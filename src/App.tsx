@@ -9,6 +9,7 @@ import { useRef, useEffect, useState } from 'react';
 import DialogBubble from './components/UI/DialogBubble';
 import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
+import Crosshair from './components/UI/Crosshair';
 import { useDialogue } from './systems/dialogue/useDialogue';
 import { MapRenderer } from './systems/scene/MapRenderer';
 import { applyGravityToCharacter } from './systems/physics/GravitySystem';
@@ -35,6 +36,7 @@ function App() {
       <StatusPanel />
       <DialogBubble />
       <LoadingIndicator />
+      <Crosshair />
     </div>
   );
 }
