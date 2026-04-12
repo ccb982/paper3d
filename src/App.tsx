@@ -57,7 +57,7 @@ const MovementController = () => {
   const mouseRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
   const [bullets, setBullets] = useState<Array<{ id: number; position: { x: number; y: number; z: number }; direction: THREE.Vector3 }>>([]);
   const bulletIdRef = useRef(0);
-  const bulletVelocity = 10; // 子弹速度
+  const bulletVelocity = 50; // 子弹速度（增加速度）
   const isMouseDownRef = useRef(false); // 鼠标按下状态
   const fireIntervalRef = useRef<NodeJS.Timeout | null>(null); // 发射子弹的定时器
   const fireRate = 200; // 发射间隔（毫秒）
@@ -136,8 +136,15 @@ const MovementController = () => {
         );
         // 从摄像机位置发射射线
         raycaster.setFromCamera(mouseVector, camera);
-        // 获取射线方向
-        const bulletDirection = raycaster.ray.direction;
+        
+        // 计算射线与远平面的交点，作为准心在3D空间中的位置
+        const farPlaneDistance = 1000; // 远平面距离
+        const crosshairPosition = new THREE.Vector3();
+        raycaster.ray.at(farPlaneDistance, crosshairPosition);
+        
+        // 计算从角色位置到准心位置的方向
+        const bulletDirection = new THREE.Vector3();
+        bulletDirection.subVectors(crosshairPosition, new THREE.Vector3(bulletPosition.x, bulletPosition.y, bulletPosition.z));
         bulletDirection.normalize();
 
         // 生成唯一的子弹ID
