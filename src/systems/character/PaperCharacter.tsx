@@ -2,7 +2,6 @@ import { useRef, useEffect } from 'react';
 import { useLoader, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { TextureLoader, DoubleSide } from 'three';
-import { FIXED_Y } from '../../utils/constants';
 import { useGameStore } from '../state/gameStore';
 
 interface PaperCharacterProps {
@@ -23,7 +22,7 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
       const { position, isMoving } = useGameStore.getState().character;
       
       // 更新位置
-      meshRef.current.position.set(position.x, FIXED_Y, position.z);
+      meshRef.current.position.set(position.x, position.y, position.z);
       
       // 当角色在移动时，让角色平滑面向相机的方向向量
       if (isMoving) {
@@ -51,7 +50,7 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
   return (
     <mesh 
       ref={meshRef} 
-      position={[0, FIXED_Y, 0]}
+      position={[0, 1.5, 0]}
       userData={{ characterId }}
       onPointerDown={() => onClick(characterId)}
     >

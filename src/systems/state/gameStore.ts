@@ -10,6 +10,7 @@ export interface Position {
 export interface CharacterState {
   position: Position;
   isMoving: boolean;
+  velocity: { x: number; y: number; z: number };
 }
 
 export interface DialogState {
@@ -26,7 +27,8 @@ export interface GameState {
   playSoundCallback: (() => void) | null;
 
   // Actions
-  setCharacterPosition: (pos: { x: number; z: number }) => void;
+  setCharacterPosition: (pos: { x: number; z: number; y?: number }) => void;
+  setCharacterVelocity: (vel: { x: number; y: number; z: number }) => void;
   setCharacterMoving: (moving: boolean) => void;
   setDialogText: (text: string) => void;
   setDialogVisible: (visible: boolean) => void;
@@ -39,8 +41,9 @@ export interface GameState {
 export const useGameStore = create<GameState>((set, get) => ({
   // 初始状态
   character: {
-    position: { x: 0, y: 0, z: 0 },
-    isMoving: false
+    position: { x: 0, y: 1.5, z: 0 },
+    isMoving: false,
+    velocity: { x: 0, y: 0, z: 0 }
   },
   dialog: {
     text: '',
@@ -55,7 +58,18 @@ export const useGameStore = create<GameState>((set, get) => ({
   setCharacterPosition: (pos) => set((state) => ({
     character: {
       ...state.character,
-      position: { ...state.character.position, x: pos.x, z: pos.z }
+      position: {
+        ...state.character.position,
+        x: pos.x,
+        z: pos.z,
+        ...(pos.y !== undefined && { y: pos.y })
+      }
+    }
+  })),
+  setCharacterVelocity: (vel) => set((state) => ({
+    character: {
+      ...state.character,
+      velocity: vel
     }
   })),
   setCharacterMoving: (moving) => set((state) => ({

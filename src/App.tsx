@@ -11,6 +11,7 @@ import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
 import { useDialogue } from './systems/dialogue/useDialogue';
 import { MapRenderer } from './systems/scene/MapRenderer';
+import { applyGravityToCharacter } from './systems/physics/GravitySystem';
 
 function App() {
   const { triggerDialogue } = useDialogue();
@@ -53,13 +54,34 @@ const MovementController = () => {
   // 每帧更新角色位置
   useFrame((_, delta) => {
     const currentPos = gameStore.character.position;
+    const currentVelocity = gameStore.character.velocity;
     const currentDirection = directionRef.current;
     
-    // 计算新位置
-    const newPos = calculateNewPosition(currentPos, currentDirection, undefined, delta);
+    // 应用重力
+    const { position: newPosWithGravity, velocity: newVelocity } = applyGravityToCharacter(
+      currentPos,
+      currentVelocity,
+      delta
+    );
     
-    // 更新角色位置
-    gameStore.setCharacterPosition(newPos);
+    // 计算水平新位置
+    const horizontalPos = calculateNewPosition(
+      { x: newPosWithGravity.x, z: newPosWithGravity.z },
+      currentDirection,
+      undefined,
+      delta
+    );
+    
+    // 合并位置和速度更新
+    const finalPos = {
+      x: horizontalPos.x,
+      y: newPosWithGravity.y,
+      z: horizontalPos.z
+    };
+    
+    // 更新角色位置和速度
+    gameStore.setCharacterPosition(finalPos);
+    gameStore.setCharacterVelocity(newVelocity);
     
     // 更新角色移动状态
     gameStore.setCharacterMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
