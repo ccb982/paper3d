@@ -9,11 +9,14 @@ import { useRef, useEffect } from 'react';
 import DialogBubble from './components/UI/DialogBubble';
 import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
+import { useDialogue } from './systems/dialogue/useDialogue';
 
 function App() {
+  const { triggerDialogue } = useDialogue();
+
   const handleCharacterClick = (id: string) => {
     console.log('Clicked character:', id);
-    // 后续集成对话系统
+    triggerDialogue(id);
   };
 
   return (
