@@ -6,6 +6,9 @@ import { calculateNewPosition } from './systems/character/CharacterController';
 import { useGameStore } from './systems/state/gameStore';
 import './styles/global.css';
 import { useRef, useEffect } from 'react';
+import DialogBubble from './components/UI/DialogBubble';
+import StatusPanel from './components/UI/StatusPanel';
+import LoadingIndicator from './components/UI/LoadingIndicator';
 
 function App() {
   const handleCharacterClick = (id: string) => {
@@ -23,6 +26,9 @@ function App() {
         />
         <MovementController />
       </Canvas>
+      <StatusPanel />
+      <DialogBubble />
+      <LoadingIndicator />
     </div>
   );
 }
