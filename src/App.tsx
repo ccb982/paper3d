@@ -7,7 +7,7 @@ import { useGameStore } from './systems/state/gameStore';
 import './styles/global.css';
 import { useRef, useEffect } from 'react';
 
-const App = () => {
+function App() {
   const handleCharacterClick = (id: string) => {
     console.log('Clicked character:', id);
     // 后续集成对话系统
@@ -25,7 +25,7 @@ const App = () => {
       </Canvas>
     </div>
   );
-};
+}
 
 // 移动控制器组件
 const MovementController = () => {

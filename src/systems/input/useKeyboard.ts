@@ -59,9 +59,9 @@ export const useKeyboard = (camera?: THREE.Camera): Direction => {
         // A键：向相机左方向移动
         // D键：向相机右方向移动
         const moveDirection = new THREE.Vector3(
-          x * cameraRight.x - z * cameraForward.x,
+          x * cameraRight.x + z * cameraForward.x,
           0,
-          x * cameraRight.z - z * cameraForward.z
+          x * cameraRight.z + z * cameraForward.z
         );
         
         setDirection({ x: moveDirection.x, z: moveDirection.z });

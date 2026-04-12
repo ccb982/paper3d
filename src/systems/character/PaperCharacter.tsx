@@ -18,23 +18,30 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
   const texture = useLoader(TextureLoader, '/textures/character.png');
 
   // 每帧更新角色位置和朝向
-  useFrame(() => {
+  useFrame((_, delta) => {
     if (meshRef.current) {
       const { position, isMoving } = useGameStore.getState().character;
       
       // 更新位置
       meshRef.current.position.set(position.x, FIXED_Y, position.z);
       
-      // 当角色在移动时，让角色时时刻刻面向相机
+      // 当角色在移动时，让角色平滑面向相机的方向向量
       if (isMoving) {
-        // 计算相机位置相对于角色的方向
+        // 获取相机的方向向量
         const cameraDirection = new THREE.Vector3();
         camera.getWorldDirection(cameraDirection);
         
-        // 让角色面向相机
-        meshRef.current.lookAt(camera.position);
+        // 计算目标旋转四元数（面向相机的方向向量）
+        const targetQuat = new THREE.Quaternion().setFromUnitVectors(
+          new THREE.Vector3(0, 0, 1), // 假设角色默认正面是 +Z
+          cameraDirection
+        );
         
-        // 修正旋转，确保角色保持直立
+        // 平滑插值，rotationSpeed 控制转速（弧度/秒）
+        const rotationSpeed = 8.0; // 每秒转 8 弧度，约 460 度/秒，可调
+        meshRef.current.quaternion.rotateTowards(targetQuat, rotationSpeed * delta);
+        
+        // 保持直立
         meshRef.current.rotation.x = 0;
         meshRef.current.rotation.z = 0;
       }
