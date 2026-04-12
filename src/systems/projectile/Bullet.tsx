@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import * as THREE from 'three';
 
 interface BulletProps {
@@ -10,86 +10,73 @@ interface BulletProps {
 
 const Bullet: React.FC<BulletProps> = ({ position, direction, velocity, onExpire }) => {
   const meshRef = useRef<THREE.Mesh>(null);
-  const creationTimeRef = useRef(Date.now()); // 保存子弹创建时间
-  const bulletLifeTime = 20000; // 20秒
-  const gravity = -0.05; // 子弹的重力
+  const creationTimeRef = useRef(Date.now());
+  const bulletLifeTime = 20000;
+  const gravity = -0.05;
   const currentPositionRef = useRef({ ...position });
   const currentVelocityRef = useRef(new THREE.Vector3().copy(direction).multiplyScalar(velocity));
+  const hasExpiredRef = useRef(false);
+  const lastFrameTimeRef = useRef(Date.now());
 
-  useEffect(() => {
-    const animate = () => {
-      if (!meshRef.current) return;
+  const checkCollision = () => {
+    if (!meshRef.current || !meshRef.current.parent || hasExpiredRef.current) return;
 
-      // 计算时间差
-      const currentTime = Date.now();
-      const deltaTime = (currentTime - creationTimeRef.current) / 1000; // 转换为秒
+    const bulletPos = meshRef.current.position;
+    const bulletRadius = 0.1;
+    const targetHalfSize = 1.5;
 
-      // 应用重力
-      currentVelocityRef.current.y += gravity * deltaTime;
-
-      // 更新位置
-      currentPositionRef.current.x += currentVelocityRef.current.x * deltaTime;
-      currentPositionRef.current.y += currentVelocityRef.current.y * deltaTime;
-      currentPositionRef.current.z += currentVelocityRef.current.z * deltaTime;
-
-      // 更新子弹位置
-      meshRef.current.position.set(
-        currentPositionRef.current.x,
-        currentPositionRef.current.y,
-        currentPositionRef.current.z
-      );
-
-      // 碰撞检测
-      if (meshRef.current && meshRef.current.parent) {
-        // 遍历场景中的所有对象，检查是否与靶子碰撞
-        let targetsFound = 0;
-        meshRef.current.parent.traverse((object) => {
-          if (object instanceof THREE.Mesh && object.userData.isTarget && object !== meshRef.current) {
-            targetsFound++;
-            // 简单的球体碰撞检测（针对平面靶子）
-            const distance = meshRef.current!.position.distanceTo(object.position);
-            const bulletRadius = 0.1; // 子弹半径
-            const targetHalfSize = 2; // 靶子半宽（增大碰撞检测范围）
-            
-            console.log(`Bullet at (${meshRef.current!.position.x.toFixed(2)}, ${meshRef.current!.position.y.toFixed(2)}, ${meshRef.current!.position.z.toFixed(2)})`);
-            console.log(`Target at (${object.position.x.toFixed(2)}, ${object.position.y.toFixed(2)}, ${object.position.z.toFixed(2)})`);
-            console.log(`Distance: ${distance.toFixed(2)}, Threshold: ${(bulletRadius + targetHalfSize).toFixed(2)}`);
-            
-            if (distance < bulletRadius + targetHalfSize) {
-              console.log('Bullet hit target!');
-              // 触发靶子被击中的回调
-              if (object.userData.handleHit) {
-                console.log('Calling handleHit on target');
-                object.userData.handleHit();
-              }
-              // 子弹消失
-              onExpire();
-            }
+    meshRef.current.parent.traverse((object) => {
+      if (hasExpiredRef.current) return;
+      
+      if (object instanceof THREE.Mesh && object.userData.isTarget && object !== meshRef.current) {
+        const distance = bulletPos.distanceTo(object.position);
+        
+        if (distance < bulletRadius + targetHalfSize) {
+          if (object.userData.handleHit) {
+            object.userData.handleHit();
           }
-        });
-        if (targetsFound === 0) {
-          console.log('No targets found in scene');
-        } else {
-          console.log(`Found ${targetsFound} targets in scene`);
+          hasExpiredRef.current = true;
+          onExpire();
         }
-      } else {
-        console.log('Bullet has no parent or meshRef is null');
       }
+    });
+  };
 
-      // 检查子弹是否过期
-      if (currentTime - creationTimeRef.current >= bulletLifeTime) {
-        onExpire();
-      } else {
-        requestAnimationFrame(animate);
-      }
-    };
+  const animate = () => {
+    if (!meshRef.current || hasExpiredRef.current) return;
 
+    const currentTime = Date.now();
+    const deltaTime = (currentTime - lastFrameTimeRef.current) / 1000;
+    lastFrameTimeRef.current = currentTime;
+
+    currentVelocityRef.current.y += gravity * deltaTime;
+
+    currentPositionRef.current.x += currentVelocityRef.current.x * deltaTime;
+    currentPositionRef.current.y += currentVelocityRef.current.y * deltaTime;
+    currentPositionRef.current.z += currentVelocityRef.current.z * deltaTime;
+
+    meshRef.current.position.set(
+      currentPositionRef.current.x,
+      currentPositionRef.current.y,
+      currentPositionRef.current.z
+    );
+
+    checkCollision();
+
+    if (currentTime - creationTimeRef.current >= bulletLifeTime && !hasExpiredRef.current) {
+      hasExpiredRef.current = true;
+      onExpire();
+    } else if (!hasExpiredRef.current) {
+      requestAnimationFrame(animate);
+    }
+  };
+
+  React.useEffect(() => {
     const animationId = requestAnimationFrame(animate);
-
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, [onExpire]);
+  }, []);
 
   return (
     <mesh ref={meshRef} position={[position.x, position.y, position.z]}>
