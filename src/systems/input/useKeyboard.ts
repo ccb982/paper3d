@@ -42,23 +42,22 @@ export const useKeyboard = (camera?: THREE.Camera): Direction => {
 
       // 如果提供了相机，将移动方向转换为相机坐标系
       if (camera) {
-        // 计算相机位置
-        const cameraPosition = camera.position.clone();
+        // 获取相机的前方向（从相机指向场景）
+        const cameraForward = new THREE.Vector3();
+        camera.getWorldDirection(cameraForward);
         
-        // 计算相机到原点的向量
-        const cameraToOrigin = new THREE.Vector3().subVectors(new THREE.Vector3(0, 0, 0), cameraPosition);
-        
-        // 计算相机的前方向（从相机指向原点，移除Y分量）
-        const cameraForward = new THREE.Vector3(cameraToOrigin.x, 0, cameraToOrigin.z).normalize();
+        // 移除Y分量，只保留水平方向
+        cameraForward.y = 0;
+        cameraForward.normalize();
         
         // 计算相机的右方向
         const cameraRight = new THREE.Vector3();
         cameraRight.crossVectors(cameraForward, new THREE.Vector3(0, 1, 0)).normalize();
         
         // 根据相机坐标系计算移动方向
-        // W键：向相机前方向的反方向移动（远离相机）
-        // S键：向相机前方向移动（靠近相机）
-        // A键：向相机左方向移动
+        // W键：向相机前方向移动
+        // S键：向相机前方向的反方向移动
+        // A键：向相机左方向移动（右方向的反方向）
         // D键：向相机右方向移动
         const moveDirection = new THREE.Vector3(
           x * cameraRight.x + z * cameraForward.x,
