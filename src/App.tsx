@@ -48,6 +48,10 @@ const MovementController = () => {
   const jumpForce = 7; // 跳跃力量
   const [cameraDistance, setCameraDistance] = useState(8); // 摄像机距离角色的距离
   const [cameraHeight, setCameraHeight] = useState(3); // 摄像机的高度
+  const [cameraYaw, setCameraYaw] = useState(0); // 摄像机绕Y轴旋转（左右）
+  const [cameraPitch, setCameraPitch] = useState(0); // 摄像机绕X轴旋转（上下）
+  const mouseRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
+  const isMouseDownRef = useRef(false); // 鼠标按下状态
 
   // 同步方向值到ref，避免闭包问题
   useEffect(() => {
@@ -80,6 +84,36 @@ const MovementController = () => {
       window.removeEventListener('wheel', handleWheel);
     };
   }, [cameraDistance, cameraHeight]);
+
+  // 鼠标控制摄像机旋转
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      // 计算鼠标移动距离
+      const deltaX = e.clientX - mouseRef.current.x;
+      const deltaY = e.clientY - mouseRef.current.y;
+
+      // 更新鼠标位置
+      mouseRef.current = { x: e.clientX, y: e.clientY };
+
+      // 计算旋转角度（灵敏度调整）
+      const sensitivity = 0.01;
+      const yawDelta = -deltaX * sensitivity; // 反向调整
+      const pitchDelta = -deltaY * sensitivity; // 反向调整
+
+      // 更新摄像机旋转角度
+      setCameraYaw(prev => prev + yawDelta);
+      // 限制俯仰角度，避免过度旋转
+      setCameraPitch(prev => Math.max(-Math.PI / 2, Math.min(Math.PI / 2, prev - pitchDelta)));
+    };
+
+    // 添加鼠标移动事件监听器
+    window.addEventListener('mousemove', handleMouseMove);
+
+    // 清理事件监听器
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
 
   // 每帧更新角色位置和摄像机位置
   useFrame((_, delta) => {
@@ -125,12 +159,18 @@ const MovementController = () => {
     // 更新角色移动状态
     gameStore.setCharacterMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
     
-    // 第三人称摄像机跟随
+    // 第三人称摄像机跟随和旋转
     if (camera) {
-      // 计算摄像机目标位置（在角色后方一定距离和高度）
-      const cameraTargetX = finalPos.x;
-      const cameraTargetY = finalPos.y + cameraHeight;
-      const cameraTargetZ = finalPos.z - cameraDistance;
+      // 根据旋转角度计算摄像机位置
+      const cameraX = finalPos.x + Math.sin(cameraYaw) * cameraDistance;
+      const cameraZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance;
+      const cameraY = finalPos.y + cameraHeight;
+      
+      // 考虑俯仰角度的影响
+      const pitchFactor = Math.cos(cameraPitch);
+      const cameraTargetX = finalPos.x + Math.sin(cameraYaw) * cameraDistance * pitchFactor;
+      const cameraTargetZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance * pitchFactor;
+      const cameraTargetY = finalPos.y + cameraHeight + Math.sin(cameraPitch) * cameraDistance;
       
       // 平滑移动摄像机到目标位置
       camera.position.x += (cameraTargetX - camera.position.x) * 0.1;
