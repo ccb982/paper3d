@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLoader } from '@react-three/fiber';
 import { TextureLoader, RepeatWrapping, PlaneGeometry, BoxGeometry, MeshStandardMaterial } from 'three';
+import Target from '../target/Target';
 
 export const MapRenderer: React.FC = () => {
   // 加载地面纹理
@@ -40,6 +41,12 @@ export const MapRenderer: React.FC = () => {
         <planeGeometry args={[2, 2]} />
         <meshStandardMaterial map={grassTexture} transparent={true} side={2} />
       </mesh>
+      
+      {/* 靶子 */}
+      <Target position={{ x: 20, y: 2, z: 0 }} rotation={{ x: 0, y: -Math.PI / 2, z: 0 }} />
+      <Target position={{ x: -20, y: 2, z: 0 }} rotation={{ x: 0, y: Math.PI / 2, z: 0 }} />
+      <Target position={{ x: 0, y: 2, z: 20 }} rotation={{ x: 0, y: Math.PI, z: 0 }} />
+      <Target position={{ x: 0, y: 2, z: -20 }} rotation={{ x: 0, y: 0, z: 0 }} />
     </group>
   );
 };
