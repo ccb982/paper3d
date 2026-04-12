@@ -1,4 +1,5 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import * as THREE from 'three';
 import { SceneSetup } from './systems/rendering/SceneSetup';
 import { PaperCharacter } from './systems/character/PaperCharacter';
 import { useKeyboard } from './systems/input/useKeyboard';
@@ -10,6 +11,7 @@ import DialogBubble from './components/UI/DialogBubble';
 import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
 import Crosshair from './components/UI/Crosshair';
+import Bullet from './systems/projectile/Bullet';
 import { useDialogue } from './systems/dialogue/useDialogue';
 import { MapRenderer } from './systems/scene/MapRenderer';
 import { applyGravityToCharacter } from './systems/physics/GravitySystem';
@@ -53,7 +55,12 @@ const MovementController = () => {
   const [cameraYaw, setCameraYaw] = useState(0); // 摄像机绕Y轴旋转（左右）
   const [cameraPitch, setCameraPitch] = useState(0); // 摄像机绕X轴旋转（上下）
   const mouseRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
+  const [bullets, setBullets] = useState<Array<{ id: number; position: { x: number; y: number; z: number }; direction: THREE.Vector3 }>>([]);
+  const bulletIdRef = useRef(0);
+  const bulletVelocity = 10; // 子弹速度
   const isMouseDownRef = useRef(false); // 鼠标按下状态
+  const fireIntervalRef = useRef<NodeJS.Timeout | null>(null); // 发射子弹的定时器
+  const fireRate = 200; // 发射间隔（毫秒）
 
   // 同步方向值到ref，避免闭包问题
   useEffect(() => {
@@ -108,14 +115,58 @@ const MovementController = () => {
       setCameraPitch(prev => Math.max(-Math.PI / 2, Math.min(Math.PI / 2, prev - pitchDelta)));
     };
 
-    // 添加鼠标移动事件监听器
+    const fireBullet = () => {
+      if (camera) {
+        const characterPos = gameStore.character.position;
+        
+        // 计算子弹发射位置（从角色位置稍微向前）
+        const bulletPosition = {
+          x: characterPos.x,
+          y: characterPos.y + 1, // 从角色胸部高度发射
+          z: characterPos.z
+        };
+
+        // 计算子弹发射方向（摄像机的前方向）
+        const cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+        cameraDirection.normalize();
+
+        // 生成唯一的子弹ID
+        const bulletId = bulletIdRef.current++;
+
+        // 添加新子弹
+        setBullets(prev => [...prev, { id: bulletId, position: bulletPosition, direction: cameraDirection }]);
+      }
+    };
+
+    const handleMouseDown = () => {
+      isMouseDownRef.current = true;
+      fireBullet(); // 立即发射一颗子弹
+      // 设置定时器，持续发射子弹
+      fireIntervalRef.current = setInterval(fireBullet, fireRate);
+    };
+
+    const handleMouseUp = () => {
+      isMouseDownRef.current = false;
+      // 清除定时器，停止发射子弹
+      if (fireIntervalRef.current) {
+        clearInterval(fireIntervalRef.current);
+        fireIntervalRef.current = null;
+      }
+    };
+
+    // 添加鼠标事件监听器
     window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
 
     // 清理事件监听器
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, []);
+  }, [gameStore.character.position, camera]);
 
   // 每帧更新角色位置和摄像机位置
   useFrame((_, delta) => {
@@ -184,7 +235,24 @@ const MovementController = () => {
     }
   });
 
-  return null;
+  // 处理子弹过期
+  const handleBulletExpire = (id: number) => {
+    setBullets(prev => prev.filter(bullet => bullet.id !== id));
+  };
+
+  return (
+    <>
+      {bullets.map(bullet => (
+        <Bullet
+          key={bullet.id}
+          position={bullet.position}
+          direction={bullet.direction}
+          velocity={bulletVelocity}
+          onExpire={() => handleBulletExpire(bullet.id)}
+        />
+      ))}
+    </>
+  );
 };
 
 export default App;
