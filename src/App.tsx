@@ -10,6 +10,7 @@ import DialogBubble from './components/UI/DialogBubble';
 import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
 import { useDialogue } from './systems/dialogue/useDialogue';
+import { MapRenderer } from './systems/scene/MapRenderer';
 
 function App() {
   const { triggerDialogue } = useDialogue();
@@ -23,6 +24,7 @@ function App() {
     <div className="game-container">
       <Canvas camera={{ position: [0, 2, 10] }}>
         <SceneSetup />
+        <MapRenderer />
         <PaperCharacter 
           characterId="player" 
           onClick={handleCharacterClick} 
