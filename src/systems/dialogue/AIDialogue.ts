@@ -21,7 +21,8 @@ export const fetchAIResponse = async (
           "你觉得这个游戏好玩吗？"
         ];
         const randomResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)];
-        resolve(randomResponse);
+        resolve(randomResponse ? randomResponse : '');
+
       }, 1000);
     });
   }
@@ -41,7 +42,8 @@ export const fetchAIResponse = async (
     }
 
     const data = await response.json();
-    return data.reply;
+    const reply = data.reply;
+    return (reply && typeof reply === 'string' && reply !== 'undefined') ? reply : '';
   } catch (error) {
     console.error('AI 请求错误:', error);
     return '（AI 暂时无法回应）';

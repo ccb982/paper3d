@@ -1,46 +1,58 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useGameStore } from '../../systems/state/gameStore';
 
-const DialogBubble: React.FC = () => {
+export const DialogBubble: React.FC = () => {
   const { dialog, isLoading } = useGameStore();
   const [displayText, setDisplayText] = useState('');
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [isVisible, setIsVisible] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    // 清理上一次的定时器
+    if (intervalRef.current) {
+      clearTimeout(intervalRef.current);
+      intervalRef.current = null;
+    }
+
     if (dialog.visible) {
       setIsVisible(true);
-      setCurrentIndex(0);
       setDisplayText('');
-      
-      const typeInterval = setInterval(() => {
-        setCurrentIndex((prevIndex) => {
-          if (prevIndex < dialog.text.length) {
-            setDisplayText((prevText) => prevText + dialog.text[prevIndex]);
-            return prevIndex + 1;
-          } else {
-            clearInterval(typeInterval);
-            return prevIndex;
-          }
-        });
-      }, 30);
 
-      return () => clearInterval(typeInterval);
+      // 获取安全的文本：排除 null/undefined/字符串"undefined"
+      let rawText = dialog.text;
+      if (rawText === undefined || rawText === null || rawText === 'undefined') {
+        rawText = '';
+      }
+      const textToDisplay = String(rawText);
+
+      // 使用递归 setTimeout 实现打字机效果
+      const typeCharacter = (index: number, fullText: string) => {
+        if (index < fullText.length) {
+          setDisplayText(prev => prev + fullText[index]);
+          intervalRef.current = setTimeout(() => typeCharacter(index + 1, fullText), 50);
+        }
+      };
+
+      if (textToDisplay.length > 0) {
+        setDisplayText('');
+        typeCharacter(0, textToDisplay);
+      }
     } else {
       setIsVisible(false);
-      setTimeout(() => {
-        setDisplayText('');
-        setCurrentIndex(0);
-      }, 300);
+      setDisplayText('');
     }
-  }, [dialog.visible, dialog.text]);
 
-  if (!isVisible) {
-    return null;
-  }
+    return () => {
+      if (intervalRef.current) {
+        clearTimeout(intervalRef.current);
+      }
+    };
+  }, [dialog.visible, dialog.text, isLoading]); // 注意依赖项
+
+  if (!isVisible) return null;
 
   return (
-    <div className="dialog-bubble" style={{ 
+    <div className="dialog-bubble" style={{
       animation: 'dialogAppear 0.3s ease-out forwards',
       opacity: isVisible ? 1 : 0,
       transform: isVisible ? 'translateX(-50%) scale(1)' : 'translateX(-50%) scale(0.8)'
@@ -52,7 +64,7 @@ const DialogBubble: React.FC = () => {
             <span className="ellipsis">...</span>
           </div>
         ) : (
-          <p>{displayText}</p>
+          <p>{displayText || ''}</p>
         )}
       </div>
     </div>

@@ -64,12 +64,16 @@ export const useGameStore = create<GameState>((set, get) => ({
       isMoving: moving
     }
   })),
-  setDialogText: (text) => set((state) => ({
-    dialog: {
-      ...state.dialog,
-      text
-    }
-  })),
+  setDialogText: (text) => set((state) => {
+    // 确保 text 是有效的字符串，且不是 "undefined"
+    let safeText = (text == null || text === 'undefined') ? '' : String(text);
+    return {
+      dialog: {
+        ...state.dialog,
+        text: safeText
+      }
+    };
+  }),
   setDialogVisible: (visible) => set((state) => ({
     dialog: {
       ...state.dialog,

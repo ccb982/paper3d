@@ -22,7 +22,8 @@ export const useDialogue = () => {
 
       const reply = await fetchAIResponse(prompt, abortController.signal);
 
-      gameStore.setDialogText(reply);
+      gameStore.setDialogText(reply || '');
+
       gameStore.setIsLoading(false);
 
       gameStore.playSound();
