@@ -126,16 +126,25 @@ const MovementController = () => {
           z: characterPos.z
         };
 
-        // 计算子弹发射方向（摄像机的前方向）
-        const cameraDirection = new THREE.Vector3();
-        camera.getWorldDirection(cameraDirection);
-        cameraDirection.normalize();
+        // 计算子弹发射方向（从角色位置指向准心位置）
+        // 创建一个射线投射器
+        const raycaster = new THREE.Raycaster();
+        // 使用鼠标当前位置作为射线起点
+        const mouseVector = new THREE.Vector2(
+          (mouseRef.current.x / window.innerWidth) * 2 - 1,
+          -(mouseRef.current.y / window.innerHeight) * 2 + 1
+        );
+        // 从摄像机位置发射射线
+        raycaster.setFromCamera(mouseVector, camera);
+        // 获取射线方向
+        const bulletDirection = raycaster.ray.direction;
+        bulletDirection.normalize();
 
         // 生成唯一的子弹ID
         const bulletId = bulletIdRef.current++;
 
         // 添加新子弹
-        setBullets(prev => [...prev, { id: bulletId, position: bulletPosition, direction: cameraDirection }]);
+        setBullets(prev => [...prev, { id: bulletId, position: bulletPosition, direction: bulletDirection }]);
       }
     };
 
