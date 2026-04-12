@@ -137,10 +137,28 @@ const MovementController = () => {
         // 从摄像机位置发射射线
         raycaster.setFromCamera(mouseVector, camera);
         
-        // 计算射线与远平面的交点，作为准心在3D空间中的位置
-        const farPlaneDistance = 1000; // 远平面距离
+        // 创建一个平面，与摄像机方向垂直，距离摄像机100单位
+        const planeDistance = 100; // 平面距离摄像机的距离
+        const cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+        
+        // 平面的法向量就是摄像机的方向
+        const planeNormal = cameraDirection.clone();
+        // 平面上的一个点：摄像机位置 + 摄像机方向 * 距离
+        const planePoint = camera.position.clone().add(cameraDirection.multiplyScalar(planeDistance));
+        
+        // 创建平面
+        const plane = new THREE.Plane();
+        plane.setFromNormalAndCoplanarPoint(planeNormal, planePoint);
+        
+        // 计算射线与平面的交点
         const crosshairPosition = new THREE.Vector3();
-        raycaster.ray.at(farPlaneDistance, crosshairPosition);
+        raycaster.ray.intersectPlane(plane, crosshairPosition);
+        
+        // 如果没有交点（射线与平面平行），使用射线的方向
+        if (!crosshairPosition) {
+          crosshairPosition.copy(raycaster.ray.direction).multiplyScalar(planeDistance).add(camera.position);
+        }
         
         // 计算从角色位置到准心位置的方向
         const bulletDirection = new THREE.Vector3();
