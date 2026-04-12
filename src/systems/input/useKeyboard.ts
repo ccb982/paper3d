@@ -4,10 +4,11 @@ import * as THREE from 'three';
 interface Direction {
   x: number;
   z: number;
+  jump: boolean;
 }
 
 export const useKeyboard = (camera?: THREE.Camera): Direction => {
-  const [direction, setDirection] = useState<Direction>({ x: 0, z: 0 });
+  const [direction, setDirection] = useState<Direction>({ x: 0, z: 0, jump: false });
 
   useEffect(() => {
     const keysPressed = new Set<string>();
@@ -25,6 +26,7 @@ export const useKeyboard = (camera?: THREE.Camera): Direction => {
     const updateDirection = () => {
       let x = 0;
       let z = 0;
+      const jump = keysPressed.has(' ');
 
       if (keysPressed.has('w')) z += 1;
       if (keysPressed.has('s')) z -= 1;
@@ -64,9 +66,9 @@ export const useKeyboard = (camera?: THREE.Camera): Direction => {
           x * cameraRight.z + z * cameraForward.z
         );
         
-        setDirection({ x: moveDirection.x, z: moveDirection.z });
+        setDirection({ x: moveDirection.x, z: moveDirection.z, jump });
       } else {
-        setDirection({ x, z });
+        setDirection({ x, z, jump });
       }
     };
 

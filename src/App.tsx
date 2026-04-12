@@ -45,6 +45,7 @@ const MovementController = () => {
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
   const gameStore = useGameStore();
+  const jumpForce = 7; // 跳跃力量
 
   // 同步方向值到ref，避免闭包问题
   useEffect(() => {
@@ -54,8 +55,17 @@ const MovementController = () => {
   // 每帧更新角色位置
   useFrame((_, delta) => {
     const currentPos = gameStore.character.position;
-    const currentVelocity = gameStore.character.velocity;
+    let currentVelocity = gameStore.character.velocity;
     const currentDirection = directionRef.current;
+    
+    // 检查是否按下跳跃键且角色在地面上
+    if (currentDirection.jump && currentVelocity.y === 0) {
+      // 应用跳跃力量
+      currentVelocity = {
+        ...currentVelocity,
+        y: jumpForce
+      };
+    }
     
     // 应用重力
     const { position: newPosWithGravity, velocity: newVelocity } = applyGravityToCharacter(
