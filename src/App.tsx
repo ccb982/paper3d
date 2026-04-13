@@ -174,37 +174,10 @@ const MovementController = () => {
   };
 
   // 每帧更新角色位置和摄像机位置
-  useFrame((_, delta) => {
+  useFrame(({ camera }, delta) => {
     const currentPos = gameStore.character.position;
     let currentVelocity = gameStore.character.velocity;
     const currentDirection = directionRef.current;
-    
-    // 开火检测
-    if (isMouseDownRef.current && camera) {
-      const now = Date.now();
-      if (now - lastFireTimeRef.current >= fireRate) {
-        lastFireTimeRef.current = now;
-        
-        // 实时获取最新值
-        const realTimeCharacterPos = gameStore.character.position;
-        const direction = getBulletDirection(camera, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
-        const newBullet = {
-          id: bulletIdRef.current++,
-          position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1, z: realTimeCharacterPos.z },
-          direction,
-        };
-        setBullets(prev => [...prev, newBullet]);
-      }
-    }
-    
-    // 更新子弹位置
-    setBullets(prev => prev.filter(bullet => {
-      bullet.position.x += bullet.direction.x * bulletVelocity * delta;
-      bullet.position.y += bullet.direction.y * bulletVelocity * delta;
-      bullet.position.z += bullet.direction.z * bulletVelocity * delta;
-      // 超出边界后移除
-      return Math.abs(bullet.position.x) < 100 && Math.abs(bullet.position.z) < 100 && bullet.position.y < 50;
-    }));
     
     // 检查是否按下跳跃键且角色在地面上
     if (currentDirection.jump && currentVelocity.y === 0) {
@@ -261,6 +234,33 @@ const MovementController = () => {
       // 让摄像机看向角色
       camera.lookAt(finalPos.x, finalPos.y + 1, finalPos.z);
     }
+    
+    // 开火检测（在相机更新之后）
+    if (isMouseDownRef.current && camera) {
+      const now = Date.now();
+      if (now - lastFireTimeRef.current >= fireRate) {
+        lastFireTimeRef.current = now;
+        
+        // 实时获取最新值
+        const realTimeCharacterPos = gameStore.character.position;
+        const direction = getBulletDirection(camera, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
+        const newBullet = {
+          id: bulletIdRef.current++,
+          position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1, z: realTimeCharacterPos.z },
+          direction,
+        };
+        setBullets(prev => [...prev, newBullet]);
+      }
+    }
+    
+    // 更新子弹位置
+    setBullets(prev => prev.filter(bullet => {
+      bullet.position.x += bullet.direction.x * bulletVelocity * delta;
+      bullet.position.y += bullet.direction.y * bulletVelocity * delta;
+      bullet.position.z += bullet.direction.z * bulletVelocity * delta;
+      // 超出边界后移除
+      return Math.abs(bullet.position.x) < 100 && Math.abs(bullet.position.z) < 100 && bullet.position.y < 50;
+    }));
   });
 
   // 处理子弹过期
