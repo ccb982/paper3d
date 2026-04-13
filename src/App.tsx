@@ -56,7 +56,7 @@ function App() {
 
 // 移动控制器组件
 const MovementController = () => {
-  const { camera, gl } = useThree();
+  const { camera, gl, scene } = useThree();
   const canvas = gl.domElement;
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
@@ -64,28 +64,85 @@ const MovementController = () => {
   const jumpForce = 7; // 跳跃力量
   const mousePosRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
   const [bullets, setBullets] = useState<Array<{ id: number; position: { x: number; y: number; z: number }; direction: THREE.Vector3 }>>([]);
+  const [lockedTarget, setLockedTarget] = useState<{ point: THREE.Vector3; object: THREE.Object3D } | null>(null);
   const bulletIdRef = useRef(0);
   const bulletVelocity = 50; // 子弹速度（增加速度）
   const isMouseDownRef = useRef(false); // 鼠标按下状态
   const lastFireTimeRef = useRef(0); // 上次发射时间
   const fireRate = 200; // 发射间隔（毫秒）
   const targetDetectedRef = useRef<THREE.Object3D | null>(null); // 检测到的目标
+  const autoShootIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const shootableObjectsRef = useRef<THREE.Object3D[]>([]);
 
   // 同步方向值到ref，避免闭包问题
   useEffect(() => {
     directionRef.current = direction;
   }, [direction]);
 
+  // 清理定时器
+  useEffect(() => {
+    return () => {
+      if (autoShootIntervalRef.current) clearInterval(autoShootIntervalRef.current);
+    };
+  }, []);
+
+  // 初始化可射击物体数组
+  useEffect(() => {
+    const objects: THREE.Object3D[] = [];
+    scene.traverse(obj => {
+      if (obj.userData.isShootable) objects.push(obj);
+    });
+    shootableObjectsRef.current = objects;
+  }, [scene]);
+
   // 鼠标事件处理
   useEffect(() => {
+    // 自动射击函数
+    const startAutoShoot = () => {
+      if (autoShootIntervalRef.current) return;
+      autoShootIntervalRef.current = setInterval(() => {
+        // 每次射击前重新检测当前锁定的目标（确保目标还存在）
+        if (lockedTarget && isMouseDownRef.current) {
+          // 计算子弹方向：从角色位置指向锁定目标的击中点（或目标中心）
+          const realTimeCharacterPos = gameStore.character.position;
+          const direction = new THREE.Vector3().subVectors(
+            lockedTarget.point,
+            new THREE.Vector3(realTimeCharacterPos.x, realTimeCharacterPos.y + 1.2, realTimeCharacterPos.z)
+          ).normalize();
+          // 创建子弹
+          const newBullet = {
+            id: bulletIdRef.current++,
+            position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1.2, z: realTimeCharacterPos.z },
+            direction,
+          };
+          setBullets(prev => [...prev, newBullet]);
+        } else {
+          // 没有目标，停止射击
+          stopAutoShoot();
+        }
+      }, fireRate);
+    };
+
+    const stopAutoShoot = () => {
+      if (autoShootIntervalRef.current) {
+        clearInterval(autoShootIntervalRef.current);
+        autoShootIntervalRef.current = null;
+      }
+    };
+
     const handleMouseDown = () => {
       isMouseDownRef.current = true;
       targetDetectedRef.current = null; // 重置目标检测
+      // 开启自动射击模式
+      if (lockedTarget) {
+        startAutoShoot();
+      }
     };
     
     const handleMouseUp = () => {
       isMouseDownRef.current = false;
       targetDetectedRef.current = null; // 松开鼠标时销毁检测器
+      stopAutoShoot();
     };
     
     const handleMouseMove = (event: MouseEvent) => {
@@ -100,8 +157,9 @@ const MovementController = () => {
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
       window.removeEventListener('mousemove', handleMouseMove);
+      if (autoShootIntervalRef.current) clearInterval(autoShootIntervalRef.current);
     };
-  }, []); // 空依赖，确保只添加一次事件监听器
+  }, [lockedTarget, gameStore, fireRate]); // 依赖项
 
   // 实时计算子弹方向（纯函数，每次调用都用最新参数）
   const getBulletDirection = (
@@ -186,6 +244,58 @@ const MovementController = () => {
     // 更新角色移动状态
     gameStore.setCharacterMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
     
+    // 射线检测可射击目标
+    if (camera) {
+      const raycaster = new THREE.Raycaster();
+      // 使用鼠标位置
+      const rect = canvas.getBoundingClientRect();
+      const mouseX = ((mousePosRef.current.x - rect.left) / rect.width) * 2 - 1;
+      const mouseY = -((mousePosRef.current.y - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+      
+      // 使用预收集的可射击物体数组
+      const intersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
+      
+      // 临时变量，用于存储新的锁定目标
+      let newLockedTarget: { point: THREE.Vector3; object: THREE.Object3D } | null = null;
+      
+      if (intersects.length > 0) {
+        const hit = intersects[0];
+        newLockedTarget = { point: hit.point, object: hit.object };
+        
+        // 调试：给锁定的目标添加发光效果
+        if (hit.object instanceof THREE.Mesh) {
+          // 保存原始材质
+          if (!hit.object.userData.originalMaterial) {
+            hit.object.userData.originalMaterial = hit.object.material;
+          }
+          // 创建发光材质
+          const glowMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0xffff00, 
+            transparent: true, 
+            opacity: 0.7 
+          });
+          hit.object.material = glowMaterial;
+        }
+      }
+      
+      // 如果之前有锁定目标，现在没有了，恢复原始材质
+      if (lockedTarget && !newLockedTarget) {
+        if (lockedTarget.object instanceof THREE.Mesh && lockedTarget.object.userData.originalMaterial) {
+          lockedTarget.object.material = lockedTarget.object.userData.originalMaterial;
+        }
+      }
+      
+      // 如果锁定目标改变，恢复之前目标的材质
+      if (lockedTarget && newLockedTarget && lockedTarget.object !== newLockedTarget.object) {
+        if (lockedTarget.object instanceof THREE.Mesh && lockedTarget.object.userData.originalMaterial) {
+          lockedTarget.object.material = lockedTarget.object.userData.originalMaterial;
+        }
+      }
+      
+      setLockedTarget(newLockedTarget);
+    }
+    
     // 目标检测
     if (isMouseDownRef.current && camera) {
       // 获取 canvas 相对坐标
@@ -234,8 +344,8 @@ const MovementController = () => {
       }
     }
     
-    // 开火检测
-    if (isMouseDownRef.current && camera) {
+    // 传统开火检测（当没有锁定目标时使用）
+    if (isMouseDownRef.current && camera && !lockedTarget) {
       const now = Date.now();
       if (now - lastFireTimeRef.current >= fireRate) {
         lastFireTimeRef.current = now;
