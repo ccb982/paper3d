@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
 interface Direction {
@@ -9,6 +9,12 @@ interface Direction {
 
 export const useKeyboard = (camera?: THREE.Camera): Direction => {
   const [direction, setDirection] = useState<Direction>({ x: 0, z: 0, jump: false });
+  const cameraRef = useRef(camera);
+
+  // 更新camera引用
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
 
   useEffect(() => {
     const keysPressed = new Set<string>();
@@ -41,10 +47,10 @@ export const useKeyboard = (camera?: THREE.Camera): Direction => {
       }
 
       // 如果提供了相机，将移动方向转换为相机坐标系
-      if (camera) {
+      if (cameraRef.current) {
         // 获取相机的前方向（从相机指向场景）
         const cameraForward = new THREE.Vector3();
-        camera.getWorldDirection(cameraForward);
+        cameraRef.current.getWorldDirection(cameraForward);
         
         // 移除Y分量，只保留水平方向
         cameraForward.y = 0;
@@ -78,7 +84,7 @@ export const useKeyboard = (camera?: THREE.Camera): Direction => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [camera]);
+  }, []); // 空依赖数组，只执行一次
 
   return direction;
 };
