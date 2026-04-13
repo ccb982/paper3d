@@ -138,33 +138,19 @@ const MovementController = () => {
   }, []); // 空依赖数组，只执行一次
 
   // 实时计算子弹方向（纯函数，每次调用都用最新参数）
-  const getBulletDirection = (camera: THREE.Camera, characterPos: { x: number; y: number; z: number }, mouseX: number, mouseY: number) => {
+  const getBulletDirection = (
+    camera: THREE.Camera,
+    mouseX: number,
+    mouseY: number
+  ): THREE.Vector3 => {
     const raycaster = new THREE.Raycaster();
     const mouseVector = new THREE.Vector2(
       (mouseX / window.innerWidth) * 2 - 1,
       -(mouseY / window.innerHeight) * 2 + 1
     );
     raycaster.setFromCamera(mouseVector, camera);
-    
-    // 获取相机射线方向
-    const rayDirection = raycaster.ray.direction.clone();
-    
-    // 角色发射点
-    const bulletOrigin = new THREE.Vector3(characterPos.x, characterPos.y + 1, characterPos.z);
-    
-    // 创建平面：经过角色发射点，且与射线方向垂直
-    const planeNormal = rayDirection.clone();
-    const plane = new THREE.Plane(planeNormal, -planeNormal.dot(bulletOrigin));
-    
-    // 计算射线与平面的交点
-    const targetPoint = new THREE.Vector3();
-    if (raycaster.ray.intersectPlane(plane, targetPoint)) {
-      // 从角色发射点指向交点
-      return new THREE.Vector3().subVectors(targetPoint, bulletOrigin).normalize();
-    } else {
-      // 射线与平面平行时，使用射线方向
-      return rayDirection.clone().normalize();
-    }
+    // 直接返回射线方向（从相机指向鼠标）
+    return raycaster.ray.direction.clone().normalize();
   };
 
   // 每帧更新角色位置和摄像机位置
@@ -180,15 +166,13 @@ const MovementController = () => {
         lastFireTimeRef.current = now;
         
         // 实时获取最新值
-        const direction = getBulletDirection(camera, characterPos, mousePosRef.current.x, mousePosRef.current.y);
-        if (direction) {
-          const newBullet = {
-            id: bulletIdRef.current++,
-            position: { x: characterPos.x, y: characterPos.y + 1, z: characterPos.z },
-            direction,
-          };
-          setBullets(prev => [...prev, newBullet]);
-        }
+      const direction = getBulletDirection(camera, mousePosRef.current.x, mousePosRef.current.y);
+      const newBullet = {
+        id: bulletIdRef.current++,
+        position: { x: characterPos.x, y: characterPos.y + 1, z: characterPos.z },
+        direction,
+      };
+      setBullets(prev => [...prev, newBullet]);
       }
     }
     
