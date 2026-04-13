@@ -155,22 +155,9 @@ const MovementController = () => {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
 
-    // 3. 定义水平面（Y = 角色发射高度）
-    const bulletOriginY = characterPos.y + 1;
-    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), bulletOriginY);
-    const targetPoint = new THREE.Vector3();
-
-    // 4. 计算交点
-    if (raycaster.ray.intersectPlane(horizontalPlane, targetPoint)) {
-      // 从角色发射点指向交点
-      return new THREE.Vector3().subVectors(
-        targetPoint,
-        new THREE.Vector3(characterPos.x, bulletOriginY, characterPos.z)
-      ).normalize();
-    } else {
-      // 射线与平面平行（罕见），回退到射线方向
-      return raycaster.ray.direction.clone().normalize();
-    }
+    // 3. 直接使用相机射线方向作为子弹方向，考虑相机的所有旋转角度
+    // 这样子弹会沿着玩家视线方向飞行，与相机俯仰角度保持一致
+    return raycaster.ray.direction.clone().normalize();
   };
 
   // 每帧更新角色位置和摄像机位置
@@ -226,10 +213,10 @@ const MovementController = () => {
       const cameraTargetZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance * pitchFactor;
       const cameraTargetY = finalPos.y + cameraHeight + Math.sin(cameraPitch) * cameraDistance * 1.5; // 增加1.5倍的俯仰影响，抬高角度
       
-      // 平滑移动摄像机到目标位置
-      camera.position.x += (cameraTargetX - camera.position.x) * 0.1;
-      camera.position.y += (cameraTargetY - camera.position.y) * 0.1;
-      camera.position.z += (cameraTargetZ - camera.position.z) * 0.1;
+      // 平滑移动摄像机到目标位置，增强修正效果
+      camera.position.x += (cameraTargetX - camera.position.x) * 0.3; // 进一步增加平滑因子，让相机更快地移动到目标位置
+      camera.position.y += (cameraTargetY - camera.position.y) * 0.3;
+      camera.position.z += (cameraTargetZ - camera.position.z) * 0.3;
       
       // 让摄像机看向角色
       camera.lookAt(finalPos.x, finalPos.y + 1, finalPos.z);
@@ -246,7 +233,7 @@ const MovementController = () => {
         const direction = getBulletDirection(camera, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
         const newBullet = {
           id: bulletIdRef.current++,
-          position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1, z: realTimeCharacterPos.z },
+          position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1.2, z: realTimeCharacterPos.z }, // 增加发射高度，确保子弹能够接触到准心
           direction,
         };
         setBullets(prev => [...prev, newBullet]);
