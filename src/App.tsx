@@ -15,6 +15,7 @@ import Bullet from './systems/projectile/Bullet';
 import { useDialogue } from './systems/dialogue/useDialogue';
 import { MapRenderer } from './systems/scene/MapRenderer';
 import { applyGravityToCharacter } from './systems/physics/GravitySystem';
+import { OrbitControls } from '@react-three/drei';
 
 function App() {
   const { triggerDialogue } = useDialogue();
@@ -24,6 +25,9 @@ function App() {
     triggerDialogue(id);
   };
 
+  const gameStore = useGameStore();
+  const characterPos = gameStore.character.position;
+
   return (
     <div className="game-container">
       <Canvas camera={{ position: [0, 2, 10] }}>
@@ -32,6 +36,13 @@ function App() {
         <PaperCharacter 
           characterId="player" 
           onClick={handleCharacterClick} 
+        />
+        <OrbitControls 
+          target={[characterPos.x, characterPos.y + 1, characterPos.z]} 
+          enableZoom={true} 
+          enablePan={false} 
+          zoomSpeed={1.0} 
+          rotateSpeed={1.0} 
         />
         <MovementController />
       </Canvas>
@@ -50,12 +61,7 @@ const MovementController = () => {
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
   const gameStore = useGameStore();
-  const characterPos = gameStore.character.position; // 直接从store获取位置
   const jumpForce = 7; // 跳跃力量
-  const [cameraDistance, setCameraDistance] = useState(8); // 摄像机距离角色的距离
-  const [cameraHeight, setCameraHeight] = useState(3); // 摄像机的高度
-  const [cameraYaw, setCameraYaw] = useState(0); // 摄像机绕Y轴旋转（左右）
-  const [cameraPitch, setCameraPitch] = useState(0); // 摄像机绕X轴旋转（上下）
   const mousePosRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
   const [bullets, setBullets] = useState<Array<{ id: number; position: { x: number; y: number; z: number }; direction: THREE.Vector3 }>>([]);
   const bulletIdRef = useRef(0);
@@ -69,74 +75,30 @@ const MovementController = () => {
     directionRef.current = direction;
   }, [direction]);
 
-  // 鼠标滚轮控制摄像机距离和高度
+  // 鼠标事件处理
   useEffect(() => {
-    const handleWheel = (e: WheelEvent) => {
-      // 计算新的摄像机距离
-      const distanceDelta = e.deltaY > 0 ? 0.5 : -0.5; // 滚轮向上减少距离，向下增加距离
-      const newDistance = cameraDistance + distanceDelta;
-      
-      // 计算新的摄像机高度（使用Ctrl键调整高度）
-      if (e.ctrlKey) {
-        const heightDelta = e.deltaY > 0 ? -0.2 : 0.2; // 滚轮向上增加高度，向下减少高度
-        const newHeight = cameraHeight + heightDelta;
-        setCameraHeight(newHeight);
-      } else {
-        // 只调整距离，不限制范围
-        setCameraDistance(newDistance);
-      }
-    };
-
-    // 添加鼠标滚轮事件监听器
-    window.addEventListener('wheel', handleWheel);
-
-    // 清理事件监听器
-    return () => {
-      window.removeEventListener('wheel', handleWheel);
-    };
-  }, [cameraDistance, cameraHeight]);
-
-  // 鼠标控制摄像机旋转
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      // 计算鼠标移动距离
-      const deltaX = e.clientX - mousePosRef.current.x;
-      const deltaY = e.clientY - mousePosRef.current.y;
-
-      // 更新鼠标位置
-      mousePosRef.current = { x: e.clientX, y: e.clientY };
-
-      // 计算旋转角度（灵敏度调整）
-      const sensitivity = 0.01;
-      const yawDelta = -deltaX * sensitivity; // 反向调整
-      const pitchDelta = -deltaY * sensitivity; // 反向调整
-
-      // 更新摄像机旋转角度
-      setCameraYaw(prev => prev + yawDelta);
-      // 限制俯仰角度，避免过度旋转
-      setCameraPitch(prev => Math.max(-Math.PI / 2, Math.min(Math.PI / 2, prev - pitchDelta)));
-    };
-
     const handleMouseDown = () => {
       isMouseDownRef.current = true;
     };
-
+    
     const handleMouseUp = () => {
       isMouseDownRef.current = false;
     };
-
-    // 添加鼠标事件监听器
-    window.addEventListener('mousemove', handleMouseMove);
+    
+    const handleMouseMove = (event: MouseEvent) => {
+      mousePosRef.current = { x: event.clientX, y: event.clientY };
+    };
+    
     window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('mouseup', handleMouseUp);
-
-    // 清理事件监听器
+    window.addEventListener('mousemove', handleMouseMove);
+    
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mousemove', handleMouseMove);
     };
-  }, []); // 空依赖数组，只执行一次
+  }, []); // 空依赖，确保只添加一次事件监听器
 
   // 实时计算子弹方向（纯函数，每次调用都用最新参数）
   const getBulletDirection = (
@@ -160,7 +122,7 @@ const MovementController = () => {
     return raycaster.ray.direction.clone().normalize();
   };
 
-  // 每帧更新角色位置和摄像机位置
+  // 每帧更新角色位置
   useFrame(({ camera }, delta) => {
     const currentPos = gameStore.character.position;
     let currentVelocity = gameStore.character.velocity;
@@ -204,25 +166,7 @@ const MovementController = () => {
     // 更新角色移动状态
     gameStore.setCharacterMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
     
-    // 第三人称摄像机跟随和旋转
-    if (camera) {
-      // 根据旋转角度计算摄像机位置
-      // 考虑俯仰角度的影响，抬高相机角度
-      const pitchFactor = Math.cos(cameraPitch);
-      const cameraTargetX = finalPos.x + Math.sin(cameraYaw) * cameraDistance * pitchFactor;
-      const cameraTargetZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance * pitchFactor;
-      const cameraTargetY = finalPos.y + cameraHeight + Math.sin(cameraPitch) * cameraDistance * 1.5; // 增加1.5倍的俯仰影响，抬高角度
-      
-      // 平滑移动摄像机到目标位置，增强修正效果
-      camera.position.x += (cameraTargetX - camera.position.x) * 0.3; // 进一步增加平滑因子，让相机更快地移动到目标位置
-      camera.position.y += (cameraTargetY - camera.position.y) * 0.3;
-      camera.position.z += (cameraTargetZ - camera.position.z) * 0.3;
-      
-      // 让摄像机看向角色
-      camera.lookAt(finalPos.x, finalPos.y + 1, finalPos.z);
-    }
-    
-    // 开火检测（在相机更新之后）
+    // 开火检测
     if (isMouseDownRef.current && camera) {
       const now = Date.now();
       if (now - lastFireTimeRef.current >= fireRate) {
