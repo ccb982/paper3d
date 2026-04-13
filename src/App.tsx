@@ -69,6 +69,7 @@ const MovementController = () => {
   const isMouseDownRef = useRef(false); // 鼠标按下状态
   const lastFireTimeRef = useRef(0); // 上次发射时间
   const fireRate = 200; // 发射间隔（毫秒）
+  const targetDetectedRef = useRef<THREE.Object3D | null>(null); // 检测到的目标
 
   // 同步方向值到ref，避免闭包问题
   useEffect(() => {
@@ -79,10 +80,12 @@ const MovementController = () => {
   useEffect(() => {
     const handleMouseDown = () => {
       isMouseDownRef.current = true;
+      targetDetectedRef.current = null; // 重置目标检测
     };
     
     const handleMouseUp = () => {
       isMouseDownRef.current = false;
+      targetDetectedRef.current = null; // 松开鼠标时销毁检测器
     };
     
     const handleMouseMove = (event: MouseEvent) => {
@@ -108,7 +111,7 @@ const MovementController = () => {
     mouseY: number,
     canvasElement: HTMLCanvasElement  // 传入 canvas 元素
   ): THREE.Vector3 => {
-    // 1. 计算 canvas 相对坐标
+    // 1. 获取 canvas 相对坐标
     const rect = canvasElement.getBoundingClientRect();
     const ndcX = ((mouseX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -((mouseY - rect.top) / rect.height) * 2 + 1;
@@ -116,10 +119,27 @@ const MovementController = () => {
     // 2. 创建射线
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+    
+    // 3. 子弹发射点（角色胸部高度）
+    const bulletOriginY = characterPos.y + 1.2;
+    const bulletOrigin = new THREE.Vector3(characterPos.x, bulletOriginY, characterPos.z);
 
-    // 3. 直接使用相机射线方向作为子弹方向，考虑相机的所有旋转角度
-    // 这样子弹会沿着玩家视线方向飞行，与相机俯仰角度保持一致
-    return raycaster.ray.direction.clone().normalize();
+    // 4. 定义水平面（Y = bulletOriginY）
+    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), bulletOriginY);
+    const targetPoint = new THREE.Vector3();
+
+    // 5. 计算射线与水平面的交点
+    if (raycaster.ray.intersectPlane(horizontalPlane, targetPoint)) {
+      // 交点存在，从角色发射点指向交点
+      return targetPoint.clone().sub(bulletOrigin).normalize();
+    } else {
+      // 射线与水平面平行（罕见，如相机完全水平且鼠标指向水平方向）
+      // 此时直接使用射线方向，并强制 Y 分量为 0（水平射击）
+      const dir = raycaster.ray.direction.clone().normalize();
+      dir.y = 0;
+      dir.normalize();
+      return dir;
+    }
   };
 
   // 每帧更新角色位置
@@ -166,6 +186,54 @@ const MovementController = () => {
     // 更新角色移动状态
     gameStore.setCharacterMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
     
+    // 目标检测
+    if (isMouseDownRef.current && camera) {
+      // 获取 canvas 相对坐标
+      const rect = canvas.getBoundingClientRect();
+      const ndcX = ((mousePosRef.current.x - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((mousePosRef.current.y - rect.top) / rect.height) * 2 + 1;
+
+      // 创建射线
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+
+      // 检测鼠标是否指向了目标（敌人）
+      const scene = camera.parent;
+      if (scene) {
+        // 递归遍历所有子物体，确保检测到所有目标
+        const allObjects: THREE.Object3D[] = [];
+        scene.traverse((object) => {
+          if (object instanceof THREE.Mesh) {
+            allObjects.push(object);
+          }
+        });
+        
+        // 检测射线与所有物体的交点
+        const intersects = raycaster.intersectObjects(allObjects, false);
+        
+        let targetFound = false;
+        for (const intersect of intersects) {
+          // 检查当前物体或其父物体是否是目标
+          let currentObject: THREE.Object3D | null = intersect.object;
+          while (currentObject) {
+            if (currentObject.userData.isTarget) {
+              // 鼠标指向了目标，设置目标检测
+              targetDetectedRef.current = currentObject;
+              targetFound = true;
+              break;
+            }
+            currentObject = currentObject.parent;
+          }
+          if (targetFound) break;
+        }
+        
+        if (!targetFound) {
+          // 没有检测到目标，重置
+          targetDetectedRef.current = null;
+        }
+      }
+    }
+    
     // 开火检测
     if (isMouseDownRef.current && camera) {
       const now = Date.now();
@@ -174,7 +242,30 @@ const MovementController = () => {
         
         // 实时获取最新值
         const realTimeCharacterPos = gameStore.character.position;
-        const direction = getBulletDirection(camera, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
+        let direction: THREE.Vector3;
+        
+        // 如果检测到目标，自动瞄准目标
+        if (targetDetectedRef.current) {
+          // 计算从角色到目标的方向
+          const bulletOriginY = realTimeCharacterPos.y + 1.2;
+          const bulletOrigin = new THREE.Vector3(realTimeCharacterPos.x, bulletOriginY, realTimeCharacterPos.z);
+          
+          // 获取目标的世界位置
+          const targetPosition = new THREE.Vector3();
+          targetDetectedRef.current.getWorldPosition(targetPosition);
+          
+          // 计算方向向量，考虑目标的高度
+          const directionVector = new THREE.Vector3(
+            targetPosition.x - bulletOrigin.x,
+            targetPosition.y - bulletOrigin.y, // 考虑目标的高度
+            targetPosition.z - bulletOrigin.z
+          );
+          direction = directionVector.normalize();
+        } else {
+          // 否则使用正常的子弹方向计算
+          direction = getBulletDirection(camera, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
+        }
+        
         const newBullet = {
           id: bulletIdRef.current++,
           position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1.2, z: realTimeCharacterPos.z }, // 增加发射高度，确保子弹能够接触到准心
