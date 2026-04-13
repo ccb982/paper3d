@@ -49,12 +49,13 @@ const MovementController = () => {
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
   const gameStore = useGameStore();
+  const characterPos = gameStore.character.position; // 直接从store获取位置
   const jumpForce = 7; // 跳跃力量
   const [cameraDistance, setCameraDistance] = useState(8); // 摄像机距离角色的距离
   const [cameraHeight, setCameraHeight] = useState(3); // 摄像机的高度
   const [cameraYaw, setCameraYaw] = useState(0); // 摄像机绕Y轴旋转（左右）
   const [cameraPitch, setCameraPitch] = useState(0); // 摄像机绕X轴旋转（上下）
-  const mouseRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
+  const mousePosRef = useRef({ x: 0, y: 0 }); // 鼠标位置引用
   const [bullets, setBullets] = useState<Array<{ id: number; position: { x: number; y: number; z: number }; direction: THREE.Vector3 }>>([]);
   const bulletIdRef = useRef(0);
   const bulletVelocity = 50; // 子弹速度（增加速度）
@@ -98,11 +99,11 @@ const MovementController = () => {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       // 计算鼠标移动距离
-      const deltaX = e.clientX - mouseRef.current.x;
-      const deltaY = e.clientY - mouseRef.current.y;
+      const deltaX = e.clientX - mousePosRef.current.x;
+      const deltaY = e.clientY - mousePosRef.current.y;
 
       // 更新鼠标位置
-      mouseRef.current = { x: e.clientX, y: e.clientY };
+      mousePosRef.current = { x: e.clientX, y: e.clientY };
 
       // 计算旋转角度（灵敏度调整）
       const sensitivity = 0.01;
@@ -134,7 +135,28 @@ const MovementController = () => {
       window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [gameStore.character.position, camera]);
+  }, []); // 空依赖数组，只执行一次
+
+  // 实时计算子弹方向（纯函数，每次调用都用最新参数）
+  const getBulletDirection = (camera: THREE.Camera, characterPos: { x: number; y: number; z: number }, mouseX: number, mouseY: number) => {
+    const raycaster = new THREE.Raycaster();
+    const mouseVector = new THREE.Vector2(
+      (mouseX / window.innerWidth) * 2 - 1,
+      -(mouseY / window.innerHeight) * 2 + 1
+    );
+    raycaster.setFromCamera(mouseVector, camera);
+    
+    // 方案B：与地面（Y=0）相交，更精确（推荐）
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // 地面平面 (Y=0)
+    const targetPoint = new THREE.Vector3();
+    const bulletOriginY = characterPos.y + 1;
+    
+    if (raycaster.ray.intersectPlane(groundPlane, targetPoint)) {
+      return new THREE.Vector3().subVectors(targetPoint, new THREE.Vector3(characterPos.x, bulletOriginY, characterPos.z)).normalize();
+    }
+    // 备选：射线平行地面时用射线方向
+    return raycaster.ray.direction.clone().normalize();
+  };
 
   // 每帧更新角色位置和摄像机位置
   useFrame((_, delta) => {
@@ -142,65 +164,33 @@ const MovementController = () => {
     let currentVelocity = gameStore.character.velocity;
     const currentDirection = directionRef.current;
     
-    // 处理子弹发射（在useFrame中确保使用实时角色位置）
+    // 开火检测
     if (isMouseDownRef.current && camera) {
-      const currentTime = Date.now();
-      if (currentTime - lastFireTimeRef.current >= fireRate) {
-        lastFireTimeRef.current = currentTime;
+      const now = Date.now();
+      if (now - lastFireTimeRef.current >= fireRate) {
+        lastFireTimeRef.current = now;
         
-        // 计算子弹发射位置（从角色位置稍微向前）
-        const bulletPosition = {
-          x: currentPos.x,
-          y: currentPos.y + 1, // 从角色胸部高度发射
-          z: currentPos.z
-        };
-
-        // 计算子弹发射方向（从角色位置指向准心位置）
-        // 创建一个射线投射器
-        const raycaster = new THREE.Raycaster();
-        // 使用鼠标当前位置作为射线起点
-        const mouseVector = new THREE.Vector2(
-          (mouseRef.current.x / window.innerWidth) * 2 - 1,
-          -(mouseRef.current.y / window.innerHeight) * 2 + 1
-        );
-        // 从摄像机位置发射射线
-        raycaster.setFromCamera(mouseVector, camera);
-        
-        // 创建一个平面，与摄像机方向垂直，距离摄像机100单位
-        const planeDistance = 100; // 平面距离摄像机的距离
-        const cameraDirection = new THREE.Vector3();
-        camera.getWorldDirection(cameraDirection);
-        
-        // 平面的法向量就是摄像机的方向
-        const planeNormal = cameraDirection.clone();
-        // 平面上的一个点：摄像机位置 + 摄像机方向 * 距离
-        const planePoint = camera.position.clone().add(cameraDirection.multiplyScalar(planeDistance));
-        
-        // 创建平面
-        const plane = new THREE.Plane();
-        plane.setFromNormalAndCoplanarPoint(planeNormal, planePoint);
-        
-        // 计算射线与平面的交点
-        const crosshairPosition = new THREE.Vector3();
-        raycaster.ray.intersectPlane(plane, crosshairPosition);
-        
-        // 如果没有交点（射线与平面平行），使用射线的方向
-        if (!crosshairPosition) {
-          crosshairPosition.copy(raycaster.ray.direction).multiplyScalar(planeDistance).add(camera.position);
+        // 实时获取最新值
+        const direction = getBulletDirection(camera, characterPos, mousePosRef.current.x, mousePosRef.current.y);
+        if (direction) {
+          const newBullet = {
+            id: bulletIdRef.current++,
+            position: { x: characterPos.x, y: characterPos.y + 1, z: characterPos.z },
+            direction,
+          };
+          setBullets(prev => [...prev, newBullet]);
         }
-        
-        // 计算从角色位置到准心位置的方向
-        const bulletDirection = new THREE.Vector3();
-        bulletDirection.subVectors(crosshairPosition, new THREE.Vector3(bulletPosition.x, bulletPosition.y, bulletPosition.z));
-        bulletDirection.normalize();
-
-        // 生成唯一的子弹ID
-        const bulletId = bulletIdRef.current++;
-
-        // 添加新子弹
-        setBullets(prev => [...prev, { id: bulletId, position: bulletPosition, direction: bulletDirection }]);
       }
     }
+    
+    // 更新子弹位置
+    setBullets(prev => prev.filter(bullet => {
+      bullet.position.x += bullet.direction.x * bulletVelocity * delta;
+      bullet.position.y += bullet.direction.y * bulletVelocity * delta;
+      bullet.position.z += bullet.direction.z * bulletVelocity * delta;
+      // 超出边界后移除
+      return Math.abs(bullet.position.x) < 100 && Math.abs(bullet.position.z) < 100 && bullet.position.y < 50;
+    }));
     
     // 检查是否按下跳跃键且角色在地面上
     if (currentDirection.jump && currentVelocity.y === 0) {
