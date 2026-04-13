@@ -45,7 +45,8 @@ function App() {
 
 // 移动控制器组件
 const MovementController = () => {
-  const { camera } = useThree();
+  const { camera, gl } = useThree();
+  const canvas = gl.domElement;
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
   const gameStore = useGameStore();
@@ -140,17 +141,36 @@ const MovementController = () => {
   // 实时计算子弹方向（纯函数，每次调用都用最新参数）
   const getBulletDirection = (
     camera: THREE.Camera,
+    characterPos: { x: number; y: number; z: number },
     mouseX: number,
-    mouseY: number
+    mouseY: number,
+    canvasElement: HTMLCanvasElement  // 传入 canvas 元素
   ): THREE.Vector3 => {
+    // 1. 计算 canvas 相对坐标
+    const rect = canvasElement.getBoundingClientRect();
+    const ndcX = ((mouseX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((mouseY - rect.top) / rect.height) * 2 + 1;
+
+    // 2. 创建射线
     const raycaster = new THREE.Raycaster();
-    const mouseVector = new THREE.Vector2(
-      (mouseX / window.innerWidth) * 2 - 1,
-      -(mouseY / window.innerHeight) * 2 + 1
-    );
-    raycaster.setFromCamera(mouseVector, camera);
-    // 直接返回射线方向（从相机指向鼠标）
-    return raycaster.ray.direction.clone().normalize();
+    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+
+    // 3. 定义水平面（Y = 角色发射高度）
+    const bulletOriginY = characterPos.y + 1;
+    const horizontalPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), bulletOriginY);
+    const targetPoint = new THREE.Vector3();
+
+    // 4. 计算交点
+    if (raycaster.ray.intersectPlane(horizontalPlane, targetPoint)) {
+      // 从角色发射点指向交点
+      return new THREE.Vector3().subVectors(
+        targetPoint,
+        new THREE.Vector3(characterPos.x, bulletOriginY, characterPos.z)
+      ).normalize();
+    } else {
+      // 射线与平面平行（罕见），回退到射线方向
+      return raycaster.ray.direction.clone().normalize();
+    }
   };
 
   // 每帧更新角色位置和摄像机位置
@@ -166,13 +186,14 @@ const MovementController = () => {
         lastFireTimeRef.current = now;
         
         // 实时获取最新值
-      const direction = getBulletDirection(camera, mousePosRef.current.x, mousePosRef.current.y);
-      const newBullet = {
-        id: bulletIdRef.current++,
-        position: { x: characterPos.x, y: characterPos.y + 1, z: characterPos.z },
-        direction,
-      };
-      setBullets(prev => [...prev, newBullet]);
+        const realTimeCharacterPos = gameStore.character.position;
+        const direction = getBulletDirection(camera, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
+        const newBullet = {
+          id: bulletIdRef.current++,
+          position: { x: realTimeCharacterPos.x, y: realTimeCharacterPos.y + 1, z: realTimeCharacterPos.z },
+          direction,
+        };
+        setBullets(prev => [...prev, newBullet]);
       }
     }
     
