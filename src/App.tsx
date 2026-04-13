@@ -146,16 +146,25 @@ const MovementController = () => {
     );
     raycaster.setFromCamera(mouseVector, camera);
     
-    // 方案B：与地面（Y=0）相交，更精确（推荐）
-    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // 地面平面 (Y=0)
-    const targetPoint = new THREE.Vector3();
-    const bulletOriginY = characterPos.y + 1;
+    // 获取相机射线方向
+    const rayDirection = raycaster.ray.direction.clone();
     
-    if (raycaster.ray.intersectPlane(groundPlane, targetPoint)) {
-      return new THREE.Vector3().subVectors(targetPoint, new THREE.Vector3(characterPos.x, bulletOriginY, characterPos.z)).normalize();
+    // 角色发射点
+    const bulletOrigin = new THREE.Vector3(characterPos.x, characterPos.y + 1, characterPos.z);
+    
+    // 创建平面：经过角色发射点，且与射线方向垂直
+    const planeNormal = rayDirection.clone();
+    const plane = new THREE.Plane(planeNormal, -planeNormal.dot(bulletOrigin));
+    
+    // 计算射线与平面的交点
+    const targetPoint = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(plane, targetPoint)) {
+      // 从角色发射点指向交点
+      return new THREE.Vector3().subVectors(targetPoint, bulletOrigin).normalize();
+    } else {
+      // 射线与平面平行时，使用射线方向
+      return rayDirection.clone().normalize();
     }
-    // 备选：射线平行地面时用射线方向
-    return raycaster.ray.direction.clone().normalize();
   };
 
   // 每帧更新角色位置和摄像机位置

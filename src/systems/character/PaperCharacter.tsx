@@ -19,31 +19,30 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
   // 每帧更新角色位置和朝向
   useFrame((_, delta) => {
     if (meshRef.current) {
-      const { position, isMoving } = useGameStore.getState().character;
-      
-      // 更新位置
-      meshRef.current.position.set(position.x, position.y, position.z);
-      
-      // 当角色在移动时，让角色平滑面向相机的方向向量
-      if (isMoving) {
-        // 获取相机的方向向量
-        const cameraDirection = new THREE.Vector3();
-        camera.getWorldDirection(cameraDirection);
-        
-        // 计算目标旋转四元数（面向相机的方向向量）
-        const targetQuat = new THREE.Quaternion().setFromUnitVectors(
-          new THREE.Vector3(0, 0, 1), // 假设角色默认正面是 +Z
-          cameraDirection
-        );
-        
-        // 平滑插值，rotationSpeed 控制转速（弧度/秒）
-        const rotationSpeed = 8.0; // 每秒转 8 弧度，约 460 度/秒，可调
-        meshRef.current.quaternion.rotateTowards(targetQuat, rotationSpeed * delta);
-        
-        // 保持直立
-        meshRef.current.rotation.x = 0;
-        meshRef.current.rotation.z = 0;
-      }
+      const { position: charPos } = useGameStore.getState().character;
+      meshRef.current.position.set(charPos.x, charPos.y, charPos.z);
+
+      // 1. 获取相机位置和角色位置
+      const cameraPos = camera.position.clone();
+      const characterPos = meshRef.current.position.clone();
+
+      // 2. 计算从角色指向相机的水平方向（忽略Y轴）
+      const toCamera = new THREE.Vector3().subVectors(cameraPos, characterPos);
+      toCamera.y = 0;               // 只取水平方向
+      toCamera.normalize();
+
+      // 3. 角色背面朝向相机 → 角色的正面方向 = 相机方向的相反数
+      const targetDirection = toCamera.clone().negate();
+
+      // 4. 计算目标旋转（只绕Y轴）
+      const targetQuat = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),   // 角色默认正面是 +Z
+        targetDirection
+      );
+
+      // 5. 平滑旋转
+      const rotationSpeed = 8.0;      // 弧度/秒
+      meshRef.current.quaternion.rotateTowards(targetQuat, rotationSpeed * delta);
     }
   });
 
