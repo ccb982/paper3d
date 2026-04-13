@@ -247,15 +247,9 @@ const MovementController = () => {
     // 第三人称摄像机跟随和旋转
     if (camera) {
       // 根据旋转角度计算摄像机位置
-      const cameraX = finalPos.x + Math.sin(cameraYaw) * cameraDistance;
-      const cameraZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance;
-      const cameraY = finalPos.y + cameraHeight;
-      
-      // 考虑俯仰角度的影响
-      const pitchFactor = Math.cos(cameraPitch);
-      const cameraTargetX = finalPos.x + Math.sin(cameraYaw) * cameraDistance * pitchFactor;
-      const cameraTargetZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance * pitchFactor;
-      const cameraTargetY = finalPos.y + cameraHeight + Math.sin(cameraPitch) * cameraDistance;
+      const cameraTargetX = finalPos.x + Math.sin(cameraYaw) * cameraDistance;
+      const cameraTargetZ = finalPos.z + Math.cos(cameraYaw) * cameraDistance;
+      const cameraTargetY = finalPos.y + cameraHeight;
       
       // 平滑移动摄像机到目标位置
       camera.position.x += (cameraTargetX - camera.position.x) * 0.1;
