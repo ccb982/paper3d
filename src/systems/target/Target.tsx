@@ -31,7 +31,7 @@ const Target: React.FC<TargetProps> = ({ position, rotation = { x: 0, y: 0, z: 0
       ref={meshRef}
       position={[position.x, position.y, position.z]}
       rotation={[rotation.x, rotation.y, rotation.z]}
-      userData={{ isTarget: true, handleHit }}
+      userData={{ isTarget: true, isShootable: true, handleHit }}
     >
       <planeGeometry args={[2, 4]} />
       <meshStandardMaterial 

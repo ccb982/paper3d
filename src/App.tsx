@@ -253,6 +253,15 @@ const MovementController = () => {
       const mouseY = -((mousePosRef.current.y - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
       
+      // 确保可射击物体数组已初始化
+      if (shootableObjectsRef.current.length === 0) {
+        const objects: THREE.Object3D[] = [];
+        scene.traverse(obj => {
+          if (obj.userData.isShootable) objects.push(obj);
+        });
+        shootableObjectsRef.current = objects;
+      }
+      
       // 使用预收集的可射击物体数组
       const intersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
       
