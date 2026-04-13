@@ -59,7 +59,7 @@ const MovementController = () => {
   const bulletIdRef = useRef(0);
   const bulletVelocity = 50; // 子弹速度（增加速度）
   const isMouseDownRef = useRef(false); // 鼠标按下状态
-  const fireIntervalRef = useRef<NodeJS.Timeout | null>(null); // 发射子弹的定时器
+  const lastFireTimeRef = useRef(0); // 上次发射时间
   const fireRate = 200; // 发射间隔（毫秒）
 
   // 同步方向值到ref，避免闭包问题
@@ -115,15 +115,44 @@ const MovementController = () => {
       setCameraPitch(prev => Math.max(-Math.PI / 2, Math.min(Math.PI / 2, prev - pitchDelta)));
     };
 
-    const fireBullet = () => {
-      if (camera) {
-        const characterPos = gameStore.character.position;
+    const handleMouseDown = () => {
+      isMouseDownRef.current = true;
+    };
+
+    const handleMouseUp = () => {
+      isMouseDownRef.current = false;
+    };
+
+    // 添加鼠标事件监听器
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mousedown', handleMouseDown);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    // 清理事件监听器
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mousedown', handleMouseDown);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [gameStore.character.position, camera]);
+
+  // 每帧更新角色位置和摄像机位置
+  useFrame((_, delta) => {
+    const currentPos = gameStore.character.position;
+    let currentVelocity = gameStore.character.velocity;
+    const currentDirection = directionRef.current;
+    
+    // 处理子弹发射（在useFrame中确保使用实时角色位置）
+    if (isMouseDownRef.current && camera) {
+      const currentTime = Date.now();
+      if (currentTime - lastFireTimeRef.current >= fireRate) {
+        lastFireTimeRef.current = currentTime;
         
         // 计算子弹发射位置（从角色位置稍微向前）
         const bulletPosition = {
-          x: characterPos.x,
-          y: characterPos.y + 1, // 从角色胸部高度发射
-          z: characterPos.z
+          x: currentPos.x,
+          y: currentPos.y + 1, // 从角色胸部高度发射
+          z: currentPos.z
         };
 
         // 计算子弹发射方向（从角色位置指向准心位置）
@@ -171,42 +200,7 @@ const MovementController = () => {
         // 添加新子弹
         setBullets(prev => [...prev, { id: bulletId, position: bulletPosition, direction: bulletDirection }]);
       }
-    };
-
-    const handleMouseDown = () => {
-      isMouseDownRef.current = true;
-      fireBullet(); // 立即发射一颗子弹
-      // 设置定时器，持续发射子弹
-      fireIntervalRef.current = setInterval(fireBullet, fireRate);
-    };
-
-    const handleMouseUp = () => {
-      isMouseDownRef.current = false;
-      // 清除定时器，停止发射子弹
-      if (fireIntervalRef.current) {
-        clearInterval(fireIntervalRef.current);
-        fireIntervalRef.current = null;
-      }
-    };
-
-    // 添加鼠标事件监听器
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    // 清理事件监听器
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [gameStore.character.position, camera]);
-
-  // 每帧更新角色位置和摄像机位置
-  useFrame((_, delta) => {
-    const currentPos = gameStore.character.position;
-    let currentVelocity = gameStore.character.velocity;
-    const currentDirection = directionRef.current;
+    }
     
     // 检查是否按下跳跃键且角色在地面上
     if (currentDirection.jump && currentVelocity.y === 0) {
