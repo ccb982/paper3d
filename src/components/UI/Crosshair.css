@@ -48,3 +48,41 @@
   width: 10px;
   height: 1px;
 }
+
+/* 锁定状态样式 */
+.crosshair-locking .crosshair-center {
+  background-color: #2196F3;
+  box-shadow: 0 0 10px rgba(33, 150, 243, 0.8);
+}
+
+.crosshair-locking .crosshair-line {
+  background-color: #2196F3;
+  box-shadow: 0 0 5px rgba(33, 150, 243, 0.8);
+}
+
+/* 锁定圆环 */
+.crosshair-lock-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.crosshair-lock-progress {
+  transition: stroke-dashoffset 0.05s linear;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.7;
+  }
+}

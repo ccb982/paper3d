@@ -19,6 +19,8 @@ import { OrbitControls } from '@react-three/drei';
 import RayVisualizer, { MultiRayVisualizer } from './components/debug/RayVisualizer';
 import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
 
+const LOCK_DURATION = 1000; // 锁定持续时间（毫秒）
+
 function getCameraPitch(camera: THREE.Camera): number {
   // 强制更新相机矩阵，确保获取到最新的方向
   camera.updateMatrixWorld();
@@ -83,6 +85,8 @@ function App() {
 
   const gameStore = useGameStore();
   const characterPos = gameStore.character.position;
+  const [isLocking, setIsLocking] = useState(false); // 是否正在锁定
+  const [lockCountdown, setLockCountdown] = useState(0); // 锁定倒计时
 
   return (
     <div className="game-container">
@@ -100,18 +104,38 @@ function App() {
           zoomSpeed={1.0} 
           rotateSpeed={1.0} 
         />
-        <MovementController />
+        <MovementController 
+          isLocking={isLocking} 
+          setIsLocking={setIsLocking}
+          lockCountdown={lockCountdown}
+          setLockCountdown={setLockCountdown}
+        />
       </Canvas>
       <StatusPanel />
       <DialogBubble />
       <LoadingIndicator />
-      <Crosshair />
+      <Crosshair 
+        isLocking={isLocking} 
+        lockProgress={1 - (lockCountdown / 1000)}
+      />
     </div>
   );
 }
 
 // 移动控制器组件
-const MovementController = () => {
+interface MovementControllerProps {
+  isLocking: boolean;
+  setIsLocking: React.Dispatch<React.SetStateAction<boolean>>;
+  lockCountdown: number;
+  setLockCountdown: React.Dispatch<React.SetStateAction<number>>;
+}
+
+const MovementController: React.FC<MovementControllerProps> = ({ 
+  isLocking, 
+  setIsLocking, 
+  lockCountdown, 
+  setLockCountdown 
+}) => {
   const { camera, gl, scene } = useThree();
   const canvas = gl.domElement;
   const cameraRef = useRef(camera);
@@ -143,6 +167,8 @@ const MovementController = () => {
   const autoShootIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const shootableObjectsRef = useRef<THREE.Object3D[]>([]);
   const lockedTargetRef = useRef(lockedTarget); // 实时锁定目标引用
+  const lockCountdownRef = useRef(0); // 锁定倒计时引用
+  const isLockingRef = useRef(false); // 是否正在锁定引用
 
   // 同步方向值到ref，避免闭包问题
   useEffect(() => {
@@ -182,6 +208,12 @@ const MovementController = () => {
     const handleMouseUp = () => {
       isMouseDownRef.current = false;
       targetDetectedRef.current = null; // 松开鼠标时销毁检测器
+      // 松开鼠标时取消锁定倒计时
+      lockCountdownRef.current = 0;
+      isLockingRef.current = false;
+      setLockCountdown(0);
+      setIsLocking(false);
+      console.log('取消锁定倒计时');
       // 更新射击状态
       gameStore.setShootInfo({ isFiring: false });
     };
@@ -349,6 +381,30 @@ const MovementController = () => {
       });
     }
     
+    // 锁定倒计时逻辑
+    if (isLockingRef.current && lockedTargetRef.current) {
+      lockCountdownRef.current -= delta * 1000; // 将delta转换为毫秒
+      console.log(`倒计时: ${lockCountdownRef.current.toFixed(0)}ms`);
+      if (lockCountdownRef.current <= 0) {
+        // 倒计时结束，锁定完成
+        lockCountdownRef.current = 0;
+        isLockingRef.current = false;
+        setLockCountdown(0);
+        setIsLocking(false);
+        console.log('锁定完成，可以射击');
+      } else {
+        // 更新倒计时状态
+        setLockCountdown(lockCountdownRef.current);
+      }
+    } else if (isLockingRef.current && !lockedTargetRef.current) {
+      // 如果目标丢失，重置锁定状态
+      lockCountdownRef.current = 0;
+      isLockingRef.current = false;
+      setLockCountdown(0);
+      setIsLocking(false);
+      console.log('目标丢失，取消锁定');
+    }
+    
     // 射线检测可射击目标
     if (camera) {
       // 强制更新相机矩阵，确保获取到最新的方向
@@ -464,8 +520,26 @@ const MovementController = () => {
           });
           hit.object.material = glowMaterial;
         }
+        
+        // 当锁定目标且鼠标按下时，开始锁定倒计时
+        // 只有当之前没有锁定目标时才开始倒计时
+        if (isMouseDownRef.current && !isLockingRef.current && !lockedTargetRef.current) {
+          lockCountdownRef.current = 1000; // 1秒锁定时间
+          isLockingRef.current = true;
+          setLockCountdown(1000);
+          setIsLocking(true);
+          console.log('开始锁定倒计时');
+        }
       } else {
         newLockedTarget = null;
+        // 当目标丢失时，重置锁定状态
+        if (isLockingRef.current) {
+          lockCountdownRef.current = 0;
+          isLockingRef.current = false;
+          setLockCountdown(0);
+          setIsLocking(false);
+          console.log('目标丢失，取消锁定');
+        }
       }
       
       // 直接更新ref，确保实时反映锁定状态
@@ -540,48 +614,25 @@ const MovementController = () => {
       }
     }
     
-    // 传统开火检测（支持锁定和非锁定状态）
-    if (isMouseDownRef.current && cameraRef.current) {
+    // 传统开火检测（只在锁定状态且倒计时结束后射击）
+    if (isMouseDownRef.current && cameraRef.current && lockedTargetRef.current && !isLockingRef.current) {
       const now = Date.now();
       if (now - lastFireTimeRef.current >= fireRate) {
         lastFireTimeRef.current = now;
         
         // 实时获取最新值
         const realTimeCharacterPos = gameStore.character.position;
-        let direction: THREE.Vector3;
         
-        if (lockedTargetRef.current) {
-          // 有锁定目标：从角色位置指向锁定目标的击中点
-          console.log('使用锁定目标射击');
-          // 获取目标的世界位置，确保使用最新位置
-          const targetPosition = new THREE.Vector3();
-          lockedTargetRef.current.object.getWorldPosition(targetPosition);
-          
-          direction = new THREE.Vector3().subVectors(
-            targetPosition,
-            new THREE.Vector3(realTimeCharacterPos.x, realTimeCharacterPos.y + 1.2, realTimeCharacterPos.z)
-          ).normalize();
-        } else if (targetDetectedRef.current) {
-          // 如果检测到目标，自动瞄准目标
-          // 计算从角色到目标的方向
-          const bulletOriginY = realTimeCharacterPos.y + 1.2;
-          const bulletOrigin = new THREE.Vector3(realTimeCharacterPos.x, bulletOriginY, realTimeCharacterPos.z);
-          
-          // 获取目标的世界位置
-          const targetPosition = new THREE.Vector3();
-          targetDetectedRef.current.getWorldPosition(targetPosition);
-          
-          // 计算方向向量，考虑目标的高度
-          const directionVector = new THREE.Vector3(
-            targetPosition.x - bulletOrigin.x,
-            targetPosition.y - bulletOrigin.y, // 考虑目标的高度
-            targetPosition.z - bulletOrigin.z
-          );
-          direction = directionVector.normalize();
-        } else {
-          // 否则使用正常的子弹方向计算
-          direction = getBulletDirection(cameraRef.current, realTimeCharacterPos, mousePosRef.current.x, mousePosRef.current.y, canvas);
-        }
+        // 有锁定目标：从角色位置指向锁定目标的击中点
+        console.log('使用锁定目标射击');
+        // 获取目标的世界位置，确保使用最新位置
+        const targetPosition = new THREE.Vector3();
+        lockedTargetRef.current.object.getWorldPosition(targetPosition);
+        
+        const direction = new THREE.Vector3().subVectors(
+          targetPosition,
+          new THREE.Vector3(realTimeCharacterPos.x, realTimeCharacterPos.y + 1.2, realTimeCharacterPos.z)
+        ).normalize();
         
         // 更新射击方向
         setShootDirection(direction.clone());
@@ -598,6 +649,7 @@ const MovementController = () => {
           direction,
         };
         setBullets(prev => [...prev, newBullet]);
+        console.log('发射子弹:', newBullet);
       }
     }
     
