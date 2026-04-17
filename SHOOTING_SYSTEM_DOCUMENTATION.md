@@ -165,6 +165,17 @@ const [shootDirection, setShootDirection] = useState(new THREE.Vector3(0, 0, -1)
 ### 3.2 Ref引用 (useRef)
 
 ```typescript
+// 射击常量
+const bulletVelocity = 50;  // 子弹速度
+const fireRate = 200;        // 发射间隔（毫秒）
+const rayOffsets = [         // 十字形5射线偏移
+  { x: 0, y: 0 },            // 中心
+  { x: 0.05, y: 0 },        // 右
+  { x: -0.05, y: 0 },       // 左
+  { x: 0, y: 0.05 },        // 上
+  { x: 0, y: -0.05 },       // 下
+];
+
 // 实时数据引用（避免闭包问题）
 const isMouseDownRef = useRef(false);           // 鼠标按下状态
 const lastFireTimeRef = useRef(0);              // 上次发射时间戳
@@ -174,6 +185,7 @@ const isLockingRef = useRef(false);             // 实时锁定状态
 const mousePosRef = useRef({ x: 0, y: 0 });     // 鼠标位置
 const bulletIdRef = useRef(0);                  // 子弹ID计数器
 const shootableObjectsRef = useRef<THREE.Object3D[]>([]); // 可射击物体列表
+const targetDetectedRef = useRef<THREE.Object3D | null>(null); // 检测到的目标
 ```
 
 **关键点**：
@@ -480,52 +492,299 @@ App.tsx
 │
 ├── 事件处理
 │   ├── handleMouseDown
+│   │   ```typescript
+│   │   const handleMouseDown = () => {
+│   │     isMouseDownRef.current = true;
+│   │     targetDetectedRef.current = null;
+│   │     gameStore.setShootInfo({ isFiring: true });
+│   │   };
+│   │   ```
 │   ├── handleMouseUp
+│   │   ```typescript
+│   │   const handleMouseUp = () => {
+│   │     isMouseDownRef.current = false;
+│   │     targetDetectedRef.current = null;
+│   │     // 松开鼠标时取消锁定倒计时
+│   │     lockCountdownRef.current = 0;
+│   │     isLockingRef.current = false;
+│   │     setLockCountdown(0);
+│   │     setIsLocking(false);
+│   │     gameStore.setShootInfo({ isFiring: false });
+│   │   };
+│   │   ```
 │   └── handleMouseMove
+│       ```typescript
+│       const handleMouseMove = (event: MouseEvent) => {
+│         mousePosRef.current = { x: event.clientX, y: event.clientY };
+│         if (camera) {
+│           // 相机矩阵更新
+│           if (camera.aspect !== canvas.width / canvas.height) {
+│             camera.aspect = canvas.width / canvas.height;
+│             camera.updateProjectionMatrix();
+│             camera.updateMatrixWorld();
+│           }
+│           // 使用基于仰角的NDC修正
+│           const characterPos = new THREE.Vector3(
+│             gameStore.character.position.x,
+│             gameStore.character.position.y,
+│             gameStore.character.position.z
+│           );
+│           const correctedNDC = getCorrectedNDC(
+│             canvas, event.clientX, event.clientY, camera, characterPos, 0.3
+│           );
+│           // 创建射线并更新可视化数据
+│           const raycaster = new THREE.Raycaster();
+│           raycaster.setFromCamera(correctedNDC, camera);
+│           setRayOrigin(raycaster.ray.origin.clone());
+│           setRayDirection(raycaster.ray.direction.clone());
+│           // ...
+│         }
+│       };
+│       ```
 │
 ├── 游戏循环 (useFrame)
 │   ├── 锁定倒计时更新
+│   │   ```typescript
+│   │   if (isLockingRef.current && lockedTargetRef.current) {
+│   │     lockCountdownRef.current -= delta * 1000;
+│   │     if (lockCountdownRef.current <= 0) {
+│   │       lockCountdownRef.current = 0;
+│   │       isLockingRef.current = false;
+│   │       setLockCountdown(0);
+│   │       setIsLocking(false);
+│   │     } else {
+│   │       setLockCountdown(lockCountdownRef.current);
+│   │     }
+│   │   }
+│   │   ```
 │   ├── 射线检测
+│   │   ```typescript
+│   │   // 多射线检测
+│   │   const allIntersects: THREE.Intersection[] = [];
+│   │   const rayOrigins: THREE.Vector3[] = [];
+│   │   const rayDirections: THREE.Vector3[] = [];
+│   │
+│   │   for (const offset of rayOffsets) {
+│   │     // 原始射线（未修正）
+│   │     raycaster.setFromCamera(
+│   │       new THREE.Vector2(ndcX + offset.x, ndcY + offset.y), camera
+│   │     );
+│   │     const rawDirection = raycaster.ray.direction.clone();
+│   │     const rawIntersects = raycaster.intersectObjects(
+│   │       shootableObjectsRef.current, true
+│   │     );
+│   │
+│   │     // 修正后的射线
+│   │     raycaster.setFromCamera(
+│   │       new THREE.Vector2(correctedNDC.x + offset.x, correctedNDC.y + offset.y), camera
+│   │     );
+│   │     const correctedDirection = raycaster.ray.direction.clone();
+│   │     const correctedIntersects = raycaster.intersectObjects(
+│   │       shootableObjectsRef.current, true
+│   │     );
+│   │
+│   │     // 取两条射线中Y分量较大的方向
+│   │     const finalDirection = rawDirection.y > correctedDirection.y
+│   │       ? rawDirection
+│   │       : correctedDirection;
+│   │
+│   │     // 使用最终方向重新设置射线进行检测
+│   │     raycaster.set(camera.position, finalDirection);
+│   │     const finalIntersects = raycaster.intersectObjects(
+│   │       shootableObjectsRef.current, true
+│   │     );
+│   │     allIntersects.push(...finalIntersects);
+│   │     rayOrigins.push(camera.position.clone());
+│   │     rayDirections.push(finalDirection);
+│   │   }
+│   │   ```
 │   ├── 目标锁定
+│   │   ```typescript
+│   │   // 锁定开始条件
+│   │   if (newLockedTarget && isMouseDownRef.current &&
+│   │       !isLockingRef.current && !lockedTargetRef.current) {
+│   │     lockCountdownRef.current = 1000;
+│   │     isLockingRef.current = true;
+│   │     setIsLocking(true);
+│   │   }
+│   │
+│   │   // 目标丢失时取消锁定
+│   │   if (isLockingRef.current && !lockedTargetRef.current) {
+│   │     lockCountdownRef.current = 0;
+│   │     isLockingRef.current = false;
+│   │     setLockCountdown(0);
+│   │     setIsLocking(false);
+│   │   }
+│   │   ```
 │   └── 射击执行
+│       ```typescript
+│       if (isMouseDownRef.current && lockedTargetRef.current && !isLockingRef.current) {
+│         const now = Date.now();
+│         if (now - lastFireTimeRef.current >= fireRate) {
+│           lastFireTimeRef.current = now;
+│           const targetPosition = new THREE.Vector3();
+│           lockedTargetRef.current.object.getWorldPosition(targetPosition);
+│           const direction = new THREE.Vector3().subVectors(
+│             targetPosition,
+│             new THREE.Vector3(
+│               realTimeCharacterPos.x,
+│               realTimeCharacterPos.y + 1.2,
+│               realTimeCharacterPos.z
+│             )
+│           ).normalize();
+│           const newBullet = { id: bulletIdRef.current++, position: {...}, direction };
+│           setBullets(prev => [...prev, newBullet]);
+│         }
+│       }
+│       ```
 │
 └── 子弹管理
     ├── 子弹更新
+    │   ```typescript
+    │   // 更新子弹位置
+    │   setBullets(prev => prev.filter(bullet => {
+    │     bullet.position.x += bullet.direction.x * bulletVelocity * delta;
+    │     bullet.position.y += bullet.direction.y * bulletVelocity * delta;
+    │     bullet.position.z += bullet.direction.z * bulletVelocity * delta;
+    │     // 超出边界后移除
+    │     return Math.abs(bullet.position.x) < 100 &&
+    │            Math.abs(bullet.position.z) < 100 &&
+    │            bullet.position.y < 50;
+    │   }));
+    │   ```
     ├── 碰撞检测
     └── 子弹过期处理
+        ```typescript
+        const handleBulletExpire = (id: number) => {
+          setBullets(prev => prev.filter(bullet => bullet.id !== id));
+        };
+        ```
+
+### 9.2 组件渲染
+
+```typescript
+// 子弹渲染
+{bullets.map(bullet => (
+  <Bullet
+    key={bullet.id}
+    position={bullet.position}
+    direction={bullet.direction}
+    velocity={bulletVelocity}
+    onExpire={() => handleBulletExpire(bullet.id)}
+  />
+))}
+
+// 射线可视化
+<RayVisualizer
+  origin={rayOrigin}
+  direction={rayDirection}
+  length={100}
+  color={0xff0000}
+/>
+
+// 多射线可视化
+<MultiRayVisualizer
+  origins={multiRayOrigins}
+  directions={multiRayDirections}
+  length={100}
+  color={0x00ffff}
+/>
+```
+
+### 9.3 React状态完整定义
+
+```typescript
+// 锁定相关状态
+const [isLocking, setIsLocking] = useState(false);
+const [lockCountdown, setLockCountdown] = useState(0);
+const [lockedTarget, setLockedTarget] = useState<{ point: THREE.Vector3; object: THREE.Object3D } | null>(null);
+
+// 子弹相关状态
+const [bullets, setBullets] = useState<Array<{
+  id: number;
+  position: { x: number; y: number; z: number };
+  direction: THREE.Vector3
+}>>([]);
+
+// 射线可视化状态
+const [rayOrigin, setRayOrigin] = useState(new THREE.Vector3());
+const [rayDirection, setRayDirection] = useState(new THREE.Vector3(0, 0, -1));
+const [shootDirection, setShootDirection] = useState(new THREE.Vector3(0, 0, -1));
+const [multiRayOrigins, setMultiRayOrigins] = useState<THREE.Vector3[]>([]);
+const [multiRayDirections, setMultiRayDirections] = useState<THREE.Vector3[]>([]);
 ```
 
 ---
 
-## 10. 调试建议
+## 10. 调试相关代码
 
-### 10.1 控制台日志
-
-系统包含详细的调试日志：
+### 10.1 调试组件导入
 
 ```typescript
-// 补偿计算日志
-console.log(`Pitch: ${pitch.toFixed(3)}, Distance: ${distanceToCamera.toFixed(2)},
-             DistanceComp: ${distanceCompensation.toFixed(3)},
-             PitchComp: ${pitchCompensation.toFixed(3)},
-             Total: ${totalCompensation.toFixed(3)},
-             Correction: ${correction.toFixed(3)}`);
+import RayVisualizer, { MultiRayVisualizer } from './components/debug/RayVisualizer';
+import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
+```
 
-// 锁定状态日志
-console.log('开始锁定倒计时');
+### 10.2 射线检测状态更新
+
+```typescript
+gameStore.setRaycastInfo({
+  active: true,
+  shootableObjects: shootableObjectsRef.current.length,
+  intersects: allIntersects.length,
+  locked: allIntersects.length > 0
+});
+```
+
+### 10.3 射击状态更新
+
+```typescript
+gameStore.setShootInfo({ isFiring: true });
+gameStore.setShootInfo({ isFiring: false });
+gameStore.setShootInfo({
+  isFiring: true,
+  fireCount: gameStore.shootInfo.fireCount + 1
+});
+```
+
+### 10.4 控制台调试日志
+
+```typescript
+console.log(`Pitch: ${pitch.toFixed(3)}, Distance: ${distanceToCamera.toFixed(2)}, ...`);
 console.log(`倒计时: ${lockCountdownRef.current.toFixed(0)}ms`);
+console.log('开始锁定倒计时');
 console.log('锁定完成，可以射击');
 console.log('目标丢失，取消锁定');
+console.log('可射击物体数量:', shootableObjectsRef.current.length);
 console.log('使用锁定目标射击');
 console.log('发射子弹:', newBullet);
 ```
 
-### 10.2 射线可视化
+### 10.5 射线可视化组件
 
-系统支持射线可视化（通过 `RayVisualizer` 组件）：
-- 红色：原始射线
-- 蓝色：修正后射线
-- 黄色：最终射线（融合结果）
+```typescript
+<RayVisualizer origin={rayOrigin} direction={rayDirection} length={100} color={0xff0000} />
+<MultiRayVisualizer origins={multiRayOrigins} directions={multiRayDirections} length={100} color={0x00ffff} />
+<ShootDirectionVisualizer origin={...} direction={shootDirection} length={3} color={0x00ff00} thickness={0.1} />
+```
+
+### 10.6 射线可视化组件属性说明
+
+| 组件 | 属性 | 类型 | 说明 |
+|------|------|------|------|
+| RayVisualizer | origin | Vector3 | 射线原点 |
+| | direction | Vector3 | 射线方向 |
+| | length | number | 射线长度 |
+| | color | number | 射线颜色(HEX) |
+| MultiRayVisualizer | origins | Vector3[] | 多条射线原点数组 |
+| | directions | Vector3[] | 多条射线方向数组 |
+| | length | number | 射线长度 |
+| | color | number | 射线颜色(HEX) |
+| ShootDirectionVisualizer | origin | Vector3 | 射击方向原点 |
+| | direction | Vector3 | 射击方向 |
+| | length | number | 方向箭头长度 |
+| | color | number | 箭头颜色(HEX) |
+| | thickness | number | 箭头粗细 |
 
 ---
 
