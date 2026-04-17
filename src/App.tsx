@@ -19,6 +19,57 @@ import { OrbitControls } from '@react-three/drei';
 import RayVisualizer, { MultiRayVisualizer } from './components/debug/RayVisualizer';
 import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
 
+function getCameraPitch(camera: THREE.Camera): number {
+  const direction = new THREE.Vector3();
+  camera.getWorldDirection(direction);
+  return Math.asin(direction.y);
+}
+
+function getCorrectedNDC(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  camera: THREE.Camera,
+  characterPosition: THREE.Vector3,
+  baseCompensation: number = 0.3
+): THREE.Vector2 {
+  const rect = canvas.getBoundingClientRect();
+  const pixelWidth = canvas.width;
+  const pixelHeight = canvas.height;
+  const scaleX = pixelWidth / rect.width;
+  const scaleY = pixelHeight / rect.height;
+  const pixelX = (clientX - rect.left) * scaleX;
+  const pixelY = (clientY - rect.top) * scaleY;
+  let ndcX = (pixelX / pixelWidth) * 2 - 1;
+  let ndcY = -(pixelY / pixelHeight) * 2 + 1;
+  
+  const pitch = getCameraPitch(camera);
+  
+  // 计算角色到摄像机的距离
+  const distanceToCamera = camera.position.distanceTo(characterPosition);
+  
+  // 动态距离补偿：距离越近，补偿强度越大
+  // 降低补偿系数，使修正效果更加柔和
+  const distanceCompensation = Math.max(0.8, Math.min(1.2, 20 / distanceToCamera));
+  
+  // 俯角补偿：俯角越高（pitch > 0，向下看），补偿效果越好
+  // 大幅降低俯角补偿系数
+  const pitchCompensation = 1.0 + Math.max(0, pitch) * 0.5;
+  
+  // 综合补偿系数
+  const totalCompensation = baseCompensation * distanceCompensation * pitchCompensation;
+  
+  // 修复补偿方向：当相机向下看时（pitch > 0），应该向上偏移射线
+  // 所以使用负的补偿值
+  const correction = -pitch * totalCompensation;
+  ndcY += correction;
+  ndcY = Math.max(-1, Math.min(1, ndcY));
+  
+  console.log(`Pitch: ${pitch.toFixed(3)}, Distance: ${distanceToCamera.toFixed(2)}, DistanceComp: ${distanceCompensation.toFixed(3)}, PitchComp: ${pitchCompensation.toFixed(3)}, Total: ${totalCompensation.toFixed(3)}, Correction: ${correction.toFixed(3)}`);
+  
+  return new THREE.Vector2(ndcX, ndcY);
+}
+
 function App() {
   const { triggerDialogue } = useDialogue();
 
@@ -308,6 +359,10 @@ const MovementController = () => {
         camera.updateProjectionMatrix();
       }
       
+      // 使用基于仰角的NDC修正
+      const characterPos = new THREE.Vector3(gameStore.character.position.x, gameStore.character.position.y, gameStore.character.position.z);
+      const correctedNDC = getCorrectedNDC(canvas, mousePosRef.current.x, mousePosRef.current.y, camera, characterPos, 0.3);
+      
       // 增加射线横截面积的检测：从1条增加到5条射线
       const rayOffsets = [
         { x: 0, y: 0 },
@@ -324,21 +379,35 @@ const MovementController = () => {
       });
       shootableObjectsRef.current = objects;
       
-      // 使用多条射线进行检测
+      // 使用多条射线进行检测，同时计算修正前后的射线并取最高位置
       const allIntersects: THREE.Intersection[] = [];
       const rayOrigins: THREE.Vector3[] = [];
       const rayDirections: THREE.Vector3[] = [];
       
       for (const offset of rayOffsets) {
+        // 原始射线（未修正）
         raycaster.setFromCamera(new THREE.Vector2(ndcX + offset.x, ndcY + offset.y), camera);
-        const intersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
-        allIntersects.push(...intersects);
+        const rawDirection = raycaster.ray.direction.clone();
+        const rawIntersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
+        
+        // 修正后的射线
+        raycaster.setFromCamera(new THREE.Vector2(correctedNDC.x + offset.x, correctedNDC.y + offset.y), camera);
+        const correctedDirection = raycaster.ray.direction.clone();
+        const correctedIntersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
+        
+        // 取两条射线中Y分量较大的方向（即更高的射线位置）
+        // Y分量越大，射线越向上
+        const finalDirection = rawDirection.y > correctedDirection.y ? rawDirection : correctedDirection;
+        
+        // 使用最终方向重新设置射线进行检测
+        raycaster.set(camera.position, finalDirection);
+        const finalIntersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
+        allIntersects.push(...finalIntersects);
         
         // 计算射线原点和方向用于可视化
         const rayOrigin = camera.position.clone();
-        const rayDirection = raycaster.ray.direction.clone();
         rayOrigins.push(rayOrigin);
-        rayDirections.push(rayDirection);
+        rayDirections.push(finalDirection);
       }
       
       // 更新多射线状态用于可视化
@@ -398,14 +467,29 @@ const MovementController = () => {
     
     // 目标检测
     if (isMouseDownRef.current && camera) {
-      // 获取 canvas 相对坐标
+      // 获取 canvas 相对坐标并应用仰角修正
+      const characterPosForTarget = new THREE.Vector3(gameStore.character.position.x, gameStore.character.position.y, gameStore.character.position.z);
+      const correctedNDCForTarget = getCorrectedNDC(canvas, mousePosRef.current.x, mousePosRef.current.y, camera, characterPosForTarget, 0.3);
       const rect = canvas.getBoundingClientRect();
       const ndcX = ((mousePosRef.current.x - rect.left) / rect.width) * 2 - 1;
       const ndcY = -((mousePosRef.current.y - rect.top) / rect.height) * 2 + 1;
 
-      // 创建射线
+      // 创建射线，同时计算修正前后的射线并取最高位置
       const raycaster = new THREE.Raycaster();
+      
+      // 原始射线（未修正）
       raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+      const rawDirection = raycaster.ray.direction.clone();
+      
+      // 修正后的射线
+      raycaster.setFromCamera(correctedNDCForTarget, camera);
+      const correctedDirection = raycaster.ray.direction.clone();
+      
+      // 取两条射线中Y分量较大的方向（即更高的射线位置）
+      const finalDirection = rawDirection.y > correctedDirection.y ? rawDirection : correctedDirection;
+      
+      // 使用最终方向设置射线
+      raycaster.set(camera.position, finalDirection);
 
       // 检测鼠标是否指向了目标（敌人）
       const scene = camera.parent;
