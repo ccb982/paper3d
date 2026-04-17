@@ -230,19 +230,19 @@ const MovementController: React.FC<MovementControllerProps> = ({
         const pixelX = (event.clientX - rect.left) * (canvas.width / rect.width);
         const pixelY = (event.clientY - rect.top) * (canvas.height / rect.height);
         
-        // 转换为标准化设备坐标
-        const ndcX = (pixelX / canvas.width) * 2 - 1;
-        const ndcY = -(pixelY / canvas.height) * 2 + 1;
-        
         // 确保相机投影矩阵已更新
         if (camera.aspect !== canvas.width / canvas.height) {
           camera.aspect = canvas.width / canvas.height;
           camera.updateProjectionMatrix();
         }
         
+        // 使用基于仰角的NDC修正
+        const characterPos = new THREE.Vector3(gameStore.character.position.x, gameStore.character.position.y, gameStore.character.position.z);
+        const correctedNDC = getCorrectedNDC(canvas, event.clientX, event.clientY, camera, characterPos, 0.3);
+        
         // 创建射线
         const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+        raycaster.setFromCamera(correctedNDC, camera);
         
         // 更新射线可视化数据
         setRayOrigin(raycaster.ray.origin.clone());
