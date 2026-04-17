@@ -1,0 +1,50 @@
+.crosshair {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+}
+
+.crosshair-center {
+  width: 4px;
+  height: 4px;
+  background-color: white;
+  border-radius: 50%;
+  position: relative;
+}
+
+.crosshair-line {
+  position: absolute;
+  background-color: white;
+}
+
+.crosshair-line-top {
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 10px;
+}
+
+.crosshair-line-bottom {
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1px;
+  height: 10px;
+}
+
+.crosshair-line-left {
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 1px;
+}
+
+.crosshair-line-right {
+  right: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 1px;
+}
