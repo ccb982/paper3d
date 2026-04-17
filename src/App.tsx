@@ -20,6 +20,9 @@ import RayVisualizer, { MultiRayVisualizer } from './components/debug/RayVisuali
 import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
 
 function getCameraPitch(camera: THREE.Camera): number {
+  // 强制更新相机矩阵，确保获取到最新的方向
+  camera.updateMatrixWorld();
+  
   const direction = new THREE.Vector3();
   camera.getWorldDirection(direction);
   return Math.asin(direction.y);
@@ -289,6 +292,9 @@ const MovementController = () => {
 
   // 每帧更新角色位置
   useFrame(({ camera }, delta) => {
+    // 强制更新相机矩阵，确保获取到最新的方向
+    camera.updateMatrixWorld();
+    
     // 更新相机引用
     cameraRef.current = camera;
     
@@ -345,6 +351,9 @@ const MovementController = () => {
     
     // 射线检测可射击目标
     if (camera) {
+      // 强制更新相机矩阵，确保获取到最新的方向
+      camera.updateMatrixWorld();
+      
       const raycaster = new THREE.Raycaster();
       const rect = canvas.getBoundingClientRect();
       
@@ -467,6 +476,9 @@ const MovementController = () => {
     
     // 目标检测
     if (isMouseDownRef.current && camera) {
+      // 强制更新相机矩阵，确保获取到最新的方向
+      camera.updateMatrixWorld();
+      
       // 获取 canvas 相对坐标并应用仰角修正
       const characterPosForTarget = new THREE.Vector3(gameStore.character.position.x, gameStore.character.position.y, gameStore.character.position.z);
       const correctedNDCForTarget = getCorrectedNDC(canvas, mousePosRef.current.x, mousePosRef.current.y, camera, characterPosForTarget, 0.3);
