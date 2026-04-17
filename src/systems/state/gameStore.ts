@@ -18,7 +18,6 @@ export interface DialogState {
   visible: boolean;
 }
 
-<<<<<<< HEAD
 export interface MousePosition {
   x: number;
   y: number;
@@ -27,8 +26,6 @@ export interface MousePosition {
   gameZ?: number;
 }
 
-=======
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
 export interface GameState {
   character: CharacterState;
   dialog: DialogState;
@@ -36,7 +33,6 @@ export interface GameState {
   isMuted: boolean;
   volume: number;
   playSoundCallback: (() => void) | null;
-<<<<<<< HEAD
   cameraPosition: Position;
   mousePosition: MousePosition;
   raycastInfo: {
@@ -49,8 +45,6 @@ export interface GameState {
     isFiring: boolean;
     fireCount: number;
   };
-=======
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
 
   // Actions
   setCharacterPosition: (pos: { x: number; z: number; y?: number }) => void;
@@ -62,13 +56,10 @@ export interface GameState {
   toggleMute: () => void;
   registerSoundCallback: (cb: () => void) => void;
   playSound: () => void;
-<<<<<<< HEAD
   setCameraPosition: (pos: { x: number; y: number; z: number }) => void;
   setMousePosition: (pos: MousePosition) => void;
   setRaycastInfo: (info: Partial<GameState['raycastInfo']>) => void;
   setShootInfo: (info: Partial<GameState['shootInfo']>) => void;
-=======
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -86,7 +77,6 @@ export const useGameStore = create<GameState>((set, get) => ({
   isMuted: false,
   volume: 1,
   playSoundCallback: null,
-<<<<<<< HEAD
   cameraPosition: { x: 0, y: 2, z: 10 },
   mousePosition: { x: 0, y: 0 },
   raycastInfo: {
@@ -100,8 +90,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     fireCount: 0
   },
 
-=======
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
 
   // Actions
   setCharacterPosition: (pos) => set((state) => ({
@@ -153,7 +141,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (callback) {
       callback();
     }
-<<<<<<< HEAD
   },
   setCameraPosition: (pos) => set({ cameraPosition: pos }),
   setMousePosition: (pos) => set({ mousePosition: pos }),
@@ -169,7 +156,4 @@ export const useGameStore = create<GameState>((set, get) => ({
       ...info
     }
   }))
-=======
-  }
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
 }));

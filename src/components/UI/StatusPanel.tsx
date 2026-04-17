@@ -2,11 +2,7 @@ import React from 'react';
 import { useGameStore } from '../../systems/state/gameStore';
 
 const StatusPanel: React.FC = () => {
-<<<<<<< HEAD
   const { character, cameraPosition, mousePosition, raycastInfo, shootInfo } = useGameStore();
-=======
-  const { character } = useGameStore();
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
 
   return (
     <div className="status-panel">
@@ -23,7 +19,6 @@ const StatusPanel: React.FC = () => {
         <span>好感度:</span>
         <span>100</span>
       </div>
-<<<<<<< HEAD
       <h3>相机状态</h3>
       <div className="status-item">
         <span>坐标:</span>
@@ -66,8 +61,6 @@ const StatusPanel: React.FC = () => {
         <span>射击次数:</span>
         <span>{shootInfo.fireCount}</span>
       </div>
-=======
->>>>>>> e7c24c7dd4b2cd421d679c150d2aa3c4aa420b8e
     </div>
   );
 };
