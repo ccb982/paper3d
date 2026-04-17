@@ -16,7 +16,7 @@ import { useDialogue } from './systems/dialogue/useDialogue';
 import { MapRenderer } from './systems/scene/MapRenderer';
 import { applyGravityToCharacter } from './systems/physics/GravitySystem';
 import { OrbitControls } from '@react-three/drei';
-import RayVisualizer from './components/debug/RayVisualizer';
+import RayVisualizer, { MultiRayVisualizer } from './components/debug/RayVisualizer';
 import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
 
 function App() {
@@ -71,6 +71,15 @@ const MovementController = () => {
   const [rayOrigin, setRayOrigin] = useState(new THREE.Vector3());
   const [rayDirection, setRayDirection] = useState(new THREE.Vector3(0, 0, -1));
   const [shootDirection, setShootDirection] = useState(new THREE.Vector3(0, 0, -1));
+  const [multiRayOrigins, setMultiRayOrigins] = useState<THREE.Vector3[]>([]);
+  const [multiRayDirections, setMultiRayDirections] = useState<THREE.Vector3[]>([]);
+  const rayOffsets = [
+    { x: 0, y: 0 },
+    { x: 0.05, y: 0 },
+    { x: -0.05, y: 0 },
+    { x: 0, y: 0.05 },
+    { x: 0, y: -0.05 },
+  ];
   const bulletIdRef = useRef(0);
   const bulletVelocity = 50; // 子弹速度（增加速度）
   const isMouseDownRef = useRef(false); // 鼠标按下状态
@@ -286,24 +295,27 @@ const MovementController = () => {
     // 射线检测可射击目标
     if (camera) {
       const raycaster = new THREE.Raycaster();
-      // 使用鼠标位置并考虑物理像素尺寸
       const rect = canvas.getBoundingClientRect();
       
-      // 正确计算鼠标在canvas物理像素上的位置
       const pixelX = (mousePosRef.current.x - rect.left) * (canvas.width / rect.width);
       const pixelY = (mousePosRef.current.y - rect.top) * (canvas.height / rect.height);
       
-      // 转换为标准化设备坐标
       const ndcX = (pixelX / canvas.width) * 2 - 1;
       const ndcY = -(pixelY / canvas.height) * 2 + 1;
       
-      // 确保相机投影矩阵已更新
       if (camera.aspect !== canvas.width / canvas.height) {
         camera.aspect = canvas.width / canvas.height;
         camera.updateProjectionMatrix();
       }
       
-      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+      // 增加射线横截面积的检测：从1条增加到5条射线
+      const rayOffsets = [
+        { x: 0, y: 0 },
+        { x: 0.05, y: 0 },
+        { x: -0.05, y: 0 },
+        { x: 0, y: 0.05 },
+        { x: 0, y: -0.05 },
+      ];
       
       // 每次都重新收集可射击物体，确保动态添加的物体也能被检测到
       const objects: THREE.Object3D[] = [];
@@ -312,24 +324,38 @@ const MovementController = () => {
       });
       shootableObjectsRef.current = objects;
       
-      // 调试：打印可射击物体数量
+      // 使用多条射线进行检测
+      const allIntersects: THREE.Intersection[] = [];
+      const rayOrigins: THREE.Vector3[] = [];
+      const rayDirections: THREE.Vector3[] = [];
+      
+      for (const offset of rayOffsets) {
+        raycaster.setFromCamera(new THREE.Vector2(ndcX + offset.x, ndcY + offset.y), camera);
+        const intersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
+        allIntersects.push(...intersects);
+        
+        // 计算射线原点和方向用于可视化
+        const rayOrigin = camera.position.clone();
+        const rayDirection = raycaster.ray.direction.clone();
+        rayOrigins.push(rayOrigin);
+        rayDirections.push(rayDirection);
+      }
+      
+      // 更新多射线状态用于可视化
+      setMultiRayOrigins(rayOrigins);
+      setMultiRayDirections(rayDirections);
+      
       console.log('可射击物体数量:', shootableObjectsRef.current.length);
+      console.log('多射线检测结果数量:', allIntersects.length);
       
-      // 使用预收集的可射击物体数组
-      const intersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
-      
-      // 调试：打印检测结果
-      console.log('射线检测结果数量:', intersects.length);
-      
-      // 临时变量，用于存储新的锁定目标
       let newLockedTarget: { point: THREE.Vector3; object: THREE.Object3D } | null = null;
       
       // 更新射线检测信息到游戏状态
       gameStore.setRaycastInfo({
         active: true,
         shootableObjects: shootableObjectsRef.current.length,
-        intersects: intersects.length,
-        locked: intersects.length > 0
+        intersects: allIntersects.length,
+        locked: allIntersects.length > 0
       });
       
       // 先恢复所有之前可能锁定的目标的材质
@@ -346,8 +372,8 @@ const MovementController = () => {
         }
       }
       
-      if (intersects.length > 0) {
-        const hit = intersects[0];
+      if (allIntersects.length > 0) {
+        const hit = allIntersects[0];
         newLockedTarget = { point: hit.point, object: hit.object };
         
         // 调试：给锁定的目标添加发光效果
@@ -431,8 +457,12 @@ const MovementController = () => {
         if (lockedTargetRef.current) {
           // 有锁定目标：从角色位置指向锁定目标的击中点
           console.log('使用锁定目标射击');
+          // 获取目标的世界位置，确保使用最新位置
+          const targetPosition = new THREE.Vector3();
+          lockedTargetRef.current.object.getWorldPosition(targetPosition);
+          
           direction = new THREE.Vector3().subVectors(
-            lockedTargetRef.current.point,
+            targetPosition,
             new THREE.Vector3(realTimeCharacterPos.x, realTimeCharacterPos.y + 1.2, realTimeCharacterPos.z)
           ).normalize();
         } else if (targetDetectedRef.current) {
@@ -507,6 +537,13 @@ const MovementController = () => {
         direction={rayDirection}
         length={100}
         color={0xff0000}
+      />
+      {/* 渲染多射线横截面积可视化 */}
+      <MultiRayVisualizer
+        origins={multiRayOrigins}
+        directions={multiRayDirections}
+        length={100}
+        color={0x00ffff}
       />
       {/* 渲染射击方向可视化 */}
       <ShootDirectionVisualizer

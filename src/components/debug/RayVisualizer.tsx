@@ -19,30 +19,62 @@ export const RayVisualizer: React.FC<RayVisualizerProps> = ({
   const lineRef = useRef<THREE.Line | null>(null);
 
   useEffect(() => {
-    // 移除旧的线
     if (lineRef.current) {
       scene.remove(lineRef.current);
     }
 
-    // 计算射线终点
-    const end = new THREE.Vector3().copy(origin).add(direction.multiplyScalar(length));
-
-    // 创建线段
+    const end = new THREE.Vector3().copy(origin).add(direction.clone().multiplyScalar(length));
     const geometry = new THREE.BufferGeometry().setFromPoints([origin, end]);
     const material = new THREE.LineBasicMaterial({ color });
     const line = new THREE.Line(geometry, material);
 
-    // 添加到场景
     scene.add(line);
     lineRef.current = line;
 
-    // 清理
     return () => {
       if (lineRef.current) {
         scene.remove(lineRef.current);
       }
     };
   }, [origin, direction, length, color, scene]);
+
+  return null;
+};
+
+interface MultiRayVisualizerProps {
+  origins: THREE.Vector3[];
+  directions: THREE.Vector3[];
+  length?: number;
+  color?: number;
+}
+
+export const MultiRayVisualizer: React.FC<MultiRayVisualizerProps> = ({
+  origins,
+  directions,
+  length = 100,
+  color = 0xff0000
+}) => {
+  const { scene } = useThree();
+  const linesRef = useRef<THREE.Line[]>([]);
+
+  useEffect(() => {
+    linesRef.current.forEach(line => scene.remove(line));
+    linesRef.current = [];
+
+    origins.forEach((origin, index) => {
+      const direction = directions[index] || directions[0];
+      const end = new THREE.Vector3().copy(origin).add(direction.clone().multiplyScalar(length));
+      const geometry = new THREE.BufferGeometry().setFromPoints([origin, end]);
+      const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 });
+      const line = new THREE.Line(geometry, material);
+      scene.add(line);
+      linesRef.current.push(line);
+    });
+
+    return () => {
+      linesRef.current.forEach(line => scene.remove(line));
+    };
+  }, [origins, directions, length, color, scene]);
 
   return null;
 };
