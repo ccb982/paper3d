@@ -234,6 +234,8 @@ const MovementController: React.FC<MovementControllerProps> = ({
         if (camera.aspect !== canvas.width / canvas.height) {
           camera.aspect = canvas.width / canvas.height;
           camera.updateProjectionMatrix();
+          // 更新相机投影矩阵后，重新更新相机矩阵
+          camera.updateMatrixWorld();
         }
         
         // 使用基于仰角的NDC修正
@@ -422,6 +424,8 @@ const MovementController: React.FC<MovementControllerProps> = ({
       if (camera.aspect !== canvas.width / canvas.height) {
         camera.aspect = canvas.width / canvas.height;
         camera.updateProjectionMatrix();
+        // 更新相机投影矩阵后，重新更新相机矩阵
+        camera.updateMatrixWorld();
       }
       
       // 使用基于仰角的NDC修正
