@@ -58,22 +58,18 @@ export class BulletEntity extends Entity {
     this.lifetime = ms;
   }
 
+  /**
+   * 获取子弹伤害值
+   */
+  public getDamage(): number {
+    return this.damage;
+  }
+
   public update(delta: number): void {
     this.position.x += this.velocity.x * delta;
     this.position.y += this.velocity.y * delta;
     this.position.z += this.velocity.z * delta;
     this.mesh.position.copy(this.position);
-
-    // 检测所有可射击的实体（包括敌人和静态物品）
-    const allEntities = EntityManager.getInstance().getAllEntities();
-    for (const entity of allEntities) {
-      if (entity === this) continue;
-      if ((entity as any).isShootable && this.position.distanceTo(entity.position) < this.radius + entity.radius) {
-        this.onHit(entity);
-        this.isActive = false;
-        break;
-      }
-    }
 
     if (Date.now() - this.createdAt > this.lifetime) {
       this.isActive = false;

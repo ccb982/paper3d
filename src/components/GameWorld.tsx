@@ -14,7 +14,10 @@ import { ShootingSystemManager, LockonShootingSystem, FreeStyleShootingSystem } 
 import { useDialogue } from '../systems/dialogue/useDialogue';
 import { characterPositionStore } from '../systems/character/CharacterPositionStore';
 import { EntityManager } from '../core/EntityManager';
+import { CollisionManager } from '../core/CollisionManager';
 import { BulletEntity } from '../entities/BulletEntity';
+import { CharacterEntity } from '../entities/CharacterEntity';
+import { StaticEntity } from '../entities/StaticEntity';
 import { FriendlyEntity } from '../entities/FriendlyEntity';
 import { EnemyEntity } from '../entities/EnemyEntity';
 import { TargetEntity } from '../entities/TargetEntity';
@@ -306,6 +309,9 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     }
 
     EntityManager.getInstance().update(delta);
+    
+    // 检测碰撞
+    CollisionManager.getInstance().update();
   });
 
   return null;
@@ -347,6 +353,39 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     
     // 注册当前操控角色到管理器
     playerCharacterManager.setCurrentCharacter(playerEntity);
+    
+    // 初始化碰撞管理器
+    const collisionManager = CollisionManager.getInstance();
+    
+    // 注册子弹 vs 角色（敌人）碰撞
+    collisionManager.registerCollision('bullet', 'character', (bullet, character) => {
+      const bulletEntity = bullet as BulletEntity;
+      const characterEntity = character as CharacterEntity;
+      if (characterEntity.isEnemy(bulletEntity as any)) { // 简化判断：敌人阵营
+        characterEntity.takeDamage(bulletEntity.getDamage() ?? 1);
+        bulletEntity.isActive = false;
+      }
+    });
+    
+    // 注册子弹 vs 静态物品（靶子）碰撞
+    collisionManager.registerCollision('bullet', 'static', (bullet, staticObj) => {
+      const staticEntity = staticObj as StaticEntity;
+      if (staticEntity.isShootable) {
+        staticEntity.takeDamage(1);
+        bullet.isActive = false;
+      }
+    });
+    
+    // 角色 vs 敌人碰撞（玩家与敌人相撞扣血）
+    collisionManager.registerCollision('character', 'character', (a, b) => {
+      const charA = a as CharacterEntity;
+      const charB = b as CharacterEntity;
+      if (charA.isEnemy(charB)) {
+        // 敌人碰撞玩家：玩家扣血，敌人反弹或停止移动
+        if (charA.isPlayerControlled) charA.takeDamage(10);
+        if (charB.isPlayerControlled) charB.takeDamage(10);
+      }
+    });
     
     // 创建敌人实体
     for (let i = 0; i < 3; i++) {
