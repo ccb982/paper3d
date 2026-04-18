@@ -35,6 +35,14 @@ export abstract class CharacterEntity extends Entity {
     const geometry = new THREE.PlaneGeometry(2, 3);
     const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geometry, material);
+    
+    // 添加点击检测相关属性
+    mesh.userData = {
+      characterId: id,
+      isCharacter: true,
+      faction: faction
+    };
+    
     super(id, 'character', mesh);
     this.faction = faction;
     this.texturePath = texturePath;

@@ -309,7 +309,7 @@ interface GameWorldProps {
 }
 
 export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWorldProps) => {
-  const { gl, scene } = useThree();
+  const { gl, scene, camera } = useThree();
   const mode = useGameStore(s => s.mode);
   const [activeShootingSystem, setActiveShootingSystem] = useState('freestyle');
   const [isLocking, setIsLocking] = useState(false);
@@ -478,6 +478,45 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     console.log(`切换到${newSystem === 'lockon' ? '锁定式' : '自由式'}射击系统`);
   }, [shootingManager, activeShootingSystem, mode, onActiveSystemChanged]);
 
+  // 处理角色点击事件
+  const handleCharacterClick = (id: string) => {
+    console.log('Clicked character:', id);
+    triggerDialogue(id);
+  };
+
+  // 射线检测函数
+  const raycastFromMouse = (event: MouseEvent): THREE.Object3D | null => {
+    if (!camera || !sceneRef.current || !gl) return null;
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    // 计算鼠标在屏幕上的位置（归一化设备坐标）
+    const rect = gl.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // 更新射线投射器
+    raycaster.setFromCamera(mouse, camera);
+
+    // 获取所有可点击的角色
+    const characterObjects: THREE.Object3D[] = [];
+    sceneRef.current.traverse(obj => {
+      if (obj.userData.isCharacter) {
+        characterObjects.push(obj);
+      }
+    });
+
+    // 检测射线与角色的交集
+    const intersects = raycaster.intersectObjects(characterObjects, true);
+
+    if (intersects.length > 0) {
+      return intersects[0].object;
+    }
+
+    return null;
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Tab') {
@@ -491,11 +530,25 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         }
       }
     };
+
+    const handleMouseClick = (event: MouseEvent) => {
+      // 只处理左键点击
+      if (event.button !== 0) return;
+
+      const clickedObject = raycastFromMouse(event);
+      if (clickedObject && clickedObject.userData.isCharacter) {
+        const characterId = clickedObject.userData.characterId;
+        handleCharacterClick(characterId);
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('click', handleMouseClick);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('click', handleMouseClick);
     };
-  }, [switchShootingSystem]);
+  }, [switchShootingSystem, camera, gl]);
 
   const characterPos = characterPositionStore.getPositionCopy();
 
