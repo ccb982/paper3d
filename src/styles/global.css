@@ -1,0 +1,225 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Arial', sans-serif;
+  background-color: #1a1a2e;
+}
+
+.game-container {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+canvas {
+  display: block;
+}
+
+/* 对话气泡样式 - 游戏风格 */
+.dialog-bubble {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+  border: 3px solid #ff6b6b;
+  border-radius: 25px 25px 25px 5px;
+  padding: 20px 25px;
+  box-shadow: 0 8px 20px rgba(255, 107, 107, 0.3);
+  max-width: 70%;
+  z-index: 1000;
+  font-family: 'Comic Sans MS', cursive, sans-serif;
+}
+
+.dialog-content {
+  font-size: 18px;
+  line-height: 1.5;
+  color: #333;
+  text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.5);
+}
+
+.loading-text {
+  font-style: italic;
+  color: #666;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+/* 状态面板样式 - 游戏风格 */
+.status-panel {
+  position: absolute;
+  top: 30px;
+  right: 30px;
+  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+  border: 2px solid #4ecdc4;
+  border-radius: 15px;
+  padding: 20px;
+  box-shadow: 0 0 20px rgba(78, 205, 196, 0.5);
+  z-index: 1000;
+  min-width: 220px;
+  backdrop-filter: blur(10px);
+}
+
+.status-panel h3 {
+  margin-bottom: 15px;
+  color: #4ecdc4;
+  font-size: 16px;
+  font-weight: bold;
+  text-align: center;
+  text-shadow: 0 0 10px rgba(78, 205, 196, 0.8);
+  border-bottom: 1px solid rgba(78, 205, 196, 0.3);
+  padding-bottom: 8px;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: #fff;
+  text-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+}
+
+.status-item span:first-child {
+  color: #4ecdc4;
+  font-weight: bold;
+}
+
+/* 加载指示器样式 - 游戏风格 */
+.loading-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2000;
+  text-align: center;
+}
+
+.loading-spinner {
+  width: 60px;
+  height: 60px;
+  border: 4px solid rgba(78, 205, 196, 0.3);
+  border-top: 4px solid #4ecdc4;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  box-shadow: 0 0 20px rgba(78, 205, 196, 0.5);
+  margin: 0 auto 10px;
+}
+
+.loading-indicator::after {
+  content: "正在思考...";
+  display: block;
+  color: #4ecdc4;
+  font-size: 16px;
+  font-weight: bold;
+  text-shadow: 0 0 10px rgba(78, 205, 196, 0.8);
+}
+
+/* 动画效果 */
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes dialogAppear {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.8);
+  }
+  50% {
+    opacity: 0.8;
+    transform: translateX(-50%) scale(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(-50%) scale(1);
+  }
+}
+
+@keyframes ellipsis {
+  0%, 20% {
+    content: ".";
+  }
+  40% {
+    content: "..";
+  }
+  60%, 100% {
+    content: "...";
+  }
+}
+
+.ellipsis {
+  animation: ellipsis 1.5s infinite;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .dialog-bubble {
+    bottom: 40px;
+    max-width: 85%;
+    padding: 15px 20px;
+  }
+  
+  .status-panel {
+    top: 20px;
+    right: 20px;
+    min-width: 180px;
+    padding: 15px;
+  }
+  
+  .status-panel h3 {
+    font-size: 14px;
+  }
+  
+  .status-item {
+    font-size: 12px;
+  }
+}
+
+/* 自由式准心样式 */
+.freestyle-crosshair {
+  position: absolute;
+  top: calc(50% + 0px);
+  left: calc(50% + 0px);
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1000;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+.freestyle-crosshair::before, .freestyle-crosshair::after {
+  content: '';
+  position: absolute;
+  background-color: #ffffff;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+}
+
+.freestyle-crosshair::before {
+  width: 2px;
+  height: 10px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.freestyle-crosshair::after {
+  width: 10px;
+  height: 2px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
