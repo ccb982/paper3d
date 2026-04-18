@@ -29,6 +29,13 @@ function App() {
   const getHeightAtRef = useRef<((x: number, z: number) => number) | null>(null);
   const [activeShootingSystem, setActiveShootingSystem] = useState<string>('freestyle');
   const [shootingManager, setShootingManager] = useState<ShootingSystemManager | null>(null);
+  const [isLocking, setIsLocking] = useState(false);
+  const [lockCountdown, setLockCountdown] = useState(0);
+  const [shootDirection, setShootDirection] = useState<{ x: number; y: number; z: number } | null>(null);
+  const bulletPoolRef = useRef<BulletPool | null>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const [terrainHeight, setTerrainHeight] = useState(0);
+
   // 日常模式下强制使用锁定射击
   useEffect(() => {
     if (mode === GameMode.DAILY) {
@@ -38,11 +45,27 @@ function App() {
       }
     }
   }, [mode, shootingManager]);
-  const [isLocking, setIsLocking] = useState(false);
-  const [lockCountdown, setLockCountdown] = useState(0);
-  const [shootDirection, setShootDirection] = useState<{ x: number; y: number; z: number } | null>(null);
-  const bulletPoolRef = useRef<BulletPool | null>(null);
-  const sceneRef = useRef<THREE.Scene | null>(null);
+
+  // 模式切换时处理鼠标锁定
+  useEffect(() => {
+    const gameContainer = document.querySelector('.game-container');
+    const needsPointerLock = (mode === GameMode.BATTLE && activeShootingSystem === 'freestyle');
+
+    if (needsPointerLock) {
+      if (gameContainer) {
+        gameContainer.style.cursor = 'none';
+        gameContainer.requestPointerLock = gameContainer.requestPointerLock || (gameContainer as any).mozRequestPointerLock;
+        if (gameContainer.requestPointerLock) {
+          gameContainer.requestPointerLock();
+        }
+      }
+    } else {
+      document.exitPointerLock && document.exitPointerLock();
+      if (gameContainer) {
+        gameContainer.style.cursor = 'default';
+      }
+    }
+  }, [mode, activeShootingSystem]);
 
   const handleCharacterClick = (id: string) => {
     console.log('Clicked character:', id);
@@ -80,13 +103,6 @@ function App() {
     console.log(`切换到${newSystem === 'lockon' ? '锁定式' : '自由式'}射击系统`);
     console.log(`shootingManager requiresPointerLock: ${shootingManager.requiresPointerLock()}`);
   }, [shootingManager, activeShootingSystem, mode]);
-
-  useEffect(() => {
-    const gameContainer = document.querySelector('.game-container');
-    if (gameContainer) {
-      gameContainer.style.cursor = 'none';
-    }
-  }, []);
 
   useEffect(() => {
     const manager = new ShootingSystemManager();
@@ -162,7 +178,6 @@ function App() {
 
   const gameStore = useGameStore();
   const characterPos = gameStore.character.position;
-  const [terrainHeight, setTerrainHeight] = useState(0);
 
   useEffect(() => {
     if (getHeightAtRef.current) {
