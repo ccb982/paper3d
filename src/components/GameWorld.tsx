@@ -398,6 +398,13 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         shootingManager.setActiveSystem('lockon');
         onActiveSystemChanged('lockon');
       }
+    } else if (mode !== GameMode.BATTLE) {
+      // 在非战斗和非日常模式下，重置射击系统状态
+      setActiveShootingSystem('lockon');
+      if (shootingManager) {
+        shootingManager.setActiveSystem('lockon');
+        onActiveSystemChanged('lockon');
+      }
     }
   }, [mode, shootingManager, onActiveSystemChanged]);
 
@@ -448,7 +455,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       if (gameContainer) {
         gameContainer.style.cursor = 'default';
       }
-    } else {
+    } else if (mode === GameMode.BATTLE) {
       if (gameContainer?.requestPointerLock) {
         gameContainer.requestPointerLock();
       }
