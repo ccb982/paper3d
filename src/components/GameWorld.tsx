@@ -13,6 +13,7 @@ import { TerrainRenderer } from '../systems/terrain/TerrainRenderer';
 import { CHARACTER_HEIGHT } from '../utils/constants';
 import { ShootingSystemManager, LockonShootingSystem, FreeStyleShootingSystem } from '../systems/shooting';
 import { useDialogue } from '../systems/dialogue/useDialogue';
+import { characterPositionStore } from '../systems/character/CharacterPositionStore';
 
 const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sceneRef }: {
   getHeightAtRef: React.MutableRefObject<((x: number, z: number) => number) | null>;
@@ -51,9 +52,9 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   useEffect(() => {
     const timer = setTimeout(() => {
       if (getHeightAtRef.current) {
-        const currentPos = gameStore.character.position;
+        const currentPos = characterPositionStore.getPositionCopy();
         const terrainHeight = getHeightAtRef.current(currentPos.x, currentPos.z);
-        gameStore.setCharacterPosition({ x: currentPos.x, y: terrainHeight + 1.5 - 0.90 + CHARACTER_HEIGHT / 2, z: currentPos.z });
+        characterPositionStore.setPosition(currentPos.x, terrainHeight + 1.5 - 0.90 + CHARACTER_HEIGHT / 2, currentPos.z);
       }
     }, 100);
     return () => {
@@ -192,15 +193,12 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   };
 
   useFrame(({ camera }, delta) => {
-    const currentPos = gameStore.character.position;
-    let currentVelocity = gameStore.character.velocity;
+    const currentPos = characterPositionStore.position;
+    let currentVelocity = characterPositionStore.velocity.clone();
     const currentDirection = directionRef.current;
 
     if (currentDirection.jump && currentVelocity.y === 0) {
-      currentVelocity = {
-        ...currentVelocity,
-        y: jumpForce
-      };
+      currentVelocity.y = jumpForce;
     }
 
     const horizontalPos = calculateNewPosition(
@@ -210,7 +208,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
       delta
     );
 
-    const tempPos = { x: horizontalPos.x, y: currentPos.y, z: horizontalPos.z };
+    const tempPos = new THREE.Vector3(horizontalPos.x, currentPos.y, horizontalPos.z);
     const { position: newPosWithGravity, velocity: newVelocity } = applyGravityToCharacter(
       tempPos,
       currentVelocity,
@@ -218,16 +216,11 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
       getHeightAtRef.current || undefined
     );
 
-    const finalPos = {
-      x: horizontalPos.x,
-      y: newPosWithGravity.y,
-      z: horizontalPos.z
-    };
+    const finalPos = new THREE.Vector3(horizontalPos.x, newPosWithGravity.y, horizontalPos.z);
 
-    gameStore.setCharacterPosition(finalPos);
-    gameStore.setCharacterVelocity(newVelocity);
-
-    gameStore.setCharacterMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
+    characterPositionStore.setPosition(finalPos.x, finalPos.y, finalPos.z);
+    characterPositionStore.setVelocity(newVelocity.x, newVelocity.y, newVelocity.z);
+    characterPositionStore.setMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
 
     if (camera) {
       cameraParamsRef.current.radius += (cameraParamsRef.current.targetRadius - cameraParamsRef.current.radius) * cameraParamsRef.current.smoothFactor;

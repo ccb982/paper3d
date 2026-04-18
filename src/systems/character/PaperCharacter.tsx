@@ -2,7 +2,7 @@ import { useRef, useEffect } from 'react';
 import { useLoader, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { TextureLoader, DoubleSide } from 'three';
-import { useGameStore } from '../state/gameStore';
+import { characterPositionStore } from './CharacterPositionStore';
 
 interface PaperCharacterProps {
   characterId: string;
@@ -19,9 +19,8 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
   // 每帧更新角色位置和朝向
   useFrame((_, delta) => {
     if (meshRef.current) {
-      const { position: charPos } = useGameStore.getState().character;
-      // 角色的Y坐标已经包含了CHARACTER_HEIGHT，所以直接使用
-      meshRef.current.position.set(charPos.x, charPos.y, charPos.z);
+      const charPos = characterPositionStore.position;
+      meshRef.current.position.copy(charPos);
 
       // 1. 获取相机位置和角色位置
       const cameraPos = camera.position.clone();
