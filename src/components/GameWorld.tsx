@@ -22,6 +22,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   sceneRef: React.MutableRefObject<THREE.Scene | null>;
 }) => {
   const { camera, gl, scene } = useThree();
+  const mode = useGameStore(s => s.mode);
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
   const isDebug = useGameStore(s => s.isDebug);
@@ -192,6 +193,10 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   };
 
   useFrame(({ camera }, delta) => {
+    if (mode !== GameMode.BATTLE && mode !== GameMode.DAILY) {
+      return;
+    }
+
     const currentPos = characterPositionStore.position;
     let currentVelocity = characterPositionStore.velocity.clone();
     const currentDirection = directionRef.current;
@@ -395,6 +400,17 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       }
     }
   }, [mode, shootingManager, onActiveSystemChanged]);
+
+  useEffect(() => {
+    if (shootingManager) {
+      const shouldActivateShooting = mode === GameMode.BATTLE || mode === GameMode.DAILY;
+      const activeSystem = shootingManager.getActiveSystem();
+      if (activeSystem && 'setActive' in activeSystem) {
+        activeSystem.setActive(shouldActivateShooting);
+        console.log(`Shooting system ${shouldActivateShooting ? 'activated' : 'deactivated'} for mode: ${mode}`);
+      }
+    }
+  }, [mode, shootingManager]);
 
   useEffect(() => {
     const gameContainer = document.querySelector('.game-container');
