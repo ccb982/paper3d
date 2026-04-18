@@ -8,17 +8,17 @@ import { useGameStore, GameMode } from '../systems/state/gameStore';
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { MapRenderer } from '../systems/scene/MapRenderer';
 import { applyGravityToCharacter } from '../systems/physics/GravitySystem';
-import { BulletPool } from '../systems/projectile/BulletPool';
 import { TerrainRenderer } from '../systems/terrain/TerrainRenderer';
 import { CHARACTER_HEIGHT } from '../utils/constants';
 import { ShootingSystemManager, LockonShootingSystem, FreeStyleShootingSystem } from '../systems/shooting';
 import { useDialogue } from '../systems/dialogue/useDialogue';
 import { characterPositionStore } from '../systems/character/CharacterPositionStore';
+import { EntityManager } from '../core/EntityManager';
+import { BulletEntity } from '../entities/BulletEntity';
 
-const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sceneRef }: {
+const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
   getHeightAtRef: React.MutableRefObject<((x: number, z: number) => number) | null>;
   shootingManager: ShootingSystemManager | null;
-  bulletPoolRef: React.MutableRefObject<BulletPool | null>;
   sceneRef: React.MutableRefObject<THREE.Scene | null>;
 }) => {
   const { camera, gl, scene } = useThree();
@@ -295,9 +295,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
       shootingManager.update(delta);
     }
 
-    if (bulletPoolRef.current && sceneRef.current) {
-      bulletPoolRef.current.update(delta, sceneRef.current);
-    }
+    EntityManager.getInstance().update(delta);
   });
 
   return null;
@@ -318,12 +316,12 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
   const getHeightAtRef = useRef<((x: number, z: number) => number) | null>(null);
   const [shootingManager, setShootingManager] = useState<ShootingSystemManager | null>(null);
   const [shootDirection, setShootDirection] = useState<{ x: number; y: number; z: number } | null>(null);
-  const bulletPoolRef = useRef<BulletPool | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const { triggerDialogue } = useDialogue();
 
   useEffect(() => {
     sceneRef.current = scene;
+    EntityManager.getInstance().setScene(scene);
   }, [scene, sceneRef]);
 
   useEffect(() => {
@@ -347,29 +345,14 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       },
       onBulletCreated: (bullet) => {
         console.log('Bullet created:', bullet);
-        if (bulletPoolRef.current && sceneRef.current) {
-          const bulletMesh = bulletPoolRef.current.getBullet();
-          console.log('Bullet mesh obtained:', bulletMesh);
-          if (bulletMesh) {
-            const bulletPos = new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z);
-            const bulletDir = new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z);
-            console.log('Setting bullet properties:', bulletPos, bulletDir, bullet.velocity);
-            bulletPoolRef.current.setBulletProperties(
-              bulletMesh.id,
-              bulletPos,
-              bulletDir,
-              bullet.velocity,
-              () => {}
-            );
-            console.log('Adding bullet to scene:', bulletMesh.mesh);
-            sceneRef.current!.add(bulletMesh.mesh);
-            console.log('Bullet added to scene');
-          } else {
-            console.log('No bullet available from pool');
-          }
-        } else {
-          console.log('Bullet pool or scene not ready');
-        }
+        const bulletEntity = new BulletEntity(
+          new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
+          new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),
+          bullet.velocity,
+          0xffaa00
+        );
+        EntityManager.getInstance().addEntity(bulletEntity);
+        console.log('BulletEntity added to EntityManager');
       },
       onActiveSystemChanged: (system) => {
         setActiveShootingSystem(system);
@@ -379,15 +362,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     setShootingManager(manager);
     return () => {
       manager.dispose();
-    };
-  }, []);
-
-  useEffect(() => {
-    bulletPoolRef.current = new BulletPool();
-    return () => {
-      if (bulletPoolRef.current) {
-        bulletPoolRef.current.clear();
-      }
     };
   }, []);
 
@@ -526,7 +500,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       <MovementController
         getHeightAtRef={getHeightAtRef}
         shootingManager={shootingManager}
-        bulletPoolRef={bulletPoolRef}
         sceneRef={sceneRef}
       />
     </>
