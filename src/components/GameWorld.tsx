@@ -24,7 +24,6 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   const { camera, gl, scene } = useThree();
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
-  const gameStore = useGameStore();
   const isDebug = useGameStore(s => s.isDebug);
   const jumpForce = 7;
   const isMouseDownRef = useRef(false);
@@ -299,13 +298,17 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   return null;
 };
 
-export const GameWorld = () => {
+interface GameWorldProps {
+  onLockStateChanged: (isLocking: boolean, lockCountdown: number) => void;
+  onActiveSystemChanged: (system: string) => void;
+}
+
+export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWorldProps) => {
   const { gl, scene } = useThree();
-  const gameStore = useGameStore();
-  const setLockState = useGameStore(s => s.setLockState);
-  const setActiveShootingSystem = useGameStore(s => s.setActiveShootingSystem);
-  const activeShootingSystem = useGameStore(s => s.activeShootingSystem);
   const mode = useGameStore(s => s.mode);
+  const [activeShootingSystem, setActiveShootingSystem] = useState('freestyle');
+  const [isLocking, setIsLocking] = useState(false);
+  const [lockCountdown, setLockCountdown] = useState(0);
   const isDebug = useGameStore(s => s.isDebug);
   const getHeightAtRef = useRef<((x: number, z: number) => number) | null>(null);
   const [shootingManager, setShootingManager] = useState<ShootingSystemManager | null>(null);
@@ -327,7 +330,9 @@ export const GameWorld = () => {
     manager.setActiveSystem('freestyle');
     manager.setCallbacks({
       onLockStateChanged: (locking, countdown) => {
-        setLockState(locking, countdown);
+        setIsLocking(locking);
+        setLockCountdown(countdown);
+        onLockStateChanged(locking, countdown);
       },
       onTargetLocked: (target) => {
         console.log('Target locked:', target);
@@ -336,11 +341,14 @@ export const GameWorld = () => {
         setShootDirection(direction);
       },
       onBulletCreated: (bullet) => {
+        console.log('Bullet created:', bullet);
         if (bulletPoolRef.current && sceneRef.current) {
           const bulletMesh = bulletPoolRef.current.getBullet();
+          console.log('Bullet mesh obtained:', bulletMesh);
           if (bulletMesh) {
             const bulletPos = new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z);
             const bulletDir = new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z);
+            console.log('Setting bullet properties:', bulletPos, bulletDir, bullet.velocity);
             bulletPoolRef.current.setBulletProperties(
               bulletMesh.id,
               bulletPos,
@@ -348,11 +356,19 @@ export const GameWorld = () => {
               bullet.velocity,
               () => {}
             );
-            if (!sceneRef.current.children.includes(bulletMesh.mesh)) {
-              sceneRef.current.add(bulletMesh.mesh);
-            }
+            console.log('Adding bullet to scene:', bulletMesh.mesh);
+            sceneRef.current!.add(bulletMesh.mesh);
+            console.log('Bullet added to scene');
+          } else {
+            console.log('No bullet available from pool');
           }
+        } else {
+          console.log('Bullet pool or scene not ready');
         }
+      },
+      onActiveSystemChanged: (system) => {
+        setActiveShootingSystem(system);
+        onActiveSystemChanged(system);
       }
     });
     setShootingManager(manager);
@@ -375,9 +391,10 @@ export const GameWorld = () => {
       setActiveShootingSystem('lockon');
       if (shootingManager) {
         shootingManager.setActiveSystem('lockon');
+        onActiveSystemChanged('lockon');
       }
     }
-  }, [mode, shootingManager]);
+  }, [mode, shootingManager, onActiveSystemChanged]);
 
   useEffect(() => {
     const gameContainer = document.querySelector('.game-container');
@@ -426,8 +443,9 @@ export const GameWorld = () => {
 
     shootingManager.setActiveSystem(newSystem);
     setActiveShootingSystem(newSystem);
+    onActiveSystemChanged(newSystem);
     console.log(`切换到${newSystem === 'lockon' ? '锁定式' : '自由式'}射击系统`);
-  }, [shootingManager, activeShootingSystem, mode]);
+  }, [shootingManager, activeShootingSystem, mode, onActiveSystemChanged]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -453,7 +471,7 @@ export const GameWorld = () => {
     triggerDialogue(id);
   };
 
-  const characterPos = gameStore.character.position;
+  const characterPos = characterPositionStore.getPositionCopy();
 
   return (
     <>

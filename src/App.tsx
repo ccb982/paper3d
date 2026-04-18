@@ -14,12 +14,12 @@ import './styles/global.css';
 function App() {
   const mode = useGameStore(s => s.mode);
   const isDebug = useGameStore(s => s.isDebug);
-  const activeShootingSystem = useGameStore(s => s.activeShootingSystem);
   const toggleDebug = useGameStore(s => s.toggleDebug);
-  const isLocking = useGameStore(s => s.isLocking);
-  const lockCountdown = useGameStore(s => s.lockCountdown);
 
   const [displayPos, setDisplayPos] = useState({ x: 0, y: 0, z: 0 });
+  const [activeShootingSystem, setActiveShootingSystem] = useState('freestyle');
+  const [isLocking, setIsLocking] = useState(false);
+  const [lockCountdown, setLockCountdown] = useState(0);
   const lastUpdateRef = useRef(0);
   const terrainHeight = 0;
 
@@ -54,7 +54,15 @@ function App() {
   return (
     <div className="game-container">
       <Canvas camera={{ position: [0, 2, 10] }}>
-        <GameWorld />
+        <GameWorld 
+          onLockStateChanged={(locking, countdown) => {
+            setIsLocking(locking);
+            setLockCountdown(countdown);
+          }}
+          onActiveSystemChanged={(system) => {
+            setActiveShootingSystem(system);
+          }}
+        />
       </Canvas>
 
       {mode === GameMode.MENU && <MenuPage />}

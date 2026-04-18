@@ -32,6 +32,7 @@ export class LockonShootingSystem extends BaseShootingSystem {
   }
 
   protected onUpdate(delta: number): void {
+    if (!this.isActive) return;
     this.performRaycastAndLock(delta);
   }
 
@@ -221,6 +222,7 @@ export class LockonShootingSystem extends BaseShootingSystem {
   }
 
   public setActive(active: boolean): void {
+    super.setActive(active);
     this.isActiveSystem = active;
   }
 
