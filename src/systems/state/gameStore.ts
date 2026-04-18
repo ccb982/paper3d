@@ -38,6 +38,9 @@ export interface GameState {
   volume: number;
   isDebug: boolean;
   playSoundCallback: (() => void) | null;
+  isLocking: boolean;
+  lockCountdown: number;
+  activeShootingSystem: string;
 
   // Actions
   setMode: (mode: GameMode) => void;
@@ -61,6 +64,8 @@ export interface GameState {
   registerSoundCallback: (cb: () => void) => void;
   playSound: () => void;
   toggleDebug: () => void;
+  setLockState: (isLocking: boolean, lockCountdown: number) => void;
+  setActiveShootingSystem: (system: string) => void;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -83,6 +88,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   volume: 1,
   isDebug: true,
   playSoundCallback: null,
+  isLocking: false,
+  lockCountdown: 0,
+  activeShootingSystem: 'freestyle',
 
   // 页面切换方法
   setMode: (mode) => set({ previousMode: get().mode, mode }),
@@ -148,5 +156,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       callback();
     }
   },
-  toggleDebug: () => set((state) => ({ isDebug: !state.isDebug }))
+  toggleDebug: () => set((state) => ({ isDebug: !state.isDebug })),
+  setLockState: (isLocking, lockCountdown) => set({ isLocking, lockCountdown }),
+  setActiveShootingSystem: (system) => set({ activeShootingSystem: system })
 }));
