@@ -64,11 +64,12 @@ export class BulletEntity extends Entity {
     this.position.z += this.velocity.z * delta;
     this.mesh.position.copy(this.position);
 
-    const enemies = EntityManager.getInstance().getEnemies();
-    for (const enemy of enemies) {
-      const distance = this.position.distanceTo(enemy.position);
-      if (distance < this.radius + enemy.radius) {
-        this.onHit(enemy);
+    // 检测所有可射击的实体（包括敌人和静态物品）
+    const allEntities = EntityManager.getInstance().getAllEntities();
+    for (const entity of allEntities) {
+      if (entity === this) continue;
+      if ((entity as any).isShootable && this.position.distanceTo(entity.position) < this.radius + entity.radius) {
+        this.onHit(entity);
         this.isActive = false;
         break;
       }
@@ -80,12 +81,12 @@ export class BulletEntity extends Entity {
   }
 
   /**
-   * 命中敌人时的处理
-   * @param enemy 被击中的敌人实体
+   * 命中实体时的处理
+   * @param entity 被击中的实体
    */
-  protected onHit(enemy: Entity): void {
-    if (typeof (enemy as any).takeDamage === 'function') {
-      (enemy as any).takeDamage(this.damage);
+  protected onHit(entity: Entity): void {
+    if (typeof (entity as any).takeDamage === 'function') {
+      (entity as any).takeDamage(this.damage);
     }
   }
 

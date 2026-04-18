@@ -17,6 +17,7 @@ import { EntityManager } from '../core/EntityManager';
 import { BulletEntity } from '../entities/BulletEntity';
 import { FriendlyEntity } from '../entities/FriendlyEntity';
 import { EnemyEntity } from '../entities/EnemyEntity';
+import { TargetEntity } from '../entities/TargetEntity';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
@@ -359,6 +360,19 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         )
       );
       entityManager.addEntity(enemyEntity);
+    }
+    
+    // 创建靶子实体
+    for (let i = 0; i < 5; i++) {
+      const targetEntity = new TargetEntity(
+        `target-${i}`,
+        new THREE.Vector3(
+          Math.random() * 30 - 15,
+          5,
+          Math.random() * 30 - 15
+        )
+      );
+      entityManager.addEntity(targetEntity);
     }
     
     console.log('Entities created:', entityManager.getEntityCount());
