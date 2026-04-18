@@ -36,10 +36,11 @@ export abstract class CharacterEntity extends Entity {
     const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geometry, material);
     
-    // 添加点击检测相关属性
+    // 添加点击检测和可射击相关属性
     mesh.userData = {
       characterId: id,
       isCharacter: true,
+      isShootable: true, // 添加可射击标志
       faction: faction
     };
     
