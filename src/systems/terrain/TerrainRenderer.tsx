@@ -2,7 +2,6 @@ import React, { useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
 import { PlaneGeometry, MeshStandardMaterial, Color, TextureLoader, RepeatWrapping, Vector3, BufferAttribute } from 'three';
 import { generateTerrain } from './TerrainGenerator';
-import Target from '../target/Target';
 
 interface TerrainParams {
   width: number;
@@ -137,30 +136,6 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
     updateTerrainColors();
   });
   
-  const targets = useMemo(() => {
-    const targetPositions = [
-      { x: 20, z: 0 },
-      { x: -20, z: 0 },
-      { x: 0, z: 20 },
-      { x: 0, z: -20 }
-    ];
-    
-    return targetPositions.map((pos, index) => {
-      const height = terrainData.getHeightAt(pos.x, pos.z);
-      const rotations = [
-        { x: 0, y: -Math.PI / 2, z: 0 },
-        { x: 0, y: Math.PI / 2, z: 0 },
-        { x: 0, y: Math.PI, z: 0 },
-        { x: 0, y: 0, z: 0 }
-      ];
-      
-      return {
-        position: { x: pos.x, y: height + 2, z: pos.z },
-        rotation: rotations[index]
-      };
-    });
-  }, [terrainData]);
-  
   return (
     <group>
       <mesh
@@ -170,14 +145,6 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
         castShadow
         receiveShadow
       />
-      
-      {targets.map((target, index) => (
-        <Target 
-          key={index}
-          position={target.position}
-          rotation={target.rotation}
-        />
-      ))}
     </group>
   );
 };
