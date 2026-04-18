@@ -7,6 +7,7 @@ import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
 import DialogBubble from './components/UI/DialogBubble';
 import { CHARACTER_HEIGHT } from './utils/constants';
+import { useEffect } from 'react';
 import './styles/global.css';
 
 function App() {
@@ -18,6 +19,19 @@ function App() {
   const toggleDebug = useGameStore(s => s.toggleDebug);
   const isLocking = useGameStore(s => s.isLocking);
   const lockCountdown = useGameStore(s => s.lockCountdown);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'F12') {
+        event.preventDefault();
+        toggleDebug();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [toggleDebug]);
 
   return (
     <div className="game-container">

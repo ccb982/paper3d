@@ -86,7 +86,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   isLoading: false,
   isMuted: false,
   volume: 1,
-  isDebug: true,
+  isDebug: false,
   playSoundCallback: null,
   isLocking: false,
   lockCountdown: 0,
