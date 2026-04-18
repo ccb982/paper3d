@@ -17,6 +17,7 @@ import { EntityManager } from '../core/EntityManager';
 import { BulletEntity } from '../entities/BulletEntity';
 import { FriendlyEntity } from '../entities/FriendlyEntity';
 import { EnemyEntity } from '../entities/EnemyEntity';
+import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
   getHeightAtRef: React.MutableRefObject<((x: number, z: number) => number) | null>;
@@ -297,6 +298,12 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
       shootingManager.update(delta);
     }
 
+    // 更新当前操控角色的相机引用
+    const currentChar = playerCharacterManager.getCurrentCharacter();
+    if (currentChar && 'setCamera' in currentChar) {
+      (currentChar as FriendlyEntity).setCamera(camera);
+    }
+
     EntityManager.getInstance().update(delta);
   });
 
@@ -336,6 +343,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       new THREE.Vector3(0, 5, 0)
     );
     entityManager.addEntity(playerEntity);
+    
+    // 注册当前操控角色到管理器
+    playerCharacterManager.setCurrentCharacter(playerEntity);
     
     // 创建敌人实体
     for (let i = 0; i < 3; i++) {
