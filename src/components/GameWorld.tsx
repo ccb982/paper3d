@@ -15,6 +15,8 @@ import { useDialogue } from '../systems/dialogue/useDialogue';
 import { characterPositionStore } from '../systems/character/CharacterPositionStore';
 import { EntityManager } from '../core/EntityManager';
 import { BulletEntity } from '../entities/BulletEntity';
+import { FriendlyEntity } from '../entities/FriendlyEntity';
+import { EnemyEntity } from '../entities/EnemyEntity';
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
   getHeightAtRef: React.MutableRefObject<((x: number, z: number) => number) | null>;
@@ -321,7 +323,35 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
 
   useEffect(() => {
     sceneRef.current = scene;
-    EntityManager.getInstance().setScene(scene);
+    const entityManager = EntityManager.getInstance();
+    entityManager.setScene(scene);
+    
+    // 清理现有实体
+    entityManager.clear();
+    
+    // 创建玩家实体
+    const playerEntity = new FriendlyEntity(
+      'player',
+      '/textures/character.png',
+      new THREE.Vector3(0, 5, 0)
+    );
+    entityManager.addEntity(playerEntity);
+    
+    // 创建敌人实体
+    for (let i = 0; i < 3; i++) {
+      const enemyEntity = new EnemyEntity(
+        `enemy-${i}`,
+        '/textures/character.png', // 暂时使用相同的纹理
+        new THREE.Vector3(
+          Math.random() * 20 - 10,
+          5,
+          Math.random() * 20 - 10
+        )
+      );
+      entityManager.addEntity(enemyEntity);
+    }
+    
+    console.log('Entities created:', entityManager.getEntityCount());
   }, [scene, sceneRef]);
 
   useEffect(() => {
@@ -345,14 +375,18 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       },
       onBulletCreated: (bullet) => {
         console.log('Bullet created:', bullet);
-        const bulletEntity = new BulletEntity(
-          new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
-          new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),
-          bullet.velocity,
-          0xffaa00
-        );
-        EntityManager.getInstance().addEntity(bulletEntity);
-        console.log('BulletEntity added to EntityManager');
+        try {
+          const bulletEntity = new BulletEntity(
+            new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
+            new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),
+            bullet.velocity,
+            0xffaa00
+          );
+          EntityManager.getInstance().addEntity(bulletEntity);
+          console.log('BulletEntity added to EntityManager');
+        } catch (error) {
+          console.error('Error creating bullet entity:', error);
+        }
       },
       onActiveSystemChanged: (system) => {
         setActiveShootingSystem(system);
@@ -463,11 +497,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     };
   }, [switchShootingSystem]);
 
-  const handleCharacterClick = (id: string) => {
-    console.log('Clicked character:', id);
-    triggerDialogue(id);
-  };
-
   const characterPos = characterPositionStore.getPositionCopy();
 
   return (
@@ -492,10 +521,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         onTerrainReady={(getHeightAt) => {
           getHeightAtRef.current = getHeightAt;
         }}
-      />
-      <PaperCharacter
-        characterId="player"
-        onClick={handleCharacterClick}
       />
       <MovementController
         getHeightAtRef={getHeightAtRef}
