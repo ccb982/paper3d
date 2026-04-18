@@ -27,6 +27,15 @@ function App() {
   const getHeightAtRef = useRef<((x: number, z: number) => number) | null>(null);
   const [activeShootingSystem, setActiveShootingSystem] = useState<string>('freestyle');
   const [shootingManager, setShootingManager] = useState<ShootingSystemManager | null>(null);
+  // 日常模式下强制使用锁定射击
+  useEffect(() => {
+    if (mode === GameMode.DAILY) {
+      setActiveShootingSystem('lockon');
+      if (shootingManager) {
+        shootingManager.setActiveSystem('lockon');
+      }
+    }
+  }, [mode, shootingManager]);
   const [isLocking, setIsLocking] = useState(false);
   const [lockCountdown, setLockCountdown] = useState(0);
   const [shootDirection, setShootDirection] = useState<{ x: number; y: number; z: number } | null>(null);
@@ -40,6 +49,11 @@ function App() {
 
   const switchShootingSystem = useCallback(() => {
     if (!shootingManager) return;
+    // 日常模式下禁用自由射击
+    if (mode === GameMode.DAILY) {
+      console.log('日常模式下只能使用锁定射击');
+      return;
+    }
     const currentSystem = activeShootingSystem;
     const newSystem = currentSystem === 'lockon' ? 'freestyle' : 'lockon';
 
@@ -63,7 +77,7 @@ function App() {
     setActiveShootingSystem(newSystem);
     console.log(`切换到${newSystem === 'lockon' ? '锁定式' : '自由式'}射击系统`);
     console.log(`shootingManager requiresPointerLock: ${shootingManager.requiresPointerLock()}`);
-  }, [shootingManager, activeShootingSystem]);
+  }, [shootingManager, activeShootingSystem, mode]);
 
   useEffect(() => {
     const gameContainer = document.querySelector('.game-container');
@@ -218,11 +232,11 @@ function App() {
       </Canvas>
         </>
       )}
-      {mode === GameMode.BATTLE && (
+      {(mode === GameMode.BATTLE || mode === GameMode.DAILY) && (
         <>
-          <div className="freestyle-crosshair" style={{ display: activeShootingSystem === 'freestyle' ? 'block' : 'none' }}></div>
+          {mode === GameMode.BATTLE && <div className="freestyle-crosshair" style={{ display: activeShootingSystem === 'freestyle' ? 'block' : 'none' }}></div>}
           <Crosshair
-            isLockMode={activeShootingSystem === 'lockon'}
+            isLockMode={mode === GameMode.DAILY || activeShootingSystem === 'lockon'}
             isLocking={isLocking}
             lockCountdown={lockCountdown}
           />
