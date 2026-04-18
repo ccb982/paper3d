@@ -36,6 +36,7 @@ export interface GameState {
   isLoading: boolean;
   isMuted: boolean;
   volume: number;
+  isDebug: boolean;
   playSoundCallback: (() => void) | null;
 
   // Actions
@@ -59,6 +60,7 @@ export interface GameState {
   toggleMute: () => void;
   registerSoundCallback: (cb: () => void) => void;
   playSound: () => void;
+  toggleDebug: () => void;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -79,6 +81,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   isLoading: false,
   isMuted: false,
   volume: 1,
+  isDebug: true,
   playSoundCallback: null,
 
   // 页面切换方法
@@ -144,5 +147,6 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (callback) {
       callback();
     }
-  }
+  },
+  toggleDebug: () => set((state) => ({ isDebug: !state.isDebug }))
 }));

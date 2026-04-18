@@ -24,6 +24,8 @@ import { ShootingSystemManager, LockonShootingSystem, FreeStyleShootingSystem } 
 function App() {
   const { triggerDialogue } = useDialogue();
   const mode = useGameStore(s => s.mode);
+  const isDebug = useGameStore(s => s.isDebug);
+  const toggleDebug = useGameStore(s => s.toggleDebug);
   const getHeightAtRef = useRef<((x: number, z: number) => number) | null>(null);
   const [activeShootingSystem, setActiveShootingSystem] = useState<string>('freestyle');
   const [shootingManager, setShootingManager] = useState<ShootingSystemManager | null>(null);
@@ -180,7 +182,7 @@ function App() {
 
       {(mode === GameMode.BATTLE || mode === GameMode.DAILY) && (
         <>
-          {mode === GameMode.BATTLE && (
+          {isDebug && (mode === GameMode.BATTLE || mode === GameMode.DAILY) && (
             <div style={{
               position: 'absolute',
               top: '10px',
@@ -197,15 +199,20 @@ function App() {
               <div>角色脚 Y: {(characterPos.y - CHARACTER_HEIGHT / 2).toFixed(2)}</div>
               <div>期望脚 Y: {(terrainHeight + 1.5 - 0.75).toFixed(2)}</div>
               <div>射击系统: {activeShootingSystem === 'lockon' ? '锁定式' : '自由式'}</div>
+              <div>模式: {mode === GameMode.BATTLE ? '战斗' : mode === GameMode.DAILY ? '日常' : mode}</div>
+              <div>调试: {isDebug ? '开启' : '关闭'}</div>
               <button onClick={switchShootingSystem} style={{ marginTop: '5px', padding: '5px 10px' }}>
                 切换射击系统 (Tab)
+              </button>
+              <button onClick={toggleDebug} style={{ marginTop: '5px', padding: '5px 10px' }}>
+                {isDebug ? '关闭调试' : '开启调试'}
               </button>
             </div>
           )}
           <Canvas camera={{ position: [0, 2, 10] }} shadows>
         <SceneSetup
-          rayData={activeShootingSystem === 'lockon' ? shootingManager?.getRayData() : []}
-          shootDirection={activeShootingSystem === 'lockon' ? shootDirection : null}
+          rayData={isDebug && activeShootingSystem === 'lockon' ? shootingManager?.getRayData() : []}
+          shootDirection={isDebug && activeShootingSystem === 'lockon' ? shootDirection : null}
           characterPosition={characterPos}
         />
         <MapRenderer getHeightAt={getHeightAtRef.current || undefined} />
@@ -260,6 +267,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
   const direction = useKeyboard(camera);
   const directionRef = useRef(direction);
   const gameStore = useGameStore();
+  const isDebug = useGameStore(s => s.isDebug);
   const jumpForce = 7;
   const bulletVelocity = 50;
   const isMouseDownRef = useRef(false);
@@ -497,28 +505,29 @@ const MovementController = ({ getHeightAtRef, shootingManager, bulletPoolRef, sc
       
       clearDebugHelpers();
       
-      const direction = new THREE.Vector3();
-      camera.getWorldDirection(direction);
-      
-      const rayOrigin = camera.position.clone();
-      const rayEnd = rayOrigin.clone().add(direction.multiplyScalar(10));
-      
-      const rayGeometry = new THREE.BufferGeometry().setFromPoints([rayOrigin, rayEnd]);
-      const rayMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-      const rayLine = new THREE.Line(rayGeometry, rayMaterial);
-      addDebugHelper(rayLine, 100);
-      
-      const raycastResult = raycastFromCamera();
-      // 隐藏红点调试标记
-      /*
-      if (raycastResult) {
-        const hitMarkerGeometry = new THREE.SphereGeometry(0.2, 8, 8);
-        const hitMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-        const hitMarker = new THREE.Mesh(hitMarkerGeometry, hitMarkerMaterial);
-        hitMarker.position.copy(raycastResult.point);
-        addDebugHelper(hitMarker, 200);
+      // 调试模式下显示射线和标记
+      if (isDebug) {
+        const direction = new THREE.Vector3();
+        camera.getWorldDirection(direction);
+        
+        const rayOrigin = camera.position.clone();
+        const rayEnd = rayOrigin.clone().add(direction.multiplyScalar(10));
+        
+        const rayGeometry = new THREE.BufferGeometry().setFromPoints([rayOrigin, rayEnd]);
+        const rayMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+        const rayLine = new THREE.Line(rayGeometry, rayMaterial);
+        addDebugHelper(rayLine, 100);
+        
+        const raycastResult = raycastFromCamera();
+        // 显示红点调试标记
+        if (raycastResult) {
+          const hitMarkerGeometry = new THREE.SphereGeometry(0.2, 8, 8);
+          const hitMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+          const hitMarker = new THREE.Mesh(hitMarkerGeometry, hitMarkerMaterial);
+          hitMarker.position.copy(raycastResult.point);
+          addDebugHelper(hitMarker, 200);
+        }
       }
-      */
     }
     
     if (shootingManager && camera && scene) {
