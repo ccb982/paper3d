@@ -3,7 +3,7 @@ import { HitFlashEffect } from '../effects/HitFlashEffect';
 import { MuzzleFlashEffect } from '../effects/MuzzleFlashEffect';
 import { ExplosionEffect } from '../effects/ExplosionEffect';
 import { RingWaveEffect } from '../effects/RingWaveEffect';
-import { DawnExplosionEffect } from '../effects/DawnExplosionEffect';
+import { DawnBurstEffect } from '../effects/DawnBurstEffect';
 import * as THREE from 'three';
 
 /**
@@ -52,7 +52,7 @@ export class EffectManager {
    * 播放爆裂黎明特效
    */
   public playDawnExplosion(position: THREE.Vector3): void {
-    this.activeEffects.push(new DawnExplosionEffect(position, 0.8));
+    this.activeEffects.push(new DawnBurstEffect(position, 4.0));
   }
 
   /**
