@@ -246,7 +246,7 @@ export class EffectManager {
   }
 
   public playDawnBurst(position: THREE.Vector3, color?: number): void {
-    this.activeEffects.push(new DawnBurstEffect(position, 3.0, color || 0xff6600));
+    this.activeEffects.push(new DawnBurstEffect(position, 4.0, color || 0xff6600));
   }
 
   public update(delta: number): void {

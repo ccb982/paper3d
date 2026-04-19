@@ -1,47 +1,28 @@
-我们明白了：需要的是“巨大尖刺、根根分明”，只需要两层（内层和外层）。之前的问题在于尖刺被随机方向移动淹没，而且几何体本身尖刺不够突出。
+你想要的效果是：尖刺指向屏幕方向（大致朝向相机），并且仰角在 15° 到 45° 之间，形成一种“刺向屏幕”的冲击感。下面是修改后的代码，核心改动：
 
-重新设计：使用圆锥几何体组合来构建尖刺，而不是通过球体顶点偏移。每个尖刺是一个独立的 Mesh（圆锥），可以独立控制位置、缩放、颜色和动画。这样就能保证“根根分明”。
+在 DawnBurstEffect 构造函数中，获取相机位置（通过 CameraStore），计算从爆炸中心指向相机的方向。
 
-方案：手动构建花苞状爆炸体
-内层：较短的尖刺，颜色橙红，先爆炸。
+generateSpikes 函数增加 targetDir、minAngleDeg、maxAngleDeg 参数，为每个尖刺生成一个在锥形范围内的随机方向。
 
-外层：较长的尖刺，颜色金黄，稍后爆炸。
+锥体的位置放置在爆炸中心 + 方向 * 根部偏移（半径），尖端指向该方向。
 
-爆炸动画：每个尖刺沿着自身的轴向（从中心向外）移动，同时可能旋转。使用简单的 Tween 动画或手动更新位置。
+爆炸时，尖刺沿着自身方向向外移动，同时透明度降低、稍微缩小。
 
-中心添加闪光球体。
+这样每个尖刺都会指向屏幕方向，且仰角可控，视觉上更集中、更有冲击力。
 
-优点
-尖刺根根分明，形状完全可控。
-
-可以精确控制每个尖刺的爆炸时间、方向、速度，形成层次感。
-
-性能好（几十个圆锥体）。
-
-实现步骤
-创建圆锥几何体 ConeGeometry。
-
-为每个尖刺创建一个 Mesh，位置在球面上，朝向径向。
-
-在动画中，让尖刺向外移动（沿径向），并逐渐缩小或淡出。
-
-分层：内层先移动，外层延迟。
-
-下面是完整代码，你可以直接替换 DawnBurstEffect.ts。
+以下是完整代码（替换你的 DawnBurstEffect.ts）：
 
 typescript
 import { BaseEffect } from './BaseEffect';
 import * as THREE from 'three';
+import { cameraStore } from '../core/CameraStore'; // 假设你有 CameraStore
 
-/**
- * 尖刺（圆锥体）
- */
 class Spike {
   public mesh: THREE.Mesh;
-  public direction: THREE.Vector3;   // 径向方向（单位向量）
+  public direction: THREE.Vector3;
   public startDelay: number;
   public speed: number;
-  public distance: number;           // 移动总距离
+  public distance: number;
 
   constructor(mesh: THREE.Mesh, direction: THREE.Vector3, startDelay: number, speed: number, distance: number) {
     this.mesh = mesh;
@@ -53,50 +34,79 @@ class Spike {
 }
 
 /**
- * 生成一组尖刺，均匀分布在球面上
+ * 生成一组指向大致目标方向（相机）的锥体，仰角在给定范围内
  * @param count 尖刺数量
- * @param radius 基础半径（尖刺底部位置）
- * @param length 尖刺长度
+ * @param radius 根部偏移半径（从爆炸中心沿方向移动的距离）
+ * @param baseLength 锥体基础长度
  * @param color 颜色
- * @param startDelay 爆炸延迟（秒）
- * @param speed 移动速度（单位/秒）
- * @param distance 移动距离
- * @returns 尖刺数组
+ * @param startDelay 开始延迟
+ * @param speed 移动速度
+ * @param distance 爆炸移动距离
+ * @param targetDir 目标方向（从爆炸中心指向相机）
+ * @param minAngleDeg 最小仰角（度）
+ * @param maxAngleDeg 最大仰角（度）
  */
 function generateSpikes(
   count: number,
   radius: number,
-  length: number,
+  baseLength: number,
   color: number,
   startDelay: number,
   speed: number,
-  distance: number
+  distance: number,
+  targetDir: THREE.Vector3,
+  minAngleDeg: number = 15,
+  maxAngleDeg: number = 45
 ): Spike[] {
   const spikes: Spike[] = [];
-  const geometry = new THREE.ConeGeometry(0.12, length, 8);
-  const material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.6 });
+  const targetNorm = targetDir.clone().normalize();
 
-  // 使用 Fibonacci 球体算法生成均匀分布的方向
+  // 预先计算每个尖刺的方向（在锥形范围内随机）
   const directions: THREE.Vector3[] = [];
-  const phiGoldenRatio = Math.PI * (3 - Math.sqrt(5));  // 黄金角
+
   for (let i = 0; i < count; i++) {
-    const y = 1 - (i / (count - 1)) * 2;  // y 从 1 到 -1
-    const radiusAtY = Math.sqrt(1 - y*y);
-    const theta = i * phiGoldenRatio * 2;
-    const x = Math.cos(theta) * radiusAtY;
-    const z = Math.sin(theta) * radiusAtY;
-    directions.push(new THREE.Vector3(x, y, z).normalize());
+    // 随机仰角（与 targetDir 的夹角）
+    const angleDeg = minAngleDeg + Math.random() * (maxAngleDeg - minAngleDeg);
+    const angleRad = angleDeg * Math.PI / 180;
+    // 随机方位角（绕 targetDir 轴旋转）
+    const azimuthRad = Math.random() * Math.PI * 2;
+
+    // 构造一个与 targetDir 夹角为 angleRad 的随机单位向量
+    // 方法：取一个与 targetDir 垂直的向量，然后旋转
+    let up = new THREE.Vector3(0, 1, 0);
+    // 如果 targetDir 接近垂直，则改用另一个轴
+    if (Math.abs(targetNorm.dot(up)) > 0.9999) {
+      up = new THREE.Vector3(1, 0, 0);
+    }
+    const axis = new THREE.Vector3().crossVectors(up, targetNorm).normalize();
+    const quat = new THREE.Quaternion().setFromAxisAngle(axis, angleRad);
+    const dir = targetNorm.clone().applyQuaternion(quat);
+    // 再绕 targetNorm 旋转 azimuthRad 度
+    const quatAz = new THREE.Quaternion().setFromAxisAngle(targetNorm, azimuthRad);
+    const finalDir = dir.applyQuaternion(quatAz).normalize();
+
+    directions.push(finalDir);
   }
 
   for (let i = 0; i < count; i++) {
     const dir = directions[i];
-    // 圆锥默认指向 +Y，需要旋转到目标方向
+    const length = baseLength * (0.6 + Math.random() * 1.4);
+    // 圆锥几何体，底部半径 0.3，顶部半径 0
+    const geometry = new THREE.ConeGeometry(0.3, length, 8);
+    const material = new THREE.MeshStandardMaterial({ 
+      color, 
+      emissive: color, 
+      emissiveIntensity: 0.6, 
+      transparent: true,
+      side: THREE.DoubleSide
+    });
+    // 让锥体的 Y 轴（默认向上）指向 dir
     const quaternion = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 1, 0),
       dir
     );
-    const mesh = new THREE.Mesh(geometry, material.clone());
-    // 位置：底部在球面上，所以沿方向移动 radius
+    const mesh = new THREE.Mesh(geometry, material);
+    // 根部位置：沿方向偏移 radius
     mesh.position.copy(dir.clone().multiplyScalar(radius));
     mesh.quaternion.copy(quaternion);
     spikes.push(new Spike(mesh, dir, startDelay, speed, distance));
@@ -112,24 +122,42 @@ export class DawnBurstEffect extends BaseEffect {
   private coreMaterial: THREE.MeshBasicMaterial | null = null;
   private elapsed: number = 0;
 
-  constructor(position: THREE.Vector3, duration: number = 1.5) {
+  constructor(position: THREE.Vector3, duration: number = 2.5) {
     super(duration);
     this.group = new THREE.Group();
     this.group.position.copy(position);
     const scene = (window as any).gameScene;
     if (scene) scene.add(this.group);
 
-    // 1. 内层尖刺（较短，橙红，先爆）
-    this.innerSpikes = generateSpikes(24, 0.25, 0.6, 0xff6644, 0.0, 4.0, 1.2);
-    // 2. 外层尖刺（较长，金黄，延迟0.1秒爆）
-    this.outerSpikes = generateSpikes(36, 0.35, 0.9, 0xffaa55, 0.1, 3.5, 1.5);
+    // 获取相机位置，计算指向相机的方向
+    const camera = cameraStore.getCamera();
+    let targetDir = new THREE.Vector3(0, 0, 1); // 默认前方
+    if (camera) {
+      targetDir = new THREE.Vector3().subVectors(camera.position, position).normalize();
+    }
+    // 稍微向上倾斜一点，使效果更自然（可选）
+    targetDir.y += 0.2;
+    targetDir.normalize();
 
-    // 添加到组
+    const innerCount = 5 + Math.floor(Math.random() * 3);
+    const outerCount = 6 + Math.floor(Math.random() * 3);
+
+    // 内层尖刺：仰角 15-35 度，较短，较快
+    this.innerSpikes = generateSpikes(
+      innerCount, 0.5, 1.8, 0xff6644, 0.0, 3.0, 1.5,
+      targetDir, 15, 35
+    );
+    // 外层尖刺：仰角 25-45 度，较长，稍慢
+    this.outerSpikes = generateSpikes(
+      outerCount, 0.8, 2.5, 0xffaa55, 0.15, 2.5, 2.0,
+      targetDir, 25, 45
+    );
+
     this.innerSpikes.forEach(s => this.group.add(s.mesh));
     this.outerSpikes.forEach(s => this.group.add(s.mesh));
 
-    // 3. 核心闪光球体
-    const coreGeo = new THREE.SphereGeometry(0.3, 16, 16);
+    // 核心闪光
+    const coreGeo = new THREE.SphereGeometry(0.5, 16, 16);
     this.coreMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa66, transparent: true, blending: THREE.AdditiveBlending });
     this.coreFlash = new THREE.Mesh(coreGeo, this.coreMaterial);
     this.coreFlash.position.set(0, 0, 0);
@@ -139,24 +167,20 @@ export class DawnBurstEffect extends BaseEffect {
   protected onUpdate(delta: number): void {
     this.elapsed += delta;
 
-    // 更新内层尖刺（无延迟）
     this.updateSpikes(this.innerSpikes, this.elapsed, delta);
-    // 更新外层尖刺（延迟0.1秒）
-    this.updateSpikes(this.outerSpikes, this.elapsed - 0.1, delta);
+    this.updateSpikes(this.outerSpikes, this.elapsed - 0.15, delta);
 
-    // 核心闪光：缩放并淡出
     if (this.coreFlash && this.coreMaterial) {
       const t = Math.min(1, this.elapsed / 0.3);
-      const scale = 1 + t * 2;
+      const scale = 1 + t * 1.8;
       this.coreFlash.scale.set(scale, scale, scale);
       this.coreMaterial.opacity = 1 - t;
     }
 
-    // 整体轻微旋转
-    this.group.rotation.y += delta * 2;
-    this.group.rotation.x += delta * 0.5;
+    // 整体缓慢旋转，增强动态
+    this.group.rotation.y += delta * 0.5;
+    this.group.rotation.x += delta * 0.2;
 
-    // 如果所有尖刺都已消失（移动距离达到，且不活跃），可以提前结束
     if (this.elapsed >= this.duration) {
       this.isActive = false;
     }
@@ -167,17 +191,15 @@ export class DawnBurstEffect extends BaseEffect {
     for (const spike of spikes) {
       const t = Math.max(0, currentTime - spike.startDelay);
       if (t <= 0) continue;
-      // 移动进度：先快后慢
       const moveProgress = Math.min(1, t * spike.speed);
       const easeOut = 1 - Math.pow(1 - moveProgress, 2);
       const offset = spike.direction.clone().multiplyScalar(easeOut * spike.distance);
-      spike.mesh.position.copy(spike.direction.clone().multiplyScalar(0.25).add(offset)); // 起始位置在半径0.25处
-      // 淡出
+      // 根部位置：原始位置 + 偏移（原始位置已在方向上偏移了 radius）
+      spike.mesh.position.copy(spike.direction.clone().multiplyScalar(0.3).add(offset));
       const material = spike.mesh.material as THREE.MeshStandardMaterial;
       material.opacity = 1 - moveProgress;
       material.transparent = true;
-      // 缩放变小
-      const scale = 1 - moveProgress * 0.5;
+      const scale = 1 - moveProgress * 0.2;
       spike.mesh.scale.set(scale, scale, scale);
     }
   }
@@ -199,26 +221,14 @@ export class DawnBurstEffect extends BaseEffect {
     }
   }
 }
-说明
-尖刺生成：使用 Fibonacci 球体算法生成均匀分布的方向，确保尖刺均匀覆盖球面。
+关键修改说明：
 
-尖刺几何体：使用 ConeGeometry，长度可调。每个尖刺独立，可单独控制位置、旋转、缩放、透明度。
+方向生成：在 generateSpikes 中，每个锥体的方向是在一个以 targetDir 为轴线的圆锥内随机生成，仰角范围由 minAngleDeg 和 maxAngleDeg 控制（默认内层 15-35°，外层 25-45°）。这样所有尖刺都会大致指向相机方向，但又略有分散，形成“刺向屏幕”的效果。
 
-爆炸动画：每个尖刺沿径向向外移动，移动距离 distance，速度 speed，移动曲线先快后慢（easeOut）。同时逐渐透明并缩小。
+根部位置：锥体的初始位置在 direction * radius 处，即从爆炸中心沿方向伸出一定距离（内层半径 0.5，外层半径 0.8），让尖刺根部附着在爆炸中心附近。
 
-分层：内层尖刺无延迟，外层延迟 0.1 秒开始移动，形成层次感。
+爆炸移动：锥体沿自身方向向外移动 distance（内层 1.5，外层 2.0），同时透明度降低、稍微缩小，模拟能量爆发。
 
-核心闪光：球体快速放大并淡出。
+相机获取：通过 cameraStore.getCamera() 获取相机位置，计算方向。你需要确保 CameraStore 已经正确设置（之前项目中应该有）。
 
-整体旋转：让特效更有动态。
-
-参数调整建议
-innerSpikes 数量、长度、颜色、速度、移动距离。
-
-outerSpikes 类似。
-
-调整 coreFlash 的大小和淡出时间。
-
-可以添加中心光晕平面（GlowPlane）增强效果。
-
-这个方案能确保尖刺根根分明，视觉效果华丽，且性能优秀（几十个独立 Mesh）。你可以根据需要微调参数
+如果还没有 CameraStore，可以在 DawnBurstEffect 构造函数中传入相机参数，或者从 useThree 获取（但注意这是在 React 组件外）。最简单的办法是在创建特效时从外部传入相机位置。

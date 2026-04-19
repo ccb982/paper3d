@@ -1,5 +1,6 @@
 import { BaseEffect } from './BaseEffect';
 import * as THREE from 'three';
+import { cameraStore } from './CameraStore';
 
 class Spike {
   public mesh: THREE.Mesh;
@@ -24,26 +25,45 @@ function generateSpikes(
   color: number,
   startDelay: number,
   speed: number,
-  distance: number
+  distance: number,
+  targetDir: THREE.Vector3,
+  minAngleDeg: number = 15,
+  maxAngleDeg: number = 45
 ): Spike[] {
   const spikes: Spike[] = [];
+  const targetNorm = targetDir.clone().normalize();
 
   const directions: THREE.Vector3[] = [];
-  const phiGoldenRatio = Math.PI * (3 - Math.sqrt(5));
+
   for (let i = 0; i < count; i++) {
-    const y = 1 - (i / (count - 1)) * 2;
-    const radiusAtY = Math.sqrt(1 - y*y);
-    const theta = i * phiGoldenRatio * 2;
-    const x = Math.cos(theta) * radiusAtY;
-    const z = Math.sin(theta) * radiusAtY;
-    directions.push(new THREE.Vector3(x, y, z).normalize());
+    const angleDeg = minAngleDeg + Math.random() * (maxAngleDeg - minAngleDeg);
+    const angleRad = angleDeg * Math.PI / 180;
+    const azimuthRad = Math.random() * Math.PI * 2;
+
+    let up = new THREE.Vector3(0, 1, 0);
+    if (Math.abs(targetNorm.dot(up)) > 0.9999) {
+      up = new THREE.Vector3(1, 0, 0);
+    }
+    const axis = new THREE.Vector3().crossVectors(up, targetNorm).normalize();
+    const quat = new THREE.Quaternion().setFromAxisAngle(axis, angleRad);
+    const dir = targetNorm.clone().applyQuaternion(quat);
+    const quatAz = new THREE.Quaternion().setFromAxisAngle(targetNorm, azimuthRad);
+    const finalDir = dir.applyQuaternion(quatAz).normalize();
+
+    directions.push(finalDir);
   }
 
   for (let i = 0; i < count; i++) {
     const dir = directions[i];
     const length = baseLength * (0.6 + Math.random() * 1.4);
-    const geometry = new THREE.ConeGeometry(1, length, 8);
-    const material = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.6, transparent: true });
+    const geometry = new THREE.ConeGeometry(1.5, length, 8);
+    const material = new THREE.MeshStandardMaterial({ 
+      color, 
+      emissive: color, 
+      emissiveIntensity: 0.6, 
+      transparent: true,
+      side: THREE.DoubleSide
+    });
     const quaternion = new THREE.Quaternion().setFromUnitVectors(
       new THREE.Vector3(0, 1, 0),
       dir
@@ -64,22 +84,37 @@ export class DawnBurstEffect extends BaseEffect {
   private coreMaterial: THREE.MeshBasicMaterial | null = null;
   private elapsed: number = 0;
 
-  constructor(position: THREE.Vector3, duration: number = 3.0) {
+  constructor(position: THREE.Vector3, duration: number = 4.0) {
     super(duration);
     this.group = new THREE.Group();
     this.group.position.copy(position);
     const scene = (window as any).gameScene;
     if (scene) scene.add(this.group);
 
+    const camera = cameraStore.getCamera();
+    let targetDir = new THREE.Vector3(0, 0, 1);
+    if (camera) {
+      targetDir = new THREE.Vector3().subVectors(camera.position, position).normalize();
+    }
+    targetDir.y += 0.2;
+    targetDir.normalize();
+
     const innerCount = 5 + Math.floor(Math.random() * 3);
     const outerCount = 6 + Math.floor(Math.random() * 3);
-    this.innerSpikes = generateSpikes(innerCount, 3, 2.5, 0xff6644, 0.0, 2.5, 2.0);
-    this.outerSpikes = generateSpikes(outerCount, 7, 3.5, 0xffaa55, 0.15, 2.0, 2.5);
+
+    this.innerSpikes = generateSpikes(
+      innerCount, 1, 5, 0xff6644, 1.0, 0.333, 2.5,
+      targetDir, 15, 35
+    );
+    this.outerSpikes = generateSpikes(
+      outerCount, 2, 7, 0xffaa55, 0.0, 0.333, 3.0,
+      targetDir, 25, 45
+    );
 
     this.innerSpikes.forEach(s => this.group.add(s.mesh));
     this.outerSpikes.forEach(s => this.group.add(s.mesh));
 
-    const coreGeo = new THREE.SphereGeometry(0.4, 16, 16);
+    const coreGeo = new THREE.SphereGeometry(1, 16, 16);
     this.coreMaterial = new THREE.MeshBasicMaterial({ color: 0xffaa66, transparent: true, blending: THREE.AdditiveBlending });
     this.coreFlash = new THREE.Mesh(coreGeo, this.coreMaterial);
     this.coreFlash.position.set(0, 0, 0);
@@ -89,17 +124,18 @@ export class DawnBurstEffect extends BaseEffect {
   protected onUpdate(delta: number): void {
     this.elapsed += delta;
 
-    this.updateSpikes(this.innerSpikes, this.elapsed, delta);
-    this.updateSpikes(this.outerSpikes, this.elapsed - 0.15, delta);
+    this.updateSpikes(this.innerSpikes, this.elapsed - 1.0, delta);
+    this.updateSpikes(this.outerSpikes, this.elapsed, delta);
 
     if (this.coreFlash && this.coreMaterial) {
-      const t = Math.min(1, this.elapsed / 0.3);
-      const scale = 1 + t * 1.5;
+      const t = Math.min(1, this.elapsed / 4.0);
+      const scale = (1 - t) * 3;
       this.coreFlash.scale.set(scale, scale, scale);
       this.coreMaterial.opacity = 1 - t;
     }
 
-    this.group.rotation.y += delta * 0.8;
+    this.group.rotation.y = 0;
+    this.group.rotation.x = 0;
 
     if (this.elapsed >= this.duration) {
       this.isActive = false;
@@ -112,14 +148,9 @@ export class DawnBurstEffect extends BaseEffect {
       const t = Math.max(0, currentTime - spike.startDelay);
       if (t <= 0) continue;
       const moveProgress = Math.min(1, t * spike.speed);
-      const easeOut = 1 - Math.pow(1 - moveProgress, 2);
-      const offset = spike.direction.clone().multiplyScalar(easeOut * spike.distance);
-      spike.mesh.position.copy(spike.direction.clone().multiplyScalar(0.3).add(offset));
       const material = spike.mesh.material as THREE.MeshStandardMaterial;
       material.opacity = 1 - moveProgress;
       material.transparent = true;
-      const scale = 1 - moveProgress * 0.3;
-      spike.mesh.scale.set(scale, scale, scale);
     }
   }
 
