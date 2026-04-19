@@ -1,10 +1,10 @@
 import { CharacterEntity } from './CharacterEntity';
-import { EntityManager } from '../core/EntityManager';
+import { EntityManager } from '../../core/EntityManager';
 import * as THREE from 'three';
-import { characterPositionStore } from '../systems/character/CharacterPositionStore';
-import { PaperAnimator } from '../core/PaperAnimator';
-import { AnimationLoader } from '../core/AnimationLoader';
-import { cameraStore } from '../core/CameraStore';
+import { characterPositionStore } from '../../systems/character/CharacterPositionStore';
+import { PaperAnimator } from '../../core/PaperAnimator';
+import { AnimationLoader } from '../../core/AnimationLoader';
+import { cameraStore } from '../../core/CameraStore';
 
 /**
  * 友方实体 - 玩家控制或友方AI角色

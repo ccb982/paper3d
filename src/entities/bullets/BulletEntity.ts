@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { Entity } from '../core/Entity';
-import { EntityManager } from '../core/EntityManager';
-import { generateId } from '../utils/idGenerator';
+import { Entity } from '../../core/Entity';
+import { EntityManager } from '../../core/EntityManager';
+import { generateId } from '../../utils/idGenerator';
 
 /**
  * 子弹实体 - 代替原 BulletPool

@@ -1,8 +1,8 @@
-import { Entity } from '../core/Entity';
+import { Entity } from '../../core/Entity';
 import * as THREE from 'three';
-import { eventBus } from '../core/eventBus';
-import { PaperAnimator } from '../core/PaperAnimator';
-import { cameraStore } from '../core/CameraStore';
+import { eventBus } from '../../core/eventBus';
+import { PaperAnimator } from '../../core/PaperAnimator';
+import { cameraStore } from '../../core/CameraStore';
 
 /**
  * 角色实体基类 - 所有角色（玩家、敌人、NPC）的父类

@@ -1,10 +1,10 @@
 import { CharacterEntity } from './CharacterEntity';
-import { EntityManager } from '../core/EntityManager';
-import { useGameStore, GameMode } from '../systems/state/gameStore';
+import { EntityManager } from '../../core/EntityManager';
+import { useGameStore, GameMode } from '../../systems/state/gameStore';
 import * as THREE from 'three';
-import { PaperAnimator } from '../core/PaperAnimator';
-import { AnimationLoader } from '../core/AnimationLoader';
-import { cameraStore } from '../core/CameraStore';
+import { PaperAnimator } from '../../core/PaperAnimator';
+import { AnimationLoader } from '../../core/AnimationLoader';
+import { cameraStore } from '../../core/CameraStore';
 
 /**
  * 敌方实体 - 敌方AI角色

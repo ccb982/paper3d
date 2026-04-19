@@ -17,11 +17,11 @@ import { EntityManager } from '../core/EntityManager';
 import { CollisionManager } from '../core/CollisionManager';
 import { cameraStore } from '../core/CameraStore';
 import { EffectManager } from '../core/EffectManager';
-import { BulletEntity } from '../entities/BulletEntity';
-import { CharacterEntity } from '../entities/CharacterEntity';
+import { BulletEntity } from '../entities/bullets/BulletEntity';
+import { CharacterEntity } from '../entities/characters/CharacterEntity';
 import { StaticEntity } from '../entities/StaticEntity';
-import { FriendlyEntity } from '../entities/FriendlyEntity';
-import { EnemyEntity } from '../entities/EnemyEntity';
+import { FriendlyEntity } from '../entities/characters/FriendlyEntity';
+import { EnemyEntity } from '../entities/characters/EnemyEntity';
 import { TargetEntity } from '../entities/TargetEntity';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 

@@ -1,4 +1,4 @@
-import { CharacterEntity } from '../../entities/CharacterEntity';
+import { CharacterEntity } from '../../entities/characters/CharacterEntity';
 import { characterPositionStore } from './CharacterPositionStore';
 
 export class PlayerCharacterManager {
