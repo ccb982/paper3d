@@ -797,7 +797,878 @@ console.log('发射子弹:', newBullet);
 
 ---
 
-## 12. 更新日志
+## 12. 鼠标锁定解除实现
+
+### 12.1 锁定解除机制
+
+**触发条件**：
+- 松开鼠标按钮（`mouseup`事件）
+- 目标丢失（射线检测未找到之前锁定的目标）
+
+**实现代码**：
+
+```typescript
+// 鼠标松开事件处理
+const handleMouseUp = () => {
+  isMouseDownRef.current = false;
+  targetDetectedRef.current = null; // 松开鼠标时销毁检测器
+  // 松开鼠标时取消锁定倒计时
+  lockCountdownRef.current = 0;
+  isLockingRef.current = false;
+  setLockCountdown(0);
+  setIsLocking(false);
+  console.log('取消锁定倒计时');
+  // 更新射击状态
+  gameStore.setShootInfo({ isFiring: false });
+};
+
+// 目标丢失时的处理（在useFrame中）
+if (isLockingRef.current && !lockedTargetRef.current) {
+  // 如果目标丢失，重置锁定状态
+  lockCountdownRef.current = 0;
+  isLockingRef.current = false;
+  setLockCountdown(0);
+  setIsLocking(false);
+  console.log('目标丢失，取消锁定');
+}
+```
+
+### 12.2 锁定解除流程
+
+1. **用户松开鼠标**：触发`mouseup`事件
+2. **重置状态**：
+   - `isMouseDownRef.current = false`
+   - `targetDetectedRef.current = null`
+   - `lockCountdownRef.current = 0`
+   - `isLockingRef.current = false`
+   - 更新React状态`setLockCountdown(0)`和`setIsLocking(false)`
+3. **更新游戏状态**：`gameStore.setShootInfo({ isFiring: false })`
+4. **目标丢失处理**：在游戏循环中检测到目标丢失时同样重置锁定状态
+
+---
+
+## 13. 瞄准系统UI设计
+
+### 13.1 核心UI组件 - Crosshair
+
+**文件位置**：`src/components/UI/Crosshair.tsx`
+
+**实现代码**：
+
+```tsx
+import React, { useState, useEffect, useRef } from 'react';
+import './Crosshair.css';
+
+interface CrosshairProps {
+  isLocking?: boolean;
+  lockProgress?: number; // 0-1
+}
+
+const Crosshair: React.FC<CrosshairProps> = ({ isLocking = false, lockProgress = 0 }) => {
+  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
+  const crosshairRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      setMousePosition({ x: e.clientX, y: e.clientY });
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
+
+  return (
+    <div 
+      ref={crosshairRef}
+      className={`crosshair ${isLocking ? 'crosshair-locking' : ''}`}
+      style={{
+        left: `${mousePosition.x}px`,
+        top: `${mousePosition.y}px`,
+        transform: 'translate(-50%, -50%)'
+      }}
+    >
+      <div className="crosshair-center"></div>
+      <div className="crosshair-line crosshair-line-top"></div>
+      <div className="crosshair-line crosshair-line-bottom"></div>
+      <div className="crosshair-line crosshair-line-left"></div>
+      <div className="crosshair-line crosshair-line-right"></div>
+      
+      {/* 锁定圆环 */}
+      {isLocking && (
+        <div className="crosshair-lock-ring">
+          <svg width="40" height="40" viewBox="0 0 40 40">
+            <circle 
+              cx="20" 
+              cy="20" 
+              r="15" 
+              fill="none" 
+              stroke="#2196F3" 
+              strokeWidth="2"
+              opacity="0.5"
+            />
+            <circle 
+              cx="20" 
+              cy="20" 
+              r="15" 
+              fill="none" 
+              stroke="#2196F3" 
+              strokeWidth="2"
+              strokeDasharray={`${2 * Math.PI * 15}`}
+              strokeDashoffset={`${2 * Math.PI * 15 * (1 - Math.max(0, Math.min(1, lockProgress)))}`}
+              strokeLinecap="round"
+              transform="rotate(-90 20 20)"
+              className="crosshair-lock-progress"
+            />
+          </svg>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Crosshair;
+```
+
+### 13.2 样式文件 - Crosshair.css
+
+**文件位置**：`src/components/UI/Crosshair.css`
+
+**实现代码**：
+
+```css
+/* 准星基础样式 */
+.crosshair {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  transform: translate(-50%, -50%);
+}
+
+/* 准星中心 */
+.crosshair-center {
+  width: 4px;
+  height: 4px;
+  background-color: #ffffff;
+  border: 2px solid #333333;
+  border-radius: 50%;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
+}
+
+/* 准星线条 */
+.crosshair-line {
+  position: absolute;
+  background-color: #ffffff;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.6);
+}
+
+.crosshair-line-top {
+  width: 2px;
+  height: 10px;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.crosshair-line-bottom {
+  width: 2px;
+  height: 10px;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.crosshair-line-left {
+  width: 10px;
+  height: 2px;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.crosshair-line-right {
+  width: 10px;
+  height: 2px;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* 锁定状态样式 */
+.crosshair-locking .crosshair-center {
+  background-color: #2196F3;
+  box-shadow: 0 0 10px rgba(33, 150, 243, 0.8);
+}
+
+.crosshair-locking .crosshair-line {
+  background-color: #2196F3;
+  box-shadow: 0 0 5px rgba(33, 150, 243, 0.8);
+}
+
+/* 锁定圆环 */
+.crosshair-lock-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.crosshair-lock-progress {
+  transition: stroke-dashoffset 0.05s linear;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse { 
+  0% { opacity: 0.7; } 
+  50% { opacity: 1; } 
+  100% { opacity: 0.7; } 
+}
+```
+
+### 13.3 UI组件使用
+
+**在App.tsx中的调用**：
+
+```tsx
+<Crosshair 
+  isLocking={isLocking} 
+  lockProgress={1 - (lockCountdown / 1000)}
+/>
+```
+
+### 13.4 视觉反馈效果
+
+1. **常规状态**：白色准星，中心为白色圆点
+2. **锁定状态**：
+   - 准星变为蓝色（`#2196F3`）
+   - 中心圆点和线条都变为蓝色
+   - 显示蓝色锁定圆环，大小为40x40像素
+   - 圆环有脉冲动画效果
+   - 圆环进度条随倒计时实时更新
+
+---
+
+## 14. 完整射击系统代码
+
+### 14.1 App.tsx 完整代码
+
+```typescript
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { OrbitControls, TransformControls } from '@react-three/drei';
+import * as THREE from 'three';
+import Crosshair from './components/UI/Crosshair';
+import { gameStore } from './store';
+import RayVisualizer from './components/debug/RayVisualizer';
+import MultiRayVisualizer from './components/debug/MultiRayVisualizer';
+import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
+
+// 射击常量
+const FIRE_RATE = 100; // 射击间隔（毫秒）
+const BULLET_SPEED = 10; // 子弹速度
+const LOCK_DURATION = 1000; // 锁定倒计时（毫秒）
+
+// 获取相机仰角
+function getCameraPitch(camera: THREE.Camera): number {
+  camera.updateMatrixWorld();
+  const direction = new THREE.Vector3();
+  camera.getWorldDirection(direction);
+  return Math.asin(direction.y);
+}
+
+// 基于相机仰角的NDC坐标修正
+function getCorrectedNDC(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  camera: THREE.Camera,
+  characterPosition: THREE.Vector3,
+  baseCompensation: number = 0.3
+): THREE.Vector2 {
+  // 计算基础NDC坐标
+  const rect = canvas.getBoundingClientRect();
+  const pixelWidth = canvas.width;
+  const pixelHeight = canvas.height;
+  const scaleX = pixelWidth / rect.width;
+  const scaleY = pixelHeight / rect.height;
+  const pixelX = (clientX - rect.left) * scaleX;
+  const pixelY = (clientY - rect.top) * scaleY;
+  let ndcX = (pixelX / pixelWidth) * 2 - 1;
+  let ndcY = -(pixelY / pixelHeight) * 2 + 1;
+  
+  // 计算相机仰角
+  const pitch = getCameraPitch(camera);
+  
+  // 计算角色到摄像机的距离
+  const distanceToCamera = camera.position.distanceTo(characterPosition);
+  
+  // 动态距离补偿：距离越近，补偿强度越大
+  const distanceCompensation = Math.max(0.8, Math.min(1.2, 20 / distanceToCamera));
+  
+  // 俯角补偿：俯角越高，补偿效果越好
+  const pitchCompensation = 1.0 + Math.max(0, pitch) * 0.5;
+  
+  // 综合补偿系数
+  const totalCompensation = baseCompensation * distanceCompensation * pitchCompensation;
+  
+  // 应用补偿
+  const correction = -pitch * totalCompensation;
+  ndcY += correction;
+  ndcY = Math.max(-1, Math.min(1, ndcY));
+  
+  // 调试日志
+  console.log(`Pitch: ${pitch.toFixed(3)}, Distance: ${distanceToCamera.toFixed(2)},
+               DistanceComp: ${distanceCompensation.toFixed(3)},
+               PitchComp: ${pitchCompensation.toFixed(3)},
+               Total: ${totalCompensation.toFixed(3)},
+               Correction: ${correction.toFixed(3)}`);
+  
+  return new THREE.Vector2(ndcX, ndcY);
+}
+
+// 计算子弹方向
+function getBulletDirection(
+  characterPosition: THREE.Vector3,
+  targetPosition: THREE.Vector3
+): THREE.Vector3 {
+  return new THREE.Vector3()
+    .subVectors(targetPosition, new THREE.Vector3(characterPosition.x, characterPosition.y + 1.2, characterPosition.z))
+    .normalize();
+}
+
+// 子弹类型
+interface Bullet {
+  id: number;
+  position: { x: number; y: number; z: number };
+  direction: THREE.Vector3;
+}
+
+// 目标类型
+interface Target {
+  object: THREE.Object3D;
+  distance: number;
+}
+
+const App: React.FC = () => {
+  // 状态管理
+  const [isLocking, setIsLocking] = useState(false);
+  const [lockCountdown, setLockCountdown] = useState(0);
+  const [lockedTarget, setLockedTarget] = useState<Target | null>(null);
+  const [bullets, setBullets] = useState<Bullet[]>([]);
+  
+  // 调试状态
+  const [rayOrigin, setRayOrigin] = useState<THREE.Vector3 | null>(null);
+  const [rayDirection, setRayDirection] = useState<THREE.Vector3 | null>(null);
+  
+  // Ref引用
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cameraRef = useRef<THREE.PerspectiveCamera>(null);
+  const characterRef = useRef<THREE.Object3D>(null);
+  const shootableObjectsRef = useRef<THREE.Object3D[]>([]);
+  
+  // 射击相关Ref
+  const isMouseDownRef = useRef(false);
+  const lockedTargetRef = useRef<Target | null>(null);
+  const lockCountdownRef = useRef(0);
+  const isLockingRef = useRef(false);
+  const lastFireTimeRef = useRef(0);
+  const bulletIdRef = useRef(0);
+  const mousePosRef = useRef({ x: 0, y: 0 });
+  const targetDetectedRef = useRef<boolean | null>(null);
+  
+  // 鼠标事件处理
+  const handleMouseDown = () => {
+    isMouseDownRef.current = true;
+    targetDetectedRef.current = null; // 点击时重置检测状态
+    gameStore.setShootInfo({ isFiring: true });
+  };
+  
+  const handleMouseUp = () => {
+    isMouseDownRef.current = false;
+    targetDetectedRef.current = null; // 松开鼠标时销毁检测器
+    // 松开鼠标时取消锁定倒计时
+    lockCountdownRef.current = 0;
+    isLockingRef.current = false;
+    setLockCountdown(0);
+    setIsLocking(false);
+    console.log('取消锁定倒计时');
+    // 更新射击状态
+    gameStore.setShootInfo({ isFiring: false });
+  };
+  
+  const handleMouseMove = (event: MouseEvent) => {
+    const mousePos = { x: event.clientX, y: event.clientY };
+    mousePosRef.current = mousePos;
+    
+    // 计算鼠标在游戏世界中的位置
+    if (cameraRef.current) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      // 相机矩阵更新
+      if (cameraRef.current.aspect !== canvas.width / canvas.height) {
+        cameraRef.current.aspect = canvas.width / canvas.height;
+        cameraRef.current.updateProjectionMatrix();
+        cameraRef.current.updateMatrixWorld();
+      }
+      
+      // 使用基于仰角的NDC修正
+      const characterPos = new THREE.Vector3(
+        gameStore.character.position.x,
+        gameStore.character.position.y,
+        gameStore.character.position.z
+      );
+      
+      const correctedNDC = getCorrectedNDC(
+        canvas, mousePos.x, mousePos.y, cameraRef.current, characterPos, 0.3
+      );
+      
+      // 创建射线并更新可视化数据
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(correctedNDC, cameraRef.current);
+      setRayOrigin(raycaster.ray.origin.clone());
+      setRayDirection(raycaster.ray.direction.clone());
+    }
+  };
+  
+  // 监听鼠标事件
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.addEventListener('mousedown', handleMouseDown);
+      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('mousemove', handleMouseMove);
+      
+      return () => {
+        canvas.removeEventListener('mousedown', handleMouseDown);
+        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('mousemove', handleMouseMove);
+      };
+    }
+  }, []);
+  
+  // 游戏循环
+  useFrame((state, delta) => {
+    const { camera } = state;
+    
+    // 确保相机矩阵已更新
+    camera.updateMatrixWorld();
+    
+    // 锁定倒计时逻辑
+    if (isLockingRef.current && lockedTargetRef.current) {
+      lockCountdownRef.current -= delta * 1000; // 将delta转换为毫秒
+      if (lockCountdownRef.current <= 0) {
+        // 倒计时结束，锁定完成
+        lockCountdownRef.current = 0;
+        isLockingRef.current = false;
+        setLockCountdown(0);
+        setIsLocking(false);
+        console.log('锁定完成，可以射击');
+      } else {
+        // 更新倒计时状态
+        setLockCountdown(lockCountdownRef.current);
+      }
+    } else if (isLockingRef.current && !lockedTargetRef.current) {
+      // 如果目标丢失，重置锁定状态
+      lockCountdownRef.current = 0;
+      isLockingRef.current = false;
+      setLockCountdown(0);
+      setIsLocking(false);
+      console.log('目标丢失，取消锁定');
+    }
+    
+    // 检测可射击目标
+    if (isMouseDownRef.current && camera && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const mousePos = mousePosRef.current;
+      
+      // 计算基础NDC坐标
+      const rect = canvas.getBoundingClientRect();
+      const pixelWidth = canvas.width;
+      const pixelHeight = canvas.height;
+      const scaleX = pixelWidth / rect.width;
+      const scaleY = pixelHeight / rect.height;
+      const pixelX = (mousePos.x - rect.left) * scaleX;
+      const pixelY = (mousePos.y - rect.top) * scaleY;
+      const ndcX = (pixelX / pixelWidth) * 2 - 1;
+      const ndcY = -(pixelY / pixelHeight) * 2 + 1;
+      
+      // 计算角色位置
+      const characterPosition = new THREE.Vector3(
+        gameStore.character.position.x,
+        gameStore.character.position.y,
+        gameStore.character.position.z
+      );
+      
+      // 获取修正后的NDC坐标
+      const correctedNDC = getCorrectedNDC(
+        canvas, mousePos.x, mousePos.y, camera, characterPosition, 0.3
+      );
+      
+      // 多射线检测
+      const raycaster = new THREE.Raycaster();
+      const allIntersects: THREE.Intersection[] = [];
+      const rayOrigins: THREE.Vector3[] = [];
+      const rayDirections: THREE.Vector3[] = [];
+      
+      // 射线偏移量（十字形布局）
+      const rayOffsets = [
+        { x: 0, y: 0 },      // 中心
+        { x: 0.05, y: 0 },   // 右
+        { x: -0.05, y: 0 },  // 左
+        { x: 0, y: 0.05 },   // 上
+        { x: 0, y: -0.05 },  // 下
+      ];
+      
+      for (const offset of rayOffsets) {
+        // 原始射线（未修正）
+        raycaster.setFromCamera(new THREE.Vector2(ndcX + offset.x, ndcY + offset.y), camera);
+        const rawDirection = raycaster.ray.direction.clone();
+        
+        // 修正后的射线
+        raycaster.setFromCamera(new THREE.Vector2(correctedNDC.x + offset.x, correctedNDC.y + offset.y), camera);
+        const correctedDirection = raycaster.ray.direction.clone();
+        
+        // 取Y分量较大的方向（更高的射线位置）
+        const finalDirection = rawDirection.y > correctedDirection.y ? rawDirection : correctedDirection;
+        
+        // 使用最终方向检测
+        raycaster.set(camera.position, finalDirection);
+        const finalIntersects = raycaster.intersectObjects(shootableObjectsRef.current, true);
+        allIntersects.push(...finalIntersects);
+        
+        // 存储射线数据用于可视化
+        rayOrigins.push(raycaster.ray.origin.clone());
+        rayDirections.push(finalDirection.clone());
+      }
+      
+      // 更新射线可视化数据
+      gameStore.setRaycastInfo({
+        origins: rayOrigins,
+        directions: rayDirections
+      });
+      
+      // 处理检测结果
+      if (allIntersects.length > 0) {
+        // 按距离排序，取最近的目标
+        allIntersects.sort((a, b) => a.distance - b.distance);
+        const closestIntersect = allIntersects[0];
+        
+        const target: Target = {
+          object: closestIntersect.object,
+          distance: closestIntersect.distance
+        };
+        
+        // 目标检测状态管理
+        if (!targetDetectedRef.current) {
+          targetDetectedRef.current = true;
+          // 开始锁定倒计时
+          if (!lockedTargetRef.current) {
+            lockCountdownRef.current = 1000; // 1秒倒计时
+            isLockingRef.current = true;
+            setLockCountdown(1000);
+            setIsLocking(true);
+            console.log('开始锁定倒计时');
+          }
+        }
+        
+        // 更新锁定目标
+        lockedTargetRef.current = target;
+        setLockedTarget(target);
+      } else {
+        // 未检测到目标
+        targetDetectedRef.current = false;
+        lockedTargetRef.current = null;
+        setLockedTarget(null);
+      }
+    }
+    
+    // 射击逻辑
+    if (isMouseDownRef.current && cameraRef.current && lockedTargetRef.current && !isLockingRef.current) {
+      const now = Date.now();
+      if (now - lastFireTimeRef.current >= FIRE_RATE) {
+        lastFireTimeRef.current = now;
+        
+        // 获取目标实时世界坐标
+        const targetPosition = new THREE.Vector3();
+        lockedTargetRef.current.object.getWorldPosition(targetPosition);
+        
+        // 计算子弹方向
+        const direction = new THREE.Vector3().subVectors(
+          targetPosition,
+          new THREE.Vector3(gameStore.character.position.x, gameStore.character.position.y + 1.2, gameStore.character.position.z)
+        ).normalize();
+        
+        // 创建子弹
+        const newBullet = {
+          id: bulletIdRef.current++,
+          position: { x: gameStore.character.position.x, y: gameStore.character.position.y + 1.2, z: gameStore.character.position.z },
+          direction,
+        };
+        setBullets(prev => [...prev, newBullet]);
+        
+        // 更新射击状态
+        gameStore.setShootInfo({ 
+          isFiring: true, 
+          lastFired: now,
+          bulletCount: (gameStore.shootInfo.bulletCount || 0) + 1
+        });
+      }
+    }
+    
+    // 更新子弹位置
+    setBullets(prevBullets => {
+      return prevBullets
+        .map(bullet => ({
+          ...bullet,
+          position: {
+            x: bullet.position.x + bullet.direction.x * BULLET_SPEED * delta,
+            y: bullet.position.y + bullet.direction.y * BULLET_SPEED * delta,
+            z: bullet.position.z + bullet.direction.z * BULLET_SPEED * delta
+          }
+        }))
+        .filter(bullet => {
+          // 简单的子弹生命周期管理
+          const distance = Math.sqrt(
+            Math.pow(bullet.position.x - gameStore.character.position.x, 2) +
+            Math.pow(bullet.position.y - gameStore.character.position.y, 2) +
+            Math.pow(bullet.position.z - gameStore.character.position.z, 2)
+          );
+          return distance < 100; // 100单位后销毁
+        });
+    });
+  });
+  
+  return (
+    <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
+      <Canvas
+        ref={canvasRef}
+        camera={{ position: [0, 5, 10], fov: 75 }}
+        onCreated={({ gl, camera }) => {
+          gl.setClearColor(0x87ceeb, 1);
+          cameraRef.current = camera as THREE.PerspectiveCamera;
+        }}
+      >
+        <ambientLight intensity={0.5} />
+        <directionalLight position={[10, 10, 5]} intensity={1} />
+        
+        {/* 角色 */}
+        <mesh 
+          ref={characterRef}
+          position={[0, 0, 0]}
+          onCreated={(mesh) => {
+            shootableObjectsRef.current.push(mesh);
+          }}
+        >
+          <boxGeometry args={[1, 2, 1]} />
+          <meshStandardMaterial color={0xff0000} />
+        </mesh>
+        
+        {/* 目标 */}
+        <mesh 
+          position={[5, 1, 0]}
+          onCreated={(mesh) => {
+            shootableObjectsRef.current.push(mesh);
+          }}
+        >
+          <sphereGeometry args={[0.5]} />
+          <meshStandardMaterial color={0x00ff00} />
+        </mesh>
+        
+        <mesh 
+          position={[-3, 1, 2]}
+          onCreated={(mesh) => {
+            shootableObjectsRef.current.push(mesh);
+          }}
+        >
+          <sphereGeometry args={[0.5]} />
+          <meshStandardMaterial color={0x00ff00} />
+        </mesh>
+        
+        {/* 子弹 */}
+        {bullets.map(bullet => (
+          <mesh key={bullet.id} position={[bullet.position.x, bullet.position.y, bullet.position.z]}>
+            <sphereGeometry args={[0.1]} />
+            <meshStandardMaterial color={0xffff00} />
+          </mesh>
+        ))}
+        
+        {/* 轨道控制器 */}
+        <OrbitControls enableDamping dampingFactor={0.1} />
+        
+        {/* 调试可视化 */}
+        {rayOrigin && rayDirection && (
+          <RayVisualizer origin={rayOrigin} direction={rayDirection} length={100} color={0xff0000} />
+        )}
+        
+        {/* 多射线可视化 */}
+        <MultiRayVisualizer />
+        
+        {/* 射击方向可视化 */}
+        <ShootDirectionVisualizer />
+      </Canvas>
+      
+      {/* 准星 */}
+      <Crosshair 
+        isLocking={isLocking} 
+        lockProgress={1 - (lockCountdown / 1000)}
+      />
+    </div>
+  );
+};
+
+export default App;
+```
+
+### 14.2 调试组件代码
+
+#### RayVisualizer.tsx
+
+```tsx
+import React, { useRef, useEffect } from 'react';
+import * as THREE from 'three';
+
+interface RayVisualizerProps {
+  origin: THREE.Vector3;
+  direction: THREE.Vector3;
+  length?: number;
+  color?: number;
+}
+
+const RayVisualizer: React.FC<RayVisualizerProps> = ({
+  origin,
+  direction,
+  length = 100,
+  color = 0xff0000
+}) => {
+  const lineRef = useRef<THREE.Line>(null);
+
+  useEffect(() => {
+    if (lineRef.current) {
+      const end = new THREE.Vector3().copy(origin).add(direction.clone().multiplyScalar(length));
+      const geometry = new THREE.BufferGeometry().setFromPoints([origin, end]);
+      const material = new THREE.LineBasicMaterial({ color });
+      lineRef.current.geometry.dispose();
+      lineRef.current.geometry = geometry;
+      lineRef.current.material = material;
+    }
+  }, [origin, direction, length, color]);
+
+  return (
+    <line ref={lineRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          count={2}
+          array={new Float32Array([0, 0, 0, 0, 0, 0])}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <lineBasicMaterial color={color} />
+    </line>
+  );
+};
+
+export default RayVisualizer;
+```
+
+#### MultiRayVisualizer.tsx
+
+```tsx
+import React, { useRef, useEffect } from 'react';
+import * as THREE from 'three';
+import { gameStore } from '../../store';
+
+const MultiRayVisualizer: React.FC = () => {
+  const groupRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    if (groupRef.current) {
+      // 清除现有线条
+      groupRef.current.clear();
+      
+      // 添加新线条
+      const { origins, directions } = gameStore.raycastInfo;
+      origins.forEach((origin, index) => {
+        const direction = directions[index];
+        if (origin && direction) {
+          const end = new THREE.Vector3().copy(origin).add(direction.clone().multiplyScalar(100));
+          const geometry = new THREE.BufferGeometry().setFromPoints([origin, end]);
+          const material = new THREE.LineBasicMaterial({ 
+            color: index === 0 ? 0xff0000 : 0x0000ff, // 中心射线红色，其他蓝色
+            linewidth: index === 0 ? 2 : 1
+          });
+          const line = new THREE.Line(geometry, material);
+          groupRef.current!.add(line);
+        }
+      });
+    }
+  }, [gameStore.raycastInfo]);
+
+  return <group ref={groupRef} />;
+};
+
+export default MultiRayVisualizer;
+```
+
+#### ShootDirectionVisualizer.tsx
+
+```tsx
+import React, { useRef, useEffect } from 'react';
+import * as THREE from 'three';
+import { gameStore } from '../../store';
+
+const ShootDirectionVisualizer: React.FC = () => {
+  const lineRef = useRef<THREE.Line>(null);
+
+  useEffect(() => {
+    if (lineRef.current && gameStore.shootInfo.isFiring) {
+      const characterPos = new THREE.Vector3(
+        gameStore.character.position.x,
+        gameStore.character.position.y + 1.2,
+        gameStore.character.position.z
+      );
+      
+      // 简单的射击方向可视化
+      const direction = new THREE.Vector3(0, 0, -1); // 示例方向
+      const end = new THREE.Vector3().copy(characterPos).add(direction.multiplyScalar(10));
+      
+      const geometry = new THREE.BufferGeometry().setFromPoints([characterPos, end]);
+      const material = new THREE.LineBasicMaterial({ color: 0x00ff00 });
+      
+      lineRef.current.geometry.dispose();
+      lineRef.current.geometry = geometry;
+      lineRef.current.material = material;
+    }
+  }, [gameStore.shootInfo, gameStore.character.position]);
+
+  return (
+    <line ref={lineRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          count={2}
+          array={new Float32Array([0, 0, 0, 0, 0, 0])}
+          itemSize={3}
+        />
+      </bufferGeometry>
+      <lineBasicMaterial color={0x00ff00} />
+    </line>
+  );
+};
+
+export default ShootDirectionVisualizer;
+```
+
+---
+
+## 15. 更新日志
 
 ### v1.0 - 当前版本
 - 实现锁定式射击系统
@@ -808,5 +1679,5 @@ console.log('发射子弹:', newBullet);
 
 ---
 
-*文档生成时间：2026-04-17*
+*文档生成时间：2026-04-18*
 *适用版本：paper3d-master*
