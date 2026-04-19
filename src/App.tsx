@@ -335,6 +335,9 @@ const MovementController: React.FC<MovementControllerProps> = ({
     // 强制更新相机矩阵，确保获取到最新的方向
     camera.updateMatrixWorld();
     
+    // 更新特效系统
+    EffectManager.getInstance().update(delta);
+    
     // 更新相机引用
     cameraRef.current = camera;
     
@@ -660,6 +663,14 @@ const MovementController: React.FC<MovementControllerProps> = ({
         };
         setBullets(prev => [...prev, newBullet]);
         console.log('发射子弹:', newBullet);
+        
+        // 触发枪口闪光特效
+        EffectManager.getInstance().playMuzzleFlash(
+          new THREE.Vector3(realTimeCharacterPos.x, realTimeCharacterPos.y + 1.2, realTimeCharacterPos.z)
+        );
+        
+        // 触发命中特效（在目标位置）
+        EffectManager.getInstance().playHitFlash(targetPosition);
       }
     }
     
