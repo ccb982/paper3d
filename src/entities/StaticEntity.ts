@@ -4,6 +4,7 @@ import * as THREE from 'three';
 export class StaticEntity extends Entity {
   public isShootable: boolean = true;   // 可被射击
   public health: number = 1;            // 生命值（默认1，一击即毁）
+  public maxHealth: number = 1;         // 最大生命值
 
   constructor(id: string, mesh: THREE.Object3D, position: THREE.Vector3) {
     // 添加可射击属性到 userData

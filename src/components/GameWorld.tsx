@@ -368,7 +368,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     collisionManager.registerCollision('bullet', 'character', (bullet, character) => {
       const bulletEntity = bullet as BulletEntity;
       const characterEntity = character as CharacterEntity;
-      if (characterEntity.isEnemy(bulletEntity as any)) { // 简化判断：敌人阵营
+      // 直接检查目标是否为敌人阵营，而不是使用 isEnemy 方法
+      if (characterEntity.faction === 'enemy') {
         characterEntity.takeDamage(bulletEntity.getDamage() ?? 1);
         bulletEntity.isActive = false;
       }
@@ -383,8 +384,11 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       }
     });
     
-    // 角色 vs 敌人碰撞（玩家与敌人相撞扣血）
+    // 角色 vs 敌人碰撞（玩家与敌人相撞扣血 - 仅在战斗模式下）
     collisionManager.registerCollision('character', 'character', (a, b) => {
+      const mode = useGameStore.getState().mode;
+      if (mode !== GameMode.BATTLE) return;
+      
       const charA = a as CharacterEntity;
       const charB = b as CharacterEntity;
       if (charA.isEnemy(charB)) {
