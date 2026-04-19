@@ -15,6 +15,7 @@ import { useDialogue } from '../systems/dialogue/useDialogue';
 import { characterPositionStore } from '../systems/character/CharacterPositionStore';
 import { EntityManager } from '../core/EntityManager';
 import { CollisionManager } from '../core/CollisionManager';
+import { cameraStore } from '../core/CameraStore';
 import { BulletEntity } from '../entities/BulletEntity';
 import { CharacterEntity } from '../entities/CharacterEntity';
 import { StaticEntity } from '../entities/StaticEntity';
@@ -35,6 +36,12 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
   const isDebug = useGameStore(s => s.isDebug);
   const jumpForce = 7;
   const isMouseDownRef = useRef(false);
+
+  // 设置相机和渲染器引用到全局存储
+  useEffect(() => {
+    cameraStore.setCamera(camera);
+    cameraStore.setRenderer(gl);
+  }, [camera, gl]);
 
   useEffect(() => {
     sceneRef.current = scene;
