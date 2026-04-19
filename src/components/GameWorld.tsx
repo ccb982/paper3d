@@ -19,10 +19,10 @@ import { cameraStore } from '../core/CameraStore';
 import { EffectManager } from '../core/EffectManager';
 import { BulletEntity } from '../entities/bullets/BulletEntity';
 import { CharacterEntity } from '../entities/characters/CharacterEntity';
-import { StaticEntity } from '../entities/StaticEntity';
+import { StaticEntity } from '../entities/static/StaticEntity';
 import { FriendlyEntity } from '../entities/characters/FriendlyEntity';
 import { EnemyEntity } from '../entities/characters/EnemyEntity';
-import { TargetEntity } from '../entities/TargetEntity';
+import { TargetEntity } from '../entities/static/TargetEntity';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {

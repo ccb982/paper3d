@@ -1,4 +1,4 @@
-import { Entity } from '../core/Entity';
+import { Entity } from '../../core/Entity';
 import * as THREE from 'three';
 
 export class StaticEntity extends Entity {

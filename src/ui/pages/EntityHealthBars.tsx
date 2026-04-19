@@ -2,7 +2,7 @@ import { useGameStore, GameMode } from '../../systems/state/gameStore';
 import { useRef, useEffect } from 'react';
 import { EntityManager } from '../../core/EntityManager';
 import { CharacterEntity } from '../../entities/characters/CharacterEntity';
-import { StaticEntity } from '../../entities/StaticEntity';
+import { StaticEntity } from '../../entities/static/StaticEntity';
 import { cameraStore } from '../../core/CameraStore';
 import * as THREE from 'three';
 
