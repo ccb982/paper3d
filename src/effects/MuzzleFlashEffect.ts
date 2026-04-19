@@ -35,7 +35,7 @@ export class MuzzleFlashEffect extends BaseEffect {
     EntityManager.getInstance().getScene()?.add(this.group);
   }
 
-  protected onUpdate(delta: number): void {
+  protected onUpdate(_delta: number): void {
     const progress = this.elapsed / this.duration;
     const scale = 1 - progress; // 快速缩小
     this.group.scale.set(scale, scale, 1);

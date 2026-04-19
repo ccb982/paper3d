@@ -122,4 +122,8 @@ export abstract class BaseShootingSystem implements IShootingSystem {
   protected notifyShootDirectionChanged(direction: { x: number; y: number; z: number } | null): void {
     this.callbacks.onShootDirectionChanged?.(direction);
   }
+
+  public getRayData(): Array<{ origin: THREE.Vector3; direction: THREE.Vector3 }> {
+    return [];
+  }
 }

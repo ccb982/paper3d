@@ -21,7 +21,7 @@ export class StaticEntity extends Entity {
   /**
    * 静态物品不需要每帧更新（除非有动画）
    */
-  public update(delta: number): void {
+  public update(_delta: number): void {
     // 静态物品通常无更新逻辑
     // 如有需要（如旋转、漂浮动画），可在此添加
   }

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { AnimationClip } from './AnimationClip';
-import { cameraStore } from './CameraStore';
+
 
 /**
  * 纸片人动画器 - 管理正面和背面动画
@@ -9,9 +9,9 @@ export class PaperAnimator {
   private frontClip: AnimationClip | null = null;
   private backClip: AnimationClip | null = null;
   private currentClip: AnimationClip | null = null;
-  private material: THREE.Material & { map?: THREE.Texture };
+  private material: THREE.Material & { map?: THREE.Texture | null };
 
-  constructor(material: THREE.Material & { map?: THREE.Texture }) {
+  constructor(material: THREE.Material & { map?: THREE.Texture | null }) {
     this.material = material;
   }
 

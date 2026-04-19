@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Entity } from '../../core/Entity';
-import { EntityManager } from '../../core/EntityManager';
+
 import { generateId } from '../../utils/idGenerator';
 
 /**
@@ -8,7 +8,6 @@ import { generateId } from '../../utils/idGenerator';
  * 支持移动、生命周期、简易碰撞检测
  */
 export class BulletEntity extends Entity {
-  private velocity: THREE.Vector3;
   private lifetime: number = 3000;
   private createdAt: number;
   private damage: number = 1;

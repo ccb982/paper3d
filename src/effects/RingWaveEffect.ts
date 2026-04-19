@@ -23,7 +23,7 @@ export class RingWaveEffect extends BaseEffect {
     EntityManager.getInstance().getScene()?.add(this.mesh);
   }
 
-  protected onUpdate(delta: number): void {
+  protected onUpdate(_delta: number): void {
     const t = this.elapsed / this.duration; // 0→1
     const scale = 1 + t * 3;
     this.mesh.scale.set(scale, scale, 1);

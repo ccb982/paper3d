@@ -19,13 +19,16 @@ export class FriendlyEntity extends CharacterEntity {
     this.isPlayerControlled = true;
     
     // 确保材质是 MeshStandardMaterial，以便支持动画
-    if (this.mesh && (this.mesh as THREE.Mesh).material instanceof THREE.MeshStandardMaterial) {
-      const material = (this.mesh as THREE.Mesh).material;
-      const animator = new PaperAnimator(material);
-      this.setAnimator(animator);
-      
-      // 异步加载动画（使用占位路径，实际项目中需要替换为真实路径）
-      this.loadAnimations(animator);
+    if (this.mesh) {
+      const mesh = this.mesh as THREE.Mesh;
+      if (mesh.material && !(mesh.material instanceof Array) && 'map' in mesh.material) {
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        const animator = new PaperAnimator(material);
+        this.setAnimator(animator);
+        
+        // 异步加载动画（使用占位路径，实际项目中需要替换为真实路径）
+        this.loadAnimations(animator);
+      }
     }
   }
   
@@ -53,11 +56,11 @@ export class FriendlyEntity extends CharacterEntity {
     this.cameraRef = camera;
   }
 
-  protected updateAI(delta: number): void {
+  protected updateAI(_delta: number): void {
     // 当不是玩家控制时，跟随玩家
     const player = EntityManager.getInstance().getEntitiesByType('character')
-      .find(e => (e as CharacterEntity).isPlayerControlled === true) as CharacterEntity;
-    if (player && player !== this) {
+      .find(e => (e as unknown as CharacterEntity).isPlayerControlled === true) as unknown as CharacterEntity;
+    if (player && player.id !== this.id) {
       const toPlayer = new THREE.Vector3().subVectors(player.position, this.position);
       if (toPlayer.length() > 2) {
         this.moveDirection.copy(toPlayer.clone().normalize());
@@ -67,10 +70,6 @@ export class FriendlyEntity extends CharacterEntity {
     }
   }
 
-  protected onDeath(): void {
-    super.onDeath();
-    console.log(`Friendly ${this.id} died`);
-  }
 
   public update(delta: number): void {
     if (!this.isActive) return;
@@ -128,5 +127,10 @@ export class FriendlyEntity extends CharacterEntity {
     const rotationSpeed = 8.0;
     this.mesh.quaternion.rotateTowards(targetQuat, rotationSpeed * delta);
     this.mesh.quaternion.normalize();
+  }
+
+  public onDeath(): void {
+    super.onDeath();
+    console.log(`Friendly entity ${this.id} died`);
   }
 }

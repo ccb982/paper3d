@@ -20,7 +20,7 @@ export class AnimationLoader {
     frameRate: number = 12,
     loop: boolean = true
   ): Promise<AnimationClip> {
-    const textures: THREE.Texture[] = [];
+  
     const loader = new THREE.TextureLoader();
     const promises: Promise<THREE.Texture>[] = [];
     for (let i = 0; i < frameCount; i++) {

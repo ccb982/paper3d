@@ -143,7 +143,7 @@ export abstract class CharacterEntity extends Entity {
 
   protected abstract updateAI(delta: number): void;
 
-  protected attack(delta: number): void {
+  protected attack(_delta: number): void {
     // 子类可覆盖
   }
 
@@ -159,7 +159,7 @@ export abstract class CharacterEntity extends Entity {
     }
   }
 
-  protected updateFacing(delta: number): void {
+  protected updateFacing(_delta: number): void {
     if (this.moveDirection.length() > 0) {
       const angle = Math.atan2(this.moveDirection.x, this.moveDirection.z);
       this.mesh.rotation.y = angle;
@@ -174,7 +174,7 @@ export abstract class CharacterEntity extends Entity {
     }
   }
 
-  protected onDeath(): void {
+  public onDeath(): void {
     eventBus.emit('entity:death', { id: this.id, faction: this.faction });
   }
 

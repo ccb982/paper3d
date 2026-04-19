@@ -239,8 +239,8 @@ export class DawnBurstEffect extends BaseEffect {
   }
 
   protected onUpdate(delta: number): void {
-    this.updateSpikes(this.innerSpikes, this.elapsed - 1.0, delta);
-    this.updateSpikes(this.outerSpikes, this.elapsed, delta);
+    this.updateSpikes(this.innerSpikes, this.elapsed - 1.0);
+    this.updateSpikes(this.outerSpikes, this.elapsed);
 
     if (this.coreFlash && this.coreMaterial) {
       const t = Math.min(1, this.elapsed / 4.0);
@@ -297,7 +297,7 @@ export class DawnBurstEffect extends BaseEffect {
     this.group.rotation.x = 0;
   }
 
-  private updateSpikes(spikes: Spike[], currentTime: number, delta: number): void {
+  private updateSpikes(spikes: Spike[], currentTime: number): void {
     if (currentTime < 0) return;
     for (const spike of spikes) {
       const t = Math.max(0, currentTime - spike.startDelay);

@@ -4,7 +4,7 @@ import { useGameStore, GameMode } from '../../systems/state/gameStore';
 import * as THREE from 'three';
 import { PaperAnimator } from '../../core/PaperAnimator';
 import { AnimationLoader } from '../../core/AnimationLoader';
-import { cameraStore } from '../../core/CameraStore';
+
 
 /**
  * 敌方实体 - 敌方AI角色
@@ -23,13 +23,16 @@ export class EnemyEntity extends CharacterEntity {
     this.randomDirection.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
     
     // 可选启用动画系统
-    if (enableAnimation && this.mesh && (this.mesh as THREE.Mesh).material instanceof THREE.MeshStandardMaterial) {
-      const material = (this.mesh as THREE.Mesh).material;
-      const animator = new PaperAnimator(material);
-      this.setAnimator(animator);
-      
-      // 异步加载动画（使用占位路径）
-      this.loadAnimations(animator);
+    if (enableAnimation && this.mesh) {
+      const mesh = this.mesh as THREE.Mesh;
+      if (mesh.material && !(mesh.material instanceof Array) && 'map' in mesh.material) {
+        const material = mesh.material as THREE.MeshStandardMaterial;
+        const animator = new PaperAnimator(material);
+        this.setAnimator(animator);
+        
+        // 异步加载动画（使用占位路径）
+        this.loadAnimations(animator);
+      }
     }
   }
   
@@ -73,9 +76,9 @@ export class EnemyEntity extends CharacterEntity {
     this.moveDirection.copy(this.randomDirection);
   }
 
-  private updateChaseMovement(delta: number): void {
+  private updateChaseMovement(_delta: number): void {
     const target = EntityManager.getInstance().getEntitiesByType('character')
-      .find(e => (e as CharacterEntity).isPlayerControlled === true) as CharacterEntity;
+      .find(e => (e as unknown as CharacterEntity).isPlayerControlled === true) as unknown as CharacterEntity;
     if (!target) {
       this.moveDirection.set(0, 0, 0);
       return;
@@ -90,7 +93,7 @@ export class EnemyEntity extends CharacterEntity {
     }
   }
 
-  protected onDeath(): void {
+  public onDeath(): void {
     super.onDeath();
     console.log(`Enemy ${this.id} died`);
   }

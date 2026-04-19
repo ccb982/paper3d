@@ -41,7 +41,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
 
   // 设置相机和渲染器引用到全局存储
   useEffect(() => {
-    cameraStore.setCamera(camera);
+    cameraStore.setCamera(camera as THREE.PerspectiveCamera);
     cameraStore.setRenderer(gl);
   }, [camera, gl]);
 
@@ -340,8 +340,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
   const { gl, scene, camera } = useThree();
   const mode = useGameStore(s => s.mode);
   const [activeShootingSystem, setActiveShootingSystem] = useState('freestyle');
-  const [isLocking, setIsLocking] = useState(false);
-  const [lockCountdown, setLockCountdown] = useState(0);
+
   const isDebug = useGameStore(s => s.isDebug);
   const getHeightAtRef = useRef<((x: number, z: number) => number) | null>(null);
   const [shootingManager, setShootingManager] = useState<ShootingSystemManager | null>(null);
@@ -456,8 +455,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     manager.setActiveSystem('freestyle');
     manager.setCallbacks({
       onLockStateChanged: (locking, countdown) => {
-        setIsLocking(locking);
-        setLockCountdown(countdown);
+
         onLockStateChanged(locking, countdown);
       },
       onTargetLocked: (target) => {
@@ -483,10 +481,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         } catch (error) {
           console.error('Error creating bullet entity:', error);
         }
-      },
-      onActiveSystemChanged: (system) => {
-        setActiveShootingSystem(system);
-        onActiveSystemChanged(system);
       }
     });
     setShootingManager(manager);
