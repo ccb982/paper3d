@@ -110,6 +110,24 @@ class RingEffect {
   }
 }
 
+class Particle {
+  public mesh: THREE.Mesh;
+  public direction: THREE.Vector3;
+  public speed: number;
+  public lifetime: number;
+  public maxLifetime: number;
+  public material: THREE.MeshBasicMaterial;
+
+  constructor(mesh: THREE.Mesh, direction: THREE.Vector3, speed: number, lifetime: number) {
+    this.mesh = mesh;
+    this.direction = direction.clone().normalize();
+    this.speed = speed;
+    this.lifetime = lifetime;
+    this.maxLifetime = lifetime;
+    this.material = mesh.material as THREE.MeshBasicMaterial;
+  }
+}
+
 export class DawnBurstEffect extends BaseEffect {
   private group: THREE.Group;
   private innerSpikes: Spike[] = [];
@@ -117,6 +135,7 @@ export class DawnBurstEffect extends BaseEffect {
   private coreFlash: THREE.Mesh | null = null;
   private coreMaterial: THREE.MeshBasicMaterial | null = null;
   private rings: RingEffect[] = [];
+  private particles: Particle[] = [];
 
   constructor(position: THREE.Vector3, duration: number = 4.0) {
     super(duration);
@@ -180,6 +199,43 @@ export class DawnBurstEffect extends BaseEffect {
       this.group.add(ring);
       this.rings.push(new RingEffect(ring, ringDelays[i], ringDurations[i], ringMaxScales[i]));
     }
+
+    // 创建#f92b3b颜色的粒子
+    this.createParticles();
+  }
+
+  private createParticles(): void {
+    const particleCount = 100; // 增加粒子数量
+    const particleColor = 0xf92b3b;
+    
+    for (let i = 0; i < particleCount; i++) {
+      // 随机方向
+      const direction = new THREE.Vector3(
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2
+      ).normalize();
+      
+      // 随机速度和生命周期
+      const speed = 1.5 + Math.random() * 1.5; // 适当增加速度
+      const lifetime = 1.5 + Math.random() * 1.5; // 适当增加生命周期
+      
+      // 创建粒子几何体
+      const geometry = new THREE.SphereGeometry(0.3, 8, 8); // 增加大小
+      const material = new THREE.MeshBasicMaterial({
+        color: particleColor,
+        transparent: true,
+        opacity: 1.0, // 增加初始不透明度
+        blending: THREE.AdditiveBlending,
+        depthWrite: false // 禁用深度写入，让粒子叠加效果更好
+      });
+      
+      const particle = new THREE.Mesh(geometry, material);
+      particle.position.set(0, 0, 0);
+      this.group.add(particle);
+      
+      this.particles.push(new Particle(particle, direction, speed, lifetime));
+    }
   }
 
   protected onUpdate(delta: number): void {
@@ -208,6 +264,33 @@ export class DawnBurstEffect extends BaseEffect {
       const scale = ring.maxScale * (1 - Math.pow(1 - progress, 2));
       ring.mesh.scale.set(scale, scale, 1);
       ring.material.opacity = 0.8 * (1 - progress);
+    }
+
+    // 更新粒子
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const particle = this.particles[i];
+      particle.lifetime -= delta;
+      
+      if (particle.lifetime <= 0) {
+        particle.mesh.parent?.remove(particle.mesh);
+        particle.mesh.geometry.dispose();
+        particle.material.dispose();
+        this.particles.splice(i, 1);
+        continue;
+      }
+      
+      // 移动粒子
+      const distance = particle.speed * delta;
+      const movement = new THREE.Vector3().copy(particle.direction).multiplyScalar(distance);
+      particle.mesh.position.add(movement);
+      
+      // 淡出效果
+      const progress = 1 - (particle.lifetime / particle.maxLifetime);
+      particle.material.opacity = 0.8 * (1 - progress);
+      
+      // 稍微缩小
+      const scale = 1 - progress * 0.5;
+      particle.mesh.scale.set(scale, scale, scale);
     }
 
     this.group.rotation.y = 0;
@@ -244,6 +327,11 @@ export class DawnBurstEffect extends BaseEffect {
     this.rings.forEach(ring => {
       ring.mesh.geometry.dispose();
       ring.material.dispose();
+    });
+    // 清理粒子
+    this.particles.forEach(particle => {
+      particle.mesh.geometry.dispose();
+      particle.material.dispose();
     });
   }
 }
