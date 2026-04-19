@@ -4,3 +4,4 @@ export { BattleHUD } from './BattleHUD';
 export { ShopPage } from './ShopPage';
 export { GachaPage } from './GachaPage';
 export { SettingPage } from './SettingPage';
+export { EntityHealthBars } from './EntityHealthBars';

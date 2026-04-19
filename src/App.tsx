@@ -1,6 +1,6 @@
 import { Canvas } from '@react-three/fiber';
 import { useGameStore, GameMode } from './systems/state/gameStore';
-import { MenuPage, DailyPage, BattleHUD, ShopPage, GachaPage, SettingPage } from './ui/pages';
+import { MenuPage, DailyPage, BattleHUD, ShopPage, GachaPage, SettingPage, EntityHealthBars } from './ui/pages';
 import { GameWorld } from './components/GameWorld';
 import Crosshair from './components/UI/Crosshair';
 import StatusPanel from './components/UI/StatusPanel';
@@ -68,6 +68,7 @@ function App() {
       {mode === GameMode.MENU && <MenuPage />}
       {mode === GameMode.DAILY && <DailyPage />}
       {mode === GameMode.BATTLE && <BattleHUD />}
+      {mode === GameMode.BATTLE && <EntityHealthBars />}
       {mode === GameMode.SHOP && <ShopPage />}
       {mode === GameMode.GACHA && <GachaPage />}
       {mode === GameMode.SETTING && <SettingPage />}
