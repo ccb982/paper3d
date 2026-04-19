@@ -103,12 +103,12 @@ export class DawnBurstEffect extends BaseEffect {
     const outerCount = 6 + Math.floor(Math.random() * 3);
 
     this.innerSpikes = generateSpikes(
-      innerCount, 1, 5, 0xff6644, 1.0, 0.333, 2.5,
-      targetDir, 15, 35
+      innerCount-3, 1, 3, 0xff6644, 1.0, 0.333, 2.5,
+      targetDir, 0, 45
     );
     this.outerSpikes = generateSpikes(
-      outerCount, 2, 7, 0xffaa55, 0.0, 0.333, 3.0,
-      targetDir, 25, 45
+      outerCount+2, 2, 7, 0xffaa55, 0.0, 0.333, 3.0,
+      targetDir, 5, 30
     );
 
     this.innerSpikes.forEach(s => this.group.add(s.mesh));
