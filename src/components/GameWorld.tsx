@@ -370,6 +370,11 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       const characterEntity = character as CharacterEntity;
       // 直接检查目标是否为敌人阵营，而不是使用 isEnemy 方法
       if (characterEntity.faction === 'enemy') {
+        // 如果当前不是战斗模式，自动切换到战斗模式
+        const currentMode = useGameStore.getState().mode;
+        if (currentMode !== GameMode.BATTLE) {
+          useGameStore.getState().setMode(GameMode.BATTLE);
+        }
         characterEntity.takeDamage(bulletEntity.getDamage() ?? 1);
         bulletEntity.isActive = false;
       }
