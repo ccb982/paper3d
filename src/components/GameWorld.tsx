@@ -18,6 +18,7 @@ import { CollisionManager } from '../core/CollisionManager';
 import { cameraStore } from '../core/CameraStore';
 import { EffectManager } from '../core/EffectManager';
 import { BulletEntity } from '../entities/bullets/BulletEntity';
+import { DawnExplosionBulletEntity } from '../entities/bullets/DawnExplosionBulletEntity';
 import { CharacterEntity } from '../entities/characters/CharacterEntity';
 import { StaticEntity } from '../entities/static/StaticEntity';
 import { FriendlyEntity } from '../entities/characters/FriendlyEntity';
@@ -468,11 +469,11 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
           // 播放枪口闪光特效
           EffectManager.getInstance().playMuzzleFlash(new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z));
           
-          const bulletEntity = new BulletEntity(
+          const bulletEntity = new DawnExplosionBulletEntity(
             new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
             new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),
             bullet.velocity,
-            0xffaa00
+            0xffd700
           );
           EntityManager.getInstance().addEntity(bulletEntity);
           console.log('BulletEntity added to EntityManager');
