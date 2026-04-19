@@ -382,21 +382,24 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         if (currentMode !== GameMode.BATTLE) {
           useGameStore.getState().setMode(GameMode.BATTLE);
         }
-        // 播放爆裂黎明特效
-        EffectManager.getInstance().playDawnExplosion(bulletEntity.position);
-        characterEntity.takeDamage(bulletEntity.getDamage() ?? 1);
+        // 调用子弹的onHit方法，触发范围伤害
+        if (typeof (bulletEntity as any).onHit === 'function') {
+          (bulletEntity as any).onHit(characterEntity);
+        }
         bulletEntity.isActive = false;
       }
     });
     
     // 注册子弹 vs 静态物品（靶子）碰撞
     collisionManager.registerCollision('bullet', 'static', (bullet, staticObj) => {
+      const bulletEntity = bullet as BulletEntity;
       const staticEntity = staticObj as StaticEntity;
       if (staticEntity.isShootable) {
-        // 播放爆裂黎明特效
-        EffectManager.getInstance().playDawnExplosion(bullet.position);
-        staticEntity.takeDamage(1);
-        bullet.isActive = false;
+        // 调用子弹的onHit方法，触发范围伤害
+        if (typeof (bulletEntity as any).onHit === 'function') {
+          (bulletEntity as any).onHit(staticEntity);
+        }
+        bulletEntity.isActive = false;
       }
     });
     

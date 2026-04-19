@@ -10,7 +10,7 @@ import { StaticEntity } from '../static/StaticEntity';
  * 继承自BulletEntity，添加特效触发和范围伤害功能
  */
 export class DawnExplosionBulletEntity extends BulletEntity {
-  private explosionRadius: number = 2; // 爆炸范围半径
+  private explosionRadius: number = 10; // 爆炸范围半径
 
   /**
    * 创建爆裂黎明子弹
