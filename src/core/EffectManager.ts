@@ -1,5 +1,6 @@
 import { BaseEffect } from './BaseEffect';
 import * as THREE from 'three';
+import { DawnBurstEffect } from './DawnBurstEffect';
 
 // 提前声明特效类，避免循环引用
 export class HitFlashEffect extends BaseEffect {
@@ -242,6 +243,10 @@ export class EffectManager {
 
   public playRingWave(position: THREE.Vector3, color?: number): void {
     this.activeEffects.push(new RingWaveEffect(position, 0.5, color || 0x33aaff));
+  }
+
+  public playDawnBurst(position: THREE.Vector3, color?: number): void {
+    this.activeEffects.push(new DawnBurstEffect(position, 3.0, color || 0xff6600));
   }
 
   public update(delta: number): void {

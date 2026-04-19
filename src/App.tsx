@@ -670,18 +670,50 @@ const MovementController: React.FC<MovementControllerProps> = ({
         );
         
         // 触发命中特效（在目标位置）
-        EffectManager.getInstance().playHitFlash(targetPosition);
+        console.log('触发DawnBurst特效, 目标位置:', targetPosition);
+        EffectManager.getInstance().playDawnBurst(targetPosition);
       }
     }
     
-    // 更新子弹位置
-    setBullets(prev => prev.filter(bullet => {
-      bullet.position.x += bullet.direction.x * bulletVelocity * delta;
-      bullet.position.y += bullet.direction.y * bulletVelocity * delta;
-      bullet.position.z += bullet.direction.z * bulletVelocity * delta;
-      // 超出边界后移除
-      return Math.abs(bullet.position.x) < 100 && Math.abs(bullet.position.z) < 100 && bullet.position.y < 50;
-    }));
+    // 更新子弹位置并检测碰撞
+    setBullets(prev => {
+      const bulletsToRemove: number[] = [];
+      
+      prev.forEach(bullet => {
+        const bulletPos = new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z);
+        
+        // 球体碰撞检测
+        const bulletRadius = 0.1;
+        
+        for (const obj of shootableObjectsRef.current) {
+          if (!(obj instanceof THREE.Mesh)) continue;
+          
+          const targetPos = new THREE.Vector3();
+          obj.getWorldPosition(targetPos);
+          
+          // 计算子弹到目标的最短距离
+          const raycaster = new THREE.Raycaster(bulletPos, bullet.direction, 0, bulletVelocity * delta * 2);
+          const intersects = raycaster.intersectObject(obj, true);
+          
+          if (intersects.length > 0) {
+            bulletsToRemove.push(bullet.id);
+            break;
+          }
+        }
+      });
+      
+      return prev
+        .filter(bullet => !bulletsToRemove.includes(bullet.id))
+        .map(bullet => {
+          bullet.position.x += bullet.direction.x * bulletVelocity * delta;
+          bullet.position.y += bullet.direction.y * bulletVelocity * delta;
+          bullet.position.z += bullet.direction.z * bulletVelocity * delta;
+          return bullet;
+        })
+        .filter(bullet => {
+          return Math.abs(bullet.position.x) < 100 && Math.abs(bullet.position.z) < 100 && bullet.position.y < 50;
+        });
+    });
   });
 
   // 处理子弹过期
