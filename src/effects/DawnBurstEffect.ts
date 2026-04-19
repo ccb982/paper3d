@@ -187,7 +187,7 @@ export class DawnBurstEffect extends BaseEffect {
       const material = new THREE.MeshBasicMaterial({
         color: ringColors[i],
         transparent: true,
-        opacity: 0.8,
+        opacity: 3.0, // 增加不透明度，使环更明显
         side: THREE.DoubleSide,
         blending: THREE.AdditiveBlending
       });
@@ -263,7 +263,7 @@ export class DawnBurstEffect extends BaseEffect {
       const progress = t / ring.duration;
       const scale = ring.maxScale * (1 - Math.pow(1 - progress, 2));
       ring.mesh.scale.set(scale, scale, 1);
-      ring.material.opacity = 0.8 * (1 - progress);
+      ring.material.opacity = 3.0 * (1 - progress); // 增加初始不透明度
     }
 
     // 更新粒子
