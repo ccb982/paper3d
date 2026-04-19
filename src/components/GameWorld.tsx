@@ -381,9 +381,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         if (currentMode !== GameMode.BATTLE) {
           useGameStore.getState().setMode(GameMode.BATTLE);
         }
-        // 播放命中特效
-        EffectManager.getInstance().playHitFlash(bulletEntity.position);
-        EffectManager.getInstance().playRingWave(characterEntity.position, 0xff4444);
+        // 播放爆裂黎明特效
+        EffectManager.getInstance().playDawnExplosion(bulletEntity.position);
         characterEntity.takeDamage(bulletEntity.getDamage() ?? 1);
         bulletEntity.isActive = false;
       }
@@ -393,9 +392,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     collisionManager.registerCollision('bullet', 'static', (bullet, staticObj) => {
       const staticEntity = staticObj as StaticEntity;
       if (staticEntity.isShootable) {
-        // 播放命中特效
-        EffectManager.getInstance().playHitFlash(bullet.position);
-        EffectManager.getInstance().playRingWave(staticEntity.position, 0x44ff44);
+        // 播放爆裂黎明特效
+        EffectManager.getInstance().playDawnExplosion(bullet.position);
         staticEntity.takeDamage(1);
         bullet.isActive = false;
       }
