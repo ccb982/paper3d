@@ -93,12 +93,29 @@ function generateSpikes(
   return spikes;
 }
 
+class RingEffect {
+  public mesh: THREE.Mesh;
+  public startDelay: number;
+  public duration: number;
+  public maxScale: number;
+  public material: THREE.MeshBasicMaterial;
+
+  constructor(mesh: THREE.Mesh, startDelay: number, duration: number, maxScale: number) {
+    this.mesh = mesh;
+    this.startDelay = startDelay;
+    this.duration = duration;
+    this.maxScale = maxScale;
+    this.material = mesh.material as THREE.MeshBasicMaterial;
+  }
+}
+
 export class DawnBurstEffect extends BaseEffect {
   private group: THREE.Group;
   private innerSpikes: Spike[] = [];
   private outerSpikes: Spike[] = [];
   private coreFlash: THREE.Mesh | null = null;
   private coreMaterial: THREE.MeshBasicMaterial | null = null;
+  private rings: RingEffect[] = [];
   private elapsed: number = 0;
 
   constructor(position: THREE.Vector3, duration: number = 4.0) {
@@ -137,6 +154,29 @@ export class DawnBurstEffect extends BaseEffect {
     this.coreFlash = new THREE.Mesh(coreGeo, this.coreMaterial);
     this.coreFlash.position.set(0, 0, 0);
     this.group.add(this.coreFlash);
+
+    const ringColors = [0xff4035, 0x7d4dff, 0xff0019];
+    const ringDelays = [0.0, 0.2, 0.4];
+    const ringDurations = [1.5, 1.5, 1.5];
+    const ringMaxScales = [4.0, 5.0, 6.0];
+
+    for (let i = 0; i < 3; i++) {
+      const geometry = new THREE.RingGeometry(0, 1, 32);
+      const material = new THREE.MeshBasicMaterial({
+        color: ringColors[i],
+        transparent: true,
+        opacity: 0.8,
+        side: THREE.DoubleSide,
+        blending: THREE.AdditiveBlending
+      });
+      const ring = new THREE.Mesh(geometry, material);
+      ring.rotation.x = (Math.random() - 0.5) * Math.PI;
+      ring.rotation.y = (Math.random() - 0.5) * Math.PI;
+      ring.rotation.z = (Math.random() - 0.5) * Math.PI;
+      ring.scale.set(0, 0, 1);
+      this.group.add(ring);
+      this.rings.push(new RingEffect(ring, ringDelays[i], ringDurations[i], ringMaxScales[i]));
+    }
   }
 
   protected onUpdate(delta: number): void {
@@ -150,6 +190,23 @@ export class DawnBurstEffect extends BaseEffect {
       const scale = (1 - t) * 3;
       this.coreFlash.scale.set(scale, scale, scale);
       this.coreMaterial.opacity = 1 - t;
+    }
+
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const ring = this.rings[i];
+      const t = this.elapsed - ring.startDelay;
+      if (t < 0) continue;
+      if (t > ring.duration) {
+        ring.mesh.parent?.remove(ring.mesh);
+        ring.mesh.geometry.dispose();
+        ring.material.dispose();
+        this.rings.splice(i, 1);
+        continue;
+      }
+      const progress = t / ring.duration;
+      const scale = ring.maxScale * (1 - Math.pow(1 - progress, 2));
+      ring.mesh.scale.set(scale, scale, 1);
+      ring.material.opacity = 0.8 * (1 - progress);
     }
 
     this.group.rotation.y = 0;
@@ -187,5 +244,9 @@ export class DawnBurstEffect extends BaseEffect {
       this.coreFlash.geometry.dispose();
       this.coreMaterial?.dispose();
     }
+    this.rings.forEach(ring => {
+      ring.mesh.geometry.dispose();
+      ring.material.dispose();
+    });
   }
 }
