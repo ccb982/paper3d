@@ -33,7 +33,10 @@ export class EntityManager {
    */
   public addEntity(entity: Entity): void {
     this.entities.set(entity.id, entity);
-    if (this.scene && entity.mesh) {
+    // 对于友好实体（玩家），不自动添加mesh到场景，避免与PaperCharacter组件重复渲染
+    // 对于其他实体（敌人、子弹、靶子等），正常添加mesh到场景
+    const isFriendlyEntity = entity.type === 'character' && (entity as any).faction === 'friendly';
+    if (this.scene && entity.mesh && !isFriendlyEntity) {
       this.scene.add(entity.mesh);
     }
     console.log(`Entity added: ${entity.type} - ${entity.id}`);

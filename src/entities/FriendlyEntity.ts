@@ -2,6 +2,9 @@ import { CharacterEntity } from './CharacterEntity';
 import { EntityManager } from '../core/EntityManager';
 import * as THREE from 'three';
 import { characterPositionStore } from '../systems/character/CharacterPositionStore';
+import { PaperAnimator } from '../core/PaperAnimator';
+import { AnimationLoader } from '../core/AnimationLoader';
+import { cameraStore } from '../core/CameraStore';
 
 /**
  * 友方实体 - 玩家控制或友方AI角色
@@ -14,6 +17,36 @@ export class FriendlyEntity extends CharacterEntity {
     this.health = 100;
     this.speed = 5;
     this.isPlayerControlled = true;
+    
+    // 确保材质是 MeshStandardMaterial，以便支持动画
+    if (this.mesh && (this.mesh as THREE.Mesh).material instanceof THREE.MeshStandardMaterial) {
+      const material = (this.mesh as THREE.Mesh).material;
+      const animator = new PaperAnimator(material);
+      this.setAnimator(animator);
+      
+      // 异步加载动画（使用占位路径，实际项目中需要替换为真实路径）
+      this.loadAnimations(animator);
+    }
+  }
+  
+  /**
+   * 加载动画
+   */
+  private async loadAnimations(animator: PaperAnimator): Promise<void> {
+    try {
+      // 加载实际的动画帧数
+      const { frontClip, backClip } = await AnimationLoader.loadPaperAnimations(
+        '/textures/characters/player',
+        2,   // 正面帧数
+        3,   // 背面帧数
+        12   // 帧率
+      );
+      animator.setFrontClip(frontClip);
+      animator.setBackClip(backClip);
+    } catch (error) {
+      console.warn('Failed to load animations for player:', error);
+      // 动画加载失败不影响游戏运行，继续使用静态纹理
+    }
   }
 
   public setCamera(camera: THREE.Camera): void {
@@ -59,6 +92,15 @@ export class FriendlyEntity extends CharacterEntity {
       this.attackCooldown -= delta;
     } else {
       this.attack(delta);
+    }
+
+    // 动画更新（如果有动画器）
+    if (this.animator) {
+      const camera = this.cameraRef || cameraStore.getCamera();
+      if (camera) {
+        this.animator.updateDirection(this.position, camera.position);
+        this.animator.update(delta);
+      }
     }
   }
 

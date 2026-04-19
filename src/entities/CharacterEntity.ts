@@ -1,6 +1,8 @@
 import { Entity } from '../core/Entity';
 import * as THREE from 'three';
 import { eventBus } from '../core/eventBus';
+import { PaperAnimator } from '../core/PaperAnimator';
+import { cameraStore } from '../core/CameraStore';
 
 /**
  * 角色实体基类 - 所有角色（玩家、敌人、NPC）的父类
@@ -29,6 +31,9 @@ export abstract class CharacterEntity extends Entity {
   public texturePath: string;                     // 贴图路径
   protected defaultWidth: number = 2;             // 纸片人宽度
   protected defaultHeight: number = 3;            // 纸片人高度
+  
+  // 动画相关
+  public animator: PaperAnimator | null = null;   // 动画器（可选）
 
   constructor(id: string, faction: string, texturePath: string, position?: THREE.Vector3) {
     // 临时创建占位网格（实际纹理异步加载后替换材质）
@@ -84,6 +89,13 @@ export abstract class CharacterEntity extends Entity {
   }
 
   /**
+   * 设置动画器（由子类调用）
+   */
+  public setAnimator(animator: PaperAnimator): void {
+    this.animator = animator;
+  }
+
+  /**
    * 每帧更新（由 EntityManager 调用）
    */
   public update(delta: number): void {
@@ -113,6 +125,15 @@ export abstract class CharacterEntity extends Entity {
       this.attackCooldown -= delta;
     } else {
       this.attack(delta);
+    }
+
+    // 动画更新（如果有动画器）
+    if (this.animator) {
+      const camera = cameraStore.getCamera();
+      if (camera) {
+        this.animator.updateDirection(this.position, camera.position);
+        this.animator.update(delta);
+      }
     }
   }
 

@@ -654,6 +654,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
           getHeightAtRef.current = getHeightAt;
         }}
       />
+      <PaperCharacter characterId="player" onClick={handleCharacterClick} />
       <MovementController
         getHeightAtRef={getHeightAtRef}
         shootingManager={shootingManager}
