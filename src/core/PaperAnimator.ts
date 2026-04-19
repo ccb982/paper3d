@@ -27,6 +27,10 @@ export class PaperAnimator {
    */
   public setBackClip(clip: AnimationClip): void {
     this.backClip = clip;
+    // 初始第一帧使用后背0贴图
+    if (!this.material.map && clip.frames.length > 0) {
+      this.material.map = clip.frames[0];
+    }
   }
 
   /**

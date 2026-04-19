@@ -127,7 +127,6 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
       if (animatorRef.current) {
         if (animationMode) {
           // 手动控制动画方向
-          // 这里需要修改 PaperAnimator 以支持手动设置动画方向
           // 暂时使用相机位置模拟
           if (animationMode === 'back') {
             // 模拟相机在角色前方，显示后背动画
@@ -138,11 +137,11 @@ export const PaperCharacter = ({ characterId, onClick }: PaperCharacterProps) =>
             const backCameraPos = characterPos.clone().add(new THREE.Vector3(0, 0, -10));
             animatorRef.current.updateDirection(characterPos, backCameraPos);
           }
+          // 只有在按键控制时才播放动画
+          animatorRef.current.update(delta);
         } else {
-          // 默认根据相机位置自动切换动画
-          animatorRef.current.updateDirection(characterPos, cameraPos);
+          // 没有按键时，不播放动画，保持当前帧
         }
-        animatorRef.current.update(delta);
       }
     }
   });
