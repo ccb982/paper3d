@@ -16,6 +16,7 @@ import { characterPositionStore } from '../systems/character/CharacterPositionSt
 import { EntityManager } from '../core/EntityManager';
 import { CollisionManager } from '../core/CollisionManager';
 import { cameraStore } from '../core/CameraStore';
+import { EffectManager } from '../core/EffectManager';
 import { BulletEntity } from '../entities/BulletEntity';
 import { CharacterEntity } from '../entities/CharacterEntity';
 import { StaticEntity } from '../entities/StaticEntity';
@@ -45,6 +46,8 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
 
   useEffect(() => {
     sceneRef.current = scene;
+    // 设置场景引用到 EntityManager，用于特效系统
+    EntityManager.getInstance().setScene(scene);
   }, [scene, sceneRef]);
 
   useEffect(() => {
@@ -319,6 +322,9 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     
     // 检测碰撞
     CollisionManager.getInstance().update();
+    
+    // 更新特效
+    EffectManager.getInstance().update(delta);
   });
 
   return null;
@@ -375,6 +381,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         if (currentMode !== GameMode.BATTLE) {
           useGameStore.getState().setMode(GameMode.BATTLE);
         }
+        // 播放命中特效
+        EffectManager.getInstance().playHitFlash(bulletEntity.position);
+        EffectManager.getInstance().playRingWave(characterEntity.position, 0xff4444);
         characterEntity.takeDamage(bulletEntity.getDamage() ?? 1);
         bulletEntity.isActive = false;
       }
@@ -384,6 +393,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     collisionManager.registerCollision('bullet', 'static', (bullet, staticObj) => {
       const staticEntity = staticObj as StaticEntity;
       if (staticEntity.isShootable) {
+        // 播放命中特效
+        EffectManager.getInstance().playHitFlash(bullet.position);
+        EffectManager.getInstance().playRingWave(staticEntity.position, 0x44ff44);
         staticEntity.takeDamage(1);
         bullet.isActive = false;
       }
@@ -455,6 +467,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       onBulletCreated: (bullet) => {
         console.log('Bullet created:', bullet);
         try {
+          // 播放枪口闪光特效
+          EffectManager.getInstance().playMuzzleFlash(new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z));
+          
           const bulletEntity = new BulletEntity(
             new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
             new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),

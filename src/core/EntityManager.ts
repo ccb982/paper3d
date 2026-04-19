@@ -28,6 +28,13 @@ export class EntityManager {
   }
 
   /**
+   * 获取场景引用
+   */
+  public getScene(): THREE.Scene | null {
+    return this.scene;
+  }
+
+  /**
    * 添加实体到管理器
    * @param entity 要添加的实体
    */
