@@ -28,14 +28,18 @@ function generateSpikes(
   distance: number,
   targetDir: THREE.Vector3,
   minAngleDeg: number = 15,
-  maxAngleDeg: number = 45
+  maxAngleDeg: number = 45,
+  minSeparationDeg: number = 25
 ): Spike[] {
+  if (count <= 0) return [];
+
   const spikes: Spike[] = [];
   const targetNorm = targetDir.clone().normalize();
+  const acceptedDirs: THREE.Vector3[] = [];
+  const maxAttempts = 200;
+  let attempts = 0;
 
-  const directions: THREE.Vector3[] = [];
-
-  for (let i = 0; i < count; i++) {
+  while (acceptedDirs.length < count && attempts < maxAttempts) {
     const angleDeg = minAngleDeg + Math.random() * (maxAngleDeg - minAngleDeg);
     const angleRad = angleDeg * Math.PI / 180;
     const azimuthRad = Math.random() * Math.PI * 2;
@@ -50,17 +54,30 @@ function generateSpikes(
     const quatAz = new THREE.Quaternion().setFromAxisAngle(targetNorm, azimuthRad);
     const finalDir = dir.applyQuaternion(quatAz).normalize();
 
-    directions.push(finalDir);
+    let tooClose = false;
+    for (const existing of acceptedDirs) {
+      const angle = finalDir.angleTo(existing) * 180 / Math.PI;
+      if (angle < minSeparationDeg) {
+        tooClose = true;
+        break;
+      }
+    }
+    if (!tooClose) {
+      acceptedDirs.push(finalDir);
+    }
+    attempts++;
   }
 
-  for (let i = 0; i < count; i++) {
-    const dir = directions[i];
-    const length = baseLength * (0.6 + Math.random() * 1.4);
-    const geometry = new THREE.ConeGeometry(1.5, length, 8);
-    const material = new THREE.MeshStandardMaterial({ 
-      color, 
-      emissive: color, 
-      emissiveIntensity: 0.6, 
+  console.log(`生成尖刺数量: ${acceptedDirs.length} / ${count}`);
+
+  for (let i = 0; i < acceptedDirs.length; i++) {
+    const dir = acceptedDirs[i];
+    const length = baseLength * (0.7 + Math.random() * 1.4);
+    const geometry = new THREE.ConeGeometry(0.7, length, 8);
+    const material = new THREE.MeshStandardMaterial({
+      color,
+      emissive: color,
+      emissiveIntensity: 0.6,
       transparent: true,
       side: THREE.DoubleSide
     });
@@ -99,16 +116,17 @@ export class DawnBurstEffect extends BaseEffect {
     targetDir.y += 0.2;
     targetDir.normalize();
 
-    const innerCount = 5 + Math.floor(Math.random() * 3);
-    const outerCount = 6 + Math.floor(Math.random() * 3);
+    let innerCount = 5 + Math.floor(Math.random() * 3) - 3;
+    innerCount = Math.max(2, innerCount);
+    const outerCount = 10 + Math.floor(Math.random() * 3);
 
     this.innerSpikes = generateSpikes(
-      innerCount-3, 1, 3, 0xb70002, 1.0, 0.333, 2.5,
-      targetDir, 0, 30
+      innerCount, 2, 3, 0xb70002, 1.0, 0.333, 2.5,
+      targetDir, 5, 45, 30
     );
     this.outerSpikes = generateSpikes(
-      outerCount+2, 2, 7, 0x610000, 0.0, 0.333, 3.0,
-      targetDir, 5, 30
+      outerCount, 3, 5, 0x610000, 0.0, 0.333, 3.0,
+      targetDir, 0, 30, 30
     );
 
     this.innerSpikes.forEach(s => this.group.add(s.mesh));
