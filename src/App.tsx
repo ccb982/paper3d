@@ -18,6 +18,7 @@ import { applyGravityToCharacter } from './systems/physics/GravitySystem';
 import { OrbitControls } from '@react-three/drei';
 import RayVisualizer, { MultiRayVisualizer } from './components/debug/RayVisualizer';
 import ShootDirectionVisualizer from './components/debug/ShootDirectionVisualizer';
+import { EffectManager } from './core/EffectManager';
 
 const LOCK_DURATION = 1000; // 锁定持续时间（毫秒）
 
@@ -90,7 +91,12 @@ function App() {
 
   return (
     <div className="game-container">
-      <Canvas camera={{ position: [0, 2, 10] }}>
+      <Canvas camera={{ position: [0, 2, 10] }}
+        onCreated={({ scene }) => {
+          // 设置场景引用，供特效系统使用
+          (window as any).gameScene = scene;
+        }}
+      >
         <SceneSetup />
         <MapRenderer />
         <PaperCharacter 
