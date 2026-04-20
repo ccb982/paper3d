@@ -49,7 +49,8 @@ export class FireEffect extends BaseEffect {
     this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
     
     this.material = new THREE.PointsMaterial({
-      size: 0.5,
+      size: 1.0,
+      sizeAttenuation: false,
       vertexColors: true,
       transparent: true,
       opacity: 0.8,
@@ -66,18 +67,18 @@ export class FireEffect extends BaseEffect {
   private emitParticle() {
     if (this.particles.length >= this.maxParticles) return;
     
-    // 发射位置：在中心点周围随机
+    // 发射位置：从一个更小的口出来
     const position = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.5,
+      (Math.random() - 0.5) * 0.1,
       0,
-      (Math.random() - 0.5) * 0.5
+      (Math.random() - 0.5) * 0.1
     );
     
-    // 初始速度：向上为主，带有随机偏移
+    // 初始速度：向上为主，带有随机偏移，增大随机范围
     const velocity = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.5,
+      (Math.random() - 0.5) * 0.8,
       1 + Math.random() * 0.5,
-      (Math.random() - 0.5) * 0.5
+      (Math.random() - 0.5) * 0.8
     );
     
     // 初始颜色：橙黄色
@@ -87,11 +88,11 @@ export class FireEffect extends BaseEffect {
       0.1 + Math.random() * 0.2
     );
     
-    // 粒子大小
-    const size = 0.1 + Math.random() * 0.2;
+    // 粒子大小：进一步减小粒子大小，使其只有几个像素大
+    const size = 0.01 + Math.random() * 0.02;
     
-    // 粒子寿命
-    const lifetime = 1.0 + Math.random() * 1.0;
+    // 粒子寿命：延长并增大随机性
+    const lifetime = 2.0 + Math.random() * 3.0;
     
     this.particles.push(new FireParticle(position, velocity, color, size, lifetime));
   }
@@ -117,12 +118,32 @@ export class FireEffect extends BaseEffect {
       
       // 应用物理效果
       // 上升浮力
-      particle.velocity.y += 0.5 * delta;
-      // 湍流
-      particle.velocity.x += (Math.random() - 0.5) * 0.1 * delta;
-      particle.velocity.z += (Math.random() - 0.5) * 0.1 * delta;
+      particle.velocity.y += 0.8 * delta;
+      // 底部向四周扩散的力：底部扩散力大，顶部扩散力小
+      const heightFactor = Math.max(0, Math.pow(1 - particle.position.y / 3, 1590)); // 粒子越高，扩散力衰减越快，3为扩散力影响的最大高度
+      const expansionStrength = 50000 * heightFactor; // 底部扩散力强度为5，顶部逐渐减小到0
+      // 计算粒子到中心的方向向量，用于扩散
+      const distance = Math.sqrt(particle.position.x * particle.position.x + particle.position.z * particle.position.z);
+      if (distance > 0) {
+        // 向四周扩散
+        particle.velocity.x += (particle.position.x / distance) * expansionStrength * delta;
+        particle.velocity.z += (particle.position.z / distance) * expansionStrength * delta;
+      } else {
+        // 对于中心的粒子，给予随机的初始扩散方向
+        const angle = Math.random() * Math.PI * 2;
+        particle.velocity.x += Math.cos(angle) * expansionStrength * delta;
+        particle.velocity.z += Math.sin(angle) * expansionStrength * delta;
+      }
+      // 在一定高度后添加随机小幅度的水平抖动
+      const jitterHeightThreshold = 0.3; // 抖动开始的高度阈值
+      if (particle.position.y > jitterHeightThreshold) {
+        const jitterStrength = 0.5; // 增大抖动强度，使效果更明显
+        particle.velocity.x += (Math.random() - 0.5) * jitterStrength;
+        particle.velocity.z += (Math.random() - 0.5) * jitterStrength;
+      }
+      
       // 阻力
-      particle.velocity.multiplyScalar(0.98);
+      particle.velocity.multiplyScalar(0.97);
       
       // 更新颜色
       const lifeFactor = particle.lifetime / particle.maxLifetime;
