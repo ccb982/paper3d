@@ -28,8 +28,8 @@ export function createFireMaterial(color1?: THREE.Color, color2?: THREE.Color): 
       gl_PointSize = 1.0;
       gl_Position = projectionMatrix * mvPosition;
       
-      // 透明度随 Y 轴升高而降低（顶部透明）
-      vAlpha = 1.0 - smoothstep(0.2, 1.2, pos.y);
+      // 透明度随 Y 轴升高而降低（顶部透明），但整体更不透明
+      vAlpha = 1.0 - smoothstep(0.1, 0.8, pos.y);
     }
   `;
 
@@ -50,7 +50,8 @@ export function createFireMaterial(color1?: THREE.Color, color2?: THREE.Color): 
       
       // 边缘羽化（基于 UV 的 U 坐标，中心亮边缘暗）
       float edge = 1.0 - abs(vUv.x - 0.5) * 1.5;
-      float alpha = vAlpha * edge * (0.7 + 0.3 * sin(uTime * 20.0));
+      // 不透明度100%，像子弹一样
+      float alpha = 1.0;
       gl_FragColor = vec4(color, alpha);
     }
   `;

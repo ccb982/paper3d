@@ -30,7 +30,7 @@ export class BulletEntity extends Entity {
     const geometry = new THREE.SphereGeometry(0.3, 12, 12); // 增大子弹体积
     const material = new THREE.MeshStandardMaterial({
       color: color,
-      emissive: 0x884400,
+      emissive: color,
       emissiveIntensity: 1.0 // 增加发光强度，让子弹更清楚
     });
     const mesh = new THREE.Mesh(geometry, material);
