@@ -1,5 +1,5 @@
 import { BaseEffect } from './BaseEffect';
-import { FlameContourWorld } from './FlameContourWorld';
+import { Flame2DEffect } from './Flame2DEffect';
 import * as THREE from 'three';
 
 class FireParticle {
@@ -35,7 +35,7 @@ export class FireEffect extends BaseEffect {
   private emitRate: number = 50;
   private emitAccumulator: number = 0;
   private elapsed: number = 0;
-  private contour: FlameContourWorld;
+  private flame2D: Flame2DEffect;
 
   constructor(position: THREE.Vector3, duration: number = Infinity) {
     super(duration);
@@ -67,10 +67,8 @@ export class FireEffect extends BaseEffect {
     const scene = (window as any).gameScene;
     if (scene) scene.add(this.group);
     
-    // 初始化火焰轮廓提取器
-    if (scene) {
-      this.contour = new FlameContourWorld(scene);
-    }
+    // 初始化 2D 火焰效果
+    this.flame2D = new Flame2DEffect();
   }
 
   private emitParticle() {
@@ -168,20 +166,18 @@ export class FireEffect extends BaseEffect {
       // 6. 寿命减少
       particle.lifetime -= delta;
 
-      // 7. 颜色与大小随生命期变化（更真实的火焰颜色）
+      // 7. 颜色与大小随生命期变化（模拟火焰颜色变化：红白色 → 橙色 → 红色）
       if (lifeFactor > 0.7) {
-        // 根部：白热
-        particle.color.setRGB(1.0, 0.9, 0.6);
+        // 初始：红白色
+        particle.color.setRGB(1.0, 0.8, 0.8);
         particle.size = 0.08;
       } else if (lifeFactor > 0.3) {
-        // 中部：橙黄
-        const t = (lifeFactor - 0.3) / 0.4;
-        particle.color.setRGB(1.0, 0.6 + t * 0.3, 0.1 + t * 0.2);
+        // 中期：橙色
+        particle.color.setRGB(1.0, 0.6, 0.0);
         particle.size = 0.1;
       } else {
-        // 顶部：暗红，逐渐透明
-        const t = lifeFactor / 0.3;
-        particle.color.setRGB(0.8, 0.2, 0.05);
+        // 后期：红色
+        particle.color.setRGB(0.8, 0.1, 0.0);
         particle.size = 0.06;
       }
 
@@ -194,15 +190,25 @@ export class FireEffect extends BaseEffect {
     // 更新几何体
     this.updateGeometry();
     
-    // 更新火焰轮廓
-    if (this.contour) {
-      // 将粒子局部坐标转换为世界坐标
-      const worldPositions = this.particles.map(p => {
+    // 更新 2D 火焰效果
+    if (this.flame2D) {
+      // 将粒子局部坐标转换为世界坐标，并包含颜色信息
+      const particleData = this.particles.map(p => {
         const worldPos = p.position.clone();
         this.group.localToWorld(worldPos);
-        return worldPos;
+        return {
+          position: worldPos,
+          color: p.color
+        };
       });
-      this.contour.update(worldPositions);
+      const camera = (window as any).cameraStore?.getCamera();
+      if (camera) {
+        console.log('FireEffect: Updating 2D flame with', particleData.length, 'particles');
+        this.flame2D.setCamera(camera);
+        this.flame2D.update(particleData);
+      } else {
+        console.log('FireEffect: Camera not available from cameraStore');
+      }
     }
     
     // 移除时间检查，使特效持续无限时间
@@ -243,9 +249,9 @@ export class FireEffect extends BaseEffect {
     const scene = (window as any).gameScene;
     if (scene && this.group.parent) scene.remove(this.group);
     
-    // 清理火焰轮廓
-    if (this.contour) {
-      this.contour.dispose();
+    // 清理 2D 火焰效果
+    if (this.flame2D) {
+      this.flame2D.dispose();
     }
     
     this.geometry.dispose();
