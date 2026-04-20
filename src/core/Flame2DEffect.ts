@@ -21,37 +21,29 @@ export class Flame2DEffect {
   private radialSegments: number = 90;         // 圆周分段数（越高轮廓越平滑）
   private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
 
-  // 预定义火焰模板（侧面：底部U形，上部多峰）
+  // 预定义火焰模板（侧面：底部U形凹陷，上部M形山峰，y坐标已翻转）
   private sideTemplateNorm: { x: number; y: number }[] = [
-    // 底部U形（从左到右）
-    { x: -0.5, y: 0.0 },
-    { x: -0.4, y: 0.05 },
-    { x: -0.3, y: 0.08 },
-    { x: -0.2, y: 0.1 },
-    { x: -0.1, y: 0.11 },
-    { x: 0.0, y: 0.12 },
-    { x: 0.1, y: 0.11 },
-    { x: 0.2, y: 0.1 },
-    { x: 0.3, y: 0.08 },
-    { x: 0.4, y: 0.05 },
-    { x: 0.5, y: 0.0 },
-    // 右边缘上升至右峰
-    { x: 0.45, y: 0.3 },
-    { x: 0.4, y: 0.5 },
-    { x: 0.35, y: 0.7 },
-    { x: 0.3, y: 0.9 },
-    { x: 0.2, y: 1.0 },   // 右峰
-    // 中峰
-    { x: 0.1, y: 0.85 },
-    { x: 0.0, y: 0.95 },
-    { x: -0.1, y: 0.85 },
-    // 左峰
-    { x: -0.2, y: 1.0 },
-    { x: -0.3, y: 0.9 },
-    { x: -0.35, y: 0.7 },
-    { x: -0.4, y: 0.5 },
-    { x: -0.45, y: 0.3 },
-    // 回到底部左（闭合，由CatmullRomCurve3的closed:true自动完成）
+    // 底部U形（底部中间凹陷，y值小=低）
+    { x: -0.5, y: 0.0 },   // 底部左
+    { x: -0.4, y: 0.15 }, // 左上
+    { x: -0.2, y: 0.25 }, // 左中
+    { x: 0.0, y: 0.3 },   // 底部中间最低
+    { x: 0.2, y: 0.25 },  // 右中
+    { x: 0.4, y: 0.15 },  // 右上
+    { x: 0.5, y: 0.0 },    // 底部右
+    // 右侧上升至右峰（M形右侧）
+    { x: 0.4, y: -0.3 },
+    { x: 0.3, y: -0.6 },
+    { x: 0.2, y: -1.0 },    // 右峰
+    // 下降到中峰
+    { x: 0.1, y: -0.85 },
+    { x: 0.0, y: -0.9 },    // 中峰
+    { x: -0.1, y: -0.85 },
+    // 下降到左峰（M形左侧）
+    { x: -0.2, y: -1.0 },   // 左峰
+    { x: -0.3, y: -0.6 },
+    { x: -0.4, y: -0.3 },
+    // 回到底部左
   ];
 
   private topTemplateNorm: { x: number; y: number }[] = [];
@@ -253,32 +245,18 @@ export class Flame2DEffect {
    */
   /**
    * 基于模板的火焰轮廓计算
-   * 1. 过滤粒子：只保留红色和红白色，排除橙色
-   * 2. 计算粒子的包围盒
-   * 3. 选择侧面或俯视模板
+   * 1. 计算所有粒子的包围盒（用于确定yThreshold）
+   * 2. 根据颜色过滤和位置分配
+   * 3. 根据摄像机俯仰角选择视角
    * 4. 根据包围盒大小调整模板
    * 5. 生成平滑轮廓
    */
   private computeTemplateContour(screenPoints: { x: number; y: number; depth: number; color: THREE.Color }[]): { x: number; y: number }[] {
-    // 1. 根据颜色过滤：只保留红色和红白色，排除橙色
-    const filtered = screenPoints.filter(p => {
-      const r = p.color.r;
-      const g = p.color.g;
-      const b = p.color.b;
-      // 红白色（焰底）：r>0.9, g>0.7, b>0.7
-      const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
-      // 红色（外缘）：r>0.7, g<0.3, b<0.2
-      const isRed = r > 0.7 && g < 0.3 && b < 0.2;
-      // 排除橙色（中部）：r>0.8, g>0.4, b<0.3，且不是红白/红色
-      const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
-      return (isRedWhite || isRed) && !isOrange;
-    });
+    if (screenPoints.length < 20) return [];
 
-    if (filtered.length < 20) return [];
-
-    // 2. 计算粒子的包围盒
+    // 1. 计算所有粒子的包围盒（用于确定yThreshold）
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of filtered) {
+    for (const p of screenPoints) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y;
@@ -287,6 +265,31 @@ export class Flame2DEffect {
     const width = maxX - minX;
     const height = maxY - minY;
     if (width < 1 || height < 1) return [];
+
+    // 2. 根据颜色过滤和位置分配：根据粒子在模板中的位置分配颜色
+    // 弧形区域（底部，y值大）：红白色；峰形区域（顶部，y值小）：红色
+    const yThreshold = (minY + maxY) / 2; // 中间分割线
+    const filtered = screenPoints.filter(p => {
+      const r = p.color.r;
+      const g = p.color.g;
+      const b = p.color.b;
+      // 红白色（焰底）：r>0.9, g>0.7, b>0.7
+      const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
+      // 红色（外缘）：r>0.7, g<0.3, b<0.2
+      const isRed = r > 0.7 && g < 0.3 && b < 0.2;
+      // 排除橙色（中部）：r>0.8, g>0.4, b<0.3
+      const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
+      // 弧形区域（底部，y值大）：找红白色；峰形区域（顶部，y值小）：找红色
+      if (p.y > yThreshold) {
+        // 底部区域（弧）：应该匹配红白色
+        return isRedWhite && !isOrange;
+      } else {
+        // 顶部区域（峰）：应该匹配红色
+        return isRed && !isOrange;
+      }
+    });
+
+    if (filtered.length < 20) return [];
 
     // 3. 根据摄像机俯仰角选择视角
     // 当相机向下看角度较大时（看向地面），使用俯视模板；其他情况使用侧面模板
