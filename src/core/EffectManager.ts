@@ -56,6 +56,24 @@ export class EffectManager {
   }
 
   /**
+   * 添加特效
+   */
+  public addEffect(effect: BaseEffect): void {
+    this.activeEffects.push(effect);
+  }
+
+  /**
+   * 移除特效
+   */
+  public removeEffect(effect: BaseEffect): void {
+    const index = this.activeEffects.indexOf(effect);
+    if (index !== -1) {
+      effect.dispose();
+      this.activeEffects.splice(index, 1);
+    }
+  }
+
+  /**
    * 每帧更新所有特效
    */
   public update(delta: number): void {
