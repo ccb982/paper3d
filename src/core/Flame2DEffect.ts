@@ -114,10 +114,17 @@ export class Flame2DEffect {
 
     // 4. 绘制缓存的轮廓
     if (this.cachedContour.length >= 3) {
+      // 检查是否有多个轮廓（通过检测角度突变）
+      const contourSegments = this.splitContourSegments(this.cachedContour);
+      
+      // 只绘制第一个轮廓（主要的火焰轮廓）
+      const segment = contourSegments[0];
+      if (segment.length < 3) return;
+      
       this.ctx.beginPath();
-      this.ctx.moveTo(this.cachedContour[0].x, this.cachedContour[0].y);
-      for (let i = 1; i < this.cachedContour.length; i++) {
-        this.ctx.lineTo(this.cachedContour[i].x, this.cachedContour[i].y);
+      this.ctx.moveTo(segment[0].x, segment[0].y);
+      for (let i = 1; i < segment.length; i++) {
+        this.ctx.lineTo(segment[i].x, segment[i].y);
       }
       this.ctx.closePath();
 
@@ -126,11 +133,50 @@ export class Flame2DEffect {
       this.ctx.strokeStyle = this.contourColor;
       this.ctx.lineWidth = this.contourWidth;
       this.ctx.stroke();
-
-      this.ctx.fillStyle = 'rgba(255, 100, 0, 0.1)';
-      this.ctx.fill();
       this.ctx.shadowBlur = 0;
     }
+  }
+
+  // 将轮廓分割成多个独立段（检测角度突变）
+  private splitContourSegments(contour: { x: number; y: number }[]): { x: number; y: number }[][] {
+    if (contour.length < 3) return [contour];
+    
+    // 计算中心点
+    let centerX = 0, centerY = 0;
+    for (const p of contour) {
+      centerX += p.x;
+      centerY += p.y;
+    }
+    centerX /= contour.length;
+    centerY /= contour.length;
+    
+    // 计算每个点的角度
+    const pointsWithAngle: { point: { x: number; y: number }; angle: number }[] = contour.map(p => ({
+      point: p,
+      angle: Math.atan2(p.y - centerY, p.x - centerX)
+    }));
+    
+    // 找到角度间隙最大的地方（可能的分段点）
+    let maxGap = 0;
+    let gapIndex = 0;
+    for (let i = 0; i < pointsWithAngle.length; i++) {
+      const nextIdx = (i + 1) % pointsWithAngle.length;
+      let angleDiff = pointsWithAngle[nextIdx].angle - pointsWithAngle[i].angle;
+      if (angleDiff < 0) angleDiff += Math.PI * 2;
+      if (angleDiff > maxGap) {
+        maxGap = angleDiff;
+        gapIndex = i;
+      }
+    }
+    
+    // 如果最大间隙超过阈值（PI），则分割轮廓
+    if (maxGap > Math.PI) {
+      const segment1 = contour.slice(0, gapIndex + 1);
+      const segment2 = contour.slice(gapIndex + 1);
+      return [segment1, segment2];
+    }
+    
+    return [contour];
   }
 
   private projectToScreen(particle: THREE.Vector3): THREE.Vector2 | null {
