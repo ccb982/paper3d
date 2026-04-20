@@ -71,10 +71,10 @@ export class BulletEntity extends Entity {
     this.position.z += this.velocity.z * delta;
     this.mesh.position.copy(this.position);
 
-    // 让水滴状子弹始终朝向飞行方向
+    // 让水滴状子弹的尾部朝向飞行方向（大半径端朝向摄像机）
     if (this.velocity.length() > 0) {
-      // 计算子弹应该朝向的方向
-      const direction = this.velocity.clone().normalize();
+      // 计算子弹应该朝向的方向（反方向，让尾部朝向飞行方向）
+      const direction = this.velocity.clone().normalize().negate();
       // 计算旋转轴和角度
       const up = new THREE.Vector3(0, 1, 0);
       const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
