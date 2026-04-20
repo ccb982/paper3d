@@ -97,6 +97,7 @@ function App() {
           // 设置场景引用，供特效系统使用
           (window as any).gameScene = scene;
           // 设置相机到 CameraStore
+          (window as any).cameraStore = cameraStore;
           cameraStore.setCamera(camera);
         }}
       >

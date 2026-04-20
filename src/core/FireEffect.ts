@@ -1,4 +1,5 @@
 import { BaseEffect } from './BaseEffect';
+import { FlameContourWorld } from './FlameContourWorld';
 import * as THREE from 'three';
 
 class FireParticle {
@@ -34,6 +35,7 @@ export class FireEffect extends BaseEffect {
   private emitRate: number = 50;
   private emitAccumulator: number = 0;
   private elapsed: number = 0;
+  private contour: FlameContourWorld;
 
   constructor(position: THREE.Vector3, duration: number = Infinity) {
     super(duration);
@@ -55,7 +57,7 @@ export class FireEffect extends BaseEffect {
       sizeAttenuation: false,
       vertexColors: true,
       transparent: true,
-      opacity: 0.8,
+      opacity: 0, // 完全透明，隐藏粒子但保留运行
       blending: THREE.AdditiveBlending
     });
     
@@ -64,6 +66,11 @@ export class FireEffect extends BaseEffect {
     
     const scene = (window as any).gameScene;
     if (scene) scene.add(this.group);
+    
+    // 初始化火焰轮廓提取器
+    if (scene) {
+      this.contour = new FlameContourWorld(scene);
+    }
   }
 
   private emitParticle() {
@@ -187,6 +194,17 @@ export class FireEffect extends BaseEffect {
     // 更新几何体
     this.updateGeometry();
     
+    // 更新火焰轮廓
+    if (this.contour) {
+      // 将粒子局部坐标转换为世界坐标
+      const worldPositions = this.particles.map(p => {
+        const worldPos = p.position.clone();
+        this.group.localToWorld(worldPos);
+        return worldPos;
+      });
+      this.contour.update(worldPositions);
+    }
+    
     // 移除时间检查，使特效持续无限时间
     // if (this.elapsed >= this.duration) {
     //   this.isActive = false;
@@ -224,6 +242,11 @@ export class FireEffect extends BaseEffect {
   public dispose(): void {
     const scene = (window as any).gameScene;
     if (scene && this.group.parent) scene.remove(this.group);
+    
+    // 清理火焰轮廓
+    if (this.contour) {
+      this.contour.dispose();
+    }
     
     this.geometry.dispose();
     this.material.dispose();
