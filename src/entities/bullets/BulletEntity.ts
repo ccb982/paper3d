@@ -27,11 +27,11 @@ export class BulletEntity extends Entity {
   ) {
     const id = generateId('bullet');
 
-    const geometry = new THREE.SphereGeometry(0.1, 8, 8);
+    const geometry = new THREE.SphereGeometry(0.3, 12, 12); // 增大子弹体积
     const material = new THREE.MeshStandardMaterial({
       color: color,
-      emissive: 0x442200,
-      emissiveIntensity: 0.5
+      emissive: 0x884400,
+      emissiveIntensity: 1.0 // 增加发光强度，让子弹更清楚
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.copy(position);
@@ -40,7 +40,7 @@ export class BulletEntity extends Entity {
 
     this.velocity = direction.clone().normalize().multiplyScalar(speed);
     this.createdAt = Date.now();
-    this.radius = 0.1;
+    this.radius = 0.3; // 增大碰撞半径，与子弹体积匹配
   }
 
   /**

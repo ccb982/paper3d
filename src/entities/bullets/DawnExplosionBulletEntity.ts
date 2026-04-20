@@ -6,11 +6,55 @@ import { CharacterEntity } from '../characters/CharacterEntity';
 import { StaticEntity } from '../static/StaticEntity';
 
 /**
+ * 创建火焰精灵特效
+ */
+function createFireSprite(position: THREE.Vector3, size: number = 0.5): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 128; // 增大画布尺寸
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  const material = new THREE.SpriteMaterial({ 
+    map: texture, 
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    opacity: 0.9 // 增加不透明度
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.position.copy(position);
+  sprite.scale.set(size, size, 1);
+  
+  let time = 0;
+  function animate() {
+    time += 0.05;
+    ctx.clearRect(0, 0, 128, 128);
+    // 绘制火焰形状（椭圆形，随机的波动）
+    const radiusX = 40 + Math.sin(time * 8) * 8; // 增大火焰半径
+    const radiusY = 60 + Math.sin(time * 12) * 12;
+    const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, radiusX);
+    grad.addColorStop(0, '#ffffff'); // 中心更亮
+    grad.addColorStop(0.3, '#ffaa33');
+    grad.addColorStop(0.6, '#ff4422');
+    grad.addColorStop(1, 'rgba(255, 0, 0, 0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(64, 64, radiusX, radiusY, 0, 0, Math.PI * 2);
+    ctx.fill();
+    texture.needsUpdate = true;
+    requestAnimationFrame(animate);
+  }
+  animate();
+  return sprite;
+}
+
+/**
  * 爆裂黎明子弹 - 命中时触发爆裂黎明特效并造成范围伤害
  * 继承自BulletEntity，添加特效触发和范围伤害功能
  */
 export class DawnExplosionBulletEntity extends BulletEntity {
   private explosionRadius: number = 10; // 爆炸范围半径
+  private fireSprite: THREE.Sprite | null = null; // 火焰精灵特效
 
   /**
    * 创建爆裂黎明子弹
@@ -28,6 +72,13 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     super(position, direction, speed, color);
     // 设置更高的伤害值
     this.setDamage(2);
+    
+    // 创建火焰精灵特效并添加到场景中
+    this.fireSprite = createFireSprite(position, 1.5); // 增大火焰精灵大小
+    const scene = EntityManager.getInstance().getScene();
+    if (this.fireSprite && scene) {
+      scene.add(this.fireSprite);
+    }
   }
 
   /**
@@ -77,9 +128,17 @@ export class DawnExplosionBulletEntity extends BulletEntity {
 
   public update(delta: number): void {
     super.update(delta);
+    // 让火焰精灵随子弹移动
+    if (this.fireSprite) {
+      this.fireSprite.position.copy(this.position);
+    }
   }
 
   public onDestroy(): void {
     super.onDestroy();
+    // 清理火焰精灵
+    if (this.fireSprite && this.fireSprite.parent) {
+      this.fireSprite.parent.remove(this.fireSprite);
+    }
   }
 }
