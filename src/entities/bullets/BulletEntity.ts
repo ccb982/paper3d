@@ -27,7 +27,8 @@ export class BulletEntity extends Entity {
   ) {
     const id = generateId('bullet');
 
-    const geometry = new THREE.SphereGeometry(0.3, 12, 12); // 增大子弹体积
+    // 创建水滴状几何体
+    const geometry = new THREE.CylinderGeometry(0.1, 0.3, 0.6, 12); // 顶部半径小，底部半径大，形成水滴形状
     const material = new THREE.MeshStandardMaterial({
       color: color,
       emissive: color,
@@ -69,6 +70,16 @@ export class BulletEntity extends Entity {
     this.position.y += this.velocity.y * delta;
     this.position.z += this.velocity.z * delta;
     this.mesh.position.copy(this.position);
+
+    // 让水滴状子弹始终朝向飞行方向
+    if (this.velocity.length() > 0) {
+      // 计算子弹应该朝向的方向
+      const direction = this.velocity.clone().normalize();
+      // 计算旋转轴和角度
+      const up = new THREE.Vector3(0, 1, 0);
+      const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+      this.mesh.quaternion.copy(quaternion);
+    }
 
     if (Date.now() - this.createdAt > this.lifetime) {
       this.isActive = false;
