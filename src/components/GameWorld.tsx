@@ -214,6 +214,9 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     if (mode !== GameMode.BATTLE && mode !== GameMode.DAILY) {
       return;
     }
+    
+    // 更新特效管理器
+    EffectManager.getInstance().update(delta);
 
     const currentPos = characterPositionStore.position;
     let currentVelocity = characterPositionStore.velocity.clone();

@@ -2,6 +2,7 @@ import { BaseEffect } from '../core/BaseEffect';
 import * as THREE from 'three';
 import { EntityManager } from '../core/EntityManager';
 import { cameraStore } from '../core/CameraStore';
+import { createGalaxyEffect, createGlowEffect, updateGalaxyEffect } from './GalaxyEffectLayer';
 
 class Spike {
   public mesh: THREE.Mesh;
@@ -94,21 +95,7 @@ function generateSpikes(
   return spikes;
 }
 
-class RingEffect {
-  public mesh: THREE.Mesh;
-  public startDelay: number;
-  public duration: number;
-  public maxScale: number;
-  public material: THREE.MeshBasicMaterial;
 
-  constructor(mesh: THREE.Mesh, startDelay: number, duration: number, maxScale: number) {
-    this.mesh = mesh;
-    this.startDelay = startDelay;
-    this.duration = duration;
-    this.maxScale = maxScale;
-    this.material = mesh.material as THREE.MeshBasicMaterial;
-  }
-}
 
 class Particle {
   public mesh: THREE.Mesh;
@@ -134,8 +121,9 @@ export class DawnBurstEffect extends BaseEffect {
   private outerSpikes: Spike[] = [];
   private coreFlash: THREE.Mesh | null = null;
   private coreMaterial: THREE.MeshBasicMaterial | null = null;
-  private rings: RingEffect[] = [];
   private particles: Particle[] = [];
+  private galaxyPoints: THREE.Points[] = [];
+  private glowPoints: THREE.Points | null = null;
 
   constructor(position: THREE.Vector3, duration: number = 4.0) {
     super(duration);
@@ -177,31 +165,35 @@ export class DawnBurstEffect extends BaseEffect {
     this.coreFlash.position.set(0, 0, 0);
     this.group.add(this.coreFlash);
 
-    const ringColors = [0xff4035, 0x7d4dff, 0xff0019];
-    const ringDelays = [0.0, 0.2, 0.4];
-    const ringDurations = [1.5, 1.5, 1.5];
-    const ringMaxScales = [4.0, 5.0, 6.0];
-
-    for (let i = 0; i < 3; i++) {
-      const geometry = new THREE.RingGeometry(0, 1, 32);
-      const material = new THREE.MeshBasicMaterial({
-        color: ringColors[i],
-        transparent: true,
-        opacity: 3.0, // 增加不透明度，使环更明显
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending
-      });
-      const ring = new THREE.Mesh(geometry, material);
-      ring.rotation.x = (Math.random() - 0.5) * Math.PI;
-      ring.rotation.y = (Math.random() - 0.5) * Math.PI;
-      ring.rotation.z = (Math.random() - 0.5) * Math.PI;
-      ring.scale.set(0, 0, 1);
-      this.group.add(ring);
-      this.rings.push(new RingEffect(ring, ringDelays[i], ringDurations[i], ringMaxScales[i]));
-    }
-
     // 创建#f92b3b颜色的粒子
     this.createParticles();
+    
+    // 创建三个不同颜色的银河旋涡（替换三个圆环）
+    const galaxyColors = [0xff4035, 0x7d4dff, 0xff0019];
+    for (let i = 0; i < 3; i++) {
+      const color = new THREE.Color(galaxyColors[i]);
+      const galaxy = createGalaxyEffect(this.group, color);
+      // 为每个银河设置随机的初始y轴旋转，不再自转
+      galaxy.rotation.y = Math.random() * Math.PI * 2;
+      // 添加微小的位置偏移，避免重合
+      const offset = 0.3;
+      galaxy.position.x = (Math.random() - 0.5) * offset;
+      galaxy.position.y = (Math.random() - 0.5) * offset;
+      galaxy.position.z = (Math.random() - 0.5) * offset;
+      // 设置不同的大小，增加视觉层次感
+      let size;
+      if (i === 0) {
+        size = 0.4; // 第一个（红色）增大
+      } else if (i === 1) {
+        size = 0.5; // 第二个（紫色）增大
+      } else {
+        size = 0.6; // 第三个（深红色）
+      }
+      galaxy.scale.set(size, size, size);
+      this.galaxyPoints.push(galaxy);
+    }
+    
+    this.glowPoints = createGlowEffect(this.group);
   }
 
   private createParticles(): void {
@@ -249,22 +241,7 @@ export class DawnBurstEffect extends BaseEffect {
       this.coreMaterial.opacity = 1 - t;
     }
 
-    for (let i = this.rings.length - 1; i >= 0; i--) {
-      const ring = this.rings[i];
-      const t = this.elapsed - ring.startDelay;
-      if (t < 0) continue;
-      if (t > ring.duration) {
-        ring.mesh.parent?.remove(ring.mesh);
-        ring.mesh.geometry.dispose();
-        ring.material.dispose();
-        this.rings.splice(i, 1);
-        continue;
-      }
-      const progress = t / ring.duration;
-      const scale = ring.maxScale * (1 - Math.pow(1 - progress, 2));
-      ring.mesh.scale.set(scale, scale, 1);
-      ring.material.opacity = 3.0 * (1 - progress); // 增加初始不透明度
-    }
+
 
     // 更新粒子
     for (let i = this.particles.length - 1; i >= 0; i--) {
@@ -293,6 +270,22 @@ export class DawnBurstEffect extends BaseEffect {
       particle.mesh.scale.set(scale, scale, scale);
     }
 
+    // 更新银河效果
+    this.galaxyPoints.forEach((galaxy, index) => {
+      updateGalaxyEffect(galaxy, this.elapsed);
+      // 银河漩涡向外扩大
+      const scaleFactor = 1 + (this.elapsed * 0.5); // 加快扩大速度
+      let baseSize;
+      if (index === 0) {
+        baseSize = 0.4; // 第一个（红色）增大
+      } else if (index === 1) {
+        baseSize = 0.5; // 第二个（紫色）增大
+      } else {
+        baseSize = 0.6; // 第三个（深红色）
+      }
+      galaxy.scale.set(baseSize * scaleFactor, baseSize * scaleFactor, baseSize * scaleFactor);
+    });
+    
     this.group.rotation.y = 0;
     this.group.rotation.x = 0;
   }
@@ -324,14 +317,31 @@ export class DawnBurstEffect extends BaseEffect {
       this.coreFlash.geometry.dispose();
       this.coreMaterial?.dispose();
     }
-    this.rings.forEach(ring => {
-      ring.mesh.geometry.dispose();
-      ring.material.dispose();
-    });
+
     // 清理粒子
     this.particles.forEach(particle => {
       particle.mesh.geometry.dispose();
       particle.material.dispose();
     });
+    
+    // 清理银河效果
+    this.galaxyPoints.forEach(galaxy => {
+      galaxy.geometry.dispose();
+      if (galaxy.material instanceof THREE.ShaderMaterial) {
+        galaxy.material.dispose();
+      } else if (Array.isArray(galaxy.material)) {
+        galaxy.material.forEach(material => material.dispose());
+      } else {
+        galaxy.material.dispose();
+      }
+    });
+    if (this.glowPoints) {
+      this.glowPoints.geometry.dispose();
+      if (this.glowPoints.material instanceof THREE.Material) {
+        this.glowPoints.material.dispose();
+      } else if (Array.isArray(this.glowPoints.material)) {
+        this.glowPoints.material.forEach(material => material.dispose());
+      }
+    }
   }
 }
