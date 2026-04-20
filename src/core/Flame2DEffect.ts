@@ -21,6 +21,23 @@ export class Flame2DEffect {
   private radialSegments: number = 90;         // 圆周分段数（越高轮廓越平滑）
   private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
 
+  // 预定义火焰模板
+  private sideTemplateNorm: { x: number; y: number }[] = [
+    { x: -0.5, y: 0.0 },   // 底部左
+    { x: -0.4, y: 0.2 },
+    { x: -0.3, y: 0.4 },
+    { x: -0.2, y: 0.6 },
+    { x: -0.1, y: 0.8 },
+    { x: 0.0, y: 1.0 },   // 顶部尖
+    { x: 0.1, y: 0.8 },
+    { x: 0.2, y: 0.6 },
+    { x: 0.3, y: 0.4 },
+    { x: 0.4, y: 0.2 },
+    { x: 0.5, y: 0.0 },   // 底部右
+  ];
+
+  private topTemplateNorm: { x: number; y: number }[] = [];
+
   // 调试选项
   public showParticles: boolean = true;
 
@@ -28,7 +45,11 @@ export class Flame2DEffect {
   private contourColor: string = '#ff8800';
   private contourWidth: number = 3;
 
-  constructor() {
+  // 单例实例
+  private static instance: Flame2DEffect | null = null;
+
+  // 私有构造函数，防止外部实例化
+  private constructor() {
     // 创建 canvas 元素
     this.canvas = document.createElement('canvas');
     this.canvas.width = this.width;
@@ -45,6 +66,13 @@ export class Flame2DEffect {
     
     this.ctx = this.canvas.getContext('2d')!;
     
+    // 初始化俯视模板（椭圆，半径归一化）
+    const radialSegments = 36;
+    for (let i = 0; i <= radialSegments; i++) {
+      const angle = (i / radialSegments) * Math.PI * 2;
+      this.topTemplateNorm.push({ x: Math.cos(angle), y: Math.sin(angle) });
+    }
+    
     // 监听窗口大小变化
     window.addEventListener('resize', () => {
       this.width = window.innerWidth;
@@ -52,6 +80,14 @@ export class Flame2DEffect {
       this.canvas.width = this.width;
       this.canvas.height = this.height;
     });
+  }
+
+  // 获取单例实例
+  public static getInstance(): Flame2DEffect {
+    if (!Flame2DEffect.instance) {
+      Flame2DEffect.instance = new Flame2DEffect();
+    }
+    return Flame2DEffect.instance;
   }
 
   public setCamera(camera: THREE.Camera): void {
@@ -105,26 +141,20 @@ export class Flame2DEffect {
       }
     }
 
-    // 3. 定时更新轮廓（极坐标外围点）
+    // 3. 定时更新轮廓（基于模板）
     const now = performance.now() * 0.001;
     if (now - this.lastContourUpdate > this.contourUpdateDelay) {
       this.lastContourUpdate = now;
-      this.cachedContour = this.computePolarContour(screenPoints);
+      this.cachedContour = this.computeTemplateContour(screenPoints);
     }
 
     // 4. 绘制缓存的轮廓
     if (this.cachedContour.length >= 3) {
-      // 检查是否有多个轮廓（通过检测角度突变）
-      const contourSegments = this.splitContourSegments(this.cachedContour);
-      
-      // 只绘制第一个轮廓（主要的火焰轮廓）
-      const segment = contourSegments[0];
-      if (segment.length < 3) return;
-      
+      // 直接绘制整个轮廓，不分割
       this.ctx.beginPath();
-      this.ctx.moveTo(segment[0].x, segment[0].y);
-      for (let i = 1; i < segment.length; i++) {
-        this.ctx.lineTo(segment[i].x, segment[i].y);
+      this.ctx.moveTo(this.cachedContour[0].x, this.cachedContour[0].y);
+      for (let i = 1; i < this.cachedContour.length; i++) {
+        this.ctx.lineTo(this.cachedContour[i].x, this.cachedContour[i].y);
       }
       this.ctx.closePath();
 
@@ -137,47 +167,7 @@ export class Flame2DEffect {
     }
   }
 
-  // 将轮廓分割成多个独立段（检测角度突变）
-  private splitContourSegments(contour: { x: number; y: number }[]): { x: number; y: number }[][] {
-    if (contour.length < 3) return [contour];
-    
-    // 计算中心点
-    let centerX = 0, centerY = 0;
-    for (const p of contour) {
-      centerX += p.x;
-      centerY += p.y;
-    }
-    centerX /= contour.length;
-    centerY /= contour.length;
-    
-    // 计算每个点的角度
-    const pointsWithAngle: { point: { x: number; y: number }; angle: number }[] = contour.map(p => ({
-      point: p,
-      angle: Math.atan2(p.y - centerY, p.x - centerX)
-    }));
-    
-    // 找到角度间隙最大的地方（可能的分段点）
-    let maxGap = 0;
-    let gapIndex = 0;
-    for (let i = 0; i < pointsWithAngle.length; i++) {
-      const nextIdx = (i + 1) % pointsWithAngle.length;
-      let angleDiff = pointsWithAngle[nextIdx].angle - pointsWithAngle[i].angle;
-      if (angleDiff < 0) angleDiff += Math.PI * 2;
-      if (angleDiff > maxGap) {
-        maxGap = angleDiff;
-        gapIndex = i;
-      }
-    }
-    
-    // 如果最大间隙超过阈值（PI），则分割轮廓
-    if (maxGap > Math.PI) {
-      const segment1 = contour.slice(0, gapIndex + 1);
-      const segment2 = contour.slice(gapIndex + 1);
-      return [segment1, segment2];
-    }
-    
-    return [contour];
-  }
+
 
   private projectToScreen(particle: THREE.Vector3): THREE.Vector2 | null {
     if (!this.camera) return null;
@@ -231,6 +221,78 @@ export class Flame2DEffect {
     const g = Math.floor(color.g * 255);
     const b = Math.floor(color.b * 255);
     return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  /**
+   * 极坐标外围点提取（根据颜色过滤）
+   * 1. 过滤粒子：只保留红色和红白色，排除橙色
+   * 2. 计算粒子群的中心点
+   * 3. 按角度分组，每组取半径的百分位数点
+   * 4. 返回按角度排序的点列表（屏幕坐标）
+   */
+  /**
+   * 基于模板的火焰轮廓计算
+   * 1. 过滤粒子：只保留红色和红白色，排除橙色
+   * 2. 计算粒子的包围盒
+   * 3. 选择侧面或俯视模板
+   * 4. 根据包围盒大小调整模板
+   * 5. 生成平滑轮廓
+   */
+  private computeTemplateContour(screenPoints: { x: number; y: number; depth: number; color: THREE.Color }[]): { x: number; y: number }[] {
+    // 1. 根据颜色过滤：只保留红色和红白色，排除橙色
+    const filtered = screenPoints.filter(p => {
+      const r = p.color.r;
+      const g = p.color.g;
+      const b = p.color.b;
+      // 红白色（焰底）：r>0.9, g>0.7, b>0.7
+      const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
+      // 红色（外缘）：r>0.7, g<0.3, b<0.2
+      const isRed = r > 0.7 && g < 0.3 && b < 0.2;
+      // 排除橙色（中部）：r>0.8, g>0.4, b<0.3，且不是红白/红色
+      const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
+      return (isRedWhite || isRed) && !isOrange;
+    });
+
+    if (filtered.length < 20) return [];
+
+    // 2. 计算粒子的包围盒
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of filtered) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const width = maxX - minX;
+    const height = maxY - minY;
+    if (width < 1 || height < 1) return [];
+
+    // 3. 选择视角（简单判断：如果火焰高度 > 宽度，则为侧面视角，否则俯视）
+    const isSideView = height > width * 1.2;
+    const template = isSideView ? this.sideTemplateNorm : this.topTemplateNorm;
+
+    // 4. 将模板缩放到实际大小
+    const contour = template.map(p => {
+      let x = minX + (p.x + 0.5) * width;    // 侧面模板x范围-0.5~0.5映射到实际宽度
+      let y = minY + p.y * height;
+      if (!isSideView) {
+        // 俯视模板是椭圆，中心在粒子云中心
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        x = centerX + p.x * width / 2;
+        y = centerY + p.y * height / 2;
+      }
+      return { x, y };
+    });
+
+    // 5. 平滑曲线
+    const points3D = contour.map(p => new THREE.Vector3(p.x, p.y, 0));
+    const curve = new THREE.CatmullRomCurve3(points3D);
+    curve.curveType = 'centripetal';
+    curve.closed = true;
+    const smoothPoints3D = curve.getPoints(100);
+    const smooth = smoothPoints3D.map(p => ({ x: p.x, y: p.y }));
+    return smooth;
   }
 
   /**

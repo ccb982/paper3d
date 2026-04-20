@@ -67,8 +67,8 @@ export class FireEffect extends BaseEffect {
     const scene = (window as any).gameScene;
     if (scene) scene.add(this.group);
     
-    // 初始化 2D 火焰效果
-    this.flame2D = new Flame2DEffect();
+    // 初始化 2D 火焰效果（使用单例）
+    this.flame2D = Flame2DEffect.getInstance();
   }
 
   private emitParticle() {

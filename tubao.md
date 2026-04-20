@@ -1,101 +1,113 @@
-火焰不需要完美的闭合边界，只需要几个特征点就能勾勒出“上尖下圆”的形态。极坐标扫描法太复杂且不稳定，我们可以改用垂直分层采样，直接根据粒子的高度（Y 坐标）提取左右边界点，然后连接成一条平滑曲线。
+你的“天才办法”非常棒：预先生成火焰轮廓模板（侧面、俯视），然后根据粒子云的形状动态调整模板（缩放、扭曲），而不是从零计算复杂轮廓。这能保证形状始终符合预期，并且性能极佳。下面我给出具体实现方案。
 
-下面给出一个全新的、简洁可靠的 computePolarContour 实现（实际上应该改名为 computeSimpleContour），完全抛弃极坐标和角度分组。
+一、火焰模板设计
+1. 侧面模板（Side View）
+火焰侧面形状：底部宽、向上收窄、顶部尖锐，略带弯曲（模拟摇曳）。
+
+可以用 CatmullRomCurve3 定义几个控制点（从底部中心到顶部尖端），然后绕 Y 轴旋转生成曲面？不，我们只需要轮廓线（2D）。侧面模板的控制点（归一化坐标，范围 0~1）：
+
+底部左侧：(-0.5, 0)
+
+底部右侧：(0.5, 0)
+
+中部左侧：(-0.3, 0.5)
+
+中部右侧：(0.3, 0.5)
+
+上部左侧：(-0.1, 0.8)
+
+上部右侧：(0.1, 0.8)
+
+顶部尖端：(0, 1.0)
+
+这些点定义了一条闭合曲线（从底部左→左边缘→顶部→右边缘→底部右）。我们将其存储为归一化的点集。
+
+2. 俯视模板（Top View）
+火焰俯视形状：近似圆形或椭圆形，中心亮，边缘略不规则。但俯视轮廓通常就是火焰外缘的投影，可以简化为椭圆，长轴对应火焰宽度，短轴对应厚度。我们可以用椭圆参数方程生成。
+
+二、动态调整模板
+2.1 从粒子云获取包围盒和方向
+计算粒子的最小包围盒（AABB），得到宽度 w、高度 h、深度 d（侧面模板只用宽度和高度，俯视用宽度和深度）。
+
+计算粒子的主方向（PCA），用于倾斜或弯曲。
+
+2.2 调整侧面模板
+将归一化坐标的 x 乘以宽度，y 乘以高度。
+
+可选：根据火焰摇曳，给顶部控制点增加随机偏移（例如 x 偏移 = sin(time) * 0.05 * width）。
+
+2.3 调整俯视模板
+椭圆长轴 = 宽度，短轴 = 深度。
+
+三、代码实现
+3.1 预定义模板数据
+typescript
+// 侧面模板（归一化坐标，Y向上，X向右，底部y=0，顶部y=1）
+const sideTemplateNorm: { x: number; y: number }[] = [
+  { x: -0.5, y: 0.0 },   // 底部左
+  { x: -0.4, y: 0.2 },
+  { x: -0.3, y: 0.4 },
+  { x: -0.2, y: 0.6 },
+  { x: -0.1, y: 0.8 },
+  { x: 0.0, y: 1.0 },   // 顶部尖
+  { x: 0.1, y: 0.8 },
+  { x: 0.2, y: 0.6 },
+  { x: 0.3, y: 0.4 },
+  { x: 0.4, y: 0.2 },
+  { x: 0.5, y: 0.0 },   // 底部右
+];
+
+// 俯视模板（椭圆，半径归一化）
+const topTemplateNorm: { x: number; y: number }[] = [];
+const radialSegments = 36;
+for (let i = 0; i <= radialSegments; i++) {
+  const angle = (i / radialSegments) * Math.PI * 2;
+  topTemplateNorm.push({ x: Math.cos(angle), y: Math.sin(angle) });
+}
+3.2 动态调整并渲染轮廓
+在 Flame2DEffect 中，不再使用 computePolarContour，而是使用模板调整：
 
 typescript
-/**
- * 简单轮廓提取：垂直分层采样
- * 1. 过滤粒子：只保留红色和红白色（排除橙色）
- * 2. 按 Y 坐标分成若干层
- * 3. 每层取最小 X 和最大 X 的点（左右边界）
- * 4. 将左右边界点分别作为轮廓点，然后合并并排序
- * 5. 用 Catmull-Rom 曲线平滑，确保顶部尖锐、底部圆润
- */
-private computeSimpleContour(points: { x: number; y: number; depth: number; color: THREE.Color }[]): { x: number; y: number }[] {
-  if (points.length < 20) return [];
+private computeTemplateContour(screenPoints: { x: number; y: number; depth: number; color: THREE.Color }[]): { x: number; y: number }[] {
+  if (screenPoints.length < 20) return [];
 
-  // 1. 颜色过滤：只保留外缘（红色）和焰底（红白色）
-  const filtered = points.filter(p => {
-    const r = p.color.r, g = p.color.g, b = p.color.b;
-    const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
-    const isRed = r > 0.7 && g < 0.3 && b < 0.2;
-    const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
-    return (isRedWhite || isRed) && !isOrange;
-  });
-  if (filtered.length < 20) return [];
-
-  // 2. 获取 Y 范围
-  const minY = Math.min(...filtered.map(p => p.y));
-  const maxY = Math.max(...filtered.map(p => p.y));
-  const yRange = maxY - minY;
-  if (yRange < 0.05) return [];
-
-  // 3. 垂直分层数量（根据屏幕高度动态调整）
-  const layers = 20;
-  const step = yRange / layers;
-  const leftPoints: { x: number; y: number }[] = [];
-  const rightPoints: { x: number; y: number }[] = [];
-
-  for (let i = 0; i <= layers; i++) {
-    const y = minY + i * step;
-    const layerParticles = filtered.filter(p => Math.abs(p.y - y) < step * 0.6);
-    if (layerParticles.length === 0) continue;
-    
-    // 取该层最小 X 和最大 X
-    let minX = Infinity, maxX = -Infinity;
-    for (const p of layerParticles) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-    }
-    // 记录左右边界点
-    leftPoints.push({ x: minX, y });
-    rightPoints.push({ x: maxX, y });
+  // 1. 计算粒子的包围盒
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of screenPoints) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
   }
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (width < 1 || height < 1) return [];
 
-  if (leftPoints.length < 3) return [];
+  // 2. 选择视角（简单判断：如果火焰高度 > 宽度，则为侧面视角，否则俯视）
+  const isSideView = height > width * 1.2;
+  const template = isSideView ? sideTemplateNorm : topTemplateNorm;
 
-  // 4. 合并左右边界点，并按角度排序（从底部左侧 → 顶部 → 底部右侧）
-  // 注意：我们需要一个闭合曲线，顺序应该是：从底部最左开始，沿着左边缘向上到顶部，再沿右边缘向下回到底部最右，然后闭合。
-  const bottomLeft = leftPoints[0];
-  const bottomRight = rightPoints[0];
-  // 左边缘（从底部到顶部）
-  const leftEdge = leftPoints.slice().sort((a, b) => a.y - b.y);
-  // 右边缘（从顶部到底部）
-  const rightEdge = rightPoints.slice().sort((a, b) => b.y - a.y);
-  
-  // 构建完整轮廓点集
-  const contour: { x: number; y: number }[] = [];
-  // 左边缘（底部到顶部）
-  for (const p of leftEdge) contour.push(p);
-  // 顶部点取左右边缘最高点的平均（使顶部尖锐）
-  const topLeft = leftEdge[leftEdge.length-1];
-  const topRight = rightEdge[rightEdge.length-1];
-  const topCenter = { x: (topLeft.x + topRight.x) / 2, y: Math.max(topLeft.y, topRight.y) };
-  contour.push(topCenter);
-  // 右边缘（顶部到底部）
-  for (const p of rightEdge) contour.push(p);
-  // 闭合到底部最左（可选，但 CatmullRomCurve3 闭合会自动连接首尾）
+  // 3. 将模板缩放到实际大小
+  const contour = template.map(p => {
+    let x = minX + (p.x + 0.5) * width;    // 侧面模板x范围-0.5~0.5映射到实际宽度
+    let y = minY + p.y * height;
+    if (!isSideView) {
+      // 俯视模板是椭圆，中心在粒子云中心
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      x = centerX + p.x * width / 2;
+      y = centerY + p.y * height / 2;
+    }
+    return { x, y };
+  });
 
-  // 5. 平滑曲线（使用 Three.js 的 CatmullRomCurve3 更可靠）
+  // 4. 平滑曲线（可选，但模板本身已平滑）
   const points3D = contour.map(p => new THREE.Vector3(p.x, p.y, 0));
   const curve = new THREE.CatmullRomCurve3(points3D);
   curve.curveType = 'centripetal';
   curve.closed = true;
   const smoothPoints3D = curve.getPoints(100);
   const smooth = smoothPoints3D.map(p => ({ x: p.x, y: p.y }));
-
   return smooth;
 }
-然后在 render 方法中，将 this.cachedContour = this.computePolarContour(screenPoints); 替换为 this.cachedContour = this.computeSimpleContour(screenPoints);。
-
-关键改进：
-
-垂直分层采样，直接获取左右边界，不再依赖角度。
-
-轮廓由左边缘、顶部点、右边缘组成，自然形成“上尖下圆”的形状。
-
-使用 Three.js 的 CatmullRomCurve3 平滑（避免手写插值 bug）。
-
-颜色过滤保留，确保只使用外缘和焰底粒子。
-
-这样生成的轮廓线将非常稳定，不会出现双线或刺猬状。你可以根据需要调整 layers（层数）和 getPoints 的采样点数来控制平滑度。
+在 render 中调用 this.cachedContour = this.computeTemplateContour(screenPoints);。
