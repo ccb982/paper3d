@@ -116,20 +116,16 @@ export class Flame2DEffect {
   }
 
   private calculateParticleSize(depth: number): number {
+    // 简化的粒子大小计算
     // 基于深度计算粒子大小，距离越远越小
-    const baseSize = 10;
-    const maxSize = 20;
-    const minSize = 2;
+    const baseSize = 15;
+    const minSize = 3;
     
-    // 深度范围（可根据实际场景调整）
-    const maxDepth = 10;
-    const minDepth = 1;
-    
-    // 计算大小因子
-    let size = baseSize / (depth / minDepth);
+    // 计算大小：距离越远越小
+    let size = baseSize / (depth * 0.8);
     
     // 限制大小范围
-    size = Math.max(minSize, Math.min(maxSize, size));
+    size = Math.max(minSize, size);
     
     return size;
   }
@@ -139,40 +135,6 @@ export class Flame2DEffect {
     const r = Math.floor(color.r * 255);
     const g = Math.floor(color.g * 255);
     const b = Math.floor(color.b * 255);
-    return `rgb(${r}, ${g}, ${b})`;
-  }
-
-  private calculateParticleColor(particle: THREE.Vector3, depth: number): string {
-    // 基于粒子高度和深度计算颜色
-    const height = particle.y;
-    const heightRatio = Math.max(0, Math.min(1, height / 5)); // 假设火焰高度为 5
-    
-    // 颜色渐变：底部橙红，顶部黄白
-    let r, g, b;
-    
-    if (heightRatio < 0.3) {
-      // 底部：橙红
-      r = 255;
-      g = Math.floor(100 + heightRatio * 155 / 0.3);
-      b = 0;
-    } else if (heightRatio < 0.7) {
-      // 中部：橙黄
-      r = 255;
-      g = Math.floor(255 - (heightRatio - 0.3) * 100 / 0.4);
-      b = Math.floor((heightRatio - 0.3) * 100 / 0.4);
-    } else {
-      // 顶部：黄白
-      r = 255;
-      g = Math.floor(155 + (heightRatio - 0.7) * 100 / 0.3);
-      b = Math.floor(100 + (heightRatio - 0.7) * 155 / 0.3);
-    }
-    
-    // 基于深度调整亮度，距离越远越暗
-    const depthRatio = Math.max(0, Math.min(1, 1 - (depth - 1) / 9)); // 深度 1-10
-    r = Math.floor(r * depthRatio);
-    g = Math.floor(g * depthRatio);
-    b = Math.floor(b * depthRatio);
-    
     return `rgb(${r}, ${g}, ${b})`;
   }
 
