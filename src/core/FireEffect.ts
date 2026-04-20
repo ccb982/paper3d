@@ -69,11 +69,11 @@ export class FireEffect extends BaseEffect {
   private emitParticle() {
     if (this.particles.length >= this.maxParticles) return;
     
-    // 发射位置：紧凑的小圆面，让火焰根部紧凑
+    // 发射位置：增大半径，让火焰根部变宽
     const position = new THREE.Vector3(
-      (Math.random() - 0.5) * 0.2,
+      (Math.random() - 0.5) * 0.8,
       0,
-      (Math.random() - 0.5) * 0.2
+      (Math.random() - 0.5) * 0.8
     );
     
     // 初始速度：从整个半球发射，而不是竖直向上
@@ -124,14 +124,10 @@ export class FireEffect extends BaseEffect {
       if (upwardForce < 0.2) upwardForce = 0.2;
       particle.velocity.y += upwardForce * delta;
 
-      // 2. 水平扩散：随高度和生命期增加
-      let spreadStrength = 0;
-      if (height > 0.3) {
-        // 超过一定高度开始分叉
-        spreadStrength = 1.5 * Math.min(1, (height - 0.3) / 2.0);
-      }
-      // 生命后期也加强扩散
-      spreadStrength += 0.8 * (1 - lifeFactor);
+      // 2. 水平扩散：底部强，随高度衰减
+      let spreadStrength = 1.2 * Math.max(0, 1 - height / 2.0);
+      // 生命后期也略微增加扩散，模拟火焰消散
+      spreadStrength += 0.3 * (1 - lifeFactor);
 
       // 随机方向
       const angle = Math.random() * Math.PI * 2;
@@ -146,8 +142,16 @@ export class FireEffect extends BaseEffect {
       particle.velocity.x += turbX * delta;
       particle.velocity.z += turbZ * delta;
 
+      // 3.5 顶部收缩力：让火焰顶部收窄
+      const radius = Math.hypot(particle.position.x, particle.position.z);
+      if (height > 1.0 && radius > 0.1) {
+        const inwardStrength = 0.5 * (height - 1.0);
+        particle.velocity.x -= (particle.position.x / radius) * inwardStrength * delta;
+        particle.velocity.z -= (particle.position.z / radius) * inwardStrength * delta;
+      }
+
       // 4. 阻力：使速度不会过快
-      particle.velocity.multiplyScalar(0.98);
+      particle.velocity.multiplyScalar(0.99); // 增大阻力，使火焰更高更飘
 
       // 5. 位置更新
       particle.position.x += particle.velocity.x * delta;
