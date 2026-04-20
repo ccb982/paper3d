@@ -1,243 +1,108 @@
-你希望先手动筛选出“最外围的点”（例如按角度取半径最大的点），然后再用这些点连成轮廓。这其实是极坐标轮廓提取，而非凸包。之前你遇到精度问题，可能是因为中心点计算不准确或角度分段不够。下面我实现一个更稳健的极坐标轮廓提取，允许你手动控制外围点的密度，并存储结果用于后续复用。
+一、问题分析
+当前 Flame2DEffect 的 computePolarContour 使用了所有粒子（包括橙色）来计算极坐标外围点，导致轮廓线可能混杂了中部粒子，形状不准确。火焰颜色规律：
 
-一、改进的极坐标轮廓提取 Flame2DEffect.ts
+焰底（根部）：红白色（高亮度，RGB 接近 (1.0, 0.8, 0.8)）
+
+中部：橙色（RGB 约 (1.0, 0.6, 0.0)）
+
+外缘：红色（RGB 约 (0.8, 0.1, 0.0)）
+
+你需要只使用红白色和红色粒子，排除橙色粒子。
+
+二、修改方案
+在 Flame2DEffect 的 computePolarContour 函数中，增加颜色过滤器，只保留符合条件的粒子。然后基于这些粒子计算轮廓。
+
+2.1 颜色判断逻辑
+我们可以根据颜色的 RGB 分量特征判断：
+
+红色外缘：r > 0.7 且 g < 0.3 且 b < 0.1（近似纯红）
+
+红白焰底：r > 0.9 且 g > 0.7 且 b > 0.7（接近白色但带红）
+
+排除橙色：g > 0.4 且 b < 0.3 且 r > 0.8（橙色特征）
+
+更简单的规则：如果颜色的绿色分量大于 0.3 且小于 0.7，同时红色大于 0.8，则为橙色，排除。或者直接使用颜色亮度：焰底亮度高，外缘亮度中等，中部亮度适中但偏橙。
+
+为了精确，我们可以在 FireEffect.ts 的粒子颜色更新逻辑中，为每个粒子增加一个 type 属性（如 root, mid, tip），然后在 Flame2DEffect 中直接使用该属性过滤。但为了不改动现有结构，我们直接用 RGB 判断。
+
+2.2 修改后的 computePolarContour 代码
 typescript
-// Flame2DEffect.ts - 极坐标外围点提取 + 平滑曲线
-import * as THREE from 'three';
+/**
+ * 极坐标外围点提取（根据颜色过滤）
+ */
+private computePolarContour(points: { x: number; y: number; depth: number; color: THREE.Color }[]): { x: number; y: number }[] {
+  if (points.length < 10) return [];
 
-export class Flame2DEffect {
-  private canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private width: number = window.innerWidth;
-  private height: number = window.innerHeight;
-  private camera: THREE.Camera | null = null;
-  private updateInterval: number = 0.016;     // 帧间隔（用于动画）
-  private lastUpdateTime: number = 0;
-  private particleData: { position: THREE.Vector3; color: THREE.Color }[] = [];
+  // 1. 根据颜色过滤：只保留红色和红白色，排除橙色
+  const filtered = points.filter(p => {
+    const r = p.color.r;
+    const g = p.color.g;
+    const b = p.color.b;
+    // 红白色（焰底）：r>0.9, g>0.7, b>0.7
+    const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
+    // 红色（外缘）：r>0.7, g<0.3, b<0.2
+    const isRed = r > 0.7 && g < 0.3 && b < 0.2;
+    // 排除橙色（中部）：r>0.8, g>0.4, b<0.3，且不是红白/红色
+    const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
+    return (isRedWhite || isRed) && !isOrange;
+  });
 
-  // 轮廓缓存
-  private cachedContour: { x: number; y: number }[] = [];
-  private lastContourUpdate: number = 0;
-  private contourUpdateDelay: number = 0.2;   // 每0.2秒重新采样一次轮廓
+  if (filtered.length < 10) return [];
 
-  // 极坐标参数
-  private radialSegments: number = 72;         // 圆周分段数（越高轮廓越平滑）
-  private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
+  // 2. 计算中心（所有过滤后点的平均）
+  let centerX = 0, centerY = 0;
+  for (const p of filtered) {
+    centerX += p.x;
+    centerY += p.y;
+  }
+  centerX /= filtered.length;
+  centerY /= filtered.length;
 
-  // 调试选项
-  public showParticles: boolean = true;
-
-  // 轮廓样式
-  private contourColor: string = '#ff8800';
-  private contourWidth: number = 3;
-
-  constructor() {
-    this.canvas = document.createElement('canvas');
-    this.canvas.width = this.width;
-    this.canvas.height = this.height;
-    this.canvas.style.position = 'fixed';
-    this.canvas.style.top = '0';
-    this.canvas.style.left = '0';
-    this.canvas.style.width = '100%';
-    this.canvas.style.height = '100%';
-    this.canvas.style.pointerEvents = 'none';
-    this.canvas.style.zIndex = '1000';
-    document.body.appendChild(this.canvas);
-    this.ctx = this.canvas.getContext('2d')!;
-
-    window.addEventListener('resize', () => {
-      this.width = window.innerWidth;
-      this.height = window.innerHeight;
-      this.canvas.width = this.width;
-      this.canvas.height = this.height;
-    });
+  // 3. 径向分组
+  const radialGroups: number[][] = new Array(this.radialSegments).fill(null).map(() => []);
+  for (const p of filtered) {
+    let angle = Math.atan2(p.y - centerY, p.x - centerX);
+    let seg = Math.floor((angle + Math.PI) / (Math.PI * 2) * this.radialSegments);
+    seg = Math.min(this.radialSegments - 1, Math.max(0, seg));
+    const radius = Math.hypot(p.x - centerX, p.y - centerY);
+    radialGroups[seg].push(radius);
   }
 
-  public setCamera(camera: THREE.Camera): void {
-    this.camera = camera;
+  // 4. 每个区间取指定百分位数的半径
+  const contour: { x: number; y: number }[] = [];
+  for (let i = 0; i < this.radialSegments; i++) {
+    const radii = radialGroups[i];
+    if (radii.length === 0) continue;
+    radii.sort((a, b) => a - b);
+    const idx = Math.floor(radii.length * this.percentile);
+    const targetRadius = radii[Math.min(idx, radii.length - 1)];
+    const angle = (i / this.radialSegments) * Math.PI * 2 - Math.PI;
+    const x = centerX + Math.cos(angle) * targetRadius;
+    const y = centerY + Math.sin(angle) * targetRadius;
+    contour.push({ x, y });
   }
 
-  public update(particles: { position: THREE.Vector3; color: THREE.Color }[]): void {
-    const now = performance.now() * 0.001;
-    if (now - this.lastUpdateTime < this.updateInterval) return;
-    this.lastUpdateTime = now;
+  if (contour.length < 3) return [];
 
-    if (!this.camera) return;
-    this.particleData = particles;
-    this.render();
-  }
+  // 按角度排序
+  contour.sort((a, b) => {
+    const angleA = Math.atan2(a.y - centerY, a.x - centerX);
+    const angleB = Math.atan2(b.y - centerY, b.x - centerX);
+    return angleA - angleB;
+  });
 
-  private render(): void {
-    if (!this.camera) return;
-    this.ctx.clearRect(0, 0, this.width, this.height);
-
-    // 1. 投影所有粒子到屏幕坐标
-    const screenPoints: { x: number; y: number; depth: number; color: THREE.Color }[] = [];
-    for (const p of this.particleData) {
-      const ndc = p.position.clone().project(this.camera!);
-      if (ndc.z < 0 || ndc.z > 1) continue;
-      const screenX = (ndc.x + 1) / 2 * this.width;
-      const screenY = (1 - ndc.y) / 2 * this.height;
-      screenPoints.push({ x: screenX, y: screenY, depth: ndc.z, color: p.color });
-    }
-
-    if (screenPoints.length < 10) return;
-
-    // 2. 绘制粒子（调试）
-    if (this.showParticles) {
-      for (const pt of screenPoints) {
-        const size = Math.max(2, 12 / (pt.depth * 0.5 + 0.5));
-        const rgba = `rgba(${Math.floor(pt.color.r * 255)}, ${Math.floor(pt.color.g * 255)}, ${Math.floor(pt.color.b * 255)}, 0.6)`;
-        this.ctx.beginPath();
-        this.ctx.arc(pt.x, pt.y, size, 0, Math.PI * 2);
-        this.ctx.fillStyle = rgba;
-        this.ctx.fill();
-      }
-    }
-
-    // 3. 定时更新轮廓（极坐标外围点）
-    const now = performance.now() * 0.001;
-    if (now - this.lastContourUpdate > this.contourUpdateDelay) {
-      this.lastContourUpdate = now;
-      this.cachedContour = this.computePolarContour(screenPoints);
-    }
-
-    // 4. 绘制缓存的轮廓
-    if (this.cachedContour.length >= 3) {
-      this.ctx.beginPath();
-      this.ctx.moveTo(this.cachedContour[0].x, this.cachedContour[0].y);
-      for (let i = 1; i < this.cachedContour.length; i++) {
-        this.ctx.lineTo(this.cachedContour[i].x, this.cachedContour[i].y);
-      }
-      this.ctx.closePath();
-
-      this.ctx.shadowBlur = 6;
-      this.ctx.shadowColor = this.contourColor;
-      this.ctx.strokeStyle = this.contourColor;
-      this.ctx.lineWidth = this.contourWidth;
-      this.ctx.stroke();
-
-      this.ctx.fillStyle = 'rgba(255, 100, 0, 0.1)';
-      this.ctx.fill();
-      this.ctx.shadowBlur = 0;
-    }
-  }
-
-  /**
-   * 极坐标外围点提取（手动选取最外围点）
-   * 1. 计算粒子群的中心点
-   * 2. 按角度分组，每组取半径的百分位数点
-   * 3. 返回按角度排序的点列表（屏幕坐标）
-   */
-  private computePolarContour(points: { x: number; y: number; depth: number }[]): { x: number; y: number }[] {
-    if (points.length < 10) return [];
-
-    // 计算中心（所有点的平均）
-    let centerX = 0, centerY = 0;
-    for (const p of points) {
-      centerX += p.x;
-      centerY += p.y;
-    }
-    centerX /= points.length;
-    centerY /= points.length;
-
-    // 径向分组：每个角度区间收集半径
-    const radialGroups: number[][] = new Array(this.radialSegments).fill(null).map(() => []);
-    for (const p of points) {
-      let angle = Math.atan2(p.y - centerY, p.x - centerX);
-      let seg = Math.floor((angle + Math.PI) / (Math.PI * 2) * this.radialSegments);
-      seg = Math.min(this.radialSegments - 1, Math.max(0, seg));
-      const radius = Math.hypot(p.x - centerX, p.y - centerY);
-      radialGroups[seg].push(radius);
-    }
-
-    // 每个区间取指定百分位的半径，构建轮廓点
-    const contour: { x: number; y: number }[] = [];
-    for (let i = 0; i < this.radialSegments; i++) {
-      const radii = radialGroups[i];
-      if (radii.length === 0) continue;
-      radii.sort((a, b) => a - b);
-      const idx = Math.floor(radii.length * this.percentile);
-      const targetRadius = radii[Math.min(idx, radii.length - 1)];
-      const angle = (i / this.radialSegments) * Math.PI * 2 - Math.PI;
-      const x = centerX + Math.cos(angle) * targetRadius;
-      const y = centerY + Math.sin(angle) * targetRadius;
-      contour.push({ x, y });
-    }
-
-    if (contour.length < 3) return [];
-
-    // 按角度排序（确保闭合顺序正确）
-    contour.sort((a, b) => {
-      const angleA = Math.atan2(a.y - centerY, a.x - centerX);
-      const angleB = Math.atan2(b.y - centerY, b.x - centerX);
-      return angleA - angleB;
-    });
-
-    // 可选：平滑曲线
-    const smooth = this.smoothPolygon(contour, 30);
-    return smooth;
-  }
-
-  /**
-   * Catmull-Rom 样条平滑多边形顶点
-   */
-  private smoothPolygon(points: { x: number; y: number }[], segmentsPerEdge: number = 20): { x: number; y: number }[] {
-    if (points.length < 3) return points;
-    const result: { x: number; y: number }[] = [];
-    const n = points.length;
-    for (let i = 0; i < n; i++) {
-      const p0 = points[(i - 1 + n) % n];
-      const p1 = points[i];
-      const p2 = points[(i + 1) % n];
-      const p3 = points[(i + 2) % n];
-      for (let t = 0; t <= segmentsPerEdge; t++) {
-        const u = t / segmentsPerEdge;
-        const x = this.catmullRom(p0.x, p1.x, p2.x, p3.x, u);
-        const y = this.catmullRom(p0.y, p1.y, p2.y, p3.y, u);
-        result.push({ x, y });
-      }
-    }
-    return result.slice(0, result.length - 1);
-  }
-
-  private catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
-    const t2 = t * t;
-    const t3 = t2 * t;
-    return 0.5 * ((2 * p1) +
-      (-p0 + p2) * t +
-      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-      (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
-  }
-
-  public dispose(): void {
-    if (this.canvas.parentElement) this.canvas.parentElement.removeChild(this.canvas);
-  }
+  // 平滑曲线
+  const smooth = this.smoothPolygon(contour, 40);
+  return smooth;
 }
-二、关键点说明
-极坐标外围点提取：
-计算所有粒子的中心，按角度分成 radialSegments（72个扇形），每个扇形内取半径的第 percentile（0.85）的点作为外围点。这相当于手动选取了“最外围的点”，然后连接起来。
+2.3 调整参数以获得更顺滑的轮廓
+radialSegments：增大到 90 或 120 可以让轮廓更平滑（但计算量稍增）。
 
-缓存轮廓：
-contourUpdateDelay = 0.2 秒更新一次轮廓，避免每帧计算。轮廓会被存储在 cachedContour 中，直到下次采样才更新。
+percentile：建议保持在 0.85 或 0.9，确保取的是外围点。
 
-平滑处理：
-用 Catmull-Rom 样条对原始外围点进行插值，生成平滑曲线。
+smoothPolygon 的 segmentsPerEdge：增加到 40 或 60 使曲线更圆润。
 
-调试粒子：
-showParticles = true 时绘制半透明粒子点，方便观察粒子分布和外围点是否合理。
+2.4 粒子大小保持为 1
+你的 PointsMaterial 已经设置 size: 1.0 且 sizeAttenuation: false，所有粒子渲染大小固定为 1 像素（屏幕空间）。这是正确的，无需修改。
 
-三、与 FireEffect.ts 的配合
-你的 FireEffect.ts 已经正确调用 flame2D.update(particleData)，无需修改。只需适当增加粒子数量（例如 maxParticles = 2000，emitRate = 80），让粒子云更密集，外围点会更连续。
-
-四、效果预期
-你会在火焰周围看到一条橙色的平滑轮廓线，随火焰摇曳而动态变化（每0.2秒更新一次）。
-
-粒子点半透明显示，方便观察轮廓是否贴合火焰边缘。
-
-如果轮廓不够平滑，可以增加 radialSegments（如 90）或调整 percentile（0.75~0.9）。
-
-如果轮廓形状不理想，可以调整粒子的物理参数（上升力、扩散力等），让粒子云形状更接近火焰。
-
-这种“笨方法”避开了复杂的凸包精度问题，完全由你控制外围点的选取逻辑，并且通过缓存保证了性能。
-
+三、集成到现有代码

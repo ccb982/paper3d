@@ -18,7 +18,7 @@ export class Flame2DEffect {
   private contourUpdateDelay: number = 0.2;   // 每0.2秒重新采样一次轮廓
 
   // 极坐标参数
-  private radialSegments: number = 72;         // 圆周分段数（越高轮廓越平滑）
+  private radialSegments: number = 90;         // 圆周分段数（越高轮廓越平滑）
   private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
 
   // 调试选项
@@ -188,26 +188,43 @@ export class Flame2DEffect {
   }
 
   /**
-   * 极坐标外围点提取（手动选取最外围点）
-   * 1. 计算粒子群的中心点
-   * 2. 按角度分组，每组取半径的百分位数点
-   * 3. 返回按角度排序的点列表（屏幕坐标）
+   * 极坐标外围点提取（根据颜色过滤）
+   * 1. 过滤粒子：只保留红色和红白色，排除橙色
+   * 2. 计算粒子群的中心点
+   * 3. 按角度分组，每组取半径的百分位数点
+   * 4. 返回按角度排序的点列表（屏幕坐标）
    */
-  private computePolarContour(points: { x: number; y: number; depth: number }[]): { x: number; y: number }[] {
+  private computePolarContour(points: { x: number; y: number; depth: number; color: THREE.Color }[]): { x: number; y: number }[] {
     if (points.length < 10) return [];
 
-    // 计算中心（所有点的平均）
+    // 1. 根据颜色过滤：只保留红色和红白色，排除橙色
+    const filtered = points.filter(p => {
+      const r = p.color.r;
+      const g = p.color.g;
+      const b = p.color.b;
+      // 红白色（焰底）：r>0.9, g>0.7, b>0.7
+      const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
+      // 红色（外缘）：r>0.7, g<0.3, b<0.2
+      const isRed = r > 0.7 && g < 0.3 && b < 0.2;
+      // 排除橙色（中部）：r>0.8, g>0.4, b<0.3，且不是红白/红色
+      const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
+      return (isRedWhite || isRed) && !isOrange;
+    });
+
+    if (filtered.length < 10) return [];
+
+    // 2. 计算中心（所有过滤后点的平均）
     let centerX = 0, centerY = 0;
-    for (const p of points) {
+    for (const p of filtered) {
       centerX += p.x;
       centerY += p.y;
     }
-    centerX /= points.length;
-    centerY /= points.length;
+    centerX /= filtered.length;
+    centerY /= filtered.length;
 
-    // 径向分组：每个角度区间收集半径
+    // 3. 径向分组：每个角度区间收集半径
     const radialGroups: number[][] = new Array(this.radialSegments).fill(null).map(() => []);
-    for (const p of points) {
+    for (const p of filtered) {
       let angle = Math.atan2(p.y - centerY, p.x - centerX);
       let seg = Math.floor((angle + Math.PI) / (Math.PI * 2) * this.radialSegments);
       seg = Math.min(this.radialSegments - 1, Math.max(0, seg));
@@ -215,7 +232,7 @@ export class Flame2DEffect {
       radialGroups[seg].push(radius);
     }
 
-    // 每个区间取指定百分位的半径，构建轮廓点
+    // 4. 每个区间取指定百分位的半径，构建轮廓点
     const contour: { x: number; y: number }[] = [];
     for (let i = 0; i < this.radialSegments; i++) {
       const radii = radialGroups[i];
@@ -231,15 +248,15 @@ export class Flame2DEffect {
 
     if (contour.length < 3) return [];
 
-    // 按角度排序（确保闭合顺序正确）
+    // 5. 按角度排序（确保闭合顺序正确）
     contour.sort((a, b) => {
       const angleA = Math.atan2(a.y - centerY, a.x - centerX);
       const angleB = Math.atan2(b.y - centerY, b.x - centerX);
       return angleA - angleB;
     });
 
-    // 可选：平滑曲线
-    const smooth = this.smoothPolygon(contour, 30);
+    // 6. 平滑曲线
+    const smooth = this.smoothPolygon(contour, 40);
     return smooth;
   }
 
