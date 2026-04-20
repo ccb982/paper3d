@@ -118,7 +118,7 @@ export class DawnBurstEffect extends BaseEffect {
   private rings: RingEffect[] = [];
   private elapsed: number = 0;
 
-  constructor(position: THREE.Vector3, duration: number = 4.0) {
+  constructor(position: THREE.Vector3, duration: number = 4.0, color?: number) {
     super(duration);
     this.group = new THREE.Group();
     this.group.position.copy(position);

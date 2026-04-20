@@ -191,6 +191,10 @@ const MovementController: React.FC<MovementControllerProps> = ({
 
   // 清理定时器
   useEffect(() => {
+    // 游戏进入时触发火焰特效
+    const characterPos = new THREE.Vector3(gameStore.character.position.x, gameStore.character.position.y, gameStore.character.position.z);
+    EffectManager.getInstance().playFireEffect(characterPos);
+    
     return () => {
       if (autoShootIntervalRef.current) clearInterval(autoShootIntervalRef.current);
     };

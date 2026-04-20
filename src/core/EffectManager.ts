@@ -1,6 +1,7 @@
 import { BaseEffect } from './BaseEffect';
 import * as THREE from 'three';
 import { DawnBurstEffect } from './DawnBurstEffect';
+import { FireEffect } from './FireEffect';
 
 // 提前声明特效类，避免循环引用
 export class HitFlashEffect extends BaseEffect {
@@ -247,6 +248,10 @@ export class EffectManager {
 
   public playDawnBurst(position: THREE.Vector3, color?: number): void {
     this.activeEffects.push(new DawnBurstEffect(position, 4.0, color || 0xff6600));
+  }
+
+  public playFireEffect(position: THREE.Vector3, duration?: number): void {
+    this.activeEffects.push(new FireEffect(position, duration === undefined ? Infinity : duration));
   }
 
   public update(delta: number): void {

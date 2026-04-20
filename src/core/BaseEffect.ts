@@ -13,7 +13,7 @@ export abstract class BaseEffect {
 
   public update(delta: number): void {
     this.elapsed += delta;
-    if (this.elapsed >= this.duration) {
+    if (this.duration !== Infinity && this.elapsed >= this.duration) {
       this.isActive = false;
       this.onComplete?.();
     } else {
