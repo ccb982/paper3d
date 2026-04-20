@@ -21,19 +21,37 @@ export class Flame2DEffect {
   private radialSegments: number = 90;         // 圆周分段数（越高轮廓越平滑）
   private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
 
-  // 预定义火焰模板
+  // 预定义火焰模板（侧面：底部U形，上部多峰）
   private sideTemplateNorm: { x: number; y: number }[] = [
-    { x: -0.5, y: 0.0 },   // 底部左
-    { x: -0.4, y: 0.2 },
-    { x: -0.3, y: 0.4 },
-    { x: -0.2, y: 0.6 },
-    { x: -0.1, y: 0.8 },
-    { x: 0.0, y: 1.0 },   // 顶部尖
-    { x: 0.1, y: 0.8 },
-    { x: 0.2, y: 0.6 },
-    { x: 0.3, y: 0.4 },
-    { x: 0.4, y: 0.2 },
-    { x: 0.5, y: 0.0 },   // 底部右
+    // 底部U形（从左到右）
+    { x: -0.5, y: 0.0 },
+    { x: -0.4, y: 0.05 },
+    { x: -0.3, y: 0.08 },
+    { x: -0.2, y: 0.1 },
+    { x: -0.1, y: 0.11 },
+    { x: 0.0, y: 0.12 },
+    { x: 0.1, y: 0.11 },
+    { x: 0.2, y: 0.1 },
+    { x: 0.3, y: 0.08 },
+    { x: 0.4, y: 0.05 },
+    { x: 0.5, y: 0.0 },
+    // 右边缘上升至右峰
+    { x: 0.45, y: 0.3 },
+    { x: 0.4, y: 0.5 },
+    { x: 0.35, y: 0.7 },
+    { x: 0.3, y: 0.9 },
+    { x: 0.2, y: 1.0 },   // 右峰
+    // 中峰
+    { x: 0.1, y: 0.85 },
+    { x: 0.0, y: 0.95 },
+    { x: -0.1, y: 0.85 },
+    // 左峰
+    { x: -0.2, y: 1.0 },
+    { x: -0.3, y: 0.9 },
+    { x: -0.35, y: 0.7 },
+    { x: -0.4, y: 0.5 },
+    { x: -0.45, y: 0.3 },
+    // 回到底部左（闭合，由CatmullRomCurve3的closed:true自动完成）
   ];
 
   private topTemplateNorm: { x: number; y: number }[] = [];
@@ -66,11 +84,14 @@ export class Flame2DEffect {
     
     this.ctx = this.canvas.getContext('2d')!;
     
-    // 初始化俯视模板（椭圆，半径归一化）
-    const radialSegments = 36;
+    // 初始化俯视模板（多瓣星形，极坐标参数化）
+    const radialSegments = 60;
     for (let i = 0; i <= radialSegments; i++) {
       const angle = (i / radialSegments) * Math.PI * 2;
-      this.topTemplateNorm.push({ x: Math.cos(angle), y: Math.sin(angle) });
+      const r = 0.8 + 0.3 * Math.cos(3 * angle);  // 三瓣，幅度0.3，半径0.8
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      this.topTemplateNorm.push({ x, y });
     }
     
     // 监听窗口大小变化
@@ -267,16 +288,23 @@ export class Flame2DEffect {
     const height = maxY - minY;
     if (width < 1 || height < 1) return [];
 
-    // 3. 选择视角（简单判断：如果火焰高度 > 宽度，则为侧面视角，否则俯视）
-    const isSideView = height > width * 1.2;
-    const template = isSideView ? this.sideTemplateNorm : this.topTemplateNorm;
+    // 3. 根据摄像机俯仰角选择视角
+    // 当相机向下看角度较大时（看向地面），使用俯视模板；其他情况使用侧面模板
+    let isTopView = false;
+    if (this.camera) {
+      const cameraDirection = new THREE.Vector3();
+      this.camera.getWorldDirection(cameraDirection);
+      // 只有当相机向下看角度超过一定阈值时才使用俯视模板
+      isTopView = cameraDirection.y < -0.5; // 向下看角度较大时使用俯视
+    }
+    const template = isTopView ? this.topTemplateNorm : this.sideTemplateNorm;
 
     // 4. 将模板缩放到实际大小
     const contour = template.map(p => {
       let x = minX + (p.x + 0.5) * width;    // 侧面模板x范围-0.5~0.5映射到实际宽度
       let y = minY + p.y * height;
-      if (!isSideView) {
-        // 俯视模板是椭圆，中心在粒子云中心
+      if (isTopView) {
+        // 俯视模板是星形，中心在粒子云中心
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
         x = centerX + p.x * width / 2;
