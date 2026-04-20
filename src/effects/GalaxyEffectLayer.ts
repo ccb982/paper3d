@@ -179,7 +179,7 @@ export function createGlowEffect(parent: THREE.Group): THREE.Points {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  const material = new THREE.PointsMaterial({ color: 0x88aaff, size: 0.08, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending });
+  const material = new THREE.PointsMaterial({ color: 0x8866ff, size: 0.005, transparent: true, opacity: 1, blending: THREE.AdditiveBlending });
   const points = new THREE.Points(geometry, material);
   parent.add(points);
   
