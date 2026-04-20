@@ -75,12 +75,12 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     this.setDamage(2);
     
     // 创建多层火焰特效，包裹子弹
-    const effectCount = 8; // 8层尾焰，形成包裹效果
+    const effectCount = 50; // 50层尾焰，大幅增加数量
     for (let i = 0; i < effectCount; i++) {
-      // 计算每层尾焰的位置，围绕子弹分布，添加随机性
-      const angle = (i / effectCount) * Math.PI * 2 + Math.random() * 0.5; // 随机角度偏移
-      const distance = 0.2 + i * 0.15 + Math.random() * 0.1; // 随机距离偏移
-      const yOffset = (Math.random() - 0.5) * 0.3; // 随机Y方向偏移
+      // 计算每层尾焰的位置，围绕子弹分布，增加随机性
+      const angle = (i / effectCount) * Math.PI * 2 + Math.random() * Math.PI * 0.5; // 增加角度随机性
+      const distance = 0.3 + Math.random() * 0.6; // 增加距离，让尾焰离子弹更远
+      const yOffset = (Math.random() - 0.5) * 0.6; // 增加Y方向随机性
       
       // 存储随机参数
       this.fireEffectParams.push({ angle, distance, yOffset });
@@ -95,12 +95,12 @@ export class DawnExplosionBulletEntity extends BulletEntity {
       // 确保尾焰在子弹周围分布
       const effectPosition = position.clone().add(offset);
       
-      // 每层尾焰的尺寸不同，添加随机性
-      const width = (2.0 - i * 0.15) * (0.8 + Math.random() * 0.4); // 随机宽度
-      const height = (2.5 - i * 0.2) * (0.8 + Math.random() * 0.4); // 随机高度
+      // 每层尾焰的尺寸不同，添加随机性，增大体积让尾焰更明显
+      const width = (1.2 - i * 0.05) * (0.7 + Math.random() * 0.3); // 增大宽度
+      const height = (1.5 - i * 0.08) * (0.7 + Math.random() * 0.3); // 增大高度
       
-      // 每层尾焰的持续时间不同
-      const duration = 6.0 - i * 0.5 + Math.random() * 1.0; // 随机持续时间
+      // 每层尾焰的持续时间不同，增加持续时间
+      const duration = 8.0 - i * 0.3 + Math.random() * 2.0; // 增加持续时间
       
       // 创建火焰特效
       const fireEffect = new FireEffect(effectPosition, duration, width, height);
