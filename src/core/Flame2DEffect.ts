@@ -5,10 +5,28 @@ export class Flame2DEffect {
   private ctx: CanvasRenderingContext2D;
   private width: number = window.innerWidth;
   private height: number = window.innerHeight;
-  private particles: THREE.Vector3[] = [];
   private camera: THREE.Camera | null = null;
   private lastUpdateTime: number = 0;
   private updateInterval: number = 0.016; // 60fps
+
+  // 粒子数据结构，包含位置和颜色
+  private particleData: { position: THREE.Vector3; color: THREE.Color }[] = [];
+
+  // 轮廓缓存
+  private cachedContour: { x: number; y: number }[] = [];
+  private lastContourUpdate: number = 0;
+  private contourUpdateDelay: number = 0.2;   // 每0.2秒重新采样一次轮廓
+
+  // 极坐标参数
+  private radialSegments: number = 72;         // 圆周分段数（越高轮廓越平滑）
+  private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
+
+  // 调试选项
+  public showParticles: boolean = true;
+
+  // 轮廓样式
+  private contourColor: string = '#ff8800';
+  private contourWidth: number = 3;
 
   constructor() {
     // 创建 canvas 元素
@@ -40,9 +58,6 @@ export class Flame2DEffect {
     this.camera = camera;
   }
 
-  // 粒子数据结构，包含位置和颜色
-  private particleData: { position: THREE.Vector3; color: THREE.Color }[] = [];
-
   public update(particles: { position: THREE.Vector3; color: THREE.Color }[]): void {
     const currentTime = performance.now() * 0.001;
     if (currentTime - this.lastUpdateTime < this.updateInterval) {
@@ -66,22 +81,56 @@ export class Flame2DEffect {
     // 清空画布
     this.ctx.clearRect(0, 0, this.width, this.height);
     
-    // 渲染 2D 粒子
-    this.particleData.forEach((particle, index) => {
-      // 将 3D 粒子转换为屏幕坐标
-      const screenPos = this.projectToScreen(particle.position);
-      if (!screenPos) return;
-      
-      // 计算粒子大小（基于深度）
-      const depth = this.getParticleDepth(particle.position);
-      const size = this.calculateParticleSize(depth);
-      
-      // 使用粒子的实际颜色
-      const color = this.colorToRGB(particle.color);
-      
-      // 绘制粒子
-      this.drawParticle(screenPos, size, color);
-    });
+    // 1. 投影所有粒子到屏幕坐标
+    const screenPoints: { x: number; y: number; depth: number; color: THREE.Color }[] = [];
+    for (const p of this.particleData) {
+      const ndc = p.position.clone().project(this.camera!);
+      if (ndc.z < 0 || ndc.z > 1) continue;
+      const screenX = (ndc.x + 1) / 2 * this.width;
+      const screenY = (1 - ndc.y) / 2 * this.height;
+      screenPoints.push({ x: screenX, y: screenY, depth: ndc.z, color: p.color });
+    }
+
+    if (screenPoints.length < 10) return;
+
+    // 2. 绘制粒子（调试）
+    if (this.showParticles) {
+      for (const pt of screenPoints) {
+        const size = Math.max(1, 4 / (pt.depth * 0.5 + 0.5));
+        const rgba = `rgba(${Math.floor(pt.color.r * 255)}, ${Math.floor(pt.color.g * 255)}, ${Math.floor(pt.color.b * 255)}, 0.6)`;
+        this.ctx.beginPath();
+        this.ctx.arc(pt.x, pt.y, size, 0, Math.PI * 2);
+        this.ctx.fillStyle = rgba;
+        this.ctx.fill();
+      }
+    }
+
+    // 3. 定时更新轮廓（极坐标外围点）
+    const now = performance.now() * 0.001;
+    if (now - this.lastContourUpdate > this.contourUpdateDelay) {
+      this.lastContourUpdate = now;
+      this.cachedContour = this.computePolarContour(screenPoints);
+    }
+
+    // 4. 绘制缓存的轮廓
+    if (this.cachedContour.length >= 3) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(this.cachedContour[0].x, this.cachedContour[0].y);
+      for (let i = 1; i < this.cachedContour.length; i++) {
+        this.ctx.lineTo(this.cachedContour[i].x, this.cachedContour[i].y);
+      }
+      this.ctx.closePath();
+
+      this.ctx.shadowBlur = 6;
+      this.ctx.shadowColor = this.contourColor;
+      this.ctx.strokeStyle = this.contourColor;
+      this.ctx.lineWidth = this.contourWidth;
+      this.ctx.stroke();
+
+      this.ctx.fillStyle = 'rgba(255, 100, 0, 0.1)';
+      this.ctx.fill();
+      this.ctx.shadowBlur = 0;
+    }
   }
 
   private projectToScreen(particle: THREE.Vector3): THREE.Vector2 | null {
@@ -136,6 +185,93 @@ export class Flame2DEffect {
     const g = Math.floor(color.g * 255);
     const b = Math.floor(color.b * 255);
     return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  /**
+   * 极坐标外围点提取（手动选取最外围点）
+   * 1. 计算粒子群的中心点
+   * 2. 按角度分组，每组取半径的百分位数点
+   * 3. 返回按角度排序的点列表（屏幕坐标）
+   */
+  private computePolarContour(points: { x: number; y: number; depth: number }[]): { x: number; y: number }[] {
+    if (points.length < 10) return [];
+
+    // 计算中心（所有点的平均）
+    let centerX = 0, centerY = 0;
+    for (const p of points) {
+      centerX += p.x;
+      centerY += p.y;
+    }
+    centerX /= points.length;
+    centerY /= points.length;
+
+    // 径向分组：每个角度区间收集半径
+    const radialGroups: number[][] = new Array(this.radialSegments).fill(null).map(() => []);
+    for (const p of points) {
+      let angle = Math.atan2(p.y - centerY, p.x - centerX);
+      let seg = Math.floor((angle + Math.PI) / (Math.PI * 2) * this.radialSegments);
+      seg = Math.min(this.radialSegments - 1, Math.max(0, seg));
+      const radius = Math.hypot(p.x - centerX, p.y - centerY);
+      radialGroups[seg].push(radius);
+    }
+
+    // 每个区间取指定百分位的半径，构建轮廓点
+    const contour: { x: number; y: number }[] = [];
+    for (let i = 0; i < this.radialSegments; i++) {
+      const radii = radialGroups[i];
+      if (radii.length === 0) continue;
+      radii.sort((a, b) => a - b);
+      const idx = Math.floor(radii.length * this.percentile);
+      const targetRadius = radii[Math.min(idx, radii.length - 1)];
+      const angle = (i / this.radialSegments) * Math.PI * 2 - Math.PI;
+      const x = centerX + Math.cos(angle) * targetRadius;
+      const y = centerY + Math.sin(angle) * targetRadius;
+      contour.push({ x, y });
+    }
+
+    if (contour.length < 3) return [];
+
+    // 按角度排序（确保闭合顺序正确）
+    contour.sort((a, b) => {
+      const angleA = Math.atan2(a.y - centerY, a.x - centerX);
+      const angleB = Math.atan2(b.y - centerY, b.x - centerX);
+      return angleA - angleB;
+    });
+
+    // 可选：平滑曲线
+    const smooth = this.smoothPolygon(contour, 30);
+    return smooth;
+  }
+
+  /**
+   * Catmull-Rom 样条平滑多边形顶点
+   */
+  private smoothPolygon(points: { x: number; y: number }[], segmentsPerEdge: number = 20): { x: number; y: number }[] {
+    if (points.length < 3) return points;
+    const result: { x: number; y: number }[] = [];
+    const n = points.length;
+    for (let i = 0; i < n; i++) {
+      const p0 = points[(i - 1 + n) % n];
+      const p1 = points[i];
+      const p2 = points[(i + 1) % n];
+      const p3 = points[(i + 2) % n];
+      for (let t = 0; t <= segmentsPerEdge; t++) {
+        const u = t / segmentsPerEdge;
+        const x = this.catmullRom(p0.x, p1.x, p2.x, p3.x, u);
+        const y = this.catmullRom(p0.y, p1.y, p2.y, p3.y, u);
+        result.push({ x, y });
+      }
+    }
+    return result.slice(0, result.length - 1);
+  }
+
+  private catmullRom(p0: number, p1: number, p2: number, p3: number, t: number): number {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    return 0.5 * ((2 * p1) +
+      (-p0 + p2) * t +
+      (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+      (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
   }
 
   private drawParticle(position: THREE.Vector2, size: number, color: string): void {
