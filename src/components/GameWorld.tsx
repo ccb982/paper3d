@@ -27,10 +27,12 @@ import { StoneBugEnemy } from '../entities/characters/StoneBugEnemy';
 import { TargetEntity } from '../entities/static/TargetEntity';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
-const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
+const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActiveShootingSystem, onActiveSystemChanged }: {
   getHeightAtRef: React.MutableRefObject<((x: number, z: number) => number) | null>;
   shootingManager: ShootingSystemManager | null;
   sceneRef: React.MutableRefObject<THREE.Scene | null>;
+  setActiveShootingSystem: (system: string) => void;
+  onActiveSystemChanged: (system: string) => void;
 }) => {
   const { camera, gl, scene } = useThree();
   const mode = useGameStore(s => s.mode);
@@ -339,6 +341,44 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     const playerChar = playerCharacterManager.getCurrentCharacter();
     if (playerChar) {
       characterPositionStore.setPosition(playerChar.position.x, playerChar.position.y, playerChar.position.z);
+      
+      // 检测周围敌人，自动切换模式
+      const entities = EntityManager.getInstance().getAllEntities();
+      const playerPos = playerChar.position;
+      const enemyDetectionRadius = 20; // 敌人检测半径
+      let hasEnemyNearby = false;
+      
+      for (const entity of entities) {
+        if (entity.type === 'character' && 'faction' in entity && entity.faction === 'enemy') {
+          const distance = playerPos.distanceTo(entity.position);
+          if (distance <= enemyDetectionRadius) {
+            hasEnemyNearby = true;
+            break;
+          }
+        }
+      }
+      
+      // 根据敌人检测结果切换模式
+      const currentMode = useGameStore.getState().mode;
+      if (hasEnemyNearby && currentMode !== GameMode.BATTLE) {
+        // 有敌人，进入战斗模式并切换到自由射击
+        useGameStore.getState().startBattle();
+        if (shootingManager) {
+          shootingManager.setActiveSystem('freestyle');
+          setActiveShootingSystem('freestyle');
+          onActiveSystemChanged('freestyle');
+          console.log('检测到敌人，自动进入战斗模式和自由射击');
+        }
+      } else if (!hasEnemyNearby && currentMode === GameMode.BATTLE) {
+        // 没有敌人，返回日常模式
+        useGameStore.getState().exitBattle();
+        if (shootingManager) {
+          shootingManager.setActiveSystem('lockon');
+          setActiveShootingSystem('lockon');
+          onActiveSystemChanged('lockon');
+          console.log('敌人已离开，自动返回日常模式和锁定射击');
+        }
+      }
     }
     
     // 更新特效
@@ -779,6 +819,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         getHeightAtRef={getHeightAtRef}
         shootingManager={shootingManager}
         sceneRef={sceneRef}
+        setActiveShootingSystem={setActiveShootingSystem}
+        onActiveSystemChanged={onActiveSystemChanged}
       />
     </>
   );
