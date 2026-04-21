@@ -405,8 +405,9 @@ class FlameContour3D {
     const centerX = (minX + maxX) / 2;
     const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
+    const time = performance.now() * 0.001;
     
-    this.worldPoints = template.map(p => {
+    this.worldPoints = template.map((p, index) => {
       let x, y, z;
       if (isTopView) {
         // 俯视：X 和 Z 由模板 x,y 决定，Y 取粒子云中部高度
@@ -415,7 +416,20 @@ class FlameContour3D {
         y = centerY;
       } else {
         // 侧面：X 和 Y 由模板决定，Z 取粒子云中间值
-        x = minX + (p.x + 0.5) * width;
+        let templateX = p.x;
+        
+        // 增加侧面的流动性，特别是顶部
+        if (p.y > 0.7) { // 顶部30%区域
+          // 顶部区域的动态效果
+          const topFactor = (p.y - 0.7) / 0.3;
+          templateX += 0.15 * Math.sin(time * 3 + index * 0.1) * topFactor;
+          templateX += 0.1 * Math.cos(time * 2 + index * 0.15) * topFactor;
+        } else if (p.y > 0.4) { // 中部区域
+          const midFactor = (p.y - 0.4) / 0.3;
+          templateX += 0.08 * Math.sin(time * 2 + index * 0.2) * midFactor;
+        }
+        
+        x = minX + (templateX + 0.5) * width;
         // 修正 y 映射：模板 y=0 是底部，y=1 是顶部，所以需要反转
         y = maxY - p.y * height; // maxY 是顶部，minY 是底部
         z = centerZ;
@@ -446,9 +460,28 @@ class FlameContour3D {
   private getTopTemplate(): { x: number; y: number }[] {
     const pts: { x: number; y: number }[] = [];
     const segments = 60;
+    const time = performance.now() * 0.001;
+    
     for (let i = 0; i <= segments; i++) {
       const angle = (i / segments) * Math.PI * 2;
-      const r = 0.8 + 0.3 * Math.cos(3 * angle); // 三瓣
+      
+      // 基础半径
+      let r = 0.6;
+      
+      // 多波叠加增加流动性
+      r += 0.2 * Math.sin(3 * angle + time * 2);
+      r += 0.15 * Math.cos(5 * angle - time * 1.5);
+      r += 0.1 * Math.sin(7 * angle + time * 3);
+      
+      // 顶部区域额外的动态效果
+      const topAngle = Math.abs(((angle + Math.PI) % (Math.PI * 2)) - Math.PI);
+      if (topAngle < Math.PI / 3) { // 顶部120度范围
+        r += 0.3 * Math.sin(time * 4) * Math.cos(topAngle * 3);
+      }
+      
+      // 确保半径不为负
+      r = Math.max(0.3, r);
+      
       const x = Math.cos(angle) * r;
       const y = Math.sin(angle) * r;
       pts.push({ x, y });
