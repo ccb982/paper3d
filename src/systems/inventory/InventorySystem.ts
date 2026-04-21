@@ -1,7 +1,8 @@
-import { Item, ItemFactory, ItemType, ItemRarity } from '../../entities/items/Item';
+import { Item, ItemFactory, ItemType, ItemRarity } from '../../entities/items/ItemData';
 
 export interface InventorySlot {
   item: Item | null;
+  itemId: string | null; // 物品ID，用于标记格子属于什么物品
   x: number;
   y: number;
 }
@@ -33,6 +34,7 @@ export class InventorySystem {
       for (let x = 0; x < this.width; x++) {
         this.slots.push({
           item: null,
+          itemId: null,
           x,
           y
         });
@@ -87,10 +89,59 @@ export class InventorySystem {
       }
     });
 
+    const shield = ItemFactory.createItem({
+      name: '盾牌',
+      type: ItemType.ARMOR,
+      description: '提供防御的盾牌',
+      icon: '/textures/items/shield.png',
+      quantity: 1,
+      maxStack: 1,
+      rarity: ItemRarity.UNCOMMON,
+      size: { width: 2, height: 2 },
+      properties: {
+        defense: 15,
+        durability: 80
+      }
+    });
+
+    const staff = ItemFactory.createItem({
+      name: '法杖',
+      type: ItemType.WEAPON,
+      description: '魔法攻击武器',
+      icon: '/textures/items/staff.png',
+      quantity: 1,
+      maxStack: 1,
+      rarity: ItemRarity.RARE,
+      size: { width: 1, height: 3 },
+      properties: {
+        magicDamage: 25,
+        durability: 70
+      }
+    });
+
+    const bow = ItemFactory.createItem({
+      name: '弓箭',
+      type: ItemType.WEAPON,
+      description: '远程攻击武器',
+      icon: '/textures/items/bow.png',
+      quantity: 1,
+      maxStack: 1,
+      rarity: ItemRarity.UNCOMMON,
+      size: { width: 2, height: 1 },
+      properties: {
+        damage: 15,
+        range: 50,
+        durability: 90
+      }
+    });
+
     // 将物品添加到背包
     this.addItem(healthPotion, 0, 0);
     this.addItem(manaPotion, 1, 0);
     this.addItem(sword, 0, 1);
+    this.addItem(shield, 2, 0);
+    this.addItem(staff, 0, 3);
+    this.addItem(bow, 2, 2);
   }
 
   /**
@@ -116,6 +167,7 @@ export class InventorySystem {
         const slotIndex = this.getSlotIndex(x + dx, y + dy);
         if (slotIndex !== -1) {
           this.slots[slotIndex].item = item;
+          this.slots[slotIndex].itemId = item.id;
         }
       }
     }
@@ -142,6 +194,7 @@ export class InventorySystem {
     for (const slot of this.slots) {
       if (slot.item && slot.item.id === itemId) {
         slot.item = null;
+        slot.itemId = null;
       }
     }
 

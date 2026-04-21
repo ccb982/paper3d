@@ -417,6 +417,14 @@ canvas {
   border-radius: 4px;
 }
 
+/* 物品颜色块样式 */
+.item-color-block {
+  width: 90%;
+  height: 90%;
+  border-radius: 4px;
+  box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.3);
+}
+
 /* 物品数量样式 */
 .item-quantity {
   position: absolute;

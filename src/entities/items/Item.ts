@@ -1,85 +1,68 @@
-export interface Item {
-  /** 物品唯一标识符 */
+// 物品类型
+export class Item {
   id: string;
-  /** 物品名称 */
   name: string;
-  /** 物品类型 */
-  type: ItemType;
-  /** 物品描述 */
-  description: string;
-  /** 物品图标路径 */
-  icon: string;
-  /** 物品数量 */
-  quantity: number;
-  /** 物品最大堆叠数量 */
-  maxStack: number;
-  /** 物品品质 */
-  rarity: ItemRarity;
-  /** 物品尺寸（占据的格子大小） */
-  size: {
-    width: number;
-    height: number;
-  };
-  /** 物品属性（可选） */
-  properties?: Record<string, any>;
-  /** 物品效果（可选） */
-  effects?: ItemEffect[];
-}
-
-export enum ItemType {
-  /** 消耗品 */
-  CONSUMABLE = 'consumable',
-  /** 武器 */
-  WEAPON = 'weapon',
-  /** 防具 */
-  ARMOR = 'armor',
-  /** 材料 */
-  MATERIAL = 'material',
-  /** 其他 */
-  OTHER = 'other'
-}
-
-export enum ItemRarity {
-  /** 普通 */
-  COMMON = 'common',
-  /** 优秀 */
-  UNCOMMON = 'uncommon',
-  /** 稀有 */
-  RARE = 'rare',
-  /** 史诗 */
-  EPIC = 'epic',
-  /** 传说 */
-  LEGENDARY = 'legendary'
-}
-
-export interface ItemEffect {
-  /** 效果类型 */
   type: string;
-  /** 效果值 */
-  value: number;
-  /** 效果持续时间（秒，可选） */
-  duration?: number;
-  /** 效果描述 */
   description: string;
+  icon: string;
+  quantity: number;
+  maxStack: number;
+  rarity: string;
+  size: { width: number; height: number };
+  properties?: Record<string, any>;
+  effects?: ItemEffect[];
+
+  constructor(itemData: Partial<Item>) {
+    this.id = itemData.id || `item_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+    this.name = itemData.name || '未命名物品';
+    this.type = itemData.type || ItemType.OTHER;
+    this.description = itemData.description || '暂无描述';
+    this.icon = itemData.icon || '/textures/items/default.png';
+    this.quantity = itemData.quantity || 1;
+    this.maxStack = itemData.maxStack || 99;
+    this.rarity = itemData.rarity || ItemRarity.COMMON;
+    this.size = itemData.size || { width: 1, height: 1 };
+    this.properties = itemData.properties || {};
+    this.effects = itemData.effects || [];
+  }
 }
 
+// 物品类型枚举
+export const ItemType = {
+  CONSUMABLE: 'consumable',
+  WEAPON: 'weapon',
+  ARMOR: 'armor',
+  MATERIAL: 'material',
+  OTHER: 'other'
+} as const;
+
+// 物品品质枚举
+export const ItemRarity = {
+  COMMON: 'common',
+  UNCOMMON: 'uncommon',
+  RARE: 'rare',
+  EPIC: 'epic',
+  LEGENDARY: 'legendary'
+} as const;
+
+// 物品效果类型
+export class ItemEffect {
+  type: string;
+  value: number;
+  duration?: number;
+  description: string;
+
+  constructor(effectData: Partial<ItemEffect>) {
+    this.type = effectData.type || '';
+    this.value = effectData.value || 0;
+    this.duration = effectData.duration;
+    this.description = effectData.description || '';
+  }
+}
+
+// 物品工厂类
 export class ItemFactory {
-  /**
-   * 创建物品实例
-   */
   static createItem(itemData: Partial<Item>): Item {
-    return {
-      id: itemData.id || `item_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      name: itemData.name || '未命名物品',
-      type: itemData.type || ItemType.OTHER,
-      description: itemData.description || '暂无描述',
-      icon: itemData.icon || '/textures/items/default.png',
-      quantity: itemData.quantity || 1,
-      maxStack: itemData.maxStack || 99,
-      rarity: itemData.rarity || ItemRarity.COMMON,
-      size: itemData.size || { width: 1, height: 1 },
-      properties: itemData.properties || {},
-      effects: itemData.effects || []
-    };
+    return new Item(itemData);
   }
 }
