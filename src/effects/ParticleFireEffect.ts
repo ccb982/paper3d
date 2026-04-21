@@ -299,6 +299,7 @@ class FlameContour3D {
   private updateInterval: number = 0.2; // 每0.2秒更新一次轮廓
   private camera: THREE.Camera | null = null;
   private parentGroup: THREE.Group;
+  private currentLineLoop: THREE.LineLoop | null = null;
 
   // 侧面模板（归一化坐标，y 从底部到顶部，x 左右，以中心为0）
   private sideTemplateNorm: { x: number; y: number }[] = [
@@ -463,17 +464,16 @@ class FlameContour3D {
     curve.closed = true;
     const smoothPoints = curve.getPoints(100);
 
-    // 清理所有子对象，确保不会有残留的几何体
-    while (this.group.children.length > 0) {
-      const child = this.group.children[0];
-      this.group.remove(child);
-      // 清理几何体和材质
-      if (child instanceof THREE.Mesh && child.geometry) {
-        child.geometry.dispose();
+    // 清理之前的线条，只清理自己创建的LineLoop
+    if (this.currentLineLoop) {
+      this.group.remove(this.currentLineLoop);
+      if (this.currentLineLoop.geometry) {
+        this.currentLineLoop.geometry.dispose();
       }
-      if (child instanceof THREE.Line && child.geometry) {
-        child.geometry.dispose();
+      if (this.currentLineLoop.material) {
+        this.currentLineLoop.material.dispose();
       }
+      this.currentLineLoop = null;
     }
 
     // 使用 LineLoop（简单，性能好）
@@ -481,19 +481,20 @@ class FlameContour3D {
     const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff6600, linewidth: 2 }); // linewidth not supported everywhere, but ok
     const lineLoop = new THREE.LineLoop(lineGeometry, lineMaterial);
     this.group.add(lineLoop);
+    this.currentLineLoop = lineLoop;
   }
 
   public dispose(): void {
-    // 清理所有子对象
-    while (this.group.children.length > 0) {
-      const child = this.group.children[0];
-      this.group.remove(child);
-      if (child instanceof THREE.Mesh && child.geometry) {
-        child.geometry.dispose();
+    // 清理自己创建的LineLoop
+    if (this.currentLineLoop) {
+      this.group.remove(this.currentLineLoop);
+      if (this.currentLineLoop.geometry) {
+        this.currentLineLoop.geometry.dispose();
       }
-      if (child instanceof THREE.Line && child.geometry) {
-        child.geometry.dispose();
+      if (this.currentLineLoop.material) {
+        this.currentLineLoop.material.dispose();
       }
+      this.currentLineLoop = null;
     }
     
     if (this.parentGroup && this.group.parent) {
