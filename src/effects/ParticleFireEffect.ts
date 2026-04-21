@@ -93,10 +93,7 @@ export class ParticleFireEffect {
       stencilWrite: false, // 粒子只测试模板，不写入
       stencilFunc: THREE.EqualStencilFunc, // 只在模板值为1的区域绘制
       stencilRef: 1,
-      stencilFuncMask: 0xff,
-      stencilFail: THREE.KEEP_STENCIL_OP,
-      stencilZFail: THREE.KEEP_STENCIL_OP,
-      stencilZPass: THREE.KEEP_STENCIL_OP
+      stencilFuncMask: 0xff
     });
     
     this.points = new THREE.Points(this.geometry, this.material);
@@ -252,8 +249,8 @@ export class ParticleFireEffect {
       // 强制更新轮廓位置，确保始终覆盖火焰
       this.contour3D.update(particleData);
       
-      // 更新模板网格
-      this.updateStencilMesh();
+      // 更新模板网格，传递粒子数据以支持视角变化时的重新计算
+      this.updateStencilMesh(particleData);
     }
     
     // 检查是否达到持续时间
@@ -292,8 +289,9 @@ export class ParticleFireEffect {
 
   /**
    * 更新模板网格和填充网格
+   * @param particles 粒子数据，用于在视角变化时重新计算填充网格
    */
-  private updateStencilMesh(): void {
+  private updateStencilMesh(particles?: { position: THREE.Vector3; color: THREE.Color }[]): void {
     if (!this.contour3D) return;
     
     // 清理旧的模板网格
@@ -320,10 +318,7 @@ export class ParticleFireEffect {
         stencilWrite: true, // 写入模板缓冲
         stencilFunc: THREE.AlwaysStencilFunc, // 总是通过模板测试
         stencilRef: 1, // 写入值为1
-        stencilFuncMask: 0xff,
-        stencilFail: THREE.ReplaceStencilOp, // 测试失败时替换
-        stencilZFail: THREE.ReplaceStencilOp, // Z测试失败时替换
-        stencilZPass: THREE.ReplaceStencilOp // Z测试通过时替换
+        stencilFuncMask: 0xff
       });
       
       // 将模板网格添加到火焰特效的 group 中
@@ -331,8 +326,8 @@ export class ParticleFireEffect {
       this.stencilMesh = newStencilMesh;
     }
     
-    // 获取新的填充网格
-    const newFillMesh = this.contour3D.getFillMesh();
+    // 获取新的填充网格，传递粒子数据以支持视角变化时的重新计算
+    const newFillMesh = this.contour3D.getFillMesh(particles);
     if (newFillMesh) {
       // 将填充网格添加到轮廓的 group 中，这样会继承 billboard 效果
       this.contour3D.addFillMesh(newFillMesh);
@@ -432,9 +427,10 @@ class FlameContour3D {
    * @param particles 粒子数组，包含 position 和 color
    */
   public update(particles: { position: THREE.Vector3; color: THREE.Color }[]): void {
-    const now = performance.now() * 0.001;
-    if (now - this.lastUpdateTime < this.updateInterval) return;
-    this.lastUpdateTime = now;
+    // 移除更新间隔限制，确保每次调用都能更新
+    // const now = performance.now() * 0.001;
+    // if (now - this.lastUpdateTime < this.updateInterval) return;
+    // this.lastUpdateTime = now;
 
     if (particles.length < 10) return;
 
@@ -660,22 +656,94 @@ class FlameContour3D {
 
   /**
    * 获取填充轮廓内部的蓝色平面
+   * @param particles 粒子数据，用于在视角变化时重新计算
    * @returns THREE.Mesh | null
    */
-  public getFillMesh(): THREE.Mesh | null {
-    if (this.worldPoints.length < 3) return null;
+  public getFillMesh(particles?: { position: THREE.Vector3; color: THREE.Color }[]): THREE.Mesh | null {
+    let worldPointsToUse = this.worldPoints;
+    
+    // 如果提供了粒子数据，重新计算 worldPoints（用于视角变化时）
+    if (particles && particles.length >= 10) {
+      // 过滤粒子
+      const filtered = particles.filter(p => {
+        const { r, g, b } = p.color;
+        return r > 0.3;
+      });
+      
+      if (filtered.length >= 10) {
+        // 计算包围盒
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        for (const p of filtered) {
+          const { x, y, z } = p.position;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+          if (z < minZ) minZ = z;
+          if (z > maxZ) maxZ = z;
+        }
+        
+        const width = maxX - minX;
+        const height = maxY - minY;
+        const depth = maxZ - minZ;
+        
+        if (width >= 0.1 && height >= 0.1) {
+          // 根据摄像机角度判断视角
+          let isTopView = false;
+          if (this.camera) {
+            const cameraDirection = new THREE.Vector3();
+            this.camera.getWorldDirection(cameraDirection);
+            isTopView = cameraDirection.y < -0.7;
+          } else {
+            isTopView = depth > width * 1.5;
+          }
+          
+          const template = isTopView ? this.getTopTemplate() : this.sideTemplateNorm;
+          const centerX = (minX + maxX) / 2;
+          const centerY = (minY + maxY) / 2;
+          const centerZ = (minZ + maxZ) / 2;
+          const time = performance.now() * 0.001;
+          
+          // 重新计算 worldPoints
+          worldPointsToUse = template.map((p, index) => {
+            let x, y, z;
+            if (isTopView) {
+              x = centerX + p.x * width / 2;
+              z = centerZ + p.y * depth / 2;
+              y = centerY;
+            } else {
+              let templateX = p.x;
+              if (p.y > 0.7) {
+                const topFactor = (p.y - 0.7) / 0.3;
+                templateX += 0.15 * Math.sin(time * 3 + index * 0.1) * topFactor;
+                templateX += 0.1 * Math.cos(time * 2 + index * 0.15) * topFactor;
+              } else if (p.y > 0.4) {
+                const midFactor = (p.y - 0.4) / 0.3;
+                templateX += 0.08 * Math.sin(time * 2 + index * 0.2) * midFactor;
+              }
+              x = minX + (templateX + 0.5) * width;
+              y = maxY - p.y * height;
+              z = centerZ;
+            }
+            return new THREE.Vector3(x, y, z);
+          });
+        }
+      }
+    }
+    
+    if (worldPointsToUse.length < 3) return null;
     
     // 检查是否是侧面视图（所有点的 z 坐标相同）
-    const zValues = this.worldPoints.map(p => p.z);
+    const zValues = worldPointsToUse.map(p => p.z);
     const isSideView = zValues.every(z => Math.abs(z - zValues[0]) < 0.01);
     
     let points2D: THREE.Vector2[];
     if (isSideView) {
       // 侧面视图：使用 x 和 y 坐标
-      points2D = this.worldPoints.map(p => new THREE.Vector2(p.x, p.y));
+      points2D = worldPointsToUse.map(p => new THREE.Vector2(p.x, p.y));
     } else {
       // 俯视图：使用 x 和 z 坐标
-      points2D = this.worldPoints.map(p => new THREE.Vector2(p.x, p.z));
+      points2D = worldPointsToUse.map(p => new THREE.Vector2(p.x, p.z));
     }
     
     // 构建 Shape
@@ -699,15 +767,17 @@ class FlameContour3D {
     const mesh = new THREE.Mesh(geometry, material);
     
     // 设置位置
-    const centerY = (this.worldPoints.reduce((sum, p) => sum + p.y, 0) / this.worldPoints.length);
-    const centerZ = (this.worldPoints.reduce((sum, p) => sum + p.z, 0) / this.worldPoints.length);
+    const centerY = (worldPointsToUse.reduce((sum, p) => sum + p.y, 0) / worldPointsToUse.length);
+    const centerZ = (worldPointsToUse.reduce((sum, p) => sum + p.z, 0) / worldPointsToUse.length);
     
     if (isSideView) {
       // 侧面视图：设置 z 坐标
       mesh.position.z = centerZ;
     } else {
-      // 俯视图：设置 y 坐标
+      // 俯视图：设置 y 坐标并旋转为水平
       mesh.position.y = centerY;
+      // 旋转 90 度，使平面平行于 XZ 平面
+      mesh.rotation.x = Math.PI / 2;
     }
     
     return mesh;
