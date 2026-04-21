@@ -207,6 +207,24 @@ export class InventorySystem {
   }
 
   /**
+   * 从指定位置移除物品
+   */
+  public removeItemAt(x: number, y: number): boolean {
+    const slotIndex = this.getSlotIndex(x, y);
+    if (slotIndex === -1) {
+      return false;
+    }
+
+    const slot = this.slots[slotIndex];
+    if (!slot.item) {
+      return false;
+    }
+
+    const itemId = slot.item.id;
+    return this.removeItem(itemId);
+  }
+
+  /**
    * 获取背包中的所有物品
    */
   public getItems(): Item[] {

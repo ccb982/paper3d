@@ -26,6 +26,15 @@ interface BackpackUIProps {
 export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) => {
   const [slots, setSlots] = useState(InventorySystem.getInstance().getSlots());
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
+  const [draggedItem, setDraggedItem] = useState<{
+    item: any;
+    startPosition: { x: number; y: number };
+  } | null>(null);
+  const [tempItem, setTempItem] = useState<{
+    item: any;
+    startPosition: { x: number; y: number };
+  } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -52,6 +61,63 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
     setHoveredItemId(null);
   };
 
+  // 处理拖拽开始
+  const handleDragStart = (slot: any) => {
+    if (slot.item) {
+      // 记录拖拽的物品和起始位置
+      setDraggedItem({
+        item: slot.item,
+        startPosition: { x: slot.x, y: slot.y }
+      });
+      setTempItem({
+        item: slot.item,
+        startPosition: { x: slot.x, y: slot.y }
+      });
+      setIsDragging(true);
+      
+      // 从背包中移除物品
+      InventorySystem.getInstance().removeItemAt(slot.x, slot.y);
+    }
+  };
+
+  // 处理拖拽结束
+  const handleDragEnd = () => {
+    if (tempItem && draggedItem) {
+      // 尝试放置物品
+      const inventory = InventorySystem.getInstance();
+      const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
+      
+      if (!success) {
+        // 如果放置失败，将物品放回原位置
+        inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
+      }
+    }
+    
+    // 重置拖拽状态
+    setDraggedItem(null);
+    setTempItem(null);
+    setIsDragging(false);
+  };
+
+  // 处理鼠标移动
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isDragging && tempItem) {
+      // 计算鼠标在背包网格中的位置
+      const backpackElement = e.currentTarget;
+      const rect = backpackElement.getBoundingClientRect();
+      const x = Math.floor((e.clientX - rect.left - 10) / 62); // 10px padding + 60px 格子宽度 + 2px 间距
+      const y = Math.floor((e.clientY - rect.top - 10) / 62); // 10px padding + 60px 格子高度 + 2px 间距
+      
+      // 检查位置是否有效
+      if (x >= 0 && x < 5 && y >= 0 && y < 10) {
+        setTempItem(prev => prev ? {
+          ...prev,
+          startPosition: { x, y }
+        } : null);
+      }
+    }
+  };
+
   if (!isVisible) {
     return null;
   }
@@ -64,7 +130,12 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
         <div className="backpack-content">
-          <div className="backpack-grid" style={{ position: 'relative' }}>
+          <div 
+            className="backpack-grid" 
+            style={{ position: 'relative' }}
+            onMouseUp={handleDragEnd}
+            onMouseMove={handleMouseMove}
+          >
             {(() => {
               // 找到每个物品的起始格子（左上角）
               const itemStartSlots = new Map<string, { x: number, y: number }>();
@@ -90,6 +161,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                     className={`backpack-slot ${isHovered ? 'backpack-slot-hovered' : ''}`}
                     onMouseEnter={() => handleMouseEnter(slot.itemId)}
                     onMouseLeave={handleMouseLeave}
+                    onMouseDown={() => handleDragStart(slot)}
                     style={{ position: 'relative', zIndex: 1 }}
                   >
                   </div>
@@ -120,6 +192,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                       }}
                       onMouseEnter={() => handleMouseEnter(slot.itemId)}
                       onMouseLeave={handleMouseLeave}
+                      onMouseDown={() => handleDragStart(slot)}
                     >
                       <div 
                         style={{ 
@@ -141,11 +214,46 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                 return null;
               }).filter(Boolean);
 
-              // 组合格子和物品
+              // 渲染临时物品（拖拽中的物品）
+              const tempItemElement = tempItem ? (
+                <div 
+                  style={{
+                    position: 'absolute',
+                    left: `${10 + tempItem.startPosition.x * 62}px`,
+                    top: `${10 + tempItem.startPosition.y * 62}px`,
+                    zIndex: 200,
+                    width: `${tempItem.item.size.width * 60}px`,
+                    height: `${tempItem.item.size.height * 60}px`,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    opacity: 0.8,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div 
+                    style={{ 
+                      backgroundColor: getColorForItemType(tempItem.item.type),
+                      width: '100%',
+                      height: '100%',
+                      borderRadius: '6px',
+                      boxShadow: 'inset 0 0 5px rgba(0, 0, 0, 0.3)'
+                    }}
+                  />
+                  {tempItem.item.quantity > 1 && (
+                    <div style={{ position: 'absolute', bottom: '2px', right: '2px', zIndex: 2, background: 'rgba(0, 0, 0, 0.7)', color: 'white', fontSize: '12px', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', minWidth: '16px' }}>
+                      {tempItem.item.quantity}
+                    </div>
+                  )}
+                </div>
+              ) : null;
+
+              // 组合格子、物品和临时物品
               return (
                 <>
                   {gridSlots}
                   {itemElements}
+                  {tempItemElement}
                 </>
               );
             })()}
