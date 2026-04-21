@@ -25,6 +25,7 @@ import { FriendlyEntity } from '../entities/characters/FriendlyEntity';
 import { EnemyEntity } from '../entities/characters/EnemyEntity';
 import { StoneBugEnemy } from '../entities/characters/StoneBugEnemy';
 import { TargetEntity } from '../entities/static/TargetEntity';
+import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActiveShootingSystem, onActiveSystemChanged }: {
@@ -568,6 +569,20 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         )
       );
       entityManager.addEntity(targetEntity);
+    }
+    
+    // 创建箱子实体
+    for (let i = 0; i < 3; i++) {
+      const boxEntity = new Box(
+        `box-${i}`,
+        new THREE.Vector3(
+          Math.random() * 30 - 15,
+          0.5, // 箱子底部与地面平齐
+          Math.random() * 30 - 15
+        ),
+        new THREE.Vector3(1, 1, 1) // 箱子尺寸
+      );
+      entityManager.addEntity(boxEntity);
     }
     
     // 在地图上创建一个持续时间无限的火焰特效
