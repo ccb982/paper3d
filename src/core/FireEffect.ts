@@ -1,5 +1,5 @@
 import { BaseEffect } from './BaseEffect';
-import { Flame2DEffect } from './Flame2DEffect';
+import { FlameContour3D } from './FlameContour3D';
 import * as THREE from 'three';
 
 class FireParticle {
@@ -35,7 +35,7 @@ export class FireEffect extends BaseEffect {
   private emitRate: number = 50;
   private emitAccumulator: number = 0;
   private elapsed: number = 0;
-  private flame2D: Flame2DEffect;
+  private contour3D: FlameContour3D | null = null;
 
   constructor(position: THREE.Vector3, duration: number = Infinity) {
     super(duration);
@@ -94,10 +94,13 @@ export class FireEffect extends BaseEffect {
     this.group.add(this.points);
     
     const scene = (window as any).gameScene;
-    if (scene) scene.add(this.group);
+    if (scene) {
+      scene.add(this.group);
+      // 使用单例模式获取 FlameContour3D 实例
+      this.contour3D = FlameContour3D.getInstance(scene);
+    }
     
-    // 初始化 2D 火焰效果（使用单例）
-    this.flame2D = Flame2DEffect.getInstance();
+    // 初始化 3D 火焰轮廓效果
   }
 
   private emitParticle() {
@@ -219,8 +222,8 @@ export class FireEffect extends BaseEffect {
     // 更新几何体
     this.updateGeometry();
     
-    // 更新 2D 火焰效果
-    if (this.flame2D) {
+    // 更新 3D 火焰轮廓效果
+    if (this.contour3D) {
       // 将粒子局部坐标转换为世界坐标，并包含颜色信息
       const particleData = this.particles.map(p => {
         const worldPos = p.position.clone();
@@ -230,14 +233,17 @@ export class FireEffect extends BaseEffect {
           color: p.color
         };
       });
+      console.log('FireEffect: Updating 3D contour with', particleData.length, 'particles');
+      
+      // 获取相机并传递给轮廓
       const camera = (window as any).cameraStore?.getCamera();
       if (camera) {
-        console.log('FireEffect: Updating 2D flame with', particleData.length, 'particles');
-        this.flame2D.setCamera(camera);
-        this.flame2D.update(particleData);
-      } else {
-        console.log('FireEffect: Camera not available from cameraStore');
+        this.contour3D.setCamera(camera);
+        // 每帧更新 billboard 效果，保持轮廓面向相机
+        this.contour3D.updateBillboard();
       }
+      
+      this.contour3D.update(particleData);
     }
     
     // 移除时间检查，使特效持续无限时间
@@ -278,9 +284,9 @@ export class FireEffect extends BaseEffect {
     const scene = (window as any).gameScene;
     if (scene && this.group.parent) scene.remove(this.group);
     
-    // 清理 2D 火焰效果
-    if (this.flame2D) {
-      this.flame2D.dispose();
+    // 清理 3D 火焰轮廓效果
+    if (this.contour3D) {
+      this.contour3D.dispose();
     }
     
     this.geometry.dispose();

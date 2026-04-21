@@ -1,0 +1,189 @@
+import * as THREE from 'three';
+
+export class FlameContour3D {
+  private static instance: FlameContour3D | null = null;
+  private group: THREE.Group;
+  private tubeMesh: THREE.Mesh | null = null;
+  private worldPoints: THREE.Vector3[] = [];
+  private lastUpdateTime: number = 0;
+  private updateInterval: number = 0.2; // 每0.2秒更新一次轮廓
+  private camera: THREE.Camera | null = null;
+  private scene: THREE.Scene | null = null;
+
+  // 侧面模板（归一化坐标，y 从底部到顶部，x 左右）
+  private sideTemplateNorm: { x: number; y: number }[] = [
+    // 底部 U 形（y=0 底部）
+    { x: -0.5, y: 0.0 }, { x: -0.4, y: 0.05 }, { x: -0.3, y: 0.08 },
+    { x: -0.2, y: 0.1 }, { x: -0.1, y: 0.11 }, { x: 0.0, y: 0.12 },
+    { x: 0.1, y: 0.11 }, { x: 0.2, y: 0.1 }, { x: 0.3, y: 0.08 },
+    { x: 0.4, y: 0.05 }, { x: 0.5, y: 0.0 },
+    // 右侧上升至右峰
+    { x: 0.45, y: 0.3 }, { x: 0.4, y: 0.5 }, { x: 0.35, y: 0.7 },
+    { x: 0.3, y: 0.9 }, { x: 0.2, y: 1.0 },   // 右峰
+    // 中峰
+    { x: 0.1, y: 0.85 }, { x: 0.0, y: 0.95 }, { x: -0.1, y: 0.85 },
+    // 左峰
+    { x: -0.2, y: 1.0 }, { x: -0.3, y: 0.9 }, { x: -0.35, y: 0.7 },
+    { x: -0.4, y: 0.5 }, { x: -0.45, y: 0.3 }, { x: -0.5, y: 0.0 },
+  ];
+
+  private constructor(scene: THREE.Scene) {
+    this.scene = scene;
+    this.group = new THREE.Group();
+    scene.add(this.group);
+  }
+
+  public static getInstance(scene: THREE.Scene): FlameContour3D {
+    if (!FlameContour3D.instance) {
+      FlameContour3D.instance = new FlameContour3D(scene);
+    }
+    return FlameContour3D.instance;
+  }
+
+  /**
+   * 设置相机，用于billboard效果
+   * @param camera THREE.Camera实例
+   */
+  public setCamera(camera: THREE.Camera): void {
+    this.camera = camera;
+  }
+
+  /**
+   * 根据粒子云的世界坐标位置和颜色，更新轮廓
+   * @param particles 粒子数组，包含 position 和 color
+   */
+  public update(particles: { position: THREE.Vector3; color: THREE.Color }[]): void {
+    const now = performance.now() * 0.001;
+    if (now - this.lastUpdateTime < this.updateInterval) return;
+    this.lastUpdateTime = now;
+
+    if (particles.length < 20) return;
+
+    // 1. 过滤颜色：只保留红白色和红色（焰底和火焰外缘），排除橙色
+    const filtered = particles.filter(p => {
+      const { r, g, b } = p.color;
+      const isRedWhite = r > 0.9 && g > 0.7 && b > 0.7;
+      const isRed = r > 0.7 && g < 0.3 && b < 0.2;
+      const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
+      return (isRedWhite || isRed) && !isOrange;
+    });
+    if (filtered.length < 20) return;
+
+    // 2. 计算包围盒
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const p of filtered) {
+      const { x, y, z } = p.position;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+      if (z < minZ) minZ = z;
+      if (z > maxZ) maxZ = z;
+    }
+    const width = maxX - minX;
+    const height = maxY - minY;
+    const depth = maxZ - minZ;
+    if (width < 0.1 || height < 0.1) return;
+
+    // 3. 判断视角：如果深度远大于宽度，则使用俯视模板，否则使用侧面模板
+    const isTopView = depth > width * 1.5;
+    const template = isTopView ? this.getTopTemplate() : this.sideTemplateNorm;
+
+    // 4. 将模板缩放到世界坐标
+    const centerX = (minX + maxX) / 2;
+    const centerZ = (minZ + maxZ) / 2;
+    this.worldPoints = template.map(p => {
+      let x, y, z;
+      if (isTopView) {
+        // 俯视：X 和 Z 由模板 x,y 决定，Y 取粒子云中部高度
+        x = centerX + p.x * width / 2;
+        z = centerZ + p.y * depth / 2;
+        y = (minY + maxY) / 2;
+      } else {
+        // 侧面：X 和 Y 由模板决定，Z 取粒子云中间值
+        x = minX + (p.x + 0.5) * width;
+        y = minY + p.y * height;
+        z = (minZ + maxZ) / 2;
+      }
+      return new THREE.Vector3(x, y, z);
+    });
+
+    // 5. 创建或更新 3D 线条
+    this.updateGeometry();
+  }
+
+  /**
+   * 更新几何体并应用billboard效果
+   */
+  public updateBillboard(): void {
+    if (!this.camera) return;
+    
+    // 让轮廓始终面向相机
+    this.group.quaternion.copy(this.camera.quaternion);
+  }
+
+  private getTopTemplate(): { x: number; y: number }[] {
+    const pts: { x: number; y: number }[] = [];
+    const segments = 60;
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      const r = 0.8 + 0.3 * Math.cos(3 * angle); // 三瓣
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      pts.push({ x, y });
+    }
+    return pts;
+  }
+
+  private updateGeometry(): void {
+    if (this.worldPoints.length < 3) return;
+
+    // 平滑曲线（使用 CatmullRomCurve3）
+    const curve = new THREE.CatmullRomCurve3(this.worldPoints);
+    curve.curveType = 'centripetal';
+    curve.closed = true;
+
+    // 清理所有子对象，确保不会有残留的几何体
+    while (this.group.children.length > 0) {
+      const child = this.group.children[0];
+      this.group.remove(child);
+      // 清理几何体和材质
+      if (child instanceof THREE.Mesh && child.geometry) {
+        child.geometry.dispose();
+      }
+      if (child instanceof THREE.Line && child.geometry) {
+        child.geometry.dispose();
+      }
+    }
+
+    // 重置引用
+    this.tubeMesh = null;
+
+    // 只使用TubeGeometry（更粗，有体积感）
+    const tubeGeometry = new THREE.TubeGeometry(curve, 100, 0.05, 8, true);
+    const tubeMaterial = new THREE.MeshStandardMaterial({ color: 0xff6600, emissive: 0x442200 });
+    this.tubeMesh = new THREE.Mesh(tubeGeometry, tubeMaterial);
+    this.group.add(this.tubeMesh);
+  }
+
+  public dispose(): void {
+    // 清理所有子对象
+    while (this.group.children.length > 0) {
+      const child = this.group.children[0];
+      this.group.remove(child);
+      if (child instanceof THREE.Mesh && child.geometry) {
+        child.geometry.dispose();
+      }
+      if (child instanceof THREE.Line && child.geometry) {
+        child.geometry.dispose();
+      }
+    }
+    
+    if (this.scene && this.group.parent) {
+      this.scene.remove(this.group);
+    }
+    
+    // 重置单例
+    FlameContour3D.instance = null;
+  }
+}
