@@ -399,6 +399,39 @@ canvas {
   transform: scale(1.05);
 }
 
+/* 物品容器样式 */
+.item-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* 物品图标样式 */
+.item-icon {
+  width: 90%;
+  height: 90%;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+/* 物品数量样式 */
+.item-quantity {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 1px 4px;
+  border-radius: 3px;
+  min-width: 16px;
+  text-align: center;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .backpack-ui {

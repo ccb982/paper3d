@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { InventorySystem } from '../../systems/inventory/InventorySystem';
 
 interface BackpackUIProps {
   isVisible: boolean;
@@ -6,6 +7,23 @@ interface BackpackUIProps {
 }
 
 export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) => {
+  const [slots, setSlots] = useState(InventorySystem.getInstance().getSlots());
+
+  useEffect(() => {
+    if (!isVisible) return;
+
+    // 监听背包变化
+    const updateSlots = () => {
+      setSlots(InventorySystem.getInstance().getSlots());
+    };
+
+    InventorySystem.getInstance().addListener(updateSlots);
+
+    return () => {
+      InventorySystem.getInstance().removeListener(updateSlots);
+    };
+  }, [isVisible]);
+
   if (!isVisible) {
     return null;
   }
@@ -19,10 +37,20 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
         </div>
         <div className="backpack-content">
           <div className="backpack-grid">
-            {/* 背包格子，暂时用占位符 */}
-            {Array.from({ length: 40 }).map((_, index) => (
+            {slots.map((slot, index) => (
               <div key={index} className="backpack-slot">
-                {/* 物品槽位 */}
+                {slot.item && (
+                  <div className="item-container">
+                    <img 
+                      src={slot.item.icon} 
+                      alt={slot.item.name} 
+                      className="item-icon"
+                    />
+                    {slot.item.quantity > 1 && (
+                      <div className="item-quantity">{slot.item.quantity}</div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
