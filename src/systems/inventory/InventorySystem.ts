@@ -192,4 +192,16 @@ export class InventorySystem {
       listener();
     }
   }
+
+  /**
+   * 清空背包
+   */
+  public clear(): void {
+    this.items.clear();
+    for (const slot of this.slots) {
+      slot.item = null;
+      slot.itemId = null;
+    }
+    this.notifyListeners();
+  }
 }

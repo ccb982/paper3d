@@ -44,14 +44,23 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
+    console.log('[BoxUI] useEffect triggered, isVisible:', isVisible, 'inventory:', inventory);
     if (!isVisible || !inventory) return;
 
     // 监听背包变化
     const updateSlots = () => {
-      setSlots(inventory.getSlots());
+      const currentSlots = inventory.getSlots();
+      console.log('[BoxUI] Updating slots, count:', currentSlots.length);
+      currentSlots.forEach((slot, i) => {
+        if (slot.item) {
+          console.log(`[BoxUI] Slot ${i}: item=${slot.item.name}`);
+        }
+      });
+      setSlots([...currentSlots]);
     };
 
     inventory.addListener(updateSlots);
+    updateSlots(); // 立即更新一次
 
     return () => {
       inventory.removeListener(updateSlots);
@@ -147,7 +156,13 @@ export const BoxUI: React.FC<BoxUIProps> = ({
           <button className="close-button" onClick={onClose}>×</button>
         </div>
         <div className="backpack-content">
-          <div className="backpack-grid">
+          <div 
+            className="backpack-grid"
+            style={{ 
+              gridTemplateColumns: 'repeat(4, 60px)',
+              width: 'fit-content'
+            }}
+          >
             {slots.map((slot, index) => {
               const isHovered = slot.item?.id === hoveredItemId;
               const isBeingDragged = tempItem?.item.id === slot.item?.id;

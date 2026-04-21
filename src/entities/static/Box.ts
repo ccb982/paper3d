@@ -67,6 +67,7 @@ export class Box extends StaticEntity {
     ];
 
     const itemCount = Math.floor(Math.random() * 4) + 2;
+    console.log(`[Box ${this.id}] 正在生成 ${itemCount} 个物品...`);
 
     for (let i = 0; i < itemCount; i++) {
       const template = itemTemplates[Math.floor(Math.random() * itemTemplates.length)];
@@ -76,16 +77,24 @@ export class Box extends StaticEntity {
         quantity: template.type === ItemType.CONSUMABLE ? Math.floor(Math.random() * 5) + 1 : 1
       });
       
+      console.log(`[Box ${this.id}] 创建物品: ${item.name}, 尺寸: ${item.size.width}x${item.size.height}`);
+      
       // 尝试放置物品到随机位置
       let placed = false;
       for (let y = 0; y < 3 && !placed; y++) {
         for (let x = 0; x < 4 && !placed; x++) {
           if (this.inventory.addItem(item, x, y)) {
             placed = true;
+            console.log(`[Box ${this.id}] 物品 ${item.name} 放置成功 at (${x}, ${y})`);
           }
         }
       }
+      if (!placed) {
+        console.log(`[Box ${this.id}] 物品 ${item.name} 放置失败！`);
+      }
     }
+    
+    console.log(`[Box ${this.id}] 物品生成完成，inventory 格子数: ${this.inventory.getSlots().length}`);
   }
 
   public getInventory(): InventorySystem {
@@ -102,6 +111,11 @@ export class Box extends StaticEntity {
 
   public close(): void {
     this.isOpened = false;
+  }
+
+  public initializeItems(): void {
+    this.inventory.clear();
+    this.generateRandomItems();
   }
   
   /**
