@@ -89,6 +89,8 @@ function App() {
       setCurrentBox(box);
       setIsBoxOpened(true);
       setIsBackpackVisible(true);
+      // 将当前箱子设置到window对象，供DragManager使用
+      (window as any).currentBox = box;
       console.log('打开箱子:', object.id);
     }
   };
@@ -100,6 +102,8 @@ function App() {
     setIsBoxOpened(false);
     setCurrentBox(null);
     setIsBackpackVisible(false);
+    // 清除window对象中的currentBox
+    (window as any).currentBox = null;
   };
 
   useEffect(() => {

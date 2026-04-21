@@ -73,34 +73,13 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   };
 
   // 处理拖拽结束
-  const handleDragEnd = (e: React.MouseEvent) => {
-    const backpackElement = e.currentTarget;
-    const rect = backpackElement.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left - 10) / 62);
-    const y = Math.floor((e.clientY - rect.top - 10) / 62);
-
-    if (x >= 0 && x < 5 && y >= 0 && y < 8) {
-      dragManager.endDrag(
-        backpackManager.getInventory(),
-        { x, y }
-      );
-    } else {
-      dragManager.endDrag(null, null);
-    }
+  const handleDragEnd = () => {
+    // 拖拽结束由DragManager全局处理
   };
 
   // 处理鼠标移动
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (dragManager.isDragging()) {
-      const backpackElement = e.currentTarget;
-      const rect = backpackElement.getBoundingClientRect();
-      const x = Math.floor((e.clientX - rect.left - 10) / 62);
-      const y = Math.floor((e.clientY - rect.top - 10) / 62);
-
-      if (x >= 0 && x < 5 && y >= 0 && y < 8) {
-        dragManager.updatePosition({ x, y });
-      }
-    }
+  const handleMouseMove = () => {
+    // 鼠标移动由DragManager全局处理
   };
 
   if (!isVisible) {

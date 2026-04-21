@@ -75,35 +75,12 @@ export const BoxUI: React.FC<BoxUIProps> = ({
     );
   };
 
-  const handleDragEnd = (e: React.MouseEvent) => {
-    if (!inventory) return;
-
-    const backpackElement = e.currentTarget;
-    const rect = backpackElement.getBoundingClientRect();
-    const x = Math.floor((e.clientX - rect.left - 10) / 62);
-    const y = Math.floor((e.clientY - rect.top - 10) / 62);
-
-    if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-      dragManager.endDrag(
-        inventory,
-        { x, y }
-      );
-    } else {
-      dragManager.endDrag(null, null);
-    }
+  const handleDragEnd = () => {
+    // 拖拽结束由DragManager全局处理
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (dragManager.isDragging()) {
-      const backpackElement = e.currentTarget;
-      const rect = backpackElement.getBoundingClientRect();
-      const x = Math.floor((e.clientX - rect.left - 10) / 62);
-      const y = Math.floor((e.clientY - rect.top - 10) / 62);
-
-      if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-        dragManager.updatePosition({ x, y });
-      }
-    }
+  const handleMouseMove = () => {
+    // 鼠标移动由DragManager全局处理
   };
 
   if (!isVisible) {
