@@ -88,17 +88,28 @@ export class DragManager {
     }
 
     // 检查鼠标是否在箱子网格内
-    const boxElement = document.querySelector('.backpack-ui[style*="right: 20px"] .backpack-grid');
+    const boxElements = document.querySelectorAll('.backpack-ui');
+    let boxElement: HTMLElement | null = null;
+    
+    boxElements.forEach(el => {
+      if (el.style.right === '20px') {
+        boxElement = el as HTMLElement;
+      }
+    });
+    
     if (boxElement) {
-      const rect = boxElement.getBoundingClientRect();
-      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-        const x = Math.floor((e.clientX - rect.left - 10) / 62);
-        const y = Math.floor((e.clientY - rect.top - 10) / 62);
-        if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-          this.draggedItem.currentPosition = { x, y };
-          this.draggedItem.currentInventory = 'box';
-          this.notifyListeners();
-          return;
+      const gridElement = boxElement.querySelector('.backpack-grid');
+      if (gridElement) {
+        const rect = gridElement.getBoundingClientRect();
+        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          const x = Math.floor((e.clientX - rect.left - 10) / 62);
+          const y = Math.floor((e.clientY - rect.top - 10) / 62);
+          if (x >= 0 && x < 4 && y >= 0 && y < 3) {
+            this.draggedItem.currentPosition = { x, y };
+            this.draggedItem.currentInventory = 'box';
+            this.notifyListeners();
+            return;
+          }
         }
       }
     }
@@ -131,19 +142,30 @@ export class DragManager {
     }
 
     // 检查鼠标是否在箱子网格内
-    const boxElement = document.querySelector('.backpack-ui[style*="right: 20px"] .backpack-grid');
+    const boxElements = document.querySelectorAll('.backpack-ui');
+    let boxElement: HTMLElement | null = null;
+    
+    boxElements.forEach(el => {
+      if (el.style.right === '20px') {
+        boxElement = el as HTMLElement;
+      }
+    });
+    
     if (boxElement) {
-      const rect = boxElement.getBoundingClientRect();
-      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-        const x = Math.floor((e.clientX - rect.left - 10) / 62);
-        const y = Math.floor((e.clientY - rect.top - 10) / 62);
-        if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-          // 从App组件获取当前箱子的库存
-          const currentBox = (window as any).currentBox;
-          if (currentBox && currentBox.getInventory) {
-            this.endDrag(currentBox.getInventory(), { x, y });
-            this.removeGlobalListeners();
-            return;
+      const gridElement = boxElement.querySelector('.backpack-grid');
+      if (gridElement) {
+        const rect = gridElement.getBoundingClientRect();
+        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
+          const x = Math.floor((e.clientX - rect.left - 10) / 62);
+          const y = Math.floor((e.clientY - rect.top - 10) / 62);
+          if (x >= 0 && x < 4 && y >= 0 && y < 3) {
+            // 从App组件获取当前箱子的库存
+            const currentBox = (window as any).currentBox;
+            if (currentBox && currentBox.getInventory) {
+              this.endDrag(currentBox.getInventory(), { x, y });
+              this.removeGlobalListeners();
+              return;
+            }
           }
         }
       }

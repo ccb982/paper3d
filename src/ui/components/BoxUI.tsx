@@ -67,6 +67,8 @@ export const BoxUI: React.FC<BoxUIProps> = ({
 
   const handleDragStart = (slot: any) => {
     if (!inventory || !slot.item) return;
+    
+    console.log('[BoxUI] Starting drag from box:', slot.item.name, slot.x, slot.y);
 
     dragManager.startDrag(
       slot.item,
@@ -206,7 +208,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
                 return null;
               }).filter(Boolean);
 
-              const tempItemElement = draggedItem && draggedItem.currentInventory === 'box' ? (
+              const tempItemElement = draggedItem ? (
                 <div 
                   style={{
                     position: 'absolute',

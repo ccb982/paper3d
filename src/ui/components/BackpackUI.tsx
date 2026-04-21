@@ -176,7 +176,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
               }).filter(Boolean);
 
               // 渲染临时物品（拖拽中的物品）
-              const tempItemElement = draggedItem && draggedItem.currentInventory === 'backpack' ? (
+              const tempItemElement = draggedItem ? (
                 <div 
                   style={{
                     position: 'absolute',
