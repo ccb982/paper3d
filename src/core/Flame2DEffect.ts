@@ -21,29 +21,27 @@ export class Flame2DEffect {
   private radialSegments: number = 90;         // 圆周分段数（越高轮廓越平滑）
   private percentile: number = 0.85;          // 百分位数，取半径较大的外围点（0.85 避开最外离散点）
 
-  // 预定义火焰模板（侧面：底部U形凹陷，上部M形山峰，y坐标已翻转）
+  // 预定义火焰模板（侧面：顶部M形山峰，底部U形）
   private sideTemplateNorm: { x: number; y: number }[] = [
-    // 底部U形（底部中间凹陷，y值小=低）
-    { x: -0.5, y: 0.0 },   // 底部左
-    { x: -0.4, y: 0.15 }, // 左上
-    { x: -0.2, y: 0.25 }, // 左中
-    { x: 0.0, y: 0.3 },   // 底部中间最低
-    { x: 0.2, y: 0.25 },  // 右中
-    { x: 0.4, y: 0.15 },  // 右上
-    { x: 0.5, y: 0.0 },    // 底部右
-    // 右侧上升至右峰（M形右侧）
-    { x: 0.4, y: -0.3 },
-    { x: 0.3, y: -0.6 },
-    { x: 0.2, y: -1.0 },    // 右峰
-    // 下降到中峰
-    { x: 0.1, y: -0.85 },
-    { x: 0.0, y: -0.9 },    // 中峰
-    { x: -0.1, y: -0.85 },
-    // 下降到左峰（M形左侧）
-    { x: -0.2, y: -1.0 },   // 左峰
-    { x: -0.3, y: -0.6 },
-    { x: -0.4, y: -0.3 },
-    // 回到底部左
+    // 顶部 M 形山峰（y=0 顶部）
+    { x: -0.25, y: 0.00 },   // 左峰
+    { x: -0.10, y: 0.08 },   // 左谷
+    { x: 0.00, y: 0.10 },    // 中峰最高
+    { x: 0.10, y: 0.08 },    // 右谷
+    { x: 0.25, y: 0.00 },    // 右峰
+    // 中部过渡
+    { x: 0.30, y: 0.30 },
+    { x: 0.35, y: 0.50 },
+    // 底部 U 形（y=1 底部）
+    { x: 0.30, y: 0.80 },
+    { x: 0.20, y: 0.90 },
+    { x: 0.00, y: 0.95 },    // 底部中央略高（U 形）
+    { x: -0.20, y: 0.90 },
+    { x: -0.30, y: 0.80 },
+    // 返回顶部左峰（闭合）
+    { x: -0.35, y: 0.50 },
+    { x: -0.30, y: 0.30 },
+    { x: -0.25, y: 0.00 },
   ];
 
   private topTemplateNorm: { x: number; y: number }[] = [];
@@ -267,7 +265,8 @@ export class Flame2DEffect {
     if (width < 1 || height < 1) return [];
 
     // 2. 根据颜色过滤和位置分配：根据粒子在模板中的位置分配颜色
-    // 弧形区域（底部，y值大）：红白色；峰形区域（顶部，y值小）：红色
+    // 模板中 y=0 是顶部（M形峰），y=1 是底部（U形弧）
+    // 峰形区域（顶部，y值小）：找红色；弧形区域（底部，y值大）：找红白色
     const yThreshold = (minY + maxY) / 2; // 中间分割线
     const filtered = screenPoints.filter(p => {
       const r = p.color.r;
@@ -279,13 +278,13 @@ export class Flame2DEffect {
       const isRed = r > 0.7 && g < 0.3 && b < 0.2;
       // 排除橙色（中部）：r>0.8, g>0.4, b<0.3
       const isOrange = r > 0.8 && g > 0.4 && g < 0.8 && b < 0.3;
-      // 弧形区域（底部，y值大）：找红白色；峰形区域（顶部，y值小）：找红色
-      if (p.y > yThreshold) {
-        // 底部区域（弧）：应该匹配红白色
-        return isRedWhite && !isOrange;
-      } else {
+      // 峰形区域（顶部，y值小）：找红色；弧形区域（底部，y值大）：找红白色
+      if (p.y < yThreshold) {
         // 顶部区域（峰）：应该匹配红色
         return isRed && !isOrange;
+      } else {
+        // 底部区域（弧）：应该匹配红白色
+        return isRedWhite && !isOrange;
       }
     });
 
@@ -298,7 +297,7 @@ export class Flame2DEffect {
       const cameraDirection = new THREE.Vector3();
       this.camera.getWorldDirection(cameraDirection);
       // 只有当相机向下看角度超过一定阈值时才使用俯视模板
-      isTopView = cameraDirection.y < -0.5; // 向下看角度较大时使用俯视
+      isTopView = cameraDirection.y < -0.7; // 向下看角度较大时使用俯视
     }
     const template = isTopView ? this.topTemplateNorm : this.sideTemplateNorm;
 
