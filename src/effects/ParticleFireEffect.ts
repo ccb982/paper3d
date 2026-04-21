@@ -39,6 +39,7 @@ export class ParticleFireEffect {
 
   constructor(position: THREE.Vector3, duration: number = Infinity) {
     this.duration = duration;
+    // console.log('ParticleFireEffect created at position:', position.x, position.y, position.z);
     this.group = new THREE.Group();
     this.group.position.copy(position);
     

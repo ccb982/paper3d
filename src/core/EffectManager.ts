@@ -60,10 +60,20 @@ export class EffectManager {
   /**
    * 播放粒子火焰特效（场景中的火）
    */
-  public playParticleFireEffect(position: THREE.Vector3, duration: number = Infinity): void {
+  public playParticleFireEffect(position: THREE.Vector3, duration: number = Infinity): ParticleFireEffect {
     const fireEffect = new ParticleFireEffect(position, duration);
     this.particleFireEffects.push(fireEffect);
     return fireEffect;
+  }
+
+  /**
+   * 清除所有粒子火焰特效
+   */
+  public clearAllParticleFireEffects(): void {
+    for (const fireEffect of this.particleFireEffects) {
+      fireEffect.dispose();
+    }
+    this.particleFireEffects = [];
   }
 
   /**

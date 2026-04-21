@@ -98,7 +98,7 @@ export class LockonShootingSystem extends BaseShootingSystem {
       direction: rayDirections[i]
     }));
 
-    console.log(`LockOn: shootable=${this.shootableObjects.length}, intersects=${allIntersects.length}, mouseDown=${this.isMouseDown}`);
+    // console.log(`LockOn: shootable=${this.shootableObjects.length}, intersects=${allIntersects.length}, mouseDown=${this.isMouseDown}`);
 
     const hasTarget = allIntersects.length > 0;
 

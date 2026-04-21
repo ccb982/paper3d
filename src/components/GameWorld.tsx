@@ -451,6 +451,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     }
     
     // 在地图上创建一个持续时间无限的火焰特效
+    // 先清理所有旧的粒子火焰特效，避免重复创建
+    EffectManager.getInstance().clearAllParticleFireEffects();
     const firePosition = new THREE.Vector3(0, 3, 10);
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
@@ -471,7 +473,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         onLockStateChanged(locking, countdown);
       },
       onTargetLocked: (target) => {
-        console.log('Target locked:', target);
+        // console.log('Target locked:', target);
       },
       onShootDirectionChanged: (direction) => {
         setShootDirection(direction);
