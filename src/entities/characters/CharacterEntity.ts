@@ -26,6 +26,9 @@ export abstract class CharacterEntity extends Entity {
   // 重力相关
   public isGrounded: boolean = true;
   public verticalVelocity: number = 0;
+  public gravity: number = 9.8;
+  public jumpForce: number = 7;
+  public height: number = 1.5; // 角色高度，用于碰撞检测
 
   // 纹理相关
   public texturePath: string;                     // 贴图路径
@@ -147,15 +150,52 @@ export abstract class CharacterEntity extends Entity {
     // 子类可覆盖
   }
 
+  // 地形高度获取函数（由外部设置）
+  private getHeightAt: ((x: number, z: number) => number) | null = null;
+
+  /**
+   * 设置地形高度获取函数
+   */
+  public setHeightAtFunction(getHeightAt: (x: number, z: number) => number): void {
+    this.getHeightAt = getHeightAt;
+  }
+
+  /**
+   * 跳跃
+   */
+  public jump(): void {
+    if (this.isGrounded) {
+      this.verticalVelocity = this.jumpForce;
+      this.isGrounded = false;
+    }
+  }
+
+  /**
+   * 应用重力和处理竖直碰撞
+   */
   protected applyGravity(delta: number): void {
+    // 应用重力
     if (!this.isGrounded) {
-      this.verticalVelocity -= 9.8 * delta;
-      this.position.y += this.verticalVelocity * delta;
-      if (this.position.y <= 0) {
-        this.position.y = 0;
-        this.verticalVelocity = 0;
-        this.isGrounded = true;
-      }
+      this.verticalVelocity -= this.gravity * delta;
+    }
+
+    // 计算新位置
+    const newY = this.position.y + this.verticalVelocity * delta;
+
+    // 获取地面高度
+    let groundHeight = 0;
+    if (this.getHeightAt) {
+      groundHeight = this.getHeightAt(this.position.x, this.position.z);
+    }
+
+    // 地面碰撞检测
+    if (newY <= groundHeight + 0.1) { // 0.1 是地面偏移量
+      this.position.y = groundHeight + 0.1;
+      this.verticalVelocity = 0;
+      this.isGrounded = true;
+    } else {
+      this.position.y = newY;
+      this.isGrounded = false;
     }
   }
 

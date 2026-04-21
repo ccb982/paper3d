@@ -23,6 +23,7 @@ import { CharacterEntity } from '../entities/characters/CharacterEntity';
 import { StaticEntity } from '../entities/static/StaticEntity';
 import { FriendlyEntity } from '../entities/characters/FriendlyEntity';
 import { EnemyEntity } from '../entities/characters/EnemyEntity';
+import { StoneBugEnemy } from '../entities/characters/StoneBugEnemy';
 import { TargetEntity } from '../entities/static/TargetEntity';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
@@ -430,11 +431,24 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         '/textures/character.png', // 暂时使用相同的纹理
         new THREE.Vector3(
           Math.random() * 20 - 10,
-          5,
+          5 - 1.5, // 下调1.5
           Math.random() * 20 - 10
         )
       );
       entityManager.addEntity(enemyEntity);
+    }
+    
+    // 创建原石虫敌人
+    for (let i = 0; i < 2; i++) {
+      const stoneBugEnemy = new StoneBugEnemy(
+        `stone-bug-${i}`,
+        new THREE.Vector3(
+          Math.random() * 20 - 10,
+          5 - 1.5, // 下调1.5
+          Math.random() * 20 - 10
+        )
+      );
+      entityManager.addEntity(stoneBugEnemy);
     }
     
     // 创建靶子实体
@@ -453,7 +467,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     // 在地图上创建一个持续时间无限的火焰特效
     // 先清理所有旧的粒子火焰特效，避免重复创建
     EffectManager.getInstance().clearAllParticleFireEffects();
-    const firePosition = new THREE.Vector3(0, 3, 10);
+    const firePosition = new THREE.Vector3(0, 3 - 1.5, 10); // 下调1.5
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
     
@@ -683,6 +697,15 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         characterPosition={characterPos}
         onTerrainReady={(getHeightAt) => {
           getHeightAtRef.current = getHeightAt;
+          
+          // 为所有角色设置地形高度获取函数
+          const entityManager = EntityManager.getInstance();
+          const characters = entityManager.getEntitiesByType('character');
+          characters.forEach(character => {
+            if (character instanceof CharacterEntity) {
+              (character as CharacterEntity).setHeightAtFunction(getHeightAt);
+            }
+          });
         }}
       />
       <PaperCharacter characterId="player" onClick={handleCharacterClick} />
