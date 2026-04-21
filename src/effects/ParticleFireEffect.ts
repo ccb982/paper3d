@@ -35,6 +35,7 @@ export class ParticleFireEffect {
   private emitAccumulator: number = 0;
   private elapsed: number = 0;
   private contour3D: FlameContour3D | null = null;
+  private stencilMesh: THREE.Mesh | null = null;
   private duration: number;
 
   constructor(position: THREE.Vector3, duration: number = Infinity) {
@@ -88,7 +89,14 @@ export class ParticleFireEffect {
       `,
       transparent: true,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      stencilWrite: false, // 粒子只测试模板，不写入
+      stencilFunc: THREE.EqualStencilFunc, // 只在模板值为1的区域绘制
+      stencilRef: 1,
+      stencilFuncMask: 0xff,
+      stencilFail: THREE.KEEP_STENCIL_OP,
+      stencilZFail: THREE.KEEP_STENCIL_OP,
+      stencilZPass: THREE.KEEP_STENCIL_OP
     });
     
     this.points = new THREE.Points(this.geometry, this.material);
@@ -243,6 +251,9 @@ export class ParticleFireEffect {
       
       // 强制更新轮廓位置，确保始终覆盖火焰
       this.contour3D.update(particleData);
+      
+      // 更新模板网格
+      this.updateStencilMesh();
     }
     
     // 检查是否达到持续时间
@@ -279,9 +290,72 @@ export class ParticleFireEffect {
     this.geometry.attributes.size.needsUpdate = true;
   }
 
+  /**
+   * 更新模板网格和填充网格
+   */
+  private updateStencilMesh(): void {
+    if (!this.contour3D) return;
+    
+    // 清理旧的模板网格
+    if (this.stencilMesh && this.stencilMesh.parent === this.group) {
+      this.group.remove(this.stencilMesh);
+      if (this.stencilMesh.geometry) {
+        this.stencilMesh.geometry.dispose();
+      }
+      if (this.stencilMesh.material) {
+        this.stencilMesh.material.dispose();
+      }
+      this.stencilMesh = null;
+    }
+    
+    // 获取新的模板网格
+    const newStencilMesh = this.contour3D.getStencilMesh();
+    if (newStencilMesh) {
+      // 为模板网格设置材质属性，用于写入模板
+      newStencilMesh.material = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        colorWrite: false, // 不写入颜色缓冲
+        stencilWrite: true, // 写入模板缓冲
+        stencilFunc: THREE.AlwaysStencilFunc, // 总是通过模板测试
+        stencilRef: 1, // 写入值为1
+        stencilFuncMask: 0xff,
+        stencilFail: THREE.ReplaceStencilOp, // 测试失败时替换
+        stencilZFail: THREE.ReplaceStencilOp, // Z测试失败时替换
+        stencilZPass: THREE.ReplaceStencilOp // Z测试通过时替换
+      });
+      
+      // 将模板网格添加到火焰特效的 group 中
+      this.group.add(newStencilMesh);
+      this.stencilMesh = newStencilMesh;
+    }
+    
+    // 获取新的填充网格
+    const newFillMesh = this.contour3D.getFillMesh();
+    if (newFillMesh) {
+      // 将填充网格添加到轮廓的 group 中，这样会继承 billboard 效果
+      this.contour3D.addFillMesh(newFillMesh);
+    }
+  }
+
   public dispose(): void {
     const scene = (window as any).gameScene;
     if (scene && this.group.parent) scene.remove(this.group);
+    
+    // 清理模板网格
+    if (this.stencilMesh) {
+      if (this.stencilMesh.parent === this.group) {
+        this.group.remove(this.stencilMesh);
+      }
+      if (this.stencilMesh.geometry) {
+        this.stencilMesh.geometry.dispose();
+      }
+      if (this.stencilMesh.material) {
+        this.stencilMesh.material.dispose();
+      }
+      this.stencilMesh = null;
+    }
     
     // 清理 3D 火焰轮廓效果
     if (this.contour3D) {
@@ -531,10 +605,134 @@ class FlameContour3D {
         (lineLoop as THREE.LineLoop).material.dispose();
       }
     }
+    
+    // 清理填充网格
+    const oldFillMeshes = this.group.children.filter(child => 
+      child instanceof THREE.Mesh && !(child instanceof THREE.LineLoop)
+    );
+    for (const mesh of oldFillMeshes) {
+      this.group.remove(mesh);
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+      }
+      if (mesh.material) {
+        mesh.material.dispose();
+      }
+    }
+    
     this.currentLineLoop = null;
     
     if (this.parentGroup && this.group.parent) {
       this.parentGroup.remove(this.group);
     }
+  }
+
+  /**
+   * 获取用于模板缓冲的闭合网格
+   * @returns THREE.Mesh | null
+   */
+  public getStencilMesh(): THREE.Mesh | null {
+    if (this.worldPoints.length < 3) return null;
+    
+    // 将轮廓点投影到 XZ 平面（y=0）
+    const points2D = this.worldPoints.map(p => new THREE.Vector2(p.x, p.z));
+    
+    // 构建 Shape
+    const shape = new THREE.Shape();
+    shape.moveTo(points2D[0].x, points2D[0].y);
+    for (let i = 1; i < points2D.length; i++) {
+      shape.lineTo(points2D[i].x, points2D[i].y);
+    }
+    shape.closePath();
+    
+    const geometry = new THREE.ShapeGeometry(shape);
+    
+    // 材质不重要，因为只用于写入模板
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geometry, material);
+    
+    // 放置在火焰的中间高度
+    const centerY = (this.worldPoints.reduce((sum, p) => sum + p.y, 0) / this.worldPoints.length);
+    mesh.position.y = centerY;
+    
+    return mesh;
+  }
+
+  /**
+   * 获取填充轮廓内部的蓝色平面
+   * @returns THREE.Mesh | null
+   */
+  public getFillMesh(): THREE.Mesh | null {
+    if (this.worldPoints.length < 3) return null;
+    
+    // 检查是否是侧面视图（所有点的 z 坐标相同）
+    const zValues = this.worldPoints.map(p => p.z);
+    const isSideView = zValues.every(z => Math.abs(z - zValues[0]) < 0.01);
+    
+    let points2D: THREE.Vector2[];
+    if (isSideView) {
+      // 侧面视图：使用 x 和 y 坐标
+      points2D = this.worldPoints.map(p => new THREE.Vector2(p.x, p.y));
+    } else {
+      // 俯视图：使用 x 和 z 坐标
+      points2D = this.worldPoints.map(p => new THREE.Vector2(p.x, p.z));
+    }
+    
+    // 构建 Shape
+    const shape = new THREE.Shape();
+    shape.moveTo(points2D[0].x, points2D[0].y);
+    for (let i = 1; i < points2D.length; i++) {
+      shape.lineTo(points2D[i].x, points2D[i].y);
+    }
+    shape.closePath();
+    
+    const geometry = new THREE.ShapeGeometry(shape);
+    
+    // 创建蓝色填充材质
+    const material = new THREE.MeshBasicMaterial({ 
+      color: 0x0000ff, 
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false // 确保不会遮挡其他物体
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    
+    // 设置位置
+    const centerY = (this.worldPoints.reduce((sum, p) => sum + p.y, 0) / this.worldPoints.length);
+    const centerZ = (this.worldPoints.reduce((sum, p) => sum + p.z, 0) / this.worldPoints.length);
+    
+    if (isSideView) {
+      // 侧面视图：设置 z 坐标
+      mesh.position.z = centerZ;
+    } else {
+      // 俯视图：设置 y 坐标
+      mesh.position.y = centerY;
+    }
+    
+    return mesh;
+  }
+
+  /**
+   * 添加填充网格到轮廓的 group 中
+   * @param fillMesh 填充网格
+   */
+  public addFillMesh(fillMesh: THREE.Mesh): void {
+    // 清理旧的填充网格
+    const oldFillMeshes = this.group.children.filter(child => 
+      child instanceof THREE.Mesh && !(child instanceof THREE.LineLoop)
+    );
+    for (const mesh of oldFillMeshes) {
+      this.group.remove(mesh);
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+      }
+      if (mesh.material) {
+        mesh.material.dispose();
+      }
+    }
+    
+    // 添加新的填充网格
+    this.group.add(fillMesh);
   }
 }
