@@ -7,6 +7,7 @@ interface DraggedItem {
   sourceInventory: InventorySystem;
   sourcePosition: { x: number; y: number };
   currentPosition: { x: number; y: number };
+  currentInventory: 'backpack' | 'box' | null;
 }
 
 export class DragManager {
@@ -26,11 +27,15 @@ export class DragManager {
   }
 
   public startDrag(item: Item, inventory: InventorySystem, position: { x: number; y: number }): void {
+    // 确定物品来源
+    const isBackpack = inventory === backpackManager.getInventory();
+    
     this.draggedItem = {
       item,
       sourceInventory: inventory,
       sourcePosition: position,
-      currentPosition: position
+      currentPosition: position,
+      currentInventory: isBackpack ? 'backpack' : 'box'
     };
     // 从源背包移除物品
     inventory.removeItemAt(position.x, position.y);
@@ -74,7 +79,9 @@ export class DragManager {
         const x = Math.floor((e.clientX - rect.left - 10) / 62);
         const y = Math.floor((e.clientY - rect.top - 10) / 62);
         if (x >= 0 && x < 5 && y >= 0 && y < 8) {
-          this.updatePosition({ x, y });
+          this.draggedItem.currentPosition = { x, y };
+          this.draggedItem.currentInventory = 'backpack';
+          this.notifyListeners();
           return;
         }
       }
@@ -88,11 +95,17 @@ export class DragManager {
         const x = Math.floor((e.clientX - rect.left - 10) / 62);
         const y = Math.floor((e.clientY - rect.top - 10) / 62);
         if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-          this.updatePosition({ x, y });
+          this.draggedItem.currentPosition = { x, y };
+          this.draggedItem.currentInventory = 'box';
+          this.notifyListeners();
           return;
         }
       }
     }
+
+    // 鼠标不在任何网格内
+    this.draggedItem.currentInventory = null;
+    this.notifyListeners();
   }
 
   private handleGlobalMouseUp(e: MouseEvent): void {
@@ -139,13 +152,6 @@ export class DragManager {
     // 鼠标不在任何网格内，放回原位置
     this.endDrag(null, null);
     this.removeGlobalListeners();
-  }
-
-  public updatePosition(position: { x: number; y: number }): void {
-    if (this.draggedItem) {
-      this.draggedItem.currentPosition = position;
-      this.notifyListeners();
-    }
   }
 
   public endDrag(targetInventory: InventorySystem | null, targetPosition: { x: number; y: number } | null): boolean {

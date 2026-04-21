@@ -206,7 +206,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
                 return null;
               }).filter(Boolean);
 
-              const tempItemElement = draggedItem ? (
+              const tempItemElement = draggedItem && draggedItem.currentInventory === 'box' ? (
                 <div 
                   style={{
                     position: 'absolute',
