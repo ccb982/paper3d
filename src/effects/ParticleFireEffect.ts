@@ -938,6 +938,12 @@ class FlameContour3D {
             finalColor = bottomColor2;
           }
           
+          // 横向亮度衰减：根据 UV.x，中心亮（系数1.0），边缘暗（系数0.5）
+          float brightnessX = 1.0 - abs(vUv.x - 0.5) * 0.7;
+          // 限制亮度范围 [0.5, 1.0]，增加衰减强度
+          brightnessX = clamp(brightnessX, 0.5, 1.0);
+          finalColor *= brightnessX;
+          
           gl_FragColor = vec4(finalColor, 0.6);
         }
       `,
