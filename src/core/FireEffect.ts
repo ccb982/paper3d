@@ -243,6 +243,7 @@ export class FireEffect extends BaseEffect {
         this.contour3D.updateBillboard();
       }
       
+      // 强制更新轮廓位置，确保始终覆盖火焰
       this.contour3D.update(particleData);
     }
     

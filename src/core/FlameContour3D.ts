@@ -85,25 +85,36 @@ export class FlameContour3D {
     const depth = maxZ - minZ;
     if (width < 0.1 || height < 0.1) return;
 
-    // 3. 判断视角：如果深度远大于宽度，则使用俯视模板，否则使用侧面模板
-    const isTopView = depth > width * 1.5;
+    // 3. 根据摄像机角度判断视角
+    let isTopView = false;
+    if (this.camera) {
+      const cameraDirection = new THREE.Vector3();
+      this.camera.getWorldDirection(cameraDirection);
+      // 只有当相机向下看角度超过一定阈值时才使用俯视模板
+      isTopView = cameraDirection.y < -0.7; // 向下看角度较大时使用俯视
+    } else {
+      // 回退到基于宽深比的判断
+      isTopView = depth > width * 1.5;
+    }
     const template = isTopView ? this.getTopTemplate() : this.sideTemplateNorm;
 
     // 4. 将模板缩放到世界坐标
     const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
     const centerZ = (minZ + maxZ) / 2;
+    
     this.worldPoints = template.map(p => {
       let x, y, z;
       if (isTopView) {
         // 俯视：X 和 Z 由模板 x,y 决定，Y 取粒子云中部高度
         x = centerX + p.x * width / 2;
         z = centerZ + p.y * depth / 2;
-        y = (minY + maxY) / 2;
+        y = centerY;
       } else {
         // 侧面：X 和 Y 由模板决定，Z 取粒子云中间值
         x = minX + (p.x + 0.5) * width;
         y = minY + p.y * height;
-        z = (minZ + maxZ) / 2;
+        z = centerZ;
       }
       return new THREE.Vector3(x, y, z);
     });
@@ -113,13 +124,19 @@ export class FlameContour3D {
   }
 
   /**
-   * 更新几何体并应用billboard效果
+   * 更新几何体并应用billboard效果（保持水平方向）
    */
   public updateBillboard(): void {
     if (!this.camera) return;
     
-    // 让轮廓始终面向相机
-    this.group.quaternion.copy(this.camera.quaternion);
+    // 保持轮廓水平，只在水平方向面向相机
+    const cameraQuaternion = this.camera.quaternion.clone();
+    // 去除垂直旋转，只保留水平旋转
+    cameraQuaternion.x = 0;
+    cameraQuaternion.z = 0;
+    cameraQuaternion.normalize();
+    
+    this.group.quaternion.copy(cameraQuaternion);
   }
 
   private getTopTemplate(): { x: number; y: number }[] {
