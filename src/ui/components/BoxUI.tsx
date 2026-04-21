@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Item, ItemType } from '../../entities/items/ItemData';
+import './BoxUI.css';
 
 interface BoxUIProps {
   isVisible: boolean;
@@ -57,65 +58,39 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   };
 
   return (
-    <div className="backpack-ui-overlay" onClick={onClose} style={{ justifyContent: 'flex-end', paddingRight: '5%' }}>
-      <div className="backpack-ui" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '380px' }}>
-        <div className="backpack-header">
+    <div className="box-ui-overlay" onClick={onClose}>
+      <div className="box-ui" onClick={(e) => e.stopPropagation()}>
+        <div className="box-header">
           <h2>{boxName}</h2>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
-        <div className="backpack-content">
+        <div className="box-content">
           {items.length === 0 ? (
-            <div style={{ color: '#aaa', textAlign: 'center', padding: '30px' }}>箱子是空的</div>
+            <div className="box-empty">箱子是空的</div>
           ) : (
             <>
-              <div className="backpack-grid">
+              <div className="box-grid">
                 {items.map((item, index) => (
                   <div
                     key={item.id}
-                    className={`backpack-slot ${hoveredIndex === index ? 'backpack-slot-hovered' : ''}`}
+                    className={`box-item ${hoveredIndex === index ? 'hovered' : ''}`}
+                    style={{
+                      backgroundColor: getColorForItemType(item.type),
+                      borderColor: getRarityColor(item.rarity)
+                    }}
                     onMouseEnter={() => setHoveredIndex(index)}
                     onMouseLeave={() => setHoveredIndex(null)}
                     onClick={() => onTakeItem(index)}
-                    style={{
-                      background: getColorForItemType(item.type),
-                      borderColor: getRarityColor(item.rarity)
-                    }}
                   >
-                    <div className="item-container">
-                      <div
-                        className="item-color-block"
-                        style={{
-                          background: getColorForItemType(item.type),
-                          border: `2px solid ${getRarityColor(item.rarity)}`
-                        }}
-                      />
-                    </div>
+                    <div className="box-item-name">{item.name}</div>
+                    {item.quantity > 1 && (
+                      <div className="box-item-quantity">×{item.quantity}</div>
+                    )}
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'flex', justifyContent: 'center', marginTop: '15px' }}>
-                <button
-                  onClick={onTakeAll}
-                  style={{
-                    background: '#4ecdc4',
-                    color: '#1e3c72',
-                    border: '2px solid #4ecdc4',
-                    padding: '10px 20px',
-                    borderRadius: '8px',
-                    cursor: 'pointer',
-                    fontSize: '14px',
-                    fontWeight: 'bold',
-                    transition: 'all 0.3s ease'
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = '#3aafaa';
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = '#4ecdc4';
-                    e.currentTarget.style.transform = 'scale(1)';
-                  }}
-                >
+              <div className="box-actions">
+                <button className="box-take-all" onClick={onTakeAll}>
                   全部拿走
                 </button>
               </div>

@@ -8,7 +8,6 @@ import LoadingIndicator from './components/UI/LoadingIndicator';
 import DialogBubble from './components/UI/DialogBubble';
 import { BackpackUI } from './ui/components/BackpackUI';
 import { BoxUI } from './ui/components/BoxUI';
-import { CombinedStorageUI } from './ui/components/CombinedStorageUI';
 import { InteractionPrompt } from './ui/components/InteractionPrompt';
 import { getNearbyInteractiveObjects } from './utils/interactionDetector';
 import type { InteractiveObject } from './utils/interactionDetector';
@@ -84,7 +83,6 @@ function App() {
       setCurrentBoxItems(items);
       setCurrentBoxId(box.id || object.id);
       setIsBoxOpened(true);
-      setIsBackpackVisible(true);
       console.log('打开箱子:', object.id, '物品:', items);
     }
   };
@@ -93,10 +91,9 @@ function App() {
     setIsBoxOpened(false);
     setCurrentBoxItems([]);
     setCurrentBoxId(null);
-    setIsBackpackVisible(false);
   };
 
-  const handleTakeItemFromBox = (index: number) => {
+  const handleTakeItem = (index: number) => {
     if (currentBoxId) {
       const entityManager = (window as any).entityManager;
       if (entityManager) {
@@ -110,26 +107,11 @@ function App() {
               console.log('获得物品:', item.name);
               const remainingItems = box.getItems ? box.getItems() : [];
               setCurrentBoxItems([...remainingItems]);
-              if (remainingItems.length === 0 && !isBoxOpened) {
+              if (remainingItems.length === 0) {
                 handleCloseBox();
               }
             }
           }
-        }
-      }
-    }
-  };
-
-  const handlePutItemToBox = (item: Item, fromX: number, fromY: number) => {
-    if (currentBoxId) {
-      const entityManager = (window as any).entityManager;
-      if (entityManager) {
-        const box = entityManager.getEntityById(currentBoxId) as any;
-        if (box && (box as any).addItem) {
-          (box as any).addItem(item);
-          console.log('放入箱子:', item.name);
-          const allItems = box.getItems ? box.getItems() : [];
-          setCurrentBoxItems([...allItems]);
         }
       }
     }
@@ -221,17 +203,21 @@ function App() {
         </>
       )}
       <DialogBubble />
+      <BackpackUI
+        isVisible={isBackpackVisible}
+        onClose={() => setIsBackpackVisible(false)}
+      />
       <InteractionPrompt
         interactiveObjects={interactiveObjects}
         onInteract={handleInteract}
       />
-      <CombinedStorageUI
-        isVisible={isBackpackVisible}
-        isBoxOpened={isBoxOpened}
-        boxItems={currentBoxItems}
-        onCloseBox={handleCloseBox}
-        onTakeItemFromBox={handleTakeItemFromBox}
-        onPutItemToBox={handlePutItemToBox}
+      <BoxUI
+        isVisible={isBoxOpened}
+        items={currentBoxItems}
+        boxName="箱子"
+        onClose={handleCloseBox}
+        onTakeItem={handleTakeItem}
+        onTakeAll={handleTakeAll}
       />
     </div>
   );

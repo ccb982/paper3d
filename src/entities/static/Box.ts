@@ -101,10 +101,6 @@ export class Box extends StaticEntity {
     this.items = [];
     return allItems;
   }
-
-  public addItem(item: Item): void {
-    this.items.push(item);
-  }
   
   /**
    * 命中时调用
