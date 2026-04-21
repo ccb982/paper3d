@@ -655,8 +655,8 @@ class FlameContour3D {
   }
 
   /**
-   * 获取填充轮廓内部的蓝色平面
-   * @param particles 粒子数据，用于在视角变化时重新计算
+   * 获取基于粒子颜色的填充平面
+   * @param particles 粒子数据，用于计算填充颜色
    * @returns THREE.Mesh | null
    */
   public getFillMesh(particles?: { position: THREE.Vector3; color: THREE.Color }[]): THREE.Mesh | null {
@@ -756,9 +756,32 @@ class FlameContour3D {
     
     const geometry = new THREE.ShapeGeometry(shape);
     
-    // 创建蓝色填充材质
+    // 计算基于粒子的颜色
+    let fillColor = new THREE.Color(0x000000);
+    if (particles && particles.length > 0) {
+      // 计算粒子颜色的平均值，并稍微调亮
+      let r = 0, g = 0, b = 0;
+      for (const particle of particles) {
+        r += particle.color.r;
+        g += particle.color.g;
+        b += particle.color.b;
+      }
+      const count = particles.length;
+      r = (r / count) * 1.5; // 调亮 50%
+      g = (g / count) * 1.5;
+      b = (b / count) * 1.5;
+      
+      // 确保颜色值在 0-1 范围内
+      r = Math.min(1, r);
+      g = Math.min(1, g);
+      b = Math.min(1, b);
+      
+      fillColor.setRGB(r, g, b);
+    }
+    
+    // 创建基于粒子颜色的填充材质
     const material = new THREE.MeshBasicMaterial({ 
-      color: 0x0000ff, 
+      color: fillColor,
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.6,
