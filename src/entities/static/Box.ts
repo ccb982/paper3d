@@ -1,12 +1,13 @@
 import { StaticEntity } from './StaticEntity';
 import { Item, ItemFactory, ItemType, ItemRarity } from '../items/ItemData';
+import { InventorySystem } from '../../systems/inventory/InventorySystem';
 import * as THREE from 'three';
 
 /**
  * 箱子类，继承自StaticEntity
  */
 export class Box extends StaticEntity {
-  private items: Item[] = [];
+  private inventory: InventorySystem;
   private isOpened: boolean = false;
 
   /**
@@ -46,6 +47,9 @@ export class Box extends StaticEntity {
       isBox: true
     };
 
+    // 创建箱子的物品栏（4x3格）
+    this.inventory = new InventorySystem(4, 3);
+    
     // 随机生成物品
     this.generateRandomItems();
   }
@@ -71,12 +75,21 @@ export class Box extends StaticEntity {
         id: `${this.id}-item-${i}`,
         quantity: template.type === ItemType.CONSUMABLE ? Math.floor(Math.random() * 5) + 1 : 1
       });
-      this.items.push(item);
+      
+      // 尝试放置物品到随机位置
+      let placed = false;
+      for (let y = 0; y < 3 && !placed; y++) {
+        for (let x = 0; x < 4 && !placed; x++) {
+          if (this.inventory.addItem(item, x, y)) {
+            placed = true;
+          }
+        }
+      }
     }
   }
 
-  public getItems(): Item[] {
-    return this.items;
+  public getInventory(): InventorySystem {
+    return this.inventory;
   }
 
   public isBoxOpened(): boolean {
@@ -87,19 +100,8 @@ export class Box extends StaticEntity {
     this.isOpened = true;
   }
 
-  public takeItem(index: number): Item | null {
-    if (index >= 0 && index < this.items.length) {
-      const item = this.items[index];
-      this.items.splice(index, 1);
-      return item;
-    }
-    return null;
-  }
-
-  public takeAllItems(): Item[] {
-    const allItems = [...this.items];
-    this.items = [];
-    return allItems;
+  public close(): void {
+    this.isOpened = false;
   }
   
   /**

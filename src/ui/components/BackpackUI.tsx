@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { InventorySystem } from '../../systems/inventory/InventorySystem';
+import { backpackManager } from '../../systems/inventory/BackpackManager';
 import { ItemType } from '../../entities/items/ItemData';
 
 // 根据物品类型返回颜色
@@ -24,7 +24,7 @@ interface BackpackUIProps {
 }
 
 export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) => {
-  const [slots, setSlots] = useState(InventorySystem.getInstance().getSlots());
+  const [slots, setSlots] = useState(backpackManager.getInventory().getSlots());
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const [draggedItem, setDraggedItem] = useState<{
     item: any;
@@ -41,13 +41,13 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
 
     // 监听背包变化
     const updateSlots = () => {
-      setSlots(InventorySystem.getInstance().getSlots());
+      setSlots(backpackManager.getInventory().getSlots());
     };
 
-    InventorySystem.getInstance().addListener(updateSlots);
+    backpackManager.getInventory().addListener(updateSlots);
 
     return () => {
-      InventorySystem.getInstance().removeListener(updateSlots);
+      backpackManager.getInventory().removeListener(updateSlots);
     };
   }, [isVisible]);
 
@@ -76,7 +76,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
       setIsDragging(true);
       
       // 从背包中移除物品
-      InventorySystem.getInstance().removeItemAt(slot.x, slot.y);
+      backpackManager.getInventory().removeItemAt(slot.x, slot.y);
     }
   };
 
@@ -84,7 +84,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   const handleDragEnd = () => {
     if (tempItem && draggedItem) {
       // 尝试放置物品
-      const inventory = InventorySystem.getInstance();
+      const inventory = backpackManager.getInventory();
       const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
       
       if (!success) {

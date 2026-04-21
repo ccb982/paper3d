@@ -8,26 +8,21 @@ export interface InventorySlot {
 }
 
 export class InventorySystem {
-  private static instance: InventorySystem;
   private items: Map<string, Item> = new Map();
   private slots: InventorySlot[] = [];
   private width: number = 5;
   private height: number = 8;
   private listeners: Array<() => void> = [];
 
-  private constructor() {
+  constructor(width: number = 5, height: number = 8) {
+    this.width = width;
+    this.height = height;
     // 初始化背包格子
     this.initSlots();
-    // 添加一些测试物品
-    this.addTestItems();
   }
 
-  public static getInstance(): InventorySystem {
-    if (!InventorySystem.instance) {
-      InventorySystem.instance = new InventorySystem();
-    }
-    return InventorySystem.instance;
-  }
+  // 移除单例模式
+  // 现在可以创建多个实例
 
   private initSlots() {
     for (let y = 0; y < this.height; y++) {
@@ -40,108 +35,6 @@ export class InventorySystem {
         });
       }
     }
-  }
-
-  private addTestItems() {
-    // 添加一些测试物品
-    const healthPotion = ItemFactory.createItem({
-      name: '治疗药水',
-      type: ItemType.CONSUMABLE,
-      description: '恢复100点生命值',
-      icon: '/textures/items/health-potion.png',
-      quantity: 5,
-      maxStack: 20,
-      rarity: ItemRarity.COMMON,
-      effects: [{
-        type: 'heal',
-        value: 100,
-        description: '恢复100点生命值'
-      }]
-    });
-
-    const manaPotion = ItemFactory.createItem({
-      name: '法力药水',
-      type: ItemType.CONSUMABLE,
-      description: '恢复100点法力值',
-      icon: '/textures/items/mana-potion.png',
-      quantity: 3,
-      maxStack: 20,
-      rarity: ItemRarity.COMMON,
-      effects: [{
-        type: 'mana',
-        value: 100,
-        description: '恢复100点法力值'
-      }]
-    });
-
-    const sword = ItemFactory.createItem({
-      name: '铁剑',
-      type: ItemType.WEAPON,
-      description: '一把普通的铁剑',
-      icon: '/textures/items/iron-sword.png',
-      quantity: 1,
-      maxStack: 1,
-      rarity: ItemRarity.UNCOMMON,
-      size: { width: 2, height: 1 },
-      properties: {
-        damage: 20,
-        durability: 100
-      }
-    });
-
-    const shield = ItemFactory.createItem({
-      name: '盾牌',
-      type: ItemType.ARMOR,
-      description: '提供防御的盾牌',
-      icon: '/textures/items/shield.png',
-      quantity: 1,
-      maxStack: 1,
-      rarity: ItemRarity.UNCOMMON,
-      size: { width: 2, height: 2 },
-      properties: {
-        defense: 15,
-        durability: 80
-      }
-    });
-
-    const staff = ItemFactory.createItem({
-      name: '法杖',
-      type: ItemType.WEAPON,
-      description: '魔法攻击武器',
-      icon: '/textures/items/staff.png',
-      quantity: 1,
-      maxStack: 1,
-      rarity: ItemRarity.RARE,
-      size: { width: 1, height: 3 },
-      properties: {
-        magicDamage: 25,
-        durability: 70
-      }
-    });
-
-    const bow = ItemFactory.createItem({
-      name: '弓箭',
-      type: ItemType.WEAPON,
-      description: '远程攻击武器',
-      icon: '/textures/items/bow.png',
-      quantity: 1,
-      maxStack: 1,
-      rarity: ItemRarity.UNCOMMON,
-      size: { width: 2, height: 1 },
-      properties: {
-        damage: 15,
-        range: 50,
-        durability: 90
-      }
-    });
-
-    // 将物品添加到背包
-    this.addItem(healthPotion, 0, 0);
-    this.addItem(manaPotion, 1, 0);
-    this.addItem(sword, 0, 1);
-    this.addItem(shield, 2, 0);
-    this.addItem(staff, 0, 3);
-    this.addItem(bow, 2, 2);
   }
 
   /**

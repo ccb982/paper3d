@@ -11,8 +11,7 @@ import { BoxUI } from './ui/components/BoxUI';
 import { InteractionPrompt } from './ui/components/InteractionPrompt';
 import { getNearbyInteractiveObjects } from './utils/interactionDetector';
 import type { InteractiveObject } from './utils/interactionDetector';
-import { Item } from './entities/items/ItemData';
-import { InventorySystem } from './systems/inventory/InventorySystem';
+import { backpackManager } from './systems/inventory/BackpackManager';
 import { CHARACTER_HEIGHT } from './utils/constants';
 import { useEffect, useState, useRef } from 'react';
 import { characterPositionStore } from './systems/character/CharacterPositionStore';
@@ -30,8 +29,7 @@ function App() {
   const [isBackpackVisible, setIsBackpackVisible] = useState(false);
   const [interactiveObjects, setInteractiveObjects] = useState<InteractiveObject[]>([]);
   const [isBoxOpened, setIsBoxOpened] = useState(false);
-  const [currentBoxItems, setCurrentBoxItems] = useState<Item[]>([]);
-  const [currentBoxId, setCurrentBoxId] = useState<string | null>(null);
+  const [currentBox, setCurrentBox] = useState<any>(null);
   const lastUpdateRef = useRef(0);
   const terrainHeight = 0;
 
@@ -53,7 +51,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     // 将InventorySystem引用存储到window对象，供BoxUI使用
-    (window as any).inventorySystem = InventorySystem.getInstance();
+    (window as any).inventorySystem = backpackManager.getInventory();
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
@@ -75,66 +73,22 @@ function App() {
   const handleInteract = (object: InteractiveObject) => {
     console.log('交互对象:', object);
     if (object.type === 'box' && object.entity) {
-      const box = object.entity as any;
+      const box = object.entity;
       if (typeof box.open === 'function') {
         box.open();
       }
-      const items = box.getItems ? box.getItems() : [];
-      setCurrentBoxItems(items);
-      setCurrentBoxId(box.id || object.id);
+      setCurrentBox(box);
       setIsBoxOpened(true);
-      console.log('打开箱子:', object.id, '物品:', items);
+      console.log('打开箱子:', object.id);
     }
   };
 
   const handleCloseBox = () => {
+    if (currentBox && typeof currentBox.close === 'function') {
+      currentBox.close();
+    }
     setIsBoxOpened(false);
-    setCurrentBoxItems([]);
-    setCurrentBoxId(null);
-  };
-
-  const handleTakeItem = (index: number) => {
-    if (currentBoxId) {
-      const entityManager = (window as any).entityManager;
-      if (entityManager) {
-        const box = entityManager.getEntityById(currentBoxId) as any;
-        if (box && box.takeItem) {
-          const item = box.takeItem(index);
-          if (item) {
-            const inventory = (window as any).inventorySystem;
-            if (inventory) {
-              inventory.addItem(item, 0, 0);
-              console.log('获得物品:', item.name);
-              const remainingItems = box.getItems ? box.getItems() : [];
-              setCurrentBoxItems([...remainingItems]);
-              if (remainingItems.length === 0) {
-                handleCloseBox();
-              }
-            }
-          }
-        }
-      }
-    }
-  };
-
-  const handleTakeAll = () => {
-    if (currentBoxId) {
-      const entityManager = (window as any).entityManager;
-      if (entityManager) {
-        const box = entityManager.getEntityById(currentBoxId) as any;
-        if (box && box.takeAllItems) {
-          const items = box.takeAllItems();
-          const inventory = (window as any).inventorySystem;
-          if (inventory) {
-            items.forEach((item: Item) => {
-              inventory.addItem(item, 0, 0);
-              console.log('获得物品:', item.name);
-            });
-          }
-        }
-      }
-      handleCloseBox();
-    }
+    setCurrentBox(null);
   };
 
   useEffect(() => {
@@ -213,11 +167,9 @@ function App() {
       />
       <BoxUI
         isVisible={isBoxOpened}
-        items={currentBoxItems}
+        inventory={currentBox?.getInventory()}
         boxName="箱子"
         onClose={handleCloseBox}
-        onTakeItem={handleTakeItem}
-        onTakeAll={handleTakeAll}
       />
     </div>
   );
