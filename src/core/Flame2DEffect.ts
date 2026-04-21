@@ -47,7 +47,7 @@ export class Flame2DEffect {
   private topTemplateNorm: { x: number; y: number }[] = [];
 
   // 调试选项
-  public showParticles: boolean = true;
+  public showParticles: boolean = false;
 
   // 轮廓样式
   private contourColor: string = '#ff8800';

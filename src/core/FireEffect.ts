@@ -52,13 +52,42 @@ export class FireEffect extends BaseEffect {
     this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
     this.geometry.setAttribute('size', new THREE.BufferAttribute(this.sizes, 1));
     
-    this.material = new THREE.PointsMaterial({
-      size: 1.0,
-      sizeAttenuation: false,
-      vertexColors: true,
+    // 使用自定义着色器实现圆形粒子
+    this.material = new THREE.ShaderMaterial({
+      uniforms: {
+        pointSize: { value: 9.0 } // 基本粒子大小（减小）
+      },
+      vertexShader: `
+        uniform float pointSize;
+        attribute float size;
+        attribute vec3 color;
+        varying vec3 vColor;
+        
+        void main() {
+          vColor = color;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = pointSize * size * (100.0 / -mvPosition.z);
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        
+        void main() {
+          // 绘制圆形粒子
+          float r = 0.5;
+          vec2 cxy = 2.0 * gl_PointCoord - 1.0;
+          float ll = dot(cxy, cxy);
+          if (ll > 1.0) discard;
+          
+          // 径向渐变
+          float alpha = 1.0 - ll;
+          gl_FragColor = vec4(vColor, alpha);
+        }
+      `,
       transparent: true,
-      opacity: 0, // 完全透明，隐藏粒子但保留运行
-      blending: THREE.AdditiveBlending
+      blending: THREE.AdditiveBlending,
+      depthWrite: false
     });
     
     this.points = new THREE.Points(this.geometry, this.material);
@@ -170,15 +199,15 @@ export class FireEffect extends BaseEffect {
       if (lifeFactor > 0.7) {
         // 初始：红白色
         particle.color.setRGB(1.0, 0.8, 0.8);
-        particle.size = 0.08;
+        particle.size = 0.2; // 增大3D粒子大小
       } else if (lifeFactor > 0.3) {
         // 中期：橙色
         particle.color.setRGB(1.0, 0.6, 0.0);
-        particle.size = 0.1;
+        particle.size = 0.25; // 增大3D粒子大小
       } else {
         // 后期：红色
         particle.color.setRGB(0.8, 0.1, 0.0);
-        particle.size = 0.06;
+        particle.size = 0.15; // 增大3D粒子大小
       }
 
       // 移除死亡粒子
