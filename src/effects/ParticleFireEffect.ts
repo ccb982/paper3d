@@ -35,6 +35,7 @@ export class ParticleFireEffect {
   private emitAccumulator: number = 0;
   private elapsed: number = 0;
   private contour3D: FlameContour3D | null = null;
+  private stencilMesh: THREE.Mesh | null = null;
   private duration: number;
 
   constructor(position: THREE.Vector3, duration: number = Infinity) {
@@ -88,7 +89,14 @@ export class ParticleFireEffect {
       `,
       transparent: true,
       blending: THREE.AdditiveBlending,
-      depthWrite: false
+      depthWrite: false,
+      stencilWrite: true,
+      stencilFunc: THREE.EqualStencilFunc,
+      stencilRef: 1,
+      stencilMask: 0xff,
+      stencilFail: THREE.KeepStencilOp,
+      stencilZFail: THREE.KeepStencilOp,
+      stencilZPass: THREE.KeepStencilOp
     });
     
     this.points = new THREE.Points(this.geometry, this.material);
@@ -243,11 +251,52 @@ export class ParticleFireEffect {
       
       // 强制更新轮廓位置，确保始终覆盖火焰
       this.contour3D.update(particleData);
+      
+      // 更新模板网格
+      this.updateStencilMesh();
     }
     
     // 检查是否达到持续时间
     if (this.duration !== Infinity && this.elapsed >= this.duration) {
       this.isActive = false;
+    }
+  }
+
+  private updateStencilMesh() {
+    if (!this.contour3D) return;
+    
+    // 清理旧的模板网格
+    if (this.stencilMesh) {
+      this.group.remove(this.stencilMesh);
+      if (this.stencilMesh.geometry) {
+        this.stencilMesh.geometry.dispose();
+      }
+      if (this.stencilMesh.material) {
+        this.stencilMesh.material.dispose();
+      }
+      this.stencilMesh = null;
+    }
+    
+    // 创建新的模板网格
+    const newStencilMesh = this.contour3D.getStencilMesh();
+    if (newStencilMesh) {
+      // 设置模板材质属性
+      newStencilMesh.material = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        side: THREE.DoubleSide,
+        colorWrite: false, // 不写入颜色缓冲
+        depthWrite: false, // 不写入深度缓冲
+        stencilWrite: true, // 写入模板缓冲
+        stencilFunc: THREE.AlwaysStencilFunc, // 总是通过
+        stencilRef: 1, // 模板参考值
+        stencilMask: 0xff, // 模板掩码
+        stencilFail: THREE.ReplaceStencilOp, // 失败时替换
+        stencilZFail: THREE.ReplaceStencilOp, // Z失败时替换
+        stencilZPass: THREE.ReplaceStencilOp // Z通过时替换
+      });
+      
+      this.stencilMesh = newStencilMesh;
+      this.group.add(this.stencilMesh);
     }
   }
 
@@ -282,6 +331,18 @@ export class ParticleFireEffect {
   public dispose(): void {
     const scene = (window as any).gameScene;
     if (scene && this.group.parent) scene.remove(this.group);
+    
+    // 清理模板网格
+    if (this.stencilMesh) {
+      this.group.remove(this.stencilMesh);
+      if (this.stencilMesh.geometry) {
+        this.stencilMesh.geometry.dispose();
+      }
+      if (this.stencilMesh.material) {
+        this.stencilMesh.material.dispose();
+      }
+      this.stencilMesh = null;
+    }
     
     // 清理 3D 火焰轮廓效果
     if (this.contour3D) {
@@ -517,6 +578,36 @@ class FlameContour3D {
     const lineLoop = new THREE.LineLoop(lineGeometry, lineMaterial);
     this.group.add(lineLoop);
     this.currentLineLoop = lineLoop;
+  }
+
+  /**
+   * 生成用于模板缓冲的闭合网格
+   * @returns THREE.Mesh 或 null
+   */
+  public getStencilMesh(): THREE.Mesh | null {
+    if (this.worldPoints.length < 3) return null;
+    
+    // 将轮廓点投影到 XZ 平面（y=0）
+    const points2D = this.worldPoints.map(p => new THREE.Vector2(p.x, p.z));
+    
+    // 构建 Shape
+    const shape = new THREE.Shape();
+    shape.moveTo(points2D[0].x, points2D[0].y);
+    for (let i = 1; i < points2D.length; i++) {
+      shape.lineTo(points2D[i].x, points2D[i].y);
+    }
+    shape.closePath();
+    
+    const geometry = new THREE.ShapeGeometry(shape);
+    // 材质不重要，因为只用于写入模板
+    const material = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geometry, material);
+    
+    // 放置在火焰的中间高度（例如火焰中心 Y）
+    const centerY = (this.worldPoints.reduce((sum, p) => sum + p.y, 0) / this.worldPoints.length);
+    mesh.position.y = centerY;
+    
+    return mesh;
   }
 
   public dispose(): void {
