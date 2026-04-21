@@ -25,16 +25,13 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F12') {
-        event.preventDefault();
-        toggleDebug();
-      }
+      // F12 现在可以正常打开浏览器开发者工具
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [toggleDebug]);
+  }, []);
 
   useEffect(() => {
     let animationId: number;

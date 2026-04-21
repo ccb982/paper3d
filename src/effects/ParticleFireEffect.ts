@@ -464,17 +464,18 @@ class FlameContour3D {
     curve.closed = true;
     const smoothPoints = curve.getPoints(100);
 
-    // 清理之前的线条，只清理自己创建的LineLoop
-    if (this.currentLineLoop) {
-      this.group.remove(this.currentLineLoop);
-      if (this.currentLineLoop.geometry) {
-        this.currentLineLoop.geometry.dispose();
+    // 清理group中所有旧的LineLoop对象
+    const oldLineLoops = this.group.children.filter(child => child instanceof THREE.LineLoop);
+    for (const lineLoop of oldLineLoops) {
+      this.group.remove(lineLoop);
+      if ((lineLoop as THREE.LineLoop).geometry) {
+        (lineLoop as THREE.LineLoop).geometry.dispose();
       }
-      if (this.currentLineLoop.material) {
-        this.currentLineLoop.material.dispose();
+      if ((lineLoop as THREE.LineLoop).material) {
+        (lineLoop as THREE.LineLoop).material.dispose();
       }
-      this.currentLineLoop = null;
     }
+    this.currentLineLoop = null;
 
     // 使用 LineLoop（简单，性能好）
     const lineGeometry = new THREE.BufferGeometry().setFromPoints(smoothPoints);
@@ -485,17 +486,18 @@ class FlameContour3D {
   }
 
   public dispose(): void {
-    // 清理自己创建的LineLoop
-    if (this.currentLineLoop) {
-      this.group.remove(this.currentLineLoop);
-      if (this.currentLineLoop.geometry) {
-        this.currentLineLoop.geometry.dispose();
+    // 清理group中所有旧的LineLoop对象
+    const oldLineLoops = this.group.children.filter(child => child instanceof THREE.LineLoop);
+    for (const lineLoop of oldLineLoops) {
+      this.group.remove(lineLoop);
+      if ((lineLoop as THREE.LineLoop).geometry) {
+        (lineLoop as THREE.LineLoop).geometry.dispose();
       }
-      if (this.currentLineLoop.material) {
-        this.currentLineLoop.material.dispose();
+      if ((lineLoop as THREE.LineLoop).material) {
+        (lineLoop as THREE.LineLoop).material.dispose();
       }
-      this.currentLineLoop = null;
     }
+    this.currentLineLoop = null;
     
     if (this.parentGroup && this.group.parent) {
       this.parentGroup.remove(this.group);
