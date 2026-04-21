@@ -7,6 +7,13 @@ import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
 import DialogBubble from './components/UI/DialogBubble';
 import { BackpackUI } from './ui/components/BackpackUI';
+import { BoxUI } from './ui/components/BoxUI';
+import { CombinedStorageUI } from './ui/components/CombinedStorageUI';
+import { InteractionPrompt } from './ui/components/InteractionPrompt';
+import { getNearbyInteractiveObjects } from './utils/interactionDetector';
+import type { InteractiveObject } from './utils/interactionDetector';
+import { Item } from './entities/items/ItemData';
+import { InventorySystem } from './systems/inventory/InventorySystem';
 import { CHARACTER_HEIGHT } from './utils/constants';
 import { useEffect, useState, useRef } from 'react';
 import { characterPositionStore } from './systems/character/CharacterPositionStore';
@@ -22,23 +29,131 @@ function App() {
   const [isLocking, setIsLocking] = useState(false);
   const [lockCountdown, setLockCountdown] = useState(0);
   const [isBackpackVisible, setIsBackpackVisible] = useState(false);
+  const [interactiveObjects, setInteractiveObjects] = useState<InteractiveObject[]>([]);
+  const [isBoxOpened, setIsBoxOpened] = useState(false);
+  const [currentBoxItems, setCurrentBoxItems] = useState<Item[]>([]);
+  const [currentBoxId, setCurrentBoxId] = useState<string | null>(null);
   const lastUpdateRef = useRef(0);
   const terrainHeight = 0;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       // F12 现在可以正常打开浏览器开发者工具
-      
+
       // 按B键显示/隐藏背包UI
       if (event.key === 'b' || event.key === 'B') {
         setIsBackpackVisible(prev => !prev);
       }
+
+      // 按E键交互
+      if (event.key === 'e' || event.key === 'E') {
+        if (interactiveObjects.length > 0) {
+          handleInteract(interactiveObjects[0]);
+        }
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
+    // 将InventorySystem引用存储到window对象，供BoxUI使用
+    (window as any).inventorySystem = InventorySystem.getInstance();
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
+  }, [interactiveObjects]);
+
+  useEffect(() => {
+    let animationId: number;
+    const updateInteractiveObjects = () => {
+      const nearby = getNearbyInteractiveObjects();
+      setInteractiveObjects(nearby);
+      animationId = requestAnimationFrame(updateInteractiveObjects);
+    };
+    animationId = requestAnimationFrame(updateInteractiveObjects);
+    return () => {
+      cancelAnimationFrame(animationId);
+    };
   }, []);
+
+  const handleInteract = (object: InteractiveObject) => {
+    console.log('交互对象:', object);
+    if (object.type === 'box' && object.entity) {
+      const box = object.entity as any;
+      if (typeof box.open === 'function') {
+        box.open();
+      }
+      const items = box.getItems ? box.getItems() : [];
+      setCurrentBoxItems(items);
+      setCurrentBoxId(box.id || object.id);
+      setIsBoxOpened(true);
+      setIsBackpackVisible(true);
+      console.log('打开箱子:', object.id, '物品:', items);
+    }
+  };
+
+  const handleCloseBox = () => {
+    setIsBoxOpened(false);
+    setCurrentBoxItems([]);
+    setCurrentBoxId(null);
+    setIsBackpackVisible(false);
+  };
+
+  const handleTakeItemFromBox = (index: number) => {
+    if (currentBoxId) {
+      const entityManager = (window as any).entityManager;
+      if (entityManager) {
+        const box = entityManager.getEntityById(currentBoxId) as any;
+        if (box && box.takeItem) {
+          const item = box.takeItem(index);
+          if (item) {
+            const inventory = (window as any).inventorySystem;
+            if (inventory) {
+              inventory.addItem(item, 0, 0);
+              console.log('获得物品:', item.name);
+              const remainingItems = box.getItems ? box.getItems() : [];
+              setCurrentBoxItems([...remainingItems]);
+              if (remainingItems.length === 0 && !isBoxOpened) {
+                handleCloseBox();
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+
+  const handlePutItemToBox = (item: Item, fromX: number, fromY: number) => {
+    if (currentBoxId) {
+      const entityManager = (window as any).entityManager;
+      if (entityManager) {
+        const box = entityManager.getEntityById(currentBoxId) as any;
+        if (box && (box as any).addItem) {
+          (box as any).addItem(item);
+          console.log('放入箱子:', item.name);
+          const allItems = box.getItems ? box.getItems() : [];
+          setCurrentBoxItems([...allItems]);
+        }
+      }
+    }
+  };
+
+  const handleTakeAll = () => {
+    if (currentBoxId) {
+      const entityManager = (window as any).entityManager;
+      if (entityManager) {
+        const box = entityManager.getEntityById(currentBoxId) as any;
+        if (box && box.takeAllItems) {
+          const items = box.takeAllItems();
+          const inventory = (window as any).inventorySystem;
+          if (inventory) {
+            items.forEach((item: Item) => {
+              inventory.addItem(item, 0, 0);
+              console.log('获得物品:', item.name);
+            });
+          }
+        }
+      }
+      handleCloseBox();
+    }
+  };
 
   useEffect(() => {
     let animationId: number;
@@ -106,9 +221,17 @@ function App() {
         </>
       )}
       <DialogBubble />
-      <BackpackUI 
-        isVisible={isBackpackVisible} 
-        onClose={() => setIsBackpackVisible(false)} 
+      <InteractionPrompt
+        interactiveObjects={interactiveObjects}
+        onInteract={handleInteract}
+      />
+      <CombinedStorageUI
+        isVisible={isBackpackVisible}
+        isBoxOpened={isBoxOpened}
+        boxItems={currentBoxItems}
+        onCloseBox={handleCloseBox}
+        onTakeItemFromBox={handleTakeItemFromBox}
+        onPutItemToBox={handlePutItemToBox}
       />
     </div>
   );

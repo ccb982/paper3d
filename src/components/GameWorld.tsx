@@ -57,6 +57,8 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     (window as any).gameScene = scene;
     // 将cameraStore引用存储到window对象，供ParticleFireEffect使用
     (window as any).cameraStore = cameraStore;
+    // 将EntityManager引用存储到window对象，供UI使用
+    (window as any).entityManager = EntityManager.getInstance();
   }, [scene, sceneRef]);
 
   useEffect(() => {
