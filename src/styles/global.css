@@ -277,3 +277,146 @@ canvas {
 .menu-buttons button:active {
   transform: scale(0.98);
 }
+
+/* 背包UI样式 */
+.backpack-ui-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  padding-left: 5%;
+  z-index: 2000;
+  backdrop-filter: blur(5px);
+}
+
+.backpack-ui {
+  background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+  border: 2px solid #4ecdc4;
+  border-radius: 15px;
+  padding: 20px;
+  width: auto;
+  max-width: 380px;
+  box-shadow: 0 0 30px rgba(78, 205, 196, 0.5);
+  animation: dialogAppear 0.3s ease-out;
+}
+
+.backpack-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(78, 205, 196, 0.3);
+}
+
+.backpack-header h2 {
+  color: #4ecdc4;
+  font-size: 24px;
+  font-weight: bold;
+  text-shadow: 0 0 10px rgba(78, 205, 196, 0.8);
+  margin: 0;
+}
+
+.close-button {
+  background: none;
+  border: 2px solid #4ecdc4;
+  color: #4ecdc4;
+  font-size: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: all 0.3s ease;
+}
+
+.close-button:hover {
+  background: #4ecdc4;
+  color: #1e3c72;
+  transform: scale(1.1);
+  box-shadow: 0 0 15px rgba(78, 205, 196, 0.8);
+}
+
+.backpack-content {
+  max-height: 350px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #4ecdc4 rgba(0, 0, 0, 0.3);
+}
+
+/* 自定义滚动条样式 */
+.backpack-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.backpack-content::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+.backpack-content::-webkit-scrollbar-thumb {
+  background: #4ecdc4;
+  border-radius: 4px;
+}
+
+.backpack-content::-webkit-scrollbar-thumb:hover {
+  background: #3aafaa;
+}
+
+.backpack-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 60px);
+  column-gap: 2px;
+  row-gap: 2px;
+  padding: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 10px;
+}
+
+.backpack-slot {
+  width: 60px;
+  height: 60px;
+  background: linear-gradient(135deg, #2c5282 0%, #4299e1 100%);
+  border: 2px solid rgba(78, 205, 196, 0.5);
+  border-radius: 6px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.backpack-slot:hover {
+  border-color: #4ecdc4;
+  box-shadow: 0 0 15px rgba(78, 205, 196, 0.8);
+  transform: scale(1.05);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .backpack-ui {
+    width: 95%;
+    padding: 15px;
+  }
+  
+  .backpack-header h2 {
+    font-size: 20px;
+  }
+  
+  .backpack-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  
+  .backpack-slot {
+    width: 60px;
+    height: 60px;
+  }
+}

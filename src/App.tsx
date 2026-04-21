@@ -6,6 +6,7 @@ import Crosshair from './components/UI/Crosshair';
 import StatusPanel from './components/UI/StatusPanel';
 import LoadingIndicator from './components/UI/LoadingIndicator';
 import DialogBubble from './components/UI/DialogBubble';
+import { BackpackUI } from './ui/components/BackpackUI';
 import { CHARACTER_HEIGHT } from './utils/constants';
 import { useEffect, useState, useRef } from 'react';
 import { characterPositionStore } from './systems/character/CharacterPositionStore';
@@ -20,12 +21,18 @@ function App() {
   const [activeShootingSystem, setActiveShootingSystem] = useState('freestyle');
   const [isLocking, setIsLocking] = useState(false);
   const [lockCountdown, setLockCountdown] = useState(0);
+  const [isBackpackVisible, setIsBackpackVisible] = useState(false);
   const lastUpdateRef = useRef(0);
   const terrainHeight = 0;
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       // F12 现在可以正常打开浏览器开发者工具
+      
+      // 按B键显示/隐藏背包UI
+      if (event.key === 'b' || event.key === 'B') {
+        setIsBackpackVisible(prev => !prev);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
@@ -99,6 +106,10 @@ function App() {
         </>
       )}
       <DialogBubble />
+      <BackpackUI 
+        isVisible={isBackpackVisible} 
+        onClose={() => setIsBackpackVisible(false)} 
+      />
     </div>
   );
 }
