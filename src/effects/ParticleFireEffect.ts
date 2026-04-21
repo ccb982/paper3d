@@ -834,26 +834,27 @@ class FlameContour3D {
         return null;
       };
       
-      // 只在y轴方向改变亮度（顶部亮，底部暗）
-      const topColor1Col = calculateColor(topParticles1, 1.5 * 1.3); // 顶部最亮
+      // 只在y轴方向改变亮度（顶部亮，底部暗）- 降低整体亮度
+      const baseBrightness = 1.2; // 降低基础亮度系数
+      const topColor1Col = calculateColor(topParticles1, baseBrightness * 1.3); // 顶部最亮
       if (topColor1Col) topColor1 = topColor1Col;
-      const topColor2Col = calculateColor(topParticles2, 1.5 * 1.25);
+      const topColor2Col = calculateColor(topParticles2, baseBrightness * 1.25);
       if (topColor2Col) topColor2 = topColor2Col;
-      const upperColor1Col = calculateColor(upperParticles1, 1.5 * 1.2);
+      const upperColor1Col = calculateColor(upperParticles1, baseBrightness * 1.2);
       if (upperColor1Col) upperColor1 = upperColor1Col;
-      const upperColor2Col = calculateColor(upperParticles2, 1.5 * 1.15);
+      const upperColor2Col = calculateColor(upperParticles2, baseBrightness * 1.15);
       if (upperColor2Col) upperColor2 = upperColor2Col;
-      const middleColor1Col = calculateColor(middleParticles1, 1.5 * 1.1);
+      const middleColor1Col = calculateColor(middleParticles1, baseBrightness * 1.1);
       if (middleColor1Col) middleColor1 = middleColor1Col;
-      const middleColor2Col = calculateColor(middleParticles2, 1.5 * 1.05);
+      const middleColor2Col = calculateColor(middleParticles2, baseBrightness * 1.05);
       if (middleColor2Col) middleColor2 = middleColor2Col;
-      const lowerColor1Col = calculateColor(lowerParticles1, 1.5 * 1.0);
+      const lowerColor1Col = calculateColor(lowerParticles1, baseBrightness * 1.0);
       if (lowerColor1Col) lowerColor1 = lowerColor1Col;
-      const lowerColor2Col = calculateColor(lowerParticles2, 1.5 * 0.95);
+      const lowerColor2Col = calculateColor(lowerParticles2, baseBrightness * 0.95);
       if (lowerColor2Col) lowerColor2 = lowerColor2Col;
-      const bottomColor1Col = calculateColor(bottomParticles1, 1.5 * 0.9);
+      const bottomColor1Col = calculateColor(bottomParticles1, baseBrightness * 0.9);
       if (bottomColor1Col) bottomColor1 = bottomColor1Col;
-      const bottomColor2Col = calculateColor(bottomParticles2, 1.5 * 0.85); // 底部最暗
+      const bottomColor2Col = calculateColor(bottomParticles2, baseBrightness * 0.85); // 底部最暗
       if (bottomColor2Col) bottomColor2 = bottomColor2Col;
     }
     
