@@ -96,6 +96,7 @@ export class ParticleFireEffect {
       stencilFuncMask: 0xff
     });
     
+    // 创建粒子系统
     this.points = new THREE.Points(this.geometry, this.material);
     this.group.add(this.points);
     
@@ -149,14 +150,14 @@ export class ParticleFireEffect {
     
     this.elapsed += delta;
     
-    // 发射粒子
+    // 发射粒子（仍然需要粒子数据来计算轮廓和填充效果）
     this.emitAccumulator += delta * this.emitRate;
     while (this.emitAccumulator >= 1.0) {
       this.emitParticle();
       this.emitAccumulator -= 1.0;
     }
     
-    // 更新粒子
+    // 更新粒子（仍然需要粒子数据来计算轮廓和填充效果）
     for (let i = this.particles.length - 1; i >= 0; i--) {
       const particle = this.particles[i];
       const lifeFactor = particle.lifetime / particle.maxLifetime; // 1 → 0
@@ -225,7 +226,7 @@ export class ParticleFireEffect {
       }
     }
     
-    // 更新几何体
+    // 更新粒子几何体
     this.updateGeometry();
     
     // 更新 3D 火焰轮廓效果
@@ -756,37 +757,194 @@ class FlameContour3D {
     
     const geometry = new THREE.ShapeGeometry(shape);
     
-    // 计算基于粒子的颜色
-    let fillColor = new THREE.Color(0x000000);
+    // 计算基于粒子的分区颜色（只在y轴分层）
+    let topColor1 = new THREE.Color(0xffffff);
+    let topColor2 = new THREE.Color(0xffffcc);
+    let upperColor1 = new THREE.Color(0xffff99);
+    let upperColor2 = new THREE.Color(0xffff66);
+    let middleColor1 = new THREE.Color(0xffff00);
+    let middleColor2 = new THREE.Color(0xffdd00);
+    let lowerColor1 = new THREE.Color(0xffcc00);
+    let lowerColor2 = new THREE.Color(0xffaa00);
+    let bottomColor1 = new THREE.Color(0xff8800);
+    let bottomColor2 = new THREE.Color(0xff6600);
+    
     if (particles && particles.length > 0) {
-      // 计算粒子颜色的平均值，并稍微调亮
-      let r = 0, g = 0, b = 0;
-      for (const particle of particles) {
-        r += particle.color.r;
-        g += particle.color.g;
-        b += particle.color.b;
+      // 计算包围盒的高度范围
+      let minY = Infinity, maxY = -Infinity;
+      for (const p of particles) {
+        if (p.position.y < minY) minY = p.position.y;
+        if (p.position.y > maxY) maxY = p.position.y;
       }
-      const count = particles.length;
-      r = (r / count) * 1.5; // 调亮 50%
-      g = (g / count) * 1.5;
-      b = (b / count) * 1.5;
+      const heightRange = maxY - minY;
       
-      // 确保颜色值在 0-1 范围内
-      r = Math.min(1, r);
-      g = Math.min(1, g);
-      b = Math.min(1, b);
+      // 分区粒子（只在y轴方向）
+      const topParticles1 = [];
+      const topParticles2 = [];
+      const upperParticles1 = [];
+      const upperParticles2 = [];
+      const middleParticles1 = [];
+      const middleParticles2 = [];
+      const lowerParticles1 = [];
+      const lowerParticles2 = [];
+      const bottomParticles1 = [];
+      const bottomParticles2 = [];
       
-      fillColor.setRGB(r, g, b);
+      for (const particle of particles) {
+        const normalizedY = (particle.position.y - minY) / heightRange;
+        
+        if (normalizedY > 0.9) {
+          topParticles1.push(particle);
+        } else if (normalizedY > 0.8) {
+          topParticles2.push(particle);
+        } else if (normalizedY > 0.65) {
+          upperParticles1.push(particle);
+        } else if (normalizedY > 0.5) {
+          upperParticles2.push(particle);
+        } else if (normalizedY > 0.35) {
+          middleParticles1.push(particle);
+        } else if (normalizedY > 0.2) {
+          middleParticles2.push(particle);
+        } else if (normalizedY > 0.1) {
+          lowerParticles1.push(particle);
+        } else if (normalizedY > 0.05) {
+          lowerParticles2.push(particle);
+        } else if (normalizedY > 0.02) {
+          bottomParticles1.push(particle);
+        } else {
+          bottomParticles2.push(particle);
+        }
+      }
+      
+      // 计算各分区颜色
+      const calculateColor = (particles: any[], brightness: number) => {
+        if (particles.length > 0) {
+          let r = 0, g = 0, b = 0;
+          for (const p of particles) {
+            r += p.color.r;
+            g += p.color.g;
+            b += p.color.b;
+          }
+          const count = particles.length;
+          r = (r / count) * brightness;
+          g = (g / count) * brightness;
+          b = (b / count) * brightness;
+          return new THREE.Color(Math.min(1, r), Math.min(1, g), Math.min(1, b));
+        }
+        return null;
+      };
+      
+      // 只在y轴方向改变亮度（顶部亮，底部暗）
+      const topColor1Col = calculateColor(topParticles1, 1.5 * 1.3); // 顶部最亮
+      if (topColor1Col) topColor1 = topColor1Col;
+      const topColor2Col = calculateColor(topParticles2, 1.5 * 1.25);
+      if (topColor2Col) topColor2 = topColor2Col;
+      const upperColor1Col = calculateColor(upperParticles1, 1.5 * 1.2);
+      if (upperColor1Col) upperColor1 = upperColor1Col;
+      const upperColor2Col = calculateColor(upperParticles2, 1.5 * 1.15);
+      if (upperColor2Col) upperColor2 = upperColor2Col;
+      const middleColor1Col = calculateColor(middleParticles1, 1.5 * 1.1);
+      if (middleColor1Col) middleColor1 = middleColor1Col;
+      const middleColor2Col = calculateColor(middleParticles2, 1.5 * 1.05);
+      if (middleColor2Col) middleColor2 = middleColor2Col;
+      const lowerColor1Col = calculateColor(lowerParticles1, 1.5 * 1.0);
+      if (lowerColor1Col) lowerColor1 = lowerColor1Col;
+      const lowerColor2Col = calculateColor(lowerParticles2, 1.5 * 0.95);
+      if (lowerColor2Col) lowerColor2 = lowerColor2Col;
+      const bottomColor1Col = calculateColor(bottomParticles1, 1.5 * 0.9);
+      if (bottomColor1Col) bottomColor1 = bottomColor1Col;
+      const bottomColor2Col = calculateColor(bottomParticles2, 1.5 * 0.85); // 底部最暗
+      if (bottomColor2Col) bottomColor2 = bottomColor2Col;
     }
     
-    // 创建基于粒子颜色的填充材质
-    const material = new THREE.MeshBasicMaterial({ 
-      color: fillColor,
-      side: THREE.DoubleSide,
+    // 创建分区渐变材质
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        topColor1: { value: topColor1 },
+        topColor2: { value: topColor2 },
+        upperColor1: { value: upperColor1 },
+        upperColor2: { value: upperColor2 },
+        middleColor1: { value: middleColor1 },
+        middleColor2: { value: middleColor2 },
+        lowerColor1: { value: lowerColor1 },
+        lowerColor2: { value: lowerColor2 },
+        bottomColor1: { value: bottomColor1 },
+        bottomColor2: { value: bottomColor2 }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 topColor1;
+        uniform vec3 topColor2;
+        uniform vec3 upperColor1;
+        uniform vec3 upperColor2;
+        uniform vec3 middleColor1;
+        uniform vec3 middleColor2;
+        uniform vec3 lowerColor1;
+        uniform vec3 lowerColor2;
+        uniform vec3 bottomColor1;
+        uniform vec3 bottomColor2;
+        varying vec2 vUv;
+        
+        void main() {
+          // 根据 Y 坐标（UV 的 y 分量）进行颜色插值
+          float y = vUv.y;
+          vec3 finalColor;
+          
+          if (y > 0.9) {
+            // 顶部区域1：最亮
+            float t = (y - 0.9) / 0.1;
+            finalColor = mix(topColor2, topColor1, t);
+          } else if (y > 0.8) {
+            // 顶部区域2
+            float t = (y - 0.8) / 0.1;
+            finalColor = mix(upperColor1, topColor2, t);
+          } else if (y > 0.65) {
+            // 上部区域1
+            float t = (y - 0.65) / 0.15;
+            finalColor = mix(upperColor2, upperColor1, t);
+          } else if (y > 0.5) {
+            // 上部区域2
+            float t = (y - 0.5) / 0.15;
+            finalColor = mix(middleColor1, upperColor2, t);
+          } else if (y > 0.35) {
+            // 中部区域1
+            float t = (y - 0.35) / 0.15;
+            finalColor = mix(middleColor2, middleColor1, t);
+          } else if (y > 0.2) {
+            // 中部区域2
+            float t = (y - 0.2) / 0.15;
+            finalColor = mix(lowerColor1, middleColor2, t);
+          } else if (y > 0.1) {
+            // 下部区域1
+            float t = (y - 0.1) / 0.1;
+            finalColor = mix(lowerColor2, lowerColor1, t);
+          } else if (y > 0.05) {
+            // 下部区域2
+            float t = (y - 0.05) / 0.05;
+            finalColor = mix(bottomColor1, lowerColor2, t);
+          } else if (y > 0.02) {
+            // 底部区域1
+            float t = (y - 0.02) / 0.03;
+            finalColor = mix(bottomColor2, bottomColor1, t);
+          } else {
+            // 底部区域2：最暗
+            finalColor = bottomColor2;
+          }
+          
+          gl_FragColor = vec4(finalColor, 0.6);
+        }
+      `,
       transparent: true,
-      opacity: 0.6,
-      depthWrite: false // 确保不会遮挡其他物体
+      side: THREE.DoubleSide,
+      depthWrite: false
     });
+    
     const mesh = new THREE.Mesh(geometry, material);
     
     // 设置位置
