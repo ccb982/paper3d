@@ -251,6 +251,9 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     characterPositionStore.setPosition(finalPos.x, finalPos.y, finalPos.z);
     characterPositionStore.setVelocity(newVelocity.x, newVelocity.y, newVelocity.z);
     characterPositionStore.setMoving(currentDirection.x !== 0 || currentDirection.z !== 0);
+    
+    // 更新玩家实体的位置
+    playerCharacterManager.updateCurrentCharacterPosition(finalPos.x, finalPos.y, finalPos.z);
 
     if (camera) {
       cameraParamsRef.current.radius += (cameraParamsRef.current.targetRadius - cameraParamsRef.current.radius) * cameraParamsRef.current.smoothFactor;
@@ -331,6 +334,12 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     
     // 检测碰撞
     CollisionManager.getInstance().update();
+    
+    // 同步玩家实体位置到characterPositionStore
+    const playerChar = playerCharacterManager.getCurrentCharacter();
+    if (playerChar) {
+      characterPositionStore.setPosition(playerChar.position.x, playerChar.position.y, playerChar.position.z);
+    }
     
     // 更新特效
     EffectManager.getInstance().update(delta);

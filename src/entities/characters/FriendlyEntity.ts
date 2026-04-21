@@ -14,7 +14,8 @@ export class FriendlyEntity extends CharacterEntity {
 
   constructor(id: string, texturePath: string, position: THREE.Vector3) {
     super(id, 'friendly', texturePath, position);
-    this.health = 100;
+    this.health = 3000;
+    this.maxHealth = 3000;
     this.speed = 5;
     this.isPlayerControlled = true;
     
