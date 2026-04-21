@@ -2,19 +2,18 @@ import React, { useEffect, useState } from 'react';
 import { InventorySystem } from '../../systems/inventory/InventorySystem';
 import { ItemType } from '../../entities/items/ItemData';
 
-// 根据物品类型返回颜色
 function getColorForItemType(type: string): string {
   switch (type) {
     case ItemType.CONSUMABLE:
-      return '#4CAF50'; // 绿色
+      return '#4CAF50';
     case ItemType.WEAPON:
-      return '#FF5722'; // 橙色
+      return '#FF5722';
     case ItemType.ARMOR:
-      return '#2196F3'; // 蓝色
+      return '#2196F3';
     case ItemType.MATERIAL:
-      return '#9C27B0'; // 紫色
+      return '#9C27B0';
     default:
-      return '#607D8B'; // 灰色
+      return '#607D8B';
   }
 }
 
@@ -31,7 +30,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   boxName, 
   onClose 
 }) => {
-  const [slots, setSlots] = useState(inventory?.getSlots() || []);
+  const [slots, setSlots] = useState<any[]>([]);
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
   const [draggedItem, setDraggedItem] = useState<{
     item: any;
@@ -40,93 +39,85 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   const [tempItem, setTempItem] = useState<{
     item: any;
     startPosition: { x: number; y: number };
+    originalPosition: { x: number; y: number };
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
-    console.log('[BoxUI] useEffect triggered, isVisible:', isVisible, 'inventory:', inventory);
     if (!isVisible || !inventory) return;
 
-    // 监听背包变化
     const updateSlots = () => {
-      const currentSlots = inventory.getSlots();
-      console.log('[BoxUI] Updating slots, count:', currentSlots.length);
-      currentSlots.forEach((slot, i) => {
-        if (slot.item) {
-          console.log(`[BoxUI] Slot ${i}: item=${slot.item.name}`);
-        }
-      });
-      setSlots([...currentSlots]);
+      setSlots([...inventory.getSlots()]);
     };
 
     inventory.addListener(updateSlots);
-    updateSlots(); // 立即更新一次
+    updateSlots();
 
     return () => {
       inventory.removeListener(updateSlots);
     };
   }, [isVisible, inventory]);
 
-  // 处理鼠标悬停
   const handleMouseEnter = (itemId: string | null) => {
     setHoveredItemId(itemId);
   };
 
-  // 处理鼠标离开
   const handleMouseLeave = () => {
     setHoveredItemId(null);
   };
 
-  // 处理拖拽开始
   const handleDragStart = (slot: any) => {
     if (!inventory || !slot.item) return;
-    
-    // 记录拖拽的物品和起始位置
+
     setDraggedItem({
       item: slot.item,
       startPosition: { x: slot.x, y: slot.y }
     });
     setTempItem({
       item: slot.item,
-      startPosition: { x: slot.x, y: slot.y }
+      startPosition: { x: slot.x, y: slot.y },
+      originalPosition: { x: slot.x, y: slot.y }
     });
     setIsDragging(true);
-    
-    // 从背包中移除物品
+
     inventory.removeItemAt(slot.x, slot.y);
   };
 
-  // 处理拖拽结束
   const handleDragEnd = () => {
     if (!inventory || !tempItem || !draggedItem) {
-      // 重置拖拽状态
+      if (tempItem && draggedItem) {
+        inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
+      }
       setDraggedItem(null);
       setTempItem(null);
       setIsDragging(false);
       return;
     }
-    
-    // 尝试放置物品
+
     const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
-    
+
     if (!success) {
-      // 如果放置失败，将物品放回原位置
       inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
     }
-    
-    // 重置拖拽状态
+
     setDraggedItem(null);
     setTempItem(null);
     setIsDragging(false);
   };
 
-  // 处理鼠标移动
-  const handleMouseMove = (e: React.MouseEvent, slot: any) => {
+  const handleMouseMove = (e: React.MouseEvent) => {
     if (isDragging && tempItem) {
-      setTempItem({
-        ...tempItem,
-        startPosition: { x: slot.x, y: slot.y }
-      });
+      const backpackElement = e.currentTarget;
+      const rect = backpackElement.getBoundingClientRect();
+      const x = Math.floor((e.clientX - rect.left - 10) / 62);
+      const y = Math.floor((e.clientY - rect.top - 10) / 62);
+
+      if (x >= 0 && x < 4 && y >= 0 && y < 3) {
+        setTempItem(prev => prev ? {
+          ...prev,
+          startPosition: { x, y }
+        } : null);
+      }
     }
   };
 
@@ -139,16 +130,19 @@ export const BoxUI: React.FC<BoxUIProps> = ({
       className="backpack-ui-overlay" 
       onClick={onClose}
       style={{
-        zIndex: 998
+        zIndex: 998,
+        justifyContent: 'flex-end',
+        paddingRight: '20px',
+        paddingLeft: 0
       }}
     >
       <div 
         className="backpack-ui" 
         onClick={(e) => e.stopPropagation()}
         style={{
-          left: 'auto',
           right: '20px',
-          transform: 'translateY(-50%)'
+          left: 'auto',
+          transform: 'none'
         }}
       >
         <div className="backpack-header">
@@ -157,71 +151,148 @@ export const BoxUI: React.FC<BoxUIProps> = ({
         </div>
         <div className="backpack-content">
           <div 
-            className="backpack-grid"
+            className="backpack-grid" 
             style={{ 
               gridTemplateColumns: 'repeat(4, 60px)',
+              position: 'relative',
               width: 'fit-content'
             }}
+            onMouseUp={handleDragEnd}
+            onMouseMove={handleMouseMove}
           >
-            {slots.map((slot, index) => {
-              const isHovered = slot.item?.id === hoveredItemId;
-              const isBeingDragged = tempItem?.item.id === slot.item?.id;
-              
-              return (
-                <div
-                  key={index}
-                  className={`backpack-slot ${slot.item ? 'occupied' : ''} ${isHovered ? 'hovered' : ''}`}
-                  onMouseEnter={() => handleMouseEnter(slot.item?.id || null)}
-                  onMouseLeave={handleMouseLeave}
-                  onMouseDown={() => handleDragStart(slot)}
-                  onMouseUp={handleDragEnd}
-                  onMouseMove={(e) => handleMouseMove(e, slot)}
+            {(() => {
+              const itemStartSlots = new Map<string, { x: number, y: number }>();
+
+              slots.forEach(slot => {
+                if (slot.item) {
+                  const currentStart = itemStartSlots.get(slot.item.id);
+                  if (!currentStart || (slot.x < currentStart.x || (slot.x === currentStart.x && slot.y < currentStart.y))) {
+                    itemStartSlots.set(slot.item.id, { x: slot.x, y: slot.y });
+                  }
+                }
+              });
+
+              const gridSlots = slots.map((slot, index) => {
+                const isHovered = hoveredItemId && slot.itemId === hoveredItemId;
+
+                return (
+                  <div 
+                    key={`slot-${index}`} 
+                    className={`backpack-slot ${isHovered ? 'backpack-slot-hovered' : ''}`}
+                    onMouseEnter={() => handleMouseEnter(slot.itemId)}
+                    onMouseLeave={handleMouseLeave}
+                    onMouseDown={() => handleDragStart(slot)}
+                    style={{ position: 'relative', zIndex: 1 }}
+                  >
+                  </div>
+                );
+              });
+
+              const itemElements = slots.map((slot, index) => {
+                const startSlot = itemStartSlots.get(slot.itemId || '');
+                const isStartSlot = slot.item && startSlot && slot.x === startSlot.x && slot.y === startSlot.y;
+
+                if (slot.item && isStartSlot) {
+                  return (
+                    <div 
+                      key={`item-${index}`} 
+                      style={{
+                        position: 'absolute',
+                        left: `${10 + slot.x * 62}px`,
+                        top: `${10 + slot.y * 62}px`,
+                        zIndex: 100,
+                        width: `${slot.item.size.width * 60}px`,
+                        height: `${slot.item.size.height * 60}px`,
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        cursor: 'pointer'
+                      }}
+                      onMouseEnter={() => handleMouseEnter(slot.itemId)}
+                      onMouseLeave={handleMouseLeave}
+                      onMouseDown={() => handleDragStart(slot)}
+                    >
+                      <div 
+                        style={{ 
+                          backgroundColor: getColorForItemType(slot.item.type),
+                          width: '100%',
+                          height: '100%',
+                          borderRadius: '6px',
+                          boxShadow: 'inset 0 0 5px rgba(0, 0, 0, 0.3)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        <span style={{ 
+                          fontSize: '12px', 
+                          color: 'white',
+                          textShadow: '1px 1px 2px rgba(0, 0, 0, 0.8)',
+                          textAlign: 'center',
+                          wordBreak: 'break-word',
+                          padding: '2px'
+                        }}>
+                          {slot.item.name}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+                return null;
+              }).filter(Boolean);
+
+              const tempItemElement = tempItem ? (
+                <div 
                   style={{
-                    position: 'relative',
-                    width: '60px',
-                    height: '60px',
-                    border: '1px solid #444',
-                    borderRadius: '4px',
-                    backgroundColor: slot.item ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.1)',
+                    position: 'absolute',
+                    left: `${10 + tempItem.startPosition.x * 62}px`,
+                    top: `${10 + tempItem.startPosition.y * 62}px`,
+                    zIndex: 200,
+                    width: `${tempItem.item.size.width * 60}px`,
+                    height: `${tempItem.item.size.height * 60}px`,
                     display: 'flex',
-                    alignItems: 'center',
                     justifyContent: 'center',
-                    cursor: slot.item ? 'grab' : 'default',
-                    zIndex: 1
+                    alignItems: 'center',
+                    opacity: 0.8,
+                    cursor: 'pointer'
                   }}
                 >
-                  {slot.item && (
-                    <div
-                      className="item"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        backgroundColor: getColorForItemType(slot.item.type),
-                        borderRadius: '4px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        position: 'relative',
-                        zIndex: 100,
-                        userSelect: 'none'
-                      }}
-                    >
-                      <span style={{ 
-                        fontSize: '14px', 
-                        color: 'white',
-                        textShadow: '1px 1px 2px rgba(0, 0, 0, 0.8)',
-                        textAlign: 'center',
-                        wordBreak: 'break-word',
-                        padding: '2px'
-                      }}>
-                        {slot.item.name}
-                      </span>
-                    </div>
-                  )}
+                  <div 
+                    style={{ 
+                      backgroundColor: getColorForItemType(tempItem.item.type),
+                      width: '100%',
+                      height: '100%',
+                      borderRadius: '6px',
+                      boxShadow: 'inset 0 0 5px rgba(0, 0, 0, 0.3)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    <span style={{ 
+                      fontSize: '12px', 
+                      color: 'white',
+                      textShadow: '1px 1px 2px rgba(0, 0, 0, 0.8)',
+                      textAlign: 'center',
+                      wordBreak: 'break-word',
+                      padding: '2px'
+                    }}>
+                      {tempItem.item.name}
+                    </span>
+                  </div>
                 </div>
+              ) : null;
+
+              return (
+                <>
+                  {gridSlots}
+                  {itemElements}
+                  {tempItemElement}
+                </>
               );
-            })}
+            })()}
           </div>
         </div>
       </div>

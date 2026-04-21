@@ -33,6 +33,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   const [tempItem, setTempItem] = useState<{
     item: any;
     startPosition: { x: number; y: number };
+    originalPosition: { x: number; y: number };
   } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -71,7 +72,8 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
       });
       setTempItem({
         item: slot.item,
-        startPosition: { x: slot.x, y: slot.y }
+        startPosition: { x: slot.x, y: slot.y },
+        originalPosition: { x: slot.x, y: slot.y }
       });
       setIsDragging(true);
       
@@ -82,18 +84,20 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
 
   // 处理拖拽结束
   const handleDragEnd = () => {
-    if (tempItem && draggedItem) {
-      // 尝试放置物品
-      const inventory = backpackManager.getInventory();
-      const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
-      
-      if (!success) {
-        // 如果放置失败，将物品放回原位置
-        inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
-      }
+    if (!tempItem || !draggedItem) {
+      setDraggedItem(null);
+      setTempItem(null);
+      setIsDragging(false);
+      return;
     }
-    
-    // 重置拖拽状态
+
+    const inventory = backpackManager.getInventory();
+    const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
+
+    if (!success) {
+      inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
+    }
+
     setDraggedItem(null);
     setTempItem(null);
     setIsDragging(false);
