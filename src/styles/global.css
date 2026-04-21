@@ -399,6 +399,15 @@ canvas {
   transform: scale(1.05);
 }
 
+/* 高亮显示的背包槽位样式 */
+.backpack-slot-hovered {
+  border-color: #4ecdc4;
+  box-shadow: 0 0 15px rgba(78, 205, 196, 0.8);
+  transform: scale(1.05);
+  position: relative;
+  z-index: 1;
+}
+
 /* 物品容器样式 */
 .item-container {
   position: relative;

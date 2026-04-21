@@ -25,6 +25,7 @@ interface BackpackUIProps {
 
 export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) => {
   const [slots, setSlots] = useState(InventorySystem.getInstance().getSlots());
+  const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isVisible) return;
@@ -41,6 +42,16 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
     };
   }, [isVisible]);
 
+  // 处理鼠标悬停
+  const handleMouseEnter = (itemId: string | null) => {
+    setHoveredItemId(itemId);
+  };
+
+  // 处理鼠标离开
+  const handleMouseLeave = () => {
+    setHoveredItemId(null);
+  };
+
   if (!isVisible) {
     return null;
   }
@@ -53,7 +64,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
           <button className="close-button" onClick={onClose}>×</button>
         </div>
         <div className="backpack-content">
-          <div className="backpack-grid">
+          <div className="backpack-grid" style={{ position: 'relative' }}>
             {(() => {
               // 找到每个物品的起始格子（左上角）
               const itemStartSlots = new Map<string, { x: number, y: number }>();
@@ -68,55 +79,72 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                 }
               });
 
-              const renderedItems = new Set<string>();
-              return slots.map((slot, index) => {
-                if (!slot.item) {
-                  return (
-                    <div key={index} className="backpack-slot">
-                    </div>
-                  );
-                }
-
-                // 检查是否是物品的起始格子（左上角）
-                const startSlot = itemStartSlots.get(slot.item.id);
-                const isStartSlot = startSlot && slot.x === startSlot.x && slot.y === startSlot.y;
+              // 首先渲染所有格子
+              const gridSlots = slots.map((slot, index) => {
+                // 检查是否需要高亮显示
+                const isHovered = hoveredItemId && slot.itemId === hoveredItemId;
                 
-                // 对于非起始格子，如果物品已经被渲染过，不显示任何内容
-                if (!isStartSlot && renderedItems.has(slot.item.id)) {
-                  return (
-                    <div key={index} className="backpack-slot">
-                    </div>
-                  );
-                }
-
-                // 标记物品为已渲染
-                renderedItems.add(slot.item.id);
-
-                // 显示颜色块，根据物品尺寸调整大小
                 return (
-                  <div key={index} className="backpack-slot">
-                    <div className="item-container" style={{ position: 'relative' }}>
+                  <div 
+                    key={`slot-${index}`} 
+                    className={`backpack-slot ${isHovered ? 'backpack-slot-hovered' : ''}`}
+                    onMouseEnter={() => handleMouseEnter(slot.itemId)}
+                    onMouseLeave={handleMouseLeave}
+                    style={{ position: 'relative', zIndex: 1 }}
+                  >
+                  </div>
+                );
+              });
+
+              // 然后渲染所有物品
+              const itemElements = slots.map((slot, index) => {
+                // 检查是否是物品的起始格子（左上角）
+                const startSlot = itemStartSlots.get(slot.itemId || '');
+                const isStartSlot = slot.item && startSlot && slot.x === startSlot.x && slot.y === startSlot.y;
+                
+                if (slot.item && isStartSlot) {
+                  return (
+                    <div 
+                      key={`item-${index}`} 
+                      style={{
+                        position: 'absolute',
+                        left: `${10 + slot.x * 62}px`, // 10px padding + 60px 格子宽度 + 2px 间距
+                        top: `${10 + slot.y * 62}px`, // 10px padding + 60px 格子高度 + 2px 间距
+                        zIndex: 100,
+                        width: `${slot.item.size.width * 60}px`,
+                        height: `${slot.item.size.height * 60}px`,
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center'
+                      }}
+                    >
                       <div 
-                        className="item-color-block" 
                         style={{ 
                           backgroundColor: getColorForItemType(slot.item.type),
-                          width: `${slot.item.size.width * 100}%`,
-                          height: `${slot.item.size.height * 100}%`,
-                          position: 'absolute',
-                          top: '0%',
-                          left: '0%',
-                          zIndex: 1
+                          width: '100%',
+                          height: '100%',
+                          borderRadius: '6px',
+                          boxShadow: 'inset 0 0 5px rgba(0, 0, 0, 0.3)'
                         }}
                       />
                       {slot.item.quantity > 1 && (
-                        <div className="item-quantity" style={{ position: 'absolute', bottom: '2px', right: '2px', zIndex: 2 }}>
+                        <div style={{ position: 'absolute', bottom: '2px', right: '2px', zIndex: 2, background: 'rgba(0, 0, 0, 0.7)', color: 'white', fontSize: '12px', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', minWidth: '16px' }}>
                           {slot.item.quantity}
                         </div>
                       )}
                     </div>
-                  </div>
-                );
-              });
+                  );
+                }
+                return null;
+              }).filter(Boolean);
+
+              // 组合格子和物品
+              return (
+                <>
+                  {gridSlots}
+                  {itemElements}
+                </>
+              );
             })()}
           </div>
         </div>
