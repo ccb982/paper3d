@@ -457,12 +457,25 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
           .subVectors(charA.position, charB.position)
           .normalize();
         
-        // 计算推开距离，根据碰撞深度分配
-        const pushDistance = collisionDepth / 2;
+        let pushDistanceA = collisionDepth / 2;
+        let pushDistanceB = collisionDepth / 2;
+        
+        // 增强敌人对玩家的推动效果
+        if (charA.isEnemy(charB)) {
+          if (charA.isPlayerControlled) {
+            // 敌人推玩家：玩家被推开更多
+            pushDistanceA = collisionDepth * 0.7;
+            pushDistanceB = collisionDepth * 0.3;
+          } else if (charB.isPlayerControlled) {
+            // 敌人推玩家：玩家被推开更多
+            pushDistanceA = collisionDepth * 0.3;
+            pushDistanceB = collisionDepth * 0.7;
+          }
+        }
         
         // 推开两个角色
-        charA.position.add(direction.multiplyScalar(pushDistance));
-        charB.position.sub(direction.multiplyScalar(pushDistance));
+        charA.position.add(direction.multiplyScalar(pushDistanceA));
+        charB.position.sub(direction.multiplyScalar(pushDistanceB));
         
         // 更新网格位置
         charA.mesh.position.copy(charA.position);
