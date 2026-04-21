@@ -4,6 +4,7 @@ import { MuzzleFlashEffect } from '../effects/MuzzleFlashEffect';
 import { ExplosionEffect } from '../effects/ExplosionEffect';
 import { RingWaveEffect } from '../effects/RingWaveEffect';
 import { DawnBurstEffect } from '../effects/DawnBurstEffect';
+import { ParticleFireEffect } from '../effects/ParticleFireEffect';
 import * as THREE from 'three';
 
 /**
@@ -12,6 +13,7 @@ import * as THREE from 'three';
 export class EffectManager {
   private static instance: EffectManager;
   private activeEffects: BaseEffect[] = [];
+  private particleFireEffects: ParticleFireEffect[] = [];
 
   private constructor() {}
 
@@ -56,6 +58,15 @@ export class EffectManager {
   }
 
   /**
+   * 播放粒子火焰特效（场景中的火）
+   */
+  public playParticleFireEffect(position: THREE.Vector3, duration: number = Infinity): void {
+    const fireEffect = new ParticleFireEffect(position, duration);
+    this.particleFireEffects.push(fireEffect);
+    return fireEffect;
+  }
+
+  /**
    * 添加特效
    */
   public addEffect(effect: BaseEffect): void {
@@ -83,6 +94,16 @@ export class EffectManager {
       if (!effect.isActive) {
         effect.dispose();
         this.activeEffects.splice(i, 1);
+      }
+    }
+    
+    // 更新粒子火焰特效
+    for (let i = this.particleFireEffects.length-1; i >= 0; i--) {
+      const fireEffect = this.particleFireEffects[i];
+      fireEffect.update(delta);
+      if (!fireEffect.isActive) {
+        fireEffect.dispose();
+        this.particleFireEffects.splice(i, 1);
       }
     }
   }

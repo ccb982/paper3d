@@ -49,6 +49,10 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef }: {
     sceneRef.current = scene;
     // 设置场景引用到 EntityManager，用于特效系统
     EntityManager.getInstance().setScene(scene);
+    // 将场景引用存储到window对象，供ParticleFireEffect使用
+    (window as any).gameScene = scene;
+    // 将cameraStore引用存储到window对象，供ParticleFireEffect使用
+    (window as any).cameraStore = cameraStore;
   }, [scene, sceneRef]);
 
   useEffect(() => {
@@ -446,6 +450,11 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       entityManager.addEntity(targetEntity);
     }
     
+    // 在地图上创建一个持续时间无限的火焰特效
+    const firePosition = new THREE.Vector3(0, 3, 10);
+    EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
+    console.log('Infinite fire effect created at:', firePosition);
+    
     console.log('Entities created:', entityManager.getEntityCount());
   }, [scene, sceneRef]);
 
@@ -621,6 +630,12 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         if (document.exitPointerLock) {
           document.exitPointerLock();
         }
+      }
+      // 按F键在当前角色位置创建火焰特效
+      if (event.key === 'F') {
+        const currentPos = characterPositionStore.getPositionCopy();
+        EffectManager.getInstance().playParticleFireEffect(new THREE.Vector3(currentPos.x, currentPos.y, currentPos.z));
+        console.log('Particle fire effect created at:', currentPos);
       }
     };
 
