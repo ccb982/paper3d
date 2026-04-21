@@ -126,8 +126,8 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   }
 
   return (
-    <div 
-      className="backpack-ui-overlay" 
+    <div
+      className="backpack-ui-overlay"
       onClick={onClose}
       style={{
         zIndex: 998,

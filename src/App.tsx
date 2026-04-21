@@ -39,7 +39,16 @@ function App() {
 
       // 按B键显示/隐藏背包UI
       if (event.key === 'b' || event.key === 'B') {
-        setIsBackpackVisible(prev => !prev);
+        setIsBackpackVisible(prev => {
+          if (prev && currentBox) {
+            if (typeof currentBox.close === 'function') {
+              currentBox.close();
+            }
+            setIsBoxOpened(false);
+            setCurrentBox(null);
+          }
+          return !prev;
+        });
       }
 
       // 按E键交互
@@ -79,6 +88,7 @@ function App() {
       }
       setCurrentBox(box);
       setIsBoxOpened(true);
+      setIsBackpackVisible(true);
       console.log('打开箱子:', object.id);
     }
   };
@@ -89,6 +99,7 @@ function App() {
     }
     setIsBoxOpened(false);
     setCurrentBox(null);
+    setIsBackpackVisible(false);
   };
 
   useEffect(() => {
@@ -157,6 +168,19 @@ function App() {
         </>
       )}
       <DialogBubble />
+      {(isBackpackVisible || isBoxOpened) && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            background: 'rgba(0, 0, 0, 0.5)',
+            zIndex: 997
+          }}
+        />
+      )}
       <BackpackUI
         isVisible={isBackpackVisible}
         onClose={() => setIsBackpackVisible(false)}
