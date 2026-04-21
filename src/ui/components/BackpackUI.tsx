@@ -115,8 +115,11 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                         height: `${slot.item.size.height * 60}px`,
                         display: 'flex',
                         justifyContent: 'center',
-                        alignItems: 'center'
+                        alignItems: 'center',
+                        cursor: 'pointer'
                       }}
+                      onMouseEnter={() => handleMouseEnter(slot.itemId)}
+                      onMouseLeave={handleMouseLeave}
                     >
                       <div 
                         style={{ 
