@@ -15,7 +15,7 @@ export class Flame2DEffect {
   // 轮廓缓存
   private cachedContour: { x: number; y: number }[] = [];
   private lastContourUpdate: number = 0;
-  private contourUpdateDelay: number = 0.2;   // 每0.2秒重新采样一次轮廓
+  private contourUpdateDelay: number = 0.01;   // 每0.01秒重新采样一次轮廓
 
   // 极坐标参数
   private radialSegments: number = 90;         // 圆周分段数（越高轮廓越平滑）
