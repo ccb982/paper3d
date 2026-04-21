@@ -371,7 +371,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
         }
       } else if (!hasEnemyNearby && currentMode === GameMode.BATTLE) {
         // 没有敌人，返回日常模式
-        useGameStore.getState().exitBattle();
+        useGameStore.getState().setMode(GameMode.DAILY);
         if (shootingManager) {
           shootingManager.setActiveSystem('lockon');
           setActiveShootingSystem('lockon');
