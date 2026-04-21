@@ -3,7 +3,6 @@ import * as THREE from 'three';
 export class FlameContour3D {
   private static instance: FlameContour3D | null = null;
   private group: THREE.Group;
-  private tubeMesh: THREE.Mesh | null = null;
   private worldPoints: THREE.Vector3[] = [];
   private lastUpdateTime: number = 0;
   private updateInterval: number = 0.2; // 每0.2秒更新一次轮廓
@@ -159,6 +158,7 @@ export class FlameContour3D {
     const curve = new THREE.CatmullRomCurve3(this.worldPoints);
     curve.curveType = 'centripetal';
     curve.closed = true;
+    const smoothPoints = curve.getPoints(100);
 
     // 清理所有子对象，确保不会有残留的几何体
     while (this.group.children.length > 0) {
@@ -173,14 +173,11 @@ export class FlameContour3D {
       }
     }
 
-    // 重置引用
-    this.tubeMesh = null;
-
-    // 只使用TubeGeometry（更粗，有体积感）
-    const tubeGeometry = new THREE.TubeGeometry(curve, 100, 0.05, 8, true);
-    const tubeMaterial = new THREE.MeshStandardMaterial({ color: 0xff6600, emissive: 0x442200 });
-    this.tubeMesh = new THREE.Mesh(tubeGeometry, tubeMaterial);
-    this.group.add(this.tubeMesh);
+    // 使用 LineLoop（简单，性能好）
+    const lineGeometry = new THREE.BufferGeometry().setFromPoints(smoothPoints);
+    const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff6600, linewidth: 2 }); // linewidth not supported everywhere, but ok
+    const lineLoop = new THREE.LineLoop(lineGeometry, lineMaterial);
+    this.group.add(lineLoop);
   }
 
   public dispose(): void {
