@@ -203,11 +203,6 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                           boxShadow: 'inset 0 0 5px rgba(0, 0, 0, 0.3)'
                         }}
                       />
-                      {slot.item.quantity > 1 && (
-                        <div style={{ position: 'absolute', bottom: '2px', right: '2px', zIndex: 2, background: 'rgba(0, 0, 0, 0.7)', color: 'white', fontSize: '12px', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', minWidth: '16px' }}>
-                          {slot.item.quantity}
-                        </div>
-                      )}
                     </div>
                   );
                 }
@@ -240,11 +235,6 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                       boxShadow: 'inset 0 0 5px rgba(0, 0, 0, 0.3)'
                     }}
                   />
-                  {tempItem.item.quantity > 1 && (
-                    <div style={{ position: 'absolute', bottom: '2px', right: '2px', zIndex: 2, background: 'rgba(0, 0, 0, 0.7)', color: 'white', fontSize: '12px', fontWeight: 'bold', padding: '1px 4px', borderRadius: '3px', minWidth: '16px' }}>
-                      {tempItem.item.quantity}
-                    </div>
-                  )}
                 </div>
               ) : null;
 
