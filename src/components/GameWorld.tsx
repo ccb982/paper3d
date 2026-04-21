@@ -410,17 +410,61 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       }
     });
     
-    // 角色 vs 敌人碰撞（玩家与敌人相撞扣血 - 仅在战斗模式下）
-    collisionManager.registerCollision('character', 'character', (a, b) => {
-      const mode = useGameStore.getState().mode;
-      if (mode !== GameMode.BATTLE) return;
+    // 注册角色 vs 静态物品碰撞
+    collisionManager.registerCollision('character', 'static', (character, staticObj) => {
+      const charEntity = character as CharacterEntity;
+      const staticEntity = staticObj as StaticEntity;
       
+      // 计算碰撞深度
+      const distance = charEntity.position.distanceTo(staticEntity.position);
+      const collisionDepth = charEntity.radius + staticEntity.radius - distance;
+      
+      if (collisionDepth > 0) {
+        // 计算碰撞方向
+        const direction = new THREE.Vector3()
+          .subVectors(charEntity.position, staticEntity.position)
+          .normalize();
+        
+        // 推开角色（静态物品不动）
+        charEntity.position.add(direction.multiplyScalar(collisionDepth));
+        
+        // 更新网格位置
+        charEntity.mesh.position.copy(charEntity.position);
+      }
+    });
+    
+    // 角色 vs 角色碰撞
+    collisionManager.registerCollision('character', 'character', (a, b) => {
       const charA = a as CharacterEntity;
       const charB = b as CharacterEntity;
-      if (charA.isEnemy(charB)) {
-        // 敌人碰撞玩家：玩家扣血，敌人反弹或停止移动
-        if (charA.isPlayerControlled) charA.takeDamage(10);
-        if (charB.isPlayerControlled) charB.takeDamage(10);
+      
+      // 计算碰撞深度
+      const distance = charA.position.distanceTo(charB.position);
+      const collisionDepth = charA.radius + charB.radius - distance;
+      
+      if (collisionDepth > 0) {
+        // 计算碰撞方向
+        const direction = new THREE.Vector3()
+          .subVectors(charA.position, charB.position)
+          .normalize();
+        
+        // 计算推开距离，根据碰撞深度分配
+        const pushDistance = collisionDepth / 2;
+        
+        // 推开两个角色
+        charA.position.add(direction.multiplyScalar(pushDistance));
+        charB.position.sub(direction.multiplyScalar(pushDistance));
+        
+        // 更新网格位置
+        charA.mesh.position.copy(charA.position);
+        charB.mesh.position.copy(charB.position);
+        
+        // 战斗模式下，敌人和玩家碰撞扣血
+        const mode = useGameStore.getState().mode;
+        if (mode === GameMode.BATTLE && charA.isEnemy(charB)) {
+          if (charA.isPlayerControlled) charA.takeDamage(10);
+          if (charB.isPlayerControlled) charB.takeDamage(10);
+        }
       }
     });
     

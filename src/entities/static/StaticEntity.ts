@@ -16,6 +16,9 @@ export class StaticEntity extends Entity {
     super(id, 'static', mesh);
     this.position.copy(position);
     this.mesh.position.copy(position);
+    
+    // 设置合适的碰撞半径
+    this.radius = 1.0; // 静态物品的碰撞半径
   }
 
   /**
