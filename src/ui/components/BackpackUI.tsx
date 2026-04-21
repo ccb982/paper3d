@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { backpackManager } from '../../systems/inventory/BackpackManager';
 import { ItemType } from '../../entities/items/ItemData';
+import { DragManager } from '../../systems/inventory/DragManager';
 
 // 根据物品类型返回颜色
 function getColorForItemType(type: string): string {
@@ -26,16 +27,7 @@ interface BackpackUIProps {
 export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) => {
   const [slots, setSlots] = useState(backpackManager.getInventory().getSlots());
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
-  const [draggedItem, setDraggedItem] = useState<{
-    item: any;
-    startPosition: { x: number; y: number };
-  } | null>(null);
-  const [tempItem, setTempItem] = useState<{
-    item: any;
-    startPosition: { x: number; y: number };
-    originalPosition: { x: number; y: number };
-  } | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const dragManager = DragManager.getInstance();
 
   useEffect(() => {
     if (!isVisible) return;
@@ -45,10 +37,17 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
       setSlots(backpackManager.getInventory().getSlots());
     };
 
+    // 监听拖拽状态变化
+    const updateDragState = () => {
+      setSlots(backpackManager.getInventory().getSlots());
+    };
+
     backpackManager.getInventory().addListener(updateSlots);
+    dragManager.addListener(updateDragState);
 
     return () => {
       backpackManager.getInventory().removeListener(updateSlots);
+      dragManager.removeListener(updateDragState);
     };
   }, [isVisible]);
 
@@ -65,59 +64,41 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   // 处理拖拽开始
   const handleDragStart = (slot: any) => {
     if (slot.item) {
-      // 记录拖拽的物品和起始位置
-      setDraggedItem({
-        item: slot.item,
-        startPosition: { x: slot.x, y: slot.y }
-      });
-      setTempItem({
-        item: slot.item,
-        startPosition: { x: slot.x, y: slot.y },
-        originalPosition: { x: slot.x, y: slot.y }
-      });
-      setIsDragging(true);
-      
-      // 从背包中移除物品
-      backpackManager.getInventory().removeItemAt(slot.x, slot.y);
+      dragManager.startDrag(
+        slot.item,
+        backpackManager.getInventory(),
+        { x: slot.x, y: slot.y }
+      );
     }
   };
 
   // 处理拖拽结束
-  const handleDragEnd = () => {
-    if (!tempItem || !draggedItem) {
-      setDraggedItem(null);
-      setTempItem(null);
-      setIsDragging(false);
-      return;
+  const handleDragEnd = (e: React.MouseEvent) => {
+    const backpackElement = e.currentTarget;
+    const rect = backpackElement.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left - 10) / 62);
+    const y = Math.floor((e.clientY - rect.top - 10) / 62);
+
+    if (x >= 0 && x < 5 && y >= 0 && y < 8) {
+      dragManager.endDrag(
+        backpackManager.getInventory(),
+        { x, y }
+      );
+    } else {
+      dragManager.endDrag(null, null);
     }
-
-    const inventory = backpackManager.getInventory();
-    const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
-
-    if (!success) {
-      inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
-    }
-
-    setDraggedItem(null);
-    setTempItem(null);
-    setIsDragging(false);
   };
 
   // 处理鼠标移动
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging && tempItem) {
-      // 计算鼠标在背包网格中的位置
+    if (dragManager.isDragging()) {
       const backpackElement = e.currentTarget;
       const rect = backpackElement.getBoundingClientRect();
-      const x = Math.floor((e.clientX - rect.left - 10) / 62); // 10px padding + 60px 格子宽度 + 2px 间距
-      const y = Math.floor((e.clientY - rect.top - 10) / 62); // 10px padding + 60px 格子高度 + 2px 间距
-      
-      // 检查位置是否有效
-      if (x >= 0 && x < 5 && y >= 0 && y < 10) {
-        setTempItem(prev => prev ? {
-          ...prev,
-          startPosition: { x, y }
-        } : null);
+      const x = Math.floor((e.clientX - rect.left - 10) / 62);
+      const y = Math.floor((e.clientY - rect.top - 10) / 62);
+
+      if (x >= 0 && x < 5 && y >= 0 && y < 8) {
+        dragManager.updatePosition({ x, y });
       }
     }
   };
@@ -125,6 +106,8 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   if (!isVisible) {
     return null;
   }
+
+  const draggedItem = dragManager.getDraggedItem();
 
   return (
     <div className="backpack-ui-overlay">
@@ -214,15 +197,15 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
               }).filter(Boolean);
 
               // 渲染临时物品（拖拽中的物品）
-              const tempItemElement = tempItem ? (
+              const tempItemElement = draggedItem ? (
                 <div 
                   style={{
                     position: 'absolute',
-                    left: `${10 + tempItem.startPosition.x * 62}px`,
-                    top: `${10 + tempItem.startPosition.y * 62}px`,
+                    left: `${10 + draggedItem.currentPosition.x * 62}px`,
+                    top: `${10 + draggedItem.currentPosition.y * 62}px`,
                     zIndex: 200,
-                    width: `${tempItem.item.size.width * 60}px`,
-                    height: `${tempItem.item.size.height * 60}px`,
+                    width: `${draggedItem.item.size.width * 60}px`,
+                    height: `${draggedItem.item.size.height * 60}px`,
                     display: 'flex',
                     justifyContent: 'center',
                     alignItems: 'center',
@@ -232,7 +215,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
                 >
                   <div 
                     style={{ 
-                      backgroundColor: getColorForItemType(tempItem.item.type),
+                      backgroundColor: getColorForItemType(draggedItem.item.type),
                       width: '100%',
                       height: '100%',
                       borderRadius: '6px',

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { InventorySystem } from '../../systems/inventory/InventorySystem';
 import { ItemType } from '../../entities/items/ItemData';
+import { DragManager } from '../../systems/inventory/DragManager';
 
 function getColorForItemType(type: string): string {
   switch (type) {
@@ -32,16 +33,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
 }) => {
   const [slots, setSlots] = useState<any[]>([]);
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
-  const [draggedItem, setDraggedItem] = useState<{
-    item: any;
-    startPosition: { x: number; y: number };
-  } | null>(null);
-  const [tempItem, setTempItem] = useState<{
-    item: any;
-    startPosition: { x: number; y: number };
-    originalPosition: { x: number; y: number };
-  } | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const dragManager = DragManager.getInstance();
 
   useEffect(() => {
     if (!isVisible || !inventory) return;
@@ -50,11 +42,18 @@ export const BoxUI: React.FC<BoxUIProps> = ({
       setSlots([...inventory.getSlots()]);
     };
 
+    const updateDragState = () => {
+      setSlots([...inventory.getSlots()]);
+    };
+
     inventory.addListener(updateSlots);
+    dragManager.addListener(updateDragState);
+
     updateSlots();
 
     return () => {
       inventory.removeListener(updateSlots);
+      dragManager.removeListener(updateDragState);
     };
   }, [isVisible, inventory]);
 
@@ -69,54 +68,40 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   const handleDragStart = (slot: any) => {
     if (!inventory || !slot.item) return;
 
-    setDraggedItem({
-      item: slot.item,
-      startPosition: { x: slot.x, y: slot.y }
-    });
-    setTempItem({
-      item: slot.item,
-      startPosition: { x: slot.x, y: slot.y },
-      originalPosition: { x: slot.x, y: slot.y }
-    });
-    setIsDragging(true);
-
-    inventory.removeItemAt(slot.x, slot.y);
+    dragManager.startDrag(
+      slot.item,
+      inventory,
+      { x: slot.x, y: slot.y }
+    );
   };
 
-  const handleDragEnd = () => {
-    if (!inventory || !tempItem || !draggedItem) {
-      if (tempItem && draggedItem) {
-        inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
-      }
-      setDraggedItem(null);
-      setTempItem(null);
-      setIsDragging(false);
-      return;
+  const handleDragEnd = (e: React.MouseEvent) => {
+    if (!inventory) return;
+
+    const backpackElement = e.currentTarget;
+    const rect = backpackElement.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left - 10) / 62);
+    const y = Math.floor((e.clientY - rect.top - 10) / 62);
+
+    if (x >= 0 && x < 4 && y >= 0 && y < 3) {
+      dragManager.endDrag(
+        inventory,
+        { x, y }
+      );
+    } else {
+      dragManager.endDrag(null, null);
     }
-
-    const success = inventory.addItem(tempItem.item, tempItem.startPosition.x, tempItem.startPosition.y);
-
-    if (!success) {
-      inventory.addItem(tempItem.item, draggedItem.startPosition.x, draggedItem.startPosition.y);
-    }
-
-    setDraggedItem(null);
-    setTempItem(null);
-    setIsDragging(false);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (isDragging && tempItem) {
+    if (dragManager.isDragging()) {
       const backpackElement = e.currentTarget;
       const rect = backpackElement.getBoundingClientRect();
       const x = Math.floor((e.clientX - rect.left - 10) / 62);
       const y = Math.floor((e.clientY - rect.top - 10) / 62);
 
       if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-        setTempItem(prev => prev ? {
-          ...prev,
-          startPosition: { x, y }
-        } : null);
+        dragManager.updatePosition({ x, y });
       }
     }
   };
@@ -124,6 +109,8 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   if (!isVisible) {
     return null;
   }
+
+  const draggedItem = dragManager.getDraggedItem();
 
   return (
     <div
@@ -242,15 +229,15 @@ export const BoxUI: React.FC<BoxUIProps> = ({
                 return null;
               }).filter(Boolean);
 
-              const tempItemElement = tempItem ? (
+              const tempItemElement = draggedItem ? (
                 <div 
                   style={{
                     position: 'absolute',
-                    left: `${10 + tempItem.startPosition.x * 62}px`,
-                    top: `${10 + tempItem.startPosition.y * 62}px`,
+                    left: `${10 + draggedItem.currentPosition.x * 62}px`,
+                    top: `${10 + draggedItem.currentPosition.y * 62}px`,
                     zIndex: 200,
-                    width: `${tempItem.item.size.width * 60}px`,
-                    height: `${tempItem.item.size.height * 60}px`,
+                    width: `${draggedItem.item.size.width * 60}px`,
+                    height: `${draggedItem.item.size.height * 60}px`,
                     display: 'flex',
                     justifyContent: 'center',
                     alignItems: 'center',
@@ -260,7 +247,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
                 >
                   <div 
                     style={{ 
-                      backgroundColor: getColorForItemType(tempItem.item.type),
+                      backgroundColor: getColorForItemType(draggedItem.item.type),
                       width: '100%',
                       height: '100%',
                       borderRadius: '6px',
@@ -279,7 +266,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
                       wordBreak: 'break-word',
                       padding: '2px'
                     }}>
-                      {tempItem.item.name}
+                      {draggedItem.item.name}
                     </span>
                   </div>
                 </div>
