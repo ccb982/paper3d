@@ -87,24 +87,30 @@ export class StoneBugEnemy extends EnemyEntity {
       emissiveIntensity: 0.5
     });
 
-    // 生成多个圆锥的位置
-    const conePositions = [
-      { x: 0.5, z: 0.5, y: 0.3 },
-      { x: -0.5, z: 0.5, y: 0.3 },
-      { x: 0.5, z: -0.5, y: 0.3 },
-      { x: -0.5, z: -0.5, y: 0.3 },
-      { x: 0, z: 0.6, y: 0.4 },
-      { x: 0, z: -0.6, y: 0.4 },
-      { x: 0.6, z: 0, y: 0.4 },
-      { x: -0.6, z: 0, y: 0.4 },
-      { x: 0, z: 0, y: 0.5 }
-    ];
-
+    // 随机生成6-9根圆锥
+    const coneCount = 6 + Math.floor(Math.random() * 4);
+    
     // 创建并添加圆锥
-    for (const pos of conePositions) {
+    for (let i = 0; i < coneCount; i++) {
+      // 随机生成圆锥位置（在半椭球表面）
+      const theta = Math.random() * Math.PI * 2; // 方位角
+      const phi = Math.random() * Math.PI / 2; // 极角（限制在半球范围内）
+      const radius = 0.8 + Math.random() * 0.4; // 半径在0.8-1.2之间
+      
+      // 计算笛卡尔坐标
+      const x = radius * Math.sin(phi) * Math.cos(theta);
+      const z = radius * Math.sin(phi) * Math.sin(theta);
+      const y = radius * Math.cos(phi);
+      
       const cone = new THREE.Mesh(coneGeometry, coneMaterial);
-      cone.position.set(pos.x, pos.y, pos.z);
-      cone.rotation.x = Math.PI / 2; // 使圆锥直立
+      cone.position.set(x, y, z);
+      
+      // 使圆锥指向外
+      const direction = new THREE.Vector3(x, y, z).normalize();
+      const up = new THREE.Vector3(0, 1, 0);
+      const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
+      cone.quaternion.copy(quaternion);
+      
       this.mesh.add(cone);
       this.cones.push(cone);
     }
