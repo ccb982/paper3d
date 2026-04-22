@@ -61,12 +61,19 @@ function App() {
   }, [interactiveObjects]);
 
   useEffect(() => {
+    const UPDATE_INTERVAL = 500; // 500ms更新一次，减少性能消耗
+    let lastUpdateTime = 0;
     let animationId: number;
-    const updateInteractiveObjects = () => {
-      const nearby = getNearbyInteractiveObjects();
-      setInteractiveObjects(nearby);
+
+    const updateInteractiveObjects = (timestamp: number) => {
+      if (timestamp - lastUpdateTime >= UPDATE_INTERVAL) {
+        const nearby = getNearbyInteractiveObjects();
+        setInteractiveObjects(nearby);
+        lastUpdateTime = timestamp;
+      }
       animationId = requestAnimationFrame(updateInteractiveObjects);
     };
+
     animationId = requestAnimationFrame(updateInteractiveObjects);
     return () => {
       cancelAnimationFrame(animationId);
