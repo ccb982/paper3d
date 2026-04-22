@@ -69,6 +69,19 @@ function App() {
       if (timestamp - lastUpdateTime >= UPDATE_INTERVAL) {
         const nearby = getNearbyInteractiveObjects();
         setInteractiveObjects(nearby);
+        
+        // 检查是否有打开的箱子，如果角色离开箱子范围则自动关闭
+        if (isBoxOpened && currentBox) {
+          const hasBoxInRange = nearby.some(obj => obj.type === 'box' && obj.entity === currentBox);
+          if (!hasBoxInRange) {
+            // 直接关闭箱子，避免依赖handleCloseBox函数
+            if (typeof currentBox.close === 'function') {
+              currentBox.close();
+            }
+            closeBox();
+          }
+        }
+        
         lastUpdateTime = timestamp;
       }
       animationId = requestAnimationFrame(updateInteractiveObjects);
@@ -78,7 +91,7 @@ function App() {
     return () => {
       cancelAnimationFrame(animationId);
     };
-  }, []);
+  }, [isBoxOpened, currentBox, closeBox]);
 
   const handleInteract = (object: InteractiveObject) => {
     console.log('交互对象:', object);
