@@ -1,6 +1,6 @@
-import React, { useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useLayoutEffect, useState } from 'react';
 import { useFrame, useLoader } from '@react-three/fiber';
-import { PlaneGeometry, MeshStandardMaterial, Color, TextureLoader, RepeatWrapping, Vector3, BufferAttribute } from 'three';
+import { PlaneGeometry, ShaderMaterial, Color, TextureLoader, RepeatWrapping, Vector3, BufferAttribute } from 'three';
 import { generateTerrain } from './TerrainGenerator';
 
 interface TerrainParams {
@@ -66,15 +66,90 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
     return geo;
   }, [terrainData, params]);
   
-  const material = useMemo(() => {
-    return new MeshStandardMaterial({
-      map: groundTexture,
-      roughness: 0.6,
-      metalness: 0.1,
-      flatShading: false,
+  // 涟漪效果的顶点着色器
+  const vertexShader = `
+    varying vec2 vUv;
+    varying vec3 vPosition;
+    void main() {
+      vUv = uv;
+      vPosition = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `;
+  
+  // 涟漪效果的片元着色器
+  const fragmentShader = `
+    uniform float uTime;
+    uniform sampler2D uGroundTexture;
+    varying vec2 vUv;
+    varying vec3 vPosition;
+    
+    void main() {
+      // 地面纹理采样
+      vec4 groundColor = texture2D(uGroundTexture, vUv * 10.0);
+      
+      // 涟漪效果
+      vec2 p = vUv - 0.5;
+      float r = length(p);
+      float angle = atan(p.y, p.x);
+      
+      // 只显示半径在 0.2 到 0.9 之间的环形区域
+      float ripple = 0.0;
+      if (r < 0.9 && r > 0.2) {
+        // 定义多层环的参数
+        int ringCount = 3;
+        for (int i = 0; i < ringCount; i++) {
+          float ringRadius = 0.3 + float(i) * 0.2;
+          float ringWidth = 0.03;
+          float radiusDiff = abs(r - ringRadius);
+          if (radiusDiff < ringWidth) {
+            // 环的弧段：起始角度随时间偏移
+            float startAngle = uTime * 0.5 + float(i) * 1.2;
+            float arcLength = 0.8;
+            float endAngle = startAngle + arcLength;
+            // 角度归一化
+            float a = angle;
+            if (a < 0.0) a += 6.28318;
+            float start = mod(startAngle, 6.28318);
+            float end = mod(endAngle, 6.28318);
+            if ((start < end && a >= start && a <= end) || (start >= end && (a >= start || a <= end))) {
+              ripple = 1.0;
+              break;
+            }
+          }
+        }
+      }
+      
+      // 涟漪颜色
+      vec3 rippleColor = vec3(0.3, 0.5, 0.9);
+      float rippleAlpha = 0.8 * ripple;
+      
+      // 混合地面纹理和涟漪效果
+      vec3 finalColor = mix(groundColor.rgb, rippleColor, rippleAlpha);
+      
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
+  `;
+  
+  // 材质状态
+  const [material, setMaterial] = useState<ShaderMaterial>();
+  
+  // 创建材质
+  useEffect(() => {
+    const mat = new ShaderMaterial({
+      uniforms: {
+        uTime: { value: 0 },
+        uGroundTexture: { value: groundTexture }
+      },
+      vertexShader,
+      fragmentShader,
       side: 2,
-      vertexColors: true
+      transparent: false
     });
+    setMaterial(mat);
+    return () => {
+      mat.dispose();
+    };
   }, [groundTexture]);
   
   // 更新地形颜色的函数
@@ -131,9 +206,13 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
     updateTerrainColors();
   }, [characterPosition]);
   
-  // 每帧更新地形颜色
-  useFrame(() => {
+  // 每帧更新地形颜色和涟漪效果
+  useFrame((_, delta) => {
     updateTerrainColors();
+    // 更新涟漪效果的时间
+    if (material) {
+      material.uniforms.uTime.value += delta;
+    }
   });
   
   return (

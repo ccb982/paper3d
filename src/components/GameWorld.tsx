@@ -28,6 +28,7 @@ import { TargetEntity } from '../entities/static/TargetEntity';
 import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 
+
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActiveShootingSystem, onActiveSystemChanged }: {
   getHeightAtRef: React.MutableRefObject<((x: number, z: number) => number) | null>;
   shootingManager: ShootingSystemManager | null;
@@ -593,6 +594,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     const firePosition = new THREE.Vector3(0, 3 - 1.5, 10); // 下调1.5
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
+    
+
     
     console.log('Entities created:', entityManager.getEntityCount());
   }, [scene, sceneRef]);

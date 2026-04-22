@@ -19,6 +19,13 @@ export class StoneBugEnemy extends EnemyEntity {
     // 创建原石虫的自定义模型
     this.createStoneBugModel();
   }
+  
+  /**
+   * 重写loadTexture方法，避免父类加载纹理
+   */
+  protected loadTexture(_path: string): void {
+    // 不执行任何操作，因为我们已经在createStoneBugModel中创建了自定义纹理
+  }
 
   /**
    * 创建原石虫模型
