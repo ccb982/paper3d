@@ -52,6 +52,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   }, [isVisible]);
 
   const [isHovered, setIsHovered] = useState(false);
+  const [isTop, setIsTop] = useState(false);
 
   // 处理鼠标悬停
   const handleMouseEnter = (itemId: string | null) => {
@@ -66,12 +67,31 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   // 处理背包UI悬停
   const handleUIHover = () => {
     setIsHovered(true);
+    setIsTop(true);
   };
 
   // 处理背包UI离开
   const handleUILeave = () => {
     setIsHovered(false);
+    setIsTop(false);
   };
+
+  // 全局鼠标移动监听
+  useEffect(() => {
+    if (!isVisible) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // 检测鼠标是否在屏幕左侧（背包区域）
+      const screenWidth = window.innerWidth;
+      const isLeftSide = e.clientX < screenWidth / 2;
+      setIsTop(isLeftSide);
+    };
+
+    document.addEventListener('mousemove', handleGlobalMouseMove);
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+    };
+  }, [isVisible]);
 
   // 处理拖拽开始
   const handleDragStart = (slot: any) => {
@@ -101,13 +121,13 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   const draggedItem = dragManager.getDraggedItem();
 
   return (
-    <div id="backpack-ui" className="backpack-ui-overlay" style={{ zIndex: isHovered ? 1000 : 999 }}>
+    <div id="backpack-ui" className="backpack-ui-overlay" style={{ zIndex: isTop ? 1001 : 999 }}>
       <div 
         className="backpack-ui" 
         onClick={(e) => e.stopPropagation()}
         onMouseEnter={handleUIHover}
         onMouseLeave={handleUILeave}
-        style={{ zIndex: isHovered ? 2002 : 2000 }}
+        style={{ zIndex: isTop ? 2003 : 2000 }}
       >
         <div className="backpack-header">
           <h2>背包</h2>
@@ -116,6 +136,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
         <div className="backpack-content">
           <div 
             className="backpack-grid" 
+            data-container="backpack"
             style={{ position: 'relative' }}
             onMouseUp={handleDragEnd}
             onMouseMove={handleMouseMove}

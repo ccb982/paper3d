@@ -60,6 +60,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   }, [isVisible, inventory]);
 
   const [isHovered, setIsHovered] = useState(false);
+  const [isTop, setIsTop] = useState(false);
 
   // 处理鼠标悬停
   const handleMouseEnter = (itemId: string | null) => {
@@ -74,12 +75,31 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   // 处理箱子UI悬停
   const handleUIHover = () => {
     setIsHovered(true);
+    setIsTop(true);
   };
 
   // 处理箱子UI离开
   const handleUILeave = () => {
     setIsHovered(false);
+    setIsTop(false);
   };
+
+  // 全局鼠标移动监听
+  useEffect(() => {
+    if (!isVisible) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // 检测鼠标是否在屏幕右侧（箱子区域）
+      const screenWidth = window.innerWidth;
+      const isRightSide = e.clientX >= screenWidth / 2;
+      setIsTop(isRightSide);
+    };
+
+    document.addEventListener('mousemove', handleGlobalMouseMove);
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+    };
+  }, [isVisible]);
 
   const handleDragStart = (slot: any) => {
     if (!inventory || !slot.item) return;
@@ -113,7 +133,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
       className="backpack-ui-overlay"
       onClick={onClose}
       style={{
-        zIndex: isHovered ? 1000 : 999,
+        zIndex: isTop ? 1001 : 999,
         justifyContent: 'flex-end',
         paddingRight: '20px',
         paddingLeft: 0
@@ -128,7 +148,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
           right: '20px',
           left: 'auto',
           transform: 'none',
-          zIndex: isHovered ? 2002 : 2000
+          zIndex: isTop ? 2003 : 2000
         }}
       >
         <div className="backpack-header">
@@ -138,6 +158,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
         <div className="backpack-content">
           <div 
             className="backpack-grid" 
+            data-container="box"
             style={{ 
               gridTemplateColumns: 'repeat(4, 60px)',
               position: 'relative',

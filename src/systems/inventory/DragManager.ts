@@ -76,30 +76,30 @@ export class DragManager {
   private handleGlobalMouseMove(e: MouseEvent): void {
     if (!this.draggedItem) return;
 
-    // 检测背包网格
-    const backpackGrid = document.querySelector('#backpack-ui .backpack-ui .backpack-grid');
-    if (backpackGrid) {
-      const rect = backpackGrid.getBoundingClientRect();
+    // 检测所有带有data-container属性的网格
+    const gridElements = document.querySelectorAll('[data-container]');
+    
+    for (const gridElement of gridElements) {
+      const containerType = gridElement.getAttribute('data-container');
+      if (!containerType) continue;
+      
+      const rect = gridElement.getBoundingClientRect();
       if (this.isPointInRect(e, rect)) {
-        const pos = this.calculateGridPosition(e, rect, 5, 8); // 5列8行
-        if (pos) {
-          this.draggedItem.currentPosition = pos;
-          this.draggedItem.currentInventory = 'backpack';
-          this.notifyListeners();
-          return;
+        let cols = 0;
+        let rows = 0;
+        
+        if (containerType === 'backpack') {
+          cols = 5;
+          rows = 8;
+        } else if (containerType === 'box') {
+          cols = 4;
+          rows = 3;
         }
-      }
-    }
-
-    // 检测箱子网格
-    const boxGrid = document.querySelector('#box-ui .backpack-ui .backpack-grid');
-    if (boxGrid) {
-      const rect = boxGrid.getBoundingClientRect();
-      if (this.isPointInRect(e, rect)) {
-        const pos = this.calculateGridPosition(e, rect, 4, 3); // 4列3行
+        
+        const pos = this.calculateGridPosition(e, rect, cols, rows);
         if (pos) {
           this.draggedItem.currentPosition = pos;
-          this.draggedItem.currentInventory = 'box';
+          this.draggedItem.currentInventory = containerType as 'backpack' | 'box';
           this.notifyListeners();
           return;
         }
@@ -120,25 +120,30 @@ export class DragManager {
     let targetInventory: InventorySystem | null = null;
     let targetPos: { x: number; y: number } | null = null;
 
-    // 检查背包
-    const backpackGrid = document.querySelector('#backpack-ui .backpack-ui .backpack-grid');
-    if (backpackGrid) {
-      const rect = backpackGrid.getBoundingClientRect();
+    // 检测所有带有data-container属性的网格
+    const gridElements = document.querySelectorAll('[data-container]');
+    
+    for (const gridElement of gridElements) {
+      const containerType = gridElement.getAttribute('data-container');
+      if (!containerType) continue;
+      
+      const rect = gridElement.getBoundingClientRect();
       if (this.isPointInRect(e, rect)) {
-        targetInventory = backpackManager.getInventory();
-        targetPos = this.calculateGridPosition(e, rect, 5, 8);
-      }
-    }
-
-    // 检查箱子
-    if (!targetInventory) {
-      const boxGrid = document.querySelector('#box-ui .backpack-ui .backpack-grid');
-      if (boxGrid) {
-        const rect = boxGrid.getBoundingClientRect();
-        if (this.isPointInRect(e, rect)) {
+        let cols = 0;
+        let rows = 0;
+        
+        if (containerType === 'backpack') {
+          targetInventory = backpackManager.getInventory();
+          cols = 5;
+          rows = 8;
+        } else if (containerType === 'box') {
           targetInventory = this.boxInventory;
-          targetPos = this.calculateGridPosition(e, rect, 4, 3);
+          cols = 4;
+          rows = 3;
         }
+        
+        targetPos = this.calculateGridPosition(e, rect, cols, rows);
+        break;
       }
     }
 
