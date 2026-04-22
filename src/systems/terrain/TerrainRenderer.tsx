@@ -93,19 +93,19 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
       float r = length(p);
       float angle = atan(p.y, p.x);
       
-      // 只显示半径在 0.2 到 0.9 之间的环形区域
+      // 只显示半径在 0.1 到 0.4 之间的环形区域
       float ripple = 0.0;
-      if (r < 0.9 && r > 0.2) {
+      if (r < 0.4 && r > 0.1) {
         // 定义多层环的参数
         int ringCount = 3;
         for (int i = 0; i < ringCount; i++) {
-          float ringRadius = 0.3 + float(i) * 0.2;
-          float ringWidth = 0.03;
+          float ringRadius = 0.15 + float(i) * 0.1;
+          float ringWidth = 0.02;
           float radiusDiff = abs(r - ringRadius);
           if (radiusDiff < ringWidth) {
             // 环的弧段：起始角度随时间偏移
             float startAngle = uTime * 0.5 + float(i) * 1.2;
-            float arcLength = 0.8;
+            float arcLength = 0.6;
             float endAngle = startAngle + arcLength;
             // 角度归一化
             float a = angle;
