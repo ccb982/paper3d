@@ -51,6 +51,8 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
     };
   }, [isVisible]);
 
+  const [isHovered, setIsHovered] = useState(false);
+
   // 处理鼠标悬停
   const handleMouseEnter = (itemId: string | null) => {
     setHoveredItemId(itemId);
@@ -59,6 +61,16 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   // 处理鼠标离开
   const handleMouseLeave = () => {
     setHoveredItemId(null);
+  };
+
+  // 处理背包UI悬停
+  const handleUIHover = () => {
+    setIsHovered(true);
+  };
+
+  // 处理背包UI离开
+  const handleUILeave = () => {
+    setIsHovered(false);
   };
 
   // 处理拖拽开始
@@ -89,8 +101,13 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   const draggedItem = dragManager.getDraggedItem();
 
   return (
-    <div className="backpack-ui-overlay">
-      <div className="backpack-ui">
+    <div className="backpack-ui-overlay" style={{ zIndex: isHovered ? 1000 : 998 }}>
+      <div 
+        className="backpack-ui" 
+        onMouseEnter={handleUIHover}
+        onMouseLeave={handleUILeave}
+        style={{ zIndex: isHovered ? 2002 : 2000 }}
+      >
         <div className="backpack-header">
           <h2>背包</h2>
           <button className="close-button" onClick={onClose}>×</button>

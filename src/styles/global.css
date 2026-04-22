@@ -289,7 +289,6 @@ canvas {
   justify-content: flex-start;
   align-items: center;
   padding-left: 5%;
-  z-index: 2000;
 }
 
 .backpack-ui {

@@ -57,12 +57,26 @@ export const BoxUI: React.FC<BoxUIProps> = ({
     };
   }, [isVisible, inventory]);
 
+  const [isHovered, setIsHovered] = useState(false);
+
+  // 处理鼠标悬停
   const handleMouseEnter = (itemId: string | null) => {
     setHoveredItemId(itemId);
   };
 
+  // 处理鼠标离开
   const handleMouseLeave = () => {
     setHoveredItemId(null);
+  };
+
+  // 处理箱子UI悬停
+  const handleUIHover = () => {
+    setIsHovered(true);
+  };
+
+  // 处理箱子UI离开
+  const handleUILeave = () => {
+    setIsHovered(false);
   };
 
   const handleDragStart = (slot: any) => {
@@ -96,7 +110,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
       className="backpack-ui-overlay"
       onClick={onClose}
       style={{
-        zIndex: 998,
+        zIndex: isHovered ? 1000 : 998,
         justifyContent: 'flex-end',
         paddingRight: '20px',
         paddingLeft: 0
@@ -105,10 +119,13 @@ export const BoxUI: React.FC<BoxUIProps> = ({
       <div 
         className="backpack-ui" 
         onClick={(e) => e.stopPropagation()}
+        onMouseEnter={handleUIHover}
+        onMouseLeave={handleUILeave}
         style={{
           right: '20px',
           left: 'auto',
-          transform: 'none'
+          transform: 'none',
+          zIndex: isHovered ? 2002 : 2000
         }}
       >
         <div className="backpack-header">
