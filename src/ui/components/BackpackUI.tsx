@@ -34,12 +34,12 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
 
     // 监听背包变化
     const updateSlots = () => {
-      setSlots(backpackManager.getInventory().getSlots());
+      setSlots([...backpackManager.getInventory().getSlots()]);
     };
 
     // 监听拖拽状态变化
     const updateDragState = () => {
-      setSlots(backpackManager.getInventory().getSlots());
+      setSlots([...backpackManager.getInventory().getSlots()]);
     };
 
     backpackManager.getInventory().addListener(updateSlots);
@@ -101,7 +101,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   const draggedItem = dragManager.getDraggedItem();
 
   return (
-    <div className="backpack-ui-overlay" style={{ zIndex: isHovered ? 1000 : 998 }}>
+    <div className="backpack-ui-overlay" style={{ zIndex: isHovered ? 1000 : 999 }}>
       <div 
         className="backpack-ui" 
         onMouseEnter={handleUIHover}

@@ -38,6 +38,9 @@ export interface GameState {
   volume: number;
   isDebug: boolean;
   playSoundCallback: (() => void) | null;
+  isBackpackVisible: boolean;
+  isBoxOpened: boolean;
+  currentBox: any;
 
   // Actions
   setMode: (mode: GameMode) => void;
@@ -61,6 +64,10 @@ export interface GameState {
   registerSoundCallback: (cb: () => void) => void;
   playSound: () => void;
   toggleDebug: () => void;
+  toggleBackpack: () => void;
+  openBox: (box: any) => void;
+  closeBox: () => void;
+  setCurrentBox: (box: any) => void;
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
@@ -83,6 +90,9 @@ export const useGameStore = create<GameState>((set, get) => ({
   volume: 1,
   isDebug: false,
   playSoundCallback: null,
+  isBackpackVisible: false,
+  isBoxOpened: false,
+  currentBox: null,
 
   // 页面切换方法
   setMode: (mode) => set({ previousMode: get().mode, mode }),
@@ -148,5 +158,45 @@ export const useGameStore = create<GameState>((set, get) => ({
       callback();
     }
   },
-  toggleDebug: () => set((state) => ({ isDebug: !state.isDebug }))
+  toggleDebug: () => set((state) => ({ isDebug: !state.isDebug })),
+  
+  // UI state actions
+  toggleBackpack: () => set((state) => {
+    const newBackpackState = !state.isBackpackVisible;
+    let newBoxState = state.isBoxOpened;
+    let newCurrentBox = state.currentBox;
+    
+    // If closing backpack and box is open, close box too
+    if (state.isBackpackVisible && state.isBoxOpened) {
+      newBoxState = false;
+      newCurrentBox = null;
+      (window as any).currentBox = null;
+    }
+    
+    return {
+      isBackpackVisible: newBackpackState,
+      isBoxOpened: newBoxState,
+      currentBox: newCurrentBox
+    };
+  }),
+  
+  openBox: (box: any) => set(() => {
+    (window as any).currentBox = box;
+    return {
+      isBoxOpened: true,
+      isBackpackVisible: true,
+      currentBox: box
+    };
+  }),
+  
+  closeBox: () => set(() => {
+    (window as any).currentBox = null;
+    return {
+      isBoxOpened: false,
+      isBackpackVisible: false,
+      currentBox: null
+    };
+  }),
+  
+  setCurrentBox: (box: any) => set({ currentBox: box })
 }));

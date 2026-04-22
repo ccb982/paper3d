@@ -110,7 +110,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
       className="backpack-ui-overlay"
       onClick={onClose}
       style={{
-        zIndex: isHovered ? 1000 : 998,
+        zIndex: isHovered ? 1000 : 999,
         justifyContent: 'flex-end',
         paddingRight: '20px',
         paddingLeft: 0

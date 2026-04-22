@@ -21,15 +21,18 @@ function App() {
   const mode = useGameStore(s => s.mode);
   const isDebug = useGameStore(s => s.isDebug);
   const toggleDebug = useGameStore(s => s.toggleDebug);
+  const isBackpackVisible = useGameStore(s => s.isBackpackVisible);
+  const isBoxOpened = useGameStore(s => s.isBoxOpened);
+  const currentBox = useGameStore(s => s.currentBox);
+  const toggleBackpack = useGameStore(s => s.toggleBackpack);
+  const openBox = useGameStore(s => s.openBox);
+  const closeBox = useGameStore(s => s.closeBox);
 
   const [displayPos, setDisplayPos] = useState({ x: 0, y: 0, z: 0 });
   const [activeShootingSystem, setActiveShootingSystem] = useState('freestyle');
   const [isLocking, setIsLocking] = useState(false);
   const [lockCountdown, setLockCountdown] = useState(0);
-  const [isBackpackVisible, setIsBackpackVisible] = useState(false);
   const [interactiveObjects, setInteractiveObjects] = useState<InteractiveObject[]>([]);
-  const [isBoxOpened, setIsBoxOpened] = useState(false);
-  const [currentBox, setCurrentBox] = useState<any>(null);
   const lastUpdateRef = useRef(0);
   const terrainHeight = 0;
 
@@ -39,16 +42,7 @@ function App() {
 
       // 按B键显示/隐藏背包UI
       if (event.key === 'b' || event.key === 'B') {
-        setIsBackpackVisible(prev => {
-          if (prev && currentBox) {
-            if (typeof currentBox.close === 'function') {
-              currentBox.close();
-            }
-            setIsBoxOpened(false);
-            setCurrentBox(null);
-          }
-          return !prev;
-        });
+        toggleBackpack();
       }
 
       // 按E键交互
@@ -86,11 +80,7 @@ function App() {
       if (typeof box.open === 'function') {
         box.open();
       }
-      setCurrentBox(box);
-      setIsBoxOpened(true);
-      setIsBackpackVisible(true);
-      // 将当前箱子设置到window对象，供DragManager使用
-      (window as any).currentBox = box;
+      openBox(box);
       console.log('打开箱子:', object.id);
     }
   };
@@ -99,11 +89,7 @@ function App() {
     if (currentBox && typeof currentBox.close === 'function') {
       currentBox.close();
     }
-    setIsBoxOpened(false);
-    setCurrentBox(null);
-    setIsBackpackVisible(false);
-    // 清除window对象中的currentBox
-    (window as any).currentBox = null;
+    closeBox();
   };
 
   useEffect(() => {
@@ -187,7 +173,7 @@ function App() {
       )}
       <BackpackUI
         isVisible={isBackpackVisible}
-        onClose={() => setIsBackpackVisible(false)}
+        onClose={toggleBackpack}
       />
       <InteractionPrompt
         interactiveObjects={interactiveObjects}
