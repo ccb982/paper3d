@@ -48,12 +48,14 @@ export const BoxUI: React.FC<BoxUIProps> = ({
 
     inventory.addListener(updateSlots);
     dragManager.addListener(updateDragState);
+    dragManager.setBoxInventory(inventory);
 
     updateSlots();
 
     return () => {
       inventory.removeListener(updateSlots);
       dragManager.removeListener(updateDragState);
+      dragManager.setBoxInventory(null);
     };
   }, [isVisible, inventory]);
 
@@ -107,6 +109,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
 
   return (
     <div
+      id="box-ui"
       className="backpack-ui-overlay"
       onClick={onClose}
       style={{

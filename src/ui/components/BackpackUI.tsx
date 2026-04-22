@@ -101,9 +101,10 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   const draggedItem = dragManager.getDraggedItem();
 
   return (
-    <div className="backpack-ui-overlay" style={{ zIndex: isHovered ? 1000 : 999 }}>
+    <div id="backpack-ui" className="backpack-ui-overlay" style={{ zIndex: isHovered ? 1000 : 999 }}>
       <div 
         className="backpack-ui" 
+        onClick={(e) => e.stopPropagation()}
         onMouseEnter={handleUIHover}
         onMouseLeave={handleUILeave}
         style={{ zIndex: isHovered ? 2002 : 2000 }}

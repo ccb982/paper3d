@@ -16,6 +16,7 @@ export class DragManager {
   private listeners: Array<() => void> = [];
   private mouseMoveHandler: ((e: MouseEvent) => void) | null = null;
   private mouseUpHandler: ((e: MouseEvent) => void) | null = null;
+  private boxInventory: InventorySystem | null = null;
 
   private constructor() {}
 
@@ -24,6 +25,10 @@ export class DragManager {
       DragManager.instance = new DragManager();
     }
     return DragManager.instance;
+  }
+
+  public setBoxInventory(inv: InventorySystem | null) {
+    this.boxInventory = inv;
   }
 
   public startDrag(item: Item, inventory: InventorySystem, position: { x: number; y: number }): void {
@@ -71,15 +76,14 @@ export class DragManager {
   private handleGlobalMouseMove(e: MouseEvent): void {
     if (!this.draggedItem) return;
 
-    // 检查鼠标是否在背包网格内
-    const backpackElement = document.querySelector('.backpack-ui .backpack-grid');
-    if (backpackElement) {
-      const rect = backpackElement.getBoundingClientRect();
-      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-        const x = Math.floor((e.clientX - rect.left - 10) / 62);
-        const y = Math.floor((e.clientY - rect.top - 10) / 62);
-        if (x >= 0 && x < 5 && y >= 0 && y < 8) {
-          this.draggedItem.currentPosition = { x, y };
+    // 检测背包网格
+    const backpackGrid = document.querySelector('#backpack-ui .backpack-ui .backpack-grid');
+    if (backpackGrid) {
+      const rect = backpackGrid.getBoundingClientRect();
+      if (this.isPointInRect(e, rect)) {
+        const pos = this.calculateGridPosition(e, rect, 5, 8); // 5列8行
+        if (pos) {
+          this.draggedItem.currentPosition = pos;
           this.draggedItem.currentInventory = 'backpack';
           this.notifyListeners();
           return;
@@ -87,34 +91,22 @@ export class DragManager {
       }
     }
 
-    // 检查鼠标是否在箱子网格内
-    const boxElements = document.querySelectorAll('.backpack-ui');
-    let boxElement: HTMLElement | null = null;
-    
-    boxElements.forEach(el => {
-      if (el.style.right === '20px') {
-        boxElement = el as HTMLElement;
-      }
-    });
-    
-    if (boxElement) {
-      const gridElement = boxElement.querySelector('.backpack-grid');
-      if (gridElement) {
-        const rect = gridElement.getBoundingClientRect();
-        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-          const x = Math.floor((e.clientX - rect.left - 10) / 62);
-          const y = Math.floor((e.clientY - rect.top - 10) / 62);
-          if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-            this.draggedItem.currentPosition = { x, y };
-            this.draggedItem.currentInventory = 'box';
-            this.notifyListeners();
-            return;
-          }
+    // 检测箱子网格
+    const boxGrid = document.querySelector('#box-ui .backpack-ui .backpack-grid');
+    if (boxGrid) {
+      const rect = boxGrid.getBoundingClientRect();
+      if (this.isPointInRect(e, rect)) {
+        const pos = this.calculateGridPosition(e, rect, 4, 3); // 4列3行
+        if (pos) {
+          this.draggedItem.currentPosition = pos;
+          this.draggedItem.currentInventory = 'box';
+          this.notifyListeners();
+          return;
         }
       }
     }
 
-    // 鼠标不在任何网格内
+    // 不在任何网格内
     this.draggedItem.currentInventory = null;
     this.notifyListeners();
   }
@@ -125,55 +117,57 @@ export class DragManager {
       return;
     }
 
-    // 检查鼠标是否在背包网格内
-    const backpackElement = document.querySelector('.backpack-ui .backpack-grid');
-    if (backpackElement) {
-      const rect = backpackElement.getBoundingClientRect();
-      if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-        const x = Math.floor((e.clientX - rect.left - 10) / 62);
-        const y = Math.floor((e.clientY - rect.top - 10) / 62);
-        if (x >= 0 && x < 5 && y >= 0 && y < 8) {
-          // 从背包管理器获取背包库存
-          this.endDrag(backpackManager.getInventory(), { x, y });
-          this.removeGlobalListeners();
-          return;
-        }
+    let targetInventory: InventorySystem | null = null;
+    let targetPos: { x: number; y: number } | null = null;
+
+    // 检查背包
+    const backpackGrid = document.querySelector('#backpack-ui .backpack-ui .backpack-grid');
+    if (backpackGrid) {
+      const rect = backpackGrid.getBoundingClientRect();
+      if (this.isPointInRect(e, rect)) {
+        targetInventory = backpackManager.getInventory();
+        targetPos = this.calculateGridPosition(e, rect, 5, 8);
       }
     }
 
-    // 检查鼠标是否在箱子网格内
-    const boxElements = document.querySelectorAll('.backpack-ui');
-    let boxElement: HTMLElement | null = null;
-    
-    boxElements.forEach(el => {
-      if (el.style.right === '20px') {
-        boxElement = el as HTMLElement;
-      }
-    });
-    
-    if (boxElement) {
-      const gridElement = boxElement.querySelector('.backpack-grid');
-      if (gridElement) {
-        const rect = gridElement.getBoundingClientRect();
-        if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) {
-          const x = Math.floor((e.clientX - rect.left - 10) / 62);
-          const y = Math.floor((e.clientY - rect.top - 10) / 62);
-          if (x >= 0 && x < 4 && y >= 0 && y < 3) {
-            // 从App组件获取当前箱子的库存
-            const currentBox = (window as any).currentBox;
-            if (currentBox && currentBox.getInventory) {
-              this.endDrag(currentBox.getInventory(), { x, y });
-              this.removeGlobalListeners();
-              return;
-            }
-          }
+    // 检查箱子
+    if (!targetInventory) {
+      const boxGrid = document.querySelector('#box-ui .backpack-ui .backpack-grid');
+      if (boxGrid) {
+        const rect = boxGrid.getBoundingClientRect();
+        if (this.isPointInRect(e, rect)) {
+          targetInventory = this.boxInventory;
+          targetPos = this.calculateGridPosition(e, rect, 4, 3);
         }
       }
     }
 
     // 鼠标不在任何网格内，放回原位置
-    this.endDrag(null, null);
+    this.endDrag(targetInventory, targetPos);
     this.removeGlobalListeners();
+  }
+
+  private isPointInRect(e: MouseEvent, rect: DOMRect): boolean {
+    return e.clientX >= rect.left && e.clientX <= rect.right &&
+           e.clientY >= rect.top && e.clientY <= rect.bottom;
+  }
+
+  private calculateGridPosition(e: MouseEvent, rect: DOMRect, cols: number, rows: number): { x: number; y: number } | null {
+    const cellWidth = rect.width / cols;
+    const cellHeight = rect.height / rows;
+    const x = Math.floor((e.clientX - rect.left) / cellWidth);
+    const y = Math.floor((e.clientY - rect.top) / cellHeight);
+    if (x >= 0 && x < cols && y >= 0 && y < rows) {
+      return { x, y };
+    }
+    return null;
+  }
+
+  private getGridSize(element: Element): { cols: number; rows: number } {
+    // 根据 ID 返回不同尺寸
+    if (element.closest('#backpack-ui')) return { cols: 5, rows: 8 };
+    if (element.closest('#box-ui')) return { cols: 4, rows: 3 };
+    return { cols: 0, rows: 0 };
   }
 
   public endDrag(targetInventory: InventorySystem | null, targetPosition: { x: number; y: number } | null): boolean {
