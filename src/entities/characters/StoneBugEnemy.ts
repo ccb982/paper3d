@@ -42,44 +42,28 @@ export class StoneBugEnemy extends EnemyEntity {
     // 创建半椭球几何体（弧面在上）
     const halfEllipsoidGeometry = new THREE.SphereGeometry(1, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
     
-    // 创建纹理 - 高亮度石头纹理
+    // 创建纹理
     const canvas = document.createElement('canvas');
     canvas.width = 512;
     canvas.height = 512;
     const ctx = canvas.getContext('2d')!;
     
-    // 填充背景 - 浅灰色石头底色
-    ctx.fillStyle = '#cccccc';
+    // 填充背景
+    ctx.fillStyle = '#442200';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // 绘制高亮度斑点纹理
-    for (let i = 0; i < 100; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const size = Math.random() * 20 + 5;
-      const opacity = Math.random() * 0.5 + 0.3;
-      
-      ctx.fillStyle = `rgba(200, 200, 200, ${opacity})`;
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    // 绘制明显的图案
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, canvas.width / 2, canvas.height / 2);
     
-    // 绘制一些浅色纹路
-    for (let i = 0; i < 50; i++) {
-      const x1 = Math.random() * canvas.width;
-      const y1 = Math.random() * canvas.height;
-      const x2 = x1 + (Math.random() - 0.5) * 50;
-      const y2 = y1 + (Math.random() - 0.5) * 50;
-      const width = Math.random() * 3 + 1;
-      
-      ctx.strokeStyle = 'rgba(150, 150, 150, 0.6)';
-      ctx.lineWidth = width;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      ctx.lineTo(x2, y2);
-      ctx.stroke();
-    }
+    ctx.fillStyle = '#00ff00';
+    ctx.fillRect(canvas.width / 2, 0, canvas.width / 2, canvas.height / 2);
+    
+    ctx.fillStyle = '#0000ff';
+    ctx.fillRect(0, canvas.height / 2, canvas.width / 2, canvas.height / 2);
+    
+    ctx.fillStyle = '#ffff00';
+    ctx.fillRect(canvas.width / 2, canvas.height / 2, canvas.width / 2, canvas.height / 2);
     
     // 创建纹理对象
     const texture = new THREE.CanvasTexture(canvas);
