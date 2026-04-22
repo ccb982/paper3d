@@ -9,7 +9,7 @@ export class StoneBugEnemy extends EnemyEntity {
 
   constructor(id: string, position: THREE.Vector3) {
     // 调用父类构造函数，使用空纹理路径
-    super(id, '', position, false);
+    super(id, 'enemy', '', position);
     
     // 设置原石虫的属性
     this.health = 50; // 比普通敌人更耐打
@@ -42,11 +42,54 @@ export class StoneBugEnemy extends EnemyEntity {
     // 创建半椭球几何体（弧面在上）
     const halfEllipsoidGeometry = new THREE.SphereGeometry(1, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
     
+    // 创建纹理 - 高亮度石头纹理
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext('2d')!;
+    
+    // 填充背景 - 浅灰色石头底色
+    ctx.fillStyle = '#cccccc';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // 绘制高亮度斑点纹理
+    for (let i = 0; i < 100; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const size = Math.random() * 20 + 5;
+      const opacity = Math.random() * 0.5 + 0.3;
+      
+      ctx.fillStyle = `rgba(200, 200, 200, ${opacity})`;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    // 绘制一些浅色纹路
+    for (let i = 0; i < 50; i++) {
+      const x1 = Math.random() * canvas.width;
+      const y1 = Math.random() * canvas.height;
+      const x2 = x1 + (Math.random() - 0.5) * 50;
+      const y2 = y1 + (Math.random() - 0.5) * 50;
+      const width = Math.random() * 3 + 1;
+      
+      ctx.strokeStyle = 'rgba(150, 150, 150, 0.6)';
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    
+    // 创建纹理对象
+    const texture = new THREE.CanvasTexture(canvas);
+    
     // 创建石头材质
     const stoneMaterial = new THREE.MeshStandardMaterial({
       color: 0x888888,
       roughness: 0.8,
-      metalness: 0.2
+      metalness: 0.2,
+      map: texture
     });
 
     // 创建半椭球网格
