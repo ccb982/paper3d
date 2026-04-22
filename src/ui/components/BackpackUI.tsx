@@ -1,7 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { backpackManager } from '../../systems/inventory/BackpackManager';
 import { ItemType } from '../../entities/items/ItemData';
 import { DragManager } from '../../systems/inventory/DragManager';
+
+// 全局获取dragManager实例
+const dragManager = DragManager.getInstance();
 
 // 根据物品类型返回颜色
 function getColorForItemType(type: string): string {
@@ -27,29 +30,27 @@ interface BackpackUIProps {
 export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) => {
   const [slots, setSlots] = useState(backpackManager.getInventory().getSlots());
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
-  const dragManager = DragManager.getInstance();
+
+  // 使用useCallback包装回调函数，防止每次渲染重新创建
+  const updateSlots = useCallback(() => {
+    setSlots([...backpackManager.getInventory().getSlots()]);
+  }, []);
+
+  const updateDragState = useCallback(() => {
+    setSlots([...backpackManager.getInventory().getSlots()]);
+  }, []);
 
   useEffect(() => {
     if (!isVisible) return;
 
-    // 监听背包变化
-    const updateSlots = () => {
-      setSlots([...backpackManager.getInventory().getSlots()]);
-    };
-
-    // 监听拖拽状态变化
-    const updateDragState = () => {
-      setSlots([...backpackManager.getInventory().getSlots()]);
-    };
-
     backpackManager.getInventory().addListener(updateSlots);
-    dragManager.addListener(updateDragState);
+    dragManager.addListener('backpack', updateDragState);
 
     return () => {
       backpackManager.getInventory().removeListener(updateSlots);
-      dragManager.removeListener(updateDragState);
+      dragManager.removeListener('backpack', updateDragState);
     };
-  }, [isVisible]);
+  }, [isVisible, updateSlots, updateDragState]);
 
   const [isHovered, setIsHovered] = useState(false);
   const [isTop, setIsTop] = useState(false);
@@ -119,6 +120,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
   }
 
   const draggedItem = dragManager.getDraggedItem();
+  const shouldShowDragItem = draggedItem?.currentInventory === 'backpack';
 
   return (
     <div id="backpack-ui" className="backpack-ui-overlay" style={{ zIndex: isTop ? 1001 : 999 }}>
@@ -215,7 +217,7 @@ export const BackpackUI: React.FC<BackpackUIProps> = ({ isVisible, onClose }) =>
               }).filter(Boolean);
 
               // 渲染临时物品（拖拽中的物品）
-              const tempItemElement = draggedItem ? (
+              const tempItemElement = shouldShowDragItem ? (
                 <div 
                   style={{
                     position: 'absolute',

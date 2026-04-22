@@ -1,7 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { InventorySystem } from '../../systems/inventory/InventorySystem';
 import { ItemType } from '../../entities/items/ItemData';
 import { DragManager } from '../../systems/inventory/DragManager';
+
+// 全局获取dragManager实例
+const dragManager = DragManager.getInstance();
 
 function getColorForItemType(type: string): string {
   switch (type) {
@@ -33,31 +36,35 @@ export const BoxUI: React.FC<BoxUIProps> = ({
 }) => {
   const [slots, setSlots] = useState<any[]>([]);
   const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
-  const dragManager = DragManager.getInstance();
+
+  // 使用useCallback包装回调函数，防止每次渲染重新创建
+  const updateSlots = useCallback(() => {
+    if (inventory) {
+      setSlots([...inventory.getSlots()]);
+    }
+  }, [inventory]);
+
+  const updateDragState = useCallback(() => {
+    if (inventory) {
+      setSlots([...inventory.getSlots()]);
+    }
+  }, [inventory]);
 
   useEffect(() => {
     if (!isVisible || !inventory) return;
 
-    const updateSlots = () => {
-      setSlots([...inventory.getSlots()]);
-    };
-
-    const updateDragState = () => {
-      setSlots([...inventory.getSlots()]);
-    };
-
     inventory.addListener(updateSlots);
-    dragManager.addListener(updateDragState);
+    dragManager.addListener('box', updateDragState);
     dragManager.setBoxInventory(inventory);
 
     updateSlots();
 
     return () => {
       inventory.removeListener(updateSlots);
-      dragManager.removeListener(updateDragState);
+      dragManager.removeListener('box', updateDragState);
       dragManager.setBoxInventory(null);
     };
-  }, [isVisible, inventory]);
+  }, [isVisible, inventory, updateSlots, updateDragState]);
 
   const [isHovered, setIsHovered] = useState(false);
   const [isTop, setIsTop] = useState(false);
@@ -126,6 +133,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
   }
 
   const draggedItem = dragManager.getDraggedItem();
+  const shouldShowDragItem = draggedItem?.currentInventory === 'box';
 
   return (
     <div
@@ -249,7 +257,7 @@ export const BoxUI: React.FC<BoxUIProps> = ({
                 return null;
               }).filter(Boolean);
 
-              const tempItemElement = draggedItem ? (
+              const tempItemElement = shouldShowDragItem ? (
                 <div 
                   style={{
                     position: 'absolute',

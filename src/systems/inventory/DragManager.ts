@@ -13,7 +13,7 @@ interface DraggedItem {
 export class DragManager {
   private static instance: DragManager;
   private draggedItem: DraggedItem | null = null;
-  private listeners: Array<() => void> = [];
+  private listeners: Map<string, Array<() => void>> = new Map();
   private mouseMoveHandler: ((e: MouseEvent) => void) | null = null;
   private mouseUpHandler: ((e: MouseEvent) => void) | null = null;
   private boxInventory: InventorySystem | null = null;
@@ -29,6 +29,20 @@ export class DragManager {
 
   public setBoxInventory(inv: InventorySystem | null) {
     this.boxInventory = inv;
+  }
+
+  public addListener(containerType: string, listener: () => void): void {
+    if (!this.listeners.has(containerType)) {
+      this.listeners.set(containerType, []);
+    }
+    this.listeners.get(containerType)?.push(listener);
+  }
+
+  public removeListener(containerType: string, listener: () => void): void {
+    const containerListeners = this.listeners.get(containerType);
+    if (containerListeners) {
+      this.listeners.set(containerType, containerListeners.filter(l => l !== listener));
+    }
   }
 
   public startDrag(item: Item, inventory: InventorySystem, position: { x: number; y: number }): void {
@@ -209,17 +223,27 @@ export class DragManager {
     return this.draggedItem !== null;
   }
 
-  public addListener(listener: () => void): void {
-    this.listeners.push(listener);
-  }
-
-  public removeListener(listener: () => void): void {
-    this.listeners = this.listeners.filter(l => l !== listener);
-  }
-
   private notifyListeners(): void {
-    for (const listener of this.listeners) {
-      listener();
+    if (!this.draggedItem) return;
+    
+    // 只通知当前拖拽目标容器的监听器
+    const targetContainer = this.draggedItem.currentInventory;
+    if (targetContainer) {
+      const containerListeners = this.listeners.get(targetContainer);
+      if (containerListeners) {
+        for (const listener of containerListeners) {
+          listener();
+        }
+      }
+    }
+    
+    // 同时通知源容器的监听器，以便更新源容器的状态
+    const sourceContainer = this.draggedItem.sourceInventory === backpackManager.getInventory() ? 'backpack' : 'box';
+    const sourceListeners = this.listeners.get(sourceContainer);
+    if (sourceListeners) {
+      for (const listener of sourceListeners) {
+        listener();
+      }
     }
   }
 }
