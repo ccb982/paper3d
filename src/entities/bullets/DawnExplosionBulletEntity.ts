@@ -5,6 +5,8 @@ import { EntityManager } from '../../core/EntityManager';
 import { CharacterEntity } from '../characters/CharacterEntity';
 import { StaticEntity } from '../static/StaticEntity';
 import { FireEffect } from '../../effects/FireEffect';
+import { TextureManager } from '../../systems/textures/TextureManager';
+import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailMaterial } from '../../systems/textures/BulletTrailTexture';
 
 /**
  * 爆裂黎明子弹 - 命中时触发爆裂黎明特效并造成范围伤害
@@ -13,6 +15,9 @@ import { FireEffect } from '../../effects/FireEffect';
 export class DawnExplosionBulletEntity extends BulletEntity {
   private explosionRadius: number = 10; // 爆炸范围半径
   private fireEffects: FireEffect[] = []; // 多层火焰特效
+  private trailMesh: THREE.Mesh | null = null; // 尾气网格
+  private trailMaterial: THREE.ShaderMaterial | null = null; // 尾气材质
+  private trailTime: number = 0; // 尾气时间
 
 
 
@@ -74,6 +79,9 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     // 设置更高的伤害值
     this.setDamage(2);
     
+    // 创建尾气特效
+    this.createTrailEffect();
+    
     // 创建多层火焰特效，包裹子弹
     const effectCount = 50; // 50层尾焰，大幅增加数量
     for (let i = 0; i < effectCount; i++) {
@@ -115,8 +123,63 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     }
   }
 
+  private createTrailEffect(): void {
+    const textureManager = new TextureManager();
+    
+    // 创建尾气纹理
+    createBulletTrailTexture(textureManager);
+    const texture = textureManager.getTexture('bullet-trail');
+    
+    if (!texture) return;
+    
+    // 创建尾气几何体和材质
+    const geometry = createBulletTrailGeometry();
+    this.trailMaterial = createBulletTrailMaterial(texture);
+    
+    // 创建尾气网格
+    this.trailMesh = new THREE.Mesh(geometry, this.trailMaterial);
+    
+    // 计算飞行方向（从velocity获取）
+    const flightDirection = this.velocity.clone().normalize();
+    
+    // 设置尾气位置：在子弹头部（飞行方向前方）
+    const trailOffset = flightDirection.clone().multiplyScalar(0.5);
+    this.trailMesh.position.copy(this.position).add(trailOffset);
+    
+    // 设置尾气朝向：头部朝向飞行方向（下面是头）
+    // 尾气的头部在y=0，尾部在y=1，需要旋转180度让头部朝前
+    this.trailMesh.lookAt(this.position.clone().add(flightDirection));
+    this.trailMesh.rotateX(Math.PI); // 旋转180度，让头部朝前
+    
+    // 添加到场景
+    const scene = EntityManager.getInstance().getScene();
+    if (scene) {
+      scene.add(this.trailMesh);
+    }
+  }
+
   public update(delta: number): void {
     super.update(delta);
+    
+    // 更新尾气时间
+    this.trailTime += delta;
+    
+    // 更新尾气位置和朝向
+    if (this.trailMesh && this.trailMaterial) {
+      // 计算飞行方向（从velocity获取）
+      const flightDirection = this.velocity.clone().normalize();
+      
+      // 更新尾气位置：跟随子弹头部
+      const trailOffset = flightDirection.clone().multiplyScalar(0.5);
+      this.trailMesh.position.copy(this.position).add(trailOffset);
+      
+      // 更新尾气朝向：朝向飞行方向
+      this.trailMesh.lookAt(this.position.clone().add(flightDirection));
+      
+      // 更新着色器时间uniform
+      this.trailMaterial.uniforms.uTime.value = this.trailTime;
+    }
+    
     // 让所有火焰特效随子弹移动，保持包裹效果和随机性
     this.fireEffects.forEach((fireEffect, index) => {
       if (fireEffect && fireEffect['mesh'] && this.fireEffectParams[index]) {
@@ -138,6 +201,23 @@ export class DawnExplosionBulletEntity extends BulletEntity {
 
   public onDestroy(): void {
     super.onDestroy();
+    
+    // 清理尾气网格
+    if (this.trailMesh) {
+      const scene = EntityManager.getInstance().getScene();
+      if (scene) {
+        scene.remove(this.trailMesh);
+      }
+      if (this.trailMesh.geometry) {
+        this.trailMesh.geometry.dispose();
+      }
+      if (this.trailMaterial) {
+        this.trailMaterial.dispose();
+      }
+      this.trailMesh = null;
+      this.trailMaterial = null;
+    }
+    
     // 清理所有火焰特效
     this.fireEffects.forEach((fireEffect) => {
       if (fireEffect) {
