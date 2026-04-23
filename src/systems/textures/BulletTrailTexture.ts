@@ -97,12 +97,16 @@ function normalizePoints(points: [number, number][]): [number, number][] {
     maxY = Math.max(maxY, y);
   });
   
-  const width = maxX - minX;
-  const height = maxY - minY;
+  const xMid = (minX + maxX) / 2;
+  const xRange = maxX - minX;
+  const yRange = maxY - minY;
   
+  // 归一化：以X中点为原点，Y最高点为原点
+  // X: (x - xMid) / xRange → 范围从 -0.5 到 0.5
+  // Y: (y - maxY) / yRange → 范围从 -1 到 0
   return points.map(([x, y]) => [
-    (x - minX) / width,
-    (y - minY) / height
+    (x - xMid) / xRange,
+    (y - maxY) / yRange
   ]);
 }
 
@@ -116,11 +120,12 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     // 绘制填充区域
     ctx.beginPath();
     const firstPoint = normalizedPoints[0];
-    ctx.moveTo(firstPoint[0] * w, (1 - firstPoint[1]) * h);
+    // 转换归一化坐标到画布坐标：X以中心为原点，Y以顶部为原点
+    ctx.moveTo((firstPoint[0] + 0.5) * w, (-firstPoint[1]) * h);
     
     for (let i = 1; i < normalizedPoints.length; i++) {
       const [x, y] = normalizedPoints[i];
-      ctx.lineTo(x * w, (1 - y) * h);
+      ctx.lineTo((x + 0.5) * w, (-y) * h);
     }
     
     ctx.closePath();
@@ -230,21 +235,21 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
       const current = normalizedPoints[i];
       const next = normalizedPoints[i + 1];
       
-      // 三角形 - 将原本的 Y 轴映射到 Z 轴，但反转Z坐标
-      // 原始数据中第一个点（尾部）的Y最小，映射到Z=1
-      // 最后一个点（头部）的Y最大，映射到Z=0
-      // 这样Z=0是头部，Z=1是尾部，与着色器定义一致
-    vertices.push(
-      center[0], 0, 1.0 - center[1] + zOffset,  // X 不变，Y 设为 0（平面），Z 使用 1.0 - 原 Y
-      current[0], 0, 1.0 - current[1] + zOffset,
-      next[0], 0, 1.0 - next[1] + zOffset
-    );
+      // 三角形 - 将Y轴映射到Z轴，但反转Z坐标
+      // 归一化后：X范围 -0.5 到 0.5，Y范围 -1 到 0
+      // 映射到3D空间：X保持不变，Y=0，Z=1 + Y（这样Z范围 0 到 1，0是尾部，1是头部）
+      // 这样子弹头（+Z方向）指向尾气头部（Z=1）
+      vertices.push(
+        center[0], 0, 1 + center[1] + zOffset,  // X 不变，Y 设为 0（平面），Z = 1 + Y
+        current[0], 0, 1 + current[1] + zOffset,
+        next[0], 0, 1 + next[1] + zOffset
+      );
       
-      // UVs
+      // UVs - 转换回0-1范围
       uvs.push(
-        center[0], center[1],
-        current[0], current[1],
-        next[0], next[1]
+        center[0] + 0.5, -center[1],
+        current[0] + 0.5, -current[1],
+        next[0] + 0.5, -next[1]
       );
       
       // 层索引（1个三角形 × 3个顶点 = 3个顶点）
@@ -285,8 +290,8 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       vec3 pos = position;
       
       // 头部固定，尾部摆动
-      // position.z 范围是 0 到 1，0 是头部，1 是尾部
-      float tailFactor = position.z;
+      // position.z 范围是 0 到 1，0 是尾部，1 是头部
+      float tailFactor = 1.0 - position.z;
       // 使用二次函数使尾部摆动幅度更大
       float wobbleAmplitude = tailFactor * tailFactor * uWobbleIntensity * 2.0;
       
@@ -294,24 +299,24 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       if (layer == 0.0) {
         // 第一层：快速小幅摆动
         // X轴摆动
-        float wobbleX = sin(uTime * uWobbleSpeed * 1.5 + position.z * 12.0) * wobbleAmplitude * 0.8;
-        wobbleX += sin(uTime * uWobbleSpeed * 2.0 + position.z * 18.0) * wobbleAmplitude * 0.4;
+        float wobbleX = sin(uTime * uWobbleSpeed * 1.5 + (1.0 - position.z) * 12.0) * wobbleAmplitude * 0.8;
+        wobbleX += sin(uTime * uWobbleSpeed * 2.0 + (1.0 - position.z) * 18.0) * wobbleAmplitude * 0.4;
         
         // Y轴摆动（立体效果）
-        float wobbleY = cos(uTime * uWobbleSpeed * 1.2 + position.z * 10.0) * wobbleAmplitude * 0.6;
-        wobbleY += cos(uTime * uWobbleSpeed * 1.6 + position.z * 14.0) * wobbleAmplitude * 0.3;
+        float wobbleY = cos(uTime * uWobbleSpeed * 1.2 + (1.0 - position.z) * 10.0) * wobbleAmplitude * 0.6;
+        wobbleY += cos(uTime * uWobbleSpeed * 1.6 + (1.0 - position.z) * 14.0) * wobbleAmplitude * 0.3;
         
         pos.x += wobbleX;
         pos.y += wobbleY;
       } else {
         // 第二层：慢速大幅摆动
         // X轴摆动
-        float wobbleX = sin(uTime * uWobbleSpeed * 0.8 + position.z * 8.0) * wobbleAmplitude * 1.2;
-        wobbleX += sin(uTime * uWobbleSpeed * 1.0 + position.z * 12.0) * wobbleAmplitude * 0.6;
+        float wobbleX = sin(uTime * uWobbleSpeed * 0.8 + (1.0 - position.z) * 8.0) * wobbleAmplitude * 1.2;
+        wobbleX += sin(uTime * uWobbleSpeed * 1.0 + (1.0 - position.z) * 12.0) * wobbleAmplitude * 0.6;
         
         // Y轴摆动（立体效果）
-        float wobbleY = cos(uTime * uWobbleSpeed * 0.6 + position.z * 6.0) * wobbleAmplitude * 1.0;
-        wobbleY += cos(uTime * uWobbleSpeed * 0.8 + position.z * 10.0) * wobbleAmplitude * 0.5;
+        float wobbleY = cos(uTime * uWobbleSpeed * 0.6 + (1.0 - position.z) * 6.0) * wobbleAmplitude * 1.0;
+        wobbleY += cos(uTime * uWobbleSpeed * 0.8 + (1.0 - position.z) * 10.0) * wobbleAmplitude * 0.5;
         
         pos.x += wobbleX;
         pos.y += wobbleY;

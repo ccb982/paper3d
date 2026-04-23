@@ -95,12 +95,32 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     // 计算飞行方向（从velocity获取）
     const flightDirection = this.velocity.clone().normalize();
     
-    // 拖尾位置：附着在子弹尾部（速度反方向偏移）
-    const trailOffset = flightDirection.clone().multiplyScalar(-0.5); // 向后偏移 0.5
-    this.trailMesh.position.copy(this.position).add(trailOffset);
+    // 尾气顶点坐标调整
+    // 新的归一化方式：以X中点为原点，Y最高点为原点
+    // 归一化后：X范围 -0.5 到 0.5，Y范围 -1 到 0
+    // 映射到3D空间：X保持不变，Y=0，Z=1+Y（Z范围 0 到 1，0是尾部，1是头部）
     
-    // 拖尾朝向：参考子弹头的方向
-    this.trailMesh.quaternion.copy(this.mesh.quaternion);
+    // 计算尾气位置：
+    // 1. 子弹位置 + 速度方向 * 0.3（子弹尾部位置）
+    // 2. 尾气的顶点（X=0, Z=0）需要对齐子弹尾部
+    const bulletTailPosition = this.position.clone().add(flightDirection.clone().multiplyScalar(0.3));
+    
+    // 尾气网格的位置应该让其顶点（X=0, Z=0）对齐子弹尾部
+    // 由于尾气几何体的X范围是-0.5到0.5，中心点在X=0
+    // 所以直接将尾气网格的位置设置为子弹尾部位置
+    this.trailMesh.position.copy(bulletTailPosition);
+    
+    // 拖尾朝向：与子弹头方向相反
+    // 因为尾气头部（Z=1）应该指向与子弹飞行相反的方向
+    const trailQuat = this.mesh.quaternion.clone();
+    // 创建一个180度旋转的四元数
+    const rotation180 = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), // Y轴旋转
+      Math.PI // 180度
+    );
+    // 应用旋转，使尾气朝向与子弹头相反
+    trailQuat.multiply(rotation180);
+    this.trailMesh.quaternion.copy(trailQuat);
     
     // 添加到场景
     const scene = EntityManager.getInstance().getScene();
@@ -120,12 +140,25 @@ export class DawnExplosionBulletEntity extends BulletEntity {
       // 计算飞行方向（从velocity获取）
       const flightDirection = this.velocity.clone().normalize();
       
-      // 更新尾气位置：附着在子弹尾部（速度反方向偏移）
-      const trailOffset = flightDirection.clone().multiplyScalar(-0.5); // 向后偏移 0.5
-      this.trailMesh.position.copy(this.position).add(trailOffset);
+      // 更新尾气位置：
+      // 1. 子弹位置 + 速度方向 * 0.3（子弹尾部位置）
+      // 2. 尾气的顶点（X=0, Z=0）需要对齐子弹尾部
+      const bulletTailPosition = this.position.clone().add(flightDirection.clone().multiplyScalar(0.3));
       
-      // 更新尾气朝向：参考子弹头的方向
-      this.trailMesh.quaternion.copy(this.mesh.quaternion);
+      // 尾气网格的位置应该让其顶点（X=0, Z=0）对齐子弹尾部
+      this.trailMesh.position.copy(bulletTailPosition);
+      
+      // 更新尾气朝向：与子弹头方向相反
+      // 因为尾气头部（Z=1）应该指向与子弹飞行相反的方向
+      const trailQuat = this.mesh.quaternion.clone();
+      // 创建一个180度旋转的四元数
+      const rotation180 = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), // Y轴旋转
+        Math.PI // 180度
+      );
+      // 应用旋转，使尾气朝向与子弹头相反
+      trailQuat.multiply(rotation180);
+      this.trailMesh.quaternion.copy(trailQuat);
       
       // 更新着色器时间uniform
       this.trailMaterial.uniforms.uTime.value = this.trailTime;
