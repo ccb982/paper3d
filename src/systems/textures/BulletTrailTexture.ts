@@ -166,48 +166,51 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     ctx.save();
     ctx.clip(); // 只在路径内绘制噪点
     
-    for (let i = 0; i < w * h * 0.02; i++) { // 2% 的像素点，优化性能
-      const x = Math.random() * w;
-      const y = Math.random() * h;
-      const normalizedY = y / h; // 归一化Y坐标，0是头部，1是尾部
-      
-      let r, g, b;
-      
-      // 根据Y坐标选择不同的颜色范围
-      if (normalizedY < 0.6) {
-        // 上半部分：蓝色到紫色 - 不添加红色噪点
-        const t = Math.random();
-        r = Math.floor(10 + t * 30); // 10-40
-        g = Math.floor(15 + t * 10); // 15-25
-        b = Math.floor(25 + t * 35); // 25-60
-      } else {
-        // 下半部分（前40%）：红色有亮光的部分
-        // 检查是否在最底部区域（0.95-1.0）
-        const isBottomArea = normalizedY > 0.95;
-        
-        if (isBottomArea) {
-          // 最底部区域（z=0）：黑色噪点
-          const t = Math.random();
-          r = Math.floor(0 + t * 30); // 0-30（接近黑色）
-          g = Math.floor(0 + t * 20); // 0-20（接近黑色）
-          b = Math.floor(0 + t * 30); // 0-30（接近黑色）
-        } else {
-          // 红色有亮光的部分：#fe0036附近
-          const t = Math.random();
-          r = Math.floor(230 + t * 25); // 230-255（接近#fe0036的红色）
-          g = Math.floor(0 + t * 20); // 0-20（接近0）
-          b = Math.floor(20 + t * 16); // 20-36（接近36）
-        }
-      }
-      
-      const brightness = 0.5 + Math.random() * 1.5; // 0.5-2.0 的亮度，增加随机性
-      const alpha = 0.4 + Math.random() * 0.6; // 0.4-1.0 的透明度
-      
-      ctx.fillStyle = `rgba(${Math.min(255, Math.floor(r * brightness))}, ${Math.min(255, Math.floor(g * brightness))}, ${Math.min(255, Math.floor(b * brightness))}, ${alpha})`;
-      ctx.beginPath();
-      ctx.arc(x, y, 1.0, 0, Math.PI * 2); // 减小噪点大小，优化性能
-      ctx.fill();
-    }
+    // 移除噪点效果，提升性能
+    // for (let i = 0; i < w * h * 0.02; i++) { // 2% 的像素点，优化性能
+    //   const x = Math.random() * w;
+    //   const y = Math.random() * h;
+    //   const normalizedY = y / h; // 归一化Y坐标，0是头部，1是尾部
+    //   
+    //   let r, g, b;
+    //   
+    //   // 根据Y坐标选择不同的颜色范围
+    //   if (normalizedY < 0.6) {
+    //     // 上半部分：蓝色到紫色 - 不添加红色噪点
+    //     const t = Math.random();
+    //     r = Math.floor(10 + t * 30); // 10-40
+    //     g = Math.floor(15 + t * 10); // 15-25
+    //     b = Math.floor(25 + t * 35); // 25-60
+    //   } else {
+    //     // 下半部分（前40%）：红色有亮光的部分
+    //     // 检查是否在最底部区域（0.95-1.0）
+    //     const isBottomArea = normalizedY > 0.95;
+    //     
+    //     if (isBottomArea) {
+    //       // 最底部区域（z=0）：黑色噪点
+    //       const t = Math.random();
+    //       r = Math.floor(0 + t * 30); // 0-30（接近黑色）
+    //       g = Math.floor(0 + t * 20); // 0-20（接近黑色）
+    //       b = Math.floor(0 + t * 30); // 0-30（接近黑色）
+    //     } else {
+    //       // 红色有亮光的部分：#fe0036附近
+    //       const t = Math.random();
+    //       r = Math.floor(230 + t * 25); // 230-255（接近#fe0036的红色）
+    //       g = Math.floor(0 + t * 20); // 0-20（接近0）
+    //       b = Math.floor(20 + t * 16); // 20-36（接近36）
+    //     }
+    //   }
+    //   
+    //   const brightness = 0.5 + Math.random() * 1.5; // 0.5-2.0 的亮度，增加随机性
+    //   const alpha = 0.4 + Math.random() * 0.6; // 0.4-1.0 的透明度
+    //   
+    //   ctx.fillStyle = `rgba(${Math.min(255, Math.floor(r * brightness))}, ${Math.min(255, Math.floor(g * brightness))}, ${Math.min(255, Math.floor(b * brightness))}, ${alpha})`;
+    //   ctx.beginPath();
+    //   // 绘制条形噪点，宽度4-8，高度1-2
+    //   const barWidth = 4 + Math.random() * 4;
+    //   const barHeight = 1 + Math.random() * 1;
+    //   ctx.fillRect(x - barWidth / 2, y - barHeight / 2, barWidth, barHeight);
+    // }
     
     ctx.restore();
     
