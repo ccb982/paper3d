@@ -144,32 +144,51 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
   
   const vertices = [];
   const uvs = [];
+  const layerIndices = []; // 用于区分不同层
   
-  // 创建一个简单的平面几何体，覆盖整个纹理区域
-  // 这样可以避免三角形拼接产生的间隙
-  vertices.push(
-    0, 0, 0,
-    1, 0, 0,
-    1, 1, 0,
-    0, 0, 0,
-    1, 1, 0,
-    0, 1, 0
-  );
+  const layerOffset = 0.1; // 两层之间的距离
   
-  uvs.push(
-    0, 0,
-    1, 0,
-    1, 1,
-    0, 0,
-    1, 1,
-    0, 1
-  );
+  // 创建两层尾气（厚度为0，平面结构）
+  for (let layer = 0; layer < 2; layer++) {
+    const zOffset = layer * layerOffset;
+    
+    // 使用原始的三角形拼接几何体
+    // 从中心点到每个顶点创建三角形
+    for (let i = 1; i < normalizedPoints.length - 1; i++) {
+      const center = normalizedPoints[0];
+      const current = normalizedPoints[i];
+      const next = normalizedPoints[i + 1];
+      
+      // 三角形
+      vertices.push(
+        center[0], center[1], zOffset,
+        current[0], current[1], zOffset,
+        next[0], next[1], zOffset
+      );
+      
+      // UVs
+      uvs.push(
+        center[0], center[1],
+        current[0], current[1],
+        next[0], next[1]
+      );
+      
+      // 层索引（1个三角形 × 3个顶点 = 3个顶点）
+      for (let j = 0; j < 3; j++) {
+        layerIndices.push(layer);
+      }
+    }
+  }
   
   const vertexBuffer = new Float32Array(vertices);
   geometry.setAttribute('position', new THREE.BufferAttribute(vertexBuffer, 3));
   
   const uvBuffer = new Float32Array(uvs);
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvBuffer, 2));
+  
+  // 添加层索引属性
+  const layerBuffer = new Float32Array(layerIndices);
+  geometry.setAttribute('layer', new THREE.BufferAttribute(layerBuffer, 1));
   
   geometry.computeVertexNormals();
   
@@ -185,15 +204,44 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
     uniform float uWobbleIntensity;
     uniform float uWobbleSpeed;
     varying vec2 vUv;
+    attribute float layer;
     
     void main() {
       vUv = uv;
       vec3 pos = position;
       
-      float wobble = sin(uTime * uWobbleSpeed + position.y * 10.0) * uWobbleIntensity;
-      wobble += sin(uTime * uWobbleSpeed * 1.5 + position.y * 15.0) * uWobbleIntensity * 0.5;
+      // 头部固定，尾部摆动
+      // position.y 范围是 0 到 1，0 是头部，1 是尾部
+      float tailFactor = position.y;
+      // 使用二次函数使尾部摆动幅度更大
+      float wobbleAmplitude = tailFactor * tailFactor * uWobbleIntensity * 2.0;
       
-      pos.x += wobble;
+      // 根据层索引创建不同的摆动效果
+      if (layer == 0.0) {
+        // 第一层：快速小幅摆动
+        // X轴摆动
+        float wobbleX = sin(uTime * uWobbleSpeed * 1.5 + position.y * 12.0) * wobbleAmplitude * 0.8;
+        wobbleX += sin(uTime * uWobbleSpeed * 2.0 + position.y * 18.0) * wobbleAmplitude * 0.4;
+        
+        // Z轴摆动（立体效果）
+        float wobbleZ = cos(uTime * uWobbleSpeed * 1.2 + position.y * 10.0) * wobbleAmplitude * 0.6;
+        wobbleZ += cos(uTime * uWobbleSpeed * 1.6 + position.y * 14.0) * wobbleAmplitude * 0.3;
+        
+        pos.x += wobbleX;
+        pos.z += wobbleZ;
+      } else {
+        // 第二层：慢速大幅摆动
+        // X轴摆动
+        float wobbleX = sin(uTime * uWobbleSpeed * 0.8 + position.y * 8.0) * wobbleAmplitude * 1.2;
+        wobbleX += sin(uTime * uWobbleSpeed * 1.0 + position.y * 12.0) * wobbleAmplitude * 0.6;
+        
+        // Z轴摆动（立体效果）
+        float wobbleZ = cos(uTime * uWobbleSpeed * 0.6 + position.y * 6.0) * wobbleAmplitude * 1.0;
+        wobbleZ += cos(uTime * uWobbleSpeed * 0.8 + position.y * 10.0) * wobbleAmplitude * 0.5;
+        
+        pos.x += wobbleX;
+        pos.z += wobbleZ;
+      }
       
       gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
     }
@@ -220,8 +268,8 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
     uniforms: {
       uTexture: { value: texture },
       uTime: { value: 0 },
-      uWobbleIntensity: { value: 0.05 },
-      uWobbleSpeed: { value: 3.0 }
+      uWobbleIntensity: { value: 0.1 },
+      uWobbleSpeed: { value: 4.0 }
     },
     vertexShader,
     fragmentShader,
