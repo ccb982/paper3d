@@ -27,6 +27,8 @@ import { StoneBugEnemy } from '../entities/characters/StoneBugEnemy';
 import { TargetEntity } from '../entities/static/TargetEntity';
 import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
+import { createBulletTrailTexture, createBulletTrailGeometry } from '../systems/textures/BulletTrailTexture';
+import { TextureManager } from '../systems/textures/TextureManager';
 
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActiveShootingSystem, onActiveSystemChanged }: {
@@ -594,9 +596,29 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     const firePosition = new THREE.Vector3(0, 3 - 1.5, 10); // 下调1.5
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
-    
 
+    // 创建子弹尾气纹理和几何体
+    const textureManager = new TextureManager();
+    createBulletTrailTexture(textureManager);
+    const bulletTrailTexture = textureManager.getTexture('bullet-trail');
     
+    // 创建子弹尾气几何体
+    const bulletTrailGeometry = createBulletTrailGeometry();
+    
+    // 创建材质
+    const bulletTrailMaterial = new THREE.MeshBasicMaterial({
+      map: bulletTrailTexture,
+      transparent: true,
+      side: THREE.DoubleSide
+    });
+    
+    // 创建子弹尾气网格
+    const bulletTrailMesh = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
+    bulletTrailMesh.position.set(5, 2, 0);
+    bulletTrailMesh.scale.set(2, 2, 2); // 调整大小
+    scene.add(bulletTrailMesh);
+    console.log('Bullet trail created at:', bulletTrailMesh.position);
+
     console.log('Entities created:', entityManager.getEntityCount());
   }, [scene, sceneRef]);
 

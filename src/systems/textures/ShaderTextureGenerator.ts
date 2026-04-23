@@ -1,7 +1,6 @@
 import * as THREE from 'three';
-import { ITextureGenerator } from './BaseTextureGenerator';
 
-export class ShaderTextureGenerator implements ITextureGenerator {
+export class ShaderTextureGenerator {
   public type = 'shader';
   private material: THREE.ShaderMaterial;
   private uniforms: Record<string, any>;

@@ -3,6 +3,7 @@ import { CanvasTextureGenerator } from './CanvasTextureGenerator';
 import { ShaderTextureGenerator } from './ShaderTextureGenerator';
 import { TextureManager } from './TextureManager';
 import { StoneBugEnemy } from '../../entities/characters/StoneBugEnemy';
+import { createBulletTrailTexture } from './BulletTrailTexture';
 
 const textureManager = new TextureManager();
 
@@ -92,6 +93,9 @@ const rippleUniforms = {
 const rippleGen = new ShaderTextureGenerator(rippleUniforms, rippleVertexShader, rippleFragmentShader);
 textureManager.register('rippleEffect', rippleGen);
 
+// 创建子弹尾气纹理
+createBulletTrailTexture(textureManager, 512, 512);
+
 const stoneBugPosition = new THREE.Vector3(0, 0, 0);
 const stoneBug = new StoneBugEnemy('stoneBug1', stoneBugPosition);
 
@@ -159,4 +163,21 @@ if (stoneBug.mesh) {
   console.log('geometry.attributes.uv:', geometry.attributes.uv);
 }
 console.log('涟漪效果已添加');
+
+// 测试子弹尾气纹理
+const bulletTrailTexture = textureManager.getTexture('bullet-trail');
+console.log('子弹尾气纹理已创建:', bulletTrailTexture);
+
+// 创建一个测试平面来显示子弹尾气纹理
+const bulletTrailGeometry = new THREE.PlaneGeometry(2, 2);
+const bulletTrailMaterial = new THREE.MeshBasicMaterial({ 
+  map: bulletTrailTexture,
+  transparent: true,
+  side: THREE.DoubleSide
+});
+const bulletTrailPlane = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
+bulletTrailPlane.position.set(-10, 0, 0);
+scene.add(bulletTrailPlane);
+
+console.log('子弹尾气纹理测试完成');
 

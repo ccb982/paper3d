@@ -1,9 +1,15 @@
 import * as THREE from 'three';
-import { ITextureGenerator } from './BaseTextureGenerator';
+
+interface TextureGenerator {
+  type: 'canvas' | 'shader';
+  generate(): THREE.Texture | THREE.Material;
+  update(delta?: number): void;
+  dispose(): void;
+}
 
 interface TextureEntry {
   id: string;
-  generator: ITextureGenerator;
+  generator: TextureGenerator;
   texture?: THREE.Texture;
   material?: THREE.Material;
   refCount: number;       // 引用计数，用于自动释放

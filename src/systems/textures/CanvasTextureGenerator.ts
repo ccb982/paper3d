@@ -1,7 +1,6 @@
 import * as THREE from 'three';
-import { ITextureGenerator } from './BaseTextureGenerator';
 
-export class CanvasTextureGenerator implements ITextureGenerator {
+export class CanvasTextureGenerator {
   public type = 'canvas';
   private canvas: HTMLCanvasElement;
   private texture: THREE.CanvasTexture;
