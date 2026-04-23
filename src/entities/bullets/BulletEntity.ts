@@ -29,6 +29,7 @@ export class BulletEntity extends Entity {
 
     // 创建水滴状几何体
     const geometry = new THREE.CylinderGeometry(0.1, 0.3, 0.6, 12); // 顶部半径小，底部半径大，形成水滴形状
+    geometry.rotateX(Math.PI / 2); // 旋转几何体，使原来的 +Y 轴变成 +Z 轴，现在尖头指向 +Z
     const material = new THREE.MeshStandardMaterial({
       color: color,
       emissive: color,
@@ -42,6 +43,16 @@ export class BulletEntity extends Entity {
     this.velocity = direction.clone().normalize().multiplyScalar(speed);
     this.createdAt = Date.now();
     this.radius = 0.3; // 增大碰撞半径，与子弹体积匹配
+    
+    // 设置初始朝向：尖头指向速度方向
+    if (direction.length() > 0) {
+      const flightDir = direction.clone().normalize();
+      const headQuat = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        flightDir
+      );
+      mesh.quaternion.copy(headQuat);
+    }
   }
 
   /**
@@ -73,12 +84,13 @@ export class BulletEntity extends Entity {
 
     // 让水滴状子弹的尾部朝向飞行方向（大半径端朝向摄像机）
     if (this.velocity.length() > 0) {
-      // 计算子弹应该朝向的方向（反方向，让尾部朝向飞行方向）
-      const direction = this.velocity.clone().normalize().negate();
-      // 计算旋转轴和角度
-      const up = new THREE.Vector3(0, 1, 0);
-      const quaternion = new THREE.Quaternion().setFromUnitVectors(up, direction);
-      this.mesh.quaternion.copy(quaternion);
+      // 子弹头朝向：尖头指向速度方向（几何体尖头在 +Z）
+      const flightDir = this.velocity.clone().normalize();
+      const headQuat = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        flightDir
+      );
+      this.mesh.quaternion.copy(headQuat);
     }
 
     if (Date.now() - this.createdAt > this.lifetime) {

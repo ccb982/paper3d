@@ -95,14 +95,16 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     // 计算飞行方向（从velocity获取）
     const flightDirection = this.velocity.clone().normalize();
     
-    // 设置尾气位置：在子弹头部（飞行方向前方）
-    const trailOffset = flightDirection.clone().multiplyScalar(0.5);
+    // 拖尾位置：附着在子弹尾部（速度反方向偏移）
+    const trailOffset = flightDirection.clone().multiplyScalar(-0.5); // 向后偏移 0.5
     this.trailMesh.position.copy(this.position).add(trailOffset);
     
-    // 设置尾气朝向：头部朝向飞行方向（下面是头）
-    // 尾气的头部在y=0，尾部在y=1，需要旋转180度让头部朝前
-    this.trailMesh.lookAt(this.position.clone().add(flightDirection));
-    this.trailMesh.rotateX(Math.PI); // 旋转180度，让头部朝前
+    // 拖尾朝向：直接设置为速度方向的反方向
+    const tailQuat = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, 0, 1),
+      flightDirection.clone().negate()
+    );
+    this.trailMesh.quaternion.copy(tailQuat);
     
     // 添加到场景
     const scene = EntityManager.getInstance().getScene();
@@ -122,12 +124,16 @@ export class DawnExplosionBulletEntity extends BulletEntity {
       // 计算飞行方向（从velocity获取）
       const flightDirection = this.velocity.clone().normalize();
       
-      // 更新尾气位置：跟随子弹头部
-      const trailOffset = flightDirection.clone().multiplyScalar(0.5);
+      // 更新尾气位置：附着在子弹尾部（速度反方向偏移）
+      const trailOffset = flightDirection.clone().multiplyScalar(-0.5); // 向后偏移 0.5
       this.trailMesh.position.copy(this.position).add(trailOffset);
       
-      // 更新尾气朝向：朝向飞行方向
-      this.trailMesh.lookAt(this.position.clone().add(flightDirection));
+      // 更新尾气朝向：直接设置为速度方向的反方向
+      const tailQuat = new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 0, 1),
+        flightDirection.clone().negate()
+      );
+      this.trailMesh.quaternion.copy(tailQuat);
       
       // 更新着色器时间uniform
       this.trailMaterial.uniforms.uTime.value = this.trailTime;

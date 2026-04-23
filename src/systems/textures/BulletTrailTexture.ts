@@ -230,12 +230,12 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
       const current = normalizedPoints[i];
       const next = normalizedPoints[i + 1];
       
-      // 三角形
-      vertices.push(
-        center[0], center[1], zOffset,
-        current[0], current[1], zOffset,
-        next[0], next[1], zOffset
-      );
+      // 三角形 - 将原本的 Y 轴（头部在 +Y）映射到 Z 轴，使头部指向 +Z
+    vertices.push(
+      center[0], 0, center[1] + zOffset,  // X 不变，Y 设为 0（平面），Z 使用原 Y
+      current[0], 0, current[1] + zOffset,
+      next[0], 0, next[1] + zOffset
+    );
       
       // UVs
       uvs.push(
@@ -282,8 +282,8 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       vec3 pos = position;
       
       // 头部固定，尾部摆动
-      // position.y 范围是 0 到 1，0 是头部，1 是尾部
-      float tailFactor = position.y;
+      // position.z 范围是 0 到 1，0 是头部，1 是尾部
+      float tailFactor = position.z;
       // 使用二次函数使尾部摆动幅度更大
       float wobbleAmplitude = tailFactor * tailFactor * uWobbleIntensity * 2.0;
       
@@ -291,27 +291,27 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       if (layer == 0.0) {
         // 第一层：快速小幅摆动
         // X轴摆动
-        float wobbleX = sin(uTime * uWobbleSpeed * 1.5 + position.y * 12.0) * wobbleAmplitude * 0.8;
-        wobbleX += sin(uTime * uWobbleSpeed * 2.0 + position.y * 18.0) * wobbleAmplitude * 0.4;
+        float wobbleX = sin(uTime * uWobbleSpeed * 1.5 + position.z * 12.0) * wobbleAmplitude * 0.8;
+        wobbleX += sin(uTime * uWobbleSpeed * 2.0 + position.z * 18.0) * wobbleAmplitude * 0.4;
         
-        // Z轴摆动（立体效果）
-        float wobbleZ = cos(uTime * uWobbleSpeed * 1.2 + position.y * 10.0) * wobbleAmplitude * 0.6;
-        wobbleZ += cos(uTime * uWobbleSpeed * 1.6 + position.y * 14.0) * wobbleAmplitude * 0.3;
+        // Y轴摆动（立体效果）
+        float wobbleY = cos(uTime * uWobbleSpeed * 1.2 + position.z * 10.0) * wobbleAmplitude * 0.6;
+        wobbleY += cos(uTime * uWobbleSpeed * 1.6 + position.z * 14.0) * wobbleAmplitude * 0.3;
         
         pos.x += wobbleX;
-        pos.z += wobbleZ;
+        pos.y += wobbleY;
       } else {
         // 第二层：慢速大幅摆动
         // X轴摆动
-        float wobbleX = sin(uTime * uWobbleSpeed * 0.8 + position.y * 8.0) * wobbleAmplitude * 1.2;
-        wobbleX += sin(uTime * uWobbleSpeed * 1.0 + position.y * 12.0) * wobbleAmplitude * 0.6;
+        float wobbleX = sin(uTime * uWobbleSpeed * 0.8 + position.z * 8.0) * wobbleAmplitude * 1.2;
+        wobbleX += sin(uTime * uWobbleSpeed * 1.0 + position.z * 12.0) * wobbleAmplitude * 0.6;
         
-        // Z轴摆动（立体效果）
-        float wobbleZ = cos(uTime * uWobbleSpeed * 0.6 + position.y * 6.0) * wobbleAmplitude * 1.0;
-        wobbleZ += cos(uTime * uWobbleSpeed * 0.8 + position.y * 10.0) * wobbleAmplitude * 0.5;
+        // Y轴摆动（立体效果）
+        float wobbleY = cos(uTime * uWobbleSpeed * 0.6 + position.z * 6.0) * wobbleAmplitude * 1.0;
+        wobbleY += cos(uTime * uWobbleSpeed * 0.8 + position.z * 10.0) * wobbleAmplitude * 0.5;
         
         pos.x += wobbleX;
-        pos.z += wobbleZ;
+        pos.y += wobbleY;
       }
       
       gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
