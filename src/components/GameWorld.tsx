@@ -53,16 +53,18 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
   }, [camera, gl]);
 
   useEffect(() => {
-    sceneRef.current = scene;
-    // 设置场景引用到 EntityManager，用于特效系统
-    EntityManager.getInstance().setScene(scene);
-    // 将场景引用存储到window对象，供ParticleFireEffect使用
-    (window as any).gameScene = scene;
-    // 将cameraStore引用存储到window对象，供ParticleFireEffect使用
-    (window as any).cameraStore = cameraStore;
-    // 将EntityManager引用存储到window对象，供UI使用
-    (window as any).entityManager = EntityManager.getInstance();
-  }, [scene, sceneRef]);
+    if (scene) {
+      sceneRef.current = scene;
+      // 设置场景引用到 EntityManager，用于特效系统
+      EntityManager.getInstance().setScene(scene);
+      // 将场景引用存储到window对象，供ParticleFireEffect使用
+      (window as any).gameScene = scene;
+      // 将cameraStore引用存储到window对象，供ParticleFireEffect使用
+      (window as any).cameraStore = cameraStore;
+      // 将EntityManager引用存储到window对象，供UI使用
+      (window as any).entityManager = EntityManager.getInstance();
+    }
+  }, [scene]);
 
   useEffect(() => {
     directionRef.current = direction;
@@ -412,9 +414,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
   const { triggerDialogue } = useDialogue();
 
   useEffect(() => {
-    sceneRef.current = scene;
+    // 只在组件挂载时执行一次
     const entityManager = EntityManager.getInstance();
-    entityManager.setScene(scene);
     
     // 清理现有实体
     entityManager.clear();
@@ -597,30 +598,38 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
 
-    // 创建子弹尾气纹理和几何体
-    const textureManager = new TextureManager();
-    createBulletTrailTexture(textureManager);
-    const bulletTrailTexture = textureManager.getTexture('bullet-trail');
-    
-    // 创建子弹尾气几何体
-    const bulletTrailGeometry = createBulletTrailGeometry();
-    
-    // 创建材质
-    const bulletTrailMaterial = new THREE.MeshBasicMaterial({
-      map: bulletTrailTexture,
-      transparent: true,
-      side: THREE.DoubleSide
-    });
-    
-    // 创建子弹尾气网格
-    const bulletTrailMesh = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
-    bulletTrailMesh.position.set(5, 2, 0);
-    bulletTrailMesh.scale.set(2, 2, 2); // 调整大小
-    scene.add(bulletTrailMesh);
-    console.log('Bullet trail created at:', bulletTrailMesh.position);
-
     console.log('Entities created:', entityManager.getEntityCount());
-  }, [scene, sceneRef]);
+  }, []);
+  
+  // 处理场景引用和子弹尾气创建
+  useEffect(() => {
+    if (scene) {
+      sceneRef.current = scene;
+      EntityManager.getInstance().setScene(scene);
+      
+      // 创建子弹尾气纹理和几何体
+      const textureManager = new TextureManager();
+      createBulletTrailTexture(textureManager);
+      const bulletTrailTexture = textureManager.getTexture('bullet-trail');
+      
+      // 创建子弹尾气几何体
+      const bulletTrailGeometry = createBulletTrailGeometry();
+      
+      // 创建材质
+      const bulletTrailMaterial = new THREE.MeshBasicMaterial({
+        map: bulletTrailTexture,
+        transparent: true,
+        side: THREE.DoubleSide
+      });
+      
+      // 创建子弹尾气网格
+      const bulletTrailMesh = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
+      bulletTrailMesh.position.set(5, 2, 0);
+      bulletTrailMesh.scale.set(2, 2, 2); // 调整大小
+      scene.add(bulletTrailMesh);
+      console.log('Bullet trail created at:', bulletTrailMesh.position);
+    }
+  }, [scene]);
 
   useEffect(() => {
     const manager = new ShootingSystemManager();
