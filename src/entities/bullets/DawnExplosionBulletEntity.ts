@@ -145,6 +145,13 @@ export class DawnExplosionBulletEntity extends BulletEntity {
             color = mix(color, glowColor, glowIntensity * 0.5);
           }
           
+          // 为子弹末端添加红色过渡效果
+          if (zNormalized < 0.3) {
+            float endIntensity = 1.0 - (zNormalized / 0.3); // 从0到1的强度
+            vec3 endColor = vec3(1.0, 0.0, 0.21); // #fe0036 红色
+            color = mix(color, endColor, endIntensity * 0.8);
+          }
+          
           gl_FragColor = vec4(color, 1.0);
         }
       `,
@@ -183,7 +190,7 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     
     // 初始化尾气位置和朝向
     const flightDir = this.velocity.clone().normalize();
-    const distance = 2.6;
+    const distance = 8.5;
     this.trailMesh.position.copy(this.position.clone().add(flightDir.clone().multiplyScalar(-distance)));
     this.trailMesh.quaternion.copy(this.mesh.quaternion);
   }
@@ -203,10 +210,10 @@ export class DawnExplosionBulletEntity extends BulletEntity {
       const flightDir = this.velocity.clone().normalize();
       
       // ===== 强制尾气位置：放在子弹后方固定距离 =====
-      // 注意：这里不使用子弹尾部，而是直接沿着速度反方向偏移一个较大数值，确保尾气明显在后
-      const distance = 2.6; // 尾气与子弹中心的距离（单位），可根据视觉效果调整
-      const trailPos = this.position.clone().add(flightDir.clone().multiplyScalar(-distance));
-      this.trailMesh.position.copy(trailPos);
+            // 注意：这里不使用子弹尾部，而是直接沿着速度反方向偏移一个较大数值，确保尾气明显在后
+            const distance = 8.5; // 尾气与子弹中心的距离（单位），可根据视觉效果调整
+            const trailPos = this.position.clone().add(flightDir.clone().multiplyScalar(-distance));
+            this.trailMesh.position.copy(trailPos);
       
       // ===== 强制尾气朝向：让尾气的 +Z 指向速度反方向 =====
       // 这样尾气的头部（+Z）会指向后方，尾部（-Z）指向前方？不，因为头部在+Z，所以指向后方意味着尾部在子弹方向，需要确认。

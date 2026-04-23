@@ -174,40 +174,29 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
       let r, g, b;
       
       // 根据Y坐标选择不同的颜色范围
-      if (normalizedY < 0.5) {
-        // 上半部分：蓝色到紫色
+      if (normalizedY < 0.6) {
+        // 上半部分：蓝色到紫色 - 不添加红色噪点
         const t = Math.random();
         r = Math.floor(10 + t * 30); // 10-40
         g = Math.floor(15 + t * 10); // 15-25
         b = Math.floor(25 + t * 35); // 25-60
       } else {
-        // 下半部分：检查是否在圆形区域内
-        const circleCenterX = w * 0.5;
-        const circleCenterY = h * 0.9;
-        const circleRadius = Math.min(w, h) * 0.25;
-        const dist = Math.sqrt((x - circleCenterX) ** 2 + (y - circleCenterY) ** 2);
-        
+        // 下半部分（前40%）：红色有亮光的部分
         // 检查是否在最底部区域（0.95-1.0）
         const isBottomArea = normalizedY > 0.95;
         
-        if (dist < circleRadius && !isBottomArea) {
-          // 圆形区域内：#fe3362附近，颜色有随机变化（更亮）
+        if (isBottomArea) {
+          // 最底部区域（z=0）：黑色噪点
           const t = Math.random();
-          r = Math.floor(230 + t * 25); // 230-255
-          g = Math.floor(60 + t * 50); // 60-110
-          b = Math.floor(90 + t * 50); // 90-140
-        } else if (isBottomArea) {
-          // 最底部区域：#fe7a91附近
-          const t = Math.random();
-          r = Math.floor(220 + t * 35); // 220-255
-          g = Math.floor(100 + t * 60); // 100-160
-          b = Math.floor(130 + t * 60); // 130-190
+          r = Math.floor(0 + t * 30); // 0-30（接近黑色）
+          g = Math.floor(0 + t * 20); // 0-20（接近黑色）
+          b = Math.floor(0 + t * 30); // 0-30（接近黑色）
         } else {
-          // 下半部分其他区域：更亮的#a31827附近
+          // 红色有亮光的部分：#fe0036附近
           const t = Math.random();
-          r = Math.floor(150 + t * 100); // 150-250
-          g = Math.floor(20 + t * 30); // 20-50
-          b = Math.floor(40 + t * 30); // 40-70
+          r = Math.floor(230 + t * 25); // 230-255（接近#fe0036的红色）
+          g = Math.floor(0 + t * 20); // 0-20（接近0）
+          b = Math.floor(20 + t * 16); // 20-36（接近36）
         }
       }
       
@@ -240,7 +229,7 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
   const uvs = [];
   const layerIndices = []; // 用于区分不同层
   
-  const layerOffset = 0.1; // 两层之间的距离
+  const layerOffset = 0; // 两层之间无距离，完全对齐
   const scaleFactor = 0.7; // 缩放因子，控制尾气大小（小于1时缩小）
   
   // 创建两层尾气（厚度为0，平面结构）
@@ -256,11 +245,11 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
       
       // 三角形 - 将Y轴映射到Z轴，但反转Z坐标
       // 归一化后：X范围 -0.5 到 0.5，Y范围 -1 到 0
-      // 映射到3D空间：X保持不变，Y=0，Z=1 + Y（这样Z范围 0 到 1，0是尾部，1是头部）
-      // 这样子弹头（+Z方向）指向尾气头部（Z=1）
-      const centerZ = 1 + center[1] + zOffset;
-      const currentZ = 1 + current[1] + zOffset;
-      const nextZ = 1 + next[1] + zOffset;
+      // 映射到3D空间：X保持不变，Y=0，Z=3 + Y（这样Z范围 2 到 3，0是尾部，1是头部，整体长度增加）
+      // 这样子弹头（+Z方向）指向尾气头部（Z=3）
+      const centerZ = 3 + center[1] + zOffset;
+      const currentZ = 3 + current[1] + zOffset;
+      const nextZ = 3 + next[1] + zOffset;
       
       // 确保没有NaN值
       if (!isNaN(center[0]) && !isNaN(centerZ) &&
@@ -321,10 +310,12 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       vec3 pos = position;
       
       // 头部固定，尾部摆动
-      // position.z 范围是 0 到 1，0 是尾部，1 是头部
-      float tailFactor = 1.0 - position.z;
-      // 使用二次函数使尾部摆动幅度更大
-      float wobbleAmplitude = tailFactor * tailFactor * uWobbleIntensity * 2.0;
+      // position.z 范围是 2 到 3，2 是尾部，3 是头部
+      float normalizedZ = position.z - 2.0; // 归一化到0-1范围
+      float tailFactor = 1.0 - normalizedZ;
+      // 调整摆动幅度，减小底部的晃动
+      // 使用更平缓的曲线，让底部摆动减小
+      float wobbleAmplitude = pow(tailFactor, 3.0) * uWobbleIntensity * 1.5;
       
       // 根据层索引创建不同的摆动效果
       if (layer == 0.0) {
@@ -372,8 +363,9 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       }
       
       // 为尾气前5%的部分添加发光效果，只在中心区域
-      if (vPositionZ > 0.95 && abs(vUv.x - 0.5) < 0.1) {
-        float glowIntensity = (vPositionZ - 0.95) * 20.0; // 从0到1的强度
+      float normalizedZ = vPositionZ - 2.0; // 归一化到0-1范围
+      if (normalizedZ > 0.95 && abs(vUv.x - 0.5) < 0.1) {
+        float glowIntensity = (normalizedZ - 0.95) * 20.0; // 从0到1的强度
         // 中心区域强度更高，边缘逐渐减弱
         float widthIntensity = 1.0 - abs(vUv.x - 0.5) / 0.1;
         vec3 glowColor = vec3(0.8, 0.6, 0.8); // 粉色发光（降低亮度）
