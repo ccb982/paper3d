@@ -121,31 +121,38 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     if (scene) {
       scene.add(this.trailMesh);
     }
+    
+    // 初始化尾气位置和朝向
+    const flightDir = this.velocity.clone().normalize();
+    const distance = 2.6;
+    this.trailMesh.position.copy(this.position.clone().add(flightDir.clone().multiplyScalar(-distance)));
+    this.trailMesh.quaternion.copy(this.mesh.quaternion);
   }
 
   public update(delta: number): void {
-    super.update(delta);
-    
+    super.update(delta); // 更新子弹位置、朝向等（父类已处理好子弹的位置和速度）
+
     // 更新尾气时间
     this.trailTime += delta;
-    
-    // 更新尾气位置和朝向
+
     if (this.trailMesh && this.trailMaterial) {
-      // 计算飞行方向（从velocity获取）
-      const flightDirection = this.velocity.clone().normalize();
+      const flightDir = this.velocity.clone().normalize();
       
-      // 更新尾气位置：
-      // 1. 子弹位置 + 速度方向 * 0.3（子弹尾部位置）
-      // 2. 尾气的中心点（Y值最大的点，Z=1）需要对齐子弹尾部
-      const bulletTailPosition = this.position.clone().add(flightDirection.clone().multiplyScalar(0.3));
+      // ===== 强制尾气位置：放在子弹后方固定距离 =====
+      // 注意：这里不使用子弹尾部，而是直接沿着速度反方向偏移一个较大数值，确保尾气明显在后
+      const distance = 2.6; // 尾气与子弹中心的距离（单位），可根据视觉效果调整
+      const trailPos = this.position.clone().add(flightDir.clone().multiplyScalar(-distance));
+      this.trailMesh.position.copy(trailPos);
       
-      // 尾气网格的位置应该让其中心点（Y值最大的点，Z=1）对齐子弹尾部
-      this.trailMesh.position.copy(bulletTailPosition);
-      
-      // 更新尾气朝向：参考子弹头的方向
+      // ===== 强制尾气朝向：让尾气的 +Z 指向速度反方向 =====
+      // 这样尾气的头部（+Z）会指向后方，尾部（-Z）指向前方？不，因为头部在+Z，所以指向后方意味着尾部在子弹方向，需要确认。
+      // 实际上我们希望尾气的尾部（宽端）指向后方。由于你的尾气头部在+Z（窄端），尾部在-Z（宽端），要让尾部指向后方，应该让 -Z 指向后方，即 +Z 指向前方。
+      // 更简单：假设你希望尾气像火焰一样“喷”向后方，通常尾气的根部（附着点）在子弹尾部，然后向后扩散。那么尾气应该指向后方，即尾气的头部（窄端）指向后方，尾部（宽端）指向前方？这会产生奇怪效果。
+      // 根据你的描述“让尾气尾部指向后方”，而你的几何体尾部在 Z=0，头部在 Z=1。为了让尾部指向后方，需要让几何体的 -Z 指向后方，即 +Z 指向前方。因此尾气的朝向应该和子弹相同（+Z 指向速度方向）。
+      // 我们采用最简单的方案：让尾气朝向与子弹相同，然后让尾气位置向后偏移足够多，使得尾部自然出现在后方。
       this.trailMesh.quaternion.copy(this.mesh.quaternion);
       
-      // 更新着色器时间uniform
+      // 更新着色器时间
       this.trailMaterial.uniforms.uTime.value = this.trailTime;
     }
   }

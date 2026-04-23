@@ -241,6 +241,7 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
   const layerIndices = []; // 用于区分不同层
   
   const layerOffset = 0.1; // 两层之间的距离
+  const scaleFactor = 0.7; // 缩放因子，控制尾气大小（小于1时缩小）
   
   // 创建两层尾气（厚度为0，平面结构）
   for (let layer = 0; layer < 2; layer++) {
@@ -266,9 +267,9 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
           !isNaN(current[0]) && !isNaN(currentZ) &&
           !isNaN(next[0]) && !isNaN(nextZ)) {
         vertices.push(
-          center[0], 0, centerZ,  // X 不变，Y 设为 0（平面），Z = 1 + Y
-          current[0], 0, currentZ,
-          next[0], 0, nextZ
+          center[0] * scaleFactor, 0, centerZ,  // X 缩放，Y 设为 0（平面），Z = 1 + Y
+          current[0] * scaleFactor, 0, currentZ,
+          next[0] * scaleFactor, 0, nextZ
         );
         
         // UVs - 转换回0-1范围

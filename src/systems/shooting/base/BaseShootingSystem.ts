@@ -10,8 +10,8 @@ export abstract class BaseShootingSystem implements IShootingSystem {
   protected callbacks: ShootingCallbacks = {};
   
   protected isActive: boolean = true;
-  protected bulletVelocity: number = 50;
-  protected fireRate: number = 200;
+  protected bulletVelocity: number = 1;
+  protected fireRate: number = 1000;
   protected bulletIdCounter: number = 0;
   
   protected characterPosition: { x: number; y: number; z: number } = { x: 0, y: 0, z: 0 };
