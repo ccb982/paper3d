@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { CanvasTextureGenerator } from './CanvasTextureGenerator';
 import { TextureManager } from './TextureManager';
 
-// 原始点数据
 const rawPoints: [number, number][] = [
   [761.9299065420561, 438.68691588785043],
   [754.233644859813, 469.4719626168224],
@@ -89,7 +88,6 @@ const rawPoints: [number, number][] = [
   [774.7570093457944, 405.3364485981308],
 ];
 
-// 归一化点
 function normalizePoints(points: [number, number][]): [number, number][] {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   points.forEach(([x, y]) => {
@@ -108,34 +106,24 @@ function normalizePoints(points: [number, number][]): [number, number][] {
   ]);
 }
 
-// 归一化后的点
 const normalizedPoints = normalizePoints(rawPoints);
 
-// 绘制子弹尾气纹理
 export function createBulletTrailTexture(textureManager: TextureManager, width: number = 512, height: number = 512): void {
   const color = '#534179';
   
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
-    // 清空画布
     ctx.clearRect(0, 0, w, h);
     
-    // 开始绘制路径
     ctx.beginPath();
-    
-    // 移动到第一个点
     const firstPoint = normalizedPoints[0];
-    ctx.moveTo(firstPoint[0] * w, firstPoint[1] * h);
+    ctx.moveTo(firstPoint[0] * w, (1 - firstPoint[1]) * h);
     
-    // 连接所有点
     for (let i = 1; i < normalizedPoints.length; i++) {
       const [x, y] = normalizedPoints[i];
-      ctx.lineTo(x * w, y * h);
+      ctx.lineTo(x * w, (1 - y) * h);
     }
     
-    // 闭合路径
     ctx.closePath();
-    
-    // 填充颜色
     ctx.fillStyle = color;
     ctx.fill();
   });
@@ -143,49 +131,90 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
   textureManager.register('bullet-trail', generator);
 }
 
-// 导出归一化点供其他地方使用
 export { normalizedPoints as bulletTrailPoints };
 
-// 根据点集创建几何体
 export function createBulletTrailGeometry(): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
   
-  // 创建顶点数组
   const vertices = [];
+  const uvs = [];
   
-  // 遍历所有点，创建三角形
   for (let i = 1; i < normalizedPoints.length - 1; i++) {
-    // 中心点（取第一个点作为中心）
     const center = normalizedPoints[0];
-    // 当前点
     const current = normalizedPoints[i];
-    // 下一个点
     const next = normalizedPoints[i + 1];
     
-    // 添加三角形
     vertices.push(
       center[0], center[1], 0,
       current[0], current[1], 0,
       next[0], next[1], 0
     );
+    
+    uvs.push(
+      center[0], center[1],
+      current[0], current[1],
+      next[0], next[1]
+    );
   }
   
-  // 创建顶点缓冲区
   const vertexBuffer = new Float32Array(vertices);
   geometry.setAttribute('position', new THREE.BufferAttribute(vertexBuffer, 3));
   
-  // 计算法线
+  const uvBuffer = new Float32Array(uvs);
+  geometry.setAttribute('uv', new THREE.BufferAttribute(uvBuffer, 2));
+  
   geometry.computeVertexNormals();
   
-  // 创建UV坐标
-  const uvs = [];
-  for (let i = 0; i < vertices.length / 3; i++) {
-    const vertexIndex = i * 3;
-    const x = vertices[vertexIndex];
-    const y = vertices[vertexIndex + 1];
-    uvs.push(x, y);
-  }
-  geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
-  
   return geometry;
+}
+
+export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderMaterial {
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  
+  const vertexShader = `
+    uniform float uTime;
+    uniform float uWobbleIntensity;
+    uniform float uWobbleSpeed;
+    varying vec2 vUv;
+    
+    void main() {
+      vUv = uv;
+      vec3 pos = position;
+      
+      float wobble = sin(uTime * uWobbleSpeed + position.y * 10.0) * uWobbleIntensity;
+      wobble += sin(uTime * uWobbleSpeed * 1.5 + position.y * 15.0) * uWobbleIntensity * 0.5;
+      
+      pos.x += wobble;
+      
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }
+  `;
+  
+  const fragmentShader = `
+    uniform sampler2D uTexture;
+    uniform float uTime;
+    varying vec2 vUv;
+    
+    void main() {
+      vec4 texColor = texture2D(uTexture, vUv);
+      
+      float alpha = texColor.a;
+      
+      gl_FragColor = vec4(texColor.rgb, alpha);
+    }
+  `;
+  
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTexture: { value: texture },
+      uTime: { value: 0 },
+      uWobbleIntensity: { value: 0.02 },
+      uWobbleSpeed: { value: 8.0 }
+    },
+    vertexShader,
+    fragmentShader,
+    transparent: true,
+    side: THREE.DoubleSide
+  });
 }
