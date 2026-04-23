@@ -628,8 +628,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     bulletTrailMaterialRef.current = bulletTrailMaterial;
     
     const bulletTrailMesh = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
-    bulletTrailMesh.position.set(5, 2, 0);
-    bulletTrailMesh.scale.set(0.8, 2, 1);
+    bulletTrailMesh.position.set(8, 2, 0); // 向右移动3个单位
+    bulletTrailMesh.scale.set(0.8, 2, 1); // 调整大小使尾气变瘦
     scene.add(bulletTrailMesh);
     console.log('Bullet trail created at:', bulletTrailMesh.position);
   }, []);
