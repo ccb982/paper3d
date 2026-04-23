@@ -92,6 +92,9 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     // 创建尾气网格
     this.trailMesh = new THREE.Mesh(geometry, this.trailMaterial);
     
+    // 增大尾气大小（缩放为原来的3倍）
+    this.trailMesh.scale.set(3, 3, 3);
+    
     // 计算飞行方向（从velocity获取）
     const flightDirection = this.velocity.clone().normalize();
     
