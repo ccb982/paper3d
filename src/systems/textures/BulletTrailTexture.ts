@@ -130,13 +130,6 @@ function findMaxYPoint(points: [number, number][]): [number, number] {
 const maxYPoint = findMaxYPoint(rawPoints);
 const normalizedMaxYPoint = normalizePoints([maxYPoint])[0];
 
-// 计算修正值：让尾气顶点对齐子弹顶点
-// 修正值 = 子弹顶点位置 - 尾气中心点位置
-// 这里使用归一化后的坐标进行修正
-const alignmentOffsetX = 0; // X方向修正值
-const alignmentOffsetY = -0.2; // Y方向修正值（调整以确保尾气完全显示）
-const trailScale = 2.0; // 尾气缩放因子，增大这个值可以使尾气更大
-
 export function createBulletTrailTexture(textureManager: TextureManager, width: number = 512, height: number = 512): void {
   
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
@@ -145,12 +138,12 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     // 绘制填充区域
     ctx.beginPath();
     const firstPoint = normalizedPoints[0];
-    // 转换归一化坐标到画布坐标：X以中心为原点，Y以顶部为原点，应用修正值
-    ctx.moveTo((firstPoint[0] + 0.5 + alignmentOffsetX) * w, (-firstPoint[1] + alignmentOffsetY) * h);
+    // 转换归一化坐标到画布坐标：X以中心为原点，Y以顶部为原点
+    ctx.moveTo((firstPoint[0] + 0.5) * w, (-firstPoint[1]) * h);
     
     for (let i = 1; i < normalizedPoints.length; i++) {
       const [x, y] = normalizedPoints[i];
-      ctx.lineTo((x + 0.5 + alignmentOffsetX) * w, (-y + alignmentOffsetY) * h);
+      ctx.lineTo((x + 0.5) * w, (-y) * h);
     }
     
     ctx.closePath();
@@ -256,10 +249,9 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
     // 使用原始的三角形拼接几何体
     // 从Y值最大的点到每个顶点创建三角形
     for (let i = 1; i < normalizedPoints.length - 1; i++) {
-      // 应用修正值和缩放因子到中心点和顶点
-      const center = [(normalizedMaxYPoint[0] + alignmentOffsetX) * trailScale, (normalizedMaxYPoint[1] + alignmentOffsetY) * trailScale];
-      const current = [(normalizedPoints[i][0] + alignmentOffsetX) * trailScale, (normalizedPoints[i][1] + alignmentOffsetY) * trailScale];
-      const next = [(normalizedPoints[i + 1][0] + alignmentOffsetX) * trailScale, (normalizedPoints[i + 1][1] + alignmentOffsetY) * trailScale];
+      const center = normalizedMaxYPoint; // 使用Y值最大的点作为中心点
+      const current = normalizedPoints[i];
+      const next = normalizedPoints[i + 1];
       
       // 三角形 - 将Y轴映射到Z轴，但反转Z坐标
       // 归一化后：X范围 -0.5 到 0.5，Y范围 -1 到 0
@@ -279,7 +271,7 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
           next[0], 0, nextZ
         );
         
-        // UVs - 转换回0-1范围，应用修正值
+        // UVs - 转换回0-1范围
         uvs.push(
           center[0] + 0.5, -center[1],
           current[0] + 0.5, -current[1],
