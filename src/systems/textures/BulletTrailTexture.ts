@@ -98,8 +98,8 @@ function normalizePoints(points: [number, number][]): [number, number][] {
   });
   
   const xMid = (minX + maxX) / 2;
-  const xRange = maxX - minX;
-  const yRange = maxY - minY;
+  const xRange = maxX - minX || 1; // 防止除以零
+  const yRange = maxY - minY || 1; // 防止除以零
   
   // 归一化：以X中点为原点，Y最高点为原点
   // X: (x - xMid) / xRange → 范围从 -0.5 到 0.5
@@ -112,6 +112,31 @@ function normalizePoints(points: [number, number][]): [number, number][] {
 
 const normalizedPoints = normalizePoints(rawPoints);
 
+// 找到Y值最大的点作为中心点（Y值最大意味着在归一化后Y值最接近0）
+function findMaxYPoint(points: [number, number][]): [number, number] {
+  let maxYPoint = points[0];
+  let maxY = points[0][1];
+  
+  for (const point of points) {
+    if (point[1] > maxY) {
+      maxY = point[1];
+      maxYPoint = point;
+    }
+  }
+  
+  return maxYPoint;
+}
+
+const maxYPoint = findMaxYPoint(rawPoints);
+const normalizedMaxYPoint = normalizePoints([maxYPoint])[0];
+
+// 计算修正值：让尾气顶点对齐子弹顶点
+// 修正值 = 子弹顶点位置 - 尾气中心点位置
+// 这里使用归一化后的坐标进行修正
+const alignmentOffsetX = 0; // X方向修正值
+const alignmentOffsetY = -0.2; // Y方向修正值（调整以确保尾气完全显示）
+const trailScale = 2.0; // 尾气缩放因子，增大这个值可以使尾气更大
+
 export function createBulletTrailTexture(textureManager: TextureManager, width: number = 512, height: number = 512): void {
   
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
@@ -120,12 +145,12 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     // 绘制填充区域
     ctx.beginPath();
     const firstPoint = normalizedPoints[0];
-    // 转换归一化坐标到画布坐标：X以中心为原点，Y以顶部为原点
-    ctx.moveTo((firstPoint[0] + 0.5) * w, (-firstPoint[1]) * h);
+    // 转换归一化坐标到画布坐标：X以中心为原点，Y以顶部为原点，应用修正值
+    ctx.moveTo((firstPoint[0] + 0.5 + alignmentOffsetX) * w, (-firstPoint[1] + alignmentOffsetY) * h);
     
     for (let i = 1; i < normalizedPoints.length; i++) {
       const [x, y] = normalizedPoints[i];
-      ctx.lineTo((x + 0.5) * w, (-y) * h);
+      ctx.lineTo((x + 0.5 + alignmentOffsetX) * w, (-y + alignmentOffsetY) * h);
     }
     
     ctx.closePath();
@@ -229,32 +254,42 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
     const zOffset = layer * layerOffset;
     
     // 使用原始的三角形拼接几何体
-    // 从中心点到每个顶点创建三角形
+    // 从Y值最大的点到每个顶点创建三角形
     for (let i = 1; i < normalizedPoints.length - 1; i++) {
-      const center = normalizedPoints[0];
-      const current = normalizedPoints[i];
-      const next = normalizedPoints[i + 1];
+      // 应用修正值和缩放因子到中心点和顶点
+      const center = [(normalizedMaxYPoint[0] + alignmentOffsetX) * trailScale, (normalizedMaxYPoint[1] + alignmentOffsetY) * trailScale];
+      const current = [(normalizedPoints[i][0] + alignmentOffsetX) * trailScale, (normalizedPoints[i][1] + alignmentOffsetY) * trailScale];
+      const next = [(normalizedPoints[i + 1][0] + alignmentOffsetX) * trailScale, (normalizedPoints[i + 1][1] + alignmentOffsetY) * trailScale];
       
       // 三角形 - 将Y轴映射到Z轴，但反转Z坐标
       // 归一化后：X范围 -0.5 到 0.5，Y范围 -1 到 0
       // 映射到3D空间：X保持不变，Y=0，Z=1 + Y（这样Z范围 0 到 1，0是尾部，1是头部）
       // 这样子弹头（+Z方向）指向尾气头部（Z=1）
-      vertices.push(
-        center[0], 0, 1 + center[1] + zOffset,  // X 不变，Y 设为 0（平面），Z = 1 + Y
-        current[0], 0, 1 + current[1] + zOffset,
-        next[0], 0, 1 + next[1] + zOffset
-      );
+      const centerZ = 1 + center[1] + zOffset;
+      const currentZ = 1 + current[1] + zOffset;
+      const nextZ = 1 + next[1] + zOffset;
       
-      // UVs - 转换回0-1范围
-      uvs.push(
-        center[0] + 0.5, -center[1],
-        current[0] + 0.5, -current[1],
-        next[0] + 0.5, -next[1]
-      );
-      
-      // 层索引（1个三角形 × 3个顶点 = 3个顶点）
-      for (let j = 0; j < 3; j++) {
-        layerIndices.push(layer);
+      // 确保没有NaN值
+      if (!isNaN(center[0]) && !isNaN(centerZ) &&
+          !isNaN(current[0]) && !isNaN(currentZ) &&
+          !isNaN(next[0]) && !isNaN(nextZ)) {
+        vertices.push(
+          center[0], 0, centerZ,  // X 不变，Y 设为 0（平面），Z = 1 + Y
+          current[0], 0, currentZ,
+          next[0], 0, nextZ
+        );
+        
+        // UVs - 转换回0-1范围，应用修正值
+        uvs.push(
+          center[0] + 0.5, -center[1],
+          current[0] + 0.5, -current[1],
+          next[0] + 0.5, -next[1]
+        );
+        
+        // 层索引（1个三角形 × 3个顶点 = 3个顶点）
+        for (let j = 0; j < 3; j++) {
+          layerIndices.push(layer);
+        }
       }
     }
   }
@@ -269,6 +304,7 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
   const layerBuffer = new Float32Array(layerIndices);
   geometry.setAttribute('layer', new THREE.BufferAttribute(layerBuffer, 1));
   
+  // 计算法线，跳过computeBoundingSphere以避免NaN错误
   geometry.computeVertexNormals();
   
   return geometry;
