@@ -109,7 +109,6 @@ function normalizePoints(points: [number, number][]): [number, number][] {
 const normalizedPoints = normalizePoints(rawPoints);
 
 export function createBulletTrailTexture(textureManager: TextureManager, width: number = 512, height: number = 512): void {
-  const color = '#534179';
   
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
@@ -125,11 +124,83 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     }
     
     ctx.closePath();
-    ctx.fillStyle = color;
+    
+    // 创建渐变效果：上半部分保持原样，下半部分使用#a31827基色，中间添加过渡，最底部添加#fe7a91
+    const gradient = ctx.createLinearGradient(w * 0.5, 0, w * 0.5, h);
+    gradient.addColorStop(0, 'rgba(1, 1, 3, 1)'); // 头部（末尾）：接近黑色
+    gradient.addColorStop(0.5, 'rgba(20, 25, 40, 1)'); // 上半部分结束
+    gradient.addColorStop(0.55, 'rgba(60, 25, 40, 1)'); // 过渡开始
+    gradient.addColorStop(0.6, 'rgba(127, 24, 39, 1)'); // 过渡中
+    gradient.addColorStop(0.65, 'rgba(163, 27, 43, 1)'); // 过渡继续
+    gradient.addColorStop(0.7, 'rgba(200, 30, 48, 1)'); // 下半部分开始（更亮的#a31827）
+    gradient.addColorStop(0.95, 'rgba(200, 30, 48, 1)'); // 下半部分
+    gradient.addColorStop(1, 'rgba(254, 122, 145, 1)'); // 最底部：#fe7a91
+    
+    ctx.fillStyle = gradient;
     ctx.fill();
     
+    // 添加更强的噪点效果
+    ctx.save();
+    ctx.clip(); // 只在路径内绘制噪点
+    
+    for (let i = 0; i < w * h * 0.05; i++) { // 5% 的像素点，增加噪点数量
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      const normalizedY = y / h; // 归一化Y坐标，0是头部，1是尾部
+      
+      let r, g, b;
+      
+      // 根据Y坐标选择不同的颜色范围
+      if (normalizedY < 0.5) {
+        // 上半部分：蓝色到紫色
+        const t = Math.random();
+        r = Math.floor(10 + t * 30); // 10-40
+        g = Math.floor(15 + t * 10); // 15-25
+        b = Math.floor(25 + t * 35); // 25-60
+      } else {
+        // 下半部分：检查是否在圆形区域内
+        const circleCenterX = w * 0.5;
+        const circleCenterY = h * 0.9;
+        const circleRadius = Math.min(w, h) * 0.25;
+        const dist = Math.sqrt((x - circleCenterX) ** 2 + (y - circleCenterY) ** 2);
+        
+        // 检查是否在最底部区域（0.95-1.0）
+        const isBottomArea = normalizedY > 0.95;
+        
+        if (dist < circleRadius && !isBottomArea) {
+          // 圆形区域内：#fe3362附近，颜色有随机变化（更亮）
+          const t = Math.random();
+          r = Math.floor(230 + t * 25); // 230-255
+          g = Math.floor(60 + t * 50); // 60-110
+          b = Math.floor(90 + t * 50); // 90-140
+        } else if (isBottomArea) {
+          // 最底部区域：#fe7a91附近
+          const t = Math.random();
+          r = Math.floor(220 + t * 35); // 220-255
+          g = Math.floor(100 + t * 60); // 100-160
+          b = Math.floor(130 + t * 60); // 130-190
+        } else {
+          // 下半部分其他区域：更亮的#a31827附近
+          const t = Math.random();
+          r = Math.floor(150 + t * 100); // 150-250
+          g = Math.floor(20 + t * 30); // 20-50
+          b = Math.floor(40 + t * 30); // 40-70
+        }
+      }
+      
+      const brightness = 0.5 + Math.random() * 1.5; // 0.5-2.0 的亮度，增加随机性
+      const alpha = 0.4 + Math.random() * 0.6; // 0.4-1.0 的透明度
+      
+      ctx.fillStyle = `rgba(${Math.min(255, Math.floor(r * brightness))}, ${Math.min(255, Math.floor(g * brightness))}, ${Math.min(255, Math.floor(b * brightness))}, ${alpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, 1.5, 0, Math.PI * 2); // 增大噪点大小
+      ctx.fill();
+    }
+    
+    ctx.restore();
+    
     // 绘制边框以确保边缘清晰
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = 'rgba(40, 20, 60, 1)'; // 紫色边框
     ctx.lineWidth = 2;
     ctx.stroke();
   });
