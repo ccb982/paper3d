@@ -230,11 +230,14 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
       const current = normalizedPoints[i];
       const next = normalizedPoints[i + 1];
       
-      // 三角形 - 将原本的 Y 轴（头部在 +Y）映射到 Z 轴，使头部指向 +Z
+      // 三角形 - 将原本的 Y 轴映射到 Z 轴，但反转Z坐标
+      // 原始数据中第一个点（尾部）的Y最小，映射到Z=1
+      // 最后一个点（头部）的Y最大，映射到Z=0
+      // 这样Z=0是头部，Z=1是尾部，与着色器定义一致
     vertices.push(
-      center[0], 0, center[1] + zOffset,  // X 不变，Y 设为 0（平面），Z 使用原 Y
-      current[0], 0, current[1] + zOffset,
-      next[0], 0, next[1] + zOffset
+      center[0], 0, 1.0 - center[1] + zOffset,  // X 不变，Y 设为 0（平面），Z 使用 1.0 - 原 Y
+      current[0], 0, 1.0 - current[1] + zOffset,
+      next[0], 0, 1.0 - next[1] + zOffset
     );
       
       // UVs

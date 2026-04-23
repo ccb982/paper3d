@@ -99,12 +99,8 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     const trailOffset = flightDirection.clone().multiplyScalar(-0.5); // 向后偏移 0.5
     this.trailMesh.position.copy(this.position).add(trailOffset);
     
-    // 拖尾朝向：直接设置为速度方向的反方向
-    const tailQuat = new THREE.Quaternion().setFromUnitVectors(
-      new THREE.Vector3(0, 0, 1),
-      flightDirection.clone().negate()
-    );
-    this.trailMesh.quaternion.copy(tailQuat);
+    // 拖尾朝向：参考子弹头的方向
+    this.trailMesh.quaternion.copy(this.mesh.quaternion);
     
     // 添加到场景
     const scene = EntityManager.getInstance().getScene();
@@ -128,12 +124,8 @@ export class DawnExplosionBulletEntity extends BulletEntity {
       const trailOffset = flightDirection.clone().multiplyScalar(-0.5); // 向后偏移 0.5
       this.trailMesh.position.copy(this.position).add(trailOffset);
       
-      // 更新尾气朝向：直接设置为速度方向的反方向
-      const tailQuat = new THREE.Quaternion().setFromUnitVectors(
-        new THREE.Vector3(0, 0, 1),
-        flightDirection.clone().negate()
-      );
-      this.trailMesh.quaternion.copy(tailQuat);
+      // 更新尾气朝向：参考子弹头的方向
+      this.trailMesh.quaternion.copy(this.mesh.quaternion);
       
       // 更新着色器时间uniform
       this.trailMaterial.uniforms.uTime.value = this.trailTime;
