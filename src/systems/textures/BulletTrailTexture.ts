@@ -130,7 +130,7 @@ function findMaxYPoint(points: [number, number][]): [number, number] {
 const maxYPoint = findMaxYPoint(rawPoints);
 const normalizedMaxYPoint = normalizePoints([maxYPoint])[0];
 
-export function createBulletTrailTexture(textureManager: TextureManager, width: number = 512, height: number = 512): void {
+export function createBulletTrailTexture(textureManager: TextureManager, width: number = 256, height: number = 256): void {
   
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
@@ -166,7 +166,7 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     ctx.save();
     ctx.clip(); // 只在路径内绘制噪点
     
-    for (let i = 0; i < w * h * 0.05; i++) { // 5% 的像素点，增加噪点数量
+    for (let i = 0; i < w * h * 0.02; i++) { // 2% 的像素点，优化性能
       const x = Math.random() * w;
       const y = Math.random() * h;
       const normalizedY = y / h; // 归一化Y坐标，0是头部，1是尾部
@@ -205,7 +205,7 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
       
       ctx.fillStyle = `rgba(${Math.min(255, Math.floor(r * brightness))}, ${Math.min(255, Math.floor(g * brightness))}, ${Math.min(255, Math.floor(b * brightness))}, ${alpha})`;
       ctx.beginPath();
-      ctx.arc(x, y, 1.5, 0, Math.PI * 2); // 增大噪点大小
+      ctx.arc(x, y, 1.0, 0, Math.PI * 2); // 减小噪点大小，优化性能
       ctx.fill();
     }
     
