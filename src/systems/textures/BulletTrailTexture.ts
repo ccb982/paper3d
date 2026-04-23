@@ -312,10 +312,12 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
     uniform float uWobbleIntensity;
     uniform float uWobbleSpeed;
     varying vec2 vUv;
+    varying float vPositionZ;
     attribute float layer;
     
     void main() {
       vUv = uv;
+      vPositionZ = position.z;
       vec3 pos = position;
       
       // 头部固定，尾部摆动
@@ -359,6 +361,7 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
     uniform sampler2D uTexture;
     uniform float uTime;
     varying vec2 vUv;
+    varying float vPositionZ;
     
     void main() {
       vec4 texColor = texture2D(uTexture, vUv);
@@ -366,6 +369,16 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
       // 确保完全透明的区域被正确处理
       if (texColor.a < 0.1) {
         discard;
+      }
+      
+      // 为尾气前5%的部分添加发光效果，只在中心区域
+      if (vPositionZ > 0.95 && abs(vUv.x - 0.5) < 0.1) {
+        float glowIntensity = (vPositionZ - 0.95) * 20.0; // 从0到1的强度
+        // 中心区域强度更高，边缘逐渐减弱
+        float widthIntensity = 1.0 - abs(vUv.x - 0.5) / 0.1;
+        vec3 glowColor = vec3(0.8, 0.6, 0.8); // 粉色发光（降低亮度）
+        texColor.rgb = mix(texColor.rgb, glowColor, glowIntensity * widthIntensity * 0.5);
+        texColor.a = mix(texColor.a, 1.0, glowIntensity * widthIntensity * 0.3);
       }
       
       gl_FragColor = texColor;

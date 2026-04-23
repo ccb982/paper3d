@@ -138,6 +138,13 @@ export class DawnExplosionBulletEntity extends BulletEntity {
           float alpha = trailColor.a * 0.8;
           color = mix(color, trailColor.rgb, alpha);
           
+          // 为子弹前端5%的部分添加发光效果
+          if (zNormalized > 0.95) {
+            float glowIntensity = (zNormalized - 0.95) * 20.0; // 从0到1的强度
+            vec3 glowColor = vec3(0.8, 0.6, 0.8); // 粉色发光（降低亮度）
+            color = mix(color, glowColor, glowIntensity * 0.5);
+          }
+          
           gl_FragColor = vec4(color, 1.0);
         }
       `,
