@@ -209,8 +209,8 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
     uniforms: {
       uTexture: { value: texture },
       uTime: { value: 0 },
-      uWobbleIntensity: { value: 0.02 },
-      uWobbleSpeed: { value: 8.0 }
+      uWobbleIntensity: { value: 0.05 },
+      uWobbleSpeed: { value: 3.0 }
     },
     vertexShader,
     fragmentShader,
