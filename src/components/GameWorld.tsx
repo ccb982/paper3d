@@ -603,29 +603,33 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
   
   // 处理场景引用和子弹尾气创建
   const bulletTrailMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const bulletTrailCreatedRef = useRef(false);
   
   useEffect(() => {
-    if (scene) {
-      sceneRef.current = scene;
-      EntityManager.getInstance().setScene(scene);
-      
-      const textureManager = new TextureManager();
-      createBulletTrailTexture(textureManager);
-      const bulletTrailTexture = textureManager.getTexture('bullet-trail');
-      
-      const bulletTrailGeometry = createBulletTrailGeometry();
-      
-      const bulletTrailMaterial = createBulletTrailMaterial(bulletTrailTexture);
-      bulletTrailMaterialRef.current = bulletTrailMaterial;
-      
-      const bulletTrailMesh = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
-      bulletTrailMesh.position.set(5, 2, 0);
-      bulletTrailMesh.scale.set(2, 2, 2);
-      scene.add(bulletTrailMesh);
-      console.log('Bullet trail created at:', bulletTrailMesh.position);
+    if (!scene || bulletTrailCreatedRef.current) {
+      return;
     }
-  }, [scene]);
-  
+    
+    bulletTrailCreatedRef.current = true;
+    sceneRef.current = scene;
+    EntityManager.getInstance().setScene(scene);
+    
+    const textureManager = new TextureManager();
+    createBulletTrailTexture(textureManager);
+    const bulletTrailTexture = textureManager.getTexture('bullet-trail');
+    
+    const bulletTrailGeometry = createBulletTrailGeometry();
+    
+    const bulletTrailMaterial = createBulletTrailMaterial(bulletTrailTexture);
+    bulletTrailMaterialRef.current = bulletTrailMaterial;
+    
+    const bulletTrailMesh = new THREE.Mesh(bulletTrailGeometry, bulletTrailMaterial);
+    bulletTrailMesh.position.set(5, 2, 0);
+    bulletTrailMesh.scale.set(0.8, 2, 1);
+    scene.add(bulletTrailMesh);
+    console.log('Bullet trail created at:', bulletTrailMesh.position);
+  }, []);
+
   useFrame(({ clock }) => {
     if (bulletTrailMaterialRef.current) {
       bulletTrailMaterialRef.current.uniforms.uTime.value = clock.getElapsedTime();
@@ -680,17 +684,14 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       setActiveShootingSystem('lockon');
       if (shootingManager) {
         shootingManager.setActiveSystem('lockon');
-        onActiveSystemChanged('lockon');
       }
     } else if (mode !== GameMode.BATTLE) {
-      // 在非战斗和非日常模式下，重置射击系统状态
       setActiveShootingSystem('lockon');
       if (shootingManager) {
         shootingManager.setActiveSystem('lockon');
-        onActiveSystemChanged('lockon');
       }
     }
-  }, [mode, shootingManager, onActiveSystemChanged]);
+  }, [mode, shootingManager]);
 
   useEffect(() => {
     if (shootingManager) {
