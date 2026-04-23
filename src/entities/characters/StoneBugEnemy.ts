@@ -9,7 +9,7 @@ export class StoneBugEnemy extends EnemyEntity {
 
   constructor(id: string, position: THREE.Vector3) {
     // 调用父类构造函数，使用空纹理路径
-    super(id, 'enemy', '', position);
+    super(id, '', position, false);
     
     // 设置原石虫的属性
     this.health = 50; // 比普通敌人更耐打

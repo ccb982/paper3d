@@ -537,28 +537,32 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       }
     });
     
-    // 创建敌人实体
+    // 创建敌人实体 - 远离玩家
     for (let i = 0; i < 3; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 30 + Math.random() * 20;
       const enemyEntity = new EnemyEntity(
         `enemy-${i}`,
-        '/textures/character.png', // 暂时使用相同的纹理
+        '/textures/character.png',
         new THREE.Vector3(
-          Math.random() * 20 - 10,
-          5 - 1.5, // 下调1.5
-          Math.random() * 20 - 10
+          Math.cos(angle) * distance,
+          5 - 1.5,
+          Math.sin(angle) * distance
         )
       );
       entityManager.addEntity(enemyEntity);
     }
     
-    // 创建原石虫敌人
+    // 创建原石虫敌人 - 远离玩家
     for (let i = 0; i < 2; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 50 + Math.random() * 30;
       const stoneBugEnemy = new StoneBugEnemy(
         `stone-bug-${i}`,
         new THREE.Vector3(
-          Math.random() * 20 - 10,
-          5 - 1.5, // 下调1.5
-          Math.random() * 20 - 10
+          Math.cos(angle) * distance,
+          5 - 1.5,
+          Math.sin(angle) * distance
         )
       );
       entityManager.addEntity(stoneBugEnemy);
