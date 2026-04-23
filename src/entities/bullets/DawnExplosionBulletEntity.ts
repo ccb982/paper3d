@@ -27,8 +27,10 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     // 设置更高的伤害值
     this.setDamage(2);
     
-    // 创建尾气特效（双层不同摆动算法）
+    // 创建尾气特效（前端附着在子弹上，后端独立）
     this.createTrailEffect();
+    // 修改子弹材质，添加前端尾气效果
+    this.modifyBulletMaterial();
   }
 
   /**
@@ -76,6 +78,77 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     });
   }
 
+  private modifyBulletMaterial(): void {
+    const textureManager = new TextureManager();
+    
+    // 创建尾气纹理用于子弹前端
+    createBulletTrailTexture(textureManager);
+    const trailTexture = textureManager.getTexture('bullet-trail');
+    
+    if (!trailTexture) return;
+    
+    // 创建新的子弹材质，添加尾气纹理作为前端效果
+    const bulletMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        baseColor: { value: new THREE.Color(this.mesh.material instanceof THREE.MeshStandardMaterial ? this.mesh.material.color : 0xdd5b42) },
+        trailTexture: { value: trailTexture },
+        time: { value: 0 },
+        speed: { value: this.velocity.length() }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        
+        void main() {
+          vUv = uv;
+          vPosition = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 baseColor;
+        uniform sampler2D trailTexture;
+        uniform float time;
+        uniform float speed;
+        
+        varying vec2 vUv;
+        varying vec3 vPosition;
+        
+        void main() {
+          // 基础颜色
+          vec3 color = baseColor;
+          
+          // 计算纹理坐标，使用尾气纹理的前30%部分
+          // 将子弹表面的Z位置映射到纹理的前30%
+          float trailLength = 0.3; // 只使用尾气纹理的前30%
+          float zNormalized = (vPosition.z + 0.3) / 0.6; // 归一化Z位置到0-1范围（覆盖整个子弹）
+          float textureY = zNormalized * trailLength; // 映射到纹理的前30%
+          
+          // 添加时间偏移，使纹理流动
+          float timeOffset = mod(time * speed * 0.1, trailLength);
+          float trailUvY = textureY + timeOffset;
+          
+          // 确保纹理坐标在0-1范围内
+          trailUvY = mod(trailUvY, 1.0);
+          
+          vec2 trailUv = vec2(vUv.x, trailUvY);
+          vec4 trailColor = texture2D(trailTexture, trailUv);
+          
+          // 混合基础颜色和尾气纹理
+          float alpha = trailColor.a * 0.8;
+          color = mix(color, trailColor.rgb, alpha);
+          
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+      side: THREE.DoubleSide,
+      transparent: true
+    });
+    
+    // 替换子弹材质
+    this.mesh.material = bulletMaterial;
+  }
+
   private createTrailEffect(): void {
     const textureManager = new TextureManager();
     
@@ -95,27 +168,6 @@ export class DawnExplosionBulletEntity extends BulletEntity {
     // 增大尾气大小（缩放为原来的3倍）
     this.trailMesh.scale.set(3, 3, 3);
     
-    // 计算飞行方向（从velocity获取）
-    const flightDirection = this.velocity.clone().normalize();
-    
-    // 尾气顶点坐标调整
-    // 新的归一化方式：以X中点为原点，Y最高点为原点
-    // 归一化后：X范围 -0.5 到 0.5，Y范围 -1 到 0
-    // 映射到3D空间：X保持不变，Y=0，Z=1+Y（Z范围 0 到 1，0是尾部，1是头部）
-    
-    // 计算尾气位置：
-    // 1. 子弹位置 + 速度方向 * 0.3（子弹尾部位置）
-    // 2. 尾气的中心点（Y值最大的点，Z=1）需要对齐子弹尾部
-    const bulletTailPosition = this.position.clone().add(flightDirection.clone().multiplyScalar(0.3));
-    
-    // 尾气网格的位置应该让其中心点（Y值最大的点，Z=1）对齐子弹尾部
-    // 由于尾气几何体的X范围是-0.5到0.5，中心点在X=0
-    // 所以直接将尾气网格的位置设置为子弹尾部位置
-    this.trailMesh.position.copy(bulletTailPosition);
-    
-    // 拖尾朝向：参考子弹头的方向
-    this.trailMesh.quaternion.copy(this.mesh.quaternion);
-    
     // 添加到场景
     const scene = EntityManager.getInstance().getScene();
     if (scene) {
@@ -134,6 +186,11 @@ export class DawnExplosionBulletEntity extends BulletEntity {
 
     // 更新尾气时间
     this.trailTime += delta;
+
+    // 更新子弹前端尾气纹理动画
+    if (this.mesh.material instanceof THREE.ShaderMaterial) {
+      this.mesh.material.uniforms.time.value = this.trailTime;
+    }
 
     if (this.trailMesh && this.trailMaterial) {
       const flightDir = this.velocity.clone().normalize();

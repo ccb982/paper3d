@@ -668,7 +668,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
             new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
             new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),
             bullet.velocity, // 使用bullet对象中的速度值
-            0xdd5b42 // 子弹颜色：#dd5b42
+            0xfd4d74 // 子弹颜色：#fd4d74
           );
           EntityManager.getInstance().addEntity(bulletEntity);
           console.log('BulletEntity added to EntityManager');
