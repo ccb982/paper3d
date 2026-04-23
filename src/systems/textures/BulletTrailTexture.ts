@@ -114,6 +114,7 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
     
+    // 绘制填充区域
     ctx.beginPath();
     const firstPoint = normalizedPoints[0];
     ctx.moveTo(firstPoint[0] * w, (1 - firstPoint[1]) * h);
@@ -126,6 +127,11 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
+    
+    // 绘制边框以确保边缘清晰
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
   });
   
   textureManager.register('bullet-trail', generator);
@@ -139,23 +145,25 @@ export function createBulletTrailGeometry(): THREE.BufferGeometry {
   const vertices = [];
   const uvs = [];
   
-  for (let i = 1; i < normalizedPoints.length - 1; i++) {
-    const center = normalizedPoints[0];
-    const current = normalizedPoints[i];
-    const next = normalizedPoints[i + 1];
-    
-    vertices.push(
-      center[0], center[1], 0,
-      current[0], current[1], 0,
-      next[0], next[1], 0
-    );
-    
-    uvs.push(
-      center[0], center[1],
-      current[0], current[1],
-      next[0], next[1]
-    );
-  }
+  // 创建一个简单的平面几何体，覆盖整个纹理区域
+  // 这样可以避免三角形拼接产生的间隙
+  vertices.push(
+    0, 0, 0,
+    1, 0, 0,
+    1, 1, 0,
+    0, 0, 0,
+    1, 1, 0,
+    0, 1, 0
+  );
+  
+  uvs.push(
+    0, 0,
+    1, 0,
+    1, 1,
+    0, 0,
+    1, 1,
+    0, 1
+  );
   
   const vertexBuffer = new Float32Array(vertices);
   geometry.setAttribute('position', new THREE.BufferAttribute(vertexBuffer, 3));
@@ -199,9 +207,12 @@ export function createBulletTrailMaterial(texture: THREE.Texture): THREE.ShaderM
     void main() {
       vec4 texColor = texture2D(uTexture, vUv);
       
-      float alpha = texColor.a;
+      // 确保完全透明的区域被正确处理
+      if (texColor.a < 0.1) {
+        discard;
+      }
       
-      gl_FragColor = vec4(texColor.rgb, alpha);
+      gl_FragColor = texColor;
     }
   `;
   

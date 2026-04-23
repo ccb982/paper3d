@@ -634,13 +634,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     console.log('Bullet trail created at:', bulletTrailMesh.position);
   }, []);
 
-  const bulletTrailUpdateRef = useRef(0);
   useFrame(({ clock }) => {
     if (bulletTrailMaterialRef.current) {
-      bulletTrailUpdateRef.current++;
-      if (bulletTrailUpdateRef.current % 6 === 0) {
-        bulletTrailMaterialRef.current.uniforms.uTime.value = clock.getElapsedTime();
-      }
+      bulletTrailMaterialRef.current.uniforms.uTime.value = clock.getElapsedTime();
     }
   });
 
