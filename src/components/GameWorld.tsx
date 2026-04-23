@@ -667,7 +667,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
           const bulletEntity = new DawnExplosionBulletEntity(
             new THREE.Vector3(bullet.position.x, bullet.position.y, bullet.position.z),
             new THREE.Vector3(bullet.direction.x, bullet.direction.y, bullet.direction.z),
-            bullet.velocity * 0.5, // 降低子弹移速
+            0, // 子弹静止
             0xdd5b42 // 子弹颜色：#dd5b42
           );
           EntityManager.getInstance().addEntity(bulletEntity);
