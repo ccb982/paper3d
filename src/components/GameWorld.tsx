@@ -413,6 +413,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
   const [shootDirection, setShootDirection] = useState<{ x: number; y: number; z: number } | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const { triggerDialogue } = useDialogue();
+  const [terrainReady, setTerrainReady] = useState(false);
 
   useEffect(() => {
     // 只在组件挂载时执行一次
@@ -595,18 +596,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       );
       entityManager.addEntity(boxEntity);
     }
-    
-    // 创建水面实体
-        const waterEntity = new WaterEntity(
-          new THREE.Vector3(0, 1, 0), // 位置，进一步提高到地面以上
-          20, // 宽度，缩小到20
-          20, // 高度，缩小到20
-          256, // 分辨率
-          64 // 网格分段数，相应减少
-        );
-        console.log('Water entity created and added to entity manager');
-        entityManager.addEntity(waterEntity);
-    
+
     // 在地图上创建一个持续时间无限的火焰特效
     // 先清理所有旧的粒子火焰特效，避免重复创建
     EffectManager.getInstance().clearAllParticleFireEffects();
@@ -616,7 +606,131 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
 
     console.log('Entities created:', entityManager.getEntityCount());
   }, []);
-  
+
+  // 根据地形高度创建水面实体
+  useEffect(() => {
+    if (!terrainReady || !getHeightAtRef.current) {
+      return;
+    }
+
+    const entityManager = EntityManager.getInstance();
+    const getHeightAt = getHeightAtRef.current;
+
+    // 使用洪水填充算法找到合适的河流生成位置
+    const findRiverPosition = () => {
+      const waterThreshold = 0.3; // 水面高度阈值
+      const width = 100;
+      const depth = 100;
+      const gridSize = 32; // 网格大小
+      const cellSize = width / gridSize;
+
+      // 初始化网格
+      const grid: boolean[][] = [];
+      for (let i = 0; i < gridSize; i++) {
+        grid[i] = [];
+        for (let j = 0; j < gridSize; j++) {
+          const x = (j / gridSize - 0.5) * width;
+          const z = (i / gridSize - 0.5) * depth;
+          const height = getHeightAt(x, z);
+          grid[i][j] = height < waterThreshold;
+        }
+      }
+
+      // 洪水填充算法找到最大的连续区域
+      const visited: boolean[][] = [];
+      for (let i = 0; i < gridSize; i++) {
+        visited[i] = new Array(gridSize).fill(false);
+      }
+
+      let maxArea = 0;
+      let bestRegion: { x: number; z: number; width: number; height: number } | null = null;
+
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          if (grid[i][j] && !visited[i][j]) {
+            // 洪水填充
+            const stack = [{ i, j }];
+            visited[i][j] = true;
+            let area = 0;
+            let minX = j, maxX = j, minY = i, maxY = i;
+
+            while (stack.length > 0) {
+              const { i: ci, j: cj } = stack.pop()!;
+              area++;
+              minX = Math.min(minX, cj);
+              maxX = Math.max(maxX, cj);
+              minY = Math.min(minY, ci);
+              maxY = Math.max(maxY, ci);
+
+              // 四个方向
+              const directions = [
+                { di: -1, dj: 0 },
+                { di: 1, dj: 0 },
+                { di: 0, dj: -1 },
+                { di: 0, dj: 1 }
+              ];
+
+              for (const dir of directions) {
+                const ni = ci + dir.di;
+                const nj = cj + dir.dj;
+                if (ni >= 0 && ni < gridSize && nj >= 0 && nj < gridSize && grid[ni][nj] && !visited[ni][nj]) {
+                  visited[ni][nj] = true;
+                  stack.push({ i: ni, j: nj });
+                }
+              }
+            }
+
+            if (area > maxArea) {
+              maxArea = area;
+              const regionWidth = (maxX - minX + 1) * cellSize;
+              const regionHeight = (maxY - minY + 1) * cellSize;
+              const centerX = ((minX + maxX) / 2 / gridSize - 0.5) * width;
+              const centerZ = ((minY + maxY) / 2 / gridSize - 0.5) * depth;
+              
+              bestRegion = {
+                x: centerX,
+                z: centerZ,
+                width: regionWidth,
+                height: regionHeight
+              };
+            }
+          }
+        }
+      }
+
+      return bestRegion;
+    };
+
+    // 找到最佳河流位置
+    const riverPosition = findRiverPosition();
+    if (riverPosition) {
+      const waterHeight = 0.3; // 统一的水面高度
+      
+      // 生成河流
+      const riverEntity = new WaterEntity(
+        new THREE.Vector3(riverPosition.x, waterHeight, riverPosition.z), // 中心位置
+        Math.max(riverPosition.width, 40), // 宽度
+        Math.max(riverPosition.height, 10), // 高度
+        256, // 分辨率
+        64 // 网格分段数
+      );
+      entityManager.addEntity(riverEntity);
+      console.log('River created at:', riverPosition, 'size:', riverPosition.width, 'x', riverPosition.height);
+    } else {
+      // 如果没有找到合适的区域，生成一个默认河流
+      const waterHeight = 0.3;
+      const riverEntity = new WaterEntity(
+        new THREE.Vector3(0, waterHeight, 0),
+        80,
+        10,
+        256,
+        64
+      );
+      entityManager.addEntity(riverEntity);
+      console.log('No suitable river position found, creating default river');
+    }
+  }, [terrainReady]);
+
   // 处理场景引用和子弹尾气创建
   const bulletTrailMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const bulletTrailCreatedRef = useRef(false);
@@ -872,7 +986,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         characterPosition={characterPos}
         onTerrainReady={(getHeightAt) => {
           getHeightAtRef.current = getHeightAt;
-          
+
           // 为所有角色设置地形高度获取函数
           const entityManager = EntityManager.getInstance();
           const characters = entityManager.getEntitiesByType('character');
@@ -881,6 +995,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
               (character as CharacterEntity).setHeightAtFunction(getHeightAt);
             }
           });
+
+          // 标记地形已准备好
+          setTerrainReady(true);
         }}
       />
       <PaperCharacter characterId="player" onClick={handleCharacterClick} />
