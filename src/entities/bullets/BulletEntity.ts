@@ -10,7 +10,7 @@ import { generateId } from '../../utils/idGenerator';
 export class BulletEntity extends Entity {
   private lifetime: number = 3000;
   private createdAt: number;
-  private damage: number = 1;
+  private damage: number = 3;
 
   /**
    * 创建子弹实体

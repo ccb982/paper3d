@@ -25,7 +25,7 @@ export class DawnExplosionBulletEntity extends BulletEntity {
   ) {
     super(position, direction, speed, color);
     // 设置更高的伤害值
-    this.setDamage(2);
+    this.setDamage(6);
     
     // 创建尾气特效（前端附着在子弹上，后端独立）
     this.createTrailEffect();
