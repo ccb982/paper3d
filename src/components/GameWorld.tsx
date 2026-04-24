@@ -29,6 +29,7 @@ import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailMaterial } from '../systems/textures/BulletTrailTexture';
 import { TextureManager } from '../systems/textures/TextureManager';
+import { WaterEntity } from '../entities/water/WaterEntity';
 
 
 const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActiveShootingSystem, onActiveSystemChanged }: {
@@ -594,6 +595,17 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       );
       entityManager.addEntity(boxEntity);
     }
+    
+    // 创建水面实体
+        const waterEntity = new WaterEntity(
+          new THREE.Vector3(0, 1, 0), // 位置，进一步提高到地面以上
+          20, // 宽度，缩小到20
+          20, // 高度，缩小到20
+          256, // 分辨率
+          64 // 网格分段数，相应减少
+        );
+        console.log('Water entity created and added to entity manager');
+        entityManager.addEntity(waterEntity);
     
     // 在地图上创建一个持续时间无限的火焰特效
     // 先清理所有旧的粒子火焰特效，避免重复创建

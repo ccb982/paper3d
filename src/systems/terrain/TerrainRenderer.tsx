@@ -70,9 +70,11 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
   const vertexShader = `
     varying vec2 vUv;
     varying vec3 vPosition;
+    varying vec3 vNormal;
     void main() {
       vUv = uv;
       vPosition = position;
+      vNormal = normal;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
@@ -83,6 +85,7 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
     uniform sampler2D uGroundTexture;
     varying vec2 vUv;
     varying vec3 vPosition;
+    varying vec3 vNormal;
     
     void main() {
       // 地面纹理采样
@@ -126,6 +129,16 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
       
       // 混合地面纹理和涟漪效果
       vec3 finalColor = mix(groundColor.rgb, rippleColor, rippleAlpha);
+      
+      // 基础光照计算
+      vec3 lightDirection = normalize(vec3(1.0, 1.0, 0.5));
+      float diffuse = max(dot(vNormal, lightDirection), 0.0);
+      
+      // 环境光
+      vec3 ambient = vec3(0.4);
+      
+      // 计算最终颜色
+      finalColor = finalColor * (ambient + diffuse);
       
       gl_FragColor = vec4(finalColor, 1.0);
     }
