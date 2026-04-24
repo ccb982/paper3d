@@ -354,7 +354,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
       // 检测周围敌人，自动切换模式
       const entities = EntityManager.getInstance().getAllEntities();
       const playerPos = playerChar.position;
-      const enemyDetectionRadius = 20; // 敌人检测半径
+      const enemyDetectionRadius = 50; // 敌人检测半径
       let hasEnemyNearby = false;
       
       for (const entity of entities) {
