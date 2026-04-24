@@ -68,13 +68,16 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
   
   // 涟漪效果的顶点着色器
   const vertexShader = `
+    attribute vec3 color;
     varying vec2 vUv;
     varying vec3 vPosition;
     varying vec3 vNormal;
+    varying vec3 vColor;
     void main() {
       vUv = uv;
       vPosition = position;
       vNormal = normal;
+      vColor = color;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }
   `;
@@ -86,6 +89,7 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
     varying vec2 vUv;
     varying vec3 vPosition;
     varying vec3 vNormal;
+    varying vec3 vColor;
     
     void main() {
       // 地面纹理采样
@@ -130,9 +134,12 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
       // 混合地面纹理和涟漪效果
       vec3 finalColor = mix(groundColor.rgb, rippleColor, rippleAlpha);
       
+      // 应用顶点颜色（阴影效果）
+      finalColor *= vColor * 0.5;
+      
       // 基础光照计算
       vec3 lightDirection = normalize(vec3(1.0, 1.0, 0.5));
-      float diffuse = max(dot(vNormal, lightDirection), 0.0);
+      float diffuse = max(dot(vNormal, lightDirection), 0.0) * 0.5;
       
       // 环境光
       vec3 ambient = vec3(0.4);
@@ -190,19 +197,19 @@ export const TerrainRenderer: React.FC<TerrainRendererProps> = ({ params, charac
       let intensity: number;
       
       // 基础亮度计算（基于高度差）
-      if (deltaY < -2.0) intensity = 1.0;
-      else if (deltaY < -0.5) intensity = 3.0;
-      else if (deltaY < 2.0) intensity = 5.0;
-      else intensity = 5.8;
+      if (deltaY < -2.0) intensity = 0.3;
+      else if (deltaY < -0.5) intensity = 0.5;
+      else if (deltaY < 2.0) intensity = 0.8;
+      else intensity = 1.0;
       
       // 远处地形亮度调整：远处的暗部调整为较暗
-      if (distance > 30 && intensity < 3.0) {
-        intensity = 3.0; // 远处的暗部调整为较暗
+      if (distance > 30 && intensity < 0.5) {
+        intensity = 0.5; // 远处的暗部调整为较暗
       }
       
       // 角色周围20格内的暗部区域提高亮度
-      if (distance <= 20 && intensity < 2.0) {
-        intensity = 2.0; // 角色周围的暗部调整为较暗
+      if (distance <= 20 && intensity < 0.4) {
+        intensity = 0.4; // 角色周围的暗部调整为较暗
       }
       
       // 设置颜色（灰度）
