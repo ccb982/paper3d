@@ -47,7 +47,11 @@ function App() {
 
       // 按E键交互
       if (event.key === 'e' || event.key === 'E') {
-        if (interactiveObjects.length > 0) {
+        if (currentBox) {
+          // 如果箱子已打开，关闭箱子
+          handleCloseBox();
+        } else if (interactiveObjects.length > 0) {
+          // 如果没有打开的箱子，打开第一个可交互对象
           handleInteract(interactiveObjects[0]);
         }
       }
