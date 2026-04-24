@@ -15,6 +15,7 @@ export class StoneBugEnemy extends EnemyEntity {
     this.health = 50; // 比普通敌人更耐打
     this.maxHealth = 50;
     this.speed = 1.5; // 比普通敌人慢
+    this.groundOffset = 0; // 重力判定下移0.7
     
     // 创建原石虫的自定义模型
     this.createStoneBugModel();
