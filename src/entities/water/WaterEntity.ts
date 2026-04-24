@@ -135,7 +135,7 @@ export class WaterEntity extends StaticEntity {
     this.waterMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
-        uHeightScale: { value: 2.0 },
+        uHeightScale: { value: 0.3 },
         uColorA: { value: new THREE.Color(0x2c7da0) },
         uColorB: { value: new THREE.Color(0x61a5c2) }
       },
@@ -145,15 +145,24 @@ export class WaterEntity extends StaticEntity {
         varying vec2 vUv;
         varying float vHeight;
 
+        float hash(vec2 p) {
+          return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+        }
+
         void main() {
           vUv = uv;
           vec3 pos = position;
 
-          float wave1 = sin(pos.x * 0.5 + uTime * 2.0) * 0.3;
-          float wave2 = sin(pos.z * 0.5 + uTime * 1.5) * 0.2;
-          float wave3 = sin((pos.x + pos.z) * 0.3 + uTime * 2.5) * 0.15;
+          float noise1 = hash(vec2(floor(pos.x * 2.0), floor(pos.z * 2.0 + uTime * 0.2)));
+          float noise2 = hash(vec2(floor(pos.x * 3.0 + uTime * 0.15), floor(pos.z * 2.5)));
 
-          float height = wave1 + wave2 + wave3;
+          float bigWaveAmp = 0.25 + 0.45 * (sin(uTime * 0.7) * 0.5 + 0.5);
+          float bigWave = sin(pos.x * 0.3 + uTime * 0.8) * bigWaveAmp;
+          float smallWave1 = sin(pos.z * 0.5 + uTime * 0.75 + noise1 * 6.28) * 0.1;
+          float smallWave2 = sin((pos.x + pos.z) * 0.3 + uTime * 1.25) * 0.08;
+          float smallWave3 = cos(pos.x * 0.8 - uTime * 0.9) * 0.05;
+
+          float height = bigWave + smallWave1 + smallWave2 + smallWave3;
           pos.y += height * uHeightScale;
           vHeight = height;
 
@@ -168,12 +177,12 @@ export class WaterEntity extends StaticEntity {
         varying float vHeight;
 
         void main() {
-          vec3 color = mix(uColorA, uColorB, vHeight * 0.5 + 0.5);
+          vec3 color = mix(uColorA, uColorB, vHeight * 2.0 + 0.5);
 
-          float shine = sin(vUv.x * 30.0 + uTime * 3.0) * cos(vUv.y * 30.0 + uTime * 2.0) * 0.15 + 0.85;
+          float shine = sin(vUv.x * 30.0 + uTime * 1.5) * cos(vUv.y * 30.0 + uTime * 1.0) * 0.1 + 0.9;
           color *= shine;
 
-          float highlight = smoothstep(0.3, 0.5, vHeight) * 0.3;
+          float highlight = smoothstep(0.2, 0.4, vHeight) * 0.2;
           color += vec3(highlight);
 
           gl_FragColor = vec4(color, 0.9);
