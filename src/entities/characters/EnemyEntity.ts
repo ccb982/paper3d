@@ -20,6 +20,7 @@ export class EnemyEntity extends CharacterEntity {
     this.maxHealth = 30;
     this.speed = 2;
     this.isPlayerControlled = false;
+    this.groundOffset = 2.2; // 上移2.1个单位
     this.randomDirection.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
     
     // 可选启用动画系统

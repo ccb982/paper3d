@@ -548,7 +548,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
         '/textures/character.png',
         new THREE.Vector3(
           Math.cos(angle) * distance,
-          5 - 1.5,
+          5 - 1.5 + 2,
           Math.sin(angle) * distance
         )
       );

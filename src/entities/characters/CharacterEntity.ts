@@ -29,6 +29,7 @@ export abstract class CharacterEntity extends Entity {
   public gravity: number = 9.8;
   public jumpForce: number = 7;
   public height: number = 1.5; // 角色高度，用于碰撞检测
+  protected groundOffset: number = 0.1; // 地面偏移量
 
   // 纹理相关
   public texturePath: string;                     // 贴图路径
@@ -43,7 +44,8 @@ export abstract class CharacterEntity extends Entity {
     const geometry = new THREE.PlaneGeometry(2, 3);
     const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geometry, material);
-    
+    mesh.scale.set(1, 1.5, 1);
+
     // 添加点击检测和可射击相关属性
     mesh.userData = {
       characterId: id,
@@ -192,8 +194,8 @@ export abstract class CharacterEntity extends Entity {
     }
 
     // 地面碰撞检测
-    if (newY <= groundHeight + 0.1) { // 0.1 是地面偏移量
-      this.position.y = groundHeight + 0.1;
+    if (newY <= groundHeight + this.groundOffset) { // 使用可配置的地面偏移量
+      this.position.y = groundHeight + this.groundOffset;
       this.verticalVelocity = 0;
       this.isGrounded = true;
     } else {
