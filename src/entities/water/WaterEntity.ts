@@ -288,10 +288,12 @@ export class WaterEntity extends StaticEntity {
           float highlight = smoothstep(0.2, 0.4, vHeight) * 0.2;
           color += vec3(highlight);
 
-          gl_FragColor = vec4(color, 0.9);
+          gl_FragColor = vec4(color, 1.0);
         }
       `,
-      transparent: true,
+      transparent: false,
+      depthWrite: true,
+      depthTest: true,
       side: THREE.DoubleSide
     });
 
