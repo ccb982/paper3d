@@ -42,15 +42,15 @@ export class WaterEntity extends StaticEntity {
 
   private static STATIC_WAVE_PARAMS = {
     isDynamic: false,
-    wave1Freq: 0.4,
-    wave1Speed: 0.8,
-    wave2Freq: 0.3,
-    wave2Speed: 0.6,
-    wave3Freq: 0.2,
-    wave3Speed: 1.0,
-    bigWaveAmp: 0.35,
-    bigWaveFreq: 0.4,
-    bigWaveAmpRange: 0.15
+    wave1Freq: 0.2,
+    wave1Speed: 0.4,
+    wave2Freq: 0.15,
+    wave2Speed: 0.3,
+    wave3Freq: 0.1,
+    wave3Speed: 0.5,
+    bigWaveAmp: 0.2,
+    bigWaveFreq: 0.3,
+    bigWaveAmpRange: 0.1
   };
 
   private static DYNAMIC_WAVE_PARAMS = {
