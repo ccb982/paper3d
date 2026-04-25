@@ -59,7 +59,7 @@ export abstract class CharacterEntity extends Entity {
     this.texturePath = texturePath;
     
     // 设置合适的碰撞半径
-    this.radius = 1.0; // 角色的碰撞半径
+    this.radius = 1.5; // 角色的碰撞半径
 
     if (position) {
       this.position.copy(position);
