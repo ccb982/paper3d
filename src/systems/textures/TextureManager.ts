@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-interface TextureGenerator {
+interface ITextureGenerator {
   type: 'canvas' | 'shader';
   generate(): THREE.Texture | THREE.Material;
   update(delta?: number): void;
@@ -9,14 +9,24 @@ interface TextureGenerator {
 
 interface TextureEntry {
   id: string;
-  generator: TextureGenerator;
+  generator: ITextureGenerator;
   texture?: THREE.Texture;
   material?: THREE.Material;
   refCount: number;       // 引用计数，用于自动释放
 }
 
 export class TextureManager {
+  private static instance: TextureManager;
   private textures: Map<string, TextureEntry> = new Map();
+
+  private constructor() {}
+
+  public static getInstance(): TextureManager {
+    if (!TextureManager.instance) {
+      TextureManager.instance = new TextureManager();
+    }
+    return TextureManager.instance;
+  }
 
   // 注册纹理生成器
   public register(id: string, generator: ITextureGenerator): void {

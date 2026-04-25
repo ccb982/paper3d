@@ -29,6 +29,7 @@ import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailMaterial } from '../systems/textures/BulletTrailTexture';
 import { TextureManager } from '../systems/textures/TextureManager';
+import { TestRedBlueTexture } from '../systems/textures/TestRedBlueTexture';
 import { WaterEntity } from '../entities/water/WaterEntity';
 
 
@@ -604,6 +605,25 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     const firePosition = new THREE.Vector3(0, 3 - 1.5, 10); // 下调1.5
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
+
+    // 创建测试纹理
+    const textureManager = TextureManager.getInstance();
+    const testTexture = new TestRedBlueTexture();
+    textureManager.register('test-red-blue', testTexture);
+    
+    // 在出生点附近创建一个平面来显示测试纹理
+    const testPlaneGeometry = new THREE.PlaneGeometry(2, 2);
+    const testPlaneMaterial = new THREE.MeshBasicMaterial({
+      map: textureManager.getTexture('test-red-blue'),
+      side: THREE.DoubleSide
+    });
+    const testPlane = new THREE.Mesh(testPlaneGeometry, testPlaneMaterial);
+    testPlane.position.set(0, 3, 5); // 出生点附近
+    testPlane.rotation.x = -Math.PI / 2; // 水平放置
+    if (sceneRef.current) {
+      sceneRef.current.add(testPlane);
+    }
+    console.log('Test red-blue texture created and displayed at (0, 3, 5)');
 
     console.log('Entities created:', entityManager.getEntityCount());
   }, []);
