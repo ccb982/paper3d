@@ -25,6 +25,7 @@ export class WaterEntity extends StaticEntity {
   private time: number = 0;
   private playerRipplePos: THREE.Vector2 = new THREE.Vector2(-1, -1);
   private playerRippleStrength: number = 0;
+  private lastPlayerWorldPos: THREE.Vector3 = new THREE.Vector3(-1000, -1000, -1000);
 
   private waveConfig: {
     isDynamic: boolean;
@@ -154,7 +155,7 @@ export class WaterEntity extends StaticEntity {
             if (i >= uDisturbCount) break;
             vec2 delta = uv - uDisturbPositions[i];
             float dist = length(delta);
-            float radius = 0.25;
+            float radius = 0.5;
             if (dist < radius) {
               float strength = uDisturbStrengths[i];
               disturbance += strength * (1.0 - dist / radius);
@@ -222,6 +223,7 @@ export class WaterEntity extends StaticEntity {
         uniform float uBigWaveAmpRange;
         varying vec2 vUv;
         varying float vHeight;
+        varying float vPlayerGlow;
         varying vec3 vWorldPos;
 
         float hash(vec2 p) {
@@ -254,6 +256,18 @@ export class WaterEntity extends StaticEntity {
           float height = (wave1 + wave2 + wave3 + bigWave) * waveMultiplier + texHeight * 4.0;
           pos.y += height * uHeightScale;
           vHeight = height;
+
+          // 玩家涟漪 - 向外扩散的sin波，有Y轴衰减
+          if (uPlayerStrength > 0.0) {
+            vec2 playerWorldPos = uWaterWorldPos + (uPlayerPos - 0.5) * vec2(40.0, 46.0);
+            float playerDist = length(vWorldPos.xz - playerWorldPos);
+            float rippleRadius = 2.0;
+            float rippleWave = sin(playerDist * 15.0 - uTime * 8.0) * 0.15;
+            float rippleFade = max(0.0, 1.0 - playerDist / rippleRadius);
+            float rippleHeight = rippleWave * rippleFade * uPlayerStrength;
+            pos.y += rippleHeight;
+            vHeight += rippleHeight;
+          }
 
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
@@ -328,7 +342,7 @@ export class WaterEntity extends StaticEntity {
     }
 
     for (let i = 0; i < this.randomDisturbances.length; i++) {
-      this.randomDisturbances[i].strength *= 0.995;
+      this.randomDisturbances[i].strength *= 0.998;
       if (this.randomDisturbances[i].strength < 0.001) {
         this.randomDisturbances.splice(i, 1);
         i--;
@@ -382,7 +396,6 @@ export class WaterEntity extends StaticEntity {
       if (this.playerRippleStrength < 0.01) {
         this.playerRippleStrength = 0;
         this.playerRipplePos.set(-1, -1);
-        this.markerSphere.visible = false;
       }
     }
 
@@ -414,16 +427,27 @@ export class WaterEntity extends StaticEntity {
     const halfWidth = this.width / 2;
     const halfHeight = this.height / 2;
 
-    return (
-      worldPos.x >= meshPos.x - halfWidth &&
+    const inXZ = worldPos.x >= meshPos.x - halfWidth &&
       worldPos.x <= meshPos.x + halfWidth &&
       worldPos.z >= meshPos.z - halfHeight &&
-      worldPos.z <= meshPos.z + halfHeight
-    );
+      worldPos.z <= meshPos.z + halfHeight;
+
+    if (!inXZ) return false;
+
+    const waterSurfaceY = meshPos.y;
+    const playerBottomY = worldPos.y - 1.0;
+    const touchThreshold = 0.5;
+
+    return Math.abs(playerBottomY - waterSurfaceY) < touchThreshold;
   }
 
   public addDisturbanceAtWorldPos(worldPos: THREE.Vector3, strength: number = 0.15): void {
     if (!this.waterMesh) return;
+
+    const movedDistance = worldPos.distanceTo(this.lastPlayerWorldPos);
+    if (movedDistance < 1.5) return;
+
+    this.lastPlayerWorldPos.copy(worldPos);
 
     const meshPos = this.waterMesh.position;
     const halfWidth = this.width / 2;
@@ -434,10 +458,10 @@ export class WaterEntity extends StaticEntity {
     const uvY = localZ / this.height;
 
     this.playerRipplePos.set(uvX, uvY);
-    this.playerRippleStrength = strength * 2.0;
+    this.playerRippleStrength = strength * (0.5 + Math.random() * 6.5);
 
     const localPos = new THREE.Vector2(localX, localZ);
-    this.addDisturbance(localPos, strength);
+    this.addDisturbance(localPos, strength * 3.0);
   }
 
   public onDestroy(): void {
