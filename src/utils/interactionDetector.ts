@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { EntityManager } from '../core/EntityManager';
 import { characterPositionStore } from '../systems/character/CharacterPositionStore';
+import { WaterEntity } from '../entities/water/WaterEntity';
 
 export type InteractiveObject = {
   id: string;
   name: string;
-  type: 'box' | 'npc' | 'door' | 'chest' | 'other';
+  type: 'box' | 'npc' | 'door' | 'chest' | 'other' | 'water';
   position: THREE.Vector3;
   distance: number;
   entity: any;
@@ -19,6 +20,8 @@ export function getNearbyInteractiveObjects(): InteractiveObject[] {
   const allEntities = entityManager.getAllEntities();
 
   const interactiveObjects: InteractiveObject[] = [];
+
+  const playerPosVec = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
 
   for (const entity of allEntities) {
     if (!entity.isActive) continue;
@@ -36,8 +39,15 @@ export function getNearbyInteractiveObjects(): InteractiveObject[] {
       }
     }
 
+    // 检测是否在水中
+    if (entity instanceof WaterEntity) {
+      const inWater = entity.isInWater(playerPosVec);
+      if (inWater) {
+        entity.addDisturbanceAtWorldPos(playerPosVec, 3.0);
+      }
+    }
+
     if (isInteractive) {
-      const playerPosVec = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
       const distance = playerPosVec.distanceTo(entity.position);
 
       if (distance <= INTERACTION_RADIUS) {

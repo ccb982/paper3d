@@ -17,10 +17,15 @@ export class WaterEntity extends StaticEntity {
   private sceneRTT: THREE.Scene;
   private cameraRTT: THREE.OrthographicCamera;
   private waterMaterial: THREE.ShaderMaterial;
+  private waterMesh: THREE.Mesh;
+  private waterSize: number = 40;
   private gridSegments: number;
+  private markerSphere: THREE.Mesh;
   private randomDisturbances: { pos: THREE.Vector2; strength: number }[] = [];
   private frameCount: number = 0;
   private time: number = 0;
+  private playerRipplePos: THREE.Vector2 = new THREE.Vector2(-1, -1);
+  private playerRippleStrength: number = 0;
 
   constructor(
     position: THREE.Vector3,
@@ -63,7 +68,9 @@ export class WaterEntity extends StaticEntity {
         uDisturbCount: { value: 0 },
         uDisturbPositions: { value: new Array(20).fill(new THREE.Vector2(0, 0)) },
         uDisturbStrengths: { value: new Array(20).fill(0) },
-        uTime: { value: 0 }
+        uTime: { value: 0 },
+        uPlayerPos: { value: new THREE.Vector2(-1, -1) },
+        uPlayerStrength: { value: 0 }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -82,6 +89,8 @@ export class WaterEntity extends StaticEntity {
         uniform vec2 uDisturbPositions[20];
         uniform float uDisturbStrengths[20];
         uniform float uTime;
+        uniform vec2 uPlayerPos;
+        uniform float uPlayerStrength;
         varying vec2 vUv;
 
         void main() {
@@ -102,13 +111,23 @@ export class WaterEntity extends StaticEntity {
             if (i >= uDisturbCount) break;
             vec2 delta = uv - uDisturbPositions[i];
             float dist = length(delta);
-            float radius = 0.05;
+            float radius = 0.25;
             if (dist < radius) {
               float strength = uDisturbStrengths[i];
               disturbance += strength * (1.0 - dist / radius);
             }
           }
           hNext += disturbance;
+
+          // 玩家涟漪红光效果
+          if (uPlayerStrength > 0.0) {
+            float playerDist = length(uv - uPlayerPos);
+            float redRadius = 0.15;
+            if (playerDist < redRadius) {
+              float redIntensity = uPlayerStrength * (1.0 - playerDist / redRadius);
+              hNext += redIntensity * 0.5;
+            }
+          }
 
           gl_FragColor = vec4(hNext, hNext, hNext, 1.0);
         }
@@ -135,15 +154,25 @@ export class WaterEntity extends StaticEntity {
     this.waterMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
-        uHeightScale: { value: 0.3 },
+        uHeightScale: { value: 0.6 },
+        uHeightTexture: { value: this.rtA.texture },
         uColorA: { value: new THREE.Color(0x2c7da0) },
-        uColorB: { value: new THREE.Color(0x61a5c2) }
+        uColorB: { value: new THREE.Color(0x61a5c2) },
+        uPlayerPos: { value: new THREE.Vector2(-1, -1) },
+        uPlayerStrength: { value: 0 },
+        uWaterWorldPos: { value: new THREE.Vector2(0, 0) }
       },
       vertexShader: `
         uniform float uTime;
         uniform float uHeightScale;
+        uniform sampler2D uHeightTexture;
+        uniform vec2 uPlayerPos;
+        uniform float uPlayerStrength;
+        uniform vec2 uWaterWorldPos;
         varying vec2 vUv;
         varying float vHeight;
+        varying float vPlayerGlow;
+        varying vec3 vWorldPos;
 
         float hash(vec2 p) {
           return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -152,6 +181,9 @@ export class WaterEntity extends StaticEntity {
         void main() {
           vUv = uv;
           vec3 pos = position;
+          vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+
+          float texHeight = texture2D(uHeightTexture, uv).r;
 
           float noise1 = hash(vec2(floor(pos.x * 2.0), floor(pos.z * 2.0 + uTime * 0.2)));
           float noise2 = hash(vec2(floor(pos.x * 3.0 + uTime * 0.15), floor(pos.z * 2.5)));
@@ -162,9 +194,20 @@ export class WaterEntity extends StaticEntity {
           float smallWave2 = sin((pos.x + pos.z) * 0.3 + uTime * 1.25) * 0.08;
           float smallWave3 = cos(pos.x * 0.8 - uTime * 0.9) * 0.05;
 
-          float height = bigWave + smallWave1 + smallWave2 + smallWave3;
+          float height = (bigWave + smallWave1 + smallWave2 + smallWave3) * 0.3 + texHeight * 4.0;
           pos.y += height * uHeightScale;
           vHeight = height;
+
+          // 计算玩家涟漪红光 - 使用世界坐标计算
+          if (uPlayerStrength > 0.0) {
+            vec2 playerWorldPos = uWaterWorldPos + (uPlayerPos - 0.5) * vec2(40.0, 46.0);
+            float playerDist = length(vWorldPos.xz - playerWorldPos);
+            float redRadius = 2.0;
+            vPlayerGlow = uPlayerStrength * (1.0 - playerDist / redRadius);
+            if (playerDist >= redRadius) vPlayerGlow = 0.0;
+          } else {
+            vPlayerGlow = 0.0;
+          }
 
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
@@ -173,8 +216,10 @@ export class WaterEntity extends StaticEntity {
         uniform vec3 uColorA;
         uniform vec3 uColorB;
         uniform float uTime;
+        uniform float uPlayerStrength;
         varying vec2 vUv;
         varying float vHeight;
+        varying float vPlayerGlow;
 
         void main() {
           vec3 color = mix(uColorA, uColorB, vHeight * 2.0 + 0.5);
@@ -185,6 +230,13 @@ export class WaterEntity extends StaticEntity {
           float highlight = smoothstep(0.2, 0.4, vHeight) * 0.2;
           color += vec3(highlight);
 
+          // 添加玩家涟漪红光
+          if (vPlayerGlow > 0.0) {
+            vec3 redColor = vec3(1.0, 0.2, 0.1);
+            color = mix(color, redColor, vPlayerGlow * 0.8);
+            color += vec3(vPlayerGlow * 0.5);
+          }
+
           gl_FragColor = vec4(color, 0.9);
         }
       `,
@@ -194,6 +246,12 @@ export class WaterEntity extends StaticEntity {
 
     const waterMesh = new THREE.Mesh(geometry, this.waterMaterial);
     waterMesh.position.copy(this.position);
+    this.waterMesh = waterMesh;
+
+    const markerGeo = new THREE.SphereGeometry(0.5, 16, 16);
+    const markerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
+    this.markerSphere = new THREE.Mesh(markerGeo, markerMat);
+    this.markerSphere.visible = false;
 
     const scene = EntityManager.getInstance().getScene();
     if (scene && this.mesh) {
@@ -205,6 +263,7 @@ export class WaterEntity extends StaticEntity {
 
     if (scene) {
       scene.add(this.mesh);
+      scene.add(this.markerSphere);
       console.log(`Water mesh added to scene: ${this.id}`);
     } else {
       console.log('Scene is null, cannot add water mesh');
@@ -238,8 +297,8 @@ export class WaterEntity extends StaticEntity {
     }
 
     for (let i = 0; i < this.randomDisturbances.length; i++) {
-      this.randomDisturbances[i].strength *= 0.98;
-      if (this.randomDisturbances[i].strength < 0.005) {
+      this.randomDisturbances[i].strength *= 0.995;
+      if (this.randomDisturbances[i].strength < 0.001) {
         this.randomDisturbances.splice(i, 1);
         i--;
       }
@@ -261,14 +320,13 @@ export class WaterEntity extends StaticEntity {
   private updateWave(): void {
     const renderer = cameraStore.getRenderer();
     if (!renderer) {
-      if (this.frameCount % 100 === 0) {
-        console.log('Renderer not available from cameraStore');
-      }
       return;
     }
 
     this.computeMaterial.uniforms.uHeightNow.value = this.rtA.texture;
     this.computeMaterial.uniforms.uHeightPrev.value = this.rtB.texture;
+    this.computeMaterial.uniforms.uPlayerPos.value = this.playerRipplePos;
+    this.computeMaterial.uniforms.uPlayerStrength.value = this.playerRippleStrength;
 
     renderer.setRenderTarget(this.rtB);
     renderer.render(this.sceneRTT, this.cameraRTT);
@@ -287,23 +345,75 @@ export class WaterEntity extends StaticEntity {
     this.updateWave();
     this.addRandomDisturbances();
 
-    if (this.waterMaterial) {
-      this.waterMaterial.uniforms.uTime.value = this.time;
+    // 衰减玩家涟漪强度
+    if (this.playerRippleStrength > 0) {
+      this.playerRippleStrength *= 0.97;
+      if (this.playerRippleStrength < 0.01) {
+        this.playerRippleStrength = 0;
+        this.playerRipplePos.set(-1, -1);
+        this.markerSphere.visible = false;
+      }
     }
 
-    if (this.frameCount % 100 === 0) {
-      console.log(`WaterEntity update: ${this.id}, frame: ${this.frameCount}, time: ${this.time.toFixed(2)}`);
+    if (this.waterMaterial) {
+      this.waterMaterial.uniforms.uTime.value = this.time;
+      this.waterMaterial.uniforms.uHeightTexture.value = this.rtA.texture;
+      this.waterMaterial.uniforms.uPlayerPos.value = this.playerRipplePos;
+      this.waterMaterial.uniforms.uPlayerStrength.value = this.playerRippleStrength;
+      if (this.waterMesh) {
+        this.waterMaterial.uniforms.uWaterWorldPos.value.set(this.waterMesh.position.x, this.waterMesh.position.z);
+      }
+      if (this.playerRippleStrength > 0.1) {
+        console.log(`[${this.id}] Update: playerRipplePos(${this.playerRipplePos.x.toFixed(3)}, ${this.playerRipplePos.y.toFixed(3)}), strength=${this.playerRippleStrength.toFixed(3)}, waterPos(${this.waterMesh?.position.x.toFixed(2)}, ${this.waterMesh?.position.z.toFixed(2)})`);
+      }
     }
   }
 
   public addDisturbance(position: THREE.Vector2, strength: number = 0.1): void {
     const uv = new THREE.Vector2(
-      (position.x + this.width / 2) / this.width,
-      (position.z + this.height / 2) / this.height
+      position.x / this.width,
+      position.y / this.height
     );
     if (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1) {
       this.randomDisturbances.push({ pos: uv, strength });
     }
+  }
+
+  public isInWater(worldPos: THREE.Vector3): boolean {
+    if (!this.waterMesh) return false;
+
+    const meshPos = this.waterMesh.position;
+    const halfWidth = this.width / 2;
+    const halfHeight = this.height / 2;
+
+    return (
+      worldPos.x >= meshPos.x - halfWidth &&
+      worldPos.x <= meshPos.x + halfWidth &&
+      worldPos.z >= meshPos.z - halfHeight &&
+      worldPos.z <= meshPos.z + halfHeight
+    );
+  }
+
+  public addDisturbanceAtWorldPos(worldPos: THREE.Vector3, strength: number = 0.15): void {
+    if (!this.waterMesh) return;
+
+    const meshPos = this.waterMesh.position;
+    const halfWidth = this.width / 2;
+    const halfHeight = this.height / 2;
+    const localX = worldPos.x - (meshPos.x - halfWidth);
+    const localZ = worldPos.z - (meshPos.z - halfHeight);
+    const uvX = localX / this.width;
+    const uvY = localZ / this.height;
+    console.log(`[${this.id}] Ripple: world(${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)}), mesh(${meshPos.x.toFixed(2)}, ${meshPos.z.toFixed(2)}), uv(${uvX.toFixed(3)}, ${uvY.toFixed(3)})`);
+
+    this.markerSphere.position.set(worldPos.x, meshPos.y + 1, worldPos.z);
+    this.markerSphere.visible = true;
+
+    this.playerRipplePos.set(uvX, uvY);
+    this.playerRippleStrength = strength * 2.0;
+
+    const localPos = new THREE.Vector2(localX, localZ);
+    this.addDisturbance(localPos, strength);
   }
 
   public onDestroy(): void {

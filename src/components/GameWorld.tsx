@@ -388,6 +388,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
           console.log('敌人已离开，自动返回日常模式和锁定射击');
         }
       }
+
     }
     
     // 更新特效
@@ -716,18 +717,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       );
       entityManager.addEntity(riverEntity);
       console.log('River created at:', riverPosition, 'size:', riverPosition.width, 'x', riverPosition.height);
-    } else {
-      // 如果没有找到合适的区域，生成一个默认河流
-      const waterHeight = 0.3;
-      const riverEntity = new WaterEntity(
-        new THREE.Vector3(0, waterHeight, 0),
-        80,
-        10,
-        256,
-        64
-      );
-      entityManager.addEntity(riverEntity);
-      console.log('No suitable river position found, creating default river');
     }
   }, [terrainReady]);
 
