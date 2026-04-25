@@ -41,7 +41,7 @@ export class WaterEntity extends StaticEntity {
     this.height = height;
     this.resolution = resolution;
     this.gridSegments = gridSegments;
-    console.log(`WaterEntity created: ${id}, position: ${position.x}, ${position.y}, ${position.z}`);
+    this.isShootable = false;
     this.createWaterEffect();
   }
 
