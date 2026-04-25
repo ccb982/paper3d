@@ -705,7 +705,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     // 找到最佳河流位置
     const riverPosition = findRiverPosition();
     if (riverPosition) {
-      const waterHeight = 0.3; // 统一的水面高度
+      const waterHeight = 0.3 + Math.random() * 0.3; // 随机水面高度 0.3-0.6
       
       // 生成河流
       const riverEntity = new WaterEntity(

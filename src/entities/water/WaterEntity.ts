@@ -55,15 +55,15 @@ export class WaterEntity extends StaticEntity {
 
   private static DYNAMIC_WAVE_PARAMS = {
     isDynamic: true,
-    wave1Freq: 0.6,
+    wave1Freq: 1.0,
     wave1Speed: 1.2,
     wave2Freq: 0.5,
     wave2Speed: 0.9,
     wave3Freq: 0.3,
     wave3Speed: 1.5,
-    bigWaveAmp: 0.5,
+    bigWaveAmp: 0.7,
     bigWaveFreq: 0.6,
-    bigWaveAmpRange: 0.5
+    bigWaveAmpRange: 0.7
   };
 
   constructor(
@@ -253,17 +253,18 @@ export class WaterEntity extends StaticEntity {
           float noise3 = hash(vec2(floor(pos.x * 4.0), floor(pos.z * 3.0 + uTime * 0.25)));
 
           // 三波交错 - 使用配置的频率和速度
-          float wave1 = sin(pos.x * uWave1Freq + pos.z * (uWave1Freq * 0.75) + uTime * uWave1Speed) * 0.08;
-          float wave2 = sin(pos.x * uWave2Freq - pos.z * (uWave2Freq * 1.33) + uTime * uWave2Speed + noise1 * 3.14) * 0.07;
-          float wave3 = sin((pos.x * uWave3Freq + pos.z * (uWave3Freq * 2.5)) + uTime * uWave3Speed + noise2 * 4.71) * 0.06;
+          float wave1 = sin(pos.x * uWave1Freq + pos.z * (uWave1Freq * 0.75) + uTime * uWave1Speed) * 0.15;
+          float wave2 = sin(pos.x * uWave2Freq - pos.z * (uWave2Freq * 1.33) + uTime * uWave2Speed + noise1 * 3.14) * 0.12;
+          float wave3 = sin((pos.x * uWave3Freq + pos.z * (uWave3Freq * 2.5)) + uTime * uWave3Speed + noise2 * 4.71) * 0.10;
 
           // 大波幅波动 - 使用配置的振幅范围
           float bigWavePhase = sin(uTime * uBigWaveFreq) * 0.5 + 0.5;
           float bigWaveAmp = uBigWaveAmp - uBigWaveAmpRange * 0.5 + uBigWaveAmpRange * bigWavePhase;
           float bigWave = sin(pos.x * (uBigWaveFreq * 0.375) + uTime * (uBigWaveFreq * 0.8)) * bigWaveAmp;
 
-          // 组合所有波动
-          float height = (wave1 + wave2 + wave3 + bigWave) * 0.5 + texHeight * 4.0;
+          // 组合所有波动 - 动态模式使用更大的乘数
+          float waveMultiplier = 1.0;
+          float height = (wave1 + wave2 + wave3 + bigWave) * waveMultiplier + texHeight * 4.0;
           pos.y += height * uHeightScale;
           vHeight = height;
 
