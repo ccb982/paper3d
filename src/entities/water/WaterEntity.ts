@@ -27,6 +27,45 @@ export class WaterEntity extends StaticEntity {
   private playerRipplePos: THREE.Vector2 = new THREE.Vector2(-1, -1);
   private playerRippleStrength: number = 0;
 
+  private waveConfig: {
+    isDynamic: boolean;
+    wave1Freq: number;
+    wave1Speed: number;
+    wave2Freq: number;
+    wave2Speed: number;
+    wave3Freq: number;
+    wave3Speed: number;
+    bigWaveAmp: number;
+    bigWaveFreq: number;
+    bigWaveAmpRange: number;
+  };
+
+  private static STATIC_WAVE_PARAMS = {
+    isDynamic: false,
+    wave1Freq: 0.4,
+    wave1Speed: 0.8,
+    wave2Freq: 0.3,
+    wave2Speed: 0.6,
+    wave3Freq: 0.2,
+    wave3Speed: 1.0,
+    bigWaveAmp: 0.35,
+    bigWaveFreq: 0.4,
+    bigWaveAmpRange: 0.15
+  };
+
+  private static DYNAMIC_WAVE_PARAMS = {
+    isDynamic: true,
+    wave1Freq: 0.6,
+    wave1Speed: 1.2,
+    wave2Freq: 0.5,
+    wave2Speed: 0.9,
+    wave3Freq: 0.3,
+    wave3Speed: 1.5,
+    bigWaveAmp: 0.5,
+    bigWaveFreq: 0.6,
+    bigWaveAmpRange: 0.5
+  };
+
   constructor(
     position: THREE.Vector3,
     width: number = 20,
@@ -42,6 +81,12 @@ export class WaterEntity extends StaticEntity {
     this.resolution = resolution;
     this.gridSegments = gridSegments;
     this.isShootable = false;
+
+    this.waveConfig = Math.random() > 0.5
+      ? { ...WaterEntity.DYNAMIC_WAVE_PARAMS }
+      : { ...WaterEntity.STATIC_WAVE_PARAMS };
+    console.log(`WaterEntity ${id}: ${this.waveConfig.isDynamic ? 'DYNAMIC' : 'STATIC'} mode`);
+
     this.createWaterEffect();
   }
 
@@ -160,7 +205,16 @@ export class WaterEntity extends StaticEntity {
         uColorB: { value: new THREE.Color(0x61a5c2) },
         uPlayerPos: { value: new THREE.Vector2(-1, -1) },
         uPlayerStrength: { value: 0 },
-        uWaterWorldPos: { value: new THREE.Vector2(0, 0) }
+        uWaterWorldPos: { value: new THREE.Vector2(0, 0) },
+        uWave1Freq: { value: this.waveConfig.wave1Freq },
+        uWave1Speed: { value: this.waveConfig.wave1Speed },
+        uWave2Freq: { value: this.waveConfig.wave2Freq },
+        uWave2Speed: { value: this.waveConfig.wave2Speed },
+        uWave3Freq: { value: this.waveConfig.wave3Freq },
+        uWave3Speed: { value: this.waveConfig.wave3Speed },
+        uBigWaveAmp: { value: this.waveConfig.bigWaveAmp },
+        uBigWaveFreq: { value: this.waveConfig.bigWaveFreq },
+        uBigWaveAmpRange: { value: this.waveConfig.bigWaveAmpRange }
       },
       vertexShader: `
         uniform float uTime;
@@ -169,6 +223,15 @@ export class WaterEntity extends StaticEntity {
         uniform vec2 uPlayerPos;
         uniform float uPlayerStrength;
         uniform vec2 uWaterWorldPos;
+        uniform float uWave1Freq;
+        uniform float uWave1Speed;
+        uniform float uWave2Freq;
+        uniform float uWave2Speed;
+        uniform float uWave3Freq;
+        uniform float uWave3Speed;
+        uniform float uBigWaveAmp;
+        uniform float uBigWaveFreq;
+        uniform float uBigWaveAmpRange;
         varying vec2 vUv;
         varying float vHeight;
         varying float vPlayerGlow;
@@ -187,14 +250,20 @@ export class WaterEntity extends StaticEntity {
 
           float noise1 = hash(vec2(floor(pos.x * 2.0), floor(pos.z * 2.0 + uTime * 0.2)));
           float noise2 = hash(vec2(floor(pos.x * 3.0 + uTime * 0.15), floor(pos.z * 2.5)));
+          float noise3 = hash(vec2(floor(pos.x * 4.0), floor(pos.z * 3.0 + uTime * 0.25)));
 
-          float bigWaveAmp = 0.25 + 0.45 * (sin(uTime * 0.7) * 0.5 + 0.5);
-          float bigWave = sin(pos.x * 0.3 + uTime * 0.8) * bigWaveAmp;
-          float smallWave1 = sin(pos.z * 0.5 + uTime * 0.75 + noise1 * 6.28) * 0.1;
-          float smallWave2 = sin((pos.x + pos.z) * 0.3 + uTime * 1.25) * 0.08;
-          float smallWave3 = cos(pos.x * 0.8 - uTime * 0.9) * 0.05;
+          // 三波交错 - 使用配置的频率和速度
+          float wave1 = sin(pos.x * uWave1Freq + pos.z * (uWave1Freq * 0.75) + uTime * uWave1Speed) * 0.08;
+          float wave2 = sin(pos.x * uWave2Freq - pos.z * (uWave2Freq * 1.33) + uTime * uWave2Speed + noise1 * 3.14) * 0.07;
+          float wave3 = sin((pos.x * uWave3Freq + pos.z * (uWave3Freq * 2.5)) + uTime * uWave3Speed + noise2 * 4.71) * 0.06;
 
-          float height = (bigWave + smallWave1 + smallWave2 + smallWave3) * 0.3 + texHeight * 4.0;
+          // 大波幅波动 - 使用配置的振幅范围
+          float bigWavePhase = sin(uTime * uBigWaveFreq) * 0.5 + 0.5;
+          float bigWaveAmp = uBigWaveAmp - uBigWaveAmpRange * 0.5 + uBigWaveAmpRange * bigWavePhase;
+          float bigWave = sin(pos.x * (uBigWaveFreq * 0.375) + uTime * (uBigWaveFreq * 0.8)) * bigWaveAmp;
+
+          // 组合所有波动
+          float height = (wave1 + wave2 + wave3 + bigWave) * 0.5 + texHeight * 4.0;
           pos.y += height * uHeightScale;
           vHeight = height;
 
@@ -363,9 +432,6 @@ export class WaterEntity extends StaticEntity {
       if (this.waterMesh) {
         this.waterMaterial.uniforms.uWaterWorldPos.value.set(this.waterMesh.position.x, this.waterMesh.position.z);
       }
-      if (this.playerRippleStrength > 0.1) {
-        console.log(`[${this.id}] Update: playerRipplePos(${this.playerRipplePos.x.toFixed(3)}, ${this.playerRipplePos.y.toFixed(3)}), strength=${this.playerRippleStrength.toFixed(3)}, waterPos(${this.waterMesh?.position.x.toFixed(2)}, ${this.waterMesh?.position.z.toFixed(2)})`);
-      }
     }
   }
 
@@ -404,7 +470,6 @@ export class WaterEntity extends StaticEntity {
     const localZ = worldPos.z - (meshPos.z - halfHeight);
     const uvX = localX / this.width;
     const uvY = localZ / this.height;
-    console.log(`[${this.id}] Ripple: world(${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)}), mesh(${meshPos.x.toFixed(2)}, ${meshPos.z.toFixed(2)}), uv(${uvX.toFixed(3)}, ${uvY.toFixed(3)})`);
 
     this.markerSphere.position.set(worldPos.x, meshPos.y + 1, worldPos.z);
     this.markerSphere.visible = true;
