@@ -20,7 +20,6 @@ export class WaterEntity extends StaticEntity {
   private waterMesh: THREE.Mesh;
   private waterSize: number = 40;
   private gridSegments: number;
-  private markerSphere: THREE.Mesh;
   private randomDisturbances: { pos: THREE.Vector2; strength: number }[] = [];
   private frameCount: number = 0;
   private time: number = 0;
@@ -85,7 +84,6 @@ export class WaterEntity extends StaticEntity {
     this.waveConfig = Math.random() > 0.5
       ? { ...WaterEntity.DYNAMIC_WAVE_PARAMS }
       : { ...WaterEntity.STATIC_WAVE_PARAMS };
-    console.log(`WaterEntity ${id}: ${this.waveConfig.isDynamic ? 'DYNAMIC' : 'STATIC'} mode`);
 
     this.createWaterEffect();
   }
@@ -164,16 +162,6 @@ export class WaterEntity extends StaticEntity {
           }
           hNext += disturbance;
 
-          // 玩家涟漪红光效果
-          if (uPlayerStrength > 0.0) {
-            float playerDist = length(uv - uPlayerPos);
-            float redRadius = 0.15;
-            if (playerDist < redRadius) {
-              float redIntensity = uPlayerStrength * (1.0 - playerDist / redRadius);
-              hNext += redIntensity * 0.5;
-            }
-          }
-
           gl_FragColor = vec4(hNext, hNext, hNext, 1.0);
         }
       `
@@ -234,7 +222,6 @@ export class WaterEntity extends StaticEntity {
         uniform float uBigWaveAmpRange;
         varying vec2 vUv;
         varying float vHeight;
-        varying float vPlayerGlow;
         varying vec3 vWorldPos;
 
         float hash(vec2 p) {
@@ -268,17 +255,6 @@ export class WaterEntity extends StaticEntity {
           pos.y += height * uHeightScale;
           vHeight = height;
 
-          // 计算玩家涟漪红光 - 使用世界坐标计算
-          if (uPlayerStrength > 0.0) {
-            vec2 playerWorldPos = uWaterWorldPos + (uPlayerPos - 0.5) * vec2(40.0, 46.0);
-            float playerDist = length(vWorldPos.xz - playerWorldPos);
-            float redRadius = 2.0;
-            vPlayerGlow = uPlayerStrength * (1.0 - playerDist / redRadius);
-            if (playerDist >= redRadius) vPlayerGlow = 0.0;
-          } else {
-            vPlayerGlow = 0.0;
-          }
-
           gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
         }
       `,
@@ -286,10 +262,8 @@ export class WaterEntity extends StaticEntity {
         uniform vec3 uColorA;
         uniform vec3 uColorB;
         uniform float uTime;
-        uniform float uPlayerStrength;
         varying vec2 vUv;
         varying float vHeight;
-        varying float vPlayerGlow;
 
         void main() {
           vec3 color = mix(uColorA, uColorB, vHeight * 2.0 + 0.5);
@@ -299,13 +273,6 @@ export class WaterEntity extends StaticEntity {
 
           float highlight = smoothstep(0.2, 0.4, vHeight) * 0.2;
           color += vec3(highlight);
-
-          // 添加玩家涟漪红光
-          if (vPlayerGlow > 0.0) {
-            vec3 redColor = vec3(1.0, 0.2, 0.1);
-            color = mix(color, redColor, vPlayerGlow * 0.8);
-            color += vec3(vPlayerGlow * 0.5);
-          }
 
           gl_FragColor = vec4(color, 0.9);
         }
@@ -318,11 +285,6 @@ export class WaterEntity extends StaticEntity {
     waterMesh.position.copy(this.position);
     this.waterMesh = waterMesh;
 
-    const markerGeo = new THREE.SphereGeometry(0.5, 16, 16);
-    const markerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.8 });
-    this.markerSphere = new THREE.Mesh(markerGeo, markerMat);
-    this.markerSphere.visible = false;
-
     const scene = EntityManager.getInstance().getScene();
     if (scene && this.mesh) {
       scene.remove(this.mesh);
@@ -333,7 +295,6 @@ export class WaterEntity extends StaticEntity {
 
     if (scene) {
       scene.add(this.mesh);
-      scene.add(this.markerSphere);
       console.log(`Water mesh added to scene: ${this.id}`);
     } else {
       console.log('Scene is null, cannot add water mesh');
@@ -471,9 +432,6 @@ export class WaterEntity extends StaticEntity {
     const localZ = worldPos.z - (meshPos.z - halfHeight);
     const uvX = localX / this.width;
     const uvY = localZ / this.height;
-
-    this.markerSphere.position.set(worldPos.x, meshPos.y + 1, worldPos.z);
-    this.markerSphere.visible = true;
 
     this.playerRipplePos.set(uvX, uvY);
     this.playerRippleStrength = strength * 2.0;
