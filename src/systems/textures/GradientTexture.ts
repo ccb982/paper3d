@@ -159,13 +159,15 @@ export function createGradientCanvas(
       // 检测是否在层边界的过渡区域
       for (let i = 0; i < layerBoundaries.length; i++) {
         const boundary = layerBoundaries[i];
-        const transitionWidth = 10; // 过渡区域宽度（像素）
+        const transitionWidth = 20; // 增加过渡区域宽度（像素）
         
         if (Math.abs(adjustedY - boundary) < transitionWidth) {
           isInTransition = true;
           transitionLayerIndex = i;
           // 计算过渡系数（0-1），使用sin函数实现平滑过渡
-          transitionT = 0.5 + 0.5 * Math.sin((adjustedY - boundary) / transitionWidth * Math.PI);
+          // 调整sin函数参数，使过渡更加平滑
+          const normalizedDistance = (adjustedY - boundary) / transitionWidth;
+          transitionT = 0.5 + 0.5 * Math.sin(normalizedDistance * Math.PI);
           break;
         }
       }
@@ -364,10 +366,11 @@ export function createGradientTexture(
 // 子弹拖尾专用多颜色分层
 export const BULLET_TRAIL_COLORS = [
   '#010103', // 黑色（头部）
-  '#141928', // 深蓝紫色
+  '#0A0C18', // 深蓝色（尾部）
+  '#1A0D18', // 深紫色（尾部）
   '#3C1928', // 紫红色
   '#7F1827', // 暗红色
   '#A31B2B', // 红色
   '#C81E30', // 亮红色
-  '#FE7A91', // 粉色（尾部）
+  '#FE7A91', // 粉色
 ];
