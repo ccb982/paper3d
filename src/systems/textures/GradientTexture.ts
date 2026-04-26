@@ -76,14 +76,14 @@ export function createGradientCanvas(
   options: GradientOptions = {}
 ): HTMLCanvasElement {
   const {
-    regionCount = 5,
-    blockCount = 12,
-    internalGradStrength = 0.25,
+    regionCount = 3,      // 减少区域数量
+    blockCount = 3,       // 减少色块数量
+    internalGradStrength = 0.05, // 减小内部渐变强度
     seed = 42,
     blockAlpha = 0.75,
-    hueVariation = 0.25,
-    satVariation = 0.3,
-    lightVariation = 0.2
+    hueVariation = 0.05,  // 减小色相变化
+    satVariation = 0.05,  // 减小饱和度变化
+    lightVariation = 0.05 // 减小明度变化
   } = options;
 
   let baseRgb: number[];
@@ -173,13 +173,19 @@ export function createGradientCanvas(
     const type = Math.floor(random() * 3);
     const centerX = random() * width;
     const centerY = random() * height;
-    const sizeW = (0.15 + random() * 0.25) * Math.min(width, height);
-    const sizeH = (0.15 + random() * 0.25) * Math.min(width, height);
+    // 减小色块大小到几十像素面积
+    const baseSize = Math.max(10, Math.min(30, Math.min(width, height) * 0.1));
+    const sizeW = baseSize + random() * baseSize * 0.5;
+    const sizeH = baseSize + random() * baseSize * 0.5;
     const rotation = random() * Math.PI * 2;
 
-    const randHue = (baseH + (random() - 0.5) * 0.4 + 1) % 1;
-    const randSat = Math.min(1, Math.max(0, baseS + (random() - 0.5) * 0.5));
-    const randLit = Math.min(1, Math.max(0, baseL + (random() - 0.5) * 0.4));
+    // 生成RGB差值不超过5的随机颜色
+    const [baseR, baseG, baseB] = baseRgb;
+    const randR = Math.min(1, Math.max(0, baseR + (random() - 0.5) * 5/255));
+    const randG = Math.min(1, Math.max(0, baseG + (random() - 0.5) * 5/255));
+    const randB = Math.min(1, Math.max(0, baseB + (random() - 0.5) * 5/255));
+    // 转换回HSL用于后续处理
+    const [randHue, randSat, randLit] = rgbToHsl(randR, randG, randB);
     const [rCol, gCol, bCol] = hslToRgb(randHue, randSat, randLit);
     ctx.fillStyle = `rgba(${rCol * 255}, ${gCol * 255}, ${bCol * 255}, ${blockAlpha})`;
 
