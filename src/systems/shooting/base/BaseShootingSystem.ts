@@ -10,7 +10,7 @@ export abstract class BaseShootingSystem implements IShootingSystem {
   protected callbacks: ShootingCallbacks = {};
   
   protected isActive: boolean = true;
-  protected bulletVelocity: number = 15;
+  protected bulletVelocity: number = 0.1;
   protected fireRate: number = 1000;
   protected bulletIdCounter: number = 0;
   
