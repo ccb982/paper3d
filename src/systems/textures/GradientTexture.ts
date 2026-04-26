@@ -99,12 +99,12 @@ export function createGradientCanvas(
 
   const regionColors: Array<{ h: number; s: number; l: number; rgb: number[] }> = [];
   for (let i = 0; i < regionCount; i++) {
-    const t = i / (regionCount - 1);
-    let hue = baseH + (t - 0.5) * hueVariation + (random() - 0.5) * 0.1;
-    hue = ((hue % 1) + 1) % 1;
-    const sat = Math.min(1, Math.max(0, baseS + (random() - 0.5) * satVariation));
-    const lit = Math.min(1, Math.max(0, baseL + (random() - 0.5) * lightVariation));
-    regionColors.push({ h: hue, s: sat, l: lit, rgb: hslToRgb(hue, sat, lit) });
+    // 使用HSL算法生成分层基色：色相固定，明度递增
+    const lightness = 0.2 + (i / (regionCount - 1)) * 0.6; // 0.2 ~ 0.8
+    const saturation = 0.8; // 固定饱和度
+    // 基于基础颜色的色相，或者使用固定色相（如蓝色240°）
+    const hue = baseH; // 使用基础颜色的色相
+    regionColors.push({ h: hue, s: saturation, l: lightness, rgb: hslToRgb(hue, saturation, lightness) });
   }
 
   const centers: Array<{ x: number; y: number; color: { h: number; s: number; l: number; rgb: number[] } }> = [];
