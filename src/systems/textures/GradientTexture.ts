@@ -100,8 +100,8 @@ export function createGradientCanvas(
   const regionColors: Array<{ h: number; s: number; l: number; rgb: number[] }> = [];
   for (let i = 0; i < regionCount; i++) {
     // 使用HSL算法生成分层基色：色相固定，明度递增
-    // 减小明度范围，使相邻层色差更小
-    const lightness = 0.4 + (i / (regionCount - 1)) * 0.3; // 0.4 ~ 0.7
+    // 略微增大明度范围，使相邻层色差更大
+    const lightness = 0.35 + (i / (regionCount - 1)) * 0.4; // 0.35 ~ 0.75
     const saturation = 0.8; // 固定饱和度
     const hue = baseH; // 使用基础颜色的色相
     regionColors.push({ h: hue, s: saturation, l: lightness, rgb: hslToRgb(hue, saturation, lightness) });
