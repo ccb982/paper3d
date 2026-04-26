@@ -148,26 +148,104 @@ export function createGradientCanvas(
       const sinOffset = Math.sin(x * 0.05) * 3; // 波浪振幅为3像素
       const adjustedY = y + sinOffset;
 
-      // 确定当前位置属于哪个层次
-      let layerIndex = 0;
+      // 初始化颜色变量
+      let finalH = 0, finalS = 0, finalL = 0;
+
+      // 检查是否处于层边界的过渡区域
+      let isInTransition = false;
+      let transitionLayerIndex = -1;
+      let transitionT = 0;
+
+      // 检测是否在层边界的过渡区域
       for (let i = 0; i < layerBoundaries.length; i++) {
-        if (adjustedY >= layerBoundaries[i]) {
-          layerIndex = i + 1;
+        const boundary = layerBoundaries[i];
+        const transitionWidth = 10; // 过渡区域宽度（像素）
+        
+        if (Math.abs(adjustedY - boundary) < transitionWidth) {
+          isInTransition = true;
+          transitionLayerIndex = i;
+          // 计算过渡系数（0-1），使用sin函数实现平滑过渡
+          transitionT = 0.5 + 0.5 * Math.sin((adjustedY - boundary) / transitionWidth * Math.PI);
+          break;
         }
       }
 
-      // 获取当前层次的颜色
-      const layerColor = regionColors[layerIndex];
+      if (isInTransition && transitionLayerIndex >= 0) {
+        // 在过渡区域，混合相邻两层的颜色
+        const layerA = regionColors[transitionLayerIndex];
+        const layerB = regionColors[transitionLayerIndex + 1];
 
-      // 加入轻微的内部渐变
-      const t = y / height;
-      const hueShift = 0.01 * Math.sin(x * 0.1 + y * 0.1) * internalGradStrength;
-      const satShift = 0.05 * Math.cos(x * 0.08) * internalGradStrength;
-      const litShift = 0.08 * Math.sin(y * 0.1) * internalGradStrength;
+        // 计算两层的颜色值
+        // 为每层添加层内渐变效果
+        const layerAStartY = transitionLayerIndex > 0 ? layerBoundaries[transitionLayerIndex - 1] : 0;
+        const layerAEndY = layerBoundaries[transitionLayerIndex];
+        const layerAT = (y - layerAStartY) / (layerAEndY - layerAStartY);
+        
+        const layerBStartY = layerBoundaries[transitionLayerIndex];
+        const layerBEndY = transitionLayerIndex < layerBoundaries.length - 1 ? layerBoundaries[transitionLayerIndex + 1] : height;
+        const layerBT = (y - layerBStartY) / (layerBEndY - layerBStartY);
 
-      const h = ((layerColor.h + hueShift % 1) + 1) % 1;
-      const s = Math.min(1, Math.max(0, layerColor.s + satShift));
-      const l = Math.min(1, Math.max(0, layerColor.l + litShift));
+        // 层内渐变强度
+        const gradientStrength = 0.3;
+        
+        // 计算两层的实际颜色
+        const layerAH = layerA.h;
+        const layerAS = Math.min(1, layerA.s + layerAT * gradientStrength);
+        const layerAL = Math.min(1, layerA.l + layerAT * gradientStrength);
+        
+        const layerBH = layerB.h;
+        const layerBS = Math.min(1, layerB.s + layerBT * gradientStrength);
+        const layerBL = Math.min(1, layerB.l + layerBT * gradientStrength);
+
+        // 使用sin过渡系数混合颜色
+        finalH = layerAH + (layerBH - layerAH) * transitionT;
+        finalS = layerAS + (layerBS - layerAS) * transitionT;
+        finalL = layerAL + (layerBL - layerAL) * transitionT;
+      } else {
+        // 不在过渡区域，使用单层颜色
+        // 确定当前位置属于哪个层次
+        let layerIndex = 0;
+        for (let i = 0; i < layerBoundaries.length; i++) {
+          if (adjustedY >= layerBoundaries[i]) {
+            layerIndex = i + 1;
+          }
+        }
+
+        // 获取当前层次的颜色
+        const layerColor = regionColors[layerIndex];
+
+        // 计算当前层内的相对位置（0-1）
+        let layerStartY = 0;
+        let layerEndY = height;
+        if (layerIndex > 0) {
+          layerStartY = layerBoundaries[layerIndex - 1];
+        }
+        if (layerIndex < layerBoundaries.length) {
+          layerEndY = layerBoundaries[layerIndex];
+        }
+        const layerHeight = layerEndY - layerStartY;
+        const layerT = layerHeight > 0 ? (y - layerStartY) / layerHeight : 0;
+
+        // 为每个基色层添加从上到下逐渐增强的渐变效果
+        // 渐变方向：上 → 下，亮度和饱和度逐渐增加
+        const gradientStrength = 0.3; // 渐变强度
+        const hueShift = 0;
+        const satShift = layerT * gradientStrength; // 饱和度从上到下增加
+        const litShift = layerT * gradientStrength; // 亮度从上到下增加
+
+        finalH = layerColor.h + hueShift;
+        finalS = Math.min(1, layerColor.s + satShift);
+        finalL = Math.min(1, layerColor.l + litShift);
+      }
+
+      // 加入轻微的内部细节变化
+      const detailHueShift = 0.01 * Math.sin(x * 0.1 + y * 0.1) * internalGradStrength;
+      const detailSatShift = 0.05 * Math.cos(x * 0.08) * internalGradStrength;
+      const detailLitShift = 0.08 * Math.sin(y * 0.1) * internalGradStrength;
+
+      const h = ((finalH + detailHueShift % 1) + 1) % 1;
+      const s = Math.min(1, Math.max(0, finalS + detailSatShift));
+      const l = Math.min(1, Math.max(0, finalL + detailLitShift));
       const [r, g, b] = hslToRgb(h, s, l);
 
       const idx = (y * width + x) * 4;
