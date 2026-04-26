@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CanvasTextureGenerator } from './CanvasTextureGenerator';
 import { TextureManager } from './TextureManager';
+import { createGradientCanvas, BULLET_TRAIL_COLORS } from './GradientTexture';
 
 const rawPoints: [number, number][] = [
   [761.9299065420561, 438.68691588785043],
@@ -135,6 +136,15 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
   const generator = new CanvasTextureGenerator(width, height, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
     
+    // 使用子弹尾气的颜色分层（使用BULLET_TRAIL_COLORS）
+    // 7种颜色：黑色 -> 深蓝紫色 -> 紫红色 -> 暗红色 -> 红色 -> 亮红色 -> 粉色
+    const bulletTrailGradientCanvas = createGradientCanvas('#ffffff', w, h, {
+      colors: BULLET_TRAIL_COLORS, // 使用多颜色分层
+      blockCount: 0,
+      internalGradStrength: 0.1, // 内部渐变强度
+      seed: 42
+    });
+    
     // 绘制填充区域
     ctx.beginPath();
     const firstPoint = normalizedPoints[0];
@@ -147,72 +157,8 @@ export function createBulletTrailTexture(textureManager: TextureManager, width: 
     }
     
     ctx.closePath();
-    
-    // 创建渐变效果：上半部分保持原样，下半部分使用#a31827基色，中间添加过渡，最底部添加#fe7a91
-    const gradient = ctx.createLinearGradient(w * 0.5, 0, w * 0.5, h);
-    gradient.addColorStop(0, 'rgba(1, 1, 3, 1)'); // 头部（末尾）：接近黑色
-    gradient.addColorStop(0.5, 'rgba(20, 25, 40, 1)'); // 上半部分结束
-    gradient.addColorStop(0.55, 'rgba(60, 25, 40, 1)'); // 过渡开始
-    gradient.addColorStop(0.6, 'rgba(127, 24, 39, 1)'); // 过渡中
-    gradient.addColorStop(0.65, 'rgba(163, 27, 43, 1)'); // 过渡继续
-    gradient.addColorStop(0.7, 'rgba(200, 30, 48, 1)'); // 下半部分开始（更亮的#a31827）
-    gradient.addColorStop(0.95, 'rgba(200, 30, 48, 1)'); // 下半部分
-    gradient.addColorStop(1, 'rgba(254, 122, 145, 1)'); // 最底部：#fe7a91
-    
-    ctx.fillStyle = gradient;
-    ctx.fill();
-    
-    // 添加更强的噪点效果
-    ctx.save();
-    ctx.clip(); // 只在路径内绘制噪点
-    
-    // 移除噪点效果，提升性能
-    // for (let i = 0; i < w * h * 0.02; i++) { // 2% 的像素点，优化性能
-    //   const x = Math.random() * w;
-    //   const y = Math.random() * h;
-    //   const normalizedY = y / h; // 归一化Y坐标，0是头部，1是尾部
-    //   
-    //   let r, g, b;
-    //   
-    //   // 根据Y坐标选择不同的颜色范围
-    //   if (normalizedY < 0.6) {
-    //     // 上半部分：蓝色到紫色 - 不添加红色噪点
-    //     const t = Math.random();
-    //     r = Math.floor(10 + t * 30); // 10-40
-    //     g = Math.floor(15 + t * 10); // 15-25
-    //     b = Math.floor(25 + t * 35); // 25-60
-    //   } else {
-    //     // 下半部分（前40%）：红色有亮光的部分
-    //     // 检查是否在最底部区域（0.95-1.0）
-    //     const isBottomArea = normalizedY > 0.95;
-    //     
-    //     if (isBottomArea) {
-    //       // 最底部区域（z=0）：黑色噪点
-    //       const t = Math.random();
-    //       r = Math.floor(0 + t * 30); // 0-30（接近黑色）
-    //       g = Math.floor(0 + t * 20); // 0-20（接近黑色）
-    //       b = Math.floor(0 + t * 30); // 0-30（接近黑色）
-    //     } else {
-    //       // 红色有亮光的部分：#fe0036附近
-    //       const t = Math.random();
-    //       r = Math.floor(230 + t * 25); // 230-255（接近#fe0036的红色）
-    //       g = Math.floor(0 + t * 20); // 0-20（接近0）
-    //       b = Math.floor(20 + t * 16); // 20-36（接近36）
-    //     }
-    //   }
-    //   
-    //   const brightness = 0.5 + Math.random() * 1.5; // 0.5-2.0 的亮度，增加随机性
-    //   const alpha = 0.4 + Math.random() * 0.6; // 0.4-1.0 的透明度
-    //   
-    //   ctx.fillStyle = `rgba(${Math.min(255, Math.floor(r * brightness))}, ${Math.min(255, Math.floor(g * brightness))}, ${Math.min(255, Math.floor(b * brightness))}, ${alpha})`;
-    //   ctx.beginPath();
-    //   // 绘制条形噪点，宽度4-8，高度1-2
-    //   const barWidth = 4 + Math.random() * 4;
-    //   const barHeight = 1 + Math.random() * 1;
-    //   ctx.fillRect(x - barWidth / 2, y - barHeight / 2, barWidth, barHeight);
-    // }
-    
-    ctx.restore();
+    ctx.clip();
+    ctx.drawImage(bulletTrailGradientCanvas, 0, 0, w, h);
     
     // 绘制边框以确保边缘清晰
     ctx.strokeStyle = 'rgba(40, 20, 60, 1)'; // 紫色边框

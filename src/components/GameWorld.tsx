@@ -29,7 +29,7 @@ import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailMaterial } from '../systems/textures/BulletTrailTexture';
 import { TextureManager } from '../systems/textures/TextureManager';
-import { TestRedBlueTexture } from '../systems/textures/TestRedBlueTexture';
+import { TestBulletTrailTexture } from '../systems/textures/TestRedBlueTexture';
 import { WaterEntity } from '../entities/water/WaterEntity';
 
 
@@ -611,13 +611,13 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
 
     // 创建测试纹理
     const textureManager = TextureManager.getInstance();
-    const testTexture = new TestRedBlueTexture();
-    textureManager.register('test-red-blue', testTexture);
+    const testTexture = new TestBulletTrailTexture();
+    textureManager.register('test-bullet-trail', testTexture);
     
     // 在出生点附近创建一个平面来显示测试纹理
     const testPlaneGeometry = new THREE.PlaneGeometry(2, 2);
     const testPlaneMaterial = new THREE.MeshBasicMaterial({
-      map: textureManager.getTexture('test-red-blue'),
+      map: textureManager.getTexture('test-bullet-trail'),
       side: THREE.DoubleSide
     });
     const testPlane = new THREE.Mesh(testPlaneGeometry, testPlaneMaterial);
@@ -626,7 +626,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     if (sceneRef.current) {
       sceneRef.current.add(testPlane);
     }
-    console.log('Test red-blue texture created and displayed at (0, 3, 5)');
+    console.log('Test bullet trail texture created and displayed at (0, 3, 5)');
 
     console.log('Entities created:', entityManager.getEntityCount());
   }, []);

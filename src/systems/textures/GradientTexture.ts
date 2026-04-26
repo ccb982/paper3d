@@ -16,6 +16,7 @@ interface GradientOptions {
   hueVariation?: number;
   satVariation?: number;
   lightVariation?: number;
+  colors?: string[]; // 多颜色分层
 }
 
 function seededRandom(seed: number) {
@@ -69,6 +70,11 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   return [r, g, b];
 }
 
+function parseColor(color: string): [number, number, number] {
+  const c = new THREE.Color(color);
+  return [c.r, c.g, c.b];
+}
+
 export function createGradientCanvas(
   baseColor: string | number[],
   width: number = 512,
@@ -76,14 +82,15 @@ export function createGradientCanvas(
   options: GradientOptions = {}
 ): HTMLCanvasElement {
   const {
-    regionCount = 5,      // 调整分层数量，使每层差异更明显
-    blockCount = 3,       // 减少色块数量
-    internalGradStrength = 0.05, // 减小内部渐变强度
+    regionCount = 5,
+    blockCount = 3,
+    internalGradStrength = 0.05,
     seed = 42,
     blockAlpha = 0.75,
-    hueVariation = 0.05,  // 减小色相变化
-    satVariation = 0.05,  // 减小饱和度变化
-    lightVariation = 0.05 // 减小明度变化
+    hueVariation = 0.05,
+    satVariation = 0.05,
+    lightVariation = 0.05,
+    colors = [] // 多颜色分层数组
   } = options;
 
   let baseRgb: number[];
@@ -97,14 +104,27 @@ export function createGradientCanvas(
 
   const random = seededRandom(seed);
 
+  // 如果提供了多颜色数组，则使用多颜色分层
+  const useMultiColors = colors.length > 0;
+
+  // 生成分层颜色
   const regionColors: Array<{ h: number; s: number; l: number; rgb: number[] }> = [];
-  for (let i = 0; i < regionCount; i++) {
-    // 使用HSL算法生成分层基色：色相固定，明度递增
-    // 略微增大明度范围，使相邻层色差更大
-    const lightness = 0.35 + (i / (regionCount - 1)) * 0.4; // 0.35 ~ 0.75
-    const saturation = 0.8; // 固定饱和度
-    const hue = baseH; // 使用基础颜色的色相
-    regionColors.push({ h: hue, s: saturation, l: lightness, rgb: hslToRgb(hue, saturation, lightness) });
+
+  if (useMultiColors) {
+    // 使用提供的颜色数组进行分层
+    for (let i = 0; i < colors.length; i++) {
+      const colorRgb = parseColor(colors[i]);
+      const [h, s, l] = rgbToHsl(colorRgb[0], colorRgb[1], colorRgb[2]);
+      regionColors.push({ h, s, l, rgb: colorRgb });
+    }
+  } else {
+    // 使用HSL算法生成分层基色（原有逻辑）
+    for (let i = 0; i < regionCount; i++) {
+      const lightness = 0.35 + (i / (regionCount - 1)) * 0.4; // 0.35 ~ 0.75
+      const saturation = 0.8; // 固定饱和度
+      const hue = baseH; // 使用基础颜色的色相
+      regionColors.push({ h: hue, s: saturation, l: lightness, rgb: hslToRgb(hue, saturation, lightness) });
+    }
   }
 
   const canvas = document.createElement('canvas');
@@ -116,9 +136,9 @@ export function createGradientCanvas(
 
   // 计算分层边界（y轴上的横线，加入sin调整）
   const layerBoundaries = [];
-  for (let i = 0; i < regionCount - 1; i++) {
-    const baseY = (i + 1) / regionCount * height;
-    // 加入sin调整分界线，使边界产生波浪效果
+  const totalLayers = useMultiColors ? regionColors.length - 1 : regionCount - 1;
+  for (let i = 0; i < totalLayers; i++) {
+    const baseY = (i + 1) / (useMultiColors ? regionColors.length : regionCount) * height;
     layerBoundaries.push(baseY);
   }
 
@@ -127,7 +147,7 @@ export function createGradientCanvas(
       // 计算当前位置的sin调整值
       const sinOffset = Math.sin(x * 0.05) * 3; // 波浪振幅为3像素
       const adjustedY = y + sinOffset;
-      
+
       // 确定当前位置属于哪个层次
       let layerIndex = 0;
       for (let i = 0; i < layerBoundaries.length; i++) {
@@ -135,21 +155,21 @@ export function createGradientCanvas(
           layerIndex = i + 1;
         }
       }
-      
+
       // 获取当前层次的颜色
       const layerColor = regionColors[layerIndex];
-      
+
       // 加入轻微的内部渐变
       const t = y / height;
       const hueShift = 0.01 * Math.sin(x * 0.1 + y * 0.1) * internalGradStrength;
       const satShift = 0.05 * Math.cos(x * 0.08) * internalGradStrength;
       const litShift = 0.08 * Math.sin(y * 0.1) * internalGradStrength;
-      
+
       const h = ((layerColor.h + hueShift % 1) + 1) % 1;
       const s = Math.min(1, Math.max(0, layerColor.s + satShift));
       const l = Math.min(1, Math.max(0, layerColor.l + litShift));
       const [r, g, b] = hslToRgb(h, s, l);
-      
+
       const idx = (y * width + x) * 4;
       data[idx] = r * 255;
       data[idx + 1] = g * 255;
@@ -163,18 +183,15 @@ export function createGradientCanvas(
     const type = Math.floor(random() * 3);
     const centerX = random() * width;
     const centerY = random() * height;
-    // 减小色块大小到几十像素面积
     const baseSize = Math.max(10, Math.min(30, Math.min(width, height) * 0.1));
     const sizeW = baseSize + random() * baseSize * 0.5;
     const sizeH = baseSize + random() * baseSize * 0.5;
     const rotation = random() * Math.PI * 2;
 
-    // 生成RGB差值不超过5的随机颜色
     const [baseR, baseG, baseB] = baseRgb;
     const randR = Math.min(1, Math.max(0, baseR + (random() - 0.5) * 5/255));
     const randG = Math.min(1, Math.max(0, baseG + (random() - 0.5) * 5/255));
     const randB = Math.min(1, Math.max(0, baseB + (random() - 0.5) * 5/255));
-    // 转换回HSL用于后续处理
     const [randHue, randSat, randLit] = rgbToHsl(randR, randG, randB);
     const [rCol, gCol, bCol] = hslToRgb(randHue, randSat, randLit);
     ctx.fillStyle = `rgba(${rCol * 255}, ${gCol * 255}, ${bCol * 255}, ${blockAlpha})`;
@@ -265,3 +282,14 @@ export function createGradientTexture(
   texture.needsUpdate = true;
   return texture;
 }
+
+// 子弹拖尾专用多颜色分层
+export const BULLET_TRAIL_COLORS = [
+  '#010103', // 黑色（头部）
+  '#141928', // 深蓝紫色
+  '#3C1928', // 紫红色
+  '#7F1827', // 暗红色
+  '#A31B2B', // 红色
+  '#C81E30', // 亮红色
+  '#FE7A91', // 粉色（尾部）
+];
