@@ -46,9 +46,9 @@ export class TestRedBlueTexture implements ITextureGenerator {
 
     // 生成红色渐变纹理（使用GradientTexture生成器）
     const redGradientCanvas = createGradientCanvas('#ff0000', 8, 8, {
-      regionCount: 3,
+      regionCount: 8, // 进一步增加分层数量
       blockCount: 0,
-      internalGradStrength: 0.15,
+      internalGradStrength: 0.15, // 增加内部渐变，使过渡更平滑
       seed: Math.floor(this.time * 10) % 100,
       hueVariation: 0.1,
       satVariation: 0.2,
@@ -57,9 +57,9 @@ export class TestRedBlueTexture implements ITextureGenerator {
 
     // 生成蓝色渐变纹理（使用GradientTexture生成器）
     const blueGradientCanvas = createGradientCanvas('#0066ff', 8, 8, {
-      regionCount: 3,
+      regionCount: 8, // 进一步增加分层数量
       blockCount: 0,
-      internalGradStrength: 0.15,
+      internalGradStrength: 0.15, // 增加内部渐变，使过渡更平滑
       seed: (Math.floor(this.time * 10) + 50) % 100,
       hueVariation: 0.1,
       satVariation: 0.2,

@@ -76,7 +76,7 @@ export function createGradientCanvas(
   options: GradientOptions = {}
 ): HTMLCanvasElement {
   const {
-    regionCount = 3,      // 减少区域数量
+    regionCount = 5,      // 调整分层数量，使每层差异更明显
     blockCount = 3,       // 减少色块数量
     internalGradStrength = 0.05, // 减小内部渐变强度
     seed = 42,
@@ -100,43 +100,11 @@ export function createGradientCanvas(
   const regionColors: Array<{ h: number; s: number; l: number; rgb: number[] }> = [];
   for (let i = 0; i < regionCount; i++) {
     // 使用HSL算法生成分层基色：色相固定，明度递增
-    const lightness = 0.2 + (i / (regionCount - 1)) * 0.6; // 0.2 ~ 0.8
+    // 减小明度范围，使相邻层色差更小
+    const lightness = 0.4 + (i / (regionCount - 1)) * 0.3; // 0.4 ~ 0.7
     const saturation = 0.8; // 固定饱和度
-    // 基于基础颜色的色相，或者使用固定色相（如蓝色240°）
     const hue = baseH; // 使用基础颜色的色相
     regionColors.push({ h: hue, s: saturation, l: lightness, rgb: hslToRgb(hue, saturation, lightness) });
-  }
-
-  const centers: Array<{ x: number; y: number; color: { h: number; s: number; l: number; rgb: number[] } }> = [];
-  for (let i = 0; i < regionCount; i++) {
-    centers.push({
-      x: random() * width,
-      y: random() * height,
-      color: regionColors[i]
-    });
-  }
-
-  function internalGradient(
-    x: number,
-    y: number,
-    center: { x: number; y: number },
-    baseColorHSL: { h: number; s: number; l: number }
-  ): number[] {
-    const dx = x - center.x;
-    const dy = y - center.y;
-    const dist = Math.hypot(dx, dy);
-    const maxDist = Math.max(width, height) * 0.6;
-    const t = Math.min(1, dist / maxDist);
-
-    const angle = Math.atan2(dy, dx);
-    const hueShift = 0.02 * Math.sin(angle * 3) * (1 - t) * internalGradStrength;
-    const satShift = 0.1 * Math.cos(angle * 2) * (1 - t) * internalGradStrength;
-    const litShift = 0.15 * Math.sin(angle * 4 + t * Math.PI) * (1 - t) * internalGradStrength;
-
-    const h = ((baseColorHSL.h + hueShift % 1) + 1) % 1;
-    const s = Math.min(1, Math.max(0, baseColorHSL.s + satShift));
-    const l = Math.min(1, Math.max(0, baseColorHSL.l + litShift));
-    return hslToRgb(h, s, l);
   }
 
   const canvas = document.createElement('canvas');
@@ -146,24 +114,46 @@ export function createGradientCanvas(
   const imageData = ctx.createImageData(width, height);
   const data = imageData.data;
 
+  // 计算分层边界（y轴上的横线，加入sin调整）
+  const layerBoundaries = [];
+  for (let i = 0; i < regionCount - 1; i++) {
+    const baseY = (i + 1) / regionCount * height;
+    // 加入sin调整分界线，使边界产生波浪效果
+    layerBoundaries.push(baseY);
+  }
+
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const dists = centers.map(c => ({ idx: c, dist: Math.hypot(x - c.x, y - c.y) }));
-      dists.sort((a, b) => a.dist - b.dist);
-      const c1 = dists[0].idx;
-      const c2 = dists[1].idx;
-
-      const t = dists[0].dist / (dists[0].dist + dists[1].dist + 1e-8);
-      let mix = Math.sin(Math.PI / 2 * (1 - t));
-      mix = Math.min(1, Math.max(0, mix));
-
-      const col1 = internalGradient(x, y, c1, c1.color);
-      const col2 = internalGradient(x, y, c2, c2.color);
-
+      // 计算当前位置的sin调整值
+      const sinOffset = Math.sin(x * 0.05) * 3; // 波浪振幅为3像素
+      const adjustedY = y + sinOffset;
+      
+      // 确定当前位置属于哪个层次
+      let layerIndex = 0;
+      for (let i = 0; i < layerBoundaries.length; i++) {
+        if (adjustedY >= layerBoundaries[i]) {
+          layerIndex = i + 1;
+        }
+      }
+      
+      // 获取当前层次的颜色
+      const layerColor = regionColors[layerIndex];
+      
+      // 加入轻微的内部渐变
+      const t = y / height;
+      const hueShift = 0.01 * Math.sin(x * 0.1 + y * 0.1) * internalGradStrength;
+      const satShift = 0.05 * Math.cos(x * 0.08) * internalGradStrength;
+      const litShift = 0.08 * Math.sin(y * 0.1) * internalGradStrength;
+      
+      const h = ((layerColor.h + hueShift % 1) + 1) % 1;
+      const s = Math.min(1, Math.max(0, layerColor.s + satShift));
+      const l = Math.min(1, Math.max(0, layerColor.l + litShift));
+      const [r, g, b] = hslToRgb(h, s, l);
+      
       const idx = (y * width + x) * 4;
-      data[idx] = (col1[0] * mix + col2[0] * (1 - mix)) * 255;
-      data[idx + 1] = (col1[1] * mix + col2[1] * (1 - mix)) * 255;
-      data[idx + 2] = (col1[2] * mix + col2[2] * (1 - mix)) * 255;
+      data[idx] = r * 255;
+      data[idx + 1] = g * 255;
+      data[idx + 2] = b * 255;
       data[idx + 3] = 255;
     }
   }
