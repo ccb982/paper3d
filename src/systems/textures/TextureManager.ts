@@ -93,12 +93,11 @@ export class TextureManager {
     }
   }
 
-  // 每帧更新所有 Shader 纹理（如果需要统一时间）
+  // 每帧更新所有纹理（包括 Shader 和 Canvas 类型）
   public updateAll(delta: number): void {
     this.textures.forEach(entry => {
-      if (entry.generator.type === 'shader') {
-        entry.generator.update(delta);
-      }
+      // 更新所有类型的纹理生成器
+      entry.generator.update(delta);
     });
   }
 }

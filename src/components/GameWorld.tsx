@@ -394,6 +394,9 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     
     // 更新特效
     EffectManager.getInstance().update(delta);
+    
+    // 更新所有纹理（包括测试纹理的流动效果）
+    TextureManager.getInstance().updateAll(delta);
   });
 
   return null;
