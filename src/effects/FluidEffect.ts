@@ -10,6 +10,12 @@ export class FluidEffect extends BaseEffect {
   private fluidDynamics: FluidDynamics;
   private texture: THREE.CanvasTexture;
   private material: THREE.MeshBasicMaterial;
+  private emitterPosition: { x: number; y: number };
+  private emitterAngle: number;
+  private emitterRadius: number;
+  private colorIndex: number;
+  private colorChangeTime: number;
+  private colors: number[][];
 
   constructor(position: THREE.Vector3, duration: number = 10.0, size: number = 5.0) {
     super(duration);
@@ -33,17 +39,21 @@ export class FluidEffect extends BaseEffect {
       pressureIterations: 20
     });
     
-    // 添加一些初始染料
-    for (let i = 0; i < 5; i++) {
-      const x = Math.random() * 512;
-      const y = Math.random() * 512;
-      const color = [
-        0.5 + Math.random() * 0.5, // 红色
-        0.2 + Math.random() * 0.3, // 绿色
-        0.8 + Math.random() * 0.2  // 蓝色
-      ];
-      this.fluidDynamics.setDye(x, y, 0, 50, 50, color);
-    }
+    // 初始化释放点位置
+    this.emitterPosition = { x: 256, y: 256 };
+    this.emitterAngle = 0;
+    this.emitterRadius = 100;
+    
+    // 初始化颜色系统
+    this.colorIndex = 0;
+    this.colorChangeTime = 0;
+    this.colors = [
+      [0.6, 0.3, 0.9], // 紫色
+      [0.9, 0.6, 0.3], // 橙色
+      [0.3, 0.9, 0.6], // 青色
+      [0.9, 0.3, 0.6], // 粉色
+      [0.6, 0.9, 0.3]  // 绿色
+    ];
     
     // 创建 canvas 纹理
     this.texture = new THREE.CanvasTexture(this.canvas);
@@ -70,6 +80,24 @@ export class FluidEffect extends BaseEffect {
   }
 
   protected onUpdate(delta: number): void {
+    // 更新释放点位置（圆形路径）
+    this.emitterAngle += delta * 2; // 旋转速度
+    this.emitterPosition.x = 256 + Math.cos(this.emitterAngle) * this.emitterRadius;
+    this.emitterPosition.y = 256 + Math.sin(this.emitterAngle) * this.emitterRadius;
+    
+    // 定时变色
+    this.colorChangeTime += delta;
+    if (this.colorChangeTime >= 2) { // 每2秒变色一次
+      this.colorChangeTime = 0;
+      this.colorIndex = (this.colorIndex + 1) % this.colors.length;
+    }
+    
+    // 获取当前颜色
+    const currentColor = this.colors[this.colorIndex];
+    
+    // 持续释放染料
+    this.fluidDynamics.setDye(this.emitterPosition.x, this.emitterPosition.y, 0, 10, 10, currentColor);
+    
     // 添加随机力来扰动流体
     if (Math.random() < 0.1) {
       const x = Math.random() * 512;
