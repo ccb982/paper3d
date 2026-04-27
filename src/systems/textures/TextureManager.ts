@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { BulletFluidTexture } from './BulletFluidTexture';
 
-interface ITextureGenerator {
+export interface ITextureGenerator {
   type: 'canvas' | 'shader';
   generate(): THREE.Texture | THREE.Material;
   update(delta?: number): void;
@@ -18,6 +19,7 @@ interface TextureEntry {
 export class TextureManager {
   private static instance: TextureManager;
   private textures: Map<string, TextureEntry> = new Map();
+  private isInitialized: boolean = false;
 
   private constructor() {}
 
@@ -26,6 +28,16 @@ export class TextureManager {
       TextureManager.instance = new TextureManager();
     }
     return TextureManager.instance;
+  }
+
+  // 初始化内置纹理
+  public initialize(): void {
+    if (this.isInitialized) return;
+    
+    // 注册子弹流体纹理
+    this.register('bulletFluid', new BulletFluidTexture());
+    
+    this.isInitialized = true;
   }
 
   // 注册纹理生成器

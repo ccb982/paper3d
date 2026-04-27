@@ -6,6 +6,7 @@ import { RingWaveEffect } from '../effects/RingWaveEffect';
 import { DawnBurstEffect } from '../effects/DawnBurstEffect';
 import { ParticleFireEffect } from '../effects/ParticleFireEffect';
 import { FluidEffect } from '../effects/FluidEffect';
+import { BulletFluidEffect } from '../effects/BulletFluidEffect';
 import * as THREE from 'three';
 
 /**
@@ -72,6 +73,13 @@ export class EffectManager {
    */
   public playFluidEffect(position: THREE.Vector3, duration: number = 10.0, size: number = 5.0): void {
     this.activeEffects.push(new FluidEffect(position, duration, size));
+  }
+
+  /**
+   * 播放子弹流体特效（基于物理模拟）
+   */
+  public playBulletFluidEffect(position: THREE.Vector3, duration: number = 30.0, size: number = 8.0): void {
+    this.activeEffects.push(new BulletFluidEffect(position, duration, size));
   }
 
   /**
