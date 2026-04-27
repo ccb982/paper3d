@@ -5,6 +5,7 @@ import { ExplosionEffect } from '../effects/ExplosionEffect';
 import { RingWaveEffect } from '../effects/RingWaveEffect';
 import { DawnBurstEffect } from '../effects/DawnBurstEffect';
 import { ParticleFireEffect } from '../effects/ParticleFireEffect';
+import { FluidEffect } from '../effects/FluidEffect';
 import * as THREE from 'three';
 
 /**
@@ -64,6 +65,13 @@ export class EffectManager {
     const fireEffect = new ParticleFireEffect(position, duration);
     this.particleFireEffects.push(fireEffect);
     return fireEffect;
+  }
+
+  /**
+   * 播放流体特效
+   */
+  public playFluidEffect(position: THREE.Vector3, duration: number = 10.0, size: number = 5.0): void {
+    this.activeEffects.push(new FluidEffect(position, duration, size));
   }
 
   /**

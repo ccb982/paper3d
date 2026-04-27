@@ -20,8 +20,8 @@ export class ItemEffect {
   constructor(
     public type: string,
     public value: number,
-    public duration?: number,
-    public description: string
+    public description: string,
+    public duration?: number
   ) {}
 }
 

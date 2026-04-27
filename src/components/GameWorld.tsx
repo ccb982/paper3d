@@ -609,6 +609,11 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     EffectManager.getInstance().playParticleFireEffect(firePosition, Infinity);
     console.log('Infinite fire effect created at:', firePosition);
 
+    // 创建流体特效
+    const fluidPosition = new THREE.Vector3(5, 0, 0); // 玩家出生点附近
+    EffectManager.getInstance().playFluidEffect(fluidPosition, 60, 8); // 60秒持续时间，8单位大小
+    console.log('Fluid effect created at:', fluidPosition);
+
     // 创建测试纹理
     const textureManager = TextureManager.getInstance();
     const testTexture = new TestBulletTrailTexture();
