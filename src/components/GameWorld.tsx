@@ -610,7 +610,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     console.log('Infinite fire effect created at:', firePosition);
 
     // 创建子弹流体特效（基于物理模拟）
-    const fluidPosition = new THREE.Vector3(5, 0, 0); // 玩家出生点附近
+    const fluidPosition = new THREE.Vector3(5, 5, 0); // 抬高到空中
     EffectManager.getInstance().playBulletFluidEffect(fluidPosition, 60, 8); // 60秒持续时间，8单位大小
     console.log('Bullet fluid effect created at:', fluidPosition);
 
