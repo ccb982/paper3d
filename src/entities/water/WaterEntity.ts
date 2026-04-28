@@ -241,19 +241,23 @@ export class WaterEntity extends StaticEntity {
           float noise2 = hash(vec2(floor(pos.x * 3.0 + uTime * 0.15), floor(pos.z * 2.5)));
           float noise3 = hash(vec2(floor(pos.x * 4.0), floor(pos.z * 3.0 + uTime * 0.25)));
 
+          // 三波交错 - 使用配置的频率和速度
           float wave1 = sin(pos.x * uWave1Freq + pos.z * (uWave1Freq * 0.75) + uTime * uWave1Speed) * 0.15;
           float wave2 = sin(pos.x * uWave2Freq - pos.z * (uWave2Freq * 1.33) + uTime * uWave2Speed + noise1 * 3.14) * 0.12;
           float wave3 = sin((pos.x * uWave3Freq + pos.z * (uWave3Freq * 2.5)) + uTime * uWave3Speed + noise2 * 4.71) * 0.10;
 
+          // 大波幅波动 - 使用配置的振幅范围
           float bigWavePhase = sin(uTime * uBigWaveFreq) * 0.5 + 0.5;
           float bigWaveAmp = uBigWaveAmp - uBigWaveAmpRange * 0.5 + uBigWaveAmpRange * bigWavePhase;
           float bigWave = sin(pos.x * (uBigWaveFreq * 0.375) + uTime * (uBigWaveFreq * 0.8)) * bigWaveAmp;
 
+          // 组合所有波动 - 动态模式使用更大的乘数
           float waveMultiplier = 1.0;
           float height = (wave1 + wave2 + wave3 + bigWave) * waveMultiplier + texHeight * 4.0;
           pos.y += height * uHeightScale;
           vHeight = height;
 
+          // 玩家涟漪 - 向外扩散的sin波，有Y轴衰减
           if (uPlayerStrength > 0.0) {
             vec2 playerWorldPos = uWaterWorldPos + (uPlayerPos - 0.5) * vec2(40.0, 46.0);
             float playerDist = length(vWorldPos.xz - playerWorldPos);
@@ -388,6 +392,7 @@ export class WaterEntity extends StaticEntity {
     this.updateWave();
     this.addRandomDisturbances();
 
+    // 衰减玩家涟漪强度
     if (this.playerRippleStrength > 0) {
       this.playerRippleStrength *= 0.97;
       if (this.playerRippleStrength < 0.01) {
@@ -475,12 +480,6 @@ export class WaterEntity extends StaticEntity {
     }
     if (this.waterMaterial) {
       this.waterMaterial.dispose();
-    }
-    if (this.fullscreenPlane) {
-      this.fullscreenPlane.geometry.dispose();
-    }
-    if (this.waterMesh && this.waterMesh.geometry) {
-      this.waterMesh.geometry.dispose();
     }
   }
 }
