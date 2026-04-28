@@ -77,34 +77,39 @@ export class BulletFluidTexture implements ITextureGenerator {
     this.fluidDynamics.setVelocity(nozzleX - 3, BULLET_Y - pushOffset, 0, 5, 4, -30, -40);  // 上侧向左上推
     this.fluidDynamics.setVelocity(nozzleX - 3, BULLET_Y + pushOffset, 0, 5, 4, -30, 40);   // 下侧向左下推
     
-    // 上侧喷射口（染料8×8）
+    // 上侧喷射口（染料3×3）
     const nozzleYUp = BULLET_Y - nozzleOffset - 2;
     this.fluidDynamics.setVelocity(nozzleX, nozzleYUp, 0, 3, 2, -jetSpeed * pulse * 0.8, -15);
-    this.fluidDynamics.setDye(nozzleX, nozzleYUp, 0, 8, 8, [0.05, 0.25, 0.45]);
+    this.fluidDynamics.setDye(nozzleX, nozzleYUp, 0, 3, 3, [0.05, 0.25, 0.45]);
     
-    // 下侧喷射口（染料8×8）
+    // 下侧喷射口（染料3×3）
     const nozzleYDown = BULLET_Y + nozzleOffset + 2;
     this.fluidDynamics.setVelocity(nozzleX, nozzleYDown, 0, 3, 2, -jetSpeed * pulse * 0.8, 15);
-    this.fluidDynamics.setDye(nozzleX, nozzleYDown, 0, 8, 8, [0.05, 0.25, 0.45]);
+    this.fluidDynamics.setDye(nozzleX, nozzleYDown, 0, 3, 3, [0.05, 0.25, 0.45]);
 
-    // 3. 沿上下两条轨迹连续释放（更小间隔，更平滑）
+    // 3. 沿上下两条轨迹连续释放（带涡流摆动）
     const trailLength = 140;
-    for (let dist = 15; dist <= trailLength; dist += 8) {
+    for (let dist = 15; dist <= trailLength; dist += 6) {
       const backX = BULLET_X - dist;
       if (backX < 0) continue;
       
       const spread = 10 + dist * 0.08;
       const intensity = 1 - dist / trailLength;
       
-      // 上侧轨迹
-      const yUp = BULLET_Y - spread;
-      this.fluidDynamics.setVelocity(backX, yUp, 0, 2, 2, -jetSpeed * 0.35 * intensity, -6);
-      this.fluidDynamics.setDye(backX, yUp, 0, 8, 8, [0.03 * intensity, 0.18 * intensity, 0.35 * intensity]);
+      // 添加涡流摆动（正弦波）
+      const waveOffset = Math.sin(dist * 0.15 + this.time * 2) * 8;
       
-      // 下侧轨迹
-      const yDown = BULLET_Y + spread;
-      this.fluidDynamics.setVelocity(backX, yDown, 0, 2, 2, -jetSpeed * 0.35 * intensity, 6);
-      this.fluidDynamics.setDye(backX, yDown, 0, 8, 8, [0.03 * intensity, 0.18 * intensity, 0.35 * intensity]);
+      // 上侧轨迹（带上下摆动）
+      const yUp = BULLET_Y - spread + waveOffset;
+      const vYUp = Math.cos(dist * 0.15) * 12;
+      this.fluidDynamics.setVelocity(backX, yUp, 0, 2, 2, -jetSpeed * 0.35 * intensity, vYUp);
+      this.fluidDynamics.setDye(backX, yUp, 0, 3, 3, [0.03 * intensity, 0.18 * intensity, 0.35 * intensity]);
+      
+      // 下侧轨迹（带上下摆动，与上侧相反）
+      const yDown = BULLET_Y + spread - waveOffset;
+      const vYDown = -Math.cos(dist * 0.15) * 12;
+      this.fluidDynamics.setVelocity(backX, yDown, 0, 2, 2, -jetSpeed * 0.35 * intensity, vYDown);
+      this.fluidDynamics.setDye(backX, yDown, 0, 3, 3, [0.03 * intensity, 0.18 * intensity, 0.35 * intensity]);
     }
 
     // 4. 仅保留尾部的分离力（不注入额外染料）
