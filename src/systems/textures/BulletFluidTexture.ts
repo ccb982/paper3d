@@ -8,26 +8,35 @@ export class BulletFluidTexture implements ITextureGenerator {
   private fluidDynamics: FluidDynamics;
   private texture: THREE.CanvasTexture;
   private lastTimestamp: number = 0;
+  private time: number = 0;
 
-  private readonly BULLET_X = 420;
-  private readonly BULLET_Y = 256;
-  private readonly TRAIL_LENGTH = 180;
+  private readonly BULLET_X: number;
+  private readonly BULLET_Y: number;
+  
+  private readonly a: number = 30;
+  private readonly b: number = 18;
+  
+  private readonly nozzleDist: number = 15;
+  private readonly jetSpeed: number = 200;
 
   constructor() {
     this.canvas = document.createElement('canvas');
-    this.canvas.width = 512;
+    this.canvas.width = 768;
     this.canvas.height = 512;
     this.canvas.style.display = 'none';
     document.body.appendChild(this.canvas);
 
+    this.BULLET_X = this.canvas.width - 80;
+    this.BULLET_Y = this.canvas.height / 2;
+
     this.fluidDynamics = new FluidDynamics(this.canvas, {
-      width: 512,
+      width: 768,
       height: 512,
       simScale: 1.0,
-      dyeScale: 1.2,
-      curl: 12,
-      velocityDissipation: 0.05,
-      dyeDissipation: 0.08,
+      dyeScale: 1.0,
+      curl: 2,                // 降低涡旋，防止卷吸
+      velocityDissipation: 0.12,
+      dyeDissipation: 0.15,
       pressureIterations: 20
     });
 
@@ -40,97 +49,67 @@ export class BulletFluidTexture implements ITextureGenerator {
     return this.texture;
   }
 
-  private injectFluid(): void {
-    const x = this.BULLET_X;
-    const y = this.BULLET_Y;
+  private injectFluid(deltaTime: number): void {
+    const { BULLET_X, BULLET_Y, a, b, nozzleDist, jetSpeed } = this;
 
-    // 全局背景向后推力（模拟子弹高速运动时尾气被甩向后方）
-    for (let bx = 0; bx < 512; bx += 40) {
-      for (let by = 0; by < 512; by += 40) {
-        this.fluidDynamics.setVelocity(bx, by, 0, 35, 35, -30, 0);
-      }
-    }
+    this.time += deltaTime * 2;
 
-    // 弹头高压区（白色椭圆形）
-    this.fluidDynamics.setVelocity(x, y, 0, 35, 25, 0, 0);
-    this.fluidDynamics.setDye(x, y, 0, 30, 20, [1, 1, 0.95]);
+    // 1. 弹头高压区（不变）
+    this.fluidDynamics.setVelocity(BULLET_X, BULLET_Y, 0, a, b, 0, 0);
+    this.fluidDynamics.setDye(BULLET_X, BULLET_Y, 0, a * 0.85, b * 0.75, [1.0, 0.95, 0.85]);
 
-    // 前方弧形阻挡罩（阻止尾气向前扩散）
-    for (let angle = -Math.PI * 0.5; angle <= Math.PI * 0.5; angle += Math.PI * 0.1) {
-      const radius = 25;
-      const shieldX = x + Math.cos(angle) * radius;
-      const shieldY = y + Math.sin(angle) * radius;
-      if (shieldX < 512 && shieldX > 0 && shieldY < 512 && shieldY > 0) {
-        const pushX = -Math.cos(angle) * 100;
-        const pushY = -Math.sin(angle) * 80;
-        this.fluidDynamics.setVelocity(shieldX, shieldY, 0, 22, 22, pushX, pushY);
-      }
-    }
+    // 2. 单一强力喷射口（仅正后方）
+    const nozzleX = BULLET_X - nozzleDist;
+    const pulse = 0.8 + Math.sin(this.time * 3) * 0.2;
+    
+    // 核心喷射点 - 严格向后喷射
+    this.fluidDynamics.setVelocity(nozzleX, BULLET_Y, 0, 10, 8, -jetSpeed * pulse, 0);
+    this.fluidDynamics.setDye(nozzleX, BULLET_Y, 0, 12, 10, [0.15, 0.65, 1.0]);
 
-    // 后方大范围引导罩（把尾气限制在锥形区域内并向后引导）
-    for (let angle = Math.PI * 0.5; angle <= Math.PI * 1.5; angle += Math.PI * 0.06) {
-      const radius = 80;
-      const guideX = x + Math.cos(angle) * radius;
-      const guideY = y + Math.sin(angle) * radius;
-      if (guideX < 512 && guideX > 0 && guideY < 512 && guideY > 0) {
-        const pushX = -60;
-        const pushY = -Math.sin(angle) * 40;
-        this.fluidDynamics.setVelocity(guideX, guideY, 0, 25, 25, pushX, pushY);
-      }
-    }
-
-    // 尾气核心（从弹头后方喷出，向左延伸，更强的向后速度）
-    const step = 12;
-    for (let dist = 20; dist <= this.TRAIL_LENGTH; dist += step) {
-      const backX = x - dist;
+    // 3. 后方连续尾迹（仅注入染料，不施加速度，让流场自然带动）
+    const trailLength = 160;
+    for (let dist = 25; dist <= trailLength; dist += 12) {
+      const backX = BULLET_X - dist;
       if (backX < 0) continue;
-      const width = 6 + dist * 0.12;
-      const intensity = 1 - (dist / this.TRAIL_LENGTH) * 0.5;
-
-      this.fluidDynamics.setVelocity(backX, y, 0, width, width * 0.5,
-        -150 * intensity, (Math.random() - 0.5) * 10);
-      this.fluidDynamics.setDye(backX, y, 0, width * 0.7, width * 0.4,
-        [0.2, 0.4, 1.0]);
+      
+      const intensity = 1 - dist / trailLength;
+      const width = 6 + dist * 0.08;
+      
+      this.fluidDynamics.setDye(backX, BULLET_Y, 0, width * 0.8, width * 0.5, 
+        [0.12, 0.5 + intensity * 0.25, 0.92]);
     }
 
-    // 卡门涡街（尾气两侧的交替涡旋）
-    const vortexOffset = 15;
-    const vortexStrength = 200;
-    const alternating = Math.sin(performance.now() * 0.0015) > 0 ? 1 : -1;
-
-    const v1X = x - 40;
-    if (v1X > 0) {
-      this.fluidDynamics.setVelocity(v1X, y + vortexOffset, 0, 18, 18,
-        -vortexStrength * alternating, -20);
-      this.fluidDynamics.setDye(v1X, y + vortexOffset, 0, 14, 14, [1.0, 0.2, 0.6]);
-
-      this.fluidDynamics.setVelocity(v1X, y - vortexOffset, 0, 18, 18,
-        -vortexStrength * alternating, 20);
-      this.fluidDynamics.setDye(v1X, y - vortexOffset, 0, 14, 14, [0.1, 0.8, 0.9]);
+    // 4. 侧视卡门涡街（仅染料位置上下偏移 + 微小的垂直速度）
+    const waveAmp = 4;   // 振幅很小，不破坏主流向
+    const waveFreq = 2.0;
+    
+    for (let dist = 40; dist <= 130; dist += 20) {
+      const backX = BULLET_X - dist;
+      if (backX < 0) continue;
+      
+      const phase = this.time * waveFreq + dist * 0.12;
+      const offsetY = Math.sin(phase) * waveAmp;
+      
+      // 上侧波动（青色）
+      const yUp = BULLET_Y - 12 + offsetY;
+      this.fluidDynamics.setDye(backX, yUp, 0, 7, 5, [0.2, 0.85, 0.92]);
+      this.fluidDynamics.setVelocity(backX, yUp, 0, 4, 4, -35, Math.sin(phase) * 10);
+      
+      // 下侧反向波动（粉色）
+      const yDown = BULLET_Y + 12 - offsetY;
+      this.fluidDynamics.setDye(backX, yDown, 0, 7, 5, [1.0, 0.28, 0.68]);
+      this.fluidDynamics.setVelocity(backX, yDown, 0, 4, 4, -35, -Math.sin(phase) * 10);
     }
 
-    const v2X = x - 80;
-    if (v2X > 0) {
-      const alternating2 = Math.sin(performance.now() * 0.0015 + Math.PI) > 0 ? 1 : -1;
-      this.fluidDynamics.setVelocity(v2X, y + vortexOffset * 1.3, 0, 16, 16,
-        -vortexStrength * 0.7 * alternating2, -15);
-      this.fluidDynamics.setDye(v2X, y + vortexOffset * 1.3, 0, 12, 12, [0.9, 0.3, 1.0]);
-
-      this.fluidDynamics.setVelocity(v2X, y - vortexOffset * 1.3, 0, 16, 16,
-        -vortexStrength * 0.7 * alternating2, 15);
-      this.fluidDynamics.setDye(v2X, y - vortexOffset * 1.3, 0, 12, 12, [0.1, 0.9, 0.7]);
-    }
-
-    const v3X = x - 120;
-    if (v3X > 0) {
-      const alternating3 = Math.sin(performance.now() * 0.0015 + Math.PI * 0.5) > 0 ? 1 : -1;
-      this.fluidDynamics.setVelocity(v3X, y + vortexOffset * 1.6, 0, 14, 14,
-        -vortexStrength * 0.5 * alternating3, -10);
-      this.fluidDynamics.setDye(v3X, y + vortexOffset * 1.6, 0, 10, 10, [0.7, 0.2, 0.9]);
-
-      this.fluidDynamics.setVelocity(v3X, y - vortexOffset * 1.6, 0, 14, 14,
-        -vortexStrength * 0.5 * alternating3, 10);
-      this.fluidDynamics.setDye(v3X, y - vortexOffset * 1.6, 0, 10, 10, [0.2, 0.7, 0.8]);
+    // 5. 极少量湍流（仅2个点，向后方向为主）
+    for (let i = 0; i < 2; i++) {
+      const dist = 50 + Math.random() * 80;
+      const backX = BULLET_X - dist;
+      if (backX < 0) continue;
+      
+      const backY = BULLET_Y + (Math.random() - 0.5) * 20;
+      this.fluidDynamics.setVelocity(backX, backY, 0, 5, 5,
+        -40 - Math.random() * 20, (Math.random() - 0.5) * 8);
     }
   }
 
@@ -141,7 +120,7 @@ export class BulletFluidTexture implements ITextureGenerator {
     const delta = Math.min(0.033, (now - this.lastTimestamp) / 1000);
     this.lastTimestamp = now;
 
-    this.injectFluid();
+    this.injectFluid(delta);
     this.texture.needsUpdate = true;
   };
 
@@ -150,6 +129,9 @@ export class BulletFluidTexture implements ITextureGenerator {
 
   dispose(): void {
     this.texture.dispose();
+    if (this.fluidDynamics) {
+      this.fluidDynamics.dispose?.();
+    }
     if (this.canvas && this.canvas.parentNode) {
       this.canvas.parentNode.removeChild(this.canvas);
     }
