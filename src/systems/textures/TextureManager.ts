@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BulletFluidTexture } from './BulletFluidTexture';
 import { TriangleFluidTexture } from './TriangleFluidTexture';
+import { VerticalTriangleTexture } from './VerticalTriangleTexture';
 
 export interface ITextureGenerator {
   type: 'canvas' | 'shader';
@@ -40,6 +41,9 @@ export class TextureManager {
     
     // 注册三角形流体纹理
     this.register('triangleFluid', new TriangleFluidTexture());
+    
+    // 注册竖直三角形水滴纹理
+    this.register('verticalTriangle', new VerticalTriangleTexture());
     
     this.isInitialized = true;
   }

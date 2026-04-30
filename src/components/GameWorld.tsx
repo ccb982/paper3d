@@ -614,15 +614,34 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     EffectManager.getInstance().playBulletFluidEffect(fluidPosition, 60, 8); // 60秒持续时间，8单位大小
     console.log('Bullet fluid effect created at:', fluidPosition);
 
+    // 创建测试纹理
+    const textureManager = TextureManager.getInstance();
+    const testTexture = new TestBulletTrailTexture();
+    textureManager.register('test-bullet-trail', testTexture);
+
     // 在地面上创建一个三角形流体特效
     const trianglePosition = new THREE.Vector3(0, 8, 0); // 抬高到空中
     EffectManager.getInstance().playTriangleFluidEffect(trianglePosition, 60, 12); // 60秒持续时间，12单位大小
     console.log('Triangle fluid effect created at:', trianglePosition);
 
-    // 创建测试纹理
-    const textureManager = TextureManager.getInstance();
-    const testTexture = new TestBulletTrailTexture();
-    textureManager.register('test-bullet-trail', testTexture);
+    // 创建竖直三角形水滴纹理（模拟水滴撞击三角形固体）
+    const verticalTriangleTexture = textureManager.getTexture('verticalTriangle');
+    if (verticalTriangleTexture) {
+      const verticalGeometry = new THREE.PlaneGeometry(6, 12);
+      const verticalMaterial = new THREE.MeshBasicMaterial({
+        map: verticalTriangleTexture,
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide
+      });
+      const verticalPlane = new THREE.Mesh(verticalGeometry, verticalMaterial);
+      verticalPlane.position.set(8, 5, 0);
+      verticalPlane.rotation.x = -Math.PI / 2;
+      if (sceneRef.current) {
+        sceneRef.current.add(verticalPlane);
+      }
+      console.log('Vertical triangle texture created at (8, 5, 0)');
+    }
     
     // 在出生点附近创建一个平面来显示测试纹理
     const testPlaneGeometry = new THREE.PlaneGeometry(2, 2);

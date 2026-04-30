@@ -9,6 +9,7 @@ import { FluidEffect } from '../effects/FluidEffect';
 import { BulletFluidEffect } from '../effects/BulletFluidEffect';
 import { GroundCanvasEffect } from '../effects/GroundCanvasEffect';
 import { TriangleFluidEffect } from '../effects/TriangleFluidEffect';
+import { VerticalTriangleEffect } from '../effects/VerticalTriangleEffect';
 import * as THREE from 'three';
 
 /**
@@ -96,6 +97,13 @@ export class EffectManager {
    */
   public playTriangleFluidEffect(position: THREE.Vector3, duration: number = 30.0, size: number = 10.0): void {
     this.activeEffects.push(new TriangleFluidEffect(position, duration, size));
+  }
+
+  /**
+   * 播放竖直三角形水滴特效（水滴撞击三角形固体）
+   */
+  public playVerticalTriangleEffect(position: THREE.Vector3, duration: number = 30.0, size: number = 10.0): void {
+    this.activeEffects.push(new VerticalTriangleEffect(position, duration, size));
   }
 
   /**

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { FluidDynamics } from '@bienehito/fluid-dynamics';
 
-export class BulletFluidTexture implements ITextureGenerator {
+export class BulletFluidTexture {
   type: 'canvas' | 'shader' = 'canvas';
 
   private canvas: HTMLCanvasElement;
