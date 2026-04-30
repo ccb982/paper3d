@@ -10,8 +10,8 @@ export class TriangleFluidTexture {
   private lastTimestamp: number = 0;
   private time: number = 0;
 
-  private readonly triangleSize: number = 40;
-  private readonly jetSpeed: number = 180;
+  private readonly triangleSize: number = 2;
+  private readonly jetSpeed: number = 280;
 
   constructor() {
     this.canvas = document.createElement('canvas');
@@ -68,38 +68,32 @@ export class TriangleFluidTexture {
     const cx = this.canvas.width * 0.55;
     const cy = this.canvas.height / 2;
     const size = this.triangleSize;
+    const injectionRadius = 14;
 
     const pulse = 0.8 + Math.sin(this.time * 3) * 0.2;
     const puffPhase = Math.floor(this.time * 4) % 4;
 
-    const frontX = cx + size * 0.5;
-    const frontY = cy;
+    const tipX = cx + size * 0.8;
+    const tipY = cy;
 
-    const injectionRadius = size * 0.35;
+    const baseX = cx - size;
 
-    const constantX = frontX + 15;
-    this.fluidDynamics.setDye(constantX, frontY, 0, injectionRadius * 1.2, injectionRadius * 0.9, [0.2, 0.5, 0.9]);
-    this.fluidDynamics.setVelocity(constantX, frontY, 0, injectionRadius * 0.6, injectionRadius * 0.4, -this.jetSpeed * 0.3, 0);
+    const constantX = tipX + 10;
+    this.fluidDynamics.setDye(constantX, tipY, 0, injectionRadius * 1.2, injectionRadius * 0.9, [0.2, 0.5, 0.9]);
+    this.fluidDynamics.setVelocity(constantX, tipY, 0, injectionRadius * 0.6, injectionRadius * 0.4, -this.jetSpeed * 0.3, 0);
 
     if (puffPhase === 0) {
-      this.fluidDynamics.setDye(frontX, frontY, 0, injectionRadius * 1.5, injectionRadius * 1.2, [0.2, 0.5, 0.9]);
-      this.fluidDynamics.setVelocity(frontX, frontY, 0, injectionRadius * 1.2, injectionRadius * 0.9, -this.jetSpeed * pulse, 0);
-
-      const trailLength = 280;
-      for (let dist = 20; dist <= trailLength; dist += 25) {
-        const backX = cx - dist;
-        if (backX < 0) continue;
-
-        const intensity = 1 - dist / trailLength;
-        const width = 15 + dist * 0.15;
-
-        this.fluidDynamics.setDye(backX, frontY, 0, width * 0.9, width * 0.6, [0.15 * intensity, 0.4 * intensity, 0.8 * intensity]);
-        this.fluidDynamics.setVelocity(backX, frontY, 0, width * 0.7, width * 0.5, -this.jetSpeed * 0.5 * intensity, 0);
-      }
+      this.fluidDynamics.setDye(tipX, tipY, 0, injectionRadius * 1.5, injectionRadius * 1.2, [0.2, 0.5, 0.9]);
+      this.fluidDynamics.setVelocity(tipX, tipY, 0, injectionRadius * 1.2, injectionRadius * 0.9, -this.jetSpeed * pulse, 0);
     }
 
-    for (let x = cx - size; x >= 0; x -= 18) {
-      this.fluidDynamics.setVelocity(x, cy, 0, 12, 25, -60, 0);
+    const tallHeight = size * 25;
+    const actualTipX = baseX + tallHeight;
+
+    for (let x = baseX; x <= actualTipX; x += 2) {
+      const t = (x - baseX) / tallHeight;
+      const halfHeight = size * 0.15 * (1 - t);
+      this.fluidDynamics.setVelocity(x, cy, 0, 3, halfHeight * 2 + 1, 0, 0);
     }
 
     const ctx = this.canvas.getContext('2d');
@@ -108,9 +102,9 @@ export class TriangleFluidTexture {
 
       ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
       ctx.beginPath();
-      ctx.moveTo(cx - size, cy - size * 0.2);
-      ctx.lineTo(cx - size, cy + size * 0.2);
-      ctx.lineTo(cx + size * 0.8, cy);
+      ctx.moveTo(baseX, cy - size * 0.15);
+      ctx.lineTo(baseX, cy + size * 0.15);
+      ctx.lineTo(actualTipX, cy);
       ctx.closePath();
       ctx.fill();
 
