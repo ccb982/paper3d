@@ -614,6 +614,11 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     EffectManager.getInstance().playBulletFluidEffect(fluidPosition, 60, 8); // 60秒持续时间，8单位大小
     console.log('Bullet fluid effect created at:', fluidPosition);
 
+    // 在地面上创建一个三角形流体特效
+    const trianglePosition = new THREE.Vector3(0, 8, 0); // 抬高到空中
+    EffectManager.getInstance().playTriangleFluidEffect(trianglePosition, 60, 12); // 60秒持续时间，12单位大小
+    console.log('Triangle fluid effect created at:', trianglePosition);
+
     // 创建测试纹理
     const textureManager = TextureManager.getInstance();
     const testTexture = new TestBulletTrailTexture();

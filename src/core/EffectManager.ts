@@ -7,6 +7,8 @@ import { DawnBurstEffect } from '../effects/DawnBurstEffect';
 import { ParticleFireEffect } from '../effects/ParticleFireEffect';
 import { FluidEffect } from '../effects/FluidEffect';
 import { BulletFluidEffect } from '../effects/BulletFluidEffect';
+import { GroundCanvasEffect } from '../effects/GroundCanvasEffect';
+import { TriangleFluidEffect } from '../effects/TriangleFluidEffect';
 import * as THREE from 'three';
 
 /**
@@ -80,6 +82,20 @@ export class EffectManager {
    */
   public playBulletFluidEffect(position: THREE.Vector3, duration: number = 30.0, size: number = 8.0): void {
     this.activeEffects.push(new BulletFluidEffect(position, duration, size));
+  }
+
+  /**
+   * 在地面上创建画布特效（平躺在地面上）
+   */
+  public playGroundCanvasEffect(position: THREE.Vector3, duration: number = 30.0, width: number = 20.0, height: number = 20.0): void {
+    this.activeEffects.push(new GroundCanvasEffect(position, duration, width, height));
+  }
+
+  /**
+   * 播放三角形流体特效
+   */
+  public playTriangleFluidEffect(position: THREE.Vector3, duration: number = 30.0, size: number = 10.0): void {
+    this.activeEffects.push(new TriangleFluidEffect(position, duration, size));
   }
 
   /**
