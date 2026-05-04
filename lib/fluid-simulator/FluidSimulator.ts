@@ -743,6 +743,8 @@ export class FluidSimulator {
         });
         this.gpuCompute.compute(this.velCorrectVar);
 
+        this.velPrevVar.texture = this.velCorrectVar.texture;
+
         setUniforms(this.phiPrevVar, {
             velocity: this.velCorrectVar.texture,
             forcedVel: this.forcedVelVar.texture,
