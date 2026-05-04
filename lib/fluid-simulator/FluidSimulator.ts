@@ -38,6 +38,12 @@ export class FluidSimulator {
     private solidNormalTexture: THREE.Texture | null = null;
     private velClearedTarget: THREE.WebGLRenderTarget | null = null;
     private phiClearedTarget: THREE.WebGLRenderTarget | null = null;
+    
+    private clearScene: THREE.Scene;
+    private clearCamera: THREE.OrthographicCamera;
+    private clearGeometry: THREE.PlaneGeometry;
+    private clearMaterial: THREE.ShaderMaterial;
+    private clearMesh: THREE.Mesh;
 
     private params: FluidParams;
     private renderer: THREE.WebGLRenderer;
@@ -52,6 +58,28 @@ export class FluidSimulator {
         if (params.initialLevelSet) {
             this.customLevelSetTexture = params.initialLevelSet;
         }
+        
+        this.clearCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        this.clearGeometry = new THREE.PlaneGeometry(2, 2);
+        this.clearMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                velInput: { value: null },
+                phiInput: { value: null },
+                solidMask: { value: null }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: FluidSimulator.solidBoundaryClearShader()
+        });
+        this.clearMesh = new THREE.Mesh(this.clearGeometry, this.clearMaterial);
+        this.clearScene = new THREE.Scene();
+        this.clearScene.add(this.clearMesh);
+        
         this.initGPUCompute();
     }
 
@@ -307,39 +335,17 @@ export class FluidSimulator {
             });
         }
 
-        const scene = new THREE.Scene();
-        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-        const geometry = new THREE.PlaneGeometry(2, 2);
-
-        const material = new THREE.ShaderMaterial({
-            uniforms: {
-                velInput: { value: velTexture },
-                phiInput: { value: phiTexture },
-                solidMask: { value: this.solidMaskTexture }
-            },
-            vertexShader: `
-                varying vec2 vUv;
-                void main() {
-                    vUv = uv;
-                    gl_Position = vec4(position, 1.0);
-                }
-            `,
-            fragmentShader: FluidSimulator.solidBoundaryClearShader()
-        });
-
-        const mesh = new THREE.Mesh(geometry, material);
-        scene.add(mesh);
+        this.clearMaterial.uniforms.velInput.value = velTexture;
+        this.clearMaterial.uniforms.phiInput.value = phiTexture;
+        this.clearMaterial.uniforms.solidMask.value = this.solidMaskTexture;
 
         const originalTarget = this.renderer.getRenderTarget();
 
         this.renderer.setRenderTarget(this.velClearedTarget);
-        this.renderer.render(scene, camera);
+        this.renderer.render(this.clearScene, this.clearCamera);
         this.renderer.setRenderTarget(this.phiClearedTarget);
-        this.renderer.render(scene, camera);
+        this.renderer.render(this.clearScene, this.clearCamera);
         this.renderer.setRenderTarget(originalTarget);
-
-        material.dispose();
-        geometry.dispose();
 
         return { velCleared: this.velClearedTarget.texture, phiCleared: this.phiClearedTarget.texture };
     }
@@ -704,26 +710,32 @@ export class FluidSimulator {
         });
         this.gpuCompute.compute(this.divergenceVar);
 
+        let pressureSrc = this.pressureVarA;
+        let pressureDst = this.pressureVarB;
+
+        setUniforms(pressureSrc, {
+            pressure: pressureSrc.texture,
+            divergence: this.divergenceVar.texture,
+            dt, resolution, density: this.params.density
+        });
+
         for (let i = 0; i < this.params.pressureIterations; i++) {
-            if (i % 2 === 0) {
-                setUniforms(this.pressureVarA, {
-                    velocity: this.velAfterCollisionVar.texture,
-                    divergence: this.divergenceVar.texture,
-                    dt, resolution, density: this.params.density
-                });
-                this.gpuCompute.compute(this.pressureVarA);
-            } else {
-                setUniforms(this.pressureVarB, {
-                    velocity: this.velAfterCollisionVar.texture,
-                    divergence: this.divergenceVar.texture,
-                    dt, resolution, density: this.params.density
-                });
-                this.gpuCompute.compute(this.pressureVarB);
-            }
-            this.swapPressure();
+            setUniforms(pressureDst, {
+                pressure: pressureSrc.texture,
+                divergence: this.divergenceVar.texture,
+                dt, resolution, density: this.params.density
+            });
+            this.gpuCompute.compute(pressureDst);
+
+            const temp = pressureSrc;
+            pressureSrc = pressureDst;
+            pressureDst = temp;
         }
 
-        const pressureTexture = this.params.pressureIterations % 2 === 0 ? this.pressureVarB.texture : this.pressureVarA.texture;
+        this.pressureVarA = pressureSrc;
+        this.pressureVarB = pressureDst;
+
+        const pressureTexture = pressureSrc.texture;
         setUniforms(this.velCorrectVar, {
             velocity: this.velAfterCollisionVar.texture,
             pressure: pressureTexture,
@@ -775,6 +787,9 @@ export class FluidSimulator {
         if (this.velClearedTarget) this.velClearedTarget.dispose();
         if (this.phiClearedTarget) this.phiClearedTarget.dispose();
         if (this.gpuCompute) this.gpuCompute.dispose();
+        
+        if (this.clearMaterial) this.clearMaterial.dispose();
+        if (this.clearGeometry) this.clearGeometry.dispose();
     }
 
     public static waterVertexShader(): string {
