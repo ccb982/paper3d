@@ -228,11 +228,19 @@ export class FluidSimulator {
             fragmentShader: `uniform sampler2D velocity; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float vxR = texture2D(velocity, uv + dx).r; float vxL = texture2D(velocity, uv - dx).r; float vyT = texture2D(velocity, uv + dy).g; float vyB = texture2D(velocity, uv - dy).g; float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y); gl_FragColor = vec4(div, 0.0, 0.0, 1.0); }`
         });
 
-        // 压力迭代（只需要一个材质反复使用）
+        // 压力迭代（只需要一个材质反复使用）- 添加自由表面和固体边界条件
         this.pressureJacobiMat = new THREE.ShaderMaterial({
-            uniforms: { pressure: { value: null }, divergence: { value: null }, dt: { value: dt }, density: { value: this.params.density }, resolution: { value: res } },
+            uniforms: { 
+                pressure: { value: null }, 
+                divergence: { value: null }, 
+                levelset: { value: null },
+                solidMask: { value: null },
+                dt: { value: dt }, 
+                density: { value: this.params.density }, 
+                resolution: { value: res } 
+            },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D pressure; uniform sampler2D divergence; uniform float dt; uniform float density; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float pL = texture2D(pressure, uv - dx).r; float pR = texture2D(pressure, uv + dx).r; float pD = texture2D(pressure, uv - dy).r; float pU = texture2D(pressure, uv + dy).r; float div = texture2D(divergence, uv).r; float h = 1.0 / resolution.x; float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0; gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0); }`
+            fragmentShader: `uniform sampler2D pressure; uniform sampler2D divergence; uniform sampler2D levelset; uniform sampler2D solidMask; uniform float dt; uniform float density; uniform vec2 resolution; varying vec2 vUv; void main() { float phi = texture2D(levelset, vUv).r; float isSolid = texture2D(solidMask, vUv).r; if (phi > 0.0 || isSolid > 0.5) { gl_FragColor = vec4(0.0); return; } vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float pL = texture2D(pressure, uv - dx).r; float pR = texture2D(pressure, uv + dx).r; float pD = texture2D(pressure, uv - dy).r; float pU = texture2D(pressure, uv + dy).r; float div = texture2D(divergence, uv).r; float h = 1.0 / resolution.x; float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0; gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0); }`
         });
 
         // 速度修正
@@ -332,6 +340,8 @@ export class FluidSimulator {
         for (let i = 0; i < this.params.pressureIterations; i++) {
             this.pressureJacobiMat.uniforms.pressure.value = pressureSrc.texture;
             this.pressureJacobiMat.uniforms.divergence.value = this.divergenceTex.texture;
+            this.pressureJacobiMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.pressureJacobiMat.uniforms.solidMask.value = this.solidMaskTex ?? this.divergenceTex.texture;
             this.renderFullscreen(this.pressureJacobiMat, pressureDst);
             [pressureSrc, pressureDst] = [pressureDst, pressureSrc];
         }
