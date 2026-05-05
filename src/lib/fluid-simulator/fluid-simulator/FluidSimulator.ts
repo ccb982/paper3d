@@ -244,7 +244,77 @@ export class FluidSimulator {
                 injectionSize: { value: this.params.injectionSize ?? 0.05 }
             },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D velocity; uniform sampler2D levelset; uniform float gravity; uniform float sigma; uniform float density; uniform float viscosity; uniform vec2 resolution; uniform float dt; uniform bool injectionEnabled; uniform vec2 injectionPos; uniform float injectionFlowRate; uniform vec2 injectionVel; uniform float injectionSize; varying vec2 vUv; void main() { vec2 uv = vUv; float phi = texture2D(levelset, uv).r; vec2 vel = texture2D(velocity, uv).rg; vel.y += gravity * dt; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); vec2 vel_r = texture2D(velocity, uv + dx).rg; vec2 vel_l = texture2D(velocity, uv - dx).rg; vec2 vel_t = texture2D(velocity, uv + dy).rg; vec2 vel_b = texture2D(velocity, uv - dy).rg; vec2 laplacian = (vel_r + vel_l + vel_t + vel_b - 4.0*vel) * (resolution.x * resolution.x); float nu = viscosity / density; vel += nu * dt * laplacian; float eps = 1.5 / resolution.x; if (abs(phi) < eps) { float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float len = length(grad); if (len > 1e-6) { vec2 n = grad / len; float phi_xx = phi_r + phi_l - 2.0*phi; float phi_yy = phi_t + phi_b - 2.0*phi; float phi_xy = (texture2D(levelset, uv + dx + dy).r - texture2D(levelset, uv + dx - dy).r - texture2D(levelset, uv - dx + dy).r + texture2D(levelset, uv - dx - dy).r) / (4.0 * dx.x * dx.x); float kappa = (phi_xx * n.y * n.y - 2.0 * phi_xy * n.x * n.y + phi_yy * n.x * n.x) / len; float delta = 0.0; if (abs(phi) < eps) delta = (1.0 + cos(3.1415926 * phi / eps)) / (2.0 * eps); vec2 f_st = sigma * kappa * delta * n; vel += (f_st / density) * dt; } } if (injectionEnabled) { float dist = length(uv - injectionPos); if (dist < injectionSize) { float mask = 1.0 - smoothstep(0.0, injectionSize, dist); phi = phi - injectionFlowRate * dt * mask; phi = clamp(phi, -0.5, 0.5); vel += injectionVel * mask; } } // 全局速度限制 - 应用于所有流体区域 float maxVel = 30.0; float velLen = length(vel); if (velLen > maxVel) vel = vel / velLen * maxVel; gl_FragColor = vec4(vel, phi, 1.0); }`
+            fragmentShader: `
+                uniform sampler2D velocity; 
+                uniform sampler2D levelset; 
+                uniform float gravity; 
+                uniform float sigma; 
+                uniform float density; 
+                uniform float viscosity; 
+                uniform vec2 resolution; 
+                uniform float dt; 
+                uniform bool injectionEnabled; 
+                uniform vec2 injectionPos; 
+                uniform float injectionFlowRate; 
+                uniform vec2 injectionVel; 
+                uniform float injectionSize; 
+                varying vec2 vUv; 
+
+                void main() { 
+                    vec2 uv = vUv; 
+                    float phi = texture2D(levelset, uv).r; 
+                    vec2 vel = texture2D(velocity, uv).rg; 
+                    vel.y += gravity * dt; 
+
+                    vec2 dx = vec2(1.0/resolution.x, 0.0); 
+                    vec2 dy = vec2(0.0, 1.0/resolution.y); 
+                    vec2 vel_r = texture2D(velocity, uv + dx).rg; 
+                    vec2 vel_l = texture2D(velocity, uv - dx).rg; 
+                    vec2 vel_t = texture2D(velocity, uv + dy).rg; 
+                    vec2 vel_b = texture2D(velocity, uv - dy).rg; 
+                    vec2 laplacian = (vel_r + vel_l + vel_t + vel_b - 4.0*vel) * (resolution.x * resolution.x); 
+                    float nu = viscosity / density; 
+                    vel += nu * dt * laplacian; 
+
+                    float eps = 1.5 / resolution.x; 
+                    if (abs(phi) < eps) { 
+                        float phi_r = texture2D(levelset, uv + dx).r; 
+                        float phi_l = texture2D(levelset, uv - dx).r; 
+                        float phi_t = texture2D(levelset, uv + dy).r; 
+                        float phi_b = texture2D(levelset, uv - dy).r; 
+                        vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); 
+                        float len = length(grad); 
+                        if (len > 1e-6) { 
+                            vec2 n = grad / len; 
+                            float phi_xx = phi_r + phi_l - 2.0*phi; 
+                            float phi_yy = phi_t + phi_b - 2.0*phi; 
+                            float phi_xy = (texture2D(levelset, uv + dx + dy).r - texture2D(levelset, uv + dx - dy).r - texture2D(levelset, uv - dx + dy).r + texture2D(levelset, uv - dx - dy).r) / (4.0 * dx.x * dx.x); 
+                            float kappa = (phi_xx * n.y * n.y - 2.0 * phi_xy * n.x * n.y + phi_yy * n.x * n.x) / len; 
+                            float delta = 0.0; 
+                            if (abs(phi) < eps) delta = (1.0 + cos(3.1415926 * phi / eps)) / (2.0 * eps); 
+                            vec2 f_st = sigma * kappa * delta * n; 
+                            vel += (f_st / density) * dt; 
+                        } 
+                    } 
+
+                    if (injectionEnabled) { 
+                        float dist = length(uv - injectionPos); 
+                        if (dist < injectionSize) { 
+                            float mask = 1.0 - smoothstep(0.0, injectionSize, dist); 
+                            phi = phi - injectionFlowRate * dt * mask; 
+                            phi = clamp(phi, -0.5, 0.5); 
+                            vel += injectionVel * mask; 
+                        } 
+                    } 
+
+                    // 全局速度限制 - 应用于所有流体区域 
+                    float maxVel = 30.0; 
+                    float velLen = length(vel); 
+                    if (velLen > maxVel) vel = vel / velLen * maxVel; 
+
+                    gl_FragColor = vec4(vel, phi, 1.0); 
+                }
+            `
         });
 
         // 墙碰撞
