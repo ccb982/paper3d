@@ -58,6 +58,17 @@ export class FluidSimulator {
     private curPhiTex!: THREE.WebGLRenderTarget;
     private curPressureTex!: THREE.WebGLRenderTarget;
 
+    // 缓存的着色器材质（复用）
+    private velocityAdvectionMat!: THREE.ShaderMaterial;
+    private externalForcesMat!: THREE.ShaderMaterial;
+    private wallCollisionMat!: THREE.ShaderMaterial;
+    private divergenceMat!: THREE.ShaderMaterial;
+    private pressureJacobiMat!: THREE.ShaderMaterial;  // 压力迭代只需要一个材质
+    private velocityCorrectMat!: THREE.ShaderMaterial;
+    private levelSetAdvectionMat!: THREE.ShaderMaterial;
+    private levelSetReinitMat!: THREE.ShaderMaterial;
+    private solidBoundaryClearMat!: THREE.ShaderMaterial;
+
     private initialized = false;
 
     constructor(renderer: THREE.WebGLRenderer, params: FluidParams) {
@@ -75,6 +86,7 @@ export class FluidSimulator {
 
         this.createTextures();
         this.initTextures();
+        this.initShaders();
         this.initialized = true;
     }
 
@@ -172,127 +184,87 @@ export class FluidSimulator {
         });
     }
 
-    // ==================== 物理步骤的着色器 ====================
-    private velocityAdvectionShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                velocity: { value: null }, 
-                dt: { value: this.params.timeStep }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    // ==================== 缓存着色器初始化 ====================
+    private initShaders(): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const res = new THREE.Vector2(this.width, this.height);
+        const dt = this.params.timeStep;
+
+        // 速度平流
+        this.velocityAdvectionMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, dt: { value: dt }, resolution: { value: res } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D velocity; uniform float dt; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = uv - step; vec2 newVel = texture2D(velocity, back).rg; gl_FragColor = vec4(newVel, 0.0, 1.0); }`
         });
-    }
 
-    private externalForcesShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
+        // 外力计算
+        this.externalForcesMat = new THREE.ShaderMaterial({
             uniforms: {
-                velocity: { value: null },
-                levelset: { value: null },
-                gravity: { value: this.params.gravity },
-                sigma: { value: this.params.surfaceTension },
-                density: { value: this.params.density },
-                viscosity: { value: this.params.viscosity },
-                resolution: { value: new THREE.Vector2(this.width, this.height) },
-                dt: { value: this.params.timeStep },
+                velocity: { value: null }, levelset: { value: null },
+                gravity: { value: this.params.gravity }, sigma: { value: this.params.surfaceTension },
+                density: { value: this.params.density }, viscosity: { value: this.params.viscosity },
+                resolution: { value: res }, dt: { value: dt },
                 injectionEnabled: { value: this.params.injectionEnabled ?? false },
                 injectionPos: { value: new THREE.Vector2(this.params.injectionPosX ?? 0.5, this.params.injectionPosY ?? 0.5) },
                 injectionFlowRate: { value: this.params.injectionFlowRate ?? 1.0 },
                 injectionVel: { value: new THREE.Vector2(this.params.injectionVelX ?? 0.0, this.params.injectionVelY ?? 0.0) },
                 injectionSize: { value: this.params.injectionSize ?? 0.05 }
             },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `uniform sampler2D velocity; uniform sampler2D levelset; uniform float gravity; uniform float sigma; uniform float density; uniform float viscosity; uniform vec2 resolution; uniform float dt; uniform bool injectionEnabled; uniform vec2 injectionPos; uniform float injectionFlowRate; uniform vec2 injectionVel; uniform float injectionSize; varying vec2 vUv; void main() { vec2 uv = vUv; float phi = texture2D(levelset, uv).r; vec2 vel = texture2D(velocity, uv).rg; vel.y += gravity * dt; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); vec2 vel_r = texture2D(velocity, uv + dx).rg; vec2 vel_l = texture2D(velocity, uv - dx).rg; vec2 vel_t = texture2D(velocity, uv + dy).rg; vec2 vel_b = texture2D(velocity, uv - dy).rg; vec2 laplacian = (vel_r + vel_l + vel_t + vel_b - 4.0*vel) * (resolution.x * resolution.x); float nu = viscosity / density; vel += nu * dt * laplacian; float eps = 1.5 / resolution.x; if (abs(phi) < eps) { float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float len = length(grad); if (len > 1e-6) { vec2 n = grad / len; float phi_xx = phi_r + phi_l - 2.0*phi; float phi_yy = phi_t + phi_b - 2.0*phi; float phi_xy = (texture2D(levelset, uv + dx + dy).r - texture2D(levelset, uv + dx - dy).r - texture2D(levelset, uv - dx + dy).r + texture2D(levelset, uv - dx - dy).r) / (4.0 * dx.x * dx.x); float kappa = (phi_xx * n.y * n.y - 2.0 * phi_xy * n.x * n.y + phi_yy * n.x * n.x) / len; float delta = 0.0; if (abs(phi) < eps) delta = (1.0 + cos(3.1415926 * phi / eps)) / (2.0 * eps); vec2 f_st = sigma * kappa * delta * n; vel += (f_st / density) * dt; } } if (injectionEnabled) { float dist = length(uv - injectionPos); if (dist < injectionSize) { float mask = 1.0 - smoothstep(0.0, injectionSize, dist); phi = phi - injectionFlowRate * dt * mask; phi = clamp(phi, -0.5, 0.5); vel += injectionVel * mask; } } gl_FragColor = vec4(vel, phi, 1.0); }`
+            vertexShader: vs,
+            fragmentShader: `uniform sampler2D velocity; uniform sampler2D levelset; uniform float gravity; uniform float sigma; uniform float density; uniform float viscosity; uniform vec2 resolution; uniform float dt; uniform bool injectionEnabled; uniform vec2 injectionPos; uniform float injectionFlowRate; uniform vec2 injectionVel; uniform float injectionSize; varying vec2 vUv; void main() { vec2 uv = vUv; float phi = texture2D(levelset, uv).r; vec2 vel = texture2D(velocity, uv).rg; vel.y += gravity * dt; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); vec2 vel_r = texture2D(velocity, uv + dx).rg; vec2 vel_l = texture2D(velocity, uv - dx).rg; vec2 vel_t = texture2D(velocity, uv + dy).rg; vec2 vel_b = texture2D(velocity, uv - dy).rg; vec2 laplacian = (vel_r + vel_l + vel_t + vel_b - 4.0*vel) * (resolution.x * resolution.x); float nu = viscosity / density; vel += nu * dt * laplacian; float eps = 1.5 / resolution.x; if (abs(phi) < eps) { float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float len = length(grad); if (len > 1e-6) { vec2 n = grad / len; float phi_xx = phi_r + phi_l - 2.0*phi; float phi_yy = phi_t + phi_b - 2.0*phi; float phi_xy = (texture2D(levelset, uv + dx + dy).r - texture2D(levelset, uv + dx - dy).r - texture2D(levelset, uv - dx + dy).r + texture2D(levelset, uv - dx - dy).r) / (4.0 * dx.x * dx.x); float kappa = (phi_xx * n.y * n.y - 2.0 * phi_xy * n.x * n.y + phi_yy * n.x * n.x) / len; float delta = 0.0; if (abs(phi) < eps) delta = (1.0 + cos(3.1415926 * phi / eps)) / (2.0 * eps); vec2 f_st = sigma * kappa * delta * n; vel += (f_st / density) * dt; } } if (injectionEnabled) { float dist = length(uv - injectionPos); if (dist < injectionSize) { float mask = 1.0 - smoothstep(0.0, injectionSize, dist); phi = phi - injectionFlowRate * dt * mask; phi = clamp(phi, -0.5, 0.5); vel += injectionVel * mask; float maxVel = 30.0; float velLen = length(vel); if (velLen > maxVel) vel = vel / velLen * maxVel; } } gl_FragColor = vec4(vel, phi, 1.0); }`
         });
-    }
 
-    private wallCollisionShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                velocity: { value: null }, 
-                solidMask: { value: null }, 
-                solidNormal: { value: null }, 
-                restitution: { value: this.params.restitution }, 
-                friction: { value: this.params.friction }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        // 墙碰撞
+        this.wallCollisionMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, solidMask: { value: null }, solidNormal: { value: null }, restitution: { value: this.params.restitution }, friction: { value: this.params.friction }, resolution: { value: res } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D velocity; uniform sampler2D solidMask; uniform sampler2D solidNormal; uniform float restitution; uniform float friction; uniform vec2 resolution; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; if (isSolid < 0.5) { vec2 vel = texture2D(velocity, vUv).rg; gl_FragColor = vec4(vel, 0.0, 1.0); return; } vec2 normal = texture2D(solidNormal, vUv).rg; float len = length(normal); if (len < 0.001) { gl_FragColor = vec4(0.0); return; } normal /= len; vec2 vel = texture2D(velocity, vUv).rg; float vn = dot(vel, normal); vec2 vt = vel - vn * normal; float vn_new = -vn * restitution; vec2 vt_new = vt * friction; vec2 vel_new = vt_new + vn_new * normal; gl_FragColor = vec4(vel_new, 0.0, 1.0); }`
         });
-    }
 
-    private divergenceShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                velocity: { value: null }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        // 散度计算
+        this.divergenceMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, resolution: { value: res } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D velocity; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float vxR = texture2D(velocity, uv + dx).r; float vxL = texture2D(velocity, uv - dx).r; float vyT = texture2D(velocity, uv + dy).g; float vyB = texture2D(velocity, uv - dy).g; float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y); gl_FragColor = vec4(div, 0.0, 0.0, 1.0); }`
         });
-    }
 
-    private pressureJacobiShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                pressure: { value: null }, 
-                divergence: { value: null }, 
-                dt: { value: this.params.timeStep }, 
-                density: { value: this.params.density }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        // 压力迭代（只需要一个材质反复使用）
+        this.pressureJacobiMat = new THREE.ShaderMaterial({
+            uniforms: { pressure: { value: null }, divergence: { value: null }, dt: { value: dt }, density: { value: this.params.density }, resolution: { value: res } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D pressure; uniform sampler2D divergence; uniform float dt; uniform float density; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float pL = texture2D(pressure, uv - dx).r; float pR = texture2D(pressure, uv + dx).r; float pD = texture2D(pressure, uv - dy).r; float pU = texture2D(pressure, uv + dy).r; float div = texture2D(divergence, uv).r; float h = 1.0 / resolution.x; float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0; gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0); }`
         });
-    }
 
-    private velocityCorrectShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                velocity: { value: null }, 
-                pressure: { value: null }, 
-                dt: { value: this.params.timeStep }, 
-                density: { value: this.params.density }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        // 速度修正
+        this.velocityCorrectMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, pressure: { value: null }, dt: { value: dt }, density: { value: this.params.density }, resolution: { value: res } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D velocity; uniform sampler2D pressure; uniform float dt; uniform float density; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float pL = texture2D(pressure, uv - dx).r; float pR = texture2D(pressure, uv + dx).r; float pD = texture2D(pressure, uv - dy).r; float pU = texture2D(pressure, uv + dy).r; vec2 vel = texture2D(velocity, uv).rg; vel.x -= (dt / density) * (pR - pL) / (2.0*dx.x); vel.y -= (dt / density) * (pU - pD) / (2.0*dy.y); gl_FragColor = vec4(vel, 0.0, 1.0); }`
         });
-    }
 
-    private levelSetAdvectionShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                velocity: { value: null }, 
-                forcedVel: { value: null }, 
-                levelset: { value: null }, 
-                dt: { value: this.params.timeStep }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) }, 
-                injectionEnabled: { value: this.params.injectionEnabled ?? false } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        // Level Set 平流
+        this.levelSetAdvectionMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, forcedVel: { value: null }, levelset: { value: null }, dt: { value: dt }, resolution: { value: res }, injectionEnabled: { value: this.params.injectionEnabled ?? false } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D velocity; uniform sampler2D forcedVel; uniform sampler2D levelset; uniform float dt; uniform vec2 resolution; uniform bool injectionEnabled; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = uv - step; float phi; if (injectionEnabled) { phi = texture2D(forcedVel, back).b; } else { phi = texture2D(levelset, back).r; } gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
         });
-    }
 
-    private levelSetReinitShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { 
-                levelset: { value: null }, 
-                dt_reinit: { value: 0.5 / Math.min(this.width, this.height) }, 
-                resolution: { value: new THREE.Vector2(this.width, this.height) } 
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        // Level Set 重初始化
+        this.levelSetReinitMat = new THREE.ShaderMaterial({
+            uniforms: { levelset: { value: null }, dt_reinit: { value: 0.5 / Math.min(this.width, this.height) }, resolution: { value: res } },
+            vertexShader: vs,
             fragmentShader: `uniform sampler2D levelset; uniform float dt_reinit; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; float phi0 = texture2D(levelset, uv).r; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float grad_len = length(grad); float sign_phi0 = sign(phi0); float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0); gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0); }`
         });
-    }
 
-    private solidBoundaryClearShader(): THREE.ShaderMaterial {
-        return new THREE.ShaderMaterial({
-            uniforms: { velInput: { value: null }, phiInput: { value: null }, solidMask: { value: null } },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `uniform sampler2D velInput; uniform sampler2D phiInput; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; vec2 vel = texture2D(velInput, vUv).rg; float phi = texture2D(phiInput, vUv).r; if (isSolid > 0.5) { vel = vec2(0.0); phi = -1.0; } gl_FragColor = vec4(vel, phi, 1.0); }`
+        // 固体边界清理：同时清理固体内部的速度场和 phi
+        this.solidBoundaryClearMat = new THREE.ShaderMaterial({
+            uniforms: { 
+                velocity: { value: null }, 
+                levelset: { value: null }, 
+                solidMask: { value: null } 
+            },
+            vertexShader: vs,
+            fragmentShader: `uniform sampler2D velocity; uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; vec2 vel = texture2D(velocity, vUv).rg; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) { vel = vec2(0.0); phi = -1.0; } gl_FragColor = vec4(vel, phi, 1.0); }`
         });
     }
 
@@ -302,14 +274,8 @@ export class FluidSimulator {
         let dt = this.params.timeStep;
         if (deltaTime !== undefined) dt = Math.min(deltaTime, 0.033);
 
-        const resolution = new THREE.Vector2(this.width, this.height);
-        const dtReinit = 0.5 / Math.min(this.width, this.height);
-
-        // 辅助函数：更新材质 uniform 中的 dt 和 resolution
-        const updateDtRes = (mat: THREE.ShaderMaterial) => {
-            if (mat.uniforms.dt) mat.uniforms.dt.value = dt;
-            if (mat.uniforms.resolution) mat.uniforms.resolution.value = resolution;
-            if (mat.uniforms.dt_reinit) mat.uniforms.dt_reinit.value = dtReinit;
+        // 辅助函数：更新注入相关的 uniform
+        const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
             if (mat.uniforms.injectionEnabled) mat.uniforms.injectionEnabled.value = this.params.injectionEnabled ?? false;
             if (mat.uniforms.injectionPos) {
                 mat.uniforms.injectionPos.value.set(this.params.injectionPosX ?? 0.5, this.params.injectionPosY ?? 0.5);
@@ -321,109 +287,84 @@ export class FluidSimulator {
             if (mat.uniforms.injectionSize) mat.uniforms.injectionSize.value = this.params.injectionSize ?? 0.05;
         };
 
+        // 更新注入参数（仅在参数可能变化时）
+        updateInjectionUniforms(this.externalForcesMat);
+        updateInjectionUniforms(this.levelSetAdvectionMat);
+
         // 1. 固体边界清理 #1（如果需要）
         if (this.solidMaskTex) {
-            const clearMat = this.solidBoundaryClearShader();
-            clearMat.uniforms.velInput.value = this.curVelTex.texture;
-            clearMat.uniforms.phiInput.value = this.curPhiTex.texture;
-            clearMat.uniforms.solidMask.value = this.solidMaskTex;
-            this.renderFullscreen(clearMat, this.velTexA);
-            this.renderFullscreen(clearMat, this.phiTexA);
-            this.curVelTex = this.velTexA;
+            this.solidBoundaryClearMat.uniforms.velocity.value = this.curVelTex.texture;
+            this.solidBoundaryClearMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.solidBoundaryClearMat.uniforms.solidMask.value = this.solidMaskTex;
+            this.renderFullscreen(this.solidBoundaryClearMat, this.velAfterCollisionTex);
+            this.curVelTex = this.velAfterCollisionTex;
+            this.renderFullscreen(this.solidBoundaryClearMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
-            clearMat.dispose();
         }
 
         // 2. 速度平流
-        const advectMat = this.velocityAdvectionShader();
-        updateDtRes(advectMat);
-        advectMat.uniforms.velocity.value = this.curVelTex.texture;
-        this.renderFullscreen(advectMat, this.velTexB);
+        this.velocityAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
+        this.renderFullscreen(this.velocityAdvectionMat, this.velTexB);
         this.curVelTex = this.velTexB;
-        advectMat.dispose();
 
         // 3. 外力计算
-        const forceMat = this.externalForcesShader();
-        updateDtRes(forceMat);
-        forceMat.uniforms.velocity.value = this.curVelTex.texture;
-        forceMat.uniforms.levelset.value = this.curPhiTex.texture;
-        this.renderFullscreen(forceMat, this.forcedVelTex);
-        forceMat.dispose();
+        this.externalForcesMat.uniforms.velocity.value = this.curVelTex.texture;
+        this.externalForcesMat.uniforms.levelset.value = this.curPhiTex.texture;
+        this.renderFullscreen(this.externalForcesMat, this.forcedVelTex);
 
         // 4. 墙碰撞处理
         let velForDiv = this.forcedVelTex.texture;
         if (this.solidMaskTex && this.solidNormalTex) {
-            const collideMat = this.wallCollisionShader();
-            updateDtRes(collideMat);
-            collideMat.uniforms.velocity.value = this.forcedVelTex.texture;
-            collideMat.uniforms.solidMask.value = this.solidMaskTex;
-            collideMat.uniforms.solidNormal.value = this.solidNormalTex;
-            this.renderFullscreen(collideMat, this.velAfterCollisionTex);
+            this.wallCollisionMat.uniforms.velocity.value = this.forcedVelTex.texture;
+            this.wallCollisionMat.uniforms.solidMask.value = this.solidMaskTex;
+            this.wallCollisionMat.uniforms.solidNormal.value = this.solidNormalTex;
+            this.renderFullscreen(this.wallCollisionMat, this.velAfterCollisionTex);
             velForDiv = this.velAfterCollisionTex.texture;
-            collideMat.dispose();
         }
 
         // 5. 散度计算
-        const divMat = this.divergenceShader();
-        updateDtRes(divMat);
-        divMat.uniforms.velocity.value = velForDiv;
-        this.renderFullscreen(divMat, this.divergenceTex);
-        divMat.dispose();
+        this.divergenceMat.uniforms.velocity.value = velForDiv;
+        this.renderFullscreen(this.divergenceMat, this.divergenceTex);
 
-        // 6. 压力迭代 (Jacobi, 双缓冲)
+        // 6. 压力迭代 (Jacobi, 双缓冲) - 只使用一个材质反复更新
         let pressureSrc = this.pressureTexA;
         let pressureDst = this.pressureTexB;
         for (let i = 0; i < this.params.pressureIterations; i++) {
-            const jacobiMat = this.pressureJacobiShader();
-            updateDtRes(jacobiMat);
-            jacobiMat.uniforms.pressure.value = pressureSrc.texture;
-            jacobiMat.uniforms.divergence.value = this.divergenceTex.texture;
-            this.renderFullscreen(jacobiMat, pressureDst);
-            jacobiMat.dispose();
+            this.pressureJacobiMat.uniforms.pressure.value = pressureSrc.texture;
+            this.pressureJacobiMat.uniforms.divergence.value = this.divergenceTex.texture;
+            this.renderFullscreen(this.pressureJacobiMat, pressureDst);
             [pressureSrc, pressureDst] = [pressureDst, pressureSrc];
         }
         this.curPressureTex = pressureSrc;
 
         // 7. 速度修正
-        const correctMat = this.velocityCorrectShader();
-        updateDtRes(correctMat);
-        correctMat.uniforms.velocity.value = velForDiv;
-        correctMat.uniforms.pressure.value = this.curPressureTex.texture;
-        this.renderFullscreen(correctMat, this.velCorrectTex);
-        correctMat.dispose();
+        this.velocityCorrectMat.uniforms.velocity.value = velForDiv;
+        this.velocityCorrectMat.uniforms.pressure.value = this.curPressureTex.texture;
+        this.renderFullscreen(this.velocityCorrectMat, this.velCorrectTex);
         this.curVelTex = this.velCorrectTex;
 
         // 8. Level Set 平流
-        const phiAdvectMat = this.levelSetAdvectionShader();
-        updateDtRes(phiAdvectMat);
-        phiAdvectMat.uniforms.velocity.value = this.curVelTex.texture;
-        phiAdvectMat.uniforms.forcedVel.value = this.forcedVelTex.texture;
-        phiAdvectMat.uniforms.levelset.value = this.curPhiTex.texture;
-        this.renderFullscreen(phiAdvectMat, this.phiTexB);
+        this.levelSetAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
+        this.levelSetAdvectionMat.uniforms.forcedVel.value = this.forcedVelTex.texture;
+        this.levelSetAdvectionMat.uniforms.levelset.value = this.curPhiTex.texture;
+        this.renderFullscreen(this.levelSetAdvectionMat, this.phiTexB);
         this.curPhiTex = this.phiTexB;
-        phiAdvectMat.dispose();
 
         // 9. Level Set 重初始化
         for (let i = 0; i < this.params.reinitIterations; i++) {
-            const reinitMat = this.levelSetReinitShader();
-            updateDtRes(reinitMat);
-            reinitMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.renderFullscreen(reinitMat, this.phiTexA);
+            this.levelSetReinitMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.renderFullscreen(this.levelSetReinitMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
-            reinitMat.dispose();
         }
 
         // 10. 固体边界清理 #2
         if (this.solidMaskTex) {
-            const clearMat = this.solidBoundaryClearShader();
-            clearMat.uniforms.velInput.value = this.curVelTex.texture;
-            clearMat.uniforms.phiInput.value = this.curPhiTex.texture;
-            clearMat.uniforms.solidMask.value = this.solidMaskTex;
-            this.renderFullscreen(clearMat, this.velTexA);
-            this.renderFullscreen(clearMat, this.phiTexA);
-            this.curVelTex = this.velTexA;
+            this.solidBoundaryClearMat.uniforms.velocity.value = this.curVelTex.texture;
+            this.solidBoundaryClearMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.renderFullscreen(this.solidBoundaryClearMat, this.velAfterCollisionTex);
+            this.curVelTex = this.velAfterCollisionTex;
+            this.renderFullscreen(this.solidBoundaryClearMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
-            clearMat.dispose();
         }
     }
 
@@ -529,6 +470,21 @@ export class FluidSimulator {
             this.velCorrectTex
         ];
         targets.forEach(t => t?.dispose());
+        
+        // 释放缓存的着色器材质
+        const materials = [
+            this.velocityAdvectionMat,
+            this.externalForcesMat,
+            this.wallCollisionMat,
+            this.divergenceMat,
+            this.pressureJacobiMat,
+            this.velocityCorrectMat,
+            this.levelSetAdvectionMat,
+            this.levelSetReinitMat,
+            this.solidBoundaryClearMat
+        ];
+        materials.forEach(m => m?.dispose());
+        
         this.quadGeometry.dispose();
     }
 
