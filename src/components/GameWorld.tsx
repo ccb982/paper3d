@@ -844,13 +844,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       injectionSize: 0.05
     };
 
-    // 创建 FluidSimulator 适配器
-    const fluidSimulator = new FluidSimulatorAdapter(
-      renderer,
-      fluidParams,
-      new THREE.Color(0.2, 0.6, 0.9),
-      new THREE.Color(0.05, 0.2, 0.4)
-    );
+    // 创建 FluidSimulator 适配器（参数通过 fluidParams 传入）
+    const fluidSimulator = new FluidSimulatorAdapter(renderer, fluidParams);
 
     fluidSimulatorRef.current = fluidSimulator;
 

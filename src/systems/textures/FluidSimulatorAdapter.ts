@@ -90,7 +90,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
     }
     
     dispose(): void {
-        this.material.dispose();
+        // material 是从 simulator 获取的引用，由 simulator.dispose() 统一释放
         this.simulator.dispose();
     }
 }

@@ -359,7 +359,12 @@ export class FluidSimulator {
 
                 void main() {
                     float phi = texture2D(phiTex, vUv).r;
-                    if (phi > 0.001) discard;   // 空气区域完全透明（加容差）
+                    
+                    // 空气区域完全透明 - phi > 0 表示空气
+                    // 使用合理阈值避免边界区域被错误 discard
+                    if (phi > 0.0) {
+                        discard;  // 空气区域完全透明
+                    }
 
                     float eps = 1.0 / resolution.x;
                     vec3 normal = computeNormal(vUv, eps);
