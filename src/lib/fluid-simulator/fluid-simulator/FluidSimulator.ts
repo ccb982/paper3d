@@ -52,6 +52,7 @@ export class FluidSimulator {
     // 固体相关
     private solidMaskTex: THREE.Texture | null = null;
     private solidNormalTex: THREE.Texture | null = null;
+    private dummySolidMaskTex!: THREE.DataTexture;
 
     // 当前活动的纹理引用（用于交换）
     private curVelTex!: THREE.WebGLRenderTarget;
@@ -67,7 +68,8 @@ export class FluidSimulator {
     private velocityCorrectMat!: THREE.ShaderMaterial;
     private levelSetAdvectionMat!: THREE.ShaderMaterial;
     private levelSetReinitMat!: THREE.ShaderMaterial;
-    private solidBoundaryClearMat!: THREE.ShaderMaterial;
+    private solidBoundaryClearVelMat!: THREE.ShaderMaterial;  // 清理固体内部速度
+    private solidBoundaryClearPhiMat!: THREE.ShaderMaterial;   // 清理固体内部 phi
 
     private initialized = false;
 
@@ -83,6 +85,9 @@ export class FluidSimulator {
         this.scene = new THREE.Scene();
         this.quad = new THREE.Mesh(this.quadGeometry, new THREE.MeshBasicMaterial());
         this.scene.add(this.quad);
+
+        // 创建全零的 1x1 纹理作为 solidMask 的 fallback
+        this.dummySolidMaskTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1, THREE.RGBAFormat);
 
         this.createTextures();
         this.initTextures();
@@ -264,15 +269,18 @@ export class FluidSimulator {
             fragmentShader: `uniform sampler2D levelset; uniform float dt_reinit; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; float phi0 = texture2D(levelset, uv).r; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float grad_len = length(grad); float sign_phi0 = sign(phi0); float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0); gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0); }`
         });
 
-        // 固体边界清理：同时清理固体内部的速度场和 phi
-        this.solidBoundaryClearMat = new THREE.ShaderMaterial({
-            uniforms: { 
-                velocity: { value: null }, 
-                levelset: { value: null }, 
-                solidMask: { value: null } 
-            },
+        // 固体边界清理 - 清理速度
+        this.solidBoundaryClearVelMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, solidMask: { value: null } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D velocity; uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; vec2 vel = texture2D(velocity, vUv).rg; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) { vel = vec2(0.0); phi = -1.0; } gl_FragColor = vec4(vel, phi, 1.0); }`
+            fragmentShader: `uniform sampler2D velocity; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; vec2 vel = texture2D(velocity, vUv).rg; if (isSolid > 0.5) vel = vec2(0.0); gl_FragColor = vec4(vel, 0.0, 1.0); }`
+        });
+
+        // 固体边界清理 - 清理 phi
+        this.solidBoundaryClearPhiMat = new THREE.ShaderMaterial({
+            uniforms: { levelset: { value: null }, solidMask: { value: null } },
+            vertexShader: vs,
+            fragmentShader: `uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) phi = -1.0; gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
         });
     }
 
@@ -301,12 +309,16 @@ export class FluidSimulator {
 
         // 1. 固体边界清理 #1（如果需要）
         if (this.solidMaskTex) {
-            this.solidBoundaryClearMat.uniforms.velocity.value = this.curVelTex.texture;
-            this.solidBoundaryClearMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.solidBoundaryClearMat.uniforms.solidMask.value = this.solidMaskTex;
-            this.renderFullscreen(this.solidBoundaryClearMat, this.velAfterCollisionTex);
+            // 清理速度
+            this.solidBoundaryClearVelMat.uniforms.velocity.value = this.curVelTex.texture;
+            this.solidBoundaryClearVelMat.uniforms.solidMask.value = this.solidMaskTex;
+            this.renderFullscreen(this.solidBoundaryClearVelMat, this.velAfterCollisionTex);
             this.curVelTex = this.velAfterCollisionTex;
-            this.renderFullscreen(this.solidBoundaryClearMat, this.phiTexA);
+
+            // 清理 phi
+            this.solidBoundaryClearPhiMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.solidBoundaryClearPhiMat.uniforms.solidMask.value = this.solidMaskTex;
+            this.renderFullscreen(this.solidBoundaryClearPhiMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
         }
 
@@ -341,7 +353,7 @@ export class FluidSimulator {
             this.pressureJacobiMat.uniforms.pressure.value = pressureSrc.texture;
             this.pressureJacobiMat.uniforms.divergence.value = this.divergenceTex.texture;
             this.pressureJacobiMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.pressureJacobiMat.uniforms.solidMask.value = this.solidMaskTex ?? this.divergenceTex.texture;
+            this.pressureJacobiMat.uniforms.solidMask.value = this.solidMaskTex ?? this.dummySolidMaskTex;
             this.renderFullscreen(this.pressureJacobiMat, pressureDst);
             [pressureSrc, pressureDst] = [pressureDst, pressureSrc];
         }
@@ -369,11 +381,16 @@ export class FluidSimulator {
 
         // 10. 固体边界清理 #2
         if (this.solidMaskTex) {
-            this.solidBoundaryClearMat.uniforms.velocity.value = this.curVelTex.texture;
-            this.solidBoundaryClearMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.renderFullscreen(this.solidBoundaryClearMat, this.velAfterCollisionTex);
+            // 清理速度
+            this.solidBoundaryClearVelMat.uniforms.velocity.value = this.curVelTex.texture;
+            this.solidBoundaryClearVelMat.uniforms.solidMask.value = this.solidMaskTex;
+            this.renderFullscreen(this.solidBoundaryClearVelMat, this.velAfterCollisionTex);
             this.curVelTex = this.velAfterCollisionTex;
-            this.renderFullscreen(this.solidBoundaryClearMat, this.phiTexA);
+
+            // 清理 phi
+            this.solidBoundaryClearPhiMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.solidBoundaryClearPhiMat.uniforms.solidMask.value = this.solidMaskTex;
+            this.renderFullscreen(this.solidBoundaryClearPhiMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
         }
     }
@@ -481,6 +498,9 @@ export class FluidSimulator {
         ];
         targets.forEach(t => t?.dispose());
         
+        // 释放 dummy 纹理
+        this.dummySolidMaskTex?.dispose();
+        
         // 释放缓存的着色器材质
         const materials = [
             this.velocityAdvectionMat,
@@ -491,7 +511,8 @@ export class FluidSimulator {
             this.velocityCorrectMat,
             this.levelSetAdvectionMat,
             this.levelSetReinitMat,
-            this.solidBoundaryClearMat
+            this.solidBoundaryClearVelMat,
+            this.solidBoundaryClearPhiMat
         ];
         materials.forEach(m => m?.dispose());
         
