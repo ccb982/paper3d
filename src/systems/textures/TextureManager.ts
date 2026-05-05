@@ -2,13 +2,14 @@ import * as THREE from 'three';
 import { BulletFluidTexture } from './BulletFluidTexture';
 import { TriangleFluidTexture } from './TriangleFluidTexture';
 import { VerticalTriangleTexture } from './VerticalTriangleTexture';
+import { FluidSimulatorAdapter } from './FluidSimulatorAdapter';
 
-export interface ITextureGenerator {
+export type ITextureGenerator = {
   type: 'canvas' | 'shader';
   generate(): THREE.Texture | THREE.Material;
   update(delta?: number): void;
   dispose(): void;
-}
+};
 
 interface TextureEntry {
   id: string;
@@ -21,6 +22,7 @@ interface TextureEntry {
 export class TextureManager {
   private static instance: TextureManager;
   private textures: Map<string, TextureEntry> = new Map();
+  private fluidSimulators: Map<string, FluidSimulatorAdapter> = new Map();
   private isInitialized: boolean = false;
 
   private constructor() {}
@@ -46,6 +48,33 @@ export class TextureManager {
     this.register('verticalTriangle', new VerticalTriangleTexture());
     
     this.isInitialized = true;
+  }
+
+  // 注册 FluidSimulator（返回适配器以便后续配置）
+  public registerFluidSimulator(id: string, adapter: FluidSimulatorAdapter): void {
+    if (this.fluidSimulators.has(id)) {
+      console.warn(`FluidSimulator ${id} already exists, overwriting.`);
+      this.unregisterFluidSimulator(id);
+    }
+    this.fluidSimulators.set(id, adapter);
+    
+    // 同时注册为材质
+    this.register(id, adapter);
+  }
+
+  // 获取 FluidSimulator 适配器
+  public getFluidSimulator(id: string): FluidSimulatorAdapter | undefined {
+    return this.fluidSimulators.get(id);
+  }
+
+  // 注销 FluidSimulator
+  public unregisterFluidSimulator(id: string): void {
+    const adapter = this.fluidSimulators.get(id);
+    if (adapter) {
+      adapter.dispose();
+      this.fluidSimulators.delete(id);
+    }
+    this.unregister(id);
   }
 
   // 注册纹理生成器

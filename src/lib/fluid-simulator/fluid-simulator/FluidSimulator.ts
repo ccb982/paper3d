@@ -84,6 +84,7 @@ export class FluidSimulator {
     }
 
     private initGPUCompute(): void {
+        if (this.gpuCompute) this.gpuCompute.dispose();
         const w = this.params.width;
         const h = this.params.height;
         this.gpuCompute = new GPUComputationRenderer(w, h, this.renderer);
@@ -100,12 +101,12 @@ export class FluidSimulator {
         const forcedVelTex = this.gpuCompute.createTexture();
         const velAfterCollisionTex = this.gpuCompute.createTexture();
 
-        this.velPrevVar = this.gpuCompute.addVariable('velPrev', this.velocityAdvectionShader(), velTex0);
-        this.velNextVar = this.gpuCompute.addVariable('velNext', this.velocityAdvectionShader(), velTex1);
-        this.phiPrevVar = this.gpuCompute.addVariable('phiPrev', this.levelSetAdvectionShader(), phiTex0);
-        this.phiNextVar = this.gpuCompute.addVariable('phiNext', this.levelSetAdvectionShader(), phiTex1);
-        this.pressureVarA = this.gpuCompute.addVariable('pressureA', this.pressureJacobiShader(), pressureTex0);
-        this.pressureVarB = this.gpuCompute.addVariable('pressureB', this.pressureJacobiShader(), pressureTex1);
+        this.velPrevVar = this.gpuCompute.addVariable('velPrev', this.velocityAdvectionShaderA(), velTex0);
+        this.velNextVar = this.gpuCompute.addVariable('velNext', this.velocityAdvectionShaderB(), velTex1);
+        this.phiPrevVar = this.gpuCompute.addVariable('phiPrev', this.levelSetAdvectionShaderA(), phiTex0);
+        this.phiNextVar = this.gpuCompute.addVariable('phiNext', this.levelSetAdvectionShaderB(), phiTex1);
+        this.pressureVarA = this.gpuCompute.addVariable('pressureA', this.pressureJacobiShaderA(), pressureTex0);
+        this.pressureVarB = this.gpuCompute.addVariable('pressureB', this.pressureJacobiShaderB(), pressureTex1);
         this.divergenceVar = this.gpuCompute.addVariable('divergence', this.divergenceShader(), divergenceTex);
         this.forcedVelVar = this.gpuCompute.addVariable('forcedVel', this.externalForcesShader(), forcedVelTex);
         this.velAfterCollisionVar = this.gpuCompute.addVariable('velAfterCollision', this.wallCollisionShader(), velAfterCollisionTex);
@@ -368,267 +369,331 @@ export class FluidSimulator {
         this.pressureVarB = temp;
     }
 
-    private velocityAdvectionShader(): string {
-        return `
-            uniform sampler2D velocity;
-            uniform float dt;
-            uniform vec2 resolution;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                vec2 vel = texture2D(velocity, uv).rg;
-                vec2 step = vel * dt / resolution;
-                vec2 back = uv - step;
-                vec2 newVel = texture2D(velocity, back).rg;
-                gl_FragColor = vec4(newVel, 0.0, 1.0);
-            }
-        `;
+    private velocityAdvectionShaderA(): string {
+        return `// Shader A
+uniform sampler2D velocity;
+uniform float dt;
+uniform vec2 resolution;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 vel = texture2D(velocity, uv).rg;
+vec2 step = vel * dt / resolution;
+vec2 back = uv - step;
+vec2 newVel = texture2D(velocity, back).rg;
+gl_FragColor = vec4(newVel, 0.0, 1.0);
+}
+`;
     }
 
-    private levelSetAdvectionShader(): string {
-        return `
-            uniform sampler2D velocity;
-            uniform sampler2D forcedVel;
-            uniform sampler2D levelset;
-            uniform float dt;
-            uniform vec2 resolution;
-            uniform bool injectionEnabled;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                vec2 vel = texture2D(velocity, uv).rg;
-                vec2 step = vel * dt / resolution;
-                vec2 back = uv - step;
-                float phi;
-                if (injectionEnabled) {
-                    phi = texture2D(forcedVel, back).b;
-                } else {
-                    phi = texture2D(levelset, back).r;
-                }
-                gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
-            }
-        `;
+    private velocityAdvectionShaderB(): string {
+        return `// Shader B
+uniform sampler2D velocity;
+uniform float dt;
+uniform vec2 resolution;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 vel = texture2D(velocity, uv).rg;
+vec2 step = vel * dt / resolution;
+vec2 back = uv - step;
+vec2 newVel = texture2D(velocity, back).rg;
+gl_FragColor = vec4(newVel, 0.0, 1.0);
+}
+`;
+    }
+
+    private levelSetAdvectionShaderA(): string {
+        return `// Shader A
+uniform sampler2D velocity;
+uniform sampler2D forcedVel;
+uniform sampler2D levelset;
+uniform float dt;
+uniform vec2 resolution;
+uniform bool injectionEnabled;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 vel = texture2D(velocity, uv).rg;
+vec2 step = vel * dt / resolution;
+vec2 back = uv - step;
+float phi;
+if (injectionEnabled) {
+phi = texture2D(forcedVel, back).b;
+} else {
+phi = texture2D(levelset, back).r;
+}
+gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+}
+`;
+    }
+
+    private levelSetAdvectionShaderB(): string {
+        return `// Shader B
+uniform sampler2D velocity;
+uniform sampler2D forcedVel;
+uniform sampler2D levelset;
+uniform float dt;
+uniform vec2 resolution;
+uniform bool injectionEnabled;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 vel = texture2D(velocity, uv).rg;
+vec2 step = vel * dt / resolution;
+vec2 back = uv - step;
+float phi;
+if (injectionEnabled) {
+phi = texture2D(forcedVel, back).b;
+} else {
+phi = texture2D(levelset, back).r;
+}
+gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+}
+`;
     }
 
     private divergenceShader(): string {
-        return `
-            uniform sampler2D velocity;
-            uniform vec2 resolution;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                vec2 dx = vec2(1.0/resolution.x, 0.0);
-                vec2 dy = vec2(0.0, 1.0/resolution.y);
-                float vxR = texture2D(velocity, uv + dx).r;
-                float vxL = texture2D(velocity, uv - dx).r;
-                float vyT = texture2D(velocity, uv + dy).g;
-                float vyB = texture2D(velocity, uv - dy).g;
-                float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y);
-                gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
-            }
-        `;
+        return `// Divergence
+uniform sampler2D velocity;
+uniform vec2 resolution;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 dx = vec2(1.0/resolution.x, 0.0);
+vec2 dy = vec2(0.0, 1.0/resolution.y);
+float vxR = texture2D(velocity, uv + dx).r;
+float vxL = texture2D(velocity, uv - dx).r;
+float vyT = texture2D(velocity, uv + dy).g;
+float vyB = texture2D(velocity, uv - dy).g;
+float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y);
+gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
+}
+`;
     }
 
-    private pressureJacobiShader(): string {
-        return `
-            uniform sampler2D pressure;
-            uniform sampler2D divergence;
-            uniform vec2 resolution;
-            uniform float dt;
-            uniform float density;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                vec2 dx = vec2(1.0/resolution.x, 0.0);
-                vec2 dy = vec2(0.0, 1.0/resolution.y);
-                float pL = texture2D(pressure, uv - dx).r;
-                float pR = texture2D(pressure, uv + dx).r;
-                float pD = texture2D(pressure, uv - dy).r;
-                float pU = texture2D(pressure, uv + dy).r;
-                float div = texture2D(divergence, uv).r;
-                float h = 1.0 / resolution.x;
-                float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0;
-                gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0);
-            }
-        `;
+    private pressureJacobiShaderA(): string {
+        return `// Shader A
+uniform sampler2D pressure;
+uniform sampler2D divergence;
+uniform vec2 resolution;
+uniform float dt;
+uniform float density;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 dx = vec2(1.0/resolution.x, 0.0);
+vec2 dy = vec2(0.0, 1.0/resolution.y);
+float pL = texture2D(pressure, uv - dx).r;
+float pR = texture2D(pressure, uv + dx).r;
+float pD = texture2D(pressure, uv - dy).r;
+float pU = texture2D(pressure, uv + dy).r;
+float div = texture2D(divergence, uv).r;
+float h = 1.0 / resolution.x;
+float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0;
+gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0);
+}
+`;
+    }
+
+    private pressureJacobiShaderB(): string {
+        return `// Shader B
+uniform sampler2D pressure;
+uniform sampler2D divergence;
+uniform vec2 resolution;
+uniform float dt;
+uniform float density;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 dx = vec2(1.0/resolution.x, 0.0);
+vec2 dy = vec2(0.0, 1.0/resolution.y);
+float pL = texture2D(pressure, uv - dx).r;
+float pR = texture2D(pressure, uv + dx).r;
+float pD = texture2D(pressure, uv - dy).r;
+float pU = texture2D(pressure, uv + dy).r;
+float div = texture2D(divergence, uv).r;
+float h = 1.0 / resolution.x;
+float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0;
+gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0);
+}
+`;
     }
 
     private velocityCorrectShader(): string {
-        return `
-            uniform sampler2D velocity;
-            uniform sampler2D pressure;
-            uniform vec2 resolution;
-            uniform float dt;
-            uniform float density;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                vec2 dx = vec2(1.0/resolution.x, 0.0);
-                vec2 dy = vec2(0.0, 1.0/resolution.y);
-                float pL = texture2D(pressure, uv - dx).r;
-                float pR = texture2D(pressure, uv + dx).r;
-                float pD = texture2D(pressure, uv - dy).r;
-                float pU = texture2D(pressure, uv + dy).r;
-                vec2 vel = texture2D(velocity, uv).rg;
-                vel.x -= (dt / density) * (pR - pL) / (2.0*dx.x);
-                vel.y -= (dt / density) * (pU - pD) / (2.0*dy.y);
-                gl_FragColor = vec4(vel, 0.0, 1.0);
-            }
-        `;
+        return `// Velocity Correct
+uniform sampler2D velocity;
+uniform sampler2D pressure;
+uniform vec2 resolution;
+uniform float dt;
+uniform float density;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+vec2 dx = vec2(1.0/resolution.x, 0.0);
+vec2 dy = vec2(0.0, 1.0/resolution.y);
+float pL = texture2D(pressure, uv - dx).r;
+float pR = texture2D(pressure, uv + dx).r;
+float pD = texture2D(pressure, uv - dy).r;
+float pU = texture2D(pressure, uv + dy).r;
+vec2 vel = texture2D(velocity, uv).rg;
+vel.x -= (dt / density) * (pR - pL) / (2.0*dx.x);
+vel.y -= (dt / density) * (pU - pD) / (2.0*dy.y);
+gl_FragColor = vec4(vel, 0.0, 1.0);
+}
+`;
     }
 
     private externalForcesShader(): string {
-        return `
-            uniform sampler2D velocity;
-            uniform sampler2D levelset;
-            uniform float gravity;
-            uniform float sigma;
-            uniform float density;
-            uniform float viscosity;
-            uniform vec2 resolution;
-            uniform float dt;
-            uniform bool injectionEnabled;
-            uniform vec2 injectionPos;
-            uniform float injectionFlowRate;
-            uniform vec2 injectionVel;
-            uniform float injectionSize;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                float phi = texture2D(levelset, uv).r;
-                vec2 vel = texture2D(velocity, uv).rg;
+        return `// External Forces
+uniform sampler2D velocity;
+uniform sampler2D levelset;
+uniform float gravity;
+uniform float sigma;
+uniform float density;
+uniform float viscosity;
+uniform vec2 resolution;
+uniform float dt;
+uniform bool injectionEnabled;
+uniform vec2 injectionPos;
+uniform float injectionFlowRate;
+uniform vec2 injectionVel;
+uniform float injectionSize;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+float phi = texture2D(levelset, uv).r;
+vec2 vel = texture2D(velocity, uv).rg;
 
-                vel.y += gravity * dt;
+vel.y += gravity * dt;
 
-                vec2 dx = vec2(1.0/resolution.x, 0.0);
-                vec2 dy = vec2(0.0, 1.0/resolution.y);
-                vec2 vel_r = texture2D(velocity, uv + dx).rg;
-                vec2 vel_l = texture2D(velocity, uv - dx).rg;
-                vec2 vel_t = texture2D(velocity, uv + dy).rg;
-                vec2 vel_b = texture2D(velocity, uv - dy).rg;
-                vec2 laplacian = (vel_r + vel_l + vel_t + vel_b - 4.0*vel) * (resolution.x * resolution.x);
-                float nu = viscosity / density;
-                vel += nu * dt * laplacian;
+vec2 dx = vec2(1.0/resolution.x, 0.0);
+vec2 dy = vec2(0.0, 1.0/resolution.y);
+vec2 vel_r = texture2D(velocity, uv + dx).rg;
+vec2 vel_l = texture2D(velocity, uv - dx).rg;
+vec2 vel_t = texture2D(velocity, uv + dy).rg;
+vec2 vel_b = texture2D(velocity, uv - dy).rg;
+vec2 laplacian = (vel_r + vel_l + vel_t + vel_b - 4.0*vel) * (resolution.x * resolution.x);
+float nu = viscosity / density;
+vel += nu * dt * laplacian;
 
-                const float eps = 1.5 / resolution.x;
-                if (abs(phi) < eps) {
-                    float phi_r = texture2D(levelset, uv + dx).r;
-                    float phi_l = texture2D(levelset, uv - dx).r;
-                    float phi_t = texture2D(levelset, uv + dy).r;
-                    float phi_b = texture2D(levelset, uv - dy).r;
-                    vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x);
-                    float len = length(grad);
-                    if (len > 1e-6) {
-                        vec2 n = grad / len;
-                        float phi_xx = phi_r + phi_l - 2.0*phi;
-                        float phi_yy = phi_t + phi_b - 2.0*phi;
-                        float phi_xy = (texture2D(levelset, uv + dx + dy).r
-                                      - texture2D(levelset, uv + dx - dy).r
-                                      - texture2D(levelset, uv - dx + dy).r
-                                      + texture2D(levelset, uv - dx - dy).r) / (4.0 * dx.x * dx.x);
-                        float kappa = (phi_xx * n.y * n.y - 2.0 * phi_xy * n.x * n.y + phi_yy * n.x * n.x) / len;
-                        float delta = 0.0;
-                        if (abs(phi) < eps) delta = (1.0 + cos(3.1415926 * phi / eps)) / (2.0 * eps);
-                        vec2 f_st = sigma * kappa * delta * n;
-                        vel += (f_st / density) * dt;
-                    }
-                }
+const float eps = 1.5 / resolution.x;
+if (abs(phi) < eps) {
+float phi_r = texture2D(levelset, uv + dx).r;
+float phi_l = texture2D(levelset, uv - dx).r;
+float phi_t = texture2D(levelset, uv + dy).r;
+float phi_b = texture2D(levelset, uv - dy).r;
+vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x);
+float len = length(grad);
+if (len > 1e-6) {
+vec2 n = grad / len;
+float phi_xx = phi_r + phi_l - 2.0*phi;
+float phi_yy = phi_t + phi_b - 2.0*phi;
+float phi_xy = (texture2D(levelset, uv + dx + dy).r
+- texture2D(levelset, uv + dx - dy).r
+- texture2D(levelset, uv - dx + dy).r
++ texture2D(levelset, uv - dx - dy).r) / (4.0 * dx.x * dx.x);
+float kappa = (phi_xx * n.y * n.y - 2.0 * phi_xy * n.x * n.y + phi_yy * n.x * n.x) / len;
+float delta = 0.0;
+if (abs(phi) < eps) delta = (1.0 + cos(3.1415926 * phi / eps)) / (2.0 * eps);
+vec2 f_st = sigma * kappa * delta * n;
+vel += (f_st / density) * dt;
+}
+}
 
-                if (injectionEnabled) {
-                    float dist = length(uv - injectionPos);
-                    if (dist < injectionSize) {
-                        float mask = 1.0 - smoothstep(0.0, injectionSize, dist);
-                        phi = min(phi, -injectionFlowRate * dt * mask);
-                        vel += injectionVel * mask;
-                    }
-                }
+if (injectionEnabled) {
+float dist = length(uv - injectionPos);
+if (dist < injectionSize) {
+float mask = 1.0 - smoothstep(0.0, injectionSize, dist);
+phi = min(phi, -injectionFlowRate * dt * mask);
+vel += injectionVel * mask;
+}
+}
 
-                gl_FragColor = vec4(vel, phi, 1.0);
-            }
-        `;
+gl_FragColor = vec4(vel, phi, 1.0);
+}
+`;
     }
 
     private levelSetReinitShader(): string {
-        return `
-            uniform sampler2D levelset;
-            uniform float dt_reinit;
-            uniform vec2 resolution;
-            varying vec2 vUv;
-            void main() {
-                vec2 uv = vUv;
-                float phi0 = texture2D(levelset, uv).r;
-                vec2 dx = vec2(1.0/resolution.x, 0.0);
-                vec2 dy = vec2(0.0, 1.0/resolution.y);
-                float phi_r = texture2D(levelset, uv + dx).r;
-                float phi_l = texture2D(levelset, uv - dx).r;
-                float phi_t = texture2D(levelset, uv + dy).r;
-                float phi_b = texture2D(levelset, uv - dy).r;
-                vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x);
-                float grad_len = length(grad);
-                float sign_phi0 = sign(phi0);
-                float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0);
-                gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0);
-            }
-        `;
+        return `uniform sampler2D levelset;
+uniform float dt_reinit;
+uniform vec2 resolution;
+varying vec2 vUv;
+void main() {
+vec2 uv = vUv;
+float phi0 = texture2D(levelset, uv).r;
+vec2 dx = vec2(1.0/resolution.x, 0.0);
+vec2 dy = vec2(0.0, 1.0/resolution.y);
+float phi_r = texture2D(levelset, uv + dx).r;
+float phi_l = texture2D(levelset, uv - dx).r;
+float phi_t = texture2D(levelset, uv + dy).r;
+float phi_b = texture2D(levelset, uv - dy).r;
+vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x);
+float grad_len = length(grad);
+float sign_phi0 = sign(phi0);
+float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0);
+gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0);
+}
+`;
     }
 
     private static solidBoundaryClearShader(): string {
-        return `
-            uniform sampler2D velInput;
-            uniform sampler2D phiInput;
-            uniform sampler2D solidMask;
-            varying vec2 vUv;
-            void main() {
-                float isSolid = texture2D(solidMask, vUv).r;
-                vec2 vel = texture2D(velInput, vUv).rg;
-                float phi = texture2D(phiInput, vUv).r;
-                if (isSolid > 0.5) {
-                    vel = vec2(0.0);
-                    phi = -1.0;
-                }
-                gl_FragColor = vec4(vel.x, vel.y, phi, 1.0);
-            }
-        `;
+        return `uniform sampler2D velInput;
+uniform sampler2D phiInput;
+uniform sampler2D solidMask;
+varying vec2 vUv;
+void main() {
+float isSolid = texture2D(solidMask, vUv).r;
+vec2 vel = texture2D(velInput, vUv).rg;
+float phi = texture2D(phiInput, vUv).r;
+if (isSolid > 0.5) {
+vel = vec2(0.0);
+phi = -1.0;
+}
+gl_FragColor = vec4(vel.x, vel.y, phi, 1.0);
+}
+`;
     }
 
     private wallCollisionShader(): string {
-        return `
-            uniform sampler2D velocity;
-            uniform sampler2D solidMask;
-            uniform sampler2D solidNormal;
-            uniform float restitution;
-            uniform float friction;
-            uniform vec2 resolution;
-            varying vec2 vUv;
-            void main() {
-                float isSolid = texture2D(solidMask, vUv).r;
+        return `// Wall Collision
+uniform sampler2D velocity;
+uniform sampler2D solidMask;
+uniform sampler2D solidNormal;
+uniform float restitution;
+uniform float friction;
+uniform vec2 resolution;
+varying vec2 vUv;
+void main() {
+float isSolid = texture2D(solidMask, vUv).r;
 
-                if (isSolid < 0.5) {
-                    vec2 vel = texture2D(velocity, vUv).rg;
-                    gl_FragColor = vec4(vel, 0.0, 1.0);
-                    return;
-                }
+if (isSolid < 0.5) {
+vec2 vel = texture2D(velocity, vUv).rg;
+gl_FragColor = vec4(vel, 0.0, 1.0);
+return;
+}
 
-                vec2 normal = texture2D(solidNormal, vUv).rg;
-                float normalLen = length(normal);
-                if (normalLen < 0.001) {
-                    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                    return;
-                }
-                normal = normal / normalLen;
+vec2 normal = texture2D(solidNormal, vUv).rg;
+float normalLen = length(normal);
+if (normalLen < 0.001) {
+gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+return;
+}
+normal = normal / normalLen;
 
-                vec2 vel = texture2D(velocity, vUv).rg;
+vec2 vel = texture2D(velocity, vUv).rg;
 
-                float vn = dot(vel, normal);
-                vec2 vt = vel - vn * normal;
+float vn = dot(vel, normal);
+vec2 vt = vel - vn * normal;
 
-                float vn_new = -vn * restitution;
-                vec2 vt_new = vt * friction;
-                vec2 vel_new = vt_new + vn_new * normal;
+float vn_new = -vn * restitution;
+vec2 vt_new = vt * friction;
+vec2 vel_new = vt_new + vn_new * normal;
 
-                gl_FragColor = vec4(vel_new, 0.0, 1.0);
-            }
-        `;
+gl_FragColor = vec4(vel_new, 0.0, 1.0);
+}
+`;
     }
 
     public update(deltaTime?: number): void {

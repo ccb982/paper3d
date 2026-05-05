@@ -29,6 +29,8 @@ import { Box } from '../entities/static/Box';
 import { playerCharacterManager } from '../systems/character/PlayerCharacterManager';
 import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailMaterial } from '../systems/textures/BulletTrailTexture';
 import { TextureManager } from '../systems/textures/TextureManager';
+import { FluidSimulatorAdapter } from '../systems/textures/FluidSimulatorAdapter';
+import type { FluidParams } from '@lib/fluid-simulator';
 import { TestBulletTrailTexture } from '../systems/textures/TestRedBlueTexture';
 import { WaterEntity } from '../entities/water/WaterEntity';
 
@@ -799,6 +801,74 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     bulletTrailMesh.scale.set(0.8, 2, 1); // 调整大小使尾气变瘦
     scene.add(bulletTrailMesh);
     console.log('Bullet trail created at:', bulletTrailMesh.position);
+  }, []);
+
+  // 初始化 FluidSimulator 并注册到 TextureManager
+  const fluidSimulatorCreatedRef = useRef(false);
+  const fluidSimulatorRef = useRef<FluidSimulatorAdapter | null>(null);
+  const fluidMeshRef = useRef<THREE.Mesh | null>(null);
+
+  useEffect(() => {
+    if (!scene || fluidSimulatorCreatedRef.current) {
+      return;
+    }
+
+    fluidSimulatorCreatedRef.current = true;
+
+    // 从 cameraStore 获取渲染器
+    const renderer = cameraStore.getRenderer();
+    if (!renderer) {
+      console.warn('No renderer available for FluidSimulator');
+      return;
+    }
+
+    // 配置 FluidSimulator 参数
+    const fluidParams: Partial<FluidParams> = {
+      width: 256,
+      height: 256,
+      density: 1000,
+      viscosity: 0.001,
+      surfaceTension: 0.0728,
+      gravity: 9.81,
+      pressureIterations: 30,
+      reinitIterations: 3,
+      timeStep: 0.016,
+      restitution: 0.3,
+      friction: 0.95,
+      injectionEnabled: true,
+      injectionPosX: 0.5,
+      injectionPosY: 0.8,
+      injectionFlowRate: 2.0,
+      injectionVelX: 0.0,
+      injectionVelY: -2.0,
+      injectionSize: 0.05
+    };
+
+    // 创建 FluidSimulator 适配器
+    const fluidSimulator = new FluidSimulatorAdapter(
+      renderer,
+      fluidParams,
+      new THREE.Color(0.2, 0.6, 0.9),
+      new THREE.Color(0.05, 0.2, 0.4)
+    );
+
+    fluidSimulatorRef.current = fluidSimulator;
+
+    // 注册到 TextureManager（会自动更新）
+    const textureManager = TextureManager.getInstance();
+    textureManager.registerFluidSimulator('levelSetFluid', fluidSimulator);
+
+    // 获取材质并创建 mesh
+    const fluidMaterial = fluidSimulator.getMaterial();
+
+    const fluidGeometry = new THREE.PlaneGeometry(10, 10);
+    const fluidMesh = new THREE.Mesh(fluidGeometry, fluidMaterial);
+    fluidMesh.position.set(-10, 2, -10); // 设置位置
+    fluidMesh.rotation.x = -Math.PI / 2; // 平放在地面上
+    scene.add(fluidMesh);
+
+    fluidMeshRef.current = fluidMesh;
+    console.log('FluidSimulator created and registered to TextureManager');
   }, []);
 
   useFrame(({ clock }) => {

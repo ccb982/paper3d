@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { FluidSimulator, FluidParams } from '../../lib/fluid-simulator';
+import { FluidSimulator } from '@lib/fluid-simulator';
+import type { FluidParams } from '@lib/fluid-simulator';
 
 export class FluidSimulatorExample {
     private renderer: THREE.WebGLRenderer;

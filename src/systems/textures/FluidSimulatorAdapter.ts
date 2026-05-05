@@ -1,5 +1,7 @@
 import * as THREE from 'three';
-import { FluidSimulator, FluidParams } from '../../lib/fluid-simulator';
+import { FluidSimulator } from '@lib/fluid-simulator';
+import type { FluidParams } from '@lib/fluid-simulator';
+import type { ITextureGenerator } from './TextureManager';
 
 export class FluidSimulatorAdapter implements ITextureGenerator {
     type: 'shader' = 'shader';
