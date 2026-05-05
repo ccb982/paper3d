@@ -863,8 +863,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
 
     const fluidGeometry = new THREE.PlaneGeometry(10, 10);
     const fluidMesh = new THREE.Mesh(fluidGeometry, fluidMaterial);
-    fluidMesh.position.set(-10, 2, -10); // 设置位置
-    fluidMesh.rotation.x = -Math.PI / 2; // 平放在地面上
+    fluidMesh.position.set(0, 3, 5); // 出生点附近
     scene.add(fluidMesh);
 
     fluidMeshRef.current = fluidMesh;
