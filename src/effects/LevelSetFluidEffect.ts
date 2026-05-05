@@ -2,8 +2,8 @@ import { BaseEffect } from '../core/BaseEffect';
 import * as THREE from 'three';
 import { EntityManager } from '../core/EntityManager';
 import { CameraStore } from '../core/CameraStore';
-import { FluidSimulator } from '@lib/fluid-simulator';
-import type { FluidParams } from '@lib/fluid-simulator';
+import { FluidSimulator } from '@lib/fluid-simulator/fluid-simulator';
+import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 
 export class LevelSetFluidEffect extends BaseEffect {
     private mesh: THREE.Mesh;

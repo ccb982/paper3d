@@ -1,1 +1,2 @@
-export { FluidSimulator, FluidParams } from './FluidSimulator';
+export { FluidSimulator } from './FluidSimulator';
+export type { FluidParams } from './FluidSimulator';

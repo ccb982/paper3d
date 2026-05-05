@@ -30,7 +30,7 @@ import { playerCharacterManager } from '../systems/character/PlayerCharacterMana
 import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailMaterial } from '../systems/textures/BulletTrailTexture';
 import { TextureManager } from '../systems/textures/TextureManager';
 import { FluidSimulatorAdapter } from '../systems/textures/FluidSimulatorAdapter';
-import type { FluidParams } from '@lib/fluid-simulator';
+import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import { TestBulletTrailTexture } from '../systems/textures/TestRedBlueTexture';
 import { WaterEntity } from '../entities/water/WaterEntity';
 
