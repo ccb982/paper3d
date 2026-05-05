@@ -20,6 +20,14 @@ export interface FluidParams {
     injectionVelX?: number;
     injectionVelY?: number;
     injectionSize?: number;
+    // 分层渲染参数
+    waterColor?: THREE.Color;           // 水面颜色
+    deepColor?: THREE.Color;            // 深水颜色
+    edgeWidth?: number;                 // 边缘宽度
+    edgeIntensity?: number;             // 边缘发光强度
+    specularIntensity?: number;         // 高光强度
+    flowIntensity?: number;             // 流动扰动强度
+    lightDir?: THREE.Vector3;           // 光照方向
 }
 
 export class FluidSimulator {
@@ -71,6 +79,16 @@ export class FluidSimulator {
     private solidBoundaryClearVelMat!: THREE.ShaderMaterial;  // 清理固体内部速度
     private solidBoundaryClearPhiMat!: THREE.ShaderMaterial;   // 清理固体内部 phi
 
+    // 分层渲染相关
+    private renderMaterial!: THREE.ShaderMaterial;
+    private waterColor: THREE.Color;
+    private deepColor: THREE.Color;
+    private edgeWidth: number;
+    private edgeIntensity: number;
+    private specularIntensity: number;
+    private flowIntensity: number;
+    private lightDir: THREE.Vector3;
+
     private initialized = false;
 
     constructor(renderer: THREE.WebGLRenderer, params: FluidParams) {
@@ -78,6 +96,15 @@ export class FluidSimulator {
         this.params = params;
         this.width = params.width;
         this.height = params.height;
+
+        // 初始化分层渲染参数（带默认值）
+        this.waterColor = params.waterColor ?? new THREE.Color(0.2, 0.5, 0.8);
+        this.deepColor = params.deepColor ?? new THREE.Color(0.05, 0.15, 0.3);
+        this.edgeWidth = params.edgeWidth ?? 0.05;
+        this.edgeIntensity = params.edgeIntensity ?? 0.3;
+        this.specularIntensity = params.specularIntensity ?? 0.5;
+        this.flowIntensity = params.flowIntensity ?? 0.3;
+        this.lightDir = params.lightDir ?? new THREE.Vector3(0.5, 1.0, 0.3).normalize();
 
         // 创建正交相机和全屏四边形（UV 从 0 到 1）
         this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -92,6 +119,7 @@ export class FluidSimulator {
         this.createTextures();
         this.initTextures();
         this.initShaders();
+        this.initRenderMaterial();  // 初始化分层渲染材质
         this.initialized = true;
     }
 
@@ -281,6 +309,99 @@ export class FluidSimulator {
             uniforms: { levelset: { value: null }, solidMask: { value: null } },
             vertexShader: vs,
             fragmentShader: `uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) phi = -1.0; gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
+        });
+    }
+
+    // ==================== 分层渲染材质初始化 ====================
+    private initRenderMaterial(): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const res = new THREE.Vector2(this.width, this.height);
+
+        this.renderMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                phiTex: { value: null },
+                velTex: { value: null },
+                resolution: { value: res },
+                lightDir: { value: this.lightDir },
+                waterColor: { value: this.waterColor },
+                deepColor: { value: this.deepColor },
+                edgeWidth: { value: this.edgeWidth },
+                edgeIntensity: { value: this.edgeIntensity },
+                specularIntensity: { value: this.specularIntensity },
+                flowIntensity: { value: this.flowIntensity }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phiTex;
+                uniform sampler2D velTex;
+                uniform vec2 resolution;
+                uniform vec3 lightDir;
+                uniform vec3 waterColor;
+                uniform vec3 deepColor;
+                uniform float edgeWidth;
+                uniform float edgeIntensity;
+                uniform float specularIntensity;
+                uniform float flowIntensity;
+
+                varying vec2 vUv;
+
+                vec3 computeNormal(vec2 uv, float eps) {
+                    float phi = texture2D(phiTex, uv).r;
+                    float phi_r = texture2D(phiTex, uv + vec2(eps, 0.0)).r;
+                    float phi_l = texture2D(phiTex, uv - vec2(eps, 0.0)).r;
+                    float phi_t = texture2D(phiTex, uv + vec2(0.0, eps)).r;
+                    float phi_b = texture2D(phiTex, uv - vec2(0.0, eps)).r;
+                    vec3 grad = vec3(phi_r - phi_l, phi_t - phi_b, 0.0);
+                    float len = length(grad);
+                    if (len < 0.001) return vec3(0.0, 0.0, 1.0);
+                    return normalize(grad);
+                }
+
+                void main() {
+                    float phi = texture2D(phiTex, vUv).r;
+                    if (phi > 0.001) discard;   // 空气区域完全透明（加容差）
+
+                    float eps = 1.0 / resolution.x;
+                    vec3 normal = computeNormal(vUv, eps);
+                    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+                    vec3 lightDirNorm = normalize(lightDir);
+
+                    // ========== 1. 基础颜色层 ==========
+                    float depth = clamp(-phi * 2.0, 0.0, 1.0);
+                    vec3 baseColor = mix(waterColor, deepColor, depth);
+
+                    // ========== 2. 漫反射光照层 ==========
+                    float diff = max(0.1, dot(normal, lightDirNorm));
+                    vec3 diffuse = baseColor * diff;
+
+                    // ========== 3. 高光层（独立） ==========
+                    vec3 halfDir = normalize(lightDirNorm + viewDir);
+                    float spec = pow(max(dot(normal, halfDir), 0.0), 64.0);
+                    vec3 specular = vec3(1.0) * spec * specularIntensity;
+
+                    // ========== 4. 边缘发光层（独立） ==========
+                    float edge = 1.0 - smoothstep(0.0, edgeWidth, abs(phi));
+                    vec3 glowColor = vec3(0.2, 0.6, 1.0);   // 淡蓝色
+                    vec3 emissive = glowColor * edge * edgeIntensity;
+
+                    // ========== 5. 流动扰动层（细节） ==========
+                    vec2 vel = texture2D(velTex, vUv).rg;
+                    float flow = length(vel) * 0.5;
+                    vec3 flowColor = vec3(0.15, 0.25, 0.35) * flow * flowIntensity;
+
+                    // ========== 最终合成（各层互不干扰） ==========
+                    vec3 color = diffuse + specular + emissive + flowColor;
+
+                    // 透明度（边缘稍透，中心不透明）
+                    float alpha = clamp(0.6 - phi * 2.0, 0.2, 0.9);
+
+                    gl_FragColor = vec4(color, alpha);
+                }
+            `,
+            transparent: true,
+            depthWrite: false,
+            blending: THREE.NormalBlending,
+            side: THREE.DoubleSide
         });
     }
 
@@ -486,6 +607,49 @@ export class FluidSimulator {
         if (config.size !== undefined) this.params.injectionSize = config.size;
     }
 
+    // ==================== 分层渲染相关接口 ====================
+    public getRenderMaterial(): THREE.ShaderMaterial {
+        // 更新纹理引用
+        this.renderMaterial.uniforms.phiTex.value = this.curPhiTex.texture;
+        this.renderMaterial.uniforms.velTex.value = this.curVelTex.texture;
+        return this.renderMaterial;
+    }
+
+    public updateRenderUniforms(): void {
+        this.renderMaterial.uniforms.phiTex.value = this.curPhiTex.texture;
+        this.renderMaterial.uniforms.velTex.value = this.curVelTex.texture;
+    }
+
+    public setWaterColor(color: THREE.Color): void {
+        this.waterColor = color;
+        this.renderMaterial.uniforms.waterColor.value = color;
+    }
+
+    public setDeepColor(color: THREE.Color): void {
+        this.deepColor = color;
+        this.renderMaterial.uniforms.deepColor.value = color;
+    }
+
+    public setEdgeIntensity(intensity: number): void {
+        this.edgeIntensity = intensity;
+        this.renderMaterial.uniforms.edgeIntensity.value = intensity;
+    }
+
+    public setSpecularIntensity(intensity: number): void {
+        this.specularIntensity = intensity;
+        this.renderMaterial.uniforms.specularIntensity.value = intensity;
+    }
+
+    public setFlowIntensity(intensity: number): void {
+        this.flowIntensity = intensity;
+        this.renderMaterial.uniforms.flowIntensity.value = intensity;
+    }
+
+    public setLightDirection(dir: THREE.Vector3): void {
+        this.lightDir = dir.clone().normalize();
+        this.renderMaterial.uniforms.lightDir.value = this.lightDir;
+    }
+
     public dispose(): void {
         const targets = [
             this.velTexA, this.velTexB,
@@ -512,7 +676,8 @@ export class FluidSimulator {
             this.levelSetAdvectionMat,
             this.levelSetReinitMat,
             this.solidBoundaryClearVelMat,
-            this.solidBoundaryClearPhiMat
+            this.solidBoundaryClearPhiMat,
+            this.renderMaterial
         ];
         materials.forEach(m => m?.dispose());
         
