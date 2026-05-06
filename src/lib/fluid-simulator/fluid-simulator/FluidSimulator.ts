@@ -276,7 +276,7 @@ export class FluidSimulator {
                     vec2 uv = vUv; 
                     float phi = texture2D(levelset, uv).r; 
                     vec2 vel = texture2D(velocity, uv).rg; 
-                    vel.y += gravity * dt; 
+                    vel.y -= gravity * dt; 
 
                     vec2 dx = vec2(1.0/resolution.x, 0.0); 
                     vec2 dy = vec2(0.0, 1.0/resolution.y); 
