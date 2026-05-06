@@ -5,12 +5,14 @@ import type { ITextureGenerator } from './TextureManager';
 
 export class FluidSimulatorAdapter implements ITextureGenerator {
     type: 'shader' = 'shader';
-    
+
     private simulator: FluidSimulator;
     private material: THREE.ShaderMaterial;
-    
+    private lastUpdateTime: number = 0;
+    private updateInterval: number = 16;
+
     constructor(
-        renderer: THREE.WebGLRenderer, 
+        renderer: THREE.WebGLRenderer,
         params: Partial<FluidParams> = {}
     ) {
         // 默认参数，包含分层渲染配置
@@ -22,7 +24,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             surfaceTension: 0.0728,
             gravity: 9.81,
             pressureIterations: 30,
-            reinitIterations: 3,
+            reinitIterations: 15,
             timeStep: 0.016,
             restitution: 0.3,
             friction: 0.95,
@@ -43,8 +45,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         // 使用 FluidSimulator 内置的分层渲染材质
         this.material = this.simulator.getRenderMaterial();
         
-        // 修改顶点着色器，添加 Y 轴偏移（保持原有行为）
-        this.material.vertexShader = `varying vec2 vUv; void main() { vUv = uv; vUv.y += 0.2; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        // 启用调试录制（记录前20帧）
+        this.simulator.enableDebugRecording(true, 20);
     }
     
     generate(): THREE.Texture | THREE.Material {
@@ -52,13 +54,18 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
     }
     
     update(delta?: number): void {
+        const now = performance.now();
+        if (now - this.lastUpdateTime < this.updateInterval) {
+            return;
+        }
+        this.lastUpdateTime = now;
+
         if (delta !== undefined) {
             this.simulator.update(delta);
         } else {
             this.simulator.update();
         }
-        
-        // 使用内置方法更新纹理引用
+
         this.simulator.updateRenderUniforms();
     }
     

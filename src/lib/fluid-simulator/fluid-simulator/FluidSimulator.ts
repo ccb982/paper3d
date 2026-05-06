@@ -67,6 +67,17 @@ export class FluidSimulator {
     private curPhiTex!: THREE.WebGLRenderTarget;
     private curPressureTex!: THREE.WebGLRenderTarget;
 
+    // 调试录制相关
+    private debugRecordingEnabled: boolean = false;
+    private debugFramesToRecord: number = 20;
+    private debugCurrentFrame: number = 0;
+    private debugRecordedData: Array<{
+        frame: number;
+        phi: number[][];
+        velX: number[][];
+        velY: number[][];
+    }> = [];
+
     // 缓存的着色器材质（复用）
     private velocityAdvectionMat!: THREE.ShaderMaterial;
     private externalForcesMat!: THREE.ShaderMaterial;
@@ -481,10 +492,8 @@ export class FluidSimulator {
     }
 
     // ==================== 更新流程 ====================
-    public update(deltaTime?: number): void {
+    public update(_deltaTime?: number): void {
         if (!this.initialized) return;
-        let dt = this.params.timeStep;
-        if (deltaTime !== undefined) dt = Math.min(deltaTime, 0.033);
 
         // 辅助函数：更新注入相关的 uniform
         const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
@@ -588,6 +597,135 @@ export class FluidSimulator {
             this.solidBoundaryClearPhiMat.uniforms.solidMask.value = this.solidMaskTex;
             this.renderFullscreen(this.solidBoundaryClearPhiMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
+        }
+
+        // ========== 调试录制 ==========
+        if (this.debugRecordingEnabled && this.debugCurrentFrame < this.debugFramesToRecord) {
+            this.captureCurrentState();
+            this.debugCurrentFrame++;
+            if (this.debugCurrentFrame >= this.debugFramesToRecord) {
+                this.debugRecordingEnabled = false;
+                this.downloadDebugData();
+            }
+        }
+    }
+
+    // ==================== 调试录制接口 ====================
+    public enableDebugRecording(enable: boolean, framesToRecord: number = 20): void {
+        this.debugRecordingEnabled = enable;
+        if (enable) {
+            this.debugFramesToRecord = framesToRecord;
+            this.debugCurrentFrame = 0;
+            this.debugRecordedData = [];
+            console.log(`[FluidSimulator] 调试录制已启用，将记录 ${framesToRecord} 帧`);
+        } else {
+            console.log(`[FluidSimulator] 调试录制已禁用`);
+        }
+    }
+
+    public exportDebugData(): void {
+        if (this.debugRecordedData.length === 0) {
+            console.warn('[FluidSimulator] 没有录制数据可导出');
+            return;
+        }
+        this.downloadDebugData();
+    }
+
+    private readTextureData(renderTarget: THREE.WebGLRenderTarget): Float32Array {
+        const gl = this.renderer.getContext() as WebGL2RenderingContext;
+        const pixelBuffer = new Float32Array(this.width * this.height * 4);
+        
+        // 保存当前帧缓冲区绑定
+        const prevFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
+        
+        // 绑定目标帧缓冲区
+        gl.bindFramebuffer(gl.FRAMEBUFFER, renderTarget.framebuffer);
+        
+        // 读取像素（RGBA格式，FLOAT类型）
+        gl.readPixels(0, 0, this.width, this.height, gl.RGBA, gl.FLOAT, pixelBuffer);
+        
+        // 恢复之前的绑定
+        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer as WebGLFramebuffer);
+        
+        return pixelBuffer;
+    }
+
+    private textureTo2DArray(pixelBuffer: Float32Array, channel: 'r' | 'g' | 'b' | 'a'): number[][] {
+        const idxMap = { r: 0, g: 1, b: 2, a: 3 };
+        const channelIdx = idxMap[channel];
+        const data2D: number[][] = [];
+        for (let y = 0; y < this.height; y++) {
+            const row: number[] = [];
+            for (let x = 0; x < this.width; x++) {
+                const i = (y * this.width + x) * 4 + channelIdx;
+                row.push(pixelBuffer[i]);
+            }
+            data2D.push(row);
+        }
+        return data2D;
+    }
+
+    private captureCurrentState(): void {
+        const phiPixels = this.readTextureData(this.curPhiTex);
+        const phiData = this.textureTo2DArray(phiPixels, 'r');
+
+        const velPixels = this.readTextureData(this.curVelTex);
+        const velXData = this.textureTo2DArray(velPixels, 'r');
+        const velYData = this.textureTo2DArray(velPixels, 'g');
+
+        this.debugRecordedData.push({
+            frame: this.debugCurrentFrame,
+            phi: phiData,
+            velX: velXData,
+            velY: velYData,
+        });
+    }
+
+    private downloadDebugData(): void {
+        const output = {
+            resolution: { width: this.width, height: this.height },
+            frames: this.debugRecordedData,
+            params: {
+                density: this.params.density,
+                viscosity: this.params.viscosity,
+                surfaceTension: this.params.surfaceTension,
+                gravity: this.params.gravity,
+                pressureIterations: this.params.pressureIterations,
+                reinitIterations: this.params.reinitIterations,
+                timeStep: this.params.timeStep,
+            }
+        };
+        
+        try {
+            const jsonStr = JSON.stringify(output, null, 2);
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fluid_debug_${Date.now()}.json`;
+            a.style.display = 'none';
+            
+            document.body.appendChild(a);
+            
+            // 处理浏览器安全限制
+            const event = new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            });
+            a.dispatchEvent(event);
+            
+            setTimeout(() => {
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+            
+            console.log(`[FluidSimulator] 调试数据已导出，共 ${this.debugRecordedData.length} 帧`);
+        } catch (error) {
+            console.error('[FluidSimulator] 导出调试数据失败:', error);
+            // 降级到控制台输出
+            console.log('[FluidSimulator] 调试数据（控制台输出）:', output);
         }
     }
 
