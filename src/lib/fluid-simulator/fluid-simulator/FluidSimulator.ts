@@ -368,14 +368,14 @@ export class FluidSimulator {
         this.levelSetAdvectionMat = new THREE.ShaderMaterial({
             uniforms: { velocity: { value: null }, forcedVel: { value: null }, levelset: { value: null }, dt: { value: dt }, resolution: { value: res }, injectionEnabled: { value: this.params.injectionEnabled ?? false } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D velocity; uniform sampler2D forcedVel; uniform sampler2D levelset; uniform float dt; uniform vec2 resolution; uniform bool injectionEnabled; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = uv - step; float phi; if (injectionEnabled) { phi = texture2D(forcedVel, back).b; } else { phi = texture2D(levelset, back).r; } gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
+            fragmentShader: `uniform sampler2D velocity; uniform sampler2D forcedVel; uniform sampler2D levelset; uniform float dt; uniform vec2 resolution; uniform bool injectionEnabled; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = clamp(uv - step, 0.0, 1.0); float phi; if (injectionEnabled) { phi = texture2D(forcedVel, back).b; } else { phi = texture2D(levelset, back).r; } gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
         });
 
         // Level Set 重初始化
         this.levelSetReinitMat = new THREE.ShaderMaterial({
             uniforms: { levelset: { value: null }, dt_reinit: { value: 0.5 / Math.min(this.width, this.height) }, resolution: { value: res } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D levelset; uniform float dt_reinit; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; float phi0 = texture2D(levelset, uv).r; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float grad_len = length(grad); float sign_phi0 = sign(phi0); float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0); gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0); }`
+            fragmentShader: `uniform sampler2D levelset; uniform float dt_reinit; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; float phi0 = texture2D(levelset, uv).r; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float grad_len = length(grad); float eps = 0.001; float sign_phi0 = phi0 > eps ? 1.0 : (phi0 < -eps ? -1.0 : 1.0); float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0); gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0); }`
         });
 
         // 固体边界清理 - 清理速度
@@ -441,10 +441,10 @@ export class FluidSimulator {
                 void main() {
                     float phi = texture2D(phiTex, vUv).r;
                     
-                    // 空气区域完全透明 - phi > 0 表示空气
-                    // 使用合理阈值避免边界区域被错误 discard
-                    if (phi > 0.0) {
-                        discard;  // 空气区域完全透明
+                    // 空气区域和界面完全透明 - phi >= 0 表示空气或界面
+                    // phi = 0 是水-空气界面，也不绘制
+                    if (phi >= 0.0) {
+                        discard;  // 空气和界面区域完全透明
                     }
 
                     float eps = 1.0 / resolution.x;
@@ -617,6 +617,9 @@ export class FluidSimulator {
             this.debugFramesToRecord = framesToRecord;
             this.debugCurrentFrame = 0;
             this.debugRecordedData = [];
+            // 立即捕获当前状态作为帧 0（初始状态）
+            this.captureCurrentState();
+            this.debugCurrentFrame++;
             console.log(`[FluidSimulator] 调试录制已启用，将记录 ${framesToRecord} 帧`);
         } else {
             console.log(`[FluidSimulator] 调试录制已禁用`);
@@ -632,33 +635,22 @@ export class FluidSimulator {
     }
 
     private readTextureData(renderTarget: THREE.WebGLRenderTarget): Float32Array {
-        const gl = this.renderer.getContext() as WebGL2RenderingContext;
         const pixelBuffer = new Float32Array(this.width * this.height * 4);
-        
-        // 保存当前帧缓冲区绑定
-        const prevFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-        
-        // 绑定目标帧缓冲区
-        gl.bindFramebuffer(gl.FRAMEBUFFER, renderTarget.framebuffer);
-        
-        // 读取像素（RGBA格式，FLOAT类型）
-        gl.readPixels(0, 0, this.width, this.height, gl.RGBA, gl.FLOAT, pixelBuffer);
-        
-        // 恢复之前的绑定
-        gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer as WebGLFramebuffer);
-        
+        // 使用 Three.js 内置方法，已处理 WebGL1/WebGL2 兼容性
+        this.renderer.readRenderTargetPixels(renderTarget, 0, 0, this.width, this.height, pixelBuffer);
         return pixelBuffer;
     }
 
     private textureTo2DArray(pixelBuffer: Float32Array, channel: 'r' | 'g' | 'b' | 'a'): number[][] {
         const idxMap = { r: 0, g: 1, b: 2, a: 3 };
         const channelIdx = idxMap[channel];
+        const sampleStep = 4; // 每隔4个像素取一个样本
         const data2D: number[][] = [];
-        for (let y = 0; y < this.height; y++) {
+        for (let y = 0; y < this.height; y += sampleStep) {
             const row: number[] = [];
-            for (let x = 0; x < this.width; x++) {
+            for (let x = 0; x < this.width; x += sampleStep) {
                 const i = (y * this.width + x) * 4 + channelIdx;
-                row.push(pixelBuffer[i]);
+                row.push(parseFloat(pixelBuffer[i].toFixed(4))); // 保留4位小数
             }
             data2D.push(row);
         }
@@ -902,6 +894,6 @@ export class FluidSimulator {
     }
 
     public static waterFragmentShader(): string {
-        return `uniform sampler2D phiTex; uniform sampler2D velTex; uniform float time; uniform vec2 resolution; uniform vec3 lightDir; uniform vec3 waterColor; uniform vec3 deepColor; uniform float edgeWidth; uniform float edgeIntensity; varying vec2 vUv; vec3 computeNormal(vec2 uv, float eps) { float phi = texture2D(phiTex, uv).r; float phi_r = texture2D(phiTex, uv + vec2(eps, 0.0)).r; float phi_l = texture2D(phiTex, uv - vec2(eps, 0.0)).r; float phi_t = texture2D(phiTex, uv + vec2(0.0, eps)).r; float phi_b = texture2D(phiTex, uv - vec2(0.0, eps)).r; vec3 grad = vec3(phi_r - phi_l, phi_t - phi_b, 0.0); float len = length(grad); if (len < 0.001) return vec3(0.0, 0.0, 1.0); return normalize(grad); } void main() { float phi = texture2D(phiTex, vUv).r; if (phi > 0.0) discard; float eps = 1.0 / resolution.x; vec3 normal = computeNormal(vUv, eps); float depth = clamp(-phi * 2.0, 0.0, 1.0); vec3 baseColor = mix(waterColor, deepColor, depth); float diff = max(0.2, dot(normal, normalize(lightDir))); vec3 color = baseColor * diff; vec3 viewDir = vec3(0.0, 0.0, 1.0); vec3 halfDir = normalize(normalize(lightDir) + viewDir); float spec = pow(max(dot(normal, halfDir), 0.0), 64.0); color += vec3(1.0) * spec * 0.6; float edge = 1.0 - smoothstep(0.0, edgeWidth, abs(phi)); color += vec3(0.5, 0.7, 1.0) * edge * edgeIntensity; vec2 vel = texture2D(velTex, vUv).rg; float flow = length(vel) * 0.3; color += vec3(0.1, 0.2, 0.3) * flow; gl_FragColor = vec4(color, 0.92); }`;
+        return `uniform sampler2D phiTex; uniform sampler2D velTex; uniform float time; uniform vec2 resolution; uniform vec3 lightDir; uniform vec3 waterColor; uniform vec3 deepColor; uniform float edgeWidth; uniform float edgeIntensity; varying vec2 vUv; vec3 computeNormal(vec2 uv, float eps) { float phi = texture2D(phiTex, uv).r; float phi_r = texture2D(phiTex, uv + vec2(eps, 0.0)).r; float phi_l = texture2D(phiTex, uv - vec2(eps, 0.0)).r; float phi_t = texture2D(phiTex, uv + vec2(0.0, eps)).r; float phi_b = texture2D(phiTex, uv - vec2(0.0, eps)).r; vec3 grad = vec3(phi_r - phi_l, phi_t - phi_b, 0.0); float len = length(grad); if (len < 0.001) return vec3(0.0, 0.0, 1.0); return normalize(grad); } void main() { float phi = texture2D(phiTex, vUv).r; if (phi >= 0.0) discard; float eps = 1.0 / resolution.x; vec3 normal = computeNormal(vUv, eps); float depth = clamp(-phi * 2.0, 0.0, 1.0); vec3 baseColor = mix(waterColor, deepColor, depth); float diff = max(0.2, dot(normal, normalize(lightDir))); vec3 color = baseColor * diff; vec3 viewDir = vec3(0.0, 0.0, 1.0); vec3 halfDir = normalize(normalize(lightDir) + viewDir); float spec = pow(max(dot(normal, halfDir), 0.0), 64.0); color += vec3(1.0) * spec * 0.6; float edge = 1.0 - smoothstep(0.0, edgeWidth, abs(phi)); color += vec3(0.5, 0.7, 1.0) * edge * edgeIntensity; vec2 vel = texture2D(velTex, vUv).rg; float flow = length(vel) * 0.3; color += vec3(0.1, 0.2, 0.3) * flow; gl_FragColor = vec4(color, 0.92); }`;
     }
 }

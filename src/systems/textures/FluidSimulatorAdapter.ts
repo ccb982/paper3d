@@ -45,8 +45,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         // 使用 FluidSimulator 内置的分层渲染材质
         this.material = this.simulator.getRenderMaterial();
         
-        // 启用调试录制（记录前20帧）
-        this.simulator.enableDebugRecording(true, 20);
+        // 启用调试录制（记录前10帧）
+        this.simulator.enableDebugRecording(true, 10);
     }
     
     generate(): THREE.Texture | THREE.Material {
