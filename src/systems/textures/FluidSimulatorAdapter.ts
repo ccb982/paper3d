@@ -24,7 +24,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             surfaceTension: 0.0728,
             gravity: 9.81,
             pressureIterations: 200,
-            reinitIterations: 15,
+            reinitIterations: 5,
             timeStep: 0.002,
             restitution: 0.3,
             friction: 0.95,

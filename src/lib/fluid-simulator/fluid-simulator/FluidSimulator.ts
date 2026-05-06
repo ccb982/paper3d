@@ -309,14 +309,15 @@ export class FluidSimulator {
                         } 
                     } 
 
-                    if (injectionEnabled) { 
-                        float dist = length(uv - injectionPos); 
-                        if (dist < injectionSize) { 
-                            float mask = 1.0 - smoothstep(0.0, injectionSize, dist); 
-                            phi = phi - injectionFlowRate * dt * mask; 
-                            phi = clamp(phi, -0.5, 0.5); 
-                            vel += injectionVel * mask; 
-                        } 
+                    if (injectionEnabled) {
+                        float dist = length(uv - injectionPos);
+                        // 只在空气中（phi > 0）且距离足够近时注射
+                        if (dist < injectionSize && phi > 0.0) {
+                            float mask = 1.0 - smoothstep(0.0, injectionSize, dist);
+                            phi = phi - injectionFlowRate * dt * mask;
+                            phi = clamp(phi, -0.5, 0.5);
+                            vel += injectionVel * mask;
+                        }
                     } 
 
                     // 全局速度限制 - 应用于所有流体区域 
@@ -450,11 +451,46 @@ export class FluidSimulator {
             fragmentShader: `uniform sampler2D velocity; uniform sampler2D forcedVel; uniform sampler2D levelset; uniform float dt; uniform vec2 resolution; uniform bool injectionEnabled; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = clamp(uv - step, 0.0, 1.0); float phi; if (injectionEnabled) { phi = texture2D(forcedVel, back).b; } else { phi = texture2D(levelset, back).r; } gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
         });
 
-        // Level Set 重初始化
+        // Level Set 重初始化（窄带限制，只在界面附近演化）
         this.levelSetReinitMat = new THREE.ShaderMaterial({
-            uniforms: { levelset: { value: null }, dt_reinit: { value: 0.5 / Math.min(this.width, this.height) }, resolution: { value: res } },
+            uniforms: { levelset: { value: null }, dt_reinit: { value: 0.1 / Math.min(this.width, this.height) }, resolution: { value: res } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D levelset; uniform float dt_reinit; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; float phi0 = texture2D(levelset, uv).r; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float phi_r = texture2D(levelset, uv + dx).r; float phi_l = texture2D(levelset, uv - dx).r; float phi_t = texture2D(levelset, uv + dy).r; float phi_b = texture2D(levelset, uv - dy).r; vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx.x); float grad_len = length(grad); float eps = 0.001; float sign_phi0 = phi0 > eps ? 1.0 : (phi0 < -eps ? -1.0 : 1.0); float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0); gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0); }`
+            fragmentShader: `
+            uniform sampler2D levelset;
+            uniform float dt_reinit;
+            uniform vec2 resolution;
+            varying vec2 vUv;
+
+            void main() {
+                vec2 uv = vUv;
+                float phi0 = texture2D(levelset, uv).r;
+                float dx = 1.0 / resolution.x;
+                float eps = 0.001;
+
+                // 窄带限制：只重初始化界面附近（abs(phi) < 2*dx）
+                if (abs(phi0) > 2.0 * dx) {
+                    gl_FragColor = vec4(phi0, 0.0, 0.0, 1.0);
+                    return;
+                }
+
+                float phi_r = texture2D(levelset, uv + vec2(dx, 0.0)).r;
+                float phi_l = texture2D(levelset, uv - vec2(dx, 0.0)).r;
+                float phi_t = texture2D(levelset, uv + vec2(0.0, dx)).r;
+                float phi_b = texture2D(levelset, uv - vec2(0.0, dx)).r;
+
+                vec2 grad = vec2(phi_r - phi_l, phi_t - phi_b) / (2.0 * dx);
+                float grad_len = length(grad);
+
+                float sign_phi0 = phi0 > eps ? 1.0 : (phi0 < -eps ? -1.0 : 1.0);
+                float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0);
+
+                // 避免符号反转
+                if (sign_phi0 > 0.0 && phi_new < 0.0) phi_new = 0.0;
+                if (sign_phi0 < 0.0 && phi_new > 0.0) phi_new = 0.0;
+
+                gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0);
+            }
+            `
         });
 
         // 固体边界清理 - 清理速度
