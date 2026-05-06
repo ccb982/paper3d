@@ -742,13 +742,13 @@ export class FluidSimulator {
     private copyShader(): THREE.ShaderMaterial {
         const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
         return new THREE.ShaderMaterial({
-            uniforms: { texture: { value: null } },
+            uniforms: { tex: { value: null } },
             vertexShader: vs,
             fragmentShader: `
-                uniform sampler2D texture;
+                uniform sampler2D tex;
                 varying vec2 vUv;
                 void main() {
-                    gl_FragColor = texture2D(texture, vUv);
+                    gl_FragColor = texture2D(tex, vUv);
                 }
             `
         });
@@ -834,7 +834,7 @@ export class FluidSimulator {
         // 2. 初始化：p = 0（已有）, r = b, z = M⁻¹r, d = z
         // r = b
         const copyMat = this.copyShader();
-        copyMat.uniforms.texture.value = this.bTex.texture;
+        copyMat.uniforms.tex.value = this.bTex.texture;
         this.renderFullscreen(copyMat, this.rTex);
 
         // z = M⁻¹r
@@ -843,7 +843,7 @@ export class FluidSimulator {
         this.renderFullscreen(precondMat, this.zTex);
 
         // d = z
-        copyMat.uniforms.texture.value = this.zTex.texture;
+        copyMat.uniforms.tex.value = this.zTex.texture;
         this.renderFullscreen(copyMat, this.dTex);
 
         // 计算初始 rz = dot(r, z)
