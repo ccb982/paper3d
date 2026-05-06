@@ -21,7 +21,7 @@ export interface FluidParams {
     injectionVelY?: number;
     injectionSize?: number;
     usePCG?: boolean;           // 是否使用PCG求解器（默认true）
-    dissipationRate?: number;   // 流体消散速率（每步 phi 增加量），0表示不消散
+    maxLifetime?: number;       // 流体最大寿命（秒），超过后消散，0表示不消散
     // 分层渲染参数
     waterColor?: THREE.Color;           // 水面颜色
     deepColor?: THREE.Color;            // 深水颜色
@@ -114,6 +114,13 @@ export class FluidSimulator {
     private solidBoundaryClearPhiMat!: THREE.ShaderMaterial;   // 清理固体内部 phi
     private bottomWallMat!: THREE.ShaderMaterial;              // 底部墙体边界（已废弃）
     private dissipationMat!: THREE.ShaderMaterial;           // 流体消散着色器
+    private ageUpdateMat!: THREE.ShaderMaterial;             // 年龄更新着色器
+    private ageAdvectionMat!: THREE.ShaderMaterial;          // 年龄平流着色器（让年龄跟随水流）
+
+    // 流体年龄纹理（用于定时消散）
+    private ageTexA!: THREE.WebGLRenderTarget;
+    private ageTexB!: THREE.WebGLRenderTarget;
+    private curAgeTex!: THREE.WebGLRenderTarget;
 
     // 分层渲染相关
     private renderMaterial!: THREE.ShaderMaterial;
@@ -216,6 +223,11 @@ export class FluidSimulator {
         this.curVelTex = this.velTexA;
         this.curPhiTex = this.phiTexA;
         this.curPressureTex = this.pressureTexA;
+
+        // 年龄纹理（用于定时消散）
+        this.ageTexA = createRT();
+        this.ageTexB = createRT();
+        this.curAgeTex = this.ageTexA;
     }
 
     private initTextures(): void {
@@ -235,6 +247,21 @@ export class FluidSimulator {
         // 初始压力为 0
         this.renderFullscreen(this.initPressureShader(), this.pressureTexA);
         this.renderFullscreen(this.initPressureShader(), this.pressureTexB);
+
+        // 确保 curPhiTex 已设置（虽然 createTextures 已经设置过）
+        this.curPhiTex = this.phiTexA;
+
+        // 初始化年龄纹理（所有像素年龄=0）
+        const initAgeShader = new THREE.ShaderMaterial({
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: `varying vec2 vUv; void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); }`
+        });
+        this.renderFullscreen(initAgeShader, this.ageTexA);
+        this.renderFullscreen(initAgeShader, this.ageTexB);
+        initAgeShader.dispose();
+
+        // 确保 curAgeTex 指向正确的初始纹理
+        this.curAgeTex = this.ageTexA;
     }
 
     private copyTextureToTarget(source: THREE.Texture, target: THREE.WebGLRenderTarget): void {
@@ -676,20 +703,116 @@ export class FluidSimulator {
 
         // 流体消散着色器
         this.dissipationMat = new THREE.ShaderMaterial({
-            uniforms: { levelset: { value: null }, dissipationRate: { value: this.params.dissipationRate ?? 0.0 }, dt: { value: this.params.timeStep } },
+            uniforms: { 
+                levelset: { value: null }, 
+                age: { value: null },
+                maxLifetime: { value: this.params.maxLifetime ?? 10.0 }, 
+                dt: { value: this.params.timeStep } 
+            },
             vertexShader: vs,
             fragmentShader: `
                 uniform sampler2D levelset;
-                uniform float dissipationRate;
+                uniform sampler2D age;
+                uniform float maxLifetime;
                 uniform float dt;
                 varying vec2 vUv;
                 void main() {
                     float phi = texture2D(levelset, vUv).r;
-                    if (phi < 0.0) {
-                        phi += dissipationRate * dt;
-                        if (phi > 0.0) phi = 0.0;
+                    float currentAge = texture2D(age, vUv).r;
+                    
+                    // 只有当 maxLifetime > 0 且水的年龄超过最大寿命时才消散
+                    if (maxLifetime > 0.0 && phi < 0.0 && currentAge >= maxLifetime) {
+                        phi = 0.1; // 将水变回空气
                     }
+                    
                     gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 年龄更新着色器
+        this.ageUpdateMat = new THREE.ShaderMaterial({
+            uniforms: { 
+                age: { value: null },
+                levelset: { value: null },
+                dt: { value: this.params.timeStep },
+                injectionEnabled: { value: this.params.injectionEnabled ?? false },
+                injectionPos: { value: new THREE.Vector2(this.params.injectionPosX ?? 0.5, this.params.injectionPosY ?? 0.5) },
+                injectionSize: { value: this.params.injectionSize ?? 0.05 }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D age;
+                uniform sampler2D levelset;
+                uniform float dt;
+                uniform bool injectionEnabled;
+                uniform vec2 injectionPos;
+                uniform float injectionSize;
+                varying vec2 vUv;
+                void main() {
+                    float currentAge = texture2D(age, vUv).r;
+                    float phi = texture2D(levelset, vUv).r;
+                    
+                    // 如果是注入区域，重置年龄为0
+                    if (injectionEnabled) {
+                        float dist = length(vUv - injectionPos);
+                        if (dist < injectionSize && phi < 0.0) {
+                            currentAge = 0.0;
+                        }
+                    }
+                    
+                    // 水粒子年龄增加
+                    if (phi < 0.0) {
+                        currentAge += dt;
+                    } else {
+                        currentAge = 0.0; // 空气区域年龄为0
+                    }
+                    
+                    gl_FragColor = vec4(currentAge, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 年龄平流着色器（让年龄跟随水流移动）
+        this.ageAdvectionMat = new THREE.ShaderMaterial({
+            uniforms: { 
+                age: { value: null },
+                velocity: { value: null },
+                levelset: { value: null },
+                dt: { value: this.params.timeStep },
+                resolution: { value: new THREE.Vector2(this.width, this.height) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D age;
+                uniform sampler2D velocity;
+                uniform sampler2D levelset;
+                uniform float dt;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+                void main() {
+                    float phi = texture2D(levelset, vUv).r;
+                    
+                    // 如果是空气，年龄为0
+                    if (phi >= 0.0) {
+                        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                        return;
+                    }
+                    
+                    // 获取当前速度
+                    vec2 vel = texture2D(velocity, vUv).rg;
+                    
+                    // 计算反向追踪位置（与速度平流保持一致：vel * dt / resolution）
+                    vec2 step = vel * dt / resolution;
+                    vec2 prevPos = vUv - step;
+                    
+                    // 边界检查：确保采样位置在纹理范围内
+                    prevPos = clamp(prevPos, vec2(0.0), vec2(1.0));
+                    
+                    // 采样该位置的年龄（跟随水流移动）
+                    float prevAge = texture2D(age, prevPos).r;
+                    
+                    gl_FragColor = vec4(prevAge, 0.0, 0.0, 1.0);
                 }
             `
         });
@@ -1201,10 +1324,37 @@ export class FluidSimulator {
         this.renderFullscreen(this.levelSetAdvectionMat, this.phiTexB);
         this.curPhiTex = this.phiTexB;
 
-        // 8.5. 流体消散（可选）
-        if (this.params.dissipationRate && this.params.dissipationRate > 0) {
+        // 8.5. 流体年龄更新（包含平流）
+        if (this.params.maxLifetime && this.params.maxLifetime > 0) {
+            // 使用真实时间增量更新年龄（_deltaTime 可能是真实时间，也可能是默认的 timeStep）
+            const realDelta = _deltaTime ?? this.params.timeStep;
+            
+            // 步骤1: 年龄平流 - 让年龄跟随水流移动
+            const ageAdvectionDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+            this.ageAdvectionMat.uniforms.age.value = this.curAgeTex.texture;
+            this.ageAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
+            this.ageAdvectionMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.ageAdvectionMat.uniforms.dt.value = this.params.timeStep;  // 物理步长用于平流
+            this.renderFullscreen(this.ageAdvectionMat, ageAdvectionDst);
+            this.curAgeTex = ageAdvectionDst;
+
+            // 步骤2: 年龄更新 - 增加年龄（使用真实时间）+ 注入区域重置
+            const ageUpdateDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+            this.ageUpdateMat.uniforms.age.value = this.curAgeTex.texture;
+            this.ageUpdateMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.ageUpdateMat.uniforms.injectionEnabled.value = this.params.injectionEnabled ?? false;
+            this.ageUpdateMat.uniforms.injectionPos.value.set(
+                this.params.injectionPosX ?? 0.5,
+                this.params.injectionPosY ?? 0.5
+            );
+            this.ageUpdateMat.uniforms.injectionSize.value = this.params.injectionSize ?? 0.05;
+            this.ageUpdateMat.uniforms.dt.value = realDelta;  // 使用真实时间增量
+            this.renderFullscreen(this.ageUpdateMat, ageUpdateDst);
+            this.curAgeTex = ageUpdateDst;
+
+            // 步骤3: 流体消散（基于年龄）
             this.dissipationMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.dissipationMat.uniforms.dissipationRate.value = this.params.dissipationRate;
+            this.dissipationMat.uniforms.age.value = this.curAgeTex.texture;
             this.renderFullscreen(this.dissipationMat, this.phiTexA);
             this.curPhiTex = this.phiTexA;
         }
@@ -1502,7 +1652,9 @@ export class FluidSimulator {
             // PCG求解器纹理
             this.rTex, this.dTex, this.qTex, this.zTex, this.bTex,
             // 预分配归约纹理池
-            ...this.reduceTexPool
+            ...this.reduceTexPool,
+            // 年龄纹理
+            this.ageTexA, this.ageTexB
         ];
         targets.forEach(t => t?.dispose());
         
@@ -1526,7 +1678,11 @@ export class FluidSimulator {
             this.spmvMat, this.axpyMat, this.scaleMat, this.computeBMat,
             this.precondMat, this.vecSubMat, this.multiplyMat, this.reduceMat, this.copyMat,
             // 消散材质
-            this.dissipationMat
+            this.dissipationMat,
+            // 年龄更新材质
+            this.ageUpdateMat,
+            // 年龄平流材质
+            this.ageAdvectionMat
         ];
         materials.forEach(m => m?.dispose());
         

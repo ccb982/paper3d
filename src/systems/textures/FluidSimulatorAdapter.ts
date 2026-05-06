@@ -8,7 +8,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
 
     private simulator: FluidSimulator;
     private material: THREE.ShaderMaterial;
-    private lastUpdateTime: number = 0;
+    private lastUpdateTime: number = performance.now();
     private updateInterval: number = 16;
 
     constructor(
@@ -29,7 +29,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             restitution: 0.3,
             friction: 0.95,
             usePCG: false,
-            dissipationRate: 0.0000,
+            maxLifetime: 0,  // 暂时关闭寿命功能
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
@@ -47,8 +47,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         // 使用 FluidSimulator 内置的分层渲染材质
         this.material = this.simulator.getRenderMaterial();
         
-        // 调试录制已禁用
-        // this.simulator.enableDebugRecording(true, 10);
+        // 调试录制（记录 10 帧）
+        this.simulator.enableDebugRecording(true, 10);
     }
     
     generate(): THREE.Texture | THREE.Material {
@@ -57,15 +57,20 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
     
     update(delta?: number): void {
         const now = performance.now();
-        if (now - this.lastUpdateTime < this.updateInterval) {
+        const elapsed = now - this.lastUpdateTime;
+        if (elapsed < this.updateInterval) {
             return;
         }
         this.lastUpdateTime = now;
 
+        // 计算真实时间增量（转换为秒），用于年龄计时
+        const realDelta = elapsed / 1000;
+        
         if (delta !== undefined) {
             this.simulator.update(delta);
         } else {
-            this.simulator.update();
+            // 传入真实时间增量，用于年龄计时
+            this.simulator.update(realDelta);
         }
 
         this.simulator.updateRenderUniforms();
