@@ -133,6 +133,7 @@ export class FluidSimulator {
     private lightDir: THREE.Vector3;
 
     private initialized = false;
+    private frameCount = 0;
 
     constructor(renderer: THREE.WebGLRenderer, params: FluidParams) {
         this.renderer = renderer;
@@ -1235,6 +1236,11 @@ export class FluidSimulator {
     public update(_deltaTime?: number): void {
         if (!this.initialized) return;
 
+        // 帧开始时的纹理状态调试（每10帧输出一次）
+        if (this.frameCount % 10 === 0) {
+            console.log(`[寿命系统] 帧开始 - curPhiTex: ${this.curPhiTex === this.phiTexA ? 'A' : 'B'}, curAgeTex: ${this.curAgeTex === this.ageTexA ? 'A' : 'B'}`);
+        }
+
         // 辅助函数：更新注入相关的 uniform
         const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
             if (mat.uniforms.injectionEnabled) mat.uniforms.injectionEnabled.value = this.params.injectionEnabled ?? false;
@@ -1317,17 +1323,24 @@ export class FluidSimulator {
         this.renderFullscreen(this.velocityCorrectMat, this.velCorrectTex);
         this.curVelTex = this.velCorrectTex;
 
-        // 8. Level Set 平流
+        // 8. Level Set 平流（双缓冲）
+        const phiAdvectDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
         this.levelSetAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
         this.levelSetAdvectionMat.uniforms.forcedVel.value = this.forcedVelTex.texture;
         this.levelSetAdvectionMat.uniforms.levelset.value = this.curPhiTex.texture;
-        this.renderFullscreen(this.levelSetAdvectionMat, this.phiTexB);
-        this.curPhiTex = this.phiTexB;
+        this.renderFullscreen(this.levelSetAdvectionMat, phiAdvectDst);
+        this.curPhiTex = phiAdvectDst;
 
         // 8.5. 流体年龄更新（包含平流）
         if (this.params.maxLifetime && this.params.maxLifetime > 0) {
             // 使用真实时间增量更新年龄（_deltaTime 可能是真实时间，也可能是默认的 timeStep）
             const realDelta = _deltaTime ?? this.params.timeStep;
+            
+            // 控制台输出寿命调试信息（每10帧输出一次，避免刷屏）
+            if (this.frameCount % 10 === 0) {
+                console.log(`[寿命系统] maxLifetime: ${this.params.maxLifetime.toFixed(3)}s | 帧时间: ${realDelta.toFixed(4)}s | 帧号: ${this.frameCount}`);
+                console.log(`          原理: ageTex纹理存储每个像素年龄，通过速度平流跟随水滴移动`);
+            }
             
             // 步骤1: 年龄平流 - 让年龄跟随水流移动
             const ageAdvectionDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
@@ -1353,10 +1366,12 @@ export class FluidSimulator {
             this.curAgeTex = ageUpdateDst;
 
             // 步骤3: 流体消散（基于年龄）
+            // 使用双缓冲避免读写冲突
+            const dissipationDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
             this.dissipationMat.uniforms.levelset.value = this.curPhiTex.texture;
             this.dissipationMat.uniforms.age.value = this.curAgeTex.texture;
-            this.renderFullscreen(this.dissipationMat, this.phiTexA);
-            this.curPhiTex = this.phiTexA;
+            this.renderFullscreen(this.dissipationMat, dissipationDst);
+            this.curPhiTex = dissipationDst;
         }
 
         // 9. Level Set 重初始化（双缓冲交替）
@@ -1393,6 +1408,9 @@ export class FluidSimulator {
                 this.downloadDebugData();
             }
         }
+
+        // 帧计数递增
+        this.frameCount++;
     }
 
     // ==================== 调试录制接口 ====================

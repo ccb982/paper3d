@@ -29,7 +29,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             restitution: 0.3,
             friction: 0.95,
             usePCG: false,
-            maxLifetime: 0,  // 暂时关闭寿命功能
+            maxLifetime: 0.09,
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
@@ -47,8 +47,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         // 使用 FluidSimulator 内置的分层渲染材质
         this.material = this.simulator.getRenderMaterial();
         
-        // 调试录制（记录 10 帧）
-        this.simulator.enableDebugRecording(true, 10);
+        // 调试录制（已关闭）
+        // this.simulator.enableDebugRecording(true, 10);
     }
     
     generate(): THREE.Texture | THREE.Material {
