@@ -7,9 +7,9 @@ export interface FluidParams {
     viscosity: number;          // Pa·s (动力粘度)
     surfaceTension: number;     // N/m
     gravity: number;            // m/s² 向下为正
-    pressureIterations: number; // 推荐20~40
-    reinitIterations: number;   // 推荐3~5
-    timeStep: number;           // 固定步长，推荐0.016
+    pressureIterations: number; // 推荐15~30（PCG迭代，收敛远快于Jacobi）
+    reinitIterations: number;   // 推荐3~5（窄带重初始化，更稳定）
+    timeStep: number;           // 固定步长，推荐0.002（静水测试用更小值）
     restitution: number;        // 恢复系数：0.0-1.0，推荐0.8
     friction: number;           // 摩擦系数：0.0-1.0，推荐0.95
     initialLevelSet?: THREE.Texture;  // 自定义初始 Level Set 纹理（可选）
@@ -20,6 +20,7 @@ export interface FluidParams {
     injectionVelX?: number;
     injectionVelY?: number;
     injectionSize?: number;
+    usePCG?: boolean;           // 是否使用PCG求解器（默认true）
     // 分层渲染参数
     waterColor?: THREE.Color;           // 水面颜色
     deepColor?: THREE.Color;            // 深水颜色
@@ -56,6 +57,13 @@ export class FluidSimulator {
     private forcedVelTex!: THREE.WebGLRenderTarget;
     private velAfterCollisionTex!: THREE.WebGLRenderTarget;
     private velCorrectTex!: THREE.WebGLRenderTarget;
+
+    // PCG求解器纹理（用于预条件共轭梯度法）
+    private rTex!: THREE.WebGLRenderTarget;    // 残差 r = b - Ap
+    private dTex!: THREE.WebGLRenderTarget;    // 搜索方向 d
+    private qTex!: THREE.WebGLRenderTarget;    // q = A * d
+    private zTex!: THREE.WebGLRenderTarget;    // 预条件后的残差 (M⁻¹r)
+    private bTex!: THREE.WebGLRenderTarget;    // 右侧项 b = (ρ/dt) * div
 
     // 固体相关
     private solidMaskTex: THREE.Texture | null = null;
@@ -156,6 +164,13 @@ export class FluidSimulator {
         this.forcedVelTex = createRT();
         this.velAfterCollisionTex = createRT();
         this.velCorrectTex = createRT();
+
+        // PCG求解器纹理
+        this.rTex = createRT();
+        this.dTex = createRT();
+        this.qTex = createRT();
+        this.zTex = createRT();
+        this.bTex = createRT();
 
         this.curVelTex = this.velTexA;
         this.curPhiTex = this.phiTexA;
@@ -504,7 +519,7 @@ export class FluidSimulator {
         this.solidBoundaryClearPhiMat = new THREE.ShaderMaterial({
             uniforms: { levelset: { value: null }, solidMask: { value: null } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) phi = -1.0; gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
+            fragmentShader: `uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) phi = 1.0; gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
         });
 
         // 底部墙体边界 - 防止流体穿透底部
@@ -526,6 +541,358 @@ export class FluidSimulator {
             }
             `
         });
+    }
+
+    // ==================== PCG求解器相关着色器 ====================
+    // SpMV着色器：计算 q = A * x（A是Poisson矩阵，负拉普拉斯算子）
+    private spmvShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const res = new THREE.Vector2(this.width, this.height);
+        return new THREE.ShaderMaterial({
+            uniforms: { x: { value: null }, levelset: { value: null }, resolution: { value: res } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D x;
+                uniform sampler2D levelset;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+                void main() {
+                    vec2 uv = vUv;
+                    float dx = 1.0 / resolution.x;
+                    vec2 dxVec = vec2(dx, 0.0);
+                    vec2 dyVec = vec2(0.0, dx);
+
+                    float phi = texture2D(levelset, uv).r;
+                    // 空气区域，直接输出0（不参与系统）
+                    if (phi > 0.0) { gl_FragColor = vec4(0.0); return; }
+
+                    float xC = texture2D(x, uv).r;
+                    float xL = texture2D(x, uv - dxVec).r;
+                    float xR = texture2D(x, uv + dxVec).r;
+                    float xD = texture2D(x, uv - dyVec).r;
+                    float xU = texture2D(x, uv + dyVec).r;
+
+                    // Neumann边界：如果邻居是空气，用当前值代替
+                    float phiL = texture2D(levelset, uv - dxVec).r;
+                    float phiR = texture2D(levelset, uv + dxVec).r;
+                    float phiD = texture2D(levelset, uv - dyVec).r;
+                    float phiU = texture2D(levelset, uv + dyVec).r;
+                    if (phiL > 0.0) xL = xC;
+                    if (phiR > 0.0) xR = xC;
+                    if (phiD > 0.0) xD = xC;
+                    if (phiU > 0.0) xU = xC;
+
+                    // 标准负拉普拉斯: -∇²x ≈ (4*xC - xL - xR - xD - xU) / (dx*dx)
+                    float Ax = (4.0 * xC - xL - xR - xD - xU) / (dx * dx);
+                    gl_FragColor = vec4(Ax, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 向量更新着色器：y = a * x + y
+    private axpyShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        return new THREE.ShaderMaterial({
+            uniforms: { x: { value: null }, y: { value: null }, a: { value: 0.0 } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D x;
+                uniform sampler2D y;
+                uniform float a;
+                varying vec2 vUv;
+                void main() {
+                    float xVal = texture2D(x, vUv).r;
+                    float yVal = texture2D(y, vUv).r;
+                    gl_FragColor = vec4(a * xVal + yVal, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 向量缩放着色器：y = a * x
+    private scaleShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        return new THREE.ShaderMaterial({
+            uniforms: { x: { value: null }, a: { value: 0.0 } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D x;
+                uniform float a;
+                varying vec2 vUv;
+                void main() {
+                    float xVal = texture2D(x, vUv).r;
+                    gl_FragColor = vec4(a * xVal, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 计算右侧项着色器：b = (density / dt) * div
+    private computeBShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        return new THREE.ShaderMaterial({
+            uniforms: { divergence: { value: null }, density: { value: this.params.density }, dt: { value: this.params.timeStep } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D divergence;
+                uniform float density;
+                uniform float dt;
+                varying vec2 vUv;
+                void main() {
+                    float div = texture2D(divergence, vUv).r;
+                    float b = (density / dt) * div;
+                    gl_FragColor = vec4(b, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // Jacobi预条件着色器：z = M⁻¹ * r = r / diag(A)，diag(A) = 4/dx²
+    private jacobiPreconditionShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const res = new THREE.Vector2(this.width, this.height);
+        return new THREE.ShaderMaterial({
+            uniforms: { r: { value: null }, resolution: { value: res } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D r;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+                void main() {
+                    float dx = 1.0 / resolution.x;
+                    float diag = 4.0 / (dx * dx);  // A的对角元
+                    float rVal = texture2D(r, vUv).r;
+                    float z = rVal / diag;  // z = M⁻¹r = r / diag(A)
+                    gl_FragColor = vec4(z, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 向量减法着色器：y = x - a * z
+    private vecSubShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        return new THREE.ShaderMaterial({
+            uniforms: { x: { value: null }, z: { value: null }, a: { value: 0.0 } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D x;
+                uniform sampler2D z;
+                uniform float a;
+                varying vec2 vUv;
+                void main() {
+                    float xVal = texture2D(x, vUv).r;
+                    float zVal = texture2D(z, vUv).r;
+                    gl_FragColor = vec4(xVal - a * zVal, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 向量相乘着色器：out = a * b（用于内积计算）
+    private multiplyShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        return new THREE.ShaderMaterial({
+            uniforms: { a: { value: null }, b: { value: null } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D a;
+                uniform sampler2D b;
+                varying vec2 vUv;
+                void main() {
+                    float aVal = texture2D(a, vUv).r;
+                    float bVal = texture2D(b, vUv).r;
+                    gl_FragColor = vec4(aVal * bVal, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 归约着色器：2x2 区域求和（用于内积归约）
+    private reduceShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const res = new THREE.Vector2(this.width, this.height);
+        return new THREE.ShaderMaterial({
+            uniforms: { inputTex: { value: null }, resolution: { value: res } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D inputTex;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+                void main() {
+                    vec2 dx = vec2(1.0 / resolution.x, 0.0);
+                    vec2 dy = vec2(0.0, 1.0 / resolution.y);
+                    
+                    // 读取2x2区域的四个像素
+                    float v00 = texture2D(inputTex, vUv).r;
+                    float v01 = texture2D(inputTex, vUv + dx).r;
+                    float v10 = texture2D(inputTex, vUv + dy).r;
+                    float v11 = texture2D(inputTex, vUv + dx + dy).r;
+                    
+                    // 求和
+                    float sum = v00 + v01 + v10 + v11;
+                    gl_FragColor = vec4(sum, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // 复制着色器
+    private copyShader(): THREE.ShaderMaterial {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        return new THREE.ShaderMaterial({
+            uniforms: { texture: { value: null } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D texture;
+                varying vec2 vUv;
+                void main() {
+                    gl_FragColor = texture2D(texture, vUv);
+                }
+            `
+        });
+    }
+
+    // 计算两个向量的内积：dot(a, b) = sum(a_i * b_i)
+    // 使用GPU归约：先计算逐像素乘积，然后逐级2x2归约到1x1
+    private computeDot(aTex: THREE.WebGLRenderTarget, bTex: THREE.WebGLRenderTarget): number {
+        // 创建临时渲染目标（尺寸与原纹理相同）
+        const tempTex1 = new THREE.WebGLRenderTarget(this.width, this.height, {
+            type: THREE.FloatType,
+            format: THREE.RGBAFormat,
+            wrapS: THREE.ClampToEdgeWrapping,
+            wrapT: THREE.ClampToEdgeWrapping,
+            minFilter: THREE.NearestFilter,
+            magFilter: THREE.NearestFilter
+        });
+
+        // 阶段1: 计算逐像素乘积 a * b
+        const multiplyMat = this.multiplyShader();
+        multiplyMat.uniforms.a.value = aTex.texture;
+        multiplyMat.uniforms.b.value = bTex.texture;
+        this.renderFullscreen(multiplyMat, tempTex1);
+
+        // 阶段2: 逐级归约（每次将分辨率减半）
+        let currentWidth = this.width;
+        let currentHeight = this.height;
+        let currentTex = tempTex1;
+        const reduceMat = this.reduceShader();
+
+        while (currentWidth > 1 || currentHeight > 1) {
+            // 计算下一级分辨率（向上取整）
+            const nextWidth = Math.ceil(currentWidth / 2);
+            const nextHeight = Math.ceil(currentHeight / 2);
+
+            // 创建下一级渲染目标
+            const nextTex = new THREE.WebGLRenderTarget(nextWidth, nextHeight, {
+                type: THREE.FloatType,
+                format: THREE.RGBAFormat,
+                wrapS: THREE.ClampToEdgeWrapping,
+                wrapT: THREE.ClampToEdgeWrapping,
+                minFilter: THREE.NearestFilter,
+                magFilter: THREE.NearestFilter
+            });
+
+            // 更新归约着色器的分辨率
+            reduceMat.uniforms.resolution.value = new THREE.Vector2(currentWidth, currentHeight);
+            reduceMat.uniforms.inputTex.value = currentTex.texture;
+            this.renderFullscreen(reduceMat, nextTex);
+
+            // 清理上一级纹理
+            if (currentTex !== tempTex1) {
+                currentTex.dispose();
+            }
+
+            // 移动到下一级
+            currentTex = nextTex;
+            currentWidth = nextWidth;
+            currentHeight = nextHeight;
+        }
+
+        // 阶段3: 读取最终的1x1纹理值
+        const pixelBuffer = new Float32Array(4);
+        this.renderer.readRenderTargetPixels(currentTex, 0, 0, 1, 1, pixelBuffer);
+        const dotProduct = pixelBuffer[0];
+
+        // 清理临时纹理
+        currentTex.dispose();
+        tempTex1.dispose();
+
+        return dotProduct;
+    }
+
+    // PCG求解器主方法
+    private solvePressurePCG(): void {
+        const cgIter = this.params.pressureIterations;
+        
+        // 1. 计算右侧项 b = (density/dt) * divergence
+        const computeBMat = this.computeBShader();
+        computeBMat.uniforms.divergence.value = this.divergenceTex.texture;
+        this.renderFullscreen(computeBMat, this.bTex);
+
+        // 2. 初始化：p = 0（已有）, r = b, z = M⁻¹r, d = z
+        // r = b
+        const copyMat = this.copyShader();
+        copyMat.uniforms.texture.value = this.bTex.texture;
+        this.renderFullscreen(copyMat, this.rTex);
+
+        // z = M⁻¹r
+        const precondMat = this.jacobiPreconditionShader();
+        precondMat.uniforms.r.value = this.rTex.texture;
+        this.renderFullscreen(precondMat, this.zTex);
+
+        // d = z
+        copyMat.uniforms.texture.value = this.zTex.texture;
+        this.renderFullscreen(copyMat, this.dTex);
+
+        // 计算初始 rz = dot(r, z)
+        let rz = this.computeDot(this.rTex, this.zTex);
+
+        const spmvMat = this.spmvShader();
+        const axpyMat = this.axpyShader();
+        const subMat = this.vecSubShader();
+
+        for (let i = 0; i < cgIter; i++) {
+            // 1. q = A * d
+            spmvMat.uniforms.x.value = this.dTex.texture;
+            spmvMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.renderFullscreen(spmvMat, this.qTex);
+
+            // 2. alpha = rz / dot(d, q)
+            let dq = this.computeDot(this.dTex, this.qTex);
+            let alpha = rz / dq;
+
+            // 3. p = p + alpha * d
+            axpyMat.uniforms.x.value = this.dTex.texture;
+            axpyMat.uniforms.y.value = this.curPressureTex.texture;
+            axpyMat.uniforms.a.value = alpha;
+            this.renderFullscreen(axpyMat, this.pressureTexA);
+            this.curPressureTex = this.pressureTexA;
+
+            // 4. r = r - alpha * q
+            subMat.uniforms.x.value = this.rTex.texture;
+            subMat.uniforms.z.value = this.qTex.texture;
+            subMat.uniforms.a.value = alpha;
+            this.renderFullscreen(subMat, this.rTex);
+
+            // 5. z_new = M⁻¹ * r
+            precondMat.uniforms.r.value = this.rTex.texture;
+            this.renderFullscreen(precondMat, this.zTex);
+
+            // 6. beta = dot(r, z) / rz_old
+            let rz_new = this.computeDot(this.rTex, this.zTex);
+            let beta = rz_new / rz;
+
+            // 7. d = z + beta * d
+            axpyMat.uniforms.x.value = this.dTex.texture;
+            axpyMat.uniforms.y.value = this.zTex.texture;
+            axpyMat.uniforms.a.value = beta;
+            this.renderFullscreen(axpyMat, this.dTex);
+
+            // 8. 更新 rz
+            rz = rz_new;
+        }
     }
 
     // ==================== 分层渲染材质初始化 ====================
@@ -686,18 +1053,24 @@ export class FluidSimulator {
         this.divergenceMat.uniforms.velocity.value = velForDiv;
         this.renderFullscreen(this.divergenceMat, this.divergenceTex);
 
-        // 6. 压力迭代 (Jacobi, 双缓冲) - 只使用一个材质反复更新
-        let pressureSrc = this.pressureTexA;
-        let pressureDst = this.pressureTexB;
-        for (let i = 0; i < this.params.pressureIterations; i++) {
-            this.pressureJacobiMat.uniforms.pressure.value = pressureSrc.texture;
-            this.pressureJacobiMat.uniforms.divergence.value = this.divergenceTex.texture;
-            this.pressureJacobiMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.pressureJacobiMat.uniforms.solidMask.value = this.solidMaskTex ?? this.dummySolidMaskTex;
-            this.renderFullscreen(this.pressureJacobiMat, pressureDst);
-            [pressureSrc, pressureDst] = [pressureDst, pressureSrc];
+        // 6. 压力求解
+        if (this.params.usePCG ?? true) {
+            // 使用PCG求解器
+            this.solvePressurePCG();
+        } else {
+            // 使用Jacobi迭代 (双缓冲) - 只使用一个材质反复更新
+            let pressureSrc = this.pressureTexA;
+            let pressureDst = this.pressureTexB;
+            for (let i = 0; i < this.params.pressureIterations; i++) {
+                this.pressureJacobiMat.uniforms.pressure.value = pressureSrc.texture;
+                this.pressureJacobiMat.uniforms.divergence.value = this.divergenceTex.texture;
+                this.pressureJacobiMat.uniforms.levelset.value = this.curPhiTex.texture;
+                this.pressureJacobiMat.uniforms.solidMask.value = this.solidMaskTex ?? this.dummySolidMaskTex;
+                this.renderFullscreen(this.pressureJacobiMat, pressureDst);
+                [pressureSrc, pressureDst] = [pressureDst, pressureSrc];
+            }
+            this.curPressureTex = pressureSrc;
         }
-        this.curPressureTex = pressureSrc;
 
         // 7. 速度修正
         this.velocityCorrectMat.uniforms.velocity.value = velForDiv;
@@ -1007,7 +1380,9 @@ export class FluidSimulator {
             this.divergenceTex,
             this.forcedVelTex,
             this.velAfterCollisionTex,
-            this.velCorrectTex
+            this.velCorrectTex,
+            // PCG求解器纹理
+            this.rTex, this.dTex, this.qTex, this.zTex, this.bTex
         ];
         targets.forEach(t => t?.dispose());
         
