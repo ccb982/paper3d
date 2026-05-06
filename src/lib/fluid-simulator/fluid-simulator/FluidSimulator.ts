@@ -577,12 +577,15 @@ export class FluidSimulator {
         this.renderFullscreen(this.levelSetAdvectionMat, this.phiTexB);
         this.curPhiTex = this.phiTexB;
 
-        // 9. Level Set 重初始化
+        // 9. Level Set 重初始化（双缓冲交替）
+        let phiSrc = this.curPhiTex;
+        let phiDst = phiSrc === this.phiTexA ? this.phiTexB : this.phiTexA;
         for (let i = 0; i < this.params.reinitIterations; i++) {
-            this.levelSetReinitMat.uniforms.levelset.value = this.curPhiTex.texture;
-            this.renderFullscreen(this.levelSetReinitMat, this.phiTexA);
-            this.curPhiTex = this.phiTexA;
+            this.levelSetReinitMat.uniforms.levelset.value = phiSrc.texture;
+            this.renderFullscreen(this.levelSetReinitMat, phiDst);
+            [phiSrc, phiDst] = [phiDst, phiSrc];  // 交换
         }
+        this.curPhiTex = phiSrc;
 
         // 10. 固体边界清理 #2
         if (this.solidMaskTex) {
