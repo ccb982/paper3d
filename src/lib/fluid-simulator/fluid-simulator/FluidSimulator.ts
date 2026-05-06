@@ -1172,11 +1172,6 @@ export class FluidSimulator {
         this.renderFullscreen(this.velocityCorrectMat, this.velCorrectTex);
         this.curVelTex = this.velCorrectTex;
 
-        // 7.5. 底部墙体边界处理
-        this.bottomWallMat.uniforms.velocity.value = this.curVelTex.texture;
-        this.renderFullscreen(this.bottomWallMat, this.velAfterCollisionTex);
-        this.curVelTex = this.velAfterCollisionTex;
-
         // 8. Level Set 平流
         this.levelSetAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
         this.levelSetAdvectionMat.uniforms.forcedVel.value = this.forcedVelTex.texture;
