@@ -29,6 +29,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             restitution: 0.3,
             friction: 0.95,
             usePCG: false,
+            dissipationRate: 0.0000,
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),

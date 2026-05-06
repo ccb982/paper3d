@@ -21,6 +21,7 @@ export interface FluidParams {
     injectionVelY?: number;
     injectionSize?: number;
     usePCG?: boolean;           // 是否使用PCG求解器（默认true）
+    dissipationRate?: number;   // 流体消散速率（每步 phi 增加量），0表示不消散
     // 分层渲染参数
     waterColor?: THREE.Color;           // 水面颜色
     deepColor?: THREE.Color;            // 深水颜色
@@ -111,7 +112,8 @@ export class FluidSimulator {
     private levelSetReinitMat!: THREE.ShaderMaterial;
     private solidBoundaryClearVelMat!: THREE.ShaderMaterial;  // 清理固体内部速度
     private solidBoundaryClearPhiMat!: THREE.ShaderMaterial;   // 清理固体内部 phi
-    private bottomWallMat!: THREE.ShaderMaterial;              // 底部墙体边界
+    private bottomWallMat!: THREE.ShaderMaterial;              // 底部墙体边界（已废弃）
+    private dissipationMat!: THREE.ShaderMaterial;           // 流体消散着色器
 
     // 分层渲染相关
     private renderMaterial!: THREE.ShaderMaterial;
@@ -671,6 +673,26 @@ export class FluidSimulator {
             vertexShader: vs,
             fragmentShader: `uniform sampler2D tex; varying vec2 vUv; void main() { gl_FragColor = texture2D(tex, vUv); }`
         });
+
+        // 流体消散着色器
+        this.dissipationMat = new THREE.ShaderMaterial({
+            uniforms: { levelset: { value: null }, dissipationRate: { value: this.params.dissipationRate ?? 0.0 }, dt: { value: this.params.timeStep } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D levelset;
+                uniform float dissipationRate;
+                uniform float dt;
+                varying vec2 vUv;
+                void main() {
+                    float phi = texture2D(levelset, vUv).r;
+                    if (phi < 0.0) {
+                        phi += dissipationRate * dt;
+                        if (phi > 0.0) phi = 0.0;
+                    }
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
     }
 
     // ==================== PCG求解器相关着色器 ====================
@@ -1179,6 +1201,14 @@ export class FluidSimulator {
         this.renderFullscreen(this.levelSetAdvectionMat, this.phiTexB);
         this.curPhiTex = this.phiTexB;
 
+        // 8.5. 流体消散（可选）
+        if (this.params.dissipationRate && this.params.dissipationRate > 0) {
+            this.dissipationMat.uniforms.levelset.value = this.curPhiTex.texture;
+            this.dissipationMat.uniforms.dissipationRate.value = this.params.dissipationRate;
+            this.renderFullscreen(this.dissipationMat, this.phiTexA);
+            this.curPhiTex = this.phiTexA;
+        }
+
         // 9. Level Set 重初始化（双缓冲交替）
         let phiSrc = this.curPhiTex;
         let phiDst = phiSrc === this.phiTexA ? this.phiTexB : this.phiTexA;
@@ -1494,7 +1524,9 @@ export class FluidSimulator {
             this.renderMaterial,
             // PCG材质
             this.spmvMat, this.axpyMat, this.scaleMat, this.computeBMat,
-            this.precondMat, this.vecSubMat, this.multiplyMat, this.reduceMat, this.copyMat
+            this.precondMat, this.vecSubMat, this.multiplyMat, this.reduceMat, this.copyMat,
+            // 消散材质
+            this.dissipationMat
         ];
         materials.forEach(m => m?.dispose());
         
