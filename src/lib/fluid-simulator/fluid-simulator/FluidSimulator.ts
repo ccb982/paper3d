@@ -89,6 +89,7 @@ export class FluidSimulator {
     private levelSetReinitMat!: THREE.ShaderMaterial;
     private solidBoundaryClearVelMat!: THREE.ShaderMaterial;  // 清理固体内部速度
     private solidBoundaryClearPhiMat!: THREE.ShaderMaterial;   // 清理固体内部 phi
+    private bottomWallMat!: THREE.ShaderMaterial;              // 底部墙体边界
 
     // 分层渲染相关
     private renderMaterial!: THREE.ShaderMaterial;
@@ -342,26 +343,104 @@ export class FluidSimulator {
             fragmentShader: `uniform sampler2D velocity; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float vxR = texture2D(velocity, uv + dx).r; float vxL = texture2D(velocity, uv - dx).r; float vyT = texture2D(velocity, uv + dy).g; float vyB = texture2D(velocity, uv - dy).g; float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y); gl_FragColor = vec4(div, 0.0, 0.0, 1.0); }`
         });
 
-        // 压力迭代（只需要一个材质反复使用）- 添加自由表面和固体边界条件
+        // 压力迭代（只需要一个材质反复使用）- 添加自由表面 Neumann 边界条件
         this.pressureJacobiMat = new THREE.ShaderMaterial({
-            uniforms: { 
-                pressure: { value: null }, 
-                divergence: { value: null }, 
+            uniforms: {
+                pressure: { value: null },
+                divergence: { value: null },
                 levelset: { value: null },
                 solidMask: { value: null },
-                dt: { value: dt }, 
-                density: { value: this.params.density }, 
-                resolution: { value: res } 
+                dt: { value: dt },
+                density: { value: this.params.density },
+                resolution: { value: res }
             },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D pressure; uniform sampler2D divergence; uniform sampler2D levelset; uniform sampler2D solidMask; uniform float dt; uniform float density; uniform vec2 resolution; varying vec2 vUv; void main() { float phi = texture2D(levelset, vUv).r; float isSolid = texture2D(solidMask, vUv).r; if (phi > 0.0 || isSolid > 0.5) { gl_FragColor = vec4(0.0); return; } vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float pL = texture2D(pressure, uv - dx).r; float pR = texture2D(pressure, uv + dx).r; float pD = texture2D(pressure, uv - dy).r; float pU = texture2D(pressure, uv + dy).r; float div = texture2D(divergence, uv).r; float h = 1.0 / resolution.x; float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0; gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0); }`
+            fragmentShader: `
+            uniform sampler2D pressure;
+            uniform sampler2D divergence;
+            uniform sampler2D levelset;
+            uniform sampler2D solidMask;
+            uniform float dt;
+            uniform float density;
+            uniform vec2 resolution;
+            varying vec2 vUv;
+
+            void main() {
+                float phi = texture2D(levelset, vUv).r;
+                float isSolid = texture2D(solidMask, vUv).r;
+                if (phi > 0.0 || isSolid > 0.5) {
+                    gl_FragColor = vec4(0.0);
+                    return;
+                }
+
+                vec2 uv = vUv;
+                vec2 dx = vec2(1.0/resolution.x, 0.0);
+                vec2 dy = vec2(0.0, 1.0/resolution.y);
+                float h = 1.0 / resolution.x;
+
+                float pL = texture2D(pressure, uv - dx).r;
+                float phiL = texture2D(levelset, uv - dx).r;
+                float pR = texture2D(pressure, uv + dx).r;
+                float phiR = texture2D(levelset, uv + dx).r;
+                float pD = texture2D(pressure, uv - dy).r;
+                float phiD = texture2D(levelset, uv - dy).r;
+                float pU = texture2D(pressure, uv + dy).r;
+                float phiU = texture2D(levelset, uv + dy).r;
+
+                float div = texture2D(divergence, uv).r;
+
+                // 自由表面校正：若邻居在空气区 (phi > 0)，则用当前点压力代替邻居压力
+                // 这等价于 Neumann 条件 ∂p/∂n = 0
+                if (phiL > 0.0) pL = texture2D(pressure, uv).r;
+                if (phiR > 0.0) pR = texture2D(pressure, uv).r;
+                if (phiD > 0.0) pD = texture2D(pressure, uv).r;
+                if (phiU > 0.0) pU = texture2D(pressure, uv).r;
+
+                float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0;
+
+                gl_FragColor = vec4(p_new, 0.0, 0.0, 1.0);
+            }
+            `
         });
 
-        // 速度修正
+        // 速度修正 - 添加自由表面处理
         this.velocityCorrectMat = new THREE.ShaderMaterial({
-            uniforms: { velocity: { value: null }, pressure: { value: null }, dt: { value: dt }, density: { value: this.params.density }, resolution: { value: res } },
+            uniforms: { velocity: { value: null }, pressure: { value: null }, levelset: { value: null }, dt: { value: dt }, density: { value: this.params.density }, resolution: { value: res } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D velocity; uniform sampler2D pressure; uniform float dt; uniform float density; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float pL = texture2D(pressure, uv - dx).r; float pR = texture2D(pressure, uv + dx).r; float pD = texture2D(pressure, uv - dy).r; float pU = texture2D(pressure, uv + dy).r; vec2 vel = texture2D(velocity, uv).rg; vel.x -= (dt / density) * (pR - pL) / (2.0*dx.x); vel.y -= (dt / density) * (pU - pD) / (2.0*dy.y); gl_FragColor = vec4(vel, 0.0, 1.0); }`
+            fragmentShader: `
+            uniform sampler2D velocity;
+            uniform sampler2D pressure;
+            uniform sampler2D levelset;
+            uniform float dt;
+            uniform float density;
+            uniform vec2 resolution;
+            varying vec2 vUv;
+
+            void main() {
+                vec2 uv = vUv;
+                float phi = texture2D(levelset, uv).r;
+                // 空气区不修正速度，保持原状
+                if (phi > 0.0) {
+                    vec2 vel = texture2D(velocity, uv).rg;
+                    gl_FragColor = vec4(vel, 0.0, 1.0);
+                    return;
+                }
+
+                vec2 dx = vec2(1.0/resolution.x, 0.0);
+                vec2 dy = vec2(0.0, 1.0/resolution.y);
+
+                float pL = texture2D(pressure, uv - dx).r;
+                float pR = texture2D(pressure, uv + dx).r;
+                float pD = texture2D(pressure, uv - dy).r;
+                float pU = texture2D(pressure, uv + dy).r;
+
+                vec2 vel = texture2D(velocity, uv).rg;
+                vel.x -= (dt / density) * (pR - pL) / (2.0*dx.x);
+                vel.y -= (dt / density) * (pU - pD) / (2.0*dy.y);
+
+                gl_FragColor = vec4(vel, 0.0, 1.0);
+            }
+            `
         });
 
         // Level Set 平流
@@ -390,6 +469,26 @@ export class FluidSimulator {
             uniforms: { levelset: { value: null }, solidMask: { value: null } },
             vertexShader: vs,
             fragmentShader: `uniform sampler2D levelset; uniform sampler2D solidMask; varying vec2 vUv; void main() { float isSolid = texture2D(solidMask, vUv).r; float phi = texture2D(levelset, vUv).r; if (isSolid > 0.5) phi = -1.0; gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
+        });
+
+        // 底部墙体边界 - 防止流体穿透底部
+        this.bottomWallMat = new THREE.ShaderMaterial({
+            uniforms: { velocity: { value: null }, resolution: { value: res } },
+            vertexShader: vs,
+            fragmentShader: `
+            uniform sampler2D velocity;
+            uniform vec2 resolution;
+            varying vec2 vUv;
+            void main() {
+                vec2 vel = texture2D(velocity, vUv).rg;
+                float bottomRow = 1.0 / resolution.y;
+                // 如果是底部边界行（vUv.y 很小），将垂直速度强制为0
+                if (vUv.y < bottomRow + 0.0001) {
+                    vel.y = 0.0;
+                }
+                gl_FragColor = vec4(vel, 0.0, 1.0);
+            }
+            `
         });
     }
 
@@ -567,8 +666,14 @@ export class FluidSimulator {
         // 7. 速度修正
         this.velocityCorrectMat.uniforms.velocity.value = velForDiv;
         this.velocityCorrectMat.uniforms.pressure.value = this.curPressureTex.texture;
+        this.velocityCorrectMat.uniforms.levelset.value = this.curPhiTex.texture;
         this.renderFullscreen(this.velocityCorrectMat, this.velCorrectTex);
         this.curVelTex = this.velCorrectTex;
+
+        // 7.5. 底部墙体边界处理
+        this.bottomWallMat.uniforms.velocity.value = this.curVelTex.texture;
+        this.renderFullscreen(this.bottomWallMat, this.velAfterCollisionTex);
+        this.curVelTex = this.velAfterCollisionTex;
 
         // 8. Level Set 平流
         this.levelSetAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
