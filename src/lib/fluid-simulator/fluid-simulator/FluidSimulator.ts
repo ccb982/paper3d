@@ -134,6 +134,7 @@ export class FluidSimulator {
     // 爆炸相关材质（预缓存，避免每帧创建）
     private explosionDivMat!: THREE.ShaderMaterial;          // 爆炸散度源着色器
     private waterGenMat!: THREE.ShaderMaterial;              // 水花生成着色器
+    private waterVelInitMat!: THREE.ShaderMaterial;          // 水花速度初始化着色器
     private ageResetMat!: THREE.ShaderMaterial;              // 年龄重置着色器
 
     // 流体年龄纹理（用于定时消散）
@@ -606,9 +607,11 @@ export class FluidSimulator {
                 float sign_phi0 = phi0 > eps ? 1.0 : (phi0 < -eps ? -1.0 : 1.0);
                 float phi_new = phi0 - dt_reinit * sign_phi0 * (grad_len - 1.0);
 
-                // 避免符号反转
-                if (sign_phi0 > 0.0 && phi_new < 0.0) phi_new = 0.0;
-                if (sign_phi0 < 0.0 && phi_new > 0.0) phi_new = 0.0;
+                // 温和的符号保护：使用 clamp 保持符号，避免直接设为0导致界面不准确
+                // 当 phi_new 跨越0时，限制为一个小的 epsilon 值保持原有符号
+                float sign_eps = 1e-6;
+                if (sign_phi0 > 0.0 && phi_new < sign_eps) phi_new = sign_eps;
+                if (sign_phi0 < 0.0 && phi_new > -sign_eps) phi_new = -sign_eps;
 
                 gl_FragColor = vec4(phi_new, 0.0, 0.0, 1.0);
             }
@@ -664,7 +667,7 @@ export class FluidSimulator {
                     float xC = texture2D(x, uv).r; float xL = texture2D(x, uv - dxVec).r; float xR = texture2D(x, uv + dxVec).r; float xD = texture2D(x, uv - dyVec).r; float xU = texture2D(x, uv + dyVec).r;
                     float phiL = texture2D(levelset, uv - dxVec).r; float phiR = texture2D(levelset, uv + dxVec).r; float phiD = texture2D(levelset, uv - dyVec).r; float phiU = texture2D(levelset, uv + dyVec).r;
                     if (phiL > 0.0) xL = xC; if (phiR > 0.0) xR = xC; if (phiD > 0.0) xD = xC; if (phiU > 0.0) xU = xC;
-                    float Ax = (4.0 * xC - xL - xR - xD - xU) / (dx * dx);
+                    float Ax = (xL + xR + xD + xU - 4.0 * xC) / (dx * dx);
                     gl_FragColor = vec4(Ax, 0.0, 0.0, 1.0);
                 }
             `
@@ -896,8 +899,9 @@ export class FluidSimulator {
                     if (phiD > 0.0) xD = xC;
                     if (phiU > 0.0) xU = xC;
 
-                    // 标准负拉普拉斯: -∇²x ≈ (4*xC - xL - xR - xD - xU) / (dx*dx)
-                    float Ax = (4.0 * xC - xL - xR - xD - xU) / (dx * dx);
+                    // 标准正拉普拉斯: ∇²x ≈ (xL + xR + xD + xU - 4*xC) / (dx*dx)
+                // 用于求解 ∇²p = (ρ/Δt)·div，与Jacobi迭代保持一致
+                float Ax = (xL + xR + xD + xU - 4.0 * xC) / (dx * dx);
                     gl_FragColor = vec4(Ax, 0.0, 0.0, 1.0);
                 }
             `
@@ -1299,7 +1303,7 @@ export class FluidSimulator {
             `
         });
 
-        // 水花生成着色器 - 只修改 phi，不修改速度（速度由散度源驱动）
+        // 水花生成着色器 - 只修改 phi
         this.waterGenMat = new THREE.ShaderMaterial({
             uniforms: {
                 center: { value: new THREE.Vector2(0.5, 0.5) },
@@ -1325,7 +1329,7 @@ export class FluidSimulator {
 
                     // 只在空气区域生成水花（phi >= 0），不修改已有水体
                     if (mask > 0.0 && phi >= 0.0) {
-                        // 在空气中生成新水（只修改 phi）
+                        // 在空气中生成新水
                         phi = -radius * mask * envelope * 2.0;
                     }
 
@@ -1335,7 +1339,46 @@ export class FluidSimulator {
             `
         });
 
-        // 年龄重置着色器
+        // 水花速度初始化着色器 - 为新生成的水花赋予径向向外速度
+        this.waterVelInitMat = new THREE.ShaderMaterial({
+            uniforms: {
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                radius: { value: 0.1 },
+                envelope: { value: 1.0 },
+                phiTex: { value: null },
+                velTex: { value: null },
+                resolution: { value: res }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform vec2 center;
+                uniform float radius;
+                uniform float envelope;
+                uniform sampler2D phiTex;
+                uniform sampler2D velTex;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+
+                void main() {
+                    vec2 uv = vUv;
+                    float phi = texture2D(phiTex, uv).r;
+                    vec2 vel = texture2D(velTex, uv).rg;
+                    float dist = distance(uv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+
+                    // 只在新生成的水区域（phi < 0）赋予径向向外速度
+                    if (mask > 0.0 && phi < 0.0) {
+                        vec2 dir = normalize(uv - center);
+                        float speed = 2.0 * mask * envelope * radius * resolution.x;
+                        vel = dir * speed;
+                    }
+
+                    gl_FragColor = vec4(vel, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 年龄重置着色器 - 重置新生成水花的年龄为0
         this.ageResetMat = new THREE.ShaderMaterial({
             uniforms: {
                 center: { value: new THREE.Vector2(0.5, 0.5) },
@@ -1359,11 +1402,11 @@ export class FluidSimulator {
                     vec2 uv = vUv;
                     float phi = texture2D(phiTex, uv).r;
                     float dist = distance(uv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+                    float mask = 1.0 - smoothstep(0.0, radius * 1.5, dist);
 
-                    // 只在新生成的水区域重置年龄
-                    float threshold = 0.05;
-                    if (mask > 0.0 && phi < 0.0 && phi > -threshold) {
+                    // 在爆炸范围内且是水体（phi < 0），重置年龄为0
+                    // 使用扩大的半径确保所有新生成的水花都被覆盖
+                    if (mask > 0.0 && phi < 0.0) {
                         // 新生成的水，年龄重置为0
                         gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
                         return;
@@ -1837,16 +1880,28 @@ export class FluidSimulator {
 
             if (envelope < 0.01) continue;
 
-            // 使用预缓存的水花生成材质
+            // 使用预缓存的水花生成材质更新 phi
             this.waterGenMat.uniforms.center.value.set(exp.cx, exp.cy);
             this.waterGenMat.uniforms.radius.value = exp.radius;
             this.waterGenMat.uniforms.envelope.value = envelope;
             this.waterGenMat.uniforms.phiTex.value = this.curPhiTex.texture;
 
-            // 使用双缓冲方式更新 phi，避免原地读写
+            // 使用双缓冲方式更新 phi
             const phiDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
             this.renderFullscreen(this.waterGenMat, phiDst);
             this.curPhiTex = phiDst;
+
+            // 使用水花速度初始化材质更新速度
+            this.waterVelInitMat.uniforms.center.value.set(exp.cx, exp.cy);
+            this.waterVelInitMat.uniforms.radius.value = exp.radius;
+            this.waterVelInitMat.uniforms.envelope.value = envelope;
+            this.waterVelInitMat.uniforms.phiTex.value = this.curPhiTex.texture;
+            this.waterVelInitMat.uniforms.velTex.value = this.curVelTex.texture;
+
+            // 使用双缓冲方式更新速度
+            const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
+            this.renderFullscreen(this.waterVelInitMat, velDst);
+            this.curVelTex = velDst;
 
             // 重置新生成水花区域的年龄为0（使用更新后的 phi）
             this.ageResetMat.uniforms.center.value.set(exp.cx, exp.cy);
@@ -1956,6 +2011,7 @@ export class FluidSimulator {
             // 爆炸相关材质
             this.explosionDivMat,
             this.waterGenMat,
+            this.waterVelInitMat,
             this.ageResetMat
         ];
         materials.forEach(m => m?.dispose());
