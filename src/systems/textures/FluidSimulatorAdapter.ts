@@ -10,6 +10,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
     private material: THREE.ShaderMaterial;
     private lastUpdateTime: number = performance.now();
     private updateInterval: number = 16;
+    private isFirstFrame: boolean = true;
 
     constructor(
         renderer: THREE.WebGLRenderer,
@@ -63,6 +64,13 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         }
         this.lastUpdateTime = now;
 
+        // 第一帧时调用一次中心爆炸
+        if (this.isFirstFrame) {
+            this.isFirstFrame = false;
+            // 使用 createWater: false 只对已有水体加速，不生成新水
+            this.simulator.explode(0.5, 0.5, 0.2, 25.0, false);
+        }
+
         // 计算真实时间增量（转换为秒），用于年龄计时
         const realDelta = elapsed / 1000;
         
@@ -101,6 +109,27 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
     
     public setSolidMaskTexture(texture: THREE.Texture): void {
         this.simulator.setSolidMaskTexture(texture);
+    }
+    
+    /**
+     * 在流体中产生爆炸效果
+     * @param cx 爆炸中心X坐标（UV空间，0~1）
+     * @param cy 爆炸中心Y坐标（UV空间，0~1）
+     * @param radius 爆炸半径（UV空间）
+     * @param strength 爆炸强度
+     * @param createWater 是否生成新水（true=生成水花，false=仅加速已有水）
+     */
+    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true): void {
+        this.simulator.explode(cx, cy, radius, strength, createWater);
+    }
+    
+    /**
+     * 在中心位置对水应用一次爆炸（一次性操作）
+     * 只对已有水体加速，不产生新水
+     */
+    public explodeCenterOnce(): void {
+        // 在中心位置应用爆炸，只加速已有水体，不产生新水
+        this.simulator.explode(0.5, 0.5, 0.15, 10.0, false);
     }
     
     dispose(): void {

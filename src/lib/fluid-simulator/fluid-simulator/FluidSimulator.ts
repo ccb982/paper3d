@@ -297,7 +297,8 @@ export class FluidSimulator {
     }
 
     private initLevelSetShader(): THREE.ShaderMaterial {
-        const radius = 0.3 * Math.min(this.width, this.height) / this.width;
+        // 减小初始水球半径，让爆炸效果更明显
+        const radius = 0.1 * Math.min(this.width, this.height) / this.width;
         return new THREE.ShaderMaterial({
             uniforms: { radius: { value: radius }, center: { value: new THREE.Vector2(0.5, 0.5) } },
             vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -1613,6 +1614,98 @@ export class FluidSimulator {
         if (config.velX !== undefined) this.params.injectionVelX = config.velX;
         if (config.velY !== undefined) this.params.injectionVelY = config.velY;
         if (config.size !== undefined) this.params.injectionSize = config.size;
+    }
+
+    // ==================== 爆炸系统接口 ====================
+    /**
+     * 在流体中产生爆炸效果
+     * @param cx 爆炸中心X坐标（UV空间，0~1）
+     * @param cy 爆炸中心Y坐标（UV空间，0~1）
+     * @param radius 爆炸半径（UV空间）
+     * @param strength 爆炸强度
+     * @param createWater 是否生成新水（true=生成水花，false=仅加速已有水）
+     */
+    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        
+        const explodeMat = new THREE.ShaderMaterial({
+            uniforms: {
+                velocity: { value: this.curVelTex.texture },
+                levelset: { value: this.curPhiTex.texture },
+                center: { value: new THREE.Vector2(cx, cy) },
+                radius: { value: radius },
+                strength: { value: strength },
+                createWater: { value: createWater },
+                resolution: { value: new THREE.Vector2(this.width, this.height) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D velocity;
+                uniform sampler2D levelset;
+                uniform vec2 center;
+                uniform float radius;
+                uniform float strength;
+                uniform bool createWater;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+
+                void main() {
+                    vec2 uv = vUv;
+                    vec2 vel = texture2D(velocity, uv).rg;
+                    float phi = texture2D(levelset, uv).r;
+                    float dist = distance(uv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+
+                    if (mask > 0.0) {
+                        // 1. 速度叠加（所有区域）
+                        vec2 dir = uv - center;
+                        float d = length(dir);
+                        if (d < 0.001) d = 0.001;
+                        vec2 radialDir = dir / d;
+                        float hash = fract(sin(dot(dir, vec2(12.9898, 78.233))) * 43758.5453);
+                        vec2 perp = vec2(-radialDir.y, radialDir.x) * (hash - 0.5) * 0.4;
+                        vel += strength * (radialDir + perp) * mask;
+
+                        // 2. 根据 createWater 决定是否改变 phi
+                        if (createWater) {
+                            // 如果原本是空气，就变成水
+                            if (phi >= 0.0) {
+                                phi = -radius * mask * 2.0;
+                            } else {
+                                // 已经是水，可以适当加深（让视觉上更明显）
+                                phi = min(phi, -radius * mask * 0.5);
+                            }
+                        }
+                        // 注意：如果 createWater == false，phi 保持不变，只在已有水体上加速
+                    }
+
+                    gl_FragColor = vec4(vel, phi, 1.0);
+                }
+            `
+        });
+
+        // 渲染到临时目标
+        const tempTarget = (this.curVelTex === this.velTexA) ? this.velTexB : this.velTexA;
+        this.renderFullscreen(explodeMat, tempTarget);
+
+        // 分离速度通道和 phi 通道
+        const copyVelMat = new THREE.ShaderMaterial({
+            uniforms: { tex: { value: tempTarget.texture } },
+            vertexShader: vs,
+            fragmentShader: `uniform sampler2D tex; varying vec2 vUv; void main() { vec4 v = texture2D(tex, vUv); gl_FragColor = vec4(v.rg, 0.0, 1.0); }`
+        });
+        this.renderFullscreen(copyVelMat, this.curVelTex);
+        copyVelMat.dispose();
+
+        const copyPhiMat = new THREE.ShaderMaterial({
+            uniforms: { combined: { value: tempTarget.texture } },
+            vertexShader: vs,
+            fragmentShader: `uniform sampler2D combined; varying vec2 vUv; void main() { gl_FragColor = vec4(texture2D(combined, vUv).b, 0.0, 0.0, 1.0); }`
+        });
+        this.renderFullscreen(copyPhiMat, this.curPhiTex);
+        copyPhiMat.dispose();
+
+        explodeMat.dispose();
     }
 
     // ==================== 分层渲染相关接口 ====================
