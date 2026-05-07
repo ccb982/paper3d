@@ -1653,26 +1653,40 @@ export class FluidSimulator {
                     float mask = 1.0 - smoothstep(0.0, radius, dist);
 
                     if (mask > 0.0) {
-                        // 1. 速度叠加（所有区域）
+                        // ========== 水量感知爆炸逻辑 ==========
+                        // 1. 计算水量因子（深水区质量大，浅水区质量小）
+                        float waterMass = max(0.01, -phi);  // 质量不小于0.01，防止除零
+                        float impulse = strength * mask;
+                        
+                        // 2. 方向计算
                         vec2 dir = uv - center;
                         float d = length(dir);
                         if (d < 0.001) d = 0.001;
                         vec2 radialDir = dir / d;
                         float hash = fract(sin(dot(dir, vec2(12.9898, 78.233))) * 43758.5453);
                         vec2 perp = vec2(-radialDir.y, radialDir.x) * (hash - 0.5) * 0.4;
-                        vel += strength * (radialDir + perp) * mask;
+                        
+                        // 3. 根据质量调整速度增量（动量守恒：p = mv）
+                        // 质量越大，获得的速度越小（深水滞重）
+                        // 质量越小，获得的速度越大（浅水迸溅）
+                        vel += (radialDir + perp) * (impulse / waterMass);
 
-                        // 2. 根据 createWater 决定是否改变 phi
+                        // 4. 水位变化
                         if (createWater) {
-                            // 如果原本是空气，就变成水
-                            if (phi >= 0.0) {
-                                phi = -radius * mask * 2.0;
-                            } else {
-                                // 已经是水，可以适当加深（让视觉上更明显）
-                                phi = min(phi, -radius * mask * 0.5);
+                            // 只在薄水区或空气区生成新水（phi > -0.1）
+                            // 深水区保持不变，避免破坏原有水体
+                            if (phi > -0.1) {
+                                float generationFactor = clamp(1.0 - waterMass * 2.0, 0.0, 1.0);
+                                if (phi >= 0.0) {
+                                    // 空气区：直接生成水
+                                    phi = -radius * mask * generationFactor * 2.0;
+                                } else {
+                                    // 薄水区：加深水层
+                                    phi = min(phi, -radius * mask * generationFactor * 0.5);
+                                }
                             }
+                            // 深水区(phi <= -0.1)：不做任何修改，保持原有水体
                         }
-                        // 注意：如果 createWater == false，phi 保持不变，只在已有水体上加速
                     }
 
                     gl_FragColor = vec4(vel, phi, 1.0);
@@ -1710,6 +1724,10 @@ export class FluidSimulator {
         this.renderMaterial.uniforms.phiTex.value = this.curPhiTex.texture;
         this.renderMaterial.uniforms.velTex.value = this.curVelTex.texture;
         return this.renderMaterial;
+    }
+
+    public setPressureIterations(iterations: number): void {
+        this.params.pressureIterations = iterations;
     }
 
     public updateRenderUniforms(): void {

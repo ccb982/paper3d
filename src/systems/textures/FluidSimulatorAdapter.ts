@@ -11,6 +11,9 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
     private lastUpdateTime: number = performance.now();
     private updateInterval: number = 16;
     private isFirstFrame: boolean = true;
+    private explosionFrameCount: number = 0;
+    private originalPressureIterations: number = 50;
+    private isExplosionBoosted: boolean = false;
 
     constructor(
         renderer: THREE.WebGLRenderer,
@@ -30,7 +33,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             restitution: 0.3,
             friction: 0.95,
             usePCG: false,
-            maxLifetime: 2.0,
+            maxLifetime: 3.5,
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
@@ -44,6 +47,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         
         // 创建模拟器，传入完整参数（包括分层渲染配置）
         this.simulator = new FluidSimulator(renderer, defaultParams);
+        this.originalPressureIterations = defaultParams.pressureIterations;
         
         // 使用 FluidSimulator 内置的分层渲染材质
         this.material = this.simulator.getRenderMaterial();
@@ -64,12 +68,38 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         }
         this.lastUpdateTime = now;
 
-        // 第一帧时调用一次中心爆炸
+        // 隔两帧炸一次（每3帧爆炸一次）
+        if (this.isExplosionBoosted) {
+            this.explosionFrameCount++;
+            
+            // 每3帧爆炸一次（第0、3、6、9、12帧）
+            if (this.explosionFrameCount % 3 === 0 && this.explosionFrameCount <= 15) {
+                // 计算当前爆炸阶段（0-4共5次爆炸）
+                const stage = this.explosionFrameCount / 3;
+                // 强度递减：300 -> 240 -> 180 -> 120 -> 60（再增大2倍）
+                const strength = 360 - stage * 60;
+                // 爆炸半径0.03，只影响水球边缘
+                this.simulator.explode(0.5, 0.5, 0.03, strength, stage === 0); // 只有第一次生成水
+            }
+            
+            // 5次爆炸完成后停止（共15帧）
+            if (this.explosionFrameCount > 15) {
+                // 爆炸结束，恢复原始迭代次数
+                this.simulator.setPressureIterations(this.originalPressureIterations);
+                this.isExplosionBoosted = false;
+                this.explosionFrameCount = 0;
+            }
+        }
+
+        // 第一帧时触发爆炸序列
         if (this.isFirstFrame) {
             this.isFirstFrame = false;
-            // 大幅增大爆炸强度，并适当增大半径确保力可以扩散
-            // 高速度在压力场反应前就把水推出去，产生明显飞溅
-            this.simulator.explode(0.5, 0.5, 0.12, 500.0, true);
+            // 爆炸期间增加压力迭代次数到200，确保流体体积守恒
+            this.simulator.setPressureIterations(200);
+            this.isExplosionBoosted = true;
+            this.explosionFrameCount = 0;
+            // 初始爆炸：中等强度，在水球表面产生扰动
+            this.simulator.explode(0.5, 0.5, 0.03, 100.0, true);
         }
 
         // 计算真实时间增量（转换为秒），用于年龄计时
