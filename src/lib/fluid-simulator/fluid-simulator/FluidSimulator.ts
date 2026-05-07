@@ -503,22 +503,11 @@ export class FluidSimulator {
                 float h = 1.0 / resolution.x;
 
                 float pL = texture2D(pressure, uv - dx).r;
-                float phiL = texture2D(levelset, uv - dx).r;
                 float pR = texture2D(pressure, uv + dx).r;
-                float phiR = texture2D(levelset, uv + dx).r;
                 float pD = texture2D(pressure, uv - dy).r;
-                float phiD = texture2D(levelset, uv - dy).r;
                 float pU = texture2D(pressure, uv + dy).r;
-                float phiU = texture2D(levelset, uv + dy).r;
 
                 float div = texture2D(divergence, uv).r;
-
-                // 自由表面校正：若邻居在空气区 (phi > 0)，则用当前点压力代替邻居压力
-                // 这等价于 Neumann 条件 ∂p/∂n = 0
-                if (phiL > 0.0) pL = texture2D(pressure, uv).r;
-                if (phiR > 0.0) pR = texture2D(pressure, uv).r;
-                if (phiD > 0.0) pD = texture2D(pressure, uv).r;
-                if (phiU > 0.0) pU = texture2D(pressure, uv).r;
 
                 float p_new = (pL + pR + pD + pU - (density / dt) * div * h * h) / 4.0;
 
@@ -1296,8 +1285,8 @@ export class FluidSimulator {
                     vec2 uv = vUv;
                     float dist = distance(uv, center);
                     float mask = 1.0 - smoothstep(0.0, radius, dist);
-                    // 散度源: S = strength * envelope * mask（简化公式，避免数值爆炸）
-                    float S = strength * envelope * mask;
+                    // 散度源: S = -strength * envelope * mask（取负以产生向外膨胀效果）
+                    float S = -strength * envelope * mask;
                     gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
                 }
             `
