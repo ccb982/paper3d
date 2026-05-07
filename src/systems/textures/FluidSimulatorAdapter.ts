@@ -76,10 +76,11 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             if (this.explosionFrameCount % 3 === 0 && this.explosionFrameCount <= 15) {
                 // 计算当前爆炸阶段（0-4共5次爆炸）
                 const stage = this.explosionFrameCount / 3;
-                // 强度递减：300 -> 240 -> 180 -> 120 -> 60（再增大2倍）
-                const strength = 360 - stage * 60;
+                // 强度递减：300 -> 240 -> 180 -> 120 -> 60（简化散度公式，无需放大）
+                const strengths = [300, 240, 180, 120, 60];
+                const strength = strengths[stage];
                 // 爆炸半径0.03，只影响水球边缘
-                this.simulator.explode(0.5, 0.5, 0.03, strength, stage === 0); // 只有第一次生成水
+                this.simulator.explode(0.5, 0.5, 0.03, strength, stage === 0, 0.1); // 只有第一次生成水
             }
             
             // 5次爆炸完成后停止（共15帧）
@@ -98,8 +99,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             this.simulator.setPressureIterations(200);
             this.isExplosionBoosted = true;
             this.explosionFrameCount = 0;
-            // 初始爆炸：中等强度，在水球表面产生扰动
-            this.simulator.explode(0.5, 0.5, 0.03, 100.0, true);
+            // 初始爆炸：中等强度，在水球表面产生扰动（简化散度公式，使用合理值）
+            this.simulator.explode(0.5, 0.5, 0.03, 300, true, 0.1);
         }
 
         // 计算真实时间增量（转换为秒），用于年龄计时
@@ -147,11 +148,12 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
      * @param cx 爆炸中心X坐标（UV空间，0~1）
      * @param cy 爆炸中心Y坐标（UV空间，0~1）
      * @param radius 爆炸半径（UV空间）
-     * @param strength 爆炸强度
+     * @param strength 爆炸强度（散度源强度）
      * @param createWater 是否生成新水（true=生成水花，false=仅加速已有水）
+     * @param duration 爆炸持续时间（秒），控制包络的衰减时长，默认0.1
      */
-    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true): void {
-        this.simulator.explode(cx, cy, radius, strength, createWater);
+    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true, duration: number = 0.1): void {
+        this.simulator.explode(cx, cy, radius, strength, createWater, duration);
     }
     
     /**
@@ -159,8 +161,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
      * 只对已有水体加速，不产生新水
      */
     public explodeCenterOnce(): void {
-        // 在中心位置应用爆炸，只加速已有水体，不产生新水
-        this.simulator.explode(0.5, 0.5, 0.15, 10.0, false);
+        // 在中心位置应用爆炸，只加速已有水体，不产生新水（简化散度公式，使用合理值）
+        this.simulator.explode(0.5, 0.5, 0.15, 100, false, 0.1);
     }
     
     dispose(): void {

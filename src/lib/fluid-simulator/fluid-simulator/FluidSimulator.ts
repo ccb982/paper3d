@@ -90,6 +90,20 @@ export class FluidSimulator {
     private curPhiTex!: THREE.WebGLRenderTarget;
     private curPressureTex!: THREE.WebGLRenderTarget;
 
+    // 爆炸散度纹理（用于散度源模型）
+    private explosionDivTex!: THREE.WebGLRenderTarget;
+
+    // 活跃爆炸列表
+    private activeExplosions: Array<{
+        cx: number;
+        cy: number;
+        radius: number;
+        strength: number;
+        createWater: boolean;
+        startTime: number;
+        duration: number;
+    }> = [];
+
     // 调试录制相关
     private debugRecordingEnabled: boolean = false;
     private debugFramesToRecord: number = 20;
@@ -116,6 +130,11 @@ export class FluidSimulator {
     private dissipationMat!: THREE.ShaderMaterial;           // 流体消散着色器
     private ageUpdateMat!: THREE.ShaderMaterial;             // 年龄更新着色器
     private ageAdvectionMat!: THREE.ShaderMaterial;          // 年龄平流着色器（让年龄跟随水流）
+
+    // 爆炸相关材质（预缓存，避免每帧创建）
+    private explosionDivMat!: THREE.ShaderMaterial;          // 爆炸散度源着色器
+    private waterGenMat!: THREE.ShaderMaterial;              // 水花生成着色器
+    private ageResetMat!: THREE.ShaderMaterial;              // 年龄重置着色器
 
     // 流体年龄纹理（用于定时消散）
     private ageTexA!: THREE.WebGLRenderTarget;
@@ -188,6 +207,9 @@ export class FluidSimulator {
         this.forcedVelTex = createRT();
         this.velAfterCollisionTex = createRT();
         this.velCorrectTex = createRT();
+
+        // 爆炸散度纹理
+        this.explosionDivTex = createRT();
 
         // PCG求解器纹理
         this.rTex = createRT();
@@ -420,9 +442,28 @@ export class FluidSimulator {
 
         // 散度计算
         this.divergenceMat = new THREE.ShaderMaterial({
-            uniforms: { velocity: { value: null }, resolution: { value: res } },
+            uniforms: { velocity: { value: null }, explosionDiv: { value: null }, resolution: { value: res } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D velocity; uniform vec2 resolution; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 dx = vec2(1.0/resolution.x, 0.0); vec2 dy = vec2(0.0, 1.0/resolution.y); float vxR = texture2D(velocity, uv + dx).r; float vxL = texture2D(velocity, uv - dx).r; float vyT = texture2D(velocity, uv + dy).g; float vyB = texture2D(velocity, uv - dy).g; float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y); gl_FragColor = vec4(div, 0.0, 0.0, 1.0); }`
+            fragmentShader: `
+                uniform sampler2D velocity;
+                uniform sampler2D explosionDiv;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+                void main() {
+                    vec2 uv = vUv;
+                    vec2 dx = vec2(1.0/resolution.x, 0.0);
+                    vec2 dy = vec2(0.0, 1.0/resolution.y);
+                    float vxR = texture2D(velocity, uv + dx).r;
+                    float vxL = texture2D(velocity, uv - dx).r;
+                    float vyT = texture2D(velocity, uv + dy).g;
+                    float vyB = texture2D(velocity, uv - dy).g;
+                    float div = (vxR - vxL) / (2.0*dx.x) + (vyT - vyB) / (2.0*dy.y);
+                    // 叠加爆炸散度源
+                    float explosionDivergence = texture2D(explosionDiv, uv).r;
+                    div += explosionDivergence;
+                    gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
+                }
+            `
         });
 
         // 压力迭代（只需要一个材质反复使用）- 添加自由表面 Neumann 边界条件
@@ -1227,6 +1268,116 @@ export class FluidSimulator {
             blending: THREE.NormalBlending,
             side: THREE.DoubleSide
         });
+
+        // ==================== 爆炸相关材质（预缓存）====================
+        // 爆炸散度源着色器
+        this.explosionDivMat = new THREE.ShaderMaterial({
+            uniforms: {
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                radius: { value: 0.1 },
+                strength: { value: 100.0 },
+                envelope: { value: 1.0 },
+                resolution: { value: res }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform vec2 center;
+                uniform float radius;
+                uniform float strength;
+                uniform float envelope;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+
+                void main() {
+                    vec2 uv = vUv;
+                    float dist = distance(uv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+                    // 散度源: S = strength * envelope * mask（简化公式，避免数值爆炸）
+                    float S = strength * envelope * mask;
+                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 水花生成着色器 - 只修改 phi，不修改速度（速度由散度源驱动）
+        this.waterGenMat = new THREE.ShaderMaterial({
+            uniforms: {
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                radius: { value: 0.1 },
+                envelope: { value: 1.0 },
+                phiTex: { value: null },
+                resolution: { value: res }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform vec2 center;
+                uniform float radius;
+                uniform float envelope;
+                uniform sampler2D phiTex;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+
+                void main() {
+                    vec2 uv = vUv;
+                    float phi = texture2D(phiTex, uv).r;
+                    float dist = distance(uv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+
+                    // 只在界面附近生成水花
+                    float threshold = 0.05;
+                    if (mask > 0.0 && phi > -threshold && phi < threshold) {
+                        // 生成新水（只修改 phi）
+                        float newPhi = -radius * mask * envelope * 2.0;
+                        if (phi < newPhi) {
+                            phi = newPhi;
+                        }
+                    }
+
+                    // 只输出 phi 到 R 通道
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 年龄重置着色器
+        this.ageResetMat = new THREE.ShaderMaterial({
+            uniforms: {
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                radius: { value: 0.1 },
+                envelope: { value: 1.0 },
+                phiTex: { value: null },
+                ageTex: { value: null },
+                resolution: { value: res }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform vec2 center;
+                uniform float radius;
+                uniform float envelope;
+                uniform sampler2D phiTex;
+                uniform sampler2D ageTex;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+
+                void main() {
+                    vec2 uv = vUv;
+                    float phi = texture2D(phiTex, uv).r;
+                    float dist = distance(uv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+
+                    // 只在新生成的水区域重置年龄
+                    float threshold = 0.05;
+                    if (mask > 0.0 && phi < 0.0 && phi > -threshold) {
+                        // 新生成的水，年龄重置为0
+                        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                        return;
+                    }
+
+                    // 其他区域保持原有年龄
+                    gl_FragColor = texture2D(ageTex, uv);
+                }
+            `
+        });
     }
 
     // ==================== 更新流程 ====================
@@ -1290,8 +1441,13 @@ export class FluidSimulator {
             velForDiv = this.velAfterCollisionTex.texture;
         }
 
+        // 4.5 构建爆炸散度源（散度源模型）
+        const dt = this.params.timeStep;
+        this.buildExplosionDivergence(dt);
+
         // 5. 散度计算
         this.divergenceMat.uniforms.velocity.value = velForDiv;
+        this.divergenceMat.uniforms.explosionDiv.value = this.explosionDivTex.texture;
         this.renderFullscreen(this.divergenceMat, this.divergenceTex);
 
         // 6. 压力求解
@@ -1618,104 +1774,95 @@ export class FluidSimulator {
      * @param cx 爆炸中心X坐标（UV空间，0~1）
      * @param cy 爆炸中心Y坐标（UV空间，0~1）
      * @param radius 爆炸半径（UV空间）
-     * @param strength 爆炸强度
-     * @param createWater 是否生成新水（true=生成水花，false=仅加速已有水）
+     * @param strength 散度源强度（推荐5000~10000）
+     * @param createWater 是否生成新水（true=生成水花，false=仅注入散度）
+     * @param duration 爆炸持续时间（秒），默认0.1
      */
-    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true): void {
+    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true, duration: number = 0.1): void {
+        // 注册爆炸到活跃列表，不直接修改速度
+        // 散度源会在每帧的 buildExplosionDivergence 中构建
+        this.activeExplosions.push({
+            cx,
+            cy,
+            radius,
+            strength,
+            createWater,
+            startTime: performance.now() / 1000,
+            duration
+        });
+    }
+
+    // ==================== 构建爆炸散度源（散度源模型） ====================
+    private buildExplosionDivergence(dt: number): void {
+        // 创建清空着色器（一次性使用）
         const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-        
-        const explodeMat = new THREE.ShaderMaterial({
-            uniforms: {
-                velocity: { value: this.curVelTex.texture },
-                levelset: { value: this.curPhiTex.texture },
-                center: { value: new THREE.Vector2(cx, cy) },
-                radius: { value: radius },
-                strength: { value: strength },
-                createWater: { value: createWater },
-                resolution: { value: new THREE.Vector2(this.width, this.height) }
-            },
+        const clearMat = new THREE.ShaderMaterial({
             vertexShader: vs,
-            fragmentShader: `
-                uniform sampler2D velocity;
-                uniform sampler2D levelset;
-                uniform vec2 center;
-                uniform float radius;
-                uniform float strength;
-                uniform bool createWater;
-                uniform vec2 resolution;
-                varying vec2 vUv;
-
-                void main() {
-                    vec2 uv = vUv;
-                    vec2 vel = texture2D(velocity, uv).rg;
-                    float phi = texture2D(levelset, uv).r;
-                    float dist = distance(uv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, dist);
-
-                    if (mask > 0.0) {
-                        // ========== 水量感知爆炸逻辑 ==========
-                        // 1. 计算水量因子（深水区质量大，浅水区质量小）
-                        float waterMass = max(0.01, -phi);  // 质量不小于0.01，防止除零
-                        float impulse = strength * mask;
-                        
-                        // 2. 方向计算
-                        vec2 dir = uv - center;
-                        float d = length(dir);
-                        if (d < 0.001) d = 0.001;
-                        vec2 radialDir = dir / d;
-                        float hash = fract(sin(dot(dir, vec2(12.9898, 78.233))) * 43758.5453);
-                        vec2 perp = vec2(-radialDir.y, radialDir.x) * (hash - 0.5) * 0.4;
-                        
-                        // 3. 根据质量调整速度增量（动量守恒：p = mv）
-                        // 质量越大，获得的速度越小（深水滞重）
-                        // 质量越小，获得的速度越大（浅水迸溅）
-                        vel += (radialDir + perp) * (impulse / waterMass);
-
-                        // 4. 水位变化
-                        if (createWater) {
-                            // 只在薄水区或空气区生成新水（phi > -0.1）
-                            // 深水区保持不变，避免破坏原有水体
-                            if (phi > -0.1) {
-                                float generationFactor = clamp(1.0 - waterMass * 2.0, 0.0, 1.0);
-                                if (phi >= 0.0) {
-                                    // 空气区：直接生成水
-                                    phi = -radius * mask * generationFactor * 2.0;
-                                } else {
-                                    // 薄水区：加深水层
-                                    phi = min(phi, -radius * mask * generationFactor * 0.5);
-                                }
-                            }
-                            // 深水区(phi <= -0.1)：不做任何修改，保持原有水体
-                        }
-                    }
-
-                    gl_FragColor = vec4(vel, phi, 1.0);
-                }
-            `
+            fragmentShader: `void main() { gl_FragColor = vec4(0.0); }`
         });
 
-        // 渲染到临时目标
-        const tempTarget = (this.curVelTex === this.velTexA) ? this.velTexB : this.velTexA;
-        this.renderFullscreen(explodeMat, tempTarget);
+        // 清空爆炸散度纹理（必须！避免上帧残留累积）
+        this.renderFullscreen(clearMat, this.explosionDivTex, true);
+        clearMat.dispose();
 
-        // 分离速度通道和 phi 通道
-        const copyVelMat = new THREE.ShaderMaterial({
-            uniforms: { tex: { value: tempTarget.texture } },
-            vertexShader: vs,
-            fragmentShader: `uniform sampler2D tex; varying vec2 vUv; void main() { vec4 v = texture2D(tex, vUv); gl_FragColor = vec4(v.rg, 0.0, 1.0); }`
-        });
-        this.renderFullscreen(copyVelMat, this.curVelTex);
-        copyVelMat.dispose();
+        // 获取当前时间
+        const currentTime = performance.now() / 1000;
 
-        const copyPhiMat = new THREE.ShaderMaterial({
-            uniforms: { combined: { value: tempTarget.texture } },
-            vertexShader: vs,
-            fragmentShader: `uniform sampler2D combined; varying vec2 vUv; void main() { gl_FragColor = vec4(texture2D(combined, vUv).b, 0.0, 0.0, 1.0); }`
-        });
-        this.renderFullscreen(copyPhiMat, this.curPhiTex);
-        copyPhiMat.dispose();
+        // 遍历活跃爆炸列表，累加散度贡献
+        for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
+            const exp = this.activeExplosions[i];
+            const elapsed = currentTime - exp.startTime;
+            const u = Math.min(1.0, Math.max(0.0, elapsed / exp.duration));
+            const envelope = 4.0 * u * (1.0 - u); // 二次抛物线包络，先升后降
 
-        explodeMat.dispose();
+            if (envelope < 0.01) {
+                // 包络太小，移除该爆炸
+                this.activeExplosions.splice(i, 1);
+                continue;
+            }
+
+            // 使用预缓存的材质，更新 uniform 值
+            this.explosionDivMat.uniforms.center.value.set(exp.cx, exp.cy);
+            this.explosionDivMat.uniforms.radius.value = exp.radius;
+            this.explosionDivMat.uniforms.strength.value = exp.strength;
+            this.explosionDivMat.uniforms.envelope.value = envelope;
+
+            // 累加渲染到 explosionDivTex（不清屏实现叠加）
+            this.renderFullscreen(this.explosionDivMat, this.explosionDivTex, false);
+        }
+
+        // 处理水花生成（createWater=true）
+        for (const exp of this.activeExplosions) {
+            if (!exp.createWater) continue;
+
+            const elapsed = currentTime - exp.startTime;
+            const u = Math.min(1.0, Math.max(0.0, elapsed / exp.duration));
+            const envelope = 4.0 * u * (1.0 - u);
+
+            if (envelope < 0.01) continue;
+
+            // 使用预缓存的水花生成材质
+            this.waterGenMat.uniforms.center.value.set(exp.cx, exp.cy);
+            this.waterGenMat.uniforms.radius.value = exp.radius;
+            this.waterGenMat.uniforms.envelope.value = envelope;
+            this.waterGenMat.uniforms.phiTex.value = this.curPhiTex.texture;
+
+            // 使用双缓冲方式更新 phi，避免原地读写
+            const phiDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+            this.renderFullscreen(this.waterGenMat, phiDst);
+            this.curPhiTex = phiDst;
+
+            // 重置新生成水花区域的年龄为0（使用更新后的 phi）
+            this.ageResetMat.uniforms.center.value.set(exp.cx, exp.cy);
+            this.ageResetMat.uniforms.radius.value = exp.radius;
+            this.ageResetMat.uniforms.envelope.value = envelope;
+            this.ageResetMat.uniforms.phiTex.value = this.curPhiTex.texture;
+            this.ageResetMat.uniforms.ageTex.value = this.curAgeTex.texture;
+
+            const ageDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+            this.renderFullscreen(this.ageResetMat, ageDst);
+            this.curAgeTex = ageDst;
+        }
     }
 
     // ==================== 分层渲染相关接口 ====================
@@ -1774,6 +1921,8 @@ export class FluidSimulator {
             this.forcedVelTex,
             this.velAfterCollisionTex,
             this.velCorrectTex,
+            // 爆炸散度纹理
+            this.explosionDivTex,
             // PCG求解器纹理
             this.rTex, this.dTex, this.qTex, this.zTex, this.bTex,
             // 预分配归约纹理池
@@ -1807,7 +1956,11 @@ export class FluidSimulator {
             // 年龄更新材质
             this.ageUpdateMat,
             // 年龄平流材质
-            this.ageAdvectionMat
+            this.ageAdvectionMat,
+            // 爆炸相关材质
+            this.explosionDivMat,
+            this.waterGenMat,
+            this.ageResetMat
         ];
         materials.forEach(m => m?.dispose());
         
