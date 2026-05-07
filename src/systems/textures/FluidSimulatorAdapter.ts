@@ -67,8 +67,9 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         // 第一帧时调用一次中心爆炸
         if (this.isFirstFrame) {
             this.isFirstFrame = false;
-            // 使用 createWater: false 只对已有水体加速，不生成新水
-            this.simulator.explode(0.5, 0.5, 0.2, 25.0, false);
+            // 大幅增大爆炸强度，并适当增大半径确保力可以扩散
+            // 高速度在压力场反应前就把水推出去，产生明显飞溅
+            this.simulator.explode(0.5, 0.5, 0.12, 500.0, true);
         }
 
         // 计算真实时间增量（转换为秒），用于年龄计时

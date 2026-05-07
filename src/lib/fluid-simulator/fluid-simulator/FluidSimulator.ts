@@ -405,11 +405,7 @@ export class FluidSimulator {
                         }
                     } 
 
-                    // 全局速度限制 - 应用于所有流体区域 
-                    float maxVel = 30.0; 
-                    float velLen = length(vel); 
-                    if (velLen > maxVel) vel = vel / velLen * maxVel; 
-
+                    // 移除全局速度限制，允许爆炸产生的高速度
                     gl_FragColor = vec4(vel, phi, 1.0); 
                 }
             `
