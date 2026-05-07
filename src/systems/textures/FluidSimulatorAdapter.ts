@@ -25,7 +25,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             height: 256,
             density: 1000,
             viscosity: 0.001,
-            surfaceTension: 0,
+            surfaceTension: 0.0728,
             gravity: 9.81,
             pressureIterations: 50,
             reinitIterations: 5,
@@ -76,11 +76,11 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             if (this.explosionFrameCount % 3 === 0 && this.explosionFrameCount <= 15) {
                 // 计算当前爆炸阶段（0-4共5次爆炸）
                 const stage = this.explosionFrameCount / 3;
-                // 强度递减：10000 -> 8000 -> 6000 -> 4000 -> 2000（大幅增大强度获得明显爆炸效果）
-                const strengths = [10000, 8000, 6000, 4000, 2000];
+                // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000（强度降低一半）
+                const strengths = [25000, 20000, 15000, 10000, 5000];
                 const strength = strengths[stage];
-                // 爆炸半径0.03，只影响水球边缘
-                this.simulator.explode(0.5, 0.5, 0.03, strength, stage === 0, 0.1); // 只有第一次生成水
+                // 爆炸半径0.15，影响较大范围
+                this.simulator.explode(0.5, 0.5, 0.15, strength, stage === 0, 0.1); // 只有第一次生成水
             }
             
             // 5次爆炸完成后停止（共15帧）
@@ -100,7 +100,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             this.isExplosionBoosted = true;
             this.explosionFrameCount = 0;
             // 初始爆炸：高强度散度源，产生明显的爆炸飞溅效果
-            this.simulator.explode(0.5, 0.5, 0.03, 10000, true, 0.1);
+            this.simulator.explode(0.5, 0.5, 0.15, 25000, true, 0.1);
         }
 
         // 计算真实时间增量（转换为秒），用于年龄计时
@@ -161,8 +161,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
      * 只对已有水体加速，不产生新水
      */
     public explodeCenterOnce(): void {
-        // 在中心位置应用爆炸，只加速已有水体，不产生新水（大幅增大强度）
-        this.simulator.explode(0.5, 0.5, 0.15, 5000, false, 0.1);
+        // 在中心位置应用爆炸，只加速已有水体，不产生新水（强度降低一半）
+        this.simulator.explode(0.5, 0.5, 0.15, 25000, false, 0.1);
     }
     
     dispose(): void {
