@@ -1323,14 +1323,10 @@ export class FluidSimulator {
                     float dist = distance(uv, center);
                     float mask = 1.0 - smoothstep(0.0, radius, dist);
 
-                    // 只在界面附近生成水花
-                    float threshold = 0.05;
-                    if (mask > 0.0 && phi > -threshold && phi < threshold) {
-                        // 生成新水（只修改 phi）
-                        float newPhi = -radius * mask * envelope * 2.0;
-                        if (phi < newPhi) {
-                            phi = newPhi;
-                        }
+                    // 只在空气区域生成水花（phi >= 0），不修改已有水体
+                    if (mask > 0.0 && phi >= 0.0) {
+                        // 在空气中生成新水（只修改 phi）
+                        phi = -radius * mask * envelope * 2.0;
                     }
 
                     // 只输出 phi 到 R 通道
