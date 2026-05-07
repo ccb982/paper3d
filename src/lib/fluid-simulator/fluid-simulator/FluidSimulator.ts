@@ -93,15 +93,15 @@ export class FluidSimulator {
     // 爆炸散度纹理（用于散度源模型）
     private explosionDivTex!: THREE.WebGLRenderTarget;
 
-    // 活跃爆炸列表
+    // 活跃爆炸列表（使用帧计数代替墙钟时间，确保模拟结果一致）
     private activeExplosions: Array<{
         cx: number;
         cy: number;
         radius: number;
         strength: number;
         createWater: boolean;
-        startTime: number;
-        duration: number;
+        startFrame: number;
+        durationFrames: number;
     }> = [];
 
     // 调试录制相关
@@ -1818,16 +1818,15 @@ export class FluidSimulator {
      * @param duration 爆炸持续时间（秒），默认0.1
      */
     public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true, duration: number = 0.1): void {
-        // 注册爆炸到活跃列表，不直接修改速度
-        // 散度源会在每帧的 buildExplosionDivergence 中构建
+        const durationFrames = Math.ceil(duration / this.params.timeStep);
         this.activeExplosions.push({
             cx,
             cy,
             radius,
             strength,
             createWater,
-            startTime: performance.now() / 1000,
-            duration
+            startFrame: this.frameCount,
+            durationFrames
         });
     }
 
@@ -1844,18 +1843,14 @@ export class FluidSimulator {
         this.renderFullscreen(clearMat, this.explosionDivTex, true);
         clearMat.dispose();
 
-        // 获取当前时间
-        const currentTime = performance.now() / 1000;
-
-        // 遍历活跃爆炸列表，累加散度贡献
+        // 遍历活跃爆炸列表，累加散度贡献（使用帧计数代替墙钟时间）
         for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
             const exp = this.activeExplosions[i];
-            const elapsed = currentTime - exp.startTime;
-            const u = Math.min(1.0, Math.max(0.0, elapsed / exp.duration));
+            const frameElapsed = this.frameCount - exp.startFrame;
+            const u = Math.min(1.0, Math.max(0.0, frameElapsed / exp.durationFrames));
             const envelope = 4.0 * u * (1.0 - u); // 二次抛物线包络，先升后降
 
-            if (envelope < 0.01) {
-                // 包络太小，移除该爆炸
+            if (u >= 1.0 || exp.durationFrames <= 0) {
                 this.activeExplosions.splice(i, 1);
                 continue;
             }
@@ -1874,8 +1869,8 @@ export class FluidSimulator {
         for (const exp of this.activeExplosions) {
             if (!exp.createWater) continue;
 
-            const elapsed = currentTime - exp.startTime;
-            const u = Math.min(1.0, Math.max(0.0, elapsed / exp.duration));
+            const frameElapsed = this.frameCount - exp.startFrame;
+            const u = Math.min(1.0, Math.max(0.0, frameElapsed / exp.durationFrames));
             const envelope = 4.0 * u * (1.0 - u);
 
             if (envelope < 0.01) continue;

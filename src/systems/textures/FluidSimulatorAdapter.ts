@@ -25,7 +25,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             height: 256,
             density: 1000,
             viscosity: 0.001,
-            surfaceTension: 0.0728,
+            surfaceTension: 0,
             gravity: 9.81,
             pressureIterations: 50,
             reinitIterations: 5,
@@ -96,7 +96,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         if (this.isFirstFrame) {
             this.isFirstFrame = false;
             // 爆炸期间增加压力迭代次数到200，确保流体体积守恒
-            this.simulator.setPressureIterations(200);
+            this.simulator.setPressureIterations(4000);
             this.isExplosionBoosted = true;
             this.explosionFrameCount = 0;
             // 初始爆炸：高强度散度源，产生明显的爆炸飞溅效果
