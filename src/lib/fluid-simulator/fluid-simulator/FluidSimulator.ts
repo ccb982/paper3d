@@ -628,6 +628,11 @@ export class FluidSimulator {
                 vel.x -= (dt / density) * pressureGrad.x;
                 vel.y -= (dt / density) * pressureGrad.y;
 
+                // 速度上限限制，防止 CFL 条件失效
+                float maxVel = 200.0;
+                float speed = length(vel);
+                if (speed > maxVel) vel = vel * (maxVel / speed);
+
                 gl_FragColor = vec4(vel, 0.0, 1.0);
             }
             `
@@ -637,7 +642,7 @@ export class FluidSimulator {
         this.levelSetAdvectionMat = new THREE.ShaderMaterial({
             uniforms: { velocity: { value: null }, forcedVel: { value: null }, levelset: { value: null }, dt: { value: dt }, resolution: { value: res }, injectionEnabled: { value: this.params.injectionEnabled ?? false } },
             vertexShader: vs,
-            fragmentShader: `uniform sampler2D velocity; uniform sampler2D forcedVel; uniform sampler2D levelset; uniform float dt; uniform vec2 resolution; uniform bool injectionEnabled; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = clamp(uv - step, 0.0, 1.0); float phi; if (injectionEnabled) { phi = texture2D(forcedVel, back).b; } else { phi = texture2D(levelset, back).r; } gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
+            fragmentShader: `uniform sampler2D velocity; uniform sampler2D forcedVel; uniform sampler2D levelset; uniform float dt; uniform vec2 resolution; uniform bool injectionEnabled; varying vec2 vUv; void main() { vec2 uv = vUv; vec2 vel = texture2D(velocity, uv).rg; vec2 step = vel * dt / resolution; vec2 back = clamp(uv - step, 0.0, 1.0); float phi; if (injectionEnabled) { phi = texture2D(forcedVel, back).b; } else { phi = texture2D(levelset, back).r; } phi = clamp(phi, -1.0, 1.0); gl_FragColor = vec4(phi, 0.0, 0.0, 1.0); }`
         });
 
         // Level Set 重初始化（窄带限制，只在界面附近演化）
@@ -830,7 +835,7 @@ export class FluidSimulator {
 
                     // 只有当 maxLifetime > 0 且水的年龄超过最大寿命时才消散
                     if (maxLifetime > 0.0 && phi < 0.0 && currentAge >= maxLifetime) {
-                        phi = 0.05; // 标记为被消散的水体（使用特殊值用于检测）
+                        phi = 1.0; // 设为空气，便于后续处理正确清除
                     }
 
                     gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
@@ -1438,6 +1443,11 @@ export class FluidSimulator {
                         float speed = 2.0 * mask * envelope * radius * resolution.x;
                         vel = dir * speed;
                     }
+
+                    // 速度上限限制，防止 CFL 条件失效
+                    float maxVel = 200.0;
+                    float currentSpeed = length(vel);
+                    if (currentSpeed > maxVel) vel = vel * (maxVel / currentSpeed);
 
                     gl_FragColor = vec4(vel, 0.0, 1.0);
                 }

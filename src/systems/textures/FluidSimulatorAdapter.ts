@@ -58,7 +58,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         this.material = this.simulator.getRenderMaterial();
         
         // 调试录制（已关闭）
-        // this.simulator.enableDebugRecording(true, 10, 10);
+        // this.simulator.enableDebugRecording(true, 11, 18);
     }
     
     generate(): THREE.Texture | THREE.Material {
@@ -84,8 +84,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
                 // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000
                 const strengths = [25000, 20000, 15000, 10000, 5000];
                 const strength = strengths[stage];
-                // 第一次爆炸（stage=1）生成水，其余爆炸只加速已有水体
-                const createWater = stage === 1;
+                // 每次爆炸都生成水
+                const createWater = true;
                 this.simulator.explode(0.5, 0.5, 0.15, strength, createWater, 0.1);
             }
             
