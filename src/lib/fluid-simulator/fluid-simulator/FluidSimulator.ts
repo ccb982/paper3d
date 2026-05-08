@@ -27,6 +27,10 @@ export interface FluidParams {
     boundaryRingWidth?: number;      // 边界环宽度（UV空间），默认 2/resolution
     boundaryDivDamping?: number;     // 散度阻尼系数（0~1），越小边界越软，默认0.5
     boundaryVelDamping?: number;     // 速度修正阻尼系数（0~1），默认0.3
+    // 爆炸随机扰动参数
+    usePerturbation?: boolean;       // 是否启用随机扰动（默认false）
+    perturbationStrength?: number;   // 扰动强度（0~1），推荐0.3~0.5
+    fragmentCount?: number;          // 多团块爆炸子团块数，默认4
     // 分层渲染参数
     waterColor?: THREE.Color;           // 水面颜色
     deepColor?: THREE.Color;            // 深水颜色
@@ -107,6 +111,8 @@ export class FluidSimulator {
         createWater: boolean;
         startFrame: number;
         durationFrames: number;
+        noiseOffsetX: number;  // 噪声相位偏移X
+        noiseOffsetY: number;  // 噪声相位偏移Y
     }> = [];
 
     // 调试录制相关
@@ -164,6 +170,12 @@ export class FluidSimulator {
     private boundaryDivDamping: number;
     private boundaryVelDamping: number;
 
+    // 爆炸随机扰动参数
+    private usePerturbation: boolean;
+    private perturbationStrength: number;
+    private fragmentCount: number;
+    private noiseTex: THREE.DataTexture;
+
     private initialized = false;
     private frameCount = 0;
     private lastDissipationLogTime = 0;
@@ -188,6 +200,14 @@ export class FluidSimulator {
         this.boundaryRingWidth = params.boundaryRingWidth ?? 2.0 / this.width;
         this.boundaryDivDamping = params.boundaryDivDamping ?? 0.5;
         this.boundaryVelDamping = params.boundaryVelDamping ?? 0.3;
+
+        // 初始化爆炸随机扰动参数
+        this.usePerturbation = params.usePerturbation ?? false;
+        this.perturbationStrength = params.perturbationStrength ?? 0.4;
+        this.fragmentCount = params.fragmentCount ?? 4;
+
+        // 生成噪声纹理（用于随机扰动）
+        this.noiseTex = this.generateNoiseTexture();
 
         // 创建正交相机和全屏四边形（UV 从 0 到 1）
         this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -1352,7 +1372,11 @@ export class FluidSimulator {
                 radius: { value: 0.1 },
                 strength: { value: 100.0 },
                 envelope: { value: 1.0 },
-                resolution: { value: res }
+                resolution: { value: res },
+                noiseTex: { value: null },
+                noiseOffset: { value: new THREE.Vector2(0.0, 0.0) },
+                perturbationStrength: { value: 0.4 },
+                usePerturbation: { value: 0.0 }
             },
             vertexShader: vs,
             fragmentShader: `
@@ -1361,12 +1385,26 @@ export class FluidSimulator {
                 uniform float strength;
                 uniform float envelope;
                 uniform vec2 resolution;
+                uniform sampler2D noiseTex;
+                uniform vec2 noiseOffset;
+                uniform float perturbationStrength;
+                uniform float usePerturbation;
                 varying vec2 vUv;
 
                 void main() {
                     vec2 uv = vUv;
                     float dist = distance(uv, center);
                     float mask = 1.0 - smoothstep(0.0, radius, dist);
+                    
+                    // 应用噪声扰动（如果启用）
+                    if (usePerturbation > 0.5) {
+                        float perturb = texture2D(noiseTex, uv * 8.0 + noiseOffset).r;
+                        perturb = (perturb - 0.5) * 2.0;  // 映射到 -1..1
+                        float noiseMask = 1.0 + perturb * perturbationStrength;
+                        mask *= noiseMask;
+                        mask = clamp(mask, 0.0, 1.0);  // 防止负值或过冲
+                    }
+                    
                     // 散度源: S = -strength * envelope * mask（负散度产生向外膨胀效果）
                     float S = -strength * envelope * mask;
                     gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
@@ -1418,7 +1456,11 @@ export class FluidSimulator {
                 envelope: { value: 1.0 },
                 phiTex: { value: null },
                 velTex: { value: null },
-                resolution: { value: res }
+                resolution: { value: res },
+                noiseTex: { value: null },
+                noiseOffset: { value: new THREE.Vector2(0.0, 0.0) },
+                perturbationStrength: { value: 0.4 },
+                usePerturbation: { value: 0.0 }
             },
             vertexShader: vs,
             fragmentShader: `
@@ -1428,6 +1470,10 @@ export class FluidSimulator {
                 uniform sampler2D phiTex;
                 uniform sampler2D velTex;
                 uniform vec2 resolution;
+                uniform sampler2D noiseTex;
+                uniform vec2 noiseOffset;
+                uniform float perturbationStrength;
+                uniform float usePerturbation;
                 varying vec2 vUv;
 
                 void main() {
@@ -1440,8 +1486,15 @@ export class FluidSimulator {
                     // 只在新生成的水区域（phi < 0）赋予径向向外速度
                     if (mask > 0.0 && phi < 0.0) {
                         vec2 dir = normalize(uv - center);
-                        float speed = 2.0 * mask * envelope * radius * resolution.x;
-                        vel = dir * speed;
+                        float baseSpeed = 2.0 * mask * envelope * radius * resolution.x;
+                        vel = dir * baseSpeed;
+                        
+                        // 添加切向速度扰动（如果启用）
+                        if (usePerturbation > 0.5) {
+                            vec2 tangent = vec2(dir.y, -dir.x);  // 垂直于径向
+                            float tangentStrength = (texture2D(noiseTex, uv * 6.0 + noiseOffset).g - 0.5) * 2.0;
+                            vel += tangent * tangentStrength * baseSpeed * 0.3;  // 切向强度约为径向的30%
+                        }
                     }
 
                     // 速度上限限制，防止 CFL 条件失效
@@ -1925,8 +1978,92 @@ export class FluidSimulator {
             strength,
             createWater,
             startFrame: this.frameCount,
-            durationFrames
+            durationFrames,
+            noiseOffsetX: Math.random() * 10.0,
+            noiseOffsetY: Math.random() * 10.0
         });
+    }
+
+    /**
+     * 多团块爆炸 - 将一次爆炸分裂成多个子团块
+     * @param cx 爆炸中心X坐标（UV空间，0~1）
+     * @param cy 爆炸中心Y坐标（UV空间，0~1）
+     * @param radius 爆炸半径（UV空间）
+     * @param strength 总散度源强度
+     * @param createWater 是否生成新水
+     * @param duration 爆炸持续时间（秒）
+     * @param fragmentCount 子团块数量，默认4
+     * @param seed 随机种子（可选，用于确定性重放）
+     */
+    public explodeFragmented(cx: number, cy: number, radius: number, strength: number, 
+                            createWater: boolean = true, duration: number = 0.1, 
+                            fragmentCount?: number, seed?: number): void {
+        const count = fragmentCount ?? this.fragmentCount;
+        const rand = seed !== undefined ? this.seededRandom(seed) : Math.random.bind(Math);
+        
+        for (let i = 0; i < count; i++) {
+            const angle = rand() * Math.PI * 2;
+            const offsetR = radius * 0.3 * rand();
+            const fx = cx + Math.cos(angle) * offsetR;
+            const fy = cy + Math.sin(angle) * offsetR;
+            const fr = radius * (0.6 + rand() * 0.4);
+            const fs = strength / count * (0.8 + rand() * 0.4);
+            this.explode(fx, fy, fr, fs, createWater, duration);
+        }
+    }
+
+    /**
+     * 基于种子的确定性伪随机函数
+     */
+    private seededRandom(seed: number): () => number {
+        let s = seed;
+        return () => {
+            s = Math.sin(s) * 10000;
+            return s - Math.floor(s);
+        };
+    }
+
+    /**
+     * 生成噪声纹理（双通道解耦设计）
+     * R通道：基础扰动（多八度叠加）
+     * G通道：方向扰动（独立哈希函数）
+     */
+    private generateNoiseTexture(size: number = 64): THREE.DataTexture {
+        const data = new Float32Array(size * size * 4);
+        // 基础哈希函数（用于强度扰动）
+        const hash1 = (x: number, y: number) => {
+            let h = x * 374761393 + y * 668265263;
+            h = (h ^ (h >> 13)) * 1274126177;
+            return (h ^ (h >> 16)) / 2147483648;
+        };
+        // 独立哈希函数（用于方向扰动，与hash1解耦）
+        const hash2 = (x: number, y: number) => {
+            let h = x * 131071 + y * 524287;
+            h = (h ^ (h >> 15)) * 786433;
+            return (h ^ (h >> 13)) / 2147483648;
+        };
+        for (let y = 0; y < size; y++) {
+            for (let x = 0; x < size; x++) {
+                const idx = (y * size + x) * 4;
+                // R通道：多八度叠加的基础扰动
+                let val = 0.0;
+                for (let oct = 1; oct <= 4; oct++) {
+                    const freq = 1 << oct;
+                    val += 0.5 / oct * hash1(x * freq % size, y * freq % size);
+                }
+                data[idx] = val;     // R: 基础扰动（hash1）
+                data[idx + 1] = hash2(x, y);  // G: 方向扰动（hash2，独立于R）
+                data[idx + 2] = 0;
+                data[idx + 3] = 1;
+            }
+        }
+        const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.FloatType);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+        return tex;
     }
 
     // ==================== 构建爆炸散度源（散度源模型） ====================
@@ -1959,6 +2096,11 @@ export class FluidSimulator {
             this.explosionDivMat.uniforms.radius.value = exp.radius;
             this.explosionDivMat.uniforms.strength.value = exp.strength;
             this.explosionDivMat.uniforms.envelope.value = envelope;
+            // 设置噪声扰动参数
+            this.explosionDivMat.uniforms.noiseTex.value = this.noiseTex;
+            this.explosionDivMat.uniforms.noiseOffset.value.set(exp.noiseOffsetX, exp.noiseOffsetY);
+            this.explosionDivMat.uniforms.perturbationStrength.value = this.perturbationStrength;
+            this.explosionDivMat.uniforms.usePerturbation.value = this.usePerturbation ? 1.0 : 0.0;
 
             // 累加渲染到 explosionDivTex（不清屏实现叠加）
             this.renderFullscreen(this.explosionDivMat, this.explosionDivTex, false);
@@ -1991,6 +2133,11 @@ export class FluidSimulator {
             this.waterVelInitMat.uniforms.envelope.value = envelope;
             this.waterVelInitMat.uniforms.phiTex.value = this.curPhiTex.texture;
             this.waterVelInitMat.uniforms.velTex.value = this.curVelTex.texture;
+            // 设置噪声扰动参数
+            this.waterVelInitMat.uniforms.noiseTex.value = this.noiseTex;
+            this.waterVelInitMat.uniforms.noiseOffset.value.set(exp.noiseOffsetX, exp.noiseOffsetY);
+            this.waterVelInitMat.uniforms.perturbationStrength.value = this.perturbationStrength;
+            this.waterVelInitMat.uniforms.usePerturbation.value = this.usePerturbation ? 1.0 : 0.0;
 
             // 使用双缓冲方式更新速度
             const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;

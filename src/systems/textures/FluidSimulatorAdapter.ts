@@ -39,6 +39,10 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             boundaryRingWidth: 0.03,
             boundaryDivDamping: 0.4,
             boundaryVelDamping: 0.2,
+            // 爆炸随机扰动参数（实现碎片感和不规则冲击波）
+            usePerturbation: true,
+            perturbationStrength: 0.4,
+            fragmentCount: 4,
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
@@ -84,9 +88,13 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
                 // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000
                 const strengths = [25000, 20000, 15000, 10000, 5000];
                 const strength = strengths[stage];
-                // 每次爆炸都生成水
-                const createWater = true;
-                this.simulator.explode(0.5, 0.5, 0.15, strength, createWater, 0.1);
+                // 第一次爆炸生成水，其余仅注入散度
+                const createWater = stage === 0;
+                // 添加随机位置偏移，避免完美同心圆
+                const offsetX = (Math.random() - 0.5) * 0.1;
+                const offsetY = (Math.random() - 0.5) * 0.1;
+                // 使用多团块爆炸方法
+                this.simulator.explodeFragmented(0.5 + offsetX, 0.5 + offsetY, 0.15, strength, createWater, 0.1);
             }
             
             // 5次爆炸完成后停止（共15帧）
