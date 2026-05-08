@@ -1585,6 +1585,16 @@ export class FluidSimulator {
     public update(_deltaTime?: number): void {
         if (!this.initialized) return;
 
+        // ========== 每帧开始时清空爆炸散度纹理 ==========
+        // 这允许在 update 前通过 addDivergenceImpulse 注入散度
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const clearMat = new THREE.ShaderMaterial({
+            vertexShader: vs,
+            fragmentShader: `void main() { gl_FragColor = vec4(0.0); }`
+        });
+        this.renderFullscreen(clearMat, this.explosionDivTex, true);
+        clearMat.dispose();
+
         // 辅助函数：更新注入相关的 uniform
         const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
             if (mat.uniforms.injectionEnabled) mat.uniforms.injectionEnabled.value = this.params.injectionEnabled ?? false;
@@ -1981,6 +1991,41 @@ export class FluidSimulator {
         this.curVelTex = this.velTexA;
     }
 
+    /**
+     * 直接注入散度到流体场中
+     * @param divergence 散度值（负值=向外膨胀，正值=向内收缩）
+     * @param radius 影响半径（UV空间，0~1）
+     * @param cx 中心X（UV空间）
+     * @param cy 中心Y（UV空间）
+     */
+    public addDivergenceImpulse(divergence: number, radius: number = 0.2, cx: number = 0.5, cy: number = 0.5): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const divMat = new THREE.ShaderMaterial({
+            uniforms: {
+                divergence: { value: divergence },
+                radius: { value: radius },
+                center: { value: new THREE.Vector2(cx, cy) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float divergence;
+                uniform float radius;
+                uniform vec2 center;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    float S = divergence * mask;
+                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        // 累加散度到爆炸散度纹理
+        this.renderFullscreen(divMat, this.explosionDivTex, false);
+        divMat.dispose();
+    }
+
     public addVelocityImpulse(dvx: number, dvy: number): void {
         const impulseMat = new THREE.ShaderMaterial({
             uniforms: {
@@ -2179,17 +2224,7 @@ export class FluidSimulator {
 
     // ==================== 构建爆炸散度源（散度源模型） ====================
     private buildExplosionDivergence(dt: number): void {
-        // 创建清空着色器（一次性使用）
-        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-        const clearMat = new THREE.ShaderMaterial({
-            vertexShader: vs,
-            fragmentShader: `void main() { gl_FragColor = vec4(0.0); }`
-        });
-
-        // 清空爆炸散度纹理（必须！避免上帧残留累积）
-        this.renderFullscreen(clearMat, this.explosionDivTex, true);
-        clearMat.dispose();
-
+        // 注意：爆炸散度纹理已经在 update() 开头被清空
         // 遍历活跃爆炸列表，累加散度贡献（使用帧计数代替墙钟时间）
         for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
             const exp = this.activeExplosions[i];

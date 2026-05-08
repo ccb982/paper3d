@@ -26,6 +26,12 @@ export class LightFluidEntity extends Entity {
     public maxAge: number = 10;
     private frameCount: number = 0;
     private prevWorldVelocity: THREE.Vector3 = new THREE.Vector3();
+    
+    // 呼吸/脉动效果参数
+    private breathingPhase: number = 0;       // 呼吸相位
+    private breathingSpeed: number;           // 呼吸频率（每秒周期数）- 随机化
+    private breathingAmplitude: number;       // 呼吸强度（散度幅度）- 随机化
+    private breathingOffset: number;          // 呼吸相位偏移（让每个水滴不同步）
 
     constructor(
         id: string, 
@@ -77,6 +83,11 @@ export class LightFluidEntity extends Entity {
         this.waterVolume = waterVolume;
         this.maxAge = maxAge;
         
+        // ★ 初始化呼吸效果参数（随机化让每个水滴不同）
+        this.breathingSpeed = 1.5 + Math.random() * 2.0;   // 1.5~3.5 Hz
+        this.breathingAmplitude = 2000 + Math.random() * 2000; // 2000~4000 散度强度
+        this.breathingOffset = Math.random() * Math.PI * 2;    // 随机相位偏移
+        
         this.simulator = new FluidSimulator(renderer, params);
         this.setInitialWaterVolume(waterVolume);
         this.setInitialVelocity(0, -200.0); // 初始速度场：向下 200.0
@@ -122,29 +133,44 @@ export class LightFluidEntity extends Entity {
         const w = this.texSize, h = this.texSize;
         const data = new Float32Array(w * h * 4);
         const cx = w / 2, cy = h / 2;
-        const baseRadius = Math.sqrt(volume) * w * 0.45;
-
-        const hash = (x: number, y: number): number => {
-            let h = x * 374761393 + y * 668265263;
-            h = (h ^ (h >> 13)) * 1274126177;
-            return (h ^ (h >> 16)) / 2147483648;
-        };
+        
+        // 液滴形状参数
+        const baseRadius = Math.sqrt(volume) * w * 0.4;
+        
+        // 液滴形状系数：垂直方向拉长，顶部变尖
+        const verticalStretch = 1.3;   // 垂直拉伸
+        const topTaper = 0.6;          // 顶部收缩系数
+        const bottomBulge = 1.2;       // 底部膨胀系数
 
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
                 const i = (y * w + x) * 4;
-                const dx = x - cx, dy = y - cy;
-                const dist = Math.sqrt(dx * dx + dy * dy);
-
-                let perturbation = 0;
-                for (let oct = 1; oct <= 3; oct++) {
-                    const freq = 1 << oct;
-                    perturbation += (hash((x * freq) % w, (y * freq) % h) - 0.5) * 2.0 / oct;
+                const dx = x - cx;
+                const dy = y - cy;
+                
+                // 液滴形状计算
+                // 将圆形转换为水滴形状：底部圆润，顶部尖细
+                const normalizedY = dy / (h * 0.5); // -1 到 1，顶部为负，底部为正
+                
+                // 根据垂直位置调整半径
+                let radiusScale = 1.0;
+                if (normalizedY < 0) {
+                    // 顶部区域：逐渐变尖
+                    radiusScale = topTaper + (1.0 - topTaper) * (1.0 + normalizedY);
+                } else {
+                    // 底部区域：略微膨胀
+                    radiusScale = 1.0 + (bottomBulge - 1.0) * normalizedY;
                 }
-                perturbation *= 2.0;
+                
+                // 垂直方向拉伸
+                const adjustedDy = dy * verticalStretch;
+                
+                // 计算液滴形状的距离
+                const dist = Math.sqrt(dx * dx + adjustedDy * adjustedDy);
+                const adjustedRadius = baseRadius * radiusScale;
 
-                const perturbedRadius = baseRadius + perturbation;
-                data[i] = dist - perturbedRadius;
+                // 规则的液滴形状（无随机扰动）
+                data[i] = dist - adjustedRadius; // phi: 内部负，外部正
                 data[i + 1] = 0;
                 data[i + 2] = 0;
                 data[i + 3] = 1;
@@ -181,6 +207,20 @@ export class LightFluidEntity extends Entity {
         const internalForceX = -accel.x * 0.5;
         const internalForceY = -accel.y * 0.5;
         this.simulator.addVelocityImpulse(internalForceX, internalForceY);
+
+        // ========== 呼吸/脉动效果（基于 S = -strength * envelope * mask） ==========
+        // 负散度 = 向外膨胀，正散度 = 向内收缩
+        this.breathingPhase += this.breathingSpeed * delta;
+        const breathingValue = Math.sin(this.breathingPhase + this.breathingOffset);
+        
+        // 使用更强的包络函数，让膨胀和收缩更加剧烈
+        // envelope = 4*u*(1-u) 的变体，产生更强的脉冲
+        const envelope = Math.abs(breathingValue); // 绝对值产生方波效果
+        
+        // 注入散度脉冲：负值=膨胀，正值=收缩
+        // 强度 * 包络 * mask（mask 在 addDivergenceImpulse 内部应用）
+        const divergence = -breathingValue * this.breathingAmplitude * envelope;
+        this.simulator.addDivergenceImpulse(divergence, 0.4); // 增大影响半径
 
         this.simulator.update(delta);
 
