@@ -55,14 +55,14 @@ export class EntityManager {
    * @param centerPos 中心位置
    * @param spreadRadius 扩散半径
    * @param initialVelocity 初始速度
-   * @param scale 液滴大小
+   * @param waterVolume 水量占比（0~1），用于计算显示大小
    */
   public async createDroplets(
     count: number,
     centerPos: THREE.Vector3,
     spreadRadius: number = 1,
     initialVelocity?: THREE.Vector3,
-    scale: number = 0.2
+    waterVolume: number = 0.45
   ): Promise<Entity[]> {
     if (!this.renderer) {
       console.error('Renderer not set! Call setRenderer() first.');
@@ -73,7 +73,7 @@ export class EntityManager {
     console.log(`  - 中心位置: (${centerPos.x.toFixed(2)}, ${centerPos.y.toFixed(2)}, ${centerPos.z.toFixed(2)})`);
     console.log(`  - 扩散半径: ${spreadRadius}`);
     console.log(`  - 初始速度: ${initialVelocity ? `(${initialVelocity.x.toFixed(2)}, ${initialVelocity.y.toFixed(2)})` : '无'}`);
-    console.log(`  - 缩放大小: ${scale}`);
+    console.log(`  - 水量占比: ${(waterVolume * 100).toFixed(1)}%`);
 
     const droplets: Entity[] = [];
     for (let i = 0; i < count; i++) {
@@ -92,7 +92,9 @@ export class EntityManager {
       vel.x += (Math.random() - 0.5) * 2;
       vel.y += (Math.random() - 0.5) * 2;
 
-      const droplet = await this.createDroplet(`droplet_${Date.now()}_${i}`, pos, vel, scale);
+      // 每个液滴可以有轻微的水量差异
+      const dropletVolume = waterVolume * (0.8 + Math.random() * 0.4);
+      const droplet = await this.createDroplet(`droplet_${Date.now()}_${i}`, pos, vel, dropletVolume);
       if (droplet) {
         droplets.push(droplet);
       }
@@ -107,13 +109,15 @@ export class EntityManager {
    * @param id 实体ID
    * @param position 位置
    * @param velocity 速度
-   * @param scale 大小
+   * @param waterVolume 水量占比（0~1），用于计算显示大小
+   * @param maxAge 最大生命周期（秒）
    */
   public async createDroplet(
     id: string,
     position: THREE.Vector3,
     velocity?: THREE.Vector3,
-    scale: number = 0.2
+    waterVolume: number = 0.45,
+    maxAge: number = 10
   ): Promise<Entity | null> {
     if (!this.renderer) {
       console.error('Renderer not set! Call setRenderer() first.');
@@ -121,7 +125,7 @@ export class EntityManager {
     }
 
     const { LightFluidEntity } = await import('@entities/fluid');
-    const droplet = new LightFluidEntity(id, this.renderer, position, velocity, scale);
+    const droplet = new LightFluidEntity(id, this.renderer, position, velocity, waterVolume, maxAge);
     this.addEntity(droplet);
     return droplet;
   }

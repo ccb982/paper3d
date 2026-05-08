@@ -1765,6 +1765,9 @@ export class FluidSimulator {
 
         // 帧计数递增
         this.frameCount++;
+
+        // ★ 关键：每帧更新渲染材质的纹理引用，确保画面正确刷新
+        this.updateRenderUniforms();
     }
 
     // ==================== 消散检测接口 ====================
@@ -1950,6 +1953,56 @@ export class FluidSimulator {
         this.copyTextureToTarget(texture, this.phiTexA);
         this.copyTextureToTarget(texture, this.phiTexB);
         this.curPhiTex = this.phiTexA;
+    }
+
+    public setInitialVelocity(vx: number, vy: number): void {
+        const mat = new THREE.ShaderMaterial({
+            uniforms: {
+                vel: { value: new THREE.Vector2(vx, vy) },
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                radius: { value: 0.6 }
+            },
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: `
+                uniform vec2 vel;
+                uniform vec2 center;
+                uniform float radius;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float inside = 1.0 - smoothstep(radius * 0.6, radius, d);
+                    gl_FragColor = vec4(vel * inside, 0.0, 1.0);
+                }
+            `
+        });
+        this.renderFullscreen(mat, this.velTexA);
+        this.renderFullscreen(mat, this.velTexB);
+        mat.dispose();
+        this.curVelTex = this.velTexA;
+    }
+
+    public addVelocityImpulse(dvx: number, dvy: number): void {
+        const impulseMat = new THREE.ShaderMaterial({
+            uniforms: {
+                curVel: { value: this.curVelTex.texture },
+                impulse: { value: new THREE.Vector2(dvx, dvy) }
+            },
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: `
+                uniform sampler2D curVel;
+                uniform vec2 impulse;
+                varying vec2 vUv;
+                void main() {
+                    vec4 oldVel = texture2D(curVel, vUv);
+                    vec2 newVel = oldVel.rg + impulse;
+                    gl_FragColor = vec4(newVel, 0.0, 1.0);
+                }
+            `
+        });
+        const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
+        this.renderFullscreen(impulseMat, velDst);
+        this.curVelTex = velDst;
+        impulseMat.dispose();
     }
 
     public setInjectionEnabled(enabled: boolean): void {
@@ -2225,6 +2278,14 @@ export class FluidSimulator {
         this.renderMaterial.uniforms.phiTex.value = this.curPhiTex.texture;
         this.renderMaterial.uniforms.velTex.value = this.curVelTex.texture;
         return this.renderMaterial;
+    }
+
+    public getCurPhiTex(): THREE.WebGLRenderTarget {
+        return this.curPhiTex;
+    }
+
+    public getCurVelTex(): THREE.WebGLRenderTarget {
+        return this.curVelTex;
     }
 
     public setPressureIterations(iterations: number): void {
