@@ -34,6 +34,11 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             friction: 0.0,
             usePCG: false,
             maxLifetime: 4,
+            // 解耦边界处理参数（增强爆炸飞溅效果）
+            decoupledBoundary: true,
+            boundaryRingWidth: 0.06,      // 增大边界环宽度，让效果更明显
+            boundaryDivDamping: 0.2,      // 减小阻尼系数，边界更软
+            boundaryVelDamping: 0.1,      // 减小速度阻尼，流体更易滑过边界
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),

@@ -22,6 +22,11 @@ export interface FluidParams {
     injectionSize?: number;
     usePCG?: boolean;           // 是否使用PCG求解器（默认true）
     maxLifetime?: number;       // 流体最大寿命（秒），超过后消散，0表示不消散
+    // 解耦边界处理参数
+    decoupledBoundary?: boolean;     // 是否启用解耦边界处理（默认false）
+    boundaryRingWidth?: number;      // 边界环宽度（UV空间），默认 2/resolution
+    boundaryDivDamping?: number;     // 散度阻尼系数（0~1），越小边界越软，默认0.5
+    boundaryVelDamping?: number;     // 速度修正阻尼系数（0~1），默认0.3
     // 分层渲染参数
     waterColor?: THREE.Color;           // 水面颜色
     deepColor?: THREE.Color;            // 深水颜色
@@ -153,6 +158,12 @@ export class FluidSimulator {
     private flowIntensity: number;
     private lightDir: THREE.Vector3;
 
+    // 解耦边界处理参数
+    private decoupledBoundary: boolean;
+    private boundaryRingWidth: number;
+    private boundaryDivDamping: number;
+    private boundaryVelDamping: number;
+
     private initialized = false;
     private frameCount = 0;
     private lastDissipationLogTime = 0;
@@ -171,6 +182,12 @@ export class FluidSimulator {
         this.specularIntensity = params.specularIntensity ?? 0.5;
         this.flowIntensity = params.flowIntensity ?? 0.3;
         this.lightDir = params.lightDir ?? new THREE.Vector3(0.5, 1.0, 0.3).normalize();
+
+        // 初始化解耦边界处理参数
+        this.decoupledBoundary = params.decoupledBoundary ?? false;
+        this.boundaryRingWidth = params.boundaryRingWidth ?? 2.0 / this.width;
+        this.boundaryDivDamping = params.boundaryDivDamping ?? 0.5;
+        this.boundaryVelDamping = params.boundaryVelDamping ?? 0.3;
 
         // 创建正交相机和全屏四边形（UV 从 0 到 1）
         this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -445,12 +462,22 @@ export class FluidSimulator {
 
         // 散度计算
         this.divergenceMat = new THREE.ShaderMaterial({
-            uniforms: { velocity: { value: null }, explosionDiv: { value: null }, resolution: { value: res } },
+            uniforms: { 
+                velocity: { value: null }, 
+                explosionDiv: { value: null }, 
+                resolution: { value: res },
+                decoupledBoundary: { value: this.decoupledBoundary ? 1.0 : 0.0 },
+                boundaryRingWidth: { value: this.boundaryRingWidth },
+                boundaryDivDamping: { value: this.boundaryDivDamping }
+            },
             vertexShader: vs,
             fragmentShader: `
                 uniform sampler2D velocity;
                 uniform sampler2D explosionDiv;
                 uniform vec2 resolution;
+                uniform float decoupledBoundary;
+                uniform float boundaryRingWidth;
+                uniform float boundaryDivDamping;
                 varying vec2 vUv;
                 void main() {
                     vec2 uv = vUv;
@@ -464,6 +491,23 @@ export class FluidSimulator {
                     // 叠加爆炸散度源
                     float explosionDivergence = texture2D(explosionDiv, uv).r;
                     div += explosionDivergence;
+
+                    // 解耦边界：使用 smoothstep 做软过渡，对边界环内的散度进行阻尼
+                    if (decoupledBoundary > 0.5) {
+                        // 计算到四个边界的距离
+                        float distToLeft = uv.x;
+                        float distToRight = 1.0 - uv.x;
+                        float distToBottom = uv.y;
+                        float distToTop = 1.0 - uv.y;
+                        float minDist = min(min(distToLeft, distToRight), min(distToBottom, distToTop));
+                        
+                        // 使用 smoothstep 创建软过渡的阻尼因子
+                        // 在边界处阻尼最强（boundaryDivDamping），在环带外完全无阻尼（1.0）
+                        float ringMask = smoothstep(0.0, boundaryRingWidth, minDist);
+                        float dampingFactor = mix(boundaryDivDamping, 1.0, ringMask);
+                        div *= dampingFactor;
+                    }
+
                     gl_FragColor = vec4(div, 0.0, 0.0, 1.0);
                 }
             `
@@ -520,7 +564,17 @@ export class FluidSimulator {
 
         // 速度修正 - 添加自由表面处理
         this.velocityCorrectMat = new THREE.ShaderMaterial({
-            uniforms: { velocity: { value: null }, pressure: { value: null }, levelset: { value: null }, dt: { value: dt }, density: { value: this.params.density }, resolution: { value: res } },
+            uniforms: { 
+                velocity: { value: null }, 
+                pressure: { value: null }, 
+                levelset: { value: null }, 
+                dt: { value: dt }, 
+                density: { value: this.params.density }, 
+                resolution: { value: res },
+                decoupledBoundary: { value: this.decoupledBoundary ? 1.0 : 0.0 },
+                boundaryRingWidth: { value: this.boundaryRingWidth },
+                boundaryVelDamping: { value: this.boundaryVelDamping }
+            },
             vertexShader: vs,
             fragmentShader: `
             uniform sampler2D velocity;
@@ -529,6 +583,9 @@ export class FluidSimulator {
             uniform float dt;
             uniform float density;
             uniform vec2 resolution;
+            uniform float decoupledBoundary;
+            uniform float boundaryRingWidth;
+            uniform float boundaryVelDamping;
             varying vec2 vUv;
 
             void main() {
@@ -550,8 +607,26 @@ export class FluidSimulator {
                 float pU = texture2D(pressure, uv + dy).r;
 
                 vec2 vel = texture2D(velocity, uv).rg;
-                vel.x -= (dt / density) * (pR - pL) / (2.0*dx.x);
-                vel.y -= (dt / density) * (pU - pD) / (2.0*dy.y);
+                vec2 pressureGrad = vec2(pR - pL, pU - pD) / (2.0*dx.x);
+
+                // 解耦边界：使用 smoothstep 做软过渡，在边界环内衰减压力梯度的修正作用
+                if (decoupledBoundary > 0.5) {
+                    // 计算到四个边界的距离
+                    float distToLeft = uv.x;
+                    float distToRight = 1.0 - uv.x;
+                    float distToBottom = uv.y;
+                    float distToTop = 1.0 - uv.y;
+                    float minDist = min(min(distToLeft, distToRight), min(distToBottom, distToTop));
+                    
+                    // 使用 smoothstep 创建软过渡的阻尼因子
+                    // 在边界处阻尼最强（boundaryVelDamping），在环带外完全无阻尼（1.0）
+                    float ringMask = smoothstep(0.0, boundaryRingWidth, minDist);
+                    float dampingFactor = mix(boundaryVelDamping, 1.0, ringMask);
+                    pressureGrad *= dampingFactor;
+                }
+
+                vel.x -= (dt / density) * pressureGrad.x;
+                vel.y -= (dt / density) * pressureGrad.y;
 
                 gl_FragColor = vec4(vel, 0.0, 1.0);
             }
@@ -1286,7 +1361,10 @@ export class FluidSimulator {
                 void main() {
                     vec2 uv = vUv;
                     float dist = distance(uv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+                    // 使用更平缓的空间衰减：在半径50%范围内保持全强度，然后逐渐衰减
+                    // 减弱爆炸向周围的衰减，让爆炸影响更均匀
+                    float t = smoothstep(radius * 0.5, radius, dist);
+                    float mask = 1.0 - t * t; // 二次曲线，边缘衰减更慢
                     // 散度源: S = -strength * envelope * mask（负散度产生向外膨胀效果）
                     float S = -strength * envelope * mask;
                     gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
@@ -1316,7 +1394,9 @@ export class FluidSimulator {
                     vec2 uv = vUv;
                     float phi = texture2D(phiTex, uv).r;
                     float dist = distance(uv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+                    // 使用更平缓的空间衰减：在半径50%范围内保持全强度
+                    float t = smoothstep(radius * 0.5, radius, dist);
+                    float mask = 1.0 - t * t;
 
                     // 只在空气区域生成水花（phi >= 0），不修改已有水体
                     if (mask > 0.0 && phi >= 0.0) {
