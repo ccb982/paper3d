@@ -40,9 +40,9 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             boundaryDivDamping: 0.4,
             boundaryVelDamping: 0.2,
             // 爆炸随机扰动参数（实现碎片感和不规则冲击波）
-            usePerturbation: true,
+            usePerturbation: false,   // 关闭随机扰动
             perturbationStrength: 0.4,
-            fragmentCount: 4,
+            fragmentCount: 1,         // 关闭多团块爆炸（设为1表示单团块）
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
@@ -164,9 +164,34 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
      * @param strength 爆炸强度（散度源强度）
      * @param createWater 是否生成新水（true=生成水花，false=仅加速已有水）
      * @param duration 爆炸持续时间（秒），控制包络的衰减时长，默认0.1
+     * @param anisotropyMode 各向异性模式：0=各向同性, 1=四极子, 2=偶极子
+     * @param anisotropyPhase 相位偏移（弧度）
+     * @param anisotropyStrength 各向异性强度 (0~1)
      */
-    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true, duration: number = 0.1): void {
-        this.simulator.explode(cx, cy, radius, strength, createWater, duration);
+    public explode(cx: number, cy: number, radius: number, strength: number, 
+                  createWater: boolean = true, duration: number = 0.1,
+                  anisotropyMode: number = 0, anisotropyPhase: number = 0.0, anisotropyStrength: number = 0.0): void {
+        this.simulator.explode(cx, cy, radius, strength, createWater, duration, anisotropyMode, anisotropyPhase, anisotropyStrength);
+    }
+
+    /**
+     * 各向异性爆炸 - 支持方向性爆炸效果
+     * @param cx 爆炸中心X坐标（UV空间，0~1）
+     * @param cy 爆炸中心Y坐标（UV空间，0~1）
+     * @param radius 爆炸半径（UV空间）
+     * @param strength 散度源强度
+     * @param createWater 是否生成新水
+     * @param duration 爆炸持续时间（秒）
+     * @param mode 各向异性模式：0=各向同性, 1=四极子, 2=偶极子
+     * @param phase 相位偏移（弧度）
+     * @param anisoStrength 各向异性强度 (0~1)
+     */
+    public explodeAnisotropic(
+        cx: number, cy: number, radius: number, strength: number,
+        createWater: boolean = true, duration: number = 0.1,
+        mode: number = 0, phase: number = 0, anisoStrength: number = 0.0
+    ): void {
+        this.simulator.explodeAnisotropic(cx, cy, radius, strength, createWater, duration, mode, phase, anisoStrength);
     }
     
     /**

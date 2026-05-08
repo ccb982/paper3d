@@ -113,6 +113,9 @@ export class FluidSimulator {
         durationFrames: number;
         noiseOffsetX: number;  // 噪声相位偏移X
         noiseOffsetY: number;  // 噪声相位偏移Y
+        anisotropyMode: number;      // 各向异性模式：0=各向同性, 1=四极子, 2=偶极子
+        anisotropyPhase: number;     // 相位偏移（弧度）
+        anisotropyStrength: number;  // 各向异性强度 (0~1)
     }> = [];
 
     // 调试录制相关
@@ -1376,7 +1379,10 @@ export class FluidSimulator {
                 noiseTex: { value: null },
                 noiseOffset: { value: new THREE.Vector2(0.0, 0.0) },
                 perturbationStrength: { value: 0.4 },
-                usePerturbation: { value: 0.0 }
+                usePerturbation: { value: 0.0 },
+                anisotropyMode: { value: 0 },           // 0=各向同性, 1=四极子, 2=偶极子
+                anisotropyPhase: { value: 0.0 },        // 相位偏移（弧度）
+                anisotropyStrength: { value: 0.0 }      // 各向异性强度 (0~1)
             },
             vertexShader: vs,
             fragmentShader: `
@@ -1389,6 +1395,9 @@ export class FluidSimulator {
                 uniform vec2 noiseOffset;
                 uniform float perturbationStrength;
                 uniform float usePerturbation;
+                uniform int anisotropyMode;
+                uniform float anisotropyPhase;
+                uniform float anisotropyStrength;
                 varying vec2 vUv;
 
                 void main() {
@@ -1405,8 +1414,32 @@ export class FluidSimulator {
                         mask = clamp(mask, 0.0, 1.0);  // 防止负值或过冲
                     }
                     
-                    // 散度源: S = -strength * envelope * mask（负散度产生向外膨胀效果）
-                    float S = -strength * envelope * mask;
+                    // 应用各向异性调制
+                    float dirMod = 1.0;
+                    if (anisotropyStrength > 0.001) {
+                        vec2 rel = uv - center;
+                        float angle = atan(rel.y, rel.x) + anisotropyPhase;
+                        
+                        if (anisotropyMode == 1) {
+                            // 四极子：cos(2*angle)，两个方向膨胀，两个方向收缩
+                            dirMod = cos(2.0 * angle);
+                        } else if (anisotropyMode == 2) {
+                            // 偶极子：cos(angle)，一侧膨胀、对侧收缩
+                            dirMod = cos(angle);
+                        }
+                        
+                        // 限制收缩强度：收缩效果过强会显得不自然
+                        // dirMod > 0: 膨胀区域，保持原值
+                        // dirMod < 0: 收缩区域，减弱强度
+                        float shrinkDamping = 0.3;  // 收缩阻尼，默认0.3使收缩弱于膨胀
+                        dirMod = dirMod > 0.0 ? dirMod : dirMod * shrinkDamping;
+                        
+                        // 将各向异性混合进去
+                        dirMod = mix(1.0, dirMod, anisotropyStrength);
+                    }
+                    
+                    // 散度源: S = -strength * envelope * mask * dirMod（负散度产生向外膨胀效果）
+                    float S = -strength * envelope * mask * dirMod;
                     gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
                 }
             `
@@ -1969,7 +2002,9 @@ export class FluidSimulator {
      * @param createWater 是否生成新水（true=生成水花，false=仅注入散度）
      * @param duration 爆炸持续时间（秒），默认0.1
      */
-    public explode(cx: number, cy: number, radius: number, strength: number, createWater: boolean = true, duration: number = 0.1): void {
+    public explode(cx: number, cy: number, radius: number, strength: number, 
+                  createWater: boolean = true, duration: number = 0.1,
+                  anisotropyMode: number = 0, anisotropyPhase: number = 0.0, anisotropyStrength: number = 0.0): void {
         const durationFrames = Math.ceil(duration / this.params.timeStep);
         this.activeExplosions.push({
             cx,
@@ -1980,8 +2015,31 @@ export class FluidSimulator {
             startFrame: this.frameCount,
             durationFrames,
             noiseOffsetX: Math.random() * 10.0,
-            noiseOffsetY: Math.random() * 10.0
+            noiseOffsetY: Math.random() * 10.0,
+            anisotropyMode,
+            anisotropyPhase,
+            anisotropyStrength
         });
+    }
+
+    /**
+     * 各向异性爆炸 - 支持方向性爆炸效果
+     * @param cx 爆炸中心X坐标（UV空间，0~1）
+     * @param cy 爆炸中心Y坐标（UV空间，0~1）
+     * @param radius 爆炸半径（UV空间）
+     * @param strength 散度源强度
+     * @param createWater 是否生成新水
+     * @param duration 爆炸持续时间（秒）
+     * @param mode 各向异性模式：0=各向同性, 1=四极子, 2=偶极子
+     * @param phase 相位偏移（弧度）
+     * @param anisoStrength 各向异性强度 (0~1)
+     */
+    public explodeAnisotropic(
+        cx: number, cy: number, radius: number, strength: number,
+        createWater: boolean = true, duration: number = 0.1,
+        mode: number = 0, phase: number = 0, anisoStrength: number = 0.0
+    ): void {
+        this.explode(cx, cy, radius, strength, createWater, duration, mode, phase, anisoStrength);
     }
 
     /**
@@ -2101,6 +2159,10 @@ export class FluidSimulator {
             this.explosionDivMat.uniforms.noiseOffset.value.set(exp.noiseOffsetX, exp.noiseOffsetY);
             this.explosionDivMat.uniforms.perturbationStrength.value = this.perturbationStrength;
             this.explosionDivMat.uniforms.usePerturbation.value = this.usePerturbation ? 1.0 : 0.0;
+            // 设置各向异性参数
+            this.explosionDivMat.uniforms.anisotropyMode.value = exp.anisotropyMode;
+            this.explosionDivMat.uniforms.anisotropyPhase.value = exp.anisotropyPhase;
+            this.explosionDivMat.uniforms.anisotropyStrength.value = exp.anisotropyStrength;
 
             // 累加渲染到 explosionDivTex（不清屏实现叠加）
             this.renderFullscreen(this.explosionDivMat, this.explosionDivTex, false);
