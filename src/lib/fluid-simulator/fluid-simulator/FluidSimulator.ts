@@ -1287,7 +1287,7 @@ export class FluidSimulator {
                     vec2 uv = vUv;
                     float dist = distance(uv, center);
                     float mask = 1.0 - smoothstep(0.0, radius, dist);
-                    // 散度源: S = -strength * envelope * mask（取负以产生向外膨胀效果）
+                    // 散度源: S = -strength * envelope * mask（负散度产生向外膨胀效果）
                     float S = -strength * envelope * mask;
                     gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
                 }

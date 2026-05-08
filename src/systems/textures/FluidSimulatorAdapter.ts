@@ -72,15 +72,18 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         if (this.isExplosionBoosted) {
             this.explosionFrameCount++;
             
-            // 每3帧爆炸一次（第0、3、6、9、12帧）
-            if (this.explosionFrameCount % 3 === 0 && this.explosionFrameCount <= 15) {
+            // 每3帧爆炸一次（第3、6、9、12、15帧），共5次爆炸
+            if (this.explosionFrameCount % 3 === 0 && this.explosionFrameCount <= 12) {
                 // 计算当前爆炸阶段（0-4共5次爆炸）
                 const stage = this.explosionFrameCount / 3;
-                // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000（强度降低一半）
+                // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000
                 const strengths = [25000, 20000, 15000, 10000, 5000];
                 const strength = strengths[stage];
-                // 爆炸已注释
-                // this.simulator.explode(0.5, 0.5, 0.15, strength, stage === 0, 0.1); // 只有第一次生成水
+                // 只有第一次爆炸（stage=0，即explosionFrameCount=0时）生成水
+                // 但由于explosionFrameCount从1开始递增，第一次爆炸实际在stage=1时触发
+                // 所以这里改为 stage === 1 表示第一次真正的爆炸
+                const createWater = false;
+                this.simulator.explode(0.5, 0.5, 0.15, strength, createWater, 0.1);
             }
             
             // 5次爆炸完成后停止（共15帧）
