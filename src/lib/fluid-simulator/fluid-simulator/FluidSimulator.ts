@@ -1361,10 +1361,7 @@ export class FluidSimulator {
                 void main() {
                     vec2 uv = vUv;
                     float dist = distance(uv, center);
-                    // 使用更平缓的空间衰减：在半径50%范围内保持全强度，然后逐渐衰减
-                    // 减弱爆炸向周围的衰减，让爆炸影响更均匀
-                    float t = smoothstep(radius * 0.5, radius, dist);
-                    float mask = 1.0 - t * t; // 二次曲线，边缘衰减更慢
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
                     // 散度源: S = -strength * envelope * mask（负散度产生向外膨胀效果）
                     float S = -strength * envelope * mask;
                     gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
@@ -1394,9 +1391,7 @@ export class FluidSimulator {
                     vec2 uv = vUv;
                     float phi = texture2D(phiTex, uv).r;
                     float dist = distance(uv, center);
-                    // 使用更平缓的空间衰减：在半径50%范围内保持全强度
-                    float t = smoothstep(radius * 0.5, radius, dist);
-                    float mask = 1.0 - t * t;
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
 
                     // 只在空气区域生成水花（phi >= 0），不修改已有水体
                     if (mask > 0.0 && phi >= 0.0) {

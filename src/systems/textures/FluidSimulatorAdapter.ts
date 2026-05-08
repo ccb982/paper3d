@@ -36,9 +36,9 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             maxLifetime: 4,
             // 解耦边界处理参数（增强爆炸飞溅效果）
             decoupledBoundary: true,
-            boundaryRingWidth: 0.06,      // 增大边界环宽度，让效果更明显
-            boundaryDivDamping: 0.2,      // 减小阻尼系数，边界更软
-            boundaryVelDamping: 0.1,      // 减小速度阻尼，流体更易滑过边界
+            boundaryRingWidth: 0.03,
+            boundaryDivDamping: 0.4,
+            boundaryVelDamping: 0.2,
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
@@ -84,10 +84,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
                 // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000
                 const strengths = [25000, 20000, 15000, 10000, 5000];
                 const strength = strengths[stage];
-                // 只有第一次爆炸（stage=0，即explosionFrameCount=0时）生成水
-                // 但由于explosionFrameCount从1开始递增，第一次爆炸实际在stage=1时触发
-                // 所以这里改为 stage === 1 表示第一次真正的爆炸
-                const createWater = false;
+                // 第一次爆炸（stage=1）生成水，其余爆炸只加速已有水体
+                const createWater = stage === 1;
                 this.simulator.explode(0.5, 0.5, 0.15, strength, createWater, 0.1);
             }
             
