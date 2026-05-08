@@ -154,6 +154,7 @@ export class FluidSimulator {
 
     private initialized = false;
     private frameCount = 0;
+    private lastDissipationLogTime = 0;
 
     constructor(renderer: THREE.WebGLRenderer, params: FluidParams) {
         this.renderer = renderer;
@@ -734,11 +735,11 @@ export class FluidSimulator {
 
         // 流体消散着色器
         this.dissipationMat = new THREE.ShaderMaterial({
-            uniforms: { 
-                levelset: { value: null }, 
+            uniforms: {
+                levelset: { value: null },
                 age: { value: null },
-                maxLifetime: { value: this.params.maxLifetime ?? 10.0 }, 
-                dt: { value: this.params.timeStep } 
+                maxLifetime: { value: this.params.maxLifetime ?? 10.0 },
+                dt: { value: this.params.timeStep }
             },
             vertexShader: vs,
             fragmentShader: `
@@ -750,12 +751,12 @@ export class FluidSimulator {
                 void main() {
                     float phi = texture2D(levelset, vUv).r;
                     float currentAge = texture2D(age, vUv).r;
-                    
+
                     // 只有当 maxLifetime > 0 且水的年龄超过最大寿命时才消散
                     if (maxLifetime > 0.0 && phi < 0.0 && currentAge >= maxLifetime) {
-                        phi = 0.1; // 将水变回空气
+                        phi = 0.05; // 标记为被消散的水体（使用特殊值用于检测）
                     }
-                    
+
                     gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
                 }
             `
@@ -1412,11 +1413,6 @@ export class FluidSimulator {
     public update(_deltaTime?: number): void {
         if (!this.initialized) return;
 
-        // 帧开始时的纹理状态调试（每10帧输出一次）
-        if (this.frameCount % 10 === 0) {
-            console.log(`[寿命系统] 帧开始 - curPhiTex: ${this.curPhiTex === this.phiTexA ? 'A' : 'B'}, curAgeTex: ${this.curAgeTex === this.ageTexA ? 'A' : 'B'}`);
-        }
-
         // 辅助函数：更新注入相关的 uniform
         const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
             if (mat.uniforms.injectionEnabled) mat.uniforms.injectionEnabled.value = this.params.injectionEnabled ?? false;
@@ -1473,6 +1469,11 @@ export class FluidSimulator {
         const dt = this.params.timeStep;
         this.buildExplosionDivergence(dt);
 
+        // 调试：检测爆炸前水体数量
+        if (this.frameCount % 10 === 0) {
+            this.debugWaterCount('buildExplosionDivergence前', this.curPhiTex);
+        }
+
         // 5. 散度计算
         this.divergenceMat.uniforms.velocity.value = velForDiv;
         this.divergenceMat.uniforms.explosionDiv.value = this.explosionDivTex.texture;
@@ -1516,13 +1517,7 @@ export class FluidSimulator {
         if (this.params.maxLifetime && this.params.maxLifetime > 0) {
             // 使用真实时间增量更新年龄（_deltaTime 可能是真实时间，也可能是默认的 timeStep）
             const realDelta = _deltaTime ?? this.params.timeStep;
-            
-            // 控制台输出寿命调试信息（每10帧输出一次，避免刷屏）
-            if (this.frameCount % 10 === 0) {
-                console.log(`[寿命系统] maxLifetime: ${this.params.maxLifetime.toFixed(3)}s | 帧时间: ${realDelta.toFixed(4)}s | 帧号: ${this.frameCount}`);
-                console.log(`          原理: ageTex纹理存储每个像素年龄，通过速度平流跟随水滴移动`);
-            }
-            
+
             // 步骤1: 年龄平流 - 让年龄跟随水流移动
             const ageAdvectionDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
             this.ageAdvectionMat.uniforms.age.value = this.curAgeTex.texture;
@@ -1553,6 +1548,11 @@ export class FluidSimulator {
             this.dissipationMat.uniforms.age.value = this.curAgeTex.texture;
             this.renderFullscreen(this.dissipationMat, dissipationDst);
             this.curPhiTex = dissipationDst;
+
+            // 检测消散的水体并输出日志（每30帧检测一次）
+            if (this.frameCount % 30 === 0) {
+                this.detectDissipatedWater(dissipationDst);
+            }
         }
 
         // 9. Level Set 重初始化（双缓冲交替）
@@ -1592,6 +1592,32 @@ export class FluidSimulator {
 
         // 帧计数递增
         this.frameCount++;
+    }
+
+    // ==================== 消散检测接口 ====================
+    private detectDissipatedWater(renderTarget: THREE.WebGLRenderTarget): void {
+        const pixels = this.readTextureData(renderTarget);
+        let dissipatedCount = 0;
+        let totalWaterCount = 0;
+
+        // 统计 phi = 0.05（被消散标记）和 phi < 0（水体）的像素数
+        for (let i = 0; i < pixels.length; i += 4) {
+            const phi = pixels[i];
+            if (phi < 0) {
+                totalWaterCount++;
+                if (phi === 0.05) {
+                    dissipatedCount++;
+                }
+            }
+        }
+
+        if (dissipatedCount > 0) {
+            const now = performance.now();
+            if (now - this.lastDissipationLogTime > 1000) { // 限制日志频率
+                console.log(`[寿命系统] 帧${this.frameCount}: 检测到 ${dissipatedCount} 个水体被消散, 当前水体总数: ${totalWaterCount}, maxLifetime: ${this.params.maxLifetime}s`);
+                this.lastDissipationLogTime = now;
+            }
+        }
     }
 
     // ==================== 调试录制接口 ====================
@@ -1898,6 +1924,26 @@ export class FluidSimulator {
             this.renderFullscreen(this.ageResetMat, ageDst);
             this.curAgeTex = ageDst;
         }
+
+        // 调试：检测爆炸后水体数量变化（每10帧）
+        if (this.frameCount % 10 === 0) {
+            this.debugWaterCount('buildExplosionDivergence后', this.curPhiTex);
+        }
+    }
+
+    private debugWaterCount(label: string, renderTarget: THREE.WebGLRenderTarget): void {
+        const pixels = this.readTextureData(renderTarget);
+        let waterCount = 0;
+        let airCount = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+            const phi = pixels[i];
+            if (phi < 0) {
+                waterCount++;
+            } else {
+                airCount++;
+            }
+        }
+        console.log(`[水体检测] ${label} - 水体: ${waterCount}, 空气: ${airCount}, 帧: ${this.frameCount}`);
     }
 
     // ==================== 分层渲染相关接口 ====================
