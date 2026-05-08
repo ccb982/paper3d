@@ -107,6 +107,7 @@ export class FluidSimulator {
     // 调试录制相关
     private debugRecordingEnabled: boolean = false;
     private debugFramesToRecord: number = 20;
+    private debugStartFrame: number = 0;
     private debugCurrentFrame: number = 0;
     private debugRecordedData: Array<{
         frame: number;
@@ -1438,11 +1439,12 @@ export class FluidSimulator {
             this.renderFullscreen(this.solidBoundaryClearVelMat, this.velAfterCollisionTex);
             this.curVelTex = this.velAfterCollisionTex;
 
-            // 清理 phi
+            // 清理 phi - 使用双缓冲，避免读写同一纹理
+            const phiClearDst1 = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
             this.solidBoundaryClearPhiMat.uniforms.levelset.value = this.curPhiTex.texture;
             this.solidBoundaryClearPhiMat.uniforms.solidMask.value = this.solidMaskTex;
-            this.renderFullscreen(this.solidBoundaryClearPhiMat, this.phiTexA);
-            this.curPhiTex = this.phiTexA;
+            this.renderFullscreen(this.solidBoundaryClearPhiMat, phiClearDst1);
+            this.curPhiTex = phiClearDst1;
         }
 
         // 2. 速度平流
@@ -1468,11 +1470,6 @@ export class FluidSimulator {
         // 4.5 构建爆炸散度源（散度源模型）
         const dt = this.params.timeStep;
         this.buildExplosionDivergence(dt);
-
-        // 调试：检测爆炸前水体数量
-        if (this.frameCount % 10 === 0) {
-            this.debugWaterCount('buildExplosionDivergence前', this.curPhiTex);
-        }
 
         // 5. 散度计算
         this.divergenceMat.uniforms.velocity.value = velForDiv;
@@ -1573,15 +1570,16 @@ export class FluidSimulator {
             this.renderFullscreen(this.solidBoundaryClearVelMat, this.velAfterCollisionTex);
             this.curVelTex = this.velAfterCollisionTex;
 
-            // 清理 phi
+            // 清理 phi - 使用双缓冲，避免读写同一纹理
+            const phiClearDst1 = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
             this.solidBoundaryClearPhiMat.uniforms.levelset.value = this.curPhiTex.texture;
             this.solidBoundaryClearPhiMat.uniforms.solidMask.value = this.solidMaskTex;
-            this.renderFullscreen(this.solidBoundaryClearPhiMat, this.phiTexA);
-            this.curPhiTex = this.phiTexA;
+            this.renderFullscreen(this.solidBoundaryClearPhiMat, phiClearDst1);
+            this.curPhiTex = phiClearDst1;
         }
 
         // ========== 调试录制 ==========
-        if (this.debugRecordingEnabled && this.debugCurrentFrame < this.debugFramesToRecord) {
+        if (this.debugRecordingEnabled && this.frameCount >= this.debugStartFrame && this.debugCurrentFrame < this.debugFramesToRecord) {
             this.captureCurrentState();
             this.debugCurrentFrame++;
             if (this.debugCurrentFrame >= this.debugFramesToRecord) {
@@ -1621,18 +1619,20 @@ export class FluidSimulator {
     }
 
     // ==================== 调试录制接口 ====================
-    public enableDebugRecording(enable: boolean, framesToRecord: number = 20): void {
+    public enableDebugRecording(enable: boolean, framesToRecord: number = 20, startFrame: number = 0): void {
         this.debugRecordingEnabled = enable;
         if (enable) {
             this.debugFramesToRecord = framesToRecord;
+            this.debugStartFrame = startFrame;
             this.debugCurrentFrame = 0;
             this.debugRecordedData = [];
-            // 立即捕获当前状态作为帧 0（初始状态）
-            this.captureCurrentState();
-            this.debugCurrentFrame++;
-            console.log(`[FluidSimulator] 调试录制已启用，将记录 ${framesToRecord} 帧`);
+            if (startFrame === 0) {
+                this.captureCurrentState();
+                this.debugCurrentFrame++;
+            }
+            console.log(`[FluidSimulator] 调试录制已启用，将记录第 ${startFrame} 到 ${startFrame + framesToRecord} 帧`);
         } else {
-            console.log(`[FluidSimulator] 调试录制已禁用`);
+            console.log('[FluidSimulator] 调试录制已禁用');
         }
     }
 
@@ -1924,26 +1924,6 @@ export class FluidSimulator {
             this.renderFullscreen(this.ageResetMat, ageDst);
             this.curAgeTex = ageDst;
         }
-
-        // 调试：检测爆炸后水体数量变化（每10帧）
-        if (this.frameCount % 10 === 0) {
-            this.debugWaterCount('buildExplosionDivergence后', this.curPhiTex);
-        }
-    }
-
-    private debugWaterCount(label: string, renderTarget: THREE.WebGLRenderTarget): void {
-        const pixels = this.readTextureData(renderTarget);
-        let waterCount = 0;
-        let airCount = 0;
-        for (let i = 0; i < pixels.length; i += 4) {
-            const phi = pixels[i];
-            if (phi < 0) {
-                waterCount++;
-            } else {
-                airCount++;
-            }
-        }
-        console.log(`[水体检测] ${label} - 水体: ${waterCount}, 空气: ${airCount}, 帧: ${this.frameCount}`);
     }
 
     // ==================== 分层渲染相关接口 ====================

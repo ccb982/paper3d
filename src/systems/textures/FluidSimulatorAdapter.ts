@@ -53,7 +53,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
         this.material = this.simulator.getRenderMaterial();
         
         // 调试录制（已关闭）
-        // this.simulator.enableDebugRecording(true, 10);
+        // this.simulator.enableDebugRecording(true, 10, 10);
     }
     
     generate(): THREE.Texture | THREE.Material {
@@ -79,8 +79,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
                 // 强度递减：25000 -> 20000 -> 15000 -> 10000 -> 5000（强度降低一半）
                 const strengths = [25000, 20000, 15000, 10000, 5000];
                 const strength = strengths[stage];
-                // 爆炸半径0.15，影响较大范围
-                this.simulator.explode(0.5, 0.5, 0.15, strength, stage === 0, 0.1); // 只有第一次生成水
+                // 爆炸已注释
+                // this.simulator.explode(0.5, 0.5, 0.15, strength, stage === 0, 0.1); // 只有第一次生成水
             }
             
             // 5次爆炸完成后停止（共15帧）
@@ -99,8 +99,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             this.simulator.setPressureIterations(200);
             this.isExplosionBoosted = true;
             this.explosionFrameCount = 0;
-            // 初始爆炸：高强度散度源，产生明显的爆炸飞溅效果
-            this.simulator.explode(0.5, 0.5, 0.15, 25000, true, 0.1);
+            // 初始爆炸已删除
         }
 
         // 计算真实时间增量（转换为秒），用于年龄计时
