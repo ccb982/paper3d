@@ -1456,6 +1456,7 @@ export class FluidSimulator {
         this.externalForcesMat.uniforms.velocity.value = this.curVelTex.texture;
         this.externalForcesMat.uniforms.levelset.value = this.curPhiTex.texture;
         this.renderFullscreen(this.externalForcesMat, this.forcedVelTex);
+        this.curVelTex = this.forcedVelTex;  // ★ 更新为包含重力的速度
 
         // 4. 墙碰撞处理
         let velForDiv = this.forcedVelTex.texture;
@@ -1470,6 +1471,9 @@ export class FluidSimulator {
         // 4.5 构建爆炸散度源（散度源模型）
         const dt = this.params.timeStep;
         this.buildExplosionDivergence(dt);
+
+        // ★ 如果爆炸修改了速度场，这里同步更新 velForDiv
+        velForDiv = this.curVelTex.texture;
 
         // 5. 散度计算
         this.divergenceMat.uniforms.velocity.value = velForDiv;
