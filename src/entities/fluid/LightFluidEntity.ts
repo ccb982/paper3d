@@ -32,6 +32,9 @@ export class LightFluidEntity extends Entity {
     private breathingSpeed: number;           // 呼吸频率（每秒周期数）- 随机化
     private breathingAmplitude: number;       // 呼吸强度（散度幅度）- 随机化
     private breathingOffset: number;          // 呼吸相位偏移（让每个水滴不同步）
+    private breathingDirection: number;        // 当前膨胀主方向（弧度）
+    private expandChoice: boolean = true;      // 当前选择：true=膨胀，false=收缩
+    private expandChoiceFrames: number = 0;   // 当前选择已持续帧数
 
     constructor(
         id: string, 
@@ -48,14 +51,14 @@ export class LightFluidEntity extends Entity {
             width: 32,
             height: 32,
             density: 1000,
-            viscosity: 0.0001,              // ★ 降低粘度，让流体更容易流动
-            surfaceTension: 0.01,           // ★ 降低表面张力，让边界更活跃
-            gravity: 50.0,                  // ★ 增大重力（在小纹理上需要更大的值）
+            viscosity: 0.001,             // 降低粘度，让呼吸散度能驱动内部流动
+            surfaceTension: 0.03,         // 保持形状
+            gravity: 2.0,                 // 极低重力
             pressureIterations: 8,
             reinitIterations: 2,
-            timeStep: 0.005,                // ★ 增大时间步长，加快模拟
-            restitution: 0.8,
-            friction: 0.99,                 // ★ 降低摩擦
+            timeStep: 0.003,              
+            restitution: 0.2,
+            friction: 0.9,               
             usePCG: false,
             maxLifetime: 0,
             decoupledBoundary: false,
@@ -85,12 +88,13 @@ export class LightFluidEntity extends Entity {
         
         // ★ 初始化呼吸效果参数（随机化让每个水滴不同）
         this.breathingSpeed = 1.5 + Math.random() * 2.0;   // 1.5~3.5 Hz
-        this.breathingAmplitude = 2000 + Math.random() * 2000; // 2000~4000 散度强度
+        this.breathingAmplitude = 4000 + Math.random() * 3000; // 4000~7000 散度强度
         this.breathingOffset = Math.random() * Math.PI * 2;    // 随机相位偏移
+        this.breathingDirection = Math.random() * Math.PI * 2; // 随机初始方向
         
         this.simulator = new FluidSimulator(renderer, params);
         this.setInitialWaterVolume(waterVolume);
-        this.setInitialVelocity(0, -200.0); // 初始速度场：向下 200.0
+        this.setInitialVelocity(0, -20.0); // 降低初始速度，让水滴保持在中心附近
         
         const renderMaterial = this.simulator.getRenderMaterial();
         this.mesh.material = renderMaterial;
@@ -208,19 +212,36 @@ export class LightFluidEntity extends Entity {
         const internalForceY = -accel.y * 0.5;
         this.simulator.addVelocityImpulse(internalForceX, internalForceY);
 
-        // ========== 呼吸/脉动效果（基于 S = -strength * envelope * mask） ==========
-        // 负散度 = 向外膨胀，正散度 = 向内收缩
+        // ========== 随机散度效果 ==========
+        // 随机选择收缩或膨胀（每种选择持续5帧）
         this.breathingPhase += this.breathingSpeed * delta;
-        const breathingValue = Math.sin(this.breathingPhase + this.breathingOffset);
         
-        // 使用更强的包络函数，让膨胀和收缩更加剧烈
-        // envelope = 4*u*(1-u) 的变体，产生更强的脉冲
-        const envelope = Math.abs(breathingValue); // 绝对值产生方波效果
+        // 每隔一段时间随机改变方向
+        if (this.frameCount % 15 === 0) {
+            this.breathingDirection = Math.random() * Math.PI * 2;
+        }
         
-        // 注入散度脉冲：负值=膨胀，正值=收缩
-        // 强度 * 包络 * mask（mask 在 addDivergenceImpulse 内部应用）
-        const divergence = -breathingValue * this.breathingAmplitude * envelope;
-        this.simulator.addDivergenceImpulse(divergence, 0.4); // 增大影响半径
+        // 选择持续5帧后切换
+        this.expandChoiceFrames++;
+        if (this.expandChoiceFrames >= 5) {
+            this.expandChoice = !this.expandChoice;
+            this.expandChoiceFrames = 0;
+        }
+        
+        // 强度基于正弦包络振荡
+        const strength = this.breathingAmplitude * Math.abs(Math.sin(this.breathingPhase + this.breathingOffset));
+        
+        if (this.expandChoice) {
+            // 膨胀：直接生成水
+            this.simulator.addWaterImpulse(0.8, 0.4, 0.5, 0.5);
+            // 增强速度场，让变化更快
+            this.simulator.addVelocityImpulse(0, -30);
+        } else {
+            // 收缩：大幅增强散度强度
+            this.simulator.addShrinkDivergenceImpulse(strength * 5, 0.5, 0.5, 0.5);
+            // 向中心的速度聚拢效果
+            this.simulator.addVelocityImpulse(0, 100);
+        }
 
         this.simulator.update(delta);
 

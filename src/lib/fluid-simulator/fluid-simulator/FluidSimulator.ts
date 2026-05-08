@@ -1585,16 +1585,6 @@ export class FluidSimulator {
     public update(_deltaTime?: number): void {
         if (!this.initialized) return;
 
-        // ========== 每帧开始时清空爆炸散度纹理 ==========
-        // 这允许在 update 前通过 addDivergenceImpulse 注入散度
-        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-        const clearMat = new THREE.ShaderMaterial({
-            vertexShader: vs,
-            fragmentShader: `void main() { gl_FragColor = vec4(0.0); }`
-        });
-        this.renderFullscreen(clearMat, this.explosionDivTex, true);
-        clearMat.dispose();
-
         // 辅助函数：更新注入相关的 uniform
         const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
             if (mat.uniforms.injectionEnabled) mat.uniforms.injectionEnabled.value = this.params.injectionEnabled ?? false;
@@ -1775,6 +1765,15 @@ export class FluidSimulator {
 
         // 帧计数递增
         this.frameCount++;
+
+        // ========== 每帧结束时清空爆炸散度纹理（为下一帧准备） ==========
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const clearMat = new THREE.ShaderMaterial({
+            vertexShader: vs,
+            fragmentShader: `void main() { gl_FragColor = vec4(0.0); }`
+        });
+        this.renderFullscreen(clearMat, this.explosionDivTex, true);
+        clearMat.dispose();
 
         // ★ 关键：每帧更新渲染材质的纹理引用，确保画面正确刷新
         this.updateRenderUniforms();
@@ -1992,7 +1991,7 @@ export class FluidSimulator {
     }
 
     /**
-     * 直接注入散度到流体场中
+     * 直接注入散度到流体场中（各向同性版本）
      * @param divergence 散度值（负值=向外膨胀，正值=向内收缩）
      * @param radius 影响半径（UV空间，0~1）
      * @param cx 中心X（UV空间）
@@ -2021,7 +2020,198 @@ export class FluidSimulator {
             `
         });
         
-        // 累加散度到爆炸散度纹理
+        this.renderFullscreen(divMat, this.explosionDivTex, false);
+        divMat.dispose();
+    }
+
+    /**
+     * 生成水函数：向 phi 场添加水
+     * @param amount 生成水量（负值会减少水）
+     * @param radius 影响半径（UV空间，0~1）
+     * @param cx 中心X（UV空间）
+     * @param cy 中心Y（UV空间）
+     */
+    public addWaterImpulse(
+        amount: number, 
+        radius: number = 0.2, 
+        cx: number = 0.5, 
+        cy: number = 0.5
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        
+        // 使用 phi 更新着色器来添加水
+        const waterMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phiTex: { value: this.curPhiTex.texture },
+                amount: { value: amount },
+                radius: { value: radius },
+                center: { value: new THREE.Vector2(cx, cy) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phiTex;
+                uniform float amount;
+                uniform float radius;
+                uniform vec2 center;
+                varying vec2 vUv;
+                
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    
+                    float phi = texture2D(phiTex, vUv).r;
+                    
+                    // amount > 0: 添加水（phi 变小，让更多区域变为水）
+                    // amount < 0: 移除水（phi 变大，让更多区域变为空气）
+                    phi -= amount * mask;
+                    
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        // 渲染到 phi 双缓冲
+        const targetTex = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+        this.renderFullscreen(waterMat, targetTex, false);
+        waterMat.dispose();
+        
+        // 交换 phi 缓冲区
+        this.curPhiTex = targetTex;
+    }
+
+    /**
+     * 正散度收缩函数：S = strength * envelope * mask
+     * 用于让流体向内收缩
+     */
+    public addShrinkDivergenceImpulse(
+        strength: number, 
+        radius: number = 0.2, 
+        cx: number = 0.5, 
+        cy: number = 0.5
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const divMat = new THREE.ShaderMaterial({
+            uniforms: {
+                strength: { value: strength },
+                radius: { value: radius },
+                center: { value: new THREE.Vector2(cx, cy) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float strength;
+                uniform float radius;
+                uniform vec2 center;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    float S = strength * mask;
+                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        this.renderFullscreen(divMat, this.explosionDivTex, false);
+        divMat.dispose();
+    }
+
+    /**
+     * 负散度膨胀函数：S = -strength * envelope * mask
+     * 用于让流体向外膨胀
+     */
+    public addExpandDivergenceImpulse(
+        strength: number, 
+        radius: number = 0.2, 
+        cx: number = 0.5, 
+        cy: number = 0.5
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const divMat = new THREE.ShaderMaterial({
+            uniforms: {
+                strength: { value: strength },
+                radius: { value: radius },
+                center: { value: new THREE.Vector2(cx, cy) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float strength;
+                uniform float radius;
+                uniform vec2 center;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    float S = -strength * mask;
+                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        this.renderFullscreen(divMat, this.explosionDivTex, false);
+        divMat.dispose();
+    }
+
+    /**
+     * 各向异性散度注入（随机方向膨胀/收缩）
+     * @param divergence 散度幅度（负值=膨胀，正值=收缩）
+     * @param radius 影响半径（UV空间，0~1）
+     * @param cx 中心X（UV空间）
+     * @param cy 中心Y（UV空间）
+     * @param directionAngle 扩张主方向（弧度，0=右，PI/2=上）
+     * @param anisotropy 各向异性强度（0=各向同性，1=完全各向异性）
+     */
+    public addAnisotropicDivergenceImpulse(
+        divergence: number, 
+        radius: number = 0.2, 
+        cx: number = 0.5, 
+        cy: number = 0.5,
+        directionAngle: number = 0,
+        anisotropy: number = 0.8
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const divMat = new THREE.ShaderMaterial({
+            uniforms: {
+                divergence: { value: divergence },
+                radius: { value: radius },
+                center: { value: new THREE.Vector2(cx, cy) },
+                dirAngle: { value: directionAngle },
+                anisoStrength: { value: anisotropy }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float divergence;
+                uniform float radius;
+                uniform vec2 center;
+                uniform float dirAngle;
+                uniform float anisoStrength;
+                varying vec2 vUv;
+                
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    
+                    // 计算当前像素相对于中心的方向角
+                    vec2 rel = vUv - center;
+                    float angle = atan(rel.y, rel.x);
+                    
+                    // 计算与主方向的夹角
+                    float diff = angle - dirAngle;
+                    
+                    // 使用余弦调制实现各向异性
+                    // dirMod 在主方向上为 1，在垂直方向上为负值（反向收缩）
+                    float dirMod = cos(diff);
+                    
+                    // 混合各向同性和各向异性
+                    // anisoStrength=0: 完全各向同性，所有方向一致
+                    // anisoStrength=1: 完全各向异性，对面方向收缩
+                    float finalMod = mix(1.0, dirMod, anisoStrength);
+                    
+                    float S = divergence * mask * finalMod;
+                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
         this.renderFullscreen(divMat, this.explosionDivTex, false);
         divMat.dispose();
     }
@@ -2224,7 +2414,7 @@ export class FluidSimulator {
 
     // ==================== 构建爆炸散度源（散度源模型） ====================
     private buildExplosionDivergence(dt: number): void {
-        // 注意：爆炸散度纹理已经在 update() 开头被清空
+        // 注意：爆炸散度纹理不再在这里清空
         // 遍历活跃爆炸列表，累加散度贡献（使用帧计数代替墙钟时间）
         for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
             const exp = this.activeExplosions[i];
