@@ -6,6 +6,7 @@ import { Entity } from './Entity';
  * 采用单例模式，提供统一的实体管理接口
  */
 export class EntityManager {
+  private renderer: THREE.WebGLRenderer | null = null;
   private static instance: EntityManager;
 
   private entities: Map<string, Entity> = new Map();
@@ -32,6 +33,104 @@ export class EntityManager {
    */
   public getScene(): THREE.Scene | null {
     return this.scene;
+  }
+
+  /**
+   * 设置渲染器引用（用于创建流体实体）
+   */
+  public setRenderer(renderer: THREE.WebGLRenderer): void {
+    this.renderer = renderer;
+  }
+
+  /**
+   * 获取渲染器引用
+   */
+  public getRenderer(): THREE.WebGLRenderer | null {
+    return this.renderer;
+  }
+
+  /**
+   * 创建多个小型液滴实体
+   * @param count 液滴数量
+   * @param centerPos 中心位置
+   * @param spreadRadius 扩散半径
+   * @param initialVelocity 初始速度
+   * @param scale 液滴大小
+   */
+  public async createDroplets(
+    count: number,
+    centerPos: THREE.Vector3,
+    spreadRadius: number = 1,
+    initialVelocity?: THREE.Vector3,
+    scale: number = 0.2
+  ): Promise<Entity[]> {
+    if (!this.renderer) {
+      console.error('Renderer not set! Call setRenderer() first.');
+      return [];
+    }
+
+    console.log(`[EntityManager] 开始创建 ${count} 个液滴`);
+    console.log(`  - 中心位置: (${centerPos.x.toFixed(2)}, ${centerPos.y.toFixed(2)}, ${centerPos.z.toFixed(2)})`);
+    console.log(`  - 扩散半径: ${spreadRadius}`);
+    console.log(`  - 初始速度: ${initialVelocity ? `(${initialVelocity.x.toFixed(2)}, ${initialVelocity.y.toFixed(2)})` : '无'}`);
+    console.log(`  - 缩放大小: ${scale}`);
+
+    const droplets: Entity[] = [];
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * spreadRadius;
+      const offsetX = Math.cos(angle) * dist;
+      const offsetY = Math.sin(angle) * dist;
+
+      const pos = new THREE.Vector3(
+        centerPos.x + offsetX,
+        centerPos.y + offsetY,
+        centerPos.z
+      );
+
+      const vel = initialVelocity?.clone() ?? new THREE.Vector3();
+      vel.x += (Math.random() - 0.5) * 2;
+      vel.y += (Math.random() - 0.5) * 2;
+
+      const droplet = await this.createDroplet(`droplet_${Date.now()}_${i}`, pos, vel, scale);
+      if (droplet) {
+        droplets.push(droplet);
+      }
+    }
+
+    console.log(`[EntityManager] 液滴创建完成，共创建 ${droplets.length} 个`);
+    return droplets;
+  }
+
+  /**
+   * 创建单个液滴实体
+   * @param id 实体ID
+   * @param position 位置
+   * @param velocity 速度
+   * @param scale 大小
+   */
+  public async createDroplet(
+    id: string,
+    position: THREE.Vector3,
+    velocity?: THREE.Vector3,
+    scale: number = 0.2
+  ): Promise<Entity | null> {
+    if (!this.renderer) {
+      console.error('Renderer not set! Call setRenderer() first.');
+      return null;
+    }
+
+    const { LightFluidEntity } = await import('@entities/fluid');
+    const droplet = new LightFluidEntity(id, this.renderer, position, velocity, scale);
+    this.addEntity(droplet);
+    return droplet;
+  }
+
+  /**
+   * 获取所有液滴实体
+   */
+  public getDroplets(): Entity[] {
+    return this.getEntitiesByType('lightFluid');
   }
 
   /**

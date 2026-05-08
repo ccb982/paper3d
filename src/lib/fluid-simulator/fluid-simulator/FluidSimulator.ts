@@ -1784,8 +1784,8 @@ export class FluidSimulator {
             }
         }
 
-        // 每10帧实时输出水量统计
-        console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
+        // 每10帧实时输出水量统计（已关闭）
+        // console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
     }
 
     // ==================== 调试录制接口 ====================

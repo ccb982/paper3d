@@ -61,6 +61,11 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
       sceneRef.current = scene;
       // 设置场景引用到 EntityManager，用于特效系统
       EntityManager.getInstance().setScene(scene);
+      // 设置渲染器引用到 EntityManager，用于流体实体创建
+      const renderer = cameraStore.getRenderer();
+      if (renderer) {
+        EntityManager.getInstance().setRenderer(renderer);
+      }
       // 将场景引用存储到window对象，供ParticleFireEffect使用
       (window as any).gameScene = scene;
       // 将cameraStore引用存储到window对象，供ParticleFireEffect使用
@@ -659,8 +664,28 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     }
     console.log('Test bullet trail texture created and displayed at (0, 3, 5)');
 
+    // 创建测试液滴
+    createTestDroplets();
     console.log('Entities created:', entityManager.getEntityCount());
   }, []);
+
+  // 创建测试液滴
+  const createTestDroplets = async () => {
+    const entityManager = EntityManager.getInstance();
+    try {
+      // 在出生点附近创建5个测试液滴
+      const droplets = await entityManager.createDroplets(
+        5,                          // 数量
+        new THREE.Vector3(0, 5, 0), // 中心位置（空中）
+        2,                          // 扩散半径
+        new THREE.Vector3(0, -2, 0),// 初始速度（向下）
+        0.15                        // 大小
+      );
+      console.log(`创建了 ${droplets.length} 个测试液滴`);
+    } catch (error) {
+      console.error('创建测试液滴失败:', error);
+    }
+  }
 
   // 根据地形高度创建水面实体
   useEffect(() => {
