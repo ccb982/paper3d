@@ -1550,8 +1550,8 @@ export class FluidSimulator {
             this.renderFullscreen(this.dissipationMat, dissipationDst);
             this.curPhiTex = dissipationDst;
 
-            // 检测消散的水体并输出日志（每30帧检测一次）
-            if (this.frameCount % 30 === 0) {
+            // 检测消散的水体并输出日志（每10帧检测一次）
+            if (this.frameCount % 10 === 0) {
                 this.detectDissipatedWater(dissipationDst);
             }
         }
@@ -1613,13 +1613,8 @@ export class FluidSimulator {
             }
         }
 
-        if (dissipatedCount > 0) {
-            const now = performance.now();
-            if (now - this.lastDissipationLogTime > 1000) { // 限制日志频率
-                console.log(`[寿命系统] 帧${this.frameCount}: 检测到 ${dissipatedCount} 个水体被消散, 当前水体总数: ${totalWaterCount}, maxLifetime: ${this.params.maxLifetime}s`);
-                this.lastDissipationLogTime = now;
-            }
-        }
+        // 每10帧实时输出水量统计
+        console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
     }
 
     // ==================== 调试录制接口 ====================

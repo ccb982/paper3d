@@ -30,10 +30,10 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             pressureIterations: 50,
             reinitIterations: 5,
             timeStep: 0.002,
-            restitution: 0.3,
-            friction: 0.95,
+            restitution: 1.0,
+            friction: 0.0,
             usePCG: false,
-            maxLifetime: 10,
+            maxLifetime: 4,
             // 分层渲染参数
             waterColor: new THREE.Color(0.2, 0.6, 0.9),
             deepColor: new THREE.Color(0.05, 0.2, 0.4),
