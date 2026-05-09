@@ -1349,7 +1349,7 @@ export class FluidSimulator {
 
                     // ========== 5. 流动扰动层（细节） ==========
                     vec2 vel = texture2D(velTex, vUv).rg;
-                    float flow = length(vel) * 0.5;
+                    float flow = length(vel) * 0.05;  // 降低速度敏感度，避免高速度时变白
                     vec3 flowColor = vec3(0.15, 0.25, 0.35) * flow * flowIntensity;
 
                     // ========== 最终合成（各层互不干扰） ==========
