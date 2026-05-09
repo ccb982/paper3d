@@ -1896,13 +1896,12 @@ export class FluidSimulator {
         this.updateRenderUniforms();
     }
 
-    // ==================== 消散检测接口 ====================
-    private detectDissipatedWater(renderTarget: THREE.WebGLRenderTarget): void {
-        const pixels = this.readTextureData(renderTarget);
+    // ==================== 水量检测接口 ====================
+    public getWaterAmount(): { totalWaterCount: number; dissipatedCount: number } {
+        const pixels = this.readTextureData(this.curPhiTex);
         let dissipatedCount = 0;
         let totalWaterCount = 0;
 
-        // 统计 phi = 0.05（被消散标记）和 phi < 0（水体）的像素数
         for (let i = 0; i < pixels.length; i += 4) {
             const phi = pixels[i];
             if (phi < 0) {
@@ -1913,8 +1912,21 @@ export class FluidSimulator {
             }
         }
 
-        // 每10帧实时输出水量统计（已关闭）
-        // console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
+        return { totalWaterCount, dissipatedCount };
+    }
+
+    public enableWaterDebug(enabled: boolean): void {
+        this.waterDebugEnabled = enabled;
+    }
+
+    private waterDebugEnabled: boolean = false;
+
+    private detectDissipatedWater(renderTarget: THREE.WebGLRenderTarget): void {
+        const { totalWaterCount, dissipatedCount } = this.getWaterAmount();
+
+        if (this.waterDebugEnabled) {
+            console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
+        }
     }
 
     // ==================== 调试录制接口 ====================
@@ -2378,11 +2390,15 @@ export class FluidSimulator {
                     float d = distance(vUv, center);
                     float mask = 1.0 - smoothstep(0.0, radius, d);
                     vec4 oldVel = texture2D(curVel, vUv);
-                    vec2 newVel = oldVel.rg + impulse * mask;
-                    float speed = length(newVel);
-                    if (speed > maxSpeed) {
-                        newVel = normalize(newVel) * maxSpeed;
+                    vec2 addedVel = impulse * mask;
+                    
+                    // 只对新增的速度分量应用速度限制，保留原始速度不变
+                    float addedSpeed = length(addedVel);
+                    if (addedSpeed > maxSpeed) {
+                        addedVel = normalize(addedVel) * maxSpeed;
                     }
+                    
+                    vec2 newVel = oldVel.rg + addedVel;
                     gl_FragColor = vec4(newVel, 0.0, 1.0);
                 }
             `

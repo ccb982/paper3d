@@ -64,8 +64,11 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
         // 使用 FluidSimulator 内置的分层渲染材质
         this.material = this.simulator.getRenderMaterial();
         
+        // 启用水量调试输出
+        //this.simulator.enableWaterDebug(true);
+        
         // 调试录制（已关闭）
-        // this.simulator.enableDebugRecording(true, 11, 18);
+        //this.simulator.enableDebugRecording(true,25, 30);
     }
     
     generate(): THREE.Texture | THREE.Material {
@@ -154,6 +157,14 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     }): void {
         this.simulator.configureInjection(config);
     }
+
+    public getWaterAmount(): { totalWaterCount: number; dissipatedCount: number } {
+        return this.simulator.getWaterAmount();
+    }
+
+    public enableWaterDebug(enabled: boolean): void {
+        this.simulator.enableWaterDebug(enabled);
+    }
     
     public setSolidMaskTexture(texture: THREE.Texture): void {
         this.simulator.setSolidMaskTexture(texture);
@@ -226,7 +237,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             if (force.velocityInjection) {
                 const inj = force.velocityInjection;
                 const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-                sim.addLocalVelocityImpulse(inj.velocity.x, inj.velocity.y, inj.radius ?? 0.2, center.x, center.y);
+                sim.addLocalVelocityImpulse(inj.velocity.x, inj.velocity.y, inj.radius ?? 0.2, center.x, center.y, 10.0);
             }
 
             // 散度注入

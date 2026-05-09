@@ -247,34 +247,19 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     // 更新特效管理器
     EffectManager.getInstance().update(scaledDelta);
 
-    // ========== 随机横向力（每1秒施加一次）==========
-    const currentTime = clock.getElapsedTime();
-    if (currentTime - lastForceTimeRef.current >= 1.0) {
-      lastForceTimeRef.current = currentTime;
-
-      const randomForce: FluidExternalForce = {
-        velocityInjection: {
-          velocity: new THREE.Vector2(
-            (Math.random() - 0.5) * 0.001,
-            0
-          ),
-          radius: 0.5,
-          centerUV: new THREE.Vector2(0.5, 0.3)
-        }
-      };
-
-      // 1. 给详细纹理施加随机横向力
-      const textureManager = TextureManager.getInstance();
-      const detailSim = textureManager.getFluidSimulator('levelSetFluid') as IFluidForceTarget | undefined;
-      if (detailSim) {
-        detailSim.applyFluidForce(randomForce);
+    // ========== 随机散度力（每帧施加，只给小液滴）==========
+    const randomForce: FluidExternalForce = {
+      divergenceInjection: {
+        divergence: (Math.random() - 0.5) * 5000,
+        radius: 0.5,
+        centerUV: new THREE.Vector2(0.5, 0.3)
       }
+    };
 
-      // 2. 给所有小液滴施加随机横向力
-      const droplets = EntityManager.getInstance().getDroplets() as IFluidForceTarget[];
-      for (const droplet of droplets) {
-        droplet.applyFluidForce(randomForce);
-      }
+    // 只给小液滴施加随机散度力（不修改详细纹理）
+    const droplets = EntityManager.getInstance().getDroplets() as IFluidForceTarget[];
+    for (const droplet of droplets) {
+      droplet.applyFluidForce(randomForce);
     }
 
     const currentPos = characterPositionStore.position;
