@@ -47,7 +47,7 @@ export class LightFluidEntity extends Entity {
         initialPosition?: THREE.Vector3,
         initialVelocity?: THREE.Vector3,
         waterVolume: number = 0.45,       // 修改为直接传入水量
-        maxAge: number = 10
+        maxAge: number = 5                // 寿命改为5秒
     ) {
         // 确保水量在有效范围内
         waterVolume = Math.max(0.01, Math.min(1.0, waterVolume));

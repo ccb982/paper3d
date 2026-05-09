@@ -36,56 +36,32 @@ export class FluidRegionManager {
 
   // 批量创建液滴（内部调用 EntityManager 的单例创建方法）
   async createDroplets(count: number, spread?: number): Promise<void> {
-    // eslint-disable-next-line no-debugger
-    debugger;  // 强制断点
-    console.log('========== FluidRegionManager.createDroplets START ==========');
-    console.log(`count: ${count}, spread: ${spread}, this.radius: ${this.radius}`);
-    
     const em = EntityManager.getInstance();
-    console.log('EntityManager instance:', em);
-    
     const renderer = em.getRenderer();
-    console.log('renderer:', renderer);
+    if (!renderer) return;
     
-    if (!renderer) {
-      console.log('renderer is null, returning');
-      return;
-    }
-    console.log('renderer is valid, proceeding...');
-    
-    let createdCount = 0;
     for (let i = 0; i < count; i++) {
-      try {
-        const angle = Math.random() * Math.PI * 2;
-        const dist = (spread ?? this.radius) * Math.sqrt(Math.random());
-        const pos = this.center.clone().add(
-          new THREE.Vector3(Math.cos(angle) * dist, Math.sin(angle) * dist, 0)
-        );
-        console.log(`[FluidRegionManager] 创建液滴 ${i+1}/${count}，位置: (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)})`);
-        
-        const vel = new THREE.Vector3(
-          (Math.random() - 0.5) * 2,
-          (Math.random() - 0.5) * 2,
-          0
-        );
-        const droplet = new LightFluidEntity(
-          `fluid_${Date.now()}_${Math.random()}`,
-          renderer,
-          pos,
-          vel,
-          0.3 + Math.random() * 0.4,  // 水量
-          8 + Math.random() * 4       // 寿命
-        );
-        em.addEntity(droplet);                 // 注册到全局管理器
-        this.addDroplet(droplet);              // 由本管理器跟踪
-        createdCount++;
-        console.log(`[FluidRegionManager] 液滴 ${i+1}/${count} 创建成功`);
-      } catch (error) {
-        console.error(`[FluidRegionManager] 创建液滴 ${i+1}/${count} 失败:`, error);
-      }
+      const angle = Math.random() * Math.PI * 2;
+      const dist = (spread ?? this.radius) * Math.sqrt(Math.random());
+      const pos = this.center.clone().add(
+        new THREE.Vector3(Math.cos(angle) * dist, Math.sin(angle) * dist, 0)
+      );
+      const vel = new THREE.Vector3(
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 2,
+        0
+      );
+      const droplet = new LightFluidEntity(
+        `fluid_${Date.now()}_${Math.random()}`,
+        renderer,
+        pos,
+        vel,
+        0.3 + Math.random() * 0.4,  // 水量
+        4 + Math.random() * 2       // 寿命：4-6秒（平均5秒）
+      );
+      em.addEntity(droplet);                 // 注册到全局管理器
+      this.addDroplet(droplet);              // 由本管理器跟踪
     }
-    
-    console.log(`[FluidRegionManager] 液滴创建完成，成功创建 ${createdCount}/${count} 个`);
   }
 
   // 核心更新：由 EntityManager 每帧调用，传入 LOD 等级
