@@ -211,6 +211,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
   };
 
   const debugHelpersRef = useRef<THREE.Object3D[]>([]);
+  const lastForceTimeRef = useRef(0);
 
   const clearDebugHelpers = () => {
     debugHelpersRef.current.forEach(helper => {
@@ -235,25 +236,31 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     }, duration);
   };
 
-  useFrame(({ camera }, delta) => {
+  useFrame(({ camera, clock }, delta) => {
     if (mode !== GameMode.BATTLE && mode !== GameMode.DAILY) {
       return;
     }
-    
+
     // 应用时间缩放（与 EntityManager 保持一致）
     const scaledDelta = delta * EntityManager.timeScale;
     
     // 更新特效管理器
     EffectManager.getInstance().update(scaledDelta);
 
-    // ========== 随机横向力 ==========
-    {
+    // ========== 随机横向力（每1秒施加一次）==========
+    const currentTime = clock.getElapsedTime();
+    if (currentTime - lastForceTimeRef.current >= 1.0) {
+      lastForceTimeRef.current = currentTime;
+
       const randomForce: FluidExternalForce = {
-        worldAcceleration: new THREE.Vector3(
-          (Math.random() - 0.5) * 20,
-          0,
-          0
-        )
+        velocityInjection: {
+          velocity: new THREE.Vector2(
+            (Math.random() - 0.5) * 0.001,
+            0
+          ),
+          radius: 0.5,
+          centerUV: new THREE.Vector2(0.5, 0.3)
+        }
       };
 
       // 1. 给详细纹理施加随机横向力

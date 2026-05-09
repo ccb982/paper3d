@@ -2357,6 +2357,42 @@ export class FluidSimulator {
         impulseMat.dispose();
     }
 
+    public addLocalVelocityImpulse(dvx: number, dvy: number, radius: number = 0.2, cx: number = 0.5, cy: number = 0.5, maxSpeed: number = 2.0): void {
+        const impulseMat = new THREE.ShaderMaterial({
+            uniforms: {
+                curVel: { value: this.curVelTex.texture },
+                impulse: { value: new THREE.Vector2(dvx, dvy) },
+                radius: { value: radius },
+                center: { value: new THREE.Vector2(cx, cy) },
+                maxSpeed: { value: maxSpeed }
+            },
+            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+            fragmentShader: `
+                uniform sampler2D curVel;
+                uniform vec2 impulse;
+                uniform float radius;
+                uniform vec2 center;
+                uniform float maxSpeed;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    vec4 oldVel = texture2D(curVel, vUv);
+                    vec2 newVel = oldVel.rg + impulse * mask;
+                    float speed = length(newVel);
+                    if (speed > maxSpeed) {
+                        newVel = normalize(newVel) * maxSpeed;
+                    }
+                    gl_FragColor = vec4(newVel, 0.0, 1.0);
+                }
+            `
+        });
+        const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
+        this.renderFullscreen(impulseMat, velDst);
+        this.curVelTex = velDst;
+        impulseMat.dispose();
+    }
+
     public setInjectionEnabled(enabled: boolean): void {
         this.params.injectionEnabled = enabled;
     }

@@ -218,29 +218,29 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     }
 
     applyFluidForce(force: FluidExternalForce): void {
-        // 忽略世界运动力（静态纹理不可移动）
-        const sim = this.simulator;
-        if (!sim) return;
+            // 忽略世界运动力（静态纹理不可移动）
+            const sim = this.simulator;
+            if (!sim) return;
 
-        // 速度注入
-        if (force.velocityInjection) {
-            const inj = force.velocityInjection;
-            // 降级：全局速度增加（所有像素）
-            sim.addVelocityImpulse(inj.velocity.x, inj.velocity.y);
-        }
+            // 速度注入
+            if (force.velocityInjection) {
+                const inj = force.velocityInjection;
+                const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+                sim.addLocalVelocityImpulse(inj.velocity.x, inj.velocity.y, inj.radius ?? 0.2, center.x, center.y);
+            }
 
-        // 散度注入
-        if (force.divergenceInjection) {
-            const inj = force.divergenceInjection;
-            const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-            sim.addDivergenceImpulse(inj.divergence, inj.radius ?? 0.2, center.x, center.y);
-        }
+            // 散度注入
+            if (force.divergenceInjection) {
+                const inj = force.divergenceInjection;
+                const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+                sim.addDivergenceImpulse(inj.divergence, inj.radius ?? 0.2, center.x, center.y);
+            }
 
-        // 水体注入
-        if (force.waterInjection) {
-            const inj = force.waterInjection;
-            const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-            sim.addWaterImpulse(inj.amount, inj.radius ?? 0.2, center.x, center.y);
+            // 水体注入
+            if (force.waterInjection) {
+                const inj = force.waterInjection;
+                const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+                sim.addWaterImpulse(inj.amount, inj.radius ?? 0.2, center.x, center.y);
+            }
         }
-    }
 }
