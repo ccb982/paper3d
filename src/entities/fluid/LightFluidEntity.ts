@@ -107,14 +107,6 @@ export class LightFluidEntity extends Entity {
         
         // 碰撞半径也根据水量计算
         this.radius = displayScale * 0.5;
-
-        console.log(`[LightFluidEntity] 创建液滴: ${id}`);
-        console.log(`  - 位置: (${this.position.x.toFixed(2)}, ${this.position.y.toFixed(2)}, ${this.position.z.toFixed(2)})`);
-        console.log(`  - 速度: (${this.worldVelocity.x.toFixed(2)}, ${this.worldVelocity.y.toFixed(2)}, ${this.worldVelocity.z.toFixed(2)})`);
-        console.log(`  - 水量: ${(waterVolume * 100).toFixed(1)}%`);
-        console.log(`  - 绘制大小: ${displayScale.toFixed(3)}`);
-        console.log(`  - 纹理尺寸: ${this.texSize}x${this.texSize}`);
-        console.log(`  - 最大生命周期: ${this.maxAge}s`);
     }
 
     /**
@@ -217,6 +209,9 @@ export class LightFluidEntity extends Entity {
         this.breathingPhase += this.breathingSpeed * delta;
         
         // 每隔一段时间随机改变方向
+        // ========== 呼吸/脉动效果已禁用 ==========
+        // 如需重新启用，请取消注释以下代码块
+        /*
         if (this.frameCount % 15 === 0) {
             this.breathingDirection = Math.random() * Math.PI * 2;
         }
@@ -242,6 +237,7 @@ export class LightFluidEntity extends Entity {
             // 向中心的速度聚拢效果
             this.simulator.addVelocityImpulse(0, 100);
         }
+        */
 
         this.simulator.update(delta);
 
