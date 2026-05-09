@@ -2498,10 +2498,19 @@ export class FluidSimulator {
     }
 
     // ==================== 分层渲染相关接口 ====================
+    private textureUpdateEnabled = true;
+
+    public setTextureUpdateEnabled(enabled: boolean): void {
+        this.textureUpdateEnabled = enabled;
+    }
+
     public getRenderMaterial(): THREE.ShaderMaterial {
-        // 更新纹理引用
-        this.renderMaterial.uniforms.phiTex.value = this.curPhiTex.texture;
-        this.renderMaterial.uniforms.velTex.value = this.curVelTex.texture;
+        // 根据纹理更新标志决定是否更新纹理引用
+        if (this.textureUpdateEnabled) {
+            this.renderMaterial.uniforms.phiTex.value = this.curPhiTex.texture;
+            this.renderMaterial.uniforms.velTex.value = this.curVelTex.texture;
+        }
+        // 否则维持上一次纹理，画面静止
         return this.renderMaterial;
     }
 

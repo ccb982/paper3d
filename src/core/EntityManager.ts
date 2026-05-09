@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Entity } from './Entity';
+import { FluidRegionManager, FluidLOD } from '@entities/fluid';
 
 /**
  * 实体管理器 - 管理所有实体的生命周期
@@ -11,6 +12,10 @@ export class EntityManager {
 
   private entities: Map<string, Entity> = new Map();
   private scene: THREE.Scene | null = null;
+  
+  // 流体区域管理器相关
+  private fluidRegions: FluidRegionManager[] = [];
+  private playerPositionCache: THREE.Vector3 = new THREE.Vector3();
 
   private constructor() {}
 
@@ -253,5 +258,73 @@ export class EntityManager {
    */
   public getEntityCount(): number {
     return this.entities.size;
+  }
+
+  // ========== 流体区域管理器方法 ==========
+
+  /**
+   * 注册流体区域管理器
+   */
+  public addFluidRegion(region: FluidRegionManager): void {
+    this.fluidRegions.push(region);
+    console.log(`FluidRegion added at (${region.getBounds().center.x.toFixed(2)}, ${region.getBounds().center.y.toFixed(2)})`);
+  }
+
+  /**
+   * 移除流体区域管理器
+   */
+  public removeFluidRegion(region: FluidRegionManager): void {
+    const idx = this.fluidRegions.indexOf(region);
+    if (idx >= 0) {
+      region.destroy();
+      this.fluidRegions.splice(idx, 1);
+      console.log('FluidRegion removed');
+    }
+  }
+
+  /**
+   * 更新所有实体（每帧调用）
+   * @param delta 时间差（秒）
+   * @param playerPosition 玩家位置（用于计算流体LOD）
+   */
+  public updateWithPlayer(delta: number, playerPosition?: THREE.Vector3): void {
+    // 1. 更新普通实体（原有逻辑）
+    const toRemove: string[] = [];
+    for (const entity of this.entities.values()) {
+      if (entity.isActive) {
+        entity.update(delta);
+      }
+      if (!entity.isActive) {
+        toRemove.push(entity.id);
+      }
+    }
+    for (const id of toRemove) {
+      this.removeEntityById(id);
+    }
+
+    // 2. 更新流体区域
+    if (playerPosition) this.playerPositionCache.copy(playerPosition);
+
+    const highDist = 3.0;    // 距离 ≤3 使用 HIGH
+    const mediumDist = 6.0;  // 距离 ≤6 使用 MEDIUM
+    const offDist = 10.0;    // 距离 ≤10 使用 LOW，超过10销毁
+
+    for (const region of this.fluidRegions) {
+      const { center, radius } = region.getBounds();
+      const dist = center.distanceTo(this.playerPositionCache) - radius;
+      let lod: FluidLOD;
+
+      if (dist <= highDist) {
+        lod = FluidLOD.HIGH;
+      } else if (dist <= mediumDist) {
+        lod = FluidLOD.MEDIUM;
+      } else if (dist <= offDist) {
+        lod = FluidLOD.LOW;
+      } else {
+        lod = FluidLOD.OFF;
+      }
+
+      region.update(delta, lod);
+    }
   }
 }
