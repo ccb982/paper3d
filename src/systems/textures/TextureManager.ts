@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { BulletFluidTexture } from './BulletFluidTexture';
-import { TriangleFluidTexture } from './TriangleFluidTexture';
-import { VerticalTriangleTexture } from './VerticalTriangleTexture';
+// import { TriangleFluidTexture } from './TriangleFluidTexture';  // 已禁用
+// import { VerticalTriangleTexture } from './VerticalTriangleTexture';  // 已禁用
 import { FluidSimulatorAdapter } from './FluidSimulatorAdapter';
 
 export type ITextureGenerator = {
@@ -41,11 +41,11 @@ export class TextureManager {
     // 注册子弹流体纹理
     this.register('bulletFluid', new BulletFluidTexture());
     
-    // 注册三角形流体纹理
-    this.register('triangleFluid', new TriangleFluidTexture());
+    // 注册三角形流体纹理（已禁用）
+    // this.register('triangleFluid', new TriangleFluidTexture());
     
-    // 注册竖直三角形水滴纹理
-    this.register('verticalTriangle', new VerticalTriangleTexture());
+    // 注册竖直三角形水滴纹理（已禁用）
+    // this.register('verticalTriangle', new VerticalTriangleTexture());
     
     this.isInitialized = true;
   }

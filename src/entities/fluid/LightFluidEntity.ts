@@ -54,7 +54,7 @@ export class LightFluidEntity extends Entity {
             viscosity: 0.001,             // 降低粘度，让呼吸散度能驱动内部流动
             surfaceTension: 0.03,         // 保持形状
             gravity: 2.0,                 // 极低重力
-            pressureIterations: 8,
+            pressureIterations: 6,
             reinitIterations: 2,
             timeStep: 0.003,              
             restitution: 0.2,

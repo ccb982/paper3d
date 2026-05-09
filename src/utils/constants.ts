@@ -1,4 +1,4 @@
-export const SPEED = 3.0; // 移动速度（单位/秒）
+export const SPEED = 5.0; // 移动速度（单位/秒）
 export const BOUNDARY = { minX: -50, maxX: 50, minZ: -50, maxZ: 50 };
 export const GRAVITY = -9.8; // 重力加速度（单位/秒²）
 export const GROUND_HEIGHT = 0; // 地面高度
