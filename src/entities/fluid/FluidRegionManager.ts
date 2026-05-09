@@ -63,7 +63,6 @@ export class FluidRegionManager {
         0.3 + Math.random() * 0.4,  // 水量
         dropletAge
       );
-      console.log(`[FluidRegionManager] 创建液滴: 寿命=${dropletAge.toFixed(1)}秒`);
       em.addEntity(droplet);                 // 注册到全局管理器
       this.addDroplet(droplet);              // 由本管理器跟踪
     }

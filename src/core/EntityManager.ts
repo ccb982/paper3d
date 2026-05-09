@@ -270,11 +270,19 @@ export class EntityManager {
   }
 
   /**
+   * 时间缩放因子，用于加快或减慢游戏内时间
+   * 1.0 = 正常速度，2.0 = 两倍速度
+   */
+  public static timeScale: number = 2.0;  // 加快到2倍速度
+
+  /**
    * 更新所有实体（每帧调用）
    * @param delta 时间差（秒）
    */
   public update(delta: number): void {
-    this.updateEntities(delta);
+    // 应用时间缩放
+    const scaledDelta = delta * EntityManager.timeScale;
+    this.updateEntities(scaledDelta);
   }
 
   /**
@@ -346,11 +354,14 @@ export class EntityManager {
    * @param playerPosition 玩家位置（用于计算流体LOD）
    */
   public updateWithPlayer(delta: number, playerPosition?: THREE.Vector3): void {
+    // 应用时间缩放
+    const scaledDelta = delta * EntityManager.timeScale;
+    
     // 1. 更新普通实体
-    this.updateEntities(delta);
+    this.updateEntities(scaledDelta);
 
     // 2. 更新流体区域
-    this.updateFluidRegions(delta, playerPosition);
+    this.updateFluidRegions(scaledDelta, playerPosition);
   }
 
   /**

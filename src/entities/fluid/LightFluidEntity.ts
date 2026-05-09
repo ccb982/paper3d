@@ -91,7 +91,6 @@ export class LightFluidEntity extends Entity {
         this.renderer = renderer;
         this.waterVolume = waterVolume;
         this.maxAge = maxAge;
-        console.log(`[LightFluidEntity] 创建液滴 ${id}: maxAge=${maxAge}s`);
         
         // ★ 初始化呼吸效果参数（随机化让每个水滴不同）
         this.breathingSpeed = 1.5 + Math.random() * 2.0;   // 1.5~3.5 Hz
