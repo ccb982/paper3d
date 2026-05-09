@@ -239,8 +239,11 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
       return;
     }
     
+    // 应用时间缩放（与 EntityManager 保持一致）
+    const scaledDelta = delta * EntityManager.timeScale;
+    
     // 更新特效管理器
-    EffectManager.getInstance().update(delta);
+    EffectManager.getInstance().update(scaledDelta);
 
     const currentPos = characterPositionStore.position;
     let currentVelocity = characterPositionStore.velocity.clone();
@@ -254,14 +257,14 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
       { x: currentPos.x, z: currentPos.z },
       currentDirection,
       undefined,
-      delta
+      scaledDelta
     );
 
     const tempPos = new THREE.Vector3(horizontalPos.x, currentPos.y, horizontalPos.z);
     const { position: newPosWithGravity, velocity: newVelocity } = applyGravityToCharacter(
       tempPos,
       currentVelocity,
-      delta,
+      scaledDelta,
       getHeightAtRef.current || undefined
     );
 

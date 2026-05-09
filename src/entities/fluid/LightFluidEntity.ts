@@ -70,6 +70,7 @@ export class LightFluidEntity extends Entity {
             decoupledBoundary: false,
             usePerturbation: false,
             injectionEnabled: false,
+            enableCentering: true,       // 关闭纹理居中追踪
         };
 
         // 根据水量计算绘制大小

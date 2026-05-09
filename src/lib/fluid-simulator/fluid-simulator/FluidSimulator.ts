@@ -39,6 +39,8 @@ export interface FluidParams {
     specularIntensity?: number;         // 高光强度
     flowIntensity?: number;             // 流动扰动强度
     lightDir?: THREE.Vector3;           // 光照方向
+    // 纹理居中追踪参数
+    enableCentering?: boolean;          // 是否开启纹理居中追踪，默认 false
 }
 
 export class FluidSimulator {
@@ -183,6 +185,12 @@ export class FluidSimulator {
     private frameCount = 0;
     private lastDissipationLogTime = 0;
 
+    // 纹理居中追踪相关
+    private centeringEnabled: boolean;
+    private smoothedOffset: THREE.Vector2 = new THREE.Vector2(0, 0);
+    private centeringPhiMat: THREE.ShaderMaterial;
+    private centeringVelMat: THREE.ShaderMaterial;
+
     constructor(renderer: THREE.WebGLRenderer, params: FluidParams) {
         this.renderer = renderer;
         this.params = params;
@@ -209,6 +217,9 @@ export class FluidSimulator {
         this.perturbationStrength = params.perturbationStrength ?? 0.4;
         this.fragmentCount = params.fragmentCount ?? 4;
 
+        // 初始化纹理居中追踪参数
+        this.centeringEnabled = params.enableCentering ?? false;
+
         // 生成噪声纹理（用于随机扰动）
         this.noiseTex = this.generateNoiseTexture();
 
@@ -225,6 +236,7 @@ export class FluidSimulator {
         this.createTextures();
         this.initTextures();
         this.initShaders();
+        this.initCenteringShaders();  // 初始化纹理居中着色器
         this.initRenderMaterial();  // 初始化分层渲染材质
         this.initialized = true;
     }
@@ -952,6 +964,77 @@ export class FluidSimulator {
                 }
             `
         });
+    }
+
+    // ==================== 纹理居中追踪着色器 ====================
+    private initCenteringShaders(): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        
+        // 平移 phi 的着色器（只操作 r 通道）
+        this.centeringPhiMat = new THREE.ShaderMaterial({
+            uniforms: {
+                tex: { value: null },
+                offset: { value: new THREE.Vector2(0, 0) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D tex;
+                uniform vec2 offset;
+                varying vec2 vUv;
+                void main() {
+                    // 采样时向反方向偏移，原来在 center 的内容就被移到了 uv+offset 处
+                    vec2 sampleUV = vUv - offset;
+                    float phi = texture2D(tex, sampleUV).r;
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 平移 vel 的着色器（操作 rg 通道）
+        this.centeringVelMat = new THREE.ShaderMaterial({
+            uniforms: {
+                tex: { value: null },
+                offset: { value: new THREE.Vector2(0, 0) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D tex;
+                uniform vec2 offset;
+                varying vec2 vUv;
+                void main() {
+                    vec2 sampleUV = vUv - offset;
+                    vec2 vel = texture2D(tex, sampleUV).rg;
+                    gl_FragColor = vec4(vel, 0.0, 1.0);
+                }
+            `
+        });
+    }
+
+    // ==================== 流体边界框中心计算 ====================
+    private computeFluidBoundingBoxCenter(): THREE.Vector2 | null {
+        // 读取当前 phi 纹理
+        const pixels = new Float32Array(this.width * this.height * 4);
+        this.renderer.readRenderTargetPixels(this.curPhiTex, 0, 0, this.width, this.height, pixels);
+
+        let minX = this.width, maxX = -1, minY = this.height, maxY = -1;
+        for (let y = 0; y < this.height; y++) {
+            for (let x = 0; x < this.width; x++) {
+                const phi = pixels[(y * this.width + x) * 4]; // r 通道
+                if (phi < 0) { // 水体区域
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        if (maxX < 0) return null; // 没有水
+
+        // 将像素坐标映射回 UV 坐标（0~1）
+        const uCenter = ((minX + maxX) * 0.5 + 0.5) / this.width;
+        const vCenter = ((minY + maxY) * 0.5 + 0.5) / this.height;
+        return new THREE.Vector2(uCenter, vCenter);
     }
 
     // ==================== PCG求解器相关着色器 ====================
@@ -1763,6 +1846,40 @@ export class FluidSimulator {
             }
         }
 
+        // ========== 纹理居中追踪 ==========
+        if (this.centeringEnabled) {
+            const currentCenter = this.computeFluidBoundingBoxCenter();
+            if (currentCenter) {
+                const targetCenter = new THREE.Vector2(0.5, 0.5);
+                const rawOffset = new THREE.Vector2().subVectors(targetCenter, currentCenter);
+                // 一阶低通平滑，避免突然跳动（系数可调，0.2~0.5）
+                this.smoothedOffset.lerp(rawOffset, 0.3);
+
+                // 只应用足够大的偏移，避免噪声（可根据分辨率调整阈值）
+                if (this.smoothedOffset.length() > 0.001) {
+                    // 平移 phi 场
+                    this.centeringPhiMat.uniforms.tex.value = this.curPhiTex.texture;
+                    this.centeringPhiMat.uniforms.offset.value = this.smoothedOffset;
+                    const phiDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+                    this.renderFullscreen(this.centeringPhiMat, phiDst);
+                    this.curPhiTex = phiDst;
+
+                    // 平移 vel 场
+                    this.centeringVelMat.uniforms.tex.value = this.curVelTex.texture;
+                    this.centeringVelMat.uniforms.offset.value = this.smoothedOffset;
+                    const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
+                    this.renderFullscreen(this.centeringVelMat, velDst);
+                    this.curVelTex = velDst;
+
+                    // 同步平移年龄场
+                    const ageDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+                    this.centeringPhiMat.uniforms.tex.value = this.curAgeTex.texture;
+                    this.renderFullscreen(this.centeringPhiMat, ageDst);
+                    this.curAgeTex = ageDst;
+                }
+            }
+        }
+
         // 帧计数递增
         this.frameCount++;
 
@@ -2415,6 +2532,14 @@ export class FluidSimulator {
     // ==================== 构建爆炸散度源（散度源模型） ====================
     private buildExplosionDivergence(dt: number): void {
         // 注意：爆炸散度纹理不再在这里清空
+        
+        // 计算反向偏移量（用于补偿纹理居中追踪的偏移）
+        // 只有启用了居中追踪且存在爆炸散度纹理时才进行补偿
+        const hasExplosionDivTex = this.explosionDivTex !== undefined;
+        const invOffset = hasExplosionDivTex && this.centeringEnabled 
+            ? new THREE.Vector2(-this.smoothedOffset.x, -this.smoothedOffset.y)
+            : new THREE.Vector2(0, 0);
+        
         // 遍历活跃爆炸列表，累加散度贡献（使用帧计数代替墙钟时间）
         for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
             const exp = this.activeExplosions[i];
@@ -2428,7 +2553,8 @@ export class FluidSimulator {
             }
 
             // 使用预缓存的材质，更新 uniform 值
-            this.explosionDivMat.uniforms.center.value.set(exp.cx, exp.cy);
+            // 根据当前居中偏移调整爆炸中心，使爆炸始终出现在流体团内部
+            this.explosionDivMat.uniforms.center.value.set(exp.cx + invOffset.x, exp.cy + invOffset.y);
             this.explosionDivMat.uniforms.radius.value = exp.radius;
             this.explosionDivMat.uniforms.strength.value = exp.strength;
             this.explosionDivMat.uniforms.envelope.value = envelope;
@@ -2457,7 +2583,8 @@ export class FluidSimulator {
             if (envelope < 0.01) continue;
 
             // 使用预缓存的水花生成材质更新 phi
-            this.waterGenMat.uniforms.center.value.set(exp.cx, exp.cy);
+            // 根据当前居中偏移调整水花中心
+            this.waterGenMat.uniforms.center.value.set(exp.cx + invOffset.x, exp.cy + invOffset.y);
             this.waterGenMat.uniforms.radius.value = exp.radius;
             this.waterGenMat.uniforms.envelope.value = envelope;
             this.waterGenMat.uniforms.phiTex.value = this.curPhiTex.texture;
@@ -2468,7 +2595,8 @@ export class FluidSimulator {
             this.curPhiTex = phiDst;
 
             // 使用水花速度初始化材质更新速度
-            this.waterVelInitMat.uniforms.center.value.set(exp.cx, exp.cy);
+            // 根据当前居中偏移调整速度初始化中心
+            this.waterVelInitMat.uniforms.center.value.set(exp.cx + invOffset.x, exp.cy + invOffset.y);
             this.waterVelInitMat.uniforms.radius.value = exp.radius;
             this.waterVelInitMat.uniforms.envelope.value = envelope;
             this.waterVelInitMat.uniforms.phiTex.value = this.curPhiTex.texture;
@@ -2485,7 +2613,8 @@ export class FluidSimulator {
             this.curVelTex = velDst;
 
             // 重置新生成水花区域的年龄为0（使用更新后的 phi）
-            this.ageResetMat.uniforms.center.value.set(exp.cx, exp.cy);
+            // 根据当前居中偏移调整年龄重置中心
+            this.ageResetMat.uniforms.center.value.set(exp.cx + invOffset.x, exp.cy + invOffset.y);
             this.ageResetMat.uniforms.radius.value = exp.radius;
             this.ageResetMat.uniforms.envelope.value = envelope;
             this.ageResetMat.uniforms.phiTex.value = this.curPhiTex.texture;

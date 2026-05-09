@@ -51,6 +51,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator {
             specularIntensity: 0.5,
             flowIntensity: 0.3,
             lightDir: new THREE.Vector3(0.5, 1.0, 0.3).normalize(),
+            // 纹理居中追踪参数
+            enableCentering: false,    // 关闭纹理居中追踪
             ...params
         };
         
