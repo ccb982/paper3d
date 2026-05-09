@@ -3,6 +3,7 @@ import { FluidSimulator } from '@lib/fluid-simulator/fluid-simulator';
 import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import { Entity } from '@core/Entity';
 import { FluidLOD } from './FluidRegionManager';
+import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
 
 /**
  * 轻量流体实体 - 可作为独立实体被 EntityManager 管理
@@ -13,7 +14,7 @@ import { FluidLOD } from './FluidRegionManager';
  * - 实际水球大小 = baseScale * sqrt(waterVolume) * sizeMultiplier
  * - 纹理中的水半径 = sqrt(waterVolume) * texSize * 0.45
  */
-export class LightFluidEntity extends Entity {
+export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private simulator: FluidSimulator;
     private renderer: THREE.WebGLRenderer;
     
@@ -31,6 +32,9 @@ export class LightFluidEntity extends Entity {
     // LOD 相关
     public lod: FluidLOD = FluidLOD.HIGH;
     private simUpdateAccumulated: number = 0;
+    
+    // 外部力累积（每帧加速度）
+    private externalAccel = new THREE.Vector3();
     
     // 呼吸/脉动效果参数
     private breathingPhase: number = 0;       // 呼吸相位
@@ -206,6 +210,13 @@ export class LightFluidEntity extends Entity {
             return;
         }
 
+        // 应用累积的外部加速度
+        if (this.externalAccel.lengthSq() > 0.0001) {
+            this.worldVelocity.add(this.externalAccel.clone().multiplyScalar(delta));
+        }
+        // 重置外部加速度（每帧重新累积）
+        this.externalAccel.set(0, 0, 0);
+
         // 位置更新（始终执行，不受LOD影响）
         this.mesh.position.x += this.worldVelocity.x * delta;
         this.mesh.position.y += this.worldVelocity.y * delta;
@@ -329,6 +340,62 @@ export class LightFluidEntity extends Entity {
         this.mesh.geometry.dispose();
         if (this.mesh.material instanceof THREE.ShaderMaterial) {
             this.mesh.material.dispose();
+        }
+    }
+
+    // ==================== IFluidForceTarget 接口实现 ====================
+
+    isMovable(): boolean {
+        return true; // 小液滴可以在世界空间移动
+    }
+
+    applyFluidForce(force: FluidExternalForce): void {
+        // ========== 1. 世界运动 ==========
+        if (force.worldImpulse) {
+            this.applyImpulse(force.worldImpulse);
+        }
+        if (force.worldAcceleration) {
+            // 加速度累积，在 update() 中每帧施加
+            this.externalAccel.add(force.worldAcceleration);
+        }
+
+        // ========== 2. 内部流场注入（仅在高/中 LOD 时生效） ==========
+        if (this.lod >= FluidLOD.LOW) return; // 低LOD或OFF时纹理冻结，跳过注入
+
+        const sim = this.simulator;
+        if (!sim) return;
+
+        // 将世界方向转为纹理空间方向（考虑液滴随机旋转）
+        const worldToTex = (v: THREE.Vector2): THREE.Vector2 => {
+            // 使用 mesh 的 rotation.z 逆旋转
+            const angle = -this.mesh.rotation.z;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const tx = v.x * cos - v.y * sin;
+            const ty = v.x * sin + v.y * cos;
+            return new THREE.Vector2(tx, ty);
+        };
+
+        // 速度注入
+        if (force.velocityInjection) {
+            const inj = force.velocityInjection;
+            const vel = worldToTex(inj.velocity);
+            // 降级：全局速度增加（所有像素）
+            sim.addVelocityImpulse(vel.x, vel.y);
+        }
+
+        // 散度注入
+        if (force.divergenceInjection) {
+            const inj = force.divergenceInjection;
+            const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+            sim.addDivergenceImpulse(inj.divergence, inj.radius ?? 0.2, center.x, center.y);
+        }
+
+        // 水体注入
+        if (force.waterInjection) {
+            const inj = force.waterInjection;
+            const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+            sim.addWaterImpulse(inj.amount, inj.radius ?? 0.2, center.x, center.y);
         }
     }
 }

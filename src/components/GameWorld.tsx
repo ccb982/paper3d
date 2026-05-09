@@ -31,6 +31,7 @@ import { createBulletTrailTexture, createBulletTrailGeometry, createBulletTrailM
 import { TextureManager } from '../systems/textures/TextureManager';
 import { FluidSimulatorAdapter } from '../systems/textures/FluidSimulatorAdapter';
 import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
+import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
 // import { TestBulletTrailTexture } from '../systems/textures/TestRedBlueTexture';  // 已禁用
 import { WaterEntity } from '../entities/water/WaterEntity';
 
@@ -244,6 +245,30 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     
     // 更新特效管理器
     EffectManager.getInstance().update(scaledDelta);
+
+    // ========== 随机横向力 ==========
+    {
+      const randomForce: FluidExternalForce = {
+        worldAcceleration: new THREE.Vector3(
+          (Math.random() - 0.5) * 20,
+          0,
+          0
+        )
+      };
+
+      // 1. 给详细纹理施加随机横向力
+      const textureManager = TextureManager.getInstance();
+      const detailSim = textureManager.getFluidSimulator('levelSetFluid') as IFluidForceTarget | undefined;
+      if (detailSim) {
+        detailSim.applyFluidForce(randomForce);
+      }
+
+      // 2. 给所有小液滴施加随机横向力
+      const droplets = EntityManager.getInstance().getDroplets() as IFluidForceTarget[];
+      for (const droplet of droplets) {
+        droplet.applyFluidForce(randomForce);
+      }
+    }
 
     const currentPos = characterPositionStore.position;
     let currentVelocity = characterPositionStore.velocity.clone();
