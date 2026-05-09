@@ -842,7 +842,7 @@ export class FluidSimulator {
             uniforms: {
                 levelset: { value: null },
                 age: { value: null },
-                maxLifetime: { value: this.params.maxLifetime ?? 10.0 },
+                maxLifetime: { value: this.params.maxLifetime !== undefined ? this.params.maxLifetime : 10.0 },
                 dt: { value: this.params.timeStep }
             },
             vertexShader: vs,

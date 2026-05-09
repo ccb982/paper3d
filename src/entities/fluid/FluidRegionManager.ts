@@ -16,6 +16,9 @@ export class FluidRegionManager {
   private maxDroplets: number;
   private currentLOD: FluidLOD = FluidLOD.HIGH;
   private markedForRemoval: boolean = false;  // 标记是否需要销毁（由EntityManager安全处理）
+  
+  // 性能优化：限制同时活跃的模拟实例数
+  private maxActiveSimulations: number = 4;   // 最多同时运行4个模拟实例
 
   constructor(center: THREE.Vector3, radius: number, maxDroplets = 20) {
     this.center = center.clone();
@@ -51,14 +54,16 @@ export class FluidRegionManager {
         (Math.random() - 0.5) * 2,
         0
       );
+      const dropletAge = 4 + Math.random() * 2;  // 寿命：4-6秒（平均5秒）
       const droplet = new LightFluidEntity(
         `fluid_${Date.now()}_${Math.random()}`,
         renderer,
         pos,
         vel,
         0.3 + Math.random() * 0.4,  // 水量
-        4 + Math.random() * 2       // 寿命：4-6秒（平均5秒）
+        dropletAge
       );
+      console.log(`[FluidRegionManager] 创建液滴: 寿命=${dropletAge.toFixed(1)}秒`);
       em.addEntity(droplet);                 // 注册到全局管理器
       this.addDroplet(droplet);              // 由本管理器跟踪
     }
@@ -80,16 +85,34 @@ export class FluidRegionManager {
       for (const droplet of this.entities) {
         droplet.isActive = false;
       }
-      console.log(`[FluidRegionManager] 区域已标记待销毁（距离角色超过10单位）`);
+      console.log(`[FluidRegionManager] 区域已标记待销毁（距离角色超过10单位），当前液滴数量: ${this.entities.length}`);
       return;
+    }
+    
+    // 调试：输出距离变化信息
+    if (lod !== this.currentLOD) {
+      const lodNames = ['HIGH', 'MEDIUM', 'LOW', 'OFF'];
+      console.log(`[FluidRegionManager] LOD变化: ${lodNames[this.currentLOD]} -> ${lodNames[lod]}, 液滴数量: ${this.entities.length}`);
     }
 
     // 重置销毁标记
     this.markedForRemoval = false;
 
-    // 为每个液滴设置LOD等级，实体自己处理更新逻辑
+    // 性能优化：限制同时活跃的模拟实例数
+    // 只允许前 N 个液滴保持活跃，其余的暂时休眠
+    let activeCount = 0;
     for (const droplet of this.entities) {
-      droplet.lod = lod;
+      if (droplet.isActive && lod < FluidLOD.OFF) {
+        if (activeCount < this.maxActiveSimulations) {
+          droplet.lod = lod;
+          activeCount++;
+        } else {
+          // 超出限制的液滴强制休眠（冻结纹理和模拟）
+          droplet.lod = FluidLOD.OFF;
+        }
+      } else {
+        droplet.lod = lod;
+      }
     }
   }
 

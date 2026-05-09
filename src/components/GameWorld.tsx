@@ -349,13 +349,17 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
       (currentChar as FriendlyEntity).setCamera(camera);
     }
 
-    EntityManager.getInstance().update(delta);
+    // 获取玩家位置用于流体区域的距离判断
+    const playerChar = playerCharacterManager.getCurrentCharacter();
+    const playerPosition = playerChar ? playerChar.position : undefined;
+    
+    // 使用带玩家位置的更新方法，支持流体区域的LOD判断
+    EntityManager.getInstance().updateWithPlayer(delta, playerPosition);
     
     // 检测碰撞
     CollisionManager.getInstance().update();
     
     // 同步玩家实体位置到characterPositionStore
-    const playerChar = playerCharacterManager.getCurrentCharacter();
     if (playerChar) {
       characterPositionStore.setPosition(playerChar.position.x, playerChar.position.y, playerChar.position.z);
       

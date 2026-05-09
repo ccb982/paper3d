@@ -52,6 +52,7 @@ export class LightFluidEntity extends Entity {
         // 确保水量在有效范围内
         waterVolume = Math.max(0.01, Math.min(1.0, waterVolume));
         
+        // 性能优化：精简模拟参数，针对小水滴牺牲部分物理细节以降低开销
         const params: FluidParams = {
             width: 32,
             height: 32,
@@ -59,9 +60,9 @@ export class LightFluidEntity extends Entity {
             viscosity: 0.001,
             surfaceTension: 0.03,
             gravity: 2.0,
-            pressureIterations: 3,        // 优化：减少压力迭代次数
-            reinitIterations: 1,          // 优化：减少重新初始化迭代次数
-            timeStep: 0.005,              // 优化：增大时间步长
+            pressureIterations: 1,        // 优化：减少压力迭代次数（原为3）
+            reinitIterations: 0,          // 优化：关闭重初始化（原为1），小水滴表面张力不重要
+            timeStep: 0.01,               // 优化：增大时间步长（原为0.005），更少子步也能稳定
             restitution: 0.2,
             friction: 0.9,
             usePCG: true,                 // 优化：使用PCG求解器加速压力计算
@@ -90,6 +91,7 @@ export class LightFluidEntity extends Entity {
         this.renderer = renderer;
         this.waterVolume = waterVolume;
         this.maxAge = maxAge;
+        console.log(`[LightFluidEntity] 创建液滴 ${id}: maxAge=${maxAge}s`);
         
         // ★ 初始化呼吸效果参数（随机化让每个水滴不同）
         this.breathingSpeed = 1.5 + Math.random() * 2.0;   // 1.5~3.5 Hz
@@ -193,6 +195,7 @@ export class LightFluidEntity extends Entity {
 
         // 寿命检测
         if (this.age > this.maxAge) {
+            console.log(`[LightFluidEntity] 液滴 ${this.id} 寿命结束: age=${this.age.toFixed(2)}s, maxAge=${this.maxAge}s`);
             this.isActive = false;
             return;
         }
@@ -257,15 +260,16 @@ export class LightFluidEntity extends Entity {
 
     /**
      * 根据LOD级别获取模拟更新间隔（秒）
+     * 性能优化：降低模拟更新频率，小水滴不需要60Hz的物理精度
      */
     private getSimInterval(): number {
         switch (this.lod) {
             case FluidLOD.HIGH:
-                return 0;  // 每帧更新
+                return 1 / 30;  // 30 FPS（原为0，每帧更新）
             case FluidLOD.MEDIUM:
-                return 1 / 30;  // 每2帧更新（假设60fps）
+                return 1 / 20;  // 20 FPS（原为1/30）
             case FluidLOD.LOW:
-                return 1 / 15;  // 每4帧更新
+                return 1 / 12;  // 12 FPS（原为1/15）
             default:
                 return Number.MAX_VALUE;  // 不更新
         }
