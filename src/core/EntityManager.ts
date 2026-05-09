@@ -117,7 +117,7 @@ export class EntityManager {
     position: THREE.Vector3,
     velocity?: THREE.Vector3,
     waterVolume: number = 0.45,
-    maxAge: number = 10
+    maxAge: number = 5
   ): Promise<Entity | null> {
     if (!this.renderer) {
       console.error('Renderer not set! Call setRenderer() first.');

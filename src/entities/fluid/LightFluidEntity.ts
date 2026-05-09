@@ -23,7 +23,7 @@ export class LightFluidEntity extends Entity {
     private readonly baseScale = 2.0;    // 基础缩放（控制纹理本身的显示大小）
     private readonly sizeMultiplier = 1.25; // 绘制大小倍增器（水滴过于大，缩小到1/4）
     private age: number = 0;
-    public maxAge: number = 10;
+    public maxAge: number = 5;
     private frameCount: number = 0;
     private prevWorldVelocity: THREE.Vector3 = new THREE.Vector3();
     
@@ -51,15 +51,15 @@ export class LightFluidEntity extends Entity {
             width: 32,
             height: 32,
             density: 1000,
-            viscosity: 0.001,             // 降低粘度，让呼吸散度能驱动内部流动
-            surfaceTension: 0.03,         // 保持形状
-            gravity: 2.0,                 // 极低重力
-            pressureIterations: 6,
-            reinitIterations: 2,
-            timeStep: 0.003,              
+            viscosity: 0.001,
+            surfaceTension: 0.03,
+            gravity: 2.0,
+            pressureIterations: 3,        // 优化：减少压力迭代次数
+            reinitIterations: 1,          // 优化：减少重新初始化迭代次数
+            timeStep: 0.005,              // 优化：增大时间步长
             restitution: 0.2,
-            friction: 0.9,               
-            usePCG: false,
+            friction: 0.9,
+            usePCG: true,                 // 优化：使用PCG求解器加速压力计算
             maxLifetime: 0,
             decoupledBoundary: false,
             usePerturbation: false,
@@ -185,6 +185,7 @@ export class LightFluidEntity extends Entity {
         this.age += delta;
         this.frameCount++;
 
+        // 寿命检测（优化性能：移除频繁的 console.log）
         if (this.age > this.maxAge) {
             this.isActive = false;
             return;

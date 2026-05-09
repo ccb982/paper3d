@@ -665,8 +665,8 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     // }
     // console.log('Test bullet trail texture created and displayed at (0, 3, 5)');
 
-    // 创建测试液滴
-    createTestDroplets();
+    // 创建测试液滴（已暂停）
+    // createTestDroplets();
     console.log('Entities created:', entityManager.getEntityCount());
   }, []);
 
