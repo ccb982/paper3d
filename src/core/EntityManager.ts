@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { Entity } from './Entity';
-import { FluidRegionManager, FluidLOD } from '@entities/fluid';
+// 延迟导入以避免循环依赖
+let FluidRegionManager: typeof import('@entities/fluid').FluidRegionManager;
+let FluidLOD: typeof import('@entities/fluid').FluidLOD;
 
 /**
  * 实体管理器 - 管理所有实体的生命周期
@@ -12,6 +14,7 @@ export class EntityManager {
 
   private entities: Map<string, Entity> = new Map();
   private scene: THREE.Scene | null = null;
+  private pendingEntities: Entity[] = [];  // 场景未设置时暂存的实体
   
   // 流体区域管理器相关
   private fluidRegions: FluidRegionManager[] = [];
@@ -30,7 +33,19 @@ export class EntityManager {
    * 设置场景引用（用于自动添加/移除网格）
    */
   public setScene(scene: THREE.Scene): void {
+    console.log(`[EntityManager] 设置场景，暂存实体数量: ${this.pendingEntities.length}`);
     this.scene = scene;
+    
+    // 将暂存的实体添加到场景
+    for (const entity of this.pendingEntities) {
+      const isFriendlyEntity = entity.type === 'character' && (entity as any).faction === 'friendly';
+      if (entity.mesh && !isFriendlyEntity) {
+        this.scene.add(entity.mesh);
+        console.log(`[EntityManager] 延迟添加实体到场景: ${entity.type} - ${entity.id}`);
+      }
+    }
+    this.pendingEntities = [];
+    console.log(`[EntityManager] 场景设置完成，暂存队列已清空`);
   }
 
   /**
@@ -40,32 +55,66 @@ export class EntityManager {
     return this.scene;
   }
 
+  private hasInitializedFluidRegion = false;  // 防止重复初始化
+
   /**
    * 设置渲染器引用（用于创建流体实体）
    */
   public setRenderer(renderer: THREE.WebGLRenderer): void {
+    console.log('[EntityManager] 设置渲染器，开始初始化流体区域');
     this.renderer = renderer;
-    // 自动初始化流体区域（包含5个小液滴）
-    this.initDefaultFluidRegion();
+    
+    // 自动初始化流体区域（包含5个小液滴）- 只初始化一次
+    if (!this.hasInitializedFluidRegion) {
+      this.hasInitializedFluidRegion = true;
+      this.initDefaultFluidRegion();
+    } else {
+      console.log('[EntityManager] 流体区域已初始化过，跳过');
+    }
   }
 
   /**
    * 初始化默认流体区域（包含5个小液滴）
    */
   private async initDefaultFluidRegion(): Promise<void> {
-    if (!this.renderer) return;
+    console.log('[EntityManager] initDefaultFluidRegion 开始执行');
+    
+    if (!this.renderer) {
+      console.log('[EntityManager] 渲染器未设置，跳过流体区域初始化');
+      return;
+    }
+    
+    console.log('[EntityManager] 渲染器已设置，继续初始化...');
+    
+    // 动态导入以避免循环依赖
+    if (!FluidRegionManager) {
+      const module = await import('@entities/fluid');
+      FluidRegionManager = module.FluidRegionManager;
+      FluidLOD = module.FluidLOD;
+      console.log('[EntityManager] 动态导入 FluidRegionManager 成功');
+    }
     
     // 创建流体区域管理器，中心在原点，半径2.0，最多10个液滴
     const center = new THREE.Vector3(0, 0, 0);
+    console.log(`[EntityManager] 创建流体区域，中心: (${center.x}, ${center.y}, ${center.z}), 半径: 2.0`);
     const region = new FluidRegionManager(center, 2.0, 10);
     
     // 添加到管理器
     this.addFluidRegion(region);
+    console.log('[EntityManager] 流体区域已添加到管理器');
     
     // 创建5个小液滴
-    await region.createDroplets(5, 1.5);
+    console.log('[EntityManager] 准备调用 region.createDroplets(5, 1.5)...');
+    try {
+      await region.createDroplets(5, 1.5);
+      console.log('[EntityManager] region.createDroplets 调用完成');
+    } catch (error) {
+      console.error('[EntityManager] region.createDroplets 调用失败:', error);
+    }
     
-    console.log('[EntityManager] 默认流体区域已初始化，包含5个小液滴');
+    console.log('[EntityManager] 默认流体区域初始化完成，包含5个小液滴');
+    console.log(`[EntityManager] 当前实体总数: ${this.entities.size}`);
+    console.log(`[EntityManager] 当前流体区域数量: ${this.fluidRegions.length}`);
   }
 
   /**
@@ -168,14 +217,31 @@ export class EntityManager {
    * @param entity 要添加的实体
    */
   public addEntity(entity: Entity): void {
+    console.log(`[EntityManager] 添加实体: ${entity.type} - ${entity.id}, 场景状态: ${this.scene ? '已设置' : '未设置'}, mesh存在: ${!!entity.mesh}`);
+    
     this.entities.set(entity.id, entity);
+    
     // 对于友好实体（玩家），不自动添加mesh到场景，避免与PaperCharacter组件重复渲染
     // 对于其他实体（敌人、子弹、靶子等），正常添加mesh到场景
     const isFriendlyEntity = entity.type === 'character' && (entity as any).faction === 'friendly';
-    if (this.scene && entity.mesh && !isFriendlyEntity) {
-      this.scene.add(entity.mesh);
+    
+    // 如果场景还未设置，先暂存实体
+    if (!this.scene) {
+      this.pendingEntities.push(entity);
+      console.log(`[EntityManager] 场景未设置，实体暂存到队列，队列大小: ${this.pendingEntities.length}`);
+      return;
     }
-    console.log(`Entity added: ${entity.type} - ${entity.id}`);
+    
+    if (entity.mesh && !isFriendlyEntity) {
+      this.scene.add(entity.mesh);
+      console.log(`[EntityManager] 实体mesh已添加到场景`);
+    } else if (isFriendlyEntity) {
+      console.log(`[EntityManager] 友好实体，跳过mesh添加`);
+    } else if (!entity.mesh) {
+      console.log(`[EntityManager] 实体没有mesh，跳过添加`);
+    }
+    
+    console.log(`[EntityManager] 实体添加完成，当前实体总数: ${this.entities.size}`);
   }
 
   /**
@@ -330,6 +396,11 @@ export class EntityManager {
    * @param playerPosition 玩家位置（用于计算流体LOD）
    */
   private updateFluidRegions(delta: number, playerPosition?: THREE.Vector3): void {
+    // 如果 FluidLOD 还未初始化，说明流体区域还没创建，跳过
+    if (!FluidLOD) {
+      return;
+    }
+    
     if (playerPosition) this.playerPositionCache.copy(playerPosition);
 
     const highDist = 3.0;    // 距离 ≤3 使用 HIGH
