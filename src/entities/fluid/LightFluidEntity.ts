@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FluidSimulator } from '@lib/fluid-simulator/fluid-simulator';
 import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import { Entity } from '@core/Entity';
+import { FluidLOD } from './FluidRegionManager';
 
 /**
  * 轻量流体实体 - 可作为独立实体被 EntityManager 管理
@@ -26,6 +27,10 @@ export class LightFluidEntity extends Entity {
     public maxAge: number = 5;
     private frameCount: number = 0;
     private prevWorldVelocity: THREE.Vector3 = new THREE.Vector3();
+    
+    // LOD 相关
+    public lod: FluidLOD = FluidLOD.HIGH;
+    private simUpdateAccumulated: number = 0;
     
     // 呼吸/脉动效果参数
     private breathingPhase: number = 0;       // 呼吸相位
@@ -182,15 +187,23 @@ export class LightFluidEntity extends Entity {
     update(delta: number): void {
         if (!this.isActive) return;
 
+        // 始终维护生命周期
         this.age += delta;
         this.frameCount++;
 
-        // 寿命检测（优化性能：移除频繁的 console.log）
+        // 寿命检测
         if (this.age > this.maxAge) {
             this.isActive = false;
             return;
         }
 
+        // OFF 级别：完全跳过更新
+        if (this.lod === FluidLOD.OFF) {
+            this.mesh.visible = false;
+            return;
+        }
+
+        // 位置更新（始终执行，不受LOD影响）
         this.mesh.position.x += this.worldVelocity.x * delta;
         this.mesh.position.y += this.worldVelocity.y * delta;
         this.mesh.position.z += this.worldVelocity.z * delta;
@@ -198,56 +211,63 @@ export class LightFluidEntity extends Entity {
 
         if (!this.simulator) return;
 
-        const accel = new THREE.Vector3().subVectors(this.worldVelocity, this.prevWorldVelocity).divideScalar(delta);
-        this.prevWorldVelocity.copy(this.worldVelocity);
+        // 根据LOD获取模拟更新间隔
+        const simInterval = this.getSimInterval();
+        
+        // 累积时间步
+        this.simUpdateAccumulated += delta;
+        
+        // 仅当累积时间达到间隔时才更新模拟
+        if (this.simUpdateAccumulated >= simInterval) {
+            // 计算加速度（基于累计时间，更准确）
+            const accel = new THREE.Vector3().subVectors(this.worldVelocity, this.prevWorldVelocity).divideScalar(this.simUpdateAccumulated || delta);
+            this.prevWorldVelocity.copy(this.worldVelocity);
 
-        const internalForceX = -accel.x * 0.5;
-        const internalForceY = -accel.y * 0.5;
-        this.simulator.addVelocityImpulse(internalForceX, internalForceY);
+            const internalForceX = -accel.x * 0.5;
+            const internalForceY = -accel.y * 0.5;
+            this.simulator.addVelocityImpulse(internalForceX, internalForceY);
 
-        // ========== 随机散度效果 ==========
-        // 随机选择收缩或膨胀（每种选择持续5帧）
-        this.breathingPhase += this.breathingSpeed * delta;
-        
-        // 每隔一段时间随机改变方向
-        // ========== 呼吸/脉动效果已禁用 ==========
-        // 如需重新启用，请取消注释以下代码块
-        /*
-        if (this.frameCount % 15 === 0) {
-            this.breathingDirection = Math.random() * Math.PI * 2;
+            // 呼吸/脉动效果（已禁用）
+            this.breathingPhase += this.breathingSpeed * this.simUpdateAccumulated;
+
+            // 更新流体模拟器（传递累计时间）
+            this.simulator.update(this.simUpdateAccumulated);
+            
+            // 重置累积时间
+            this.simUpdateAccumulated = 0;
         }
-        
-        // 选择持续5帧后切换
-        this.expandChoiceFrames++;
-        if (this.expandChoiceFrames >= 5) {
-            this.expandChoice = !this.expandChoice;
-            this.expandChoiceFrames = 0;
-        }
-        
-        // 强度基于正弦包络振荡
-        const strength = this.breathingAmplitude * Math.abs(Math.sin(this.breathingPhase + this.breathingOffset));
-        
-        if (this.expandChoice) {
-            // 膨胀：直接生成水
-            this.simulator.addWaterImpulse(0.8, 0.4, 0.5, 0.5);
-            // 增强速度场，让变化更快
-            this.simulator.addVelocityImpulse(0, -30);
+
+        // 纹理更新控制：LOW级别冻结纹理
+        if (this.lod === FluidLOD.LOW) {
+            this.simulator.setTextureUpdateEnabled(false);
         } else {
-            // 收缩：大幅增强散度强度
-            this.simulator.addShrinkDivergenceImpulse(strength * 5, 0.5, 0.5, 0.5);
-            // 向中心的速度聚拢效果
-            this.simulator.addVelocityImpulse(0, 100);
-        }
-        */
-
-        this.simulator.update(delta);
-
-        const newMaterial = this.simulator.getRenderMaterial();
-        if (this.mesh.material !== newMaterial) {
-            if (this.mesh.material instanceof THREE.ShaderMaterial) {
-                this.mesh.material.dispose();
+            this.simulator.setTextureUpdateEnabled(true);
+            // 仅在非LOW级别时更新材质
+            const newMaterial = this.simulator.getRenderMaterial();
+            if (this.mesh.material !== newMaterial) {
+                if (this.mesh.material instanceof THREE.ShaderMaterial) {
+                    this.mesh.material.dispose();
+                }
+                this.mesh.material = newMaterial;
             }
-            this.mesh.material = newMaterial;
+        }
+
+        this.mesh.visible = true;
+    }
+
+    /**
+     * 根据LOD级别获取模拟更新间隔（秒）
+     */
+    private getSimInterval(): number {
+        switch (this.lod) {
+            case FluidLOD.HIGH:
+                return 0;  // 每帧更新
+            case FluidLOD.MEDIUM:
+                return 1 / 30;  // 每2帧更新（假设60fps）
+            case FluidLOD.LOW:
+                return 1 / 15;  // 每4帧更新
+            default:
+                return Number.MAX_VALUE;  // 不更新
         }
     }
 

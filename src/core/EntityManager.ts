@@ -45,6 +45,27 @@ export class EntityManager {
    */
   public setRenderer(renderer: THREE.WebGLRenderer): void {
     this.renderer = renderer;
+    // 自动初始化流体区域（包含5个小液滴）
+    this.initDefaultFluidRegion();
+  }
+
+  /**
+   * 初始化默认流体区域（包含5个小液滴）
+   */
+  private async initDefaultFluidRegion(): Promise<void> {
+    if (!this.renderer) return;
+    
+    // 创建流体区域管理器，中心在原点，半径2.0，最多10个液滴
+    const center = new THREE.Vector3(0, 0, 0);
+    const region = new FluidRegionManager(center, 2.0, 10);
+    
+    // 添加到管理器
+    this.addFluidRegion(region);
+    
+    // 创建5个小液滴
+    await region.createDroplets(5, 1.5);
+    
+    console.log('[EntityManager] 默认流体区域已初始化，包含5个小液滴');
   }
 
   /**
@@ -223,6 +244,14 @@ export class EntityManager {
    * @param delta 时间差（秒）
    */
   public update(delta: number): void {
+    this.updateEntities(delta);
+  }
+
+  /**
+   * 更新所有实体（内部方法，提取公共逻辑）
+   * @param delta 时间差（秒）
+   */
+  private updateEntities(delta: number): void {
     const toRemove: string[] = [];
 
     for (const entity of this.entities.values()) {
@@ -288,26 +317,27 @@ export class EntityManager {
    * @param playerPosition 玩家位置（用于计算流体LOD）
    */
   public updateWithPlayer(delta: number, playerPosition?: THREE.Vector3): void {
-    // 1. 更新普通实体（原有逻辑）
-    const toRemove: string[] = [];
-    for (const entity of this.entities.values()) {
-      if (entity.isActive) {
-        entity.update(delta);
-      }
-      if (!entity.isActive) {
-        toRemove.push(entity.id);
-      }
-    }
-    for (const id of toRemove) {
-      this.removeEntityById(id);
-    }
+    // 1. 更新普通实体
+    this.updateEntities(delta);
 
     // 2. 更新流体区域
+    this.updateFluidRegions(delta, playerPosition);
+  }
+
+  /**
+   * 更新流体区域（内部方法）
+   * @param delta 时间差（秒）
+   * @param playerPosition 玩家位置（用于计算流体LOD）
+   */
+  private updateFluidRegions(delta: number, playerPosition?: THREE.Vector3): void {
     if (playerPosition) this.playerPositionCache.copy(playerPosition);
 
     const highDist = 3.0;    // 距离 ≤3 使用 HIGH
     const mediumDist = 6.0;  // 距离 ≤6 使用 MEDIUM
     const offDist = 10.0;    // 距离 ≤10 使用 LOW，超过10销毁
+
+    // 收集需要移除的流体区域（安全删除，避免迭代时修改数组）
+    const regionsToRemove: FluidRegionManager[] = [];
 
     for (const region of this.fluidRegions) {
       const { center, radius } = region.getBounds();
@@ -325,6 +355,16 @@ export class EntityManager {
       }
 
       region.update(delta, lod);
+
+      // 检查区域是否标记为待移除
+      if (region.isMarkedForRemoval()) {
+        regionsToRemove.push(region);
+      }
+    }
+
+    // 在循环外部安全删除标记的区域
+    for (const region of regionsToRemove) {
+      this.removeFluidRegion(region);
     }
   }
 }
