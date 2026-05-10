@@ -64,7 +64,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             density: 1000,
             viscosity: 0.001,
             surfaceTension: 0.03,
-            gravity: 2.0,
+            gravity: 5.0,
             pressureIterations: 1,        // 优化：减少压力迭代次数（原为3）
             reinitIterations: 0,          // 优化：关闭重初始化（原为1），小水滴表面张力不重要
             timeStep: 0.01,               // 优化：增大时间步长（原为0.005），更少子步也能稳定
@@ -191,6 +191,9 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         tex.dispose();
     }
 
+    // 模拟器内部固定时间步长
+    private readonly simTimeStep = 0.01;
+
     update(delta: number): void {
         if (!this.isActive) return;
 
@@ -228,10 +231,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
         // 根据LOD获取模拟更新间隔
         const simInterval = this.getSimInterval();
-        
+
         // 累积时间步
         this.simUpdateAccumulated += delta;
-        
+
         // 仅当累积时间达到间隔时才更新模拟
         if (this.simUpdateAccumulated >= simInterval) {
             this.processPendingForces(this.simUpdateAccumulated);
@@ -244,14 +247,30 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             const internalForceY = -accel.y * 0.5;
             this.simulator.addVelocityImpulse(internalForceX, internalForceY);
 
+            // ★★★ 内部随机微风：让水滴一直有内部流动，非常生动 ★★★
+            if (this.lod < FluidLOD.LOW) {
+                const windAngle = Math.random() * Math.PI * 2;
+                const windStrength = 0.3 + Math.random() * 0.4;
+                this.simulator.addVelocityImpulse(
+                    Math.cos(windAngle) * windStrength,
+                    Math.sin(windAngle) * windStrength
+                );
+            }
+
             // 呼吸/脉动效果（已禁用）
             this.breathingPhase += this.breathingSpeed * this.simUpdateAccumulated;
 
-            // 更新流体模拟器（传递累计时间）
-            this.simulator.update(this.simUpdateAccumulated);
-            
-            // 重置累积时间
-            this.simUpdateAccumulated = 0;
+            // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
+            const substeps = Math.max(1, Math.floor(this.simUpdateAccumulated / this.simTimeStep));
+            const actualSubsteps = Math.min(substeps, 10);
+
+            for (let s = 0; s < actualSubsteps; s++) {
+                this.simulator.update(this.simTimeStep);
+            }
+
+            this.simulator.updateRenderUniforms();
+
+            this.simUpdateAccumulated -= actualSubsteps * this.simTimeStep;
         }
 
         // 纹理更新控制：LOW级别冻结纹理
@@ -259,7 +278,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             this.simulator.setTextureUpdateEnabled(false);
         } else {
             this.simulator.setTextureUpdateEnabled(true);
-            // 仅在非LOW级别时更新材质
             const newMaterial = this.simulator.getRenderMaterial();
             if (this.mesh.material !== newMaterial) {
                 if (this.mesh.material instanceof THREE.ShaderMaterial) {
