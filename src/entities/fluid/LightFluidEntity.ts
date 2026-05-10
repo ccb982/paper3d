@@ -70,12 +70,12 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             timeStep: 0.01,               // 优化：增大时间步长（原为0.005），更少子步也能稳定
             restitution: 0.2,
             friction: 0.9,
-            usePCG: true,                 // 优化：使用PCG求解器加速压力计算
+            usePCG: false,                // 禁用PCG（避免GPU回读卡顿）
             maxLifetime: 0,
             decoupledBoundary: false,
             usePerturbation: false,
             injectionEnabled: false,
-            enableCentering: true,       // 关闭纹理居中追踪
+            enableCentering: false,      // 关闭纹理居中追踪，消除 GPU 回读
         };
 
         // 根据水量计算绘制大小
