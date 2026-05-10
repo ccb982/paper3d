@@ -47,7 +47,7 @@ export class FluidRegionManager {
       const angle = Math.random() * Math.PI * 2;
       const dist = (spread ?? this.radius) * Math.sqrt(Math.random());
       const pos = this.center.clone().add(
-        new THREE.Vector3(Math.cos(angle) * dist, Math.sin(angle) * dist, 0)
+        new THREE.Vector3(Math.cos(angle) * dist, Math.sin(angle) * dist + 1.5, 0)  // 抬高 1.5 单位
       );
       const vel = new THREE.Vector3(
         (Math.random() - 0.5) * 2,

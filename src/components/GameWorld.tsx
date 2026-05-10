@@ -247,16 +247,21 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     // 更新特效管理器
     EffectManager.getInstance().update(scaledDelta);
 
-    // ========== 随机散度力（每帧施加，只给小液滴）==========
+    // ========== 随机散度力 + 注水（每帧施加，只给小液滴）==========
     const randomForce: FluidExternalForce = {
       divergenceInjection: {
-        divergence: (Math.random() - 0.5) * 5000,
+        divergence: (Math.random() - 0.5) * 3000,  // 降低散度强度避免水消失
         radius: 0.5,
         centerUV: new THREE.Vector2(0.5, 0.3)
+      },
+      waterInjection: {
+        amount: 0.01 + Math.random() * 0.02,  // 随机注水量：0.01~0.03
+        radius: 0.25,
+        centerUV: new THREE.Vector2(0.5, 0.7)  // 从上方注水
       }
     };
 
-    // 只给小液滴施加随机散度力（不修改详细纹理）
+    // 只给小液滴施加随机散度力 + 注水（不修改详细纹理）
     const droplets = EntityManager.getInstance().getDroplets() as IFluidForceTarget[];
     for (const droplet of droplets) {
       droplet.applyFluidForce(randomForce);
