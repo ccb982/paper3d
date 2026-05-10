@@ -10,11 +10,12 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     private simulator: FluidSimulator;
     private material: THREE.ShaderMaterial;
     private lastUpdateTime: number = performance.now();
-    private updateInterval: number = 16;
+    private updateInterval: number = 0;
     private isFirstFrame: boolean = true;
     private explosionFrameCount: number = 0;
     private originalPressureIterations: number = 50;
     private isExplosionBoosted: boolean = false;
+    private pendingForces: FluidExternalForce[] = [];
 
     constructor(
         renderer: THREE.WebGLRenderer,
@@ -78,10 +79,11 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     update(delta?: number): void {
         const now = performance.now();
         const elapsed = now - this.lastUpdateTime;
-        if (elapsed < this.updateInterval) {
-            return;
-        }
         this.lastUpdateTime = now;
+
+        const realDelta = (delta !== undefined) ? delta : (elapsed / 1000);
+
+        this.processPendingForces(realDelta);
 
         // 隔两帧炸一次（每3帧爆炸一次）
         if (this.isExplosionBoosted) {
@@ -121,14 +123,10 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             this.explosionFrameCount = 0;
             // 初始爆炸已删除
         }
-
-        // 计算真实时间增量（转换为秒），用于年龄计时
-        const realDelta = elapsed / 1000;
         
         if (delta !== undefined) {
             this.simulator.update(delta);
         } else {
-            // 传入真实时间增量，用于年龄计时
             this.simulator.update(realDelta);
         }
 
@@ -229,29 +227,42 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     }
 
     applyFluidForce(force: FluidExternalForce): void {
-            // 忽略世界运动力（静态纹理不可移动）
-            const sim = this.simulator;
-            if (!sim) return;
+        if (!this.simulator) return;
+        // 忽略世界运动力（静态纹理不可移动），但内部力全部缓存
+        if (force.velocityInjection || force.divergenceInjection || force.waterInjection) {
+            this.pendingForces.push(force);
+        }
+    }
 
-            // 速度注入
+    private processPendingForces(dt: number): void {
+        const sim = this.simulator;
+        if (!sim || this.pendingForces.length === 0) return;
+
+        for (const force of this.pendingForces) {
             if (force.velocityInjection) {
                 const inj = force.velocityInjection;
                 const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-                sim.addLocalVelocityImpulse(inj.velocity.x, inj.velocity.y, inj.radius ?? 0.2, center.x, center.y, 10.0);
+                const radius = inj.radius ?? 0.2;
+                const dvx = inj.velocity.x * dt;
+                const dvy = inj.velocity.y * dt;
+                sim.addLocalVelocityImpulse(dvx, dvy, radius, center.x, center.y, 10.0);
             }
 
-            // 散度注入
             if (force.divergenceInjection) {
                 const inj = force.divergenceInjection;
                 const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-                sim.addDivergenceImpulse(inj.divergence, inj.radius ?? 0.2, center.x, center.y);
+                const radius = inj.radius ?? 0.2;
+                sim.addDivergenceImpulse(inj.divergence, radius, center.x, center.y);
             }
 
-            // 水体注入
             if (force.waterInjection) {
                 const inj = force.waterInjection;
                 const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-                sim.addWaterImpulse(inj.amount, inj.radius ?? 0.2, center.x, center.y);
+                const radius = inj.radius ?? 0.2;
+                sim.addWaterImpulse(inj.amount, radius, center.x, center.y);
             }
         }
+
+        this.pendingForces.length = 0;
+    }
 }

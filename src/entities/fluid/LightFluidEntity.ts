@@ -35,6 +35,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     
     // 外部力累积（每帧加速度）
     private externalAccel = new THREE.Vector3();
+    private pendingForces: FluidExternalForce[] = [];
     
     // 呼吸/脉动效果参数
     private breathingPhase: number = 0;       // 呼吸相位
@@ -233,6 +234,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         
         // 仅当累积时间达到间隔时才更新模拟
         if (this.simUpdateAccumulated >= simInterval) {
+            this.processPendingForces(this.simUpdateAccumulated);
+
             // 计算加速度（基于累计时间，更准确）
             const accel = new THREE.Vector3().subVectors(this.worldVelocity, this.prevWorldVelocity).divideScalar(this.simUpdateAccumulated || delta);
             this.prevWorldVelocity.copy(this.worldVelocity);
@@ -359,15 +362,20 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             this.externalAccel.add(force.worldAcceleration);
         }
 
-        // ========== 2. 内部流场注入（仅在高/中 LOD 时生效） ==========
-        if (this.lod >= FluidLOD.LOW) return; // 低LOD或OFF时纹理冻结，跳过注入
+        // ========== 2. 内部流场注入（缓存后在 update 中处理） ==========
+        if (force.velocityInjection || force.divergenceInjection || force.waterInjection) {
+            this.pendingForces.push(force);
+        }
+    }
+
+    private processPendingForces(dt: number): void {
+        if (this.lod >= FluidLOD.LOW || this.pendingForces.length === 0) return; // 低LOD或OFF时纹理冻结，跳过注入
 
         const sim = this.simulator;
         if (!sim) return;
 
         // 将世界方向转为纹理空间方向（考虑液滴随机旋转）
         const worldToTex = (v: THREE.Vector2): THREE.Vector2 => {
-            // 使用 mesh 的 rotation.z 逆旋转
             const angle = -this.mesh.rotation.z;
             const cos = Math.cos(angle);
             const sin = Math.sin(angle);
@@ -376,26 +384,28 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             return new THREE.Vector2(tx, ty);
         };
 
-        // 速度注入
-        if (force.velocityInjection) {
-            const inj = force.velocityInjection;
-            const vel = worldToTex(inj.velocity);
-            // 降级：全局速度增加（所有像素）
-            sim.addVelocityImpulse(vel.x, vel.y);
+        for (const force of this.pendingForces) {
+            if (force.velocityInjection) {
+                const inj = force.velocityInjection;
+                const vel = worldToTex(inj.velocity);
+                const dvx = vel.x * dt;
+                const dvy = vel.y * dt;
+                sim.addVelocityImpulse(dvx, dvy);
+            }
+
+            if (force.divergenceInjection) {
+                const inj = force.divergenceInjection;
+                const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+                sim.addDivergenceImpulse(inj.divergence, inj.radius ?? 0.2, center.x, center.y);
+            }
+
+            if (force.waterInjection) {
+                const inj = force.waterInjection;
+                const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+                sim.addWaterImpulse(inj.amount, inj.radius ?? 0.2, center.x, center.y);
+            }
         }
 
-        // 散度注入
-        if (force.divergenceInjection) {
-            const inj = force.divergenceInjection;
-            const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-            sim.addDivergenceImpulse(inj.divergence, inj.radius ?? 0.2, center.x, center.y);
-        }
-
-        // 水体注入
-        if (force.waterInjection) {
-            const inj = force.waterInjection;
-            const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
-            sim.addWaterImpulse(inj.amount, inj.radius ?? 0.2, center.x, center.y);
-        }
+        this.pendingForces.length = 0;
     }
 }

@@ -50,7 +50,6 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
   const isDebug = useGameStore(s => s.isDebug);
   const jumpForce = 7;
   const isMouseDownRef = useRef(false);
-  const windFrameCountRef = useRef(0);
 
   // 设置相机和渲染器引用到全局存储
   useEffect(() => {
@@ -427,20 +426,17 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     // 更新特效
     EffectManager.getInstance().update(delta);
 
-    // ===== 侧向风力测试（每5帧作用一次） =====
-    windFrameCountRef.current++;
-    if (windFrameCountRef.current % 5 === 0) {
-      const adapter = TextureManager.getInstance().getFluidSimulator('levelSetFluid');
-      if (adapter) {
-        const windForce: FluidExternalForce = {
-          velocityInjection: {
-            velocity: new THREE.Vector2(0.08, 0),
-            radius: 1.0,
-            centerUV: new THREE.Vector2(0.5, 0.5)
-          }
-        };
-        adapter.applyFluidForce(windForce);
-      }
+    // ===== 侧向风力测试（加速度模型，每帧施加） =====
+    const adapter = TextureManager.getInstance().getFluidSimulator('levelSetFluid');
+    if (adapter) {
+      const windForce: FluidExternalForce = {
+        velocityInjection: {
+          velocity: new THREE.Vector2(200, 0),
+          radius: 1.0,
+          centerUV: new THREE.Vector2(0.5, 0.5)
+        }
+      };
+      adapter.applyFluidForce(windForce);
     }
     // ============================
 
@@ -709,7 +705,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
 
     // 创建测试液滴（已暂停）
     // createTestDroplets();
-    console.log('Entities created:', entityManager.getEntityCount());
+    
   }, []);
 
   // 创建测试液滴
@@ -930,7 +926,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     scene.add(fluidMesh);
 
     fluidMeshRef.current = fluidMesh;
-    console.log('FluidSimulator created and registered to TextureManager');
+   
   }, []);
 
   useFrame(({ clock }) => {
@@ -1002,7 +998,7 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
       const activeSystem = shootingManager.getActiveSystem();
       if (activeSystem && 'setActive' in activeSystem) {
         activeSystem.setActive(shouldActivateShooting);
-        console.log(`Shooting system ${shouldActivateShooting ? 'activated' : 'deactivated'} for mode: ${mode}`);
+        
       }
     }
   }, [mode, shootingManager]);
