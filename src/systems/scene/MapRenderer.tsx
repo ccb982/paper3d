@@ -15,7 +15,6 @@ export const MapRenderer: React.FC<MapRendererProps> = ({ getHeightAt }) => {
   const grassPositions = [
     { x: 5, z: 0 },
     { x: -5, z: 0 },
-    { x: 0, z: 5 },
     { x: 0, z: -5 }
   ];
 

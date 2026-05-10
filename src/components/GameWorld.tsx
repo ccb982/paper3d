@@ -50,6 +50,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
   const isDebug = useGameStore(s => s.isDebug);
   const jumpForce = 7;
   const isMouseDownRef = useRef(false);
+  const windFrameCountRef = useRef(0);
 
   // 设置相机和渲染器引用到全局存储
   useEffect(() => {
@@ -408,7 +409,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
           shootingManager.setActiveSystem('freestyle');
           setActiveShootingSystem('freestyle');
           onActiveSystemChanged('freestyle');
-          console.log('检测到敌人，自动进入战斗模式和自由射击');
+          
         }
       } else if (!hasEnemyNearby && currentMode === GameMode.BATTLE) {
         // 没有敌人，返回日常模式
@@ -417,7 +418,7 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
           shootingManager.setActiveSystem('lockon');
           setActiveShootingSystem('lockon');
           onActiveSystemChanged('lockon');
-          console.log('敌人已离开，自动返回日常模式和锁定射击');
+          
         }
       }
 
@@ -425,7 +426,24 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     
     // 更新特效
     EffectManager.getInstance().update(delta);
-    
+
+    // ===== 侧向风力测试（每5帧作用一次） =====
+    windFrameCountRef.current++;
+    if (windFrameCountRef.current % 5 === 0) {
+      const adapter = TextureManager.getInstance().getFluidSimulator('levelSetFluid');
+      if (adapter) {
+        const windForce: FluidExternalForce = {
+          velocityInjection: {
+            velocity: new THREE.Vector2(0.08, 0),
+            radius: 1.0,
+            centerUV: new THREE.Vector2(0.5, 0.5)
+          }
+        };
+        adapter.applyFluidForce(windForce);
+      }
+    }
+    // ============================
+
     // 更新所有纹理（包括测试纹理的流动效果）
     TextureManager.getInstance().updateAll(delta);
   });
