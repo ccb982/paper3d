@@ -1804,8 +1804,8 @@ export class FluidSimulator {
             this.renderFullscreen(this.dissipationMat, dissipationDst);
             this.curPhiTex = dissipationDst;
 
-            // 检测消散的水体并输出日志（每10帧检测一次）
-            if (this.frameCount % 10 === 0) {
+            // 检测消散的水体并输出日志（每60帧检测一次，仅调试模式）
+            if (this.waterDebugEnabled && this.frameCount % 60 === 0) {
                 this.detectDissipatedWater(dissipationDst);
             }
         }
@@ -1922,11 +1922,11 @@ export class FluidSimulator {
     private waterDebugEnabled: boolean = false;
 
     private detectDissipatedWater(renderTarget: THREE.WebGLRenderTarget): void {
-        const { totalWaterCount, dissipatedCount } = this.getWaterAmount();
+        // ★ 性能优化：仅在调试模式启用时才执行GPU回读
+        if (!this.waterDebugEnabled) return;
 
-        if (this.waterDebugEnabled) {
-            console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
-        }
+        const { totalWaterCount, dissipatedCount } = this.getWaterAmount();
+        console.log(`[水量监测] 帧${this.frameCount}: 水体总数=${totalWaterCount}, 消散数=${dissipatedCount}, maxLifetime=${this.params.maxLifetime}s`);
     }
 
     // ==================== 调试录制接口 ====================

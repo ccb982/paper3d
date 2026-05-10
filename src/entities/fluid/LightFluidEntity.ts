@@ -307,6 +307,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         }
     }
 
+    // ===========================================
+    // GPU 回读方法（已禁用 - 性能杀手，仅用于调试）
+    // ===========================================
+    /*
     private readPhiCenter(): number {
         const w = this.texSize, h = this.texSize;
         const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
@@ -334,6 +338,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             return new THREE.Vector2(0, 0);
         }
     }
+    */
 
     public applyForce(force: THREE.Vector3, delta: number): void {
         this.worldVelocity.add(force.clone().multiplyScalar(delta));
