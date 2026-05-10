@@ -41,6 +41,7 @@ export interface FluidParams {
     lightDir?: THREE.Vector3;           // 光照方向
     // 纹理居中追踪参数
     enableCentering?: boolean;          // 是否开启纹理居中追踪，默认 false
+    centeringInterval?: number;          // 居中追踪间隔（秒），默认 1.0
 }
 
 export class FluidSimulator {
@@ -187,6 +188,8 @@ export class FluidSimulator {
 
     // 纹理居中追踪相关
     private centeringEnabled: boolean;
+    private centeringInterval: number;
+    private lastCenteringTime: number;
     private smoothedOffset: THREE.Vector2 = new THREE.Vector2(0, 0);
     private centeringPhiMat: THREE.ShaderMaterial;
     private centeringVelMat: THREE.ShaderMaterial;
@@ -219,6 +222,8 @@ export class FluidSimulator {
 
         // 初始化纹理居中追踪参数
         this.centeringEnabled = params.enableCentering ?? false;
+        this.centeringInterval = params.centeringInterval ?? 1.0;  // 默认1秒
+        this.lastCenteringTime = 0;
 
         // 生成噪声纹理（用于随机扰动）
         this.noiseTex = this.generateNoiseTexture();
@@ -1846,36 +1851,40 @@ export class FluidSimulator {
             }
         }
 
-        // ========== 纹理居中追踪 ==========
+        // ========== 纹理居中追踪（带节流，每 centeringInterval 秒执行一次）==========
         if (this.centeringEnabled) {
-            const currentCenter = this.computeFluidBoundingBoxCenter();
-            if (currentCenter) {
-                const targetCenter = new THREE.Vector2(0.5, 0.5);
-                const rawOffset = new THREE.Vector2().subVectors(targetCenter, currentCenter);
-                // 一阶低通平滑，避免突然跳动（系数可调，0.2~0.5）
-                this.smoothedOffset.lerp(rawOffset, 0.3);
+            const now = performance.now() / 1000;  // 转换为秒
+            if (now - this.lastCenteringTime >= this.centeringInterval) {
+                this.lastCenteringTime = now;
+                const currentCenter = this.computeFluidBoundingBoxCenter();
+                if (currentCenter) {
+                    const targetCenter = new THREE.Vector2(0.5, 0.5);
+                    const rawOffset = new THREE.Vector2().subVectors(targetCenter, currentCenter);
+                    // 一阶低通平滑，避免突然跳动（系数可调，0.2~0.5）
+                    this.smoothedOffset.lerp(rawOffset, 0.3);
 
-                // 只应用足够大的偏移，避免噪声（可根据分辨率调整阈值）
-                if (this.smoothedOffset.length() > 0.001) {
-                    // 平移 phi 场
-                    this.centeringPhiMat.uniforms.tex.value = this.curPhiTex.texture;
-                    this.centeringPhiMat.uniforms.offset.value = this.smoothedOffset;
-                    const phiDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
-                    this.renderFullscreen(this.centeringPhiMat, phiDst);
-                    this.curPhiTex = phiDst;
+                    // 只应用足够大的偏移，避免噪声（可根据分辨率调整阈值）
+                    if (this.smoothedOffset.length() > 0.001) {
+                        // 平移 phi 场
+                        this.centeringPhiMat.uniforms.tex.value = this.curPhiTex.texture;
+                        this.centeringPhiMat.uniforms.offset.value = this.smoothedOffset;
+                        const phiDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+                        this.renderFullscreen(this.centeringPhiMat, phiDst);
+                        this.curPhiTex = phiDst;
 
-                    // 平移 vel 场
-                    this.centeringVelMat.uniforms.tex.value = this.curVelTex.texture;
-                    this.centeringVelMat.uniforms.offset.value = this.smoothedOffset;
-                    const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
-                    this.renderFullscreen(this.centeringVelMat, velDst);
-                    this.curVelTex = velDst;
+                        // 平移 vel 场
+                        this.centeringVelMat.uniforms.tex.value = this.curVelTex.texture;
+                        this.centeringVelMat.uniforms.offset.value = this.smoothedOffset;
+                        const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
+                        this.renderFullscreen(this.centeringVelMat, velDst);
+                        this.curVelTex = velDst;
 
-                    // 同步平移年龄场
-                    const ageDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
-                    this.centeringPhiMat.uniforms.tex.value = this.curAgeTex.texture;
-                    this.renderFullscreen(this.centeringPhiMat, ageDst);
-                    this.curAgeTex = ageDst;
+                        // 同步平移年龄场
+                        const ageDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+                        this.centeringPhiMat.uniforms.tex.value = this.curAgeTex.texture;
+                        this.renderFullscreen(this.centeringPhiMat, ageDst);
+                        this.curAgeTex = ageDst;
+                    }
                 }
             }
         }

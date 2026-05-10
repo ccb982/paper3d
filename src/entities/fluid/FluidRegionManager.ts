@@ -71,6 +71,7 @@ export class FluidRegionManager {
   // 核心更新：由 EntityManager 每帧调用，传入 LOD 等级
   // 注意：本方法不再直接调用实体的update，而是设置LOD让实体自己处理
   update(delta: number, lod: FluidLOD): void {
+    const previousLOD = this.currentLOD;
     this.currentLOD = lod;
 
     // 收集已失效的液滴（已在 EntityManager 中标记为非活跃的）
@@ -89,9 +90,9 @@ export class FluidRegionManager {
     }
     
     // 调试：输出距离变化信息
-    if (lod !== this.currentLOD) {
+    if (previousLOD !== lod) {
       const lodNames = ['HIGH', 'MEDIUM', 'LOW', 'OFF'];
-      console.log(`[FluidRegionManager] LOD变化: ${lodNames[this.currentLOD]} -> ${lodNames[lod]}, 液滴数量: ${this.entities.length}`);
+      console.log(`[FluidRegionManager] LOD变化: ${lodNames[previousLOD]} -> ${lodNames[lod]}, 液滴数量: ${this.entities.length}`);
     }
 
     // 重置销毁标记

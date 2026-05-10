@@ -75,7 +75,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             decoupledBoundary: false,
             usePerturbation: false,
             injectionEnabled: false,
-            enableCentering: false,      // 关闭纹理居中追踪，消除 GPU 回读
+            enableCentering: true,       // 启用纹理居中追踪
+            centeringInterval: 1.0,     // 居中追踪间隔1秒，减少GPU回读频率
         };
 
         // 根据水量计算绘制大小
