@@ -63,11 +63,11 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             height: 32,
             density: 1000,
             viscosity: 0.001,
-            surfaceTension: 0.03,
+            surfaceTension: 0.1,          // 让界面更紧凑，受力后回弹更真实
             gravity: 5.0,
-            pressureIterations: 1,        // 优化：减少压力迭代次数（原为3）
-            reinitIterations: 0,          // 优化：关闭重初始化（原为1），小水滴表面张力不重要
-            timeStep: 0.01,               // 优化：增大时间步长（原为0.005），更少子步也能稳定
+            pressureIterations: 4,        // 提高压力迭代，让压力场能真正响应散度
+            reinitIterations: 1,          // 保持 Level Set 平滑，避免界面锯齿模糊响应
+            timeStep: 0.008,              // 略减小步长，提高稳定性，使外力可更精确地每一步作用
             restitution: 0.2,
             friction: 0.9,
             usePCG: false,                // 禁用PCG（避免GPU回读卡顿）
@@ -193,7 +193,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     }
 
     // 模拟器内部固定时间步长
-    private readonly simTimeStep = 0.01;
+    private readonly simTimeStep = 0.008;
 
     update(delta: number): void {
         if (!this.isActive) return;
@@ -244,9 +244,16 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             const accel = new THREE.Vector3().subVectors(this.worldVelocity, this.prevWorldVelocity).divideScalar(this.simUpdateAccumulated || delta);
             this.prevWorldVelocity.copy(this.worldVelocity);
 
-            const internalForceX = -accel.x * 0.5;
-            const internalForceY = -accel.y * 0.5;
-            this.simulator.addVelocityImpulse(internalForceX, internalForceY);
+            // 将世界加速度转化为局部散度注入，模拟惯性挤压
+            if (accel.length() > 1.0) { // 只对明显的加速度反应
+                const accelDir = new THREE.Vector2(accel.x, accel.y).normalize();
+                // 在加速度反方向的边缘注入散度，模拟惯性让水向一边堆积
+                const offsetDist = 0.3; // 偏离中心的距离
+                const cx = 0.5 - accelDir.x * offsetDist;
+                const cy = 0.5 - accelDir.y * offsetDist;
+                const squeeze = accel.length() * 200; // 降低散度强度，避免数值不稳定
+                this.simulator.addDivergenceImpulse(-squeeze, 0.25, cx, cy); // 负散度 = 向外推
+            }
 
             // ★★★ 内部随机微风：让水滴一直有内部流动，非常生动 ★★★
             if (this.lod < FluidLOD.LOW) {
@@ -411,10 +418,15 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         for (const force of this.pendingForces) {
             if (force.velocityInjection) {
                 const inj = force.velocityInjection;
-                const vel = worldToTex(inj.velocity);
-                const dvx = vel.x * dt;
-                const dvy = vel.y * dt;
-                sim.addVelocityImpulse(dvx, dvy);
+                const texVel = worldToTex(inj.velocity);
+                const center = inj.centerUV ?? new THREE.Vector2(0.5, 0.5);
+                // 使用局部速度注入，限制速度上限防止飞出纹理
+                sim.addLocalVelocityImpulse(
+                    texVel.x, texVel.y,
+                    inj.radius ?? 0.2,
+                    center.x, center.y,
+                    5.0  // 最大速度限制，适当放宽
+                );
             }
 
             if (force.divergenceInjection) {
