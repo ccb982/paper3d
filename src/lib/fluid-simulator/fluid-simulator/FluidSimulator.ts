@@ -1042,6 +1042,73 @@ export class FluidSimulator {
         return new THREE.Vector2(uCenter, vCenter);
     }
 
+    // ==================== GPU质心计算（避免大数据回读）====================
+    // 使用 GPU 归约计算水体质心，只回读 1x1 纹理（4个float），开销极小
+    private computeFluidCentroidGPU(): THREE.Vector2 | null {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+
+        // 阶段1: 计算逐像素的加权值 phi*x, phi*y, phi（使用 r,g,b 通道）
+        const weightedMat = new THREE.ShaderMaterial({
+            uniforms: { phi: { value: null }, resolution: { value: new THREE.Vector2(this.width, this.height) } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phi;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+                void main() {
+                    float phiVal = texture2D(phi, vUv).r;
+                    if (phiVal >= 0.0) {
+                        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                    } else {
+                        float phiAbs = abs(phiVal);
+                        float wX = phiAbs * vUv.x;
+                        float wY = phiAbs * vUv.y;
+                        gl_FragColor = vec4(wX, wY, phiAbs, 1.0);
+                    }
+                }
+            `
+        });
+
+        weightedMat.uniforms.phi.value = this.curPhiTex.texture;
+        weightedMat.uniforms.resolution.value = new THREE.Vector2(this.width, this.height);
+        this.renderFullscreen(weightedMat, this.reduceTexPool[0]);
+        weightedMat.dispose();
+
+        // 阶段2: 逐级归约
+        let currentWidth = this.width;
+        let currentHeight = this.height;
+        let reduceIdx = 0;
+
+        while (currentWidth > 1 || currentHeight > 1) {
+            const nextWidth = Math.ceil(currentWidth / 2);
+            const nextHeight = Math.ceil(currentHeight / 2);
+            const nextTexIdx = reduceIdx + 1;
+
+            this.reduceMat.uniforms.resolution.value = new THREE.Vector2(currentWidth, currentHeight);
+            this.reduceMat.uniforms.inputTex.value = this.reduceTexPool[reduceIdx].texture;
+            this.renderFullscreen(this.reduceMat, this.reduceTexPool[nextTexIdx]);
+
+            currentWidth = nextWidth;
+            currentHeight = nextHeight;
+            reduceIdx = nextTexIdx;
+        }
+
+        // 阶段3: 读取最终的 1x1 纹理值
+        const pixelBuffer = new Float32Array(4);
+        this.renderer.readRenderTargetPixels(this.reduceTexPool[reduceIdx], 0, 0, 1, 1, pixelBuffer);
+
+        const sumPhiX = pixelBuffer[0];
+        const sumPhiY = pixelBuffer[1];
+        const sumPhi = pixelBuffer[2];
+
+        if (sumPhi < 0.0001) return null;
+
+        const uCenter = sumPhiX / sumPhi;
+        const vCenter = sumPhiY / sumPhi;
+
+        return new THREE.Vector2(uCenter, vCenter);
+    }
+
     // ==================== PCG求解器相关着色器 ====================
     // SpMV着色器：计算 q = A * x（A是Poisson矩阵，负拉普拉斯算子）
     private spmvShader(): THREE.ShaderMaterial {
@@ -1856,7 +1923,8 @@ export class FluidSimulator {
             const now = performance.now() / 1000;  // 转换为秒
             if (now - this.lastCenteringTime >= this.centeringInterval) {
                 this.lastCenteringTime = now;
-                const currentCenter = this.computeFluidBoundingBoxCenter();
+                // 使用 GPU 质心计算，避免回读大数据
+                const currentCenter = this.computeFluidCentroidGPU();
                 if (currentCenter) {
                     const targetCenter = new THREE.Vector2(0.5, 0.5);
                     const rawOffset = new THREE.Vector2().subVectors(targetCenter, currentCenter);
