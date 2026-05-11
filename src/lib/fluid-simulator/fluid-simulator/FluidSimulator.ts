@@ -2902,4 +2902,194 @@ export class FluidSimulator {
     public static waterFragmentShader(): string {
         return `uniform sampler2D phiTex; uniform sampler2D velTex; uniform float time; uniform vec2 resolution; uniform vec3 lightDir; uniform vec3 waterColor; uniform vec3 deepColor; uniform float edgeWidth; uniform float edgeIntensity; varying vec2 vUv; vec3 computeNormal(vec2 uv, float eps) { float phi = texture2D(phiTex, uv).r; float phi_r = texture2D(phiTex, uv + vec2(eps, 0.0)).r; float phi_l = texture2D(phiTex, uv - vec2(eps, 0.0)).r; float phi_t = texture2D(phiTex, uv + vec2(0.0, eps)).r; float phi_b = texture2D(phiTex, uv - vec2(0.0, eps)).r; vec3 grad = vec3(phi_r - phi_l, phi_t - phi_b, 0.0); float len = length(grad); if (len < 0.001) return vec3(0.0, 0.0, 1.0); return normalize(grad); } void main() { float phi = texture2D(phiTex, vUv).r; if (phi >= 0.0) discard; float eps = 1.0 / resolution.x; vec3 normal = computeNormal(vUv, eps); float depth = clamp(-phi * 2.0, 0.0, 1.0); vec3 baseColor = mix(waterColor, deepColor, depth); float diff = max(0.2, dot(normal, normalize(lightDir))); vec3 color = baseColor * diff; vec3 viewDir = vec3(0.0, 0.0, 1.0); vec3 halfDir = normalize(normalize(lightDir) + viewDir); float spec = pow(max(dot(normal, halfDir), 0.0), 64.0); color += vec3(1.0) * spec * 0.6; float edge = 1.0 - smoothstep(0.0, edgeWidth, abs(phi)); color += vec3(0.5, 0.7, 1.0) * edge * edgeIntensity; vec2 vel = texture2D(velTex, vUv).rg; float flow = length(vel) * 0.3; color += vec3(0.1, 0.2, 0.3) * flow; gl_FragColor = vec4(color, 0.92); }`;
     }
+
+    // ==================== 水面纹理分裂相关方法 ====================
+    public setVelocityTexture(texture: THREE.Texture): void {
+        this.copyTextureToTarget(texture, this.velTexA);
+        this.copyTextureToTarget(texture, this.velTexB);
+        this.curVelTex = this.velTexA;
+    }
+
+    public generateCrackMaskGPU(
+        targetRT: THREE.WebGLRenderTarget,
+        centerUV: THREE.Vector2,
+        angles: number[],
+        angleWidth: number,
+        seed: number
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const crackMat = new THREE.ShaderMaterial({
+            uniforms: {
+                center: { value: centerUV },
+                angles: { value: new Float32Array(angles) },
+                angleCount: { value: angles.length },
+                angleWidth: { value: angleWidth },
+                seed: { value: seed },
+                resolution: { value: new THREE.Vector2(this.width, this.height) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform vec2 center;
+                uniform float angles[32];
+                uniform int angleCount;
+                uniform float angleWidth;
+                uniform float seed;
+                uniform vec2 resolution;
+                
+                varying vec2 vUv;
+                
+                float rand(vec2 co) {
+                    return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+                }
+                
+                void main() {
+                    vec2 d = vUv - center;
+                    float dist = length(d);
+                    float angle = atan(d.y, d.x);
+                    
+                    // 角度规范化到 [0, 2π)
+                    if (angle < 0.0) angle += 6.283185307;
+                    
+                    float mask = 1.0;
+                    for (int i = 0; i < 32; i++) {
+                        if (i >= angleCount) break;
+                        float targetAngle = angles[i];
+                        float diff = abs(angle - targetAngle);
+                        // 处理环绕
+                        if (diff > 3.141592653) diff = 6.283185307 - diff;
+                        if (diff < angleWidth) {
+                            mask = 0.0;
+                            break;
+                        }
+                    }
+                    
+                    // 添加随机扰动
+                    float noise = rand(vUv * resolution + seed);
+                    mask = mix(mask, 0.0, smoothstep(0.95, 1.0, noise));
+                    
+                    gl_FragColor = vec4(mask, mask, mask, 1.0);
+                }
+            `
+        });
+        
+        this.renderFullscreen(crackMat, targetRT);
+        crackMat.dispose();
+    }
+
+    public applyCrackMask(maskTexture: THREE.Texture): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const applyMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phi: { value: this.curPhiTex.texture },
+                mask: { value: maskTexture }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phi;
+                uniform sampler2D mask;
+                varying vec2 vUv;
+                
+                void main() {
+                    float phiVal = texture2D(phi, vUv).r;
+                    float maskVal = texture2D(mask, vUv).r;
+                    // 在裂缝处将 phi 设置为正数（空气）
+                    float newPhi = mix(0.1, phiVal, maskVal);
+                    gl_FragColor = vec4(newPhi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        const dst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+        this.renderFullscreen(applyMat, dst);
+        this.curPhiTex = dst;
+        applyMat.dispose();
+    }
+
+    public readPhiAndVel(): { phi: Float32Array; vel: Float32Array } {
+        const phiBuffer = new Float32Array(this.width * this.height * 4);
+        const velBuffer = new Float32Array(this.width * this.height * 4);
+        
+        this.renderer.readRenderTargetPixels(this.curPhiTex, 0, 0, this.width, this.height, phiBuffer);
+        this.renderer.readRenderTargetPixels(this.curVelTex, 0, 0, this.width, this.height, velBuffer);
+        
+        return { phi: phiBuffer, vel: velBuffer };
+    }
+
+    public clearSectorRegionsGPU(
+        centerUV: THREE.Vector2,
+        sectors: Array<{ startAngle: number; endAngle: number }>,
+        radius: number
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        
+        // 展平 sectors 数据
+        const startAngles = new Float32Array(sectors.map(s => s.startAngle));
+        const endAngles = new Float32Array(sectors.map(s => s.endAngle));
+        
+        const clearMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phi: { value: this.curPhiTex.texture },
+                center: { value: centerUV },
+                radius: { value: radius },
+                startAngles: { value: startAngles },
+                endAngles: { value: endAngles },
+                sectorCount: { value: sectors.length },
+                resolution: { value: new THREE.Vector2(this.width, this.height) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phi;
+                uniform vec2 center;
+                uniform float radius;
+                uniform float startAngles[32];
+                uniform float endAngles[32];
+                uniform int sectorCount;
+                uniform vec2 resolution;
+                
+                varying vec2 vUv;
+                
+                void main() {
+                    vec2 d = vUv - center;
+                    float dist = length(d);
+                    
+                    if (dist > radius) {
+                        gl_FragColor = texture2D(phi, vUv);
+                        return;
+                    }
+                    
+                    float angle = atan(d.y, d.x);
+                    // 角度规范化到 [0, 2π)
+                    if (angle < 0.0) angle += 6.283185307;
+                    
+                    bool inSector = false;
+                    for (int i = 0; i < 32; i++) {
+                        if (i >= sectorCount) break;
+                        float start = startAngles[i];
+                        float end = endAngles[i];
+                        
+                        float testAngle = angle;
+                        if (testAngle < start) testAngle += 6.283185307;
+                        float testEnd = end;
+                        if (testEnd < start) testEnd += 6.283185307;
+                        
+                        if (testAngle >= start && testAngle < testEnd) {
+                            inSector = true;
+                            break;
+                        }
+                    }
+                    
+                    if (inSector) {
+                        gl_FragColor = vec4(0.1, 0.0, 0.0, 1.0);
+                    } else {
+                        gl_FragColor = texture2D(phi, vUv);
+                    }
+                }
+            `
+        });
+        
+        const dst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+        this.renderFullscreen(clearMat, dst);
+        this.curPhiTex = dst;
+        clearMat.dispose();
+    }
 }

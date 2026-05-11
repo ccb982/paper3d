@@ -917,6 +917,9 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     const fluidSimulator = new FluidSimulatorAdapter(renderer, fluidParams);
 
     fluidSimulatorRef.current = fluidSimulator;
+    
+    // 初始化水面分裂系统
+    fluidSimulator.initFragmentSystem(EntityManager.getInstance());
 
     // 注册到 TextureManager（会自动更新）
     const textureManager = TextureManager.getInstance();
