@@ -1046,68 +1046,86 @@ export class FluidSimulator {
     // 使用 GPU 归约计算水体质心，只回读 1x1 纹理（4个float），开销极小
     private computeFluidCentroidGPU(): THREE.Vector2 | null {
         const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const eps = 1.0 / this.width;  // 用于平滑掩模
 
-        // 阶段1: 计算逐像素的加权值 phi*x, phi*y, phi（使用 r,g,b 通道）
+        // ---------- 阶段1：加权累加（基于水‑空气掩模，而非 abs(phi)）----------
         const weightedMat = new THREE.ShaderMaterial({
-            uniforms: { phi: { value: null }, resolution: { value: new THREE.Vector2(this.width, this.height) } },
+            uniforms: {
+                phi: { value: this.curPhiTex.texture },
+                eps: { value: eps }
+            },
             vertexShader: vs,
             fragmentShader: `
                 uniform sampler2D phi;
-                uniform vec2 resolution;
+                uniform float eps;
                 varying vec2 vUv;
                 void main() {
                     float phiVal = texture2D(phi, vUv).r;
-                    if (phiVal >= 0.0) {
-                        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-                    } else {
-                        float phiAbs = abs(phiVal);
-                        float wX = phiAbs * vUv.x;
-                        float wY = phiAbs * vUv.y;
-                        gl_FragColor = vec4(wX, wY, phiAbs, 1.0);
-                    }
+                    // 平滑水体掩模：phi < 0 时 weight → 1，过渡区平滑衰减
+                    float weight = 1.0 - smoothstep(-eps, eps, phiVal);
+                    gl_FragColor = vec4(weight * vUv.x, weight * vUv.y, weight, 1.0);
                 }
             `
         });
 
-        weightedMat.uniforms.phi.value = this.curPhiTex.texture;
-        weightedMat.uniforms.resolution.value = new THREE.Vector2(this.width, this.height);
+        // 渲染到 reduceTexPool[0]（该纹理尺寸为 this.width × this.height）
         this.renderFullscreen(weightedMat, this.reduceTexPool[0]);
         weightedMat.dispose();
 
-        // 阶段2: 逐级归约
+        // ---------- 阶段2：GPU 归约 ----------
         let currentWidth = this.width;
         let currentHeight = this.height;
         let reduceIdx = 0;
 
+        // 修正后的归约着色器（本地创建，不修改全局 reduceMat，避免影响其他归约）
+        const safeReduceMat = new THREE.ShaderMaterial({
+            uniforms: { inputTex: { value: null }, srcRes: { value: new THREE.Vector2(currentWidth, currentHeight) } },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D inputTex;
+                uniform vec2 srcRes;            // 当前归约输入纹理的真实分辨率
+                varying vec2 vUv;
+                void main() {
+                    vec2 d = vec2(1.0 / srcRes.x, 1.0 / srcRes.y);
+                    // 钳制 UV，防止"采样到重复边界像素"
+                    vec2 uv = min(vUv, vec2(1.0) - d);
+                    float v00 = texture2D(inputTex, uv).r;
+                    float v01 = texture2D(inputTex, uv + vec2(d.x, 0.0)).r;
+                    float v10 = texture2D(inputTex, uv + vec2(0.0, d.y)).r;
+                    float v11 = texture2D(inputTex, uv + d).r;
+                    float sum = v00 + v01 + v10 + v11;
+                    gl_FragColor = vec4(sum, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
         while (currentWidth > 1 || currentHeight > 1) {
-            const nextWidth = Math.ceil(currentWidth / 2);
-            const nextHeight = Math.ceil(currentHeight / 2);
+            const nextWidth = Math.max(1, Math.ceil(currentWidth / 2));
+            const nextHeight = Math.max(1, Math.ceil(currentHeight / 2));
             const nextTexIdx = reduceIdx + 1;
 
-            this.reduceMat.uniforms.resolution.value = new THREE.Vector2(currentWidth, currentHeight);
-            this.reduceMat.uniforms.inputTex.value = this.reduceTexPool[reduceIdx].texture;
-            this.renderFullscreen(this.reduceMat, this.reduceTexPool[nextTexIdx]);
+            safeReduceMat.uniforms.inputTex.value = this.reduceTexPool[reduceIdx].texture;
+            safeReduceMat.uniforms.srcRes.value = new THREE.Vector2(currentWidth, currentHeight);
+            this.renderFullscreen(safeReduceMat, this.reduceTexPool[nextTexIdx]);
 
             currentWidth = nextWidth;
             currentHeight = nextHeight;
             reduceIdx = nextTexIdx;
         }
+        safeReduceMat.dispose();
 
-        // 阶段3: 读取最终的 1x1 纹理值
+        // ---------- 阶段3：回读 1×1 纹理 ----------
         const pixelBuffer = new Float32Array(4);
         this.renderer.readRenderTargetPixels(this.reduceTexPool[reduceIdx], 0, 0, 1, 1, pixelBuffer);
 
         const sumPhiX = pixelBuffer[0];
         const sumPhiY = pixelBuffer[1];
-        const sumPhi = pixelBuffer[2];
+        const sumPhi  = pixelBuffer[2];
 
-        console.log(`[CentroidGPU] sumPhiX=${sumPhiX.toFixed(4)}, sumPhiY=${sumPhiY.toFixed(4)}, sumPhi=${sumPhi.toFixed(4)}, reduceIdx=${reduceIdx}`);
-
-        if (sumPhi < 0.0001) return null;
+        if (sumPhi < 0.0001) return null;      // 无水
 
         const uCenter = sumPhiX / sumPhi;
         const vCenter = sumPhiY / sumPhi;
-
         return new THREE.Vector2(uCenter, vCenter);
     }
 
@@ -1925,20 +1943,16 @@ export class FluidSimulator {
             const now = performance.now() / 1000;  // 转换为秒
             if (now - this.lastCenteringTime >= this.centeringInterval) {
                 this.lastCenteringTime = now;
-                // 使用 GPU 包围盒中心计算
+                // 使用包围盒中心计算（稳定可靠）
                 const currentCenter = this.computeFluidBoundingBoxCenter();
-                console.log(`[Centering] 当前质心: ${currentCenter ? `(${currentCenter.x.toFixed(4)}, ${currentCenter.y.toFixed(4)})` : 'null'}`);
                 if (currentCenter) {
                     const targetCenter = new THREE.Vector2(0.5, 0.5);
                     const rawOffset = new THREE.Vector2().subVectors(targetCenter, currentCenter);
-                    console.log(`[Centering] 原始偏移: (${rawOffset.x.toFixed(4)}, ${rawOffset.y.toFixed(4)})`);
                     // 一阶低通平滑，避免突然跳动（系数可调，0.2~0.5）
                     this.smoothedOffset.lerp(rawOffset, 0.3);
-                    console.log(`[Centering] 平滑后偏移: (${this.smoothedOffset.x.toFixed(4)}, ${this.smoothedOffset.y.toFixed(4)}), 长度: ${this.smoothedOffset.length().toFixed(4)}`);
 
                     // 只应用足够大的偏移，避免噪声（可根据分辨率调整阈值）
                     if (this.smoothedOffset.length() > 0.001) {
-                        console.log(`[Centering] 应用偏移到纹理`);
                         // 平移 phi 场
                         this.centeringPhiMat.uniforms.tex.value = this.curPhiTex.texture;
                         this.centeringPhiMat.uniforms.offset.value = this.smoothedOffset;
