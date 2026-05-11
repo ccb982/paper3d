@@ -198,8 +198,8 @@ export class FluidSimulator {
     private externalCamera: THREE.Camera | null = null;
     private fluidWorldBounds: THREE.Box3 = new THREE.Box3();
     private isVisibleInCamera: boolean = true;
-    private visibilityCheckInterval: number = 10;
-    private lastVisibilityCheckFrame: number = 0;
+    private visibilityCheckInterval: number = 0.5;  // 每0.5秒检查一次
+    private lastVisibilityCheckTime: number = 0;
     private cachedWorldCenter: THREE.Vector3 = new THREE.Vector3();
     private cachedWorldRadius: number = 0.5;
 
@@ -1792,7 +1792,7 @@ export class FluidSimulator {
 
         const realDelta = _deltaTime ?? this.params.timeStep;
 
-        if (!this.updateVisibilityIfNeeded()) {
+        if (!this.updateVisibilityIfNeeded(performance.now() / 1000)) {
             if (this.params.maxLifetime && this.params.maxLifetime > 0) {
                 this.updateAgeOnly(realDelta);
             }
@@ -2913,9 +2913,9 @@ export class FluidSimulator {
         return frustum.intersectsSphere(sphere);
     }
 
-    public updateVisibilityIfNeeded(): boolean {
-        if (this.frameCount - this.lastVisibilityCheckFrame >= this.visibilityCheckInterval) {
-            this.lastVisibilityCheckFrame = this.frameCount;
+    public updateVisibilityIfNeeded(currentTime: number): boolean {
+        if (currentTime - this.lastVisibilityCheckTime >= this.visibilityCheckInterval) {
+            this.lastVisibilityCheckTime = currentTime;
             this.isVisibleInCamera = this.checkVisibility();
             if (!this.isVisibleInCamera) {
                 console.log(`[FluidSimulator] 流体移出摄像机视野，暂停模拟计算`);

@@ -49,8 +49,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     // 可见性裁剪相关
     private externalCamera: THREE.Camera | null = null;
     private isVisibleInCamera: boolean = true;
-    private visibilityCheckInterval: number = 10;
-    private lastVisibilityCheckFrame: number = 0;
+    private visibilityCheckInterval: number = 0.5;  // 每0.5秒检查一次
+    private lastVisibilityCheckTime: number = 0;
     private cachedWorldRadius: number = 1.0;  // 小液滴的典型半径
 
     constructor(
@@ -248,7 +248,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         if (!this.simulator) return;
 
         // 可见性检测：不可见时跳过纹理模拟更新
-        const isVisible = this.updateVisibilityIfNeeded();
+        const isVisible = this.updateVisibilityIfNeeded(performance.now() / 1000);
         
         // 根据可见性和LOD控制纹理更新
         if (!isVisible || this.lod === FluidLOD.LOW) {
@@ -419,9 +419,9 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         return frustum.intersectsSphere(sphere);
     }
 
-    private updateVisibilityIfNeeded(): boolean {
-        if (this.frameCount - this.lastVisibilityCheckFrame >= this.visibilityCheckInterval) {
-            this.lastVisibilityCheckFrame = this.frameCount;
+    private updateVisibilityIfNeeded(currentTime: number): boolean {
+        if (currentTime - this.lastVisibilityCheckTime >= this.visibilityCheckInterval) {
+            this.lastVisibilityCheckTime = currentTime;
             const wasVisible = this.isVisibleInCamera;
             this.isVisibleInCamera = this.checkVisibility();
             if (wasVisible && !this.isVisibleInCamera) {
@@ -443,11 +443,20 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
     onDestroy(): void {
         super.onDestroy();
-        this.simulator.dispose();
-        this.mesh.geometry.dispose();
-        if (this.mesh.material instanceof THREE.ShaderMaterial) {
-            this.mesh.material.dispose();
+        // 先释放 mesh.material（它引用的是 simulator.getRenderMaterial() 返回的 renderMaterial）
+        // 由于 mesh.material 和 simulator.renderMaterial 是同一个对象，
+        // simulator.dispose() 也会释放它，所以需要先处理避免双重释放
+        const mat = this.mesh.material;
+        this.mesh.material = new THREE.MeshBasicMaterial(); // 临时替换为空白材质
+        if (mat instanceof THREE.ShaderMaterial) {
+            mat.dispose();
+        } else if (mat instanceof THREE.Material) {
+            mat.dispose();
         }
+        // 再释放几何体
+        this.mesh.geometry.dispose();
+        // 最后释放 simulator（会释放内部所有纹理和材质，包括原来的 renderMaterial）
+        this.simulator.dispose();
     }
 
     // ==================== IFluidForceTarget 接口实现 ====================
