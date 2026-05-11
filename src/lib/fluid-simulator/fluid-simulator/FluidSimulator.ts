@@ -155,6 +155,12 @@ export class FluidSimulator {
     private waterVelInitMat!: THREE.ShaderMaterial;          // 水花速度初始化着色器
     private ageResetMat!: THREE.ShaderMaterial;              // 年龄重置着色器
 
+    // 注入/脉冲相关材质（预缓存，避免每帧创建）
+    private velocityImpulseMat!: THREE.ShaderMaterial;       // 全局速度脉冲
+    private localVelocityImpulseMat!: THREE.ShaderMaterial;  // 局部速度脉冲
+    private divergenceImpulseMat!: THREE.ShaderMaterial;     // 散度脉冲
+    private waterImpulseMat!: THREE.ShaderMaterial;          // 水脉冲
+
     // 流体年龄纹理（用于定时消散）
     private ageTexA!: THREE.WebGLRenderTarget;
     private ageTexB!: THREE.WebGLRenderTarget;
@@ -1763,6 +1769,114 @@ export class FluidSimulator {
                 }
             `
         });
+
+        // ==================== 注入/脉冲相关材质（预缓存，避免每帧创建）====================
+
+        // 全局速度脉冲着色器
+        this.velocityImpulseMat = new THREE.ShaderMaterial({
+            uniforms: {
+                curVel: { value: null },
+                impulse: { value: new THREE.Vector2(0.0, 0.0) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D curVel;
+                uniform vec2 impulse;
+                varying vec2 vUv;
+                void main() {
+                    vec4 oldVel = texture2D(curVel, vUv);
+                    vec2 newVel = oldVel.rg + impulse;
+                    gl_FragColor = vec4(newVel, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 局部速度脉冲着色器（带半径限制和速度上限）
+        this.localVelocityImpulseMat = new THREE.ShaderMaterial({
+            uniforms: {
+                curVel: { value: null },
+                impulse: { value: new THREE.Vector2(0.0, 0.0) },
+                radius: { value: 0.2 },
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                maxSpeed: { value: 2.0 }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D curVel;
+                uniform vec2 impulse;
+                uniform float radius;
+                uniform vec2 center;
+                uniform float maxSpeed;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    vec4 oldVel = texture2D(curVel, vUv);
+                    vec2 addedVel = impulse * mask;
+                    
+                    // 只对新增的速度分量应用速度限制，保留原始速度不变
+                    float addedSpeed = length(addedVel);
+                    if (addedSpeed > maxSpeed) {
+                        addedVel = normalize(addedVel) * maxSpeed;
+                    }
+                    
+                    vec2 newVel = oldVel.rg + addedVel;
+                    gl_FragColor = vec4(newVel, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 散度脉冲着色器
+        this.divergenceImpulseMat = new THREE.ShaderMaterial({
+            uniforms: {
+                divergence: { value: 0.0 },
+                radius: { value: 0.2 },
+                center: { value: new THREE.Vector2(0.5, 0.5) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float divergence;
+                uniform float radius;
+                uniform vec2 center;
+                varying vec2 vUv;
+                void main() {
+                    float d = distance(vUv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, d);
+                    float S = divergence * mask;
+                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 水脉冲着色器（向 phi 场添加水）
+        this.waterImpulseMat = new THREE.ShaderMaterial({
+            uniforms: {
+                amount: { value: 0.1 },
+                radius: { value: 0.2 },
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                phiTex: { value: null }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float amount;
+                uniform float radius;
+                uniform vec2 center;
+                uniform sampler2D phiTex;
+                varying vec2 vUv;
+                void main() {
+                    vec2 uv = vUv;
+                    float phi = texture2D(phiTex, uv).r;
+                    float dist = distance(uv, center);
+                    float mask = 1.0 - smoothstep(0.0, radius, dist);
+                    
+                    // amount > 0: 添加水（phi 变小，让更多区域变为水）
+                    // amount < 0: 移除水（phi 变大，让更多区域变为空气）
+                    phi -= amount * mask;
+                    
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
     }
 
     // ==================== 更新流程 ====================
@@ -2264,30 +2378,12 @@ export class FluidSimulator {
      * @param cy 中心Y（UV空间）
      */
     public addDivergenceImpulse(divergence: number, radius: number = 0.2, cx: number = 0.5, cy: number = 0.5): void {
-        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-        const divMat = new THREE.ShaderMaterial({
-            uniforms: {
-                divergence: { value: divergence },
-                radius: { value: radius },
-                center: { value: new THREE.Vector2(cx, cy) }
-            },
-            vertexShader: vs,
-            fragmentShader: `
-                uniform float divergence;
-                uniform float radius;
-                uniform vec2 center;
-                varying vec2 vUv;
-                void main() {
-                    float d = distance(vUv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, d);
-                    float S = divergence * mask;
-                    gl_FragColor = vec4(S, 0.0, 0.0, 1.0);
-                }
-            `
-        });
+        // 使用预创建的材质，更新 uniform 值
+        this.divergenceImpulseMat.uniforms.divergence.value = divergence;
+        this.divergenceImpulseMat.uniforms.radius.value = radius;
+        this.divergenceImpulseMat.uniforms.center.value.set(cx, cy);
         
-        this.renderFullscreen(divMat, this.explosionDivTex, false);
-        divMat.dispose();
+        this.renderFullscreen(this.divergenceImpulseMat, this.explosionDivTex, false);
     }
 
     /**
@@ -2303,43 +2399,15 @@ export class FluidSimulator {
         cx: number = 0.5, 
         cy: number = 0.5
     ): void {
-        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-        
-        // 使用 phi 更新着色器来添加水
-        const waterMat = new THREE.ShaderMaterial({
-            uniforms: {
-                phiTex: { value: this.curPhiTex.texture },
-                amount: { value: amount },
-                radius: { value: radius },
-                center: { value: new THREE.Vector2(cx, cy) }
-            },
-            vertexShader: vs,
-            fragmentShader: `
-                uniform sampler2D phiTex;
-                uniform float amount;
-                uniform float radius;
-                uniform vec2 center;
-                varying vec2 vUv;
-                
-                void main() {
-                    float d = distance(vUv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, d);
-                    
-                    float phi = texture2D(phiTex, vUv).r;
-                    
-                    // amount > 0: 添加水（phi 变小，让更多区域变为水）
-                    // amount < 0: 移除水（phi 变大，让更多区域变为空气）
-                    phi -= amount * mask;
-                    
-                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
-                }
-            `
-        });
+        // 使用预创建的材质，更新 uniform 值
+        this.waterImpulseMat.uniforms.phiTex.value = this.curPhiTex.texture;
+        this.waterImpulseMat.uniforms.amount.value = amount;
+        this.waterImpulseMat.uniforms.radius.value = radius;
+        this.waterImpulseMat.uniforms.center.value.set(cx, cy);
         
         // 渲染到 phi 双缓冲
         const targetTex = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
-        this.renderFullscreen(waterMat, targetTex, false);
-        waterMat.dispose();
+        this.renderFullscreen(this.waterImpulseMat, targetTex, false);
         
         // 交换 phi 缓冲区
         this.curPhiTex = targetTex;
@@ -2483,67 +2551,26 @@ export class FluidSimulator {
     }
 
     public addVelocityImpulse(dvx: number, dvy: number): void {
-        const impulseMat = new THREE.ShaderMaterial({
-            uniforms: {
-                curVel: { value: this.curVelTex.texture },
-                impulse: { value: new THREE.Vector2(dvx, dvy) }
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `
-                uniform sampler2D curVel;
-                uniform vec2 impulse;
-                varying vec2 vUv;
-                void main() {
-                    vec4 oldVel = texture2D(curVel, vUv);
-                    vec2 newVel = oldVel.rg + impulse;
-                    gl_FragColor = vec4(newVel, 0.0, 1.0);
-                }
-            `
-        });
+        // 使用预创建的材质，更新 uniform 值
+        this.velocityImpulseMat.uniforms.curVel.value = this.curVelTex.texture;
+        this.velocityImpulseMat.uniforms.impulse.value.set(dvx, dvy);
+        
         const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
-        this.renderFullscreen(impulseMat, velDst);
+        this.renderFullscreen(this.velocityImpulseMat, velDst);
         this.curVelTex = velDst;
-        impulseMat.dispose();
     }
 
     public addLocalVelocityImpulse(dvx: number, dvy: number, radius: number = 0.2, cx: number = 0.5, cy: number = 0.5, maxSpeed: number = 2.0): void {
-        const impulseMat = new THREE.ShaderMaterial({
-            uniforms: {
-                curVel: { value: this.curVelTex.texture },
-                impulse: { value: new THREE.Vector2(dvx, dvy) },
-                radius: { value: radius },
-                center: { value: new THREE.Vector2(cx, cy) },
-                maxSpeed: { value: maxSpeed }
-            },
-            vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `
-                uniform sampler2D curVel;
-                uniform vec2 impulse;
-                uniform float radius;
-                uniform vec2 center;
-                uniform float maxSpeed;
-                varying vec2 vUv;
-                void main() {
-                    float d = distance(vUv, center);
-                    float mask = 1.0 - smoothstep(0.0, radius, d);
-                    vec4 oldVel = texture2D(curVel, vUv);
-                    vec2 addedVel = impulse * mask;
-                    
-                    // 只对新增的速度分量应用速度限制，保留原始速度不变
-                    float addedSpeed = length(addedVel);
-                    if (addedSpeed > maxSpeed) {
-                        addedVel = normalize(addedVel) * maxSpeed;
-                    }
-                    
-                    vec2 newVel = oldVel.rg + addedVel;
-                    gl_FragColor = vec4(newVel, 0.0, 1.0);
-                }
-            `
-        });
+        // 使用预创建的材质，更新 uniform 值
+        this.localVelocityImpulseMat.uniforms.curVel.value = this.curVelTex.texture;
+        this.localVelocityImpulseMat.uniforms.impulse.value.set(dvx, dvy);
+        this.localVelocityImpulseMat.uniforms.radius.value = radius;
+        this.localVelocityImpulseMat.uniforms.center.value.set(cx, cy);
+        this.localVelocityImpulseMat.uniforms.maxSpeed.value = maxSpeed;
+        
         const velDst = this.curVelTex === this.velTexA ? this.velTexB : this.velTexA;
-        this.renderFullscreen(impulseMat, velDst);
+        this.renderFullscreen(this.localVelocityImpulseMat, velDst);
         this.curVelTex = velDst;
-        impulseMat.dispose();
     }
 
     public setInjectionEnabled(enabled: boolean): void {
@@ -2973,7 +3000,12 @@ export class FluidSimulator {
             this.explosionDivMat,
             this.waterGenMat,
             this.waterVelInitMat,
-            this.ageResetMat
+            this.ageResetMat,
+            // 脉冲注入相关材质
+            this.velocityImpulseMat,
+            this.localVelocityImpulseMat,
+            this.divergenceImpulseMat,
+            this.waterImpulseMat
         ];
         materials.forEach(m => m?.dispose());
         
