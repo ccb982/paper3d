@@ -3,8 +3,8 @@ import { FluidSimulator } from '@lib/fluid-simulator/fluid-simulator';
 import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import type { ITextureGenerator } from './TextureManager';
 import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
-import { FluidFragmentSystem } from '@entities/fluid';
-import { EntityManager } from '@core/EntityManager';
+// import { FluidFragmentSystem } from '@entities/fluid';
+// import { EntityManager } from '@core/EntityManager';
 
 export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarget {
     type: 'shader' = 'shader';
@@ -19,9 +19,9 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     private isExplosionBoosted: boolean = false;
     private pendingForces: FluidExternalForce[] = [];
     
-    // 水面分裂相关
-    private entityManager: EntityManager | null = null;
-    private fragmentSystem: FluidFragmentSystem | null = null;
+    // // 水面分裂相关（已注释）
+    // private entityManager: EntityManager | null = null;
+    // private fragmentSystem: FluidFragmentSystem | null = null;
 
     constructor(
         renderer: THREE.WebGLRenderer,
@@ -119,10 +119,10 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
                 this.isExplosionBoosted = false;
                 this.explosionFrameCount = 0;
                 
-                // 爆炸结束后触发水面分裂测试
-                if (this.fragmentSystem) {
-                    this.splitWater();
-                }
+                // // 爆炸结束后触发水面分裂测试（已注释）
+                // if (this.fragmentSystem) {
+                //     this.splitWater();
+                // }
             }
         }
 
@@ -227,44 +227,44 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
         this.simulator.explode(0.5, 0.5, 0.15, 25000, false, 0.1);
     }
     
-    /**
-     * 初始化水面分裂系统
-     * @param entityManager 实体管理器
-     */
-    public initFragmentSystem(entityManager: EntityManager): void {
-        this.entityManager = entityManager;
-        this.fragmentSystem = new FluidFragmentSystem(
-            this.simulator,
-            entityManager,
-            (uv) => {
-                // UV转世界坐标（假设水面在XY平面，UV 0~1对应世界坐标 -5~5）
-                return new THREE.Vector3(uv.x * 10 - 5, uv.y * 10 - 5, 0);
-            }
-        );
-        console.log('[FluidSimulatorAdapter] 水面分裂系统已初始化');
-    }
+    // /**
+    //  * 初始化水面分裂系统（已注释）
+    //  * @param entityManager 实体管理器
+    //  */
+    // public initFragmentSystem(entityManager: EntityManager): void {
+    //     this.entityManager = entityManager;
+    //     this.fragmentSystem = new FluidFragmentSystem(
+    //         this.simulator,
+    //         entityManager,
+    //         (uv) => {
+    //             // UV转世界坐标（假设水面在XY平面，UV 0~1对应世界坐标 -5~5）
+    //             return new THREE.Vector3(uv.x * 10 - 5, uv.y * 10 - 5, 0);
+    //         }
+    //     );
+    //     console.log('[FluidSimulatorAdapter] 水面分裂系统已初始化');
+    // }
     
-    /**
-     * 执行水面分裂（测试用）
-     * 在中心位置分裂水面，产生多个小水滴碎片
-     */
-    public splitWater(): void {
-        if (!this.fragmentSystem) {
-            console.warn('[FluidSimulatorAdapter] 请先调用 initFragmentSystem() 初始化分裂系统');
-            return;
-        }
+    // /**
+    //  * 执行水面分裂（测试用，已注释）
+    //  * 在中心位置分裂水面，产生多个小水滴碎片
+    //  */
+    // public splitWater(): void {
+    //     if (!this.fragmentSystem) {
+    //         console.warn('[FluidSimulatorAdapter] 请先调用 initFragmentSystem() 初始化分裂系统');
+    //         return;
+    //     }
         
-        // 在中心位置执行分裂
-        const fragments = this.fragmentSystem.explode(
-            0.5,      // 中心X (UV坐标)
-            0.5,      // 中心Y (UV坐标)
-            0.2,      // 分裂半径
-            8.0,      // 爆炸强度
-            6         // 分裂成6个碎片
-        );
+    //     // 在中心位置执行分裂
+    //     const fragments = this.fragmentSystem.explode(
+    //         0.5,      // 中心X (UV坐标)
+    //         0.5,      // 中心Y (UV坐标)
+    //         0.2,      // 分裂半径
+    //         8.0,      // 爆炸强度
+    //         6         // 分裂成6个碎片
+    //     );
         
-        console.log(`[FluidSimulatorAdapter] 水面分裂完成，创建了 ${fragments.length} 个碎片`);
-    }
+    //     console.log(`[FluidSimulatorAdapter] 水面分裂完成，创建了 ${fragments.length} 个碎片`);
+    // }
     
     dispose(): void {
         // material 是从 simulator 获取的引用，由 simulator.dispose() 统一释放

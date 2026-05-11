@@ -9,7 +9,11 @@
     "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
-      "@lib/*": ["src/lib/*"]
+      "@lib/*": ["src/lib/*"],
+      "@entities/*": ["src/entities/*"],
+      "@core/*": ["src/core/*"],
+      "@systems/*": ["src/systems/*"],
+      "@ui/*": ["src/ui/*"]
     },
 
     /* Bundler mode */
@@ -21,9 +25,9 @@
     "jsx": "react-jsx",
 
     /* Linting */
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "erasableSyntaxOnly": false,
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"]

@@ -46,6 +46,13 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private expandChoice: boolean = true;      // 当前选择：true=膨胀，false=收缩
     private expandChoiceFrames: number = 0;   // 当前选择已持续帧数
 
+    // 可见性裁剪相关
+    private externalCamera: THREE.Camera | null = null;
+    private isVisibleInCamera: boolean = true;
+    private visibilityCheckInterval: number = 10;
+    private lastVisibilityCheckFrame: number = 0;
+    private cachedWorldRadius: number = 1.0;  // 小液滴的典型半径
+
     constructor(
         id: string, 
         renderer: THREE.WebGLRenderer, 
@@ -116,10 +123,15 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         if (initialPosition) {
             this.mesh.position.copy(initialPosition);
             this.position.copy(initialPosition);
+            // 设置模拟器的世界变换用于可见性检测
+            this.simulator.setWorldTransform(initialPosition, displayScale * 0.5);
         }
         
         // 碰撞半径也根据水量计算
         this.radius = displayScale * 0.5;
+        
+        // 设置小液滴的可见性检测半径
+        this.cachedWorldRadius = displayScale * 0.5;
     }
 
     /**
@@ -222,13 +234,33 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         // 重置外部加速度（每帧重新累积）
         this.externalAccel.set(0, 0, 0);
 
-        // 位置更新（始终执行，不受LOD影响）
+        // 位置更新（始终执行，不受LOD和可见性影响）
         this.mesh.position.x += this.worldVelocity.x * delta;
         this.mesh.position.y += this.worldVelocity.y * delta;
         this.mesh.position.z += this.worldVelocity.z * delta;
         this.position.copy(this.mesh.position);
 
+        // 更新模拟器的世界位置（用于可见性检测）
+        if (this.simulator) {
+            this.simulator.setWorldTransform(this.mesh.position, this.cachedWorldRadius);
+        }
+
         if (!this.simulator) return;
+
+        // 可见性检测：不可见时跳过纹理模拟更新
+        const isVisible = this.updateVisibilityIfNeeded();
+        
+        // 根据可见性和LOD控制纹理更新
+        if (!isVisible || this.lod === FluidLOD.LOW) {
+            this.simulator.setTextureUpdateEnabled(false);
+            this.mesh.visible = true;
+            // 如果不可见，跳过模拟更新但保留渲染
+            if (!isVisible) {
+                return;
+            }
+        } else {
+            this.simulator.setTextureUpdateEnabled(true);
+        }
 
         // 根据LOD获取模拟更新间隔
         const simInterval = this.getSimInterval();
@@ -281,11 +313,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             this.simUpdateAccumulated -= actualSubsteps * this.simTimeStep;
         }
 
-        // 纹理更新控制：LOW级别冻结纹理
-        if (this.lod === FluidLOD.LOW) {
-            this.simulator.setTextureUpdateEnabled(false);
-        } else {
-            this.simulator.setTextureUpdateEnabled(true);
+        // 纹理更新控制：更新材质引用（如果LOD不是LOW且可见）
+        if (this.isVisibleInCamera && this.lod !== FluidLOD.LOW) {
             const newMaterial = this.simulator.getRenderMaterial();
             if (this.mesh.material !== newMaterial) {
                 if (this.mesh.material instanceof THREE.ShaderMaterial) {
@@ -358,6 +387,50 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
     public setVelocity(velocity: THREE.Vector3): void {
         this.worldVelocity.copy(velocity);
+    }
+
+    public setCamera(camera: THREE.Camera): void {
+        this.externalCamera = camera;
+        this.simulator.setCamera(camera);
+    }
+
+    public setWorldRadius(radius: number): void {
+        this.cachedWorldRadius = radius;
+    }
+
+    public getIsVisible(): boolean {
+        return this.isVisibleInCamera;
+    }
+
+    private checkVisibility(): boolean {
+        if (!this.externalCamera) {
+            return true;
+        }
+
+        const frustum = new THREE.Frustum();
+        const projScreenMatrix = new THREE.Matrix4();
+        projScreenMatrix.multiplyMatrices(
+            this.externalCamera.projectionMatrix,
+            this.externalCamera.matrixWorldInverse
+        );
+        frustum.setFromProjectionMatrix(projScreenMatrix);
+
+        const sphere = new THREE.Sphere(this.mesh.position, this.cachedWorldRadius);
+        return frustum.intersectsSphere(sphere);
+    }
+
+    private updateVisibilityIfNeeded(): boolean {
+        if (this.frameCount - this.lastVisibilityCheckFrame >= this.visibilityCheckInterval) {
+            this.lastVisibilityCheckFrame = this.frameCount;
+            const wasVisible = this.isVisibleInCamera;
+            this.isVisibleInCamera = this.checkVisibility();
+            if (wasVisible && !this.isVisibleInCamera) {
+                console.log(`[LightFluidEntity] 液滴 ${this.id} 移出视野，暂停模拟`);
+            } else if (!wasVisible && this.isVisibleInCamera) {
+                console.log(`[LightFluidEntity] 液滴 ${this.id} 进入视野，恢复模拟`);
+            }
+        }
+        return this.isVisibleInCamera;
     }
 
     public isEmpty(): boolean {

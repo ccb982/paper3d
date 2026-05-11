@@ -194,6 +194,15 @@ export class FluidSimulator {
     private centeringPhiMat: THREE.ShaderMaterial;
     private centeringVelMat: THREE.ShaderMaterial;
 
+    // 可见性裁剪相关
+    private externalCamera: THREE.Camera | null = null;
+    private fluidWorldBounds: THREE.Box3 = new THREE.Box3();
+    private isVisibleInCamera: boolean = true;
+    private visibilityCheckInterval: number = 10;
+    private lastVisibilityCheckFrame: number = 0;
+    private cachedWorldCenter: THREE.Vector3 = new THREE.Vector3();
+    private cachedWorldRadius: number = 0.5;
+
     constructor(renderer: THREE.WebGLRenderer, params: FluidParams) {
         this.renderer = renderer;
         this.params = params;
@@ -1757,8 +1766,39 @@ export class FluidSimulator {
     }
 
     // ==================== 更新流程 ====================
+
+    private updateAgeOnly(realDelta: number): void {
+        if (!this.params.maxLifetime || this.params.maxLifetime <= 0) return;
+
+        const ageAdvectionDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+        this.ageAdvectionMat.uniforms.age.value = this.curAgeTex.texture;
+        this.ageAdvectionMat.uniforms.velocity.value = this.curVelTex.texture;
+        this.ageAdvectionMat.uniforms.levelset.value = this.curPhiTex.texture;
+        this.ageAdvectionMat.uniforms.dt.value = this.params.timeStep;
+        this.renderFullscreen(this.ageAdvectionMat, ageAdvectionDst);
+        this.curAgeTex = ageAdvectionDst;
+
+        const ageUpdateDst = this.curAgeTex === this.ageTexA ? this.ageTexB : this.ageTexA;
+        this.ageUpdateMat.uniforms.age.value = this.curAgeTex.texture;
+        this.ageUpdateMat.uniforms.levelset.value = this.curPhiTex.texture;
+        this.ageUpdateMat.uniforms.injectionEnabled.value = false;
+        this.ageUpdateMat.uniforms.dt.value = realDelta;
+        this.renderFullscreen(this.ageUpdateMat, ageUpdateDst);
+        this.curAgeTex = ageUpdateDst;
+    }
+
     public update(_deltaTime?: number): void {
         if (!this.initialized) return;
+
+        const realDelta = _deltaTime ?? this.params.timeStep;
+
+        if (!this.updateVisibilityIfNeeded()) {
+            if (this.params.maxLifetime && this.params.maxLifetime > 0) {
+                this.updateAgeOnly(realDelta);
+            }
+            this.frameCount++;
+            return;
+        }
 
         // 辅助函数：更新注入相关的 uniform
         const updateInjectionUniforms = (mat: THREE.ShaderMaterial) => {
@@ -2837,6 +2877,51 @@ export class FluidSimulator {
     public setLightDirection(dir: THREE.Vector3): void {
         this.lightDir = dir.clone().normalize();
         this.renderMaterial.uniforms.lightDir.value = this.lightDir;
+    }
+
+    public setWorldTransform(center: THREE.Vector3, radius: number): void {
+        this.cachedWorldCenter.copy(center);
+        this.cachedWorldRadius = radius;
+        this.fluidWorldBounds.setFromCenterAndSize(
+            center,
+            new THREE.Vector3(radius * 2, radius * 2, radius * 2)
+        );
+    }
+
+    public setCamera(camera: THREE.Camera): void {
+        this.externalCamera = camera;
+    }
+
+    public getIsVisible(): boolean {
+        return this.isVisibleInCamera;
+    }
+
+    private checkVisibility(): boolean {
+        if (!this.externalCamera) {
+            return true;
+        }
+
+        const frustum = new THREE.Frustum();
+        const projScreenMatrix = new THREE.Matrix4();
+        projScreenMatrix.multiplyMatrices(
+            this.externalCamera.projectionMatrix,
+            this.externalCamera.matrixWorldInverse
+        );
+        frustum.setFromProjectionMatrix(projScreenMatrix);
+
+        const sphere = new THREE.Sphere(this.cachedWorldCenter, this.cachedWorldRadius);
+        return frustum.intersectsSphere(sphere);
+    }
+
+    public updateVisibilityIfNeeded(): boolean {
+        if (this.frameCount - this.lastVisibilityCheckFrame >= this.visibilityCheckInterval) {
+            this.lastVisibilityCheckFrame = this.frameCount;
+            this.isVisibleInCamera = this.checkVisibility();
+            if (!this.isVisibleInCamera) {
+                console.log(`[FluidSimulator] 流体移出摄像机视野，暂停模拟计算`);
+            }
+        }
+        return this.isVisibleInCamera;
     }
 
     public dispose(): void {
