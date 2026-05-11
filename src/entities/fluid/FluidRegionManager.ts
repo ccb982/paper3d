@@ -1,13 +1,9 @@
 import * as THREE from 'three';
 import { EntityManager } from '@core/EntityManager';
 import { LightFluidEntity } from './LightFluidEntity';
+import { FluidLOD } from './FluidTypes';
 
-export enum FluidLOD {
-  HIGH   = 0,   // 每帧更新模拟 + 纹理刷新
-  MEDIUM = 1,   // 每2帧更新模拟 + 纹理刷新
-  LOW    = 2,   // 每4帧更新模拟，不刷新纹理（冻结画面）
-  OFF    = 3    // 完全不更新
-}
+export { FluidLOD };
 
 export class FluidRegionManager {
   private entities: LightFluidEntity[] = [];

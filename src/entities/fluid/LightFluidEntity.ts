@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { FluidSimulator } from '@lib/fluid-simulator/fluid-simulator';
 import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import { Entity } from '@core/Entity';
-import { FluidLOD } from './FluidRegionManager';
+import { FluidLOD } from './FluidTypes';
 import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
 
 /**

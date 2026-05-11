@@ -54,7 +54,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             flowIntensity: 0.3,
             lightDir: new THREE.Vector3(0.5, 1.0, 0.3).normalize(),
             // 纹理居中追踪参数
-            enableCentering: false,    // 关闭纹理居中追踪
+            enableCentering: false,     // 开启纹理居中追踪（GPU质心计算，避免回读）
+            centeringInterval: 0.5,    // 每0.5秒计算一次质心并居中
             ...params
         };
         

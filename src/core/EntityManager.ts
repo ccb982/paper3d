@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { Entity } from './Entity';
-// 延迟导入以避免循环依赖
+import { FluidLOD } from '@entities/fluid';
+// 延迟导入 FluidRegionManager 类本身（仍需动态导入避免循环）
 let FluidRegionManager: typeof import('@entities/fluid').FluidRegionManager;
-let FluidLOD: typeof import('@entities/fluid').FluidLOD;
 
 /**
  * 实体管理器 - 管理所有实体的生命周期
@@ -73,11 +73,10 @@ export class EntityManager {
   private async initDefaultFluidRegion(): Promise<void> {
     if (!this.renderer) return;
     
-    // 动态导入以避免循环依赖
+    // 动态导入 FluidRegionManager 类本身（仍需动态导入避免循环）
     if (!FluidRegionManager) {
       const module = await import('@entities/fluid');
       FluidRegionManager = module.FluidRegionManager;
-      FluidLOD = module.FluidLOD;
     }
     
     // 创建流体区域管理器，中心在原点，半径2.0，最多10个液滴

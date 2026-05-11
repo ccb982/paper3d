@@ -1101,6 +1101,8 @@ export class FluidSimulator {
         const sumPhiY = pixelBuffer[1];
         const sumPhi = pixelBuffer[2];
 
+        console.log(`[CentroidGPU] sumPhiX=${sumPhiX.toFixed(4)}, sumPhiY=${sumPhiY.toFixed(4)}, sumPhi=${sumPhi.toFixed(4)}, reduceIdx=${reduceIdx}`);
+
         if (sumPhi < 0.0001) return null;
 
         const uCenter = sumPhiX / sumPhi;
@@ -1923,16 +1925,20 @@ export class FluidSimulator {
             const now = performance.now() / 1000;  // 转换为秒
             if (now - this.lastCenteringTime >= this.centeringInterval) {
                 this.lastCenteringTime = now;
-                // 使用 GPU 质心计算，避免回读大数据
-                const currentCenter = this.computeFluidCentroidGPU();
+                // 使用 GPU 包围盒中心计算
+                const currentCenter = this.computeFluidBoundingBoxCenter();
+                console.log(`[Centering] 当前质心: ${currentCenter ? `(${currentCenter.x.toFixed(4)}, ${currentCenter.y.toFixed(4)})` : 'null'}`);
                 if (currentCenter) {
                     const targetCenter = new THREE.Vector2(0.5, 0.5);
                     const rawOffset = new THREE.Vector2().subVectors(targetCenter, currentCenter);
+                    console.log(`[Centering] 原始偏移: (${rawOffset.x.toFixed(4)}, ${rawOffset.y.toFixed(4)})`);
                     // 一阶低通平滑，避免突然跳动（系数可调，0.2~0.5）
                     this.smoothedOffset.lerp(rawOffset, 0.3);
+                    console.log(`[Centering] 平滑后偏移: (${this.smoothedOffset.x.toFixed(4)}, ${this.smoothedOffset.y.toFixed(4)}), 长度: ${this.smoothedOffset.length().toFixed(4)}`);
 
                     // 只应用足够大的偏移，避免噪声（可根据分辨率调整阈值）
                     if (this.smoothedOffset.length() > 0.001) {
+                        console.log(`[Centering] 应用偏移到纹理`);
                         // 平移 phi 场
                         this.centeringPhiMat.uniforms.tex.value = this.curPhiTex.texture;
                         this.centeringPhiMat.uniforms.offset.value = this.smoothedOffset;
