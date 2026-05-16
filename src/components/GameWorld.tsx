@@ -488,6 +488,17 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     // 注册当前操控角色到管理器
     playerCharacterManager.setCurrentCharacter(playerEntity);
     
+    // 在出生点附近创建一次爆炸效果（延迟1秒后触发）
+    setTimeout(() => {
+      const explosionPosition = new THREE.Vector3(0, 3, 0); // 玩家脚下附近
+      entityManager.createExplosion(
+        `spawn-explosion-${Date.now()}`,
+        explosionPosition,
+        8.0 // 爆炸影响范围8米
+      );
+      console.log('爆炸效果已在出生点附近创建:', explosionPosition);
+    }, 1000);
+    
     // 初始化碰撞管理器
     const collisionManager = CollisionManager.getInstance();
     

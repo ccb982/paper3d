@@ -1,35 +1,35 @@
-import {
+import type {
   ExplosionParams,
   PhysicalState,
   ExplosionProfiles,
-  DEFAULT_EXPLOSION_PARAMS,
 } from './types';
+import { DEFAULT_EXPLOSION_PARAMS } from './types';
 
 export class Explosion1DSolver {
   private static MAX_SUBSTEPS = 2000;
   private static GAS_CONSTANT = 287.058;
 
-  private gamma: number;
-  private cfl: number;
-  private shockThreshold: number;
-  private N: number;
-  private r: Float64Array;
-  private rHalf: Float64Array;
-  private dr: Float64Array;
-  private volume: Float64Array;
-  private area: Float64Array;
-  private U: Float64Array[];
-  private Unew: Float64Array[];
-  private rho: Float64Array;
-  private u: Float64Array;
-  private p: Float64Array;
-  private T: Float64Array;
+  private gamma: number = 1.4;
+  private cfl: number = 0.4;
+  private shockThreshold: number = 1.5;
+  private N: number = 256;
+  private r: Float64Array = new Float64Array(0);
+  private rHalf: Float64Array = new Float64Array(0);
+  private dr: Float64Array = new Float64Array(0);
+  private volume: Float64Array = new Float64Array(0);
+  private area: Float64Array = new Float64Array(0);
+  private U: Float64Array[] = [];
+  private Unew: Float64Array[] = [];
+  private rho: Float64Array = new Float64Array(0);
+  private u: Float64Array = new Float64Array(0);
+  private p: Float64Array = new Float64Array(0);
+  private T: Float64Array = new Float64Array(0);
   private t: number = 0;
   private active: boolean = true;
   private shockRadius: number = 0;
-  private ambientRho: number;
-  private ambientP: number;
-  private ambientT: number;
+  private ambientRho: number = 1.225;
+  private ambientP: number = 101325;
+  private ambientT: number = 288.15;
 
   constructor(params: ExplosionParams) {
     const p = { ...DEFAULT_EXPLOSION_PARAMS, ...params };
@@ -112,7 +112,8 @@ export class Explosion1DSolver {
     const smoothWidth = r0 * 0.3;
     for (let i = 0; i < this.N; i++) {
       const rVal = this.r[i];
-      const coeff = rVal <= r0 ? 1.0 : Math.exp(-((rVal - r0) / smoothWidth) ** 2);
+      const diff = (rVal - r0) / smoothWidth;
+      const coeff = rVal <= r0 ? 1.0 : Math.exp(-(diff ** 2));
       this.p[i] = P_inside * coeff + this.ambientP * (1 - coeff);
       this.rho[i] = this.ambientRho * (1.0 + 0.5 * coeff);
       this.u[i] = 0;
@@ -270,10 +271,12 @@ export class Explosion1DSolver {
       const p = this.p[i];
       const E = this.U[2][i];
       const rInv = this.r[i] > 1e-4 ? 2.0 / this.r[i] : 0.0;
-      const source = -rInv * [rho * u, rho * u * u, u * (E + p)];
-      for (let k = 0; k < 3; k++) {
-        this.Unew[k][i] = this.U[k][i] + 0.5 * dt * source[k];
-      }
+      const source0 = -rInv * rho * u;
+      const source1 = -rInv * rho * u * u;
+      const source2 = -rInv * u * (E + p);
+      this.Unew[0][i] = this.U[0][i] + 0.5 * dt * source0;
+      this.Unew[1][i] = this.U[1][i] + 0.5 * dt * source1;
+      this.Unew[2][i] = this.U[2][i] + 0.5 * dt * source2;
     }
     [this.U, this.Unew] = [this.Unew, this.U];
     for (let i = 0; i < this.N; i++) this.consToPrim(i);
@@ -329,10 +332,12 @@ export class Explosion1DSolver {
       const p = this.p[i];
       const E = this.U[2][i];
       const rInv = this.r[i] > 1e-4 ? 2.0 / this.r[i] : 0.0;
-      const source = -rInv * [rho * u, rho * u * u, u * (E + p)];
-      for (let k = 0; k < 3; k++) {
-        this.Unew[k][i] = this.U[k][i] + 0.5 * dt * source[k];
-      }
+      const source0 = -rInv * rho * u;
+      const source1 = -rInv * rho * u * u;
+      const source2 = -rInv * u * (E + p);
+      this.Unew[0][i] = this.U[0][i] + 0.5 * dt * source0;
+      this.Unew[1][i] = this.U[1][i] + 0.5 * dt * source1;
+      this.Unew[2][i] = this.U[2][i] + 0.5 * dt * source2;
     }
     [this.U, this.Unew] = [this.Unew, this.U];
     this.applyBC();
@@ -451,16 +456,17 @@ export class Explosion1DSolver {
   }
 
   public destroy(): void {
+    this.active = false;
     this.U = [];
     this.Unew = [];
-    this.rho = null!;
-    this.u = null!;
-    this.p = null!;
-    this.T = null!;
-    this.r = null!;
-    this.rHalf = null!;
-    this.dr = null!;
-    this.volume = null!;
-    this.area = null!;
+    this.rho = undefined as any;
+    this.u = undefined as any;
+    this.p = undefined as any;
+    this.T = undefined as any;
+    this.r = undefined as any;
+    this.rHalf = undefined as any;
+    this.dr = undefined as any;
+    this.volume = undefined as any;
+    this.area = undefined as any;
   }
 }

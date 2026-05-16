@@ -465,6 +465,15 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         return true; // 小液滴可以在世界空间移动
     }
 
+    getPosition(): THREE.Vector3 {
+        return this.position;
+    }
+
+    getBoundingRadius(): number {
+        // 返回液滴的世界空间半径
+        return this.cachedWorldRadius;
+    }
+
     applyFluidForce(force: FluidExternalForce): void {
         // ========== 1. 世界运动 ==========
         if (force.worldImpulse) {

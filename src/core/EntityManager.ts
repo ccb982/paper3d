@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { Entity } from './Entity';
 import { FluidLOD } from '@entities/fluid';
+import { ExplosionManager, DEFAULT_EXPLOSION_PARAMS } from '@lib/explosion-processor';
+import type { ExplosionParams } from '@lib/explosion-processor';
+import type { IFluidForceTarget } from '@entities/fluid';
 // 延迟导入 FluidRegionManager 类本身（仍需动态导入避免循环）
 let FluidRegionManager: typeof import('@entities/fluid').FluidRegionManager;
 
@@ -20,7 +23,12 @@ export class EntityManager {
   private fluidRegions: FluidRegionManager[] = [];
   private playerPositionCache: THREE.Vector3 = new THREE.Vector3();
 
-  private constructor() {}
+  // 爆炸管理器相关
+  private explosionManager: ExplosionManager;
+
+  private constructor() {
+    this.explosionManager = new ExplosionManager();
+  }
 
   public static getInstance(): EntityManager {
     if (!EntityManager.instance) {
@@ -226,6 +234,10 @@ export class EntityManager {
       if (this.scene && entity.mesh) {
         this.scene.remove(entity.mesh);
       }
+      // 从爆炸管理器注销目标
+      if (this.isFluidForceTarget(entity)) {
+        this.explosionManager.unregisterTarget(entity as unknown as IFluidForceTarget);
+      }
       this.entities.delete(entityId);
       console.log(`Entity removed: ${entity.type} - ${entityId}`);
     }
@@ -268,6 +280,149 @@ export class EntityManager {
     return this.getEntitiesByType('bullet');
   }
 
+  // ========== 爆炸管理器方法 ==========
+
+  /**
+   * 默认世界空间边界（用于UV映射，支持负坐标）
+   * 世界坐标范围：[worldMinX, worldMaxX] x [worldMinY, worldMaxY]
+   */
+  private worldMinX: number = -10.0;
+  private worldMaxX: number = 10.0;
+  private worldMinY: number = -10.0;
+  private worldMaxY: number = 10.0;
+
+  /**
+   * 创建爆炸
+   * 一次性查询范围内的可影响目标并注册，爆炸结束后自动清理
+   * @param id 爆炸唯一ID
+   * @param worldPosition 爆炸位置（世界空间）
+   * @param maxInfluenceRadius 最大影响半径
+   * @param params 爆炸参数（可选）
+   */
+  public createExplosion(
+    id: string,
+    worldPosition: THREE.Vector3,
+    maxInfluenceRadius: number = 10.0,
+    params?: Partial<ExplosionParams>
+  ): void {
+    console.log(`[EntityManager] 创建爆炸: ${id} at (${worldPosition.x.toFixed(2)}, ${worldPosition.y.toFixed(2)}), radius: ${maxInfluenceRadius}`);
+
+    // 1. 查询范围内所有可被爆炸影响的实体
+    const affectedTargets = this.findTargetsInRange(worldPosition, maxInfluenceRadius);
+    console.log(`[EntityManager] 找到 ${affectedTargets.length} 个受影响目标`);
+
+    // 2. 设置世界坐标到UV坐标的映射（支持负坐标）
+    this.explosionManager.setWorldBounds(
+      this.worldMinX, this.worldMaxX,
+      this.worldMinY, this.worldMaxY
+    );
+
+    // 3. 注册这些目标到爆炸管理器
+    affectedTargets.forEach(target => {
+      this.explosionManager.registerTarget(target);
+    });
+
+    // 4. 创建爆炸
+    const explosionParams = { ...DEFAULT_EXPLOSION_PARAMS, ...params };
+    this.explosionManager.create(
+      id,
+      explosionParams,
+      worldPosition.x,
+      worldPosition.y,
+      maxInfluenceRadius
+    );
+  }
+
+  /**
+   * 设置世界空间边界（用于UV坐标映射）
+   * @param minX 世界X最小值
+   * @param maxX 世界X最大值
+   * @param minY 世界Y最小值
+   * @param maxY 世界Y最大值
+   */
+  public setExplosionWorldBounds(minX: number, maxX: number, minY: number, maxY: number): void {
+    this.worldMinX = minX;
+    this.worldMaxX = maxX;
+    this.worldMinY = minY;
+    this.worldMaxY = maxY;
+    this.explosionManager.setWorldBounds(minX, maxX, minY, maxY);
+  }
+
+  /**
+   * 查询范围内可被爆炸影响的目标
+   * @param center 中心点
+   * @param radius 半径
+   * @returns 可影响的目标数组
+   */
+  private findTargetsInRange(center: THREE.Vector3, radius: number): IFluidForceTarget[] {
+    const result: IFluidForceTarget[] = [];
+
+    for (const entity of this.entities.values()) {
+      // 检查实体是否实现了 IFluidForceTarget 接口
+      if (this.isFluidForceTarget(entity)) {
+        const target = entity as unknown as IFluidForceTarget;
+
+        try {
+          const targetPos = target.getPosition?.();
+          if (!targetPos) continue;
+
+          const distance = targetPos.distanceTo(center);
+          const boundingRadius = target.getBoundingRadius?.() || 0;
+
+          if (distance - boundingRadius <= radius) {
+            result.push(target);
+          }
+        } catch (e) {
+          console.warn('Error checking target distance:', e);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * 检查实体是否实现了 IFluidForceTarget 接口
+   */
+  private isFluidForceTarget(entity: Entity): boolean {
+    const target = entity as unknown as IFluidForceTarget;
+    return (
+      typeof target.isMovable === 'function' &&
+      typeof target.applyFluidForce === 'function' &&
+      typeof target.getPosition === 'function' &&
+      typeof target.getBoundingRadius === 'function'
+    );
+  }
+
+  /**
+   * 更新所有爆炸
+   * @param delta 时间差（秒）
+   */
+  public updateExplosions(delta: number): void {
+    this.explosionManager.updateAll(delta);
+  }
+
+  /**
+   * 获取爆炸数量
+   */
+  public getExplosionCount(): number {
+    return this.explosionManager.getCount();
+  }
+
+  /**
+   * 获取活跃爆炸数量
+   */
+  public getActiveExplosionCount(): number {
+    return this.explosionManager.getActiveCount();
+  }
+
+  /**
+   * 清理所有爆炸
+   */
+  public clearExplosions(): void {
+    this.explosionManager.clear();
+  }
+
   /**
    * 时间缩放因子，用于加快或减慢游戏内时间
    * 1.0 = 正常速度，2.0 = 两倍速度
@@ -282,6 +437,8 @@ export class EntityManager {
     // 应用时间缩放
     const scaledDelta = delta * EntityManager.timeScale;
     this.updateEntities(scaledDelta);
+    // 更新爆炸
+    this.updateExplosions(scaledDelta);
   }
 
   /**
@@ -316,6 +473,8 @@ export class EntityManager {
       }
     }
     this.entities.clear();
+    // 清理爆炸
+    this.clearExplosions();
     console.log('EntityManager cleared');
   }
 
@@ -361,6 +520,9 @@ export class EntityManager {
 
     // 2. 更新流体区域
     this.updateFluidRegions(scaledDelta, playerPosition);
+
+    // 3. 更新爆炸
+    this.updateExplosions(scaledDelta);
   }
 
   /**

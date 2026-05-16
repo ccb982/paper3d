@@ -54,4 +54,8 @@ export interface IFluidForceTarget {
   isMovable(): boolean;
   /** 应用一个统一外力，内部自动分派 */
   applyFluidForce(force: FluidExternalForce): void;
+  /** 获取目标在世界空间的位置 */
+  getPosition(): THREE.Vector3;
+  /** 获取目标的碰撞半径（用于空间查询优化） */
+  getBoundingRadius(): number;
 }

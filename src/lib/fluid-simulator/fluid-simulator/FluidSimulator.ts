@@ -112,6 +112,7 @@ export class FluidSimulator {
         radius: number;
         strength: number;
         createWater: boolean;
+        waterGenerated: boolean;  // 是否已生成过水花（防止每帧重复生成）
         startFrame: number;
         durationFrames: number;
         noiseOffsetX: number;  // 噪声相位偏移X
@@ -2633,6 +2634,7 @@ export class FluidSimulator {
             radius,
             strength,
             createWater,
+            waterGenerated: false,  // 初始为未生成状态
             startFrame: this.frameCount,
             durationFrames,
             noiseOffsetX: Math.random() * 10.0,
@@ -2788,15 +2790,19 @@ export class FluidSimulator {
             this.renderFullscreen(this.explosionDivMat, this.explosionDivTex, false);
         }
 
-        // 处理水花生成（createWater=true）
+        // 处理水花生成（createWater=true，且只在第一帧生成一次）
         for (const exp of this.activeExplosions) {
-            if (!exp.createWater) continue;
+            if (!exp.createWater || exp.waterGenerated) continue;
 
             const frameElapsed = this.frameCount - exp.startFrame;
             const u = Math.min(1.0, Math.max(0.0, frameElapsed / exp.durationFrames));
             const envelope = 4.0 * u * (1.0 - u);
 
-            if (envelope < 0.01) continue;
+            // 只在水花包络最大时生成一次（通常在爆炸开始后的短暂窗口）
+            if (envelope < 0.5) continue;
+
+            // 标记为已生成，防止后续帧重复生成
+            exp.waterGenerated = true;
 
             // 使用预缓存的水花生成材质更新 phi
             // 根据当前居中偏移调整水花中心
