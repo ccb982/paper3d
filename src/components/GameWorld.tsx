@@ -431,18 +431,19 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
     // 更新特效
     EffectManager.getInstance().update(delta);
 
-    // ===== 侧向风力测试（加速度模型，每帧施加） =====
-    const adapter = TextureManager.getInstance().getFluidSimulator('levelSetFluid');
-    if (adapter) {
-      const windForce: FluidExternalForce = {
-        velocityInjection: {
-          velocity: new THREE.Vector2(200, 0),
-          radius: 1.0,
-          centerUV: new THREE.Vector2(0.5, 0.5)
-        }
-      };
-      adapter.applyFluidForce(windForce);
-    }
+    // ===== 侧向风力测试（加速度模型，每帧施加）=====
+    // 已注释，避免影响流体效果
+    // const adapter = TextureManager.getInstance().getFluidSimulator('levelSetFluid');
+    // if (adapter) {
+    //   const windForce: FluidExternalForce = {
+    //     velocityInjection: {
+    //       velocity: new THREE.Vector2(200, 0),
+    //       radius: 1.0,
+    //       centerUV: new THREE.Vector2(0.5, 0.5)
+    //     }
+    //   };
+    //   adapter.applyFluidForce(windForce);
+    // }
     // ============================
 
     // 更新所有纹理（包括测试纹理的流动效果）

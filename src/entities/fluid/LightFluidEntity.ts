@@ -216,7 +216,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
         // 寿命检测
         if (this.age > this.maxAge) {
-            console.log(`[LightFluidEntity] 液滴 ${this.id} 寿命结束: age=${this.age.toFixed(2)}s, maxAge=${this.maxAge}s`);
             this.isActive = false;
             return;
         }

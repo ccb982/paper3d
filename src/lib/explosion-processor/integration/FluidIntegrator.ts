@@ -17,6 +17,10 @@ export class FluidIntegrator {
   private worldOffsetX: number = 0;  // 世界坐标偏移（用于处理负坐标）
   private worldOffsetY: number = 0;
   private destroyed: boolean = false;
+  
+  // 复用对象减少 GC
+  private centerUV: THREE.Vector2 = new THREE.Vector2();
+  private tempVector2: THREE.Vector2 = new THREE.Vector2();
 
   constructor(target: IFluidForceTarget, injectionParams?: Partial<InjectionParams>) {
     this.target = target;
@@ -98,8 +102,8 @@ export class FluidIntegrator {
 
     const fireballRadius = shockRadius * this.injectionParams.fireballRadiusRatio;
 
-    // 修正UV坐标计算：考虑世界坐标偏移
-    const centerUV = new THREE.Vector2(
+    // 修正UV坐标计算：考虑世界坐标偏移（复用对象减少GC）
+    this.centerUV.set(
       (worldCenterX + this.worldOffsetX) * this.worldToUVScale,
       (worldCenterY + this.worldOffsetY) * this.worldToUVScale
     );
@@ -108,7 +112,7 @@ export class FluidIntegrator {
     // 移除velocityInjection，因为其方向固定为45°是错误的
     // divergenceInjection已经能产生足够真实的径向扩散效果
     const divergenceInjection: FluidDivergenceInjection = {
-      centerUV: centerUV.clone(),
+      centerUV: this.tempVector2.copy(this.centerUV),
       radius: fireballRadius * this.worldToUVScale,
       falloff: 'gaussian',
       divergence: -Math.min(
@@ -127,7 +131,7 @@ export class FluidIntegrator {
 
       if (waterAmount > 0) {
         const waterInjection: FluidWaterInjection = {
-          centerUV: centerUV.clone(),
+          centerUV: this.tempVector2.copy(this.centerUV),
           radius: fireballRadius * this.worldToUVScale,
           falloff: 'linear',
           amount: waterAmount,

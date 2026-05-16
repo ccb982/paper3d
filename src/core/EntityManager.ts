@@ -239,7 +239,6 @@ export class EntityManager {
         this.explosionManager.unregisterTarget(entity as unknown as IFluidForceTarget);
       }
       this.entities.delete(entityId);
-      console.log(`Entity removed: ${entity.type} - ${entityId}`);
     }
   }
 

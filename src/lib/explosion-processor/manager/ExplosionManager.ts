@@ -50,6 +50,7 @@ export class ExplosionManager {
     };
 
     this.explosions.set(id, entry);
+    console.log(`[ExplosionManager] 爆炸已创建: id=${id}, duration=${(params as any).duration || 2.0}s, 位置=(${worldX.toFixed(2)}, ${worldY.toFixed(2)})`);
     return explosion;
   }
 
@@ -101,9 +102,12 @@ export class ExplosionManager {
    * @param graphicsDelta 时间增量（秒）
    */
   public updateAll(graphicsDelta: number): void {
-    // 限制最大单帧增量，防止时间跳跃
+    // 限制最大单帧增量，防止时间跳跃（最大 33ms，约 30fps）
     const clampedDelta = Math.min(graphicsDelta, 0.033);
     this.graphicsTime += clampedDelta;
+
+    // 如果没有爆炸，直接返回
+    if (this.explosions.size === 0) return;
 
     this.explosions.forEach((entry, id) => {
       const explosion = entry.solver;
@@ -113,8 +117,13 @@ export class ExplosionManager {
         return;
       }
 
-      // 推进爆炸时间
-      explosion.advanceTo(this.graphicsTime);
+      // 使用增量时间推进，避免一次性时间跳跃导致的性能问题
+      explosion.advanceBy(clampedDelta);
+
+      // 输出爆炸计时日志（每秒输出一次）
+      if (Math.floor(this.graphicsTime) > Math.floor(this.graphicsTime - clampedDelta)) {
+        console.log(`[ExplosionManager] 爆炸更新: id=${id}, t=${explosion.getTime().toFixed(3)}s, duration=${(explosion as any).duration}s`);
+      }
 
       // 检查是否需要注入：只在爆炸激活的第一帧注入
       if (!entry.hasInjected) {
@@ -127,12 +136,13 @@ export class ExplosionManager {
           entry.maxInfluenceRadius
         );
 
-        // 对每个目标应用爆炸效果
+        // 对每个目标应用爆炸效果（只在首次注入时调用）
         affectedTargets.forEach((target) => {
           const integrator = this.getOrCreateIntegrator(target);
           integrator.inject(explosion, entry.position.x, entry.position.y);
         });
       }
+      // 已注入过的爆炸不再调用 inject，避免冗余计算
     });
 
     // 清理失效的爆炸
@@ -226,6 +236,7 @@ export class ExplosionManager {
     if (entry) {
       entry.solver.destroy();
       this.explosions.delete(id);
+      console.log(`[ExplosionManager] 爆炸已销毁: id=${id}, 剩余爆炸数=${this.explosions.size}`);
     }
   }
 

@@ -9,6 +9,7 @@ export interface ExplosionParams {
   rMax?: number;
   cfl?: number;
   shockThreshold?: number;
+  duration?: number;  // 爆炸持续时间（秒），超过此时间爆炸自动结束
 }
 
 export interface PhysicalState {
@@ -54,9 +55,10 @@ export const DEFAULT_EXPLOSION_PARAMS: Required<ExplosionParams> = {
   ambientDensity: 1.225,
   ambientPressure: 101325,
   gamma: 1.4,
-  N: 256,
+  N: 128,  // 降低网格数优化性能（从 256 降至 128，计算量减少约 75%）
   rMin: 0.002,
   rMax: 10.0,
   cfl: 0.4,
   shockThreshold: 1.5,
+  duration: 2.0,  // 默认持续2秒后自动结束
 };

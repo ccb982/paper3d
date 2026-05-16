@@ -6,13 +6,14 @@ import type {
 import { DEFAULT_EXPLOSION_PARAMS } from './types';
 
 export class Explosion1DSolver {
-  private static MAX_SUBSTEPS = 2000;
+  private static MAX_SUBSTEPS = 500;  // 减少最大子步数以优化性能
   private static GAS_CONSTANT = 287.058;
 
   private gamma: number = 1.4;
   private cfl: number = 0.4;
   private shockThreshold: number = 1.5;
   private N: number = 256;
+  private duration: number = 2.0;  // 爆炸持续时间（秒）
   private r: Float64Array = new Float64Array(0);
   private rHalf: Float64Array = new Float64Array(0);
   private dr: Float64Array = new Float64Array(0);
@@ -36,6 +37,7 @@ export class Explosion1DSolver {
     this.gamma = p.gamma;
     this.cfl = p.cfl;
     this.shockThreshold = p.shockThreshold;
+    this.duration = p.duration;
     this.ambientRho = p.ambientDensity;
     this.ambientP = p.ambientPressure;
     this.ambientT = this.ambientP / (Explosion1DSolver.GAS_CONSTANT * this.ambientRho);
@@ -355,32 +357,47 @@ export class Explosion1DSolver {
   }
 
   private maxDt(): number {
-    let dtMax = Infinity;
-    for (let i = 0; i < this.N; i++) {
-      const c = this.soundSpeed(this.rho[i], this.p[i]);
-      const localDt = this.cfl * this.dr[i] / (Math.abs(this.u[i]) + c);
-      if (localDt < dtMax) dtMax = localDt;
-    }
-    return dtMax;
+    // 使用固定时间步长，避免 CFL 计算导致的极小时间步长问题
+    // 固定步长更稳定且性能更好
+    return 0.001; // 固定 1ms 时间步长
   }
 
   public advanceTo(targetTime: number): void {
-    if (!this.active) return;
+    // 如果爆炸已超时或未激活，直接返回
+    if (!this.active || this.t >= this.duration) return;
+    
+    // 单次最多推进 0.1 秒，防止长时间阻塞
+    const effectiveTarget = Math.min(targetTime, this.t + 0.1, this.duration);
+    
     let steps = 0;
     while (
-      this.t < targetTime - 1e-9 &&
+      this.t < effectiveTarget - 1e-9 &&
       steps++ < Explosion1DSolver.MAX_SUBSTEPS
     ) {
-      const dtRemaining = targetTime - this.t;
+      const dtRemaining = effectiveTarget - this.t;
       const maxDt = this.maxDt();
       const dt = Math.min(maxDt, dtRemaining);
       if (dt <= 1e-12) break;
       this.substep(dt);
       this.t += dt;
       this.updateShockRadius();
-      if (!this.active) break;
+      // 检查是否超时
+      if (this.t >= this.duration) {
+        this.active = false;
+        break;
+      }
     }
-    if (Math.abs(this.t - targetTime) < 1e-9) this.t = targetTime;
+    if (Math.abs(this.t - effectiveTarget) < 1e-9) this.t = effectiveTarget;
+  }
+
+  /**
+   * 增量时间推进（推荐用于每帧更新）
+   * @param deltaTime 时间增量（秒）
+   */
+  public advanceBy(deltaTime: number): void {
+    if (!this.active || this.t >= this.duration || deltaTime <= 0) return;
+    const target = Math.min(this.t + deltaTime, this.duration);
+    this.advanceTo(target);
   }
 
   public getTime(): number {
@@ -388,6 +405,13 @@ export class Explosion1DSolver {
   }
 
   public isActive(): boolean {
+    // 爆炸超过持续时间后自动变为不活跃
+    if (this.t >= this.duration) {
+      if (this.active) {
+        console.log(`[Explosion1DSolver] 爆炸时间结束: t=${this.t.toFixed(3)}s, duration=${this.duration}s`);
+      }
+      return false;
+    }
     return this.active;
   }
 
