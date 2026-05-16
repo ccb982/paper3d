@@ -9,6 +9,7 @@ export interface FluidParams {
     gravity: number;            // m/s² 向下为正
     pressureIterations: number; // 推荐15~30（PCG迭代，收敛远快于Jacobi）
     reinitIterations: number;   // 推荐3~5（窄带重初始化，更稳定）
+    reinitInterval?: number;    // 重初始化间隔帧数，默认1（每帧），性能优先可设10~20
     timeStep: number;           // 固定步长，推荐0.002（静水测试用更小值）
     restitution: number;        // 恢复系数：0.0-1.0，推荐0.8
     friction: number;           // 摩擦系数：0.0-1.0，推荐0.95
@@ -260,6 +261,7 @@ export class FluidSimulator {
         this.initCenteringShaders();  // 初始化纹理居中着色器
         this.initRenderMaterial();  // 初始化分层渲染材质
         this.initialized = true;
+        console.log(`[FluidSimulator] 初始化完成，分辨率: ${this.width}×${this.height}`);
     }
 
     private createTextures(): void {
@@ -2058,12 +2060,18 @@ export class FluidSimulator {
         }
 
         // 9. Level Set 重初始化（双缓冲交替）
+        // 根据 reinitInterval 参数决定是否执行重初始化
+        const reinitInterval = this.params.reinitInterval ?? 1;
         let phiSrc = this.curPhiTex;
         let phiDst = phiSrc === this.phiTexA ? this.phiTexB : this.phiTexA;
-        for (let i = 0; i < this.params.reinitIterations; i++) {
-            this.levelSetReinitMat.uniforms.levelset.value = phiSrc.texture;
-            this.renderFullscreen(this.levelSetReinitMat, phiDst);
-            [phiSrc, phiDst] = [phiDst, phiSrc];  // 交换
+        
+        if (this.frameCount % reinitInterval === 0) {
+            // 仅在间隔帧执行重初始化，性能优化策略
+            for (let i = 0; i < this.params.reinitIterations; i++) {
+                this.levelSetReinitMat.uniforms.levelset.value = phiSrc.texture;
+                this.renderFullscreen(this.levelSetReinitMat, phiDst);
+                [phiSrc, phiDst] = [phiDst, phiSrc];  // 交换
+            }
         }
         this.curPhiTex = phiSrc;
 

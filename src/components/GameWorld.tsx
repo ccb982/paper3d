@@ -909,8 +909,6 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
 
     // 配置 FluidSimulator 参数
     const fluidParams: Partial<FluidParams> = {
-      width: 256,
-      height: 256,
       density: 1000,
       viscosity: 0.001,
       surfaceTension: 0.0728,

@@ -29,19 +29,20 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     ) {
         // 默认参数，包含分层渲染配置
         const defaultParams: FluidParams = {
-            width: 256,
-            height: 256,
+            width: 1512,
+            height: 1512,
             density: 1000,
             viscosity: 0.001,
             surfaceTension: 0.0728,
             gravity: 9.81,
             pressureIterations: 50,
-            reinitIterations: 5,
+            reinitIterations: 1,           // 每100帧执行1次：单次迭代次数
+            reinitInterval: 100,         // 每100帧执行1次：间隔帧数
             timeStep: 0.002,
             restitution: 1.0,
             friction: 0.0,
             usePCG: false,
-            maxLifetime: 4,
+            maxLifetime: 2000,
             // 解耦边界处理参数（增强爆炸飞溅效果）
             decoupledBoundary: true,
             boundaryRingWidth: 0.03,
