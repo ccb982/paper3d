@@ -138,7 +138,11 @@ export class Explosion1DSolver {
       }
     }
     this.shockRadius = this.r[idx];
-    if (this.p[0] < this.ambientP * this.shockThreshold) {
+    
+    // 只有在爆炸已经运行一段时间后才检查压力（避免初始化时误判）
+    // 至少运行 0.1 秒后才检查压力
+    if (this.t >= 0.1 && this.p[0] < this.ambientP * this.shockThreshold) {
+      console.log(`[Explosion1DSolver] 爆炸压力过低停止: p[0]=${this.p[0]}, ambientP=${this.ambientP * this.shockThreshold}`);
       this.active = false;
     }
   }
