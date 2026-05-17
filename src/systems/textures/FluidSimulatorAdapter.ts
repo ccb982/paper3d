@@ -35,7 +35,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             viscosity: 0.001,
             surfaceTension: 0.0728,
             gravity: 9.81,
-            pressureIterations: 50,
+            pressureIterations: 200,
             reinitIterations: 1,           // 每100帧执行1次：单次迭代次数
             reinitInterval: 100,         // 每100帧执行1次：间隔帧数
             timeStep: 0.002,
@@ -110,8 +110,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
                 const waterMultiplier = stage === 4 ? 2 : 1;
                 const boostedStrength = stage === 4 ? strength * 2 : strength;  // 最后一次强度翻倍
                 // 添加随机位置偏移，避免完美同心圆
-                const offsetX = (Math.random() - 0.5) * 0.1;
-                const offsetY = (Math.random() - 0.5) * 0.1;
+                const offsetX = (Math.random() - 0.5) * 0.01;
+                const offsetY = (Math.random() - 0.5) * 0.01;
                 console.log(`[FluidSimulatorAdapter] 爆炸触发: frame=${this.explosionFrameCount}, stage=${stage}, createWater=${createWater}, strength=${boostedStrength}, waterMultiplier=${waterMultiplier}`);
                 // 使用多团块爆炸方法
                 this.simulator.explodeFragmented(0.5 + offsetX, 0.5 + offsetY, 0.15, boostedStrength, createWater, 0.1, undefined, undefined, waterMultiplier);
@@ -135,7 +135,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
         if (this.isFirstFrame) {
             this.isFirstFrame = false;
             // 爆炸期间增加压力迭代次数到200，确保流体体积守恒
-            this.simulator.setPressureIterations(200);
+            this.simulator.setPressureIterations(500);
             this.isExplosionBoosted = true;
             this.explosionFrameCount = 0;
             // 初始爆炸已删除

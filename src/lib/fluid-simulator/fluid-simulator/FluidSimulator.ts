@@ -397,12 +397,160 @@ export class FluidSimulator {
     }
 
     private initLevelSetShader(): THREE.ShaderMaterial {
-        // 减小初始水球半径，让爆炸效果更明显
-        const radius = 0.1 * Math.min(this.width, this.height) / this.width;
+        // 增大初始水球半径，覆盖更多区域
+        const radius = 0.35 * Math.min(this.width, this.height) / this.width;
         return new THREE.ShaderMaterial({
-            uniforms: { radius: { value: radius }, center: { value: new THREE.Vector2(0.5, 0.5) } },
+            uniforms: { 
+                radius: { value: radius }, 
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                noiseScale: { value: 0.12 },   // 噪声幅度
+                thicknessFactor: { value: 0.7 }, // 大幅增大！中心厚度（压力差）
+                edgeThinFactor: { value: 0.3 }, // 边缘变薄因子
+                ringAmplitude: { value: 0.08 }, 
+                breakupStrength: { value: 0.1 },
+                breakupScale: { value: 5.0 }
+            },
             vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-            fragmentShader: `uniform vec2 center; uniform float radius; varying vec2 vUv; void main() { float d = distance(vUv, center) - radius; d = clamp(d, -0.5, 0.5); gl_FragColor = vec4(d, 0.0, 0.0, 1.0); }`
+            fragmentShader: `
+                uniform vec2 center; 
+                uniform float radius; 
+                uniform float noiseScale;
+                uniform float thicknessFactor;
+                uniform float edgeThinFactor;
+                uniform float ringAmplitude;
+                uniform float breakupStrength;
+                uniform float breakupScale;
+                varying vec2 vUv;
+                
+                // 伪随机哈希
+                float hash(vec2 p) {
+                    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+                }
+                
+                // 值噪声
+                float valueNoise(vec2 p) {
+                    vec2 i = floor(p);
+                    vec2 f = fract(p);
+                    f = f * f * (3.0 - 2.0 * f);
+                    
+                    float a = hash(i);
+                    float b = hash(i + vec2(1.0, 0.0));
+                    float c = hash(i + vec2(0.0, 1.0));
+                    float d = hash(i + vec2(1.0, 1.0));
+                    
+                    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+                }
+                
+                // FBM 分形噪声
+                float fbm(vec2 p) {
+                    float value = 0.0;
+                    float amplitude = 0.5;
+                    for (int i = 0; i < 4; i++) {
+                        value += amplitude * valueNoise(p);
+                        amplitude *= 0.5;
+                        p *= 2.0;
+                    }
+                    return value - 0.3;
+                }
+                
+                // Voronoi 细胞噪声
+                float voronoi(vec2 p) {
+                    vec2 i = floor(p);
+                    vec2 f = fract(p);
+                    
+                    float minDist = 1.0;
+                    float secondMin = 1.0;
+                    for (float y = -2.0; y <= 2.0; y++) {
+                        for (float x = -2.0; x <= 2.0; x++) {
+                            vec2 neighbor = vec2(x, y);
+                            vec2 cellId = i + neighbor;
+                            vec2 point = vec2(hash(cellId + 0.1), hash(cellId + 0.2)) - 0.5;
+                            point *= 0.8;
+                            float d = length(neighbor + point - f);
+                            if (d < minDist) {
+                                secondMin = minDist;
+                                minDist = d;
+                            } else if (d < secondMin) {
+                                secondMin = d;
+                            }
+                        }
+                    }
+                    return secondMin - minDist;
+                }
+                
+                // 湍流噪声
+                float turbulence(vec2 p) {
+                    float value = 0.0;
+                    float amplitude = 1.0;
+                    for (int i = 0; i < 4; i++) {
+                        value += amplitude * abs(valueNoise(p) * 2.0 - 1.0);
+                        amplitude *= 0.5;
+                        p *= 2.0;
+                    }
+                    return value;
+                }
+                
+                void main() { 
+                    vec2 delta = vUv - center;
+                    float dist = length(delta);
+                    float angle = atan(delta.y, delta.x);
+                    float seed = hash(vec2(radius, 0.5));
+                    
+                    // 基础距离场
+                    float d = dist - radius;
+                    
+                    // ===== 大幅增大压力差 =====
+                    // 中心 phi 值非常负（深），边缘 phi 值接近 0（浅）
+                    float thicknessProfile = 0.0;
+                    if (dist < radius) {
+                        float t = dist / radius; // 0(中心) -> 1(边缘)
+                        
+                        // 1. 核心区域急剧变厚（phi 更负）
+                        // 使用高次函数，中心区域 phi 急剧下降
+                        float coreDepth = 1.0 - pow(t, 0.5); // 平方根，中心更快变深
+                        thicknessProfile = -thicknessFactor * coreDepth * radius;
+                        
+                        // 2. 边缘急剧变薄（phi 快速趋近 0）
+                        // 在 t > 0.7 时急剧衰减
+                        float edgeThin = smoothstep(0.7, 1.0, t);
+                        thicknessProfile -= edgeThinFactor * edgeThin * radius;
+                    }
+                    d += thicknessProfile;
+                    
+                    // ===== 碎裂扰动 =====
+                    // Voronoi 细胞边界
+                    float vor = voronoi(vUv * breakupScale + seed * 10.0);
+                    float vorInfluence = smoothstep(radius * 1.1, radius * 0.4, dist);
+                    d += (vor - 0.3) * breakupStrength * 2.0 * vorInfluence;
+                    
+                    // FBM 湍流
+                    float turb = fbm(vUv * 3.0 + seed * 5.0);
+                    float turbInfluence = smoothstep(radius * 1.0, radius * 0.0, dist);
+                    d += turb * breakupStrength * turbInfluence;
+                    
+                    // 径向涟漪
+                    float ripple = sin(dist * 20.0 - seed * 8.0) * 0.02;
+                    ripple *= smoothstep(radius, radius * 0.3, dist);
+                    d += ripple;
+                    
+                    // 环形结构（减弱，保持整体性）
+                    for (float i = 1.0; i <= 2.0; i++) {
+                        float r = radius * (0.3 + 0.3 * i);
+                        float wave = sin((dist - r) * 15.0 + angle * i + seed) * 0.5 + 0.5;
+                        float falloff = exp(-abs(dist - r) * 12.0);
+                        d += wave * falloff * ringAmplitude / i;
+                    }
+                    
+                    // 边缘空洞
+                    float edgeNoise = valueNoise(vUv * 5.0 + seed * 15.0);
+                    float edgeMask = smoothstep(0.0, 0.12, abs(dist - radius));
+                    d += (edgeNoise - 0.5) * 0.04 * edgeMask;
+                    
+                    // 放宽 clamp 范围，允许更大的 phi 值差异
+                    d = clamp(d, -0.5, 0.5); 
+                    gl_FragColor = vec4(d, 0.0, 0.0, 1.0); 
+                }
+            `
         });
     }
 
