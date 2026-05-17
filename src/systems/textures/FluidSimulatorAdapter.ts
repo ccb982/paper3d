@@ -31,7 +31,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
         const defaultParams: FluidParams = {
             width: 512,
             height: 512,
-            density: 1000,
+            density: 1,
             viscosity: 0.001,
             surfaceTension: 0.0728,
             gravity: 9.81,
@@ -44,10 +44,10 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             usePCG: false,
             maxLifetime: 2000,
             // 解耦边界处理参数（增强爆炸飞溅效果）
-            decoupledBoundary: true,
+            decoupledBoundary: false,
             boundaryRingWidth: 0.03,
-            boundaryDivDamping: 0.4,
-            boundaryVelDamping: 0.2,
+            boundaryDivDamping: 1.0,
+            boundaryVelDamping: 1.0,
             // 爆炸随机扰动参数（实现碎片感和不规则冲击波）
             usePerturbation: false,   // 关闭随机扰动
             perturbationStrength: 0.4,
@@ -93,7 +93,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
 
         this.processPendingForces(realDelta);
 
-        // 隔两帧炸一次（每3帧爆炸一次）
+        // 爆炸序列控制
         if (this.isExplosionBoosted) {
             this.explosionFrameCount++;
             
@@ -108,26 +108,20 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
                 const createWater = stage === 0 || stage === 4;
                 // 最后一次爆炸增加水量倍数并增强强度
                 const waterMultiplier = stage === 4 ? 2 : 1;
-                const boostedStrength = stage === 4 ? strength * 2 : strength;  // 最后一次强度翻倍
+                const boostedStrength = stage === 4 ? strength * 2 : strength;
                 // 添加随机位置偏移，避免完美同心圆
                 const offsetX = (Math.random() - 0.5) * 0.01;
                 const offsetY = (Math.random() - 0.5) * 0.01;
                 console.log(`[FluidSimulatorAdapter] 爆炸触发: frame=${this.explosionFrameCount}, stage=${stage}, createWater=${createWater}, strength=${boostedStrength}, waterMultiplier=${waterMultiplier}`);
-                // 使用多团块爆炸方法
+                // 使用多团块爆炸方法，duration=0.5秒
                 this.simulator.explodeFragmented(0.5 + offsetX, 0.5 + offsetY, 0.15, boostedStrength, createWater, 0.1, undefined, undefined, waterMultiplier);
             }
             
-            // 5次爆炸完成后停止（共35帧）
+            // 5次爆炸完成后停止爆炸序列
             if (this.explosionFrameCount > 35) {
-                // 爆炸结束，恢复原始迭代次数
                 this.simulator.setPressureIterations(this.originalPressureIterations);
                 this.isExplosionBoosted = false;
                 this.explosionFrameCount = 0;
-                
-                // // 爆炸结束后触发水面分裂测试（已注释）
-                // if (this.fragmentSystem) {
-                //     this.splitWater();
-                // }
             }
         }
 
