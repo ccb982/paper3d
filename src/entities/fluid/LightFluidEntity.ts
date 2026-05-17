@@ -73,7 +73,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             surfaceTension: 0.1,          // 让界面更紧凑，受力后回弹更真实
             gravity: 5.0,
             pressureIterations: 4,        // 提高压力迭代，让压力场能真正响应散度
-            reinitIterations: 1,          // 保持 Level Set 平滑，避免界面锯齿模糊响应
+            reinitIterations: 1,          // 每100帧执行1次：单次迭代次数
+            reinitInterval: 100,         // 每100帧执行1次：间隔帧数
             timeStep: 0.008,              // 略减小步长，提高稳定性，使外力可更精确地每一步作用
             restitution: 0.2,
             friction: 0.9,
@@ -83,7 +84,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             usePerturbation: false,
             injectionEnabled: false,
             enableCentering: true,       // 启用纹理居中追踪
-            centeringInterval: 1.0,     // 居中追踪间隔1秒，减少GPU回读频率
+            centeringInterval: 0.5,      // 提高居中频率到0.1秒，防止水跑出边界
         };
 
         // 根据水量计算绘制大小
@@ -114,7 +115,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         
         this.simulator = new FluidSimulator(renderer, params);
         this.setInitialWaterVolume(waterVolume);
-        this.setInitialVelocity(0, -20.0); // 降低初始速度，让水滴保持在中心附近
+        this.setInitialVelocity(0, -2.0);  // 大幅降低初始速度，防止水立刻飞出边界
         
         const renderMaterial = this.simulator.getRenderMaterial();
         this.mesh.material = renderMaterial;
@@ -289,7 +290,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             // ★★★ 内部随机微风：让水滴一直有内部流动，非常生动 ★★★
             if (this.lod < FluidLOD.LOW) {
                 const windAngle = Math.random() * Math.PI * 2;
-                const windStrength = 0.3 + Math.random() * 0.4;
+                const windStrength = 0.05 + Math.random() * 0.05; // 大幅降低微风强度，防止水飞出边界
                 this.simulator.addVelocityImpulse(
                     Math.cos(windAngle) * windStrength,
                     Math.sin(windAngle) * windStrength

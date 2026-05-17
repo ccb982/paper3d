@@ -2686,7 +2686,7 @@ export class FluidSimulator {
      */
     public explodeFragmented(cx: number, cy: number, radius: number, strength: number, 
                             createWater: boolean = true, duration: number = 0.1, 
-                            fragmentCount?: number, seed?: number): void {
+                            fragmentCount?: number, seed?: number, waterMultiplier: number = 1): void {
         const count = fragmentCount ?? this.fragmentCount;
         const rand = seed !== undefined ? this.seededRandom(seed) : Math.random.bind(Math);
         
@@ -2696,8 +2696,25 @@ export class FluidSimulator {
             const fx = cx + Math.cos(angle) * offsetR;
             const fy = cy + Math.sin(angle) * offsetR;
             const fr = radius * (0.6 + rand() * 0.4);
-            const fs = strength / count * (0.8 + rand() * 0.4);
+            // 首次爆炸(createWater=true)保持正强度（外扩），后续爆炸全部负强度（收缩）
+            const sign = createWater ? 1 : -1;
+            const fs = sign * strength / count * (0.8 + rand() * 0.4);
+            console.log(`[Explosion] i=${i}, createWater=${createWater}, sign=${sign}, fs=${fs.toFixed(2)}, strength=${strength}, count=${count}`);
             this.explode(fx, fy, fr, fs, createWater, duration);
+        }
+        
+        // 如果需要增加水量，额外生成水花
+        if (createWater && waterMultiplier > 1) {
+            const extraWaterCount = Math.floor(count * (waterMultiplier - 1));
+            for (let i = 0; i < extraWaterCount; i++) {
+                const angle = rand() * Math.PI * 2;
+                const offsetR = radius * (0.5 + rand() * 0.5);  // 更外围的水花
+                const fx = cx + Math.cos(angle) * offsetR;
+                const fy = cy + Math.sin(angle) * offsetR;
+                const fr = radius * (0.3 + rand() * 0.3);  // 更小的水花
+                const fs = strength / count * (0.5 + rand() * 0.5);
+                this.explode(fx, fy, fr, fs, true, duration * 0.5);  // 更短的持续时间
+            }
         }
     }
 
