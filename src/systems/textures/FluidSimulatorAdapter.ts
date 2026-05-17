@@ -44,7 +44,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             usePCG: false,
             maxLifetime: 2000,
             // 解耦边界处理参数（增强爆炸飞溅效果）
-            decoupledBoundary: false,
+            decoupledBoundary: true,
             boundaryRingWidth: 0.03,
             boundaryDivDamping: 1.0,
             boundaryVelDamping: 1.0,
@@ -112,7 +112,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
                 // 添加随机位置偏移，避免完美同心圆
                 const offsetX = (Math.random() - 0.5) * 0.01;
                 const offsetY = (Math.random() - 0.5) * 0.01;
-                console.log(`[FluidSimulatorAdapter] 爆炸触发: frame=${this.explosionFrameCount}, stage=${stage}, createWater=${createWater}, strength=${boostedStrength}, waterMultiplier=${waterMultiplier}`);
+                // console.log(`[FluidSimulatorAdapter] 爆炸触发: frame=${this.explosionFrameCount}, stage=${stage}, createWater=${createWater}, strength=${boostedStrength}, waterMultiplier=${waterMultiplier}`);
                 // 使用多团块爆炸方法，duration=0.5秒
                 this.simulator.explodeFragmented(0.5 + offsetX, 0.5 + offsetY, 0.15, boostedStrength, createWater, 0.1, undefined, undefined, waterMultiplier);
             }

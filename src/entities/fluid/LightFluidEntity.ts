@@ -4,6 +4,7 @@ import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import { Entity } from '@core/Entity';
 import { FluidLOD } from './FluidTypes';
 import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
+import { GRAVITY, GROUND_HEIGHT } from '../../utils/constants';
 
 /**
  * 轻量流体实体 - 可作为独立实体被 EntityManager 管理
@@ -19,7 +20,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private renderer: THREE.WebGLRenderer;
     
     public waterVolume: number = 0.45;  // 水量占比 0~1
-    public worldVelocity: THREE.Vector3;
     
     private readonly texSize = 32;       // 内部纹理尺寸（保持32x32不变）
     private readonly baseScale = 2.0;    // 基础缩放（控制纹理本身的显示大小）
@@ -27,7 +27,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private age: number = 0;
     public maxAge: number = 5;
     private frameCount: number = 0;
-    private prevWorldVelocity: THREE.Vector3 = new THREE.Vector3();
+    private prevVelocity: THREE.Vector3 = new THREE.Vector3();  // 用于惯性挤压计算
     
     // LOD 相关
     public lod: FluidLOD = FluidLOD.HIGH;
@@ -36,15 +36,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     // 外部力累积（每帧加速度）
     private externalAccel = new THREE.Vector3();
     private pendingForces: FluidExternalForce[] = [];
-    
-    // 呼吸/脉动效果参数
-    private breathingPhase: number = 0;       // 呼吸相位
-    private breathingSpeed: number;           // 呼吸频率（每秒周期数）- 随机化
-    private breathingAmplitude: number;       // 呼吸强度（散度幅度）- 随机化
-    private breathingOffset: number;          // 呼吸相位偏移（让每个水滴不同步）
-    private breathingDirection: number;        // 当前膨胀主方向（弧度）
-    private expandChoice: boolean = true;      // 当前选择：true=膨胀，false=收缩
-    private expandChoiceFrames: number = 0;   // 当前选择已持续帧数
 
     // 可见性裁剪相关
     private externalCamera: THREE.Camera | null = null;
@@ -59,23 +50,24 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         initialPosition?: THREE.Vector3,
         initialVelocity?: THREE.Vector3,
         waterVolume: number = 0.45,       // 修改为直接传入水量
-        maxAge: number = 5                // 寿命改为5秒
+        maxAge: number = 100                // 寿命改为5秒
     ) {
         // 确保水量在有效范围内
         waterVolume = Math.max(0.01, Math.min(1.0, waterVolume));
         
         // 性能优化：精简模拟参数，针对小水滴牺牲部分物理细节以降低开销
+        // 注意：不再在模拟器内设置 gravity，重力由 GravitySystem 统一管理
         const params: FluidParams = {
             width: 32,
             height: 32,
             density: 1000,
             viscosity: 0.001,
             surfaceTension: 0.1,          // 让界面更紧凑，受力后回弹更真实
-            gravity: 5.0,
+            gravity: 0,                    // 重力由 GravitySystem 统一应用，不再内部处理
             pressureIterations: 4,        // 提高压力迭代，让压力场能真正响应散度
             reinitIterations: 1,          // 每100帧执行1次：单次迭代次数
             reinitInterval: 100,         // 每100帧执行1次：间隔帧数
-            timeStep: 0.008,              // 略减小步长，提高稳定性，使外力可更精确地每一步作用
+            timeStep: 0.01,              // 略减小步长，提高稳定性，使外力可更精确地每一步作用
             restitution: 0.2,
             friction: 0.9,
             usePCG: false,                // 禁用PCG（避免GPU回读卡顿）
@@ -84,7 +76,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             usePerturbation: false,
             injectionEnabled: false,
             enableCentering: true,       // 启用纹理居中追踪
-            centeringInterval: 1.0,     // 居中追踪间隔1秒，减少GPU回读频率
+            centeringInterval: 0.1,     // 居中追踪间隔1秒，减少GPU回读频率
         };
 
         // 根据水量计算绘制大小
@@ -106,21 +98,18 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         this.renderer = renderer;
         this.waterVolume = waterVolume;
         this.maxAge = maxAge;
-        
-        // ★ 初始化呼吸效果参数（随机化让每个水滴不同）
-        this.breathingSpeed = 1.5 + Math.random() * 2.0;   // 1.5~3.5 Hz
-        this.breathingAmplitude = 4000 + Math.random() * 3000; // 4000~7000 散度强度
-        this.breathingOffset = Math.random() * Math.PI * 2;    // 随机相位偏移
-        this.breathingDirection = Math.random() * Math.PI * 2; // 随机初始方向
-        
+
         this.simulator = new FluidSimulator(renderer, params);
         this.setInitialWaterVolume(waterVolume);
-        this.setInitialVelocity(0, -20.0); // 降低初始速度，让水滴保持在中心附近
-        
+        // 实体初始速度（第一帧会触发惯性挤压效果）
+        // 使用基类的 velocity 属性（而非独立的 worldVelocity）
+        const defaultVelocity = new THREE.Vector3(0, -20.0, 0);
+        this.velocity = initialVelocity?.clone() ?? defaultVelocity;
+        this.prevVelocity.copy(this.velocity);  // 初始化前一帧速度
+
         const renderMaterial = this.simulator.getRenderMaterial();
         this.mesh.material = renderMaterial;
 
-        this.worldVelocity = initialVelocity?.clone() ?? new THREE.Vector3();
         if (initialPosition) {
             this.mesh.position.copy(initialPosition);
             this.position.copy(initialPosition);
@@ -215,6 +204,11 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         this.age += delta;
         this.frameCount++;
 
+        // 调试：每60帧输出一次状态
+        if (this.frameCount % 60 === 0) {
+            console.log(`[LightFluid:${this.id}] frame=${this.frameCount}, age=${this.age.toFixed(2)}/${this.maxAge}, LOD=${FluidLOD[this.lod]}, visible=${this.isVisibleInCamera}, vel=${this.velocity.length().toFixed(1)}, pos=(${this.mesh.position.x.toFixed(1)}, ${this.mesh.position.y.toFixed(1)})`);
+        }
+
         // 寿命检测
         if (this.age > this.maxAge) {
             this.isActive = false;
@@ -227,17 +221,31 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             return;
         }
 
+        // ★★★ 复用 Entity 基类的 velocity + GravitySystem 重力 ★★★
         // 应用累积的外部加速度
         if (this.externalAccel.lengthSq() > 0.0001) {
-            this.worldVelocity.add(this.externalAccel.clone().multiplyScalar(delta));
+            this.velocity.add(this.externalAccel.clone().multiplyScalar(delta));
         }
         // 重置外部加速度（每帧重新累积）
         this.externalAccel.set(0, 0, 0);
 
+        // 应用重力（使用统一的 GravitySystem）
+        this.velocity.y += GRAVITY * delta;
+
+        // 地面碰撞检测
+        const groundY = GROUND_HEIGHT + this.radius * 0.5 + 0.2;
+        if (this.position.y <= groundY) {
+            this.position.y = groundY;
+            this.velocity.y = 0;
+            // 地面摩擦
+            this.velocity.x *= 0.95;
+            this.velocity.z *= 0.95;
+        }
+
         // 位置更新（始终执行，不受LOD和可见性影响）
-        this.mesh.position.x += this.worldVelocity.x * delta;
-        this.mesh.position.y += this.worldVelocity.y * delta;
-        this.mesh.position.z += this.worldVelocity.z * delta;
+        this.mesh.position.x += this.velocity.x * delta;
+        this.mesh.position.y += this.velocity.y * delta;
+        this.mesh.position.z += this.velocity.z * delta;
         this.position.copy(this.mesh.position);
 
         // 更新模拟器的世界位置（用于可见性检测）
@@ -273,8 +281,9 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             this.processPendingForces(this.simUpdateAccumulated);
 
             // 计算加速度（基于累计时间，更准确）
-            const accel = new THREE.Vector3().subVectors(this.worldVelocity, this.prevWorldVelocity).divideScalar(this.simUpdateAccumulated || delta);
-            this.prevWorldVelocity.copy(this.worldVelocity);
+            // 使用基类的 velocity
+            const accel = new THREE.Vector3().subVectors(this.velocity, this.prevVelocity).divideScalar(this.simUpdateAccumulated || delta);
+            this.prevVelocity.copy(this.velocity);
 
             // 将世界加速度转化为局部散度注入，模拟惯性挤压
             if (accel.length() > 1.0) { // 只对明显的加速度反应
@@ -284,21 +293,12 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 const cx = 0.5 - accelDir.x * offsetDist;
                 const cy = 0.5 - accelDir.y * offsetDist;
                 const squeeze = accel.length() * 200; // 降低散度强度，避免数值不稳定
+                // 调试：惯性挤压触发
+                if (this.frameCount % 60 === 0) {
+                    console.log(`[LightFluid:${this.id}] 惯性挤压: accel=${accel.length().toFixed(1)}, squeeze=${squeeze.toFixed(0)}, dir=(${accelDir.x.toFixed(2)}, ${accelDir.y.toFixed(2)})`);
+                }
                 this.simulator.addDivergenceImpulse(-squeeze, 0.25, cx, cy); // 负散度 = 向外推
             }
-
-            // ★★★ 内部随机微风：让水滴一直有内部流动，非常生动 ★★★
-            if (this.lod < FluidLOD.LOW) {
-                const windAngle = Math.random() * Math.PI * 2;
-                const windStrength = 0.3 + Math.random() * 0.4;
-                this.simulator.addVelocityImpulse(
-                    Math.cos(windAngle) * windStrength,
-                    Math.sin(windAngle) * windStrength
-                );
-            }
-
-            // 呼吸/脉动效果（已禁用）
-            this.breathingPhase += this.breathingSpeed * this.simUpdateAccumulated;
 
             // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
             const substeps = Math.max(1, Math.floor(this.simUpdateAccumulated / this.simTimeStep));
@@ -378,15 +378,18 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     */
 
     public applyForce(force: THREE.Vector3, delta: number): void {
-        this.worldVelocity.add(force.clone().multiplyScalar(delta));
+        // 使用基类的 velocity
+        this.velocity.add(force.clone().multiplyScalar(delta));
     }
 
     public applyImpulse(impulse: THREE.Vector3): void {
-        this.worldVelocity.add(impulse);
+        // 使用基类的 velocity
+        this.velocity.add(impulse);
     }
 
     public setVelocity(velocity: THREE.Vector3): void {
-        this.worldVelocity.copy(velocity);
+        // 使用基类的 velocity
+        this.velocity.copy(velocity);
     }
 
     public setCamera(camera: THREE.Camera): void {
@@ -477,15 +480,29 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     applyFluidForce(force: FluidExternalForce): void {
         // ========== 1. 世界运动 ==========
         if (force.worldImpulse) {
+            // 调试：冲量接收
+            console.log(`[LightFluid:${this.id}] 接收冲量: (${force.worldImpulse.x.toFixed(2)}, ${force.worldImpulse.y.toFixed(2)}, ${force.worldImpulse.z.toFixed(2)})`);
             this.applyImpulse(force.worldImpulse);
         }
         if (force.worldAcceleration) {
+            // 调试：加速度接收
+            console.log(`[LightFluid:${this.id}] 接收加速度: (${force.worldAcceleration.x.toFixed(2)}, ${force.worldAcceleration.y.toFixed(2)}, ${force.worldAcceleration.z.toFixed(2)})`);
             // 加速度累积，在 update() 中每帧施加
             this.externalAccel.add(force.worldAcceleration);
         }
 
         // ========== 2. 内部流场注入（缓存后在 update 中处理） ==========
         if (force.velocityInjection || force.divergenceInjection || force.waterInjection) {
+            // 调试：流场注入
+            if (force.velocityInjection) {
+                console.log(`[LightFluid:${this.id}] 速度注入: (${force.velocityInjection.velocity.x.toFixed(2)}, ${force.velocityInjection.velocity.y.toFixed(2)}), r=${force.velocityInjection.radius}`);
+            }
+            if (force.divergenceInjection) {
+                console.log(`[LightFluid:${this.id}] 散度注入: ${force.divergenceInjection.divergence.toFixed(0)}, r=${force.divergenceInjection.radius}`);
+            }
+            if (force.waterInjection) {
+                console.log(`[LightFluid:${this.id}] 水量注入: ${force.waterInjection.amount.toFixed(3)}, r=${force.waterInjection.radius}`);
+            }
             this.pendingForces.push(force);
         }
     }

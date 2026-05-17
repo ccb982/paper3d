@@ -2792,7 +2792,7 @@ export class FluidSimulator {
             // 首次爆炸(createWater=true)保持正强度（外扩），后续爆炸全部负强度（收缩）
             const sign = createWater ? 1 : -1;
             const fs = sign * strength / count * (0.8 + rand() * 0.4);
-            console.log(`[Explosion] i=${i}, createWater=${createWater}, sign=${sign}, fs=${fs.toFixed(2)}, strength=${strength}, count=${count}`);
+            // console.log(`[Explosion] i=${i}, createWater=${createWater}, sign=${sign}, fs=${fs.toFixed(2)}, strength=${strength}, count=${count}`);
             this.explode(fx, fy, fr, fs, createWater, duration);
         }
         
