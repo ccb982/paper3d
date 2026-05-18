@@ -159,10 +159,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         // ========== 2. 角平分线朝向（初始运动方向） ==========
         // 默认竖直向下（重力）
         const angle = this.velocity.lengthSq() > 0.001 
-            ? Math.atan2(this.velocity.y, this.velocity.x) 
-            : Math.PI / 2;
+            ? -Math.atan2(this.velocity.y, this.velocity.x)  // 负号：纹理Y轴朝下
+            : 0;  // 默认：尖端朝上
         
-        // 纹理中心 = 重心位置（三分之一处）
+        // 纹理中心 = 重心位置
         const centerX = w / 2;
         const centerY = h / 2;
         
@@ -175,22 +175,22 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 
                 // 转换为以重心为原点的坐标
                 let dx = (x - centerX) / halfW;
-                let dy = (centerY - y) / halfH;  // y轴翻转：向下为正
+                let dy = (y - centerY) / halfH;  // y向下为正（UV坐标系）
                 
                 // 旋转到角平分线方向
-                const rotX = dx * cosA + dy * sinA;
-                const rotY = -dx * sinA + dy * cosA;
+                const rotX = dx * cosA - dy * sinA;
+                const rotY = dx * sinA + dy * cosA;
                 
-                // 坐标转换后：rotY > 0 是下方（半圆突出），rotY < 0 是上方（三角形尖端）
+                // rotY > 0 是上方（三角形尖端向下），rotY < 0 是下方（半圆向上）
                 let phi: number;
                 
-                if (rotY < 0) {
-                    // 三角形尖端区域：rotY 从 0 递减到 -1
-                    const t = -rotY;  // 0~1，从底边到尖端
+                if (rotY > 0) {
+                    // 三角形尖端区域：rotY 从 0 递增到 1
+                    const t = rotY;  // 0~1，从底边到尖端
                     const triWidth = 1.0 - t;  // 底边宽，逐渐变尖
                     phi = Math.abs(rotX) - triWidth;
                 } else {
-                    // 半圆区域：rotY 从 0 递增到 1，圆心在 rotY=0
+                    // 半圆区域：rotY 从 0 递减到 -1，圆心在 rotY=0
                     phi = Math.sqrt(rotX * rotX + rotY * rotY) - 1.0;
                 }
                 
