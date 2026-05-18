@@ -175,11 +175,9 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         const halfW = r * widthRatio;
         const halfH = r * heightRatio;
         
-        // ========== 2. 角平分线朝向（初始运动方向） ==========
-        // 默认竖直向下（重力）
-        const angle = this.velocity.lengthSq() > 0.001 
-            ? -Math.atan2(this.velocity.y, this.velocity.x)  // 负号：纹理Y轴朝下
-            : 0;  // 默认：尖端朝上
+        // ========== 2. 角平分线朝向（统一竖直向下创建） ==========
+        // 第0帧会在 update 中转向初速度方向
+        const angle = 0;  // 统一竖直向下，尖端朝上
         
         // 纹理中心 = 重心位置
         const centerX = w / 2;
@@ -285,15 +283,21 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         this.mesh.position.z += this.velocity.z * delta;
         this.position.copy(this.mesh.position);
         
-        // 旋转插值：重心（半圆那头）朝运动方向，尖端朝运动反方向
+        // 旋转：第0帧直接跳转到初速度方向，之后正常插值
         if (this.velocity.lengthSq() > 0.01) {
             // atan2(vx, -vy)：让半圆那头朝下（运动方向）
             const targetAngle = Math.atan2(this.velocity.x, -this.velocity.y);
-            // 角度插值（处理跨越 -π/π 的情况）
-            let diff = targetAngle - this.currentRotation;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            this.currentRotation += diff * this.rotationLerp;
+            
+            if (this.frameCount <= 1) {
+                // 第0帧：直接跳转，不插值
+                this.currentRotation = targetAngle;
+            } else {
+                // 角度插值（处理跨越 -π/π 的情况）
+                let diff = targetAngle - this.currentRotation;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                this.currentRotation += diff * this.rotationLerp;
+            }
             this.mesh.rotation.z = this.currentRotation;
         }
 
