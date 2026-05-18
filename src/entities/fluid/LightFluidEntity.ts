@@ -91,7 +91,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.scale.set(displayScale, displayScale, 1);
-        mesh.rotation.z = Math.random() * Math.PI * 2;
 
         super(id, 'lightFluid', mesh);
         
@@ -143,45 +142,59 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private setInitialWaterVolume(volume: number): void {
         const w = this.texSize, h = this.texSize;
         const data = new Float32Array(w * h * 4);
-        const cx = w / 2, cy = h / 2;
         
-        // 液滴形状参数
-        const baseRadius = Math.sqrt(volume) * w * 0.4;
+        // ========== 1. 根据水量计算基础尺寸 ==========
+        // 形状：上三角 + 下半圆
+        // 面积 = 三角形面积 + 半圆面积 = r² + πr²/2 ≈ 2.57r²
+        // r = √(面积 / 2.57)
+        const area = volume * w * h;
+        const r = Math.sqrt(area / 2.57);
         
-        // 液滴形状系数：垂直方向拉长，顶部变尖
-        const verticalStretch = 1.3;   // 垂直拉伸
-        const topTaper = 0.6;          // 顶部收缩系数
-        const bottomBulge = 1.2;       // 底部膨胀系数
-
+        // 随机高宽比（高矮胖瘦）
+        const heightRatio = 0.8 + Math.random() * 0.4;  // 0.8~1.2，高
+        const widthRatio = 0.6 + Math.random() * 0.6;  // 0.6~1.2，胖
+        const halfW = r * widthRatio;
+        const halfH = r * heightRatio;
+        
+        // ========== 2. 角平分线朝向（初始运动方向） ==========
+        // 默认竖直向下（重力）
+        const angle = this.velocity.lengthSq() > 0.001 
+            ? Math.atan2(this.velocity.y, this.velocity.x) 
+            : Math.PI / 2;
+        
+        // 纹理中心 = 重心位置（三分之一处）
+        const centerX = w / 2;
+        const centerY = h / 2;
+        
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+        
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
                 const i = (y * w + x) * 4;
-                const dx = x - cx;
-                const dy = y - cy;
                 
-                // 液滴形状计算
-                // 将圆形转换为水滴形状：底部圆润，顶部尖细
-                const normalizedY = dy / (h * 0.5); // -1 到 1，顶部为负，底部为正
+                // 转换为以重心为原点的坐标
+                let dx = (x - centerX) / halfW;
+                let dy = (centerY - y) / halfH;  // y轴翻转：向下为正
                 
-                // 根据垂直位置调整半径
-                let radiusScale = 1.0;
-                if (normalizedY < 0) {
-                    // 顶部区域：逐渐变尖
-                    radiusScale = topTaper + (1.0 - topTaper) * (1.0 + normalizedY);
+                // 旋转到角平分线方向
+                const rotX = dx * cosA + dy * sinA;
+                const rotY = -dx * sinA + dy * cosA;
+                
+                // 坐标转换后：rotY > 0 是下方（半圆突出），rotY < 0 是上方（三角形尖端）
+                let phi: number;
+                
+                if (rotY < 0) {
+                    // 三角形尖端区域：rotY 从 0 递减到 -1
+                    const t = -rotY;  // 0~1，从底边到尖端
+                    const triWidth = 1.0 - t;  // 底边宽，逐渐变尖
+                    phi = Math.abs(rotX) - triWidth;
                 } else {
-                    // 底部区域：略微膨胀
-                    radiusScale = 1.0 + (bottomBulge - 1.0) * normalizedY;
+                    // 半圆区域：rotY 从 0 递增到 1，圆心在 rotY=0
+                    phi = Math.sqrt(rotX * rotX + rotY * rotY) - 1.0;
                 }
                 
-                // 垂直方向拉伸
-                const adjustedDy = dy * verticalStretch;
-                
-                // 计算液滴形状的距离
-                const dist = Math.sqrt(dx * dx + adjustedDy * adjustedDy);
-                const adjustedRadius = baseRadius * radiusScale;
-
-                // 规则的液滴形状（无随机扰动）
-                data[i] = dist - adjustedRadius; // phi: 内部负，外部正
+                data[i] = phi;         // phi: 内部负，外部正
                 data[i + 1] = 0;
                 data[i + 2] = 0;
                 data[i + 3] = 1;
