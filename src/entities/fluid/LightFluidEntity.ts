@@ -56,7 +56,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private _sphere = new THREE.Sphere();         // 裁剪球体
 
     // 尾部挖空效果参数（用于拖尾）
-    public trailEnabled: boolean = false;         // 是否启用尾部挖空
+    public trailEnabled: boolean = true;          // 是否启用尾部挖空（默认启用）
     public trailRadius: number = 0.1;             // 尾部挖空半径（纹理空间）
     private trailOffset: number = 0.25;           // 尾部偏移量（相对于中心）
 
@@ -140,6 +140,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         
         // 设置小液滴的可见性检测半径
         this.cachedWorldRadius = displayScale * 0.5;
+
     }
 
     /**
@@ -186,6 +187,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         const cosA = Math.cos(angle);
         const sinA = Math.sin(angle);
         
+        // 尾部挖空参数（尖端位置）
+        const trailRadius = this.trailRadius * r;  // 转换回像素空间
+        const trailOffsetY = this.trailOffset * r;  // 尖端正方向偏移
+        
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
                 const i = (y * w + x) * 4;
@@ -198,7 +203,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 const rotX = dx * cosA - dy * sinA;
                 const rotY = dx * sinA + dy * cosA;
                 
-                // rotY > 0 是上方（三角形尖端向下），rotY < 0 是下方（半圆向上）
+                // rotY > 0 是上方（三角形尖端），rotY < 0 是下方（半圆）
                 let phi: number;
                 
                 if (rotY > 0) {
@@ -209,6 +214,24 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 } else {
                     // 半圆区域：rotY 从 0 递减到 -1，圆心在 rotY=0
                     phi = Math.sqrt(rotX * rotX + rotY * rotY) - 1.0;
+                }
+                
+                // ========== 3. 尾部挖空（在尖端正方向挖一个圆） ==========
+                if (this.trailEnabled) {
+                    // 尖端正方向距离
+                    const distToTip = rotY;
+                    // 只在尖端区域挖空
+                    if (distToTip > 0 && distToTip < trailOffsetY * 2) {
+                        // 计算到尖端圆心的距离
+                        const tipX = 0;
+                        const tipY = trailOffsetY / halfH;  // 转换回归一化坐标
+                        const tipDist = Math.sqrt(Math.pow(rotX - tipX, 2) + Math.pow(rotY - tipY, 2));
+                        const tipRadius = trailRadius / halfH;  // 转换回归一化坐标
+                        
+                        if (tipDist < tipRadius) {
+                            phi = 1.0;  // 挖空（空气）
+                        }
+                    }
                 }
                 
                 data[i] = phi;         // phi: 内部负，外部正
@@ -306,12 +329,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             this.simulator.setWorldTransform(this.mesh.position, this.cachedWorldRadius);
         }
 
-        // 更新尾部挖空效果
-        this.updateTrailMark();
-
-        if (!this.simulator) return;
-
-        // 可见性检测：不可见时跳过纹理模拟更新
+        // 位置更新（始终执行，不受LOD和可见性影响）：不可见时跳过纹理模拟更新
         const isVisible = this.updateVisibilityIfNeeded(performance.now() / 1000);
         
         // 根据可见性和LOD控制纹理更新
@@ -394,46 +412,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 return 1 / 12;  // 12 FPS（原为1/15）
             default:
                 return Number.MAX_VALUE;  // 不更新
-        }
-    }
-
-    /**
-     * 更新尾部挖空位置
-     * 尾部位置 = 中心 + 速度反方向 * 偏移量（纹理空间）
-     */
-    private updateTrailMark(): void {
-        if (!this.simulator) return;
-
-        const speed = this.velocity.length();
-
-        if (this.trailEnabled && speed > 0.1) {
-            // 将世界速度方向转换到纹理空间（考虑纹理旋转）
-            const angle = -this.mesh.rotation.z;
-            const cos = Math.cos(angle);
-            const sin = Math.sin(angle);
-
-            const velX = this.velocity.x;
-            const velY = this.velocity.y;
-            const texVelX = velX * cos + velY * sin;
-            const texVelY = -velX * sin + velY * cos;
-
-            const texSpeed = Math.sqrt(texVelX * texVelX + texVelY * texVelY);
-            if (texSpeed > 0.01) {
-                const normX = texVelX / texSpeed;
-                const normY = texVelY / texSpeed;
-
-                // 尾部在速度反方向
-                const trailU = 0.5 - normX * this.trailOffset;
-                const trailV = 0.5 - normY * this.trailOffset;
-
-                this.simulator.setTrailEnabled(true);
-                this.simulator.setTrailUV(trailU, trailV);
-                this.simulator.setTrailRadius(this.trailRadius);
-            } else {
-                this.simulator.setTrailEnabled(false);
-            }
-        } else {
-            this.simulator.setTrailEnabled(false);
         }
     }
 
@@ -642,30 +620,5 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         }
 
         this.pendingForces.length = 0;
-    }
-
-    // ==================== 尾部挖空控制方法（用于拖尾效果）====================
-
-    /**
-     * 启用/禁用尾部挖空效果
-     */
-    public setTrail(enabled: boolean): void {
-        this.trailEnabled = enabled;
-    }
-
-    /**
-     * 设置尾部挖空的半径
-     * @param radius 半径（纹理空间，0~0.5）
-     */
-    public setTrailRadius(radius: number): void {
-        this.trailRadius = Math.max(0.01, Math.min(0.4, radius));
-    }
-
-    /**
-     * 设置尾部偏移量（相对于中心的距离）
-     * @param offset 偏移量（纹理空间，0~0.5）
-     */
-    public setTrailOffset(offset: number): void {
-        this.trailOffset = Math.max(0.05, Math.min(0.45, offset));
     }
 }
