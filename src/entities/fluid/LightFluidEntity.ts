@@ -222,7 +222,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         }
 
         // ★★★ 复用 Entity 基类的 velocity + GravitySystem 重力 ★★★
-        // 应用累积的外部加速度
+        // 应用累积的外部加速度vel.y -= gravity * dt;  // 模拟器内部重力
+
         if (this.externalAccel.lengthSq() > 0.0001) {
             this.velocity.add(this.externalAccel.clone().multiplyScalar(delta));
         }
