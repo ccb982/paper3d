@@ -48,6 +48,13 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private currentRotation: number = 0;      // 当前旋转角度
     private rotationLerp: number = 0.1;       // 插值速度
 
+    // ========== 性能优化：预创建的临时对象（避免每帧 GC） ==========
+    private _tmpAccel = new THREE.Vector3();      // 加速度计算
+    private _tmpAccelDir = new THREE.Vector2();   // 加速度方向
+    private _frustum = new THREE.Frustum();       // 视锥体裁剪
+    private _projScreenMatrix = new THREE.Matrix4(); // 投影矩阵
+    private _sphere = new THREE.Sphere();         // 裁剪球体
+
     constructor(
         id: string, 
         renderer: THREE.WebGLRenderer, 
@@ -311,22 +318,19 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             this.processPendingForces(this.simUpdateAccumulated);
 
             // 计算加速度（基于累计时间，更准确）
-            // 使用基类的 velocity
-            const accel = new THREE.Vector3().subVectors(this.velocity, this.prevVelocity).divideScalar(this.simUpdateAccumulated || delta);
+            // 使用预创建的临时对象，避免每帧 GC
+            this._tmpAccel.subVectors(this.velocity, this.prevVelocity).divideScalar(this.simUpdateAccumulated || delta);
             this.prevVelocity.copy(this.velocity);
 
             // 将世界加速度转化为局部散度注入，模拟惯性挤压
-            if (accel.length() > 1.0) { // 只对明显的加速度反应
-                const accelDir = new THREE.Vector2(accel.x, accel.y).normalize();
+            if (this._tmpAccel.length() > 1.0) { // 只对明显的加速度反应
+                this._tmpAccelDir.set(this._tmpAccel.x, this._tmpAccel.y).normalize();
+                const accelDir = this._tmpAccelDir;
                 // 在加速度反方向的边缘注入散度，模拟惯性让水向一边堆积
                 const offsetDist = 0.3; // 偏离中心的距离
                 const cx = 0.5 - accelDir.x * offsetDist;
                 const cy = 0.5 - accelDir.y * offsetDist;
-                const squeeze = accel.length() * 200; // 降低散度强度，避免数值不稳定
-                // 调试：惯性挤压触发
-                if (this.frameCount % 60 === 0) {
-                    console.log(`[LightFluid:${this.id}] 惯性挤压: accel=${accel.length().toFixed(1)}, squeeze=${squeeze.toFixed(0)}, dir=(${accelDir.x.toFixed(2)}, ${accelDir.y.toFixed(2)})`);
-                }
+                const squeeze = this._tmpAccel.length() * 200; // 降低散度强度，避免数值不稳定
                 this.simulator.addDivergenceImpulse(-squeeze, 0.25, cx, cy); // 负散度 = 向外推
             }
 
@@ -440,16 +444,14 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             return true;
         }
 
-        const frustum = new THREE.Frustum();
-        const projScreenMatrix = new THREE.Matrix4();
-        projScreenMatrix.multiplyMatrices(
+        // 使用预创建的临时对象，避免每帧 GC
+        this._projScreenMatrix.multiplyMatrices(
             this.externalCamera.projectionMatrix,
             this.externalCamera.matrixWorldInverse
         );
-        frustum.setFromProjectionMatrix(projScreenMatrix);
-
-        const sphere = new THREE.Sphere(this.mesh.position, this.cachedWorldRadius);
-        return frustum.intersectsSphere(sphere);
+        this._frustum.setFromProjectionMatrix(this._projScreenMatrix);
+        this._sphere.set(this.mesh.position, this.cachedWorldRadius);
+        return this._frustum.intersectsSphere(this._sphere);
     }
 
     private updateVisibilityIfNeeded(currentTime: number): boolean {
