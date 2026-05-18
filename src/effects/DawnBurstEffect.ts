@@ -125,6 +125,9 @@ export class DawnBurstEffect extends BaseEffect {
   private galaxyPoints: THREE.Points[] = [];
   private glowPoints: THREE.Points | null = null;
 
+  // ========== 性能优化：预创建的临时对象（避免每帧 GC）==========
+  private _tmpMovement = new THREE.Vector3();
+
   constructor(position: THREE.Vector3, duration: number = 4.0) {
     super(duration);
     this.group = new THREE.Group();
@@ -258,8 +261,8 @@ export class DawnBurstEffect extends BaseEffect {
       
       // 移动粒子
       const distance = particle.speed * delta;
-      const movement = new THREE.Vector3().copy(particle.direction).multiplyScalar(distance);
-      particle.mesh.position.add(movement);
+      this._tmpMovement.copy(particle.direction).multiplyScalar(distance);
+      particle.mesh.position.add(this._tmpMovement);
       
       // 淡出效果
       const progress = 1 - (particle.lifetime / particle.maxLifetime);

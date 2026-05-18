@@ -1572,7 +1572,11 @@ export class FluidSimulator {
                 edgeWidth: { value: this.edgeWidth },
                 edgeIntensity: { value: this.edgeIntensity },
                 specularIntensity: { value: this.specularIntensity },
-                flowIntensity: { value: this.flowIntensity }
+                flowIntensity: { value: this.flowIntensity },
+                // 尾部挖空参数（用于拖尾效果）
+                trailEnabled: { value: false },
+                trailUV: { value: new THREE.Vector2(0.5, 0.5) },
+                trailRadius: { value: 0.1 }
             },
             vertexShader: vs,
             fragmentShader: `
@@ -1586,6 +1590,10 @@ export class FluidSimulator {
                 uniform float edgeIntensity;
                 uniform float specularIntensity;
                 uniform float flowIntensity;
+                // 尾部挖空 uniforms
+                uniform bool trailEnabled;
+                uniform vec2 trailUV;
+                uniform float trailRadius;
 
                 varying vec2 vUv;
 
@@ -1603,7 +1611,15 @@ export class FluidSimulator {
 
                 void main() {
                     float phi = texture2D(phiTex, vUv).r;
-                    
+
+                    // ========== 0. 尾部挖空效果（phi > 0 变成空气）==========
+                    if (trailEnabled) {
+                        float trailDist = distance(vUv, trailUV);
+                        float trailMask = 1.0 - smoothstep(0.0, trailRadius, trailDist);
+                        // 在尾部区域强制将 phi 设为正值（空气）
+                        phi = mix(phi, 1.0, trailMask);
+                    }
+
                     // phi >= 0 是空气或界面区域，显示为淡蓝色半透明
                     if (phi >= 0.0) {
                         gl_FragColor = vec4(0.6, 0.8, 1.0, 0.1);  // 淡蓝色半透明空气
@@ -3023,6 +3039,33 @@ export class FluidSimulator {
     public setFlowIntensity(intensity: number): void {
         this.flowIntensity = intensity;
         this.renderMaterial.uniforms.flowIntensity.value = intensity;
+    }
+
+    // ==================== 尾部挖空设置方法（用于拖尾效果）====================
+
+    /**
+     * 启用/禁用尾部挖空效果
+     * @param enabled 是否启用
+     */
+    public setTrailEnabled(enabled: boolean): void {
+        this.renderMaterial.uniforms.trailEnabled.value = enabled;
+    }
+
+    /**
+     * 设置尾部挖空的位置（纹理坐标 0~1）
+     * @param u 纹理 U 坐标
+     * @param v 纹理 V 坐标
+     */
+    public setTrailUV(u: number, v: number): void {
+        this.renderMaterial.uniforms.trailUV.value.set(u, v);
+    }
+
+    /**
+     * 设置尾部挖空的半径
+     * @param radius 半径（纹理空间，0~0.5）
+     */
+    public setTrailRadius(radius: number): void {
+        this.renderMaterial.uniforms.trailRadius.value = radius;
     }
 
     public setLightDirection(dir: THREE.Vector3): void {

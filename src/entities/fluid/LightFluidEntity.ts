@@ -55,6 +55,14 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private _projScreenMatrix = new THREE.Matrix4(); // 投影矩阵
     private _sphere = new THREE.Sphere();         // 裁剪球体
 
+    // 尾部挖空效果参数（用于拖尾）
+    public trailEnabled: boolean = false;         // 是否启用尾部挖空
+    public trailRadius: number = 0.1;             // 尾部挖空半径（纹理空间）
+    private trailOffset: number = 0.25;           // 尾部偏移量（相对于中心）
+
+    // 重力开关
+    public gravityEnabled: boolean = false;        // 是否启用重力（默认暂停）
+
     constructor(
         id: string, 
         renderer: THREE.WebGLRenderer, 
@@ -255,16 +263,20 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         this.externalAccel.set(0, 0, 0);
 
         // 应用重力（使用统一的 GravitySystem）
-        this.velocity.y += GRAVITY * delta;
+        if (this.gravityEnabled) {
+            this.velocity.y += GRAVITY * delta;
+        }
 
-        // 地面碰撞检测
-        const groundY = GROUND_HEIGHT + this.radius * 0.5 + 0.2;
-        if (this.position.y <= groundY) {
-            this.position.y = groundY;
-            this.velocity.y = 0;
-            // 地面摩擦
-            this.velocity.x *= 0.95;
-            this.velocity.z *= 0.95;
+        // 地面碰撞检测（暂停重力时也禁用）
+        if (this.gravityEnabled) {
+            const groundY = GROUND_HEIGHT + this.radius * 0.5 + 0.2;
+            if (this.position.y <= groundY) {
+                this.position.y = groundY;
+                this.velocity.y = 0;
+                // 地面摩擦
+                this.velocity.x *= 0.95;
+                this.velocity.z *= 0.95;
+            }
         }
 
         // 位置更新（始终执行，不受LOD和可见性影响）
@@ -289,6 +301,9 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         if (this.simulator) {
             this.simulator.setWorldTransform(this.mesh.position, this.cachedWorldRadius);
         }
+
+        // 更新尾部挖空效果
+        this.updateTrailMark();
 
         if (!this.simulator) return;
 
@@ -375,6 +390,46 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 return 1 / 12;  // 12 FPS（原为1/15）
             default:
                 return Number.MAX_VALUE;  // 不更新
+        }
+    }
+
+    /**
+     * 更新尾部挖空位置
+     * 尾部位置 = 中心 + 速度反方向 * 偏移量（纹理空间）
+     */
+    private updateTrailMark(): void {
+        if (!this.simulator) return;
+
+        const speed = this.velocity.length();
+
+        if (this.trailEnabled && speed > 0.1) {
+            // 将世界速度方向转换到纹理空间（考虑纹理旋转）
+            const angle = -this.mesh.rotation.z;
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+
+            const velX = this.velocity.x;
+            const velY = this.velocity.y;
+            const texVelX = velX * cos + velY * sin;
+            const texVelY = -velX * sin + velY * cos;
+
+            const texSpeed = Math.sqrt(texVelX * texVelX + texVelY * texVelY);
+            if (texSpeed > 0.01) {
+                const normX = texVelX / texSpeed;
+                const normY = texVelY / texSpeed;
+
+                // 尾部在速度反方向
+                const trailU = 0.5 - normX * this.trailOffset;
+                const trailV = 0.5 - normY * this.trailOffset;
+
+                this.simulator.setTrailEnabled(true);
+                this.simulator.setTrailUV(trailU, trailV);
+                this.simulator.setTrailRadius(this.trailRadius);
+            } else {
+                this.simulator.setTrailEnabled(false);
+            }
+        } else {
+            this.simulator.setTrailEnabled(false);
         }
     }
 
@@ -583,5 +638,30 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         }
 
         this.pendingForces.length = 0;
+    }
+
+    // ==================== 尾部挖空控制方法（用于拖尾效果）====================
+
+    /**
+     * 启用/禁用尾部挖空效果
+     */
+    public setTrail(enabled: boolean): void {
+        this.trailEnabled = enabled;
+    }
+
+    /**
+     * 设置尾部挖空的半径
+     * @param radius 半径（纹理空间，0~0.5）
+     */
+    public setTrailRadius(radius: number): void {
+        this.trailRadius = Math.max(0.01, Math.min(0.4, radius));
+    }
+
+    /**
+     * 设置尾部偏移量（相对于中心的距离）
+     * @param offset 偏移量（纹理空间，0~0.5）
+     */
+    public setTrailOffset(offset: number): void {
+        this.trailOffset = Math.max(0.05, Math.min(0.45, offset));
     }
 }

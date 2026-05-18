@@ -9,6 +9,14 @@ export class FreeStyleShootingSystem extends BaseShootingSystem {
   private mousePos: { x: number; y: number } = { x: 0, y: 0 };
   private shootableObjects: THREE.Object3D[] = [];
 
+  // ========== 性能优化：预创建的临时对象（避免每帧 GC）==========
+  private _tmpDirection = new THREE.Vector3();
+  private _tmpRaycaster = new THREE.Raycaster();
+  private _tmpHitPoint = new THREE.Vector3();
+  private _tmpFarPoint = new THREE.Vector3();
+  private _tmpBulletOrigin = new THREE.Vector3();
+  private _tmpDirToTarget = new THREE.Vector3();
+
   public setShootableObjects(objects: THREE.Object3D[]): void {
     this.shootableObjects = objects;
   }
@@ -24,20 +32,18 @@ export class FreeStyleShootingSystem extends BaseShootingSystem {
   private getRaycastHitPoint(): THREE.Vector3 | null {
     if (!this.camera) return null;
 
-    const raycaster = new THREE.Raycaster();
-    const direction = new THREE.Vector3();
-    this.camera.getWorldDirection(direction);
-    raycaster.set(this.camera.position, direction);
+    this.camera.getWorldDirection(this._tmpDirection);
+    this._tmpRaycaster.set(this.camera.position, this._tmpDirection);
 
     if (this.shootableObjects.length > 0) {
-      const intersects = raycaster.intersectObjects(this.shootableObjects, true);
+      const intersects = this._tmpRaycaster.intersectObjects(this.shootableObjects, true);
       if (intersects.length > 0) {
         return intersects[0].point;
       }
     }
 
-    const farPoint = this.camera.position.clone().add(direction.multiplyScalar(100));
-    return farPoint;
+    this._tmpFarPoint.copy(this.camera.position).addScaledVector(this._tmpDirection, 100);
+    return this._tmpFarPoint;
   }
 
   private updateShooting(): void {
@@ -51,21 +57,21 @@ export class FreeStyleShootingSystem extends BaseShootingSystem {
     const hitPoint = this.getRaycastHitPoint();
     if (!hitPoint) return;
 
-    const bulletOrigin = new THREE.Vector3(
+    this._tmpBulletOrigin.set(
       this.characterPosition.x,
       this.characterPosition.y + 1.5,
       this.characterPosition.z
     );
 
-    const direction = hitPoint.clone().sub(bulletOrigin).normalize();
+    this._tmpDirToTarget.copy(hitPoint).sub(this._tmpBulletOrigin).normalize();
 
     this.createBullet(
       {
-        x: bulletOrigin.x,
-        y: bulletOrigin.y,
-        z: bulletOrigin.z
+        x: this._tmpBulletOrigin.x,
+        y: this._tmpBulletOrigin.y,
+        z: this._tmpBulletOrigin.z
       },
-      { x: direction.x, y: direction.y, z: direction.z }
+      { x: this._tmpDirToTarget.x, y: this._tmpDirToTarget.y, z: this._tmpDirToTarget.z }
     );
   }
 
