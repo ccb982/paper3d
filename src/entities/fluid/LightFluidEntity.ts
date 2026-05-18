@@ -156,7 +156,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         
         // 随机高宽比（高矮胖瘦）
         const heightRatio = 0.8 + Math.random() * 0.4;  // 0.8~1.2，高
-        const widthRatio = 0.3 + Math.random() * 0.3;  // 0.6~1.2，胖
+        const widthRatio = 0.3 + Math.random() * 0.3;  // 0.3~0.6，胖
         const halfW = r * widthRatio;
         const halfH = r * heightRatio;
         
