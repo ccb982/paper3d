@@ -1,10 +1,15 @@
 import * as THREE from 'three';
 
+// ========== 性能优化：预创建的临时对象（避免每帧 GC）==========
+const _tmpDirection = new THREE.Vector3();
+const _tmpRawNDC = new THREE.Vector2();
+const _tmpCorrectedNDC = new THREE.Vector2();
+const _tmpRaycaster = new THREE.Raycaster();
+
 export function getCameraPitch(camera: THREE.Camera): number {
   camera.updateMatrixWorld();
-  const direction = new THREE.Vector3();
-  camera.getWorldDirection(direction);
-  return Math.asin(direction.y);
+  camera.getWorldDirection(_tmpDirection);
+  return Math.asin(_tmpDirection.y);
 }
 
 export interface CorrectedNDCResult {
@@ -24,7 +29,7 @@ export function getCorrectedNDC(
   const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
   const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
 
-  const rawNDC = new THREE.Vector2(
+  _tmpRawNDC.set(
     Math.max(-1, Math.min(1, ndcX)),
     Math.max(-1, Math.min(1, ndcY))
   );
@@ -38,12 +43,13 @@ export function getCorrectedNDC(
   const totalCompensation = baseCompensation * distanceCompensation * pitchCompensation;
   const correction = -pitch * totalCompensation;
 
-  const correctedNDC = new THREE.Vector2(
+  _tmpCorrectedNDC.set(
     Math.max(-1, Math.min(1, ndcX)),
     Math.max(-1, Math.min(1, ndcY + correction))
   );
 
-  return { raw: rawNDC, corrected: correctedNDC };
+  // 返回新对象（外部会修改或存储这些值）
+  return { raw: _tmpRawNDC.clone(), corrected: _tmpCorrectedNDC.clone() };
 }
 
 export function getBulletDirection(
@@ -56,8 +62,7 @@ export function getBulletDirection(
   const characterPos = characterPosition || new THREE.Vector3(0, 0, 0);
   const corrected = getCorrectedNDC(canvas, mouseX, mouseY, camera, characterPos, 0.3);
 
-  const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(corrected.corrected, camera);
+  _tmpRaycaster.setFromCamera(corrected.corrected, camera);
 
-  return raycaster.ray.direction.clone();
+  return _tmpRaycaster.ray.direction.clone();
 }

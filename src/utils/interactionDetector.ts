@@ -14,6 +14,9 @@ export type InteractiveObject = {
 
 export const INTERACTION_RADIUS = 3;
 
+// ========== 性能优化：预创建的临时对象（避免每帧 GC）==========
+const _tmpPlayerPosVec = new THREE.Vector3();
+
 export function getNearbyInteractiveObjects(): InteractiveObject[] {
   const playerPos = characterPositionStore.getPositionCopy();
   const entityManager = EntityManager.getInstance();
@@ -21,7 +24,7 @@ export function getNearbyInteractiveObjects(): InteractiveObject[] {
 
   const interactiveObjects: InteractiveObject[] = [];
 
-  const playerPosVec = new THREE.Vector3(playerPos.x, playerPos.y, playerPos.z);
+  _tmpPlayerPosVec.set(playerPos.x, playerPos.y, playerPos.z);
 
   for (const entity of allEntities) {
     if (!entity.isActive) continue;
@@ -41,14 +44,14 @@ export function getNearbyInteractiveObjects(): InteractiveObject[] {
 
     // 检测是否在水中
     if (entity instanceof WaterEntity) {
-      const inWater = entity.isInWater(playerPosVec);
+      const inWater = entity.isInWater(_tmpPlayerPosVec);
       if (inWater) {
-        entity.addDisturbanceAtWorldPos(playerPosVec, 3.0);
+        entity.addDisturbanceAtWorldPos(_tmpPlayerPosVec, 3.0);
       }
     }
 
     if (isInteractive) {
-      const distance = playerPosVec.distanceTo(entity.position);
+      const distance = _tmpPlayerPosVec.distanceTo(entity.position);
 
       if (distance <= INTERACTION_RADIUS) {
         interactiveObjects.push({

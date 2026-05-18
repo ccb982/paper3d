@@ -27,6 +27,11 @@ export class LockonShootingSystem extends BaseShootingSystem {
   private rayData: RayData[] = [];
   private isActiveSystem: boolean = false;
 
+  // ========== 性能优化：预创建的临时对象（避免每帧 GC）==========
+  private _tmpCharacterPos = new THREE.Vector3();
+  private _tmpRaycaster = new THREE.Raycaster();
+  private _tmpRayOffset = new THREE.Vector2();
+
   protected onInitialize(): void {
     console.log('LockonShootingSystem initialized');
   }
@@ -44,7 +49,7 @@ export class LockonShootingSystem extends BaseShootingSystem {
 
     this.camera.updateMatrixWorld();
 
-    const characterPos = new THREE.Vector3(
+    this._tmpCharacterPos.set(
       this.characterPosition.x,
       this.characterPosition.y,
       this.characterPosition.z
@@ -55,11 +60,10 @@ export class LockonShootingSystem extends BaseShootingSystem {
       this.mousePos.x,
       this.mousePos.y,
       this.camera,
-      characterPos,
+      this._tmpCharacterPos,
       0.3
     );
 
-    const raycaster = new THREE.Raycaster();
     const allIntersects: THREE.Intersection[] = [];
     const rayOrigins: THREE.Vector3[] = [];
     const rayDirections: THREE.Vector3[] = [];
@@ -79,14 +83,12 @@ export class LockonShootingSystem extends BaseShootingSystem {
     ];
 
     for (const offset of rayOffsets) {
-        raycaster.setFromCamera(
-          new THREE.Vector2(ndcResult.corrected.x + offset.x, ndcResult.corrected.y + offset.y),
-          this.camera
-        );
-        const finalDirection = raycaster.ray.direction.clone();
+        this._tmpRayOffset.set(ndcResult.corrected.x + offset.x, ndcResult.corrected.y + offset.y);
+        this._tmpRaycaster.setFromCamera(this._tmpRayOffset, this.camera);
+        const finalDirection = this._tmpRaycaster.ray.direction.clone();
 
-        raycaster.set(this.camera.position, finalDirection);
-        const intersects = raycaster.intersectObjects(this.shootableObjects, true);
+        this._tmpRaycaster.set(this.camera.position, finalDirection);
+        const intersects = this._tmpRaycaster.intersectObjects(this.shootableObjects, true);
 
         allIntersects.push(...intersects);
         rayOrigins.push(this.camera.position.clone());
