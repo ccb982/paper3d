@@ -43,6 +43,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private visibilityCheckInterval: number = 0.5;  // 每0.5秒检查一次
     private lastVisibilityCheckTime: number = 0;
     private cachedWorldRadius: number = 1.0;  // 小液滴的典型半径
+    
+    // 旋转插值相关
+    private currentRotation: number = 0;      // 当前旋转角度
+    private rotationLerp: number = 0.1;       // 插值速度
 
     constructor(
         id: string, 
@@ -261,6 +265,18 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         this.mesh.position.y += this.velocity.y * delta;
         this.mesh.position.z += this.velocity.z * delta;
         this.position.copy(this.mesh.position);
+        
+        // 旋转插值：重心（半圆那头）朝运动方向，尖端朝运动反方向
+        if (this.velocity.lengthSq() > 0.01) {
+            // atan2(vx, -vy)：让半圆那头朝下（运动方向）
+            const targetAngle = Math.atan2(this.velocity.x, -this.velocity.y);
+            // 角度插值（处理跨越 -π/π 的情况）
+            let diff = targetAngle - this.currentRotation;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            this.currentRotation += diff * this.rotationLerp;
+            this.mesh.rotation.z = this.currentRotation;
+        }
 
         // 更新模拟器的世界位置（用于可见性检测）
         if (this.simulator) {
