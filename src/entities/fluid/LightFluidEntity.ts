@@ -61,7 +61,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private trailOffset: number = 0.25;           // 尾部偏移量（相对于中心）
 
     // 重力开关
-    public gravityEnabled: boolean = false;        // 是否启用重力（默认暂停）
+    public gravityEnabled: boolean = false;        // 是否启用重力
 
     constructor(
         id: string, 
@@ -245,7 +245,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         tex.needsUpdate = true;
         this.simulator.setLevelSetTexture(tex);
         tex.dispose();
-    }
+
+            }
 
     // 模拟器内部固定时间步长
     private readonly simTimeStep = 0.008;
@@ -369,6 +370,21 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 const cy = 0.5 - accelDir.y * offsetDist;
                 const squeeze = this._tmpAccel.length() * 200; // 降低散度强度，避免数值不稳定
                 this.simulator.addDivergenceImpulse(-squeeze, 0.25, cx, cy); // 负散度 = 向外推
+            }
+
+            // ========== 持续散度注入：让水向尖端流动 ==========
+            if (this.trailEnabled) {
+                // 尖端位置：三角形尖端在纹理空间的坐标（考虑液滴朝向）
+                const tipU = 0.5;
+                const tipV = 0.5 + this.trailOffset;
+                const tipRadius = this.trailRadius * 1.5;
+                const tipStrength = -80.0 * delta;  // 负散度 = 收缩 = 吸水效果，乘以delta使其与时间相关
+                
+                this.simulator.addDivergenceImpulse(tipStrength, tipRadius, tipU, tipV);
+                
+                // 在尖端位置持续注入水量，让水被"推"向尖端形成拖尾
+                const waterAmount = 0.5 * delta;  // 水量注入，乘以delta与时间相关
+                this.simulator.addWaterImpulse(waterAmount, tipRadius * 0.8, tipU, tipV);
             }
 
             // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
