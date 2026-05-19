@@ -59,6 +59,11 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     public trailEnabled: boolean = true;          // 是否启用尾部挖空（默认启用）
     public trailRadius: number = 0.1;             // 尾部挖空半径（纹理空间）
     private trailOffset: number = 0.25;           // 尾部偏移量（相对于中心）
+    
+    // 挖空位置的UV坐标（在初始化时计算并缓存）
+    private cachedTipU: number = 0.5;             // 挖空圆心U坐标
+    private cachedTipV: number = 0.5;             // 挖空圆心V坐标
+    private cachedTipRadiusUV: number = 0.1;      // 挖空半径（UV空间）
 
     // 重力开关
     public gravityEnabled: boolean = false;        // 是否启用重力
@@ -190,6 +195,14 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         // 尾部挖空参数（尖端位置）
         const trailRadius = this.trailRadius * r;  // 转换回像素空间
         const trailOffsetY = this.trailOffset * r;  // 尖端正方向偏移
+        
+        // ========== 计算挖空位置的UV坐标并缓存 ==========
+        // 挖空圆心在旋转坐标系中是 (rotX=0, rotY=trailOffsetY/halfH)
+        // 由于初始化时angle=0（竖直向下），旋转坐标系与归一化坐标系重合
+        const dy = trailOffsetY / halfH;  // 归一化Y偏移
+        this.cachedTipU = 0.5;  // X居中
+        this.cachedTipV = 0.5 + dy;  // Y偏移到尖端方向
+        this.cachedTipRadiusUV = trailRadius / halfH;  // UV空间中的挖空半径
         
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
@@ -365,7 +378,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 this._tmpAccelDir.set(this._tmpAccel.x, this._tmpAccel.y).normalize();
                 const accelDir = this._tmpAccelDir;
                 // 在加速度反方向的边缘注入散度，模拟惯性让水向一边堆积
-                const offsetDist = 0.3; // 偏离中心的距离
+                const offsetDist = 0.6; // 偏离中心的距离
                 const cx = 0.5 - accelDir.x * offsetDist;
                 const cy = 0.5 - accelDir.y * offsetDist;
                 const squeeze = this._tmpAccel.length() * 200; // 降低散度强度，避免数值不稳定
@@ -374,17 +387,24 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
             // ========== 持续散度注入：让水向尖端流动 ==========
             if (this.trailEnabled) {
-                // 尖端位置：三角形尖端在纹理空间的坐标（考虑液滴朝向）
-                const tipU = 0.5;
-                const tipV = 0.5 + this.trailOffset;
-                const tipRadius = this.trailRadius * 1.5;
-                const tipStrength = -80.0 * delta;  // 负散度 = 收缩 = 吸水效果，乘以delta使其与时间相关
+                // 使用缓存的挖空位置坐标，确保与初始化时的挖空位置精确对齐
+                const tipU = this.cachedTipU;        // 挖空圆心U坐标
+                const tipV = this.cachedTipV;        // 挖空圆心V坐标
+                const tipRadius = this.cachedTipRadiusUV;  // 挖空半径（UV空间）
                 
-                this.simulator.addDivergenceImpulse(tipStrength, tipRadius, tipU, tipV);
+                // 修正偏移：让注入位置更靠近液滴中心
+                // centerBias: 0=不偏移(使用挖空位置), 1=完全移到中心(0.5,0.5)
+                const centerBias = 0.6;  // 30%偏向中心
+                const injectU = tipU + (0.5 - tipU) * centerBias;
+                const injectV = tipV + (0.5 - tipV) * centerBias;
                 
-                // 在尖端位置持续注入水量，让水被"推"向尖端形成拖尾
-                const waterAmount = 0.5 * delta;  // 水量注入，乘以delta与时间相关
-                this.simulator.addWaterImpulse(waterAmount, tipRadius * 0.8, tipU, tipV);
+                const tipStrength = 15000.0 * delta;  // 散度强度上万，产生强烈的收缩吸水效果（原-3000）
+                
+                this.simulator.addDivergenceImpulse(tipStrength, tipRadius, injectU, injectV);
+                
+                // 在挖空位置持续注入水量，让水被"推"向尖端形成拖尾
+                const waterAmount = 5.0 * delta;  // 大幅增大水量注入
+                this.simulator.addWaterImpulse(waterAmount, tipRadius, injectU, injectV);
             }
 
             // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
