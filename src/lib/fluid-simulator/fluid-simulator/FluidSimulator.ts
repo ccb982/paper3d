@@ -590,8 +590,8 @@ export class FluidSimulator {
 
                     if (injectionEnabled) {
                         float dist = length(uv - injectionPos);
-                        // 只在空气中（phi > 0）且距离足够近时注射
-                        if (dist < injectionSize && phi > 0.0) {
+                        // 在注入区域内持续注入水（无论流体内部还是外部）
+                        if (dist < injectionSize) {
                             float mask = 1.0 - smoothstep(0.0, injectionSize, dist);
                             phi = phi - injectionFlowRate * dt * mask;
                             vel += injectionVel * mask;
@@ -813,10 +813,10 @@ export class FluidSimulator {
                 float eps = 0.001;
 
                 // 移除窄带限制，允许全屏流体
-                // if (abs(phi0) > 8.0 * dx) {
-                //     gl_FragColor = vec4(phi0, 0.0, 0.0, 1.0);
-                //     return;
-                // }
+                if (abs(phi0) > 8.0 * dx) {
+                    gl_FragColor = vec4(phi0, 0.0, 0.0, 1.0);
+                    return;
+                }
 
                 float phi_r = texture2D(levelset, uv + vec2(dx, 0.0)).r;
                 float phi_l = texture2D(levelset, uv - vec2(dx, 0.0)).r;
@@ -2512,6 +2512,76 @@ export class FluidSimulator {
         
         // 交换 phi 缓冲区
         this.curPhiTex = targetTex;
+    }
+
+    /**
+     * 在边界最外层削弱phi值，形成固体墙效果
+     * @param strength 削弱强度（正值增大phi，使边界更硬）
+     * @param edgeWidth 边界宽度（UV空间，默认1个像素）
+     * @param tipGap 尾部开口大小（0=无开口，1=完全开放）
+     */
+    public addBoundaryPhiDamping(
+        strength: number = 0.5, 
+        edgeWidth: number = 1.0,
+        tipGap: number = 0.1
+    ): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        
+        const boundaryMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phiTex: { value: this.curPhiTex.texture },
+                strength: { value: strength },
+                edgeWidth: { value: edgeWidth / this.width },
+                tipGap: { value: tipGap },
+                resolution: { value: new THREE.Vector2(this.width, this.height) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform float strength;
+                uniform float edgeWidth;
+                uniform float tipGap;
+                uniform vec2 resolution;
+                uniform sampler2D phiTex;
+                varying vec2 vUv;
+                
+                void main() {
+                    vec2 uv = vUv;
+                    float phi = texture2D(phiTex, uv).r;
+                    
+                    // 计算到边界的距离（UV空间，中心为原点）
+                    vec2 centerDist = abs(uv - vec2(0.5));
+                    float maxDist = max(centerDist.x, centerDist.y);
+                    float distToEdge = 0.5 - maxDist;  // 正数表示在边界内
+                    
+                    // 边界掩码：只在最外层生效
+                    float edgeMask = smoothstep(edgeWidth, 0.0, distToEdge);
+                    
+                    // 尾部开口：在顶部中心区域留一个开口
+                    float tipMask = 1.0;
+                    if (uv.y > 0.5) {  // 上半部分（尾部）
+                        float distToCenterX = abs(uv.x - 0.5);
+                        tipMask = smoothstep(tipGap * 0.5, tipGap, distToCenterX);
+                    }
+                    
+                    // 综合掩码：边界处生效，但尾部开口处不生效
+                    float mask = edgeMask * tipMask;
+                    
+                    // 增大phi值（削弱水），形成固体墙
+                    phi += strength * mask;
+                    
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        
+        // 渲染到 phi 双缓冲
+        const targetTex = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+        this.renderFullscreen(boundaryMat, targetTex, false);
+        
+        // 交换 phi 缓冲区
+        this.curPhiTex = targetTex;
+        
+        boundaryMat.dispose();
     }
 
     /**

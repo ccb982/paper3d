@@ -87,7 +87,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             density: 1000,
             viscosity: 0.001,
             surfaceTension: 0.1,          // 让界面更紧凑，受力后回弹更真实
-            gravity: 0,                    // 重力由 GravitySystem 统一应用，不再内部处理
+            gravity: -10,                    //让纹理更像子弹一点，有这玩意真是太好了
             pressureIterations: 4,        // 提高压力迭代，让压力场能真正响应散度
             reinitIterations: 1,          // 每100帧执行1次：单次迭代次数
             reinitInterval: 100,         // 每100帧执行1次：间隔帧数
@@ -99,7 +99,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             decoupledBoundary: false,
             usePerturbation: false,
             injectionEnabled: false,
-            enableCentering: true,       // 启用纹理居中追踪
+            enableCentering: false,       // 启用纹理居中追踪
             centeringInterval: 0.1,     // 居中追踪间隔1秒，减少GPU回读频率
         };
 
@@ -123,6 +123,20 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         this.maxAge = maxAge;
 
         this.simulator = new FluidSimulator(renderer, params);
+        
+        // ========== 配置持续水流注入（在头部位置） ==========
+        if (this.trailEnabled) {
+            this.simulator.configureInjection({
+                enabled: true,
+                posX: 0.5,           // 头部中心X
+                posY: 0.25,          // 头部中心Y
+                flowRate: 20.0,      // 持续注入流量
+                velX: 0,             // 注入速度X
+                velY: 0.5,           // 注入速度Y（向下，朝向尾部）
+                size: 0.15           // 注入区域大小
+            });
+        }
+        
         this.setInitialWaterVolume(waterVolume);
         // 实体初始速度（第一帧会触发惯性挤压效果）
         // 使用基类的 velocity 属性（而非独立的 worldVelocity）
@@ -392,19 +406,20 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 const tipV = this.cachedTipV;        // 挖空圆心V坐标
                 const tipRadius = this.cachedTipRadiusUV;  // 挖空半径（UV空间）
                 
-                // 修正偏移：让注入位置更靠近液滴中心
-                // centerBias: 0=不偏移(使用挖空位置), 1=完全移到中心(0.5,0.5)
-                const centerBias = 0.6;  // 30%偏向中心
-                const injectU = tipU + (0.5 - tipU) * centerBias;
-                const injectV = tipV + (0.5 - tipV) * centerBias;
+                // 修正偏移：让散度注入位置更靠近液滴中心
+                const centerBias = 0.6;
+                const divU = tipU + (0.5 - tipU) * centerBias;
+                const divV = tipV + (0.5 - tipV) * centerBias;
                 
-                const tipStrength = 15000.0 * delta;  // 散度强度上万，产生强烈的收缩吸水效果（原-3000）
+                const tipStrength = 15000.0 * delta;  // 散度强度上万
+                this.simulator.addDivergenceImpulse(tipStrength, tipRadius, divU, divV);
                 
-                this.simulator.addDivergenceImpulse(tipStrength, tipRadius, injectU, injectV);
-                
-                // 在挖空位置持续注入水量，让水被"推"向尖端形成拖尾
-                const waterAmount = 5.0 * delta;  // 大幅增大水量注入
-                this.simulator.addWaterImpulse(waterAmount, tipRadius, injectU, injectV);
+                // ========== 边界phi削弱：形成固体墙，尾部留开口 ==========
+                this.simulator.addBoundaryPhiDamping(
+                    1.5,    // 削弱强度（增大phi值，形成固体墙）
+                    1.0,    // 边界宽度（1个像素）
+                    0.15    // 尾部开口大小
+                );
             }
 
             // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
