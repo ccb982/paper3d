@@ -798,7 +798,7 @@ export class FluidSimulator {
                 vel.y -= (dt / density) * pressureGrad.y;
 
                 // 速度上限限制，防止 CFL 条件失效
-                float maxVel = 200.0;
+                float maxVel = 250.0;
                 float speed = length(vel);
                 if (speed > maxVel) vel = vel * (maxVel / speed);
 
@@ -1872,7 +1872,7 @@ export class FluidSimulator {
                     }
 
                     // 速度上限限制，防止 CFL 条件失效
-                    float maxVel = 200.0;
+                    float maxVel = 250.0;
                     float currentSpeed = length(vel);
                     if (currentSpeed > maxVel) vel = vel * (maxVel / currentSpeed);
 

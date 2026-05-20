@@ -80,7 +80,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         waterVolume = Math.max(0.01, Math.min(1.0, waterVolume));
         
         // 性能优化：精简模拟参数，针对小水滴牺牲部分物理细节以降低开销
-        // 注意：不再在模拟器内设置 gravity，重力由 GravitySystem 统一管理
+        
         const params: FluidParams = {
             width: 32,
             height: 32,
