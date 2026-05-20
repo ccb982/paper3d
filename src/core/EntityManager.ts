@@ -94,8 +94,8 @@ export class EntityManager {
     // 添加到管理器
     this.addFluidRegion(region);
     
-    // 创建5个小液滴
-    await region.createDroplets(5, 1.5);
+    // 创建5个小液滴（已注释）
+    // await region.createDroplets(5, 1.5);
   }
 
   /**

@@ -63,6 +63,11 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             // 纹理居中追踪参数
             enableCentering: false,     // 开启纹理居中追踪（GPU质心计算，避免回读）
             centeringInterval: 0.5,    // 每0.5秒计算一次质心并居中
+            // phi 场后处理修正参数
+            clampAirPhi: true,          // 启用空气区 phi 上限钳制
+            maxAirPhi: 0.00,           // 空气区 phi 上限
+            compensateWaterPhi: true,   // 启用水体区负向补偿
+            waterCompensationRate: 0.01, // 补偿速率（避免水体流失）
             ...params
         };
         
@@ -154,6 +159,10 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     
     public setInjectionEnabled(enabled: boolean): void {
         this.simulator.setInjectionEnabled(enabled);
+    }
+
+    public setPhiCorrection(clampAir: boolean, maxAir: number, compensateWater: boolean, compensationRate: number): void {
+        this.simulator.setPhiCorrection(clampAir, maxAir, compensateWater, compensationRate);
     }
     
     public configureInjection(config: {

@@ -43,6 +43,11 @@ export interface FluidParams {
     // 纹理居中追踪参数
     enableCentering?: boolean;          // 是否开启纹理居中追踪，默认 false
     centeringInterval?: number;          // 居中追踪间隔（秒），默认 1.0
+    // ===== phi 场后处理修正开关 =====
+    clampAirPhi?: boolean;              // 是否限制空气区 phi 最大值
+    maxAirPhi?: number;                 // 空气区 phi 上限，默认 0.1
+    compensateWaterPhi?: boolean;       // 是否对水体区进行负向补偿
+    waterCompensationRate?: number;     // 补偿速率（单位：距离/秒），默认 0.01
 }
 
 export class FluidSimulator {
@@ -202,6 +207,13 @@ export class FluidSimulator {
     private centeringPhiMat: THREE.ShaderMaterial;
     private centeringVelMat: THREE.ShaderMaterial;
 
+    // phi 场后处理修正相关
+    private clampAirPhi: boolean;
+    private maxAirPhi: number;
+    private compensateWaterPhi: boolean;
+    private waterCompensationRate: number;
+    private phiCorrectionMat!: THREE.ShaderMaterial;
+
     // 可见性裁剪相关
     private externalCamera: THREE.Camera | null = null;
     private fluidWorldBounds: THREE.Box3 = new THREE.Box3();
@@ -241,6 +253,12 @@ export class FluidSimulator {
         this.centeringEnabled = params.enableCentering ?? false;
         this.centeringInterval = params.centeringInterval ?? 1.0;  // 默认1秒
         this.lastCenteringTime = 0;
+
+        // 初始化 phi 场后处理修正参数
+        this.clampAirPhi = params.clampAirPhi ?? false;
+        this.maxAirPhi = params.maxAirPhi ?? 0.1;
+        this.compensateWaterPhi = params.compensateWaterPhi ?? false;
+        this.waterCompensationRate = params.waterCompensationRate ?? 0.01;
 
         // 生成噪声纹理（用于随机扰动）
         this.noiseTex = this.generateNoiseTexture();
@@ -1077,6 +1095,44 @@ export class FluidSimulator {
                     float prevAge = texture2D(age, prevPos).r;
                     
                     gl_FragColor = vec4(prevAge, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // phi 场后处理修正材质
+        this.phiCorrectionMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phiTex: { value: null },
+                dt: { value: this.params.timeStep },
+                maxAirPhi: { value: this.maxAirPhi },
+                waterCompRate: { value: this.waterCompensationRate },
+                enableClamp: { value: this.clampAirPhi ? 1.0 : 0.0 },
+                enableCompensate: { value: this.compensateWaterPhi ? 1.0 : 0.0 }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phiTex;
+                uniform float dt;
+                uniform float maxAirPhi;
+                uniform float waterCompRate;
+                uniform float enableClamp;
+                uniform float enableCompensate;
+                varying vec2 vUv;
+
+                void main() {
+                    float phi = texture2D(phiTex, vUv).r;
+
+                    // 1. 空气区钳制上限
+                    if (enableClamp > 0.5 && phi > 0.0 && phi > maxAirPhi) {
+                        phi = maxAirPhi;
+                    }
+
+                    // 2. 水体区负向补偿（phi 变得更负，对抗耗散流失）
+                    if (enableCompensate > 0.5 && phi < 0.0) {
+                        phi = phi - waterCompRate * dt;
+                    }
+
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
                 }
             `
         });
@@ -2167,6 +2223,20 @@ export class FluidSimulator {
         }
         this.curPhiTex = phiSrc;
 
+        // 9.5 phi 场后处理修正（钳制空气上限 & 水体负向补偿）
+        if (this.clampAirPhi || this.compensateWaterPhi) {
+            this.phiCorrectionMat.uniforms.phiTex.value = this.curPhiTex.texture;
+            this.phiCorrectionMat.uniforms.dt.value = this.params.timeStep;
+            this.phiCorrectionMat.uniforms.maxAirPhi.value = this.maxAirPhi;
+            this.phiCorrectionMat.uniforms.waterCompRate.value = this.waterCompensationRate;
+            this.phiCorrectionMat.uniforms.enableClamp.value = this.clampAirPhi ? 1.0 : 0.0;
+            this.phiCorrectionMat.uniforms.enableCompensate.value = this.compensateWaterPhi ? 1.0 : 0.0;
+
+            const phiDst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+            this.renderFullscreen(this.phiCorrectionMat, phiDst);
+            this.curPhiTex = phiDst;
+        }
+
         // 10. 固体边界清理 #2
         if (this.solidMaskTex) {
             // 清理速度
@@ -2746,6 +2816,20 @@ export class FluidSimulator {
 
     public setInjectionEnabled(enabled: boolean): void {
         this.params.injectionEnabled = enabled;
+    }
+
+    /**
+     * 设置 phi 场后处理修正参数
+     * @param clampAir 是否限制空气区 phi 最大值
+     * @param maxAir 空气区 phi 上限
+     * @param compensateWater 是否对水体区进行负向补偿
+     * @param compensationRate 补偿速率（单位：距离/秒）
+     */
+    public setPhiCorrection(clampAir: boolean, maxAir: number, compensateWater: boolean, compensationRate: number): void {
+        this.clampAirPhi = clampAir;
+        this.maxAirPhi = maxAir;
+        this.compensateWaterPhi = compensateWater;
+        this.waterCompensationRate = compensationRate;
     }
 
     public setInjectionPosition(x: number, y: number): void {
