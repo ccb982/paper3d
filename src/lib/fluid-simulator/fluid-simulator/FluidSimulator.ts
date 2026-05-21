@@ -3454,6 +3454,16 @@ export class FluidSimulator {
         return { phi: phiBuffer, vel: velBuffer };
     }
 
+    /**
+     * 应用自定义着色器到 phi 场（用于自定义修改 phi 值）
+     * @param material 自定义着色器材质（需要包含 phiTex uniform）
+     */
+    public applyCustomShaderToPhi(material: THREE.ShaderMaterial): void {
+        const dst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+        this.renderFullscreen(material, dst);
+        this.curPhiTex = dst;
+    }
+
     public clearSectorRegionsGPU(
         centerUV: THREE.Vector2,
         sectors: Array<{ startAngle: number; endAngle: number }>,

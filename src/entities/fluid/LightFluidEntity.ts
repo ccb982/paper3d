@@ -109,7 +109,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             centeringInterval: 0.1,          // 居中追踪间隔1秒，减少GPU回读频率
             // phi 场后处理修正参数
             clampAirPhi: true,               // 启用空气区 phi 上限钳制
-            maxAirPhi: 0.08,                // 空气区 phi 上限
+            maxAirPhi: 0.001,                // 空气区 phi 上限
             compensateWaterPhi: true,       // 启用水体区负向补偿
             waterCompensationRate: 0.01,    // 补偿速率（避免水体流失）
         };
@@ -135,7 +135,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
         this.simulator = new FluidSimulator(renderer, params);
         
-        // ========== 配置持续水流注入（已禁用） ==========
+        // ========== 配置持续水流注入（已禁用） ==========效果巨jb不明显，而且有问题
         // if (this.trailEnabled) {
         //     this.simulator.configureInjection({
         //         enabled: true,
@@ -286,6 +286,98 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
             }
 
+    /**
+     * 应用子弹形状固体墙（phi大幅削弱）
+     * 墙体区域会强制增大phi值（变为空气/固体），仅尾部开口区域允许水通过
+     * @param strength 墙体强度（phi增加量，推荐 0.5~1.0）
+     * @param bulletLength 子弹总长度（相对于纹理半高，默认 0.9）
+     * @param width 子弹宽度（相对于纹理半宽，默认 0.6）
+     * @param tailOpeningRadius 尾部开口半径（UV空间，默认 0.12）
+     */
+    private applyBulletSolidWall(
+        strength: number = 100,
+        bulletLength: number = 0.9,
+        width: number = 0.6,
+        tailOpeningRadius: number = 0.12
+    ): void {
+        const sim = this.simulator;
+        if (!sim) return;
+
+        const vs = `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+
+        const centerU = 0.5;
+        const centerV = 0.5;
+        const angle = this.mesh.rotation.z;
+
+        const bulletWallMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phiTex: { value: sim.getCurPhiTex().texture },
+                strength: { value: strength },
+                center: { value: new THREE.Vector2(centerU, centerV) },
+                angle: { value: angle },
+                bulletLength: { value: bulletLength },
+                width: { value: width },
+                tailOpeningRadius: { value: tailOpeningRadius },
+                resolution: { value: new THREE.Vector2(this.texSize, this.texSize) }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phiTex;
+                uniform float strength;
+                uniform vec2 center;
+                uniform float angle;
+                uniform float bulletLength;
+                uniform float width;
+                uniform float tailOpeningRadius;
+                uniform vec2 resolution;
+                varying vec2 vUv;
+
+                vec2 worldToLocal(vec2 uv) {
+                    vec2 p = uv - center;
+                    float cosA = cos(angle);
+                    float sinA = sin(angle);
+                    return vec2(p.x * cosA + p.y * sinA, -p.x * sinA + p.y * cosA);
+                }
+
+                float bulletSDF(vec2 p) {
+                    float halfLen = bulletLength;
+                    float t = (p.y + halfLen) / (2.0 * halfLen);
+                    float curveWidth = width * (1.0 - t * 0.3);
+                    curveWidth = mix(curveWidth, width * 0.4, smoothstep(0.7, 1.0, t));
+                    float horizDist = abs(p.x) - curveWidth;
+                    float vertDist = max(abs(p.y) - halfLen, 0.0);
+                    return max(horizDist, vertDist);
+                }
+
+                void main() {
+                    vec2 localUV = worldToLocal(vUv);
+                    float phi = texture2D(phiTex, vUv).r;
+                    float sdf = bulletSDF(localUV);
+                    float tipY = bulletLength * 0.85;
+                    float dx = localUV.x;
+                    float dy = localUV.y - tipY;
+                    float distToTip = sqrt(dx*dx + dy*dy);
+                    bool inTailOpening = (localUV.y > 0.7 * bulletLength) && (distToTip < tailOpeningRadius);
+                    if (sdf > 0.0 && !inTailOpening) {
+                        phi = max(phi, strength);
+                    }
+                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+
+        // 使用公共方法应用自定义着色器到 phi 场
+        sim.applyCustomShaderToPhi(bulletWallMat);
+
+        bulletWallMat.dispose();
+    }
+
     // 模拟器内部固定时间步长
     private readonly simTimeStep = 0.008;
 
@@ -424,13 +516,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 
                 const tipStrength = 15000.0 * delta;  // 散度强度上万
                 this.simulator.addDivergenceImpulse(tipStrength, tipRadius, divU, divV);
-                
-                // ========== 边界phi削弱：形成固体墙，尾部留开口 ==========
-                this.simulator.addBoundaryPhiDamping(
-                    1.5,    // 削弱强度（增大phi值，形成固体墙）
-                    1.0,    // 边界宽度（1个像素）
-                    0.15    // 尾部开口大小
-                );
             }
 
             // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
@@ -438,6 +523,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             const actualSubsteps = Math.min(substeps, 10);
 
             for (let s = 0; s < actualSubsteps; s++) {
+                // ★ 每个子步前重新应用墙体（使用当前旋转角度）
+                if (this.trailEnabled) {
+                    this.applyBulletSolidWall(0.8, 0.9, 0.6, 0.12);
+                }
                 this.simulator.update(this.simTimeStep);
             }
 
