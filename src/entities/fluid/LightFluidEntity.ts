@@ -104,18 +104,18 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             usePerturbation: false,
             injectionEnabled: true,        // 启用持续水流注入（通过 FluidParams 配置）
             injectionPosX: 0.5,           // 注入位置X（头部中心）
-            injectionPosY: 0.25,          // 注入位置Y（头部中心）
+            injectionPosY: 0.4,          // 注入位置Y（头部中心）
             injectionFlowRate: 500.0,     // 大幅增大注水量，依靠固体墙约束形状
             injectionVelX: 0,             // 注入速度X
             injectionVelY: 0.5,           // 注入速度Y（向下，朝向尾部）
-            injectionSize: 0.2,           // 增大注入区域
+            injectionSize: 0.12,           // 增大注入区域
             enableCentering: false,         // 启用纹理居中追踪
             centeringInterval: 0.1,          // 居中追踪间隔1秒，减少GPU回读频率
             // phi 场后处理修正参数
             clampAirPhi: true,               // 启用空气区 phi 上限钳制
-            maxAirPhi: 0.00,                // 空气区 phi 上限
+            maxAirPhi: 0.01,                // 空气区 phi 上限
             compensateWaterPhi: true,       // 启用水体区负向补偿
-            waterCompensationRate: 0.01,    // 补偿速率（避免水体流失）
+            waterCompensationRate: -0.01,    // 补偿速率（避免水体流失）
         };
 
         // 根据水量计算绘制大小
@@ -437,7 +437,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 this.simulator.addBoundaryPhiDamping(
                     1.5,    // 削弱强度（增大phi值，形成固体墙）
                     1.0,    // 边界宽度（1个像素）
-                    0.15    // 尾部开口大小
+                    0.9    // 尾部开口大小
                 );
             }
 
@@ -698,14 +698,15 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     }
 
     /**
-     * 生成 phi 场削弱掩码纹理
-     * 复用 setInitialWaterVolume 的形状计算，壁区域值为 1，开口区域值为 0
+     * 生成 phi 场削弱掩码纹理（向外扩张边界）
+     * 掩码值 1 的区域每帧 phi += weakenStrength，形成"软墙"
+     * 只削弱形状外部轮廓附近，不削减内部水域
      */
     private generateWeakenMaskTexture(): void {
         const w = this.texSize, h = this.texSize;
         const data = new Float32Array(w * h * 4);
         
-        // 完全复用 setInitialWaterVolume 中的形状计算
+        // 复用形状参数
         const area = this.waterVolume * w * h;
         const r = Math.sqrt(area / 2.57);
         const heightRatio = 0.8 + Math.random() * 0.4;
@@ -714,11 +715,26 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         const halfH = r * heightRatio;
         const centerX = w / 2;
         const centerY = h / 2;
-        const cosA = 1.0, sinA = 0.0;  // 角度0，与初始水体一致
+        const cosA = 1.0, sinA = 0.0;
         
-        // 尾部挖空参数（复用现有 trail 参数）
+        // 尾部挖空参数
         const trailRadiusPx = this.trailRadius * r;
         const trailOffsetY = this.trailOffset * r;
+        
+        // 向外扩张的宽度（像素），可根据需要调整
+        const expandWidthPx = 2.0;
+        
+        // 辅助函数：计算给定 (rotX, rotY) 到形状边界的距离（有符号）
+        // 负值：内部，正值：外部
+        const shapeSDF = (rotX: number, rotY: number): number => {
+            if (rotY > 0) {
+                // 三角形尖端区域：边界为 |rotX| = 1 - rotY
+                return Math.abs(rotX) - (1.0 - rotY);
+            } else {
+                // 半圆区域：边界为 sqrt(rotX^2 + rotY^2) = 1
+                return Math.hypot(rotX, rotY) - 1.0;
+            }
+        };
         
         for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
@@ -728,21 +744,11 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 const rotX = dx * cosA - dy * sinA;
                 const rotY = dx * sinA + dy * cosA;
                 
-                // 判定当前像素是否在子弹形状的壁区域（即形状内部但非挖空区域）
-                let insideShape = false;
-                if (rotY > 0) {
-                    // 三角形尖端区域
-                    const t = rotY;
-                    const triWidth = 1.0 - t;
-                    if (Math.abs(rotX) <= triWidth) insideShape = true;
-                } else {
-                    // 半圆区域
-                    if (Math.hypot(rotX, rotY) <= 1.0) insideShape = true;
-                }
+                const sdf = shapeSDF(rotX, rotY);
                 
-                // 判断是否在尾部开口区域（挖空）
+                // 检查是否在尾部开口区域（挖空）
                 let isTipHollow = false;
-                if (this.trailEnabled) {
+                if (this.trailEnabled && rotY > 0) {
                     const distToTip = rotY;
                     if (distToTip > 0 && distToTip < trailOffsetY * 2) {
                         const tipX = 0;
@@ -755,9 +761,13 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                     }
                 }
                 
-                // 壁区域：insideShape 且 不是开口区域
-                const isWall = insideShape && !isTipHollow;
-                const maskValue = isWall ? 1.0 : 0.0;
+                // ★★★ 核心改动：只在形状外部且距离边界小于 expandWidthPx（向外扩张）的区域施加削弱 ★★★
+                // 排除尾部开口区域
+                const externalDist = sdf;  // sdf > 0 表示外部，值越大离边界越远
+                const threshold = expandWidthPx / Math.max(halfW, halfH);
+                const isExternalBoundary = !isTipHollow && externalDist > 0 && externalDist < threshold;
+                
+                const maskValue = isExternalBoundary ? 1.0 : 0.0;
                 data[i] = maskValue;
                 data[i+1] = 0;
                 data[i+2] = 0;

@@ -30,8 +30,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     ) {
         // 默认参数，包含分层渲染配置
         const defaultParams: FluidParams = {
-            width: 256,
-            height: 256,
+            width: 512,
+            height: 512,
             density: 1,
             viscosity: 0.001,
             surfaceTension: 0.0728,
@@ -66,9 +66,9 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             centeringInterval: 0.5,    // 每0.5秒计算一次质心并居中
             // phi 场后处理修正参数
             clampAirPhi: true,          // 启用空气区 phi 上限钳制
-            maxAirPhi: 0.001,           // 空气区 phi 上限
+            maxAirPhi: 0.000,           // 空气区 phi 上限
             compensateWaterPhi: true,   // 启用水体区负向补偿
-            waterCompensationRate: 0.01, // 补偿速率（避免水体流失）
+            waterCompensationRate: -0.1, // 补偿速率（避免水体流失）
             ...params
         };
         
