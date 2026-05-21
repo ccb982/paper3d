@@ -2877,6 +2877,40 @@ export class FluidSimulator {
         this.params.injectionVelY = y;
     }
 
+    /**
+     * 应用 phi 场削弱掩码
+     * 将当前 phi 场加上掩码纹理乘以削弱强度
+     * @param maskTex 削弱掩码纹理（壁区域=1，开口区域=0）
+     * @param strength 削弱强度
+     */
+    public applyPhiWeakenMask(maskTex: THREE.Texture, strength: number): void {
+        const vs = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+        const weakenMat = new THREE.ShaderMaterial({
+            uniforms: {
+                phiTex: { value: this.curPhiTex.texture },
+                maskTex: { value: maskTex },
+                strength: { value: strength }
+            },
+            vertexShader: vs,
+            fragmentShader: `
+                uniform sampler2D phiTex;
+                uniform sampler2D maskTex;
+                uniform float strength;
+                varying vec2 vUv;
+                void main() {
+                    float phi = texture2D(phiTex, vUv).r;
+                    float mask = texture2D(maskTex, vUv).r;  // 壁区域=1，开口=0
+                    float newPhi = phi + mask * strength;
+                    gl_FragColor = vec4(newPhi, 0.0, 0.0, 1.0);
+                }
+            `
+        });
+        const dst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
+        this.renderFullscreen(weakenMat, dst);
+        this.curPhiTex = dst;
+        weakenMat.dispose();
+    }
+
     public setInjectionSize(size: number): void {
         this.params.injectionSize = size;
     }
@@ -3452,16 +3486,6 @@ export class FluidSimulator {
         this.renderer.readRenderTargetPixels(this.curVelTex, 0, 0, this.width, this.height, velBuffer);
         
         return { phi: phiBuffer, vel: velBuffer };
-    }
-
-    /**
-     * 应用自定义着色器到 phi 场（用于自定义修改 phi 值）
-     * @param material 自定义着色器材质（需要包含 phiTex uniform）
-     */
-    public applyCustomShaderToPhi(material: THREE.ShaderMaterial): void {
-        const dst = this.curPhiTex === this.phiTexA ? this.phiTexB : this.phiTexA;
-        this.renderFullscreen(material, dst);
-        this.curPhiTex = dst;
     }
 
     public clearSectorRegionsGPU(

@@ -64,6 +64,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     private cachedTipU: number = 0.5;             // 挖空圆心U坐标
     private cachedTipV: number = 0.5;             // 挖空圆心V坐标
     private cachedTipRadiusUV: number = 0.1;      // 挖空半径（UV空间）
+    
+    // phi 场削弱掩码相关
+    private weakenMaskTexture: THREE.DataTexture | null = null;
+    private readonly weakenStrength: number = 100;  // 可调节的削弱强度
 
     // 重力开关
     public gravityEnabled: boolean = false;        // 是否启用重力
@@ -101,15 +105,15 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             injectionEnabled: true,        // 启用持续水流注入（通过 FluidParams 配置）
             injectionPosX: 0.5,           // 注入位置X（头部中心）
             injectionPosY: 0.25,          // 注入位置Y（头部中心）
-            injectionFlowRate: 20.0,      // 持续注入流量
+            injectionFlowRate: 500.0,     // 大幅增大注水量，依靠固体墙约束形状
             injectionVelX: 0,             // 注入速度X
             injectionVelY: 0.5,           // 注入速度Y（向下，朝向尾部）
-            injectionSize: 0.15,          // 注入区域大小
+            injectionSize: 0.2,           // 增大注入区域
             enableCentering: false,         // 启用纹理居中追踪
             centeringInterval: 0.1,          // 居中追踪间隔1秒，减少GPU回读频率
             // phi 场后处理修正参数
             clampAirPhi: true,               // 启用空气区 phi 上限钳制
-            maxAirPhi: 0.001,                // 空气区 phi 上限
+            maxAirPhi: 0.00,                // 空气区 phi 上限
             compensateWaterPhi: true,       // 启用水体区负向补偿
             waterCompensationRate: 0.01,    // 补偿速率（避免水体流失）
         };
@@ -135,7 +139,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
         this.simulator = new FluidSimulator(renderer, params);
         
-        // ========== 配置持续水流注入（已禁用） ==========效果巨jb不明显，而且有问题
+        // ========== 配置持续水流注入（已禁用） ==========
         // if (this.trailEnabled) {
         //     this.simulator.configureInjection({
         //         enabled: true,
@@ -149,6 +153,10 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         // }
         
         this.setInitialWaterVolume(waterVolume);
+        
+        // 生成 phi 场削弱掩码纹理（复用初始水体形状）
+        this.generateWeakenMaskTexture();
+        
         // 实体初始速度（第一帧会触发惯性挤压效果）
         // 使用基类的 velocity 属性（而非独立的 worldVelocity）
         const defaultVelocity = new THREE.Vector3(0, -20.0, 0);
@@ -285,98 +293,6 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         tex.dispose();
 
             }
-
-    /**
-     * 应用子弹形状固体墙（phi大幅削弱）
-     * 墙体区域会强制增大phi值（变为空气/固体），仅尾部开口区域允许水通过
-     * @param strength 墙体强度（phi增加量，推荐 0.5~1.0）
-     * @param bulletLength 子弹总长度（相对于纹理半高，默认 0.9）
-     * @param width 子弹宽度（相对于纹理半宽，默认 0.6）
-     * @param tailOpeningRadius 尾部开口半径（UV空间，默认 0.12）
-     */
-    private applyBulletSolidWall(
-        strength: number = 100,
-        bulletLength: number = 0.9,
-        width: number = 0.6,
-        tailOpeningRadius: number = 0.12
-    ): void {
-        const sim = this.simulator;
-        if (!sim) return;
-
-        const vs = `
-            varying vec2 vUv;
-            void main() {
-                vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-        `;
-
-        const centerU = 0.5;
-        const centerV = 0.5;
-        const angle = this.mesh.rotation.z;
-
-        const bulletWallMat = new THREE.ShaderMaterial({
-            uniforms: {
-                phiTex: { value: sim.getCurPhiTex().texture },
-                strength: { value: strength },
-                center: { value: new THREE.Vector2(centerU, centerV) },
-                angle: { value: angle },
-                bulletLength: { value: bulletLength },
-                width: { value: width },
-                tailOpeningRadius: { value: tailOpeningRadius },
-                resolution: { value: new THREE.Vector2(this.texSize, this.texSize) }
-            },
-            vertexShader: vs,
-            fragmentShader: `
-                uniform sampler2D phiTex;
-                uniform float strength;
-                uniform vec2 center;
-                uniform float angle;
-                uniform float bulletLength;
-                uniform float width;
-                uniform float tailOpeningRadius;
-                uniform vec2 resolution;
-                varying vec2 vUv;
-
-                vec2 worldToLocal(vec2 uv) {
-                    vec2 p = uv - center;
-                    float cosA = cos(angle);
-                    float sinA = sin(angle);
-                    return vec2(p.x * cosA + p.y * sinA, -p.x * sinA + p.y * cosA);
-                }
-
-                float bulletSDF(vec2 p) {
-                    float halfLen = bulletLength;
-                    float t = (p.y + halfLen) / (2.0 * halfLen);
-                    float curveWidth = width * (1.0 - t * 0.3);
-                    curveWidth = mix(curveWidth, width * 0.4, smoothstep(0.7, 1.0, t));
-                    float horizDist = abs(p.x) - curveWidth;
-                    float vertDist = max(abs(p.y) - halfLen, 0.0);
-                    return max(horizDist, vertDist);
-                }
-
-                void main() {
-                    vec2 localUV = worldToLocal(vUv);
-                    float phi = texture2D(phiTex, vUv).r;
-                    float sdf = bulletSDF(localUV);
-                    float tipY = bulletLength * 0.85;
-                    float dx = localUV.x;
-                    float dy = localUV.y - tipY;
-                    float distToTip = sqrt(dx*dx + dy*dy);
-                    bool inTailOpening = (localUV.y > 0.7 * bulletLength) && (distToTip < tailOpeningRadius);
-                    if (sdf > 0.0 && !inTailOpening) {
-                        phi = max(phi, strength);
-                    }
-                    gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
-                }
-            `
-        });
-
-        // 使用公共方法应用自定义着色器到 phi 场
-        sim.applyCustomShaderToPhi(bulletWallMat);
-
-        bulletWallMat.dispose();
-    }
 
     // 模拟器内部固定时间步长
     private readonly simTimeStep = 0.008;
@@ -516,6 +432,13 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
                 
                 const tipStrength = 15000.0 * delta;  // 散度强度上万
                 this.simulator.addDivergenceImpulse(tipStrength, tipRadius, divU, divV);
+                
+                // ========== 边界phi削弱：形成固体墙，尾部留开口 ==========
+                this.simulator.addBoundaryPhiDamping(
+                    1.5,    // 削弱强度（增大phi值，形成固体墙）
+                    1.0,    // 边界宽度（1个像素）
+                    0.15    // 尾部开口大小
+                );
             }
 
             // ★★★ 修复：执行多个子步让物理时间跟上真实时间 ★★★
@@ -523,14 +446,15 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             const actualSubsteps = Math.min(substeps, 10);
 
             for (let s = 0; s < actualSubsteps; s++) {
-                // ★ 每个子步前重新应用墙体（使用当前旋转角度）
-                if (this.trailEnabled) {
-                    this.applyBulletSolidWall(0.8, 0.9, 0.6, 0.12);
-                }
                 this.simulator.update(this.simTimeStep);
             }
 
             this.simulator.updateRenderUniforms();
+
+            // ========== phi 场壁区域削弱（每帧应用） ==========
+            if (this.weakenMaskTexture) {
+                this.simulator.applyPhiWeakenMask(this.weakenMaskTexture, this.weakenStrength);
+            }
 
             this.simUpdateAccumulated -= actualSubsteps * this.simTimeStep;
         }
@@ -771,5 +695,78 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         }
 
         this.pendingForces.length = 0;
+    }
+
+    /**
+     * 生成 phi 场削弱掩码纹理
+     * 复用 setInitialWaterVolume 的形状计算，壁区域值为 1，开口区域值为 0
+     */
+    private generateWeakenMaskTexture(): void {
+        const w = this.texSize, h = this.texSize;
+        const data = new Float32Array(w * h * 4);
+        
+        // 完全复用 setInitialWaterVolume 中的形状计算
+        const area = this.waterVolume * w * h;
+        const r = Math.sqrt(area / 2.57);
+        const heightRatio = 0.8 + Math.random() * 0.4;
+        const widthRatio = 0.3 + Math.random() * 0.3;
+        const halfW = r * widthRatio;
+        const halfH = r * heightRatio;
+        const centerX = w / 2;
+        const centerY = h / 2;
+        const cosA = 1.0, sinA = 0.0;  // 角度0，与初始水体一致
+        
+        // 尾部挖空参数（复用现有 trail 参数）
+        const trailRadiusPx = this.trailRadius * r;
+        const trailOffsetY = this.trailOffset * r;
+        
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const i = (y * w + x) * 4;
+                let dx = (x - centerX) / halfW;
+                let dy = (y - centerY) / halfH;
+                const rotX = dx * cosA - dy * sinA;
+                const rotY = dx * sinA + dy * cosA;
+                
+                // 判定当前像素是否在子弹形状的壁区域（即形状内部但非挖空区域）
+                let insideShape = false;
+                if (rotY > 0) {
+                    // 三角形尖端区域
+                    const t = rotY;
+                    const triWidth = 1.0 - t;
+                    if (Math.abs(rotX) <= triWidth) insideShape = true;
+                } else {
+                    // 半圆区域
+                    if (Math.hypot(rotX, rotY) <= 1.0) insideShape = true;
+                }
+                
+                // 判断是否在尾部开口区域（挖空）
+                let isTipHollow = false;
+                if (this.trailEnabled) {
+                    const distToTip = rotY;
+                    if (distToTip > 0 && distToTip < trailOffsetY * 2) {
+                        const tipX = 0;
+                        const tipY = trailOffsetY / halfH;
+                        const tipDist = Math.hypot(rotX - tipX, rotY - tipY);
+                        const tipRadius = trailRadiusPx / halfH;
+                        if (tipDist < tipRadius) {
+                            isTipHollow = true;
+                        }
+                    }
+                }
+                
+                // 壁区域：insideShape 且 不是开口区域
+                const isWall = insideShape && !isTipHollow;
+                const maskValue = isWall ? 1.0 : 0.0;
+                data[i] = maskValue;
+                data[i+1] = 0;
+                data[i+2] = 0;
+                data[i+3] = 1;
+            }
+        }
+        
+        const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+        tex.needsUpdate = true;
+        this.weakenMaskTexture = tex;
     }
 }
