@@ -98,9 +98,20 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             maxLifetime: 0,
             decoupledBoundary: false,
             usePerturbation: false,
-            injectionEnabled: false,
-            enableCentering: false,       // 启用纹理居中追踪
-            centeringInterval: 0.1,     // 居中追踪间隔1秒，减少GPU回读频率
+            injectionEnabled: true,        // 启用持续水流注入（通过 FluidParams 配置）
+            injectionPosX: 0.5,           // 注入位置X（头部中心）
+            injectionPosY: 0.25,          // 注入位置Y（头部中心）
+            injectionFlowRate: 20.0,      // 持续注入流量
+            injectionVelX: 0,             // 注入速度X
+            injectionVelY: 0.5,           // 注入速度Y（向下，朝向尾部）
+            injectionSize: 0.15,          // 注入区域大小
+            enableCentering: false,         // 启用纹理居中追踪
+            centeringInterval: 0.1,          // 居中追踪间隔1秒，减少GPU回读频率
+            // phi 场后处理修正参数
+            clampAirPhi: true,               // 启用空气区 phi 上限钳制
+            maxAirPhi: 0.08,                // 空气区 phi 上限
+            compensateWaterPhi: true,       // 启用水体区负向补偿
+            waterCompensationRate: 0.01,    // 补偿速率（避免水体流失）
         };
 
         // 根据水量计算绘制大小
@@ -124,18 +135,18 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
         this.simulator = new FluidSimulator(renderer, params);
         
-        // ========== 配置持续水流注入（在头部位置） ==========
-        if (this.trailEnabled) {
-            this.simulator.configureInjection({
-                enabled: true,
-                posX: 0.5,           // 头部中心X
-                posY: 0.25,          // 头部中心Y
-                flowRate: 20.0,      // 持续注入流量
-                velX: 0,             // 注入速度X
-                velY: 0.5,           // 注入速度Y（向下，朝向尾部）
-                size: 0.15           // 注入区域大小
-            });
-        }
+        // ========== 配置持续水流注入（已禁用） ==========
+        // if (this.trailEnabled) {
+        //     this.simulator.configureInjection({
+        //         enabled: true,
+        //         posX: 0.5,           // 头部中心X
+        //         posY: 0.25,          // 头部中心Y
+        //         flowRate: 20.0,      // 持续注入流量
+        //         velX: 0,             // 注入速度X
+        //         velY: 0.5,           // 注入速度Y（向下，朝向尾部）
+        //         size: 0.15           // 注入区域大小
+        //     });
+        // }
         
         this.setInitialWaterVolume(waterVolume);
         // 实体初始速度（第一帧会触发惯性挤压效果）
