@@ -214,6 +214,12 @@ export class FluidSimulator {
     private waterCompensationRate: number;
     private phiCorrectionMat!: THREE.ShaderMaterial;
 
+    // 恒定散度注入相关
+    private constantInjectionActive: boolean = false;
+    private constantInjectionCenter: THREE.Vector2 = new THREE.Vector2(0.5, 0.5);
+    private constantInjectionRadius: number = 0.1;
+    private constantInjectionStrength: number = -1000;  // 负值=向外膨胀注入
+
     // 可见性裁剪相关
     private externalCamera: THREE.Camera | null = null;
     private fluidWorldBounds: THREE.Box3 = new THREE.Box3();
@@ -2832,6 +2838,31 @@ export class FluidSimulator {
         this.waterCompensationRate = compensationRate;
     }
 
+    /**
+     * 启动恒定散度注入（每帧自动施加，直到停止）
+     * @param center 中心UV坐标
+     * @param radius 影响半径
+     * @param strength 每帧散度值（负值=向外膨胀注入流体，正值=向内收缩）
+     */
+    public startConstantInjection(center: THREE.Vector2, radius: number, strength: number): void {
+        this.constantInjectionActive = true;
+        this.constantInjectionCenter.copy(center);
+        this.constantInjectionRadius = radius;
+        this.constantInjectionStrength = strength;
+        console.log(`[FluidSimulator] 启动恒定注入: center=(${center.x},${center.y}), radius=${radius}, strength=${strength}`);
+    }
+
+    /** 停止恒定散度注入 */
+    public stopConstantInjection(): void {
+        this.constantInjectionActive = false;
+        console.log(`[FluidSimulator] 停止恒定注入`);
+    }
+
+    /** 动态调整注入强度（不重启注入） */
+    public setInjectionStrength(strength: number): void {
+        this.constantInjectionStrength = strength;
+    }
+
     public setInjectionPosition(x: number, y: number): void {
         this.params.injectionPosX = x;
         this.params.injectionPosY = y;
@@ -3058,6 +3089,20 @@ export class FluidSimulator {
             this.explosionDivMat.uniforms.anisotropyStrength.value = exp.anisotropyStrength;
 
             // 累加渲染到 explosionDivTex（不清屏实现叠加）
+            this.renderFullscreen(this.explosionDivMat, this.explosionDivTex, false);
+        }
+
+        // 处理恒定散度注入
+        if (this.constantInjectionActive && hasExplosionDivTex) {
+            this.explosionDivMat.uniforms.center.value.set(
+                this.constantInjectionCenter.x + invOffset.x,
+                this.constantInjectionCenter.y + invOffset.y
+            );
+            this.explosionDivMat.uniforms.radius.value = this.constantInjectionRadius;
+            this.explosionDivMat.uniforms.strength.value = this.constantInjectionStrength;
+            this.explosionDivMat.uniforms.envelope.value = 1.0;
+            this.explosionDivMat.uniforms.usePerturbation.value = 0.0;
+            // 累加到 explosionDivTex（不清屏）
             this.renderFullscreen(this.explosionDivMat, this.explosionDivTex, false);
         }
 

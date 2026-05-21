@@ -18,6 +18,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     private originalPressureIterations: number = 50;
     private isExplosionBoosted: boolean = false;
     private pendingForces: FluidExternalForce[] = [];
+    private constantInjectionStarted: boolean = false;  // 追踪恒定注入是否已启动
     
     // // 水面分裂相关（已注释）
     // private entityManager: EntityManager | null = null;
@@ -139,6 +140,14 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             this.explosionFrameCount = 0;
             // 初始爆炸已删除
         }
+
+        // 启动恒定散度注入（只在第一次update时启动一次）
+        if (!this.constantInjectionStarted) {
+            this.constantInjectionStarted = true;
+            // 中心位置注入：中心(0.5,0.5)，半径0.3，每帧强度-2000（向外膨胀注入流体）
+            this.startConstantInjection(new THREE.Vector2(0.5, 0.5), 0.3, -2000);
+            console.log('[FluidSimulatorAdapter] 已启动恒定散度注入');
+        }
         
         if (delta !== undefined) {
             this.simulator.update(delta);
@@ -163,6 +172,18 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
 
     public setPhiCorrection(clampAir: boolean, maxAir: number, compensateWater: boolean, compensationRate: number): void {
         this.simulator.setPhiCorrection(clampAir, maxAir, compensateWater, compensationRate);
+    }
+
+    public startConstantInjection(centerUV: THREE.Vector2, radius: number, strength: number): void {
+        this.simulator.startConstantInjection(centerUV, radius, strength);
+    }
+
+    public stopConstantInjection(): void {
+        this.simulator.stopConstantInjection();
+    }
+
+    public setInjectionStrength(strength: number): void {
+        this.simulator.setInjectionStrength(strength);
     }
     
     public configureInjection(config: {
