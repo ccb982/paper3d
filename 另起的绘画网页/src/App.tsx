@@ -2,6 +2,7 @@ import { useAppStore } from './stores/useAppStore';
 import { ImageImport } from './components/ImageImport';
 import { LayerControl } from './components/LayerControl';
 import { MainCanvas } from './components/MainCanvas';
+import { Toolbar } from './components/Toolbar';
 
 function App() {
   const { layerVisibility } = useAppStore();
@@ -12,7 +13,8 @@ function App() {
         <ImageImport />
         <LayerControl />
       </aside>
-      <div className="canvas-container">
+      <div className="canvas-container" style={{ position: 'relative' }}>
+        <Toolbar />
         <MainCanvas />
       </div>
     </div>

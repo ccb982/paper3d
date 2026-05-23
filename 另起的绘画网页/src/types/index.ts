@@ -12,6 +12,8 @@ export interface Group {
 
 export type ShapeType = 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush';
 
+export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush';
+
 export interface Shape {
   id: string;
   groupId: string;

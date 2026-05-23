@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point } from '../types';
+import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType } from '../types';
 
 interface AppState {
   // 图片导入状态
@@ -60,6 +60,10 @@ interface AppState {
   setPanOffset: (offset: Point) => void;
   setPanMode: (panMode: boolean) => void;
   resetView: () => void;
+
+  // 当前工具
+  currentTool: ToolType;
+  setCurrentTool: (tool: ToolType) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -187,4 +191,8 @@ export const useAppStore = create<AppState>((set) => ({
   setPanOffset: (offset) => set({ panOffset: offset }),
   setPanMode: (panMode) => set({ isPanMode: panMode }),
   resetView: () => set({ zoom: 1.0, panOffset: { x: 0, y: 0 } }),
+
+  // 当前工具
+  currentTool: 'select',
+  setCurrentTool: (tool) => set({ currentTool: tool }),
 }));

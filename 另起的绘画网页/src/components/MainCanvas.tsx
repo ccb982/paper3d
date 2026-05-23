@@ -1,5 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import type { Point, Shape } from '../types';
 
 const CANVAS_SIZE = 512;
 
@@ -17,10 +18,158 @@ export function MainCanvas() {
     setZoom,
     setPanOffset,
     setMousePosition,
+    currentTool,
+    shapes,
+    addShape,
+    activeGroupId,
   } = useAppStore();
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [tempPoints, setTempPoints] = useState<Point[]>([]);
+  const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
+
+  const canvasToWorld = useCallback((canvasX: number, canvasY: number): Point => {
+    const centerX = CANVAS_SIZE / 2;
+    const centerY = CANVAS_SIZE / 2;
+    const worldX = (canvasX - centerX - panOffset.x) / zoom - centerX;
+    const worldY = (canvasY - centerY - panOffset.y) / zoom - centerY;
+
+    const axisX = axis.xMin + ((worldX + CANVAS_SIZE) / CANVAS_SIZE) * (axis.xMax - axis.xMin);
+    const axisY = axis.yMax - ((worldY + CANVAS_SIZE) / CANVAS_SIZE) * (axis.yMax - axis.yMin);
+    return { x: axisX, y: axisY };
+  }, [axis, zoom, panOffset]);
+
+  const worldToCanvas = useCallback((worldX: number, worldY: number): Point => {
+    const px = ((worldX - axis.xMin) / (axis.xMax - axis.xMin)) * CANVAS_SIZE;
+    const py = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * CANVAS_SIZE;
+    return { x: px, y: py };
+  }, [axis]);
+
+  const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape, isPreview = false) => {
+    const points = shape.points;
+    const color = isPreview ? '#666' : (shape.color || '#ff0000');
+
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+
+    switch (shape.type) {
+      case 'point':
+        if (points.length > 0) {
+          const p = worldToCanvas(points[0].x, points[0].y);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+
+      case 'line':
+        if (points.length >= 2) {
+          const p1 = worldToCanvas(points[0].x, points[0].y);
+          const p2 = worldToCanvas(points[1].x, points[1].y);
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+        }
+        break;
+
+      case 'rectangle':
+        if (points.length >= 2) {
+          const p1 = worldToCanvas(points[0].x, points[0].y);
+          const p2 = worldToCanvas(points[1].x, points[1].y);
+          ctx.strokeRect(
+            Math.min(p1.x, p2.x),
+            Math.min(p1.y, p2.y),
+            Math.abs(p2.x - p1.x),
+            Math.abs(p2.y - p1.y)
+          );
+        }
+        break;
+
+      case 'circle':
+        if (points.length >= 2) {
+          const center = worldToCanvas(points[0].x, points[0].y);
+          const edge = worldToCanvas(points[1].x, points[1].y);
+          const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        break;
+
+      case 'triangle':
+        if (points.length >= 1) {
+          const p1 = worldToCanvas(points[0].x, points[0].y);
+          if (points.length === 1) {
+            ctx.beginPath();
+            ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (points.length === 2) {
+            const p2 = worldToCanvas(points[1].x, points[1].y);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          } else {
+            const p2 = worldToCanvas(points[1].x, points[1].y);
+            const p3 = worldToCanvas(points[2].x, points[2].y);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.lineTo(p3.x, p3.y);
+            ctx.closePath();
+            ctx.stroke();
+          }
+        }
+        break;
+
+      case 'quadratic':
+        if (points.length >= 1) {
+          const p1 = worldToCanvas(points[0].x, points[0].y);
+          if (points.length === 1) {
+            ctx.beginPath();
+            ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+          } else if (points.length === 2) {
+            const p2 = worldToCanvas(points[1].x, points[1].y);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          } else {
+            const p2 = worldToCanvas(points[1].x, points[1].y);
+            const ctrl = worldToCanvas(points[2].x, points[2].y);
+            ctx.beginPath();
+            ctx.moveTo(p1.x, p1.y);
+            ctx.quadraticCurveTo(ctrl.x, ctrl.y, p2.x, p2.y);
+            ctx.stroke();
+          }
+        }
+        break;
+
+      case 'brush':
+        if (points.length >= 2) {
+          ctx.beginPath();
+          const start = worldToCanvas(points[0].x, points[0].y);
+          ctx.moveTo(start.x, start.y);
+          for (let i = 1; i < points.length; i++) {
+            const p = worldToCanvas(points[i].x, points[i].y);
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        } else if (points.length === 1) {
+          const p = worldToCanvas(points[0].x, points[0].y);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+    }
+  }, [worldToCanvas]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -38,7 +187,6 @@ export function MainCanvas() {
     ctx.scale(zoom, zoom);
     ctx.translate(-CANVAS_SIZE / 2, -CANVAS_SIZE / 2);
 
-    // 绘制图片图层（已裁剪的选区部分）
     if (layerVisibility.imageLayer && imageState.originalImage && imageState.imageSrc) {
       const img = imageState.originalImage;
 
@@ -68,7 +216,6 @@ export function MainCanvas() {
       }
     }
 
-    // 绘制坐标轴网格
     if (layerVisibility.axisLayer && grid.visible) {
       ctx.strokeStyle = '#d0d0d0';
       ctx.lineWidth = 1;
@@ -87,11 +234,10 @@ export function MainCanvas() {
         ctx.stroke();
       }
 
-      // 主坐标轴
       const centerX = (0 - axis.xMin) / (axis.xMax - axis.xMin) * CANVAS_SIZE;
       const centerY = (axis.yMax - 0) / (axis.yMax - axis.yMin) * CANVAS_SIZE;
 
-      ctx.strokeStyle = '#333';
+      ctx.strokeStyle = '#000000';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(0, centerY);
@@ -102,7 +248,6 @@ export function MainCanvas() {
       ctx.lineTo(centerX, CANVAS_SIZE);
       ctx.stroke();
 
-      // 坐标轴标签
       ctx.fillStyle = '#666';
       ctx.font = '12px monospace';
       ctx.fillText(`X: ${axis.xMin.toFixed(2)}`, 5, 18);
@@ -111,8 +256,36 @@ export function MainCanvas() {
       ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, CANVAS_SIZE - 5);
     }
 
+    if (layerVisibility.drawLayer) {
+      shapes.forEach((shape) => {
+        drawShape(ctx, shape);
+      });
+
+      if (tempPoints.length > 0) {
+        const tempShape: Shape = {
+          id: 'temp',
+          groupId: 'temp',
+          type: currentTool as any,
+          points: tempPoints,
+          color: '#666',
+        };
+        drawShape(ctx, tempShape, true);
+
+        if (previewPoint) {
+          const previewShape: Shape = {
+            id: 'preview',
+            groupId: 'temp',
+            type: currentTool as any,
+            points: [...tempPoints, previewPoint],
+            color: '#999',
+          };
+          drawShape(ctx, previewShape, true);
+        }
+      }
+    }
+
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape]);
 
   useEffect(() => {
     drawCanvas();
@@ -130,17 +303,6 @@ export function MainCanvas() {
     };
   }, []);
 
-  const getWorldCoords = useCallback((canvasX: number, canvasY: number) => {
-    const centerX = CANVAS_SIZE / 2;
-    const centerY = CANVAS_SIZE / 2;
-    const worldX = (canvasX - centerX - panOffset.x) / zoom - centerX;
-    const worldY = (canvasY - centerY - panOffset.y) / zoom - centerY;
-
-    const axisX = axis.xMin + ((worldX + CANVAS_SIZE) / CANVAS_SIZE) * (axis.xMax - axis.xMin);
-    const axisY = axis.yMax - ((worldY + CANVAS_SIZE) / CANVAS_SIZE) * (axis.yMax - axis.yMin);
-    return { x: axisX, y: axisY };
-  }, [axis, zoom, panOffset]);
-
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
       if (isPanning) {
@@ -155,15 +317,20 @@ export function MainCanvas() {
       }
 
       const coords = getCanvasCoords(e);
-      const worldCoords = getWorldCoords(coords.x, coords.y);
+      const worldCoords = canvasToWorld(coords.x, coords.y);
       setMousePosition(worldCoords);
+
+      if (tempPoints.length > 0 && currentTool !== 'select') {
+        setPreviewPoint(worldCoords);
+      }
     },
-    [isPanning, panStart, panOffset, getCanvasCoords, getWorldCoords, setMousePosition, setPanOffset]
+    [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorld, setMousePosition, setPanOffset, tempPoints, currentTool]
   );
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
     setMousePosition(null);
+    setPreviewPoint(null);
   }, [setMousePosition]);
 
   const handleWheel = useCallback(
@@ -189,6 +356,131 @@ export function MainCanvas() {
   const handleMouseUp = useCallback(() => {
     setIsPanning(false);
   }, []);
+
+  const finalizeShape = useCallback((pointsToSave: Point[]) => {
+    if (pointsToSave.length >= 1) {
+      const toolToType: Record<string, string> = {
+        point: 'point',
+        line: 'line',
+        rectangle: 'rectangle',
+        circle: 'circle',
+        triangle: 'triangle',
+        quadratic: 'quadratic',
+        brush: 'brush',
+      };
+
+      const newShape: Shape = {
+        id: `shape_${Date.now()}`,
+        groupId: activeGroupId || 'default',
+        type: toolToType[currentTool] as any,
+        points: pointsToSave,
+        color: '#ff0000',
+      };
+      addShape(newShape);
+
+      useAppStore.setState((state) => ({
+        shapes: state.shapes.filter(s => s.id !== 'current_shape'),
+      }));
+    }
+    setTempPoints([]);
+    setPreviewPoint(null);
+  }, [currentTool, addShape, activeGroupId]);
+
+  const updateCurrentShape = useCallback((newPoints: Point[]) => {
+    if (newPoints.length >= 1) {
+      const toolToType: Record<string, string> = {
+        point: 'point',
+        line: 'line',
+        rectangle: 'rectangle',
+        circle: 'circle',
+        triangle: 'triangle',
+        quadratic: 'quadratic',
+        brush: 'brush',
+      };
+
+      const newShape: Shape = {
+        id: `current_shape`,
+        groupId: activeGroupId || 'default',
+        type: toolToType[currentTool] as any,
+        points: newPoints,
+        color: '#666',
+      };
+
+      useAppStore.setState((state) => {
+        const filtered = state.shapes.filter(s => s.id !== 'current_shape');
+        return { shapes: [...filtered, newShape] };
+      });
+    }
+  }, [currentTool, activeGroupId]);
+
+  const handleCanvasClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (isPanning || isPanMode || currentTool === 'select') return;
+
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorld(coords.x, coords.y);
+
+      const toolPointsRequired: Record<string, number> = {
+        point: 1,
+        line: 2,
+        rectangle: 2,
+        circle: 2,
+        triangle: 3,
+        quadratic: 3,
+        brush: Infinity,
+      };
+
+      const requiredPoints = toolPointsRequired[currentTool] || 1;
+
+      if (currentTool === 'brush') {
+        setTempPoints(prev => {
+          const newPoints = [...prev, worldCoords];
+          updateCurrentShape(newPoints);
+          return newPoints;
+        });
+      } else {
+        setTempPoints(prev => {
+          const newPoints = [...prev, worldCoords];
+
+          const toolToType: Record<string, string> = {
+            point: 'point',
+            line: 'line',
+            rectangle: 'rectangle',
+            circle: 'circle',
+            triangle: 'triangle',
+            quadratic: 'quadratic',
+            brush: 'brush',
+          };
+
+          const newShape: Shape = {
+            id: `current_shape`,
+            groupId: activeGroupId || 'default',
+            type: toolToType[currentTool] as any,
+            points: newPoints,
+            color: '#ff0000',
+          };
+
+          useAppStore.setState((state) => {
+            const filtered = state.shapes.filter(s => s.id !== 'current_shape');
+            return { shapes: [...filtered, newShape] };
+          });
+
+          if (newPoints.length >= requiredPoints) {
+            setTimeout(() => finalizeShape(newPoints), 0);
+          }
+
+          return newPoints;
+        });
+      }
+    },
+    [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorld, activeGroupId, updateCurrentShape, finalizeShape]
+  );
+
+  const handleDoubleClick = useCallback(() => {
+    if (currentTool === 'brush' && tempPoints.length >= 2) {
+      finalizeShape(tempPoints);
+    }
+  }, [currentTool, tempPoints, finalizeShape]);
 
   return (
     <div
@@ -217,6 +509,8 @@ export function MainCanvas() {
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
+        onClick={handleCanvasClick}
+        onDoubleClick={handleDoubleClick}
       />
     </div>
   );
