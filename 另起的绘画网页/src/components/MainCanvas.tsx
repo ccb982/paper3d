@@ -13,6 +13,7 @@ export function MainCanvas() {
     grid,
     zoom,
     panOffset,
+    isPanMode,
     setZoom,
     setPanOffset,
     setMousePosition,
@@ -177,12 +178,12 @@ export function MainCanvas() {
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && isPanMode)) {
         setIsPanning(true);
         setPanStart({ x: e.clientX, y: e.clientY });
       }
     },
-    []
+    [isPanMode]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -199,7 +200,7 @@ export function MainCanvas() {
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        cursor: isPanning ? 'grabbing' : 'default',
+        cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default'),
       }}
     >
       <canvas

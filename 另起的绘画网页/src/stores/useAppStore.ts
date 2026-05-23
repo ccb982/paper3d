@@ -55,8 +55,10 @@ interface AppState {
   // 视图缩放和偏移
   zoom: number;  // 缩放比例，1.0 表示 100%
   panOffset: Point;  // 拖拽偏移
+  isPanMode: boolean;  // 是否处于拖动模式
   setZoom: (zoom: number) => void;
   setPanOffset: (offset: Point) => void;
+  setPanMode: (panMode: boolean) => void;
   resetView: () => void;
 }
 
@@ -180,7 +182,9 @@ export const useAppStore = create<AppState>((set) => ({
   // 视图缩放和偏移
   zoom: 1.0,
   panOffset: { x: 0, y: 0 },
+  isPanMode: false,
   setZoom: (zoom) => set({ zoom: Math.max(0.1, Math.min(10, zoom)) }),
   setPanOffset: (offset) => set({ panOffset: offset }),
+  setPanMode: (panMode) => set({ isPanMode: panMode }),
   resetView: () => set({ zoom: 1.0, panOffset: { x: 0, y: 0 } }),
 }));

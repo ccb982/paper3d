@@ -1,7 +1,7 @@
 import { useAppStore } from '../stores/useAppStore';
 
 export function LayerControl() {
-  const { layerVisibility, toggleLayer, axis, setAxis, resetAxis, grid, setGrid, mousePosition, zoom, setZoom, resetView } = useAppStore();
+  const { layerVisibility, toggleLayer, axis, setAxis, resetAxis, grid, setGrid, mousePosition, zoom, setZoom, resetView, isPanMode, setPanMode } = useAppStore();
 
   return (
     <>
@@ -138,6 +138,13 @@ export function LayerControl() {
           style={{ marginTop: '8px', width: '100%' }}
         >
           重置视图
+        </button>
+        <button
+          onClick={() => setPanMode(!isPanMode)}
+          className={`btn ${isPanMode ? 'btn-danger' : 'btn-primary'}`}
+          style={{ marginTop: '8px', width: '100%' }}
+        >
+          {isPanMode ? '✓ 拖动模式' : '拖动模式'}
         </button>
         <p style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>
           滚轮缩放 | Alt+拖拽平移 | 中键拖拽平移
