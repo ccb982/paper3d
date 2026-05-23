@@ -13,7 +13,14 @@ const tools: { type: ToolType; icon: string; label: string }[] = [
 ];
 
 export function Toolbar() {
-  const { currentTool, setCurrentTool } = useAppStore();
+  const { 
+    currentTool, 
+    setCurrentTool,
+    snapRadius,
+    setSnapRadius,
+    snapEnabled,
+    setSnapEnabled 
+  } = useAppStore();
 
   return (
     <div
@@ -55,6 +62,55 @@ export function Toolbar() {
           {tool.icon}
         </button>
       ))}
+      
+      <div style={{ height: '8px' }} />
+      
+      <button
+        onClick={() => setSnapEnabled(!snapEnabled)}
+        title={snapEnabled ? '关闭吸附' : '开启吸附'}
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: snapEnabled ? '#52c41a' : '#ddd',
+          color: snapEnabled ? '#fff' : '#666',
+          fontSize: '14px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'all 0.2s',
+        }}
+      >
+        ◉
+      </button>
+      
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '2px',
+          padding: '4px 0',
+        }}
+      >
+        <span style={{ fontSize: '10px', color: '#666' }}>吸附半径</span>
+        <input
+          type="range"
+          min="1"
+          max="50"
+          value={snapRadius}
+          onChange={(e) => setSnapRadius(parseInt(e.target.value))}
+          disabled={!snapEnabled}
+          style={{
+            width: '32px',
+            height: '6px',
+            cursor: snapEnabled ? 'pointer' : 'not-allowed',
+          }}
+        />
+        <span style={{ fontSize: '10px', color: '#666' }}>{snapRadius}px</span>
+      </div>
     </div>
   );
 }

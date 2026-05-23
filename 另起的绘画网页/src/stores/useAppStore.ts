@@ -64,6 +64,12 @@ interface AppState {
   // 当前工具
   currentTool: ToolType;
   setCurrentTool: (tool: ToolType) => void;
+
+  // 点吸附配置
+  snapRadius: number;  // 吸附半径（像素）
+  setSnapRadius: (radius: number) => void;
+  snapEnabled: boolean;  // 是否启用吸附
+  setSnapEnabled: (enabled: boolean) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -195,4 +201,10 @@ export const useAppStore = create<AppState>((set) => ({
   // 当前工具
   currentTool: 'select',
   setCurrentTool: (tool) => set({ currentTool: tool }),
+
+  // 点吸附配置
+  snapRadius: 10,  // 默认吸附半径10像素
+  setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
+  snapEnabled: true,  // 默认启用吸附
+  setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
 }));

@@ -22,6 +22,8 @@ export function MainCanvas() {
     shapes,
     addShape,
     activeGroupId,
+    snapRadius,
+    snapEnabled,
   } = useAppStore();
 
   const [isPanning, setIsPanning] = useState(false);
@@ -45,6 +47,57 @@ export function MainCanvas() {
     const py = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * CANVAS_SIZE;
     return { x: px, y: py };
   }, [axis]);
+
+  const snapToExistingPoint = useCallback((
+    point: Point,
+    toolType: string,
+    currentPointCount: number
+  ): Point => {
+    if (!snapEnabled) return point;
+
+    const shouldSnapNow = (() => {
+      if (toolType === 'rectangle') return false;
+      if (toolType === 'quadratic' && currentPointCount === 2) return false;
+      return true;
+    })();
+
+    if (!shouldSnapNow) return point;
+
+    const canvasPoint = worldToCanvas(point.x, point.y);
+    const checkAndSnap = (p: Point): Point | null => {
+      const existingCanvasPoint = worldToCanvas(p.x, p.y);
+      const distance = Math.hypot(
+        canvasPoint.x - existingCanvasPoint.x,
+        canvasPoint.y - existingCanvasPoint.y
+      );
+      if (distance < snapRadius) return p;
+      return null;
+    };
+
+    const candidatePoints: Point[] = [];
+
+    for (const shape of shapes) {
+      if (shape.id === 'current_shape') continue;
+
+      if (shape.type === 'quadratic') {
+        candidatePoints.push(shape.points[0]);
+        if (shape.points[1]) candidatePoints.push(shape.points[1]);
+      } else {
+        candidatePoints.push(...shape.points);
+      }
+    }
+
+    if (toolType !== 'rectangle') {
+      candidatePoints.push(...tempPoints);
+    }
+
+    for (const p of candidatePoints) {
+      const snapped = checkAndSnap(p);
+      if (snapped) return snapped;
+    }
+
+    return point;
+  }, [snapEnabled, snapRadius, shapes, tempPoints, worldToCanvas]);
 
   const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape, isPreview = false) => {
     const points = shape.points;
@@ -420,6 +473,12 @@ export function MainCanvas() {
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorld(coords.x, coords.y);
 
+      const snappedCoords = snapToExistingPoint(
+        worldCoords,
+        currentTool,
+        tempPoints.length
+      );
+
       const toolPointsRequired: Record<string, number> = {
         point: 1,
         line: 2,
@@ -434,13 +493,13 @@ export function MainCanvas() {
 
       if (currentTool === 'brush') {
         setTempPoints(prev => {
-          const newPoints = [...prev, worldCoords];
+          const newPoints = [...prev, snappedCoords];
           updateCurrentShape(newPoints);
           return newPoints;
         });
       } else {
         setTempPoints(prev => {
-          const newPoints = [...prev, worldCoords];
+          const newPoints = [...prev, snappedCoords];
 
           const toolToType: Record<string, string> = {
             point: 'point',
