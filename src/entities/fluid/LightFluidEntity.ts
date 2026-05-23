@@ -67,7 +67,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     
     // phi 场削弱掩码相关
     private weakenMaskTexture: THREE.DataTexture | null = null;
-    private readonly weakenStrength: number = 100;  // 可调节的削弱强度
+    private readonly weakenStrength: number = 10;  // 可调节的削弱强度
 
     // 重力开关
     public gravityEnabled: boolean = false;        // 是否启用重力
@@ -78,7 +78,8 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         initialPosition?: THREE.Vector3,
         initialVelocity?: THREE.Vector3,
         waterVolume: number = 0.45,       // 修改为直接传入水量
-        maxAge: number = 100                // 寿命改为5秒
+        maxAge: number = 100,               // 寿命改为5秒
+        skipInitialVolume: boolean = false  // 是否跳过初始水量设置（用于碎片系统）
     ) {
         // 确保水量在有效范围内
         waterVolume = Math.max(0.01, Math.min(1.0, waterVolume));
@@ -152,7 +153,11 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         //     });
         // }
         
-        this.setInitialWaterVolume(waterVolume);
+        // 跳过初始水量设置（用于碎片系统，避免冗余纹理创建）
+        // 碎片系统会在创建后立即调用 setLevelSetTexture 设置自定义纹理
+        if (!skipInitialVolume) {
+            this.setInitialWaterVolume(waterVolume);
+        }
         
         // 生成 phi 场削弱掩码纹理（复用初始水体形状）
         this.generateWeakenMaskTexture();
@@ -590,19 +595,19 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
     onDestroy(): void {
         super.onDestroy();
-        // 先释放 mesh.material（它引用的是 simulator.getRenderMaterial() 返回的 renderMaterial）
-        // 由于 mesh.material 和 simulator.renderMaterial 是同一个对象，
-        // simulator.dispose() 也会释放它，所以需要先处理避免双重释放
-        const mat = this.mesh.material;
-        this.mesh.material = new THREE.MeshBasicMaterial(); // 临时替换为空白材质
-        if (mat instanceof THREE.ShaderMaterial) {
-            mat.dispose();
-        } else if (mat instanceof THREE.Material) {
-            mat.dispose();
+        
+        // 释放削弱掩码纹理（防止显存泄漏）
+        if (this.weakenMaskTexture) {
+            this.weakenMaskTexture.dispose();
+            this.weakenMaskTexture = null;
         }
-        // 再释放几何体
+        
+        // 释放几何体
         this.mesh.geometry.dispose();
-        // 最后释放 simulator（会释放内部所有纹理和材质，包括原来的 renderMaterial）
+        
+        // 释放 simulator（会释放内部所有纹理和材质，包括 renderMaterial）
+        // 注意：mesh.material 引用的是 simulator 的 renderMaterial，由 simulator.dispose() 统一释放
+        // 不要手动 dispose mesh.material，避免重复释放
         this.simulator.dispose();
     }
 

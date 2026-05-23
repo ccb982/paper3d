@@ -24,6 +24,7 @@ export class TextureManager {
   private textures: Map<string, TextureEntry> = new Map();
   private fluidSimulators: Map<string, FluidSimulatorAdapter> = new Map();
   private isInitialized: boolean = false;
+  private managerCamera: THREE.Camera | null = null;  // 相机引用，用于可见性裁剪
 
   private constructor() {}
 
@@ -58,6 +59,11 @@ export class TextureManager {
     }
     this.fluidSimulators.set(id, adapter);
     
+    // 如果已有相机引用，自动设置（启用可见性裁剪）
+    if (this.managerCamera) {
+      adapter.setCamera(this.managerCamera);
+    }
+    
     // 同时注册为材质
     this.register(id, adapter);
   }
@@ -75,6 +81,28 @@ export class TextureManager {
       this.fluidSimulators.delete(id);
     }
     this.unregister(id);
+  }
+
+  /**
+   * 设置相机引用，用于可见性裁剪
+   * 设置后，所有已注册的流体模拟器都会启用可见性检测
+   * 不在相机视野内的流体模拟将跳过更新，节省 GPU 开销
+   * @param camera Three.js 相机
+   */
+  public setCamera(camera: THREE.Camera): void {
+    this.managerCamera = camera;
+    // 同步设置到所有已注册的流体模拟器
+    this.fluidSimulators.forEach(adapter => {
+      adapter.setCamera(camera);
+    });
+    console.log('[TextureManager] 相机已设置，可见性裁剪已启用');
+  }
+
+  /**
+   * 获取当前相机引用
+   */
+  public getCamera(): THREE.Camera | null {
+    return this.managerCamera;
   }
 
   // 注册纹理生成器

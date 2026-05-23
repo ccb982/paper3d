@@ -19,6 +19,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     private isExplosionBoosted: boolean = false;
     private pendingForces: FluidExternalForce[] = [];
     private constantInjectionStarted: boolean = false;  // 追踪恒定注入是否已启动
+    private adapterCamera: THREE.Camera | null = null;  // 相机引用，用于可见性裁剪
     
     // // 水面分裂相关（已注释）
     // private entityManager: EntityManager | null = null;
@@ -30,7 +31,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
     ) {
         // 默认参数，包含分层渲染配置
         const defaultParams: FluidParams = {
-            width: 256,
+            width: 512,
             height: 256,
             density: 1,
             viscosity: 0.001,
@@ -184,6 +185,17 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
 
     public setInjectionStrength(strength: number): void {
         this.simulator.setInjectionStrength(strength);
+    }
+
+    /**
+     * 设置相机引用，用于可见性裁剪
+     * 设置后，流体模拟会在不可见时自动跳过更新
+     * @param camera Three.js 相机
+     */
+    public setCamera(camera: THREE.Camera): void {
+        this.adapterCamera = camera;
+        this.simulator.setCamera(camera);
+        this.simulator.setWorldTransform(new THREE.Vector3(0, 0, 0), 5.0);
     }
     
     public configureInjection(config: {

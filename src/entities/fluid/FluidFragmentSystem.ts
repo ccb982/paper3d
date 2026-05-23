@@ -245,7 +245,12 @@ export class FluidFragmentSystem {
         worldVelocity: THREE.Vector3
     ): LightFluidEntity | null {
         const renderer = this.entityManager.getRenderer();
-        if (!renderer) return null;
+        if (!renderer) {
+            // 如果无法创建实体，也要释放临时纹理
+            phiTex.dispose();
+            velTex.dispose();
+            return null;
+        }
 
         const droplet = new LightFluidEntity(
             `frag_${Date.now()}_${Math.random()}`,
@@ -253,11 +258,15 @@ export class FluidFragmentSystem {
             worldPos,
             worldVelocity,
             0.6,
-            4.0
+            4.0,
+            true  // skipInitialVolume: true，跳过初始水量设置，避免冗余纹理创建
         );
         // 注入纹理数据
         droplet.getSimulator().setLevelSetTexture(phiTex);
         droplet.getSimulator().setVelocityTexture(velTex);
+        // 纹理已被复制到模拟器内部，释放临时纹理（防止显存泄漏）
+        phiTex.dispose();
+        velTex.dispose();
         this.entityManager.addEntity(droplet);
         return droplet;
     }
