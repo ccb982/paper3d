@@ -1,0 +1,162 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.app-container {
+  display: flex;
+  width: 100%;
+  height: 100vh;
+}
+
+.sidebar {
+  width: 280px;
+  background: #f5f5f5;
+  border-right: 1px solid #ddd;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.sidebar-section {
+  background: white;
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.sidebar-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #333;
+}
+
+.sidebar-section label {
+  display: block;
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 4px;
+}
+
+.sidebar-section input[type="file"] {
+  width: 100%;
+  font-size: 12px;
+}
+
+.sidebar-section input[type="number"],
+.sidebar-section input[type="text"] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.canvas-container {
+  flex: 1;
+  position: relative;
+  background: #e0e0e0;
+  overflow: hidden;
+}
+
+.main-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.coordinate-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  font-size: 10px;
+  color: #666;
+}
+
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: #1890ff;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #40a9ff;
+}
+
+.btn-danger {
+  background: #ff4d4f;
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #ff7875;
+}
+
+.coordinate-display {
+  font-size: 11px;
+  color: #333;
+  background: #fff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-top: 8px;
+  font-family: monospace;
+}
+
+.image-preview {
+  max-width: 100%;
+  margin-top: 8px;
+  border-radius: 4px;
+}
+
+.selection-overlay {
+  position: absolute;
+  border: 2px dashed #1890ff;
+  background: rgba(24, 144, 255, 0.1);
+  cursor: move;
+}
+
+.selection-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #1890ff;
+  border: 1px solid white;
+  border-radius: 50%;
+}
+
+.selection-handle.nw { top: -5px; left: -5px; cursor: nw-resize; }
+.selection-handle.ne { top: -5px; right: -5px; cursor: ne-resize; }
+.selection-handle.sw { bottom: -5px; left: -5px; cursor: sw-resize; }
+.selection-handle.se { bottom: -5px; right: -5px; cursor: se-resize; }
