@@ -10,6 +10,7 @@ const tools: { type: ToolType; icon: string; label: string }[] = [
   { type: 'triangle', icon: '△', label: '三角形' },
   { type: 'quadratic', icon: '⌒', label: '贝塞尔' },
   { type: 'brush', icon: '✎', label: '画笔' },
+  { type: 'eraser', icon: '✕', label: '橡皮' },
 ];
 
 export function Toolbar() {
@@ -23,6 +24,7 @@ export function Toolbar() {
     undo,
     saveToStorage,
     loadFromStorage,
+    exportToJson,
   } = useAppStore();
 
   const handleSave = () => {
@@ -33,6 +35,10 @@ export function Toolbar() {
   const handleLoad = () => {
     loadFromStorage();
     alert('已加载');
+  };
+
+  const handleExport = () => {
+    exportToJson();
   };
 
   return (
@@ -136,6 +142,26 @@ export function Toolbar() {
         }}
       >
         📂
+      </button>
+
+      <button
+        onClick={handleExport}
+        title="导出JSON"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: 'transparent',
+          color: '#333',
+          fontSize: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        📥
       </button>
 
       <div style={{ height: '8px' }} />

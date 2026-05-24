@@ -254,35 +254,43 @@ export function MainCanvas() {
     ctx.scale(zoom, zoom);
     ctx.translate(-canvasSize / 2, -canvasSize / 2);
 
-    if (layerVisibility.imageLayer && imageState.originalImage && imageState.imageSrc) {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, canvasSize, canvasSize);
+    if (imageState.originalImage && imageState.imageSrc) {
+      const imageLayer = layers.find(l => l.id === imageState.imageLayerId);
+      const isImageLayerVisible = imageLayer?.visible ?? false;
+      
+      if (isImageLayerVisible) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvasSize, canvasSize);
 
-      const img = imageState.originalImage;
+        ctx.globalAlpha = imageLayer?.opacity ?? 0.5;
+        const img = imageState.originalImage;
 
-      if (imageState.selectionRect) {
-        const sel = imageState.selectionRect;
-        const scaleX = canvasSize / sel.width;
-        const scaleY = canvasSize / sel.height;
-        const scale = Math.min(scaleX, scaleY);
+        if (imageState.selectionRect) {
+          const sel = imageState.selectionRect;
+          const scaleX = canvasSize / sel.width;
+          const scaleY = canvasSize / sel.height;
+          const scale = Math.min(scaleX, scaleY);
 
-        const drawWidth = sel.width * scale;
-        const drawHeight = sel.height * scale;
-        const offsetX = (canvasSize - drawWidth) / 2;
-        const offsetY = (canvasSize - drawHeight) / 2;
+          const drawWidth = sel.width * scale;
+          const drawHeight = sel.height * scale;
+          const offsetX = (canvasSize - drawWidth) / 2;
+          const offsetY = (canvasSize - drawHeight) / 2;
 
-        ctx.drawImage(
-          img,
-          sel.x, sel.y, sel.width, sel.height,
-          offsetX, offsetY, drawWidth, drawHeight
-        );
-      } else {
-        const scale = Math.min(canvasSize / img.width, canvasSize / img.height);
-        const drawWidth = img.width * scale;
-        const drawHeight = img.height * scale;
-        const offsetX = (canvasSize - drawWidth) / 2;
-        const offsetY = (canvasSize - drawHeight) / 2;
-        ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+          ctx.drawImage(
+            img,
+            sel.x, sel.y, sel.width, sel.height,
+            offsetX, offsetY, drawWidth, drawHeight
+          );
+        } else {
+          const scale = Math.min(canvasSize / img.width, canvasSize / img.height);
+          const drawWidth = img.width * scale;
+          const drawHeight = img.height * scale;
+          const offsetX = (canvasSize - drawWidth) / 2;
+          const offsetY = (canvasSize - drawHeight) / 2;
+          ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+        }
+
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -363,7 +371,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers]);
 
   useEffect(() => {
     drawCanvas();
@@ -505,6 +513,37 @@ export function MainCanvas() {
 
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorld(coords.x, coords.y);
+
+      if (currentTool === 'eraser') {
+        const state = useAppStore.getState();
+        const currentLayerId = state.activeLayerId || state.layers[0]?.id;
+        if (!currentLayerId) return;
+
+        const layerShapes = state.shapes.filter(s => s.layerId === currentLayerId);
+
+        let shapeToRemove: string | null = null;
+        for (const shape of layerShapes) {
+          for (const point of shape.points) {
+            const distance = Math.sqrt(
+              Math.pow(point.x - worldCoords.x, 2) + 
+              Math.pow(point.y - worldCoords.y, 2)
+            );
+            if (distance < 10) {
+              shapeToRemove = shape.id;
+              break;
+            }
+          }
+          if (shapeToRemove) break;
+        }
+
+        if (shapeToRemove) {
+          state.saveHistory();
+          useAppStore.setState(s => ({
+            shapes: s.shapes.filter(sh => sh.id !== shapeToRemove)
+          }));
+        }
+        return;
+      }
 
       const snappedCoords = snapToExistingPoint(
         worldCoords,

@@ -142,6 +142,23 @@ export function LayerControl() {
                   {layer.displayId}. {layer.name}
                 </span>
               )}
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.1"
+                value={layer.opacity}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  updateLayer(layer.id, { opacity: parseFloat(e.target.value) });
+                }}
+                style={{
+                  width: '40px',
+                  height: '12px',
+                  cursor: 'pointer',
+                }}
+                title={`透明度: ${(layer.opacity * 100).toFixed(0)}%`}
+              />
               <button
                 onClick={(e) => {
                   e.stopPropagation();

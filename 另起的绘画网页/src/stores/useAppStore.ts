@@ -90,6 +90,7 @@ interface AppState {
 
   // 保存/加载
   saveToStorage: () => void;
+  exportToJson: () => void;
   loadFromStorage: () => void;
 }
 
@@ -106,19 +107,50 @@ export const useAppStore = create<AppState>((set) => ({
     originalImage: null,
     imageSrc: null,
     selectionRect: null,
+    imageLayerId: null,
   },
   setOriginalImage: (img, src) =>
-    set((state) => ({
-      imageState: { ...state.imageState, originalImage: img, imageSrc: src },
-    })),
+    set((state) => {
+      const imageLayerId = `image_layer_${Date.now()}`;
+      const newLayer: Layer = {
+        id: imageLayerId,
+        displayId: 0,
+        name: '参考图片',
+        visible: true,
+        locked: false,
+        opacity: 0.5,
+      };
+      const renumberedLayers = state.layers.map((layer, index) => ({
+        ...layer,
+        displayId: index + 1,
+      }));
+      return {
+        imageState: { ...state.imageState, originalImage: img, imageSrc: src, imageLayerId },
+        layers: [newLayer, ...renumberedLayers],
+      };
+    }),
   setSelectionRect: (rect) =>
     set((state) => ({
       imageState: { ...state.imageState, selectionRect: rect },
     })),
   clearImage: () =>
-    set({
-      imageState: { originalImage: null, imageSrc: null, selectionRect: null },
-      isPreviewStage: false,
+    set((state) => {
+      const imageLayerId = state.imageState.imageLayerId;
+      const newLayers = imageLayerId
+        ? state.layers.filter((l) => l.id !== imageLayerId)
+        : state.layers;
+      const renumberedLayers = newLayers.map((layer, index) => ({
+        ...layer,
+        displayId: index + 1,
+      }));
+      return {
+        imageState: { originalImage: null, imageSrc: null, selectionRect: null, imageLayerId: null },
+        isPreviewStage: false,
+        layers: renumberedLayers,
+        shapes: imageLayerId
+          ? state.shapes.filter((s) => s.layerId !== imageLayerId)
+          : state.shapes,
+      };
     }),
 
   // 选区预览阶段状态
@@ -201,11 +233,15 @@ export const useAppStore = create<AppState>((set) => ({
   activeLayerId: 'layer_1',
   addLayer: (name) =>
     set((state) => {
+      const maxDisplayId = state.layers.length > 0
+        ? Math.max(...state.layers.map(l => l.displayId))
+        : 0;
+      const newDisplayId = maxDisplayId >= 0 ? maxDisplayId + 1 : 1;
       const newLayers = [
         ...state.layers,
         {
           id: `layer_${Date.now()}`,
-          displayId: state.layers.length + 1,
+          displayId: newDisplayId,
           name,
           visible: true,
           locked: false,
@@ -217,10 +253,21 @@ export const useAppStore = create<AppState>((set) => ({
   removeLayer: (id) =>
     set((state) => {
       const remainingLayers = state.layers.filter((l) => l.id !== id);
-      const renumberedLayers = remainingLayers.map((layer, index) => ({
-        ...layer,
-        displayId: index + 1,
-      }));
+      
+      const renumberedLayers = remainingLayers.map((layer, index) => {
+        // 如果是图片图层（displayId === 0），保持为0
+        if (layer.displayId === 0) {
+          return layer;
+        }
+        // 其他图层重新编号
+        // 如果第一个是图片图层，从1开始；否则从0开始
+        const startIndex = remainingLayers[0]?.displayId === 0 ? 1 : 0;
+        return {
+          ...layer,
+          displayId: startIndex + index,
+        };
+      });
+      
       const isRemovingActive = state.activeLayerId === id;
       const newActiveLayerId = isRemovingActive
         ? (renumberedLayers.length > 0 ? renumberedLayers[0].id : null)
@@ -242,13 +289,30 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   reorderLayers: (fromIndex, toIndex) =>
     set((state) => {
+      // 不允许移动图层0（参考图片）
+      const fromLayer = state.layers[fromIndex];
+      if (fromLayer.displayId === 0) {
+        return state;
+      }
+      
+      // 如果目标位置是0，调整到位置1（图片图层后面）
+      const adjustedToIndex = toIndex === 0 ? 1 : toIndex;
+      
       const newLayers = [...state.layers];
       const [removed] = newLayers.splice(fromIndex, 1);
-      newLayers.splice(toIndex, 0, removed);
-      const renumberedLayers = newLayers.map((layer, index) => ({
-        ...layer,
-        displayId: index + 1,
-      }));
+      newLayers.splice(adjustedToIndex, 0, removed);
+      
+      // 重新编号：图层0保持为0，其他图层从1开始
+      const renumberedLayers = newLayers.map((layer, index) => {
+        if (layer.displayId === 0) {
+          return layer;
+        }
+        return {
+          ...layer,
+          displayId: index,
+        };
+      });
+      
       return { layers: renumberedLayers };
     }),
 
@@ -320,10 +384,11 @@ export const useAppStore = create<AppState>((set) => ({
   // 保存/加载
   saveToStorage: () => {
     const state = useAppStore.getState();
+    const imageLayerId = state.imageState.imageLayerId;
     const data = {
-      shapes: state.shapes,
+      shapes: state.shapes.filter(s => s.layerId !== imageLayerId),
       groups: state.groups,
-      layers: state.layers,
+      layers: state.layers.filter(l => l.id !== imageLayerId),
       activeLayerId: state.activeLayerId,
       axis: state.axis,
       grid: state.grid,
@@ -331,6 +396,62 @@ export const useAppStore = create<AppState>((set) => ({
       snapEnabled: state.snapEnabled,
     };
     localStorage.setItem('drawing-app-data', JSON.stringify(data));
+  },
+  exportToJson: () => {
+    const state = useAppStore.getState();
+    const imageLayerId = state.imageState.imageLayerId;
+    
+    const exportData = {
+      version: '1.0',
+      exportTime: new Date().toISOString(),
+      axis: {
+        xMin: state.axis.xMin,
+        xMax: state.axis.xMax,
+        yMin: state.axis.yMin,
+        yMax: state.axis.yMax,
+      },
+      grid: {
+        cols: state.grid.cols,
+        rows: state.grid.rows,
+        cellWidth: (state.axis.xMax - state.axis.xMin) / state.grid.cols,
+        cellHeight: (state.axis.yMax - state.axis.yMin) / state.grid.rows,
+      },
+      layers: state.layers
+        .filter(layer => layer.id !== imageLayerId)
+        .map((layer, index) => ({
+          id: layer.id,
+          displayId: index + 1,
+          name: layer.name,
+          visible: layer.visible,
+          locked: layer.locked,
+          opacity: layer.opacity,
+          shapes: state.shapes
+            .filter(shape => shape.layerId === layer.id)
+            .map(shape => ({
+              id: shape.id,
+              type: shape.type,
+              groupId: shape.groupId,
+              color: shape.color,
+              points: shape.points.map(point => ({
+                x: point.x,
+                y: point.y,
+              })),
+            })),
+        })),
+      groups: state.groups,
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `drawing-export-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   },
   loadFromStorage: () => {
     const data = localStorage.getItem('drawing-app-data');

@@ -12,7 +12,7 @@ export interface Group {
 
 export type ShapeType = 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush';
 
-export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush';
+export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush' | 'eraser';
 
 export interface Shape {
   id: string;
@@ -33,6 +33,7 @@ export interface ImageImportState {
     width: number;
     height: number;
   } | null;
+  imageLayerId: string | null;
 }
 
 export interface AxisConfig {
