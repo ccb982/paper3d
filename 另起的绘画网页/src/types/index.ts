@@ -56,6 +56,7 @@ export interface LayerVisibility {
 
 export interface Layer {
   id: string;
+  displayId: number;
   name: string;
   visible: boolean;
   locked: boolean;

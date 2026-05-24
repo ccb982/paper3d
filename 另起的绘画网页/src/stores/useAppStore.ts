@@ -191,6 +191,7 @@ export const useAppStore = create<AppState>((set) => ({
   layers: [
     {
       id: 'layer_1',
+      displayId: 1,
       name: '图层 1',
       visible: true,
       locked: false,
@@ -199,27 +200,33 @@ export const useAppStore = create<AppState>((set) => ({
   ],
   activeLayerId: 'layer_1',
   addLayer: (name) =>
-    set((state) => ({
-      layers: [
+    set((state) => {
+      const newLayers = [
         ...state.layers,
         {
           id: `layer_${Date.now()}`,
+          displayId: state.layers.length + 1,
           name,
           visible: true,
           locked: false,
           opacity: 1,
         },
-      ],
-    })),
+      ];
+      return { layers: newLayers };
+    }),
   removeLayer: (id) =>
     set((state) => {
       const remainingLayers = state.layers.filter((l) => l.id !== id);
+      const renumberedLayers = remainingLayers.map((layer, index) => ({
+        ...layer,
+        displayId: index + 1,
+      }));
       const isRemovingActive = state.activeLayerId === id;
       const newActiveLayerId = isRemovingActive
-        ? (remainingLayers.length > 0 ? remainingLayers[0].id : null)
+        ? (renumberedLayers.length > 0 ? renumberedLayers[0].id : null)
         : state.activeLayerId;
       return {
-        layers: remainingLayers,
+        layers: renumberedLayers,
         activeLayerId: newActiveLayerId,
         shapes: state.shapes.filter((s) => s.layerId !== id),
       };
@@ -238,7 +245,11 @@ export const useAppStore = create<AppState>((set) => ({
       const newLayers = [...state.layers];
       const [removed] = newLayers.splice(fromIndex, 1);
       newLayers.splice(toIndex, 0, removed);
-      return { layers: newLayers };
+      const renumberedLayers = newLayers.map((layer, index) => ({
+        ...layer,
+        displayId: index + 1,
+      }));
+      return { layers: renumberedLayers };
     }),
 
   // 形状管理

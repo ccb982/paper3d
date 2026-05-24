@@ -447,20 +447,24 @@ export function MainCanvas() {
         brush: 'brush',
       };
 
+      const state = useAppStore.getState();
+      const currentLayerId = state.activeLayerId || state.layers[0]?.id;
+      if (!currentLayerId) return;
+
       const newShape: Shape = {
         id: `shape_${Date.now()}`,
         groupId: activeGroupId || 'default',
-        layerId: activeLayerId || 'layer_1',
+        layerId: currentLayerId,
         type: toolToType[currentTool] as any,
         points: pointsToSave,
         color: '#ff0000',
       };
 
-      useAppStore.getState().saveHistory();
+      state.saveHistory();
       addShape(newShape);
 
-      useAppStore.setState((state) => ({
-        shapes: state.shapes.filter(s => s.id !== 'current_shape'),
+      useAppStore.setState((s) => ({
+        shapes: s.shapes.filter(sh => sh.id !== 'current_shape'),
       }));
     }
     setTempPoints([]);

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 
 export function LayerControl() {
@@ -25,19 +26,11 @@ export function LayerControl() {
     setPanMode,
   } = useAppStore();
 
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState('');
+
   const handleAddLayer = () => {
-    const existingNumbers: number[] = [];
-    layers.forEach((l) => {
-      const match = l.name.match(/^图层\s*(\d+)$/);
-      if (match) {
-        existingNumbers.push(parseInt(match[1], 10));
-      }
-    });
-    let newNumber = 1;
-    while (existingNumbers.includes(newNumber)) {
-      newNumber++;
-    }
-    addLayer(`图层 ${newNumber}`);
+    addLayer(`图层 ${layers.length + 1}`);
   };
 
   const handleRemoveLayer = (id: string) => {
@@ -103,16 +96,52 @@ export function LayerControl() {
               >
                 {layer.visible ? '👁' : '👁‍🗨'}
               </button>
-              <span
-                style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  textDecoration: layer.visible ? 'none' : 'line-through',
-                  color: layer.visible ? '#333' : '#999',
-                }}
-              >
-                {layer.name}
-              </span>
+              {editingLayerId === layer.id ? (
+                <input
+                  type="text"
+                  value={editingName}
+                  onChange={(e) => setEditingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      if (editingName.trim()) {
+                        updateLayer(layer.id, { name: editingName.trim() });
+                      }
+                      setEditingLayerId(null);
+                    } else if (e.key === 'Escape') {
+                      setEditingLayerId(null);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (editingName.trim()) {
+                      updateLayer(layer.id, { name: editingName.trim() });
+                    }
+                    setEditingLayerId(null);
+                  }}
+                  autoFocus
+                  style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    border: '1px solid #1890ff',
+                    borderRadius: '2px',
+                    padding: '2px 4px',
+                  }}
+                />
+              ) : (
+                <span
+                  style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    textDecoration: layer.visible ? 'none' : 'line-through',
+                    color: layer.visible ? '#333' : '#999',
+                  }}
+                  onDoubleClick={() => {
+                    setEditingLayerId(layer.id);
+                    setEditingName(layer.name);
+                  }}
+                >
+                  {layer.displayId}. {layer.name}
+                </span>
+              )}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
