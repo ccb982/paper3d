@@ -88,6 +88,18 @@ export function MainCanvas() {
     return { x: px, y: py };
   }, [axis, canvasSize]);
 
+  const worldToCanvasForSnap = useCallback((worldX: number, worldY: number): Point => {
+    const centerX = canvasSize / 2;
+    const centerY = canvasSize / 2;
+
+    const rawX = ((worldX - axis.xMin) / (axis.xMax - axis.xMin)) * canvasSize;
+    const rawY = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * canvasSize;
+
+    const canvasX = (rawX - centerX) * zoom + centerX + panOffset.x;
+    const canvasY = (rawY - centerY) * zoom + centerY + panOffset.y;
+    return { x: canvasX, y: canvasY };
+  }, [axis, zoom, panOffset, canvasSize]);
+
   const snapToExistingPoint = useCallback((
     point: Point,
     toolType: string,
@@ -96,48 +108,37 @@ export function MainCanvas() {
     if (!snapEnabled) return point;
 
     const shouldSnapNow = (() => {
-      if (toolType === 'rectangle') return false;
-      if (toolType === 'quadratic' && currentPointCount === 2) return false;
+      if (toolType === 'quadratic' && currentPointCount >= 2) return false;
+      if (toolType === 'rectangle' && currentPointCount >= 2) return false;
       return true;
     })();
-
     if (!shouldSnapNow) return point;
 
-    const canvasPoint = worldToCanvas(point.x, point.y);
-    const checkAndSnap = (p: Point): Point | null => {
-      const existingCanvasPoint = worldToCanvas(p.x, p.y);
-      const distance = Math.hypot(
-        canvasPoint.x - existingCanvasPoint.x,
-        canvasPoint.y - existingCanvasPoint.y
-      ) * zoom;
-      if (distance < snapRadius) return p;
-      return null;
-    };
+    const canvasPoint = worldToCanvasForSnap(point.x, point.y);
+    let bestMatch: Point | null = null;
+    let bestDist = snapRadius;
 
     const candidatePoints: Point[] = [];
-
     for (const shape of shapes) {
       if (shape.id === 'current_shape') continue;
-
-      if (shape.type === 'quadratic') {
-        candidatePoints.push(shape.points[0]);
-        if (shape.points[1]) candidatePoints.push(shape.points[1]);
-      } else {
-        candidatePoints.push(...shape.points);
-      }
+      candidatePoints.push(...shape.points);
     }
-
     if (toolType !== 'rectangle') {
       candidatePoints.push(...tempPoints);
     }
 
     for (const p of candidatePoints) {
-      const snapped = checkAndSnap(p);
-      if (snapped) return snapped;
+      const pCanvas = worldToCanvasForSnap(p.x, p.y);
+      const dist = Math.hypot(canvasPoint.x - pCanvas.x, canvasPoint.y - pCanvas.y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestMatch = p;
+      }
     }
 
+    if (bestMatch) return bestMatch;
     return point;
-  }, [snapEnabled, snapRadius, shapes, tempPoints, worldToCanvas]);
+  }, [snapEnabled, snapRadius, shapes, tempPoints, worldToCanvasForSnap]);
 
   const findShapeAtPoint = useCallback((x: number, y: number) => {
     const hitRadius = snapRadius / zoom;
@@ -972,16 +973,17 @@ export function MainCanvas() {
         const currentLayerId = state.activeLayerId || state.layers[0]?.id;
         if (!currentLayerId) return;
 
-        const layerShapes = state.shapes.filter(s => s.layerId === currentLayerId);
-
+        const clickCanvas = getCanvasCoords(e);
         let shapeToRemove: string | null = null;
-        for (const shape of layerShapes) {
+
+        for (const shape of state.shapes) {
+          if (shape.id === 'current_shape') continue;
+          if (shape.layerId !== currentLayerId) continue;
+
           for (const point of shape.points) {
-            const distance = Math.sqrt(
-              Math.pow(point.x - worldCoords.x, 2) + 
-              Math.pow(point.y - worldCoords.y, 2)
-            );
-            if (distance < 10) {
+            const pointCanvas = worldToCanvasForSnap(point.x, point.y);
+            const dist = Math.hypot(pointCanvas.x - clickCanvas.x, pointCanvas.y - clickCanvas.y);
+            if (dist < snapRadius) {
               shapeToRemove = shape.id;
               break;
             }
@@ -1058,7 +1060,7 @@ export function MainCanvas() {
         });
       }
     },
-    [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorld, activeGroupId, activeLayerId, updateCurrentShape, finalizeShape]
+    [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorld, activeGroupId, activeLayerId, updateCurrentShape, finalizeShape, worldToCanvasForSnap, snapToExistingPoint, snapRadius]
   );
 
   const handleDoubleClick = useCallback(() => {
