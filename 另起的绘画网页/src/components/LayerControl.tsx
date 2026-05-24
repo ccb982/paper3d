@@ -1,10 +1,178 @@
 import { useAppStore } from '../stores/useAppStore';
 
 export function LayerControl() {
-  const { layerVisibility, toggleLayer, axis, setAxis, resetAxis, grid, setGrid, mousePosition, zoom, setZoom, resetView, isPanMode, setPanMode } = useAppStore();
+  const {
+    layers,
+    activeLayerId,
+    addLayer,
+    removeLayer,
+    updateLayer,
+    setActiveLayer,
+    toggleLayerVisibility,
+    reorderLayers,
+    layerVisibility,
+    toggleLayer,
+    axis,
+    setAxis,
+    resetAxis,
+    grid,
+    setGrid,
+    mousePosition,
+    zoom,
+    setZoom,
+    resetView,
+    isPanMode,
+    setPanMode,
+  } = useAppStore();
+
+  const handleAddLayer = () => {
+    const existingNumbers: number[] = [];
+    layers.forEach((l) => {
+      const match = l.name.match(/^图层\s*(\d+)$/);
+      if (match) {
+        existingNumbers.push(parseInt(match[1], 10));
+      }
+    });
+    let newNumber = 1;
+    while (existingNumbers.includes(newNumber)) {
+      newNumber++;
+    }
+    addLayer(`图层 ${newNumber}`);
+  };
+
+  const handleRemoveLayer = (id: string) => {
+    if (layers.length > 1) {
+      removeLayer(id);
+    }
+  };
+
+  const handleMoveUp = (index: number) => {
+    if (index < layers.length - 1) {
+      reorderLayers(index, index + 1);
+    }
+  };
+
+  const handleMoveDown = (index: number) => {
+    if (index > 0) {
+      reorderLayers(index, index - 1);
+    }
+  };
 
   return (
     <>
+      <div className="sidebar-section">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3>图层管理</h3>
+          <button
+            onClick={handleAddLayer}
+            className="btn btn-primary"
+            style={{ fontSize: '12px', padding: '2px 8px' }}
+          >
+            + 添加
+          </button>
+        </div>
+        <div style={{ marginTop: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+          {layers.map((layer, index) => (
+            <div
+              key={layer.id}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px',
+                marginBottom: '4px',
+                backgroundColor: activeLayerId === layer.id ? '#e6f7ff' : '#f5f5f5',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+              onClick={() => setActiveLayer(layer.id)}
+            >
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleLayerVisibility(layer.id);
+                }}
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                }}
+              >
+                {layer.visible ? '👁' : '👁‍🗨'}
+              </button>
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: '12px',
+                  textDecoration: layer.visible ? 'none' : 'line-through',
+                  color: layer.visible ? '#333' : '#999',
+                }}
+              >
+                {layer.name}
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMoveDown(index);
+                }}
+                disabled={index === 0}
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  fontSize: '12px',
+                  cursor: index === 0 ? 'not-allowed' : 'pointer',
+                  opacity: index === 0 ? 0.3 : 1,
+                }}
+              >
+                ↑
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMoveUp(index);
+                }}
+                disabled={index === layers.length - 1}
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  fontSize: '12px',
+                  cursor: index === layers.length - 1 ? 'not-allowed' : 'pointer',
+                  opacity: index === layers.length - 1 ? 0.3 : 1,
+                }}
+              >
+                ↓
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemoveLayer(layer.id);
+                }}
+                disabled={layers.length <= 1}
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  fontSize: '12px',
+                  cursor: layers.length <= 1 ? 'not-allowed' : 'pointer',
+                  opacity: layers.length <= 1 ? 0.3 : 1,
+                  color: '#ff4d4f',
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="sidebar-section">
         <h3>图层可见性</h3>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>

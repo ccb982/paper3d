@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType } from '../types';
+import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer } from '../types';
 
 interface AppState {
   // 图片导入状态
@@ -33,6 +33,16 @@ interface AppState {
   removeGroup: (id: string) => void;
   updateGroup: (id: string, updates: Partial<Group>) => void;
   setActiveGroup: (id: string | null) => void;
+
+  // 图层管理
+  layers: Layer[];
+  activeLayerId: string | null;
+  addLayer: (name: string) => void;
+  removeLayer: (id: string) => void;
+  updateLayer: (id: string, updates: Partial<Layer>) => void;
+  setActiveLayer: (id: string | null) => void;
+  toggleLayerVisibility: (id: string) => void;
+  reorderLayers: (fromIndex: number, toIndex: number) => void;
 
   // 形状管理
   shapes: Shape[];
@@ -70,6 +80,17 @@ interface AppState {
   setSnapRadius: (radius: number) => void;
   snapEnabled: boolean;  // 是否启用吸附
   setSnapEnabled: (enabled: boolean) => void;
+
+  // 撤销历史
+  shapesHistory: Shape[][];
+  historyIndex: number;
+  saveHistory: () => void;
+  undo: () => void;
+  canUndo: () => boolean;
+
+  // 保存/加载
+  saveToStorage: () => void;
+  loadFromStorage: () => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -166,6 +187,60 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   setActiveGroup: (id) => set({ activeGroupId: id }),
 
+  // 图层管理
+  layers: [
+    {
+      id: 'layer_1',
+      name: '图层 1',
+      visible: true,
+      locked: false,
+      opacity: 1,
+    },
+  ],
+  activeLayerId: 'layer_1',
+  addLayer: (name) =>
+    set((state) => ({
+      layers: [
+        ...state.layers,
+        {
+          id: `layer_${Date.now()}`,
+          name,
+          visible: true,
+          locked: false,
+          opacity: 1,
+        },
+      ],
+    })),
+  removeLayer: (id) =>
+    set((state) => {
+      const remainingLayers = state.layers.filter((l) => l.id !== id);
+      const isRemovingActive = state.activeLayerId === id;
+      const newActiveLayerId = isRemovingActive
+        ? (remainingLayers.length > 0 ? remainingLayers[0].id : null)
+        : state.activeLayerId;
+      return {
+        layers: remainingLayers,
+        activeLayerId: newActiveLayerId,
+        shapes: state.shapes.filter((s) => s.layerId !== id),
+      };
+    }),
+  updateLayer: (id, updates) =>
+    set((state) => ({
+      layers: state.layers.map((l) => (l.id === id ? { ...l, ...updates } : l)),
+    })),
+  setActiveLayer: (id) => set({ activeLayerId: id }),
+  toggleLayerVisibility: (id) =>
+    set((state) => ({
+      layers: state.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
+    })),
+  reorderLayers: (fromIndex, toIndex) =>
+    set((state) => {
+      const newLayers = [...state.layers];
+      const [removed] = newLayers.splice(fromIndex, 1);
+      newLayers.splice(toIndex, 0, removed);
+      return { layers: newLayers };
+    }),
+
   // 形状管理
   shapes: [],
   addShape: (shape) =>
@@ -207,4 +282,71 @@ export const useAppStore = create<AppState>((set) => ({
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
   snapEnabled: true,  // 默认启用吸附
   setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
+
+  // 撤销历史
+  shapesHistory: [[]],
+  historyIndex: 0,
+  saveHistory: () =>
+    set((state) => {
+      const newHistory = state.shapesHistory.slice(0, state.historyIndex + 1);
+      newHistory.push([...state.shapes]);
+      if (newHistory.length > 50) newHistory.shift();
+      return { shapesHistory: newHistory, historyIndex: newHistory.length - 1 };
+    }),
+  undo: () =>
+    set((state) => {
+      if (state.historyIndex > 0) {
+        const newIndex = state.historyIndex - 1;
+        return { shapes: [...state.shapesHistory[newIndex]], historyIndex: newIndex };
+      }
+      return state;
+    }),
+  canUndo: () => {
+    const state = useAppStore.getState();
+    return state.historyIndex > 0;
+  },
+
+  // 保存/加载
+  saveToStorage: () => {
+    const state = useAppStore.getState();
+    const data = {
+      shapes: state.shapes,
+      groups: state.groups,
+      layers: state.layers,
+      activeLayerId: state.activeLayerId,
+      axis: state.axis,
+      grid: state.grid,
+      snapRadius: state.snapRadius,
+      snapEnabled: state.snapEnabled,
+    };
+    localStorage.setItem('drawing-app-data', JSON.stringify(data));
+  },
+  loadFromStorage: () => {
+    const data = localStorage.getItem('drawing-app-data');
+    if (data) {
+      try {
+        const parsed = JSON.parse(data);
+        const loadedLayers = parsed.layers || [{ id: 'layer_1', name: '图层 1', visible: true, locked: false, opacity: 1 }];
+        const loadedActiveLayerId = parsed.activeLayerId || 'layer_1';
+        const loadedShapes = (parsed.shapes || []).map((s: any) => ({
+          ...s,
+          layerId: s.layerId || loadedActiveLayerId,
+        }));
+        set((state) => ({
+          shapes: loadedShapes,
+          groups: parsed.groups || [],
+          layers: loadedLayers,
+          activeLayerId: loadedActiveLayerId,
+          axis: parsed.axis || state.axis,
+          grid: parsed.grid || state.grid,
+          snapRadius: parsed.snapRadius ?? 10,
+          snapEnabled: parsed.snapEnabled ?? true,
+          shapesHistory: [loadedShapes],
+          historyIndex: 0,
+        }));
+      } catch (e) {
+        console.error('Failed to load data:', e);
+      }
+    }
+  },
 }));

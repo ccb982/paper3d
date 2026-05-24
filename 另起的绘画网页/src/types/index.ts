@@ -17,6 +17,7 @@ export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 't
 export interface Shape {
   id: string;
   groupId: string;
+  layerId: string;
   type: ShapeType;
   points: Point[];
   color: string;
@@ -51,4 +52,12 @@ export interface LayerVisibility {
   imageLayer: boolean;
   drawLayer: boolean;
   axisLayer: boolean;
+}
+
+export interface Layer {
+  id: string;
+  name: string;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
 }

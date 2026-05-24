@@ -13,14 +13,27 @@ const tools: { type: ToolType; icon: string; label: string }[] = [
 ];
 
 export function Toolbar() {
-  const { 
-    currentTool, 
+  const {
+    currentTool,
     setCurrentTool,
     snapRadius,
     setSnapRadius,
     snapEnabled,
-    setSnapEnabled 
+    setSnapEnabled,
+    undo,
+    saveToStorage,
+    loadFromStorage,
   } = useAppStore();
+
+  const handleSave = () => {
+    saveToStorage();
+    alert('已保存');
+  };
+
+  const handleLoad = () => {
+    loadFromStorage();
+    alert('已加载');
+  };
 
   return (
     <div
@@ -62,9 +75,71 @@ export function Toolbar() {
           {tool.icon}
         </button>
       ))}
-      
+
       <div style={{ height: '8px' }} />
-      
+
+      <button
+        onClick={undo}
+        title="撤销"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: 'transparent',
+          color: '#333',
+          fontSize: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        ↩
+      </button>
+
+      <button
+        onClick={handleSave}
+        title="保存"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: 'transparent',
+          color: '#333',
+          fontSize: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        💾
+      </button>
+
+      <button
+        onClick={handleLoad}
+        title="加载"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: 'transparent',
+          color: '#333',
+          fontSize: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        📂
+      </button>
+
+      <div style={{ height: '8px' }} />
+
       <button
         onClick={() => setSnapEnabled(!snapEnabled)}
         title={snapEnabled ? '关闭吸附' : '开启吸附'}
@@ -85,7 +160,7 @@ export function Toolbar() {
       >
         ◉
       </button>
-      
+
       <div
         style={{
           display: 'flex',
@@ -114,3 +189,4 @@ export function Toolbar() {
     </div>
   );
 }
+

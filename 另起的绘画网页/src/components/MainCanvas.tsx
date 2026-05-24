@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 
-const CANVAS_SIZE = 512;
+const BASE_CANVAS_SIZE = 512;
 
 export function MainCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -22,6 +22,8 @@ export function MainCanvas() {
     shapes,
     addShape,
     activeGroupId,
+    activeLayerId,
+    layers,
     snapRadius,
     snapEnabled,
   } = useAppStore();
@@ -30,21 +32,36 @@ export function MainCanvas() {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
+  const [canvasSize, setCanvasSize] = useState(BASE_CANVAS_SIZE);
+
+  useEffect(() => {
+    const updateSize = () => {
+      if (containerRef.current) {
+        const container = containerRef.current;
+        const size = Math.min(container.clientWidth, container.clientHeight);
+        setCanvasSize(size > 0 ? size : BASE_CANVAS_SIZE);
+      }
+    };
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
 
   const canvasToWorld = useCallback((canvasX: number, canvasY: number): Point => {
-    const centerX = CANVAS_SIZE / 2;
-    const centerY = CANVAS_SIZE / 2;
-    const worldX = (canvasX - centerX - panOffset.x) / zoom - centerX;
-    const worldY = (canvasY - centerY - panOffset.y) / zoom - centerY;
+    const centerX = canvasSize / 2;
+    const centerY = canvasSize / 2;
 
-    const axisX = axis.xMin + ((worldX + CANVAS_SIZE) / CANVAS_SIZE) * (axis.xMax - axis.xMin);
-    const axisY = axis.yMax - ((worldY + CANVAS_SIZE) / CANVAS_SIZE) * (axis.yMax - axis.yMin);
-    return { x: axisX, y: axisY };
-  }, [axis, zoom, panOffset]);
+    const rawX = (canvasX - centerX - panOffset.x) / zoom + centerX;
+    const rawY = (canvasY - centerY - panOffset.y) / zoom + centerY;
+
+    const worldX = (rawX / canvasSize) * (axis.xMax - axis.xMin) + axis.xMin;
+    const worldY = axis.yMax - (rawY / canvasSize) * (axis.yMax - axis.yMin);
+    return { x: worldX, y: worldY };
+  }, [axis, zoom, panOffset, canvasSize]);
 
   const worldToCanvas = useCallback((worldX: number, worldY: number): Point => {
-    const px = ((worldX - axis.xMin) / (axis.xMax - axis.xMin)) * CANVAS_SIZE;
-    const py = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * CANVAS_SIZE;
+    const px = ((worldX - axis.xMin) / (axis.xMax - axis.xMin)) * canvasSize;
+    const py = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * canvasSize;
     return { x: px, y: py };
   }, [axis]);
 
@@ -230,29 +247,29 @@ export function MainCanvas() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    ctx.clearRect(0, 0, canvasSize, canvasSize);
 
     ctx.save();
-    ctx.translate(CANVAS_SIZE / 2 + panOffset.x, CANVAS_SIZE / 2 + panOffset.y);
+    ctx.translate(canvasSize / 2 + panOffset.x, canvasSize / 2 + panOffset.y);
     ctx.scale(zoom, zoom);
-    ctx.translate(-CANVAS_SIZE / 2, -CANVAS_SIZE / 2);
+    ctx.translate(-canvasSize / 2, -canvasSize / 2);
 
     if (layerVisibility.imageLayer && imageState.originalImage && imageState.imageSrc) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvasSize, canvasSize);
+
       const img = imageState.originalImage;
 
       if (imageState.selectionRect) {
         const sel = imageState.selectionRect;
-        const scaleX = CANVAS_SIZE / sel.width;
-        const scaleY = CANVAS_SIZE / sel.height;
+        const scaleX = canvasSize / sel.width;
+        const scaleY = canvasSize / sel.height;
         const scale = Math.min(scaleX, scaleY);
 
         const drawWidth = sel.width * scale;
         const drawHeight = sel.height * scale;
-        const offsetX = (CANVAS_SIZE - drawWidth) / 2;
-        const offsetY = (CANVAS_SIZE - drawHeight) / 2;
+        const offsetX = (canvasSize - drawWidth) / 2;
+        const offsetY = (canvasSize - drawHeight) / 2;
 
         ctx.drawImage(
           img,
@@ -260,11 +277,11 @@ export function MainCanvas() {
           offsetX, offsetY, drawWidth, drawHeight
         );
       } else {
-        const scale = Math.min(CANVAS_SIZE / img.width, CANVAS_SIZE / img.height);
+        const scale = Math.min(canvasSize / img.width, canvasSize / img.height);
         const drawWidth = img.width * scale;
         const drawHeight = img.height * scale;
-        const offsetX = (CANVAS_SIZE - drawWidth) / 2;
-        const offsetY = (CANVAS_SIZE - drawHeight) / 2;
+        const offsetX = (canvasSize - drawWidth) / 2;
+        const offsetY = (canvasSize - drawHeight) / 2;
         ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
       }
     }
@@ -273,46 +290,54 @@ export function MainCanvas() {
       ctx.strokeStyle = '#d0d0d0';
       ctx.lineWidth = 1;
       for (let i = 0; i <= grid.cols; i++) {
-        const pos = (i / grid.cols) * CANVAS_SIZE;
+        const pos = (i / grid.cols) * canvasSize;
         ctx.beginPath();
         ctx.moveTo(pos, 0);
-        ctx.lineTo(pos, CANVAS_SIZE);
+        ctx.lineTo(pos, canvasSize);
         ctx.stroke();
       }
       for (let i = 0; i <= grid.rows; i++) {
-        const pos = (i / grid.rows) * CANVAS_SIZE;
+        const pos = (i / grid.rows) * canvasSize;
         ctx.beginPath();
         ctx.moveTo(0, pos);
-        ctx.lineTo(CANVAS_SIZE, pos);
+        ctx.lineTo(canvasSize, pos);
         ctx.stroke();
       }
 
-      const centerX = (0 - axis.xMin) / (axis.xMax - axis.xMin) * CANVAS_SIZE;
-      const centerY = (axis.yMax - 0) / (axis.yMax - axis.yMin) * CANVAS_SIZE;
+      const centerX = (0 - axis.xMin) / (axis.xMax - axis.xMin) * canvasSize;
+      const centerY = (axis.yMax - 0) / (axis.yMax - axis.yMin) * canvasSize;
 
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(0, centerY);
-      ctx.lineTo(CANVAS_SIZE, centerY);
+      ctx.lineTo(canvasSize, centerY);
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(centerX, 0);
-      ctx.lineTo(centerX, CANVAS_SIZE);
+      ctx.lineTo(centerX, canvasSize);
       ctx.stroke();
 
       ctx.fillStyle = '#666';
       ctx.font = '12px monospace';
       ctx.fillText(`X: ${axis.xMin.toFixed(2)}`, 5, 18);
-      ctx.fillText(`X: ${axis.xMax.toFixed(2)}`, CANVAS_SIZE - 45, 18);
+      ctx.fillText(`X: ${axis.xMax.toFixed(2)}`, canvasSize - 45, 18);
       ctx.fillText(`Y: ${axis.yMax.toFixed(2)}`, 5, 20);
-      ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, CANVAS_SIZE - 5);
+      ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, canvasSize - 5);
     }
 
     if (layerVisibility.drawLayer) {
-      shapes.forEach((shape) => {
-        drawShape(ctx, shape);
+      layers.forEach((layer) => {
+        if (layer.visible) {
+          ctx.globalAlpha = layer.opacity;
+          shapes.forEach((shape) => {
+            if (shape.layerId === layer.id) {
+              drawShape(ctx, shape);
+            }
+          });
+        }
       });
+      ctx.globalAlpha = 1;
 
       if (tempPoints.length > 0) {
         const tempShape: Shape = {
@@ -348,8 +373,8 @@ export function MainCanvas() {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const scaleX = CANVAS_SIZE / rect.width;
-    const scaleY = CANVAS_SIZE / rect.height;
+    const scaleX = canvasSize / rect.width;
+    const scaleY = canvasSize / rect.height;
     return {
       x: (e.clientX - rect.left) * scaleX,
       y: (e.clientY - rect.top) * scaleY,
@@ -425,10 +450,13 @@ export function MainCanvas() {
       const newShape: Shape = {
         id: `shape_${Date.now()}`,
         groupId: activeGroupId || 'default',
+        layerId: activeLayerId || 'layer_1',
         type: toolToType[currentTool] as any,
         points: pointsToSave,
         color: '#ff0000',
       };
+
+      useAppStore.getState().saveHistory();
       addShape(newShape);
 
       useAppStore.setState((state) => ({
@@ -454,6 +482,7 @@ export function MainCanvas() {
       const newShape: Shape = {
         id: `current_shape`,
         groupId: activeGroupId || 'default',
+        layerId: activeLayerId || 'layer_1',
         type: toolToType[currentTool] as any,
         points: newPoints,
         color: '#666',
@@ -464,7 +493,7 @@ export function MainCanvas() {
         return { shapes: [...filtered, newShape] };
       });
     }
-  }, [currentTool, activeGroupId]);
+  }, [currentTool, activeGroupId, activeLayerId]);
 
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent) => {
@@ -514,6 +543,7 @@ export function MainCanvas() {
           const newShape: Shape = {
             id: `current_shape`,
             groupId: activeGroupId || 'default',
+            layerId: activeLayerId || 'layer_1',
             type: toolToType[currentTool] as any,
             points: newPoints,
             color: '#ff0000',
@@ -532,7 +562,7 @@ export function MainCanvas() {
         });
       }
     },
-    [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorld, activeGroupId, updateCurrentShape, finalizeShape]
+    [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorld, activeGroupId, activeLayerId, updateCurrentShape, finalizeShape]
   );
 
   const handleDoubleClick = useCallback(() => {
@@ -554,23 +584,48 @@ export function MainCanvas() {
         cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default'),
       }}
     >
-      <canvas
-        ref={canvasRef}
-        width={CANVAS_SIZE}
-        height={CANVAS_SIZE}
+      <div
         style={{
+          width: '100%',
+          height: '100%',
           maxWidth: '100%',
           maxHeight: '100%',
-          imageRendering: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={handleMouseLeave}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseUp={handleMouseUp}
-        onClick={handleCanvasClick}
-        onDoubleClick={handleDoubleClick}
-      />
+      >
+        <div
+          style={{
+            aspectRatio: '1 / 1',
+            width: 'auto',
+            height: 'auto',
+            maxWidth: '100%',
+            maxHeight: '100%',
+            position: 'relative',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            width={canvasSize}
+            height={canvasSize}
+            style={{
+              width: '100%',
+              height: '100%',
+              imageRendering: 'auto',
+              display: 'block',
+            }}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onClick={handleCanvasClick}
+            onDoubleClick={handleDoubleClick}
+          />
+        </div>
+      </div>
     </div>
   );
 }
