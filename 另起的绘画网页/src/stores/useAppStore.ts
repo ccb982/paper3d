@@ -326,6 +326,23 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       shapes: state.shapes.map((s) => (s.id === id ? { ...s, ...updates } : s)),
     })),
+  updateShapeAnnotation: (shapeId, annotation) =>
+    set((state) => ({
+      shapes: state.shapes.map((s) => 
+        s.id === shapeId ? { ...s, annotation } : s
+      ),
+    })),
+  updatePointAnnotation: (shapeId, pointIndex, annotation) =>
+    set((state) => ({
+      shapes: state.shapes.map((s) => 
+        s.id === shapeId ? {
+          ...s,
+          points: s.points.map((p, idx) => 
+            idx === pointIndex ? { ...p, annotation } : p
+          ),
+        } : s
+      ),
+    })),
   clearShapes: () => set({ shapes: [] }),
 
   // 鼠标位置
@@ -432,9 +449,11 @@ export const useAppStore = create<AppState>((set) => ({
               type: shape.type,
               groupId: shape.groupId,
               color: shape.color,
+              annotation: shape.annotation,
               points: shape.points.map(point => ({
                 x: point.x,
                 y: point.y,
+                annotation: point.annotation,
               })),
             })),
         })),

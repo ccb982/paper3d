@@ -1,6 +1,7 @@
 export interface Point {
   x: number;
   y: number;
+  annotation?: string;
 }
 
 export interface Group {
@@ -12,7 +13,7 @@ export interface Group {
 
 export type ShapeType = 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush';
 
-export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush' | 'eraser';
+export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush' | 'eraser' | 'annotation';
 
 export interface Shape {
   id: string;

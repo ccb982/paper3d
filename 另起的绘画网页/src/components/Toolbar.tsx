@@ -11,6 +11,7 @@ const tools: { type: ToolType; icon: string; label: string }[] = [
   { type: 'quadratic', icon: '⌒', label: '贝塞尔' },
   { type: 'brush', icon: '✎', label: '画笔' },
   { type: 'eraser', icon: '✕', label: '橡皮' },
+  { type: 'annotation', icon: '📝', label: '注释' },
 ];
 
 export function Toolbar() {
