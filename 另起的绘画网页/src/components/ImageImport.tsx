@@ -13,6 +13,9 @@ export function ImageImport() {
     setPreviewStage,
     applySelectionToCanvas,
   } = useAppStore();
+  const saveHistory = useCallback(() => {
+    useAppStore.getState().saveHistory();
+  }, []);
 
   const [isSelecting, setIsSelecting] = useState(false);
   const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
@@ -43,6 +46,7 @@ export function ImageImport() {
   );
 
   const handleClear = useCallback(() => {
+    saveHistory();
     clearImage();
     setPreviewStage(false);
     setSelectionStart(null);
@@ -51,7 +55,7 @@ export function ImageImport() {
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, [clearImage, setPreviewStage]);
+  }, [clearImage, setPreviewStage, saveHistory]);
 
   const handleConfirmSelection = useCallback(() => {
     if (selectionStart && selectionEnd && imageState.originalImage) {
@@ -89,8 +93,9 @@ export function ImageImport() {
         height,
       });
       applySelectionToCanvas();
+      saveHistory();
     }
-  }, [selectionStart, selectionEnd, imageState.originalImage, setSelectionRect, applySelectionToCanvas]);
+  }, [selectionStart, selectionEnd, imageState.originalImage, setSelectionRect, applySelectionToCanvas, saveHistory]);
 
   const handleBackToSelection = useCallback(() => {
     setPreviewStage(true);

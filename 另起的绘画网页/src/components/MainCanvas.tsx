@@ -67,6 +67,38 @@ export function MainCanvas() {
     return () => window.removeEventListener('resize', updateSize);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (tempPoints.length > 0) {
+          useAppStore.setState((s) => ({
+            shapes: s.shapes.filter(sh => sh.id !== 'current_shape'),
+          }));
+          setTempPoints([]);
+          setPreviewPoint(null);
+        }
+        if (annotationEditor) {
+          setAnnotationEditor(null);
+          setHighlightRegion(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tempPoints, annotationEditor]);
+
+  const prevToolRef = useRef(currentTool);
+  useEffect(() => {
+    if (prevToolRef.current !== currentTool && tempPoints.length > 0) {
+      useAppStore.setState((s) => ({
+        shapes: s.shapes.filter(sh => sh.id !== 'current_shape'),
+      }));
+      setTempPoints([]);
+      setPreviewPoint(null);
+    }
+    prevToolRef.current = currentTool;
+  }, [currentTool, tempPoints]);
+
   const canvasToWorld = useCallback((canvasX: number, canvasY: number): Point => {
     const centerX = canvasSize / 2;
     const centerY = canvasSize / 2;
@@ -887,6 +919,7 @@ export function MainCanvas() {
       } else {
         updateShapeAnnotation(annotationEditor.shapeId, annotation);
       }
+      useAppStore.getState().saveHistory();
     }
     setAnnotationEditor(null);
     setHighlightRegion(null);
@@ -898,40 +931,40 @@ export function MainCanvas() {
   }, []);
 
   const finalizeShape = useCallback((pointsToSave: Point[]) => {
-    if (pointsToSave.length >= 1) {
-      const toolToType: Record<string, string> = {
-        point: 'point',
-        line: 'line',
-        rectangle: 'rectangle',
-        circle: 'circle',
-        triangle: 'triangle',
-        quadratic: 'quadratic',
-        brush: 'brush',
-      };
+    if (pointsToSave.length < 1) return;
 
-      const state = useAppStore.getState();
-      const currentLayerId = state.activeLayerId || state.layers[0]?.id;
-      if (!currentLayerId) return;
+    const toolToType: Record<string, string> = {
+      point: 'point',
+      line: 'line',
+      rectangle: 'rectangle',
+      circle: 'circle',
+      triangle: 'triangle',
+      quadratic: 'quadratic',
+      brush: 'brush',
+    };
 
-      const newShape: Shape = {
-        id: `shape_${Date.now()}`,
-        groupId: activeGroupId || 'default',
-        layerId: currentLayerId,
-        type: toolToType[currentTool] as any,
-        points: pointsToSave,
-        color: '#ff0000',
-      };
+    const state = useAppStore.getState();
+    const currentLayerId = state.activeLayerId || state.layers[0]?.id;
+    if (!currentLayerId) return;
 
-      state.saveHistory();
-      addShape(newShape);
+    const newShape: Shape = {
+      id: `shape_${Date.now()}`,
+      groupId: activeGroupId || 'default',
+      layerId: currentLayerId,
+      type: toolToType[currentTool] as any,
+      points: pointsToSave,
+      color: '#ff0000',
+    };
 
-      useAppStore.setState((s) => ({
-        shapes: s.shapes.filter(sh => sh.id !== 'current_shape'),
-      }));
-    }
+    useAppStore.setState((s) => ({
+      shapes: s.shapes.filter(sh => sh.id !== 'current_shape').concat(newShape),
+    }));
+
+    useAppStore.getState().saveHistory();
+
     setTempPoints([]);
     setPreviewPoint(null);
-  }, [currentTool, addShape, activeGroupId]);
+  }, [currentTool, activeGroupId, activeLayerId]);
 
   const updateCurrentShape = useCallback((newPoints: Point[]) => {
     if (newPoints.length >= 1) {

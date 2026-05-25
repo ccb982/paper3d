@@ -67,7 +67,7 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
     
     // phi 场削弱掩码相关
     private weakenMaskTexture: THREE.DataTexture | null = null;
-    private readonly weakenStrength: number = 10;  // 可调节的削弱强度
+    private readonly weakenStrength: number = 70;  // 可调节的削弱强度
 
     // 重力开关
     public gravityEnabled: boolean = false;        // 是否启用重力
@@ -88,12 +88,12 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
         
         const params: FluidParams = {
             width: 32,
-            height: 32,
+            height: 64,
             density: 1000,
             viscosity: 0.001,
             surfaceTension: 0.1,          // 让界面更紧凑，受力后回弹更真实
             gravity: -10,                    //让纹理更像子弹一点，有这玩意真是太好了
-            pressureIterations: 4,        // 提高压力迭代，让压力场能真正响应散度
+            pressureIterations: 40,        // 提高压力迭代，让压力场能真正响应散度
             reinitIterations: 1,          // 每100帧执行1次：单次迭代次数
             reinitInterval: 100,         // 每100帧执行1次：间隔帧数
             timeStep: 0.01,              // 略减小步长，提高稳定性，使外力可更精确地每一步作用
@@ -105,18 +105,18 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
             usePerturbation: false,
             injectionEnabled: true,        // 启用持续水流注入（通过 FluidParams 配置）
             injectionPosX: 0.5,           // 注入位置X（头部中心）
-            injectionPosY: 0.4,          // 注入位置Y（头部中心）
-            injectionFlowRate: 500.0,     // 大幅增大注水量，依靠固体墙约束形状
+            injectionPosY: 0.3,          // 注入位置Y（头部中心）
+            injectionFlowRate: 300.0,     // 大幅增大注水量，依靠固体墙约束形状
             injectionVelX: 0,             // 注入速度X
             injectionVelY: 0.5,           // 注入速度Y（向下，朝向尾部）
-            injectionSize: 0.12,           // 增大注入区域
+            injectionSize: 0.35,           // 增大注入区域
             enableCentering: false,         // 启用纹理居中追踪
             centeringInterval: 0.1,          // 居中追踪间隔1秒，减少GPU回读频率
             // phi 场后处理修正参数
             clampAirPhi: true,               // 启用空气区 phi 上限钳制
             maxAirPhi: 0.01,                // 空气区 phi 上限
             compensateWaterPhi: true,       // 启用水体区负向补偿
-            waterCompensationRate: -0.01,    // 补偿速率（避免水体流失）
+            waterCompensationRate: -30,    // 补偿速率（避免水体流失）
         };
 
         // 根据水量计算绘制大小
