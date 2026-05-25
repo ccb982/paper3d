@@ -69,7 +69,11 @@ export function MainCanvas() {
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
   const [canvasSize, setCanvasSize] = useState(BASE_CANVAS_SIZE);
   
+  // 生成唯一编辑器会话ID
+  const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
   const [annotationEditor, setAnnotationEditor] = useState<{
+    editorId: string;
     x: number;
     y: number;
     shapeId: string;
@@ -77,12 +81,24 @@ export function MainCanvas() {
     annotation?: string;
   } | null>(null);
 
+  const currentEditorIdRef = useRef<string | null>(null);
+
+  const closeCurrentEditor = useCallback(() => {
+    setAnnotationEditor(null);
+    setHighlightRegion(null);
+  }, []);
+
   const [highlightRegion, setHighlightRegion] = useState<{
     shapeIds: string[];
     bounds: { minX: number; minY: number; maxX: number; maxY: number } | null;
     type: 'closed';
     shape: Shape;
   } | null>(null);
+
+  // 同步当前编辑器ID到ref
+  useEffect(() => {
+    currentEditorIdRef.current = annotationEditor?.editorId || null;
+  }, [annotationEditor]);
 
   // ========== 橡皮擦专用状态 ==========
   const [isErasing, setIsErasing] = useState(false);
@@ -231,29 +247,43 @@ export function MainCanvas() {
   }, [shapes, snapRadius, zoom]);
 
   const findAnnotationAtPoint = useCallback((canvasX: number, canvasY: number) => {
+    let bestMatch: { shape: Shape; pointIndex?: number; distance: number } | null = null;
+    const shapeMarkerRadius = 8;
+    const pointMarkerRadius = 6;
+
     for (const shape of shapes) {
       if (shape.id === 'current_shape') continue;
+
       if (shape.annotation && shape.points.length > 0) {
         const canvasPoints = shape.points.map(p => worldToCanvas(p.x, p.y));
         const centerX = canvasPoints.reduce((sum, p) => sum + p.x, 0) / canvasPoints.length;
         const centerY = canvasPoints.reduce((sum, p) => sum + p.y, 0) / canvasPoints.length;
-        const markerX = centerX + 10, markerY = centerY - 10;
-        if (Math.hypot(canvasX - markerX, canvasY - markerY) < 8) {
-          return { shape, pointIndex: undefined };
+        const markerX = centerX + 10;
+        const markerY = centerY - 10;
+        const dist = Math.hypot(canvasX - markerX, canvasY - markerY);
+        if (dist < shapeMarkerRadius) {
+          if (!bestMatch || dist < bestMatch.distance) {
+            bestMatch = { shape, pointIndex: undefined, distance: dist };
+          }
         }
       }
+
       for (let i = 0; i < shape.points.length; i++) {
         const p = shape.points[i];
         if (p.annotation) {
           const cp = worldToCanvas(p.x, p.y);
-          const markerX = cp.x + 8, markerY = cp.y - 8;
-          if (Math.hypot(canvasX - markerX, canvasY - markerY) < 6) {
-            return { shape, pointIndex: i };
+          const markerX = cp.x + 8;
+          const markerY = cp.y - 8;
+          const dist = Math.hypot(canvasX - markerX, canvasY - markerY);
+          if (dist < pointMarkerRadius) {
+            if (!bestMatch || dist < bestMatch.distance) {
+              bestMatch = { shape, pointIndex: i, distance: dist };
+            }
           }
         }
       }
     }
-    return null;
+    return bestMatch ? { shape: bestMatch.shape, pointIndex: bestMatch.pointIndex } : null;
   }, [shapes, worldToCanvas]);
 
   // ========== 区域检测（用于注释闭合区域）==========
@@ -801,7 +831,6 @@ export function MainCanvas() {
   }, [zoom, setZoom]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    // 平移模式：中键 / Alt+左键 / PanMode
     if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && isPanMode)) {
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
@@ -810,28 +839,36 @@ export function MainCanvas() {
 
     const coords = getCanvasCoords(e);
 
-    // 注释工具
     if (currentTool === 'annotation') {
       const worldCoords = canvasToWorld(coords.x, coords.y);
       const region = detectRegionAtPoint(worldCoords.x, worldCoords.y);
       if (region) {
+        closeCurrentEditor();
         setHighlightRegion(region);
         const regionShape = shapes.find(s => s.id === region.shapeIds[0]);
         if (regionShape) {
-          setAnnotationEditor({ x: e.clientX, y: e.clientY, shapeId: region.shapeIds[0], annotation: regionShape.annotation });
+          setAnnotationEditor({
+            editorId: generateEditorId(),
+            x: e.clientX,
+            y: e.clientY,
+            shapeId: region.shapeIds[0],
+            annotation: regionShape.annotation,
+          });
         }
       }
       return;
     }
 
-    // 点击注释标记
     const clickedAnnotation = findAnnotationAtPoint(coords.x, coords.y);
     if (clickedAnnotation) {
+      closeCurrentEditor();
       const annotation = clickedAnnotation.pointIndex !== undefined
         ? clickedAnnotation.shape.points[clickedAnnotation.pointIndex].annotation
         : clickedAnnotation.shape.annotation;
       setAnnotationEditor({
-        x: e.clientX, y: e.clientY,
+        editorId: generateEditorId(),
+        x: e.clientX,
+        y: e.clientY,
         shapeId: clickedAnnotation.shape.id,
         pointIndex: clickedAnnotation.pointIndex,
         annotation: annotation,
@@ -839,16 +876,30 @@ export function MainCanvas() {
       return;
     }
 
-    // 橡皮擦：开始擦除会话
     if (currentTool === 'eraser') {
       setIsErasing(true);
       erasedShapesThisSessionRef.current.clear();
-      // 立即擦除当前鼠标位置下的图形（单击不移动的情况）
       const idsToErase = getShapesToEraseAtPoint(coords.x, coords.y);
       if (idsToErase.length > 0) eraseShapes(idsToErase);
       return;
     }
-  }, [isPanMode, currentTool, getCanvasCoords, canvasToWorld, detectRegionAtPoint, shapes, findAnnotationAtPoint, getShapesToEraseAtPoint, eraseShapes]);
+  }, [
+    isPanMode,
+    currentTool,
+    getCanvasCoords,
+    canvasToWorld,
+    detectRegionAtPoint,
+    shapes,
+    findAnnotationAtPoint,
+    getShapesToEraseAtPoint,
+    eraseShapes,
+    closeCurrentEditor,
+    setIsPanning,
+    setPanStart,
+    setHighlightRegion,
+    setAnnotationEditor,
+    setIsErasing,
+  ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (isErasing && currentTool === 'eraser') {
@@ -868,7 +919,7 @@ export function MainCanvas() {
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser') return;
+    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'annotation') return;
     const coords = getCanvasCoords(e);
     const worldCoords = canvasToWorld(coords.x, coords.y);
     const snappedCoords = snapToExistingPoint(worldCoords, currentTool, tempPoints.length);
@@ -923,14 +974,37 @@ export function MainCanvas() {
 
   // 注释保存/取消
   const handleAnnotationSave = useCallback((annotation: string) => {
-    if (annotationEditor) {
-      if (annotationEditor.pointIndex !== undefined) {
-        updatePointAnnotation(annotationEditor.shapeId, annotationEditor.pointIndex, annotation);
-      } else {
-        updateShapeAnnotation(annotationEditor.shapeId, annotation);
-      }
-      useAppStore.getState().saveHistory();
+    const editor = annotationEditor;
+    // 会话ID校验：如果当前编辑器已被关闭或被新编辑器替换，放弃保存
+    if (!editor || editor.editorId !== currentEditorIdRef.current) {
+      return;
     }
+
+    // 获取最新的 store 状态，验证目标图形和点是否仍然存在
+    const state = useAppStore.getState();
+    const targetShape = state.shapes.find(s => s.id === editor.shapeId);
+    if (!targetShape) {
+      // 目标图形已被删除，取消保存并关闭编辑器
+      setAnnotationEditor(null);
+      setHighlightRegion(null);
+      return;
+    }
+
+    if (editor.pointIndex !== undefined) {
+      // 验证点索引是否有效
+      if (editor.pointIndex >= 0 && editor.pointIndex < targetShape.points.length) {
+        updatePointAnnotation(editor.shapeId, editor.pointIndex, annotation);
+        state.saveHistory();
+      } else {
+        // 点不存在，放弃保存
+        console.warn('Point annotation target not found');
+      }
+    } else {
+      updateShapeAnnotation(editor.shapeId, annotation);
+      state.saveHistory();
+    }
+
+    // 关闭编辑器
     setAnnotationEditor(null);
     setHighlightRegion(null);
   }, [annotationEditor, updateShapeAnnotation, updatePointAnnotation]);

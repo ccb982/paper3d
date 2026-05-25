@@ -26,6 +26,12 @@ export function AnnotationEditor({
     inputRef.current?.focus();
   }, []);
 
+  // 当注释内容或目标变化时更新编辑器
+  useEffect(() => {
+    setValue(existingAnnotation);
+    inputRef.current?.focus();
+  }, [existingAnnotation, shapeId, pointIndex]);
+
   const handleSave = () => {
     onSave(value.trim());
   };
