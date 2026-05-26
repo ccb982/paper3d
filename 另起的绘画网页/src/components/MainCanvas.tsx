@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
+import { worldToCanvas, canvasToWorld } from '../utils/transform';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -154,31 +155,17 @@ export function MainCanvas() {
   }, [currentTool, tempPoints]);
 
   // ========== 坐标转换函数 ==========
-  const canvasToWorld = useCallback((canvasX: number, canvasY: number): Point => {
-    const centerX = canvasSize / 2;
-    const centerY = canvasSize / 2;
-    const rawX = (canvasX - centerX - panOffset.x) / zoom + centerX;
-    const rawY = (canvasY - centerY - panOffset.y) / zoom + centerY;
-    const worldX = (rawX / canvasSize) * (axis.xMax - axis.xMin) + axis.xMin;
-    const worldY = axis.yMax - (rawY / canvasSize) * (axis.yMax - axis.yMin);
-    return { x: worldX, y: worldY };
-  }, [axis, zoom, panOffset, canvasSize]);
+  const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
+    return canvasToWorld(canvasX, canvasY, axis, canvasSize, zoom, panOffset);
+  }, [axis, canvasSize, zoom, panOffset]);
 
-  const worldToCanvas = useCallback((worldX: number, worldY: number): Point => {
-    const px = ((worldX - axis.xMin) / (axis.xMax - axis.xMin)) * canvasSize;
-    const py = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * canvasSize;
-    return { x: px, y: py };
+  const worldToCanvasFn = useCallback((worldX: number, worldY: number): Point => {
+    return worldToCanvas(worldX, worldY, axis, canvasSize, { applyViewTransform: false });
   }, [axis, canvasSize]);
 
   const worldToCanvasForSnap = useCallback((worldX: number, worldY: number): Point => {
-    const centerX = canvasSize / 2;
-    const centerY = canvasSize / 2;
-    const rawX = ((worldX - axis.xMin) / (axis.xMax - axis.xMin)) * canvasSize;
-    const rawY = ((axis.yMax - worldY) / (axis.yMax - axis.yMin)) * canvasSize;
-    const canvasX = (rawX - centerX) * zoom + centerX + panOffset.x;
-    const canvasY = (rawY - centerY) * zoom + centerY + panOffset.y;
-    return { x: canvasX, y: canvasY };
-  }, [axis, zoom, panOffset, canvasSize]);
+    return worldToCanvas(worldX, worldY, axis, canvasSize, { applyViewTransform: true }, zoom, panOffset);
+  }, [axis, canvasSize, zoom, panOffset]);
 
   // ========== 点吸附 ==========
   const snapToExistingPoint = useCallback((
@@ -198,16 +185,34 @@ export function MainCanvas() {
     let bestMatch: Point | null = null;
     let bestDist = snapRadius;
 
-    const candidatePoints: Point[] = [];
+    const candidateMap = new Map<string, Point>();
+    const addCandidate = (p: Point) => {
+      const key = `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
+      if (!candidateMap.has(key)) candidateMap.set(key, p);
+    };
+
     for (const shape of shapes) {
       if (shape.id === 'current_shape') continue;
-      candidatePoints.push(...shape.points);
-    }
-    if (toolType !== 'rectangle') {
-      candidatePoints.push(...tempPoints);
+      shape.points.forEach(p => addCandidate(p));
+      if (shape.type === 'rectangle' && shape.points.length >= 2) {
+        const p1 = shape.points[0];
+        const p2 = shape.points[1];
+        const minX = Math.min(p1.x, p2.x);
+        const maxX = Math.max(p1.x, p2.x);
+        const minY = Math.min(p1.y, p2.y);
+        const maxY = Math.max(p1.y, p2.y);
+        addCandidate({ x: minX, y: minY });
+        addCandidate({ x: maxX, y: minY });
+        addCandidate({ x: maxX, y: maxY });
+        addCandidate({ x: minX, y: maxY });
+      }
     }
 
-    for (const p of candidatePoints) {
+    if (toolType !== 'rectangle') {
+      tempPoints.forEach(p => addCandidate(p));
+    }
+
+    for (const p of candidateMap.values()) {
       const pCanvas = worldToCanvasForSnap(p.x, p.y);
       const dist = Math.hypot(canvasPoint.x - pCanvas.x, canvasPoint.y - pCanvas.y);
       if (dist < bestDist) {
@@ -255,7 +260,7 @@ export function MainCanvas() {
       if (shape.id === 'current_shape') continue;
 
       if (shape.annotation && shape.points.length > 0) {
-        const canvasPoints = shape.points.map(p => worldToCanvas(p.x, p.y));
+        const canvasPoints = shape.points.map(p => worldToCanvasFn(p.x, p.y));
         const centerX = canvasPoints.reduce((sum, p) => sum + p.x, 0) / canvasPoints.length;
         const centerY = canvasPoints.reduce((sum, p) => sum + p.y, 0) / canvasPoints.length;
         const markerX = centerX + 10;
@@ -271,7 +276,7 @@ export function MainCanvas() {
       for (let i = 0; i < shape.points.length; i++) {
         const p = shape.points[i];
         if (p.annotation) {
-          const cp = worldToCanvas(p.x, p.y);
+          const cp = worldToCanvasFn(p.x, p.y);
           const markerX = cp.x + 8;
           const markerY = cp.y - 8;
           const dist = Math.hypot(canvasX - markerX, canvasY - markerY);
@@ -284,7 +289,7 @@ export function MainCanvas() {
       }
     }
     return bestMatch ? { shape: bestMatch.shape, pointIndex: bestMatch.pointIndex } : null;
-  }, [shapes, worldToCanvas]);
+  }, [shapes, worldToCanvasFn]);
 
   // ========== 区域检测（用于注释闭合区域）==========
   const getShapeBounds = (shape: Shape) => {
@@ -521,16 +526,16 @@ export function MainCanvas() {
     switch (shape.type) {
       case 'circle':
         if (points.length >= 2) {
-          const center = worldToCanvas(points[0].x, points[0].y);
-          const edge = worldToCanvas(points[1].x, points[1].y);
+          const center = worldToCanvasFn(points[0].x, points[0].y);
+          const edge = worldToCanvasFn(points[1].x, points[1].y);
           const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
           ctx.beginPath(); ctx.arc(center.x, center.y, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         }
         break;
       case 'rectangle':
         if (points.length >= 2) {
-          const p1 = worldToCanvas(points[0].x, points[0].y);
-          const p2 = worldToCanvas(points[1].x, points[1].y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y);
+          const p2 = worldToCanvasFn(points[1].x, points[1].y);
           ctx.fillRect(Math.min(p1.x, p2.x), Math.min(p1.y, p2.y), Math.abs(p2.x - p1.x), Math.abs(p2.y - p1.y));
           ctx.strokeRect(Math.min(p1.x, p2.x), Math.min(p1.y, p2.y), Math.abs(p2.x - p1.x), Math.abs(p2.y - p1.y));
         }
@@ -538,17 +543,17 @@ export function MainCanvas() {
       case 'triangle':
         if (points.length >= 3) {
           ctx.beginPath();
-          const p1 = worldToCanvas(points[0].x, points[0].y); ctx.moveTo(p1.x, p1.y);
-          const p2 = worldToCanvas(points[1].x, points[1].y); ctx.lineTo(p2.x, p2.y);
-          const p3 = worldToCanvas(points[2].x, points[2].y); ctx.lineTo(p3.x, p3.y); ctx.closePath();
+          const p1 = worldToCanvasFn(points[0].x, points[0].y); ctx.moveTo(p1.x, p1.y);
+          const p2 = worldToCanvasFn(points[1].x, points[1].y); ctx.lineTo(p2.x, p2.y);
+          const p3 = worldToCanvasFn(points[2].x, points[2].y); ctx.lineTo(p3.x, p3.y); ctx.closePath();
           ctx.fill(); ctx.stroke();
         }
         break;
       case 'quadratic':
         if (points.length >= 3) {
-          const p1 = worldToCanvas(points[0].x, points[0].y);
-          const p2 = worldToCanvas(points[1].x, points[1].y);
-          const ctrl = worldToCanvas(points[2].x, points[2].y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y);
+          const p2 = worldToCanvasFn(points[1].x, points[1].y);
+          const ctrl = worldToCanvasFn(points[2].x, points[2].y);
           ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
           ctx.quadraticCurveTo(ctrl.x, ctrl.y, p2.x, p2.y);
           ctx.lineTo(p2.x, p2.y); ctx.lineTo(p1.x, p1.y); ctx.closePath();
@@ -558,9 +563,9 @@ export function MainCanvas() {
       default:
         if (points.length >= 2) {
           ctx.beginPath();
-          const p1 = worldToCanvas(points[0].x, points[0].y); ctx.moveTo(p1.x, p1.y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y); ctx.moveTo(p1.x, p1.y);
           for (let i = 1; i < points.length; i++) {
-            const p = worldToCanvas(points[i].x, points[i].y); ctx.lineTo(p.x, p.y);
+            const p = worldToCanvasFn(points[i].x, points[i].y); ctx.lineTo(p.x, p.y);
           }
           ctx.closePath(); ctx.fill(); ctx.stroke();
         }
@@ -578,56 +583,56 @@ export function MainCanvas() {
     switch (shape.type) {
       case 'point':
         if (points.length > 0) {
-          const p = worldToCanvas(points[0].x, points[0].y);
+          const p = worldToCanvasFn(points[0].x, points[0].y);
           ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill();
         }
         break;
       case 'line':
         if (points.length >= 2) {
-          const p1 = worldToCanvas(points[0].x, points[0].y);
-          const p2 = worldToCanvas(points[1].x, points[1].y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y);
+          const p2 = worldToCanvasFn(points[1].x, points[1].y);
           ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
         }
         break;
       case 'rectangle':
         if (points.length >= 2) {
-          const p1 = worldToCanvas(points[0].x, points[0].y);
-          const p2 = worldToCanvas(points[1].x, points[1].y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y);
+          const p2 = worldToCanvasFn(points[1].x, points[1].y);
           ctx.strokeRect(Math.min(p1.x, p2.x), Math.min(p1.y, p2.y), Math.abs(p2.x - p1.x), Math.abs(p2.y - p1.y));
         }
         break;
       case 'circle':
         if (points.length >= 2) {
-          const center = worldToCanvas(points[0].x, points[0].y);
-          const edge = worldToCanvas(points[1].x, points[1].y);
+          const center = worldToCanvasFn(points[0].x, points[0].y);
+          const edge = worldToCanvasFn(points[1].x, points[1].y);
           const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
           ctx.beginPath(); ctx.arc(center.x, center.y, radius, 0, Math.PI * 2); ctx.stroke();
         }
         break;
       case 'triangle':
         if (points.length >= 1) {
-          const p1 = worldToCanvas(points[0].x, points[0].y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y);
           if (points.length === 1) { ctx.beginPath(); ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2); ctx.fill(); }
           else if (points.length === 2) {
-            const p2 = worldToCanvas(points[1].x, points[1].y);
+            const p2 = worldToCanvasFn(points[1].x, points[1].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
           } else {
-            const p2 = worldToCanvas(points[1].x, points[1].y);
-            const p3 = worldToCanvas(points[2].x, points[2].y);
+            const p2 = worldToCanvasFn(points[1].x, points[1].y);
+            const p3 = worldToCanvasFn(points[2].x, points[2].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.lineTo(p3.x, p3.y); ctx.closePath(); ctx.stroke();
           }
         }
         break;
       case 'quadratic':
         if (points.length >= 1) {
-          const p1 = worldToCanvas(points[0].x, points[0].y);
+          const p1 = worldToCanvasFn(points[0].x, points[0].y);
           if (points.length === 1) { ctx.beginPath(); ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2); ctx.fill(); }
           else if (points.length === 2) {
-            const p2 = worldToCanvas(points[1].x, points[1].y);
+            const p2 = worldToCanvasFn(points[1].x, points[1].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
           } else {
-            const p2 = worldToCanvas(points[1].x, points[1].y);
-            const ctrl = worldToCanvas(points[2].x, points[2].y);
+            const p2 = worldToCanvasFn(points[1].x, points[1].y);
+            const ctrl = worldToCanvasFn(points[2].x, points[2].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.quadraticCurveTo(ctrl.x, ctrl.y, p2.x, p2.y); ctx.stroke();
           }
         }
@@ -635,13 +640,13 @@ export function MainCanvas() {
       case 'brush':
         if (points.length >= 2) {
           ctx.beginPath();
-          const start = worldToCanvas(points[0].x, points[0].y); ctx.moveTo(start.x, start.y);
+          const start = worldToCanvasFn(points[0].x, points[0].y); ctx.moveTo(start.x, start.y);
           for (let i = 1; i < points.length; i++) {
-            const p = worldToCanvas(points[i].x, points[i].y); ctx.lineTo(p.x, p.y);
+            const p = worldToCanvasFn(points[i].x, points[i].y); ctx.lineTo(p.x, p.y);
           }
           ctx.stroke();
         } else if (points.length === 1) {
-          const p = worldToCanvas(points[0].x, points[0].y);
+          const p = worldToCanvasFn(points[0].x, points[0].y);
           ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill();
         }
         break;
@@ -651,7 +656,7 @@ export function MainCanvas() {
       if (shape.annotation) {
         let centerX = 0, centerY = 0;
         if (points.length > 0) {
-          const canvasPoints = points.map(p => worldToCanvas(p.x, p.y));
+          const canvasPoints = points.map(p => worldToCanvasFn(p.x, p.y));
           centerX = canvasPoints.reduce((sum, p) => sum + p.x, 0) / canvasPoints.length;
           centerY = canvasPoints.reduce((sum, p) => sum + p.y, 0) / canvasPoints.length;
         }
@@ -665,7 +670,7 @@ export function MainCanvas() {
       for (let i = 0; i < points.length; i++) {
         const p = points[i];
         if (p.annotation) {
-          const cp = worldToCanvas(p.x, p.y);
+          const cp = worldToCanvasFn(p.x, p.y);
           ctx.save();
           ctx.fillStyle = '#52c41a'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
           ctx.beginPath(); ctx.arc(cp.x + 8, cp.y - 8, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
@@ -774,13 +779,13 @@ export function MainCanvas() {
     if (currentTool === 'eraser' && mousePosition) {
       ctx.save();
       ctx.strokeStyle = '#ff0000'; ctx.fillStyle = 'rgba(255, 0, 0, 0.2)'; ctx.lineWidth = 2 / zoom;
-      const eraserCanvasPos = worldToCanvas(mousePosition.x, mousePosition.y);
+      const eraserCanvasPos = worldToCanvasFn(mousePosition.x, mousePosition.y);
       ctx.beginPath(); ctx.arc(eraserCanvasPos.x, eraserCanvasPos.y, snapRadius / zoom, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.restore();
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, highlightRegion, worldToCanvas, mousePosition, snapRadius, canvasSize]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, highlightRegion, worldToCanvasFn, mousePosition, snapRadius, canvasSize]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -804,7 +809,7 @@ export function MainCanvas() {
     }
 
     const coords = getCanvasCoords(e);
-    const worldCoords = canvasToWorld(coords.x, coords.y);
+    const worldCoords = canvasToWorldFn(coords.x, coords.y);
     setMousePosition(worldCoords);
 
     if (isErasing && currentTool === 'eraser') {
@@ -816,7 +821,7 @@ export function MainCanvas() {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorld, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -840,7 +845,7 @@ export function MainCanvas() {
     const coords = getCanvasCoords(e);
 
     if (currentTool === 'annotation') {
-      const worldCoords = canvasToWorld(coords.x, coords.y);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
       const region = detectRegionAtPoint(worldCoords.x, worldCoords.y);
       if (region) {
         closeCurrentEditor();
@@ -921,7 +926,7 @@ export function MainCanvas() {
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
     if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'annotation') return;
     const coords = getCanvasCoords(e);
-    const worldCoords = canvasToWorld(coords.x, coords.y);
+    const worldCoords = canvasToWorldFn(coords.x, coords.y);
     const snappedCoords = snapToExistingPoint(worldCoords, currentTool, tempPoints.length);
     const toolPointsRequired: Record<string, number> = { point: 1, line: 2, rectangle: 2, circle: 2, triangle: 3, quadratic: 3, brush: Infinity };
     const requiredPoints = toolPointsRequired[currentTool] || 1;
