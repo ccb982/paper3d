@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer } from '../types';
+import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, Annotation } from '../types';
 
 interface AppState {
   // 图片导入状态
@@ -81,12 +81,21 @@ interface AppState {
   snapEnabled: boolean;  // 是否启用吸附
   setSnapEnabled: (enabled: boolean) => void;
 
-  // 撤销历史
-  shapesHistory: Shape[][];
+  // 注释管理
+  annotations: Annotation[];
+  addAnnotation: (annotation: Omit<Annotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  updateAnnotation: (id: string, updates: Partial<Pick<Annotation, 'text' | 'geometry'>>) => void;
+  removeAnnotation: (id: string) => void;
+  clearAnnotations: () => void;
+
+  // 撤销历史（复合快照，包含 shapes 和 annotations）
+  historySnapshots: Array<{ shapes: Shape[]; annotations: Annotation[] }>;
   historyIndex: number;
   saveHistory: () => void;
   undo: () => void;
+  redo: () => void;
   canUndo: () => boolean;
+  canRedo: () => boolean;
 
   // 保存/加载
   saveToStorage: () => void;
@@ -326,24 +335,31 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       shapes: state.shapes.map((s) => (s.id === id ? { ...s, ...updates } : s)),
     })),
-  updateShapeAnnotation: (shapeId, annotation) =>
-    set((state) => ({
-      shapes: state.shapes.map((s) => 
-        s.id === shapeId ? { ...s, annotation } : s
-      ),
-    })),
-  updatePointAnnotation: (shapeId, pointIndex, annotation) =>
-    set((state) => ({
-      shapes: state.shapes.map((s) => 
-        s.id === shapeId ? {
-          ...s,
-          points: s.points.map((p, idx) => 
-            idx === pointIndex ? { ...p, annotation } : p
-          ),
-        } : s
-      ),
-    })),
   clearShapes: () => set({ shapes: [] }),
+
+  // 注释管理
+  annotations: [],
+  addAnnotation: (annotation) =>
+    set((state) => {
+      const newAnnotation: Annotation = {
+        ...annotation,
+        id: `anno_${Date.now()}_${Math.random()}`,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      return { annotations: [...state.annotations, newAnnotation] };
+    }),
+  updateAnnotation: (id, updates) =>
+    set((state) => ({
+      annotations: state.annotations.map((anno) =>
+        anno.id === id ? { ...anno, ...updates, updatedAt: Date.now() } : anno
+      ),
+    })),
+  removeAnnotation: (id) =>
+    set((state) => ({
+      annotations: state.annotations.filter((anno) => anno.id !== id),
+    })),
+  clearAnnotations: () => set({ annotations: [] }),
 
   // 鼠标位置
   mousePosition: null,
@@ -375,27 +391,50 @@ export const useAppStore = create<AppState>((set) => ({
   snapEnabled: true,  // 默认启用吸附
   setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
 
-  // 撤销历史
-  shapesHistory: [[]],
+  // 撤销历史（复合快照）
+  historySnapshots: [{ shapes: [], annotations: [] }],
   historyIndex: 0,
   saveHistory: () =>
     set((state) => {
-      const newHistory = state.shapesHistory.slice(0, state.historyIndex + 1);
-      newHistory.push([...state.shapes]);
+      const newSnapshot = { shapes: [...state.shapes], annotations: [...state.annotations] };
+      const newHistory = state.historySnapshots.slice(0, state.historyIndex + 1);
+      newHistory.push(newSnapshot);
       if (newHistory.length > 50) newHistory.shift();
-      return { shapesHistory: newHistory, historyIndex: newHistory.length - 1 };
+      return { historySnapshots: newHistory, historyIndex: newHistory.length - 1 };
     }),
   undo: () =>
     set((state) => {
       if (state.historyIndex > 0) {
         const newIndex = state.historyIndex - 1;
-        return { shapes: [...state.shapesHistory[newIndex]], historyIndex: newIndex };
+        const snapshot = state.historySnapshots[newIndex];
+        return {
+          shapes: [...snapshot.shapes],
+          annotations: [...snapshot.annotations],
+          historyIndex: newIndex,
+        };
+      }
+      return state;
+    }),
+  redo: () =>
+    set((state) => {
+      if (state.historyIndex < state.historySnapshots.length - 1) {
+        const newIndex = state.historyIndex + 1;
+        const snapshot = state.historySnapshots[newIndex];
+        return {
+          shapes: [...snapshot.shapes],
+          annotations: [...snapshot.annotations],
+          historyIndex: newIndex,
+        };
       }
       return state;
     }),
   canUndo: () => {
     const state = useAppStore.getState();
     return state.historyIndex > 0;
+  },
+  canRedo: () => {
+    const state = useAppStore.getState();
+    return state.historyIndex < state.historySnapshots.length - 1;
   },
 
   // 保存/加载
@@ -404,6 +443,7 @@ export const useAppStore = create<AppState>((set) => ({
     const imageLayerId = state.imageState.imageLayerId;
     const data = {
       shapes: state.shapes.filter(s => s.layerId !== imageLayerId),
+      annotations: state.annotations,
       groups: state.groups,
       layers: state.layers.filter(l => l.id !== imageLayerId),
       activeLayerId: state.activeLayerId,
@@ -417,7 +457,7 @@ export const useAppStore = create<AppState>((set) => ({
   exportToJson: () => {
     const state = useAppStore.getState();
     const imageLayerId = state.imageState.imageLayerId;
-    
+
     const exportData = {
       version: '1.0',
       exportTime: new Date().toISOString(),
@@ -449,14 +489,13 @@ export const useAppStore = create<AppState>((set) => ({
               type: shape.type,
               groupId: shape.groupId,
               color: shape.color,
-              annotation: shape.annotation,
               points: shape.points.map(point => ({
                 x: point.x,
                 y: point.y,
-                annotation: point.annotation,
               })),
             })),
         })),
+      annotations: state.annotations,
       groups: state.groups,
     };
 
@@ -483,8 +522,10 @@ export const useAppStore = create<AppState>((set) => ({
           ...s,
           layerId: s.layerId || loadedActiveLayerId,
         }));
+        const loadedAnnotations = parsed.annotations || [];
         set((state) => ({
           shapes: loadedShapes,
+          annotations: loadedAnnotations,
           groups: parsed.groups || [],
           layers: loadedLayers,
           activeLayerId: loadedActiveLayerId,
@@ -492,7 +533,7 @@ export const useAppStore = create<AppState>((set) => ({
           grid: parsed.grid || state.grid,
           snapRadius: parsed.snapRadius ?? 10,
           snapEnabled: parsed.snapEnabled ?? true,
-          shapesHistory: [loadedShapes],
+          historySnapshots: [{ shapes: loadedShapes, annotations: loadedAnnotations }],
           historyIndex: 0,
         }));
       } catch (e) {

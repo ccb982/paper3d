@@ -1,6 +1,6 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
-import type { Point, Shape } from '../types';
+import type { Point, Shape, Annotation, AnnotationGeometry } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld } from '../utils/transform';
 
@@ -60,8 +60,11 @@ export function MainCanvas() {
     layers,
     snapRadius,
     snapEnabled,
-    updateShapeAnnotation,
-    updatePointAnnotation,
+    annotations,
+    addAnnotation,
+    updateAnnotation,
+    removeAnnotation,
+    saveHistory,
   } = useAppStore();
 
   const [isPanning, setIsPanning] = useState(false);
@@ -77,9 +80,9 @@ export function MainCanvas() {
     editorId: string;
     x: number;
     y: number;
-    shapeId: string;
-    pointIndex?: number;
-    annotation?: string;
+    annotationId: string | null;
+    existingText: string;
+    newGeometry?: AnnotationGeometry;
   } | null>(null);
 
   const currentEditorIdRef = useRef<string | null>(null);
@@ -251,45 +254,28 @@ export function MainCanvas() {
     return null;
   }, [shapes, snapRadius, zoom]);
 
-  const findAnnotationAtPoint = useCallback((canvasX: number, canvasY: number) => {
-    let bestMatch: { shape: Shape; pointIndex?: number; distance: number } | null = null;
-    const shapeMarkerRadius = 8;
-    const pointMarkerRadius = 6;
-
-    for (const shape of shapes) {
-      if (shape.id === 'current_shape') continue;
-
-      if (shape.annotation && shape.points.length > 0) {
-        const canvasPoints = shape.points.map(p => worldToCanvasFn(p.x, p.y));
-        const centerX = canvasPoints.reduce((sum, p) => sum + p.x, 0) / canvasPoints.length;
-        const centerY = canvasPoints.reduce((sum, p) => sum + p.y, 0) / canvasPoints.length;
-        const markerX = centerX + 10;
-        const markerY = centerY - 10;
-        const dist = Math.hypot(canvasX - markerX, canvasY - markerY);
-        if (dist < shapeMarkerRadius) {
-          if (!bestMatch || dist < bestMatch.distance) {
-            bestMatch = { shape, pointIndex: undefined, distance: dist };
-          }
+  const hitTestAnnotation = useCallback((annotation: Annotation, worldPoint: Point, threshold: number): boolean => {
+    const { geometry } = annotation;
+    switch (geometry.type) {
+      case 'point':
+        return Math.hypot(worldPoint.x - geometry.points[0].x, worldPoint.y - geometry.points[0].y) < threshold;
+      case 'polyline':
+      case 'polygon': {
+        const points = geometry.points;
+        for (let i = 0; i < points.length - 1; i++) {
+          const a = points[i], b = points[i + 1];
+          const dist = distanceToLineSegment(worldPoint.x, worldPoint.y, a.x, a.y, b.x, b.y);
+          if (dist < threshold) return true;
         }
-      }
-
-      for (let i = 0; i < shape.points.length; i++) {
-        const p = shape.points[i];
-        if (p.annotation) {
-          const cp = worldToCanvasFn(p.x, p.y);
-          const markerX = cp.x + 8;
-          const markerY = cp.y - 8;
-          const dist = Math.hypot(canvasX - markerX, canvasY - markerY);
-          if (dist < pointMarkerRadius) {
-            if (!bestMatch || dist < bestMatch.distance) {
-              bestMatch = { shape, pointIndex: i, distance: dist };
-            }
-          }
+        if (geometry.type === 'polygon' && points.length >= 3) {
+          if (isPointInPolygon(worldPoint, points)) return true;
         }
+        return false;
       }
+      default:
+        return false;
     }
-    return bestMatch ? { shape: bestMatch.shape, pointIndex: bestMatch.pointIndex } : null;
-  }, [shapes, worldToCanvasFn]);
+  }, []);
 
   // ========== 区域检测（用于注释闭合区域）==========
   const getShapeBounds = (shape: Shape) => {
@@ -766,6 +752,54 @@ export function MainCanvas() {
       }
     }
 
+    // 绘制注释
+    if (layerVisibility.drawLayer) {
+      annotations.forEach(annotation => {
+        if (annotation.layerId !== activeLayerId) return;
+        const { geometry, text } = annotation;
+        ctx.save();
+        ctx.strokeStyle = '#1890ff';
+        ctx.fillStyle = '#1890ff';
+        ctx.lineWidth = 2;
+        switch (geometry.type) {
+          case 'point': {
+            const p = worldToCanvasFn(geometry.points[0].x, geometry.points[0].y);
+            ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill();
+            break;
+          }
+          case 'polyline': {
+            if (geometry.points.length < 2) break;
+            const canvasPoints = geometry.points.map(p => worldToCanvasFn(p.x, p.y));
+            ctx.beginPath();
+            ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y);
+            for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y);
+            ctx.stroke();
+            break;
+          }
+          case 'polygon': {
+            if (geometry.points.length < 3) break;
+            const canvasPoints = geometry.points.map(p => worldToCanvasFn(p.x, p.y));
+            ctx.beginPath();
+            ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y);
+            for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(24, 144, 255, 0.1)';
+            ctx.fill();
+            ctx.stroke();
+            break;
+          }
+        }
+        const labelPos = geometry.type === 'point'
+          ? worldToCanvasFn(geometry.points[0].x + 0.02, geometry.points[0].y + 0.02)
+          : worldToCanvasFn(geometry.points[0].x, geometry.points[0].y);
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = '#333';
+        ctx.shadowBlur = 0;
+        ctx.fillText(text.length > 20 ? text.slice(0, 17) + '...' : text, labelPos.x + 10, labelPos.y - 5);
+        ctx.restore();
+      });
+    }
+
     // 高亮区域（注释预览）
     if (highlightRegion && highlightRegion.bounds && highlightRegion.shape) {
       ctx.save();
@@ -846,38 +880,27 @@ export function MainCanvas() {
 
     if (currentTool === 'annotation') {
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
-      const region = detectRegionAtPoint(worldCoords.x, worldCoords.y);
-      if (region) {
-        closeCurrentEditor();
-        setHighlightRegion(region);
-        const regionShape = shapes.find(s => s.id === region.shapeIds[0]);
-        if (regionShape) {
-          setAnnotationEditor({
-            editorId: generateEditorId(),
-            x: e.clientX,
-            y: e.clientY,
-            shapeId: region.shapeIds[0],
-            annotation: regionShape.annotation,
-          });
-        }
+      const clickedAnnotation = annotations.find(anno =>
+        hitTestAnnotation(anno, worldCoords, 10 / zoom)
+      );
+      if (clickedAnnotation) {
+        setAnnotationEditor({
+          editorId: generateEditorId(),
+          x: e.clientX,
+          y: e.clientY,
+          annotationId: clickedAnnotation.id,
+          existingText: clickedAnnotation.text,
+        });
+      } else {
+        setAnnotationEditor({
+          editorId: generateEditorId(),
+          x: e.clientX,
+          y: e.clientY,
+          annotationId: null,
+          existingText: '',
+          newGeometry: { type: 'point', points: [worldCoords] },
+        });
       }
-      return;
-    }
-
-    const clickedAnnotation = findAnnotationAtPoint(coords.x, coords.y);
-    if (clickedAnnotation) {
-      closeCurrentEditor();
-      const annotation = clickedAnnotation.pointIndex !== undefined
-        ? clickedAnnotation.shape.points[clickedAnnotation.pointIndex].annotation
-        : clickedAnnotation.shape.annotation;
-      setAnnotationEditor({
-        editorId: generateEditorId(),
-        x: e.clientX,
-        y: e.clientY,
-        shapeId: clickedAnnotation.shape.id,
-        pointIndex: clickedAnnotation.pointIndex,
-        annotation: annotation,
-      });
       return;
     }
 
@@ -892,18 +915,16 @@ export function MainCanvas() {
     isPanMode,
     currentTool,
     getCanvasCoords,
-    canvasToWorld,
-    detectRegionAtPoint,
-    shapes,
-    findAnnotationAtPoint,
+    canvasToWorldFn,
+    annotations,
+    hitTestAnnotation,
     getShapesToEraseAtPoint,
     eraseShapes,
-    closeCurrentEditor,
     setIsPanning,
     setPanStart,
-    setHighlightRegion,
     setAnnotationEditor,
     setIsErasing,
+    zoom,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -978,45 +999,28 @@ export function MainCanvas() {
   }, [currentTool, tempPoints, activeGroupId, activeLayerId, layers]);
 
   // 注释保存/取消
-  const handleAnnotationSave = useCallback((annotation: string) => {
+  const handleAnnotationSave = useCallback((text: string, geometry?: AnnotationGeometry) => {
     const editor = annotationEditor;
-    // 会话ID校验：如果当前编辑器已被关闭或被新编辑器替换，放弃保存
     if (!editor || editor.editorId !== currentEditorIdRef.current) {
       return;
     }
 
-    // 获取最新的 store 状态，验证目标图形和点是否仍然存在
-    const state = useAppStore.getState();
-    const targetShape = state.shapes.find(s => s.id === editor.shapeId);
-    if (!targetShape) {
-      // 目标图形已被删除，取消保存并关闭编辑器
-      setAnnotationEditor(null);
-      setHighlightRegion(null);
-      return;
-    }
-
-    if (editor.pointIndex !== undefined) {
-      // 验证点索引是否有效
-      if (editor.pointIndex >= 0 && editor.pointIndex < targetShape.points.length) {
-        updatePointAnnotation(editor.shapeId, editor.pointIndex, annotation);
-        state.saveHistory();
-      } else {
-        // 点不存在，放弃保存
-        console.warn('Point annotation target not found');
-      }
+    if (editor.annotationId) {
+      updateAnnotation(editor.annotationId, { text });
     } else {
-      updateShapeAnnotation(editor.shapeId, annotation);
-      state.saveHistory();
+      const finalGeometry = geometry || editor.newGeometry || { type: 'point' as const, points: [{ x: 0, y: 0 }] };
+      addAnnotation({
+        text,
+        geometry: finalGeometry,
+        layerId: activeLayerId || layers[0]?.id || 'layer_1',
+      });
     }
-
-    // 关闭编辑器
+    saveHistory();
     setAnnotationEditor(null);
-    setHighlightRegion(null);
-  }, [annotationEditor, updateShapeAnnotation, updatePointAnnotation]);
+  }, [annotationEditor, updateAnnotation, addAnnotation, saveHistory, activeLayerId, layers]);
 
   const handleAnnotationCancel = useCallback(() => {
     setAnnotationEditor(null);
-    setHighlightRegion(null);
   }, []);
 
   return (
@@ -1042,9 +1046,8 @@ export function MainCanvas() {
         <AnnotationEditor
           x={annotationEditor.x}
           y={annotationEditor.y}
-          shapeId={annotationEditor.shapeId}
-          pointIndex={annotationEditor.pointIndex}
-          existingAnnotation={annotationEditor.annotation}
+          annotationId={annotationEditor.annotationId}
+          existingText={annotationEditor.existingText}
           onSave={handleAnnotationSave}
           onCancel={handleAnnotationCancel}
         />

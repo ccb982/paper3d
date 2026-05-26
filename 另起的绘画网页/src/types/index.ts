@@ -1,7 +1,6 @@
 export interface Point {
   x: number;
   y: number;
-  annotation?: string;
 }
 
 export interface Group {
@@ -22,7 +21,6 @@ export interface Shape {
   type: ShapeType;
   points: Point[];
   color: string;
-  annotation?: string;
 }
 
 export interface ImageImportState {
@@ -63,4 +61,20 @@ export interface Layer {
   visible: boolean;
   locked: boolean;
   opacity: number;
+}
+
+export type AnnotationGeometryType = 'point' | 'polyline' | 'polygon';
+
+export interface AnnotationGeometry {
+  type: AnnotationGeometryType;
+  points: Point[];
+}
+
+export interface Annotation {
+  id: string;
+  text: string;
+  geometry: AnnotationGeometry;
+  layerId: string;
+  createdAt: number;
+  updatedAt: number;
 }

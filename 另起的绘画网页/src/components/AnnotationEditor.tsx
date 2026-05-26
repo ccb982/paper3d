@@ -1,36 +1,35 @@
 import { useState, useEffect, useRef } from 'react';
+import type { AnnotationGeometry } from '../types';
 
 interface AnnotationEditorProps {
   x: number;
   y: number;
-  shapeId: string;
-  pointIndex?: number;
-  existingAnnotation?: string;
-  onSave: (annotation: string) => void;
+  annotationId: string | null;
+  existingText: string;
+  newGeometry?: AnnotationGeometry;
+  onSave: (text: string, geometry?: AnnotationGeometry) => void;
   onCancel: () => void;
 }
 
 export function AnnotationEditor({
   x,
   y,
-  shapeId,
-  pointIndex,
-  existingAnnotation = '',
+  annotationId,
+  existingText,
   onSave,
   onCancel,
 }: AnnotationEditorProps) {
-  const [value, setValue] = useState(existingAnnotation);
+  const [value, setValue] = useState(existingText);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // 当注释内容或目标变化时更新编辑器
   useEffect(() => {
-    setValue(existingAnnotation);
+    setValue(existingText);
     inputRef.current?.focus();
-  }, [existingAnnotation, shapeId, pointIndex]);
+  }, [existingText, annotationId]);
 
   const handleSave = () => {
     onSave(value.trim());
@@ -60,7 +59,7 @@ export function AnnotationEditor({
       }}
     >
       <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>
-        {pointIndex !== undefined ? `点 ${pointIndex + 1}` : '图形'} 注释
+        {annotationId ? '编辑注释' : '新建注释'}
       </div>
       <textarea
         ref={inputRef}
