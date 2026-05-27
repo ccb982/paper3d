@@ -994,8 +994,8 @@ export function MainCanvas() {
           points: newPoints,
           color: '#ff0000',
         };
-        useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(finalShape) }));
-        useAppStore.getState().saveHistory();
+        addShape(finalShape);
+        saveHistory();
         setTempPoints([]);
         setPreviewPoint(null);
       }

@@ -333,15 +333,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   shapes: [],
   addShape: (shape) =>
     set((state) => {
+      console.log('>>> [addShape] 被调用了！');
+      console.log('>>> 图形类型:', shape.type);
+      console.log('>>> 图形ID:', shape.id);
+      console.log('>>> 所属图层:', shape.layerId);
       const approximatePolygon = computeApproximatePolygon(shape);
       console.log('[addShape] 图形类型:', shape.type);
       console.log('[addShape] 原始点数:', shape.points.length);
       console.log('[addShape] 生成的多边形点数:', approximatePolygon.length);
-      if (approximatePolygon.length > 0) {
-        console.log('[addShape] 多边形前3个点:', approximatePolygon.slice(0, 3));
-      }
       const newShape = { ...shape, approximatePolygon };
       setTimeout(() => {
+        console.log('>>> [setTimeout] 准备刷新区域缓存, layerId:', shape.layerId);
         get().refreshRegionCache(shape.layerId);
       }, 0);
       return { shapes: [...state.shapes, newShape] };
@@ -449,10 +451,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshRegionCache: (layerId) => {
     const state = get();
     const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
-    console.log('[refreshRegionCache] =========================================');
-    console.log('[refreshRegionCache] 图层:', layerId);
-    console.log('[refreshRegionCache] 该图层图形总数:', allShapesInLayer.length);
-    console.log('[refreshRegionCache] 当前已存储的区域注释数:', state.regionAnnotations.length);
+    console.log('==========================================');
+    console.log('[绘画后区域检测] 图形总数:', allShapesInLayer.length);
 
     const worldBounds = {
       xMin: state.axis.xMin,
@@ -460,17 +460,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMin: state.axis.yMin,
       yMax: state.axis.yMax,
     };
-    console.log('[refreshRegionCache] 世界边界:', worldBounds);
 
     const regions = computeRegionsWithHoles(allShapesInLayer, worldBounds, 150);
-    console.log('[refreshRegionCache] 生成区域数量:', regions.length);
-    regions.forEach((region, index) => {
-      console.log(`[refreshRegionCache] 区域${index}: 环数=${region.length}`);
-      region.forEach((ring, ringIndex) => {
-        console.log(`[refreshRegionCache]   环${ringIndex}: 点数=${ring.length}`);
-      });
-    });
-    console.log('[refreshRegionCache] =========================================');
+    console.log('[绘画后区域检测] 检测到的封闭区域数量:', regions.length);
+    
+    for (let i = 0; i < regions.length; i++) {
+      const region = regions[i];
+      console.log(`--- 封闭区域 ${i} ---`);
+      for (let j = 0; j < region.length; j++) {
+        const ring = region[j];
+        const ringType = j === 0 ? '外环' : `内环${j}`;
+        console.log(`  ${ringType}: ${ring.length}个顶点`);
+        if (ring.length > 0) {
+          const first3 = ring.slice(0, 3).map(p => `(${p.x.toFixed(4)}, ${p.y.toFixed(4)})`).join(' -> ');
+          console.log(`  前3个点: ${first3}${ring.length > 3 ? ' -> ...' : ''}`);
+        }
+      }
+    }
+    console.log('==========================================');
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
     }));
