@@ -1,8 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
-import type { Point, Shape, Annotation, AnnotationGeometry } from '../types';
+import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld } from '../utils/transform';
+import { findRegionByPoint } from '../utils/regionDetection';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -60,10 +61,16 @@ export function MainCanvas() {
     layers,
     snapRadius,
     snapEnabled,
-    annotations,
-    addAnnotation,
-    updateAnnotation,
-    removeAnnotation,
+    pointAnnotations,
+    addPointAnnotation,
+    updatePointAnnotation,
+    removePointAnnotation,
+    regionAnnotations,
+    addRegionAnnotation,
+    updateRegionAnnotation,
+    removeRegionAnnotation,
+    regionPolygonsCache,
+    refreshRegionCache,
     saveHistory,
   } = useAppStore();
 
@@ -73,36 +80,37 @@ export function MainCanvas() {
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
   const [canvasSize, setCanvasSize] = useState(BASE_CANVAS_SIZE);
   
-  // 生成唯一编辑器会话ID
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  const [annotationEditor, setAnnotationEditor] = useState<{
+  const [pointAnnotationEditor, setPointAnnotationEditor] = useState<{
     editorId: string;
     x: number;
     y: number;
     annotationId: string | null;
     existingText: string;
-    newGeometry?: AnnotationGeometry;
+    position: Point;
+  } | null>(null);
+
+  const [regionAnnotationEditor, setRegionAnnotationEditor] = useState<{
+    editorId: string;
+    x: number;
+    y: number;
+    annotationId: string | null;
+    existingText: string;
+    polygon: Point[][];
   } | null>(null);
 
   const currentEditorIdRef = useRef<string | null>(null);
 
   const closeCurrentEditor = useCallback(() => {
-    setAnnotationEditor(null);
-    setHighlightRegion(null);
+    setPointAnnotationEditor(null);
+    setRegionAnnotationEditor(null);
   }, []);
-
-  const [highlightRegion, setHighlightRegion] = useState<{
-    shapeIds: string[];
-    bounds: { minX: number; minY: number; maxX: number; maxY: number } | null;
-    type: 'closed';
-    shape: Shape;
-  } | null>(null);
 
   // 同步当前编辑器ID到ref
   useEffect(() => {
-    currentEditorIdRef.current = annotationEditor?.editorId || null;
-  }, [annotationEditor]);
+    currentEditorIdRef.current = pointAnnotationEditor?.editorId || regionAnnotationEditor?.editorId || null;
+  }, [pointAnnotationEditor, regionAnnotationEditor]);
 
   // ========== 橡皮擦专用状态 ==========
   const [isErasing, setIsErasing] = useState(false);
@@ -134,15 +142,15 @@ export function MainCanvas() {
           setTempPoints([]);
           setPreviewPoint(null);
         }
-        if (annotationEditor) {
-          setAnnotationEditor(null);
-          setHighlightRegion(null);
+        if (pointAnnotationEditor || regionAnnotationEditor) {
+          setPointAnnotationEditor(null);
+          setRegionAnnotationEditor(null);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tempPoints, annotationEditor]);
+  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor]);
 
   // ========== 切换工具时清理临时图形 ==========
   const prevToolRef = useRef(currentTool);
@@ -253,29 +261,6 @@ export function MainCanvas() {
     }
     return null;
   }, [shapes, snapRadius, zoom]);
-
-  const hitTestAnnotation = useCallback((annotation: Annotation, worldPoint: Point, threshold: number): boolean => {
-    const { geometry } = annotation;
-    switch (geometry.type) {
-      case 'point':
-        return Math.hypot(worldPoint.x - geometry.points[0].x, worldPoint.y - geometry.points[0].y) < threshold;
-      case 'polyline':
-      case 'polygon': {
-        const points = geometry.points;
-        for (let i = 0; i < points.length - 1; i++) {
-          const a = points[i], b = points[i + 1];
-          const dist = distanceToLineSegment(worldPoint.x, worldPoint.y, a.x, a.y, b.x, b.y);
-          if (dist < threshold) return true;
-        }
-        if (geometry.type === 'polygon' && points.length >= 3) {
-          if (isPointInPolygon(worldPoint, points)) return true;
-        }
-        return false;
-      }
-      default:
-        return false;
-    }
-  }, []);
 
   // ========== 区域检测（用于注释闭合区域）==========
   const getShapeBounds = (shape: Shape) => {
@@ -752,61 +737,63 @@ export function MainCanvas() {
       }
     }
 
-    // 绘制注释
+    // 绘制点注释
     if (layerVisibility.drawLayer) {
-      annotations.forEach(annotation => {
-        if (annotation.layerId !== activeLayerId) return;
-        const { geometry, text } = annotation;
+      pointAnnotations.forEach(anno => {
+        if (anno.layerId !== activeLayerId) return;
+        const canvasPos = worldToCanvasFn(anno.position.x, anno.position.y);
         ctx.save();
-        ctx.strokeStyle = '#1890ff';
-        ctx.fillStyle = '#1890ff';
-        ctx.lineWidth = 2;
-        switch (geometry.type) {
-          case 'point': {
-            const p = worldToCanvasFn(geometry.points[0].x, geometry.points[0].y);
-            ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill();
-            break;
-          }
-          case 'polyline': {
-            if (geometry.points.length < 2) break;
-            const canvasPoints = geometry.points.map(p => worldToCanvasFn(p.x, p.y));
-            ctx.beginPath();
-            ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y);
-            for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y);
-            ctx.stroke();
-            break;
-          }
-          case 'polygon': {
-            if (geometry.points.length < 3) break;
-            const canvasPoints = geometry.points.map(p => worldToCanvasFn(p.x, p.y));
-            ctx.beginPath();
-            ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y);
-            for (let i = 1; i < canvasPoints.length; i++) ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(24, 144, 255, 0.1)';
-            ctx.fill();
-            ctx.stroke();
-            break;
-          }
-        }
-        const labelPos = geometry.type === 'point'
-          ? worldToCanvasFn(geometry.points[0].x + 0.02, geometry.points[0].y + 0.02)
-          : worldToCanvasFn(geometry.points[0].x, geometry.points[0].y);
-        ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#333';
+        ctx.fillStyle = '#ff4d4f';
         ctx.shadowBlur = 0;
-        ctx.fillText(text.length > 20 ? text.slice(0, 17) + '...' : text, labelPos.x + 10, labelPos.y - 5);
+        ctx.beginPath();
+        ctx.arc(canvasPos.x, canvasPos.y, 6, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('📍', canvasPos.x, canvasPos.y);
+        ctx.fillStyle = '#333';
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(anno.text.length > 15 ? anno.text.slice(0, 12) + '...' : anno.text, canvasPos.x + 10, canvasPos.y - 5);
         ctx.restore();
       });
     }
 
-    // 高亮区域（注释预览）
-    if (highlightRegion && highlightRegion.bounds && highlightRegion.shape) {
-      ctx.save();
-      ctx.strokeStyle = '#ff0000'; ctx.fillStyle = 'rgba(255, 0, 0, 0.1)'; ctx.lineWidth = 2 / zoom;
-      ctx.setLineDash([5 / zoom, 3 / zoom]);
-      drawShapeHighlight(ctx, highlightRegion.shape);
-      ctx.restore();
+    // 绘制区域注释
+    if (layerVisibility.drawLayer) {
+      regionAnnotations.forEach(anno => {
+        if (anno.layerId !== activeLayerId) return;
+        ctx.save();
+        ctx.fillStyle = 'rgba(24, 144, 255, 0.2)';
+        ctx.strokeStyle = '#1890ff';
+        ctx.lineWidth = 2;
+        for (const ring of anno.polygon) {
+          if (ring.length < 3) continue;
+          const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
+          ctx.beginPath();
+          ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
+          for (let i = 1; i < canvasRing.length; i++) {
+            ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+        const outerRing = anno.polygon[0];
+        let minX = Infinity, minY = Infinity;
+        for (const p of outerRing) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+        }
+        const labelPos = worldToCanvasFn(minX, minY);
+        ctx.fillStyle = '#333';
+        ctx.font = '12px sans-serif';
+        ctx.shadowBlur = 0;
+        ctx.fillText(anno.text.length > 20 ? anno.text.slice(0, 17) + '...' : anno.text, labelPos.x + 5, labelPos.y - 5);
+        ctx.restore();
+      });
     }
 
     // 橡皮擦光标效果
@@ -819,9 +806,21 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, highlightRegion, worldToCanvasFn, mousePosition, snapRadius, canvasSize]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      setZoom(Math.max(0.1, Math.min(10, zoom * delta)));
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [zoom, setZoom]);
 
   const getCanvasCoords = useCallback((e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -863,12 +862,6 @@ export function MainCanvas() {
     setPreviewPoint(null);
   }, [setMousePosition]);
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(Math.max(0.1, Math.min(10, zoom * delta)));
-  }, [zoom, setZoom]);
-
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && isPanMode)) {
       setIsPanning(true);
@@ -877,29 +870,34 @@ export function MainCanvas() {
     }
 
     const coords = getCanvasCoords(e);
+    const worldCoords = canvasToWorldFn(coords.x, coords.y);
 
-    if (currentTool === 'annotation') {
-      const worldCoords = canvasToWorldFn(coords.x, coords.y);
-      const clickedAnnotation = annotations.find(anno =>
-        hitTestAnnotation(anno, worldCoords, 10 / zoom)
-      );
-      if (clickedAnnotation) {
-        setAnnotationEditor({
-          editorId: generateEditorId(),
-          x: e.clientX,
-          y: e.clientY,
-          annotationId: clickedAnnotation.id,
-          existingText: clickedAnnotation.text,
-        });
-      } else {
-        setAnnotationEditor({
+    if (currentTool === 'pointAnnotation') {
+      setPointAnnotationEditor({
+        editorId: generateEditorId(),
+        x: e.clientX,
+        y: e.clientY,
+        annotationId: null,
+        existingText: '',
+        position: worldCoords,
+      });
+      return;
+    }
+
+    if (currentTool === 'regionAnnotation') {
+      const regions = regionPolygonsCache[activeLayerId] || [];
+      const hitRegion = findRegionByPoint(worldCoords, regions);
+      if (hitRegion) {
+        setRegionAnnotationEditor({
           editorId: generateEditorId(),
           x: e.clientX,
           y: e.clientY,
           annotationId: null,
           existingText: '',
-          newGeometry: { type: 'point', points: [worldCoords] },
+          polygon: hitRegion,
         });
+      } else {
+        console.log('未点击到任何区域');
       }
       return;
     }
@@ -916,15 +914,13 @@ export function MainCanvas() {
     currentTool,
     getCanvasCoords,
     canvasToWorldFn,
-    annotations,
-    hitTestAnnotation,
+    activeLayerId,
+    regionPolygonsCache,
     getShapesToEraseAtPoint,
     eraseShapes,
     setIsPanning,
     setPanStart,
-    setAnnotationEditor,
     setIsErasing,
-    zoom,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -945,7 +941,7 @@ export function MainCanvas() {
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'annotation') return;
+    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation') return;
     const coords = getCanvasCoords(e);
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
     const snappedCoords = snapToExistingPoint(worldCoords, currentTool, tempPoints.length);
@@ -953,33 +949,43 @@ export function MainCanvas() {
     const requiredPoints = toolPointsRequired[currentTool] || 1;
 
     if (currentTool === 'brush') {
-      setTempPoints(prev => {
-        const newPoints = [...prev, snappedCoords];
-        // 更新临时图形显示
-        const toolToType: Record<string, string> = { point: 'point', line: 'line', rectangle: 'rectangle', circle: 'circle', triangle: 'triangle', quadratic: 'quadratic', brush: 'brush' };
-        const newShape: Shape = { id: 'current_shape', groupId: activeGroupId || 'default', layerId: activeLayerId || layers[0]?.id, type: toolToType[currentTool] as any, points: newPoints, color: '#ff0000' };
-        useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(newShape) }));
-        return newPoints;
-      });
+      setTempPoints(prev => [...prev, snappedCoords]);
     } else {
-      setTempPoints(prev => {
-        const newPoints = [...prev, snappedCoords];
+      const newPoints = [...tempPoints, snappedCoords];
+      setTempPoints(newPoints);
+      if (newPoints.length >= requiredPoints) {
         const toolToType: Record<string, string> = { point: 'point', line: 'line', rectangle: 'rectangle', circle: 'circle', triangle: 'triangle', quadratic: 'quadratic', brush: 'brush' };
-        const newShape: Shape = { id: 'current_shape', groupId: activeGroupId || 'default', layerId: activeLayerId || layers[0]?.id, type: toolToType[currentTool] as any, points: newPoints, color: '#ff0000' };
-        useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(newShape) }));
-        if (newPoints.length >= requiredPoints) {
-          // 最终确定形状
-          const finalShape: Shape = { ...newShape, id: `shape_${Date.now()}`, color: '#ff0000' };
-          useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(finalShape) }));
-          useAppStore.getState().saveHistory();
-          setTempPoints([]);
-          setPreviewPoint(null);
-          return [];
-        }
-        return newPoints;
-      });
+        const finalShape: Shape = {
+          id: `shape_${Date.now()}`,
+          groupId: activeGroupId || 'default',
+          layerId: activeLayerId || layers[0]?.id,
+          type: toolToType[currentTool] as any,
+          points: newPoints,
+          color: '#ff0000',
+        };
+        useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(finalShape) }));
+        useAppStore.getState().saveHistory();
+        setTempPoints([]);
+        setPreviewPoint(null);
+      }
     }
-  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorld, snapToExistingPoint, tempPoints.length, activeGroupId, activeLayerId, layers]);
+  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers]);
+
+  // 同步临时图形到 store
+  useEffect(() => {
+    if (currentTool === 'brush' && tempPoints.length > 0) {
+      const toolToType: Record<string, string> = { point: 'point', line: 'line', rectangle: 'rectangle', circle: 'circle', triangle: 'triangle', quadratic: 'quadratic', brush: 'brush' };
+      const newShape: Shape = {
+        id: 'current_shape',
+        groupId: activeGroupId || 'default',
+        layerId: activeLayerId || layers[0]?.id,
+        type: toolToType[currentTool] as any,
+        points: tempPoints,
+        color: '#ff0000',
+      };
+      useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(newShape) }));
+    }
+  }, [tempPoints, currentTool, activeGroupId, activeLayerId, layers]);
 
   const handleDoubleClick = useCallback(() => {
     if (currentTool === 'brush' && tempPoints.length >= 2) {
@@ -998,30 +1004,39 @@ export function MainCanvas() {
     }
   }, [currentTool, tempPoints, activeGroupId, activeLayerId, layers]);
 
-  // 注释保存/取消
-  const handleAnnotationSave = useCallback((text: string, geometry?: AnnotationGeometry) => {
-    const editor = annotationEditor;
-    if (!editor || editor.editorId !== currentEditorIdRef.current) {
-      return;
-    }
-
+  // 点注释保存
+  const handlePointAnnotationSave = useCallback((text: string) => {
+    const editor = pointAnnotationEditor;
+    if (!editor || editor.editorId !== currentEditorIdRef.current) return;
     if (editor.annotationId) {
-      updateAnnotation(editor.annotationId, { text });
+      updatePointAnnotation(editor.annotationId, text);
     } else {
-      const finalGeometry = geometry || editor.newGeometry || { type: 'point' as const, points: [{ x: 0, y: 0 }] };
-      addAnnotation({
+      addPointAnnotation({
         text,
-        geometry: finalGeometry,
-        layerId: activeLayerId || layers[0]?.id || 'layer_1',
+        position: editor.position,
+        layerId: activeLayerId || layers[0]?.id,
       });
     }
     saveHistory();
-    setAnnotationEditor(null);
-  }, [annotationEditor, updateAnnotation, addAnnotation, saveHistory, activeLayerId, layers]);
+    setPointAnnotationEditor(null);
+  }, [pointAnnotationEditor, updatePointAnnotation, addPointAnnotation, saveHistory, activeLayerId, layers]);
 
-  const handleAnnotationCancel = useCallback(() => {
-    setAnnotationEditor(null);
-  }, []);
+  // 区域注释保存
+  const handleRegionAnnotationSave = useCallback((text: string) => {
+    const editor = regionAnnotationEditor;
+    if (!editor || editor.editorId !== currentEditorIdRef.current) return;
+    if (editor.annotationId) {
+      updateRegionAnnotation(editor.annotationId, text);
+    } else {
+      addRegionAnnotation({
+        text,
+        polygon: editor.polygon,
+        layerId: activeLayerId || layers[0]?.id,
+      });
+    }
+    saveHistory();
+    setRegionAnnotationEditor(null);
+  }, [regionAnnotationEditor, updateRegionAnnotation, addRegionAnnotation, saveHistory, activeLayerId, layers]);
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default') }}>
@@ -1034,7 +1049,6 @@ export function MainCanvas() {
             style={{ width: '100%', height: '100%', imageRendering: 'auto', display: 'block' }}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
-            onWheel={handleWheel}
             onMouseDown={handleMouseDown}
             onMouseUp={handleMouseUp}
             onClick={handleCanvasClick}
@@ -1042,14 +1056,24 @@ export function MainCanvas() {
           />
         </div>
       </div>
-      {annotationEditor && (
+      {pointAnnotationEditor && (
         <AnnotationEditor
-          x={annotationEditor.x}
-          y={annotationEditor.y}
-          annotationId={annotationEditor.annotationId}
-          existingText={annotationEditor.existingText}
-          onSave={handleAnnotationSave}
-          onCancel={handleAnnotationCancel}
+          x={pointAnnotationEditor.x}
+          y={pointAnnotationEditor.y}
+          annotationId={pointAnnotationEditor.annotationId}
+          existingText={pointAnnotationEditor.existingText}
+          onSave={handlePointAnnotationSave}
+          onCancel={() => setPointAnnotationEditor(null)}
+        />
+      )}
+      {regionAnnotationEditor && (
+        <AnnotationEditor
+          x={regionAnnotationEditor.x}
+          y={regionAnnotationEditor.y}
+          annotationId={regionAnnotationEditor.annotationId}
+          existingText={regionAnnotationEditor.existingText}
+          onSave={handleRegionAnnotationSave}
+          onCancel={() => setRegionAnnotationEditor(null)}
         />
       )}
     </div>

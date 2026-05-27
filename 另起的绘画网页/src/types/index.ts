@@ -12,7 +12,11 @@ export interface Group {
 
 export type ShapeType = 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush';
 
-export type ToolType = 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush' | 'eraser' | 'annotation';
+export type ToolType = 
+  | 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' 
+  | 'quadratic' | 'brush' | 'eraser'
+  | 'pointAnnotation'   // 点注释工具
+  | 'regionAnnotation'; // 区域注释工具
 
 export interface Shape {
   id: string;
@@ -20,6 +24,7 @@ export interface Shape {
   layerId: string;
   type: ShapeType;
   points: Point[];
+  approximatePolygon: Point[]; // 闭合多边形（世界坐标），开放曲线则为空数组
   color: string;
 }
 
@@ -63,17 +68,21 @@ export interface Layer {
   opacity: number;
 }
 
-export type AnnotationGeometryType = 'point' | 'polyline' | 'polygon';
-
-export interface AnnotationGeometry {
-  type: AnnotationGeometryType;
-  points: Point[];
-}
-
-export interface Annotation {
+// 点注释（独立）
+export interface PointAnnotation {
   id: string;
   text: string;
-  geometry: AnnotationGeometry;
+  position: Point;      // 世界坐标
+  layerId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// 区域注释（独立）
+export interface RegionAnnotation {
+  id: string;
+  text: string;
+  polygon: Point[][];   // 多环多边形：第一个环为外环，后续为内洞
   layerId: string;
   createdAt: number;
   updatedAt: number;

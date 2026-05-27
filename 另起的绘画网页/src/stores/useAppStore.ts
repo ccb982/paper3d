@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, Annotation } from '../types';
+import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation } from '../types';
+import { computeApproximatePolygon } from '../utils/approximatePolygon';
+import { computeRegionsFromPolygons } from '../utils/regionDetection';
 
 interface AppState {
   // 图片导入状态
@@ -9,9 +11,9 @@ interface AppState {
   clearImage: () => void;
 
   // 选区预览阶段状态
-  isPreviewStage: boolean;  // 是否处于选区预览阶段
+  isPreviewStage: boolean;
   setPreviewStage: (preview: boolean) => void;
-  applySelectionToCanvas: () => void;  // 确认选区并应用到画布
+  applySelectionToCanvas: () => void;
 
   // 坐标轴配置
   axis: AxisConfig;
@@ -63,9 +65,9 @@ interface AppState {
   setIsSelecting: (selecting: boolean) => void;
 
   // 视图缩放和偏移
-  zoom: number;  // 缩放比例，1.0 表示 100%
-  panOffset: Point;  // 拖拽偏移
-  isPanMode: boolean;  // 是否处于拖动模式
+  zoom: number;
+  panOffset: Point;
+  isPanMode: boolean;
   setZoom: (zoom: number) => void;
   setPanOffset: (offset: Point) => void;
   setPanMode: (panMode: boolean) => void;
@@ -76,20 +78,31 @@ interface AppState {
   setCurrentTool: (tool: ToolType) => void;
 
   // 点吸附配置
-  snapRadius: number;  // 吸附半径（像素）
+  snapRadius: number;
   setSnapRadius: (radius: number) => void;
-  snapEnabled: boolean;  // 是否启用吸附
+  snapEnabled: boolean;
   setSnapEnabled: (enabled: boolean) => void;
 
-  // 注释管理
-  annotations: Annotation[];
-  addAnnotation: (annotation: Omit<Annotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
-  updateAnnotation: (id: string, updates: Partial<Pick<Annotation, 'text' | 'geometry'>>) => void;
-  removeAnnotation: (id: string) => void;
-  clearAnnotations: () => void;
+  // 点注释
+  pointAnnotations: PointAnnotation[];
+  addPointAnnotation: (annotation: Omit<PointAnnotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  updatePointAnnotation: (id: string, text: string) => void;
+  removePointAnnotation: (id: string) => void;
+  clearPointAnnotations: () => void;
 
-  // 撤销历史（复合快照，包含 shapes 和 annotations）
-  historySnapshots: Array<{ shapes: Shape[]; annotations: Annotation[] }>;
+  // 区域注释
+  regionAnnotations: RegionAnnotation[];
+  addRegionAnnotation: (annotation: Omit<RegionAnnotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  updateRegionAnnotation: (id: string, text: string) => void;
+  removeRegionAnnotation: (id: string) => void;
+  clearRegionAnnotations: () => void;
+
+  // 区域检测缓存
+  regionPolygonsCache: Record<string, Point[][][]>;
+  refreshRegionCache: (layerId: string) => void;
+
+  // 撤销历史（复合快照）
+  historySnapshots: Array<{ shapes: Shape[]; pointAnnotations: PointAnnotation[]; regionAnnotations: RegionAnnotation[] }>;
   historyIndex: number;
   saveHistory: () => void;
   undo: () => void;
@@ -110,8 +123,7 @@ const defaultAxis: AxisConfig = {
   yMax: 1,
 };
 
-export const useAppStore = create<AppState>((set) => ({
-  // 图片导入状态
+export const useAppStore = create<AppState>((set, get) => ({
   imageState: {
     originalImage: null,
     imageSrc: null,
@@ -162,24 +174,19 @@ export const useAppStore = create<AppState>((set) => ({
       };
     }),
 
-  // 选区预览阶段状态
   isPreviewStage: false,
   setPreviewStage: (preview) => set({ isPreviewStage: preview }),
   applySelectionToCanvas: () => {
-    // 确认选区后，进入画布编辑阶段
     set((state) => ({
       isPreviewStage: false,
-      // 保留 selectionRect，但不再处于预览阶段
     }));
   },
 
-  // 坐标轴配置
   axis: defaultAxis,
   setAxis: (axis) =>
     set((state) => ({ axis: { ...state.axis, ...axis } })),
   resetAxis: () => set({ axis: defaultAxis }),
 
-  // 格子配置
   grid: {
     cols: 10,
     rows: 10,
@@ -188,7 +195,6 @@ export const useAppStore = create<AppState>((set) => ({
   setGrid: (grid) =>
     set((state) => ({ grid: { ...state.grid, ...grid } })),
 
-  // 图层可见性
   layerVisibility: {
     imageLayer: true,
     drawLayer: true,
@@ -202,7 +208,6 @@ export const useAppStore = create<AppState>((set) => ({
       },
     })),
 
-  // 分组管理
   groups: [],
   activeGroupId: null,
   addGroup: (name, color) =>
@@ -228,7 +233,6 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   setActiveGroup: (id) => set({ activeGroupId: id }),
 
-  // 图层管理
   layers: [
     {
       id: 'layer_1',
@@ -264,12 +268,9 @@ export const useAppStore = create<AppState>((set) => ({
       const remainingLayers = state.layers.filter((l) => l.id !== id);
       
       const renumberedLayers = remainingLayers.map((layer, index) => {
-        // 如果是图片图层（displayId === 0），保持为0
         if (layer.displayId === 0) {
           return layer;
         }
-        // 其他图层重新编号
-        // 如果第一个是图片图层，从1开始；否则从0开始
         const startIndex = remainingLayers[0]?.displayId === 0 ? 1 : 0;
         return {
           ...layer,
@@ -291,27 +292,31 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       layers: state.layers.map((l) => (l.id === id ? { ...l, ...updates } : l)),
     })),
-  setActiveLayer: (id) => set({ activeLayerId: id }),
+  setActiveLayer: (id) => {
+    set({ activeLayerId: id });
+    if (id) {
+      setTimeout(() => {
+        get().refreshRegionCache(id);
+      }, 0);
+    }
+  },
   toggleLayerVisibility: (id) =>
     set((state) => ({
       layers: state.layers.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)),
     })),
   reorderLayers: (fromIndex, toIndex) =>
     set((state) => {
-      // 不允许移动图层0（参考图片）
       const fromLayer = state.layers[fromIndex];
       if (fromLayer.displayId === 0) {
         return state;
       }
       
-      // 如果目标位置是0，调整到位置1（图片图层后面）
       const adjustedToIndex = toIndex === 0 ? 1 : toIndex;
       
       const newLayers = [...state.layers];
       const [removed] = newLayers.splice(fromIndex, 1);
       newLayers.splice(adjustedToIndex, 0, removed);
       
-      // 重新编号：图层0保持为0，其他图层从1开始
       const renumberedLayers = newLayers.map((layer, index) => {
         if (layer.displayId === 0) {
           return layer;
@@ -325,54 +330,49 @@ export const useAppStore = create<AppState>((set) => ({
       return { layers: renumberedLayers };
     }),
 
-  // 形状管理
   shapes: [],
   addShape: (shape) =>
-    set((state) => ({ shapes: [...state.shapes, shape] })),
+    set((state) => {
+      const approximatePolygon = computeApproximatePolygon(shape);
+      const newShape = { ...shape, approximatePolygon };
+      setTimeout(() => {
+        get().refreshRegionCache(shape.layerId);
+      }, 0);
+      return { shapes: [...state.shapes, newShape] };
+    }),
   removeShape: (id) =>
-    set((state) => ({ shapes: state.shapes.filter((s) => s.id !== id) })),
+    set((state) => {
+      const shape = state.shapes.find(s => s.id === id);
+      if (shape) {
+        setTimeout(() => {
+          get().refreshRegionCache(shape.layerId);
+        }, 0);
+      }
+      return { shapes: state.shapes.filter((s) => s.id !== id) };
+    }),
   updateShape: (id, updates) =>
-    set((state) => ({
-      shapes: state.shapes.map((s) => (s.id === id ? { ...s, ...updates } : s)),
-    })),
+    set((state) => {
+      const oldShape = state.shapes.find(s => s.id === id);
+      if (!oldShape) return state;
+      const updatedShape = { ...oldShape, ...updates };
+      const approximatePolygon = computeApproximatePolygon(updatedShape);
+      const newShape = { ...updatedShape, approximatePolygon };
+      setTimeout(() => {
+        get().refreshRegionCache(newShape.layerId);
+      }, 0);
+      return { shapes: state.shapes.map((s) => (s.id === id ? newShape : s)) };
+    }),
   clearShapes: () => set({ shapes: [] }),
 
-  // 注释管理
-  annotations: [],
-  addAnnotation: (annotation) =>
-    set((state) => {
-      const newAnnotation: Annotation = {
-        ...annotation,
-        id: `anno_${Date.now()}_${Math.random()}`,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      return { annotations: [...state.annotations, newAnnotation] };
-    }),
-  updateAnnotation: (id, updates) =>
-    set((state) => ({
-      annotations: state.annotations.map((anno) =>
-        anno.id === id ? { ...anno, ...updates, updatedAt: Date.now() } : anno
-      ),
-    })),
-  removeAnnotation: (id) =>
-    set((state) => ({
-      annotations: state.annotations.filter((anno) => anno.id !== id),
-    })),
-  clearAnnotations: () => set({ annotations: [] }),
-
-  // 鼠标位置
   mousePosition: null,
   setMousePosition: (pos) => set({ mousePosition: pos }),
 
-  // 选区状态
   isSelecting: false,
   selectionStart: null,
   selectionEnd: null,
   setSelection: (start, end) => set({ selectionStart: start, selectionEnd: end }),
   setIsSelecting: (selecting) => set({ isSelecting: selecting }),
 
-  // 视图缩放和偏移
   zoom: 1.0,
   panOffset: { x: 0, y: 0 },
   isPanMode: false,
@@ -381,22 +381,91 @@ export const useAppStore = create<AppState>((set) => ({
   setPanMode: (panMode) => set({ isPanMode: panMode }),
   resetView: () => set({ zoom: 1.0, panOffset: { x: 0, y: 0 } }),
 
-  // 当前工具
   currentTool: 'select',
   setCurrentTool: (tool) => set({ currentTool: tool }),
 
-  // 点吸附配置
-  snapRadius: 10,  // 默认吸附半径10像素
+  snapRadius: 10,
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
-  snapEnabled: true,  // 默认启用吸附
+  snapEnabled: true,
   setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
 
-  // 撤销历史（复合快照）
-  historySnapshots: [{ shapes: [], annotations: [] }],
+  pointAnnotations: [],
+  addPointAnnotation: (annotation) =>
+    set((state) => ({
+      pointAnnotations: [
+        ...state.pointAnnotations,
+        {
+          ...annotation,
+          id: `point_anno_${Date.now()}_${Math.random()}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+    })),
+  updatePointAnnotation: (id, text) =>
+    set((state) => ({
+      pointAnnotations: state.pointAnnotations.map(a =>
+        a.id === id ? { ...a, text, updatedAt: Date.now() } : a
+      ),
+    })),
+  removePointAnnotation: (id) =>
+    set((state) => ({
+      pointAnnotations: state.pointAnnotations.filter(a => a.id !== id),
+    })),
+  clearPointAnnotations: () => set({ pointAnnotations: [] }),
+
+  regionAnnotations: [],
+  addRegionAnnotation: (annotation) =>
+    set((state) => ({
+      regionAnnotations: [
+        ...state.regionAnnotations,
+        {
+          ...annotation,
+          id: `region_anno_${Date.now()}_${Math.random()}`,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+      ],
+    })),
+  updateRegionAnnotation: (id, text) =>
+    set((state) => ({
+      regionAnnotations: state.regionAnnotations.map(a =>
+        a.id === id ? { ...a, text, updatedAt: Date.now() } : a
+      ),
+    })),
+  removeRegionAnnotation: (id) =>
+    set((state) => ({
+      regionAnnotations: state.regionAnnotations.filter(a => a.id !== id),
+    })),
+  clearRegionAnnotations: () => set({ regionAnnotations: [] }),
+
+  regionPolygonsCache: {},
+  refreshRegionCache: (layerId) => {
+    const state = get();
+    const polygons = state.shapes
+      .filter(s => s.layerId === layerId && s.approximatePolygon.length > 0)
+      .map(s => s.approximatePolygon);
+    const worldBounds = {
+      xMin: state.axis.xMin,
+      xMax: state.axis.xMax,
+      yMin: state.axis.yMin,
+      yMax: state.axis.yMax,
+    };
+    const regions = computeRegionsFromPolygons(polygons, worldBounds);
+    set((s) => ({
+      regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
+    }));
+  },
+
+  historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [] }],
   historyIndex: 0,
   saveHistory: () =>
     set((state) => {
-      const newSnapshot = { shapes: [...state.shapes], annotations: [...state.annotations] };
+      const newSnapshot = { 
+        shapes: [...state.shapes], 
+        pointAnnotations: [...state.pointAnnotations],
+        regionAnnotations: [...state.regionAnnotations]
+      };
       const newHistory = state.historySnapshots.slice(0, state.historyIndex + 1);
       newHistory.push(newSnapshot);
       if (newHistory.length > 50) newHistory.shift();
@@ -409,7 +478,8 @@ export const useAppStore = create<AppState>((set) => ({
         const snapshot = state.historySnapshots[newIndex];
         return {
           shapes: [...snapshot.shapes],
-          annotations: [...snapshot.annotations],
+          pointAnnotations: [...snapshot.pointAnnotations],
+          regionAnnotations: [...snapshot.regionAnnotations],
           historyIndex: newIndex,
         };
       }
@@ -422,7 +492,8 @@ export const useAppStore = create<AppState>((set) => ({
         const snapshot = state.historySnapshots[newIndex];
         return {
           shapes: [...snapshot.shapes],
-          annotations: [...snapshot.annotations],
+          pointAnnotations: [...snapshot.pointAnnotations],
+          regionAnnotations: [...snapshot.regionAnnotations],
           historyIndex: newIndex,
         };
       }
@@ -437,20 +508,20 @@ export const useAppStore = create<AppState>((set) => ({
     return state.historyIndex < state.historySnapshots.length - 1;
   },
 
-  // 保存/加载
   saveToStorage: () => {
     const state = useAppStore.getState();
     const imageLayerId = state.imageState.imageLayerId;
     const data = {
       shapes: state.shapes.filter(s => s.layerId !== imageLayerId),
-      annotations: state.annotations,
+      pointAnnotations: state.pointAnnotations,
+      regionAnnotations: state.regionAnnotations,
       groups: state.groups,
       layers: state.layers.filter(l => l.id !== imageLayerId),
       activeLayerId: state.activeLayerId,
+      activeGroupId: state.activeGroupId,
       axis: state.axis,
       grid: state.grid,
-      snapRadius: state.snapRadius,
-      snapEnabled: state.snapEnabled,
+      layerVisibility: state.layerVisibility,
     };
     localStorage.setItem('drawing-app-data', JSON.stringify(data));
   },
@@ -495,7 +566,8 @@ export const useAppStore = create<AppState>((set) => ({
               })),
             })),
         })),
-      annotations: state.annotations,
+      pointAnnotations: state.pointAnnotations,
+      regionAnnotations: state.regionAnnotations,
       groups: state.groups,
     };
 
@@ -512,33 +584,31 @@ export const useAppStore = create<AppState>((set) => ({
     URL.revokeObjectURL(url);
   },
   loadFromStorage: () => {
-    const data = localStorage.getItem('drawing-app-data');
-    if (data) {
-      try {
-        const parsed = JSON.parse(data);
-        const loadedLayers = parsed.layers || [{ id: 'layer_1', name: '图层 1', visible: true, locked: false, opacity: 1 }];
-        const loadedActiveLayerId = parsed.activeLayerId || 'layer_1';
-        const loadedShapes = (parsed.shapes || []).map((s: any) => ({
-          ...s,
-          layerId: s.layerId || loadedActiveLayerId,
-        }));
-        const loadedAnnotations = parsed.annotations || [];
-        set((state) => ({
-          shapes: loadedShapes,
-          annotations: loadedAnnotations,
-          groups: parsed.groups || [],
-          layers: loadedLayers,
-          activeLayerId: loadedActiveLayerId,
-          axis: parsed.axis || state.axis,
-          grid: parsed.grid || state.grid,
-          snapRadius: parsed.snapRadius ?? 10,
-          snapEnabled: parsed.snapEnabled ?? true,
-          historySnapshots: [{ shapes: loadedShapes, annotations: loadedAnnotations }],
-          historyIndex: 0,
-        }));
-      } catch (e) {
-        console.error('Failed to load data:', e);
-      }
+    const stored = localStorage.getItem('drawing-app-data');
+    if (!stored) return;
+    try {
+      const data = JSON.parse(stored);
+      set((state) => {
+        const activeLayerId = data.activeLayerId || state.activeLayerId;
+        setTimeout(() => {
+          get().refreshRegionCache(activeLayerId);
+        }, 0);
+        return {
+          ...state,
+          shapes: data.shapes || [],
+          pointAnnotations: data.pointAnnotations || [],
+          regionAnnotations: data.regionAnnotations || [],
+          groups: data.groups || [],
+          layers: data.layers.length > 0 ? data.layers : state.layers,
+          activeLayerId,
+          activeGroupId: data.activeGroupId || null,
+          axis: data.axis || defaultAxis,
+          grid: data.grid || state.grid,
+          layerVisibility: data.layerVisibility || state.layerVisibility,
+        };
+      });
+    } catch (e) {
+      console.error('Failed to load from storage:', e);
     }
   },
 }));

@@ -1,13 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import type { AnnotationGeometry } from '../types';
 
 interface AnnotationEditorProps {
   x: number;
   y: number;
   annotationId: string | null;
   existingText: string;
-  newGeometry?: AnnotationGeometry;
-  onSave: (text: string, geometry?: AnnotationGeometry) => void;
+  onSave: (text: string) => void;
   onCancel: () => void;
 }
 
