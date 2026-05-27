@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation } from '../types';
 import { computeApproximatePolygon } from '../utils/approximatePolygon';
-import { computeRegionsFromPolygons } from '../utils/regionDetection';
+import { computeRegionsWithHoles } from '../utils/regionDetectionBySampling';
 
 interface AppState {
   // 图片导入状态
@@ -453,21 +453,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log('[refreshRegionCache] 图层:', layerId);
     console.log('[refreshRegionCache] 该图层图形总数:', allShapesInLayer.length);
     console.log('[refreshRegionCache] 当前已存储的区域注释数:', state.regionAnnotations.length);
-    
-    allShapesInLayer.forEach((shape, index) => {
-      const hasPolygon = shape.approximatePolygon && shape.approximatePolygon.length > 0;
-      console.log(`[refreshRegionCache] 图形${index}: id=${shape.id}, type=${shape.type}, hasPolygon=${hasPolygon}`);
-      if (hasPolygon) {
-        console.log(`[refreshRegionCache]   多边形点数: ${shape.approximatePolygon.length}`);
-        console.log(`[refreshRegionCache]   前3个点:`, shape.approximatePolygon.slice(0, 3));
-      }
-    });
-    
-    const polygons = allShapesInLayer
-      .filter(s => s.approximatePolygon && s.approximatePolygon.length > 0)
-      .map(s => s.approximatePolygon);
-    console.log('[refreshRegionCache] 有效多边形数量:', polygons.length);
-    
+
     const worldBounds = {
       xMin: state.axis.xMin,
       xMax: state.axis.xMax,
@@ -475,7 +461,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMax: state.axis.yMax,
     };
     console.log('[refreshRegionCache] 世界边界:', worldBounds);
-    const regions = computeRegionsFromPolygons(polygons, worldBounds);
+
+    const regions = computeRegionsWithHoles(allShapesInLayer, worldBounds, 150);
     console.log('[refreshRegionCache] 生成区域数量:', regions.length);
     regions.forEach((region, index) => {
       console.log(`[refreshRegionCache] 区域${index}: 环数=${region.length}`);
