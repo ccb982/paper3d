@@ -811,6 +811,11 @@ export function MainCanvas() {
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
   useEffect(() => {
+    console.log('[MainCanvas] 初始化刷新区域缓存...');
+    refreshRegionCache(activeLayerId);
+  }, []);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const onWheel = (e: WheelEvent) => {
@@ -885,9 +890,21 @@ export function MainCanvas() {
     }
 
     if (currentTool === 'regionAnnotation') {
+      console.log('=== 区域注释点击检测开始 ===');
+      console.log('1. 点击坐标 (canvas):', coords);
+      console.log('2. 转换后坐标 (world):', worldCoords);
+      console.log('3. 当前活动图层:', activeLayerId);
+      console.log('4. 区域缓存 keys:', Object.keys(regionPolygonsCache));
       const regions = regionPolygonsCache[activeLayerId] || [];
+      console.log('5. 当前图层区域数量:', regions.length);
+      if (regions.length > 0) {
+        console.log('6. 第一个区域详情:', JSON.stringify(regions[0]));
+      }
+      console.log('7. 开始调用 findRegionByPoint...');
       const hitRegion = findRegionByPoint(worldCoords, regions);
+      console.log('8. 检测结果:', hitRegion);
       if (hitRegion) {
+        console.log('9. 命中区域多边形点数:', hitRegion.map(r => r.length));
         setRegionAnnotationEditor({
           editorId: generateEditorId(),
           x: e.clientX,
@@ -897,8 +914,22 @@ export function MainCanvas() {
           polygon: hitRegion,
         });
       } else {
-        console.log('未点击到任何区域');
+        console.log('❌ 未点击到任何区域');
+        console.log('   尝试打印所有区域的包围盒...');
+        for (let i = 0; i < regions.length; i++) {
+          const ring = regions[i][0];
+          if (ring && ring.length > 0) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const p of ring) {
+              minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+              maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+            }
+            console.log(`   区域${i}包围盒: min(${minX.toFixed(4)}, ${minY.toFixed(4)}) max(${maxX.toFixed(4)}, ${maxY.toFixed(4)})`);
+            console.log(`   点击点是否在包围盒内: x=${worldCoords.x.toFixed(4)} y=${worldCoords.y.toFixed(4)}, inX=${worldCoords.x >= minX && worldCoords.x <= maxX}, inY=${worldCoords.y >= minY && worldCoords.y <= maxY}`);
+          }
+        }
       }
+      console.log('=== 区域注释点击检测结束 ===');
       return;
     }
 

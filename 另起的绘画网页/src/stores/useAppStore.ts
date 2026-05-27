@@ -334,6 +334,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   addShape: (shape) =>
     set((state) => {
       const approximatePolygon = computeApproximatePolygon(shape);
+      console.log('[addShape] 图形类型:', shape.type);
+      console.log('[addShape] 原始点数:', shape.points.length);
+      console.log('[addShape] 生成的多边形点数:', approximatePolygon.length);
+      if (approximatePolygon.length > 0) {
+        console.log('[addShape] 多边形前3个点:', approximatePolygon.slice(0, 3));
+      }
       const newShape = { ...shape, approximatePolygon };
       setTimeout(() => {
         get().refreshRegionCache(shape.layerId);
@@ -442,16 +448,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   regionPolygonsCache: {},
   refreshRegionCache: (layerId) => {
     const state = get();
-    const polygons = state.shapes
-      .filter(s => s.layerId === layerId && s.approximatePolygon.length > 0)
+    const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
+    console.log('[refreshRegionCache] =========================================');
+    console.log('[refreshRegionCache] 图层:', layerId);
+    console.log('[refreshRegionCache] 该图层图形总数:', allShapesInLayer.length);
+    console.log('[refreshRegionCache] 当前已存储的区域注释数:', state.regionAnnotations.length);
+    
+    allShapesInLayer.forEach((shape, index) => {
+      const hasPolygon = shape.approximatePolygon && shape.approximatePolygon.length > 0;
+      console.log(`[refreshRegionCache] 图形${index}: id=${shape.id}, type=${shape.type}, hasPolygon=${hasPolygon}`);
+      if (hasPolygon) {
+        console.log(`[refreshRegionCache]   多边形点数: ${shape.approximatePolygon.length}`);
+        console.log(`[refreshRegionCache]   前3个点:`, shape.approximatePolygon.slice(0, 3));
+      }
+    });
+    
+    const polygons = allShapesInLayer
+      .filter(s => s.approximatePolygon && s.approximatePolygon.length > 0)
       .map(s => s.approximatePolygon);
+    console.log('[refreshRegionCache] 有效多边形数量:', polygons.length);
+    
     const worldBounds = {
       xMin: state.axis.xMin,
       xMax: state.axis.xMax,
       yMin: state.axis.yMin,
       yMax: state.axis.yMax,
     };
+    console.log('[refreshRegionCache] 世界边界:', worldBounds);
     const regions = computeRegionsFromPolygons(polygons, worldBounds);
+    console.log('[refreshRegionCache] 生成区域数量:', regions.length);
+    regions.forEach((region, index) => {
+      console.log(`[refreshRegionCache] 区域${index}: 环数=${region.length}`);
+      region.forEach((ring, ringIndex) => {
+        console.log(`[refreshRegionCache]   环${ringIndex}: 点数=${ring.length}`);
+      });
+    });
+    console.log('[refreshRegionCache] =========================================');
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
     }));
@@ -588,6 +620,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!stored) return;
     try {
       const data = JSON.parse(stored);
+      const shapesWithPolygon = (data.shapes || []).map((shape: Shape) => ({
+        ...shape,
+        approximatePolygon: computeApproximatePolygon(shape),
+      }));
+      console.log('[loadFromStorage] 加载图形数量:', shapesWithPolygon.length);
+      console.log('[loadFromStorage] 为图形补充 approximatePolygon');
       set((state) => {
         const activeLayerId = data.activeLayerId || state.activeLayerId;
         setTimeout(() => {
@@ -595,7 +633,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }, 0);
         return {
           ...state,
-          shapes: data.shapes || [],
+          shapes: shapesWithPolygon,
           pointAnnotations: data.pointAnnotations || [],
           regionAnnotations: data.regionAnnotations || [],
           groups: data.groups || [],
