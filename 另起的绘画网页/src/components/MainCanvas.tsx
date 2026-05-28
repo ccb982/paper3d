@@ -4,7 +4,7 @@ import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld } from '../utils/transform';
 import { findRegionByPoint } from '../utils/regionDetection';
-import { getDebugRegions, computeGridRegions, computeScanlineIntervals } from '../utils/regionDetectionExact';
+import { getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay } from '../utils/regionDetectionExact';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -866,6 +866,44 @@ export function MainCanvas() {
           ctx.fillStyle = color;
           ctx.font = '10px monospace';
           ctx.fillText(`R${region.id}: ${region.cellCount}c`, seedCanvas.x + 8, seedCanvas.y - 5);
+
+          // 绘制射线
+          region.rays.forEach((ray: DebugRay) => {
+            const startCanvas = worldToCanvasFn(ray.start.x, ray.start.y);
+            const endCanvas = worldToCanvasFn(ray.end.x, ray.end.y);
+
+            // 根据 outsideId 选择颜色
+            const rayColor = ray.outsideId === -1 ? '#00ff00' : '#ff0000';
+
+            // 绘制射线起点
+            ctx.fillStyle = rayColor;
+            ctx.beginPath();
+            ctx.arc(startCanvas.x, startCanvas.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // 绘制射线（从起点到交点）
+            ctx.strokeStyle = rayColor;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([]);
+            ctx.beginPath();
+            ctx.moveTo(startCanvas.x, startCanvas.y);
+            ctx.lineTo(endCanvas.x, endCanvas.y);
+            ctx.stroke();
+
+            // 绘制射线终点（交点）
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(endCanvas.x, endCanvas.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = rayColor;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 绘制outsideId标签
+            ctx.fillStyle = rayColor;
+            ctx.font = '8px monospace';
+            ctx.fillText(`→${ray.outsideId}`, endCanvas.x + 5, endCanvas.y - 5);
+          });
 
           ctx.restore();
         });
