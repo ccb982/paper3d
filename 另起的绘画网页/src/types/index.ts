@@ -24,7 +24,6 @@ export interface Shape {
   layerId: string;
   type: ShapeType;
   points: Point[];
-  approximatePolygon: Point[]; // 闭合多边形（世界坐标），开放曲线则为空数组
   color: string;
 }
 

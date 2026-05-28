@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation } from '../types';
-import { computeApproximatePolygon } from '../utils/approximatePolygon';
-import { computeRegionsWithHoles } from '../utils/regionDetectionBySampling';
+import { computeRegionsExact } from '../utils/regionDetectionExact';
 
 interface AppState {
   // 图片导入状态
@@ -337,11 +336,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.log('>>> 图形类型:', shape.type);
       console.log('>>> 图形ID:', shape.id);
       console.log('>>> 所属图层:', shape.layerId);
-      const approximatePolygon = computeApproximatePolygon(shape);
       console.log('[addShape] 图形类型:', shape.type);
       console.log('[addShape] 原始点数:', shape.points.length);
-      console.log('[addShape] 生成的多边形点数:', approximatePolygon.length);
-      const newShape = { ...shape, approximatePolygon };
+      const newShape = { ...shape };
       setTimeout(() => {
         console.log('>>> [setTimeout] 准备刷新区域缓存, layerId:', shape.layerId);
         get().refreshRegionCache(shape.layerId);
@@ -362,9 +359,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const oldShape = state.shapes.find(s => s.id === id);
       if (!oldShape) return state;
-      const updatedShape = { ...oldShape, ...updates };
-      const approximatePolygon = computeApproximatePolygon(updatedShape);
-      const newShape = { ...updatedShape, approximatePolygon };
+      const newShape = { ...oldShape, ...updates };
       setTimeout(() => {
         get().refreshRegionCache(newShape.layerId);
       }, 0);
@@ -461,7 +456,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMax: state.axis.yMax,
     };
 
-    const regions = computeRegionsWithHoles(allShapesInLayer, worldBounds, 150);
+    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300, 1.0);
     console.log('[绘画后区域检测] 检测到的封闭区域数量:', regions.length);
     
     for (let i = 0; i < regions.length; i++) {
@@ -614,12 +609,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!stored) return;
     try {
       const data = JSON.parse(stored);
-      const shapesWithPolygon = (data.shapes || []).map((shape: Shape) => ({
-        ...shape,
-        approximatePolygon: computeApproximatePolygon(shape),
-      }));
-      console.log('[loadFromStorage] 加载图形数量:', shapesWithPolygon.length);
-      console.log('[loadFromStorage] 为图形补充 approximatePolygon');
+      console.log('[loadFromStorage] 加载图形数量:', data.shapes?.length || 0);
       set((state) => {
         const activeLayerId = data.activeLayerId || state.activeLayerId;
         setTimeout(() => {
@@ -627,7 +617,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         }, 0);
         return {
           ...state,
-          shapes: shapesWithPolygon,
+          shapes: data.shapes || [],
           pointAnnotations: data.pointAnnotations || [],
           regionAnnotations: data.regionAnnotations || [],
           groups: data.groups || [],

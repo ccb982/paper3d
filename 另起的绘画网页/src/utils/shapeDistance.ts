@@ -39,8 +39,17 @@ export function pointToShapeDistance(point: Point, shape: Shape): number {
         const p1 = pts[0], p2 = pts[1];
         const left = Math.min(p1.x, p2.x), right = Math.max(p1.x, p2.x);
         const bottom = Math.min(p1.y, p2.y), top = Math.max(p1.y, p2.y);
-        const dx = Math.max(left - point.x, 0, point.x - right);
-        const dy = Math.max(bottom - point.y, 0, point.y - top);
+
+        let dx = 0;
+        if (point.x < left) dx = left - point.x;
+        else if (point.x > right) dx = point.x - right;
+        else dx = Math.min(point.x - left, right - point.x);
+
+        let dy = 0;
+        if (point.y < bottom) dy = bottom - point.y;
+        else if (point.y > top) dy = point.y - top;
+        else dy = Math.min(point.y - bottom, top - point.y);
+
         return Math.hypot(dx, dy);
       }
       return Infinity;
