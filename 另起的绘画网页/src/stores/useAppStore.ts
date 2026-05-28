@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation } from '../types';
-import { computeRegionsExact } from '../utils/regionDetectionExact';
+import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, type ScanlineCache } from '../utils/regionDetectionExact';
 
 interface AppState {
   // 图片导入状态
@@ -98,6 +98,7 @@ interface AppState {
 
   // 区域检测缓存
   regionPolygonsCache: Record<string, Point[][][]>;
+  regionScanlineCache: Record<string, ScanlineCache>;
   refreshRegionCache: (layerId: string) => void;
 
   // 撤销历史（复合快照）
@@ -281,10 +282,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newActiveLayerId = isRemovingActive
         ? (renumberedLayers.length > 0 ? renumberedLayers[0].id : null)
         : state.activeLayerId;
+      
+      // 清理缓存
+      const { [id]: _, ...newPolyCache } = state.regionPolygonsCache;
+      const { [id]: __, ...newScanCache } = state.regionScanlineCache;
+      
       return {
         layers: renumberedLayers,
         activeLayerId: newActiveLayerId,
         shapes: state.shapes.filter((s) => s.layerId !== id),
+        regionPolygonsCache: newPolyCache,
+        regionScanlineCache: newScanCache,
       };
     }),
   updateLayer: (id, updates) =>
@@ -443,6 +451,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearRegionAnnotations: () => set({ regionAnnotations: [] }),
 
   regionPolygonsCache: {},
+  regionScanlineCache: {},
   refreshRegionCache: (layerId) => {
     const state = get();
     const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
@@ -456,6 +465,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMax: state.axis.yMax,
     };
 
+    const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300);
+    const scanlineCache = computeScanlineIntervals(gridData);
     const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300, 1.0);
     console.log('[绘画后区域检测] 检测到的封闭区域数量:', regions.length);
     
@@ -475,6 +486,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log('==========================================');
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
+      regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
     }));
   },
 

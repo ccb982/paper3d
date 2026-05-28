@@ -4,6 +4,7 @@ import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld } from '../utils/transform';
 import { findRegionByPoint } from '../utils/regionDetection';
+import { getDebugRegions, computeGridRegions, computeScanlineIntervals } from '../utils/regionDetectionExact';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -79,6 +80,8 @@ export function MainCanvas() {
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
   const [canvasSize, setCanvasSize] = useState(BASE_CANVAS_SIZE);
+  const [showDebugRegions, setShowDebugRegions] = useState(false);
+  const [showGridCells, setShowGridCells] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -134,6 +137,14 @@ export function MainCanvas() {
   // ========== Escape 键取消临时图形和注释编辑器 ==========
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'd') {
+        setShowDebugRegions(prev => !prev);
+        return;
+      }
+      if (e.ctrlKey && e.key === 'g') {
+        setShowGridCells(prev => !prev);
+        return;
+      }
       if (e.key === 'Escape') {
         if (tempPoints.length > 0) {
           useAppStore.setState((s) => ({
@@ -794,6 +805,160 @@ export function MainCanvas() {
         ctx.fillText(anno.text.length > 20 ? anno.text.slice(0, 17) + '...' : anno.text, labelPos.x + 5, labelPos.y - 5);
         ctx.restore();
       });
+    }
+
+
+    // ========== 调试：BFS区域绘制 ==========
+    if (showDebugRegions && layerVisibility.drawLayer) {
+      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      if (currentLayerShapes.length > 0) {
+        const worldBounds = {
+          xMin: axis.xMin,
+          xMax: axis.xMax,
+          yMin: axis.yMin,
+          yMax: axis.yMax,
+        };
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 200);
+
+        const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
+
+        debugRegions.forEach((region, idx) => {
+          ctx.save();
+          const color = colors[idx % colors.length];
+
+          // 绘制区域色块填充
+          if (region.boundaryPolygon.length >= 3) {
+            ctx.fillStyle = color + '40'; // 添加40%透明度
+            const canvasPoly = region.boundaryPolygon.map(p => worldToCanvasFn(p.x, p.y));
+            ctx.beginPath();
+            ctx.moveTo(canvasPoly[0].x, canvasPoly[0].y);
+            for (let i = 1; i < canvasPoly.length; i++) {
+              ctx.lineTo(canvasPoly[i].x, canvasPoly[i].y);
+            }
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          // 绘制边界多边形
+          if (region.boundaryPolygon.length >= 3) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 3]);
+            const canvasPoly = region.boundaryPolygon.map(p => worldToCanvasFn(p.x, p.y));
+            ctx.beginPath();
+            ctx.moveTo(canvasPoly[0].x, canvasPoly[0].y);
+            for (let i = 1; i < canvasPoly.length; i++) {
+              ctx.lineTo(canvasPoly[i].x, canvasPoly[i].y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+            ctx.setLineDash([]);
+          }
+
+          // 绘制种子点
+          const seedCanvas = worldToCanvasFn(region.seed.x, region.seed.y);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(seedCanvas.x, seedCanvas.y, 5, 0, Math.PI * 2);
+          ctx.fill();
+
+          // 绘制区域ID和cell数量
+          ctx.fillStyle = color;
+          ctx.font = '10px monospace';
+          ctx.fillText(`R${region.id}: ${region.cellCount}c`, seedCanvas.x + 8, seedCanvas.y - 5);
+
+          ctx.restore();
+        });
+
+        console.log(`[调试] 绘制了 ${debugRegions.length} 个BFS区域`);
+      }
+    }
+
+    // ========== 调试：绘制原始网格单元格（BFS搜索范围）==========
+    if (showGridCells && layerVisibility.drawLayer) {
+      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      if (currentLayerShapes.length > 0) {
+        const worldBounds = {
+          xMin: axis.xMin,
+          xMax: axis.xMax,
+          yMin: axis.yMin,
+          yMax: axis.yMax,
+        };
+        const gridData = computeGridRegions(currentLayerShapes, worldBounds, 100);
+        const { regionIdGrid, stepX, stepY, xMin, yMin, resolution, regions } = gridData;
+
+        const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
+
+        // 绘制所有区域的单元格
+        regions.forEach(region => {
+          ctx.save();
+          const color = colors[region.id % colors.length];
+          ctx.fillStyle = color + '60'; // 60%透明度
+
+          region.cells.forEach(cell => {
+            const worldX = xMin + cell.j * stepX;
+            const worldY = yMin + cell.i * stepY;
+            const canvasTL = worldToCanvasFn(worldX, worldY);
+            const canvasBR = worldToCanvasFn(worldX + stepX, worldY + stepY);
+            
+            ctx.fillRect(canvasTL.x, canvasTL.y, canvasBR.x - canvasTL.x, canvasBR.y - canvasTL.y);
+          });
+          ctx.restore();
+        });
+
+        // 绘制扫描线区间（左右范围）
+        const scanlineCache = computeScanlineIntervals(gridData);
+        
+        regions.forEach(region => {
+          ctx.save();
+          const color = colors[region.id % colors.length];
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 2]);
+
+          const spans = scanlineCache[region.id] || [];
+          spans.forEach(span => {
+            const leftCanvas = worldToCanvasFn(span.xMin, span.y);
+            const rightCanvas = worldToCanvasFn(span.xMax, span.y);
+            
+            // 绘制左边界线（向下延伸一小段）
+            ctx.beginPath();
+            ctx.moveTo(leftCanvas.x, leftCanvas.y - 5);
+            ctx.lineTo(leftCanvas.x, leftCanvas.y + 5);
+            ctx.stroke();
+            
+            // 绘制右边界线（向下延伸一小段）
+            ctx.beginPath();
+            ctx.moveTo(rightCanvas.x, rightCanvas.y - 5);
+            ctx.lineTo(rightCanvas.x, rightCanvas.y + 5);
+            ctx.stroke();
+            
+            // 绘制左右范围连线
+            ctx.beginPath();
+            ctx.moveTo(leftCanvas.x, leftCanvas.y);
+            ctx.lineTo(rightCanvas.x, rightCanvas.y);
+            ctx.stroke();
+          });
+          ctx.setLineDash([]);
+          ctx.restore();
+        });
+
+        // 输出网格数据信息到控制台
+        console.log('==========================================');
+        console.log('[BFS原始网格数据]');
+        console.log(`网格分辨率: ${resolution}x${resolution}`);
+        console.log(`单元格大小: ${stepX.toFixed(6)} x ${stepY.toFixed(6)}`);
+        console.log(`总区域数: ${regions.length}`);
+        regions.forEach(region => {
+          console.log(`区域${region.id}: ${region.cells.length}个单元格, 种子点: (${region.seed.x.toFixed(4)}, ${region.seed.y.toFixed(4)})`);
+          const spans = scanlineCache[region.id] || [];
+          if (spans.length > 0) {
+            console.log(`  扫描线区间数: ${spans.length}`);
+            console.log(`  示例区间: y=${spans[0].y.toFixed(4)}, xMin=${spans[0].xMin.toFixed(4)}, xMax=${spans[0].xMax.toFixed(4)}`);
+          }
+        });
+        console.log('==========================================');
+      }
     }
 
     // 橡皮擦光标效果

@@ -1,6 +1,6 @@
-// utils/regionDetectionExact.ts
 import type { Point, Shape } from '../types';
 
+// ========== 基础几何函数 ==========
 function pointToSegmentDistanceSq(p: Point, a: Point, b: Point): number {
   const ax = p.x - a.x, ay = p.y - a.y;
   const bx = b.x - a.x, by = b.y - a.y;
@@ -132,6 +132,7 @@ function rasterizeShape(shape: Shape, stepX: number, stepY: number, xMin: number
   }
 }
 
+// ========== 栅格化与连通区域 ==========
 export interface GridRegion {
   id: number;
   cells: { i: number; j: number }[];
@@ -225,6 +226,89 @@ export function computeGridRegions(
   };
 }
 
+// ========== 扫描线区间辅助 ==========
+export interface ScanlineSpan {
+  y: number;      // 该行的世界坐标 Y（单元格中心）
+  xMin: number;   // 左边界（世界坐标）
+  xMax: number;   // 右边界（世界坐标）
+}
+
+export type ScanlineCache = Record<number, ScanlineSpan[]>;
+
+export function computeScanlineIntervals(gridData: GridData): ScanlineCache {
+  const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
+  const cache: ScanlineCache = {};
+
+  for (let i = 0; i < resolution; i++) {
+    let currentId = -1;
+    let spanStart = -1;
+    const worldY = yMin + (i + 0.5) * stepY;
+
+    for (let j = 0; j <= resolution; j++) {
+      const id = (j < resolution) ? regionIdGrid[i][j] : -1;
+
+      if (id !== currentId) {
+        if (currentId !== -1 && spanStart !== -1) {
+          const xLeft = xMin + spanStart * stepX;
+          const xRight = xMin + j * stepX;   // 修正：j 是下一个不同 ID 的起始列，右边界正确
+          if (!cache[currentId]) cache[currentId] = [];
+          cache[currentId].push({ y: worldY, xMin: xLeft, xMax: xRight });
+        }
+        if (id !== -1) {
+          currentId = id;
+          spanStart = j;
+        } else {
+          currentId = -1;
+          spanStart = -1;
+        }
+      }
+    }
+  }
+  return cache;
+}
+
+// ========== 垂直扫描线区间（按列）==========
+export interface VerticalSpan {
+  x: number;      // 该列的世界坐标 X（单元格中心）
+  yMin: number;  // 下边界（世界坐标）
+  yMax: number;  // 上边界（世界坐标）
+}
+
+export type VerticalCache = Record<number, VerticalSpan[]>;
+
+export function computeVerticalIntervals(gridData: GridData): VerticalCache {
+  const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
+  const cache: VerticalCache = {};
+
+  for (let j = 0; j < resolution; j++) {
+    let currentId = -1;
+    let spanStart = -1;
+    const worldX = xMin + (j + 0.5) * stepX;
+
+    for (let i = 0; i <= resolution; i++) {
+      const id = (i < resolution) ? regionIdGrid[i][j] : -1;
+
+      if (id !== currentId) {
+        if (currentId !== -1 && spanStart !== -1) {
+          const yBottom = yMin + spanStart * stepY;
+          const yTop = yMin + i * stepY;
+          if (!cache[currentId]) cache[currentId] = [];
+          cache[currentId].push({ x: worldX, yMin: yBottom, yMax: yTop });
+        }
+        if (id !== -1) {
+          currentId = id;
+          spanStart = i;
+        } else {
+          currentId = -1;
+          spanStart = -1;
+        }
+      }
+    }
+  }
+  return cache;
+}
+
+// ========== 射线与形状求交 ==========
 function intersectLineSegment(origin: Point, dir: Point, a: Point, b: Point): number | null {
   const ax = a.x, ay = a.y;
   const bx = b.x, by = b.y;
@@ -360,41 +444,88 @@ function getNearestIntersection(origin: Point, dir: Point, shapes: Shape[]): { p
   return null;
 }
 
+// ========== 判断单元格是否为该区域的外边界单元格（与背景-1相邻）==========
+function isOuterBoundaryCell(
+  i: number,
+  j: number,
+  regionId: number,
+  regionIdGrid: number[][],
+  resolution: number
+): boolean {
+  if (i < 0 || i >= resolution || j < 0 || j >= resolution) return false;
+  if (regionIdGrid[i][j] !== regionId) return false;
+  const neighbors: [number, number][] = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+  for (const [di, dj] of neighbors) {
+    const ni = i + di, nj = j + dj;
+    if (ni < 0 || ni >= resolution || nj < 0 || nj >= resolution) return true;
+    if (regionIdGrid[ni][nj] === -1) return true;
+  }
+  return false;
+}
+
+// ========== 精确边界提取（从外边界单元边缘向背景区域发射射线）==========
 export function extractExactBoundary(
   regionId: number,
-  seed: Point,
   shapes: Shape[],
   gridData: GridData,
+  scanlineCache: ScanlineCache,
+  verticalCache: VerticalCache,
   angleStepDeg: number = 1.0
 ): Point[] {
   const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
-  const delta = Math.min(stepX, stepY) * 1e-6;
-  const angleStepRad = (angleStepDeg * Math.PI) / 180;
-  const totalSteps = Math.ceil(2 * Math.PI / angleStepRad);
-  const boundaryPoints: { angle: number; point: Point }[] = [];
+  const boundaryPointsSet = new Set<string>();
+  const addPoint = (p: Point) => {
+    const key = `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
+    boundaryPointsSet.add(key);
+  };
 
-  for (let step = 0; step < totalSteps; step++) {
-    const angle = step * angleStepRad;
-    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+  for (let i = 0; i < resolution; i++) {
+    for (let j = 0; j < resolution; j++) {
+      if (!isOuterBoundaryCell(i, j, regionId, regionIdGrid, resolution)) continue;
 
-    const hit = getNearestIntersection(seed, dir, shapes);
-    if (!hit) continue;
+      const cellLeft = xMin + j * stepX;
+      const cellRight = xMin + (j + 1) * stepX;
+      const cellTop = yMin + i * stepY;
+      const cellBottom = yMin + (i + 1) * stepY;
 
-    const frontX = hit.point.x + dir.x * delta;
-    const frontY = hit.point.y + dir.y * delta;
+      const leftBg = (j === 0) || (regionIdGrid[i][j - 1] === -1);
+      const rightBg = (j === resolution - 1) || (regionIdGrid[i][j + 1] === -1);
+      const upBg = (i === 0) || (regionIdGrid[i - 1][j] === -1);
+      const downBg = (i === resolution - 1) || (regionIdGrid[i + 1][j] === -1);
 
-    let i = Math.floor((frontY - yMin) / stepY);
-    let j = Math.floor((frontX - xMin) / stepX);
-    i = Math.max(0, Math.min(resolution - 1, i));
-    j = Math.max(0, Math.min(resolution - 1, j));
-
-    const nextId = regionIdGrid[i][j];
-    if (nextId !== regionId) {
-      boundaryPoints.push({ angle, point: hit.point });
+      if (leftBg) {
+        const ox = cellLeft;
+        const oy = (cellTop + cellBottom) / 2;
+        const p = getNearestIntersection({ x: ox, y: oy }, { x: -1, y: 0 }, shapes);
+        if (p) addPoint(p.point);
+      }
+      if (rightBg) {
+        const ox = cellRight;
+        const oy = (cellTop + cellBottom) / 2;
+        const p = getNearestIntersection({ x: ox, y: oy }, { x: 1, y: 0 }, shapes);
+        if (p) addPoint(p.point);
+      }
+      if (upBg) {
+        const ox = (cellLeft + cellRight) / 2;
+        const oy = cellTop;
+        const p = getNearestIntersection({ x: ox, y: oy }, { x: 0, y: -1 }, shapes);
+        if (p) addPoint(p.point);
+      }
+      if (downBg) {
+        const ox = (cellLeft + cellRight) / 2;
+        const oy = cellBottom;
+        const p = getNearestIntersection({ x: ox, y: oy }, { x: 0, y: 1 }, shapes);
+        if (p) addPoint(p.point);
+      }
     }
   }
 
-  if (boundaryPoints.length < 3) {
+  let points = Array.from(boundaryPointsSet).map(key => {
+    const [xStr, yStr] = key.split('_');
+    return { x: parseFloat(xStr) / 1e6, y: parseFloat(yStr) / 1e6 };
+  });
+
+  if (points.length < 3) {
     const region = gridData.regions.find(r => r.id === regionId);
     if (region) {
       const { minI, maxI, minJ, maxJ } = region.bounds;
@@ -407,16 +538,25 @@ export function extractExactBoundary(
     return [];
   }
 
-  boundaryPoints.sort((a, b) => a.angle - b.angle);
-  const poly = boundaryPoints.map(bp => bp.point);
+  let centerX = 0, centerY = 0;
+  for (const p of points) { centerX += p.x; centerY += p.y; }
+  centerX /= points.length;
+  centerY /= points.length;
 
-  if (poly.length >= 2 && (Math.hypot(poly[0].x - poly[poly.length-1].x, poly[0].y - poly[poly.length-1].y) > delta)) {
-    poly.push(poly[0]);
+  points.sort((a, b) => {
+    const angleA = Math.atan2(a.y - centerY, a.x - centerX);
+    const angleB = Math.atan2(b.y - centerY, b.x - centerX);
+    return angleA - angleB;
+  });
+
+  if (points.length >= 2 &&
+      Math.hypot(points[0].x - points[points.length - 1].x, points[0].y - points[points.length - 1].y) > 1e-9) {
+    points.push(points[0]);
   }
-
-  return poly;
+  return points;
 }
 
+// ========== 对外主函数 ==========
 export function computeRegionsExact(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
@@ -425,19 +565,98 @@ export function computeRegionsExact(
 ): Point[][][] {
   console.log('[computeRegionsExact] 开始精确区域检测...');
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
+  const scanlineCache = computeScanlineIntervals(gridData);
+  const verticalCache = computeVerticalIntervals(gridData);
   console.log(`[computeRegionsExact] 发现 ${gridData.regions.length} 个连通区域`);
 
   const polygons: Point[][][] = [];
 
+  // 辅助：判断多边形是否几乎等于全屏
+  const isFullWorldPolygon = (poly: Point[]): boolean => {
+    if (poly.length < 3) return false;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of poly) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y);
+    }
+    const eps = 1e-6;
+    return (Math.abs(minX - worldBounds.xMin) < eps &&
+            Math.abs(maxX - worldBounds.xMax) < eps &&
+            Math.abs(minY - worldBounds.yMin) < eps &&
+            Math.abs(maxY - worldBounds.yMax) < eps);
+  };
+
   for (const region of gridData.regions) {
     if (region.cells.length < 10) continue;
 
-    const outerPoly = extractExactBoundary(region.id, region.seed, shapes, gridData, angleStepDeg);
-    if (outerPoly.length >= 3) {
+    // 过滤背景区域（触及世界边界栅格边缘的区域）
+    const { minI, maxI, minJ, maxJ } = region.bounds;
+    const touchesWorldEdge = (minI === 0 || maxI === resolution - 1 || minJ === 0 || maxJ === resolution - 1);
+    if (touchesWorldEdge) {
+      console.log(`[computeRegionsExact] 跳过与世界边界相邻的区域 ${region.id}`);
+      continue;
+    }
+
+    const outerPoly = extractExactBoundary(
+      region.id,
+      shapes,
+      gridData,
+      scanlineCache,
+      verticalCache,
+      angleStepDeg
+    );
+
+    if (outerPoly.length >= 3 && !isFullWorldPolygon(outerPoly)) {
       polygons.push([outerPoly]);
     }
   }
 
   console.log(`[computeRegionsExact] 提取到 ${polygons.length} 个有效多边形`);
   return polygons;
+}
+
+// ========== 调试用 ==========
+export interface DebugRegionData {
+  id: number;
+  cellCount: number;
+  bounds: { minI: number; maxI: number; minJ: number; maxJ: number };
+  seed: Point;
+  boundaryPolygon: Point[];
+}
+
+export function getDebugRegions(
+  shapes: Shape[],
+  worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
+  resolution: number = 300
+): DebugRegionData[] {
+  console.log('[getDebugRegions] 开始获取调试区域数据...');
+  const gridData = computeGridRegions(shapes, worldBounds, resolution);
+  const scanlineCache = computeScanlineIntervals(gridData);
+  const verticalCache = computeVerticalIntervals(gridData);
+  console.log(`[getDebugRegions] 发现 ${gridData.regions.length} 个连通区域`);
+
+  const debugRegions: DebugRegionData[] = [];
+
+  for (const region of gridData.regions) {
+    const boundaryPolygon = extractExactBoundary(
+      region.id,
+      shapes,
+      gridData,
+      scanlineCache,
+      verticalCache,
+      1.0
+    );
+    debugRegions.push({
+      id: region.id,
+      cellCount: region.cells.length,
+      bounds: region.bounds,
+      seed: region.seed,
+      boundaryPolygon,
+    });
+    console.log(`[getDebugRegions] 区域${region.id}: cells=${region.cells.length}, boundaryPoints=${boundaryPolygon.length}`);
+  }
+
+  return debugRegions;
 }
