@@ -375,7 +375,7 @@ function getOutsideIdAroundPoint(
   return bestId;
 }
 
-// ========== 核心：收集边界点（新版本，无法线） ==========
+// ========== 核心：收集边界点（8方向 + 多数投票） ==========
 export interface BoundaryPoint {
   point: Point;
   insideId: number;
@@ -438,7 +438,7 @@ function buildClosedRing(points: Point[]): Point[] {
   if (points.length < 3) return [];
   const uniqueMap = new Map<string, Point>();
   for (const p of points) {
-    const key = `${Math.round(p.x*1e9)}_${Math.round(p.y*1e9)}`;
+    const key = `${Math.round(p.x * 1e9)}_${Math.round(p.y * 1e9)}`;
     if (!uniqueMap.has(key)) uniqueMap.set(key, p);
   }
   let unique = Array.from(uniqueMap.values());
@@ -448,24 +448,32 @@ function buildClosedRing(points: Point[]): Point[] {
   for (const p of unique) { cx += p.x; cy += p.y; }
   cx /= unique.length; cy /= unique.length;
 
-  unique.sort((a,b) => {
+  unique.sort((a, b) => {
     const angleA = Math.atan2(a.y - cy, a.x - cx);
     const angleB = Math.atan2(b.y - cy, b.x - cx);
     return angleA - angleB;
   });
 
-  if (Math.hypot(unique[0].x - unique[unique.length-1].x, unique[0].y - unique[unique.length-1].y) > 1e-6) {
+  if (Math.hypot(unique[0].x - unique[unique.length - 1].x, unique[0].y - unique[unique.length - 1].y) > 1e-6) {
     unique.push(unique[0]);
   }
   return unique;
 }
 
-// ========== 5. 主函数：计算所有封闭区域（外环+内孔） ==========
+function polygonArea(points: Point[]): number {
+  let area = 0;
+  const n = points.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    area += points[j].x * points[i].y - points[j].y * points[i].x;
+  }
+  return area / 2;
+}
+
+// ========== 5. 主函数：计算所有封闭区域（每个区域一个外环 + 多个内环） ==========
 export function computeRegionsExact(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 500,
-  _angleStepDeg: number = 1.0
+  resolution: number = 500
 ): Point[][][] {
   console.log('[computeRegionsExact] 开始区域检测...');
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
@@ -474,7 +482,7 @@ export function computeRegionsExact(
   const mainRegions = gridData.regions.filter(r => !r.touchesEdge && r.cells.length >= 10);
   console.log(`[computeRegionsExact] 其中主区域 ${mainRegions.length} 个`);
 
-  const allPolygons: Point[][][] = [];
+  const result: Point[][][] = [];
 
   for (const region of mainRegions) {
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
@@ -487,52 +495,43 @@ export function computeRegionsExact(
       groups.get(id)!.push(bp.point);
     }
 
-    const rings: { points: Point[]; area: number; outsideId: number }[] = [];
+    const rings: { points: Point[]; outsideId: number; area: number }[] = [];
     for (const [outsideId, pts] of groups.entries()) {
       if (pts.length < 3) continue;
       const ring = buildClosedRing(pts);
       if (ring.length >= 3) {
-        let area = 0;
-        for (let i = 0, j = ring.length-1; i < ring.length; j = i++) {
-          area += (ring[j].x * ring[i].y - ring[j].y * ring[i].x);
-        }
-        area /= 2;
-        rings.push({ points: ring, area, outsideId });
+        const area = polygonArea(ring);
+        rings.push({ points: ring, outsideId, area });
       }
     }
 
     if (rings.length === 0) continue;
 
-    let outerRing = rings.find(r => r.outsideId === -1 && r.area > 0);
+    const outerCandidates = rings.filter(r => r.outsideId === -1 && r.area > 0);
+    let outerRing = outerCandidates.length > 0 ? outerCandidates[0] : null;
+
     if (!outerRing) {
-      const positives = rings.filter(r => r.area > 0);
-      if (positives.length > 0) {
-        positives.sort((a,b) => b.area - a.area);
-        outerRing = positives[0];
+      const positiveRings = rings.filter(r => r.area > 0);
+      if (positiveRings.length > 0) {
+        positiveRings.sort((a, b) => b.area - a.area);
+        outerRing = positiveRings[0];
       }
     }
     if (!outerRing) continue;
 
-    let outerPoints = [...outerRing.points];
-    if (outerRing.area < 0) outerPoints.reverse();
+    if (outerRing.area < 0) {
+      outerRing.points.reverse();
+    }
 
-    const holes = rings.filter(r => r !== outerRing && r.area < 0).map(hole => {
-      let points = [...hole.points];
-      let area = 0;
-      for (let i = 0, j = points.length-1; i < points.length; j = i++) {
-        area += (points[j].x * points[i].y - points[j].y * points[i].x);
-      }
-      area /= 2;
-      if (area > 0) points.reverse();
-      return points;
-    });
+    const innerRings = rings.filter(r => r !== outerRing);
 
-    allPolygons.push([outerPoints, ...holes]);
-    console.log(`[computeRegionsExact] 区域 ${region.id}: 外环点数=${outerPoints.length}, 内孔数=${holes.length}`);
+    const regionPolygon: Point[][] = [outerRing.points, ...innerRings.map(r => r.points)];
+    result.push(regionPolygon);
+    console.log(`[computeRegionsExact] 区域 ${region.id}: 外环点数=${outerRing.points.length}, 内环数=${innerRings.length}`);
   }
 
-  console.log(`[computeRegionsExact] 最终得到 ${allPolygons.length} 个带孔多边形`);
-  return allPolygons;
+  console.log(`[computeRegionsExact] 最终得到 ${result.length} 个带孔多边形`);
+  return result;
 }
 
 // ========== 6. 调试辅助 ==========
