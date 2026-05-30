@@ -433,6 +433,24 @@ function collectBoundaryPointsForMainRegion(
   return Array.from(pointMap.values());
 }
 
+export function groupBoundaryPointsByOutsideId(
+  boundaryPoints: BoundaryPoint[]
+): Map<number, Point[]> {
+  const groups = new Map<number, Point[]>();
+
+  for (const bp of boundaryPoints) {
+    const { outsideId, point } = bp;
+    if (!groups.has(outsideId)) {
+      groups.set(outsideId, []);
+    }
+    groups.get(outsideId)!.push(point);
+  }
+
+  console.log(`[groupBoundaryPointsByOutsideId] outsideId组数=${groups.size}, 每组点数:`, Array.from(groups.values()).map(p => p.length));
+
+  return groups;
+}
+
 // ========== 4. 多边形构建（极角排序） ==========
 function buildClosedRing(points: Point[]): Point[] {
   if (points.length < 3) return [];
@@ -475,12 +493,8 @@ export function computeRegionsExact(
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
   resolution: number = 500
 ): Point[][][] {
-  console.log('[computeRegionsExact] 开始区域检测...');
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
-  console.log(`[computeRegionsExact] 共发现 ${gridData.regions.length} 个连通区域`);
-
   const mainRegions = gridData.regions.filter(r => !r.touchesEdge && r.cells.length >= 10);
-  console.log(`[computeRegionsExact] 其中主区域 ${mainRegions.length} 个`);
 
   const result: Point[][][] = [];
 
@@ -488,12 +502,8 @@ export function computeRegionsExact(
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
     if (boundaryPoints.length < 3) continue;
 
-    const groups = new Map<number, Point[]>();
-    for (const bp of boundaryPoints) {
-      const id = bp.outsideId;
-      if (!groups.has(id)) groups.set(id, []);
-      groups.get(id)!.push(bp.point);
-    }
+    const groups = groupBoundaryPointsByOutsideId(boundaryPoints);
+    console.log(`[computeRegionsExact] 区域${region.id}: outsideId组数=${groups.size}, 每组点数:`, Array.from(groups.values()).map(p => p.length));
 
     const rings: { points: Point[]; outsideId: number; area: number }[] = [];
     for (const [outsideId, pts] of groups.entries()) {
@@ -527,10 +537,8 @@ export function computeRegionsExact(
 
     const regionPolygon: Point[][] = [outerRing.points, ...innerRings.map(r => r.points)];
     result.push(regionPolygon);
-    console.log(`[computeRegionsExact] 区域 ${region.id}: 外环点数=${outerRing.points.length}, 内环数=${innerRings.length}`);
   }
 
-  console.log(`[computeRegionsExact] 最终得到 ${result.length} 个带孔多边形`);
   return result;
 }
 

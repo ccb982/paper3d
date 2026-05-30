@@ -818,92 +818,15 @@ export function MainCanvas() {
           yMin: axis.yMin,
           yMax: axis.yMax,
         };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 200);
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 300);
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
         debugRegions.forEach((region, idx) => {
+          console.log(`[调试绘制] region.id=${region.id}, boundaryPoints=${region.boundaryPoints.length}`);
+          if (region.id !== 3) return;
           ctx.save();
           const color = colors[idx % colors.length];
-
-          // 绘制区域色块填充
-          if (region.boundaryPolygon.length >= 3) {
-            ctx.fillStyle = color + '40'; // 添加40%透明度
-            const canvasPoly = region.boundaryPolygon.map(p => worldToCanvasFn(p.x, p.y));
-            ctx.beginPath();
-            ctx.moveTo(canvasPoly[0].x, canvasPoly[0].y);
-            for (let i = 1; i < canvasPoly.length; i++) {
-              ctx.lineTo(canvasPoly[i].x, canvasPoly[i].y);
-            }
-            ctx.closePath();
-            ctx.fill();
-          }
-
-          // 绘制边界多边形
-          if (region.boundaryPolygon.length >= 3) {
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.setLineDash([5, 3]);
-            const canvasPoly = region.boundaryPolygon.map(p => worldToCanvasFn(p.x, p.y));
-            ctx.beginPath();
-            ctx.moveTo(canvasPoly[0].x, canvasPoly[0].y);
-            for (let i = 1; i < canvasPoly.length; i++) {
-              ctx.lineTo(canvasPoly[i].x, canvasPoly[i].y);
-            }
-            ctx.closePath();
-            ctx.stroke();
-            ctx.setLineDash([]);
-          }
-
-          // 绘制种子点
-          const seedCanvas = worldToCanvasFn(region.seed.x, region.seed.y);
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.arc(seedCanvas.x, seedCanvas.y, 5, 0, Math.PI * 2);
-          ctx.fill();
-
-          // 绘制区域ID和cell数量
-          ctx.fillStyle = color;
-          ctx.font = '10px monospace';
-          ctx.fillText(`R${region.id}: ${region.cellCount}c`, seedCanvas.x + 8, seedCanvas.y - 5);
-
-          // 绘制射线
-          region.rays.forEach((ray: DebugRay) => {
-            const startCanvas = worldToCanvasFn(ray.start.x, ray.start.y);
-            const endCanvas = worldToCanvasFn(ray.end.x, ray.end.y);
-
-            // 根据 outsideId 选择颜色
-            const rayColor = ray.outsideId === -1 ? '#00ff00' : '#ff0000';
-
-            // 绘制射线起点
-            ctx.fillStyle = rayColor;
-            ctx.beginPath();
-            ctx.arc(startCanvas.x, startCanvas.y, 3, 0, Math.PI * 2);
-            ctx.fill();
-
-            // 绘制射线（从起点到交点）
-            ctx.strokeStyle = rayColor;
-            ctx.lineWidth = 1;
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.moveTo(startCanvas.x, startCanvas.y);
-            ctx.lineTo(endCanvas.x, endCanvas.y);
-            ctx.stroke();
-
-            // 绘制射线终点（交点）
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath();
-            ctx.arc(endCanvas.x, endCanvas.y, 4, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = rayColor;
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            // 绘制outsideId标签
-            ctx.fillStyle = rayColor;
-            ctx.font = '8px monospace';
-            ctx.fillText(`→${ray.outsideId}`, endCanvas.x + 5, endCanvas.y - 5);
-          });
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
           if (region.boundaryPoints && region.boundaryPoints.length > 0) {
@@ -916,32 +839,23 @@ export function MainCanvas() {
               outsideIdGroups.get(bp.outsideId)!.push(bp);
             }
 
-            // 为每个 outsideId 生成颜色
-            const outsideIdColors: Map<number, string> = new Map();
-            const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
-            let colorIndex = 0;
-            outsideIdGroups.forEach((_, id) => {
-              outsideIdColors.set(id, pointColors[colorIndex % pointColors.length]);
-              colorIndex++;
-            });
+            console.log(`[调试绘制] 区域3分组:`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
 
-            // 绘制每个边界点
+            // 只绘制点数为27的那个组
             for (const [outsideId, points] of outsideIdGroups) {
-              const color = outsideIdColors.get(outsideId) || '#ffffff';
-              ctx.fillStyle = color;
+              if (points.length !== 27) continue;
+              ctx.fillStyle = '#ff0000';
               ctx.strokeStyle = '#000000';
               ctx.lineWidth = 1;
 
               for (const bp of points) {
                 const canvasPoint = worldToCanvasFn(bp.point.x, bp.point.y);
-                // 绘制点（实心圆）
                 ctx.beginPath();
                 ctx.arc(canvasPoint.x, canvasPoint.y, 4, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.stroke();
 
-                // 绘制 outsideId 标签
-                ctx.fillStyle = color;
+                ctx.fillStyle = '#ff0000';
                 ctx.font = '7px monospace';
                 ctx.fillText(`o:${outsideId}`, canvasPoint.x + 6, canvasPoint.y - 6);
               }
