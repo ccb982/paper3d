@@ -780,18 +780,18 @@ export function MainCanvas() {
         ctx.fillStyle = 'rgba(24, 144, 255, 0.2)';
         ctx.strokeStyle = '#1890ff';
         ctx.lineWidth = 2;
+        ctx.beginPath();
         for (const ring of anno.polygon) {
           if (ring.length < 3) continue;
           const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
-          ctx.beginPath();
           ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
           for (let i = 1; i < canvasRing.length; i++) {
             ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
           }
           ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
         }
+        ctx.fill('evenodd');
+        ctx.stroke();
         const outerRing = anno.polygon[0];
         let minX = Infinity, minY = Infinity;
         for (const p of outerRing) {
