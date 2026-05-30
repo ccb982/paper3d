@@ -4,7 +4,7 @@ import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld } from '../utils/transform';
 import { findRegionByPoint } from '../utils/regionDetection';
-import { getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay } from '../utils/regionDetectionExact';
+import { getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -904,6 +904,49 @@ export function MainCanvas() {
             ctx.font = '8px monospace';
             ctx.fillText(`→${ray.outsideId}`, endCanvas.x + 5, endCanvas.y - 5);
           });
+
+          // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
+          if (region.boundaryPoints && region.boundaryPoints.length > 0) {
+            // 按 outsideId 分组
+            const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
+            for (const bp of region.boundaryPoints) {
+              if (!outsideIdGroups.has(bp.outsideId)) {
+                outsideIdGroups.set(bp.outsideId, []);
+              }
+              outsideIdGroups.get(bp.outsideId)!.push(bp);
+            }
+
+            // 为每个 outsideId 生成颜色
+            const outsideIdColors: Map<number, string> = new Map();
+            const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
+            let colorIndex = 0;
+            outsideIdGroups.forEach((_, id) => {
+              outsideIdColors.set(id, pointColors[colorIndex % pointColors.length]);
+              colorIndex++;
+            });
+
+            // 绘制每个边界点
+            for (const [outsideId, points] of outsideIdGroups) {
+              const color = outsideIdColors.get(outsideId) || '#ffffff';
+              ctx.fillStyle = color;
+              ctx.strokeStyle = '#000000';
+              ctx.lineWidth = 1;
+
+              for (const bp of points) {
+                const canvasPoint = worldToCanvasFn(bp.point.x, bp.point.y);
+                // 绘制点（实心圆）
+                ctx.beginPath();
+                ctx.arc(canvasPoint.x, canvasPoint.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+
+                // 绘制 outsideId 标签
+                ctx.fillStyle = color;
+                ctx.font = '7px monospace';
+                ctx.fillText(`o:${outsideId}`, canvasPoint.x + 6, canvasPoint.y - 6);
+              }
+            }
+          }
 
           ctx.restore();
         });
