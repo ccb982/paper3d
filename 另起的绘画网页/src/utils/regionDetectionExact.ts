@@ -549,6 +549,7 @@ export interface DebugRegionData {
   boundaryPolygon: Point[]; rays: DebugRay[];
   boundaryPoints: BoundaryPoint[];
   clusteredBoundaryPoints?: BoundaryPoint[];
+  stitchedCycles?: Point[][];
 }
 
 export function getDebugRegions(
@@ -584,6 +585,17 @@ export function getDebugRegions(
       console.log(`  新ID=${nid}, 点数=${pts.length}, 前3个点:`, pts.slice(0,3).map(p => `(${p.x.toFixed(4)},${p.y.toFixed(4)})`));
     }
 
+    const stitchThreshold = step * 2.0;
+    const segments: Point[][] = [];
+    for (const [, pts] of newGroups) {
+      if (pts.length >= 2) segments.push(pts);
+    }
+    const stitchedCycles = stitchSegmentsToCycles(segments, stitchThreshold);
+    console.log(`[调试] 区域 ${region.id} 拼接后环数: ${stitchedCycles.length}`);
+    for (let i = 0; i < stitchedCycles.length; i++) {
+      console.log(`  环${i}: ${stitchedCycles[i].length}个点`);
+    }
+
     let boundaryPolygon: Point[] = [];
     if (boundaryPoints.length >= 3) {
       const groups = new Map<number, Point[]>();
@@ -604,6 +616,7 @@ export function getDebugRegions(
       rays,
       boundaryPoints,
       clusteredBoundaryPoints: filteredClustered,
+      stitchedCycles,
     });
   }
   return debug;
@@ -902,4 +915,176 @@ export function reclusterBoundaryPointsByPolarAngle(
 
   console.log(`[reclusterBoundaryPointsByPolarAngle] 新生成片段数量: ${nextId - 1}`);
   return newBoundaryPoints;
+}
+
+// ========== 片段拼接成环算法（用于调试） ==========
+
+function distSq(p1: Point, p2: Point): number {
+  const dx = p1.x - p2.x, dy = p1.y - p2.y;
+  return dx*dx + dy*dy;
+}
+
+function deduplicatePoints(pts: Point[], threshold: number): Point[] {
+  if (pts.length <= 1) return pts;
+  const result: Point[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    if (distSq(result[result.length-1], pts[i]) > threshold * threshold) {
+      result.push(pts[i]);
+    }
+  }
+  return result;
+}
+
+function areSegmentsOverlapping(segA: Point[], segB: Point[], threshold: number): boolean {
+  const aFirst = segA[0], aLast = segA[segA.length-1];
+  const bFirst = segB[0], bLast = segB[segB.length-1];
+  const match1 = (distSq(aFirst, bFirst) < threshold*threshold && distSq(aLast, bLast) < threshold*threshold);
+  const match2 = (distSq(aFirst, bLast) < threshold*threshold && distSq(aLast, bFirst) < threshold*threshold);
+  if (!match1 && !match2) return false;
+  const steps = Math.min(5, Math.min(segA.length, segB.length));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const idxA = Math.floor(t * (segA.length-1));
+    const idxB = Math.floor(t * (segB.length-1));
+    if (distSq(segA[idxA], segB[idxB]) > threshold*threshold) return false;
+  }
+  return true;
+}
+
+function deduplicateSegments(segments: Point[][], threshold: number): Point[][] {
+  const keep = new Array(segments.length).fill(true);
+  for (let i = 0; i < segments.length; i++) {
+    if (!keep[i]) continue;
+    for (let j = i+1; j < segments.length; j++) {
+      if (!keep[j]) continue;
+      if (areSegmentsOverlapping(segments[i], segments[j], threshold)) {
+        if (segments[i].length >= segments[j].length) keep[j] = false;
+        else keep[i] = false;
+      }
+    }
+  }
+  return segments.filter((_, idx) => keep[idx]);
+}
+
+interface GraphNode {
+  id: number;
+  point: Point;
+}
+
+interface GraphEdge {
+  from: number;
+  to: number;
+  points: Point[];
+}
+
+function buildGraph(openSegments: Point[][], threshold: number): { nodes: GraphNode[], edges: GraphEdge[] } {
+  const rawEndpoints: Point[] = [];
+  for (const seg of openSegments) {
+    if (seg.length >= 2) {
+      rawEndpoints.push(seg[0]);
+      rawEndpoints.push(seg[seg.length-1]);
+    }
+  }
+
+  const nodes: GraphNode[] = [];
+  const endpointToNodeId = new Map<string, number>();
+  const eps = threshold * 0.5;
+  for (const p of rawEndpoints) {
+    const key = `${Math.round(p.x/eps)}_${Math.round(p.y/eps)}`;
+    if (!endpointToNodeId.has(key)) {
+      endpointToNodeId.set(key, nodes.length);
+      nodes.push({ id: nodes.length, point: p });
+    }
+  }
+
+  const edges: GraphEdge[] = [];
+  for (const seg of openSegments) {
+    if (seg.length < 2) continue;
+    const first = seg[0];
+    const last = seg[seg.length-1];
+    const key1 = `${Math.round(first.x/eps)}_${Math.round(first.y/eps)}`;
+    const key2 = `${Math.round(last.x/eps)}_${Math.round(last.y/eps)}`;
+    const fromId = endpointToNodeId.get(key1)!;
+    const toId = endpointToNodeId.get(key2)!;
+    if (fromId === toId) continue;
+    let pointsSeq = seg.slice();
+    if (distSq(nodes[fromId].point, first) > threshold) {
+      pointsSeq = seg.slice().reverse();
+    }
+    edges.push({ from: fromId, to: toId, points: pointsSeq });
+  }
+
+  return { nodes, edges };
+}
+
+function findCyclesFromGraph(edges: GraphEdge[], nodes: GraphNode[], threshold: number): Point[][] {
+  const adj = new Map<number, { to: number; edgeIdx: number; points: Point[] }[]>();
+  for (let i = 0; i < edges.length; i++) {
+    const e = edges[i];
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    adj.get(e.from)!.push({ to: e.to, edgeIdx: i, points: e.points });
+    if (!adj.has(e.to)) adj.set(e.to, []);
+    adj.get(e.to)!.push({ to: e.from, edgeIdx: i, points: e.points.slice().reverse() });
+  }
+
+  const usedEdge = new Array(edges.length).fill(false);
+  const cycles: Point[][] = [];
+
+  for (let startEdgeIdx = 0; startEdgeIdx < edges.length; startEdgeIdx++) {
+    if (usedEdge[startEdgeIdx]) continue;
+    const startEdge = edges[startEdgeIdx];
+    let currentNode = startEdge.from;
+    const pathPoints: Point[] = [];
+    const pathEdges: number[] = [];
+    pathPoints.push(nodes[currentNode].point);
+    const firstPoints = edges[startEdgeIdx].points;
+    pathPoints.push(...firstPoints.slice(1));
+    currentNode = edges[startEdgeIdx].to;
+    pathEdges.push(startEdgeIdx);
+    usedEdge[startEdgeIdx] = true;
+
+    let foundNext = true;
+    while (currentNode !== startEdge.from && foundNext) {
+      foundNext = false;
+      const neighbors = adj.get(currentNode) || [];
+      for (const nb of neighbors) {
+        if (!usedEdge[nb.edgeIdx]) {
+          usedEdge[nb.edgeIdx] = true;
+          pathEdges.push(nb.edgeIdx);
+          const nextPoints = edges[nb.edgeIdx].points;
+          pathPoints.push(...nextPoints.slice(1));
+          currentNode = edges[nb.edgeIdx].to;
+          foundNext = true;
+          break;
+        }
+      }
+    }
+
+    if (currentNode === startEdge.from && pathPoints.length >= 3) {
+      if (distSq(pathPoints[0], pathPoints[pathPoints.length-1]) > threshold*threshold) {
+        pathPoints.push(pathPoints[0]);
+      } else if (distSq(pathPoints[0], pathPoints[pathPoints.length-1]) < 1e-6) {
+        pathPoints.pop();
+      }
+      cycles.push(deduplicatePoints(pathPoints, threshold));
+    }
+  }
+  return cycles;
+}
+
+export function stitchSegmentsToCycles(segments: Point[][], threshold: number): Point[][] {
+  if (segments.length === 0) return [];
+  const uniqueSegments = deduplicateSegments(segments, threshold);
+  const selfCycles: Point[][] = [];
+  const openSegments: Point[][] = [];
+  for (const seg of uniqueSegments) {
+    if (seg.length >= 3 && distSq(seg[0], seg[seg.length-1]) < threshold*threshold) {
+      selfCycles.push(deduplicatePoints(seg, threshold));
+    } else {
+      openSegments.push(seg);
+    }
+  }
+  const { nodes, edges } = buildGraph(openSegments, threshold);
+  const graphCycles = findCyclesFromGraph(edges, nodes, threshold);
+  return [...selfCycles, ...graphCycles];
 }
