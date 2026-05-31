@@ -82,6 +82,8 @@ export function MainCanvas() {
   const [canvasSize, setCanvasSize] = useState(BASE_CANVAS_SIZE);
   const [showDebugRegions, setShowDebugRegions] = useState(false);
   const [showGridCells, setShowGridCells] = useState(false);
+  const [debugRegionId, setDebugRegionId] = useState(0);
+  const [debugOutsideId, setDebugOutsideId] = useState(-1);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -824,13 +826,13 @@ export function MainCanvas() {
 
         debugRegions.forEach((region, idx) => {
           console.log(`[调试绘制] region.id=${region.id}, boundaryPoints=${region.boundaryPoints.length}`);
-          if (region.id !== 3) return;
+          if (debugRegionId !== 0 && region.id !== debugRegionId) return;
           ctx.save();
           const color = colors[idx % colors.length];
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
           if (region.boundaryPoints && region.boundaryPoints.length > 0) {
-            // 按 outsideId 分组
+            // 按 outsideId 分组（使用当前正在用的分组算法）
             const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
             for (const bp of region.boundaryPoints) {
               if (!outsideIdGroups.has(bp.outsideId)) {
@@ -839,12 +841,17 @@ export function MainCanvas() {
               outsideIdGroups.get(bp.outsideId)!.push(bp);
             }
 
-            console.log(`[调试绘制] 区域3分组:`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
+            console.log(`[调试绘制] 区域${region.id}分组:`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
 
-            // 只绘制点数为27的那个组
+            const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
+            let colorIdx = 0;
+
+            // 绘制所有 outsideId 组的点
             for (const [outsideId, points] of outsideIdGroups) {
-              if (points.length !== 27) continue;
-              ctx.fillStyle = '#ff0000';
+              if (debugOutsideId !== -1 && outsideId !== debugOutsideId) continue;
+              const color = pointColors[colorIdx % pointColors.length];
+              colorIdx++;
+              ctx.fillStyle = color;
               ctx.strokeStyle = '#000000';
               ctx.lineWidth = 1;
 
@@ -855,7 +862,7 @@ export function MainCanvas() {
                 ctx.fill();
                 ctx.stroke();
 
-                ctx.fillStyle = '#ff0000';
+                ctx.fillStyle = color;
                 ctx.font = '7px monospace';
                 ctx.fillText(`o:${outsideId}`, canvasPoint.x + 6, canvasPoint.y - 6);
               }
@@ -1245,6 +1252,43 @@ export function MainCanvas() {
             onClick={handleCanvasClick}
             onDoubleClick={handleDoubleClick}
           />
+          {showDebugRegions && (
+            <div style={{
+              position: 'absolute',
+              top: 10,
+              right: 10,
+              background: 'rgba(0,0,0,0.8)',
+              color: '#fff',
+              padding: '8px 12px',
+              borderRadius: 4,
+              fontSize: 12,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              zIndex: 100,
+            }}>
+              <span>区域:</span>
+              <input
+                type="number"
+                min="0"
+                value={debugRegionId}
+                onChange={e => setDebugRegionId(Math.max(0, parseInt(e.target.value) || 0))}
+                style={{ width: 50, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugRegionId(prev => Math.max(0, prev - 1))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugRegionId(prev => prev + 1)} style={{ padding: '2px 6px' }}>+</button>
+              <span style={{ marginLeft: 8 }}>外部ID:</span>
+              <input
+                type="number"
+                value={debugOutsideId}
+                onChange={e => setDebugOutsideId(parseInt(e.target.value) || -1)}
+                style={{ width: 50, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugOutsideId(prev => prev - 1)} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugOutsideId(prev => prev + 1)} style={{ padding: '2px 6px' }}>+</button>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>(-1=全部)</span>
+            </div>
+          )}
         </div>
       </div>
       {pointAnnotationEditor && (

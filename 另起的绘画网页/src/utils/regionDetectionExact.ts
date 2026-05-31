@@ -548,6 +548,7 @@ export interface DebugRegionData {
   id: number; cellCount: number; bounds: any; seed: Point;
   boundaryPolygon: Point[]; rays: DebugRay[];
   boundaryPoints: BoundaryPoint[];
+  clusteredBoundaryPoints?: BoundaryPoint[];
 }
 
 export function getDebugRegions(
@@ -560,6 +561,29 @@ export function getDebugRegions(
   for (const region of gridData.regions) {
     if (region.touchesEdge) continue;
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
+
+    const step = Math.min(gridData.stepX, gridData.stepY);
+    const threshold = step * 1.5;
+
+    console.log(`\n[调试] 区域 ${region.id} (原始 outsideId 分组):`);
+    const rawGroups = groupBoundaryPointsByOutsideId(boundaryPoints);
+    for (const [oid, pts] of rawGroups.entries()) {
+      console.log(`  原始 outsideId=${oid}, 点数=${pts.length}`);
+    }
+
+    const clusteredMap = sortAndClusterBoundaryPointsByInsideId(boundaryPoints, threshold);
+    const clusteredBoundaryPoints = clusteredMap.get(region.id) || [];
+
+    console.log(`[调试] 区域 ${region.id} (新聚类后):`);
+    const newGroups = new Map<number, Point[]>();
+    for (const bp of clusteredBoundaryPoints) {
+      if (!newGroups.has(bp.outsideId)) newGroups.set(bp.outsideId, []);
+      newGroups.get(bp.outsideId)!.push(bp.point);
+    }
+    for (const [nid, pts] of newGroups.entries()) {
+      console.log(`  新ID=${nid}, 点数=${pts.length}, 前3个点:`, pts.slice(0,3).map(p => `(${p.x.toFixed(4)},${p.y.toFixed(4)})`));
+    }
+
     let boundaryPolygon: Point[] = [];
     if (boundaryPoints.length >= 3) {
       const groups = new Map<number, Point[]>();
@@ -579,12 +603,260 @@ export function getDebugRegions(
       boundaryPolygon,
       rays,
       boundaryPoints,
+      clusteredBoundaryPoints,
     });
   }
   return debug;
 }
 
 // 保留兼容旧代码的空函数
+// ========== 新增：点集排序与聚类（仅用于调试验证） ==========
+
+function orderPointsByAdjacency(points: Point[], threshold: number): Point[] {
+  if (points.length <= 1) return points;
+  const n = points.length;
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  const threshSq = threshold * threshold;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dx = points[i].x - points[j].x;
+      const dy = points[i].y - points[j].y;
+      if (dx * dx + dy * dy <= threshSq) {
+        adj[i].push(j);
+        adj[j].push(i);
+      }
+    }
+  }
+
+  let start = 0;
+  let foundEndpoint = false;
+  for (let i = 0; i < n; i++) {
+    if (adj[i].length === 1) { start = i; foundEndpoint = true; break; }
+  }
+  if (!foundEndpoint) {
+    for (let i = 0; i < n; i++) {
+      if (adj[i].length === 0) return [points[i]];
+    }
+    if (n > 0 && adj[0].length > 1) start = 0;
+    else return points;
+  }
+
+  const path: number[] = [start];
+  let prev = -1;
+  let cur = start;
+  for (let iter = 0; iter < n * 2; iter++) {
+    const nexts = adj[cur].filter(nb => nb !== prev);
+    if (nexts.length === 0) break;
+    const next = nexts[0];
+    if (next === start && path.length > 1) break;
+    path.push(next);
+    prev = cur;
+    cur = next;
+  }
+  if (path.length > 2 && points[path[0]] === points[path[path.length-1]]) path.pop();
+  return path.map(idx => points[idx]);
+}
+
+export function sortAndClusterBoundaryPoints(
+  boundaryPoints: BoundaryPoint[],
+  threshold: number
+): BoundaryPoint[] {
+  if (boundaryPoints.length === 0) return [];
+
+  const groupsByOriginalId = new Map<number, BoundaryPoint[]>();
+  for (const bp of boundaryPoints) {
+    if (!groupsByOriginalId.has(bp.outsideId)) {
+      groupsByOriginalId.set(bp.outsideId, []);
+    }
+    groupsByOriginalId.get(bp.outsideId)!.push(bp);
+  }
+
+  const newBoundaryPoints: BoundaryPoint[] = [];
+  let nextNewId = 1;
+
+  for (const [, pointsInGroup] of groupsByOriginalId) {
+    const rawPoints = pointsInGroup.map(bp => bp.point);
+    const n = rawPoints.length;
+    if (n < 3) continue;
+
+    const adjLocal: number[][] = Array.from({ length: n }, () => []);
+    const threshSq = threshold * threshold;
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = rawPoints[i].x - rawPoints[j].x;
+        const dy = rawPoints[i].y - rawPoints[j].y;
+        if (dx * dx + dy * dy <= threshSq) {
+          adjLocal[i].push(j);
+          adjLocal[j].push(i);
+        }
+      }
+    }
+
+    const visited = new Array(n).fill(false);
+    const components: number[][] = [];
+
+    for (let i = 0; i < n; i++) {
+      if (!visited[i]) {
+        const queue: number[] = [i];
+        visited[i] = true;
+        const comp: number[] = [i];
+        while (queue.length) {
+          const cur = queue.shift()!;
+          for (const nb of adjLocal[cur]) {
+            if (!visited[nb]) {
+              visited[nb] = true;
+              queue.push(nb);
+              comp.push(nb);
+            }
+          }
+        }
+        components.push(comp);
+      }
+    }
+
+    for (const comp of components) {
+      if (comp.length < 3) continue;
+      const compPoints = comp.map(idx => rawPoints[idx]);
+      const orderedPoints = orderPointsByAdjacency(compPoints, threshold);
+      if (orderedPoints.length < 3) continue;
+
+      const newId = nextNewId++;
+      for (let idx = 0; idx < orderedPoints.length; idx++) {
+        const pt = orderedPoints[idx];
+        const origBp = pointsInGroup.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
+        if (origBp) {
+          newBoundaryPoints.push({
+            point: pt,
+            insideId: origBp.insideId,
+            outsideId: newId,
+          });
+        }
+      }
+    }
+  }
+
+  console.log(`[sortAndClusterBoundaryPoints] 生成了 ${nextNewId - 1} 个有序片段`);
+  return newBoundaryPoints;
+}
+
 export interface ScanlineSpan { y: number; xMin: number; xMax: number; }
 export type ScanlineCache = Record<number, ScanlineSpan[]>;
 export function computeScanlineIntervals(gridData: GridData): ScanlineCache { return {}; }
+
+// ============================================================================
+// 新增：基于 insideId 的边界点聚类与排序（用于调试验证，不影响原有区域构建）
+// ============================================================================
+
+function splitAndSortPointsInGroup(pointsInGroup: BoundaryPoint[], threshold: number): Point[][] {
+  if (pointsInGroup.length < 3) return [];
+
+  const rawPoints = pointsInGroup.map(bp => bp.point);
+  const n = rawPoints.length;
+
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  const threshSq = threshold * threshold;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const dx = rawPoints[i].x - rawPoints[j].x;
+      const dy = rawPoints[i].y - rawPoints[j].y;
+      if (dx * dx + dy * dy <= threshSq) {
+        adj[i].push(j);
+        adj[j].push(i);
+      }
+    }
+  }
+
+  const visited = new Array(n).fill(false);
+  const components: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    if (!visited[i]) {
+      const queue: number[] = [i];
+      visited[i] = true;
+      const comp: number[] = [i];
+      while (queue.length) {
+        const cur = queue.shift()!;
+        for (const nb of adj[cur]) {
+          if (!visited[nb]) {
+            visited[nb] = true;
+            queue.push(nb);
+            comp.push(nb);
+          }
+        }
+      }
+      components.push(comp);
+    }
+  }
+
+  const result: Point[][] = [];
+  for (const comp of components) {
+    if (comp.length < 3) continue;
+    const compPoints = comp.map(idx => rawPoints[idx]);
+    const ordered = orderPointsByAdjacency(compPoints, threshold);
+    if (ordered.length >= 3) {
+      result.push(ordered);
+    }
+  }
+  return result;
+}
+
+function getNextAvailableId(usedIds: Set<number>, start: number): number {
+  let id = start;
+  while (usedIds.has(id)) {
+    id++;
+  }
+  return id;
+}
+
+export function sortAndClusterBoundaryPointsByInsideId(
+  boundaryPoints: BoundaryPoint[],
+  threshold: number
+): Map<number, BoundaryPoint[]> {
+  if (boundaryPoints.length === 0) return new Map();
+
+  const byInsideId = new Map<number, BoundaryPoint[]>();
+  for (const bp of boundaryPoints) {
+    if (!byInsideId.has(bp.insideId)) {
+      byInsideId.set(bp.insideId, []);
+    }
+    byInsideId.get(bp.insideId)!.push(bp);
+  }
+
+  const usedIds = new Set<number>();
+  for (const bp of boundaryPoints) {
+    usedIds.add(bp.insideId);
+    usedIds.add(bp.outsideId);
+  }
+
+  let nextNewId = 1;
+  nextNewId = getNextAvailableId(usedIds, nextNewId);
+
+  const resultMap = new Map<number, BoundaryPoint[]>();
+
+  for (const [insideId, groupPoints] of byInsideId.entries()) {
+    const fragments = splitAndSortPointsInGroup(groupPoints, threshold);
+    const newPointsForThisInsideId: BoundaryPoint[] = [];
+
+    for (const fragment of fragments) {
+      const newId = nextNewId;
+      nextNewId = getNextAvailableId(usedIds, nextNewId + 1);
+
+      for (const pt of fragment) {
+        const orig = groupPoints.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
+        if (orig) {
+          newPointsForThisInsideId.push({
+            point: pt,
+            insideId: insideId,
+            outsideId: newId,
+          });
+        }
+      }
+    }
+
+    if (newPointsForThisInsideId.length > 0) {
+      resultMap.set(insideId, newPointsForThisInsideId);
+    }
+  }
+
+  console.log(`[sortAndClusterBoundaryPointsByInsideId] 生成了 ${nextNewId - 1} 个有序片段`);
+  return resultMap;
+}
