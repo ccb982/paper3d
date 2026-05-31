@@ -84,6 +84,7 @@ export function MainCanvas() {
   const [showGridCells, setShowGridCells] = useState(false);
   const [debugRegionId, setDebugRegionId] = useState(0);
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
+  const [debugShowOriginal, setDebugShowOriginal] = useState(true);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -832,16 +833,19 @@ export function MainCanvas() {
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
           if (region.boundaryPoints && region.boundaryPoints.length > 0) {
-            // 按 outsideId 分组（使用当前正在用的分组算法）
+            // 按 outsideId 分组
+            const debugPoints = debugShowOriginal
+              ? region.boundaryPoints
+              : (region.clusteredBoundaryPoints || region.boundaryPoints);
             const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
-            for (const bp of region.boundaryPoints) {
+            for (const bp of debugPoints) {
               if (!outsideIdGroups.has(bp.outsideId)) {
                 outsideIdGroups.set(bp.outsideId, []);
               }
               outsideIdGroups.get(bp.outsideId)!.push(bp);
             }
 
-            console.log(`[调试绘制] 区域${region.id}分组:`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
+            console.log(`[调试绘制] 区域${region.id}分组(${debugShowOriginal ? '原始' : '新聚类'}):`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
 
             const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
             let colorIdx = 0;
@@ -1287,6 +1291,18 @@ export function MainCanvas() {
               <button onClick={() => setDebugOutsideId(prev => prev - 1)} style={{ padding: '2px 6px' }}>-</button>
               <button onClick={() => setDebugOutsideId(prev => prev + 1)} style={{ padding: '2px 6px' }}>+</button>
               <span style={{ fontSize: 10, opacity: 0.7 }}>(-1=全部)</span>
+              <span style={{ marginLeft: 12 }}>原始:</span>
+              <button
+                onClick={() => setDebugShowOriginal(prev => !prev)}
+                style={{
+                  padding: '2px 6px',
+                  background: debugShowOriginal ? '#4CAF50' : '#666',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 3,
+                  fontSize: 11,
+                }}
+              >{debugShowOriginal ? '是' : '否'}</button>
             </div>
           )}
         </div>
