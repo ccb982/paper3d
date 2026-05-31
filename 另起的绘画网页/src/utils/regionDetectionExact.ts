@@ -571,12 +571,12 @@ export function getDebugRegions(
       console.log(`  原始 outsideId=${oid}, 点数=${pts.length}`);
     }
 
-    const clusteredMap = sortAndClusterBoundaryPointsByInsideId(boundaryPoints, threshold);
-    const clusteredBoundaryPoints = clusteredMap.get(region.id) || [];
+    const clusteredBoundaryPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 20.0);
+    const filteredClustered = clusteredBoundaryPoints.filter(bp => bp.insideId === region.id);
 
     console.log(`[调试] 区域 ${region.id} (新聚类后):`);
     const newGroups = new Map<number, Point[]>();
-    for (const bp of clusteredBoundaryPoints) {
+    for (const bp of filteredClustered) {
       if (!newGroups.has(bp.outsideId)) newGroups.set(bp.outsideId, []);
       newGroups.get(bp.outsideId)!.push(bp.point);
     }
@@ -603,7 +603,7 @@ export function getDebugRegions(
       boundaryPolygon,
       rays,
       boundaryPoints,
-      clusteredBoundaryPoints,
+      clusteredBoundaryPoints: filteredClustered,
     });
   }
   return debug;
@@ -807,56 +807,99 @@ function getNextAvailableId(usedIds: Set<number>, start: number): number {
   return id;
 }
 
-export function sortAndClusterBoundaryPointsByInsideId(
-  boundaryPoints: BoundaryPoint[],
-  threshold: number
-): Map<number, BoundaryPoint[]> {
-  if (boundaryPoints.length === 0) return new Map();
+function splitByPolarAngleAndDistance(points: Point[], gapFactor: number): Point[][] {
+  if (points.length <= 2) return [points];
 
-  const byInsideId = new Map<number, BoundaryPoint[]>();
-  for (const bp of boundaryPoints) {
-    if (!byInsideId.has(bp.insideId)) {
-      byInsideId.set(bp.insideId, []);
+  let cx = 0, cy = 0;
+  for (const p of points) { cx += p.x; cy += p.y; }
+  cx /= points.length;
+  cy /= points.length;
+
+  const sorted = [...points];
+  sorted.sort((a, b) => {
+    const angleA = Math.atan2(a.y - cy, a.x - cx);
+    const angleB = Math.atan2(b.y - cy, b.x - cx);
+    return angleA - angleB;
+  });
+
+  const n = sorted.length;
+  const dists: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    dists.push(Math.hypot(sorted[i+1].x - sorted[i].x, sorted[i+1].y - sorted[i].y));
+  }
+  const lastDist = Math.hypot(sorted[n-1].x - sorted[0].x, sorted[n-1].y - sorted[0].y);
+
+  const allDists = [...dists, lastDist];
+  allDists.sort((a,b) => a-b);
+  const median = allDists[Math.floor(allDists.length / 2)];
+  const threshold = Math.max(median * gapFactor, 1e-6);
+
+  const cuts: number[] = [];
+  for (let i = 0; i < dists.length; i++) {
+    if (dists[i] > threshold) cuts.push(i + 1);
+  }
+
+  const segments: Point[][] = [];
+  let start = 0;
+  for (const cut of cuts) {
+    if (cut > start) {
+      segments.push(sorted.slice(start, cut));
+      start = cut;
     }
-    byInsideId.get(bp.insideId)!.push(bp);
+  }
+  if (start < n) {
+    segments.push(sorted.slice(start, n));
   }
 
-  const usedIds = new Set<number>();
+  return segments;
+}
+
+export function reclusterBoundaryPointsByPolarAngle(
+  boundaryPoints: BoundaryPoint[],
+  gapFactor: number = 2.5
+): BoundaryPoint[] {
+  if (boundaryPoints.length === 0) return [];
+
+  const byInside = new Map<number, BoundaryPoint[]>();
   for (const bp of boundaryPoints) {
-    usedIds.add(bp.insideId);
-    usedIds.add(bp.outsideId);
+    if (!byInside.has(bp.insideId)) byInside.set(bp.insideId, []);
+    byInside.get(bp.insideId)!.push(bp);
   }
 
-  let nextNewId = 1;
-  nextNewId = getNextAvailableId(usedIds, nextNewId);
+  const newBoundaryPoints: BoundaryPoint[] = [];
+  let nextId = 1;
 
-  const resultMap = new Map<number, BoundaryPoint[]>();
+  for (const [insideId, insidePoints] of byInside) {
+    const byOriginalOutside = new Map<number, BoundaryPoint[]>();
+    for (const bp of insidePoints) {
+      const oid = bp.outsideId;
+      if (!byOriginalOutside.has(oid)) byOriginalOutside.set(oid, []);
+      byOriginalOutside.get(oid)!.push(bp);
+    }
 
-  for (const [insideId, groupPoints] of byInsideId.entries()) {
-    const fragments = splitAndSortPointsInGroup(groupPoints, threshold);
-    const newPointsForThisInsideId: BoundaryPoint[] = [];
+    for (const [origOutsideId, group] of byOriginalOutside) {
+      const points = group.map(bp => bp.point);
+      const segments = splitByPolarAngleAndDistance(points, gapFactor);
 
-    for (const fragment of fragments) {
-      const newId = nextNewId;
-      nextNewId = getNextAvailableId(usedIds, nextNewId + 1);
-
-      for (const pt of fragment) {
-        const orig = groupPoints.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
-        if (orig) {
-          newPointsForThisInsideId.push({
-            point: pt,
-            insideId: insideId,
-            outsideId: newId,
-          });
+      for (const seg of segments) {
+        if (seg.length === 0) continue;
+        const newOutsideId = nextId++;
+        for (const pt of seg) {
+          const orig = group.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
+          if (orig) {
+            newBoundaryPoints.push({
+              point: pt,
+              insideId: insideId,
+              outsideId: newOutsideId,
+            });
+          } else {
+            newBoundaryPoints.push({ point: pt, insideId: insideId, outsideId: newOutsideId });
+          }
         }
       }
     }
-
-    if (newPointsForThisInsideId.length > 0) {
-      resultMap.set(insideId, newPointsForThisInsideId);
-    }
   }
 
-  console.log(`[sortAndClusterBoundaryPointsByInsideId] 生成了 ${nextNewId - 1} 个有序片段`);
-  return resultMap;
+  console.log(`[reclusterBoundaryPointsByPolarAngle] 新生成片段数量: ${nextId - 1}`);
+  return newBoundaryPoints;
 }
