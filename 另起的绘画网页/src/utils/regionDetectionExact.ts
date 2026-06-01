@@ -446,8 +446,6 @@ export function groupBoundaryPointsByOutsideId(
     groups.get(outsideId)!.push(point);
   }
 
-  console.log(`[groupBoundaryPointsByOutsideId] outsideId组数=${groups.size}, 每组点数:`, Array.from(groups.values()).map(p => p.length));
-
   return groups;
 }
 
@@ -503,7 +501,6 @@ export function computeRegionsExact(
     if (boundaryPoints.length < 3) continue;
 
     const groups = groupBoundaryPointsByOutsideId(boundaryPoints);
-    console.log(`[computeRegionsExact] 区域${region.id}: outsideId组数=${groups.size}, 每组点数:`, Array.from(groups.values()).map(p => p.length));
 
     const rings: { points: Point[]; outsideId: number; area: number }[] = [];
     for (const [outsideId, pts] of groups.entries()) {
@@ -549,6 +546,7 @@ export interface DebugRegionData {
   boundaryPolygon: Point[]; rays: DebugRay[];
   boundaryPoints: BoundaryPoint[];
   clusteredBoundaryPoints?: BoundaryPoint[];
+  rings?: Point[][];
 }
 
 export function getDebugRegions(
@@ -565,23 +563,43 @@ export function getDebugRegions(
     const step = Math.min(gridData.stepX, gridData.stepY);
     const threshold = step * 1.5;
 
-    console.log(`\n[调试] 区域 ${region.id} (原始 outsideId 分组):`);
     const rawGroups = groupBoundaryPointsByOutsideId(boundaryPoints);
-    for (const [oid, pts] of rawGroups.entries()) {
-      console.log(`  原始 outsideId=${oid}, 点数=${pts.length}`);
-    }
 
     const clusteredBoundaryPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 20.0, 0.008);
     const filteredClustered = clusteredBoundaryPoints.filter(bp => bp.insideId === region.id);
 
-    console.log(`[调试] 区域 ${region.id} (新聚类后):`);
     const newGroups = new Map<number, Point[]>();
     for (const bp of filteredClustered) {
       if (!newGroups.has(bp.outsideId)) newGroups.set(bp.outsideId, []);
       newGroups.get(bp.outsideId)!.push(bp.point);
     }
-    for (const [nid, pts] of newGroups.entries()) {
-      console.log(`  新ID=${nid}, 点数=${pts.length}, 前3个点:`, pts.slice(0,3).map(p => `(${p.x.toFixed(4)},${p.y.toFixed(4)})`));
+
+    // 使用鲁棒的最近邻生长算法构建环
+    const allPoints: Point[] = [];
+    for (const points of newGroups.values()) {
+      allPoints.push(...points);
+    }
+    // 全局去重
+    const uniqueMap = new Map<string, Point>();
+    for (const p of allPoints) {
+      const key = `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
+      if (!uniqueMap.has(key)) uniqueMap.set(key, p);
+    }
+    const uniquePoints: Point[] = Array.from(uniqueMap.values());
+    
+    const ringsFromSegments = buildRingsByPointWalking(uniquePoints, 0.01);
+    console.log(`[调试] 区域 ${region.id} 拼接成环数量: ${ringsFromSegments.length}`);
+    ringsFromSegments.forEach((ring, idx) => {
+      console.log(`  环${idx}: ${ring.length} 个顶点`);
+    });
+
+    // 如果没有生成环，使用原始边界点构建一个环作为备用
+    if (ringsFromSegments.length === 0 && uniquePoints.length >= 3) {
+      const fallbackRing = buildClosedRing(uniquePoints);
+      if (fallbackRing.length >= 3) {
+        ringsFromSegments.push(fallbackRing);
+        console.log(`[调试] 区域 ${region.id} 使用备用环: ${fallbackRing.length} 个顶点`);
+      }
     }
 
     let boundaryPolygon: Point[] = [];
@@ -604,6 +622,7 @@ export function getDebugRegions(
       rays,
       boundaryPoints,
       clusteredBoundaryPoints: filteredClustered,
+      rings: ringsFromSegments,
     });
   }
   return debug;
@@ -936,4 +955,213 @@ export function reclusterBoundaryPointsByPolarAngle(
 
   console.log(`[reclusterBoundaryPointsByPolarAngle] 新生成片段数量: ${nextId - 1}`);
   return newBoundaryPoints;
+}
+
+interface RingSegment {
+  id: number;
+  points: Point[];
+  start: Point;
+  end: Point;
+}
+
+interface RingEndpoint {
+  segId: number;
+  isStart: boolean;
+  point: Point;
+}
+
+/**
+ * 从新的分组（每个 outsideId 对应一个有序片段）构建完整的闭合环
+ * @param groupedPoints Map<outsideId, Point[]> 每个 outsideId 内的点已经按顺序排列
+ * @param distanceThreshold 端点匹配的距离阈值（世界单位）
+ * @returns 闭合环列表，每个环是 Point[]（首尾闭合）
+ */
+export function buildRingsFromSegments(
+  groupedPoints: Map<number, Point[]>,
+  distanceThreshold: number = 0.1
+): Point[][] {
+  const segments: RingSegment[] = [];
+  for (const [id, points] of groupedPoints) {
+    if (points.length < 2) continue;
+    segments.push({
+      id,
+      points: points,
+      start: points[0],
+      end: points[points.length - 1],
+    });
+  }
+
+  if (segments.length === 0) return [];
+
+  const endpoints: RingEndpoint[] = [];
+  for (const seg of segments) {
+    endpoints.push({ segId: seg.id, isStart: true, point: seg.start });
+    endpoints.push({ segId: seg.id, isStart: false, point: seg.end });
+  }
+
+  const usedEndpoint = new Set<number>();
+  const matchMap = new Map<number, number>();
+  const threshSq = distanceThreshold * distanceThreshold;
+
+  for (let i = 0; i < endpoints.length; i++) {
+    if (usedEndpoint.has(i)) continue;
+    let bestIdx = -1;
+    let bestDistSq = Infinity;
+    for (let j = 0; j < endpoints.length; j++) {
+      if (i === j || usedEndpoint.has(j)) continue;
+      if (endpoints[i].segId === endpoints[j].segId) continue;
+      const dx = endpoints[i].point.x - endpoints[j].point.x;
+      const dy = endpoints[i].point.y - endpoints[j].point.y;
+      const distSq = dx * dx + dy * dy;
+      if (distSq < bestDistSq && distSq <= threshSq) {
+        bestDistSq = distSq;
+        bestIdx = j;
+      }
+    }
+    if (bestIdx !== -1) {
+      matchMap.set(i, bestIdx);
+      matchMap.set(bestIdx, i);
+      usedEndpoint.add(i);
+      usedEndpoint.add(bestIdx);
+    }
+  }
+
+  const usedSegment = new Set<number>();
+  const rings: Point[][] = [];
+
+  for (const seg of segments) {
+    if (usedSegment.has(seg.id)) continue;
+
+    let startEndpointIdx = endpoints.findIndex(
+      ep => ep.segId === seg.id && ep.isStart === true
+    );
+    if (startEndpointIdx === -1) continue;
+
+    const ringPoints: Point[] = [];
+    let currentIdx = startEndpointIdx;
+
+    while (!usedSegment.has(endpoints[currentIdx].segId)) {
+      const ep = endpoints[currentIdx];
+      const currentSeg = segments.find(s => s.id === ep.segId)!;
+      usedSegment.add(currentSeg.id);
+
+      if (ep.isStart) {
+        for (let i = 0; i < currentSeg.points.length; i++) {
+          ringPoints.push(currentSeg.points[i]);
+        }
+      } else {
+        for (let i = currentSeg.points.length - 1; i >= 0; i--) {
+          ringPoints.push(currentSeg.points[i]);
+        }
+      }
+
+      const matchedIdx = matchMap.get(currentIdx);
+      if (matchedIdx === undefined) break;
+      currentIdx = matchedIdx;
+      if (currentIdx === startEndpointIdx) break;
+    }
+
+    if (ringPoints.length >= 3) {
+      const firstPt = ringPoints[0];
+      const lastPt = ringPoints[ringPoints.length - 1];
+      if (Math.hypot(firstPt.x - lastPt.x, firstPt.y - lastPt.y) > distanceThreshold) {
+        ringPoints.push(firstPt);
+      }
+      rings.push(ringPoints);
+    }
+  }
+
+  return rings;
+}
+
+/**
+ * 鲁棒的最近邻生长环构建算法
+ * @param allPoints 所有点（已去重）
+ * @param distanceThreshold 最近邻距离阈值（世界单位）
+ * @returns 闭合环数组
+ */
+export function buildRingsByPointWalking(
+  allPoints: Point[],
+  distanceThreshold: number = 0.1
+): Point[][] {
+  if (allPoints.length < 3) return [];
+
+  let remainingIndices = new Set<number>(allPoints.map((_, idx) => idx));
+  const rings: Point[][] = [];
+
+  const distSq = (a: Point, b: Point) => {
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return dx * dx + dy * dy;
+  };
+
+  while (remainingIndices.size >= 3) {
+    let startIdx: number | null = null;
+    for (const idx of remainingIndices) {
+      startIdx = idx;
+      break;
+    }
+    if (startIdx === null) break;
+
+    const pathIndices: number[] = [startIdx];
+    remainingIndices.delete(startIdx);
+
+    let currentIdx = startIdx;
+    let closed = false;
+    let maxAttempts = remainingIndices.size + 10;
+    let attempts = 0;
+
+    while (!closed && attempts < maxAttempts && remainingIndices.size > 0) {
+      let bestIdx: number | null = null;
+      let bestDistSq = Infinity;
+      const currentPoint = allPoints[currentIdx];
+      for (const idx of remainingIndices) {
+        const d2 = distSq(currentPoint, allPoints[idx]);
+        if (d2 < bestDistSq) {
+          bestDistSq = d2;
+          bestIdx = idx;
+        }
+      }
+
+      if (bestIdx === null) break;
+      const nearestDist = Math.sqrt(bestDistSq);
+      const startPoint = allPoints[startIdx];
+      const toStart = Math.hypot(allPoints[bestIdx].x - startPoint.x, allPoints[bestIdx].y - startPoint.y);
+
+      if (toStart <= distanceThreshold && pathIndices.length >= 2) {
+        closed = true;
+        break;
+      } else if (nearestDist <= distanceThreshold) {
+        pathIndices.push(bestIdx);
+        remainingIndices.delete(bestIdx);
+        currentIdx = bestIdx;
+      } else {
+        break;
+      }
+      attempts++;
+    }
+
+    if (!closed && pathIndices.length >= 3) {
+      const lastPoint = allPoints[pathIndices[pathIndices.length - 1]];
+      const startPoint = allPoints[startIdx];
+      if (Math.hypot(lastPoint.x - startPoint.x, lastPoint.y - startPoint.y) <= distanceThreshold) {
+        closed = true;
+      }
+    }
+
+    if (closed && pathIndices.length >= 3) {
+      const ringPoints = pathIndices.map(idx => allPoints[idx]);
+      const last = ringPoints[ringPoints.length - 1];
+      const first = ringPoints[0];
+      if (Math.hypot(last.x - first.x, last.y - first.y) > distanceThreshold) {
+        ringPoints.push(first);
+      }
+      rings.push(ringPoints);
+    } else {
+      for (let i = 1; i < pathIndices.length; i++) {
+        remainingIndices.add(pathIndices[i]);
+      }
+    }
+  }
+
+  return rings;
 }

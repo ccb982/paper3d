@@ -873,6 +873,33 @@ export function MainCanvas() {
             }
           }
 
+          // 绘制环（仅在非原始模式下显示）
+          if (!debugShowOriginal && region.rings && region.rings.length > 0) {
+            const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+            region.rings.forEach((ring, ringIdx) => {
+              if (ring.length < 3) return;
+              const ringColor = ringColors[ringIdx % ringColors.length];
+              ctx.strokeStyle = ringColor;
+              ctx.fillStyle = ringColor + '30';
+              ctx.lineWidth = 3;
+              ctx.beginPath();
+              for (let i = 0; i < ring.length; i++) {
+                const cp = worldToCanvasFn(ring[i].x, ring[i].y);
+                if (i === 0) ctx.moveTo(cp.x, cp.y);
+                else ctx.lineTo(cp.x, cp.y);
+              }
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+
+              const midIdx = Math.floor(ring.length / 2);
+              const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
+              ctx.fillStyle = ringColor;
+              ctx.font = 'bold 12px monospace';
+              ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
+            });
+          }
+
           ctx.restore();
         });
 
