@@ -571,7 +571,7 @@ export function getDebugRegions(
       console.log(`  原始 outsideId=${oid}, 点数=${pts.length}`);
     }
 
-    const clusteredBoundaryPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 20.0);
+    const clusteredBoundaryPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 20.0, 0.008);
     const filteredClustered = clusteredBoundaryPoints.filter(bp => bp.insideId === region.id);
 
     console.log(`[调试] 区域 ${region.id} (新聚类后):`);
@@ -854,9 +854,39 @@ function splitByPolarAngleAndDistance(points: Point[], gapFactor: number): Point
   return segments;
 }
 
+/**
+ * 对点集进行距离去重
+ * @param points 原始点数组
+ * @param threshold 距离阈值，小于此值的点被视为重复
+ * @returns 去重后的点数组（保持原顺序，保留第一个遇到的点）
+ */
+function deduplicatePointsByDistance(points: Point[], threshold: number): Point[] {
+  if (points.length <= 1) return points.slice();
+
+  const result: Point[] = [];
+  const threshSq = threshold * threshold;
+
+  for (const p of points) {
+    let isDuplicate = false;
+    for (const kept of result) {
+      const dx = p.x - kept.x;
+      const dy = p.y - kept.y;
+      if (dx * dx + dy * dy < threshSq) {
+        isDuplicate = true;
+        break;
+      }
+    }
+    if (!isDuplicate) {
+      result.push(p);
+    }
+  }
+  return result;
+}
+
 export function reclusterBoundaryPointsByPolarAngle(
   boundaryPoints: BoundaryPoint[],
-  gapFactor: number = 2.5
+  gapFactor: number = 2.5,
+  dedupThreshold: number = 5.0
 ): BoundaryPoint[] {
   if (boundaryPoints.length === 0) return [];
 
@@ -883,8 +913,12 @@ export function reclusterBoundaryPointsByPolarAngle(
 
       for (const seg of segments) {
         if (seg.length === 0) continue;
+        // 对每个片段内的点去重
+        const dedupedSeg = deduplicatePointsByDistance(seg, dedupThreshold);
+        if (dedupedSeg.length === 0) continue;
+        
         const newOutsideId = nextId++;
-        for (const pt of seg) {
+        for (const pt of dedupedSeg) {
           const orig = group.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
           if (orig) {
             newBoundaryPoints.push({
