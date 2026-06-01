@@ -477,18 +477,18 @@ function buildClosedRing(points: Point[]): Point[] {
 }
 
 /**
- * 改进的多边形构建算法 - 通过距离分组识别多个环（外框和孔洞）
+ * 基于极角排序和距离突变的分组构建环（改进版）
  * @param points 无序点集
- * @param distanceThreshold 距离突变阈值（相对于平均距离的比例，默认0.3即30%）
- * @returns 闭合环数组，每个环是Point[]
+ * @param distanceThresholdFactor 距离突变阈值因子（相对于平均距离的比例，默认0.3）
+ * @returns 闭合环数组
  */
-function buildClosedRingsByDistanceGrouping(points: Point[], distanceThreshold: number = 0.3): Point[][] {
+function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFactor: number = 0.3): Point[][] {
   if (points.length < 3) return [];
 
-  // 1. 去重
+  // 1. 去重（基于坐标精度）
   const uniqueMap = new Map<string, Point>();
   for (const p of points) {
-    const key = `${Math.round(p.x * 1e9)}_${Math.round(p.y * 1e9)}`;
+    const key = `${p.x.toFixed(9)},${p.y.toFixed(9)}`;
     if (!uniqueMap.has(key)) uniqueMap.set(key, p);
   }
   const unique = Array.from(uniqueMap.values());
@@ -499,68 +499,51 @@ function buildClosedRingsByDistanceGrouping(points: Point[], distanceThreshold: 
   for (const p of unique) { cx += p.x; cy += p.y; }
   cx /= unique.length; cy /= unique.length;
 
-  // 3. 计算每个点的极角和距离，按极角排序
-  const pointsWithInfo = unique.map(p => {
-    const dx = p.x - cx;
-    const dy = p.y - cy;
-    return {
-      point: p,
-      angle: Math.atan2(dy, dx),
-      dist: Math.hypot(dx, dy)
-    };
-  }).sort((a, b) => a.angle - b.angle);
+  // 3. 计算每个点的极角和距离
+  const pointsWithInfo = unique.map(p => ({
+    point: p,
+    angle: Math.atan2(p.y - cy, p.x - cx),
+    dist: Math.hypot(p.x - cx, p.y - cy)
+  }));
 
-  // 4. 计算平均距离和距离阈值
+  // 4. 按极角排序
+  pointsWithInfo.sort((a, b) => a.angle - b.angle);
+
+  // 5. 计算平均距离，设定突变阈值
   const avgDist = pointsWithInfo.reduce((sum, p) => sum + p.dist, 0) / pointsWithInfo.length;
-  const distThreshold = avgDist * distanceThreshold;
+  const distThreshold = avgDist * distanceThresholdFactor;
 
-  // 5. 根据距离突变分组
+  // 6. 根据距离突变分组（注意环形首尾）
   const groups: Point[][] = [];
   let currentGroup: Point[] = [pointsWithInfo[0].point];
-  
-  for (let i = 1; i < pointsWithInfo.length; i++) {
+  const n = pointsWithInfo.length;
+
+  for (let i = 1; i < n; i++) {
     const prevDist = pointsWithInfo[i - 1].dist;
     const currDist = pointsWithInfo[i].dist;
     const distDiff = Math.abs(currDist - prevDist);
 
     if (distDiff > distThreshold && currentGroup.length >= 3) {
-      // 距离突变，开始新组
+      // 突变且当前组足够大，保存当前组并开始新组
       groups.push(currentGroup);
       currentGroup = [pointsWithInfo[i].point];
     } else {
       currentGroup.push(pointsWithInfo[i].point);
     }
   }
-
   // 添加最后一组
-  if (currentGroup.length >= 3) {
-    groups.push(currentGroup);
+  if (currentGroup.length >= 3) groups.push(currentGroup);
+  else if (currentGroup.length > 0 && groups.length > 0) {
+    // 若最后一组太小，合并到前一组
+    groups[groups.length - 1].push(...currentGroup);
   }
 
-  // 6. 对每组进行极角排序并闭合
+  // 7. 对每个组调用 buildClosedRing 生成闭合环
   const rings: Point[][] = [];
   for (const group of groups) {
-    if (group.length < 3) continue;
-
-    // 重新计算组内重心
-    let gcx = 0, gcy = 0;
-    for (const p of group) { gcx += p.x; gcy += p.y; }
-    gcx /= group.length; gcy /= group.length;
-
-    // 按极角排序
-    const sorted = [...group].sort((a, b) => {
-      const angleA = Math.atan2(a.y - gcy, a.x - gcx);
-      const angleB = Math.atan2(b.y - gcy, b.x - gcx);
-      return angleA - angleB;
-    });
-
-    // 闭合环
-    if (Math.hypot(sorted[0].x - sorted[sorted.length - 1].x, sorted[0].y - sorted[sorted.length - 1].y) > 1e-6) {
-      sorted.push(sorted[0]);
-    }
-    rings.push(sorted);
+    const ring = buildClosedRing(group);
+    if (ring.length >= 3) rings.push(ring);
   }
-
   return rings;
 }
 
