@@ -476,6 +476,94 @@ function buildClosedRing(points: Point[]): Point[] {
   return unique;
 }
 
+/**
+ * 改进的多边形构建算法 - 通过距离分组识别多个环（外框和孔洞）
+ * @param points 无序点集
+ * @param distanceThreshold 距离突变阈值（相对于平均距离的比例，默认0.3即30%）
+ * @returns 闭合环数组，每个环是Point[]
+ */
+function buildClosedRingsByDistanceGrouping(points: Point[], distanceThreshold: number = 0.3): Point[][] {
+  if (points.length < 3) return [];
+
+  // 1. 去重
+  const uniqueMap = new Map<string, Point>();
+  for (const p of points) {
+    const key = `${Math.round(p.x * 1e9)}_${Math.round(p.y * 1e9)}`;
+    if (!uniqueMap.has(key)) uniqueMap.set(key, p);
+  }
+  const unique = Array.from(uniqueMap.values());
+  if (unique.length < 3) return [];
+
+  // 2. 计算重心
+  let cx = 0, cy = 0;
+  for (const p of unique) { cx += p.x; cy += p.y; }
+  cx /= unique.length; cy /= unique.length;
+
+  // 3. 计算每个点的极角和距离，按极角排序
+  const pointsWithInfo = unique.map(p => {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    return {
+      point: p,
+      angle: Math.atan2(dy, dx),
+      dist: Math.hypot(dx, dy)
+    };
+  }).sort((a, b) => a.angle - b.angle);
+
+  // 4. 计算平均距离和距离阈值
+  const avgDist = pointsWithInfo.reduce((sum, p) => sum + p.dist, 0) / pointsWithInfo.length;
+  const distThreshold = avgDist * distanceThreshold;
+
+  // 5. 根据距离突变分组
+  const groups: Point[][] = [];
+  let currentGroup: Point[] = [pointsWithInfo[0].point];
+  
+  for (let i = 1; i < pointsWithInfo.length; i++) {
+    const prevDist = pointsWithInfo[i - 1].dist;
+    const currDist = pointsWithInfo[i].dist;
+    const distDiff = Math.abs(currDist - prevDist);
+
+    if (distDiff > distThreshold && currentGroup.length >= 3) {
+      // 距离突变，开始新组
+      groups.push(currentGroup);
+      currentGroup = [pointsWithInfo[i].point];
+    } else {
+      currentGroup.push(pointsWithInfo[i].point);
+    }
+  }
+
+  // 添加最后一组
+  if (currentGroup.length >= 3) {
+    groups.push(currentGroup);
+  }
+
+  // 6. 对每组进行极角排序并闭合
+  const rings: Point[][] = [];
+  for (const group of groups) {
+    if (group.length < 3) continue;
+
+    // 重新计算组内重心
+    let gcx = 0, gcy = 0;
+    for (const p of group) { gcx += p.x; gcy += p.y; }
+    gcx /= group.length; gcy /= group.length;
+
+    // 按极角排序
+    const sorted = [...group].sort((a, b) => {
+      const angleA = Math.atan2(a.y - gcy, a.x - gcx);
+      const angleB = Math.atan2(b.y - gcy, b.x - gcx);
+      return angleA - angleB;
+    });
+
+    // 闭合环
+    if (Math.hypot(sorted[0].x - sorted[sorted.length - 1].x, sorted[0].y - sorted[sorted.length - 1].y) > 1e-6) {
+      sorted.push(sorted[0]);
+    }
+    rings.push(sorted);
+  }
+
+  return rings;
+}
+
 function polygonArea(points: Point[]): number {
   let area = 0;
   const n = points.length;
@@ -563,44 +651,23 @@ export function getDebugRegions(
     const step = Math.min(gridData.stepX, gridData.stepY);
     const threshold = step * 1.5;
 
-    const rawGroups = groupBoundaryPointsByOutsideId(boundaryPoints);
-
-    const clusteredBoundaryPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 20.0, 0.008);
-    const filteredClustered = clusteredBoundaryPoints.filter(bp => bp.insideId === region.id);
-
-    const newGroups = new Map<number, Point[]>();
-    for (const bp of filteredClustered) {
-      if (!newGroups.has(bp.outsideId)) newGroups.set(bp.outsideId, []);
-      newGroups.get(bp.outsideId)!.push(bp.point);
-    }
-
-    // 使用鲁棒的最近邻生长算法构建环
-    const allPoints: Point[] = [];
-    for (const points of newGroups.values()) {
-      allPoints.push(...points);
-    }
+    // 使用距离分组算法直接从所有边界点识别多个环（外框和孔洞）
+    const allBoundaryPoints = boundaryPoints.map(bp => bp.point);
+    
     // 全局去重
     const uniqueMap = new Map<string, Point>();
-    for (const p of allPoints) {
+    for (const p of allBoundaryPoints) {
       const key = `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
       if (!uniqueMap.has(key)) uniqueMap.set(key, p);
     }
     const uniquePoints: Point[] = Array.from(uniqueMap.values());
     
-    const ringsFromSegments = buildRingsByPointWalking(uniquePoints, 0.01);
-    console.log(`[调试] 区域 ${region.id} 拼接成环数量: ${ringsFromSegments.length}`);
+    // 使用距离分组算法构建环（可识别孔洞）
+    const ringsFromSegments = buildClosedRingsByDistanceGrouping(uniquePoints, 0.3);
+    console.log(`[调试] 区域 ${region.id} 距离分组成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
       console.log(`  环${idx}: ${ring.length} 个顶点`);
     });
-
-    // 如果没有生成环，使用原始边界点构建一个环作为备用
-    if (ringsFromSegments.length === 0 && uniquePoints.length >= 3) {
-      const fallbackRing = buildClosedRing(uniquePoints);
-      if (fallbackRing.length >= 3) {
-        ringsFromSegments.push(fallbackRing);
-        console.log(`[调试] 区域 ${region.id} 使用备用环: ${fallbackRing.length} 个顶点`);
-      }
-    }
 
     let boundaryPolygon: Point[] = [];
     if (boundaryPoints.length >= 3) {
@@ -621,7 +688,7 @@ export function getDebugRegions(
       boundaryPolygon,
       rays,
       boundaryPoints,
-      clusteredBoundaryPoints: filteredClustered,
+      clusteredBoundaryPoints: [],
       rings: ringsFromSegments,
     });
   }
