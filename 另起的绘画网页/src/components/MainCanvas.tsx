@@ -85,7 +85,6 @@ export function MainCanvas() {
   const [debugRegionId, setDebugRegionId] = useState(0);
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
   const [debugShowOriginal, setDebugShowOriginal] = useState(true);
-  const [debugShowStitched, setDebugShowStitched] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -833,38 +832,7 @@ export function MainCanvas() {
           const color = colors[idx % colors.length];
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
-          if (debugShowStitched && region.stitchedCycles && region.stitchedCycles.length > 0) {
-            const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
-            let colorIdx = 0;
-            for (const cycle of region.stitchedCycles) {
-              if (debugOutsideId !== -1 && colorIdx !== debugOutsideId) { colorIdx++; continue; }
-              const color = pointColors[colorIdx % pointColors.length];
-              colorIdx++;
-              ctx.fillStyle = color;
-              ctx.strokeStyle = color;
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              for (let i = 0; i < cycle.length; i++) {
-                const canvasPoint = worldToCanvasFn(cycle[i].x, cycle[i].y);
-                if (i === 0) ctx.moveTo(canvasPoint.x, canvasPoint.y);
-                else ctx.lineTo(canvasPoint.x, canvasPoint.y);
-              }
-              ctx.closePath();
-              ctx.fill();
-              ctx.stroke();
-
-              for (const pt of cycle) {
-                const canvasPoint = worldToCanvasFn(pt.x, pt.y);
-                ctx.beginPath();
-                ctx.arc(canvasPoint.x, canvasPoint.y, 4, 0, Math.PI * 2);
-                ctx.fillStyle = color;
-                ctx.fill();
-                ctx.strokeStyle = '#000';
-                ctx.stroke();
-              }
-              console.log(`[调试绘制] 区域${region.id}成环: ${colorIdx-1}环, ${cycle.length}点`);
-            }
-          } else if (region.boundaryPoints && region.boundaryPoints.length > 0) {
+          if (region.boundaryPoints && region.boundaryPoints.length > 0) {
             // 按 outsideId 分组
             const debugPoints = debugShowOriginal
               ? region.boundaryPoints
@@ -1335,18 +1303,6 @@ export function MainCanvas() {
                   fontSize: 11,
                 }}
               >{debugShowOriginal ? '是' : '否'}</button>
-              <span style={{ marginLeft: 12 }}>成环:</span>
-              <button
-                onClick={() => setDebugShowStitched(prev => !prev)}
-                style={{
-                  padding: '2px 6px',
-                  background: debugShowStitched ? '#4CAF50' : '#666',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 3,
-                  fontSize: 11,
-                }}
-              >{debugShowStitched ? '是' : '否'}</button>
             </div>
           )}
         </div>
