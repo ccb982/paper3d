@@ -646,7 +646,7 @@ export function getDebugRegions(
     const uniquePoints: Point[] = Array.from(uniqueMap.values());
     
     // 使用距离分组算法构建环（可识别孔洞）
-    const ringsFromSegments = buildClosedRingsByDistanceGrouping(uniquePoints, 0.3);
+    const ringsFromSegments = buildClosedRingsByDistanceGrouping(uniquePoints, 0.5);
     console.log(`[调试] 区域 ${region.id} 距离分组成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
       console.log(`  环${idx}: ${ring.length} 个顶点`);
