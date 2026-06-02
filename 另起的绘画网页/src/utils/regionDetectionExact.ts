@@ -612,6 +612,13 @@ export function computeRegionsExact(
 
 // ========== 6. 调试辅助 ==========
 export interface DebugRay { start: Point; end: Point; direction: string; outsideId: number; }
+export interface OutsideIdEndpoint {
+  outsideId: number;
+  insideId: number;
+  p1: { x: number; y: number; distToCentroid: number };
+  p2: { x: number; y: number; distToCentroid: number } | null;
+}
+
 export interface DebugRegionData {
   id: number; cellCount: number; bounds: any; seed: Point;
   boundaryPolygon: Point[]; rays: DebugRay[];
@@ -621,6 +628,8 @@ export interface DebugRegionData {
   centroid?: Point | null;
   uniqueBoundaryPoints?: { point: Point; insideId: number; outsideId: number }[];
   pointGroups?: Point[][];
+  outsideIdEndpoints?: OutsideIdEndpoint[]; // 重新聚类后的端点
+  originalOutsideIdEndpoints?: OutsideIdEndpoint[]; // 原始边界点的端点
 }
 
 export function getDebugRegions(
@@ -680,12 +689,107 @@ export function getDebugRegions(
       if (outerPts && outerPts.length >= 3) boundaryPolygon = buildClosedRing(outerPts);
     }
 
+    // 计算原始边界点的端点信息
+    const originalOutsideIdEndpoints: OutsideIdEndpoint[] = [];
+    if (boundaryPoints.length > 0) {
+      const origCentroid = { x: 0, y: 0 };
+      for (const bp of boundaryPoints) { origCentroid.x += bp.point.x; origCentroid.y += bp.point.y; }
+      origCentroid.x /= boundaryPoints.length;
+      origCentroid.y /= boundaryPoints.length;
+      
+      // 按原始 outsideId 分组
+      const byOriginalOutside = new Map<number, { point: Point; insideId: number }[]>();
+      for (const bp of boundaryPoints) {
+        if (!byOriginalOutside.has(bp.outsideId)) {
+          byOriginalOutside.set(bp.outsideId, []);
+        }
+        byOriginalOutside.get(bp.outsideId)!.push({ point: bp.point, insideId: bp.insideId });
+      }
+      
+      // 对每个原始 outsideId 组按极角排序，找到首尾端点
+      for (const [outsideId, points] of byOriginalOutside) {
+        if (points.length < 1) continue;
+        
+        points.sort((a, b) => {
+          const angleA = Math.atan2(a.point.y - origCentroid.y, a.point.x - origCentroid.x);
+          const angleB = Math.atan2(b.point.y - origCentroid.y, b.point.x - origCentroid.x);
+          return angleA - angleB;
+        });
+        
+        const p1 = points[0];
+        const dist1 = Math.hypot(p1.point.x - origCentroid.x, p1.point.y - origCentroid.y);
+        
+        let p2Data: { x: number; y: number; distToCentroid: number } | null = null;
+        if (points.length >= 2) {
+          const p2 = points[points.length - 1];
+          const dist2 = Math.hypot(p2.point.x - origCentroid.x, p2.point.y - origCentroid.y);
+          p2Data = { x: p2.point.x, y: p2.point.y, distToCentroid: dist2 };
+        }
+        
+        originalOutsideIdEndpoints.push({
+          outsideId,
+          insideId: p1.insideId,
+          p1: { x: p1.point.x, y: p1.point.y, distToCentroid: dist1 },
+          p2: p2Data,
+        });
+      }
+    }
+
     // 计算重心用于调试
     let centroid: Point | null = null;
     if (allBoundaryPoints.length > 0) {
       let cx = 0, cy = 0;
       for (const p of allBoundaryPoints) { cx += p.x; cy += p.y; }
       centroid = { x: cx / allBoundaryPoints.length, y: cy / allBoundaryPoints.length };
+    }
+    
+    // 计算每个 outsideId 组的两侧端点到重心的距离
+    const outsideIdEndpoints: OutsideIdEndpoint[] = [];
+    if (centroid) {
+      // 按 outsideId 分组
+      const byOutsideId = new Map<number, { point: Point; insideId: number }[]>();
+      for (const ub of uniqueBoundaryPoints) {
+        if (!byOutsideId.has(ub.outsideId)) {
+          byOutsideId.set(ub.outsideId, []);
+        }
+        byOutsideId.get(ub.outsideId)!.push({ point: ub.point, insideId: ub.insideId });
+      }
+      
+      // 对每个 outsideId 组按极角排序，找到首尾端点
+      for (const [outsideId, points] of byOutsideId) {
+        if (points.length < 1) continue;
+        
+        // 按极角排序
+        points.sort((a, b) => {
+          const angleA = Math.atan2(a.point.y - centroid.y, a.point.x - centroid.x);
+          const angleB = Math.atan2(b.point.y - centroid.y, b.point.x - centroid.x);
+          return angleA - angleB;
+        });
+        
+        const p1 = points[0];
+        const dist1 = Math.hypot(p1.point.x - centroid.x, p1.point.y - centroid.y);
+        
+        // 如果只有一个点，p2 为 null
+        let p2Data: { x: number; y: number; distToCentroid: number } | null = null;
+        if (points.length >= 2) {
+          const p2 = points[points.length - 1];
+          const dist2 = Math.hypot(p2.point.x - centroid.x, p2.point.y - centroid.y);
+          p2Data = { x: p2.point.x, y: p2.point.y, distToCentroid: dist2 };
+        }
+        
+        outsideIdEndpoints.push({
+          outsideId,
+          insideId: p1.insideId,
+          p1: { x: p1.point.x, y: p1.point.y, distToCentroid: dist1 },
+          p2: p2Data,
+        });
+        
+        if (p2Data) {
+          console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${p1.point.x.toFixed(3)},${p1.point.y.toFixed(3)}) d1=${dist1.toFixed(3)}, p2(${p2Data.x.toFixed(3)},${p2Data.y.toFixed(3)}) d2=${p2Data.distToCentroid.toFixed(3)}`);
+        } else {
+          console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${p1.point.x.toFixed(3)},${p1.point.y.toFixed(3)}) d1=${dist1.toFixed(3)} (单点)`);
+        }
+      }
     }
 
     const rays: DebugRay[] = [];
@@ -702,6 +806,8 @@ export function getDebugRegions(
       centroid,
       uniqueBoundaryPoints,
       pointGroups,
+      outsideIdEndpoints,
+      originalOutsideIdEndpoints,
     });
   }
   return debug;

@@ -131,6 +131,7 @@ export function MainCanvas() {
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
   const [debugShowOriginal, setDebugShowOriginal] = useState(true);
   const [debugDistanceThreshold, setDebugDistanceThreshold] = useState(0.5);
+  const [debugShowEndpoints, setDebugShowEndpoints] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -882,7 +883,7 @@ export function MainCanvas() {
             // 按 outsideId 分组
             const debugPoints = debugShowOriginal
               ? region.boundaryPoints
-              : (region.clusteredBoundaryPoints || region.boundaryPoints);
+              : (region.uniqueBoundaryPoints as any || region.boundaryPoints);
             const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
             for (const bp of debugPoints) {
               if (!outsideIdGroups.has(bp.outsideId)) {
@@ -918,8 +919,8 @@ export function MainCanvas() {
               }
             }
 
-            // 绘制重心到每个去重后边界点的连线
-            if (region.centroid && region.uniqueBoundaryPoints) {
+            // 绘制重心到每个去重后边界点的连线（端点信息模式且非原始模式时不绘制）
+            if (!debugShowEndpoints && !debugShowOriginal && region.centroid && region.uniqueBoundaryPoints) {
               const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
               
               // 绘制重心点
@@ -982,6 +983,59 @@ export function MainCanvas() {
               
               ctx.globalAlpha = 1;
             }
+          }
+
+          // 绘制端点信息（原始模式下使用 originalOutsideIdEndpoints，非原始模式下使用 outsideIdEndpoints）
+          const endpointsToShow = debugShowOriginal ? region.originalOutsideIdEndpoints : region.outsideIdEndpoints;
+          if (debugShowEndpoints && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
+            const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
+            const endpointColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+            
+            ctx.font = 'bold 10px monospace';
+            
+            endpointsToShow!.forEach((ep, idx) => {
+              if (debugOutsideId !== -1 && ep.outsideId !== debugOutsideId) return;
+              
+              const color = endpointColors[idx % endpointColors.length];
+              
+              // 绘制端点 p1
+              const p1Canvas = worldToCanvasFn(ep.p1.x, ep.p1.y);
+              ctx.fillStyle = color;
+              ctx.beginPath();
+              ctx.arc(p1Canvas.x, p1Canvas.y, 6, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.strokeStyle = '#000000';
+              ctx.lineWidth = 2;
+              ctx.stroke();
+              
+              // p1 标签
+              ctx.fillStyle = color;
+              ctx.fillText(`p1:(${ep.p1.x.toFixed(2)},${ep.p1.y.toFixed(2)}) d=${ep.p1.distToCentroid.toFixed(3)}`, p1Canvas.x + 8, p1Canvas.y - 8);
+              
+              // 如果有 p2，绘制 p2
+              if (ep.p2) {
+                const p2Canvas = worldToCanvasFn(ep.p2.x, ep.p2.y);
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(p2Canvas.x, p2Canvas.y, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#000000';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                
+                // p2 标签
+                ctx.fillStyle = color;
+                ctx.fillText(`p2:(${ep.p2.x.toFixed(2)},${ep.p2.y.toFixed(2)}) d=${ep.p2.distToCentroid.toFixed(3)}`, p2Canvas.x + 8, p2Canvas.y - 8);
+                
+                // 绘制端点 ID 标签
+                ctx.fillStyle = '#000000';
+                ctx.fillText(`o:${ep.outsideId}`, (p1Canvas.x + p2Canvas.x) / 2 + 8, (p1Canvas.y + p2Canvas.y) / 2);
+              } else {
+                // 单点情况，只显示 outsideId
+                ctx.fillStyle = '#000000';
+                ctx.fillText(`o:${ep.outsideId}`, p1Canvas.x + 8, p1Canvas.y + 12);
+              }
+            });
           }
 
           // // 绘制环（仅在非原始模式下显示）
@@ -1456,6 +1510,16 @@ export function MainCanvas() {
               />
               <button onClick={() => setDebugDistanceThreshold(prev => Math.max(0, prev - 0.001))} style={{ padding: '2px 6px' }}>-</button>
               <button onClick={() => setDebugDistanceThreshold(prev => Math.min(0.5, prev + 0.001))} style={{ padding: '2px 6px' }}>+</button>
+              <div style={{ marginLeft: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={debugShowEndpoints}
+                    onChange={(e) => setDebugShowEndpoints(e.target.checked)}
+                  />
+                  <span>端点信息</span>
+                </label>
+              </div>
             </div>
           )}
         </div>
