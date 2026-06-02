@@ -868,7 +868,7 @@ export function MainCanvas() {
           yMin: axis.yMin,
           yMax: axis.yMax,
         };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 300, debugDistanceThreshold);
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold);
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
@@ -879,11 +879,10 @@ export function MainCanvas() {
           const color = colors[idx % colors.length];
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
-          if (region.boundaryPoints && region.boundaryPoints.length > 0) {
+          // 端点信息模式下不绘制，只在原始模式下绘制最初的 outsideId 点
+          if (!debugShowEndpoints && debugShowOriginal && region.boundaryPoints && region.boundaryPoints.length > 0) {
             // 按 outsideId 分组
-            const debugPoints = debugShowOriginal
-              ? region.boundaryPoints
-              : (region.uniqueBoundaryPoints as any || region.boundaryPoints);
+            const debugPoints = region.boundaryPoints;
             const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
             for (const bp of debugPoints) {
               if (!outsideIdGroups.has(bp.outsideId)) {
@@ -990,6 +989,15 @@ export function MainCanvas() {
           if (debugShowEndpoints && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
             const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
             const endpointColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+            
+            // 绘制重心点
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(centroidCanvas.x, centroidCanvas.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1;
+            ctx.stroke();
             
             ctx.font = 'bold 10px monospace';
             
