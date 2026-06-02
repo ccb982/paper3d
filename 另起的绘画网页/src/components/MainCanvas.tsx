@@ -879,10 +879,12 @@ export function MainCanvas() {
           const color = colors[idx % colors.length];
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
-          // 端点信息模式下不绘制，只在原始模式下绘制最初的 outsideId 点
-          if (!debugShowEndpoints && debugShowOriginal && region.boundaryPoints && region.boundaryPoints.length > 0) {
+          // 端点信息模式下不绘制
+          if (!debugShowEndpoints && region.boundaryPoints && region.boundaryPoints.length > 0) {
             // 按 outsideId 分组
-            const debugPoints = region.boundaryPoints;
+            const debugPoints = debugShowOriginal
+              ? region.boundaryPoints
+              : (region.uniqueBoundaryPoints as any || region.boundaryPoints);
             const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
             for (const bp of debugPoints) {
               if (!outsideIdGroups.has(bp.outsideId)) {
@@ -966,17 +968,6 @@ export function MainCanvas() {
                   ctx.moveTo(centroidCanvas.x, centroidCanvas.y);
                   ctx.lineTo(clippedEnd.x, clippedEnd.y);
                   ctx.stroke();
-                  
-                  // 绘制去重后的边界点
-                  ctx.fillStyle = color;
-                  ctx.beginPath();
-                  ctx.arc(pointCanvas.x, pointCanvas.y, 3, 0, Math.PI * 2);
-                  ctx.fill();
-                  
-                  // 绘制 insideId 和 outsideId 标签
-                  ctx.font = 'bold 7px monospace';
-                  ctx.fillText(`i:${ub.insideId}`, pointCanvas.x + 5, pointCanvas.y - 8);
-                  ctx.fillText(`o:${outsideId}`, pointCanvas.x + 5, pointCanvas.y + 8);
                 }
               }
               
