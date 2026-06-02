@@ -85,6 +85,7 @@ export function MainCanvas() {
   const [debugRegionId, setDebugRegionId] = useState(0);
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
   const [debugShowOriginal, setDebugShowOriginal] = useState(true);
+  const [debugDistanceThreshold, setDebugDistanceThreshold] = useState(0.5);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -821,7 +822,7 @@ export function MainCanvas() {
           yMin: axis.yMin,
           yMax: axis.yMax,
         };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 300);
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 300, debugDistanceThreshold);
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
@@ -873,32 +874,62 @@ export function MainCanvas() {
             }
           }
 
-          // 绘制环（仅在非原始模式下显示）
-          if (!debugShowOriginal && region.rings && region.rings.length > 0) {
-            const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
-            region.rings.forEach((ring, ringIdx) => {
-              if (ring.length < 3) return;
-              const ringColor = ringColors[ringIdx % ringColors.length];
-              ctx.strokeStyle = ringColor;
-              ctx.fillStyle = ringColor + '30';
-              ctx.lineWidth = 3;
+          // 绘制重心到每个去重后边界点的连线（调试用）
+          if (!debugShowOriginal && region.centroid && region.uniquePoints) {
+            const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
+            
+            // 绘制重心点
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(centroidCanvas.x, centroidCanvas.y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // 绘制重心标记
+            ctx.font = 'bold 10px monospace';
+            ctx.fillText('重心', centroidCanvas.x + 8, centroidCanvas.y - 8);
+            
+            // 绘制每个去重后边界点到重心的连线
+            ctx.strokeStyle = '#00ffff';
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.6;
+            
+            region.uniquePoints.forEach(p => {
+              const pointCanvas = worldToCanvasFn(p.x, p.y);
               ctx.beginPath();
-              for (let i = 0; i < ring.length; i++) {
-                const cp = worldToCanvasFn(ring[i].x, ring[i].y);
-                if (i === 0) ctx.moveTo(cp.x, cp.y);
-                else ctx.lineTo(cp.x, cp.y);
-              }
-              ctx.closePath();
-              ctx.fill();
+              ctx.moveTo(centroidCanvas.x, centroidCanvas.y);
+              ctx.lineTo(pointCanvas.x, pointCanvas.y);
               ctx.stroke();
-
-              const midIdx = Math.floor(ring.length / 2);
-              const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
-              ctx.fillStyle = ringColor;
-              ctx.font = 'bold 12px monospace';
-              ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
             });
+            
+            ctx.globalAlpha = 1;
           }
+
+          // // 绘制环（仅在非原始模式下显示）
+          // if (!debugShowOriginal && region.rings && region.rings.length > 0) {
+          //   const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+          //   region.rings.forEach((ring, ringIdx) => {
+          //     if (ring.length < 3) return;
+          //     const ringColor = ringColors[ringIdx % ringColors.length];
+          //     ctx.strokeStyle = ringColor;
+          //     ctx.fillStyle = ringColor + '30';
+          //     ctx.lineWidth = 3;
+          //     ctx.beginPath();
+          //     for (let i = 0; i < ring.length; i++) {
+          //       const cp = worldToCanvasFn(ring[i].x, ring[i].y);
+          //       if (i === 0) ctx.moveTo(cp.x, cp.y);
+          //       else ctx.lineTo(cp.x, cp.y);
+          //     }
+          //     ctx.closePath();
+          //     ctx.fill();
+          //     ctx.stroke();
+
+          //     const midIdx = Math.floor(ring.length / 2);
+          //     const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
+          //     ctx.fillStyle = ringColor;
+          //     ctx.font = 'bold 12px monospace';
+          //     ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
+          //   });
+          // }
 
           ctx.restore();
         });
@@ -1330,6 +1361,21 @@ export function MainCanvas() {
                   fontSize: 11,
                 }}
               >{debugShowOriginal ? '是' : '否'}</button>
+              <span style={{ marginLeft: 12 }}>距离阈值:</span>
+              <input
+                type="number"
+                min="0"
+                max="0.5"
+                step="0.001"
+                value={debugDistanceThreshold}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = parseFloat(e.target.value) || 0;
+                  setDebugDistanceThreshold(Math.max(0, Math.min(0.5, val)));
+                }}
+                style={{ width: 60, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugDistanceThreshold(prev => Math.max(0, prev - 0.001))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugDistanceThreshold(prev => Math.min(0.5, prev + 0.001))} style={{ padding: '2px 6px' }}>+</button>
             </div>
           )}
         </div>

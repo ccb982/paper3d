@@ -618,12 +618,15 @@ export interface DebugRegionData {
   boundaryPoints: BoundaryPoint[];
   clusteredBoundaryPoints?: BoundaryPoint[];
   rings?: Point[][];
+  centroid?: Point | null;
+  uniquePoints?: Point[];
 }
 
 export function getDebugRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 300
+  resolution: number = 300,
+  distanceThresholdFactor: number = 0.5
 ): DebugRegionData[] {
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
   const debug: DebugRegionData[] = [];
@@ -637,16 +640,28 @@ export function getDebugRegions(
     // 使用距离分组算法直接从所有边界点识别多个环（外框和孔洞）
     const allBoundaryPoints = boundaryPoints.map(bp => bp.point);
     
-    // 全局去重
-    const uniqueMap = new Map<string, Point>();
+    // 全局去重（根据距离阈值控制密度）
+    const uniquePoints: Point[] = [];
+    const threshSq = distanceThresholdFactor * distanceThresholdFactor; // 使用距离阈值的平方
+    
     for (const p of allBoundaryPoints) {
-      const key = `${p.x.toFixed(6)},${p.y.toFixed(6)}`;
-      if (!uniqueMap.has(key)) uniqueMap.set(key, p);
+      let isDuplicate = false;
+      for (const up of uniquePoints) {
+        const dx = p.x - up.x;
+        const dy = p.y - up.y;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < threshSq) {
+          isDuplicate = true;
+          break;
+        }
+      }
+      if (!isDuplicate) {
+        uniquePoints.push(p);
+      }
     }
-    const uniquePoints: Point[] = Array.from(uniqueMap.values());
     
     // 使用距离分组算法构建环（可识别孔洞）
-    const ringsFromSegments = buildClosedRingsByDistanceGrouping(uniquePoints, 0.5);
+    const ringsFromSegments = buildClosedRingsByDistanceGrouping(uniquePoints, distanceThresholdFactor);
     console.log(`[调试] 区域 ${region.id} 距离分组成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
       console.log(`  环${idx}: ${ring.length} 个顶点`);
@@ -662,6 +677,15 @@ export function getDebugRegions(
       const outerPts = groups.get(-1);
       if (outerPts && outerPts.length >= 3) boundaryPolygon = buildClosedRing(outerPts);
     }
+
+    // 计算重心用于调试
+    let centroid: Point | null = null;
+    if (allBoundaryPoints.length > 0) {
+      let cx = 0, cy = 0;
+      for (const p of allBoundaryPoints) { cx += p.x; cy += p.y; }
+      centroid = { x: cx / allBoundaryPoints.length, y: cy / allBoundaryPoints.length };
+    }
+
     const rays: DebugRay[] = [];
     debug.push({
       id: region.id,
@@ -673,6 +697,8 @@ export function getDebugRegions(
       boundaryPoints,
       clusteredBoundaryPoints: [],
       rings: ringsFromSegments,
+      centroid,
+      uniquePoints,
     });
   }
   return debug;
