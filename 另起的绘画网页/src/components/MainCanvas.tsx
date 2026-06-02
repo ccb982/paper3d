@@ -26,6 +26,51 @@ function distanceToLineSegment(
   return Math.hypot(px - projX, py - projY);
 }
 
+function clipLineToCanvas(
+  start: { x: number; y: number },
+  end: { x: number; y: number },
+  canvasSize: number
+): { x: number; y: number } {
+  let x = end.x;
+  let y = end.y;
+  
+  // 如果端点在画布内，直接返回
+  if (x >= 0 && x <= canvasSize && y >= 0 && y <= canvasSize) {
+    return { x, y };
+  }
+  
+  // 使用 Liang-Barsky 算法裁剪线段到画布边界
+  const x0 = start.x, y0 = start.y;
+  const x1 = end.x, y1 = end.y;
+  const xmin = 0, ymin = 0, xmax = canvasSize, ymax = canvasSize;
+  
+  let t0 = 0, t1 = 1;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  
+  const p = [-dx, dx, -dy, dy];
+  const q = [x0 - xmin, xmax - x0, y0 - ymin, ymax - y0];
+  
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      // 线段平行于裁剪边界
+      if (q[i] < 0) return { x: x0, y: y0 }; // 完全在边界外
+    } else {
+      const t = q[i] / p[i];
+      if (p[i] < 0 && t > t0) t0 = t;
+      if (p[i] > 0 && t < t1) t1 = t;
+    }
+  }
+  
+  if (t0 > t1) return { x: x0, y: y0 }; // 线段完全在裁剪区域外
+  
+  // 返回裁剪后的端点
+  return {
+    x: x0 + t1 * dx,
+    y: y0 + t1 * dy
+  };
+}
+
 function sampleQuadraticCurve(p0: Point, p1: Point, ctrl: Point, segments = 30): Point[] {
   const points: Point[] = [];
   for (let i = 0; i <= segments; i++) {
@@ -872,36 +917,71 @@ export function MainCanvas() {
                 ctx.fillText(`o:${outsideId}`, canvasPoint.x + 6, canvasPoint.y - 6);
               }
             }
-          }
 
-          // 绘制重心到每个去重后边界点的连线（调试用）
-          if (!debugShowOriginal && region.centroid && region.uniquePoints) {
-            const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
-            
-            // 绘制重心点
-            ctx.fillStyle = '#ff0000';
-            ctx.beginPath();
-            ctx.arc(centroidCanvas.x, centroidCanvas.y, 5, 0, Math.PI * 2);
-            ctx.fill();
-            
-            // 绘制重心标记
-            ctx.font = 'bold 10px monospace';
-            ctx.fillText('重心', centroidCanvas.x + 8, centroidCanvas.y - 8);
-            
-            // 绘制每个去重后边界点到重心的连线
-            ctx.strokeStyle = '#00ffff';
-            ctx.lineWidth = 1;
-            ctx.globalAlpha = 0.6;
-            
-            region.uniquePoints.forEach(p => {
-              const pointCanvas = worldToCanvasFn(p.x, p.y);
+            // 绘制重心到每个去重后边界点的连线
+            if (region.centroid && region.uniqueBoundaryPoints) {
+              const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
+              
+              // 绘制重心点
+              ctx.fillStyle = '#ff0000';
               ctx.beginPath();
-              ctx.moveTo(centroidCanvas.x, centroidCanvas.y);
-              ctx.lineTo(pointCanvas.x, pointCanvas.y);
-              ctx.stroke();
-            });
-            
-            ctx.globalAlpha = 1;
+              ctx.arc(centroidCanvas.x, centroidCanvas.y, 5, 0, Math.PI * 2);
+              ctx.fill();
+              
+              // 绘制重心标记
+              ctx.font = 'bold 10px monospace';
+              ctx.fillText('重心', centroidCanvas.x + 8, centroidCanvas.y - 8);
+              
+              // 按 outsideId 分组
+              const uniqueGroups = new Map<number, { point: Point; outsideId: number }[]>();
+              for (const ub of region.uniqueBoundaryPoints) {
+                if (!uniqueGroups.has(ub.outsideId)) {
+                  uniqueGroups.set(ub.outsideId, []);
+                }
+                uniqueGroups.get(ub.outsideId)!.push(ub);
+              }
+              
+              const groupColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+              let groupColorIdx = 0;
+              
+              ctx.lineWidth = 1;
+              ctx.globalAlpha = 0.7;
+              
+              // 按 outsideId 分组绘制连线和点
+              for (const [outsideId, points] of uniqueGroups) {
+                // 根据调试面板的外部ID过滤
+                if (debugOutsideId !== -1 && outsideId !== debugOutsideId) continue;
+                
+                const color = groupColors[groupColorIdx % groupColors.length];
+                groupColorIdx++;
+                ctx.strokeStyle = color;
+                
+                for (const ub of points) {
+                  const pointCanvas = worldToCanvasFn(ub.point.x, ub.point.y);
+                  
+                  // 裁剪连线到画布边界内
+                  const clippedEnd = clipLineToCanvas(centroidCanvas, pointCanvas, canvasSize);
+                  
+                  ctx.beginPath();
+                  ctx.moveTo(centroidCanvas.x, centroidCanvas.y);
+                  ctx.lineTo(clippedEnd.x, clippedEnd.y);
+                  ctx.stroke();
+                  
+                  // 绘制去重后的边界点
+                  ctx.fillStyle = color;
+                  ctx.beginPath();
+                  ctx.arc(pointCanvas.x, pointCanvas.y, 3, 0, Math.PI * 2);
+                  ctx.fill();
+                  
+                  // 绘制 insideId 和 outsideId 标签
+                  ctx.font = 'bold 7px monospace';
+                  ctx.fillText(`i:${ub.insideId}`, pointCanvas.x + 5, pointCanvas.y - 8);
+                  ctx.fillText(`o:${outsideId}`, pointCanvas.x + 5, pointCanvas.y + 8);
+                }
+              }
+              
+              ctx.globalAlpha = 1;
+            }
           }
 
           // // 绘制环（仅在非原始模式下显示）

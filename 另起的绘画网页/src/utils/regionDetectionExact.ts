@@ -480,10 +480,10 @@ function buildClosedRing(points: Point[]): Point[] {
  * 基于极角排序和距离突变的分组构建环（改进版）
  * @param points 无序点集
  * @param distanceThresholdFactor 距离突变阈值因子（相对于平均距离的比例，默认0.3）
- * @returns 闭合环数组
+ * @returns { rings: Point[][], groups: Point[][] } 闭合环数组和分组信息
  */
-function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFactor: number = 0.3): Point[][] {
-  if (points.length < 3) return [];
+function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFactor: number = 0.3): { rings: Point[][], groups: Point[][] } {
+  if (points.length < 3) return { rings: [], groups: [] };
 
   // 1. 去重（基于坐标精度）
   const uniqueMap = new Map<string, Point>();
@@ -492,7 +492,7 @@ function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFa
     if (!uniqueMap.has(key)) uniqueMap.set(key, p);
   }
   const unique = Array.from(uniqueMap.values());
-  if (unique.length < 3) return [];
+  if (unique.length < 3) return { rings: [], groups: [] };
 
   // 2. 计算重心
   let cx = 0, cy = 0;
@@ -544,7 +544,7 @@ function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFa
     const ring = buildClosedRing(group);
     if (ring.length >= 3) rings.push(ring);
   }
-  return rings;
+  return { rings, groups };
 }
 
 function polygonArea(points: Point[]): number {
@@ -619,7 +619,8 @@ export interface DebugRegionData {
   clusteredBoundaryPoints?: BoundaryPoint[];
   rings?: Point[][];
   centroid?: Point | null;
-  uniquePoints?: Point[];
+  uniqueBoundaryPoints?: { point: Point; insideId: number; outsideId: number }[];
+  pointGroups?: Point[][];
 }
 
 export function getDebugRegions(
@@ -633,38 +634,39 @@ export function getDebugRegions(
   for (const region of gridData.regions) {
     if (region.touchesEdge) continue;
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
+    
+    // 使用重新聚类算法重新分配 outsideId（基于极角排序和距离阈值）
+    const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 2.5, distanceThresholdFactor);
+    
+    console.log(`[调试] 区域 ${region.id} 原始边界点: ${boundaryPoints.length}, 重新聚类后: ${reclusteredPoints.length}`);
 
     const step = Math.min(gridData.stepX, gridData.stepY);
     const threshold = step * 1.5;
 
     // 使用距离分组算法直接从所有边界点识别多个环（外框和孔洞）
-    const allBoundaryPoints = boundaryPoints.map(bp => bp.point);
+    const allBoundaryPoints = reclusteredPoints.map(bp => bp.point);
     
-    // 全局去重（根据距离阈值控制密度）
-    const uniquePoints: Point[] = [];
-    const threshSq = distanceThresholdFactor * distanceThresholdFactor; // 使用距离阈值的平方
+    // 保留重新聚类后的边界点（不丢弃任何点），包含 insideId 和 outsideId
+    const uniqueBoundaryPoints: { point: Point; insideId: number; outsideId: number }[] = reclusteredPoints.map(bp => ({
+      point: bp.point,
+      insideId: bp.insideId,
+      outsideId: bp.outsideId
+    }));
     
-    for (const p of allBoundaryPoints) {
-      let isDuplicate = false;
-      for (const up of uniquePoints) {
-        const dx = p.x - up.x;
-        const dy = p.y - up.y;
-        const distSq = dx * dx + dy * dy;
-        if (distSq < threshSq) {
-          isDuplicate = true;
-          break;
-        }
-      }
-      if (!isDuplicate) {
-        uniquePoints.push(p);
-      }
-    }
+    // 提取纯点集用于环构建（不丢弃任何点）
+    const uniquePoints = uniqueBoundaryPoints.map(ub => ub.point);
+    
+    console.log(`[调试] 区域 ${region.id} 重新聚类后点数: ${uniqueBoundaryPoints.length}`);
     
     // 使用距离分组算法构建环（可识别孔洞）
-    const ringsFromSegments = buildClosedRingsByDistanceGrouping(uniquePoints, distanceThresholdFactor);
+    const { rings: ringsFromSegments, groups: pointGroups } = buildClosedRingsByDistanceGrouping(uniquePoints, distanceThresholdFactor);
     console.log(`[调试] 区域 ${region.id} 距离分组成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
       console.log(`  环${idx}: ${ring.length} 个顶点`);
+    });
+    console.log(`[调试] 区域 ${region.id} 距离分组数量: ${pointGroups.length}`);
+    pointGroups.forEach((group, idx) => {
+      console.log(`  组${idx}: ${group.length} 个点`);
     });
 
     let boundaryPolygon: Point[] = [];
@@ -698,7 +700,8 @@ export function getDebugRegions(
       clusteredBoundaryPoints: [],
       rings: ringsFromSegments,
       centroid,
-      uniquePoints,
+      uniqueBoundaryPoints,
+      pointGroups,
     });
   }
   return debug;
