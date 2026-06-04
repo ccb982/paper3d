@@ -448,6 +448,52 @@ export function groupBoundaryPointsByOutsideId(
   return groups;
 }
 
+// ========== 新增：按 outsideId 分组，对每组内的点进行最小距离降采样 ==========
+/**
+ * 对边界点进行降采样：每个 outsideId 内，保留的点之间距离不小于 minDistance。
+ * @param boundaryPoints 原始边界点列表
+ * @param minDistance 最小距离阈值（世界坐标单位）
+ * @returns 降采样后的边界点列表
+ */
+export function downsampleBoundaryPointsByOutsideId(
+  boundaryPoints: BoundaryPoint[],
+  minDistance: number
+): BoundaryPoint[] {
+  if (minDistance <= 0) return boundaryPoints;
+
+  const groups = new Map<number, BoundaryPoint[]>();
+  for (const bp of boundaryPoints) {
+    if (!groups.has(bp.outsideId)) groups.set(bp.outsideId, []);
+    groups.get(bp.outsideId)!.push(bp);
+  }
+
+  const result: BoundaryPoint[] = [];
+
+  for (const [outsideId, points] of groups) {
+    if (points.length === 0) continue;
+
+    const kept: BoundaryPoint[] = [points[0]];
+    for (let i = 1; i < points.length; i++) {
+      const p = points[i];
+      let tooClose = false;
+      for (const keptPoint of kept) {
+        const dist = Math.hypot(p.point.x - keptPoint.point.x, p.point.y - keptPoint.point.y);
+        if (dist < minDistance) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (!tooClose) {
+        kept.push(p);
+      }
+    }
+    result.push(...kept);
+  }
+
+  console.log(`[降采样] 阈值=${minDistance.toFixed(6)}, 原始点数=${boundaryPoints.length}, 降采样后=${result.length}`);
+  return result;
+}
+
 // ========== 4. 多边形构建（极角排序）==========
 function buildClosedRing(points: Point[]): Point[] {
   if (points.length < 3) return [];
@@ -750,7 +796,9 @@ export function getDebugRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
   resolution: number = 300,
-  distanceThresholdFactor: number = 0.5
+  distanceThresholdFactor: number = 0.5,
+  radialThresholdFactor: number = 0.5,
+  downsampleDistanceFactor: number = 0.2
 ): DebugRegionData[] {
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
   const debug: DebugRegionData[] = [];
@@ -759,9 +807,18 @@ export function getDebugRegions(
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
     
     const step = Math.min(gridData.stepX, gridData.stepY);
-    const distThreshold = step * 1.8 * (1 + distanceThresholdFactor);
-    const radialThreshold = step * 0.6 * (1 + distanceThresholdFactor);
-    const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, distThreshold, radialThreshold);
+    
+    // 降采样：先减少点密度，避免极角排序后出现微小抖动
+    // 使用更大的基础倍数（10倍step），使得滑块调整更有效果
+    const downsampleThres = step * 10 * downsampleDistanceFactor;
+    console.log(`[调试] 区域 ${region.id} 降采样阈值=${downsampleThres.toFixed(6)}`);
+    const downsampledPoints = downsampleBoundaryPointsByOutsideId(boundaryPoints, downsampleThres);
+    
+    // 增大常数因子，确保阈值足够大以匹配实际点间距
+    const distThreshold = step * 15 * (1 + distanceThresholdFactor);
+    const radialThreshold = step * 8 * (1 + radialThresholdFactor);
+    console.log(`[调试] 区域 ${region.id} step=${step.toFixed(6)}, distThreshold=${distThreshold.toFixed(6)}, radialThreshold=${radialThreshold.toFixed(6)}`);
+    const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(downsampledPoints, distThreshold, radialThreshold);
     
     console.log(`[调试] 区域 ${region.id} 原始边界点: ${boundaryPoints.length}, 重新聚类后: ${reclusteredPoints.length}`);
 

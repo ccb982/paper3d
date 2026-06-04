@@ -131,6 +131,8 @@ export function MainCanvas() {
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
   const [debugShowOriginal, setDebugShowOriginal] = useState(true);
   const [debugDistanceThreshold, setDebugDistanceThreshold] = useState(0.5);
+  const [debugRadialThreshold, setDebugRadialThreshold] = useState(0.5);
+  const [debugDownsampleFactor, setDebugDownsampleFactor] = useState(0.2);
   const [debugShowEndpoints, setDebugShowEndpoints] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -868,7 +870,7 @@ export function MainCanvas() {
           yMin: axis.yMin,
           yMax: axis.yMax,
         };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold);
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor);
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
@@ -1433,35 +1435,22 @@ export function MainCanvas() {
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default') }}>
-      <div style={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div ref={canvasWrapperRef} style={{ aspectRatio: '1 / 1', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%', position: 'relative', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
-          <canvas
-            ref={canvasRef}
-            width={canvasSize}
-            height={canvasSize}
-            style={{ width: '100%', height: '100%', imageRendering: 'auto', display: 'block' }}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={handleMouseLeave}
-            onMouseDown={handleMouseDown}
-            onMouseUp={handleMouseUp}
-            onClick={handleCanvasClick}
-            onDoubleClick={handleDoubleClick}
-          />
-          {showDebugRegions && (
-            <div style={{
-              position: 'absolute',
-              top: 10,
-              right: 10,
-              background: 'rgba(0,0,0,0.8)',
-              color: '#fff',
-              padding: '8px 12px',
-              borderRadius: 4,
-              fontSize: 12,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              zIndex: 100,
-            }}>
+      <div style={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+        {showDebugRegions && (
+          <div style={{
+            background: 'rgba(0,0,0,0.9)',
+            color: '#fff',
+            padding: '8px 12px',
+            borderRadius: 6,
+            fontSize: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
+            boxShadow: '0 2px 12px rgba(0,0,0,0.5)',
+          }}>
+            {/* 第一行：区域选择、外部ID选择、原始模式 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>区域:</span>
               <input
                 type="number"
@@ -1470,9 +1459,10 @@ export function MainCanvas() {
                 onChange={e => setDebugRegionId(Math.max(0, parseInt(e.target.value) || 0))}
                 style={{ width: 50, padding: '2px 4px', fontSize: 12 }}
               />
-              <button onClick={() => setDebugRegionId(prev => Math.max(0, prev - 1))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugRegionId(prev => prev - 1)} style={{ padding: '2px 6px' }}>-</button>
               <button onClick={() => setDebugRegionId(prev => prev + 1)} style={{ padding: '2px 6px' }}>+</button>
-              <span style={{ marginLeft: 8 }}>外部ID:</span>
+              <span style={{ fontSize: 10, opacity: 0.7 }}>(0=全部)</span>
+              <span style={{ marginLeft: 12 }}>外部ID:</span>
               <input
                 type="number"
                 value={debugOutsideId}
@@ -1494,21 +1484,54 @@ export function MainCanvas() {
                   fontSize: 11,
                 }}
               >{debugShowOriginal ? '是' : '否'}</button>
-              <span style={{ marginLeft: 12 }}>距离阈值:</span>
+            </div>
+            {/* 第二行：距离阈值、降采样、端点信息 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>欧式距离:</span>
               <input
                 type="number"
                 min="0"
-                max="0.5"
-                step="0.001"
+                max="5"
+                step="0.01"
                 value={debugDistanceThreshold}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   const val = parseFloat(e.target.value) || 0;
-                  setDebugDistanceThreshold(Math.max(0, Math.min(0.5, val)));
+                  setDebugDistanceThreshold(Math.max(0, Math.min(5, val)));
                 }}
                 style={{ width: 60, padding: '2px 4px', fontSize: 12 }}
               />
-              <button onClick={() => setDebugDistanceThreshold(prev => Math.max(0, prev - 0.001))} style={{ padding: '2px 6px' }}>-</button>
-              <button onClick={() => setDebugDistanceThreshold(prev => Math.min(0.5, prev + 0.001))} style={{ padding: '2px 6px' }}>+</button>
+              <button onClick={() => setDebugDistanceThreshold(prev => Math.max(0, prev - 0.1))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugDistanceThreshold(prev => Math.min(5, prev + 0.1))} style={{ padding: '2px 6px' }}>+</button>
+              <span style={{ marginLeft: 12 }}>径向距离:</span>
+              <input
+                type="number"
+                min="0"
+                max="5"
+                step="0.01"
+                value={debugRadialThreshold}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = parseFloat(e.target.value) || 0;
+                  setDebugRadialThreshold(Math.max(0, Math.min(5, val)));
+                }}
+                style={{ width: 60, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugRadialThreshold(prev => Math.max(0, prev - 0.1))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugRadialThreshold(prev => Math.min(5, prev + 0.1))} style={{ padding: '2px 6px' }}>+</button>
+              <span style={{ marginLeft: 12 }}>降采样:</span>
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={debugDownsampleFactor}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = parseFloat(e.target.value) || 0;
+                  setDebugDownsampleFactor(Math.max(0, Math.min(1, val)));
+                }}
+                style={{ width: 60, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugDownsampleFactor(prev => Math.max(0, prev - 0.05))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugDownsampleFactor(prev => Math.min(1, prev + 0.05))} style={{ padding: '2px 6px' }}>+</button>
               <div style={{ marginLeft: 12 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input
@@ -1520,7 +1543,21 @@ export function MainCanvas() {
                 </label>
               </div>
             </div>
-          )}
+          </div>
+        )}
+        <div ref={canvasWrapperRef} style={{ aspectRatio: '1 / 1', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%', position: 'relative', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+          <canvas
+            ref={canvasRef}
+            width={canvasSize}
+            height={canvasSize}
+            style={{ width: '100%', height: '100%', imageRendering: 'auto', display: 'block' }}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onClick={handleCanvasClick}
+            onDoubleClick={handleDoubleClick}
+          />
         </div>
       </div>
       {pointAnnotationEditor && (
