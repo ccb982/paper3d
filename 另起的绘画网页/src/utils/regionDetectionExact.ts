@@ -1,7 +1,6 @@
 import type { Point, Shape } from '../types';
 
 // ========== 1. 光栅化：将图形边缘画到网格上 ==========
-
 function rasterizeLine(
   x0: number, y0: number,
   x1: number, y1: number,
@@ -91,7 +90,7 @@ function rasterizeShape(shape: Shape, stepX: number, stepY: number, xMin: number
   }
 }
 
-// ========== 2. 连通区域识别（BFS） ==========
+// ========== 2. 连通区域识别（BFS）==========
 export interface GridRegion {
   id: number;
   cells: { i: number; j: number }[];
@@ -375,7 +374,7 @@ function getOutsideIdAroundPoint(
   return bestId;
 }
 
-// ========== 核心：收集边界点（8方向 + 多数投票） ==========
+// ========== 核心：收集边界点 ==========
 export interface BoundaryPoint {
   point: Point;
   insideId: number;
@@ -387,7 +386,7 @@ function collectBoundaryPointsForMainRegion(
   gridData: GridData,
   shapes: Shape[]
 ): BoundaryPoint[] {
-  const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
+  const { stepX, stepY, xMin, yMin } = gridData;
 
   const region = gridData.regions.find(r => r.id === regionId);
   if (!region) return [];
@@ -449,7 +448,7 @@ export function groupBoundaryPointsByOutsideId(
   return groups;
 }
 
-// ========== 4. 多边形构建（极角排序） ==========
+// ========== 4. 多边形构建（极角排序）==========
 function buildClosedRing(points: Point[]): Point[] {
   if (points.length < 3) return [];
   const uniqueMap = new Map<string, Point>();
@@ -476,16 +475,9 @@ function buildClosedRing(points: Point[]): Point[] {
   return unique;
 }
 
-/**
- * 基于极角排序和距离突变的分组构建环（改进版）
- * @param points 无序点集
- * @param distanceThresholdFactor 距离突变阈值因子（相对于平均距离的比例，默认0.3）
- * @returns { rings: Point[][], groups: Point[][] } 闭合环数组和分组信息
- */
 function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFactor: number = 0.3): { rings: Point[][], groups: Point[][] } {
   if (points.length < 3) return { rings: [], groups: [] };
 
-  // 1. 去重（基于坐标精度）
   const uniqueMap = new Map<string, Point>();
   for (const p of points) {
     const key = `${p.x.toFixed(9)},${p.y.toFixed(9)}`;
@@ -494,26 +486,21 @@ function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFa
   const unique = Array.from(uniqueMap.values());
   if (unique.length < 3) return { rings: [], groups: [] };
 
-  // 2. 计算重心
   let cx = 0, cy = 0;
   for (const p of unique) { cx += p.x; cy += p.y; }
   cx /= unique.length; cy /= unique.length;
 
-  // 3. 计算每个点的极角和距离
   const pointsWithInfo = unique.map(p => ({
     point: p,
     angle: Math.atan2(p.y - cy, p.x - cx),
     dist: Math.hypot(p.x - cx, p.y - cy)
   }));
 
-  // 4. 按极角排序
   pointsWithInfo.sort((a, b) => a.angle - b.angle);
 
-  // 5. 计算平均距离，设定突变阈值
   const avgDist = pointsWithInfo.reduce((sum, p) => sum + p.dist, 0) / pointsWithInfo.length;
   const distThreshold = avgDist * distanceThresholdFactor;
 
-  // 6. 根据距离突变分组（注意环形首尾）
   const groups: Point[][] = [];
   let currentGroup: Point[] = [pointsWithInfo[0].point];
   const n = pointsWithInfo.length;
@@ -524,21 +511,17 @@ function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFa
     const distDiff = Math.abs(currDist - prevDist);
 
     if (distDiff > distThreshold && currentGroup.length >= 3) {
-      // 突变且当前组足够大，保存当前组并开始新组
       groups.push(currentGroup);
       currentGroup = [pointsWithInfo[i].point];
     } else {
       currentGroup.push(pointsWithInfo[i].point);
     }
   }
-  // 添加最后一组
   if (currentGroup.length >= 3) groups.push(currentGroup);
   else if (currentGroup.length > 0 && groups.length > 0) {
-    // 若最后一组太小，合并到前一组
     groups[groups.length - 1].push(...currentGroup);
   }
 
-  // 7. 对每个组调用 buildClosedRing 生成闭合环
   const rings: Point[][] = [];
   for (const group of groups) {
     const ring = buildClosedRing(group);
@@ -556,7 +539,7 @@ function polygonArea(points: Point[]): number {
   return area / 2;
 }
 
-// ========== 5. 主函数：计算所有封闭区域（每个区域一个外环 + 多个内环） ==========
+// ========== 5. 主函数：计算所有封闭区域 ==========
 export function computeRegionsExact(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
@@ -628,10 +611,141 @@ export interface DebugRegionData {
   centroid?: Point | null;
   uniqueBoundaryPoints?: { point: Point; insideId: number; outsideId: number }[];
   pointGroups?: Point[][];
-  outsideIdEndpoints?: OutsideIdEndpoint[]; // 重新聚类后的端点
-  originalOutsideIdEndpoints?: OutsideIdEndpoint[]; // 原始边界点的端点
+  outsideIdEndpoints?: OutsideIdEndpoint[];
+  originalOutsideIdEndpoints?: OutsideIdEndpoint[];
 }
 
+// ========== 双重阈值辅助函数（新算法） ==========
+function radialDist(p: Point, centroid: Point): number {
+  return Math.hypot(p.x - centroid.x, p.y - centroid.y);
+}
+
+function meetsThreshold(
+  a: Point,
+  b: Point,
+  centroid: Point,
+  distThreshold: number,
+  radialThreshold: number
+): boolean {
+  const euclidean = Math.hypot(a.x - b.x, a.y - b.y);
+  if (euclidean >= distThreshold) return false;
+  const radialA = radialDist(a, centroid);
+  const radialB = radialDist(b, centroid);
+  return Math.abs(radialA - radialB) < radialThreshold;
+}
+
+// ========== 第一次分组：将无序点集构建为有序片段 ==========
+interface Segment {
+  id: number;
+  points: Point[];
+  start: Point;
+  end: Point;
+  closed: boolean;
+}
+
+function groupIntoSegments(
+  points: Point[],
+  centroid: Point | null,
+  distThreshold: number,
+  radialThreshold: number
+): Segment[] {
+  if (points.length === 0) return [];
+
+  if (!centroid) {
+    let cx = 0, cy = 0;
+    for (const p of points) { cx += p.x; cy += p.y; }
+    centroid = { x: cx / points.length, y: cy / points.length };
+  }
+
+  const sorted = [...points];
+  sorted.sort((a, b) => {
+    const angleA = Math.atan2(a.y - centroid!.y, a.x - centroid!.x);
+    const angleB = Math.atan2(b.y - centroid!.y, b.x - centroid!.x);
+    return angleA - angleB;
+  });
+
+  const segments: { points: Point[]; last: Point }[] = [];
+  for (const p of sorted) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < segments.length; i++) {
+      const last = segments[i].last;
+      if (meetsThreshold(last, p, centroid, distThreshold, radialThreshold)) {
+        const d = Math.hypot(last.x - p.x, last.y - p.y);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+    }
+    if (bestIdx !== -1) {
+      segments[bestIdx].points.push(p);
+      segments[bestIdx].last = p;
+    } else {
+      segments.push({ points: [p], last: p });
+    }
+  }
+
+  let nextId = 0;
+  const result: Segment[] = [];
+  for (const seg of segments) {
+    if (seg.points.length === 0) continue;
+    const start = seg.points[0];
+    const end = seg.points[seg.points.length - 1];
+    let closed = false;
+    if (seg.points.length >= 3 && meetsThreshold(start, end, centroid, distThreshold, radialThreshold)) {
+      closed = true;
+    }
+    result.push({ id: nextId++, points: seg.points, start, end, closed });
+  }
+  return result;
+}
+
+// 新版边界点重聚类函数（使用双重阈值）
+export function reclusterBoundaryPointsByPolarAngle(
+  boundaryPoints: BoundaryPoint[],
+  distThreshold: number,
+  radialThreshold: number
+): BoundaryPoint[] {
+  if (boundaryPoints.length === 0) return [];
+
+  const byOriginalId = new Map<number, { point: Point; insideId: number }[]>();
+  for (const bp of boundaryPoints) {
+    if (!byOriginalId.has(bp.outsideId)) {
+      byOriginalId.set(bp.outsideId, []);
+    }
+    byOriginalId.get(bp.outsideId)!.push({ point: bp.point, insideId: bp.insideId });
+  }
+
+  const newBoundaryPoints: BoundaryPoint[] = [];
+  let nextSegmentId = 1;
+
+  for (const [, ptsWithInfo] of byOriginalId) {
+    const points = ptsWithInfo.map(item => item.point);
+    let cx = 0, cy = 0;
+    for (const p of points) { cx += p.x; cy += p.y; }
+    const groupCentroid = { x: cx / points.length, y: cy / points.length };
+
+    const segments = groupIntoSegments(points, groupCentroid, distThreshold, radialThreshold);
+    for (const seg of segments) {
+      const newId = nextSegmentId++;
+      for (const pt of seg.points) {
+        const original = ptsWithInfo.find(item => Math.hypot(item.point.x - pt.x, item.point.y - pt.y) < 1e-6);
+        const insideId = original ? original.insideId : boundaryPoints[0].insideId;
+        newBoundaryPoints.push({
+          point: pt,
+          insideId: insideId,
+          outsideId: newId,
+        });
+      }
+    }
+  }
+
+  console.log(`[reclusterBoundaryPointsByPolarAngle] 生成片段数量: ${nextSegmentId - 1}`);
+  return newBoundaryPoints;
+}
+
+// ========== 调试主函数 getDebugRegions（已集成新聚类）==========
 export function getDebugRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
@@ -644,30 +758,25 @@ export function getDebugRegions(
     if (region.touchesEdge) continue;
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
     
-    // 使用重新聚类算法重新分配 outsideId（基于极角排序和距离阈值）
-    const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, 2.5, distanceThresholdFactor);
+    const step = Math.min(gridData.stepX, gridData.stepY);
+    const distThreshold = step * 1.8 * (1 + distanceThresholdFactor);
+    const radialThreshold = step * 0.6 * (1 + distanceThresholdFactor);
+    const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(boundaryPoints, distThreshold, radialThreshold);
     
     console.log(`[调试] 区域 ${region.id} 原始边界点: ${boundaryPoints.length}, 重新聚类后: ${reclusteredPoints.length}`);
 
-    const step = Math.min(gridData.stepX, gridData.stepY);
-    const threshold = step * 1.5;
-
-    // 使用距离分组算法直接从所有边界点识别多个环（外框和孔洞）
     const allBoundaryPoints = reclusteredPoints.map(bp => bp.point);
     
-    // 保留重新聚类后的边界点（不丢弃任何点），包含 insideId 和 outsideId
     const uniqueBoundaryPoints: { point: Point; insideId: number; outsideId: number }[] = reclusteredPoints.map(bp => ({
       point: bp.point,
       insideId: bp.insideId,
       outsideId: bp.outsideId
     }));
     
-    // 提取纯点集用于环构建（不丢弃任何点）
     const uniquePoints = uniqueBoundaryPoints.map(ub => ub.point);
     
     console.log(`[调试] 区域 ${region.id} 重新聚类后点数: ${uniqueBoundaryPoints.length}`);
     
-    // 使用距离分组算法构建环（可识别孔洞）
     const { rings: ringsFromSegments, groups: pointGroups } = buildClosedRingsByDistanceGrouping(uniquePoints, distanceThresholdFactor);
     console.log(`[调试] 区域 ${region.id} 距离分组成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
@@ -689,7 +798,6 @@ export function getDebugRegions(
       if (outerPts && outerPts.length >= 3) boundaryPolygon = buildClosedRing(outerPts);
     }
 
-    // 计算原始边界点的端点信息
     const originalOutsideIdEndpoints: OutsideIdEndpoint[] = [];
     if (boundaryPoints.length > 0) {
       const origCentroid = { x: 0, y: 0 };
@@ -697,7 +805,6 @@ export function getDebugRegions(
       origCentroid.x /= boundaryPoints.length;
       origCentroid.y /= boundaryPoints.length;
       
-      // 按原始 outsideId 分组
       const byOriginalOutside = new Map<number, { point: Point; insideId: number }[]>();
       for (const bp of boundaryPoints) {
         if (!byOriginalOutside.has(bp.outsideId)) {
@@ -706,7 +813,6 @@ export function getDebugRegions(
         byOriginalOutside.get(bp.outsideId)!.push({ point: bp.point, insideId: bp.insideId });
       }
       
-      // 对每个原始 outsideId 组按极角排序，找到首尾端点
       for (const [outsideId, points] of byOriginalOutside) {
         if (points.length < 1) continue;
         
@@ -735,7 +841,6 @@ export function getDebugRegions(
       }
     }
 
-    // 计算重心用于调试
     let centroid: Point | null = null;
     if (allBoundaryPoints.length > 0) {
       let cx = 0, cy = 0;
@@ -743,10 +848,8 @@ export function getDebugRegions(
       centroid = { x: cx / allBoundaryPoints.length, y: cy / allBoundaryPoints.length };
     }
     
-    // 计算每个 outsideId 组的两侧端点到重心的距离
     const outsideIdEndpoints: OutsideIdEndpoint[] = [];
     if (centroid) {
-      // 按 outsideId 分组
       const byOutsideId = new Map<number, { point: Point; insideId: number }[]>();
       for (const ub of uniqueBoundaryPoints) {
         if (!byOutsideId.has(ub.outsideId)) {
@@ -755,11 +858,9 @@ export function getDebugRegions(
         byOutsideId.get(ub.outsideId)!.push({ point: ub.point, insideId: ub.insideId });
       }
       
-      // 对每个 outsideId 组按极角排序，找到首尾端点
       for (const [outsideId, points] of byOutsideId) {
         if (points.length < 1) continue;
         
-        // 按极角排序
         points.sort((a, b) => {
           const angleA = Math.atan2(a.point.y - centroid.y, a.point.x - centroid.x);
           const angleB = Math.atan2(b.point.y - centroid.y, b.point.x - centroid.x);
@@ -769,7 +870,6 @@ export function getDebugRegions(
         const p1 = points[0];
         const dist1 = Math.hypot(p1.point.x - centroid.x, p1.point.y - centroid.y);
         
-        // 如果只有一个点，p2 为 null
         let p2Data: { x: number; y: number; distToCentroid: number } | null = null;
         if (points.length >= 2) {
           const p2 = points[points.length - 1];
@@ -813,540 +913,11 @@ export function getDebugRegions(
   return debug;
 }
 
-// 保留兼容旧代码的空函数
-// ========== 新增：点集排序与聚类（仅用于调试验证） ==========
-
-function orderPointsByAdjacency(points: Point[], threshold: number): Point[] {
-  if (points.length <= 1) return points;
-  const n = points.length;
-  const adj: number[][] = Array.from({ length: n }, () => []);
-  const threshSq = threshold * threshold;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const dx = points[i].x - points[j].x;
-      const dy = points[i].y - points[j].y;
-      if (dx * dx + dy * dy <= threshSq) {
-        adj[i].push(j);
-        adj[j].push(i);
-      }
-    }
-  }
-
-  let start = 0;
-  let foundEndpoint = false;
-  for (let i = 0; i < n; i++) {
-    if (adj[i].length === 1) { start = i; foundEndpoint = true; break; }
-  }
-  if (!foundEndpoint) {
-    for (let i = 0; i < n; i++) {
-      if (adj[i].length === 0) return [points[i]];
-    }
-    if (n > 0 && adj[0].length > 1) start = 0;
-    else return points;
-  }
-
-  const path: number[] = [start];
-  let prev = -1;
-  let cur = start;
-  for (let iter = 0; iter < n * 2; iter++) {
-    const nexts = adj[cur].filter(nb => nb !== prev);
-    if (nexts.length === 0) break;
-    const next = nexts[0];
-    if (next === start && path.length > 1) break;
-    path.push(next);
-    prev = cur;
-    cur = next;
-  }
-  if (path.length > 2 && points[path[0]] === points[path[path.length-1]]) path.pop();
-  return path.map(idx => points[idx]);
+// 保留旧函数兼容（避免外部调用报错）
+export function sortAndClusterBoundaryPoints(boundaryPoints: BoundaryPoint[], _threshold: number): BoundaryPoint[] {
+  console.warn("sortAndClusterBoundaryPoints is deprecated, use reclusterBoundaryPointsByPolarAngle");
+  return boundaryPoints;
 }
-
-export function sortAndClusterBoundaryPoints(
-  boundaryPoints: BoundaryPoint[],
-  threshold: number
-): BoundaryPoint[] {
-  if (boundaryPoints.length === 0) return [];
-
-  const groupsByOriginalId = new Map<number, BoundaryPoint[]>();
-  for (const bp of boundaryPoints) {
-    if (!groupsByOriginalId.has(bp.outsideId)) {
-      groupsByOriginalId.set(bp.outsideId, []);
-    }
-    groupsByOriginalId.get(bp.outsideId)!.push(bp);
-  }
-
-  const newBoundaryPoints: BoundaryPoint[] = [];
-  let nextNewId = 1;
-
-  for (const [, pointsInGroup] of groupsByOriginalId) {
-    const rawPoints = pointsInGroup.map(bp => bp.point);
-    const n = rawPoints.length;
-    if (n < 3) continue;
-
-    const adjLocal: number[][] = Array.from({ length: n }, () => []);
-    const threshSq = threshold * threshold;
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const dx = rawPoints[i].x - rawPoints[j].x;
-        const dy = rawPoints[i].y - rawPoints[j].y;
-        if (dx * dx + dy * dy <= threshSq) {
-          adjLocal[i].push(j);
-          adjLocal[j].push(i);
-        }
-      }
-    }
-
-    const visited = new Array(n).fill(false);
-    const components: number[][] = [];
-
-    for (let i = 0; i < n; i++) {
-      if (!visited[i]) {
-        const queue: number[] = [i];
-        visited[i] = true;
-        const comp: number[] = [i];
-        while (queue.length) {
-          const cur = queue.shift()!;
-          for (const nb of adjLocal[cur]) {
-            if (!visited[nb]) {
-              visited[nb] = true;
-              queue.push(nb);
-              comp.push(nb);
-            }
-          }
-        }
-        components.push(comp);
-      }
-    }
-
-    for (const comp of components) {
-      if (comp.length < 3) continue;
-      const compPoints = comp.map(idx => rawPoints[idx]);
-      const orderedPoints = orderPointsByAdjacency(compPoints, threshold);
-      if (orderedPoints.length < 3) continue;
-
-      const newId = nextNewId++;
-      for (let idx = 0; idx < orderedPoints.length; idx++) {
-        const pt = orderedPoints[idx];
-        const origBp = pointsInGroup.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
-        if (origBp) {
-          newBoundaryPoints.push({
-            point: pt,
-            insideId: origBp.insideId,
-            outsideId: newId,
-          });
-        }
-      }
-    }
-  }
-
-  console.log(`[sortAndClusterBoundaryPoints] 生成了 ${nextNewId - 1} 个有序片段`);
-  return newBoundaryPoints;
-}
-
 export interface ScanlineSpan { y: number; xMin: number; xMax: number; }
 export type ScanlineCache = Record<number, ScanlineSpan[]>;
-export function computeScanlineIntervals(gridData: GridData): ScanlineCache { return {}; }
-
-// ============================================================================
-// 新增：基于 insideId 的边界点聚类与排序（用于调试验证，不影响原有区域构建）
-// ============================================================================
-
-function splitAndSortPointsInGroup(pointsInGroup: BoundaryPoint[], threshold: number): Point[][] {
-  if (pointsInGroup.length < 3) return [];
-
-  const rawPoints = pointsInGroup.map(bp => bp.point);
-  const n = rawPoints.length;
-
-  const adj: number[][] = Array.from({ length: n }, () => []);
-  const threshSq = threshold * threshold;
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const dx = rawPoints[i].x - rawPoints[j].x;
-      const dy = rawPoints[i].y - rawPoints[j].y;
-      if (dx * dx + dy * dy <= threshSq) {
-        adj[i].push(j);
-        adj[j].push(i);
-      }
-    }
-  }
-
-  const visited = new Array(n).fill(false);
-  const components: number[][] = [];
-  for (let i = 0; i < n; i++) {
-    if (!visited[i]) {
-      const queue: number[] = [i];
-      visited[i] = true;
-      const comp: number[] = [i];
-      while (queue.length) {
-        const cur = queue.shift()!;
-        for (const nb of adj[cur]) {
-          if (!visited[nb]) {
-            visited[nb] = true;
-            queue.push(nb);
-            comp.push(nb);
-          }
-        }
-      }
-      components.push(comp);
-    }
-  }
-
-  const result: Point[][] = [];
-  for (const comp of components) {
-    if (comp.length < 3) continue;
-    const compPoints = comp.map(idx => rawPoints[idx]);
-    const ordered = orderPointsByAdjacency(compPoints, threshold);
-    if (ordered.length >= 3) {
-      result.push(ordered);
-    }
-  }
-  return result;
-}
-
-function getNextAvailableId(usedIds: Set<number>, start: number): number {
-  let id = start;
-  while (usedIds.has(id)) {
-    id++;
-  }
-  return id;
-}
-
-function splitByPolarAngleAndDistance(points: Point[], gapFactor: number): Point[][] {
-  if (points.length <= 2) return [points];
-
-  let cx = 0, cy = 0;
-  for (const p of points) { cx += p.x; cy += p.y; }
-  cx /= points.length;
-  cy /= points.length;
-
-  const sorted = [...points];
-  sorted.sort((a, b) => {
-    const angleA = Math.atan2(a.y - cy, a.x - cx);
-    const angleB = Math.atan2(b.y - cy, b.x - cx);
-    return angleA - angleB;
-  });
-
-  const n = sorted.length;
-  const dists: number[] = [];
-  for (let i = 0; i < n - 1; i++) {
-    dists.push(Math.hypot(sorted[i+1].x - sorted[i].x, sorted[i+1].y - sorted[i].y));
-  }
-  const lastDist = Math.hypot(sorted[n-1].x - sorted[0].x, sorted[n-1].y - sorted[0].y);
-
-  const allDists = [...dists, lastDist];
-  allDists.sort((a,b) => a-b);
-  const median = allDists[Math.floor(allDists.length / 2)];
-  const threshold = Math.max(median * gapFactor, 1e-6);
-
-  const cuts: number[] = [];
-  for (let i = 0; i < dists.length; i++) {
-    if (dists[i] > threshold) cuts.push(i + 1);
-  }
-
-  const segments: Point[][] = [];
-  let start = 0;
-  for (const cut of cuts) {
-    if (cut > start) {
-      segments.push(sorted.slice(start, cut));
-      start = cut;
-    }
-  }
-  if (start < n) {
-    segments.push(sorted.slice(start, n));
-  }
-
-  return segments;
-}
-
-/**
- * 对点集进行距离去重
- * @param points 原始点数组
- * @param threshold 距离阈值，小于此值的点被视为重复
- * @returns 去重后的点数组（保持原顺序，保留第一个遇到的点）
- */
-function deduplicatePointsByDistance(points: Point[], threshold: number): Point[] {
-  if (points.length <= 1) return points.slice();
-
-  const result: Point[] = [];
-  const threshSq = threshold * threshold;
-
-  for (const p of points) {
-    let isDuplicate = false;
-    for (const kept of result) {
-      const dx = p.x - kept.x;
-      const dy = p.y - kept.y;
-      if (dx * dx + dy * dy < threshSq) {
-        isDuplicate = true;
-        break;
-      }
-    }
-    if (!isDuplicate) {
-      result.push(p);
-    }
-  }
-  return result;
-}
-
-export function reclusterBoundaryPointsByPolarAngle(
-  boundaryPoints: BoundaryPoint[],
-  gapFactor: number = 2.5,
-  dedupThreshold: number = 5.0
-): BoundaryPoint[] {
-  if (boundaryPoints.length === 0) return [];
-
-  const byInside = new Map<number, BoundaryPoint[]>();
-  for (const bp of boundaryPoints) {
-    if (!byInside.has(bp.insideId)) byInside.set(bp.insideId, []);
-    byInside.get(bp.insideId)!.push(bp);
-  }
-
-  const newBoundaryPoints: BoundaryPoint[] = [];
-  let nextId = 1;
-
-  for (const [insideId, insidePoints] of byInside) {
-    const byOriginalOutside = new Map<number, BoundaryPoint[]>();
-    for (const bp of insidePoints) {
-      const oid = bp.outsideId;
-      if (!byOriginalOutside.has(oid)) byOriginalOutside.set(oid, []);
-      byOriginalOutside.get(oid)!.push(bp);
-    }
-
-    for (const [origOutsideId, group] of byOriginalOutside) {
-      const points = group.map(bp => bp.point);
-      const segments = splitByPolarAngleAndDistance(points, gapFactor);
-
-      for (const seg of segments) {
-        if (seg.length === 0) continue;
-        // 对每个片段内的点去重
-        const dedupedSeg = deduplicatePointsByDistance(seg, dedupThreshold);
-        if (dedupedSeg.length === 0) continue;
-        
-        const newOutsideId = nextId++;
-        for (const pt of dedupedSeg) {
-          const orig = group.find(bp => Math.hypot(bp.point.x - pt.x, bp.point.y - pt.y) < 1e-6);
-          if (orig) {
-            newBoundaryPoints.push({
-              point: pt,
-              insideId: insideId,
-              outsideId: newOutsideId,
-            });
-          } else {
-            newBoundaryPoints.push({ point: pt, insideId: insideId, outsideId: newOutsideId });
-          }
-        }
-      }
-    }
-  }
-
-  console.log(`[reclusterBoundaryPointsByPolarAngle] 新生成片段数量: ${nextId - 1}`);
-  return newBoundaryPoints;
-}
-
-interface RingSegment {
-  id: number;
-  points: Point[];
-  start: Point;
-  end: Point;
-}
-
-interface RingEndpoint {
-  segId: number;
-  isStart: boolean;
-  point: Point;
-}
-
-/**
- * 从新的分组（每个 outsideId 对应一个有序片段）构建完整的闭合环
- * @param groupedPoints Map<outsideId, Point[]> 每个 outsideId 内的点已经按顺序排列
- * @param distanceThreshold 端点匹配的距离阈值（世界单位）
- * @returns 闭合环列表，每个环是 Point[]（首尾闭合）
- */
-export function buildRingsFromSegments(
-  groupedPoints: Map<number, Point[]>,
-  distanceThreshold: number = 0.1
-): Point[][] {
-  const segments: RingSegment[] = [];
-  for (const [id, points] of groupedPoints) {
-    if (points.length < 2) continue;
-    segments.push({
-      id,
-      points: points,
-      start: points[0],
-      end: points[points.length - 1],
-    });
-  }
-
-  if (segments.length === 0) return [];
-
-  const endpoints: RingEndpoint[] = [];
-  for (const seg of segments) {
-    endpoints.push({ segId: seg.id, isStart: true, point: seg.start });
-    endpoints.push({ segId: seg.id, isStart: false, point: seg.end });
-  }
-
-  const usedEndpoint = new Set<number>();
-  const matchMap = new Map<number, number>();
-  const threshSq = distanceThreshold * distanceThreshold;
-
-  for (let i = 0; i < endpoints.length; i++) {
-    if (usedEndpoint.has(i)) continue;
-    let bestIdx = -1;
-    let bestDistSq = Infinity;
-    for (let j = 0; j < endpoints.length; j++) {
-      if (i === j || usedEndpoint.has(j)) continue;
-      if (endpoints[i].segId === endpoints[j].segId) continue;
-      const dx = endpoints[i].point.x - endpoints[j].point.x;
-      const dy = endpoints[i].point.y - endpoints[j].point.y;
-      const distSq = dx * dx + dy * dy;
-      if (distSq < bestDistSq && distSq <= threshSq) {
-        bestDistSq = distSq;
-        bestIdx = j;
-      }
-    }
-    if (bestIdx !== -1) {
-      matchMap.set(i, bestIdx);
-      matchMap.set(bestIdx, i);
-      usedEndpoint.add(i);
-      usedEndpoint.add(bestIdx);
-    }
-  }
-
-  const usedSegment = new Set<number>();
-  const rings: Point[][] = [];
-
-  for (const seg of segments) {
-    if (usedSegment.has(seg.id)) continue;
-
-    let startEndpointIdx = endpoints.findIndex(
-      ep => ep.segId === seg.id && ep.isStart === true
-    );
-    if (startEndpointIdx === -1) continue;
-
-    const ringPoints: Point[] = [];
-    let currentIdx = startEndpointIdx;
-
-    while (!usedSegment.has(endpoints[currentIdx].segId)) {
-      const ep = endpoints[currentIdx];
-      const currentSeg = segments.find(s => s.id === ep.segId)!;
-      usedSegment.add(currentSeg.id);
-
-      if (ep.isStart) {
-        for (let i = 0; i < currentSeg.points.length; i++) {
-          ringPoints.push(currentSeg.points[i]);
-        }
-      } else {
-        for (let i = currentSeg.points.length - 1; i >= 0; i--) {
-          ringPoints.push(currentSeg.points[i]);
-        }
-      }
-
-      const matchedIdx = matchMap.get(currentIdx);
-      if (matchedIdx === undefined) break;
-      currentIdx = matchedIdx;
-      if (currentIdx === startEndpointIdx) break;
-    }
-
-    if (ringPoints.length >= 3) {
-      const firstPt = ringPoints[0];
-      const lastPt = ringPoints[ringPoints.length - 1];
-      if (Math.hypot(firstPt.x - lastPt.x, firstPt.y - lastPt.y) > distanceThreshold) {
-        ringPoints.push(firstPt);
-      }
-      rings.push(ringPoints);
-    }
-  }
-
-  return rings;
-}
-
-/**
- * 鲁棒的最近邻生长环构建算法
- * @param allPoints 所有点（已去重）
- * @param distanceThreshold 最近邻距离阈值（世界单位）
- * @returns 闭合环数组
- */
-export function buildRingsByPointWalking(
-  allPoints: Point[],
-  distanceThreshold: number = 0.1
-): Point[][] {
-  if (allPoints.length < 3) return [];
-
-  let remainingIndices = new Set<number>(allPoints.map((_, idx) => idx));
-  const rings: Point[][] = [];
-
-  const distSq = (a: Point, b: Point) => {
-    const dx = a.x - b.x, dy = a.y - b.y;
-    return dx * dx + dy * dy;
-  };
-
-  while (remainingIndices.size >= 3) {
-    let startIdx: number | null = null;
-    for (const idx of remainingIndices) {
-      startIdx = idx;
-      break;
-    }
-    if (startIdx === null) break;
-
-    const pathIndices: number[] = [startIdx];
-    remainingIndices.delete(startIdx);
-
-    let currentIdx = startIdx;
-    let closed = false;
-    let maxAttempts = remainingIndices.size + 10;
-    let attempts = 0;
-
-    while (!closed && attempts < maxAttempts && remainingIndices.size > 0) {
-      let bestIdx: number | null = null;
-      let bestDistSq = Infinity;
-      const currentPoint = allPoints[currentIdx];
-      for (const idx of remainingIndices) {
-        const d2 = distSq(currentPoint, allPoints[idx]);
-        if (d2 < bestDistSq) {
-          bestDistSq = d2;
-          bestIdx = idx;
-        }
-      }
-
-      if (bestIdx === null) break;
-      const nearestDist = Math.sqrt(bestDistSq);
-      const startPoint = allPoints[startIdx];
-      const toStart = Math.hypot(allPoints[bestIdx].x - startPoint.x, allPoints[bestIdx].y - startPoint.y);
-
-      if (toStart <= distanceThreshold && pathIndices.length >= 2) {
-        closed = true;
-        break;
-      } else if (nearestDist <= distanceThreshold) {
-        pathIndices.push(bestIdx);
-        remainingIndices.delete(bestIdx);
-        currentIdx = bestIdx;
-      } else {
-        break;
-      }
-      attempts++;
-    }
-
-    if (!closed && pathIndices.length >= 3) {
-      const lastPoint = allPoints[pathIndices[pathIndices.length - 1]];
-      const startPoint = allPoints[startIdx];
-      if (Math.hypot(lastPoint.x - startPoint.x, lastPoint.y - startPoint.y) <= distanceThreshold) {
-        closed = true;
-      }
-    }
-
-    if (closed && pathIndices.length >= 3) {
-      const ringPoints = pathIndices.map(idx => allPoints[idx]);
-      const last = ringPoints[ringPoints.length - 1];
-      const first = ringPoints[0];
-      if (Math.hypot(last.x - first.x, last.y - first.y) > distanceThreshold) {
-        ringPoints.push(first);
-      }
-      rings.push(ringPoints);
-    } else {
-      for (let i = 1; i < pathIndices.length; i++) {
-        remainingIndices.add(pathIndices[i]);
-      }
-    }
-  }
-
-  return rings;
-}
+export function computeScanlineIntervals(_gridData: GridData): ScanlineCache { return {}; }
