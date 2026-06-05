@@ -131,7 +131,7 @@ export function MainCanvas() {
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
   const [debugShowOriginal, setDebugShowOriginal] = useState(true);
   const [debugDistanceThreshold, setDebugDistanceThreshold] = useState(1.2);
-  const [debugRadialThreshold, setDebugRadialThreshold] = useState(1.2);
+  const [debugRadialThreshold, setDebugRadialThreshold] = useState(2);
   const [debugDownsampleFactor, setDebugDownsampleFactor] = useState(0.5);
   const [debugRingDistanceThreshold, setDebugRingDistanceThreshold] = useState(2);
   const [debugRingRadialThreshold, setDebugRingRadialThreshold] = useState(2);

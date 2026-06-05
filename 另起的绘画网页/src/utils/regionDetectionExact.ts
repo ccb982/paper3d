@@ -817,9 +817,9 @@ export function getDebugRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
   resolution: number = 300,
-  distanceThresholdFactor: number = 0.5,
-  radialThresholdFactor: number = 0.5,
-  downsampleDistanceFactor: number = 0.2,
+  distanceThresholdFactor: number = 1.2,
+  radialThresholdFactor: number = 2,
+  downsampleDistanceFactor: number = 0.5,
   ringDistanceThreshold: number = 2,
   ringRadialThreshold: number = 2
 ): DebugRegionData[] {
