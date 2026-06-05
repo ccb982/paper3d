@@ -134,6 +134,7 @@ export function MainCanvas() {
   const [debugRadialThreshold, setDebugRadialThreshold] = useState(0.8);
   const [debugDownsampleFactor, setDebugDownsampleFactor] = useState(0.5);
   const [debugShowEndpoints, setDebugShowEndpoints] = useState(false);
+  const [debugShowRings, setDebugShowRings] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -875,14 +876,14 @@ export function MainCanvas() {
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
         debugRegions.forEach((region, idx) => {
-          console.log(`[调试绘制] region.id=${region.id}, boundaryPoints=${region.boundaryPoints.length}`);
+          // console.log(`[调试绘制] region.id=${region.id}, boundaryPoints=${region.boundaryPoints.length}`);
           if (debugRegionId !== 0 && region.id !== debugRegionId) return;
           ctx.save();
           const color = colors[idx % colors.length];
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
-          // 端点信息模式下不绘制
-          if (!debugShowEndpoints && region.boundaryPoints && region.boundaryPoints.length > 0) {
+          // 端点信息模式和绘制环模式下不绘制
+          if (!debugShowEndpoints && !debugShowRings && region.boundaryPoints && region.boundaryPoints.length > 0) {
             // 按 outsideId 分组
             const debugPoints = debugShowOriginal
               ? region.boundaryPoints
@@ -895,7 +896,7 @@ export function MainCanvas() {
               outsideIdGroups.get(bp.outsideId)!.push(bp);
             }
 
-            console.log(`[调试绘制] 区域${region.id}分组(${debugShowOriginal ? '原始' : '新聚类'}):`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
+            // console.log(`[调试绘制] 区域${region.id}分组(${debugShowOriginal ? '原始' : '新聚类'}):`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
 
             const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
             let colorIdx = 0;
@@ -978,8 +979,9 @@ export function MainCanvas() {
           }
 
           // 绘制端点信息（原始模式下使用 originalOutsideIdEndpoints，非原始模式下使用 outsideIdEndpoints）
+          // 绘制环模式下不显示端点信息
           const endpointsToShow = debugShowOriginal ? region.originalOutsideIdEndpoints : region.outsideIdEndpoints;
-          if (debugShowEndpoints && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
+          if (debugShowEndpoints && !debugShowRings && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
             const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
             const endpointColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
             
@@ -1039,32 +1041,35 @@ export function MainCanvas() {
             });
           }
 
-          // // 绘制环（仅在非原始模式下显示）
-          // if (!debugShowOriginal && region.rings && region.rings.length > 0) {
-          //   const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
-          //   region.rings.forEach((ring, ringIdx) => {
-          //     if (ring.length < 3) return;
-          //     const ringColor = ringColors[ringIdx % ringColors.length];
-          //     ctx.strokeStyle = ringColor;
-          //     ctx.fillStyle = ringColor + '30';
-          //     ctx.lineWidth = 3;
-          //     ctx.beginPath();
-          //     for (let i = 0; i < ring.length; i++) {
-          //       const cp = worldToCanvasFn(ring[i].x, ring[i].y);
-          //       if (i === 0) ctx.moveTo(cp.x, cp.y);
-          //       else ctx.lineTo(cp.x, cp.y);
-          //     }
-          //     ctx.closePath();
-          //     ctx.fill();
-          //     ctx.stroke();
+          // 绘制环（仅在 debugShowRings 为 true 时显示）
+          if (debugShowRings) {
+            console.log(`[调试绘制] 区域${region.id} rings数据:`, region.rings);
+            if (region.rings && region.rings.length > 0) {
+            const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+            region.rings.forEach((ring, ringIdx) => {
+              if (ring.length < 3) return;
+              const ringColor = ringColors[ringIdx % ringColors.length];
+              ctx.strokeStyle = ringColor;
+              ctx.fillStyle = ringColor + '30';
+              ctx.lineWidth = 3;
+              ctx.beginPath();
+              for (let i = 0; i < ring.length; i++) {
+                const cp = worldToCanvasFn(ring[i].x, ring[i].y);
+                if (i === 0) ctx.moveTo(cp.x, cp.y);
+                else ctx.lineTo(cp.x, cp.y);
+              }
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
 
-          //     const midIdx = Math.floor(ring.length / 2);
-          //     const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
-          //     ctx.fillStyle = ringColor;
-          //     ctx.font = 'bold 12px monospace';
-          //     ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
-          //   });
-          // }
+              const midIdx = Math.floor(ring.length / 2);
+              const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
+              ctx.fillStyle = ringColor;
+              ctx.font = 'bold 12px monospace';
+              ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
+            });
+            }
+          }
 
           ctx.restore();
         });
@@ -1540,6 +1545,16 @@ export function MainCanvas() {
                     onChange={(e) => setDebugShowEndpoints(e.target.checked)}
                   />
                   <span>端点信息</span>
+                </label>
+              </div>
+              <div style={{ marginLeft: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={debugShowRings}
+                    onChange={(e) => setDebugShowRings(e.target.checked)}
+                  />
+                  <span>绘制环</span>
                 </label>
               </div>
             </div>

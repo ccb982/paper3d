@@ -832,16 +832,16 @@ export function getDebugRegions(
     // 降采样：先减少点密度，避免极角排序后出现微小抖动
     // 使用更大的基础倍数（10倍step），使得滑块调整更有效果
     const downsampleThres = step * 10 * downsampleDistanceFactor;
-    console.log(`[调试] 区域 ${region.id} 降采样阈值=${downsampleThres.toFixed(6)}`);
+    // console.log(`[调试] 区域 ${region.id} 降采样阈值=${downsampleThres.toFixed(6)}`);
     const downsampledPoints = downsampleBoundaryPointsByOutsideId(boundaryPoints, downsampleThres);
     
     // 调整常数因子，确保阈值足够大以匹配实际点间距
     const distThreshold = step * 8 * (1 + distanceThresholdFactor);
     const radialThreshold = step * 4 * (1 + radialThresholdFactor);
-    console.log(`[调试] 区域 ${region.id} step=${step.toFixed(6)}, distThreshold=${distThreshold.toFixed(6)}, radialThreshold=${radialThreshold.toFixed(6)}`);
+    // console.log(`[调试] 区域 ${region.id} step=${step.toFixed(6)}, distThreshold=${distThreshold.toFixed(6)}, radialThreshold=${radialThreshold.toFixed(6)}`);
     const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(downsampledPoints, distThreshold, radialThreshold);
     
-    console.log(`[调试] 区域 ${region.id} 原始边界点: ${boundaryPoints.length}, 重新聚类后: ${reclusteredPoints.length}`);
+    // console.log(`[调试] 区域 ${region.id} 原始边界点: ${boundaryPoints.length}, 重新聚类后: ${reclusteredPoints.length}`);
 
     const allBoundaryPoints = reclusteredPoints.map(bp => bp.point);
     
@@ -853,17 +853,64 @@ export function getDebugRegions(
     
     const uniquePoints = uniqueBoundaryPoints.map(ub => ub.point);
     
-    console.log(`[调试] 区域 ${region.id} 重新聚类后点数: ${uniqueBoundaryPoints.length}`);
+    // console.log(`[调试] 区域 ${region.id} 重新聚类后点数: ${uniqueBoundaryPoints.length}`);
     
-    const { rings: ringsFromSegments, groups: pointGroups } = buildClosedRingsByDistanceGrouping(uniquePoints, distanceThresholdFactor);
-    console.log(`[调试] 区域 ${region.id} 距离分组成环数量: ${ringsFromSegments.length}`);
+    // 构建 segments 列表（基于 reclusteredPoints 的分组）
+    const segmentsMap = new Map<number, { points: Point[]; start: Point; end: Point; closed: boolean }>();
+    for (const bp of reclusteredPoints) {
+      if (!segmentsMap.has(bp.outsideId)) {
+        segmentsMap.set(bp.outsideId, { points: [], start: bp.point, end: bp.point, closed: false });
+      }
+      const seg = segmentsMap.get(bp.outsideId)!;
+      seg.points.push(bp.point);
+      seg.end = bp.point;
+    }
+    
+    // 计算全局重心用于判断闭合
+    const globalCentroid = { x: 0, y: 0 };
+    let totalPoints = 0;
+    for (const seg of segmentsMap.values()) {
+      for (const p of seg.points) {
+        globalCentroid.x += p.x;
+        globalCentroid.y += p.y;
+        totalPoints++;
+      }
+    }
+    if (totalPoints > 0) {
+      globalCentroid.x /= totalPoints;
+      globalCentroid.y /= totalPoints;
+    }
+    
+    // 构建 SegmentForMatching 列表
+    const segmentsList: SegmentForMatching[] = [];
+    for (const seg of segmentsMap.values()) {
+      const start = seg.points[0];
+      const end = seg.points[seg.points.length - 1];
+      const euclidean = Math.hypot(start.x - end.x, start.y - end.y);
+      const radialStart = Math.hypot(start.x - globalCentroid.x, start.y - globalCentroid.y);
+      const radialEnd = Math.hypot(end.x - globalCentroid.x, end.y - globalCentroid.y);
+      const closed = (euclidean < distThreshold && Math.abs(radialStart - radialEnd) < radialThreshold);
+      segmentsList.push({
+        points: seg.points,
+        start,
+        end,
+        closed
+      });
+    }
+    
+    // 使用新的组环算法
+    console.log(`[调试] 区域 ${region.id} segmentsList数量: ${segmentsList.length}`);
+    segmentsList.forEach((seg, idx) => {
+      console.log(`  segment${idx}: ${seg.points.length}点, closed=${seg.closed}, start=(${seg.start.x.toFixed(3)},${seg.start.y.toFixed(3)}), end=(${seg.end.x.toFixed(3)},${seg.end.y.toFixed(3)})`);
+    });
+    const ringsFromSegments = buildClosedRingsFromSegments(segmentsList, globalCentroid, distThreshold, radialThreshold);
+    console.log(`[调试] 区域 ${region.id} 端点匹配成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
-      console.log(`  环${idx}: ${ring.length} 个顶点`);
+      console.log(`  环${idx}: ${ring.length} 个顶点，起点=(${ring[0]?.x.toFixed(3)},${ring[0]?.y.toFixed(3)})`);
     });
-    console.log(`[调试] 区域 ${region.id} 距离分组数量: ${pointGroups.length}`);
-    pointGroups.forEach((group, idx) => {
-      console.log(`  组${idx}: ${group.length} 个点`);
-    });
+    
+    // 保持后续代码兼容，pointGroups 设为空数组
+    const pointGroups: Point[][] = [];
 
     let boundaryPolygon: Point[] = [];
     if (boundaryPoints.length >= 3) {
@@ -993,3 +1040,150 @@ export function sortAndClusterBoundaryPoints(boundaryPoints: BoundaryPoint[], _t
 export interface ScanlineSpan { y: number; xMin: number; xMax: number; }
 export type ScanlineCache = Record<number, ScanlineSpan[]>;
 export function computeScanlineIntervals(_gridData: GridData): ScanlineCache { return {}; }
+
+// ========== 新组环函数：基于端点匹配的双重阈值算法 ==========
+export interface SegmentForMatching {
+  points: Point[];
+  start: Point;
+  end: Point;
+  closed: boolean;
+}
+
+interface OpenRing {
+  points: Point[];
+  first: Point;
+  last: Point;
+}
+
+export function buildClosedRingsFromSegments(
+  segments: SegmentForMatching[],
+  centroid: Point,
+  distThreshold: number,
+  radialThreshold: number
+): Point[][] {
+  if (segments.length === 0) return [];
+
+  function meetsThreshold(a: Point, b: Point, debugMsg?: string): boolean {
+    const euclidean = Math.hypot(a.x - b.x, a.y - b.y);
+    const radialA = Math.hypot(a.x - centroid.x, a.y - centroid.y);
+    const radialB = Math.hypot(b.x - centroid.x, b.y - centroid.y);
+    const radialDiff = Math.abs(radialA - radialB);
+    const result = euclidean < distThreshold && radialDiff < radialThreshold;
+    if (!result && debugMsg) {
+      console.log(`[组环调试] ${debugMsg} - 失败: euclidean=${euclidean.toFixed(6)} >= ${distThreshold.toFixed(6)}, radialDiff=${radialDiff.toFixed(6)} >= ${radialThreshold.toFixed(6)}`);
+    }
+    return result;
+  }
+
+  const used = new Array(segments.length).fill(false);
+  const openRings: OpenRing[] = [];
+  const closedRings: Point[][] = [];
+
+  function tryConnect(
+    ring: OpenRing,
+    seg: SegmentForMatching,
+    connectToFirst: boolean,
+    connectWithStart: boolean
+  ): { success: boolean; newPoints: Point[] } {
+    const ringPoint = connectToFirst ? ring.first : ring.last;
+    const segPoint = connectWithStart ? seg.start : seg.end;
+
+    if (!meetsThreshold(ringPoint, segPoint)) return { success: false, newPoints: [] };
+
+    let merged: Point[];
+    if (connectToFirst) {
+      const segmentPoints = connectWithStart ? seg.points : [...seg.points].reverse();
+      merged = [...segmentPoints, ...ring.points];
+    } else {
+      const segmentPoints = connectWithStart ? seg.points.slice(1) : [...seg.points].reverse().slice(1);
+      merged = [...ring.points, ...segmentPoints];
+    }
+    return { success: true, newPoints: merged };
+  }
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    if (used[idx]) continue;
+    const seg = segments[idx];
+    let matched = false;
+
+    for (let i = 0; i < openRings.length; i++) {
+      const ring = openRings[i];
+      const ways = [
+        { connectToFirst: true, connectWithStart: true },
+        { connectToFirst: true, connectWithStart: false },
+        { connectToFirst: false, connectWithStart: true },
+        { connectToFirst: false, connectWithStart: false }
+      ];
+      for (const way of ways) {
+        const result = tryConnect(ring, seg, way.connectToFirst, way.connectWithStart);
+        if (!result.success && openRings.length > 0) {
+          const ringPoint = way.connectToFirst ? ring.first : ring.last;
+          const segPoint = way.connectWithStart ? seg.start : seg.end;
+          meetsThreshold(ringPoint, segPoint, `连接segment${idx}到环${i}`);
+        }
+        if (result.success) {
+          openRings[i] = {
+            points: result.newPoints,
+            first: result.newPoints[0],
+            last: result.newPoints[result.newPoints.length - 1]
+          };
+          used[idx] = true;
+          matched = true;
+
+          const firstPt = openRings[i].first;
+          const lastPt = openRings[i].last;
+          if (meetsThreshold(firstPt, lastPt)) {
+            const closedRing = openRings.splice(i, 1)[0].points;
+            if (Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
+                           closedRing[0].y - closedRing[closedRing.length - 1].y) > 1e-6) {
+              closedRing.push(closedRing[0]);
+            }
+            closedRings.push(closedRing);
+          }
+          break;
+        }
+      }
+      if (matched) break;
+    }
+
+    if (!matched) {
+      openRings.push({
+        points: [...seg.points],
+        first: seg.start,
+        last: seg.end
+      });
+      used[idx] = true;
+    }
+  }
+
+  console.log(`[组环调试] 剩余开放环数量: ${openRings.length}`);
+  for (const ring of openRings) {
+    console.log(`[组环调试] 开放环点数: ${ring.points.length}, first=(${ring.first.x.toFixed(6)},${ring.first.y.toFixed(6)}), last=(${ring.last.x.toFixed(6)},${ring.last.y.toFixed(6)})`);
+    const isClosed = meetsThreshold(ring.first, ring.last, '开放环自身闭合检测');
+    console.log(`[组环调试] 开放环自身闭合检测: ${isClosed}`);
+    if (isClosed && ring.points.length >= 3) {
+      let closedRing = [...ring.points];
+      if (Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
+                     closedRing[0].y - closedRing[closedRing.length - 1].y) > 1e-6) {
+        closedRing.push(closedRing[0]);
+      }
+      closedRings.push(closedRing);
+    }
+  }
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    if (!used[idx] && segments[idx].closed && segments[idx].points.length >= 3) {
+      const seg = segments[idx];
+      if (meetsThreshold(seg.start, seg.end)) {
+        let closedRing = [...seg.points];
+        if (Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
+                       closedRing[0].y - closedRing[closedRing.length - 1].y) > 1e-6) {
+          closedRing.push(closedRing[0]);
+        }
+        closedRings.push(closedRing);
+      }
+    }
+  }
+
+  return closedRings;
+}
