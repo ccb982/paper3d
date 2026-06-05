@@ -1055,6 +1055,7 @@ interface OpenRing {
   last: Point;
 }
 
+// ========== 改进版：基于极角排序的片段连接算法 ==========
 export function buildClosedRingsFromSegments(
   segments: SegmentForMatching[],
   centroid: Point,
@@ -1063,140 +1064,164 @@ export function buildClosedRingsFromSegments(
 ): Point[][] {
   if (segments.length === 0) return [];
 
-  function meetsThreshold(a: Point, b: Point, debugMsg?: string): boolean {
+  // 过滤掉只有1个点的segment，它们无法形成有效的环
+  const validSegments = segments.filter(seg => seg.points.length >= 2);
+  if (validSegments.length === 0) return [];
+
+  // 辅助函数：判断两个端点是否满足连接条件
+  const meetsThreshold = (a: Point, b: Point): boolean => {
     const euclidean = Math.hypot(a.x - b.x, a.y - b.y);
     const radialA = Math.hypot(a.x - centroid.x, a.y - centroid.y);
     const radialB = Math.hypot(b.x - centroid.x, b.y - centroid.y);
     const radialDiff = Math.abs(radialA - radialB);
-    const result = euclidean < distThreshold && radialDiff < radialThreshold;
-    if (!result && debugMsg) {
-      console.log(`[组环调试] ${debugMsg} - 失败: euclidean=${euclidean.toFixed(6)} >= ${distThreshold.toFixed(6)}, radialDiff=${radialDiff.toFixed(6)} >= ${radialThreshold.toFixed(6)}`);
-    }
-    return result;
-  }
+    return euclidean < distThreshold && radialDiff < radialThreshold;
+  };
 
-  const used = new Array(segments.length).fill(false);
-  const openRings: OpenRing[] = [];
+  // 为每个片段分配唯一ID（基于原始顺序）
+  const segWithId = validSegments.map((seg, idx) => ({ ...seg, id: idx }));
+  
+  // 按片段起点的极角排序（保证环绕顺序）
+  const sortedSegments = [...segWithId].sort((a, b) => {
+    const angleA = Math.atan2(a.start.y - centroid.y, a.start.x - centroid.x);
+    const angleB = Math.atan2(b.start.y - centroid.y, b.start.x - centroid.x);
+    return angleA - angleB;
+  });
+
+  const used = new Array(validSegments.length).fill(false);
   const closedRings: Point[][] = [];
+  
+  // 开放环结构
+  interface OpenRing {
+    points: Point[];
+    first: Point;
+    last: Point;
+  }
+  const openRings: OpenRing[] = [];
 
-  function tryConnect(
+  // 尝试将片段连接到指定开放环的指定端点
+  const tryConnect = (
     ring: OpenRing,
-    seg: SegmentForMatching,
-    connectToFirst: boolean,
-    connectWithStart: boolean
-  ): { success: boolean; newPoints: Point[] } {
+    seg: typeof sortedSegments[0],
+    connectToFirst: boolean,   // true=连接环首，false=连接环尾
+    connectWithStart: boolean  // true=使用片段的起点，false=使用片段的终点
+  ): { success: boolean; newPoints: Point[]; newFirst: Point; newLast: Point } | null => {
     const ringPoint = connectToFirst ? ring.first : ring.last;
     const segPoint = connectWithStart ? seg.start : seg.end;
-
-    if (!meetsThreshold(ringPoint, segPoint)) return { success: false, newPoints: [] };
-
-    let merged: Point[];
-    if (connectToFirst) {
+    if (!meetsThreshold(ringPoint, segPoint)) return null;
+    
+    let newPoints: Point[];
+    let newFirst: Point, newLast: Point;
+    
+    // 如果segment只有一个点，特殊处理
+    if (seg.points.length === 1) {
+      if (connectToFirst) {
+        newPoints = [seg.points[0], ...ring.points];
+        newFirst = seg.points[0];
+        newLast = ring.last;
+      } else {
+        newPoints = [...ring.points, seg.points[0]];
+        newFirst = ring.first;
+        newLast = seg.points[0];
+      }
+    } else if (connectToFirst) {
+      // 连接在环首
       const segmentPoints = connectWithStart ? seg.points : [...seg.points].reverse();
-      merged = [...segmentPoints, ...ring.points];
+      newPoints = [...segmentPoints, ...ring.points];
+      newFirst = segmentPoints[0];
+      newLast = ring.last;
     } else {
+      // 连接在环尾
       const segmentPoints = connectWithStart ? seg.points.slice(1) : [...seg.points].reverse().slice(1);
-      merged = [...ring.points, ...segmentPoints];
+      newPoints = [...ring.points, ...segmentPoints];
+      newFirst = ring.first;
+      newLast = segmentPoints.length > 0 ? segmentPoints[segmentPoints.length - 1] : ring.last;
     }
-    return { success: true, newPoints: merged };
-  }
+    return { success: true, newPoints, newFirst, newLast };
+  };
 
-  for (let idx = 0; idx < segments.length; idx++) {
-    if (used[idx]) continue;
-    const seg = segments[idx];
+  // 主循环：按极角顺序处理每个片段
+  for (const seg of sortedSegments) {
+    if (used[seg.id]) continue;
+    
     let matched = false;
-
     for (let i = 0; i < openRings.length; i++) {
       const ring = openRings[i];
       const ways = [
-        { connectToFirst: true, connectWithStart: true },
-        { connectToFirst: true, connectWithStart: false },
-        { connectToFirst: false, connectWithStart: true },
-        { connectToFirst: false, connectWithStart: false }
+        { toFirst: false, withStart: true },  // 尾 + seg起点
+        { toFirst: false, withStart: false }, // 尾 + seg终点
+        { toFirst: true, withStart: true },   // 首 + seg起点
+        { toFirst: true, withStart: false }   // 首 + seg终点
       ];
+      
       for (const way of ways) {
-        const result = tryConnect(ring, seg, way.connectToFirst, way.connectWithStart);
-        if (!result.success && openRings.length > 0) {
-          const ringPoint = way.connectToFirst ? ring.first : ring.last;
-          const segPoint = way.connectWithStart ? seg.start : seg.end;
-          meetsThreshold(ringPoint, segPoint, `连接segment${idx}到环${i}`);
-        }
-        if (result.success) {
-          openRings[i] = {
-            points: result.newPoints,
-            first: result.newPoints[0],
-            last: result.newPoints[result.newPoints.length - 1]
-          };
-          used[idx] = true;
+        const result = tryConnect(ring, seg, way.toFirst, way.withStart);
+        if (result) {
+          // 更新开放环
+          ring.points = result.newPoints;
+          ring.first = result.newFirst;
+          ring.last = result.newLast;
+          used[seg.id] = true;
           matched = true;
-
-          const firstPt = openRings[i].first;
-          const lastPt = openRings[i].last;
-          if (meetsThreshold(firstPt, lastPt)) {
-            const closedRing = openRings.splice(i, 1)[0].points;
-            if (Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
-                           closedRing[0].y - closedRing[closedRing.length - 1].y) > 1e-6) {
-              closedRing.push(closedRing[0]);
-            }
-            closedRings.push(closedRing);
+          
+          // 检查环是否闭合
+          if (meetsThreshold(ring.first, ring.last)) {
+            // 闭合：首尾相接，若距离>1e-6则主动闭合
+            let closedPoints = [...ring.points];
+            const dist = Math.hypot(closedPoints[0].x - closedPoints[closedPoints.length-1].x, 
+                                    closedPoints[0].y - closedPoints[closedPoints.length-1].y);
+            if (dist > 1e-6) closedPoints.push(closedPoints[0]);
+            closedRings.push(closedPoints);
+            openRings.splice(i, 1); // 移除已闭合的环
           }
           break;
         }
       }
       if (matched) break;
     }
-
+    
     if (!matched) {
+      // 新建开放环
       openRings.push({
         points: [...seg.points],
         first: seg.start,
         last: seg.end
       });
-      used[idx] = true;
+      used[seg.id] = true;
     }
   }
 
-  console.log(`[组环调试] 剩余开放环数量: ${openRings.length}`);
+  // 处理剩余未闭合的开放环
   for (const ring of openRings) {
-    console.log(`[组环调试] 开放环点数: ${ring.points.length}, first=(${ring.first.x.toFixed(6)},${ring.first.y.toFixed(6)}), last=(${ring.last.x.toFixed(6)},${ring.last.y.toFixed(6)})`);
-    const isClosed = meetsThreshold(ring.first, ring.last, '开放环自身闭合检测');
-    console.log(`[组环调试] 开放环自身闭合检测: ${isClosed}`);
-    if (isClosed && ring.points.length >= 3) {
-      let closedRing = [...ring.points];
-      if (Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
-                     closedRing[0].y - closedRing[closedRing.length - 1].y) > 1e-6) {
-        closedRing.push(closedRing[0]);
-      }
-      closedRings.push(closedRing);
+    if (ring.points.length >= 3 && meetsThreshold(ring.first, ring.last)) {
+      let closedPoints = [...ring.points];
+      const dist = Math.hypot(closedPoints[0].x - closedPoints[closedPoints.length-1].x, 
+                              closedPoints[0].y - closedPoints[closedPoints.length-1].y);
+      if (dist > 1e-6) closedPoints.push(closedPoints[0]);
+      closedRings.push(closedPoints);
     }
   }
 
-  for (let idx = 0; idx < segments.length; idx++) {
-    if (!used[idx] && segments[idx].closed && segments[idx].points.length >= 3) {
-      const seg = segments[idx];
+  // 处理未使用但自身已闭合的片段
+  for (const seg of sortedSegments) {
+    if (!used[seg.id] && seg.closed && seg.points.length >= 3) {
       if (meetsThreshold(seg.start, seg.end)) {
-        let closedRing = [...seg.points];
-        if (Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
-                       closedRing[0].y - closedRing[closedRing.length - 1].y) > 1e-6) {
-          closedRing.push(closedRing[0]);
-        }
-        closedRings.push(closedRing);
+        let closedPoints = [...seg.points];
+        const dist = Math.hypot(closedPoints[0].x - closedPoints[closedPoints.length-1].x, 
+                                closedPoints[0].y - closedPoints[closedPoints.length-1].y);
+        if (dist > 1e-6) closedPoints.push(closedPoints[0]);
+        closedRings.push(closedPoints);
       }
     }
   }
 
-  // 处理简单图形：如果只有一个segment且没有形成环，但点数足够，直接作为一个环
-  if (closedRings.length === 0 && segments.length === 1 && segments[0].points.length >= 3) {
-    const seg = segments[0];
-    let closedRing = [...seg.points];
-    // 检查是否已经闭合
-    const dist = Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
-                            closedRing[0].y - closedRing[closedRing.length - 1].y);
-    if (dist > 1e-6) {
-      closedRing.push(closedRing[0]);
-    }
-    closedRings.push(closedRing);
-    console.log(`[组环调试] 简单图形处理: 直接将单个segment作为环，点数=${seg.points.length}`);
+  // 兜底：若没有生成任何环且只有一个未使用的片段，强制将其作为环
+  if (closedRings.length === 0 && validSegments.length === 1 && validSegments[0].points.length >= 3) {
+    const seg = validSegments[0];
+    let closedPoints = [...seg.points];
+    const dist = Math.hypot(closedPoints[0].x - closedPoints[closedPoints.length-1].x, 
+                            closedPoints[0].y - closedPoints[closedPoints.length-1].y);
+    if (dist > 1e-6) closedPoints.push(closedPoints[0]);
+    closedRings.push(closedPoints);
   }
 
   return closedRings;
