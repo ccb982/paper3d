@@ -835,9 +835,9 @@ export function getDebugRegions(
     console.log(`[调试] 区域 ${region.id} 降采样阈值=${downsampleThres.toFixed(6)}`);
     const downsampledPoints = downsampleBoundaryPointsByOutsideId(boundaryPoints, downsampleThres);
     
-    // 增大常数因子，确保阈值足够大以匹配实际点间距
-    const distThreshold = step * 15 * (1 + distanceThresholdFactor);
-    const radialThreshold = step * 8 * (1 + radialThresholdFactor);
+    // 调整常数因子，确保阈值足够大以匹配实际点间距
+    const distThreshold = step * 8 * (1 + distanceThresholdFactor);
+    const radialThreshold = step * 4 * (1 + radialThresholdFactor);
     console.log(`[调试] 区域 ${region.id} step=${step.toFixed(6)}, distThreshold=${distThreshold.toFixed(6)}, radialThreshold=${radialThreshold.toFixed(6)}`);
     const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(downsampledPoints, distThreshold, radialThreshold);
     
@@ -928,45 +928,39 @@ export function getDebugRegions(
     
     const outsideIdEndpoints: OutsideIdEndpoint[] = [];
     if (centroid) {
-      const byOutsideId = new Map<number, { point: Point; insideId: number }[]>();
-      for (const ub of uniqueBoundaryPoints) {
-        if (!byOutsideId.has(ub.outsideId)) {
-          byOutsideId.set(ub.outsideId, []);
-        }
-        byOutsideId.get(ub.outsideId)!.push({ point: ub.point, insideId: ub.insideId });
+      // 按新的 outsideId 分组（每个片段一个独立 id）
+      const byOutsideId = new Map<number, BoundaryPoint[]>();
+      for (const bp of reclusteredPoints) {
+        if (!byOutsideId.has(bp.outsideId)) byOutsideId.set(bp.outsideId, []);
+        byOutsideId.get(bp.outsideId)!.push(bp);
       }
-      
+
       for (const [outsideId, points] of byOutsideId) {
-        if (points.length < 1) continue;
+        if (points.length === 0) continue;
         
-        points.sort((a, b) => {
-          const angleA = Math.atan2(a.point.y - centroid.y, a.point.x - centroid.x);
-          const angleB = Math.atan2(b.point.y - centroid.y, b.point.x - centroid.x);
-          return angleA - angleB;
-        });
+        // 使用片段本身的起点和终点（即 points 数组的第一个和最后一个点）
+        const start = points[0].point;
+        const end = points[points.length - 1].point;
+        const radialStart = Math.hypot(start.x - centroid.x, start.y - centroid.y);
+        const radialEnd = Math.hypot(end.x - centroid.x, end.y - centroid.y);
+        const startInsideId = points[0].insideId;
         
-        const p1 = points[0];
-        const dist1 = Math.hypot(p1.point.x - centroid.x, p1.point.y - centroid.y);
+        // 判断该片段是否自身闭合（首尾距离 < 阈值）
+        const isClosed = points.length >= 3 && Math.hypot(end.x - start.x, end.y - start.y) < distThreshold * 0.5;
         
-        let p2Data: { x: number; y: number; distToCentroid: number } | null = null;
-        if (points.length >= 2) {
-          const p2 = points[points.length - 1];
-          const dist2 = Math.hypot(p2.point.x - centroid.x, p2.point.y - centroid.y);
-          p2Data = { x: p2.point.x, y: p2.point.y, distToCentroid: dist2 };
+        if (isClosed) {
+          // 自身闭合的片段不显示端点
+          continue;
         }
         
         outsideIdEndpoints.push({
           outsideId,
-          insideId: p1.insideId,
-          p1: { x: p1.point.x, y: p1.point.y, distToCentroid: dist1 },
-          p2: p2Data,
+          insideId: startInsideId,
+          p1: { x: start.x, y: start.y, distToCentroid: radialStart },
+          p2: { x: end.x, y: end.y, distToCentroid: radialEnd },
         });
         
-        if (p2Data) {
-          console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${p1.point.x.toFixed(3)},${p1.point.y.toFixed(3)}) d1=${dist1.toFixed(3)}, p2(${p2Data.x.toFixed(3)},${p2Data.y.toFixed(3)}) d2=${p2Data.distToCentroid.toFixed(3)}`);
-        } else {
-          console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${p1.point.x.toFixed(3)},${p1.point.y.toFixed(3)}) d1=${dist1.toFixed(3)} (单点)`);
-        }
+        console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${start.x.toFixed(3)},${start.y.toFixed(3)}) d1=${radialStart.toFixed(3)}, p2(${end.x.toFixed(3)},${end.y.toFixed(3)}) d2=${radialEnd.toFixed(3)}`);
       }
     }
 
