@@ -883,11 +883,20 @@ export function MainCanvas() {
 
           // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
           // 端点信息模式和绘制环模式下不绘制
-          if (!debugShowEndpoints && !debugShowRings && region.boundaryPoints && region.boundaryPoints.length > 0) {
+          // 检查条件：非原始模式下也检查 uniqueBoundaryPoints
+          const hasPoints = debugShowOriginal 
+            ? (region.boundaryPoints && region.boundaryPoints.length > 0)
+            : ((region.uniqueBoundaryPoints && region.uniqueBoundaryPoints.length > 0) || (region.boundaryPoints && region.boundaryPoints.length > 0));
+          if (!debugShowEndpoints && !debugShowRings && hasPoints) {
             // 按 outsideId 分组
             const debugPoints = debugShowOriginal
               ? region.boundaryPoints
               : (region.uniqueBoundaryPoints as any || region.boundaryPoints);
+            // 确保即使只有一个 outsideId 也能正确绘制
+            if (debugPoints.length === 0) {
+              console.warn(`[警告] 区域${region.id}调试点数为0`);
+              return;
+            }
             const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
             for (const bp of debugPoints) {
               if (!outsideIdGroups.has(bp.outsideId)) {
@@ -1043,7 +1052,7 @@ export function MainCanvas() {
 
           // 绘制环（仅在 debugShowRings 为 true 时显示）
           if (debugShowRings) {
-            console.log(`[调试绘制] 区域${region.id} rings数据:`, region.rings);
+            // console.log(`[调试绘制] 区域${region.id} rings数据:`, region.rings);
             if (region.rings && region.rings.length > 0) {
             const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
             region.rings.forEach((ring, ringIdx) => {
@@ -1074,7 +1083,7 @@ export function MainCanvas() {
           ctx.restore();
         });
 
-        console.log(`[调试] 绘制了 ${debugRegions.length} 个BFS区域`);
+        // console.log(`[调试] 绘制了 ${debugRegions.length} 个BFS区域`);
       }
     }
 
@@ -1175,7 +1184,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugShowEndpoints, debugShowRings]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 

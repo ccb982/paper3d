@@ -490,7 +490,7 @@ export function downsampleBoundaryPointsByOutsideId(
     result.push(...kept);
   }
 
-  console.log(`[降采样] 阈值=${minDistance.toFixed(6)}, 原始点数=${boundaryPoints.length}, 降采样后=${result.length}`);
+  // console.log(`[降采样] 阈值=${minDistance.toFixed(6)}, 原始点数=${boundaryPoints.length}, 降采样后=${result.length}`);
   return result;
 }
 
@@ -808,7 +808,7 @@ export function reclusterBoundaryPointsByPolarAngle(
     }
   }
 
-  console.log(`[reclusterBoundaryPointsByPolarAngle] 生成片段数量: ${nextSegmentId - 1}`);
+  // console.log(`[reclusterBoundaryPointsByPolarAngle] 生成片段数量: ${nextSegmentId - 1}`);
   return newBoundaryPoints;
 }
 
@@ -838,14 +838,14 @@ export function getDebugRegions(
     // 调整常数因子，确保阈值足够大以匹配实际点间距
     const distThreshold = step * 8 * (1 + distanceThresholdFactor);
     const radialThreshold = step * 4 * (1 + radialThresholdFactor);
-    // console.log(`[调试] 区域 ${region.id} step=${step.toFixed(6)}, distThreshold=${distThreshold.toFixed(6)}, radialThreshold=${radialThreshold.toFixed(6)}`);
     const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(downsampledPoints, distThreshold, radialThreshold);
     
-    // console.log(`[调试] 区域 ${region.id} 原始边界点: ${boundaryPoints.length}, 重新聚类后: ${reclusteredPoints.length}`);
+    // 如果重新聚类失败（返回空），使用原始点作为回退
+    const finalPoints = reclusteredPoints.length > 0 ? reclusteredPoints : downsampledPoints.length > 0 ? downsampledPoints : boundaryPoints;
 
-    const allBoundaryPoints = reclusteredPoints.map(bp => bp.point);
+    const allBoundaryPoints = finalPoints.map(bp => bp.point);
     
-    const uniqueBoundaryPoints: { point: Point; insideId: number; outsideId: number }[] = reclusteredPoints.map(bp => ({
+    const uniqueBoundaryPoints: { point: Point; insideId: number; outsideId: number }[] = finalPoints.map(bp => ({
       point: bp.point,
       insideId: bp.insideId,
       outsideId: bp.outsideId
@@ -855,9 +855,9 @@ export function getDebugRegions(
     
     // console.log(`[调试] 区域 ${region.id} 重新聚类后点数: ${uniqueBoundaryPoints.length}`);
     
-    // 构建 segments 列表（基于 reclusteredPoints 的分组）
+    // 构建 segments 列表（基于 finalPoints 的分组）
     const segmentsMap = new Map<number, { points: Point[]; start: Point; end: Point; closed: boolean }>();
-    for (const bp of reclusteredPoints) {
+    for (const bp of finalPoints) {
       if (!segmentsMap.has(bp.outsideId)) {
         segmentsMap.set(bp.outsideId, { points: [], start: bp.point, end: bp.point, closed: false });
       }
@@ -1007,7 +1007,7 @@ export function getDebugRegions(
           p2: { x: end.x, y: end.y, distToCentroid: radialEnd },
         });
         
-        console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${start.x.toFixed(3)},${start.y.toFixed(3)}) d1=${radialStart.toFixed(3)}, p2(${end.x.toFixed(3)},${end.y.toFixed(3)}) d2=${radialEnd.toFixed(3)}`);
+        // console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${start.x.toFixed(3)},${start.y.toFixed(3)}) d1=${radialStart.toFixed(3)}, p2(${end.x.toFixed(3)},${end.y.toFixed(3)}) d2=${radialEnd.toFixed(3)}`);
       }
     }
 
@@ -1183,6 +1183,20 @@ export function buildClosedRingsFromSegments(
         closedRings.push(closedRing);
       }
     }
+  }
+
+  // 处理简单图形：如果只有一个segment且没有形成环，但点数足够，直接作为一个环
+  if (closedRings.length === 0 && segments.length === 1 && segments[0].points.length >= 3) {
+    const seg = segments[0];
+    let closedRing = [...seg.points];
+    // 检查是否已经闭合
+    const dist = Math.hypot(closedRing[0].x - closedRing[closedRing.length - 1].x,
+                            closedRing[0].y - closedRing[closedRing.length - 1].y);
+    if (dist > 1e-6) {
+      closedRing.push(closedRing[0]);
+    }
+    closedRings.push(closedRing);
+    console.log(`[组环调试] 简单图形处理: 直接将单个segment作为环，点数=${seg.points.length}`);
   }
 
   return closedRings;
