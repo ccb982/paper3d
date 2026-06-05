@@ -703,6 +703,7 @@ function groupIntoSegments(
     centroid = { x: cx / points.length, y: cy / points.length };
   }
 
+  // 极角排序
   const sorted = [...points];
   sorted.sort((a, b) => {
     const angleA = Math.atan2(a.y - centroid!.y, a.x - centroid!.x);
@@ -710,41 +711,55 @@ function groupIntoSegments(
     return angleA - angleB;
   });
 
-  const segments: { points: Point[]; last: Point }[] = [];
-  for (const p of sorted) {
-    let bestIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < segments.length; i++) {
-      const last = segments[i].last;
-      if (meetsThreshold(last, p, centroid, distThreshold, radialThreshold)) {
-        const d = Math.hypot(last.x - p.x, last.y - p.y);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
-      }
-    }
-    if (bestIdx !== -1) {
-      segments[bestIdx].points.push(p);
-      segments[bestIdx].last = p;
+  const segments: Segment[] = [];
+  let currentPoints: Point[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const curr = sorted[i];
+    if (meetsThreshold(prev, curr, centroid, distThreshold, radialThreshold)) {
+      // 满足条件，继续当前 segment
+      currentPoints.push(curr);
     } else {
-      segments.push({ points: [p], last: p });
+      // 不满足，结束当前 segment，开启新 segment
+      segments.push({
+        id: segments.length,
+        points: currentPoints,
+        start: currentPoints[0],
+        end: currentPoints[currentPoints.length - 1],
+        closed: false,
+      });
+      currentPoints = [curr];
     }
   }
 
-  let nextId = 0;
-  const result: Segment[] = [];
-  for (const seg of segments) {
-    if (seg.points.length === 0) continue;
-    const start = seg.points[0];
-    const end = seg.points[seg.points.length - 1];
-    let closed = false;
-    if (seg.points.length >= 3 && meetsThreshold(start, end, centroid, distThreshold, radialThreshold)) {
-      closed = true;
-    }
-    result.push({ id: nextId++, points: seg.points, start, end, closed });
+  // 最后一个 segment
+  if (currentPoints.length > 0) {
+    segments.push({
+      id: segments.length,
+      points: currentPoints,
+      start: currentPoints[0],
+      end: currentPoints[currentPoints.length - 1],
+      closed: false,
+    });
   }
-  return result;
+
+  // 检查首尾是否满足闭环条件
+  if (segments.length > 0 && segments[0].points.length > 0 && segments[segments.length - 1].points.length > 0) {
+    const firstStart = segments[0].start;
+    const lastEnd = segments[segments.length - 1].end;
+    if (meetsThreshold(lastEnd, firstStart, centroid, distThreshold, radialThreshold)) {
+      // 合并首尾为一个闭环 segment
+      const mergedPoints = [...segments[segments.length - 1].points, ...segments[0].points];
+      segments[0].points = mergedPoints;
+      segments[0].start = mergedPoints[0];
+      segments[0].end = mergedPoints[mergedPoints.length - 1];
+      segments[0].closed = true;
+      segments.pop(); // 移除最后一个
+    }
+  }
+
+  return segments;
 }
 
 // 新版边界点重聚类函数（使用双重阈值）
@@ -754,6 +769,14 @@ export function reclusterBoundaryPointsByPolarAngle(
   radialThreshold: number
 ): BoundaryPoint[] {
   if (boundaryPoints.length === 0) return [];
+
+  // 计算全局重心（所有边界点的平均）
+  let gcx = 0, gcy = 0;
+  for (const bp of boundaryPoints) {
+    gcx += bp.point.x;
+    gcy += bp.point.y;
+  }
+  const globalCentroid = { x: gcx / boundaryPoints.length, y: gcy / boundaryPoints.length };
 
   const byOriginalId = new Map<number, { point: Point; insideId: number }[]>();
   for (const bp of boundaryPoints) {
@@ -768,11 +791,9 @@ export function reclusterBoundaryPointsByPolarAngle(
 
   for (const [, ptsWithInfo] of byOriginalId) {
     const points = ptsWithInfo.map(item => item.point);
-    let cx = 0, cy = 0;
-    for (const p of points) { cx += p.x; cy += p.y; }
-    const groupCentroid = { x: cx / points.length, y: cy / points.length };
 
-    const segments = groupIntoSegments(points, groupCentroid, distThreshold, radialThreshold);
+    // 使用全局重心进行极角排序，保证不同原始组的点排序基准一致
+    const segments = groupIntoSegments(points, globalCentroid, distThreshold, radialThreshold);
     for (const seg of segments) {
       const newId = nextSegmentId++;
       for (const pt of seg.points) {
