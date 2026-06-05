@@ -133,6 +133,8 @@ export function MainCanvas() {
   const [debugDistanceThreshold, setDebugDistanceThreshold] = useState(1.2);
   const [debugRadialThreshold, setDebugRadialThreshold] = useState(1.2);
   const [debugDownsampleFactor, setDebugDownsampleFactor] = useState(0.5);
+  const [debugRingDistanceThreshold, setDebugRingDistanceThreshold] = useState(2);
+  const [debugRingRadialThreshold, setDebugRingRadialThreshold] = useState(2);
   const [debugShowEndpoints, setDebugShowEndpoints] = useState(false);
   const [debugShowRings, setDebugShowRings] = useState(false);
   
@@ -871,7 +873,7 @@ export function MainCanvas() {
           yMin: axis.yMin,
           yMax: axis.yMax,
         };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor);
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
@@ -1184,7 +1186,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugShowEndpoints, debugShowRings]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1546,6 +1548,40 @@ export function MainCanvas() {
               />
               <button onClick={() => setDebugDownsampleFactor(prev => Math.max(0, prev - 0.05))} style={{ padding: '2px 6px' }}>-</button>
               <button onClick={() => setDebugDownsampleFactor(prev => Math.min(1, prev + 0.05))} style={{ padding: '2px 6px' }}>+</button>
+            </div>
+            {/* 第三行：环拼接阈值 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+              <span>环拼接:</span>
+              <span style={{ fontSize: 11 }}>欧氏</span>
+              <input
+                type="number"
+                min="0"
+                max="20"
+                step="0.1"
+                value={debugRingDistanceThreshold}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = parseFloat(e.target.value) || 0;
+                  setDebugRingDistanceThreshold(Math.max(0, Math.min(20, val)));
+                }}
+                style={{ width: 50, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugRingDistanceThreshold(prev => Math.max(0, prev - 0.5))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugRingDistanceThreshold(prev => Math.min(20, prev + 0.5))} style={{ padding: '2px 6px' }}>+</button>
+              <span style={{ fontSize: 11 }}>径向</span>
+              <input
+                type="number"
+                min="0"
+                max="20"
+                step="0.1"
+                value={debugRingRadialThreshold}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  const val = parseFloat(e.target.value) || 0;
+                  setDebugRingRadialThreshold(Math.max(0, Math.min(20, val)));
+                }}
+                style={{ width: 50, padding: '2px 4px', fontSize: 12 }}
+              />
+              <button onClick={() => setDebugRingRadialThreshold(prev => Math.max(0, prev - 0.5))} style={{ padding: '2px 6px' }}>-</button>
+              <button onClick={() => setDebugRingRadialThreshold(prev => Math.min(20, prev + 0.5))} style={{ padding: '2px 6px' }}>+</button>
               <div style={{ marginLeft: 12 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input

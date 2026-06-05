@@ -819,7 +819,9 @@ export function getDebugRegions(
   resolution: number = 300,
   distanceThresholdFactor: number = 0.5,
   radialThresholdFactor: number = 0.5,
-  downsampleDistanceFactor: number = 0.2
+  downsampleDistanceFactor: number = 0.2,
+  ringDistanceThreshold: number = 2,
+  ringRadialThreshold: number = 2
 ): DebugRegionData[] {
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
   const debug: DebugRegionData[] = [];
@@ -903,7 +905,10 @@ export function getDebugRegions(
     segmentsList.forEach((seg, idx) => {
       console.log(`  segment${idx}: ${seg.points.length}点, closed=${seg.closed}, start=(${seg.start.x.toFixed(3)},${seg.start.y.toFixed(3)}), end=(${seg.end.x.toFixed(3)},${seg.end.y.toFixed(3)})`);
     });
-    const ringsFromSegments = buildClosedRingsFromSegments(segmentsList, globalCentroid, distThreshold, radialThreshold);
+    // 环拼接阈值也需要乘以step系数
+    const ringDistThreshold = step * 8 * ringDistanceThreshold;
+    const ringRadialThres = step * 4 * ringRadialThreshold;
+    const ringsFromSegments = buildClosedRingsFromSegments(segmentsList, globalCentroid, ringDistThreshold, ringRadialThres);
     console.log(`[调试] 区域 ${region.id} 端点匹配成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
       console.log(`  环${idx}: ${ring.length} 个顶点，起点=(${ring[0]?.x.toFixed(3)},${ring[0]?.y.toFixed(3)})`);
