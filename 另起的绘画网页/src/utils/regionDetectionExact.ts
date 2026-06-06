@@ -659,6 +659,7 @@ export interface DebugRegionData {
   pointGroups?: Point[][];
   outsideIdEndpoints?: OutsideIdEndpoint[];
   originalOutsideIdEndpoints?: OutsideIdEndpoint[];
+  segments?: SegmentForMatching[];  // 新增：用于调试绘制片段
 }
 
 // ========== 双重阈值辅助函数（新算法） ==========
@@ -905,11 +906,11 @@ export function getDebugRegions(
     segmentsList.forEach((seg, idx) => {
       console.log(`  segment${idx}: ${seg.points.length}点, closed=${seg.closed}, start=(${seg.start.x.toFixed(3)},${seg.start.y.toFixed(3)}), end=(${seg.end.x.toFixed(3)},${seg.end.y.toFixed(3)})`);
     });
-    // 环拼接阈值也需要乘以step系数
-    const ringDistThreshold = step * 8 * ringDistanceThreshold;
-    const ringRadialThres = step * 4 * ringRadialThreshold;
-    const ringsFromSegments = buildClosedRingsFromSegments(segmentsList, globalCentroid, ringDistThreshold, ringRadialThres);
-    console.log(`[调试] 区域 ${region.id} 端点匹配成环数量: ${ringsFromSegments.length}`);
+    // 使用新的凹包算法提取环，不依赖outsideId分组
+    const allBoundaryPointsForRings = uniqueBoundaryPoints.map(bp => bp.point);
+    const maxEdgeLength = step * 6 * ringDistanceThreshold; // 使用环拼接阈值系数
+    const ringsFromSegments = extractClosedRingsFromPoints(allBoundaryPointsForRings, maxEdgeLength);
+    console.log(`[调试] 区域 ${region.id} 凹包成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
       console.log(`  环${idx}: ${ring.length} 个顶点，起点=(${ring[0]?.x.toFixed(3)},${ring[0]?.y.toFixed(3)})`);
     });
@@ -1032,6 +1033,7 @@ export function getDebugRegions(
       pointGroups,
       outsideIdEndpoints,
       originalOutsideIdEndpoints,
+      segments: segmentsList,  // 新增：保存片段数据用于调试绘制
     });
   }
   return debug;
@@ -1230,4 +1232,184 @@ export function buildClosedRingsFromSegments(
   }
 
   return closedRings;
+}
+
+// ========== 新成环算法：基于凹包迭代，不依赖 outsideId 分组 ==========
+
+/**
+ * 计算点集的凸包（Graham scan）
+ */
+function convexHull(points: Point[]): Point[] {
+  if (points.length < 3) return points.slice();
+  // 找最下最左的点
+  const start = points.reduce((p, q) => p.y < q.y || (p.y === q.y && p.x < q.x) ? p : q);
+  const sorted = points.slice();
+  sorted.sort((a, b) => {
+    const angleA = Math.atan2(a.y - start.y, a.x - start.x);
+    const angleB = Math.atan2(b.y - start.y, b.x - start.x);
+    if (angleA !== angleB) return angleA - angleB;
+    return (Math.hypot(a.x - start.x, a.y - start.y) - Math.hypot(b.x - start.x, b.y - start.y));
+  });
+  const stack: Point[] = [];
+  for (const p of sorted) {
+    while (stack.length >= 2 && cross(stack[stack.length-2], stack[stack.length-1], p) <= 0) {
+      stack.pop();
+    }
+    stack.push(p);
+  }
+  return stack;
+}
+
+function cross(o: Point, a: Point, b: Point): number {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+/**
+ * 计算点集的凹包（通过凸包 + 边长阈值内插）
+ */
+function concaveHull(points: Point[], maxEdgeLength: number): Point[] {
+  if (points.length < 3) return points.slice();
+  let hull = convexHull(points);
+  if (hull.length < 3) return hull;
+  
+  let changed = true;
+  const maxIter = 10;
+  let iter = 0;
+  while (changed && iter < maxIter) {
+    changed = false;
+    const newHull: Point[] = [];
+    for (let i = 0; i < hull.length - 1; i++) {
+      const a = hull[i];
+      const b = hull[i+1];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      if (dist > maxEdgeLength) {
+        let bestPoint: Point | null = null;
+        let maxDist = 0;
+        for (const p of points) {
+          const t = ((p.x - a.x)*(b.x - a.x) + (p.y - a.y)*(b.y - a.y)) / (dist * dist);
+          if (t < 0 || t > 1) continue;
+          const projX = a.x + t * (b.x - a.x);
+          const projY = a.y + t * (b.y - a.y);
+          const d = Math.hypot(p.x - projX, p.y - projY);
+          if (d > maxDist && d < dist * 0.8) {
+            maxDist = d;
+            bestPoint = p;
+          }
+        }
+        if (bestPoint) {
+          newHull.push(a, bestPoint);
+          changed = true;
+        } else {
+          newHull.push(a);
+        }
+      } else {
+        newHull.push(a);
+      }
+    }
+    newHull.push(hull[hull.length-1]);
+    if (changed) {
+      hull = convexHull(newHull);
+    }
+    iter++;
+  }
+  if (hull.length >= 2 && (hull[0].x !== hull[hull.length-1].x || hull[0].y !== hull[hull.length-1].y)) {
+    hull.push(hull[0]);
+  }
+  return hull;
+}
+
+/**
+ * 判断点是否在多边形内部（包括边界）
+ */
+function isPointInPolygon(p: Point, polygon: Point[]): boolean {
+  let inside = false;
+  const n = polygon.length;
+  for (let i = 0, j = n-1; i < n; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    const intersect = ((yi > p.y) !== (yj > p.y)) &&
+      (p.x < (xj - xi) * (p.y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  for (let i = 0; i < n-1; i++) {
+    const a = polygon[i], b = polygon[i+1];
+    const dist = Math.abs((b.y - a.y)*p.x - (b.x - a.x)*p.y + b.x*a.y - b.y*a.x) / Math.hypot(b.y - a.y, b.x - a.x);
+    if (dist < 1e-6 && Math.min(a.x, b.x) <= p.x && p.x <= Math.max(a.x, b.x) &&
+        Math.min(a.y, b.y) <= p.y && p.y <= Math.max(a.y, b.y)) {
+      return true;
+    }
+  }
+  return inside;
+}
+
+/**
+ * 计算多边形的有向面积（正为逆时针，负为顺时针）
+ */
+function polygonSignedArea(polygon: Point[]): number {
+  let area = 0;
+  const n = polygon.length;
+  for (let i = 0, j = n-1; i < n; j = i++) {
+    area += (polygon[j].x * polygon[i].y - polygon[j].y * polygon[i].x);
+  }
+  return area / 2;
+}
+
+/**
+ * 主函数：从无序边界点集中提取多个闭合环（外环+内环）
+ */
+export function extractClosedRingsFromPoints(
+  allPoints: Point[],
+  maxEdgeLength: number
+): Point[][] {
+  if (allPoints.length < 3) return [];
+  
+  const used = new Array(allPoints.length).fill(false);
+  const rings: Point[][] = [];
+  
+  const getUnusedPointIndex = () => {
+    for (let i = 0; i < allPoints.length; i++) {
+      if (!used[i]) return i;
+    }
+    return -1;
+  };
+  
+  let seedIdx = getUnusedPointIndex();
+  while (seedIdx !== -1) {
+    const remainingPoints = allPoints.filter((_, idx) => !used[idx]);
+    if (remainingPoints.length < 3) break;
+    
+    let hull = concaveHull(remainingPoints, maxEdgeLength);
+    if (hull.length < 3) {
+      hull = convexHull(remainingPoints);
+      if (hull.length < 3) break;
+      if (hull[0] !== hull[hull.length-1]) hull.push(hull[0]);
+    }
+    
+    for (let i = 0; i < allPoints.length; i++) {
+      if (!used[i] && isPointInPolygon(allPoints[i], hull)) {
+        used[i] = true;
+      }
+    }
+    
+    rings.push(hull);
+    seedIdx = getUnusedPointIndex();
+  }
+  
+  if (rings.length === 0) return [];
+  
+  const withArea = rings.map(ring => ({
+    ring,
+    area: polygonSignedArea(ring),
+    absArea: Math.abs(polygonSignedArea(ring))
+  }));
+  withArea.sort((a, b) => b.absArea - a.absArea);
+  
+  const outer = withArea[0].ring;
+  if (polygonSignedArea(outer) < 0) outer.reverse();
+  const innerRings = withArea.slice(1).map(r => {
+    if (polygonSignedArea(r.ring) > 0) r.ring.reverse();
+    return r.ring;
+  });
+  
+  return [outer, ...innerRings];
 }

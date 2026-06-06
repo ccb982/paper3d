@@ -137,6 +137,7 @@ export function MainCanvas() {
   const [debugRingRadialThreshold, setDebugRingRadialThreshold] = useState(2);
   const [debugShowEndpoints, setDebugShowEndpoints] = useState(false);
   const [debugShowRings, setDebugShowRings] = useState(false);
+  const [debugShowSegments, setDebugShowSegments] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -889,7 +890,7 @@ export function MainCanvas() {
           const hasPoints = debugShowOriginal 
             ? (region.boundaryPoints && region.boundaryPoints.length > 0)
             : ((region.uniqueBoundaryPoints && region.uniqueBoundaryPoints.length > 0) || (region.boundaryPoints && region.boundaryPoints.length > 0));
-          if (!debugShowEndpoints && !debugShowRings && hasPoints) {
+          if (!debugShowEndpoints && !debugShowRings && !debugShowSegments && hasPoints) {
             // 按 outsideId 分组
             const debugPoints = debugShowOriginal
               ? region.boundaryPoints
@@ -992,7 +993,7 @@ export function MainCanvas() {
           // 绘制端点信息（原始模式下使用 originalOutsideIdEndpoints，非原始模式下使用 outsideIdEndpoints）
           // 绘制环模式下不显示端点信息
           const endpointsToShow = debugShowOriginal ? region.originalOutsideIdEndpoints : region.outsideIdEndpoints;
-          if (debugShowEndpoints && !debugShowRings && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
+          if (debugShowEndpoints && !debugShowRings && !debugShowSegments && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
             const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
             const endpointColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
             
@@ -1079,6 +1080,60 @@ export function MainCanvas() {
               ctx.font = 'bold 12px monospace';
               ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
             });
+            }
+          }
+
+          // 绘制片段（仅在 debugShowSegments 为 true 时显示）
+          if (debugShowSegments) {
+            if (region.segments && region.segments.length > 0) {
+              const segmentColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
+              region.segments.forEach((seg, segIdx) => {
+                if (seg.points.length < 1) return;
+                const segColor = segmentColors[segIdx % segmentColors.length];
+                ctx.strokeStyle = segColor;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                
+                // 绘制片段线条
+                for (let i = 0; i < seg.points.length; i++) {
+                  const cp = worldToCanvasFn(seg.points[i].x, seg.points[i].y);
+                  if (i === 0) ctx.moveTo(cp.x, cp.y);
+                  else ctx.lineTo(cp.x, cp.y);
+                }
+                ctx.stroke();
+
+                // 绘制起点和终点标记
+                if (seg.points.length >= 1) {
+                  const startPoint = worldToCanvasFn(seg.start.x, seg.start.y);
+                  ctx.fillStyle = '#ffffff';
+                  ctx.strokeStyle = '#ff0000';
+                  ctx.lineWidth = 2;
+                  ctx.beginPath();
+                  ctx.arc(startPoint.x, startPoint.y, 5, 0, Math.PI * 2);
+                  ctx.fill();
+                  ctx.stroke();
+
+                  if (seg.points.length >= 2) {
+                    const endPoint = worldToCanvasFn(seg.end.x, seg.end.y);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.strokeStyle = '#00ff00';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(endPoint.x, endPoint.y, 5, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                  }
+                }
+
+                // 在片段中间位置显示序号
+                if (seg.points.length >= 2) {
+                  const midIdx = Math.floor(seg.points.length / 2);
+                  const midPoint = worldToCanvasFn(seg.points[midIdx].x, seg.points[midIdx].y);
+                  ctx.fillStyle = segColor;
+                  ctx.font = 'bold 10px monospace';
+                  ctx.fillText(`段${segIdx}(${seg.points.length})`, midPoint.x, midPoint.y);
+                }
+              });
             }
           }
 
@@ -1186,7 +1241,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1600,6 +1655,16 @@ export function MainCanvas() {
                     onChange={(e) => setDebugShowRings(e.target.checked)}
                   />
                   <span>绘制环</span>
+                </label>
+              </div>
+              <div style={{ marginLeft: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={debugShowSegments}
+                    onChange={(e) => setDebugShowSegments(e.target.checked)}
+                  />
+                  <span>绘制片段</span>
                 </label>
               </div>
             </div>
