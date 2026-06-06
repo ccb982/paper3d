@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation } from '../types';
-import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, type ScanlineCache } from '../utils/regionDetectionExact';
+import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache } from '../utils/regionDetectionExact';
 
 interface AppState {
   // 图片导入状态
@@ -562,8 +562,57 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = useAppStore.getState();
     const imageLayerId = state.imageState.imageLayerId;
 
+    // 计算调试区域的环信息
+    const worldBounds = {
+      xMin: state.axis.xMin,
+      xMax: state.axis.xMax,
+      yMin: state.axis.yMin,
+      yMax: state.axis.yMax,
+    };
+    // 使用与调试面板相同的默认参数
+    const debugRegions = getDebugRegions(
+      state.shapes,
+      worldBounds,
+      600,
+      1.2,  // distanceThresholdFactor
+      2,    // radialThresholdFactor
+      0.5,  // downsampleDistanceFactor
+      2,    // ringDistanceThreshold
+      2     // ringRadialThreshold
+    );
+
+    // 构建区域环信息
+    const regionRingsInfo = debugRegions.map(region => ({
+      regionId: region.id,
+      cellCount: region.cellCount,
+      centroid: region.centroid ? { x: region.centroid.x, y: region.centroid.y } : null,
+      rings: (region.rings || []).map((ring, ringIdx) => ({
+        ringIndex: ringIdx,
+        pointCount: ring.length,
+        // 环上每个点的坐标和顺序
+        points: ring.map((p, pIdx) => ({
+          index: pIdx,
+          x: p.x,
+          y: p.y,
+        })),
+        // 环的包围框
+        bounds: ring.length > 0 ? {
+          minX: Math.min(...ring.map(p => p.x)),
+          maxX: Math.max(...ring.map(p => p.x)),
+          minY: Math.min(...ring.map(p => p.y)),
+          maxY: Math.max(...ring.map(p => p.y)),
+        } : null,
+      })),
+      // 边界点分组信息
+      boundaryGroups: region.uniqueBoundaryPoints ? 
+        Array.from(new Set(region.uniqueBoundaryPoints.map(bp => bp.outsideId))).map(oid => ({
+          outsideId: oid,
+          pointCount: region.uniqueBoundaryPoints!.filter(bp => bp.outsideId === oid).length,
+        })) : [],
+    }));
+
     const exportData = {
-      version: '1.0',
+      version: '1.1',  // 版本升级
       exportTime: new Date().toISOString(),
       axis: {
         xMin: state.axis.xMin,
@@ -602,6 +651,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       pointAnnotations: state.pointAnnotations,
       regionAnnotations: state.regionAnnotations,
       groups: state.groups,
+      // 新增：调试区域环信息
+      debugRegionRings: regionRingsInfo,
     };
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
