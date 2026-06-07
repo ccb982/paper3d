@@ -703,50 +703,53 @@ function polygonArea(points: Point[]): number {
 export function computeRegionsExact(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 500
+  resolution: number = 600
 ): Point[][][] {
   const gridData = computeGridRegions(shapes, worldBounds, resolution);
   const mainRegions = gridData.regions.filter(r => !r.touchesEdge && r.cells.length >= 10);
 
   const result: Point[][][] = [];
+  const { stepX, stepY } = gridData;
+  const step = Math.min(stepX, stepY);
 
   for (const region of mainRegions) {
+    // 1. 收集边界点
     const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
     if (boundaryPoints.length < 3) continue;
 
-    const groups = groupBoundaryPointsByOutsideId(boundaryPoints);
+    // 2. 降采样（减少点密度）
+    const downsampleThres = step * 10 * 0.15; // 使用固定降采样因子 0.15
+    const downsampledPoints = downsampleBoundaryPointsByOutsideId(boundaryPoints, downsampleThres);
+    if (downsampledPoints.length < 3) continue;
 
-    const rings: { points: Point[]; outsideId: number; area: number }[] = [];
-    for (const [outsideId, pts] of groups.entries()) {
-      if (pts.length < 3) continue;
-      const ring = buildClosedRing(pts);
-      if (ring.length >= 3) {
-        const area = polygonArea(ring);
-        rings.push({ points: ring, outsideId, area });
-      }
-    }
+    // 3. 提取所有边界点的坐标用于成环
+    const allBoundaryPoints = downsampledPoints.map(bp => bp.point);
+
+    // 4. 使用简单的欧式距离成环算法
+    const maxEdgeLength = step * 6 * 3.5; // 使用固定环拼接阈值 3.5
+    const rings = connectPointsToRingsByDistance(allBoundaryPoints, maxEdgeLength);
 
     if (rings.length === 0) continue;
 
-    const outerCandidates = rings.filter(r => r.outsideId === -1 && r.area > 0);
-    let outerRing = outerCandidates.length > 0 ? outerCandidates[0] : null;
+    // 5. 确定外环和内环（按面积排序，最大的为外环）
+    const withArea = rings.map(ring => ({
+      ring,
+      area: polygonSignedArea(ring),
+      absArea: Math.abs(polygonSignedArea(ring))
+    }));
+    withArea.sort((a, b) => b.absArea - a.absArea);
 
-    if (!outerRing) {
-      const positiveRings = rings.filter(r => r.area > 0);
-      if (positiveRings.length > 0) {
-        positiveRings.sort((a, b) => b.area - a.area);
-        outerRing = positiveRings[0];
-      }
-    }
-    if (!outerRing) continue;
+    // 外环应为正面积（逆时针），如果不是则反转
+    const outer = withArea[0].ring;
+    if (polygonSignedArea(outer) < 0) outer.reverse();
 
-    if (outerRing.area < 0) {
-      outerRing.points.reverse();
-    }
+    // 内环应为负面积（顺时针），如果不是则反转
+    const innerRings = withArea.slice(1).map(r => {
+      if (polygonSignedArea(r.ring) > 0) r.ring.reverse();
+      return r.ring;
+    });
 
-    const innerRings = rings.filter(r => r !== outerRing);
-
-    const regionPolygon: Point[][] = [outerRing.points, ...innerRings.map(r => r.points)];
+    const regionPolygon: Point[][] = [outer, ...innerRings];
     result.push(regionPolygon);
   }
 

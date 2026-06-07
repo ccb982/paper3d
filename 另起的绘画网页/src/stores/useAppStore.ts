@@ -562,57 +562,69 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = useAppStore.getState();
     const imageLayerId = state.imageState.imageLayerId;
 
-    // 计算调试区域的环信息
+    // 计算正式区域信息（使用正式算法）
     const worldBounds = {
       xMin: state.axis.xMin,
       xMax: state.axis.xMax,
       yMin: state.axis.yMin,
       yMax: state.axis.yMax,
     };
-    // 使用与调试面板相同的默认参数
-    const debugRegions = getDebugRegions(
-      state.shapes,
-      worldBounds,
-      600,
-      1.2,  // distanceThresholdFactor
-      2,    // radialThresholdFactor
-      0.5,  // downsampleDistanceFactor
-      2,    // ringDistanceThreshold
-      2     // ringRadialThreshold
-    );
+    
+    // 使用正式算法 computeRegionsExact
+    const regions = computeRegionsExact(state.shapes, worldBounds, 600);
 
-    // 构建区域环信息
-    const regionRingsInfo = debugRegions.map(region => ({
-      regionId: region.id,
-      cellCount: region.cellCount,
-      centroid: region.centroid ? { x: region.centroid.x, y: region.centroid.y } : null,
-      rings: (region.rings || []).map((ring, ringIdx) => ({
-        ringIndex: ringIdx,
-        pointCount: ring.length,
-        // 环上每个点的坐标和顺序
-        points: ring.map((p, pIdx) => ({
-          index: pIdx,
-          x: p.x,
-          y: p.y,
-        })),
-        // 环的包围框
-        bounds: ring.length > 0 ? {
-          minX: Math.min(...ring.map(p => p.x)),
-          maxX: Math.max(...ring.map(p => p.x)),
-          minY: Math.min(...ring.map(p => p.y)),
-          maxY: Math.max(...ring.map(p => p.y)),
-        } : null,
-      })),
-      // 边界点分组信息
-      boundaryGroups: region.uniqueBoundaryPoints ? 
-        Array.from(new Set(region.uniqueBoundaryPoints.map(bp => bp.outsideId))).map(oid => ({
-          outsideId: oid,
-          pointCount: region.uniqueBoundaryPoints!.filter(bp => bp.outsideId === oid).length,
-        })) : [],
-    }));
+    // 构建区域环信息（标注内环/外环）
+    const regionRingsInfo = regions.map((region, regionIdx) => {
+      const rings = region.map((ring, ringIdx) => {
+        // 判断内环/外环：第一个是外环，其余是内环
+        const isOuter = ringIdx === 0;
+        
+        // 计算环的面积（用于验证方向）
+        let area = 0;
+        for (let i = 0; i < ring.length - 1; i++) {
+          area += ring[i].x * ring[i + 1].y - ring[i + 1].x * ring[i].y;
+        }
+        area /= 2;
+
+        return {
+          ringIndex: ringIdx,
+          type: isOuter ? 'outer' : 'inner',  // 明确标注内环/外环
+          pointCount: ring.length,
+          area: area,
+          direction: area >= 0 ? 'counterclockwise' : 'clockwise',  // 旋转方向
+          // 环上每个点的坐标和顺序（按绘制顺序排列）
+          points: ring.map((p, pIdx) => ({
+            index: pIdx,
+            x: p.x,
+            y: p.y,
+          })),
+          // 环的包围框
+          bounds: ring.length > 0 ? {
+            minX: Math.min(...ring.map(p => p.x)),
+            maxX: Math.max(...ring.map(p => p.x)),
+            minY: Math.min(...ring.map(p => p.y)),
+            maxY: Math.max(...ring.map(p => p.y)),
+          } : null,
+        };
+      });
+
+      // 计算区域总面积（外环面积 - 所有内环面积）
+      const outerArea = rings.find(r => r.type === 'outer')?.area || 0;
+      const innerAreas = rings.filter(r => r.type === 'inner').reduce((sum, r) => sum + Math.abs(r.area), 0);
+      const totalArea = outerArea - innerAreas;
+
+      return {
+        regionIndex: regionIdx,
+        ringCount: rings.length,
+        outerRingCount: rings.filter(r => r.type === 'outer').length,
+        innerRingCount: rings.filter(r => r.type === 'inner').length,
+        totalArea: totalArea,
+        rings: rings,
+      };
+    });
 
     const exportData = {
-      version: '1.1',  // 版本升级
+      version: '1.2',  // 版本升级：正式算法+内环/外环标注
       exportTime: new Date().toISOString(),
       axis: {
         xMin: state.axis.xMin,
@@ -651,8 +663,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       pointAnnotations: state.pointAnnotations,
       regionAnnotations: state.regionAnnotations,
       groups: state.groups,
-      // 新增：调试区域环信息
-      debugRegionRings: regionRingsInfo,
+      // 区域环信息（使用正式算法）
+      regions: regionRingsInfo,
     };
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
