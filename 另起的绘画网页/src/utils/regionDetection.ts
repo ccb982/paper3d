@@ -1,5 +1,46 @@
 import type { Point } from '../types';
 
+// 生成区域的唯一签名（基于外环的几何特征）
+export function generateRegionSignature(region: Point[][]): string {
+  if (!region || region.length === 0 || !region[0] || region[0].length === 0) {
+    return '';
+  }
+  
+  const outerRing = region[0];
+  
+  // 计算重心（使用更高精度）
+  let cx = 0, cy = 0;
+  for (const p of outerRing) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= outerRing.length;
+  cy /= outerRing.length;
+  
+  // 计算面积（使用绝对值）
+  let area = 0;
+  for (let i = 0; i < outerRing.length; i++) {
+    const j = (i + 1) % outerRing.length;
+    area += outerRing[i].x * outerRing[j].y - outerRing[j].x * outerRing[i].y;
+  }
+  area = Math.abs(area / 2);
+  
+  // 计算最小包围盒
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of outerRing) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  
+  const width = maxX - minX;
+  const height = maxY - minY;
+  
+  // 生成签名（使用固定精度，确保稳定性）
+  return `region_${cx.toFixed(8)}_${cy.toFixed(8)}_${area.toFixed(8)}_${width.toFixed(8)}_${height.toFixed(8)}`;
+}
+
 function pointToSegmentDistance(p: Point, a: Point, b: Point): number {
   const abx = b.x - a.x;
   const aby = b.y - a.y;

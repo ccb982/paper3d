@@ -1664,3 +1664,25 @@ export function extractClosedRingsFromPoints(
   
   return [outer, ...innerRings];
 }
+
+/**
+ * 获取世界坐标点所在的 BFS 区域 ID（正数）
+ * @returns 区域ID，如果点不在任何有效区域（墙区域或外部）则返回 null
+ */
+export function getRegionIdAtPoint(
+  point: Point,
+  shapes: Shape[],
+  worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
+  resolution: number = 200
+): number | null {
+  const gridData = computeGridRegions(shapes, worldBounds, resolution);
+  const { stepX, stepY, xMin, yMin, resolution: res, regionIdGrid } = gridData;
+  const j = Math.floor((point.x - xMin) / stepX);
+  const i = Math.floor((point.y - yMin) / stepY);
+  if (i >= 0 && i < res && j >= 0 && j < res) {
+    const rid = regionIdGrid[i][j];
+    // 返回非负区域ID（墙区域为负数，外部未填充的为 -1，均忽略）
+    if (rid >= 0) return rid;
+  }
+  return null;
+}

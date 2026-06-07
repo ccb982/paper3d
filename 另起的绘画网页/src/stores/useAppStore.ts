@@ -93,6 +93,7 @@ interface AppState {
   regionAnnotations: RegionAnnotation[];
   addRegionAnnotation: (annotation: Omit<RegionAnnotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
   updateRegionAnnotation: (id: string, text: string) => void;
+  updateRegionAnnotationWithRegionId: (id: string, text: string, regionId: string) => void;
   removeRegionAnnotation: (id: string) => void;
   clearRegionAnnotations: () => void;
 
@@ -427,21 +428,35 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   regionAnnotations: [],
   addRegionAnnotation: (annotation) =>
-    set((state) => ({
-      regionAnnotations: [
-        ...state.regionAnnotations,
-        {
-          ...annotation,
-          id: `region_anno_${Date.now()}_${Math.random()}`,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      ],
-    })),
+    set((state) => {
+      // 如果该区域已有注释，先移除旧注释（确保一个区域只有一个注释）
+      const filteredAnnotations = annotation.regionId
+        ? state.regionAnnotations.filter(a => a.regionId !== annotation.regionId)
+        : state.regionAnnotations;
+      
+      return {
+        regionAnnotations: [
+          ...filteredAnnotations,
+          {
+            ...annotation,
+            id: `region_anno_${Date.now()}_${Math.random()}`,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        ],
+      };
+    }),
   updateRegionAnnotation: (id, text) =>
     set((state) => ({
       regionAnnotations: state.regionAnnotations.map(a =>
         a.id === id ? { ...a, text, updatedAt: Date.now() } : a
+      ),
+    })),
+  // 更新区域注释（包含 regionId）
+  updateRegionAnnotationWithRegionId: (id, text, regionId) =>
+    set((state) => ({
+      regionAnnotations: state.regionAnnotations.map(a =>
+        a.id === id ? { ...a, text, regionId, updatedAt: Date.now() } : a
       ),
     })),
   removeRegionAnnotation: (id) =>

@@ -3,8 +3,8 @@ import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld } from '../utils/transform';
-import { findRegionByPoint } from '../utils/regionDetection';
-import { getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
+import { findRegionByPoint, generateRegionSignature } from '../utils/regionDetection';
+import { getRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -113,8 +113,9 @@ export function MainCanvas() {
     removePointAnnotation,
     regionAnnotations,
     addRegionAnnotation,
-    updateRegionAnnotation,
+    updateRegionAnnotationWithRegionId,
     removeRegionAnnotation,
+    saveToStorage,
     regionPolygonsCache,
     refreshRegionCache,
     saveHistory,
@@ -158,6 +159,7 @@ export function MainCanvas() {
     annotationId: string | null;
     existingText: string;
     polygon: Point[][];
+    regionId: string;
   } | null>(null);
 
   const currentEditorIdRef = useRef<string | null>(null);
@@ -1267,22 +1269,6 @@ export function MainCanvas() {
           ctx.setLineDash([]);
           ctx.restore();
         });
-
-        // 输出网格数据信息到控制台
-        console.log('==========================================');
-        console.log('[BFS原始网格数据]');
-        console.log(`网格分辨率: ${resolution}x${resolution}`);
-        console.log(`单元格大小: ${stepX.toFixed(6)} x ${stepY.toFixed(6)}`);
-        console.log(`总区域数: ${regions.length}`);
-        regions.forEach(region => {
-          console.log(`区域${region.id}: ${region.cells.length}个单元格, 种子点: (${region.seed.x.toFixed(4)}, ${region.seed.y.toFixed(4)})`);
-          const spans = scanlineCache[region.id] || [];
-          if (spans.length > 0) {
-            console.log(`  扫描线区间数: ${spans.length}`);
-            console.log(`  示例区间: y=${spans[0].y.toFixed(4)}, xMin=${spans[0].xMin.toFixed(4)}, xMax=${spans[0].xMax.toFixed(4)}`);
-          }
-        });
-        console.log('==========================================');
       }
     }
 
@@ -1301,9 +1287,10 @@ export function MainCanvas() {
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
   useEffect(() => {
-    console.log('[MainCanvas] 初始化刷新区域缓存...');
     refreshRegionCache(activeLayerId);
   }, []);
+
+
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1380,21 +1367,51 @@ export function MainCanvas() {
     }
 
     if (currentTool === 'regionAnnotation') {
-      console.log('=== 区域注释点击检测开始 ===');
-      console.log('1. 点击坐标 (canvas):', coords);
-      console.log('2. 转换后坐标 (world):', worldCoords);
-      console.log('3. 当前活动图层:', activeLayerId);
-      console.log('4. 区域缓存 keys:', Object.keys(regionPolygonsCache));
-      const regions = regionPolygonsCache[activeLayerId] || [];
-      console.log('5. 当前图层区域数量:', regions.length);
-      if (regions.length > 0) {
-        console.log('6. 第一个区域详情:', JSON.stringify(regions[0]));
+      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      if (currentLayerShapes.length === 0) return;
+
+      // 获取BFS区域ID（正数）
+      const worldBounds = {
+        xMin: axis.xMin,
+        xMax: axis.xMax,
+        yMin: axis.yMin,
+        yMax: axis.yMax,
+      };
+      const bfsRegionId = getRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
+      
+      if (bfsRegionId === null) {
+        console.log('[区域注释] 点击位置不在任何有效BFS区域内（可能是墙或外部）');
+        return;
       }
-      console.log('7. 开始调用 findRegionByPoint...');
-      const hitRegion = findRegionByPoint(worldCoords, regions);
-      console.log('8. 检测结果:', hitRegion);
-      if (hitRegion) {
-        console.log('9. 命中区域多边形点数:', hitRegion.map(r => r.length));
+
+      // 通过BFS区域ID查找已有注释
+      const existingAnnotation = regionAnnotations.find(
+        anno => anno.layerId === activeLayerId && String(anno.regionId) === String(bfsRegionId)
+      );
+
+      // 还需要获取多边形用于显示（保持原有逻辑，但匹配不依赖它）
+      const regions = regionPolygonsCache[activeLayerId] || [];
+      const hitRegion = findRegionByPoint(worldCoords, regions); // 仅用于获取多边形形状
+
+      if (existingAnnotation) {
+        // 编辑已有注释
+        console.log('[区域注释] 找到匹配的已有注释，区域ID:', bfsRegionId, ', 文本:', existingAnnotation.text);
+        setRegionAnnotationEditor({
+          editorId: generateEditorId(),
+          x: e.clientX,
+          y: e.clientY,
+          annotationId: existingAnnotation.id,
+          existingText: existingAnnotation.text,
+          polygon: hitRegion || existingAnnotation.polygon, // 优先用几何检测的结果，否则用已存储的
+          regionId: String(bfsRegionId),
+        });
+      } else {
+        if (!hitRegion) {
+          console.log('[区域注释] 无法获取区域多边形，但BFS ID存在，可能算法不一致，放弃创建');
+          return;
+        }
+        // 创建新注释
+        console.log('[区域注释] 创建新注释，区域ID:', bfsRegionId);
         setRegionAnnotationEditor({
           editorId: generateEditorId(),
           x: e.clientX,
@@ -1402,24 +1419,9 @@ export function MainCanvas() {
           annotationId: null,
           existingText: '',
           polygon: hitRegion,
+          regionId: String(bfsRegionId),
         });
-      } else {
-        console.log('❌ 未点击到任何区域');
-        console.log('   尝试打印所有区域的包围盒...');
-        for (let i = 0; i < regions.length; i++) {
-          const ring = regions[i][0];
-          if (ring && ring.length > 0) {
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const p of ring) {
-              minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-              maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-            }
-            console.log(`   区域${i}包围盒: min(${minX.toFixed(4)}, ${minY.toFixed(4)}) max(${maxX.toFixed(4)}, ${maxY.toFixed(4)})`);
-            console.log(`   点击点是否在包围盒内: x=${worldCoords.x.toFixed(4)} y=${worldCoords.y.toFixed(4)}, inX=${worldCoords.x >= minX && worldCoords.x <= maxX}, inY=${worldCoords.y >= minY && worldCoords.y <= maxY}`);
-          }
-        }
       }
-      console.log('=== 区域注释点击检测结束 ===');
       return;
     }
 
@@ -1442,6 +1444,8 @@ export function MainCanvas() {
     setIsPanning,
     setPanStart,
     setIsErasing,
+    regionAnnotations,
+    updateRegionAnnotationWithRegionId,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -1545,19 +1549,30 @@ export function MainCanvas() {
   // 区域注释保存
   const handleRegionAnnotationSave = useCallback((text: string) => {
     const editor = regionAnnotationEditor;
-    if (!editor || editor.editorId !== currentEditorIdRef.current) return;
+    
+    if (!editor || editor.editorId !== currentEditorIdRef.current) {
+      return;
+    }
+    
+    // 直接更新 store
     if (editor.annotationId) {
-      updateRegionAnnotation(editor.annotationId, text);
+      updateRegionAnnotationWithRegionId(editor.annotationId, text, editor.regionId);
     } else {
       addRegionAnnotation({
         text,
         polygon: editor.polygon,
         layerId: activeLayerId || layers[0]?.id,
+        regionId: editor.regionId,
       });
     }
-    saveHistory();
+    
     setRegionAnnotationEditor(null);
-  }, [regionAnnotationEditor, updateRegionAnnotation, addRegionAnnotation, saveHistory, activeLayerId, layers]);
+  }, [regionAnnotationEditor, updateRegionAnnotationWithRegionId, addRegionAnnotation, activeLayerId, layers]);
+
+  // 监听区域注释变化，保存到历史快照（不保存到 localStorage）
+  useEffect(() => {
+    saveHistory();
+  }, [regionAnnotations, saveHistory]);
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default') }}>
