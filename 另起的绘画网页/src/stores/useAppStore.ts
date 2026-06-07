@@ -185,7 +185,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   axis: defaultAxis,
   setAxis: (axis) =>
-    set((state) => ({ axis: { ...state.axis, ...axis } })),
+    set((state) => ({ 
+      axis: { ...state.axis, ...axis }, 
+      zoom: 1, 
+      panOffset: { x: 0, y: 0 } 
+    })),
   resetAxis: () => set({ axis: defaultAxis }),
 
   grid: {
