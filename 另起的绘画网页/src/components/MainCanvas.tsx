@@ -138,6 +138,7 @@ export function MainCanvas() {
   const [debugShowEndpoints, setDebugShowEndpoints] = useState(false);
   const [debugShowRings, setDebugShowRings] = useState(false);
   const [debugShowSegments, setDebugShowSegments] = useState(false);
+  const [debugShowWallGrouped, setDebugShowWallGrouped] = useState(false);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -1137,6 +1138,39 @@ export function MainCanvas() {
             }
           }
 
+          // 绘制墙分组点（仅在 debugShowWallGrouped 为 true 时显示）
+          if (debugShowWallGrouped) {
+            if (region.wallGroupedPoints && region.wallGroupedPoints.size > 0) {
+              const wallColors = ['#8b0000', '#006400', '#00008b', '#8b008b', '#8b4513', '#2f4f4f', '#556b2f', '#483d8b', '#008080', '#800000'];
+              region.wallGroupedPoints.forEach((points, wallId) => {
+                const colorIdx = Math.abs(wallId + 1) % wallColors.length;
+                const color = wallColors[colorIdx];
+                ctx.fillStyle = color;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1;
+
+                // 绘制每个点
+                points.forEach(p => {
+                  const cp = worldToCanvasFn(p.x, p.y);
+                  ctx.beginPath();
+                  ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
+                  ctx.fill();
+                });
+
+                // 在该组点的重心位置显示墙ID
+                if (points.length > 0) {
+                  let sumX = 0, sumY = 0;
+                  points.forEach(p => { sumX += p.x; sumY += p.y; });
+                  const centroid = { x: sumX / points.length, y: sumY / points.length };
+                  const cp = worldToCanvasFn(centroid.x, centroid.y);
+                  ctx.fillStyle = '#ffffff';
+                  ctx.font = 'bold 10px monospace';
+                  ctx.fillText(`墙${wallId}(${points.length})`, cp.x, cp.y);
+                }
+              });
+            }
+          }
+
           ctx.restore();
         });
 
@@ -1262,7 +1296,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, canvasSize, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1686,6 +1720,16 @@ export function MainCanvas() {
                     onChange={(e) => setDebugShowSegments(e.target.checked)}
                   />
                   <span>绘制片段</span>
+                </label>
+              </div>
+              <div style={{ marginLeft: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={debugShowWallGrouped}
+                    onChange={(e) => setDebugShowWallGrouped(e.target.checked)}
+                  />
+                  <span>墙分组点</span>
                 </label>
               </div>
             </div>

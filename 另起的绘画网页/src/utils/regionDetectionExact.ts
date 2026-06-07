@@ -426,6 +426,68 @@ function getOutsideIdAroundPoint(
   return bestId;
 }
 
+// ========== 新增：获取点周围的墙区域ID（负ID）==========
+/**
+ * 在世界坐标点周围搜索，找到最常见的墙区域ID（负ID）。
+ */
+export function getWallIdAroundPoint(
+  point: Point,
+  gridData: GridData,
+  radius: number = 2
+): number | null {
+  const { wallRegionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
+  const gridPos = worldToGrid(point.x, point.y, xMin, yMin, stepX, stepY, resolution);
+  if (!gridPos) return null;
+  const { i: ci, j: cj } = gridPos;
+
+  const freq = new Map<number, number>();
+  let hasWall = false;
+
+  for (let di = -radius; di <= radius; di++) {
+    for (let dj = -radius; dj <= radius; dj++) {
+      const ni = ci + di;
+      const nj = cj + dj;
+      if (ni < 0 || ni >= resolution || nj < 0 || nj >= resolution) continue;
+      const wallId = wallRegionIdGrid[ni][nj];
+      if (wallId < 0) {
+        hasWall = true;
+        freq.set(wallId, (freq.get(wallId) || 0) + 1);
+      }
+    }
+  }
+
+  if (!hasWall) return null;
+
+  let bestId: number | null = null;
+  let bestCount = 0;
+  for (const [id, count] of freq.entries()) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
+/**
+ * 将边界点按它们关联的墙区域ID（负ID）分组。
+ */
+export function groupBoundaryPointsByWallId(
+  boundaryPoints: BoundaryPoint[],
+  gridData: GridData,
+  radius: number = 2
+): Map<number, Point[]> {
+  const groups = new Map<number, Point[]>();
+  for (const bp of boundaryPoints) {
+    const wallId = getWallIdAroundPoint(bp.point, gridData, radius);
+    if (wallId !== null) {
+      if (!groups.has(wallId)) groups.set(wallId, []);
+      groups.get(wallId)!.push(bp.point);
+    }
+  }
+  return groups;
+}
+
 // ========== 核心：收集边界点 ==========
 export interface BoundaryPoint {
   point: Point;
@@ -712,6 +774,7 @@ export interface DebugRegionData {
   outsideIdEndpoints?: OutsideIdEndpoint[];
   originalOutsideIdEndpoints?: OutsideIdEndpoint[];
   segments?: SegmentForMatching[];  // 新增：用于调试绘制片段
+  wallGroupedPoints?: Map<number, Point[]>;  // 按墙区域ID分组后的点集
 }
 
 // ========== 双重阈值辅助函数（新算法） ==========
@@ -958,13 +1021,13 @@ export function getDebugRegions(
     segmentsList.forEach((seg, idx) => {
       console.log(`  segment${idx}: ${seg.points.length}点, closed=${seg.closed}, start=(${seg.start.x.toFixed(3)},${seg.start.y.toFixed(3)}), end=(${seg.end.x.toFixed(3)},${seg.end.y.toFixed(3)})`);
     });
-    // 使用新的凹包算法提取环，不依赖outsideId分组
+    // 使用简单的欧式距离成环算法
     const allBoundaryPointsForRings = uniqueBoundaryPoints.map(bp => bp.point);
     const maxEdgeLength = step * 6 * ringDistanceThreshold; // 使用环拼接阈值系数
-    const ringsFromSegments = extractClosedRingsFromPoints(allBoundaryPointsForRings, maxEdgeLength);
-    console.log(`[调试] 区域 ${region.id} 凹包成环数量: ${ringsFromSegments.length}`);
+    const ringsFromSegments = connectPointsToRingsByDistance(allBoundaryPointsForRings, maxEdgeLength);
+    console.log(`[调试] 区域 ${region.id} 成环数量: ${ringsFromSegments.length}`);
     ringsFromSegments.forEach((ring, idx) => {
-      console.log(`  环${idx}: ${ring.length} 个顶点，起点=(${ring[0]?.x.toFixed(3)},${ring[0]?.y.toFixed(3)})`);
+      console.log(`  环${idx}: ${ring.length} 个顶点`);
     });
     
     // 保持后续代码兼容，pointGroups 设为空数组
@@ -1069,6 +1132,9 @@ export function getDebugRegions(
       }
     }
 
+    // 按墙ID分组边界点（使用降采样后的点）
+    const wallGroupedPoints = groupBoundaryPointsByWallId(downsampledPoints, gridData, 2);
+
     const rays: DebugRay[] = [];
     debug.push({
       id: region.id,
@@ -1086,6 +1152,7 @@ export function getDebugRegions(
       outsideIdEndpoints,
       originalOutsideIdEndpoints,
       segments: segmentsList,  // 新增：保存片段数据用于调试绘制
+      wallGroupedPoints,  // 按墙ID分组后的点集
     });
   }
   return debug;
@@ -1286,7 +1353,136 @@ export function buildClosedRingsFromSegments(
   return closedRings;
 }
 
-// ========== 新成环算法：基于凹包迭代，不依赖 outsideId 分组 ==========
+// ========== 简单成环函数：基于欧式距离的最近邻贪心连接 ==========
+/**
+ * 将无序点集用最近邻贪心算法连接成闭合环
+ * @param points 无序点集
+ * @param maxEdgeLength 最大边长阈值，超过则断开
+ * @returns 多个环的点序列
+ */
+export function connectPointsToRingsByDistance(
+  points: Point[],
+  maxEdgeLength: number
+): Point[][] {
+  if (points.length < 3) return [];
+
+  const used = new Array(points.length).fill(false);
+  const rings: Point[][] = [];
+
+  // 获取未使用的点索引
+  const getUnusedIndices = (): number[] => {
+    const indices: number[] = [];
+    for (let i = 0; i < points.length; i++) {
+      if (!used[i]) indices.push(i);
+    }
+    return indices;
+  };
+
+  // 计算两点间欧式距离
+  const dist = (a: Point, b: Point): number => Math.hypot(a.x - b.x, a.y - b.y);
+
+  // 贪心构建一个环
+  const buildOneRing = (startIdx: number): Point[] | null => {
+    const ring: number[] = [startIdx];
+    used[startIdx] = true;
+    let currentIdx = startIdx;
+
+    while (true) {
+      const current = points[currentIdx];
+      let bestIdx = -1;
+      let bestDist = Infinity;
+
+      // 找最近邻
+      for (let i = 0; i < points.length; i++) {
+        if (used[i] || i === currentIdx) continue;
+        const d = dist(current, points[i]);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx === -1 || bestDist > maxEdgeLength) {
+        // 无法继续，尝试闭合或放弃
+        break;
+      }
+
+      // 检查是否回到起点（形成环）
+      const distToStart = dist(points[bestIdx], points[startIdx]);
+      if (ring.length >= 3 && distToStart < bestDist && distToStart <= maxEdgeLength) {
+        // 闭合环
+        ring.push(startIdx);
+        used[bestIdx] = true;
+        return ring.map(i => ({ ...points[i] }));
+      }
+
+      ring.push(bestIdx);
+      used[bestIdx] = true;
+      currentIdx = bestIdx;
+    }
+
+    // 无法形成有效环
+    for (const idx of ring) {
+      used[idx] = false; // 回滚
+    }
+    return null;
+  };
+
+  // 尝试从每个未使用点开始构建环
+  while (true) {
+    const unused = getUnusedIndices();
+    if (unused.length < 3) break;
+
+    let ring: Point[] | null = null;
+    // 尝试从未使用点构建环
+    for (const startIdx of unused) {
+      ring = buildOneRing(startIdx);
+      if (ring && ring.length >= 3) {
+        rings.push(ring);
+        break;
+      }
+    }
+
+    if (!ring || ring.length < 3) break;
+  }
+
+  // 处理剩余孤立点：尝试连接成小环
+  const remaining = getUnusedIndices();
+  if (remaining.length >= 3) {
+    // 简单方法：把剩余点按距离连接成一条链，然后尝试闭合
+    const chain: number[] = [remaining[0]];
+    used[remaining[0]] = true;
+    let currentIdx = remaining[0];
+
+    for (let i = 1; i < remaining.length; i++) {
+      const idx = remaining[i];
+      const d = dist(points[currentIdx], points[idx]);
+      if (d <= maxEdgeLength) {
+        chain.push(idx);
+        used[idx] = true;
+        currentIdx = idx;
+      }
+    }
+
+    // 尝试闭合
+    if (chain.length >= 3) {
+      const d = dist(points[currentIdx], points[chain[0]]);
+      if (d <= maxEdgeLength) {
+        rings.push(chain.map(i => ({ ...points[i] })));
+      }
+    }
+  }
+
+  // 按面积排序
+  const withArea = rings.map(ring => ({
+    ring,
+    area: polygonSignedArea(ring),
+    absArea: Math.abs(polygonSignedArea(ring))
+  }));
+  withArea.sort((a, b) => b.absArea - a.absArea);
+
+  return withArea.map(r => r.ring);
+}
 
 /**
  * 计算点集的凸包（Graham scan）
