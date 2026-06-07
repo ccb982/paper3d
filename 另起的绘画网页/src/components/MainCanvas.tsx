@@ -1155,9 +1155,30 @@ export function MainCanvas() {
           yMax: axis.yMax,
         };
         const gridData = computeGridRegions(currentLayerShapes, worldBounds, 100);
-        const { regionIdGrid, stepX, stepY, xMin, yMin, resolution, regions } = gridData;
+        const { regionIdGrid, stepX, stepY, xMin, yMin, resolution, regions, wallRegions } = gridData;
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
+        const wallColors = ['#8b0000', '#006400', '#00008b', '#8b008b', '#8b4513', '#2f4f4f', '#556b2f', '#483d8b', '#008080', '#800000'];
+
+        // 绘制所有墙区域的单元格（负ID）
+        if (wallRegions && wallRegions.length > 0) {
+          wallRegions.forEach(wallRegion => {
+            ctx.save();
+            const colorIdx = Math.abs(wallRegion.id + 1) % wallColors.length;
+            const color = wallColors[colorIdx];
+            ctx.fillStyle = color + 'cc'; // 较高不透明度
+
+            wallRegion.cells.forEach(cell => {
+              const worldX = xMin + cell.j * stepX;
+              const worldY = yMin + cell.i * stepY;
+              const canvasTL = worldToCanvasFn(worldX, worldY);
+              const canvasBR = worldToCanvasFn(worldX + stepX, worldY + stepY);
+
+              ctx.fillRect(canvasTL.x, canvasTL.y, canvasBR.x - canvasTL.x, canvasBR.y - canvasTL.y);
+            });
+            ctx.restore();
+          });
+        }
 
         // 绘制所有区域的单元格
         regions.forEach(region => {
@@ -1170,7 +1191,7 @@ export function MainCanvas() {
             const worldY = yMin + cell.i * stepY;
             const canvasTL = worldToCanvasFn(worldX, worldY);
             const canvasBR = worldToCanvasFn(worldX + stepX, worldY + stepY);
-            
+
             ctx.fillRect(canvasTL.x, canvasTL.y, canvasBR.x - canvasTL.x, canvasBR.y - canvasTL.y);
           });
           ctx.restore();

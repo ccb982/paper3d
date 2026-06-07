@@ -99,9 +99,17 @@ export interface GridRegion {
   touchesEdge: boolean;
 }
 
+export interface WallRegion {
+  id: number;
+  cells: { i: number; j: number }[];
+  bounds: { minI: number; maxI: number; minJ: number; maxJ: number };
+}
+
 export interface GridData {
   regionIdGrid: number[][];
   regions: GridRegion[];
+  wallRegionIdGrid: number[][];
+  wallRegions: WallRegion[];
   stepX: number; stepY: number;
   xMin: number; yMin: number;
   resolution: number;
@@ -118,6 +126,50 @@ export function computeGridRegions(
 
   const wallGrid: boolean[][] = Array(resolution).fill(null).map(() => Array(resolution).fill(false));
   for (const shape of shapes) rasterizeShape(shape, stepX, stepY, xMin, yMin, resolution, wallGrid);
+
+  // 对墙格子进行八连通洪水填充，分配负ID
+  const wallRegionIdGrid: number[][] = Array(resolution).fill(null).map(() => Array(resolution).fill(0));
+  const wallRegions: WallRegion[] = [];
+  let currentWallId = -1;
+  const wallDirs = [
+    [-1, -1], [-1, 0], [-1, 1],
+    [0, -1],           [0, 1],
+    [1, -1],  [1, 0],  [1, 1]
+  ];
+
+  for (let i = 0; i < resolution; i++) {
+    for (let j = 0; j < resolution; j++) {
+      if (wallGrid[i][j] && wallRegionIdGrid[i][j] === 0) {
+        const regionId = currentWallId--;
+        const cells: { i: number; j: number }[] = [];
+        const queue: [number, number][] = [[i, j]];
+        wallRegionIdGrid[i][j] = regionId;
+        let minI = i, maxI = i, minJ = j, maxJ = j;
+
+        while (queue.length > 0) {
+          const [ci, cj] = queue.shift()!;
+          cells.push({ i: ci, j: cj });
+          minI = Math.min(minI, ci); maxI = Math.max(maxI, ci);
+          minJ = Math.min(minJ, cj); maxJ = Math.max(maxJ, cj);
+
+          for (const [di, dj] of wallDirs) {
+            const ni = ci + di, nj = cj + dj;
+            if (ni >= 0 && ni < resolution && nj >= 0 && nj < resolution &&
+                wallGrid[ni][nj] && wallRegionIdGrid[ni][nj] === 0) {
+              wallRegionIdGrid[ni][nj] = regionId;
+              queue.push([ni, nj]);
+            }
+          }
+        }
+
+        wallRegions.push({
+          id: regionId,
+          cells,
+          bounds: { minI, maxI, minJ, maxJ }
+        });
+      }
+    }
+  }
 
   const regionIdGrid: number[][] = Array(resolution).fill(null).map(() => Array(resolution).fill(-1));
   const regions: GridRegion[] = [];
@@ -157,7 +209,7 @@ export function computeGridRegions(
       currentId++;
     }
   }
-  return { regionIdGrid, regions, stepX, stepY, xMin, yMin, resolution };
+  return { regionIdGrid, regions, wallRegionIdGrid, wallRegions, stepX, stepY, xMin, yMin, resolution };
 }
 
 // ========== 3. 射线与图形精确求交 ==========
@@ -332,7 +384,7 @@ function getOutsideIdAroundPoint(
       const nj = cj + dj;
       if (ni < 0 || ni >= resolution || nj < 0 || nj >= resolution) continue;
       const nid = regionIdGrid[ni][nj];
-      if (nid === rid || nid === -1) continue;
+      if (nid === rid || nid === -1 || nid < 0) continue; // 排除负ID（墙区域）
 
       const centerX = xMin + (nj + 0.5) * stepX;
       const centerY = yMin + (ni + 0.5) * stepY;
