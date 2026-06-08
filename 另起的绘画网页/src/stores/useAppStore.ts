@@ -477,11 +477,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log('==========================================');
     console.log('[绘画后区域检测] 图形总数:', allShapesInLayer.length);
 
+    // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
     const worldBounds = {
-      xMin: state.axis.xMin,
-      xMax: state.axis.xMax,
-      yMin: state.axis.yMin,
-      yMax: state.axis.yMax,
+      xMin: 0,
+      xMax: 1,
+      yMin: 0,
+      yMax: 1,
     };
 
     const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300);

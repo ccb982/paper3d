@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
-import { worldToCanvas, canvasToWorld } from '../utils/transform';
+import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { findRegionByPoint, generateRegionSignature } from '../utils/regionDetection';
 import { getRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
 
@@ -774,22 +774,40 @@ export function MainCanvas() {
     if (layerVisibility.axisLayer && grid.visible) {
       ctx.strokeStyle = '#d0d0d0'; ctx.lineWidth = 1;
       for (let i = 0; i <= grid.cols; i++) {
-        const pos = (i / grid.cols) * currentSize;
+        // 将网格位置从世界坐标 [0,1] 映射到画布
+        const worldX = i / grid.cols;
+        const pos = worldX * currentSize;
         ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, currentSize); ctx.stroke();
+        
+        // 绘制网格标签（使用 axis 范围显示）
+        const axisPos = worldToAxis(worldX, 0, axis);
+        ctx.fillStyle = '#999'; ctx.font = '10px monospace';
+        ctx.fillText(axisPos.x.toFixed(1), pos - 15, 12);
       }
       for (let i = 0; i <= grid.rows; i++) {
-        const pos = (i / grid.rows) * currentSize;
+        // 将网格位置从世界坐标 [0,1] 映射到画布
+        const worldY = i / grid.rows;
+        const pos = worldY * currentSize;
         ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(currentSize, pos); ctx.stroke();
+        
+        // 绘制网格标签（使用 axis 范围显示）
+        const axisPos = worldToAxis(0, worldY, axis);
+        ctx.fillStyle = '#999'; ctx.font = '10px monospace';
+        ctx.fillText(axisPos.y.toFixed(1), 2, pos + 4);
       }
-      const centerX = (0 - axis.xMin) / (axis.xMax - axis.xMin) * currentSize;
-      const centerY = (axis.yMax - 0) / (axis.yMax - axis.yMin) * currentSize;
+      
+      // 中心十字线（世界坐标 0.5 对应画布中心）
+      const centerX = currentSize / 2;
+      const centerY = currentSize / 2;
       ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(0, centerY); ctx.lineTo(currentSize, centerY); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, currentSize); ctx.stroke();
+      
+      // 轴标签（显示 axis 范围）
       ctx.fillStyle = '#666'; ctx.font = '12px monospace';
       ctx.fillText(`X: ${axis.xMin.toFixed(2)}`, 5, 18);
       ctx.fillText(`X: ${axis.xMax.toFixed(2)}`, currentSize - 45, 18);
-      ctx.fillText(`Y: ${axis.yMax.toFixed(2)}`, 5, 20);
+      ctx.fillText(`Y: ${axis.yMax.toFixed(2)}`, 5, 30);
       ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, currentSize - 5);
     }
 
@@ -881,11 +899,12 @@ export function MainCanvas() {
     if (showDebugRegions && layerVisibility.drawLayer) {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
+        // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
         const worldBounds = {
-          xMin: axis.xMin,
-          xMax: axis.xMax,
-          yMin: axis.yMin,
-          yMax: axis.yMax,
+          xMin: 0,
+          xMax: 1,
+          yMin: 0,
+          yMax: 1,
         };
         const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
 
@@ -1194,11 +1213,12 @@ export function MainCanvas() {
     if (showGridCells && layerVisibility.drawLayer) {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
+        // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
         const worldBounds = {
-          xMin: axis.xMin,
-          xMax: axis.xMax,
-          yMin: axis.yMin,
-          yMax: axis.yMax,
+          xMin: 0,
+          xMax: 1,
+          yMin: 0,
+          yMax: 1,
         };
         const gridData = computeGridRegions(currentLayerShapes, worldBounds, 100);
         const { regionIdGrid, stepX, stepY, xMin, yMin, resolution, regions, wallRegions } = gridData;
@@ -1387,11 +1407,12 @@ export function MainCanvas() {
       if (currentLayerShapes.length === 0) return;
 
       // 获取BFS区域ID（正数）
+      // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
       const worldBounds = {
-        xMin: axis.xMin,
-        xMax: axis.xMax,
-        yMin: axis.yMin,
-        yMax: axis.yMax,
+        xMin: 0,
+        xMax: 1,
+        yMin: 0,
+        yMax: 1,
       };
       const bfsRegionId = getRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
       
