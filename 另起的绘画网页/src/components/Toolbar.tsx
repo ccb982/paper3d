@@ -12,7 +12,7 @@ const tools: { type: ToolType; icon: string; label: string }[] = [
   { type: 'brush', icon: '✎', label: '画笔' },
   { type: 'eraser', icon: '✕', label: '橡皮' },
   { type: 'pointAnnotation', icon: '📍', label: '点注释' },
-  { type: 'regionAnnotation', icon: '🗺️', label: '区域注释' },
+  { type: 'regionAnnotation', icon: '🗺️', label: '区域注释', hint: '完成绘图后再添加' },
 ];
 
 export function Toolbar() {
@@ -64,7 +64,7 @@ export function Toolbar() {
         <button
           key={tool.type}
           onClick={() => setCurrentTool(tool.type)}
-          title={tool.label}
+          title={tool.hint ? `${tool.label}\n${tool.hint}` : tool.label}
           style={{
             width: '36px',
             height: '36px',
@@ -78,9 +78,31 @@ export function Toolbar() {
             alignItems: 'center',
             justifyContent: 'center',
             transition: 'all 0.2s',
+            position: 'relative',
           }}
         >
           {tool.icon}
+          {tool.hint && currentTool === tool.type && (
+            <div
+              style={{
+                position: 'absolute',
+                left: '100%',
+                marginLeft: '8px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                backgroundColor: '#333',
+                color: '#fff',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                fontSize: '12px',
+                whiteSpace: 'nowrap',
+                zIndex: 200,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              }}
+            >
+              ⚠️ {tool.hint}
+            </div>
+          )}
         </button>
       ))}
 

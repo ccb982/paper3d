@@ -1391,18 +1391,52 @@ export function MainCanvas() {
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
 
     if (currentTool === 'pointAnnotation') {
-      setPointAnnotationEditor({
-        editorId: generateEditorId(),
-        x: e.clientX,
-        y: e.clientY,
-        annotationId: null,
-        existingText: '',
-        position: worldCoords,
-      });
+      // 检测附近是否已有点注释（距离阈值：世界坐标 0.08，约画布的 8%）
+      const proximityThreshold = 0.08;
+      let existingAnnotation = null;
+      let minDistance = Infinity;
+
+      for (const anno of pointAnnotations) {
+        if (anno.layerId !== activeLayerId) continue;
+        const dx = anno.position.x - worldCoords.x;
+        const dy = anno.position.y - worldCoords.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < proximityThreshold && distance < minDistance) {
+          minDistance = distance;
+          existingAnnotation = anno;
+        }
+      }
+
+      if (existingAnnotation) {
+        // 找到附近的注释，读取并允许修改
+        console.log('[点注释] 找到附近的已有注释，距离:', minDistance.toFixed(4), ', 文本:', existingAnnotation.text);
+        setPointAnnotationEditor({
+          editorId: generateEditorId(),
+          x: e.clientX,
+          y: e.clientY,
+          annotationId: existingAnnotation.id,
+          existingText: existingAnnotation.text,
+          position: existingAnnotation.position, // 使用已有注释的位置
+        });
+      } else {
+        // 创建新注释
+        setPointAnnotationEditor({
+          editorId: generateEditorId(),
+          x: e.clientX,
+          y: e.clientY,
+          annotationId: null,
+          existingText: '',
+          position: worldCoords,
+        });
+      }
       return;
     }
 
     if (currentTool === 'regionAnnotation') {
+      // ⚠️ 重要备注：区域注释绑定的是 BFS 算法生成的区域 ID
+      // 每次绘制新图形后，BFS 网格会重新计算，区域 ID 可能会发生变化
+      // 因此建议在完成所有图形绘制后再添加区域注释
+      // 如果在绘制过程中添加注释，后续绘制新图形可能导致注释绑定的区域不再匹配
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length === 0) return;
 
