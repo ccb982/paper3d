@@ -82,6 +82,10 @@ interface AppState {
   snapEnabled: boolean;
   setSnapEnabled: (enabled: boolean) => void;
 
+  // 线条粗细配置
+  lineWidth: number;
+  setLineWidth: (width: number) => void;
+
   // 点注释
   pointAnnotations: PointAnnotation[];
   addPointAnnotation: (annotation: Omit<PointAnnotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
@@ -405,19 +409,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   snapEnabled: true,
   setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
 
+  // 线条粗细配置（0表示无，不显示线条，支持小数如0.1, 0.5等）
+  lineWidth: 2,
+  setLineWidth: (width) => set({ lineWidth: Math.max(0, Math.min(5, Math.round(width * 10) / 10)) }),
+
   pointAnnotations: [],
-  addPointAnnotation: (annotation) =>
-    set((state) => ({
+  addPointAnnotation: (annotation) => {
+    // 生成随机颜色
+    const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+    return set((state) => ({
       pointAnnotations: [
         ...state.pointAnnotations,
         {
           ...annotation,
           id: `point_anno_${Date.now()}_${Math.random()}`,
+          color: randomColor,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
       ],
-    })),
+    }));
+  },
   updatePointAnnotation: (id, text) =>
     set((state) => ({
       pointAnnotations: state.pointAnnotations.map(a =>
@@ -431,8 +443,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearPointAnnotations: () => set({ pointAnnotations: [] }),
 
   regionAnnotations: [],
-  addRegionAnnotation: (annotation) =>
-    set((state) => {
+  addRegionAnnotation: (annotation) => {
+    // 生成随机颜色
+    const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+    return set((state) => {
       // 如果该区域已有注释，先移除旧注释（确保一个区域只有一个注释）
       const filteredAnnotations = annotation.regionId
         ? state.regionAnnotations.filter(a => a.regionId !== annotation.regionId)
@@ -444,12 +458,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           {
             ...annotation,
             id: `region_anno_${Date.now()}_${Math.random()}`,
+            color: randomColor,
             createdAt: Date.now(),
             updatedAt: Date.now(),
           },
         ],
       };
-    }),
+    });
+  },
   updateRegionAnnotation: (id, text) =>
     set((state) => ({
       regionAnnotations: state.regionAnnotations.map(a =>

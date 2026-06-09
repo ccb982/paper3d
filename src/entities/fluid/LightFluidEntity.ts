@@ -5,6 +5,8 @@ import { Entity } from '@core/Entity';
 import { FluidLOD } from './FluidTypes';
 import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
 import { GRAVITY, GROUND_HEIGHT } from '../../utils/constants';
+import { polygonToLevelSetTexture, type PolygonPoint, type DrawingExportJson } from '../../utils/polygonToLevelSet';
+import { BULLET_SHAPE_POLYGON } from '../../utils/bulletShape';
 
 /**
  * 轻量流体实体 - 可作为独立实体被 EntityManager 管理
@@ -204,100 +206,55 @@ export class LightFluidEntity extends Entity implements IFluidForceTarget {
 
     private setInitialWaterVolume(volume: number): void {
         const w = this.texSize, h = this.texSize;
-        const data = new Float32Array(w * h * 4);
         
-        // ========== 1. 根据水量计算基础尺寸 ==========
-        // 形状：上三角 + 下半圆
-        // 面积 = 三角形面积 + 半圆面积 = r² + πr²/2 ≈ 2.57r²
-        // r = √(面积 / 2.57)
-        const area = volume * w * h;
-        const r = Math.sqrt(area / 2.57);
+        // ========== 使用自定义子弹形状（从绘画JSON提取） ==========
+        console.log(`[LightFluidEntity] 使用自定义子弹形状，${BULLET_SHAPE_POLYGON.length}个环，外环${BULLET_SHAPE_POLYGON[0]?.length || 0}点`);
         
-        // 随机高宽比（高矮胖瘦）
-        const heightRatio = 0.8 + Math.random() * 0.4;  // 0.8~1.2，高
-        const widthRatio = 0.3 + Math.random() * 0.3;  // 0.3~0.6，胖
-        const halfW = r * widthRatio;
-        const halfH = r * heightRatio;
-        
-        // ========== 2. 角平分线朝向（统一竖直向下创建） ==========
-        // 第0帧会在 update 中转向初速度方向
-        const angle = 0;  // 统一竖直向下，尖端朝上
-        
-        // 纹理中心 = 重心位置
-        const centerX = w / 2;
-        const centerY = h / 2;
-        
-        const cosA = Math.cos(angle);
-        const sinA = Math.sin(angle);
-        
-        // 尾部挖空参数（尖端位置）
-        const trailRadius = this.trailRadius * r;  // 转换回像素空间
-        const trailOffsetY = this.trailOffset * r;  // 尖端正方向偏移
-        
-        // ========== 计算挖空位置的UV坐标并缓存 ==========
-        // 挖空圆心在旋转坐标系中是 (rotX=0, rotY=trailOffsetY/halfH)
-        // 由于初始化时angle=0（竖直向下），旋转坐标系与归一化坐标系重合
-        const dy = trailOffsetY / halfH;  // 归一化Y偏移
-        this.cachedTipU = 0.5;  // X居中
-        this.cachedTipV = 0.5 + dy;  // Y偏移到尖端方向
-        this.cachedTipRadiusUV = trailRadius / halfH;  // UV空间中的挖空半径
-        
-        for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-                const i = (y * w + x) * 4;
-                
-                // 转换为以重心为原点的坐标
-                let dx = (x - centerX) / halfW;
-                let dy = (y - centerY) / halfH;  // y向下为正（UV坐标系）
-                
-                // 旋转到角平分线方向
-                const rotX = dx * cosA - dy * sinA;
-                const rotY = dx * sinA + dy * cosA;
-                
-                // rotY > 0 是上方（三角形尖端），rotY < 0 是下方（半圆）
-                let phi: number;
-                
-                if (rotY > 0) {
-                    // 三角形尖端区域：rotY 从 0 递增到 1
-                    const t = rotY;  // 0~1，从底边到尖端
-                    const triWidth = 1.0 - t;  // 底边宽，逐渐变尖
-                    phi = Math.abs(rotX) - triWidth;
-                } else {
-                    // 半圆区域：rotY 从 0 递减到 -1，圆心在 rotY=0
-                    phi = Math.sqrt(rotX * rotX + rotY * rotY) - 1.0;
-                }
-                
-                // ========== 3. 尾部挖空（在尖端正方向挖一个圆） ==========
-                if (this.trailEnabled) {
-                    // 尖端正方向距离
-                    const distToTip = rotY;
-                    // 只在尖端区域挖空
-                    if (distToTip > 0 && distToTip < trailOffsetY * 2) {
-                        // 计算到尖端圆心的距离
-                        const tipX = 0;
-                        const tipY = trailOffsetY / halfH;  // 转换回归一化坐标
-                        const tipDist = Math.sqrt(Math.pow(rotX - tipX, 2) + Math.pow(rotY - tipY, 2));
-                        const tipRadius = trailRadius / halfH;  // 转换回归一化坐标
-                        
-                        if (tipDist < tipRadius) {
-                            phi = 1.0;  // 挖空（空气）
-                        }
-                    }
-                }
-                
-                data[i] = phi;         // phi: 内部负，外部正
-                data[i + 1] = 0;
-                data[i + 2] = 0;
-                data[i + 3] = 1;
-            }
-        }
-        
-        const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
-        tex.needsUpdate = true;
+        const tex = polygonToLevelSetTexture(BULLET_SHAPE_POLYGON, w, h, true);
         this.simulator.setLevelSetTexture(tex);
         tex.dispose();
+        
+        // 设置挖空位置参数（用于尾部效果）
+        this.cachedTipU = 0.5;       // X居中
+        this.cachedTipV = 0.75;      // Y偏移到尖端方向（下方）
+        this.cachedTipRadiusUV = 0.1; // UV空间中的挖空半径
+    }
 
-            }
+    /**
+     * 设置自定义多边形形状（从绘画导出JSON）
+     * @param polygonRings 多环数组（第一个是外环，后续是内环/孔洞）
+     */
+    public setCustomPolygonShape(polygonRings: PolygonPoint[][]): void {
+        const w = this.texSize;
+        const h = this.texSize;
+        
+        console.log(`[LightFluidEntity] 设置自定义多边形形状，外环${polygonRings[0]?.length || 0}点，${polygonRings.length}个环`);
+        
+        const tex = polygonToLevelSetTexture(polygonRings, w, h, true);
+        this.simulator.setLevelSetTexture(tex);
+        tex.dispose();
+        
+        // 重新生成削弱掩码纹理
+        this.generateWeakenMaskTexture();
+    }
+
+    /**
+     * 从绘画导出JSON对象设置形状
+     * @param jsonObj 绘画导出JSON对象
+     * @returns 是否成功
+     */
+    public setShapeFromDrawingJson(jsonObj: DrawingExportJson): boolean {
+        if (!jsonObj.regionAnnotations || jsonObj.regionAnnotations.length === 0) {
+            console.warn('[LightFluidEntity] JSON中没有区域注释');
+            return false;
+        }
+        
+        const polygon = jsonObj.regionAnnotations[0].polygon;
+        this.setCustomPolygonShape(polygon);
+        
+        console.log(`[LightFluidEntity] 成功从JSON设置形状: "${jsonObj.regionAnnotations[0].text}"`);
+        return true;
+    }
 
     // 模拟器内部固定时间步长
     private readonly simTimeStep = 0.008;

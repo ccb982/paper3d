@@ -107,6 +107,7 @@ export function MainCanvas() {
     layers,
     snapRadius,
     snapEnabled,
+    lineWidth,
     pointAnnotations,
     addPointAnnotation,
     updatePointAnnotation,
@@ -628,7 +629,7 @@ export function MainCanvas() {
     const color = isPreview ? '#666' : (shape.color || '#ff0000');
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = lineWidth;
 
     switch (shape.type) {
       case 'point':
@@ -638,21 +639,21 @@ export function MainCanvas() {
         }
         break;
       case 'line':
-        if (points.length >= 2) {
+        if (points.length >= 2 && lineWidth > 0.01) {
           const p1 = worldToCanvasFn(points[0].x, points[0].y);
           const p2 = worldToCanvasFn(points[1].x, points[1].y);
           ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
         }
         break;
       case 'rectangle':
-        if (points.length >= 2) {
+        if (points.length >= 2 && lineWidth > 0.01) {
           const p1 = worldToCanvasFn(points[0].x, points[0].y);
           const p2 = worldToCanvasFn(points[1].x, points[1].y);
           ctx.strokeRect(Math.min(p1.x, p2.x), Math.min(p1.y, p2.y), Math.abs(p2.x - p1.x), Math.abs(p2.y - p1.y));
         }
         break;
       case 'circle':
-        if (points.length >= 2) {
+        if (points.length >= 2 && lineWidth > 0.01) {
           const center = worldToCanvasFn(points[0].x, points[0].y);
           const edge = worldToCanvasFn(points[1].x, points[1].y);
           const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
@@ -663,10 +664,10 @@ export function MainCanvas() {
         if (points.length >= 1) {
           const p1 = worldToCanvasFn(points[0].x, points[0].y);
           if (points.length === 1) { ctx.beginPath(); ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2); ctx.fill(); }
-          else if (points.length === 2) {
+          else if (points.length === 2 && lineWidth > 0.01) {
             const p2 = worldToCanvasFn(points[1].x, points[1].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-          } else {
+          } else if (lineWidth > 0.01) {
             const p2 = worldToCanvasFn(points[1].x, points[1].y);
             const p3 = worldToCanvasFn(points[2].x, points[2].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.lineTo(p3.x, p3.y); ctx.closePath(); ctx.stroke();
@@ -677,10 +678,10 @@ export function MainCanvas() {
         if (points.length >= 1) {
           const p1 = worldToCanvasFn(points[0].x, points[0].y);
           if (points.length === 1) { ctx.beginPath(); ctx.arc(p1.x, p1.y, 5, 0, Math.PI * 2); ctx.fill(); }
-          else if (points.length === 2) {
+          else if (points.length === 2 && lineWidth > 0.01) {
             const p2 = worldToCanvasFn(points[1].x, points[1].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
-          } else {
+          } else if (lineWidth > 0.01) {
             const p2 = worldToCanvasFn(points[1].x, points[1].y);
             const ctrl = worldToCanvasFn(points[2].x, points[2].y);
             ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.quadraticCurveTo(ctrl.x, ctrl.y, p2.x, p2.y); ctx.stroke();
@@ -688,7 +689,7 @@ export function MainCanvas() {
         }
         break;
       case 'brush':
-        if (points.length >= 2) {
+        if (points.length >= 2 && lineWidth > 0.01) {
           ctx.beginPath();
           const start = worldToCanvasFn(points[0].x, points[0].y); ctx.moveTo(start.x, start.y);
           for (let i = 1; i < points.length; i++) {
@@ -730,7 +731,7 @@ export function MainCanvas() {
         }
       }
     }
-  }, [worldToCanvas]);
+  }, [worldToCanvas, lineWidth]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -841,7 +842,9 @@ export function MainCanvas() {
         if (anno.layerId !== activeLayerId) return;
         const canvasPos = worldToCanvasFn(anno.position.x, anno.position.y);
         ctx.save();
-        ctx.fillStyle = '#ff4d4f';
+        // 使用注释的颜色
+        const color = anno.color || '#ff4d4f';
+        ctx.fillStyle = color;
         ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.arc(canvasPos.x, canvasPos.y, 6, 0, 2 * Math.PI);
@@ -851,7 +854,7 @@ export function MainCanvas() {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('📍', canvasPos.x, canvasPos.y);
-        ctx.fillStyle = '#333';
+        ctx.fillStyle = color;
         ctx.font = '12px sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText(anno.text.length > 15 ? anno.text.slice(0, 12) + '...' : anno.text, canvasPos.x + 10, canvasPos.y - 5);
@@ -864,9 +867,13 @@ export function MainCanvas() {
       regionAnnotations.forEach(anno => {
         if (anno.layerId !== activeLayerId) return;
         ctx.save();
-        ctx.fillStyle = 'rgba(24, 144, 255, 0.2)';
-        ctx.strokeStyle = '#1890ff';
-        ctx.lineWidth = 2;
+        // 使用注释的颜色
+        const color = anno.color || '#1890ff';
+        ctx.fillStyle = color.replace(/rgb\(|#/, '').length === 6 
+          ? `rgba(${parseInt(color.slice(1,3),16)}, ${parseInt(color.slice(3,5),16)}, ${parseInt(color.slice(5,7),16)}, 0.2)` 
+          : 'rgba(24, 144, 255, 0.2)';
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
         ctx.beginPath();
         for (const ring of anno.polygon) {
           if (ring.length < 3) continue;
@@ -878,7 +885,9 @@ export function MainCanvas() {
           ctx.closePath();
         }
         ctx.fill('evenodd');
-        ctx.stroke();
+        if (lineWidth > 0.01) {
+          ctx.stroke();
+        }
         const outerRing = anno.polygon[0];
         let minX = Infinity, minY = Infinity;
         for (const p of outerRing) {
@@ -886,7 +895,7 @@ export function MainCanvas() {
           if (p.y < minY) minY = p.y;
         }
         const labelPos = worldToCanvasFn(minX, minY);
-        ctx.fillStyle = '#333';
+        ctx.fillStyle = color;
         ctx.font = '12px sans-serif';
         ctx.shadowBlur = 0;
         ctx.fillText(anno.text.length > 20 ? anno.text.slice(0, 17) + '...' : anno.text, labelPos.x + 5, labelPos.y - 5);

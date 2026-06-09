@@ -73,6 +73,7 @@ export interface PointAnnotation {
   text: string;
   position: Point;      // 世界坐标
   layerId: string;
+  color: string;        // 注释颜色
   createdAt: number;
   updatedAt: number;
 }
@@ -84,6 +85,7 @@ export interface RegionAnnotation {
   polygon: Point[][];   // 多环多边形：第一个环为外环，后续为内洞
   layerId: string;
   regionId: string | number;     // 绑定的区域ID，用于匹配同一区域（支持字符串签名或数字BFS区域ID）
+  color: string;        // 注释颜色
   createdAt: number;
   updatedAt: number;
 }

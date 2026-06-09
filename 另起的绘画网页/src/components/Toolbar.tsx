@@ -23,6 +23,8 @@ export function Toolbar() {
     setSnapRadius,
     snapEnabled,
     setSnapEnabled,
+    lineWidth,
+    setLineWidth,
     undo,
     saveToStorage,
     loadFromStorage,
@@ -235,6 +237,32 @@ export function Toolbar() {
           }}
         />
         <span style={{ fontSize: '10px', color: '#666' }}>{snapRadius}px</span>
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '2px',
+          padding: '4px 0',
+        }}
+      >
+        <span style={{ fontSize: '10px', color: '#666' }}>线条粗细</span>
+        <input
+          type="range"
+          min="0"
+          max="5"
+          step="0.1"
+          value={lineWidth}
+          onChange={(e) => setLineWidth(parseFloat(e.target.value))}
+          style={{
+            width: '32px',
+            height: '6px',
+            cursor: 'pointer',
+          }}
+        />
+        <span style={{ fontSize: '10px', color: '#666' }}>{lineWidth === 0 ? '无' : lineWidth + 'px'}</span>
       </div>
     </div>
   );
