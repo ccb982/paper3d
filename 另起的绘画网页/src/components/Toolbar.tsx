@@ -1,7 +1,7 @@
 import { useAppStore } from '../stores/useAppStore';
 import type { ToolType } from '../types';
 
-const tools: { type: ToolType; icon: string; label: string }[] = [
+const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
   { type: 'select', icon: '⬚', label: '选择' },
   { type: 'point', icon: '•', label: '点' },
   { type: 'line', icon: '/', label: '线段' },
@@ -10,9 +10,17 @@ const tools: { type: ToolType; icon: string; label: string }[] = [
   { type: 'triangle', icon: '△', label: '三角形' },
   { type: 'quadratic', icon: '⌒', label: '贝塞尔' },
   { type: 'brush', icon: '✎', label: '画笔' },
+  { type: 'paintBrush', icon: '🖌️', label: '上色画笔', hint: '拖拽涂抹，自动提取区域' },
   { type: 'eraser', icon: '✕', label: '橡皮' },
   { type: 'pointAnnotation', icon: '📍', label: '点注释' },
   { type: 'regionAnnotation', icon: '🗺️', label: '区域注释', hint: '完成绘图后再添加' },
+];
+
+// 预设颜色
+const presetColors = [
+  '#ff0000', '#ff6b6b', '#ffa502', '#ffd93d', '#26de81', 
+  '#00b894', '#00cec9', '#74b9ff', '#0984e3', '#6c5ce7',
+  '#a29bfe', '#fd79a8', '#e84393', '#636e72', '#2d3436'
 ];
 
 export function Toolbar() {
@@ -29,6 +37,10 @@ export function Toolbar() {
     saveToStorage,
     loadFromStorage,
     exportToJson,
+    currentColor,
+    setCurrentColor,
+    paintBrushSize,
+    setPaintBrushSize,
   } = useAppStore();
 
   const handleSave = () => {
@@ -60,6 +72,9 @@ export function Toolbar() {
         borderRadius: '8px',
         boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
         zIndex: 100,
+        maxHeight: '80vh',
+        overflowY: 'auto',
+        overflowX: 'hidden',
       }}
     >
       {tools.map((tool) => (
@@ -264,6 +279,101 @@ export function Toolbar() {
         />
         <span style={{ fontSize: '10px', color: '#666' }}>{lineWidth === 0 ? '无' : lineWidth + 'px'}</span>
       </div>
+
+      {/* 颜色选择器 */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '4px',
+          padding: '4px 0',
+        }}
+      >
+        <span style={{ fontSize: '10px', color: '#666' }}>颜色</span>
+        {/* 当前颜色预览 */}
+        <div
+          style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '50%',
+            backgroundColor: currentColor,
+            border: '2px solid #ccc',
+            cursor: 'pointer',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          }}
+          title="点击选择颜色"
+        />
+        {/* 预设颜色网格 */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(5, 1fr)',
+            gap: '2px',
+            padding: '2px',
+          }}
+        >
+          {presetColors.map((color) => (
+            <button
+              key={color}
+              onClick={() => setCurrentColor(color)}
+              style={{
+                width: '16px',
+                height: '16px',
+                borderRadius: '3px',
+                backgroundColor: color,
+                border: currentColor === color ? '2px solid #333' : '1px solid #ddd',
+                cursor: 'pointer',
+                padding: '0',
+              }}
+              title={color}
+            />
+          ))}
+        </div>
+        {/* 自定义颜色输入 */}
+        <input
+          type="color"
+          value={currentColor}
+          onChange={(e) => setCurrentColor(e.target.value)}
+          style={{
+            width: '32px',
+            height: '20px',
+            cursor: 'pointer',
+            border: 'none',
+            borderRadius: '4px',
+          }}
+          title="自定义颜色"
+        />
+      </div>
+
+      {/* 上色画笔大小（仅在上色画笔工具时显示） */}
+      {currentTool === 'paintBrush' && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '2px',
+            padding: '4px 0',
+          }}
+        >
+          <span style={{ fontSize: '10px', color: '#666' }}>画笔大小</span>
+          <input
+            type="range"
+            min="0.01"
+            max="0.2"
+            step="0.01"
+            value={paintBrushSize}
+            onChange={(e) => setPaintBrushSize(parseFloat(e.target.value))}
+            style={{
+              width: '32px',
+              height: '6px',
+              cursor: 'pointer',
+            }}
+          />
+          <span style={{ fontSize: '10px', color: '#666' }}>{(paintBrushSize * 100).toFixed(0)}%</span>
+        </div>
+      )}
     </div>
   );
 }

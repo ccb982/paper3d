@@ -83,6 +83,16 @@ function rasterizeShape(shape: Shape, stepX: number, stepY: number, xMin: number
       } break;
     case 'brush': if (pts.length >= 2) {
         for (let i = 0; i < pts.length - 1; i++) segments.push([pts[i], pts[i + 1]]);
+        // 检测是否近似闭合（起点和终点距离小于最小步长的2倍）
+        const start = pts[0], end = pts[pts.length - 1];
+        const dist = Math.hypot(end.x - start.x, end.y - start.y);
+        if (dist < maxSegLen * 2) {
+          segments.push([end, start]); // 闭合路径
+        }
+      } break;
+    case 'polygon': if (pts.length >= 3) {
+        for (let i = 0; i < pts.length - 1; i++) segments.push([pts[i], pts[i + 1]]);
+        segments.push([pts[pts.length - 1], pts[0]]); // 闭合多边形
       } break;
   }
   for (const [a, b] of segments) {

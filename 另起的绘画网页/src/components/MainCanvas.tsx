@@ -5,6 +5,8 @@ import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { findRegionByPoint, generateRegionSignature } from '../utils/regionDetection';
 import { getRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
+import { generatePolygonFromPoints } from '../utils/geometryUtils';
+import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 
 const BASE_CANVAS_SIZE = 512;
 
@@ -119,7 +121,15 @@ export function MainCanvas() {
     saveToStorage,
     regionPolygonsCache,
     refreshRegionCache,
+    colorBlockRegionsCache,
+    refreshColorBlockCache,
     saveHistory,
+    currentColor,
+    paintBrushSize,
+    paintBuffers,
+    initPaintBuffer,
+    updatePaintBuffer,
+    extractPolygonsFromPaintBuffer,
   } = useAppStore();
 
   const [isPanning, setIsPanning] = useState(false);
@@ -141,6 +151,10 @@ export function MainCanvas() {
   const [debugShowRings, setDebugShowRings] = useState(false);
   const [debugShowSegments, setDebugShowSegments] = useState(false);
   const [debugShowWallGrouped, setDebugShowWallGrouped] = useState(false);
+  
+  // 上色画笔状态
+  const [isPainting, setIsPainting] = useState(false);
+  const lastPaintPointRef = useRef<Point | null>(null);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -701,6 +715,29 @@ export function MainCanvas() {
           ctx.fillStyle = color; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI * 2); ctx.fill();
         }
         break;
+      case 'polygon':
+        if (points.length >= 3) {
+          const canvasPoints = points.map(p => worldToCanvasFn(p.x, p.y));
+          ctx.beginPath();
+          ctx.moveTo(canvasPoints[0].x, canvasPoints[0].y);
+          for (let i = 1; i < canvasPoints.length; i++) {
+            ctx.lineTo(canvasPoints[i].x, canvasPoints[i].y);
+          }
+          ctx.closePath();
+          if (shape.fillOnly) {
+            ctx.fillStyle = color;
+            ctx.fill();
+            if (lineWidth > 0.01) {
+              ctx.strokeStyle = color;
+              ctx.stroke();
+            }
+          } else {
+            ctx.fillStyle = color + '20';
+            ctx.fill();
+            if (lineWidth > 0.01) ctx.stroke();
+          }
+        }
+        break;
     }
 
     if (!isPreview) {
@@ -731,7 +768,7 @@ export function MainCanvas() {
         }
       }
     }
-  }, [worldToCanvas, lineWidth]);
+  }, [worldToCanvas, lineWidth, currentColor]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -769,6 +806,17 @@ export function MainCanvas() {
         }
         ctx.globalAlpha = 1;
       }
+    }
+
+    // 绘制像素缓冲区 (叠加)
+    const layerId = activeLayerId || layers[0]?.id;
+    const buffer = paintBuffers[layerId];
+    if (buffer && layerVisibility.drawLayer) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = buffer.width;
+      tempCanvas.height = buffer.height;
+      tempCanvas.getContext('2d')!.putImageData(buffer, 0, 0);
+      ctx.drawImage(tempCanvas, 0, 0, currentSize, currentSize);
     }
 
     // 坐标轴与格子
@@ -903,6 +951,49 @@ export function MainCanvas() {
       });
     }
 
+    // 绘制区域图层（显示区域注释算法提取的色块区域）
+    if (layerVisibility.regionLayer) {
+      const regions = colorBlockRegionsCache[activeLayerId] || [];
+      const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da', '#a8e6cf', '#ffd3a5', '#ff8b94', '#6c5ce7'];
+      
+      regions.forEach((region, idx) => {
+        ctx.save();
+        const color = colors[idx % colors.length];
+        ctx.fillStyle = color + '40'; // 40%透明度填充
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        
+        for (const ring of region) {
+          if (ring.length < 3) continue;
+          const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
+          ctx.beginPath();
+          ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
+          for (let i = 1; i < canvasRing.length; i++) {
+            ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
+          }
+          ctx.closePath();
+        }
+        ctx.fill('evenodd');
+        ctx.stroke();
+        
+        // 显示区域ID标签
+        if (region.length > 0) {
+          const centroid = region[0].reduce((acc, p) => ({
+            x: acc.x + p.x,
+            y: acc.y + p.y
+          }), { x: 0, y: 0 });
+          centroid.x /= region[0].length;
+          centroid.y /= region[0].length;
+          const labelPos = worldToCanvasFn(centroid.x, centroid.y);
+          ctx.fillStyle = color;
+          ctx.font = 'bold 12px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`色块${idx}`, labelPos.x, labelPos.y);
+        }
+        ctx.restore();
+      });
+    }
 
     // ========== 调试：BFS区域绘制 ==========
     if (showDebugRegions && layerVisibility.drawLayer) {
@@ -1321,12 +1412,13 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
   useEffect(() => {
     refreshRegionCache(activeLayerId);
+    refreshColorBlockCache(activeLayerId);
   }, []);
 
 
@@ -1378,10 +1470,42 @@ export function MainCanvas() {
       return;
     }
 
+    if (isPainting && currentTool === 'paintBrush') {
+      const layerId = activeLayerId || layers[0]?.id;
+      if (!layerId) return;
+
+      if (!paintBuffers[layerId]) {
+        initPaintBuffer(layerId);
+      }
+
+      updatePaintBuffer(layerId, (imgData) => {
+        drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+      });
+
+      if (lastPaintPointRef.current) {
+        const dist = Math.hypot(worldCoords.x - lastPaintPointRef.current.x,
+                                worldCoords.y - lastPaintPointRef.current.y);
+        const step = paintBrushSize * 0.5;
+        if (dist > step) {
+          const steps = Math.ceil(dist / step);
+          for (let i = 1; i < steps; i++) {
+            const t = i / steps;
+            const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
+            const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
+            updatePaintBuffer(layerId, (imgData) => {
+              drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+            });
+          }
+        }
+      }
+      lastPaintPointRef.current = worldCoords;
+      return;
+    }
+
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1512,6 +1636,19 @@ export function MainCanvas() {
       if (idsToErase.length > 0) eraseShapes(idsToErase);
       return;
     }
+
+    if (currentTool === 'paintBrush') {
+      setIsPainting(true);
+      lastPaintPointRef.current = null;
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId) {
+        if (!paintBuffers[layerId]) initPaintBuffer(layerId);
+        updatePaintBuffer(layerId, (imgData) => {
+          drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+        });
+      }
+      return;
+    }
   }, [
     isPanMode,
     currentTool,
@@ -1526,6 +1663,12 @@ export function MainCanvas() {
     setIsErasing,
     regionAnnotations,
     updateRegionAnnotationWithRegionId,
+    paintBuffers,
+    initPaintBuffer,
+    updatePaintBuffer,
+    paintBrushSize,
+    currentColor,
+    layers,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -1541,12 +1684,22 @@ export function MainCanvas() {
       setIsErasing(false);
       erasedShapesThisSessionRef.current.clear();
     }
+
+    if (isPainting && currentTool === 'paintBrush') {
+      setIsPainting(false);
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId && paintBuffers[layerId]) {
+        extractPolygonsFromPaintBuffer(layerId, currentColor);
+        saveHistory();
+      }
+    }
+
     setIsPanning(false);
-  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes]);
+  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, paintBrushSize, activeGroupId, activeLayerId, layers, currentColor, paintBuffers, extractPolygonsFromPaintBuffer, saveHistory]);
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation') return;
+    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation' || currentTool === 'paintBrush') return;
     const coords = getCanvasCoords(e);
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
     const snappedCoords = snapToExistingPoint(worldCoords, currentTool, tempPoints.length);
@@ -1566,7 +1719,7 @@ export function MainCanvas() {
           layerId: activeLayerId || layers[0]?.id,
           type: toolToType[currentTool] as any,
           points: newPoints,
-          color: '#ff0000',
+          color: currentColor,
         };
         addShape(finalShape);
         saveHistory();
@@ -1574,7 +1727,7 @@ export function MainCanvas() {
         setPreviewPoint(null);
       }
     }
-  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers]);
+  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers, currentColor]);
 
   // 同步临时图形到 store
   useEffect(() => {
@@ -1586,11 +1739,11 @@ export function MainCanvas() {
         layerId: activeLayerId || layers[0]?.id,
         type: toolToType[currentTool] as any,
         points: tempPoints,
-        color: '#ff0000',
+        color: currentColor,
       };
       useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(newShape) }));
     }
-  }, [tempPoints, currentTool, activeGroupId, activeLayerId, layers]);
+  }, [tempPoints, currentTool, activeGroupId, activeLayerId, layers, currentColor]);
 
   const handleDoubleClick = useCallback(() => {
     if (currentTool === 'brush' && tempPoints.length >= 2) {
@@ -1600,14 +1753,14 @@ export function MainCanvas() {
         layerId: activeLayerId || layers[0]?.id,
         type: 'brush',
         points: tempPoints,
-        color: '#ff0000',
+        color: currentColor,
       };
       useAppStore.setState(state => ({ shapes: state.shapes.filter(s => s.id !== 'current_shape').concat(finalShape) }));
       useAppStore.getState().saveHistory();
       setTempPoints([]);
       setPreviewPoint(null);
     }
-  }, [currentTool, tempPoints, activeGroupId, activeLayerId, layers]);
+  }, [currentTool, tempPoints, activeGroupId, activeLayerId, layers, currentColor]);
 
   // 点注释保存
   const handlePointAnnotationSave = useCallback((text: string) => {

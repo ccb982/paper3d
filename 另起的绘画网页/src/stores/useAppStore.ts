@@ -1,6 +1,7 @@
 import { create } from 'zustand';
-import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation } from '../types';
+import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation, ColorBlock } from '../types';
 import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache } from '../utils/regionDetectionExact';
+import { detectColorBlocks } from '../utils/colorBlockDetection';
 
 interface AppState {
   // 图片导入状态
@@ -106,6 +107,29 @@ interface AppState {
   regionScanlineCache: Record<string, ScanlineCache>;
   refreshRegionCache: (layerId: string) => void;
 
+  // 色块区域检测缓存（独立存储，使用相同算法）
+  colorBlockRegionsCache: Record<string, Point[][][]>;
+  refreshColorBlockCache: (layerId: string) => void;
+
+  /** 每个图层的像素绘制缓冲区 (512x512 RGBA) */
+  paintBuffers: Record<string, ImageData | null>;
+
+  /** 初始化图层的像素缓冲区 */
+  initPaintBuffer: (layerId: string) => void;
+  /** 更新指定图层的缓冲区（合并绘制） */
+  updatePaintBuffer: (layerId: string, updater: (imageData: ImageData) => void) => void;
+  /** 清除图层的缓冲区（全透明） */
+  clearPaintBuffer: (layerId: string) => void;
+  /** 从缓冲区中提取当前颜色的多边形并添加到 shapes，同时清除对应颜色的像素 */
+  extractPolygonsFromPaintBuffer: (layerId: string, targetColor: string) => void;
+
+  // 色块
+  colorBlocks: ColorBlock[];
+  nextColorBlockId: number;
+  setColorBlocks: (blocks: ColorBlock[]) => void;
+  updateColorBlocksForLayer: (layerId: string) => void;
+  clearColorBlocksForLayer: (layerId: string) => void;
+
   // 撤销历史（复合快照）
   historySnapshots: Array<{ shapes: Shape[]; pointAnnotations: PointAnnotation[]; regionAnnotations: RegionAnnotation[] }>;
   historyIndex: number;
@@ -208,6 +232,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     imageLayer: true,
     drawLayer: true,
     axisLayer: true,
+    regionLayer: false, // 区域注释算法提取的色块区域
   },
   toggleLayer: (layer) =>
     set((state) => ({
@@ -295,6 +320,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 清理缓存
       const { [id]: _, ...newPolyCache } = state.regionPolygonsCache;
       const { [id]: __, ...newScanCache } = state.regionScanlineCache;
+      const { [id]: ___, ...newColorBlockCache } = state.colorBlockRegionsCache;
+      const { [id]: ____, ...newPaintBuffers } = state.paintBuffers;
+      
+      // 清理该图层的色块
+      const newColorBlocks = state.colorBlocks.filter(b => b.layerId !== id);
       
       return {
         layers: renumberedLayers,
@@ -302,6 +332,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         shapes: state.shapes.filter((s) => s.layerId !== id),
         regionPolygonsCache: newPolyCache,
         regionScanlineCache: newScanCache,
+        colorBlockRegionsCache: newColorBlockCache,
+        paintBuffers: newPaintBuffers,
+        colorBlocks: newColorBlocks,
       };
     }),
   updateLayer: (id, updates) =>
@@ -313,6 +346,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (id) {
       setTimeout(() => {
         get().refreshRegionCache(id);
+        get().refreshColorBlockCache(id);
       }, 0);
     }
   },
@@ -359,6 +393,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       setTimeout(() => {
         console.log('>>> [setTimeout] 准备刷新区域缓存, layerId:', shape.layerId);
         get().refreshRegionCache(shape.layerId);
+        get().refreshColorBlockCache(shape.layerId);
+        get().updateColorBlocksForLayer(shape.layerId);
       }, 0);
       return { shapes: [...state.shapes, newShape] };
     }),
@@ -368,6 +404,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (shape) {
         setTimeout(() => {
           get().refreshRegionCache(shape.layerId);
+          get().refreshColorBlockCache(shape.layerId);
+          get().updateColorBlocksForLayer(shape.layerId);
         }, 0);
       }
       return { shapes: state.shapes.filter((s) => s.id !== id) };
@@ -379,10 +417,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newShape = { ...oldShape, ...updates };
       setTimeout(() => {
         get().refreshRegionCache(newShape.layerId);
+        get().refreshColorBlockCache(newShape.layerId);
+        get().updateColorBlocksForLayer(newShape.layerId);
       }, 0);
       return { shapes: state.shapes.map((s) => (s.id === id ? newShape : s)) };
     }),
-  clearShapes: () => set({ shapes: [] }),
+  clearShapes: () => {
+    set({ shapes: [], colorBlocks: [], nextColorBlockId: 1 });
+  },
 
   mousePosition: null,
   setMousePosition: (pos) => set({ mousePosition: pos }),
@@ -413,6 +455,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   lineWidth: 2,
   setLineWidth: (width) => set({ lineWidth: Math.max(0, Math.min(5, Math.round(width * 10) / 10)) }),
 
+  // 上色画笔大小（世界坐标单位）
+  paintBrushSize: 0.05,
+  setPaintBrushSize: (size) => set({ paintBrushSize: Math.max(0.01, Math.min(0.2, Math.round(size * 100) / 100)) }),
+
+  // 当前颜色配置
+  currentColor: '#ff0000',
+  setCurrentColor: (color) => set({ currentColor: color }),
+
+  // 点注释
   pointAnnotations: [],
   addPointAnnotation: (annotation) => {
     // 生成随机颜色
@@ -485,6 +536,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
   clearRegionAnnotations: () => set({ regionAnnotations: [] }),
 
+  // 色块相关
+  colorBlocks: [],
+  nextColorBlockId: 1,  // 从1开始，只增不减
+
+  setColorBlocks: (blocks) => set({ colorBlocks: blocks }),
+
+  updateColorBlocksForLayer: (layerId) => {
+    const state = get();
+    const shapesInLayer = state.shapes.filter(s => s.layerId === layerId);
+    // 调用色块检测函数
+    const newBlocks = detectColorBlocks(shapesInLayer, layerId, state.nextColorBlockId);
+    
+    // 保留其他图层的色块不变
+    const otherBlocks = state.colorBlocks.filter(b => b.layerId !== layerId);
+    
+    // 计算最大已使用ID（确保 nextColorBlockId 足够大）
+    let maxId = state.nextColorBlockId - 1;
+    for (const block of newBlocks) {
+      if (block.id > maxId) maxId = block.id;
+    }
+    
+    set({
+      colorBlocks: [...otherBlocks, ...newBlocks],
+      nextColorBlockId: maxId + 1,  // 确保下次新色块ID更大
+    });
+  },
+
+  clearColorBlocksForLayer: (layerId) => {
+    set(state => ({
+      colorBlocks: state.colorBlocks.filter(b => b.layerId !== layerId),
+    }));
+  },
+
   regionPolygonsCache: {},
   regionScanlineCache: {},
   refreshRegionCache: (layerId) => {
@@ -524,6 +608,117 @@ export const useAppStore = create<AppState>((set, get) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
       regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
     }));
+  },
+
+  colorBlockRegionsCache: {},
+  refreshColorBlockCache: (layerId) => {
+    const state = get();
+    // 只检测 polygon 类型的形状（上色画笔生成的色块）
+    const colorBlockShapes = state.shapes.filter(s => s.layerId === layerId && s.type === 'polygon');
+    console.log('==========================================');
+    console.log('[色块区域检测] 色块形状总数:', colorBlockShapes.length);
+
+    if (colorBlockShapes.length === 0) {
+      set((s) => ({
+        colorBlockRegionsCache: { ...s.colorBlockRegionsCache, [layerId]: [] },
+      }));
+      return;
+    }
+
+    // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
+    const worldBounds = {
+      xMin: 0,
+      xMax: 1,
+      yMin: 0,
+      yMax: 1,
+    };
+
+    // 使用相同的区域检测算法
+    const regions = computeRegionsExact(colorBlockShapes, worldBounds, 300, 1.0);
+    console.log('[色块区域检测] 检测到的封闭区域数量:', regions.length);
+    console.log('==========================================');
+    
+    set((s) => ({
+      colorBlockRegionsCache: { ...s.colorBlockRegionsCache, [layerId]: regions },
+    }));
+  },
+
+  // 像素缓冲区相关
+  paintBuffers: {},
+  initPaintBuffer: (layerId) =>
+    set((state) => {
+      if (state.paintBuffers[layerId]) return state;
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.clearRect(0, 0, size, size);
+      const imageData = ctx.getImageData(0, 0, size, size);
+      return {
+        paintBuffers: { ...state.paintBuffers, [layerId]: imageData },
+      };
+    }),
+  updatePaintBuffer: (layerId, updater) =>
+    set((state) => {
+      const old = state.paintBuffers[layerId];
+      if (!old) return state;
+      const newImageData = new ImageData(new Uint8ClampedArray(old.data), old.width, old.height);
+      updater(newImageData);
+      return {
+        paintBuffers: { ...state.paintBuffers, [layerId]: newImageData },
+      };
+    }),
+  clearPaintBuffer: (layerId) =>
+    set((state) => {
+      if (!state.paintBuffers[layerId]) return state;
+      const size = 512;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d')!;
+      ctx.clearRect(0, 0, size, size);
+      const empty = ctx.getImageData(0, 0, size, size);
+      return {
+        paintBuffers: { ...state.paintBuffers, [layerId]: empty },
+      };
+    }),
+  extractPolygonsFromPaintBuffer: (layerId, targetColor) => {
+    const state = get();
+    const buffer = state.paintBuffers[layerId];
+    if (!buffer) return;
+
+    const { extractPolygonsFromImageData, hexToRgb } = require('../utils/paintBufferUtils');
+    const polygons = extractPolygonsFromImageData(buffer, targetColor);
+    if (polygons.length === 0) return;
+
+    const newShapes: Shape[] = polygons.map((polygon) => ({
+      id: `shape_${Date.now()}_${Math.random()}`,
+      groupId: state.activeGroupId || 'default',
+      layerId,
+      type: 'polygon',
+      points: polygon,
+      color: targetColor,
+      fillOnly: true,
+    }));
+
+    set((s) => ({
+      shapes: [...s.shapes, ...newShapes],
+    }));
+
+    const colorRgb = hexToRgb(targetColor);
+    if (colorRgb) {
+      state.updatePaintBuffer(layerId, (imgData) => {
+        for (let i = 0; i < imgData.data.length; i += 4) {
+          if (imgData.data[i] === colorRgb.r &&
+              imgData.data[i+1] === colorRgb.g &&
+              imgData.data[i+2] === colorRgb.b &&
+              imgData.data[i+3] > 0) {
+            imgData.data[i+3] = 0;
+          }
+        }
+      });
+    }
   },
 
   historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [] }],
@@ -701,6 +896,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       groups: state.groups,
       // 区域环信息（使用正式算法）
       regions: regionRingsInfo,
+      // 色块数据
+      colorBlocks: state.colorBlocks,
+      nextColorBlockId: state.nextColorBlockId,
     };
 
     const blob = new Blob([JSON.stringify(exportData, null, 2)], {
@@ -725,6 +923,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const activeLayerId = data.activeLayerId || state.activeLayerId;
         setTimeout(() => {
           get().refreshRegionCache(activeLayerId);
+          get().refreshColorBlockCache(activeLayerId);
         }, 0);
         return {
           ...state,
@@ -738,6 +937,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           axis: data.axis || defaultAxis,
           grid: data.grid || state.grid,
           layerVisibility: data.layerVisibility || state.layerVisibility,
+          colorBlocks: data.colorBlocks || [],
+          nextColorBlockId: data.nextColorBlockId || 1,
         };
       });
     } catch (e) {

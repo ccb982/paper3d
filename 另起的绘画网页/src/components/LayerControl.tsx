@@ -245,6 +245,14 @@ export function LayerControl() {
           />
           坐标轴图层
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+          <input
+            type="checkbox"
+            checked={layerVisibility.regionLayer}
+            onChange={() => toggleLayer('regionLayer')}
+          />
+          区域色块图层
+        </label>
       </div>
 
       <div className="sidebar-section">
