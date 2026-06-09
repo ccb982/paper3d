@@ -1699,6 +1699,27 @@ export function MainCanvas() {
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
+    if (currentTool === 'picker') {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const x = (e.clientX - rect.left) * scaleX;
+      const y = (e.clientY - rect.top) * scaleY;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      const imageData = ctx.getImageData(x, y, 1, 1);
+      const [r, g, b] = imageData.data;
+      const hexColor = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+      
+      useAppStore.getState().setCurrentColor(hexColor);
+      return;
+    }
+    
     if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation' || currentTool === 'paintBrush') return;
     const coords = getCanvasCoords(e);
     const worldCoords = canvasToWorldFn(coords.x, coords.y);

@@ -11,6 +11,7 @@ const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = 
   { type: 'quadratic', icon: '⌒', label: '贝塞尔' },
   { type: 'brush', icon: '✎', label: '画笔' },
   { type: 'paintBrush', icon: '🖌️', label: '上色画笔', hint: '拖拽涂抹，自动提取区域' },
+  { type: 'picker', icon: '🎨', label: '取色器', hint: '点击画布取色' },
   { type: 'eraser', icon: '✕', label: '橡皮' },
   { type: 'pointAnnotation', icon: '📍', label: '点注释' },
   { type: 'regionAnnotation', icon: '🗺️', label: '区域注释', hint: '完成绘图后再添加' },

@@ -17,7 +17,8 @@ export type ToolType =
   | 'quadratic' | 'brush' | 'eraser'
   | 'pointAnnotation'   // 点注释工具
   | 'regionAnnotation'  // 区域注释工具
-  | 'paintBrush';       // 上色画笔工具
+  | 'paintBrush'        // 上色画笔工具
+  | 'picker';           // 取色器工具
 
 export interface Shape {
   id: string;

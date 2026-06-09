@@ -1,5 +1,6 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import type { Point } from '../types';
 
 export function ImageImport() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -21,6 +22,9 @@ export function ImageImport() {
   const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{ x: number; y: number } | null>(null);
   const [clippedImageSrc, setClippedImageSrc] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState<'rect' | 'polygon'>('rect');
+  const [polygonPoints, setPolygonPoints] = useState<Point[]>([]);
+  const [isDrawingPolygon, setIsDrawingPolygon] = useState(false);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -37,6 +41,8 @@ export function ImageImport() {
           setPreviewStage(true);
           setSelectionStart(null);
           setSelectionEnd(null);
+          setPolygonPoints([]);
+          setIsDrawingPolygon(false);
         };
         img.src = event.target?.result as string;
       };
@@ -52,6 +58,8 @@ export function ImageImport() {
     setSelectionStart(null);
     setSelectionEnd(null);
     setClippedImageSrc(null);
+    setPolygonPoints([]);
+    setIsDrawingPolygon(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -97,10 +105,175 @@ export function ImageImport() {
     }
   }, [selectionStart, selectionEnd, imageState.originalImage, setSelectionRect, applySelectionToCanvas, saveHistory]);
 
+  // 辅助函数：将预览画布坐标转换为原图像素坐标
+  const previewToOriginal = useCallback((previewX: number, previewY: number) => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas || !imageState.originalImage) return null;
+    const img = imageState.originalImage;
+    const scaleX = img.width / canvas.width;
+    const scaleY = img.height / canvas.height;
+    return { x: previewX * scaleX, y: previewY * scaleY };
+  }, [imageState.originalImage]);
+
+  // 多边形绘制：鼠标点击添加顶点
+  const handlePolygonMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!imageState.originalImage || selectionMode !== 'polygon') return;
+    const rect = previewCanvasRef.current!.getBoundingClientRect();
+    const scaleX = previewCanvasRef.current!.width / rect.width;
+    const scaleY = previewCanvasRef.current!.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    setPolygonPoints(prev => [...prev, { x, y }]);
+    setIsDrawingPolygon(true);
+  }, [imageState.originalImage, selectionMode]);
+
+  // 完成多边形绘制（双击或按 Enter）
+  const finishPolygon = useCallback(() => {
+    if (polygonPoints.length < 3) {
+      alert('至少需要3个顶点');
+      return;
+    }
+    // 闭合多边形
+    const closedPoints = [...polygonPoints, polygonPoints[0]];
+    extractPolygonRegionByBFS(closedPoints);
+    setIsDrawingPolygon(false);
+    setPolygonPoints([]);
+  }, [polygonPoints]);
+
+  // BFS 提取多边形内部区域
+  const extractPolygonRegionByBFS = useCallback((polygon: Point[]) => {
+    const img = imageState.originalImage;
+    if (!img) return;
+
+    // 1. 计算多边形包围盒（原图坐标）
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of polygon) {
+      const orig = previewToOriginal(p.x, p.y)!;
+      minX = Math.min(minX, orig.x);
+      minY = Math.min(minY, orig.y);
+      maxX = Math.max(maxX, orig.x);
+      maxY = Math.max(maxY, orig.y);
+    }
+    // 边界扩展1像素，避免锯齿
+    const bbox = {
+      x: Math.max(0, Math.floor(minX)),
+      y: Math.max(0, Math.floor(minY)),
+      w: Math.min(img.width, Math.ceil(maxX) + 1) - Math.max(0, Math.floor(minX)),
+      h: Math.min(img.height, Math.ceil(maxY) + 1) - Math.max(0, Math.floor(minY))
+    };
+    if (bbox.w <= 0 || bbox.h <= 0) return;
+
+    // 2. 创建临时网格（分辨率 = 包围盒尺寸，每个网格对应原图一个像素）
+    const gridW = bbox.w;
+    const gridH = bbox.h;
+    const wallGrid: boolean[][] = Array(gridH).fill(null).map(() => Array(gridW).fill(false));
+
+    // 3. 光栅化多边形边界（Bresenham 画线）
+    const drawLine = (x0: number, y0: number, x1: number, y1: number) => {
+      let x = x0, y = y0;
+      const dx = Math.abs(x1 - x0);
+      const dy = Math.abs(y1 - y0);
+      const sx = x0 < x1 ? 1 : -1;
+      const sy = y0 < y1 ? 1 : -1;
+      let err = dx - dy;
+      while (true) {
+        if (x >= 0 && x < gridW && y >= 0 && y < gridH) wallGrid[y][x] = true;
+        if (x === x1 && y === y1) break;
+        const e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x += sx; }
+        if (e2 < dx) { err += dx; y += sy; }
+      }
+    };
+
+    // 将多边形顶点转换为网格坐标（相对于包围盒）
+    const gridPoly = polygon.map(p => {
+      const orig = previewToOriginal(p.x, p.y)!;
+      return { x: orig.x - bbox.x, y: orig.y - bbox.y };
+    });
+    for (let i = 0; i < gridPoly.length - 1; i++) {
+      const a = gridPoly[i];
+      const b = gridPoly[i+1];
+      drawLine(Math.round(a.x), Math.round(a.y), Math.round(b.x), Math.round(b.y));
+    }
+
+    // 4. 找到多边形内部一点作为 BFS 种子（重心）
+    let cx = 0, cy = 0;
+    for (const p of gridPoly) { cx += p.x; cy += p.y; }
+    cx /= gridPoly.length;
+    cy /= gridPoly.length;
+    const seedX = Math.floor(cx);
+    const seedY = Math.floor(cy);
+    if (seedX < 0 || seedX >= gridW || seedY < 0 || seedY >= gridH) return;
+
+    // 5. BFS 填充内部（四连通，避开边界墙）
+    const inside = Array(gridH).fill(null).map(() => Array(gridW).fill(false));
+    const queue: [number, number][] = [[seedX, seedY]];
+    inside[seedY][seedX] = true;
+    const dirs = [[0,1],[1,0],[0,-1],[-1,0]];
+    while (queue.length) {
+      const [x, y] = queue.shift()!;
+      for (const [dx, dy] of dirs) {
+        const nx = x + dx, ny = y + dy;
+        if (nx >= 0 && nx < gridW && ny >= 0 && ny < gridH && !wallGrid[ny][nx] && !inside[ny][nx]) {
+          inside[ny][nx] = true;
+          queue.push([nx, ny]);
+        }
+      }
+    }
+
+    // 6. 提取内部像素到新 Canvas
+    const resultCanvas = document.createElement('canvas');
+    resultCanvas.width = bbox.w;
+    resultCanvas.height = bbox.h;
+    const ctx = resultCanvas.getContext('2d')!;
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = img.width;
+    srcCanvas.height = img.height;
+    const srcCtx = srcCanvas.getContext('2d')!;
+    srcCtx.drawImage(img, 0, 0);
+    const srcData = srcCtx.getImageData(0, 0, img.width, img.height);
+    const dstData = ctx.createImageData(bbox.w, bbox.h);
+
+    for (let y = 0; y < gridH; y++) {
+      for (let x = 0; x < gridW; x++) {
+        if (inside[y][x]) {
+          const srcX = bbox.x + x;
+          const srcY = bbox.y + y;
+          const srcIdx = (srcY * img.width + srcX) * 4;
+          const dstIdx = (y * bbox.w + x) * 4;
+          dstData.data[dstIdx] = srcData.data[srcIdx];
+          dstData.data[dstIdx+1] = srcData.data[srcIdx+1];
+          dstData.data[dstIdx+2] = srcData.data[srcIdx+2];
+          dstData.data[dstIdx+3] = srcData.data[srcIdx+3];
+        } else {
+          // 外部设为完全透明
+          const dstIdx = (y * bbox.w + x) * 4;
+          dstData.data[dstIdx+3] = 0;
+        }
+      }
+    }
+    ctx.putImageData(dstData, 0, 0);
+    const clippedImageSrc = resultCanvas.toDataURL('image/png');
+
+    // 7. 设置到 store（替换原有图片，并记录选区矩形为包围盒）
+    const newImg = new Image();
+    newImg.onload = () => {
+      setOriginalImage(newImg, clippedImageSrc);
+      // 对于多边形选区，selectionRect 应该是裁剪后图片的完整区域（从0,0开始）
+      setSelectionRect({ x: 0, y: 0, width: bbox.w, height: bbox.h });
+      applySelectionToCanvas();
+      saveHistory();
+      setPreviewStage(false);
+    };
+    newImg.src = clippedImageSrc;
+  }, [imageState.originalImage, previewToOriginal, setOriginalImage, setSelectionRect, applySelectionToCanvas, saveHistory, setPreviewStage]);
+
   const handleBackToSelection = useCallback(() => {
     setPreviewStage(true);
     setSelectionStart(null);
     setSelectionEnd(null);
+    setPolygonPoints([]);
+    setIsDrawingPolygon(false);
   }, [setPreviewStage]);
 
   const handlePreviewMouseDown = useCallback(
@@ -150,7 +323,7 @@ export function ImageImport() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-    if (selectionStart && selectionEnd) {
+    if (selectionMode === 'rect' && selectionStart && selectionEnd) {
       const topLeft = {
         x: Math.min(selectionStart.x, selectionEnd.x) * scale,
         y: Math.min(selectionStart.y, selectionEnd.y) * scale,
@@ -189,7 +362,34 @@ export function ImageImport() {
         topLeft.y + 15
       );
     }
-  }, [imageState.originalImage, selectionStart, selectionEnd]);
+
+    // 绘制多边形预览
+    if (selectionMode === 'polygon' && polygonPoints.length > 0) {
+      ctx.save();
+      ctx.strokeStyle = '#ff0000';
+      ctx.fillStyle = '#ff0000';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      // 画线段
+      for (let i = 0; i < polygonPoints.length - 1; i++) {
+        ctx.beginPath();
+        ctx.moveTo(polygonPoints[i].x, polygonPoints[i].y);
+        ctx.lineTo(polygonPoints[i+1].x, polygonPoints[i+1].y);
+        ctx.stroke();
+      }
+      // 画顶点
+      for (const p of polygonPoints) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+        ctx.fillStyle = '#ff0000';
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }, [imageState.originalImage, selectionStart, selectionEnd, selectionMode, polygonPoints]);
 
   useEffect(() => {
     if (imageState.originalImage && isPreviewStage) {
@@ -211,8 +411,39 @@ export function ImageImport() {
       {imageState.imageSrc && isPreviewStage && (
         <div style={{ marginTop: '12px' }}>
           <h4 style={{ fontSize: '13px', marginBottom: '8px' }}>步骤1：框选范围</h4>
+          <div style={{ marginBottom: '8px' }}>
+            <button
+              onClick={() => setSelectionMode('rect')}
+              style={{
+                padding: '4px 8px',
+                fontSize: '11px',
+                backgroundColor: selectionMode === 'rect' ? '#1890ff' : '#f0f0f0',
+                color: selectionMode === 'rect' ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                marginRight: '4px',
+              }}
+            >
+              矩形选区
+            </button>
+            <button
+              onClick={() => setSelectionMode('polygon')}
+              style={{
+                padding: '4px 8px',
+                fontSize: '11px',
+                backgroundColor: selectionMode === 'polygon' ? '#1890ff' : '#f0f0f0',
+                color: selectionMode === 'polygon' ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              多边形选区
+            </button>
+          </div>
           <p style={{ fontSize: '11px', color: '#666', marginBottom: '8px' }}>
-            在下方图片上拖动鼠标选择要导入的区域
+            {selectionMode === 'polygon' ? '单击添加顶点，双击完成' : '拖动鼠标选择矩形区域'}
           </p>
           <div style={{ position: 'relative', display: 'inline-block' }}>
             <canvas
@@ -223,10 +454,11 @@ export function ImageImport() {
                 cursor: 'crosshair',
                 display: 'block',
               }}
-              onMouseDown={handlePreviewMouseDown}
-              onMouseMove={handlePreviewMouseMove}
-              onMouseUp={handlePreviewMouseUp}
-              onMouseLeave={handlePreviewMouseUp}
+              onMouseDown={selectionMode === 'polygon' ? handlePolygonMouseDown : handlePreviewMouseDown}
+              onMouseMove={selectionMode === 'polygon' ? undefined : handlePreviewMouseMove}
+              onMouseUp={selectionMode === 'polygon' ? undefined : handlePreviewMouseUp}
+              onMouseLeave={selectionMode === 'polygon' ? undefined : handlePreviewMouseUp}
+              onDoubleClick={selectionMode === 'polygon' ? finishPolygon : undefined}
             />
           </div>
           <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
@@ -237,19 +469,36 @@ export function ImageImport() {
             >
               重新选择图片
             </button>
-            <button
-              onClick={handleConfirmSelection}
-              className="btn btn-primary"
-              style={{ flex: 1 }}
-              disabled={!selectionStart || !selectionEnd}
-            >
-              确认选区
-            </button>
+            {selectionMode === 'rect' && (
+              <button
+                onClick={handleConfirmSelection}
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                disabled={!selectionStart || !selectionEnd}
+              >
+                确认选区
+              </button>
+            )}
+            {selectionMode === 'polygon' && (
+              <button
+                onClick={finishPolygon}
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                disabled={polygonPoints.length < 3}
+              >
+                确认选区
+              </button>
+            )}
           </div>
-          {selectionStart && selectionEnd && (
+          {selectionMode === 'rect' && selectionStart && selectionEnd && (
             <p style={{ fontSize: '11px', color: '#1890ff', marginTop: '8px' }}>
               已选择: {Math.abs(selectionEnd.x - selectionStart.x).toFixed(0)} x{' '}
               {Math.abs(selectionEnd.y - selectionStart.y).toFixed(0)} 像素
+            </p>
+          )}
+          {selectionMode === 'polygon' && polygonPoints.length > 0 && (
+            <p style={{ fontSize: '11px', color: '#1890ff', marginTop: '8px' }}>
+              已添加 {polygonPoints.length} 个顶点
             </p>
           )}
         </div>
