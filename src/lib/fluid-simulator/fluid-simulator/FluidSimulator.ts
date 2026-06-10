@@ -13,6 +13,7 @@ export interface FluidParams {
     timeStep: number;           // 固定步长，推荐0.002（静水测试用更小值）
     restitution: number;        // 恢复系数：0.0-1.0，推荐0.8
     friction: number;           // 摩擦系数：0.0-1.0，推荐0.95
+    maxVelocity?: number;       // 最大速度上限，防止CFL条件失效，默认250
     initialLevelSet?: THREE.Texture;  // 自定义初始 Level Set 纹理（可选）
     injectionEnabled?: boolean;
     injectionPosX?: number;
@@ -56,6 +57,7 @@ export class FluidSimulator {
     private height: number;
     private params: FluidParams;
     private renderer: THREE.WebGLRenderer;
+    private maxVelocity: number;  // 最大速度上限，每个实例独立
 
     // 临时场景、相机、全屏四边形（复用）
     private scene: THREE.Scene;
@@ -249,6 +251,9 @@ export class FluidSimulator {
         this.boundaryRingWidth = params.boundaryRingWidth ?? 2.0 / this.width;
         this.boundaryDivDamping = params.boundaryDivDamping ?? 0.5;
         this.boundaryVelDamping = params.boundaryVelDamping ?? 0.3;
+
+        // 初始化最大速度上限（每个实例独立）
+        this.maxVelocity = params.maxVelocity ?? 250.0;
 
         // 初始化爆炸随机扰动参数
         this.usePerturbation = params.usePerturbation ?? false;
@@ -748,7 +753,8 @@ export class FluidSimulator {
                 resolution: { value: res },
                 decoupledBoundary: { value: this.decoupledBoundary ? 1.0 : 0.0 },
                 boundaryRingWidth: { value: this.boundaryRingWidth },
-                boundaryVelDamping: { value: this.boundaryVelDamping }
+                boundaryVelDamping: { value: this.boundaryVelDamping },
+                maxVelocity: { value: this.maxVelocity }
             },
             vertexShader: vs,
             fragmentShader: `
@@ -761,6 +767,7 @@ export class FluidSimulator {
             uniform float decoupledBoundary;
             uniform float boundaryRingWidth;
             uniform float boundaryVelDamping;
+            uniform float maxVelocity;
             varying vec2 vUv;
 
             void main() {
@@ -804,9 +811,8 @@ export class FluidSimulator {
                 vel.y -= (dt / density) * pressureGrad.y;
 
                 // 速度上限限制，防止 CFL 条件失效
-                float maxVel = 250.0;
                 float speed = length(vel);
-                if (speed > maxVel) vel = vel * (maxVel / speed);
+                if (speed > maxVelocity) vel = vel * (maxVelocity / speed);
 
                 gl_FragColor = vec4(vel, 0.0, 1.0);
             }
@@ -1840,7 +1846,8 @@ export class FluidSimulator {
                 noiseTex: { value: null },
                 noiseOffset: { value: new THREE.Vector2(0.0, 0.0) },
                 perturbationStrength: { value: 0.4 },
-                usePerturbation: { value: 0.0 }
+                usePerturbation: { value: 0.0 },
+                maxVelocity: { value: this.maxVelocity }
             },
             vertexShader: vs,
             fragmentShader: `
@@ -1854,6 +1861,7 @@ export class FluidSimulator {
                 uniform vec2 noiseOffset;
                 uniform float perturbationStrength;
                 uniform float usePerturbation;
+                uniform float maxVelocity;
                 varying vec2 vUv;
 
                 void main() {
@@ -1878,9 +1886,8 @@ export class FluidSimulator {
                     }
 
                     // 速度上限限制，防止 CFL 条件失效
-                    float maxVel = 250.0;
                     float currentSpeed = length(vel);
-                    if (currentSpeed > maxVel) vel = vel * (maxVel / currentSpeed);
+                    if (currentSpeed > maxVelocity) vel = vel * (maxVelocity / currentSpeed);
 
                     gl_FragColor = vec4(vel, 0.0, 1.0);
                 }
@@ -3225,6 +3232,25 @@ export class FluidSimulator {
 
     public setPressureIterations(iterations: number): void {
         this.params.pressureIterations = iterations;
+    }
+
+    /**
+     * 设置最大速度上限（每个实例独立）
+     * @param maxVel 最大速度值，默认250
+     */
+    public setMaxVelocity(maxVel: number): void {
+        this.maxVelocity = maxVel;
+        // 更新所有相关着色器的 uniform
+        this.velocityCorrectMat.uniforms.maxVelocity.value = maxVel;
+        this.waterVelInitMat.uniforms.maxVelocity.value = maxVel;
+    }
+
+    /**
+     * 获取当前最大速度上限
+     * @returns 当前最大速度值
+     */
+    public getMaxVelocity(): number {
+        return this.maxVelocity;
     }
 
     public updateRenderUniforms(): void {

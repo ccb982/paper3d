@@ -34,8 +34,8 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             width: 512,
             height: 256,
             density: 1,
-            viscosity: 0.001,
-            surfaceTension: 0.0728,
+            viscosity: 1000,
+            surfaceTension: 728000,
             gravity: 9.81,
             pressureIterations: 200,
             reinitIterations: 1,           // 每100帧执行1次：单次迭代次数
@@ -45,6 +45,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             friction: 0.0,
             usePCG: false,
             maxLifetime: 2000,
+            maxVelocity: 110,             // 流体速度上限，默认75
             // 解耦边界处理参数（增强爆炸飞溅效果）
             decoupledBoundary: true,
             boundaryRingWidth: 0.03,
@@ -67,7 +68,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             centeringInterval: 0.5,    // 每0.5秒计算一次质心并居中
             // phi 场后处理修正参数
             clampAirPhi: true,          // 启用空气区 phi 上限钳制
-            maxAirPhi: 0.00,           // 空气区 phi 上限
+            maxAirPhi: 0.001,           // 空气区 phi 上限
             compensateWaterPhi: true,   // 启用水体区负向补偿
             waterCompensationRate: 0.1, // 补偿速率（避免水体流失）
             ...params
