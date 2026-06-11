@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation, ColorBlock } from '../types';
-import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache } from '../utils/regionDetectionExact';
+import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache, type GridData } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
+import { drawCircleOnBuffer, extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 
 interface AppState {
   // 图片导入状态
@@ -129,6 +130,13 @@ interface AppState {
   setColorBlocks: (blocks: ColorBlock[]) => void;
   updateColorBlocksForLayer: (layerId: string) => void;
   clearColorBlocksForLayer: (layerId: string) => void;
+
+  // BFS 区域颜色缓冲区
+  regionColorBuffers: Map<number, { imageData: ImageData; bounds: { minX: number; maxX: number; minY: number; maxY: number } }>;
+  currentGridData: GridData | null;
+  regionColorsDirty: boolean;
+  setRegionColor: (regionId: number, worldX: number, worldY: number, color: string, radius: number) => void;
+  clearRegionColors: () => void;
 
   // 撤销历史（复合快照）
   historySnapshots: Array<{ shapes: Shape[]; pointAnnotations: PointAnnotation[]; regionAnnotations: RegionAnnotation[] }>;
@@ -569,6 +577,66 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  // BFS 区域颜色缓冲区相关
+  regionColorBuffers: new Map(),
+  currentGridData: null,
+  regionColorsDirty: false,
+  
+  setRegionColor: (regionId, worldX, worldY, color, radius) => {
+    const state = get();
+    const gridData = state.currentGridData;
+    if (!gridData) return;
+
+    const region = gridData.regions.find(r => r.id === regionId);
+    if (!region) return;
+
+    // 获取或创建该区域的颜色缓冲区
+    let bufferInfo = state.regionColorBuffers.get(regionId);
+    if (!bufferInfo) {
+      const { minI, maxI, minJ, maxJ } = region.bounds;
+      const width = maxJ - minJ + 1;
+      const height = maxI - minI + 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.clearRect(0, 0, width, height);
+      const imageData = ctx.getImageData(0, 0, width, height);
+      bufferInfo = {
+        imageData,
+        bounds: { minX: minJ, maxX: maxJ, minY: minI, maxY: maxI },
+      };
+      state.regionColorBuffers.set(regionId, bufferInfo);
+    }
+
+    // 将世界坐标映射到区域缓冲区的局部坐标
+    const { minX, maxX, minY, maxY } = bufferInfo.bounds;
+    const stepX = gridData.stepX;
+    const stepY = gridData.stepY;
+    const worldMinX = gridData.xMin + minX * stepX;
+    const worldMinY = gridData.yMin + minY * stepY;
+    const localX = (worldX - worldMinX) / stepX;
+    const localY = (worldY - worldMinY) / stepY;
+    const localWidth = maxX - minX + 1;
+    const localHeight = maxY - minY + 1;
+
+    // 使用现有的 drawCircleOnBuffer 绘制到局部缓冲区
+    drawCircleOnBuffer(
+      bufferInfo.imageData,
+      { x: localX / localWidth, y: 1 - localY / localHeight }, // 注意 Y 轴翻转
+      radius / Math.min(stepX, stepY), // 半径转换（像素单位）
+      color,
+      localWidth
+    );
+    
+    // 触发重新渲染
+    set({ regionColorsDirty: true });
+  },
+  
+  clearRegionColors: () => {
+    set({ regionColorBuffers: new Map(), regionColorsDirty: true });
+  },
+
   regionPolygonsCache: {},
   regionScanlineCache: {},
   refreshRegionCache: (layerId) => {
@@ -604,9 +672,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     console.log('==========================================');
+    
+    // 清空区域颜色缓冲区（因为区域ID可能变化）
+    state.clearRegionColors();
+    
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
       regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
+      currentGridData: gridData,
     }));
   },
 
@@ -688,7 +761,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const buffer = state.paintBuffers[layerId];
     if (!buffer) return;
 
-    const { extractPolygonsFromImageData, hexToRgb } = require('../utils/paintBufferUtils');
     const polygons = extractPolygonsFromImageData(buffer, targetColor);
     if (polygons.length === 0) return;
 

@@ -4,7 +4,7 @@ import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { findRegionByPoint, generateRegionSignature } from '../utils/regionDetection';
-import { getRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
+import { getRegionIdAtPoint, computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
 import { generatePolygonFromPoints } from '../utils/geometryUtils';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 
@@ -130,6 +130,8 @@ export function MainCanvas() {
     initPaintBuffer,
     updatePaintBuffer,
     extractPolygonsFromPaintBuffer,
+    currentGridData,
+    setRegionColor,
   } = useAppStore();
 
   const [isPanning, setIsPanning] = useState(false);
@@ -819,6 +821,31 @@ export function MainCanvas() {
       ctx.drawImage(tempCanvas, 0, 0, currentSize, currentSize);
     }
 
+    // 绘制所有区域颜色缓冲区到主画布
+    if (currentGridData) {
+      const { regionColorBuffers } = useAppStore.getState();
+      for (const [regionId, { imageData, bounds }] of regionColorBuffers.entries()) {
+        const { minX, maxX, minY, maxY } = bounds;
+        const stepX = currentGridData.stepX;
+        const stepY = currentGridData.stepY;
+        const xMinWorld = currentGridData.xMin + minX * stepX;
+        const yMinWorld = currentGridData.yMin + minY * stepY;
+        const widthWorld = (maxX - minX + 1) * stepX;
+        const heightWorld = (maxY - minY + 1) * stepY;
+
+        // 将局部 ImageData 绘制到画布对应世界坐标区域
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = imageData.width;
+        tempCanvas.height = imageData.height;
+        tempCanvas.getContext('2d')!.putImageData(imageData, 0, 0);
+        
+        // 计算画布坐标（注意 Y 轴翻转）
+        const canvasTL = worldToCanvasFn(xMinWorld, yMinWorld + heightWorld);
+        const canvasBR = worldToCanvasFn(xMinWorld + widthWorld, yMinWorld);
+        ctx.drawImage(tempCanvas, canvasTL.x, canvasTL.y, canvasBR.x - canvasTL.x, canvasBR.y - canvasTL.y);
+      }
+    }
+
     // 坐标轴与格子
     if (layerVisibility.axisLayer && grid.visible) {
       ctx.strokeStyle = '#d0d0d0'; ctx.lineWidth = 1;
@@ -1412,7 +1439,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, currentGridData]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1471,16 +1498,11 @@ export function MainCanvas() {
     }
 
     if (isPainting && currentTool === 'paintBrush') {
-      const layerId = activeLayerId || layers[0]?.id;
-      if (!layerId) return;
-
-      if (!paintBuffers[layerId]) {
-        initPaintBuffer(layerId);
+      // 获取当前鼠标下的 BFS 区域 ID
+      const regionId = currentGridData ? getRegionIdAtPoint(worldCoords.x, worldCoords.y, currentGridData) : null;
+      if (regionId !== null) {
+        setRegionColor(regionId, worldCoords.x, worldCoords.y, currentColor, paintBrushSize);
       }
-
-      updatePaintBuffer(layerId, (imgData) => {
-        drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
-      });
 
       if (lastPaintPointRef.current) {
         const dist = Math.hypot(worldCoords.x - lastPaintPointRef.current.x,
@@ -1492,9 +1514,11 @@ export function MainCanvas() {
             const t = i / steps;
             const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
             const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
-            updatePaintBuffer(layerId, (imgData) => {
-              drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
-            });
+            // 在插值点上也获取区域 ID 并上色
+            const interpRegionId = currentGridData ? getRegionIdAtPoint(interpX, interpY, currentGridData) : null;
+            if (interpRegionId !== null) {
+              setRegionColor(interpRegionId, interpX, interpY, currentColor, paintBrushSize);
+            }
           }
         }
       }
@@ -1505,7 +1529,7 @@ export function MainCanvas() {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, currentGridData, setRegionColor]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1581,7 +1605,7 @@ export function MainCanvas() {
         yMin: 0,
         yMax: 1,
       };
-      const bfsRegionId = getRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
+      const bfsRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
       
       if (bfsRegionId === null) {
         console.log('[区域注释] 点击位置不在任何有效BFS区域内（可能是墙或外部）');
@@ -1640,12 +1664,11 @@ export function MainCanvas() {
     if (currentTool === 'paintBrush') {
       setIsPainting(true);
       lastPaintPointRef.current = null;
-      const layerId = activeLayerId || layers[0]?.id;
-      if (layerId) {
-        if (!paintBuffers[layerId]) initPaintBuffer(layerId);
-        updatePaintBuffer(layerId, (imgData) => {
-          drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
-        });
+      
+      // 获取当前鼠标下的 BFS 区域 ID
+      const regionId = currentGridData ? getRegionIdAtPoint(worldCoords.x, worldCoords.y, currentGridData) : null;
+      if (regionId !== null) {
+        setRegionColor(regionId, worldCoords.x, worldCoords.y, currentColor, paintBrushSize);
       }
       return;
     }
@@ -1663,12 +1686,8 @@ export function MainCanvas() {
     setIsErasing,
     regionAnnotations,
     updateRegionAnnotationWithRegionId,
-    paintBuffers,
-    initPaintBuffer,
-    updatePaintBuffer,
-    paintBrushSize,
-    currentColor,
-    layers,
+    currentGridData,
+    setRegionColor,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -1687,15 +1706,12 @@ export function MainCanvas() {
 
     if (isPainting && currentTool === 'paintBrush') {
       setIsPainting(false);
-      const layerId = activeLayerId || layers[0]?.id;
-      if (layerId && paintBuffers[layerId]) {
-        extractPolygonsFromPaintBuffer(layerId, currentColor);
-        saveHistory();
-      }
+      // 区域颜色已存储在 regionColorBuffers 中，无需提取多边形
+      saveHistory();
     }
 
     setIsPanning(false);
-  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, paintBrushSize, activeGroupId, activeLayerId, layers, currentColor, paintBuffers, extractPolygonsFromPaintBuffer, saveHistory]);
+  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, paintBrushSize, activeGroupId, activeLayerId, layers, currentColor, saveHistory]);
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {

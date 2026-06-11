@@ -125,6 +125,30 @@ export interface GridData {
   resolution: number;
 }
 
+/**
+ * 从缓存的 GridData 中高效获取指定世界坐标的区域ID
+ * @param worldX 世界坐标 X
+ * @param worldY 世界坐标 Y
+ * @param gridData 缓存的网格数据
+ * @returns 区域ID，如果不在任何区域内则返回 null
+ */
+export function getRegionIdAtPoint(worldX: number, worldY: number, gridData: GridData): number | null {
+  const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
+  
+  // 将世界坐标转换为网格坐标
+  const j = Math.floor((worldX - xMin) / stepX);
+  const i = Math.floor((worldY - yMin) / stepY);
+  
+  // 检查是否在网格范围内
+  if (i < 0 || i >= resolution || j < 0 || j >= resolution) {
+    return null;
+  }
+  
+  // 获取区域ID
+  const regionId = regionIdGrid[i][j];
+  return regionId > 0 ? regionId : null;
+}
+
 export function computeGridRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
@@ -1677,9 +1701,10 @@ export function extractClosedRingsFromPoints(
 
 /**
  * 获取世界坐标点所在的 BFS 区域 ID（正数）
+ * 注意：此函数每次都会重新计算网格，性能较低。建议使用 getRegionIdAtPoint 从缓存的 GridData 中查询。
  * @returns 区域ID，如果点不在任何有效区域（墙区域或外部）则返回 null
  */
-export function getRegionIdAtPoint(
+export function computeRegionIdAtPoint(
   point: Point,
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
