@@ -1740,12 +1740,46 @@ export function MainCanvas() {
 
     if (isPainting && currentTool === 'paintBrush') {
       setIsPainting(false);
-      // 不再自动提取多边形，像素数据已记录在 regionPixelsMap 中
+      
+      // 清除不在任何 BFS 区域内的像素
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId && paintBuffers[layerId]) {
+        const gridData = useAppStore.getState().currentGridData;
+        if (gridData) {
+          updatePaintBuffer(layerId, (imgData) => {
+            const canvasSize = BASE_CANVAS_SIZE;
+            const data = imgData.data;
+            
+            for (let y = 0; y < canvasSize; y++) {
+              for (let x = 0; x < canvasSize; x++) {
+                // 计算像素在世界坐标中的位置
+                const worldX = x / canvasSize;
+                const worldY = 1 - y / canvasSize; // Y轴翻转
+                
+                // 检查该像素是否在有效 BFS 区域内
+                const regionId = getRegionIdAtPoint(worldX, worldY, gridData);
+                
+                // 如果不在任何区域内且该像素有颜色，则清除
+                if (regionId === null) {
+                  const idx = (y * canvasSize + x) * 4;
+                  if (data[idx + 3] > 0) { // 检查 alpha 通道
+                    data[idx] = 0;     // R
+                    data[idx + 1] = 0; // G
+                    data[idx + 2] = 0; // B
+                    data[idx + 3] = 0; // A
+                  }
+                }
+              }
+            }
+          });
+        }
+      }
+      
       saveHistory();
     }
 
     setIsPanning(false);
-  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, saveHistory]);
+  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, saveHistory, activeLayerId, layers, paintBuffers, updatePaintBuffer]);
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
