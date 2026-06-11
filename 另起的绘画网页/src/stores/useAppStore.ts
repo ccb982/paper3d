@@ -3,6 +3,7 @@ import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisib
 import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache, type GridData } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
+import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 
 interface AppState {
   // 图片导入状态
@@ -136,6 +137,10 @@ interface AppState {
   regionPixelsMap: Map<number, Set<string>>;
   addPixelToRegion: (regionId: number, pixelX: number, pixelY: number) => void;
   clearRegionPixels: () => void;
+
+  // 区域ID纹理缓存 - 用于快速查询像素所属区域
+  regionIdTexture: Map<string, Uint8Array>; // key: layerId, value: 512x512 Uint8Array
+  generateRegionIdTexture: (layerId: string) => void;
 
   // 撤销历史（复合快照）
   historySnapshots: Array<{ shapes: Shape[]; pointAnnotations: PointAnnotation[]; regionAnnotations: RegionAnnotation[] }>;
@@ -592,6 +597,33 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ regionPixelsMap: new Map() });
   },
 
+  // 区域ID纹理缓存 - 用于快速查询像素所属区域
+  regionIdTexture: new Map(),
+  generateRegionIdTexture: (layerId) => {
+    const state = get();
+    const regions = state.regionPolygonsCache[layerId] || [];
+    const width = 512;
+    const height = 512;
+    const regionIdMap = new Uint8Array(width * height); // 初始为0
+    
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const worldX = x / width;
+        const worldY = 1 - y / height; // Y轴翻转
+        for (let i = 0; i < regions.length; i++) {
+          if (isPointInPolygonWithHoles({ x: worldX, y: worldY }, regions[i])) {
+            regionIdMap[y * width + x] = i + 1; // 区域ID从1开始
+            break; // 找到第一个即可（区域不重叠）
+          }
+        }
+      }
+    }
+    
+    set((s) => ({
+      regionIdTexture: new Map(s.regionIdTexture).set(layerId, regionIdMap),
+    }));
+  },
+
   regionPolygonsCache: {},
   regionScanlineCache: {},
   refreshRegionCache: (layerId) => {
@@ -636,6 +668,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
       regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
     }));
+    
+    // 生成区域ID纹理（异步执行，不阻塞UI）
+    setTimeout(() => {
+      get().generateRegionIdTexture(layerId);
+    }, 0);
   },
 
   colorBlockRegionsCache: {},
