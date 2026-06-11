@@ -194,33 +194,6 @@ export function MainCanvas() {
     }
   }, [activeLayerId, layers, regionIdTexture, addPixelToRegion]);
   
-  // 记录圆内所有像素坐标到区域（保留原函数，用于兼容）
-  const recordCirclePixels = useCallback((
-    centerWorld: Point,
-    radiusWorld: number,
-    regionId: number
-  ) => {
-    const canvasSize = BASE_CANVAS_SIZE;
-    const centerX = centerWorld.x * canvasSize;
-    const centerY = (1 - centerWorld.y) * canvasSize;
-    const radiusPx = radiusWorld * canvasSize;
-    const radiusSq = radiusPx * radiusPx;
-    const minX = Math.max(0, Math.floor(centerX - radiusPx));
-    const maxX = Math.min(canvasSize - 1, Math.ceil(centerX + radiusPx));
-    const minY = Math.max(0, Math.floor(centerY - radiusPx));
-    const maxY = Math.min(canvasSize - 1, Math.ceil(centerY + radiusPx));
-
-    for (let y = minY; y <= maxY; y++) {
-      for (let x = minX; x <= maxX; x++) {
-        const dx = x - centerX;
-        const dy = y - centerY;
-        if (dx * dx + dy * dy <= radiusSq) {
-          addPixelToRegion(regionId, x, y);
-        }
-      }
-    }
-  }, [addPixelToRegion]);
-  
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   const [pointAnnotationEditor, setPointAnnotationEditor] = useState<{
