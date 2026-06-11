@@ -143,7 +143,13 @@ interface AppState {
   generateRegionIdTexture: (layerId: string) => void;
 
   // 撤销历史（复合快照）
-  historySnapshots: Array<{ shapes: Shape[]; pointAnnotations: PointAnnotation[]; regionAnnotations: RegionAnnotation[] }>;
+  historySnapshots: Array<{ 
+    shapes: Shape[]; 
+    pointAnnotations: PointAnnotation[]; 
+    regionAnnotations: RegionAnnotation[]; 
+    regionPixelsMap: Map<number, string[]>;
+    paintBuffers: Record<string, { width: number; height: number; data: number[] }>;
+  }>;
   historyIndex: number;
   saveHistory: () => void;
   undo: () => void;
@@ -785,18 +791,38 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [] }],
+  historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [], regionPixelsMap: new Map(), paintBuffers: {} }],
   historyIndex: 0,
   saveHistory: () =>
     set((state) => {
+      // 将 regionPixelsMap 转换为可序列化格式
+      const serializedRegionPixelsMap = new Map<number, string[]>();
+      state.regionPixelsMap.forEach((pixels, regionId) => {
+        serializedRegionPixelsMap.set(regionId, Array.from(pixels));
+      });
+      
+      // 将 paintBuffers（普通对象）转换为可序列化格式
+      const serializedPaintBuffers: Record<string, { width: number; height: number; data: number[] }> = {};
+      for (const [layerId, imgData] of Object.entries(state.paintBuffers)) {
+        if (imgData) {
+          serializedPaintBuffers[layerId] = {
+            width: imgData.width,
+            height: imgData.height,
+            data: Array.from(imgData.data),
+          };
+        }
+      }
+      
       const newSnapshot = { 
         shapes: [...state.shapes], 
         pointAnnotations: [...state.pointAnnotations],
-        regionAnnotations: [...state.regionAnnotations]
+        regionAnnotations: [...state.regionAnnotations],
+        regionPixelsMap: serializedRegionPixelsMap,
+        paintBuffers: serializedPaintBuffers,
       };
       const newHistory = state.historySnapshots.slice(0, state.historyIndex + 1);
       newHistory.push(newSnapshot);
-      if (newHistory.length > 50) newHistory.shift();
+      if (newHistory.length > 30) newHistory.shift(); // 减少历史记录数量以节省内存
       return { historySnapshots: newHistory, historyIndex: newHistory.length - 1 };
     }),
   undo: () =>
@@ -804,10 +830,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (state.historyIndex > 0) {
         const newIndex = state.historyIndex - 1;
         const snapshot = state.historySnapshots[newIndex];
+        
+        // 恢复 regionPixelsMap
+        const restoredRegionPixelsMap = new Map<number, Set<string>>();
+        snapshot.regionPixelsMap.forEach((pixels, regionId) => {
+          restoredRegionPixelsMap.set(regionId, new Set(pixels));
+        });
+        
+        // 恢复 paintBuffers（普通对象）
+        const restoredPaintBuffers: Record<string, ImageData | null> = {};
+        for (const [layerId, serialized] of Object.entries(snapshot.paintBuffers)) {
+          restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
+        }
+        
         return {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
           regionAnnotations: [...snapshot.regionAnnotations],
+          regionPixelsMap: restoredRegionPixelsMap,
+          paintBuffers: restoredPaintBuffers,
           historyIndex: newIndex,
         };
       }
@@ -818,10 +859,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (state.historyIndex < state.historySnapshots.length - 1) {
         const newIndex = state.historyIndex + 1;
         const snapshot = state.historySnapshots[newIndex];
+        
+        // 恢复 regionPixelsMap
+        const restoredRegionPixelsMap = new Map<number, Set<string>>();
+        snapshot.regionPixelsMap.forEach((pixels, regionId) => {
+          restoredRegionPixelsMap.set(regionId, new Set(pixels));
+        });
+        
+        // 恢复 paintBuffers（普通对象）
+        const restoredPaintBuffers: Record<string, ImageData | null> = {};
+        for (const [layerId, serialized] of Object.entries(snapshot.paintBuffers)) {
+          restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
+        }
+        
         return {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
           regionAnnotations: [...snapshot.regionAnnotations],
+          regionPixelsMap: restoredRegionPixelsMap,
+          paintBuffers: restoredPaintBuffers,
           historyIndex: newIndex,
         };
       }
