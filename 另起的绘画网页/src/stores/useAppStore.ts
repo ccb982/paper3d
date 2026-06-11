@@ -134,6 +134,12 @@ interface AppState {
   // 缓存最新的 GridData，供上色画笔做区域限制检查
   currentGridData: GridData | null;
 
+  // 按区域ID存储被涂色的像素坐标（去重）
+  // key: regionId, value: Set<string> 存储 "x,y" 格式的像素坐标
+  regionPixelsMap: Map<number, Set<string>>;
+  addPixelToRegion: (regionId: number, pixelX: number, pixelY: number) => void;
+  clearRegionPixels: () => void;
+
   // 撤销历史（复合快照）
   historySnapshots: Array<{ shapes: Shape[]; pointAnnotations: PointAnnotation[]; regionAnnotations: RegionAnnotation[] }>;
   historyIndex: number;
@@ -576,6 +582,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 缓存最新的 GridData（供上色画笔做区域限制检查）
   currentGridData: null,
 
+  // 按区域ID存储被涂色的像素坐标（去重）
+  regionPixelsMap: new Map(),
+  addPixelToRegion: (regionId, pixelX, pixelY) =>
+    set((state) => {
+      const key = `${pixelX},${pixelY}`;
+      const regionMap = new Map(state.regionPixelsMap);
+      if (!regionMap.has(regionId)) {
+        regionMap.set(regionId, new Set());
+      }
+      regionMap.get(regionId)!.add(key);
+      return { regionPixelsMap: regionMap };
+    }),
+  clearRegionPixels: () => {
+    set({ regionPixelsMap: new Map() });
+  },
+
   regionPolygonsCache: {},
   regionScanlineCache: {},
   refreshRegionCache: (layerId) => {
@@ -612,8 +634,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     console.log('==========================================');
     
-    // 区域重计算后，清空该图层的画笔缓冲区（避免残留颜色对应错误的区域）
+    // 区域重计算后，清空该图层的画笔缓冲区和区域像素记录
     state.clearPaintBuffer(layerId);
+    state.clearRegionPixels();
     
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
