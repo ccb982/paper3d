@@ -130,8 +130,6 @@ export function MainCanvas() {
     initPaintBuffer,
     updatePaintBuffer,
     extractPolygonsFromPaintBuffer,
-    currentGridData,
-    setRegionColor,
   } = useAppStore();
 
   const [isPanning, setIsPanning] = useState(false);
@@ -821,31 +819,6 @@ export function MainCanvas() {
       ctx.drawImage(tempCanvas, 0, 0, currentSize, currentSize);
     }
 
-    // 绘制所有区域颜色缓冲区到主画布
-    if (currentGridData) {
-      const { regionColorBuffers } = useAppStore.getState();
-      for (const [regionId, { imageData, bounds }] of regionColorBuffers.entries()) {
-        const { minX, maxX, minY, maxY } = bounds;
-        const stepX = currentGridData.stepX;
-        const stepY = currentGridData.stepY;
-        const xMinWorld = currentGridData.xMin + minX * stepX;
-        const yMinWorld = currentGridData.yMin + minY * stepY;
-        const widthWorld = (maxX - minX + 1) * stepX;
-        const heightWorld = (maxY - minY + 1) * stepY;
-
-        // 将局部 ImageData 绘制到画布对应世界坐标区域
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = imageData.width;
-        tempCanvas.height = imageData.height;
-        tempCanvas.getContext('2d')!.putImageData(imageData, 0, 0);
-        
-        // 计算画布坐标（注意 Y 轴翻转）
-        const canvasTL = worldToCanvasFn(xMinWorld, yMinWorld + heightWorld);
-        const canvasBR = worldToCanvasFn(xMinWorld + widthWorld, yMinWorld);
-        ctx.drawImage(tempCanvas, canvasTL.x, canvasTL.y, canvasBR.x - canvasTL.x, canvasBR.y - canvasTL.y);
-      }
-    }
-
     // 坐标轴与格子
     if (layerVisibility.axisLayer && grid.visible) {
       ctx.strokeStyle = '#d0d0d0'; ctx.lineWidth = 1;
@@ -1439,7 +1412,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, currentGridData]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1498,38 +1471,52 @@ export function MainCanvas() {
     }
 
     if (isPainting && currentTool === 'paintBrush') {
-      // 获取当前鼠标下的 BFS 区域 ID
-      const regionId = currentGridData ? getRegionIdAtPoint(worldCoords.x, worldCoords.y, currentGridData) : null;
-      if (regionId !== null) {
-        setRegionColor(regionId, worldCoords.x, worldCoords.y, currentColor, paintBrushSize);
-      }
+      const layerId = activeLayerId || layers[0]?.id;
+      if (!layerId) return;
 
-      if (lastPaintPointRef.current) {
-        const dist = Math.hypot(worldCoords.x - lastPaintPointRef.current.x,
-                                worldCoords.y - lastPaintPointRef.current.y);
-        const step = paintBrushSize * 0.5;
-        if (dist > step) {
-          const steps = Math.ceil(dist / step);
-          for (let i = 1; i < steps; i++) {
-            const t = i / steps;
-            const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
-            const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
-            // 在插值点上也获取区域 ID 并上色
-            const interpRegionId = currentGridData ? getRegionIdAtPoint(interpX, interpY, currentGridData) : null;
-            if (interpRegionId !== null) {
-              setRegionColor(interpRegionId, interpX, interpY, currentColor, paintBrushSize);
+      // 检查当前像素是否在有效 BFS 区域内
+      const gridData = useAppStore.getState().currentGridData;
+      if (gridData) {
+        const regionId = getRegionIdAtPoint(worldCoords.x, worldCoords.y, gridData);
+        if (regionId !== null) {
+          if (!paintBuffers[layerId]) {
+            initPaintBuffer(layerId);
+          }
+
+          updatePaintBuffer(layerId, (imgData) => {
+            drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+          });
+
+          if (lastPaintPointRef.current) {
+            const dist = Math.hypot(worldCoords.x - lastPaintPointRef.current.x,
+                                    worldCoords.y - lastPaintPointRef.current.y);
+            const step = paintBrushSize * 0.5;
+            if (dist > step) {
+              const steps = Math.ceil(dist / step);
+              for (let i = 1; i < steps; i++) {
+                const t = i / steps;
+                const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
+                const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
+                // 插值点也要检查区域
+                const interpRegionId = getRegionIdAtPoint(interpX, interpY, gridData);
+                if (interpRegionId !== null) {
+                  updatePaintBuffer(layerId, (imgData) => {
+                    drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+                  });
+                }
+              }
             }
           }
+          lastPaintPointRef.current = worldCoords;
         }
       }
-      lastPaintPointRef.current = worldCoords;
       return;
     }
 
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, currentGridData, setRegionColor]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1664,11 +1651,19 @@ export function MainCanvas() {
     if (currentTool === 'paintBrush') {
       setIsPainting(true);
       lastPaintPointRef.current = null;
-      
-      // 获取当前鼠标下的 BFS 区域 ID
-      const regionId = currentGridData ? getRegionIdAtPoint(worldCoords.x, worldCoords.y, currentGridData) : null;
-      if (regionId !== null) {
-        setRegionColor(regionId, worldCoords.x, worldCoords.y, currentColor, paintBrushSize);
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId) {
+        // 检查当前像素是否在有效 BFS 区域内
+        const gridData = useAppStore.getState().currentGridData;
+        if (gridData) {
+          const regionId = getRegionIdAtPoint(worldCoords.x, worldCoords.y, gridData);
+          if (regionId !== null) {
+            if (!paintBuffers[layerId]) initPaintBuffer(layerId);
+            updatePaintBuffer(layerId, (imgData) => {
+              drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+            });
+          }
+        }
       }
       return;
     }
@@ -1686,8 +1681,12 @@ export function MainCanvas() {
     setIsErasing,
     regionAnnotations,
     updateRegionAnnotationWithRegionId,
-    currentGridData,
-    setRegionColor,
+    paintBuffers,
+    initPaintBuffer,
+    updatePaintBuffer,
+    paintBrushSize,
+    currentColor,
+    layers,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -1706,12 +1705,15 @@ export function MainCanvas() {
 
     if (isPainting && currentTool === 'paintBrush') {
       setIsPainting(false);
-      // 区域颜色已存储在 regionColorBuffers 中，无需提取多边形
-      saveHistory();
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId && paintBuffers[layerId]) {
+        extractPolygonsFromPaintBuffer(layerId, currentColor);
+        saveHistory();
+      }
     }
 
     setIsPanning(false);
-  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, paintBrushSize, activeGroupId, activeLayerId, layers, currentColor, saveHistory]);
+  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, paintBrushSize, activeGroupId, activeLayerId, layers, currentColor, paintBuffers, extractPolygonsFromPaintBuffer, saveHistory]);
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
