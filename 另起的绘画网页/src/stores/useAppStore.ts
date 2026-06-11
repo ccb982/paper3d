@@ -131,9 +131,6 @@ interface AppState {
   updateColorBlocksForLayer: (layerId: string) => void;
   clearColorBlocksForLayer: (layerId: string) => void;
 
-  // 缓存最新的 GridData，供上色画笔做区域限制检查
-  currentGridData: GridData | null;
-
   // 按区域ID存储被涂色的像素坐标（去重）
   // key: regionId, value: Set<string> 存储 "x,y" 格式的像素坐标
   regionPixelsMap: Map<number, Set<string>>;
@@ -466,8 +463,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setLineWidth: (width) => set({ lineWidth: Math.max(0, Math.min(5, Math.round(width * 10) / 10)) }),
 
   // 上色画笔大小（世界坐标单位）
-  paintBrushSize: 0.05,
-  setPaintBrushSize: (size) => set({ paintBrushSize: Math.max(0.01, Math.min(0.2, Math.round(size * 100) / 100)) }),
+  paintBrushSize: 0.01,
+  setPaintBrushSize: (size) => set({ paintBrushSize: Math.max(0.002, Math.min(0.2, Math.round(size * 1000) / 1000)) }),
 
   // 当前颜色配置
   currentColor: '#ff0000',
@@ -579,9 +576,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
-  // 缓存最新的 GridData（供上色画笔做区域限制检查）
-  currentGridData: null,
-
   // 按区域ID存储被涂色的像素坐标（去重）
   regionPixelsMap: new Map(),
   addPixelToRegion: (regionId, pixelX, pixelY) =>
@@ -641,7 +635,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
       regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
-      currentGridData: gridData,
     }));
   },
 

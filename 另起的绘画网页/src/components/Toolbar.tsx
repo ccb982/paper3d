@@ -361,9 +361,9 @@ export function Toolbar() {
           <span style={{ fontSize: '10px', color: '#666' }}>画笔大小</span>
           <input
             type="range"
-            min="0.01"
+            min="0.002"
             max="0.2"
-            step="0.01"
+            step="0.001"
             value={paintBrushSize}
             onChange={(e) => setPaintBrushSize(parseFloat(e.target.value))}
             style={{
@@ -372,7 +372,7 @@ export function Toolbar() {
               cursor: 'pointer',
             }}
           />
-          <span style={{ fontSize: '10px', color: '#666' }}>{(paintBrushSize * 100).toFixed(0)}%</span>
+          <span style={{ fontSize: '10px', color: '#666' }}>{(paintBrushSize * 100).toFixed(1)}%</span>
         </div>
       )}
     </div>

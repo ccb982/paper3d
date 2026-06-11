@@ -5,6 +5,7 @@ import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { findRegionByPoint, generateRegionSignature } from '../utils/regionDetection';
 import { getRegionIdAtPoint, computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
+import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { generatePolygonFromPoints } from '../utils/geometryUtils';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 
@@ -183,6 +184,22 @@ export function MainCanvas() {
       }
     }
   }, [addPixelToRegion]);
+
+  // 检查点是否在区域注释算法生成的任何多边形区域内
+  const isPointInAnyRegion = useCallback((worldX: number, worldY: number): boolean => {
+    const layerId = activeLayerId || layers[0]?.id;
+    if (!layerId) return false;
+    
+    const regions = regionPolygonsCache[layerId] || [];
+    const point = { x: worldX, y: worldY };
+    
+    for (const region of regions) {
+      if (isPointInPolygonWithHoles(point, region)) {
+        return true;
+      }
+    }
+    return false;
+  }, [activeLayerId, layers, regionPolygonsCache]);
   
   const generateEditorId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -1502,45 +1519,42 @@ export function MainCanvas() {
       const layerId = activeLayerId || layers[0]?.id;
       if (!layerId) return;
 
-      const gridData = useAppStore.getState().currentGridData;
-      if (gridData) {
-        const regionId = getRegionIdAtPoint(worldCoords.x, worldCoords.y, gridData);
-        if (regionId !== null) {
-          // 记录圆内所有像素到区域
-          recordCirclePixels(worldCoords, paintBrushSize, regionId);
+      // 使用区域注释算法检查是否在精确区域内
+      if (isPointInAnyRegion(worldCoords.x, worldCoords.y)) {
+        // 记录圆内所有像素到区域
+        recordCirclePixels(worldCoords, paintBrushSize, 1); // 使用虚拟区域ID 1
 
-          if (!paintBuffers[layerId]) {
-            initPaintBuffer(layerId);
-          }
+        if (!paintBuffers[layerId]) {
+          initPaintBuffer(layerId);
+        }
 
-          updatePaintBuffer(layerId, (imgData) => {
-            drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
-          });
+        updatePaintBuffer(layerId, (imgData) => {
+          drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+        });
 
-          if (lastPaintPointRef.current) {
-            const dist = Math.hypot(worldCoords.x - lastPaintPointRef.current.x,
-                                    worldCoords.y - lastPaintPointRef.current.y);
-            const step = paintBrushSize * 0.5;
-            if (dist > step) {
-              const steps = Math.ceil(dist / step);
-              for (let i = 1; i < steps; i++) {
-                const t = i / steps;
-                const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
-                const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
-                const interpRegionId = getRegionIdAtPoint(interpX, interpY, gridData);
-                if (interpRegionId !== null) {
-                  // 记录插值点圆内像素
-                  recordCirclePixels({ x: interpX, y: interpY }, paintBrushSize, interpRegionId);
-                  
-                  updatePaintBuffer(layerId, (imgData) => {
-                    drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
-                  });
-                }
+        if (lastPaintPointRef.current) {
+          const dist = Math.hypot(worldCoords.x - lastPaintPointRef.current.x,
+                                  worldCoords.y - lastPaintPointRef.current.y);
+          const step = paintBrushSize * 0.5;
+          if (dist > step) {
+            const steps = Math.ceil(dist / step);
+            for (let i = 1; i < steps; i++) {
+              const t = i / steps;
+              const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
+              const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
+              // 插值点也要检查区域
+              if (isPointInAnyRegion(interpX, interpY)) {
+                // 记录插值点圆内像素
+                recordCirclePixels({ x: interpX, y: interpY }, paintBrushSize, 1);
+                
+                updatePaintBuffer(layerId, (imgData) => {
+                  drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+                });
               }
             }
           }
-          lastPaintPointRef.current = worldCoords;
         }
+        lastPaintPointRef.current = worldCoords;
       }
       return;
     }
@@ -1548,7 +1562,7 @@ export function MainCanvas() {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixels]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixels, isPointInAnyRegion]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1685,18 +1699,15 @@ export function MainCanvas() {
       lastPaintPointRef.current = null;
       const layerId = activeLayerId || layers[0]?.id;
       if (layerId) {
-        const gridData = useAppStore.getState().currentGridData;
-        if (gridData) {
-          const regionId = getRegionIdAtPoint(worldCoords.x, worldCoords.y, gridData);
-          if (regionId !== null) {
-            // 记录圆内所有像素到区域
-            recordCirclePixels(worldCoords, paintBrushSize, regionId);
-            
-            if (!paintBuffers[layerId]) initPaintBuffer(layerId);
-            updatePaintBuffer(layerId, (imgData) => {
-              drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
-            });
-          }
+        // 使用区域注释算法检查是否在精确区域内
+        if (isPointInAnyRegion(worldCoords.x, worldCoords.y)) {
+          // 记录圆内所有像素到区域
+          recordCirclePixels(worldCoords, paintBrushSize, 1); // 使用虚拟区域ID 1
+          
+          if (!paintBuffers[layerId]) initPaintBuffer(layerId);
+          updatePaintBuffer(layerId, (imgData) => {
+            drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+          });
         }
       }
       return;
@@ -1722,6 +1733,7 @@ export function MainCanvas() {
     currentColor,
     layers,
     recordCirclePixels,
+    isPointInAnyRegion,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
@@ -1741,45 +1753,39 @@ export function MainCanvas() {
     if (isPainting && currentTool === 'paintBrush') {
       setIsPainting(false);
       
-      // 清除不在任何 BFS 区域内的像素
+      // 使用区域注释算法清除不在任何精确区域内的像素
       const layerId = activeLayerId || layers[0]?.id;
       if (layerId && paintBuffers[layerId]) {
-        const gridData = useAppStore.getState().currentGridData;
-        if (gridData) {
-          updatePaintBuffer(layerId, (imgData) => {
-            const canvasSize = BASE_CANVAS_SIZE;
-            const data = imgData.data;
-            
-            for (let y = 0; y < canvasSize; y++) {
-              for (let x = 0; x < canvasSize; x++) {
-                // 计算像素在世界坐标中的位置
-                const worldX = x / canvasSize;
-                const worldY = 1 - y / canvasSize; // Y轴翻转
-                
-                // 检查该像素是否在有效 BFS 区域内
-                const regionId = getRegionIdAtPoint(worldX, worldY, gridData);
-                
-                // 如果不在任何区域内且该像素有颜色，则清除
-                if (regionId === null) {
-                  const idx = (y * canvasSize + x) * 4;
-                  if (data[idx + 3] > 0) { // 检查 alpha 通道
-                    data[idx] = 0;     // R
-                    data[idx + 1] = 0; // G
-                    data[idx + 2] = 0; // B
-                    data[idx + 3] = 0; // A
-                  }
+        updatePaintBuffer(layerId, (imgData) => {
+          const canvasSize = BASE_CANVAS_SIZE;
+          const data = imgData.data;
+          
+          for (let y = 0; y < canvasSize; y++) {
+            for (let x = 0; x < canvasSize; x++) {
+              // 计算像素在世界坐标中的位置
+              const worldX = x / canvasSize;
+              const worldY = 1 - y / canvasSize; // Y轴翻转
+              
+              // 使用区域注释算法检查是否在精确区域内
+              if (!isPointInAnyRegion(worldX, worldY)) {
+                const idx = (y * canvasSize + x) * 4;
+                if (data[idx + 3] > 0) { // 检查 alpha 通道
+                  data[idx] = 0;     // R
+                  data[idx + 1] = 0; // G
+                  data[idx + 2] = 0; // B
+                  data[idx + 3] = 0; // A
                 }
               }
             }
-          });
-        }
+          }
+        });
       }
       
       saveHistory();
     }
 
     setIsPanning(false);
-  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, saveHistory, activeLayerId, layers, paintBuffers, updatePaintBuffer]);
+  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, saveHistory, activeLayerId, layers, paintBuffers, updatePaintBuffer, isPointInAnyRegion]);
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
