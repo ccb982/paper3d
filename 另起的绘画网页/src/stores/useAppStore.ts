@@ -867,6 +867,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           const store = useAppStore.getState();
           if (activeId) {
             store.refreshRegionCache(activeId);
+            store.refreshColorBlockCache(activeId);
             store.generateRegionIdTexture(activeId);
           }
         }, 0);
@@ -925,6 +926,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           const store = useAppStore.getState();
           if (activeId) {
             store.refreshRegionCache(activeId);
+            store.refreshColorBlockCache(activeId);
             store.generateRegionIdTexture(activeId);
           }
         }, 0);
