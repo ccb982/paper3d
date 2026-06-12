@@ -22,7 +22,8 @@ const FIXED_WORLD_MAX = 1;
  * 将世界坐标（0~1）映射到画布坐标
  * worldX, worldY: 世界坐标，范围 [0,1]
  * axis: 坐标轴配置（仅用于 applyViewTransform 时保持兼容，不影响映射）
- * canvasSize: 画布像素尺寸
+ * canvasWidth: 画布宽度
+ * canvasHeight: 画布高度
  * options: 转换选项
  * zoom: 缩放因子
  * panOffset: 平移偏移
@@ -31,18 +32,19 @@ export function worldToCanvas(
   worldX: number,
   worldY: number,
   axis: Axis,
-  canvasSize: number,
+  canvasWidth: number,
+  canvasHeight: number,
   options?: TransformOptions,
   zoom: number = 1,
   panOffset: Point = { x: 0, y: 0 }
 ): Point {
   // 使用固定的 [0,1] 范围映射到画布
-  const px = ((worldX - FIXED_WORLD_MIN) / (FIXED_WORLD_MAX - FIXED_WORLD_MIN)) * canvasSize;
-  const py = ((FIXED_WORLD_MAX - worldY) / (FIXED_WORLD_MAX - FIXED_WORLD_MIN)) * canvasSize;
+  const px = ((worldX - FIXED_WORLD_MIN) / (FIXED_WORLD_MAX - FIXED_WORLD_MIN)) * canvasWidth;
+  const py = ((FIXED_WORLD_MAX - worldY) / (FIXED_WORLD_MAX - FIXED_WORLD_MIN)) * canvasHeight;
 
   if (options?.applyViewTransform) {
-    const centerX = canvasSize / 2;
-    const centerY = canvasSize / 2;
+    const centerX = canvasWidth / 2;
+    const centerY = canvasHeight / 2;
     const canvasX = (px - centerX) * zoom + centerX + panOffset.x;
     const canvasY = (py - centerY) * zoom + centerY + panOffset.y;
     return { x: canvasX, y: canvasY };
@@ -55,7 +57,8 @@ export function worldToCanvas(
  * 将画布坐标映射到世界坐标（0~1）
  * canvasX, canvasY: 画布像素坐标
  * axis: 坐标轴配置（仅用于保持兼容，不影响映射）
- * canvasSize: 画布像素尺寸
+ * canvasWidth: 画布宽度
+ * canvasHeight: 画布高度
  * zoom: 缩放因子
  * panOffset: 平移偏移
  */
@@ -63,17 +66,18 @@ export function canvasToWorld(
   canvasX: number,
   canvasY: number,
   axis: Axis,
-  canvasSize: number,
+  canvasWidth: number,
+  canvasHeight: number,
   zoom: number = 1,
   panOffset: Point = { x: 0, y: 0 }
 ): Point {
-  const centerX = canvasSize / 2;
-  const centerY = canvasSize / 2;
+  const centerX = canvasWidth / 2;
+  const centerY = canvasHeight / 2;
   const rawX = (canvasX - centerX - panOffset.x) / zoom + centerX;
   const rawY = (canvasY - centerY - panOffset.y) / zoom + centerY;
   // 使用固定的 [0,1] 范围映射
-  const worldX = (rawX / canvasSize) * (FIXED_WORLD_MAX - FIXED_WORLD_MIN) + FIXED_WORLD_MIN;
-  const worldY = FIXED_WORLD_MAX - (rawY / canvasSize) * (FIXED_WORLD_MAX - FIXED_WORLD_MIN);
+  const worldX = (rawX / canvasWidth) * (FIXED_WORLD_MAX - FIXED_WORLD_MIN) + FIXED_WORLD_MIN;
+  const worldY = FIXED_WORLD_MAX - (rawY / canvasHeight) * (FIXED_WORLD_MAX - FIXED_WORLD_MIN);
   return { x: worldX, y: worldY };
 }
 

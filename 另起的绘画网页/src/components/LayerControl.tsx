@@ -31,8 +31,10 @@ export function LayerControl() {
     resetBackgroundTransform,
     setBackgroundDragging,
     // 画布尺寸
-    canvasSize,
-    setCanvasSize,
+    canvasWidth,
+    canvasHeight,
+    setCanvasWidth,
+    setCanvasHeight,
   } = useAppStore();
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -447,21 +449,38 @@ export function LayerControl() {
           <input
             type="number"
             min={64}
-            max={2048}
+            max={4096}
             step={64}
-            value={canvasSize ?? 512}
-            onChange={(e) => setCanvasSize(parseInt(e.target.value) || 512)}
+            value={canvasWidth ?? 512}
+            onChange={(e) => setCanvasWidth(parseInt(e.target.value) || 512)}
+            style={{ width: '80px', fontSize: '12px' }}
+          />
+          <span style={{ fontSize: '12px' }}>x</span>
+          <input
+            type="number"
+            min={64}
+            max={4096}
+            step={64}
+            value={canvasHeight ?? 512}
+            onChange={(e) => setCanvasHeight(parseInt(e.target.value) || 512)}
             style={{ width: '80px', fontSize: '12px' }}
           />
           <span style={{ fontSize: '12px' }}>px</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-          <button onClick={() => setCanvasSize(256)} className="btn btn-primary">256</button>
-          <button onClick={() => setCanvasSize(512)} className="btn btn-primary">512</button>
-          <button onClick={() => setCanvasSize(1024)} className="btn btn-primary">1024</button>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <button onClick={() => { setCanvasWidth(800); setCanvasHeight(600); }} className="btn btn-primary">4:3</button>
+          <button onClick={() => { setCanvasWidth(1920); setCanvasHeight(1080); }} className="btn btn-primary">16:9</button>
+          <button onClick={() => { setCanvasWidth(1024); setCanvasHeight(1024); }} className="btn btn-primary">1:1</button>
+          <button onClick={() => { setCanvasWidth(1080); setCanvasHeight(1920); }} className="btn btn-primary">9:16</button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <button onClick={() => { setCanvasWidth(512); setCanvasHeight(512); }} className="btn btn-secondary">512×512</button>
+          <button onClick={() => { setCanvasWidth(1024); setCanvasHeight(1024); }} className="btn btn-secondary">1024×1024</button>
+          <button onClick={() => { setCanvasWidth(800); setCanvasHeight(600); }} className="btn btn-secondary">800×600</button>
+          <button onClick={() => { setCanvasWidth(1280); setCanvasHeight(720); }} className="btn btn-secondary">1280×720</button>
         </div>
         <p style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
-          调整画布分辨率（64-2048）
+          调整画布分辨率（64-4096）
         </p>
       </div>
 

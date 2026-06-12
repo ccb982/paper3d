@@ -76,8 +76,10 @@ interface AppState {
   resetView: () => void;
   
   // 画布尺寸
-  canvasSize: number;
-  setCanvasSize: (size: number) => void;
+  canvasWidth: number;
+  canvasHeight: number;
+  setCanvasWidth: (width: number) => void;
+  setCanvasHeight: (height: number) => void;
 
   // 当前工具
   currentTool: ToolType;
@@ -533,8 +535,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   resetView: () => set({ zoom: 1.0, panOffset: { x: 0, y: 0 } }),
   
   // 画布尺寸
-  canvasSize: 512,
-  setCanvasSize: (size) => set({ canvasSize: Math.max(64, Math.min(2048, size)) }),
+  canvasWidth: 512,
+  canvasHeight: 512,
+  setCanvasWidth: (width) => set({ canvasWidth: Math.max(64, Math.min(4096, width)) }),
+  setCanvasHeight: (height) => set({ canvasHeight: Math.max(64, Math.min(4096, height)) }),
 
   currentTool: 'select',
   setCurrentTool: (tool) => set({ currentTool: tool }),

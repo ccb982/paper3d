@@ -31,20 +31,21 @@ function distanceToLineSegment(
 function clipLineToCanvas(
   start: { x: number; y: number },
   end: { x: number; y: number },
-  canvasSize: number
+  canvasWidth: number,
+  canvasHeight: number
 ): { x: number; y: number } {
   let x = end.x;
   let y = end.y;
   
   // 如果端点在画布内，直接返回
-  if (x >= 0 && x <= canvasSize && y >= 0 && y <= canvasSize) {
+  if (x >= 0 && x <= canvasWidth && y >= 0 && y <= canvasHeight) {
     return { x, y };
   }
   
   // 使用 Liang-Barsky 算法裁剪线段到画布边界
   const x0 = start.x, y0 = start.y;
   const x1 = end.x, y1 = end.y;
-  const xmin = 0, ymin = 0, xmax = canvasSize, ymax = canvasSize;
+  const xmin = 0, ymin = 0, xmax = canvasWidth, ymax = canvasHeight;
   
   let t0 = 0, t1 = 1;
   const dx = x1 - x0;
@@ -139,8 +140,8 @@ export function MainCanvas() {
     updateBackgroundDrag,
     endBackgroundDrag,
     // 画布尺寸
-    canvasSize: globalCanvasSize,
-    setCanvasSize,
+    canvasWidth,
+    canvasHeight,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -153,9 +154,7 @@ export function MainCanvas() {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
-  // 使用全局画布尺寸，本地状态用于容器自适应
-  const [containerSize, setContainerSize] = useState(BASE_CANVAS_SIZE);
-  const canvasSize = globalCanvasSize; // 使用全局画布尺寸
+  // 使用全局画布尺寸
   const [showDebugRegions, setShowDebugRegions] = useState(false);
   const [showGridCells, setShowGridCells] = useState(false);
   const [debugRegionId, setDebugRegionId] = useState(0);
@@ -248,20 +247,7 @@ export function MainCanvas() {
   const [isErasing, setIsErasing] = useState(false);
   const erasedShapesThisSessionRef = useRef<Set<string>>(new Set()); // 用 ref 避免不必要的重渲染
 
-  // ========== 视图尺寸自适应 ==========
-  useEffect(() => {
-    const updateSize = () => {
-      if (canvasWrapperRef.current) {
-        const wrapper = canvasWrapperRef.current;
-        const rect = wrapper.getBoundingClientRect();
-        const size = Math.min(rect.width, rect.height);
-        setContainerSize(size > 0 ? Math.floor(size) : BASE_CANVAS_SIZE);
-      }
-    };
-    updateSize();
-    window.addEventListener('resize', updateSize);
-    return () => window.removeEventListener('resize', updateSize);
-  }, []);
+  // ========== 视图尺寸自适应（已移除，改用全局画布尺寸）==========
 
   // ========== Escape 键取消临时图形和注释编辑器 ==========
   useEffect(() => {
@@ -307,25 +293,16 @@ export function MainCanvas() {
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const currentSize = canvas.width; // 实际宽度（与高度相同，因为正方形）
-    return canvasToWorld(canvasX, canvasY, axis, currentSize, zoom, panOffset);
-  }, [axis, zoom, panOffset]); // 不再依赖 canvasSize 状态
+    return canvasToWorld(canvasX, canvasY, axis, canvasWidth, canvasHeight, zoom, panOffset);
+  }, [axis, canvasWidth, canvasHeight, zoom, panOffset]);
 
   const worldToCanvasFn = useCallback((worldX: number, worldY: number): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const currentSize = canvas.width;
-    return worldToCanvas(worldX, worldY, axis, currentSize, { applyViewTransform: false });
-  }, [axis]); // 不再依赖 canvasSize
+    return worldToCanvas(worldX, worldY, axis, canvasWidth, canvasHeight, { applyViewTransform: false });
+  }, [axis, canvasWidth, canvasHeight]);
 
   const worldToCanvasForSnap = useCallback((worldX: number, worldY: number): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const currentSize = canvas.width;
-    return worldToCanvas(worldX, worldY, axis, currentSize, { applyViewTransform: true }, zoom, panOffset);
-  }, [axis, zoom, panOffset]); // 不再依赖 canvasSize
+    return worldToCanvas(worldX, worldY, axis, canvasWidth, canvasHeight, { applyViewTransform: true }, zoom, panOffset);
+  }, [axis, canvasWidth, canvasHeight, zoom, panOffset]);
 
   // ========== 点吸附 ==========
   const snapToExistingPoint = useCallback((
@@ -830,20 +807,23 @@ export function MainCanvas() {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const currentSize = canvas.width; // 使用 canvas 实际像素尺寸
 
-    ctx.clearRect(0, 0, currentSize, currentSize);
+    // 使用全局画布尺寸
+    const currentWidth = canvasWidth;
+    const currentHeight = canvasHeight;
+
+    ctx.clearRect(0, 0, currentWidth, currentHeight);
     ctx.save();
-    ctx.translate(currentSize / 2 + panOffset.x, currentSize / 2 + panOffset.y);
+    ctx.translate(currentWidth / 2 + panOffset.x, currentHeight / 2 + panOffset.y);
     ctx.scale(zoom, zoom);
-    ctx.translate(-currentSize / 2, -currentSize / 2);
+    ctx.translate(-currentWidth / 2, -currentHeight / 2);
 
     // 绘制图片图层
     if (imageState.originalImage && imageState.imageSrc) {
       const imageLayer = layers.find(l => l.id === imageState.imageLayerId);
       const isImageLayerVisible = imageLayer?.visible ?? false;
       if (isImageLayerVisible) {
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, currentSize, currentSize);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, currentWidth, currentHeight);
         ctx.globalAlpha = imageLayer?.opacity ?? 0.5;
         const img = imageState.originalImage;
         
@@ -860,19 +840,19 @@ export function MainCanvas() {
         
         if (imageState.selectionRect) {
           const sel = imageState.selectionRect;
-          const scaleX = currentSize / sel.width, scaleY = currentSize / sel.height;
+          const scaleX = currentWidth / sel.width, scaleY = currentHeight / sel.height;
           const fitScale = Math.min(scaleX, scaleY);
           drawWidth = sel.width * fitScale * bgScale;
           drawHeight = sel.height * fitScale * bgScale;
-          offsetX = (currentSize - drawWidth) / 2 + bgOffsetX;
-          offsetY = (currentSize - drawHeight) / 2 + bgOffsetY;
+          offsetX = (currentWidth - drawWidth) / 2 + bgOffsetX;
+          offsetY = (currentHeight - drawHeight) / 2 + bgOffsetY;
           ctx.drawImage(img, sel.x, sel.y, sel.width, sel.height, offsetX, offsetY, drawWidth, drawHeight);
         } else {
-          const fitScale = Math.min(currentSize / img.width, currentSize / img.height);
+          const fitScale = Math.min(currentWidth / img.width, currentHeight / img.height);
           drawWidth = img.width * fitScale * bgScale;
           drawHeight = img.height * fitScale * bgScale;
-          offsetX = (currentSize - drawWidth) / 2 + bgOffsetX;
-          offsetY = (currentSize - drawHeight) / 2 + bgOffsetY;
+          offsetX = (currentWidth - drawWidth) / 2 + bgOffsetX;
+          offsetY = (currentHeight - drawHeight) / 2 + bgOffsetY;
           ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
         }
         
@@ -890,7 +870,7 @@ export function MainCanvas() {
       tempCanvas.width = buffer.width;
       tempCanvas.height = buffer.height;
       tempCanvas.getContext('2d')!.putImageData(buffer, 0, 0);
-      ctx.drawImage(tempCanvas, 0, 0, currentSize, currentSize);
+      ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
     }
 
     // 坐标轴与格子
@@ -899,8 +879,8 @@ export function MainCanvas() {
       for (let i = 0; i <= grid.cols; i++) {
         // 将网格位置从世界坐标 [0,1] 映射到画布
         const worldX = i / grid.cols;
-        const pos = worldX * currentSize;
-        ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, currentSize); ctx.stroke();
+        const pos = worldX * currentWidth;
+        ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, currentHeight); ctx.stroke();
         
         // 绘制网格标签（使用 axis 范围显示）
         const axisPos = worldToAxis(worldX, 0, axis);
@@ -910,8 +890,8 @@ export function MainCanvas() {
       for (let i = 0; i <= grid.rows; i++) {
         // 将网格位置从世界坐标 [0,1] 映射到画布
         const worldY = i / grid.rows;
-        const pos = worldY * currentSize;
-        ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(currentSize, pos); ctx.stroke();
+        const pos = worldY * currentHeight;
+        ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(currentWidth, pos); ctx.stroke();
         
         // 绘制网格标签（使用 axis 范围显示）
         const axisPos = worldToAxis(0, worldY, axis);
@@ -920,18 +900,18 @@ export function MainCanvas() {
       }
       
       // 中心十字线（世界坐标 0.5 对应画布中心）
-      const centerX = currentSize / 2;
-      const centerY = currentSize / 2;
+      const centerX = currentWidth / 2;
+      const centerY = currentHeight / 2;
       ctx.strokeStyle = '#000000'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(0, centerY); ctx.lineTo(currentSize, centerY); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, currentSize); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, centerY); ctx.lineTo(currentWidth, centerY); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(centerX, 0); ctx.lineTo(centerX, currentHeight); ctx.stroke();
       
       // 轴标签（显示 axis 范围）
       ctx.fillStyle = '#666'; ctx.font = '12px monospace';
       ctx.fillText(`X: ${axis.xMin.toFixed(2)}`, 5, 18);
-      ctx.fillText(`X: ${axis.xMax.toFixed(2)}`, currentSize - 45, 18);
+      ctx.fillText(`X: ${axis.xMax.toFixed(2)}`, currentWidth - 45, 18);
       ctx.fillText(`Y: ${axis.yMax.toFixed(2)}`, 5, 30);
-      ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, currentSize - 5);
+      ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, currentHeight - 5);
     }
 
     // 绘制普通图形
@@ -1183,7 +1163,7 @@ export function MainCanvas() {
                   const pointCanvas = worldToCanvasFn(ub.point.x, ub.point.y);
                   
                   // 裁剪连线到画布边界内
-                  const clippedEnd = clipLineToCanvas(centroidCanvas, pointCanvas, currentSize);
+                  const clippedEnd = clipLineToCanvas(centroidCanvas, pointCanvas, canvasWidth, canvasHeight);
                   
                   ctx.beginPath();
                   ctx.moveTo(centroidCanvas.x, centroidCanvas.y);
@@ -1486,7 +1466,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasSize]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -2176,12 +2156,12 @@ export function MainCanvas() {
             </div>
           </div>
         )}
-        <div ref={canvasWrapperRef} style={{ aspectRatio: '1 / 1', width: 'auto', height: 'auto', maxWidth: '100%', maxHeight: '100%', position: 'relative', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
+        <div ref={canvasWrapperRef} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%', position: 'relative', boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}>
           <canvas
             ref={canvasRef}
-            width={canvasSize}
-            height={canvasSize}
-            style={{ width: '100%', height: '100%', imageRendering: 'auto', display: 'block' }}
+            width={canvasWidth}
+            height={canvasHeight}
+            style={{ imageRendering: 'auto', display: 'block', maxWidth: '100%', maxHeight: '100%' }}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
             onMouseDown={handleMouseDown}
