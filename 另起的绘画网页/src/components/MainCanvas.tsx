@@ -138,6 +138,9 @@ export function MainCanvas() {
     startBackgroundDrag,
     updateBackgroundDrag,
     endBackgroundDrag,
+    // 画布尺寸
+    canvasSize: globalCanvasSize,
+    setCanvasSize,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -150,7 +153,9 @@ export function MainCanvas() {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
-  const [canvasSize, setCanvasSize] = useState(BASE_CANVAS_SIZE);
+  // 使用全局画布尺寸，本地状态用于容器自适应
+  const [containerSize, setContainerSize] = useState(BASE_CANVAS_SIZE);
+  const canvasSize = globalCanvasSize; // 使用全局画布尺寸
   const [showDebugRegions, setShowDebugRegions] = useState(false);
   const [showGridCells, setShowGridCells] = useState(false);
   const [debugRegionId, setDebugRegionId] = useState(0);
@@ -250,7 +255,7 @@ export function MainCanvas() {
         const wrapper = canvasWrapperRef.current;
         const rect = wrapper.getBoundingClientRect();
         const size = Math.min(rect.width, rect.height);
-        setCanvasSize(size > 0 ? Math.floor(size) : BASE_CANVAS_SIZE);
+        setContainerSize(size > 0 ? Math.floor(size) : BASE_CANVAS_SIZE);
       }
     };
     updateSize();
@@ -1481,7 +1486,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasSize]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 

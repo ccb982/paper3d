@@ -74,6 +74,10 @@ interface AppState {
   setPanOffset: (offset: Point) => void;
   setPanMode: (panMode: boolean) => void;
   resetView: () => void;
+  
+  // 画布尺寸
+  canvasSize: number;
+  setCanvasSize: (size: number) => void;
 
   // 当前工具
   currentTool: ToolType;
@@ -527,6 +531,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setPanOffset: (offset) => set({ panOffset: offset }),
   setPanMode: (panMode) => set({ isPanMode: panMode }),
   resetView: () => set({ zoom: 1.0, panOffset: { x: 0, y: 0 } }),
+  
+  // 画布尺寸
+  canvasSize: 512,
+  setCanvasSize: (size) => set({ canvasSize: Math.max(64, Math.min(2048, size)) }),
 
   currentTool: 'select',
   setCurrentTool: (tool) => set({ currentTool: tool }),

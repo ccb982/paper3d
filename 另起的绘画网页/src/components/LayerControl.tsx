@@ -30,6 +30,9 @@ export function LayerControl() {
     setBackgroundScale,
     resetBackgroundTransform,
     setBackgroundDragging,
+    // 画布尺寸
+    canvasSize,
+    setCanvasSize,
   } = useAppStore();
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -435,6 +438,30 @@ export function LayerControl() {
         </div>
         <p style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
           开启拖动后，在画布上拖拽移动背景
+        </p>
+      </div>
+
+      <div className="sidebar-section">
+        <h3>画布尺寸</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <input
+            type="number"
+            min={64}
+            max={2048}
+            step={64}
+            value={canvasSize ?? 512}
+            onChange={(e) => setCanvasSize(parseInt(e.target.value) || 512)}
+            style={{ width: '80px', fontSize: '12px' }}
+          />
+          <span style={{ fontSize: '12px' }}>px</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <button onClick={() => setCanvasSize(256)} className="btn btn-primary">256</button>
+          <button onClick={() => setCanvasSize(512)} className="btn btn-primary">512</button>
+          <button onClick={() => setCanvasSize(1024)} className="btn btn-primary">1024</button>
+        </div>
+        <p style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
+          调整画布分辨率（64-2048）
         </p>
       </div>
 
