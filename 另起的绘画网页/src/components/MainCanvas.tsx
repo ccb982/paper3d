@@ -132,7 +132,14 @@ export function MainCanvas() {
     extractPolygonsFromPaintBuffer,
     addPixelToRegion,
     regionIdTexture,
+    isRestoringHistory,
   } = useAppStore();
+
+  // 使用 ref 追踪恢复状态，避免触发 useEffect
+  const isRestoringRef = useRef(false);
+  useEffect(() => {
+    isRestoringRef.current = isRestoringHistory;
+  }, [isRestoringHistory]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -1933,7 +1940,12 @@ export function MainCanvas() {
   }, [regionAnnotationEditor, updateRegionAnnotationWithRegionId, addRegionAnnotation, activeLayerId, layers]);
 
   // 监听区域注释变化，保存到历史快照（不保存到 localStorage）
+  // 使用 ref 标志阻止撤销/重做后的循环保存
   useEffect(() => {
+    if (isRestoringRef.current) {
+      // 如果是撤销/重做恢复，不保存
+      return;
+    }
     saveHistory();
   }, [regionAnnotations, saveHistory]);
 

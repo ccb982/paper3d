@@ -144,13 +144,24 @@ interface AppState {
 
   // 撤销历史（复合快照）
   historySnapshots: Array<{ 
+    id: number;
     shapes: Shape[]; 
     pointAnnotations: PointAnnotation[]; 
     regionAnnotations: RegionAnnotation[]; 
     regionPixelsMap: Map<number, string[]>;
     paintBuffers: Record<string, { width: number; height: number; data: number[] }>;
+    // 操作统计
+    stats: {
+      shapeCount: number;           // 线条总数
+      shapeTypes: string[];        // 线条类型列表
+      pointAnnotationCount: number; // 点注释数量
+      regionAnnotationCount: number; // 区域注释数量
+      paintedPixelCount: number;   // 绘画像素总数
+    };
   }>;
   historyIndex: number;
+  /** 标志：是否正在恢复历史（撤销/重做中），用于阻止循环保存 */
+  isRestoringHistory: boolean;
   saveHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -500,15 +511,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   updatePointAnnotation: (id, text) =>
-    set((state) => ({
-      pointAnnotations: state.pointAnnotations.map(a =>
-        a.id === id ? { ...a, text, updatedAt: Date.now() } : a
-      ),
-    })),
+    set((state) => {
+      get().saveHistory(); // 保存历史
+      return {
+        pointAnnotations: state.pointAnnotations.map(a =>
+          a.id === id ? { ...a, text, updatedAt: Date.now() } : a
+        ),
+      };
+    }),
   removePointAnnotation: (id) =>
-    set((state) => ({
-      pointAnnotations: state.pointAnnotations.filter(a => a.id !== id),
-    })),
+    set((state) => {
+      get().saveHistory(); // 保存历史
+      return { pointAnnotations: state.pointAnnotations.filter(a => a.id !== id) };
+    }),
   clearPointAnnotations: () => set({ pointAnnotations: [] }),
 
   regionAnnotations: [],
@@ -536,22 +551,29 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
   updateRegionAnnotation: (id, text) =>
-    set((state) => ({
-      regionAnnotations: state.regionAnnotations.map(a =>
-        a.id === id ? { ...a, text, updatedAt: Date.now() } : a
-      ),
-    })),
+    set((state) => {
+      get().saveHistory(); // 保存历史
+      return {
+        regionAnnotations: state.regionAnnotations.map(a =>
+          a.id === id ? { ...a, text, updatedAt: Date.now() } : a
+        ),
+      };
+    }),
   // 更新区域注释（包含 regionId）
   updateRegionAnnotationWithRegionId: (id, text, regionId) =>
-    set((state) => ({
-      regionAnnotations: state.regionAnnotations.map(a =>
-        a.id === id ? { ...a, text, regionId, updatedAt: Date.now() } : a
-      ),
-    })),
+    set((state) => {
+      get().saveHistory(); // 保存历史
+      return {
+        regionAnnotations: state.regionAnnotations.map(a =>
+          a.id === id ? { ...a, text, regionId, updatedAt: Date.now() } : a
+        ),
+      };
+    }),
   removeRegionAnnotation: (id) =>
-    set((state) => ({
-      regionAnnotations: state.regionAnnotations.filter(a => a.id !== id),
-    })),
+    set((state) => {
+      get().saveHistory(); // 保存历史
+      return { regionAnnotations: state.regionAnnotations.filter(a => a.id !== id) };
+    }),
   clearRegionAnnotations: () => set({ regionAnnotations: [] }),
 
   // 色块相关
@@ -684,30 +706,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   colorBlockRegionsCache: {},
   refreshColorBlockCache: (layerId) => {
     const state = get();
-    // 只检测 polygon 类型的形状（上色画笔生成的色块）
-    const colorBlockShapes = state.shapes.filter(s => s.layerId === layerId && s.type === 'polygon');
+    // 直接使用 regionPolygonsCache（区域注释算法检测到的封闭区域）
+    const regions = state.regionPolygonsCache[layerId] || [];
     console.log('==========================================');
-    console.log('[色块区域检测] 色块形状总数:', colorBlockShapes.length);
-
-    if (colorBlockShapes.length === 0) {
-      set((s) => ({
-        colorBlockRegionsCache: { ...s.colorBlockRegionsCache, [layerId]: [] },
-      }));
-      return;
-    }
-
-    // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
-    const worldBounds = {
-      xMin: 0,
-      xMax: 1,
-      yMin: 0,
-      yMax: 1,
-    };
-
-    // 使用相同的区域检测算法
-    const regions = computeRegionsExact(colorBlockShapes, worldBounds, 300, 1.0);
-    console.log('[色块区域检测] 检测到的封闭区域数量:', regions.length);
-    console.log('==========================================');
+    console.log('[色块区域检测] 区域总数:', regions.length);
     
     set((s) => ({
       colorBlockRegionsCache: { ...s.colorBlockRegionsCache, [layerId]: regions },
@@ -791,14 +793,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [], regionPixelsMap: new Map(), paintBuffers: {} }],
+  historySnapshots: [{ 
+    id: 0, 
+    shapes: [], 
+    pointAnnotations: [], 
+    regionAnnotations: [], 
+    regionPixelsMap: new Map(), 
+    paintBuffers: {},
+    stats: { shapeCount: 0, shapeTypes: [], pointAnnotationCount: 0, regionAnnotationCount: 0, paintedPixelCount: 0 }
+  }],
   historyIndex: 0,
+  isRestoringHistory: false,
   saveHistory: () =>
     set((state) => {
+      // 如果正在恢复历史，跳过保存
+      if (state.isRestoringHistory) {
+        console.log('[快照保存] 跳过（正在恢复历史）');
+        return state;
+      }
       // 将 regionPixelsMap 转换为可序列化格式
       const serializedRegionPixelsMap = new Map<number, string[]>();
       state.regionPixelsMap.forEach((pixels, regionId) => {
         serializedRegionPixelsMap.set(regionId, Array.from(pixels));
+      });
+      
+      // 计算绘画像素总数
+      let paintedPixelCount = 0;
+      serializedRegionPixelsMap.forEach((pixels) => {
+        paintedPixelCount += pixels.length;
       });
       
       // 将 paintBuffers（普通对象）转换为可序列化格式
@@ -813,16 +835,33 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
       
+      // 统计线条类型
+      const shapeTypes = [...new Set(state.shapes.map(s => s.type))];
+      
+      const snapshotId = Date.now();
       const newSnapshot = { 
+        id: snapshotId,
         shapes: [...state.shapes], 
         pointAnnotations: [...state.pointAnnotations],
         regionAnnotations: [...state.regionAnnotations],
         regionPixelsMap: serializedRegionPixelsMap,
         paintBuffers: serializedPaintBuffers,
+        stats: {
+          shapeCount: state.shapes.length,
+          shapeTypes: shapeTypes,
+          pointAnnotationCount: state.pointAnnotations.length,
+          regionAnnotationCount: state.regionAnnotations.length,
+          paintedPixelCount: paintedPixelCount,
+        },
       };
       const newHistory = state.historySnapshots.slice(0, state.historyIndex + 1);
       newHistory.push(newSnapshot);
       if (newHistory.length > 30) newHistory.shift(); // 减少历史记录数量以节省内存
+      console.log(`[快照保存] ID: ${snapshotId}, 索引: ${newHistory.length - 1}`);
+      console.log(`  线条: ${state.shapes.length}个 (类型: ${shapeTypes.join(', ') || '无'})`);
+      console.log(`  点注释: ${state.pointAnnotations.length}个`);
+      console.log(`  区域注释: ${state.regionAnnotations.length}个`);
+      console.log(`  绘画像素: ${paintedPixelCount}个`);
       return { historySnapshots: newHistory, historyIndex: newHistory.length - 1 };
     }),
   undo: () =>
@@ -843,14 +882,34 @@ export const useAppStore = create<AppState>((set, get) => ({
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
         
-        return {
+        console.log(`[撤销] 恢复到快照 ID: ${snapshot.id}, 索引: ${newIndex}`);
+        console.log(`  线条: ${snapshot.stats.shapeCount}个 (类型: ${snapshot.stats.shapeTypes.join(', ') || '无'})`);
+        console.log(`  点注释: ${snapshot.stats.pointAnnotationCount}个`);
+        console.log(`  区域注释: ${snapshot.stats.regionAnnotationCount}个`);
+        console.log(`  绘画像素: ${snapshot.stats.paintedPixelCount}个`);
+        
+        const newState = {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
           regionAnnotations: [...snapshot.regionAnnotations],
           regionPixelsMap: restoredRegionPixelsMap,
           paintBuffers: restoredPaintBuffers,
           historyIndex: newIndex,
+          isRestoringHistory: true, // 标记正在恢复
         };
+        
+        // 延迟重置标志并重新计算区域数据
+        setTimeout(() => {
+          const state = get();
+          // 重新计算所有图层的区域数据
+          const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
+          layerIds.forEach(layerId => {
+            state.refreshRegionCache(layerId);
+          });
+          set({ isRestoringHistory: false });
+        }, 0);
+        
+        return newState;
       }
       return state;
     }),
@@ -872,14 +931,34 @@ export const useAppStore = create<AppState>((set, get) => ({
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
         
-        return {
+        console.log(`[重做] 恢复到快照 ID: ${snapshot.id}, 索引: ${newIndex}`);
+        console.log(`  线条: ${snapshot.stats.shapeCount}个 (类型: ${snapshot.stats.shapeTypes.join(', ') || '无'})`);
+        console.log(`  点注释: ${snapshot.stats.pointAnnotationCount}个`);
+        console.log(`  区域注释: ${snapshot.stats.regionAnnotationCount}个`);
+        console.log(`  绘画像素: ${snapshot.stats.paintedPixelCount}个`);
+        
+        const newState = {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
           regionAnnotations: [...snapshot.regionAnnotations],
           regionPixelsMap: restoredRegionPixelsMap,
           paintBuffers: restoredPaintBuffers,
           historyIndex: newIndex,
+          isRestoringHistory: true, // 标记正在恢复
         };
+        
+        // 延迟重置标志并重新计算区域数据
+        setTimeout(() => {
+          const state = get();
+          // 重新计算所有图层的区域数据
+          const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
+          layerIds.forEach(layerId => {
+            state.refreshRegionCache(layerId);
+          });
+          set({ isRestoringHistory: false });
+        }, 0);
+        
+        return newState;
       }
       return state;
     }),
