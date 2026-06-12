@@ -137,6 +137,7 @@ export function MainCanvas() {
     setBackgroundDragging,
     startBackgroundDrag,
     updateBackgroundDrag,
+    endBackgroundDrag,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -1523,6 +1524,10 @@ export function MainCanvas() {
     // 优先处理背景拖动模式
     if (imageState.isBackgroundDragging && imageState.backgroundDragStart) {
       updateBackgroundDrag(e.clientX, e.clientY);
+      // 立即触发重绘
+      requestAnimationFrame(() => {
+        drawCanvas();
+      });
       return;
     }
 
@@ -1605,7 +1610,7 @@ export function MainCanvas() {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1798,7 +1803,7 @@ export function MainCanvas() {
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // 处理背景拖动结束
     if (imageState.isBackgroundDragging) {
-      // 背景拖动不需要保存历史，只是临时变换
+      endBackgroundDrag(); // 重置拖动起始位置
       return;
     }
 

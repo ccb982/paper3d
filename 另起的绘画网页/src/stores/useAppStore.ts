@@ -188,12 +188,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     selectionRect: null,
     imageLayerId: null,
     // 背景层变换参数
-  offsetX: 0,      // 背景图片偏移 X
-  offsetY: 0,      // 背景图片偏移 Y
-  scale: 1,        // 背景图片缩放比例
-  isBackgroundDragging: false, // 是否处于背景拖动模式
-  backgroundDragStart: { x: 0, y: 0 } | null, // 拖动起始位置
-},
+    offsetX: 0,      // 背景图片偏移 X
+    offsetY: 0,      // 背景图片偏移 Y
+    scale: 1,        // 背景图片缩放比例
+    isBackgroundDragging: false, // 是否处于背景拖动模式
+    backgroundDragStart: null, // 拖动起始位置（初始为null）
+  },
   setOriginalImage: (img, src) =>
     set((state) => {
       const imageLayerId = `image_layer_${Date.now()}`;
@@ -254,6 +254,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
       };
     }),
+  endBackgroundDrag: () =>
+    set((state) => ({
+      imageState: { ...state.imageState, backgroundDragStart: null },
+    })),
   clearImage: () =>
     set((state) => {
       const imageLayerId = state.imageState.imageLayerId;
@@ -265,7 +269,17 @@ export const useAppStore = create<AppState>((set, get) => ({
         displayId: index + 1,
       }));
       return {
-        imageState: { originalImage: null, imageSrc: null, selectionRect: null, imageLayerId: null, offsetX: 0, offsetY: 0, scale: 1 },
+        imageState: { 
+          originalImage: null, 
+          imageSrc: null, 
+          selectionRect: null, 
+          imageLayerId: null, 
+          offsetX: 0, 
+          offsetY: 0, 
+          scale: 1,
+          isBackgroundDragging: false,
+          backgroundDragStart: null,
+        },
         isPreviewStage: false,
         layers: renumberedLayers,
         shapes: imageLayerId
