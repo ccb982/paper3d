@@ -654,7 +654,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   regionPolygonsCache: {},
   regionScanlineCache: {},
-  refreshRegionCache: (layerId) => {
+  refreshRegionCache: (layerId, options?: { clearPaintData?: boolean }) => {
     const state = get();
     const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
     console.log('==========================================');
@@ -688,9 +688,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     console.log('==========================================');
     
-    // 区域重计算后，清空该图层的画笔缓冲区和区域像素记录
-    state.clearPaintBuffer(layerId);
-    state.clearRegionPixels();
+    // 区域重计算后，仅在需要时清空该图层的画笔缓冲区和区域像素记录
+    // 默认不清空（用于撤销/重做后的重新计算），仅在添加/删除形状时手动调用清空
+    if (options?.clearPaintData !== false) {
+      state.clearPaintBuffer(layerId);
+      state.clearRegionPixels();
+    }
     
     set((s) => ({
       regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
@@ -901,10 +904,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         // 延迟重置标志并重新计算区域数据
         setTimeout(() => {
           const state = get();
-          // 重新计算所有图层的区域数据
+          // 重新计算所有图层的区域数据，但不清空绘画数据
           const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
           layerIds.forEach(layerId => {
-            state.refreshRegionCache(layerId);
+            state.refreshRegionCache(layerId, { clearPaintData: false });
           });
           set({ isRestoringHistory: false });
         }, 0);
@@ -950,10 +953,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         // 延迟重置标志并重新计算区域数据
         setTimeout(() => {
           const state = get();
-          // 重新计算所有图层的区域数据
+          // 重新计算所有图层的区域数据，但不清空绘画数据
           const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
           layerIds.forEach(layerId => {
-            state.refreshRegionCache(layerId);
+            state.refreshRegionCache(layerId, { clearPaintData: false });
           });
           set({ isRestoringHistory: false });
         }, 0);
