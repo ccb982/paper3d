@@ -147,7 +147,7 @@ export function LayerControl() {
                 min="0.1"
                 max="1"
                 step="0.1"
-                value={layer.opacity}
+                value={layer?.opacity ?? 1}
                 onChange={(e) => {
                   e.stopPropagation();
                   updateLayer(layer.id, { opacity: parseFloat(e.target.value) });
@@ -157,7 +157,7 @@ export function LayerControl() {
                   height: '12px',
                   cursor: 'pointer',
                 }}
-                title={`透明度: ${(layer.opacity * 100).toFixed(0)}%`}
+                title={`透明度: ${((layer?.opacity ?? 1) * 100).toFixed(0)}%`}
               />
               <button
                 onClick={(e) => {
@@ -224,7 +224,7 @@ export function LayerControl() {
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
           <input
             type="checkbox"
-            checked={layerVisibility.imageLayer}
+            checked={layerVisibility?.imageLayer ?? true}
             onChange={() => toggleLayer('imageLayer')}
           />
           图片图层
@@ -232,7 +232,7 @@ export function LayerControl() {
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
           <input
             type="checkbox"
-            checked={layerVisibility.drawLayer}
+            checked={layerVisibility?.drawLayer ?? true}
             onChange={() => toggleLayer('drawLayer')}
           />
           绘制图层
@@ -240,7 +240,7 @@ export function LayerControl() {
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
           <input
             type="checkbox"
-            checked={layerVisibility.axisLayer}
+            checked={layerVisibility?.axisLayer ?? true}
             onChange={() => toggleLayer('axisLayer')}
           />
           坐标轴图层
@@ -248,7 +248,7 @@ export function LayerControl() {
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
           <input
             type="checkbox"
-            checked={layerVisibility.regionLayer}
+            checked={layerVisibility?.regionLayer ?? false}
             onChange={() => toggleLayer('regionLayer')}
           />
           区域色块图层
@@ -262,7 +262,7 @@ export function LayerControl() {
             <label>X最小</label>
             <input
               type="number"
-              value={axis.xMin}
+              value={axis?.xMin ?? 0}
               onChange={(e) => setAxis({ xMin: parseFloat(e.target.value) || 0 })}
             />
           </div>
@@ -270,7 +270,7 @@ export function LayerControl() {
             <label>X最大</label>
             <input
               type="number"
-              value={axis.xMax}
+              value={axis?.xMax ?? 1}
               onChange={(e) => setAxis({ xMax: parseFloat(e.target.value) || 1 })}
             />
           </div>
@@ -278,7 +278,7 @@ export function LayerControl() {
             <label>Y最小</label>
             <input
               type="number"
-              value={axis.yMin}
+              value={axis?.yMin ?? 0}
               onChange={(e) => setAxis({ yMin: parseFloat(e.target.value) || 0 })}
             />
           </div>
@@ -286,7 +286,7 @@ export function LayerControl() {
             <label>Y最大</label>
             <input
               type="number"
-              value={axis.yMax}
+              value={axis?.yMax ?? 1}
               onChange={(e) => setAxis({ yMax: parseFloat(e.target.value) || 1 })}
             />
           </div>
@@ -306,8 +306,8 @@ export function LayerControl() {
           <label style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
             <input
               type="checkbox"
-              checked={grid.visible}
-              onChange={() => setGrid({ visible: !grid.visible })}
+              checked={grid?.visible ?? true}
+              onChange={() => setGrid({ visible: !(grid?.visible ?? true) })}
             />
             显示格子
           </label>
@@ -319,7 +319,7 @@ export function LayerControl() {
               type="number"
               min={1}
               max={100}
-              value={grid.cols}
+              value={grid?.cols ?? 10}
               onChange={(e) => setGrid({ cols: Math.max(1, parseInt(e.target.value) || 10) })}
             />
           </div>
@@ -329,7 +329,7 @@ export function LayerControl() {
               type="number"
               min={1}
               max={100}
-              value={grid.rows}
+              value={grid?.rows ?? 10}
               onChange={(e) => setGrid({ rows: Math.max(1, parseInt(e.target.value) || 10) })}
             />
           </div>
@@ -339,20 +339,20 @@ export function LayerControl() {
       <div className="sidebar-section">
         <h3>缩放与平移</h3>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-          <span style={{ fontSize: '12px', minWidth: '40px' }}>{Math.round(zoom * 100)}%</span>
+          <span style={{ fontSize: '12px', minWidth: '40px' }}>{Math.round((zoom ?? 1) * 100)}%</span>
           <input
             type="range"
             min={10}
             max={1000}
-            value={zoom * 100}
+            value={(zoom ?? 1) * 100}
             onChange={(e) => setZoom(parseInt(e.target.value) / 100)}
             style={{ flex: 1 }}
           />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-          <button onClick={() => setZoom(zoom * 0.8)} className="btn btn-primary">-</button>
+          <button onClick={() => setZoom((zoom ?? 1) * 0.8)} className="btn btn-primary">-</button>
           <button onClick={() => setZoom(1.0)} className="btn btn-primary">100%</button>
-          <button onClick={() => setZoom(zoom * 1.25)} className="btn btn-primary">+</button>
+          <button onClick={() => setZoom((zoom ?? 1) * 1.25)} className="btn btn-primary">+</button>
         </div>
         <button
           onClick={resetView}

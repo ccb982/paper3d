@@ -988,6 +988,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       axis: state.axis,
       grid: state.grid,
       layerVisibility: state.layerVisibility,
+      zoom: state.zoom, // 保存缩放状态
+      panOffset: state.panOffset, // 保存平移偏移
     };
     localStorage.setItem('drawing-app-data', JSON.stringify(data));
   },
@@ -1141,6 +1143,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           layerVisibility: data.layerVisibility || state.layerVisibility,
           colorBlocks: data.colorBlocks || [],
           nextColorBlockId: data.nextColorBlockId || 1,
+          zoom: data.zoom ?? state.zoom ?? 1.0, // 加载缩放状态，使用默认值
+          panOffset: data.panOffset ?? state.panOffset ?? { x: 0, y: 0 }, // 加载平移偏移
         };
       });
     } catch (e) {
