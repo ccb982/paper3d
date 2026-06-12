@@ -149,8 +149,6 @@ interface AppState {
     regionAnnotations: RegionAnnotation[]; 
     regionPixelsMap: Map<number, string[]>;
     paintBuffers: Record<string, { width: number; height: number; data: number[] }>;
-    colorBlocks: ColorBlock[];
-    nextColorBlockId: number;
   }>;
   historyIndex: number;
   saveHistory: () => void;
@@ -793,7 +791,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [], regionPixelsMap: new Map(), paintBuffers: {}, colorBlocks: [], nextColorBlockId: 1 }],
+  historySnapshots: [{ shapes: [], pointAnnotations: [], regionAnnotations: [], regionPixelsMap: new Map(), paintBuffers: {} }],
   historyIndex: 0,
   saveHistory: () =>
     set((state) => {
@@ -821,8 +819,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         regionAnnotations: [...state.regionAnnotations],
         regionPixelsMap: serializedRegionPixelsMap,
         paintBuffers: serializedPaintBuffers,
-        colorBlocks: [...state.colorBlocks],
-        nextColorBlockId: state.nextColorBlockId,
       };
       const newHistory = state.historySnapshots.slice(0, state.historyIndex + 1);
       newHistory.push(newSnapshot);
@@ -847,42 +843,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
         
-        // 恢复 colorBlocks 和 nextColorBlockId
-        const restoredColorBlocks = snapshot.colorBlocks || [];
-        const restoredNextColorBlockId = snapshot.nextColorBlockId || 1;
-        
-        // 清空当前图层的缓存（避免使用旧数据）
-        const activeId = state.activeLayerId;
-        const newPolyCache = { ...state.regionPolygonsCache };
-        const newColorBlockCache = { ...state.colorBlockRegionsCache };
-        const newRegionIdTexture = new Map(state.regionIdTexture);
-        if (activeId) {
-          delete newPolyCache[activeId];
-          delete newColorBlockCache[activeId];
-          newRegionIdTexture.delete(activeId);
-        }
-        
-        // 异步重建缓存
-        setTimeout(() => {
-          const store = useAppStore.getState();
-          if (activeId) {
-            store.refreshRegionCache(activeId);
-            store.refreshColorBlockCache(activeId);
-            store.generateRegionIdTexture(activeId);
-          }
-        }, 0);
-        
         return {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
           regionAnnotations: [...snapshot.regionAnnotations],
           regionPixelsMap: restoredRegionPixelsMap,
           paintBuffers: restoredPaintBuffers,
-          colorBlocks: restoredColorBlocks,
-          nextColorBlockId: restoredNextColorBlockId,
-          regionPolygonsCache: newPolyCache,
-          colorBlockRegionsCache: newColorBlockCache,
-          regionIdTexture: newRegionIdTexture,
           historyIndex: newIndex,
         };
       }
@@ -906,42 +872,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
         
-        // 恢复 colorBlocks 和 nextColorBlockId
-        const restoredColorBlocks = snapshot.colorBlocks || [];
-        const restoredNextColorBlockId = snapshot.nextColorBlockId || 1;
-        
-        // 清空当前图层的缓存（避免使用旧数据）
-        const activeId = state.activeLayerId;
-        const newPolyCache = { ...state.regionPolygonsCache };
-        const newColorBlockCache = { ...state.colorBlockRegionsCache };
-        const newRegionIdTexture = new Map(state.regionIdTexture);
-        if (activeId) {
-          delete newPolyCache[activeId];
-          delete newColorBlockCache[activeId];
-          newRegionIdTexture.delete(activeId);
-        }
-        
-        // 异步重建缓存
-        setTimeout(() => {
-          const store = useAppStore.getState();
-          if (activeId) {
-            store.refreshRegionCache(activeId);
-            store.refreshColorBlockCache(activeId);
-            store.generateRegionIdTexture(activeId);
-          }
-        }, 0);
-        
         return {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
           regionAnnotations: [...snapshot.regionAnnotations],
           regionPixelsMap: restoredRegionPixelsMap,
           paintBuffers: restoredPaintBuffers,
-          colorBlocks: restoredColorBlocks,
-          nextColorBlockId: restoredNextColorBlockId,
-          regionPolygonsCache: newPolyCache,
-          colorBlockRegionsCache: newColorBlockCache,
-          regionIdTexture: newRegionIdTexture,
           historyIndex: newIndex,
         };
       }
