@@ -9,6 +9,7 @@ import { generatePolygonFromPoints } from '../utils/geometryUtils';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 
 const BASE_CANVAS_SIZE = 512;
+const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
 // ========== 几何辅助函数 ==========
 function distanceToLineSegment(
@@ -179,15 +180,14 @@ export function MainCanvas() {
     centerWorld: Point,
     radiusWorld: number
   ) => {
-    const canvasSize = BASE_CANVAS_SIZE;
-    const centerX = centerWorld.x * canvasSize;
-    const centerY = (1 - centerWorld.y) * canvasSize;
-    const radiusPx = radiusWorld * canvasSize;
+    const centerX = centerWorld.x * PAINT_BUFFER_SIZE;
+    const centerY = (1 - centerWorld.y) * PAINT_BUFFER_SIZE;
+    const radiusPx = radiusWorld * PAINT_BUFFER_SIZE;
     const radiusSq = radiusPx * radiusPx;
     const minX = Math.max(0, Math.floor(centerX - radiusPx));
-    const maxX = Math.min(canvasSize - 1, Math.ceil(centerX + radiusPx));
+    const maxX = Math.min(PAINT_BUFFER_SIZE - 1, Math.ceil(centerX + radiusPx));
     const minY = Math.max(0, Math.floor(centerY - radiusPx));
-    const maxY = Math.min(canvasSize - 1, Math.ceil(centerY + radiusPx));
+    const maxY = Math.min(PAINT_BUFFER_SIZE - 1, Math.ceil(centerY + radiusPx));
 
     // 获取当前图层的区域ID纹理
     const layerId = activeLayerId || layers[0]?.id;
@@ -201,7 +201,7 @@ export function MainCanvas() {
         const dy = y - centerY;
         if (dx * dx + dy * dy <= radiusSq) {
           // 从纹理中快速查询区域ID（O(1)操作）
-          const regionId = texture[y * canvasSize + x];
+          const regionId = texture[y * PAINT_BUFFER_SIZE + x];
           if (regionId !== 0) {
             addPixelToRegion(regionId, x, y);
           }
@@ -800,7 +800,7 @@ export function MainCanvas() {
         }
       }
     }
-  }, [worldToCanvas, lineWidth, currentColor]);
+  }, [worldToCanvasFn, lineWidth, currentColor]);
 
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1542,12 +1542,12 @@ export function MainCanvas() {
       const texture = regionIdTexture.get(layerId);
       if (!texture) return;
 
-      const canvasSize = BASE_CANVAS_SIZE;
-      const canvasX = Math.floor(worldCoords.x * canvasSize);
-      const canvasY = Math.floor((1 - worldCoords.y) * canvasSize);
+      // 使用固定缓冲区尺寸进行纹理索引（纹理固定为512x512）
+      const canvasX = Math.floor(worldCoords.x * PAINT_BUFFER_SIZE);
+      const canvasY = Math.floor((1 - worldCoords.y) * PAINT_BUFFER_SIZE);
       
       // 从纹理中获取区域ID（O(1)操作）
-      const regionId = texture[canvasY * canvasSize + canvasX];
+      const regionId = texture[canvasY * PAINT_BUFFER_SIZE + canvasX];
       if (regionId !== 0) {
         // 记录圆内所有像素到对应区域（使用纹理快速查询）
         recordCirclePixelsToRegions(worldCoords, paintBrushSize);
@@ -1557,7 +1557,7 @@ export function MainCanvas() {
         }
 
         updatePaintBuffer(layerId, (imgData) => {
-          drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+          drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, PAINT_BUFFER_SIZE);
         });
 
         if (lastPaintPointRef.current) {
@@ -1571,17 +1571,17 @@ export function MainCanvas() {
               const interpX = lastPaintPointRef.current.x + (worldCoords.x - lastPaintPointRef.current.x) * t;
               const interpY = lastPaintPointRef.current.y + (worldCoords.y - lastPaintPointRef.current.y) * t;
               
-              // 插值点使用纹理查询区域ID
-              const interpCanvasX = Math.floor(interpX * canvasSize);
-              const interpCanvasY = Math.floor((1 - interpY) * canvasSize);
-              const interpRegionId = texture[interpCanvasY * canvasSize + interpCanvasX];
+              // 插值点使用纹理查询区域ID（缓冲区固定512x512）
+              const interpCanvasX = Math.floor(interpX * PAINT_BUFFER_SIZE);
+              const interpCanvasY = Math.floor((1 - interpY) * PAINT_BUFFER_SIZE);
+              const interpRegionId = texture[interpCanvasY * PAINT_BUFFER_SIZE + interpCanvasX];
               
               if (interpRegionId !== 0) {
                 // 记录插值点圆内像素（使用纹理快速查询）
                 recordCirclePixelsToRegions({ x: interpX, y: interpY }, paintBrushSize);
                 
                 updatePaintBuffer(layerId, (imgData) => {
-                  drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+                  drawCircleOnBuffer(imgData, { x: interpX, y: interpY }, paintBrushSize, currentColor, PAINT_BUFFER_SIZE);
                 });
               }
             }
@@ -1741,20 +1741,19 @@ export function MainCanvas() {
         // 使用预计算的区域ID纹理快速查询区域ID
         const texture = regionIdTexture.get(layerId);
         if (texture) {
-          // 将世界坐标转换为画布像素坐标
-          const canvasSize = BASE_CANVAS_SIZE;
-          const canvasX = Math.floor(worldCoords.x * canvasSize);
-          const canvasY = Math.floor((1 - worldCoords.y) * canvasSize); // Y轴翻转
+          // 将世界坐标转换为缓冲区像素坐标（缓冲区固定512x512）
+          const canvasX = Math.floor(worldCoords.x * PAINT_BUFFER_SIZE);
+          const canvasY = Math.floor((1 - worldCoords.y) * PAINT_BUFFER_SIZE); // Y轴翻转
           
           // 从纹理中获取区域ID（O(1)操作）
-          const regionId = texture[canvasY * canvasSize + canvasX];
+          const regionId = texture[canvasY * PAINT_BUFFER_SIZE + canvasX];
           if (regionId !== 0) {
             // 记录圆内所有像素到对应区域
             recordCirclePixelsToRegions(worldCoords, paintBrushSize);
             
             if (!paintBuffers[layerId]) initPaintBuffer(layerId);
             updatePaintBuffer(layerId, (imgData) => {
-              drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, BASE_CANVAS_SIZE);
+              drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, PAINT_BUFFER_SIZE);
             });
           }
         }
@@ -1814,17 +1813,16 @@ export function MainCanvas() {
         const texture = regionIdTexture.get(layerId);
         if (texture) {
           updatePaintBuffer(layerId, (imgData) => {
-            const canvasSize = BASE_CANVAS_SIZE;
             const data = imgData.data;
             
-            for (let y = 0; y < canvasSize; y++) {
-              for (let x = 0; x < canvasSize; x++) {
+            for (let y = 0; y < PAINT_BUFFER_SIZE; y++) {
+              for (let x = 0; x < PAINT_BUFFER_SIZE; x++) {
                 // 从纹理中快速查询区域ID（O(1)操作）
-                const regionId = texture[y * canvasSize + x];
+                const regionId = texture[y * PAINT_BUFFER_SIZE + x];
                 
                 // 如果不在任何区域内且该像素有颜色，则清除
                 if (regionId === 0) {
-                  const idx = (y * canvasSize + x) * 4;
+                  const idx = (y * PAINT_BUFFER_SIZE + x) * 4;
                   if (data[idx + 3] > 0) { // 检查 alpha 通道
                     data[idx] = 0;     // R
                     data[idx + 1] = 0; // G
