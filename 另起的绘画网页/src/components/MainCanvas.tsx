@@ -133,6 +133,10 @@ export function MainCanvas() {
     addPixelToRegion,
     regionIdTexture,
     isRestoringHistory,
+    // 背景拖动
+    setBackgroundDragging,
+    startBackgroundDrag,
+    updateBackgroundDrag,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -836,19 +840,38 @@ export function MainCanvas() {
         ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, currentSize, currentSize);
         ctx.globalAlpha = imageLayer?.opacity ?? 0.5;
         const img = imageState.originalImage;
+        
+        // 保存当前状态
+        ctx.save();
+        
+        // 应用背景层变换
+        const bgOffsetX = imageState.offsetX ?? 0;
+        const bgOffsetY = imageState.offsetY ?? 0;
+        const bgScale = imageState.scale ?? 1;
+        
+        // 计算图片绘制位置（居中基础上应用变换）
+        let drawWidth: number, drawHeight: number, offsetX: number, offsetY: number;
+        
         if (imageState.selectionRect) {
           const sel = imageState.selectionRect;
           const scaleX = currentSize / sel.width, scaleY = currentSize / sel.height;
-          const scale = Math.min(scaleX, scaleY);
-          const drawWidth = sel.width * scale, drawHeight = sel.height * scale;
-          const offsetX = (currentSize - drawWidth) / 2, offsetY = (currentSize - drawHeight) / 2;
+          const fitScale = Math.min(scaleX, scaleY);
+          drawWidth = sel.width * fitScale * bgScale;
+          drawHeight = sel.height * fitScale * bgScale;
+          offsetX = (currentSize - drawWidth) / 2 + bgOffsetX;
+          offsetY = (currentSize - drawHeight) / 2 + bgOffsetY;
           ctx.drawImage(img, sel.x, sel.y, sel.width, sel.height, offsetX, offsetY, drawWidth, drawHeight);
         } else {
-          const scale = Math.min(currentSize / img.width, currentSize / img.height);
-          const drawWidth = img.width * scale, drawHeight = img.height * scale;
-          const offsetX = (currentSize - drawWidth) / 2, offsetY = (currentSize - drawHeight) / 2;
+          const fitScale = Math.min(currentSize / img.width, currentSize / img.height);
+          drawWidth = img.width * fitScale * bgScale;
+          drawHeight = img.height * fitScale * bgScale;
+          offsetX = (currentSize - drawWidth) / 2 + bgOffsetX;
+          offsetY = (currentSize - drawHeight) / 2 + bgOffsetY;
           ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
         }
+        
+        // 恢复状态
+        ctx.restore();
         ctx.globalAlpha = 1;
       }
     }
@@ -1497,6 +1520,12 @@ export function MainCanvas() {
 
   // ========== 鼠标事件 ==========
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    // 优先处理背景拖动模式
+    if (imageState.isBackgroundDragging && imageState.backgroundDragStart) {
+      updateBackgroundDrag(e.clientX, e.clientY);
+      return;
+    }
+
     if (isPanning) {
       const dx = e.clientX - panStart.x;
       const dy = e.clientY - panStart.y;
@@ -1585,6 +1614,12 @@ export function MainCanvas() {
   }, [setMousePosition]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    // 优先处理背景拖动模式
+    if (imageState.isBackgroundDragging && e.button === 0) {
+      startBackgroundDrag(e.clientX, e.clientY);
+      return;
+    }
+
     if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && isPanMode)) {
       setIsPanning(true);
       setPanStart({ x: e.clientX, y: e.clientY });
@@ -1761,6 +1796,12 @@ export function MainCanvas() {
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    // 处理背景拖动结束
+    if (imageState.isBackgroundDragging) {
+      // 背景拖动不需要保存历史，只是临时变换
+      return;
+    }
+
     if (isErasing && currentTool === 'eraser') {
       // 确保最后一次擦除（如果 mouseup 时还有未被 Move 覆盖的位置，但一般 Move 已覆盖，这步可省略，保留以保万无一失）
       const coords = getCanvasCoords(e);

@@ -24,6 +24,12 @@ export function LayerControl() {
     resetView,
     isPanMode,
     setPanMode,
+    // 背景层控制
+    imageState,
+    setBackgroundOffset,
+    setBackgroundScale,
+    resetBackgroundTransform,
+    setBackgroundDragging,
   } = useAppStore();
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -370,6 +376,65 @@ export function LayerControl() {
         </button>
         <p style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>
           滚轮缩放 | Alt+拖拽平移 | 中键拖拽平移
+        </p>
+      </div>
+
+      <div className="sidebar-section">
+        <h3>背景层控制</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+          <span style={{ fontSize: '12px', minWidth: '40px' }}>{Math.round((imageState?.scale ?? 1) * 100)}%</span>
+          <input
+            type="range"
+            min={10}
+            max={500}
+            value={(imageState?.scale ?? 1) * 100}
+            onChange={(e) => setBackgroundScale(parseInt(e.target.value) / 100)}
+            style={{ flex: 1 }}
+          />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <button onClick={() => setBackgroundScale((imageState?.scale ?? 1) * 0.8)} className="btn btn-primary">-</button>
+          <button onClick={() => setBackgroundScale(1.0)} className="btn btn-primary">100%</button>
+          <button onClick={() => setBackgroundScale((imageState?.scale ?? 1) * 1.25)} className="btn btn-primary">+</button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <div>
+            <label style={{ fontSize: '11px' }}>偏移 X</label>
+            <input
+              type="number"
+              step="1"
+              value={Math.round(imageState?.offsetX ?? 0)}
+              onChange={(e) => setBackgroundOffset(parseInt(e.target.value) || 0, imageState?.offsetY ?? 0)}
+              style={{ fontSize: '11px' }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: '11px' }}>偏移 Y</label>
+            <input
+              type="number"
+              step="1"
+              value={Math.round(imageState?.offsetY ?? 0)}
+              onChange={(e) => setBackgroundOffset(imageState?.offsetX ?? 0, parseInt(e.target.value) || 0)}
+              style={{ fontSize: '11px' }}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <button
+            onClick={() => setBackgroundDragging(!(imageState?.isBackgroundDragging ?? false))}
+            className={`btn ${(imageState?.isBackgroundDragging ?? false) ? 'btn-danger' : 'btn-primary'}`}
+          >
+            {imageState?.isBackgroundDragging ? '✓ 拖动中' : '拖动背景'}
+          </button>
+          <button
+            onClick={resetBackgroundTransform}
+            className="btn btn-primary"
+          >
+            重置背景
+          </button>
+        </div>
+        <p style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
+          开启拖动后，在画布上拖拽移动背景
         </p>
       </div>
 

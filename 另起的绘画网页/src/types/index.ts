@@ -40,6 +40,12 @@ export interface ImageImportState {
     height: number;
   } | null;
   imageLayerId: string | null;
+  // 背景层变换参数
+  offsetX: number;      // 背景图片偏移 X
+  offsetY: number;      // 背景图片偏移 Y
+  scale: number;        // 背景图片缩放比例
+  isBackgroundDragging: boolean; // 是否处于背景拖动模式
+  backgroundDragStart: { x: number; y: number } | null; // 拖动起始位置
 }
 
 export interface AxisConfig {

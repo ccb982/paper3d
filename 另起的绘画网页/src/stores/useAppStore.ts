@@ -187,7 +187,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     imageSrc: null,
     selectionRect: null,
     imageLayerId: null,
-  },
+    // 背景层变换参数
+  offsetX: 0,      // 背景图片偏移 X
+  offsetY: 0,      // 背景图片偏移 Y
+  scale: 1,        // 背景图片缩放比例
+  isBackgroundDragging: false, // 是否处于背景拖动模式
+  backgroundDragStart: { x: 0, y: 0 } | null, // 拖动起始位置
+},
   setOriginalImage: (img, src) =>
     set((state) => {
       const imageLayerId = `image_layer_${Date.now()}`;
@@ -212,6 +218,42 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       imageState: { ...state.imageState, selectionRect: rect },
     })),
+  // 背景层变换控制
+  setBackgroundOffset: (offsetX, offsetY) =>
+    set((state) => ({
+      imageState: { ...state.imageState, offsetX, offsetY },
+    })),
+  setBackgroundScale: (scale) =>
+    set((state) => ({
+      imageState: { ...state.imageState, scale: Math.max(0.1, Math.min(10, scale)) },
+    })),
+  resetBackgroundTransform: () =>
+    set((state) => ({
+      imageState: { ...state.imageState, offsetX: 0, offsetY: 0, scale: 1 },
+    })),
+  // 背景拖动模式控制
+  setBackgroundDragging: (enabled) =>
+    set((state) => ({
+      imageState: { ...state.imageState, isBackgroundDragging: enabled },
+    })),
+  startBackgroundDrag: (x, y) =>
+    set((state) => ({
+      imageState: { ...state.imageState, backgroundDragStart: { x, y } },
+    })),
+  updateBackgroundDrag: (x, y) =>
+    set((state) => {
+      if (!state.imageState.backgroundDragStart) return state;
+      const dx = x - state.imageState.backgroundDragStart.x;
+      const dy = y - state.imageState.backgroundDragStart.y;
+      return {
+        imageState: {
+          ...state.imageState,
+          offsetX: state.imageState.offsetX + dx,
+          offsetY: state.imageState.offsetY + dy,
+          backgroundDragStart: { x, y },
+        },
+      };
+    }),
   clearImage: () =>
     set((state) => {
       const imageLayerId = state.imageState.imageLayerId;
@@ -223,7 +265,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         displayId: index + 1,
       }));
       return {
-        imageState: { originalImage: null, imageSrc: null, selectionRect: null, imageLayerId: null },
+        imageState: { originalImage: null, imageSrc: null, selectionRect: null, imageLayerId: null, offsetX: 0, offsetY: 0, scale: 1 },
         isPreviewStage: false,
         layers: renumberedLayers,
         shapes: imageLayerId
