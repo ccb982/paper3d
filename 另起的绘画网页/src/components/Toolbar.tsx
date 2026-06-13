@@ -56,6 +56,8 @@ export function Toolbar() {
     clearColorExtractCurves,
     colorExtractEraserMode,
     setColorExtractEraserMode,
+    clearExtractedColorBlocks,
+    setPendingExtractPolygon,
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
@@ -69,8 +71,9 @@ export function Toolbar() {
       setColorExtractPreviewPoint(null);
       setColorExtractEraserMode(false);
       clearColorExtractCurves();
+      clearExtractedColorBlocks();
     }
-  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint, setColorExtractEraserMode, clearColorExtractCurves]);
+  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint, setColorExtractEraserMode, clearColorExtractCurves, clearExtractedColorBlocks]);
 
   const handleSave = () => {
     exitColorExtractMode();
@@ -249,9 +252,14 @@ export function Toolbar() {
                 if (colorExtractPoints.length < 3) {
                   alert('请至少绘制3个点');
                 } else {
-                  console.log('[颜色提取] 提取区域，控制点:', colorExtractPoints);
-                  alert('颜色提取算法待实现，控制台已打印点集');
-                  exitColorExtractMode();  // 提取后退出模式
+                  console.log('[颜色提取] 手动触发提取，点集:', colorExtractPoints);
+                  // 保存折线到曲线列表
+                  addColorExtractCurve({ type: 'polyline', points: [...colorExtractPoints] });
+                  // 触发提取（MainCanvas 会监听并执行）
+                  setPendingExtractPolygon([...colorExtractPoints]);
+                  // 清空状态
+                  clearColorExtractPoints();
+                  setLastPolygonPoint(null);
                 }
                 setShowColorExtractMenu(false);
               }}

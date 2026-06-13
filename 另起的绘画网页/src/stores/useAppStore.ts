@@ -100,9 +100,9 @@ interface AppState {
   colorExtractRegionId: number | null;   // 当前正在绘制的曲线所在的区域 ID
   setColorExtractWaitingFor: (waiting: 'start' | 'end' | 'control' | null) => void;
   setColorExtractRegionId: (id: number | null) => void;
-  // 已绘制的贝塞尔曲线列表
-  colorExtractCurves: Array<{ start: Point; end: Point; control: Point }>;
-  addColorExtractCurve: (curve: { start: Point; end: Point; control: Point }) => void;
+  // 已绘制的曲线列表（支持贝塞尔曲线和折线）
+  colorExtractCurves: Array<{ type: 'bezier'; start: Point; end: Point; control: Point } | { type: 'polyline'; points: Point[] }>;
+  addColorExtractCurve: (curve: { type: 'bezier'; start: Point; end: Point; control: Point } | { type: 'polyline'; points: Point[] }) => void;
   removeColorExtractCurve: (index: number) => void;
   clearColorExtractCurves: () => void;
   // 颜色提取橡皮模式
@@ -111,10 +111,37 @@ interface AppState {
   // 折线模式最后一个点坐标（用于检测双击结束）
   lastPolygonPoint: Point | null;
   setLastPolygonPoint: (point: Point | null) => void;
+  // 手动触发颜色提取的多边形（Toolbar → MainCanvas 通信）
+  pendingExtractPolygon: Point[] | null;
+  setPendingExtractPolygon: (polygon: Point[] | null) => void;
+  // 次级颜色提取色块（从闭合曲线内部提取）
+  extractedColorBlocks: Array<{
+    id: number;
+    avgColor: { r: number; g: number; b: number };
+    pixels: Array<{ x: number; y: number }>;  // 世界坐标 0-1
+  }>;
+  clearExtractedColorBlocks: () => void;
+  addExtractedColorBlock: (block: { id: number; avgColor: { r: number; g: number; b: number }; pixels: Array<{ x: number; y: number }> }) => void;
+  setExtractedColorBlocks: (blocks: Array<{ id: number; avgColor: { r: number; g: number; b: number }; pixels: Array<{ x: number; y: number }> }>) => void;
+  
+  // 颜色提取调试数据（用于绘制BFS识别效果）
+  colorExtractDebugData: {
+    maskPixels: Array<{ x: number; y: number }>;  // 掩码内的像素
+    blocks: Array<{
+      id: number;
+      color: string;
+      pixels: Array<{ x: number; y: number }>;
+    }>;
+  } | null;
+  setColorExtractDebugData: (data: { maskPixels: Array<{ x: number; y: number }>; blocks: Array<{ id: number; color: string; pixels: Array<{ x: number; y: number }> }> } | null) => void;
 
   // 点吸附配置
   snapRadius: number;
   setSnapRadius: (radius: number) => void;
+  
+  // 颜色提取调试模式（Ctrl+G切换）
+  showColorExtractDebug: boolean;
+  setShowColorExtractDebug: (show: boolean) => void;
   snapEnabled: boolean;
   setSnapEnabled: (enabled: boolean) => void;
 
@@ -573,7 +600,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   colorExtractPoints: [],
   setColorExtractPoints: (points) => set({ colorExtractPoints: points }),
   addColorExtractPoint: (point) => set((state) => ({ colorExtractPoints: [...state.colorExtractPoints, point] })),
-  clearColorExtractPoints: () => set({ colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null, colorExtractRegionId: null }),
+  clearColorExtractPoints: () => set({ colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null, colorExtractRegionId: null, lastPolygonPoint: null }),
   colorExtractPreviewPoint: null,
   setColorExtractPreviewPoint: (point) => set({ colorExtractPreviewPoint: point }),
   colorExtractWaitingFor: null,
@@ -590,11 +617,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   setColorExtractEraserMode: (mode) => set({ colorExtractEraserMode: mode }),
   lastPolygonPoint: null,
   setLastPolygonPoint: (point) => set({ lastPolygonPoint: point }),
+  pendingExtractPolygon: null,
+  setPendingExtractPolygon: (polygon) => set({ pendingExtractPolygon: polygon }),
+  extractedColorBlocks: [],
+  clearExtractedColorBlocks: () => set({ extractedColorBlocks: [] }),
+  addExtractedColorBlock: (block) => set((state) => ({ extractedColorBlocks: [...state.extractedColorBlocks, block] })),
+  setExtractedColorBlocks: (blocks) => set({ extractedColorBlocks: blocks }),
+  
+  colorExtractDebugData: null,
+  setColorExtractDebugData: (data) => set({ colorExtractDebugData: data }),
 
   snapRadius: 15,
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
   snapEnabled: true,
   setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
+  
+  showColorExtractDebug: false,
+  setShowColorExtractDebug: (show) => set({ showColorExtractDebug: show }),
 
   // 线条粗细配置（0表示无，不显示线条，支持小数如0.1, 0.5等）
   lineWidth: 2,

@@ -190,6 +190,13 @@ export function MainCanvas() {
     setColorExtractEraserMode,
     lastPolygonPoint,
     setLastPolygonPoint,
+    setExtractedColorBlocks,
+    pendingExtractPolygon,
+    setPendingExtractPolygon,
+    showColorExtractDebug,
+    setShowColorExtractDebug,
+    colorExtractDebugData,
+    setColorExtractDebugData,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -312,6 +319,14 @@ export function MainCanvas() {
         setShowGridCells(prev => !prev);
         return;
       }
+      if (e.ctrlKey && e.key === 'G') {
+        setShowColorExtractDebug(prev => {
+          const newValue = !prev;
+          console.log(`[颜色提取] 调试模式 ${newValue ? '开启' : '关闭'}`);
+          return newValue;
+        });
+        return;
+      }
       if (e.key === 'Escape') {
         if (tempPoints.length > 0) {
           useAppStore.setState((s) => ({
@@ -358,6 +373,338 @@ export function MainCanvas() {
     prevToolRef.current = currentTool;
   }, [currentTool, tempPoints, colorExtractMode, clearColorExtractPoints, setColorExtractMode]);
 
+  // ========== 次级BFS区域颜色提取函数 ==========
+  
+  // 辅助函数：将世界坐标多边形光栅化为掩码（Uint8Array，1=内部，0=外部）
+  const rasterizePolygonMask = useCallback((
+    polygon: Point[],
+    width: number,
+    height: number
+  ): Uint8Array => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, width, height);
+    ctx.beginPath();
+    const pxPoints = polygon.map(p => ({ x: p.x * width, y: p.y * height }));
+    ctx.moveTo(pxPoints[0].x, pxPoints[0].y);
+    for (let i = 1; i < pxPoints.length; i++) {
+      ctx.lineTo(pxPoints[i].x, pxPoints[i].y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'black';
+    ctx.fill();
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const mask = new Uint8Array(width * height);
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      if (imageData.data[i] === 0 && imageData.data[i+1] === 0 && imageData.data[i+2] === 0) {
+        mask[i/4] = 1;
+      }
+    }
+    return mask;
+  }, []);
+
+  // 获取当前画布的世界坐标颜色数据（不应用视图变换）
+  const getWorldColorImageData = useCallback((): ImageData | null => {
+    console.log('[颜色提取] 开始获取画布颜色数据...');
+    const startTime = performance.now();
+    
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = canvasWidth;
+    offCanvas.height = canvasHeight;
+    const offCtx = offCanvas.getContext('2d')!;
+
+    // 1. 绘制背景图片（应用背景层变换，与主画布绘制逻辑保持一致）
+    if (imageState.originalImage && imageState.imageSrc) {
+      const img = imageState.originalImage;
+      const bgOffsetX = imageState.offsetX ?? 0;
+      const bgOffsetY = imageState.offsetY ?? 0;
+      const bgScale = imageState.scale ?? 1;
+      
+      console.log(`[颜色提取] 背景变换参数: offsetX=${bgOffsetX.toFixed(2)}, offsetY=${bgOffsetY.toFixed(2)}, scale=${bgScale.toFixed(2)}`);
+
+      if (imageState.selectionRect) {
+        const sel = imageState.selectionRect;
+        const scaleX = canvasWidth / sel.width;
+        const scaleY = canvasHeight / sel.height;
+        const fitScale = Math.min(scaleX, scaleY);
+        const drawWidth = sel.width * fitScale * bgScale;
+        const drawHeight = sel.height * fitScale * bgScale;
+        const offsetX = (canvasWidth - drawWidth) / 2 + bgOffsetX;
+        const offsetY = (canvasHeight - drawHeight) / 2 + bgOffsetY;
+        offCtx.drawImage(img, sel.x, sel.y, sel.width, sel.height, offsetX, offsetY, drawWidth, drawHeight);
+      } else {
+        const fitScale = Math.min(canvasWidth / img.width, canvasHeight / img.height);
+        const drawWidth = img.width * fitScale * bgScale;
+        const drawHeight = img.height * fitScale * bgScale;
+        const offsetX = (canvasWidth - drawWidth) / 2 + bgOffsetX;
+        const offsetY = (canvasHeight - drawHeight) / 2 + bgOffsetY;
+        offCtx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+      }
+    }
+
+    // 2. 绘制像素缓冲区
+    const layerId = activeLayerId || layers[0]?.id;
+    const buffer = paintBuffers[layerId];
+    if (buffer && layerVisibility.drawLayer) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = buffer.width;
+      tempCanvas.height = buffer.height;
+      tempCanvas.getContext('2d')!.putImageData(buffer, 0, 0);
+      offCtx.drawImage(tempCanvas, 0, 0, canvasWidth, canvasHeight);
+    }
+
+    const colorData = offCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const endTime = performance.now();
+    console.log(`[颜色提取] 获取颜色数据完成，耗时: ${(endTime - startTime).toFixed(2)}ms, 数据大小: ${colorData.data.length} bytes`);
+    return colorData;
+  }, [canvasWidth, canvasHeight, imageState, activeLayerId, layers, paintBuffers, layerVisibility]);
+
+  // 连通区域标记，返回色块列表
+  const extractConnectedComponents = useCallback((
+    mask: Uint8Array,
+    colorData: ImageData,
+    width: number,
+    height: number
+  ): Array<{ id: number; avgColor: { r: number; g: number; b: number }; pixels: Array<{ x: number; y: number }> }> => {
+    console.log(`[颜色提取] 开始连通区域标记，尺寸: ${width}x${height}, 颜色阈值: 30`);
+    const startTime = performance.now();
+    
+    // 统计掩码内的像素情况
+    let maskPixels = 0;
+    let opaquePixels = 0;
+    let sampleColors: string[] = [];
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] === 1) {
+        maskPixels++;
+        const srcIdx = i * 4;
+        if (colorData.data[srcIdx + 3] >= 128) {
+          opaquePixels++;
+          if (sampleColors.length < 5) {
+            const r = colorData.data[srcIdx];
+            const g = colorData.data[srcIdx + 1];
+            const b = colorData.data[srcIdx + 2];
+            sampleColors.push(`rgb(${r},${g},${b})`);
+          }
+        }
+      }
+    }
+    console.log(`[颜色提取] 掩码内像素数: ${maskPixels}, 不透明像素数: ${opaquePixels}`);
+    console.log(`[颜色提取] 掩码内前5个不透明像素颜色示例: ${sampleColors.join(', ')}`);
+    
+    const visited = new Uint8Array(width * height);
+    const components: Array<{ pixels: Array<{ x: number; y: number }>; sumR: number; sumG: number; sumB: number }> = [];
+
+    // 颜色阈值（可调）
+    const colorThreshold = 30;
+
+    const isSimilar = (c1: Uint8ClampedArray, c2: Uint8ClampedArray) => {
+      return (Math.abs(c1[0] - c2[0]) < colorThreshold &&
+              Math.abs(c1[1] - c2[1]) < colorThreshold &&
+              Math.abs(c1[2] - c2[2]) < colorThreshold);
+    };
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = y * width + x;
+        if (mask[idx] === 0 || visited[idx]) continue;
+
+        // BFS
+        const queue: [number, number][] = [[x, y]];
+        const regionPixels: Array<{ x: number; y: number }> = [];
+        let sumR = 0, sumG = 0, sumB = 0;
+        visited[idx] = 1;
+
+        while (queue.length) {
+          const [cx, cy] = queue.shift()!;
+          const pixelIdx = cy * width + cx;
+          const srcIdx = pixelIdx * 4;
+          const r = colorData.data[srcIdx];
+          const g = colorData.data[srcIdx+1];
+          const b = colorData.data[srcIdx+2];
+          if (colorData.data[srcIdx+3] < 128) continue;
+          regionPixels.push({ x: cx / width, y: cy / height });
+          sumR += r; sumG += g; sumB += b;
+
+          // 8邻域
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = cx + dx, ny = cy + dy;
+              if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+              const nIdx = ny * width + nx;
+              if (mask[nIdx] === 0 || visited[nIdx]) continue;
+              const nSrcIdx = nIdx * 4;
+              const nr = colorData.data[nSrcIdx];
+              const ng = colorData.data[nSrcIdx+1];
+              const nb = colorData.data[nSrcIdx+2];
+              if (isSimilar([r,g,b], [nr,ng,nb])) {
+                visited[nIdx] = 1;
+                queue.push([nx, ny]);
+              }
+            }
+          }
+        }
+
+        if (regionPixels.length > 0) {
+          components.push({
+            pixels: regionPixels,
+            sumR, sumG, sumB,
+          });
+        }
+      }
+    }
+
+    // 计算平均色并生成色块
+    const result = components.map((comp, idx) => {
+      const pixelCount = comp.pixels.length;
+      const avgR = comp.sumR / pixelCount;
+      const avgG = comp.sumG / pixelCount;
+      const avgB = comp.sumB / pixelCount;
+      return {
+        id: idx + 1,
+        avgColor: { r: avgR, g: avgG, b: avgB },
+        pixels: comp.pixels,
+      };
+    });
+    
+    const endTime = performance.now();
+    console.log(`[颜色提取] 连通区域标记完成，耗时: ${(endTime - startTime).toFixed(2)}ms, 提取到 ${result.length} 个色块`);
+    if (result.length > 0) {
+      console.log('[颜色提取] 色块详情:');
+      result.forEach((block, idx) => {
+        console.log(`  色块 ${idx + 1}: 像素数=${block.pixels.length}, 平均颜色=rgb(${Math.round(block.avgColor.r)}, ${Math.round(block.avgColor.g)}, ${Math.round(block.avgColor.b)})`);
+      });
+    }
+    
+    // 收集调试数据（用于 Ctrl+G 调试显示）
+    const debugMaskPixels: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] === 1) {
+        const x = (i % width) / width;
+        const y = Math.floor(i / width) / height;
+        debugMaskPixels.push({ x, y });
+      }
+    }
+    
+    const debugBlocks = result.map((block, idx) => ({
+      id: idx + 1,
+      color: `rgb(${Math.round(block.avgColor.r)}, ${Math.round(block.avgColor.g)}, ${Math.round(block.avgColor.b)})`,
+      pixels: block.pixels,
+    }));
+    
+    setColorExtractDebugData({ maskPixels: debugMaskPixels, blocks: debugBlocks });
+    
+    return result;
+  }, []);
+
+  // 主提取函数（将提取的颜色写入 paintBuffers）
+  const performColorExtraction = useCallback((polygon: Point[]) => {
+    console.log('[颜色提取] ==================== 开始颜色提取 ====================');
+    const startTime = performance.now();
+    
+    if (polygon.length < 3) {
+      console.warn('[颜色提取] 多边形点数不足3，无法提取');
+      return;
+    }
+
+    // 输出多边形信息
+    console.log(`[颜色提取] 多边形顶点数: ${polygon.length}`);
+    polygon.forEach((point, idx) => {
+      console.log(`  顶点 ${idx + 1}: (${point.x.toFixed(4)}, ${point.y.toFixed(4)})`);
+    });
+
+    // 1. 生成掩码
+    console.log(`[颜色提取] Step 1/6: 生成掩码 (${canvasWidth}x${canvasHeight})...`);
+    const mask = rasterizePolygonMask(polygon, canvasWidth, canvasHeight);
+    const maskPixelCount = mask.reduce((sum, val) => sum + val, 0);
+    console.log(`[颜色提取] 掩码生成完成，内部像素数: ${maskPixelCount}`);
+    
+    // 2. 获取当前画布颜色数据（背景 + 已有 buffer）
+    console.log('[颜色提取] Step 2/6: 获取画布颜色数据...');
+    const colorData = getWorldColorImageData();
+    if (!colorData) {
+      console.error('[颜色提取] 无法获取画布颜色数据');
+      return;
+    }
+
+    // 3. 连通区域标记
+    console.log('[颜色提取] Step 3/6: 连通区域标记...');
+    const blocks = extractConnectedComponents(mask, colorData, canvasWidth, canvasHeight);
+    console.log(`[颜色提取] 提取到 ${blocks.length} 个色块`);
+
+    if (blocks.length === 0) {
+      console.log('[颜色提取] 未提取到任何色块，提前返回');
+      return;
+    }
+
+    // 4. 将每个色块填充到 paintBuffer 中
+    console.log('[颜色提取] Step 4/6: 填充 paintBuffer...');
+    const layerId = activeLayerId || layers[0]?.id;
+    if (!layerId) {
+      console.error('[颜色提取] 没有活动图层');
+      return;
+    }
+    console.log(`[颜色提取] 目标图层ID: ${layerId}`);
+
+    // 确保 paintBuffer 存在
+    if (!paintBuffers[layerId]) {
+      console.log('[颜色提取] 初始化 paintBuffer...');
+      initPaintBuffer(layerId);
+    }
+
+    // 统计总像素数
+    const totalPixels = blocks.reduce((sum, block) => sum + block.pixels.length, 0);
+    console.log(`[颜色提取] 将填充 ${totalPixels} 个像素到缓冲区`);
+
+    // 批量更新 buffer
+    let writtenPixels = 0;
+    updatePaintBuffer(layerId, (imgData) => {
+      for (const block of blocks) {
+        const { r, g, b } = block.avgColor;
+        for (const pixel of block.pixels) {
+          // 世界坐标转 buffer 像素坐标（Y轴翻转）
+          const px = Math.floor(pixel.x * PAINT_BUFFER_SIZE);
+          const py = Math.floor((1 - pixel.y) * PAINT_BUFFER_SIZE);
+          if (px >= 0 && px < PAINT_BUFFER_SIZE && py >= 0 && py < PAINT_BUFFER_SIZE) {
+            const idx = (py * PAINT_BUFFER_SIZE + px) * 4;
+            imgData.data[idx] = r;
+            imgData.data[idx + 1] = g;
+            imgData.data[idx + 2] = b;
+            imgData.data[idx + 3] = 255;
+            writtenPixels++;
+          }
+        }
+      }
+    });
+    console.log(`[颜色提取] 成功写入 ${writtenPixels} 个像素`);
+
+    // 5. 保存历史，以便撤销
+    console.log('[颜色提取] Step 5/6: 保存历史记录...');
+    saveHistory();
+    console.log('[颜色提取] 历史记录已保存');
+
+    // 6. 清空临时色块显示（不再需要覆盖层）
+    console.log('[颜色提取] Step 6/6: 清空临时色块...');
+    setExtractedColorBlocks([]);
+
+    const endTime = performance.now();
+    console.log(`[颜色提取] ==================== 颜色提取完成 ====================`);
+    console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
+    console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
+  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
+
+  // 监听手动触发颜色提取（必须在 performColorExtraction 定义之后）
+  useEffect(() => {
+    if (pendingExtractPolygon && pendingExtractPolygon.length >= 3) {
+      console.log('[颜色提取] 监听到手动提取请求，多边形点数:', pendingExtractPolygon.length);
+      performColorExtraction(pendingExtractPolygon);
+      setPendingExtractPolygon(null);  // 清空触发器
+    }
+  }, [pendingExtractPolygon, performColorExtraction, setPendingExtractPolygon]);
+
   // ========== 颜色提取：贝塞尔曲线提取函数 ==========
   const performBezierColorExtract = useCallback((points: Point[]) => {
     if (points.length !== 3) return;
@@ -366,12 +713,21 @@ export function MainCanvas() {
     console.log('  起点:', `(${start.x.toFixed(4)}, ${start.y.toFixed(4)})`);
     console.log('  终点:', `(${end.x.toFixed(4)}, ${end.y.toFixed(4)})`);
     console.log('  控制点:', `(${ctrl.x.toFixed(4)}, ${ctrl.y.toFixed(4)})`);
-    // 保存曲线到列表，不清空状态
-    addColorExtractCurve({ start, end, control: ctrl });
+    
+    // 生成贝塞尔曲线包围的多边形（采样曲线）
+    const curvePoints = sampleQuadraticCurve(start, end, ctrl, 30);
+    // 闭合多边形：起点 -> 曲线采样点 -> 终点 -> 回到起点
+    const closedPolygon = [...curvePoints, end, start];
+    if (closedPolygon.length >= 3) {
+      performColorExtraction(closedPolygon);
+    }
+    
+    // 保存曲线到列表（使用 bezier 类型）
+    addColorExtractCurve({ type: 'bezier', start, end, control: ctrl });
     // 清空当前正在绘制的点，准备下一条
     clearColorExtractPoints();
     setColorExtractWaitingFor('start');
-  }, [addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor]);
+  }, [addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor, performColorExtraction, sampleQuadraticCurve]);
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
@@ -458,9 +814,17 @@ export function MainCanvas() {
 
     // 吸附到已绘制的颜色提取曲线顶点
     for (const curve of colorExtractCurves) {
-      addCandidate(curve.start);
-      addCandidate(curve.end);
-      addCandidate(curve.control);
+      if (curve.type === 'bezier') {
+        // 贝塞尔曲线：吸附到起点、终点、控制点
+        addCandidate(curve.start);
+        addCandidate(curve.end);
+        addCandidate(curve.control);
+      } else if (curve.type === 'polyline') {
+        // 折线：吸附到所有顶点
+        for (const p of curve.points) {
+          addCandidate(p);
+        }
+      }
     }
 
     // 吸附到当前正在绘制的点（折线和贝塞尔模式都支持）
@@ -1611,16 +1975,31 @@ export function MainCanvas() {
 
       // 绘制所有已保存的曲线
       for (const curve of colorExtractCurves) {
-        const sampledCurve = sampleQuadraticCurve(curve.start, curve.end, curve.control, 30);
-        if (sampledCurve.length >= 2) {
-          ctx.beginPath();
-          const first = worldToCanvasFn(sampledCurve[0].x, sampledCurve[0].y);
-          ctx.moveTo(first.x, first.y);
-          for (let i = 1; i < sampledCurve.length; i++) {
-            const p = worldToCanvasFn(sampledCurve[i].x, sampledCurve[i].y);
-            ctx.lineTo(p.x, p.y);
+        if (curve.type === 'bezier') {
+          // 贝塞尔曲线：采样绘制
+          const sampledCurve = sampleQuadraticCurve(curve.start, curve.end, curve.control, 30);
+          if (sampledCurve.length >= 2) {
+            ctx.beginPath();
+            const first = worldToCanvasFn(sampledCurve[0].x, sampledCurve[0].y);
+            ctx.moveTo(first.x, first.y);
+            for (let i = 1; i < sampledCurve.length; i++) {
+              const p = worldToCanvasFn(sampledCurve[i].x, sampledCurve[i].y);
+              ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
           }
-          ctx.stroke();
+        } else if (curve.type === 'polyline') {
+          // 折线：直接绘制直线段
+          if (curve.points.length >= 2) {
+            ctx.beginPath();
+            const first = worldToCanvasFn(curve.points[0].x, curve.points[0].y);
+            ctx.moveTo(first.x, first.y);
+            for (let i = 1; i < curve.points.length; i++) {
+              const p = worldToCanvasFn(curve.points[i].x, curve.points[i].y);
+              ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+          }
         }
       }
       ctx.restore();
@@ -1754,8 +2133,46 @@ export function MainCanvas() {
       ctx.restore();
     }
 
+    // ========== 颜色提取调试模式绘制（Ctrl+G）==========
+    if (showColorExtractDebug && colorExtractDebugData) {
+      ctx.save();
+      
+      // 绘制掩码区域（半透明红色）
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
+      ctx.beginPath();
+      for (const pixel of colorExtractDebugData.maskPixels) {
+        const p = worldToCanvasFn(pixel.x, pixel.y);
+        ctx.rect(p.x, p.y, 1, 1);
+      }
+      ctx.fill();
+      
+      // 绘制每个色块（不同颜色）
+      for (const block of colorExtractDebugData.blocks) {
+        ctx.fillStyle = `${block.color}80`; // 添加50%透明度
+        ctx.beginPath();
+        for (const pixel of block.pixels) {
+          const p = worldToCanvasFn(pixel.x, pixel.y);
+          ctx.rect(p.x, p.y, 1, 1);
+        }
+        ctx.fill();
+        
+        // 绘制色块标签
+        if (block.pixels.length > 0) {
+          const centerPixel = block.pixels[Math.floor(block.pixels.length / 2)];
+          const center = worldToCanvasFn(centerPixel.x, centerPixel.y);
+          ctx.fillStyle = 'black';
+          ctx.font = '12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(`#${block.id}`, center.x, center.y);
+        }
+      }
+      
+      ctx.restore();
+    }
+
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1856,8 +2273,24 @@ export function MainCanvas() {
         for (let i = colorExtractCurves.length - 1; i >= 0; i--) {
           const curve = colorExtractCurves[i];
           
-          // 检测鼠标是否靠近曲线的任何部分（采样曲线并检测距离）
-          const isNearCurve = isPointNearCurve(worldCoords, curve.start, curve.end, curve.control, eraseRadius);
+          let isNearCurve = false;
+          
+          if (curve.type === 'bezier') {
+            // 贝塞尔曲线：检测鼠标是否靠近曲线的任何部分
+            isNearCurve = isPointNearCurve(worldCoords, curve.start, curve.end, curve.control, eraseRadius);
+          } else if (curve.type === 'polyline') {
+            // 折线：检测鼠标是否靠近任何线段
+            for (let j = 0; j < curve.points.length - 1; j++) {
+              const p1 = curve.points[j];
+              const p2 = curve.points[j + 1];
+              // 使用中点作为控制点来检测直线段
+              const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+              if (isPointNearCurve(worldCoords, p1, p2, mid, eraseRadius)) {
+                isNearCurve = true;
+                break;
+              }
+            }
+          }
           
           if (isNearCurve) {
             toDelete.push(i);
@@ -2083,18 +2516,14 @@ export function MainCanvas() {
         if (isSamePoint) {
           // 点击了同一个点，结束折线绘制
           console.log('[颜色提取] 双击同一点，结束折线绘制');
-          // 保存折线到曲线列表
           if (colorExtractPoints.length >= 2) {
-            // 将折线转换为贝塞尔曲线格式保存（使用相邻点作为起点和终点，控制点取中点）
-            for (let i = 0; i < colorExtractPoints.length - 1; i++) {
-              const start = colorExtractPoints[i];
-              const end = colorExtractPoints[i + 1];
-              const control = {
-                x: (start.x + end.x) / 2,
-                y: (start.y + end.y) / 2
-              };
-              addColorExtractCurve({ start, end, control });
+            // 闭合多边形：将现有折线点闭合（首尾相连）
+            const polygon = [...colorExtractPoints];
+            if (polygon.length >= 3) {
+              performColorExtraction(polygon);
             }
+            // 保存折线到曲线列表（保持显示）
+            addColorExtractCurve({ type: 'polyline', points: [...colorExtractPoints] });
           }
           // 清空状态
           clearColorExtractPoints();
