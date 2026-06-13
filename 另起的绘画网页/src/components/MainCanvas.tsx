@@ -1520,23 +1520,37 @@ export function MainCanvas() {
       ctx.restore();
     }
 
-    // ========== 绘制颜色提取模式的虚线墙 ==========
+    // ========== 绘制颜色提取模式的虚线（仅开放折线/曲线，不闭合、不填充） ==========
     if (colorExtractMode && colorExtractPoints.length > 0) {
       ctx.save();
       ctx.setLineDash([8, 6]);
       ctx.strokeStyle = '#ffaa00';
-      ctx.fillStyle = 'rgba(255, 170, 0, 0.15)';
       ctx.lineWidth = 2;
       ctx.globalAlpha = 1;
 
-      // 获取要绘制的路径点
       let drawPoints: Point[] = colorExtractPoints;
+
+      // 贝塞尔曲线：按顺序 [起点, 终点, 控制点] 处理
       if (colorExtractTool === 'bezier' && colorExtractPoints.length >= 3) {
-        drawPoints = buildBezierPath(colorExtractPoints);
+        // 每次取三个点：p0=起点, p1=终点, ctrl=控制点
+        const sampledPoints: Point[] = [];
+        for (let i = 0; i + 2 < colorExtractPoints.length; i += 3) {
+          const p0 = colorExtractPoints[i];      // 起点
+          const p1 = colorExtractPoints[i + 1];  // 终点
+          const ctrl = colorExtractPoints[i + 2]; // 控制点
+          const curve = sampleQuadraticCurve(p0, p1, ctrl, 30);
+          if (sampledPoints.length === 0) {
+            sampledPoints.push(...curve);
+          } else {
+            // 跳过第一个点避免重复
+            sampledPoints.push(...curve.slice(1));
+          }
+        }
+        drawPoints = sampledPoints;
       }
 
+      // 绘制虚线连线（只画开放路径，不闭合）
       if (drawPoints.length >= 2) {
-        // 绘制连线
         ctx.beginPath();
         const firstCanvas = worldToCanvasFn(drawPoints[0].x, drawPoints[0].y);
         ctx.moveTo(firstCanvas.x, firstCanvas.y);
@@ -1545,29 +1559,9 @@ export function MainCanvas() {
           ctx.lineTo(pCanvas.x, pCanvas.y);
         }
         ctx.stroke();
-
-        // 若点数≥3，显示闭合虚线并半透明填充
-        if (colorExtractPoints.length >= 3) {
-          // 从最后一个点画到第一个点（闭合虚线）
-          const lastCanvas = worldToCanvasFn(drawPoints[drawPoints.length - 1].x, drawPoints[drawPoints.length - 1].y);
-          ctx.beginPath();
-          ctx.moveTo(lastCanvas.x, lastCanvas.y);
-          ctx.lineTo(firstCanvas.x, firstCanvas.y);
-          ctx.stroke();
-
-          // 填充多边形（基于原始控制点，贝塞尔也用控制点填充）
-          const fillPoints = colorExtractPoints.map(p => worldToCanvasFn(p.x, p.y));
-          ctx.beginPath();
-          ctx.moveTo(fillPoints[0].x, fillPoints[0].y);
-          for (let i = 1; i < fillPoints.length; i++) {
-            ctx.lineTo(fillPoints[i].x, fillPoints[i].y);
-          }
-          ctx.closePath();
-          ctx.fill();
-        }
       }
 
-      // 绘制控制点
+      // 绘制控制点（橙色圆点）
       for (const p of colorExtractPoints) {
         const cp = worldToCanvasFn(p.x, p.y);
         ctx.beginPath();
