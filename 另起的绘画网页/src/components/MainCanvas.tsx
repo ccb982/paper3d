@@ -186,6 +186,11 @@ export function MainCanvas() {
     isRestoringRef.current = isRestoringHistory;
   }, [isRestoringHistory]);
 
+  // 调试：追踪 colorExtractMode 状态变化
+  useEffect(() => {
+    console.log(`[颜色提取] colorExtractMode 状态变化: ${colorExtractMode}`);
+  }, [colorExtractMode]);
+
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
@@ -309,6 +314,7 @@ export function MainCanvas() {
         }
         // 颜色提取模式：ESC 退出
         if (colorExtractMode) {
+          console.log('[颜色提取] ESC 退出模式，已清除控制点');
           clearColorExtractPoints();
           setColorExtractMode(false);
           useAppStore.setState({ colorExtractTool: null });
@@ -330,8 +336,8 @@ export function MainCanvas() {
         setTempPoints([]);
         setPreviewPoint(null);
       }
-      // 切换工具时退出颜色提取模式
-      if (colorExtractMode) {
+      // 切换到非 select 工具时才退出颜色提取模式
+      if (colorExtractMode && currentTool !== 'select') {
         clearColorExtractPoints();
         setColorExtractMode(false);
         useAppStore.setState({ colorExtractTool: null });
@@ -1723,6 +1729,7 @@ export function MainCanvas() {
 
     // 颜色提取模式：左键添加点
     if (colorExtractMode && e.button === 0) {
+      console.log('[颜色提取] 进入颜色提取处理');
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
       // 可选：点吸附
@@ -1730,8 +1737,13 @@ export function MainCanvas() {
       if (snapEnabled && colorExtractPoints.length > 0) {
         snapped = snapToExistingPoint(worldCoords, 'point', colorExtractPoints.length);
       }
+      const newIndex = colorExtractPoints.length;
       addColorExtractPoint(snapped);
+      console.log(`[颜色提取] 添加控制点 #${newIndex + 1}: (${snapped.x.toFixed(4)}, ${snapped.y.toFixed(4)})`);
+      console.log(`[颜色提取] 当前点数: ${newIndex + 1}, 工具: ${colorExtractTool}`);
       return;
+    } else if (e.button === 0) {
+      console.log(`[颜色提取] 未进入颜色提取模式，colorExtractMode: ${colorExtractMode}`);
     }
 
     if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && isPanMode)) {

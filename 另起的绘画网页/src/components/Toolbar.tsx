@@ -194,6 +194,8 @@ export function Toolbar() {
                 setColorExtractMode(true);
                 clearColorExtractPoints();
                 setShowColorExtractMenu(false);
+                setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
+                console.log('[颜色提取] 进入折线模式，准备添加控制点');
               }}
               style={{
                 padding: '4px 8px',
@@ -213,6 +215,8 @@ export function Toolbar() {
                 setColorExtractMode(true);
                 clearColorExtractPoints();
                 setShowColorExtractMenu(false);
+                setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
+                console.log('[颜色提取] 进入贝塞尔曲线模式，准备添加控制点');
               }}
               style={{
                 padding: '4px 8px',
@@ -233,6 +237,7 @@ export function Toolbar() {
                 } else {
                   console.log('[颜色提取] 提取区域，控制点:', colorExtractPoints);
                   alert('颜色提取算法待实现，控制台已打印点集');
+                  exitColorExtractMode();  // 提取后退出模式
                 }
                 setShowColorExtractMenu(false);
               }}

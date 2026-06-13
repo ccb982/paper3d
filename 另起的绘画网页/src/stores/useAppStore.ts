@@ -484,15 +484,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   shapes: [],
   addShape: (shape) =>
     set((state) => {
-      console.log('>>> [addShape] 被调用了！');
-      console.log('>>> 图形类型:', shape.type);
-      console.log('>>> 图形ID:', shape.id);
-      console.log('>>> 所属图层:', shape.layerId);
       console.log('[addShape] 图形类型:', shape.type);
       console.log('[addShape] 原始点数:', shape.points.length);
       const newShape = { ...shape };
       setTimeout(() => {
-        console.log('>>> [setTimeout] 准备刷新区域缓存, layerId:', shape.layerId);
         get().refreshRegionCache(shape.layerId);
         get().refreshColorBlockCache(shape.layerId);
         get().updateColorBlocksForLayer(shape.layerId);
@@ -987,6 +982,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           paintBuffers: restoredPaintBuffers,
           historyIndex: newIndex,
           isRestoringHistory: true, // 标记正在恢复
+          colorExtractMode: false,  // 强制退出颜色提取模式
+          colorExtractPoints: [],   // 清空点集
+          colorExtractTool: null,   // 重置工具
         };
         
         // 延迟重置标志并重新计算区域数据
@@ -1002,7 +1000,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         
         return newState;
       }
-      return state;
+      return {
+        ...state,
+        colorExtractMode: false,
+        colorExtractPoints: [],
+        colorExtractTool: null,
+      };
     }),
   redo: () =>
     set((state) => {
@@ -1036,6 +1039,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           paintBuffers: restoredPaintBuffers,
           historyIndex: newIndex,
           isRestoringHistory: true, // 标记正在恢复
+          colorExtractMode: false,  // 强制退出颜色提取模式
+          colorExtractPoints: [],   // 清空点集
+          colorExtractTool: null,   // 重置工具
         };
         
         // 延迟重置标志并重新计算区域数据
@@ -1051,7 +1057,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         
         return newState;
       }
-      return state;
+      return {
+        ...state,
+        colorExtractMode: false,
+        colorExtractPoints: [],
+        colorExtractTool: null,
+      };
     }),
   canUndo: () => {
     const state = useAppStore.getState();
