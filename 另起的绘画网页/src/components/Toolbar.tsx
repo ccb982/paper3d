@@ -1,4 +1,5 @@
 import { useAppStore } from '../stores/useAppStore';
+import { useState } from 'react';
 import type { ToolType } from '../types';
 
 const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
@@ -42,7 +43,15 @@ export function Toolbar() {
     setCurrentColor,
     paintBrushSize,
     setPaintBrushSize,
+    colorExtractMode,
+    setColorExtractMode,
+    colorExtractTool,
+    setColorExtractTool,
+    colorExtractPoints,
+    clearColorExtractPoints,
   } = useAppStore();
+
+  const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
 
   const handleSave = () => {
     saveToStorage();
@@ -123,6 +132,110 @@ export function Toolbar() {
           )}
         </button>
       ))}
+
+      <div style={{ height: '8px' }} />
+
+      {/* 颜色提取按钮 */}
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => setShowColorExtractMenu(!showColorExtractMenu)}
+          title="颜色提取"
+          style={{
+            width: '36px',
+            height: '36px',
+            border: 'none',
+            borderRadius: '6px',
+            backgroundColor: colorExtractMode ? '#faad14' : 'transparent',
+            color: colorExtractMode ? '#fff' : '#333',
+            fontSize: '18px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          🎨
+        </button>
+
+        {showColorExtractMenu && (
+          <div style={{
+            position: 'fixed',  // 改为 fixed，避免被 overflow 裁剪
+            left: '56px',      // 相对于视口定位，稍微偏移
+            top: '50%',        // 垂直居中
+            marginTop: '-40px',// 向上偏移一点，让菜单居中
+            backgroundColor: '#fff',
+            border: '1px solid #d9d9d9',
+            borderRadius: '6px',
+            padding: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 2000,      // 最高层级
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+          }}>
+            <button
+              onClick={() => {
+                setColorExtractTool('polygon');
+                setColorExtractMode(true);
+                clearColorExtractPoints();
+                setShowColorExtractMenu(false);
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: colorExtractTool === 'polygon' && colorExtractMode ? '#1890ff' : '#f5f5f5',
+                color: colorExtractTool === 'polygon' && colorExtractMode ? '#fff' : '#333',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              折线
+            </button>
+            <button
+              onClick={() => {
+                setColorExtractTool('bezier');
+                setColorExtractMode(true);
+                clearColorExtractPoints();
+                setShowColorExtractMenu(false);
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: colorExtractTool === 'bezier' && colorExtractMode ? '#1890ff' : '#f5f5f5',
+                color: colorExtractTool === 'bezier' && colorExtractMode ? '#fff' : '#333',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              贝塞尔曲线
+            </button>
+            <button
+              onClick={() => {
+                if (colorExtractPoints.length < 3) {
+                  alert('请至少绘制3个点');
+                } else {
+                  console.log('[颜色提取] 提取区域，控制点:', colorExtractPoints);
+                  alert('颜色提取算法待实现，控制台已打印点集');
+                }
+                setShowColorExtractMenu(false);
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#52c41a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              提取颜色
+            </button>
+          </div>
+        )}
+      </div>
 
       <div style={{ height: '8px' }} />
 

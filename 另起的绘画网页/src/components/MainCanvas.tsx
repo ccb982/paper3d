@@ -11,6 +11,34 @@ import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 const BASE_CANVAS_SIZE = 512;
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
+// ========== 贝塞尔曲线辅助函数 ==========
+function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
+  const result: Point[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const mt = 1 - t;
+    const x = mt * mt * p0.x + 2 * mt * t * ctrl.x + t * t * p1.x;
+    const y = mt * mt * p0.y + 2 * mt * t * ctrl.y + t * t * p1.y;
+    result.push({ x, y });
+  }
+  return result;
+}
+
+function buildBezierPath(points: Point[]): Point[] {
+  if (points.length < 2) return points.slice();
+  if (points.length === 2) return [points[0], points[1]];
+  const fullPath: Point[] = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const p0 = points[i - 1];
+    const p1 = points[i + 1];
+    const ctrl = points[i];
+    const curve = sampleQuadraticBezier(p0, p1, ctrl, 20);
+    fullPath.push(...curve.slice(1)); // 避免重复起点
+  }
+  fullPath.push(points[points.length - 1]);
+  return fullPath;
+}
+
 // ========== 几何辅助函数 ==========
 function distanceToLineSegment(
   px: number, py: number,
@@ -143,6 +171,13 @@ export function MainCanvas() {
     // 画布尺寸
     canvasWidth,
     canvasHeight,
+    // 颜色提取模式
+    colorExtractMode,
+    setColorExtractMode,
+    colorExtractTool,
+    colorExtractPoints,
+    addColorExtractPoint,
+    clearColorExtractPoints,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -272,24 +307,38 @@ export function MainCanvas() {
           setPointAnnotationEditor(null);
           setRegionAnnotationEditor(null);
         }
+        // 颜色提取模式：ESC 退出
+        if (colorExtractMode) {
+          clearColorExtractPoints();
+          setColorExtractMode(false);
+          useAppStore.setState({ colorExtractTool: null });
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor]);
+  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor, colorExtractMode, clearColorExtractPoints, setColorExtractMode]);
 
   // ========== 切换工具时清理临时图形 ==========
   const prevToolRef = useRef(currentTool);
   useEffect(() => {
-    if (prevToolRef.current !== currentTool && tempPoints.length > 0) {
-      useAppStore.setState((s) => ({
-        shapes: s.shapes.filter(sh => sh.id !== 'current_shape'),
-      }));
-      setTempPoints([]);
-      setPreviewPoint(null);
+    if (prevToolRef.current !== currentTool) {
+      if (tempPoints.length > 0) {
+        useAppStore.setState((s) => ({
+          shapes: s.shapes.filter(sh => sh.id !== 'current_shape'),
+        }));
+        setTempPoints([]);
+        setPreviewPoint(null);
+      }
+      // 切换工具时退出颜色提取模式
+      if (colorExtractMode) {
+        clearColorExtractPoints();
+        setColorExtractMode(false);
+        useAppStore.setState({ colorExtractTool: null });
+      }
     }
     prevToolRef.current = currentTool;
-  }, [currentTool, tempPoints]);
+  }, [currentTool, tempPoints, colorExtractMode, clearColorExtractPoints, setColorExtractMode]);
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
@@ -1465,8 +1514,70 @@ export function MainCanvas() {
       ctx.restore();
     }
 
+    // ========== 绘制颜色提取模式的虚线墙 ==========
+    if (colorExtractMode && colorExtractPoints.length > 0) {
+      ctx.save();
+      ctx.setLineDash([8, 6]);
+      ctx.strokeStyle = '#ffaa00';
+      ctx.fillStyle = 'rgba(255, 170, 0, 0.15)';
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 1;
+
+      // 获取要绘制的路径点
+      let drawPoints: Point[] = colorExtractPoints;
+      if (colorExtractTool === 'bezier' && colorExtractPoints.length >= 3) {
+        drawPoints = buildBezierPath(colorExtractPoints);
+      }
+
+      if (drawPoints.length >= 2) {
+        // 绘制连线
+        ctx.beginPath();
+        const firstCanvas = worldToCanvasFn(drawPoints[0].x, drawPoints[0].y);
+        ctx.moveTo(firstCanvas.x, firstCanvas.y);
+        for (let i = 1; i < drawPoints.length; i++) {
+          const pCanvas = worldToCanvasFn(drawPoints[i].x, drawPoints[i].y);
+          ctx.lineTo(pCanvas.x, pCanvas.y);
+        }
+        ctx.stroke();
+
+        // 若点数≥3，显示闭合虚线并半透明填充
+        if (colorExtractPoints.length >= 3) {
+          // 从最后一个点画到第一个点（闭合虚线）
+          const lastCanvas = worldToCanvasFn(drawPoints[drawPoints.length - 1].x, drawPoints[drawPoints.length - 1].y);
+          ctx.beginPath();
+          ctx.moveTo(lastCanvas.x, lastCanvas.y);
+          ctx.lineTo(firstCanvas.x, firstCanvas.y);
+          ctx.stroke();
+
+          // 填充多边形（基于原始控制点，贝塞尔也用控制点填充）
+          const fillPoints = colorExtractPoints.map(p => worldToCanvasFn(p.x, p.y));
+          ctx.beginPath();
+          ctx.moveTo(fillPoints[0].x, fillPoints[0].y);
+          for (let i = 1; i < fillPoints.length; i++) {
+            ctx.lineTo(fillPoints[i].x, fillPoints[i].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+
+      // 绘制控制点
+      for (const p of colorExtractPoints) {
+        const cp = worldToCanvasFn(p.x, p.y);
+        ctx.beginPath();
+        ctx.arc(cp.x, cp.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffaa00';
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText('•', cp.x - 2, cp.y + 3);
+      }
+
+      ctx.restore();
+    }
+
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1607,6 +1718,19 @@ export function MainCanvas() {
     // 优先处理背景拖动模式
     if (imageState.isBackgroundDragging && e.button === 0) {
       startBackgroundDrag(e.clientX, e.clientY);
+      return;
+    }
+
+    // 颜色提取模式：左键添加点
+    if (colorExtractMode && e.button === 0) {
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
+      // 可选：点吸附
+      let snapped = worldCoords;
+      if (snapEnabled && colorExtractPoints.length > 0) {
+        snapped = snapToExistingPoint(worldCoords, 'point', colorExtractPoints.length);
+      }
+      addColorExtractPoint(snapped);
       return;
     }
 

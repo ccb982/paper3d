@@ -85,6 +85,16 @@ interface AppState {
   currentTool: ToolType;
   setCurrentTool: (tool: ToolType) => void;
 
+  // 颜色提取模式
+  colorExtractMode: boolean;
+  setColorExtractMode: (mode: boolean) => void;
+  colorExtractTool: 'polygon' | 'bezier' | null;
+  setColorExtractTool: (tool: 'polygon' | 'bezier' | null) => void;
+  colorExtractPoints: Point[];
+  setColorExtractPoints: (points: Point[]) => void;
+  addColorExtractPoint: (point: Point) => void;
+  clearColorExtractPoints: () => void;
+
   // 点吸附配置
   snapRadius: number;
   setSnapRadius: (radius: number) => void;
@@ -542,6 +552,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   currentTool: 'select',
   setCurrentTool: (tool) => set({ currentTool: tool }),
+
+  // 颜色提取模式
+  colorExtractMode: false,
+  setColorExtractMode: (mode) => set({ colorExtractMode: mode }),
+  colorExtractTool: null,
+  setColorExtractTool: (tool) => set({ colorExtractTool: tool }),
+  colorExtractPoints: [],
+  setColorExtractPoints: (points) => set({ colorExtractPoints: points }),
+  addColorExtractPoint: (point) => set((state) => ({ colorExtractPoints: [...state.colorExtractPoints, point] })),
+  clearColorExtractPoints: () => set({ colorExtractPoints: [] }),
 
   snapRadius: 10,
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
