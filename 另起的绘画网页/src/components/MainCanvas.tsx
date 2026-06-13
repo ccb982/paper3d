@@ -406,6 +406,86 @@ export function MainCanvas() {
     return mask;
   }, []);
 
+  // 新增：将区域多边形光栅化为掩码（包含边界像素，支持内外环）
+  const rasterizeRegionMask = useCallback((
+    region: Point[][],
+    width: number,
+    height: number
+  ): Uint8Array => {
+    const mask = new Uint8Array(width * height);
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = width;
+    offCanvas.height = height;
+    const ctx = offCanvas.getContext('2d')!;
+
+    // 1. 用黑色填充整个 canvas
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, width, height);
+
+    // 2. 绘制所有环（外环 + 内环），使用白色填充内部（evenodd 规则）
+    ctx.fillStyle = 'white';
+    for (const ring of region) {
+      if (ring.length < 3) continue;
+      ctx.beginPath();
+      const pxPoints = ring.map(p => ({ x: p.x * width, y: p.y * height }));
+      ctx.moveTo(pxPoints[0].x, pxPoints[0].y);
+      for (let i = 1; i < pxPoints.length; i++) ctx.lineTo(pxPoints[i].x, pxPoints[i].y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    // 3. 绘制环的边框（宽度 1 像素），以确保边界像素也被包含
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 1;
+    for (const ring of region) {
+      if (ring.length < 3) continue;
+      ctx.beginPath();
+      const pxPoints = ring.map(p => ({ x: p.x * width, y: p.y * height }));
+      ctx.moveTo(pxPoints[0].x, pxPoints[0].y);
+      for (let i = 1; i < pxPoints.length; i++) ctx.lineTo(pxPoints[i].x, pxPoints[i].y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    // 4. 读取像素，白色（或接近白色）的像素标记为 1
+    const imgData = ctx.getImageData(0, 0, width, height);
+    for (let i = 0; i < imgData.data.length; i += 4) {
+      if (imgData.data[i] > 200 && imgData.data[i+1] > 200 && imgData.data[i+2] > 200) {
+        mask[i / 4] = 1;
+      }
+    }
+    return mask;
+  }, []);
+
+  // 新增辅助函数：获取虚线所在区域的完整多边形
+  const getRegionPolygonFromPoints = useCallback((points: Point[]): Point[][] | null => {
+    if (points.length < 3) return null;
+    
+    // 计算重心（或使用第一个点）
+    let cx = 0, cy = 0;
+    for (const p of points) { cx += p.x; cy += p.y; }
+    cx /= points.length; cy /= points.length;
+    
+    const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+    // 获取当前图层的所有图形（排除正在绘制的临时图形）
+    const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+    
+    const regionId = computeRegionIdAtPoint({ x: cx, y: cy }, currentLayerShapes, worldBounds, 300);
+    if (regionId === null) {
+      console.log('[颜色提取] 无法定位到有效区域');
+      return null;
+    }
+    
+    const regionsCache = regionPolygonsCache[activeLayerId];
+    if (!regionsCache || regionId >= regionsCache.length) {
+      console.log('[颜色提取] 区域缓存不存在或索引超出范围');
+      return null;
+    }
+    
+    console.log(`[颜色提取] 找到区域 ID: ${regionId}`);
+    return regionsCache[regionId];
+  }, [shapes, activeLayerId, regionPolygonsCache]);
+
   // 获取当前画布的世界坐标颜色数据（不应用视图变换）
   const getWorldColorImageData = useCallback((): ImageData | null => {
     console.log('[颜色提取] 开始获取画布颜色数据...');
@@ -696,14 +776,123 @@ export function MainCanvas() {
     console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
   }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
 
+  // 新增：针对 BFS 区域多边形的提取函数
+  const performColorExtractionOnRegion = useCallback((regionPolygon: Point[][]) => {
+    if (!regionPolygon || regionPolygon.length === 0) {
+      console.warn('[颜色提取] 区域多边形为空，无法提取');
+      return;
+    }
+    
+    console.log('[颜色提取] ==================== 开始 BFS 区域颜色提取 ====================');
+    const startTime = performance.now();
+    
+    // 输出区域信息
+    console.log(`[颜色提取] 区域环数: ${regionPolygon.length}`);
+    regionPolygon.forEach((ring, ringIdx) => {
+      console.log(`  环 ${ringIdx + 1} 顶点数: ${ring.length}`);
+    });
+
+    // 1. 生成掩码（包含边界）
+    console.log(`[颜色提取] Step 1/6: 生成区域掩码 (${canvasWidth}x${canvasHeight})...`);
+    const mask = rasterizeRegionMask(regionPolygon, canvasWidth, canvasHeight);
+    const maskPixelCount = mask.reduce((sum, val) => sum + val, 0);
+    console.log(`[颜色提取] 掩码生成完成，内部像素数: ${maskPixelCount}`);
+    
+    if (maskPixelCount === 0) {
+      console.log('[颜色提取] 掩码内无像素，提前返回');
+      return;
+    }
+    
+    // 2. 获取当前画布颜色数据（背景 + 已有 buffer）
+    console.log('[颜色提取] Step 2/6: 获取画布颜色数据...');
+    const colorData = getWorldColorImageData();
+    if (!colorData) {
+      console.error('[颜色提取] 无法获取画布颜色数据');
+      return;
+    }
+
+    // 3. 连通区域标记
+    console.log('[颜色提取] Step 3/6: 连通区域标记...');
+    const blocks = extractConnectedComponents(mask, colorData, canvasWidth, canvasHeight);
+    console.log(`[颜色提取] 提取到 ${blocks.length} 个色块`);
+
+    if (blocks.length === 0) {
+      console.log('[颜色提取] 未提取到任何色块，提前返回');
+      return;
+    }
+
+    // 4. 将每个色块填充到 paintBuffer 中
+    console.log('[颜色提取] Step 4/6: 填充 paintBuffer...');
+    const layerId = activeLayerId || layers[0]?.id;
+    if (!layerId) {
+      console.error('[颜色提取] 没有活动图层');
+      return;
+    }
+    console.log(`[颜色提取] 目标图层ID: ${layerId}`);
+
+    // 确保 paintBuffer 存在
+    if (!paintBuffers[layerId]) {
+      console.log('[颜色提取] 初始化 paintBuffer...');
+      initPaintBuffer(layerId);
+    }
+
+    // 统计总像素数
+    const totalPixels = blocks.reduce((sum, block) => sum + block.pixels.length, 0);
+    console.log(`[颜色提取] 将填充 ${totalPixels} 个像素到缓冲区`);
+
+    // 批量更新 buffer
+    let writtenPixels = 0;
+    updatePaintBuffer(layerId, (imgData) => {
+      for (const block of blocks) {
+        const { r, g, b } = block.avgColor;
+        for (const pixel of block.pixels) {
+          // 世界坐标转 buffer 像素坐标（Y轴翻转）
+          const px = Math.floor(pixel.x * PAINT_BUFFER_SIZE);
+          const py = Math.floor((1 - pixel.y) * PAINT_BUFFER_SIZE);
+          if (px >= 0 && px < PAINT_BUFFER_SIZE && py >= 0 && py < PAINT_BUFFER_SIZE) {
+            const idx = (py * PAINT_BUFFER_SIZE + px) * 4;
+            imgData.data[idx] = r;
+            imgData.data[idx + 1] = g;
+            imgData.data[idx + 2] = b;
+            imgData.data[idx + 3] = 255;
+            writtenPixels++;
+          }
+        }
+      }
+    });
+    console.log(`[颜色提取] 成功写入 ${writtenPixels} 个像素`);
+
+    // 5. 保存历史，以便撤销
+    console.log('[颜色提取] Step 5/6: 保存历史记录...');
+    saveHistory();
+    console.log('[颜色提取] 历史记录已保存');
+
+    // 6. 清空临时色块显示
+    console.log('[颜色提取] Step 6/6: 清空临时色块...');
+    setExtractedColorBlocks([]);
+
+    const endTime = performance.now();
+    console.log(`[颜色提取] ==================== BFS 区域颜色提取完成 ====================`);
+    console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
+    console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
+  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
+
   // 监听手动触发颜色提取（必须在 performColorExtraction 定义之后）
   useEffect(() => {
     if (pendingExtractPolygon && pendingExtractPolygon.length >= 3) {
       console.log('[颜色提取] 监听到手动提取请求，多边形点数:', pendingExtractPolygon.length);
-      performColorExtraction(pendingExtractPolygon);
+      // 获取该虚线所在的 BFS 区域多边形
+      const regionPoly = getRegionPolygonFromPoints(pendingExtractPolygon);
+      if (regionPoly) {
+        performColorExtractionOnRegion(regionPoly);
+      } else {
+        console.warn('[颜色提取] 无法定位到有效区域，跳过提取');
+        // 降级：使用原始多边形
+        performColorExtraction(pendingExtractPolygon);
+      }
       setPendingExtractPolygon(null);  // 清空触发器
     }
-  }, [pendingExtractPolygon, performColorExtraction, setPendingExtractPolygon]);
+  }, [pendingExtractPolygon, performColorExtraction, performColorExtractionOnRegion, getRegionPolygonFromPoints, setPendingExtractPolygon]);
 
   // ========== 颜色提取：贝塞尔曲线提取函数 ==========
   const performBezierColorExtract = useCallback((points: Point[]) => {
@@ -718,8 +907,18 @@ export function MainCanvas() {
     const curvePoints = sampleQuadraticCurve(start, end, ctrl, 30);
     // 闭合多边形：起点 -> 曲线采样点 -> 终点 -> 回到起点
     const closedPolygon = [...curvePoints, end, start];
-    if (closedPolygon.length >= 3) {
-      performColorExtraction(closedPolygon);
+    
+    // 获取该虚线所在的 BFS 区域多边形
+    const regionPoly = getRegionPolygonFromPoints(closedPolygon);
+    if (regionPoly) {
+      // 使用 BFS 区域多边形进行提取
+      performColorExtractionOnRegion(regionPoly);
+    } else {
+      console.warn('[颜色提取] 无法定位到有效区域，跳过提取');
+      // 降级：使用原始多边形
+      if (closedPolygon.length >= 3) {
+        performColorExtraction(closedPolygon);
+      }
     }
     
     // 保存曲线到列表（使用 bezier 类型）
@@ -727,7 +926,7 @@ export function MainCanvas() {
     // 清空当前正在绘制的点，准备下一条
     clearColorExtractPoints();
     setColorExtractWaitingFor('start');
-  }, [addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor, performColorExtraction, sampleQuadraticCurve]);
+  }, [addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor, performColorExtraction, performColorExtractionOnRegion, getRegionPolygonFromPoints, sampleQuadraticCurve]);
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
@@ -2517,10 +2716,18 @@ export function MainCanvas() {
           // 点击了同一个点，结束折线绘制
           console.log('[颜色提取] 双击同一点，结束折线绘制');
           if (colorExtractPoints.length >= 2) {
-            // 闭合多边形：将现有折线点闭合（首尾相连）
-            const polygon = [...colorExtractPoints];
-            if (polygon.length >= 3) {
-              performColorExtraction(polygon);
+            // 获取该虚线所在的 BFS 区域多边形
+            const regionPoly = getRegionPolygonFromPoints(colorExtractPoints);
+            if (regionPoly) {
+              // 使用 BFS 区域多边形进行提取
+              performColorExtractionOnRegion(regionPoly);
+            } else {
+              console.warn('[颜色提取] 无法定位到有效区域，跳过提取');
+              // 降级：使用原始多边形
+              const polygon = [...colorExtractPoints];
+              if (polygon.length >= 3) {
+                performColorExtraction(polygon);
+              }
             }
             // 保存折线到曲线列表（保持显示）
             addColorExtractCurve({ type: 'polyline', points: [...colorExtractPoints] });
