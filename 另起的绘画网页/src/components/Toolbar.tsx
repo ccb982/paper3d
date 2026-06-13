@@ -52,6 +52,10 @@ export function Toolbar() {
     setColorExtractPreviewPoint,
     colorExtractWaitingFor,
     setColorExtractWaitingFor,
+    colorExtractCurves,
+    clearColorExtractCurves,
+    colorExtractEraserMode,
+    setColorExtractEraserMode,
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
@@ -63,8 +67,10 @@ export function Toolbar() {
       setColorExtractMode(false);
       setColorExtractTool(null);
       setColorExtractPreviewPoint(null);
+      setColorExtractEraserMode(false);
+      clearColorExtractCurves();
     }
-  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint]);
+  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint, setColorExtractEraserMode, clearColorExtractCurves]);
 
   const handleSave = () => {
     exitColorExtractMode();
@@ -198,6 +204,7 @@ export function Toolbar() {
                 setColorExtractMode(true);
                 clearColorExtractPoints();
                 setColorExtractWaitingFor('start');  // 折线模式：累加点
+                setColorExtractEraserMode(false);  // 退出橡皮模式
                 setShowColorExtractMenu(false);
                 setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
                 console.log('[颜色提取] 进入折线模式，准备添加控制点');
@@ -220,6 +227,7 @@ export function Toolbar() {
                 setColorExtractMode(true);
                 clearColorExtractPoints();
                 setColorExtractWaitingFor('start');  // 贝塞尔曲线：起点 → 终点 → 控制点
+                setColorExtractEraserMode(false);  // 退出橡皮模式
                 setShowColorExtractMenu(false);
                 setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
                 console.log('[颜色提取] 进入贝塞尔曲线模式，准备添加控制点');
@@ -258,6 +266,27 @@ export function Toolbar() {
               }}
             >
               提取颜色
+            </button>
+            <button
+              onClick={() => {
+                if (colorExtractCurves.length === 0) {
+                  alert('没有可删除的曲线');
+                } else {
+                  setColorExtractEraserMode(!colorExtractEraserMode);
+                  setShowColorExtractMenu(false);
+                }
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: colorExtractEraserMode ? '#ff4d4f' : '#f5f5f5',
+                color: colorExtractEraserMode ? '#fff' : '#333',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              {colorExtractEraserMode ? '退出橡皮' : '橡皮模式'}
             </button>
           </div>
         )}

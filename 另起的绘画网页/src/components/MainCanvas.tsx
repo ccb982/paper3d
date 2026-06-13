@@ -182,6 +182,10 @@ export function MainCanvas() {
     setColorExtractPreviewPoint,
     colorExtractWaitingFor,
     setColorExtractWaitingFor,
+    colorExtractCurves,
+    addColorExtractCurve,
+    colorExtractEraserMode,
+    setColorExtractEraserMode,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -354,12 +358,16 @@ export function MainCanvas() {
   const performBezierColorExtract = useCallback((points: Point[]) => {
     if (points.length !== 3) return;
     const [start, end, ctrl] = points;
-    console.log('[颜色提取] 贝塞尔曲线');
+    console.log('[颜色提取] 贝塞尔曲线已保存');
     console.log('  起点:', `(${start.x.toFixed(4)}, ${start.y.toFixed(4)})`);
     console.log('  终点:', `(${end.x.toFixed(4)}, ${end.y.toFixed(4)})`);
     console.log('  控制点:', `(${ctrl.x.toFixed(4)}, ${ctrl.y.toFixed(4)})`);
-    // 不弹出提示，仅记录日志
-  }, []);
+    // 保存曲线到列表，不清空状态
+    addColorExtractCurve({ start, end, control: ctrl });
+    // 清空当前正在绘制的点，准备下一条
+    clearColorExtractPoints();
+    setColorExtractWaitingFor('start');
+  }, [addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor]);
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
@@ -429,6 +437,44 @@ export function MainCanvas() {
     }
     return bestMatch || point;
   }, [snapEnabled, snapRadius, shapes, tempPoints, worldToCanvasForSnap]);
+
+  // ========== 颜色提取模式预览专用吸附（只吸附到虚线顶点）==========
+  const snapColorExtractPreview = useCallback((point: Point, currentPointCount: number): Point => {
+    if (!snapEnabled) return point;
+    
+    const canvasPoint = worldToCanvasForSnap(point.x, point.y);
+    let bestMatch: Point | null = null;
+    let bestDist = snapRadius;
+
+    const candidateMap = new Map<string, Point>();
+    const addCandidate = (p: Point) => {
+      const key = `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
+      if (!candidateMap.has(key)) candidateMap.set(key, p);
+    };
+
+    // 吸附到已绘制的颜色提取曲线顶点
+    for (const curve of colorExtractCurves) {
+      addCandidate(curve.start);
+      addCandidate(curve.end);
+      addCandidate(curve.control);
+    }
+
+    // 吸附到当前正在绘制的点（折线和贝塞尔模式都支持）
+    // 这样第一个点也能吸附到已有虚线顶点，后续点也能吸附到当前正在绘制的点
+    for (const p of colorExtractPoints) {
+      addCandidate(p);
+    }
+
+    for (const p of candidateMap.values()) {
+      const pCanvas = worldToCanvasForSnap(p.x, p.y);
+      const dist = Math.hypot(canvasPoint.x - pCanvas.x, canvasPoint.y - pCanvas.y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestMatch = p;
+      }
+    }
+    return bestMatch || point;
+  }, [snapEnabled, snapRadius, colorExtractCurves, colorExtractPoints, worldToCanvasForSnap]);
 
   // ========== 查找图形上的点/边（用于注释）==========
   const findShapeAtPoint = useCallback((x: number, y: number) => {
@@ -1535,7 +1581,32 @@ export function MainCanvas() {
       ctx.restore();
     }
 
-    // ========== 绘制颜色提取模式的虚线 ==========
+    // ========== 绘制已保存的颜色提取曲线 ==========
+    if (colorExtractMode && colorExtractCurves.length > 0) {
+      ctx.save();
+      ctx.setLineDash([8, 6]);
+      ctx.strokeStyle = '#ffaa00';
+      ctx.lineWidth = 2;
+      ctx.globalAlpha = 1;
+
+      // 绘制所有已保存的曲线
+      for (const curve of colorExtractCurves) {
+        const sampledCurve = sampleQuadraticCurve(curve.start, curve.end, curve.control, 30);
+        if (sampledCurve.length >= 2) {
+          ctx.beginPath();
+          const first = worldToCanvasFn(sampledCurve[0].x, sampledCurve[0].y);
+          ctx.moveTo(first.x, first.y);
+          for (let i = 1; i < sampledCurve.length; i++) {
+            const p = worldToCanvasFn(sampledCurve[i].x, sampledCurve[i].y);
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    // ========== 绘制当前正在绘制的颜色提取虚线 ==========
     if (colorExtractMode && colorExtractTool === 'bezier') {
       ctx.save();
       ctx.setLineDash([8, 6]);
@@ -1664,7 +1735,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -1726,9 +1797,10 @@ export function MainCanvas() {
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
     setMousePosition(worldCoords);
 
-    // 颜色提取模式下的预览点
-    if (colorExtractMode && colorExtractPoints.length > 0) {
-      setColorExtractPreviewPoint(worldCoords);
+    // 颜色提取模式下的预览点（带吸附，第一个点也能吸附）
+    if (colorExtractMode) {
+      const snappedPreview = snapColorExtractPreview(worldCoords, colorExtractPoints.length);
+      setColorExtractPreviewPoint(snappedPreview);
     } else if (colorExtractPreviewPoint) {
       setColorExtractPreviewPoint(null);
     }
@@ -1800,7 +1872,7 @@ export function MainCanvas() {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1816,15 +1888,40 @@ export function MainCanvas() {
       return;
     }
 
+    // 颜色提取橡皮模式：点击删除曲线
+    if (colorExtractMode && colorExtractEraserMode && e.button === 0) {
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
+      // 检查点击位置是否接近某条曲线
+      const clickRadius = 0.02; // 点击半径（世界坐标）
+      let deletedIndex = -1;
+      for (let i = colorExtractCurves.length - 1; i >= 0; i--) {
+        const curve = colorExtractCurves[i];
+        // 检查点击是否接近曲线的任意部分
+        const distToStart = Math.hypot(worldCoords.x - curve.start.x, worldCoords.y - curve.start.y);
+        const distToEnd = Math.hypot(worldCoords.x - curve.end.x, worldCoords.y - curve.end.y);
+        const distToControl = Math.hypot(worldCoords.x - curve.control.x, worldCoords.y - curve.control.y);
+        if (distToStart < clickRadius || distToEnd < clickRadius || distToControl < clickRadius) {
+          deletedIndex = i;
+          break;
+        }
+      }
+      if (deletedIndex >= 0) {
+        console.log('[颜色提取橡皮] 删除曲线 #', deletedIndex);
+        useAppStore.getState().removeColorExtractCurve(deletedIndex);
+      }
+      return;
+    }
+
     // 颜色提取模式：左键添加点
     if (colorExtractMode && e.button === 0) {
       console.log('[颜色提取] 进入颜色提取处理');
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
-      // 可选：点吸附
+      // 点吸附：使用预览吸附函数，第一个点也能吸附到已有虚线顶点
       let snapped = worldCoords;
-      if (snapEnabled && colorExtractPoints.length > 0) {
-        snapped = snapToExistingPoint(worldCoords, 'point', colorExtractPoints.length);
+      if (snapEnabled) {
+        snapped = snapColorExtractPreview(worldCoords, colorExtractPoints.length);
       }
 
       if (colorExtractTool === 'bezier') {
@@ -2040,7 +2137,10 @@ export function MainCanvas() {
     setColorExtractPreviewPoint,
     colorExtractWaitingFor,
     setColorExtractWaitingFor,
+    colorExtractCurves,
+    colorExtractEraserMode,
     performBezierColorExtract,
+    snapColorExtractPreview,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {

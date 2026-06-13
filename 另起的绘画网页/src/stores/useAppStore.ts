@@ -98,6 +98,14 @@ interface AppState {
   setColorExtractPreviewPoint: (point: Point | null) => void;
   colorExtractWaitingFor: 'start' | 'end' | 'control' | null;
   setColorExtractWaitingFor: (state: 'start' | 'end' | 'control' | null) => void;
+  // 已绘制的贝塞尔曲线列表
+  colorExtractCurves: Array<{ start: Point; end: Point; control: Point }>;
+  addColorExtractCurve: (curve: { start: Point; end: Point; control: Point }) => void;
+  removeColorExtractCurve: (index: number) => void;
+  clearColorExtractCurves: () => void;
+  // 颜色提取橡皮模式
+  colorExtractEraserMode: boolean;
+  setColorExtractEraserMode: (mode: boolean) => void;
 
   // 点吸附配置
   snapRadius: number;
@@ -565,8 +573,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   setColorExtractPreviewPoint: (point) => set({ colorExtractPreviewPoint: point }),
   colorExtractWaitingFor: null,
   setColorExtractWaitingFor: (waiting) => set({ colorExtractWaitingFor: waiting }),
+  colorExtractCurves: [],
+  addColorExtractCurve: (curve) => set((state) => ({ colorExtractCurves: [...state.colorExtractCurves, curve] })),
+  removeColorExtractCurve: (index) => set((state) => ({
+    colorExtractCurves: state.colorExtractCurves.filter((_, i) => i !== index)
+  })),
+  clearColorExtractCurves: () => set({ colorExtractCurves: [] }),
+  colorExtractEraserMode: false,
+  setColorExtractEraserMode: (mode) => set({ colorExtractEraserMode: mode }),
 
-  snapRadius: 10,
+  snapRadius: 15,
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
   snapEnabled: true,
   setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
