@@ -97,7 +97,9 @@ interface AppState {
   colorExtractPreviewPoint: Point | null;
   setColorExtractPreviewPoint: (point: Point | null) => void;
   colorExtractWaitingFor: 'start' | 'end' | 'control' | null;
-  setColorExtractWaitingFor: (state: 'start' | 'end' | 'control' | null) => void;
+  colorExtractRegionId: number | null;   // 当前正在绘制的曲线所在的区域 ID
+  setColorExtractWaitingFor: (waiting: 'start' | 'end' | 'control' | null) => void;
+  setColorExtractRegionId: (id: number | null) => void;
   // 已绘制的贝塞尔曲线列表
   colorExtractCurves: Array<{ start: Point; end: Point; control: Point }>;
   addColorExtractCurve: (curve: { start: Point; end: Point; control: Point }) => void;
@@ -567,15 +569,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   colorExtractMode: false,
   setColorExtractMode: (mode) => set({ colorExtractMode: mode }),
   colorExtractTool: null,
-  setColorExtractTool: (tool) => set({ colorExtractTool: tool, colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null }),
+  setColorExtractTool: (tool) => set({ colorExtractTool: tool, colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null, colorExtractRegionId: null }),
   colorExtractPoints: [],
   setColorExtractPoints: (points) => set({ colorExtractPoints: points }),
   addColorExtractPoint: (point) => set((state) => ({ colorExtractPoints: [...state.colorExtractPoints, point] })),
-  clearColorExtractPoints: () => set({ colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null }),
+  clearColorExtractPoints: () => set({ colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null, colorExtractRegionId: null }),
   colorExtractPreviewPoint: null,
   setColorExtractPreviewPoint: (point) => set({ colorExtractPreviewPoint: point }),
   colorExtractWaitingFor: null,
   setColorExtractWaitingFor: (waiting) => set({ colorExtractWaitingFor: waiting }),
+  colorExtractRegionId: null,
+  setColorExtractRegionId: (id) => set({ colorExtractRegionId: id }),
   colorExtractCurves: [],
   addColorExtractCurve: (curve) => set((state) => ({ colorExtractCurves: [...state.colorExtractCurves, curve] })),
   removeColorExtractCurve: (index) => set((state) => ({

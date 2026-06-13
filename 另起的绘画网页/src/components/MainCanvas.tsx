@@ -182,6 +182,8 @@ export function MainCanvas() {
     setColorExtractPreviewPoint,
     colorExtractWaitingFor,
     setColorExtractWaitingFor,
+    colorExtractRegionId,
+    setColorExtractRegionId,
     colorExtractCurves,
     addColorExtractCurve,
     colorExtractEraserMode,
@@ -1791,6 +1793,17 @@ export function MainCanvas() {
     };
   }, []); // 无依赖，每次调用都从 DOM 获取最新值
 
+  // 获取世界坐标点所在的区域 ID
+  const getRegionIdAtWorldPoint = useCallback((world: Point): number => {
+    const layerId = activeLayerId || layers[0]?.id;
+    if (!layerId) return 0;
+    const texture = regionIdTexture.get(layerId);
+    if (!texture) return 0;
+    const x = Math.floor(world.x * PAINT_BUFFER_SIZE);
+    const y = Math.floor((1 - world.y) * PAINT_BUFFER_SIZE);
+    return texture[y * PAINT_BUFFER_SIZE + x] ?? 0;
+  }, [activeLayerId, layers, regionIdTexture]);
+
   // 检测点是否靠近贝塞尔曲线或直线
   const isPointNearCurve = useCallback((point: Point, start: Point, end: Point, control: Point, radius: number): boolean => {
     // 采样曲线上的多个点进行检测
@@ -1876,10 +1889,31 @@ export function MainCanvas() {
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
     setMousePosition(worldCoords);
 
-    // 颜色提取模式下的预览点（带吸附，第一个点也能吸附）
+    // 颜色提取模式下的预览点（带吸附和区域限制）
     if (colorExtractMode) {
       const snappedPreview = snapColorExtractPreview(worldCoords, colorExtractPoints.length);
-      setColorExtractPreviewPoint(snappedPreview);
+      
+      // 贝塞尔曲线的控制点预览不受区域限制
+      const isBezierControlPreview = colorExtractTool === 'bezier' && 
+        colorExtractWaitingFor === 'control' && 
+        colorExtractPoints.length === 2;
+      
+      if (isBezierControlPreview) {
+        // 控制点预览：可以在任何地方
+        setColorExtractPreviewPoint(snappedPreview);
+      } else {
+        // 起点和终点预览：检查区域合法性
+        const regionId = getRegionIdAtWorldPoint(snappedPreview);
+        let previewValid = (regionId !== 0);
+        if (previewValid && colorExtractRegionId !== null) {
+          previewValid = (regionId === colorExtractRegionId);
+        }
+        if (previewValid) {
+          setColorExtractPreviewPoint(snappedPreview);
+        } else {
+          setColorExtractPreviewPoint(null);
+        }
+      }
     } else if (colorExtractPreviewPoint) {
       setColorExtractPreviewPoint(null);
     }
@@ -1951,7 +1985,7 @@ export function MainCanvas() {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview, colorExtractEraserMode, colorExtractCurves, isPointNearCurve]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview, colorExtractEraserMode, colorExtractCurves, isPointNearCurve, getRegionIdAtWorldPoint, colorExtractRegionId]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -1985,6 +2019,36 @@ export function MainCanvas() {
       let snapped = worldCoords;
       if (snapEnabled) {
         snapped = snapColorExtractPreview(worldCoords, colorExtractPoints.length);
+      }
+
+      // 区域检查：获取当前点的区域 ID
+      const regionId = getRegionIdAtWorldPoint(snapped);
+      
+      // 贝塞尔曲线的控制点（第三个点）不受区域限制
+      const isBezierControlPoint = colorExtractTool === 'bezier' && 
+        colorExtractWaitingFor === 'control' && 
+        colorExtractPoints.length === 2;
+      
+      if (!isBezierControlPoint) {
+        // 有效性检查：不能在无效区域（空气/固体）上绘制（起点和终点）
+        if (regionId === 0) {
+          console.warn('[颜色提取] 无法在无效区域（空气/固体）上绘制');
+          return;
+        }
+        
+        // 跨区域检查：如果已有区域，新点必须在同一区域（起点和终点）
+        if (colorExtractRegionId !== null && regionId !== colorExtractRegionId) {
+          console.warn('[颜色提取] 不能跨区域绘制');
+          // 清空当前点集并重置状态
+          clearColorExtractPoints();
+          setColorExtractRegionId(null);
+          return;
+        }
+      }
+
+      // 如果是第一个点，记录区域 ID
+      if (colorExtractPoints.length === 0) {
+        setColorExtractRegionId(regionId);
       }
 
       if (colorExtractTool === 'bezier') {
