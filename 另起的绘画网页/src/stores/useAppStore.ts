@@ -94,6 +94,10 @@ interface AppState {
   setColorExtractPoints: (points: Point[]) => void;
   addColorExtractPoint: (point: Point) => void;
   clearColorExtractPoints: () => void;
+  colorExtractPreviewPoint: Point | null;
+  setColorExtractPreviewPoint: (point: Point | null) => void;
+  colorExtractWaitingFor: 'start' | 'end' | 'control' | null;
+  setColorExtractWaitingFor: (state: 'start' | 'end' | 'control' | null) => void;
 
   // 点吸附配置
   snapRadius: number;
@@ -552,11 +556,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   colorExtractMode: false,
   setColorExtractMode: (mode) => set({ colorExtractMode: mode }),
   colorExtractTool: null,
-  setColorExtractTool: (tool) => set({ colorExtractTool: tool }),
+  setColorExtractTool: (tool) => set({ colorExtractTool: tool, colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null }),
   colorExtractPoints: [],
   setColorExtractPoints: (points) => set({ colorExtractPoints: points }),
   addColorExtractPoint: (point) => set((state) => ({ colorExtractPoints: [...state.colorExtractPoints, point] })),
-  clearColorExtractPoints: () => set({ colorExtractPoints: [] }),
+  clearColorExtractPoints: () => set({ colorExtractPoints: [], colorExtractPreviewPoint: null, colorExtractWaitingFor: null }),
+  colorExtractPreviewPoint: null,
+  setColorExtractPreviewPoint: (point) => set({ colorExtractPreviewPoint: point }),
+  colorExtractWaitingFor: null,
+  setColorExtractWaitingFor: (waiting) => set({ colorExtractWaitingFor: waiting }),
 
   snapRadius: 10,
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),

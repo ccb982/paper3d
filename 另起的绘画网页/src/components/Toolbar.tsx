@@ -49,6 +49,9 @@ export function Toolbar() {
     setColorExtractTool,
     colorExtractPoints,
     clearColorExtractPoints,
+    setColorExtractPreviewPoint,
+    colorExtractWaitingFor,
+    setColorExtractWaitingFor,
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
@@ -59,8 +62,9 @@ export function Toolbar() {
       clearColorExtractPoints();
       setColorExtractMode(false);
       setColorExtractTool(null);
+      setColorExtractPreviewPoint(null);
     }
-  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool]);
+  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint]);
 
   const handleSave = () => {
     exitColorExtractMode();
@@ -193,6 +197,7 @@ export function Toolbar() {
                 setColorExtractTool('polygon');
                 setColorExtractMode(true);
                 clearColorExtractPoints();
+                setColorExtractWaitingFor('start');  // 折线模式：累加点
                 setShowColorExtractMenu(false);
                 setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
                 console.log('[颜色提取] 进入折线模式，准备添加控制点');
@@ -214,6 +219,7 @@ export function Toolbar() {
                 setColorExtractTool('bezier');
                 setColorExtractMode(true);
                 clearColorExtractPoints();
+                setColorExtractWaitingFor('start');  // 贝塞尔曲线：起点 → 终点 → 控制点
                 setShowColorExtractMenu(false);
                 setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
                 console.log('[颜色提取] 进入贝塞尔曲线模式，准备添加控制点');
