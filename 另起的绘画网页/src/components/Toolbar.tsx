@@ -1,5 +1,5 @@
 import { useAppStore } from '../stores/useAppStore';
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import type { ToolType } from '../types';
 
 const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
@@ -53,17 +53,29 @@ export function Toolbar() {
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
 
+  // 统一退出颜色提取模式的函数
+  const exitColorExtractMode = useCallback(() => {
+    if (colorExtractMode) {
+      clearColorExtractPoints();
+      setColorExtractMode(false);
+      setColorExtractTool(null);
+    }
+  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool]);
+
   const handleSave = () => {
+    exitColorExtractMode();
     saveToStorage();
     alert('已保存');
   };
 
   const handleLoad = () => {
+    exitColorExtractMode();
     loadFromStorage();
     alert('已加载');
   };
 
   const handleExport = () => {
+    exitColorExtractMode();
     exportToJson();
   };
 
@@ -90,7 +102,10 @@ export function Toolbar() {
       {tools.map((tool) => (
         <button
           key={tool.type}
-          onClick={() => setCurrentTool(tool.type)}
+          onClick={() => {
+            exitColorExtractMode();  // 先退出颜色提取模式
+            setCurrentTool(tool.type);
+          }}
           title={tool.hint ? `${tool.label}\n${tool.hint}` : tool.label}
           style={{
             width: '36px',
@@ -240,7 +255,10 @@ export function Toolbar() {
       <div style={{ height: '8px' }} />
 
       <button
-        onClick={undo}
+        onClick={() => {
+          exitColorExtractMode();
+          undo();
+        }}
         title="撤销"
         style={{
           width: '36px',
