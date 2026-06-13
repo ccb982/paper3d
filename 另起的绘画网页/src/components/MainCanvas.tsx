@@ -186,6 +186,8 @@ export function MainCanvas() {
     addColorExtractCurve,
     colorExtractEraserMode,
     setColorExtractEraserMode,
+    lastPolygonPoint,
+    setLastPolygonPoint,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -1948,9 +1950,37 @@ export function MainCanvas() {
           setColorExtractWaitingFor('start');
         }
       } else if (colorExtractTool === 'polygon') {
-        // 折线模式：仅累加点，由用户手动提取
+        // 折线模式：检测是否点击了同一个点（结束绘制）
+        const isSamePoint = lastPolygonPoint !== null && 
+          Math.abs(snapped.x - lastPolygonPoint.x) < 0.001 && 
+          Math.abs(snapped.y - lastPolygonPoint.y) < 0.001;
+        
+        if (isSamePoint) {
+          // 点击了同一个点，结束折线绘制
+          console.log('[颜色提取] 双击同一点，结束折线绘制');
+          // 保存折线到曲线列表
+          if (colorExtractPoints.length >= 2) {
+            // 将折线转换为贝塞尔曲线格式保存（使用相邻点作为起点和终点，控制点取中点）
+            for (let i = 0; i < colorExtractPoints.length - 1; i++) {
+              const start = colorExtractPoints[i];
+              const end = colorExtractPoints[i + 1];
+              const control = {
+                x: (start.x + end.x) / 2,
+                y: (start.y + end.y) / 2
+              };
+              addColorExtractCurve({ start, end, control });
+            }
+          }
+          // 清空状态
+          clearColorExtractPoints();
+          setLastPolygonPoint(null);
+          return;
+        }
+        
+        // 正常添加点
         const newIndex = colorExtractPoints.length;
         addColorExtractPoint(snapped);
+        setLastPolygonPoint(snapped); // 记录当前点
         console.log(`[颜色提取] 添加折线点 #${newIndex + 1}: (${snapped.x.toFixed(4)}, ${snapped.y.toFixed(4)})`);
       }
       return;
@@ -2141,6 +2171,10 @@ export function MainCanvas() {
     colorExtractEraserMode,
     performBezierColorExtract,
     snapColorExtractPreview,
+    lastPolygonPoint,
+    setLastPolygonPoint,
+    addColorExtractCurve,
+    clearColorExtractPoints,
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {

@@ -106,6 +106,9 @@ interface AppState {
   // 颜色提取橡皮模式
   colorExtractEraserMode: boolean;
   setColorExtractEraserMode: (mode: boolean) => void;
+  // 折线模式最后一个点坐标（用于检测双击结束）
+  lastPolygonPoint: Point | null;
+  setLastPolygonPoint: (point: Point | null) => void;
 
   // 点吸附配置
   snapRadius: number;
@@ -581,6 +584,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearColorExtractCurves: () => set({ colorExtractCurves: [] }),
   colorExtractEraserMode: false,
   setColorExtractEraserMode: (mode) => set({ colorExtractEraserMode: mode }),
+  lastPolygonPoint: null,
+  setLastPolygonPoint: (point) => set({ lastPolygonPoint: point }),
 
   snapRadius: 15,
   setSnapRadius: (radius) => set({ snapRadius: Math.max(1, Math.min(50, radius)) }),
