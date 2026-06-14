@@ -107,6 +107,9 @@ interface AppState {
   clearColorExtractCurves: () => void;
   // 清空所有虚线并删除对应的 shapes（用于重新开始）
   clearColorExtractCurvesAndShapes: () => void;
+  // 颜色提取区域选择模式（点击提取颜色后进入此模式）
+  colorExtractSelectingRegion: boolean;
+  setColorExtractSelectingRegion: (selecting: boolean) => void;
   // 颜色提取橡皮模式
   colorExtractEraserMode: boolean;
   setColorExtractEraserMode: (mode: boolean) => void;
@@ -626,6 +629,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 清空曲线列表
     set({ colorExtractCurves: [] });
   },
+  colorExtractSelectingRegion: false,
+  setColorExtractSelectingRegion: (selecting) => set({ colorExtractSelectingRegion: selecting }),
   colorExtractEraserMode: false,
   setColorExtractEraserMode: (mode) => set({ colorExtractEraserMode: mode }),
   lastPolygonPoint: null,

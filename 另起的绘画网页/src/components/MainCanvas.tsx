@@ -1,14 +1,11 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
-import type { Point, Shape, PointAnnotation, RegionAnnotation } from '../types';
+import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
-import { findRegionByPoint, generateRegionSignature } from '../utils/regionDetection';
-import { getRegionIdAtPoint, computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, type DebugRay, type BoundaryPoint } from '../utils/regionDetectionExact';
-import { generatePolygonFromPoints } from '../utils/geometryUtils';
+import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals } from '../utils/regionDetectionExact';
+import { findRegionByPoint } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
-
-const BASE_CANVAS_SIZE = 512;
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
 // ========== 贝塞尔曲线辅助函数 ==========
@@ -189,6 +186,7 @@ export function MainCanvas() {
     addColorExtractCurve,
     colorExtractEraserMode,
     setColorExtractEraserMode,
+    colorExtractSelectingRegion,
     lastPolygonPoint,
     setLastPolygonPoint,
     setExtractedColorBlocks,
@@ -486,6 +484,18 @@ export function MainCanvas() {
     console.log(`[颜色提取] 找到区域 ID: ${regionId}`);
     return regionsCache[regionId];
   }, [shapes, activeLayerId, regionPolygonsCache]);
+
+  // 新增辅助函数：通过区域ID获取区域多边形
+  const getRegionPolygonById = useCallback((regionId: number): Point[][] | null => {
+    const regionsCache = regionPolygonsCache[activeLayerId];
+    if (!regionsCache || regionId < 0 || regionId >= regionsCache.length) {
+      console.log('[颜色提取] 区域缓存不存在或索引超出范围，regionId:', regionId);
+      return null;
+    }
+    
+    console.log(`[颜色提取] 通过 ID 获取区域多边形: ${regionId}`);
+    return regionsCache[regionId];
+  }, [activeLayerId, regionPolygonsCache]);
 
   // 获取当前画布的世界坐标颜色数据（不应用视图变换）
   const getWorldColorImageData = useCallback((): ImageData | null => {
@@ -2652,6 +2662,11 @@ export function MainCanvas() {
 
     // 颜色提取模式：左键添加点
     if (colorExtractMode && e.button === 0) {
+      // 区域选择模式下不允许绘制
+      if (colorExtractSelectingRegion) {
+        console.log('[颜色提取] 区域选择模式下，不允许绘制');
+        return;
+      }
       console.log('[颜色提取] 进入颜色提取处理');
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
@@ -3028,6 +3043,40 @@ export function MainCanvas() {
       return;
     }
     
+    // 颜色提取区域选择模式：点击一个 BFS 区域进行提取
+    const { colorExtractSelectingRegion, setColorExtractSelectingRegion, colorExtractCurves } = useAppStore.getState();
+    if (colorExtractSelectingRegion && colorExtractCurves.length > 0) {
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
+      
+      // 获取点击位置的区域 ID（使用 computeRegionIdAtPoint 计算）
+      const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      const regionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
+      console.log('[颜色提取] 点击位置区域 ID:', regionId);
+      
+      if (regionId !== null && regionId >= 0) {
+        // 获取该区域的多边形
+        const regionPoly = getRegionPolygonById(regionId);
+        if (regionPoly) {
+          console.log('[颜色提取] 找到区域多边形，环数:', regionPoly.length);
+          // 执行颜色提取
+          performColorExtractionOnRegion(regionPoly);
+          console.log('[颜色提取] 已在区域', regionId, '内完成颜色提取');
+        } else {
+          console.warn('[颜色提取] 无法获取区域', regionId, '的多边形');
+          alert('无法获取该区域的详细信息，请重试');
+        }
+      } else {
+        console.warn('[颜色提取] 点击位置不在有效区域内');
+        alert('请点击一个有效的闭合区域内部');
+      }
+      
+      // 退出区域选择模式
+      setColorExtractSelectingRegion(false);
+      return;
+    }
+    
     if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation' || currentTool === 'paintBrush') return;
     const coords = getCanvasCoords(e);
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
@@ -3056,7 +3105,7 @@ export function MainCanvas() {
         setPreviewPoint(null);
       }
     }
-  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers, currentColor]);
+  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers, currentColor, performColorExtractionOnRegion, getRegionPolygonById, shapes]);
 
   // 同步临时图形到 store
   useEffect(() => {

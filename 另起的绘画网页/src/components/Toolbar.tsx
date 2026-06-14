@@ -1,18 +1,6 @@
 import { useAppStore } from '../stores/useAppStore';
 import { useState, useCallback } from 'react';
-import type { ToolType, Point } from '../types';
-
-// 贝塞尔曲线采样函数
-function sampleQuadraticCurve(p0: Point, p1: Point, ctrl: Point, segments = 30): Point[] {
-  const points: Point[] = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const x = (1 - t) * (1 - t) * p0.x + 2 * (1 - t) * t * ctrl.x + t * t * p1.x;
-    const y = (1 - t) * (1 - t) * p0.y + 2 * (1 - t) * t * ctrl.y + t * t * p1.y;
-    points.push({ x, y });
-  }
-  return points;
-}
+import type { ToolType } from '../types';
 
 const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
   { type: 'select', icon: '⬚', label: '选择' },
@@ -59,18 +47,17 @@ export function Toolbar() {
     setColorExtractMode,
     colorExtractTool,
     setColorExtractTool,
-    colorExtractPoints,
     clearColorExtractPoints,
     setColorExtractPreviewPoint,
-    colorExtractWaitingFor,
     setColorExtractWaitingFor,
     colorExtractCurves,
     clearColorExtractCurves,
     clearColorExtractCurvesAndShapes,
     colorExtractEraserMode,
     setColorExtractEraserMode,
+    colorExtractSelectingRegion,
+    setColorExtractSelectingRegion,
     clearExtractedColorBlocks,
-    setPendingExtractPolygon,
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
@@ -262,54 +249,30 @@ export function Toolbar() {
             </button>
             <button
               onClick={() => {
-                // 合并所有已保存的虚线为一个闭合多边形
-                const allPoints: Array<{ x: number; y: number }> = [];
-                
-                // 添加所有已保存的折线点
-                for (const curve of colorExtractCurves) {
-                  if (curve.type === 'polyline') {
-                    // 折线：添加所有点（除了最后一个，因为它是回到起点的）
-                    for (let i = 0; i < curve.points.length - 1; i++) {
-                      allPoints.push(curve.points[i]);
-                    }
-                  } else if (curve.type === 'bezier') {
-                    // 贝塞尔曲线：采样曲线上的点
-                    const sampled = sampleQuadraticCurve(curve.start, curve.end, curve.control, 20);
-                    for (let i = 0; i < sampled.length; i++) {
-                      allPoints.push(sampled[i]);
-                    }
-                  }
-                }
-                
-                // 添加当前正在绘制的折线点（如果有）
-                if (colorExtractPoints.length >= 2) {
-                  for (const point of colorExtractPoints) {
-                    allPoints.push(point);
-                  }
-                }
-                
-                if (allPoints.length < 3) {
-                  alert('请先绘制至少一条闭合的虚线多边形');
+                // 检查是否有已绘制的虚线
+                if (colorExtractCurves.length === 0) {
+                  alert('请先绘制至少一条虚线');
                   setShowColorExtractMenu(false);
                   return;
                 }
                 
-                console.log('[颜色提取] 手动触发提取，已保存虚线数:', colorExtractCurves.length, ', 总点数:', allPoints.length);
-                // 触发提取（MainCanvas 会监听并执行）
-                setPendingExtractPolygon(allPoints);
+                // 进入区域选择模式
+                setColorExtractSelectingRegion(true);
+                setCurrentTool('select');  // 确保可以点击选择
+                console.log('[颜色提取] 进入区域选择模式，请点击一个 BFS 闭合区域');
                 setShowColorExtractMenu(false);
               }}
               style={{
                 padding: '4px 8px',
                 fontSize: '12px',
-                backgroundColor: '#52c41a',
+                backgroundColor: colorExtractSelectingRegion ? '#1890ff' : '#52c41a',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
               }}
             >
-              提取颜色
+              {colorExtractSelectingRegion ? '选择区域中...' : '提取颜色'}
             </button>
             <button
               onClick={() => {
