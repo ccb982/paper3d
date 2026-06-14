@@ -10,7 +10,7 @@ export interface Group {
   visible: boolean;
 }
 
-export type ShapeType = 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush' | 'polygon';
+export type ShapeType = 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' | 'quadratic' | 'brush' | 'polygon' | 'polyline';
 
 export type ToolType = 
   | 'select' | 'point' | 'line' | 'rectangle' | 'circle' | 'triangle' 

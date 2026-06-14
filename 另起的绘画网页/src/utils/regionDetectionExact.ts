@@ -94,6 +94,10 @@ function rasterizeShape(shape: Shape, stepX: number, stepY: number, xMin: number
         for (let i = 0; i < pts.length - 1; i++) segments.push([pts[i], pts[i + 1]]);
         segments.push([pts[pts.length - 1], pts[0]]); // 闭合多边形
       } break;
+    case 'polyline': if (pts.length >= 2) {
+        for (let i = 0; i < pts.length - 1; i++) segments.push([pts[i], pts[i + 1]]);
+        // polyline 不闭合，只连接连续的点
+      } break;
   }
   for (const [a, b] of segments) {
     rasterizeLine(a.x, a.y, b.x, b.y, stepX, stepY, xMin, yMin, resolution, wallGrid);
@@ -361,6 +365,17 @@ function getNearestIntersection(origin: Point, dir: Point, shapes: Shape[]): { p
         }
         break;
       case 'brush':
+        if (pts.length >= 2) {
+          for (let i=0;i<pts.length-1;i++) {
+            const t = intersectLineSegment(origin, dir, pts[i], pts[i+1]);
+            if (t !== null && (bestT === null || t < bestT)) {
+              bestT = t; bestPoint = { x: origin.x + dir.x*t, y: origin.y + dir.y*t };
+              bestShapeId = shape.id; bestSegment = [pts[i], pts[i+1]];
+            }
+          }
+        }
+        break;
+      case 'polyline':
         if (pts.length >= 2) {
           for (let i=0;i<pts.length-1;i++) {
             const t = intersectLineSegment(origin, dir, pts[i], pts[i+1]);

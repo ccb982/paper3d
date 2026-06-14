@@ -1,6 +1,18 @@
 import { useAppStore } from '../stores/useAppStore';
 import { useState, useCallback } from 'react';
-import type { ToolType } from '../types';
+import type { ToolType, Point } from '../types';
+
+// 贝塞尔曲线采样函数
+function sampleQuadraticCurve(p0: Point, p1: Point, ctrl: Point, segments = 30): Point[] {
+  const points: Point[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const x = (1 - t) * (1 - t) * p0.x + 2 * (1 - t) * t * ctrl.x + t * t * p1.x;
+    const y = (1 - t) * (1 - t) * p0.y + 2 * (1 - t) * t * ctrl.y + t * t * p1.y;
+    points.push({ x, y });
+  }
+  return points;
+}
 
 const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
   { type: 'select', icon: '⬚', label: '选择' },
@@ -54,6 +66,7 @@ export function Toolbar() {
     setColorExtractWaitingFor,
     colorExtractCurves,
     clearColorExtractCurves,
+    clearColorExtractCurvesAndShapes,
     colorExtractEraserMode,
     setColorExtractEraserMode,
     clearExtractedColorBlocks,
@@ -249,18 +262,41 @@ export function Toolbar() {
             </button>
             <button
               onClick={() => {
-                if (colorExtractPoints.length < 3) {
-                  alert('请至少绘制3个点');
-                } else {
-                  console.log('[颜色提取] 手动触发提取，点集:', colorExtractPoints);
-                  // 保存折线到曲线列表
-                  addColorExtractCurve({ type: 'polyline', points: [...colorExtractPoints] });
-                  // 触发提取（MainCanvas 会监听并执行）
-                  setPendingExtractPolygon([...colorExtractPoints]);
-                  // 清空状态
-                  clearColorExtractPoints();
-                  setLastPolygonPoint(null);
+                // 合并所有已保存的虚线为一个闭合多边形
+                const allPoints: Array<{ x: number; y: number }> = [];
+                
+                // 添加所有已保存的折线点
+                for (const curve of colorExtractCurves) {
+                  if (curve.type === 'polyline') {
+                    // 折线：添加所有点（除了最后一个，因为它是回到起点的）
+                    for (let i = 0; i < curve.points.length - 1; i++) {
+                      allPoints.push(curve.points[i]);
+                    }
+                  } else if (curve.type === 'bezier') {
+                    // 贝塞尔曲线：采样曲线上的点
+                    const sampled = sampleQuadraticCurve(curve.start, curve.end, curve.control, 20);
+                    for (let i = 0; i < sampled.length; i++) {
+                      allPoints.push(sampled[i]);
+                    }
+                  }
                 }
+                
+                // 添加当前正在绘制的折线点（如果有）
+                if (colorExtractPoints.length >= 2) {
+                  for (const point of colorExtractPoints) {
+                    allPoints.push(point);
+                  }
+                }
+                
+                if (allPoints.length < 3) {
+                  alert('请先绘制至少一条闭合的虚线多边形');
+                  setShowColorExtractMenu(false);
+                  return;
+                }
+                
+                console.log('[颜色提取] 手动触发提取，已保存虚线数:', colorExtractCurves.length, ', 总点数:', allPoints.length);
+                // 触发提取（MainCanvas 会监听并执行）
+                setPendingExtractPolygon(allPoints);
                 setShowColorExtractMenu(false);
               }}
               style={{
@@ -295,6 +331,28 @@ export function Toolbar() {
               }}
             >
               {colorExtractEraserMode ? '退出橡皮' : '橡皮模式'}
+            </button>
+            <button
+              onClick={() => {
+                if (colorExtractCurves.length === 0) {
+                  alert('没有可删除的虚线');
+                } else if (confirm(`确定要清空所有 ${colorExtractCurves.length} 条虚线吗？`)) {
+                  clearColorExtractCurvesAndShapes();
+                  console.log('[颜色提取] 已清空所有虚线和对应的 shapes');
+                }
+                setShowColorExtractMenu(false);
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#f5f5f5',
+                color: '#333',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              清空虚线
             </button>
           </div>
         )}

@@ -101,10 +101,12 @@ interface AppState {
   setColorExtractWaitingFor: (waiting: 'start' | 'end' | 'control' | null) => void;
   setColorExtractRegionId: (id: number | null) => void;
   // 已绘制的曲线列表（支持贝塞尔曲线和折线）
-  colorExtractCurves: Array<{ type: 'bezier'; start: Point; end: Point; control: Point } | { type: 'polyline'; points: Point[] }>;
-  addColorExtractCurve: (curve: { type: 'bezier'; start: Point; end: Point; control: Point } | { type: 'polyline'; points: Point[] }) => void;
+  colorExtractCurves: Array<{ type: 'bezier'; start: Point; end: Point; control: Point; shapeId?: string } | { type: 'polyline'; points: Point[]; shapeId?: string }>;
+  addColorExtractCurve: (curve: { type: 'bezier'; start: Point; end: Point; control: Point; shapeId?: string } | { type: 'polyline'; points: Point[]; shapeId?: string }) => void;
   removeColorExtractCurve: (index: number) => void;
   clearColorExtractCurves: () => void;
+  // 清空所有虚线并删除对应的 shapes（用于重新开始）
+  clearColorExtractCurvesAndShapes: () => void;
   // 颜色提取橡皮模式
   colorExtractEraserMode: boolean;
   setColorExtractEraserMode: (mode: boolean) => void;
@@ -613,6 +615,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     colorExtractCurves: state.colorExtractCurves.filter((_, i) => i !== index)
   })),
   clearColorExtractCurves: () => set({ colorExtractCurves: [] }),
+  clearColorExtractCurvesAndShapes: () => {
+    const state = useAppStore.getState();
+    // 删除所有对应的 shapes
+    for (const curve of state.colorExtractCurves) {
+      if (curve.shapeId) {
+        state.removeShape(curve.shapeId);
+      }
+    }
+    // 清空曲线列表
+    set({ colorExtractCurves: [] });
+  },
   colorExtractEraserMode: false,
   setColorExtractEraserMode: (mode) => set({ colorExtractEraserMode: mode }),
   lastPolygonPoint: null,
