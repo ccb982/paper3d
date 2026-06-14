@@ -208,7 +208,7 @@ export function Toolbar() {
                 clearColorExtractPoints();
                 setColorExtractWaitingFor('start');  // 折线模式：累加点
                 setColorExtractEraserMode(false);  // 退出橡皮模式
-                setShowColorExtractMenu(false);
+                // 保持菜单打开，不关闭
                 setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
                 console.log('[颜色提取] 进入折线模式，准备添加控制点');
               }}
@@ -231,7 +231,7 @@ export function Toolbar() {
                 clearColorExtractPoints();
                 setColorExtractWaitingFor('start');  // 贝塞尔曲线：起点 → 终点 → 控制点
                 setColorExtractEraserMode(false);  // 退出橡皮模式
-                setShowColorExtractMenu(false);
+                // 保持菜单打开，不关闭
                 setCurrentTool('select');  // 确保当前工具是 select，避免被强制退出
                 console.log('[颜色提取] 进入贝塞尔曲线模式，准备添加控制点');
               }}
@@ -252,7 +252,6 @@ export function Toolbar() {
                 // 检查是否有已绘制的虚线
                 if (colorExtractCurves.length === 0) {
                   alert('请先绘制至少一条虚线');
-                  setShowColorExtractMenu(false);
                   return;
                 }
                 
@@ -260,7 +259,7 @@ export function Toolbar() {
                 setColorExtractSelectingRegion(true);
                 setCurrentTool('select');  // 确保可以点击选择
                 console.log('[颜色提取] 进入区域选择模式，请点击一个 BFS 闭合区域');
-                setShowColorExtractMenu(false);
+                // 保持菜单打开，不关闭
               }}
               style={{
                 padding: '4px 8px',
@@ -280,7 +279,7 @@ export function Toolbar() {
                   alert('没有可删除的曲线');
                 } else {
                   setColorExtractEraserMode(!colorExtractEraserMode);
-                  setShowColorExtractMenu(false);
+                  // 保持菜单打开，不关闭
                 }
               }}
               style={{
@@ -303,7 +302,7 @@ export function Toolbar() {
                   clearColorExtractCurvesAndShapes();
                   console.log('[颜色提取] 已清空所有虚线和对应的 shapes');
                 }
-                setShowColorExtractMenu(false);
+                // 保持菜单打开，不关闭
               }}
               style={{
                 padding: '4px 8px',
@@ -316,6 +315,22 @@ export function Toolbar() {
               }}
             >
               清空虚线
+            </button>
+            <button
+              onClick={() => {
+                setShowColorExtractMenu(false);
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#f5f5f5',
+                color: '#333',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              关闭菜单
             </button>
           </div>
         )}
