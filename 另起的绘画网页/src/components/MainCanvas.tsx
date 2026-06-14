@@ -134,6 +134,7 @@ export function MainCanvas() {
     currentTool,
     shapes,
     addShape,
+    removeShape,
     activeGroupId,
     activeLayerId,
     layers,
@@ -881,18 +882,40 @@ export function MainCanvas() {
   useEffect(() => {
     if (pendingExtractPolygon && pendingExtractPolygon.length >= 3) {
       console.log('[颜色提取] 监听到手动提取请求，多边形点数:', pendingExtractPolygon.length);
-      // 获取该虚线所在的 BFS 区域多边形
-      const regionPoly = getRegionPolygonFromPoints(pendingExtractPolygon);
-      if (regionPoly) {
-        performColorExtractionOnRegion(regionPoly);
-      } else {
-        console.warn('[颜色提取] 无法定位到有效区域，跳过提取');
-        // 降级：使用原始多边形
-        performColorExtraction(pendingExtractPolygon);
-      }
+
+      // 1. 生成临时形状 ID
+      const tempShapeId = `temp_manual_extract_${Date.now()}`;
+      const tempShape = {
+        id: tempShapeId,
+        groupId: activeGroupId || 'default',
+        layerId: activeLayerId,
+        type: 'polyline' as const,
+        points: [...pendingExtractPolygon],
+        color: '#ffaa00',
+      };
+      // 2. 添加到 shapes，这会触发 refreshRegionCache（异步）
+      addShape(tempShape);
+
+      // 3. 等待区域缓存更新
+      setTimeout(() => {
+        // 获取虚线所在的 BFS 区域多边形
+        const regionPoly = getRegionPolygonFromPoints(pendingExtractPolygon);
+        if (regionPoly) {
+          // 执行颜色提取
+          performColorExtractionOnRegion(regionPoly);
+          // 保存虚线用于显示（保留在界面上）
+          addColorExtractCurve({ type: 'polyline', points: [...pendingExtractPolygon] });
+        } else {
+          console.warn('[颜色提取] 无法定位到有效 BFS 区域，放弃提取');
+          alert('当前虚线未落在任何有效闭合区域内，请确保虚线位于已有图形围成的封闭区域中。');
+        }
+        // 4. 移除临时形状
+        removeShape(tempShapeId);
+      }, 100);
+
       setPendingExtractPolygon(null);  // 清空触发器
     }
-  }, [pendingExtractPolygon, performColorExtraction, performColorExtractionOnRegion, getRegionPolygonFromPoints, setPendingExtractPolygon]);
+  }, [pendingExtractPolygon, performColorExtractionOnRegion, getRegionPolygonFromPoints, setPendingExtractPolygon, addColorExtractCurve, addShape, removeShape, activeGroupId, activeLayerId]);
 
   // ========== 颜色提取：贝塞尔曲线提取函数 ==========
   const performBezierColorExtract = useCallback((points: Point[]) => {
@@ -902,31 +925,45 @@ export function MainCanvas() {
     console.log('  起点:', `(${start.x.toFixed(4)}, ${start.y.toFixed(4)})`);
     console.log('  终点:', `(${end.x.toFixed(4)}, ${end.y.toFixed(4)})`);
     console.log('  控制点:', `(${ctrl.x.toFixed(4)}, ${ctrl.y.toFixed(4)})`);
-    
+
     // 生成贝塞尔曲线包围的多边形（采样曲线）
     const curvePoints = sampleQuadraticCurve(start, end, ctrl, 30);
-    // 闭合多边形：起点 -> 曲线采样点 -> 终点 -> 回到起点
-    const closedPolygon = [...curvePoints, end, start];
-    
-    // 获取该虚线所在的 BFS 区域多边形
-    const regionPoly = getRegionPolygonFromPoints(closedPolygon);
-    if (regionPoly) {
-      // 使用 BFS 区域多边形进行提取
-      performColorExtractionOnRegion(regionPoly);
-    } else {
-      console.warn('[颜色提取] 无法定位到有效区域，跳过提取');
-      // 降级：使用原始多边形
-      if (closedPolygon.length >= 3) {
-        performColorExtraction(closedPolygon);
+
+    // 1. 生成临时形状 ID
+    const tempShapeId = `temp_bezier_${Date.now()}`;
+    const tempShape = {
+      id: tempShapeId,
+      groupId: activeGroupId || 'default',
+      layerId: activeLayerId,
+      type: 'quadratic' as const,
+      points: [start, end, ctrl],
+      color: '#ffaa00',
+    };
+    addShape(tempShape);
+
+    setTimeout(() => {
+      // 闭合多边形：起点 -> 曲线采样点 -> 终点 -> 回到起点
+      const closedPolygon = [...curvePoints, end, start];
+      // 获取该虚线所在的 BFS 区域多边形
+      const regionPoly = getRegionPolygonFromPoints(closedPolygon);
+      if (regionPoly) {
+        // 使用 BFS 区域多边形进行提取
+        performColorExtractionOnRegion(regionPoly);
+        // 保存曲线到列表（使用 bezier 类型）
+        addColorExtractCurve({ type: 'bezier', start, end, control: ctrl });
+      } else {
+        console.warn('[颜色提取] 无法定位到有效 BFS 区域，跳过提取');
+        // 不降级，只提示
+        alert('当前贝塞尔曲线未落在任何有效闭合区域内，请确保曲线位于已有图形围成的封闭区域中。');
       }
-    }
-    
-    // 保存曲线到列表（使用 bezier 类型）
-    addColorExtractCurve({ type: 'bezier', start, end, control: ctrl });
+      // 移除临时形状
+      removeShape(tempShapeId);
+    }, 100);
+
     // 清空当前正在绘制的点，准备下一条
     clearColorExtractPoints();
     setColorExtractWaitingFor('start');
-  }, [addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor, performColorExtraction, performColorExtractionOnRegion, getRegionPolygonFromPoints, sampleQuadraticCurve]);
+  }, [addShape, removeShape, activeGroupId, activeLayerId, addColorExtractCurve, clearColorExtractPoints, setColorExtractWaitingFor, performColorExtractionOnRegion, getRegionPolygonFromPoints, sampleQuadraticCurve]);
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
@@ -2716,21 +2753,36 @@ export function MainCanvas() {
           // 点击了同一个点，结束折线绘制
           console.log('[颜色提取] 双击同一点，结束折线绘制');
           if (colorExtractPoints.length >= 2) {
-            // 获取该虚线所在的 BFS 区域多边形
-            const regionPoly = getRegionPolygonFromPoints(colorExtractPoints);
-            if (regionPoly) {
-              // 使用 BFS 区域多边形进行提取
-              performColorExtractionOnRegion(regionPoly);
-            } else {
-              console.warn('[颜色提取] 无法定位到有效区域，跳过提取');
-              // 降级：使用原始多边形
-              const polygon = [...colorExtractPoints];
-              if (polygon.length >= 3) {
-                performColorExtraction(polygon);
+            // 1. 生成临时形状 ID
+            const tempShapeId = `temp_extract_${Date.now()}`;
+            const tempShape = {
+              id: tempShapeId,
+              groupId: activeGroupId || 'default',
+              layerId: activeLayerId,
+              type: 'polyline' as const,
+              points: [...colorExtractPoints],
+              color: '#ffaa00',
+            };
+            // 2. 添加到 shapes，这会触发 refreshRegionCache（异步）
+            addShape(tempShape);
+
+            // 3. 等待区域缓存更新（addShape 内部有 setTimeout 刷新，这里延迟 100ms 确保完成）
+            setTimeout(() => {
+              // 获取虚线所在的 BFS 区域多边形
+              const regionPoly = getRegionPolygonFromPoints(colorExtractPoints);
+              if (regionPoly) {
+                // 执行颜色提取
+                performColorExtractionOnRegion(regionPoly);
+                // 保存虚线用于显示（保留在界面上）
+                addColorExtractCurve({ type: 'polyline', points: [...colorExtractPoints] });
+              } else {
+                console.warn('[颜色提取] 无法定位到有效 BFS 区域，跳过提取');
+                alert('当前折线未落在任何有效闭合区域内，请确保折线位于已有图形围成的封闭区域中。');
               }
-            }
-            // 保存折线到曲线列表（保持显示）
-            addColorExtractCurve({ type: 'polyline', points: [...colorExtractPoints] });
+              // 4. 移除临时形状
+              removeShape(tempShapeId);
+              // 注意：removeShape 内部也会自动刷新区域缓存，无需额外调用
+            }, 100);
           }
           // 清空状态
           clearColorExtractPoints();
