@@ -3112,10 +3112,14 @@ export function MainCanvas() {
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
       
-      // 1. 获取点击位置所在的实线区域 ID（基于所有形状）
-      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      // 1. 获取点击位置所在的实线区域 ID（只使用实线形状，排除虚线）
+      const solidShapes = shapes.filter(s => 
+        s.layerId === activeLayerId && 
+        s.id !== 'current_shape' &&
+        s.color !== '#ffaa00'  // 排除虚线（颜色标记）
+      );
       const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-      const solidRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
+      const solidRegionId = computeRegionIdAtPoint(worldCoords, solidShapes, worldBounds, 300);
       console.log('[颜色提取] 点击位置实线区域 ID:', solidRegionId);
       
       if (solidRegionId === null) {
