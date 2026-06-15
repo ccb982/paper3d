@@ -51,18 +51,20 @@ export function Toolbar() {
     setColorExtractPreviewPoint,
     setColorExtractWaitingFor,
     colorExtractCurves,
-    clearColorExtractCurves,
     clearColorExtractCurvesAndShapes,
     colorExtractEraserMode,
     setColorExtractEraserMode,
-    colorExtractSelectingRegion,
-    setColorExtractSelectingRegion,
+    colorExtractWaiting,
+    setColorExtractWaiting,
     clearExtractedColorBlocks,
+    refreshRegionCache,
+    generateRegionIdTexture,
+    activeLayerId,
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
 
-  // 统一退出颜色提取模式的函数
+  // 统一退出颜色提取模式的函数（保留虚线，不清除）
   const exitColorExtractMode = useCallback(() => {
     if (colorExtractMode) {
       clearColorExtractPoints();
@@ -70,10 +72,11 @@ export function Toolbar() {
       setColorExtractTool(null);
       setColorExtractPreviewPoint(null);
       setColorExtractEraserMode(false);
-      clearColorExtractCurves();
+      // 不移除虚线，虚线只能通过手动删除或点击"清空虚线"按钮删除
+      // clearColorExtractCurves();
       clearExtractedColorBlocks();
     }
-  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint, setColorExtractEraserMode, clearColorExtractCurves, clearExtractedColorBlocks]);
+  }, [colorExtractMode, clearColorExtractPoints, setColorExtractMode, setColorExtractTool, setColorExtractPreviewPoint, setColorExtractEraserMode, clearExtractedColorBlocks]);
 
   const handleSave = () => {
     exitColorExtractMode();
@@ -255,23 +258,22 @@ export function Toolbar() {
                   return;
                 }
                 
-                // 进入区域选择模式
-                setColorExtractSelectingRegion(true);
-                setCurrentTool('select');  // 确保可以点击选择
-                console.log('[颜色提取] 进入区域选择模式，请点击一个 BFS 闭合区域');
+                // 进入等待状态，等待用户点击实线区域
+                setColorExtractWaiting(true);
+                console.log('[颜色提取] 进入等待状态，请点击实线闭合区域');
                 // 保持菜单打开，不关闭
               }}
               style={{
                 padding: '4px 8px',
                 fontSize: '12px',
-                backgroundColor: colorExtractSelectingRegion ? '#1890ff' : '#52c41a',
+                backgroundColor: colorExtractWaiting ? '#1890ff' : '#52c41a',
                 color: '#fff',
                 border: 'none',
                 borderRadius: '4px',
                 cursor: 'pointer',
               }}
             >
-              {colorExtractSelectingRegion ? '选择区域中...' : '提取颜色'}
+              {colorExtractWaiting ? '点击实线区域...' : '提取颜色'}
             </button>
             <button
               onClick={() => {
@@ -301,6 +303,12 @@ export function Toolbar() {
                 } else if (confirm(`确定要清空所有 ${colorExtractCurves.length} 条虚线吗？`)) {
                   clearColorExtractCurvesAndShapes();
                   console.log('[颜色提取] 已清空所有虚线和对应的 shapes');
+                  // 清空后同步刷新区域
+                  if (activeLayerId) {
+                    refreshRegionCache(activeLayerId, { clearPaintData: false });
+                    generateRegionIdTexture(activeLayerId);
+                    console.log('[颜色提取] 已重新计算区域');
+                  }
                 }
                 // 保持菜单打开，不关闭
               }}

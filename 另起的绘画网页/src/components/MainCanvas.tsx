@@ -3,8 +3,8 @@ import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
-import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals } from '../utils/regionDetectionExact';
-import { findRegionByPoint } from '../utils/regionDetection';
+import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact } from '../utils/regionDetectionExact';
+import { findRegionByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
@@ -149,6 +149,7 @@ export function MainCanvas() {
     saveToStorage,
     regionPolygonsCache,
     refreshRegionCache,
+    generateRegionIdTexture,
     colorBlockRegionsCache,
     refreshColorBlockCache,
     saveHistory,
@@ -186,7 +187,7 @@ export function MainCanvas() {
     addColorExtractCurve,
     colorExtractEraserMode,
     setColorExtractEraserMode,
-    colorExtractSelectingRegion,
+    colorExtractWaiting,
     lastPolygonPoint,
     setLastPolygonPoint,
     setExtractedColorBlocks,
@@ -387,7 +388,7 @@ export function MainCanvas() {
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, width, height);
     ctx.beginPath();
-    const pxPoints = polygon.map(p => ({ x: p.x * width, y: p.y * height }));
+    const pxPoints = polygon.map(p => ({ x: p.x * width, y: (1 - p.y) * height }));
     ctx.moveTo(pxPoints[0].x, pxPoints[0].y);
     for (let i = 1; i < pxPoints.length; i++) {
       ctx.lineTo(pxPoints[i].x, pxPoints[i].y);
@@ -426,7 +427,7 @@ export function MainCanvas() {
     for (const ring of region) {
       if (ring.length < 3) continue;
       ctx.beginPath();
-      const pxPoints = ring.map(p => ({ x: p.x * width, y: p.y * height }));
+      const pxPoints = ring.map(p => ({ x: p.x * width, y: (1 - p.y) * height }));
       ctx.moveTo(pxPoints[0].x, pxPoints[0].y);
       for (let i = 1; i < pxPoints.length; i++) ctx.lineTo(pxPoints[i].x, pxPoints[i].y);
       ctx.closePath();
@@ -439,7 +440,7 @@ export function MainCanvas() {
     for (const ring of region) {
       if (ring.length < 3) continue;
       ctx.beginPath();
-      const pxPoints = ring.map(p => ({ x: p.x * width, y: p.y * height }));
+      const pxPoints = ring.map(p => ({ x: p.x * width, y: (1 - p.y) * height }));
       ctx.moveTo(pxPoints[0].x, pxPoints[0].y);
       for (let i = 1; i < pxPoints.length; i++) ctx.lineTo(pxPoints[i].x, pxPoints[i].y);
       ctx.closePath();
@@ -616,7 +617,7 @@ export function MainCanvas() {
           const g = colorData.data[srcIdx+1];
           const b = colorData.data[srcIdx+2];
           if (colorData.data[srcIdx+3] < 128) continue;
-          regionPixels.push({ x: cx / width, y: cy / height });
+          regionPixels.push({ x: cx / width, y: 1 - cy / height });
           sumR += r; sumG += g; sumB += b;
 
           // 8邻域
@@ -887,6 +888,75 @@ export function MainCanvas() {
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
     console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
   }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
+
+  // 获取所有虚线形状（从全局 shapes 中筛选）
+  const getDashedShapes = useCallback(() => {
+    return shapes.filter((s: Shape) =>
+      s.color === '#ffaa00' &&
+      (s.type === 'polyline' || s.type === 'quadratic')
+    );
+  }, [shapes]);
+
+  // 计算给定实线区域多边形内的所有虚线子区域
+  const computeDashedSubRegionsInsideSolid = useCallback((
+    solidRegion: Point[][]
+  ): Point[][][] => {
+    const dashedShapes = getDashedShapes();
+    console.log('[虚线子区域计算] 找到虚线形状数量:', dashedShapes.length);
+    
+    if (dashedShapes.length === 0) return [];
+
+    const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+    // 仅用虚线墙计算全局区域划分
+    const allDashedRegions = computeRegionsExact(dashedShapes, worldBounds, 600);
+    console.log('[虚线子区域计算] 虚线形成的全局区域数量:', allDashedRegions.length);
+
+    // 过滤：保留与实线区域有交集的虚线区域
+    const insideRegions = allDashedRegions.filter((region, index) => {
+      if (region.length === 0) return false;
+      
+      // 检查区域是否与实线区域有交集
+      // 方法：检查虚线区域的外环是否有任何点在实线区域内
+      const outer = region[0];
+      let hasPointInside = false;
+      
+      // 采样检查一些点（每隔几个点检查一个）
+      for (let i = 0; i < outer.length; i += Math.max(1, Math.floor(outer.length / 10))) {
+        const point = outer[i];
+        if (isPointInPolygonWithHoles(point, solidRegion)) {
+          hasPointInside = true;
+          break;
+        }
+      }
+      
+      console.log(`[虚线子区域计算] 区域 ${index} 外环顶点数: ${outer.length}, 是否与实线区域有交集: ${hasPointInside}`);
+      return hasPointInside;
+    });
+
+    console.log('[虚线子区域计算] 最终保留的虚线子区域数量:', insideRegions.length);
+    return insideRegions;
+  }, [getDashedShapes]);
+
+  // 虚线添加/删除后同步刷新区域的函数
+  const syncRefreshRegion = useCallback((layerId: string) => {
+    if (!layerId) return;
+    // 同步重新计算区域（不使用 setTimeout）
+    refreshRegionCache(layerId, { clearPaintData: false });
+    // 立即生成区域ID纹理
+    generateRegionIdTexture(layerId);
+  }, [refreshRegionCache, generateRegionIdTexture]);
+
+  // 监听虚线添加后的区域刷新
+  useEffect(() => {
+    // 每当 colorExtractCurves 变化时，延迟刷新区域以确保 shapes 已更新
+    const timer = setTimeout(() => {
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId && colorExtractCurves.length > 0) {
+        syncRefreshRegion(layerId);
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [colorExtractCurves, activeLayerId, layers, syncRefreshRegion]);
 
   // 监听手动触发颜色提取（必须在 performColorExtractionOnRegion 定义之后）
   useEffect(() => {
@@ -2521,6 +2591,11 @@ export function MainCanvas() {
           removeCurve(index);
         }
         
+        // 删除曲线（可能多条）后，同步刷新区域
+        if (toDelete.length > 0 && activeLayerId) {
+          syncRefreshRegion(activeLayerId);
+        }
+        
         // 触发重绘（更新橡皮光标位置）
         requestAnimationFrame(() => {
           drawCanvas();
@@ -2662,9 +2737,9 @@ export function MainCanvas() {
 
     // 颜色提取模式：左键添加点
     if (colorExtractMode && e.button === 0) {
-      // 区域选择模式下不允许绘制
-      if (colorExtractSelectingRegion) {
-        console.log('[颜色提取] 区域选择模式下，不允许绘制');
+      // 等待点击实线区域模式下不允许绘制
+      if (colorExtractWaiting) {
+        console.log('[颜色提取] 等待点击实线区域模式下，不允许绘制');
         return;
       }
       console.log('[颜色提取] 进入颜色提取处理');
@@ -3043,37 +3118,50 @@ export function MainCanvas() {
       return;
     }
     
-    // 颜色提取区域选择模式：点击一个 BFS 区域进行提取
-    const { colorExtractSelectingRegion, setColorExtractSelectingRegion, colorExtractCurves } = useAppStore.getState();
-    if (colorExtractSelectingRegion && colorExtractCurves.length > 0) {
+    // 颜色提取等待状态：点击实线区域提取内部虚线子区域
+    const { colorExtractWaiting, setColorExtractWaiting, colorExtractCurves } = useAppStore.getState();
+    if (colorExtractWaiting && colorExtractCurves.length > 0) {
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
       
-      // 获取点击位置的区域 ID（使用 computeRegionIdAtPoint 计算）
-      const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+      // 1. 获取点击位置所在的实线区域 ID（基于所有形状）
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
-      const regionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
-      console.log('[颜色提取] 点击位置区域 ID:', regionId);
+      const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+      const solidRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
+      console.log('[颜色提取] 点击位置实线区域 ID:', solidRegionId);
       
-      if (regionId !== null && regionId >= 0) {
-        // 获取该区域的多边形
-        const regionPoly = getRegionPolygonById(regionId);
-        if (regionPoly) {
-          console.log('[颜色提取] 找到区域多边形，环数:', regionPoly.length);
-          // 执行颜色提取
-          performColorExtractionOnRegion(regionPoly);
-          console.log('[颜色提取] 已在区域', regionId, '内完成颜色提取');
-        } else {
-          console.warn('[颜色提取] 无法获取区域', regionId, '的多边形');
-          alert('无法获取该区域的详细信息，请重试');
-        }
-      } else {
-        console.warn('[颜色提取] 点击位置不在有效区域内');
-        alert('请点击一个有效的闭合区域内部');
+      if (solidRegionId === null) {
+        alert('请点击一个由实线围成的闭合区域内部');
+        setColorExtractWaiting(false);
+        return;
       }
       
-      // 退出区域选择模式
-      setColorExtractSelectingRegion(false);
+      // 2. 获取该实线区域的多边形
+      const solidRegionPoly = getRegionPolygonById(solidRegionId);
+      if (!solidRegionPoly) {
+        alert('无法获取区域多边形');
+        setColorExtractWaiting(false);
+        return;
+      }
+      
+      // 3. 计算内部的虚线子区域
+      const subRegions = computeDashedSubRegionsInsideSolid(solidRegionPoly);
+      console.log('[颜色提取] 找到虚线子区域数:', subRegions.length);
+      
+      if (subRegions.length === 0) {
+        alert('该实线区域内没有由虚线围成的闭合子区域');
+      } else {
+        // 4. 对每个子区域提取颜色
+        for (const sub of subRegions) {
+          performColorExtractionOnRegion(sub);
+        }
+        alert(`已为 ${subRegions.length} 个虚线子区域上色`);
+      }
+      
+      // 5. 退出等待状态
+      setColorExtractWaiting(false);
+      // 可选：退出颜色提取模式
+      setColorExtractMode(false);
       return;
     }
     
@@ -3371,7 +3459,13 @@ export function MainCanvas() {
             ref={canvasRef}
             width={canvasWidth}
             height={canvasHeight}
-            style={{ imageRendering: 'auto', display: 'block', maxWidth: '100%', maxHeight: '100%' }}
+            style={{
+              imageRendering: 'auto',
+              display: 'block',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              cursor: colorExtractWaiting ? 'crosshair' : (isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default')),
+            }}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
             onMouseDown={handleMouseDown}
