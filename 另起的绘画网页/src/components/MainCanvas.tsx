@@ -788,106 +788,94 @@ export function MainCanvas() {
     console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
   }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
 
-  // 新增：针对 BFS 区域多边形的提取函数
+  // 精确颜色提取：直接将区域内的每个像素颜色复制到 paintBuffer（不合并连通域）
   const performColorExtractionOnRegion = useCallback((regionPolygon: Point[][]) => {
     if (!regionPolygon || regionPolygon.length === 0) {
       console.warn('[颜色提取] 区域多边形为空，无法提取');
       return;
     }
-    
-    console.log('[颜色提取] ==================== 开始 BFS 区域颜色提取 ====================');
+
+    console.log('[颜色提取] ==================== 精确颜色提取开始 ====================');
     const startTime = performance.now();
-    
-    // 输出区域信息
-    console.log(`[颜色提取] 区域环数: ${regionPolygon.length}`);
-    regionPolygon.forEach((ring, ringIdx) => {
-      console.log(`  环 ${ringIdx + 1} 顶点数: ${ring.length}`);
-    });
 
     // 1. 生成掩码（包含边界）
-    console.log(`[颜色提取] Step 1/6: 生成区域掩码 (${canvasWidth}x${canvasHeight})...`);
+    console.log(`[颜色提取] Step 1/4: 生成区域掩码 (${canvasWidth}x${canvasHeight})...`);
     const mask = rasterizeRegionMask(regionPolygon, canvasWidth, canvasHeight);
     const maskPixelCount = mask.reduce((sum, val) => sum + val, 0);
     console.log(`[颜色提取] 掩码生成完成，内部像素数: ${maskPixelCount}`);
-    
+
     if (maskPixelCount === 0) {
       console.log('[颜色提取] 掩码内无像素，提前返回');
       return;
     }
-    
+
     // 2. 获取当前画布颜色数据（背景 + 已有 buffer）
-    console.log('[颜色提取] Step 2/6: 获取画布颜色数据...');
+    console.log('[颜色提取] Step 2/4: 获取画布颜色数据...');
     const colorData = getWorldColorImageData();
     if (!colorData) {
       console.error('[颜色提取] 无法获取画布颜色数据');
       return;
     }
 
-    // 3. 连通区域标记
-    console.log('[颜色提取] Step 3/6: 连通区域标记...');
-    const blocks = extractConnectedComponents(mask, colorData, canvasWidth, canvasHeight);
-    console.log(`[颜色提取] 提取到 ${blocks.length} 个色块`);
-
-    if (blocks.length === 0) {
-      console.log('[颜色提取] 未提取到任何色块，提前返回');
-      return;
-    }
-
-    // 4. 将每个色块填充到 paintBuffer 中
-    console.log('[颜色提取] Step 4/6: 填充 paintBuffer...');
+    // 3. 精确复制像素到 paintBuffer（不再做连通域合并）
+    console.log('[颜色提取] Step 3/4: 精确复制像素到 paintBuffer...');
     const layerId = activeLayerId || layers[0]?.id;
     if (!layerId) {
       console.error('[颜色提取] 没有活动图层');
       return;
     }
-    console.log(`[颜色提取] 目标图层ID: ${layerId}`);
 
     // 确保 paintBuffer 存在
     if (!paintBuffers[layerId]) {
-      console.log('[颜色提取] 初始化 paintBuffer...');
       initPaintBuffer(layerId);
     }
 
-    // 统计总像素数
-    const totalPixels = blocks.reduce((sum, block) => sum + block.pixels.length, 0);
-    console.log(`[颜色提取] 将填充 ${totalPixels} 个像素到缓冲区`);
-
-    // 批量更新 buffer
     let writtenPixels = 0;
     updatePaintBuffer(layerId, (imgData) => {
-      for (const block of blocks) {
-        const { r, g, b } = block.avgColor;
-        for (const pixel of block.pixels) {
-          // 世界坐标转 buffer 像素坐标（Y轴翻转）
-          const px = Math.floor(pixel.x * PAINT_BUFFER_SIZE);
-          const py = Math.floor((1 - pixel.y) * PAINT_BUFFER_SIZE);
+      // 遍历所有像素，只处理掩码内的点
+      for (let y = 0; y < canvasHeight; y++) {
+        for (let x = 0; x < canvasWidth; x++) {
+          const maskIdx = y * canvasWidth + x;
+          if (mask[maskIdx] !== 1) continue;
+
+          // 从 colorData 中获取精确颜色
+          const colorIdx = maskIdx * 4;
+          const r = colorData.data[colorIdx];
+          const g = colorData.data[colorIdx + 1];
+          const b = colorData.data[colorIdx + 2];
+          const a = colorData.data[colorIdx + 3];
+          if (a < 128) continue; // 忽略透明像素
+
+          // 将当前像素的世界坐标映射到 paintBuffer 坐标（512x512）
+          const worldX = x / canvasWidth;
+          const worldY = 1 - y / canvasHeight; // Y轴翻转
+          const px = Math.floor(worldX * PAINT_BUFFER_SIZE);
+          const py = Math.floor((1 - worldY) * PAINT_BUFFER_SIZE);
           if (px >= 0 && px < PAINT_BUFFER_SIZE && py >= 0 && py < PAINT_BUFFER_SIZE) {
-            const idx = (py * PAINT_BUFFER_SIZE + px) * 4;
-            imgData.data[idx] = r;
-            imgData.data[idx + 1] = g;
-            imgData.data[idx + 2] = b;
-            imgData.data[idx + 3] = 255;
+            const bufIdx = (py * PAINT_BUFFER_SIZE + px) * 4;
+            imgData.data[bufIdx] = r;
+            imgData.data[bufIdx + 1] = g;
+            imgData.data[bufIdx + 2] = b;
+            imgData.data[bufIdx + 3] = 255; // 完全不透明
             writtenPixels++;
           }
         }
       }
     });
-    console.log(`[颜色提取] 成功写入 ${writtenPixels} 个像素`);
 
-    // 5. 保存历史，以便撤销
-    console.log('[颜色提取] Step 5/6: 保存历史记录...');
+    console.log(`[颜色提取] 成功写入 ${writtenPixels} 个精确像素`);
+
+    // 4. 保存历史，以便撤销
+    console.log('[颜色提取] Step 4/4: 保存历史记录...');
     saveHistory();
-    console.log('[颜色提取] 历史记录已保存');
 
-    // 6. 清空临时色块显示
-    console.log('[颜色提取] Step 6/6: 清空临时色块...');
+    // 5. 清空临时色块显示
     setExtractedColorBlocks([]);
 
     const endTime = performance.now();
-    console.log(`[颜色提取] ==================== BFS 区域颜色提取完成 ====================`);
-    console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
-    console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
+    console.log('[颜色提取] ==================== 精确颜色提取完成 ====================');
+    console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms，写入像素数: ${writtenPixels}`);
+  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
 
   // 获取所有虚线形状（从全局 shapes 中筛选）
   const getDashedShapes = useCallback(() => {
