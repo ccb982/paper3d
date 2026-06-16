@@ -6,7 +6,38 @@ import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact } from '../utils/regionDetectionExact';
 import { findRegionByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
+import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
+
+// ========== HSL 到 RGB 转换 ==========
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  let r: number, g: number, b: number;
+  
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1/6) return p + (q - p) * 6 * t;
+      if (t < 1/2) return q;
+      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  
+  return {
+    r: Math.round(r * 255),
+    g: Math.round(g * 255),
+    b: Math.round(b * 255)
+  };
+}
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -1571,11 +1602,10 @@ export function MainCanvas() {
     ctx.translate(-currentWidth / 2, -currentHeight / 2);
 
     // 绘制图片图层
-    if (imageState.originalImage && imageState.imageSrc) {
+    if (layerVisibility.imageLayer && imageState.originalImage && imageState.imageSrc) {
       const imageLayer = layers.find(l => l.id === imageState.imageLayerId);
       const isImageLayerVisible = imageLayer?.visible ?? false;
       if (isImageLayerVisible) {
-        ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, currentWidth, currentHeight);
         ctx.globalAlpha = imageLayer?.opacity ?? 0.5;
         const img = imageState.originalImage;
         
@@ -1757,17 +1787,48 @@ export function MainCanvas() {
       });
     }
 
-    // 绘制区域图层（显示区域注释算法提取的色块区域）
+    // 绘制区域图层（显示 BFS 按色相分组后的实际颜色）
     if (layerVisibility.regionLayer) {
       const regions = colorBlockRegionsCache[activeLayerId] || [];
-      const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da', '#a8e6cf', '#ffd3a5', '#ff8b94', '#6c5ce7'];
+      let buffer = paintBuffers[activeLayerId];
       
+      // 如果 buffer 不存在，初始化一个空 buffer
+      if (!buffer) {
+        initPaintBuffer(activeLayerId);
+        buffer = paintBuffers[activeLayerId];
+      }
+      
+      if (regions.length > 0 && buffer) {
+        // 对每个区域执行 BFS 按色相聚类并渲染
+        regions.forEach((region, idx) => {
+          // 生成区域掩码
+          const mask = rasterizeRegionMask(region, canvasWidth, canvasHeight);
+          
+          // 执行 BFS 按色相聚类
+          const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, buffer!, 0.05);
+          
+          // 用每个聚类的平均色填充（优化：只遍历聚类中的像素）
+          clusters.forEach((cluster) => {
+            // 将平均 HSL 转换为 RGB
+            const { r, g, b } = hslToRgb(cluster.avgHsl.h, cluster.avgHsl.s, cluster.avgHsl.l);
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
+            
+            // 直接遍历聚类中的像素坐标
+            for (const pixelIdx of cluster.pixels) {
+              const y = Math.floor(pixelIdx / canvasWidth);
+              const x = pixelIdx % canvasWidth;
+              ctx.fillRect(x, y, 1, 1);
+            }
+          });
+        });
+      }
+      
+      // 额外绘制区域边框和标签
       regions.forEach((region, idx) => {
         ctx.save();
-        const color = colors[idx % colors.length];
-        ctx.fillStyle = color + '40'; // 40%透明度填充
+        const color = '#ff6b6b';
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 1;
         
         for (const ring of region) {
           if (ring.length < 3) continue;
@@ -1778,9 +1839,8 @@ export function MainCanvas() {
             ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
           }
           ctx.closePath();
+          ctx.stroke();
         }
-        ctx.fill('evenodd');
-        ctx.stroke();
         
         // 显示区域ID标签
         if (region.length > 0) {
@@ -1791,11 +1851,13 @@ export function MainCanvas() {
           centroid.x /= region[0].length;
           centroid.y /= region[0].length;
           const labelPos = worldToCanvasFn(centroid.x, centroid.y);
-          ctx.fillStyle = color;
-          ctx.font = 'bold 12px monospace';
+          ctx.fillStyle = '#fff';
+          ctx.font = 'bold 10px monospace';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(`色块${idx}`, labelPos.x, labelPos.y);
+          ctx.shadowColor = '#000';
+          ctx.shadowBlur = 2;
+          ctx.fillText(`R${idx}`, labelPos.x, labelPos.y);
         }
         ctx.restore();
       });
@@ -2447,7 +2509,18 @@ export function MainCanvas() {
   useEffect(() => {
     refreshRegionCache(activeLayerId);
     refreshColorBlockCache(activeLayerId);
-  }, []);
+    // 确保 paintBuffer 被初始化
+    if (!paintBuffers[activeLayerId]) {
+      initPaintBuffer(activeLayerId);
+    }
+  }, [activeLayerId]);
+
+  // 当图层切换时，确保 colorBlockRegionsCache 被刷新
+  useEffect(() => {
+    if (activeLayerId) {
+      refreshColorBlockCache(activeLayerId);
+    }
+  }, [activeLayerId, shapes]);
 
 
 

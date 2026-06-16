@@ -326,6 +326,43 @@ export function Toolbar() {
             </button>
             <button
               onClick={() => {
+                // 动态导入压缩模块
+                import('../utils/colorCompressor').then(({ compressLayerColors }) => {
+                  const result = compressLayerColors(activeLayerId);
+                  if (result) {
+                    console.log('[压缩结果]', result);
+                    // 下载 JSON 文件
+                    const json = JSON.stringify(result, null, 2);
+                    const blob = new Blob([json], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `color_compression_${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    alert(`压缩完成！共 ${result.regionCount} 个区域，调色板大小: ${result.palette.length}`);
+                  } else {
+                    alert('压缩失败，请确保有虚线围成的闭合区域');
+                  }
+                }).catch(err => {
+                  console.error('[颜色压缩] 导入失败:', err);
+                  alert('压缩功能加载失败');
+                });
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#722ed1',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              压缩颜色
+            </button>
+            <button
+              onClick={() => {
                 setShowColorExtractMenu(false);
               }}
               style={{
