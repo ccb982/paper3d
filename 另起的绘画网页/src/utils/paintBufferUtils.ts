@@ -118,7 +118,7 @@ export function extractPolygonsFromImageData(
 }
 
 /** 摩尔邻域边界追踪 (返回有序边界点，像素坐标) */
-function traceBoundary(
+export function traceBoundary(
   pixels: [number, number][],
   width: number,
   height: number,

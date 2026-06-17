@@ -7,6 +7,7 @@ import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeSca
 import { findRegionByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
+import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, DashedSubRegion } from '../utils/colorExtractionUtils';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
 // ========== HSL 到 RGB 转换 ==========
@@ -183,6 +184,8 @@ export function MainCanvas() {
     generateRegionIdTexture,
     colorBlockRegionsCache,
     refreshColorBlockCache,
+    dashedSubRegionsCache,
+    refreshDashedSubRegionsCache,
     saveHistory,
     currentColor,
     paintBrushSize,
@@ -915,46 +918,6 @@ export function MainCanvas() {
       (s.type === 'polyline' || s.type === 'quadratic')
     );
   }, [shapes]);
-
-  // 计算给定实线区域多边形内的所有虚线子区域
-  const computeDashedSubRegionsInsideSolid = useCallback((
-    solidRegion: Point[][]
-  ): Point[][][] => {
-    const dashedShapes = getDashedShapes();
-    console.log('[虚线子区域计算] 找到虚线形状数量:', dashedShapes.length);
-    
-    if (dashedShapes.length === 0) return [];
-
-    const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-    // 仅用虚线墙计算全局区域划分
-    const allDashedRegions = computeRegionsExact(dashedShapes, worldBounds, 600);
-    console.log('[虚线子区域计算] 虚线形成的全局区域数量:', allDashedRegions.length);
-
-    // 过滤：保留与实线区域有交集的虚线区域
-    const insideRegions = allDashedRegions.filter((region, index) => {
-      if (region.length === 0) return false;
-      
-      // 检查区域是否与实线区域有交集
-      // 方法：检查虚线区域的外环是否有任何点在实线区域内
-      const outer = region[0];
-      let hasPointInside = false;
-      
-      // 采样检查一些点（每隔几个点检查一个）
-      for (let i = 0; i < outer.length; i += Math.max(1, Math.floor(outer.length / 10))) {
-        const point = outer[i];
-        if (isPointInPolygonWithHoles(point, solidRegion)) {
-          hasPointInside = true;
-          break;
-        }
-      }
-      
-      console.log(`[虚线子区域计算] 区域 ${index} 外环顶点数: ${outer.length}, 是否与实线区域有交集: ${hasPointInside}`);
-      return hasPointInside;
-    });
-
-    console.log('[虚线子区域计算] 最终保留的虚线子区域数量:', insideRegions.length);
-    return insideRegions;
-  }, [getDashedShapes]);
 
   // 虚线添加/删除后同步刷新区域的函数
   const syncRefreshRegion = useCallback((layerId: string) => {
@@ -3179,49 +3142,45 @@ export function MainCanvas() {
       return;
     }
     
-    // 颜色提取等待状态：点击实线区域提取内部虚线子区域
-    const { colorExtractWaiting, setColorExtractWaiting, colorExtractCurves } = useAppStore.getState();
-    if (colorExtractWaiting && colorExtractCurves.length > 0) {
+    // 颜色提取等待状态：点击区域提取颜色（使用与 Ctrl+G 相同的区域算法）
+    const { colorExtractWaiting, setColorExtractWaiting } = useAppStore.getState();
+    if (colorExtractWaiting) {
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
       
-      // 1. 获取点击位置所在的实线区域 ID（只使用实线形状，排除虚线）
-      const solidShapes = shapes.filter(s => 
-        s.layerId === activeLayerId && 
-        s.id !== 'current_shape' &&
-        s.color !== '#ffaa00'  // 排除虚线（颜色标记）
-      );
-      const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-      const solidRegionId = computeRegionIdAtPoint(worldCoords, solidShapes, worldBounds, 300);
-      console.log('[颜色提取] 点击位置实线区域 ID:', solidRegionId);
+      console.log('[颜色提取] 点击位置:', worldCoords);
       
-      if (solidRegionId === null) {
-        alert('请点击一个由实线围成的闭合区域内部');
+      // 1. 刷新区域缓存（使用与 Ctrl+G 相同的算法）
+      refreshDashedSubRegionsCache(activeLayerId);
+      
+      // 2. 从缓存中获取区域列表
+      const regions = dashedSubRegionsCache[activeLayerId] || [];
+      console.log('[颜色提取] 区域缓存数量:', regions.length);
+      
+      if (regions.length === 0) {
+        alert('当前图层没有可提取的闭合区域');
         setColorExtractWaiting(false);
         return;
       }
       
-      // 2. 获取该实线区域的多边形
-      const solidRegionPoly = getRegionPolygonById(solidRegionId);
-      if (!solidRegionPoly) {
-        alert('无法获取区域多边形');
+      // 3. 使用 findRegionAtPoint 查找点击位置对应的区域
+      const clickedRegion = findRegionAtPoint(worldCoords, regions, canvasWidth, canvasHeight);
+      
+      if (!clickedRegion) {
+        alert('请点击一个闭合区域内部');
         setColorExtractWaiting(false);
         return;
       }
       
-      // 3. 计算内部的虚线子区域
-      const subRegions = computeDashedSubRegionsInsideSolid(solidRegionPoly);
-      console.log('[颜色提取] 找到虚线子区域数:', subRegions.length);
+      console.log('[颜色提取] 找到区域 ID:', clickedRegion.id);
+      console.log('[颜色提取] 区域顶点数:', clickedRegion.polygon[0]?.length);
+      console.log('[颜色提取] 区域像素数:', clickedRegion.pixelCount);
+      console.log('[颜色提取] 区域中心点:', clickedRegion.centroid);
       
-      if (subRegions.length === 0) {
-        alert('该实线区域内没有由虚线围成的闭合子区域');
-      } else {
-        // 4. 对每个子区域提取颜色
-        for (const sub of subRegions) {
-          performColorExtractionOnRegion(sub);
-        }
-        alert(`已为 ${subRegions.length} 个虚线子区域上色`);
-      }
+      // 4. 根据区域多边形提取颜色
+      performColorExtractionOnRegion(clickedRegion.polygon);
+      
+      alert(`已为区域 #${clickedRegion.id} 上色`);
       
       // 5. 退出等待状态
       setColorExtractWaiting(false);

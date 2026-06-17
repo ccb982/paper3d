@@ -68,7 +68,7 @@ export class FluidSimulatorAdapter implements ITextureGenerator, IFluidForceTarg
             centeringInterval: 0.5,    // 每0.5秒计算一次质心并居中
             // phi 场后处理修正参数
             clampAirPhi: true,          // 启用空气区 phi 上限钳制
-            maxAirPhi: 0.001,           // 空气区 phi 上限
+            maxAirPhi: 0.000,           // 空气区 phi 上限
             compensateWaterPhi: true,   // 启用水体区负向补偿
             waterCompensationRate: 0.1, // 补偿速率（避免水体流失）
             ...params

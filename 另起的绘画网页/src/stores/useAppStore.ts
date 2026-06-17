@@ -4,6 +4,7 @@ import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getD
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
+import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 
 interface AppState {
   // 图片导入状态
@@ -179,6 +180,16 @@ interface AppState {
   // 色块区域检测缓存（独立存储，使用相同算法）
   colorBlockRegionsCache: Record<string, Point[][][]>;
   refreshColorBlockCache: (layerId: string) => void;
+
+  // 虚线子区域缓存（带 ID）
+  dashedSubRegionsCache: Record<string, Array<{
+    id: number;
+    solidRegionId: number;
+    polygon: Point[][];
+    pixelCount: number;
+    centroid: Point;
+  }>>;
+  refreshDashedSubRegionsCache: (layerId: string) => void;
 
   /** 每个图层的像素绘制缓冲区 (512x512 RGBA) */
   paintBuffers: Record<string, ImageData | null>;
@@ -897,6 +908,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     
     set((s) => ({
       colorBlockRegionsCache: { ...s.colorBlockRegionsCache, [layerId]: regions },
+    }));
+  },
+
+  // 虚线子区域缓存（带 ID）
+  dashedSubRegionsCache: {},
+  refreshDashedSubRegionsCache: (layerId) => {
+    const state = get();
+    // 获取当前图层的所有形状
+    const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
+    
+    if (allShapesInLayer.length === 0) {
+      set((s) => ({
+        dashedSubRegionsCache: { ...s.dashedSubRegionsCache, [layerId]: [] },
+      }));
+      return;
+    }
+
+    console.log('[虚线子区域缓存] 图层:', layerId, '图形总数:', allShapesInLayer.length);
+
+    // 使用与 Ctrl+G 相同的算法计算所有闭合区域
+    const subRegions = computeAllDashedClosedRegions(
+      allShapesInLayer,
+      state.canvasWidth,
+      state.canvasHeight
+    );
+
+    console.log('[虚线子区域缓存] 计算出的区域数:', subRegions.length);
+
+    set((s) => ({
+      dashedSubRegionsCache: { ...s.dashedSubRegionsCache, [layerId]: subRegions },
     }));
   },
 
