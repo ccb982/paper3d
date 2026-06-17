@@ -48,23 +48,33 @@ function computeCentroid(polygon: Point[]): Point {
   return { x: cx / polygon.length, y: cy / polygon.length };
 }
 
-// ========== 使用与 Ctrl+G 相同的算法计算所有闭合区域 ==========
-// 直接使用 computeRegionsExact 返回所有封闭区域，每个区域分配唯一 ID
+// ========== 使用与 Ctrl+G 相同的算法计算纯虚线闭合区域 ==========
+// 只使用虚线形状（颜色为 '#ffaa00'）进行区域检测
 export function computeAllDashedClosedRegions(
   shapes: Shape[],
   canvasWidth: number,
   canvasHeight: number,
   resolution: number = 600
 ): DashedSubRegion[] {
-  console.log('[虚线闭合区域计算] 开始，使用与 Ctrl+G 相同的算法');
-  console.log('[虚线闭合区域计算] 图形总数:', shapes.length);
+  console.log('[纯虚线闭合区域计算] 开始');
+  console.log('[纯虚线闭合区域计算] 输入图形总数:', shapes.length);
+  
+  // 只筛选虚线形状（颜色为 '#ffaa00'）
+  const dashedShapes = shapes.filter(s => s.color === '#ffaa00');
+  
+  console.log('[纯虚线闭合区域计算] 虚线形状数:', dashedShapes.length);
+  
+  if (dashedShapes.length === 0) {
+    console.log('[纯虚线闭合区域计算] 没有虚线形状，返回空数组');
+    return [];
+  }
   
   const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
   
-  // 使用与调试模式相同的区域检测算法
-  const regions = computeRegionsExact(shapes, worldBounds, resolution);
+  // 使用与调试模式相同的区域检测算法，但只使用虚线形状
+  const regions = computeRegionsExact(dashedShapes, worldBounds, resolution);
   
-  console.log('[虚线闭合区域计算] 检测到的区域数:', regions.length);
+  console.log('[纯虚线闭合区域计算] 检测到的区域数:', regions.length);
   
   const result: DashedSubRegion[] = [];
   
@@ -84,9 +94,10 @@ export function computeAllDashedClosedRegions(
       centroid: centroid
     });
     
-    console.log(`[虚线闭合区域计算] 区域 ${i}: ${outerRing.length} 个顶点, 面积: ${area.toFixed(4)}`);
+    console.log(`[纯虚线闭合区域计算] 区域 ${i}: ${outerRing.length} 个顶点, 面积: ${area.toFixed(4)}`);
   }
   
+  console.log('[纯虚线闭合区域计算] 最终返回区域数:', result.length);
   return result;
 }
 

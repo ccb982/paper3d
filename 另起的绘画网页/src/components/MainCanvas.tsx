@@ -1419,9 +1419,20 @@ export function MainCanvas() {
   const drawShape = useCallback((ctx: CanvasRenderingContext2D, shape: Shape, isPreview = false) => {
     const points = shape.points;
     const color = isPreview ? '#666' : (shape.color || '#ff0000');
+    
+    // 虚线形状（颜色 '#ffaa00'）需要设置虚线样式
+    const isDashed = color === '#ffaa00';
+    
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = lineWidth;
+    
+    // 设置虚线样式
+    if (isDashed) {
+      ctx.setLineDash([8, 6]);
+    } else {
+      ctx.setLineDash([]);
+    }
 
     switch (shape.type) {
       case 'point':
@@ -1546,6 +1557,9 @@ export function MainCanvas() {
         }
       }
     }
+    
+    // 恢复实线样式，避免影响其他绘制
+    ctx.setLineDash([]);
   }, [worldToCanvasFn, lineWidth, currentColor]);
 
   const drawCanvas = useCallback(() => {
@@ -3150,15 +3164,26 @@ export function MainCanvas() {
       
       console.log('[颜色提取] 点击位置:', worldCoords);
       
-      // 1. 刷新区域缓存（使用与 Ctrl+G 相同的算法）
-      refreshDashedSubRegionsCache(activeLayerId);
+      // 1. 获取当前图层的所有形状
+      const allShapesInLayer = shapes.filter(s => s.layerId === activeLayerId);
+      console.log('[颜色提取] 当前图层图形数:', allShapesInLayer.length);
       
-      // 2. 从缓存中获取区域列表
-      const regions = dashedSubRegionsCache[activeLayerId] || [];
-      console.log('[颜色提取] 区域缓存数量:', regions.length);
+      if (allShapesInLayer.length === 0) {
+        alert('当前图层没有图形');
+        setColorExtractWaiting(false);
+        return;
+      }
+      
+      // 2. 直接计算纯虚线闭合区域（不依赖缓存）
+      const regions = computeAllDashedClosedRegions(
+        allShapesInLayer,
+        canvasWidth,
+        canvasHeight
+      );
+      console.log('[颜色提取] 计算出的区域数:', regions.length);
       
       if (regions.length === 0) {
-        alert('当前图层没有可提取的闭合区域');
+        alert('当前图层没有由虚线围成的闭合区域');
         setColorExtractWaiting(false);
         return;
       }
@@ -3167,7 +3192,7 @@ export function MainCanvas() {
       const clickedRegion = findRegionAtPoint(worldCoords, regions, canvasWidth, canvasHeight);
       
       if (!clickedRegion) {
-        alert('请点击一个闭合区域内部');
+        alert('请点击一个虚线闭合区域内部');
         setColorExtractWaiting(false);
         return;
       }
