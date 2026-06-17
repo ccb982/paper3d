@@ -1775,6 +1775,7 @@ export function MainCanvas() {
         buffer = paintBuffers[activeLayerId];
       }
       
+      // 只有在有区域且有 buffer 时才渲染
       if (regions.length > 0 && buffer) {
         // 对每个区域执行 BFS 按色相聚类并渲染
         regions.forEach((region, idx) => {
@@ -1782,7 +1783,7 @@ export function MainCanvas() {
           const mask = rasterizeRegionMask(region, canvasWidth, canvasHeight);
           
           // 执行 BFS 按色相聚类
-          const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, buffer!, 0.05);
+          const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, buffer, 0.05);
           
           // 用每个聚类的平均色填充（优化：只遍历聚类中的像素）
           clusters.forEach((cluster) => {
@@ -1798,46 +1799,46 @@ export function MainCanvas() {
             }
           });
         });
-      }
-      
-      // 额外绘制区域边框和标签
-      regions.forEach((region, idx) => {
-        ctx.save();
-        const color = '#ff6b6b';
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
         
-        for (const ring of region) {
-          if (ring.length < 3) continue;
-          const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
-          ctx.beginPath();
-          ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
-          for (let i = 1; i < canvasRing.length; i++) {
-            ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
+        // 额外绘制区域边框和标签
+        regions.forEach((region, idx) => {
+          ctx.save();
+          const color = '#ff6b6b';
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1;
+          
+          for (const ring of region) {
+            if (ring.length < 3) continue;
+            const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
+            ctx.beginPath();
+            ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
+            for (let i = 1; i < canvasRing.length; i++) {
+              ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
+            }
+            ctx.closePath();
+            ctx.stroke();
           }
-          ctx.closePath();
-          ctx.stroke();
-        }
-        
-        // 显示区域ID标签
-        if (region.length > 0) {
-          const centroid = region[0].reduce((acc, p) => ({
-            x: acc.x + p.x,
-            y: acc.y + p.y
-          }), { x: 0, y: 0 });
-          centroid.x /= region[0].length;
-          centroid.y /= region[0].length;
-          const labelPos = worldToCanvasFn(centroid.x, centroid.y);
-          ctx.fillStyle = '#fff';
-          ctx.font = 'bold 10px monospace';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.shadowColor = '#000';
-          ctx.shadowBlur = 2;
-          ctx.fillText(`R${idx}`, labelPos.x, labelPos.y);
-        }
-        ctx.restore();
-      });
+          
+          // 显示区域ID标签
+          if (region.length > 0) {
+            const centroid = region[0].reduce((acc, p) => ({
+              x: acc.x + p.x,
+              y: acc.y + p.y
+            }), { x: 0, y: 0 });
+            centroid.x /= region[0].length;
+            centroid.y /= region[0].length;
+            const labelPos = worldToCanvasFn(centroid.x, centroid.y);
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 10px monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = '#000';
+            ctx.shadowBlur = 2;
+            ctx.fillText(`R${idx}`, labelPos.x, labelPos.y);
+          }
+          ctx.restore();
+        });
+      }
     }
 
     // ========== 调试：BFS区域绘制 ==========
