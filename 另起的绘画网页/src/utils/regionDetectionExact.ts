@@ -210,7 +210,7 @@ export function computeGridRegions(
   }
 
   const regionIdGrid: number[][] = Array(resolution).fill(null).map(() => Array(resolution).fill(-1));
-  const regions: GridRegion[] = [];
+  let regions: GridRegion[] = [];
   let currentId = 0;
   const dirs = [[-1, 0], [1, 0], [0, -1], [0, 1]];
 
