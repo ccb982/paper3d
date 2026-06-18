@@ -59,6 +59,7 @@ export function Toolbar() {
     clearExtractedColorBlocks,
     refreshRegionCache,
     generateRegionIdTexture,
+    bakeRegionLayerTexture,
     activeLayerId,
   } = useAppStore();
 
@@ -341,6 +342,8 @@ export function Toolbar() {
                     a.click();
                     URL.revokeObjectURL(url);
                     alert(`压缩完成！共 ${result.regionCount} 个区域，调色板大小: ${result.palette.length}`);
+                    // 新增：烘焙区域色块图层
+                    bakeRegionLayerTexture(activeLayerId);
                   } else {
                     alert('压缩失败，请确保有虚线围成的闭合区域');
                   }

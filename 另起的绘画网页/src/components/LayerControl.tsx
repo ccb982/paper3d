@@ -35,10 +35,23 @@ export function LayerControl() {
     canvasHeight,
     setCanvasWidth,
     setCanvasHeight,
+    // 区域色块图层烘焙
+    regionLayerCanvas,
+    bakeRegionLayerTexture,
   } = useAppStore();
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
+
+  // 切换区域色块图层可见性时自动烘焙
+  const handleToggleRegionLayer = () => {
+    const currentVisibility = layerVisibility?.regionLayer ?? false;
+    toggleLayer('regionLayer');
+    // 如果开启可见性且还没有烘焙过，自动触发烘焙
+    if (!currentVisibility && !regionLayerCanvas) {
+      bakeRegionLayerTexture(activeLayerId || '');
+    }
+  };
 
   const handleAddLayer = () => {
     addLayer(`图层 ${layers.length + 1}`);
@@ -260,7 +273,7 @@ export function LayerControl() {
           <input
             type="checkbox"
             checked={layerVisibility?.regionLayer ?? false}
-            onChange={() => toggleLayer('regionLayer')}
+            onChange={handleToggleRegionLayer}
           />
           区域色块图层
         </label>

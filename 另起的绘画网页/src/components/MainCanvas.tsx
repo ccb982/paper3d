@@ -231,6 +231,11 @@ export function MainCanvas() {
     setShowColorExtractDebug,
     colorExtractDebugData,
     setColorExtractDebugData,
+    // 区域色块图层纹理
+    regionLayerTexture,
+    generateRegionLayerTexture,
+    // 新的区域色块图层缓存画布
+    regionLayerCanvas,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -906,10 +911,17 @@ export function MainCanvas() {
     // 5. 清空临时色块显示
     setExtractedColorBlocks([]);
 
+    // 6. 更新区域色块图层纹理（静态烘焙）
+    console.log('[颜色提取] Step 5/5: 生成区域图层纹理...');
+    const currentLayerId = activeLayerId || layers[0]?.id;
+    if (currentLayerId) {
+      generateRegionLayerTexture(currentLayerId);
+    }
+
     const endTime = performance.now();
     console.log('[颜色提取] ==================== 精确颜色提取完成 ====================');
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms，写入像素数: ${writtenPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
+  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, generateRegionLayerTexture]);
 
   // 获取所有虚线形状（从全局 shapes 中筛选）
   const getDashedShapes = useCallback(() => {
@@ -1764,81 +1776,9 @@ export function MainCanvas() {
       });
     }
 
-    // 绘制区域图层（显示 BFS 按色相分组后的实际颜色）
-    if (layerVisibility.regionLayer) {
-      const regions = colorBlockRegionsCache[activeLayerId] || [];
-      let buffer = paintBuffers[activeLayerId];
-      
-      // 如果 buffer 不存在，初始化一个空 buffer
-      if (!buffer) {
-        initPaintBuffer(activeLayerId);
-        buffer = paintBuffers[activeLayerId];
-      }
-      
-      // 只有在有区域且有 buffer 时才渲染
-      if (regions.length > 0 && buffer) {
-        // 对每个区域执行 BFS 按色相聚类并渲染
-        regions.forEach((region, idx) => {
-          // 生成区域掩码
-          const mask = rasterizeRegionMask(region, canvasWidth, canvasHeight);
-          
-          // 执行 BFS 按色相聚类
-          const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, buffer, 0.05);
-          
-          // 用每个聚类的平均色填充（优化：只遍历聚类中的像素）
-          clusters.forEach((cluster) => {
-            // 将平均 HSL 转换为 RGB
-            const { r, g, b } = hslToRgb(cluster.avgHsl.h, cluster.avgHsl.s, cluster.avgHsl.l);
-            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.8)`;
-            
-            // 直接遍历聚类中的像素坐标
-            for (const pixelIdx of cluster.pixels) {
-              const y = Math.floor(pixelIdx / canvasWidth);
-              const x = pixelIdx % canvasWidth;
-              ctx.fillRect(x, y, 1, 1);
-            }
-          });
-        });
-        
-        // 额外绘制区域边框和标签
-        regions.forEach((region, idx) => {
-          ctx.save();
-          const color = '#ff6b6b';
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 1;
-          
-          for (const ring of region) {
-            if (ring.length < 3) continue;
-            const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
-            ctx.beginPath();
-            ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
-            for (let i = 1; i < canvasRing.length; i++) {
-              ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
-            }
-            ctx.closePath();
-            ctx.stroke();
-          }
-          
-          // 显示区域ID标签
-          if (region.length > 0) {
-            const centroid = region[0].reduce((acc, p) => ({
-              x: acc.x + p.x,
-              y: acc.y + p.y
-            }), { x: 0, y: 0 });
-            centroid.x /= region[0].length;
-            centroid.y /= region[0].length;
-            const labelPos = worldToCanvasFn(centroid.x, centroid.y);
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 10px monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.shadowColor = '#000';
-            ctx.shadowBlur = 2;
-            ctx.fillText(`R${idx}`, labelPos.x, labelPos.y);
-          }
-          ctx.restore();
-        });
-      }
+    // 绘制区域色块图层（静态纹理）
+    if (layerVisibility.regionLayer && regionLayerCanvas) {
+      ctx.drawImage(regionLayerCanvas, 0, 0);
     }
 
     // ========== 调试：BFS区域绘制 ==========

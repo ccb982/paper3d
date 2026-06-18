@@ -5,6 +5,7 @@ import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
+import { bfsHueClustering, rasterizeRegionMask, hslToRgb } from '../utils/colorCompressor';
 
 interface AppState {
   // 图片导入状态
@@ -175,7 +176,7 @@ interface AppState {
   // 区域检测缓存
   regionPolygonsCache: Record<string, Point[][][]>;
   regionScanlineCache: Record<string, ScanlineCache>;
-  refreshRegionCache: (layerId: string) => void;
+  refreshRegionCache: (layerId: string, options?: { clearPaintData?: boolean }) => void;
 
   // 色块区域检测缓存（独立存储，使用相同算法）
   colorBlockRegionsCache: Record<string, Point[][][]>;
@@ -190,6 +191,10 @@ interface AppState {
     centroid: Point;
   }>>;
   refreshDashedSubRegionsCache: (layerId: string) => void;
+
+  // 区域色块图层缓存（静态纹理画布）
+  regionLayerCanvas: HTMLCanvasElement | null;
+  bakeRegionLayerTexture: (layerId: string) => void;
 
   /** 每个图层的像素绘制缓冲区 (512x512 RGBA) */
   paintBuffers: Record<string, ImageData | null>;
@@ -219,6 +224,12 @@ interface AppState {
   // 区域ID纹理缓存 - 用于快速查询像素所属区域
   regionIdTexture: Map<string, Uint8Array>; // key: layerId, value: 512x512 Uint8Array
   generateRegionIdTexture: (layerId: string) => void;
+
+  // 区域色块图层纹理缓存（静态烘焙）
+  // key: layerId, value: ImageData
+  regionLayerTexture: Record<string, ImageData | null>;
+  /** 生成区域色块图层纹理（只使用虚线围成的区域） */
+  generateRegionLayerTexture: (layerId: string) => void;
 
   // 撤销历史（复合快照）
   historySnapshots: Array<{ 
@@ -862,7 +873,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300);
     const scanlineCache = computeScanlineIntervals(gridData);
-    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300, 1.0);
+    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300);
     console.log('[绘画后区域检测] 检测到的封闭区域数量:', regions.length);
     
     for (let i = 0; i < regions.length; i++) {
@@ -941,8 +952,74 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  // 区域色块图层缓存（静态纹理画布）
+  regionLayerCanvas: null,
+  /**
+   * 烘焙区域色块图层：基于虚线闭合区域，从当前画布合成图中提取颜色块，
+   * 生成静态纹理画布，并缓存到 regionLayerCanvas。
+   */
+  bakeRegionLayerTexture: (layerId: string) => {
+    const state = get();
+    const { shapes, canvasWidth, canvasHeight } = state;
+
+    // 1. 获取虚线闭合区域（仅使用虚线形状）
+    const allShapes = shapes.filter(s => s.layerId === layerId);
+    const dashedRegions = computeAllDashedClosedRegions(allShapes, canvasWidth, canvasHeight);
+    if (dashedRegions.length === 0) {
+      // 没有虚线区域，清空缓存
+      set({ regionLayerCanvas: null });
+      return;
+    }
+
+    // 2. 合成当前画布的完整颜色数据（背景 + 绘制层）
+    const composited = getCompositedImageData(state);
+    if (!composited) {
+      console.warn('[bakeRegionLayerTexture] 无法合成图像数据');
+      return;
+    }
+
+    // 3. 创建输出画布
+    const outputCanvas = document.createElement('canvas');
+    outputCanvas.width = canvasWidth;
+    outputCanvas.height = canvasHeight;
+    const outCtx = outputCanvas.getContext('2d')!;
+    // 初始透明
+    outCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+    const outImageData = outCtx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const outData = outImageData.data;
+
+    // 4. 对每个虚线区域进行色块提取并填充到输出画布
+    for (const region of dashedRegions) {
+      // 4a. 生成该区域的像素掩码（Uint8Array，1=内部）
+      const mask = rasterizeRegionMask(region.polygon, canvasWidth, canvasHeight);
+
+      // 4b. 对掩码内的像素进行 BFS 色相聚类（从 composited 中提取颜色）
+      const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, composited, 0.05);
+
+      // 4c. 将每个聚类的平均色填充到输出画布对应的像素位置
+      for (const cluster of clusters) {
+        const rgb = hslToRgb(cluster.avgHsl.h, cluster.avgHsl.s, cluster.avgHsl.l);
+        for (const pixelIdx of cluster.pixels) {
+          const outIdx = pixelIdx * 4;
+          outData[outIdx] = rgb.r;
+          outData[outIdx + 1] = rgb.g;
+          outData[outIdx + 2] = rgb.b;
+          outData[outIdx + 3] = 255;
+        }
+      }
+    }
+
+    // 5. 将填充好的 ImageData 放回画布
+    outCtx.putImageData(outImageData, 0, 0);
+
+    // 6. 存储到 store
+    set({ regionLayerCanvas: outputCanvas });
+    console.log('[bakeRegionLayerTexture] 区域色块图层烘焙完成');
+  },
+
   // 像素缓冲区相关
   paintBuffers: {},
+  regionLayerTexture: {}, // 区域色块图层纹理缓存
   initPaintBuffer: (layerId) =>
     set((state) => {
       if (state.paintBuffers[layerId]) return state;
@@ -1016,6 +1093,81 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       });
     }
+  },
+
+  /**
+   * 生成区域色块图层纹理（静态烘焙）
+   * 只使用虚线围成的区域，直接从 paintBuffer 提取像素
+   */
+  generateRegionLayerTexture: (layerId) => {
+    const state = get();
+    const shapes = state.shapes.filter(s => s.layerId === layerId);
+    const paintBuffer = state.paintBuffers[layerId];
+    
+    // 创建一个 512x512 的透明纹理
+    const size = 512;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, size, size);
+    const texture = ctx.getImageData(0, 0, size, size);
+    
+    if (!paintBuffer || shapes.length === 0) {
+      set((s) => ({
+        regionLayerTexture: { ...s.regionLayerTexture, [layerId]: texture },
+      }));
+      return;
+    }
+    
+    // 只获取虚线闭合区域
+    const dashedRegions = computeAllDashedClosedRegions(shapes, size, size);
+    console.log(`[区域图层纹理] 图层 ${layerId} 检测到 ${dashedRegions.length} 个虚线闭合区域`);
+    
+    if (dashedRegions.length === 0) {
+      set((s) => ({
+        regionLayerTexture: { ...s.regionLayerTexture, [layerId]: texture },
+      }));
+      return;
+    }
+    
+    // 将区域转换为像素掩码并从 paintBuffer 提取颜色
+    dashedRegions.forEach((region) => {
+      if (region.polygon.length === 0 || region.polygon[0].length < 3) return;
+      
+      // 遍历区域内的像素（使用世界坐标）
+      for (let py = 0; py < size; py++) {
+        for (let px = 0; px < size; px++) {
+          // 将像素坐标转换为世界坐标
+          const worldX = px / size;
+          const worldY = 1 - py / size; // Y轴翻转
+          
+          // 检查点是否在区域内
+          if (isPointInPolygonWithHoles({ x: worldX, y: worldY }, region.polygon)) {
+            // 从 paintBuffer 提取颜色
+            const bufIdx = (py * size + px) * 4;
+            const r = paintBuffer.data[bufIdx];
+            const g = paintBuffer.data[bufIdx + 1];
+            const b = paintBuffer.data[bufIdx + 2];
+            const a = paintBuffer.data[bufIdx + 3];
+            
+            // 如果 paintBuffer 中有颜色，复制到纹理
+            if (a > 0) {
+              texture.data[bufIdx] = r;
+              texture.data[bufIdx + 1] = g;
+              texture.data[bufIdx + 2] = b;
+              texture.data[bufIdx + 3] = a;
+            }
+          }
+        }
+      }
+    });
+    
+    set((s) => ({
+      regionLayerTexture: { ...s.regionLayerTexture, [layerId]: texture },
+    }));
+    
+    console.log(`[区域图层纹理] 图层 ${layerId} 纹理生成完成`);
   },
 
   historySnapshots: [{ 
@@ -1390,3 +1542,54 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 }));
+
+// ===== 辅助函数：合成图像数据 =====
+function getCompositedImageData(state: AppState): ImageData | null {
+  const { imageState, paintBuffers, layerVisibility, canvasWidth, canvasHeight, activeLayerId, layers } = state;
+  const offCanvas = document.createElement('canvas');
+  offCanvas.width = canvasWidth;
+  offCanvas.height = canvasHeight;
+  const ctx = offCanvas.getContext('2d')!;
+
+  // 1. 绘制背景图片（如果存在且可见）
+  if (layerVisibility.imageLayer && imageState.originalImage && imageState.imageSrc) {
+    const img = imageState.originalImage;
+    const bgOffsetX = imageState.offsetX ?? 0;
+    const bgOffsetY = imageState.offsetY ?? 0;
+    const bgScale = imageState.scale ?? 1;
+
+    if (imageState.selectionRect) {
+      const sel = imageState.selectionRect;
+      const scaleX = canvasWidth / sel.width;
+      const scaleY = canvasHeight / sel.height;
+      const fitScale = Math.min(scaleX, scaleY);
+      const drawWidth = sel.width * fitScale * bgScale;
+      const drawHeight = sel.height * fitScale * bgScale;
+      const offsetX = (canvasWidth - drawWidth) / 2 + bgOffsetX;
+      const offsetY = (canvasHeight - drawHeight) / 2 + bgOffsetY;
+      ctx.drawImage(img, sel.x, sel.y, sel.width, sel.height, offsetX, offsetY, drawWidth, drawHeight);
+    } else {
+      const fitScale = Math.min(canvasWidth / img.width, canvasHeight / img.height);
+      const drawWidth = img.width * fitScale * bgScale;
+      const drawHeight = img.height * fitScale * bgScale;
+      const offsetX = (canvasWidth - drawWidth) / 2 + bgOffsetX;
+      const offsetY = (canvasHeight - drawHeight) / 2 + bgOffsetY;
+      ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+    }
+  }
+
+  // 2. 绘制绘制层（paintBuffer）
+  if (layerVisibility.drawLayer) {
+    const layerId = activeLayerId || layers[0]?.id;
+    const buffer = paintBuffers[layerId];
+    if (buffer) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = buffer.width;
+      tempCanvas.height = buffer.height;
+      tempCanvas.getContext('2d')!.putImageData(buffer, 0, 0);
+      ctx.drawImage(tempCanvas, 0, 0, canvasWidth, canvasHeight);
+    }
+  }
+
+  return ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+}
