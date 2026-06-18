@@ -158,6 +158,8 @@ export function bfsHueClustering(
 }
 
 // ==================== 主压缩函数 ====================
+const PAINT_BUFFER_SIZE = 512;
+
 export function compressLayerColors(layerId: string): any {
   const state = useAppStore.getState();
 
@@ -176,15 +178,15 @@ export function compressLayerColors(layerId: string): any {
     return null;
   }
 
-  // 3. 获取 paintBuffer
+  // 3. 获取 paintBuffer（固定 512x512）
   const buffer = state.paintBuffers[layerId];
   if (!buffer) {
     console.warn('[颜色压缩] 当前图层没有 paintBuffer');
     return null;
   }
 
-  const canvasWidth = state.canvasWidth;
-  const canvasHeight = state.canvasHeight;
+  // 使用与 paintBuffer 一致的分辨率，避免索引越界
+  const resolution = PAINT_BUFFER_SIZE;
 
   // 4. 对每个区域提取像素并聚类
   const regionResults: Array<{
@@ -197,14 +199,14 @@ export function compressLayerColors(layerId: string): any {
 
   for (let ri = 0; ri < regions.length; ri++) {
     const region = regions[ri];
-    // 生成掩码
-    const mask = rasterizeRegionMask(region, canvasWidth, canvasHeight);
+    // 生成掩码（使用 paintBuffer 的分辨率）
+    const mask = rasterizeRegionMask(region, resolution, resolution);
 
     // 计算包围盒（基于掩码）
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let y = 0; y < canvasHeight; y++) {
-      for (let x = 0; x < canvasWidth; x++) {
-        const idx = y * canvasWidth + x;
+    for (let y = 0; y < resolution; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const idx = y * resolution + x;
         if (mask[idx]) {
           if (x < minX) minX = x;
           if (x > maxX) maxX = x;
@@ -216,11 +218,11 @@ export function compressLayerColors(layerId: string): any {
     // 扩展1像素抗锯齿
     minX = Math.max(0, minX - 1);
     minY = Math.max(0, minY - 1);
-    maxX = Math.min(canvasWidth - 1, maxX + 1);
-    maxY = Math.min(canvasHeight - 1, maxY + 1);
+    maxX = Math.min(resolution - 1, maxX + 1);
+    maxY = Math.min(resolution - 1, maxY + 1);
 
-    // BFS 聚类
-    const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, buffer, 0.05);
+    // BFS 聚类（使用 paintBuffer 的分辨率）
+    const clusters = bfsHueClustering(mask, resolution, resolution, buffer, 0.05);
 
     // 收集聚类信息
     const clusterInfos = clusters.map(cluster => ({
@@ -239,7 +241,7 @@ export function compressLayerColors(layerId: string): any {
   // 5. 返回压缩数据（供后续生成纹理和导出JSON）
   const result = {
     version: 2,
-    resolution: [canvasWidth, canvasHeight] as [number, number],
+    resolution: [resolution, resolution] as [number, number],
     regionCount: regions.length,
     palette: globalPalette,
     regions: regionResults,
