@@ -5,7 +5,7 @@ import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
-import { bfsHueClustering, rasterizeRegionMask, hslToRgb } from '../utils/colorCompressor';
+import { bfsHueClustering, rasterizeRegionMask, hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, dequantize } from '../utils/colorCompressor';
 
 interface AppState {
   // 图片导入状态
@@ -988,25 +988,83 @@ export const useAppStore = create<AppState>((set, get) => ({
     const outImageData = outCtx.getImageData(0, 0, canvasWidth, canvasHeight);
     const outData = outImageData.data;
 
-    // 4. 对每个虚线区域进行色块提取并填充到输出画布
+    // 4. 使用 V2 算法对每个虚线区域进行色块提取
+    const hueThreshold = 0.05;
+
     for (const region of dashedRegions) {
-      // 4a. 生成该区域的像素掩码（Uint8Array，1=内部）
-      const mask = rasterizeRegionMask(region.polygon, canvasWidth, canvasHeight);
+      // 4a. 计算 BBox（V2 方式，考虑所有环）
+      const bbox = computeBBoxAllRings(region.polygon);
+      console.log('[bakeRegionLayerTexture] region.polygon 结构:', JSON.stringify(region.polygon).slice(0, 200));
+      console.log('[bakeRegionLayerTexture] bbox:', bbox);
 
-      // 4b. 对掩码内的像素进行 BFS 色相聚类（从 composited 中提取颜色）
-      const clusters = bfsHueClustering(mask, canvasWidth, canvasHeight, composited, 0.05);
+      // 4b. 生成局部掩码（V2 方式）
+      const mask = rasterizeRegionMaskLocal(region.polygon, bbox);
+      const maskSum = mask.reduce((a, b) => a + b, 0);
+      console.log('[bakeRegionLayerTexture] mask 有效像素数:', maskSum);
 
-      // 4c. 将每个聚类的平均色填充到输出画布对应的像素位置
-      for (const cluster of clusters) {
-        const rgb = hslToRgb(cluster.avgHsl.h, cluster.avgHsl.s, cluster.avgHsl.l);
-        for (const pixelIdx of cluster.pixels) {
-          const outIdx = pixelIdx * 4;
+      // 4c. 使用 V2 聚类（bbox 坐标基于 PAINT_BUFFER_SIZE，需要创建 512x512 的合成图）
+      const PAINT_BUFFER_SIZE = 512;
+      // 创建 512x512 的合成图（paintBuffer 直接绘制，不拉伸）
+      const buffer = state.paintBuffers[layerId];
+      console.log('[bakeRegionLayerTexture] buffer:', buffer ? `${buffer.width}x${buffer.height}` : 'null');
+
+      if (!buffer) {
+        console.warn('[bakeRegionLayerTexture] 没有 paintBuffer，跳过区域');
+        continue;
+      }
+
+      const smallComposited = document.createElement('canvas');
+      smallComposited.width = PAINT_BUFFER_SIZE;
+      smallComposited.height = PAINT_BUFFER_SIZE;
+      const smallCtx = smallComposited.getContext('2d')!;
+      smallCtx.putImageData(buffer, 0, 0);
+
+      const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
+        mask,
+        bbox,
+        smallCtx.getImageData(0, 0, PAINT_BUFFER_SIZE, PAINT_BUFFER_SIZE),
+        hueThreshold,
+        PAINT_BUFFER_SIZE
+      );
+      console.log('[bakeRegionLayerTexture] 聚类结果: baseColors=', baseColors.length, 'regionIdTex=', regionIdTex ? '有' : '无', 'deltaTex=', deltaTex.length);
+
+      // 4d. 将结果渲染到输出画布
+      const { w, h, x: offsetX, y: offsetY } = bbox;
+      let renderedPixels = 0;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const idx = y * w + x;
+          // 检查是否有效像素
+          if (regionIdTex && regionIdTex[idx] === 0) continue;
+          if (!regionIdTex && mask[idx] === 0) continue;
+
+          // 计算最终颜色
+          let finalHsl;
+          if (regionIdTex) {
+            const baseIdx = regionIdTex[idx] - 1;
+            const base = baseColors[baseIdx];
+            const dH = dequantize(deltaTex[idx * 3], 0.5);
+            const dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
+            const dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
+            let h = base.h + dH;
+            if (h < 0) h += 1.0;
+            if (h > 1.0) h -= 1.0;
+            finalHsl = { h, s: Math.max(0, Math.min(1, base.s + dS)), l: Math.max(0, Math.min(1, base.l + dL)) };
+          } else {
+            // 单色调
+            finalHsl = baseColors[0];
+          }
+
+          const rgb = hslToRgb(finalHsl.h, finalHsl.s, finalHsl.l);
+          const outIdx = ((offsetY + y) * canvasWidth + (offsetX + x)) * 4;
           outData[outIdx] = rgb.r;
           outData[outIdx + 1] = rgb.g;
           outData[outIdx + 2] = rgb.b;
           outData[outIdx + 3] = 255;
+          renderedPixels++;
         }
       }
+      console.log('[bakeRegionLayerTexture] 渲染像素数:', renderedPixels);
     }
 
     // 5. 将填充好的 ImageData 放回画布

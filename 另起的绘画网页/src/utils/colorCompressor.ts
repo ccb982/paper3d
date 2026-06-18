@@ -261,7 +261,8 @@ function clusterAndGenerateTexturesV2(
   mask: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
   paintBuffer: ImageData,
-  hueThreshold: number = 0.05
+  hueThreshold: number = 0.05,
+  sourceWidth: number = PAINT_BUFFER_SIZE  // 支持外部指定源图像宽度
 ): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaTex: Uint8Array } {
   const { w, h, x: offsetX, y: offsetY } = bbox;
   const totalPixels = w * h;
@@ -270,7 +271,7 @@ function clusterAndGenerateTexturesV2(
   const clusters: Cluster[] = [];
 
   const getColor = (idx: number) => {
-    const globalIdx = ((offsetY + Math.floor(idx / w)) * PAINT_BUFFER_SIZE + (offsetX + (idx % w))) * 4;
+    const globalIdx = ((offsetY + Math.floor(idx / w)) * sourceWidth + (offsetX + (idx % w))) * 4;
     return { r: paintBuffer.data[globalIdx], g: paintBuffer.data[globalIdx + 1], b: paintBuffer.data[globalIdx + 2] };
   };
   const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
@@ -341,6 +342,13 @@ function clusterAndGenerateTexturesV2(
   }
   return { baseColors, regionIdTex, deltaTex };
 }
+
+// 导出辅助函数供外部使用（bakeRegionLayerTexture）
+export function dequantize(value: number, range: number): number {
+  return ((value / 255) - 0.5) * range * 2;
+}
+
+export { computeBBoxAllRings, rasterizeRegionMaskLocal, clusterAndGenerateTexturesV2 };
 
 function bufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);

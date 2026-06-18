@@ -341,7 +341,7 @@ export function Toolbar() {
                     a.download = `color_compression_${Date.now()}.json`;
                     a.click();
                     URL.revokeObjectURL(url);
-                    alert(`压缩完成！共 ${result.regionCount} 个区域，调色板大小: ${result.palette.length}`);
+                    alert(`压缩完成！共 ${result.regionCount} 个区域`);
                     // 新增：烘焙区域色块图层
                     bakeRegionLayerTexture(activeLayerId);
                   } else {
