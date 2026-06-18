@@ -42,6 +42,7 @@
       border-radius: 4px;
       font-size: 12px;
     }
+    .file-info { margin-top: 10px; font-size: 12px; color: #888; }
   </style>
 </head>
 <body>
@@ -49,10 +50,11 @@
 
   <div class="controls">
     <button onclick="loadJsonFile()">加载 JSON 文件</button>
-    <span style="color:#888;margin-left:20px;">或直接粘贴 JSON 内容：</span>
+    <button onclick="loadFtexFile()">加载 .ftx.gz 文件</button>
+    <span style="color:#888;margin-left:20px;">支持 JSON 和 .ftx.gz 极致压缩格式</span>
   </div>
 
-  <input type="file" id="fileInput" accept=".json" style="display:none" onchange="handleFile(this)">
+  <input type="file" id="fileInput" accept=".json,.ftx,.ftx.gz" style="display:none" onchange="handleFile(this)">
 
   <div class="container">
     <div>
@@ -62,6 +64,7 @@
       </div>
       <div class="info">左键点击画布查看像素颜色</div>
       <div class="stats" id="stats"></div>
+      <div class="file-info" id="fileInfo"></div>
     </div>
 
     <div>
@@ -74,6 +77,10 @@
   </div>
 
   <script>
+    // ========== 常量定义 ==========
+    const MAGIC = 0x46545832; // "FTX2"
+    const VERSION = 2;
+
     // ========== 辅助函数 ==========
     function base64ToUint8Array(base64) {
       const binary = atob(base64);
@@ -112,6 +119,150 @@
         g: Math.round(g * 255),
         b: Math.round(b * 255)
       };
+    }
+
+    // ========== RLE 解码器 ==========
+    function rleDecode(encodedData, bytesPerPixel, expectedPixelCount) {
+      if (encodedData.length === 0) return new Uint8Array(0);
+
+      const result = new Uint8Array(expectedPixelCount * bytesPerPixel);
+      let readOffset = 0;
+      let writeOffset = 0;
+
+      while (readOffset < encodedData.length) {
+        // 读取长度 (Uint32, Little Endian)
+        const count = encodedData[readOffset] | (encodedData[readOffset + 1] << 8) | (encodedData[readOffset + 2] << 16) | (encodedData[readOffset + 3] << 24);
+        readOffset += 4;
+
+        // 读取像素值
+        const pixel = encodedData.slice(readOffset, readOffset + bytesPerPixel);
+        readOffset += bytesPerPixel;
+
+        // 填充到目标数组
+        for (let i = 0; i < count; i++) {
+          result.set(pixel, writeOffset);
+          writeOffset += bytesPerPixel;
+        }
+      }
+      return result;
+    }
+
+    // ========== 从二进制解压回 V2 结果 ==========
+    function decompressFromBinary(buffer) {
+      const dataView = new DataView(buffer);
+      let offset = 0;
+
+      // 校验 Magic（大端序）
+      const magic = dataView.getUint32(offset, false);
+      offset += 4;
+      if (magic !== MAGIC) throw new Error('无效的文件格式 (Magic 不匹配)');
+
+      const version = dataView.getUint8(offset);
+      offset += 1;
+      if (version !== VERSION) throw new Error(`不支持的版本: ${version}`);
+
+      const regionCount = dataView.getUint16(offset, true);
+      offset += 2;
+      const resolution = dataView.getUint32(offset, true);
+      offset += 4;
+      const hueThreshold = dataView.getFloat32(offset, true);
+      offset += 4;
+
+      const regions = [];
+
+      for (let i = 0; i < regionCount; i++) {
+        // 读取 Region Header
+        const id = dataView.getUint16(offset, true);
+        offset += 2;
+        const bbox = {
+          x: dataView.getUint16(offset, true),
+          y: dataView.getUint16(offset, true),
+          w: dataView.getUint16(offset, true),
+          h: dataView.getUint16(offset, true),
+        };
+        offset += 8;
+        const colorCount = dataView.getUint16(offset, true);
+        offset += 2;
+
+        const baseColors = [];
+        for (let j = 0; j < colorCount; j++) {
+          const h = dataView.getFloat32(offset, true);
+          offset += 4;
+          const s = dataView.getFloat32(offset, true);
+          offset += 4;
+          const l = dataView.getFloat32(offset, true);
+          offset += 4;
+          baseColors.push({ h, s, l });
+        }
+
+        // 读取 RLE RegionIdTex
+        const regionIdTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let regionIdTex = undefined;
+        if (regionIdTexLen > 0) {
+          const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+          offset += regionIdTexLen;
+          const totalPixels = bbox.w * bbox.h;
+          const decoded = rleDecode(encoded, 1, totalPixels);
+          // 转为 Base64
+          regionIdTex = uint8ArrayToBase64(decoded);
+        }
+
+        // 读取 RLE DeltaTex
+        const deltaTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let deltaTex = '';
+        if (deltaTexLen > 0) {
+          const encoded = new Uint8Array(buffer, offset, deltaTexLen);
+          offset += deltaTexLen;
+          const totalPixels = bbox.w * bbox.h;
+          const decoded = rleDecode(encoded, 3, totalPixels);
+          deltaTex = uint8ArrayToBase64(decoded);
+        }
+
+        regions.push({
+          id,
+          bbox,
+          baseColors,
+          regionIdTexture: regionIdTex,
+          deltaTexture: deltaTex,
+        });
+      }
+
+      return {
+        version: 2,
+        resolution: [resolution, resolution],
+        regionCount,
+        regions,
+        quantization: 'uint8',
+        hueThreshold,
+      };
+    }
+
+    function uint8ArrayToBase64(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    // ========== Gzip 解压 ==========
+    async function decompressGzip(file) {
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8Array = new Uint8Array(arrayBuffer);
+
+      // 检查是否为 Gzip (Magic: 0x1F 0x8B)
+      const isGzipped = uint8Array.length >= 2 && uint8Array[0] === 0x1f && uint8Array[1] === 0x8b;
+
+      if (isGzipped) {
+        const blob = new Blob([uint8Array]);
+        const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+        const decompressedBlob = await new Response(decompressedStream).blob();
+        return await decompressedBlob.arrayBuffer();
+      }
+
+      return arrayBuffer;
     }
 
     // ========== 主渲染函数 ==========
@@ -195,24 +346,50 @@
     }
 
     // ========== 文件加载 ==========
+    let currentFileInput = null;
+
     function loadJsonFile() {
-      document.getElementById('fileInput').click();
+      const input = document.getElementById('fileInput');
+      input.accept = '.json,.ftx,.ftx.gz';
+      input.click();
     }
 
-    function handleFile(input) {
+    function loadFtexFile() {
+      const input = document.getElementById('fileInput');
+      input.accept = '.ftx,.ftx.gz,.json';
+      input.click();
+    }
+
+    async function handleFile(input) {
       const file = input.files[0];
       if (!file) return;
 
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = JSON.parse(e.target.result);
+      const fileInfo = document.getElementById('fileInfo');
+      fileInfo.textContent = `正在加载: ${file.name} (${(file.size / 1024).toFixed(1)} KB)...`;
+
+      try {
+        const filename = file.name.toLowerCase();
+
+        if (filename.endsWith('.ftx.gz') || filename.endsWith('.ftx')) {
+          // 使用二进制解压
+          const buffer = await decompressGzip(file);
+          const data = decompressFromBinary(buffer);
           renderRegions(data);
-        } catch (err) {
-          alert('JSON 解析失败: ' + err.message);
+          fileInfo.textContent = `已加载极致压缩文件: ${file.name}`;
+        } else {
+          // 使用 JSON 解析
+          const text = await file.text();
+          const data = JSON.parse(text);
+          renderRegions(data);
+          fileInfo.textContent = `已加载 JSON 文件: ${file.name}`;
         }
-      };
-      reader.readAsText(file);
+      } catch (err) {
+        alert('文件加载失败: ' + err.message);
+        fileInfo.textContent = '';
+      }
+
+      // 清空 input 以允许重复选择同一文件
+      input.value = '';
     }
 
     // ========== 局部放大 ==========
@@ -250,34 +427,6 @@
       zoomCtx.lineWidth = 2;
       zoomCtx.strokeRect(borderX - 2, borderY - 2, 4, 4);
     });
-
-    // ========== 默认加载示例 JSON ==========
-    // 这里可以直接内嵌一个最小的测试数据
-    const defaultJson = {
-      "version": 2,
-      "resolution": [512, 512],
-      "regionCount": 1,
-      "regions": [{
-        "id": 0,
-        "bbox": {"x": 229, "y": 115, "w": 75, "h": 193},
-        "baseColors": [
-          {"h": 0.499, "s": 0.408, "l": 0.447},
-          {"h": 0.070, "s": 0.367, "l": 0.475}
-        ],
-        "deltaTexture": ""
-      }]
-    };
-
-    // 如果 URL 包含 json 数据则加载
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('data')) {
-      try {
-        const data = JSON.parse(decodeURIComponent(urlParams.get('data')));
-        renderRegions(data);
-      } catch (e) {
-        console.error('URL 数据解析失败:', e);
-      }
-    }
   </script>
 </body>
 </html>

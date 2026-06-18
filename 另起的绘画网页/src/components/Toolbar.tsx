@@ -365,6 +365,97 @@ export function Toolbar() {
               压缩颜色
             </button>
             <button
+              onClick={async () => {
+                setShowColorExtractMenu(false);
+                try {
+                  const { compressLayerColors } = await import('../utils/colorCompressor');
+                  const { compressToBinary, compressToGzip } = await import('../utils/binaryCompression');
+
+                  const result = compressLayerColors(activeLayerId);
+                  if (!result) {
+                    alert('压缩失败，请确保有虚线围成的闭合区域');
+                    return;
+                  }
+
+                  // 1. 转为二进制
+                  const binaryData = compressToBinary(result);
+
+                  // 2. Gzip 压缩
+                  const gzippedBlob = await compressToGzip(binaryData);
+
+                  // 3. 下载
+                  const url = URL.createObjectURL(gzippedBlob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `color_compression_${Date.now()}.ftx.gz`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+
+                  console.log('[极致压缩] 导出成功', result);
+                  alert(`极致压缩完成！共 ${result.regionCount} 个区域`);
+                } catch (err) {
+                  console.error('[极致压缩] 导出失败:', err);
+                  alert('极致压缩失败: ' + (err as Error).message);
+                }
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#089981',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              导出极致压缩
+            </button>
+            <input
+              type="file"
+              accept=".ftx,.ftx.gz,.json"
+              style={{ display: 'none' }}
+              id="import-ftex-input"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const { decompressFromBinary, decompressFromGzip } = await import('../utils/binaryCompression');
+
+                  // 解压 Gzip 并解析二进制
+                  const binaryData = await decompressFromGzip(file);
+                  const result = decompressFromBinary(binaryData);
+
+                  console.log('[极致压缩] 导入成功', result);
+                  alert(`导入成功！共 ${result.regionCount} 个区域`);
+
+                  // 烘焙区域色块图层
+                  bakeRegionLayerTexture(activeLayerId);
+                } catch (err) {
+                  console.error('[极致压缩] 导入失败:', err);
+                  alert('导入失败: ' + (err as Error).message);
+                }
+                // 清空 input 以允许重复选择同一文件
+                e.target.value = '';
+              }}
+            />
+            <button
+              onClick={() => {
+                setShowColorExtractMenu(false);
+                document.getElementById('import-ftex-input')?.click();
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#f0883e',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              导入极致压缩
+            </button>
+            <button
               onClick={() => {
                 setShowColorExtractMenu(false);
               }}
