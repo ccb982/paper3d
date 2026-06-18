@@ -236,6 +236,7 @@ export function MainCanvas() {
     generateRegionLayerTexture,
     // 新的区域色块图层缓存画布
     regionLayerCanvas,
+    bakeRegionLayerTexture,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -821,11 +822,17 @@ export function MainCanvas() {
     console.log('[颜色提取] Step 6/6: 清空临时色块...');
     setExtractedColorBlocks([]);
 
+    // 7. 更新区域色块图层（静态烘焙）
+    console.log('[颜色提取] Step 7/7: 生成区域图层...');
+    if (layerId) {
+      bakeRegionLayerTexture(layerId);
+    }
+
     const endTime = performance.now();
     console.log(`[颜色提取] ==================== 颜色提取完成 ====================`);
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
     console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
+  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture, layerVisibility]);
 
   // 精确颜色提取：直接将区域内的每个像素颜色复制到 paintBuffer（不合并连通域）
   const performColorExtractionOnRegion = useCallback((regionPolygon: Point[][]) => {
@@ -911,17 +918,17 @@ export function MainCanvas() {
     // 5. 清空临时色块显示
     setExtractedColorBlocks([]);
 
-    // 6. 更新区域色块图层纹理（静态烘焙）
-    console.log('[颜色提取] Step 5/5: 生成区域图层纹理...');
+    // 6. 更新区域色块图层（静态烘焙）
+    console.log('[颜色提取] Step 5/5: 生成区域图层...');
     const currentLayerId = activeLayerId || layers[0]?.id;
     if (currentLayerId) {
-      generateRegionLayerTexture(currentLayerId);
+      bakeRegionLayerTexture(currentLayerId);
     }
 
     const endTime = performance.now();
     console.log('[颜色提取] ==================== 精确颜色提取完成 ====================');
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms，写入像素数: ${writtenPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, generateRegionLayerTexture]);
+  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture]);
 
   // 获取所有虚线形状（从全局 shapes 中筛选）
   const getDashedShapes = useCallback(() => {
@@ -2972,6 +2979,11 @@ export function MainCanvas() {
             updatePaintBuffer(layerId, (imgData) => {
               drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, PAINT_BUFFER_SIZE);
             });
+            
+            // 绘制后重新烘焙区域色块图层（如果已开启可见性）
+            if (layerVisibility?.regionLayer) {
+              bakeRegionLayerTexture(layerId);
+            }
           }
         }
       }
@@ -2994,6 +3006,8 @@ export function MainCanvas() {
     paintBuffers,
     initPaintBuffer,
     updatePaintBuffer,
+    bakeRegionLayerTexture,
+    layerVisibility,
     paintBrushSize,
     currentColor,
     layers,
