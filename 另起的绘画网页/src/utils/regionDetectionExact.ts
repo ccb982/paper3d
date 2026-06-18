@@ -247,6 +247,147 @@ export function computeGridRegions(
       currentId++;
     }
   }
+
+  // ========== 后处理：合并小区域（<=2格）到相邻大区域（8邻域） ==========
+  // 1. 统计每个区域的格子数
+  const regionCellCounts = new Map<number, number>();
+  for (const region of regions) {
+    regionCellCounts.set(region.id, region.cells.length);
+  }
+
+  // 2. 找出小区域（格子数 <= 2）
+  const smallIds = new Set<number>();
+  for (const [id, count] of regionCellCounts) {
+    if (count <= 2) {
+      smallIds.add(id);
+    }
+  }
+
+  // 3. 如果有小区域，执行合并
+  if (smallIds.size > 0) {
+    const mergeMap = new Map<number, number>(); // smallId -> targetId
+
+    for (const smallId of smallIds) {
+      // 找到该小区域的所有格子
+      const cells: [number, number][] = [];
+      for (let i = 0; i < resolution; i++) {
+        for (let j = 0; j < resolution; j++) {
+          if (regionIdGrid[i][j] === smallId) {
+            cells.push([i, j]);
+          }
+        }
+      }
+
+      // ★★★ 使用8邻域检测相邻区域 ★★★
+      const neighborIds = new Set<number>();
+      const dirs8 = [
+        [-1, -1], [-1, 0], [-1, 1],
+        [0, -1],           [0, 1],
+        [1, -1],  [1, 0],  [1, 1]
+      ];
+      for (const [ci, cj] of cells) {
+        for (const [di, dj] of dirs8) {
+          const ni = ci + di, nj = cj + dj;
+          if (ni >= 0 && ni < resolution && nj >= 0 && nj < resolution) {
+            const nid = regionIdGrid[ni][nj];
+            // 只考虑正ID区域，排除自身和小区域
+            if (nid >= 0 && nid !== smallId && !smallIds.has(nid)) {
+              neighborIds.add(nid);
+            }
+          }
+        }
+      }
+
+      // 找格子数最多的相邻区域作为目标（只找大区域，格子数 > 2）
+      let targetId: number | null = null;
+      let maxCount = 2;
+      for (const nid of neighborIds) {
+        const count = regionCellCounts.get(nid) || 0;
+        if (count > maxCount) {
+          maxCount = count;
+          targetId = nid;
+        }
+      }
+
+      if (targetId !== null) {
+        mergeMap.set(smallId, targetId);
+      }
+    }
+
+    // 4. 执行合并：更新 regionIdGrid
+    for (const [smallId, targetId] of mergeMap) {
+      for (let i = 0; i < resolution; i++) {
+        for (let j = 0; j < resolution; j++) {
+          if (regionIdGrid[i][j] === smallId) {
+            regionIdGrid[i][j] = targetId;
+          }
+        }
+      }
+    }
+
+    // 5. 重新构建 regions（基于更新后的 regionIdGrid）
+    const newRegions: GridRegion[] = [];
+    const processed = new Set<number>();
+
+    for (let i = 0; i < resolution; i++) {
+      for (let j = 0; j < resolution; j++) {
+        const rid = regionIdGrid[i][j];
+        if (rid >= 0 && !processed.has(rid)) {
+          processed.add(rid);
+
+          // BFS 收集该区域所有格子（使用4邻域，因为此时ID已正确连续）
+          const cells: { i: number; j: number }[] = [];
+          const queue: [number, number][] = [[i, j]];
+          const visited = new Set<string>();
+          visited.add(`${i},${j}`);
+          let minI = i, maxI = i, minJ = j, maxJ = j;
+          let touchesEdge = false;
+
+          while (queue.length) {
+            const [ci, cj] = queue.shift()!;
+            cells.push({ i: ci, j: cj });
+            if (ci === 0 || ci === resolution - 1 || cj === 0 || cj === resolution - 1) {
+              touchesEdge = true;
+            }
+            minI = Math.min(minI, ci);
+            maxI = Math.max(maxI, ci);
+            minJ = Math.min(minJ, cj);
+            maxJ = Math.max(maxJ, cj);
+
+            for (const [di, dj] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+              const ni = ci + di, nj = cj + dj;
+              if (ni >= 0 && ni < resolution && nj >= 0 && nj < resolution) {
+                if (regionIdGrid[ni][nj] === rid && !visited.has(`${ni},${nj}`)) {
+                  visited.add(`${ni},${nj}`);
+                  queue.push([ni, nj]);
+                }
+              }
+            }
+          }
+
+          // 计算种子（重心）
+          let sumX = 0, sumY = 0;
+          for (const cell of cells) {
+            sumX += xMin + (cell.j + 0.5) * stepX;
+            sumY += yMin + (cell.i + 0.5) * stepY;
+          }
+          const seed = { x: sumX / cells.length, y: sumY / cells.length };
+
+          newRegions.push({
+            id: rid,
+            cells,
+            bounds: { minI, maxI, minJ, maxJ },
+            seed,
+            touchesEdge,
+          });
+        }
+      }
+    }
+
+    regions = newRegions;
+  }
+  // ========== 后处理结束 ==========
+
   return { regionIdGrid, regions, wallRegionIdGrid, wallRegions, stepX, stepY, xMin, yMin, resolution };
 }
 
