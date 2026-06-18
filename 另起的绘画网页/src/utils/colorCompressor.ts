@@ -157,103 +157,239 @@ export function bfsHueClustering(
   return clusters;
 }
 
-// ==================== 主压缩函数 ====================
+// ==================== 主压缩函数（V2 多级色块纹理压缩） ====================
 const PAINT_BUFFER_SIZE = 512;
 
-export function compressLayerColors(layerId: string): any {
-  const state = useAppStore.getState();
+// ==================== 类型定义 ====================
+export interface CompressedRegionV2 {
+  id: number;
+  bbox: { x: number; y: number; w: number; h: number };
+  baseColors: Array<{ h: number; s: number; l: number }>;
+  regionIdTexture?: string;
+  deltaTexture: string;
+}
 
-  // 1. 获取虚线 shapes
-  const dashShapes = state.shapes.filter(s => s.color === '#ffaa00' && s.layerId === layerId);
-  if (dashShapes.length === 0) {
-    console.warn('[颜色压缩] 没有虚线图形');
-    return null;
+export interface CompressionResultV2 {
+  version: 2;
+  resolution: [number, number];
+  regionCount: number;
+  regions: CompressedRegionV2[];
+  quantization: 'uint8';
+  hueThreshold: number;
+}
+
+// ==================== 辅助函数 ====================
+function computeBBoxAllRings(region: Point[][]): { x: number; y: number; w: number; h: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const ring of region) {
+    for (const p of ring) {
+      const px = p.x * PAINT_BUFFER_SIZE;
+      const py = (1 - p.y) * PAINT_BUFFER_SIZE;
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+    }
+  }
+  const padding = 2;
+  minX = Math.max(0, Math.floor(minX) - padding);
+  minY = Math.max(0, Math.floor(minY) - padding);
+  maxX = Math.min(PAINT_BUFFER_SIZE - 1, Math.ceil(maxX) + padding);
+  maxY = Math.min(PAINT_BUFFER_SIZE - 1, Math.ceil(maxY) + padding);
+  return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+}
+
+function projectPolygonToBBox(region: Point[][], bbox: { x: number; y: number; w: number; h: number }): Point[][] {
+  return region.map(ring =>
+    ring.map(p => ({
+      x: (p.x * PAINT_BUFFER_SIZE - bbox.x),
+      y: ((1 - p.y) * PAINT_BUFFER_SIZE - bbox.y),
+    }))
+  );
+}
+
+function rasterizeRegionMaskLocal(region: Point[][], bbox: { x: number; y: number; w: number; h: number }): Uint8Array {
+  const { w, h } = bbox;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = 'black';
+  ctx.fillRect(0, 0, w, h);
+  const localRings = projectPolygonToBBox(region, bbox);
+  ctx.fillStyle = 'white';
+  for (const ring of localRings) {
+    if (ring.length < 3) continue;
+    ctx.beginPath();
+    ctx.moveTo(ring[0].x, ring[0].y);
+    for (let i = 1; i < ring.length; i++) ctx.lineTo(ring[i].x, ring[i].y);
+    ctx.closePath();
+    ctx.fill('evenodd');
+  }
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 1;
+  for (const ring of localRings) {
+    if (ring.length < 3) continue;
+    ctx.beginPath();
+    ctx.moveTo(ring[0].x, ring[0].y);
+    for (let i = 1; i < ring.length; i++) ctx.lineTo(ring[i].x, ring[i].y);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const mask = new Uint8Array(w * h);
+  for (let i = 0; i < imageData.data.length; i += 4) {
+    if (imageData.data[i] > 200 && imageData.data[i+1] > 200 && imageData.data[i+2] > 200) mask[i / 4] = 1;
+  }
+  return mask;
+}
+
+function normalizeHueDelta(delta: number): number {
+  if (delta > 0.5) return delta - 1.0;
+  if (delta < -0.5) return delta + 1.0;
+  return delta;
+}
+
+function hueDistance(h1: number, h2: number): number {
+  let d = h2 - h1;
+  if (d > 0.5) d -= 1.0;
+  else if (d < -0.5) d += 1.0;
+  return Math.abs(d);
+}
+
+function clusterAndGenerateTexturesV2(
+  mask: Uint8Array,
+  bbox: { x: number; y: number; w: number; h: number },
+  paintBuffer: ImageData,
+  hueThreshold: number = 0.05
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaTex: Uint8Array } {
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const totalPixels = w * h;
+  const visited = new Uint8Array(totalPixels);
+  interface Cluster { pixels: number[]; sumH: number; sumS: number; sumL: number; count: number; avgH: number; avgS: number; avgL: number; }
+  const clusters: Cluster[] = [];
+
+  const getColor = (idx: number) => {
+    const globalIdx = ((offsetY + Math.floor(idx / w)) * PAINT_BUFFER_SIZE + (offsetX + (idx % w))) * 4;
+    return { r: paintBuffer.data[globalIdx], g: paintBuffer.data[globalIdx + 1], b: paintBuffer.data[globalIdx + 2] };
+  };
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (mask[idx] === 0 || visited[idx]) continue;
+      const seedColor = getColor(idx);
+      const seedHsl = rgbToHsl(seedColor.r, seedColor.g, seedColor.b);
+      const queue: [number, number][] = [[x, y]];
+      visited[idx] = 1;
+      const cluster: Cluster = { pixels: [], sumH: seedHsl.h, sumS: seedHsl.s, sumL: seedHsl.l, count: 1, avgH: seedHsl.h, avgS: seedHsl.s, avgL: seedHsl.l };
+      cluster.pixels.push(idx);
+
+      while (queue.length) {
+        const [cx, cy] = queue.shift()!;
+        const ci = cy * w + cx;
+        for (const [dx, dy] of dirs) {
+          const nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          const ni = ny * w + nx;
+          if (mask[ni] === 0 || visited[ni]) continue;
+          const neighborColor = getColor(ni);
+          const neighborHsl = rgbToHsl(neighborColor.r, neighborColor.g, neighborColor.b);
+          const hDist = hueDistance(cluster.avgH, neighborHsl.h);
+          if (hDist < hueThreshold) {
+            visited[ni] = 1;
+            queue.push([nx, ny]);
+            cluster.pixels.push(ni);
+            cluster.sumH += neighborHsl.h; cluster.sumS += neighborHsl.s; cluster.sumL += neighborHsl.l;
+            cluster.count++;
+            cluster.avgH = cluster.sumH / cluster.count;
+            cluster.avgS = cluster.sumS / cluster.count;
+            cluster.avgL = cluster.sumL / cluster.count;
+          }
+        }
+      }
+      if (cluster.pixels.length > 0) clusters.push(cluster);
+    }
   }
 
-  // 2. 计算闭合区域（输入的 dashShapes 已经全是虚线，不需要排除）
+  if (clusters.length === 0) return { baseColors: [], regionIdTex: null, deltaTex: new Uint8Array(0) };
+
+  const baseColors = clusters.map(c => ({ h: c.sumH / c.count, s: c.sumS / c.count, l: c.sumL / c.count }));
+  const regionIdTex = clusters.length > 1 ? new Uint8Array(totalPixels) : null;
+  const deltaTex = new Uint8Array(totalPixels * 3);
+  const quantize = (value: number, range: number): number => {
+    const normalized = (value / range) * 0.5 + 0.5;
+    return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
+  };
+
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const cluster = clusters[ci];
+    const base = baseColors[ci];
+    for (const pixelIdx of cluster.pixels) {
+      if (regionIdTex) regionIdTex[pixelIdx] = ci + 1;
+      const col = getColor(pixelIdx);
+      const hsl = rgbToHsl(col.r, col.g, col.b);
+      const dH = normalizeHueDelta(hsl.h - base.h);
+      const dS = hsl.s - base.s;
+      const dL = hsl.l - base.l;
+      const idx3 = pixelIdx * 3;
+      deltaTex[idx3] = quantize(dH, 0.5);
+      deltaTex[idx3 + 1] = quantize(dS, 1.0);
+      deltaTex[idx3 + 2] = quantize(dL, 1.0);
+    }
+  }
+  return { baseColors, regionIdTex, deltaTex };
+}
+
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+// ==================== 主压缩函数 ====================
+export function compressLayerColors(layerId: string): CompressionResultV2 | null {
+  const state = useAppStore.getState();
+  const dashShapes = state.shapes.filter(s => s.color === '#ffaa00' && s.layerId === layerId);
+  if (dashShapes.length === 0) { console.warn('[颜色压缩] 没有虚线图形'); return null; }
+
   const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
   const regions = computeRegionsExact(dashShapes, worldBounds, 600);
-  if (regions.length === 0) {
-    console.warn('[颜色压缩] 没有检测到闭合区域');
-    return null;
-  }
+  if (regions.length === 0) { console.warn('[颜色压缩] 没有检测到闭合区域'); return null; }
 
-  // 3. 获取 paintBuffer（固定 512x512）
   const buffer = state.paintBuffers[layerId];
-  if (!buffer) {
-    console.warn('[颜色压缩] 当前图层没有 paintBuffer');
-    return null;
-  }
+  if (!buffer) { console.warn('[颜色压缩] 当前图层没有 paintBuffer'); return null; }
 
-  // 使用与 paintBuffer 一致的分辨率，避免索引越界
-  const resolution = PAINT_BUFFER_SIZE;
-
-  // 4. 对每个区域提取像素并聚类
-  const regionResults: Array<{
-    regionIndex: number;
-    bbox: { minX: number; minY: number; maxX: number; maxY: number };
-    clusters: Array<{ pixelCount: number; avgHsl: { h: number; s: number; l: number } }>;
-  }> = [];
-
-  const globalPalette: Array<{ h: number; s: number; l: number }> = [];
+  const compressedRegions: CompressedRegionV2[] = [];
+  const hueThreshold = 0.05;
 
   for (let ri = 0; ri < regions.length; ri++) {
     const region = regions[ri];
-    // 生成掩码（使用 paintBuffer 的分辨率）
-    const mask = rasterizeRegionMask(region, resolution, resolution);
+    const bbox = computeBBoxAllRings(region);
+    const mask = rasterizeRegionMaskLocal(region, bbox);
+    const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(mask, bbox, buffer, hueThreshold);
+    if (baseColors.length === 0) continue;
 
-    // 计算包围盒（基于掩码）
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let y = 0; y < resolution; y++) {
-      for (let x = 0; x < resolution; x++) {
-        const idx = y * resolution + x;
-        if (mask[idx]) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    // 扩展1像素抗锯齿
-    minX = Math.max(0, minX - 1);
-    minY = Math.max(0, minY - 1);
-    maxX = Math.min(resolution - 1, maxX + 1);
-    maxY = Math.min(resolution - 1, maxY + 1);
-
-    // BFS 聚类（使用 paintBuffer 的分辨率）
-    const clusters = bfsHueClustering(mask, resolution, resolution, buffer, 0.05);
-
-    // 收集聚类信息
-    const clusterInfos = clusters.map(cluster => ({
-      pixelCount: cluster.pixels.length,
-      avgHsl: cluster.avgHsl,
-    }));
-    clusterInfos.forEach(info => globalPalette.push(info.avgHsl));
-
-    regionResults.push({
-      regionIndex: ri,
-      bbox: { minX, minY, maxX, maxY },
-      clusters: clusterInfos,
+    compressedRegions.push({
+      id: ri,
+      bbox,
+      baseColors,
+      regionIdTexture: regionIdTex ? bufferToBase64(regionIdTex.buffer) : undefined,
+      deltaTexture: bufferToBase64(deltaTex.buffer),
     });
   }
 
-  // 5. 返回压缩数据（供后续生成纹理和导出JSON）
-  const result = {
+  const result: CompressionResultV2 = {
     version: 2,
-    resolution: [resolution, resolution] as [number, number],
-    regionCount: regions.length,
-    palette: globalPalette,
-    regions: regionResults,
+    resolution: [PAINT_BUFFER_SIZE, PAINT_BUFFER_SIZE],
+    regionCount: compressedRegions.length,
+    regions: compressedRegions,
+    quantization: 'uint8',
+    hueThreshold,
   };
 
-  console.log('[颜色压缩] 压缩完成，全局调色板大小:', globalPalette.length);
-  console.log('[颜色压缩] 区域详情:', regionResults.map(r => ({
-    region: r.regionIndex,
-    bbox: r.bbox,
-    clusterCount: r.clusters.length,
-    avgHsls: r.clusters.map(c => c.avgHsl),
-  })));
-
+  console.log('[颜色压缩] 压缩完成，区域数:', compressedRegions.length);
   return result;
 }
