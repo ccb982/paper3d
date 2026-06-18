@@ -871,9 +871,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMax: 1,
     };
 
-    const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300);
+    const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300, '#ffaa00');  // 排除虚线
     const scanlineCache = computeScanlineIntervals(gridData);
-    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300);
+    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300, '#ffaa00');  // 排除虚线
     console.log('[绘画后区域检测] 检测到的封闭区域数量:', regions.length);
     
     for (let i = 0; i < regions.length; i++) {

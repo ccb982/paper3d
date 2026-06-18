@@ -2894,7 +2894,7 @@ export function MainCanvas() {
         yMin: 0,
         yMax: 1,
       };
-      const bfsRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300);
+      const bfsRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300, '#ffaa00');  // 排除虚线
       
       if (bfsRegionId === null) {
         console.log('[区域注释] 点击位置不在任何有效BFS区域内（可能是墙或外部）');

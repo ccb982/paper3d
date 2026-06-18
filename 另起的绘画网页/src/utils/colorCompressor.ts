@@ -168,7 +168,7 @@ export function compressLayerColors(layerId: string): any {
     return null;
   }
 
-  // 2. 计算闭合区域
+  // 2. 计算闭合区域（输入的 dashShapes 已经全是虚线，不需要排除）
   const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
   const regions = computeRegionsExact(dashShapes, worldBounds, 600);
   if (regions.length === 0) {

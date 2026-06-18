@@ -72,9 +72,10 @@ function applyColorOverlap(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number }
 ): ColorBlock[] {
-  // 创建一个网格用于判断覆盖关系
+  // 创建一个网格用于判断覆盖关系（只使用实线形状，排除虚线）
   const resolution = 200;
-  const gridData = computeGridRegions(shapes, worldBounds, resolution);
+  const solidShapes = shapes.filter(s => s.color !== '#ffaa00');
+  const gridData = computeGridRegions(solidShapes, worldBounds, resolution);
   const { regionIdGrid, stepX, stepY, xMin, yMin } = gridData;
 
   // 创建一个映射：区域ID -> 该区域内最高优先级的颜色

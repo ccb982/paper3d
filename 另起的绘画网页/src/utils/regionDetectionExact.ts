@@ -156,14 +156,22 @@ export function getRegionIdAtPoint(worldX: number, worldY: number, gridData: Gri
 export function computeGridRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 500
+  resolution: number = 500,
+  excludeColor?: string  // 排除的颜色，传入 '#ffaa00' 则排除虚线
 ): GridData {
   const { xMin, xMax, yMin, yMax } = worldBounds;
   const stepX = (xMax - xMin) / resolution;
   const stepY = (yMax - yMin) / resolution;
 
   const wallGrid: boolean[][] = Array(resolution).fill(null).map(() => Array(resolution).fill(false));
-  for (const shape of shapes) rasterizeShape(shape, stepX, stepY, xMin, yMin, resolution, wallGrid);
+  
+  // 根据 excludeColor 过滤要光栅化的形状
+  for (const shape of shapes) {
+    if (excludeColor && shape.color === excludeColor) {
+      continue; // 跳过指定颜色的形状
+    }
+    rasterizeShape(shape, stepX, stepY, xMin, yMin, resolution, wallGrid);
+  }
 
   // 对墙格子进行八连通洪水填充，分配负ID
   const wallRegionIdGrid: number[][] = Array(resolution).fill(null).map(() => Array(resolution).fill(0));
@@ -893,9 +901,10 @@ function polygonArea(points: Point[]): number {
 export function computeRegionsExact(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 600
+  resolution: number = 600,
+  excludeColor?: string  // 排除的颜色，传入 '#ffaa00' 则排除虚线
 ): Point[][][] {
-  const gridData = computeGridRegions(shapes, worldBounds, resolution);
+  const gridData = computeGridRegions(shapes, worldBounds, resolution, excludeColor);
   const mainRegions = gridData.regions.filter(r => !r.touchesEdge && r.cells.length >= 10);
 
   const result: Point[][][] = [];
@@ -1864,9 +1873,10 @@ export function computeRegionIdAtPoint(
   point: Point,
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 200
+  resolution: number = 200,
+  excludeColor?: string  // 排除的颜色，传入 '#ffaa00' 则排除虚线
 ): number | null {
-  const gridData = computeGridRegions(shapes, worldBounds, resolution);
+  const gridData = computeGridRegions(shapes, worldBounds, resolution, excludeColor);
   const { stepX, stepY, xMin, yMin, resolution: res, regionIdGrid } = gridData;
   const j = Math.floor((point.x - xMin) / stepX);
   const i = Math.floor((point.y - yMin) / stepY);

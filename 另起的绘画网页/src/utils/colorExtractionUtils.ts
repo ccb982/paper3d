@@ -72,6 +72,7 @@ export function computeAllDashedClosedRegions(
   const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
   
   // 使用与调试模式相同的区域检测算法，但只使用虚线形状
+  // 输入的 dashedShapes 已经全是虚线，不需要再排除
   const regions = computeRegionsExact(dashedShapes, worldBounds, resolution);
   
   console.log('[纯虚线闭合区域计算] 检测到的区域数:', regions.length);
