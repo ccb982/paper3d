@@ -3206,12 +3206,10 @@ export function MainCanvas() {
       // 4. 根据区域多边形提取颜色
       performColorExtractionOnRegion(clickedRegion.polygon);
       
-      alert(`已为区域 #${clickedRegion.id} 上色`);
-      
-      // 5. 退出等待状态
-      setColorExtractWaiting(false);
-      // 可选：退出颜色提取模式
-      setColorExtractMode(false);
+      // 5. 保持颜色提取模式和等待状态，支持连续提取多个区域
+      // 不退出模式，用户可以继续点击其他区域
+      // setColorExtractWaiting(false);
+      // setColorExtractMode(false);
       return;
     }
     
