@@ -53,12 +53,12 @@ function rleEncode(data: Uint8Array, bytesPerPixel: number): Uint8Array {
       i += step;
     }
 
-    // 写入 [count (Uint32)] + [pixel bytes]
-    const countBuf = new Uint8Array(4);
-    new DataView(countBuf.buffer).setUint32(0, count, true); // 小端序
-    const chunk = new Uint8Array(4 + pixel.length);
+    // 写入 [count (Uint16)] + [pixel bytes]
+    const countBuf = new Uint8Array(2);
+    new DataView(countBuf.buffer).setUint16(0, count, true); // 小端序
+    const chunk = new Uint8Array(2 + pixel.length);
     chunk.set(countBuf, 0);
-    chunk.set(pixel, 4);
+    chunk.set(pixel, 2);
 
     chunks.push(chunk);
   }
@@ -84,9 +84,9 @@ function rleDecode(encodedData: Uint8Array, bytesPerPixel: number, expectedPixel
   const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
 
   while (readOffset < encodedData.length) {
-    // 读取长度 (Uint32, Little Endian)
-    const count = dataView.getUint32(readOffset, true);
-    readOffset += 4;
+    // 读取长度 (Uint16, Little Endian)
+    const count = dataView.getUint16(readOffset, true);
+    readOffset += 2;
 
     // 读取像素值
     const pixel = encodedData.slice(readOffset, readOffset + bytesPerPixel);

@@ -421,11 +421,33 @@ export function Toolbar() {
                 try {
                   const { decompressFromBinary, decompressFromGzip } = await import('../utils/binaryCompression');
 
-                  // 解压 Gzip 并解析二进制
-                  const binaryData = await decompressFromGzip(file);
-                  const result = decompressFromBinary(binaryData);
+                  // 读取文件数据
+                  const arrayBuffer = await file.arrayBuffer();
+                  const uint8Array = new Uint8Array(arrayBuffer);
 
-                  console.log('[极致压缩] 导入成功', result);
+                  // 1. 检测是否为 Gzip
+                  const isGzipped = uint8Array.length >= 2 && uint8Array[0] === 0x1f && uint8Array[1] === 0x8b;
+                  let dataBuffer = arrayBuffer;
+                  if (isGzipped) {
+                    dataBuffer = await decompressFromGzip(file);
+                  }
+
+                  // 2. 检测是否为 FTX2 二进制格式（通过 Magic 头）
+                  const MAGIC = 0x46545832; // "FTX2"
+                  const magic = new DataView(dataBuffer).getUint32(0, true); // 小端序
+
+                  let result;
+                  if (magic === MAGIC) {
+                    // FTX2 二进制格式
+                    result = decompressFromBinary(dataBuffer);
+                    console.log('[极致压缩] 导入 FTX2 文件成功', result);
+                  } else {
+                    // JSON 格式
+                    const text = new TextDecoder().decode(dataBuffer);
+                    result = JSON.parse(text);
+                    console.log('[极致压缩] 导入 JSON 文件成功', result);
+                  }
+
                   alert(`导入成功！共 ${result.regionCount} 个区域`);
 
                   // 烘焙区域色块图层
