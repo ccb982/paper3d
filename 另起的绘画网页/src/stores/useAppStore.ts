@@ -903,10 +903,38 @@ export const useAppStore = create<AppState>((set, get) => ({
       regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
     }));
     
-    // 生成区域ID纹理（异步执行，不阻塞UI）
-    setTimeout(() => {
-      get().generateRegionIdTexture(layerId);
-    }, 0);
+    // 直接从 gridData.regionIdGrid 生成 regionIdTexture（使用合并后的实际 ID）
+    // 这样可以保证 regionIdTexture 与 getRegionIdAtPoint 返回的 ID 一致
+    const texWidth = 512;
+    const texHeight = 512;
+    const regionIdMap = new Uint8Array(texWidth * texHeight); // 初始为0
+    
+    const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
+    
+    for (let ty = 0; ty < texHeight; ty++) {
+      for (let tx = 0; tx < texWidth; tx++) {
+        // 将纹理坐标转换为世界坐标 [0,1]
+        const worldX = tx / texWidth;
+        const worldY = 1 - ty / texHeight; // Y轴翻转
+        
+        // 将世界坐标转换为 grid 坐标
+        const gx = Math.floor((worldX - xMin) / stepX);
+        const gy = Math.floor((worldY - yMin) / stepY);
+        
+        if (gx >= 0 && gx < resolution && gy >= 0 && gy < resolution) {
+          const gridId = regionIdGrid[gy][gx];
+          // gridId > 0 表示有效区域（负数为墙）
+          // 但纹理中存储的是 1-based 索引，所以需要转换
+          // 实际上 getRegionIdAtPoint 返回的是 gridId > 0 ? gridId : null
+          // 所以我们直接存储 gridId（如果是正数）
+          regionIdMap[ty * texWidth + tx] = gridId > 0 ? gridId : 0;
+        }
+      }
+    }
+    
+    set((s) => ({
+      regionIdTexture: new Map(s.regionIdTexture).set(layerId, regionIdMap),
+    }));
   },
 
   colorBlockRegionsCache: {},
