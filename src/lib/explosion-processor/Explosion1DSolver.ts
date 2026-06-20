@@ -31,6 +31,10 @@ export class Explosion1DSolver {
   private ambientRho: number = 1.225;
   private ambientP: number = 101325;
   private ambientT: number = 288.15;
+  
+  // 冲击波速度历史缓存（用于计算加速度）
+  private prevShockSpeed: number = 0;
+  private prevTime: number = 0;
 
   constructor(params: ExplosionParams) {
     const p = { ...DEFAULT_EXPLOSION_PARAMS, ...params };
@@ -400,8 +404,17 @@ export class Explosion1DSolver {
    */
   public advanceBy(deltaTime: number): void {
     if (!this.active || this.t >= this.duration || deltaTime <= 0) return;
+    
+    // 保存当前状态用于计算加速度
+    const oldSpeed = this.getShockSpeed();
+    const oldTime = this.t;
+    
     const target = Math.min(this.t + deltaTime, this.duration);
     this.advanceTo(target);
+    
+    // 更新历史缓存
+    this.prevShockSpeed = oldSpeed;
+    this.prevTime = oldTime;
   }
 
   public getTime(): number {
@@ -481,6 +494,27 @@ export class Explosion1DSolver {
     const s2 = this.sample(Math.min(r2, this.r[this.N - 1]));
     const dr = r2 - r1;
     return (s2.p - s1.p) / dr;
+  }
+
+  /**
+   * 归一化采样：输入 xi = r / R_shock，返回该处的物理状态
+   * @param xi 归一化半径（0 到 1+）
+   */
+  public sampleNormalized(xi: number): PhysicalState {
+    const r = xi * this.shockRadius;
+    if (r <= this.r[0]) return this.sample(this.r[0]);
+    if (r >= this.r[this.N - 1]) return this.sample(this.r[this.N - 1]);
+    return this.sample(r);
+  }
+
+  /**
+   * 计算冲击波加速度（基于速度差分）
+   * @returns 冲击波加速度 (m/s^2)
+   */
+  public getShockAcceleration(): number {
+    const dt = this.t - this.prevTime;
+    if (dt < 1e-9) return 0;
+    return (this.getShockSpeed() - this.prevShockSpeed) / dt;
   }
 
   public destroy(): void {

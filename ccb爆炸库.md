@@ -1299,3 +1299,496 @@ types.ts 中的 InjectionParams 旧参数：确保所有使用 DEFAULT_INJECTION
 
 
 
+好的，完全理解你的要求。核心改动如下：
+
+取消“每帧注入”：改为基于时间累积的“间隔注入”。
+
+注入间隔由物理时间 delta t 驱动：每次物理推进后累加时间，达到阈值才执行注入。
+
+坐标映射职责分离：FluidIntegrator 只传递力场描述符，不负责坐标转换。
+
+设计方案
+注入策略（间隔注入）
+在 ExplosionEntry 中新增：
+
+injectionAccumulator: number —— 累积的物理时间。
+
+injectionInterval: number —— 注入间隔（默认 0.016 秒，约 1 帧）。
+
+注入逻辑：
+
+每帧 updateAll 中，物理推进 clampedDelta 后，累加到 accumulator。
+
+当 accumulator >= injectionInterval 时，执行一次注入（对所有已注册目标）。
+
+执行后，accumulator -= injectionInterval（允许累积多次，避免误差累积）。
+
+这样注入频率由 injectionInterval 控制，既不是每帧也不是仅一次。
+
+完整代码生成
+1. types.ts —— 新增 ExplosionForceField 和调整参数
+typescript
+// types.ts
+import * as THREE from 'three';
+
+export interface ExplosionParams {
+  totalEnergy: number;
+  initialRadius: number;
+  ambientDensity: number;
+  ambientPressure: number;
+  gamma?: number;
+  N?: number;
+  rMin?: number;
+  rMax?: number;
+  cfl?: number;
+  shockThreshold?: number;
+  duration?: number;
+  injectionInterval?: number;  // 注入间隔（秒），默认 0.016
+}
+
+export interface PhysicalState {
+  rho: number;
+  u: number;
+  p: number;
+  T: number;
+}
+
+export interface ExplosionProfiles {
+  r: Float64Array;
+  rho: Float64Array;
+  u: Float64Array;
+  p: Float64Array;
+  T: Float64Array;
+}
+
+export interface ExplosionVisualData {
+  shockRadius: number;
+  shockSpeed: number;
+  coreTemperature: number;
+  corePressure: number;
+  profiles: ExplosionProfiles;
+}
+
+/**
+ * 爆炸力场描述符：由 FluidIntegrator 生成，传递给 IFluidForceTarget
+ * 坐标映射由目标（FluidSimulator）内部自行处理
+ */
+export interface ExplosionForceField {
+  /** 爆炸中心世界坐标（原始世界坐标，不包含纹理偏移） */
+  centerWorld: THREE.Vector2;
+  /** 当前冲击波半径（物理单位） */
+  shockRadius: number;
+  /** 核心压力（Pa） */
+  corePressure: number;
+  /** 核心温度（K） */
+  coreTemperature: number;
+  /** 环境压力（Pa） */
+  ambientPressure: number;
+  /** 采样函数：输入物理半径 r，返回该处的物理状态 */
+  sample: (r: number) => PhysicalState;
+  /** 归一化采样函数：ξ = r / R_shock，返回物理状态 */
+  sampleNormalized: (xi: number) => PhysicalState;
+  /** 冲击波加速度 (m/s²) */
+  shockAcceleration: number;
+  /** 冲击波速度 (m/s) */
+  shockSpeed: number;
+}
+
+export interface InjectionParams {
+  /** 压力梯度 (Pa/m) → 散度 (1/s) 的转换系数 */
+  pressureToDivergenceScale: number;
+  /** 动量传递系数（0~1） */
+  momentumTransferCoeff: number;
+  /** 水体生成强度（0~1） */
+  waterGenerationStrength: number;
+  /** 是否启用调试可视化 */
+  debugVisualization?: boolean;
+}
+
+export const DEFAULT_INJECTION_PARAMS: InjectionParams = {
+  pressureToDivergenceScale: 1.0,
+  momentumTransferCoeff: 0.3,
+  waterGenerationStrength: 0.0,
+  debugVisualization: false,
+};
+
+export const DEFAULT_EXPLOSION_PARAMS: Required<ExplosionParams> = {
+  totalEnergy: 500000,
+  initialRadius: 0.02,
+  ambientDensity: 1.225,
+  ambientPressure: 101325,
+  gamma: 1.4,
+  N: 128,
+  rMin: 0.002,
+  rMax: 10.0,
+  cfl: 0.4,
+  shockThreshold: 1.5,
+  duration: 2.0,
+  injectionInterval: 0.016,  // 默认约 1 帧（60fps）
+};
+2. Explosion1DSolver.ts —— 新增方法
+在类的顶部添加缓存成员：
+
+typescript
+private prevShockSpeed: number = 0;
+private prevTime: number = 0;
+在 advanceBy 中更新缓存：
+
+typescript
+public advanceBy(deltaTime: number): void {
+  if (!this.active || this.t >= this.duration || deltaTime <= 0) return;
+  const oldSpeed = this.getShockSpeed();
+  const oldTime = this.t;
+  const target = Math.min(this.t + deltaTime, this.duration);
+  this.advanceTo(target);
+  this.prevShockSpeed = oldSpeed;
+  this.prevTime = oldTime;
+}
+在 destroy 之前新增：
+
+typescript
+public sampleNormalized(xi: number): PhysicalState {
+  const r = xi * this.shockRadius;
+  if (r <= this.r[0]) return this.sample(this.r[0]);
+  if (r >= this.r[this.N - 1]) return this.sample(this.r[this.N - 1]);
+  return this.sample(r);
+}
+
+public getShockAcceleration(): number {
+  const dt = this.t - this.prevTime;
+  if (dt < 1e-9) return 0;
+  return (this.getShockSpeed() - this.prevShockSpeed) / dt;
+}
+3. FluidExternalForce.ts —— 修改接口
+typescript
+import * as THREE from 'three';
+import type { ExplosionForceField } from '@lib/explosion-processor/types';
+
+export interface FluidInternalInjection {
+  centerUV?: THREE.Vector2;
+  radius?: number;
+  falloff?: 'linear' | 'gaussian';
+}
+
+export interface FluidVelocityInjection extends FluidInternalInjection {
+  velocity: THREE.Vector2;
+}
+
+export interface FluidDivergenceInjection extends FluidInternalInjection {
+  divergence: number;
+}
+
+export interface FluidWaterInjection extends FluidInternalInjection {
+  amount: number;
+}
+
+export interface FluidExternalForce {
+  worldImpulse?: THREE.Vector3;
+  worldAcceleration?: THREE.Vector3;
+  velocityInjection?: FluidVelocityInjection;
+  divergenceInjection?: FluidDivergenceInjection;
+  waterInjection?: FluidWaterInjection;
+}
+
+export interface IFluidForceTarget {
+  isMovable(): boolean;
+  applyFluidForce(force: FluidExternalForce): void;
+  getPosition(): THREE.Vector3;
+  getBoundingRadius(): number;
+
+  /**
+   * 接收爆炸力场描述符（由目标自行采样并映射到纹理空间）
+   * 坐标映射由目标内部完成，FluidIntegrator 只传递原始物理数据
+   */
+  applyExplosionField?(field: ExplosionForceField): void;
+}
+4. ExplosionManager.ts —— 核心重构（间隔注入 + 静态列表）
+typescript
+import * as THREE from 'three';
+import { Explosion1DSolver } from '../Explosion1DSolver';
+import type { ExplosionParams } from '@lib/explosion-processor/types';
+import { FluidIntegrator } from '../integration/FluidIntegrator';
+import type { IFluidForceTarget } from '@entities/fluid/FluidExternalForce';
+import { DEFAULT_EXPLOSION_PARAMS } from '../types';
+
+interface ExplosionEntry {
+  solver: Explosion1DSolver;
+  position: THREE.Vector3;
+  maxInfluenceRadius: number;
+  registeredTargets: IFluidForceTarget[];   // 静态列表，创建时锁定
+  injectionAccumulator: number;              // 累积物理时间
+  injectionInterval: number;                // 注入间隔（秒）
+}
+
+export class ExplosionManager {
+  private explosions: Map<string, ExplosionEntry> = new Map();
+  private targets: Set<IFluidForceTarget> = new Set();
+  private integrators: Map<IFluidForceTarget, FluidIntegrator> = new Map();
+  private graphicsTime: number = 0;
+
+  public registerTarget(target: IFluidForceTarget): void {
+    this.targets.add(target);
+  }
+
+  public unregisterTarget(target: IFluidForceTarget): void {
+    this.targets.delete(target);
+    const integrator = this.integrators.get(target);
+    if (integrator) {
+      integrator.destroy();
+      this.integrators.delete(target);
+    }
+  }
+
+  public create(
+    id: string,
+    params: ExplosionParams,
+    worldX: number,
+    worldY: number,
+    maxInfluenceRadius: number = 10.0
+  ): Explosion1DSolver {
+    if (this.explosions.has(id)) {
+      console.warn(`Explosion with id "${id}" already exists, removing old one`);
+      this.remove(id);
+    }
+
+    const fullParams = { ...DEFAULT_EXPLOSION_PARAMS, ...params };
+    const explosion = new Explosion1DSolver(fullParams);
+    const center = new THREE.Vector3(worldX, worldY, 0);
+
+    const affectedTargets = this.findTargetsInRange(center, maxInfluenceRadius);
+
+    const entry: ExplosionEntry = {
+      solver: explosion,
+      position: center,
+      maxInfluenceRadius,
+      registeredTargets: affectedTargets,
+      injectionAccumulator: 0,
+      injectionInterval: fullParams.injectionInterval ?? 0.016,
+    };
+
+    this.explosions.set(id, entry);
+
+    // 为每个目标预创建 Integrator
+    for (const target of affectedTargets) {
+      if (!this.integrators.has(target)) {
+        this.integrators.set(target, new FluidIntegrator(target));
+      }
+    }
+
+    console.log(`[ExplosionManager] 爆炸创建: id=${id}, 锁定目标=${affectedTargets.length}, 注入间隔=${entry.injectionInterval}s`);
+    return explosion;
+  }
+
+  /**
+   * 更新所有爆炸
+   * 核心改动：累积物理时间，达到注入间隔时才执行注入
+   */
+  public updateAll(graphicsDelta: number): void {
+    const clampedDelta = Math.min(graphicsDelta, 0.033);
+    this.graphicsTime += clampedDelta;
+
+    if (this.explosions.size === 0) return;
+
+    this.explosions.forEach((entry, id) => {
+      const explosion = entry.solver;
+      if (!explosion.isActive()) return;
+
+      // 1. 推进物理
+      explosion.advanceBy(clampedDelta);
+
+      // 2. 累积物理时间
+      entry.injectionAccumulator += clampedDelta;
+
+      // 3. 达到注入间隔 → 执行注入
+      if (entry.injectionAccumulator >= entry.injectionInterval) {
+        const injectCount = Math.floor(entry.injectionAccumulator / entry.injectionInterval);
+        // 执行注入（可执行多次，但一次就够了，因为状态是连续的）
+        this.performInjection(entry);
+        // 更新累加器，保留余数避免误差累积
+        entry.injectionAccumulator -= injectCount * entry.injectionInterval;
+        // 如果累加器还大于间隔，继续注入（防止帧率波动导致积压）
+        if (entry.injectionAccumulator >= entry.injectionInterval) {
+          this.performInjection(entry);
+          entry.injectionAccumulator = 0;
+        }
+      }
+    });
+
+    this.cleanupInactive();
+  }
+
+  /**
+   * 执行一次注入：遍历静态列表，向所有有效目标注入力场
+   */
+  private performInjection(entry: ExplosionEntry): void {
+    const explosion = entry.solver;
+    if (!explosion.isActive()) return;
+
+    for (const target of entry.registeredTargets) {
+      if (!this.isTargetValid(target)) continue;
+      const integrator = this.integrators.get(target);
+      if (integrator) {
+        integrator.inject(explosion, entry.position.x, entry.position.y);
+      }
+    }
+  }
+
+  private findTargetsInRange(center: THREE.Vector3, radius: number): IFluidForceTarget[] {
+    const result: IFluidForceTarget[] = [];
+    for (const target of this.targets) {
+      try {
+        const targetPos = target.getPosition?.();
+        if (!targetPos) continue;
+        const distance = targetPos.distanceTo(center);
+        const boundingRadius = target.getBoundingRadius?.() || 0;
+        if (distance - boundingRadius <= radius) {
+          result.push(target);
+        }
+      } catch (e) {
+        console.warn('Error checking target distance:', e);
+      }
+    }
+    return result;
+  }
+
+  private isTargetValid(target: IFluidForceTarget): boolean {
+    try {
+      if (typeof (target as any).isActive === 'boolean') {
+        return (target as any).isActive;
+      }
+      target.getPosition();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ... 其余公共方法（get, remove, has, advanceTo, getActiveExplosions, clear, forEach, cleanupInactive 等）保持不变 ...
+  // 参考之前给出的代码，这里省略重复内容
+}
+5. FluidIntegrator.ts —— 只传递力场，不处理坐标
+typescript
+import * as THREE from 'three';
+import { Explosion1DSolver } from '../Explosion1DSolver';
+import type { InjectionParams, ExplosionForceField } from '@lib/explosion-processor/types';
+import { DEFAULT_INJECTION_PARAMS } from '@lib/explosion-processor/types';
+import type { IFluidForceTarget } from '@entities/fluid/FluidExternalForce';
+
+export class FluidIntegrator {
+  private target: IFluidForceTarget | null = null;
+  private injectionParams: InjectionParams;
+  private destroyed: boolean = false;
+  private centerWorld: THREE.Vector2 = new THREE.Vector2();
+
+  constructor(target: IFluidForceTarget, injectionParams?: Partial<InjectionParams>) {
+    this.target = target;
+    this.injectionParams = { ...DEFAULT_INJECTION_PARAMS, ...injectionParams };
+  }
+
+  public setInjectionParams(params: Partial<InjectionParams>): void {
+    if (this.destroyed) return;
+    this.injectionParams = { ...this.injectionParams, ...params };
+  }
+
+  /**
+   * 注入爆炸力场描述符（仅传递原始物理数据，不进行任何坐标映射）
+   */
+  public inject(explosion: Explosion1DSolver, worldCenterX: number, worldCenterY: number): void {
+    if (this.destroyed || !this.target || !explosion.isActive()) return;
+
+    if (typeof this.target.applyExplosionField === 'function') {
+      const field = this.buildForceField(explosion, worldCenterX, worldCenterY);
+      this.target.applyExplosionField(field);
+    } else {
+      // 降级：目标不支持精细力场，静默忽略（后续可升级）
+      // console.debug('[FluidIntegrator] 目标不支持 applyExplosionField，跳过');
+    }
+  }
+
+  private buildForceField(
+    explosion: Explosion1DSolver,
+    worldCenterX: number,
+    worldCenterY: number
+  ): ExplosionForceField {
+    this.centerWorld.set(worldCenterX, worldCenterY);
+    return {
+      centerWorld: this.centerWorld.clone(),
+      shockRadius: explosion.getShockRadius(),
+      corePressure: explosion.getCorePressure(),
+      coreTemperature: explosion.getCoreTemperature(),
+      ambientPressure: explosion.getAmbientPressure(),
+      sample: (r: number) => explosion.sample(r),
+      sampleNormalized: (xi: number) => explosion.sampleNormalized(xi),
+      shockAcceleration: explosion.getShockAcceleration(),
+      shockSpeed: explosion.getShockSpeed(),
+    };
+  }
+
+  public setTarget(target: IFluidForceTarget): void {
+    if (this.destroyed) return;
+    this.target = target;
+  }
+
+  public getTarget(): IFluidForceTarget | null {
+    return this.target;
+  }
+
+  public destroy(): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.target = null;
+    this.injectionParams = undefined as any;
+  }
+
+  public isDestroyed(): boolean {
+    return this.destroyed;
+  }
+}
+6. ExplosionDebugVisualizer.ts —— 3D 调试可视化（不变，参考上一轮）
+7. EntityManager.ts —— 简化调用
+typescript
+public createExplosion(
+  id: string,
+  worldPosition: THREE.Vector3,
+  maxInfluenceRadius: number = 10.0,
+  params?: Partial<ExplosionParams>
+): void {
+  this.explosionManager.create(
+    id,
+    { ...DEFAULT_EXPLOSION_PARAMS, ...params },
+    worldPosition.x,
+    worldPosition.y,
+    maxInfluenceRadius
+  );
+}
+8. FluidSimulatorAdapter.ts 和 LightFluidEntity.ts —— 空实现 applyExplosionField
+typescript
+applyExplosionField(field: ExplosionForceField): void {
+  // 阶段二实现，目前只记录调试信息
+  if (this.injectionParams.debugVisualization) {
+    console.log(`[${this.constructor.name}] 收到力场: R=${field.shockRadius.toFixed(3)}, P=${field.corePressure.toFixed(0)}`);
+  }
+}
+配置示例
+typescript
+// 创建一个注入间隔为 0.05 秒（约每 3 帧注入一次）的爆炸
+entityManager.createExplosion(
+  'test_explosion',
+  new THREE.Vector3(0, 0, 0),
+  10.0,
+  {
+    totalEnergy: 500000,
+    initialRadius: 0.02,
+    duration: 2.0,
+    injectionInterval: 0.05,  // 每 0.05 秒注入一次
+  }
+);
+总结
+改动	说明
+注入策略	改为间隔注入，由 injectionInterval 控制频率，默认 0.016s
+累积机制	每帧累加物理时间 clampedDelta，达到间隔才触发注入
+坐标映射	完全从 FluidIntegrator 移除，由目标内部处理
+参数配置	injectionInterval 在 ExplosionParams 中可配置
+向后兼容	旧接口保留，新增 applyExplosionField 为可选方法
+如有其他需要调整的地方，请告诉我。
+

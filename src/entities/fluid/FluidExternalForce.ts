@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { ExplosionForceField } from '@lib/explosion-processor/types';
 
 /**
  * 流体内部注入（纹理空间，UV 0~1）
@@ -58,4 +59,11 @@ export interface IFluidForceTarget {
   getPosition(): THREE.Vector3;
   /** 获取目标的碰撞半径（用于空间查询优化） */
   getBoundingRadius(): number;
+  
+  /**
+   * 接收爆炸力场描述符（由目标自行采样并映射到纹理空间）
+   * 坐标映射由目标内部完成，FluidIntegrator 只传递原始物理数据
+   * @param field 爆炸力场描述符
+   */
+  applyExplosionField?(field: ExplosionForceField): void;
 }

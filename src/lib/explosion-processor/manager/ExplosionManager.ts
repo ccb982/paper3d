@@ -3,13 +3,18 @@ import { Explosion1DSolver } from '../Explosion1DSolver';
 import type { ExplosionParams } from '@lib/explosion-processor/types';
 import { FluidIntegrator } from '../integration/FluidIntegrator';
 import type { IFluidForceTarget } from '@entities/fluid/FluidExternalForce';
+import { DEFAULT_EXPLOSION_PARAMS } from '../types';
 
 interface ExplosionEntry {
   solver: Explosion1DSolver;
   position: THREE.Vector3;
   maxInfluenceRadius: number;
-  hasInjected: boolean;       // 是否已注入过冲量
-  lastInjectionTime: number;   // 上次注入时间
+  /** 静态列表：爆炸创建时锁定，之后不再修改 */
+  registeredTargets: IFluidForceTarget[];
+  /** 累积的物理时间 */
+  injectionAccumulator: number;
+  /** 注入间隔（秒） */
+  injectionInterval: number;
 }
 
 export class ExplosionManager {
@@ -17,7 +22,39 @@ export class ExplosionManager {
   private targets: Set<IFluidForceTarget> = new Set();
   private integrators: Map<IFluidForceTarget, FluidIntegrator> = new Map();
   private graphicsTime: number = 0;
-  private injectionInterval: number = 0.3;  // 注入间隔（秒）
+
+  /**
+   * 注册可被爆炸影响的目标
+   * @param target 目标对象
+   */
+  public registerTarget(target: IFluidForceTarget): void {
+    this.targets.add(target);
+  }
+
+  /**
+   * 批量注册目标
+   * @param targets 目标数组
+   */
+  public registerTargets(targets: IFluidForceTarget[]): void {
+    for (const target of targets) {
+      this.targets.add(target);
+    }
+  }
+
+  /**
+   * 注销目标
+   * @param target 目标对象
+   */
+  public unregisterTarget(target: IFluidForceTarget): void {
+    this.targets.delete(target);
+
+    // 清理相关的集成器
+    const integrator = this.integrators.get(target);
+    if (integrator) {
+      integrator.destroy();
+      this.integrators.delete(target);
+    }
+  }
 
   /**
    * 创建爆炸并查询影响范围内的目标
@@ -40,17 +77,32 @@ export class ExplosionManager {
       this.remove(id);
     }
 
-    const explosion = new Explosion1DSolver(params);
+    const fullParams = { ...DEFAULT_EXPLOSION_PARAMS, ...params };
+    const explosion = new Explosion1DSolver(fullParams);
+    const center = new THREE.Vector3(worldX, worldY, 0);
+
+    // 创建时一次性锁定范围内的目标
+    const affectedTargets = this.findTargetsInRange(center, maxInfluenceRadius);
+
     const entry: ExplosionEntry = {
       solver: explosion,
-      position: new THREE.Vector3(worldX, worldY, 0),
+      position: center,
       maxInfluenceRadius,
-      hasInjected: false,
-      lastInjectionTime: 0,
+      registeredTargets: affectedTargets,
+      injectionAccumulator: 0,
+      injectionInterval: fullParams.injectionInterval ?? 0.016,
     };
 
     this.explosions.set(id, entry);
-    console.log(`[ExplosionManager] 爆炸已创建: id=${id}, duration=${(params as any).duration || 2.0}s, 位置=(${worldX.toFixed(2)}, ${worldY.toFixed(2)})`);
+
+    // 为每个目标预创建 Integrator
+    for (const target of affectedTargets) {
+      if (!this.integrators.has(target)) {
+        this.integrators.set(target, new FluidIntegrator(target));
+      }
+    }
+
+    console.log(`[ExplosionManager] 爆炸创建: id=${id}, 锁定目标=${affectedTargets.length}, 注入间隔=${entry.injectionInterval}s`);
     return explosion;
   }
 
@@ -75,30 +127,8 @@ export class ExplosionManager {
   }
 
   /**
-   * 注册可被爆炸影响的目标
-   * @param target 目标对象
-   */
-  public registerTarget(target: IFluidForceTarget): void {
-    this.targets.add(target);
-  }
-
-  /**
-   * 注销目标
-   * @param target 目标对象
-   */
-  public unregisterTarget(target: IFluidForceTarget): void {
-    this.targets.delete(target);
-
-    // 清理相关的集成器
-    const integrator = this.integrators.get(target);
-    if (integrator) {
-      integrator.destroy();
-      this.integrators.delete(target);
-    }
-  }
-
-  /**
-   * 更新所有爆炸，并自动影响范围内的目标
+   * 更新所有爆炸
+   * 核心改动：累积物理时间，达到注入间隔时才执行注入
    * @param graphicsDelta 时间增量（秒）
    */
   public updateAll(graphicsDelta: number): void {
@@ -117,36 +147,39 @@ export class ExplosionManager {
         return;
       }
 
-      // 使用增量时间推进，避免一次性时间跳跃导致的性能问题
+      // 1. 推进物理
       explosion.advanceBy(clampedDelta);
 
-      // 输出爆炸计时日志（每秒输出一次）
-      if (Math.floor(this.graphicsTime) > Math.floor(this.graphicsTime - clampedDelta)) {
-        console.log(`[ExplosionManager] 爆炸更新: id=${id}, t=${explosion.getTime().toFixed(3)}s, duration=${(explosion as any).duration}s`);
+      // 2. 累积物理时间
+      entry.injectionAccumulator += clampedDelta;
+
+      // 3. 达到注入间隔 -> 执行注入
+      if (entry.injectionAccumulator >= entry.injectionInterval) {
+        this.performInjection(entry);
+        // 保留余数，避免时间漂移
+        entry.injectionAccumulator -= entry.injectionInterval;
       }
-
-      // 检查是否需要注入：只在爆炸激活的第一帧注入
-      if (!entry.hasInjected) {
-        entry.hasInjected = true;
-        entry.lastInjectionTime = this.graphicsTime;
-
-        // 查找范围内的目标
-        const affectedTargets = this.findTargetsInRange(
-          entry.position,
-          entry.maxInfluenceRadius
-        );
-
-        // 对每个目标应用爆炸效果（只在首次注入时调用）
-        affectedTargets.forEach((target) => {
-          const integrator = this.getOrCreateIntegrator(target);
-          integrator.inject(explosion, entry.position.x, entry.position.y);
-        });
-      }
-      // 已注入过的爆炸不再调用 inject，避免冗余计算
     });
 
     // 清理失效的爆炸
     this.cleanupInactive();
+  }
+
+  /**
+   * 执行一次注入：遍历静态列表，向所有有效目标注入力场
+   * @param entry 爆炸条目
+   */
+  private performInjection(entry: ExplosionEntry): void {
+    const explosion = entry.solver;
+    if (!explosion.isActive()) return;
+
+    for (const target of entry.registeredTargets) {
+      if (!this.isTargetValid(target)) continue;
+      const integrator = this.integrators.get(target);
+      if (integrator) {
+        integrator.inject(explosion, entry.position.x, entry.position.y);
+      }
+    }
   }
 
   /**
@@ -178,53 +211,46 @@ export class ExplosionManager {
   }
 
   /**
-   * 获取或创建集成器
+   * 检查目标是否仍然有效（不被销毁）
    * @param target 目标对象
-   * @returns 流体集成器
+   * @returns 是否有效
    */
-  private getOrCreateIntegrator(target: IFluidForceTarget): FluidIntegrator {
-    let integrator = this.integrators.get(target);
-
-    if (!integrator) {
-      integrator = new FluidIntegrator(target);
-      this.integrators.set(target, integrator);
-    }
-
-    return integrator;
-  }
-
-  /**
-   * 设置世界到UV的缩放比例（应用于所有集成器）
-   * @param scale 缩放比例
-   */
-  public setWorldToUVScale(scale: number): void {
-    for (const integrator of this.integrators.values()) {
-      integrator.setWorldToUVScale(scale);
+  private isTargetValid(target: IFluidForceTarget): boolean {
+    try {
+      // 如果目标实现了 isActive（如 Entity），检查它
+      if (typeof (target as any).isActive === 'boolean') {
+        return (target as any).isActive;
+      }
+      // 否则尝试获取位置，失败则视为无效
+      target.getPosition();
+      return true;
+    } catch {
+      return false;
     }
   }
 
   /**
-   * 设置世界坐标偏移（用于处理负坐标）
-   * @param offsetX X方向偏移
-   * @param offsetY Y方向偏移
+   * 设置世界到UV的缩放比例（已废弃，坐标映射由目标内部处理）
+   * @deprecated
    */
-  public setWorldOffset(offsetX: number, offsetY: number): void {
-    for (const integrator of this.integrators.values()) {
-      integrator.setWorldOffset(offsetX, offsetY);
-    }
+  public setWorldToUVScale(_scale: number): void {
+    console.warn('[ExplosionManager] setWorldToUVScale 已废弃，坐标映射由目标内部处理');
   }
 
   /**
-   * 根据世界范围自动设置UV映射（支持负坐标）
-   * @param worldMinX 世界X最小值
-   * @param worldMaxX 世界X最大值
-   * @param worldMinY 世界Y最小值
-   * @param worldMaxY 世界Y最大值
+   * 设置世界坐标偏移（已废弃，坐标映射由目标内部处理）
+   * @deprecated
    */
-  public setWorldBounds(worldMinX: number, worldMaxX: number, worldMinY: number, worldMaxY: number): void {
-    for (const integrator of this.integrators.values()) {
-      integrator.setWorldBounds(worldMinX, worldMaxX, worldMinY, worldMaxY);
-    }
+  public setWorldOffset(_offsetX: number, _offsetY: number): void {
+    console.warn('[ExplosionManager] setWorldOffset 已废弃，坐标映射由目标内部处理');
+  }
+
+  /**
+   * 根据世界范围自动设置UV映射（已废弃，坐标映射由目标内部处理）
+   * @deprecated
+   */
+  public setWorldBounds(_worldMinX: number, _worldMaxX: number, _worldMinY: number, _worldMaxY: number): void {
+    console.warn('[ExplosionManager] setWorldBounds 已废弃，坐标映射由目标内部处理');
   }
 
   /**
@@ -362,8 +388,9 @@ export class ExplosionManager {
   /**
    * 更新目标位置（用于空间查询优化）
    * @param target 目标对象
+   * @deprecated 当前实现是线性搜索，此方法预留用于未来优化
    */
-  public updateTargetPosition(target: IFluidForceTarget): void {
+  public updateTargetPosition(_target: IFluidForceTarget): void {
     // 如果需要空间分区优化，可以在这里更新空间索引
     // 当前实现是线性搜索，此方法预留用于未来优化
   }
