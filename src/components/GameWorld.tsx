@@ -32,6 +32,7 @@ import { TextureManager } from '../systems/textures/TextureManager';
 import { FluidSimulatorAdapter } from '../systems/textures/FluidSimulatorAdapter';
 import type { FluidParams } from '@lib/fluid-simulator/fluid-simulator';
 import type { IFluidForceTarget, FluidExternalForce } from '@entities/fluid';
+import { ExplosionDebugVisualizer } from '@lib/explosion-processor';
 // import { TestBulletTrailTexture } from '../systems/textures/TestRedBlueTexture';  // 已禁用
 import { WaterEntity } from '../entities/water/WaterEntity';
 
@@ -73,6 +74,24 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
       (window as any).cameraStore = cameraStore;
       // 将EntityManager引用存储到window对象，供UI使用
       (window as any).entityManager = EntityManager.getInstance();
+      
+      // 创建爆炸调试可视化（默认启用，方便查看效果）
+      try {
+        const explosionManager = EntityManager.getInstance().getExplosionManager();
+        const debugVisualizer = new ExplosionDebugVisualizer(scene, explosionManager, {
+          showShockSphere: true,
+          showPressureDisc: true,
+          showVelocityArrows: true,
+          showHUD: true,
+        });
+        debugVisualizer.setWorldScale(1);
+        console.log('[GameWorld] 爆炸调试可视化已成功创建');
+        
+        // 将可视化器保存到全局，方便调试
+        (window as any).explosionDebugVisualizer = debugVisualizer;
+      } catch (error) {
+        console.error('[GameWorld] 创建爆炸调试可视化失败:', error);
+      }
     }
   }, [scene]);
 
@@ -447,6 +466,11 @@ const MovementController = ({ getHeightAtRef, shootingManager, sceneRef, setActi
 
     // 更新所有纹理（包括测试纹理的流动效果）
     TextureManager.getInstance().updateAll(delta);
+    
+    // 更新爆炸调试可视化
+    if ((window as any).explosionDebugVisualizer) {
+      (window as any).explosionDebugVisualizer.update();
+    }
   });
 
   return null;
@@ -488,21 +512,20 @@ export const GameWorld = ({ onLockStateChanged, onActiveSystemChanged }: GameWor
     // 注册当前操控角色到管理器
     playerCharacterManager.setCurrentCharacter(playerEntity);
     
-    // 在出生点附近创建一次爆炸效果（延迟1秒后触发）- 已注释
-    // // 使用全局标志防止重复创建（React StrictMode 可能导致 useEffect 执行两次）
-    // if (!window.__spawnExplosionCreated) {
-    //   window.__spawnExplosionCreated = true;
-    //   setTimeout(() => {
-    //     const explosionPosition = new THREE.Vector3(0, 3, 0); // 玩家脚下附近
-    //     entityManager.createExplosion(
-    //       `spawn-explosion-${Date.now()}`,
-    //       explosionPosition,
-    //       8.0 // 爆炸影响范围8米
-    //     );
-    //     console.log('爆炸效果已在出生点附近创建:', explosionPosition);
-    //   }, 1000);
-    // }
-    
+    // 在出生点附近创建一次爆炸效果（延迟1秒后触发）
+    // 使用全局标志防止重复创建（React StrictMode 可能导致 useEffect 执行两次）
+    if (!window.__spawnExplosionCreated) {
+      window.__spawnExplosionCreated = true;
+      setTimeout(() => {
+        const explosionPosition = new THREE.Vector3(0, 3, 0); // 玩家脚下附近
+        entityManager.createExplosion(
+          `spawn-explosion-${Date.now()}`,
+          explosionPosition,
+          8.0 // 爆炸影响范围8米
+        );
+        console.log('爆炸效果已在出生点附近创建:', explosionPosition);
+      }, 1000);
+    }
     // 初始化碰撞管理器
     const collisionManager = CollisionManager.getInstance();
     

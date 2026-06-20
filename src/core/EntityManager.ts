@@ -423,6 +423,13 @@ export class EntityManager {
   }
 
   /**
+   * 获取爆炸管理器（用于调试可视化）
+   */
+  public getExplosionManager(): ExplosionManager {
+    return this.explosionManager;
+  }
+
+  /**
    * 时间缩放因子，用于加快或减慢游戏内时间
    * 1.0 = 正常速度，2.0 = 两倍速度
    */

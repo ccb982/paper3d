@@ -163,6 +163,9 @@ export class ExplosionDebugVisualizer {
     const activeExplosions = this.explosionManager.getAllExplosions();
     const activeIds = new Set<string>();
     
+    // 调试日志
+    console.log(`[ExplosionDebugVisualizer] 更新中，总爆炸数: ${this.explosionManager.getCount()}, 活跃数: ${this.explosionManager.getActiveCount()}`);
+    
     // 更新或创建可视化
     this.explosionManager.forEach((explosion, id) => {
       activeIds.add(id);
@@ -194,7 +197,12 @@ export class ExplosionDebugVisualizer {
     }
     
     const position = this.explosionManager.getPosition(id);
-    if (!position) return;
+    if (!position) {
+      console.log(`[ExplosionDebugVisualizer] 爆炸 ${id} 位置为空`);
+      return;
+    }
+    
+    console.log(`[ExplosionDebugVisualizer] 更新爆炸 ${id}, 位置: (${position.x}, ${position.y})`);
     
     const worldPos = new THREE.Vector3(
       position.x * this.worldScale,
@@ -203,6 +211,7 @@ export class ExplosionDebugVisualizer {
     );
     
     if (!visuals) {
+      console.log(`[ExplosionDebugVisualizer] 创建可视化对象: ${id}`);
       visuals = this.createVisuals(explosion, id, worldPos);
       this.visuals.set(id, visuals);
     } else {
@@ -290,12 +299,17 @@ export class ExplosionDebugVisualizer {
       worldPosition: worldPos.clone(),
     };
     
+    const data = this.getVisualData(explosion);
+    console.log(`[ExplosionDebugVisualizer] 创建可视化: id=${id}, 位置=(${worldPos.x}, ${worldPos.y}, ${worldPos.z}), shockRadius=${data.shockRadius}`);
+    
     // 创建冲击波球壳
     if (this.config.showShockSphere) {
       const sphereGeo = new THREE.SphereGeometry(1, 32, 16);
       visuals.shockSphere = new THREE.Mesh(sphereGeo, this.shockMaterial.clone());
       visuals.shockSphere.position.copy(worldPos);
+      visuals.shockSphere.scale.setScalar(data.shockRadius * this.worldScale);
       this.parentObject.add(visuals.shockSphere);
+      console.log(`[ExplosionDebugVisualizer] 创建冲击波球壳: scale=${data.shockRadius * this.worldScale}`);
     }
     
     // 创建压力切片圆盘
