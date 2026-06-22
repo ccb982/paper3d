@@ -27,28 +27,28 @@ function uint8ToBase64(bytes: Uint8Array): string {
 // H: -0.5 ~ +0.5 → 0 ~ 63 (6位)
 // S: -1.0 ~ +1.0 → 0 ~ 31 (5位)
 // L: -1.0 ~ +1.0 → 0 ~ 31 (5位)
-function quantizeH(dH: number): number {
+export function quantizeH(dH: number): number {
   return Math.round((dH + 0.5) * 63);
 }
 
-function quantizeS(dS: number): number {
+export function quantizeS(dS: number): number {
   return Math.round((dS + 1.0) * 15.5);
 }
 
-function quantizeL(dL: number): number {
+export function quantizeL(dL: number): number {
   return Math.round((dL + 1.0) * 15.5);
 }
 
 // ---------- FTX 2.0 反量化函数 ----------
-function dequantizeH(encoded: number): number {
+export function dequantizeH(encoded: number): number {
   return (encoded / 63) - 0.5;
 }
 
-function dequantizeS(encoded: number): number {
+export function dequantizeS(encoded: number): number {
   return (encoded / 15.5) - 1.0;
 }
 
-function dequantizeL(encoded: number): number {
+export function dequantizeL(encoded: number): number {
   return (encoded / 15.5) - 1.0;
 }
 
@@ -446,16 +446,3 @@ export async function decompressFromGzip(file: File): Promise<ArrayBuffer> {
 
   return arrayBuffer;
 }
-
-// ---------- 导出量化/反量化函数供外部使用 ----------
-export {
-  quantizeH,
-  quantizeS,
-  quantizeL,
-  dequantizeH,
-  dequantizeS,
-  dequantizeL,
-  packRGB565,
-  unpackRGB565,
-  bakeBaseColor
-};

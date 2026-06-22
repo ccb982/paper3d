@@ -319,6 +319,13 @@ function clusterAndGenerateTexturesV2(
   const baseColors = clusters.map(c => ({ h: c.sumH / c.count, s: c.sumS / c.count, l: c.sumL / c.count }));
   const regionIdTex = clusters.length > 1 ? new Uint8Array(totalPixels) : null;
   const deltaTex = new Uint8Array(totalPixels * 3);
+  
+  // 量化公式（与 dequantize 配套）：
+  // dH = ((value / 255) - 0.5) * 0.5 * 2 = value/255 - 0.5
+  //    => value = (dH + 0.5) * 255, dH ∈ [-0.5, 0.5]
+  // dS = ((value / 255) - 0.5) * 1.0 * 2 = value/127.5 - 1
+  //    => value = (dS + 1) * 127.5, dS ∈ [-1, 1]
+  // dL 同 S
   const quantize = (value: number, range: number): number => {
     const normalized = (value / range) * 0.5 + 0.5;
     return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
@@ -346,6 +353,83 @@ function clusterAndGenerateTexturesV2(
 // 导出辅助函数供外部使用（bakeRegionLayerTexture）
 export function dequantize(value: number, range: number): number {
   return ((value / 255) - 0.5) * range * 2;
+}
+
+// ==================== FTX 2.0 解码函数 ====================
+// 量化公式：
+//   Encoded_H = (dH + 0.5) * 63  → 0~63 (6位)
+//   Encoded_S = (dS + 1.0) * 15.5 → 0~31 (5位)
+//   Encoded_L = (dL + 1.0) * 15.5 → 0~31 (5位)
+// 偏置烘焙：
+//   Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)
+// 解码公式：
+//   Final_HSL = Base_Shifted + Delta_Encoded（仅加法）
+
+/**
+ * FTX 2.0 反量化：从 uint8 编码值还原物理残差
+ * @param encodedH 0~255 编码值（对应 0~63 量化范围）
+ * @param encodedS 0~255 编码值（对应 0~31 量化范围）
+ * @param encodedL 0~255 编码值（对应 0~31 量化范围）
+ */
+export function dequantizeFTX2(
+  encodedH: number,
+  encodedS: number,
+  encodedL: number
+): { dH: number; dS: number; dL: number } {
+  // uint8 → 量化整数
+  const quantH = encodedH / 255 * 63;
+  const quantS = encodedS / 255 * 31;
+  const quantL = encodedL / 255 * 31;
+  
+  // 量化整数 → 物理残差
+  return {
+    dH: (quantH / 63) - 0.5,      // -0.5 ~ +0.5
+    dS: (quantS / 31) - 1.0,      // -1.0 ~ +1.0
+    dL: (quantL / 31) - 1.0       // -1.0 ~ +1.0
+  };
+}
+
+/**
+ * FTX 2.0 基础色偏置烘焙
+ * @param base 原始基础色 (H, S, L)
+ */
+export function bakeBaseColorFTX2(base: { h: number; s: number; l: number }): { h: number; s: number; l: number } {
+  return {
+    h: base.h - 0.5,
+    s: base.s - 1.0,
+    l: base.l - 1.0
+  };
+}
+
+/**
+ * FTX 2.0 解码：从偏置基础色和编码残差还原最终 HSL
+ * @param baseShifted 偏置后的基础色
+ * @param encodedH 0~255 编码值
+ * @param encodedS 0~255 编码值
+ * @param encodedL 0~255 编码值
+ */
+export function decodeFTX2(
+  baseShifted: { h: number; s: number; l: number },
+  encodedH: number,
+  encodedS: number,
+  encodedL: number
+): { h: number; s: number; l: number } {
+  // 量化公式验证：
+  // H: quantize = (dH + 0.5) * 255, decode = encoded / 255
+  // S: quantize = (dS + 1.0) * 127.5, decode = (encoded / 127.5) - 1
+  // L: quantize = (dL + 1.0) * 127.5, decode = (encoded / 127.5) - 1
+  const finalH = fract(baseShifted.h + (encodedH / 255));
+  const finalS = clamp(baseShifted.s + (encodedS / 127.5) - 1.0, 0, 1);
+  const finalL = clamp(baseShifted.l + (encodedL / 127.5) - 1.0, 0, 1);
+  return { h: finalH, s: finalS, l: finalL };
+}
+
+// 辅助函数
+function fract(x: number): number {
+  return x - Math.floor(x);
+}
+function clamp(x: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, x));
 }
 
 export { computeBBoxAllRings, rasterizeRegionMaskLocal, clusterAndGenerateTexturesV2 };

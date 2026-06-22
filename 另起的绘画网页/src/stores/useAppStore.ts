@@ -6,6 +6,7 @@ import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtil
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { bfsHueClustering, rasterizeRegionMask, hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, dequantize } from '../utils/colorCompressor';
+import { quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL } from '../utils/binaryCompression';
 
 interface AppState {
   // 图片导入状态
@@ -1056,30 +1057,74 @@ export const useAppStore = create<AppState>((set, get) => ({
       );
       console.log('[bakeRegionLayerTexture] 聚类结果: baseColors=', baseColors.length, 'regionIdTex=', regionIdTex ? '有' : '无', 'deltaTex=', deltaTex.length);
 
-      // 4d. 将结果渲染到输出画布
+      // 调试：检查数据范围
+      console.log('[bakeRegionLayerTexture] 调试信息:');
+      console.log('  baseColors[0]:', baseColors[0]);
+      if (deltaTex.length > 0) {
+        console.log('  deltaTex 前10个值:', Array.from(deltaTex.slice(0, 30)));
+      }
+      console.log('  regionIdTex null?', regionIdTex === null, '长度:', regionIdTex ? regionIdTex.length : 0);
+      if (regionIdTex && regionIdTex.length > 0) {
+        console.log('  regionIdTex 前10个值:', Array.from(regionIdTex.slice(0, 10)));
+      }
+
+      // 4e. 使用与 HTML 一致的解码方式渲染到输出画布
+      // 解码公式：dH = ((value / 255) - 0.5) * range * 2
+      //          finalH = base.h + dH (色相需要 wrap)
+      //          finalS = clamp(base.s + dS, 0, 1)
+      //          finalL = clamp(base.l + dL, 0, 1)
       const { w, h, x: offsetX, y: offsetY } = bbox;
       let renderedPixels = 0;
+      let skippedZero = 0;
+      let skippedNoBase = 0;
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const idx = y * w + x;
           // 检查是否有效像素
-          if (regionIdTex && regionIdTex[idx] === 0) continue;
-          if (!regionIdTex && mask[idx] === 0) continue;
+          if (regionIdTex && regionIdTex[idx] === 0) {
+            skippedZero++;
+            continue;
+          }
+          if (!regionIdTex && mask[idx] === 0) {
+            skippedZero++;
+            continue;
+          }
 
-          // 计算最终颜色
+          // 获取基础色调索引
           let finalHsl;
           if (regionIdTex) {
             const baseIdx = regionIdTex[idx] - 1;
+            if (baseIdx < 0 || baseIdx >= baseColors.length) {
+              skippedNoBase++;
+              continue;
+            }
             const base = baseColors[baseIdx];
-            const dH = dequantize(deltaTex[idx * 3], 0.5);
-            const dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
-            const dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
-            let h = base.h + dH;
-            if (h < 0) h += 1.0;
-            if (h > 1.0) h -= 1.0;
-            finalHsl = { h, s: Math.max(0, Math.min(1, base.s + dS)), l: Math.max(0, Math.min(1, base.l + dL)) };
+            
+            // 反量化 delta（从 8 位值得到物理残差）
+            let dH = 0, dS = 0, dL = 0;
+            if (deltaTex.length > 0) {
+              dH = dequantize(deltaTex[idx * 3], 0.5);
+              dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
+              dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
+              
+              // 模拟 RGB565 量化再反量化（与 FTX 2.0 解码网页一致）
+              const qH = quantizeH(dH);
+              const qS = quantizeS(dS);
+              const qL = quantizeL(dL);
+              dH = dequantizeH(qH);
+              dS = dequantizeS(qS);
+              dL = dequantizeL(qL);
+            }
+            
+            // 计算最终 HSL（与 HTML renderRegions 一致）
+            let finalH = base.h + dH;
+            if (finalH < 0) finalH += 1.0;
+            if (finalH > 1.0) finalH -= 1.0;
+            const finalS = Math.max(0, Math.min(1, base.s + dS));
+            const finalL = Math.max(0, Math.min(1, base.l + dL));
+            finalHsl = { h: finalH, s: finalS, l: finalL };
           } else {
-            // 单色调
+            // 单色调：直接使用原始基础色
             finalHsl = baseColors[0];
           }
 
@@ -1092,7 +1137,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           renderedPixels++;
         }
       }
-      console.log('[bakeRegionLayerTexture] 渲染像素数:', renderedPixels);
+      console.log('[bakeRegionLayerTexture] 解码渲染: 成功', renderedPixels, '跳过零:', skippedZero, '跳过无效:', skippedNoBase);
     }
 
     // 5. 将填充好的 ImageData 放回画布
