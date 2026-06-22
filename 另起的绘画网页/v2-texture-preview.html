@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>V2 纹理预览测试</title>
+  <title>V2 纹理预览测试 (FTX 2.0)</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -43,18 +43,34 @@
       font-size: 12px;
     }
     .file-info { margin-top: 10px; font-size: 12px; color: #888; }
+    .format-info {
+      margin-top: 10px;
+      padding: 10px;
+      background: #1e3a5f;
+      border-radius: 4px;
+      font-size: 12px;
+      border-left: 4px solid #722ed1;
+    }
   </style>
 </head>
 <body>
-  <h1>V2 纹理预览测试</h1>
+  <h1>V2 纹理预览测试 (FTX 2.0)</h1>
 
   <div class="controls">
     <button onclick="loadJsonFile()">加载 JSON 文件</button>
     <button onclick="loadFtexFile()">加载 .ftx.gz 文件</button>
-    <span style="color:#888;margin-left:20px;">支持 JSON 和 .ftx.gz 极致压缩格式</span>
+    <span style="color:#888;margin-left:20px;">支持 JSON 和 FTX 2.0 极致压缩格式</span>
   </div>
 
   <input type="file" id="fileInput" accept=".json,.ftx,.ftx.gz" style="display:none" onchange="handleFile(this)">
+
+  <div class="format-info">
+    <strong>FTX 2.0 编码格式说明：</strong>
+    <div>• 残差存储：RGB565 打包 (H:6位, S:5位, L:5位)</div>
+    <div>• 偏置烘焙：Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)</div>
+    <div>• 解码公式：Final_HSL = Base_Shifted + Delta_Encoded (仅加法)</div>
+    <div>• 带宽：2字节/像素，配合 BBox 裁剪可达 1/10~1/20 压缩率</div>
+  </div>
 
   <div class="container">
     <div>
@@ -77,9 +93,34 @@
   </div>
 
   <script>
-    // ========== 常量定义 ==========
+    // ========== FTX 2.0 常量定义 ==========
     const MAGIC = 0x46545832; // "FTX2"
     const VERSION = 2;
+
+    // ========== FTX 2.0 量化/反量化函数 ==========
+    // H: -0.5 ~ +0.5 → 0 ~ 63 (6位)
+    // S: -1.0 ~ +1.0 → 0 ~ 31 (5位)
+    // L: -1.0 ~ +1.0 → 0 ~ 31 (5位)
+    function quantizeH(dH) { return Math.round((dH + 0.5) * 63); }
+    function quantizeS(dS) { return Math.round((dS + 1.0) * 15.5); }
+    function quantizeL(dL) { return Math.round((dL + 1.0) * 15.5); }
+    
+    function dequantizeH(encoded) { return (encoded / 63) - 0.5; }
+    function dequantizeS(encoded) { return (encoded / 15.5) - 1.0; }
+    function dequantizeL(encoded) { return (encoded / 15.5) - 1.0; }
+
+    // ========== RGB565 打包/解包 ==========
+    function packRGB565(s, h, l) {
+      return ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
+    }
+
+    function unpackRGB565(packed) {
+      return {
+        s: (packed >> 11) & 0x1F,
+        h: (packed >> 5) & 0x3F,
+        l: packed & 0x1F
+      };
+    }
 
     // ========== 辅助函数 ==========
     function base64ToUint8Array(base64) {
@@ -91,10 +132,190 @@
       return bytes;
     }
 
+    function uint8ArrayToBase64(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    // ========== RLE 解码器 (1字节/像素) ==========
+    function rleDecode8(encodedData, expectedPixelCount) {
+      if (encodedData.length === 0) return new Uint8Array(0);
+
+      const result = new Uint8Array(expectedPixelCount);
+      let readOffset = 0;
+      let writeOffset = 0;
+      const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
+
+      while (readOffset + 3 <= encodedData.length && writeOffset < expectedPixelCount) {
+        const count = dataView.getUint16(readOffset, true);
+        readOffset += 2;
+        const pixel = encodedData[readOffset++];
+
+        const actualCount = Math.min(count, expectedPixelCount - writeOffset);
+        for (let i = 0; i < actualCount; i++) {
+          result[writeOffset++] = pixel;
+        }
+      }
+      return result;
+    }
+
+    // ========== RLE 解码器 (2字节/像素，RGB565) ==========
+    function rleDecode16(encodedData, expectedPixelCount) {
+      if (encodedData.length === 0) return new Uint16Array(0);
+
+      const result = new Uint16Array(expectedPixelCount);
+      let readOffset = 0;
+      let writeOffset = 0;
+      const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
+
+      while (readOffset + 4 <= encodedData.length && writeOffset < expectedPixelCount) {
+        const count = dataView.getUint16(readOffset, true);
+        readOffset += 2;
+        const pixel = dataView.getUint16(readOffset, true);
+        readOffset += 2;
+
+        const actualCount = Math.min(count, expectedPixelCount - writeOffset);
+        for (let i = 0; i < actualCount; i++) {
+          result[writeOffset++] = pixel;
+        }
+      }
+      return result;
+    }
+
+    // ========== 从 FTX 2.0 二进制解压 ==========
+    function decompressFromBinary(buffer) {
+      const dataView = new DataView(buffer);
+      let offset = 0;
+
+      // 校验 Magic（大端序）
+      if (offset + 4 > buffer.byteLength) throw new Error('文件太短：无法读取 Magic');
+      const magic = dataView.getUint32(offset, false);
+      offset += 4;
+      if (magic !== MAGIC) throw new Error('无效的文件格式 (Magic 不匹配)');
+
+      const version = dataView.getUint8(offset);
+      offset += 1;
+      if (version !== VERSION) throw new Error(`不支持的版本: ${version}`);
+
+      const regionCount = dataView.getUint16(offset, true);
+      offset += 2;
+      const resolution = dataView.getUint32(offset, true);
+      offset += 4;
+      const hueThreshold = dataView.getFloat32(offset, true);
+      offset += 4;
+
+      const regions = [];
+
+      for (let i = 0; i < regionCount; i++) {
+        // 读取 Region Header
+        if (offset + 12 > buffer.byteLength) throw new Error(`区域 ${i} 头部越界`);
+
+        const id = dataView.getUint16(offset, true);
+        offset += 2;
+
+        const x = dataView.getUint16(offset, true);
+        offset += 2;
+        const y = dataView.getUint16(offset, true);
+        offset += 2;
+        const w = dataView.getUint16(offset, true);
+        offset += 2;
+        const h = dataView.getUint16(offset, true);
+        offset += 2;
+
+        const bbox = { x, y, w, h };
+        const colorCount = dataView.getUint16(offset, true);
+        offset += 2;
+
+        // 读取偏置后的基础色，然后还原
+        const baseColors = [];
+        for (let j = 0; j < colorCount; j++) {
+          if (offset + 12 > buffer.byteLength) throw new Error(`区域 ${i} 的 baseColors[${j}] 越界`);
+          const h = dataView.getFloat32(offset, true) + 0.5; // 还原偏置
+          offset += 4;
+          const s = dataView.getFloat32(offset, true) + 1.0;
+          offset += 4;
+          const l = dataView.getFloat32(offset, true) + 1.0;
+          offset += 4;
+          baseColors.push({ 
+            h: (h + 1) % 1, 
+            s: Math.max(0, Math.min(1, s)), 
+            l: Math.max(0, Math.min(1, l)) 
+          });
+        }
+
+        // 读取 RLE RegionIdTex (1字节/像素)
+        if (offset + 4 > buffer.byteLength) throw new Error(`区域 ${i} 的 regionIdTexLen 越界`);
+        const regionIdTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let regionIdTex = undefined;
+        if (regionIdTexLen > 0) {
+          if (offset + regionIdTexLen > buffer.byteLength) throw new Error(`区域 ${i} 的 regionIdTex 数据越界`);
+          const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+          offset += regionIdTexLen;
+          const totalPixels = bbox.w * bbox.h;
+          const decoded = rleDecode8(encoded, totalPixels);
+          regionIdTex = uint8ArrayToBase64(decoded);
+        }
+
+        // 读取 RLE DeltaTex (RGB565，2字节/像素)
+        if (offset + 4 > buffer.byteLength) throw new Error(`区域 ${i} 的 deltaTexLen 越界`);
+        const deltaTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let deltaTex = '';
+        if (deltaTexLen > 0) {
+          if (offset + deltaTexLen > buffer.byteLength) throw new Error(`区域 ${i} 的 deltaTex 数据越界`);
+          const encoded = new Uint8Array(buffer, offset, deltaTexLen);
+          offset += deltaTexLen;
+          const totalPixels = bbox.w * bbox.h;
+          const decoded16 = rleDecode16(encoded, totalPixels);
+          
+          // RGB565 转换回 3字节/像素的 uint8 格式
+          const decoded8 = new Uint8Array(totalPixels * 3);
+          for (let j = 0; j < totalPixels; j++) {
+            const rgb565 = decoded16[j];
+            const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
+            
+            // FTX 2.0 反量化
+            const dH = dequantizeH(encodedH);
+            const dS = dequantizeS(encodedS);
+            const dL = dequantizeL(encodedL);
+            
+            // 转换回 uint8 存储格式
+            decoded8[j * 3] = Math.round(((dH / 0.5) + 1) * 127.5);
+            decoded8[j * 3 + 1] = Math.round(((dS / 2) + 0.5) * 255);
+            decoded8[j * 3 + 2] = Math.round(((dL / 2) + 0.5) * 255);
+          }
+          deltaTex = uint8ArrayToBase64(decoded8);
+        }
+
+        regions.push({
+          id,
+          bbox,
+          baseColors,
+          regionIdTexture: regionIdTex ?? "",
+          deltaTexture: deltaTex ?? "",
+        });
+      }
+
+      return {
+        version: 2,
+        resolution: [resolution, resolution],
+        regionCount,
+        regions,
+        quantization: 'rgb565',
+        hueThreshold,
+      };
+    }
+
+    // ========== 传统反量化函数（兼容旧格式）==========
     function dequantize(value, range) {
       return ((value / 255) - 0.5) * range * 2;
     }
 
+    // ========== HSL → RGB 转换 ==========
     function hslToRgb(h, s, l) {
       let r, g, b;
       if (s === 0) {
@@ -121,187 +342,6 @@
       };
     }
 
-    // ========== RLE 解码器（带调试）==========
-    function rleDecode(encodedData, bytesPerPixel, expectedPixelCount) {
-      if (encodedData.length === 0) return new Uint8Array(0);
-
-      console.log(`RLE 解码: encodedData.length=${encodedData.length}, bytesPerPixel=${bytesPerPixel}, expectedPixelCount=${expectedPixelCount}`);
-
-      const result = new Uint8Array(expectedPixelCount * bytesPerPixel);
-      let readOffset = 0;
-      let writeOffset = 0;
-      let runCount = 0;
-      const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
-
-      while (readOffset < encodedData.length && writeOffset < result.length) {
-        // 检查读取 count 是否越界
-        if (readOffset + 4 > encodedData.length) {
-          console.log(`RLE: 提前结束，readOffset=${readOffset}, length=${encodedData.length}`);
-          break;
-        }
-        const count = dataView.getUint16(readOffset, true);
-        readOffset += 2;
-
-        // 检查读取 pixel 是否越界
-        if (readOffset + bytesPerPixel > encodedData.length) {
-          console.log(`RLE: pixel 越界，readOffset=${readOffset}, bytesPerPixel=${bytesPerPixel}`);
-          break;
-        }
-        const pixel = encodedData.slice(readOffset, readOffset + bytesPerPixel);
-        readOffset += bytesPerPixel;
-
-        // 安全写入，避免越界
-        const remainingSlots = (result.length - writeOffset) / bytesPerPixel;
-        const actualCount = Math.min(count, Math.floor(remainingSlots));
-
-        for (let i = 0; i < actualCount; i++) {
-          result.set(pixel, writeOffset);
-          writeOffset += bytesPerPixel;
-        }
-        runCount++;
-      }
-      console.log(`RLE 解码完成: runCount=${runCount}, writeOffset=${writeOffset}, expected=${expectedPixelCount * bytesPerPixel}`);
-      return result;
-    }
-
-    // ========== 从二进制解压回 V2 结果 ==========
-    function decompressFromBinary(buffer) {
-      const dataView = new DataView(buffer);
-      let offset = 0;
-
-      // 校验 Magic（大端序）
-      if (offset + 4 > buffer.byteLength) throw new Error('文件太短：无法读取 Magic');
-      const magic = dataView.getUint32(offset, false);
-      offset += 4;
-      if (magic !== MAGIC) throw new Error('无效的文件格式 (Magic 不匹配)');
-
-      const version = dataView.getUint8(offset);
-      offset += 1;
-      if (version !== VERSION) throw new Error(`不支持的版本: ${version}`);
-
-      const regionCount = dataView.getUint16(offset, true);
-      offset += 2;
-      const resolution = dataView.getUint32(offset, true);
-      offset += 4;
-      const hueThreshold = dataView.getFloat32(offset, true);
-      offset += 4;
-
-      const regions = [];
-
-      for (let i = 0; i < regionCount; i++) {
-        // 读取 Region Header（带边界检查）
-        if (offset + 12 > buffer.byteLength) throw new Error(`区域 ${i} 头部越界: offset=${offset}, byteLength=${buffer.byteLength}`);
-
-        console.log(`读取区域 ${i} 头部前，offset=${offset}, buffer位置 [offset, offset+12]=${Array.from(new Uint8Array(buffer, offset, Math.min(12, buffer.byteLength - offset)))}`);
-
-        const id = dataView.getUint16(offset, true);
-        offset += 2;
-        console.log(`id=${id}, offset after id=${offset}`);
-
-        const x = dataView.getUint16(offset, true);
-        offset += 2;
-        const y = dataView.getUint16(offset, true);
-        offset += 2;
-        const w = dataView.getUint16(offset, true);
-        offset += 2;
-        const h = dataView.getUint16(offset, true);
-        offset += 2;
-
-        const bbox = { x, y, w, h };
-        console.log(`区域 ${i} bbox:`, bbox);
-        console.log(`offset after bbox=${offset}`);
-        const colorCount = dataView.getUint16(offset, true);
-        offset += 2;
-
-        const baseColors = [];
-        for (let j = 0; j < colorCount; j++) {
-          if (offset + 12 > buffer.byteLength) throw new Error(`区域 ${i} 的 baseColors[${j}] 越界`);
-          const h = dataView.getFloat32(offset, true);
-          offset += 4;
-          const s = dataView.getFloat32(offset, true);
-          offset += 4;
-          const l = dataView.getFloat32(offset, true);
-          offset += 4;
-          baseColors.push({ h, s, l });
-        }
-
-        // 读取 RLE RegionIdTex
-        if (offset + 4 > buffer.byteLength) throw new Error(`区域 ${i} 的 regionIdTexLen 越界`);
-        const regionIdTexLen = dataView.getUint32(offset, true);
-        offset += 4;
-        let regionIdTex = undefined;
-        if (regionIdTexLen > 0) {
-          if (offset + regionIdTexLen > buffer.byteLength) throw new Error(`区域 ${i} 的 regionIdTex 数据越界`);
-          const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
-          offset += regionIdTexLen;
-          const totalPixels = bbox.w * bbox.h;
-          const decoded = rleDecode(encoded, 1, totalPixels);
-          regionIdTex = uint8ArrayToBase64(decoded);
-          // 调试：检查前 20 个像素的值
-          console.log(`regionIdTex 前20字节:`, Array.from(decoded.slice(0, 20)));
-        }
-
-        // 读取 RLE DeltaTex
-        if (offset + 4 > buffer.byteLength) throw new Error(`区域 ${i} 的 deltaTexLen 越界`);
-        const deltaTexLen = dataView.getUint32(offset, true);
-        offset += 4;
-        let deltaTex = '';
-        if (deltaTexLen > 0) {
-          if (offset + deltaTexLen > buffer.byteLength) throw new Error(`区域 ${i} 的 deltaTex 数据越界`);
-          const encoded = new Uint8Array(buffer, offset, deltaTexLen);
-          offset += deltaTexLen;
-          const totalPixels = bbox.w * bbox.h;
-          const decoded = rleDecode(encoded, 3, totalPixels);
-          deltaTex = uint8ArrayToBase64(decoded);
-          // 调试：检查前 20 个像素（每像素3字节）的值
-          console.log(`deltaTex 前30字节:`, Array.from(decoded.slice(0, 30)));
-        }
-
-        regions.push({
-          id,
-          bbox,
-          baseColors,
-          regionIdTexture: regionIdTex ?? "",
-          deltaTexture: deltaTex ?? "",
-        });
-      }
-
-      return {
-        version: 2,
-        resolution: [resolution, resolution],
-        regionCount,
-        regions,
-        quantization: 'uint8',
-        hueThreshold,
-      };
-    }
-
-    function uint8ArrayToBase64(bytes) {
-      let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return btoa(binary);
-    }
-
-    // ========== Gzip 解压 ==========
-    async function decompressGzip(file) {
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-
-      // 检查是否为 Gzip (Magic: 0x1F 0x8B)
-      const isGzipped = uint8Array.length >= 2 && uint8Array[0] === 0x1f && uint8Array[1] === 0x8b;
-
-      if (isGzipped) {
-        const blob = new Blob([uint8Array]);
-        const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
-        const decompressedBlob = await new Response(decompressedStream).blob();
-        return await decompressedBlob.arrayBuffer();
-      }
-
-      return arrayBuffer;
-    }
-
     // ========== 主渲染函数 ==========
     function renderRegions(data) {
       const canvas = document.getElementById('previewCanvas');
@@ -325,71 +365,6 @@
 
         console.log(`regionIdTex: ${regionIdTex ? regionIdTex.length : 'null'}, deltaTex: ${deltaTex.length}`);
 
-        // 调试：检查 regionIdTex 中非零值的实际分布
-        if (regionIdTex) {
-          const uniqueValues = new Set(regionIdTex);
-          const sample = [];
-          for (let i = 0; i < Math.min(50, regionIdTex.length); i++) {
-            if (i % 100 === 0) sample.push(regionIdTex[i]);
-          }
-          console.log(`regionIdTex 样本(每100个取1个):`, sample.slice(0, 20));
-          console.log(`regionIdTex 唯一值数量: ${uniqueValues.size}, 最大值: ${Math.max(...regionIdTex)}, 最小值: ${Math.min(...regionIdTex)}`);
-
-          // 统计值为0的像素数量
-          let zeroCount = 0;
-          for (let i = 0; i < regionIdTex.length; i++) {
-            if (regionIdTex[i] === 0) zeroCount++;
-          }
-          console.log(`regionIdTex 中值为0的像素: ${zeroCount}/${regionIdTex.length} (${(zeroCount/regionIdTex.length*100).toFixed(1)}%)`);
-
-          // 统计非零值的分布
-          const nonZeroValues = [];
-          for (let i = 0; i < regionIdTex.length; i++) {
-            if (regionIdTex[i] !== 0) nonZeroValues.push(regionIdTex[i]);
-          }
-          const nonZeroUnique = [...new Set(nonZeroValues)];
-          console.log(`非零值数量: ${nonZeroValues.length}, 唯一非零值: ${nonZeroUnique.slice(0, 20)}`);
-        }
-
-        // 调试：检查前10个被渲染的像素
-        let debugCount = 0;
-        for (let py = 0; py < h && debugCount < 10; py++) {
-          for (let px = 0; px < w && debugCount < 10; px++) {
-            const localIdx = py * w + px;
-
-            // 检查掩码（regionId 为 0 表示无效像素）
-            if (regionIdTex && regionIdTex[localIdx] === 0) continue;
-            debugCount++;
-
-            // 获取基础色调索引
-            let baseIdx;
-            if (regionIdTex) {
-              baseIdx = regionIdTex[localIdx] - 1;
-            } else {
-              baseIdx = 0; // 单色调
-            }
-
-            const base = baseColors[baseIdx];
-
-            // 处理 delta（为空则全零）
-            let dH = 0, dS = 0, dL = 0;
-            if (deltaTex.length > 0) {
-              dH = dequantize(deltaTex[localIdx * 3], 0.5);
-              dS = dequantize(deltaTex[localIdx * 3 + 1], 1.0);
-              dL = dequantize(deltaTex[localIdx * 3 + 2], 1.0);
-            }
-
-            // 计算最终 HSL
-            let finalH = base.h + dH;
-            if (finalH < 0) finalH += 1.0;
-            if (finalH > 1.0) finalH -= 1.0;
-            const finalS = Math.max(0, Math.min(1, base.s + dS));
-            const finalL = Math.max(0, Math.min(1, base.l + dL));
-
-            console.log(`像素(${px},${py}): baseIdx=${baseIdx}, base=${JSON.stringify(base)}, dH=${dH}, dS=${dS}, dL=${dL}, finalH=${finalH}, finalS=${finalS}, finalL=${finalL}`);
-          }
-        }
-
         // 渲染每个像素
         let renderedCount = 0;
         let skippedZero = 0;
@@ -409,7 +384,7 @@
             if (regionIdTex) {
               baseIdx = regionIdTex[localIdx] - 1;
             } else {
-              baseIdx = 0; // 单色调
+              baseIdx = 0;
             }
 
             const base = baseColors[baseIdx];
@@ -449,6 +424,7 @@
           <div>  - BBox: (${x}, ${y}, ${w}x${h})</div>
           <div>  - 基础色调数: ${baseColors.length}</div>
           <div>  - 渲染像素: ${renderedCount}</div>
+          <div>  - 量化格式: ${data.quantization || 'uint8'}</div>
           <div>  - regionIdTex: ${regionIdTex ? regionIdTex.length + ' 字节' : '无（单色调）'}</div>
           <div>  - deltaTex: ${deltaTex.length} 字节</div>
         `;
@@ -456,8 +432,6 @@
     }
 
     // ========== 文件加载 ==========
-    let currentFileInput = null;
-
     function loadJsonFile() {
       const input = document.getElementById('fileInput');
       input.accept = '.json,.ftx,.ftx.gz';
@@ -493,11 +467,11 @@
 
         // 2. 检查是否为 FTX2 二进制格式（通过 Magic 头判断）
         const magic = new DataView(dataBuffer).getUint32(0, false);
-        if (magic === 0x46545832) {
-          // FTX2 二进制格式
+        if (magic === MAGIC) {
+          // FTX 2.0 二进制格式
           const data = decompressFromBinary(dataBuffer);
           renderRegions(data);
-          fileInfo.textContent = `已加载 FTX2 文件: ${file.name}`;
+          fileInfo.textContent = `已加载 FTX 2.0 文件: ${file.name}`;
 
           // 自动下载解码后的 JSON 以供对比
           const jsonStr = JSON.stringify(data, null, 2);
@@ -505,7 +479,7 @@
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = `decoded_from_binary_${Date.now()}.json`;
+          a.download = `decoded_from_ftx2_${Date.now()}.json`;
           a.click();
           URL.revokeObjectURL(url);
         } else {

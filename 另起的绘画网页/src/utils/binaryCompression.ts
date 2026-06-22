@@ -23,47 +23,76 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-// ---------- RLE 编码器 ----------
-function rleEncode(data: Uint8Array, bytesPerPixel: number): Uint8Array {
+// ---------- FTX 2.0 量化函数 ----------
+// H: -0.5 ~ +0.5 → 0 ~ 63 (6位)
+// S: -1.0 ~ +1.0 → 0 ~ 31 (5位)
+// L: -1.0 ~ +1.0 → 0 ~ 31 (5位)
+function quantizeH(dH: number): number {
+  return Math.round((dH + 0.5) * 63);
+}
+
+function quantizeS(dS: number): number {
+  return Math.round((dS + 1.0) * 15.5);
+}
+
+function quantizeL(dL: number): number {
+  return Math.round((dL + 1.0) * 15.5);
+}
+
+// ---------- FTX 2.0 反量化函数 ----------
+function dequantizeH(encoded: number): number {
+  return (encoded / 63) - 0.5;
+}
+
+function dequantizeS(encoded: number): number {
+  return (encoded / 15.5) - 1.0;
+}
+
+function dequantizeL(encoded: number): number {
+  return (encoded / 15.5) - 1.0;
+}
+
+// ---------- RGB565 打包/解包 ----------
+// 打包：(S << 11) | (H << 5) | L
+function packRGB565(s: number, h: number, l: number): number {
+  return ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
+}
+
+function unpackRGB565(packed: number): { s: number; h: number; l: number } {
+  return {
+    s: (packed >> 11) & 0x1F,
+    h: (packed >> 5) & 0x3F,
+    l: packed & 0x1F
+  };
+}
+
+// ---------- RLE 编码器 (针对 RGB565 格式，2字节/像素) ----------
+function rleEncode16(data: Uint16Array): Uint8Array {
   if (data.length === 0) return new Uint8Array(0);
 
   const chunks: Uint8Array[] = [];
-
   let i = 0;
   const len = data.length;
-  const step = bytesPerPixel;
 
   while (i < len) {
-    let runStart = i;
-    const pixel = data.slice(i, i + step);
-    i += step;
+    const pixel = data[i];
+    i++;
 
-    // 计算连续相同的像素数量（最大 65535）
     let count = 1;
     while (i < len && count < 65535) {
-      let match = true;
-      for (let j = 0; j < step; j++) {
-        if (data[i + j] !== pixel[j]) {
-          match = false;
-          break;
-        }
-      }
-      if (!match) break;
+      if (data[i] !== pixel) break;
       count++;
-      i += step;
+      i++;
     }
 
-    // 写入 [count (Uint16)] + [pixel bytes]
-    const countBuf = new Uint8Array(2);
-    new DataView(countBuf.buffer).setUint16(0, count, true); // 小端序
-    const chunk = new Uint8Array(2 + pixel.length);
-    chunk.set(countBuf, 0);
-    chunk.set(pixel, 2);
-
+    // 写入 [count (Uint16)] + [pixel (Uint16)] → 4字节/块
+    const chunk = new Uint8Array(4);
+    const view = new DataView(chunk.buffer);
+    view.setUint16(0, count, true);   // 小端序
+    view.setUint16(2, pixel, true);   // 小端序
     chunks.push(chunk);
   }
 
-  // 拼接所有 chunks
   const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
   const result = new Uint8Array(totalLength);
   let offset = 0;
@@ -74,62 +103,127 @@ function rleEncode(data: Uint8Array, bytesPerPixel: number): Uint8Array {
   return result;
 }
 
-// ---------- RLE 解码器 ----------
-function rleDecode(encodedData: Uint8Array, bytesPerPixel: number, expectedPixelCount: number): Uint8Array {
-  if (encodedData.length === 0) return new Uint8Array(0);
+// ---------- RLE 解码器 (针对 RGB565 格式) ----------
+function rleDecode16(encodedData: Uint8Array, expectedPixelCount: number): Uint16Array {
+  if (encodedData.length === 0) return new Uint16Array(0);
 
-  const result = new Uint8Array(expectedPixelCount * bytesPerPixel);
+  const result = new Uint16Array(expectedPixelCount);
   let readOffset = 0;
   let writeOffset = 0;
   const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
 
-  while (readOffset < encodedData.length) {
-    // 读取长度 (Uint16, Little Endian)
+  while (readOffset + 4 <= encodedData.length && writeOffset < expectedPixelCount) {
     const count = dataView.getUint16(readOffset, true);
     readOffset += 2;
+    const pixel = dataView.getUint16(readOffset, true);
+    readOffset += 2;
 
-    // 读取像素值
-    const pixel = encodedData.slice(readOffset, readOffset + bytesPerPixel);
-    readOffset += bytesPerPixel;
-
-    // 填充到目标数组
-    for (let i = 0; i < count; i++) {
-      result.set(pixel, writeOffset);
-      writeOffset += bytesPerPixel;
+    const actualCount = Math.min(count, expectedPixelCount - writeOffset);
+    for (let i = 0; i < actualCount; i++) {
+      result[writeOffset++] = pixel;
     }
   }
   return result;
 }
 
-// ---------- 核心：压缩 V2 结果为二进制 ----------
+// ---------- RLE 编码器 (针对 regionId，1字节/像素) ----------
+function rleEncode8(data: Uint8Array): Uint8Array {
+  if (data.length === 0) return new Uint8Array(0);
+
+  const chunks: Uint8Array[] = [];
+  let i = 0;
+  const len = data.length;
+
+  while (i < len) {
+    const pixel = data[i];
+    i++;
+
+    let count = 1;
+    while (i < len && count < 65535) {
+      if (data[i] !== pixel) break;
+      count++;
+      i++;
+    }
+
+    // 写入 [count (Uint16)] + [pixel (Uint8)] → 3字节/块
+    const chunk = new Uint8Array(3);
+    const view = new DataView(chunk.buffer);
+    view.setUint16(0, count, true);
+    chunk[2] = pixel;
+    chunks.push(chunk);
+  }
+
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+}
+
+// ---------- RLE 解码器 (针对 regionId，1字节/像素) ----------
+function rleDecode8(encodedData: Uint8Array, expectedPixelCount: number): Uint8Array {
+  if (encodedData.length === 0) return new Uint8Array(0);
+
+  const result = new Uint8Array(expectedPixelCount);
+  let readOffset = 0;
+  let writeOffset = 0;
+  const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
+
+  while (readOffset + 3 <= encodedData.length && writeOffset < expectedPixelCount) {
+    const count = dataView.getUint16(readOffset, true);
+    readOffset += 2;
+    const pixel = encodedData[readOffset++];
+
+    const actualCount = Math.min(count, expectedPixelCount - writeOffset);
+    for (let i = 0; i < actualCount; i++) {
+      result[writeOffset++] = pixel;
+    }
+  }
+  return result;
+}
+
+// ---------- 基础色偏置烘焙 (FTX 2.0 核心优化) ----------
+// Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)
+function bakeBaseColor(base: { h: number; s: number; l: number }): { h: number; s: number; l: number } {
+  return {
+    h: base.h - 0.5,
+    s: base.s - 1.0,
+    l: base.l - 1.0
+  };
+}
+
+// ---------- 核心：压缩 V2 结果为 FTX 2.0 二进制 ----------
 export function compressToBinary(result: CompressionResultV2): Uint8Array {
   const { resolution, regions, hueThreshold } = result;
-  const res = resolution[0]; // 假设是正方形
+  const res = resolution[0];
 
-  // Header 大小：Magic(4) + Ver(1) + Count(2) + Res(4) + Threshold(4)
+  // Header 大小：Magic(4) + Ver(1) + Count(2) + Res(4) + Threshold(4) = 15
   const headerSize = 15;
   const buffers: Uint8Array[] = [];
 
   // 写入 Header（魔数用大端序保证 "FTX2"，其余字段用小端序）
-    const headerBuf = new ArrayBuffer(headerSize);
-    const headerView = new DataView(headerBuf);
-    let offset = 0;
-    headerView.setUint32(offset, MAGIC, false); // 大端序：0x46 0x54 0x58 0x32 = "FTX2"
-    offset += 4;
-    headerView.setUint8(offset, VERSION);
-    offset += 1;
-    headerView.setUint16(offset, regions.length, true);
-    offset += 2;
-    headerView.setUint32(offset, res, true);
-    offset += 4;
-    headerView.setFloat32(offset, hueThreshold, true);
-    offset += 4;
+  const headerBuf = new ArrayBuffer(headerSize);
+  const headerView = new DataView(headerBuf);
+  let offset = 0;
+  headerView.setUint32(offset, MAGIC, false); // 大端序
+  offset += 4;
+  headerView.setUint8(offset, VERSION);
+  offset += 1;
+  headerView.setUint16(offset, regions.length, true);
+  offset += 2;
+  headerView.setUint32(offset, res, true);
+  offset += 4;
+  headerView.setFloat32(offset, hueThreshold, true);
+  offset += 4;
   buffers.push(new Uint8Array(headerBuf));
 
   // 循环写入 Region
   for (const region of regions) {
     const bbox = region.bbox;
-    const baseColors = region.baseColors;
+    const baseColors = region.baseColors.map(bakeBaseColor); // 偏置烘焙
     const regionIdTex = region.regionIdTexture ? base64ToUint8(region.regionIdTexture) : null;
     const deltaTex = base64ToUint8(region.deltaTexture);
 
@@ -153,20 +247,20 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     rView.setUint16(rOffset, colorCount, true);
     rOffset += 2;
 
-    // 写入 BaseColors (Float32 * 3)
+    // 写入偏置后的 BaseColors (Float32 * 3)
     for (const c of baseColors) {
-      rView.setFloat32(rOffset, c.h, true);
+      rView.setFloat32(rOffset, c.h, true);  // Base_H - 0.5
       rOffset += 4;
-      rView.setFloat32(rOffset, c.s, true);
+      rView.setFloat32(rOffset, c.s, true);  // Base_S - 1.0
       rOffset += 4;
-      rView.setFloat32(rOffset, c.l, true);
+      rView.setFloat32(rOffset, c.l, true);  // Base_L - 1.0
       rOffset += 4;
     }
     buffers.push(new Uint8Array(regionHeader));
 
-    // ---- 编码 RegionIdTex (RLE) ----
+    // ---- 编码 RegionIdTex (RLE，1字节/像素) ----
     if (regionIdTex && regionIdTex.length > 0) {
-      const encoded = rleEncode(regionIdTex, 1);
+      const encoded = rleEncode8(regionIdTex);
       const lenBuf = new ArrayBuffer(4);
       new DataView(lenBuf).setUint32(0, encoded.length, true);
       buffers.push(new Uint8Array(lenBuf));
@@ -175,9 +269,30 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
       buffers.push(new Uint8Array(4)); // 长度 0
     }
 
-    // ---- 编码 DeltaTex (RLE) ----
+    // ---- 编码 DeltaTex (先转换为 RGB565，再 RLE) ----
     if (deltaTex && deltaTex.length > 0) {
-      const encoded = rleEncode(deltaTex, 3);
+      // 原始 deltaTex 是 3字节/像素 (dH, dS, dL) 的 uint8 格式
+      // 需要转换为 RGB565 格式：(S << 11) | (H << 5) | L
+      const totalPixels = bbox.w * bbox.h;
+      const rgb565Data = new Uint16Array(totalPixels);
+      
+      for (let i = 0; i < totalPixels; i++) {
+        const idx = i * 3;
+        // 原始存储是 uint8，需要先反量化回物理值
+        const dH = ((deltaTex[idx] / 255) - 0.5) * 0.5;   // 原范围 -0.5~+0.5
+        const dS = ((deltaTex[idx + 1] / 255) - 0.5) * 2; // 原范围 -1.0~+1.0
+        const dL = ((deltaTex[idx + 2] / 255) - 0.5) * 2; // 原范围 -1.0~+1.0
+        
+        // FTX 2.0 量化
+        const encodedH = quantizeH(dH);
+        const encodedS = quantizeS(dS);
+        const encodedL = quantizeL(dL);
+        
+        // 打包为 RGB565
+        rgb565Data[i] = packRGB565(encodedS, encodedH, encodedL);
+      }
+      
+      const encoded = rleEncode16(rgb565Data);
       const lenBuf = new ArrayBuffer(4);
       new DataView(lenBuf).setUint32(0, encoded.length, true);
       buffers.push(new Uint8Array(lenBuf));
@@ -198,7 +313,7 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
   return finalBuffer;
 }
 
-// ---------- 核心：从二进制解压回 CompressionResultV2 ----------
+// ---------- 核心：从 FTX 2.0 二进制解压回 CompressionResultV2 ----------
 export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
   const dataView = new DataView(buffer);
   let offset = 0;
@@ -235,18 +350,19 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     const colorCount = dataView.getUint16(offset, true);
     offset += 2;
 
+    // 读取偏置后的基础色，然后还原
     const baseColors: Array<{ h: number; s: number; l: number }> = [];
     for (let j = 0; j < colorCount; j++) {
-      const h = dataView.getFloat32(offset, true);
+      const h = dataView.getFloat32(offset, true) + 0.5; // Base_Shifted.h + 0.5 = Base_H
       offset += 4;
-      const s = dataView.getFloat32(offset, true);
+      const s = dataView.getFloat32(offset, true) + 1.0; // Base_Shifted.s + 1.0 = Base_S
       offset += 4;
-      const l = dataView.getFloat32(offset, true);
+      const l = dataView.getFloat32(offset, true) + 1.0; // Base_Shifted.l + 1.0 = Base_L
       offset += 4;
-      baseColors.push({ h, s, l });
+      baseColors.push({ h: (h + 1) % 1, s: Math.max(0, Math.min(1, s)), l: Math.max(0, Math.min(1, l)) });
     }
 
-    // 读取 RLE RegionIdTex
+    // 读取 RLE RegionIdTex (1字节/像素)
     const regionIdTexLen = dataView.getUint32(offset, true);
     offset += 4;
     let regionIdTex: string | undefined = undefined;
@@ -254,11 +370,11 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
       const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
       const totalPixels = bbox.w * bbox.h;
-      const decoded = rleDecode(encoded, 1, totalPixels);
+      const decoded = rleDecode8(encoded, totalPixels);
       regionIdTex = uint8ToBase64(decoded);
     }
 
-    // 读取 RLE DeltaTex
+    // 读取 RLE DeltaTex (RGB565，2字节/像素)
     const deltaTexLen = dataView.getUint32(offset, true);
     offset += 4;
     let deltaTex = '';
@@ -266,8 +382,25 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
       const encoded = new Uint8Array(buffer, offset, deltaTexLen);
       offset += deltaTexLen;
       const totalPixels = bbox.w * bbox.h;
-      const decoded = rleDecode(encoded, 3, totalPixels);
-      deltaTex = uint8ToBase64(decoded);
+      const decoded16 = rleDecode16(encoded, totalPixels);
+      
+      // RGB565 转换回 3字节/像素的 uint8 格式
+      const decoded8 = new Uint8Array(totalPixels * 3);
+      for (let j = 0; j < totalPixels; j++) {
+        const rgb565 = decoded16[j];
+        const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
+        
+        // FTX 2.0 反量化
+        const dH = dequantizeH(encodedH);
+        const dS = dequantizeS(encodedS);
+        const dL = dequantizeL(encodedL);
+        
+        // 转换回 uint8 存储格式
+        decoded8[j * 3] = Math.round(((dH / 0.5) + 1) * 127.5);   // -0.5~+0.5 → 0~255
+        decoded8[j * 3 + 1] = Math.round(((dS / 2) + 0.5) * 255); // -1.0~+1.0 → 0~255
+        decoded8[j * 3 + 2] = Math.round(((dL / 2) + 0.5) * 255); // -1.0~+1.0 → 0~255
+      }
+      deltaTex = uint8ToBase64(decoded8);
     }
 
     regions.push({
@@ -284,7 +417,7 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     resolution: [resolution, resolution],
     regionCount,
     regions,
-    quantization: 'uint8',
+    quantization: 'rgb565', // 标记为 RGB565 格式
     hueThreshold,
   };
 }
@@ -313,3 +446,16 @@ export async function decompressFromGzip(file: File): Promise<ArrayBuffer> {
 
   return arrayBuffer;
 }
+
+// ---------- 导出量化/反量化函数供外部使用 ----------
+export {
+  quantizeH,
+  quantizeS,
+  quantizeL,
+  dequantizeH,
+  dequantizeS,
+  dequantizeL,
+  packRGB565,
+  unpackRGB565,
+  bakeBaseColor
+};
