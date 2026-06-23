@@ -7,12 +7,6 @@ precision highp float;
 // 顶点位置（世界坐标 0~1）
 attribute vec2 aPosition;
 
-// 顶点索引（用于计算切线）
-attribute float aIndex;
-
-// 总顶点数
-uniform int uVertexCount;
-
 // 时间
 uniform float uTime;
 
@@ -83,11 +77,6 @@ void main() {
   
   // ========== 2. 应用扭曲链（完全在GPU上并行计算）==========
   vec2 distorted = transformed;
-  
-  // 计算当前顶点的邻居（用于切线计算）
-  int i = int(aIndex);
-  int prevIdx = i > 0 ? i - 1 : uVertexCount - 1;
-  int nextIdx = i < uVertexCount - 1 ? i + 1 : 0;
   
   for (int d = 0; d < 8; d++) {
     if (d >= uDistortionCount) break;
@@ -224,12 +213,19 @@ export class GPUMaskProcessor {
   init(canvas?: HTMLCanvasElement): boolean {
     const targetCanvas = canvas || this.createOffscreenCanvas();
     
+    // 配置参数：启用模板缓冲用于奇偶填充
+    const contextOptions = {
+      stencil: true,
+      depth: false,
+      antialias: false,
+    };
+    
     // 尝试获取 WebGL2 上下文（支持 float 纹理）
-    let gl = targetCanvas.getContext('webgl2') as WebGLRenderingContext | null;
+    let gl = targetCanvas.getContext('webgl2', contextOptions) as WebGLRenderingContext | null;
     
     if (!gl) {
       // 回退到 WebGL1
-      gl = targetCanvas.getContext('webgl') as WebGLRenderingContext | null;
+      gl = targetCanvas.getContext('webgl', contextOptions) as WebGLRenderingContext | null;
     }
     
     if (!gl) {
@@ -404,13 +400,23 @@ export class GPUMaskProcessor {
       // 使用着色器程序
       gl.useProgram(this.program);
       
-      // 清空为外部（phi = 1.0 = 白色）
-      gl.clearColor(1.0, 0.0, 0.0, 1.0);
-      gl.clear(gl.COLOR_BUFFER_BIT);
+      // ===== 模板缓冲初始化 =====
+      gl.enable(gl.STENCIL_TEST);
+      gl.clearStencil(0);
+      gl.stencilMask(0xFF);
       
-      // 启用混合用于处理孔洞
-      gl.enable(gl.BLEND);
-      gl.blendFunc(gl.ONE, gl.ZERO);
+      // 清空颜色缓冲为外部（黑色=0），模板缓冲为0
+      gl.clearColor(0.0, 0.0, 0.0, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+      
+      // 禁用混合，我们使用模板缓冲来处理奇偶填充
+      gl.disable(gl.BLEND);
+      
+      // ===== 第一步：绘制所有环到模板缓冲 =====
+      // 关键设置：绘制三角形时翻转模板位（偶数→奇数→偶数）
+      gl.stencilOp(gl.INVERT, gl.INVERT, gl.INVERT);
+      gl.stencilFunc(gl.ALWAYS, 0, 0xFF);
+      gl.colorMask(false, false, false, false); // 只写模板，不写颜色
       
       // 绘制每个环
       for (let ringIdx = 0; ringIdx < polygon.length; ringIdx++) {
@@ -436,34 +442,46 @@ export class GPUMaskProcessor {
         gl.enableVertexAttribArray(aPosition);
         gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
         
-        // 创建并上传顶点索引
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuffer);
-        gl.bufferData(gl.ARRAY_BUFFER, indices, gl.STATIC_DRAW);
-        
+        // 创建并上传顶点索引（仅在着色器需要时设置）
         const aIndex = gl.getAttribLocation(this.program, 'aIndex');
-        gl.enableVertexAttribArray(aIndex);
-        gl.vertexAttribPointer(aIndex, 1, gl.FLOAT, false, 0, 0);
+        if (aIndex >= 0) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuffer);
+          gl.bufferData(gl.ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+          gl.enableVertexAttribArray(aIndex);
+          gl.vertexAttribPointer(aIndex, 1, gl.FLOAT, false, 0, 0);
+        }
         
         // 设置Uniforms
         this.setUniforms(ring, maskEffect, time);
         
-        // 绘制（使用TRIANGLE_FAN）
+        // 绘制（使用TRIANGLE_FAN）- 只更新模板缓冲
         gl.drawArrays(gl.TRIANGLE_FAN, 0, ring.length);
       }
       
-      // 读取像素结果
+      // ===== 第二步：只绘制模板值为1的像素（奇数层 = 内部） =====
+      gl.colorMask(true, true, true, true); // 恢复颜色写入
+      gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+      gl.stencilFunc(gl.EQUAL, 1, 0xFF); // 只绘制模板值为1的像素
+      
+      // 设置颜色为内部（白色=1）
+      gl.clearColor(1.0, 0.0, 0.0, 1.0);
+      
+      // 使用模板测试的 clear 来填充内部区域
+      this.fillStencilRegion();
+      
+      // ===== 读取结果 =====
       const pixels = new Uint8Array(this.resolution * this.resolution * 4);
       gl.readPixels(0, 0, this.resolution, this.resolution, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       
-      // 转换为掩码数组（1=内部 phi=-1，0=外部 phi=1）
+      // 转换为掩码数组（1=内部，0=外部）
       const mask = new Uint8Array(this.resolution * this.resolution);
       for (let i = 0; i < mask.length; i++) {
-        // R通道为负值时(=255)表示内部，255-255=0; 正值时(0)=外部，0-255=-255->255
         const r = pixels[i * 4];
-        mask[i] = r < 128 ? 1 : 0; // phi=-1 (r=255) -> 内部 = 1
+        mask[i] = r > 128 ? 1 : 0; // R>128 表示内部
       }
       
       // 解绑
+      gl.disable(gl.STENCIL_TEST);
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
       
@@ -486,7 +504,6 @@ export class GPUMaskProcessor {
     // 基本参数
     gl.uniform1f(gl.getUniformLocation(program, 'uTime'), time);
     gl.uniform2f(gl.getUniformLocation(program, 'uResolution'), this.resolution, this.resolution);
-    gl.uniform1i(gl.getUniformLocation(program, 'uVertexCount'), ring.length);
     
     // 变换参数
     const transform = maskEffect?.transform || {};
@@ -551,6 +568,17 @@ export class GPUMaskProcessor {
     gl.uniform1fv(gl.getUniformLocation(program, 'uDistortionFalloffRadius'), falloffRadii);
     gl.uniform1fv(gl.getUniformLocation(program, 'uDistortionSeed'), seeds);
     gl.uniform1iv(gl.getUniformLocation(program, 'uDistortionOctaves'), octaves);
+  }
+  
+  /**
+   * 填充模板缓冲标记的区域（使用 gl.clear + 模板测试）
+   */
+  private fillStencilRegion(): void {
+    const gl = this.gl!;
+    
+    // gl.clear 也会受模板测试影响！
+    // 这是最简单高效的方式：只清除（填充）模板值为1的像素
+    gl.clear(gl.COLOR_BUFFER_BIT);
   }
   
   /**

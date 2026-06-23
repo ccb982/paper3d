@@ -10,6 +10,7 @@ export function MaskEffectPanel() {
     bakeRegionLayerTexture,
     layerVisibility,
     triggerCanvasRedraw,
+    forceCPUMode,
   } = useAppStore();
 
   // 获取当前选中图层的区域注释
@@ -241,15 +242,40 @@ export function MaskEffectPanel() {
     <div className="sidebar-section">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h3>蒙版特效</h3>
-        {editingAnno && (
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          {/* GPU/CPU 切换按钮 */}
           <button
-            onClick={handleToggleEnabled}
-            className={`btn ${editingAnno.maskEffect?.enabled ? 'btn-danger' : 'btn-primary'}`}
-            style={{ fontSize: '11px', padding: '2px 8px' }}
+            onClick={() => {
+              const { forceCPUMode, setForceCPUMode } = useAppStore.getState();
+              setForceCPUMode(!forceCPUMode);
+              // 切换后立即重新烘焙
+              if (layerVisibility.regionLayer && activeLayerId) {
+                useAppStore.getState().bakeRegionLayerTexture(activeLayerId);
+              }
+            }}
+            style={{
+              fontSize: '10px',
+              padding: '2px 6px',
+              background: forceCPUMode ? '#FF9800' : '#4CAF50',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+            title="切换 GPU/CPU 渲染模式"
           >
-            {editingAnno.maskEffect?.enabled ? '关闭' : '启用'}
+            {forceCPUMode ? '💻 CPU' : '🚀 GPU'}
           </button>
-        )}
+          {editingAnno && (
+            <button
+              onClick={handleToggleEnabled}
+              className={`btn ${editingAnno.maskEffect?.enabled ? 'btn-danger' : 'btn-primary'}`}
+              style={{ fontSize: '11px', padding: '2px 8px' }}
+            >
+              {editingAnno.maskEffect?.enabled ? '关闭' : '启用'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 选择区域注释 */}

@@ -175,6 +175,10 @@ interface AppState {
   removeRegionAnnotation: (id: string) => void;
   clearRegionAnnotations: () => void;
 
+  // GPU/CPU 切换模式（用于性能对比）
+  forceCPUMode: boolean;
+  setForceCPUMode: (force: boolean) => void;
+
   // 区域检测缓存
   regionPolygonsCache: Record<string, Point[][][]>;
   regionScanlineCache: Record<string, ScanlineCache>;
@@ -795,6 +799,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   clearRegionAnnotations: () => set({ regionAnnotations: [] }),
 
+  // GPU/CPU 切换模式
+  forceCPUMode: false,
+  setForceCPUMode: (force) => set({ forceCPUMode: force }),
+
   // 色块相关
   colorBlocks: [],
   nextColorBlockId: 1,  // 从1开始，只增不减
@@ -978,27 +986,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   /**
    * 烘焙区域色块图层：基于虚线闭合区域，从当前画布合成图中提取颜色块，
    * 生成静态纹理画布，并缓存到 regionLayerCanvas。
-   * 
-   * 支持GPU扭曲蒙版方案：使用顶点着色器并行处理BFS区域环顶点，
-   * 实现波形、湍流、漩涡扭曲，然后利用硬件光栅化生成掩码。
    */
   bakeRegionLayerTexture: (layerId: string) => {
     const state = get();
-    const { shapes, canvasWidth, canvasHeight, regionAnnotations } = state;
+    const { shapes, canvasWidth, canvasHeight, paintBuffers } = state;
 
-    // 1. 获取虚线闭合区域（仅使用虚线形状）
+    // 1. 获取虚线闭合区域（颜色提取只基于虚线区域）
     const allShapes = shapes.filter(s => s.layerId === layerId);
     const dashedRegions = computeAllDashedClosedRegions(allShapes, canvasWidth, canvasHeight);
+    
+    // 如果没有任何虚线区域，清空图层
     if (dashedRegions.length === 0) {
-      // 没有虚线区域，清空缓存
       set({ regionLayerCanvas: null });
       return;
     }
 
-    // 2. 合成当前画布的完整颜色数据（背景 + 绘制层）
-    const composited = getCompositedImageData(state);
-    if (!composited) {
-      console.warn('[bakeRegionLayerTexture] 无法合成图像数据');
+    // 2. 获取合成图像数据
+    const buffer = paintBuffers[layerId];
+    if (!buffer) {
+      set({ regionLayerCanvas: null });
       return;
     }
 
@@ -1007,131 +1013,63 @@ export const useAppStore = create<AppState>((set, get) => ({
     outputCanvas.width = canvasWidth;
     outputCanvas.height = canvasHeight;
     const outCtx = outputCanvas.getContext('2d')!;
-    // 初始透明
     outCtx.clearRect(0, 0, canvasWidth, canvasHeight);
     const outImageData = outCtx.getImageData(0, 0, canvasWidth, canvasHeight);
     const outData = outImageData.data;
 
-    // 4. 获取GPU蒙版处理器
-    const gpuProcessor = getGPUMaskProcessor();
-    const useGPU = gpuProcessor && gpuProcessor.isReady();
-    const time = performance.now() / 1000; // 全局时间（秒）
+    const PAINT_BUFFER_SIZE = 512;
     
-    // 打印渲染路径说明
-    const hasMaskEffectRegions = dashedRegions.some(region => {
-      const anno = regionAnnotations.find(a => 
-        String(a.regionId) === String(region.id) && a.layerId === layerId
-      );
-      return anno?.maskEffect?.enabled;
-    });
-    
-    if (hasMaskEffectRegions) {
-      console.log(`[bakeRegionLayerTexture] 🚀 渲染路径: ${useGPU ? '✅ GPU 顶点着色器扭曲（WebGL加速）' : '⚠️ CPU 回退扭曲（JavaScript计算）'}`);
-    }
-
-    // 5. 使用 V2 算法对每个虚线区域进行色块提取
-    const hueThreshold = 0.05;
-
+    // 4. 对每个虚线区域进行颜色提取
     for (const region of dashedRegions) {
-      // 查找匹配的区域注释（获取扭曲效果参数）
-      const anno = regionAnnotations.find(a => 
-        String(a.regionId) === String(region.id) && a.layerId === layerId
-      );
+      const polygon = region.polygon;
+      const bbox = computeBBoxAllRings(polygon);
+      
+      // 生成区域掩码
+      const mask = rasterizeRegionMaskLocal(polygon, bbox);
+      
+      // 如果掩码为空，跳过
+      if (mask.reduce((a, b) => a + b, 0) === 0) continue;
 
-      // 使用原始多边形（不做CPU预扭曲）
-      const originalPolygon = region.polygon;
-
-      // 4a. 计算 BBox
-      const bbox = computeBBoxAllRings(originalPolygon);
-
-      // 4b. 生成局部掩码
-      let mask: Uint8Array | null = null;
-      if (anno?.maskEffect?.enabled && useGPU) {
-        // GPU 顶点扭曲
-        gpuProcessor!.generateMask(originalPolygon, anno.maskEffect, time);
-        mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
-      } else if (anno?.maskEffect?.enabled) {
-        // CPU 回退扭曲
-        const distortedPolygon = originalPolygon.map(ring =>
-          processMaskRingCPU(ring, anno.maskEffect, time)
-        );
-        mask = rasterizeRegionMaskLocal(distortedPolygon, bbox);
-      } else {
-        // 没有扭曲效果，直接光栅化
-        mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
-      }
-
-      // 4c. 使用 V2 聚类
-      const PAINT_BUFFER_SIZE = 512;
-      const buffer = state.paintBuffers[layerId];
-
-      if (!buffer) {
-        continue;
-      }
-
+      // 准备小画布采样
       const smallComposited = document.createElement('canvas');
       smallComposited.width = PAINT_BUFFER_SIZE;
       smallComposited.height = PAINT_BUFFER_SIZE;
       const smallCtx = smallComposited.getContext('2d')!;
       smallCtx.putImageData(buffer, 0, 0);
 
+      // 聚类并生成纹理
       const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
         mask,
         bbox,
         smallCtx.getImageData(0, 0, PAINT_BUFFER_SIZE, PAINT_BUFFER_SIZE),
-        hueThreshold,
+        0.05,
         PAINT_BUFFER_SIZE
       );
 
-      // 4e. 使用与 HTML 一致的解码方式渲染到输出画布
-      // 解码公式：dH = ((value / 255) - 0.5) * range * 2
-      //          finalH = base.h + dH (色相需要 wrap)
-      //          finalS = clamp(base.s + dS, 0, 1)
-      //          finalL = clamp(base.l + dL, 0, 1)
+      // 渲染到输出画布
       const { w, h, x: offsetX, y: offsetY } = bbox;
-      let renderedPixels = 0;
-      let skippedZero = 0;
-      let skippedNoBase = 0;
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const idx = y * w + x;
-          // 检查是否有效像素
-          if (regionIdTex && regionIdTex[idx] === 0) {
-            skippedZero++;
-            continue;
-          }
-          if (!regionIdTex && mask[idx] === 0) {
-            skippedZero++;
-            continue;
-          }
+          if (mask[idx] === 0) continue;
 
-          // 获取基础色调索引
           let finalHsl;
           if (regionIdTex) {
             const baseIdx = regionIdTex[idx] - 1;
-            if (baseIdx < 0 || baseIdx >= baseColors.length) {
-              skippedNoBase++;
-              continue;
-            }
+            if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
             const base = baseColors[baseIdx];
             
-            // 反量化 delta（从 8 位值得到物理残差）
-            let dH = 0, dS = 0, dL = 0;
-            if (deltaTex.length > 0) {
-              dH = dequantize(deltaTex[idx * 3], 0.5);
-              dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
-              dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
-              
-              // 模拟 RGB565 量化再反量化（与 FTX 2.0 解码网页一致）
-              const qH = quantizeH(dH);
-              const qS = quantizeS(dS);
-              const qL = quantizeL(dL);
-              dH = dequantizeH(qH);
-              dS = dequantizeS(qS);
-              dL = dequantizeL(qL);
-            }
+            let dH = dequantize(deltaTex[idx * 3], 0.5);
+            let dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
+            let dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
             
-            // 计算最终 HSL（与 HTML renderRegions 一致）
+            const qH = quantizeH(dH);
+            const qS = quantizeS(dS);
+            const qL = quantizeL(dL);
+            dH = dequantizeH(qH);
+            dS = dequantizeS(qS);
+            dL = dequantizeL(qL);
+
             let finalH = base.h + dH;
             if (finalH < 0) finalH += 1.0;
             if (finalH > 1.0) finalH -= 1.0;
@@ -1139,7 +1077,6 @@ export const useAppStore = create<AppState>((set, get) => ({
             const finalL = Math.max(0, Math.min(1, base.l + dL));
             finalHsl = { h: finalH, s: finalS, l: finalL };
           } else {
-            // 单色调：直接使用原始基础色
             finalHsl = baseColors[0];
           }
 
@@ -1149,15 +1086,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           outData[outIdx + 1] = rgb.g;
           outData[outIdx + 2] = rgb.b;
           outData[outIdx + 3] = 255;
-          renderedPixels++;
         }
       }
     }
 
-    // 5. 将填充好的 ImageData 放回画布
+    // 5. 输出最终画布
     outCtx.putImageData(outImageData, 0, 0);
-
-    // 6. 存储到 store
     set({ regionLayerCanvas: outputCanvas });
   },
 

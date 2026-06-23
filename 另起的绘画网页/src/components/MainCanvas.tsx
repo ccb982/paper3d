@@ -4,7 +4,7 @@ import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact } from '../utils/regionDetectionExact';
-import { findRegionByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
+import { findRegionByPoint, findRegionIndexByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
 import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, DashedSubRegion } from '../utils/colorExtractionUtils';
@@ -2922,27 +2922,23 @@ export function MainCanvas() {
       if (currentLayerShapes.length === 0) return;
 
       // 获取BFS区域ID（正数）
-      // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
-      const worldBounds = {
-        xMin: 0,
-        xMax: 1,
-        yMin: 0,
-        yMax: 1,
-      };
-      const bfsRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300, '#ffaa00');  // 排除虚线
+      // 获取 BFS 区域缓存
+      const regions = regionPolygonsCache[activeLayerId] || [];
       
-      if (bfsRegionId === null) {
+      // 使用区域索引作为 regionId（确保与 bakeRegionLayerTexture 中的索引一致）
+      const regionIndex = findRegionIndexByPoint(worldCoords, regions);
+      
+      if (regionIndex === -1) {
         return;
       }
 
-      // 通过BFS区域ID查找已有注释
-      const existingAnnotation = regionAnnotations.find(
-        anno => anno.layerId === activeLayerId && String(anno.regionId) === String(bfsRegionId)
-      );
+      // 获取区域多边形用于显示
+      const hitRegion = regions[regionIndex];
 
-      // 还需要获取多边形用于显示（保持原有逻辑，但匹配不依赖它）
-      const regions = regionPolygonsCache[activeLayerId] || [];
-      const hitRegion = findRegionByPoint(worldCoords, regions); // 仅用于获取多边形形状
+      // 通过区域索引查找已有注释
+      const existingAnnotation = regionAnnotations.find(
+        anno => anno.layerId === activeLayerId && String(anno.regionId) === String(regionIndex)
+      );
 
       if (existingAnnotation) {
         // 编辑已有注释
@@ -2952,8 +2948,8 @@ export function MainCanvas() {
           y: e.clientY,
           annotationId: existingAnnotation.id,
           existingText: existingAnnotation.text,
-          polygon: hitRegion || existingAnnotation.polygon, // 优先用几何检测的结果，否则用已存储的
-          regionId: String(bfsRegionId),
+          polygon: hitRegion || existingAnnotation.polygon,
+          regionId: String(regionIndex),
         });
       } else {
         if (!hitRegion) {
@@ -2967,7 +2963,7 @@ export function MainCanvas() {
           annotationId: null,
           existingText: '',
           polygon: hitRegion,
-          regionId: String(bfsRegionId),
+          regionId: String(regionIndex),
         });
       }
       return;

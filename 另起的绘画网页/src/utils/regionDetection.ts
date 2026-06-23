@@ -105,6 +105,23 @@ export function findRegionByPoint(
   return null;
 }
 
+/**
+ * 查找点所在区域的索引（用于正确匹配区域注释）
+ */
+export function findRegionIndexByPoint(
+  point: Point,
+  regions: Point[][][],
+  tolerance: number = 1e-9
+): number {
+  for (let i = 0; i < regions.length; i++) {
+    const region = regions[i];
+    if (isPointInPolygonWithHoles(point, region, tolerance)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 export function computeRegionsFromPolygons(
   polygons: Point[][],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number }
