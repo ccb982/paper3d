@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import * as THREE from 'three';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation, ColorBlock } from '../types';
 import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache, type GridData } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
@@ -200,6 +201,8 @@ interface AppState {
 
   // 区域色块图层缓存（静态纹理画布）
   regionLayerCanvas: HTMLCanvasElement | null;
+  // 【新增】区域色块图层 GPU 纹理 - 用于后续流体解算
+  regionLayerTextureGPU: THREE.DataTexture | null;
   bakeRegionLayerTexture: (layerId: string) => void;
 
   /** 每个图层的像素绘制缓冲区 (512x512 RGBA) */
@@ -982,14 +985,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // 区域色块图层缓存（静态纹理画布）
   regionLayerCanvas: null,
+  regionLayerTextureGPU: null,  // 【新增】GPU 纹理
   redrawTrigger: 0,
   /**
    * 烘焙区域色块图层：基于虚线闭合区域，从当前画布合成图中提取颜色块，
-   * 生成静态纹理画布，并缓存到 regionLayerCanvas。
+   * 生成静态纹理画布，并缓存到 regionLayerCanvas 和 GPU 纹理。
    */
   bakeRegionLayerTexture: (layerId: string) => {
     const state = get();
-    const { shapes, canvasWidth, canvasHeight, paintBuffers } = state;
+    const { shapes, canvasWidth, canvasHeight, paintBuffers, regionLayerTextureGPU } = state;
+
+    // 清理旧的 GPU 纹理，防止显存泄漏
+    if (regionLayerTextureGPU) {
+      regionLayerTextureGPU.dispose();
+    }
 
     // 1. 获取虚线闭合区域（颜色提取只基于虚线区域）
     const allShapes = shapes.filter(s => s.layerId === layerId);
@@ -997,14 +1006,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     
     // 如果没有任何虚线区域，清空图层
     if (dashedRegions.length === 0) {
-      set({ regionLayerCanvas: null });
+      set({ regionLayerCanvas: null, regionLayerTextureGPU: null });
       return;
     }
 
     // 2. 获取合成图像数据
     const buffer = paintBuffers[layerId];
     if (!buffer) {
-      set({ regionLayerCanvas: null });
+      set({ regionLayerCanvas: null, regionLayerTextureGPU: null });
       return;
     }
 
@@ -1092,7 +1101,28 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 5. 输出最终画布
     outCtx.putImageData(outImageData, 0, 0);
-    set({ regionLayerCanvas: outputCanvas });
+
+    // 6. 创建 GPU 纹理（DataTexture）
+    // 注意：ImageData.data 是 Uint8ClampedArray，DataTexture 会复制数据
+    const gpuTexture = new THREE.DataTexture(
+      outImageData.data.slice(),  // 复制一份，避免被后续修改影响
+      canvasWidth,
+      canvasHeight,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType
+    );
+    gpuTexture.needsUpdate = true;
+    // 纹理过滤模式：线性插值保证平滑
+    gpuTexture.minFilter = THREE.LinearFilter;
+    gpuTexture.magFilter = THREE.LinearFilter;
+    gpuTexture.wrapS = THREE.ClampToEdgeWrapping;
+    gpuTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+    // 7. 同时保存到 canvas 和 GPU 纹理
+    set({
+      regionLayerCanvas: outputCanvas,
+      regionLayerTextureGPU: gpuTexture,
+    });
   },
 
   // 像素缓冲区相关
