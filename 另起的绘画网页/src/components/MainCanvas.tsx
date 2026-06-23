@@ -275,6 +275,15 @@ export function MainCanvas() {
   const [isPainting, setIsPainting] = useState(false);
   const lastPaintPointRef = useRef<Point | null>(null);
 
+  // 动画循环相关
+  const animationFrameRef = useRef<number>();
+  const lastBakeTimeRef = useRef<number>(0);
+  const BAKE_INTERVAL_MS = 100; // 每秒10次，平衡性能与流畅度
+  // 持续重绘循环（用于动画效果）
+  const renderFrameRef = useRef<number>();
+  const lastRenderTimeRef = useRef<number>(0);
+  const RENDER_INTERVAL_MS = 16; // 约每秒60帧
+
   // 记录圆内所有像素坐标到对应区域（使用预计算的区域ID纹理快速查询）
   const recordCirclePixelsToRegions = useCallback((
     centerWorld: Point,
@@ -3294,6 +3303,92 @@ export function MainCanvas() {
     }
     saveHistory();
   }, [regionAnnotations, saveHistory]);
+
+  // ========== 区域色块图层自动动画循环 ==========
+  useEffect(() => {
+    // 检查条件：区域色块图层可见且存在启用蒙版特效的注释
+    const hasActiveMask = regionAnnotations.some(
+      (a) => a.layerId === activeLayerId && a.maskEffect?.enabled
+    );
+    const isRegionLayerVisible = layerVisibility.regionLayer;
+
+    if (!isRegionLayerVisible || !hasActiveMask || !activeLayerId) {
+      // 不满足条件时停止动画循环
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = undefined;
+      }
+      return;
+    }
+
+    const animate = (timestamp: number) => {
+      // 节流：按固定间隔烘焙区域色块图层
+      if (timestamp - lastBakeTimeRef.current >= BAKE_INTERVAL_MS) {
+        bakeRegionLayerTexture(activeLayerId);
+        lastBakeTimeRef.current = timestamp;
+      }
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    // 启动循环
+    animationFrameRef.current = requestAnimationFrame(animate);
+
+    // 清理
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = undefined;
+      }
+    };
+  }, [
+    regionAnnotations,
+    activeLayerId,
+    layerVisibility.regionLayer,
+    bakeRegionLayerTexture,
+  ]);
+
+  // ========== 持续重绘画布循环（用于动画效果实时更新） ==========
+  useEffect(() => {
+    // 检查条件：区域色块图层可见且存在启用蒙版特效的注释
+    const hasActiveMask = regionAnnotations.some(
+      (a) => a.layerId === activeLayerId && a.maskEffect?.enabled
+    );
+    const isRegionLayerVisible = layerVisibility.regionLayer;
+
+    if (!isRegionLayerVisible || !hasActiveMask || !activeLayerId) {
+      // 不满足条件时停止重绘循环
+      if (renderFrameRef.current) {
+        cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = undefined;
+      }
+      return;
+    }
+
+    const animateRender = (timestamp: number) => {
+      // 节流：按固定间隔重绘画布
+      if (timestamp - lastRenderTimeRef.current >= RENDER_INTERVAL_MS) {
+        drawCanvas();
+        lastRenderTimeRef.current = timestamp;
+      }
+      renderFrameRef.current = requestAnimationFrame(animateRender);
+    };
+
+    // 启动重绘循环
+    renderFrameRef.current = requestAnimationFrame(animateRender);
+
+    // 清理
+    return () => {
+      if (renderFrameRef.current) {
+        cancelAnimationFrame(renderFrameRef.current);
+        renderFrameRef.current = undefined;
+      }
+    };
+  }, [
+    regionAnnotations,
+    activeLayerId,
+    layerVisibility.regionLayer,
+    drawCanvas,
+  ]);
 
   return (
     <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default') }}>
