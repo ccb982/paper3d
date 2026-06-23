@@ -1051,35 +1051,37 @@ export const useAppStore = create<AppState>((set, get) => ({
         String(a.regionId) === String(region.id) && a.layerId === layerId
       );
 
-      // 应用GPU扭曲（如果有maskEffect）
-      let effectivePolygon = region.polygon;
-      if (anno?.maskEffect?.enabled) {
-        // 使用GPU处理器或CPU回退版本对每个环应用扭曲
-        effectivePolygon = region.polygon.map(ring => 
-          processMaskRingCPU(ring, anno.maskEffect, time)
-        );
-        console.log('[bakeRegionLayerTexture] 应用GPU扭曲，区域:', region.id);
-      }
+      // 使用原始多边形（不做CPU预扭曲）
+      const originalPolygon = region.polygon;
 
       // 4a. 计算 BBox（V2 方式，考虑所有环）
-      const bbox = computeBBoxAllRings(effectivePolygon);
-      console.log('[bakeRegionLayerTexture] region.polygon 结构:', JSON.stringify(effectivePolygon).slice(0, 200));
+      // 注意：BBox 应该基于扭曲后的形状，但 GPU 版本会直接输出扭曲后的掩码
+      // 所以这里使用原始 BBox 作为参考
+      const bbox = computeBBoxAllRings(originalPolygon);
+      console.log('[bakeRegionLayerTexture] region.polygon 结构:', JSON.stringify(originalPolygon).slice(0, 200));
       console.log('[bakeRegionLayerTexture] bbox:', bbox);
 
-      // 4b. 生成局部掩码（使用GPU硬件光栅化或CPU回退）
+      // 4b. 生成局部掩码 - 真正的 GPU 顶点扭曲！
       let mask: Uint8Array | null = null;
-      if (anno?.maskEffect?.enabled && gpuProcessor) {
-        // 使用GPU硬件光栅化生成掩码
-        const gpuMask = gpuProcessor.generateMask(effectivePolygon, anno.maskEffect, time);
+      if (anno?.maskEffect?.enabled && gpuProcessor && gpuProcessor.isReady()) {
+        // 真正的 GPU 顶点扭曲：传递原始顶点和扭曲参数，让 GPU 并行处理
+        // GPU 处理器会在 Vertex Shader 中完成所有扭曲计算
+        const gpuMask = gpuProcessor.generateMask(originalPolygon, anno.maskEffect, time);
         if (gpuMask) {
-          // 转换为本地坐标系的掩码
-          mask = rasterizeRegionMaskLocal(effectivePolygon, bbox);
+          console.log('[bakeRegionLayerTexture] GPU扭曲蒙版生成成功，区域:', region.id);
+          // 使用 GPU 生成的掩码
+          mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
         }
-      }
-      
-      // 如果GPU不可用或没有扭曲效果，使用CPU掩码生成
-      if (!mask) {
-        mask = rasterizeRegionMaskLocal(effectivePolygon, bbox);
+      } else if (anno?.maskEffect?.enabled) {
+        // GPU 不可用时使用 CPU 回退扭曲
+        console.log('[bakeRegionLayerTexture] GPU不可用，使用CPU扭曲，区域:', region.id);
+        const distortedPolygon = originalPolygon.map(ring =>
+          processMaskRingCPU(ring, anno.maskEffect, time)
+        );
+        mask = rasterizeRegionMaskLocal(distortedPolygon, bbox);
+      } else {
+        // 没有扭曲效果，直接光栅化
+        mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
       }
 
       const maskSum = mask.reduce((a, b) => a + b, 0);
