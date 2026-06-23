@@ -562,8 +562,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   shapes: [],
   addShape: (shape) =>
     set((state) => {
-      console.log('[addShape] 图形类型:', shape.type);
-      console.log('[addShape] 原始点数:', shape.points.length);
       const newShape = { ...shape };
       setTimeout(() => {
         get().refreshRegionCache(shape.layerId);
@@ -878,8 +876,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshRegionCache: (layerId, options?: { clearPaintData?: boolean }) => {
     const state = get();
     const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
-    console.log('==========================================');
-    console.log('[绘画后区域检测] 图形总数:', allShapesInLayer.length);
 
     // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
     const worldBounds = {
@@ -892,22 +888,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300, '#ffaa00');  // 排除虚线
     const scanlineCache = computeScanlineIntervals(gridData);
     const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300, '#ffaa00');  // 排除虚线
-    console.log('[绘画后区域检测] 检测到的封闭区域数量:', regions.length);
-    
-    for (let i = 0; i < regions.length; i++) {
-      const region = regions[i];
-      console.log(`--- 封闭区域 ${i} ---`);
-      for (let j = 0; j < region.length; j++) {
-        const ring = region[j];
-        const ringType = j === 0 ? '外环' : `内环${j}`;
-        console.log(`  ${ringType}: ${ring.length}个顶点`);
-        if (ring.length > 0) {
-          const first3 = ring.slice(0, 3).map(p => `(${p.x.toFixed(4)}, ${p.y.toFixed(4)})`).join(' -> ');
-          console.log(`  前3个点: ${first3}${ring.length > 3 ? ' -> ...' : ''}`);
-        }
-      }
-    }
-    console.log('==========================================');
     
     // 区域重计算后，仅在需要时清空该图层的画笔缓冲区和区域像素记录
     // 默认不清空（用于撤销/重做后的重新计算），仅在添加/删除形状时手动调用清空
@@ -960,8 +940,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     // 直接使用 regionPolygonsCache（区域注释算法检测到的封闭区域）
     const regions = state.regionPolygonsCache[layerId] || [];
-    console.log('==========================================');
-    console.log('[色块区域检测] 区域总数:', regions.length);
     
     set((s) => ({
       colorBlockRegionsCache: { ...s.colorBlockRegionsCache, [layerId]: regions },
@@ -982,16 +960,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    console.log('[虚线子区域缓存] 图层:', layerId, '图形总数:', allShapesInLayer.length);
-
     // 使用与 Ctrl+G 相同的算法计算所有闭合区域
     const subRegions = computeAllDashedClosedRegions(
       allShapesInLayer,
       state.canvasWidth,
       state.canvasHeight
     );
-
-    console.log('[虚线子区域缓存] 计算出的区域数:', subRegions.length);
 
     set((s) => ({
       dashedSubRegionsCache: { ...s.dashedSubRegionsCache, [layerId]: subRegions },
@@ -1040,7 +1014,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 4. 获取GPU蒙版处理器
     const gpuProcessor = getGPUMaskProcessor();
+    const useGPU = gpuProcessor && gpuProcessor.isReady();
     const time = performance.now() / 1000; // 全局时间（秒）
+    
+    // 打印渲染路径说明
+    const hasMaskEffectRegions = dashedRegions.some(region => {
+      const anno = regionAnnotations.find(a => 
+        String(a.regionId) === String(region.id) && a.layerId === layerId
+      );
+      return anno?.maskEffect?.enabled;
+    });
+    
+    if (hasMaskEffectRegions) {
+      console.log(`[bakeRegionLayerTexture] 🚀 渲染路径: ${useGPU ? '✅ GPU 顶点着色器扭曲（WebGL加速）' : '⚠️ CPU 回退扭曲（JavaScript计算）'}`);
+    }
 
     // 5. 使用 V2 算法对每个虚线区域进行色块提取
     const hueThreshold = 0.05;
@@ -1054,27 +1041,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 使用原始多边形（不做CPU预扭曲）
       const originalPolygon = region.polygon;
 
-      // 4a. 计算 BBox（V2 方式，考虑所有环）
-      // 注意：BBox 应该基于扭曲后的形状，但 GPU 版本会直接输出扭曲后的掩码
-      // 所以这里使用原始 BBox 作为参考
+      // 4a. 计算 BBox
       const bbox = computeBBoxAllRings(originalPolygon);
-      console.log('[bakeRegionLayerTexture] region.polygon 结构:', JSON.stringify(originalPolygon).slice(0, 200));
-      console.log('[bakeRegionLayerTexture] bbox:', bbox);
 
-      // 4b. 生成局部掩码 - 真正的 GPU 顶点扭曲！
+      // 4b. 生成局部掩码
       let mask: Uint8Array | null = null;
-      if (anno?.maskEffect?.enabled && gpuProcessor && gpuProcessor.isReady()) {
-        // 真正的 GPU 顶点扭曲：传递原始顶点和扭曲参数，让 GPU 并行处理
-        // GPU 处理器会在 Vertex Shader 中完成所有扭曲计算
-        const gpuMask = gpuProcessor.generateMask(originalPolygon, anno.maskEffect, time);
-        if (gpuMask) {
-          console.log('[bakeRegionLayerTexture] GPU扭曲蒙版生成成功，区域:', region.id);
-          // 使用 GPU 生成的掩码
-          mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
-        }
+      if (anno?.maskEffect?.enabled && useGPU) {
+        // GPU 顶点扭曲
+        gpuProcessor!.generateMask(originalPolygon, anno.maskEffect, time);
+        mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
       } else if (anno?.maskEffect?.enabled) {
-        // GPU 不可用时使用 CPU 回退扭曲
-        console.log('[bakeRegionLayerTexture] GPU不可用，使用CPU扭曲，区域:', region.id);
+        // CPU 回退扭曲
         const distortedPolygon = originalPolygon.map(ring =>
           processMaskRingCPU(ring, anno.maskEffect, time)
         );
@@ -1084,17 +1061,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         mask = rasterizeRegionMaskLocal(originalPolygon, bbox);
       }
 
-      const maskSum = mask.reduce((a, b) => a + b, 0);
-      console.log('[bakeRegionLayerTexture] mask 有效像素数:', maskSum);
-
-      // 4c. 使用 V2 聚类（bbox 坐标基于 PAINT_BUFFER_SIZE，需要创建 512x512 的合成图）
+      // 4c. 使用 V2 聚类
       const PAINT_BUFFER_SIZE = 512;
-      // 创建 512x512 的合成图（paintBuffer 直接绘制，不拉伸）
       const buffer = state.paintBuffers[layerId];
-      console.log('[bakeRegionLayerTexture] buffer:', buffer ? `${buffer.width}x${buffer.height}` : 'null');
 
       if (!buffer) {
-        console.warn('[bakeRegionLayerTexture] 没有 paintBuffer，跳过区域');
         continue;
       }
 
@@ -1111,18 +1082,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         hueThreshold,
         PAINT_BUFFER_SIZE
       );
-      console.log('[bakeRegionLayerTexture] 聚类结果: baseColors=', baseColors.length, 'regionIdTex=', regionIdTex ? '有' : '无', 'deltaTex=', deltaTex.length);
-
-      // 调试：检查数据范围
-      console.log('[bakeRegionLayerTexture] 调试信息:');
-      console.log('  baseColors[0]:', baseColors[0]);
-      if (deltaTex.length > 0) {
-        console.log('  deltaTex 前10个值:', Array.from(deltaTex.slice(0, 30)));
-      }
-      console.log('  regionIdTex null?', regionIdTex === null, '长度:', regionIdTex ? regionIdTex.length : 0);
-      if (regionIdTex && regionIdTex.length > 0) {
-        console.log('  regionIdTex 前10个值:', Array.from(regionIdTex.slice(0, 10)));
-      }
 
       // 4e. 使用与 HTML 一致的解码方式渲染到输出画布
       // 解码公式：dH = ((value / 255) - 0.5) * range * 2
@@ -1193,7 +1152,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           renderedPixels++;
         }
       }
-      console.log('[bakeRegionLayerTexture] 解码渲染: 成功', renderedPixels, '跳过零:', skippedZero, '跳过无效:', skippedNoBase);
     }
 
     // 5. 将填充好的 ImageData 放回画布
@@ -1201,7 +1159,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 6. 存储到 store
     set({ regionLayerCanvas: outputCanvas });
-    console.log('[bakeRegionLayerTexture] 区域色块图层烘焙完成（GPU扭曲蒙版已集成）');
   },
 
   // 像素缓冲区相关
@@ -1372,7 +1329,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       // 如果正在恢复历史，跳过保存
       if (state.isRestoringHistory) {
-        console.log('[快照保存] 跳过（正在恢复历史）');
         return state;
       }
       // 将 regionPixelsMap 转换为可序列化格式
@@ -1421,11 +1377,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newHistory = state.historySnapshots.slice(0, state.historyIndex + 1);
       newHistory.push(newSnapshot);
       if (newHistory.length > 30) newHistory.shift(); // 减少历史记录数量以节省内存
-      console.log(`[快照保存] ID: ${snapshotId}, 索引: ${newHistory.length - 1}`);
-      console.log(`  线条: ${state.shapes.length}个 (类型: ${shapeTypes.join(', ') || '无'})`);
-      console.log(`  点注释: ${state.pointAnnotations.length}个`);
-      console.log(`  区域注释: ${state.regionAnnotations.length}个`);
-      console.log(`  绘画像素: ${paintedPixelCount}个`);
       return { historySnapshots: newHistory, historyIndex: newHistory.length - 1 };
     }),
   undo: () =>
@@ -1445,12 +1396,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         for (const [layerId, serialized] of Object.entries(snapshot.paintBuffers)) {
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
-        
-        console.log(`[撤销] 恢复到快照 ID: ${snapshot.id}, 索引: ${newIndex}`);
-        console.log(`  线条: ${snapshot.stats.shapeCount}个 (类型: ${snapshot.stats.shapeTypes.join(', ') || '无'})`);
-        console.log(`  点注释: ${snapshot.stats.pointAnnotationCount}个`);
-        console.log(`  区域注释: ${snapshot.stats.regionAnnotationCount}个`);
-        console.log(`  绘画像素: ${snapshot.stats.paintedPixelCount}个`);
         
         const newState = {
           shapes: [...snapshot.shapes],

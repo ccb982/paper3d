@@ -2857,11 +2857,9 @@ export function MainCanvas() {
         const newIndex = colorExtractPoints.length;
         addColorExtractPoint(snapped);
         setLastPolygonPoint(snapped); // 记录当前点
-        console.log(`[颜色提取] 添加折线点 #${newIndex + 1}: (${snapped.x.toFixed(4)}, ${snapped.y.toFixed(4)})`);
       }
       return;
     } else if (e.button === 0) {
-      console.log(`[颜色提取] 未进入颜色提取模式，colorExtractMode: ${colorExtractMode}`);
     }
 
     if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && isPanMode)) {
@@ -2934,7 +2932,6 @@ export function MainCanvas() {
       const bfsRegionId = computeRegionIdAtPoint(worldCoords, currentLayerShapes, worldBounds, 300, '#ffaa00');  // 排除虚线
       
       if (bfsRegionId === null) {
-        console.log('[区域注释] 点击位置不在任何有效BFS区域内（可能是墙或外部）');
         return;
       }
 
@@ -2949,7 +2946,6 @@ export function MainCanvas() {
 
       if (existingAnnotation) {
         // 编辑已有注释
-        console.log('[区域注释] 找到匹配的已有注释，区域ID:', bfsRegionId, ', 文本:', existingAnnotation.text);
         setRegionAnnotationEditor({
           editorId: generateEditorId(),
           x: e.clientX,
@@ -2961,11 +2957,9 @@ export function MainCanvas() {
         });
       } else {
         if (!hitRegion) {
-          console.log('[区域注释] 无法获取区域多边形，但BFS ID存在，可能算法不一致，放弃创建');
           return;
         }
         // 创建新注释
-        console.log('[区域注释] 创建新注释，区域ID:', bfsRegionId);
         setRegionAnnotationEditor({
           editorId: generateEditorId(),
           x: e.clientX,

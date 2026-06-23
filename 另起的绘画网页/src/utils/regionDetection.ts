@@ -96,29 +96,12 @@ export function findRegionByPoint(
   regions: Point[][][],
   tolerance: number = 1e-9
 ): Point[][] | null {
-  console.log('[findRegionByPoint] 开始查找区域...');
-  console.log('[findRegionByPoint] 待检测点:', point);
-  console.log('[findRegionByPoint] 区域数量:', regions.length);
   for (let i = 0; i < regions.length; i++) {
     const region = regions[i];
-    const outerRing = region[0];
-    console.log(`[findRegionByPoint] 检查区域${i}, 外环点数:`, outerRing.length);
-    if (outerRing.length > 0) {
-      const isInOuter = isPointInPolygon(point, outerRing, tolerance);
-      console.log(`[findRegionByPoint] 区域${i} 外环检测结果:`, isInOuter);
-      if (isInOuter && region.length > 1) {
-        for (let j = 1; j < region.length; j++) {
-          const isInHole = isPointInPolygon(point, region[j], tolerance);
-          console.log(`[findRegionByPoint] 区域${i} 内环${j}检测结果:`, isInHole);
-        }
-      }
-    }
     if (isPointInPolygonWithHoles(point, region, tolerance)) {
-      console.log(`[findRegionByPoint] ✅ 命中区域${i}`);
       return region;
     }
   }
-  console.log('[findRegionByPoint] ❌ 未命中任何区域');
   return null;
 }
 

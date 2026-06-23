@@ -56,16 +56,10 @@ export function computeAllDashedClosedRegions(
   canvasHeight: number,
   resolution: number = 600
 ): DashedSubRegion[] {
-  console.log('[纯虚线闭合区域计算] 开始');
-  console.log('[纯虚线闭合区域计算] 输入图形总数:', shapes.length);
-  
   // 只筛选虚线形状（颜色为 '#ffaa00'）
   const dashedShapes = shapes.filter(s => s.color === '#ffaa00');
   
-  console.log('[纯虚线闭合区域计算] 虚线形状数:', dashedShapes.length);
-  
   if (dashedShapes.length === 0) {
-    console.log('[纯虚线闭合区域计算] 没有虚线形状，返回空数组');
     return [];
   }
   
@@ -74,8 +68,6 @@ export function computeAllDashedClosedRegions(
   // 使用与调试模式相同的区域检测算法，但只使用虚线形状
   // 输入的 dashedShapes 已经全是虚线，不需要再排除
   const regions = computeRegionsExact(dashedShapes, worldBounds, resolution);
-  
-  console.log('[纯虚线闭合区域计算] 检测到的区域数:', regions.length);
   
   const result: DashedSubRegion[] = [];
   
@@ -94,11 +86,8 @@ export function computeAllDashedClosedRegions(
       pixelCount: Math.floor(area * canvasWidth * canvasHeight),
       centroid: centroid
     });
-    
-    console.log(`[纯虚线闭合区域计算] 区域 ${i}: ${outerRing.length} 个顶点, 面积: ${area.toFixed(4)}`);
   }
   
-  console.log('[纯虚线闭合区域计算] 最终返回区域数:', result.length);
   return result;
 }
 
