@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import { MaskEffectPanel } from './MaskEffectPanel';
 
 export function LayerControl() {
   const {
@@ -451,10 +452,13 @@ export function LayerControl() {
             重置背景
           </button>
         </div>
-        <p style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
+        <p style={{ fontSize: '10px', color: '#888', marginTop: '8px' }}>
           开启拖动后，在画布上拖拽移动背景
         </p>
       </div>
+
+      {/* 蒙版特效面板 */}
+      <MaskEffectPanel />
 
       <div className="sidebar-section">
         <h3>画布尺寸</h3>

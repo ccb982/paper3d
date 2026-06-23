@@ -7,6 +7,7 @@ import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { bfsHueClustering, rasterizeRegionMask, hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, dequantize } from '../utils/colorCompressor';
 import { quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL } from '../utils/binaryCompression';
+import { getGPUMaskProcessor, processMaskRingCPU } from '../utils/gpuMaskProcessor';
 
 interface AppState {
   // 图片导入状态
@@ -565,6 +566,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().refreshRegionCache(shape.layerId);
         get().refreshColorBlockCache(shape.layerId);
         get().updateColorBlocksForLayer(shape.layerId);
+        // 自动更新区域色块图层（如果可见）
+        if (state.layerVisibility.regionLayer) {
+          get().bakeRegionLayerTexture(shape.layerId);
+        }
       }, 0);
       return { shapes: [...state.shapes, newShape] };
     }),
@@ -572,10 +577,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const shape = state.shapes.find(s => s.id === id);
       if (shape) {
+        const layerId = shape.layerId;
         setTimeout(() => {
-          get().refreshRegionCache(shape.layerId);
-          get().refreshColorBlockCache(shape.layerId);
-          get().updateColorBlocksForLayer(shape.layerId);
+          get().refreshRegionCache(layerId);
+          get().refreshColorBlockCache(layerId);
+          get().updateColorBlocksForLayer(layerId);
+          // 自动更新区域色块图层（如果可见）
+          if (state.layerVisibility.regionLayer) {
+            get().bakeRegionLayerTexture(layerId);
+          }
         }, 0);
       }
       return { shapes: state.shapes.filter((s) => s.id !== id) };
@@ -589,6 +599,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         get().refreshRegionCache(newShape.layerId);
         get().refreshColorBlockCache(newShape.layerId);
         get().updateColorBlocksForLayer(newShape.layerId);
+        // 自动更新区域色块图层（如果可见）
+        if (state.layerVisibility.regionLayer) {
+          get().bakeRegionLayerTexture(newShape.layerId);
+        }
       }, 0);
       return { shapes: state.shapes.map((s) => (s.id === id ? newShape : s)) };
     }),
@@ -986,10 +1000,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   /**
    * 烘焙区域色块图层：基于虚线闭合区域，从当前画布合成图中提取颜色块，
    * 生成静态纹理画布，并缓存到 regionLayerCanvas。
+   * 
+   * 支持GPU扭曲蒙版方案：使用顶点着色器并行处理BFS区域环顶点，
+   * 实现波形、湍流、漩涡扭曲，然后利用硬件光栅化生成掩码。
    */
   bakeRegionLayerTexture: (layerId: string) => {
     const state = get();
-    const { shapes, canvasWidth, canvasHeight } = state;
+    const { shapes, canvasWidth, canvasHeight, regionAnnotations } = state;
 
     // 1. 获取虚线闭合区域（仅使用虚线形状）
     const allShapes = shapes.filter(s => s.layerId === layerId);
@@ -1017,17 +1034,50 @@ export const useAppStore = create<AppState>((set, get) => ({
     const outImageData = outCtx.getImageData(0, 0, canvasWidth, canvasHeight);
     const outData = outImageData.data;
 
-    // 4. 使用 V2 算法对每个虚线区域进行色块提取
+    // 4. 获取GPU蒙版处理器
+    const gpuProcessor = getGPUMaskProcessor();
+    const time = performance.now() / 1000; // 全局时间（秒）
+
+    // 5. 使用 V2 算法对每个虚线区域进行色块提取
     const hueThreshold = 0.05;
 
     for (const region of dashedRegions) {
+      // 查找匹配的区域注释（获取扭曲效果参数）
+      const anno = regionAnnotations.find(a => 
+        String(a.regionId) === String(region.id) && a.layerId === layerId
+      );
+
+      // 应用GPU扭曲（如果有maskEffect）
+      let effectivePolygon = region.polygon;
+      if (anno?.maskEffect?.enabled) {
+        // 使用GPU处理器或CPU回退版本对每个环应用扭曲
+        effectivePolygon = region.polygon.map(ring => 
+          processMaskRingCPU(ring, anno.maskEffect, time)
+        );
+        console.log('[bakeRegionLayerTexture] 应用GPU扭曲，区域:', region.id);
+      }
+
       // 4a. 计算 BBox（V2 方式，考虑所有环）
-      const bbox = computeBBoxAllRings(region.polygon);
-      console.log('[bakeRegionLayerTexture] region.polygon 结构:', JSON.stringify(region.polygon).slice(0, 200));
+      const bbox = computeBBoxAllRings(effectivePolygon);
+      console.log('[bakeRegionLayerTexture] region.polygon 结构:', JSON.stringify(effectivePolygon).slice(0, 200));
       console.log('[bakeRegionLayerTexture] bbox:', bbox);
 
-      // 4b. 生成局部掩码（V2 方式）
-      const mask = rasterizeRegionMaskLocal(region.polygon, bbox);
+      // 4b. 生成局部掩码（使用GPU硬件光栅化或CPU回退）
+      let mask: Uint8Array | null = null;
+      if (anno?.maskEffect?.enabled && gpuProcessor) {
+        // 使用GPU硬件光栅化生成掩码
+        const gpuMask = gpuProcessor.generateMask(effectivePolygon, anno.maskEffect, time);
+        if (gpuMask) {
+          // 转换为本地坐标系的掩码
+          mask = rasterizeRegionMaskLocal(effectivePolygon, bbox);
+        }
+      }
+      
+      // 如果GPU不可用或没有扭曲效果，使用CPU掩码生成
+      if (!mask) {
+        mask = rasterizeRegionMaskLocal(effectivePolygon, bbox);
+      }
+
       const maskSum = mask.reduce((a, b) => a + b, 0);
       console.log('[bakeRegionLayerTexture] mask 有效像素数:', maskSum);
 
@@ -1145,7 +1195,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 6. 存储到 store
     set({ regionLayerCanvas: outputCanvas });
-    console.log('[bakeRegionLayerTexture] 区域色块图层烘焙完成');
+    console.log('[bakeRegionLayerTexture] 区域色块图层烘焙完成（GPU扭曲蒙版已集成）');
   },
 
   // 像素缓冲区相关

@@ -8,6 +8,7 @@ import { findRegionByPoint, isPointInPolygonWithHoles } from '../utils/regionDet
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
 import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, DashedSubRegion } from '../utils/colorExtractionUtils';
+import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
 // ========== HSL 到 RGB 转换 ==========
@@ -1744,6 +1745,9 @@ export function MainCanvas() {
 
     // 绘制区域注释
     if (layerVisibility.drawLayer) {
+      // 获取当前时间用于扭曲动画
+      const currentTime = performance.now() / 1000;
+      
       regionAnnotations.forEach(anno => {
         if (anno.layerId !== activeLayerId) return;
         ctx.save();
@@ -1755,7 +1759,16 @@ export function MainCanvas() {
         ctx.strokeStyle = color;
         ctx.lineWidth = lineWidth;
         ctx.beginPath();
-        for (const ring of anno.polygon) {
+        
+        // 应用扭曲效果（如果有）
+        let effectivePolygon = anno.polygon;
+        if (anno.maskEffect?.enabled) {
+          effectivePolygon = anno.polygon.map(ring => 
+            processMaskRingCPU(ring, anno.maskEffect, currentTime)
+          );
+        }
+        
+        for (const ring of effectivePolygon) {
           if (ring.length < 3) continue;
           const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
           ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
@@ -1768,7 +1781,9 @@ export function MainCanvas() {
         if (lineWidth > 0.01) {
           ctx.stroke();
         }
-        const outerRing = anno.polygon[0];
+        
+        // 计算标签位置（基于扭曲后的多边形）
+        const outerRing = effectivePolygon[0];
         let minX = Infinity, minY = Infinity;
         for (const p of outerRing) {
           if (p.x < minX) minX = p.x;

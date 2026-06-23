@@ -98,6 +98,30 @@ export interface RegionAnnotation {
   color: string;        // 注释颜色
   createdAt: number;
   updatedAt: number;
+  // 新增：遮罩特效参数（GPU扭曲蒙版）
+  maskEffect?: {
+    enabled: boolean;
+    transform: {
+      position: { x: number; y: number };
+      anchor: { x: number; y: number } | null; // null 表示自动计算重心
+      rotation: number; // 弧度
+      scale: { x: number; y: number };
+    };
+    distortions: Array<{
+      id: string;
+      type: 'wave' | 'turbulent' | 'twirl';
+      enabled: boolean;
+      amplitude: number;
+      frequency: number;
+      speed: number;
+      phase: number;
+      direction?: 'normal' | 'tangent' | 'xy';
+      center?: { x: number; y: number };
+      falloffRadius?: number;
+      seed?: number;
+      octaves?: number;
+    }>;
+  };
 }
 
 // 色块（独立）
