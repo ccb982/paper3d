@@ -1773,12 +1773,14 @@ export function MainCanvas() {
         ctx.lineWidth = lineWidth;
         ctx.beginPath();
         
-        // 应用扭曲效果（如果有）
+        // 应用扭曲效果：仅在区域色块图层可见且注释启用蒙版特效时扭曲
         let effectivePolygon = anno.polygon;
-        if (anno.maskEffect?.enabled) {
+        if (layerVisibility.regionLayer && anno.maskEffect?.enabled) {
           effectivePolygon = anno.polygon.map(ring => 
             processMaskRingCPU(ring, anno.maskEffect, currentTime)
           );
+        } else {
+          effectivePolygon = anno.polygon; // 保持原始形状
         }
         
         for (const ring of effectivePolygon) {
@@ -2455,7 +2457,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
