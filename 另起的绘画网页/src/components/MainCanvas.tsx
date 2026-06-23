@@ -238,6 +238,7 @@ export function MainCanvas() {
     // 新的区域色块图层缓存画布
     regionLayerCanvas,
     bakeRegionLayerTexture,
+    redrawTrigger,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -283,6 +284,9 @@ export function MainCanvas() {
   const renderFrameRef = useRef<number>();
   const lastRenderTimeRef = useRef<number>(0);
   const RENDER_INTERVAL_MS = 16; // 约每秒60帧
+  // 状态变化检测
+  const lastMaskEffectRef = useRef<string>('');
+  const CHECK_INTERVAL_FRAMES = 2; // 每2帧检查一次状态变化
 
   // 记录圆内所有像素坐标到对应区域（使用预计算的区域ID纹理快速查询）
   const recordCirclePixelsToRegions = useCallback((
@@ -2451,7 +2455,7 @@ export function MainCanvas() {
     }
 
     ctx.restore();
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -3324,8 +3328,23 @@ export function MainCanvas() {
     const animate = (timestamp: number) => {
       // 节流：按固定间隔烘焙区域色块图层
       if (timestamp - lastBakeTimeRef.current >= BAKE_INTERVAL_MS) {
-        bakeRegionLayerTexture(activeLayerId);
-        lastBakeTimeRef.current = timestamp;
+        // 重新检查条件（防止循环启动后条件变化）
+        const currentHasActiveMask = regionAnnotations.some(
+          (a) => a.layerId === activeLayerId && a.maskEffect?.enabled
+        );
+        const currentIsVisible = layerVisibility.regionLayer;
+
+        if (currentHasActiveMask && currentIsVisible && activeLayerId) {
+          bakeRegionLayerTexture(activeLayerId);
+          lastBakeTimeRef.current = timestamp;
+        } else {
+          // 条件不再满足，停止循环
+          if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = undefined;
+          }
+          return;
+        }
       }
       animationFrameRef.current = requestAnimationFrame(animate);
     };
@@ -3364,14 +3383,51 @@ export function MainCanvas() {
       return;
     }
 
+    let frameCount = 0;
+
     const animateRender = (timestamp: number) => {
+      frameCount++;
+
+      // 重新检查条件（防止循环启动后条件变化）
+      const currentHasActiveMask = regionAnnotations.some(
+        (a) => a.layerId === activeLayerId && a.maskEffect?.enabled
+      );
+      const currentIsVisible = layerVisibility.regionLayer;
+
+      if (!currentHasActiveMask || !currentIsVisible || !activeLayerId) {
+        // 条件不再满足，停止循环
+        if (renderFrameRef.current) {
+          cancelAnimationFrame(renderFrameRef.current);
+          renderFrameRef.current = undefined;
+        }
+        return;
+      }
+
+      // 状态变化检测：每 CHECK_INTERVAL_FRAMES 帧检查一次
+      if (frameCount % CHECK_INTERVAL_FRAMES === 0) {
+        // 获取当前蒙版特效状态的字符串表示
+        const currentLayerAnnotations = regionAnnotations.filter(a => a.layerId === activeLayerId);
+        const currentMaskEffectStr = JSON.stringify(currentLayerAnnotations.map(a => a.maskEffect));
+
+        // 如果状态发生变化，立即更新区域色块图层
+        if (currentMaskEffectStr !== lastMaskEffectRef.current) {
+          bakeRegionLayerTexture(activeLayerId);
+          lastMaskEffectRef.current = currentMaskEffectStr;
+        }
+      }
+
       // 节流：按固定间隔重绘画布
       if (timestamp - lastRenderTimeRef.current >= RENDER_INTERVAL_MS) {
         drawCanvas();
         lastRenderTimeRef.current = timestamp;
       }
+
       renderFrameRef.current = requestAnimationFrame(animateRender);
     };
+
+    // 初始化状态
+    const initialLayerAnnotations = regionAnnotations.filter(a => a.layerId === activeLayerId);
+    lastMaskEffectRef.current = JSON.stringify(initialLayerAnnotations.map(a => a.maskEffect));
 
     // 启动重绘循环
     renderFrameRef.current = requestAnimationFrame(animateRender);
@@ -3388,6 +3444,7 @@ export function MainCanvas() {
     activeLayerId,
     layerVisibility.regionLayer,
     drawCanvas,
+    bakeRegionLayerTexture,
   ]);
 
   return (

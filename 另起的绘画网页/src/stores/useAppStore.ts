@@ -263,6 +263,9 @@ interface AppState {
   saveToStorage: () => void;
   exportToJson: () => void;
   loadFromStorage: () => void;
+  /** 触发画布重绘（用于蒙版特效参数修改后立即更新实时预览） */
+  redrawTrigger: number;
+  triggerCanvasRedraw: () => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -997,6 +1000,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // 区域色块图层缓存（静态纹理画布）
   regionLayerCanvas: null,
+  redrawTrigger: 0,
   /**
    * 烘焙区域色块图层：基于虚线闭合区域，从当前画布合成图中提取颜色块，
    * 生成静态纹理画布，并缓存到 regionLayerCanvas。
@@ -1721,6 +1725,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       console.error('Failed to load from storage:', e);
     }
+  },
+
+  /** 触发画布重绘（用于蒙版特效参数修改后立即更新实时预览） */
+  triggerCanvasRedraw: () => {
+    // 通过递增 redrawTrigger 来触发 MainCanvas 中的 drawCanvas 重绘
+    set((state) => ({
+      redrawTrigger: state.redrawTrigger + 1,
+    }));
   },
 }));
 

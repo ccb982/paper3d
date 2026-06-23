@@ -7,6 +7,9 @@ export function MaskEffectPanel() {
     regionAnnotations,
     updateRegionAnnotation,
     activeLayerId,
+    bakeRegionLayerTexture,
+    layerVisibility,
+    triggerCanvasRedraw,
   } = useAppStore();
 
   // 获取当前选中图层的区域注释
@@ -40,6 +43,7 @@ export function MaskEffectPanel() {
   const handleToggleEnabled = () => {
     if (!editingAnno) return;
     const currentEnabled = editingAnno.maskEffect?.enabled;
+    const currentLayerId = activeLayerId;
     
     // 如果当前未启用或没有maskEffect，创建新的maskEffect
     if (!currentEnabled) {
@@ -58,6 +62,12 @@ export function MaskEffectPanel() {
         useAppStore.setState({ regionAnnotations: newAnnotations });
       }
       setEditingAnno(updated);
+      // 立即更新区域色块图层（如果可见）
+      if (layerVisibility.regionLayer && currentLayerId) {
+        bakeRegionLayerTexture(currentLayerId);
+      }
+      // 触发画布重绘（更新实时预览边框）
+      triggerCanvasRedraw();
     } else {
       // 如果当前已启用，禁用它（移除maskEffect）
       const updated = {
@@ -74,6 +84,12 @@ export function MaskEffectPanel() {
         useAppStore.setState({ regionAnnotations: newAnnotations });
       }
       setEditingAnno(updated);
+      // 立即更新区域色块图层（如果可见）
+      if (layerVisibility.regionLayer && currentLayerId) {
+        bakeRegionLayerTexture(currentLayerId);
+      }
+      // 触发画布重绘（更新实时预览边框）
+      triggerCanvasRedraw();
     }
   };
 
@@ -124,6 +140,12 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
+    // 立即更新区域色块图层（如果可见）
+    if (layerVisibility.regionLayer && activeLayerId) {
+      bakeRegionLayerTexture(activeLayerId);
+    }
+    // 触发画布重绘（更新实时预览边框）
+    triggerCanvasRedraw();
   };
 
   // 删除扭曲效果
@@ -145,6 +167,12 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
+    // 立即更新区域色块图层（如果可见）
+    if (layerVisibility.regionLayer && activeLayerId) {
+      bakeRegionLayerTexture(activeLayerId);
+    }
+    // 触发画布重绘（更新实时预览边框）
+    triggerCanvasRedraw();
   };
 
   // 更新扭曲效果参数
@@ -168,6 +196,12 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
+    // 立即更新区域色块图层（如果可见）
+    if (layerVisibility.regionLayer && activeLayerId) {
+      bakeRegionLayerTexture(activeLayerId);
+    }
+    // 触发画布重绘（更新实时预览边框）
+    triggerCanvasRedraw();
   };
 
   // 更新变换参数
@@ -190,6 +224,12 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
+    // 立即更新区域色块图层（如果可见）
+    if (layerVisibility.regionLayer && activeLayerId) {
+      bakeRegionLayerTexture(activeLayerId);
+    }
+    // 触发画布重绘（更新实时预览边框）
+    triggerCanvasRedraw();
   };
 
   // 如果没有区域注释，不显示面板
