@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { FluidSimulator } from '@fluid/fluid-simulator/FluidSimulator';
-import type { FluidParams } from '@fluid/fluid-simulator/FluidSimulator';
+import { FluidSimulator } from './FluidSimulator';
+import type { FluidParams } from './FluidSimulator';
 
 /**
  * 流体模拟适配器 - 绘画网页专用版本

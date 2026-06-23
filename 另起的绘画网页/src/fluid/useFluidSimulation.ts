@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { FluidSimulatorAdapter } from './FluidSimulatorAdapter';
-import type { FluidParams } from '@fluid/fluid-simulator/FluidSimulator';
+import type { FluidParams } from './FluidSimulator';
 
 export interface UseFluidSimulationOptions {
   width?: number;

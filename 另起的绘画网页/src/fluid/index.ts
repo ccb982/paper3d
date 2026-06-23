@@ -3,6 +3,10 @@
  * 整合自游戏中的流体库，提供完整的流体模拟功能
  */
 
+// 核心模拟器
+export { FluidSimulator } from './FluidSimulator';
+export type { FluidParams } from './FluidSimulator';
+
 // 适配器
 export { FluidSimulatorAdapter } from './FluidSimulatorAdapter';
 
