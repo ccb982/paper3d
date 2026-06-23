@@ -253,7 +253,6 @@ export class GPUMaskProcessor {
     this.createFramebuffer();
     
     this.isInitialized = true;
-    console.log('[GPUMaskProcessor] Initialized successfully with WebGL');
     return true;
   }
   

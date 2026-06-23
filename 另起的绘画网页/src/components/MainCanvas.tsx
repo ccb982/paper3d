@@ -279,7 +279,7 @@ export function MainCanvas() {
   // 动画循环相关
   const animationFrameRef = useRef<number>();
   const lastBakeTimeRef = useRef<number>(0);
-  const BAKE_INTERVAL_MS = 100; // 每秒10次，平衡性能与流畅度
+  const BAKE_INTERVAL_MS = Number.MAX_SAFE_INTEGER; // 彻底关闭自动烘焙
   // 持续重绘循环（用于动画效果）
   const renderFrameRef = useRef<number>();
   const lastRenderTimeRef = useRef<number>(0);
