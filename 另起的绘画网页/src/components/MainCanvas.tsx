@@ -1880,13 +1880,13 @@ export function MainCanvas() {
 
     // 绘制区域注释
     if (layerVisibility.drawLayer) {
-      // 获取当前时间用于扭曲动画
-      const currentTime = performance.now() / 1000;
-      
       regionAnnotations.forEach(anno => {
         if (anno.layerId !== activeLayerId) return;
+        
+        // 如果启用了蒙版特效且区域色块图层可见，跳过（边框在 regionLayer 中绘制）
+        if (anno.maskEffect?.enabled && layerVisibility.regionLayer) return;
+        
         ctx.save();
-        // 使用注释的颜色
         const color = anno.color || '#1890ff';
         ctx.fillStyle = color.replace(/rgb\(|#/, '').length === 6 
           ? `rgba(${parseInt(color.slice(1,3),16)}, ${parseInt(color.slice(3,5),16)}, ${parseInt(color.slice(5,7),16)}, 0.2)` 
@@ -1895,17 +1895,8 @@ export function MainCanvas() {
         ctx.lineWidth = lineWidth;
         ctx.beginPath();
         
-        // 应用扭曲效果：仅在区域色块图层可见且注释启用蒙版特效时扭曲
-        let effectivePolygon = anno.polygon;
-        if (layerVisibility.regionLayer && anno.maskEffect?.enabled) {
-          effectivePolygon = anno.polygon.map(ring => 
-            processMaskRingCPU(ring, anno.maskEffect, currentTime)
-          );
-        } else {
-          effectivePolygon = anno.polygon; // 保持原始形状
-        }
-        
-        for (const ring of effectivePolygon) {
+        // 不应用扭曲（原始形状）
+        for (const ring of anno.polygon) {
           if (ring.length < 3) continue;
           const canvasRing = ring.map(p => worldToCanvasFn(p.x, p.y));
           ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
@@ -1919,8 +1910,8 @@ export function MainCanvas() {
           ctx.stroke();
         }
         
-        // 计算标签位置（基于扭曲后的多边形）
-        const outerRing = effectivePolygon[0];
+        // 计算标签位置
+        const outerRing = anno.polygon[0];
         let minX = Infinity, minY = Infinity;
         for (const p of outerRing) {
           if (p.x < minX) minX = p.x;
@@ -1939,6 +1930,35 @@ export function MainCanvas() {
     // WebGL 渲染器已单独处理，此处保留 CPU 回退
     if (layerVisibility.regionLayer && regionLayerCanvas && !regionLayerTextureGPU) {
       ctx.drawImage(regionLayerCanvas, 0, 0);
+    }
+
+    // ========== 蒙版特效动态轮廓绘制（作为区域色块图层的一部分）==========
+    if (layerVisibility.regionLayer) {
+      const currentTime = performance.now() / 1000;
+      
+      regionAnnotations.forEach(anno => {
+        if (anno.layerId !== activeLayerId) return;
+        if (!anno.maskEffect?.enabled) return; // 只绘制启用蒙版特效的注释
+        
+        const outerRing = anno.polygon[0];
+        if (!outerRing || outerRing.length < 3) return;
+        
+        // 应用 CPU 扭曲
+        const distortedRing = processMaskRingCPU(outerRing, anno.maskEffect, currentTime);
+        
+        ctx.save();
+        ctx.strokeStyle = anno.color || '#1890ff';
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+        const canvasRing = distortedRing.map(p => worldToCanvasFn(p.x, p.y));
+        ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
+        for (let i = 1; i < canvasRing.length; i++) {
+          ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+      });
     }
 
     // ========== 调试：BFS区域绘制 ==========
