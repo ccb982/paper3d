@@ -1,6 +1,19 @@
 import { create } from 'zustand';
 import * as THREE from 'three';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation, ColorBlock } from '../types';
+
+// 独立区域纹理项
+interface RegionTextureItem {
+  regionId: number;
+  texture: THREE.DataTexture;
+  bbox: { x: number; y: number; w: number; h: number }; // 世界坐标 (0~1)
+  transform: {
+    position: { x: number; y: number };
+    rotation: number;
+    scale: { x: number; y: number };
+    anchor: { x: number; y: number } | null;
+  };
+}
 import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, getDebugRegions, type ScanlineCache, type GridData } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
@@ -239,6 +252,11 @@ interface AppState {
   regionLayerTexture: Record<string, ImageData | null>;
   /** 生成区域色块图层纹理（只使用虚线围成的区域） */
   generateRegionLayerTexture: (layerId: string) => void;
+
+  // 【新增】独立区域纹理列表（用于GPU渲染，每个区域一个纹理）
+  regionLayerTextures: Record<string, RegionTextureItem[]>;
+  /** 更新区域纹理列表 */
+  updateRegionLayerTextures: (layerId: string) => void;
 
   // 撤销历史（复合快照）
   historySnapshots: Array<{ 
@@ -1017,29 +1035,27 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // 3. 创建输出画布
+    // 3. 创建输出画布（与主画布同尺寸）
     const outputCanvas = document.createElement('canvas');
     outputCanvas.width = canvasWidth;
     outputCanvas.height = canvasHeight;
     const outCtx = outputCanvas.getContext('2d')!;
     outCtx.clearRect(0, 0, canvasWidth, canvasHeight);
-    const outImageData = outCtx.getImageData(0, 0, canvasWidth, canvasHeight);
-    const outData = outImageData.data;
 
     const PAINT_BUFFER_SIZE = 512;
-    
-    // 4. 对每个虚线区域进行颜色提取
+    const scaleX = canvasWidth / PAINT_BUFFER_SIZE;
+    const scaleY = canvasHeight / PAINT_BUFFER_SIZE;
+
+    // 4. 对每个虚线区域进行颜色提取并绘制
     for (const region of dashedRegions) {
       const polygon = region.polygon;
       const bbox = computeBBoxAllRings(polygon);
-      
-      // 生成区域掩码
       const mask = rasterizeRegionMaskLocal(polygon, bbox);
       
       // 如果掩码为空，跳过
       if (mask.reduce((a, b) => a + b, 0) === 0) continue;
 
-      // 准备小画布采样
+      // 获取 paintBuffer 的 ImageData
       const smallComposited = document.createElement('canvas');
       smallComposited.width = PAINT_BUFFER_SIZE;
       smallComposited.height = PAINT_BUFFER_SIZE;
@@ -1055,8 +1071,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         PAINT_BUFFER_SIZE
       );
 
-      // 渲染到输出画布
+      // 构建区域纹理的 ImageData（局部坐标，尺寸 bbox.w × bbox.h）
       const { w, h, x: offsetX, y: offsetY } = bbox;
+      const regionImageData = new ImageData(w, h);
+      const regionData = regionImageData.data;
+
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const idx = y * w + x;
@@ -1067,43 +1086,50 @@ export const useAppStore = create<AppState>((set, get) => ({
             const baseIdx = regionIdTex[idx] - 1;
             if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
             const base = baseColors[baseIdx];
-            
-            let dH = dequantize(deltaTex[idx * 3], 0.5);
-            let dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
-            let dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
-            
+            const dH = dequantize(deltaTex[idx * 3], 0.5);
+            const dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
+            const dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
             const qH = quantizeH(dH);
             const qS = quantizeS(dS);
             const qL = quantizeL(dL);
-            dH = dequantizeH(qH);
-            dS = dequantizeS(qS);
-            dL = dequantizeL(qL);
-
-            let finalH = base.h + dH;
-            if (finalH < 0) finalH += 1.0;
-            if (finalH > 1.0) finalH -= 1.0;
-            const finalS = Math.max(0, Math.min(1, base.s + dS));
-            const finalL = Math.max(0, Math.min(1, base.l + dL));
-            finalHsl = { h: finalH, s: finalS, l: finalL };
+            const finalH = base.h + dequantizeH(qH);
+            const finalS = Math.max(0, Math.min(1, base.s + dequantizeS(qS)));
+            const finalL = Math.max(0, Math.min(1, base.l + dequantizeL(qL)));
+            let hVal = finalH;
+            if (hVal < 0) hVal += 1.0;
+            if (hVal > 1.0) hVal -= 1.0;
+            finalHsl = { h: hVal, s: finalS, l: finalL };
           } else {
             finalHsl = baseColors[0];
           }
 
           const rgb = hslToRgb(finalHsl.h, finalHsl.s, finalHsl.l);
-          const outIdx = ((offsetY + y) * canvasWidth + (offsetX + x)) * 4;
-          outData[outIdx] = rgb.r;
-          outData[outIdx + 1] = rgb.g;
-          outData[outIdx + 2] = rgb.b;
-          outData[outIdx + 3] = 255;
+          const outIdx = (y * w + x) * 4;
+          regionData[outIdx] = rgb.r;
+          regionData[outIdx + 1] = rgb.g;
+          regionData[outIdx + 2] = rgb.b;
+          regionData[outIdx + 3] = 255;
         }
       }
+
+      // 将区域纹理绘制到输出画布（缩放至目标尺寸）
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = w;
+      tempCanvas.height = h;
+      const tempCtx = tempCanvas.getContext('2d')!;
+      tempCtx.putImageData(regionImageData, 0, 0);
+
+      // 缩放后的位置和大小
+      const destX = offsetX * scaleX;
+      const destY = offsetY * scaleY;
+      const destW = w * scaleX;
+      const destH = h * scaleY;
+
+      outCtx.drawImage(tempCanvas, destX, destY, destW, destH);
     }
 
-    // 5. 输出最终画布
-    outCtx.putImageData(outImageData, 0, 0);
-
-    // 6. 创建 GPU 纹理（DataTexture）
-    // 注意：ImageData.data 是 Uint8ClampedArray，DataTexture 会复制数据
+    // 5. 创建 GPU 纹理（DataTexture）
+    const outImageData = outCtx.getImageData(0, 0, canvasWidth, canvasHeight);
     const gpuTexture = new THREE.DataTexture(
       outImageData.data.slice(),  // 复制一份，避免被后续修改影响
       canvasWidth,
@@ -1112,13 +1138,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       THREE.UnsignedByteType
     );
     gpuTexture.needsUpdate = true;
-    // 纹理过滤模式：线性插值保证平滑
     gpuTexture.minFilter = THREE.LinearFilter;
     gpuTexture.magFilter = THREE.LinearFilter;
     gpuTexture.wrapS = THREE.ClampToEdgeWrapping;
     gpuTexture.wrapT = THREE.ClampToEdgeWrapping;
 
-    // 7. 同时保存到 canvas 和 GPU 纹理
+    // 6. 同时保存到 canvas 和 GPU 纹理
     set({
       regionLayerCanvas: outputCanvas,
       regionLayerTextureGPU: gpuTexture,
@@ -1128,6 +1153,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 像素缓冲区相关
   paintBuffers: {},
   regionLayerTexture: {}, // 区域色块图层纹理缓存
+  regionLayerTextures: {}, // 独立区域纹理列表
   initPaintBuffer: (layerId) =>
     set((state) => {
       if (state.paintBuffers[layerId]) return state;
@@ -1276,6 +1302,172 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
     
     console.log(`[区域图层纹理] 图层 ${layerId} 纹理生成完成`);
+  },
+
+  /**
+   * 更新区域纹理列表（为每个虚线区域生成独立的GPU纹理）
+   */
+  updateRegionLayerTextures: (layerId) => {
+    const state = get();
+    const shapes = state.shapes.filter(s => s.layerId === layerId);
+    const paintBuffer = state.paintBuffers[layerId];
+    
+    // 获取区域注释中的变换参数
+    const annoMap = new Map<number, RegionAnnotation>();
+    state.regionAnnotations
+      .filter(a => a.layerId === layerId && a.maskEffect?.enabled)
+      .forEach(a => {
+        const id = Number(a.regionId);
+        annoMap.set(id, a);
+      });
+
+    if (!paintBuffer) {
+      set((s) => ({
+        regionLayerTextures: { ...s.regionLayerTextures, [layerId]: [] },
+      }));
+      return;
+    }
+
+    const dashedRegions = computeAllDashedClosedRegions(shapes, state.canvasWidth, state.canvasHeight);
+    const PAINT_SIZE = 512;
+    const items: RegionTextureItem[] = [];
+
+    for (let i = 0; i < dashedRegions.length; i++) {
+      const region = dashedRegions[i];
+      const polygon = region.polygon;
+      
+      if (polygon.length === 0 || polygon[0].length < 3) continue;
+
+      // 计算包围盒
+      const bbox = computeBBoxAllRings(polygon);
+      const texWidth = Math.max(1, bbox.w);
+      const texHeight = Math.max(1, bbox.h);
+      
+      if (texWidth <= 0 || texHeight <= 0) continue;
+
+      // 生成掩码
+      const mask = rasterizeRegionMaskLocal(polygon, bbox);
+      
+      // 创建小画布获取颜色数据
+      const smallComposited = document.createElement('canvas');
+      smallComposited.width = PAINT_SIZE;
+      smallComposited.height = PAINT_SIZE;
+      const smallCtx = smallComposited.getContext('2d')!;
+      smallCtx.putImageData(paintBuffer, 0, 0);
+
+      // 聚类生成纹理
+      const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
+        mask,
+        bbox,
+        smallCtx.getImageData(0, 0, PAINT_SIZE, PAINT_SIZE),
+        0.05,
+        PAINT_SIZE
+      );
+
+      // 创建输出ImageData
+      const imageData = new ImageData(texWidth, texHeight);
+      const data = imageData.data;
+
+      // 填充颜色
+      for (let y = 0; y < texHeight; y++) {
+        for (let x = 0; x < texWidth; x++) {
+          const idx = y * texWidth + x;
+          if (mask[idx] === 0) continue;
+
+          let finalHsl;
+          if (regionIdTex) {
+            const baseIdx = regionIdTex[idx] - 1;
+            if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
+            const base = baseColors[baseIdx];
+            const dH = dequantize(deltaTex[idx * 3], 0.5);
+            const dS = dequantize(deltaTex[idx * 3 + 1], 1.0);
+            const dL = dequantize(deltaTex[idx * 3 + 2], 1.0);
+            
+            // 量化/反量化
+            const qH = quantizeH(dH);
+            const qS = quantizeS(dS);
+            const qL = quantizeL(dL);
+            const finalH = base.h + dequantizeH(qH);
+            const finalS = Math.max(0, Math.min(1, base.s + dequantizeS(qS)));
+            const finalL = Math.max(0, Math.min(1, base.l + dequantizeL(qL)));
+            
+            finalHsl = { h: finalH < 0 ? finalH + 1.0 : (finalH > 1.0 ? finalH - 1.0 : finalH), s: finalS, l: finalL };
+          } else if (baseColors.length > 0) {
+            finalHsl = baseColors[0];
+          } else {
+            continue;
+          }
+
+          const rgb = hslToRgb(finalHsl.h, finalHsl.s, finalHsl.l);
+          const outIdx = (y * texWidth + x) * 4;
+          data[outIdx] = rgb.r;
+          data[outIdx + 1] = rgb.g;
+          data[outIdx + 2] = rgb.b;
+          data[outIdx + 3] = 255;
+        }
+      }
+
+      // 创建DataTexture
+      const texture = new THREE.DataTexture(
+        imageData.data,
+        texWidth,
+        texHeight,
+        THREE.RGBAFormat,
+        THREE.UnsignedByteType
+      );
+      texture.needsUpdate = true;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+
+      // 获取变换参数
+      const anno = annoMap.get(i);
+      const transform = anno?.maskEffect?.transform || {
+        position: { x: 0, y: 0 },
+        rotation: 0,
+        scale: { x: 1, y: 1 },
+        anchor: null,
+      };
+
+      // === 新增：计算默认锚点（区域中心世界坐标） ===
+      let anchor = transform.anchor;
+      if (!anchor) {
+        // bbox 是像素坐标（0~512），需转换为世界坐标 [0,1]
+        const cx = (bbox.x + bbox.w / 2) / PAINT_SIZE;
+        const cy = 1 - (bbox.y + bbox.h / 2) / PAINT_SIZE; // y 翻转
+        anchor = { x: cx, y: cy };
+      }
+
+      // 将 anchor 存入 transform，以便后续使用
+      const finalTransform = {
+        ...transform,
+        anchor,
+      };
+
+      items.push({
+        regionId: i,
+        texture,
+        bbox: { 
+          x: bbox.x, 
+          y: bbox.y, 
+          w: bbox.w, 
+          h: bbox.h 
+        },
+        transform: finalTransform,
+      });
+    }
+
+    // 释放旧纹理
+    const oldItems = state.regionLayerTextures[layerId] || [];
+    oldItems.forEach(item => item.texture.dispose());
+
+    // 存储新纹理
+    set((s) => ({
+      regionLayerTextures: { ...s.regionLayerTextures, [layerId]: items },
+    }));
+    
+    console.log(`[区域图层纹理] 图层 ${layerId} 生成 ${items.length} 个独立区域纹理`);
   },
 
   historySnapshots: [{ 

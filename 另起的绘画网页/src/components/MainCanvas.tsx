@@ -151,12 +151,11 @@ export function MainCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
   
-  // WebGL 相关 refs（使用自定义着色器，不再需要相机矩阵）
+  // WebGL 相关 refs（使用独立区域纹理和 Group）
   const webglRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const webglSceneRef = useRef<THREE.Scene | null>(null);
-  const webglMeshRef = useRef<THREE.Mesh | null>(null);
-  const webglMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
-  const webglCameraRef = useRef<THREE.OrthographicCamera | null>(null); // 占位符，不再更新
+  const webglCameraRef = useRef<THREE.OrthographicCamera | null>(null);
+  const regionGroupRef = useRef<THREE.Group | null>(null); // 区域Mesh分组
   const {
     imageState,
     layerVisibility,
@@ -247,6 +246,9 @@ export function MainCanvas() {
     regionLayerCanvas,
     regionLayerTextureGPU,
     bakeRegionLayerTexture,
+    // 独立区域纹理列表（新方案）
+    regionLayerTextures,
+    updateRegionLayerTextures,
     redrawTrigger,
   } = useAppStore();
 
@@ -261,7 +263,7 @@ export function MainCanvas() {
     console.log(`[颜色提取] colorExtractMode 状态变化: ${colorExtractMode}`);
   }, [colorExtractMode]);
 
-  // ========== WebGL 环境初始化（使用自定义着色器，与 2D Canvas 变换一致）==========
+  // ========== WebGL 环境初始化（使用独立区域纹理和 Group）==========
   useEffect(() => {
     if (!canvasWrapperRef.current) return;
 
@@ -291,88 +293,94 @@ export function MainCanvas() {
     const scene = new THREE.Scene();
     webglSceneRef.current = scene;
 
-    // 创建占位相机（顶点着色器自行计算 NDC，不再使用相机矩阵）
-    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    // 创建正交相机（匹配 2D Canvas 坐标系）
+    const camera = new THREE.OrthographicCamera(0, canvasWidth, canvasHeight, 0, -1, 1);
     webglCameraRef.current = camera;
 
-    // 创建自定义材质（顶点着色器实现与 2D Canvas 一致的变换）
-    const material = new THREE.ShaderMaterial({
-      uniforms: {
-        uTexture: { value: null },
-        uZoom: { value: zoom },
-        uPanOffset: { value: new THREE.Vector2(panOffset.x, panOffset.y) },
-        uCanvasSize: { value: new THREE.Vector2(canvasWidth, canvasHeight) },
-      },
-      vertexShader: `
-        uniform vec2 uCanvasSize;
-        uniform float uZoom;
-        uniform vec2 uPanOffset;
-        varying vec2 vUv;
-        
-        void main() {
-          vUv = uv;
-          
-          // 将顶点从相对中心（-canvasSize/2 ~ canvasSize/2）转为左上角坐标（0 ~ canvasSize）
-          vec2 pixelPos = position + uCanvasSize * 0.5;
-          
-          // 应用与 2D Canvas 一致的变换：先缩放，再平移
-          vec2 canvasPos = (pixelPos - uCanvasSize * 0.5) * uZoom + uCanvasSize * 0.5 + uPanOffset;
-          
-          // 转为 NDC（归一化设备坐标）
-          vec2 ndc = (canvasPos / uCanvasSize) * 2.0 - 1.0;
-          ndc.y = -ndc.y; // 翻转 Y 轴以匹配 Canvas 坐标系
-          
-          gl_Position = vec4(ndc, 0.0, 1.0);
-        }
-      `,
-      fragmentShader: `
-        uniform sampler2D uTexture;
-        varying vec2 vUv;
-        
-        void main() {
-          vec4 color = texture2D(uTexture, vUv);
-          gl_FragColor = color;
-        }
-      `,
-      transparent: true,
-      depthWrite: false,
-    });
-    webglMaterialRef.current = material;
-
-    // 创建全屏四边形
-    const geometry = new THREE.PlaneGeometry(canvasWidth, canvasHeight);
-    const mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
-    webglMeshRef.current = mesh;
+    // 创建区域Mesh分组
+    const regionGroup = new THREE.Group();
+    scene.add(regionGroup);
+    regionGroupRef.current = regionGroup;
 
     return () => {
       renderer.dispose();
-      geometry.dispose();
-      material.dispose();
       if (webglCanvas.parentNode) webglCanvas.parentNode.removeChild(webglCanvas);
     };
   }, [canvasWidth, canvasHeight]);
 
-  // ========== 更新 WebGL Uniforms（监听 zoom 和 panOffset）==========
+  // ========== 更新区域Mesh（监听区域纹理列表变化）==========
   useEffect(() => {
-    const mat = webglMaterialRef.current;
-    if (!mat) return;
-    mat.uniforms.uZoom.value = zoom;
-    mat.uniforms.uPanOffset.value.set(panOffset.x, panOffset.y);
-  }, [zoom, panOffset]);
+    const group = regionGroupRef.current;
+    if (!group) return;
 
-  // ========== 更新 WebGL 纹理（监听 GPU 纹理更新）==========
-  useEffect(() => {
-    const mesh = webglMeshRef.current;
-    if (!mesh) return;
-    const mat = mesh.material as THREE.ShaderMaterial;
-    if (regionLayerTextureGPU) {
-      mat.uniforms.uTexture.value = regionLayerTextureGPU;
-      mat.needsUpdate = true;
-    } else {
-      mat.uniforms.uTexture.value = null;
+    // 清除旧Mesh
+    while (group.children.length > 0) {
+      const child = group.children[0];
+      if (child instanceof THREE.Mesh) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose());
+        } else {
+          child.material.dispose();
+        }
+      }
+      group.remove(child);
     }
-  }, [regionLayerTextureGPU]);
+
+    // 获取区域纹理列表
+    const items = regionLayerTextures[activeLayerId] || [];
+    const PAINT_SIZE = 512;
+    
+    for (const item of items) {
+      const { bbox, texture, transform } = item;
+      const anchor = transform.anchor || { x: 0.5, y: 0.5 };
+
+      // Canvas 坐标（y向下）
+      const x = (bbox.x / PAINT_SIZE) * canvasWidth;
+      const y = (bbox.y / PAINT_SIZE) * canvasHeight;
+      const w = (bbox.w / PAINT_SIZE) * canvasWidth;
+      const h = (bbox.h / PAINT_SIZE) * canvasHeight;
+
+      // 锚点（世界 0~1）转 Canvas 坐标
+      const anchorX = anchor.x * canvasWidth;
+      const anchorY = (1 - anchor.y) * canvasHeight;  // 用户 y 底部→顶部，Canvas 顶部→底部
+
+      // 创建几何体（尺寸 = bbox 尺寸）
+      const geometry = new THREE.PlaneGeometry(w, h);
+      
+      // 几何体中心
+      const centerX = x + w / 2;
+      const centerY = y + h / 2;
+      
+      // 将几何体平移到以锚点为原点：centerX - anchorX 表示从锚点到中心的偏移
+      // 反向平移即可将锚点移动到局部坐标 (0,0)
+      geometry.translate(
+        centerX - anchorX,
+        centerY - anchorY,
+        0
+      );
+
+      // 创建材质
+      const material = new THREE.MeshBasicMaterial({ 
+        map: texture, 
+        transparent: true, 
+        depthWrite: false 
+      });
+
+      // Mesh 位置直接设为锚点 Canvas 坐标
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(anchorX, anchorY, 0);
+      
+      // 应用旋转和缩放（此时将围绕锚点）
+      mesh.rotation.z = transform.rotation;
+      mesh.scale.set(transform.scale.x, transform.scale.y, 1);
+
+      group.add(mesh);
+    }
+    
+    // 设置可见性
+    group.visible = layerVisibility.regionLayer;
+  }, [regionLayerTextures, activeLayerId, layerVisibility.regionLayer, canvasWidth, canvasHeight]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -958,17 +966,18 @@ export function MainCanvas() {
     console.log('[颜色提取] Step 6/6: 清空临时色块...');
     setExtractedColorBlocks([]);
 
-    // 7. 更新区域色块图层（静态烘焙）
+    // 7. 更新区域色块图层（静态烘焙 + 独立区域纹理）
     console.log('[颜色提取] Step 7/7: 生成区域图层...');
     if (layerId) {
       bakeRegionLayerTexture(layerId);
+      updateRegionLayerTextures(layerId);
     }
 
     const endTime = performance.now();
     console.log(`[颜色提取] ==================== 颜色提取完成 ====================`);
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
     console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture, layerVisibility]);
+  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture, updateRegionLayerTextures, layerVisibility]);
 
   // 精确颜色提取：直接将区域内的每个像素颜色复制到 paintBuffer（不合并连通域）
   const performColorExtractionOnRegion = useCallback((regionPolygon: Point[][]) => {
@@ -1054,17 +1063,18 @@ export function MainCanvas() {
     // 5. 清空临时色块显示
     setExtractedColorBlocks([]);
 
-    // 6. 更新区域色块图层（静态烘焙）
+    // 6. 更新区域色块图层（静态烘焙 + 独立区域纹理）
     console.log('[颜色提取] Step 5/5: 生成区域图层...');
     const currentLayerId = activeLayerId || layers[0]?.id;
     if (currentLayerId) {
       bakeRegionLayerTexture(currentLayerId);
+      updateRegionLayerTextures(currentLayerId);
     }
 
     const endTime = performance.now();
     console.log('[颜色提取] ==================== 精确颜色提取完成 ====================');
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms，写入像素数: ${writtenPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture]);
+  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture, updateRegionLayerTextures]);
 
   // 获取所有虚线形状（从全局 shapes 中筛选）
   const getDashedShapes = useCallback(() => {
@@ -2606,17 +2616,12 @@ export function MainCanvas() {
       const renderer = webglRendererRef.current;
       const scene = webglSceneRef.current;
       const camera = webglCameraRef.current;
-      // 如果纹理存在则渲染，否则清除（显示透明）
-      if (regionLayerTextureGPU) {
-        renderer.render(scene, camera);
-      } else {
-        renderer.clear();
-      }
+      renderer.render(scene, camera);
     } else if (webglRendererRef.current) {
       // 区域色块图层不可见时清除 WebGL 画布
       webglRendererRef.current.clear();
     }
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations, regionLayerTextureGPU]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -3487,6 +3492,7 @@ export function MainCanvas() {
 
         if (currentHasActiveMask && currentIsVisible && activeLayerId) {
           bakeRegionLayerTexture(activeLayerId);
+          updateRegionLayerTextures(activeLayerId);
           lastBakeTimeRef.current = timestamp;
         } else {
           // 条件不再满足，停止循环
@@ -3563,6 +3569,7 @@ export function MainCanvas() {
         // 如果状态发生变化，立即更新区域色块图层
         if (currentMaskEffectStr !== lastMaskEffectRef.current) {
           bakeRegionLayerTexture(activeLayerId);
+          updateRegionLayerTextures(activeLayerId);
           lastMaskEffectRef.current = currentMaskEffectStr;
         }
       }
