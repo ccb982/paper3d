@@ -51,6 +51,7 @@ export class RegionEntity {
   ): void {
     const bbox = computeBBoxAllRings(this.boundary);
     const mask = rasterizeRegionMaskLocal(this.boundary, bbox);
+    const { w, h } = bbox;
 
     const smallComposited = document.createElement('canvas');
     smallComposited.width = 512;
@@ -66,11 +67,32 @@ export class RegionEntity {
       512
     );
 
+    const resampledDelta = new Uint8Array(textureSize * textureSize * 3);
+    const resampledRegionId = regionIdTex ? new Uint8Array(textureSize * textureSize) : null;
+
+    for (let ty = 0; ty < textureSize; ty++) {
+      for (let tx = 0; tx < textureSize; tx++) {
+        const u = (tx + 0.5) / textureSize;
+        const v = (ty + 0.5) / textureSize;
+        const srcX = Math.floor(u * w);
+        const srcY = Math.floor((1 - v) * h);
+        const srcIdx = srcY * w + srcX;
+
+        resampledDelta[(ty * textureSize + tx) * 3] = deltaTex[srcIdx * 3];
+        resampledDelta[(ty * textureSize + tx) * 3 + 1] = deltaTex[srcIdx * 3 + 1];
+        resampledDelta[(ty * textureSize + tx) * 3 + 2] = deltaTex[srcIdx * 3 + 2];
+
+        if (resampledRegionId && regionIdTex) {
+          resampledRegionId[ty * textureSize + tx] = regionIdTex[srcIdx];
+        }
+      }
+    }
+
     this._ftxData = {
       version: 2,
       baseColors,
-      deltaTexture: deltaTex,
-      regionIdTexture: regionIdTex || undefined,
+      deltaTexture: resampledDelta,
+      regionIdTexture: resampledRegionId || undefined,
       textureSize,
       bbox,
     };
@@ -93,8 +115,8 @@ export class RegionEntity {
     }
     this._gpuTexture = new THREE.DataTexture(
       pixelData,
-      bbox.w,
-      bbox.h,
+      textureSize,
+      textureSize,
       THREE.RGBAFormat,
       THREE.UnsignedByteType
     );
@@ -112,25 +134,25 @@ export class RegionEntity {
     baseColors: Array<{ h: number; s: number; l: number }>,
     deltaTexture: Uint8Array,
     regionIdTexture: Uint8Array | undefined,
-    _textureSize: number,
-    bbox: { w: number; h: number }
+    textureSize: number,
+    _bbox: { w: number; h: number }
   ): Uint8ClampedArray {
-    const { w, h } = bbox;
-    const pixelData = new Uint8ClampedArray(w * h * 4);
+    const pixelData = new Uint8ClampedArray(textureSize * textureSize * 4);
     pixelData.fill(0);
 
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const idx = y * w + x;
+    for (let ty = 0; ty < textureSize; ty++) {
+      for (let tx = 0; tx < textureSize; tx++) {
+        const idx = ty * textureSize + tx;
+        const deltaIdx = idx * 3;
 
         let finalHsl;
         if (regionIdTexture) {
           const baseIdx = regionIdTexture[idx] - 1;
           if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
           const base = baseColors[baseIdx];
-          const dH = dequantize(deltaTexture[idx * 3], 0.5);
-          const dS = dequantize(deltaTexture[idx * 3 + 1], 1.0);
-          const dL = dequantize(deltaTexture[idx * 3 + 2], 1.0);
+          const dH = dequantize(deltaTexture[deltaIdx], 0.5);
+          const dS = dequantize(deltaTexture[deltaIdx + 1], 1.0);
+          const dL = dequantize(deltaTexture[deltaIdx + 2], 1.0);
 
           let finalH = base.h + dH;
           if (finalH < 0) finalH += 1.0;
@@ -145,7 +167,7 @@ export class RegionEntity {
         }
 
         const rgb = hslToRgb(finalHsl.h, finalHsl.s, finalHsl.l);
-        const outIdx = (y * w + x) * 4;
+        const outIdx = (ty * textureSize + tx) * 4;
         pixelData[outIdx] = rgb.r;
         pixelData[outIdx + 1] = rgb.g;
         pixelData[outIdx + 2] = rgb.b;
