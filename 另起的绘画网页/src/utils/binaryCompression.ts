@@ -15,7 +15,7 @@ function base64ToUint8(base64: string): Uint8Array {
 }
 
 // ---------- Uint8Array 转 Base64 ----------
-function uint8ToBase64(bytes: Uint8Array): string {
+export function uint8ToBase64(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i++) {
     binary += String.fromCharCode(bytes[i]);

@@ -245,10 +245,8 @@ export function MainCanvas() {
     // 新的区域色块图层缓存画布
     regionLayerCanvas,
     regionLayerTextureGPU,
-    bakeRegionLayerTexture,
-    // 独立区域纹理列表（新方案）
-    regionLayerTextures,
-    updateRegionLayerTextures,
+    // 【重构】区域实体列表（存储 ftx 压缩数据）
+    regionEntities,
     redrawTrigger,
   } = useAppStore();
 
@@ -327,13 +325,20 @@ export function MainCanvas() {
       group.remove(child);
     }
 
-    // 获取区域纹理列表
-    const items = regionLayerTextures[activeLayerId] || [];
+    // 获取区域实体列表（【重构】直接使用 RegionEntity）
+    const entities = regionEntities[activeLayerId] || [];
     const PAINT_SIZE = 512;
     
-    for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
-      const item = items[itemIdx];
-      const { bbox, texture, transform } = item;
+    for (let entityIdx = 0; entityIdx < entities.length; entityIdx++) {
+      const entity = entities[entityIdx];
+      const bbox = entity.bbox;
+      if (!bbox) continue;
+
+      // 【重构】使用 RegionEntity.getGPUTexture() 按需生成纹理（带缓存）
+      const texture = entity.getGPUTexture();
+      if (!texture) continue;
+
+      const transform = entity.transform;
       const anchor = transform.anchor || { x: 0.5, y: 0.5 };
 
       // Canvas 坐标（y向下）
@@ -344,29 +349,19 @@ export function MainCanvas() {
 
       // 锚点（世界 0~1）转 Canvas 坐标
       const anchorX = anchor.x * canvasWidth;
-      const anchorY = (1 - anchor.y) * canvasHeight;  // 用户 y 底部→顶部，Canvas 顶部→底部
+      const anchorY = (1 - anchor.y) * canvasHeight;
 
-      // 几何体中心
-      const centerX = x + w / 2;
-      const centerY = y + h / 2;
-
-      console.log(`[RegionMesh] 区域 ${itemIdx}: bbox(512空间) = { x: ${bbox.x.toFixed(2)}, y: ${bbox.y.toFixed(2)}, w: ${bbox.w.toFixed(2)}, h: ${bbox.h.toFixed(2)} }`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: Canvas坐标 = { x: ${x.toFixed(2)}, y: ${y.toFixed(2)}, w: ${w.toFixed(2)}, h: ${h.toFixed(2)} }`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: anchor(世界) = { x: ${anchor.x.toFixed(4)}, y: ${anchor.y.toFixed(4)} }`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: anchor(Canvas) = { x: ${anchorX.toFixed(2)}, y: ${anchorY.toFixed(2)} }`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: center(Canvas) = { x: ${centerX.toFixed(2)}, y: ${centerY.toFixed(2)} }`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: geometry.translate = (${(centerX - anchorX).toFixed(2)}, ${(centerY - anchorY).toFixed(2)})`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: mesh.position = (${anchorX.toFixed(2)}, ${anchorY.toFixed(2)}), rotation.z = ${transform.rotation.toFixed(4)}, scale = (${transform.scale.x.toFixed(2)}, ${transform.scale.y.toFixed(2)})`);
-      console.log(`[RegionMesh] 区域 ${itemIdx}: canvasWidth=${canvasWidth}, canvasHeight=${canvasHeight}, PAINT_SIZE=${PAINT_SIZE}`);
+      // 应用 position 偏移
+      const posX = anchorX + transform.position.x * canvasWidth;
+      const posY = anchorY - transform.position.y * canvasHeight;
 
       // 创建几何体（尺寸 = bbox 尺寸）
       const geometry = new THREE.PlaneGeometry(w, h);
       
-      // 将几何体平移到以锚点为原点：centerX - anchorX 表示从锚点到中心的偏移
-      // 反向平移即可将锚点移动到局部坐标 (0,0)
+      // 将几何体平移到以锚点为原点（包含 position 偏移后的位置）
       geometry.translate(
-        centerX - anchorX,
-        centerY - anchorY,
+        (x + w / 2) - posX,
+        (y + h / 2) - posY,
         0
       );
 
@@ -377,9 +372,9 @@ export function MainCanvas() {
         depthWrite: false 
       });
 
-      // Mesh 位置直接设为锚点 Canvas 坐标
+      // Mesh 位置设为包含 position 偏移的锚点坐标
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(anchorX, anchorY, 0);
+      mesh.position.set(posX, posY, 0);
       
       // 应用旋转和缩放（此时将围绕锚点）
       mesh.rotation.z = transform.rotation;
@@ -390,7 +385,7 @@ export function MainCanvas() {
     
     // 设置可见性
     group.visible = layerVisibility.regionLayer;
-  }, [regionLayerTextures, activeLayerId, layerVisibility.regionLayer, canvasWidth, canvasHeight]);
+  }, [regionEntities, activeLayerId, layerVisibility.regionLayer, canvasWidth, canvasHeight]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -976,18 +971,17 @@ export function MainCanvas() {
     console.log('[颜色提取] Step 6/6: 清空临时色块...');
     setExtractedColorBlocks([]);
 
-    // 7. 更新区域色块图层（静态烘焙 + 独立区域纹理）
+    // 7. 更新区域色块图层（使用 RegionEntity）
     console.log('[颜色提取] Step 7/7: 生成区域图层...');
     if (layerId) {
-      bakeRegionLayerTexture(layerId);
-      updateRegionLayerTextures(layerId);
+      useAppStore.getState().refreshRegionEntities(layerId);
     }
 
     const endTime = performance.now();
     console.log(`[颜色提取] ==================== 颜色提取完成 ====================`);
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
     console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture, updateRegionLayerTextures, layerVisibility]);
+  }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, layerVisibility]);
 
   // 精确颜色提取：直接将区域内的每个像素颜色复制到 paintBuffer（不合并连通域）
   const performColorExtractionOnRegion = useCallback((regionPolygon: Point[][]) => {
@@ -1073,18 +1067,17 @@ export function MainCanvas() {
     // 5. 清空临时色块显示
     setExtractedColorBlocks([]);
 
-    // 6. 更新区域色块图层（静态烘焙 + 独立区域纹理）
+    // 6. 更新区域色块图层（使用 RegionEntity）
     console.log('[颜色提取] Step 5/5: 生成区域图层...');
     const currentLayerId = activeLayerId || layers[0]?.id;
     if (currentLayerId) {
-      bakeRegionLayerTexture(currentLayerId);
-      updateRegionLayerTextures(currentLayerId);
+      useAppStore.getState().refreshRegionEntities(currentLayerId);
     }
 
     const endTime = performance.now();
     console.log('[颜色提取] ==================== 精确颜色提取完成 ====================');
     console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms，写入像素数: ${writtenPixels}`);
-  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, bakeRegionLayerTexture, updateRegionLayerTextures]);
+  }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
 
   // 获取所有虚线形状（从全局 shapes 中筛选）
   const getDashedShapes = useCallback(() => {
@@ -3174,9 +3167,9 @@ export function MainCanvas() {
               drawCircleOnBuffer(imgData, worldCoords, paintBrushSize, currentColor, PAINT_BUFFER_SIZE);
             });
             
-            // 绘制后重新烘焙区域色块图层（如果已开启可见性）
+            // 绘制后刷新区域实体（如果已开启可见性）
             if (layerVisibility?.regionLayer) {
-              bakeRegionLayerTexture(layerId);
+              useAppStore.getState().refreshRegionEntities(layerId);
             }
           }
         }
@@ -3200,7 +3193,6 @@ export function MainCanvas() {
     paintBuffers,
     initPaintBuffer,
     updatePaintBuffer,
-    bakeRegionLayerTexture,
     layerVisibility,
     paintBrushSize,
     currentColor,
@@ -3501,8 +3493,7 @@ export function MainCanvas() {
         const currentIsVisible = layerVisibility.regionLayer;
 
         if (currentHasActiveMask && currentIsVisible && activeLayerId) {
-          bakeRegionLayerTexture(activeLayerId);
-          updateRegionLayerTextures(activeLayerId);
+          useAppStore.getState().refreshRegionEntities(activeLayerId);
           lastBakeTimeRef.current = timestamp;
         } else {
           // 条件不再满足，停止循环
@@ -3530,7 +3521,6 @@ export function MainCanvas() {
     regionAnnotations,
     activeLayerId,
     layerVisibility.regionLayer,
-    bakeRegionLayerTexture,
   ]);
 
   // ========== 持续重绘画布循环（用于动画效果实时更新） ==========
@@ -3578,8 +3568,7 @@ export function MainCanvas() {
 
         // 如果状态发生变化，立即更新区域色块图层
         if (currentMaskEffectStr !== lastMaskEffectRef.current) {
-          bakeRegionLayerTexture(activeLayerId);
-          updateRegionLayerTextures(activeLayerId);
+          useAppStore.getState().refreshRegionEntities(activeLayerId);
           lastMaskEffectRef.current = currentMaskEffectStr;
         }
       }
@@ -3612,7 +3601,6 @@ export function MainCanvas() {
     activeLayerId,
     layerVisibility.regionLayer,
     drawCanvas,
-    bakeRegionLayerTexture,
   ]);
 
   return (

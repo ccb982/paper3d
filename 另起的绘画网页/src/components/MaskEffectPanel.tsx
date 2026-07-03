@@ -7,8 +7,7 @@ export function MaskEffectPanel() {
     regionAnnotations,
     updateRegionAnnotation,
     activeLayerId,
-    bakeRegionLayerTexture,
-    updateRegionLayerTextures,
+    refreshRegionEntities,
     layerVisibility,
     triggerCanvasRedraw,
     forceCPUMode,
@@ -66,8 +65,7 @@ export function MaskEffectPanel() {
       setEditingAnno(updated);
       // 立即更新区域色块图层（如果可见）
       if (layerVisibility.regionLayer && currentLayerId) {
-        bakeRegionLayerTexture(currentLayerId);
-        updateRegionLayerTextures(currentLayerId);
+        refreshRegionEntities(currentLayerId);
       }
       // 触发画布重绘（更新实时预览边框）
       triggerCanvasRedraw();
@@ -89,8 +87,7 @@ export function MaskEffectPanel() {
       setEditingAnno(updated);
       // 立即更新区域色块图层（如果可见）
       if (layerVisibility.regionLayer && currentLayerId) {
-        bakeRegionLayerTexture(currentLayerId);
-        updateRegionLayerTextures(currentLayerId);
+        refreshRegionEntities(currentLayerId);
       }
       // 触发画布重绘（更新实时预览边框）
       triggerCanvasRedraw();
@@ -146,8 +143,7 @@ export function MaskEffectPanel() {
     setEditingAnno(updated);
     // 立即更新区域色块图层（如果可见）
     if (layerVisibility.regionLayer && activeLayerId) {
-      bakeRegionLayerTexture(activeLayerId);
-      updateRegionLayerTextures(activeLayerId);
+      refreshRegionEntities(activeLayerId);
     }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
@@ -174,8 +170,7 @@ export function MaskEffectPanel() {
     setEditingAnno(updated);
     // 立即更新区域色块图层（如果可见）
     if (layerVisibility.regionLayer && activeLayerId) {
-      bakeRegionLayerTexture(activeLayerId);
-      updateRegionLayerTextures(activeLayerId);
+      refreshRegionEntities(activeLayerId);
     }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
@@ -204,8 +199,7 @@ export function MaskEffectPanel() {
     setEditingAnno(updated);
     // 立即更新区域色块图层（如果可见）
     if (layerVisibility.regionLayer && activeLayerId) {
-      bakeRegionLayerTexture(activeLayerId);
-      updateRegionLayerTextures(activeLayerId);
+      refreshRegionEntities(activeLayerId);
     }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
@@ -233,8 +227,7 @@ export function MaskEffectPanel() {
     setEditingAnno(updated);
     // 立即更新区域色块图层（如果可见）
     if (layerVisibility.regionLayer && activeLayerId) {
-      bakeRegionLayerTexture(activeLayerId);
-      updateRegionLayerTextures(activeLayerId);
+      refreshRegionEntities(activeLayerId);
     }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
@@ -253,11 +246,11 @@ export function MaskEffectPanel() {
           {/* GPU/CPU 切换按钮 */}
           <button
             onClick={() => {
-              const { forceCPUMode, setForceCPUMode } = useAppStore.getState();
+              const { forceCPUMode, setForceCPUMode, refreshRegionEntities } = useAppStore.getState();
               setForceCPUMode(!forceCPUMode);
-              // 切换后立即重新烘焙
+              // 切换后立即刷新区域实体
               if (layerVisibility.regionLayer && activeLayerId) {
-                useAppStore.getState().bakeRegionLayerTexture(activeLayerId);
+                refreshRegionEntities(activeLayerId);
               }
             }}
             style={{
