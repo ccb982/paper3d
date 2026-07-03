@@ -1047,13 +1047,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const scaleY = canvasHeight / PAINT_BUFFER_SIZE;
 
     // 4. 对每个虚线区域进行颜色提取并绘制
-    for (const region of dashedRegions) {
+    for (let regionIdx = 0; regionIdx < dashedRegions.length; regionIdx++) {
+      const region = dashedRegions[regionIdx];
       const polygon = region.polygon;
       const bbox = computeBBoxAllRings(polygon);
       const mask = rasterizeRegionMaskLocal(polygon, bbox);
       
       // 如果掩码为空，跳过
       if (mask.reduce((a, b) => a + b, 0) === 0) continue;
+
+      console.log(`[bakeRegionLayerTexture] 区域 ${regionIdx}: bbox = { x: ${bbox.x.toFixed(2)}, y: ${bbox.y.toFixed(2)}, w: ${bbox.w.toFixed(2)}, h: ${bbox.h.toFixed(2)} }`);
 
       // 获取 paintBuffer 的 ImageData
       const smallComposited = document.createElement('canvas');
@@ -1124,6 +1127,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const destY = offsetY * scaleY;
       const destW = w * scaleX;
       const destH = h * scaleY;
+
+      console.log(`[bakeRegionLayerTexture] 区域 ${regionIdx}: 缩放参数 scaleX=${scaleX.toFixed(3)}, scaleY=${scaleY.toFixed(3)}`);
+      console.log(`[bakeRegionLayerTexture] 区域 ${regionIdx}: 绘制位置 destX=${destX.toFixed(2)}, destY=${destY.toFixed(2)}, destW=${destW.toFixed(2)}, destH=${destH.toFixed(2)}`);
+      console.log(`[bakeRegionLayerTexture] 区域 ${regionIdx}: 画布尺寸 canvasWidth=${canvasWidth}, canvasHeight=${canvasHeight}`);
 
       outCtx.drawImage(tempCanvas, destX, destY, destW, destH);
     }
@@ -1437,6 +1444,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         const cx = (bbox.x + bbox.w / 2) / PAINT_SIZE;
         const cy = 1 - (bbox.y + bbox.h / 2) / PAINT_SIZE; // y 翻转
         anchor = { x: cx, y: cy };
+        console.log(`[updateRegionLayerTextures] 区域 ${i}: 自动计算锚点 anchor = { x: ${anchor.x.toFixed(4)}, y: ${anchor.y.toFixed(4)} }, bbox中心 = ({ (bbox.x + bbox.w/2).toFixed(2) }, { (bbox.y + bbox.h/2).toFixed(2) })`);
+      } else {
+        console.log(`[updateRegionLayerTextures] 区域 ${i}: 使用已有锚点 anchor = { x: ${anchor.x.toFixed(4)}, y: ${anchor.y.toFixed(4)} }`);
       }
 
       // 将 anchor 存入 transform，以便后续使用
@@ -1444,6 +1454,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...transform,
         anchor,
       };
+
+      console.log(`[updateRegionLayerTextures] 区域 ${i}: bbox = { x: ${bbox.x.toFixed(2)}, y: ${bbox.y.toFixed(2)}, w: ${bbox.w.toFixed(2)}, h: ${bbox.h.toFixed(2)} }, transform = { rotation: ${transform.rotation.toFixed(4)}, scale: { x: ${transform.scale.x.toFixed(2)}, y: ${transform.scale.y.toFixed(2)} }, position: { x: ${transform.position.x.toFixed(2)}, y: ${transform.position.y.toFixed(2)} } }`);
 
       items.push({
         regionId: i,

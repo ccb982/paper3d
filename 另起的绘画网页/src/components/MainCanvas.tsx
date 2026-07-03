@@ -331,7 +331,8 @@ export function MainCanvas() {
     const items = regionLayerTextures[activeLayerId] || [];
     const PAINT_SIZE = 512;
     
-    for (const item of items) {
+    for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
+      const item = items[itemIdx];
       const { bbox, texture, transform } = item;
       const anchor = transform.anchor || { x: 0.5, y: 0.5 };
 
@@ -345,12 +346,21 @@ export function MainCanvas() {
       const anchorX = anchor.x * canvasWidth;
       const anchorY = (1 - anchor.y) * canvasHeight;  // 用户 y 底部→顶部，Canvas 顶部→底部
 
-      // 创建几何体（尺寸 = bbox 尺寸）
-      const geometry = new THREE.PlaneGeometry(w, h);
-      
       // 几何体中心
       const centerX = x + w / 2;
       const centerY = y + h / 2;
+
+      console.log(`[RegionMesh] 区域 ${itemIdx}: bbox(512空间) = { x: ${bbox.x.toFixed(2)}, y: ${bbox.y.toFixed(2)}, w: ${bbox.w.toFixed(2)}, h: ${bbox.h.toFixed(2)} }`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: Canvas坐标 = { x: ${x.toFixed(2)}, y: ${y.toFixed(2)}, w: ${w.toFixed(2)}, h: ${h.toFixed(2)} }`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: anchor(世界) = { x: ${anchor.x.toFixed(4)}, y: ${anchor.y.toFixed(4)} }`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: anchor(Canvas) = { x: ${anchorX.toFixed(2)}, y: ${anchorY.toFixed(2)} }`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: center(Canvas) = { x: ${centerX.toFixed(2)}, y: ${centerY.toFixed(2)} }`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: geometry.translate = (${(centerX - anchorX).toFixed(2)}, ${(centerY - anchorY).toFixed(2)})`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: mesh.position = (${anchorX.toFixed(2)}, ${anchorY.toFixed(2)}), rotation.z = ${transform.rotation.toFixed(4)}, scale = (${transform.scale.x.toFixed(2)}, ${transform.scale.y.toFixed(2)})`);
+      console.log(`[RegionMesh] 区域 ${itemIdx}: canvasWidth=${canvasWidth}, canvasHeight=${canvasHeight}, PAINT_SIZE=${PAINT_SIZE}`);
+
+      // 创建几何体（尺寸 = bbox 尺寸）
+      const geometry = new THREE.PlaneGeometry(w, h);
       
       // 将几何体平移到以锚点为原点：centerX - anchorX 表示从锚点到中心的偏移
       // 反向平移即可将锚点移动到局部坐标 (0,0)
