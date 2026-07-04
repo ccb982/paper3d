@@ -340,29 +340,38 @@ export function MainCanvas() {
       const transform = entity.transform;
       const anchor = transform.anchor || { x: 0.5, y: 0.5 };
 
-      // 将世界包围盒映射到画布坐标（Y轴翻转）
+      // 世界包围盒 → 画布坐标（左上角原点，Y向下）
+      // worldBbox.y 是区域顶部的世界坐标（Y向上），转换为画布坐标（Y向下）
       const x = bbox.x * canvasWidth;
-      const y = (1 - bbox.y - bbox.h) * canvasHeight;
+      const y = (1 - bbox.y) * canvasHeight;
       const w = bbox.w * canvasWidth;
       const h = bbox.h * canvasHeight;
 
-      // 锚点（世界坐标）转画布坐标
-      const anchorX = anchor.x * canvasWidth;
-      const anchorY = (1 - anchor.y) * canvasHeight;
+      // 锚点（世界坐标）→ 画布坐标
+      let anchorX = anchor.x * canvasWidth;
+      let anchorY = (1 - anchor.y) * canvasHeight;
 
-      // 应用位置偏移（世界单位 → 像素）
-      const posX = anchorX + transform.position.x * canvasWidth;
-      const posY = anchorY - transform.position.y * canvasHeight;
+      // 边界保护：确保锚点在画布范围内
+      if (anchorX < 0 || anchorX > canvasWidth || anchorY < 0 || anchorY > canvasHeight) {
+        console.warn(`[WebGL 边界保护] 锚点超出画布范围: (${anchorX.toFixed(1)}, ${anchorY.toFixed(1)})`, 
+          `画布尺寸: ${canvasWidth}x${canvasHeight}, 世界锚点: (${anchor.x.toFixed(4)}, ${anchor.y.toFixed(4)})`);
+        anchorX = Math.max(0, Math.min(canvasWidth, anchorX));
+        anchorY = Math.max(0, Math.min(canvasHeight, anchorY));
+      }
+
+      // 位置偏移（世界单位 → 画布像素）
+      const offsetX = transform.position.x * canvasWidth;
+      const offsetY = -transform.position.y * canvasHeight;
 
       // 创建几何体（尺寸 = bbox 尺寸）
       const geometry = new THREE.PlaneGeometry(w, h);
       
-      // 将几何体平移到锚点（使锚点位于几何体中心）
-      geometry.translate(
-        (x + w / 2) - posX,
-        (y + h / 2) - posY,
-        0
-      );
+      // 计算几何体相对于锚点的偏移（包含位置偏移）
+      const centerX = x + w / 2;
+      const centerY = y + h / 2;
+      const localX = (centerX - anchorX) + offsetX;
+      const localY = (centerY - anchorY) + offsetY;
+      geometry.translate(localX, localY, 0);
 
       // 创建材质
       const material = new THREE.MeshBasicMaterial({ 
@@ -373,13 +382,35 @@ export function MainCanvas() {
 
       // Mesh 位置设为锚点，旋转/缩放绕锚点
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(posX, posY, 0);
+      mesh.position.set(anchorX, anchorY, 0);
       
       // 应用旋转和缩放（此时将围绕锚点）
       mesh.rotation.z = transform.rotation;
       mesh.scale.set(transform.scale.x, transform.scale.y, 1);
 
       group.add(mesh);
+
+      // 【调试】输出 WebGL 渲染坐标信息
+      console.log('========== WebGL 区域纹理调试 ==========');
+      console.log(`区域 ID: ${entity.id}, Layer: ${entity.layerId}`);
+      console.log('--- 世界坐标 ---');
+      console.log(`worldBbox: x=${bbox.x.toFixed(4)}, y=${bbox.y.toFixed(4)}, w=${bbox.w.toFixed(4)}, h=${bbox.h.toFixed(4)}`);
+      console.log(`anchor: x=${anchor.x.toFixed(4)}, y=${anchor.y.toFixed(4)}`);
+      console.log(`transform.position: x=${transform.position.x.toFixed(4)}, y=${transform.position.y.toFixed(4)}`);
+      console.log(`transform.rotation: ${transform.rotation.toFixed(4)}`);
+      console.log(`transform.scale: x=${transform.scale.x.toFixed(4)}, y=${transform.scale.y.toFixed(4)}`);
+      console.log('--- 画布坐标（像素） ---');
+      console.log(`纹理位置: x=${x.toFixed(1)}, y=${y.toFixed(1)}, w=${w.toFixed(1)}, h=${h.toFixed(1)}`);
+      console.log(`纹理中心: cx=${centerX.toFixed(1)}, cy=${centerY.toFixed(1)}`);
+      console.log(`锚点: ax=${anchorX.toFixed(1)}, ay=${anchorY.toFixed(1)}`);
+      console.log(`偏移量: offsetX=${offsetX.toFixed(1)}, offsetY=${offsetY.toFixed(1)}`);
+      console.log('--- 几何体与 Mesh ---');
+      console.log(`几何体平移: localX=${localX.toFixed(1)}, localY=${localY.toFixed(1)}`);
+      console.log(`Mesh 位置: position.x=${anchorX.toFixed(1)}, position.y=${anchorY.toFixed(1)}`);
+      console.log(`Mesh 旋转: rotation.z=${transform.rotation.toFixed(4)}`);
+      console.log(`Mesh 缩放: scale.x=${transform.scale.x.toFixed(4)}, scale.y=${transform.scale.y.toFixed(4)}`);
+      console.log(`纹理尺寸: ${texture.image.width}x${texture.image.height}`);
+      console.log('========================================');
     }
     
     // 设置可见性
@@ -1898,6 +1929,31 @@ export function MainCanvas() {
         // 如果启用了蒙版特效且区域色块图层可见，跳过（边框在 regionLayer 中绘制）
         if (anno.maskEffect?.enabled && layerVisibility.regionLayer) return;
         
+        // 【调试】输出 2D Canvas 绘制坐标信息
+        const outerRing = anno.polygon[0];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of outerRing) {
+          if (p.x < minX) minX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y > maxY) maxY = p.y;
+        }
+        const worldCenterX = (minX + maxX) / 2;
+        const worldCenterY = (minY + maxY) / 2;
+        const canvasMin = worldToCanvasFn(minX, minY);
+        const canvasMax = worldToCanvasFn(maxX, maxY);
+        const canvasCenter = worldToCanvasFn(worldCenterX, worldCenterY);
+        
+        console.log('========== 2D Canvas 区域实线调试 ==========');
+        console.log(`注释 ID: ${anno.id}, Layer: ${anno.layerId}`);
+        console.log(`世界坐标范围: min(${minX.toFixed(4)}, ${minY.toFixed(4)}) - max(${maxX.toFixed(4)}, ${maxY.toFixed(4)})`);
+        console.log(`世界中心: (${worldCenterX.toFixed(4)}, ${worldCenterY.toFixed(4)})`);
+        console.log(`画布坐标范围: min(${canvasMin.x.toFixed(1)}, ${canvasMin.y.toFixed(1)}) - max(${canvasMax.x.toFixed(1)}, ${canvasMax.y.toFixed(1)})`);
+        console.log(`画布中心: (${canvasCenter.x.toFixed(1)}, ${canvasCenter.y.toFixed(1)})`);
+        console.log(`边框点数: ${outerRing.length}`);
+        console.log(`蒙版特效: ${anno.maskEffect?.enabled ? '启用' : '禁用'}`);
+        console.log('============================================');
+        
         ctx.save();
         const color = anno.color || '#1890ff';
         ctx.fillStyle = color.replace(/rgb\(|#/, '').length === 6 
@@ -1923,13 +1979,12 @@ export function MainCanvas() {
         }
         
         // 计算标签位置
-        const outerRing = anno.polygon[0];
-        let minX = Infinity, minY = Infinity;
+        let labelMinX = Infinity, labelMinY = Infinity;
         for (const p of outerRing) {
-          if (p.x < minX) minX = p.x;
-          if (p.y < minY) minY = p.y;
+          if (p.x < labelMinX) labelMinX = p.x;
+          if (p.y < labelMinY) labelMinY = p.y;
         }
-        const labelPos = worldToCanvasFn(minX, minY);
+        const labelPos = worldToCanvasFn(labelMinX, labelMinY);
         ctx.fillStyle = color;
         ctx.font = '12px sans-serif';
         ctx.shadowBlur = 0;

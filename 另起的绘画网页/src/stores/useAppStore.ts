@@ -1208,20 +1208,42 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (anno?.maskEffect) {
         // 恢复边框扭曲参数
         entity.maskEffect = anno.maskEffect;
-        // 恢复纹理变换参数
+        
+        // 恢复纹理变换参数（带校验）
         if (anno.maskEffect.transform) {
-          entity.transform = {
-            ...entity.transform,
-            ...anno.maskEffect.transform,
-          };
+          const savedTransform = anno.maskEffect.transform;
+          
+          // 校验并恢复锚点（只有在有效范围内才使用）
+          const savedAnchor = savedTransform.anchor;
+          if (savedAnchor && savedAnchor.x >= 0 && savedAnchor.x <= 1 && savedAnchor.y >= 0 && savedAnchor.y <= 1) {
+            entity.transform.anchor = { x: savedAnchor.x, y: savedAnchor.y };
+          }
+          
+          // 校验并恢复位置（钳制到合理范围）
+          if (savedTransform.position) {
+            entity.transform.position = {
+              x: Math.max(-0.5, Math.min(0.5, savedTransform.position.x)),
+              y: Math.max(-0.5, Math.min(0.5, savedTransform.position.y)),
+            };
+          }
+          
+          // 恢复旋转和缩放（无需校验）
+          if (typeof savedTransform.rotation === 'number') {
+            entity.transform.rotation = savedTransform.rotation;
+          }
+          if (savedTransform.scale) {
+            entity.transform.scale = { ...savedTransform.scale };
+          }
         }
       }
 
       // 计算默认锚点（区域中心世界坐标）
       const bbox = entity.bbox;
       if (bbox && !entity.transform.anchor) {
-        const cx = (bbox.x + bbox.w / 2) / PAINT_SIZE;
-        const cy = 1 - (bbox.y + bbox.h / 2) / PAINT_SIZE;
+        // bbox 已经是世界坐标（0~1），直接计算中心
+        // bbox.y 是区域顶部，减去高度的一半得到中心
+        const cx = bbox.x + bbox.w / 2;
+        const cy = bbox.y - bbox.h / 2;
         entity.transform.anchor = { x: cx, y: cy };
       }
 

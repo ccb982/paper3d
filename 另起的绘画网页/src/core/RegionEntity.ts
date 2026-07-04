@@ -54,7 +54,7 @@ export class RegionEntity {
 
     this.worldBbox = {
       x: pixelBbox.x / 512,
-      y: 1 - (pixelBbox.y + pixelBbox.h) / 512,
+      y: 1 - pixelBbox.y / 512,
       w: pixelBbox.w / 512,
       h: pixelBbox.h / 512,
     };
@@ -259,7 +259,7 @@ export class RegionEntity {
       const pb = data.ftxData.bbox;
       this.worldBbox = {
         x: pb.x / 512,
-        y: 1 - (pb.y + pb.h) / 512,
+        y: 1 - pb.y / 512,
         w: pb.w / 512,
         h: pb.h / 512,
       };
