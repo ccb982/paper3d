@@ -327,7 +327,6 @@ export function MainCanvas() {
 
     // 获取区域实体列表（【重构】直接使用 RegionEntity）
     const entities = regionEntities[activeLayerId] || [];
-    const PAINT_SIZE = 512;
     
     for (let entityIdx = 0; entityIdx < entities.length; entityIdx++) {
       const entity = entities[entityIdx];
@@ -341,24 +340,24 @@ export function MainCanvas() {
       const transform = entity.transform;
       const anchor = transform.anchor || { x: 0.5, y: 0.5 };
 
-      // Canvas 坐标（y向下）
-      const x = (bbox.x / PAINT_SIZE) * canvasWidth;
-      const y = (bbox.y / PAINT_SIZE) * canvasHeight;
-      const w = (bbox.w / PAINT_SIZE) * canvasWidth;
-      const h = (bbox.h / PAINT_SIZE) * canvasHeight;
+      // 将世界包围盒映射到画布坐标（Y轴翻转）
+      const x = bbox.x * canvasWidth;
+      const y = (1 - bbox.y - bbox.h) * canvasHeight;
+      const w = bbox.w * canvasWidth;
+      const h = bbox.h * canvasHeight;
 
-      // 锚点（世界 0~1）转 Canvas 坐标
+      // 锚点（世界坐标）转画布坐标
       const anchorX = anchor.x * canvasWidth;
       const anchorY = (1 - anchor.y) * canvasHeight;
 
-      // 应用 position 偏移
+      // 应用位置偏移（世界单位 → 像素）
       const posX = anchorX + transform.position.x * canvasWidth;
       const posY = anchorY - transform.position.y * canvasHeight;
 
       // 创建几何体（尺寸 = bbox 尺寸）
       const geometry = new THREE.PlaneGeometry(w, h);
       
-      // 将几何体平移到以锚点为原点（包含 position 偏移后的位置）
+      // 将几何体平移到锚点（使锚点位于几何体中心）
       geometry.translate(
         (x + w / 2) - posX,
         (y + h / 2) - posY,
@@ -372,7 +371,7 @@ export function MainCanvas() {
         depthWrite: false 
       });
 
-      // Mesh 位置设为包含 position 偏移的锚点坐标
+      // Mesh 位置设为锚点，旋转/缩放绕锚点
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(posX, posY, 0);
       

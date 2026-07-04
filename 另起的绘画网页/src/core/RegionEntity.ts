@@ -25,6 +25,7 @@ export class RegionEntity {
   public readonly boundary: Point[][];
 
   private _ftxData: FtxTextureData | null = null;
+  public worldBbox: { x: number; y: number; w: number; h: number } | null = null;
 
   public transform = {
     position: { x: 0, y: 0 },
@@ -49,9 +50,17 @@ export class RegionEntity {
     hueThreshold: number = 0.05,
     textureSize: number = 128
   ): void {
-    const bbox = computeBBoxAllRings(this.boundary);
-    const mask = rasterizeRegionMaskLocal(this.boundary, bbox);
-    const { w, h } = bbox;
+    const pixelBbox = computeBBoxAllRings(this.boundary);
+
+    this.worldBbox = {
+      x: pixelBbox.x / 512,
+      y: 1 - (pixelBbox.y + pixelBbox.h) / 512,
+      w: pixelBbox.w / 512,
+      h: pixelBbox.h / 512,
+    };
+
+    const mask = rasterizeRegionMaskLocal(this.boundary, pixelBbox);
+    const { w, h } = pixelBbox;
 
     const smallComposited = document.createElement('canvas');
     smallComposited.width = 512;
@@ -61,7 +70,7 @@ export class RegionEntity {
 
     const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
       mask,
-      bbox,
+      pixelBbox,
       ctx.getImageData(0, 0, 512, 512),
       hueThreshold,
       512
@@ -94,7 +103,7 @@ export class RegionEntity {
       deltaTexture: resampledDelta,
       regionIdTexture: resampledRegionId || undefined,
       textureSize,
-      bbox,
+      bbox: pixelBbox,
     };
 
     this._textureVersion++;
@@ -178,14 +187,20 @@ export class RegionEntity {
   }
 
   public exportFtxBinary(): Uint8Array | null {
-    if (!this._ftxData) return null;
+    if (!this._ftxData || !this.worldBbox) return null;
+    const bboxPixels = {
+      x: Math.round(this.worldBbox.x * 512),
+      y: Math.round((1 - this.worldBbox.y - this.worldBbox.h) * 512),
+      w: Math.round(this.worldBbox.w * 512),
+      h: Math.round(this.worldBbox.h * 512),
+    };
     const result: CompressionResultV2 = {
       version: 2,
       resolution: [512, 512],
       regionCount: 1,
       regions: [{
         id: this.id,
-        bbox: this._ftxData.bbox,
+        bbox: bboxPixels,
         baseColors: this._ftxData.baseColors,
         regionIdTexture: this._ftxData.regionIdTexture
           ? uint8ToBase64(this._ftxData.regionIdTexture)
@@ -205,6 +220,7 @@ export class RegionEntity {
       boundary: this.boundary,
       transform: this.transform,
       maskEffect: this.maskEffect,
+      worldBbox: this.worldBbox,
       ftxData: this._ftxData ? {
         version: this._ftxData.version,
         baseColors: this._ftxData.baseColors,
@@ -237,6 +253,17 @@ export class RegionEntity {
     if (data.maskEffect) {
       this.maskEffect = data.maskEffect;
     }
+    if (data.worldBbox) {
+      this.worldBbox = data.worldBbox;
+    } else if (data.ftxData?.bbox) {
+      const pb = data.ftxData.bbox;
+      this.worldBbox = {
+        x: pb.x / 512,
+        y: 1 - (pb.y + pb.h) / 512,
+        w: pb.w / 512,
+        h: pb.h / 512,
+      };
+    }
     if (data.ftxData) {
       this._ftxData = {
         version: data.ftxData.version,
@@ -253,6 +280,6 @@ export class RegionEntity {
   }
 
   public get bbox(): { x: number; y: number; w: number; h: number } | null {
-    return this._ftxData?.bbox || null;
+    return this.worldBbox;
   }
 }
