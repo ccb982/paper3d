@@ -50,11 +50,13 @@ export class RegionEntity {
     hueThreshold: number = 0.05,
     textureSize: number = 128
   ): void {
+    console.log(`[RegionEntity] 区域 ${this.id} - 开始纹理提取...`);
+    
     const pixelBbox = computeBBoxAllRings(this.boundary);
 
     this.worldBbox = {
       x: pixelBbox.x / 512,
-      y: 1 - pixelBbox.y / 512,
+      y: pixelBbox.y / 512,
       w: pixelBbox.w / 512,
       h: pixelBbox.h / 512,
     };
@@ -75,6 +77,8 @@ export class RegionEntity {
       hueThreshold,
       512
     );
+
+    console.log(`[RegionEntity] 区域 ${this.id} - 颜色聚类完成: ${baseColors.length} 个基础色, 残差纹理大小: ${deltaTex.length}`);
 
     const resampledDelta = new Uint8Array(textureSize * textureSize * 3);
     const resampledRegionId = regionIdTex ? new Uint8Array(textureSize * textureSize) : null;
@@ -106,6 +110,8 @@ export class RegionEntity {
       bbox: pixelBbox,
     };
 
+    console.log(`[RegionEntity] 区域 ${this.id} - FTX编码完成: 纹理尺寸 ${textureSize}x${textureSize}, 数据量 ${resampledDelta.length} 字节`);
+
     this._textureVersion++;
   }
 
@@ -113,9 +119,12 @@ export class RegionEntity {
     if (!this._ftxData) return null;
 
     if (this._gpuTexture && this._textureVersion === this._cachedVersion) {
+      console.log(`[RegionEntity] 区域 ${this.id} - 使用缓存的GPU纹理`);
       return this._gpuTexture;
     }
 
+    console.log(`[RegionEntity] 区域 ${this.id} - 开始解压FTX数据生成GPU纹理...`);
+    
     const { baseColors, deltaTexture, regionIdTexture, textureSize, bbox } = this._ftxData;
     const pixelData = this._decompressToRGBA(baseColors, deltaTexture, regionIdTexture, textureSize, bbox);
 
@@ -259,7 +268,7 @@ export class RegionEntity {
       const pb = data.ftxData.bbox;
       this.worldBbox = {
         x: pb.x / 512,
-        y: 1 - pb.y / 512,
+        y: pb.y / 512,
         w: pb.w / 512,
         h: pb.h / 512,
       };

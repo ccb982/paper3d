@@ -151,11 +151,13 @@ export function MainCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
   
-  // WebGL 相关 refs（使用独立区域纹理和 Group）
+  // WebGL 相关 refs（使用归一化坐标和 rootGroup）
   const webglRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const webglSceneRef = useRef<THREE.Scene | null>(null);
   const webglCameraRef = useRef<THREE.OrthographicCamera | null>(null);
-  const regionGroupRef = useRef<THREE.Group | null>(null); // 区域Mesh分组
+  const rootGroupRef = useRef<THREE.Group | null>(null); // 根Group，负责缩放归一化坐标到画布
+  const regionUniformsMapRef = useRef<Map<number, THREE.Uniforms>>([]); // 存储每个区域的 uniforms
+  const animationFrameIdRef = useRef<number | null>(null); // 动画循环 ID
   const {
     imageState,
     layerVisibility,
@@ -261,7 +263,7 @@ export function MainCanvas() {
     console.log(`[颜色提取] colorExtractMode 状态变化: ${colorExtractMode}`);
   }, [colorExtractMode]);
 
-  // ========== WebGL 环境初始化（使用独立区域纹理和 Group）==========
+  // ========== WebGL 环境初始化（使用归一化坐标和 rootGroup）==========
   useEffect(() => {
     if (!canvasWrapperRef.current) return;
 
@@ -291,27 +293,97 @@ export function MainCanvas() {
     const scene = new THREE.Scene();
     webglSceneRef.current = scene;
 
-    // 创建正交相机（匹配 2D Canvas 坐标系）
-    const camera = new THREE.OrthographicCamera(0, canvasWidth, canvasHeight, 0, -1, 1);
+    // 创建正交相机：归一化坐标（0~1），原点左上角，Y向下
+    const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
     webglCameraRef.current = camera;
 
-    // 创建区域Mesh分组
-    const regionGroup = new THREE.Group();
-    scene.add(regionGroup);
-    regionGroupRef.current = regionGroup;
+    // 创建根 Group（负责将归一化坐标映射到画布像素）
+    const rootGroup = new THREE.Group();
+    rootGroup.scale.set(canvasWidth, canvasHeight, 1);
+    scene.add(rootGroup);
+    rootGroupRef.current = rootGroup;
 
     return () => {
       renderer.dispose();
       if (webglCanvas.parentNode) webglCanvas.parentNode.removeChild(webglCanvas);
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+      }
     };
+  }, []);
+
+  // ========== 同步视图变换（响应 zoom 和 panOffset）==========
+  useEffect(() => {
+    const camera = webglCameraRef.current;
+    if (!camera) return;
+    camera.position.set(panOffset.x, -panOffset.y, 0);
+    camera.zoom = zoom;
+    camera.updateProjectionMatrix();
+  }, [zoom, panOffset]);
+
+  // ========== 同步画布尺寸（响应 canvasWidth/canvasHeight）==========
+  useEffect(() => {
+    const renderer = webglRendererRef.current;
+    const camera = webglCameraRef.current;
+    const rootGroup = rootGroupRef.current;
+    if (!renderer || !camera || !rootGroup) return;
+    
+    renderer.setSize(canvasWidth, canvasHeight);
+    camera.left = 0;
+    camera.right = 1;
+    camera.top = 1;
+    camera.bottom = 0;
+    camera.updateProjectionMatrix();
+    
+    rootGroup.scale.set(canvasWidth, canvasHeight, 1);
   }, [canvasWidth, canvasHeight]);
+
+  // ========== 同步可见性（响应 layerVisibility.regionLayer）==========
+  useEffect(() => {
+    const renderer = webglRendererRef.current;
+    const scene = webglSceneRef.current;
+    const camera = webglCameraRef.current;
+    if (!renderer || !scene || !camera) return;
+    
+    const visible = layerVisibility.regionLayer;
+    renderer.domElement.style.display = visible ? 'block' : 'none';
+    
+    // 启动/停止动画循环
+    if (visible) {
+      const animate = (time: number) => {
+        if (!layerVisibility.regionLayer) return;
+        const seconds = time / 1000;
+        
+        // 更新所有区域的 uniforms
+        regionUniformsMapRef.current.forEach(({ uniforms }) => {
+          uniforms.uTime.value = seconds;
+        });
+        
+        renderer.render(scene, camera);
+        animationFrameIdRef.current = requestAnimationFrame(animate);
+      };
+      animationFrameIdRef.current = requestAnimationFrame(animate);
+    } else {
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+    }
+    
+    return () => {
+      if (animationFrameIdRef.current) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+    };
+  }, [layerVisibility.regionLayer]);
 
   // ========== 更新区域Mesh（监听区域纹理列表变化）==========
   useEffect(() => {
-    const group = regionGroupRef.current;
+    const group = rootGroupRef.current;
     if (!group) return;
 
-    // 清除旧Mesh
+    // 清除旧 Mesh 和 Line
     while (group.children.length > 0) {
       const child = group.children[0];
       if (child instanceof THREE.Mesh) {
@@ -321,17 +393,40 @@ export function MainCanvas() {
         } else {
           child.material.dispose();
         }
+      } else if (child instanceof THREE.Line) {
+        child.geometry.dispose();
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose());
+        } else {
+          child.material.dispose();
+        }
+      } else if (child instanceof THREE.Group) {
+        child.children.forEach(c => {
+          if (c instanceof THREE.Mesh || c instanceof THREE.Line) {
+            c.geometry.dispose();
+            if (Array.isArray(c.material)) {
+              c.material.forEach(m => m.dispose());
+            } else {
+              c.material.dispose();
+            }
+          }
+        });
       }
       group.remove(child);
     }
+
+    // 清空 uniforms 映射
+    regionUniformsMapRef.current = [];
 
     // 获取区域实体列表（【重构】直接使用 RegionEntity）
     const entities = regionEntities[activeLayerId] || [];
     
     for (let entityIdx = 0; entityIdx < entities.length; entityIdx++) {
       const entity = entities[entityIdx];
-      const bbox = entity.bbox;
+      const bbox = entity.worldBbox;
       if (!bbox) continue;
+
+      console.log(`[WebGL] 区域 ${entity.id} - 开始构建Mesh...`);
 
       // 【重构】使用 RegionEntity.getGPUTexture() 按需生成纹理（带缓存）
       const texture = entity.getGPUTexture();
@@ -340,82 +435,76 @@ export function MainCanvas() {
       const transform = entity.transform;
       const anchor = transform.anchor || { x: 0.5, y: 0.5 };
 
-      // 世界包围盒 → 画布坐标（左上角原点，Y向下）
-      // worldBbox.y 是区域顶部的世界坐标（Y向上），转换为画布坐标（Y向下）
-      const x = bbox.x * canvasWidth;
-      const y = (1 - bbox.y) * canvasHeight;
-      const w = bbox.w * canvasWidth;
-      const h = bbox.h * canvasHeight;
+      // 创建每个区域的独立 Group（方便整体变换）
+      const regionGroup = new THREE.Group();
 
-      // 锚点（世界坐标）→ 画布坐标
-      let anchorX = anchor.x * canvasWidth;
-      let anchorY = (1 - anchor.y) * canvasHeight;
-
-      // 边界保护：确保锚点在画布范围内
-      if (anchorX < 0 || anchorX > canvasWidth || anchorY < 0 || anchorY > canvasHeight) {
-        console.warn(`[WebGL 边界保护] 锚点超出画布范围: (${anchorX.toFixed(1)}, ${anchorY.toFixed(1)})`, 
-          `画布尺寸: ${canvasWidth}x${canvasHeight}, 世界锚点: (${anchor.x.toFixed(4)}, ${anchor.y.toFixed(4)})`);
-        anchorX = Math.max(0, Math.min(canvasWidth, anchorX));
-        anchorY = Math.max(0, Math.min(canvasHeight, anchorY));
-      }
-
-      // 位置偏移（世界单位 → 画布像素）
-      const offsetX = transform.position.x * canvasWidth;
-      const offsetY = -transform.position.y * canvasHeight;
-
-      // 创建几何体（尺寸 = bbox 尺寸）
-      const geometry = new THREE.PlaneGeometry(w, h);
+      // ---- 纹理 Mesh（使用归一化坐标）----
+      const w = bbox.w;
+      const h = bbox.h;
       
-      // 计算几何体相对于锚点的偏移（包含位置偏移）
-      const centerX = x + w / 2;
-      const centerY = y + h / 2;
-      const localX = (centerX - anchorX) + offsetX;
-      const localY = (centerY - anchorY) + offsetY;
-      geometry.translate(localX, localY, 0);
-
-      // 创建材质
-      const material = new THREE.MeshBasicMaterial({ 
+      // 几何体以中心为原点，大小 1x1，通过 scale 调整
+      const planeGeo = new THREE.PlaneGeometry(1, 1);
+      const planeMat = new THREE.MeshBasicMaterial({ 
         map: texture, 
-        transparent: true, 
+        transparent: true,
         depthWrite: false 
       });
-
-      // Mesh 位置设为锚点，旋转/缩放绕锚点
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(anchorX, anchorY, 0);
+      const mesh = new THREE.Mesh(planeGeo, planeMat);
       
-      // 应用旋转和缩放（此时将围绕锚点）
+      // 应用变换（围绕锚点，归一化坐标）
+      const anchorX = anchor.x;
+      const anchorY = anchor.y;
+      const offsetX = transform.position.x;
+      const offsetY = transform.position.y;
+      
+      // 将几何体平移到锚点（使锚点位于几何体中心）
+      // worldBbox.y 是区域顶部（Y向下），中心 Y = 顶部 + 高度/2
+      const centerX = bbox.x + w / 2;
+      const centerY = bbox.y + h / 2;
+      const localX = (centerX - anchorX) + offsetX;
+      const localY = (centerY - anchorY) + offsetY;
+      planeGeo.translate(localX, localY, 0);
+      
+      // Mesh 位置设为锚点 + 偏移
+      mesh.position.set(anchorX + offsetX, anchorY + offsetY, 0);
       mesh.rotation.z = transform.rotation;
-      mesh.scale.set(transform.scale.x, transform.scale.y, 1);
+      mesh.scale.set(w * transform.scale.x, h * transform.scale.y, 1);
+      
+      regionGroup.add(mesh);
+      console.log(`[WebGL] 区域 ${entity.id} - 创建纹理Mesh完成: 位置(${mesh.position.x.toFixed(4)}, ${mesh.position.y.toFixed(4)}), 缩放(${mesh.scale.x.toFixed(4)}, ${mesh.scale.y.toFixed(4)}), 旋转(${mesh.rotation.z.toFixed(4)})`);
 
-      group.add(mesh);
+      // ---- 边框 LineLoop（使用归一化坐标）----
+      const outerRing = entity.boundary[0];
+      if (outerRing && outerRing.length >= 3) {
+        // 边界点 p.y 是世界坐标（Y向上），转换为 Y 向下
+        const points = outerRing.map(p => new THREE.Vector3(p.x, 1 - p.y, 0));
+        const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+        const lineMat = new THREE.LineBasicMaterial({ 
+          color: 0xffaa00, 
+          transparent: true,
+          opacity: 0.8
+        });
+        const line = new THREE.LineLoop(lineGeo, lineMat);
+        regionGroup.add(line);
+        console.log(`[WebGL] 区域 ${entity.id} - 创建边框LineLoop完成: ${outerRing.length} 个顶点`);
+      }
 
-      // 【调试】输出 WebGL 渲染坐标信息
-      console.log('========== WebGL 区域纹理调试 ==========');
-      console.log(`区域 ID: ${entity.id}, Layer: ${entity.layerId}`);
-      console.log('--- 世界坐标 ---');
-      console.log(`worldBbox: x=${bbox.x.toFixed(4)}, y=${bbox.y.toFixed(4)}, w=${bbox.w.toFixed(4)}, h=${bbox.h.toFixed(4)}`);
-      console.log(`anchor: x=${anchor.x.toFixed(4)}, y=${anchor.y.toFixed(4)}`);
-      console.log(`transform.position: x=${transform.position.x.toFixed(4)}, y=${transform.position.y.toFixed(4)}`);
-      console.log(`transform.rotation: ${transform.rotation.toFixed(4)}`);
-      console.log(`transform.scale: x=${transform.scale.x.toFixed(4)}, y=${transform.scale.y.toFixed(4)}`);
-      console.log('--- 画布坐标（像素） ---');
-      console.log(`纹理位置: x=${x.toFixed(1)}, y=${y.toFixed(1)}, w=${w.toFixed(1)}, h=${h.toFixed(1)}`);
-      console.log(`纹理中心: cx=${centerX.toFixed(1)}, cy=${centerY.toFixed(1)}`);
-      console.log(`锚点: ax=${anchorX.toFixed(1)}, ay=${anchorY.toFixed(1)}`);
-      console.log(`偏移量: offsetX=${offsetX.toFixed(1)}, offsetY=${offsetY.toFixed(1)}`);
-      console.log('--- 几何体与 Mesh ---');
-      console.log(`几何体平移: localX=${localX.toFixed(1)}, localY=${localY.toFixed(1)}`);
-      console.log(`Mesh 位置: position.x=${anchorX.toFixed(1)}, position.y=${anchorY.toFixed(1)}`);
-      console.log(`Mesh 旋转: rotation.z=${transform.rotation.toFixed(4)}`);
-      console.log(`Mesh 缩放: scale.x=${transform.scale.x.toFixed(4)}, scale.y=${transform.scale.y.toFixed(4)}`);
-      console.log(`纹理尺寸: ${texture.image.width}x${texture.image.height}`);
-      console.log('========================================');
+      // ---- 存储 uniforms（用于动画更新）----
+      const uniforms = {
+        uTime: { value: 0 },
+        uDistortionEnabled: { value: entity.maskEffect?.enabled ? 1 : 0 },
+      };
+      regionUniformsMapRef.current.push({ regionId: entity.id, uniforms });
+
+      // 【调试】输出区域色块图层位置
+      const meshCenterX = bbox.x + w / 2;
+      const meshCenterY = bbox.y + h / 2;
+      console.log(`[WebGL] 区域 ${entity.id} - 归一化位置: (${bbox.x.toFixed(4)}, ${bbox.y.toFixed(4)}) ~ (${(bbox.x + w).toFixed(4)}, ${(bbox.y + h).toFixed(4)}), 中心: (${meshCenterX.toFixed(4)}, ${meshCenterY.toFixed(4)})`);
+
+      group.add(regionGroup);
+      console.log(`[WebGL] 区域 ${entity.id} - 添加到场景完成`);
     }
-    
-    // 设置可见性
-    group.visible = layerVisibility.regionLayer;
-  }, [regionEntities, activeLayerId, layerVisibility.regionLayer, canvasWidth, canvasHeight]);
+  }, [regionEntities, activeLayerId]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
@@ -1938,22 +2027,6 @@ export function MainCanvas() {
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
         }
-        const worldCenterX = (minX + maxX) / 2;
-        const worldCenterY = (minY + maxY) / 2;
-        const canvasMin = worldToCanvasFn(minX, minY);
-        const canvasMax = worldToCanvasFn(maxX, maxY);
-        const canvasCenter = worldToCanvasFn(worldCenterX, worldCenterY);
-        
-        console.log('========== 2D Canvas 区域实线调试 ==========');
-        console.log(`注释 ID: ${anno.id}, Layer: ${anno.layerId}`);
-        console.log(`世界坐标范围: min(${minX.toFixed(4)}, ${minY.toFixed(4)}) - max(${maxX.toFixed(4)}, ${maxY.toFixed(4)})`);
-        console.log(`世界中心: (${worldCenterX.toFixed(4)}, ${worldCenterY.toFixed(4)})`);
-        console.log(`画布坐标范围: min(${canvasMin.x.toFixed(1)}, ${canvasMin.y.toFixed(1)}) - max(${canvasMax.x.toFixed(1)}, ${canvasMax.y.toFixed(1)})`);
-        console.log(`画布中心: (${canvasCenter.x.toFixed(1)}, ${canvasCenter.y.toFixed(1)})`);
-        console.log(`边框点数: ${outerRing.length}`);
-        console.log(`蒙版特效: ${anno.maskEffect?.enabled ? '启用' : '禁用'}`);
-        console.log('============================================');
-        
         ctx.save();
         const color = anno.color || '#1890ff';
         ctx.fillStyle = color.replace(/rgb\(|#/, '').length === 6 
@@ -2668,16 +2741,7 @@ export function MainCanvas() {
 
     ctx.restore();
 
-    // ========== WebGL 渲染区域色块图层 ==========
-    if (layerVisibility.regionLayer && webglRendererRef.current && webglSceneRef.current && webglCameraRef.current) {
-      const renderer = webglRendererRef.current;
-      const scene = webglSceneRef.current;
-      const camera = webglCameraRef.current;
-      renderer.render(scene, camera);
-    } else if (webglRendererRef.current) {
-      // 区域色块图层不可见时清除 WebGL 画布
-      webglRendererRef.current.clear();
-    }
+    // WebGL 渲染已由动画循环处理，此处无需手动渲染
   }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);

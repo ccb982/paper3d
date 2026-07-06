@@ -1241,9 +1241,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const bbox = entity.bbox;
       if (bbox && !entity.transform.anchor) {
         // bbox 已经是世界坐标（0~1），直接计算中心
-        // bbox.y 是区域顶部，减去高度的一半得到中心
+        // bbox.y 是区域顶部（Y向下），中心 Y = 顶部 + 高度/2
         const cx = bbox.x + bbox.w / 2;
-        const cy = bbox.y - bbox.h / 2;
+        const cy = bbox.y + bbox.h / 2;
         entity.transform.anchor = { x: cx, y: cy };
       }
 
@@ -1254,7 +1254,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       regionEntities: { ...s.regionEntities, [layerId]: entities },
     }));
 
-    console.log(`[refreshRegionEntities] 图层 ${layerId} 构建 ${entities.length} 个区域实体`);
+    
   },
 
   // 【重构】释放区域实体资源
