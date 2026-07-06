@@ -335,6 +335,10 @@ export function MainCanvas() {
     if (!renderer || !camera) return;
     
     renderer.setSize(canvasWidth, canvasHeight);
+    // 更新 WebGL canvas 的 CSS 尺寸（保持居中对齐）
+    renderer.domElement.style.width = `${canvasWidth}px`;
+    renderer.domElement.style.height = `${canvasHeight}px`;
+    
     // 相机使用画布像素坐标，Y向下（与 Canvas 一致）
     camera.left = 0;
     camera.right = canvasWidth;
@@ -443,7 +447,11 @@ export function MainCanvas() {
 
       // 使用 RegionEntity.getGPUTexture() 按需生成纹理
       const texture = entity.getGPUTexture();
-      if (!texture) continue;
+      console.log(`[WebGL] 区域 ${entity.id} - 获取纹理: ${texture ? `宽${texture.image.width}x高${texture.image.height}` : 'null'}`);
+      if (!texture) {
+        console.log(`[WebGL] 区域 ${entity.id} - 纹理为空，跳过创建Mesh`);
+        continue;
+      }
 
       // 确保纹理 Y 轴方向正确（Canvas 数据 Y=0 在顶部，Three.js 默认 Y=0 在底部）
       texture.flipY = true;
@@ -455,20 +463,26 @@ export function MainCanvas() {
       const w = bbox.w;
       const h = bbox.h;
       
-      // 计算画布坐标（与 worldToCanvasFn 一致，不含 zoom/pan）
+      // 计算画布坐标（与 worldToCanvasFn 一致）
+      // worldToCanvas: px = worldX * canvasWidth, py = (1 - worldY) * canvasHeight
+      // worldBbox 使用世界坐标（Y向上）：y 是最小Y（最下面），y+h 是最大Y（最上面）
       const canvasLeft = bbox.x * canvasWidth;
-      const canvasTop = (1 - bbox.y - h) * canvasHeight;  // 区域顶部（Y向下）
-      const canvasW = w * canvasWidth;
-      const canvasH = h * canvasHeight;
-      const canvasCenterX = canvasLeft + canvasW / 2;
-      const canvasCenterY = canvasTop + canvasH / 2;
+      const canvasTop = (1 - (bbox.y + bbox.h)) * canvasHeight;  // 区域顶部（Y向下，画布坐标）
+      const canvasW = bbox.w * canvasWidth;
+      const canvasH = bbox.h * canvasHeight;
+      const canvasCenterX = (bbox.x + bbox.w / 2) * canvasWidth;
+      const canvasCenterY = (1 - (bbox.y + bbox.h / 2)) * canvasHeight;
       
       // 几何体以中心为原点，大小 1x1，通过 scale 调整
       const planeGeo = new THREE.PlaneGeometry(1, 1);
+      
+      // 使用 FTX 解码后的纹理
       const planeMat = new THREE.MeshBasicMaterial({ 
-        map: texture, 
-        transparent: true,
-        depthWrite: false 
+        map: texture,
+        transparent: true,        // 纹理有透明像素
+        depthWrite: true,         // 允许深度写入
+        side: THREE.DoubleSide,   // 双面渲染
+        alphaTest: 0.5,           // 透明度测试，只渲染不透明部分
       });
       const mesh = new THREE.Mesh(planeGeo, planeMat);
       mesh.position.set(canvasCenterX, canvasCenterY, 0);
@@ -476,26 +490,6 @@ export function MainCanvas() {
       
       regionGroup.add(mesh);
       console.log(`[WebGL] 区域 ${entity.id} - Mesh画布坐标: 左上(${canvasLeft.toFixed(1)}, ${canvasTop.toFixed(1)}), 尺寸(${canvasW.toFixed(1)}, ${canvasH.toFixed(1)}), 中心(${canvasCenterX.toFixed(1)}, ${canvasCenterY.toFixed(1)})`);
-
-      // ---- 边框 LineLoop（使用画布坐标）----
-      const outerRing = entity.boundary[0];
-      if (outerRing && outerRing.length >= 3) {
-        // 将世界坐标转换为画布坐标（与 worldToCanvasFn 一致）
-        const points = outerRing.map(p => {
-          const cx = p.x * canvasWidth;
-          const cy = (1 - p.y) * canvasHeight;
-          return new THREE.Vector3(cx, cy, 0);
-        });
-        const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
-        const lineMat = new THREE.LineBasicMaterial({ 
-          color: 0xffaa00, 
-          transparent: true,
-          opacity: 0.8
-        });
-        const line = new THREE.LineLoop(lineGeo, lineMat);
-        regionGroup.add(line);
-        console.log(`[WebGL] 区域 ${entity.id} - 创建边框LineLoop完成: ${outerRing.length} 个顶点`);
-      }
 
       // ---- 存储 uniforms ----
       const uniforms = {
@@ -2100,48 +2094,6 @@ export function MainCanvas() {
         }
         ctx.closePath();
         ctx.stroke();
-        ctx.restore();
-      });
-    }
-
-    // ========== 调试：绘制 worldBbox 包围盒（红色，用于对比）==========
-    if (layerVisibility.regionLayer) {
-      const regionEntitiesForLayer = regionEntities[activeLayerId] || [];
-      regionEntitiesForLayer.forEach(entity => {
-        const bbox = entity.worldBbox;
-        if (!bbox) return;
-        
-        ctx.save();
-        ctx.strokeStyle = '#ff0000';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
-        
-        // 使用 worldToCanvasFn 将世界坐标转换为画布坐标（与虚线绘制一致）
-        const tl = worldToCanvasFn(bbox.x, bbox.y + bbox.h);
-        const tr = worldToCanvasFn(bbox.x + bbox.w, bbox.y + bbox.h);
-        const br = worldToCanvasFn(bbox.x + bbox.w, bbox.y);
-        const bl = worldToCanvasFn(bbox.x, bbox.y);
-        
-        ctx.beginPath();
-        ctx.moveTo(tl.x, tl.y);
-        ctx.lineTo(tr.x, tr.y);
-        ctx.lineTo(br.x, br.y);
-        ctx.lineTo(bl.x, bl.y);
-        ctx.closePath();
-        ctx.stroke();
-        
-        // 绘制中心点
-        const center = worldToCanvasFn(bbox.x + bbox.w / 2, bbox.y + bbox.h / 2);
-        ctx.fillStyle = '#ff0000';
-        ctx.beginPath();
-        ctx.arc(center.x, center.y, 5, 0, Math.PI * 2);
-        ctx.fill();
-        
-        ctx.fillStyle = '#ff0000';
-        ctx.font = '12px sans-serif';
-        ctx.fillText(`bbox ${entity.id}`, center.x + 10, center.y - 10);
-        
-        ctx.setLineDash([]);
         ctx.restore();
       });
     }
