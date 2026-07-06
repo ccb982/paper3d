@@ -52,14 +52,28 @@ export class RegionEntity {
   ): void {
     console.log(`[RegionEntity] 区域 ${this.id} - 开始纹理提取...`);
     
-    const pixelBbox = computeBBoxAllRings(this.boundary);
-
+    // 直接从 boundary 计算世界坐标包围盒（与边框点处理方式一致，Y向上）
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const ring of this.boundary) {
+      for (const p of ring) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    
+    // worldBbox 使用世界坐标（Y向上），与相机一致
     this.worldBbox = {
-      x: pixelBbox.x / 512,
-      y: pixelBbox.y / 512,
-      w: pixelBbox.w / 512,
-      h: pixelBbox.h / 512,
+      x: minX,
+      y: minY,
+      w: maxX - minX,
+      h: maxY - minY,
     };
+
+    console.log(`[RegionEntity] 区域 ${this.id} - 世界坐标边界: (${minX.toFixed(4)}, ${minY.toFixed(4)}) ~ (${maxX.toFixed(4)}, ${maxY.toFixed(4)}), worldBbox: (${this.worldBbox.x.toFixed(4)}, ${this.worldBbox.y.toFixed(4)}) w=${this.worldBbox.w.toFixed(4)}, h=${this.worldBbox.h.toFixed(4)}`);
+
+    const pixelBbox = computeBBoxAllRings(this.boundary);
 
     const mask = rasterizeRegionMaskLocal(this.boundary, pixelBbox);
     const { w, h } = pixelBbox;
@@ -127,6 +141,14 @@ export class RegionEntity {
     
     const { baseColors, deltaTexture, regionIdTexture, textureSize, bbox } = this._ftxData;
     const pixelData = this._decompressToRGBA(baseColors, deltaTexture, regionIdTexture, textureSize, bbox);
+
+    // 【调试】统计纹理像素
+    let opaquePixels = 0;
+    let totalPixels = pixelData.length / 4;
+    for (let i = 3; i < pixelData.length; i += 4) {
+      if (pixelData[i] > 0) opaquePixels++;
+    }
+    console.log(`[RegionEntity] 区域 ${this.id} - 纹理统计: 总像素 ${totalPixels}, 不透明像素 ${opaquePixels}, 透明像素 ${totalPixels - opaquePixels}`);
 
     if (this._gpuTexture) {
       this._gpuTexture.dispose();

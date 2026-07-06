@@ -1238,10 +1238,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // 计算默认锚点（区域中心世界坐标）
-      const bbox = entity.bbox;
+      const bbox = entity.worldBbox;
       if (bbox && !entity.transform.anchor) {
-        // bbox 已经是世界坐标（0~1），直接计算中心
-        // bbox.y 是区域顶部（Y向下），中心 Y = 顶部 + 高度/2
+        // bbox 已经是世界坐标（0~1，Y向上），直接计算中心
         const cx = bbox.x + bbox.w / 2;
         const cy = bbox.y + bbox.h / 2;
         entity.transform.anchor = { x: cx, y: cy };
