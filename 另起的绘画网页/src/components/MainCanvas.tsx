@@ -12,6 +12,193 @@ import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, Dashe
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
+// ========== 边框着色器材质（GPU扭曲）==========
+function createBorderShaderMaterial(maskEffect: any, canvasWidth: number, canvasHeight: number): THREE.ShaderMaterial {
+  const distortions = maskEffect?.distortions || [];
+  
+  const uniforms = {
+    uTime: { value: 0 },
+    uCanvasWidth: { value: canvasWidth },
+    uCanvasHeight: { value: canvasHeight },
+    uDistortionCount: { value: distortions.length },
+    uDistortionTypes: { value: new Int32Array(8) },
+    uDistortionEnabled: { value: new Int32Array(8) },
+    uDistortionAmplitude: { value: new Float32Array(8) },
+    uDistortionFrequency: { value: new Float32Array(8) },
+    uDistortionSpeed: { value: new Float32Array(8) },
+    uDistortionPhase: { value: new Float32Array(8) },
+    uDistortionDirection: { value: new Int32Array(8) },
+    uDistortionCenter: { value: new Float32Array(16) },
+    uDistortionFalloffRadius: { value: new Float32Array(8) },
+    uDistortionSeed: { value: new Float32Array(8) },
+    uDistortionOctaves: { value: new Int32Array(8) },
+    uBorderColor: { value: new THREE.Color(0xffaa00) },
+  };
+  
+  for (let i = 0; i < 8; i++) {
+    if (i < distortions.length) {
+      const op = distortions[i];
+      uniforms.uDistortionTypes.value[i] = op.type === 'wave' ? 0 : op.type === 'turbulent' ? 1 : 2;
+      uniforms.uDistortionEnabled.value[i] = op.enabled ? 1 : 0;
+      uniforms.uDistortionAmplitude.value[i] = (op.amplitude || 0.05) * canvasWidth;
+      uniforms.uDistortionFrequency.value[i] = op.frequency || 1;
+      uniforms.uDistortionSpeed.value[i] = op.speed || 1;
+      uniforms.uDistortionPhase.value[i] = op.phase || 0;
+      uniforms.uDistortionDirection.value[i] = op.direction === 'normal' ? 0 : op.direction === 'tangent' ? 1 : 2;
+      uniforms.uDistortionCenter.value[i * 2] = (op.center?.x || 0.5) * canvasWidth;
+      uniforms.uDistortionCenter.value[i * 2 + 1] = (op.center?.y || 0.5) * canvasHeight;
+      uniforms.uDistortionFalloffRadius.value[i] = (op.falloffRadius || 0.5) * canvasWidth;
+      uniforms.uDistortionSeed.value[i] = op.seed || 42;
+      uniforms.uDistortionOctaves.value[i] = op.octaves || 3;
+    } else {
+      uniforms.uDistortionTypes.value[i] = 0;
+      uniforms.uDistortionEnabled.value[i] = 0;
+      uniforms.uDistortionAmplitude.value[i] = 0;
+      uniforms.uDistortionFrequency.value[i] = 0;
+      uniforms.uDistortionSpeed.value[i] = 0;
+      uniforms.uDistortionPhase.value[i] = 0;
+      uniforms.uDistortionDirection.value[i] = 0;
+      uniforms.uDistortionCenter.value[i * 2] = 0;
+      uniforms.uDistortionCenter.value[i * 2 + 1] = 0;
+      uniforms.uDistortionFalloffRadius.value[i] = 0;
+      uniforms.uDistortionSeed.value[i] = 0;
+      uniforms.uDistortionOctaves.value[i] = 0;
+    }
+  }
+  
+  const vertexShader = `
+    uniform float uTime;
+    uniform float uCanvasWidth;
+    uniform float uCanvasHeight;
+    uniform int uDistortionCount;
+    uniform int uDistortionTypes[8];
+    uniform int uDistortionEnabled[8];
+    uniform float uDistortionAmplitude[8];
+    uniform float uDistortionFrequency[8];
+    uniform float uDistortionSpeed[8];
+    uniform float uDistortionPhase[8];
+    uniform int uDistortionDirection[8];
+    uniform vec2 uDistortionCenter[8];
+    uniform float uDistortionFalloffRadius[8];
+    uniform float uDistortionSeed[8];
+    uniform int uDistortionOctaves[8];
+    
+    float hash(float p) {
+      float x = sin(p) * 43758.5453;
+      return x - floor(x);
+    }
+    
+    float smoothNoise(vec2 p, float seed) {
+      vec2 ix = floor(p);
+      vec2 fx = fract(p);
+      vec2 ux = fx * fx * (3.0 - 2.0 * fx);
+      vec2 uy = fx * fx * (3.0 - 2.0 * fx);
+      float n00 = hash(ix.x * 127.1 + ix.y * 311.7 + seed);
+      float n10 = hash((ix.x + 1.0) * 127.1 + ix.y * 311.7 + seed);
+      float n01 = hash(ix.x * 127.1 + (ix.y + 1.0) * 311.7 + seed);
+      float n11 = hash((ix.x + 1.0) * 127.1 + (ix.y + 1.0) * 311.7 + seed);
+      return mix(mix(n00, n10, ux.x), mix(n01, n11, ux.x), uy.y);
+    }
+    
+    void main() {
+      vec2 pos = position.xy;
+      vec2 distorted = pos;
+      
+      for (int d = 0; d < 8; d++) {
+        if (d >= uDistortionCount) break;
+        if (uDistortionEnabled[d] == 0) continue;
+        
+        int dtype = uDistortionTypes[d];
+        
+        if (dtype == 0) {
+          float amp = uDistortionAmplitude[d];
+          float freq = uDistortionFrequency[d];
+          float speed = uDistortionSpeed[d];
+          float phase = uDistortionPhase[d];
+          float t = uTime * speed + phase;
+          
+          int dir = uDistortionDirection[d];
+          
+          if (dir == 0) {
+            float eps = 1.0;
+            vec2 pPlusX = pos + vec2(eps, 0.0);
+            vec2 pPlusY = pos + vec2(0.0, eps);
+            float offsetHere = amp * sin(freq * (distorted.x + distorted.y) + t);
+            float offsetX = amp * sin(freq * (pPlusX.x + pPlusX.y) + t);
+            float offsetY = amp * sin(freq * (pPlusY.x + pPlusY.y) + t);
+            
+            vec2 gradient = vec2(offsetX - offsetHere, offsetY - offsetHere);
+            if (length(gradient) > 0.0001) {
+              vec2 normal = normalize(vec2(-gradient.y, gradient.x));
+              float offset = amp * sin(freq * (distorted.x + distorted.y) + t);
+              distorted += normal * offset;
+            }
+          } else if (dir == 1) {
+            float offset = amp * sin(freq * (distorted.x + distorted.y) + t);
+            vec2 tangent = normalize(vec2(1.0, 1.0));
+            distorted += tangent * offset;
+          } else {
+            distorted.x += amp * sin(freq * distorted.x / uCanvasWidth + t);
+            distorted.y += amp * sin(freq * distorted.y / uCanvasHeight + t * 1.3);
+          }
+        } else if (dtype == 1) {
+          float amp = uDistortionAmplitude[d];
+          float freq = uDistortionFrequency[d];
+          float speed = uDistortionSpeed[d];
+          float seed = uDistortionSeed[d];
+          int octaves = uDistortionOctaves[d];
+          
+          vec2 noiseOffset = vec2(0.0);
+          for (int o = 0; o < 6; o++) {
+            if (o >= octaves) break;
+            float f = freq * pow(2.0, float(o));
+            float a = amp / pow(2.0, float(o));
+            vec2 noiseCoord = distorted * f / uCanvasWidth + vec2(uTime * speed, uTime * speed * 0.7);
+            float n = smoothNoise(noiseCoord, seed + float(o) * 100.0);
+            noiseOffset += (n - 0.5) * a * 2.0;
+          }
+          distorted += noiseOffset;
+        } else if (dtype == 2) {
+          vec2 center = uDistortionCenter[d];
+          float radius = uDistortionFalloffRadius[d];
+          float amp = uDistortionAmplitude[d];
+          float speed = uDistortionSpeed[d];
+          
+          vec2 delta = distorted - center;
+          float dist = length(delta);
+          if (dist > 0.0001) {
+            float falloff = exp(-dist / radius);
+            float angle = amp * falloff * (1.0 + sin(uTime * speed)) / uCanvasWidth;
+            float cosA = cos(angle);
+            float sinA = sin(angle);
+            distorted = center + vec2(
+              delta.x * cosA - delta.y * sinA,
+              delta.x * sinA + delta.y * cosA
+            );
+          }
+        }
+      }
+      
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(distorted, 0.0, 1.0);
+    }
+  `;
+  
+  const fragmentShader = `
+    uniform vec3 uBorderColor;
+    
+    void main() {
+      gl_FragColor = vec4(uBorderColor, 0.8);
+    }
+  `;
+  
+  return new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader,
+    fragmentShader,
+    transparent: true,
+  });
+}
+
 // ========== HSL 到 RGB 转换 ==========
 function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
   let r: number, g: number, b: number;
@@ -266,6 +453,10 @@ export function MainCanvas() {
   // 【调试】存储 WebGL Mesh 实际使用的坐标（用于在 2D Canvas 上绘制）
   const webglMeshCornersRef = useRef<Array<{ id: number; corners: Array<{ x: number; y: number }>; center: { x: number; y: number } }>>([]);
 
+  // 边框 Group 和 uniforms 存储（用于 GPU 边框扭曲）
+  const borderGroupRef = useRef<THREE.Group | null>(null);
+  const borderUniformsMapRef = useRef<Map<number, { uniforms: any; mesh: THREE.Line }>>(new Map());
+
   // ========== WebGL 环境初始化（使用画布像素坐标，与 2D Canvas 一致）==========
   useEffect(() => {
     if (!canvasWrapperRef.current) return;
@@ -305,6 +496,11 @@ export function MainCanvas() {
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
     rootGroupRef.current = rootGroup;
+
+    // 创建边框 Group（用于 GPU 边框扭曲）
+    const borderGroup = new THREE.Group();
+    scene.add(borderGroup);
+    borderGroupRef.current = borderGroup;
 
     return () => {
       renderer.dispose();
@@ -371,6 +567,11 @@ export function MainCanvas() {
           uniforms.uTime.value = seconds;
         });
         
+        // 更新边框 uniforms
+        borderUniformsMapRef.current.forEach(({ uniforms }) => {
+          uniforms.uTime.value = seconds;
+        });
+        
         renderer.render(scene, camera);
         frameCount++;
         if (frameCount % 60 === 0) {
@@ -397,6 +598,7 @@ export function MainCanvas() {
   // ========== 更新区域Mesh（监听区域纹理列表变化）==========
   useEffect(() => {
     const group = rootGroupRef.current;
+    const borderGroup = borderGroupRef.current;
     if (!group) return;
 
     // 清除旧 Mesh 和 Line
@@ -430,6 +632,23 @@ export function MainCanvas() {
       }
       group.remove(child);
     }
+
+    // 清除 borderGroup 中的旧线条
+    if (borderGroup) {
+      while (borderGroup.children.length > 0) {
+        const child = borderGroup.children[0];
+        if (child instanceof THREE.Line) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) {
+            child.material.forEach(m => m.dispose());
+          } else {
+            child.material.dispose();
+          }
+        }
+        borderGroup.remove(child);
+      }
+    }
+    borderUniformsMapRef.current.clear();
 
     // 清空 uniforms 映射
     regionUniformsMapRef.current = [];
@@ -494,6 +713,34 @@ export function MainCanvas() {
       regionGroup.add(mesh);
       console.log(`[WebGL] 区域 ${entity.id} - Mesh画布坐标: 左上(${canvasLeft.toFixed(1)}, ${canvasTop.toFixed(1)}), 尺寸(${canvasW.toFixed(1)}, ${canvasH.toFixed(1)}), 中心(${canvasCenterX.toFixed(1)}, ${canvasCenterY.toFixed(1)})`);
 
+      // ---- 创建边框 LineLoop（GPU扭曲）----
+      const boundary = entity.boundary;
+      if (boundary.length > 0 && boundary[0].length >= 3 && borderGroup) {
+        const outerRing = boundary[0];
+        const borderPoints = outerRing.map(p => {
+          const cx = p.x * canvasWidth;
+          const cy = (1 - p.y) * canvasHeight;
+          return { x: cx, y: cy };
+        });
+        
+        const positions = new Float32Array(borderPoints.length * 3);
+        for (let i = 0; i < borderPoints.length; i++) {
+          positions[i * 3] = borderPoints[i].x;
+          positions[i * 3 + 1] = borderPoints[i].y;
+          positions[i * 3 + 2] = 0;
+        }
+        
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        
+        const material = createBorderShaderMaterial(entity.maskEffect || {}, canvasWidth, canvasHeight);
+        const line = new THREE.LineLoop(geometry, material);
+        
+        borderGroup.add(line);
+        borderUniformsMapRef.current.set(entity.id, { uniforms: material.uniforms, mesh: line });
+        console.log(`[WebGL] 区域 ${entity.id} - 创建边框LineLoop完成: ${outerRing.length} 个顶点`);
+      }
+
       // ---- 存储 uniforms ----
       const uniforms = {
         uTime: { value: 0 },
@@ -504,7 +751,7 @@ export function MainCanvas() {
       group.add(regionGroup);
       console.log(`[WebGL] 区域 ${entity.id} - 添加到场景完成`);
     }
-  }, [regionEntities, activeLayerId]);
+  }, [regionEntities, activeLayerId, canvasWidth, canvasHeight]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
