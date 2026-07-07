@@ -12,61 +12,9 @@ import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, Dashe
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
-// ========== 边框着色器材质（GPU扭曲）==========
-function createBorderShaderMaterial(maskEffect: any, canvasWidth: number, canvasHeight: number): THREE.ShaderMaterial {
-  const distortions = maskEffect?.distortions || [];
-  
-  const uniforms = {
-    uTime: { value: 0 },
-    uCanvasWidth: { value: canvasWidth },
-    uCanvasHeight: { value: canvasHeight },
-    uDistortionCount: { value: distortions.length },
-    uDistortionTypes: { value: new Int32Array(8) },
-    uDistortionEnabled: { value: new Int32Array(8) },
-    uDistortionAmplitude: { value: new Float32Array(8) },
-    uDistortionFrequency: { value: new Float32Array(8) },
-    uDistortionSpeed: { value: new Float32Array(8) },
-    uDistortionPhase: { value: new Float32Array(8) },
-    uDistortionDirection: { value: new Int32Array(8) },
-    uDistortionCenter: { value: new Float32Array(16) },
-    uDistortionFalloffRadius: { value: new Float32Array(8) },
-    uDistortionSeed: { value: new Float32Array(8) },
-    uDistortionOctaves: { value: new Int32Array(8) },
-    uBorderColor: { value: new THREE.Color(0xffaa00) },
-  };
-  
-  for (let i = 0; i < 8; i++) {
-    if (i < distortions.length) {
-      const op = distortions[i];
-      uniforms.uDistortionTypes.value[i] = op.type === 'wave' ? 0 : op.type === 'turbulent' ? 1 : 2;
-      uniforms.uDistortionEnabled.value[i] = op.enabled ? 1 : 0;
-      uniforms.uDistortionAmplitude.value[i] = (op.amplitude || 0.05) * canvasWidth;
-      uniforms.uDistortionFrequency.value[i] = op.frequency || 1;
-      uniforms.uDistortionSpeed.value[i] = op.speed || 1;
-      uniforms.uDistortionPhase.value[i] = op.phase || 0;
-      uniforms.uDistortionDirection.value[i] = op.direction === 'normal' ? 0 : op.direction === 'tangent' ? 1 : 2;
-      uniforms.uDistortionCenter.value[i * 2] = (op.center?.x || 0.5) * canvasWidth;
-      uniforms.uDistortionCenter.value[i * 2 + 1] = (op.center?.y || 0.5) * canvasHeight;
-      uniforms.uDistortionFalloffRadius.value[i] = (op.falloffRadius || 0.5) * canvasWidth;
-      uniforms.uDistortionSeed.value[i] = op.seed || 42;
-      uniforms.uDistortionOctaves.value[i] = op.octaves || 3;
-    } else {
-      uniforms.uDistortionTypes.value[i] = 0;
-      uniforms.uDistortionEnabled.value[i] = 0;
-      uniforms.uDistortionAmplitude.value[i] = 0;
-      uniforms.uDistortionFrequency.value[i] = 0;
-      uniforms.uDistortionSpeed.value[i] = 0;
-      uniforms.uDistortionPhase.value[i] = 0;
-      uniforms.uDistortionDirection.value[i] = 0;
-      uniforms.uDistortionCenter.value[i * 2] = 0;
-      uniforms.uDistortionCenter.value[i * 2 + 1] = 0;
-      uniforms.uDistortionFalloffRadius.value[i] = 0;
-      uniforms.uDistortionSeed.value[i] = 0;
-      uniforms.uDistortionOctaves.value[i] = 0;
-    }
-  }
-  
-  const vertexShader = `
+// ========== 公共顶点着色器（共享掩码和边框的扭曲逻辑）==========
+function createDistortionVertexShader(): string {
+  return `
     uniform float uTime;
     uniform float uCanvasWidth;
     uniform float uCanvasHeight;
@@ -182,6 +130,70 @@ function createBorderShaderMaterial(maskEffect: any, canvasWidth: number, canvas
       gl_Position = projectionMatrix * modelViewMatrix * vec4(distorted, 0.0, 1.0);
     }
   `;
+}
+
+// ========== 填充扭曲参数到 uniforms ==========
+function fillDistortionUniforms(uniforms: any, maskEffect: any, canvasWidth: number, canvasHeight: number): void {
+  const distortions = maskEffect?.distortions || [];
+  
+  for (let i = 0; i < 8; i++) {
+    if (i < distortions.length) {
+      const op = distortions[i];
+      uniforms.uDistortionTypes.value[i] = op.type === 'wave' ? 0 : op.type === 'turbulent' ? 1 : 2;
+      uniforms.uDistortionEnabled.value[i] = op.enabled ? 1 : 0;
+      uniforms.uDistortionAmplitude.value[i] = (op.amplitude || 0.05) * canvasWidth;
+      uniforms.uDistortionFrequency.value[i] = op.frequency || 1;
+      uniforms.uDistortionSpeed.value[i] = op.speed || 1;
+      uniforms.uDistortionPhase.value[i] = op.phase || 0;
+      uniforms.uDistortionDirection.value[i] = op.direction === 'normal' ? 0 : op.direction === 'tangent' ? 1 : 2;
+      uniforms.uDistortionCenter.value[i * 2] = (op.center?.x || 0.5) * canvasWidth;
+      uniforms.uDistortionCenter.value[i * 2 + 1] = (op.center?.y || 0.5) * canvasHeight;
+      uniforms.uDistortionFalloffRadius.value[i] = (op.falloffRadius || 0.5) * canvasWidth;
+      uniforms.uDistortionSeed.value[i] = op.seed || 42;
+      uniforms.uDistortionOctaves.value[i] = op.octaves || 3;
+    } else {
+      uniforms.uDistortionTypes.value[i] = 0;
+      uniforms.uDistortionEnabled.value[i] = 0;
+      uniforms.uDistortionAmplitude.value[i] = 0;
+      uniforms.uDistortionFrequency.value[i] = 0;
+      uniforms.uDistortionSpeed.value[i] = 0;
+      uniforms.uDistortionPhase.value[i] = 0;
+      uniforms.uDistortionDirection.value[i] = 0;
+      uniforms.uDistortionCenter.value[i * 2] = 0;
+      uniforms.uDistortionCenter.value[i * 2 + 1] = 0;
+      uniforms.uDistortionFalloffRadius.value[i] = 0;
+      uniforms.uDistortionSeed.value[i] = 0;
+      uniforms.uDistortionOctaves.value[i] = 0;
+    }
+  }
+}
+
+// ========== 边框着色器材质（GPU扭曲）==========
+function createBorderShaderMaterial(maskEffect: any, canvasWidth: number, canvasHeight: number): THREE.ShaderMaterial {
+  const distortions = maskEffect?.distortions || [];
+  
+  const uniforms = {
+    uTime: { value: 0 },
+    uCanvasWidth: { value: canvasWidth },
+    uCanvasHeight: { value: canvasHeight },
+    uDistortionCount: { value: distortions.length },
+    uDistortionTypes: { value: new Int32Array(8) },
+    uDistortionEnabled: { value: new Int32Array(8) },
+    uDistortionAmplitude: { value: new Float32Array(8) },
+    uDistortionFrequency: { value: new Float32Array(8) },
+    uDistortionSpeed: { value: new Float32Array(8) },
+    uDistortionPhase: { value: new Float32Array(8) },
+    uDistortionDirection: { value: new Int32Array(8) },
+    uDistortionCenter: { value: new Float32Array(16) },
+    uDistortionFalloffRadius: { value: new Float32Array(8) },
+    uDistortionSeed: { value: new Float32Array(8) },
+    uDistortionOctaves: { value: new Int32Array(8) },
+    uBorderColor: { value: new THREE.Color(0xffaa00) },
+  };
+  
+  fillDistortionUniforms(uniforms, maskEffect, canvasWidth, canvasHeight);
+  
+  const vertexShader = createDistortionVertexShader();
   
   const fragmentShader = `
     uniform vec3 uBorderColor;
@@ -343,7 +355,7 @@ export function MainCanvas() {
   const webglSceneRef = useRef<THREE.Scene | null>(null);
   const webglCameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const rootGroupRef = useRef<THREE.Group | null>(null); // 根Group，负责缩放归一化坐标到画布
-  const regionUniformsMapRef = useRef<Map<number, THREE.Uniforms>>([]); // 存储每个区域的 uniforms
+  const regionUniformsMapRef = useRef<Array<{ regionId: number; uniforms: any }>>([]); // 存储每个区域的 uniforms
   const animationFrameIdRef = useRef<number | null>(null); // 动画循环 ID
   const {
     imageState,
@@ -456,6 +468,16 @@ export function MainCanvas() {
   // 边框 Group 和 uniforms 存储（用于 GPU 边框扭曲）
   const borderGroupRef = useRef<THREE.Group | null>(null);
   const borderUniformsMapRef = useRef<Map<number, { uniforms: any; mesh: THREE.Line }>>(new Map());
+  
+  // 纹理 Mesh 引用（用于清理）
+  const textureMeshesRef = useRef<THREE.Mesh[]>([]);
+  
+  // 模板填充网格引用（用于模板缓冲裁剪）
+  const stencilMeshesRef = useRef<Array<{
+    regionId: number;
+    mesh: THREE.Mesh;
+    uniforms: any;
+  }>>([]);
 
   // ========== WebGL 环境初始化（使用画布像素坐标，与 2D Canvas 一致）==========
   useEffect(() => {
@@ -473,11 +495,12 @@ export function MainCanvas() {
     webglCanvas.style.display = 'block';
     canvasWrapperRef.current.appendChild(webglCanvas);
 
-    // 创建 WebGL 渲染器
+    // 创建 WebGL 渲染器（启用模板缓冲）
     const renderer = new THREE.WebGLRenderer({
       canvas: webglCanvas,
       alpha: true,
       antialias: false,
+      stencil: true,
     });
     renderer.setSize(canvasWidth, canvasHeight);
     renderer.setPixelRatio(1);
@@ -496,6 +519,8 @@ export function MainCanvas() {
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
     rootGroupRef.current = rootGroup;
+
+    
 
     // 创建边框 Group（用于 GPU 边框扭曲）
     const borderGroup = new THREE.Group();
@@ -567,12 +592,20 @@ export function MainCanvas() {
           uniforms.uTime.value = seconds;
         });
         
+        // 更新模板填充网格的 uniforms
+        stencilMeshesRef.current.forEach(({ uniforms }) => {
+          uniforms.uTime.value = seconds;
+        });
+        
         // 更新边框 uniforms
         borderUniformsMapRef.current.forEach(({ uniforms }) => {
           uniforms.uTime.value = seconds;
         });
         
+        // ========== 渲染场景（模板缓冲方案）==========
+        renderer.clear(false, false, true); // 只清除模板缓冲
         renderer.render(scene, camera);
+        
         frameCount++;
         if (frameCount % 60 === 0) {
           console.log(`[WebGL渲染] 第 ${frameCount} 帧, 场景子节点数: ${scene.children.length}, rootGroup子节点数: ${rootGroupRef.current?.children.length || 0}`);
@@ -600,6 +633,17 @@ export function MainCanvas() {
     const group = rootGroupRef.current;
     const borderGroup = borderGroupRef.current;
     if (!group) return;
+
+    // 清空旧的纹理 Mesh
+    textureMeshesRef.current.forEach(mesh => {
+      mesh.geometry.dispose();
+      if (Array.isArray(mesh.material)) {
+        mesh.material.forEach(m => m.dispose());
+      } else {
+        mesh.material.dispose();
+      }
+    });
+    textureMeshesRef.current = [];
 
     // 清除旧 Mesh 和 Line
     while (group.children.length > 0) {
@@ -650,6 +694,15 @@ export function MainCanvas() {
     }
     borderUniformsMapRef.current.clear();
 
+    // 清空模板填充网格
+    stencilMeshesRef.current.forEach(({ mesh }) => {
+      mesh.geometry.dispose();
+      if (mesh.material instanceof THREE.ShaderMaterial) {
+        mesh.material.dispose();
+      }
+    });
+    stencilMeshesRef.current = [];
+
     // 清空 uniforms 映射
     regionUniformsMapRef.current = [];
     webglMeshCornersRef.current = [];
@@ -677,6 +730,81 @@ export function MainCanvas() {
 
       const regionGroup = new THREE.Group();
 
+      // ---- 创建模板填充网格（用于模板缓冲裁剪）----
+      const boundary = entity.boundary;
+      if (boundary.length > 0 && boundary[0].length >= 3) {
+        const shape = new THREE.Shape();
+        const outerRing = boundary[0];
+        const outerPts = outerRing.map(p => new THREE.Vector2(
+          p.x * canvasWidth,
+          (1 - p.y) * canvasHeight
+        ));
+        shape.moveTo(outerPts[0].x, outerPts[0].y);
+        for (let i = 1; i < outerPts.length; i++) {
+          shape.lineTo(outerPts[i].x, outerPts[i].y);
+        }
+
+        for (let ringIdx = 1; ringIdx < boundary.length; ringIdx++) {
+          const ring = boundary[ringIdx];
+          const ringPts = ring.map(p => new THREE.Vector2(
+            p.x * canvasWidth,
+            (1 - p.y) * canvasHeight
+          ));
+          const reversed = ringPts.reverse();
+          const hole = new THREE.Path(reversed);
+          shape.holes.push(hole);
+        }
+
+        const shapeGeometry = new THREE.ShapeGeometry(shape);
+
+        const stencilUniforms = {
+          uTime: { value: 0 },
+          uCanvasWidth: { value: canvasWidth },
+          uCanvasHeight: { value: canvasHeight },
+          uDistortionCount: { value: (entity.maskEffect?.distortions?.length || 0) },
+          uDistortionTypes: { value: new Int32Array(8) },
+          uDistortionEnabled: { value: new Int32Array(8) },
+          uDistortionAmplitude: { value: new Float32Array(8) },
+          uDistortionFrequency: { value: new Float32Array(8) },
+          uDistortionSpeed: { value: new Float32Array(8) },
+          uDistortionPhase: { value: new Float32Array(8) },
+          uDistortionDirection: { value: new Int32Array(8) },
+          uDistortionCenter: { value: new Float32Array(16) },
+          uDistortionFalloffRadius: { value: new Float32Array(8) },
+          uDistortionSeed: { value: new Float32Array(8) },
+          uDistortionOctaves: { value: new Int32Array(8) },
+        };
+        fillDistortionUniforms(stencilUniforms, entity.maskEffect, canvasWidth, canvasHeight);
+
+        const stencilMat = new THREE.ShaderMaterial({
+          uniforms: stencilUniforms,
+          vertexShader: createDistortionVertexShader(),
+          fragmentShader: `
+            void main() {
+              gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+            }
+          `,
+          transparent: true,
+          depthWrite: false,
+          stencilWrite: true,
+          stencilRef: 1,
+          stencilFunc: THREE.AlwaysStencilFunc,
+          stencilFail: THREE.InvertStencilOp,
+          stencilZFail: THREE.InvertStencilOp,
+          stencilZPass: THREE.InvertStencilOp,
+        });
+
+        const stencilMesh = new THREE.Mesh(shapeGeometry, stencilMat);
+        stencilMesh.renderOrder = 0;
+        rootGroupRef.current?.add(stencilMesh);
+        stencilMeshesRef.current.push({
+          regionId: entity.id,
+          mesh: stencilMesh,
+          uniforms: stencilUniforms,
+        });
+        console.log(`[WebGL] 区域 ${entity.id} - 创建模板填充网格完成`);
+      }
+
       // ---- 纹理 Mesh（使用画布像素坐标，与 worldToCanvasFn 一致）----
       // worldToCanvas 的公式：px = worldX * canvasWidth, py = (1 - worldY) * canvasHeight
       const w = bbox.w;
@@ -702,19 +830,22 @@ export function MainCanvas() {
         depthWrite: true,         // 允许深度写入
         side: THREE.DoubleSide,   // 双面渲染
         alphaTest: 0.5,           // 透明度测试，只渲染不透明部分
-        outputColorSpace: (THREE as any).NoColorSpace,  // 防止渲染器双倍伽马
+        stencilTest: true,        // 启用模板测试
+        stencilRef: 1,
+        stencilFunc: THREE.EqualStencilFunc, // 只绘制模板值 == 1 的像素
       });
       const mesh = new THREE.Mesh(planeGeo, planeMat);
       mesh.position.set(canvasCenterX, canvasCenterY, 0);
       // 稍微放大一圈，确保纹理覆盖整个区域（避免边缘缝隙）
       const scaleFactor = 1.05;
       mesh.scale.set(canvasW * scaleFactor, canvasH * scaleFactor, 1);
+      mesh.renderOrder = 1;
       
-      regionGroup.add(mesh);
+      rootGroupRef.current?.add(mesh);
+      textureMeshesRef.current.push(mesh);
       console.log(`[WebGL] 区域 ${entity.id} - Mesh画布坐标: 左上(${canvasLeft.toFixed(1)}, ${canvasTop.toFixed(1)}), 尺寸(${canvasW.toFixed(1)}, ${canvasH.toFixed(1)}), 中心(${canvasCenterX.toFixed(1)}, ${canvasCenterY.toFixed(1)})`);
 
       // ---- 创建边框 LineLoop（GPU扭曲）----
-      const boundary = entity.boundary;
       if (boundary.length > 0 && boundary[0].length >= 3 && borderGroup) {
         const outerRing = boundary[0];
         const borderPoints = outerRing.map(p => {
@@ -735,6 +866,7 @@ export function MainCanvas() {
         
         const material = createBorderShaderMaterial(entity.maskEffect || {}, canvasWidth, canvasHeight);
         const line = new THREE.LineLoop(geometry, material);
+        line.renderOrder = 2;
         
         borderGroup.add(line);
         borderUniformsMapRef.current.set(entity.id, { uniforms: material.uniforms, mesh: line });
