@@ -160,6 +160,13 @@ export class RegionEntity {
       THREE.RGBAFormat,
       THREE.UnsignedByteType
     );
+    // canvas.getImageData() 返回的是 sRGB 编码，解压后仍为 sRGB
+    // 设置 SRGBColorSpace 让 Three.js 采样时自动解码为线性，渲染时再编码
+    if ('SRGBColorSpace' in THREE) {
+      this._gpuTexture.colorSpace = (THREE as any).SRGBColorSpace;
+    } else {
+      this._gpuTexture.colorSpace = 'srgb';
+    }
     this._gpuTexture.needsUpdate = true;
     this._gpuTexture.minFilter = THREE.LinearFilter;
     this._gpuTexture.magFilter = THREE.LinearFilter;
@@ -201,7 +208,17 @@ export class RegionEntity {
           const finalL = Math.max(0, Math.min(1, base.l + dL));
           finalHsl = { h: finalH, s: finalS, l: finalL };
         } else if (baseColors.length > 0) {
-          finalHsl = baseColors[0];
+          const base = baseColors[0];
+          const dH = dequantize(deltaTexture[deltaIdx], 0.5);
+          const dS = dequantize(deltaTexture[deltaIdx + 1], 1.0);
+          const dL = dequantize(deltaTexture[deltaIdx + 2], 1.0);
+          
+          let finalH = base.h + dH;
+          if (finalH < 0) finalH += 1.0;
+          if (finalH > 1.0) finalH -= 1.0;
+          const finalS = Math.max(0, Math.min(1, base.s + dS));
+          const finalL = Math.max(0, Math.min(1, base.l + dL));
+          finalHsl = { h: finalH, s: finalS, l: finalL };
         } else {
           continue;
         }

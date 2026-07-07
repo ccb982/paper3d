@@ -483,10 +483,13 @@ export function MainCanvas() {
         depthWrite: true,         // 允许深度写入
         side: THREE.DoubleSide,   // 双面渲染
         alphaTest: 0.5,           // 透明度测试，只渲染不透明部分
+        outputColorSpace: (THREE as any).NoColorSpace,  // 防止渲染器双倍伽马
       });
       const mesh = new THREE.Mesh(planeGeo, planeMat);
       mesh.position.set(canvasCenterX, canvasCenterY, 0);
-      mesh.scale.set(canvasW, canvasH, 1);
+      // 稍微放大一圈，确保纹理覆盖整个区域（避免边缘缝隙）
+      const scaleFactor = 1.05;
+      mesh.scale.set(canvasW * scaleFactor, canvasH * scaleFactor, 1);
       
       regionGroup.add(mesh);
       console.log(`[WebGL] 区域 ${entity.id} - Mesh画布坐标: 左上(${canvasLeft.toFixed(1)}, ${canvasTop.toFixed(1)}), 尺寸(${canvasW.toFixed(1)}, ${canvasH.toFixed(1)}), 中心(${canvasCenterX.toFixed(1)}, ${canvasCenterY.toFixed(1)})`);
