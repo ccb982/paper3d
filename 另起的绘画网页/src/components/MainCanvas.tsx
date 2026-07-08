@@ -524,7 +524,7 @@ export function MainCanvas() {
 
     // 创建边框 Group（用于 GPU 边框扭曲）
     const borderGroup = new THREE.Group();
-    scene.add(borderGroup);
+    rootGroup.add(borderGroup);
     borderGroupRef.current = borderGroup;
 
     return () => {
@@ -786,6 +786,7 @@ export function MainCanvas() {
           `,
           transparent: true,
           depthWrite: false,
+          side: THREE.DoubleSide,
           stencilWrite: true,
           stencilRef: 1,
           stencilFunc: THREE.AlwaysStencilFunc,
@@ -794,15 +795,54 @@ export function MainCanvas() {
           stencilZPass: THREE.InvertStencilOp,
         });
 
+        // ---- 创建调试网格（显示模板网格的实时扭曲效果）----
+        const debugMat = new THREE.ShaderMaterial({
+          uniforms: stencilUniforms,
+          vertexShader: createDistortionVertexShader(),
+          fragmentShader: `
+            void main() {
+              gl_FragColor = vec4(0.0, 1.0, 1.0, 0.3);
+            }
+          `,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        });
+
+        // ---- 应用基础变换 ----
+        const anchorX = (entity.transform.anchor?.x ?? (bbox.x + bbox.w / 2)) * canvasWidth;
+        const anchorY = (1 - (entity.transform.anchor?.y ?? (bbox.y + bbox.h / 2))) * canvasHeight;
+        const offsetX = entity.transform.position.x;
+        const offsetY = entity.transform.position.y;
+        
+        // 核心修正：几何体平移到相对于锚点的位置（与实线边框一致）
+        shapeGeometry.translate(-anchorX, -anchorY, 0);
+        
         const stencilMesh = new THREE.Mesh(shapeGeometry, stencilMat);
         stencilMesh.renderOrder = 0;
+        // 核心修正：位置设置为 anchor + offset（与实线边框一致）
+        stencilMesh.position.set(anchorX + offsetX, anchorY + offsetY, 0);
+        // 修正旋转方向：ShapeGeometry 的顶点顺序与 LineLoop 相反，取反以保持一致
+        stencilMesh.rotation.z = -entity.transform.rotation;
+        stencilMesh.scale.set(entity.transform.scale.x, entity.transform.scale.y, 1);
         rootGroupRef.current?.add(stencilMesh);
         stencilMeshesRef.current.push({
           regionId: entity.id,
           mesh: stencilMesh,
           uniforms: stencilUniforms,
         });
-        console.log(`[WebGL] 区域 ${entity.id} - 创建模板填充网格完成`);
+        
+        const debugGeom = shapeGeometry.clone();
+        const debugMesh = new THREE.Mesh(debugGeom, debugMat);
+        debugMesh.renderOrder = 1.5;
+        // 核心修正：位置设置为 anchor + offset（与实线边框一致）
+        debugMesh.position.set(anchorX + offsetX, anchorY + offsetY, 0);
+        // 修正旋转方向：与 stencilMesh 一致
+        debugMesh.rotation.z = -entity.transform.rotation;
+        debugMesh.scale.set(entity.transform.scale.x, entity.transform.scale.y, 1);
+        rootGroupRef.current?.add(debugMesh);
+        
+        console.log(`[WebGL] 区域 ${entity.id} - 创建模板填充网格完成（含调试网格），锚点(${anchorX.toFixed(1)}, ${anchorY.toFixed(1)}), 变换: 旋转=${entity.transform.rotation.toFixed(2)}°, 缩放=(${entity.transform.scale.x.toFixed(2)}, ${entity.transform.scale.y.toFixed(2)})`);
       }
 
       // ---- 纹理 Mesh（使用画布像素坐标，与 worldToCanvasFn 一致）----
@@ -811,46 +851,70 @@ export function MainCanvas() {
       const h = bbox.h;
       
       // 计算画布坐标（与 worldToCanvasFn 一致）
-      // worldToCanvas: px = worldX * canvasWidth, py = (1 - worldY) * canvasHeight
-      // worldBbox 使用世界坐标（Y向上）：y 是最小Y（最下面），y+h 是最大Y（最上面）
       const canvasLeft = bbox.x * canvasWidth;
-      const canvasTop = (1 - (bbox.y + bbox.h)) * canvasHeight;  // 区域顶部（Y向下，画布坐标）
+      const canvasTop = (1 - (bbox.y + bbox.h)) * canvasHeight;
       const canvasW = bbox.w * canvasWidth;
       const canvasH = bbox.h * canvasHeight;
       const canvasCenterX = (bbox.x + bbox.w / 2) * canvasWidth;
       const canvasCenterY = (1 - (bbox.y + bbox.h / 2)) * canvasHeight;
       
-      // 几何体以中心为原点，大小 1x1，通过 scale 调整
+      // 计算锚点（与模板网格和边框一致）
+      const anchorX = (entity.transform.anchor?.x ?? (bbox.x + bbox.w / 2)) * canvasWidth;
+      const anchorY = (1 - (entity.transform.anchor?.y ?? (bbox.y + bbox.h / 2))) * canvasHeight;
+      const offsetX = entity.transform.position.x;
+      const offsetY = entity.transform.position.y;
+      
+      // 几何体以中心为原点，大小 1x1
       const planeGeo = new THREE.PlaneGeometry(1, 1);
+      
+      // 将几何体平移到相对于锚点的位置
+      // PlaneGeometry 中心在原点，需要移到区域中心相对于锚点的位置
+      const dx = canvasCenterX - anchorX;
+      const dy = canvasCenterY - anchorY;
+      planeGeo.translate(dx, dy, 0);
       
       // 使用 FTX 解码后的纹理
       const planeMat = new THREE.MeshBasicMaterial({ 
         map: texture,
-        transparent: true,        // 纹理有透明像素
-        depthWrite: true,         // 允许深度写入
-        side: THREE.DoubleSide,   // 双面渲染
-        alphaTest: 0.5,           // 透明度测试，只渲染不透明部分
-        stencilTest: true,        // 启用模板测试
+        transparent: true,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+        alphaTest: 0.5,
+        stencilTest: true,
         stencilRef: 1,
-        stencilFunc: THREE.EqualStencilFunc, // 只绘制模板值 == 1 的像素
+        stencilFunc: THREE.EqualStencilFunc,
       });
       const mesh = new THREE.Mesh(planeGeo, planeMat);
-      mesh.position.set(canvasCenterX, canvasCenterY, 0);
-      // 稍微放大一圈，确保纹理覆盖整个区域（避免边缘缝隙）
+      
+      // 应用基础变换（旋转和缩放围绕锚点）
+      mesh.position.set(anchorX + offsetX, anchorY + offsetY, 0);
+      mesh.rotation.z = entity.transform.rotation;
+      
+      // 稍微放大一圈，确保纹理覆盖整个区域
       const scaleFactor = 1.05;
-      mesh.scale.set(canvasW * scaleFactor, canvasH * scaleFactor, 1);
+      mesh.scale.set(
+        canvasW * scaleFactor * entity.transform.scale.x,
+        canvasH * scaleFactor * entity.transform.scale.y,
+        1
+      );
       mesh.renderOrder = 1;
       
       rootGroupRef.current?.add(mesh);
       textureMeshesRef.current.push(mesh);
-      console.log(`[WebGL] 区域 ${entity.id} - Mesh画布坐标: 左上(${canvasLeft.toFixed(1)}, ${canvasTop.toFixed(1)}), 尺寸(${canvasW.toFixed(1)}, ${canvasH.toFixed(1)}), 中心(${canvasCenterX.toFixed(1)}, ${canvasCenterY.toFixed(1)})`);
+      console.log(`[WebGL] 区域 ${entity.id} - Mesh画布坐标: 左上(${canvasLeft.toFixed(1)}, ${canvasTop.toFixed(1)}), 尺寸(${canvasW.toFixed(1)}, ${canvasH.toFixed(1)}), 中心(${canvasCenterX.toFixed(1)}, ${canvasCenterY.toFixed(1)}), 锚点(${anchorX.toFixed(1)}, ${anchorY.toFixed(1)}), 变换: 旋转=${entity.transform.rotation.toFixed(2)}°, 缩放=(${entity.transform.scale.x.toFixed(2)}, ${entity.transform.scale.y.toFixed(2)})`);
 
       // ---- 创建边框 LineLoop（GPU扭曲）----
       if (boundary.length > 0 && boundary[0].length >= 3 && borderGroup) {
         const outerRing = boundary[0];
+        const anchorX = (entity.transform.anchor?.x ?? (bbox.x + bbox.w / 2)) * canvasWidth;
+        const anchorY = (1 - (entity.transform.anchor?.y ?? (bbox.y + bbox.h / 2))) * canvasHeight;
+        const offsetX = entity.transform.position.x;
+        const offsetY = entity.transform.position.y;
+        
+        // 顶点坐标相对于锚点
         const borderPoints = outerRing.map(p => {
-          const cx = p.x * canvasWidth;
-          const cy = (1 - p.y) * canvasHeight;
+          const cx = p.x * canvasWidth - anchorX;
+          const cy = (1 - p.y) * canvasHeight - anchorY;
           return { x: cx, y: cy };
         });
         
@@ -868,9 +932,13 @@ export function MainCanvas() {
         const line = new THREE.LineLoop(geometry, material);
         line.renderOrder = 2;
         
+        line.position.set(anchorX + offsetX, anchorY + offsetY, 0);
+        line.rotation.z = entity.transform.rotation;
+        line.scale.set(entity.transform.scale.x, entity.transform.scale.y, 1);
+        
         borderGroup.add(line);
         borderUniformsMapRef.current.set(entity.id, { uniforms: material.uniforms, mesh: line });
-        console.log(`[WebGL] 区域 ${entity.id} - 创建边框LineLoop完成: ${outerRing.length} 个顶点`);
+        console.log(`[WebGL] 区域 ${entity.id} - 创建边框LineLoop完成: ${outerRing.length} 个顶点，变换: 旋转=${entity.transform.rotation.toFixed(2)}°, 缩放=(${entity.transform.scale.x.toFixed(2)}, ${entity.transform.scale.y.toFixed(2)})`);
       }
 
       // ---- 存储 uniforms ----

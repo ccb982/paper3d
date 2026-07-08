@@ -1164,7 +1164,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 【重构】构建区域实体（从 paintBuffer 提取 ftx 数据）
   refreshRegionEntities: (layerId) => {
     const state = get();
-    const shapes = state.shapes.filter(s => s.layerId === layerId);
     const paintBuffer = state.paintBuffers[layerId];
 
     // 获取区域注释中的变换参数和边框扭曲参数
@@ -1187,13 +1186,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    const dashedRegions = computeAllDashedClosedRegions(shapes, state.canvasWidth, state.canvasHeight);
-    const PAINT_SIZE = 512;
+    const regions = state.regionPolygonsCache[layerId] || [];
     const entities: RegionEntity[] = [];
 
-    for (let i = 0; i < dashedRegions.length; i++) {
-      const region = dashedRegions[i];
-      const polygon = region.polygon;
+    for (let i = 0; i < regions.length; i++) {
+      const polygon = regions[i];
 
       if (polygon.length === 0 || polygon[0].length < 3) continue;
 
