@@ -603,7 +603,7 @@ export function MainCanvas() {
         });
         
         // ========== 渲染场景（模板缓冲方案）==========
-        renderer.clear(false, false, true); // 只清除模板缓冲
+        renderer.clear(true, false, true); // 清除颜色和模板缓冲（透明背景）
         renderer.render(scene, camera);
         
         frameCount++;
@@ -888,7 +888,8 @@ export function MainCanvas() {
       
       // 应用基础变换（旋转和缩放围绕锚点）
       mesh.position.set(anchorX + offsetX, anchorY + offsetY, 0);
-      mesh.rotation.z = entity.transform.rotation;
+      // 修正旋转方向：与模板网格保持一致
+      mesh.rotation.z = -entity.transform.rotation;
       
       // 稍微放大一圈，确保纹理覆盖整个区域
       const scaleFactor = 1.05;
