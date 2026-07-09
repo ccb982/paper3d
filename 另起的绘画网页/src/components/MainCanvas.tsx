@@ -19,10 +19,14 @@ const VAT_VERTEX_SHADER = `
   uniform float uTotalFrames;
   uniform float uVertexCount;
 
+  varying vec2 vUv;
+
   void main() {
     float texX = (float(gl_VertexID) + 0.5) / uVertexCount;
     float texY = (uFrameIndex + 0.5) / uTotalFrames;
     vec2 displacement = texture2D(uDisplacementTex, vec2(texX, texY)).rg;
+
+    vUv = uv;
 
     vec3 pos = position + vec3(displacement, 0.0);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -424,7 +428,8 @@ export function MainCanvas() {
     
     // 启动/停止动画循环
     if (visible) {
-      let frameCount = 0;
+      let lastTime = 0;
+      let lastFrameIdx = 0;
       const animate = (time: number) => {
         if (!layerVisibility.regionLayer) return;
 
@@ -444,11 +449,40 @@ export function MainCanvas() {
 
         renderer.clear(true, false, true);
         renderer.render(scene, camera);
-        
-        frameCount++;
-        if (frameCount % 60 === 0) {
-          console.log(`[WebGL渲染] 第 ${frameCount} 帧, 场景子节点数: ${scene.children.length}, rootGroup子节点数: ${rootGroupRef.current?.children.length || 0}`);
+
+        // 每秒输出一次调试信息
+        if (time - lastTime >= 1000) {
+          const framesPlayed = (frameIndexRef.current - lastFrameIdx + TOTAL_FRAMES) % TOTAL_FRAMES;
+          const playSpeed = framesPlayed / ((time - lastTime) / 1000); // 帧/秒
+          console.log(`[调试] 帧索引: ${frameIndexRef.current}/${TOTAL_FRAMES}, 播放速度: ${playSpeed.toFixed(1)} 帧/秒`);
+
+          if (group) {
+            let borderLines: THREE.LineLoop[] = [];
+            let fillMeshes: THREE.Mesh[] = [];
+            group.children.forEach(child => {
+              if (child instanceof THREE.LineLoop) borderLines.push(child);
+              if (child instanceof THREE.Mesh && (child.material as THREE.ShaderMaterial).uniforms?.uDisplacementTex && child.renderOrder === 0) fillMeshes.push(child);
+            });
+            
+            if (borderLines.length > 0) {
+              const line = borderLines[0];
+              const pos = line.geometry.attributes.position;
+              const firstV = { x: pos.getX(0), y: pos.getY(0) };
+              console.log(`[实线边框] 数量: ${borderLines.length}, 第一个顶点局部坐标: (${firstV.x.toFixed(2)}, ${firstV.y.toFixed(2)}), Mesh位置: (${line.position.x.toFixed(2)}, ${line.position.y.toFixed(2)})`);
+            }
+            
+            if (fillMeshes.length > 0) {
+              const mesh = fillMeshes[0];
+              const pos = mesh.geometry.attributes.position;
+              const firstV = { x: pos.getX(0), y: pos.getY(0) };
+              console.log(`[模板填充] 数量: ${fillMeshes.length}, 第一个顶点局部坐标: (${firstV.x.toFixed(2)}, ${firstV.y.toFixed(2)}), Mesh位置: (${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)})`);
+            }
+          }
+
+          lastTime = time;
+          lastFrameIdx = frameIndexRef.current;
         }
+
         animationFrameIdRef.current = requestAnimationFrame(animate);
       };
       animationFrameIdRef.current = requestAnimationFrame(animate);
@@ -507,20 +541,40 @@ useEffect(() => {
       (1 - p.y) * canvasHeight
     ));
 
-    // ---- 构建填充网格（用于模板缓冲）----
-    const shape = new THREE.Shape(pts);
-    for (let i = 1; i < entity.boundary.length; i++) {
-      const ring = entity.boundary[i];
-      if (ring.length < 3) continue;
-      const holePts = ring.map(p => new THREE.Vector2(
-        p.x * canvasWidth,
-        (1 - p.y) * canvasHeight
-      ));
-      const path = new THREE.Path(holePts);
-      shape.holes.push(path);
+    // ---- 构建填充网格（手动 BufferGeometry + 三角化，保持顶点顺序与 LineLoop 一致）----
+    const triangles = THREE.ShapeUtils.triangulateShape(pts, []);
+    const triangleIndices: number[] = [];
+    for (const tri of triangles) {
+      triangleIndices.push(tri[0], tri[1], tri[2]);
     }
 
-    const fillGeom = new THREE.ShapeGeometry(shape);
+    const fillGeom = new THREE.BufferGeometry();
+    const positions = new Float32Array(pts.length * 3);
+    for (let i = 0; i < pts.length; i++) {
+      positions[i * 3] = pts[i].x;
+      positions[i * 3 + 1] = pts[i].y;
+      positions[i * 3 + 2] = 0;
+    }
+    fillGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    fillGeom.setIndex(triangleIndices);
+    fillGeom.computeVertexNormals();
+
+    // 生成 UV（用于颜色纹理映射）
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    const rangeX = maxX - minX || 1;
+    const rangeY = maxY - minY || 1;
+    const uv = new Float32Array(pts.length * 2);
+    for (let i = 0; i < pts.length; i++) {
+      uv[i * 2] = (pts[i].x - minX) / rangeX;
+      uv[i * 2 + 1] = (pts[i].y - minY) / rangeY;
+    }
+    fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 
     const fillMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -621,7 +675,7 @@ useEffect(() => {
     if (colorMesh) group.add(colorMesh);
     group.add(lineLoop);
 
-    console.log(`[WebGL] 区域 ${entity.id} - VAT构建完成，顶点数: ${vertexCount}, 帧数: ${numFrames}`);
+    
   }
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight]);
 
