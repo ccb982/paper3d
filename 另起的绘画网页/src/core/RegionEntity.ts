@@ -1,5 +1,6 @@
 import type { Point } from '../types';
 import * as THREE from 'three';
+import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 import {
   computeBBoxAllRings,
   rasterizeRegionMaskLocal,
@@ -38,6 +39,13 @@ export class RegionEntity {
   private _gpuTexture: THREE.DataTexture | null = null;
   private _textureVersion: number = 0;
   private _cachedVersion: number = -1;
+
+  private _displacementTexture: THREE.DataTexture | null = null;
+  private _numFrames: number = 60;
+  private _totalVertices: number = 0;
+  private _lastMaskEffectHash: string = '';
+  private _lastCanvasWidth: number = 0;
+  private _lastCanvasHeight: number = 0;
 
   constructor(id: number, layerId: string, boundary: Point[][]) {
     this.id = id;
@@ -281,10 +289,109 @@ export class RegionEntity {
     };
   }
 
+  public buildDisplacementTexture(
+    canvasWidth: number,
+    canvasHeight: number,
+    maskEffect?: any,
+    numFrames: number = 60
+  ): THREE.DataTexture {
+    const effect = maskEffect || this.maskEffect;
+    if (!effect) {
+      throw new Error('RegionEntity: 缺少扭曲参数，无法生成位移纹理');
+    }
+
+    const outerRing = this.boundary[0];
+    if (!outerRing || outerRing.length < 3) {
+      throw new Error('区域外环顶点不足3个');
+    }
+
+    const vertices = outerRing;
+    const vertexCount = vertices.length;
+    this._totalVertices = vertexCount;
+    this._numFrames = numFrames;
+
+    const basePixels = vertices.map(p => ({
+      x: p.x * canvasWidth,
+      y: (1 - p.y) * canvasHeight,
+    }));
+
+    const data = new Float32Array(numFrames * vertexCount * 2);
+
+    for (let frame = 0; frame < numFrames; frame++) {
+      const t = (frame / numFrames) * 2 * Math.PI;
+      const distortedWorld = processMaskRingCPU(vertices, effect, t);
+      const distortedPixels = distortedWorld.map(p => ({
+        x: p.x * canvasWidth,
+        y: (1 - p.y) * canvasHeight,
+      }));
+
+      for (let i = 0; i < vertexCount; i++) {
+        const idx = (frame * vertexCount + i) * 2;
+        data[idx] = distortedPixels[i].x - basePixels[i].x;
+        data[idx + 1] = distortedPixels[i].y - basePixels[i].y;
+      }
+    }
+
+    const texture = new THREE.DataTexture(
+      data,
+      vertexCount,
+      numFrames,
+      THREE.RGFormat,
+      THREE.FloatType
+    );
+    texture.needsUpdate = true;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+
+    this._lastMaskEffectHash = JSON.stringify(effect);
+    this._lastCanvasWidth = canvasWidth;
+    this._lastCanvasHeight = canvasHeight;
+
+    if (this._displacementTexture) {
+      this._displacementTexture.dispose();
+    }
+    this._displacementTexture = texture;
+    return texture;
+  }
+
+  public getDisplacementTexture(
+    canvasWidth: number,
+    canvasHeight: number,
+    forceRebuild: boolean = false
+  ): THREE.DataTexture | null {
+    if (!this.maskEffect) return null;
+
+    const currentHash = JSON.stringify(this.maskEffect);
+    const paramsChanged =
+      forceRebuild ||
+      this._lastCanvasWidth !== canvasWidth ||
+      this._lastCanvasHeight !== canvasHeight ||
+      this._lastMaskEffectHash !== currentHash;
+
+    if (paramsChanged || !this._displacementTexture) {
+      this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, this._numFrames);
+    }
+    return this._displacementTexture;
+  }
+
+  public getTotalVertices(): number {
+    return this._totalVertices;
+  }
+
+  public getNumFrames(): number {
+    return this._numFrames;
+  }
+
   public dispose(): void {
     if (this._gpuTexture) {
       this._gpuTexture.dispose();
       this._gpuTexture = null;
+    }
+    if (this._displacementTexture) {
+      this._displacementTexture.dispose();
+      this._displacementTexture = null;
     }
     this._ftxData = null;
   }
