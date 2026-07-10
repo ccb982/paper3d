@@ -300,6 +300,8 @@ export function MainCanvas() {
     isVertexPinMode,
     vertexPinRadius,
     isVertexPinEraserMode,
+    showRegionBorderWebGL,
+    showRegionBorder2D,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -656,9 +658,11 @@ useEffect(() => {
 
     group.add(fillMesh);
     if (colorMesh) group.add(colorMesh);
-    for (const line of borderLines) group.add(line);
+    if (showRegionBorderWebGL) {
+      for (const line of borderLines) group.add(line);
+    }
   }
-}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations]);
+}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [isPinning, setIsPinning] = useState(false);
@@ -2202,7 +2206,7 @@ useEffect(() => {
           ctx.closePath();
         }
         ctx.fill('evenodd');
-        if (lineWidth > 0.01) {
+        if (lineWidth > 0.01 && showRegionBorder2D) {
           ctx.stroke();
         }
         
@@ -2252,7 +2256,9 @@ useEffect(() => {
           ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
         }
         ctx.closePath();
-        ctx.stroke();
+        if (showRegionBorder2D) {
+          ctx.stroke();
+        }
         ctx.restore();
       });
     }
@@ -2941,7 +2947,7 @@ useEffect(() => {
     ctx.restore();
 
     // WebGL 渲染已由动画循环处理，此处无需手动渲染
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations, showRegionBorder2D]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 

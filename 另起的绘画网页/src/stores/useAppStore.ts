@@ -294,6 +294,12 @@ interface AppState {
   setVertexPinRadius: (radius: number) => void;
   isVertexPinEraserMode: boolean;
   setVertexPinEraserMode: (mode: boolean) => void;
+
+  showRegionBorderWebGL: boolean;
+  setShowRegionBorderWebGL: (show: boolean) => void;
+
+  showRegionBorder2D: boolean;
+  setShowRegionBorder2D: (show: boolean) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1679,6 +1685,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   setVertexPinRadius: (radius) => set({ vertexPinRadius: Math.max(0.005, Math.min(0.1, radius)) }),
   isVertexPinEraserMode: false,
   setVertexPinEraserMode: (mode) => set({ isVertexPinEraserMode: mode }),
+
+  showRegionBorderWebGL: true,
+  setShowRegionBorderWebGL: (show) => set({ showRegionBorderWebGL: show }),
+
+  showRegionBorder2D: true,
+  setShowRegionBorder2D: (show) => set({ showRegionBorder2D: show }),
 }));
 
 // ===== 辅助函数：合成图像数据 =====

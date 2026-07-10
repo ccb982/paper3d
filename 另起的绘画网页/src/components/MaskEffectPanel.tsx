@@ -19,6 +19,10 @@ export function MaskEffectPanel() {
     setVertexPinRadius,
     isVertexPinEraserMode,
     setVertexPinEraserMode,
+    showRegionBorderWebGL,
+    setShowRegionBorderWebGL,
+    showRegionBorder2D,
+    setShowRegionBorder2D,
   } = useAppStore();
 
   // 获取当前选中图层的区域注释
@@ -653,6 +657,26 @@ export function MaskEffectPanel() {
           蒙版特效已禁用。点击上方"启用"按钮开启。
         </div>
       )}
+
+      {/* ===== 边框控制 ===== */}
+      <div style={{ marginTop: '12px', padding: '8px', background: '#f0f0f0', borderRadius: '4px' }}>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button
+            onClick={() => setShowRegionBorder2D(!showRegionBorder2D)}
+            className={`btn ${showRegionBorder2D ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ flex: 1, fontSize: '11px', padding: '4px' }}
+          >
+            {showRegionBorder2D ? '隐藏' : '显示'} 2D实线
+          </button>
+          <button
+            onClick={() => setShowRegionBorderWebGL(!showRegionBorderWebGL)}
+            className={`btn ${showRegionBorderWebGL ? 'btn-primary' : 'btn-secondary'}`}
+            style={{ flex: 1, fontSize: '11px', padding: '4px' }}
+          >
+            {showRegionBorderWebGL ? '隐藏' : '显示'} WebGL边框
+          </button>
+        </div>
+      </div>
 
       {/* ===== 顶点固定控制 ===== */}
       <div style={{ marginTop: '16px', padding: '8px', background: '#f0f0f0', borderRadius: '4px' }}>
