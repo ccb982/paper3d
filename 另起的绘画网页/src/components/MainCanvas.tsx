@@ -525,7 +525,14 @@ useEffect(() => {
   const entities = regionEntities[activeLayerId] || [];
   if (entities.length === 0) return;
 
+  const regionAnnotationsForLayer = regionAnnotations.filter(a => a.layerId === activeLayerId);
+
   for (const entity of entities) {
+    const hasAnnotation = regionAnnotationsForLayer.some(
+      anno => Number(anno.regionId) === entity.id
+    );
+    if (!hasAnnotation) continue;
+
     const bbox = entity.worldBbox;
     if (!bbox) continue;
 
@@ -681,7 +688,7 @@ useEffect(() => {
     if (colorMesh) group.add(colorMesh);
     for (const line of borderLines) group.add(line);
   }
-}, [regionEntities, activeLayerId, canvasWidth, canvasHeight]);
+}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
