@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import type { RegionAnnotation } from '../types';
 
@@ -29,6 +29,25 @@ export function MaskEffectPanel() {
   const layerAnnotations = regionAnnotations.filter(a => a.layerId === activeLayerId);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [editingAnno, setEditingAnno] = useState<RegionAnnotation | null>(null);
+
+  const [isRandomizing, setIsRandomizing] = useState(false);
+  const [randomIntervalSeconds, setRandomIntervalSeconds] = useState(30);
+  const randomIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const baseMaskEffectRef = useRef<any>(null);
+
+  const [randomRanges, setRandomRanges] = useState({
+    positionX: 0.02,
+    positionY: 0.02,
+    scaleX: 0.1,
+    scaleY: 0.1,
+    rotation: 0.2,
+    amplitude: 0.01,
+    frequency: 0.4,
+    speed: 0.4,
+    phase: 0.2,
+    falloffRadius: 0.04,
+    seed: 20,
+  });
 
   // 当选择变化时更新编辑状态
   useEffect(() => {
@@ -245,6 +264,93 @@ export function MaskEffectPanel() {
     triggerCanvasRedraw();
   };
 
+  const randomizeParameters = useCallback(() => {
+    const base = baseMaskEffectRef.current;
+    if (!base || !editingAnno) return;
+
+    const newMaskEffect = JSON.parse(JSON.stringify(base));
+    const trans = newMaskEffect.transform;
+    const baseTrans = base.transform;
+
+    trans.position.x = Math.max(-0.5, Math.min(0.5, baseTrans.position.x + (Math.random() - 0.5) * randomRanges.positionX * 2));
+    trans.position.y = Math.max(-0.5, Math.min(0.5, baseTrans.position.y + (Math.random() - 0.5) * randomRanges.positionY * 2));
+
+    trans.scale.x = Math.max(0.1, Math.min(3.0, baseTrans.scale.x + (Math.random() - 0.5) * randomRanges.scaleX * 2));
+    trans.scale.y = Math.max(0.1, Math.min(3.0, baseTrans.scale.y + (Math.random() - 0.5) * randomRanges.scaleY * 2));
+
+    trans.rotation = baseTrans.rotation + (Math.random() - 0.5) * randomRanges.rotation * 2;
+
+    if (newMaskEffect.distortions && base.distortions) {
+      for (let i = 0; i < newMaskEffect.distortions.length; i++) {
+        const dist = newMaskEffect.distortions[i];
+        const baseDist = base.distortions[i];
+        if (!baseDist) continue;
+
+        dist.amplitude = Math.max(0, Math.min(0.3, baseDist.amplitude + (Math.random() - 0.5) * randomRanges.amplitude * 2));
+        dist.frequency = Math.max(0.1, Math.min(10, baseDist.frequency + (Math.random() - 0.5) * randomRanges.frequency * 2));
+        dist.speed = Math.max(-5, Math.min(5, baseDist.speed + (Math.random() - 0.5) * randomRanges.speed * 2));
+        dist.phase = Math.max(0, Math.min(6.28, baseDist.phase + (Math.random() - 0.5) * randomRanges.phase * 2));
+
+        if (dist.falloffRadius !== undefined && baseDist.falloffRadius !== undefined) {
+          dist.falloffRadius = Math.max(0.01, Math.min(1, baseDist.falloffRadius + (Math.random() - 0.5) * randomRanges.falloffRadius * 2));
+        }
+        if (dist.seed !== undefined && baseDist.seed !== undefined) {
+          dist.seed = Math.max(0, Math.min(1000, baseDist.seed + (Math.random() - 0.5) * randomRanges.seed * 2));
+        }
+      }
+    }
+
+    const store = useAppStore.getState();
+    const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+    if (idx >= 0) {
+      const updatedAnno = {
+        ...store.regionAnnotations[idx],
+        maskEffect: newMaskEffect,
+        updatedAt: Date.now(),
+      };
+      const newAnnotations = [...store.regionAnnotations];
+      newAnnotations[idx] = updatedAnno;
+      useAppStore.setState({ regionAnnotations: newAnnotations });
+
+      if (layerVisibility.regionLayer && activeLayerId) {
+        refreshRegionEntities(activeLayerId);
+      }
+      triggerCanvasRedraw();
+
+      setEditingAnno(updatedAnno);
+    }
+  }, [editingAnno, activeLayerId, layerVisibility, refreshRegionEntities, triggerCanvasRedraw, randomRanges]);
+
+  const toggleRandomizing = useCallback(() => {
+    if (isRandomizing) {
+      if (randomIntervalRef.current) {
+        clearInterval(randomIntervalRef.current);
+        randomIntervalRef.current = null;
+      }
+      setIsRandomizing(false);
+      baseMaskEffectRef.current = null;
+    } else {
+      if (editingAnno?.maskEffect) {
+        baseMaskEffectRef.current = JSON.parse(JSON.stringify(editingAnno.maskEffect));
+      } else {
+        return;
+      }
+      setIsRandomizing(true);
+      randomIntervalRef.current = setInterval(() => {
+        randomizeParameters();
+      }, randomIntervalSeconds * 1000);
+    }
+  }, [isRandomizing, randomizeParameters, randomIntervalSeconds, editingAnno]);
+
+  useEffect(() => {
+    return () => {
+      if (randomIntervalRef.current) {
+        clearInterval(randomIntervalRef.current);
+        randomIntervalRef.current = null;
+      }
+    };
+  }, []);
+
   // 如果没有区域注释，不显示面板
   if (layerAnnotations.length === 0) {
     return null;
@@ -313,6 +419,195 @@ export function MaskEffectPanel() {
 
       {editingAnno && editingAnno.maskEffect?.enabled && (
         <>
+          {/* 随机微调 */}
+          <div style={{ marginTop: '12px', padding: '8px', background: '#f0f0f0', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+              <button
+                onClick={toggleRandomizing}
+                className={`btn ${isRandomizing ? 'btn-warning' : 'btn-primary'}`}
+                style={{ flex: 1, fontSize: '11px', padding: '4px' }}
+              >
+                {isRandomizing ? '⏹ 停止随机微调' : '🎲 随机微调'}
+              </button>
+              <span style={{ fontSize: '10px', color: '#888' }}>
+                {isRandomizing ? `每 ${randomIntervalSeconds} 秒微调一次` : '点击开启持续抖动'}
+              </span>
+            </div>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
+                <span>微调间隔</span>
+                <span>{randomIntervalSeconds} 秒</span>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={120}
+                step={1}
+                value={randomIntervalSeconds}
+                onChange={(e) => setRandomIntervalSeconds(parseInt(e.target.value))}
+                style={{ width: '100%', marginTop: '4px' }}
+              />
+            </div>
+
+            {/* 随机范围设置 */}
+            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #ddd' }}>
+              <div style={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '6px' }}>随机范围</div>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '10px' }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>位置X</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.positionX.toFixed(3)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.2}
+                    step={0.005}
+                    value={randomRanges.positionX}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, positionX: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>位置Y</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.positionY.toFixed(3)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.2}
+                    step={0.005}
+                    value={randomRanges.positionY}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, positionY: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>缩放X</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.scaleX.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={randomRanges.scaleX}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, scaleX: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>缩放Y</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.scaleY.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={randomRanges.scaleY}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, scaleY: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>旋转</span>
+                    <span style={{ color: '#666' }}>±{(randomRanges.rotation * 180 / Math.PI).toFixed(1)}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.PI}
+                    step={0.01}
+                    value={randomRanges.rotation}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, rotation: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>幅度</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.amplitude.toFixed(3)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.3}
+                    step={0.005}
+                    value={randomRanges.amplitude}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, amplitude: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>频率</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.frequency.toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={5}
+                    step={0.1}
+                    value={randomRanges.frequency}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, frequency: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>速度</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.speed.toFixed(1)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={5}
+                    step={0.1}
+                    value={randomRanges.speed}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, speed: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>相位</span>
+                    <span style={{ color: '#666' }}>±{(randomRanges.phase * 180 / Math.PI).toFixed(1)}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.PI}
+                    step={0.01}
+                    value={randomRanges.phase}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, phase: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>衰减半径</span>
+                    <span style={{ color: '#666' }}>±{randomRanges.falloffRadius.toFixed(2)}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.5}
+                    step={0.01}
+                    value={randomRanges.falloffRadius}
+                    onChange={(e) => setRandomRanges(r => ({ ...r, falloffRadius: parseFloat(e.target.value) }))}
+                    style={{ width: '100%', marginTop: '2px' }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* 变换参数 */}
           <div style={{ marginTop: '12px', padding: '8px', background: '#f5f5f5', borderRadius: '4px' }}>
             <div style={{ fontSize: '11px', fontWeight: 'bold', marginBottom: '8px' }}>变换</div>
