@@ -533,35 +533,39 @@ useEffect(() => {
     const vertexCount = entity.getTotalVertices();
     const numFrames = entity.getNumFrames();
 
-    const outerRing = entity.boundary[0];
-    if (!outerRing || outerRing.length < 3) continue;
+    // --- 1. 将所有环转换为 Vector2（像素坐标） ---
+    const allRingsVec = entity.boundary.map(ring =>
+      ring.map(p => new THREE.Vector2(
+        p.x * canvasWidth,
+        (1 - p.y) * canvasHeight
+      ))
+    );
 
-    const pts = outerRing.map(p => new THREE.Vector2(
-      p.x * canvasWidth,
-      (1 - p.y) * canvasHeight
-    ));
+    if (allRingsVec.length === 0 || allRingsVec[0].length < 3) continue;
 
-    // ---- 构建填充网格（手动 BufferGeometry + 三角化，保持顶点顺序与 LineLoop 一致）----
-    const triangles = THREE.ShapeUtils.triangulateShape(pts, []);
-    const triangleIndices: number[] = [];
-    for (const tri of triangles) {
-      triangleIndices.push(tri[0], tri[1], tri[2]);
-    }
+    // --- 2. 三角剖分：外环 + 内环（洞） ---
+    const outerShape = allRingsVec[0];
+    const holes = allRingsVec.slice(1);
+    const triangles = THREE.ShapeUtils.triangulateShape(outerShape, holes);
+    
+    // 扁平化所有顶点（顺序必须与三角剖分返回的索引一致：先外环，后内环）
+    const allPoints = [outerShape, ...holes].flat();
 
+    // --- 3. 构建填充网格（带洞） ---
     const fillGeom = new THREE.BufferGeometry();
-    const positions = new Float32Array(pts.length * 3);
-    for (let i = 0; i < pts.length; i++) {
-      positions[i * 3] = pts[i].x;
-      positions[i * 3 + 1] = pts[i].y;
+    const positions = new Float32Array(allPoints.length * 3);
+    allPoints.forEach((p, i) => {
+      positions[i * 3] = p.x;
+      positions[i * 3 + 1] = p.y;
       positions[i * 3 + 2] = 0;
-    }
+    });
     fillGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    fillGeom.setIndex(triangleIndices);
+    fillGeom.setIndex(triangles);
     fillGeom.computeVertexNormals();
 
-    // 生成 UV（用于颜色纹理映射）
+    // --- 4. UV 生成（用于纹理映射） ---
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of pts) {
+    for (const p of allPoints) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y;
@@ -569,13 +573,14 @@ useEffect(() => {
     }
     const rangeX = maxX - minX || 1;
     const rangeY = maxY - minY || 1;
-    const uv = new Float32Array(pts.length * 2);
-    for (let i = 0; i < pts.length; i++) {
-      uv[i * 2] = (pts[i].x - minX) / rangeX;
-      uv[i * 2 + 1] = (pts[i].y - minY) / rangeY;
-    }
+    const uv = new Float32Array(allPoints.length * 2);
+    allPoints.forEach((p, i) => {
+      uv[i * 2] = (p.x - minX) / rangeX;
+      uv[i * 2 + 1] = (p.y - minY) / rangeY;
+    });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 
+    // --- 5. 填充网格材质（模板缓冲奇偶填充） ---
     const fillMat = new THREE.ShaderMaterial({
       uniforms: {
         uDisplacementTex: { value: displacementTex },
@@ -595,17 +600,15 @@ useEffect(() => {
       stencilZFail: THREE.InvertStencilOp,
       stencilZPass: THREE.InvertStencilOp,
     });
-
     const fillMesh = new THREE.Mesh(fillGeom, fillMat);
     fillMesh.renderOrder = 0;
 
-    // ---- 构建颜色纹理网格 ----
+    // --- 6. 颜色纹理网格（复用同一几何体，带洞区域无三角形 → 纹理自动丢弃） ---
     const colorTexture = entity.getGPUTexture();
     let colorMesh: THREE.Mesh | null = null;
     if (colorTexture) {
       colorTexture.flipY = true;
       const texGeom = fillGeom.clone();
-
       const texMat = new THREE.ShaderMaterial({
         uniforms: {
           uDisplacementTex: { value: displacementTex },
@@ -623,39 +626,42 @@ useEffect(() => {
         stencilRef: 1,
         stencilFunc: THREE.EqualStencilFunc,
       });
-
       colorMesh = new THREE.Mesh(texGeom, texMat);
       colorMesh.renderOrder = 1;
     }
 
-    // ---- 构建边框 LineLoop ----
-    const borderGeom = new THREE.BufferGeometry();
-    const borderPos = new Float32Array(pts.length * 3);
-    for (let i = 0; i < pts.length; i++) {
-      borderPos[i * 3] = pts[i].x;
-      borderPos[i * 3 + 1] = pts[i].y;
-      borderPos[i * 3 + 2] = 0;
+    // --- 7. 边框：为每个环单独创建 LineLoop ---
+    const borderLines: THREE.LineLoop[] = [];
+    for (const ring of allRingsVec) {
+      if (ring.length < 3) continue;
+      const borderGeom = new THREE.BufferGeometry();
+      const borderPos = new Float32Array(ring.length * 3);
+      ring.forEach((p, i) => {
+        borderPos[i * 3] = p.x;
+        borderPos[i * 3 + 1] = p.y;
+        borderPos[i * 3 + 2] = 0;
+      });
+      borderGeom.setAttribute('position', new THREE.BufferAttribute(borderPos, 3));
+
+      const borderMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uDisplacementTex: { value: displacementTex },
+          uFrameIndex: { value: frameIndexRef.current },
+          uTotalFrames: { value: numFrames },
+          uVertexCount: { value: vertexCount },
+          uBorderColor: { value: new THREE.Color(0xffaa00) },
+        },
+        vertexShader: VAT_VERTEX_SHADER,
+        fragmentShader: BORDER_FRAGMENT_SHADER,
+        transparent: true,
+        depthWrite: false,
+      });
+      const lineLoop = new THREE.LineLoop(borderGeom, borderMat);
+      lineLoop.renderOrder = 2;
+      borderLines.push(lineLoop);
     }
-    borderGeom.setAttribute('position', new THREE.BufferAttribute(borderPos, 3));
 
-    const borderMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uDisplacementTex: { value: displacementTex },
-        uFrameIndex: { value: frameIndexRef.current },
-        uTotalFrames: { value: numFrames },
-        uVertexCount: { value: vertexCount },
-        uBorderColor: { value: new THREE.Color(0xffaa00) },
-      },
-      vertexShader: VAT_VERTEX_SHADER,
-      fragmentShader: BORDER_FRAGMENT_SHADER,
-      transparent: true,
-      depthWrite: false,
-    });
-
-    const lineLoop = new THREE.LineLoop(borderGeom, borderMat);
-    lineLoop.renderOrder = 2;
-
-    // ---- 应用变换（锚点+位置+旋转+缩放）----
+    // --- 8. 应用变换（锚点+位置+旋转+缩放）到所有 Mesh 和 LineLoop ---
     const anchorX = (entity.transform.anchor?.x ?? (bbox.x + bbox.w / 2)) * canvasWidth;
     const anchorY = (1 - (entity.transform.anchor?.y ?? (bbox.y + bbox.h / 2))) * canvasHeight;
     const offsetX = entity.transform.position.x;
@@ -669,13 +675,11 @@ useEffect(() => {
 
     setTransform(fillMesh);
     if (colorMesh) setTransform(colorMesh);
-    setTransform(lineLoop);
+    for (const line of borderLines) setTransform(line);
 
     group.add(fillMesh);
     if (colorMesh) group.add(colorMesh);
-    group.add(lineLoop);
-
-    
+    for (const line of borderLines) group.add(line);
   }
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight]);
 

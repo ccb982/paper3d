@@ -297,20 +297,20 @@ export class RegionEntity {
   ): THREE.DataTexture {
     const effect = maskEffect || this.maskEffect;
     if (!effect) {
-      throw new Error('RegionEntity: 缺少扭曲参数，无法生成位移纹理');
+      throw new Error('RegionEntity: 缺少扭曲参数');
     }
 
-    const outerRing = this.boundary[0];
-    if (!outerRing || outerRing.length < 3) {
+    const allRings = this.boundary;
+    if (allRings.length === 0 || allRings[0].length < 3) {
       throw new Error('区域外环顶点不足3个');
     }
 
-    const vertices = outerRing;
-    const vertexCount = vertices.length;
+    const allVertices = allRings.flat();
+    const vertexCount = allVertices.length;
     this._totalVertices = vertexCount;
     this._numFrames = numFrames;
 
-    const basePixels = vertices.map(p => ({
+    const basePixels = allVertices.map(p => ({
       x: p.x * canvasWidth,
       y: (1 - p.y) * canvasHeight,
     }));
@@ -319,16 +319,22 @@ export class RegionEntity {
 
     for (let frame = 0; frame < numFrames; frame++) {
       const t = (frame / numFrames) * 2 * Math.PI;
-      const distortedWorld = processMaskRingCPU(vertices, effect, t);
-      const distortedPixels = distortedWorld.map(p => ({
-        x: p.x * canvasWidth,
-        y: (1 - p.y) * canvasHeight,
-      }));
+      let globalIdx = 0;
 
-      for (let i = 0; i < vertexCount; i++) {
-        const idx = (frame * vertexCount + i) * 2;
-        data[idx] = distortedPixels[i].x - basePixels[i].x;
-        data[idx + 1] = distortedPixels[i].y - basePixels[i].y;
+      for (const ring of allRings) {
+        const distortedWorld = processMaskRingCPU(ring, effect, t);
+
+        for (let i = 0; i < ring.length; i++) {
+          const base = basePixels[globalIdx + i];
+          const distortedPx = {
+            x: distortedWorld[i].x * canvasWidth,
+            y: (1 - distortedWorld[i].y) * canvasHeight,
+          };
+          const idx = (frame * vertexCount + globalIdx + i) * 2;
+          data[idx] = distortedPx.x - base.x;
+          data[idx + 1] = distortedPx.y - base.y;
+        }
+        globalIdx += ring.length;
       }
     }
 
@@ -348,10 +354,7 @@ export class RegionEntity {
     this._lastMaskEffectHash = JSON.stringify(effect);
     this._lastCanvasWidth = canvasWidth;
     this._lastCanvasHeight = canvasHeight;
-
-    if (this._displacementTexture) {
-      this._displacementTexture.dispose();
-    }
+    if (this._displacementTexture) this._displacementTexture.dispose();
     this._displacementTexture = texture;
     return texture;
   }
