@@ -295,6 +295,11 @@ export function MainCanvas() {
     // 【重构】区域实体列表（存储 ftx 压缩数据）
     regionEntities,
     redrawTrigger,
+    refreshRegionEntities,
+    triggerCanvasRedraw,
+    isVertexPinMode,
+    vertexPinRadius,
+    isVertexPinEraserMode,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -310,6 +315,9 @@ export function MainCanvas() {
 
   // 【调试】存储 WebGL Mesh 实际使用的坐标（用于在 2D Canvas 上绘制）
   const webglMeshCornersRef = useRef<Array<{ id: number; corners: Array<{ x: number; y: number }>; center: { x: number; y: number } }>>([]);
+
+  // 顶点固定节流定时器
+  const pinRefreshThrottleRef = useRef<number | null>(null);
 
   // 边框 Group 和 uniforms 存储（用于 GPU 边框扭曲）
   const borderGroupRef = useRef<THREE.Group | null>(null);
@@ -653,6 +661,7 @@ useEffect(() => {
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations]);
 
   const [isPanning, setIsPanning] = useState(false);
+  const [isPinning, setIsPinning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [tempPoints, setTempPoints] = useState<Point[]>([]);
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
@@ -2680,6 +2689,49 @@ useEffect(() => {
       ctx.restore();
     }
 
+    // ========== 绘制固定顶点 ==========
+    if (isVertexPinMode || layerVisibility.regionLayer) {
+      const entities = regionEntities[activeLayerId] || [];
+      for (const entity of entities) {
+        if (entity.fixedVertices.size === 0) continue;
+        let globalIdx = 0;
+        for (const ring of entity.boundary) {
+          for (const p of ring) {
+            if (entity.fixedVertices.has(globalIdx)) {
+              const canvasPos = worldToCanvasFn(p.x, p.y);
+              ctx.save();
+              ctx.strokeStyle = '#ff0000';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.arc(canvasPos.x, canvasPos.y, 6, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.fillStyle = '#ff0000';
+              ctx.beginPath();
+              ctx.arc(canvasPos.x, canvasPos.y, 2, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.restore();
+            }
+            globalIdx++;
+          }
+        }
+      }
+    }
+
+    // 顶点固定模式光标效果
+    if (isVertexPinMode && mousePosition) {
+      const canvasPos = worldToCanvasFn(mousePosition.x, mousePosition.y);
+      const radiusPx = vertexPinRadius * canvasWidth / zoom;
+      ctx.save();
+      ctx.strokeStyle = isVertexPinEraserMode ? '#ffaa00' : '#ff0000';
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(canvasPos.x, canvasPos.y, radiusPx, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
     // ========== 绘制已保存的颜色提取曲线 ==========
     if (colorExtractMode && colorExtractCurves.length > 0) {
       ctx.save();
@@ -2976,6 +3028,33 @@ useEffect(() => {
 
   // ========== 鼠标事件 ==========
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isPinning && isVertexPinMode) {
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
+
+      const entities = regionEntities[activeLayerId] || [];
+      let anyToggled = false;
+
+      for (const entity of entities) {
+        const hits = entity.getVerticesNearPoint(worldCoords.x, worldCoords.y, vertexPinRadius);
+        if (hits.length > 0) {
+          entity.setFixedVertices(hits.map(h => h.globalIndex), !isVertexPinEraserMode);
+          anyToggled = true;
+        }
+      }
+
+      if (anyToggled) {
+        if (pinRefreshThrottleRef.current === null) {
+          refreshRegionEntities(activeLayerId);
+          triggerCanvasRedraw();
+          pinRefreshThrottleRef.current = window.setTimeout(() => {
+            pinRefreshThrottleRef.current = null;
+          }, 100);
+        }
+      }
+      return;
+    }
+
     // 优先处理背景拖动模式
     if (imageState.isBackgroundDragging && imageState.backgroundDragStart) {
       updateBackgroundDrag(e.clientX, e.clientY);
@@ -3168,6 +3247,29 @@ useEffect(() => {
   }, [setMousePosition, setColorExtractPreviewPoint]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (isVertexPinMode && e.button === 0) {
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
+      setIsPinning(true);
+
+      const entities = regionEntities[activeLayerId] || [];
+      let anyToggled = false;
+
+      for (const entity of entities) {
+        const hits = entity.getVerticesNearPoint(worldCoords.x, worldCoords.y, vertexPinRadius);
+        if (hits.length > 0) {
+          entity.setFixedVertices(hits.map(h => h.globalIndex), !isVertexPinEraserMode);
+          anyToggled = true;
+        }
+      }
+
+      if (anyToggled) {
+        refreshRegionEntities(activeLayerId);
+        triggerCanvasRedraw();
+      }
+      return;
+    }
+
     // 优先处理背景拖动模式
     if (imageState.isBackgroundDragging && e.button === 0) {
       startBackgroundDrag(e.clientX, e.clientY);
@@ -3482,6 +3584,11 @@ useEffect(() => {
   ]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (isVertexPinMode) {
+      setIsPinning(false);
+      return;
+    }
+
     // 处理背景拖动结束
     if (imageState.isBackgroundDragging) {
       endBackgroundDrag(); // 重置拖动起始位置

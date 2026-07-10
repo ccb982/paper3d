@@ -286,6 +286,14 @@ interface AppState {
   setRegionAnimationSpeed: (speed: number) => void;
   regionAnimationTime: number;
   setRegionAnimationTime: (time: number) => void;
+
+  // 顶点固定画笔模式（由蒙版面板控制）
+  isVertexPinMode: boolean;
+  setVertexPinMode: (mode: boolean) => void;
+  vertexPinRadius: number;
+  setVertexPinRadius: (radius: number) => void;
+  isVertexPinEraserMode: boolean;
+  setVertexPinEraserMode: (mode: boolean) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1183,6 +1191,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 释放旧的区域实体
     const oldEntities = state.regionEntities[layerId] || [];
+    
+    // ★ 保存旧实体的固定点
+    const fixedVerticesMap = new Map<number, Set<number>>();
+    for (const old of oldEntities) {
+      if (old.fixedVertices.size > 0) {
+        fixedVerticesMap.set(old.id, new Set(old.fixedVertices));
+      }
+    }
+    
     oldEntities.forEach(e => e.dispose());
 
     if (!paintBuffer) {
@@ -1247,6 +1264,12 @@ export const useAppStore = create<AppState>((set, get) => ({
         const cx = bbox.x + bbox.w / 2;
         const cy = bbox.y + bbox.h / 2;
         entity.transform.anchor = { x: cx, y: cy };
+      }
+
+      // ★ 恢复固定点
+      const savedFixed = fixedVerticesMap.get(i);
+      if (savedFixed) {
+        entity.fixedVertices = new Set(savedFixed);
       }
 
       entities.push(entity);
@@ -1649,6 +1672,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   setRegionAnimationSpeed: (speed) => set({ regionAnimationSpeed: speed }),
   regionAnimationTime: 0,
   setRegionAnimationTime: (time) => set({ regionAnimationTime: time }),
+
+  isVertexPinMode: false,
+  setVertexPinMode: (mode) => set({ isVertexPinMode: mode }),
+  vertexPinRadius: 0.02,
+  setVertexPinRadius: (radius) => set({ vertexPinRadius: Math.max(0.005, Math.min(0.1, radius)) }),
+  isVertexPinEraserMode: false,
+  setVertexPinEraserMode: (mode) => set({ isVertexPinEraserMode: mode }),
 }));
 
 // ===== 辅助函数：合成图像数据 =====

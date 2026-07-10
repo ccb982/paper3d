@@ -47,6 +47,8 @@ export class RegionEntity {
   private _lastCanvasWidth: number = 0;
   private _lastCanvasHeight: number = 0;
 
+  public fixedVertices: Set<number> = new Set();
+
   constructor(id: number, layerId: string, boundary: Point[][]) {
     this.id = id;
     this.layerId = layerId;
@@ -317,25 +319,31 @@ export class RegionEntity {
 
     const totalFrames = numFrames + 1;
     const data = new Float32Array(totalFrames * vertexCount * 2);
+    const hasFixed = this.fixedVertices.size > 0;
 
     for (let frame = 0; frame < totalFrames; frame++) {
       const t = (frame / numFrames) * 2 * Math.PI;
-      let globalIdx = 0;
 
+      const distortedWorldAll: Point[] = [];
       for (const ring of allRings) {
-        const distortedWorld = processMaskRingCPU(ring, effect, t);
+        const distorted = processMaskRingCPU(ring, effect, t);
+        distortedWorldAll.push(...distorted);
+      }
 
-        for (let i = 0; i < ring.length; i++) {
-          const base = basePixels[globalIdx + i];
+      for (let globalIdx = 0; globalIdx < vertexCount; globalIdx++) {
+        const idx = (frame * vertexCount + globalIdx) * 2;
+        if (hasFixed && this.fixedVertices.has(globalIdx)) {
+          data[idx] = 0;
+          data[idx + 1] = 0;
+        } else {
+          const base = basePixels[globalIdx];
           const distortedPx = {
-            x: distortedWorld[i].x * canvasWidth,
-            y: (1 - distortedWorld[i].y) * canvasHeight,
+            x: distortedWorldAll[globalIdx].x * canvasWidth,
+            y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
           };
-          const idx = (frame * vertexCount + globalIdx + i) * 2;
           data[idx] = distortedPx.x - base.x;
           data[idx + 1] = distortedPx.y - base.y;
         }
-        globalIdx += ring.length;
       }
     }
 
@@ -386,6 +394,53 @@ export class RegionEntity {
 
   public getNumFrames(): number {
     return this._numFrames + 1;
+  }
+
+  public toggleFixedVertex(globalIndex: number): boolean {
+    if (this.fixedVertices.has(globalIndex)) {
+      this.fixedVertices.delete(globalIndex);
+      return false;
+    } else {
+      this.fixedVertices.add(globalIndex);
+      return true;
+    }
+  }
+
+  public toggleFixedVertices(indices: number[]): void {
+    for (const idx of indices) {
+      this.toggleFixedVertex(idx);
+    }
+    this._textureVersion++;
+  }
+
+  public setFixedVertices(indices: number[], fixed: boolean): void {
+    for (const idx of indices) {
+      if (fixed) {
+        this.fixedVertices.add(idx);
+      } else {
+        this.fixedVertices.delete(idx);
+      }
+    }
+    this._textureVersion++;
+  }
+
+  public getVerticesNearPoint(
+    worldX: number,
+    worldY: number,
+    threshold: number = 0.02
+  ): Array<{ globalIndex: number; point: Point }> {
+    const result: Array<{ globalIndex: number; point: Point }> = [];
+    let globalIdx = 0;
+    for (const ring of this.boundary) {
+      for (const p of ring) {
+        const dist = Math.hypot(p.x - worldX, p.y - worldY);
+        if (dist < threshold) {
+          result.push({ globalIndex: globalIdx, point: p });
+        }
+        globalIdx++;
+      }
+    }
+    return result;
   }
 
   public dispose(): void {

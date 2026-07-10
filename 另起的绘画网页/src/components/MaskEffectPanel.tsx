@@ -13,6 +13,12 @@ export function MaskEffectPanel() {
     forceCPUMode,
     regionAnimationSpeed,
     setRegionAnimationSpeed,
+    isVertexPinMode,
+    setVertexPinMode,
+    vertexPinRadius,
+    setVertexPinRadius,
+    isVertexPinEraserMode,
+    setVertexPinEraserMode,
   } = useAppStore();
 
   // 获取当前选中图层的区域注释
@@ -647,6 +653,66 @@ export function MaskEffectPanel() {
           蒙版特效已禁用。点击上方"启用"按钮开启。
         </div>
       )}
+
+      {/* ===== 顶点固定控制 ===== */}
+      <div style={{ marginTop: '16px', padding: '8px', background: '#f0f0f0', borderRadius: '4px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', fontWeight: 'bold' }}>顶点固定</span>
+          <button
+            onClick={() => {
+              const enabled = !isVertexPinMode;
+              setVertexPinMode(enabled);
+              if (enabled) {
+                useAppStore.getState().setCurrentTool('vertexPin');
+              } else {
+                useAppStore.getState().setCurrentTool('select');
+              }
+            }}
+            className={`btn ${isVertexPinMode ? 'btn-danger' : 'btn-primary'}`}
+            style={{ fontSize: '11px', padding: '2px 8px' }}
+          >
+            {isVertexPinMode ? '退出' : '启用'}
+          </button>
+        </div>
+        {isVertexPinMode && (
+          <>
+            <div style={{ marginTop: '8px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                <span>画笔半径</span>
+                <span>{(vertexPinRadius * 100).toFixed(1)}%</span>
+              </div>
+              <input
+                type="range"
+                min={0.5}
+                max={5}
+                step={0.1}
+                value={vertexPinRadius * 100}
+                onChange={(e) => setVertexPinRadius(parseFloat(e.target.value) / 100)}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
+              <button
+                onClick={() => setVertexPinEraserMode(false)}
+                className={`btn ${!isVertexPinEraserMode ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ flex: 1, fontSize: '11px', padding: '4px' }}
+              >
+                固定笔
+              </button>
+              <button
+                onClick={() => setVertexPinEraserMode(true)}
+                className={`btn ${isVertexPinEraserMode ? 'btn-warning' : 'btn-secondary'}`}
+                style={{ flex: 1, fontSize: '11px', padding: '4px' }}
+              >
+                橡皮擦
+              </button>
+            </div>
+            <p style={{ fontSize: '10px', color: '#666', marginTop: '4px' }}>
+              {isVertexPinEraserMode ? '红色圆点表示已固定，涂抹取消固定' : '点击或涂抹顶点，红色圆点表示固定（不参与扭动）'}
+            </p>
+          </>
+        )}
+      </div>
     </div>
   );
 }

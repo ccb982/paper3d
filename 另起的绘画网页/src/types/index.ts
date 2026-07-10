@@ -18,7 +18,8 @@ export type ToolType =
   | 'pointAnnotation'   // 点注释工具
   | 'regionAnnotation'  // 区域注释工具
   | 'paintBrush'        // 上色画笔工具
-  | 'picker';           // 取色器工具
+  | 'picker'            // 取色器工具
+  | 'vertexPin';        // 顶点固定画笔（不在工具栏显示）
 
 export interface Shape {
   id: string;
