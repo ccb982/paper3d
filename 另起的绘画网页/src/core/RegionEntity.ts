@@ -330,19 +330,41 @@ export class RegionEntity {
         distortedWorldAll.push(...distorted);
       }
 
+      const rawDeltas = new Float32Array(vertexCount * 2);
+      for (let globalIdx = 0; globalIdx < vertexCount; globalIdx++) {
+        const base = basePixels[globalIdx];
+        const distortedPx = {
+          x: distortedWorldAll[globalIdx].x * canvasWidth,
+          y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
+        };
+        rawDeltas[globalIdx * 2] = distortedPx.x - base.x;
+        rawDeltas[globalIdx * 2 + 1] = distortedPx.y - base.y;
+      }
+
+      let avgDx = 0, avgDy = 0;
+      let fixedCount = 0;
+      if (hasFixed) {
+        for (let globalIdx = 0; globalIdx < vertexCount; globalIdx++) {
+          if (this.fixedVertices.has(globalIdx)) {
+            avgDx += rawDeltas[globalIdx * 2];
+            avgDy += rawDeltas[globalIdx * 2 + 1];
+            fixedCount++;
+          }
+        }
+        if (fixedCount > 0) {
+          avgDx /= fixedCount;
+          avgDy /= fixedCount;
+        }
+      }
+
       for (let globalIdx = 0; globalIdx < vertexCount; globalIdx++) {
         const idx = (frame * vertexCount + globalIdx) * 2;
         if (hasFixed && this.fixedVertices.has(globalIdx)) {
           data[idx] = 0;
           data[idx + 1] = 0;
         } else {
-          const base = basePixels[globalIdx];
-          const distortedPx = {
-            x: distortedWorldAll[globalIdx].x * canvasWidth,
-            y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
-          };
-          data[idx] = distortedPx.x - base.x;
-          data[idx + 1] = distortedPx.y - base.y;
+          data[idx] = rawDeltas[globalIdx * 2] - avgDx;
+          data[idx + 1] = rawDeltas[globalIdx * 2 + 1] - avgDy;
         }
       }
     }
