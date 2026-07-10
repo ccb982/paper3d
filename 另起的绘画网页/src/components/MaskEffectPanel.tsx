@@ -11,6 +11,8 @@ export function MaskEffectPanel() {
     layerVisibility,
     triggerCanvasRedraw,
     forceCPUMode,
+    regionAnimationSpeed,
+    setRegionAnimationSpeed,
   } = useAppStore();
 
   // 获取当前选中图层的区域注释
@@ -378,6 +380,23 @@ export function MaskEffectPanel() {
                 />
               </div>
             </div>
+          </div>
+
+          {/* 动画速度控制 */}
+          <div style={{ marginTop: '12px', padding: '8px', background: '#f5f5f5', borderRadius: '4px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
+              <span>动画速度</span>
+              <span>{regionAnimationSpeed.toFixed(2)}x</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={3}
+              step={0.05}
+              value={regionAnimationSpeed}
+              onChange={(e) => setRegionAnimationSpeed(parseFloat(e.target.value))}
+              style={{ width: '100%' }}
+            />
           </div>
 
           {/* 扭曲效果列表 */}

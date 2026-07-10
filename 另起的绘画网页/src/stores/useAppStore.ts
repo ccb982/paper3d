@@ -280,6 +280,12 @@ interface AppState {
   /** 触发画布重绘（用于蒙版特效参数修改后立即更新实时预览） */
   redrawTrigger: number;
   triggerCanvasRedraw: () => void;
+
+  // 区域动画播放参数（CPU/GPU 同步）
+  regionAnimationSpeed: number;
+  setRegionAnimationSpeed: (speed: number) => void;
+  regionAnimationTime: number;
+  setRegionAnimationTime: (time: number) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1638,6 +1644,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       redrawTrigger: state.redrawTrigger + 1,
     }));
   },
+
+  regionAnimationSpeed: 0.5,
+  setRegionAnimationSpeed: (speed) => set({ regionAnimationSpeed: speed }),
+  regionAnimationTime: 0,
+  setRegionAnimationTime: (time) => set({ regionAnimationTime: time }),
 }));
 
 // ===== 辅助函数：合成图像数据 =====

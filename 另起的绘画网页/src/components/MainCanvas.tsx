@@ -23,7 +23,7 @@ const VAT_VERTEX_SHADER = `
 
   void main() {
     float texX = (float(gl_VertexID) + 0.5) / uVertexCount;
-    float texY = (uFrameIndex + 0.5) / uTotalFrames;
+    float texY = uFrameIndex / uTotalFrames;
     vec2 displacement = texture2D(uDisplacementTex, vec2(texX, texY)).rg;
 
     vUv = uv;
@@ -429,11 +429,18 @@ export function MainCanvas() {
     // 启动/停止动画循环
     if (visible) {
       let lastTime = 0;
-      let lastFrameIdx = 0;
       const animate = (time: number) => {
         if (!layerVisibility.regionLayer) return;
 
-        frameIndexRef.current = (frameIndexRef.current + 1) % TOTAL_FRAMES;
+        const delta = lastTime ? (time - lastTime) / 1000 : 0;
+        lastTime = time;
+
+        const speed = useAppStore.getState().regionAnimationSpeed || 0.5;
+        let newTime = (useAppStore.getState().regionAnimationTime + delta * speed) % 1;
+        useAppStore.getState().setRegionAnimationTime(newTime);
+
+        const frameIndex = newTime * TOTAL_FRAMES;
+        frameIndexRef.current = frameIndex;
 
         const group = rootGroupRef.current;
         if (group) {
@@ -441,7 +448,7 @@ export function MainCanvas() {
             if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
               const mat = child.material as THREE.ShaderMaterial;
               if (mat && mat.uniforms && mat.uniforms.uFrameIndex) {
-                mat.uniforms.uFrameIndex.value = frameIndexRef.current;
+                mat.uniforms.uFrameIndex.value = frameIndex;
               }
             }
           });
@@ -449,39 +456,6 @@ export function MainCanvas() {
 
         renderer.clear(true, false, true);
         renderer.render(scene, camera);
-
-        // 每秒输出一次调试信息
-        if (time - lastTime >= 1000) {
-          const framesPlayed = (frameIndexRef.current - lastFrameIdx + TOTAL_FRAMES) % TOTAL_FRAMES;
-          const playSpeed = framesPlayed / ((time - lastTime) / 1000); // 帧/秒
-          console.log(`[调试] 帧索引: ${frameIndexRef.current}/${TOTAL_FRAMES}, 播放速度: ${playSpeed.toFixed(1)} 帧/秒`);
-
-          if (group) {
-            let borderLines: THREE.LineLoop[] = [];
-            let fillMeshes: THREE.Mesh[] = [];
-            group.children.forEach(child => {
-              if (child instanceof THREE.LineLoop) borderLines.push(child);
-              if (child instanceof THREE.Mesh && (child.material as THREE.ShaderMaterial).uniforms?.uDisplacementTex && child.renderOrder === 0) fillMeshes.push(child);
-            });
-            
-            if (borderLines.length > 0) {
-              const line = borderLines[0];
-              const pos = line.geometry.attributes.position;
-              const firstV = { x: pos.getX(0), y: pos.getY(0) };
-              console.log(`[实线边框] 数量: ${borderLines.length}, 第一个顶点局部坐标: (${firstV.x.toFixed(2)}, ${firstV.y.toFixed(2)}), Mesh位置: (${line.position.x.toFixed(2)}, ${line.position.y.toFixed(2)})`);
-            }
-            
-            if (fillMeshes.length > 0) {
-              const mesh = fillMeshes[0];
-              const pos = mesh.geometry.attributes.position;
-              const firstV = { x: pos.getX(0), y: pos.getY(0) };
-              console.log(`[模板填充] 数量: ${fillMeshes.length}, 第一个顶点局部坐标: (${firstV.x.toFixed(2)}, ${firstV.y.toFixed(2)}), Mesh位置: (${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)})`);
-            }
-          }
-
-          lastTime = time;
-          lastFrameIdx = frameIndexRef.current;
-        }
 
         animationFrameIdRef.current = requestAnimationFrame(animate);
       };
@@ -2246,7 +2220,8 @@ useEffect(() => {
 
     // ========== 蒙版特效动态轮廓绘制（作为区域色块图层的一部分）==========
     if (layerVisibility.regionLayer) {
-      const currentTime = performance.now() / 1000;
+      const animationTime = useAppStore.getState().regionAnimationTime;
+      const currentTime = animationTime * 2 * Math.PI;
       
       regionAnnotations.forEach(anno => {
         if (anno.layerId !== activeLayerId) return;
@@ -2255,7 +2230,7 @@ useEffect(() => {
         const outerRing = anno.polygon[0];
         if (!outerRing || outerRing.length < 3) return;
         
-        // 应用 CPU 扭曲
+        // 应用 CPU 扭曲（使用全局同步时间）
         const distortedRing = processMaskRingCPU(outerRing, anno.maskEffect, currentTime);
         
         ctx.save();

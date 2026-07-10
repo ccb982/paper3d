@@ -315,9 +315,10 @@ export class RegionEntity {
       y: (1 - p.y) * canvasHeight,
     }));
 
-    const data = new Float32Array(numFrames * vertexCount * 2);
+    const totalFrames = numFrames + 1;
+    const data = new Float32Array(totalFrames * vertexCount * 2);
 
-    for (let frame = 0; frame < numFrames; frame++) {
+    for (let frame = 0; frame < totalFrames; frame++) {
       const t = (frame / numFrames) * 2 * Math.PI;
       let globalIdx = 0;
 
@@ -341,7 +342,7 @@ export class RegionEntity {
     const texture = new THREE.DataTexture(
       data,
       vertexCount,
-      numFrames,
+      totalFrames,
       THREE.RGFormat,
       THREE.FloatType
     );
@@ -349,7 +350,7 @@ export class RegionEntity {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
 
     this._lastMaskEffectHash = JSON.stringify(effect);
     this._lastCanvasWidth = canvasWidth;
@@ -384,7 +385,7 @@ export class RegionEntity {
   }
 
   public getNumFrames(): number {
-    return this._numFrames;
+    return this._numFrames + 1;
   }
 
   public dispose(): void {
