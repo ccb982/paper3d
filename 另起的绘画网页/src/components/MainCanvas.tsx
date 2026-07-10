@@ -668,21 +668,9 @@ useEffect(() => {
       borderLines.push(lineLoop);
     }
 
-    // --- 8. 应用变换（锚点+位置+旋转+缩放）到所有 Mesh 和 LineLoop ---
-    const anchorX = (entity.transform.anchor?.x ?? (bbox.x + bbox.w / 2)) * canvasWidth;
-    const anchorY = (1 - (entity.transform.anchor?.y ?? (bbox.y + bbox.h / 2))) * canvasHeight;
-    const offsetX = entity.transform.position.x;
-    const offsetY = entity.transform.position.y;
-
-    const setTransform = (mesh: THREE.Mesh | THREE.LineLoop) => {
-      mesh.position.set(anchorX + offsetX, anchorY + offsetY, 0);
-      mesh.rotation.z = -entity.transform.rotation;
-      mesh.scale.set(entity.transform.scale.x, entity.transform.scale.y, 1);
-    };
-
-    setTransform(fillMesh);
-    if (colorMesh) setTransform(colorMesh);
-    for (const line of borderLines) setTransform(line);
+    // --- 8. 无需应用网格变换（变换已烘焙到位移纹理中）---
+    // processMaskRingCPU 已完整应用了 maskEffect.transform（锚点、位移、旋转、缩放）
+    // 网格保持单位矩阵，由位移纹理承载所有变换
 
     group.add(fillMesh);
     if (colorMesh) group.add(colorMesh);
