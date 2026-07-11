@@ -418,6 +418,22 @@ export class RegionEntity {
     return this._numFrames + 1;
   }
 
+  public updateDisplacementOnly(canvasWidth: number, canvasHeight: number): void {
+    if (!this.maskEffect) return;
+
+    const effectHash = JSON.stringify(this.maskEffect);
+    const fixedHash = JSON.stringify(Array.from(this.fixedVertices));
+    
+    if (effectHash === this._lastMaskEffectHash && 
+        canvasWidth === this._lastCanvasWidth && 
+        canvasHeight === this._lastCanvasHeight &&
+        this._displacementTexture) {
+      return;
+    }
+
+    this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, this._numFrames);
+  }
+
   public toggleFixedVertex(globalIndex: number): boolean {
     if (this.fixedVertices.has(globalIndex)) {
       this.fixedVertices.delete(globalIndex);

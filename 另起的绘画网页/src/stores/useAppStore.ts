@@ -1288,6 +1288,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     
   },
 
+  updateRegionDisplacementOnly: (layerId: string) => {
+    const state = get();
+    const entities = state.regionEntities[layerId] || [];
+    const { canvasWidth, canvasHeight } = state;
+    
+    entities.forEach(entity => {
+      entity.updateDisplacementOnly(canvasWidth, canvasHeight);
+    });
+    
+    set((s) => ({
+      regionEntities: { ...s.regionEntities, [layerId]: [...entities] },
+    }));
+  },
+
   // 【重构】释放区域实体资源
   disposeRegionEntities: (layerId) => {
     const state = get();

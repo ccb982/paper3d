@@ -8,6 +8,7 @@ export function MaskEffectPanel() {
     updateRegionAnnotation,
     activeLayerId,
     refreshRegionEntities,
+    updateRegionDisplacementOnly,
     layerVisibility,
     triggerCanvasRedraw,
     forceCPUMode,
@@ -312,14 +313,14 @@ export function MaskEffectPanel() {
       newAnnotations[idx] = updatedAnno;
       useAppStore.setState({ regionAnnotations: newAnnotations });
 
-      if (layerVisibility.regionLayer && activeLayerId) {
-        refreshRegionEntities(activeLayerId);
+      if (activeLayerId) {
+        updateRegionDisplacementOnly(activeLayerId);
       }
       triggerCanvasRedraw();
 
       setEditingAnno(updatedAnno);
     }
-  }, [editingAnno, activeLayerId, layerVisibility, refreshRegionEntities, triggerCanvasRedraw, randomRanges]);
+  }, [editingAnno, activeLayerId, updateRegionDisplacementOnly, triggerCanvasRedraw, randomRanges]);
 
   const toggleRandomizing = useCallback(() => {
     if (isRandomizing) {
