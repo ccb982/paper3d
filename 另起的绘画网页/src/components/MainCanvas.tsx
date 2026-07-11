@@ -10,6 +10,7 @@ import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
 import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, DashedSubRegion } from '../utils/colorExtractionUtils';
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
+import earcut from 'earcut';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
 // ========== VAT 顶点着色器（读取预计算位移纹理）==========
@@ -361,6 +362,7 @@ export function MainCanvas() {
     renderer.setSize(canvasWidth, canvasHeight);
     renderer.setPixelRatio(1);
     renderer.setClearColor(0x000000, 0);
+    renderer.autoClear = false;
     webglRendererRef.current = renderer;
 
     // 创建场景
@@ -375,8 +377,6 @@ export function MainCanvas() {
     const rootGroup = new THREE.Group();
     scene.add(rootGroup);
     rootGroupRef.current = rootGroup;
-
-    
 
     // 创建边框 Group（用于 GPU 边框扭曲）
     const borderGroup = new THREE.Group();
@@ -439,6 +439,7 @@ export function MainCanvas() {
     // 启动/停止动画循环
     if (visible) {
       let lastTime = 0;
+      let frameCounter = 0;
       const animate = (time: number) => {
         if (!layerVisibility.regionLayer) return;
 
@@ -453,7 +454,24 @@ export function MainCanvas() {
         frameIndexRef.current = frameIndex;
 
         const group = rootGroupRef.current;
+        let meshInfo = '';
         if (group) {
+          let meshCount = 0, lineCount = 0;
+          group.children.forEach(child => {
+            if (child instanceof THREE.Mesh) {
+              meshCount++;
+              const mat = child.material as any;
+              const stencilOn = mat.stencilTest === true;
+              const ro = child.renderOrder;
+              const hasFrameUni = !!(mat.uniforms && mat.uniforms.uFrameIndex);
+              if (frameCounter % 30 === 0) {
+                meshInfo += ` [M${ro}${stencilOn?'+stencil':''}${hasFrameUni?'+vat':''}]`;
+              }
+            } else if (child instanceof THREE.LineLoop) {
+              lineCount++;
+            }
+          });
+          // 每帧更新 uniforms
           group.children.forEach(child => {
             if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
               const mat = child.material as THREE.ShaderMaterial;
@@ -464,8 +482,18 @@ export function MainCanvas() {
           });
         }
 
-        renderer.clear(true, false, true);
+        renderer.clear(true, true, true);
         renderer.render(scene, camera);
+        
+        if (frameCounter % 30 === 0) {
+          const children = group?.children?.length ?? 0;
+          console.log(
+            `[DEBUG渲染] 帧#${frameCounter} ` +
+            `frameIndex=${frameIndex.toFixed(1)}/${TOTAL_FRAMES} ` +
+            `children=${children}${meshInfo}`
+          );
+        }
+        frameCounter++;
 
         animationFrameIdRef.current = requestAnimationFrame(animate);
       };
@@ -510,17 +538,25 @@ useEffect(() => {
   if (entities.length === 0) return;
 
   const regionAnnotationsForLayer = regionAnnotations.filter(a => a.layerId === activeLayerId);
+  
+  let meshCount = 0, texCount = 0;
 
   for (const entity of entities) {
+    try {
+    console.log(`[区域渲染] 处理实体 ${entity.id}: boundary=${entity.boundary?.length}环, totalVerts=${entity.getTotalVertices?.()}, hasMaskEffect=${!!entity.maskEffect}, hasBbox=${!!entity.worldBbox}`);
+    
     const hasAnnotation = regionAnnotationsForLayer.some(
       anno => Number(anno.regionId) === entity.id
     );
-    if (!hasAnnotation) continue;
 
     const bbox = entity.worldBbox;
-    if (!bbox) continue;
+    if (!bbox) { console.warn(`[区域渲染] 区域 ${entity.id} - 无 bbox，跳过`); continue; }
 
     const displacementTex = entity.getDisplacementTexture(canvasWidth, canvasHeight);
+    if (!displacementTex) {
+      console.warn(`[区域渲染] 区域 ${entity.id} - displacementTex 为 null，跳过`);
+      continue;
+    }
     const vertexCount = entity.getTotalVertices();
     const numFrames = entity.getNumFrames();
 
@@ -532,15 +568,107 @@ useEffect(() => {
       ))
     );
 
-    if (allRingsVec.length === 0 || allRingsVec[0].length < 3) continue;
+    if (allRingsVec.length === 0 || allRingsVec[0].length < 3) {
+      console.warn(`[区域渲染] 区域 ${entity.id} - 顶点数不足(allRingsVec=${allRingsVec.length}, ring0=${allRingsVec[0]?.length})，跳过`);
+      continue;
+    }
 
-    // --- 2. 三角剖分：外环 + 内环（洞） ---
-    const outerShape = allRingsVec[0];
-    const holes = allRingsVec.slice(1);
-    const triangles = THREE.ShapeUtils.triangulateShape(outerShape, holes);
+    // --- 2. 三角剖分（使用 earcut，支持孔洞） ---
+    const allPoints = allRingsVec.flat();
     
-    // 扁平化所有顶点（顺序必须与三角剖分返回的索引一致：先外环，后内环）
-    const allPoints = [outerShape, ...holes].flat();
+    // 构建扁平坐标数组 [x0,y0, x1,y1, ...] 和每个环的长度
+    const flatCoords: number[] = [];
+    const ringLengths: number[] = [];
+    for (const ring of allRingsVec) {
+      ringLengths.push(ring.length);
+      for (const v of ring) {
+        flatCoords.push(v.x, v.y);
+      }
+    }
+    
+    // ★ 数据清洗：过滤 NaN/Infinity
+    for (let i = 0; i < flatCoords.length; i++) {
+      if (!isFinite(flatCoords[i])) {
+        console.warn(`[区域渲染] 区域 ${entity.id} - flatCoords[${i}]=${flatCoords[i]} 无效，置零`);
+        flatCoords[i] = 0;
+      }
+    }
+    // 去除连续重复点
+    for (let ri = 0; ri < ringLengths.length; ri++) {
+      const start = ringLengths.slice(0, ri).reduce((s, l) => s + l, 0);
+      const len = ringLengths[ri];
+      const keep: number[] = [];
+      for (let vi = 0; vi < len; vi++) {
+        const idx = (start + vi) * 2;
+        const prevIdx = (start + ((vi - 1 + len) % len)) * 2;
+        if (vi > 0 && flatCoords[idx] === flatCoords[prevIdx] && flatCoords[idx + 1] === flatCoords[prevIdx + 1]) {
+          continue; // 跳过与上一个相同的点
+        }
+        keep.push(vi);
+      }
+      if (keep.length < 3) {
+        console.warn(`[区域渲染] 区域 ${entity.id} - 环${ri} 清洗后顶点不足(${keep.length})`);
+        continue; // 跳过此实体
+      }
+      // 重写该环数据，只保留 keep 中的顶点
+      const keptCoords: number[] = [];
+      for (const vi of keep) {
+        keptCoords.push(flatCoords[(start + vi) * 2], flatCoords[(start + vi) * 2 + 1]);
+      }
+      // 替换 flatCoords 中对应段
+      const before = flatCoords.slice(0, start * 2);
+      const after = flatCoords.slice((start + len) * 2);
+      flatCoords.length = 0;
+      flatCoords.push(...before, ...keptCoords, ...after);
+      ringLengths[ri] = keep.length;
+    }
+    // ★ 重新计算 allPoints（与清洗后的 flatCoords 保持一致）
+    allPoints.length = 0;
+    for (let i = 0; i < flatCoords.length; i += 2) {
+      allPoints.push(new THREE.Vector2(flatCoords[i], flatCoords[i + 1]));
+    }
+    
+    // 构建 holeIndices：earcut 需要每个孔洞在顶点数组中的起始索引（累计和）
+    const holeIndices: number[] | null = ringLengths.length > 1
+      ? (() => {
+          const indices: number[] = [];
+          let cumSum = ringLengths[0]; // 第一个环是外环
+          for (let i = 1; i < ringLengths.length; i++) {
+            indices.push(cumSum);
+            cumSum += ringLengths[i];
+          }
+          return indices;
+        })()
+      : null;
+    
+    let indices: number[];
+    try {
+      indices = earcut(flatCoords, holeIndices, 2);
+    } catch (e) {
+      console.warn(`[区域渲染] 区域 ${entity.id} - earcut 剖分失败:`, e);
+      indices = [];
+    }
+    
+    // 验证索引有效性
+    if (indices.length === 0 || indices.length % 3 !== 0) {
+      console.warn(
+        `[区域渲染] 区域 ${entity.id} - 索引无效(长度=${indices.length}, ${indices.length % 3 !== 0 ? '非3倍数' : '空'})，` +
+        `使用外环回退剖分`
+      );
+      // 回退：仅外环剖分（无孔洞 → holeIndices=null）
+      const outerLen = ringLengths[0];
+      const outerFlat = flatCoords.slice(0, outerLen * 2);
+      try {
+        indices = earcut(outerFlat, null, 2);
+      } catch (e2) {
+        console.error(`[区域渲染] 区域 ${entity.id} - 外环剖分也失败:`, e2);
+        indices = [];
+      }
+      if (indices.length === 0 || indices.length % 3 !== 0) {
+        console.error(`[区域渲染] 区域 ${entity.id} - 所有三角剖分均失败，跳过此实体`);
+        continue;
+      }
+    }
 
     // --- 3. 构建填充网格（带洞） ---
     const fillGeom = new THREE.BufferGeometry();
@@ -551,10 +679,10 @@ useEffect(() => {
       positions[i * 3 + 2] = 0;
     });
     fillGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    fillGeom.setIndex(triangles);
+    fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
-
-    // --- 4. UV 生成（用于纹理映射） ---
+    
+    // 先计算 bbox（用于 UV 和调试）
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of allPoints) {
       if (p.x < minX) minX = p.x;
@@ -562,6 +690,26 @@ useEffect(() => {
       if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
     }
+    
+    // ★ 调试：几何体详情
+    {
+      const posAttr = fillGeom.getAttribute('position');
+      const idxAttr = fillGeom.getIndex();
+      let posSample = '';
+      if (posAttr && posAttr.count > 0) {
+        const first = [posAttr.getX(0), posAttr.getY(0), posAttr.getZ(0)];
+        const last = [posAttr.getX(posAttr.count-1), posAttr.getY(posAttr.count-1), posAttr.getZ(posAttr.count-1)];
+        posSample = `first=(${first.map(v=>v.toFixed(1)).join(',')}), last=(${last.map(v=>v.toFixed(1)).join(',')})`;
+      }
+      console.log(
+        `[DEBUG几何] 区域${entity.id} 几何体: ` +
+        `顶点=${posAttr?.count??0}, 三角形=${idxAttr?.count/3??0}, ` +
+        `positions=[${minX.toFixed(1)}~${maxX.toFixed(1)}, ${minY.toFixed(1)}~${maxY.toFixed(1)}], ` +
+        posSample
+      );
+    }
+
+    // --- 4. UV 生成（用于纹理映射） ---
     const rangeX = maxX - minX || 1;
     const rangeY = maxY - minY || 1;
     const uv = new Float32Array(allPoints.length * 2);
@@ -570,6 +718,15 @@ useEffect(() => {
       uv[i * 2 + 1] = (p.y - minY) / rangeY;
     });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    
+    // ★ 调试：UV 详情
+    {
+      let uvSample = '';
+      if (uv.length >= 4) {
+        uvSample = `uv[0]=(${uv[0].toFixed(3)},${uv[1].toFixed(3)}), uv[${uv.length/2-1}]=(${uv[uv.length-2].toFixed(3)},${uv[uv.length-1].toFixed(3)})`;
+      }
+      console.log(`[DEBUG几何] 区域${entity.id} UV: 数量=${uv.length/2}, 范围=[0~1, 0~1], ${uvSample}`);
+    }
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---
     const fillMat = new THREE.ShaderMaterial({
@@ -581,24 +738,60 @@ useEffect(() => {
       },
       vertexShader: VAT_VERTEX_SHADER,
       fragmentShader: FILL_FRAGMENT_SHADER,
-      transparent: true,
+      transparent: false,
       depthWrite: false,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
       stencilWrite: true,
       stencilRef: 1,
       stencilFunc: THREE.AlwaysStencilFunc,
-      stencilFail: THREE.InvertStencilOp,
-      stencilZFail: THREE.InvertStencilOp,
-      stencilZPass: THREE.InvertStencilOp,
+      stencilFail: THREE.ReplaceStencilOp,
+      stencilZFail: THREE.ReplaceStencilOp,
+      stencilZPass: THREE.ReplaceStencilOp,
     });
+    // Three.js r170 的 ShaderMaterial 构造函数不处理继承属性，需创建后设置
+    fillMat.stencilTest = true;
     const fillMesh = new THREE.Mesh(fillGeom, fillMat);
     fillMesh.renderOrder = 0;
+    fillMesh.frustumCulled = false;
+    
+    // ★ 调试：填充网格详情
+    console.log(
+      `[DEBUG填充] 区域${entity.id} 填充网格: ` +
+      `stencilTest=${fillMat.stencilTest}, stencilWrite=${fillMat.stencilWrite}, ref=${fillMat.stencilRef}, ` +
+      `func=${fillMat.stencilFunc===THREE.AlwaysStencilFunc?'Always':fillMat.stencilFunc}, ` +
+      `zPass=${fillMat.stencilZPass===THREE.ReplaceStencilOp?'Replace':fillMat.stencilZPass}, ` +
+      `transparent=${fillMat.transparent}, side=${fillMat.side===THREE.FrontSide?'Front':fillMat.side}`
+    );
 
     // --- 6. 颜色纹理网格（复用同一几何体，带洞区域无三角形 → 纹理自动丢弃） ---
     const colorTexture = entity.getGPUTexture();
     let colorMesh: THREE.Mesh | null = null;
     if (colorTexture) {
       colorTexture.flipY = true;
+      colorTexture.needsUpdate = true;
+      
+      // ★ 调试：检查纹理像素数据
+      {
+        const px = colorTexture.image.data;
+        if (px) {
+          let opaqueCount = 0, totalCount = px.length / 4;
+          let sampleColors: string[] = [];
+          for (let i = 0; i < px.length && sampleColors.length < 5; i += 4) {
+            if (px[i+3] > 0) { sampleColors.push(`(${px[i]},${px[i+1]},${px[i+2]},${px[i+3]})`); }
+          }
+          for (let i = 3; i < px.length; i += 4) { if (px[i] > 0) opaqueCount++; }
+          console.log(
+            `[DEBUG纹理] 区域${entity.id} 纹理像素: 总=${totalCount}, 不透明=${opaqueCount}, ` +
+            `格式=RGBA, 类型=${(colorTexture.type===THREE.UnsignedByteType?'UnsignedByte':colorTexture.type)}, ` +
+            `颜色空间=${(colorTexture as any).colorSpace}, ` +
+            `flipY=${colorTexture.flipY}, needsUpdate=${(colorTexture as any).needsUpdate}, ` +
+            `采样=${sampleColors.join(', ')}`
+          );
+        } else {
+          console.warn(`[DEBUG纹理] 区域${entity.id} 纹理无像素数据!`);
+        }
+      }
+      
       const texGeom = fillGeom.clone();
       const texMat = new THREE.ShaderMaterial({
         uniforms: {
@@ -612,13 +805,88 @@ useEffect(() => {
         fragmentShader: COLOR_FRAGMENT_SHADER,
         transparent: true,
         depthWrite: true,
-        side: THREE.DoubleSide,
-        stencilTest: true,
-        stencilRef: 1,
-        stencilFunc: THREE.EqualStencilFunc,
+        side: THREE.FrontSide,
       });
+      // stencil 属性在 Three.js r170 中需创建后再设置
+      texMat.stencilTest = true;
+      texMat.stencilRef = 1;
+      texMat.stencilFunc = THREE.EqualStencilFunc;
       colorMesh = new THREE.Mesh(texGeom, texMat);
       colorMesh.renderOrder = 1;
+      colorMesh.frustumCulled = false;
+      
+      // ★ 调试：颜色网格材质详情
+      console.log(
+        `[DEBUG颜色] 区域${entity.id} 颜色网格: ` +
+        `stencilTest=${texMat.stencilTest}, stencilRef=${texMat.stencilRef}, ` +
+        `stencilFunc=${texMat.stencilFunc===THREE.EqualStencilFunc?'Equal':texMat.stencilFunc}, ` +
+        `transparent=${texMat.transparent}, depthWrite=${texMat.depthWrite}, ` +
+        `side=${texMat.side===THREE.FrontSide?'Front':texMat.side}, ` +
+        `renderOrder=${colorMesh.renderOrder}, ` +
+        `uniforms.uColorTex=${texMat.uniforms.uColorTex.value?.image?.width??'null'}x${texMat.uniforms.uColorTex.value?.image?.height??'null'}`
+      );
+      
+      // ★ 调试：与颜色网格同样的几何体、同样的纹理，但跳过模板/VAT
+      const simpleTexMat = new THREE.ShaderMaterial({
+        uniforms: { uColorTex: { value: colorTexture } },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D uColorTex;
+          varying vec2 vUv;
+          void main() {
+            vec4 c = texture2D(uColorTex, vUv);
+            gl_FragColor = c;
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        depthTest: false,
+      });
+      const simpleMesh = new THREE.Mesh(texGeom, simpleTexMat);
+      simpleMesh.renderOrder = 5;
+      group.add(simpleMesh);
+      console.log(`[DEBUG_纹理] 添加简单纹理网格, 纹理尺寸=${colorTexture.image.width}x${colorTexture.image.height}, uv=${uv.length/2}个, depthTest=false, renderOrder=5`);
+      
+      // ===== 调试：不依赖 stencil 的纯色网格（验证几何体位置） =====
+      if (typeof window !== 'undefined') {
+        const dbg = (window as any).__debugRegion;
+        if (!dbg) {
+          (window as any).__debugRegion = {};
+        }
+        // 创建纯红调试网格（无 stencil, 无 VAT）
+        if (!(window as any).__debugRegion._redMeshCreated && entity.id === 0) {
+          (window as any).__debugRegion._redMeshCreated = true;
+          const dbgGeom = fillGeom.clone();
+          const dbgMat = new THREE.MeshBasicMaterial({
+            color: 0xff0000,
+            transparent: true,
+            opacity: 0.5,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+          });
+          const dbgMesh = new THREE.Mesh(dbgGeom, dbgMat);
+          dbgMesh.renderOrder = 10; // 画在最上层
+          dbgMesh.frustumCulled = false;
+          group.add(dbgMesh);
+          console.log('[DEBUG] 红色调试网格已添加到场景');
+        }
+      }
+      
+      console.log(
+        `[区域渲染] 区域 ${entity.id} 材质详情: ` +
+        `stencilTest=${texMat.stencilTest}, stencilRef=${texMat.stencilRef}, ` +
+        `stencilFunc=${texMat.stencilFunc === THREE.EqualStencilFunc ? 'Equal' : texMat.stencilFunc}, ` +
+        `transparent=${texMat.transparent}, ` +
+        `textureSize=${colorTexture.image.width}x${colorTexture.image.height}, ` +
+        `colorSpace=${(colorTexture as any).colorSpace}`
+      );
     }
 
     // --- 7. 边框：为每个环单独创建 LineLoop ---
@@ -656,11 +924,40 @@ useEffect(() => {
     // processMaskRingCPU 已完整应用了 maskEffect.transform（锚点、位移、旋转、缩放）
     // 网格保持单位矩阵，由位移纹理承载所有变换
 
+    console.log(
+      `[区域渲染] 区域 ${entity.id} | ` +
+      `模板填充=${fillMesh ? '✓' : '✗'} | ` +
+      `颜色纹理=${colorTexture ? `✓ (${colorTexture.image.width}×${colorTexture.image.height})` : '✗'} | ` +
+      `边框=${showRegionBorderWebGL && borderLines.length > 0 ? `✓ ${borderLines.length}环` : '✗'}`
+    );
+
     group.add(fillMesh);
-    if (colorMesh) group.add(colorMesh);
+    if (colorMesh) { group.add(colorMesh); texCount++; }
+    meshCount++;
     if (showRegionBorderWebGL) {
       for (const line of borderLines) group.add(line);
     }
+  } catch (e: any) {
+    console.error(`[区域渲染] 区域 ${entity.id} 处理出错:`, e?.message || e);
+  }
+  }
+  console.log(`[区域渲染] 完成: ${entities.length}实体, ${meshCount}网格, ${texCount}颜色纹理`);
+  
+  // ★ 调试：打印 group 最终的子节点状态
+  {
+    const children = group.children;
+    const details = children.map((c, i) => {
+      if (c instanceof THREE.Mesh) {
+        const mat = c.material as any;
+        return `[${i}]Mesh ro=${c.renderOrder} stencil=${mat?.stencilTest===true} transparent=${mat?.transparent} depthTest=${mat?.depthTest??true}`;
+      } else if (c instanceof THREE.LineLoop) {
+        return `[${i}]LineLoop ro=${c.renderOrder}`;
+      } else if (c instanceof THREE.Group) {
+        return `[${i}]Group`;
+      }
+      return `[${i}]${c.constructor?.name??'?'}`;
+    });
+    console.log(`[DEBUG组] group 子节点(${children.length}个): ${details.join(' | ')}`);
   }
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL]);
 

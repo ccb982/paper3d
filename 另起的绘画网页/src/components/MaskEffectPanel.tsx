@@ -7,7 +7,6 @@ export function MaskEffectPanel() {
     regionAnnotations,
     updateRegionAnnotation,
     activeLayerId,
-    refreshRegionEntities,
     updateRegionDisplacementOnly,
     layerVisibility,
     triggerCanvasRedraw,
@@ -95,9 +94,9 @@ export function MaskEffectPanel() {
         useAppStore.setState({ regionAnnotations: newAnnotations });
       }
       setEditingAnno(updated);
-      // 立即更新区域色块图层（如果可见）
-      if (layerVisibility.regionLayer && currentLayerId) {
-        refreshRegionEntities(currentLayerId);
+      // 立即更新位移纹理（不重建实体）
+      if (currentLayerId) {
+        updateRegionDisplacementOnly(currentLayerId);
       }
       // 触发画布重绘（更新实时预览边框）
       triggerCanvasRedraw();
@@ -117,9 +116,9 @@ export function MaskEffectPanel() {
         useAppStore.setState({ regionAnnotations: newAnnotations });
       }
       setEditingAnno(updated);
-      // 立即更新区域色块图层（如果可见）
-      if (layerVisibility.regionLayer && currentLayerId) {
-        refreshRegionEntities(currentLayerId);
+      // 立即更新位移纹理（不重建实体）
+      if (currentLayerId) {
+        updateRegionDisplacementOnly(currentLayerId);
       }
       // 触发画布重绘（更新实时预览边框）
       triggerCanvasRedraw();
@@ -173,10 +172,10 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
-    // 立即更新区域色块图层（如果可见）
-    if (layerVisibility.regionLayer && activeLayerId) {
-      refreshRegionEntities(activeLayerId);
-    }
+    // 立即更新位移纹理（不重建实体）
+      if (activeLayerId) {
+        updateRegionDisplacementOnly(activeLayerId);
+      }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
   };
@@ -200,10 +199,10 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
-    // 立即更新区域色块图层（如果可见）
-    if (layerVisibility.regionLayer && activeLayerId) {
-      refreshRegionEntities(activeLayerId);
-    }
+    // 立即更新位移纹理（不重建实体）
+      if (activeLayerId) {
+        updateRegionDisplacementOnly(activeLayerId);
+      }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
   };
@@ -229,10 +228,10 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
-    // 立即更新区域色块图层（如果可见）
-    if (layerVisibility.regionLayer && activeLayerId) {
-      refreshRegionEntities(activeLayerId);
-    }
+    // 立即更新位移纹理（不重建实体）
+      if (activeLayerId) {
+        updateRegionDisplacementOnly(activeLayerId);
+      }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
   };
@@ -257,10 +256,10 @@ export function MaskEffectPanel() {
       useAppStore.setState({ regionAnnotations: newAnnotations });
     }
     setEditingAnno(updated);
-    // 立即更新区域色块图层（如果可见）
-    if (layerVisibility.regionLayer && activeLayerId) {
-      refreshRegionEntities(activeLayerId);
-    }
+    // 立即更新位移纹理（不重建实体）
+      if (activeLayerId) {
+        updateRegionDisplacementOnly(activeLayerId);
+      }
     // 触发画布重绘（更新实时预览边框）
     triggerCanvasRedraw();
   };

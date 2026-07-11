@@ -60,7 +60,6 @@ export class RegionEntity {
     hueThreshold: number = 0.05,
     textureSize: number = 128
   ): void {
-    console.log(`[RegionEntity] 区域 ${this.id} - 开始纹理提取...`);
     
     // 直接从 boundary 计算世界坐标包围盒（与边框点处理方式一致，Y向上）
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -81,8 +80,6 @@ export class RegionEntity {
       h: maxY - minY,
     };
 
-    console.log(`[RegionEntity] 区域 ${this.id} - 世界坐标边界: (${minX.toFixed(4)}, ${minY.toFixed(4)}) ~ (${maxX.toFixed(4)}, ${maxY.toFixed(4)}), worldBbox: (${this.worldBbox.x.toFixed(4)}, ${this.worldBbox.y.toFixed(4)}) w=${this.worldBbox.w.toFixed(4)}, h=${this.worldBbox.h.toFixed(4)}`);
-
     const pixelBbox = computeBBoxAllRings(this.boundary);
 
     const mask = rasterizeRegionMaskLocal(this.boundary, pixelBbox);
@@ -102,7 +99,7 @@ export class RegionEntity {
       512
     );
 
-    console.log(`[RegionEntity] 区域 ${this.id} - 颜色聚类完成: ${baseColors.length} 个基础色, 残差纹理大小: ${deltaTex.length}`);
+    console.log(`[FTX管道] 区域 ${this.id} → paintBuffer→FTX: ${baseColors.length}基础色, 残差${deltaTex.length}字节`);
 
     const resampledDelta = new Uint8Array(textureSize * textureSize * 3);
     const resampledRegionId = regionIdTex ? new Uint8Array(textureSize * textureSize) : null;
@@ -134,8 +131,6 @@ export class RegionEntity {
       bbox: pixelBbox,
     };
 
-    console.log(`[RegionEntity] 区域 ${this.id} - FTX编码完成: 纹理尺寸 ${textureSize}x${textureSize}, 数据量 ${resampledDelta.length} 字节`);
-
     this._textureVersion++;
   }
 
@@ -143,22 +138,17 @@ export class RegionEntity {
     if (!this._ftxData) return null;
 
     if (this._gpuTexture && this._textureVersion === this._cachedVersion) {
-      console.log(`[RegionEntity] 区域 ${this.id} - 使用缓存的GPU纹理`);
       return this._gpuTexture;
     }
 
-    console.log(`[RegionEntity] 区域 ${this.id} - 开始解压FTX数据生成GPU纹理...`);
-    
     const { baseColors, deltaTexture, regionIdTexture, textureSize, bbox } = this._ftxData;
     const pixelData = this._decompressToRGBA(baseColors, deltaTexture, regionIdTexture, textureSize, bbox);
 
-    // 【调试】统计纹理像素
     let opaquePixels = 0;
     let totalPixels = pixelData.length / 4;
     for (let i = 3; i < pixelData.length; i += 4) {
       if (pixelData[i] > 0) opaquePixels++;
     }
-    console.log(`[RegionEntity] 区域 ${this.id} - 纹理统计: 总像素 ${totalPixels}, 不透明像素 ${opaquePixels}, 透明像素 ${totalPixels - opaquePixels}`);
 
     if (this._gpuTexture) {
       this._gpuTexture.dispose();
@@ -170,8 +160,6 @@ export class RegionEntity {
       THREE.RGBAFormat,
       THREE.UnsignedByteType
     );
-    // canvas.getImageData() 返回的是 sRGB 编码，解压后仍为 sRGB
-    // 设置 SRGBColorSpace 让 Three.js 采样时自动解码为线性，渲染时再编码
     if ('SRGBColorSpace' in THREE) {
       this._gpuTexture.colorSpace = (THREE as any).SRGBColorSpace;
     } else {
@@ -184,6 +172,8 @@ export class RegionEntity {
     this._gpuTexture.wrapT = THREE.ClampToEdgeWrapping;
 
     this._cachedVersion = this._textureVersion;
+    
+    console.log(`[FTX管道] 区域 ${this.id} → GPU纹理: ${textureSize}x${textureSize}, 不透明${opaquePixels}/${totalPixels}像素`);
     return this._gpuTexture;
   }
 
@@ -395,7 +385,43 @@ export class RegionEntity {
     canvasHeight: number,
     forceRebuild: boolean = false
   ): THREE.DataTexture | null {
-    if (!this.maskEffect) return null;
+    if (!this.maskEffect) {
+      // 无 maskEffect 时创建零位移纹理（无扭曲，原始位置）
+      // 确保 FTX 数据已就绪
+      if (!this._ftxData) return null;
+      
+      const allRings = this.boundary;
+      if (allRings.length === 0 || allRings[0].length < 3) return null;
+      
+      const allVertices = allRings.flat();
+      const vertexCount = allVertices.length;
+      this._totalVertices = vertexCount;
+      this._numFrames = 60;
+      
+      const totalFrames = this._numFrames + 1;
+      const data = new Float32Array(totalFrames * vertexCount * 2);
+      // data 默认全 0，即零位移
+      
+      if (this._displacementTexture) this._displacementTexture.dispose();
+      this._displacementTexture = new THREE.DataTexture(
+        data,
+        vertexCount,
+        totalFrames,
+        THREE.RGFormat,
+        THREE.FloatType
+      );
+      this._displacementTexture.needsUpdate = true;
+      this._displacementTexture.wrapS = THREE.ClampToEdgeWrapping;
+      this._displacementTexture.wrapT = THREE.ClampToEdgeWrapping;
+      this._displacementTexture.minFilter = THREE.LinearFilter;
+      this._displacementTexture.magFilter = THREE.NearestFilter;
+      
+      this._lastMaskEffectHash = '__default_zero__';
+      this._lastCanvasWidth = canvasWidth;
+      this._lastCanvasHeight = canvasHeight;
+      
+      return this._displacementTexture;
+    }
 
     const currentHash = JSON.stringify(this.maskEffect);
     const paramsChanged =
