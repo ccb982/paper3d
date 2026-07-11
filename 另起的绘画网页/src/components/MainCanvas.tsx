@@ -1069,6 +1069,7 @@ useEffect(() => {
   // ========== 橡皮擦专用状态 ==========
   const [isErasing, setIsErasing] = useState(false);
   const erasedShapesThisSessionRef = useRef<Set<string>>(new Set()); // 用 ref 避免不必要的重渲染
+  const erasedAnnotationsThisSessionRef = useRef<Set<string>>(new Set()); // 擦除的注释 ID
 
   // ========== 视图尺寸自适应（已移除，改用全局画布尺寸）==========
 
@@ -2104,6 +2105,64 @@ useEffect(() => {
     }));
     // 记录已删除的ID，防止同一会话中重复检测
     idsToErase.forEach(id => erasedShapesThisSessionRef.current.add(id));
+  }, []);
+
+  // 点-多边形包含测试（射线法）
+  const pointInPolygon = useCallback((px: number, py: number, polygon: Point[]): boolean => {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i].x, yi = polygon[i].y;
+      const xj = polygon[j].x, yj = polygon[j].y;
+      if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }, []);
+
+  // 获取鼠标位置下可擦除的注释
+  const getAnnotationsToEraseAtPoint = useCallback((canvasX: number, canvasY: number): string[] => {
+    const state = useAppStore.getState();
+    const currentLayerId = state.activeLayerId || state.layers[0]?.id;
+    if (!currentLayerId) return [];
+
+    const toEraseIds: string[] = [];
+
+    // 检测点注释
+    for (const anno of state.pointAnnotations) {
+      if (anno.layerId !== currentLayerId) continue;
+      if (erasedAnnotationsThisSessionRef.current.has(anno.id)) continue;
+      const canvasPos = worldToCanvasForSnap(anno.position.x, anno.position.y);
+      const dist = Math.hypot(canvasX - canvasPos.x, canvasY - canvasPos.y);
+      if (dist < snapRadius) {
+        toEraseIds.push(anno.id);
+      }
+    }
+
+    // 检测区域注释
+    for (const anno of state.regionAnnotations) {
+      if (anno.layerId !== currentLayerId) continue;
+      if (erasedAnnotationsThisSessionRef.current.has(anno.id)) continue;
+      const worldPt = canvasToWorldFn(canvasX, canvasY);
+      // 检查外环
+      const outerRing = anno.polygon[0];
+      if (!outerRing || outerRing.length < 3) continue;
+      if (pointInPolygon(worldPt.x, worldPt.y, outerRing)) {
+        toEraseIds.push(anno.id);
+      }
+    }
+
+    return toEraseIds;
+  }, [snapRadius, worldToCanvasForSnap, canvasToWorldFn, pointInPolygon]);
+
+  // 执行擦除注释
+  const eraseAnnotations = useCallback((idsToErase: string[]) => {
+    if (idsToErase.length === 0) return;
+    useAppStore.setState(state => ({
+      pointAnnotations: state.pointAnnotations.filter(a => !idsToErase.includes(a.id)),
+      regionAnnotations: state.regionAnnotations.filter(a => !idsToErase.includes(a.id)),
+    }));
+    idsToErase.forEach(id => erasedAnnotationsThisSessionRef.current.add(id));
   }, []);
 
   // ========== 绘图函数 ==========
@@ -3476,6 +3535,8 @@ useEffect(() => {
     if (isErasing && currentTool === 'eraser') {
       const idsToErase = getShapesToEraseAtPoint(coords.x, coords.y);
       if (idsToErase.length > 0) eraseShapes(idsToErase);
+      const annoIds = getAnnotationsToEraseAtPoint(coords.x, coords.y);
+      if (annoIds.length > 0) eraseAnnotations(annoIds);
       return;
     }
 
@@ -3540,7 +3601,7 @@ useEffect(() => {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview, colorExtractEraserMode, colorExtractCurves, isPointNearCurve, getRegionIdAtWorldPoint, colorExtractRegionId]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, getAnnotationsToEraseAtPoint, eraseAnnotations, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview, colorExtractEraserMode, colorExtractCurves, isPointNearCurve, getRegionIdAtWorldPoint, colorExtractRegionId]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -3809,8 +3870,11 @@ useEffect(() => {
     if (currentTool === 'eraser') {
       setIsErasing(true);
       erasedShapesThisSessionRef.current.clear();
+      erasedAnnotationsThisSessionRef.current.clear();
       const idsToErase = getShapesToEraseAtPoint(coords.x, coords.y);
       if (idsToErase.length > 0) eraseShapes(idsToErase);
+      const annoIds = getAnnotationsToEraseAtPoint(coords.x, coords.y);
+      if (annoIds.length > 0) eraseAnnotations(annoIds);
       return;
     }
 
@@ -3855,6 +3919,8 @@ useEffect(() => {
     regionPolygonsCache,
     getShapesToEraseAtPoint,
     eraseShapes,
+    getAnnotationsToEraseAtPoint,
+    eraseAnnotations,
     setIsPanning,
     setPanStart,
     setIsErasing,
@@ -3903,12 +3969,15 @@ useEffect(() => {
       const coords = getCanvasCoords(e);
       const finalIds = getShapesToEraseAtPoint(coords.x, coords.y);
       if (finalIds.length > 0) eraseShapes(finalIds);
-      // 如果有任何图形被删除，保存历史
-      if (erasedShapesThisSessionRef.current.size > 0) {
+      const finalAnnoIds = getAnnotationsToEraseAtPoint(coords.x, coords.y);
+      if (finalAnnoIds.length > 0) eraseAnnotations(finalAnnoIds);
+      // 如果有任何图形或注释被删除，保存历史
+      if (erasedShapesThisSessionRef.current.size > 0 || erasedAnnotationsThisSessionRef.current.size > 0) {
         useAppStore.getState().saveHistory();
       }
       setIsErasing(false);
       erasedShapesThisSessionRef.current.clear();
+      erasedAnnotationsThisSessionRef.current.clear();
     }
 
     if (isPainting && currentTool === 'paintBrush') {
