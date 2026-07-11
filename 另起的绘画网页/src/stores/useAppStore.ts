@@ -1294,6 +1294,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { canvasWidth, canvasHeight } = state;
     
     entities.forEach(entity => {
+      const anno = state.regionAnnotations.find(
+        a => a.layerId === layerId && Number(a.regionId) === entity.id
+      );
+      if (anno?.maskEffect) {
+        entity.maskEffect = anno.maskEffect;
+      }
       entity.updateDisplacementOnly(canvasWidth, canvasHeight);
     });
     

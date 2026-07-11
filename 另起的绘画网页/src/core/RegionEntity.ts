@@ -422,7 +422,6 @@ export class RegionEntity {
     if (!this.maskEffect) return;
 
     const effectHash = JSON.stringify(this.maskEffect);
-    const fixedHash = JSON.stringify(Array.from(this.fixedVertices));
     
     if (effectHash === this._lastMaskEffectHash && 
         canvasWidth === this._lastCanvasWidth && 
