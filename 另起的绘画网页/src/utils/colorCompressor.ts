@@ -90,10 +90,10 @@ export function bfsHueClustering(
   width: number,
   height: number,
   buffer: ImageData,
-  hueThreshold: number = 0.05
+  hueThreshold: number = 0.025
 ): Array<{ pixels: number[]; avgHsl: { h: number; s: number; l: number } }> {
   const visited = new Uint8Array(width * height);
-  const clusters: Array<{ pixels: number[]; sumR: number; sumG: number; sumB: number }> = [];
+  const clusters: Array<{ pixels: number[]; avgHsl: { h: number; s: number; l: number } }> = [];
 
   const getIndex = (x: number, y: number) => y * width + x;
   const getColor = (idx: number) => {
@@ -261,7 +261,7 @@ function clusterAndGenerateTexturesV2(
   mask: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
   paintBuffer: ImageData,
-  hueThreshold: number = 0.05,
+  hueThreshold: number = 0.025,
   sourceWidth: number = PAINT_BUFFER_SIZE  // 支持外部指定源图像宽度
 ): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaTex: Uint8Array } {
   const { w, h, x: offsetX, y: offsetY } = bbox;
@@ -448,14 +448,14 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
   if (dashShapes.length === 0) { console.warn('[颜色压缩] 没有虚线图形'); return null; }
 
   const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-  const regions = computeRegionsExact(dashShapes, worldBounds, 600);
+  const regions = computeRegionsExact(dashShapes, worldBounds, 1000);
   if (regions.length === 0) { console.warn('[颜色压缩] 没有检测到闭合区域'); return null; }
 
   const buffer = state.paintBuffers[layerId];
   if (!buffer) { console.warn('[颜色压缩] 当前图层没有 paintBuffer'); return null; }
 
   const compressedRegions: CompressedRegionV2[] = [];
-  const hueThreshold = 0.05;
+  const hueThreshold = 0.025;
 
   for (let ri = 0; ri < regions.length; ri++) {
     const region = regions[ri];

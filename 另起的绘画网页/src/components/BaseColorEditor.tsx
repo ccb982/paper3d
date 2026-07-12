@@ -216,7 +216,7 @@ function extractBaseByClick(
     localMask,
     pxBbox,
     bgImageData,
-    0.05,
+    0.025,
     textureSize
   );
 

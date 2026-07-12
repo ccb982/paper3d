@@ -37,7 +37,7 @@ export function detectColorBlocks(
   // 为每种颜色计算封闭区域
   for (const [color, groupShapes] of colorGroups.entries()) {
     // 对该颜色组的所有形状计算封闭区域多边形
-    const regions = computeRegionsExact(groupShapes, worldBounds, 300);
+    const regions = computeRegionsExact(groupShapes, worldBounds, 1000);
     
     // 为每个区域创建一个色块
     for (const polygon of regions) {

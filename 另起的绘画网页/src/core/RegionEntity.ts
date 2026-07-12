@@ -57,7 +57,7 @@ export class RegionEntity {
 
   public buildFromPaintBuffer(
     paintBuffer: ImageData,
-    hueThreshold: number = 0.05,
+    hueThreshold: number = 0.025,
     textureSize: number = 128
   ): void {
     
@@ -255,7 +255,7 @@ export class RegionEntity {
         deltaTexture: uint8ToBase64(this._ftxData.deltaTexture),
       }],
       quantization: 'uint8',
-      hueThreshold: 0.05,
+      hueThreshold: 0.025,
     };
     return compressToBinary(result);
   }

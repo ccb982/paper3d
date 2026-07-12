@@ -54,7 +54,7 @@ export function computeAllDashedClosedRegions(
   shapes: Shape[],
   canvasWidth: number,
   canvasHeight: number,
-  resolution: number = 600
+  resolution: number = 1000
 ): DashedSubRegion[] {
   // 只筛选虚线形状（颜色为 '#ffaa00'）
   const dashedShapes = shapes.filter(s => s.color === '#ffaa00');

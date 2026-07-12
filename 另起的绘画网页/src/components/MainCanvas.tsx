@@ -1235,7 +1235,7 @@ useEffect(() => {
     // 获取当前图层的所有图形（排除正在绘制的临时图形）
     const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
     
-    const regionId = computeRegionIdAtPoint({ x: cx, y: cy }, currentLayerShapes, worldBounds, 300);
+    const regionId = computeRegionIdAtPoint({ x: cx, y: cy }, currentLayerShapes, worldBounds, 1000);
     if (regionId === null) {
       console.log('[颜色提取] 无法定位到有效区域');
       return null;
@@ -2630,7 +2630,7 @@ useEffect(() => {
           yMin: 0,
           yMax: 1,
         };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 600, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 1000, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
 
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 

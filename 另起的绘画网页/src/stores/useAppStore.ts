@@ -926,9 +926,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMax: 1,
     };
 
-    const gridData = computeGridRegions(allShapesInLayer, worldBounds, 300, '#ffaa00');  // 排除虚线
+    const gridData = computeGridRegions(allShapesInLayer, worldBounds, 1000, '#ffaa00');  // 排除虚线
     const scanlineCache = computeScanlineIntervals(gridData);
-    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 300, '#ffaa00');  // 排除虚线
+    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 1000, '#ffaa00');  // 排除虚线
     
     // 区域重计算后，仅在需要时清空该图层的画笔缓冲区和区域像素记录
     // 默认不清空（用于撤销/重做后的重新计算），仅在添加/删除形状时手动调用清空
@@ -1227,7 +1227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const entity = new RegionEntity(i, layerId, polygon);
 
       // 构建 ftx 压缩数据
-      entity.buildFromPaintBuffer(paintBuffer, 0.05, 128);
+      entity.buildFromPaintBuffer(paintBuffer, 0.025, 128);
 
       // 恢复变换参数和边框扭曲参数（从区域注释中读取）
       const anno = annoMap.get(i);
@@ -1538,7 +1538,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     
     // 使用正式算法 computeRegionsExact
-    const regions = computeRegionsExact(state.shapes, worldBounds, 600);
+    const regions = computeRegionsExact(state.shapes, worldBounds, 1000);
 
     // 构建区域环信息（标注内环/外环）
     const regionRingsInfo = regions.map((region, regionIdx) => {
