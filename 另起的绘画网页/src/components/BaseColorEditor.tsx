@@ -542,8 +542,7 @@ export const BaseColorEditor: React.FC = () => {
 
     const updated = new ImageData(new Uint8ClampedArray(data), TEX_SIZE, TEX_SIZE);
     setBaseTexture(updated);
-    setTimeout(() => saveToHistory(), 0);
-  }, [baseTexture, brushColor, brushSize, saveToHistory]);
+  }, [baseTexture, brushColor, brushSize]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -596,12 +595,13 @@ export const BaseColorEditor: React.FC = () => {
         }
       }
     } else if (currentTool === 'paint') {
+      saveToHistory();
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'picker') {
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, snapPointToExisting]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
