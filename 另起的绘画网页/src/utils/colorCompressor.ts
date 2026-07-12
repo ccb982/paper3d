@@ -257,6 +257,51 @@ function hueDistance(h1: number, h2: number): number {
   return Math.abs(d);
 }
 
+function areColorsSimilar(
+  a: { h: number; s: number; l: number },
+  b: { h: number; s: number; l: number },
+  hThresh: number,
+  sThresh: number,
+  lThresh: number
+): boolean {
+  let dh = Math.abs(a.h - b.h);
+  if (dh > 0.5) dh = 1 - dh;
+  return dh < hThresh && Math.abs(a.s - b.s) < sThresh && Math.abs(a.l - b.l) < lThresh;
+}
+
+function mergeBaseColors(
+  baseColors: Array<{ h: number; s: number; l: number }>,
+  clusterSizes: number[],
+  hueThreshold: number = 0.01,
+  satThreshold: number = 0.05,
+  lightThreshold: number = 0.05
+): {
+  mergedColors: Array<{ h: number; s: number; l: number }>;
+  oldToNewMap: Uint8Array;
+} {
+  const sortedIndices = baseColors.map((_, i) => i).sort((a, b) => clusterSizes[b] - clusterSizes[a]);
+  const merged: Array<{ h: number; s: number; l: number }> = [];
+  const map = new Uint8Array(baseColors.length + 1);
+
+  for (const idx of sortedIndices) {
+    let assigned = false;
+    for (let m = 0; m < merged.length; m++) {
+      const rep = merged[m];
+      if (areColorsSimilar(baseColors[idx], rep, hueThreshold, satThreshold, lightThreshold)) {
+        map[idx + 1] = m + 1;
+        assigned = true;
+        break;
+      }
+    }
+    if (!assigned) {
+      map[idx + 1] = merged.length + 1;
+      merged.push({ ...baseColors[idx] });
+    }
+  }
+
+  return { mergedColors: merged, oldToNewMap: map };
+}
+
 function clusterAndGenerateTexturesV2(
   mask: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
@@ -289,7 +334,6 @@ function clusterAndGenerateTexturesV2(
 
       while (queue.length) {
         const [cx, cy] = queue.shift()!;
-        const ci = cy * w + cx;
         for (const [dx, dy] of dirs) {
           const nx = cx + dx, ny = cy + dy;
           if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
@@ -319,15 +363,14 @@ function clusterAndGenerateTexturesV2(
   if (clusters.length === 0) return { baseColors: [], regionIdTex: null, deltaTex: new Uint8Array(0) };
 
   const baseColors = clusters.map(c => ({ h: c.sumH / c.count, s: c.sumS / c.count, l: c.sumL / c.count }));
-  const regionIdTex = clusters.length > 1 ? new Uint8Array(totalPixels) : null;
+  const clusterSizes = clusters.map(c => c.pixels.length);
+
+  const { mergedColors, oldToNewMap } = mergeBaseColors(baseColors, clusterSizes, 0.01, 0.05, 0.05);
+
+  let finalBaseColors = mergedColors;
+  const regionIdTex = finalBaseColors.length > 1 ? new Uint8Array(totalPixels) : null;
   const deltaTex = new Uint8Array(totalPixels * 3);
   
-  // 量化公式（与 dequantize 配套）：
-  // dH = ((value / 255) - 0.5) * 0.5 * 2 = value/255 - 0.5
-  //    => value = (dH + 0.5) * 255, dH ∈ [-0.5, 0.5]
-  // dS = ((value / 255) - 0.5) * 1.0 * 2 = value/127.5 - 1
-  //    => value = (dS + 1) * 127.5, dS ∈ [-1, 1]
-  // dL 同 S
   const quantize = (value: number, range: number): number => {
     const normalized = (value / range) * 0.5 + 0.5;
     return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
@@ -335,9 +378,15 @@ function clusterAndGenerateTexturesV2(
 
   for (let ci = 0; ci < clusters.length; ci++) {
     const cluster = clusters[ci];
-    const base = baseColors[ci];
+    const newIdx = oldToNewMap[ci + 1] - 1;
+    let base;
+    if (newIdx >= 0 && newIdx < finalBaseColors.length) {
+      base = finalBaseColors[newIdx];
+    } else {
+      base = { h: cluster.sumH / cluster.count, s: cluster.sumS / cluster.count, l: cluster.sumL / cluster.count };
+    }
     for (const pixelIdx of cluster.pixels) {
-      if (regionIdTex) regionIdTex[pixelIdx] = ci + 1;
+      if (regionIdTex) regionIdTex[pixelIdx] = newIdx >= 0 ? newIdx + 1 : ci + 1;
       const col = getColor(pixelIdx);
       const hsl = rgbToHsl(col.r, col.g, col.b);
       const dH = normalizeHueDelta(hsl.h - base.h);
@@ -349,7 +398,7 @@ function clusterAndGenerateTexturesV2(
       deltaTex[idx3 + 2] = quantize(dL, 1.0);
     }
   }
-  return { baseColors, regionIdTex, deltaTex };
+  return { baseColors: finalBaseColors, regionIdTex, deltaTex };
 }
 
 // 导出辅助函数供外部使用（bakeRegionLayerTexture）
