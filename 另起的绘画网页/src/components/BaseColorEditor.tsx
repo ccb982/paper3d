@@ -91,8 +91,6 @@ function extractBaseByClick(
   baseTexture: ImageData;
   residualTexture: ImageData;
   bbox: { x: number; y: number; w: number; h: number };
-  baseColors: Array<{ h: number; s: number; l: number }>;
-  regionIdTex: Uint8Array | null;
 } | null {
   if (worldPolygons.length === 0) return null;
 
@@ -284,8 +282,6 @@ function extractBaseByClick(
     baseTexture: baseImageData,
     residualTexture: residualImageData,
     bbox: pxBbox,
-    baseColors,
-    regionIdTex,
   };
 }
 
@@ -300,8 +296,6 @@ export const BaseColorEditor: React.FC = () => {
   const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
   const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
   const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
-  const [regionIdTex, setRegionIdTex] = useState<Uint8Array | null>(null);
   const [brushColor, setBrushColor] = useState('#ff0000');
   const [brushSize, setBrushSize] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -322,8 +316,6 @@ export const BaseColorEditor: React.FC = () => {
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
-    baseColors: Array<{ h: number; s: number; l: number }>;
-    regionIdTex: Uint8Array | null;
   }
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -334,14 +326,12 @@ export const BaseColorEditor: React.FC = () => {
       baseTexture: baseTexture ? new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height) : null,
       residualTexture: residualTexture ? new ImageData(new Uint8ClampedArray(residualTexture.data), residualTexture.width, residualTexture.height) : null,
       bbox: bbox ? { ...bbox } : null,
-      baseColors: baseColors.map(c => ({ ...c })),
-      regionIdTex: regionIdTex ? new Uint8Array(regionIdTex) : null,
     };
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newState);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [dashedPolygons, baseTexture, residualTexture, bbox, baseColors, regionIdTex, history, historyIndex]);
+  }, [dashedPolygons, baseTexture, residualTexture, bbox, history, historyIndex]);
 
   const undo = useCallback(() => {
     if (historyIndex <= 0) return;
@@ -350,8 +340,6 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(prevState.baseTexture);
     setResidualTexture(prevState.residualTexture);
     setBbox(prevState.bbox);
-    setBaseColors(prevState.baseColors);
-    setRegionIdTex(prevState.regionIdTex);
     setHistoryIndex(historyIndex - 1);
   }, [history, historyIndex]);
 
@@ -362,8 +350,6 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(nextState.baseTexture);
     setResidualTexture(nextState.residualTexture);
     setBbox(nextState.bbox);
-    setBaseColors(nextState.baseColors);
-    setRegionIdTex(nextState.regionIdTex);
     setHistoryIndex(historyIndex + 1);
   }, [history, historyIndex]);
 
@@ -466,8 +452,6 @@ export const BaseColorEditor: React.FC = () => {
         setBaseTexture(null);
         setResidualTexture(null);
         setBbox(null);
-        setBaseColors([]);
-        setRegionIdTex(null);
       };
       img.src = e.target?.result as string;
     };
@@ -500,8 +484,6 @@ export const BaseColorEditor: React.FC = () => {
       setBaseTexture(result.baseTexture);
       setResidualTexture(result.residualTexture);
       setBbox(result.bbox);
-      setBaseColors(result.baseColors);
-      setRegionIdTex(result.regionIdTex);
       setTimeout(() => saveToHistory(), 0);
     }
   }, [bgImageData, dashedPolygons, drawingPolygon, saveToHistory]);
@@ -540,11 +522,9 @@ export const BaseColorEditor: React.FC = () => {
     const r = parseInt(rgb[1], 16);
     const g = parseInt(rgb[2], 16);
     const b = parseInt(rgb[3], 16);
-    const newHsl = rgbToHsl(r, g, b);
 
     const data = baseTexture.data;
     const half = Math.floor(brushSize / 2);
-    const touchedClusters = new Set<number>();
 
     for (let dy = -half; dy <= half; dy++) {
       for (let dx = -half; dx <= half; dx++) {
@@ -557,33 +537,13 @@ export const BaseColorEditor: React.FC = () => {
         data[pi + 1] = g;
         data[pi + 2] = b;
         data[pi + 3] = 255;
-
-        if (bbox && regionIdTex && baseColors.length > 0) {
-          if (gx >= bbox.x && gx < bbox.x + bbox.w && gy >= bbox.y && gy < bbox.y + bbox.h) {
-            const localIdx = (gy - bbox.y) * bbox.w + (gx - bbox.x);
-            const clusterIdx = regionIdTex[localIdx];
-            if (clusterIdx > 0) {
-              touchedClusters.add(clusterIdx - 1);
-            }
-          }
-        }
       }
     }
 
-    setBaseTexture(new ImageData(new Uint8ClampedArray(data), TEX_SIZE, TEX_SIZE));
-
-    if (touchedClusters.size > 0 && baseColors.length > 0) {
-      setBaseColors(prev => {
-        const updated = [...prev];
-        for (const idx of touchedClusters) {
-          if (idx >= 0 && idx < updated.length) {
-            updated[idx] = { ...newHsl };
-          }
-        }
-        return updated;
-      });
-    }
-  }, [baseTexture, brushColor, brushSize, bbox, regionIdTex, baseColors]);
+    const updated = new ImageData(new Uint8ClampedArray(data), TEX_SIZE, TEX_SIZE);
+    setBaseTexture(updated);
+    setTimeout(() => saveToHistory(), 0);
+  }, [baseTexture, brushColor, brushSize, saveToHistory]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -699,33 +659,34 @@ export const BaseColorEditor: React.FC = () => {
     }
     // 叠加模式：基础色 + 残差还原（原始图像）
     else if (mode === 'composite') {
-      if (baseTexture && residualTexture && bbox && baseColors.length > 0) {
-        const compositeData = new ImageData(new Uint8ClampedArray(baseTexture.data), TEX_SIZE, TEX_SIZE);
-        const { w } = bbox;
+      if (baseTexture && residualTexture) {
+        const compositeData = new ImageData(
+          new Uint8ClampedArray(baseTexture.data),
+          TEX_SIZE,
+          TEX_SIZE
+        );
+        const baseData = baseTexture.data;
+        const residualData = residualTexture.data;
+
         for (let y = 0; y < TEX_SIZE; y++) {
           for (let x = 0; x < TEX_SIZE; x++) {
             const idx = (y * TEX_SIZE + x) * 4;
-            if (baseTexture.data[idx + 3] > 0) {
-              const localIdx = (y - bbox.y) * w + (x - bbox.x);
-              const clusterIdx = regionIdTex ? regionIdTex[localIdx] : 1;
-              const base = baseColors[clusterIdx - 1] || baseColors[0];
-              const dH = dequantize(residualTexture.data[idx], 0.5);
-              const dS = dequantize(residualTexture.data[idx + 1], 1.0);
-              const dL = dequantize(residualTexture.data[idx + 2], 1.0);
-              let finalH = base.h + dH;
-              if (finalH < 0) finalH += 1;
-              if (finalH >= 1) finalH -= 1;
-              const finalS = Math.max(0, Math.min(1, base.s + dS));
-              const finalL = Math.max(0, Math.min(1, base.l + dL));
+            if (baseData[idx + 3] > 0) {
+              const hslBase = rgbToHsl(baseData[idx], baseData[idx + 1], baseData[idx + 2]);
+              const dH = dequantize(residualData[idx], 0.25);
+              const dS = dequantize(residualData[idx + 1], 1.0);
+              const dL = dequantize(residualData[idx + 2], 1.0);
+              let finalH = hslBase.h + dH;
+              if (finalH < 0) finalH += 1.0;
+              if (finalH >= 1.0) finalH -= 1.0;
+              const finalS = Math.max(0, Math.min(1, hslBase.s + dS));
+              const finalL = Math.max(0, Math.min(1, hslBase.l + dL));
               const rgb = hslToRgb(finalH, finalS, finalL);
               compositeData.data[idx] = rgb.r;
               compositeData.data[idx + 1] = rgb.g;
               compositeData.data[idx + 2] = rgb.b;
               compositeData.data[idx + 3] = 255;
             } else {
-              compositeData.data[idx] = 0;
-              compositeData.data[idx + 1] = 0;
-              compositeData.data[idx + 2] = 0;
               compositeData.data[idx + 3] = 0;
             }
           }
@@ -1061,8 +1022,6 @@ export const BaseColorEditor: React.FC = () => {
             setBaseTexture(null);
             setResidualTexture(null);
             setBbox(null);
-            setBaseColors([]);
-            setRegionIdTex(null);
           }}
           disabled={!baseTexture && !residualTexture}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}

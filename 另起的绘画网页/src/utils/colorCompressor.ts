@@ -342,7 +342,7 @@ function clusterAndGenerateTexturesV2(
       const dS = hsl.s - base.s;
       const dL = hsl.l - base.l;
       const idx3 = pixelIdx * 3;
-      deltaTex[idx3] = quantize(dH, 0.5);
+      deltaTex[idx3] = quantize(dH * 0.5, 0.25);
       deltaTex[idx3 + 1] = quantize(dS, 1.0);
       deltaTex[idx3 + 2] = quantize(dL, 1.0);
     }
