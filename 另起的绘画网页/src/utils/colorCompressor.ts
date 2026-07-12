@@ -314,6 +314,8 @@ function clusterAndGenerateTexturesV2(
     }
   }
 
+  clusters.sort((a, b) => b.pixels.length - a.pixels.length);
+
   if (clusters.length === 0) return { baseColors: [], regionIdTex: null, deltaTex: new Uint8Array(0) };
 
   const baseColors = clusters.map(c => ({ h: c.sumH / c.count, s: c.sumS / c.count, l: c.sumL / c.count }));
