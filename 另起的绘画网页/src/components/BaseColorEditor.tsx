@@ -1,4 +1,51 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+
+// ========== 贝塞尔曲线辅助函数 ==========
+function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
+  const result: Point[] = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const mt = 1 - t;
+    const x = mt * mt * p0.x + 2 * mt * t * ctrl.x + t * t * p1.x;
+    const y = mt * mt * p0.y + 2 * mt * t * ctrl.y + t * t * p1.y;
+    result.push({ x, y });
+  }
+  return result;
+}
+
+function buildBezierPath(points: Point[]): Point[] {
+  if (points.length < 2) return points.slice();
+  if (points.length === 2) return [points[0], points[1]];
+  const fullPath: Point[] = [points[0]];
+  for (let i = 1; i < points.length - 1; i++) {
+    const p0 = points[i - 1];
+    const p1 = points[i + 1];
+    const ctrl = points[i];
+    const curve = sampleQuadraticBezier(p0, p1, ctrl, 20);
+    fullPath.push(...curve.slice(1));
+  }
+  fullPath.push(points[points.length - 1]);
+  return fullPath;
+}
+
+// ========== 几何辅助函数 ==========
+function distanceToLineSegment(
+  px: number, py: number,
+  x1: number, y1: number,
+  x2: number, y2: number
+): number {
+  const ax = px - x1, ay = py - y1;
+  const bx = x2 - x1, by = y2 - y1;
+  const dot = ax * bx + ay * by;
+  const len2 = bx * bx + by * by;
+  if (len2 === 0) return Math.hypot(ax, ay);
+  let t = dot / len2;
+  t = Math.max(0, Math.min(1, t));
+  const projX = x1 + t * bx;
+  const projY = y1 + t * by;
+  return Math.hypot(px - projX, py - projY);
+}
+
 import { computeRegionsExact } from '../utils/regionDetectionExact';
 import {
   clusterAndGenerateTexturesV2,
@@ -139,9 +186,9 @@ function extractBaseFromDashedPolygons(
 export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [bgImageData, setBgImageData] = useState<ImageData | null>(null);
-  const [dashedPolygons, setDashedPolygons] = useState<Point[][]>([]); // 世界坐标的闭合多边形
-  const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null); // 正在绘制的多边形（世界坐标）
-  const [currentTool, setCurrentTool] = useState<'dashed' | 'paint' | 'picker'>('dashed');
+  const [dashedPolygons, setDashedPolygons] = useState<Point[][]>([]);
+  const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
+  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite'>('base');
   const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
   const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
@@ -152,6 +199,9 @@ export const BaseColorEditor: React.FC = () => {
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [snapPoint, setSnapPoint] = useState<Point | null>(null);
+  const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
@@ -182,6 +232,48 @@ export const BaseColorEditor: React.FC = () => {
   const handleContainerMouseUp = useCallback(() => {
     isPanningRef.current = false;
   }, []);
+
+  // 点吸附函数（控制点不参与吸附）
+  const snapPointToExisting = useCallback((point: Point, currentPointCount: number, toolType: string): Point => {
+    if (!snapEnabled) return point;
+    const shouldSnap = (() => {
+      if (toolType === 'bezier' && currentPointCount >= 2) return false;
+      return true;
+    })();
+    if (!shouldSnap) return point;
+
+    const canvasPoint = { x: point.x * TEX_SIZE, y: (1 - point.y) * TEX_SIZE };
+    const snapRadiusPx = 10;
+    let bestMatch: Point | null = null;
+    let bestDist = snapRadiusPx;
+
+    const candidateMap = new Map<string, Point>();
+    const addCandidate = (p: Point) => {
+      const key = `${Math.round(p.x * 1e6)}_${Math.round(p.y * 1e6)}`;
+      if (!candidateMap.has(key)) candidateMap.set(key, p);
+    };
+
+    for (const poly of dashedPolygons) {
+      for (let i = 0; i < poly.length; i++) {
+        addCandidate(poly[i]);
+      }
+    }
+
+    if (drawingPolygon) {
+      drawingPolygon.forEach(p => addCandidate(p));
+    }
+
+    for (const p of candidateMap.values()) {
+      const pCanvas = { x: p.x * TEX_SIZE, y: (1 - p.y) * TEX_SIZE };
+      const dist = Math.hypot(canvasPoint.x - pCanvas.x, canvasPoint.y - pCanvas.y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestMatch = p;
+      }
+    }
+
+    return bestMatch || point;
+  }, [snapEnabled, dashedPolygons, drawingPolygon]);
 
   // 加载背景图
   const handleLoadBackground = useCallback((file: File) => {
@@ -282,7 +374,6 @@ export const BaseColorEditor: React.FC = () => {
     const world = canvasToWorld(pixel.x, pixel.y);
 
     if (currentTool === 'dashed') {
-      // 右键或双击闭合
       if (e.button === 2 || e.detail === 2) {
         e.preventDefault();
         if (drawingPolygon && drawingPolygon.length >= 3) {
@@ -291,9 +382,30 @@ export const BaseColorEditor: React.FC = () => {
         }
         return;
       }
-      // 左键添加顶点
       if (e.button === 0) {
-        setDrawingPolygon(prev => prev ? [...prev, world] : [world]);
+        const snapped = snapPointToExisting(world, drawingPolygon ? drawingPolygon.length : 0, 'dashed');
+        setDrawingPolygon(prev => prev ? [...prev, snapped] : [snapped]);
+      }
+    } else if (currentTool === 'bezier') {
+      if (e.button === 2 || e.detail === 2) {
+        e.preventDefault();
+        if (drawingPolygon && drawingPolygon.length >= 3) {
+          setDashedPolygons(prev => [...prev, drawingPolygon]);
+          setDrawingPolygon(null);
+        }
+        return;
+      }
+      if (e.button === 0) {
+        const pointCount = drawingPolygon ? drawingPolygon.length : 0;
+        const snapped = snapPointToExisting(world, pointCount, 'bezier');
+        if (pointCount === 2) {
+          const newPoly = [...drawingPolygon!, snapped];
+          setDashedPolygons(prev => [...prev, newPoly]);
+          setDrawingPolygon(null);
+          setPreviewPoint(null);
+        } else {
+          setDrawingPolygon(prev => prev ? [...prev, snapped] : [snapped]);
+        }
       }
     } else if (currentTool === 'paint') {
       setIsDrawing(true);
@@ -301,16 +413,27 @@ export const BaseColorEditor: React.FC = () => {
     } else if (currentTool === 'picker') {
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, snapPointToExisting]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
     setMousePos(pixel);
+    const world = canvasToWorld(pixel.x, pixel.y);
+
+    if (currentTool === 'dashed' || currentTool === 'bezier') {
+      if (drawingPolygon && drawingPolygon.length > 0) {
+        const pointCount = drawingPolygon.length;
+        const snapped = snapPointToExisting(world, pointCount, currentTool);
+        setPreviewPoint(snapped);
+        const isSnapped = Math.abs(world.x - snapped.x) > 0.0001 || Math.abs(world.y - snapped.y) > 0.0001;
+        setSnapPoint(isSnapped ? snapped : null);
+      }
+    }
 
     if (isDrawing && currentTool === 'paint') {
       paintOnBase(pixel.x, pixel.y);
     }
-  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase]);
+  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, drawingPolygon, snapPointToExisting]);
 
   const handleMouseUp = useCallback(() => {
     setIsDrawing(false);
@@ -358,52 +481,109 @@ export const BaseColorEditor: React.FC = () => {
     for (const poly of dashedPolygons) {
       if (poly.length < 2) continue;
       const pts = poly.map(p => worldToCanvas(p.x, p.y));
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
+      if (poly.length === 3) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        ctx.quadraticCurveTo(pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        ctx.closePath();
+        ctx.stroke();
       }
-      ctx.closePath();
-      ctx.stroke();
     }
     ctx.restore();
 
-    // 4. 正在绘制的多边形
-    if (drawingPolygon && drawingPolygon.length >= 2) {
+    // 4. 正在绘制的多边形（含预览虚线）
+    if (drawingPolygon && drawingPolygon.length >= 1) {
       ctx.save();
       ctx.strokeStyle = '#ffaa00';
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y));
-      ctx.beginPath();
-      ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineTo(pts[i].x, pts[i].y);
+      
+      if (currentTool === 'bezier' && drawingPolygon.length === 2) {
+        if (previewPoint) {
+          const previewCanvas = worldToCanvas(previewPoint.x, previewPoint.y);
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          ctx.quadraticCurveTo(pts[1].x, pts[1].y, previewCanvas.x, previewCanvas.y);
+          ctx.stroke();
+          
+          ctx.setLineDash([2, 4]);
+          ctx.strokeStyle = '#888';
+          ctx.beginPath();
+          ctx.moveTo(pts[1].x, pts[1].y);
+          ctx.lineTo(previewCanvas.x, previewCanvas.y);
+          ctx.stroke();
+        }
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i].x, pts[i].y);
+        }
+        if (previewPoint) {
+          const previewCanvas = worldToCanvas(previewPoint.x, previewPoint.y);
+          ctx.lineTo(previewCanvas.x, previewCanvas.y);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
       ctx.restore();
     }
 
-    // 5. 多边形顶点
+    // 5. 多边形顶点和控制点
     ctx.save();
-    ctx.fillStyle = '#ffaa00';
     for (const poly of dashedPolygons) {
-      for (const p of poly) {
+      for (let i = 0; i < poly.length; i++) {
+        const p = poly[i];
         const cp = worldToCanvas(p.x, p.y);
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2);
-        ctx.fill();
+        if (poly.length === 3 && i === 1) {
+          ctx.fillStyle = '#ff4444';
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillStyle = '#ffaa00';
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
     if (drawingPolygon) {
-      for (const p of drawingPolygon) {
+      for (let i = 0; i < drawingPolygon.length; i++) {
+        const p = drawingPolygon[i];
         const cp = worldToCanvas(p.x, p.y);
-        ctx.beginPath();
-        ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2);
-        ctx.fill();
+        if (currentTool === 'bezier' && drawingPolygon.length === 2 && i === 1) {
+          ctx.fillStyle = '#ff4444';
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillStyle = '#ffaa00';
+          ctx.beginPath();
+          ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
     ctx.restore();
+
+    // 6. 吸附点显示
+    if (snapPoint) {
+      ctx.save();
+      ctx.fillStyle = '#52c41a';
+      ctx.beginPath();
+      const sp = worldToCanvas(snapPoint.x, snapPoint.y);
+      ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
 
     // 6. BBox 显示
     if (bbox) {
@@ -477,6 +657,26 @@ export const BaseColorEditor: React.FC = () => {
         >
           虚线
         </button>
+        <button
+          onClick={() => { setCurrentTool('bezier'); setDrawingPolygon(null); }}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: currentTool === 'bezier' ? '#ff4444' : '#f0f0f0',
+            color: currentTool === 'bezier' ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+        >
+          贝塞尔
+        </button>
+        <label style={{ fontSize: '11px', padding: '2px 6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <input
+            type="checkbox"
+            checked={snapEnabled}
+            onChange={(e) => setSnapEnabled(e.target.checked)}
+            style={{ margin: 0 }}
+          />
+          吸附
+        </label>
         <button
           onClick={() => { setCurrentTool('paint'); setDrawingPolygon(null); }}
           disabled={!baseTexture}
