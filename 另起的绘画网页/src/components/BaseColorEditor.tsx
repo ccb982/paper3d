@@ -53,6 +53,7 @@ import {
   rasterizeRegionMaskLocal,
   hslToRgb,
   rgbToHsl,
+  dequantize,
 } from '../utils/colorCompressor';
 import type { Point, Shape } from '../types';
 
@@ -86,7 +87,13 @@ function extractBaseByClick(
   worldPolygons: Point[][],
   clickPixel: { x: number; y: number },
   textureSize: number = TEX_SIZE
-): { baseTexture: ImageData; residualTexture: ImageData; bbox: { x: number; y: number; w: number; h: number } } | null {
+): {
+  baseTexture: ImageData;
+  residualTexture: ImageData;
+  bbox: { x: number; y: number; w: number; h: number };
+  baseColors: Array<{ h: number; s: number; l: number }>;
+  regionIdTex: Uint8Array | null;
+} | null {
   if (worldPolygons.length === 0) return null;
 
   // 将贝塞尔曲线转换为折线（采样）
@@ -196,40 +203,90 @@ function extractBaseByClick(
     h: maxY - minY + 1,
   };
 
-  // 4. 构建基础色纹理（使用BFS区域内的颜色）
+  // 4. 裁剪局部 mask
+  const { w, h } = pxBbox;
+  const localMask = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const globalIdx = (pxBbox.y + y) * textureSize + (pxBbox.x + x);
+      localMask[y * w + x] = visited[globalIdx];
+    }
+  }
+
+  // 5. 调用聚类函数
+  const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
+    localMask,
+    pxBbox,
+    bgImageData,
+    0.05,
+    textureSize
+  );
+
+  if (baseColors.length === 0) return null;
+
+  // 6. 构建基础色纹理（聚类平均色填充）
   const baseCanvas = document.createElement('canvas');
   baseCanvas.width = textureSize;
   baseCanvas.height = textureSize;
   const baseCtx = baseCanvas.getContext('2d')!;
-  baseCtx.clearRect(0, 0, textureSize, textureSize);
-  const baseImageData = baseCtx.getImageData(0, 0, textureSize, textureSize);
+  const baseImageData = baseCtx.createImageData(textureSize, textureSize);
+  const baseData = baseImageData.data;
 
   for (let y = 0; y < textureSize; y++) {
     for (let x = 0; x < textureSize; x++) {
+      const idx = (y * textureSize + x) * 4;
       if (visited[y * textureSize + x] === 1) {
-        const srcIdx = (y * textureSize + x) * 4;
-        const dstIdx = (y * textureSize + x) * 4;
-        baseImageData.data[dstIdx] = bgImageData.data[srcIdx];
-        baseImageData.data[dstIdx + 1] = bgImageData.data[srcIdx + 1];
-        baseImageData.data[dstIdx + 2] = bgImageData.data[srcIdx + 2];
-        baseImageData.data[dstIdx + 3] = 255;
+        const localIdx = (y - pxBbox.y) * w + (x - pxBbox.x);
+        const clusterIdx = regionIdTex ? regionIdTex[localIdx] : 1;
+        const base = baseColors[clusterIdx - 1] || baseColors[0];
+        const rgb = hslToRgb(base.h, base.s, base.l);
+        baseData[idx] = rgb.r;
+        baseData[idx + 1] = rgb.g;
+        baseData[idx + 2] = rgb.b;
+        baseData[idx + 3] = 255;
+      } else {
+        baseData[idx] = 0;
+        baseData[idx + 1] = 0;
+        baseData[idx + 2] = 0;
+        baseData[idx + 3] = 0;
       }
     }
   }
 
-  // 5. 生成残差纹理（原始 - 基础色，偏移 128 存储）
-  const residualImageData = new ImageData(textureSize, textureSize);
-  for (let i = 0; i < residualImageData.data.length; i += 4) {
-    const r = bgImageData.data[i] - baseImageData.data[i];
-    const g = bgImageData.data[i + 1] - baseImageData.data[i + 1];
-    const b = bgImageData.data[i + 2] - baseImageData.data[i + 2];
-    residualImageData.data[i] = r + 128;
-    residualImageData.data[i + 1] = g + 128;
-    residualImageData.data[i + 2] = b + 128;
-    residualImageData.data[i + 3] = 255;
+  // 7. 构建残差纹理（使用 deltaTex 编码值）
+  const residualCanvas = document.createElement('canvas');
+  residualCanvas.width = textureSize;
+  residualCanvas.height = textureSize;
+  const residualCtx = residualCanvas.getContext('2d')!;
+  const residualImageData = residualCtx.createImageData(textureSize, textureSize);
+  const residualData = residualImageData.data;
+
+  for (let y = 0; y < textureSize; y++) {
+    for (let x = 0; x < textureSize; x++) {
+      const idx = (y * textureSize + x) * 4;
+      if (visited[y * textureSize + x] === 1) {
+        const localIdx = (y - pxBbox.y) * w + (x - pxBbox.x);
+        const dIdx = localIdx * 3;
+        residualData[idx] = deltaTex[dIdx];
+        residualData[idx + 1] = deltaTex[dIdx + 1];
+        residualData[idx + 2] = deltaTex[dIdx + 2];
+        residualData[idx + 3] = 255;
+      } else {
+        residualData[idx] = 128;
+        residualData[idx + 1] = 128;
+        residualData[idx + 2] = 128;
+        residualData[idx + 3] = 255;
+      }
+    }
   }
 
-  return { baseTexture: baseImageData, residualTexture: residualImageData, bbox: pxBbox };
+  return {
+    baseTexture: baseImageData,
+    residualTexture: residualImageData,
+    bbox: pxBbox,
+    baseColors,
+    regionIdTex,
+  };
 }
 
 // ============ 组件 ============
@@ -238,11 +295,13 @@ export const BaseColorEditor: React.FC = () => {
   const [bgImageData, setBgImageData] = useState<ImageData | null>(null);
   const [dashedPolygons, setDashedPolygons] = useState<Point[][]>([]);
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
-  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker'>('dashed');
+  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite'>('base');
   const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
   const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
   const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
+  const [regionIdTex, setRegionIdTex] = useState<Uint8Array | null>(null);
   const [brushColor, setBrushColor] = useState('#ff0000');
   const [brushSize, setBrushSize] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -263,6 +322,8 @@ export const BaseColorEditor: React.FC = () => {
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
+    baseColors: Array<{ h: number; s: number; l: number }>;
+    regionIdTex: Uint8Array | null;
   }
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -273,12 +334,14 @@ export const BaseColorEditor: React.FC = () => {
       baseTexture: baseTexture ? new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height) : null,
       residualTexture: residualTexture ? new ImageData(new Uint8ClampedArray(residualTexture.data), residualTexture.width, residualTexture.height) : null,
       bbox: bbox ? { ...bbox } : null,
+      baseColors: baseColors.map(c => ({ ...c })),
+      regionIdTex: regionIdTex ? new Uint8Array(regionIdTex) : null,
     };
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newState);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [dashedPolygons, baseTexture, residualTexture, bbox, history, historyIndex]);
+  }, [dashedPolygons, baseTexture, residualTexture, bbox, baseColors, regionIdTex, history, historyIndex]);
 
   const undo = useCallback(() => {
     if (historyIndex <= 0) return;
@@ -287,6 +350,8 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(prevState.baseTexture);
     setResidualTexture(prevState.residualTexture);
     setBbox(prevState.bbox);
+    setBaseColors(prevState.baseColors);
+    setRegionIdTex(prevState.regionIdTex);
     setHistoryIndex(historyIndex - 1);
   }, [history, historyIndex]);
 
@@ -297,6 +362,8 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(nextState.baseTexture);
     setResidualTexture(nextState.residualTexture);
     setBbox(nextState.bbox);
+    setBaseColors(nextState.baseColors);
+    setRegionIdTex(nextState.regionIdTex);
     setHistoryIndex(historyIndex + 1);
   }, [history, historyIndex]);
 
@@ -399,13 +466,15 @@ export const BaseColorEditor: React.FC = () => {
         setBaseTexture(null);
         setResidualTexture(null);
         setBbox(null);
+        setBaseColors([]);
+        setRegionIdTex(null);
       };
       img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
   }, []);
 
-  // 自动提取
+  // 进入提取模式
   const handleAutoExtract = useCallback(() => {
     if (!bgImageData) return;
     const allPolygons = drawingPolygon && drawingPolygon.length >= 3
@@ -413,6 +482,9 @@ export const BaseColorEditor: React.FC = () => {
       : dashedPolygons;
     if (allPolygons.length === 0) return;
 
+    setDrawingPolygon(null);
+    setPreviewPoint(null);
+    setCurrentTool('select');
     setIsExtractMode(true);
   }, [bgImageData, dashedPolygons, drawingPolygon]);
 
@@ -428,6 +500,8 @@ export const BaseColorEditor: React.FC = () => {
       setBaseTexture(result.baseTexture);
       setResidualTexture(result.residualTexture);
       setBbox(result.bbox);
+      setBaseColors(result.baseColors);
+      setRegionIdTex(result.regionIdTex);
       setTimeout(() => saveToHistory(), 0);
     }
   }, [bgImageData, dashedPolygons, drawingPolygon, saveToHistory]);
@@ -466,9 +540,12 @@ export const BaseColorEditor: React.FC = () => {
     const r = parseInt(rgb[1], 16);
     const g = parseInt(rgb[2], 16);
     const b = parseInt(rgb[3], 16);
+    const newHsl = rgbToHsl(r, g, b);
 
     const data = baseTexture.data;
     const half = Math.floor(brushSize / 2);
+    const touchedClusters = new Set<number>();
+
     for (let dy = -half; dy <= half; dy++) {
       for (let dx = -half; dx <= half; dx++) {
         if (dx * dx + dy * dy > half * half) continue;
@@ -480,11 +557,33 @@ export const BaseColorEditor: React.FC = () => {
         data[pi + 1] = g;
         data[pi + 2] = b;
         data[pi + 3] = 255;
+
+        if (bbox && regionIdTex && baseColors.length > 0) {
+          if (gx >= bbox.x && gx < bbox.x + bbox.w && gy >= bbox.y && gy < bbox.y + bbox.h) {
+            const localIdx = (gy - bbox.y) * bbox.w + (gx - bbox.x);
+            const clusterIdx = regionIdTex[localIdx];
+            if (clusterIdx > 0) {
+              touchedClusters.add(clusterIdx - 1);
+            }
+          }
+        }
       }
     }
-    // 更新 baseTexture 引用触发重绘（不修改残差，残差保持原始值）
+
     setBaseTexture(new ImageData(new Uint8ClampedArray(data), TEX_SIZE, TEX_SIZE));
-  }, [baseTexture, brushColor, brushSize]);
+
+    if (touchedClusters.size > 0 && baseColors.length > 0) {
+      setBaseColors(prev => {
+        const updated = [...prev];
+        for (const idx of touchedClusters) {
+          if (idx >= 0 && idx < updated.length) {
+            updated[idx] = { ...newHsl };
+          }
+        }
+        return updated;
+      });
+    }
+  }, [baseTexture, brushColor, brushSize, bbox, regionIdTex, baseColors]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -583,29 +682,65 @@ export const BaseColorEditor: React.FC = () => {
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-    // 1. 背景图
-    if (bgImageData) {
+    // 基础色模式：背景图 + 基础色纹理（基础色区域显示提取的颜色）
+    if (mode === 'base') {
+      if (bgImageData) {
+        ctx.putImageData(bgImageData, 0, 0);
+      }
+      if (baseTexture) {
+        ctx.putImageData(baseTexture, 0, 0);
+      }
+    }
+    // 残差模式：基础色区域显示残差（偏移128），其他区域显示灰色
+    else if (mode === 'residual') {
+      if (residualTexture) {
+        ctx.putImageData(residualTexture, 0, 0);
+      }
+    }
+    // 叠加模式：基础色 + 残差还原（原始图像）
+    else if (mode === 'composite') {
+      if (baseTexture && residualTexture && bbox && baseColors.length > 0) {
+        const compositeData = new ImageData(new Uint8ClampedArray(baseTexture.data), TEX_SIZE, TEX_SIZE);
+        const { w } = bbox;
+        for (let y = 0; y < TEX_SIZE; y++) {
+          for (let x = 0; x < TEX_SIZE; x++) {
+            const idx = (y * TEX_SIZE + x) * 4;
+            if (baseTexture.data[idx + 3] > 0) {
+              const localIdx = (y - bbox.y) * w + (x - bbox.x);
+              const clusterIdx = regionIdTex ? regionIdTex[localIdx] : 1;
+              const base = baseColors[clusterIdx - 1] || baseColors[0];
+              const dH = dequantize(residualTexture.data[idx], 0.5);
+              const dS = dequantize(residualTexture.data[idx + 1], 1.0);
+              const dL = dequantize(residualTexture.data[idx + 2], 1.0);
+              let finalH = base.h + dH;
+              if (finalH < 0) finalH += 1;
+              if (finalH >= 1) finalH -= 1;
+              const finalS = Math.max(0, Math.min(1, base.s + dS));
+              const finalL = Math.max(0, Math.min(1, base.l + dL));
+              const rgb = hslToRgb(finalH, finalS, finalL);
+              compositeData.data[idx] = rgb.r;
+              compositeData.data[idx + 1] = rgb.g;
+              compositeData.data[idx + 2] = rgb.b;
+              compositeData.data[idx + 3] = 255;
+            } else {
+              compositeData.data[idx] = 0;
+              compositeData.data[idx + 1] = 0;
+              compositeData.data[idx + 2] = 0;
+              compositeData.data[idx + 3] = 0;
+            }
+          }
+        }
+        ctx.putImageData(compositeData, 0, 0);
+      } else if (bgImageData) {
+        ctx.putImageData(bgImageData, 0, 0);
+      }
+    }
+    // 默认模式：只显示背景图
+    else if (bgImageData) {
       ctx.putImageData(bgImageData, 0, 0);
     }
 
-    // 2. 基础色、残差或叠加显示
-    if (mode === 'composite' && baseTexture && residualTexture) {
-      // 基础色 + 残差还原 = 原始图像
-      const compositeData = new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height);
-      for (let i = 0; i < compositeData.data.length; i += 4) {
-        compositeData.data[i] = Math.min(255, Math.max(0, baseTexture.data[i] + residualTexture.data[i] - 128));
-        compositeData.data[i + 1] = Math.min(255, Math.max(0, baseTexture.data[i + 1] + residualTexture.data[i + 1] - 128));
-        compositeData.data[i + 2] = Math.min(255, Math.max(0, baseTexture.data[i + 2] + residualTexture.data[i + 2] - 128));
-      }
-      ctx.putImageData(compositeData, 0, 0);
-    } else {
-      const displayData = mode === 'base' ? baseTexture : residualTexture;
-      if (displayData) {
-        ctx.putImageData(displayData, 0, 0);
-      }
-    }
-
-    // 3. 提取模式提示
+    // 提取模式提示
     if (isExtractMode) {
       ctx.save();
       ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
@@ -926,6 +1061,8 @@ export const BaseColorEditor: React.FC = () => {
             setBaseTexture(null);
             setResidualTexture(null);
             setBbox(null);
+            setBaseColors([]);
+            setRegionIdTex(null);
           }}
           disabled={!baseTexture && !residualTexture}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
