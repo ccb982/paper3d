@@ -60,16 +60,8 @@ function extractBaseFromDashedPolygons(
   };
   if (pxBbox.w <= 0 || pxBbox.h <= 0) return null;
 
-  // 2. 将世界坐标多边形转为像素坐标（相对于 bbox 本地）
-  const localPolygons: Point[][] = worldPolygons.map(ring =>
-    ring.map(p => ({
-      x: p.x * textureSize - pxBbox.x,
-      y: (1 - p.y) * textureSize - pxBbox.y,
-    }))
-  );
-
-  // 3. 栅格化 mask
-  const mask = rasterizeRegionMaskLocal(localPolygons, pxBbox);
+  // 2. 栅格化 mask（直接传入世界坐标，rasterizeRegionMaskLocal 内部会处理坐标转换）
+  const mask = rasterizeRegionMaskLocal(worldPolygons, pxBbox);
   if (!mask || mask.length === 0) return null;
 
   // 4. 颜色聚类
@@ -150,7 +142,7 @@ export const BaseColorEditor: React.FC = () => {
   const [dashedPolygons, setDashedPolygons] = useState<Point[][]>([]); // 世界坐标的闭合多边形
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null); // 正在绘制的多边形（世界坐标）
   const [currentTool, setCurrentTool] = useState<'dashed' | 'paint' | 'picker'>('dashed');
-  const [mode, setMode] = useState<'base' | 'residual'>('base');
+  const [mode, setMode] = useState<'base' | 'residual' | 'composite'>('base');
   const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
   const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
   const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -280,28 +272,9 @@ export const BaseColorEditor: React.FC = () => {
         data[pi + 3] = 255;
       }
     }
-    // 更新 baseTexture 引用触发重绘
+    // 更新 baseTexture 引用触发重绘（不修改残差，残差保持原始值）
     setBaseTexture(new ImageData(new Uint8ClampedArray(data), TEX_SIZE, TEX_SIZE));
-
-    // 同步更新残差
-    if (bgImageData && residualTexture) {
-      const resData = residualTexture.data;
-      for (let dy = -half; dy <= half; dy++) {
-        for (let dx = -half; dx <= half; dx++) {
-          if (dx * dx + dy * dy > half * half) continue;
-          const gx = px + dx;
-          const gy = py + dy;
-          if (gx < 0 || gx >= TEX_SIZE || gy < 0 || gy >= TEX_SIZE) continue;
-          const pi = (gy * TEX_SIZE + gx) * 4;
-          resData[pi] = bgImageData.data[pi] - r + 128;
-          resData[pi + 1] = bgImageData.data[pi + 1] - g + 128;
-          resData[pi + 2] = bgImageData.data[pi + 2] - b + 128;
-          resData[pi + 3] = 255;
-        }
-      }
-      setResidualTexture(new ImageData(new Uint8ClampedArray(resData), TEX_SIZE, TEX_SIZE));
-    }
-  }, [baseTexture, bgImageData, residualTexture, brushColor, brushSize]);
+  }, [baseTexture, brushColor, brushSize]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -360,10 +333,21 @@ export const BaseColorEditor: React.FC = () => {
       ctx.putImageData(bgImageData, 0, 0);
     }
 
-    // 2. 基础色或残差叠加
-    const displayData = mode === 'base' ? baseTexture : residualTexture;
-    if (displayData) {
-      ctx.putImageData(displayData, 0, 0);
+    // 2. 基础色、残差或叠加显示
+    if (mode === 'composite' && baseTexture && residualTexture) {
+      // 基础色 + 残差还原 = 原始图像
+      const compositeData = new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height);
+      for (let i = 0; i < compositeData.data.length; i += 4) {
+        compositeData.data[i] = Math.min(255, Math.max(0, baseTexture.data[i] + residualTexture.data[i] - 128));
+        compositeData.data[i + 1] = Math.min(255, Math.max(0, baseTexture.data[i + 1] + residualTexture.data[i + 1] - 128));
+        compositeData.data[i + 2] = Math.min(255, Math.max(0, baseTexture.data[i + 2] + residualTexture.data[i + 2] - 128));
+      }
+      ctx.putImageData(compositeData, 0, 0);
+    } else {
+      const displayData = mode === 'base' ? baseTexture : residualTexture;
+      if (displayData) {
+        ctx.putImageData(displayData, 0, 0);
+      }
     }
 
     // 3. 已完成的多边形（虚线）
@@ -449,6 +433,18 @@ export const BaseColorEditor: React.FC = () => {
       ctx.restore();
     }
   }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, mousePos, currentTool, brushColor, brushSize]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const wheelHandler = (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      setZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
+    };
+    container.addEventListener('wheel', wheelHandler, { passive: false });
+    return () => container.removeEventListener('wheel', wheelHandler);
+  }, []);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: '#fff' }}>
@@ -545,6 +541,18 @@ export const BaseColorEditor: React.FC = () => {
           残差
         </button>
         <button
+          onClick={() => setMode('composite')}
+          disabled={!baseTexture || !residualTexture}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: mode === 'composite' ? '#1890ff' : '#f0f0f0',
+            color: mode === 'composite' ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+        >
+          叠加
+        </button>
+        <button
           onClick={() => {
             setBaseTexture(null);
             setResidualTexture(null);
@@ -565,7 +573,6 @@ export const BaseColorEditor: React.FC = () => {
           background: '#2a2a2a',
           display: 'flex', justifyContent: 'center', alignItems: 'center',
         }}
-        onWheel={handleWheel}
         onMouseDown={handleContainerMouseDown}
         onMouseMove={handleContainerMouseMove}
         onMouseUp={handleContainerMouseUp}

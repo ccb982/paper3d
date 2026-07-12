@@ -160,11 +160,10 @@ export class RegionEntity {
       THREE.RGBAFormat,
       THREE.UnsignedByteType
     );
-    if ('SRGBColorSpace' in THREE) {
-      this._gpuTexture.colorSpace = (THREE as any).SRGBColorSpace;
-    } else {
-      this._gpuTexture.colorSpace = 'srgb';
-    }
+    // 注意：_decompressToRGBA 返回的已经是 sRGB 显示值（hslToRgb 生成的是 sRGB）
+    // 如果设置 SRGBColorSpace，会导致 GPU 做 sRGB→linear 逆校正，渲染器又做 linear→sRGB 正校正
+    // 双重校正会压缩暗部，导致颜色发黑。此处不设置 colorSpace，让数据按线性传递即可。
+    // 渲染器最终输出时会统一做一次 linear→sRGB 校正，颜色就能正确还原。
     this._gpuTexture.needsUpdate = true;
     this._gpuTexture.minFilter = THREE.LinearFilter;
     this._gpuTexture.magFilter = THREE.LinearFilter;
