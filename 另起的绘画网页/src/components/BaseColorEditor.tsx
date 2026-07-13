@@ -807,15 +807,13 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
 
-    // 基础色模式：直接绘制基础色纹理
+    // 参考图模式：显示原始上传的背景图
     if (mode === 'base') {
-      if (baseTexture) {
-        // 临时测试：用 fillRect 填充白色
-        ctx.fillStyle = 'white';
-        ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
-        console.log('[DEBUG] BASE MODE: fillRect WHITE');
-      } else if (bgImageData) {
+      if (bgImageData) {
         ctx.putImageData(bgImageData, 0, 0);
+      } else {
+        ctx.fillStyle = '#333';
+        ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       }
     }
     // 残差模式：基础色区域显示残差（偏移128），其他区域显示灰色
@@ -1181,23 +1179,23 @@ export const BaseColorEditor: React.FC = () => {
           onClick={() => setMode('base')}
           style={{
             padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
-            background: mode === 'base' ? '#52c41a' : '#f0f0f0',
+            background: mode === 'base' ? '#1890ff' : '#f0f0f0',
             color: mode === 'base' ? '#fff' : '#333',
             border: '1px solid #d9d9d9',
           }}
         >
-          基础色
+          参考图
         </button>
         <button
           onClick={() => setMode('base2')}
           style={{
             padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
-            background: mode === 'base2' ? '#ff4d4f' : '#f0f0f0',
+            background: mode === 'base2' ? '#52c41a' : '#f0f0f0',
             color: mode === 'base2' ? '#fff' : '#333',
             border: '1px solid #d9d9d9',
           }}
         >
-          新基础色
+          基础色
         </button>
         <button
           onClick={() => setMode('residual')}
@@ -1298,7 +1296,7 @@ export const BaseColorEditor: React.FC = () => {
         </div>
 
         {/* 基础色信息面板 - position: absolute 避免影响 canvas 布局 */}
-        {(mode === 'base' || mode === 'base2') && baseColors.length > 0 && (
+        {mode === 'base2' && baseColors.length > 0 && (
           <div style={{
             position: 'absolute',
             top: 0,
