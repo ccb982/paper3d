@@ -477,7 +477,7 @@ export function MainCanvas() {
             if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
               const mat = child.material as THREE.ShaderMaterial;
               if (mat && mat.uniforms && mat.uniforms.uTime) {
-                mat.uniforms.uTime.value = currentTime;
+                mat.uniforms.uTime.value = currentTime * 2;
               }
             }
           });
