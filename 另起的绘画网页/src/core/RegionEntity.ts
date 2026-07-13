@@ -284,7 +284,7 @@ export class RegionEntity {
     canvasWidth: number,
     canvasHeight: number,
     maskEffect?: any,
-    numFrames: number = 60
+    loopFrames: number = 30
   ): THREE.DataTexture {
     const effect = maskEffect || this.maskEffect;
     if (!effect) {
@@ -299,19 +299,25 @@ export class RegionEntity {
     const allVertices = allRings.flat();
     const vertexCount = allVertices.length;
     this._totalVertices = vertexCount;
-    this._numFrames = numFrames;
 
     const basePixels = allVertices.map(p => ({
       x: p.x * canvasWidth,
       y: (1 - p.y) * canvasHeight,
     }));
 
-    const totalFrames = numFrames + 1;
+    const totalFrames = 2 * loopFrames;
+    this._numFrames = totalFrames;
     const data = new Float32Array(totalFrames * vertexCount * 2);
     const hasFixed = this.fixedVertices.size > 0;
 
     for (let frame = 0; frame < totalFrames; frame++) {
-      const t = (frame / numFrames) * 2 * Math.PI;
+      let t: number;
+      if (frame < loopFrames) {
+        t = (frame / loopFrames) * 2 * Math.PI;
+      } else {
+        const reverseIndex = frame - loopFrames;
+        t = (1 - (reverseIndex + 1) / loopFrames) * 2 * Math.PI;
+      }
 
       const distortedWorldAll: Point[] = [];
       for (const ring of allRings) {
@@ -358,6 +364,9 @@ export class RegionEntity {
       }
     }
 
+    const frameSize = vertexCount * 2;
+    data.copyWithin((totalFrames - 1) * frameSize, 0, frameSize);
+
     const texture = new THREE.DataTexture(
       data,
       vertexCount,
@@ -369,7 +378,7 @@ export class RegionEntity {
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
     texture.wrapS = THREE.ClampToEdgeWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
 
     this._lastMaskEffectHash = JSON.stringify(effect);
     this._lastCanvasWidth = canvasWidth;
@@ -385,8 +394,6 @@ export class RegionEntity {
     forceRebuild: boolean = false
   ): THREE.DataTexture | null {
     if (!this.maskEffect) {
-      // 无 maskEffect 时创建零位移纹理（无扭曲，原始位置）
-      // 确保 FTX 数据已就绪
       if (!this._ftxData) return null;
       
       const allRings = this.boundary;
@@ -395,11 +402,10 @@ export class RegionEntity {
       const allVertices = allRings.flat();
       const vertexCount = allVertices.length;
       this._totalVertices = vertexCount;
-      this._numFrames = 60;
+      const totalFrames = 60;
+      this._numFrames = totalFrames;
       
-      const totalFrames = this._numFrames + 1;
       const data = new Float32Array(totalFrames * vertexCount * 2);
-      // data 默认全 0，即零位移
       
       if (this._displacementTexture) this._displacementTexture.dispose();
       this._displacementTexture = new THREE.DataTexture(
@@ -430,7 +436,7 @@ export class RegionEntity {
       this._lastMaskEffectHash !== currentHash;
 
     if (paramsChanged || !this._displacementTexture) {
-      this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, this._numFrames);
+      this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, 30);
     }
     return this._displacementTexture;
   }

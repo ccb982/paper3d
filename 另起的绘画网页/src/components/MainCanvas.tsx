@@ -13,18 +13,21 @@ import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 import earcut from 'earcut';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
-// ========== VAT 顶点着色器（读取预计算位移纹理）==========
+// ========== VAT 顶点着色器（读取预计算位移纹理，GPU自计算帧索引）==========
 const VAT_VERTEX_SHADER = `
   uniform sampler2D uDisplacementTex;
-  uniform float uFrameIndex;
+  uniform float uTime;
+  uniform float uFramesPerSecond;
   uniform float uTotalFrames;
   uniform float uVertexCount;
 
   varying vec2 vUv;
 
   void main() {
+    float frame = mod(uTime * uFramesPerSecond, uTotalFrames);
+    float texY = frame / uTotalFrames;
     float texX = (float(gl_VertexID) + 0.5) / uVertexCount;
-    float texY = uFrameIndex / uTotalFrames;
+
     vec2 displacement = texture2D(uDisplacementTex, vec2(texX, texY)).rg;
 
     vUv = uv;
@@ -447,11 +450,9 @@ export function MainCanvas() {
         lastTime = time;
 
         const speed = useAppStore.getState().regionAnimationSpeed || 0.5;
-        let newTime = (useAppStore.getState().regionAnimationTime + delta * speed) % 1;
-        useAppStore.getState().setRegionAnimationTime(newTime);
-
-        const frameIndex = newTime * TOTAL_FRAMES;
-        frameIndexRef.current = frameIndex;
+        let currentTime = useAppStore.getState().regionAnimationTime + delta * speed;
+        currentTime = currentTime % 1000;
+        useAppStore.getState().setRegionAnimationTime(currentTime);
 
         const group = rootGroupRef.current;
         let meshInfo = '';
@@ -463,9 +464,9 @@ export function MainCanvas() {
               const mat = child.material as any;
               const stencilOn = mat.stencilTest === true;
               const ro = child.renderOrder;
-              const hasFrameUni = !!(mat.uniforms && mat.uniforms.uFrameIndex);
+              const hasTimeUni = !!(mat.uniforms && mat.uniforms.uTime);
               if (frameCounter % 30 === 0) {
-                meshInfo += ` [M${ro}${stencilOn?'+stencil':''}${hasFrameUni?'+vat':''}]`;
+                meshInfo += ` [M${ro}${stencilOn?'+stencil':''}${hasTimeUni?'+vat':''}]`;
               }
             } else if (child instanceof THREE.LineLoop) {
               lineCount++;
@@ -475,8 +476,8 @@ export function MainCanvas() {
           group.children.forEach(child => {
             if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
               const mat = child.material as THREE.ShaderMaterial;
-              if (mat && mat.uniforms && mat.uniforms.uFrameIndex) {
-                mat.uniforms.uFrameIndex.value = frameIndex;
+              if (mat && mat.uniforms && mat.uniforms.uTime) {
+                mat.uniforms.uTime.value = currentTime;
               }
             }
           });
@@ -489,7 +490,7 @@ export function MainCanvas() {
           const children = group?.children?.length ?? 0;
           console.log(
             `[DEBUG渲染] 帧#${frameCounter} ` +
-            `frameIndex=${frameIndex.toFixed(1)}/${TOTAL_FRAMES} ` +
+            `time=${currentTime.toFixed(2)}s ` +
             `children=${children}${meshInfo}`
           );
         }
@@ -732,7 +733,8 @@ useEffect(() => {
     const fillMat = new THREE.ShaderMaterial({
       uniforms: {
         uDisplacementTex: { value: displacementTex },
-        uFrameIndex: { value: frameIndexRef.current },
+        uTime: { value: 0 },
+        uFramesPerSecond: { value: 30 },
         uTotalFrames: { value: numFrames },
         uVertexCount: { value: vertexCount },
       },
@@ -796,7 +798,8 @@ useEffect(() => {
       const texMat = new THREE.ShaderMaterial({
         uniforms: {
           uDisplacementTex: { value: displacementTex },
-          uFrameIndex: { value: frameIndexRef.current },
+          uTime: { value: 0 },
+          uFramesPerSecond: { value: 30 },
           uTotalFrames: { value: numFrames },
           uVertexCount: { value: vertexCount },
           uColorTex: { value: colorTexture },
@@ -905,7 +908,8 @@ useEffect(() => {
       const borderMat = new THREE.ShaderMaterial({
         uniforms: {
           uDisplacementTex: { value: displacementTex },
-          uFrameIndex: { value: frameIndexRef.current },
+          uTime: { value: 0 },
+          uFramesPerSecond: { value: 30 },
           uTotalFrames: { value: numFrames },
           uVertexCount: { value: vertexCount },
           uBorderColor: { value: new THREE.Color(0xffaa00) },
