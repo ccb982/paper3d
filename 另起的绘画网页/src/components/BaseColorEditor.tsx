@@ -1,4 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {
+  clusterAndGenerateTexturesV2,
+  hslToRgb,
+  rgbToHsl,
+  dequantize,
+} from '../utils/colorCompressor';
+import type { Point } from '../types';
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -28,35 +35,6 @@ function buildBezierPath(points: Point[]): Point[] {
   return fullPath;
 }
 
-// ========== 几何辅助函数 ==========
-function distanceToLineSegment(
-  px: number, py: number,
-  x1: number, y1: number,
-  x2: number, y2: number
-): number {
-  const ax = px - x1, ay = py - y1;
-  const bx = x2 - x1, by = y2 - y1;
-  const dot = ax * bx + ay * by;
-  const len2 = bx * bx + by * by;
-  if (len2 === 0) return Math.hypot(ax, ay);
-  let t = dot / len2;
-  t = Math.max(0, Math.min(1, t));
-  const projX = x1 + t * bx;
-  const projY = y1 + t * by;
-  return Math.hypot(px - projX, py - projY);
-}
-
-import { computeRegionsExact } from '../utils/regionDetectionExact';
-import {
-  clusterAndGenerateTexturesV2,
-  computeBBoxAllRings,
-  rasterizeRegionMaskLocal,
-  hslToRgb,
-  rgbToHsl,
-  dequantize,
-} from '../utils/colorCompressor';
-import type { Point, Shape } from '../types';
-
 // ============ 坐标转换 ============
 const TEX_SIZE = 512;
 
@@ -66,19 +44,6 @@ function canvasToWorld(cx: number, cy: number): Point {
 
 function worldToCanvas(wx: number, wy: number): Point {
   return { x: wx * TEX_SIZE, y: (1 - wy) * TEX_SIZE };
-}
-
-// ============ 射线法多边形包含测试 ============
-function pointInPolygon(px: number, py: number, polygon: Point[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const xi = polygon[i].x, yi = polygon[i].y;
-    const xj = polygon[j].x, yj = polygon[j].y;
-    if ((yi > py) !== (yj > py) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
-      inside = !inside;
-    }
-  }
-  return inside;
 }
 
 // ============ 提取模式下的BFS取色 ============
@@ -91,6 +56,7 @@ function extractBaseByClick(
   baseTexture: ImageData;
   residualTexture: ImageData;
   bbox: { x: number; y: number; w: number; h: number };
+  baseColors: Array<{ h: number; s: number; l: number }>;
 } | null {
   if (worldPolygons.length === 0) return null;
 
@@ -148,21 +114,30 @@ function extractBaseByClick(
   }
 
   // 2. BFS取色：从点击位置开始，不能穿过墙
-  const visited = new Uint8Array(textureSize * textureSize);
+  const bfsVisited = new Uint8Array(textureSize * textureSize);
   const queue: { x: number; y: number }[] = [];
   
   const cx = clickPixel.x;
   const cy = clickPixel.y;
   
-  if (cx < 0 || cx >= textureSize || cy < 0 || cy >= textureSize) return null;
-  if (wallMask[cy * textureSize + cx] === 1) return null;
+  console.log('[DEBUG BFS] starting at:', { cx, cy, textureSize });
+  
+  if (cx < 0 || cx >= textureSize || cy < 0 || cy >= textureSize) {
+    console.log('[DEBUG BFS] click outside bounds');
+    return null;
+  }
+  if (wallMask[cy * textureSize + cx] === 1) {
+    console.log('[DEBUG BFS] click on wall');
+    return null;
+  }
   
   queue.push({ x: cx, y: cy });
-  visited[cy * textureSize + cx] = 1;
+  bfsVisited[cy * textureSize + cx] = 1;
   
   const dx = [-1, 1, 0, 0];
   const dy = [0, 0, -1, 1];
   
+  let visitedCount = 1;
   while (queue.length > 0) {
     const { x, y } = queue.shift()!;
     
@@ -171,19 +146,22 @@ function extractBaseByClick(
       const ny = y + dy[i];
       
       if (nx >= 0 && nx < textureSize && ny >= 0 && ny < textureSize) {
-        if (visited[ny * textureSize + nx] === 0 && wallMask[ny * textureSize + nx] === 0) {
-          visited[ny * textureSize + nx] = 1;
+        if (bfsVisited[ny * textureSize + nx] === 0 && wallMask[ny * textureSize + nx] === 0) {
+          bfsVisited[ny * textureSize + nx] = 1;
+          visitedCount++;
           queue.push({ x: nx, y: ny });
         }
       }
     }
   }
+  
+  console.log('[DEBUG BFS] completed:', { visitedCount });
 
   // 3. 计算BFS区域的bbox
   let minX = textureSize, minY = textureSize, maxX = -1, maxY = -1;
   for (let y = 0; y < textureSize; y++) {
     for (let x = 0; x < textureSize; x++) {
-      if (visited[y * textureSize + x] === 1) {
+      if (bfsVisited[y * textureSize + x] === 1) {
         if (x < minX) minX = x;
         if (y < minY) minY = y;
         if (x > maxX) maxX = x;
@@ -207,20 +185,45 @@ function extractBaseByClick(
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const globalIdx = (pxBbox.y + y) * textureSize + (pxBbox.x + x);
-      localMask[y * w + x] = visited[globalIdx];
+      localMask[y * w + x] = bfsVisited[globalIdx];
     }
   }
+  
+  console.log('[DEBUG] localMask created:', {
+    localMaskSample: [localMask[0], localMask[100], localMask[1000]],
+    localMaskSum: localMask.reduce((a, b) => a + b, 0)
+  });
 
   // 5. 调用聚类函数
-  const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
+  console.log('[DEBUG] before clustering - bfsVisited check:', {
+    sample1: bfsVisited[pxBbox.y * textureSize + pxBbox.x],
+    sample2: bfsVisited[(pxBbox.y + 5) * textureSize + pxBbox.x + 5],
+    count: bfsVisited.reduce((a, b) => a + b, 0)
+  });
+  
+  const { baseColors: colors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
     localMask,
     pxBbox,
     bgImageData,
     0.025,
     textureSize
   );
+  
+  console.log('[DEBUG] after clustering - bfsVisited check:', {
+    sample1: bfsVisited[pxBbox.y * textureSize + pxBbox.x],
+    sample2: bfsVisited[(pxBbox.y + 5) * textureSize + pxBbox.x + 5],
+    count: bfsVisited.reduce((a, b) => a + b, 0)
+  });
 
-  if (baseColors.length === 0) return null;
+  console.log('[DEBUG] extractBaseByClick:', {
+    colorsCount: colors.length,
+    firstColor: colors.length > 0 ? colors[0] : null,
+    regionIdTexLength: regionIdTex?.length,
+    deltaTexLength: deltaTex?.length,
+    pxBbox: pxBbox,
+  });
+
+  if (colors.length === 0) return null;
 
   // 6. 构建基础色纹理（聚类平均色填充）
   const baseCanvas = document.createElement('canvas');
@@ -230,26 +233,83 @@ function extractBaseByClick(
   const baseImageData = baseCtx.createImageData(textureSize, textureSize);
   const baseData = baseImageData.data;
 
-  for (let y = 0; y < textureSize; y++) {
-    for (let x = 0; x < textureSize; x++) {
-      const idx = (y * textureSize + x) * 4;
-      if (visited[y * textureSize + x] === 1) {
-        const localIdx = (y - pxBbox.y) * w + (x - pxBbox.x);
-        const clusterIdx = regionIdTex ? regionIdTex[localIdx] : 1;
-        const base = baseColors[clusterIdx - 1] || baseColors[0];
+  console.log('[DEBUG] building baseTexture:', {
+    pxBbox,
+    w, h,
+    colorsLength: colors.length,
+    regionIdTexLength: regionIdTex?.length,
+    regionIdTexSample: regionIdTex ? [
+      regionIdTex[0],
+      regionIdTex[100],
+      regionIdTex[1000]
+    ] : 'null'
+  });
+
+  let paintedPixels = 0;
+  
+  if (regionIdTex) {
+    for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
+      const clusterIdx = regionIdTex[localIdx];
+      if (clusterIdx > 0) {
+        const colorIndex = clusterIdx - 1;
+        const base = colors[colorIndex] || colors[0];
         const rgb = hslToRgb(base.h, base.s, base.l);
+        
+        const localY = Math.floor(localIdx / w);
+        const localX = localIdx % w;
+        const globalY = pxBbox.y + localY;
+        const globalX = pxBbox.x + localX;
+        const idx = (globalY * textureSize + globalX) * 4;
+        
         baseData[idx] = rgb.r;
         baseData[idx + 1] = rgb.g;
         baseData[idx + 2] = rgb.b;
         baseData[idx + 3] = 255;
-      } else {
-        baseData[idx] = 0;
-        baseData[idx + 1] = 0;
-        baseData[idx + 2] = 0;
-        baseData[idx + 3] = 0;
+        paintedPixels++;
+      }
+    }
+  } else if (colors.length > 0) {
+    const base = colors[0];
+    const rgb = hslToRgb(base.h, base.s, base.l);
+    for (let localY = 0; localY < h; localY++) {
+      for (let localX = 0; localX < w; localX++) {
+        const globalY = pxBbox.y + localY;
+        const globalX = pxBbox.x + localX;
+        const idx = (globalY * textureSize + globalX) * 4;
+        baseData[idx] = rgb.r;
+        baseData[idx + 1] = rgb.g;
+        baseData[idx + 2] = rgb.b;
+        baseData[idx + 3] = 255;
+        paintedPixels++;
       }
     }
   }
+  
+  console.log('[DEBUG] baseTexture loop complete:', { paintedPixels });
+
+  let foundPixel = null;
+  for (let i = 0; i < regionIdTex?.length; i++) {
+    if (regionIdTex && regionIdTex[i] > 0) {
+      const localY = Math.floor(i / w);
+      const localX = i % w;
+      const globalY = pxBbox.y + localY;
+      const globalX = pxBbox.x + localX;
+      const idx = (globalY * textureSize + globalX) * 4;
+      foundPixel = {
+        localIdx: i,
+        globalX, globalY,
+        clusterIdx: regionIdTex[i],
+        rgb: [baseData[idx], baseData[idx + 1], baseData[idx + 2], baseData[idx + 3]]
+      };
+      break;
+    }
+  }
+  
+  console.log('[DEBUG] baseTexture created:', {
+    foundPixel,
+    foundPixelRgb: foundPixel ? foundPixel.rgb : null,
+    paintedPixels: paintedPixels
+  });
 
   // 7. 构建残差纹理（使用 deltaTex 编码值）
   const residualCanvas = document.createElement('canvas');
@@ -262,40 +322,53 @@ function extractBaseByClick(
   for (let y = 0; y < textureSize; y++) {
     for (let x = 0; x < textureSize; x++) {
       const idx = (y * textureSize + x) * 4;
-      if (visited[y * textureSize + x] === 1) {
-        const localIdx = (y - pxBbox.y) * w + (x - pxBbox.x);
-        const dIdx = localIdx * 3;
-        residualData[idx] = deltaTex[dIdx];
-        residualData[idx + 1] = deltaTex[dIdx + 1];
-        residualData[idx + 2] = deltaTex[dIdx + 2];
-        residualData[idx + 3] = 255;
-      } else {
-        residualData[idx] = 128;
-        residualData[idx + 1] = 128;
-        residualData[idx + 2] = 128;
-        residualData[idx + 3] = 255;
-      }
+      residualData[idx] = 128;
+      residualData[idx + 1] = 128;
+      residualData[idx + 2] = 128;
+      residualData[idx + 3] = 255;
     }
+  }
+  
+  for (let localIdx = 0; localIdx < deltaTex.length / 3; localIdx++) {
+    const dIdx = localIdx * 3;
+    const localY = Math.floor(localIdx / w);
+    const localX = localIdx % w;
+    const globalY = pxBbox.y + localY;
+    const globalX = pxBbox.x + localX;
+    const idx = (globalY * textureSize + globalX) * 4;
+    
+    residualData[idx] = deltaTex[dIdx];
+    residualData[idx + 1] = deltaTex[dIdx + 1];
+    residualData[idx + 2] = deltaTex[dIdx + 2];
+    residualData[idx + 3] = 255;
   }
 
   return {
     baseTexture: baseImageData,
     residualTexture: residualImageData,
     bbox: pxBbox,
+    baseColors: colors,
+    regionIdTex: regionIdTex || new Uint8Array(0),
+    texW: w,
+    texH: h,
   };
 }
 
 // ============ 组件 ============
 export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const [bgImageData, setBgImageData] = useState<ImageData | null>(null);
   const [dashedPolygons, setDashedPolygons] = useState<Point[][]>([]);
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
   const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select'>('dashed');
-  const [mode, setMode] = useState<'base' | 'residual' | 'composite'>('base');
+  const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
   const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
   const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
   const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
+  const [regionIdTex, setRegionIdTex] = useState<Uint8Array>(new Uint8Array(0));
+  const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [brushColor, setBrushColor] = useState('#ff0000');
   const [brushSize, setBrushSize] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -316,6 +389,7 @@ export const BaseColorEditor: React.FC = () => {
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
+    baseColors: Array<{ h: number; s: number; l: number }>;
   }
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -326,12 +400,13 @@ export const BaseColorEditor: React.FC = () => {
       baseTexture: baseTexture ? new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height) : null,
       residualTexture: residualTexture ? new ImageData(new Uint8ClampedArray(residualTexture.data), residualTexture.width, residualTexture.height) : null,
       bbox: bbox ? { ...bbox } : null,
+      baseColors: baseColors.map(c => ({ ...c })),
     };
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newState);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [dashedPolygons, baseTexture, residualTexture, bbox, history, historyIndex]);
+  }, [dashedPolygons, baseTexture, residualTexture, bbox, baseColors, history, historyIndex]);
 
   const undo = useCallback(() => {
     if (historyIndex <= 0) return;
@@ -340,6 +415,7 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(prevState.baseTexture);
     setResidualTexture(prevState.residualTexture);
     setBbox(prevState.bbox);
+    setBaseColors(prevState.baseColors);
     setHistoryIndex(historyIndex - 1);
   }, [history, historyIndex]);
 
@@ -350,6 +426,7 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(nextState.baseTexture);
     setResidualTexture(nextState.residualTexture);
     setBbox(nextState.bbox);
+    setBaseColors(nextState.baseColors);
     setHistoryIndex(historyIndex + 1);
   }, [history, historyIndex]);
 
@@ -367,12 +444,6 @@ export const BaseColorEditor: React.FC = () => {
   }, [undo, redo]);
 
   // 滚轮缩放
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(prev => Math.max(0.1, Math.min(10, prev * delta)));
-  }, []);
-
   // 拖拽平移（中键或空格+左键）
   const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
@@ -452,6 +523,7 @@ export const BaseColorEditor: React.FC = () => {
         setBaseTexture(null);
         setResidualTexture(null);
         setBbox(null);
+        setBaseColors([]);
       };
       img.src = e.target?.result as string;
     };
@@ -481,12 +553,59 @@ export const BaseColorEditor: React.FC = () => {
 
     const result = extractBaseByClick(bgImageData, allPolygons, pixel);
     if (result) {
+      console.log('[DEBUG] extract result:', {
+        baseTextureExists: !!result.baseTexture,
+        firstPixel: result.baseTexture ? [
+          result.baseTexture.data[0],
+          result.baseTexture.data[1],
+          result.baseTexture.data[2],
+          result.baseTexture.data[3]
+        ] : null,
+        bbox: result.bbox
+      });
       setBaseTexture(result.baseTexture);
       setResidualTexture(result.residualTexture);
       setBbox(result.bbox);
+      setBaseColors(result.baseColors);
+      setRegionIdTex(result.regionIdTex);
+      setTexWH({ w: result.texW, h: result.texH });
+      setIsExtractMode(false);
       setTimeout(() => saveToHistory(), 0);
     }
   }, [bgImageData, dashedPolygons, drawingPolygon, saveToHistory]);
+
+  // 更新基础色并重新生成纹理
+  const updateBaseColor = useCallback((index: number, newHSL: { h: number; s: number; l: number }) => {
+    setBaseColors(prev => {
+      const updated = [...prev];
+      updated[index] = newHSL;
+      return updated;
+    });
+
+    // 重新生成 baseTexture
+    if (baseTexture && regionIdTex.length > 0 && bbox) {
+      const newData = new Uint8ClampedArray(baseTexture.data);
+      const rgb = hslToRgb(newHSL.h, newHSL.s, newHSL.l);
+      const { w, h: hTex } = texWH;
+
+      for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
+        const clusterIdx = regionIdTex[localIdx];
+        if (clusterIdx === index + 1) {
+          const localY = Math.floor(localIdx / w);
+          const localX = localIdx % w;
+          const globalY = bbox.y + localY;
+          const globalX = bbox.x + localX;
+          const idx = (globalY * TEX_SIZE + globalX) * 4;
+          newData[idx] = rgb.r;
+          newData[idx + 1] = rgb.g;
+          newData[idx + 2] = rgb.b;
+          newData[idx + 3] = 255;
+        }
+      }
+
+      setBaseTexture(new ImageData(newData, TEX_SIZE, TEX_SIZE));
+    }
+  }, [baseTexture, regionIdTex, bbox, texWH]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -635,20 +754,68 @@ export const BaseColorEditor: React.FC = () => {
     e.preventDefault();
   }, []);
 
-  // 渲染画布
+  // 渲染画布（主要内容，不依赖 mousePos）
+  const renderCountRef = useRef(0);
   useEffect(() => {
+    renderCountRef.current++;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+    console.log(`[DEBUG] RENDER #${renderCountRef.current} START: mode=${mode}, baseTexture=${!!baseTexture}, isExtractMode=${isExtractMode}`);
 
-    // 基础色模式：背景图 + 基础色纹理（基础色区域显示提取的颜色）
-    if (mode === 'base') {
-      if (bgImageData) {
-        ctx.putImageData(bgImageData, 0, 0);
-      }
+    // ===== 新基础色模式：完全独立的渲染路径 =====
+    if (mode === 'base2') {
+      ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+
       if (baseTexture) {
         ctx.putImageData(baseTexture, 0, 0);
+      } else if (bgImageData) {
+        ctx.putImageData(bgImageData, 0, 0);
+      }
+
+      // 绘制虚线多边形
+      ctx.save();
+      ctx.strokeStyle = '#ffaa00';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      for (const poly of dashedPolygons) {
+        if (poly.length < 2) continue;
+        ctx.beginPath();
+        const p0 = worldToCanvas(poly[0].x, poly[0].y);
+        ctx.moveTo(p0.x, p0.y);
+        for (let i = 1; i < poly.length; i++) {
+          const p = worldToCanvas(poly[i].x, poly[i].y);
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // 绘制 bbox
+      if (bbox) {
+        ctx.save();
+        ctx.strokeStyle = '#00ff00';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
+        ctx.restore();
+      }
+
+      return;
+    }
+
+    // 基础色模式：直接绘制基础色纹理
+    if (mode === 'base') {
+      if (baseTexture) {
+        // 临时测试：用 fillRect 填充白色
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+        console.log('[DEBUG] BASE MODE: fillRect WHITE');
+      } else if (bgImageData) {
+        ctx.putImageData(bgImageData, 0, 0);
       }
     }
     // 残差模式：基础色区域显示残差（偏移128），其他区域显示灰色
@@ -853,7 +1020,35 @@ export const BaseColorEditor: React.FC = () => {
       }
       ctx.restore();
     }
-  }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, mousePos, currentTool, brushColor, brushSize]);
+
+    console.log(`[DEBUG] RENDER #${renderCountRef.current} END`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, isExtractMode]);
+
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const octx = overlay.getContext('2d')!;
+    // 清除 overlay
+    octx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+
+    if (!mousePos || (currentTool !== 'paint' && currentTool !== 'picker')) return;
+
+    octx.save();
+    octx.strokeStyle = currentTool === 'picker' ? '#1890ff' : brushColor;
+    octx.lineWidth = 1;
+    octx.setLineDash([]);
+    octx.beginPath();
+    octx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
+    octx.stroke();
+    if (currentTool === 'picker') {
+      octx.beginPath();
+      octx.arc(mousePos.x, mousePos.y, 2, 0, Math.PI * 2);
+      octx.fillStyle = '#1890ff';
+      octx.fill();
+    }
+    octx.restore();
+  }, [mousePos, currentTool, brushColor, brushSize]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -994,6 +1189,17 @@ export const BaseColorEditor: React.FC = () => {
           基础色
         </button>
         <button
+          onClick={() => setMode('base2')}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: mode === 'base2' ? '#ff4d4f' : '#f0f0f0',
+            color: mode === 'base2' ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+        >
+          新基础色
+        </button>
+        <button
           onClick={() => setMode('residual')}
           disabled={!residualTexture}
           style={{
@@ -1022,6 +1228,7 @@ export const BaseColorEditor: React.FC = () => {
             setBaseTexture(null);
             setResidualTexture(null);
             setBbox(null);
+            setBaseColors([]);
           }}
           disabled={!baseTexture && !residualTexture}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
@@ -1030,45 +1237,147 @@ export const BaseColorEditor: React.FC = () => {
         </button>
       </div>
 
-      {/* 独立画布容器（支持滚轮缩放和拖拽平移） */}
-      <div
-        ref={containerRef}
-        style={{
-          position: 'relative', flex: 1, width: '100%', overflow: 'hidden',
-          background: '#2a2a2a',
-          display: 'flex', justifyContent: 'center', alignItems: 'center',
-        }}
-        onMouseDown={handleContainerMouseDown}
-        onMouseMove={handleContainerMouseMove}
-        onMouseUp={handleContainerMouseUp}
-        onMouseLeave={handleContainerMouseUp}
-      >
-        <canvas
-          ref={canvasRef}
-          width={TEX_SIZE}
-          height={TEX_SIZE}
+      <div style={{ flex: 1, display: 'flex', position: 'relative' }}>
+        {/* 独立画布容器（支持滚轮缩放和拖拽平移） */}
+        <div
+          ref={containerRef}
           style={{
-            display: 'block',
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-            transformOrigin: 'center center',
-            cursor: currentTool === 'dashed' ? 'crosshair' : isPanningRef.current ? 'grabbing' : 'default',
-            boxShadow: '0 0 8px rgba(0,0,0,0.5)',
+            position: 'relative', flex: 1, overflow: 'hidden',
+            background: '#2a2a2a',
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
           }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onContextMenu={handleContextMenu}
-        />
-        {/* 缩放指示器 */}
-        <div style={{
-          position: 'absolute', bottom: 8, right: 8,
-          background: 'rgba(0,0,0,0.7)', color: '#fff',
-          padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
-          pointerEvents: 'none',
-        }}>
-          {Math.round(zoom * 100)}% | Alt+拖拽平移 | 滚轮缩放
+          onMouseDown={handleContainerMouseDown}
+          onMouseMove={handleContainerMouseMove}
+          onMouseUp={handleContainerMouseUp}
+          onMouseLeave={handleContainerMouseUp}
+        >
+          <div style={{ position: 'relative', display: 'inline-block' }}>
+            <canvas
+              ref={canvasRef}
+              width={TEX_SIZE}
+              height={TEX_SIZE}
+              style={{
+                display: 'block',
+                border: '1px solid #333',
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: 'center center',
+                cursor: currentTool === 'dashed' ? 'crosshair' : isPanningRef.current ? 'grabbing' : 'default',
+                boxShadow: '0 0 8px rgba(0,0,0,0.5)',
+              }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onContextMenu={handleContextMenu}
+            />
+            <canvas
+              ref={overlayRef}
+              width={TEX_SIZE}
+              height={TEX_SIZE}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                display: 'block',
+                border: '1px solid #333',
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: 'center center',
+                pointerEvents: 'none',
+              }}
+            />
+          </div>
+          {/* 缩放指示器 */}
+          <div style={{
+            position: 'absolute', bottom: 8, right: 8,
+            background: 'rgba(0,0,0,0.7)', color: '#fff',
+            padding: '2px 8px', borderRadius: '4px', fontSize: '11px',
+            pointerEvents: 'none',
+          }}>
+            {Math.round(zoom * 100)}% | Alt+拖拽平移 | 滚轮缩放
+          </div>
         </div>
+
+        {/* 基础色信息面板 - position: absolute 避免影响 canvas 布局 */}
+        {(mode === 'base' || mode === 'base2') && baseColors.length > 0 && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: '280px',
+            padding: '12px',
+            background: '#f5f5f5',
+            borderLeft: '1px solid #ddd',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            fontSize: '12px',
+            zIndex: 10,
+          }}>
+            <h4 style={{ margin: '0 0 8px 0' }}>基础色列表 ({baseColors.length})</h4>
+            {baseColors.map((hsl, index) => {
+              const rgb = hslToRgb(hsl.h, hsl.s, hsl.l);
+              const hex = `#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`;
+              return (
+                <div key={index} style={{
+                  marginBottom: '12px',
+                  padding: '8px',
+                  background: '#fff',
+                  borderRadius: '4px',
+                  border: '1px solid #e0e0e0',
+                }}>
+                  {/* 颜色行 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                    <span style={{ minWidth: '28px', fontWeight: 'bold', color: '#333' }}>#{index + 1}</span>
+                    <div style={{ width: '28px', height: '28px', borderRadius: '4px', background: hex, border: '1px solid #ccc' }} />
+                    <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#666' }}>
+                      {hex.toUpperCase()}
+                    </span>
+                  </div>
+                  {/* HSL 滑块 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
+                    <span style={{ width: '12px', fontSize: '10px', color: '#999' }}>H</span>
+                    <input
+                      type="range"
+                      min={0} max={360} step={1}
+                      value={hsl.h * 360}
+                      onChange={e => updateBaseColor(index, { ...hsl, h: Number(e.target.value) / 360 })}
+                      style={{ flex: 1, height: '4px' }}
+                    />
+                    <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
+                      {(hsl.h * 360).toFixed(0)}°
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
+                    <span style={{ width: '12px', fontSize: '10px', color: '#999' }}>S</span>
+                    <input
+                      type="range"
+                      min={0} max={100} step={1}
+                      value={hsl.s * 100}
+                      onChange={e => updateBaseColor(index, { ...hsl, s: Number(e.target.value) / 100 })}
+                      style={{ flex: 1, height: '4px' }}
+                    />
+                    <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
+                      {(hsl.s * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <span style={{ width: '12px', fontSize: '10px', color: '#999' }}>L</span>
+                    <input
+                      type="range"
+                      min={0} max={100} step={1}
+                      value={hsl.l * 100}
+                      onChange={e => updateBaseColor(index, { ...hsl, l: Number(e.target.value) / 100 })}
+                      style={{ flex: 1, height: '4px' }}
+                    />
+                    <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
+                      {(hsl.l * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 状态信息 */}
