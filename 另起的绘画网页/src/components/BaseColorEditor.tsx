@@ -970,7 +970,7 @@ export const BaseColorEditor: React.FC = () => {
             const neighborColor = getColor(ni);
             const neighborHsl = rgbToHsl(neighborColor.r, neighborColor.g, neighborColor.b);
             
-            const hDiff = Math.abs(neighborHsl.h - cluster.avgH);
+            const hDiff = Math.abs(neighborHsl.h - seedHsl.h);
             const hDist = Math.min(hDiff, 1 - hDiff);
             
             if (hDist < hueThreshold) {
@@ -981,14 +981,56 @@ export const BaseColorEditor: React.FC = () => {
               cluster.sumS += neighborHsl.s;
               cluster.sumL += neighborHsl.l;
               cluster.count++;
-              cluster.avgH = cluster.sumH / cluster.count;
-              cluster.avgS = cluster.sumS / cluster.count;
-              cluster.avgL = cluster.sumL / cluster.count;
             }
           }
         }
         
-        if (cluster.pixels.length > 0) clusters.push(cluster);
+        if (cluster.pixels.length <= 10 && cluster.pixels.length > 0) {
+          const neighborColors: { r: number; g: number; b: number }[] = [];
+          for (const pi of cluster.pixels) {
+            const px = pi % w;
+            const py = Math.floor(pi / w);
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;
+                const nx = px + dx, ny = py + dy;
+                if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
+                  const ni = ny * w + nx;
+                  if (localMask[ni] > 0 && !visited[ni]) {
+                    neighborColors.push(getColor(ni));
+                  }
+                }
+              }
+            }
+          }
+          if (neighborColors.length > 0) {
+            let bestR = neighborColors[0].r, bestG = neighborColors[0].g, bestB = neighborColors[0].b;
+            let maxCount = 0;
+            for (const c of neighborColors) {
+              let count = 0;
+              for (const other of neighborColors) {
+                const dr = c.r - other.r;
+                const dg = c.g - other.g;
+                const db = c.b - other.b;
+                if (dr * dr + dg * dg + db * db < 256) count++;
+              }
+              if (count > maxCount) {
+                maxCount = count;
+                bestR = c.r;
+                bestG = c.g;
+                bestB = c.b;
+              }
+            }
+            for (const pi of cluster.pixels) {
+              const globalIdx = ((offsetY + Math.floor(pi / w)) * TEX_SIZE + (offsetX + (pi % w))) * 4;
+              baseTexture.data[globalIdx] = bestR;
+              baseTexture.data[globalIdx + 1] = bestG;
+              baseTexture.data[globalIdx + 2] = bestB;
+            }
+          }
+        } else if (cluster.pixels.length > 0) {
+          clusters.push(cluster);
+        }
       }
     }
 
@@ -1061,6 +1103,63 @@ export const BaseColorEditor: React.FC = () => {
     setSelectedBaseColorIndex(null);
     setTimeout(() => saveToHistory(), 0);
   }, [bbox, baseTexture, baseColors.length, saveToHistory]);
+
+  // 重新计算残差：基于原图和当前基础色纹理
+  const recalculateResidual = useCallback(() => {
+    if (!baseTexture || !bgImageData || !bbox || baseColors.length === 0) return;
+    
+    const residualCanvas = document.createElement('canvas');
+    residualCanvas.width = TEX_SIZE;
+    residualCanvas.height = TEX_SIZE;
+    const residualCtx = residualCanvas.getContext('2d')!;
+    const residualImageData = residualCtx.createImageData(TEX_SIZE, TEX_SIZE);
+    const residualData = residualImageData.data;
+    
+    for (let y = 0; y < TEX_SIZE; y++) {
+      for (let x = 0; x < TEX_SIZE; x++) {
+        const idx = (y * TEX_SIZE + x) * 4;
+        residualData[idx] = 128;
+        residualData[idx + 1] = 128;
+        residualData[idx + 2] = 128;
+        residualData[idx + 3] = 255;
+      }
+    }
+    
+    const quantize = (value: number, range: number): number => {
+      const normalized = (value / range) * 0.5 + 0.5;
+      return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
+    };
+    
+    for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
+      for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
+        const idx = (y * TEX_SIZE + x) * 4;
+        if (baseTexture.data[idx + 3] > 0) {
+          const baseR = baseTexture.data[idx];
+          const baseG = baseTexture.data[idx + 1];
+          const baseB = baseTexture.data[idx + 2];
+          const baseHsl = rgbToHsl(baseR, baseG, baseB);
+          
+          const origR = bgImageData.data[idx];
+          const origG = bgImageData.data[idx + 1];
+          const origB = bgImageData.data[idx + 2];
+          const origHsl = rgbToHsl(origR, origG, origB);
+          
+          let dH = origHsl.h - baseHsl.h;
+          if (dH > 0.5) dH -= 1.0;
+          if (dH < -0.5) dH += 1.0;
+          const dS = origHsl.s - baseHsl.s;
+          const dL = origHsl.l - baseHsl.l;
+          
+          residualData[idx] = quantize(dH * 0.5, 0.25);
+          residualData[idx + 1] = quantize(dS, 1.0);
+          residualData[idx + 2] = quantize(dL, 1.0);
+        }
+      }
+    }
+    
+    setResidualTexture(residualImageData);
+    setTimeout(() => saveToHistory(), 0);
+  }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -1242,39 +1341,20 @@ export const BaseColorEditor: React.FC = () => {
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-      if (bbox && baseTexture && baseColors.length > 0) {
+      if (bbox && baseTexture) {
         const filledData = new ImageData(
           new Uint8ClampedArray(baseTexture.data),
           TEX_SIZE,
           TEX_SIZE
         );
         
-        const baseColorRgbs = baseColors.map(c => hslToRgb(c.h, c.s, c.l));
-        
         for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
           for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
             const idx = (y * TEX_SIZE + x) * 4;
             if (filledData.data[idx + 3] === 0 && bgImageData) {
-              const r = bgImageData.data[idx];
-              const g = bgImageData.data[idx + 1];
-              const b = bgImageData.data[idx + 2];
-              
-              let bestDist = Infinity;
-              let bestRgb = baseColorRgbs[0];
-              for (const rgb of baseColorRgbs) {
-                const dr = r - rgb.r;
-                const dg = g - rgb.g;
-                const db = b - rgb.b;
-                const dist = dr * dr + dg * dg + db * db;
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  bestRgb = rgb;
-                }
-              }
-              
-              filledData.data[idx] = bestRgb.r;
-              filledData.data[idx + 1] = bestRgb.g;
-              filledData.data[idx + 2] = bestRgb.b;
+              filledData.data[idx] = bgImageData.data[idx];
+              filledData.data[idx + 1] = bgImageData.data[idx + 1];
+              filledData.data[idx + 2] = bgImageData.data[idx + 2];
               filledData.data[idx + 3] = 255;
             }
           }
@@ -1826,6 +1906,20 @@ export const BaseColorEditor: React.FC = () => {
         >
           残差
         </button>
+        {mode === 'residual' && (
+          <button
+            onClick={recalculateResidual}
+            disabled={!baseTexture || !bgImageData || !bbox}
+            style={{
+              padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+              background: '#722ed1',
+              color: '#fff',
+              border: '1px solid #d9d9d9',
+            }}
+          >
+            重新计算残差
+          </button>
+        )}
         <button
           onClick={() => setMode('composite')}
           disabled={!baseTexture || !residualTexture}

@@ -196,7 +196,7 @@ export class RegionEntity {
           const baseIdx = regionIdTexture[idx] - 1;
           if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
           const base = baseColors[baseIdx];
-          const dH = dequantize(deltaTexture[deltaIdx], 0.5);
+          const dH = dequantize(deltaTexture[deltaIdx], 0.25);
           const dS = dequantize(deltaTexture[deltaIdx + 1], 1.0);
           const dL = dequantize(deltaTexture[deltaIdx + 2], 1.0);
 
@@ -208,7 +208,7 @@ export class RegionEntity {
           finalHsl = { h: finalH, s: finalS, l: finalL };
         } else if (baseColors.length > 0) {
           const base = baseColors[0];
-          const dH = dequantize(deltaTexture[deltaIdx], 0.5);
+          const dH = dequantize(deltaTexture[deltaIdx], 0.25);
           const dS = dequantize(deltaTexture[deltaIdx + 1], 1.0);
           const dL = dequantize(deltaTexture[deltaIdx + 2], 1.0);
           
