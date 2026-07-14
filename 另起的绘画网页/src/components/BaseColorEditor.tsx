@@ -6,6 +6,7 @@ import {
   dequantize,
 } from '../utils/colorCompressor';
 import type { Point } from '../types';
+import BaseColorList from './BaseColorList';
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -387,49 +388,307 @@ export const BaseColorEditor: React.FC = () => {
   const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
   const [regionIdTex, setRegionIdTex] = useState<Uint8Array>(new Uint8Array(0));
+  
   const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
   const [selectedBaseColorIndex, setSelectedBaseColorIndex] = useState<number | null>(null);
 
+  const handleSelectBaseColor = useCallback((index: number) => {
+    setSelectedBaseColorIndex(prev => prev === index ? null : index);
+  }, []);
+
   const highlightCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  useEffect(() => {
-    if (!highlightCanvasRef.current) {
-      const canvas = document.createElement('canvas');
-      canvas.width = TEX_SIZE;
-      canvas.height = TEX_SIZE;
-      highlightCanvasRef.current = canvas;
-    }
-    const canvas = highlightCanvasRef.current;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+  const webglCanvasRef = useRef<HTMLCanvasElement>(null);
+  const glRef = useRef<WebGLRenderingContext | null>(null);
+  const programRef = useRef<WebGLProgram | null>(null);
+  const textureRef = useRef<WebGLTexture | null>(null);
+  const baseTextureRef = useRef<WebGLTexture | null>(null);
+  const selectedIndexUniformRef = useRef<WebGLUniformLocation | null>(null);
+  const positionBufferRef = useRef<WebGLBuffer | null>(null);
+  const [webglReady, setWebglReady] = useState(false);
 
-    if (selectedBaseColorIndex === null || !colorPixelsMap || !bbox) {
+  const initWebGL = useCallback(() => {
+    const canvas = webglCanvasRef.current;
+    if (!canvas) return false;
+
+    const gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: false });
+    if (!gl) {
+      console.warn('WebGL not supported, fallback to CPU');
+      return false;
+    }
+    console.log('[WebGL] initWebGL success');
+
+    const vsSource = `
+      attribute vec2 a_position;
+      varying vec2 v_uv;
+      void main() {
+        gl_Position = vec4(a_position, 0.0, 1.0);
+        v_uv = (a_position + 1.0) / 2.0;
+      }
+    `;
+
+    const fsSource = `
+      precision highp float;
+      uniform sampler2D u_tex;
+      uniform sampler2D u_baseTex;
+      uniform int u_selectedIndex;
+      varying vec2 v_uv;
+
+      void main() {
+        if (u_selectedIndex > 0) {
+          vec2 uv = vec2(v_uv.x, 1.0 - v_uv.y);
+          float idx = texture2D(u_tex, uv).r * 255.0;
+          int intIdx = int(floor(idx + 0.5));
+          if (intIdx == u_selectedIndex) {
+            vec4 baseColor = texture2D(u_baseTex, uv);
+            vec3 white = vec3(1.0);
+            float mixAmount = 0.6;
+            vec3 highlighted = mix(baseColor.rgb, white, mixAmount);
+            gl_FragColor = vec4(highlighted, 0.9);
+          } else {
+            discard;
+          }
+        } else {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+        }
+      }
+    `;
+
+    const compileShader = (type: number, source: string): WebGLShader | null => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    };
+
+    const vertexShader = compileShader(gl.VERTEX_SHADER, vsSource);
+    const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fsSource);
+    if (!vertexShader || !fragmentShader) {
+      return false;
+    }
+
+    const program = gl.createProgram();
+    if (!program) return false;
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error('Program link error:', gl.getProgramInfoLog(program));
+      return false;
+    }
+
+    gl.useProgram(program);
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    const positions = new Float32Array([
+      -1, -1,
+       1, -1,
+      -1,  1,
+       1,  1,
+    ]);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+    const positionLocation = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    gl.clearColor(0, 0, 0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    glRef.current = gl;
+    programRef.current = program;
+    positionBufferRef.current = positionBuffer;
+    selectedIndexUniformRef.current = gl.getUniformLocation(program, 'u_selectedIndex');
+
+    const texLoc = gl.getUniformLocation(program, 'u_tex');
+    gl.uniform1i(texLoc, 0);
+
+    const baseTexLoc = gl.getUniformLocation(program, 'u_baseTex');
+    gl.uniform1i(baseTexLoc, 1);
+
+    setWebglReady(true);
+    return true;
+  }, []);
+
+  const uploadTexture = useCallback(() => {
+    const gl = glRef.current;
+    if (!gl || !regionIdTex || regionIdTex.length === 0 || !bbox) return;
+    if (!webglReady) return;
+
+    if (textureRef.current) {
+      gl.deleteTexture(textureRef.current);
+      textureRef.current = null;
+    }
+
+    const texture = gl.createTexture();
+    if (!texture) {
+      console.warn('[WebGL] 创建纹理失败');
       return;
     }
 
-    const pixelIndices = colorPixelsMap.get(selectedBaseColorIndex);
-    if (!pixelIndices || pixelIndices.length === 0) return;
+    console.log('[WebGL] uploadTexture start, regionIdTex.length:', regionIdTex.length, 'bbox:', bbox);
 
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    const rgbData = new Uint8Array(TEX_SIZE * TEX_SIZE * 3);
     const { w } = texWH;
-    const imageData = ctx.createImageData(TEX_SIZE, TEX_SIZE);
-    const data = imageData.data;
 
-    for (const localIdx of pixelIndices) {
+    for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
       const localY = Math.floor(localIdx / w);
       const localX = localIdx % w;
       const globalY = bbox.y + localY;
       const globalX = bbox.x + localX;
       if (globalY >= 0 && globalY < TEX_SIZE && globalX >= 0 && globalX < TEX_SIZE) {
-        const idx = (globalY * TEX_SIZE + globalX) * 4;
-        data[idx] = 255;
-        data[idx + 1] = 255;
-        data[idx + 2] = 0;
-        data[idx + 3] = 120;
+        const globalIdx = (globalY * TEX_SIZE + globalX) * 3;
+        const val = regionIdTex[localIdx];
+        rgbData[globalIdx] = val;
+        rgbData[globalIdx + 1] = val;
+        rgbData[globalIdx + 2] = val;
       }
     }
-    ctx.putImageData(imageData, 0, 0);
-  }, [selectedBaseColorIndex, colorPixelsMap, bbox, texWH]);
+
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, TEX_SIZE, TEX_SIZE, 0, gl.RGB, gl.UNSIGNED_BYTE, rgbData);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    if (!gl.isTexture(texture)) {
+      console.warn('[WebGL] 纹理无效');
+      gl.deleteTexture(texture);
+      return;
+    }
+    textureRef.current = texture;
+    console.log('[WebGL] uploadTexture done');
+  }, [regionIdTex, bbox, texWH, webglReady]);
+
+  const uploadBaseTexture = useCallback(() => {
+    const gl = glRef.current;
+    if (!gl || !baseTexture) return;
+    if (!webglReady) return;
+
+    if (baseTextureRef.current) {
+      gl.deleteTexture(baseTextureRef.current);
+      baseTextureRef.current = null;
+    }
+
+    const texture = gl.createTexture();
+    if (!texture) {
+      console.warn('[WebGL] 创建基础色纹理失败');
+      return;
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, TEX_SIZE, TEX_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseTexture.data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    if (!gl.isTexture(texture)) {
+      console.warn('[WebGL] 基础色纹理无效');
+      gl.deleteTexture(texture);
+      return;
+    }
+    baseTextureRef.current = texture;
+    console.log('[WebGL] uploadBaseTexture done');
+  }, [baseTexture, webglReady]);
+
+  const drawHighlightGL = useCallback((index: number | null) => {
+    const gl = glRef.current;
+    const program = programRef.current;
+    const buffer = positionBufferRef.current;
+    if (!gl || !program || !buffer || !webglReady) return;
+
+    if (textureRef.current && !gl.isTexture(textureRef.current)) {
+      textureRef.current = null;
+      return;
+    }
+
+    if (baseTextureRef.current && !gl.isTexture(baseTextureRef.current)) {
+      baseTextureRef.current = null;
+      return;
+    }
+
+    gl.useProgram(program);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    const positionLocation = gl.getAttribLocation(program, 'a_position');
+    gl.enableVertexAttribArray(positionLocation);
+    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, textureRef.current);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, baseTextureRef.current);
+
+    const idxLoc = selectedIndexUniformRef.current;
+    if (idxLoc !== null) {
+      gl.uniform1i(idxLoc, index !== null ? index + 1 : 0);
+    }
+
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }, [webglReady]);
+
+  useEffect(() => {
+    if (!glRef.current) {
+      const ok = initWebGL();
+      if (!ok) return;
+    }
+    if (!webglReady) return;
+    if (!textureRef.current && regionIdTex && regionIdTex.length > 0 && bbox) {
+      uploadTexture();
+    }
+    if (!baseTextureRef.current && baseTexture) {
+      uploadBaseTexture();
+    }
+    if (mode === 'base2') {
+      drawHighlightGL(selectedBaseColorIndex);
+    } else {
+      const gl = glRef.current;
+      if (gl) {
+        gl.clear(gl.COLOR_BUFFER_BIT);
+      }
+    }
+  }, [selectedBaseColorIndex, regionIdTex, bbox, mode, webglReady, uploadTexture, uploadBaseTexture, drawHighlightGL]);
+
+  useEffect(() => {
+    if (!webglReady || !baseTexture) return;
+    uploadBaseTexture();
+    if (mode === 'base2' && selectedBaseColorIndex !== null) {
+      drawHighlightGL(selectedBaseColorIndex);
+    }
+  }, [baseTexture, webglReady, mode, selectedBaseColorIndex, uploadBaseTexture, drawHighlightGL]);
+
+  useEffect(() => {
+    return () => {
+      const gl = glRef.current;
+      if (gl) {
+        if (textureRef.current) gl.deleteTexture(textureRef.current);
+        if (baseTextureRef.current) gl.deleteTexture(baseTextureRef.current);
+        if (programRef.current) gl.deleteProgram(programRef.current);
+        if (positionBufferRef.current) gl.deleteBuffer(positionBufferRef.current);
+      }
+      glRef.current = null;
+      programRef.current = null;
+      textureRef.current = null;
+      baseTextureRef.current = null;
+      positionBufferRef.current = null;
+      selectedIndexUniformRef.current = null;
+      setWebglReady(false);
+    };
+  }, []);
 
   const [brushColor, setBrushColor] = useState('#ff0000');
   const [brushSize, setBrushSize] = useState(8);
@@ -645,30 +904,29 @@ export const BaseColorEditor: React.FC = () => {
       return updated;
     });
 
-    // 重新生成 baseTexture
-    if (baseTexture && regionIdTex.length > 0 && bbox) {
+    if (baseTexture && colorPixelsMap && bbox) {
+      const pixelIndices = colorPixelsMap.get(index);
+      if (!pixelIndices || pixelIndices.length === 0) return;
+
       const newData = new Uint8ClampedArray(baseTexture.data);
       const rgb = hslToRgb(newHSL.h, newHSL.s, newHSL.l);
       const { w } = texWH;
 
-      for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
-        const clusterIdx = regionIdTex[localIdx];
-        if (clusterIdx === index + 1) {
-          const localY = Math.floor(localIdx / w);
-          const localX = localIdx % w;
-          const globalY = bbox.y + localY;
-          const globalX = bbox.x + localX;
-          const idx = (globalY * TEX_SIZE + globalX) * 4;
-          newData[idx] = rgb.r;
-          newData[idx + 1] = rgb.g;
-          newData[idx + 2] = rgb.b;
-          newData[idx + 3] = 255;
-        }
+      for (const localIdx of pixelIndices) {
+        const localY = Math.floor(localIdx / w);
+        const localX = localIdx % w;
+        const globalY = bbox.y + localY;
+        const globalX = bbox.x + localX;
+        const idx = (globalY * TEX_SIZE + globalX) * 4;
+        newData[idx] = rgb.r;
+        newData[idx + 1] = rgb.g;
+        newData[idx + 2] = rgb.b;
+        newData[idx + 3] = 255;
       }
 
       setBaseTexture(new ImageData(newData, TEX_SIZE, TEX_SIZE));
     }
-  }, [baseTexture, regionIdTex, bbox, texWH]);
+  }, [baseTexture, colorPixelsMap, bbox, texWH]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -1336,6 +1594,22 @@ export const BaseColorEditor: React.FC = () => {
               onContextMenu={handleContextMenu}
             />
             <canvas
+              ref={webglCanvasRef}
+              width={TEX_SIZE}
+              height={TEX_SIZE}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                display: 'block',
+                border: '1px solid #333',
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: 'center center',
+                pointerEvents: 'none',
+                zIndex: 5,
+              }}
+            />
+            <canvas
               ref={overlayRef}
               width={TEX_SIZE}
               height={TEX_SIZE}
@@ -1348,6 +1622,7 @@ export const BaseColorEditor: React.FC = () => {
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                 transformOrigin: 'center center',
                 pointerEvents: 'none',
+                zIndex: 10,
               }}
             />
           </div>
@@ -1362,94 +1637,13 @@ export const BaseColorEditor: React.FC = () => {
           </div>
         </div>
 
-        {/* 基础色信息面板 - position: absolute 避免影响 canvas 布局 */}
         {mode === 'base2' && baseColors.length > 0 && (
-          <div style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            bottom: 0,
-            width: '280px',
-            padding: '12px',
-            background: '#f5f5f5',
-            borderLeft: '1px solid #ddd',
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            fontSize: '12px',
-            zIndex: 10,
-          }}>
-            <h4 style={{ margin: '0 0 8px 0' }}>基础色列表 ({baseColors.length})</h4>
-            {baseColors.map((hsl, index) => {
-              const rgb = hslToRgb(hsl.h, hsl.s, hsl.l);
-              const hex = `#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`;
-              const isSelected = selectedBaseColorIndex === index;
-              return (
-                <div
-                  key={index}
-                  onClick={() => setSelectedBaseColorIndex(isSelected ? null : index)}
-                  style={{
-                    marginBottom: '12px',
-                    padding: '8px',
-                    background: isSelected ? '#e6f7ff' : '#fff',
-                    borderRadius: '4px',
-                    border: isSelected ? '2px solid #1890ff' : '1px solid #e0e0e0',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s',
-                    boxShadow: isSelected ? '0 0 0 2px rgba(24,144,255,0.2)' : 'none',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                    <span style={{ minWidth: '28px', fontWeight: 'bold', color: isSelected ? '#1890ff' : '#333' }}>#{index + 1}</span>
-                    <div style={{ width: '28px', height: '28px', borderRadius: '4px', background: hex, border: '1px solid #ccc' }} />
-                    <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#666' }}>
-                      {hex.toUpperCase()}
-                    </span>
-                    {isSelected && <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#1890ff' }}>👁️ 高亮中</span>}
-                  </div>
-                  {/* HSL 滑块 */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
-                    <span style={{ width: '12px', fontSize: '10px', color: '#999' }}>H</span>
-                    <input
-                      type="range"
-                      min={0} max={360} step={1}
-                      value={hsl.h * 360}
-                      onChange={e => updateBaseColor(index, { ...hsl, h: Number(e.target.value) / 360 })}
-                      style={{ flex: 1, height: '4px' }}
-                    />
-                    <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
-                      {(hsl.h * 360).toFixed(0)}°
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
-                    <span style={{ width: '12px', fontSize: '10px', color: '#999' }}>S</span>
-                    <input
-                      type="range"
-                      min={0} max={100} step={1}
-                      value={hsl.s * 100}
-                      onChange={e => updateBaseColor(index, { ...hsl, s: Number(e.target.value) / 100 })}
-                      style={{ flex: 1, height: '4px' }}
-                    />
-                    <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
-                      {(hsl.s * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: '12px', fontSize: '10px', color: '#999' }}>L</span>
-                    <input
-                      type="range"
-                      min={0} max={100} step={1}
-                      value={hsl.l * 100}
-                      onChange={e => updateBaseColor(index, { ...hsl, l: Number(e.target.value) / 100 })}
-                      style={{ flex: 1, height: '4px' }}
-                    />
-                    <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
-                      {(hsl.l * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <BaseColorList
+            colors={baseColors}
+            selectedIndex={selectedBaseColorIndex}
+            onSelect={handleSelectBaseColor}
+            onUpdate={updateBaseColor}
+          />
         )}
       </div>
 
