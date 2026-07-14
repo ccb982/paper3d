@@ -910,61 +910,106 @@ export const BaseColorEditor: React.FC = () => {
   const handleRecluster = useCallback(() => {
     if (!bbox || !baseTexture) return;
     
-    const localMask = new Uint8Array(bbox.w * bbox.h);
+    const { w, h, x: offsetX, y: offsetY } = bbox;
+    const totalPixels = w * h;
     
-    for (let y = 0; y < bbox.h; y++) {
-      for (let x = 0; x < bbox.w; x++) {
-        const globalIdx = (bbox.y + y) * TEX_SIZE + (bbox.x + x);
+    const localMask = new Uint8Array(totalPixels);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const globalIdx = (offsetY + y) * TEX_SIZE + (offsetX + x);
         const idx = globalIdx * 4;
-        const alpha = baseTexture.data[idx + 3];
-        localMask[y * bbox.w + x] = alpha > 0 ? 1 : 0;
+        localMask[y * w + x] = baseTexture.data[idx + 3] > 0 ? 1 : 0;
       }
     }
 
-    if (baseColors.length === 0) return;
+    const hueThreshold = 0.025;
+    const visited = new Uint8Array(totalPixels);
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    
+    interface Cluster { pixels: number[]; sumH: number; sumS: number; sumL: number; count: number; avgH: number; avgS: number; avgL: number; }
+    const clusters: Cluster[] = [];
 
-    const centroids = baseColors.map(c => {
-      const rgb = hslToRgb(c.h, c.s, c.l);
-      return [rgb.r, rgb.g, rgb.b];
-    });
-    
-    const assignments: number[] = new Array(bbox.w * bbox.h).fill(-1);
-    
-    for (let y = 0; y < bbox.h; y++) {
-      for (let x = 0; x < bbox.w; x++) {
-        const localIdx = y * bbox.w + x;
-        if (localMask[localIdx] === 0) continue;
+    const getColor = (idx: number) => {
+      const globalIdx = ((offsetY + Math.floor(idx / w)) * TEX_SIZE + (offsetX + (idx % w))) * 4;
+      return { 
+        r: baseTexture.data[globalIdx], 
+        g: baseTexture.data[globalIdx + 1], 
+        b: baseTexture.data[globalIdx + 2] 
+      };
+    };
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        if (localMask[idx] === 0 || visited[idx]) continue;
         
-        const globalIdx = (bbox.y + y) * TEX_SIZE + (bbox.x + x);
-        const idx = globalIdx * 4;
-        const r = baseTexture.data[idx];
-        const g = baseTexture.data[idx + 1];
-        const b = baseTexture.data[idx + 2];
+        const seedColor = getColor(idx);
+        const seedHsl = rgbToHsl(seedColor.r, seedColor.g, seedColor.b);
+        const queue: [number, number][] = [[x, y]];
+        visited[idx] = 1;
         
-        let bestDist = Infinity;
-        let bestIdx = 0;
-        
-        for (let i = 0; i < centroids.length; i++) {
-          const dr = r - centroids[i][0];
-          const dg = g - centroids[i][1];
-          const db = b - centroids[i][2];
-          const dist = dr * dr + dg * dg + db * db;
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestIdx = i;
+        const cluster: Cluster = { 
+          pixels: [idx], 
+          sumH: seedHsl.h, 
+          sumS: seedHsl.s, 
+          sumL: seedHsl.l, 
+          count: 1, 
+          avgH: seedHsl.h, 
+          avgS: seedHsl.s, 
+          avgL: seedHsl.l 
+        };
+
+        while (queue.length) {
+          const [cx, cy] = queue.shift()!;
+          for (const [dx, dy] of dirs) {
+            const nx = cx + dx, ny = cy + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const ni = ny * w + nx;
+            if (localMask[ni] === 0 || visited[ni]) continue;
+            
+            const neighborColor = getColor(ni);
+            const neighborHsl = rgbToHsl(neighborColor.r, neighborColor.g, neighborColor.b);
+            
+            const hDiff = Math.abs(neighborHsl.h - cluster.avgH);
+            const hDist = Math.min(hDiff, 1 - hDiff);
+            
+            if (hDist < hueThreshold) {
+              visited[ni] = 1;
+              queue.push([nx, ny]);
+              cluster.pixels.push(ni);
+              cluster.sumH += neighborHsl.h;
+              cluster.sumS += neighborHsl.s;
+              cluster.sumL += neighborHsl.l;
+              cluster.count++;
+              cluster.avgH = cluster.sumH / cluster.count;
+              cluster.avgS = cluster.sumS / cluster.count;
+              cluster.avgL = cluster.sumL / cluster.count;
+            }
           }
         }
         
-        assignments[localIdx] = bestIdx;
+        if (cluster.pixels.length > 0) clusters.push(cluster);
       }
     }
 
-    const newRegionIdTex = new Uint8Array(bbox.w * bbox.h);
-    for (let i = 0; i < newRegionIdTex.length; i++) {
-      newRegionIdTex[i] = assignments[i] >= 0 ? assignments[i] + 1 : 0;
-    }
+    clusters.sort((a, b) => b.pixels.length - a.pixels.length);
 
-    const colors = baseColors.map(c => ({ ...c }));
+    if (clusters.length === 0) return;
+
+    const colors = clusters.map(c => ({ 
+      h: c.sumH / c.count, 
+      s: c.sumS / c.count, 
+      l: c.sumL / c.count 
+    }));
+
+    const newRegionIdTex = new Uint8Array(totalPixels);
+    
+    for (let ci = 0; ci < clusters.length; ci++) {
+      const cluster = clusters[ci];
+      for (const pixelIdx of cluster.pixels) {
+        newRegionIdTex[pixelIdx] = ci + 1;
+      }
+    }
 
     const newBaseCanvas = document.createElement('canvas');
     newBaseCanvas.width = TEX_SIZE;
@@ -1084,12 +1129,15 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     if (pickingIndex !== null && e.button === 0) {
-      if (!bgImageData) return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
       
-      const idx = (pixel.y * TEX_SIZE + pixel.x) * 4;
-      const r = bgImageData.data[idx];
-      const g = bgImageData.data[idx + 1];
-      const b = bgImageData.data[idx + 2];
+      const displayPixel = ctx.getImageData(pixel.x, pixel.y, 1, 1).data;
+      const r = displayPixel[0];
+      const g = displayPixel[1];
+      const b = displayPixel[2];
       
       const hsl = rgbToHsl(r, g, b);
       updateBaseColor(pickingIndex, hsl);
