@@ -60,6 +60,7 @@ function extractBaseByClick(
   regionIdTex: Uint8Array;
   texW: number;
   texH: number;
+  colorPixelsMap: Map<number, number[]>;
 } | null {
   if (worldPolygons.length === 0) return null;
 
@@ -348,6 +349,18 @@ function extractBaseByClick(
     residualData[idx + 3] = 255;
   }
 
+  const colorPixelsMap = new Map<number, number[]>();
+  if (regionIdTex) {
+    for (let i = 0; i < regionIdTex.length; i++) {
+      const clusterIdx = regionIdTex[i];
+      if (clusterIdx > 0) {
+        const colorIdx = clusterIdx - 1;
+        if (!colorPixelsMap.has(colorIdx)) colorPixelsMap.set(colorIdx, []);
+        colorPixelsMap.get(colorIdx)!.push(i);
+      }
+    }
+  }
+
   return {
     baseTexture: baseImageData,
     residualTexture: residualImageData,
@@ -356,6 +369,7 @@ function extractBaseByClick(
     regionIdTex: regionIdTex || new Uint8Array(0),
     texW: w,
     texH: h,
+    colorPixelsMap,
   };
 }
 
@@ -374,52 +388,48 @@ export const BaseColorEditor: React.FC = () => {
   const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
   const [regionIdTex, setRegionIdTex] = useState<Uint8Array>(new Uint8Array(0));
   const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
   const [selectedBaseColorIndex, setSelectedBaseColorIndex] = useState<number | null>(null);
 
   const highlightCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    if (selectedBaseColorIndex === null || !regionIdTex || regionIdTex.length === 0 || !bbox) {
-      if (highlightCanvasRef.current) {
-        const ctx = highlightCanvasRef.current.getContext('2d')!;
-        ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
-      }
-      return;
-    }
-
     if (!highlightCanvasRef.current) {
       const canvas = document.createElement('canvas');
       canvas.width = TEX_SIZE;
       canvas.height = TEX_SIZE;
       highlightCanvasRef.current = canvas;
     }
-
     const canvas = highlightCanvasRef.current;
     const ctx = canvas.getContext('2d')!;
     ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-    const targetId = selectedBaseColorIndex + 1;
+    if (selectedBaseColorIndex === null || !colorPixelsMap || !bbox) {
+      return;
+    }
+
+    const pixelIndices = colorPixelsMap.get(selectedBaseColorIndex);
+    if (!pixelIndices || pixelIndices.length === 0) return;
+
     const { w } = texWH;
     const imageData = ctx.createImageData(TEX_SIZE, TEX_SIZE);
     const data = imageData.data;
 
-    for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
-      if (regionIdTex[localIdx] === targetId) {
-        const localY = Math.floor(localIdx / w);
-        const localX = localIdx % w;
-        const globalY = bbox.y + localY;
-        const globalX = bbox.x + localX;
-        if (globalY >= 0 && globalY < TEX_SIZE && globalX >= 0 && globalX < TEX_SIZE) {
-          const idx = (globalY * TEX_SIZE + globalX) * 4;
-          data[idx] = 255;
-          data[idx + 1] = 255;
-          data[idx + 2] = 0;
-          data[idx + 3] = 120;
-        }
+    for (const localIdx of pixelIndices) {
+      const localY = Math.floor(localIdx / w);
+      const localX = localIdx % w;
+      const globalY = bbox.y + localY;
+      const globalX = bbox.x + localX;
+      if (globalY >= 0 && globalY < TEX_SIZE && globalX >= 0 && globalX < TEX_SIZE) {
+        const idx = (globalY * TEX_SIZE + globalX) * 4;
+        data[idx] = 255;
+        data[idx + 1] = 255;
+        data[idx + 2] = 0;
+        data[idx + 3] = 120;
       }
     }
     ctx.putImageData(imageData, 0, 0);
-  }, [selectedBaseColorIndex, regionIdTex.length, bbox, texWH.w]);
+  }, [selectedBaseColorIndex, colorPixelsMap, bbox, texWH]);
 
   const [brushColor, setBrushColor] = useState('#ff0000');
   const [brushSize, setBrushSize] = useState(8);
@@ -621,6 +631,7 @@ export const BaseColorEditor: React.FC = () => {
       setBaseColors(result.baseColors);
       setRegionIdTex(result.regionIdTex);
       setTexWH({ w: result.texW, h: result.texH });
+      setColorPixelsMap(result.colorPixelsMap);
       setIsExtractMode(false);
       setTimeout(() => saveToHistory(), 0);
     }
@@ -1082,19 +1093,7 @@ export const BaseColorEditor: React.FC = () => {
 
     octx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-    if (highlightCanvasRef.current) {
-      octx.drawImage(highlightCanvasRef.current, 0, 0);
-    }
-  }, [selectedBaseColorIndex]);
-
-  useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay) return;
-    const octx = overlay.getContext('2d')!;
-
-    octx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
-
-    if (highlightCanvasRef.current) {
+    if (mode === 'base2' && highlightCanvasRef.current) {
       octx.drawImage(highlightCanvasRef.current, 0, 0);
     }
 
@@ -1114,7 +1113,7 @@ export const BaseColorEditor: React.FC = () => {
       octx.fill();
     }
     octx.restore();
-  }, [mousePos, currentTool, brushColor, brushSize]);
+  }, [mousePos, currentTool, brushColor, brushSize, selectedBaseColorIndex, mode]);
 
   useEffect(() => {
     const container = containerRef.current;
