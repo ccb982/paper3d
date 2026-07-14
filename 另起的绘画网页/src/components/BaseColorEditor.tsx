@@ -512,7 +512,7 @@ export const BaseColorEditor: React.FC = () => {
     gl.bindTexture(gl.TEXTURE_2D, texture);
 
     const rgbData = new Uint8Array(TEX_SIZE * TEX_SIZE * 3);
-    const { w } = texWH;
+    const { w } = bbox;
 
     for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
       const localY = Math.floor(localIdx / w);
@@ -541,7 +541,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     textureRef.current = texture;
     console.log('[WebGL] uploadTexture done');
-  }, [regionIdTex, bbox, texWH, webglReady]);
+  }, [regionIdTex, bbox, webglReady]);
 
   const uploadBaseTexture = useCallback(() => {
     const gl = glRef.current;
@@ -885,7 +885,7 @@ export const BaseColorEditor: React.FC = () => {
 
       const newData = new Uint8ClampedArray(baseTexture.data);
       const rgb = hslToRgb(newHSL.h, newHSL.s, newHSL.l);
-      const { w } = texWH;
+      const { w } = bbox;
 
       for (const localIdx of pixelIndices) {
         const localY = Math.floor(localIdx / w);
@@ -901,7 +901,7 @@ export const BaseColorEditor: React.FC = () => {
 
       setBaseTexture(new ImageData(newData, TEX_SIZE, TEX_SIZE));
     }
-  }, [baseTexture, colorPixelsMap, bbox, texWH]);
+  }, [baseTexture, colorPixelsMap, bbox]);
 
   const handlePickColor = useCallback((index: number) => {
     setPickingIndex(prev => prev === index ? null : index);
@@ -911,100 +911,52 @@ export const BaseColorEditor: React.FC = () => {
     if (!bbox || !baseTexture) return;
     
     const localMask = new Uint8Array(bbox.w * bbox.h);
-    const colorSamples: number[][] = [];
     
     for (let y = 0; y < bbox.h; y++) {
       for (let x = 0; x < bbox.w; x++) {
         const globalIdx = (bbox.y + y) * TEX_SIZE + (bbox.x + x);
         const idx = globalIdx * 4;
         const alpha = baseTexture.data[idx + 3];
-        if (alpha > 0) {
-          localMask[y * bbox.w + x] = 1;
-          colorSamples.push([
-            baseTexture.data[idx],
-            baseTexture.data[idx + 1],
-            baseTexture.data[idx + 2]
-          ]);
-        } else {
-          localMask[y * bbox.w + x] = 0;
-        }
+        localMask[y * bbox.w + x] = alpha > 0 ? 1 : 0;
       }
     }
 
-    if (colorSamples.length === 0) return;
+    if (baseColors.length === 0) return;
 
-    const k = Math.max(2, Math.min(baseColors.length, Math.floor(Math.sqrt(colorSamples.length / 10))));
+    const centroids = baseColors.map(c => {
+      const rgb = hslToRgb(c.h, c.s, c.l);
+      return [rgb.r, rgb.g, rgb.b];
+    });
     
-    const centroids = colorSamples.slice(0, k);
+    const assignments: number[] = new Array(bbox.w * bbox.h).fill(-1);
     
-    let iterations = 0;
-    const maxIterations = 10;
-    let assignments: number[] = new Array(bbox.w * bbox.h).fill(-1);
-    
-    while (iterations < maxIterations) {
-      let changed = false;
-      
-      for (let y = 0; y < bbox.h; y++) {
-        for (let x = 0; x < bbox.w; x++) {
-          const localIdx = y * bbox.w + x;
-          if (localMask[localIdx] === 0) continue;
-          
-          const globalIdx = (bbox.y + y) * TEX_SIZE + (bbox.x + x);
-          const idx = globalIdx * 4;
-          const r = baseTexture.data[idx];
-          const g = baseTexture.data[idx + 1];
-          const b = baseTexture.data[idx + 2];
-          
-          let bestDist = Infinity;
-          let bestIdx = 0;
-          
-          for (let i = 0; i < centroids.length; i++) {
-            const dr = r - centroids[i][0];
-            const dg = g - centroids[i][1];
-            const db = b - centroids[i][2];
-            const dist = dr * dr + dg * dg + db * db;
-            if (dist < bestDist) {
-              bestDist = dist;
-              bestIdx = i;
-            }
-          }
-          
-          if (assignments[localIdx] !== bestIdx) {
-            assignments[localIdx] = bestIdx;
-            changed = true;
+    for (let y = 0; y < bbox.h; y++) {
+      for (let x = 0; x < bbox.w; x++) {
+        const localIdx = y * bbox.w + x;
+        if (localMask[localIdx] === 0) continue;
+        
+        const globalIdx = (bbox.y + y) * TEX_SIZE + (bbox.x + x);
+        const idx = globalIdx * 4;
+        const r = baseTexture.data[idx];
+        const g = baseTexture.data[idx + 1];
+        const b = baseTexture.data[idx + 2];
+        
+        let bestDist = Infinity;
+        let bestIdx = 0;
+        
+        for (let i = 0; i < centroids.length; i++) {
+          const dr = r - centroids[i][0];
+          const dg = g - centroids[i][1];
+          const db = b - centroids[i][2];
+          const dist = dr * dr + dg * dg + db * db;
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
           }
         }
+        
+        assignments[localIdx] = bestIdx;
       }
-      
-      if (!changed) break;
-      
-      const counts = new Array(centroids.length).fill(0);
-      const sums = centroids.map(() => [0, 0, 0]);
-      
-      for (let y = 0; y < bbox.h; y++) {
-        for (let x = 0; x < bbox.w; x++) {
-          const localIdx = y * bbox.w + x;
-          const clusterIdx = assignments[localIdx];
-          if (clusterIdx >= 0) {
-            const globalIdx = (bbox.y + y) * TEX_SIZE + (bbox.x + x);
-            const idx = globalIdx * 4;
-            sums[clusterIdx][0] += baseTexture.data[idx];
-            sums[clusterIdx][1] += baseTexture.data[idx + 1];
-            sums[clusterIdx][2] += baseTexture.data[idx + 2];
-            counts[clusterIdx]++;
-          }
-        }
-      }
-      
-      for (let i = 0; i < centroids.length; i++) {
-        if (counts[i] > 0) {
-          centroids[i][0] = Math.round(sums[i][0] / counts[i]);
-          centroids[i][1] = Math.round(sums[i][1] / counts[i]);
-          centroids[i][2] = Math.round(sums[i][2] / counts[i]);
-        }
-      }
-      
-      iterations++;
     }
 
     const newRegionIdTex = new Uint8Array(bbox.w * bbox.h);
@@ -1012,7 +964,7 @@ export const BaseColorEditor: React.FC = () => {
       newRegionIdTex[i] = assignments[i] >= 0 ? assignments[i] + 1 : 0;
     }
 
-    const colors = centroids.map(([r, g, b]) => rgbToHsl(r, g, b));
+    const colors = baseColors.map(c => ({ ...c }));
 
     const newBaseCanvas = document.createElement('canvas');
     newBaseCanvas.width = TEX_SIZE;
