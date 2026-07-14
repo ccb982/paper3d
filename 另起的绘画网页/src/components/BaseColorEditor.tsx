@@ -57,6 +57,9 @@ function extractBaseByClick(
   residualTexture: ImageData;
   bbox: { x: number; y: number; w: number; h: number };
   baseColors: Array<{ h: number; s: number; l: number }>;
+  regionIdTex: Uint8Array;
+  texW: number;
+  texH: number;
 } | null {
   if (worldPolygons.length === 0) return null;
 
@@ -288,8 +291,9 @@ function extractBaseByClick(
   console.log('[DEBUG] baseTexture loop complete:', { paintedPixels });
 
   let foundPixel = null;
-  for (let i = 0; i < regionIdTex?.length; i++) {
-    if (regionIdTex && regionIdTex[i] > 0) {
+  if (regionIdTex) {
+    for (let i = 0; i < regionIdTex.length; i++) {
+      if (regionIdTex[i] > 0) {
       const localY = Math.floor(i / w);
       const localX = i % w;
       const globalY = pxBbox.y + localY;
@@ -302,6 +306,7 @@ function extractBaseByClick(
         rgb: [baseData[idx], baseData[idx + 1], baseData[idx + 2], baseData[idx + 3]]
       };
       break;
+      }
     }
   }
   
@@ -369,6 +374,53 @@ export const BaseColorEditor: React.FC = () => {
   const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
   const [regionIdTex, setRegionIdTex] = useState<Uint8Array>(new Uint8Array(0));
   const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const [selectedBaseColorIndex, setSelectedBaseColorIndex] = useState<number | null>(null);
+
+  const highlightCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (selectedBaseColorIndex === null || !regionIdTex || regionIdTex.length === 0 || !bbox) {
+      if (highlightCanvasRef.current) {
+        const ctx = highlightCanvasRef.current.getContext('2d')!;
+        ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+      }
+      return;
+    }
+
+    if (!highlightCanvasRef.current) {
+      const canvas = document.createElement('canvas');
+      canvas.width = TEX_SIZE;
+      canvas.height = TEX_SIZE;
+      highlightCanvasRef.current = canvas;
+    }
+
+    const canvas = highlightCanvasRef.current;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+
+    const targetId = selectedBaseColorIndex + 1;
+    const { w } = texWH;
+    const imageData = ctx.createImageData(TEX_SIZE, TEX_SIZE);
+    const data = imageData.data;
+
+    for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
+      if (regionIdTex[localIdx] === targetId) {
+        const localY = Math.floor(localIdx / w);
+        const localX = localIdx % w;
+        const globalY = bbox.y + localY;
+        const globalX = bbox.x + localX;
+        if (globalY >= 0 && globalY < TEX_SIZE && globalX >= 0 && globalX < TEX_SIZE) {
+          const idx = (globalY * TEX_SIZE + globalX) * 4;
+          data[idx] = 255;
+          data[idx + 1] = 255;
+          data[idx + 2] = 0;
+          data[idx + 3] = 120;
+        }
+      }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }, [selectedBaseColorIndex, regionIdTex.length, bbox, texWH.w]);
+
   const [brushColor, setBrushColor] = useState('#ff0000');
   const [brushSize, setBrushSize] = useState(8);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -586,7 +638,7 @@ export const BaseColorEditor: React.FC = () => {
     if (baseTexture && regionIdTex.length > 0 && bbox) {
       const newData = new Uint8ClampedArray(baseTexture.data);
       const rgb = hslToRgb(newHSL.h, newHSL.s, newHSL.l);
-      const { w, h: hTex } = texWH;
+      const { w } = texWH;
 
       for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
         const clusterIdx = regionIdTex[localIdx];
@@ -1027,8 +1079,24 @@ export const BaseColorEditor: React.FC = () => {
     const overlay = overlayRef.current;
     if (!overlay) return;
     const octx = overlay.getContext('2d')!;
-    // 清除 overlay
+
     octx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+
+    if (highlightCanvasRef.current) {
+      octx.drawImage(highlightCanvasRef.current, 0, 0);
+    }
+  }, [selectedBaseColorIndex]);
+
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const octx = overlay.getContext('2d')!;
+
+    octx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+
+    if (highlightCanvasRef.current) {
+      octx.drawImage(highlightCanvasRef.current, 0, 0);
+    }
 
     if (!mousePos || (currentTool !== 'paint' && currentTool !== 'picker')) return;
 
@@ -1315,21 +1383,29 @@ export const BaseColorEditor: React.FC = () => {
             {baseColors.map((hsl, index) => {
               const rgb = hslToRgb(hsl.h, hsl.s, hsl.l);
               const hex = `#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`;
+              const isSelected = selectedBaseColorIndex === index;
               return (
-                <div key={index} style={{
-                  marginBottom: '12px',
-                  padding: '8px',
-                  background: '#fff',
-                  borderRadius: '4px',
-                  border: '1px solid #e0e0e0',
-                }}>
-                  {/* 颜色行 */}
+                <div
+                  key={index}
+                  onClick={() => setSelectedBaseColorIndex(isSelected ? null : index)}
+                  style={{
+                    marginBottom: '12px',
+                    padding: '8px',
+                    background: isSelected ? '#e6f7ff' : '#fff',
+                    borderRadius: '4px',
+                    border: isSelected ? '2px solid #1890ff' : '1px solid #e0e0e0',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    boxShadow: isSelected ? '0 0 0 2px rgba(24,144,255,0.2)' : 'none',
+                  }}
+                >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-                    <span style={{ minWidth: '28px', fontWeight: 'bold', color: '#333' }}>#{index + 1}</span>
+                    <span style={{ minWidth: '28px', fontWeight: 'bold', color: isSelected ? '#1890ff' : '#333' }}>#{index + 1}</span>
                     <div style={{ width: '28px', height: '28px', borderRadius: '4px', background: hex, border: '1px solid #ccc' }} />
                     <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#666' }}>
                       {hex.toUpperCase()}
                     </span>
+                    {isSelected && <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#1890ff' }}>👁️ 高亮中</span>}
                   </div>
                   {/* HSL 滑块 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '3px' }}>
