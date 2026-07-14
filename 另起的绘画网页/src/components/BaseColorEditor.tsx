@@ -51,7 +51,7 @@ function worldToCanvas(wx: number, wy: number): Point {
 function extractBaseByClick(
   bgImageData: ImageData,
   worldPolygons: Point[][],
-  clickPixel: { x: number; y: number },
+  _clickPixel?: { x: number; y: number },
   textureSize: number = TEX_SIZE
 ): {
   baseTexture: ImageData;
@@ -118,64 +118,23 @@ function extractBaseByClick(
     }
   }
 
-  // 2. BFS取色：从点击位置开始，不能穿过墙
-  const bfsVisited = new Uint8Array(textureSize * textureSize);
-  const queue: { x: number; y: number }[] = [];
-  
-  const cx = clickPixel.x;
-  const cy = clickPixel.y;
-  
-  console.log('[DEBUG BFS] starting at:', { cx, cy, textureSize });
-  
-  if (cx < 0 || cx >= textureSize || cy < 0 || cy >= textureSize) {
-    console.log('[DEBUG BFS] click outside bounds');
-    return null;
-  }
-  if (wallMask[cy * textureSize + cx] === 1) {
-    console.log('[DEBUG BFS] click on wall');
-    return null;
-  }
-  
-  queue.push({ x: cx, y: cy });
-  bfsVisited[cy * textureSize + cx] = 1;
-  
-  const dx = [-1, 1, 0, 0];
-  const dy = [0, 0, -1, 1];
-  
-  let visitedCount = 1;
-  while (queue.length > 0) {
-    const { x, y } = queue.shift()!;
-    
-    for (let i = 0; i < 4; i++) {
-      const nx = x + dx[i];
-      const ny = y + dy[i];
-      
-      if (nx >= 0 && nx < textureSize && ny >= 0 && ny < textureSize) {
-        if (bfsVisited[ny * textureSize + nx] === 0 && wallMask[ny * textureSize + nx] === 0) {
-          bfsVisited[ny * textureSize + nx] = 1;
-          visitedCount++;
-          queue.push({ x: nx, y: ny });
-        }
-      }
-    }
-  }
-  
-  console.log('[DEBUG BFS] completed:', { visitedCount });
-
-  // 3. 计算BFS区域的bbox
+  // 2. 计算多边形的bbox（整个box区域）
   let minX = textureSize, minY = textureSize, maxX = -1, maxY = -1;
-  for (let y = 0; y < textureSize; y++) {
-    for (let x = 0; x < textureSize; x++) {
-      if (bfsVisited[y * textureSize + x] === 1) {
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-      }
+  for (const poly of rasterizablePolygons) {
+    for (const p of poly) {
+      const px = Math.round(p.x * textureSize);
+      const py = Math.round((1 - p.y) * textureSize);
+      if (px < minX) minX = px;
+      if (py < minY) minY = py;
+      if (px > maxX) maxX = px;
+      if (py > maxY) maxY = py;
     }
   }
   
-  if (maxX < 0) return null;
+  minX = Math.max(0, minX - 10);
+  minY = Math.max(0, minY - 10);
+  maxX = Math.min(textureSize - 1, maxX + 10);
+  maxY = Math.min(textureSize - 1, maxY + 10);
   
   const pxBbox = {
     x: minX,
@@ -183,6 +142,18 @@ function extractBaseByClick(
     w: maxX - minX + 1,
     h: maxY - minY + 1,
   };
+  
+  // 3. 标记整个bbox区域为已访问（不考虑墙的限制）
+  const bfsVisited = new Uint8Array(textureSize * textureSize);
+  let visitedCount = 0;
+  for (let y = pxBbox.y; y < pxBbox.y + pxBbox.h; y++) {
+    for (let x = pxBbox.x; x < pxBbox.x + pxBbox.w; x++) {
+      bfsVisited[y * textureSize + x] = 1;
+      visitedCount++;
+    }
+  }
+  
+  console.log('[DEBUG BFS] completed - entire bbox:', { visitedCount, pxBbox });
 
   // 4. 裁剪局部 mask
   const { w, h } = pxBbox;
@@ -1271,8 +1242,50 @@ export const BaseColorEditor: React.FC = () => {
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-      if (baseTexture) {
-        ctx.putImageData(baseTexture, 0, 0);
+      if (bbox && baseTexture && baseColors.length > 0) {
+        const filledData = new ImageData(
+          new Uint8ClampedArray(baseTexture.data),
+          TEX_SIZE,
+          TEX_SIZE
+        );
+        
+        const baseColorRgbs = baseColors.map(c => hslToRgb(c.h, c.s, c.l));
+        
+        for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
+          for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
+            const idx = (y * TEX_SIZE + x) * 4;
+            if (filledData.data[idx + 3] === 0 && bgImageData) {
+              const r = bgImageData.data[idx];
+              const g = bgImageData.data[idx + 1];
+              const b = bgImageData.data[idx + 2];
+              
+              let bestDist = Infinity;
+              let bestRgb = baseColorRgbs[0];
+              for (const rgb of baseColorRgbs) {
+                const dr = r - rgb.r;
+                const dg = g - rgb.g;
+                const db = b - rgb.b;
+                const dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestRgb = rgb;
+                }
+              }
+              
+              filledData.data[idx] = bestRgb.r;
+              filledData.data[idx + 1] = bestRgb.g;
+              filledData.data[idx + 2] = bestRgb.b;
+              filledData.data[idx + 3] = 255;
+            }
+          }
+        }
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
+        ctx.clip();
+        ctx.putImageData(filledData, 0, 0);
+        ctx.restore();
       } else if (bgImageData) {
         ctx.putImageData(bgImageData, 0, 0);
       }
@@ -1320,13 +1333,65 @@ export const BaseColorEditor: React.FC = () => {
     }
     // 残差模式：基础色区域显示残差（偏移128），其他区域显示灰色
     else if (mode === 'residual') {
-      if (residualTexture) {
-        ctx.putImageData(residualTexture, 0, 0);
+      ctx.fillStyle = '#333';
+      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      
+      if (bbox && residualTexture && baseColors.length > 0) {
+        const filledData = new ImageData(
+          new Uint8ClampedArray(residualTexture.data),
+          TEX_SIZE,
+          TEX_SIZE
+        );
+        
+        const baseColorRgbs = baseColors.map(c => hslToRgb(c.h, c.s, c.l));
+        
+        for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
+          for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
+            const idx = (y * TEX_SIZE + x) * 4;
+            if (filledData.data[idx + 3] === 0 && bgImageData) {
+              const r = bgImageData.data[idx];
+              const g = bgImageData.data[idx + 1];
+              const b = bgImageData.data[idx + 2];
+              
+              let bestDist = Infinity;
+              let bestRgb = baseColorRgbs[0];
+              for (const rgb of baseColorRgbs) {
+                const dr = r - rgb.r;
+                const dg = g - rgb.g;
+                const db = b - rgb.b;
+                const dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestRgb = rgb;
+                }
+              }
+              
+              const dR = r - bestRgb.r;
+              const dG = g - bestRgb.g;
+              const dB = b - bestRgb.b;
+              
+              filledData.data[idx] = Math.max(0, Math.min(255, dR + 128));
+              filledData.data[idx + 1] = Math.max(0, Math.min(255, dG + 128));
+              filledData.data[idx + 2] = Math.max(0, Math.min(255, dB + 128));
+              filledData.data[idx + 3] = 255;
+            }
+          }
+        }
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
+        ctx.clip();
+        ctx.putImageData(filledData, 0, 0);
+        ctx.restore();
       }
     }
     // 叠加模式：基础色 + 残差还原（原始图像）
     else if (mode === 'composite') {
-      if (baseTexture && residualTexture) {
+      ctx.fillStyle = '#333';
+      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      
+      if (bbox && baseTexture && residualTexture && baseColors.length > 0) {
         const compositeData = new ImageData(
           new Uint8ClampedArray(baseTexture.data),
           TEX_SIZE,
@@ -1334,9 +1399,11 @@ export const BaseColorEditor: React.FC = () => {
         );
         const baseData = baseTexture.data;
         const residualData = residualTexture.data;
+        
+        const baseColorRgbs = baseColors.map(c => hslToRgb(c.h, c.s, c.l));
 
-        for (let y = 0; y < TEX_SIZE; y++) {
-          for (let x = 0; x < TEX_SIZE; x++) {
+        for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
+          for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
             const idx = (y * TEX_SIZE + x) * 4;
             if (baseData[idx + 3] > 0) {
               const hslBase = rgbToHsl(baseData[idx], baseData[idx + 1], baseData[idx + 2]);
@@ -1353,12 +1420,56 @@ export const BaseColorEditor: React.FC = () => {
               compositeData.data[idx + 1] = rgb.g;
               compositeData.data[idx + 2] = rgb.b;
               compositeData.data[idx + 3] = 255;
+            } else if (bgImageData) {
+              const r = bgImageData.data[idx];
+              const g = bgImageData.data[idx + 1];
+              const b = bgImageData.data[idx + 2];
+              
+              let bestDist = Infinity;
+              let bestColor = baseColors[0];
+              for (let i = 0; i < baseColors.length; i++) {
+                const rgb = baseColorRgbs[i];
+                const dr = r - rgb.r;
+                const dg = g - rgb.g;
+                const db = b - rgb.b;
+                const dist = dr * dr + dg * dg + db * db;
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestColor = baseColors[i];
+                }
+              }
+              
+              const dR = r - hslToRgb(bestColor.h, bestColor.s, bestColor.l).r;
+              const dG = g - hslToRgb(bestColor.h, bestColor.s, bestColor.l).g;
+              const dB = b - hslToRgb(bestColor.h, bestColor.s, bestColor.l).b;
+              
+              const dH = dequantize(Math.max(0, Math.min(255, dR + 128)), 0.25);
+              const dS = dequantize(Math.max(0, Math.min(255, dG + 128)), 1.0);
+              const dL = dequantize(Math.max(0, Math.min(255, dB + 128)), 1.0);
+              
+              let finalH = bestColor.h + dH;
+              if (finalH < 0) finalH += 1.0;
+              if (finalH >= 1.0) finalH -= 1.0;
+              const finalS = Math.max(0, Math.min(1, bestColor.s + dS));
+              const finalL = Math.max(0, Math.min(1, bestColor.l + dL));
+              const rgb = hslToRgb(finalH, finalS, finalL);
+              
+              compositeData.data[idx] = rgb.r;
+              compositeData.data[idx + 1] = rgb.g;
+              compositeData.data[idx + 2] = rgb.b;
+              compositeData.data[idx + 3] = 255;
             } else {
               compositeData.data[idx + 3] = 0;
             }
           }
         }
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
+        ctx.clip();
         ctx.putImageData(compositeData, 0, 0);
+        ctx.restore();
       } else if (bgImageData) {
         ctx.putImageData(bgImageData, 0, 0);
       }
