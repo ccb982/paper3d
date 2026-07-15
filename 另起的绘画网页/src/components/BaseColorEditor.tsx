@@ -58,12 +58,12 @@ function extractBaseByClick(
 ): {
   baseTexture: ImageData;
   residualTexture: ImageData;
+  deltaTex: Uint8Array;
   bbox: { x: number; y: number; w: number; h: number };
   baseColors: Array<{ h: number; s: number; l: number }>;
   regionIdTex: Uint8Array;
   texW: number;
   texH: number;
-  colorPixelsMap: Map<number, number[]>;
 } | null {
   if (worldPolygons.length === 0) return null;
 
@@ -331,28 +331,201 @@ function extractBaseByClick(
     residualData[idx + 3] = 255;
   }
 
-  const colorPixelsMap = new Map<number, number[]>();
-  if (regionIdTex) {
-    for (let i = 0; i < regionIdTex.length; i++) {
-      const clusterIdx = regionIdTex[i];
-      if (clusterIdx > 0) {
-        const colorIdx = clusterIdx - 1;
-        if (!colorPixelsMap.has(colorIdx)) colorPixelsMap.set(colorIdx, []);
-        colorPixelsMap.get(colorIdx)!.push(i);
-      }
-    }
-  }
-
   return {
     baseTexture: baseImageData,
     residualTexture: residualImageData,
+    deltaTex: deltaTex || new Uint8Array(0),
     bbox: pxBbox,
     baseColors: colors,
     regionIdTex: regionIdTex || new Uint8Array(0),
     texW: w,
     texH: h,
-    colorPixelsMap,
   };
+}
+
+// ============ 颜色合并与纹理重建函数 ============
+function mergeColorsWithGlobal(
+  extractedColors: Array<{ h: number; s: number; l: number }>,
+  extractedRegionIdTex: Uint8Array,
+  _extractedDeltaTex: Uint8Array,
+  globalColors: Array<{ id: number; h: number; s: number; l: number }>,
+  nextId: number,
+  bbox: { x: number; y: number; w: number; h: number },
+  bgImageData: ImageData,
+  textureSize: number
+): {
+  newGlobalColors: Array<{ id: number; h: number; s: number; l: number }>;
+  newNextId: number;
+  newRegionIdTex: Uint8Array;
+  newDeltaTex: Uint8Array;
+} {
+  const localToGlobalId = new Map<number, number>();
+  const newColors: typeof globalColors = [...globalColors];
+  let currentNextId = nextId;
+
+  for (let i = 0; i < extractedColors.length; i++) {
+    const ec = extractedColors[i];
+    let matchedId = -1;
+    let minDist = 0.3;
+    for (const gc of newColors) {
+      const dh = Math.min(Math.abs(ec.h - gc.h), 1 - Math.abs(ec.h - gc.h));
+      const ds = Math.abs(ec.s - gc.s);
+      const dl = Math.abs(ec.l - gc.l);
+      const dist = dh + ds * 0.5 + dl * 0.5;
+      if (dist < minDist) {
+        minDist = dist;
+        matchedId = gc.id;
+      }
+    }
+    if (matchedId === -1) {
+      matchedId = currentNextId++;
+      newColors.push({ id: matchedId, h: ec.h, s: ec.s, l: ec.l });
+    }
+    localToGlobalId.set(i, matchedId);
+  }
+
+  const totalPixels = bbox.w * bbox.h;
+  const newRegionIdTex = new Uint8Array(totalPixels);
+  for (let idx = 0; idx < totalPixels; idx++) {
+    const localIdx = extractedRegionIdTex[idx];
+    if (localIdx > 0) {
+      const mappedId = localToGlobalId.get(localIdx - 1);
+      newRegionIdTex[idx] = mappedId !== undefined ? mappedId : 0;
+    }
+  }
+
+  const colorMapById = new Map<number, typeof globalColors[0]>();
+  for (const c of newColors) {
+    colorMapById.set(c.id, c);
+  }
+
+  const newDeltaTex = new Uint8Array(totalPixels * 3);
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const quantize = (value: number, range: number): number => {
+    const normalized = (value / range) * 0.5 + 0.5;
+    return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
+  };
+  const normalizeHueDelta = (delta: number) => {
+    if (delta > 0.5) return delta - 1.0;
+    if (delta < -0.5) return delta + 1.0;
+    return delta;
+  };
+
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const idx = py * w + px;
+      const globalId = newRegionIdTex[idx];
+      if (globalId === 0) continue;
+      const base = colorMapById.get(globalId);
+      if (!base) continue;
+      const globalX = offsetX + px;
+      const globalY = offsetY + py;
+      const pixelIdx4 = (globalY * textureSize + globalX) * 4;
+      const r = bgImageData.data[pixelIdx4];
+      const g = bgImageData.data[pixelIdx4 + 1];
+      const b = bgImageData.data[pixelIdx4 + 2];
+      const hsl = rgbToHsl(r, g, b);
+      const dH = normalizeHueDelta(hsl.h - base.h);
+      const dS = hsl.s - base.s;
+      const dL = hsl.l - base.l;
+      newDeltaTex[idx * 3] = quantize(dH * 0.5, 0.25);
+      newDeltaTex[idx * 3 + 1] = quantize(dS, 1.0);
+      newDeltaTex[idx * 3 + 2] = quantize(dL, 1.0);
+    }
+  }
+
+  return {
+    newGlobalColors: newColors,
+    newNextId: currentNextId,
+    newRegionIdTex,
+    newDeltaTex,
+  };
+}
+
+function buildBaseTextureFromRegionId(
+  globalColors: Array<{ id: number; h: number; s: number; l: number }>,
+  regionIdTex: Uint8Array,
+  bbox: { x: number; y: number; w: number; h: number },
+  textureSize: number
+): ImageData {
+  const colorMapById = new Map<number, typeof globalColors[0]>();
+  for (const c of globalColors) {
+    colorMapById.set(c.id, c);
+  }
+
+  const uniqueIds = new Set<number>();
+  for (let i = 0; i < regionIdTex.length; i++) {
+    if (regionIdTex[i] > 0) uniqueIds.add(regionIdTex[i]);
+  }
+  const globalColorIds = globalColors.map(c => c.id);
+  console.log('[DEBUG] buildBaseTextureFromRegionId:', {
+    regionIdTexUniqueIds: Array.from(uniqueIds),
+    globalColorIds,
+    missingIds: Array.from(uniqueIds).filter(id => !globalColorIds.includes(id))
+  });
+
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const canvas = document.createElement('canvas');
+  canvas.width = textureSize;
+  canvas.height = textureSize;
+  const ctx = canvas.getContext('2d')!;
+  const imageData = ctx.createImageData(textureSize, textureSize);
+  const data = imageData.data;
+  data.fill(0);
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const idx = py * w + px;
+      const globalId = regionIdTex[idx];
+      if (globalId === 0) continue;
+      const color = colorMapById.get(globalId);
+      if (!color) continue;
+      const rgb = hslToRgb(color.h, color.s, color.l);
+      const globalX = offsetX + px;
+      const globalY = offsetY + py;
+      const pIdx = (globalY * textureSize + globalX) * 4;
+      data[pIdx] = rgb.r;
+      data[pIdx + 1] = rgb.g;
+      data[pIdx + 2] = rgb.b;
+      data[pIdx + 3] = 255;
+    }
+  }
+  return imageData;
+}
+
+function buildResidualTextureFromDelta(
+  deltaTex: Uint8Array,
+  bbox: { x: number; y: number; w: number; h: number },
+  textureSize: number
+): ImageData {
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const canvas = document.createElement('canvas');
+  canvas.width = textureSize;
+  canvas.height = textureSize;
+  const ctx = canvas.getContext('2d')!;
+  const imageData = ctx.createImageData(textureSize, textureSize);
+  const data = imageData.data;
+  for (let y = 0; y < textureSize; y++) {
+    for (let x = 0; x < textureSize; x++) {
+      const idx = (y * textureSize + x) * 4;
+      data[idx] = 128;
+      data[idx + 1] = 128;
+      data[idx + 2] = 128;
+      data[idx + 3] = 255;
+    }
+  }
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const idx = py * w + px;
+      const globalX = offsetX + px;
+      const globalY = offsetY + py;
+      const pIdx = (globalY * textureSize + globalX) * 4;
+      data[pIdx] = deltaTex[idx * 3];
+      data[pIdx + 1] = deltaTex[idx * 3 + 1];
+      data[pIdx + 2] = deltaTex[idx * 3 + 2];
+      data[pIdx + 3] = 255;
+    }
+  }
+  return imageData;
 }
 
 // ============ 组件 ============
@@ -371,10 +544,12 @@ export const BaseColorEditor: React.FC = () => {
     setSharedBaseColors,
     setGlobalBbox,
     syncGlobalBboxFromCurrentFrame,
+    setNextColorId,
+    updateColorInGlobal,
   } = useAppStore();
 
-  const { frames, sharedBaseColors, activeFrameId, globalBbox } = skillGroupEditor;
-  const currentFrame = frames.find(f => f.id === activeFrameId) || null;
+  const { frames, sharedBaseColors, activeFrameId, globalBbox, nextColorId } = skillGroupEditor;
+  const currentFrame = frames.find((f: typeof frames[0]) => f.id === activeFrameId) || null;
 
   const bgImageData = currentFrame?.bgImageData || null;
   const dashedPolygons = currentFrame?.dashedPolygons || [];
@@ -390,7 +565,7 @@ export const BaseColorEditor: React.FC = () => {
 
   const setDashedPolygons = useCallback((val: Point[][] | ((prev: Point[][]) => Point[][])) => {
     if (!activeFrameId) return;
-    const frame = frames.find(f => f.id === activeFrameId);
+    const frame = frames.find((f: typeof frames[0]) => f.id === activeFrameId);
     const currentPolygons = frame?.dashedPolygons || [];
     const newVal = typeof val === 'function' ? val(currentPolygons) : val;
     updateSkillFrame(activeFrameId, { dashedPolygons: newVal });
@@ -408,7 +583,7 @@ export const BaseColorEditor: React.FC = () => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { bbox: val });
   }, [activeFrameId, updateSkillFrame]);
 
-  const setBaseColors = useCallback((val: Array<{ h: number; s: number; l: number }> | ((prev: Array<{ h: number; s: number; l: number }>) => Array<{ h: number; s: number; l: number }>)) => {
+  const setBaseColors = useCallback((val: Array<{ id: number; h: number; s: number; l: number }> | ((prev: Array<{ id: number; h: number; s: number; l: number }>) => Array<{ id: number; h: number; s: number; l: number }>)) => {
     const newVal = typeof val === 'function' ? val(sharedBaseColors) : val;
     setSharedBaseColors(newVal);
   }, [sharedBaseColors, setSharedBaseColors]);
@@ -423,17 +598,32 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [frames.length, addSkillFrame]);
 
+  const buildColorPixelsMap = useCallback((regionIdTex: Uint8Array): Map<number, number[]> => {
+    const map = new Map<number, number[]>();
+    for (let i = 0; i < regionIdTex.length; i++) {
+      const globalId = regionIdTex[i];
+      if (globalId > 0) {
+        if (!map.has(globalId)) map.set(globalId, []);
+        map.get(globalId)!.push(i);
+      }
+    }
+    return map;
+  }, []);
+
   useEffect(() => {
     setDrawingPolygon(null);
-  }, [activeFrameId]);
+    const frame = frames.find((f: typeof frames[0]) => f.id === activeFrameId);
+    if (frame && frame.regionIdTex.length > 0) {
+      setColorPixelsMap(buildColorPixelsMap(frame.regionIdTex));
+    }
+  }, [activeFrameId, frames, buildColorPixelsMap]);
 
-  const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
-  const [selectedBaseColorIndex, setSelectedBaseColorIndex] = useState<number | null>(null);
-  const [pickingIndex, setPickingIndex] = useState<number | null>(null);
+  const [selectedBaseColorId, setSelectedBaseColorId] = useState<number | null>(null);
+  const [pickingId, setPickingId] = useState<number | null>(null);
 
-  const handleSelectBaseColor = useCallback((index: number) => {
-    setSelectedBaseColorIndex(prev => prev === index ? null : index);
+  const handleSelectBaseColor = useCallback((id: number) => {
+    setSelectedBaseColorId(prev => prev === id ? null : id);
   }, []);
 
   const highlightCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -684,7 +874,7 @@ export const BaseColorEditor: React.FC = () => {
 
     const idxLoc = selectedIndexUniformRef.current;
     if (idxLoc !== null) {
-      gl.uniform1i(idxLoc, index !== null ? index + 1 : 0);
+      gl.uniform1i(idxLoc, index !== null ? index : 0);
     }
 
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -704,14 +894,14 @@ export const BaseColorEditor: React.FC = () => {
       uploadBaseTexture();
     }
     if (mode === 'base2') {
-      drawHighlightGL(selectedBaseColorIndex);
+      drawHighlightGL(selectedBaseColorId);
     } else {
       const gl = glRef.current;
       if (gl) {
         gl.clear(gl.COLOR_BUFFER_BIT);
       }
     }
-  }, [selectedBaseColorIndex, regionIdTex, bbox, mode, webglReady, uploadTexture, uploadBaseTexture, drawHighlightGL]);
+  }, [selectedBaseColorId, regionIdTex, bbox, mode, webglReady, uploadTexture, uploadBaseTexture, drawHighlightGL]);
 
   useEffect(() => {
     return () => {
@@ -752,18 +942,18 @@ export const BaseColorEditor: React.FC = () => {
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
-    baseColors: Array<{ h: number; s: number; l: number }>;
+    baseColors: Array<{ id: number; h: number; s: number; l: number }>;
   }
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
   const saveToHistory = useCallback(() => {
     const newState: HistoryState = {
-      dashedPolygons: dashedPolygons.map(poly => poly.map(p => ({ ...p }))),
+      dashedPolygons: dashedPolygons.map((poly: Point[]) => poly.map((p: Point) => ({ ...p }))),
       baseTexture: baseTexture ? new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height) : null,
       residualTexture: residualTexture ? new ImageData(new Uint8ClampedArray(residualTexture.data), residualTexture.width, residualTexture.height) : null,
       bbox: bbox ? { ...bbox } : null,
-      baseColors: baseColors.map(c => ({ ...c })),
+      baseColors: baseColors.map((c: typeof baseColors[0]) => ({ ...c })),
     };
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(newState);
@@ -916,45 +1106,47 @@ export const BaseColorEditor: React.FC = () => {
       : dashedPolygons;
     if (allPolygons.length === 0) return;
 
-    // 使用全局 bbox（如果存在），否则传 null 让函数自动计算
     const result = extractBaseByClick(bgImageData, allPolygons, pixel, TEX_SIZE, globalBbox);
     if (result) {
-      console.log('[DEBUG] extract result:', {
-        baseTextureExists: !!result.baseTexture,
-        firstPixel: result.baseTexture ? [
-          result.baseTexture.data[0],
-          result.baseTexture.data[1],
-          result.baseTexture.data[2],
-          result.baseTexture.data[3]
-        ] : null,
-        bbox: result.bbox
-      });
-      setBaseTexture(result.baseTexture);
-      setResidualTexture(result.residualTexture);
+      const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex } = mergeColorsWithGlobal(
+        result.baseColors,
+        result.regionIdTex,
+        result.deltaTex,
+        sharedBaseColors,
+        nextColorId,
+        result.bbox,
+        bgImageData,
+        TEX_SIZE
+      );
+
+      setSharedBaseColors(newGlobalColors);
+      setNextColorId(newNextId);
+
+      const newBaseTexture = buildBaseTextureFromRegionId(
+        newGlobalColors,
+        newRegionIdTex,
+        result.bbox,
+        TEX_SIZE
+      );
+      setBaseTexture(newBaseTexture);
+      setResidualTexture(buildResidualTextureFromDelta(newDeltaTex, result.bbox, TEX_SIZE));
       setBbox(result.bbox);
-      setBaseColors(result.baseColors);
-      setRegionIdTex(result.regionIdTex);
-      setTexWH({ w: result.texW, h: result.texH });
-      setColorPixelsMap(result.colorPixelsMap);
+      setRegionIdTex(newRegionIdTex);
+      setColorPixelsMap(buildColorPixelsMap(newRegionIdTex));
       setIsExtractMode(false);
-      // 如果全局 bbox 为空，用当前帧的 bbox 初始化
       if (!globalBbox) {
         setGlobalBbox(result.bbox);
       }
       setTimeout(() => saveToHistory(), 0);
     }
-  }, [bgImageData, dashedPolygons, drawingPolygon, globalBbox, setGlobalBbox, saveToHistory]);
+  }, [bgImageData, dashedPolygons, drawingPolygon, globalBbox, setGlobalBbox, saveToHistory, sharedBaseColors, setSharedBaseColors, nextColorId, setNextColorId, buildColorPixelsMap]);
 
   // 更新基础色并重新生成纹理
-  const updateBaseColor = useCallback((index: number, newHSL: { h: number; s: number; l: number }) => {
-    setBaseColors(prev => {
-      const updated = [...prev];
-      updated[index] = newHSL;
-      return updated;
-    });
+  const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
+    updateColorInGlobal(id, newHSL);
 
     if (baseTexture && colorPixelsMap && bbox) {
-      const pixelIndices = colorPixelsMap.get(index);
+      const pixelIndices = colorPixelsMap.get(id);
       if (!pixelIndices || pixelIndices.length === 0) return;
 
       const newData = new Uint8ClampedArray(baseTexture.data);
@@ -975,14 +1167,14 @@ export const BaseColorEditor: React.FC = () => {
 
       setBaseTexture(new ImageData(newData, TEX_SIZE, TEX_SIZE));
     }
-  }, [baseTexture, colorPixelsMap, bbox]);
+  }, [baseTexture, colorPixelsMap, bbox, updateColorInGlobal]);
 
-  const handlePickColor = useCallback((index: number) => {
-    setPickingIndex(prev => prev === index ? null : index);
+  const handlePickColor = useCallback((id: number) => {
+    setPickingId(prev => prev === id ? null : id);
   }, []);
 
   const handleRecluster = useCallback(() => {
-    if (!bbox || !baseTexture) return;
+    if (!bbox || !baseTexture || !bgImageData) return;
     
     const { w, h, x: offsetX, y: offsetY } = bbox;
     const totalPixels = w * h;
@@ -1118,65 +1310,43 @@ export const BaseColorEditor: React.FC = () => {
       l: c.sumL / c.count 
     }));
 
-    const newRegionIdTex = new Uint8Array(totalPixels);
+    const tempRegionIdTex = new Uint8Array(totalPixels);
     
     for (let ci = 0; ci < clusters.length; ci++) {
       const cluster = clusters[ci];
       for (const pixelIdx of cluster.pixels) {
-        newRegionIdTex[pixelIdx] = ci + 1;
+        tempRegionIdTex[pixelIdx] = ci + 1;
       }
     }
 
-    const newBaseCanvas = document.createElement('canvas');
-    newBaseCanvas.width = TEX_SIZE;
-    newBaseCanvas.height = TEX_SIZE;
-    const newBaseCtx = newBaseCanvas.getContext('2d')!;
-    const newBaseImageData = newBaseCtx.createImageData(TEX_SIZE, TEX_SIZE);
-    const newBaseData = newBaseImageData.data;
+    const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex } = mergeColorsWithGlobal(
+      colors,
+      tempRegionIdTex,
+      new Uint8Array(totalPixels * 3),
+      sharedBaseColors,
+      nextColorId,
+      bbox,
+      bgImageData,
+      TEX_SIZE
+    );
 
-    for (let i = 0; i < newBaseData.length; i++) {
-      newBaseData[i] = 0;
-    }
+    setSharedBaseColors(newGlobalColors);
+    setNextColorId(newNextId);
 
-    for (let localIdx = 0; localIdx < newRegionIdTex.length; localIdx++) {
-      const regionId = newRegionIdTex[localIdx];
-      if (regionId > 0 && regionId <= colors.length) {
-        const colorIdx = regionId - 1;
-        const color = colors[colorIdx];
-        const rgb = hslToRgb(color.h, color.s, color.l);
-        const localY = Math.floor(localIdx / bbox.w);
-        const localX = localIdx % bbox.w;
-        const globalY = bbox.y + localY;
-        const globalX = bbox.x + localX;
-        const idx = (globalY * TEX_SIZE + globalX) * 4;
-        newBaseData[idx] = rgb.r;
-        newBaseData[idx + 1] = rgb.g;
-        newBaseData[idx + 2] = rgb.b;
-        newBaseData[idx + 3] = 255;
-      }
-    }
+    const newBaseTexture = buildBaseTextureFromRegionId(
+      newGlobalColors,
+      newRegionIdTex,
+      bbox,
+      TEX_SIZE
+    );
 
-    const newColorPixelsMap = new Map<number, number[]>();
-    for (let i = 0; i < colors.length; i++) {
-      newColorPixelsMap.set(i, []);
-    }
-
-    for (let localIdx = 0; localIdx < newRegionIdTex.length; localIdx++) {
-      const regionId = newRegionIdTex[localIdx];
-      if (regionId > 0 && regionId <= colors.length) {
-        const colorIdx = regionId - 1;
-        const pixels = newColorPixelsMap.get(colorIdx)!;
-        pixels.push(localIdx);
-      }
-    }
-
-    setBaseColors(colors);
     setRegionIdTex(newRegionIdTex);
-    setColorPixelsMap(newColorPixelsMap);
-    setBaseTexture(new ImageData(newBaseData, TEX_SIZE, TEX_SIZE));
-    setSelectedBaseColorIndex(null);
+    setColorPixelsMap(buildColorPixelsMap(newRegionIdTex));
+    setBaseTexture(newBaseTexture);
+    setResidualTexture(buildResidualTextureFromDelta(newDeltaTex, bbox, TEX_SIZE));
+    setSelectedBaseColorId(null);
     setTimeout(() => saveToHistory(), 0);
-  }, [bbox, baseTexture, baseColors.length, saveToHistory]);
+  }, [bbox, baseTexture, bgImageData, sharedBaseColors, nextColorId, saveToHistory, buildColorPixelsMap]);
 
   // 重新计算残差：基于原图和当前基础色纹理
   const recalculateResidual = useCallback(() => {
@@ -1301,7 +1471,7 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
 
-    if (pickingIndex !== null && e.button === 0) {
+    if (pickingId !== null && e.button === 0) {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
@@ -1313,8 +1483,8 @@ export const BaseColorEditor: React.FC = () => {
       const b = displayPixel[2];
       
       const hsl = rgbToHsl(r, g, b);
-      updateBaseColor(pickingIndex, hsl);
-      setPickingIndex(null);
+      updateBaseColor(pickingId, hsl);
+      setPickingId(null);
       setTimeout(() => saveToHistory(), 0);
       return;
     }
@@ -1366,7 +1536,7 @@ export const BaseColorEditor: React.FC = () => {
     } else if (currentTool === 'picker') {
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingIndex, bgImageData, updateBaseColor]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -1415,9 +1585,15 @@ export const BaseColorEditor: React.FC = () => {
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-      if (bbox && baseTexture) {
+      if (bbox && currentFrame?.regionIdTex.length > 0 && sharedBaseColors.length > 0) {
+        const displayBaseTexture = buildBaseTextureFromRegionId(
+          sharedBaseColors,
+          currentFrame.regionIdTex,
+          bbox,
+          TEX_SIZE
+        );
         const filledData = new ImageData(
-          new Uint8ClampedArray(baseTexture.data),
+          new Uint8ClampedArray(displayBaseTexture.data),
           TEX_SIZE,
           TEX_SIZE
         );
@@ -1451,7 +1627,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        const pts = poly.map(p => worldToCanvas(p.x, p.y));
+        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y));
         if (poly.length === 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -1568,7 +1744,7 @@ export const BaseColorEditor: React.FC = () => {
           TEX_SIZE
         );
         
-        const baseColorRgbs = baseColors.map(c => hslToRgb(c.h, c.s, c.l));
+        const baseColorRgbs = baseColors.map((c: typeof baseColors[0]) => hslToRgb(c.h, c.s, c.l));
         
         for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
           for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
@@ -1625,7 +1801,7 @@ export const BaseColorEditor: React.FC = () => {
         const baseData = baseTexture.data;
         const residualData = residualTexture.data;
         
-        const baseColorRgbs = baseColors.map(c => hslToRgb(c.h, c.s, c.l));
+        const baseColorRgbs = baseColors.map((c: typeof baseColors[0]) => hslToRgb(c.h, c.s, c.l));
 
         for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
           for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
@@ -1726,7 +1902,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        const pts = poly.map(p => worldToCanvas(p.x, p.y));
+        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y));
         if (poly.length === 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -1873,7 +2049,7 @@ export const BaseColorEditor: React.FC = () => {
 
     console.log(`[DEBUG] RENDER #${renderCountRef.current} END`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos]);
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors]);
 
   useEffect(() => {
     const overlay = overlayRef.current;
@@ -1902,7 +2078,7 @@ export const BaseColorEditor: React.FC = () => {
       octx.fill();
     }
     octx.restore();
-  }, [mousePos, currentTool, brushColor, brushSize, selectedBaseColorIndex, mode]);
+  }, [mousePos, currentTool, brushColor, brushSize, selectedBaseColorId, mode]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1921,7 +2097,7 @@ export const BaseColorEditor: React.FC = () => {
       {/* 帧管理栏 */}
       <div style={{ display: 'flex', gap: '4px', padding: '6px 12px', borderBottom: '1px solid #e8e8e8', alignItems: 'center', background: '#f5f5f5' }}>
         <span style={{ fontSize: '11px', color: '#666', marginRight: '4px' }}>帧:</span>
-        {frames.map((frame) => (
+        {frames.map((frame: typeof frames[0]) => (
           <div
             key={frame.id}
             style={{
@@ -2260,8 +2436,8 @@ export const BaseColorEditor: React.FC = () => {
         {mode === 'base2' && baseColors.length > 0 && (
           <BaseColorList
             colors={baseColors}
-            selectedIndex={selectedBaseColorIndex}
-            pickingIndex={pickingIndex}
+            selectedId={selectedBaseColorId}
+            pickingId={pickingId}
             onSelect={handleSelectBaseColor}
             onUpdate={updateBaseColor}
             onRecluster={handleRecluster}

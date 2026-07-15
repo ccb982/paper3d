@@ -2,25 +2,25 @@ import React from 'react';
 import { hslToRgb } from '../utils/colorCompressor';
 
 interface ColorItemProps {
+  colorId: number;
   hsl: { h: number; s: number; l: number };
-  index: number;
   isSelected: boolean;
   isPicking: boolean;
   isExpanded: boolean;
-  onSelect: (index: number) => void;
-  onUpdate: (index: number, hsl: { h: number; s: number; l: number }) => void;
+  onSelect: (id: number) => void;
+  onUpdate: (id: number, hsl: { h: number; s: number; l: number }) => void;
   onRecluster: () => void;
-  onPickColor: (index: number) => void;
-  onToggleExpand: (index: number) => void;
+  onPickColor: (id: number) => void;
+  onToggleExpand: (id: number) => void;
 }
 
-const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, onSelect, onUpdate, onRecluster, onPickColor, onToggleExpand }: ColorItemProps) => {
+const ColorItem = React.memo(({ colorId, hsl, isSelected, isPicking, isExpanded, onSelect, onUpdate, onRecluster, onPickColor, onToggleExpand }: ColorItemProps) => {
   const rgb = hslToRgb(hsl.h, hsl.s, hsl.l);
   const hex = `#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`;
 
   return (
     <div
-      onClick={() => onSelect(index)}
+      onClick={() => onSelect(colorId)}
       style={{
         marginBottom: '12px',
         padding: '8px',
@@ -33,7 +33,7 @@ const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, o
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-        <span style={{ minWidth: '28px', fontWeight: 'bold', color: isSelected ? '#1890ff' : '#333' }}>#{index + 1}</span>
+        <span style={{ minWidth: '28px', fontWeight: 'bold', color: isSelected ? '#1890ff' : '#333' }}>#{colorId}</span>
         <div style={{ width: '28px', height: '28px', borderRadius: '4px', background: hex, border: '1px solid #ccc' }} />
         <span style={{ fontFamily: 'monospace', fontSize: '11px', color: '#666' }}>
           {hex.toUpperCase()}
@@ -42,7 +42,7 @@ const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, o
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onToggleExpand(index);
+            onToggleExpand(colorId);
           }}
           style={{
             padding: '2px 6px',
@@ -59,7 +59,7 @@ const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, o
         <button
           onClick={(e) => {
             e.stopPropagation();
-            onPickColor(index);
+            onPickColor(colorId);
           }}
           style={{
             padding: '2px 6px',
@@ -82,7 +82,7 @@ const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, o
               type="range"
               min={0} max={360} step={1}
               value={hsl.h * 360}
-              onChange={e => onUpdate(index, { ...hsl, h: Number(e.target.value) / 360 })}
+              onChange={e => onUpdate(colorId, { ...hsl, h: Number(e.target.value) / 360 })}
               onMouseUp={() => onRecluster()}
               style={{ flex: 1, height: '4px' }}
             />
@@ -96,7 +96,7 @@ const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, o
               type="range"
               min={0} max={100} step={1}
               value={hsl.s * 100}
-              onChange={e => onUpdate(index, { ...hsl, s: Number(e.target.value) / 100 })}
+              onChange={e => onUpdate(colorId, { ...hsl, s: Number(e.target.value) / 100 })}
               onMouseUp={() => onRecluster()}
               style={{ flex: 1, height: '4px' }}
             />
@@ -110,7 +110,7 @@ const ColorItem = React.memo(({ hsl, index, isSelected, isPicking, isExpanded, o
               type="range"
               min={0} max={100} step={1}
               value={hsl.l * 100}
-              onChange={e => onUpdate(index, { ...hsl, l: Number(e.target.value) / 100 })}
+              onChange={e => onUpdate(colorId, { ...hsl, l: Number(e.target.value) / 100 })}
               onMouseUp={() => onRecluster()}
               style={{ flex: 1, height: '4px' }}
             />

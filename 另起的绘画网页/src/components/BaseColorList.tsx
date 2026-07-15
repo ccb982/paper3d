@@ -2,20 +2,20 @@ import React, { useState, useCallback } from 'react';
 import ColorItem from './ColorItem';
 
 interface BaseColorListProps {
-  colors: Array<{ h: number; s: number; l: number }>;
-  selectedIndex: number | null;
-  pickingIndex: number | null;
-  onSelect: (index: number) => void;
-  onUpdate: (index: number, hsl: { h: number; s: number; l: number }) => void;
+  colors: Array<{ id: number; h: number; s: number; l: number }>;
+  selectedId: number | null;
+  pickingId: number | null;
+  onSelect: (id: number) => void;
+  onUpdate: (id: number, hsl: { h: number; s: number; l: number }) => void;
   onRecluster: () => void;
-  onPickColor: (index: number) => void;
+  onPickColor: (id: number) => void;
 }
 
-const BaseColorList = React.memo(({ colors, selectedIndex, pickingIndex, onSelect, onUpdate, onRecluster, onPickColor }: BaseColorListProps) => {
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onUpdate, onRecluster, onPickColor }: BaseColorListProps) => {
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  const handleToggleExpand = useCallback((index: number) => {
-    setExpandedIndex(prev => prev === index ? null : index);
+  const handleToggleExpand = useCallback((id: number) => {
+    setExpandedId(prev => prev === id ? null : id);
   }, []);
 
   return (
@@ -50,14 +50,14 @@ const BaseColorList = React.memo(({ colors, selectedIndex, pickingIndex, onSelec
           重新聚类
         </button>
       </div>
-      {colors.map((hsl, index) => (
+      {colors.map((color) => (
         <ColorItem
-          key={index}
-          hsl={hsl}
-          index={index}
-          isSelected={selectedIndex === index}
-          isPicking={pickingIndex === index}
-          isExpanded={expandedIndex === index}
+          key={color.id}
+          colorId={color.id}
+          hsl={{ h: color.h, s: color.s, l: color.l }}
+          isSelected={selectedId === color.id}
+          isPicking={pickingId === color.id}
+          isExpanded={expandedId === color.id}
           onSelect={onSelect}
           onUpdate={onUpdate}
           onRecluster={onRecluster}

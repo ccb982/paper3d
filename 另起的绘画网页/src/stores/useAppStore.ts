@@ -338,9 +338,10 @@ interface AppState {
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint8Array;
     }>;
-    sharedBaseColors: Array<{ h: number; s: number; l: number }>;
+    sharedBaseColors: Array<{ id: number; h: number; s: number; l: number }>;
     activeFrameId: string | null;
     globalBbox: { x: number; y: number; w: number; h: number } | null;
+    nextColorId: number;
   };
   addSkillFrame: (name?: string) => void;
   removeSkillFrame: (frameId: string) => void;
@@ -353,9 +354,12 @@ interface AppState {
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint8Array;
   }>) => void;
-  setSharedBaseColors: (colors: Array<{ h: number; s: number; l: number }>) => void;
+  setSharedBaseColors: (colors: Array<{ id: number; h: number; s: number; l: number }>) => void;
   setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
   syncGlobalBboxFromCurrentFrame: () => void;
+  setNextColorId: (nextId: number) => void;
+  addColorToGlobal: (color: { h: number; s: number; l: number }) => number;
+  updateColorInGlobal: (id: number, color: { h: number; s: number; l: number }) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1821,6 +1825,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     sharedBaseColors: [],
     activeFrameId: null,
     globalBbox: null,
+    nextColorId: 1,
   },
   addSkillFrame: (name) => {
     set((state) => {
@@ -1905,6 +1910,42 @@ export const useAppStore = create<AppState>((set, get) => ({
         globalBbox: { ...frame.bbox! },
       },
     }));
+  },
+  setNextColorId: (nextId) => {
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        nextColorId: nextId,
+      },
+    }));
+  },
+  addColorToGlobal: (color) => {
+    const state = get();
+    const newId = state.skillGroupEditor.nextColorId;
+    const newColors = [
+      ...state.skillGroupEditor.sharedBaseColors,
+      { id: newId, ...color },
+    ];
+    set({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        sharedBaseColors: newColors,
+        nextColorId: newId + 1,
+      },
+    });
+    return newId;
+  },
+  updateColorInGlobal: (id, color) => {
+    const state = get();
+    const newColors = state.skillGroupEditor.sharedBaseColors.map(c =>
+      c.id === id ? { ...c, ...color } : c
+    );
+    set({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        sharedBaseColors: newColors,
+      },
+    });
   },
 }));
 
