@@ -1533,29 +1533,12 @@ export const BaseColorEditor: React.FC = () => {
           bbox,
           TEX_SIZE
         );
-        const filledData = new ImageData(
-          new Uint8ClampedArray(displayBaseTexture.data),
-          TEX_SIZE,
-          TEX_SIZE
-        );
-        
-        for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
-          for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
-            const idx = (y * TEX_SIZE + x) * 4;
-            if (filledData.data[idx + 3] === 0 && bgImageData) {
-              filledData.data[idx] = bgImageData.data[idx];
-              filledData.data[idx + 1] = bgImageData.data[idx + 1];
-              filledData.data[idx + 2] = bgImageData.data[idx + 2];
-              filledData.data[idx + 3] = 255;
-            }
-          }
-        }
         
         ctx.save();
         ctx.beginPath();
         ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
         ctx.clip();
-        ctx.putImageData(filledData, 0, 0);
+        ctx.putImageData(displayBaseTexture, 0, 0);
         ctx.restore();
       } else if (bgImageData) {
         ctx.putImageData(bgImageData, 0, 0);
