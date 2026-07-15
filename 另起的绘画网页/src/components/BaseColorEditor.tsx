@@ -1098,12 +1098,11 @@ export const BaseColorEditor: React.FC = () => {
         setBaseTexture(null);
         setResidualTexture(null);
         setBbox(null);
-        setBaseColors([]);
       };
       img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
-  }, [setBgImageData, setDashedPolygons, setBaseTexture, setResidualTexture, setBbox, setBaseColors]);
+  }, [setBgImageData, setDashedPolygons, setBaseTexture, setResidualTexture, setBbox]);
 
   // 进入提取模式
   const handleAutoExtract = useCallback(() => {
@@ -2289,7 +2288,6 @@ export const BaseColorEditor: React.FC = () => {
             setBaseTexture(null);
             setResidualTexture(null);
             setBbox(null);
-            setBaseColors([]);
           }}
           disabled={!baseTexture && !residualTexture}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
