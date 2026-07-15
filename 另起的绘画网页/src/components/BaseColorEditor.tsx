@@ -53,7 +53,8 @@ function extractBaseByClick(
   bgImageData: ImageData,
   worldPolygons: Point[][],
   _clickPixel?: { x: number; y: number },
-  textureSize: number = TEX_SIZE
+  textureSize: number = TEX_SIZE,
+  forcedBbox?: { x: number; y: number; w: number; h: number } | null
 ): {
   baseTexture: ImageData;
   residualTexture: ImageData;
@@ -120,29 +121,37 @@ function extractBaseByClick(
   }
 
   // 2. 计算多边形的bbox（整个box区域）
-  let minX = textureSize, minY = textureSize, maxX = -1, maxY = -1;
-  for (const poly of rasterizablePolygons) {
-    for (const p of poly) {
-      const px = Math.round(p.x * textureSize);
-      const py = Math.round((1 - p.y) * textureSize);
-      if (px < minX) minX = px;
-      if (py < minY) minY = py;
-      if (px > maxX) maxX = px;
-      if (py > maxY) maxY = py;
+  let pxBbox: { x: number; y: number; w: number; h: number };
+  
+  if (forcedBbox) {
+    // 使用全局统一的 bbox
+    pxBbox = { ...forcedBbox };
+  } else {
+    // 自动计算所有多边形的包围盒
+    let minX = textureSize, minY = textureSize, maxX = -1, maxY = -1;
+    for (const poly of rasterizablePolygons) {
+      for (const p of poly) {
+        const px = Math.round(p.x * textureSize);
+        const py = Math.round((1 - p.y) * textureSize);
+        if (px < minX) minX = px;
+        if (py < minY) minY = py;
+        if (px > maxX) maxX = px;
+        if (py > maxY) maxY = py;
+      }
     }
+    
+    minX = Math.max(0, minX - 10);
+    minY = Math.max(0, minY - 10);
+    maxX = Math.min(textureSize - 1, maxX + 10);
+    maxY = Math.min(textureSize - 1, maxY + 10);
+    
+    pxBbox = {
+      x: minX,
+      y: minY,
+      w: maxX - minX + 1,
+      h: maxY - minY + 1,
+    };
   }
-  
-  minX = Math.max(0, minX - 10);
-  minY = Math.max(0, minY - 10);
-  maxX = Math.min(textureSize - 1, maxX + 10);
-  maxY = Math.min(textureSize - 1, maxY + 10);
-  
-  const pxBbox = {
-    x: minX,
-    y: minY,
-    w: maxX - minX + 1,
-    h: maxY - minY + 1,
-  };
   
   // 3. 标记整个bbox区域为已访问（不考虑墙的限制）
   const bfsVisited = new Uint8Array(textureSize * textureSize);
@@ -350,43 +359,78 @@ function extractBaseByClick(
 export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const [bgImageData, setBgImageData] = useState<ImageData | null>(null);
-  const [dashedPolygons, setDashedPolygons] = useState<Point[][]>([]);
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
   const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
-  const { baseColorEditorState, setBaseColorEditorState } = useAppStore();
-  
-  const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
-  const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
-  const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
-  const [regionIdTex, setRegionIdTex] = useState<Uint8Array>(new Uint8Array(0));
-  
+  const {
+    skillGroupEditor,
+    addSkillFrame,
+    removeSkillFrame,
+    switchSkillFrame,
+    updateSkillFrame,
+    setSharedBaseColors,
+    setGlobalBbox,
+    syncGlobalBboxFromCurrentFrame,
+  } = useAppStore();
+
+  const { frames, sharedBaseColors, activeFrameId, globalBbox } = skillGroupEditor;
+  const currentFrame = frames.find(f => f.id === activeFrameId) || null;
+
+  const bgImageData = currentFrame?.bgImageData || null;
+  const dashedPolygons = currentFrame?.dashedPolygons || [];
+  const baseTexture = currentFrame?.baseTexture || null;
+  const residualTexture = currentFrame?.residualTexture || null;
+  const bbox = currentFrame?.bbox || null;
+  const regionIdTex = currentFrame?.regionIdTex || new Uint8Array(0);
+  const baseColors = sharedBaseColors;
+
+  const setBgImageData = useCallback((val: ImageData | null) => {
+    if (activeFrameId) updateSkillFrame(activeFrameId, { bgImageData: val });
+  }, [activeFrameId, updateSkillFrame]);
+
+  const setDashedPolygons = useCallback((val: Point[][] | ((prev: Point[][]) => Point[][])) => {
+    if (!activeFrameId) return;
+    const frame = frames.find(f => f.id === activeFrameId);
+    const currentPolygons = frame?.dashedPolygons || [];
+    const newVal = typeof val === 'function' ? val(currentPolygons) : val;
+    updateSkillFrame(activeFrameId, { dashedPolygons: newVal });
+  }, [activeFrameId, frames, updateSkillFrame]);
+
+  const setBaseTexture = useCallback((val: ImageData | null) => {
+    if (activeFrameId) updateSkillFrame(activeFrameId, { baseTexture: val });
+  }, [activeFrameId, updateSkillFrame]);
+
+  const setResidualTexture = useCallback((val: ImageData | null) => {
+    if (activeFrameId) updateSkillFrame(activeFrameId, { residualTexture: val });
+  }, [activeFrameId, updateSkillFrame]);
+
+  const setBbox = useCallback((val: { x: number; y: number; w: number; h: number } | null) => {
+    if (activeFrameId) updateSkillFrame(activeFrameId, { bbox: val });
+  }, [activeFrameId, updateSkillFrame]);
+
+  const setBaseColors = useCallback((val: Array<{ h: number; s: number; l: number }> | ((prev: Array<{ h: number; s: number; l: number }>) => Array<{ h: number; s: number; l: number }>)) => {
+    const newVal = typeof val === 'function' ? val(sharedBaseColors) : val;
+    setSharedBaseColors(newVal);
+  }, [sharedBaseColors, setSharedBaseColors]);
+
+  const setRegionIdTex = useCallback((val: Uint8Array) => {
+    if (activeFrameId) updateSkillFrame(activeFrameId, { regionIdTex: val });
+  }, [activeFrameId, updateSkillFrame]);
+
   useEffect(() => {
-    setBaseTexture(baseColorEditorState.baseTexture);
-    setResidualTexture(baseColorEditorState.residualTexture);
-    setBbox(baseColorEditorState.bbox);
-    setBaseColors(baseColorEditorState.baseColors);
-    setRegionIdTex(baseColorEditorState.regionIdTex);
-    setBgImageData(baseColorEditorState.bgImageData);
-  }, []);
-  
+    if (frames.length === 0) {
+      addSkillFrame('帧 1');
+    }
+  }, [frames.length, addSkillFrame]);
+
+  useEffect(() => {
+    setDrawingPolygon(null);
+  }, [activeFrameId]);
+
   const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
   const [selectedBaseColorIndex, setSelectedBaseColorIndex] = useState<number | null>(null);
   const [pickingIndex, setPickingIndex] = useState<number | null>(null);
-
-  useEffect(() => {
-    setBaseColorEditorState({
-      baseTexture,
-      residualTexture,
-      bbox,
-      baseColors,
-      regionIdTex,
-      bgImageData,
-    });
-  }, [baseTexture, residualTexture, bbox, baseColors, regionIdTex, bgImageData, setBaseColorEditorState]);
 
   const handleSelectBaseColor = useCallback((index: number) => {
     setSelectedBaseColorIndex(prev => prev === index ? null : index);
@@ -805,6 +849,7 @@ export const BaseColorEditor: React.FC = () => {
 
     for (const poly of dashedPolygons) {
       for (let i = 0; i < poly.length; i++) {
+        if (poly.length === 3 && i === 2) continue;
         addCandidate(poly[i]);
       }
     }
@@ -838,7 +883,6 @@ export const BaseColorEditor: React.FC = () => {
         ctx.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
         const imageData = ctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
         setBgImageData(imageData);
-        setBaseColorEditorState({ bgImageData: imageData });
         setDashedPolygons([]);
         setDrawingPolygon(null);
         setBaseTexture(null);
@@ -849,7 +893,7 @@ export const BaseColorEditor: React.FC = () => {
       img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
-  }, [setBaseColorEditorState]);
+  }, [setBgImageData, setDashedPolygons, setBaseTexture, setResidualTexture, setBbox, setBaseColors]);
 
   // 进入提取模式
   const handleAutoExtract = useCallback(() => {
@@ -872,7 +916,8 @@ export const BaseColorEditor: React.FC = () => {
       : dashedPolygons;
     if (allPolygons.length === 0) return;
 
-    const result = extractBaseByClick(bgImageData, allPolygons, pixel);
+    // 使用全局 bbox（如果存在），否则传 null 让函数自动计算
+    const result = extractBaseByClick(bgImageData, allPolygons, pixel, TEX_SIZE, globalBbox);
     if (result) {
       console.log('[DEBUG] extract result:', {
         baseTextureExists: !!result.baseTexture,
@@ -892,9 +937,13 @@ export const BaseColorEditor: React.FC = () => {
       setTexWH({ w: result.texW, h: result.texH });
       setColorPixelsMap(result.colorPixelsMap);
       setIsExtractMode(false);
+      // 如果全局 bbox 为空，用当前帧的 bbox 初始化
+      if (!globalBbox) {
+        setGlobalBbox(result.bbox);
+      }
       setTimeout(() => saveToHistory(), 0);
     }
-  }, [bgImageData, dashedPolygons, drawingPolygon, saveToHistory]);
+  }, [bgImageData, dashedPolygons, drawingPolygon, globalBbox, setGlobalBbox, saveToHistory]);
 
   // 更新基础色并重新生成纹理
   const updateBaseColor = useCallback((index: number, newHSL: { h: number; s: number; l: number }) => {
@@ -1402,19 +1451,25 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        ctx.beginPath();
-        const p0 = worldToCanvas(poly[0].x, poly[0].y);
-        ctx.moveTo(p0.x, p0.y);
-        for (let i = 1; i < poly.length; i++) {
-          const p = worldToCanvas(poly[i].x, poly[i].y);
-          ctx.lineTo(p.x, p.y);
+        const pts = poly.map(p => worldToCanvas(p.x, p.y));
+        if (poly.length === 3) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          ctx.quadraticCurveTo(pts[2].x, pts[2].y, pts[1].x, pts[1].y);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) {
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          ctx.closePath();
+          ctx.stroke();
         }
-        ctx.closePath();
-        ctx.stroke();
       }
       ctx.restore();
 
-      // 绘制 bbox
+      // 绘制当前帧 bbox
       if (bbox) {
         ctx.save();
         ctx.strokeStyle = '#00ff00';
@@ -1424,11 +1479,76 @@ export const BaseColorEditor: React.FC = () => {
         ctx.restore();
       }
 
-      return;
+      // 绘制全局 bbox（红色，与当前帧区分）
+      if (globalBbox) {
+        ctx.save();
+        ctx.strokeStyle = '#ff0000';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 4]);
+        ctx.strokeRect(globalBbox.x, globalBbox.y, globalBbox.w, globalBbox.h);
+        ctx.restore();
+      }
+
+      // 正在绘制的多边形（含预览虚线）
+      if (drawingPolygon && drawingPolygon.length >= 1) {
+        ctx.save();
+        ctx.strokeStyle = '#ffaa00';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y));
+        
+        if (currentTool === 'bezier' && drawingPolygon.length === 2) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          const midX = (pts[0].x + pts[1].x) / 2;
+          const midY = (pts[0].y + pts[1].y) / 2;
+          ctx.quadraticCurveTo(midX, midY, pts[1].x, pts[1].y);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) {
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y) : null);
+          if (currentPreview) {
+            const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y);
+            ctx.lineTo(previewCanvas.x, previewCanvas.y);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // 绘制顶点
+      ctx.save();
+      ctx.fillStyle = '#ff0000';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1;
+      for (const poly of dashedPolygons) {
+        for (const p of poly) {
+          const pt = worldToCanvas(p.x, p.y);
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      if (drawingPolygon) {
+        for (const p of drawingPolygon) {
+          const pt = worldToCanvas(p.x, p.y);
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+
     }
 
     // 参考图模式：显示原始上传的背景图
-    if (mode === 'base') {
+    else if (mode === 'base') {
       if (bgImageData) {
         ctx.putImageData(bgImageData, 0, 0);
       } else {
@@ -1598,29 +1718,31 @@ export const BaseColorEditor: React.FC = () => {
       ctx.restore();
     }
 
-    // 4. 已完成的多边形（虚线）
-    ctx.save();
-    ctx.strokeStyle = '#ffaa00';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
-    for (const poly of dashedPolygons) {
-      if (poly.length < 2) continue;
-      const pts = poly.map(p => worldToCanvas(p.x, p.y));
-      if (poly.length === 3) {
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        ctx.quadraticCurveTo(pts[2].x, pts[2].y, pts[1].x, pts[1].y);
-        ctx.stroke();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x, pts[0].y);
-        for (let i = 1; i < pts.length; i++) {
-          ctx.lineTo(pts[i].x, pts[i].y);
+    // 4. 已完成的多边形（虚线）- base2模式已在前面绘制，跳过
+    if (mode !== 'base2') {
+      ctx.save();
+      ctx.strokeStyle = '#ffaa00';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      for (const poly of dashedPolygons) {
+        if (poly.length < 2) continue;
+        const pts = poly.map(p => worldToCanvas(p.x, p.y));
+        if (poly.length === 3) {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          ctx.quadraticCurveTo(pts[2].x, pts[2].y, pts[1].x, pts[1].y);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i = 1; i < pts.length; i++) {
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
+          ctx.stroke();
         }
-        ctx.stroke();
       }
+      ctx.restore();
     }
-    ctx.restore();
 
     // 5. 正在绘制的多边形（含预览虚线）
     if (drawingPolygon && drawingPolygon.length >= 1) {
@@ -1631,8 +1753,9 @@ export const BaseColorEditor: React.FC = () => {
       const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y));
       
       if (currentTool === 'bezier' && drawingPolygon.length === 2) {
-        if (previewPoint) {
-          const previewCanvas = worldToCanvas(previewPoint.x, previewPoint.y);
+        const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y) : null);
+        if (currentPreview) {
+          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y);
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
           ctx.quadraticCurveTo(previewCanvas.x, previewCanvas.y, pts[1].x, pts[1].y);
@@ -1651,8 +1774,9 @@ export const BaseColorEditor: React.FC = () => {
         for (let i = 1; i < pts.length; i++) {
           ctx.lineTo(pts[i].x, pts[i].y);
         }
-        if (previewPoint) {
-          const previewCanvas = worldToCanvas(previewPoint.x, previewPoint.y);
+        const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y) : null);
+        if (currentPreview) {
+          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y);
           ctx.lineTo(previewCanvas.x, previewCanvas.y);
         }
         ctx.stroke();
@@ -1709,13 +1833,23 @@ export const BaseColorEditor: React.FC = () => {
       ctx.restore();
     }
 
-    // 6. BBox 显示
+    // 6. 当前帧 BBox 显示
     if (bbox) {
       ctx.save();
       ctx.strokeStyle = '#52c41a';
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.strokeRect(bbox.x, bbox.y, bbox.w, bbox.h);
+      ctx.restore();
+    }
+
+    // 7. 全局 BBox 显示（红色粗虚线，与当前帧区分）
+    if (globalBbox) {
+      ctx.save();
+      ctx.strokeStyle = '#ff0000';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 4]);
+      ctx.strokeRect(globalBbox.x, globalBbox.y, globalBbox.w, globalBbox.h);
       ctx.restore();
     }
 
@@ -1739,7 +1873,7 @@ export const BaseColorEditor: React.FC = () => {
 
     console.log(`[DEBUG] RENDER #${renderCountRef.current} END`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, isExtractMode]);
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos]);
 
   useEffect(() => {
     const overlay = overlayRef.current;
@@ -1784,6 +1918,81 @@ export const BaseColorEditor: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', width: '100%', background: '#fff' }}>
+      {/* 帧管理栏 */}
+      <div style={{ display: 'flex', gap: '4px', padding: '6px 12px', borderBottom: '1px solid #e8e8e8', alignItems: 'center', background: '#f5f5f5' }}>
+        <span style={{ fontSize: '11px', color: '#666', marginRight: '4px' }}>帧:</span>
+        {frames.map((frame) => (
+          <div
+            key={frame.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              padding: '2px 6px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              background: frame.id === activeFrameId ? '#1890ff' : '#fff',
+              color: frame.id === activeFrameId ? '#fff' : '#333',
+              border: '1px solid #d9d9d9',
+              borderRadius: '3px',
+            }}
+            onClick={() => switchSkillFrame(frame.id)}
+          >
+            <span>{frame.name}</span>
+            {frames.length > 1 && (
+              <span
+                style={{
+                  fontSize: '10px',
+                  color: frame.id === activeFrameId ? '#fff' : '#999',
+                  cursor: 'pointer',
+                  padding: '0 2px',
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm(`确定删除 ${frame.name}?`)) {
+                    removeSkillFrame(frame.id);
+                  }
+                }}
+              >
+                ×
+              </span>
+            )}
+          </div>
+        ))}
+        <button
+          onClick={() => addSkillFrame()}
+          style={{
+            padding: '2px 8px',
+            fontSize: '11px',
+            cursor: 'pointer',
+            border: '1px solid #d9d9d9',
+            background: '#fff',
+          }}
+        >
+          + 新建帧
+        </button>
+        <button
+          onClick={() => syncGlobalBboxFromCurrentFrame()}
+          disabled={!currentFrame?.bbox}
+          style={{
+            padding: '2px 8px',
+            fontSize: '11px',
+            cursor: currentFrame?.bbox ? 'pointer' : 'not-allowed',
+            border: '1px solid #d9d9d9',
+            background: currentFrame?.bbox ? '#fff' : '#f5f5f5',
+            color: currentFrame?.bbox ? '#333' : '#999',
+          }}
+          title="将当前帧的 bbox 设为全局统一 bbox"
+        >
+          统一 bbox
+        </button>
+        <span style={{ fontSize: '11px', color: '#999' }}>
+          {globalBbox ? `全局bbox: ${globalBbox.w}×${globalBbox.h}` : '全局bbox: 未设置'}
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#999' }}>
+          共享基础色: {sharedBaseColors.length} 个
+        </span>
+      </div>
       {/* 工具栏 */}
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', padding: '8px 12px', borderBottom: '1px solid #e8e8e8', alignItems: 'center', background: '#fafafa' }}>
         <label style={{ fontSize: '11px', padding: '2px 6px', background: '#e6f7ff', borderRadius: '3px', cursor: 'pointer', border: '1px solid #91d5ff' }}>

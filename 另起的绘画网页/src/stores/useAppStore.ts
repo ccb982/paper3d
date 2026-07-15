@@ -325,6 +325,37 @@ interface AppState {
     regionIdTexture: Uint8Array | undefined;
     bbox: { x: number; y: number; w: number; h: number };
   }) => void;
+
+  // 技能组编辑器（多帧）
+  skillGroupEditor: {
+    frames: Array<{
+      id: string;
+      name: string;
+      bgImageData: ImageData | null;
+      dashedPolygons: Point[][];
+      baseTexture: ImageData | null;
+      residualTexture: ImageData | null;
+      bbox: { x: number; y: number; w: number; h: number } | null;
+      regionIdTex: Uint8Array;
+    }>;
+    sharedBaseColors: Array<{ h: number; s: number; l: number }>;
+    activeFrameId: string | null;
+    globalBbox: { x: number; y: number; w: number; h: number } | null;
+  };
+  addSkillFrame: (name?: string) => void;
+  removeSkillFrame: (frameId: string) => void;
+  switchSkillFrame: (frameId: string) => void;
+  updateSkillFrame: (frameId: string, data: Partial<{
+    bgImageData: ImageData | null;
+    dashedPolygons: Point[][];
+    baseTexture: ImageData | null;
+    residualTexture: ImageData | null;
+    bbox: { x: number; y: number; w: number; h: number } | null;
+    regionIdTex: Uint8Array;
+  }>) => void;
+  setSharedBaseColors: (colors: Array<{ h: number; s: number; l: number }>) => void;
+  setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
+  syncGlobalBboxFromCurrentFrame: () => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1782,6 +1813,98 @@ export const useAppStore = create<AppState>((set, get) => ({
     setTimeout(() => {
       get().triggerCanvasRedraw();
     }, 0);
+  },
+
+  // 技能组编辑器
+  skillGroupEditor: {
+    frames: [],
+    sharedBaseColors: [],
+    activeFrameId: null,
+    globalBbox: null,
+  },
+  addSkillFrame: (name) => {
+    set((state) => {
+      const newFrame = {
+        id: `frame_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name: name || `帧 ${state.skillGroupEditor.frames.length + 1}`,
+        bgImageData: null,
+        dashedPolygons: [],
+        baseTexture: null,
+        residualTexture: null,
+        bbox: null,
+        regionIdTex: new Uint8Array(0),
+      };
+      return {
+        skillGroupEditor: {
+          ...state.skillGroupEditor,
+          frames: [...state.skillGroupEditor.frames, newFrame],
+          activeFrameId: state.skillGroupEditor.frames.length === 0 ? newFrame.id : state.skillGroupEditor.activeFrameId,
+        },
+      };
+    });
+  },
+  removeSkillFrame: (frameId) => {
+    set((state) => {
+      const newFrames = state.skillGroupEditor.frames.filter(f => f.id !== frameId);
+      let newActiveId = state.skillGroupEditor.activeFrameId;
+      if (newActiveId === frameId) {
+        newActiveId = newFrames.length > 0 ? newFrames[0].id : null;
+      }
+      return {
+        skillGroupEditor: {
+          ...state.skillGroupEditor,
+          frames: newFrames,
+          activeFrameId: newActiveId,
+        },
+      };
+    });
+  },
+  switchSkillFrame: (frameId) => {
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        activeFrameId: frameId,
+      },
+    }));
+  },
+  updateSkillFrame: (frameId, data) => {
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        frames: state.skillGroupEditor.frames.map((f) =>
+          f.id === frameId ? { ...f, ...data } : f
+        ),
+      },
+    }));
+  },
+  setSharedBaseColors: (colors) => {
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        sharedBaseColors: colors,
+      },
+    }));
+  },
+  setGlobalBbox: (bbox) => {
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        globalBbox: bbox,
+      },
+    }));
+  },
+  syncGlobalBboxFromCurrentFrame: () => {
+    const state = get();
+    const { activeFrameId, frames } = state.skillGroupEditor;
+    if (!activeFrameId) return;
+    const frame = frames.find(f => f.id === activeFrameId);
+    if (!frame || !frame.bbox) return;
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        globalBbox: { ...frame.bbox! },
+      },
+    }));
   },
 }));
 
