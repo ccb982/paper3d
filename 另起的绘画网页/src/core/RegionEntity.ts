@@ -134,6 +134,15 @@ export class RegionEntity {
     this._textureVersion++;
   }
 
+  public setFtxData(data: FtxTextureData): void {
+    this._ftxData = data;
+    this._textureVersion++;
+  }
+
+  public getFtxData(): FtxTextureData | null {
+    return this._ftxData;
+  }
+
   public getGPUTexture(): THREE.DataTexture | null {
     if (!this._ftxData) return null;
 

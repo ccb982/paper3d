@@ -7,6 +7,7 @@ import {
 } from '../utils/colorCompressor';
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
+import { useAppStore } from '../stores/useAppStore';
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -354,16 +355,38 @@ export const BaseColorEditor: React.FC = () => {
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
   const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
+  const { baseColorEditorState, setBaseColorEditorState } = useAppStore();
+  
   const [baseTexture, setBaseTexture] = useState<ImageData | null>(null);
   const [residualTexture, setResidualTexture] = useState<ImageData | null>(null);
   const [bbox, setBbox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [baseColors, setBaseColors] = useState<Array<{ h: number; s: number; l: number }>>([]);
   const [regionIdTex, setRegionIdTex] = useState<Uint8Array>(new Uint8Array(0));
   
+  useEffect(() => {
+    setBaseTexture(baseColorEditorState.baseTexture);
+    setResidualTexture(baseColorEditorState.residualTexture);
+    setBbox(baseColorEditorState.bbox);
+    setBaseColors(baseColorEditorState.baseColors);
+    setRegionIdTex(baseColorEditorState.regionIdTex);
+    setBgImageData(baseColorEditorState.bgImageData);
+  }, []);
+  
   const [texWH, setTexWH] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
   const [selectedBaseColorIndex, setSelectedBaseColorIndex] = useState<number | null>(null);
   const [pickingIndex, setPickingIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setBaseColorEditorState({
+      baseTexture,
+      residualTexture,
+      bbox,
+      baseColors,
+      regionIdTex,
+      bgImageData,
+    });
+  }, [baseTexture, residualTexture, bbox, baseColors, regionIdTex, bgImageData, setBaseColorEditorState]);
 
   const handleSelectBaseColor = useCallback((index: number) => {
     setSelectedBaseColorIndex(prev => prev === index ? null : index);
@@ -630,10 +653,10 @@ export const BaseColorEditor: React.FC = () => {
       if (!ok) return;
     }
     if (!webglReady) return;
-    if (!textureRef.current && regionIdTex && regionIdTex.length > 0 && bbox) {
+    if (regionIdTex && regionIdTex.length > 0 && bbox) {
       uploadTexture();
     }
-    if (!baseTextureRef.current && baseTexture) {
+    if (baseTexture) {
       uploadBaseTexture();
     }
     if (mode === 'base2') {
@@ -813,7 +836,9 @@ export const BaseColorEditor: React.FC = () => {
         canvas.height = TEX_SIZE;
         const ctx = canvas.getContext('2d')!;
         ctx.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
-        setBgImageData(ctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE));
+        const imageData = ctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+        setBgImageData(imageData);
+        setBaseColorEditorState({ bgImageData: imageData });
         setDashedPolygons([]);
         setDrawingPolygon(null);
         setBaseTexture(null);
@@ -824,7 +849,7 @@ export const BaseColorEditor: React.FC = () => {
       img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
-  }, []);
+  }, [setBaseColorEditorState]);
 
   // 进入提取模式
   const handleAutoExtract = useCallback(() => {

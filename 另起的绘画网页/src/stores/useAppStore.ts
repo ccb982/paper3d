@@ -300,6 +300,31 @@ interface AppState {
 
   showRegionBorder2D: boolean;
   setShowRegionBorder2D: (show: boolean) => void;
+
+  // 基础色编辑器状态
+  baseColorEditorState: {
+    baseTexture: ImageData | null;
+    residualTexture: ImageData | null;
+    bbox: { x: number; y: number; w: number; h: number } | null;
+    baseColors: Array<{ h: number; s: number; l: number }>;
+    regionIdTex: Uint8Array;
+    bgImageData: ImageData | null;
+  };
+  setBaseColorEditorState: (state: Partial<{
+    baseTexture: ImageData | null;
+    residualTexture: ImageData | null;
+    bbox: { x: number; y: number; w: number; h: number } | null;
+    baseColors: Array<{ h: number; s: number; l: number }>;
+    regionIdTex: Uint8Array;
+    bgImageData: ImageData | null;
+  }>) => void;
+  clearBaseColorEditorState: () => void;
+  updateRegionFtxData: (layerId: string, regionId: number, ftxData: {
+    baseColors: Array<{ h: number; s: number; l: number }>;
+    deltaTexture: Uint8Array;
+    regionIdTexture: Uint8Array | undefined;
+    bbox: { x: number; y: number; w: number; h: number };
+  }) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1509,6 +1534,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveToStorage: () => {
     const state = useAppStore.getState();
     const imageLayerId = state.imageState.imageLayerId;
+    
     const data = {
       shapes: state.shapes.filter(s => s.layerId !== imageLayerId),
       pointAnnotations: state.pointAnnotations,
@@ -1711,6 +1737,52 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   showRegionBorder2D: true,
   setShowRegionBorder2D: (show) => set({ showRegionBorder2D: show }),
+
+  baseColorEditorState: {
+    baseTexture: null,
+    residualTexture: null,
+    bbox: null,
+    baseColors: [],
+    regionIdTex: new Uint8Array(0),
+    bgImageData: null,
+  },
+  setBaseColorEditorState: (updates) => set((state) => ({
+    baseColorEditorState: { ...state.baseColorEditorState, ...updates },
+  })),
+  clearBaseColorEditorState: () => set({
+    baseColorEditorState: {
+      baseTexture: null,
+      residualTexture: null,
+      bbox: null,
+      baseColors: [],
+      regionIdTex: new Uint8Array(0),
+      bgImageData: null,
+    },
+  }),
+  updateRegionFtxData: (layerId, regionId, ftxData) => {
+    set((state) => {
+      const entities = state.regionEntities[layerId] || [];
+      const newEntities = [...entities];
+      const entity = newEntities.find(e => e.id === regionId);
+      if (entity) {
+        entity.setFtxData({
+          version: 2,
+          baseColors: ftxData.baseColors,
+          deltaTexture: ftxData.deltaTexture,
+          regionIdTexture: ftxData.regionIdTexture,
+          textureSize: 128,
+          bbox: ftxData.bbox,
+        });
+      }
+      return {
+        ...state,
+        regionEntities: { ...state.regionEntities, [layerId]: newEntities },
+      };
+    });
+    setTimeout(() => {
+      get().triggerCanvasRedraw();
+    }, 0);
+  },
 }));
 
 // ===== 辅助函数：合成图像数据 =====
