@@ -11,6 +11,16 @@ import { hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeR
 import { quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL } from '../utils/binaryCompression';
 import { RegionEntity } from '../core/RegionEntity';
 
+export interface SharedBaseColor {
+  id: number;
+  h: number;
+  s: number;
+  l: number;
+  frameIds: string[];
+  area: number;
+  tempFlag?: boolean;
+}
+
 interface AppState {
   // 图片导入状态
   imageState: ImageImportState;
@@ -339,7 +349,7 @@ interface AppState {
       regionIdTex: Uint8Array;
       baseColorValues: Array<{ h: number; s: number; l: number }>;
     }>;
-    sharedBaseColors: Array<{ id: number; h: number; s: number; l: number }>;
+    sharedBaseColors: Array<SharedBaseColor>;
     activeFrameId: string | null;
     globalBbox: { x: number; y: number; w: number; h: number } | null;
     nextColorId: number;
@@ -356,12 +366,15 @@ interface AppState {
     regionIdTex: Uint8Array;
     baseColorValues: Array<{ h: number; s: number; l: number }>;
   }>) => void;
-  setSharedBaseColors: (colors: Array<{ id: number; h: number; s: number; l: number }>) => void;
+  setSharedBaseColors: (colors: SharedBaseColor[]) => void;
   setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
   syncGlobalBboxFromCurrentFrame: () => void;
   setNextColorId: (nextId: number) => void;
-  addColorToGlobal: (color: { h: number; s: number; l: number }) => number;
-  updateColorInGlobal: (id: number, color: { h: number; s: number; l: number }) => void;
+  addColorToGlobal: (color: { h: number; s: number; l: number }, frameId: string) => number;
+  updateColorInGlobal: (id: number, color: { h: number; s: number; l: number }, sourceFrameId?: string) => void;
+  recalculateAllAreas: () => void;
+  mergeAndSortColors: (updatedColorId?: number) => void;
+  reclusterCurrentFrame: () => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1922,12 +1935,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     }));
   },
-  addColorToGlobal: (color) => {
+  addColorToGlobal: (color, frameId) => {
     const state = get();
     const newId = state.skillGroupEditor.nextColorId;
     const newColors = [
       ...state.skillGroupEditor.sharedBaseColors,
-      { id: newId, ...color },
+      { id: newId, ...color, frameIds: [frameId], area: 0 },
     ];
     set({
       skillGroupEditor: {
@@ -1938,17 +1951,245 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
     return newId;
   },
-  updateColorInGlobal: (id, color) => {
+  updateColorInGlobal: (id, color, sourceFrameId) => {
     const state = get();
-    const newColors = state.skillGroupEditor.sharedBaseColors.map(c =>
-      c.id === id ? { ...c, ...color } : c
-    );
+    const colors = [...state.skillGroupEditor.sharedBaseColors];
+    const idx = colors.findIndex(c => c.id === id);
+    if (idx === -1) return;
+
+    colors[idx].h = color.h;
+    colors[idx].s = color.s;
+    colors[idx].l = color.l;
+
+    set({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        sharedBaseColors: colors,
+      },
+    });
+
+    get().recalculateAllAreas();
+    get().mergeAndSortColors(id);
+  },
+  recalculateAllAreas: () => {
+    const state = get();
+    const { frames, sharedBaseColors } = state.skillGroupEditor;
+
+    const colorMap = new Map<number, SharedBaseColor>();
+    for (const c of sharedBaseColors) {
+      colorMap.set(c.id, { ...c, area: 0, frameIds: [...c.frameIds] });
+    }
+
+    for (const frame of frames) {
+      const { regionIdTex, bbox } = frame;
+      if (!regionIdTex || regionIdTex.length === 0 || !bbox) continue;
+
+      const countMap = new Map<number, number>();
+      for (let i = 0; i < regionIdTex.length; i++) {
+        const colorId = regionIdTex[i];
+        if (colorId > 0) {
+          countMap.set(colorId, (countMap.get(colorId) || 0) + 1);
+        }
+      }
+
+      for (const [colorId, count] of countMap) {
+        const color = colorMap.get(colorId);
+        if (color) {
+          color.area += count;
+          if (!color.frameIds.includes(frame.id)) {
+            color.frameIds.push(frame.id);
+          }
+        }
+      }
+    }
+
+    const newColors = Array.from(colorMap.values());
     set({
       skillGroupEditor: {
         ...state.skillGroupEditor,
         sharedBaseColors: newColors,
       },
     });
+  },
+  mergeAndSortColors: (updatedColorId) => {
+    const state = get();
+    let colors = state.skillGroupEditor.sharedBaseColors.map(c => ({ ...c, frameIds: [...c.frameIds] }));
+    const hslThreshold = 0.025;
+
+    if (updatedColorId !== undefined) {
+      const idx = colors.findIndex(c => c.id === updatedColorId);
+      if (idx === -1) return;
+      const target = colors[idx];
+
+      let mergeTarget: SharedBaseColor | null = null;
+      let mergeIdx = -1;
+      for (let i = 0; i < colors.length; i++) {
+        if (i === idx) continue;
+        const c = colors[i];
+        const dh = Math.min(Math.abs(c.h - target.h), 1 - Math.abs(c.h - target.h));
+        const ds = Math.abs(c.s - target.s);
+        const dl = Math.abs(c.l - target.l);
+        if (dh < hslThreshold && ds < 0.1 && dl < 0.1) {
+          mergeTarget = c;
+          mergeIdx = i;
+          break;
+        }
+      }
+
+      if (mergeTarget) {
+        const keepIdx = target.area >= mergeTarget.area ? idx : mergeIdx;
+        const removeIdx = keepIdx === idx ? mergeIdx : idx;
+        const keep = colors[keepIdx];
+        const remove = colors[removeIdx];
+
+        keep.frameIds = Array.from(new Set([...keep.frameIds, ...remove.frameIds]));
+        keep.area += remove.area;
+
+        colors.splice(removeIdx, 1);
+      }
+    }
+
+    colors.sort((a, b) => b.area - a.area);
+
+    set({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        sharedBaseColors: colors,
+      },
+    });
+  },
+  reclusterCurrentFrame: () => {
+    const state = get();
+    const { activeFrameId, frames, sharedBaseColors, nextColorId } = state.skillGroupEditor;
+    if (!activeFrameId) return;
+    const frame = frames.find(f => f.id === activeFrameId);
+    if (!frame || !frame.bbox || !frame.bgImageData || !frame.baseTexture) return;
+
+    const colors = sharedBaseColors.map(c => ({ ...c, tempFlag: false }));
+
+    let currentNextId = nextColorId;
+
+    const { w, h, x: offsetX, y: offsetY } = frame.bbox;
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = w;
+    maskCanvas.height = h;
+    const maskCtx = maskCanvas.getContext('2d')!;
+    const maskImageData = maskCtx.createImageData(w, h);
+    const maskData = maskImageData.data;
+
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const globalIdx = ((offsetY + py) * 512 + (offsetX + px)) * 4;
+        const alpha = frame.baseTexture.data[globalIdx + 3];
+        const maskIdx = (py * w + px) * 4;
+        maskData[maskIdx] = alpha > 0 ? 255 : 0;
+        maskData[maskIdx + 1] = alpha > 0 ? 255 : 0;
+        maskData[maskIdx + 2] = alpha > 0 ? 255 : 0;
+        maskData[maskIdx + 3] = alpha > 0 ? 255 : 0;
+      }
+    }
+
+    const result = clusterAndGenerateTexturesV2(
+      maskImageData,
+      frame.bbox,
+      frame.bgImageData,
+      0.025,
+      512
+    );
+
+    if (!result) return;
+
+    const { baseColors: extractedColors, regionIdTex: rawRegionIdTex } = result;
+
+    const tempColors = [...colors];
+    const newColorEntries: SharedBaseColor[] = [];
+
+    for (const ec of extractedColors) {
+      let found = false;
+      for (const gc of tempColors) {
+        const dh = Math.min(Math.abs(gc.h - ec.h), 1 - Math.abs(gc.h - ec.h));
+        const ds = Math.abs(gc.s - ec.s);
+        const dl = Math.abs(gc.l - ec.l);
+        if (dh < 0.025 && ds < 0.1 && dl < 0.1) {
+          gc.tempFlag = true;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        newColorEntries.push({
+          id: currentNextId,
+          h: ec.h,
+          s: ec.s,
+          l: ec.l,
+          frameIds: [activeFrameId],
+          area: 0,
+          tempFlag: true,
+        });
+        currentNextId++;
+      }
+    }
+
+    const finalColors = [...tempColors, ...newColorEntries];
+
+    const filtered = finalColors.filter(c => {
+      if (c.frameIds.includes(activeFrameId) && c.tempFlag === false) {
+        return false;
+      }
+      return true;
+    });
+
+    const localToGlobal = new Map<number, number>();
+    let localIdx = 0;
+    for (const ec of extractedColors) {
+      let globalId: number | undefined;
+      let minDist = 0.3;
+      for (const fc of finalColors) {
+        if (!fc.tempFlag) continue;
+        const dh = Math.min(Math.abs(fc.h - ec.h), 1 - Math.abs(fc.h - ec.h));
+        const ds = Math.abs(fc.s - ec.s);
+        const dl = Math.abs(fc.l - ec.l);
+        const dist = dh + ds * 0.5 + dl * 0.5;
+        if (dist < minDist) {
+          minDist = dist;
+          globalId = fc.id;
+        }
+      }
+      if (globalId !== undefined) {
+        localToGlobal.set(localIdx, globalId);
+      }
+      localIdx++;
+    }
+
+    const newRegionIdTex = new Uint8Array(rawRegionIdTex.length);
+    for (let i = 0; i < rawRegionIdTex.length; i++) {
+      const localIdxVal = rawRegionIdTex[i];
+      if (localIdxVal > 0) {
+        const globalId = localToGlobal.get(localIdxVal - 1);
+        newRegionIdTex[i] = globalId || 0;
+      }
+    }
+
+    const updatedFrames = frames.map(f =>
+      f.id === activeFrameId ? { ...f, regionIdTex: newRegionIdTex } : f
+    );
+
+    const cleanColors = filtered.map(c => {
+      const { tempFlag, ...rest } = c;
+      return { ...rest, tempFlag: false };
+    });
+
+    set({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        frames: updatedFrames,
+        sharedBaseColors: cleanColors,
+        nextColorId: currentNextId,
+      },
+    });
+
+    get().recalculateAllAreas();
+    get().mergeAndSortColors();
   },
 }));
 
