@@ -337,6 +337,7 @@ interface AppState {
       residualTexture: ImageData | null;
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint8Array;
+      baseColorValues: Array<{ h: number; s: number; l: number }>;
     }>;
     sharedBaseColors: Array<{ id: number; h: number; s: number; l: number }>;
     activeFrameId: string | null;
@@ -353,6 +354,7 @@ interface AppState {
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint8Array;
+    baseColorValues: Array<{ h: number; s: number; l: number }>;
   }>) => void;
   setSharedBaseColors: (colors: Array<{ id: number; h: number; s: number; l: number }>) => void;
   setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
@@ -1838,6 +1840,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         residualTexture: null,
         bbox: null,
         regionIdTex: new Uint8Array(0),
+        baseColorValues: [],
       };
       return {
         skillGroupEditor: {
