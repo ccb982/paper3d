@@ -9,15 +9,17 @@ import {
   dequantizeH,
   dequantizeS,
   dequantizeL,
+  getAdaptiveBlockIndex,
+  getRangeForBlock,
 } from '../utils/colorCompressor';
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
 import { useAppStore } from '../stores/useAppStore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 
-const MERGE_HUE_THRESHOLD = 0.001;
-const MERGE_SAT_THRESHOLD = 0.002;
-const MERGE_LIGHT_THRESHOLD = 0.002;
+const MERGE_HUE_THRESHOLD = 0.02;
+const MERGE_SAT_THRESHOLD = 0.05;
+const MERGE_LIGHT_THRESHOLD = 0.05;
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -567,10 +569,10 @@ function buildResidualTextureFromDelta(
   for (let y = 0; y < textureSize; y++) {
     for (let x = 0; x < textureSize; x++) {
       const idx = (y * textureSize + x) * 4;
-      data[idx] = 128;
-      data[idx + 1] = 128;
-      data[idx + 2] = 128;
-      data[idx + 3] = 255;
+      data[idx] = 0;
+      data[idx + 1] = 0;
+      data[idx + 2] = 0;
+      data[idx + 3] = 0;
     }
   }
   for (let py = 0; py < h; py++) {
@@ -1260,7 +1262,7 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox]);
 
-  // 重新计算残差：基于原图和当前基础色纹理
+  // 重新计算残差：基于原图和当前基础色纹理（使用自适应量化）
   const recalculateResidual = useCallback(() => {
     if (!baseTexture || !bgImageData || !bbox || baseColors.length === 0) return;
     
@@ -1274,15 +1276,22 @@ export const BaseColorEditor: React.FC = () => {
     for (let y = 0; y < TEX_SIZE; y++) {
       for (let x = 0; x < TEX_SIZE; x++) {
         const idx = (y * TEX_SIZE + x) * 4;
-        residualData[idx] = 128;
-        residualData[idx + 1] = 128;
-        residualData[idx + 2] = 128;
-        residualData[idx + 3] = 255;
+        residualData[idx] = 0;
+        residualData[idx + 1] = 0;
+        residualData[idx + 2] = 0;
+        residualData[idx + 3] = 0;
       }
     }
     
-    for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
-      for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
+    const { w, h } = bbox;
+    const tempDeltas = new Float32Array(w * h * 3);
+    const blockMax = new Float32Array(16 * 3);
+    
+    // 第一遍扫描：计算每个块的最大残差绝对值
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const x = bbox.x + px;
+        const y = bbox.y + py;
         const idx = (y * TEX_SIZE + x) * 4;
         if (baseTexture.data[idx + 3] > 0) {
           const baseR = baseTexture.data[idx];
@@ -1301,16 +1310,88 @@ export const BaseColorEditor: React.FC = () => {
           const dS = origHsl.s - baseHsl.s;
           const dL = origHsl.l - baseHsl.l;
           
-          residualData[idx] = quantizeH(dH);
-          residualData[idx + 1] = quantizeS(dS);
-          residualData[idx + 2] = quantizeL(dL);
+          const idx3 = py * w + px;
+          tempDeltas[idx3 * 3] = dH;
+          tempDeltas[idx3 * 3 + 1] = dS;
+          tempDeltas[idx3 * 3 + 2] = dL;
+          
+          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+          const baseIdx = blockIdx * 3;
+          blockMax[baseIdx] = Math.max(blockMax[baseIdx], Math.abs(dH));
+          blockMax[baseIdx + 1] = Math.max(blockMax[baseIdx + 1], Math.abs(dS));
+          blockMax[baseIdx + 2] = Math.max(blockMax[baseIdx + 2], Math.abs(dL));
+        }
+      }
+    }
+    
+    // 统计每个块中残差在 [-0.25, 0.25] 范围内的像素比例
+    const blockPixelCount = new Uint32Array(16);
+    const blockSmallCount = new Uint32Array(16);
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const x = bbox.x + px;
+        const y = bbox.y + py;
+        const idx = (y * TEX_SIZE + x) * 4;
+        if (baseTexture.data[idx + 3] > 0) {
+          const idx3 = py * w + px;
+          const dH = tempDeltas[idx3 * 3];
+          const dS = tempDeltas[idx3 * 3 + 1];
+          const dL = tempDeltas[idx3 * 3 + 2];
+          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+          blockPixelCount[blockIdx]++;
+          if (Math.abs(dH) <= 0.25 && Math.abs(dS) <= 0.25 && Math.abs(dL) <= 0.25) {
+            blockSmallCount[blockIdx]++;
+          }
+        }
+      }
+    }
+    
+    // 决策每个块的档位：70%以上像素残差在 [-0.25, 0.25] 范围内使用窄范围
+    let blockFlags = 0;
+    const ranges = new Float32Array(16);
+    for (let b = 0; b < 16; b++) {
+      if (blockPixelCount[b] > 0) {
+        const ratio = blockSmallCount[b] / blockPixelCount[b];
+        if (ratio >= 0.7) {
+          blockFlags |= (1 << b);
+          ranges[b] = 0.25;
+        } else {
+          ranges[b] = 0.5;
+        }
+      } else {
+        ranges[b] = 0.5;
+      }
+    }
+    
+    // 第二遍扫描：使用自适应范围量化残差
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const x = bbox.x + px;
+        const y = bbox.y + py;
+        const idx = (y * TEX_SIZE + x) * 4;
+        if (baseTexture.data[idx + 3] > 0) {
+          const idx3 = py * w + px;
+          const dH = tempDeltas[idx3 * 3];
+          const dS = tempDeltas[idx3 * 3 + 1];
+          const dL = tempDeltas[idx3 * 3 + 2];
+          
+          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+          const range = ranges[blockIdx];
+          
+          residualData[idx] = quantizeH(dH, range);
+          residualData[idx + 1] = quantizeS(dS, range);
+          residualData[idx + 2] = quantizeL(dL, range);
+          residualData[idx + 3] = 255;
         }
       }
     }
     
     setResidualTexture(residualImageData);
+    if (activeFrameId) {
+      updateSkillFrame(activeFrameId, { blockFlags });
+    }
     setTimeout(() => saveToHistory(), 0);
-  }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory]);
+  }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame]);
 
   // 更新基础色并重新生成纹理
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
@@ -1797,6 +1878,8 @@ export const BaseColorEditor: React.FC = () => {
         );
         const baseData = baseTexture.data;
         const residualData = residualTexture.data;
+        const blockFlags = currentFrame?.blockFlags ?? 0;
+        const { w, h } = bbox;
         
         const baseColorRgbs = baseColors.map((c: typeof baseColors[0]) => hslToRgb(c.h, c.s, c.l));
 
@@ -1804,20 +1887,32 @@ export const BaseColorEditor: React.FC = () => {
           for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
             const idx = (y * TEX_SIZE + x) * 4;
             if (baseData[idx + 3] > 0) {
-              const hslBase = rgbToHsl(baseData[idx], baseData[idx + 1], baseData[idx + 2]);
-              const dH = dequantizeH(residualData[idx]);
-              const dS = dequantizeS(residualData[idx + 1]);
-              const dL = dequantizeL(residualData[idx + 2]);
-              let finalH = hslBase.h + dH;
-              if (finalH < 0) finalH += 1.0;
-              if (finalH >= 1.0) finalH -= 1.0;
-              const finalS = Math.max(0, Math.min(1, hslBase.s + dS));
-              const finalL = Math.max(0, Math.min(1, hslBase.l + dL));
-              const rgb = hslToRgb(finalH, finalS, finalL);
-              compositeData.data[idx] = rgb.r;
-              compositeData.data[idx + 1] = rgb.g;
-              compositeData.data[idx + 2] = rgb.b;
-              compositeData.data[idx + 3] = 255;
+              if (residualData[idx + 3] === 0) {
+                compositeData.data[idx] = baseData[idx];
+                compositeData.data[idx + 1] = baseData[idx + 1];
+                compositeData.data[idx + 2] = baseData[idx + 2];
+                compositeData.data[idx + 3] = 255;
+              } else {
+                const px = x - bbox.x;
+                const py = y - bbox.y;
+                const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+                const range = getRangeForBlock(blockFlags, blockIdx);
+                
+                const hslBase = rgbToHsl(baseData[idx], baseData[idx + 1], baseData[idx + 2]);
+                const dH = dequantizeH(residualData[idx], range);
+                const dS = dequantizeS(residualData[idx + 1], range);
+                const dL = dequantizeL(residualData[idx + 2], range);
+                let finalH = hslBase.h + dH;
+                if (finalH < 0) finalH += 1.0;
+                if (finalH >= 1.0) finalH -= 1.0;
+                const finalS = Math.max(0, Math.min(1, hslBase.s + dS));
+                const finalL = Math.max(0, Math.min(1, hslBase.l + dL));
+                const rgb = hslToRgb(finalH, finalS, finalL);
+                compositeData.data[idx] = rgb.r;
+                compositeData.data[idx + 1] = rgb.g;
+                compositeData.data[idx + 2] = rgb.b;
+                compositeData.data[idx + 3] = 255;
+              }
             } else if (bgImageData) {
               const r = bgImageData.data[idx];
               const g = bgImageData.data[idx + 1];

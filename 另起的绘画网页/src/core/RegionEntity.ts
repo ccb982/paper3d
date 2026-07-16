@@ -9,17 +9,20 @@ import {
   dequantizeH,
   dequantizeS,
   dequantizeL,
+  getAdaptiveBlockIndex,
+  getRangeForBlock,
 } from '../utils/colorCompressor';
 import { compressToBinary, uint8ToBase64 } from '../utils/binaryCompression';
 import type { CompressionResultV2 } from '../utils/colorCompressor';
 
 export interface FtxTextureData {
-  version: 2;
+  version: 2 | 3;
   baseColors: Array<{ h: number; s: number; l: number }>;
   deltaTexture: Uint8Array;
   regionIdTexture?: Uint8Array;
   textureSize: number;
   bbox: { x: number; y: number; w: number; h: number };
+  blockFlags: number;
 }
 
 export class RegionEntity {
@@ -93,7 +96,7 @@ export class RegionEntity {
     const ctx = smallComposited.getContext('2d')!;
     ctx.putImageData(paintBuffer, 0, 0);
 
-    const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
+    const { baseColors, regionIdTex, deltaTex, blockFlags } = clusterAndGenerateTexturesV2(
       mask,
       pixelBbox,
       ctx.getImageData(0, 0, 512, 512),
@@ -101,7 +104,7 @@ export class RegionEntity {
       512
     );
 
-    console.log(`[FTX管道] 区域 ${this.id} → paintBuffer→FTX: ${baseColors.length}基础色, 残差${deltaTex.length}字节`);
+    console.log(`[FTX管道] 区域 ${this.id} → paintBuffer→FTX: ${baseColors.length}基础色, 残差${deltaTex.length}字节, blockFlags=${blockFlags}`);
 
     const resampledDelta = new Uint8Array(textureSize * textureSize * 3);
     const resampledRegionId = regionIdTex ? new Uint8Array(textureSize * textureSize) : null;
@@ -125,12 +128,13 @@ export class RegionEntity {
     }
 
     this._ftxData = {
-      version: 2,
+      version: 3,
       baseColors,
       deltaTexture: resampledDelta,
       regionIdTexture: resampledRegionId || undefined,
       textureSize,
       bbox: pixelBbox,
+      blockFlags,
     };
 
     this._textureVersion++;
@@ -152,8 +156,8 @@ export class RegionEntity {
       return this._gpuTexture;
     }
 
-    const { baseColors, deltaTexture, regionIdTexture, textureSize, bbox } = this._ftxData;
-    const pixelData = this._decompressToRGBA(baseColors, deltaTexture, regionIdTexture, textureSize, bbox);
+    const { baseColors, deltaTexture, regionIdTexture, textureSize, bbox, blockFlags } = this._ftxData;
+    const pixelData = this._decompressToRGBA(baseColors, deltaTexture, regionIdTexture, textureSize, bbox, blockFlags);
 
     let opaquePixels = 0;
     let totalPixels = pixelData.length / 4;
@@ -192,7 +196,8 @@ export class RegionEntity {
     deltaTexture: Uint8Array,
     regionIdTexture: Uint8Array | undefined,
     textureSize: number,
-    _bbox: { w: number; h: number }
+    _bbox: { w: number; h: number },
+    blockFlags: number = 0
   ): Uint8ClampedArray {
     const pixelData = new Uint8ClampedArray(textureSize * textureSize * 4);
     pixelData.fill(0);
@@ -202,14 +207,17 @@ export class RegionEntity {
         const idx = ty * textureSize + tx;
         const deltaIdx = idx * 3;
 
+        const blockIdx = getAdaptiveBlockIndex(tx, ty, textureSize, textureSize);
+        const range = getRangeForBlock(blockFlags, blockIdx);
+
         let finalHsl;
         if (regionIdTexture) {
           const baseIdx = regionIdTexture[idx] - 1;
           if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
           const base = baseColors[baseIdx];
-          const dH = dequantizeH(deltaTexture[deltaIdx]);
-          const dS = dequantizeS(deltaTexture[deltaIdx + 1]);
-          const dL = dequantizeL(deltaTexture[deltaIdx + 2]);
+          const dH = dequantizeH(deltaTexture[deltaIdx], range);
+          const dS = dequantizeS(deltaTexture[deltaIdx + 1], range);
+          const dL = dequantizeL(deltaTexture[deltaIdx + 2], range);
 
           let finalH = base.h + dH;
           if (finalH < 0) finalH += 1.0;
@@ -219,9 +227,9 @@ export class RegionEntity {
           finalHsl = { h: finalH, s: finalS, l: finalL };
         } else if (baseColors.length > 0) {
           const base = baseColors[0];
-          const dH = dequantizeH(deltaTexture[deltaIdx]);
-          const dS = dequantizeS(deltaTexture[deltaIdx + 1]);
-          const dL = dequantizeL(deltaTexture[deltaIdx + 2]);
+          const dH = dequantizeH(deltaTexture[deltaIdx], range);
+          const dS = dequantizeS(deltaTexture[deltaIdx + 1], range);
+          const dL = dequantizeL(deltaTexture[deltaIdx + 2], range);
           
           let finalH = base.h + dH;
           if (finalH < 0) finalH += 1.0;

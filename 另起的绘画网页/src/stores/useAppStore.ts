@@ -345,6 +345,7 @@ interface AppState {
       baseTexture: ImageData | null;
       residualTexture: ImageData | null;
       deltaTex: Uint8Array;
+      blockFlags: number;
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint8Array;
       baseColorValues: Array<{ h: number; s: number; l: number }>;
@@ -363,6 +364,7 @@ interface AppState {
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
     deltaTex: Uint8Array;
+    blockFlags: number;
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint8Array;
     baseColorValues: Array<{ h: number; s: number; l: number }>;
@@ -1923,6 +1925,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         baseTexture: null,
         residualTexture: null,
         deltaTex: new Uint8Array(0),
+        blockFlags: 0,
         bbox: null,
         regionIdTex: new Uint8Array(0),
         baseColorValues: [],

@@ -2,7 +2,7 @@ import type { CompressionResultV2, CompressedRegionV2 } from './colorCompressor'
 
 // ---------- 常量定义 ----------
 const MAGIC = 0x46545832; // "FTX2"
-const VERSION = 2;
+const VERSION = 3;
 
 // ---------- 辅助：Base64 转 Uint8Array ----------
 function base64ToUint8(base64: string): Uint8Array {
@@ -247,6 +247,10 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     rView.setUint16(rOffset, colorCount, true);
     rOffset += 2;
 
+    // 写入 blockFlags (2字节，仅 V3+)
+    rView.setUint16(rOffset, region.blockFlags ?? 0, true);
+    rOffset += 2;
+
     // 写入偏置后的 BaseColors (Float32 * 3)
     for (const c of baseColors) {
       rView.setFloat32(rOffset, c.h, true);  // Base_H - 0.5
@@ -320,7 +324,7 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
 
   const version = dataView.getUint8(offset);
   offset += 1;
-  if (version !== VERSION) throw new Error(`不支持的版本: ${version}`);
+  if (version !== 2 && version !== 3) throw new Error(`不支持的版本: ${version}`);
 
   const regionCount = dataView.getUint16(offset, true);
   offset += 2;
@@ -344,6 +348,10 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     offset += 8;
     const colorCount = dataView.getUint16(offset, true);
     offset += 2;
+
+    // 读取 blockFlags (2字节，仅 V3+)
+    const blockFlags = version === 3 ? dataView.getUint16(offset, true) : 0;
+    offset += version === 3 ? 2 : 0;
 
     // 读取偏置后的基础色，然后还原
     const baseColors: Array<{ h: number; s: number; l: number }> = [];
@@ -399,11 +407,12 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
       baseColors,
       regionIdTexture: regionIdTex,
       deltaTexture: deltaTex,
+      blockFlags,
     });
   }
 
   return {
-    version: 2,
+    version: version as 3,
     resolution: [resolution, resolution],
     regionCount,
     regions,

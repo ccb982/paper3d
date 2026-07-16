@@ -2,6 +2,21 @@ import { useAppStore } from '../stores/useAppStore';
 import { computeRegionsExact } from './regionDetectionExact';
 import type { Point } from '../types';
 
+// ==================== 自适应量化 4x4 ====================
+export const ADAPTIVE_BLOCK_COLS = 4;
+export const ADAPTIVE_BLOCK_ROWS = 4;
+export const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
+
+export function getAdaptiveBlockIndex(x: number, y: number, w: number, h: number): number {
+    const col = Math.min(Math.floor((x / w) * ADAPTIVE_BLOCK_COLS), ADAPTIVE_BLOCK_COLS - 1);
+    const row = Math.min(Math.floor((y / h) * ADAPTIVE_BLOCK_ROWS), ADAPTIVE_BLOCK_ROWS - 1);
+    return row * ADAPTIVE_BLOCK_COLS + col;
+}
+
+export function getRangeForBlock(flags: number, blockIdx: number): number {
+    return (flags & (1 << blockIdx)) ? 0.25 : 0.5;
+}
+
 // ==================== 颜色空间转换 ====================
 export function srgbToLinear(c: number): number {
   c /= 255;
@@ -53,6 +68,34 @@ export function hslToRgb(h: number, s: number, l: number): { r: number; g: numbe
     g: Math.round(linearToSrgb(g) * 255), 
     b: Math.round(linearToSrgb(b) * 255) 
   };
+}
+
+// ==================== 量化/反量化 ====================
+export function quantizeH(dH: number, range: number = 0.5): number {
+    const clamped = Math.max(-range, Math.min(range, dH));
+    return Math.round(((clamped + range) / (2 * range)) * 63);
+}
+
+export function dequantizeH(qH: number, range: number = 0.5): number {
+    return (qH / 63) * 2 * range - range;
+}
+
+export function quantizeS(dS: number, range: number = 0.5): number {
+    const clamped = Math.max(-range, Math.min(range, dS));
+    return Math.round(((clamped + range) / (2 * range)) * 31);
+}
+
+export function dequantizeS(qS: number, range: number = 0.5): number {
+    return (qS / 31) * 2 * range - range;
+}
+
+export function quantizeL(dL: number, range: number = 0.5): number {
+    const clamped = Math.max(-range, Math.min(range, dL));
+    return Math.round(((clamped + range) / (2 * range)) * 31);
+}
+
+export function dequantizeL(qL: number, range: number = 0.5): number {
+    return (qL / 31) * 2 * range - range;
 }
 
 // ==================== 区域掩码光栅化 ====================
@@ -454,7 +497,7 @@ function clusterByColorAndSpace(
     return { baseColors: [], regionIdTex: new Uint8Array(totalPixels) };
   }
 
-  const kInit = Math.min(20, count);
+  const kInit = Math.min(64, count);
   let { centroids, labels } = kmeans(pixelColors, kInit, 20, 42);
 
   const mergeResult = mergeCentroids(centroids, labels, 5.0);
@@ -559,10 +602,11 @@ export interface CompressedRegionV2 {
   baseColors: Array<{ h: number; s: number; l: number }>;
   regionIdTexture?: string;
   deltaTexture: string;
+  blockFlags: number;
 }
 
 export interface CompressionResultV2 {
-  version: 2;
+  version: 3;
   resolution: [number, number];
   regionCount: number;
   regions: CompressedRegionV2[];
@@ -694,23 +738,24 @@ function mergeBaseColors(
   return { mergedColors: merged, oldToNewMap: map };
 }
 
-function clusterAndGenerateTexturesV2(
+export function clusterAndGenerateTexturesV2(
   mask: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
   paintBuffer: ImageData,
   hueThreshold: number = 0.025,
   sourceWidth: number = PAINT_BUFFER_SIZE
-): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaTex: Uint8Array } {
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaTex: Uint8Array; blockFlags: number } {
   const { w, h } = bbox;
   const totalPixels = w * h;
 
   const { baseColors, regionIdTex } = clusterByColorAndSpace(mask, bbox, paintBuffer, sourceWidth);
 
   if (baseColors.length === 0 || totalPixels === 0) {
-    return { baseColors: [], regionIdTex: null, deltaTex: new Uint8Array(0) };
+    return { baseColors: [], regionIdTex: null, deltaTex: new Uint8Array(0), blockFlags: 0 };
   }
 
-  const deltaTex = new Uint8Array(totalPixels * 3);
+  const tempDeltas = new Float32Array(totalPixels * 3);
+  const blockMax = new Float32Array(ADAPTIVE_TOTAL_BLOCKS * 3);
 
   for (let i = 0; i < totalPixels; i++) {
     const colorIdx = regionIdTex[i];
@@ -731,44 +776,78 @@ function clusterAndGenerateTexturesV2(
     const dL = hsl.l - base.l;
 
     const idx3 = i * 3;
-    deltaTex[idx3] = quantizeH(dH);
-    deltaTex[idx3 + 1] = quantizeS(dS);
-    deltaTex[idx3 + 2] = quantizeL(dL);
+    tempDeltas[idx3] = dH;
+    tempDeltas[idx3 + 1] = dS;
+    tempDeltas[idx3 + 2] = dL;
+
+    const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
+    const baseIdx = blockIdx * 3;
+    blockMax[baseIdx] = Math.max(blockMax[baseIdx], Math.abs(dH));
+    blockMax[baseIdx + 1] = Math.max(blockMax[baseIdx + 1], Math.abs(dS));
+    blockMax[baseIdx + 2] = Math.max(blockMax[baseIdx + 2], Math.abs(dL));
+  }
+
+  const blockPixelCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+  const blockSmallCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+  for (let i = 0; i < totalPixels; i++) {
+    const colorIdx = regionIdTex[i];
+    if (colorIdx === 0) continue;
+    const idx3 = i * 3;
+    const dH = tempDeltas[idx3];
+    const dS = tempDeltas[idx3 + 1];
+    const dL = tempDeltas[idx3 + 2];
+    const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
+    blockPixelCount[blockIdx]++;
+    if (Math.abs(dH) <= 0.25 && Math.abs(dS) <= 0.25 && Math.abs(dL) <= 0.25) {
+      blockSmallCount[blockIdx]++;
+    }
+  }
+
+  let blockFlags = 0;
+  const ranges = new Float32Array(ADAPTIVE_TOTAL_BLOCKS);
+  for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
+    if (blockPixelCount[b] > 0) {
+      const ratio = blockSmallCount[b] / blockPixelCount[b];
+      if (ratio >= 0.7) {
+        blockFlags |= (1 << b);
+        ranges[b] = 0.25;
+      } else {
+        ranges[b] = 0.5;
+      }
+    } else {
+      ranges[b] = 0.5;
+    }
+  }
+
+  const deltaTex = new Uint8Array(totalPixels * 3);
+  for (let i = 0; i < totalPixels; i++) {
+    const colorIdx = regionIdTex[i];
+    if (colorIdx === 0) continue;
+    const base = baseColors[colorIdx - 1];
+    if (!base) continue;
+
+    const idx3 = i * 3;
+    const dH = tempDeltas[idx3];
+    const dS = tempDeltas[idx3 + 1];
+    const dL = tempDeltas[idx3 + 2];
+
+    const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
+    const range = ranges[blockIdx];
+
+    deltaTex[idx3] = quantizeH(dH, range);
+    deltaTex[idx3 + 1] = quantizeS(dS, range);
+    deltaTex[idx3 + 2] = quantizeL(dL, range);
   }
 
   return {
     baseColors,
     regionIdTex: regionIdTex.length > 0 ? regionIdTex : null,
-    deltaTex
+    deltaTex,
+    blockFlags
   };
 }
 
-// 导出辅助函数供外部使用（bakeRegionLayerTexture）
-// FTX 2.0 量化（直接返回 0~63 / 0~31）
-export function quantizeH(dH: number): number {
-  return Math.round((dH + 0.5) * 63);
-}
 
-export function quantizeS(dS: number): number {
-  return Math.round((dS + 1.0) * 15.5);
-}
-
-export function quantizeL(dL: number): number {
-  return Math.round((dL + 1.0) * 15.5);
-}
-
-// FTX 2.0 反量化（从 0~63 / 0~31 还原物理值）
-export function dequantizeH(encoded: number): number {
-  return encoded / 63 - 0.5;
-}
-
-export function dequantizeS(encoded: number): number {
-  return encoded / 15.5 - 1.0;
-}
-
-export function dequantizeL(encoded: number): number {
-  return encoded / 15.5 - 1.0;
-}
 
 // ==================== FTX 2.0 解码函数 ====================
 // 量化公式：
@@ -847,7 +926,7 @@ function clamp(x: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, x));
 }
 
-export { computeBBoxAllRings, rasterizeRegionMaskLocal, clusterAndGenerateTexturesV2 };
+export { computeBBoxAllRings, rasterizeRegionMaskLocal };
 
 function bufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
@@ -876,7 +955,7 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
     const region = regions[ri];
     const bbox = computeBBoxAllRings(region);
     const mask = rasterizeRegionMaskLocal(region, bbox);
-    const { baseColors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(mask, bbox, buffer, hueThreshold);
+    const { baseColors, regionIdTex, deltaTex, blockFlags } = clusterAndGenerateTexturesV2(mask, bbox, buffer, hueThreshold);
     if (baseColors.length === 0) continue;
 
     compressedRegions.push({
@@ -885,11 +964,12 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
       baseColors,
       regionIdTexture: regionIdTex ? bufferToBase64(regionIdTex.buffer) : undefined,
       deltaTexture: bufferToBase64(deltaTex.buffer),
+      blockFlags,
     });
   }
 
   const result: CompressionResultV2 = {
-    version: 2,
+    version: 3,
     resolution: [PAINT_BUFFER_SIZE, PAINT_BUFFER_SIZE],
     regionCount: compressedRegions.length,
     regions: compressedRegions,
