@@ -6,7 +6,9 @@ import {
   rasterizeRegionMaskLocal,
   clusterAndGenerateTexturesV2,
   hslToRgb,
-  dequantize,
+  dequantizeH,
+  dequantizeS,
+  dequantizeL,
 } from '../utils/colorCompressor';
 import { compressToBinary, uint8ToBase64 } from '../utils/binaryCompression';
 import type { CompressionResultV2 } from '../utils/colorCompressor';
@@ -205,9 +207,9 @@ export class RegionEntity {
           const baseIdx = regionIdTexture[idx] - 1;
           if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
           const base = baseColors[baseIdx];
-          const dH = dequantize(deltaTexture[deltaIdx], 0.25);
-          const dS = dequantize(deltaTexture[deltaIdx + 1], 1.0);
-          const dL = dequantize(deltaTexture[deltaIdx + 2], 1.0);
+          const dH = dequantizeH(deltaTexture[deltaIdx]);
+          const dS = dequantizeS(deltaTexture[deltaIdx + 1]);
+          const dL = dequantizeL(deltaTexture[deltaIdx + 2]);
 
           let finalH = base.h + dH;
           if (finalH < 0) finalH += 1.0;
@@ -217,9 +219,9 @@ export class RegionEntity {
           finalHsl = { h: finalH, s: finalS, l: finalL };
         } else if (baseColors.length > 0) {
           const base = baseColors[0];
-          const dH = dequantize(deltaTexture[deltaIdx], 0.25);
-          const dS = dequantize(deltaTexture[deltaIdx + 1], 1.0);
-          const dL = dequantize(deltaTexture[deltaIdx + 2], 1.0);
+          const dH = dequantizeH(deltaTexture[deltaIdx]);
+          const dS = dequantizeS(deltaTexture[deltaIdx + 1]);
+          const dL = dequantizeL(deltaTexture[deltaIdx + 2]);
           
           let finalH = base.h + dH;
           if (finalH < 0) finalH += 1.0;

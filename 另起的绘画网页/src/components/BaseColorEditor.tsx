@@ -3,7 +3,12 @@ import {
   clusterAndGenerateTexturesV2,
   hslToRgb,
   rgbToHsl,
-  dequantize,
+  quantizeH,
+  quantizeS,
+  quantizeL,
+  dequantizeH,
+  dequantizeS,
+  dequantizeL,
 } from '../utils/colorCompressor';
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
@@ -425,10 +430,6 @@ function mergeColorsWithGlobal(
 
   const newDeltaTex = new Uint8Array(totalPixels * 3);
   const { w, h, x: offsetX, y: offsetY } = bbox;
-  const quantize = (value: number, range: number): number => {
-    const normalized = (value / range) * 0.5 + 0.5;
-    return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
-  };
   const normalizeHueDelta = (delta: number) => {
     if (delta > 0.5) return delta - 1.0;
     if (delta < -0.5) return delta + 1.0;
@@ -452,9 +453,9 @@ function mergeColorsWithGlobal(
       const dH = normalizeHueDelta(hsl.h - base.h);
       const dS = hsl.s - base.s;
       const dL = hsl.l - base.l;
-      newDeltaTex[idx * 3] = quantize(dH * 0.5, 0.25);
-      newDeltaTex[idx * 3 + 1] = quantize(dS, 1.0);
-      newDeltaTex[idx * 3 + 2] = quantize(dL, 1.0);
+      newDeltaTex[idx * 3] = quantizeH(dH);
+      newDeltaTex[idx * 3 + 1] = quantizeS(dS);
+      newDeltaTex[idx * 3 + 2] = quantizeL(dL);
     }
   }
 
@@ -1259,58 +1260,6 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox]);
 
-  // 更新基础色并重新生成纹理
-  const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
-    updateColorInGlobal(id, newHSL, activeFrameId);
-
-    const currentFrame = frames.find(f => f.id === activeFrameId);
-    if (currentFrame && currentFrame.bbox) {
-      const newBaseTexture = buildBaseTextureFromRegionId(
-        sharedBaseColors,
-        currentFrame.regionIdTex,
-        currentFrame.bbox,
-        TEX_SIZE
-      );
-      updateSkillFrame(activeFrameId, { baseTexture: newBaseTexture });
-    }
-  }, [activeFrameId, frames, sharedBaseColors, updateSkillFrame, updateColorInGlobal]);
-
-  const handlePickColor = useCallback((id: number) => {
-    setPickingId(prev => prev === id ? null : id);
-  }, []);
-
-  const handleRecluster = useCallback(() => {
-    const { reclusterCurrentFrame } = useAppStore.getState();
-    reclusterCurrentFrame();
-
-    const state = useAppStore.getState();
-    const currentFrame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
-    
-    if (currentFrame && currentFrame.bbox && currentFrame.regionIdTex) {
-      const newBaseTexture = buildBaseTextureFromRegionId(
-        state.skillGroupEditor.sharedBaseColors,
-        currentFrame.regionIdTex,
-        currentFrame.bbox,
-        TEX_SIZE
-      );
-      
-      const newDeltaTex = new Uint8Array(currentFrame.bbox.w * currentFrame.bbox.h * 3);
-      for (let i = 0; i < newDeltaTex.length; i++) {
-        newDeltaTex[i] = 128;
-      }
-      
-      updateSkillFrame(state.skillGroupEditor.activeFrameId!, {
-        baseTexture: newBaseTexture,
-        residualTexture: buildResidualTextureFromDelta(newDeltaTex, currentFrame.bbox, TEX_SIZE),
-      });
-      
-      setColorPixelsMap(buildColorPixelsMap(currentFrame.regionIdTex));
-    }
-    
-    setSelectedBaseColorId(null);
-    setTimeout(() => saveToHistory(), 0);
-  }, [saveToHistory, buildColorPixelsMap, updateSkillFrame]);
-
   // 重新计算残差：基于原图和当前基础色纹理
   const recalculateResidual = useCallback(() => {
     if (!baseTexture || !bgImageData || !bbox || baseColors.length === 0) return;
@@ -1332,11 +1281,6 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
     
-    const quantize = (value: number, range: number): number => {
-      const normalized = (value / range) * 0.5 + 0.5;
-      return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
-    };
-    
     for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
       for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
         const idx = (y * TEX_SIZE + x) * 4;
@@ -1357,9 +1301,9 @@ export const BaseColorEditor: React.FC = () => {
           const dS = origHsl.s - baseHsl.s;
           const dL = origHsl.l - baseHsl.l;
           
-          residualData[idx] = quantize(dH * 0.5, 0.25);
-          residualData[idx + 1] = quantize(dS, 1.0);
-          residualData[idx + 2] = quantize(dL, 1.0);
+          residualData[idx] = quantizeH(dH);
+          residualData[idx + 1] = quantizeS(dS);
+          residualData[idx + 2] = quantizeL(dL);
         }
       }
     }
@@ -1367,6 +1311,58 @@ export const BaseColorEditor: React.FC = () => {
     setResidualTexture(residualImageData);
     setTimeout(() => saveToHistory(), 0);
   }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory]);
+
+  // 更新基础色并重新生成纹理
+  const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
+    updateColorInGlobal(id, newHSL, activeFrameId);
+
+    const currentFrame = frames.find(f => f.id === activeFrameId);
+    if (currentFrame && currentFrame.bbox) {
+      const newBaseTexture = buildBaseTextureFromRegionId(
+        sharedBaseColors,
+        currentFrame.regionIdTex,
+        currentFrame.bbox,
+        TEX_SIZE
+      );
+      updateSkillFrame(activeFrameId, { baseTexture: newBaseTexture });
+      
+      recalculateResidual();
+    }
+  }, [activeFrameId, frames, sharedBaseColors, updateSkillFrame, updateColorInGlobal, recalculateResidual]);
+
+  const handlePickColor = useCallback((id: number) => {
+    setPickingId(prev => prev === id ? null : id);
+  }, []);
+
+  const handleRecluster = useCallback(() => {
+    const { reclusterCurrentFrame } = useAppStore.getState();
+    reclusterCurrentFrame();
+
+    const state = useAppStore.getState();
+    const currentFrame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
+    
+    if (currentFrame && currentFrame.bbox && currentFrame.regionIdTex) {
+      const newBaseTexture = buildBaseTextureFromRegionId(
+        state.skillGroupEditor.sharedBaseColors,
+        currentFrame.regionIdTex,
+        currentFrame.bbox,
+        TEX_SIZE
+      );
+      
+      updateSkillFrame(state.skillGroupEditor.activeFrameId!, {
+        baseTexture: newBaseTexture,
+      });
+      
+      setColorPixelsMap(buildColorPixelsMap(currentFrame.regionIdTex));
+    }
+    
+    setSelectedBaseColorId(null);
+    
+    setTimeout(() => {
+      recalculateResidual();
+      saveToHistory();
+    }, 0);
+  }, [saveToHistory, buildColorPixelsMap, updateSkillFrame, recalculateResidual]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -1724,7 +1720,7 @@ export const BaseColorEditor: React.FC = () => {
         ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       }
     }
-    // 残差模式：基础色区域显示残差（偏移128），其他区域显示灰色
+    // 残差模式：显示FTX格式的HSL残差（H:0~63, S:0~31, L:0~31）
     else if (mode === 'residual') {
       ctx.fillStyle = '#333';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
@@ -1736,36 +1732,45 @@ export const BaseColorEditor: React.FC = () => {
           TEX_SIZE
         );
         
-        const baseColorRgbs = baseColors.map((c: typeof baseColors[0]) => hslToRgb(c.h, c.s, c.l));
-        
         for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
           for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
             const idx = (y * TEX_SIZE + x) * 4;
-            if (filledData.data[idx + 3] === 0 && bgImageData) {
+            if (filledData.data[idx + 3] === 0 && bgImageData && baseTexture) {
               const r = bgImageData.data[idx];
               const g = bgImageData.data[idx + 1];
               const b = bgImageData.data[idx + 2];
+              const origHsl = rgbToHsl(r, g, b);
               
-              let bestDist = Infinity;
-              let bestRgb = baseColorRgbs[0];
-              for (const rgb of baseColorRgbs) {
-                const dr = r - rgb.r;
-                const dg = g - rgb.g;
-                const db = b - rgb.b;
-                const dist = dr * dr + dg * dg + db * db;
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  bestRgb = rgb;
+              const baseR = baseTexture.data[idx];
+              const baseG = baseTexture.data[idx + 1];
+              const baseB = baseTexture.data[idx + 2];
+              let baseHsl = rgbToHsl(baseR, baseG, baseB);
+              
+              if (baseTexture.data[idx + 3] === 0) {
+                let bestDist = Infinity;
+                let bestColor = baseColors[0];
+                for (const c of baseColors) {
+                  const dh = Math.min(Math.abs(origHsl.h - c.h), 1 - Math.abs(origHsl.h - c.h));
+                  const ds = Math.abs(origHsl.s - c.s);
+                  const dl = Math.abs(origHsl.l - c.l);
+                  const dist = dh + ds + dl;
+                  if (dist < bestDist) {
+                    bestDist = dist;
+                    bestColor = c;
+                  }
                 }
+                baseHsl = { h: bestColor.h, s: bestColor.s, l: bestColor.l };
               }
               
-              const dR = r - bestRgb.r;
-              const dG = g - bestRgb.g;
-              const dB = b - bestRgb.b;
+              let dH = origHsl.h - baseHsl.h;
+              if (dH > 0.5) dH -= 1.0;
+              if (dH < -0.5) dH += 1.0;
+              const dS = origHsl.s - baseHsl.s;
+              const dL = origHsl.l - baseHsl.l;
               
-              filledData.data[idx] = Math.max(0, Math.min(255, dR + 128));
-              filledData.data[idx + 1] = Math.max(0, Math.min(255, dG + 128));
-              filledData.data[idx + 2] = Math.max(0, Math.min(255, dB + 128));
+              filledData.data[idx] = quantizeH(dH);
+              filledData.data[idx + 1] = quantizeS(dS);
+              filledData.data[idx + 2] = quantizeL(dL);
               filledData.data[idx + 3] = 255;
             }
           }
@@ -1800,9 +1805,9 @@ export const BaseColorEditor: React.FC = () => {
             const idx = (y * TEX_SIZE + x) * 4;
             if (baseData[idx + 3] > 0) {
               const hslBase = rgbToHsl(baseData[idx], baseData[idx + 1], baseData[idx + 2]);
-              const dH = dequantize(residualData[idx], 0.25);
-              const dS = dequantize(residualData[idx + 1], 1.0);
-              const dL = dequantize(residualData[idx + 2], 1.0);
+              const dH = dequantizeH(residualData[idx]);
+              const dS = dequantizeS(residualData[idx + 1]);
+              const dL = dequantizeL(residualData[idx + 2]);
               let finalH = hslBase.h + dH;
               if (finalH < 0) finalH += 1.0;
               if (finalH >= 1.0) finalH -= 1.0;
@@ -1832,15 +1837,13 @@ export const BaseColorEditor: React.FC = () => {
                 }
               }
               
-              const dR = r - hslToRgb(bestColor.h, bestColor.s, bestColor.l).r;
-              const dG = g - hslToRgb(bestColor.h, bestColor.s, bestColor.l).g;
-              const dB = b - hslToRgb(bestColor.h, bestColor.s, bestColor.l).b;
+              const hslBg = rgbToHsl(r, g, b);
+              const dH = hslBg.h - bestColor.h;
+              const dHNormalized = dH > 0.5 ? dH - 1.0 : dH < -0.5 ? dH + 1.0 : dH;
+              const dS = hslBg.s - bestColor.s;
+              const dL = hslBg.l - bestColor.l;
               
-              const dH = dequantize(Math.max(0, Math.min(255, dR + 128)), 0.25);
-              const dS = dequantize(Math.max(0, Math.min(255, dG + 128)), 1.0);
-              const dL = dequantize(Math.max(0, Math.min(255, dB + 128)), 1.0);
-              
-              let finalH = bestColor.h + dH;
+              let finalH = bestColor.h + dHNormalized;
               if (finalH < 0) finalH += 1.0;
               if (finalH >= 1.0) finalH -= 1.0;
               const finalS = Math.max(0, Math.min(1, bestColor.s + dS));

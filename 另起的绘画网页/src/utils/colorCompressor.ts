@@ -3,18 +3,30 @@ import { computeRegionsExact } from './regionDetectionExact';
 import type { Point } from '../types';
 
 // ==================== 颜色空间转换 ====================
+export function srgbToLinear(c: number): number {
+  c /= 255;
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
 export function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
-  r /= 255; g /= 255; b /= 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const rL = srgbToLinear(r);
+  const gL = srgbToLinear(g);
+  const bL = srgbToLinear(b);
+  const max = Math.max(rL, gL, bL), min = Math.min(rL, gL, bL);
   let h = 0, s = 0, l = (max + min) / 2;
   if (max !== min) {
     const d = max - min;
     s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
-    else if (max === g) h = ((b - r) / d + 2) / 6;
-    else h = ((r - g) / d + 4) / 6;
+    if (max === rL) h = ((gL - bL) / d + (gL < bL ? 6 : 0)) / 6;
+    else if (max === gL) h = ((bL - rL) / d + 2) / 6;
+    else h = ((rL - gL) / d + 4) / 6;
   }
   return { h, s, l };
+}
+
+export function linearToSrgb(c: number): number {
+  c = Math.max(0, Math.min(1, c));
+  return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1/2.4) - 0.055;
 }
 
 export function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
@@ -36,7 +48,11 @@ export function hslToRgb(h: number, s: number, l: number): { r: number; g: numbe
     g = hue2rgb(p, q, h);
     b = hue2rgb(p, q, h - 1/3);
   }
-  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+  return { 
+    r: Math.round(linearToSrgb(r) * 255), 
+    g: Math.round(linearToSrgb(g) * 255), 
+    b: Math.round(linearToSrgb(b) * 255) 
+  };
 }
 
 // ==================== 区域掩码光栅化 ====================
@@ -550,7 +566,7 @@ export interface CompressionResultV2 {
   resolution: [number, number];
   regionCount: number;
   regions: CompressedRegionV2[];
-  quantization: 'uint8';
+  quantization: 'uint8' | 'rgb565';
   hueThreshold: number;
 }
 
@@ -695,10 +711,6 @@ function clusterAndGenerateTexturesV2(
   }
 
   const deltaTex = new Uint8Array(totalPixels * 3);
-  const quantize = (value: number, range: number): number => {
-    const normalized = (value / range) * 0.5 + 0.5;
-    return Math.round(Math.max(0, Math.min(1, normalized)) * 255);
-  };
 
   for (let i = 0; i < totalPixels; i++) {
     const colorIdx = regionIdTex[i];
@@ -719,9 +731,9 @@ function clusterAndGenerateTexturesV2(
     const dL = hsl.l - base.l;
 
     const idx3 = i * 3;
-    deltaTex[idx3] = quantize(dH * 0.5, 0.25);
-    deltaTex[idx3 + 1] = quantize(dS, 1.0);
-    deltaTex[idx3 + 2] = quantize(dL, 1.0);
+    deltaTex[idx3] = quantizeH(dH);
+    deltaTex[idx3 + 1] = quantizeS(dS);
+    deltaTex[idx3 + 2] = quantizeL(dL);
   }
 
   return {
@@ -732,8 +744,30 @@ function clusterAndGenerateTexturesV2(
 }
 
 // 导出辅助函数供外部使用（bakeRegionLayerTexture）
-export function dequantize(value: number, range: number): number {
-  return ((value / 255) - 0.5) * range * 2;
+// FTX 2.0 量化（直接返回 0~63 / 0~31）
+export function quantizeH(dH: number): number {
+  return Math.round((dH + 0.5) * 63);
+}
+
+export function quantizeS(dS: number): number {
+  return Math.round((dS + 1.0) * 15.5);
+}
+
+export function quantizeL(dL: number): number {
+  return Math.round((dL + 1.0) * 15.5);
+}
+
+// FTX 2.0 反量化（从 0~63 / 0~31 还原物理值）
+export function dequantizeH(encoded: number): number {
+  return encoded / 63 - 0.5;
+}
+
+export function dequantizeS(encoded: number): number {
+  return encoded / 15.5 - 1.0;
+}
+
+export function dequantizeL(encoded: number): number {
+  return encoded / 15.5 - 1.0;
 }
 
 // ==================== FTX 2.0 解码函数 ====================

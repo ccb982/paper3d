@@ -271,22 +271,17 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
 
     // ---- 编码 DeltaTex (先转换为 RGB565，再 RLE) ----
     if (deltaTex && deltaTex.length > 0) {
-      // 原始 deltaTex 是 3字节/像素 (dH, dS, dL) 的 uint8 格式
-      // 需要转换为 RGB565 格式：(S << 11) | (H << 5) | L
+      // deltaTex 已经是 FTX 2.0 量化格式：dH(0~63), dS(0~31), dL(0~31)
+      // 直接打包为 RGB565 格式：(S << 11) | (H << 5) | L
       const totalPixels = bbox.w * bbox.h;
       const rgb565Data = new Uint16Array(totalPixels);
       
       for (let i = 0; i < totalPixels; i++) {
         const idx = i * 3;
-        // 原始存储是 uint8，需要先反量化回物理值
-        const dH = ((deltaTex[idx] / 255) - 0.5) * 0.5;   // 原范围 -0.5~+0.5
-        const dS = ((deltaTex[idx + 1] / 255) - 0.5) * 2; // 原范围 -1.0~+1.0
-        const dL = ((deltaTex[idx + 2] / 255) - 0.5) * 2; // 原范围 -1.0~+1.0
-        
-        // FTX 2.0 量化
-        const encodedH = quantizeH(dH);
-        const encodedS = quantizeS(dS);
-        const encodedL = quantizeL(dL);
+        // 直接读取 FTX 2.0 量化值
+        const encodedH = deltaTex[idx];     // 0~63
+        const encodedS = deltaTex[idx + 1]; // 0~31
+        const encodedL = deltaTex[idx + 2]; // 0~31
         
         // 打包为 RGB565
         rgb565Data[i] = packRGB565(encodedS, encodedH, encodedL);
@@ -384,21 +379,16 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
       const totalPixels = bbox.w * bbox.h;
       const decoded16 = rleDecode16(encoded, totalPixels);
       
-      // RGB565 转换回 3字节/像素的 uint8 格式
+      // RGB565 转换回 FTX 2.0 量化格式的 uint8 (dH:0~63, dS:0~31, dL:0~31)
       const decoded8 = new Uint8Array(totalPixels * 3);
       for (let j = 0; j < totalPixels; j++) {
         const rgb565 = decoded16[j];
         const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
         
-        // FTX 2.0 反量化
-        const dH = dequantizeH(encodedH);
-        const dS = dequantizeS(encodedS);
-        const dL = dequantizeL(encodedL);
-        
-        // 转换回 uint8 存储格式
-        decoded8[j * 3] = Math.round(((dH / 0.5) + 1) * 127.5);   // -0.5~+0.5 → 0~255
-        decoded8[j * 3 + 1] = Math.round(((dS / 2) + 0.5) * 255); // -1.0~+1.0 → 0~255
-        decoded8[j * 3 + 2] = Math.round(((dL / 2) + 0.5) * 255); // -1.0~+1.0 → 0~255
+        // 直接使用 FTX 2.0 量化值（0~63/0~31），无需反量化
+        decoded8[j * 3] = encodedH;     // 0~63
+        decoded8[j * 3 + 1] = encodedS; // 0~31
+        decoded8[j * 3 + 2] = encodedL; // 0~31
       }
       deltaTex = uint8ToBase64(decoded8);
     }

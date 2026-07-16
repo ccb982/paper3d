@@ -7,8 +7,7 @@ import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
-import { hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, dequantize } from '../utils/colorCompressor';
-import { quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL } from '../utils/binaryCompression';
+import { hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
 
 export interface SharedBaseColor {
@@ -345,6 +344,7 @@ interface AppState {
       dashedPolygons: Point[][];
       baseTexture: ImageData | null;
       residualTexture: ImageData | null;
+      deltaTex: Uint8Array;
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint8Array;
       baseColorValues: Array<{ h: number; s: number; l: number }>;
@@ -362,6 +362,7 @@ interface AppState {
     dashedPolygons: Point[][];
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
+    deltaTex: Uint8Array;
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint8Array;
     baseColorValues: Array<{ h: number; s: number; l: number }>;
@@ -1437,6 +1438,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 统计线条类型
       const shapeTypes = [...new Set(state.shapes.map(s => s.type))];
       
+      const serializeImageData = (imgData: ImageData | null): { width: number; height: number; data: number[] } | null => {
+        if (!imgData) return null;
+        return {
+          width: imgData.width,
+          height: imgData.height,
+          data: Array.from(imgData.data),
+        };
+      };
+
+      const serializedSkillGroupFrames = state.skillGroupEditor.frames.map(frame => ({
+        ...frame,
+        bgImageData: serializeImageData(frame.bgImageData),
+        baseTexture: serializeImageData(frame.baseTexture),
+        residualTexture: serializeImageData(frame.residualTexture),
+        deltaTex: Array.from(frame.deltaTex),
+        regionIdTex: Array.from(frame.regionIdTex),
+        colorPixelsMap: null,
+      }));
+
       const snapshotId = Date.now();
       const newSnapshot = { 
         id: snapshotId,
@@ -1445,6 +1465,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         regionAnnotations: [...state.regionAnnotations],
         regionPixelsMap: serializedRegionPixelsMap,
         paintBuffers: serializedPaintBuffers,
+        skillGroupEditor: {
+          frames: serializedSkillGroupFrames,
+          sharedBaseColors: [...state.skillGroupEditor.sharedBaseColors],
+          activeFrameId: state.skillGroupEditor.activeFrameId,
+          globalBbox: state.skillGroupEditor.globalBbox ? { ...state.skillGroupEditor.globalBbox } : null,
+          nextColorId: state.skillGroupEditor.nextColorId,
+        },
         stats: {
           shapeCount: state.shapes.length,
           shapeTypes: shapeTypes,
@@ -1476,6 +1503,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
         
+        const deserializeImageData = (serialized: { width: number; height: number; data: number[] } | null): ImageData | null => {
+          if (!serialized) return null;
+          return new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
+        };
+
+        const restoredSkillGroupFrames = snapshot.skillGroupEditor?.frames.map(frame => ({
+          ...frame,
+          bgImageData: deserializeImageData(frame.bgImageData),
+          baseTexture: deserializeImageData(frame.baseTexture),
+          residualTexture: deserializeImageData(frame.residualTexture),
+          deltaTex: new Uint8Array(frame.deltaTex || []),
+          regionIdTex: new Uint8Array(frame.regionIdTex),
+          colorPixelsMap: null,
+        })) || [];
+        
         const newState = {
           shapes: [...snapshot.shapes],
           pointAnnotations: [...snapshot.pointAnnotations],
@@ -1487,6 +1529,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           colorExtractMode: false,  // 强制退出颜色提取模式
           colorExtractPoints: [],   // 清空点集
           colorExtractTool: null,   // 重置工具
+          skillGroupEditor: snapshot.skillGroupEditor ? {
+            frames: restoredSkillGroupFrames,
+            sharedBaseColors: [...snapshot.skillGroupEditor.sharedBaseColors],
+            activeFrameId: snapshot.skillGroupEditor.activeFrameId,
+            globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
+            nextColorId: snapshot.skillGroupEditor.nextColorId,
+          } : state.skillGroupEditor,
         };
         
         // 延迟重置标志并重新计算区域数据
@@ -1530,6 +1579,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           restoredPaintBuffers[layerId] = new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
         }
         
+        const deserializeImageData = (serialized: { width: number; height: number; data: number[] } | null): ImageData | null => {
+          if (!serialized) return null;
+          return new ImageData(new Uint8ClampedArray(serialized.data), serialized.width, serialized.height);
+        };
+
+        const restoredSkillGroupFrames = snapshot.skillGroupEditor?.frames.map(frame => ({
+          ...frame,
+          bgImageData: deserializeImageData(frame.bgImageData),
+          baseTexture: deserializeImageData(frame.baseTexture),
+          residualTexture: deserializeImageData(frame.residualTexture),
+          deltaTex: new Uint8Array(frame.deltaTex || []),
+          regionIdTex: new Uint8Array(frame.regionIdTex),
+          colorPixelsMap: null,
+        })) || [];
+        
         console.log(`[重做] 恢复到快照 ID: ${snapshot.id}, 索引: ${newIndex}`);
         console.log(`  线条: ${snapshot.stats.shapeCount}个 (类型: ${snapshot.stats.shapeTypes.join(', ') || '无'})`);
         console.log(`  点注释: ${snapshot.stats.pointAnnotationCount}个`);
@@ -1547,6 +1611,13 @@ export const useAppStore = create<AppState>((set, get) => ({
           colorExtractMode: false,  // 强制退出颜色提取模式
           colorExtractPoints: [],   // 清空点集
           colorExtractTool: null,   // 重置工具
+          skillGroupEditor: snapshot.skillGroupEditor ? {
+            frames: restoredSkillGroupFrames,
+            sharedBaseColors: [...snapshot.skillGroupEditor.sharedBaseColors],
+            activeFrameId: snapshot.skillGroupEditor.activeFrameId,
+            globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
+            nextColorId: snapshot.skillGroupEditor.nextColorId,
+          } : state.skillGroupEditor,
         };
         
         // 延迟重置标志并重新计算区域数据
@@ -1851,6 +1922,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         dashedPolygons: [],
         baseTexture: null,
         residualTexture: null,
+        deltaTex: new Uint8Array(0),
         bbox: null,
         regionIdTex: new Uint8Array(0),
         baseColorValues: [],
@@ -2101,7 +2173,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (!result) return;
 
-    const { baseColors: extractedColors, regionIdTex: rawRegionIdTex } = result;
+    const { baseColors: extractedColors, regionIdTex: rawRegionIdTex, deltaTex: newDeltaTex } = result;
 
     const tempColors = [...colors];
     const newColorEntries: SharedBaseColor[] = [];
@@ -2173,7 +2245,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     const updatedFrames = frames.map(f =>
-      f.id === activeFrameId ? { ...f, regionIdTex: newRegionIdTex } : f
+      f.id === activeFrameId ? { ...f, regionIdTex: newRegionIdTex, deltaTex: newDeltaTex } : f
     );
 
     const cleanColors = filtered.map(c => {
