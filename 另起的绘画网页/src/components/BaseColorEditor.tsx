@@ -8,6 +8,11 @@ import {
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
 import { useAppStore } from '../stores/useAppStore';
+import type { SharedBaseColor } from '../stores/useAppStore';
+
+const MERGE_HUE_THRESHOLD = 0.001;
+const MERGE_SAT_THRESHOLD = 0.002;
+const MERGE_LIGHT_THRESHOLD = 0.002;
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -343,8 +348,6 @@ function extractBaseByClick(
   };
 }
 
-import type { SharedBaseColor } from '../stores/useAppStore';
-
 // ============ 颜色合并与纹理重建函数 ============
 function mergeColorsWithGlobal(
   extractedColors: Array<{ h: number; s: number; l: number }>,
@@ -355,7 +358,10 @@ function mergeColorsWithGlobal(
   bbox: { x: number; y: number; w: number; h: number },
   bgImageData: ImageData,
   textureSize: number,
-  frameId: string
+  frameId: string,
+  hueThreshold: number = 0.3,
+  satThreshold: number = 0.5,
+  lightThreshold: number = 0.5
 ): {
   newGlobalColors: SharedBaseColor[];
   newNextId: number;
@@ -381,15 +387,13 @@ function mergeColorsWithGlobal(
   for (let i = 0; i < extractedColors.length; i++) {
     const ec = extractedColors[i];
     let matchedId = -1;
-    let minDist = 0.3;
     for (const gc of newColors) {
       const dh = Math.min(Math.abs(ec.h - gc.h), 1 - Math.abs(ec.h - gc.h));
       const ds = Math.abs(ec.s - gc.s);
       const dl = Math.abs(ec.l - gc.l);
-      const dist = dh + ds * 0.5 + dl * 0.5;
-      if (dist < minDist) {
-        minDist = dist;
+      if (dh < hueThreshold && ds < satThreshold && dl < lightThreshold) {
         matchedId = gc.id;
+        break;
       }
     }
     if (matchedId === -1) {
@@ -498,6 +502,41 @@ function buildBaseTextureFromRegionId(
       const globalId = regionIdTex[idx];
       if (globalId === 0) continue;
       const color = colorMapById.get(globalId);
+      if (!color) continue;
+      const rgb = hslToRgb(color.h, color.s, color.l);
+      const globalX = offsetX + px;
+      const globalY = offsetY + py;
+      const pIdx = (globalY * textureSize + globalX) * 4;
+      data[pIdx] = rgb.r;
+      data[pIdx + 1] = rgb.g;
+      data[pIdx + 2] = rgb.b;
+      data[pIdx + 3] = 255;
+    }
+  }
+  return imageData;
+}
+
+function buildBaseTextureFromLocalColors(
+  colors: Array<{ h: number; s: number; l: number }>,
+  regionIdTex: Uint8Array,
+  bbox: { x: number; y: number; w: number; h: number },
+  textureSize: number
+): ImageData {
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const canvas = document.createElement('canvas');
+  canvas.width = textureSize;
+  canvas.height = textureSize;
+  const ctx = canvas.getContext('2d')!;
+  const imageData = ctx.createImageData(textureSize, textureSize);
+  const data = imageData.data;
+  data.fill(0);
+
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const idx = py * w + px;
+      const localIdx = regionIdTex[idx];
+      if (localIdx === 0) continue;
+      const color = colors[localIdx - 1];
       if (!color) continue;
       const rgb = hslToRgb(color.h, color.s, color.l);
       const globalX = offsetX + px;
@@ -1118,6 +1157,58 @@ export const BaseColorEditor: React.FC = () => {
     setIsExtractMode(true);
   }, [bgImageData, dashedPolygons, drawingPolygon]);
 
+  const autoMergeToGlobal = useCallback((frameId: string) => {
+    const state = useAppStore.getState();
+    const { frames, sharedBaseColors, nextColorId, globalBbox } = state.skillGroupEditor;
+    const { recalculateAllAreas, mergeAndSortColors } = state;
+    const frame = frames.find(f => f.id === frameId);
+    if (!frame) return;
+
+    if (!frame.baseColorValues || frame.baseColorValues.length === 0) return;
+    if (!frame.bgImageData) return;
+
+    const effectiveBbox = globalBbox || frame.bbox;
+    if (!effectiveBbox) return;
+
+    const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex } = mergeColorsWithGlobal(
+      frame.baseColorValues,
+      frame.regionIdTex,
+      new Uint8Array(0),
+      sharedBaseColors,
+      nextColorId,
+      effectiveBbox,
+      frame.bgImageData,
+      TEX_SIZE,
+      frameId,
+      MERGE_HUE_THRESHOLD,
+      MERGE_SAT_THRESHOLD,
+      MERGE_LIGHT_THRESHOLD
+    );
+
+    setSharedBaseColors(newGlobalColors);
+    setNextColorId(newNextId);
+
+    const newBaseTexture = buildBaseTextureFromRegionId(
+      newGlobalColors,
+      newRegionIdTex,
+      effectiveBbox,
+      TEX_SIZE
+    );
+    const newResidualTexture = buildResidualTextureFromDelta(newDeltaTex, effectiveBbox, TEX_SIZE);
+
+    updateSkillFrame(frameId, {
+      regionIdTex: newRegionIdTex,
+      baseTexture: newBaseTexture,
+      residualTexture: newResidualTexture,
+      baseColorValues: [],
+    });
+
+    recalculateAllAreas();
+    mergeAndSortColors();
+
+    console.log(`[自动合并] 帧 ${frameId} 已合并到全局，全局颜色数: ${newGlobalColors.length}`);
+  }, [setSharedBaseColors, setNextColorId, updateSkillFrame]);
+
   const handleExtractClick = useCallback((pixel: { x: number; y: number }) => {
     const state = useAppStore.getState();
     const currentActiveFrameId = state.skillGroupEditor.activeFrameId;
@@ -1133,82 +1224,40 @@ export const BaseColorEditor: React.FC = () => {
 
     const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, TEX_SIZE, state.skillGroupEditor.globalBbox);
     if (result) {
-      const currentNextId = state.skillGroupEditor.nextColorId;
-      let currentColors = state.skillGroupEditor.sharedBaseColors;
-      if (currentColors.length === 0) {
-        console.warn('[提取] sharedBaseColors 为空，从所有帧的 baseColorValues 重建');
-        const allFrameColors: Array<{ h: number; s: number; l: number }> = [];
-        const seen = new Set<string>();
-        for (const frame of state.skillGroupEditor.frames) {
-          for (const c of frame.baseColorValues || []) {
-            const key = `${c.h.toFixed(4)},${c.s.toFixed(4)},${c.l.toFixed(4)}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              allFrameColors.push(c);
-            }
-          }
-        }
-        currentColors = allFrameColors.map((c, idx) => ({ 
-          id: currentNextId + idx, 
-          ...c, 
-          frameIds: [], 
-          area: 0 
-        }));
-      }
-      
-      console.log('[DEBUG] handleExtractClick START:', {
-        currentActiveFrameId,
-        currentColorsLength: currentColors.length,
-        currentNextId,
-        extractedColorsLength: result.baseColors.length,
-      });
-      
-      const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex } = mergeColorsWithGlobal(
-        result.baseColors,
-        result.regionIdTex,
-        result.deltaTex,
-        currentColors,
-        currentNextId,
-        result.bbox,
-        currentFrameData.bgImageData,
-        TEX_SIZE,
-        currentActiveFrameId
-      );
+      const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaTex: localDeltaTex, bbox } = result;
 
-      console.log('[DEBUG] handleExtractClick AFTER MERGE:', {
-        newGlobalColorsLength: newGlobalColors.length,
-        newNextId,
-      });
-
-      const newBaseTexture = buildBaseTextureFromRegionId(
-        newGlobalColors,
-        newRegionIdTex,
-        result.bbox,
+      const newBaseTexture = buildBaseTextureFromLocalColors(
+        localBaseColors,
+        localRegionIdTex,
+        bbox,
         TEX_SIZE
       );
 
       updateSkillFrame(currentActiveFrameId, {
-        baseColorValues: result.baseColors,
+        baseColorValues: localBaseColors,
         baseTexture: newBaseTexture,
-        residualTexture: buildResidualTextureFromDelta(newDeltaTex, result.bbox, TEX_SIZE),
-        bbox: result.bbox,
-        regionIdTex: newRegionIdTex,
+        residualTexture: buildResidualTextureFromDelta(localDeltaTex, bbox, TEX_SIZE),
+        bbox: bbox,
+        regionIdTex: localRegionIdTex,
       });
 
-      setSharedBaseColors(newGlobalColors);
-      setNextColorId(newNextId);
-      setColorPixelsMap(buildColorPixelsMap(newRegionIdTex));
       setIsExtractMode(false);
+
+      autoMergeToGlobal(currentActiveFrameId);
+
       if (!state.skillGroupEditor.globalBbox) {
         setGlobalBbox(result.bbox);
       }
 
-      const { recalculateAllAreas, mergeAndSortColors } = useAppStore.getState();
-      recalculateAllAreas();
-      mergeAndSortColors();
-      setTimeout(() => saveToHistory(), 0);
+      setTimeout(() => {
+        const updatedFrame = useAppStore.getState().skillGroupEditor.frames.find(f => f.id === currentActiveFrameId);
+        if (updatedFrame && updatedFrame.regionIdTex.length > 0) {
+          setColorPixelsMap(buildColorPixelsMap(updatedFrame.regionIdTex));
+        }
+        saveToHistory();
+      }, 0);
     }
-  }, [drawingPolygon, saveToHistory, setSharedBaseColors, setNextColorId, buildColorPixelsMap, updateSkillFrame, setGlobalBbox]);
+  }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox]);
 
   // 更新基础色并重新生成纹理
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {

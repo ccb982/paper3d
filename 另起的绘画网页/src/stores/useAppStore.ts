@@ -2060,16 +2060,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   reclusterCurrentFrame: () => {
     const state = get();
-    const { activeFrameId, frames, sharedBaseColors, nextColorId } = state.skillGroupEditor;
+    const { activeFrameId, frames, sharedBaseColors, nextColorId, globalBbox } = state.skillGroupEditor;
     if (!activeFrameId) return;
     const frame = frames.find(f => f.id === activeFrameId);
-    if (!frame || !frame.bbox || !frame.bgImageData || !frame.baseTexture) return;
+    if (!frame || !frame.bgImageData || !frame.baseTexture) return;
 
     const colors = sharedBaseColors.map(c => ({ ...c, tempFlag: false }));
 
     let currentNextId = nextColorId;
 
-    const { w, h, x: offsetX, y: offsetY } = frame.bbox;
+    const effectiveBbox = globalBbox || frame.bbox;
+    if (!effectiveBbox) return;
+    const { w, h, x: offsetX, y: offsetY } = effectiveBbox;
     const maskCanvas = document.createElement('canvas');
     maskCanvas.width = w;
     maskCanvas.height = h;
@@ -2091,7 +2093,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     const result = clusterAndGenerateTexturesV2(
       maskImageData,
-      frame.bbox,
+      effectiveBbox,
       frame.bgImageData,
       0.025,
       512
