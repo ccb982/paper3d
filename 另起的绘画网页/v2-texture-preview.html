@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>V2 纹理预览测试 (FTX 2.0)</title>
+  <title>纹理预览测试 (FTX 2.0/3.0)</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -65,11 +65,13 @@
   <input type="file" id="fileInput" accept=".json,.ftx,.ftx.gz" style="display:none" onchange="handleFile(this)">
 
   <div class="format-info">
-    <strong>FTX 2.0 编码格式说明：</strong>
+    <strong>FTX 编码格式说明：</strong>
     <div>• 残差存储：RGB565 打包 (H:6位, S:5位, L:5位)</div>
     <div>• 偏置烘焙：Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)</div>
     <div>• 解码公式：Final_HSL = Base_Shifted + Delta_Encoded (仅加法)</div>
     <div>• 带宽：2字节/像素，配合 BBox 裁剪可达 1/10~1/20 压缩率</div>
+    <div>• FTX 3.0 新增：自适应量化 (4×4空间分区，blockFlags 控制)</div>
+    <div>• 自适应范围：窄范围(±0.25)提高精度，宽范围(±0.5)保证动态范围</div>
   </div>
 
   <div class="container">
@@ -93,21 +95,31 @@
   </div>
 
   <script>
-    // ========== FTX 2.0 常量定义 ==========
+    // ========== FTX 常量定义 ==========
     const MAGIC = 0x46545832; // "FTX2"
-    const VERSION = 2;
+    const ADAPTIVE_BLOCK_COLS = 4;
+    const ADAPTIVE_BLOCK_ROWS = 4;
+    const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
 
-    // ========== FTX 2.0 量化/反量化函数 ==========
-    // H: -0.5 ~ +0.5 → 0 ~ 63 (6位)
-    // S: -1.0 ~ +1.0 → 0 ~ 31 (5位)
-    // L: -1.0 ~ +1.0 → 0 ~ 31 (5位)
-    function quantizeH(dH) { return Math.round((dH + 0.5) * 63); }
-    function quantizeS(dS) { return Math.round((dS + 1.0) * 15.5); }
-    function quantizeL(dL) { return Math.round((dL + 1.0) * 15.5); }
+    // ========== FTX 量化/反量化函数 ==========
+    function quantizeH(dH, range) { range = range || 0.5; return Math.round(((dH + range) / (2 * range)) * 63); }
+    function quantizeS(dS, range) { range = range || 0.5; return Math.round(((dS + range) / (2 * range)) * 31); }
+    function quantizeL(dL, range) { range = range || 0.5; return Math.round(((dL + range) / (2 * range)) * 31); }
     
-    function dequantizeH(encoded) { return (encoded / 63) - 0.5; }
-    function dequantizeS(encoded) { return (encoded / 15.5) - 1.0; }
-    function dequantizeL(encoded) { return (encoded / 15.5) - 1.0; }
+    function dequantizeH(encoded, range) { range = range || 0.5; return ((encoded / 63) * 2 * range) - range; }
+    function dequantizeS(encoded, range) { range = range || 0.5; return ((encoded / 31) * 2 * range) - range; }
+    function dequantizeL(encoded, range) { range = range || 0.5; return ((encoded / 31) * 2 * range) - range; }
+
+    // ========== 自适应量化辅助函数 ==========
+    function getAdaptiveBlockIndex(x, y, w, h) {
+      const col = Math.min(Math.floor((x / w) * ADAPTIVE_BLOCK_COLS), ADAPTIVE_BLOCK_COLS - 1);
+      const row = Math.min(Math.floor((y / h) * ADAPTIVE_BLOCK_ROWS), ADAPTIVE_BLOCK_ROWS - 1);
+      return row * ADAPTIVE_BLOCK_COLS + col;
+    }
+
+    function getRangeForBlock(blockFlags, blockIdx) {
+      return (blockFlags & (1 << blockIdx)) ? 0.25 : 0.5;
+    }
 
     // ========== RGB565 打包/解包 ==========
     function packRGB565(s, h, l) {
@@ -185,7 +197,7 @@
       return result;
     }
 
-    // ========== 从 FTX 2.0 二进制解压 ==========
+    // ========== 从 FTX 二进制解压 (支持 V2/V3) ==========
     function decompressFromBinary(buffer) {
       const dataView = new DataView(buffer);
       let offset = 0;
@@ -198,7 +210,7 @@
 
       const version = dataView.getUint8(offset);
       offset += 1;
-      if (version !== VERSION) throw new Error(`不支持的版本: ${version}`);
+      if (version !== 2 && version !== 3) throw new Error(`不支持的版本: ${version}`);
 
       const regionCount = dataView.getUint16(offset, true);
       offset += 2;
@@ -210,9 +222,6 @@
       const regions = [];
 
       for (let i = 0; i < regionCount; i++) {
-        // 读取 Region Header
-        if (offset + 12 > buffer.byteLength) throw new Error(`区域 ${i} 头部越界`);
-
         const id = dataView.getUint16(offset, true);
         offset += 2;
 
@@ -229,11 +238,15 @@
         const colorCount = dataView.getUint16(offset, true);
         offset += 2;
 
+        // 读取 blockFlags (2字节，仅 V3+)
+        const blockFlags = version === 3 ? dataView.getUint16(offset, true) : 0;
+        offset += version === 3 ? 2 : 0;
+
         // 读取偏置后的基础色，然后还原
         const baseColors = [];
         for (let j = 0; j < colorCount; j++) {
           if (offset + 12 > buffer.byteLength) throw new Error(`区域 ${i} 的 baseColors[${j}] 越界`);
-          const h = dataView.getFloat32(offset, true) + 0.5; // 还原偏置
+          const h = dataView.getFloat32(offset, true) + 0.5;
           offset += 4;
           const s = dataView.getFloat32(offset, true) + 1.0;
           offset += 4;
@@ -272,16 +285,13 @@
           const totalPixels = bbox.w * bbox.h;
           const decoded16 = rleDecode16(encoded, totalPixels);
           
-          // RGB565 转换回 FTX 2.0 量化格式的 uint8 (dH:0~63, dS:0~31, dL:0~31)
           const decoded8 = new Uint8Array(totalPixels * 3);
           for (let j = 0; j < totalPixels; j++) {
             const rgb565 = decoded16[j];
             const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
-            
-            // 直接使用 FTX 2.0 量化值（0~63/0~31），无需反量化
-            decoded8[j * 3] = encodedH;     // 0~63
-            decoded8[j * 3 + 1] = encodedS; // 0~31
-            decoded8[j * 3 + 2] = encodedL; // 0~31
+            decoded8[j * 3] = encodedH;
+            decoded8[j * 3 + 1] = encodedS;
+            decoded8[j * 3 + 2] = encodedL;
           }
           deltaTex = uint8ArrayToBase64(decoded8);
         }
@@ -292,11 +302,12 @@
           baseColors,
           regionIdTexture: regionIdTex ?? "",
           deltaTexture: deltaTex ?? "",
+          blockFlags,
         });
       }
 
       return {
-        version: 2,
+        version,
         resolution: [resolution, resolution],
         regionCount,
         regions,
@@ -354,18 +365,16 @@
       console.log('渲染数据:', data);
 
       for (const region of data.regions) {
-        const { bbox, baseColors, regionIdTexture, deltaTexture } = region;
+        const { bbox, baseColors, regionIdTexture, deltaTexture, blockFlags = 0 } = region;
         const { x, y, w, h } = bbox;
 
-        console.log(`区域 ${region.id}: bbox=(${x}, ${y}, ${w}x${h}), baseColors=${baseColors.length}`);
+        console.log(`区域 ${region.id}: bbox=(${x}, ${y}, ${w}x${h}), baseColors=${baseColors.length}, blockFlags=${blockFlags}`);
 
-        // 解码纹理
         const regionIdTex = regionIdTexture ? base64ToUint8Array(regionIdTexture) : null;
         const deltaTex = base64ToUint8Array(deltaTexture);
 
         console.log(`regionIdTex: ${regionIdTex ? regionIdTex.length : 'null'}, deltaTex: ${deltaTex.length}`);
 
-        // 渲染每个像素
         let renderedCount = 0;
         let skippedZero = 0;
         let skippedNoBase = 0;
@@ -373,13 +382,11 @@
           for (let px = 0; px < w; px++) {
             const localIdx = py * w + px;
 
-            // 检查掩码（regionId 为 0 表示无效像素）
             if (regionIdTex && regionIdTex[localIdx] === 0) {
               skippedZero++;
               continue;
             }
 
-            // 获取基础色调索引
             let baseIdx;
             if (regionIdTex) {
               baseIdx = regionIdTex[localIdx] - 1;
@@ -393,23 +400,23 @@
               continue;
             }
 
-            // 处理 delta（为空则全零）
             let dH = 0, dS = 0, dL = 0;
             if (deltaTex.length > 0) {
-              // FTX 2.0 反量化：deltaTex 存储的是 0~63/0~31 的量化值
-              dH = dequantizeH(deltaTex[localIdx * 3]);
-              dS = dequantizeS(deltaTex[localIdx * 3 + 1]);
-              dL = dequantizeL(deltaTex[localIdx * 3 + 2]);
+              // 根据位置获取自适应量化范围
+              const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+              const range = getRangeForBlock(blockFlags, blockIdx);
+              
+              dH = dequantizeH(deltaTex[localIdx * 3], range);
+              dS = dequantizeS(deltaTex[localIdx * 3 + 1], range);
+              dL = dequantizeL(deltaTex[localIdx * 3 + 2], range);
             }
 
-            // 计算最终 HSL
             let finalH = base.h + dH;
             if (finalH < 0) finalH += 1.0;
             if (finalH > 1.0) finalH -= 1.0;
             const finalS = Math.max(0, Math.min(1, base.s + dS));
             const finalL = Math.max(0, Math.min(1, base.l + dL));
 
-            // 转换为 RGB 并绘制
             const rgb = hslToRgb(finalH, finalS, finalL);
             ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
             ctx.fillRect(x + px, y + py, 1, 1);
@@ -419,13 +426,14 @@
 
         console.log(`区域 ${region.id} 渲染了 ${renderedCount} 像素, 跳过零值: ${skippedZero}, 跳过无效索引: ${skippedNoBase}`);
 
-        // 显示统计信息
         stats.innerHTML += `
           <div>区域 ${region.id}:</div>
           <div>  - BBox: (${x}, ${y}, ${w}x${h})</div>
           <div>  - 基础色调数: ${baseColors.length}</div>
           <div>  - 渲染像素: ${renderedCount}</div>
           <div>  - 量化格式: ${data.quantization || 'uint8'}</div>
+          <div>  - FTX版本: ${data.version}</div>
+          <div>  - blockFlags: ${blockFlags.toString(2).padStart(16, '0')}</div>
           <div>  - regionIdTex: ${regionIdTex ? regionIdTex.length + ' 字节' : '无（单色调）'}</div>
           <div>  - deltaTex: ${deltaTex.length} 字节</div>
         `;

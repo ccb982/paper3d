@@ -227,9 +227,9 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     const regionIdTex = region.regionIdTexture ? base64ToUint8(region.regionIdTexture) : null;
     const deltaTex = base64ToUint8(region.deltaTexture);
 
-    // Region Header: ID(2) + BBox(8) + ColorCount(2) + Colors(N * 12)
+    // Region Header: ID(2) + BBox(8) + ColorCount(2) + blockFlags(2) + Colors(N * 12)
     const colorCount = baseColors.length;
-    const regionHeaderSize = 2 + 8 + 2 + colorCount * 12;
+    const regionHeaderSize = 2 + 8 + 2 + 2 + colorCount * 12;
     const regionHeader = new ArrayBuffer(regionHeaderSize);
     const rView = new DataView(regionHeader);
     let rOffset = 0;
