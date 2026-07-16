@@ -1383,16 +1383,32 @@ export const BaseColorEditor: React.FC = () => {
 
   // 取色
   const pickColor = useCallback((px: number, py: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const pixel = ctx.getImageData(px, py, 1, 1).data;
-    const hex = '#' + [pixel[0], pixel[1], pixel[2]]
+    if (!baseTexture) {
+      console.warn('取色器：baseTexture 为空，无法取色');
+      return;
+    }
+    if (px < 0 || px >= TEX_SIZE || py < 0 || py >= TEX_SIZE) {
+      console.warn('取色器：坐标超出范围', { px, py });
+      return;
+    }
+    const idx = (py * TEX_SIZE + px) * 4;
+    const r = baseTexture.data[idx];
+    const g = baseTexture.data[idx + 1];
+    const b = baseTexture.data[idx + 2];
+    const a = baseTexture.data[idx + 3];
+    
+    console.log('[取色器] 采样', { px, py, r, g, b, a });
+    
+    if (a === 0) {
+      console.warn('取色器：采样点为透明');
+      return;
+    }
+    
+    const hex = '#' + [r, g, b]
       .map(v => v.toString(16).padStart(2, '0'))
       .join('');
     setBrushColor(hex);
-  }, []);
+  }, [baseTexture]);
 
   // 在基础色纹理上涂色
   const paintOnBase = useCallback((px: number, py: number) => {
@@ -1493,13 +1509,21 @@ export const BaseColorEditor: React.FC = () => {
         }
       }
     } else if (currentTool === 'paint') {
+      if (mode !== 'base2') {
+        console.warn('画笔仅在基础色模式下可用');
+        return;
+      }
       saveToHistory();
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'picker') {
+      if (mode !== 'base2') {
+        console.warn('取色器仅在基础色模式下可用');
+        return;
+      }
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -1516,10 +1540,10 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
 
-    if (isDrawing && currentTool === 'paint') {
+    if (isDrawing && currentTool === 'paint' && mode === 'base2') {
       paintOnBase(pixel.x, pixel.y);
     }
-  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, drawingPolygon, snapPointToExisting]);
+  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, drawingPolygon, snapPointToExisting, mode]);
 
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture) {
@@ -1575,19 +1599,14 @@ export const BaseColorEditor: React.FC = () => {
         });
       }
 
-      if (bbox && currentFrame?.regionIdTex.length > 0 && sharedBaseColors.length > 0) {
-        const displayBaseTexture = buildBaseTextureFromRegionId(
-          sharedBaseColors,
-          currentFrame.regionIdTex,
-          bbox,
-          TEX_SIZE
-        );
-        
+      if (baseTexture) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
-        ctx.clip();
-        ctx.putImageData(displayBaseTexture, 0, 0);
+        if (bbox) {
+          ctx.beginPath();
+          ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
+          ctx.clip();
+        }
+        ctx.putImageData(baseTexture, 0, 0);
         ctx.restore();
       } else if (bgImageData) {
         ctx.putImageData(bgImageData, 0, 0);
@@ -2217,7 +2236,7 @@ export const BaseColorEditor: React.FC = () => {
         </label>
         <button
           onClick={() => { setCurrentTool('paint'); setDrawingPolygon(null); }}
-          disabled={!baseTexture}
+          disabled={!baseTexture || mode !== 'base2'}
           style={{
             padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
             background: currentTool === 'paint' ? '#1890ff' : '#f0f0f0',
@@ -2229,6 +2248,7 @@ export const BaseColorEditor: React.FC = () => {
         </button>
         <button
           onClick={() => { setCurrentTool('picker'); setDrawingPolygon(null); }}
+          disabled={mode !== 'base2'}
           style={{
             padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
             background: currentTool === 'picker' ? '#1890ff' : '#f0f0f0',
