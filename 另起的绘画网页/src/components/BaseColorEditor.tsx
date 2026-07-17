@@ -18,6 +18,8 @@ import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
 import { useAppStore } from '../stores/useAppStore';
 import type { SharedBaseColor } from '../stores/useAppStore';
+import { packMultiFrameToBinary } from '../utils/multiFrameExport';
+import { compressToGzip } from '../utils/binaryCompression';
 
 const MERGE_HUE_THRESHOLD = 0.02;
 const MERGE_SAT_THRESHOLD = 0.05;
@@ -2674,6 +2676,66 @@ export const BaseColorEditor: React.FC = () => {
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
         >
           清除结果
+        </button>
+        <button
+          onClick={async () => {
+            const state = useAppStore.getState();
+            const { frames, sharedBaseColors } = state.skillGroupEditor;
+            const validFrames = frames.filter(f => f.bbox && f.regionIdTex && f.regionIdTex.length > 0);
+            if (validFrames.length === 0) {
+              alert('没有可导出的帧（需要先提取基础色）');
+              return;
+            }
+
+            const sortedColors = [...sharedBaseColors].sort((a, b) => a.id - b.id);
+            const idToIndex = new Map<number, number>();
+            sortedColors.forEach((c, idx) => idToIndex.set(c.id, idx));
+
+            const exportFrames = validFrames.map(frame => {
+              const origRegionIdTex = frame.regionIdTex!;
+              const newRegionIdTex = new Uint8Array(origRegionIdTex.length);
+              for (let i = 0; i < origRegionIdTex.length; i++) {
+                const id = origRegionIdTex[i];
+                if (id === 0) {
+                  newRegionIdTex[i] = 0;
+                } else {
+                  const idx = idToIndex.get(id);
+                  if (idx === undefined) {
+                    console.warn(`颜色ID ${id} 不在调色板中，可能已被合并或删除，该像素将被忽略`);
+                    newRegionIdTex[i] = 0;
+                  } else {
+                    newRegionIdTex[i] = idx + 1;
+                  }
+                }
+              }
+              return {
+                name: frame.name || '未命名',
+                width: 512,
+                height: 512,
+                bbox: frame.bbox!,
+                regionIdTex: newRegionIdTex,
+                deltaTex: frame.deltaTex!,
+                blockFlags: frame.blockFlags ?? 0,
+              };
+            });
+
+            const binary = packMultiFrameToBinary(sortedColors, exportFrames);
+            const gzipped = await compressToGzip(binary);
+            const url = URL.createObjectURL(gzipped);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `multiframe_export_${Date.now()}.ftx3.gz`;
+            a.click();
+            URL.revokeObjectURL(url);
+          }}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: '#13c2c2',
+            color: '#fff',
+            border: '1px solid #d9d9d9',
+          }}
+        >
+          导出多帧纹理
         </button>
       </div>
 
