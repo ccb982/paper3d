@@ -13,6 +13,7 @@ import {
   dequantizeH,
   dequantizeS,
   dequantizeL,
+  uint8ToBase64,
 } from '../core/ftxCore';
 
 export {
@@ -1334,8 +1335,8 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
       id: ri,
       bbox,
       baseColors,
-      regionIdTexture: regionIdTex ? bufferToBase64(regionIdTex.buffer) : undefined,
-      deltaTexture: bufferToBase64(deltaTex.buffer),
+      regionIdTexture: regionIdTex ? uint8ToBase64(regionIdTex) : undefined,
+      deltaTexture: uint8ToBase64(deltaTex),
       blockFlags,
     });
   }
