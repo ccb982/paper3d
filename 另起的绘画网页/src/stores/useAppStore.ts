@@ -344,6 +344,8 @@ interface AppState {
       dashedPolygons: Point[][];
       baseTexture: ImageData | null;
       residualTexture: ImageData | null;
+      residualTexture888: ImageData | null;
+      residualTexture565: ImageData | null;
       deltaTex: Uint8Array;
       blockFlags: number;
       bbox: { x: number; y: number; w: number; h: number } | null;
@@ -363,6 +365,8 @@ interface AppState {
     dashedPolygons: Point[][];
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
+    residualTexture888: ImageData | null;
+    residualTexture565: ImageData | null;
     deltaTex: Uint8Array;
     blockFlags: number;
     bbox: { x: number; y: number; w: number; h: number } | null;
@@ -1924,6 +1928,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         dashedPolygons: [],
         baseTexture: null,
         residualTexture: null,
+        residualTexture888: null,
+        residualTexture565: null,
         deltaTex: new Uint8Array(0),
         blockFlags: 0,
         bbox: null,

@@ -14,6 +14,7 @@ import {
   getAdaptiveBlockIndex,
   getRangeForBlock,
   uint8ToBase64,
+  packRGB565,
 } from '../core/ftxCore';
 import { compressToBinary } from '../utils/binaryCompression';
 import type { CompressionResultV2 } from '../utils/colorCompressor';
@@ -120,9 +121,18 @@ export class RegionEntity {
         const srcY = Math.floor((1 - v) * h);
         const srcIdx = srcY * w + srcX;
 
-        resampledDelta[(ty * textureSize + tx) * 3] = deltaTex[srcIdx * 3];
-        resampledDelta[(ty * textureSize + tx) * 3 + 1] = deltaTex[srcIdx * 3 + 1];
-        resampledDelta[(ty * textureSize + tx) * 3 + 2] = deltaTex[srcIdx * 3 + 2];
+        const hVal = deltaTex[srcIdx * 3];
+        const sVal = deltaTex[srcIdx * 3 + 1];
+        const lVal = deltaTex[srcIdx * 3 + 2];
+
+        const packed = packRGB565(sVal, hVal, lVal);
+        const decodedH = (packed >> 5) & 0x3F;
+        const decodedS = (packed >> 11) & 0x1F;
+        const decodedL = packed & 0x1F;
+
+        resampledDelta[(ty * textureSize + tx) * 3] = decodedH;
+        resampledDelta[(ty * textureSize + tx) * 3 + 1] = decodedS;
+        resampledDelta[(ty * textureSize + tx) * 3 + 2] = decodedL;
 
         if (resampledRegionId && regionIdTex) {
           resampledRegionId[ty * textureSize + tx] = regionIdTex[srcIdx];
