@@ -656,6 +656,9 @@ export const BaseColorEditor: React.FC = () => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { regionIdTex: val });
   }, [activeFrameId, updateSkillFrame]);
 
+  const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
+  const [blockFlags, setBlockFlags] = useState(0);
+
   useEffect(() => {
     if (frames.length === 0) {
       addSkillFrame('帧 1');
@@ -1287,9 +1290,8 @@ export const BaseColorEditor: React.FC = () => {
     
     const { w, h } = bbox;
     const tempDeltas = new Float32Array(w * h * 3);
-    const blockMax = new Float32Array(16 * 3);
     
-    // 第一遍扫描：计算每个块的最大残差绝对值
+    // 第一遍扫描：计算残差
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const x = bbox.x + px;
@@ -1316,56 +1318,65 @@ export const BaseColorEditor: React.FC = () => {
           tempDeltas[idx3 * 3] = dH;
           tempDeltas[idx3 * 3 + 1] = dS;
           tempDeltas[idx3 * 3 + 2] = dL;
-          
-          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-          const baseIdx = blockIdx * 3;
-          blockMax[baseIdx] = Math.max(blockMax[baseIdx], Math.abs(dH));
-          blockMax[baseIdx + 1] = Math.max(blockMax[baseIdx + 1], Math.abs(dS));
-          blockMax[baseIdx + 2] = Math.max(blockMax[baseIdx + 2], Math.abs(dL));
         }
       }
     }
     
-    // 统计每个块中残差在 [-0.25, 0.25] 范围内的像素比例
-    const blockPixelCount = new Uint32Array(16);
-    const blockSmallCount = new Uint32Array(16);
-    for (let py = 0; py < h; py++) {
-      for (let px = 0; px < w; px++) {
-        const x = bbox.x + px;
-        const y = bbox.y + py;
-        const idx = (y * TEX_SIZE + x) * 4;
-        if (baseTexture.data[idx + 3] > 0) {
-          const idx3 = py * w + px;
-          const dH = tempDeltas[idx3 * 3];
-          const dS = tempDeltas[idx3 * 3 + 1];
-          const dL = tempDeltas[idx3 * 3 + 2];
-          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-          blockPixelCount[blockIdx]++;
-          if (Math.abs(dH) <= 0.25 && Math.abs(dS) <= 0.25 && Math.abs(dL) <= 0.25) {
-            blockSmallCount[blockIdx]++;
+    // 确定量化范围：第一次计算时生成并保存，后续复用
+    let ranges: Float32Array;
+    if (residualRanges) {
+      ranges = residualRanges;
+    } else {
+      const blockMax = new Float32Array(16 * 3);
+      const blockPixelCount = new Uint32Array(16);
+      const blockSmallCount = new Uint32Array(16);
+      
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const x = bbox.x + px;
+          const y = bbox.y + py;
+          const idx = (y * TEX_SIZE + x) * 4;
+          if (baseTexture.data[idx + 3] > 0) {
+            const idx3 = py * w + px;
+            const dH = tempDeltas[idx3 * 3];
+            const dS = tempDeltas[idx3 * 3 + 1];
+            const dL = tempDeltas[idx3 * 3 + 2];
+            
+            const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+            const baseIdx = blockIdx * 3;
+            blockMax[baseIdx] = Math.max(blockMax[baseIdx], Math.abs(dH));
+            blockMax[baseIdx + 1] = Math.max(blockMax[baseIdx + 1], Math.abs(dS));
+            blockMax[baseIdx + 2] = Math.max(blockMax[baseIdx + 2], Math.abs(dL));
+            
+            blockPixelCount[blockIdx]++;
+            if (Math.abs(dH) <= 0.25 && Math.abs(dS) <= 0.25 && Math.abs(dL) <= 0.25) {
+              blockSmallCount[blockIdx]++;
+            }
           }
         }
       }
-    }
-    
-    // 决策每个块的档位：70%以上像素残差在 [-0.25, 0.25] 范围内使用窄范围
-    let blockFlags = 0;
-    const ranges = new Float32Array(16);
-    for (let b = 0; b < 16; b++) {
-      if (blockPixelCount[b] > 0) {
-        const ratio = blockSmallCount[b] / blockPixelCount[b];
-        if (ratio >= 0.7) {
-          blockFlags |= (1 << b);
-          ranges[b] = 0.25;
+      
+      const newBlockFlags = 0;
+      ranges = new Float32Array(16);
+      for (let b = 0; b < 16; b++) {
+        if (blockPixelCount[b] > 0) {
+          const ratio = blockSmallCount[b] / blockPixelCount[b];
+          if (ratio >= 0.7) {
+            newBlockFlags |= (1 << b);
+            ranges[b] = 0.25;
+          } else {
+            ranges[b] = 0.5;
+          }
         } else {
           ranges[b] = 0.5;
         }
-      } else {
-        ranges[b] = 0.5;
       }
+      
+      setResidualRanges(ranges);
+      setBlockFlags(newBlockFlags);
     }
     
-    // 第二遍扫描：使用自适应范围量化残差
+    // 第二遍扫描：使用固定的量化范围量化残差
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const x = bbox.x + px;
@@ -1393,25 +1404,26 @@ export const BaseColorEditor: React.FC = () => {
       updateSkillFrame(activeFrameId, { blockFlags });
     }
     setTimeout(() => saveToHistory(), 0);
-  }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame]);
+  }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges]);
 
   // 更新基础色并重新生成纹理
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
     updateColorInGlobal(id, newHSL, activeFrameId);
 
-    const currentFrame = frames.find(f => f.id === activeFrameId);
+    const state = useAppStore.getState();
+    const currentFrame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
     if (currentFrame && currentFrame.bbox) {
       const newBaseTexture = buildBaseTextureFromRegionId(
-        sharedBaseColors,
+        state.skillGroupEditor.sharedBaseColors,
         currentFrame.regionIdTex,
         currentFrame.bbox,
         TEX_SIZE
       );
-      updateSkillFrame(activeFrameId, { baseTexture: newBaseTexture });
+      updateSkillFrame(currentFrame.id, { baseTexture: newBaseTexture });
       
       recalculateResidual();
     }
-  }, [activeFrameId, frames, sharedBaseColors, updateSkillFrame, updateColorInGlobal, recalculateResidual]);
+  }, [updateSkillFrame, updateColorInGlobal, recalculateResidual]);
 
   const handlePickColor = useCallback((id: number) => {
     setPickingId(prev => prev === id ? null : id);
@@ -1440,6 +1452,8 @@ export const BaseColorEditor: React.FC = () => {
     }
     
     setSelectedBaseColorId(null);
+    setResidualRanges(null);
+    setBlockFlags(0);
     
     setTimeout(() => {
       recalculateResidual();
@@ -2440,6 +2454,8 @@ export const BaseColorEditor: React.FC = () => {
             setBaseTexture(null);
             setResidualTexture(null);
             setBbox(null);
+            setResidualRanges(null);
+            setBlockFlags(0);
           }}
           disabled={!baseTexture && !residualTexture}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}

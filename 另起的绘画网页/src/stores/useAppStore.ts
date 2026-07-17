@@ -2116,11 +2116,31 @@ export const useAppStore = create<AppState>((set, get) => ({
         const removeIdx = keepIdx === idx ? mergeIdx : idx;
         const keep = colors[keepIdx];
         const remove = colors[removeIdx];
+        const keepId = keep.id;
+        const removeId = remove.id;
 
         keep.frameIds = Array.from(new Set([...keep.frameIds, ...remove.frameIds]));
         keep.area += remove.area;
 
         colors.splice(removeIdx, 1);
+
+        const updatedFrames = state.skillGroupEditor.frames.map(frame => {
+          if (!frame.regionIdTex || frame.regionIdTex.length === 0) return frame;
+          const newTex = new Uint8Array(frame.regionIdTex);
+          for (let i = 0; i < newTex.length; i++) {
+            if (newTex[i] === removeId) newTex[i] = keepId;
+          }
+          return { ...frame, regionIdTex: newTex };
+        });
+
+        set({
+          skillGroupEditor: {
+            ...state.skillGroupEditor,
+            sharedBaseColors: colors,
+            frames: updatedFrames,
+          },
+        });
+        return;
       }
     }
 
