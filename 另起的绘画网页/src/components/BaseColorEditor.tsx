@@ -3,6 +3,8 @@ import {
   clusterAndGenerateTexturesV2,
   hslToRgb,
   rgbToHsl,
+} from '../utils/colorCompressor';
+import {
   quantizeH,
   quantizeS,
   quantizeL,
@@ -11,7 +13,7 @@ import {
   dequantizeL,
   getAdaptiveBlockIndex,
   getRangeForBlock,
-} from '../utils/colorCompressor';
+} from '../core/ftxCore';
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
 import { useAppStore } from '../stores/useAppStore';

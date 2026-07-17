@@ -1,21 +1,33 @@
 import { useAppStore } from '../stores/useAppStore';
 import { computeRegionsExact } from './regionDetectionExact';
 import type { Point } from '../types';
+import {
+  ADAPTIVE_BLOCK_COLS,
+  ADAPTIVE_BLOCK_ROWS,
+  ADAPTIVE_TOTAL_BLOCKS,
+  getAdaptiveBlockIndex,
+  getRangeForBlock,
+  quantizeH,
+  quantizeS,
+  quantizeL,
+  dequantizeH,
+  dequantizeS,
+  dequantizeL,
+} from '../core/ftxCore';
 
-// ==================== 自适应量化 4x4 ====================
-export const ADAPTIVE_BLOCK_COLS = 4;
-export const ADAPTIVE_BLOCK_ROWS = 4;
-export const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
-
-export function getAdaptiveBlockIndex(x: number, y: number, w: number, h: number): number {
-    const col = Math.min(Math.floor((x / w) * ADAPTIVE_BLOCK_COLS), ADAPTIVE_BLOCK_COLS - 1);
-    const row = Math.min(Math.floor((y / h) * ADAPTIVE_BLOCK_ROWS), ADAPTIVE_BLOCK_ROWS - 1);
-    return row * ADAPTIVE_BLOCK_COLS + col;
-}
-
-export function getRangeForBlock(flags: number, blockIdx: number): number {
-    return (flags & (1 << blockIdx)) ? 0.25 : 0.5;
-}
+export {
+  ADAPTIVE_BLOCK_COLS,
+  ADAPTIVE_BLOCK_ROWS,
+  ADAPTIVE_TOTAL_BLOCKS,
+  getAdaptiveBlockIndex,
+  getRangeForBlock,
+  quantizeH,
+  quantizeS,
+  quantizeL,
+  dequantizeH,
+  dequantizeS,
+  dequantizeL,
+};
 
 // ==================== 颜色空间转换 ====================
 export function srgbToLinear(c: number): number {
@@ -24,9 +36,9 @@ export function srgbToLinear(c: number): number {
 }
 
 export function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
-  const rL = srgbToLinear(r);
-  const gL = srgbToLinear(g);
-  const bL = srgbToLinear(b);
+  const rL = r / 255;
+  const gL = g / 255;
+  const bL = b / 255;
   const max = Math.max(rL, gL, bL), min = Math.min(rL, gL, bL);
   let h = 0, s = 0, l = (max + min) / 2;
   if (max !== min) {
@@ -64,38 +76,10 @@ export function hslToRgb(h: number, s: number, l: number): { r: number; g: numbe
     b = hue2rgb(p, q, h - 1/3);
   }
   return { 
-    r: Math.round(linearToSrgb(r) * 255), 
-    g: Math.round(linearToSrgb(g) * 255), 
-    b: Math.round(linearToSrgb(b) * 255) 
+    r: Math.round(r * 255), 
+    g: Math.round(g * 255), 
+    b: Math.round(b * 255) 
   };
-}
-
-// ==================== 量化/反量化 ====================
-export function quantizeH(dH: number, range: number = 0.5): number {
-    const clamped = Math.max(-range, Math.min(range, dH));
-    return Math.round(((clamped + range) / (2 * range)) * 63);
-}
-
-export function dequantizeH(qH: number, range: number = 0.5): number {
-    return (qH / 63) * 2 * range - range;
-}
-
-export function quantizeS(dS: number, range: number = 0.5): number {
-    const clamped = Math.max(-range, Math.min(range, dS));
-    return Math.round(((clamped + range) / (2 * range)) * 31);
-}
-
-export function dequantizeS(qS: number, range: number = 0.5): number {
-    return (qS / 31) * 2 * range - range;
-}
-
-export function quantizeL(dL: number, range: number = 0.5): number {
-    const clamped = Math.max(-range, Math.min(range, dL));
-    return Math.round(((clamped + range) / (2 * range)) * 31);
-}
-
-export function dequantizeL(qL: number, range: number = 0.5): number {
-    return (qL / 31) * 2 * range - range;
 }
 
 // ==================== 区域掩码光栅化 ====================
@@ -757,12 +741,11 @@ function hardRadiusClustering(
 ): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array } {
   const RADIUS = 0.25;
   const MIN_PIXELS = Math.max(10, count * 0.005);
+  const MAX_ITER = 5;
 
   const order = Array.from({ length: count }, (_, i) => i);
-  shuffle(order);
 
   const clusters: Cluster[] = [];
-
   for (const idx of order) {
     const h = hsl[idx * 3];
     const s = hsl[idx * 3 + 1];
@@ -778,7 +761,6 @@ function hardRadiusClustering(
       const dh = deltaHue(h, cl.centerH);
       const ds = Math.abs(s - cl.centerS);
       const dl = Math.abs(l - cl.centerL);
-
       if (dh <= RADIUS && ds <= RADIUS && dl <= RADIUS) {
         const dist = dh * 1.0 + ds * 0.5 + dl * 0.5;
         if (dist < bestDist) {
@@ -815,68 +797,82 @@ function hardRadiusClustering(
     }
   }
 
-  for (let c = 0; c < clusters.length; c++) {
-    const cl = clusters[c];
-    let sumH = 0, sumS = 0, sumL = 0;
-    for (const idx of cl.pixels) {
-      sumH += hsl[idx * 3];
-      sumS += hsl[idx * 3 + 1];
-      sumL += hsl[idx * 3 + 2];
+  for (let iter = 0; iter < MAX_ITER; iter++) {
+    for (const cl of clusters) {
+      cl.pixels = [];
+      cl.sumH = 0;
+      cl.sumS = 0;
+      cl.sumL = 0;
+      cl.bboxCenterX = 0;
+      cl.bboxCenterY = 0;
     }
-    const n = cl.pixels.length;
-    const newH = sumH / n;
-    const newS = sumS / n;
-    const newL = sumL / n;
 
-    const kept: number[] = [];
-    for (const idx of cl.pixels) {
-      const dh = deltaHue(hsl[idx * 3], newH);
-      const ds = Math.abs(hsl[idx * 3 + 1] - newS);
-      const dl = Math.abs(hsl[idx * 3 + 2] - newL);
-      if (dh <= RADIUS && ds <= RADIUS && dl <= RADIUS) {
-        kept.push(idx);
+    const newClusters: Cluster[] = [];
+    for (let idx = 0; idx < count; idx++) {
+      const h = hsl[idx * 3];
+      const s = hsl[idx * 3 + 1];
+      const l = hsl[idx * 3 + 2];
+      const x = coords[idx * 2];
+      const y = coords[idx * 2 + 1];
+
+      let bestClusterIdx = -1;
+      let bestDist = Infinity;
+
+      for (let c = 0; c < clusters.length; c++) {
+        const cl = clusters[c];
+        const dh = deltaHue(h, cl.centerH);
+        const ds = Math.abs(s - cl.centerS);
+        const dl = Math.abs(l - cl.centerL);
+        if (dh <= RADIUS && ds <= RADIUS && dl <= RADIUS) {
+          const dist = dh * 1.0 + ds * 0.5 + dl * 0.5;
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestClusterIdx = c;
+          }
+        }
+      }
+
+      if (bestClusterIdx !== -1) {
+        const cl = clusters[bestClusterIdx];
+        cl.pixels.push(idx);
+        cl.sumH += h;
+        cl.sumS += s;
+        cl.sumL += l;
+        cl.bboxCenterX += x;
+        cl.bboxCenterY += y;
+      } else {
+        newClusters.push({
+          centerH: h,
+          centerS: s,
+          centerL: l,
+          pixels: [idx],
+          sumH: h,
+          sumS: s,
+          sumL: l,
+          bboxCenterX: x,
+          bboxCenterY: y,
+        });
       }
     }
 
-    if (kept.length === 0) {
-      let minDist = Infinity;
-      let bestIdx = cl.pixels[0];
-      for (const idx of cl.pixels) {
-        const dh = deltaHue(hsl[idx * 3], newH);
-        const ds = Math.abs(hsl[idx * 3 + 1] - newS);
-        const dl = Math.abs(hsl[idx * 3 + 2] - newL);
-        const dist = dh * 1.0 + ds * 0.5 + dl * 0.5;
-        if (dist < minDist) { minDist = dist; bestIdx = idx; }
-      }
-      kept.push(bestIdx);
+    clusters.push(...newClusters);
+
+    for (const cl of clusters) {
+      const cnt = cl.pixels.length;
+      if (cnt === 0) continue;
+      cl.centerH = cl.sumH / cnt;
+      cl.centerS = cl.sumS / cnt;
+      cl.centerL = cl.sumL / cnt;
+      cl.bboxCenterX = cl.bboxCenterX / cnt;
+      cl.bboxCenterY = cl.bboxCenterY / cnt;
     }
 
-    cl.pixels = kept;
-    let sH = 0, sS = 0, sL = 0;
-    for (const idx of cl.pixels) {
-      sH += hsl[idx * 3];
-      sS += hsl[idx * 3 + 1];
-      sL += hsl[idx * 3 + 2];
-    }
-    const cnt = cl.pixels.length;
-    cl.centerH = sH / cnt;
-    cl.centerS = sS / cnt;
-    cl.centerL = sL / cnt;
-    cl.sumH = sH;
-    cl.sumS = sS;
-    cl.sumL = sL;
-    let cx = 0, cy = 0;
-    for (const idx of cl.pixels) {
-      cx += coords[idx * 2];
-      cy += coords[idx * 2 + 1];
-    }
-    cl.bboxCenterX = cx / cnt;
-    cl.bboxCenterY = cy / cnt;
+    const nonEmpty = clusters.filter(c => c.pixels.length > 0);
+    clusters.length = 0;
+    clusters.push(...nonEmpty);
+
+    if (newClusters.length === 0 && iter > 0) break;
   }
-
-  const nonEmpty = clusters.filter(c => c.pixels.length > 0);
-  clusters.length = 0;
-  clusters.push(...nonEmpty);
 
   const largeClusters: Cluster[] = [];
   const smallClusters: Cluster[] = [];

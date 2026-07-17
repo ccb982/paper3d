@@ -6,13 +6,16 @@ import {
   rasterizeRegionMaskLocal,
   clusterAndGenerateTexturesV2,
   hslToRgb,
+} from '../utils/colorCompressor';
+import {
   dequantizeH,
   dequantizeS,
   dequantizeL,
   getAdaptiveBlockIndex,
   getRangeForBlock,
-} from '../utils/colorCompressor';
-import { compressToBinary, uint8ToBase64 } from '../utils/binaryCompression';
+  uint8ToBase64,
+} from '../core/ftxCore';
+import { compressToBinary } from '../utils/binaryCompression';
 import type { CompressionResultV2 } from '../utils/colorCompressor';
 
 export interface FtxTextureData {
@@ -220,8 +223,7 @@ export class RegionEntity {
           const dL = dequantizeL(deltaTexture[deltaIdx + 2], range);
 
           let finalH = base.h + dH;
-          if (finalH < 0) finalH += 1.0;
-          if (finalH > 1.0) finalH -= 1.0;
+          finalH = ((finalH % 1) + 1) % 1;
           const finalS = Math.max(0, Math.min(1, base.s + dS));
           const finalL = Math.max(0, Math.min(1, base.l + dL));
           finalHsl = { h: finalH, s: finalS, l: finalL };
@@ -232,8 +234,7 @@ export class RegionEntity {
           const dL = dequantizeL(deltaTexture[deltaIdx + 2], range);
           
           let finalH = base.h + dH;
-          if (finalH < 0) finalH += 1.0;
-          if (finalH > 1.0) finalH -= 1.0;
+          finalH = ((finalH % 1) + 1) % 1;
           const finalS = Math.max(0, Math.min(1, base.s + dS));
           const finalL = Math.max(0, Math.min(1, base.l + dL));
           finalHsl = { h: finalH, s: finalS, l: finalL };
