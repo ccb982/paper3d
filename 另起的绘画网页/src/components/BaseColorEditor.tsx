@@ -471,11 +471,6 @@ function buildBaseTextureFromRegionId(
     if (regionIdTex[i] > 0) uniqueIds.add(regionIdTex[i]);
   }
   const globalColorIds = globalColors.map(c => c.id);
-  console.log('[DEBUG] buildBaseTextureFromRegionId:', {
-    regionIdTexUniqueIds: Array.from(uniqueIds),
-    globalColorIds,
-    missingIds: Array.from(uniqueIds).filter(id => !globalColorIds.includes(id))
-  });
 
   const { w, h, x: offsetX, y: offsetY } = bbox;
   const canvas = document.createElement('canvas');
@@ -608,6 +603,9 @@ export const BaseColorEditor: React.FC = () => {
   const [blockFlags, setBlockFlags] = useState(0);
   
   const [showColorInfoOnClick, setShowColorInfoOnClick] = useState(false);
+  
+  const [debugShowBadPixels, setDebugShowBadPixels] = useState(false);
+  const [debugBadPixels, setDebugBadPixels] = useState<number[]>([]);
   
   const [colorInfo, setColorInfo] = useState<{
     x: number;
@@ -1352,6 +1350,20 @@ export const BaseColorEditor: React.FC = () => {
       3
     );
 
+    // 保存坏像素列表（用于调试高亮）
+    if (refinementResult.badPixels) {
+      setDebugBadPixels(refinementResult.badPixels);
+      if (refinementResult.badPixels.length > 0 && bbox) {
+        const { x: offsetX, y: offsetY, w } = bbox;
+        const badPixelCoords = refinementResult.badPixels.map(localIdx => {
+          const px = localIdx % w;
+          const py = Math.floor(localIdx / w);
+          return { x: offsetX + px, y: offsetY + py };
+        });
+        console.log(`[坏像素] 共 ${refinementResult.badPixels.length} 个，坐标列表:`, badPixelCoords);
+      }
+    }
+
     // 无论是否修正，都使用返回的最新 blockFlags 更新
     // 因为残差可能已变化（用户调HSL），需要重新评估块范围
     newBlockFlags = refinementResult.blockFlags;
@@ -1375,10 +1387,6 @@ export const BaseColorEditor: React.FC = () => {
       if (baseColorsCopy.length !== prevColorCount) {
         setSharedBaseColors([...baseColorsCopy]);
       }
-
-      console.log('[refineResiduals] 修正完成, changed=true, changedPixels=' + 
-        refinementResult.changedPixelCount + ', newBlockFlags=' + newBlockFlags.toString(2).padStart(16,'0') +
-        ', baseColors ' + prevColorCount + '->' + baseColorsCopy.length);
     }
 
     const deltaPacked = new Uint16Array(totalPixels);
@@ -1764,33 +1772,6 @@ export const BaseColorEditor: React.FC = () => {
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
 
-      if (currentFrame) {
-        const regionIdsPresent = currentFrame.regionIdTex && currentFrame.regionIdTex.length > 0;
-        const colorsPresent = sharedBaseColors.length > 0;
-        const bboxPresent = !!bbox;
-        
-        const regionIdTexSample = regionIdsPresent ? [
-          currentFrame.regionIdTex[0],
-          currentFrame.regionIdTex[Math.floor(currentFrame.regionIdTex.length / 2)],
-          currentFrame.regionIdTex[currentFrame.regionIdTex.length - 1]
-        ] : 'no regionIdTex';
-        
-        const colorIds = colorsPresent ? sharedBaseColors.slice(0, 10).map(c => c.id) : 'no colors';
-        
-        console.log(`[DEBUG] base2 RENDER frame=${currentFrame.id}:`, {
-          regionIdsPresent,
-          colorsPresent,
-          bboxPresent,
-          regionIdTexLength: regionIdsPresent ? currentFrame.regionIdTex.length : 0,
-          colorsLength: colorsPresent ? sharedBaseColors.length : 0,
-          regionIdTexSample,
-          colorIds,
-          hasMissingIds: regionIdsPresent && colorsPresent 
-            ? [...new Set(currentFrame.regionIdTex)].some(id => id > 0 && !sharedBaseColors.some(c => c.id === id))
-            : 'N/A'
-        });
-      }
-
       if (baseTexture) {
         ctx.save();
         if (bbox) {
@@ -2109,6 +2090,47 @@ export const BaseColorEditor: React.FC = () => {
       ctx.restore();
     }
 
+    // 调试：绘制坏像素高亮（所有模式都支持）
+    console.log('[坏像素渲染] 检查绘制条件:', {
+      debugShowBadPixels: debugShowBadPixels,
+      debugBadPixelsLength: debugBadPixels.length,
+      hasBbox: !!bbox,
+      mode: mode,
+    });
+    if (debugShowBadPixels && debugBadPixels.length > 0 && bbox) {
+      const { x: offsetX, y: offsetY, w, h } = bbox;
+      console.log('[坏像素渲染] 开始绘制高亮:', {
+        bbox: { x: offsetX, y: offsetY, w, h },
+        pixelCount: debugBadPixels.length,
+        firstFewCoords: debugBadPixels.slice(0, 5).map(localIdx => {
+          const px = localIdx % w;
+          const py = Math.floor(localIdx / w);
+          return { x: offsetX + px, y: offsetY + py };
+        }),
+      });
+      ctx.save();
+      ctx.fillStyle = 'white';
+      for (const localIdx of debugBadPixels) {
+        const px = localIdx % w;
+        const py = Math.floor(localIdx / w);
+        const globalX = offsetX + px;
+        const globalY = offsetY + py;
+        ctx.fillRect(globalX, globalY, 1, 1);
+      }
+      ctx.restore();
+      console.log('[坏像素渲染] 绘制完成');
+    } else {
+      if (!debugShowBadPixels) {
+        console.log('[坏像素渲染] 未绘制：debugShowBadPixels为false');
+      }
+      if (debugBadPixels.length === 0) {
+        console.log('[坏像素渲染] 未绘制：debugBadPixels为空');
+      }
+      if (!bbox) {
+        console.log('[坏像素渲染] 未绘制：bbox为空');
+      }
+    }
+
     // 7. 画笔光标
     if (mousePos && (currentTool === 'paint' || currentTool === 'picker')) {
       ctx.save();
@@ -2128,7 +2150,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors]);
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors, debugShowBadPixels, debugBadPixels]);
 
   useEffect(() => {
     const overlay = overlayRef.current;
@@ -2433,6 +2455,51 @@ export const BaseColorEditor: React.FC = () => {
           }}
         >
           {showColorInfoOnClick ? '✓ HSL检查' : 'HSL检查'}
+        </button>
+        <button
+          onClick={() => {
+            console.log('[坏像素按钮] 点击了按钮');
+            console.log('[坏像素按钮] 当前状态:', {
+              debugShowBadPixels: debugShowBadPixels,
+              debugBadPixelsLength: debugBadPixels.length,
+              hasBgImageData: !!bgImageData,
+              hasBbox: !!bbox,
+              baseColorsLength: baseColors.length,
+            });
+            
+            if (debugBadPixels.length === 0 && bgImageData && bbox && baseColors.length > 0) {
+              console.log('[坏像素按钮] 坏像素数据为空，触发recalculateResidual');
+              recalculateResidual();
+            } else if (debugBadPixels.length === 0) {
+              console.log('[坏像素按钮] 坏像素数据为空，但条件不满足:', {
+                bgImageData: !!bgImageData,
+                bbox: !!bbox,
+                baseColorsLength: baseColors.length,
+              });
+            }
+            
+            const newState = !debugShowBadPixels;
+            console.log('[坏像素按钮] 切换状态:', { from: debugShowBadPixels, to: newState });
+            setDebugShowBadPixels(newState);
+            if (newState && debugBadPixels.length > 0 && bbox) {
+              const { x: offsetX, y: offsetY, w } = bbox;
+              const badPixelCoords = debugBadPixels.map(localIdx => {
+                const px = localIdx % w;
+                const py = Math.floor(localIdx / w);
+                return { x: offsetX + px, y: offsetY + py };
+              });
+              console.log(`[坏像素] 共 ${debugBadPixels.length} 个，坐标列表:`, badPixelCoords);
+            }
+          }}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: debugShowBadPixels ? '#ff4d4f' : '#f0f0f0',
+            color: debugShowBadPixels ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+        >
+          {debugShowBadPixels ? '隐藏坏像素' : '显示坏像素'}
+          {debugBadPixels.length > 0 && ` (${debugBadPixels.length})`}
         </button>
         <button
           onClick={() => {

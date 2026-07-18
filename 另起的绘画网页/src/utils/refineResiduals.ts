@@ -48,7 +48,7 @@ export function refineResidualsAndColors(
   textureSize: number,
   hueThreshold: number = 0.01,
   maxNewColors: number = 3
-): { blockFlags: number; changed: boolean; changedPixelCount: number } {
+): { blockFlags: number; changed: boolean; changedPixelCount: number; badPixels: number[] } {
   const { w, h } = bbox;
   const totalPixels = w * h;
   const DELTA_THRESHOLD = 0.25;
@@ -71,11 +71,7 @@ export function refineResidualsAndColors(
     const py = Math.floor(idx / w);
     const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
 
-    const dH = tempDeltas[idx * 3];
-    let overlayH = base.h + dH;
-    overlayH = ((overlayH % 1) + 1) % 1;
-
-    const hDist = hueDistance(overlayH, bgHsl.h);
+    const hDist = hueDistance(base.h, bgHsl.h);
     if (hDist > hueThreshold) {
       badPixels.push(idx);
     }
@@ -109,7 +105,7 @@ export function refineResidualsAndColors(
         }
       }
     }
-    return { blockFlags, changed: false, changedPixelCount: 0 };
+    return { blockFlags, changed: false, changedPixelCount: 0, badPixels: [] };
   }
 
   // 步骤2：对每个异常像素，寻找最佳替代基础色
@@ -256,5 +252,5 @@ export function refineResidualsAndColors(
     }
   }
 
-  return { blockFlags: newBlockFlags, changed: true, changedPixelCount: changedCount };
+  return { blockFlags: newBlockFlags, changed: true, changedPixelCount: changedCount, badPixels };
 }
