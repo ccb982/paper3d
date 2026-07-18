@@ -616,10 +616,11 @@ export const BaseColorEditor: React.FC = () => {
     overlayHsl: { h: number; s: number; l: number };
     bgRgb: { r: number; g: number; b: number };
     bgHsl: { h: number; s: number; l: number };
+    baseColor: { h: number; s: number; l: number };
+    residualHsl: { h: number; s: number; l: number };
     hueDiff: number;
     meetsStandard: boolean;
     colorId: number;
-    baseColor: { h: number; s: number; l: number } | null;
   } | null>(null);
 
   useEffect(() => {
@@ -1707,7 +1708,8 @@ export const BaseColorEditor: React.FC = () => {
     const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
     
     const blockIdx = getAdaptiveBlockIndex(localX, localY, bbox.w, bbox.h);
-    const range = getRangeForBlock(blockFlags, blockIdx);
+    const frameBlockFlags = currentFrame.blockFlags ?? 0;
+    const range = getRangeForBlock(frameBlockFlags, blockIdx);
     
     const dH = dequantizeH(qH, range);
     const dS = dequantizeS(qS, range);
@@ -1721,11 +1723,12 @@ export const BaseColorEditor: React.FC = () => {
     
     const overlayRgb = hslToRgb(finalH, finalS, finalL);
     const overlayHsl = { h: finalH, s: finalS, l: finalL };
+    const residualHsl = { h: dH, s: dS, l: dL };
 
     const hueDiff = Math.abs(finalH - bgHsl.h);
     const correctedHueDiff = hueDiff > 0.5 ? 1 - hueDiff : hueDiff;
     
-    const THRESHOLD = 0.01;
+    const THRESHOLD = 0.015;
     const meetsStandard = correctedHueDiff <= THRESHOLD;
 
     setColorInfo({
@@ -1735,10 +1738,11 @@ export const BaseColorEditor: React.FC = () => {
       overlayHsl,
       bgRgb,
       bgHsl,
+      baseColor: { h: base.h, s: base.s, l: base.l },
+      residualHsl,
       hueDiff: correctedHueDiff,
       meetsStandard,
       colorId,
-      baseColor: { h: base.h, s: base.s, l: base.l },
     });
   }, [showColorInfoOnClick, getCanvasPixel, bgImageData, bbox, currentFrame, baseColors, blockFlags]);
 
@@ -2631,11 +2635,20 @@ export const BaseColorEditor: React.FC = () => {
             
             <div style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #eee' }}>
               <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>基础色 ID: {colorInfo.colorId}</div>
-              {colorInfo.baseColor && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '4px',
+                    backgroundColor: `hsl(${colorInfo.baseColor.h * 360}, ${colorInfo.baseColor.s * 100}%, ${colorInfo.baseColor.l * 100}%)`,
+                    border: '1px solid #ddd',
+                  }}
+                />
                 <div style={{ fontSize: '11px', color: '#666' }}>
                   基础色 HSL: ({colorInfo.baseColor.h.toFixed(4)}, {colorInfo.baseColor.s.toFixed(4)}, {colorInfo.baseColor.l.toFixed(4)})
                 </div>
-              )}
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: '16px' }}>
@@ -2686,13 +2699,20 @@ export const BaseColorEditor: React.FC = () => {
               </div>
             </div>
 
+            <div style={{ marginTop: '8px', padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>残差 HSL (delta):</div>
+              <div style={{ fontSize: '11px', fontFamily: 'monospace' }}>
+                dH: {colorInfo.residualHsl.h.toFixed(4)} | dS: {colorInfo.residualHsl.s.toFixed(4)} | dL: {colorInfo.residualHsl.l.toFixed(4)}
+              </div>
+            </div>
+
             <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #eee' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span style={{ fontSize: '12px' }}>色相差: </span>
                 <span style={{ fontWeight: 'bold', fontSize: '14px', color: colorInfo.meetsStandard ? '#52c41a' : '#ff4d4f' }}>
                   {colorInfo.hueDiff.toFixed(4)}
                 </span>
-                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: 0.01)</span>
+                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: 0.015)</span>
               </div>
               <div
                 style={{
