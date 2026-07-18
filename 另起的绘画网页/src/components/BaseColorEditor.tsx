@@ -606,6 +606,21 @@ export const BaseColorEditor: React.FC = () => {
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0);
+  
+  const [showColorInfoOnClick, setShowColorInfoOnClick] = useState(false);
+  
+  const [colorInfo, setColorInfo] = useState<{
+    x: number;
+    y: number;
+    overlayRgb: { r: number; g: number; b: number };
+    overlayHsl: { h: number; s: number; l: number };
+    bgRgb: { r: number; g: number; b: number };
+    bgHsl: { h: number; s: number; l: number };
+    hueDiff: number;
+    meetsStandard: boolean;
+    colorId: number;
+    baseColor: { h: number; s: number; l: number } | null;
+  } | null>(null);
 
   useEffect(() => {
     if (frames.length === 0) {
@@ -1332,7 +1347,7 @@ export const BaseColorEditor: React.FC = () => {
       bgImageData,
       tempDeltas,
       TEX_SIZE,
-      0.25,
+      0.01,
       3
     );
 
@@ -1643,6 +1658,89 @@ export const BaseColorEditor: React.FC = () => {
     }
     setIsDrawing(false);
   }, [isDrawing, baseTexture, saveToHistory, currentTool, handleRecluster]);
+
+  const handleColorInfoClick = useCallback((e: React.MouseEvent) => {
+    if (!showColorInfoOnClick) return;
+    
+    const pixel = getCanvasPixel(e);
+    const px = pixel.x;
+    const py = pixel.y;
+    
+    if (!bgImageData || !bbox || !currentFrame?.deltaPacked || !currentFrame?.regionIdTex) {
+      setColorInfo(null);
+      return;
+    }
+
+    const colorMapById = new Map<number, SharedBaseColor>();
+    for (const c of baseColors) {
+      colorMapById.set(c.id, c);
+    }
+
+    const inBbox = px >= bbox.x && px < bbox.x + bbox.w && py >= bbox.y && py < bbox.y + bbox.h;
+    
+    if (!inBbox) {
+      setColorInfo(null);
+      return;
+    }
+
+    const localX = px - bbox.x;
+    const localY = py - bbox.y;
+    const idx = localY * bbox.w + localX;
+    
+    const colorId = currentFrame.regionIdTex[idx];
+    const base = colorMapById.get(colorId);
+    
+    if (!base) {
+      setColorInfo(null);
+      return;
+    }
+
+    const bgIdx = (py * TEX_SIZE + px) * 4;
+    const bgRgb = {
+      r: bgImageData.data[bgIdx],
+      g: bgImageData.data[bgIdx + 1],
+      b: bgImageData.data[bgIdx + 2],
+    };
+    const bgHsl = rgbToHsl(bgRgb.r, bgRgb.g, bgRgb.b);
+
+    const packed = currentFrame.deltaPacked[idx];
+    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+    
+    const blockIdx = getAdaptiveBlockIndex(localX, localY, bbox.w, bbox.h);
+    const range = getRangeForBlock(blockFlags, blockIdx);
+    
+    const dH = dequantizeH(qH, range);
+    const dS = dequantizeS(qS, range);
+    const dL = dequantizeL(qL, range);
+
+    let finalH = base.h + dH;
+    if (finalH < 0) finalH += 1.0;
+    else if (finalH >= 1.0) finalH -= 1.0;
+    const finalS = Math.max(0, Math.min(1, base.s + dS));
+    const finalL = Math.max(0, Math.min(1, base.l + dL));
+    
+    const overlayRgb = hslToRgb(finalH, finalS, finalL);
+    const overlayHsl = { h: finalH, s: finalS, l: finalL };
+
+    const hueDiff = Math.abs(finalH - bgHsl.h);
+    const correctedHueDiff = hueDiff > 0.5 ? 1 - hueDiff : hueDiff;
+    
+    const THRESHOLD = 0.01;
+    const meetsStandard = correctedHueDiff <= THRESHOLD;
+
+    setColorInfo({
+      x: e.clientX,
+      y: e.clientY,
+      overlayRgb,
+      overlayHsl,
+      bgRgb,
+      bgHsl,
+      hueDiff: correctedHueDiff,
+      meetsStandard,
+      colorId,
+      baseColor: { h: base.h, s: base.s, l: base.l },
+    });
+  }, [showColorInfoOnClick, getCanvasPixel, bgImageData, bbox, currentFrame, baseColors, blockFlags]);
 
   // 右键菜单禁用
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -2321,6 +2419,18 @@ export const BaseColorEditor: React.FC = () => {
           叠加
         </button>
         <button
+          onClick={() => setShowColorInfoOnClick(!showColorInfoOnClick)}
+          disabled={!baseTexture || !residualTexture}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: showColorInfoOnClick ? '#faad14' : '#f0f0f0',
+            color: showColorInfoOnClick ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+        >
+          {showColorInfoOnClick ? '✓ HSL检查' : 'HSL检查'}
+        </button>
+        <button
           onClick={() => {
             setBaseTexture(null);
             setResidualTexture(null);
@@ -2427,6 +2537,7 @@ export const BaseColorEditor: React.FC = () => {
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
               onContextMenu={handleContextMenu}
+              onClick={handleColorInfoClick}
             />
             <canvas
               ref={webglCanvasRef}
@@ -2482,6 +2593,124 @@ export const BaseColorEditor: React.FC = () => {
             onRecluster={handleRecluster}
             onPickColor={handlePickColor}
           />
+        )}
+
+        {colorInfo && (
+          <div
+            style={{
+              position: 'fixed',
+              left: colorInfo.x + 10,
+              top: colorInfo.y + 10,
+              background: '#fff',
+              border: '1px solid #ccc',
+              borderRadius: '8px',
+              padding: '12px',
+              fontSize: '12px',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+              zIndex: 1000,
+              minWidth: '280px',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <span style={{ fontWeight: 'bold', fontSize: '13px' }}>像素颜色信息</span>
+              <button
+                onClick={() => setColorInfo(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '16px',
+                  cursor: 'pointer',
+                  color: '#999',
+                  padding: '0 4px',
+                }}
+              >
+                ×
+              </button>
+            </div>
+            
+            <div style={{ marginBottom: '8px', paddingBottom: '8px', borderBottom: '1px solid #eee' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>基础色 ID: {colorInfo.colorId}</div>
+              {colorInfo.baseColor && (
+                <div style={{ fontSize: '11px', color: '#666' }}>
+                  基础色 HSL: ({colorInfo.baseColor.h.toFixed(4)}, {colorInfo.baseColor.s.toFixed(4)}, {colorInfo.baseColor.l.toFixed(4)})
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '16px' }}>
+              <div>
+                <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>叠加色 (基础色+残差)</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '4px',
+                      backgroundColor: `rgb(${colorInfo.overlayRgb.r}, ${colorInfo.overlayRgb.g}, ${colorInfo.overlayRgb.b})`,
+                      border: '1px solid #ddd',
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '11px' }}>
+                      RGB: ({colorInfo.overlayRgb.r}, {colorInfo.overlayRgb.g}, {colorInfo.overlayRgb.b})
+                    </div>
+                    <div style={{ fontSize: '11px' }}>
+                      HSL: ({colorInfo.overlayHsl.h.toFixed(4)}, {colorInfo.overlayHsl.s.toFixed(4)}, {colorInfo.overlayHsl.l.toFixed(4)})
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>背景色 (原始)</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '4px',
+                      backgroundColor: `rgb(${colorInfo.bgRgb.r}, ${colorInfo.bgRgb.g}, ${colorInfo.bgRgb.b})`,
+                      border: '1px solid #ddd',
+                    }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '11px' }}>
+                      RGB: ({colorInfo.bgRgb.r}, {colorInfo.bgRgb.g}, {colorInfo.bgRgb.b})
+                    </div>
+                    <div style={{ fontSize: '11px' }}>
+                      HSL: ({colorInfo.bgHsl.h.toFixed(4)}, {colorInfo.bgHsl.s.toFixed(4)}, {colorInfo.bgHsl.l.toFixed(4)})
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #eee' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px' }}>色相差: </span>
+                <span style={{ fontWeight: 'bold', fontSize: '14px', color: colorInfo.meetsStandard ? '#52c41a' : '#ff4d4f' }}>
+                  {colorInfo.hueDiff.toFixed(4)}
+                </span>
+                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: 0.01)</span>
+              </div>
+              <div
+                style={{
+                  marginTop: '4px',
+                  padding: '4px 8px',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  textAlign: 'center',
+                  fontWeight: 'bold',
+                  backgroundColor: colorInfo.meetsStandard ? '#f6ffed' : '#fff2f0',
+                  color: colorInfo.meetsStandard ? '#52c41a' : '#ff4d4f',
+                  border: `1px solid ${colorInfo.meetsStandard ? '#b7eb8f' : '#ffccc7'}`,
+                }}
+              >
+                {colorInfo.meetsStandard ? '✓ 符合标准' : '✗ 不符合标准'}
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

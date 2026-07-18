@@ -46,7 +46,7 @@ export function refineResidualsAndColors(
   bgImageData: ImageData,
   tempDeltas: Float32Array,
   textureSize: number,
-  hueThreshold: number = 0.25,
+  hueThreshold: number = 0.01,
   maxNewColors: number = 3
 ): { blockFlags: number; changed: boolean; changedPixelCount: number } {
   const { w, h } = bbox;
