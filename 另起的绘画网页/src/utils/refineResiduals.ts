@@ -1,5 +1,5 @@
 import { rgbToHsl } from './colorCompressor';
-import { getAdaptiveBlockIndex, ADAPTIVE_TOTAL_BLOCKS } from '../core/ftxCore';
+import { getAdaptiveBlockIndex, ADAPTIVE_TOTAL_BLOCKS, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getRangeForBlock } from '../core/ftxCore';
 
 function hueDistance(h1: number, h2: number): number {
   let d = Math.abs(h1 - h2);
@@ -46,7 +46,7 @@ export function refineResidualsAndColors(
   bgImageData: ImageData,
   tempDeltas: Float32Array,
   textureSize: number,
-  hueThreshold: number = 0.01,
+  hueThreshold: number = 0.015,
   maxNewColors: number = 3
 ): { blockFlags: number; changed: boolean; changedPixelCount: number; badPixels: number[] } {
   const { w, h } = bbox;
@@ -59,7 +59,36 @@ export function refineResidualsAndColors(
     colorMapById.set(c.id, { h: c.h, s: c.s, l: c.l });
   }
 
-  // 步骤1：识别异常像素（叠加色与背景色色相差 > 阈值）
+  // 步骤1：先计算 blockFlags（用于后续量化/反量化）
+  let blockPixelCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+  let blockSmallCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+  for (let idx = 0; idx < totalPixels; idx++) {
+    const colorId = regionIdTex[idx];
+    if (colorId === 0) continue;
+    const px = idx % w;
+    const py = Math.floor(idx / w);
+    const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+    blockPixelCount[blockIdx]++;
+
+    const dH = tempDeltas[idx * 3];
+    const dS = tempDeltas[idx * 3 + 1];
+    const dL = tempDeltas[idx * 3 + 2];
+    if (Math.abs(dH) <= DELTA_THRESHOLD && Math.abs(dS) <= DELTA_THRESHOLD && Math.abs(dL) <= DELTA_THRESHOLD) {
+      blockSmallCount[blockIdx]++;
+    }
+  }
+
+  let blockFlags = 0;
+  for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
+    if (blockPixelCount[b] > 0) {
+      const ratio = blockSmallCount[b] / blockPixelCount[b];
+      if (ratio >= 0.95) {
+        blockFlags |= (1 << b);
+      }
+    }
+  }
+
+  // 步骤2：识别异常像素（使用量化/反量化后的最终色相与背景色比较，与HSL检查一致）
   const badPixels: number[] = [];
   for (let idx = 0; idx < totalPixels; idx++) {
     const colorId = regionIdTex[idx];
@@ -71,40 +100,34 @@ export function refineResidualsAndColors(
     const py = Math.floor(idx / w);
     const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
 
-    const hDist = hueDistance(base.h, bgHsl.h);
+    // 获取该像素的残差（浮点值）
+    const dH = tempDeltas[idx * 3];
+    const dS = tempDeltas[idx * 3 + 1];
+    const dL = tempDeltas[idx * 3 + 2];
+
+    // 获取自适应块范围
+    const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+    const range = getRangeForBlock(blockFlags, blockIdx);
+
+    // 量化并反量化残差（与最终纹理打包/解包一致）
+    const qH = quantizeH(dH, range);
+    const qS = quantizeS(dS, range);
+    const qL = quantizeL(dL, range);
+    const dH_decoded = dequantizeH(qH, range);
+
+    // 解码后的最终色相（需要处理环绕）
+    let finalH = base.h + dH_decoded;
+    if (finalH < 0) finalH += 1.0;
+    else if (finalH >= 1.0) finalH -= 1.0;
+
+    // 计算最终色相与背景色相的差异（考虑环绕）
+    const hDist = hueDistance(finalH, bgHsl.h);
     if (hDist > hueThreshold) {
       badPixels.push(idx);
     }
   }
 
   if (badPixels.length === 0) {
-    const blockPixelCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
-    const blockSmallCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
-    for (let idx = 0; idx < totalPixels; idx++) {
-      const colorId = regionIdTex[idx];
-      if (colorId === 0) continue;
-      const px = idx % w;
-      const py = Math.floor(idx / w);
-      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-      blockPixelCount[blockIdx]++;
-
-      const dH = tempDeltas[idx * 3];
-      const dS = tempDeltas[idx * 3 + 1];
-      const dL = tempDeltas[idx * 3 + 2];
-      if (Math.abs(dH) <= DELTA_THRESHOLD && Math.abs(dS) <= DELTA_THRESHOLD && Math.abs(dL) <= DELTA_THRESHOLD) {
-        blockSmallCount[blockIdx]++;
-      }
-    }
-
-    let blockFlags = 0;
-    for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
-      if (blockPixelCount[b] > 0) {
-        const ratio = blockSmallCount[b] / blockPixelCount[b];
-        if (ratio >= 0.95) {
-          blockFlags |= (1 << b);
-        }
-      }
-    }
     return { blockFlags, changed: false, changedPixelCount: 0, badPixels: [] };
   }
 
@@ -224,8 +247,9 @@ export function refineResidualsAndColors(
   }
 
   // 步骤4：重新计算 blockFlags
-  const blockPixelCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
-  const blockSmallCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+  blockPixelCount.fill(0);
+  blockSmallCount.fill(0);
+  let newBlockFlags = 0;
   for (let idx = 0; idx < totalPixels; idx++) {
     const colorId = regionIdTex[idx];
     if (colorId === 0) continue;
@@ -242,7 +266,6 @@ export function refineResidualsAndColors(
     }
   }
 
-  let newBlockFlags = 0;
   for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
     if (blockPixelCount[b] > 0) {
       const ratio = blockSmallCount[b] / blockPixelCount[b];

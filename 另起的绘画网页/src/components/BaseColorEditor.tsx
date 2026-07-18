@@ -1346,7 +1346,7 @@ export const BaseColorEditor: React.FC = () => {
       bgImageData,
       tempDeltas,
       TEX_SIZE,
-      0.01,
+      0.015,
       3
     );
 
