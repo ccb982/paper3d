@@ -14,7 +14,7 @@ import {
   getAdaptiveBlockIndex,
   getRangeForBlock,
   uint8ToBase64,
-  packRGB565,
+  unpackRGB565,
 } from '../core/ftxCore';
 import { compressToBinary } from '../utils/binaryCompression';
 import type { CompressionResultV2 } from '../utils/colorCompressor';
@@ -100,7 +100,7 @@ export class RegionEntity {
     const ctx = smallComposited.getContext('2d')!;
     ctx.putImageData(paintBuffer, 0, 0);
 
-    const { baseColors, regionIdTex, deltaTex, blockFlags } = clusterAndGenerateTexturesV2(
+    const { baseColors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
       mask,
       pixelBbox,
       ctx.getImageData(0, 0, 512, 512),
@@ -108,7 +108,7 @@ export class RegionEntity {
       512
     );
 
-    console.log(`[FTX管道] 区域 ${this.id} → paintBuffer→FTX: ${baseColors.length}基础色, 残差${deltaTex.length}字节, blockFlags=${blockFlags}`);
+    console.log(`[FTX管道] 区域 ${this.id} → paintBuffer→FTX: ${baseColors.length}基础色, 残差${deltaPacked.length}像素, blockFlags=${blockFlags}`);
 
     const resampledDelta = new Uint8Array(textureSize * textureSize * 3);
     const resampledRegionId = regionIdTex ? new Uint8Array(textureSize * textureSize) : null;
@@ -121,14 +121,8 @@ export class RegionEntity {
         const srcY = Math.floor((1 - v) * h);
         const srcIdx = srcY * w + srcX;
 
-        const hVal = deltaTex[srcIdx * 3];
-        const sVal = deltaTex[srcIdx * 3 + 1];
-        const lVal = deltaTex[srcIdx * 3 + 2];
-
-        const packed = packRGB565(sVal, hVal, lVal);
-        const decodedH = (packed >> 5) & 0x3F;
-        const decodedS = (packed >> 11) & 0x1F;
-        const decodedL = packed & 0x1F;
+        const packed = deltaPacked[srcIdx];
+        const { s: decodedS, h: decodedH, l: decodedL } = unpackRGB565(packed);
 
         resampledDelta[(ty * textureSize + tx) * 3] = decodedH;
         resampledDelta[(ty * textureSize + tx) * 3 + 1] = decodedS;
@@ -283,6 +277,7 @@ export class RegionEntity {
           ? uint8ToBase64(this._ftxData.regionIdTexture)
           : undefined,
         deltaTexture: uint8ToBase64(this._ftxData.deltaTexture),
+        blockFlags: this._ftxData.blockFlags,
       }],
       quantization: 'uint8',
       hueThreshold: 0.025,
@@ -586,6 +581,7 @@ export class RegionEntity {
           : undefined,
         textureSize: data.ftxData.textureSize,
         bbox: data.ftxData.bbox,
+        blockFlags: data.ftxData.blockFlags ?? 0,
       };
       this._textureVersion++;
     }

@@ -13,6 +13,8 @@ import {
   dequantizeL,
   getAdaptiveBlockIndex,
   getRangeForBlock,
+  packRGB565,
+  unpackRGB565,
 } from '../core/ftxCore';
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
@@ -64,6 +66,90 @@ function worldToCanvas(wx: number, wy: number): Point {
   return { x: wx * TEX_SIZE, y: (1 - wy) * TEX_SIZE };
 }
 
+function buildResidualTextureFromPacked(
+  deltaPacked: Uint16Array,
+  bbox: { x: number; y: number; w: number; h: number },
+  textureSize: number
+): ImageData {
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const imageData = new ImageData(textureSize, textureSize);
+  const data = imageData.data;
+  data.fill(0);
+
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const idx = py * w + px;
+      const packed = deltaPacked[idx];
+      const { s, h: qH, l: qL } = unpackRGB565(packed);
+
+      const globalX = offsetX + px;
+      const globalY = offsetY + py;
+      const pIdx = (globalY * textureSize + globalX) * 4;
+
+      data[pIdx] = (qH / 63) * 255;
+      data[pIdx + 1] = (s / 31) * 255;
+      data[pIdx + 2] = (qL / 31) * 255;
+      data[pIdx + 3] = 255;
+    }
+  }
+  return imageData;
+}
+
+function buildCompositeFromPacked(
+  regionIdTex: Uint8Array,
+  baseColors: Array<{ id: number; h: number; s: number; l: number }>,
+  deltaPacked: Uint16Array,
+  bbox: { x: number; y: number; w: number; h: number },
+  blockFlags: number,
+  textureSize: number
+): ImageData {
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const imageData = new ImageData(textureSize, textureSize);
+  const data = imageData.data;
+  data.fill(0);
+
+  const colorMapById = new Map<number, typeof baseColors[0]>();
+  for (const c of baseColors) {
+    colorMapById.set(c.id, c);
+  }
+
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const idx = py * w + px;
+      const colorIdx = regionIdTex[idx];
+      if (colorIdx === 0) continue;
+      const base = colorMapById.get(colorIdx);
+      if (!base) continue;
+
+      const packed = deltaPacked[idx];
+      const { s, h: qH, l: qL } = unpackRGB565(packed);
+
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+
+      const dH = dequantizeH(qH, range);
+      const dS = dequantizeS(s, range);
+      const dL = dequantizeL(qL, range);
+
+      let finalH = base.h + dH;
+      if (finalH < 0) finalH += 1.0;
+      else if (finalH >= 1.0) finalH -= 1.0;
+      const finalS = Math.max(0, Math.min(1, base.s + dS));
+      const finalL = Math.max(0, Math.min(1, base.l + dL));
+
+      const rgb = hslToRgb(finalH, finalS, finalL);
+      const globalX = offsetX + px;
+      const globalY = offsetY + py;
+      const pIdx = (globalY * textureSize + globalX) * 4;
+      data[pIdx] = rgb.r;
+      data[pIdx + 1] = rgb.g;
+      data[pIdx + 2] = rgb.b;
+      data[pIdx + 3] = 255;
+    }
+  }
+  return imageData;
+}
+
 // ============ 提取模式下的BFS取色 ============
 function extractBaseByClick(
   bgImageData: ImageData,
@@ -74,16 +160,16 @@ function extractBaseByClick(
 ): {
   baseTexture: ImageData;
   residualTexture: ImageData;
-  deltaTex: Uint8Array;
+  deltaPacked: Uint16Array;
   bbox: { x: number; y: number; w: number; h: number };
   baseColors: Array<{ h: number; s: number; l: number }>;
   regionIdTex: Uint8Array;
   texW: number;
   texH: number;
+  blockFlags: number;
 } | null {
   if (worldPolygons.length === 0) return null;
 
-  // 将贝塞尔曲线转换为折线（采样）
   const rasterizablePolygons = worldPolygons.map(poly => {
     if (poly.length === 3) {
       return buildBezierPath(poly);
@@ -91,14 +177,11 @@ function extractBaseByClick(
     return poly.slice();
   });
 
-  // 1. 创建墙mask：虚线和贝塞尔曲线作为不可穿过的墙
   const wallMask = new Uint8Array(textureSize * textureSize);
   
-  // 将所有多边形（虚线和贝塞尔）光栅化为墙
   for (const poly of rasterizablePolygons) {
     if (poly.length < 2) continue;
     
-    // 绘制线段作为墙（8邻域扩展）
     for (let i = 0; i < poly.length - 1; i++) {
       const p1 = poly[i];
       const p2 = poly[i + 1];
@@ -108,7 +191,6 @@ function extractBaseByClick(
       const x2 = Math.round(p2.x * textureSize);
       const y2 = Math.round((1 - p2.y) * textureSize);
       
-      // 绘制线段（Bresenham算法）
       const dx = Math.abs(x2 - x1);
       const dy = Math.abs(y2 - y1);
       const sx = x1 < x2 ? 1 : -1;
@@ -119,7 +201,6 @@ function extractBaseByClick(
       
       while (true) {
         if (x >= 0 && x < textureSize && y >= 0 && y < textureSize) {
-          // 8邻域标记为墙
           for (let nx = x - 2; nx <= x + 2; nx++) {
             for (let ny = y - 2; ny <= y + 2; ny++) {
               if (nx >= 0 && nx < textureSize && ny >= 0 && ny < textureSize) {
@@ -136,14 +217,11 @@ function extractBaseByClick(
     }
   }
 
-  // 2. 计算多边形的bbox（整个box区域）
   let pxBbox: { x: number; y: number; w: number; h: number };
   
   if (forcedBbox) {
-    // 使用全局统一的 bbox
     pxBbox = { ...forcedBbox };
   } else {
-    // 自动计算所有多边形的包围盒
     let minX = textureSize, minY = textureSize, maxX = -1, maxY = -1;
     for (const poly of rasterizablePolygons) {
       for (const p of poly) {
@@ -169,7 +247,6 @@ function extractBaseByClick(
     };
   }
   
-  // 3. 标记整个bbox区域为已访问（不考虑墙的限制）
   const bfsVisited = new Uint8Array(textureSize * textureSize);
   let visitedCount = 0;
   for (let y = pxBbox.y; y < pxBbox.y + pxBbox.h; y++) {
@@ -178,10 +255,7 @@ function extractBaseByClick(
       visitedCount++;
     }
   }
-  
-  console.log('[DEBUG BFS] completed - entire bbox:', { visitedCount, pxBbox });
 
-  // 4. 裁剪局部 mask
   const { w, h } = pxBbox;
   const localMask = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
@@ -190,44 +264,17 @@ function extractBaseByClick(
       localMask[y * w + x] = bfsVisited[globalIdx];
     }
   }
-  
-  console.log('[DEBUG] localMask created:', {
-    localMaskSample: [localMask[0], localMask[100], localMask[1000]],
-    localMaskSum: localMask.reduce((a, b) => a + b, 0)
-  });
 
-  // 5. 调用聚类函数
-  console.log('[DEBUG] before clustering - bfsVisited check:', {
-    sample1: bfsVisited[pxBbox.y * textureSize + pxBbox.x],
-    sample2: bfsVisited[(pxBbox.y + 5) * textureSize + pxBbox.x + 5],
-    count: bfsVisited.reduce((a, b) => a + b, 0)
-  });
-  
-  const { baseColors: colors, regionIdTex, deltaTex } = clusterAndGenerateTexturesV2(
+  const { baseColors: colors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
     localMask,
     pxBbox,
     bgImageData,
     0.025,
     textureSize
   );
-  
-  console.log('[DEBUG] after clustering - bfsVisited check:', {
-    sample1: bfsVisited[pxBbox.y * textureSize + pxBbox.x],
-    sample2: bfsVisited[(pxBbox.y + 5) * textureSize + pxBbox.x + 5],
-    count: bfsVisited.reduce((a, b) => a + b, 0)
-  });
-
-  console.log('[DEBUG] extractBaseByClick:', {
-    colorsCount: colors.length,
-    firstColor: colors.length > 0 ? colors[0] : null,
-    regionIdTexLength: regionIdTex?.length,
-    deltaTexLength: deltaTex?.length,
-    pxBbox: pxBbox,
-  });
 
   if (colors.length === 0) return null;
 
-  // 6. 构建基础色纹理（聚类平均色填充）
   const baseCanvas = document.createElement('canvas');
   baseCanvas.width = textureSize;
   baseCanvas.height = textureSize;
@@ -235,20 +282,6 @@ function extractBaseByClick(
   const baseImageData = baseCtx.createImageData(textureSize, textureSize);
   const baseData = baseImageData.data;
 
-  console.log('[DEBUG] building baseTexture:', {
-    pxBbox,
-    w, h,
-    colorsLength: colors.length,
-    regionIdTexLength: regionIdTex?.length,
-    regionIdTexSample: regionIdTex ? [
-      regionIdTex[0],
-      regionIdTex[100],
-      regionIdTex[1000]
-    ] : 'null'
-  });
-
-  let paintedPixels = 0;
-  
   if (regionIdTex) {
     for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
       const clusterIdx = regionIdTex[localIdx];
@@ -267,7 +300,6 @@ function extractBaseByClick(
         baseData[idx + 1] = rgb.g;
         baseData[idx + 2] = rgb.b;
         baseData[idx + 3] = 255;
-        paintedPixels++;
       }
     }
   } else if (colors.length > 0) {
@@ -282,125 +314,22 @@ function extractBaseByClick(
         baseData[idx + 1] = rgb.g;
         baseData[idx + 2] = rgb.b;
         baseData[idx + 3] = 255;
-        paintedPixels++;
       }
     }
   }
-  
-  console.log('[DEBUG] baseTexture loop complete:', { paintedPixels });
 
-  let foundPixel = null;
-  if (regionIdTex) {
-    for (let i = 0; i < regionIdTex.length; i++) {
-      if (regionIdTex[i] > 0) {
-      const localY = Math.floor(i / w);
-      const localX = i % w;
-      const globalY = pxBbox.y + localY;
-      const globalX = pxBbox.x + localX;
-      const idx = (globalY * textureSize + globalX) * 4;
-      foundPixel = {
-        localIdx: i,
-        globalX, globalY,
-        clusterIdx: regionIdTex[i],
-        rgb: [baseData[idx], baseData[idx + 1], baseData[idx + 2], baseData[idx + 3]]
-      };
-      break;
-      }
-    }
-  }
-  
-  console.log('[DEBUG] baseTexture created:', {
-    foundPixel,
-    foundPixelRgb: foundPixel ? foundPixel.rgb : null,
-    paintedPixels: paintedPixels
-  });
-
-  // 7. 构建残差纹理888（直接使用 deltaTex）
-  const residualCanvas888 = document.createElement('canvas');
-  residualCanvas888.width = textureSize;
-  residualCanvas888.height = textureSize;
-  const residualCtx888 = residualCanvas888.getContext('2d')!;
-  const residualImageData888 = residualCtx888.createImageData(textureSize, textureSize);
-  const residualData888 = residualImageData888.data;
-
-  for (let y = 0; y < textureSize; y++) {
-    for (let x = 0; x < textureSize; x++) {
-      const idx = (y * textureSize + x) * 4;
-      residualData888[idx] = 128;
-      residualData888[idx + 1] = 128;
-      residualData888[idx + 2] = 128;
-      residualData888[idx + 3] = 255;
-    }
-  }
-  
-  for (let localIdx = 0; localIdx < deltaTex.length / 3; localIdx++) {
-    const dIdx = localIdx * 3;
-    const localY = Math.floor(localIdx / w);
-    const localX = localIdx % w;
-    const globalY = pxBbox.y + localY;
-    const globalX = pxBbox.x + localX;
-    const idx = (globalY * textureSize + globalX) * 4;
-    
-    residualData888[idx] = deltaTex[dIdx];
-    residualData888[idx + 1] = deltaTex[dIdx + 1];
-    residualData888[idx + 2] = deltaTex[dIdx + 2];
-    residualData888[idx + 3] = 255;
-  }
-
-  // 8. 构建残差纹理565（对 deltaTex 做 RGB565 截断）
-  const deltaTex565 = new Uint8Array(deltaTex.length);
-  for (let i = 0; i < deltaTex.length; i += 3) {
-    const h = deltaTex[i];
-    const s = deltaTex[i + 1];
-    const l = deltaTex[i + 2];
-    const packed = ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
-    deltaTex565[i] = (packed >> 5) & 0x3F;
-    deltaTex565[i + 1] = (packed >> 11) & 0x1F;
-    deltaTex565[i + 2] = packed & 0x1F;
-  }
-
-  const residualCanvas565 = document.createElement('canvas');
-  residualCanvas565.width = textureSize;
-  residualCanvas565.height = textureSize;
-  const residualCtx565 = residualCanvas565.getContext('2d')!;
-  const residualImageData565 = residualCtx565.createImageData(textureSize, textureSize);
-  const residualData565 = residualImageData565.data;
-
-  for (let y = 0; y < textureSize; y++) {
-    for (let x = 0; x < textureSize; x++) {
-      const idx = (y * textureSize + x) * 4;
-      residualData565[idx] = 128;
-      residualData565[idx + 1] = 128;
-      residualData565[idx + 2] = 128;
-      residualData565[idx + 3] = 255;
-    }
-  }
-  
-  for (let localIdx = 0; localIdx < deltaTex565.length / 3; localIdx++) {
-    const dIdx = localIdx * 3;
-    const localY = Math.floor(localIdx / w);
-    const localX = localIdx % w;
-    const globalY = pxBbox.y + localY;
-    const globalX = pxBbox.x + localX;
-    const idx = (globalY * textureSize + globalX) * 4;
-    
-    residualData565[idx] = deltaTex565[dIdx];
-    residualData565[idx + 1] = deltaTex565[dIdx + 1];
-    residualData565[idx + 2] = deltaTex565[dIdx + 2];
-    residualData565[idx + 3] = 255;
-  }
+  const residualTexture = buildResidualTextureFromPacked(deltaPacked, pxBbox, textureSize);
 
   return {
     baseTexture: baseImageData,
-    residualTexture: residualImageData888,
-    residualTexture888: residualImageData888,
-    residualTexture565: residualImageData565,
-    deltaTex: deltaTex || new Uint8Array(0),
+    residualTexture,
+    deltaPacked,
     bbox: pxBbox,
     baseColors: colors,
     regionIdTex: regionIdTex || new Uint8Array(0),
     texW: w,
     texH: h,
+    blockFlags,
   };
 }
 
@@ -415,6 +344,7 @@ function mergeColorsWithGlobal(
   bgImageData: ImageData,
   textureSize: number,
   frameId: string,
+  blockFlags: number = 0,
   hueThreshold: number = 0.3,
   satThreshold: number = 0.5,
   lightThreshold: number = 0.5
@@ -423,6 +353,7 @@ function mergeColorsWithGlobal(
   newNextId: number;
   newRegionIdTex: Uint8Array;
   newDeltaTex: Uint8Array;
+  blockFlags: number;
 } {
   const localToGlobalId = new Map<number, number>();
   let newColors: SharedBaseColor[];
@@ -504,9 +435,13 @@ function mergeColorsWithGlobal(
       const dH = normalizeHueDelta(hsl.h - base.h);
       const dS = hsl.s - base.s;
       const dL = hsl.l - base.l;
-      newDeltaTex[idx * 3] = quantizeH(dH);
-      newDeltaTex[idx * 3 + 1] = quantizeS(dS);
-      newDeltaTex[idx * 3 + 2] = quantizeL(dL);
+
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+
+      newDeltaTex[idx * 3] = quantizeH(dH, range);
+      newDeltaTex[idx * 3 + 1] = quantizeS(dS, range);
+      newDeltaTex[idx * 3 + 2] = quantizeL(dL, range);
     }
   }
 
@@ -515,6 +450,7 @@ function mergeColorsWithGlobal(
     newNextId: currentNextId,
     newRegionIdTex,
     newDeltaTex,
+    blockFlags,
   };
 }
 
@@ -603,104 +539,6 @@ function buildBaseTextureFromLocalColors(
   return imageData;
 }
 
-function buildResidualTextureFromDelta(
-  deltaTex: Uint8Array,
-  bbox: { x: number; y: number; w: number; h: number },
-  textureSize: number
-): ImageData {
-  const { w, h, x: offsetX, y: offsetY } = bbox;
-  const canvas = document.createElement('canvas');
-  canvas.width = textureSize;
-  canvas.height = textureSize;
-  const ctx = canvas.getContext('2d')!;
-  const imageData = ctx.createImageData(textureSize, textureSize);
-  const data = imageData.data;
-  for (let y = 0; y < textureSize; y++) {
-    for (let x = 0; x < textureSize; x++) {
-      const idx = (y * textureSize + x) * 4;
-      data[idx] = 0;
-      data[idx + 1] = 0;
-      data[idx + 2] = 0;
-      data[idx + 3] = 0;
-    }
-  }
-  for (let py = 0; py < h; py++) {
-    for (let px = 0; px < w; px++) {
-      const idx = py * w + px;
-      const globalX = offsetX + px;
-      const globalY = offsetY + py;
-      const pIdx = (globalY * textureSize + globalX) * 4;
-      data[pIdx] = deltaTex[idx * 3];
-      data[pIdx + 1] = deltaTex[idx * 3 + 1];
-      data[pIdx + 2] = deltaTex[idx * 3 + 2];
-      data[pIdx + 3] = 255;
-    }
-  }
-  return imageData;
-}
-
-function buildResidualTexturesFromDelta(
-  deltaTex: Uint8Array,
-  bbox: { x: number; y: number; w: number; h: number },
-  textureSize: number
-): { residual888: ImageData; residual565: ImageData } {
-  const { w, h, x: offsetX, y: offsetY } = bbox;
-
-  const createEmpty = () => {
-    const canvas = document.createElement('canvas');
-    canvas.width = textureSize;
-    canvas.height = textureSize;
-    const ctx = canvas.getContext('2d')!;
-    const imageData = ctx.createImageData(textureSize, textureSize);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      data[i + 3] = 255;
-    }
-    return imageData;
-  };
-
-  const residual888 = createEmpty();
-  const residual565 = createEmpty();
-
-  const data888 = residual888.data;
-  const data565 = residual565.data;
-
-  const packUnpackRGB565 = (h: number, s: number, l: number): { h: number; s: number; l: number } => {
-    const packed = ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
-    return {
-      h: (packed >> 5) & 0x3F,
-      s: (packed >> 11) & 0x1F,
-      l: packed & 0x1F,
-    };
-  };
-
-  for (let py = 0; py < h; py++) {
-    for (let px = 0; px < w; px++) {
-      const idx = py * w + px;
-      const globalX = offsetX + px;
-      const globalY = offsetY + py;
-      const pIdx = (globalY * textureSize + globalX) * 4;
-
-      const hVal = deltaTex[idx * 3];
-      const sVal = deltaTex[idx * 3 + 1];
-      const lVal = deltaTex[idx * 3 + 2];
-
-      data888[pIdx] = hVal;
-      data888[pIdx + 1] = sVal;
-      data888[pIdx + 2] = lVal;
-      data888[pIdx + 3] = 255;
-
-      const unpacked = packUnpackRGB565(hVal, sVal, lVal);
-      data565[pIdx] = unpacked.h;
-      data565[pIdx + 1] = unpacked.s;
-      data565[pIdx + 2] = unpacked.l;
-      data565[pIdx + 3] = 255;
-    }
-  }
-
-  return { residual888, residual565 };
-}
-
 // ============ 组件 ============
 export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -728,8 +566,6 @@ export const BaseColorEditor: React.FC = () => {
   const dashedPolygons = currentFrame?.dashedPolygons || [];
   const baseTexture = currentFrame?.baseTexture || null;
   const residualTexture = currentFrame?.residualTexture || null;
-  const residualTexture888 = currentFrame?.residualTexture888 || null;
-  const residualTexture565 = currentFrame?.residualTexture565 || null;
   const bbox = currentFrame?.bbox || null;
   const regionIdTex = currentFrame?.regionIdTex || new Uint8Array(0);
   const baseColors = sharedBaseColors;
@@ -754,14 +590,6 @@ export const BaseColorEditor: React.FC = () => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { residualTexture: val });
   }, [activeFrameId, updateSkillFrame]);
 
-  const setResidualTexture888 = useCallback((val: ImageData | null) => {
-    if (activeFrameId) updateSkillFrame(activeFrameId, { residualTexture888: val });
-  }, [activeFrameId, updateSkillFrame]);
-
-  const setResidualTexture565 = useCallback((val: ImageData | null) => {
-    if (activeFrameId) updateSkillFrame(activeFrameId, { residualTexture565: val });
-  }, [activeFrameId, updateSkillFrame]);
-
   const setBbox = useCallback((val: { x: number; y: number; w: number; h: number } | null) => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { bbox: val });
   }, [activeFrameId, updateSkillFrame]);
@@ -777,7 +605,6 @@ export const BaseColorEditor: React.FC = () => {
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0);
-  const [residualPrecision, setResidualPrecision] = useState<'full' | 'rgb565'>('full');
 
   useEffect(() => {
     if (frames.length === 0) {
@@ -1124,8 +951,6 @@ export const BaseColorEditor: React.FC = () => {
     dashedPolygons: Point[][];
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
-    residualTexture888: ImageData | null;
-    residualTexture565: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
     baseColors: SharedBaseColor[];
   }
@@ -1137,8 +962,6 @@ export const BaseColorEditor: React.FC = () => {
       dashedPolygons: dashedPolygons.map((poly: Point[]) => poly.map((p: Point) => ({ ...p }))),
       baseTexture: baseTexture ? new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height) : null,
       residualTexture: residualTexture ? new ImageData(new Uint8ClampedArray(residualTexture.data), residualTexture.width, residualTexture.height) : null,
-      residualTexture888: residualTexture888 ? new ImageData(new Uint8ClampedArray(residualTexture888.data), residualTexture888.width, residualTexture888.height) : null,
-      residualTexture565: residualTexture565 ? new ImageData(new Uint8ClampedArray(residualTexture565.data), residualTexture565.width, residualTexture565.height) : null,
       bbox: bbox ? { ...bbox } : null,
       baseColors: baseColors.map((c: typeof baseColors[0]) => ({ ...c })),
     };
@@ -1146,7 +969,7 @@ export const BaseColorEditor: React.FC = () => {
     newHistory.push(newState);
     setHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
-  }, [dashedPolygons, baseTexture, residualTexture, residualTexture888, residualTexture565, bbox, baseColors, history, historyIndex]);
+  }, [dashedPolygons, baseTexture, residualTexture, bbox, baseColors, history, historyIndex]);
 
   const undo = useCallback(() => {
     if (historyIndex <= 0) return;
@@ -1154,8 +977,6 @@ export const BaseColorEditor: React.FC = () => {
     setDashedPolygons(prevState.dashedPolygons);
     setBaseTexture(prevState.baseTexture);
     setResidualTexture(prevState.residualTexture);
-    setResidualTexture888(prevState.residualTexture888);
-    setResidualTexture565(prevState.residualTexture565);
     setBbox(prevState.bbox);
     setBaseColors(prevState.baseColors);
     setHistoryIndex(historyIndex - 1);
@@ -1167,8 +988,6 @@ export const BaseColorEditor: React.FC = () => {
     setDashedPolygons(nextState.dashedPolygons);
     setBaseTexture(nextState.baseTexture);
     setResidualTexture(nextState.residualTexture);
-    setResidualTexture888(nextState.residualTexture888);
-    setResidualTexture565(nextState.residualTexture565);
     setBbox(nextState.bbox);
     setBaseColors(nextState.baseColors);
     setHistoryIndex(historyIndex + 1);
@@ -1302,7 +1121,7 @@ export const BaseColorEditor: React.FC = () => {
     const effectiveBbox = globalBbox || frame.bbox;
     if (!effectiveBbox) return;
 
-    const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex } = mergeColorsWithGlobal(
+    const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex, blockFlags: mergedBlockFlags } = mergeColorsWithGlobal(
       frame.baseColorValues,
       frame.regionIdTex,
       new Uint8Array(0),
@@ -1312,10 +1131,20 @@ export const BaseColorEditor: React.FC = () => {
       frame.bgImageData,
       TEX_SIZE,
       frameId,
+      frame.blockFlags ?? 0,
       MERGE_HUE_THRESHOLD,
       MERGE_SAT_THRESHOLD,
       MERGE_LIGHT_THRESHOLD
     );
+
+    const totalPixels = effectiveBbox.w * effectiveBbox.h;
+    const newDeltaPacked = new Uint16Array(totalPixels);
+    for (let i = 0; i < totalPixels; i++) {
+      const h = newDeltaTex[i * 3];
+      const s = newDeltaTex[i * 3 + 1];
+      const l = newDeltaTex[i * 3 + 2];
+      newDeltaPacked[i] = packRGB565(s, h, l);
+    }
 
     setSharedBaseColors(newGlobalColors);
     setNextColorId(newNextId);
@@ -1326,15 +1155,15 @@ export const BaseColorEditor: React.FC = () => {
       effectiveBbox,
       TEX_SIZE
     );
-    const { residual888: newResidualTexture888, residual565: newResidualTexture565 } = buildResidualTexturesFromDelta(newDeltaTex, effectiveBbox, TEX_SIZE);
+    const newResidualTexture = buildResidualTextureFromPacked(newDeltaPacked, effectiveBbox, TEX_SIZE);
 
     updateSkillFrame(frameId, {
       regionIdTex: newRegionIdTex,
       baseTexture: newBaseTexture,
-      residualTexture: newResidualTexture888,
-      residualTexture888: newResidualTexture888,
-      residualTexture565: newResidualTexture565,
+      residualTexture: newResidualTexture,
+      deltaPacked: newDeltaPacked,
       baseColorValues: [],
+      blockFlags: mergedBlockFlags,
     });
 
     recalculateAllAreas();
@@ -1358,7 +1187,7 @@ export const BaseColorEditor: React.FC = () => {
 
     const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, TEX_SIZE, state.skillGroupEditor.globalBbox);
     if (result) {
-      const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaTex: localDeltaTex, bbox, residualTexture888, residualTexture565 } = result;
+      const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, residualTexture, blockFlags } = result;
 
       const newBaseTexture = buildBaseTextureFromLocalColors(
         localBaseColors,
@@ -1370,12 +1199,11 @@ export const BaseColorEditor: React.FC = () => {
       updateSkillFrame(currentActiveFrameId, {
         baseColorValues: localBaseColors,
         baseTexture: newBaseTexture,
-        residualTexture: residualTexture888,
-        residualTexture888: residualTexture888,
-        residualTexture565: residualTexture565,
+        residualTexture: residualTexture,
         bbox: bbox,
         regionIdTex: localRegionIdTex,
-        deltaTex: localDeltaTex,
+        deltaPacked: deltaPacked,
+        blockFlags: blockFlags,
       });
 
       setIsExtractMode(false);
@@ -1396,55 +1224,13 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox]);
 
-  // 模拟 RGB565 打包 + 解包（S-5位, H-6位, L-5位）
-  const applyRGB565Quantization = useCallback((rgbaData: Uint8Array): Uint8Array => {
-    const len = rgbaData.length;
-    const quantized = new Uint8Array(len);
-    
-    for (let i = 0; i < len; i += 4) {
-      const h = rgbaData[i];     // 0~63 (6位)
-      const s = rgbaData[i + 1]; // 0~31 (5位)
-      const l = rgbaData[i + 2]; // 0~31 (5位)
-      const a = rgbaData[i + 3]; // alpha 保持不变
-      
-      const packed = ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
-      const decodedS = (packed >> 11) & 0x1F;
-      const decodedH = (packed >> 5) & 0x3F;
-      const decodedL = packed & 0x1F;
-      
-      quantized[i] = decodedH;
-      quantized[i + 1] = decodedS;
-      quantized[i + 2] = decodedL;
-      quantized[i + 3] = a;
-    }
-    return quantized;
-  }, []);
-
-  // 重新计算残差：基于原图和当前基础色纹理（使用自适应量化）
   const recalculateResidual = useCallback(() => {
     if (!baseTexture || !bgImageData || !bbox || baseColors.length === 0) return;
     
-    const residualCanvas = document.createElement('canvas');
-    residualCanvas.width = TEX_SIZE;
-    residualCanvas.height = TEX_SIZE;
-    const residualCtx = residualCanvas.getContext('2d')!;
-    const residualImageData = residualCtx.createImageData(TEX_SIZE, TEX_SIZE);
-    const residualData = residualImageData.data;
-    
-    for (let y = 0; y < TEX_SIZE; y++) {
-      for (let x = 0; x < TEX_SIZE; x++) {
-        const idx = (y * TEX_SIZE + x) * 4;
-        residualData[idx] = 0;
-        residualData[idx + 1] = 0;
-        residualData[idx + 2] = 0;
-        residualData[idx + 3] = 0;
-      }
-    }
-    
     const { w, h } = bbox;
-    const tempDeltas = new Float32Array(w * h * 3);
+    const totalPixels = w * h;
+    const tempDeltas = new Float32Array(totalPixels * 3);
     
-    // 第一遍扫描：计算残差
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const x = bbox.x + px;
@@ -1475,10 +1261,11 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
     
-    // 确定量化范围：第一次计算时生成并保存，后续复用
     let ranges: Float32Array;
+    let newBlockFlags: number;
     if (residualRanges) {
       ranges = residualRanges;
+      newBlockFlags = blockFlags;
     } else {
       const blockMax = new Float32Array(16 * 3);
       const blockPixelCount = new Uint32Array(16);
@@ -1509,7 +1296,7 @@ export const BaseColorEditor: React.FC = () => {
         }
       }
       
-      const newBlockFlags = 0;
+      newBlockFlags = 0;
       ranges = new Float32Array(16);
       for (let b = 0; b < 16; b++) {
         if (blockPixelCount[b] > 0) {
@@ -1529,14 +1316,15 @@ export const BaseColorEditor: React.FC = () => {
       setBlockFlags(newBlockFlags);
     }
     
-    // 第二遍扫描：使用固定的量化范围量化残差
+    const deltaPacked = new Uint16Array(totalPixels);
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
+        const idx = py * w + px;
         const x = bbox.x + px;
         const y = bbox.y + py;
-        const idx = (y * TEX_SIZE + x) * 4;
-        if (baseTexture.data[idx + 3] > 0) {
-          const idx3 = py * w + px;
+        const pIdx = (y * TEX_SIZE + x) * 4;
+        if (baseTexture.data[pIdx + 3] > 0) {
+          const idx3 = idx;
           const dH = tempDeltas[idx3 * 3];
           const dS = tempDeltas[idx3 * 3 + 1];
           const dL = tempDeltas[idx3 * 3 + 2];
@@ -1544,38 +1332,23 @@ export const BaseColorEditor: React.FC = () => {
           const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
           const range = ranges[blockIdx];
           
-          residualData[idx] = quantizeH(dH, range);
-          residualData[idx + 1] = quantizeS(dS, range);
-          residualData[idx + 2] = quantizeL(dL, range);
-          residualData[idx + 3] = 255;
+          const qH = quantizeH(dH, range);
+          const qS = quantizeS(dS, range);
+          const qL = quantizeL(dL, range);
+          
+          deltaPacked[idx] = packRGB565(qS, qH, qL);
         }
       }
     }
     
-    const deltaTex = new Uint8Array(w * h * 3);
-    for (let py = 0; py < h; py++) {
-      for (let px = 0; px < w; px++) {
-        const x = bbox.x + px;
-        const y = bbox.y + py;
-        const idx = (y * TEX_SIZE + x) * 4;
-        if (baseTexture.data[idx + 3] > 0) {
-          const idx3 = py * w + px;
-          deltaTex[idx3 * 3] = residualData[idx];
-          deltaTex[idx3 * 3 + 1] = residualData[idx + 1];
-          deltaTex[idx3 * 3 + 2] = residualData[idx + 2];
-        }
-      }
-    }
+    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, bbox, TEX_SIZE);
+    setResidualTexture(residualDisplay);
     
-    const { residual888, residual565 } = buildResidualTexturesFromDelta(deltaTex, bbox, TEX_SIZE);
-    
-    setResidualTexture(residual888);
     if (activeFrameId) {
       updateSkillFrame(activeFrameId, { 
-        residualTexture: residual888,
-        residualTexture888: residual888,
-        residualTexture565: residual565,
-        blockFlags 
+        residualTexture: residualDisplay,
+        deltaPacked: deltaPacked,
+        blockFlags: newBlockFlags,
       });
     }
     setTimeout(() => saveToHistory(), 0);
@@ -1816,9 +1589,12 @@ export const BaseColorEditor: React.FC = () => {
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture) {
       setTimeout(() => saveToHistory(), 0);
+      if (currentTool === 'paint') {
+        setTimeout(() => handleRecluster(), 0);
+      }
     }
     setIsDrawing(false);
-  }, [isDrawing, baseTexture, saveToHistory]);
+  }, [isDrawing, baseTexture, saveToHistory, currentTool, handleRecluster]);
 
   // 右键菜单禁用
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1990,185 +1766,34 @@ export const BaseColorEditor: React.FC = () => {
         ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       }
     }
-    // 残差模式：显示FTX格式的HSL残差（H:0~63, S:0~31, L:0~31）
     else if (mode === 'residual') {
       ctx.fillStyle = '#333';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       
-      if (bbox && baseColors.length > 0) {
-        const currentResidualTexture = residualPrecision === 'rgb565' 
-          ? residualTexture565 
-          : residualTexture888;
+      if (bbox && currentFrame?.deltaPacked && baseColors.length > 0) {
+        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, bbox, TEX_SIZE);
         
-        if (currentResidualTexture) {
-          const filledData = new ImageData(
-            new Uint8ClampedArray(currentResidualTexture.data),
-            TEX_SIZE,
-            TEX_SIZE
-          );
-          
-          for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
-            for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
-              const idx = (y * TEX_SIZE + x) * 4;
-              if (filledData.data[idx + 3] === 0 && bgImageData && baseTexture) {
-                const r = bgImageData.data[idx];
-                const g = bgImageData.data[idx + 1];
-                const b = bgImageData.data[idx + 2];
-                const origHsl = rgbToHsl(r, g, b);
-                
-                const baseR = baseTexture.data[idx];
-                const baseG = baseTexture.data[idx + 1];
-                const baseB = baseTexture.data[idx + 2];
-                let baseHsl = rgbToHsl(baseR, baseG, baseB);
-                
-                if (baseTexture.data[idx + 3] === 0) {
-                  let bestDist = Infinity;
-                  let bestColor = baseColors[0];
-                  for (const c of baseColors) {
-                    const dh = Math.min(Math.abs(origHsl.h - c.h), 1 - Math.abs(origHsl.h - c.h));
-                    const ds = Math.abs(origHsl.s - c.s);
-                    const dl = Math.abs(origHsl.l - c.l);
-                    const dist = dh + ds + dl;
-                    if (dist < bestDist) {
-                      bestDist = dist;
-                      bestColor = c;
-                    }
-                  }
-                  baseHsl = { h: bestColor.h, s: bestColor.s, l: bestColor.l };
-                }
-                
-                let dH = origHsl.h - baseHsl.h;
-                if (dH > 0.5) dH -= 1.0;
-                if (dH < -0.5) dH += 1.0;
-                const dS = origHsl.s - baseHsl.s;
-                const dL = origHsl.l - baseHsl.l;
-                
-                let h = quantizeH(dH);
-                let s = quantizeS(dS);
-                let l = quantizeL(dL);
-                
-                if (residualPrecision === 'rgb565') {
-                  const packed = ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
-                  h = (packed >> 5) & 0x3F;
-                  s = (packed >> 11) & 0x1F;
-                  l = packed & 0x1F;
-                }
-                
-                filledData.data[idx] = h;
-                filledData.data[idx + 1] = s;
-                filledData.data[idx + 2] = l;
-                filledData.data[idx + 3] = 255;
-              }
-            }
-          }
-          
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
-          ctx.clip();
-          ctx.putImageData(filledData, 0, 0);
-          ctx.restore();
-        }
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(bbox.x, bbox.y, bbox.w, bbox.h);
+        ctx.clip();
+        ctx.putImageData(residualDisplay, 0, 0);
+        ctx.restore();
       }
     }
-    // 叠加模式：基础色 + 残差还原（原始图像）
     else if (mode === 'composite') {
       ctx.fillStyle = '#333';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       
-      const currentResidualTexture = residualPrecision === 'rgb565' 
-        ? residualTexture565 
-        : residualTexture888;
-      
-      if (bbox && baseTexture && currentResidualTexture && baseColors.length > 0) {
-        const compositeData = new ImageData(
-          new Uint8ClampedArray(baseTexture.data),
-          TEX_SIZE,
+      if (bbox && baseTexture && currentFrame?.deltaPacked && currentFrame.regionIdTex && baseColors.length > 0) {
+        const compositeData = buildCompositeFromPacked(
+          currentFrame.regionIdTex,
+          baseColors,
+          currentFrame.deltaPacked,
+          bbox,
+          currentFrame.blockFlags,
           TEX_SIZE
         );
-        const baseData = baseTexture.data;
-        const residualData = currentResidualTexture.data;
-        const blockFlags = currentFrame?.blockFlags ?? 0;
-        const { w, h } = bbox;
-        
-        const baseColorRgbs = baseColors.map((c: typeof baseColors[0]) => hslToRgb(c.h, c.s, c.l));
-
-        for (let y = bbox.y; y < bbox.y + bbox.h; y++) {
-          for (let x = bbox.x; x < bbox.x + bbox.w; x++) {
-            const idx = (y * TEX_SIZE + x) * 4;
-            if (baseData[idx + 3] > 0) {
-              if (residualData[idx + 3] === 0) {
-                compositeData.data[idx] = baseData[idx];
-                compositeData.data[idx + 1] = baseData[idx + 1];
-                compositeData.data[idx + 2] = baseData[idx + 2];
-                compositeData.data[idx + 3] = 255;
-              } else {
-                const px = x - bbox.x;
-                const py = y - bbox.y;
-                const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-                const range = getRangeForBlock(blockFlags, blockIdx);
-                
-                const hslBase = rgbToHsl(baseData[idx], baseData[idx + 1], baseData[idx + 2]);
-                
-                const dh = residualData[idx];
-                const ds = residualData[idx + 1];
-                const dl = residualData[idx + 2];
-                
-                const dH = dequantizeH(dh, range);
-                const dS = dequantizeS(ds, range);
-                const dL = dequantizeL(dl, range);
-                let finalH = hslBase.h + dH;
-                if (finalH < 0) finalH += 1.0;
-                if (finalH >= 1.0) finalH -= 1.0;
-                const finalS = Math.max(0, Math.min(1, hslBase.s + dS));
-                const finalL = Math.max(0, Math.min(1, hslBase.l + dL));
-                const rgb = hslToRgb(finalH, finalS, finalL);
-                compositeData.data[idx] = rgb.r;
-                compositeData.data[idx + 1] = rgb.g;
-                compositeData.data[idx + 2] = rgb.b;
-                compositeData.data[idx + 3] = 255;
-              }
-            } else if (bgImageData) {
-              const r = bgImageData.data[idx];
-              const g = bgImageData.data[idx + 1];
-              const b = bgImageData.data[idx + 2];
-              
-              let bestDist = Infinity;
-              let bestColor = baseColors[0];
-              for (let i = 0; i < baseColors.length; i++) {
-                const rgb = baseColorRgbs[i];
-                const dr = r - rgb.r;
-                const dg = g - rgb.g;
-                const db = b - rgb.b;
-                const dist = dr * dr + dg * dg + db * db;
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  bestColor = baseColors[i];
-                }
-              }
-              
-              const hslBg = rgbToHsl(r, g, b);
-              const dH = hslBg.h - bestColor.h;
-              const dHNormalized = dH > 0.5 ? dH - 1.0 : dH < -0.5 ? dH + 1.0 : dH;
-              const dS = hslBg.s - bestColor.s;
-              const dL = hslBg.l - bestColor.l;
-              
-              let finalH = bestColor.h + dHNormalized;
-              if (finalH < 0) finalH += 1.0;
-              if (finalH >= 1.0) finalH -= 1.0;
-              const finalS = Math.max(0, Math.min(1, bestColor.s + dS));
-              const finalL = Math.max(0, Math.min(1, bestColor.l + dL));
-              const rgb = hslToRgb(finalH, finalS, finalL);
-              
-              compositeData.data[idx] = rgb.r;
-              compositeData.data[idx + 1] = rgb.g;
-              compositeData.data[idx + 2] = rgb.b;
-              compositeData.data[idx + 3] = 255;
-            } else {
-              compositeData.data[idx + 3] = 0;
-            }
-          }
-        }
         
         ctx.save();
         ctx.beginPath();
@@ -2353,7 +1978,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [bgImageData, baseTexture, residualTexture, residualTexture888, residualTexture565, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors, residualPrecision]);
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors]);
 
   useEffect(() => {
     const overlay = overlayRef.current;
@@ -2621,23 +2246,6 @@ export const BaseColorEditor: React.FC = () => {
         >
           残差
         </button>
-        {mode === 'residual' || mode === 'composite' ? (
-          <button
-            onClick={() => {
-              const newPrecision = residualPrecision === 'full' ? 'rgb565' : 'full';
-              setResidualPrecision(newPrecision);
-              console.log(`[RGB565] 切换精度: ${residualPrecision} -> ${newPrecision}, 888纹理: ${!!residualTexture888}, 565纹理: ${!!residualTexture565}`);
-            }}
-            style={{
-              padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
-              background: residualPrecision === 'rgb565' ? '#faad14' : '#f0f0f0',
-              color: residualPrecision === 'rgb565' ? '#fff' : '#333',
-              border: '1px solid #d9d9d9',
-            }}
-          >
-            {residualPrecision === 'full' ? 'RGB888' : 'RGB565'}
-          </button>
-        ) : null}
         {mode === 'residual' && (
           <button
             onClick={recalculateResidual}
@@ -2714,7 +2322,7 @@ export const BaseColorEditor: React.FC = () => {
                 height: 512,
                 bbox: frame.bbox!,
                 regionIdTex: newRegionIdTex,
-                deltaTex: frame.deltaTex!,
+                deltaPacked: frame.deltaPacked,
                 blockFlags: frame.blockFlags ?? 0,
               };
             });

@@ -7,7 +7,8 @@ import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
-import { hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL } from '../utils/colorCompressor';
+import { hslToRgb, clusterAndGenerateTexturesV2, computeBBoxAllRings, rasterizeRegionMaskLocal, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, rgbToHsl, getAdaptiveBlockIndex, getRangeForBlock } from '../utils/colorCompressor';
+import { packRGB565 } from '../core/ftxCore';
 import { RegionEntity } from '../core/RegionEntity';
 
 export interface SharedBaseColor {
@@ -344,9 +345,7 @@ interface AppState {
       dashedPolygons: Point[][];
       baseTexture: ImageData | null;
       residualTexture: ImageData | null;
-      residualTexture888: ImageData | null;
-      residualTexture565: ImageData | null;
-      deltaTex: Uint8Array;
+      deltaPacked: Uint16Array;
       blockFlags: number;
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint8Array;
@@ -365,9 +364,7 @@ interface AppState {
     dashedPolygons: Point[][];
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
-    residualTexture888: ImageData | null;
-    residualTexture565: ImageData | null;
-    deltaTex: Uint8Array;
+    deltaPacked: Uint16Array;
     blockFlags: number;
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint8Array;
@@ -1458,7 +1455,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         bgImageData: serializeImageData(frame.bgImageData),
         baseTexture: serializeImageData(frame.baseTexture),
         residualTexture: serializeImageData(frame.residualTexture),
-        deltaTex: Array.from(frame.deltaTex),
+        deltaPacked: Array.from(frame.deltaPacked),
         regionIdTex: Array.from(frame.regionIdTex),
         colorPixelsMap: null,
       }));
@@ -1519,7 +1516,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           bgImageData: deserializeImageData(frame.bgImageData),
           baseTexture: deserializeImageData(frame.baseTexture),
           residualTexture: deserializeImageData(frame.residualTexture),
-          deltaTex: new Uint8Array(frame.deltaTex || []),
+          deltaPacked: new Uint16Array(frame.deltaPacked || []),
           regionIdTex: new Uint8Array(frame.regionIdTex),
           colorPixelsMap: null,
         })) || [];
@@ -1595,7 +1592,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           bgImageData: deserializeImageData(frame.bgImageData),
           baseTexture: deserializeImageData(frame.baseTexture),
           residualTexture: deserializeImageData(frame.residualTexture),
-          deltaTex: new Uint8Array(frame.deltaTex || []),
+          deltaPacked: new Uint16Array(frame.deltaPacked || []),
           regionIdTex: new Uint8Array(frame.regionIdTex),
           colorPixelsMap: null,
         })) || [];
@@ -1899,6 +1896,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           regionIdTexture: ftxData.regionIdTexture,
           textureSize: 128,
           bbox: ftxData.bbox,
+          blockFlags: 0,
         });
       }
       return {
@@ -1928,9 +1926,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         dashedPolygons: [],
         baseTexture: null,
         residualTexture: null,
-        residualTexture888: null,
-        residualTexture565: null,
-        deltaTex: new Uint8Array(0),
+        deltaPacked: new Uint16Array(0),
         blockFlags: 0,
         bbox: null,
         regionIdTex: new Uint8Array(0),
@@ -2164,15 +2160,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { activeFrameId, frames, sharedBaseColors, nextColorId, globalBbox } = state.skillGroupEditor;
     if (!activeFrameId) return;
     const frame = frames.find(f => f.id === activeFrameId);
-    if (!frame || !frame.bgImageData || !frame.baseTexture) return;
-
-    const colors = sharedBaseColors.map(c => ({ ...c, tempFlag: false }));
-
-    let currentNextId = nextColorId;
+    if (!frame || !frame.baseTexture || !frame.bgImageData) return;
 
     const effectiveBbox = globalBbox || frame.bbox;
     if (!effectiveBbox) return;
     const { w, h, x: offsetX, y: offsetY } = effectiveBbox;
+
     const maskCanvas = document.createElement('canvas');
     maskCanvas.width = w;
     maskCanvas.height = h;
@@ -2185,108 +2178,152 @@ export const useAppStore = create<AppState>((set, get) => ({
         const globalIdx = ((offsetY + py) * 512 + (offsetX + px)) * 4;
         const alpha = frame.baseTexture.data[globalIdx + 3];
         const maskIdx = (py * w + px) * 4;
-        maskData[maskIdx] = alpha > 0 ? 255 : 0;
-        maskData[maskIdx + 1] = alpha > 0 ? 255 : 0;
-        maskData[maskIdx + 2] = alpha > 0 ? 255 : 0;
-        maskData[maskIdx + 3] = alpha > 0 ? 255 : 0;
+        const val = alpha > 0 ? 255 : 0;
+        maskData[maskIdx] = val;
+        maskData[maskIdx + 1] = val;
+        maskData[maskIdx + 2] = val;
+        maskData[maskIdx + 3] = 255;
       }
     }
 
     const result = clusterAndGenerateTexturesV2(
       maskImageData,
       effectiveBbox,
-      frame.bgImageData,
+      frame.baseTexture,
       0.025,
       512
     );
 
     if (!result) return;
 
-    const { baseColors: extractedColors, regionIdTex: rawRegionIdTex, deltaTex: newDeltaTex } = result;
+    const { baseColors: extractedColors, regionIdTex: rawRegionIdTex, deltaPacked: newDeltaPacked, blockFlags } = result;
 
-    const tempColors = [...colors];
-    const newColorEntries: SharedBaseColor[] = [];
+    let globalColors = sharedBaseColors.map(c => ({ ...c, frameIds: [...c.frameIds] }));
+    let currentNextId = nextColorId;
+    const usedGlobalIds = new Set<number>();
+    const localToGlobal = new Map<number, number>();
 
-    for (const ec of extractedColors) {
-      let found = false;
-      for (const gc of tempColors) {
+    for (let i = 0; i < extractedColors.length; i++) {
+      const ec = extractedColors[i];
+      let matchedGlobalId: number | null = null;
+      let minDist = Infinity;
+      const threshold = 0.025;
+
+      for (const gc of globalColors) {
         const dh = Math.min(Math.abs(gc.h - ec.h), 1 - Math.abs(gc.h - ec.h));
         const ds = Math.abs(gc.s - ec.s);
         const dl = Math.abs(gc.l - ec.l);
-        if (dh < 0.025 && ds < 0.1 && dl < 0.1) {
-          gc.tempFlag = true;
-          found = true;
-          break;
+        const dist = dh + ds * 0.5 + dl * 0.5;
+
+        if (dist < minDist && dist < threshold) {
+          minDist = dist;
+          matchedGlobalId = gc.id;
         }
       }
-      if (!found) {
-        newColorEntries.push({
-          id: currentNextId,
+
+      if (matchedGlobalId !== null) {
+        localToGlobal.set(i, matchedGlobalId);
+        usedGlobalIds.add(matchedGlobalId);
+
+        const gc = globalColors.find(c => c.id === matchedGlobalId);
+        if (gc && !gc.frameIds.includes(activeFrameId)) {
+          gc.frameIds.push(activeFrameId);
+        }
+      } else {
+        const newId = currentNextId;
+        globalColors.push({
+          id: newId,
           h: ec.h,
           s: ec.s,
           l: ec.l,
           frameIds: [activeFrameId],
           area: 0,
-          tempFlag: true,
         });
+        localToGlobal.set(i, newId);
+        usedGlobalIds.add(newId);
         currentNextId++;
       }
     }
 
-    const finalColors = [...tempColors, ...newColorEntries];
-
-    const filtered = finalColors.filter(c => {
-      if (c.frameIds.includes(activeFrameId) && c.tempFlag === false) {
-        return false;
+    const totalPixels = w * h;
+    const newRegionIdTex = new Uint8Array(totalPixels);
+    for (let i = 0; i < totalPixels; i++) {
+      const localIdx = rawRegionIdTex[i];
+      if (localIdx > 0) {
+        const globalId = localToGlobal.get(localIdx - 1);
+        newRegionIdTex[i] = globalId !== undefined ? globalId : 0;
       }
-      return true;
-    });
+    }
 
-    const localToGlobal = new Map<number, number>();
-    let localIdx = 0;
-    for (const ec of extractedColors) {
-      let globalId: number | undefined;
-      let minDist = 0.3;
-      for (const fc of finalColors) {
-        if (!fc.tempFlag) continue;
-        const dh = Math.min(Math.abs(fc.h - ec.h), 1 - Math.abs(fc.h - ec.h));
-        const ds = Math.abs(fc.s - ec.s);
-        const dl = Math.abs(fc.l - ec.l);
-        const dist = dh + ds * 0.5 + dl * 0.5;
-        if (dist < minDist) {
-          minDist = dist;
-          globalId = fc.id;
+    // ★ 关键修复：用全局基础色 + 原始图像重新计算 deltaPacked
+    //   因为 regionIdTex 已从本地索引重映射到全局 ID，
+    //   而 clusterAndGenerateTexturesV2 返回的 deltaPacked 是基于本地基础色的，
+    //   必须基于全局基础色重新量化残差，否则解码时色相会严重偏差
+    const colorMapById = new Map<number, { h: number; s: number; l: number }>();
+    for (const gc of globalColors) {
+      colorMapById.set(gc.id, { h: gc.h, s: gc.s, l: gc.l });
+    }
+
+    const recomputedDeltaPacked = new Uint16Array(totalPixels);
+    const normalizeHueDelta = (delta: number) => {
+      if (delta > 0.5) return delta - 1.0;
+      if (delta < -0.5) return delta + 1.0;
+      return delta;
+    };
+
+    const bgImg = frame.bgImageData;
+    if (!bgImg) return;
+
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const idx = py * w + px;
+        const globalId = newRegionIdTex[idx];
+        if (globalId === 0) continue;
+        const base = colorMapById.get(globalId);
+        if (!base) continue;
+
+        const gx = offsetX + px;
+        const gy = offsetY + py;
+        const pIdx4 = (gy * 512 + gx) * 4;
+        const hsl = rgbToHsl(bgImg.data[pIdx4], bgImg.data[pIdx4 + 1], bgImg.data[pIdx4 + 2]);
+        const dH = normalizeHueDelta(hsl.h - base.h);
+        const dS = hsl.s - base.s;
+        const dL = hsl.l - base.l;
+
+        const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+        const range = getRangeForBlock(blockFlags, blockIdx);
+        const qH = quantizeH(dH, range);
+        const qS = quantizeS(dS, range);
+        const qL = quantizeL(dL, range);
+
+        recomputedDeltaPacked[idx] = packRGB565(qS, qH, qL);
+      }
+    }
+
+    const updatedFrame = { ...frame, regionIdTex: newRegionIdTex, deltaPacked: recomputedDeltaPacked, blockFlags };
+    const updatedFrames = frames.map(f => f.id === activeFrameId ? updatedFrame : f);
+
+    const colorAreaMap = new Map<number, number>();
+    for (const f of updatedFrames) {
+      if (!f.regionIdTex || f.regionIdTex.length === 0) continue;
+      for (const id of f.regionIdTex) {
+        if (id > 0) {
+          colorAreaMap.set(id, (colorAreaMap.get(id) || 0) + 1);
         }
       }
-      if (globalId !== undefined) {
-        localToGlobal.set(localIdx, globalId);
-      }
-      localIdx++;
     }
 
-    const newRegionIdTex = new Uint8Array(rawRegionIdTex.length);
-    for (let i = 0; i < rawRegionIdTex.length; i++) {
-      const localIdxVal = rawRegionIdTex[i];
-      if (localIdxVal > 0) {
-        const globalId = localToGlobal.get(localIdxVal - 1);
-        newRegionIdTex[i] = globalId || 0;
-      }
+    for (const gc of globalColors) {
+      gc.area = colorAreaMap.get(gc.id) || 0;
     }
 
-    const updatedFrames = frames.map(f =>
-      f.id === activeFrameId ? { ...f, regionIdTex: newRegionIdTex, deltaTex: newDeltaTex } : f
-    );
-
-    const cleanColors = filtered.map(c => {
-      const { tempFlag, ...rest } = c;
-      return { ...rest, tempFlag: false };
-    });
+    globalColors.sort((a, b) => b.area - a.area);
 
     set({
       skillGroupEditor: {
         ...state.skillGroupEditor,
         frames: updatedFrames,
-        sharedBaseColors: cleanColors,
+        sharedBaseColors: globalColors,
         nextColorId: currentNextId,
       },
     });

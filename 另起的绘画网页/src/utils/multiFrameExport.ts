@@ -1,4 +1,4 @@
-import { uint8ToBase64, base64ToUint8, rleEncode8, rleEncode16, packRGB565 } from '../core/ftxCore';
+import { rleEncode8, rleEncode16 } from '../core/ftxCore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 
 export interface FrameExportData {
@@ -7,7 +7,7 @@ export interface FrameExportData {
   height: number;
   bbox: { x: number; y: number; w: number; h: number };
   regionIdTex: Uint8Array;
-  deltaTex: Uint8Array;
+  deltaPacked: Uint16Array;
   blockFlags: number;
 }
 
@@ -21,15 +21,8 @@ export function packMultiFrameToBinary(
   const frameChunks: Uint8Array[] = [];
   for (const frame of frames) {
     const nameBytes = new TextEncoder().encode(frame.name);
-    const totalPixels = frame.bbox.w * frame.bbox.h;
-    const rgb565Data = new Uint16Array(totalPixels);
-    for (let i = 0; i < totalPixels; i++) {
-      const h = frame.deltaTex[i * 3];
-      const s = frame.deltaTex[i * 3 + 1];
-      const l = frame.deltaTex[i * 3 + 2];
-      rgb565Data[i] = packRGB565(s, h, l);
-    }
-    const deltaEncoded = rleEncode16(rgb565Data);
+    
+    const deltaEncoded = rleEncode16(frame.deltaPacked);
     const regionEncoded = rleEncode8(frame.regionIdTex);
 
     let frameSize = 1 + nameBytes.length;

@@ -14,6 +14,7 @@ import {
   dequantizeS,
   dequantizeL,
   uint8ToBase64,
+  packRGB565,
 } from '../core/ftxCore';
 
 export {
@@ -1114,14 +1115,14 @@ export function clusterAndGenerateTexturesV2(
   paintBuffer: ImageData,
   hueThreshold: number = 0.025,
   sourceWidth: number = PAINT_BUFFER_SIZE
-): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaTex: Uint8Array; blockFlags: number } {
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaPacked: Uint16Array; blockFlags: number } {
   const { w, h } = bbox;
   const totalPixels = w * h;
 
   const { baseColors, regionIdTex } = clusterByColorAndSpace(mask, bbox, paintBuffer, sourceWidth);
 
   if (baseColors.length === 0 || totalPixels === 0) {
-    return { baseColors: [], regionIdTex: null, deltaTex: new Uint8Array(0), blockFlags: 0 };
+    return { baseColors: [], regionIdTex: null, deltaPacked: new Uint16Array(0), blockFlags: 0 };
   }
 
   const tempDeltas = new Float32Array(totalPixels * 3);
@@ -1181,7 +1182,7 @@ export function clusterAndGenerateTexturesV2(
   for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
     if (blockPixelCount[b] > 0) {
       const ratio = blockSmallCount[b] / blockPixelCount[b];
-      if (ratio >= 0.7) {
+      if (ratio >= 0.95) {
         blockFlags |= (1 << b);
         ranges[b] = 0.25;
       } else {
@@ -1192,7 +1193,7 @@ export function clusterAndGenerateTexturesV2(
     }
   }
 
-  const deltaTex = new Uint8Array(totalPixels * 3);
+  const deltaPacked = new Uint16Array(totalPixels);
   for (let i = 0; i < totalPixels; i++) {
     const colorIdx = regionIdTex[i];
     if (colorIdx === 0) continue;
@@ -1207,15 +1208,17 @@ export function clusterAndGenerateTexturesV2(
     const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
     const range = ranges[blockIdx];
 
-    deltaTex[idx3] = quantizeH(dH, range);
-    deltaTex[idx3 + 1] = quantizeS(dS, range);
-    deltaTex[idx3 + 2] = quantizeL(dL, range);
+    const qH = quantizeH(dH, range);
+    const qS = quantizeS(dS, range);
+    const qL = quantizeL(dL, range);
+
+    deltaPacked[i] = packRGB565(qS, qH, qL);
   }
 
   return {
     baseColors,
     regionIdTex: regionIdTex.length > 0 ? regionIdTex : null,
-    deltaTex,
+    deltaPacked,
     blockFlags
   };
 }
@@ -1328,7 +1331,7 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
     const region = regions[ri];
     const bbox = computeBBoxAllRings(region);
     const mask = rasterizeRegionMaskLocal(region, bbox);
-    const { baseColors, regionIdTex, deltaTex, blockFlags } = clusterAndGenerateTexturesV2(mask, bbox, buffer, hueThreshold);
+    const { baseColors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(mask, bbox, buffer, hueThreshold);
     if (baseColors.length === 0) continue;
 
     compressedRegions.push({
@@ -1336,7 +1339,7 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
       bbox,
       baseColors,
       regionIdTexture: regionIdTex ? uint8ToBase64(regionIdTex) : undefined,
-      deltaTexture: uint8ToBase64(deltaTex),
+      deltaTexture: deltaPacked.length > 0 ? uint8ToBase64(new Uint8Array(deltaPacked.buffer)) : '',
       blockFlags,
     });
   }
