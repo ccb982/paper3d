@@ -22,6 +22,7 @@ import { useAppStore } from '../stores/useAppStore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 import { packMultiFrameToBinary } from '../utils/multiFrameExport';
 import { compressToGzip } from '../utils/binaryCompression';
+import { refineResidualsAndColors } from '../utils/refineResiduals';
 
 const MERGE_HUE_THRESHOLD = 0.02;
 const MERGE_SAT_THRESHOLD = 0.05;
@@ -1225,39 +1226,44 @@ export const BaseColorEditor: React.FC = () => {
   }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox]);
 
   const recalculateResidual = useCallback(() => {
-    if (!baseTexture || !bgImageData || !bbox || baseColors.length === 0) return;
+    if (!bgImageData || !bbox || baseColors.length === 0) return;
     
     const { w, h } = bbox;
     const totalPixels = w * h;
     const tempDeltas = new Float32Array(totalPixels * 3);
     
+    // 构建颜色映射：ID -> 基础色（baseColors 排序后索引与 ID 不再对应）
+    const colorMapById = new Map<number, SharedBaseColor>();
+    for (const c of baseColors) {
+      colorMapById.set(c.id, c);
+    }
+    
+    // 直接从 regionIdTex + baseColors 计算残差，不依赖 baseTexture ImageData
+    // 避免 baseTexture 与 baseColors 不同步导致的色相偏差
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
+        const idx3 = py * w + px;
+        const colorId = regionIdTex[idx3];
+        const baseHsl = colorMapById.get(colorId);
+        if (!baseHsl) continue;
+        
         const x = bbox.x + px;
         const y = bbox.y + py;
         const idx = (y * TEX_SIZE + x) * 4;
-        if (baseTexture.data[idx + 3] > 0) {
-          const baseR = baseTexture.data[idx];
-          const baseG = baseTexture.data[idx + 1];
-          const baseB = baseTexture.data[idx + 2];
-          const baseHsl = rgbToHsl(baseR, baseG, baseB);
-          
-          const origR = bgImageData.data[idx];
-          const origG = bgImageData.data[idx + 1];
-          const origB = bgImageData.data[idx + 2];
-          const origHsl = rgbToHsl(origR, origG, origB);
-          
-          let dH = origHsl.h - baseHsl.h;
-          if (dH > 0.5) dH -= 1.0;
-          if (dH < -0.5) dH += 1.0;
-          const dS = origHsl.s - baseHsl.s;
-          const dL = origHsl.l - baseHsl.l;
-          
-          const idx3 = py * w + px;
-          tempDeltas[idx3 * 3] = dH;
-          tempDeltas[idx3 * 3 + 1] = dS;
-          tempDeltas[idx3 * 3 + 2] = dL;
-        }
+        const origR = bgImageData.data[idx];
+        const origG = bgImageData.data[idx + 1];
+        const origB = bgImageData.data[idx + 2];
+        const origHsl = rgbToHsl(origR, origG, origB);
+        
+        let dH = origHsl.h - baseHsl.h;
+        if (dH > 0.5) dH -= 1.0;
+        if (dH < -0.5) dH += 1.0;
+        const dS = origHsl.s - baseHsl.s;
+        const dL = origHsl.l - baseHsl.l;
+        
+        tempDeltas[idx3 * 3] = dH;
+        tempDeltas[idx3 * 3 + 1] = dS;
+        tempDeltas[idx3 * 3 + 2] = dL;
       }
     }
     
@@ -1273,11 +1279,9 @@ export const BaseColorEditor: React.FC = () => {
       
       for (let py = 0; py < h; py++) {
         for (let px = 0; px < w; px++) {
-          const x = bbox.x + px;
-          const y = bbox.y + py;
-          const idx = (y * TEX_SIZE + x) * 4;
-          if (baseTexture.data[idx + 3] > 0) {
-            const idx3 = py * w + px;
+          const idx3 = py * w + px;
+          const colorId = regionIdTex[idx3];
+          if (colorId > 0) {
             const dH = tempDeltas[idx3 * 3];
             const dS = tempDeltas[idx3 * 3 + 1];
             const dL = tempDeltas[idx3 * 3 + 2];
@@ -1301,7 +1305,7 @@ export const BaseColorEditor: React.FC = () => {
       for (let b = 0; b < 16; b++) {
         if (blockPixelCount[b] > 0) {
           const ratio = blockSmallCount[b] / blockPixelCount[b];
-          if (ratio >= 0.7) {
+          if (ratio >= 0.95) {
             newBlockFlags |= (1 << b);
             ranges[b] = 0.25;
           } else {
@@ -1315,19 +1319,63 @@ export const BaseColorEditor: React.FC = () => {
       setResidualRanges(ranges);
       setBlockFlags(newBlockFlags);
     }
-    
+
+    // ★ 残差修正：对色相偏差大的像素尝试用周围/全局基础色替换
+    //    修正后可让更多块进入窄范围(0.25)，减少 clamp 截断导致的色相偏差
+    const regionIdTexCopy = new Uint8Array(regionIdTex);
+    const baseColorsCopy = baseColors.map((c: SharedBaseColor) => ({ ...c }));
+    const prevColorCount = baseColorsCopy.length;
+    const refinementResult = refineResidualsAndColors(
+      regionIdTexCopy,
+      baseColorsCopy,
+      bbox,
+      bgImageData,
+      tempDeltas,
+      TEX_SIZE,
+      0.25,
+      3
+    );
+
+    // 无论是否修正，都使用返回的最新 blockFlags 更新
+    // 因为残差可能已变化（用户调HSL），需要重新评估块范围
+    newBlockFlags = refinementResult.blockFlags;
+    setBlockFlags(newBlockFlags);
+
+    // 同步更新 ranges
+    const refinedRanges = new Float32Array(16);
+    for (let b = 0; b < 16; b++) {
+      refinedRanges[b] = (newBlockFlags & (1 << b)) ? 0.25 : 0.5;
+    }
+    setResidualRanges(refinedRanges);
+    ranges = refinedRanges;
+
+    // 如果发生了像素修正，则更新 regionIdTex 和 baseColors
+    if (refinementResult.changed) {
+      // 写回修正后的 regionIdTex
+      if (activeFrameId) {
+        updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
+      }
+      // 如果 baseColors 被 push 了新颜色，同步回全局
+      if (baseColorsCopy.length !== prevColorCount) {
+        setSharedBaseColors([...baseColorsCopy]);
+      }
+
+      console.log('[refineResiduals] 修正完成, changed=true, changedPixels=' + 
+        refinementResult.changedPixelCount + ', newBlockFlags=' + newBlockFlags.toString(2).padStart(16,'0') +
+        ', baseColors ' + prevColorCount + '->' + baseColorsCopy.length);
+    }
+
     const deltaPacked = new Uint16Array(totalPixels);
+    // 使用修正后的 regionIdTex（如果有修正）来判断像素有效性
+    const effectiveRegionIdTex = refinementResult.changed ? regionIdTexCopy : regionIdTex;
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const idx = py * w + px;
-        const x = bbox.x + px;
-        const y = bbox.y + py;
-        const pIdx = (y * TEX_SIZE + x) * 4;
-        if (baseTexture.data[pIdx + 3] > 0) {
-          const idx3 = idx;
-          const dH = tempDeltas[idx3 * 3];
-          const dS = tempDeltas[idx3 * 3 + 1];
-          const dL = tempDeltas[idx3 * 3 + 2];
+        const colorId = effectiveRegionIdTex[idx];
+        if (colorId > 0) {
+          const dH = tempDeltas[idx * 3];
+          const dS = tempDeltas[idx * 3 + 1];
+          const dL = tempDeltas[idx * 3 + 2];
           
           const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
           const range = ranges[blockIdx];
@@ -1352,7 +1400,7 @@ export const BaseColorEditor: React.FC = () => {
       });
     }
     setTimeout(() => saveToHistory(), 0);
-  }, [baseTexture, bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges]);
+  }, [bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges]);
 
   // 更新基础色并重新生成纹理
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
