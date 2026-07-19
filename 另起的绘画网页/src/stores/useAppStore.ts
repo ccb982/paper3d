@@ -1307,7 +1307,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const entity = new RegionEntity(i, layerId, polygon);
 
       // 构建 ftx 压缩数据
-      entity.buildFromPaintBuffer(paintBuffer, 0.025, 128);
+      entity.buildFromPaintBuffer(paintBuffer, 0.025, 512);
 
       // 恢复变换参数和边框扭曲参数（从区域注释中读取）
       const anno = annoMap.get(i);

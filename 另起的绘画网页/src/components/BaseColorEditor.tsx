@@ -22,7 +22,7 @@ import { useAppStore } from '../stores/useAppStore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 import { packMultiFrameToBinary } from '../utils/multiFrameExport';
 import { compressToGzip } from '../utils/binaryCompression';
-import { refineResidualsAndColors } from '../utils/refineResiduals';
+import { refineResidualsAndColors } from '../core/refineResiduals';
 
 const MERGE_HUE_THRESHOLD = 0.02;
 const MERGE_SAT_THRESHOLD = 0.05;

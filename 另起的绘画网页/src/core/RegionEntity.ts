@@ -11,11 +11,16 @@ import {
   dequantizeH,
   dequantizeS,
   dequantizeL,
+  quantizeH,
+  quantizeS,
+  quantizeL,
   getAdaptiveBlockIndex,
   getRangeForBlock,
   uint8ToBase64,
+  packRGB565,
   unpackRGB565,
 } from '../core/ftxCore';
+import { refineResidualsAndColors } from '../core/refineResiduals';
 import { compressToBinary } from '../utils/binaryCompression';
 import type { CompressionResultV2 } from '../utils/colorCompressor';
 
@@ -66,8 +71,7 @@ export class RegionEntity {
 
   public buildFromPaintBuffer(
     paintBuffer: ImageData,
-    hueThreshold: number = 0.025,
-    textureSize: number = 128
+    hueThreshold: number = 0.025
   ): void {
     
     // 直接从 boundary 计算世界坐标包围盒（与边框点处理方式一致，Y向上）
@@ -100,7 +104,7 @@ export class RegionEntity {
     const ctx = smallComposited.getContext('2d')!;
     ctx.putImageData(paintBuffer, 0, 0);
 
-    const { baseColors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
+    const { baseColors: initialColors, regionIdTex: initialRegionIdTex, deltaPacked: initialDeltaPacked, blockFlags: initialBlockFlags } = clusterAndGenerateTexturesV2(
       mask,
       pixelBbox,
       ctx.getImageData(0, 0, 512, 512),
@@ -108,38 +112,96 @@ export class RegionEntity {
       512
     );
 
-    console.log(`[FTX管道] 区域 ${this.id} → paintBuffer→FTX: ${baseColors.length}基础色, 残差${deltaPacked.length}像素, blockFlags=${blockFlags}`);
+    console.log(`[FTX管道] 区域 ${this.id} → 初次聚类: ${initialColors.length}基础色, 残差${initialDeltaPacked.length}像素, blockFlags=${initialBlockFlags}`);
 
-    const resampledDelta = new Uint8Array(textureSize * textureSize * 3);
-    const resampledRegionId = regionIdTex ? new Uint8Array(textureSize * textureSize) : null;
+    // --- 残差修正：与基础色编辑器逻辑对齐 ---
+    let baseColors = initialColors;
+    let regionIdTex = initialRegionIdTex;
+    let deltaPacked = initialDeltaPacked;
+    let blockFlags = initialBlockFlags;
 
-    for (let ty = 0; ty < textureSize; ty++) {
-      for (let tx = 0; tx < textureSize; tx++) {
-        const u = (tx + 0.5) / textureSize;
-        const v = (ty + 0.5) / textureSize;
-        const srcX = Math.floor(u * w);
-        const srcY = Math.floor((1 - v) * h);
-        const srcIdx = srcY * w + srcX;
+    if (regionIdTex && baseColors.length > 0) {
+      const totalPixels = w * h;
 
-        const packed = deltaPacked[srcIdx];
-        const { s: decodedS, h: decodedH, l: decodedL } = unpackRGB565(packed);
+      // 将 deltaPacked 解包为浮点残差数组
+      const tempDeltas = new Float32Array(totalPixels * 3);
+      for (let idx = 0; idx < totalPixels; idx++) {
+        const colorIdx = regionIdTex[idx];
+        if (colorIdx === 0) continue;
+        const packed = deltaPacked[idx];
+        const { s, h: qH, l: qL } = unpackRGB565(packed);
+        const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
+        const range = getRangeForBlock(blockFlags, blockIdx);
+        tempDeltas[idx * 3] = dequantizeH(qH, range);
+        tempDeltas[idx * 3 + 1] = dequantizeS(s, range);
+        tempDeltas[idx * 3 + 2] = dequantizeL(qL, range);
+      }
 
-        resampledDelta[(ty * textureSize + tx) * 3] = decodedH;
-        resampledDelta[(ty * textureSize + tx) * 3 + 1] = decodedS;
-        resampledDelta[(ty * textureSize + tx) * 3 + 2] = decodedL;
+      // 准备含 ID 的基础色列表
+      const colorsWithId = baseColors.map((c, i) => ({ id: i + 1, ...c }));
+      const regionIdTexCopy = new Uint8Array(regionIdTex);
+      const paintBufferData = ctx.getImageData(0, 0, 512, 512);
 
-        if (resampledRegionId && regionIdTex) {
-          resampledRegionId[ty * textureSize + tx] = regionIdTex[srcIdx];
+      // 执行核心修正
+      const refinementResult = refineResidualsAndColors(
+        regionIdTexCopy,
+        colorsWithId,
+        pixelBbox,
+        paintBufferData,
+        tempDeltas,
+        512,
+        0.015,
+        3
+      );
+
+      // 将修正后的 tempDeltas 重新量化为 RGB565
+      const finalBaseColors = colorsWithId;
+      const finalRegionIdTex = regionIdTexCopy;
+      const finalBlockFlags = refinementResult.blockFlags;
+      const finalDeltaPacked = new Uint16Array(totalPixels);
+      for (let idx = 0; idx < totalPixels; idx++) {
+        const colorIdx = finalRegionIdTex[idx];
+        if (colorIdx === 0) {
+          finalDeltaPacked[idx] = 0;
+          continue;
         }
+        const dH = tempDeltas[idx * 3];
+        const dS = tempDeltas[idx * 3 + 1];
+        const dL = tempDeltas[idx * 3 + 2];
+        const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
+        const range = getRangeForBlock(finalBlockFlags, blockIdx);
+        finalDeltaPacked[idx] = packRGB565(quantizeS(dS, range), quantizeH(dH, range), quantizeL(dL, range));
+      }
+
+      baseColors = finalBaseColors;
+      regionIdTex = finalRegionIdTex;
+      deltaPacked = finalDeltaPacked;
+      blockFlags = finalBlockFlags;
+
+      console.log(`[FTX管道] 区域 ${this.id} 残差修正完成，修正了 ${refinementResult.changedPixelCount} 个像素，最终 ${baseColors.length} 基础色`);
+    }
+
+    // 直接使用原始 512x512 分辨率数据，不做降采样
+    const finalDelta = new Uint8Array(w * h * 3);
+    const finalRegionId = regionIdTex ? new Uint8Array(w * h) : null;
+
+    for (let idx = 0; idx < w * h; idx++) {
+      const packed = deltaPacked[idx];
+      const { s: decodedS, h: decodedH, l: decodedL } = unpackRGB565(packed);
+      finalDelta[idx * 3] = decodedH;
+      finalDelta[idx * 3 + 1] = decodedS;
+      finalDelta[idx * 3 + 2] = decodedL;
+      if (finalRegionId && regionIdTex) {
+        finalRegionId[idx] = regionIdTex[idx];
       }
     }
 
     this._ftxData = {
       version: 3,
       baseColors,
-      deltaTexture: resampledDelta,
-      regionIdTexture: resampledRegionId || undefined,
-      textureSize,
+      deltaTexture: finalDelta,
+      regionIdTexture: finalRegionId || undefined,
+      textureSize: 512,
       bbox: pixelBbox,
       blockFlags,
     };
@@ -203,7 +265,7 @@ export class RegionEntity {
     deltaTexture: Uint8Array,
     regionIdTexture: Uint8Array | undefined,
     textureSize: number,
-    _bbox: { w: number; h: number },
+    bbox: { x: number; y: number; w: number; h: number },
     blockFlags: number = 0
   ): Uint8ClampedArray {
     const pixelData = new Uint8ClampedArray(textureSize * textureSize * 4);
@@ -214,7 +276,7 @@ export class RegionEntity {
         const idx = ty * textureSize + tx;
         const deltaIdx = idx * 3;
 
-        const blockIdx = getAdaptiveBlockIndex(tx, ty, textureSize, textureSize);
+        const blockIdx = getAdaptiveBlockIndex(tx, ty, bbox.w, bbox.h);
         const range = getRangeForBlock(blockFlags, blockIdx);
 
         let finalHsl;
@@ -266,7 +328,7 @@ export class RegionEntity {
       h: Math.round(this.worldBbox.h * 512),
     };
     const result: CompressionResultV2 = {
-      version: 2,
+      version: 3,
       resolution: [512, 512],
       regionCount: 1,
       regions: [{
@@ -300,6 +362,7 @@ export class RegionEntity {
         regionIdTexture: this._ftxData.regionIdTexture ? Array.from(this._ftxData.regionIdTexture) : undefined,
         textureSize: this._ftxData.textureSize,
         bbox: this._ftxData.bbox,
+        blockFlags: this._ftxData.blockFlags,
       } : null,
       ftxId: `ftx_${this.id}_${this.layerId}`,
     };

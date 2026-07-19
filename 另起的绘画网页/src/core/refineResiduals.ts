@@ -1,5 +1,5 @@
-import { rgbToHsl } from './colorCompressor';
-import { getAdaptiveBlockIndex, ADAPTIVE_TOTAL_BLOCKS, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getRangeForBlock } from '../core/ftxCore';
+import { rgbToHsl } from '../utils/colorCompressor';
+import { getAdaptiveBlockIndex, ADAPTIVE_TOTAL_BLOCKS, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getRangeForBlock } from './ftxCore';
 
 function hueDistance(h1: number, h2: number): number {
   let d = Math.abs(h1 - h2);
