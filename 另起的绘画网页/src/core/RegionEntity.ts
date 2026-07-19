@@ -181,18 +181,24 @@ export class RegionEntity {
       console.log(`[FTX管道] 区域 ${this.id} 残差修正完成，修正了 ${refinementResult.changedPixelCount} 个像素，最终 ${baseColors.length} 基础色`);
     }
 
-    // 直接使用原始 512x512 分辨率数据，不做降采样
-    const finalDelta = new Uint8Array(w * h * 3);
-    const finalRegionId = regionIdTex ? new Uint8Array(w * h) : null;
+    // 将局部 bbox 数据扩展到完整的 512x512 纹理
+    const finalDelta = new Uint8Array(512 * 512 * 3);
+    const finalRegionId = regionIdTex ? new Uint8Array(512 * 512) : null;
 
     for (let idx = 0; idx < w * h; idx++) {
+      const localX = idx % w;
+      const localY = Math.floor(idx / w);
+      const globalX = pixelBbox.x + localX;
+      const globalY = pixelBbox.y + localY;
+      const globalIdx = globalY * 512 + globalX;
+
       const packed = deltaPacked[idx];
       const { s: decodedS, h: decodedH, l: decodedL } = unpackRGB565(packed);
-      finalDelta[idx * 3] = decodedH;
-      finalDelta[idx * 3 + 1] = decodedS;
-      finalDelta[idx * 3 + 2] = decodedL;
+      finalDelta[globalIdx * 3] = decodedH;
+      finalDelta[globalIdx * 3 + 1] = decodedS;
+      finalDelta[globalIdx * 3 + 2] = decodedL;
       if (finalRegionId && regionIdTex) {
-        finalRegionId[idx] = regionIdTex[idx];
+        finalRegionId[globalIdx] = regionIdTex[idx];
       }
     }
 
@@ -276,7 +282,13 @@ export class RegionEntity {
         const idx = ty * textureSize + tx;
         const deltaIdx = idx * 3;
 
-        const blockIdx = getAdaptiveBlockIndex(tx, ty, bbox.w, bbox.h);
+        // 跳过 bbox 外的像素（全透明）
+        if (tx < bbox.x || tx >= bbox.x + bbox.w || ty < bbox.y || ty >= bbox.y + bbox.h) continue;
+
+        // blockFlags 是基于 bbox 内的局部坐标计算的，必须用局部坐标
+        const localX = tx - bbox.x;
+        const localY = ty - bbox.y;
+        const blockIdx = getAdaptiveBlockIndex(localX, localY, bbox.w, bbox.h);
         const range = getRangeForBlock(blockFlags, blockIdx);
 
         let finalHsl;

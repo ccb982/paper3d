@@ -673,14 +673,36 @@ useEffect(() => {
       if (p.y > maxY) maxY = p.y;
     }
 
-    // --- 4. UV 生成（用于纹理映射） ---
+    // --- 4. UV 生成（映射 bbox 区域到几何体） ---
     const rangeX = maxX - minX || 1;
     const rangeY = maxY - minY || 1;
     const uv = new Float32Array(allPoints.length * 2);
-    allPoints.forEach((p, i) => {
-      uv[i * 2] = (p.x - minX) / rangeX;
-      uv[i * 2 + 1] = (p.y - minY) / rangeY;
-    });
+
+    // 从 FTX 数据中获取纹素 bbox（纹理空间中的实际数据区域）
+    const rawFtx = entity.getFtxData();
+    const texSize = 512;
+    if (rawFtx) {
+      const uMin = rawFtx.bbox.x / texSize;
+      const uMax = (rawFtx.bbox.x + rawFtx.bbox.w) / texSize;
+      // 纹理不 flipY，直接用 image 坐标系：V向下 (top=0, bottom=1)
+      const vMin = rawFtx.bbox.y / texSize;
+      const vMax = (rawFtx.bbox.y + rawFtx.bbox.h) / texSize;
+      const uRange = uMax - uMin || 0.001;
+      const vRange = vMax - vMin || 0.001;
+      allPoints.forEach((p, i) => {
+        // 几何体 XY → 归一化 [0,1] → bbox UV
+        const nx = (p.x - minX) / rangeX;
+        const ny = (p.y - minY) / rangeY;  // 0=几何体顶部, 1=几何体底部
+        uv[i * 2] = uMin + nx * uRange;
+        uv[i * 2 + 1] = vMin + ny * vRange;
+      });
+    } else {
+      // 回退：0~1
+      allPoints.forEach((p, i) => {
+        uv[i * 2] = (p.x - minX) / rangeX;
+        uv[i * 2 + 1] = (p.y - minY) / rangeY;
+      });
+    }
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     
     // ★ 调试：UV 详情
@@ -732,7 +754,6 @@ useEffect(() => {
     const colorTexture = entity.getGPUTexture();
     let colorMesh: THREE.Mesh | null = null;
     if (colorTexture) {
-      colorTexture.flipY = true;
       colorTexture.needsUpdate = true;
       
       // ★ 调试：检查纹理像素数据
