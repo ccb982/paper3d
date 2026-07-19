@@ -4,7 +4,7 @@ import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
-import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact } from '../utils/regionDetectionExact';
+import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact, type DebugRegionData } from '../utils/regionDetectionExact';
 import { findRegionByPoint, findRegionIndexByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
@@ -972,6 +972,7 @@ useEffect(() => {
   const [previewPoint, setPreviewPoint] = useState<Point | null>(null);
   // 使用全局画布尺寸
   const [showDebugRegions, setShowDebugRegions] = useState(false);
+  const debugRegionsCache = useRef<DebugRegionData[] | null>(null);
   const [showGridCells, setShowGridCells] = useState(false);
   const [debugRegionId, setDebugRegionId] = useState(0);
   const [debugOutsideId, setDebugOutsideId] = useState(-1);
@@ -1088,7 +1089,19 @@ useEffect(() => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === 'd') {
-        setShowDebugRegions(prev => !prev);
+        setShowDebugRegions(prev => {
+          const newState = !prev;
+          if (newState) {
+            const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+            if (currentLayerShapes.length > 0) {
+              const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+              debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, 1000, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+            }
+          } else {
+            debugRegionsCache.current = null;
+          }
+          return newState;
+        });
         return;
       }
       if (e.ctrlKey && e.key === 'g') {
@@ -1126,7 +1139,18 @@ useEffect(() => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor, colorExtractMode, clearColorExtractPoints, setColorExtractMode]);
+  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor, colorExtractMode, clearColorExtractPoints, setColorExtractMode, shapes, activeLayerId, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold]);
+
+  // ========== 形状或图层变化时更新调试缓存 ==========
+  useEffect(() => {
+    if (showDebugRegions) {
+      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      if (currentLayerShapes.length > 0) {
+        const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+        debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, 1000, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+      }
+    }
+  }, [showDebugRegions, shapes, activeLayerId]);
 
   // ========== 切换工具时清理临时图形 ==========
   const prevToolRef = useRef(currentTool);
@@ -2630,22 +2654,14 @@ useEffect(() => {
       });
     }
 
-    // ========== 调试：BFS区域绘制 ==========
+    // ========== 调试：BFS区域绘制（使用缓存数据）==========
     if (showDebugRegions && layerVisibility.drawLayer) {
-      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
-      if (currentLayerShapes.length > 0) {
-        // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
-        const worldBounds = {
-          xMin: 0,
-          xMax: 1,
-          yMin: 0,
-          yMax: 1,
-        };
-        const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, 1000, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+      const debugRegions = debugRegionsCache.current;
+      if (!debugRegions || debugRegions.length === 0) return;
 
-        const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
+      const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
-        debugRegions.forEach((region, idx) => {
+      debugRegions.forEach((region, idx) => {
           if (debugRegionId !== 0 && region.id !== debugRegionId) return;
           ctx.save();
           const color = colors[idx % colors.length];
@@ -2707,9 +2723,6 @@ useEffect(() => {
 
           ctx.restore();
         });
-
-        // console.log(`[调试] 绘制了 ${debugRegions.length} 个BFS区域`);
-      }
     }
 
     // ========== 调试：绘制原始网格单元格（BFS搜索范围）==========
