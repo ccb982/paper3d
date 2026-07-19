@@ -2646,293 +2646,61 @@ useEffect(() => {
         const colors = ['#ff6b6b', '#4ecdc4', '#ffe66d', '#95e1d3', '#f38181', '#aa96da'];
 
         debugRegions.forEach((region, idx) => {
-          // console.log(`[调试绘制] region.id=${region.id}, boundaryPoints=${region.boundaryPoints.length}`);
           if (debugRegionId !== 0 && region.id !== debugRegionId) return;
           ctx.save();
           const color = colors[idx % colors.length];
 
-          // 绘制边界点（按 outsideId 分组，相同 outsideId 使用相同颜色）
-          // 端点信息模式和绘制环模式下不绘制
-          // 检查条件：非原始模式下也检查 uniqueBoundaryPoints
-          const hasPoints = debugShowOriginal 
-            ? (region.boundaryPoints && region.boundaryPoints.length > 0)
-            : ((region.uniqueBoundaryPoints && region.uniqueBoundaryPoints.length > 0) || (region.boundaryPoints && region.boundaryPoints.length > 0));
-          if (!debugShowEndpoints && !debugShowRings && !debugShowSegments && hasPoints) {
-            // 按 outsideId 分组
-            const debugPoints = debugShowOriginal
-              ? region.boundaryPoints
-              : (region.uniqueBoundaryPoints as any || region.boundaryPoints);
-            // 确保即使只有一个 outsideId 也能正确绘制
-            if (debugPoints.length === 0) {
-              console.warn(`[警告] 区域${region.id}调试点数为0`);
-              return;
-            }
-            const outsideIdGroups = new Map<number, { point: Point; insideId: number }[]>();
-            for (const bp of debugPoints) {
-              if (!outsideIdGroups.has(bp.outsideId)) {
-                outsideIdGroups.set(bp.outsideId, []);
-              }
-              outsideIdGroups.get(bp.outsideId)!.push(bp);
+          // 绘制边界点（不按 outsideId 分组，统一颜色）
+          const hasPoints = region.boundaryPoints && region.boundaryPoints.length > 0;
+          if (hasPoints && !debugShowRings) {
+            ctx.fillStyle = color;
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1;
+
+            for (const bp of region.boundaryPoints) {
+              const canvasPoint = worldToCanvasFn(bp.point.x, bp.point.y);
+              ctx.beginPath();
+              ctx.arc(canvasPoint.x, canvasPoint.y, 4, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
             }
 
-            // console.log(`[调试绘制] 区域${region.id}分组(${debugShowOriginal ? '原始' : '新聚类'}):`, Array.from(outsideIdGroups.entries()).map(([id, pts]) => `o:${id}=${pts.length}`));
-
-            const pointColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
-            let colorIdx = 0;
-
-            // 绘制所有 outsideId 组的点
-            for (const [outsideId, points] of outsideIdGroups) {
-              if (debugOutsideId !== -1 && outsideId !== debugOutsideId) continue;
-              const color = pointColors[colorIdx % pointColors.length];
-              colorIdx++;
-              ctx.fillStyle = color;
-              ctx.strokeStyle = '#000000';
-              ctx.lineWidth = 1;
-
-              for (const bp of points) {
-                const canvasPoint = worldToCanvasFn(bp.point.x, bp.point.y);
-                ctx.beginPath();
-                ctx.arc(canvasPoint.x, canvasPoint.y, 4, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.stroke();
-
-                ctx.fillStyle = color;
-                ctx.font = '7px monospace';
-                ctx.fillText(`o:${outsideId}`, canvasPoint.x + 6, canvasPoint.y - 6);
-              }
-            }
-
-            // 绘制重心到每个去重后边界点的连线（端点信息模式且非原始模式时不绘制）
-            if (!debugShowEndpoints && !debugShowOriginal && region.centroid && region.uniqueBoundaryPoints) {
+            if (region.centroid) {
               const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
-              
-              // 绘制重心点
               ctx.fillStyle = '#ff0000';
               ctx.beginPath();
               ctx.arc(centroidCanvas.x, centroidCanvas.y, 5, 0, Math.PI * 2);
               ctx.fill();
-              
-              // 绘制重心标记
               ctx.font = 'bold 10px monospace';
               ctx.fillText('重心', centroidCanvas.x + 8, centroidCanvas.y - 8);
-              
-              // 按 outsideId 分组
-              const uniqueGroups = new Map<number, { point: Point; outsideId: number }[]>();
-              for (const ub of region.uniqueBoundaryPoints) {
-                if (!uniqueGroups.has(ub.outsideId)) {
-                  uniqueGroups.set(ub.outsideId, []);
-                }
-                uniqueGroups.get(ub.outsideId)!.push(ub);
-              }
-              
-              const groupColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
-              let groupColorIdx = 0;
-              
-              ctx.lineWidth = 1;
-              ctx.globalAlpha = 0.7;
-              
-              // 按 outsideId 分组绘制连线和点
-              for (const [outsideId, points] of uniqueGroups) {
-                // 根据调试面板的外部ID过滤
-                if (debugOutsideId !== -1 && outsideId !== debugOutsideId) continue;
-                
-                const color = groupColors[groupColorIdx % groupColors.length];
-                groupColorIdx++;
-                ctx.strokeStyle = color;
-                
-                for (const ub of points) {
-                  const pointCanvas = worldToCanvasFn(ub.point.x, ub.point.y);
-                  
-                  // 裁剪连线到画布边界内
-                  const clippedEnd = clipLineToCanvas(centroidCanvas, pointCanvas, canvasWidth, canvasHeight);
-                  
-                  ctx.beginPath();
-                  ctx.moveTo(centroidCanvas.x, centroidCanvas.y);
-                  ctx.lineTo(clippedEnd.x, clippedEnd.y);
-                  ctx.stroke();
-                }
-              }
-              
-              ctx.globalAlpha = 1;
             }
           }
 
-          // 绘制端点信息（原始模式下使用 originalOutsideIdEndpoints，非原始模式下使用 outsideIdEndpoints）
-          // 绘制环模式下不显示端点信息
-          const endpointsToShow = debugShowOriginal ? region.originalOutsideIdEndpoints : region.outsideIdEndpoints;
-          if (debugShowEndpoints && !debugShowRings && !debugShowSegments && endpointsToShow && endpointsToShow.length > 0 && region.centroid) {
-            const centroidCanvas = worldToCanvasFn(region.centroid.x, region.centroid.y);
-            const endpointColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
-            
-            // 绘制重心点
-            ctx.fillStyle = '#ff0000';
-            ctx.beginPath();
-            ctx.arc(centroidCanvas.x, centroidCanvas.y, 5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.strokeStyle = '#000000';
-            ctx.lineWidth = 1;
-            ctx.stroke();
-            
-            ctx.font = 'bold 10px monospace';
-            
-            endpointsToShow!.forEach((ep, idx) => {
-              if (debugOutsideId !== -1 && ep.outsideId !== debugOutsideId) return;
-              
-              const color = endpointColors[idx % endpointColors.length];
-              
-              // 绘制端点 p1
-              const p1Canvas = worldToCanvasFn(ep.p1.x, ep.p1.y);
-              ctx.fillStyle = color;
-              ctx.beginPath();
-              ctx.arc(p1Canvas.x, p1Canvas.y, 6, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.strokeStyle = '#000000';
-              ctx.lineWidth = 2;
-              ctx.stroke();
-              
-              // p1 标签
-              ctx.fillStyle = color;
-              ctx.fillText(`p1:(${ep.p1.x.toFixed(2)},${ep.p1.y.toFixed(2)}) d=${ep.p1.distToCentroid.toFixed(3)}`, p1Canvas.x + 8, p1Canvas.y - 8);
-              
-              // 如果有 p2，绘制 p2
-              if (ep.p2) {
-                const p2Canvas = worldToCanvasFn(ep.p2.x, ep.p2.y);
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(p2Canvas.x, p2Canvas.y, 6, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.strokeStyle = '#000000';
-                ctx.lineWidth = 2;
-                ctx.stroke();
-                
-                // p2 标签
-                ctx.fillStyle = color;
-                ctx.fillText(`p2:(${ep.p2.x.toFixed(2)},${ep.p2.y.toFixed(2)}) d=${ep.p2.distToCentroid.toFixed(3)}`, p2Canvas.x + 8, p2Canvas.y - 8);
-                
-                // 绘制端点 ID 标签
-                ctx.fillStyle = '#000000';
-                ctx.fillText(`o:${ep.outsideId}`, (p1Canvas.x + p2Canvas.x) / 2 + 8, (p1Canvas.y + p2Canvas.y) / 2);
-              } else {
-                // 单点情况，只显示 outsideId
-                ctx.fillStyle = '#000000';
-                ctx.fillText(`o:${ep.outsideId}`, p1Canvas.x + 8, p1Canvas.y + 12);
-              }
-            });
-          }
-
-          // 绘制环（仅在 debugShowRings 为 true 时显示）
+          // 绘制环（与正式区域注释算法一致的环）
           if (debugShowRings) {
-            // console.log(`[调试绘制] 区域${region.id} rings数据:`, region.rings);
             if (region.rings && region.rings.length > 0) {
-            const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
-            region.rings.forEach((ring, ringIdx) => {
-              if (ring.length < 3) return;
-              const ringColor = ringColors[ringIdx % ringColors.length];
-              ctx.strokeStyle = ringColor;
-              ctx.fillStyle = ringColor + '30';
-              ctx.lineWidth = 3;
-              ctx.beginPath();
-              for (let i = 0; i < ring.length; i++) {
-                const cp = worldToCanvasFn(ring[i].x, ring[i].y);
-                if (i === 0) ctx.moveTo(cp.x, cp.y);
-                else ctx.lineTo(cp.x, cp.y);
-              }
-              ctx.closePath();
-              ctx.fill();
-              ctx.stroke();
-
-              const midIdx = Math.floor(ring.length / 2);
-              const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
-              ctx.fillStyle = ringColor;
-              ctx.font = 'bold 12px monospace';
-              ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
-            });
-            }
-          }
-
-          // 绘制片段（仅在 debugShowSegments 为 true 时显示）
-          if (debugShowSegments) {
-            if (region.segments && region.segments.length > 0) {
-              const segmentColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff', '#ff8800', '#8800ff'];
-              region.segments.forEach((seg, segIdx) => {
-                if (seg.points.length < 1) return;
-                const segColor = segmentColors[segIdx % segmentColors.length];
-                ctx.strokeStyle = segColor;
-                ctx.lineWidth = 2;
+              const ringColors = ['#ff0000', '#00ff00', '#0000ff', '#ff00ff', '#00ffff', '#ff8800', '#8800ff', '#ffff00'];
+              region.rings.forEach((ring, ringIdx) => {
+                if (ring.length < 3) return;
+                const ringColor = ringColors[ringIdx % ringColors.length];
+                ctx.strokeStyle = ringColor;
+                ctx.fillStyle = ringColor + '30';
+                ctx.lineWidth = 3;
                 ctx.beginPath();
-                
-                // 绘制片段线条
-                for (let i = 0; i < seg.points.length; i++) {
-                  const cp = worldToCanvasFn(seg.points[i].x, seg.points[i].y);
+                for (let i = 0; i < ring.length; i++) {
+                  const cp = worldToCanvasFn(ring[i].x, ring[i].y);
                   if (i === 0) ctx.moveTo(cp.x, cp.y);
                   else ctx.lineTo(cp.x, cp.y);
                 }
+                ctx.closePath();
+                ctx.fill();
                 ctx.stroke();
 
-                // 绘制起点和终点标记
-                if (seg.points.length >= 1) {
-                  const startPoint = worldToCanvasFn(seg.start.x, seg.start.y);
-                  ctx.fillStyle = '#ffffff';
-                  ctx.strokeStyle = '#ff0000';
-                  ctx.lineWidth = 2;
-                  ctx.beginPath();
-                  ctx.arc(startPoint.x, startPoint.y, 5, 0, Math.PI * 2);
-                  ctx.fill();
-                  ctx.stroke();
-
-                  if (seg.points.length >= 2) {
-                    const endPoint = worldToCanvasFn(seg.end.x, seg.end.y);
-                    ctx.fillStyle = '#ffffff';
-                    ctx.strokeStyle = '#00ff00';
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.arc(endPoint.x, endPoint.y, 5, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.stroke();
-                  }
-                }
-
-                // 在片段中间位置显示序号
-                if (seg.points.length >= 2) {
-                  const midIdx = Math.floor(seg.points.length / 2);
-                  const midPoint = worldToCanvasFn(seg.points[midIdx].x, seg.points[midIdx].y);
-                  ctx.fillStyle = segColor;
-                  ctx.font = 'bold 10px monospace';
-                  ctx.fillText(`段${segIdx}(${seg.points.length})`, midPoint.x, midPoint.y);
-                }
-              });
-            }
-          }
-
-          // 绘制墙分组点（仅在 debugShowWallGrouped 为 true 时显示）
-          if (debugShowWallGrouped) {
-            if (region.wallGroupedPoints && region.wallGroupedPoints.size > 0) {
-              const wallColors = ['#8b0000', '#006400', '#00008b', '#8b008b', '#8b4513', '#2f4f4f', '#556b2f', '#483d8b', '#008080', '#800000'];
-              region.wallGroupedPoints.forEach((points, wallId) => {
-                const colorIdx = Math.abs(wallId + 1) % wallColors.length;
-                const color = wallColors[colorIdx];
-                ctx.fillStyle = color;
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1;
-
-                // 绘制每个点
-                points.forEach(p => {
-                  const cp = worldToCanvasFn(p.x, p.y);
-                  ctx.beginPath();
-                  ctx.arc(cp.x, cp.y, 4, 0, Math.PI * 2);
-                  ctx.fill();
-                });
-
-                // 在该组点的重心位置显示墙ID
-                if (points.length > 0) {
-                  let sumX = 0, sumY = 0;
-                  points.forEach(p => { sumX += p.x; sumY += p.y; });
-                  const centroid = { x: sumX / points.length, y: sumY / points.length };
-                  const cp = worldToCanvasFn(centroid.x, centroid.y);
-                  ctx.fillStyle = '#ffffff';
-                  ctx.font = 'bold 10px monospace';
-                  ctx.fillText(`墙${wallId}(${points.length})`, cp.x, cp.y);
-                }
+                const midIdx = Math.floor(ring.length / 2);
+                const midPoint = worldToCanvasFn(ring[midIdx].x, ring[midIdx].y);
+                ctx.fillStyle = ringColor;
+                ctx.font = 'bold 12px monospace';
+                ctx.fillText(`环${ringIdx}(${ring.length})`, midPoint.x, midPoint.y);
               });
             }
           }

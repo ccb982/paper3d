@@ -1,5 +1,50 @@
 import type { Point, Shape } from '../types';
 
+// ========== 新增：Douglas-Peucker 多边形简化 ==========
+function perpendicularDistance(p: Point, a: Point, b: Point): number {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+    const projX = a.x + t * dx;
+    const projY = a.y + t * dy;
+    return Math.hypot(p.x - projX, p.y - projY);
+}
+
+function simplifyPolygonDP(points: Point[], epsilon: number): Point[] {
+    if (points.length <= 2) return points;
+    const isClosed = Math.hypot(points[0].x - points[points.length - 1].x,
+                               points[0].y - points[points.length - 1].y) < 1e-6;
+    const pts = isClosed ? points.slice(0, -1) : points;
+    if (pts.length <= 2) return points;
+
+    let dmax = 0;
+    let index = 0;
+    const end = pts.length - 1;
+    for (let i = 1; i < end; i++) {
+        const d = perpendicularDistance(pts[i], pts[0], pts[end]);
+        if (d > dmax) {
+            dmax = d;
+            index = i;
+        }
+    }
+
+    let result: Point[];
+    if (dmax > epsilon) {
+        const left = simplifyPolygonDP(pts.slice(0, index + 1), epsilon);
+        const right = simplifyPolygonDP(pts.slice(index), epsilon);
+        result = left.slice(0, -1).concat(right);
+    } else {
+        result = [pts[0], pts[end]];
+    }
+
+    if (isClosed && result.length > 0) {
+        result.push(result[0]);
+    }
+    return result;
+}
+
 // ========== 1. 光栅化：将图形边缘画到网格上 ==========
 function rasterizeLine(
   x0: number, y0: number,
@@ -917,7 +962,7 @@ export function computeRegionsExact(
     if (boundaryPoints.length < 3) continue;
 
     // 2. 降采样（减少点密度）
-    const downsampleThres = step * 10 * 0.15; // 使用固定降采样因子 0.15
+    const downsampleThres = step * 10 * 0.5; // 增大降采样距离，减少点数
     const downsampledPoints = downsampleBoundaryPointsByOutsideId(boundaryPoints, downsampleThres);
     if (downsampledPoints.length < 3) continue;
 
@@ -949,6 +994,13 @@ export function computeRegionsExact(
     });
 
     const regionPolygon: Point[][] = [outer, ...innerRings];
+    
+    // 对每个区域的所有环进行 Douglas-Peucker 简化
+    const simplifyEpsilon = step * 1.0;
+    for (let ri = 0; ri < regionPolygon.length; ri++) {
+        regionPolygon[ri] = simplifyPolygonDP(regionPolygon[ri], simplifyEpsilon);
+    }
+    
     result.push(regionPolygon);
   }
 
@@ -1130,234 +1182,60 @@ export function reclusterBoundaryPointsByPolarAngle(
   return newBoundaryPoints;
 }
 
-// ========== 调试主函数 getDebugRegions（已集成新聚类）==========
+// ========== 调试主函数 getDebugRegions（与正式算法一致）==========
 export function getDebugRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 300,
+  resolution: number = 1000,
   distanceThresholdFactor: number = 1.2,
   radialThresholdFactor: number = 2,
   downsampleDistanceFactor: number = 0.5,
   ringDistanceThreshold: number = 2,
   ringRadialThreshold: number = 2
 ): DebugRegionData[] {
-  const gridData = computeGridRegions(shapes, worldBounds, resolution);
-  const debug: DebugRegionData[] = [];
-  for (const region of gridData.regions) {
-    if (region.touchesEdge) continue;
-    const boundaryPoints = collectBoundaryPointsForMainRegion(region.id, gridData, shapes);
-    
-    const step = Math.min(gridData.stepX, gridData.stepY);
-    
-    // 降采样：先减少点密度，避免极角排序后出现微小抖动
-    // 使用更大的基础倍数（10倍step），使得滑块调整更有效果
-    const downsampleThres = step * 10 * downsampleDistanceFactor;
-    // console.log(`[调试] 区域 ${region.id} 降采样阈值=${downsampleThres.toFixed(6)}`);
-    const downsampledPoints = downsampleBoundaryPointsByOutsideId(boundaryPoints, downsampleThres);
-    
-    // 调整常数因子，确保阈值足够大以匹配实际点间距
-    const distThreshold = step * 8 * (1 + distanceThresholdFactor);
-    const radialThreshold = step * 4 * (1 + radialThresholdFactor);
-    const reclusteredPoints = reclusterBoundaryPointsByPolarAngle(downsampledPoints, distThreshold, radialThreshold);
-    
-    // 如果重新聚类失败（返回空），使用原始点作为回退
-    const finalPoints = reclusteredPoints.length > 0 ? reclusteredPoints : downsampledPoints.length > 0 ? downsampledPoints : boundaryPoints;
+  const regions = computeRegionsExact(shapes, worldBounds, resolution, '#ffaa00');
 
-    const allBoundaryPoints = finalPoints.map(bp => bp.point);
-    
-    const uniqueBoundaryPoints: { point: Point; insideId: number; outsideId: number }[] = finalPoints.map(bp => ({
-      point: bp.point,
-      insideId: bp.insideId,
-      outsideId: bp.outsideId
+  const debugData: DebugRegionData[] = [];
+  for (let idx = 0; idx < regions.length; idx++) {
+    const region = regions[idx];
+    const outerRing = region[0] || [];
+    const boundaryPoints: BoundaryPoint[] = outerRing.map(p => ({
+      point: p,
+      insideId: idx,
+      outsideId: -1,
     }));
-    
-    const uniquePoints = uniqueBoundaryPoints.map(ub => ub.point);
-    
-    // console.log(`[调试] 区域 ${region.id} 重新聚类后点数: ${uniqueBoundaryPoints.length}`);
-    
-    // 构建 segments 列表（基于 finalPoints 的分组）
-    const segmentsMap = new Map<number, { points: Point[]; start: Point; end: Point; closed: boolean }>();
-    for (const bp of finalPoints) {
-      if (!segmentsMap.has(bp.outsideId)) {
-        segmentsMap.set(bp.outsideId, { points: [], start: bp.point, end: bp.point, closed: false });
-      }
-      const seg = segmentsMap.get(bp.outsideId)!;
-      seg.points.push(bp.point);
-      seg.end = bp.point;
-    }
-    
-    // 计算全局重心用于判断闭合
-    const globalCentroid = { x: 0, y: 0 };
-    let totalPoints = 0;
-    for (const seg of segmentsMap.values()) {
-      for (const p of seg.points) {
-        globalCentroid.x += p.x;
-        globalCentroid.y += p.y;
-        totalPoints++;
-      }
-    }
-    if (totalPoints > 0) {
-      globalCentroid.x /= totalPoints;
-      globalCentroid.y /= totalPoints;
-    }
-    
-    // 构建 SegmentForMatching 列表
-    const segmentsList: SegmentForMatching[] = [];
-    for (const seg of segmentsMap.values()) {
-      const start = seg.points[0];
-      const end = seg.points[seg.points.length - 1];
-      const euclidean = Math.hypot(start.x - end.x, start.y - end.y);
-      const radialStart = Math.hypot(start.x - globalCentroid.x, start.y - globalCentroid.y);
-      const radialEnd = Math.hypot(end.x - globalCentroid.x, end.y - globalCentroid.y);
-      const closed = (euclidean < distThreshold && Math.abs(radialStart - radialEnd) < radialThreshold);
-      segmentsList.push({
-        points: seg.points,
-        start,
-        end,
-        closed
-      });
-    }
-    
-    // 使用新的组环算法
-    console.log(`[调试] 区域 ${region.id} segmentsList数量: ${segmentsList.length}`);
-    segmentsList.forEach((seg, idx) => {
-      console.log(`  segment${idx}: ${seg.points.length}点, closed=${seg.closed}, start=(${seg.start.x.toFixed(3)},${seg.start.y.toFixed(3)}), end=(${seg.end.x.toFixed(3)},${seg.end.y.toFixed(3)})`);
-    });
-    // 使用简单的欧式距离成环算法
-    const allBoundaryPointsForRings = uniqueBoundaryPoints.map(bp => bp.point);
-    const maxEdgeLength = step * 6 * ringDistanceThreshold; // 使用环拼接阈值系数
-    const ringsFromSegments = connectPointsToRingsByDistance(allBoundaryPointsForRings, maxEdgeLength);
-    console.log(`[调试] 区域 ${region.id} 成环数量: ${ringsFromSegments.length}`);
-    ringsFromSegments.forEach((ring, idx) => {
-      console.log(`  环${idx}: ${ring.length} 个顶点`);
-    });
-    
-    // 保持后续代码兼容，pointGroups 设为空数组
-    const pointGroups: Point[][] = [];
 
-    let boundaryPolygon: Point[] = [];
-    if (boundaryPoints.length >= 3) {
-      const groups = new Map<number, Point[]>();
-      for (const bp of boundaryPoints) {
-        if (!groups.has(bp.outsideId)) groups.set(bp.outsideId, []);
-        groups.get(bp.outsideId)!.push(bp.point);
-      }
-      const outerPts = groups.get(-1);
-      if (outerPts && outerPts.length >= 3) boundaryPolygon = buildClosedRing(outerPts);
+    const rings = region;
+
+    let cx = 0, cy = 0;
+    for (const p of outerRing) {
+      cx += p.x;
+      cy += p.y;
     }
+    cx /= outerRing.length || 1;
+    cy /= outerRing.length || 1;
 
-    const originalOutsideIdEndpoints: OutsideIdEndpoint[] = [];
-    if (boundaryPoints.length > 0) {
-      const origCentroid = { x: 0, y: 0 };
-      for (const bp of boundaryPoints) { origCentroid.x += bp.point.x; origCentroid.y += bp.point.y; }
-      origCentroid.x /= boundaryPoints.length;
-      origCentroid.y /= boundaryPoints.length;
-      
-      const byOriginalOutside = new Map<number, { point: Point; insideId: number }[]>();
-      for (const bp of boundaryPoints) {
-        if (!byOriginalOutside.has(bp.outsideId)) {
-          byOriginalOutside.set(bp.outsideId, []);
-        }
-        byOriginalOutside.get(bp.outsideId)!.push({ point: bp.point, insideId: bp.insideId });
-      }
-      
-      for (const [outsideId, points] of byOriginalOutside) {
-        if (points.length < 1) continue;
-        
-        points.sort((a, b) => {
-          const angleA = Math.atan2(a.point.y - origCentroid.y, a.point.x - origCentroid.x);
-          const angleB = Math.atan2(b.point.y - origCentroid.y, b.point.x - origCentroid.x);
-          return angleA - angleB;
-        });
-        
-        const p1 = points[0];
-        const dist1 = Math.hypot(p1.point.x - origCentroid.x, p1.point.y - origCentroid.y);
-        
-        let p2Data: { x: number; y: number; distToCentroid: number } | null = null;
-        if (points.length >= 2) {
-          const p2 = points[points.length - 1];
-          const dist2 = Math.hypot(p2.point.x - origCentroid.x, p2.point.y - origCentroid.y);
-          p2Data = { x: p2.point.x, y: p2.point.y, distToCentroid: dist2 };
-        }
-        
-        originalOutsideIdEndpoints.push({
-          outsideId,
-          insideId: p1.insideId,
-          p1: { x: p1.point.x, y: p1.point.y, distToCentroid: dist1 },
-          p2: p2Data,
-        });
-      }
-    }
-
-    let centroid: Point | null = null;
-    if (allBoundaryPoints.length > 0) {
-      let cx = 0, cy = 0;
-      for (const p of allBoundaryPoints) { cx += p.x; cy += p.y; }
-      centroid = { x: cx / allBoundaryPoints.length, y: cy / allBoundaryPoints.length };
-    }
-    
-    const outsideIdEndpoints: OutsideIdEndpoint[] = [];
-    if (centroid) {
-      // 按新的 outsideId 分组（每个片段一个独立 id）
-      const byOutsideId = new Map<number, BoundaryPoint[]>();
-      for (const bp of reclusteredPoints) {
-        if (!byOutsideId.has(bp.outsideId)) byOutsideId.set(bp.outsideId, []);
-        byOutsideId.get(bp.outsideId)!.push(bp);
-      }
-
-      for (const [outsideId, points] of byOutsideId) {
-        if (points.length === 0) continue;
-        
-        // 使用片段本身的起点和终点（即 points 数组的第一个和最后一个点）
-        const start = points[0].point;
-        const end = points[points.length - 1].point;
-        const radialStart = Math.hypot(start.x - centroid.x, start.y - centroid.y);
-        const radialEnd = Math.hypot(end.x - centroid.x, end.y - centroid.y);
-        const startInsideId = points[0].insideId;
-        
-        // 判断该片段是否自身闭合（首尾距离 < 阈值）
-        const isClosed = points.length >= 3 && Math.hypot(end.x - start.x, end.y - start.y) < distThreshold * 0.5;
-        
-        if (isClosed) {
-          // 自身闭合的片段不显示端点
-          continue;
-        }
-        
-        outsideIdEndpoints.push({
-          outsideId,
-          insideId: startInsideId,
-          p1: { x: start.x, y: start.y, distToCentroid: radialStart },
-          p2: { x: end.x, y: end.y, distToCentroid: radialEnd },
-        });
-        
-        // console.log(`[调试] 区域 ${region.id} o:${outsideId} 端点: p1(${start.x.toFixed(3)},${start.y.toFixed(3)}) d1=${radialStart.toFixed(3)}, p2(${end.x.toFixed(3)},${end.y.toFixed(3)}) d2=${radialEnd.toFixed(3)}`);
-      }
-    }
-
-    // 按墙ID分组边界点（使用降采样后的点）
-    const wallGroupedPoints = groupBoundaryPointsByWallId(downsampledPoints, gridData, 2);
-
-    const rays: DebugRay[] = [];
-    debug.push({
-      id: region.id,
-      cellCount: region.cells.length,
-      bounds: region.bounds,
-      seed: region.seed,
-      boundaryPolygon,
-      rays,
-      boundaryPoints,
+    debugData.push({
+      id: idx,
+      cellCount: 0,
+      bounds: { minI: 0, maxI: 0, minJ: 0, maxJ: 0 },
+      seed: { x: cx, y: cy },
+      boundaryPolygon: outerRing,
+      rays: [],
+      boundaryPoints: boundaryPoints,
       clusteredBoundaryPoints: [],
-      rings: ringsFromSegments,
-      centroid,
-      uniqueBoundaryPoints,
-      pointGroups,
-      outsideIdEndpoints,
-      originalOutsideIdEndpoints,
-      segments: segmentsList,  // 新增：保存片段数据用于调试绘制
-      wallGroupedPoints,  // 按墙ID分组后的点集
+      rings: rings,
+      centroid: { x: cx, y: cy },
+      uniqueBoundaryPoints: boundaryPoints.map(bp => ({ ...bp })),
+      pointGroups: [],
+      outsideIdEndpoints: [],
+      originalOutsideIdEndpoints: [],
+      segments: [],
+      wallGroupedPoints: new Map(),
     });
   }
-  return debug;
+
+  return debugData;
 }
 
 // 保留旧函数兼容（避免外部调用报错）
