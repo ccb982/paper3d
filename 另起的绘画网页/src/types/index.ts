@@ -135,3 +135,14 @@ export interface ColorBlock {
   createdAt: number;
   updatedAt: number;
 }
+
+// 帧数据（存储从基础色编辑器导入的底图和残差信息）
+export interface FrameData {
+  id: string;                         // 对应图层ID
+  baseTexture: ImageData | null;      // 解码后的基础色纹理（全尺寸 512x512）
+  residualTexture: ImageData | null;  // 残差纹理（全尺寸，后续给流体）
+  bbox: { x: number; y: number; w: number; h: number } | null;
+  deltaPacked: Uint16Array | null;    // 残差打包数据（RGB565），后续给流体
+  blockFlags: number;
+  sourceResolution: number;           // 原始纹理尺寸（通常512）
+}

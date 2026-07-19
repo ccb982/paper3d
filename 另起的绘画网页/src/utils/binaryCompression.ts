@@ -1,4 +1,6 @@
 import type { CompressionResultV2, CompressedRegionV2 } from './colorCompressor';
+import type { SharedBaseColor } from '../stores/useAppStore';
+import type { FrameExportData } from './multiFrameExport';
 import {
   compressToBinary as coreCompress,
   decompressFromBinary as coreDecompress,
@@ -270,3 +272,96 @@ export {
   getAdaptiveBlockIndex,
   getRangeForBlock,
 };
+
+// ==================== 多帧 FTX 解包 ====================
+export interface MultiFrameData {
+  palette: SharedBaseColor[];
+  frames: FrameExportData[];
+}
+
+/**
+ * 解析 packMultiFrameToBinary 生成的二进制数据
+ * 格式：Magic(4) + Version(1) + FrameCount(2) + PaletteCount(2) + Palette + Frames
+ */
+export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData {
+  const view = new DataView(buffer);
+  let offset = 0;
+
+  const magic = view.getUint32(offset, false);
+  offset += 4;
+  if (magic !== 0x46545833) {
+    throw new Error('无效的多帧文件格式 (Magic 不匹配)');
+  }
+
+  const version = view.getUint8(offset);
+  offset += 1;
+  if (version !== 2) {
+    throw new Error(`不支持的多帧版本: ${version}`);
+  }
+
+  const frameCount = view.getUint16(offset, true);
+  offset += 2;
+  const paletteCount = view.getUint16(offset, true);
+  offset += 2;
+
+  const palette: SharedBaseColor[] = [];
+  for (let i = 0; i < paletteCount; i++) {
+    palette.push({
+      id: i + 1,
+      h: view.getFloat32(offset, true),
+      s: view.getFloat32(offset + 4, true),
+      l: view.getFloat32(offset + 8, true),
+      frameIds: [],
+      area: 0,
+    });
+    offset += 12;
+  }
+
+  const frames: FrameExportData[] = [];
+  for (let f = 0; f < frameCount; f++) {
+    const nameLen = view.getUint8(offset);
+    offset += 1;
+    const nameBytes = new Uint8Array(buffer, offset, nameLen);
+    const name = new TextDecoder().decode(nameBytes);
+    offset += nameLen;
+
+    const width = view.getUint16(offset, true); offset += 2;
+    const height = view.getUint16(offset, true); offset += 2;
+    const bbox = {
+      x: view.getUint16(offset, true),
+      y: view.getUint16(offset, true),
+      w: view.getUint16(offset, true),
+      h: view.getUint16(offset, true),
+    };
+    offset += 8;
+
+    const blockFlags = view.getUint16(offset, true);
+    offset += 2;
+
+    const regionIdTexLen = view.getUint32(offset, true);
+    offset += 4;
+    let regionIdTex: Uint8Array;
+    if (regionIdTexLen > 0) {
+      const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+      offset += regionIdTexLen;
+      regionIdTex = rleDecode8(encoded, bbox.w * bbox.h);
+    } else {
+      regionIdTex = new Uint8Array(0);
+    }
+
+    const deltaPackedLen = view.getUint32(offset, true);
+    offset += 4;
+    let deltaPacked: Uint16Array;
+    if (deltaPackedLen > 0) {
+      const encoded = new Uint8Array(buffer, offset, deltaPackedLen);
+      offset += deltaPackedLen;
+      deltaPacked = rleDecode16(encoded, bbox.w * bbox.h);
+    } else {
+      deltaPacked = new Uint16Array(0);
+    }
+
+    frames.push({ name, width, height, bbox, regionIdTex, deltaPacked, blockFlags });
+  }
+
+  return { palette, frames };
+}

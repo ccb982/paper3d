@@ -306,6 +306,7 @@ export function MainCanvas() {
     isVertexPinEraserMode,
     showRegionBorderWebGL,
     showRegionBorder2D,
+    frameDataMap,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -2460,6 +2461,20 @@ useEffect(() => {
 
     // 绘制像素缓冲区 (叠加)
     const layerId = activeLayerId || layers[0]?.id;
+
+    // 绘制导入的 FTX 底图（当前激活图层的帧数据）
+    const frameData = layerId ? frameDataMap[layerId] : null;
+    if (frameData?.baseTexture) {
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = frameData.baseTexture.width;
+      tempCanvas.height = frameData.baseTexture.height;
+      tempCanvas.getContext('2d')!.putImageData(frameData.baseTexture, 0, 0);
+      ctx.save();
+      ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
+      ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+      ctx.restore();
+    }
+
     const buffer = paintBuffers[layerId];
     if (buffer && layerVisibility.drawLayer) {
       const tempCanvas = document.createElement('canvas');

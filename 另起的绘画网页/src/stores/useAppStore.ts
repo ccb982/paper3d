@@ -380,6 +380,10 @@ interface AppState {
   recalculateAllAreas: () => void;
   mergeAndSortColors: (updatedColorId?: number) => void;
   reclusterCurrentFrame: () => void;
+
+  // 多帧 FTX 导入（主绘画页面底图数据）
+  frameDataMap: Record<string, import('../types').FrameData>;
+  importMultiFrameData: (buffer: ArrayBuffer) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -2331,6 +2335,86 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     get().recalculateAllAreas();
     get().mergeAndSortColors();
+  },
+
+  // 多帧 FTX 导入
+  frameDataMap: {},
+
+  importMultiFrameData: async (buffer: ArrayBuffer) => {
+    const { unpackMultiFrameFromBinary } = await import('../utils/binaryCompression');
+    const { decodeFrameToTextures } = await import('../utils/colorCompressor');
+    const state = get();
+
+    const multiData = unpackMultiFrameFromBinary(buffer);
+    const { palette, frames } = multiData;
+
+    if (frames.length === 0) return;
+
+    // 合并调色板
+    const currentPalette = [...state.skillGroupEditor.sharedBaseColors];
+    let nextId = currentPalette.reduce((max, c) => Math.max(max, c.id), 0) + 1;
+    for (const imp of palette) {
+      let found = false;
+      for (const c of currentPalette) {
+        const dh = Math.min(Math.abs(c.h - imp.h), 1 - Math.abs(c.h - imp.h));
+        if (dh < 0.02 && Math.abs(c.s - imp.s) < 0.05 && Math.abs(c.l - imp.l) < 0.05) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        currentPalette.push({ ...imp, id: nextId++, frameIds: [], area: 0 });
+      }
+    }
+
+    // 为每帧创建图层并解码纹理
+    const newFrameDataMap: Record<string, import('../types').FrameData> = {};
+    let displayId = state.layers.length + 1;
+
+    for (const frame of frames) {
+      const { baseTexture, residualTexture } = decodeFrameToTextures(frame, currentPalette);
+      const layerName = frame.name || `帧 ${displayId}`;
+      const layerId = `layer_${Date.now()}_${displayId}_${Math.random().toString(36).slice(2, 6)}`;
+
+      const newLayer: Layer = {
+        id: layerId,
+        displayId,
+        name: layerName,
+        visible: true,
+        locked: false,
+        opacity: 1,
+      };
+
+      set((s) => ({ layers: [...s.layers, newLayer] }));
+
+      newFrameDataMap[layerId] = {
+        id: layerId,
+        baseTexture,
+        residualTexture,
+        bbox: frame.bbox,
+        deltaPacked: frame.deltaPacked,
+        blockFlags: frame.blockFlags,
+        sourceResolution: frame.width,
+      };
+
+      displayId++;
+    }
+
+    set((s) => ({
+      frameDataMap: { ...s.frameDataMap, ...newFrameDataMap },
+      skillGroupEditor: {
+        ...s.skillGroupEditor,
+        sharedBaseColors: currentPalette,
+      },
+    }));
+
+    // 自动激活第一个导入的图层
+    const firstLayerId = Object.keys(newFrameDataMap)[0];
+    if (firstLayerId) {
+      set({ activeLayerId: firstLayerId });
+    }
+
+    console.log(`[FTX导入] 成功导入 ${frames.length} 帧，调色板 ${palette.length}→${currentPalette.length} 色`);
   },
 }));
 

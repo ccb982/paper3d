@@ -477,6 +477,51 @@ export function Toolbar() {
             >
               导入极致压缩
             </button>
+            <input
+              type="file"
+              id="import-multi-frame-input"
+              style={{ display: 'none' }}
+              accept=".ftx3.gz,.ftx3"
+              onChange={async (e) => {
+                const file = (e.target as HTMLInputElement).files?.[0];
+                if (!file) return;
+                try {
+                  const arrayBuffer = await file.arrayBuffer();
+                  const uint8Array = new Uint8Array(arrayBuffer);
+                  // Gzip 解压
+                  const isGzipped = uint8Array.length >= 2 && uint8Array[0] === 0x1f && uint8Array[1] === 0x8b;
+                  let dataBuffer = arrayBuffer;
+                  if (isGzipped) {
+                    const blob = new Blob([uint8Array]);
+                    const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+                    const decompressedBlob = await new Response(decompressedStream).blob();
+                    dataBuffer = await decompressedBlob.arrayBuffer();
+                  }
+                  useAppStore.getState().importMultiFrameData(dataBuffer);
+                } catch (err) {
+                  console.error('[多帧导入] 导入失败:', err);
+                  alert('导入失败: ' + (err as Error).message);
+                }
+                e.target.value = '';
+              }}
+            />
+            <button
+              onClick={() => {
+                setShowColorExtractMenu(false);
+                document.getElementById('import-multi-frame-input')?.click();
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                backgroundColor: '#4caf50',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              导入多帧底图
+            </button>
             <button
               onClick={() => {
                 setShowColorExtractMenu(false);

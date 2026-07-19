@@ -15,7 +15,10 @@ import {
   dequantizeL,
   uint8ToBase64,
   packRGB565,
+  unpackRGB565,
 } from '../core/ftxCore';
+import type { FrameExportData } from './multiFrameExport';
+import type { SharedBaseColor } from '../stores/useAppStore';
 
 export {
   ADAPTIVE_BLOCK_COLS,
@@ -1303,6 +1306,77 @@ function clamp(x: number, min: number, max: number): number {
 }
 
 export { computeBBoxAllRings, rasterizeRegionMaskLocal };
+
+// ==================== 多帧解码：从帧数据生成底图和残差纹理 ====================
+/**
+ * 将一帧的数据（regionIdTex + deltaPacked + 调色板）解码为全尺寸的基础色纹理和残差纹理
+ */
+export function decodeFrameToTextures(
+  frame: FrameExportData,
+  palette: SharedBaseColor[]
+): { baseTexture: ImageData; residualTexture: ImageData } {
+  const { bbox, regionIdTex, deltaPacked, blockFlags } = frame;
+  const texSize = 512;
+  const totalPixels = bbox.w * bbox.h;
+
+  const baseImageData = new ImageData(texSize, texSize);
+  const baseData = baseImageData.data;
+  const resImageData = new ImageData(texSize, texSize);
+  const resData = resImageData.data;
+
+  if (totalPixels === 0 || deltaPacked.length === 0) {
+    return { baseTexture: baseImageData, residualTexture: resImageData };
+  }
+
+  // 构建调色板映射
+  const colorMap = new Map<number, { h: number; s: number; l: number }>();
+  for (const c of palette) {
+    colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
+  }
+
+  for (let i = 0; i < totalPixels; i++) {
+    const colorId = regionIdTex[i] || 0;
+    if (colorId === 0) continue;
+    const baseColor = colorMap.get(colorId);
+    if (!baseColor) continue;
+
+    const px = i % bbox.w;
+    const py = Math.floor(i / bbox.w);
+    const blockIdx = getAdaptiveBlockIndex(px, py, bbox.w, bbox.h);
+    const range = getRangeForBlock(blockFlags, blockIdx);
+
+    const packed = deltaPacked[i];
+    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+    const dH = dequantizeH(qH, range);
+    const dS = dequantizeS(qS, range);
+    const dL = dequantizeL(qL, range);
+
+    let finalH = baseColor.h + dH;
+    finalH = ((finalH % 1) + 1) % 1;
+    const finalS = Math.max(0, Math.min(1, baseColor.s + dS));
+    const finalL = Math.max(0, Math.min(1, baseColor.l + dL));
+
+    const rgb = hslToRgb(finalH, finalS, finalL);
+
+    const globalX = bbox.x + px;
+    const globalY = bbox.y + py;
+    const idx = (globalY * texSize + globalX) * 4;
+    baseData[idx] = rgb.r;
+    baseData[idx + 1] = rgb.g;
+    baseData[idx + 2] = rgb.b;
+    baseData[idx + 3] = 255;
+
+    const rRes = Math.round((qH / 63) * 255);
+    const gRes = Math.round((qS / 31) * 255);
+    const bRes = Math.round((qL / 31) * 255);
+    resData[idx] = rRes;
+    resData[idx + 1] = gRes;
+    resData[idx + 2] = bRes;
+    resData[idx + 3] = 255;
+  }
+
+  return { baseTexture: baseImageData, residualTexture: resImageData };
+}
 
 function bufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
