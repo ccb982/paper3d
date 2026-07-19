@@ -772,10 +772,9 @@ export const BaseColorEditor: React.FC = () => {
     if (!gl) {
       console.warn('WebGL not supported, fallback to CPU');
       return false;
-    }
-    console.log('[WebGL] initWebGL success');
+  }
 
-    const vsSource = `
+  const vsSource = `
       attribute vec2 a_position;
       varying vec2 v_uv;
       void main() {
@@ -1281,8 +1280,6 @@ export const BaseColorEditor: React.FC = () => {
 
     recalculateAllAreas();
     mergeAndSortColors();
-
-    console.log(`[自动合并] 帧 ${frameId} 已合并到全局，全局颜色数: ${newGlobalColors.length}`);
   }, [setSharedBaseColors, setNextColorId, updateSkillFrame]);
 
   const handleExtractClick = useCallback((pixel: { x: number; y: number }) => {
@@ -1458,7 +1455,6 @@ export const BaseColorEditor: React.FC = () => {
           const py = Math.floor(localIdx / w);
           return { x: offsetX + px, y: offsetY + py };
         });
-        console.log(`[坏像素] 共 ${refinementResult.badPixels.length} 个，坐标列表:`, badPixelCoords);
       }
     }
 
@@ -1607,8 +1603,6 @@ export const BaseColorEditor: React.FC = () => {
     const g = baseTexture.data[idx + 1];
     const b = baseTexture.data[idx + 2];
     const a = baseTexture.data[idx + 3];
-    
-    console.log('[取色器] 采样', { px, py, r, g, b, a });
     
     if (a === 0) {
       console.warn('取色器：采样点为透明');
@@ -2198,23 +2192,8 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 调试：绘制坏像素高亮（所有模式都支持）
-    console.log('[坏像素渲染] 检查绘制条件:', {
-      debugShowBadPixels: debugShowBadPixels,
-      debugBadPixelsLength: debugBadPixels.length,
-      hasBbox: !!bbox,
-      mode: mode,
-    });
     if (debugShowBadPixels && debugBadPixels.length > 0 && bbox) {
       const { x: offsetX, y: offsetY, w, h } = bbox;
-      console.log('[坏像素渲染] 开始绘制高亮:', {
-        bbox: { x: offsetX, y: offsetY, w, h },
-        pixelCount: debugBadPixels.length,
-        firstFewCoords: debugBadPixels.slice(0, 5).map(localIdx => {
-          const px = localIdx % w;
-          const py = Math.floor(localIdx / w);
-          return { x: offsetX + px, y: offsetY + py };
-        }),
-      });
       ctx.save();
       ctx.fillStyle = 'white';
       for (const localIdx of debugBadPixels) {
@@ -2225,17 +2204,6 @@ export const BaseColorEditor: React.FC = () => {
         ctx.fillRect(globalX, globalY, 1, 1);
       }
       ctx.restore();
-      console.log('[坏像素渲染] 绘制完成');
-    } else {
-      if (!debugShowBadPixels) {
-        console.log('[坏像素渲染] 未绘制：debugShowBadPixels为false');
-      }
-      if (debugBadPixels.length === 0) {
-        console.log('[坏像素渲染] 未绘制：debugBadPixels为空');
-      }
-      if (!bbox) {
-        console.log('[坏像素渲染] 未绘制：bbox为空');
-      }
     }
 
     // 7. 画笔光标
@@ -2625,7 +2593,6 @@ export const BaseColorEditor: React.FC = () => {
             }
             
             const newState = !debugShowBadPixels;
-            console.log('[坏像素按钮] 切换状态:', { from: debugShowBadPixels, to: newState });
             setDebugShowBadPixels(newState);
             if (newState && debugBadPixels.length > 0 && bbox) {
               const { x: offsetX, y: offsetY, w } = bbox;
@@ -2634,7 +2601,6 @@ export const BaseColorEditor: React.FC = () => {
                 const py = Math.floor(localIdx / w);
                 return { x: offsetX + px, y: offsetY + py };
               });
-              console.log(`[坏像素] 共 ${debugBadPixels.length} 个，坐标列表:`, badPixelCoords);
             }
           }}
           style={{
@@ -2703,7 +2669,13 @@ export const BaseColorEditor: React.FC = () => {
             });
 
             const binary = packMultiFrameToBinary(sortedColors, exportFrames);
+            console.log('[多帧导出] 二进制数据生成成功，大小:', binary.length, '字节');
+            console.log('[多帧导出] 魔数:', binary.slice(0, 4).join(','));
+            console.log('[多帧导出] 版本:', binary[4]);
+            console.log('[多帧导出] 帧数:', (binary[5] | (binary[6] << 8)));
+            console.log('[多帧导出] 调色板数:', (binary[7] | (binary[8] << 8)));
             const gzipped = await compressToGzip(binary);
+            console.log('[多帧导出] Gzip压缩完成，大小:', gzipped.size, '字节');
             const url = URL.createObjectURL(gzipped);
             const a = document.createElement('a');
             a.href = url;

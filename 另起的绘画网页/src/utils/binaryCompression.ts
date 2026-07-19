@@ -287,14 +287,18 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
   const view = new DataView(buffer);
   let offset = 0;
 
+  console.log('[多帧解包] 开始解析，总长度:', buffer.byteLength, '字节');
+  
   const magic = view.getUint32(offset, false);
   offset += 4;
+  console.log('[多帧解包] 魔数:', magic.toString(16).toUpperCase(), '(预期: 46545833)');
   if (magic !== 0x46545833) {
     throw new Error('无效的多帧文件格式 (Magic 不匹配)');
   }
 
   const version = view.getUint8(offset);
   offset += 1;
+  console.log('[多帧解包] 版本:', version, '(预期: 2)');
   if (version !== 2) {
     throw new Error(`不支持的多帧版本: ${version}`);
   }
@@ -303,6 +307,7 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
   offset += 2;
   const paletteCount = view.getUint16(offset, true);
   offset += 2;
+  console.log('[多帧解包] 帧数:', frameCount, '调色板数:', paletteCount);
 
   const palette: SharedBaseColor[] = [];
   for (let i = 0; i < paletteCount; i++) {

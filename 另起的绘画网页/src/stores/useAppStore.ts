@@ -2350,7 +2350,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     if (frames.length === 0) return;
 
-    // 合并调色板
+    // ---------- 合并调色板 ----------
     const currentPalette = [...state.skillGroupEditor.sharedBaseColors];
     let nextId = currentPalette.reduce((max, c) => Math.max(max, c.id), 0) + 1;
     for (const imp of palette) {
@@ -2367,26 +2367,56 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    // 为每帧创建图层并解码纹理
+    // ---------- 获取背景层（displayId === 0）----------
+    const bgLayerId = state.imageState.imageLayerId;
+    const bgLayer = state.layers.find(l => l.id === bgLayerId);
+
+    // ---------- 获取所有绘制层（非背景层），按现有 displayId 排序 ----------
+    const drawLayers = state.layers
+      .filter(l => l.id !== bgLayerId)
+      .sort((a, b) => (a.displayId || 0) - (b.displayId || 0));
+
     const newFrameDataMap: Record<string, import('../types').FrameData> = {};
-    let displayId = state.layers.length + 1;
+    const updatedLayers: Layer[] = [];
 
-    for (const frame of frames) {
-      const { baseTexture, residualTexture } = decodeFrameToTextures(frame, currentPalette);
-      const layerName = frame.name || `帧 ${displayId}`;
-      const layerId = `layer_${Date.now()}_${displayId}_${Math.random().toString(36).slice(2, 6)}`;
+    // ---------- 按帧顺序处理 ----------
+    for (let i = 0; i < frames.length; i++) {
+      const frame = frames[i];
+      const { baseTexture, residualTexture } = decodeFrameToTextures(frame, palette);
 
-      const newLayer: Layer = {
-        id: layerId,
-        displayId,
-        name: layerName,
-        visible: true,
-        locked: false,
-        opacity: 1,
-      };
+      // 调试日志
+      let paintedPixels = 0;
+      const bd = baseTexture.data;
+      for (let j = 3; j < bd.length; j += 4) {
+        if (bd[j] > 0) paintedPixels++;
+      }
+      console.log(`[FTX导入] 帧"${frame.name}" 解码完成，底图像素数: ${paintedPixels}, bbox: (${frame.bbox.x},${frame.bbox.y},${frame.bbox.w}x${frame.bbox.h})`);
 
-      set((s) => ({ layers: [...s.layers, newLayer] }));
+      const layerName = frame.name || `帧 ${i + 1}`;
+      let layerId: string;
+      let existingLayer: Layer | undefined;
 
+      if (i < drawLayers.length) {
+        // ---------- 复用已有绘制图层 ----------
+        existingLayer = drawLayers[i];
+        layerId = existingLayer.id;
+        existingLayer.name = layerName;
+        updatedLayers.push(existingLayer);
+      } else {
+        // ---------- 新建绘制图层 ----------
+        layerId = `layer_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`;
+        const newLayer: Layer = {
+          id: layerId,
+          displayId: 0,
+          name: layerName,
+          visible: true,
+          locked: false,
+          opacity: 1,
+        };
+        updatedLayers.push(newLayer);
+      }
+
+      // 存入 frameDataMap
       newFrameDataMap[layerId] = {
         id: layerId,
         baseTexture,
@@ -2396,25 +2426,49 @@ export const useAppStore = create<AppState>((set, get) => ({
         blockFlags: frame.blockFlags,
         sourceResolution: frame.width,
       };
-
-      displayId++;
     }
 
-    set((s) => ({
-      frameDataMap: { ...s.frameDataMap, ...newFrameDataMap },
+    // ---------- 移除多余的绘制层（帧数少于原有图层） ----------
+    const layersToRemove = drawLayers.slice(frames.length);
+
+    // ---------- 清理被删除的图层数据 ----------
+    const finalFrameDataMap = { ...state.frameDataMap };
+    for (const layer of layersToRemove) {
+      delete finalFrameDataMap[layer.id];
+    }
+    Object.assign(finalFrameDataMap, newFrameDataMap);
+
+    // ---------- 构建最终图层列表：背景层 + 所有绘制层（重新编号） ----------
+    const finalLayers: Layer[] = [];
+
+    // 1. 背景层（如果存在）保持 displayId = 0
+    if (bgLayer) {
+      bgLayer.displayId = 0;
+      finalLayers.push(bgLayer);
+    }
+
+    // 2. 所有绘制层（复用 + 新建）重新分配 displayId 从 1 开始
+    let displayCounter = 1;
+    for (const layer of updatedLayers) {
+      layer.displayId = displayCounter++;
+      finalLayers.push(layer);
+    }
+
+    // 激活第一个导入的帧对应的图层（如果有）
+    const firstLayerId = updatedLayers.length > 0 ? updatedLayers[0].id : state.activeLayerId;
+
+    // ---------- 一次性更新状态 ----------
+    set({
+      layers: finalLayers,
+      frameDataMap: finalFrameDataMap,
+      activeLayerId: firstLayerId,
       skillGroupEditor: {
-        ...s.skillGroupEditor,
+        ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
       },
-    }));
+    });
 
-    // 自动激活第一个导入的图层
-    const firstLayerId = Object.keys(newFrameDataMap)[0];
-    if (firstLayerId) {
-      set({ activeLayerId: firstLayerId });
-    }
-
-    console.log(`[FTX导入] 成功导入 ${frames.length} 帧，调色板 ${palette.length}→${currentPalette.length} 色`);
+    console.log(`[FTX导入] 成功导入 ${frames.length} 帧，调色板 ${palette.length}→${currentPalette.length} 色，更新/创建 ${updatedLayers.length} 个绘制图层`);
   },
 }));
 

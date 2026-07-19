@@ -315,12 +315,7 @@ export function MainCanvas() {
     isRestoringRef.current = isRestoringHistory;
   }, [isRestoringHistory]);
 
-  // 调试：追踪 colorExtractMode 状态变化
-  useEffect(() => {
-    console.log(`[颜色提取] colorExtractMode 状态变化: ${colorExtractMode}`);
-  }, [colorExtractMode]);
-
-  // 【调试】存储 WebGL Mesh 实际使用的坐标（用于在 2D Canvas 上绘制）
+  // 存储 WebGL Mesh 实际使用的坐标（用于在 2D Canvas 上绘制）
   const webglMeshCornersRef = useRef<Array<{ id: number; corners: Array<{ x: number; y: number }>; center: { x: number; y: number } }>>([]);
 
   // 顶点固定节流定时器
@@ -438,8 +433,6 @@ export function MainCanvas() {
     const visible = layerVisibility.regionLayer;
     renderer.domElement.style.display = visible ? 'block' : 'none';
     
-    console.log(`[WebGL渲染] 区域色块图层可见性: ${visible}, canvas尺寸: ${renderer.domElement.width}x${renderer.domElement.height}, 场景子节点数: ${scene.children.length}`);
-    
     // 启动/停止动画循环
     if (visible) {
       let lastTime = 0;
@@ -545,18 +538,15 @@ useEffect(() => {
 
   for (const entity of entities) {
     try {
-    console.log(`[区域渲染] 处理实体 ${entity.id}: boundary=${entity.boundary?.length}环, totalVerts=${entity.getTotalVertices?.()}, hasMaskEffect=${!!entity.maskEffect}, hasBbox=${!!entity.worldBbox}`);
-    
     const hasAnnotation = regionAnnotationsForLayer.some(
       anno => Number(anno.regionId) === entity.id
     );
 
     const bbox = entity.worldBbox;
-    if (!bbox) { console.warn(`[区域渲染] 区域 ${entity.id} - 无 bbox，跳过`); continue; }
+    if (!bbox) { continue; }
 
     const displacementTex = entity.getDisplacementTexture(canvasWidth, canvasHeight);
     if (!displacementTex) {
-      console.warn(`[区域渲染] 区域 ${entity.id} - displacementTex 为 null，跳过`);
       continue;
     }
     const vertexCount = entity.getTotalVertices();
@@ -571,7 +561,6 @@ useEffect(() => {
     );
 
     if (allRingsVec.length === 0 || allRingsVec[0].length < 3) {
-      console.warn(`[区域渲染] 区域 ${entity.id} - 顶点数不足(allRingsVec=${allRingsVec.length}, ring0=${allRingsVec[0]?.length})，跳过`);
       continue;
     }
 
@@ -591,7 +580,6 @@ useEffect(() => {
     // ★ 数据清洗：过滤 NaN/Infinity
     for (let i = 0; i < flatCoords.length; i++) {
       if (!isFinite(flatCoords[i])) {
-        console.warn(`[区域渲染] 区域 ${entity.id} - flatCoords[${i}]=${flatCoords[i]} 无效，置零`);
         flatCoords[i] = 0;
       }
     }
@@ -609,8 +597,7 @@ useEffect(() => {
         keep.push(vi);
       }
       if (keep.length < 3) {
-        console.warn(`[区域渲染] 区域 ${entity.id} - 环${ri} 清洗后顶点不足(${keep.length})`);
-        continue; // 跳过此实体
+        continue;
       }
       // 重写该环数据，只保留 keep 中的顶点
       const keptCoords: number[] = [];
@@ -647,27 +634,20 @@ useEffect(() => {
     try {
       indices = earcut(flatCoords, holeIndices, 2);
     } catch (e) {
-      console.warn(`[区域渲染] 区域 ${entity.id} - earcut 剖分失败:`, e);
       indices = [];
     }
     
     // 验证索引有效性
     if (indices.length === 0 || indices.length % 3 !== 0) {
-      console.warn(
-        `[区域渲染] 区域 ${entity.id} - 索引无效(长度=${indices.length}, ${indices.length % 3 !== 0 ? '非3倍数' : '空'})，` +
-        `使用外环回退剖分`
-      );
       // 回退：仅外环剖分（无孔洞 → holeIndices=null）
       const outerLen = ringLengths[0];
       const outerFlat = flatCoords.slice(0, outerLen * 2);
       try {
         indices = earcut(outerFlat, null, 2);
       } catch (e2) {
-        console.error(`[区域渲染] 区域 ${entity.id} - 外环剖分也失败:`, e2);
         indices = [];
       }
       if (indices.length === 0 || indices.length % 3 !== 0) {
-        console.error(`[区域渲染] 区域 ${entity.id} - 所有三角剖分均失败，跳过此实体`);
         continue;
       }
     }
@@ -684,31 +664,13 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // 先计算 bbox（用于 UV 和调试）
+    // 先计算 bbox（用于 UV）
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const p of allPoints) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
       if (p.y < minY) minY = p.y;
       if (p.y > maxY) maxY = p.y;
-    }
-    
-    // ★ 调试：几何体详情
-    {
-      const posAttr = fillGeom.getAttribute('position');
-      const idxAttr = fillGeom.getIndex();
-      let posSample = '';
-      if (posAttr && posAttr.count > 0) {
-        const first = [posAttr.getX(0), posAttr.getY(0), posAttr.getZ(0)];
-        const last = [posAttr.getX(posAttr.count-1), posAttr.getY(posAttr.count-1), posAttr.getZ(posAttr.count-1)];
-        posSample = `first=(${first.map(v=>v.toFixed(1)).join(',')}), last=(${last.map(v=>v.toFixed(1)).join(',')})`;
-      }
-      console.log(
-        `[DEBUG几何] 区域${entity.id} 几何体: ` +
-        `顶点=${posAttr?.count??0}, 三角形=${idxAttr?.count/3??0}, ` +
-        `positions=[${minX.toFixed(1)}~${maxX.toFixed(1)}, ${minY.toFixed(1)}~${maxY.toFixed(1)}], ` +
-        posSample
-      );
     }
 
     // --- 4. UV 生成（用于纹理映射） ---
@@ -876,21 +838,12 @@ useEffect(() => {
             depthWrite: false,
           });
           const dbgMesh = new THREE.Mesh(dbgGeom, dbgMat);
-          dbgMesh.renderOrder = 10; // 画在最上层
+          dbgMesh.renderOrder = 10;
           dbgMesh.frustumCulled = false;
           group.add(dbgMesh);
-          console.log('[DEBUG] 红色调试网格已添加到场景');
         }
       }
       
-      console.log(
-        `[区域渲染] 区域 ${entity.id} 材质详情: ` +
-        `stencilTest=${texMat.stencilTest}, stencilRef=${texMat.stencilRef}, ` +
-        `stencilFunc=${texMat.stencilFunc === THREE.EqualStencilFunc ? 'Equal' : texMat.stencilFunc}, ` +
-        `transparent=${texMat.transparent}, ` +
-        `textureSize=${colorTexture.image.width}x${colorTexture.image.height}, ` +
-        `colorSpace=${(colorTexture as any).colorSpace}`
-      );
     }
 
     // --- 7. 边框：为每个环单独创建 LineLoop ---
@@ -929,13 +882,6 @@ useEffect(() => {
     // processMaskRingCPU 已完整应用了 maskEffect.transform（锚点、位移、旋转、缩放）
     // 网格保持单位矩阵，由位移纹理承载所有变换
 
-    console.log(
-      `[区域渲染] 区域 ${entity.id} | ` +
-      `模板填充=${fillMesh ? '✓' : '✗'} | ` +
-      `颜色纹理=${colorTexture ? `✓ (${colorTexture.image.width}×${colorTexture.image.height})` : '✗'} | ` +
-      `边框=${showRegionBorderWebGL && borderLines.length > 0 ? `✓ ${borderLines.length}环` : '✗'}`
-    );
-
     group.add(fillMesh);
     if (colorMesh) { group.add(colorMesh); texCount++; }
     meshCount++;
@@ -943,26 +889,7 @@ useEffect(() => {
       for (const line of borderLines) group.add(line);
     }
   } catch (e: any) {
-    console.error(`[区域渲染] 区域 ${entity.id} 处理出错:`, e?.message || e);
   }
-  }
-  console.log(`[区域渲染] 完成: ${entities.length}实体, ${meshCount}网格, ${texCount}颜色纹理`);
-  
-  // ★ 调试：打印 group 最终的子节点状态
-  {
-    const children = group.children;
-    const details = children.map((c, i) => {
-      if (c instanceof THREE.Mesh) {
-        const mat = c.material as any;
-        return `[${i}]Mesh ro=${c.renderOrder} stencil=${mat?.stencilTest===true} transparent=${mat?.transparent} depthTest=${mat?.depthTest??true}`;
-      } else if (c instanceof THREE.LineLoop) {
-        return `[${i}]LineLoop ro=${c.renderOrder}`;
-      } else if (c instanceof THREE.Group) {
-        return `[${i}]Group`;
-      }
-      return `[${i}]${c.constructor?.name??'?'}`;
-    });
-    console.log(`[DEBUG组] group 子节点(${children.length}个): ${details.join(' | ')}`);
   }
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL]);
 
@@ -1503,20 +1430,11 @@ useEffect(() => {
       return;
     }
 
-    // 输出多边形信息
-    console.log(`[颜色提取] 多边形顶点数: ${polygon.length}`);
-    polygon.forEach((point, idx) => {
-      console.log(`  顶点 ${idx + 1}: (${point.x.toFixed(4)}, ${point.y.toFixed(4)})`);
-    });
-
     // 1. 生成掩码
-    console.log(`[颜色提取] Step 1/6: 生成掩码 (${canvasWidth}x${canvasHeight})...`);
     const mask = rasterizePolygonMask(polygon, canvasWidth, canvasHeight);
     const maskPixelCount = mask.reduce((sum, val) => sum + val, 0);
-    console.log(`[颜色提取] 掩码生成完成，内部像素数: ${maskPixelCount}`);
     
     // 2. 获取当前画布颜色数据（背景 + 已有 buffer）
-    console.log('[颜色提取] Step 2/6: 获取画布颜色数据...');
     const colorData = getWorldColorImageData();
     if (!colorData) {
       console.error('[颜色提取] 无法获取画布颜色数据');
@@ -1524,33 +1442,27 @@ useEffect(() => {
     }
 
     // 3. 连通区域标记
-    console.log('[颜色提取] Step 3/6: 连通区域标记...');
     const blocks = extractConnectedComponents(mask, colorData, canvasWidth, canvasHeight);
-    console.log(`[颜色提取] 提取到 ${blocks.length} 个色块`);
 
     if (blocks.length === 0) {
-      console.log('[颜色提取] 未提取到任何色块，提前返回');
+      console.log('[颜色提取] 未提取到任何色块');
       return;
     }
 
     // 4. 将每个色块填充到 paintBuffer 中
-    console.log('[颜色提取] Step 4/6: 填充 paintBuffer...');
     const layerId = activeLayerId || layers[0]?.id;
     if (!layerId) {
       console.error('[颜色提取] 没有活动图层');
       return;
     }
-    console.log(`[颜色提取] 目标图层ID: ${layerId}`);
 
     // 确保 paintBuffer 存在
     if (!paintBuffers[layerId]) {
-      console.log('[颜色提取] 初始化 paintBuffer...');
       initPaintBuffer(layerId);
     }
 
     // 统计总像素数
     const totalPixels = blocks.reduce((sum, block) => sum + block.pixels.length, 0);
-    console.log(`[颜色提取] 将填充 ${totalPixels} 个像素到缓冲区`);
 
     // 批量更新 buffer
     let writtenPixels = 0;
@@ -1558,7 +1470,6 @@ useEffect(() => {
       for (const block of blocks) {
         const { r, g, b } = block.avgColor;
         for (const pixel of block.pixels) {
-          // 世界坐标转 buffer 像素坐标（Y轴翻转）
           const px = Math.floor(pixel.x * PAINT_BUFFER_SIZE);
           const py = Math.floor((1 - pixel.y) * PAINT_BUFFER_SIZE);
           if (px >= 0 && px < PAINT_BUFFER_SIZE && py >= 0 && py < PAINT_BUFFER_SIZE) {
@@ -1572,27 +1483,17 @@ useEffect(() => {
         }
       }
     });
-    console.log(`[颜色提取] 成功写入 ${writtenPixels} 个像素`);
 
     // 5. 保存历史，以便撤销
-    console.log('[颜色提取] Step 5/6: 保存历史记录...');
     saveHistory();
-    console.log('[颜色提取] 历史记录已保存');
 
     // 6. 清空临时色块显示（不再需要覆盖层）
-    console.log('[颜色提取] Step 6/6: 清空临时色块...');
     setExtractedColorBlocks([]);
 
     // 7. 更新区域色块图层（使用 RegionEntity）
-    console.log('[颜色提取] Step 7/7: 生成区域图层...');
     if (layerId) {
       useAppStore.getState().refreshRegionEntities(layerId);
     }
-
-    const endTime = performance.now();
-    console.log(`[颜色提取] ==================== 颜色提取完成 ====================`);
-    console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms`);
-    console.log(`[颜色提取] 色块数: ${blocks.length}, 总像素数: ${totalPixels}`);
   }, [canvasWidth, canvasHeight, rasterizePolygonMask, getWorldColorImageData, extractConnectedComponents, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks, layerVisibility]);
 
   // 精确颜色提取：直接将区域内的每个像素颜色复制到 paintBuffer（不合并连通域）
@@ -1602,22 +1503,18 @@ useEffect(() => {
       return;
     }
 
-    console.log('[颜色提取] ==================== 精确颜色提取开始 ====================');
     const startTime = performance.now();
 
     // 1. 生成掩码（包含边界）
-    console.log(`[颜色提取] Step 1/4: 生成区域掩码 (${canvasWidth}x${canvasHeight})...`);
     const mask = rasterizeRegionMask(regionPolygon, canvasWidth, canvasHeight);
     const maskPixelCount = mask.reduce((sum, val) => sum + val, 0);
-    console.log(`[颜色提取] 掩码生成完成，内部像素数: ${maskPixelCount}`);
 
     if (maskPixelCount === 0) {
-      console.log('[颜色提取] 掩码内无像素，提前返回');
+      console.log('[颜色提取] 掩码内无像素');
       return;
     }
 
     // 2. 获取当前画布颜色数据（背景 + 已有 buffer）
-    console.log('[颜色提取] Step 2/4: 获取画布颜色数据...');
     const colorData = getWorldColorImageData();
     if (!colorData) {
       console.error('[颜色提取] 无法获取画布颜色数据');
@@ -1625,7 +1522,6 @@ useEffect(() => {
     }
 
     // 3. 精确复制像素到 paintBuffer（不再做连通域合并）
-    console.log('[颜色提取] Step 3/4: 精确复制像素到 paintBuffer...');
     const layerId = activeLayerId || layers[0]?.id;
     if (!layerId) {
       console.error('[颜色提取] 没有活动图层');
@@ -1670,25 +1566,17 @@ useEffect(() => {
       }
     });
 
-    console.log(`[颜色提取] 成功写入 ${writtenPixels} 个精确像素`);
-
     // 4. 保存历史，以便撤销
-    console.log('[颜色提取] Step 4/4: 保存历史记录...');
     saveHistory();
 
     // 5. 清空临时色块显示
     setExtractedColorBlocks([]);
 
     // 6. 更新区域色块图层（使用 RegionEntity）
-    console.log('[颜色提取] Step 5/5: 生成区域图层...');
     const currentLayerId = activeLayerId || layers[0]?.id;
     if (currentLayerId) {
       useAppStore.getState().refreshRegionEntities(currentLayerId);
     }
-
-    const endTime = performance.now();
-    console.log('[颜色提取] ==================== 精确颜色提取完成 ====================');
-    console.log(`[颜色提取] 总耗时: ${(endTime - startTime).toFixed(2)}ms，写入像素数: ${writtenPixels}`);
   }, [canvasWidth, canvasHeight, rasterizeRegionMask, getWorldColorImageData, activeLayerId, layers, paintBuffers, initPaintBuffer, updatePaintBuffer, saveHistory, setExtractedColorBlocks]);
 
   // 获取所有虚线形状（从全局 shapes 中筛选）
@@ -2465,6 +2353,13 @@ useEffect(() => {
     // 绘制导入的 FTX 底图（当前激活图层的帧数据）
     const frameData = layerId ? frameDataMap[layerId] : null;
     if (frameData?.baseTexture) {
+      // 验证底图数据
+      let paintedPixels = 0;
+      const bd = frameData.baseTexture.data;
+      for (let i = 3; i < bd.length; i += 4) {
+        if (bd[i] > 0) paintedPixels++;
+      }
+      console.log('[FTX底图渲染] layerId:', layerId, '底图像素数:', paintedPixels, 'currentWidth:', currentWidth, 'currentHeight:', currentHeight);
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = frameData.baseTexture.width;
       tempCanvas.height = frameData.baseTexture.height;
@@ -3110,7 +3005,7 @@ useEffect(() => {
     ctx.restore();
 
     // WebGL 渲染已由动画循环处理，此处无需手动渲染
-  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations, showRegionBorder2D]);
+  }, [imageState, layerVisibility, axis, grid, zoom, panOffset, shapes, tempPoints, previewPoint, currentTool, drawShape, layers, worldToCanvasFn, mousePosition, snapRadius, showDebugRegions, debugRegionId, debugOutsideId, debugShowOriginal, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, debugShowEndpoints, debugShowRings, debugShowSegments, debugShowWallGrouped, isPainting, paintBrushSize, colorBlockRegionsCache, activeLayerId, paintBuffers, canvasWidth, canvasHeight, colorExtractMode, colorExtractTool, colorExtractPoints, colorExtractPreviewPoint, colorExtractWaitingFor, colorExtractCurves, colorExtractEraserMode, showColorExtractDebug, colorExtractDebugData, redrawTrigger, regionAnnotations, showRegionBorder2D, frameDataMap]);
 
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
@@ -3658,8 +3553,6 @@ useEffect(() => {
       }
 
       if (existingAnnotation) {
-        // 找到附近的注释，读取并允许修改
-        console.log('[点注释] 找到附近的已有注释，距离:', minDistance.toFixed(4), ', 文本:', existingAnnotation.text);
         setPointAnnotationEditor({
           editorId: generateEditorId(),
           x: e.clientX,
