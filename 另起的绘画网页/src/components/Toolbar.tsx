@@ -1,5 +1,5 @@
 import { useAppStore } from '../stores/useAppStore';
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import type { ToolType } from '../types';
 
 const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
@@ -64,7 +64,6 @@ export function Toolbar() {
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
-  const multiFrameInputRef = useRef<HTMLInputElement>(null);
 
   // 统一退出颜色提取模式的函数（保留虚线，不清除）
   const exitColorExtractMode = useCallback(() => {
@@ -413,24 +412,6 @@ export function Toolbar() {
             </button>
             <button
               onClick={() => {
-                console.log('[多帧导入] 按钮被点击，准备打开文件选择器');
-                setShowColorExtractMenu(false);
-                multiFrameInputRef.current?.click();
-              }}
-              style={{
-                padding: '4px 8px',
-                fontSize: '12px',
-                backgroundColor: '#4caf50',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-            >
-              导入多帧底图
-            </button>
-            <button
-              onClick={() => {
                 setShowColorExtractMenu(false);
               }}
               style={{
@@ -703,46 +684,6 @@ export function Toolbar() {
           <span style={{ fontSize: '10px', color: '#666' }}>{(paintBrushSize * 100).toFixed(1)}%</span>
         </div>
       )}
-
-      {/* 多帧导入 - 始终挂载，不受菜单显隐影响 */}
-      <input
-        ref={multiFrameInputRef}
-        type="file"
-        accept=".ftx3.gz,.ftx3"
-        style={{ display: 'none' }}
-        onChange={async (e) => {
-          console.log('[多帧导入] onChange 触发');
-          const file = (e.target as HTMLInputElement).files?.[0];
-          if (!file) {
-            console.log('[多帧导入] 用户取消选择');
-            return;
-          }
-          console.log('[多帧导入] 选择文件:', file.name, '大小:', file.size, '字节');
-          try {
-            const arrayBuffer = await file.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-            console.log('[多帧导入] 文件头:', uint8Array.slice(0, 8).join(','));
-            // Gzip 解压
-            const isGzipped = uint8Array.length >= 2 && uint8Array[0] === 0x1f && uint8Array[1] === 0x8b;
-            console.log('[多帧导入] 是否Gzip压缩:', isGzipped);
-            let dataBuffer = arrayBuffer;
-            if (isGzipped) {
-              const blob = new Blob([uint8Array]);
-              const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
-              const decompressedBlob = await new Response(decompressedStream).blob();
-              dataBuffer = await decompressedBlob.arrayBuffer();
-              console.log('[多帧导入] Gzip解压完成，大小:', dataBuffer.byteLength, '字节');
-              const decompressedBytes = new Uint8Array(dataBuffer);
-              console.log('[多帧导入] 解压后文件头:', decompressedBytes.slice(0, 8).join(','));
-            }
-            useAppStore.getState().importMultiFrameData(dataBuffer);
-          } catch (err) {
-            console.error('[多帧导入] 导入失败:', err);
-            alert('导入失败: ' + (err as Error).message);
-          }
-          e.target.value = '';
-        }}
-      />
     </div>
   );
 }
