@@ -696,6 +696,11 @@ export const BaseColorEditor: React.FC = () => {
     baseColor: { h: number; s: number; l: number };
     residualHsl: { h: number; s: number; l: number };
     hueDiff: number;
+    satDiff: number;
+    lightDiff: number;
+    hueThreshold: number;
+    satThreshold: number;
+    lightThreshold: number;
     meetsStandard: boolean;
     colorId: number;
   } | null>(null);
@@ -1814,9 +1819,13 @@ export const BaseColorEditor: React.FC = () => {
 
     const hueDiff = Math.abs(finalH - bgHsl.h);
     const correctedHueDiff = hueDiff > 0.5 ? 1 - hueDiff : hueDiff;
+    const satDiff = Math.abs(finalS - bgHsl.s);
+    const lightDiff = Math.abs(finalL - bgHsl.l);
     
-    const THRESHOLD = 0.015;
-    const meetsStandard = correctedHueDiff <= THRESHOLD;
+    const hueThreshold = 0.015;
+    const satThreshold = 0.05;
+    const lightThreshold = 0.05;
+    const meetsStandard = correctedHueDiff <= hueThreshold && satDiff <= satThreshold && lightDiff <= lightThreshold;
 
     setColorInfo({
       x: e.clientX,
@@ -1828,6 +1837,11 @@ export const BaseColorEditor: React.FC = () => {
       baseColor: { h: base.h, s: base.s, l: base.l },
       residualHsl,
       hueDiff: correctedHueDiff,
+      satDiff,
+      lightDiff,
+      hueThreshold,
+      satThreshold,
+      lightThreshold,
       meetsStandard,
       colorId,
     });
@@ -2853,12 +2867,26 @@ export const BaseColorEditor: React.FC = () => {
             </div>
 
             <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid #eee' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
                 <span style={{ fontSize: '12px' }}>色相差: </span>
-                <span style={{ fontWeight: 'bold', fontSize: '14px', color: colorInfo.meetsStandard ? '#52c41a' : '#ff4d4f' }}>
+                <span style={{ fontWeight: 'bold', fontSize: '14px', color: colorInfo.hueDiff <= colorInfo.hueThreshold ? '#52c41a' : '#ff4d4f' }}>
                   {colorInfo.hueDiff.toFixed(4)}
                 </span>
-                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: 0.015)</span>
+                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: {colorInfo.hueThreshold})</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <span style={{ fontSize: '12px' }}>饱和度差: </span>
+                <span style={{ fontWeight: 'bold', fontSize: '14px', color: colorInfo.satDiff <= colorInfo.satThreshold ? '#52c41a' : '#ff4d4f' }}>
+                  {colorInfo.satDiff.toFixed(4)}
+                </span>
+                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: {colorInfo.satThreshold})</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px' }}>亮度差: </span>
+                <span style={{ fontWeight: 'bold', fontSize: '14px', color: colorInfo.lightDiff <= colorInfo.lightThreshold ? '#52c41a' : '#ff4d4f' }}>
+                  {colorInfo.lightDiff.toFixed(4)}
+                </span>
+                <span style={{ fontSize: '11px', color: '#999' }}>(阈值: {colorInfo.lightThreshold})</span>
               </div>
               <div
                 style={{
