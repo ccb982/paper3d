@@ -360,6 +360,7 @@ interface AppState {
   removeSkillFrame: (frameId: string) => void;
   switchSkillFrame: (frameId: string) => void;
   updateSkillFrame: (frameId: string, data: Partial<{
+    name: string;
     bgImageData: ImageData | null;
     dashedPolygons: Point[][];
     baseTexture: ImageData | null;

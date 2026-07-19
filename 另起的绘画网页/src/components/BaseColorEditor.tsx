@@ -746,6 +746,8 @@ export const BaseColorEditor: React.FC = () => {
   const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
   const [selectedBaseColorId, setSelectedBaseColorId] = useState<number | null>(null);
   const [pickingId, setPickingId] = useState<number | null>(null);
+  const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
+  const [editingFrameName, setEditingFrameName] = useState('');
 
   const handleSelectBaseColor = useCallback((id: number) => {
     setSelectedBaseColorId(prev => prev === id ? null : id);
@@ -2320,7 +2322,46 @@ export const BaseColorEditor: React.FC = () => {
             }}
             onClick={() => switchSkillFrame(frame.id)}
           >
-            <span>{frame.name}</span>
+            {frame.id === editingFrameId ? (
+              <input
+                type="text"
+                value={editingFrameName}
+                onChange={(e) => setEditingFrameName(e.target.value.slice(0, 10))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    updateSkillFrame(frame.id, { name: editingFrameName || `帧 ${frames.indexOf(frame) + 1}` });
+                    setEditingFrameId(null);
+                  } else if (e.key === 'Escape') {
+                    setEditingFrameId(null);
+                  }
+                }}
+                onBlur={() => {
+                  updateSkillFrame(frame.id, { name: editingFrameName || `帧 ${frames.indexOf(frame) + 1}` });
+                  setEditingFrameId(null);
+                }}
+                style={{
+                  width: '80px',
+                  fontSize: '11px',
+                  padding: '1px 3px',
+                  border: '1px solid #999',
+                  borderRadius: '2px',
+                  background: frame.id === activeFrameId ? '#096dd9' : '#fff',
+                  color: frame.id === activeFrameId ? '#fff' : '#333',
+                }}
+                autoFocus
+              />
+            ) : (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingFrameId(frame.id);
+                  setEditingFrameName(frame.name);
+                }}
+                style={{ textDecoration: 'underline', textDecorationStyle: 'dotted', cursor: 'text' }}
+              >
+                {frame.name}
+              </span>
+            )}
             {frames.length > 1 && (
               <span
                 style={{
