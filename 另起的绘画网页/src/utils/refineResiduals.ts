@@ -39,6 +39,29 @@ function normalizeHueDelta(d: number): number {
   return d;
 }
 
+function isPixelAcceptable(
+  finalHsl: { h: number; s: number; l: number },
+  bgHsl: { h: number; s: number; l: number },
+  hThresh: number = 0.015,
+  sThresh: number = 0.05,
+  lThresh: number = 0.05
+): boolean {
+  const dh = hueDistance(finalHsl.h, bgHsl.h);
+  const ds = Math.abs(finalHsl.s - bgHsl.s);
+  const dl = Math.abs(finalHsl.l - bgHsl.l);
+  return dh < hThresh && ds < sThresh && dl < lThresh;
+}
+
+function hslWeightedDistance(
+  a: { h: number; s: number; l: number },
+  b: { h: number; s: number; l: number }
+): number {
+  const dh = hueDistance(a.h, b.h);
+  const ds = Math.abs(a.s - b.s);
+  const dl = Math.abs(a.l - b.l);
+  return dh * 2.0 + ds + dl;
+}
+
 export function refineResidualsAndColors(
   regionIdTex: Uint8Array,
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
@@ -53,13 +76,11 @@ export function refineResidualsAndColors(
   const totalPixels = w * h;
   const DELTA_THRESHOLD = 0.25;
 
-  // 构建颜色映射：ID -> 基础色（baseColors 排序后索引与 ID 不再对应）
   const colorMapById = new Map<number, { h: number; s: number; l: number }>();
   for (const c of baseColors) {
     colorMapById.set(c.id, { h: c.h, s: c.s, l: c.l });
   }
 
-  // 步骤1：先计算 blockFlags（用于后续量化/反量化）
   let blockPixelCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
   let blockSmallCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
   for (let idx = 0; idx < totalPixels; idx++) {
@@ -88,7 +109,6 @@ export function refineResidualsAndColors(
     }
   }
 
-  // 步骤2：识别异常像素（使用量化/反量化后的最终色相与背景色比较，与HSL检查一致）
   const badPixels: number[] = [];
   for (let idx = 0; idx < totalPixels; idx++) {
     const colorId = regionIdTex[idx];
@@ -100,29 +120,27 @@ export function refineResidualsAndColors(
     const py = Math.floor(idx / w);
     const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
 
-    // 获取该像素的残差（浮点值）
     const dH = tempDeltas[idx * 3];
     const dS = tempDeltas[idx * 3 + 1];
     const dL = tempDeltas[idx * 3 + 2];
 
-    // 获取自适应块范围
     const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
     const range = getRangeForBlock(blockFlags, blockIdx);
 
-    // 量化并反量化残差（与最终纹理打包/解包一致）
     const qH = quantizeH(dH, range);
     const qS = quantizeS(dS, range);
     const qL = quantizeL(dL, range);
     const dH_decoded = dequantizeH(qH, range);
+    const dS_decoded = dequantizeS(qS, range);
+    const dL_decoded = dequantizeL(qL, range);
 
-    // 解码后的最终色相（需要处理环绕）
     let finalH = base.h + dH_decoded;
     if (finalH < 0) finalH += 1.0;
     else if (finalH >= 1.0) finalH -= 1.0;
+    const finalS = Math.max(0, Math.min(1, base.s + dS_decoded));
+    const finalL = Math.max(0, Math.min(1, base.l + dL_decoded));
 
-    // 计算最终色相与背景色相的差异（考虑环绕）
-    const hDist = hueDistance(finalH, bgHsl.h);
-    if (hDist > hueThreshold) {
+    if (!isPixelAcceptable({ h: finalH, s: finalS, l: finalL }, bgHsl, hueThreshold, 0.05, 0.05)) {
       badPixels.push(idx);
     }
   }
@@ -131,7 +149,6 @@ export function refineResidualsAndColors(
     return { blockFlags, changed: false, changedPixelCount: 0, badPixels: [] };
   }
 
-  // 步骤2：对每个异常像素，寻找最佳替代基础色
   let newColorCount = 0;
   let changedCount = 0;
 
@@ -140,7 +157,6 @@ export function refineResidualsAndColors(
     const py = Math.floor(idx / w);
     const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
 
-    // ---- 第一步：收集周围通过校验的基础色 ----
     const candidates = new Map<number, number>();
     const searchRadius = 3;
     for (let dy = -searchRadius; dy <= searchRadius; dy++) {
@@ -155,7 +171,7 @@ export function refineResidualsAndColors(
         const nBase = colorMapById.get(nColorId);
         if (!nBase) continue;
         const nBgHsl = getBackgroundHslAt(nx, ny, bbox, bgImageData, textureSize);
-        if (hueDistance(nBase.h, nBgHsl.h) < hueThreshold) {
+        if (isPixelAcceptable(nBase, nBgHsl, hueThreshold, 0.05, 0.05)) {
           candidates.set(nColorId, (candidates.get(nColorId) || 0) + 1);
         }
       }
@@ -164,7 +180,6 @@ export function refineResidualsAndColors(
     let bestId: number | null = null;
     let bestScore = -1;
 
-    // 如果有候选，选出现次数最多的
     if (candidates.size > 0) {
       for (const [id, count] of candidates) {
         if (count > bestScore) {
@@ -174,18 +189,16 @@ export function refineResidualsAndColors(
       }
     }
 
-    // 如果没有周围合适的，尝试全局基础色中与背景色最接近的
     if (bestId === null) {
       let minDist = Infinity;
       for (const c of baseColors) {
-        const dist = hueDistance(c.h, bgHsl.h);
+        const dist = hslWeightedDistance(c, bgHsl);
         if (dist < minDist) {
           minDist = dist;
           bestId = c.id;
         }
       }
-      // 如果最小距离仍大于阈值，且允许创建新颜色
-      if (minDist > hueThreshold && newColorCount < maxNewColors) {
+      if (minDist > hueThreshold * 2 && newColorCount < maxNewColors) {
         let duplicate = false;
         let duplicateId: number | null = null;
         const newHsl = { h: bgHsl.h, s: bgHsl.s, l: bgHsl.l };
@@ -197,7 +210,6 @@ export function refineResidualsAndColors(
           }
         }
         if (!duplicate) {
-          // 生成新 ID（取现有最大 ID + 1）
           let maxId = 0;
           for (const c of baseColors) {
             if (c.id > maxId) maxId = c.id;
@@ -214,14 +226,12 @@ export function refineResidualsAndColors(
       }
     }
 
-    // 如果最终 bestId 有效且与原来不同，则更新
     if (bestId !== null && bestId !== regionIdTex[idx]) {
       regionIdTex[idx] = bestId;
       changedCount++;
     }
   }
 
-  // 步骤3：重新计算所有像素的残差（基于更新后的 regionIdTex）
   for (let idx = 0; idx < totalPixels; idx++) {
     const colorId = regionIdTex[idx];
     if (colorId === 0) {
@@ -246,7 +256,6 @@ export function refineResidualsAndColors(
     tempDeltas[idx * 3 + 2] = dL;
   }
 
-  // 步骤4：重新计算 blockFlags
   blockPixelCount.fill(0);
   blockSmallCount.fill(0);
   let newBlockFlags = 0;

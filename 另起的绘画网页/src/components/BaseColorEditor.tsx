@@ -266,7 +266,7 @@ function extractBaseByClick(
     }
   }
 
-  const { baseColors: colors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
+  let { baseColors: colors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
     localMask,
     pxBbox,
     bgImageData,
@@ -275,6 +275,85 @@ function extractBaseByClick(
   );
 
   if (colors.length === 0) return null;
+
+  // ========== 自动修正：第一次产生残差后自动调用一次修正 ==========
+  if (regionIdTex) {
+    const totalPixels = w * h;
+    
+    // 将 deltaPacked（RGB565打包）转换为 tempDeltas（浮点残差）
+    const tempDeltas = new Float32Array(totalPixels * 3);
+    for (let idx = 0; idx < totalPixels; idx++) {
+      const colorIdx = regionIdTex[idx];
+      if (colorIdx === 0) {
+        tempDeltas[idx * 3] = 0;
+        tempDeltas[idx * 3 + 1] = 0;
+        tempDeltas[idx * 3 + 2] = 0;
+        continue;
+      }
+      const base = colors[colorIdx - 1];
+      if (!base) continue;
+
+      const packed = deltaPacked[idx];
+      const { s, h: qH, l: qL } = unpackRGB565(packed);
+      const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+
+      const dH = dequantizeH(qH, range);
+      const dS = dequantizeS(s, range);
+      const dL = dequantizeL(qL, range);
+
+      tempDeltas[idx * 3] = dH;
+      tempDeltas[idx * 3 + 1] = dS;
+      tempDeltas[idx * 3 + 2] = dL;
+    }
+
+    // 添加 id 字段以便 refineResidualsAndColors 使用
+    const colorsWithId = colors.map((c, i) => ({ id: i + 1, ...c }));
+    const regionIdTexCopy = new Uint8Array(regionIdTex);
+
+    // 调用修正函数
+    const refinementResult = refineResidualsAndColors(
+      regionIdTexCopy,
+      colorsWithId,
+      pxBbox,
+      bgImageData,
+      tempDeltas,
+      textureSize,
+      0.015,
+      3
+    );
+
+    // 更新修正后的结果
+    regionIdTex = regionIdTexCopy;
+    colors = colorsWithId;
+    blockFlags = refinementResult.blockFlags;
+
+    // 将修正后的 tempDeltas 重新打包为 deltaPacked
+    const newDeltaPacked = new Uint16Array(totalPixels);
+    for (let idx = 0; idx < totalPixels; idx++) {
+      const colorIdx = regionIdTex[idx];
+      if (colorIdx === 0) {
+        newDeltaPacked[idx] = 0;
+        continue;
+      }
+      const base = colors[colorIdx - 1];
+      if (!base) continue;
+
+      const dH = tempDeltas[idx * 3];
+      const dS = tempDeltas[idx * 3 + 1];
+      const dL = tempDeltas[idx * 3 + 2];
+
+      const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+
+      const qH = quantizeH(dH, range);
+      const qS = quantizeS(dS, range);
+      const qL = quantizeL(dL, range);
+
+      newDeltaPacked[idx] = packRGB565(qS, qH, qL);
+    }
+    deltaPacked = newDeltaPacked;
+  }
 
   const baseCanvas = document.createElement('canvas');
   baseCanvas.width = textureSize;
