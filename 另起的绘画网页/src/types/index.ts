@@ -19,7 +19,8 @@ export type ToolType =
   | 'regionAnnotation'  // 区域注释工具
   | 'paintBrush'        // 上色画笔工具
   | 'picker'            // 取色器工具
-  | 'vertexPin';        // 顶点固定画笔（不在工具栏显示）
+  | 'vertexPin'         // 顶点固定画笔（不在工具栏显示）
+  | 'move';             // 移动工具
 
 export interface Shape {
   id: string;

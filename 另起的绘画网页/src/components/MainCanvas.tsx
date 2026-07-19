@@ -990,6 +990,13 @@ useEffect(() => {
   const [isPainting, setIsPainting] = useState(false);
   const lastPaintPointRef = useRef<Point | null>(null);
 
+  // 移动工具状态
+  const [moveTargetId, setMoveTargetId] = useState<string | null>(null);
+  const [moveShapeIds, setMoveShapeIds] = useState<string[]>([]);
+  const [moveStartWorld, setMoveStartWorld] = useState<Point | null>(null);
+  const [moveRegionId, setMoveRegionId] = useState<number | null>(null);
+  const [isMoving, setIsMoving] = useState(false);
+
   // 动画循环相关
   const animationFrameRef = useRef<number>();
   const lastBakeTimeRef = useRef<number>(0);
@@ -3431,6 +3438,28 @@ useEffect(() => {
       return;
     }
 
+    // ========== 移动工具：拖拽移动 ==========
+    if (isMoving && moveShapeIds.length > 0 && moveStartWorld) {
+      const coords = getCanvasCoords(e);
+      const currentWorld = canvasToWorldFn(coords.x, coords.y);
+      const dx = currentWorld.x - moveStartWorld.x;
+      const dy = currentWorld.y - moveStartWorld.y;
+      if (Math.abs(dx) < 0.0001 && Math.abs(dy) < 0.0001) return;
+
+      useAppStore.setState(state => ({
+        shapes: state.shapes.map(s => {
+          if (moveShapeIds.includes(s.id)) {
+            const newPoints = s.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+            return { ...s, points: newPoints };
+          }
+          return s;
+        }),
+      }));
+      setMoveStartWorld(currentWorld);
+      requestAnimationFrame(() => { drawCanvas(); });
+      return;
+    }
+
     if (isPanning) {
       // 更新鼠标位置（用于橡皮光标跟随）
       const coords = getCanvasCoords(e);
@@ -3641,6 +3670,48 @@ useEffect(() => {
     // 优先处理背景拖动模式
     if (imageState.isBackgroundDragging && e.button === 0) {
       startBackgroundDrag(e.clientX, e.clientY);
+      return;
+    }
+
+    // ========== 移动工具 ==========
+    if (currentTool === 'move' && e.button === 0) {
+      const coords = getCanvasCoords(e);
+      const worldCoords = canvasToWorldFn(coords.x, coords.y);
+      
+      const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
+      
+      // 1. 寻找命中的封闭实线图形（非虚线 #ffaa00）
+      let targetShape: typeof currentLayerShapes[0] | null = null;
+      for (const shape of currentLayerShapes) {
+        if (shape.color === '#ffaa00') continue;
+        if (!isClosedShape(shape)) continue;
+        if (isPointInsideShape(worldCoords, shape)) {
+          targetShape = shape;
+          break;
+        }
+      }
+      if (!targetShape) return;
+
+      // 2. 收集内部虚线：着色#ffaa00且所有顶点都在主图形内部的图形
+      const movingIds: string[] = [targetShape.id];
+      for (const shape of currentLayerShapes) {
+        if (shape.color !== '#ffaa00') continue;
+        const allInside = shape.points.every(p => isPointInsideShape(p, targetShape!));
+        if (allInside) movingIds.push(shape.id);
+      }
+
+      // 3. 获取区域ID（取主图形中心点查询 regionIdTexture）
+      const centerX = targetShape.points.reduce((s, p) => s + p.x, 0) / targetShape.points.length;
+      const centerY = targetShape.points.reduce((s, p) => s + p.y, 0) / targetShape.points.length;
+      const regionId = getRegionIdAtWorldPoint({ x: centerX, y: centerY });
+
+      // 4. 记录状态
+      setMoveTargetId(targetShape.id);
+      setMoveShapeIds(movingIds);
+      setMoveStartWorld(worldCoords);
+      setMoveRegionId(regionId);
+      setIsMoving(true);
+      setPanStart({ x: e.clientX, y: e.clientY });
       return;
     }
 
@@ -3968,6 +4039,38 @@ useEffect(() => {
       return;
     }
 
+    // ========== 移动工具：松开鼠标 ==========
+    if (isMoving) {
+      // 删除区域注释
+      if (moveRegionId !== null && moveRegionId > 0) {
+        const layerId = activeLayerId || layers[0]?.id;
+        if (layerId) {
+          useAppStore.setState(state => ({
+            regionAnnotations: state.regionAnnotations.filter(
+              a => !(a.layerId === layerId && String(a.regionId) === String(moveRegionId))
+            ),
+          }));
+        }
+      }
+
+      // 清空移动状态
+      setIsMoving(false);
+      setMoveTargetId(null);
+      setMoveShapeIds([]);
+      setMoveStartWorld(null);
+      setMoveRegionId(null);
+
+      // 保存历史 & 刷新区域缓存
+      saveHistory();
+      const layerId = activeLayerId || layers[0]?.id;
+      if (layerId) {
+        refreshRegionCache(layerId);
+        refreshColorBlockCache(layerId);
+      }
+      drawCanvas();
+      return;
+    }
+
     if (isErasing && currentTool === 'eraser') {
       // 确保最后一次擦除（如果 mouseup 时还有未被 Move 覆盖的位置，但一般 Move 已覆盖，这步可省略，保留以保万无一失）
       const coords = getCanvasCoords(e);
@@ -4020,7 +4123,7 @@ useEffect(() => {
     }
 
     setIsPanning(false);
-  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, saveHistory, activeLayerId, layers, paintBuffers, updatePaintBuffer, regionIdTexture]);
+  }, [isErasing, currentTool, getCanvasCoords, getShapesToEraseAtPoint, eraseShapes, isPainting, saveHistory, activeLayerId, layers, paintBuffers, updatePaintBuffer, regionIdTexture, isMoving, moveRegionId, refreshRegionCache, refreshColorBlockCache, drawCanvas]);
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
@@ -4101,7 +4204,7 @@ useEffect(() => {
       return;
     }
     
-    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation' || currentTool === 'paintBrush') return;
+    if (isPanning || isPanMode || currentTool === 'select' || currentTool === 'eraser' || currentTool === 'pointAnnotation' || currentTool === 'regionAnnotation' || currentTool === 'paintBrush' || currentTool === 'move') return;
     const coords = getCanvasCoords(e);
     const worldCoords = canvasToWorldFn(coords.x, coords.y);
     const snappedCoords = snapToExistingPoint(worldCoords, currentTool, tempPoints.length);
@@ -4352,7 +4455,7 @@ useEffect(() => {
   ]);
 
   return (
-    <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default') }}>
+    <div ref={containerRef} style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', cursor: currentTool === 'move' ? 'move' : (isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default')) }}>
       <div style={{ width: '100%', height: '100%', maxWidth: '100%', maxHeight: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
         {showDebugRegions && (
           <div style={{
@@ -4537,7 +4640,7 @@ useEffect(() => {
               display: 'block',
               maxWidth: '100%',
               maxHeight: '100%',
-              cursor: colorExtractWaiting ? 'crosshair' : (isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default')),
+              cursor: colorExtractWaiting ? 'crosshair' : (currentTool === 'move' ? 'move' : (isPanning ? 'grabbing' : (isPanMode ? 'grab' : 'default'))),
             }}
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
