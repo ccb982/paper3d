@@ -69,6 +69,7 @@ function worldToCanvas(wx: number, wy: number): Point {
 
 function buildResidualTextureFromPacked(
   deltaPacked: Uint16Array,
+  regionIdTex: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
   textureSize: number
 ): ImageData {
@@ -80,6 +81,7 @@ function buildResidualTextureFromPacked(
   for (let py = 0; py < h; py++) {
     for (let px = 0; px < w; px++) {
       const idx = py * w + px;
+      if (regionIdTex[idx] === 0) continue;
       const packed = deltaPacked[idx];
       const { s, h: qH, l: qL } = unpackRGB565(packed);
 
@@ -248,12 +250,17 @@ function extractBaseByClick(
     };
   }
   
+  // 构建mask时跳过透明像素（alpha < 128），避免透明背景被当作黑色聚类
   const bfsVisited = new Uint8Array(textureSize * textureSize);
   let visitedCount = 0;
   for (let y = pxBbox.y; y < pxBbox.y + pxBbox.h; y++) {
     for (let x = pxBbox.x; x < pxBbox.x + pxBbox.w; x++) {
-      bfsVisited[y * textureSize + x] = 1;
-      visitedCount++;
+      const pIdx = (y * textureSize + x) * 4;
+      const alpha = bgImageData.data[pIdx + 3];
+      if (alpha >= 128) {
+        bfsVisited[y * textureSize + x] = 1;
+        visitedCount++;
+      }
     }
   }
 
@@ -398,7 +405,7 @@ function extractBaseByClick(
     }
   }
 
-  const residualTexture = buildResidualTextureFromPacked(deltaPacked, pxBbox, textureSize);
+  const residualTexture = buildResidualTextureFromPacked(deltaPacked, regionIdTex!, pxBbox, textureSize);
 
   return {
     baseTexture: baseImageData,
@@ -1259,7 +1266,7 @@ export const BaseColorEditor: React.FC = () => {
       effectiveBbox,
       TEX_SIZE
     );
-    const newResidualTexture = buildResidualTextureFromPacked(newDeltaPacked, effectiveBbox, TEX_SIZE);
+    const newResidualTexture = buildResidualTextureFromPacked(newDeltaPacked, newRegionIdTex, effectiveBbox, TEX_SIZE);
 
     updateSkillFrame(frameId, {
       regionIdTex: newRegionIdTex,
@@ -1502,7 +1509,7 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
     
-    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, bbox, TEX_SIZE);
+    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTex, bbox, TEX_SIZE);
     setResidualTexture(residualDisplay);
     
     if (activeFrameId) {
@@ -1999,8 +2006,8 @@ export const BaseColorEditor: React.FC = () => {
       ctx.fillStyle = '#333';
       ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
       
-      if (bbox && currentFrame?.deltaPacked && baseColors.length > 0) {
-        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, bbox, TEX_SIZE);
+      if (bbox && currentFrame?.deltaPacked && currentFrame.regionIdTex && baseColors.length > 0) {
+        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, currentFrame.regionIdTex, bbox, TEX_SIZE);
         
         ctx.save();
         ctx.beginPath();
