@@ -731,6 +731,11 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [activeFrameId, frames, buildColorPixelsMap]);
 
+  useEffect(() => {
+    setDebugBadPixels([]);
+    setDebugShowBadPixels(false);
+  }, [activeFrameId]);
+
   const [colorPixelsMap, setColorPixelsMap] = useState<Map<number, number[]> | null>(null);
   const [selectedBaseColorId, setSelectedBaseColorId] = useState<number | null>(null);
   const [pickingId, setPickingId] = useState<number | null>(null);
