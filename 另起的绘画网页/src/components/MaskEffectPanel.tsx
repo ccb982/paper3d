@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import type { RegionAnnotation } from '../types';
 
@@ -26,8 +26,24 @@ export function MaskEffectPanel() {
     refreshRegionCache,
   } = useAppStore();
 
-  // 获取当前选中图层的区域注释
-  const layerAnnotations = regionAnnotations.filter((a: RegionAnnotation) => a.layerId === activeLayerId);
+  // 用 useMemo 缓存当前图层注释，并过滤掉无效 regionId
+  const layerAnnotations = useMemo(() => {
+    if (!activeLayerId) return [];
+    return regionAnnotations.filter((a: RegionAnnotation) =>
+      a.layerId === activeLayerId && a.regionId !== undefined && a.regionId !== null
+    );
+  }, [regionAnnotations, activeLayerId]);
+
+  // 当 activeLayerId 变化时，重置选中状态，并刷新区域实体
+  useEffect(() => {
+    setSelectedAnnotationId(null);
+    setEditingAnno(null);
+    if (activeLayerId) {
+      refreshRegionCache(activeLayerId);
+      refreshRegionEntities(activeLayerId);
+    }
+  }, [activeLayerId, refreshRegionCache, refreshRegionEntities]);
+
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [editingAnno, setEditingAnno] = useState<RegionAnnotation | null>(null);
 

@@ -41,11 +41,9 @@ const VAT_VERTEX_SHADER = `
 
 // ========== 填充网格的片元着色器（用于模板缓冲）==========
 const FILL_FRAGMENT_SHADER = `
-  varying vec2 vDisplacement;
   void main() {
-    float intensity = length(vDisplacement);
-    // 红色=位移强度，像素被VAT推动；黑色=零位移
-    gl_FragColor = vec4(intensity * 2.0, 0.0, 0.0, 0.7);
+    // 完全透明，仅写入模板缓冲，不显示颜色
+    gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
   }
 `;
 
@@ -585,9 +583,11 @@ useEffect(() => {
 
   for (const entity of entities) {
     try {
-    const hasAnnotation = regionAnnotationsForLayer.some(
-      anno => Number(anno.regionId) === entity.id
-    );
+    const anno = regionAnnotationsForLayer.find(a => Number(a.regionId) === entity.id);
+    const hasAnnotation = !!anno;
+    const hasMaskEffect = anno?.maskEffect?.enabled;
+
+    console.log(`[VAT区域#${entity.id}] 注释=${hasAnnotation ? `id=${anno!.id} regionId=${anno!.regionId}` : '无'} 蒙版特效=${hasMaskEffect ? '启用' : '未启用'} 顶点数=${entity.getTotalVertices()} 帧数=${entity.getNumFrames()}`);
 
     const bbox = entity.worldBbox;
     if (!bbox) { continue; }
