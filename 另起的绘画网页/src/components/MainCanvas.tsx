@@ -486,7 +486,7 @@ export function MainCanvas() {
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
         
-        if (frameCounter % 30 === 0) {
+        if (false && frameCounter % 30 === 0) {
           const children = group?.children?.length ?? 0;
           console.log(
             `[DEBUG渲染] 帧#${frameCounter} ` +
@@ -711,14 +711,6 @@ useEffect(() => {
     }
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     
-    // ★ 调试：UV 详情
-    {
-      let uvSample = '';
-      if (uv.length >= 4) {
-        uvSample = `uv[0]=(${uv[0].toFixed(3)},${uv[1].toFixed(3)}), uv[${uv.length/2-1}]=(${uv[uv.length-2].toFixed(3)},${uv[uv.length-1].toFixed(3)})`;
-      }
-      console.log(`[DEBUG几何] 区域${entity.id} UV: 数量=${uv.length/2}, 范围=[0~1, 0~1], ${uvSample}`);
-    }
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---
     const fillMat = new THREE.ShaderMaterial({
@@ -746,43 +738,25 @@ useEffect(() => {
     const fillMesh = new THREE.Mesh(fillGeom, fillMat);
     fillMesh.renderOrder = 0;
     fillMesh.frustumCulled = false;
-    
-    // ★ 调试：填充网格详情
-    console.log(
-      `[DEBUG填充] 区域${entity.id} 填充网格: ` +
-      `stencilTest=${fillMat.stencilTest}, stencilWrite=${fillMat.stencilWrite}, ref=${fillMat.stencilRef}, ` +
-      `func=${fillMat.stencilFunc===THREE.AlwaysStencilFunc?'Always':fillMat.stencilFunc}, ` +
-      `zPass=${fillMat.stencilZPass===THREE.ReplaceStencilOp?'Replace':fillMat.stencilZPass}, ` +
-      `transparent=${fillMat.transparent}, side=${fillMat.side===THREE.FrontSide?'Front':fillMat.side}`
-    );
 
-    // --- 6. 颜色纹理网格（复用同一几何体，带洞区域无三角形 → 纹理自动丢弃） ---
-    const colorTexture = entity.getGPUTexture();
+    // --- 6. 颜色纹理网格（使用 frameDataMap 绑定的纹理）---
+    const frameData = frameDataMap[activeLayerId];
+    const boundTex = frameData?.boundRegionId === entity.id ? frameData.boundBaseTexture : null;
     let colorMesh: THREE.Mesh | null = null;
-    if (colorTexture) {
+    if (boundTex) {
+      // 将 ImageData 转换为 Three.js DataTexture
+      const colorTexture = new THREE.DataTexture(
+        new Uint8ClampedArray(boundTex.data),
+        boundTex.width,
+        boundTex.height,
+        THREE.RGBAFormat,
+        THREE.UnsignedByteType
+      );
       colorTexture.needsUpdate = true;
-      
-      // ★ 调试：检查纹理像素数据
-      {
-        const px = colorTexture.image.data;
-        if (px) {
-          let opaqueCount = 0, totalCount = px.length / 4;
-          let sampleColors: string[] = [];
-          for (let i = 0; i < px.length && sampleColors.length < 5; i += 4) {
-            if (px[i+3] > 0) { sampleColors.push(`(${px[i]},${px[i+1]},${px[i+2]},${px[i+3]})`); }
-          }
-          for (let i = 3; i < px.length; i += 4) { if (px[i] > 0) opaqueCount++; }
-          console.log(
-            `[DEBUG纹理] 区域${entity.id} 纹理像素: 总=${totalCount}, 不透明=${opaqueCount}, ` +
-            `格式=RGBA, 类型=${(colorTexture.type===THREE.UnsignedByteType?'UnsignedByte':colorTexture.type)}, ` +
-            `颜色空间=${(colorTexture as any).colorSpace}, ` +
-            `flipY=${colorTexture.flipY}, needsUpdate=${(colorTexture as any).needsUpdate}, ` +
-            `采样=${sampleColors.join(', ')}`
-          );
-        } else {
-          console.warn(`[DEBUG纹理] 区域${entity.id} 纹理无像素数据!`);
-        }
-      }
+      colorTexture.minFilter = THREE.LinearFilter;
+      colorTexture.magFilter = THREE.LinearFilter;
+      colorTexture.wrapS = THREE.ClampToEdgeWrapping;
+      colorTexture.wrapT = THREE.ClampToEdgeWrapping;
       
       const texGeom = fillGeom.clone();
       const texMat = new THREE.ShaderMaterial({
@@ -800,7 +774,6 @@ useEffect(() => {
         depthWrite: true,
         side: THREE.FrontSide,
       });
-      // stencil 属性在 Three.js r170 中需创建后再设置
       texMat.stencilTest = true;
       texMat.stencilRef = 1;
       texMat.stencilFunc = THREE.EqualStencilFunc;
@@ -808,18 +781,7 @@ useEffect(() => {
       colorMesh.renderOrder = 1;
       colorMesh.frustumCulled = false;
       
-      // ★ 调试：颜色网格材质详情
-      console.log(
-        `[DEBUG颜色] 区域${entity.id} 颜色网格: ` +
-        `stencilTest=${texMat.stencilTest}, stencilRef=${texMat.stencilRef}, ` +
-        `stencilFunc=${texMat.stencilFunc===THREE.EqualStencilFunc?'Equal':texMat.stencilFunc}, ` +
-        `transparent=${texMat.transparent}, depthWrite=${texMat.depthWrite}, ` +
-        `side=${texMat.side===THREE.FrontSide?'Front':texMat.side}, ` +
-        `renderOrder=${colorMesh.renderOrder}, ` +
-        `uniforms.uColorTex=${texMat.uniforms.uColorTex.value?.image?.width??'null'}x${texMat.uniforms.uColorTex.value?.image?.height??'null'}`
-      );
-      
-      // ★ 调试：与颜色网格同样的几何体、同样的纹理，但跳过模板/VAT
+      // 简单纹理网格（无 stencil/VAT，用于可视化验证）
       const simpleTexMat = new THREE.ShaderMaterial({
         uniforms: { uColorTex: { value: colorTexture } },
         vertexShader: `
@@ -845,32 +807,6 @@ useEffect(() => {
       const simpleMesh = new THREE.Mesh(texGeom, simpleTexMat);
       simpleMesh.renderOrder = 5;
       group.add(simpleMesh);
-      console.log(`[DEBUG_纹理] 添加简单纹理网格, 纹理尺寸=${colorTexture.image.width}x${colorTexture.image.height}, uv=${uv.length/2}个, depthTest=false, renderOrder=5`);
-      
-      // ===== 调试：不依赖 stencil 的纯色网格（验证几何体位置） =====
-      if (typeof window !== 'undefined') {
-        const dbg = (window as any).__debugRegion;
-        if (!dbg) {
-          (window as any).__debugRegion = {};
-        }
-        // 创建纯红调试网格（无 stencil, 无 VAT）
-        if (!(window as any).__debugRegion._redMeshCreated && entity.id === 0) {
-          (window as any).__debugRegion._redMeshCreated = true;
-          const dbgGeom = fillGeom.clone();
-          const dbgMat = new THREE.MeshBasicMaterial({
-            color: 0xff0000,
-            transparent: true,
-            opacity: 0.5,
-            side: THREE.DoubleSide,
-            depthWrite: false,
-          });
-          const dbgMesh = new THREE.Mesh(dbgGeom, dbgMat);
-          dbgMesh.renderOrder = 10;
-          dbgMesh.frustumCulled = false;
-          group.add(dbgMesh);
-        }
-      }
-      
     }
 
     // --- 7. 边框：为每个环单独创建 LineLoop ---
@@ -918,7 +854,7 @@ useEffect(() => {
   } catch (e: any) {
   }
   }
-}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL]);
+}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL, frameDataMap]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [isPinning, setIsPinning] = useState(false);
@@ -2607,12 +2543,19 @@ useEffect(() => {
       });
     }
 
-    // 绘制区域色块图层（静态纹理，受 activeLayer 可见性和透明度控制）
-    if (layerVisibility.regionLayer && activeLayer?.visible && regionLayerCanvas && !regionLayerTextureGPU) {
-      ctx.save();
-      ctx.globalAlpha = activeLayer.opacity;
-      ctx.drawImage(regionLayerCanvas, 0, 0);
-      ctx.restore();
+    // 绘制区域色块图层（使用 frameDataMap 绑定的纹理）
+    if (layerVisibility.regionLayer && activeLayer?.visible && activeLayerId) {
+      const layerFrame = frameDataMap[activeLayerId];
+      if (layerFrame?.boundBaseTexture) {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = layerFrame.boundBaseTexture.width;
+        tempCanvas.height = layerFrame.boundBaseTexture.height;
+        tempCanvas.getContext('2d')!.putImageData(layerFrame.boundBaseTexture, 0, 0);
+        ctx.save();
+        ctx.globalAlpha = activeLayer.opacity;
+        ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+        ctx.restore();
+      }
     }
 
     // ========== 蒙版特效动态轮廓绘制（作为区域色块图层的一部分，受 activeLayer 可见性和透明度控制）==========

@@ -329,12 +329,6 @@ interface AppState {
     bgImageData: ImageData | null;
   }>) => void;
   clearBaseColorEditorState: () => void;
-  updateRegionFtxData: (layerId: string, regionId: number, ftxData: {
-    baseColors: Array<{ h: number; s: number; l: number }>;
-    deltaTexture: Uint8Array;
-    regionIdTexture: Uint8Array | undefined;
-    bbox: { x: number; y: number; w: number; h: number };
-  }) => void;
 
   // 技能组编辑器（多帧）
   skillGroupEditor: {
@@ -651,9 +645,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       setTimeout(() => {
         get().refreshRegionCache(id);
         get().refreshColorBlockCache(id);
-        if (get().layerVisibility.regionLayer) {
-          get().refreshRegionEntities(id);
-        }
+        get().refreshRegionEntities(id);   // ← 总是刷新，独立于区域图层可见性
       }, 0);
     }
   },
@@ -1065,6 +1057,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       regionIdTexture: new Map(s.regionIdTexture).set(layerId, regionIdMap),
     }));
+
+    // 自动刷新区域实体（使绑定下拉框总能获取到本图层的区域 ID）
+    get().refreshRegionEntities(layerId);
   },
 
   colorBlockRegionsCache: {},
@@ -1268,14 +1263,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log(`[区域图层纹理] 图层 ${layerId} 纹理生成完成`);
   },
 
-  /**
-   * 更新区域纹理列表（为每个虚线区域生成独立的GPU纹理）
-   * 【重构】使用 RegionEntity.getGPUTexture() 按需生成纹理
-   */
-  // 【重构】构建区域实体（从 paintBuffer 提取 ftx 数据）
+  // 构建区域实体（只存几何和特效，不存储颜色数据）
   refreshRegionEntities: (layerId) => {
     const state = get();
-    const paintBuffer = state.paintBuffers[layerId];
 
     // 获取区域注释中的变换参数和边框扭曲参数
     const annoMap = new Map<number, RegionAnnotation>();
@@ -1299,13 +1289,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     
     oldEntities.forEach(e => e.dispose());
 
-    if (!paintBuffer) {
-      set((s) => ({
-        regionEntities: { ...s.regionEntities, [layerId]: [] },
-      }));
-      return;
-    }
-
     const regions = state.regionPolygonsCache[layerId] || [];
     const entities: RegionEntity[] = [];
 
@@ -1314,29 +1297,24 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       if (polygon.length === 0 || polygon[0].length < 3) continue;
 
-      // 创建区域实体
+      // 创建区域实体（构造函数自动计算 worldBbox）
       const entity = new RegionEntity(i, layerId, polygon);
 
-      // 构建 ftx 压缩数据
-      entity.buildFromPaintBuffer(paintBuffer, 0.025, 512);
-
-      // 恢复变换参数和边框扭曲参数（从区域注释中读取）
+      // 恢复蒙版特效参数（从区域注释中读取）
       const anno = annoMap.get(i);
       if (anno?.maskEffect) {
-        // 恢复边框扭曲参数
         entity.maskEffect = anno.maskEffect;
         
-        // 恢复纹理变换参数（带校验）
         if (anno.maskEffect.transform) {
           const savedTransform = anno.maskEffect.transform;
           
-          // 校验并恢复锚点（只有在有效范围内才使用）
+          // 校验并恢复锚点
           const savedAnchor = savedTransform.anchor;
           if (savedAnchor && savedAnchor.x >= 0 && savedAnchor.x <= 1 && savedAnchor.y >= 0 && savedAnchor.y <= 1) {
             entity.transform.anchor = { x: savedAnchor.x, y: savedAnchor.y };
           }
           
-          // 校验并恢复位置（钳制到合理范围）
+          // 校验并恢复位置
           if (savedTransform.position) {
             entity.transform.position = {
               x: Math.max(-0.5, Math.min(0.5, savedTransform.position.x)),
@@ -1344,7 +1322,6 @@ export const useAppStore = create<AppState>((set, get) => ({
             };
           }
           
-          // 恢复旋转和缩放（无需校验）
           if (typeof savedTransform.rotation === 'number') {
             entity.transform.rotation = savedTransform.rotation;
           }
@@ -1357,7 +1334,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 计算默认锚点（区域中心世界坐标）
       const bbox = entity.worldBbox;
       if (bbox && !entity.transform.anchor) {
-        // bbox 已经是世界坐标（0~1，Y向上），直接计算中心
         const cx = bbox.x + bbox.w / 2;
         const cy = bbox.y + bbox.h / 2;
         entity.transform.anchor = { x: cx, y: cy };
@@ -1375,8 +1351,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({
       regionEntities: { ...s.regionEntities, [layerId]: entities },
     }));
-
-    
   },
 
   updateRegionDisplacementOnly: (layerId: string) => {
@@ -1895,31 +1869,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       bgImageData: null,
     },
   }),
-  updateRegionFtxData: (layerId, regionId, ftxData) => {
-    set((state) => {
-      const entities = state.regionEntities[layerId] || [];
-      const newEntities = [...entities];
-      const entity = newEntities.find(e => e.id === regionId);
-      if (entity) {
-        entity.setFtxData({
-          version: 2,
-          baseColors: ftxData.baseColors,
-          deltaTexture: ftxData.deltaTexture,
-          regionIdTexture: ftxData.regionIdTexture,
-          textureSize: 128,
-          bbox: ftxData.bbox,
-          blockFlags: 0,
-        });
-      }
-      return {
-        ...state,
-        regionEntities: { ...state.regionEntities, [layerId]: newEntities },
-      };
-    });
-    setTimeout(() => {
-      get().triggerCanvasRedraw();
-    }, 0);
-  },
 
   // 技能组编辑器
   skillGroupEditor: {
@@ -2511,9 +2460,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
-  // ===== 绑定图层到区域 =====
+  // ===== 绑定图层到区域（使用全局调色板 + 多边形裁剪）=====
   bindFrameToLayer: async (layerId: string, regionId: number | null) => {
-    const { decodeFrameWithRegionColors } = await import('../utils/colorCompressor');
+    const { decodeFrameWithGlobalPalette, cropTextureByPolygon } = await import('../utils/colorCompressor');
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) {
@@ -2521,7 +2470,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // 如果 regionId 为 null，表示解绑
+    // 解绑
     if (regionId === null) {
       set((s) => ({
         frameDataMap: {
@@ -2546,68 +2495,47 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // 获取该区域使用的颜色列表（全局 ID 列表）
-    const ftxData = entity.getFtxData();
-    if (!ftxData) {
-      console.warn(`[绑定] 区域 ${regionId} 没有 FTX 数据`);
-      return;
-    }
-
-    // ftxData.baseColors 存储的是全局调色板 ID (id, h, s, l)
-    // 构建 全局ID -> 区域本地索引 (1-based) 的映射
-    const globalToLocal = new Map<number, number>();
-    ftxData.baseColors.forEach((c, idx) => {
-      globalToLocal.set(c.id, idx + 1);
-    });
-
-    // 重新映射 regionIdTex
+    // 使用全局调色板解码帧数据（rawRegionIdTex 已经是全局 ID）
+    const globalPalette = state.skillGroupEditor.sharedBaseColors;
     const raw = frameData.rawRegionIdTex;
     if (!raw || raw.length === 0) {
       console.warn(`[绑定] 图层 ${layerId} 没有原始区域ID纹理`);
       return;
     }
 
-    const newRegionIdTex = new Uint8Array(raw.length);
-    let validPixelCount = 0;
-    for (let i = 0; i < raw.length; i++) {
-      const globalId = raw[i];
-      if (globalId === 0) {
-        newRegionIdTex[i] = 0;
-      } else {
-        const localIdx = globalToLocal.get(globalId);
-        if (localIdx) {
-          newRegionIdTex[i] = localIdx;
-          validPixelCount++;
-        } else {
-          newRegionIdTex[i] = 0;
-        }
-      }
-    }
-
-    if (validPixelCount === 0) {
-      console.warn(`[绑定] 该帧没有任何像素属于区域 ${regionId}，绑定无效`);
-      return;
-    }
-
-    // 解码生成绑定后的纹理
-    const { baseTexture, residualTexture } = decodeFrameWithRegionColors(
-      newRegionIdTex,
+    // 解码完整的 512x512 纹理（全局调色板直接查找）
+    const fullBase = decodeFrameWithGlobalPalette(
+      raw,
       frameData.rawDeltaPacked,
-      ftxData.baseColors,
+      globalPalette,
       frameData.rawBbox!,
       frameData.rawBlockFlags,
       512
     );
 
-    // 更新 frameDataMap
+    // 用区域多边形裁剪，外部像素置透明
+    const croppedBase = cropTextureByPolygon(fullBase, entity.boundary);
+
+    // 统计有效像素
+    let validPixelCount = 0;
+    const data = croppedBase.data;
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] > 0) validPixelCount++;
+    }
+
+    if (validPixelCount === 0) {
+      console.warn(`[绑定] 该帧在区域 ${regionId} 内没有有效像素`);
+      return;
+    }
+
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
         [layerId]: {
           ...frameData,
           boundRegionId: regionId,
-          boundBaseTexture: baseTexture,
-          boundResidualTexture: residualTexture,
+          boundBaseTexture: croppedBase,
+          boundResidualTexture: null,
         },
       },
     }));

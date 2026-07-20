@@ -1,5 +1,6 @@
 import { useAppStore } from '../stores/useAppStore';
 import { computeRegionsExact } from './regionDetectionExact';
+import { isPointInPolygonWithHoles } from './regionDetection';
 import type { Point } from '../types';
 import {
   ADAPTIVE_BLOCK_COLS,
@@ -1444,6 +1445,96 @@ export function decodeFrameWithRegionColors(
   }
 
   return { baseTexture: baseImageData, residualTexture: resImageData };
+}
+
+// ===== 新架构：用全局调色板解码帧数据（regionIdTex 已经是全局 ID）=====
+/**
+ * 使用全局调色板解码帧数据为全尺寸 ImageData（512x512）。
+ * regionIdTex 中的值直接就是全局调色板 ID，无需再做映射。
+ */
+export function decodeFrameWithGlobalPalette(
+  regionIdTex: Uint8Array,
+  deltaPacked: Uint16Array,
+  palette: Array<{ id: number; h: number; s: number; l: number }>,
+  bbox: { x: number; y: number; w: number; h: number },
+  blockFlags: number,
+  textureSize: number = 512
+): ImageData {
+  const { w, h } = bbox;
+  const totalPixels = w * h;
+  const imageData = new ImageData(textureSize, textureSize);
+  const data = imageData.data;
+  data.fill(0);
+
+  const colorMap = new Map<number, { h: number; s: number; l: number }>();
+  for (const c of palette) {
+    colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
+  }
+
+  for (let i = 0; i < totalPixels; i++) {
+    const globalId = regionIdTex[i];
+    if (globalId === 0) continue;
+    const base = colorMap.get(globalId);
+    if (!base) continue;
+
+    const px = i % w;
+    const py = Math.floor(i / w);
+    const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+    const range = getRangeForBlock(blockFlags, blockIdx);
+
+    const packed = deltaPacked[i];
+    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+    const dH = dequantizeH(qH, range);
+    const dS = dequantizeS(qS, range);
+    const dL = dequantizeL(qL, range);
+
+    let finalH = base.h + dH;
+    finalH = ((finalH % 1) + 1) % 1;
+    const finalS = Math.max(0, Math.min(1, base.s + dS));
+    const finalL = Math.max(0, Math.min(1, base.l + dL));
+
+    const rgb = hslToRgb(finalH, finalS, finalL);
+
+    const globalX = bbox.x + px;
+    const globalY = bbox.y + py;
+    const idx = (globalY * textureSize + globalX) * 4;
+    data[idx] = rgb.r;
+    data[idx + 1] = rgb.g;
+    data[idx + 2] = rgb.b;
+    data[idx + 3] = 255;
+  }
+
+  return imageData;
+}
+
+/**
+ * 根据多边形掩码裁剪纹理，外部像素置为透明。
+ * polygon 使用世界坐标 [0,1]，与 region 边界一致。
+ */
+export function cropTextureByPolygon(
+  imageData: ImageData,
+  polygon: Point[][],
+  textureSize: number = 512
+): ImageData {
+  const result = new ImageData(
+    new Uint8ClampedArray(imageData.data),
+    imageData.width,
+    imageData.height
+  );
+  const data = result.data;
+
+  for (let y = 0; y < textureSize; y++) {
+    for (let x = 0; x < textureSize; x++) {
+      const worldX = x / textureSize;
+      const worldY = 1 - y / textureSize;  // canvas Y → 世界坐标 Y（向上）
+      const inside = isPointInPolygonWithHoles({ x: worldX, y: worldY }, polygon);
+      if (!inside) {
+        const idx = (y * textureSize + x) * 4;
+        data[idx + 3] = 0;
+      }
+    }
+  }
+  return result;
 }
 
 function bufferToBase64(buffer: ArrayBuffer): string {

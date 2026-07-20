@@ -1,45 +1,12 @@
 import type { Point } from '../types';
 import * as THREE from 'three';
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
-import {
-  computeBBoxAllRings,
-  rasterizeRegionMaskLocal,
-  clusterAndGenerateTexturesV2,
-  hslToRgb,
-} from '../utils/colorCompressor';
-import {
-  dequantizeH,
-  dequantizeS,
-  dequantizeL,
-  quantizeH,
-  quantizeS,
-  quantizeL,
-  getAdaptiveBlockIndex,
-  getRangeForBlock,
-  uint8ToBase64,
-  packRGB565,
-  unpackRGB565,
-} from '../core/ftxCore';
-import { refineResidualsAndColors } from '../core/refineResiduals';
-import { compressToBinary } from '../utils/binaryCompression';
-import type { CompressionResultV2 } from '../utils/colorCompressor';
-
-export interface FtxTextureData {
-  version: 2 | 3;
-  baseColors: Array<{ h: number; s: number; l: number }>;
-  deltaTexture: Uint8Array;
-  regionIdTexture?: Uint8Array;
-  textureSize: number;
-  bbox: { x: number; y: number; w: number; h: number };
-  blockFlags: number;
-}
 
 export class RegionEntity {
   public readonly id: number;
   public readonly layerId: string;
   public readonly boundary: Point[][];
 
-  private _ftxData: FtxTextureData | null = null;
   public worldBbox: { x: number; y: number; w: number; h: number } | null = null;
 
   public transform = {
@@ -50,9 +17,7 @@ export class RegionEntity {
   };
   public maskEffect: any = null;
 
-  private _gpuTexture: THREE.DataTexture | null = null;
-  private _textureVersion: number = 0;
-  private _cachedVersion: number = -1;
+  public fixedVertices: Set<number> = new Set();
 
   private _displacementTexture: THREE.DataTexture | null = null;
   private _numFrames: number = 60;
@@ -61,20 +26,14 @@ export class RegionEntity {
   private _lastCanvasWidth: number = 0;
   private _lastCanvasHeight: number = 0;
 
-  public fixedVertices: Set<number> = new Set();
-
   constructor(id: number, layerId: string, boundary: Point[][]) {
     this.id = id;
     this.layerId = layerId;
     this.boundary = boundary;
+    this.computeWorldBbox();
   }
 
-  public buildFromPaintBuffer(
-    paintBuffer: ImageData,
-    hueThreshold: number = 0.025
-  ): void {
-    
-    // 直接从 boundary 计算世界坐标包围盒（与边框点处理方式一致，Y向上）
+  private computeWorldBbox() {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const ring of this.boundary) {
       for (const p of ring) {
@@ -84,301 +43,17 @@ export class RegionEntity {
         if (p.y > maxY) maxY = p.y;
       }
     }
-    
-    // worldBbox 使用世界坐标（Y向上），与相机一致
-    this.worldBbox = {
-      x: minX,
-      y: minY,
-      w: maxX - minX,
-      h: maxY - minY,
-    };
-
-    const pixelBbox = computeBBoxAllRings(this.boundary);
-
-    const mask = rasterizeRegionMaskLocal(this.boundary, pixelBbox);
-    const { w, h } = pixelBbox;
-
-    const smallComposited = document.createElement('canvas');
-    smallComposited.width = 512;
-    smallComposited.height = 512;
-    const ctx = smallComposited.getContext('2d')!;
-    ctx.putImageData(paintBuffer, 0, 0);
-
-    const { baseColors: initialColors, regionIdTex: initialRegionIdTex, deltaPacked: initialDeltaPacked, blockFlags: initialBlockFlags } = clusterAndGenerateTexturesV2(
-      mask,
-      pixelBbox,
-      ctx.getImageData(0, 0, 512, 512),
-      hueThreshold,
-      512
-    );
-
-    console.log(`[FTX管道] 区域 ${this.id} → 初次聚类: ${initialColors.length}基础色, 残差${initialDeltaPacked.length}像素, blockFlags=${initialBlockFlags}`);
-
-    // --- 残差修正：与基础色编辑器逻辑对齐 ---
-    let baseColors = initialColors;
-    let regionIdTex = initialRegionIdTex;
-    let deltaPacked = initialDeltaPacked;
-    let blockFlags = initialBlockFlags;
-
-    if (regionIdTex && baseColors.length > 0) {
-      const totalPixels = w * h;
-
-      // 将 deltaPacked 解包为浮点残差数组
-      const tempDeltas = new Float32Array(totalPixels * 3);
-      for (let idx = 0; idx < totalPixels; idx++) {
-        const colorIdx = regionIdTex[idx];
-        if (colorIdx === 0) continue;
-        const packed = deltaPacked[idx];
-        const { s, h: qH, l: qL } = unpackRGB565(packed);
-        const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
-        const range = getRangeForBlock(blockFlags, blockIdx);
-        tempDeltas[idx * 3] = dequantizeH(qH, range);
-        tempDeltas[idx * 3 + 1] = dequantizeS(s, range);
-        tempDeltas[idx * 3 + 2] = dequantizeL(qL, range);
-      }
-
-      // 准备含 ID 的基础色列表
-      const colorsWithId = baseColors.map((c, i) => ({ id: i + 1, ...c }));
-      const regionIdTexCopy = new Uint8Array(regionIdTex);
-      const paintBufferData = ctx.getImageData(0, 0, 512, 512);
-
-      // 执行核心修正
-      const refinementResult = refineResidualsAndColors(
-        regionIdTexCopy,
-        colorsWithId,
-        pixelBbox,
-        paintBufferData,
-        tempDeltas,
-        512,
-        0.015,
-        3
-      );
-
-      // 将修正后的 tempDeltas 重新量化为 RGB565
-      const finalBaseColors = colorsWithId;
-      const finalRegionIdTex = regionIdTexCopy;
-      const finalBlockFlags = refinementResult.blockFlags;
-      const finalDeltaPacked = new Uint16Array(totalPixels);
-      for (let idx = 0; idx < totalPixels; idx++) {
-        const colorIdx = finalRegionIdTex[idx];
-        if (colorIdx === 0) {
-          finalDeltaPacked[idx] = 0;
-          continue;
-        }
-        const dH = tempDeltas[idx * 3];
-        const dS = tempDeltas[idx * 3 + 1];
-        const dL = tempDeltas[idx * 3 + 2];
-        const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
-        const range = getRangeForBlock(finalBlockFlags, blockIdx);
-        finalDeltaPacked[idx] = packRGB565(quantizeS(dS, range), quantizeH(dH, range), quantizeL(dL, range));
-      }
-
-      baseColors = finalBaseColors;
-      regionIdTex = finalRegionIdTex;
-      deltaPacked = finalDeltaPacked;
-      blockFlags = finalBlockFlags;
-
-      console.log(`[FTX管道] 区域 ${this.id} 残差修正完成，修正了 ${refinementResult.changedPixelCount} 个像素，最终 ${baseColors.length} 基础色`);
+    if (isFinite(minX)) {
+      this.worldBbox = {
+        x: minX,
+        y: minY,
+        w: maxX - minX,
+        h: maxY - minY,
+      };
     }
-
-    // 将局部 bbox 数据扩展到完整的 512x512 纹理
-    const finalDelta = new Uint8Array(512 * 512 * 3);
-    const finalRegionId = regionIdTex ? new Uint8Array(512 * 512) : null;
-
-    for (let idx = 0; idx < w * h; idx++) {
-      const localX = idx % w;
-      const localY = Math.floor(idx / w);
-      const globalX = pixelBbox.x + localX;
-      const globalY = pixelBbox.y + localY;
-      const globalIdx = globalY * 512 + globalX;
-
-      const packed = deltaPacked[idx];
-      const { s: decodedS, h: decodedH, l: decodedL } = unpackRGB565(packed);
-      finalDelta[globalIdx * 3] = decodedH;
-      finalDelta[globalIdx * 3 + 1] = decodedS;
-      finalDelta[globalIdx * 3 + 2] = decodedL;
-      if (finalRegionId && regionIdTex) {
-        finalRegionId[globalIdx] = regionIdTex[idx];
-      }
-    }
-
-    this._ftxData = {
-      version: 3,
-      baseColors,
-      deltaTexture: finalDelta,
-      regionIdTexture: finalRegionId || undefined,
-      textureSize: 512,
-      bbox: pixelBbox,
-      blockFlags,
-    };
-
-    this._textureVersion++;
   }
 
-  public setFtxData(data: FtxTextureData): void {
-    this._ftxData = data;
-    this._textureVersion++;
-  }
-
-  public getFtxData(): FtxTextureData | null {
-    return this._ftxData;
-  }
-
-  public getGPUTexture(): THREE.DataTexture | null {
-    if (!this._ftxData) return null;
-
-    if (this._gpuTexture && this._textureVersion === this._cachedVersion) {
-      return this._gpuTexture;
-    }
-
-    const { baseColors, deltaTexture, regionIdTexture, textureSize, bbox, blockFlags } = this._ftxData;
-    const pixelData = this._decompressToRGBA(baseColors, deltaTexture, regionIdTexture, textureSize, bbox, blockFlags);
-
-    let opaquePixels = 0;
-    let totalPixels = pixelData.length / 4;
-    for (let i = 3; i < pixelData.length; i += 4) {
-      if (pixelData[i] > 0) opaquePixels++;
-    }
-
-    if (this._gpuTexture) {
-      this._gpuTexture.dispose();
-    }
-    this._gpuTexture = new THREE.DataTexture(
-      pixelData,
-      textureSize,
-      textureSize,
-      THREE.RGBAFormat,
-      THREE.UnsignedByteType
-    );
-    // 注意：_decompressToRGBA 返回的已经是 sRGB 显示值（hslToRgb 生成的是 sRGB）
-    // 如果设置 SRGBColorSpace，会导致 GPU 做 sRGB→linear 逆校正，渲染器又做 linear→sRGB 正校正
-    // 双重校正会压缩暗部，导致颜色发黑。此处不设置 colorSpace，让数据按线性传递即可。
-    // 渲染器最终输出时会统一做一次 linear→sRGB 校正，颜色就能正确还原。
-    this._gpuTexture.needsUpdate = true;
-    this._gpuTexture.minFilter = THREE.LinearFilter;
-    this._gpuTexture.magFilter = THREE.LinearFilter;
-    this._gpuTexture.wrapS = THREE.ClampToEdgeWrapping;
-    this._gpuTexture.wrapT = THREE.ClampToEdgeWrapping;
-
-    this._cachedVersion = this._textureVersion;
-    
-    console.log(`[FTX管道] 区域 ${this.id} → GPU纹理: ${textureSize}x${textureSize}, 不透明${opaquePixels}/${totalPixels}像素`);
-    return this._gpuTexture;
-  }
-
-  private _decompressToRGBA(
-    baseColors: Array<{ h: number; s: number; l: number }>,
-    deltaTexture: Uint8Array,
-    regionIdTexture: Uint8Array | undefined,
-    textureSize: number,
-    bbox: { x: number; y: number; w: number; h: number },
-    blockFlags: number = 0
-  ): Uint8ClampedArray {
-    const pixelData = new Uint8ClampedArray(textureSize * textureSize * 4);
-    pixelData.fill(0);
-
-    for (let ty = 0; ty < textureSize; ty++) {
-      for (let tx = 0; tx < textureSize; tx++) {
-        const idx = ty * textureSize + tx;
-        const deltaIdx = idx * 3;
-
-        // 跳过 bbox 外的像素（全透明）
-        if (tx < bbox.x || tx >= bbox.x + bbox.w || ty < bbox.y || ty >= bbox.y + bbox.h) continue;
-
-        // blockFlags 是基于 bbox 内的局部坐标计算的，必须用局部坐标
-        const localX = tx - bbox.x;
-        const localY = ty - bbox.y;
-        const blockIdx = getAdaptiveBlockIndex(localX, localY, bbox.w, bbox.h);
-        const range = getRangeForBlock(blockFlags, blockIdx);
-
-        let finalHsl;
-        if (regionIdTexture) {
-          const baseIdx = regionIdTexture[idx] - 1;
-          if (baseIdx < 0 || baseIdx >= baseColors.length) continue;
-          const base = baseColors[baseIdx];
-          const dH = dequantizeH(deltaTexture[deltaIdx], range);
-          const dS = dequantizeS(deltaTexture[deltaIdx + 1], range);
-          const dL = dequantizeL(deltaTexture[deltaIdx + 2], range);
-
-          let finalH = base.h + dH;
-          finalH = ((finalH % 1) + 1) % 1;
-          const finalS = Math.max(0, Math.min(1, base.s + dS));
-          const finalL = Math.max(0, Math.min(1, base.l + dL));
-          finalHsl = { h: finalH, s: finalS, l: finalL };
-        } else if (baseColors.length > 0) {
-          const base = baseColors[0];
-          const dH = dequantizeH(deltaTexture[deltaIdx], range);
-          const dS = dequantizeS(deltaTexture[deltaIdx + 1], range);
-          const dL = dequantizeL(deltaTexture[deltaIdx + 2], range);
-          
-          let finalH = base.h + dH;
-          finalH = ((finalH % 1) + 1) % 1;
-          const finalS = Math.max(0, Math.min(1, base.s + dS));
-          const finalL = Math.max(0, Math.min(1, base.l + dL));
-          finalHsl = { h: finalH, s: finalS, l: finalL };
-        } else {
-          continue;
-        }
-
-        const rgb = hslToRgb(finalHsl.h, finalHsl.s, finalHsl.l);
-        const outIdx = (ty * textureSize + tx) * 4;
-        pixelData[outIdx] = rgb.r;
-        pixelData[outIdx + 1] = rgb.g;
-        pixelData[outIdx + 2] = rgb.b;
-        pixelData[outIdx + 3] = 255;
-      }
-    }
-    return pixelData;
-  }
-
-  public exportFtxBinary(): Uint8Array | null {
-    if (!this._ftxData || !this.worldBbox) return null;
-    const bboxPixels = {
-      x: Math.round(this.worldBbox.x * 512),
-      y: Math.round((1 - this.worldBbox.y - this.worldBbox.h) * 512),
-      w: Math.round(this.worldBbox.w * 512),
-      h: Math.round(this.worldBbox.h * 512),
-    };
-    const result: CompressionResultV2 = {
-      version: 3,
-      resolution: [512, 512],
-      regionCount: 1,
-      regions: [{
-        id: this.id,
-        bbox: bboxPixels,
-        baseColors: this._ftxData.baseColors,
-        regionIdTexture: this._ftxData.regionIdTexture
-          ? uint8ToBase64(this._ftxData.regionIdTexture)
-          : undefined,
-        deltaTexture: uint8ToBase64(this._ftxData.deltaTexture),
-        blockFlags: this._ftxData.blockFlags,
-      }],
-      quantization: 'uint8',
-      hueThreshold: 0.025,
-    };
-    return compressToBinary(result);
-  }
-
-  public serialize(): any {
-    return {
-      id: this.id,
-      layerId: this.layerId,
-      boundary: this.boundary,
-      transform: this.transform,
-      maskEffect: this.maskEffect,
-      worldBbox: this.worldBbox,
-      ftxData: this._ftxData ? {
-        version: this._ftxData.version,
-        baseColors: this._ftxData.baseColors,
-        deltaTexture: Array.from(this._ftxData.deltaTexture),
-        regionIdTexture: this._ftxData.regionIdTexture ? Array.from(this._ftxData.regionIdTexture) : undefined,
-        textureSize: this._ftxData.textureSize,
-        bbox: this._ftxData.bbox,
-        blockFlags: this._ftxData.blockFlags,
-      } : null,
-      ftxId: `ftx_${this.id}_${this.layerId}`,
-    };
-  }
+  // ========== 位移纹理 ==========
 
   public buildDisplacementTexture(
     canvasWidth: number,
@@ -494,19 +169,17 @@ export class RegionEntity {
     forceRebuild: boolean = false
   ): THREE.DataTexture | null {
     if (!this.maskEffect) {
-      if (!this._ftxData) return null;
-      
       const allRings = this.boundary;
       if (allRings.length === 0 || allRings[0].length < 3) return null;
-      
+
       const allVertices = allRings.flat();
       const vertexCount = allVertices.length;
       this._totalVertices = vertexCount;
       const totalFrames = 60;
       this._numFrames = totalFrames;
-      
+
       const data = new Float32Array(totalFrames * vertexCount * 2);
-      
+
       if (this._displacementTexture) this._displacementTexture.dispose();
       this._displacementTexture = new THREE.DataTexture(
         data,
@@ -520,11 +193,11 @@ export class RegionEntity {
       this._displacementTexture.wrapT = THREE.ClampToEdgeWrapping;
       this._displacementTexture.minFilter = THREE.LinearFilter;
       this._displacementTexture.magFilter = THREE.NearestFilter;
-      
+
       this._lastMaskEffectHash = '__default_zero__';
       this._lastCanvasWidth = canvasWidth;
       this._lastCanvasHeight = canvasHeight;
-      
+
       return this._displacementTexture;
     }
 
@@ -553,9 +226,9 @@ export class RegionEntity {
     if (!this.maskEffect) return;
 
     const effectHash = JSON.stringify(this.maskEffect);
-    
-    if (effectHash === this._lastMaskEffectHash && 
-        canvasWidth === this._lastCanvasWidth && 
+
+    if (effectHash === this._lastMaskEffectHash &&
+        canvasWidth === this._lastCanvasWidth &&
         canvasHeight === this._lastCanvasHeight &&
         this._displacementTexture) {
       return;
@@ -563,6 +236,8 @@ export class RegionEntity {
 
     this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, this._numFrames);
   }
+
+  // ========== 固定顶点 ==========
 
   public toggleFixedVertex(globalIndex: number): boolean {
     if (this.fixedVertices.has(globalIndex)) {
@@ -578,7 +253,6 @@ export class RegionEntity {
     for (const idx of indices) {
       this.toggleFixedVertex(idx);
     }
-    this._textureVersion++;
   }
 
   public setFixedVertices(indices: number[], fixed: boolean): void {
@@ -589,7 +263,6 @@ export class RegionEntity {
         this.fixedVertices.delete(idx);
       }
     }
-    this._textureVersion++;
   }
 
   public getVerticesNearPoint(
@@ -611,16 +284,24 @@ export class RegionEntity {
     return result;
   }
 
+  // ========== 序列化 / 生命周期 ==========
+
   public dispose(): void {
-    if (this._gpuTexture) {
-      this._gpuTexture.dispose();
-      this._gpuTexture = null;
-    }
     if (this._displacementTexture) {
       this._displacementTexture.dispose();
       this._displacementTexture = null;
     }
-    this._ftxData = null;
+  }
+
+  public serialize(): any {
+    return {
+      id: this.id,
+      layerId: this.layerId,
+      boundary: this.boundary,
+      transform: this.transform,
+      maskEffect: this.maskEffect,
+      worldBbox: this.worldBbox,
+    };
   }
 
   public restoreFromSerialized(data: any): void {
@@ -637,28 +318,6 @@ export class RegionEntity {
     }
     if (data.worldBbox) {
       this.worldBbox = data.worldBbox;
-    } else if (data.ftxData?.bbox) {
-      const pb = data.ftxData.bbox;
-      this.worldBbox = {
-        x: pb.x / 512,
-        y: pb.y / 512,
-        w: pb.w / 512,
-        h: pb.h / 512,
-      };
-    }
-    if (data.ftxData) {
-      this._ftxData = {
-        version: data.ftxData.version,
-        baseColors: data.ftxData.baseColors,
-        deltaTexture: new Uint8Array(data.ftxData.deltaTexture),
-        regionIdTexture: data.ftxData.regionIdTexture
-          ? new Uint8Array(data.ftxData.regionIdTexture)
-          : undefined,
-        textureSize: data.ftxData.textureSize,
-        bbox: data.ftxData.bbox,
-        blockFlags: data.ftxData.blockFlags ?? 0,
-      };
-      this._textureVersion++;
     }
   }
 

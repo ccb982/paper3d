@@ -548,15 +548,14 @@ export function Toolbar() {
                   return;
                 }
 
-                // 收集所有已绑定帧的调色板颜色
+                // 收集所有已绑定帧使用的调色板颜色（扫描 rawRegionIdTex 中的全局 ID）
                 const usedColorIds = new Set<number>();
                 for (const frame of validFrames) {
-                  const frameData = frameDataMap[frame.id];
-                  const entity = state.regionEntities[frame.layerId]?.find(e => e.id === frameData?.boundRegionId);
-                  if (entity) {
-                    const ftx = entity.getFtxData();
-                    if (ftx) {
-                      ftx.baseColors.forEach(c => usedColorIds.add(c.id));
+                  const fd = frameDataMap[frame.id];
+                  const raw = fd?.rawRegionIdTex;
+                  if (raw) {
+                    for (let i = 0; i < raw.length; i++) {
+                      if (raw[i] !== 0) usedColorIds.add(raw[i]);
                     }
                   }
                 }
