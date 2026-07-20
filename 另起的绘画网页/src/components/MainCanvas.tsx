@@ -769,6 +769,7 @@ useEffect(() => {
     fillMat.stencilTest = true;
     fillMat.depthTest = false;
     fillMat.depthWrite = false;
+    fillMat.colorWrite = [false, false, false, false];
     const fillMesh = new THREE.Mesh(fillGeom, fillMat);
     fillMesh.renderOrder = 0;
     fillMesh.frustumCulled = false;
