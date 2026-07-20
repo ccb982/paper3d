@@ -1329,6 +1329,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             entity.transform.scale = { ...savedTransform.scale };
           }
         }
+      } else {
+        entity.maskEffect = null;  // 确保显式置 null，防止旧特效残留
       }
 
       // 计算默认锚点（区域中心世界坐标）
@@ -1362,9 +1364,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const anno = state.regionAnnotations.find(
         a => a.layerId === layerId && Number(a.regionId) === entity.id
       );
-      if (anno?.maskEffect) {
-        entity.maskEffect = anno.maskEffect;
-      }
+      // ★ 关键修复：无论 maskEffect 是否存在，都直接赋值（或置 null）
+      entity.maskEffect = anno?.maskEffect || null;
       entity.updateDisplacementOnly(canvasWidth, canvasHeight);
     });
     

@@ -670,45 +670,13 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // 先计算 bbox（用于 UV）
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of allPoints) {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    }
-
-    // --- 4. UV 生成（映射 bbox 区域到几何体） ---
-    const rangeX = maxX - minX || 1;
-    const rangeY = maxY - minY || 1;
+    // --- 4. UV 生成（像素坐标 → 归一化 UV，直接映射到 512x512 纹理）---
+    const texSize = canvasWidth;
     const uv = new Float32Array(allPoints.length * 2);
-
-    // 从 FTX 数据中获取纹素 bbox（纹理空间中的实际数据区域）
-    const rawFtx = entity.getFtxData();
-    const texSize = 512;
-    if (rawFtx) {
-      const uMin = rawFtx.bbox.x / texSize;
-      const uMax = (rawFtx.bbox.x + rawFtx.bbox.w) / texSize;
-      // 纹理不 flipY，直接用 image 坐标系：V向下 (top=0, bottom=1)
-      const vMin = rawFtx.bbox.y / texSize;
-      const vMax = (rawFtx.bbox.y + rawFtx.bbox.h) / texSize;
-      const uRange = uMax - uMin || 0.001;
-      const vRange = vMax - vMin || 0.001;
-      allPoints.forEach((p, i) => {
-        // 几何体 XY → 归一化 [0,1] → bbox UV
-        const nx = (p.x - minX) / rangeX;
-        const ny = (p.y - minY) / rangeY;  // 0=几何体顶部, 1=几何体底部
-        uv[i * 2] = uMin + nx * uRange;
-        uv[i * 2 + 1] = vMin + ny * vRange;
-      });
-    } else {
-      // 回退：0~1
-      allPoints.forEach((p, i) => {
-        uv[i * 2] = (p.x - minX) / rangeX;
-        uv[i * 2 + 1] = (p.y - minY) / rangeY;
-      });
-    }
+    allPoints.forEach((p, i) => {
+      uv[i * 2] = p.x / texSize;
+      uv[i * 2 + 1] = p.y / texSize;
+    });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     
 
@@ -780,33 +748,6 @@ useEffect(() => {
       colorMesh = new THREE.Mesh(texGeom, texMat);
       colorMesh.renderOrder = 1;
       colorMesh.frustumCulled = false;
-      
-      // 简单纹理网格（无 stencil/VAT，用于可视化验证）
-      const simpleTexMat = new THREE.ShaderMaterial({
-        uniforms: { uColorTex: { value: colorTexture } },
-        vertexShader: `
-          varying vec2 vUv;
-          void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform sampler2D uColorTex;
-          varying vec2 vUv;
-          void main() {
-            vec4 c = texture2D(uColorTex, vUv);
-            gl_FragColor = c;
-          }
-        `,
-        transparent: true,
-        depthWrite: false,
-        side: THREE.DoubleSide,
-        depthTest: false,
-      });
-      const simpleMesh = new THREE.Mesh(texGeom, simpleTexMat);
-      simpleMesh.renderOrder = 5;
-      group.add(simpleMesh);
     }
 
     // --- 7. 边框：为每个环单独创建 LineLoop ---
