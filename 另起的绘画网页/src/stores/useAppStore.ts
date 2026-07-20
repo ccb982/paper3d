@@ -384,6 +384,12 @@ interface AppState {
   // 多帧 FTX 导入（主绘画页面底图数据）
   frameDataMap: Record<string, import('../types').FrameData>;
   importMultiFrameData: (buffer: ArrayBuffer) => void;
+
+  // 绑定图层到区域
+  bindFrameToLayer: (layerId: string, regionId: number | null) => Promise<void>;
+
+  // 获取某图层可绑定的区域列表
+  getBindableRegions: (layerId: string) => Array<{ id: number; name: string }>;
 }
 
 const defaultAxis: AxisConfig = {
@@ -2353,17 +2359,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     // ---------- 合并调色板 ----------
     const currentPalette = [...state.skillGroupEditor.sharedBaseColors];
     let nextId = currentPalette.reduce((max, c) => Math.max(max, c.id), 0) + 1;
-    for (const imp of palette) {
+    const globalIdMap = new Map<number, number>();
+
+    for (let i = 0; i < palette.length; i++) {
+      const imp = palette[i];
       let found = false;
       for (const c of currentPalette) {
         const dh = Math.min(Math.abs(c.h - imp.h), 1 - Math.abs(c.h - imp.h));
         if (dh < 0.02 && Math.abs(c.s - imp.s) < 0.05 && Math.abs(c.l - imp.l) < 0.05) {
+          globalIdMap.set(i + 1, c.id);
           found = true;
           break;
         }
       }
       if (!found) {
-        currentPalette.push({ ...imp, id: nextId++, frameIds: [], area: 0 });
+        const newId = nextId++;
+        currentPalette.push({ ...imp, id: newId, frameIds: [], area: 0 });
+        globalIdMap.set(i + 1, newId);
       }
     }
 
@@ -2382,7 +2394,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     // ---------- 按帧顺序处理 ----------
     for (let i = 0; i < frames.length; i++) {
       const frame = frames[i];
-      const { baseTexture, residualTexture } = decodeFrameToTextures(frame, palette);
+
+      // 将 regionIdTex 从导入索引映射到全局 ID
+      const mappedRegionIdTex = new Uint8Array(frame.regionIdTex.length);
+      for (let j = 0; j < frame.regionIdTex.length; j++) {
+        const oldId = frame.regionIdTex[j];
+        mappedRegionIdTex[j] = oldId === 0 ? 0 : (globalIdMap.get(oldId) || 0);
+      }
+
+      // 解码生成预览纹理（使用合并后的调色板）
+      const previewFrame = {
+        ...frame,
+        regionIdTex: mappedRegionIdTex,
+      };
+      const { baseTexture, residualTexture } = decodeFrameToTextures(previewFrame, currentPalette);
 
       // 调试日志
       let paintedPixels = 0;
@@ -2416,15 +2441,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         updatedLayers.push(newLayer);
       }
 
-      // 存入 frameDataMap
+      // 存入 frameDataMap（包含原始数据和预览纹理）
       newFrameDataMap[layerId] = {
         id: layerId,
+        rawRegionIdTex: mappedRegionIdTex,
+        rawDeltaPacked: frame.deltaPacked,
+        rawBbox: frame.bbox,
+        rawBlockFlags: frame.blockFlags,
+        sourceResolution: frame.width,
         baseTexture,
         residualTexture,
-        bbox: frame.bbox,
-        deltaPacked: frame.deltaPacked,
-        blockFlags: frame.blockFlags,
-        sourceResolution: frame.width,
+        boundRegionId: null,
+        boundBaseTexture: null,
+        boundResidualTexture: null,
       };
     }
 
@@ -2470,6 +2499,121 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     console.log(`[FTX导入] 成功导入 ${frames.length} 帧，调色板 ${palette.length}→${currentPalette.length} 色，更新/创建 ${updatedLayers.length} 个绘制图层`);
   },
+
+  // ===== 获取某图层可绑定的区域列表 =====
+  getBindableRegions: (layerId: string) => {
+    const state = get();
+    const entities = state.regionEntities[layerId] || [];
+    return entities.map(entity => ({
+      id: entity.id,
+      name: `区域 ${entity.id} (${entity.boundary.length} 环)`,
+    }));
+  },
+
+  // ===== 绑定图层到区域 =====
+  bindFrameToLayer: async (layerId: string, regionId: number | null) => {
+    const { decodeFrameWithRegionColors } = await import('../utils/colorCompressor');
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) {
+      console.warn(`[绑定] 图层 ${layerId} 没有帧数据`);
+      return;
+    }
+
+    // 如果 regionId 为 null，表示解绑
+    if (regionId === null) {
+      set((s) => ({
+        frameDataMap: {
+          ...s.frameDataMap,
+          [layerId]: {
+            ...frameData,
+            boundRegionId: null,
+            boundBaseTexture: null,
+            boundResidualTexture: null,
+          },
+        },
+      }));
+      console.log(`[绑定] 图层 ${layerId} 已解绑`);
+      return;
+    }
+
+    // 查找对应的区域实体
+    const entities = state.regionEntities[layerId] || [];
+    const entity = entities.find(e => e.id === regionId);
+    if (!entity) {
+      console.warn(`[绑定] 图层 ${layerId} 中不存在区域 ID ${regionId}`);
+      return;
+    }
+
+    // 获取该区域使用的颜色列表（全局 ID 列表）
+    const ftxData = entity.getFtxData();
+    if (!ftxData) {
+      console.warn(`[绑定] 区域 ${regionId} 没有 FTX 数据`);
+      return;
+    }
+
+    // ftxData.baseColors 存储的是全局调色板 ID (id, h, s, l)
+    // 构建 全局ID -> 区域本地索引 (1-based) 的映射
+    const globalToLocal = new Map<number, number>();
+    ftxData.baseColors.forEach((c, idx) => {
+      globalToLocal.set(c.id, idx + 1);
+    });
+
+    // 重新映射 regionIdTex
+    const raw = frameData.rawRegionIdTex;
+    if (!raw || raw.length === 0) {
+      console.warn(`[绑定] 图层 ${layerId} 没有原始区域ID纹理`);
+      return;
+    }
+
+    const newRegionIdTex = new Uint8Array(raw.length);
+    let validPixelCount = 0;
+    for (let i = 0; i < raw.length; i++) {
+      const globalId = raw[i];
+      if (globalId === 0) {
+        newRegionIdTex[i] = 0;
+      } else {
+        const localIdx = globalToLocal.get(globalId);
+        if (localIdx) {
+          newRegionIdTex[i] = localIdx;
+          validPixelCount++;
+        } else {
+          newRegionIdTex[i] = 0;
+        }
+      }
+    }
+
+    if (validPixelCount === 0) {
+      console.warn(`[绑定] 该帧没有任何像素属于区域 ${regionId}，绑定无效`);
+      return;
+    }
+
+    // 解码生成绑定后的纹理
+    const { baseTexture, residualTexture } = decodeFrameWithRegionColors(
+      newRegionIdTex,
+      frameData.rawDeltaPacked,
+      ftxData.baseColors,
+      frameData.rawBbox!,
+      frameData.rawBlockFlags,
+      512
+    );
+
+    // 更新 frameDataMap
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          boundRegionId: regionId,
+          boundBaseTexture: baseTexture,
+          boundResidualTexture: residualTexture,
+        },
+      },
+    }));
+
+    console.log(`[绑定] 图层 ${layerId} 成功绑定到区域 ${regionId}，有效像素 ${validPixelCount}`);
+  },
+
 }));
 
 // ===== 辅助函数：合成图像数据 =====

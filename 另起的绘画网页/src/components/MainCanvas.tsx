@@ -2373,22 +2373,72 @@ useEffect(() => {
 
     // 绘制导入的 FTX 底图（当前激活图层的帧数据）
     const frameData = layerId ? frameDataMap[layerId] : null;
-    if (frameData?.baseTexture) {
-      // 验证底图数据
-      let paintedPixels = 0;
-      const bd = frameData.baseTexture.data;
-      for (let i = 3; i < bd.length; i += 4) {
-        if (bd[i] > 0) paintedPixels++;
+
+    if (frameData) {
+      // ★ 优先使用绑定后的纹理
+      let textureToDraw = frameData.boundBaseTexture || frameData.baseTexture;
+
+      // 如果两者都为空但有原始数据，显示占位提示
+      if (!textureToDraw && frameData.rawRegionIdTex) {
+        // 显示一个半透明占位
+        ctx.save();
+        ctx.fillStyle = 'rgba(40, 40, 60, 0.8)';
+        ctx.fillRect(0, 0, currentWidth, currentHeight);
+        ctx.fillStyle = '#aaa';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const status = frameData.boundRegionId !== null ? '已绑定但纹理为空' : '未绑定区域';
+        ctx.fillText(`📦 帧数据已导入，${status}`, currentWidth / 2, currentHeight / 2 - 10);
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = '#888';
+        ctx.fillText('请在图层面板中选择区域进行绑定', currentWidth / 2, currentHeight / 2 + 24);
+        ctx.restore();
       }
-      console.log('[FTX底图渲染] layerId:', layerId, '底图像素数:', paintedPixels, 'currentWidth:', currentWidth, 'currentHeight:', currentHeight);
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = frameData.baseTexture.width;
-      tempCanvas.height = frameData.baseTexture.height;
-      tempCanvas.getContext('2d')!.putImageData(frameData.baseTexture, 0, 0);
-      ctx.save();
-      ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
-      ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
-      ctx.restore();
+
+      if (textureToDraw) {
+        // ✅ 直接绘制，不判断有效像素
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = textureToDraw.width;
+        tempCanvas.height = textureToDraw.height;
+        tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
+        ctx.save();
+        ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
+        ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+        ctx.restore();
+
+        // 绘制 bbox 边框作为视觉提示
+        if (frameData.rawBbox) {
+          const b = frameData.rawBbox;
+          ctx.save();
+          ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([5, 5]);
+          const scaleX = currentWidth / 512;
+          const scaleY = currentHeight / 512;
+          ctx.strokeRect(b.x * scaleX, b.y * scaleY, b.w * scaleX, b.h * scaleY);
+          ctx.restore();
+        }
+
+        // 绑定状态标签
+        if (frameData.boundRegionId !== null) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(82, 196, 26, 0.9)';
+          ctx.font = '12px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText(`✅ 已绑定区域 #${frameData.boundRegionId}`, 8, 8);
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.fillStyle = 'rgba(250, 173, 20, 0.9)';
+          ctx.font = '12px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          ctx.fillText('📦 预览模式 (未绑定)', 8, 8);
+          ctx.restore();
+        }
+      }
     }
 
     const buffer = paintBuffers[layerId];

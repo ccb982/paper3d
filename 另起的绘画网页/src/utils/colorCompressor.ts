@@ -1378,6 +1378,71 @@ export function decodeFrameToTextures(
   return { baseTexture: baseImageData, residualTexture: resImageData };
 }
 
+// ===== 辅助函数：用区域颜色列表解码帧（用于绑定操作）=====
+export function decodeFrameWithRegionColors(
+  regionIdTex: Uint8Array,
+  deltaPacked: Uint16Array | null,
+  regionColors: Array<{ h: number; s: number; l: number }>,
+  bbox: { x: number; y: number; w: number; h: number },
+  blockFlags: number,
+  texSize: number = 512
+): { baseTexture: ImageData; residualTexture: ImageData } {
+  const { w, h } = bbox;
+  const totalPixels = w * h;
+  const baseImageData = new ImageData(texSize, texSize);
+  const baseData = baseImageData.data;
+  const resImageData = new ImageData(texSize, texSize);
+  const resData = resImageData.data;
+
+  if (totalPixels === 0 || !deltaPacked || deltaPacked.length === 0) {
+    return { baseTexture: baseImageData, residualTexture: resImageData };
+  }
+
+  // 从 regionColors 直接解码
+  for (let i = 0; i < totalPixels; i++) {
+    const colorIdx = regionIdTex[i] || 0;
+    if (colorIdx === 0) continue;
+    const baseColor = regionColors[colorIdx - 1];
+    if (!baseColor) continue;
+
+    const px = i % w;
+    const py = Math.floor(i / w);
+    const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+    const range = getRangeForBlock(blockFlags, blockIdx);
+
+    const packed = deltaPacked[i];
+    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+    const dH = dequantizeH(qH, range);
+    const dS = dequantizeS(qS, range);
+    const dL = dequantizeL(qL, range);
+
+    let finalH = baseColor.h + dH;
+    finalH = ((finalH % 1) + 1) % 1;
+    const finalS = Math.max(0, Math.min(1, baseColor.s + dS));
+    const finalL = Math.max(0, Math.min(1, baseColor.l + dL));
+
+    const rgb = hslToRgb(finalH, finalS, finalL);
+
+    const globalX = bbox.x + px;
+    const globalY = bbox.y + py;
+    const idx = (globalY * texSize + globalX) * 4;
+    baseData[idx] = rgb.r;
+    baseData[idx + 1] = rgb.g;
+    baseData[idx + 2] = rgb.b;
+    baseData[idx + 3] = 255;
+
+    const rRes = Math.round((qH / 63) * 255);
+    const gRes = Math.round((qS / 31) * 255);
+    const bRes = Math.round((qL / 31) * 255);
+    resData[idx] = rRes;
+    resData[idx + 1] = gRes;
+    resData[idx + 2] = bRes;
+    resData[idx + 3] = 255;
+  }
+
+  return { baseTexture: baseImageData, residualTexture: resImageData };
+}
+
 function bufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = '';

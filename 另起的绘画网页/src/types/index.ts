@@ -139,10 +139,21 @@ export interface ColorBlock {
 // 帧数据（存储从基础色编辑器导入的底图和残差信息）
 export interface FrameData {
   id: string;                         // 对应图层ID
-  baseTexture: ImageData | null;      // 解码后的基础色纹理（全尺寸 512x512）
-  residualTexture: ImageData | null;  // 残差纹理（全尺寸，后续给流体）
-  bbox: { x: number; y: number; w: number; h: number } | null;
-  deltaPacked: Uint16Array | null;    // 残差打包数据（RGB565），后续给流体
-  blockFlags: number;
+
+  // ---------- 原始导入数据（永远保留，用于重新绑定） ----------
+  rawRegionIdTex: Uint8Array | null;  // 像素值 = 全局颜色 ID
+  rawDeltaPacked: Uint16Array | null;
+  rawBbox: { x: number; y: number; w: number; h: number } | null;
+  rawBlockFlags: number;
   sourceResolution: number;           // 原始纹理尺寸（通常512）
+
+  // ---------- 显示用纹理（导入后立即生成，供预览） ----------
+  // 注意：这个纹理是根据原始调色板解码的，但尚未绑定到区域
+  baseTexture: ImageData | null;      // 临时底图（预览用）
+  residualTexture: ImageData | null;  // 临时残差图（预览用）
+
+  // ---------- 绑定状态 ----------
+  boundRegionId: number | null;       // 绑定的区域 ID（RegionEntity.id），null 表示未绑定
+  boundBaseTexture: ImageData | null; // 绑定后生成的最终底图
+  boundResidualTexture: ImageData | null; // 绑定后生成的最终残差图
 }

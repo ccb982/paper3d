@@ -332,13 +332,11 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
 
     const width = view.getUint16(offset, true); offset += 2;
     const height = view.getUint16(offset, true); offset += 2;
-    const bbox = {
-      x: view.getUint16(offset, true),
-      y: view.getUint16(offset, true),
-      w: view.getUint16(offset, true),
-      h: view.getUint16(offset, true),
-    };
-    offset += 8;
+    const bboxX = view.getUint16(offset, true); offset += 2;
+    const bboxY = view.getUint16(offset, true); offset += 2;
+    const bboxW = view.getUint16(offset, true); offset += 2;
+    const bboxH = view.getUint16(offset, true); offset += 2;
+    const bbox = { x: bboxX, y: bboxY, w: bboxW, h: bboxH };
 
     const blockFlags = view.getUint16(offset, true);
     offset += 2;

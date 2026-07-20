@@ -38,6 +38,11 @@ export function LayerControl() {
     setCanvasHeight,
     // 区域色块图层
     regionLayerCanvas,
+    // ===== 新增：多帧导入绑定 =====
+    frameDataMap,
+    bindFrameToLayer,
+    getBindableRegions,
+    regionEntities,
   } = useAppStore();
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
@@ -51,6 +56,33 @@ export function LayerControl() {
     if (!currentVisibility) {
       useAppStore.getState().refreshRegionEntities(activeLayerId || '');
     }
+  };
+
+  // ===== 新增：处理绑定变更 =====
+  const handleBindChange = (layerId: string, regionId: string) => {
+    const val = regionId === '' ? null : parseInt(regionId, 10);
+    bindFrameToLayer(layerId, val);
+  };
+
+  // 判断图层是否有待绑定的帧数据
+  const hasUnboundFrame = (layerId: string): boolean => {
+    const frame = frameDataMap[layerId];
+    return !!frame && !!frame.rawRegionIdTex && frame.boundRegionId === null;
+  };
+
+  // 判断图层是否已绑定
+  const isBound = (layerId: string): boolean => {
+    const frame = frameDataMap[layerId];
+    return !!frame && frame.boundRegionId !== null;
+  };
+
+  // 获取图层当前绑定的区域名称
+  const getBoundRegionName = (layerId: string): string => {
+    const frame = frameDataMap[layerId];
+    if (!frame || frame.boundRegionId === null) return '未绑定';
+    const regions = getBindableRegions(layerId);
+    const found = regions.find(r => r.id === frame.boundRegionId);
+    return found ? found.name : `区域 ${frame.boundRegionId}`;
   };
 
   const handleAddLayer = () => {
@@ -89,157 +121,226 @@ export function LayerControl() {
           </button>
         </div>
         <div style={{ marginTop: '8px', maxHeight: '200px', overflowY: 'auto' }}>
-          {layers.map((layer, index) => (
-            <div
-              key={layer.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: '4px',
-                marginBottom: '4px',
-                backgroundColor: activeLayerId === layer.id ? '#e6f7ff' : '#f5f5f5',
-                borderRadius: '4px',
-                cursor: 'pointer',
-              }}
-              onClick={() => setActiveLayer(layer.id)}
-            >
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleLayerVisibility(layer.id);
-                }}
+          {layers.map((layer, index) => {
+            const frame = frameDataMap[layer.id];
+            const hasFrame = !!frame?.rawRegionIdTex;
+            const isLayerBound = isBound(layer.id);
+            const isUnbound = hasUnboundFrame(layer.id);
+            const bindableRegions = hasFrame ? getBindableRegions(layer.id) : [];
+
+            const layerElement = (
+              <div
+                key={layer.id}
                 style={{
-                  width: '20px',
-                  height: '20px',
-                  border: 'none',
-                  backgroundColor: 'transparent',
-                  fontSize: '12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  padding: '4px',
+                  marginBottom: '4px',
+                  backgroundColor: activeLayerId === layer.id ? '#e6f7ff' : '#f5f5f5',
+                  borderRadius: '4px',
                   cursor: 'pointer',
                 }}
+                onClick={() => setActiveLayer(layer.id)}
               >
-                {layer.visible ? '👁' : '👁‍🗨'}
-              </button>
-              {editingLayerId === layer.id ? (
-                <input
-                  type="text"
-                  value={editingName}
-                  onChange={(e) => setEditingName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      if (editingName.trim()) {
-                        updateLayer(layer.id, { name: editingName.trim() });
-                      }
-                      setEditingLayerId(null);
-                    } else if (e.key === 'Escape') {
-                      setEditingLayerId(null);
-                    }
-                  }}
-                  onBlur={() => {
-                    if (editingName.trim()) {
-                      updateLayer(layer.id, { name: editingName.trim() });
-                    }
-                    setEditingLayerId(null);
-                  }}
-                  autoFocus
-                  style={{
-                    flex: 1,
-                    fontSize: '12px',
-                    border: '1px solid #1890ff',
-                    borderRadius: '2px',
-                    padding: '2px 4px',
-                  }}
-                />
-              ) : (
-                <span
-                  style={{
-                    flex: 1,
-                    fontSize: '12px',
-                    textDecoration: layer.visible ? 'none' : 'line-through',
-                    color: layer.visible ? '#333' : '#999',
-                  }}
-                  onDoubleClick={() => {
-                    setEditingLayerId(layer.id);
-                    setEditingName(layer.name);
-                  }}
-                >
-                  {layer.displayId}. {layer.name}
-                </span>
-              )}
-              <input
-                type="range"
-                min="0.1"
-                max="1"
-                step="0.1"
-                value={layer?.opacity ?? 1}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  updateLayer(layer.id, { opacity: parseFloat(e.target.value) });
-                }}
-                style={{
-                  width: '40px',
-                  height: '12px',
-                  cursor: 'pointer',
-                }}
-                title={`透明度: ${((layer?.opacity ?? 1) * 100).toFixed(0)}%`}
-              />
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleMoveDown(index);
-                }}
-                disabled={index === 0}
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  border: 'none',
-                  backgroundColor: 'transparent',
-                  fontSize: '12px',
-                  cursor: index === 0 ? 'not-allowed' : 'pointer',
-                  opacity: index === 0 ? 0.3 : 1,
-                }}
-              >
-                ↑
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleMoveUp(index);
-                }}
-                disabled={index === layers.length - 1}
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  border: 'none',
-                  backgroundColor: 'transparent',
-                  fontSize: '12px',
-                  cursor: index === layers.length - 1 ? 'not-allowed' : 'pointer',
-                  opacity: index === layers.length - 1 ? 0.3 : 1,
-                }}
-              >
-                ↓
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleRemoveLayer(layer.id);
-                }}
-                disabled={layers.length <= 1}
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  border: 'none',
-                  backgroundColor: 'transparent',
-                  fontSize: '12px',
-                  cursor: layers.length <= 1 ? 'not-allowed' : 'pointer',
-                  opacity: layers.length <= 1 ? 0.3 : 1,
-                  color: '#ff4d4f',
-                }}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                {/* 第一行：图层基本信息 */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleLayerVisibility(layer.id);
+                    }}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {layer.visible ? '👁' : '👁‍🗨'}
+                  </button>
+                  {editingLayerId === layer.id ? (
+                    <input
+                      type="text"
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          if (editingName.trim()) {
+                            updateLayer(layer.id, { name: editingName.trim() });
+                          }
+                          setEditingLayerId(null);
+                        } else if (e.key === 'Escape') {
+                          setEditingLayerId(null);
+                        }
+                      }}
+                      onBlur={() => {
+                        if (editingName.trim()) {
+                          updateLayer(layer.id, { name: editingName.trim() });
+                        }
+                        setEditingLayerId(null);
+                      }}
+                      autoFocus
+                      style={{
+                        flex: 1,
+                        fontSize: '12px',
+                        border: '1px solid #1890ff',
+                        borderRadius: '2px',
+                        padding: '2px 4px',
+                      }}
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        flex: 1,
+                        fontSize: '12px',
+                        textDecoration: layer.visible ? 'none' : 'line-through',
+                        color: layer.visible ? '#333' : '#999',
+                      }}
+                      onDoubleClick={() => {
+                        setEditingLayerId(layer.id);
+                        setEditingName(layer.name);
+                      }}
+                    >
+                      {layer.displayId}. {layer.name}
+                    </span>
+                  )}
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="1"
+                    step="0.1"
+                    value={layer?.opacity ?? 1}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      updateLayer(layer.id, { opacity: parseFloat(e.target.value) });
+                    }}
+                    style={{
+                      width: '40px',
+                      height: '12px',
+                      cursor: 'pointer',
+                    }}
+                    title={`透明度: ${((layer?.opacity ?? 1) * 100).toFixed(0)}%`}
+                  />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleMoveDown(index);
+                    }}
+                    disabled={index === 0}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      fontSize: '12px',
+                      cursor: index === 0 ? 'not-allowed' : 'pointer',
+                      opacity: index === 0 ? 0.3 : 1,
+                    }}
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleMoveUp(index);
+                    }}
+                    disabled={index === layers.length - 1}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      fontSize: '12px',
+                      cursor: index === layers.length - 1 ? 'not-allowed' : 'pointer',
+                      opacity: index === layers.length - 1 ? 0.3 : 1,
+                    }}
+                  >
+                    ↓
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveLayer(layer.id);
+                    }}
+                    disabled={layers.length <= 1}
+                    style={{
+                      width: '20px',
+                      height: '20px',
+                      border: 'none',
+                      backgroundColor: 'transparent',
+                      fontSize: '12px',
+                      cursor: layers.length <= 1 ? 'not-allowed' : 'pointer',
+                      opacity: layers.length <= 1 ? 0.3 : 1,
+                      color: '#ff4d4f',
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* 第二行：绑定控制 */}
+                {hasFrame && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      marginTop: '4px',
+                      paddingLeft: '24px',
+                      fontSize: '11px',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <span style={{ color: '#666', minWidth: '36px' }}>
+                      {isLayerBound ? '✅ 已绑定' : '📦 待绑定'}
+                    </span>
+                    <select
+                      value={frame.boundRegionId !== null ? String(frame.boundRegionId) : ''}
+                      onChange={(e) => handleBindChange(layer.id, e.target.value)}
+                      style={{
+                        flex: 1,
+                        fontSize: '11px',
+                        padding: '2px 4px',
+                        borderRadius: '3px',
+                        border: isLayerBound ? '1px solid #52c41a' : '1px solid #faad14',
+                        backgroundColor: isLayerBound ? '#f6ffed' : '#fffbe6',
+                      }}
+                    >
+                      <option value="">-- 选择区域绑定 --</option>
+                      {bindableRegions.length === 0 && (
+                        <option value="" disabled>（暂无可用区域）</option>
+                      )}
+                      {bindableRegions.map(r => (
+                        <option key={r.id} value={String(r.id)}>{r.name}</option>
+                      ))}
+                    </select>
+                    {isLayerBound && (
+                      <button
+                        onClick={() => handleBindChange(layer.id, '')}
+                        style={{
+                          fontSize: '10px',
+                          padding: '1px 6px',
+                          border: '1px solid #ff4d4f',
+                          borderRadius: '3px',
+                          background: '#fff',
+                          color: '#ff4d4f',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        解绑
+                      </button>
+                    )}
+                    {isUnbound && bindableRegions.length > 0 && (
+                      <span style={{ fontSize: '10px', color: '#faad14' }}>⚠️ 需绑定</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+            return layerElement;
+          })}
         </div>
       </div>
 

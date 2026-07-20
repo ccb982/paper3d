@@ -411,6 +411,102 @@ export function Toolbar() {
               导出极致压缩
             </button>
             <button
+              onClick={async () => {
+                const state = useAppStore.getState();
+                const { frames, sharedBaseColors } = state.skillGroupEditor;
+                const { frameDataMap } = state;
+
+                // ★ 只导出已绑定的帧
+                const validFrames = frames.filter(f => {
+                  const frameData = frameDataMap[f.id];
+                  return f.bbox && frameData?.boundRegionId !== null && frameData?.boundBaseTexture !== null;
+                });
+
+                if (validFrames.length === 0) {
+                  alert('没有可导出的帧。请先在图层管理中为导入的帧绑定区域。');
+                  return;
+                }
+
+                // 收集所有已绑定帧的调色板颜色
+                const usedColorIds = new Set<number>();
+                for (const frame of validFrames) {
+                  const frameData = frameDataMap[frame.id];
+                  const entity = state.regionEntities[frame.layerId]?.find(e => e.id === frameData?.boundRegionId);
+                  if (entity) {
+                    const ftx = entity.getFtxData();
+                    if (ftx) {
+                      ftx.baseColors.forEach(c => usedColorIds.add(c.id));
+                    }
+                  }
+                }
+
+                // 导出调色板 = 共享调色板 ∩ 被使用的颜色
+                const exportedPalette = sharedBaseColors.filter(c => usedColorIds.has(c.id));
+
+                if (exportedPalette.length === 0) {
+                  alert('绑定的区域没有颜色数据，请确保区域已正确提取颜色。');
+                  return;
+                }
+
+                try {
+                  const { packMultiFrameToBinary } = await import('../utils/multiFrameExport');
+                  // 构建导出帧数据
+                  const idToIndex = new Map<number, number>();
+                  exportedPalette.forEach((c, idx) => idToIndex.set(c.id, idx));
+
+                  const exportFrames = validFrames.map(frame => {
+                    const frameData = frameDataMap[frame.id];
+                    const raw = frameData.rawRegionIdTex!;
+                    const newRegionIdTex = new Uint8Array(raw.length);
+                    for (let i = 0; i < raw.length; i++) {
+                      const globalId = raw[i];
+                      if (globalId === 0) {
+                        newRegionIdTex[i] = 0;
+                      } else {
+                        const idx = idToIndex.get(globalId);
+                        newRegionIdTex[i] = idx !== undefined ? idx + 1 : 0;
+                      }
+                    }
+
+                    return {
+                      name: frame.name || '未命名',
+                      width: 512,
+                      height: 512,
+                      bbox: frame.bbox!,
+                      regionIdTex: newRegionIdTex,
+                      deltaPacked: frameData.rawDeltaPacked || new Uint16Array(0),
+                      blockFlags: frameData.rawBlockFlags ?? 0,
+                    };
+                  });
+
+                  const binary = packMultiFrameToBinary(exportedPalette, exportFrames);
+                  const compressToGzip = (await import('../utils/binaryCompression')).compressToGzip;
+                  const gzipped = await compressToGzip(binary);
+                  const url = URL.createObjectURL(gzipped);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `multiframe_export_${Date.now()}.ftx3.gz`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  alert(`导出成功！${exportFrames.length} 帧，${exportedPalette.length} 色`);
+                } catch (err) {
+                  console.error('[多帧导出] 失败:', err);
+                  alert('导出失败: ' + (err as Error).message);
+                }
+              }}
+              style={{
+                padding: '4px 8px',
+                fontSize: '12px',
+                background: '#13c2c2',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              导出多帧纹理（仅已绑定）
+            </button>
+            <button
               onClick={() => {
                 setShowColorExtractMenu(false);
               }}
