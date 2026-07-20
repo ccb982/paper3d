@@ -2614,52 +2614,7 @@ useEffect(() => {
       });
     }
 
-    // 绘制区域色块图层（使用 frameDataMap 绑定的纹理）
-    if (layerVisibility.regionLayer && activeLayer?.visible && activeLayerId) {
-      const layerFrame = frameDataMap[activeLayerId];
-      if (layerFrame?.boundBaseTexture) {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = layerFrame.boundBaseTexture.width;
-        tempCanvas.height = layerFrame.boundBaseTexture.height;
-        tempCanvas.getContext('2d')!.putImageData(layerFrame.boundBaseTexture, 0, 0);
-        ctx.save();
-        ctx.globalAlpha = activeLayer.opacity;
-        ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
-        ctx.restore();
-      }
-    }
-
-    // ========== 蒙版特效动态轮廓绘制（作为区域色块图层的一部分，受 activeLayer 可见性和透明度控制）==========
-    if (layerVisibility.regionLayer && activeLayer?.visible) {
-      const animationTime = useAppStore.getState().regionAnimationTime;
-      const currentTime = animationTime * 2 * Math.PI;
-      
-      regionAnnotations.forEach(anno => {
-        if (anno.layerId !== activeLayerId) return;
-        if (!anno.maskEffect?.enabled) return; // 只绘制启用蒙版特效的注释
-        
-        const outerRing = anno.polygon[0];
-        if (!outerRing || outerRing.length < 3) return;
-        
-        // 应用 CPU 扭曲（使用全局同步时间）
-        const distortedRing = processMaskRingCPU(outerRing, anno.maskEffect, currentTime);
-        
-        ctx.save();
-        ctx.strokeStyle = anno.color || '#1890ff';
-        ctx.lineWidth = lineWidth;
-        ctx.beginPath();
-        const canvasRing = distortedRing.map(p => worldToCanvasFn(p.x, p.y));
-        ctx.moveTo(canvasRing[0].x, canvasRing[0].y);
-        for (let i = 1; i < canvasRing.length; i++) {
-          ctx.lineTo(canvasRing[i].x, canvasRing[i].y);
-        }
-        ctx.closePath();
-        if (showRegionBorder2D) {
-          ctx.stroke();
-        }
-        ctx.restore();
-      });
-    }
+    // ========== 区域色块图层已由 WebGL VAT+模板缓冲渲染，2D Canvas 不再负责 ==========
 
     // ========== 调试：BFS区域绘制（使用缓存数据）==========
     if (showDebugRegions && layerVisibility.drawLayer) {

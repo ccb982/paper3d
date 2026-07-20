@@ -1846,7 +1846,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showRegionBorderWebGL: true,
   setShowRegionBorderWebGL: (show) => set({ showRegionBorderWebGL: show }),
 
-  showRegionBorder2D: true,
+  showRegionBorder2D: false,
   setShowRegionBorder2D: (show) => set({ showRegionBorder2D: show }),
 
   baseColorEditorState: {

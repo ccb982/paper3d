@@ -5,7 +5,6 @@ import type { RegionAnnotation } from '../types';
 export function MaskEffectPanel() {
   const {
     regionAnnotations,
-    updateRegionAnnotation,
     activeLayerId,
     updateRegionDisplacementOnly,
     layerVisibility,
@@ -23,10 +22,12 @@ export function MaskEffectPanel() {
     setShowRegionBorderWebGL,
     showRegionBorder2D,
     setShowRegionBorder2D,
+    refreshRegionEntities,
+    refreshRegionCache,
   } = useAppStore();
 
   // 获取当前选中图层的区域注释
-  const layerAnnotations = regionAnnotations.filter(a => a.layerId === activeLayerId);
+  const layerAnnotations = regionAnnotations.filter((a: RegionAnnotation) => a.layerId === activeLayerId);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [editingAnno, setEditingAnno] = useState<RegionAnnotation | null>(null);
 
@@ -52,7 +53,7 @@ export function MaskEffectPanel() {
   // 当选择变化时更新编辑状态
   useEffect(() => {
     if (selectedAnnotationId) {
-      const anno = regionAnnotations.find(a => a.id === selectedAnnotationId);
+      const anno = regionAnnotations.find((a: RegionAnnotation) => a.id === selectedAnnotationId);
       setEditingAnno(anno ? JSON.parse(JSON.stringify(anno)) : null);
     } else {
       setEditingAnno(null);
@@ -62,7 +63,7 @@ export function MaskEffectPanel() {
   // 初始化选中第一个有maskEffect的注释
   useEffect(() => {
     if (!selectedAnnotationId && layerAnnotations.length > 0) {
-      const annoWithMask = layerAnnotations.find(a => a.maskEffect?.enabled);
+      const annoWithMask = layerAnnotations.find((a: RegionAnnotation) => a.maskEffect?.enabled);
       if (annoWithMask) {
         setSelectedAnnotationId(annoWithMask.id);
       } else {
@@ -87,7 +88,7 @@ export function MaskEffectPanel() {
       };
       // 更新store
       const store = useAppStore.getState();
-      const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+      const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
       if (idx >= 0) {
         const newAnnotations = [...store.regionAnnotations];
         newAnnotations[idx] = updated;
@@ -109,7 +110,7 @@ export function MaskEffectPanel() {
       };
       // 更新store
       const store = useAppStore.getState();
-      const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+      const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
       if (idx >= 0) {
         const newAnnotations = [...store.regionAnnotations];
         newAnnotations[idx] = updated;
@@ -165,7 +166,7 @@ export function MaskEffectPanel() {
     };
     // 更新store
     const store = useAppStore.getState();
-    const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+    const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
     if (idx >= 0) {
       const newAnnotations = [...store.regionAnnotations];
       newAnnotations[idx] = updated;
@@ -192,7 +193,7 @@ export function MaskEffectPanel() {
       updatedAt: Date.now(),
     };
     const store = useAppStore.getState();
-    const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+    const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
     if (idx >= 0) {
       const newAnnotations = [...store.regionAnnotations];
       newAnnotations[idx] = updated;
@@ -208,7 +209,20 @@ export function MaskEffectPanel() {
   };
 
   // 更新扭曲效果参数
-  const handleUpdateDistortion = (distortionId: string, updates: Partial<typeof editingAnno.maskEffect.distortions[0]>) => {
+  const handleUpdateDistortion = (distortionId: string, updates: Partial<{
+    id: string;
+    type: 'wave' | 'turbulent' | 'twirl';
+    enabled: boolean;
+    amplitude: number;
+    frequency: number;
+    speed: number;
+    phase: number;
+    direction?: 'normal' | 'tangent' | 'xy';
+    center?: { x: number; y: number };
+    falloffRadius?: number;
+    seed?: number;
+    octaves?: number;
+  }>) => {
     if (!editingAnno || !editingAnno.maskEffect) return;
     const updated = {
       ...editingAnno,
@@ -221,7 +235,7 @@ export function MaskEffectPanel() {
       updatedAt: Date.now(),
     };
     const store = useAppStore.getState();
-    const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+    const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
     if (idx >= 0) {
       const newAnnotations = [...store.regionAnnotations];
       newAnnotations[idx] = updated;
@@ -237,7 +251,12 @@ export function MaskEffectPanel() {
   };
 
   // 更新变换参数
-  const handleUpdateTransform = (updates: Partial<typeof editingAnno.maskEffect.transform>) => {
+  const handleUpdateTransform = (updates: Partial<{
+    position: { x: number; y: number };
+    anchor: { x: number; y: number } | null;
+    rotation: number;
+    scale: { x: number; y: number };
+  }>) => {
     if (!editingAnno) return;
     const maskEffect = editingAnno.maskEffect || createDefaultMaskEffect();
     const updated = {
@@ -249,7 +268,7 @@ export function MaskEffectPanel() {
       updatedAt: Date.now(),
     };
     const store = useAppStore.getState();
-    const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+    const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
     if (idx >= 0) {
       const newAnnotations = [...store.regionAnnotations];
       newAnnotations[idx] = updated;
@@ -301,7 +320,7 @@ export function MaskEffectPanel() {
     }
 
     const store = useAppStore.getState();
-    const idx = store.regionAnnotations.findIndex(a => a.id === editingAnno.id);
+    const idx = store.regionAnnotations.findIndex((a: RegionAnnotation) => a.id === editingAnno.id);
     if (idx >= 0) {
       const updatedAnno = {
         ...store.regionAnnotations[idx],
@@ -353,7 +372,44 @@ export function MaskEffectPanel() {
 
   // 如果没有区域注释，不显示面板
   if (layerAnnotations.length === 0) {
-    return null;
+    return (
+      <div className="sidebar-section">
+        <h3>蒙版特效</h3>
+        <div style={{ marginTop: '12px', padding: '12px', background: '#fff3cd', borderRadius: '4px', fontSize: '11px', color: '#856404' }}>
+          <div style={{ marginBottom: '8px' }}>
+            <span style={{ fontWeight: 'bold' }}>⚠️ 未检测到区域注释</span>
+          </div>
+          <div style={{ marginBottom: '8px', fontSize: '10px', color: '#666' }}>
+            当前图层没有区域注释。请先绘制闭合实线区域，然后添加区域注释。
+          </div>
+          <button
+            onClick={() => {
+              console.log('[蒙版特效] 强制刷新并检测区域...');
+              if (activeLayerId) {
+                refreshRegionCache(activeLayerId);
+                refreshRegionEntities(activeLayerId);
+                const currentAnnotations = useAppStore.getState().regionAnnotations.filter((a: RegionAnnotation) => a.layerId === activeLayerId);
+                const currentEntities = useAppStore.getState().regionEntities[activeLayerId] || [];
+                console.log(`[蒙版特效] 检测结果：区域实体=${currentEntities.length}个，区域注释=${currentAnnotations.length}个`);
+                if (currentAnnotations.length === 0) {
+                  console.warn('[蒙版特效] 仍未检测到区域注释，请检查：');
+                  console.warn('  1. 是否绘制了闭合实线区域？');
+                  console.warn('  2. 是否添加了区域注释（🗺️ 区域注释工具）？');
+                  console.warn('  3. 当前选中的图层是否正确？');
+                }
+              } else {
+                console.warn('[蒙版特效] 未选中任何图层');
+              }
+              triggerCanvasRedraw();
+            }}
+            className="btn btn-primary"
+            style={{ width: '100%', fontSize: '11px', padding: '6px' }}
+          >
+            🔄 强制刷新并检测区域
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -361,12 +417,42 @@ export function MaskEffectPanel() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h3>蒙版特效</h3>
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          {/* 强制刷新按钮 */}
+          <button
+            onClick={() => {
+              console.log('[蒙版特效] 强制刷新并检测区域...');
+              if (activeLayerId) {
+                refreshRegionCache(activeLayerId);
+                refreshRegionEntities(activeLayerId);
+                const currentAnnotations = useAppStore.getState().regionAnnotations.filter((a: RegionAnnotation) => a.layerId === activeLayerId);
+                const currentEntities = useAppStore.getState().regionEntities[activeLayerId] || [];
+                console.log(`[蒙版特效] 检测结果：区域实体=${currentEntities.length}个，区域注释=${currentAnnotations.length}个`);
+                if (currentEntities.length === 0) {
+                  console.warn('[蒙版特效] 未检测到区域实体，请检查是否绘制了闭合实线区域');
+                }
+              } else {
+                console.warn('[蒙版特效] 未选中任何图层');
+              }
+              triggerCanvasRedraw();
+            }}
+            style={{
+              fontSize: '10px',
+              padding: '2px 6px',
+              background: '#f0f0f0',
+              color: '#666',
+              border: '1px solid #ddd',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+            title="强制刷新区域缓存和实体"
+          >
+            🔄
+          </button>
           {/* GPU/CPU 切换按钮 */}
           <button
             onClick={() => {
               const { forceCPUMode, setForceCPUMode, refreshRegionEntities } = useAppStore.getState();
               setForceCPUMode(!forceCPUMode);
-              // 切换后立即刷新区域实体
               if (layerVisibility.regionLayer && activeLayerId) {
                 refreshRegionEntities(activeLayerId);
               }
@@ -409,7 +495,7 @@ export function MaskEffectPanel() {
             marginTop: '4px',
           }}
         >
-          {layerAnnotations.map(anno => (
+          {layerAnnotations.map((anno: RegionAnnotation) => (
             <option key={anno.id} value={anno.id}>
               {anno.text || `区域 ${anno.regionId}`}
             </option>
@@ -734,7 +820,7 @@ export function MaskEffectPanel() {
             </div>
 
             {/* 扭曲效果参数 */}
-            {editingAnno.maskEffect.distortions.map((dist, idx) => (
+            {editingAnno.maskEffect.distortions.map((dist) => (
               <div
                 key={dist.id}
                 style={{
