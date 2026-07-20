@@ -423,22 +423,28 @@ export function MainCanvas() {
     camera.updateProjectionMatrix();
   }, [canvasWidth, canvasHeight]);
 
-  // ========== 同步可见性（响应 layerVisibility.regionLayer）==========
+  // ========== 同步可见性和透明度（响应 layerVisibility.regionLayer 和图层属性）==========
   useEffect(() => {
     const renderer = webglRendererRef.current;
     const scene = webglSceneRef.current;
     const camera = webglCameraRef.current;
     if (!renderer || !scene || !camera) return;
     
-    const visible = layerVisibility.regionLayer;
+    const activeLayer = layers.find(l => l.id === activeLayerId);
+    const visible = layerVisibility.regionLayer && (activeLayer?.visible ?? true);
+    const opacity = activeLayer?.opacity ?? 1;
+    
     renderer.domElement.style.display = visible ? 'block' : 'none';
+    renderer.domElement.style.opacity = opacity.toString();
     
     // 启动/停止动画循环
     if (visible) {
       let lastTime = 0;
       let frameCounter = 0;
       const animate = (time: number) => {
-        if (!layerVisibility.regionLayer) return;
+        const currentActiveLayer = useAppStore.getState().layers.find(l => l.id === useAppStore.getState().activeLayerId);
+        const currentVisible = useAppStore.getState().layerVisibility.regionLayer && (currentActiveLayer?.visible ?? true);
+        if (!currentVisible) return;
 
         const delta = lastTime ? (time - lastTime) / 1000 : 0;
         lastTime = time;
@@ -506,7 +512,7 @@ export function MainCanvas() {
         animationFrameIdRef.current = null;
       }
     };
-  }, [layerVisibility.regionLayer]);
+  }, [layerVisibility.regionLayer, layers, activeLayerId]);
 
   const frameIndexRef = useRef<number>(0);
 const TOTAL_FRAMES = 60;
@@ -2368,79 +2374,79 @@ useEffect(() => {
       }
     }
 
-    // 绘制像素缓冲区 (叠加)
+    // ===== 2. 绘制帧图层（位于图片图层之上，绘制图层之下）=====
     const layerId = activeLayerId || layers[0]?.id;
+    const activeLayer = layers.find(l => l.id === layerId);
+    
+    if (layerVisibility.frameLayer && activeLayer?.visible) {
+      const frameData = layerId ? frameDataMap[layerId] : null;
+      if (frameData) {
+        // ★ 优先使用绑定后的纹理
+        let textureToDraw = frameData.boundBaseTexture || frameData.baseTexture;
 
-    // 绘制导入的 FTX 底图（当前激活图层的帧数据）
-    const frameData = layerId ? frameDataMap[layerId] : null;
-
-    if (frameData) {
-      // ★ 优先使用绑定后的纹理
-      let textureToDraw = frameData.boundBaseTexture || frameData.baseTexture;
-
-      // 如果两者都为空但有原始数据，显示占位提示
-      if (!textureToDraw && frameData.rawRegionIdTex) {
-        // 显示一个半透明占位
-        ctx.save();
-        ctx.fillStyle = 'rgba(40, 40, 60, 0.8)';
-        ctx.fillRect(0, 0, currentWidth, currentHeight);
-        ctx.fillStyle = '#aaa';
-        ctx.font = '16px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const status = frameData.boundRegionId !== null ? '已绑定但纹理为空' : '未绑定区域';
-        ctx.fillText(`📦 帧数据已导入，${status}`, currentWidth / 2, currentHeight / 2 - 10);
-        ctx.font = '12px sans-serif';
-        ctx.fillStyle = '#888';
-        ctx.fillText('请在图层面板中选择区域进行绑定', currentWidth / 2, currentHeight / 2 + 24);
-        ctx.restore();
-      }
-
-      if (textureToDraw) {
-        // ✅ 直接绘制，不判断有效像素
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = textureToDraw.width;
-        tempCanvas.height = textureToDraw.height;
-        tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
-        ctx.save();
-        ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
-        ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
-        ctx.restore();
-
-        // 绘制 bbox 边框作为视觉提示
-        if (frameData.rawBbox) {
-          const b = frameData.rawBbox;
+        // 如果两者都为空但有原始数据，显示占位提示
+        if (!textureToDraw && frameData.rawRegionIdTex) {
           ctx.save();
-          ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([5, 5]);
-          const scaleX = currentWidth / 512;
-          const scaleY = currentHeight / 512;
-          ctx.strokeRect(b.x * scaleX, b.y * scaleY, b.w * scaleX, b.h * scaleY);
+          ctx.fillStyle = 'rgba(40, 40, 60, 0.8)';
+          ctx.fillRect(0, 0, currentWidth, currentHeight);
+          ctx.fillStyle = '#aaa';
+          ctx.font = '16px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          const status = frameData.boundRegionId !== null ? '已绑定但纹理为空' : '未绑定区域';
+          ctx.fillText(`📦 帧数据已导入，${status}`, currentWidth / 2, currentHeight / 2 - 10);
+          ctx.font = '12px sans-serif';
+          ctx.fillStyle = '#888';
+          ctx.fillText('请在图层面板中选择区域进行绑定', currentWidth / 2, currentHeight / 2 + 24);
           ctx.restore();
         }
 
-        // 绑定状态标签
-        if (frameData.boundRegionId !== null) {
+        if (textureToDraw) {
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = textureToDraw.width;
+          tempCanvas.height = textureToDraw.height;
+          tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
           ctx.save();
-          ctx.fillStyle = 'rgba(82, 196, 26, 0.9)';
-          ctx.font = '12px sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'top';
-          ctx.fillText(`✅ 已绑定区域 #${frameData.boundRegionId}`, 8, 8);
+          ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
+          ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
           ctx.restore();
-        } else {
-          ctx.save();
-          ctx.fillStyle = 'rgba(250, 173, 20, 0.9)';
-          ctx.font = '12px sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'top';
-          ctx.fillText('📦 预览模式 (未绑定)', 8, 8);
-          ctx.restore();
+
+          // 绘制 bbox 边框作为视觉提示
+          if (frameData.rawBbox) {
+            const b = frameData.rawBbox;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            const scaleX = currentWidth / 512;
+            const scaleY = currentHeight / 512;
+            ctx.strokeRect(b.x * scaleX, b.y * scaleY, b.w * scaleX, b.h * scaleY);
+            ctx.restore();
+          }
+
+          // 绑定状态标签
+          if (frameData.boundRegionId !== null) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(82, 196, 26, 0.9)';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`✅ 已绑定区域 #${frameData.boundRegionId}`, 8, 8);
+            ctx.restore();
+          } else {
+            ctx.save();
+            ctx.fillStyle = 'rgba(250, 173, 20, 0.9)';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText('📦 预览模式 (未绑定)', 8, 8);
+            ctx.restore();
+          }
         }
       }
     }
 
+    // ===== 3. 绘制绘制图层（像素缓冲区）=====
     const buffer = paintBuffers[layerId];
     if (buffer && layerVisibility.drawLayer) {
       const tempCanvas = document.createElement('canvas');
@@ -2491,18 +2497,20 @@ useEffect(() => {
       ctx.fillText(`Y: ${axis.yMin.toFixed(2)}`, 5, currentHeight - 5);
     }
 
-    // 绘制普通图形
+    // 绘制普通图形（按图层分组，应用可见性和透明度）
     if (layerVisibility.drawLayer) {
       layers.forEach(layer => {
-        if (layer.visible) {
-          ctx.globalAlpha = layer.opacity;
-          shapes.forEach(shape => {
-            if (shape.layerId === layer.id && shape.id !== 'current_shape') {
-              drawShape(ctx, shape);
-            }
-          });
-        }
+        if (!layer.visible) return;
+        ctx.save();
+        ctx.globalAlpha = layer.opacity;
+        shapes.forEach(shape => {
+          if (shape.layerId === layer.id && shape.id !== 'current_shape') {
+            drawShape(ctx, shape);
+          }
+        });
+        ctx.restore();
       });
+
       ctx.globalAlpha = 1;
       // 绘制临时图形（绘制中）
       if (tempPoints.length > 0) {
@@ -2541,13 +2549,16 @@ useEffect(() => {
       });
     }
 
-    // 绘制区域注释
-    if (layerVisibility.drawLayer) {
+    // 绘制区域注释（受 activeLayer 可见性和透明度控制）
+    if (layerVisibility.drawLayer && activeLayer?.visible) {
       regionAnnotations.forEach(anno => {
         if (anno.layerId !== activeLayerId) return;
         
         // 如果启用了蒙版特效且区域色块图层可见，跳过（边框在 regionLayer 中绘制）
         if (anno.maskEffect?.enabled && layerVisibility.regionLayer) return;
+        
+        ctx.save();
+        ctx.globalAlpha = activeLayer.opacity;
         
         // 【调试】输出 2D Canvas 绘制坐标信息
         const outerRing = anno.polygon[0];
@@ -2558,7 +2569,6 @@ useEffect(() => {
           if (p.x > maxX) maxX = p.x;
           if (p.y > maxY) maxY = p.y;
         }
-        ctx.save();
         const color = anno.color || '#1890ff';
         ctx.fillStyle = color.replace(/rgb\(|#/, '').length === 6 
           ? `rgba(${parseInt(color.slice(1,3),16)}, ${parseInt(color.slice(3,5),16)}, ${parseInt(color.slice(5,7),16)}, 0.2)` 
@@ -2597,14 +2607,16 @@ useEffect(() => {
       });
     }
 
-    // 绘制区域色块图层（静态纹理）
-    // WebGL 渲染器已单独处理，此处保留 CPU 回退
-    if (layerVisibility.regionLayer && regionLayerCanvas && !regionLayerTextureGPU) {
+    // 绘制区域色块图层（静态纹理，受 activeLayer 可见性和透明度控制）
+    if (layerVisibility.regionLayer && activeLayer?.visible && regionLayerCanvas && !regionLayerTextureGPU) {
+      ctx.save();
+      ctx.globalAlpha = activeLayer.opacity;
       ctx.drawImage(regionLayerCanvas, 0, 0);
+      ctx.restore();
     }
 
-    // ========== 蒙版特效动态轮廓绘制（作为区域色块图层的一部分）==========
-    if (layerVisibility.regionLayer) {
+    // ========== 蒙版特效动态轮廓绘制（作为区域色块图层的一部分，受 activeLayer 可见性和透明度控制）==========
+    if (layerVisibility.regionLayer && activeLayer?.visible) {
       const animationTime = useAppStore.getState().regionAnimationTime;
       const currentTime = animationTime * 2 * Math.PI;
       

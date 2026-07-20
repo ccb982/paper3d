@@ -533,6 +533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   layerVisibility: {
     imageLayer: true,
+    frameLayer: true,   // 帧图层（FTX导入数据），默认可见
     drawLayer: true,
     axisLayer: true,
     regionLayer: false, // 区域注释算法提取的色块区域

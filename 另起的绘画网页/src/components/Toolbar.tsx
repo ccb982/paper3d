@@ -64,6 +64,27 @@ export function Toolbar() {
   } = useAppStore();
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
+  const [showShapeMenu, setShowShapeMenu] = useState(false);
+
+  const shapeTools = [
+    { type: 'point' as ToolType, icon: '•', label: '点' },
+    { type: 'line' as ToolType, icon: '/', label: '线段' },
+    { type: 'rectangle' as ToolType, icon: '□', label: '矩形' },
+    { type: 'circle' as ToolType, icon: '○', label: '圆形' },
+    { type: 'triangle' as ToolType, icon: '△', label: '三角形' },
+    { type: 'quadratic' as ToolType, icon: '⌒', label: '贝塞尔' },
+    { type: 'brush' as ToolType, icon: '✎', label: '画笔' },
+  ];
+
+  const mainTools = [
+    { type: 'select' as ToolType, icon: '⬚', label: '选择' },
+    { type: 'paintBrush' as ToolType, icon: '🖌️', label: '上色画笔', hint: '拖拽涂抹，自动提取区域' },
+    { type: 'picker' as ToolType, icon: '🎨', label: '取色器', hint: '点击画布取色' },
+    { type: 'move' as ToolType, icon: '✋', label: '移动', hint: '拖拽移动封闭图形' },
+    { type: 'eraser' as ToolType, icon: '✕', label: '橡皮' },
+    { type: 'pointAnnotation' as ToolType, icon: '📍', label: '点注释' },
+    { type: 'regionAnnotation' as ToolType, icon: '🗺️', label: '区域注释', hint: '完成绘图后再添加' },
+  ];
 
   // 统一退出颜色提取模式的函数（保留虚线，不清除）
   const exitColorExtractMode = useCallback(() => {
@@ -116,11 +137,111 @@ export function Toolbar() {
         overflowX: 'hidden',
       }}
     >
-      {tools.map((tool) => (
+      {/* 1. 选择工具 */}
+      <button
+        key="select"
+        onClick={() => {
+          exitColorExtractMode();
+          setCurrentTool('select');
+        }}
+        title="选择"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: currentTool === 'select' ? '#1890ff' : 'transparent',
+          color: currentTool === 'select' ? '#fff' : '#333',
+          fontSize: '18px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'all 0.2s',
+          position: 'relative',
+        }}
+      >
+        ⬚
+      </button>
+
+      {/* 2. 形状次级菜单（第二位）*/}
+      <div style={{ position: 'relative' }}>
+        <button
+          onClick={() => {
+            setShowShapeMenu(!showShapeMenu);
+            setShowColorExtractMenu(false);
+          }}
+          title="形状工具"
+          style={{
+            width: '36px',
+            height: '36px',
+            border: 'none',
+            borderRadius: '6px',
+            backgroundColor: showShapeMenu ? '#1890ff' : 'transparent',
+            color: showShapeMenu ? '#fff' : '#333',
+            fontSize: '18px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.2s',
+          }}
+        >
+          ⬜
+        </button>
+
+        {showShapeMenu && (
+          <div style={{
+            position: 'fixed',
+            left: '56px',
+            top: '50%',
+            marginTop: '-140px',
+            backgroundColor: '#fff',
+            border: '1px solid #d9d9d9',
+            borderRadius: '6px',
+            padding: '4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            zIndex: 2000,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+          }}>
+            {shapeTools.map((tool) => (
+              <button
+                key={tool.type}
+                onClick={() => {
+                  exitColorExtractMode();
+                  setCurrentTool(tool.type);
+                  setShowShapeMenu(false);
+                }}
+                title={tool.label}
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  border: 'none',
+                  borderRadius: '6px',
+                  backgroundColor: currentTool === tool.type ? '#1890ff' : 'transparent',
+                  color: currentTool === tool.type ? '#fff' : '#333',
+                  fontSize: '18px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                {tool.icon}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 3. 其他主工具 */}
+      {mainTools.slice(1).map((tool) => (
         <button
           key={tool.type}
           onClick={() => {
-            exitColorExtractMode();  // 先退出颜色提取模式
+            exitColorExtractMode();
             setCurrentTool(tool.type);
           }}
           title={tool.hint ? `${tool.label}\n${tool.hint}` : tool.label}

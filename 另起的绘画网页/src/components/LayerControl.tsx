@@ -357,6 +357,14 @@ export function LayerControl() {
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
           <input
             type="checkbox"
+            checked={layerVisibility?.frameLayer ?? true}
+            onChange={() => toggleLayer('frameLayer')}
+          />
+          帧图层
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginTop: '8px' }}>
+          <input
+            type="checkbox"
             checked={layerVisibility?.drawLayer ?? true}
             onChange={() => toggleLayer('drawLayer')}
           />

@@ -1356,22 +1356,25 @@ export function decodeFrameToTextures(
     const finalS = Math.max(0, Math.min(1, baseColor.s + dS));
     const finalL = Math.max(0, Math.min(1, baseColor.l + dL));
 
-    const rgb = hslToRgb(finalH, finalS, finalL);
+    // 基础色（纯调色板颜色，不加残差）
+    const baseRgb = hslToRgb(baseColor.h, baseColor.s, baseColor.l);
+    // 叠加色（基础色+残差后的合成颜色）
+    const compRgb = hslToRgb(finalH, finalS, finalL);
 
     const globalX = bbox.x + px;
     const globalY = bbox.y + py;
     const idx = (globalY * texSize + globalX) * 4;
-    baseData[idx] = rgb.r;
-    baseData[idx + 1] = rgb.g;
-    baseData[idx + 2] = rgb.b;
+
+    // baseTexture = 纯基础色
+    baseData[idx] = baseRgb.r;
+    baseData[idx + 1] = baseRgb.g;
+    baseData[idx + 2] = baseRgb.b;
     baseData[idx + 3] = 255;
 
-    const rRes = Math.round((qH / 63) * 255);
-    const gRes = Math.round((qS / 31) * 255);
-    const bRes = Math.round((qL / 31) * 255);
-    resData[idx] = rRes;
-    resData[idx + 1] = gRes;
-    resData[idx + 2] = bRes;
+    // residualTexture = 叠加色（基础色+残差）
+    resData[idx] = compRgb.r;
+    resData[idx + 1] = compRgb.g;
+    resData[idx + 2] = compRgb.b;
     resData[idx + 3] = 255;
   }
 

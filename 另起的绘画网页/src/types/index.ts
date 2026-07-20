@@ -65,6 +65,7 @@ export interface GridConfig {
 
 export interface LayerVisibility {
   imageLayer: boolean;
+  frameLayer: boolean;  // 帧图层（FTX导入数据）
   drawLayer: boolean;
   axisLayer: boolean;
   regionLayer: boolean; // 区域注释算法提取的色块区域
