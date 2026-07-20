@@ -2535,11 +2535,36 @@ export const useAppStore = create<AppState>((set, get) => ({
           boundRegionId: regionId,
           boundBaseTexture: fullBase,
           boundResidualTexture: null,
+          textureOffset: frameData.textureOffset || { x: 0, y: 0 },
+          textureScale: frameData.textureScale || { x: 1, y: 1 },
+          textureRotation: frameData.textureRotation || 0,
         },
       },
     }));
 
     console.log(`[绑定] 图层 ${layerId} 成功绑定到区域 ${regionId}，有效像素 ${validPixelCount}`);
+  },
+
+  // ===== 设置底图纹理变换（偏移、缩放和旋转）=====
+  setFrameTextureTransform: (layerId: string, offset: { x: number; y: number }, scale: { x: number; y: number }, rotation: number = 0) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) {
+      console.warn(`[底图变换] 图层 ${layerId} 没有帧数据`);
+      return;
+    }
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          textureOffset: offset,
+          textureScale: scale,
+          textureRotation: rotation,
+        },
+      },
+    }));
+    console.log(`[底图变换] 图层 ${layerId} 偏移=(${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}) 缩放=(${scale.x.toFixed(3)}, ${scale.y.toFixed(3)}) 旋转=${rotation.toFixed(3)}rad`);
   },
 
 }));

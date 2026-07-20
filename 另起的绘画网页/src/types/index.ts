@@ -157,4 +157,9 @@ export interface FrameData {
   boundRegionId: number | null;       // 绑定的区域 ID（RegionEntity.id），null 表示未绑定
   boundBaseTexture: ImageData | null; // 绑定后生成的最终底图
   boundResidualTexture: ImageData | null; // 绑定后生成的最终残差图
+
+  // ---------- 底图变换（用于对齐模板缓冲） ----------
+  textureOffset: { x: number; y: number };   // 纹理偏移（UV空间，0~1）
+  textureScale: { x: number; y: number };    // 纹理缩放（1=原始大小）
+  textureRotation: number;                   // 纹理旋转（弧度，0=不旋转）
 }

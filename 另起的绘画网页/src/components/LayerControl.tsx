@@ -337,6 +337,137 @@ export function LayerControl() {
                     )}
                   </div>
                 )}
+
+                {/* 底图变换控制（仅已绑定的图层） */}
+                {isLayerBound && (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      paddingLeft: '24px',
+                      paddingRight: '4px',
+                      fontSize: '10px',
+                      borderTop: '1px dashed #e0e0e0',
+                      paddingTop: '6px',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                      <span style={{ color: '#666', fontWeight: 'bold' }}>底图变换</span>
+                      <button
+                        onClick={() => {
+                          const { setFrameTextureTransform } = useAppStore.getState();
+                          setFrameTextureTransform(layer.id, { x: 0, y: 0 }, { x: 1, y: 1 }, 0);
+                        }}
+                        style={{
+                          fontSize: '9px',
+                          padding: '1px 4px',
+                          border: 'none',
+                          borderRadius: '2px',
+                          background: '#f0f0f0',
+                          color: '#666',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        重置
+                      </button>
+                    </div>
+                    {/* 偏移 X */}
+                    <div style={{ marginBottom: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>偏移 X</span>
+                        <span style={{ color: '#999' }}>{(frame.textureOffset?.x || 0).toFixed(3)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-1"
+                        max="1"
+                        step="0.01"
+                        value={frame.textureOffset?.x || 0}
+                        onChange={(e) => {
+                          const { setFrameTextureTransform } = useAppStore.getState();
+                          setFrameTextureTransform(layer.id, { x: parseFloat(e.target.value), y: frame.textureOffset?.y || 0 }, frame.textureScale || { x: 1, y: 1 }, frame.textureRotation || 0);
+                        }}
+                        style={{ width: '100%', marginTop: '2px' }}
+                      />
+                    </div>
+                    {/* 偏移 Y */}
+                    <div style={{ marginBottom: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>偏移 Y</span>
+                        <span style={{ color: '#999' }}>{(frame.textureOffset?.y || 0).toFixed(3)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-1"
+                        max="1"
+                        step="0.01"
+                        value={frame.textureOffset?.y || 0}
+                        onChange={(e) => {
+                          const { setFrameTextureTransform } = useAppStore.getState();
+                          setFrameTextureTransform(layer.id, { x: frame.textureOffset?.x || 0, y: parseFloat(e.target.value) }, frame.textureScale || { x: 1, y: 1 }, frame.textureRotation || 0);
+                        }}
+                        style={{ width: '100%', marginTop: '2px' }}
+                      />
+                    </div>
+                    {/* 缩放 X */}
+                    <div style={{ marginBottom: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>缩放 X</span>
+                        <span style={{ color: '#999' }}>{(frame.textureScale?.x || 1).toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="3"
+                        step="0.05"
+                        value={frame.textureScale?.x || 1}
+                        onChange={(e) => {
+                          const { setFrameTextureTransform } = useAppStore.getState();
+                          setFrameTextureTransform(layer.id, frame.textureOffset || { x: 0, y: 0 }, { x: parseFloat(e.target.value), y: frame.textureScale?.y || 1 }, frame.textureRotation || 0);
+                        }}
+                        style={{ width: '100%', marginTop: '2px' }}
+                      />
+                    </div>
+                    {/* 缩放 Y */}
+                    <div style={{ marginBottom: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>缩放 Y</span>
+                        <span style={{ color: '#999' }}>{(frame.textureScale?.y || 1).toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="3"
+                        step="0.05"
+                        value={frame.textureScale?.y || 1}
+                        onChange={(e) => {
+                          const { setFrameTextureTransform } = useAppStore.getState();
+                          setFrameTextureTransform(layer.id, frame.textureOffset || { x: 0, y: 0 }, { x: frame.textureScale?.x || 1, y: parseFloat(e.target.value) }, frame.textureRotation || 0);
+                        }}
+                        style={{ width: '100%', marginTop: '2px' }}
+                      />
+                    </div>
+                    {/* 旋转 */}
+                    <div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>旋转</span>
+                        <span style={{ color: '#999' }}>{((frame.textureRotation || 0) * 180 / Math.PI).toFixed(0)}°</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="-3.14"
+                        max="3.14"
+                        step="0.05"
+                        value={frame.textureRotation || 0}
+                        onChange={(e) => {
+                          const { setFrameTextureTransform } = useAppStore.getState();
+                          setFrameTextureTransform(layer.id, frame.textureOffset || { x: 0, y: 0 }, frame.textureScale || { x: 1, y: 1 }, parseFloat(e.target.value));
+                        }}
+                        style={{ width: '100%', marginTop: '2px' }}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
             );
             return layerElement;

@@ -55,12 +55,30 @@ const BORDER_FRAGMENT_SHADER = `
   }
 `;
 
-// ========== 颜色纹理的片元着色器（带UV）==========
+// ========== 颜色纹理的片元着色器（带UV + 底图变换 + 旋转 + 边界裁剪）==========
 const COLOR_FRAGMENT_SHADER = `
   uniform sampler2D uColorTex;
+  uniform vec2 uTexOffset;
+  uniform vec2 uTexScale;
+  uniform float uTexRotation;
   varying vec2 vUv;
   void main() {
-    gl_FragColor = texture2D(uColorTex, vUv);
+    vec2 uv = vUv;
+    
+    float cosRot = cos(uTexRotation);
+    float sinRot = sin(uTexRotation);
+    
+    uv -= 0.5;
+    uv = vec2(uv.x * cosRot - uv.y * sinRot, uv.x * sinRot + uv.y * cosRot);
+    uv += 0.5;
+    
+    uv = (uv - uTexOffset) / uTexScale;
+    
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+    } else {
+      gl_FragColor = texture2D(uColorTex, uv);
+    }
   }
 `;
 
@@ -813,6 +831,9 @@ useEffect(() => {
           uTotalFrames: { value: numFrames },
           uVertexCount: { value: vertexCount },
           uColorTex: { value: colorTexture },
+          uTexOffset: { value: new THREE.Vector2(frameData.textureOffset?.x || 0, frameData.textureOffset?.y || 0) },
+          uTexScale: { value: new THREE.Vector2(frameData.textureScale?.x || 1, frameData.textureScale?.y || 1) },
+          uTexRotation: { value: frameData.textureRotation || 0 },
         },
         vertexShader: VAT_VERTEX_SHADER,
         fragmentShader: COLOR_FRAGMENT_SHADER,
