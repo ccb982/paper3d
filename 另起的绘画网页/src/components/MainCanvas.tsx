@@ -22,6 +22,7 @@ const VAT_VERTEX_SHADER = `
   uniform float uVertexCount;
 
   varying vec2 vUv;
+  varying vec2 vDisplacement;
 
   void main() {
     float frame = mod(uTime * uFramesPerSecond, uTotalFrames);
@@ -31,6 +32,7 @@ const VAT_VERTEX_SHADER = `
     vec2 displacement = texture2D(uDisplacementTex, vec2(texX, texY)).rg;
 
     vUv = uv;
+    vDisplacement = displacement;
 
     vec3 pos = position + vec3(displacement, 0.0);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -39,8 +41,11 @@ const VAT_VERTEX_SHADER = `
 
 // ========== 填充网格的片元着色器（用于模板缓冲）==========
 const FILL_FRAGMENT_SHADER = `
+  varying vec2 vDisplacement;
   void main() {
-    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+    float intensity = length(vDisplacement);
+    // 红色=位移强度，像素被VAT推动；黑色=零位移
+    gl_FragColor = vec4(intensity * 2.0, 0.0, 0.0, 0.7);
   }
 `;
 
@@ -454,26 +459,66 @@ export function MainCanvas() {
         currentTime = currentTime % 1000;
         useAppStore.getState().setRegionAnimationTime(currentTime);
 
-        const group = rootGroupRef.current;
-        let meshInfo = '';
-        if (group) {
-          let meshCount = 0, lineCount = 0;
-          group.children.forEach(child => {
-            if (child instanceof THREE.Mesh) {
-              meshCount++;
-              const mat = child.material as any;
-              const stencilOn = mat.stencilTest === true;
+        // ===== 全面调试：模板缓冲全流程 =====
+        const debugDetail = frameCounter < 15 || frameCounter % 60 === 0;
+        if (debugDetail) {
+          const group = rootGroupRef.current;
+          if (group) {
+            console.groupCollapsed(`[模板缓冲调试] 帧#${frameCounter} time=${currentTime.toFixed(3)}s`);
+            
+            let fillCount = 0, colorCount = 0;
+            group.children.forEach((child, ci) => {
+              if (!(child instanceof THREE.Mesh)) return;
+              const mat = child.material as THREE.ShaderMaterial;
+              const hasStencil = (mat as any).stencilTest === true;
+              const hasWrite = (mat as any).stencilWrite === true;
+              const stencilFunc = (mat as any).stencilFunc ?? 'N/A';
               const ro = child.renderOrder;
-              const hasTimeUni = !!(mat.uniforms && mat.uniforms.uTime);
-              const showDetail = frameCounter < 10 || frameCounter % 60 === 0;
-              if (showDetail) {
-                const hasColorTex = !!(mat.uniforms && mat.uniforms.uColorTex);
-                meshInfo += ` [M${ro}${stencilOn?'+stencil':''}${hasTimeUni?'+vat':''}${hasColorTex?'+tex':''}]`;
+              const ut = mat.uniforms?.uTime?.value ?? -1;
+              const vc = mat.uniforms?.uVertexCount?.value ?? -1;
+              const hasTex = !!mat.uniforms?.uColorTex;
+              const dt = mat.uniforms?.uDisplacementTex?.value;
+
+              if (hasWrite) fillCount++;
+              if (hasTex) colorCount++;
+
+              // 采样 displacement texture 的前几个像素（帧0位置和当前帧位置）
+              let dispSample = 'none';
+              if (dt && dt.image && (dt as any).image.data) {
+                const img = (dt as any).image;
+                const tw = img.width || dt.image.width || 0;
+                const totalFrames = mat.uniforms?.uTotalFrames?.value ?? 1;
+                const fps = mat.uniforms?.uFramesPerSecond?.value ?? 30;
+                const frameIdx = Math.floor((currentTime * fps) % totalFrames);
+                const texY = Math.floor((frameIdx / totalFrames) * (tw || 1));
+                const d = img.data || dt.image.data;
+                // 采样 vertex 0 的位移
+                const idxV0 = (texY * tw + 0) * 4;
+                if (d && idxV0 + 3 < d.length) {
+                  dispSample = `v0@帧${frameIdx}:RG=(${d[idxV0].toFixed(0)},${d[idxV0+1].toFixed(0)})` +
+                    ` v1:(${d[idxV0+4]?.toFixed(0)??'?'},${d[idxV0+5]?.toFixed(0)??'?'})`;
+                }
               }
-            } else if (child instanceof THREE.LineLoop) {
-              lineCount++;
-            }
-          });
+
+              console.log(
+                `  child#${ci} ro=${ro} type=${hasWrite?'FILL':hasTex?'COLOR':'?'}` +
+                ` stencilTest=${hasStencil} stencilWrite=${hasWrite} stencilFunc=${stencilFunc}` +
+                ` uTime=${ut?.toFixed(3)??'N/A'} vtxCnt=${vc}` +
+                ` | dispTex=${dispSample}`
+              );
+            });
+            
+            // 网格构建时数据统计
+            const dispTexInfo = group.userData?.['dispTexInfo'] as string | undefined;
+            if (dispTexInfo) console.log(`  【构建时】${dispTexInfo}`);
+
+            console.log(`  小结: fillMesh=${fillCount} colorMesh=${colorCount}`);
+            console.groupEnd();
+          }
+        }
+
+        const group = rootGroupRef.current;
+        if (group) {
           // 每帧更新 uniforms
           group.children.forEach(child => {
             if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
@@ -488,14 +533,6 @@ export function MainCanvas() {
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
         
-        if (frameCounter % 120 === 0) {
-          const children = group?.children?.length ?? 0;
-          console.log(
-            `[DEBUG渲染] 帧#${frameCounter} ` +
-            `time=${currentTime.toFixed(2)}s ` +
-            `children=${children}${meshInfo}`
-          );
-        }
         frameCounter++;
 
         animationFrameIdRef.current = requestAnimationFrame(animate);
@@ -647,8 +684,11 @@ useEffect(() => {
       indices = [];
     }
     
+    console.log(`[三角剖分诊断] 区域#${entity.id} 顶点数=${flatCoords.length/2} 环数=${ringLengths.length} holeIndices=${holeIndices?.length??0} 索引数=${indices.length} 三角形数=${indices.length/3}`);
+    
     // 验证索引有效性
     if (indices.length === 0 || indices.length % 3 !== 0) {
+      console.warn(`[三角剖分诊断] ⚠️ earcut失败，回退到仅外环`);
       // 回退：仅外环剖分（无孔洞 → holeIndices=null）
       const outerLen = ringLengths[0];
       const outerFlat = flatCoords.slice(0, outerLen * 2);
@@ -658,6 +698,7 @@ useEffect(() => {
         indices = [];
       }
       if (indices.length === 0 || indices.length % 3 !== 0) {
+        console.warn(`[三角剖分诊断] ⚠️ 外环剖分也失败，跳过该区域`);
         continue;
       }
     }
@@ -695,18 +736,21 @@ useEffect(() => {
       },
       vertexShader: VAT_VERTEX_SHADER,
       fragmentShader: FILL_FRAGMENT_SHADER,
-      transparent: false,
+      transparent: true,
+      depthTest: false,
       depthWrite: false,
-      side: THREE.FrontSide,
+      side: THREE.DoubleSide,  // ★ earcut生成的三角形方向可能不一致，DoubleSide确保都能渲染
       stencilWrite: true,
       stencilRef: 1,
       stencilFunc: THREE.AlwaysStencilFunc,
-      stencilFail: THREE.ReplaceStencilOp,
-      stencilZFail: THREE.ReplaceStencilOp,
-      stencilZPass: THREE.ReplaceStencilOp,
+      stencilFail: THREE.InvertStencilOp,  // 奇偶翻转：三角形重叠区域抵消
+      stencilZFail: THREE.InvertStencilOp,
+      stencilZPass: THREE.InvertStencilOp,
     });
     // Three.js r170 的 ShaderMaterial 构造函数不处理继承属性，需创建后设置
     fillMat.stencilTest = true;
+    fillMat.depthTest = false;
+    fillMat.depthWrite = false;
     const fillMesh = new THREE.Mesh(fillGeom, fillMat);
     fillMesh.renderOrder = 0;
     fillMesh.frustumCulled = false;
@@ -720,7 +764,31 @@ useEffect(() => {
       let validPx = 0;
       const bd = boundTex.data;
       for (let i = 3; i < bd.length; i += 4) { if (bd[i] > 0) validPx++; }
-      console.log(`[VAT颜色网格] 区域#${entity.id} 绑定纹理 ${boundTex.width}x${boundTex.height}, 有效像素=${validPx}`);
+      
+      // 检查纹理前几个像素的颜色值（确认数据有效）
+      let firstPixel = 'N/A';
+      if (bd.length >= 4) {
+        firstPixel = `RGBA=(${bd[0]},${bd[1]},${bd[2]},${bd[3]})`;
+      }
+      
+      // 分析 UV 范围
+      let uvMinX = Infinity, uvMaxX = -Infinity, uvMinY = Infinity, uvMaxY = -Infinity;
+      const uvArray = fillGeom.attributes.uv.array as Float32Array;
+      for (let i = 0; i < uvArray.length; i += 2) {
+        if (uvArray[i] < uvMinX) uvMinX = uvArray[i];
+        if (uvArray[i] > uvMaxX) uvMaxX = uvArray[i];
+        if (uvArray[i + 1] < uvMinY) uvMinY = uvArray[i + 1];
+        if (uvArray[i + 1] > uvMaxY) uvMaxY = uvArray[i + 1];
+      }
+      
+      console.log(`[COLOR诊断] 区域#${entity.id}`);
+      console.log(`  boundBaseTexture: ${boundTex.width}x${boundTex.height} 有效像素=${validPx}/${boundTex.width*boundTex.height}`);
+      console.log(`  首像素颜色: ${firstPixel}`);
+      console.log(`  UV范围: X=[${uvMinX.toFixed(4)}, ${uvMaxX.toFixed(4)}] Y=[${uvMinY.toFixed(4)}, ${uvMaxY.toFixed(4)}]`);
+      console.log(`  期望UV范围: [0,1]（纹理尺寸=512x512，像素坐标0~512 → 归一化后0~1）`);
+      if (uvMinX < 0 || uvMaxX > 1 || uvMinY < 0 || uvMaxY > 1) {
+        console.warn(`  ⚠️ UV超出[0,1]范围！纹理采样可能异常`);
+      }
 
       // 将 ImageData 转换为 Three.js DataTexture
       const colorTexture = new THREE.DataTexture(
@@ -737,7 +805,6 @@ useEffect(() => {
       colorTexture.wrapS = THREE.ClampToEdgeWrapping;
       colorTexture.wrapT = THREE.ClampToEdgeWrapping;
       
-      const texGeom = fillGeom.clone();
       const texMat = new THREE.ShaderMaterial({
         uniforms: {
           uDisplacementTex: { value: displacementTex },
@@ -751,12 +818,13 @@ useEffect(() => {
         fragmentShader: COLOR_FRAGMENT_SHADER,
         transparent: true,
         depthWrite: true,
-        side: THREE.FrontSide,
+        side: THREE.DoubleSide,  // ★ earcut生成的三角形方向可能不一致，DoubleSide确保都能渲染
       });
       texMat.stencilTest = true;
       texMat.stencilRef = 1;
       texMat.stencilFunc = THREE.EqualStencilFunc;
-      colorMesh = new THREE.Mesh(texGeom, texMat);
+      // 共享 fillGeom，确保 GPU 按 gl_VertexID 索引的顶点顺序完全一致
+      colorMesh = new THREE.Mesh(fillGeom, texMat);
       colorMesh.renderOrder = 1;
       colorMesh.frustumCulled = false;
     }
@@ -809,6 +877,54 @@ useEffect(() => {
   }
 
   console.log(`[VAT网格构建] 完成：创建 ${meshCount} 个填充网格, ${texCount} 个纹理网格, rootGroup子节点=${group.children.length}`);
+
+  // ===== 位移纹理诊断数据（存入 group.userData，供动画循环读取）=====
+  if (entities.length > 0) {
+    const firstEntity = entities[0];
+    const dt = firstEntity.getDisplacementTexture(canvasWidth, canvasHeight);
+    if (dt && (dt as any).image && (dt as any).image.data) {
+      const img = (dt as any).image;
+      const d = img.data;
+      const tw = img.width || 0;
+      const numFrames = firstEntity.getNumFrames();
+      const vc = firstEntity.getTotalVertices();
+      let nonZeroPixels = 0, maxDisp = 0, minDisp = Infinity;
+      for (let i = 0; i < d.length; i += 4) {
+        const mag = Math.abs(d[i]) + Math.abs(d[i + 1]);
+        if (mag > 0) {
+          nonZeroPixels++;
+          if (mag > maxDisp) maxDisp = mag;
+          if (mag < minDisp) minDisp = mag;
+        }
+      }
+      if (minDisp === Infinity) minDisp = 0;
+      
+      const entitiesInfo = entities.map(e => {
+        const mf = e.maskEffect;
+        return `  #${e.id}: maskEffect=${mf ? `enabled=${mf.enabled} amp=${mf.amplitude?.toFixed(1)} freq=${mf.frequency?.toFixed(2)} twist=${mf.twist?.toFixed(2)}` : 'null'}`;
+      }).join('\n');
+
+      group.userData['dispTexInfo'] =
+        `位移纹理: ${tw}x${tw} 总帧=${numFrames} 顶点数=${vc} ` +
+        `非零像素=${nonZeroPixels}/${d.length/4} 最大位移=${maxDisp.toFixed(1)} 最小非零=${minDisp.toFixed(1)}`;
+      
+      console.log(`[VAT位移纹理诊断]\n${group.userData['dispTexInfo']}\n区域掩码特效:\n${entitiesInfo}`);
+    } else {
+      console.warn('[VAT位移纹理诊断] ⚠️ 位移纹理为空或无数据！maskEffect 可能为 null');
+      group.userData['dispTexInfo'] = '⚠️ 位移纹理为空';
+    }
+
+    // 绑定纹理诊断
+    const fd = frameDataMap[activeLayerId];
+    if (fd?.boundBaseTexture) {
+      const bt = fd.boundBaseTexture;
+      let btValid = 0;
+      for (let i = 3; i < bt.data.length; i += 4) { if (bt.data[i] > 0) btValid++; }
+      console.log(`[VAT绑定纹理] boundRegionId=${fd.boundRegionId} 尺寸=${bt.width}x${bt.height} 有效像素=${btValid}/${bt.width * bt.height}`);
+    } else {
+      console.log('[VAT绑定纹理] ⚠️ 无绑定纹理 (boundBaseTexture 为空)');
+    }
+  }
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL, frameDataMap]);
 
   const [isPanning, setIsPanning] = useState(false);

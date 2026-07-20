@@ -2463,7 +2463,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ===== 绑定图层到区域（使用全局调色板 + 多边形裁剪）=====
   bindFrameToLayer: async (layerId: string, regionId: number | null) => {
-    const { decodeFrameWithGlobalPalette, cropTextureByPolygon } = await import('../utils/colorCompressor');
+    const { decodeFrameWithGlobalPalette } = await import('../utils/colorCompressor');
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) {
@@ -2514,18 +2514,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       512
     );
 
-    // 用区域多边形裁剪，外部像素置透明
-    const croppedBase = cropTextureByPolygon(fullBase, entity.boundary);
-
-    // 统计有效像素
+    // 直接保存完整底图，模板缓冲负责每帧的边界裁剪
+    // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样 fullBase（仅模板=1区域）
     let validPixelCount = 0;
-    const data = croppedBase.data;
+    const data = fullBase.data;
     for (let i = 3; i < data.length; i += 4) {
       if (data[i] > 0) validPixelCount++;
     }
 
     if (validPixelCount === 0) {
-      console.warn(`[绑定] 该帧在区域 ${regionId} 内没有有效像素`);
+      console.warn(`[绑定] 该帧没有有效像素`);
       return;
     }
 
@@ -2535,7 +2533,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         [layerId]: {
           ...frameData,
           boundRegionId: regionId,
-          boundBaseTexture: croppedBase,
+          boundBaseTexture: fullBase,
           boundResidualTexture: null,
         },
       },
