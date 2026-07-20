@@ -55,16 +55,65 @@ const BORDER_FRAGMENT_SHADER = `
   }
 `;
 
-// ========== 颜色纹理的片元着色器（带UV + 底图变换 + 旋转 + 边界裁剪）==========
+// ========== 颜色纹理的片元着色器（带UV + 底图变换 + 旋转 + 呼吸式扭曲）==========
 const COLOR_FRAGMENT_SHADER = `
   uniform sampler2D uColorTex;
   uniform vec2 uTexOffset;
   uniform vec2 uTexScale;
   uniform float uTexRotation;
+  uniform float uTime;
+  uniform float uDistortEnabled;
+  uniform float uDistortAmplitude;
+  uniform float uDistortFrequency;
+  uniform float uDistortSpeed;
+  uniform float uDistortRotation;
   varying vec2 vUv;
   void main() {
     vec2 uv = vUv;
     
+    // ==========================================
+    // 1. 呼吸式扭曲（在屏幕空间，独立于底图变换）
+    // ==========================================
+    if (uDistortEnabled > 0.5) {
+      float time = uTime;
+      
+      // 扭曲旋转：将UV旋转到扭曲坐标系
+      float cosDR = cos(uDistortRotation);
+      float sinDR = sin(uDistortRotation);
+      vec2 dUv = uv - 0.5;
+      vec2 rotUv = vec2(
+        dUv.x * cosDR - dUv.y * sinDR,
+        dUv.x * sinDR + dUv.y * cosDR
+      );
+      rotUv += 0.5;
+      
+      // 动态参数
+      float amplitude = uDistortAmplitude * (0.5 + 0.5 * sin(time * 0.4));
+      float frequency = uDistortFrequency;
+      float phase = time * uDistortSpeed + 0.5 * sin(time * 0.3);
+      
+      // 水平偏移
+      float offsetX = amplitude * sin(frequency * rotUv.y + phase);
+      rotUv.x += offsetX;
+      
+      // 次级小波
+      float secondaryAmp = amplitude * 0.3;
+      float secondaryFreq = frequency * 1.8;
+      float secondaryPhase = time * 2.5;
+      rotUv.x += secondaryAmp * sin(secondaryFreq * rotUv.y + secondaryPhase);
+      
+      // 旋转回原始空间
+      vec2 backUv = rotUv - 0.5;
+      uv = vec2(
+        backUv.x * cosDR + backUv.y * sinDR,
+        -backUv.x * sinDR + backUv.y * cosDR
+      );
+      uv += 0.5;
+    }
+    
+    // ==========================================
+    // 2. 底图变换（旋转、偏移、缩放）
+    // ==========================================
     float cosRot = cos(uTexRotation);
     float sinRot = sin(uTexRotation);
     
@@ -74,11 +123,7 @@ const COLOR_FRAGMENT_SHADER = `
     
     uv = (uv - uTexOffset) / uTexScale;
     
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-    } else {
-      gl_FragColor = texture2D(uColorTex, uv);
-    }
+    gl_FragColor = texture2D(uColorTex, uv);
   }
 `;
 
@@ -835,6 +880,11 @@ useEffect(() => {
           uTexOffset: { value: new THREE.Vector2(frameData.textureOffset?.x || 0, frameData.textureOffset?.y || 0) },
           uTexScale: { value: new THREE.Vector2(frameData.textureScale?.x || 1, frameData.textureScale?.y || 1) },
           uTexRotation: { value: frameData.textureRotation || 0 },
+          uDistortEnabled: { value: frameData.distortEnabled ? 1 : 0 },
+          uDistortAmplitude: { value: frameData.distortAmplitude ?? 0.06 },
+          uDistortFrequency: { value: frameData.distortFrequency ?? 5.0 },
+          uDistortSpeed: { value: frameData.distortSpeed ?? 1.2 },
+          uDistortRotation: { value: frameData.distortRotation ?? 0 },
         },
         vertexShader: VAT_VERTEX_SHADER,
         fragmentShader: COLOR_FRAGMENT_SHADER,

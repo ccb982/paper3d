@@ -2405,6 +2405,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         boundRegionId: null,
         boundBaseTexture: null,
         boundResidualTexture: null,
+        textureOffset: { x: 0, y: 0 },
+        textureScale: { x: 1, y: 1 },
+        textureRotation: 0,
+        distortEnabled: false,
+        distortAmplitude: 0.06,
+        distortFrequency: 5.0,
+        distortSpeed: 1.2,
+        distortRotation: 0,
       };
     }
 
@@ -2538,6 +2546,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           textureOffset: frameData.textureOffset || { x: 0, y: 0 },
           textureScale: frameData.textureScale || { x: 1, y: 1 },
           textureRotation: frameData.textureRotation || 0,
+          distortEnabled: frameData.distortEnabled || false,
+          distortAmplitude: frameData.distortAmplitude ?? 0.06,
+          distortFrequency: frameData.distortFrequency ?? 5.0,
+          distortSpeed: frameData.distortSpeed ?? 1.2,
+          distortRotation: frameData.distortRotation ?? 0,
         },
       },
     }));
@@ -2546,7 +2559,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ===== 设置底图纹理变换（偏移、缩放和旋转）=====
-  setFrameTextureTransform: (layerId: string, offset: { x: number; y: number }, scale: { x: number; y: number }, rotation: number = 0) => {
+  setFrameTextureTransform: (layerId: string, offset: { x: number; y: number }, scale: { x: number; y: number }, rotation: number = 0, distortEnabled: boolean = false) => {
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) {
@@ -2561,10 +2574,54 @@ export const useAppStore = create<AppState>((set, get) => ({
           textureOffset: offset,
           textureScale: scale,
           textureRotation: rotation,
+          distortEnabled: distortEnabled,
         },
       },
     }));
-    console.log(`[底图变换] 图层 ${layerId} 偏移=(${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}) 缩放=(${scale.x.toFixed(3)}, ${scale.y.toFixed(3)}) 旋转=${rotation.toFixed(3)}rad`);
+    console.log(`[底图变换] 图层 ${layerId} 偏移=(${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}) 缩放=(${scale.x.toFixed(3)}, ${scale.y.toFixed(3)}) 旋转=${rotation.toFixed(3)}rad 扭曲=${distortEnabled}`);
+  },
+
+  // ===== 切换呼吸式纹理扭曲效果 =====
+  toggleFrameDistort: (layerId: string) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) {
+      console.warn(`[底图变换] 图层 ${layerId} 没有帧数据`);
+      return;
+    }
+    const newEnabled = !frameData.distortEnabled;
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          distortEnabled: newEnabled,
+        },
+      },
+    }));
+    console.log(`[底图变换] 图层 ${layerId} 呼吸扭曲效果 ${newEnabled ? '启用' : '禁用'}`);
+  },
+
+  // ===== 设置呼吸式扭曲参数 =====
+  setFrameDistortParams: (layerId: string, params: { amplitude?: number; frequency?: number; speed?: number; rotation?: number }) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) {
+      console.warn(`[底图变换] 图层 ${layerId} 没有帧数据`);
+      return;
+    }
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          distortAmplitude: params.amplitude ?? frameData.distortAmplitude,
+          distortFrequency: params.frequency ?? frameData.distortFrequency,
+          distortSpeed: params.speed ?? frameData.distortSpeed,
+          distortRotation: params.rotation ?? frameData.distortRotation,
+        },
+      },
+    }));
   },
 
 }));

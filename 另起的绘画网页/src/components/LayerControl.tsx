@@ -466,6 +466,108 @@ export function LayerControl() {
                         style={{ width: '100%', marginTop: '2px' }}
                       />
                     </div>
+                    {/* 呼吸式扭曲效果开关 */}
+                    <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px dashed #e0e0e0' }}>
+                      <button
+                        onClick={() => {
+                          const { toggleFrameDistort } = useAppStore.getState();
+                          toggleFrameDistort(layer.id);
+                        }}
+                        style={{
+                          width: '100%',
+                          fontSize: '11px',
+                          padding: '3px 6px',
+                          border: 'none',
+                          borderRadius: '3px',
+                          cursor: 'pointer',
+                          backgroundColor: frame.distortEnabled ? '#52c41a' : '#d9d9d9',
+                          color: frame.distortEnabled ? '#fff' : '#666',
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        {frame.distortEnabled ? '💨 呼吸效果：开启' : '💨 呼吸效果：关闭'}
+                      </button>
+                      {frame.distortEnabled && (
+                        <div style={{ marginTop: '4px', paddingLeft: '4px' }}>
+                          {/* 幅度 */}
+                          <div style={{ marginBottom: '3px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>幅度</span>
+                              <span style={{ color: '#999' }}>{(frame.distortAmplitude ?? 0.06).toFixed(3)}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="0.2"
+                              step="0.005"
+                              value={frame.distortAmplitude ?? 0.06}
+                              onChange={(e) => {
+                                const { setFrameDistortParams } = useAppStore.getState();
+                                setFrameDistortParams(layer.id, { amplitude: parseFloat(e.target.value) });
+                              }}
+                              style={{ width: '100%', marginTop: '2px' }}
+                            />
+                          </div>
+                          {/* 频率 */}
+                          <div style={{ marginBottom: '3px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>频率</span>
+                              <span style={{ color: '#999' }}>{(frame.distortFrequency ?? 5.0).toFixed(1)}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="1"
+                              max="20"
+                              step="0.5"
+                              value={frame.distortFrequency ?? 5.0}
+                              onChange={(e) => {
+                                const { setFrameDistortParams } = useAppStore.getState();
+                                setFrameDistortParams(layer.id, { frequency: parseFloat(e.target.value) });
+                              }}
+                              style={{ width: '100%', marginTop: '2px' }}
+                            />
+                          </div>
+                          {/* 速度 */}
+                          <div style={{ marginBottom: '3px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>速度</span>
+                              <span style={{ color: '#999' }}>{(frame.distortSpeed ?? 1.2).toFixed(2)}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="5"
+                              step="0.1"
+                              value={frame.distortSpeed ?? 1.2}
+                              onChange={(e) => {
+                                const { setFrameDistortParams } = useAppStore.getState();
+                                setFrameDistortParams(layer.id, { speed: parseFloat(e.target.value) });
+                              }}
+                              style={{ width: '100%', marginTop: '2px' }}
+                            />
+                          </div>
+                          {/* 扭曲方向 */}
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>扭曲方向</span>
+                              <span style={{ color: '#999' }}>{((frame.distortRotation ?? 0) * 180 / Math.PI).toFixed(0)}°</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="-3.14"
+                              max="3.14"
+                              step="0.05"
+                              value={frame.distortRotation ?? 0}
+                              onChange={(e) => {
+                                const { setFrameDistortParams } = useAppStore.getState();
+                                setFrameDistortParams(layer.id, { rotation: parseFloat(e.target.value) });
+                              }}
+                              style={{ width: '100%', marginTop: '2px' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

@@ -162,4 +162,9 @@ export interface FrameData {
   textureOffset: { x: number; y: number };   // 纹理偏移（UV空间，0~1）
   textureScale: { x: number; y: number };    // 纹理缩放（1=原始大小）
   textureRotation: number;                   // 纹理旋转（弧度，0=不旋转）
+  distortEnabled: boolean;                   // 是否启用呼吸式纹理扭曲效果
+  distortAmplitude: number;                  // 扭曲幅度（默认0.06）
+  distortFrequency: number;                  // 扭曲频率（默认5.0）
+  distortSpeed: number;                      // 扭曲速度（默认1.2）
+  distortRotation: number;                   // 扭曲方向旋转（弧度，0=水平）
 }
