@@ -465,8 +465,10 @@ export function MainCanvas() {
               const stencilOn = mat.stencilTest === true;
               const ro = child.renderOrder;
               const hasTimeUni = !!(mat.uniforms && mat.uniforms.uTime);
-              if (frameCounter % 30 === 0) {
-                meshInfo += ` [M${ro}${stencilOn?'+stencil':''}${hasTimeUni?'+vat':''}]`;
+              const showDetail = frameCounter < 10 || frameCounter % 60 === 0;
+              if (showDetail) {
+                const hasColorTex = !!(mat.uniforms && mat.uniforms.uColorTex);
+                meshInfo += ` [M${ro}${stencilOn?'+stencil':''}${hasTimeUni?'+vat':''}${hasColorTex?'+tex':''}]`;
               }
             } else if (child instanceof THREE.LineLoop) {
               lineCount++;
@@ -486,7 +488,7 @@ export function MainCanvas() {
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
         
-        if (false && frameCounter % 30 === 0) {
+        if (frameCounter % 120 === 0) {
           const children = group?.children?.length ?? 0;
           console.log(
             `[DEBUG渲染] 帧#${frameCounter} ` +
@@ -541,6 +543,8 @@ useEffect(() => {
   const regionAnnotationsForLayer = regionAnnotations.filter(a => a.layerId === activeLayerId);
   
   let meshCount = 0, texCount = 0;
+
+  console.log(`[VAT网格构建] 图层="${activeLayerId}" 实体数=${entities.length} 帧数据=${!!frameDataMap[activeLayerId]} boundRegionId=${frameDataMap[activeLayerId]?.boundRegionId}`);
 
   for (const entity of entities) {
     try {
@@ -712,6 +716,12 @@ useEffect(() => {
     const boundTex = frameData?.boundRegionId === entity.id ? frameData.boundBaseTexture : null;
     let colorMesh: THREE.Mesh | null = null;
     if (boundTex) {
+      // 统计 boundTex 中 alpha>0 的像素数
+      let validPx = 0;
+      const bd = boundTex.data;
+      for (let i = 3; i < bd.length; i += 4) { if (bd[i] > 0) validPx++; }
+      console.log(`[VAT颜色网格] 区域#${entity.id} 绑定纹理 ${boundTex.width}x${boundTex.height}, 有效像素=${validPx}`);
+
       // 将 ImageData 转换为 Three.js DataTexture
       const colorTexture = new THREE.DataTexture(
         new Uint8ClampedArray(boundTex.data),
@@ -721,6 +731,7 @@ useEffect(() => {
         THREE.UnsignedByteType
       );
       colorTexture.needsUpdate = true;
+      colorTexture.flipY = false;  // ImageData V-down 坐标系，不翻转
       colorTexture.minFilter = THREE.LinearFilter;
       colorTexture.magFilter = THREE.LinearFilter;
       colorTexture.wrapS = THREE.ClampToEdgeWrapping;
@@ -793,8 +804,11 @@ useEffect(() => {
       for (const line of borderLines) group.add(line);
     }
   } catch (e: any) {
+    console.warn(`[VAT网格构建] 区域#${entity.id} 构建异常:`, e);
   }
   }
+
+  console.log(`[VAT网格构建] 完成：创建 ${meshCount} 个填充网格, ${texCount} 个纹理网格, rootGroup子节点=${group.children.length}`);
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL, frameDataMap]);
 
   const [isPanning, setIsPanning] = useState(false);
