@@ -373,6 +373,7 @@ export function MainCanvas() {
     showRegionBorderWebGL,
     showRegionBorder2D,
     frameDataMap,
+    bfsResolution,
   } = useAppStore();
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
@@ -1129,7 +1130,7 @@ useEffect(() => {
             const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
             if (currentLayerShapes.length > 0) {
               const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-              debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, 1000, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+              debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
             }
           } else {
             debugRegionsCache.current = null;
@@ -1173,7 +1174,7 @@ useEffect(() => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor, colorExtractMode, clearColorExtractPoints, setColorExtractMode, shapes, activeLayerId, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold]);
+  }, [tempPoints, pointAnnotationEditor, regionAnnotationEditor, colorExtractMode, clearColorExtractPoints, setColorExtractMode, shapes, activeLayerId, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold, bfsResolution]);
 
   // ========== 形状或图层变化时更新调试缓存 ==========
   useEffect(() => {
@@ -1181,10 +1182,10 @@ useEffect(() => {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
         const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-        debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, 1000, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+        debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
       }
     }
-  }, [showDebugRegions, shapes, activeLayerId]);
+  }, [showDebugRegions, shapes, activeLayerId, bfsResolution]);
 
   // ========== 切换工具时清理临时图形 ==========
   const prevToolRef = useRef(currentTool);
@@ -1304,7 +1305,7 @@ useEffect(() => {
     // 获取当前图层的所有图形（排除正在绘制的临时图形）
     const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
     
-    const regionId = computeRegionIdAtPoint({ x: cx, y: cy }, currentLayerShapes, worldBounds, 1000);
+    const regionId = computeRegionIdAtPoint({ x: cx, y: cy }, currentLayerShapes, worldBounds, bfsResolution);
     if (regionId === null) {
       console.log('[颜色提取] 无法定位到有效区域');
       return null;

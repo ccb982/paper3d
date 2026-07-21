@@ -1551,7 +1551,7 @@ export function compressLayerColors(layerId: string): CompressionResultV2 | null
   if (dashShapes.length === 0) { console.warn('[颜色压缩] 没有虚线图形'); return null; }
 
   const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-  const regions = computeRegionsExact(dashShapes, worldBounds, 1000);
+  const regions = computeRegionsExact(dashShapes, worldBounds, state.bfsResolution);
   if (regions.length === 0) { console.warn('[颜色压缩] 没有检测到闭合区域'); return null; }
 
   const buffer = state.paintBuffers[layerId];

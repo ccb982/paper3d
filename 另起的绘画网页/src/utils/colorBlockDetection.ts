@@ -11,7 +11,8 @@ import { computeRegionsExact, computeGridRegions } from './regionDetectionExact'
 export function detectColorBlocks(
   shapes: Shape[],
   layerId: string,
-  startId: number
+  startId: number,
+  resolution: number = 1000
 ): ColorBlock[] {
   if (shapes.length === 0) return [];
 
@@ -37,7 +38,7 @@ export function detectColorBlocks(
   // 为每种颜色计算封闭区域
   for (const [color, groupShapes] of colorGroups.entries()) {
     // 对该颜色组的所有形状计算封闭区域多边形
-    const regions = computeRegionsExact(groupShapes, worldBounds, 1000);
+    const regions = computeRegionsExact(groupShapes, worldBounds, resolution);
     
     // 为每个区域创建一个色块
     for (const polygon of regions) {

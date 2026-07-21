@@ -172,6 +172,10 @@ interface AppState {
   lineWidth: number;
   setLineWidth: (width: number) => void;
 
+  // BFS 光栅化分辨率（越大越精细，但越慢；默认1000，范围200~3000）
+  bfsResolution: number;
+  setBfsResolution: (resolution: number) => void;
+
   // 点注释
   pointAnnotations: PointAnnotation[];
   addPointAnnotation: (annotation: Omit<PointAnnotation, 'id' | 'createdAt' | 'updatedAt'>) => void;
@@ -823,6 +827,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   lineWidth: 2,
   setLineWidth: (width) => set({ lineWidth: Math.max(0, Math.min(5, Math.round(width * 10) / 10)) }),
 
+  // BFS 光栅化分辨率（越大越精细，但越慢；默认800，范围200~3000）
+  bfsResolution: 800,
+  setBfsResolution: (resolution) => set({ bfsResolution: Math.max(200, Math.min(3000, Math.round(resolution))) }),
+
   // 上色画笔大小（世界坐标单位）
   paintBrushSize: 0.01,
   setPaintBrushSize: (size) => set({ paintBrushSize: Math.max(0.002, Math.min(0.2, Math.round(size * 1000) / 1000)) }),
@@ -929,7 +937,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const shapesInLayer = state.shapes.filter(s => s.layerId === layerId);
     // 调用色块检测函数
-    const newBlocks = detectColorBlocks(shapesInLayer, layerId, state.nextColorBlockId);
+    const newBlocks = detectColorBlocks(shapesInLayer, layerId, state.nextColorBlockId, state.bfsResolution);
     
     // 保留其他图层的色块不变
     const otherBlocks = state.colorBlocks.filter(b => b.layerId !== layerId);
@@ -1009,9 +1017,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       yMax: 1,
     };
 
-    const gridData = computeGridRegions(allShapesInLayer, worldBounds, 1000, '#ffaa00');  // 排除虚线
+    const gridData = computeGridRegions(allShapesInLayer, worldBounds, state.bfsResolution, '#ffaa00');  // 排除虚线
     const scanlineCache = computeScanlineIntervals(gridData);
-    const regions = computeRegionsExact(allShapesInLayer, worldBounds, 1000, '#ffaa00');  // 排除虚线
+    const regions = computeRegionsExact(allShapesInLayer, worldBounds, state.bfsResolution, '#ffaa00');  // 排除虚线
     
     // 区域重计算后，仅在需要时清空该图层的画笔缓冲区和区域像素记录
     // 默认不清空（用于撤销/重做后的重新计算），仅在添加/删除形状时手动调用清空
@@ -1675,7 +1683,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     };
     
     // 使用正式算法 computeRegionsExact
-    const regions = computeRegionsExact(state.shapes, worldBounds, 1000);
+    const regions = computeRegionsExact(state.shapes, worldBounds, state.bfsResolution);
 
     // 构建区域环信息（标注内环/外环）
     const regionRingsInfo = regions.map((region, regionIdx) => {

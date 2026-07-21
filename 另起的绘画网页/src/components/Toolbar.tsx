@@ -36,6 +36,8 @@ export function Toolbar() {
     setSnapEnabled,
     lineWidth,
     setLineWidth,
+    bfsResolution,
+    setBfsResolution,
     undo,
     saveToStorage,
     loadFromStorage,
@@ -212,7 +214,6 @@ export function Toolbar() {
                 onClick={() => {
                   exitColorExtractMode();
                   setCurrentTool(tool.type);
-                  setShowShapeMenu(false);
                 }}
                 title={tool.label}
                 style={{
@@ -804,6 +805,33 @@ export function Toolbar() {
           }}
         />
         <span style={{ fontSize: '10px', color: '#666' }}>{lineWidth === 0 ? '无' : lineWidth + 'px'}</span>
+      </div>
+
+      {/* BFS 光栅化分辨率 */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '2px',
+          padding: '4px 0',
+        }}
+      >
+        <span style={{ fontSize: '9px', color: '#999' }}>BFS精度</span>
+        <input
+          type="range"
+          min="200"
+          max="3000"
+          step="100"
+          value={bfsResolution}
+          onChange={(e) => setBfsResolution(parseInt(e.target.value))}
+          style={{
+            width: '32px',
+            height: '6px',
+            cursor: 'pointer',
+          }}
+        />
+        <span style={{ fontSize: '9px', color: '#666' }}>{bfsResolution}</span>
       </div>
 
       {/* 颜色选择器 */}
