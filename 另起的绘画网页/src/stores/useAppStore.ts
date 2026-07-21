@@ -2170,8 +2170,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   reclusterFrameFromScratch: (frameId) => {
-    get().clearAllColorsInFrame(frameId);
+    const state = get();
+    const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
+    if (!frame) return;
+
+    // 备份旧颜色 ID（用于提取成功后清理）
+    const oldColorIds = new Set<number>();
+    if (frame.regionIdTex) {
+      for (const id of frame.regionIdTex) {
+        if (id !== 0) oldColorIds.add(id);
+      }
+    }
+
+    // 先尝试提取（不提前清空，失败时保留原数据）
     get().extractAndApplyColorsToFrame(frameId);
+
+    // 检查提取是否成功
+    const updatedFrame = get().skillGroupEditor.frames.find(f => f.id === frameId);
+    const hasValidPixels = updatedFrame?.regionIdTex?.some(v => v !== 0) ?? false;
+
+    if (hasValidPixels) {
+      // 提取成功：清理旧颜色引用
+      for (const id of oldColorIds) {
+        get().decrementColorRef(id, frameId);
+      }
+      get().pruneUnusedColors();
+      get().sortPaletteByArea();
+    } else {
+      console.warn('[重新聚类] 提取失败，保留原有数据');
+    }
   },
 
   deleteColorFromFrame: (frameId, colorId) => {
