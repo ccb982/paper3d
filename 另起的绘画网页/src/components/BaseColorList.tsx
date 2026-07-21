@@ -7,13 +7,14 @@ interface BaseColorListProps {
   pickingId: number | null;
   onSelect: (id: number) => void;
   onUpdate: (id: number, hsl: { h: number; s: number; l: number }) => void;
+  onDragEnd: () => void;
   onRecluster: () => void;
   onPickColor: (id: number) => void;
 }
 
 const PAGE_SIZE = 100;
 
-const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onUpdate, onRecluster, onPickColor }: BaseColorListProps) => {
+const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onUpdate, onDragEnd, onRecluster, onPickColor }: BaseColorListProps) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -93,7 +94,7 @@ const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onU
             isExpanded={expandedId === color.id}
             onSelect={onSelect}
             onUpdate={onUpdate}
-            onRecluster={onRecluster}
+            onDragEnd={onDragEnd}
             onPickColor={onPickColor}
             onToggleExpand={handleToggleExpand}
           />

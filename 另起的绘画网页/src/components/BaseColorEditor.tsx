@@ -24,10 +24,6 @@ import { packMultiFrameToBinary } from '../utils/multiFrameExport';
 import { compressToGzip } from '../utils/binaryCompression';
 import { refineResidualsAndColors } from '../core/refineResiduals';
 
-const MERGE_HUE_THRESHOLD = 0.02;
-const MERGE_SAT_THRESHOLD = 0.05;
-const MERGE_LIGHT_THRESHOLD = 0.05;
-
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
   const result: Point[] = [];
@@ -420,172 +416,6 @@ function extractBaseByClick(
   };
 }
 
-// ============ 颜色合并与纹理重建函数 ============
-function mergeColorsWithGlobal(
-  extractedColors: Array<{ h: number; s: number; l: number }>,
-  extractedRegionIdTex: Uint8Array,
-  _extractedDeltaTex: Uint8Array,
-  globalColors: SharedBaseColor[],
-  nextId: number,
-  bbox: { x: number; y: number; w: number; h: number },
-  bgImageData: ImageData,
-  textureSize: number,
-  frameId: string,
-  blockFlags: number = 0,
-  hueThreshold: number = 0.3,
-  satThreshold: number = 0.5,
-  lightThreshold: number = 0.5
-): {
-  newGlobalColors: SharedBaseColor[];
-  newNextId: number;
-  newRegionIdTex: Uint8Array;
-  newDeltaTex: Uint8Array;
-  blockFlags: number;
-} {
-  const localToGlobalId = new Map<number, number>();
-  let newColors: SharedBaseColor[];
-  let currentNextId = nextId;
-
-  if (globalColors.length === 0) {
-    newColors = extractedColors.map((c, idx) => ({ 
-      id: currentNextId + idx, 
-      ...c,
-      frameIds: [frameId],
-      area: 0
-    }));
-    currentNextId += extractedColors.length;
-  } else {
-    newColors = globalColors.map(c => ({ ...c, frameIds: [...c.frameIds] }));
-  }
-
-  for (let i = 0; i < extractedColors.length; i++) {
-    const ec = extractedColors[i];
-    let matchedId = -1;
-    for (const gc of newColors) {
-      const dh = Math.min(Math.abs(ec.h - gc.h), 1 - Math.abs(ec.h - gc.h));
-      const ds = Math.abs(ec.s - gc.s);
-      const dl = Math.abs(ec.l - gc.l);
-      if (dh < hueThreshold && ds < satThreshold && dl < lightThreshold) {
-        matchedId = gc.id;
-        break;
-      }
-    }
-    if (matchedId === -1) {
-      matchedId = currentNextId++;
-      newColors.push({ id: matchedId, h: ec.h, s: ec.s, l: ec.l, frameIds: [frameId], area: 0 });
-    } else {
-      const matchedColor = newColors.find(c => c.id === matchedId);
-      if (matchedColor && !matchedColor.frameIds.includes(frameId)) {
-        matchedColor.frameIds.push(frameId);
-      }
-    }
-    localToGlobalId.set(i, matchedId);
-  }
-
-  const totalPixels = bbox.w * bbox.h;
-  const newRegionIdTex = new Uint8Array(totalPixels);
-  for (let idx = 0; idx < totalPixels; idx++) {
-    const localIdx = extractedRegionIdTex[idx];
-    if (localIdx > 0) {
-      const mappedId = localToGlobalId.get(localIdx - 1);
-      newRegionIdTex[idx] = mappedId !== undefined ? mappedId : 0;
-    }
-  }
-
-  const colorMapById = new Map<number, typeof globalColors[0]>();
-  for (const c of newColors) {
-    colorMapById.set(c.id, c);
-  }
-
-  const newDeltaTex = new Uint8Array(totalPixels * 3);
-  const { w, h, x: offsetX, y: offsetY } = bbox;
-  const normalizeHueDelta = (delta: number) => {
-    if (delta > 0.5) return delta - 1.0;
-    if (delta < -0.5) return delta + 1.0;
-    return delta;
-  };
-
-  for (let py = 0; py < h; py++) {
-    for (let px = 0; px < w; px++) {
-      const idx = py * w + px;
-      const globalId = newRegionIdTex[idx];
-      if (globalId === 0) continue;
-      const base = colorMapById.get(globalId);
-      if (!base) continue;
-      const globalX = offsetX + px;
-      const globalY = offsetY + py;
-      const pixelIdx4 = (globalY * textureSize + globalX) * 4;
-      const r = bgImageData.data[pixelIdx4];
-      const g = bgImageData.data[pixelIdx4 + 1];
-      const b = bgImageData.data[pixelIdx4 + 2];
-      const hsl = rgbToHsl(r, g, b);
-      const dH = normalizeHueDelta(hsl.h - base.h);
-      const dS = hsl.s - base.s;
-      const dL = hsl.l - base.l;
-
-      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-      const range = getRangeForBlock(blockFlags, blockIdx);
-
-      newDeltaTex[idx * 3] = quantizeH(dH, range);
-      newDeltaTex[idx * 3 + 1] = quantizeS(dS, range);
-      newDeltaTex[idx * 3 + 2] = quantizeL(dL, range);
-    }
-  }
-
-  return {
-    newGlobalColors: newColors,
-    newNextId: currentNextId,
-    newRegionIdTex,
-    newDeltaTex,
-    blockFlags,
-  };
-}
-
-function buildBaseTextureFromRegionId(
-  globalColors: Array<{ id: number; h: number; s: number; l: number }>,
-  regionIdTex: Uint8Array,
-  bbox: { x: number; y: number; w: number; h: number },
-  textureSize: number
-): ImageData {
-  const colorMapById = new Map<number, typeof globalColors[0]>();
-  for (const c of globalColors) {
-    colorMapById.set(c.id, c);
-  }
-
-  const uniqueIds = new Set<number>();
-  for (let i = 0; i < regionIdTex.length; i++) {
-    if (regionIdTex[i] > 0) uniqueIds.add(regionIdTex[i]);
-  }
-  const globalColorIds = globalColors.map(c => c.id);
-
-  const { w, h, x: offsetX, y: offsetY } = bbox;
-  const canvas = document.createElement('canvas');
-  canvas.width = textureSize;
-  canvas.height = textureSize;
-  const ctx = canvas.getContext('2d')!;
-  const imageData = ctx.createImageData(textureSize, textureSize);
-  const data = imageData.data;
-  data.fill(0);
-  for (let py = 0; py < h; py++) {
-    for (let px = 0; px < w; px++) {
-      const idx = py * w + px;
-      const globalId = regionIdTex[idx];
-      if (globalId === 0) continue;
-      const color = colorMapById.get(globalId);
-      if (!color) continue;
-      const rgb = hslToRgb(color.h, color.s, color.l);
-      const globalX = offsetX + px;
-      const globalY = offsetY + py;
-      const pIdx = (globalY * textureSize + globalX) * 4;
-      data[pIdx] = rgb.r;
-      data[pIdx + 1] = rgb.g;
-      data[pIdx + 2] = rgb.b;
-      data[pIdx + 3] = 255;
-    }
-  }
-  return imageData;
-}
-
 function buildBaseTextureFromLocalColors(
   colors: Array<{ h: number; s: number; l: number }>,
   regionIdTex: Uint8Array,
@@ -634,14 +464,16 @@ export const BaseColorEditor: React.FC = () => {
     removeSkillFrame,
     switchSkillFrame,
     updateSkillFrame,
-    setSharedBaseColors,
     setGlobalBbox,
     syncGlobalBboxFromCurrentFrame,
-    setNextColorId,
-    updateColorInGlobal,
+    updateColorValue,
+    addColorToPalette,
+    syncFrameTextures,
+    sortPaletteByArea,
+    reclusterFrameFromScratch,
   } = useAppStore();
 
-  const { frames, sharedBaseColors, activeFrameId, globalBbox, nextColorId } = skillGroupEditor;
+  const { frames, sharedBaseColors, activeFrameId, globalBbox } = skillGroupEditor;
   const currentFrame = frames.find((f: typeof frames[0]) => f.id === activeFrameId) || null;
 
   const bgImageData = currentFrame?.bgImageData || null;
@@ -675,11 +507,6 @@ export const BaseColorEditor: React.FC = () => {
   const setBbox = useCallback((val: { x: number; y: number; w: number; h: number } | null) => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { bbox: val });
   }, [activeFrameId, updateSkillFrame]);
-
-  const setBaseColors = useCallback((val: SharedBaseColor[] | ((prev: SharedBaseColor[]) => SharedBaseColor[])) => {
-    const newVal = typeof val === 'function' ? val(sharedBaseColors) : val;
-    setSharedBaseColors(newVal);
-  }, [sharedBaseColors, setSharedBaseColors]);
 
   const setRegionIdTex = useCallback((val: Uint8Array) => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { regionIdTex: val });
@@ -1090,9 +917,17 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(prevState.baseTexture);
     setResidualTexture(prevState.residualTexture);
     setBbox(prevState.bbox);
-    setBaseColors(prevState.baseColors);
+    // 逐颜色恢复历史值，不直接覆盖全局调色板
+    const currentBaseColors: SharedBaseColor[] = useAppStore.getState().sharedBaseColors;
+    const currentColorMap = new Map<number, SharedBaseColor>(currentBaseColors.map((c: SharedBaseColor) => [c.id, c]));
+    for (const oldColor of prevState.baseColors) {
+      const cur = currentColorMap.get(oldColor.id);
+      if (!cur || cur.h !== oldColor.h || cur.s !== oldColor.s || cur.l !== oldColor.l) {
+        updateColorValue(oldColor.id, { h: oldColor.h, s: oldColor.s, l: oldColor.l });
+      }
+    }
     setHistoryIndex(historyIndex - 1);
-  }, [history, historyIndex]);
+  }, [history, historyIndex, updateColorValue]);
 
   const redo = useCallback(() => {
     if (historyIndex >= history.length - 1) return;
@@ -1101,9 +936,17 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(nextState.baseTexture);
     setResidualTexture(nextState.residualTexture);
     setBbox(nextState.bbox);
-    setBaseColors(nextState.baseColors);
+    // 逐颜色恢复历史值，不直接覆盖全局调色板
+    const currentBaseColors: SharedBaseColor[] = useAppStore.getState().sharedBaseColors;
+    const currentColorMap = new Map<number, SharedBaseColor>(currentBaseColors.map((c: SharedBaseColor) => [c.id, c]));
+    for (const oldColor of nextState.baseColors) {
+      const cur = currentColorMap.get(oldColor.id);
+      if (!cur || cur.h !== oldColor.h || cur.s !== oldColor.s || cur.l !== oldColor.l) {
+        updateColorValue(oldColor.id, { h: oldColor.h, s: oldColor.s, l: oldColor.l });
+      }
+    }
     setHistoryIndex(historyIndex + 1);
-  }, [history, historyIndex]);
+  }, [history, historyIndex, updateColorValue]);
 
   // 键盘快捷键
   useEffect(() => {
@@ -1221,66 +1064,38 @@ export const BaseColorEditor: React.FC = () => {
   }, [bgImageData, dashedPolygons, drawingPolygon]);
 
   const autoMergeToGlobal = useCallback((frameId: string) => {
-    const state = useAppStore.getState();
-    const { frames, sharedBaseColors, nextColorId, globalBbox } = state.skillGroupEditor;
-    const { recalculateAllAreas, mergeAndSortColors } = state;
-    const frame = frames.find(f => f.id === frameId);
+    const store = useAppStore.getState();
+    const frame = store.skillGroupEditor.frames.find(f => f.id === frameId);
     if (!frame) return;
-
     if (!frame.baseColorValues || frame.baseColorValues.length === 0) return;
-    if (!frame.bgImageData) return;
+    if (!frame.regionIdTex || frame.regionIdTex.length === 0) return;
 
-    const effectiveBbox = globalBbox || frame.bbox;
-    if (!effectiveBbox) return;
+    const localColors = frame.baseColorValues;
 
-    const { newGlobalColors, newNextId, newRegionIdTex, newDeltaTex, blockFlags: mergedBlockFlags } = mergeColorsWithGlobal(
-      frame.baseColorValues,
-      frame.regionIdTex,
-      new Uint8Array(0),
-      sharedBaseColors,
-      nextColorId,
-      effectiveBbox,
-      frame.bgImageData,
-      TEX_SIZE,
-      frameId,
-      frame.blockFlags ?? 0,
-      MERGE_HUE_THRESHOLD,
-      MERGE_SAT_THRESHOLD,
-      MERGE_LIGHT_THRESHOLD
-    );
-
-    const totalPixels = effectiveBbox.w * effectiveBbox.h;
-    const newDeltaPacked = new Uint16Array(totalPixels);
-    for (let i = 0; i < totalPixels; i++) {
-      const h = newDeltaTex[i * 3];
-      const s = newDeltaTex[i * 3 + 1];
-      const l = newDeltaTex[i * 3 + 2];
-      newDeltaPacked[i] = packRGB565(s, h, l);
+    // 映射本地颜色索引 (1-based) → 全局颜色 ID
+    const localToGlobal = new Map<number, number>();
+    for (let i = 0; i < localColors.length; i++) {
+      const globalId = store.addColorToPalette(localColors[i], frameId);
+      localToGlobal.set(i + 1, globalId);
     }
 
-    setSharedBaseColors(newGlobalColors);
-    setNextColorId(newNextId);
-
-    const newBaseTexture = buildBaseTextureFromRegionId(
-      newGlobalColors,
-      newRegionIdTex,
-      effectiveBbox,
-      TEX_SIZE
-    );
-    const newResidualTexture = buildResidualTextureFromPacked(newDeltaPacked, newRegionIdTex, effectiveBbox, TEX_SIZE);
+    // 替换 regionIdTex 中的本地索引为全局 ID
+    const newRegionIdTex = new Uint8Array(frame.regionIdTex.length);
+    for (let i = 0; i < frame.regionIdTex.length; i++) {
+      const localIdx = frame.regionIdTex[i];
+      newRegionIdTex[i] = localIdx === 0 ? 0 : (localToGlobal.get(localIdx) || 0);
+    }
 
     updateSkillFrame(frameId, {
       regionIdTex: newRegionIdTex,
-      baseTexture: newBaseTexture,
-      residualTexture: newResidualTexture,
-      deltaPacked: newDeltaPacked,
       baseColorValues: [],
-      blockFlags: mergedBlockFlags,
     });
 
-    recalculateAllAreas();
-    mergeAndSortColors();
-  }, [setSharedBaseColors, setNextColorId, updateSkillFrame]);
+    syncFrameTextures(frameId);
+    sortPaletteByArea();
+
+    console.log(`[自动合并] 帧 ${frameId}: ${localColors.length} 个本地颜色 → 全局调色板`);
+  }, [updateSkillFrame, syncFrameTextures, sortPaletteByArea, addColorToPalette]);
 
   const handleExtractClick = useCallback((pixel: { x: number; y: number }) => {
     const state = useAppStore.getState();
@@ -1477,9 +1292,25 @@ export const BaseColorEditor: React.FC = () => {
       if (activeFrameId) {
         updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
       }
-      // 如果 baseColors 被 push 了新颜色，同步回全局
+      // 如果 baseColors 被 push 了新颜色，通过 addColorToPalette 加入全局调色板
       if (baseColorsCopy.length !== prevColorCount) {
-        setSharedBaseColors([...baseColorsCopy]);
+        const oldToNewId = new Map<number, number>();
+        for (let i = prevColorCount; i < baseColorsCopy.length; i++) {
+          const c = baseColorsCopy[i];
+          const globalId = addColorToPalette({ h: c.h, s: c.s, l: c.l }, activeFrameId || '');
+          oldToNewId.set(c.id, globalId);
+        }
+        // 更新 regionIdTexCopy 中的颜色 ID 为新分配的全局 ID
+        for (let i = 0; i < regionIdTexCopy.length; i++) {
+          const oldId = regionIdTexCopy[i];
+          if (oldToNewId.has(oldId)) {
+            regionIdTexCopy[i] = oldToNewId.get(oldId)!;
+          }
+        }
+        // 重新写回更新后的 regionIdTex（因为 ID 可能变了）
+        if (activeFrameId) {
+          updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
+        }
       }
     }
 
@@ -1518,62 +1349,36 @@ export const BaseColorEditor: React.FC = () => {
       });
     }
     setTimeout(() => saveToHistory(), 0);
-  }, [bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges]);
+  }, [bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges, addColorToPalette]);
 
-  // 更新基础色并重新生成纹理
+  // 更新基础色值（仅更新调色板，不重算残差——滑块拖动时性能优化）
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
-    updateColorInGlobal(id, newHSL, activeFrameId);
-
-    const state = useAppStore.getState();
-    const currentFrame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
-    if (currentFrame && currentFrame.bbox) {
-      const newBaseTexture = buildBaseTextureFromRegionId(
-        state.skillGroupEditor.sharedBaseColors,
-        currentFrame.regionIdTex,
-        currentFrame.bbox,
-        TEX_SIZE
-      );
-      updateSkillFrame(currentFrame.id, { baseTexture: newBaseTexture });
-      
-      recalculateResidual();
-    }
-  }, [updateSkillFrame, updateColorInGlobal, recalculateResidual]);
+    updateColorValue(id, newHSL);
+  }, [updateColorValue]);
 
   const handlePickColor = useCallback((id: number) => {
     setPickingId(prev => prev === id ? null : id);
   }, []);
 
   const handleRecluster = useCallback(() => {
-    const { reclusterCurrentFrame } = useAppStore.getState();
-    reclusterCurrentFrame();
+    if (!activeFrameId) return;
+    
+    reclusterFrameFromScratch(activeFrameId);
 
-    const state = useAppStore.getState();
-    const currentFrame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
-    
-    if (currentFrame && currentFrame.bbox && currentFrame.regionIdTex) {
-      const newBaseTexture = buildBaseTextureFromRegionId(
-        state.skillGroupEditor.sharedBaseColors,
-        currentFrame.regionIdTex,
-        currentFrame.bbox,
-        TEX_SIZE
-      );
-      
-      updateSkillFrame(state.skillGroupEditor.activeFrameId!, {
-        baseTexture: newBaseTexture,
-      });
-      
-      setColorPixelsMap(buildColorPixelsMap(currentFrame.regionIdTex));
-    }
-    
     setSelectedBaseColorId(null);
     setResidualRanges(null);
     setBlockFlags(0);
-    
+
     setTimeout(() => {
+      const state = useAppStore.getState();
+      const currentFrame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
+      if (currentFrame && currentFrame.regionIdTex) {
+        setColorPixelsMap(buildColorPixelsMap(currentFrame.regionIdTex));
+      }
       recalculateResidual();
       saveToHistory();
     }, 0);
-  }, [saveToHistory, buildColorPixelsMap, updateSkillFrame, recalculateResidual]);
+  }, [activeFrameId, reclusterFrameFromScratch, recalculateResidual, saveToHistory, buildColorPixelsMap, setColorPixelsMap]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -2779,6 +2584,7 @@ export const BaseColorEditor: React.FC = () => {
             pickingId={pickingId}
             onSelect={handleSelectBaseColor}
             onUpdate={updateBaseColor}
+            onDragEnd={recalculateResidual}
             onRecluster={handleRecluster}
             onPickColor={handlePickColor}
           />

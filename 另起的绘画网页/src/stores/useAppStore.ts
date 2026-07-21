@@ -5,10 +5,9 @@ import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisib
 import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, type ScanlineCache } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
-import { isPointInPolygonWithHoles } from '../utils/regionDetection';
+import { isPointInPolygonWithHoles, isPointInPolygon } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
-import { hslToRgb, computeBBoxAllRings, rasterizeRegionMaskLocal, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, rgbToHsl, getAdaptiveBlockIndex, getRangeForBlock } from '../utils/colorCompressor';
-import { packRGB565 } from '../core/ftxCore';
+import { hslToRgb, clusterAndGenerateTexturesV2 } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
 
 export interface SharedBaseColor {
@@ -19,6 +18,20 @@ export interface SharedBaseColor {
   frameIds: string[];
   area: number;
   tempFlag?: boolean;
+}
+
+interface PaletteColor {
+  h: number;
+  s: number;
+  l: number;
+  frameIds: Set<string>;
+}
+
+interface UnifiedFrameRef {
+  id: string;
+  type: 'skillGroup' | 'frameData';
+  regionIdTex: Uint8Array | null;
+  bbox: { x: number; y: number; w: number; h: number } | null;
 }
 
 interface AppState {
@@ -354,6 +367,36 @@ interface AppState {
     globalBbox: { x: number; y: number; w: number; h: number } | null;
     nextColorId: number;
   };
+
+  // ===== 新架构：全局调色板（唯一真相源）=====
+  palette: Map<number, PaletteColor>;
+  nextColorId: number;
+  sharedBaseColors: Array<SharedBaseColor>;
+
+  // ===== 新架构核心函数 =====
+  // 第一层：调色板原子操作
+  addColorToPalette: (hsl: { h: number; s: number; l: number }, frameId: string) => number;
+  updateColorValue: (colorId: number, newHsl: { h: number; s: number; l: number }) => void;
+  incrementColorRef: (colorId: number, frameId: string) => void;
+  decrementColorRef: (colorId: number, frameId: string) => void;
+  pruneUnusedColors: () => void;
+  replaceColorReferences: (oldId: number, newId: number) => void;
+
+  // 第二层：帧像素映射
+  extractAndApplyColorsToFrame: (frameId: string) => void;
+  reclusterFrameFromScratch: (frameId: string) => void;
+  deleteColorFromFrame: (frameId: string, colorId: number) => void;
+  clearAllColorsInFrame: (frameId: string) => void;
+
+  // 第三层：统计与渲染
+  getAllFrameRefs: () => UnifiedFrameRef[];
+  sortPaletteByArea: () => void;
+  syncFrameTextures: (frameId: string) => void;
+
+  // 高级工作流
+  mergeSimilarColors: (threshold?: number) => void;
+  resetCurrentFrameColors: (frameId: string) => void;
+
   addSkillFrame: (name?: string) => void;
   removeSkillFrame: (frameId: string) => void;
   switchSkillFrame: (frameId: string) => void;
@@ -1888,6 +1931,575 @@ export const useAppStore = create<AppState>((set, get) => ({
     globalBbox: null,
     nextColorId: 1,
   },
+
+  // ===== 新架构：全局调色板初始状态 =====
+  palette: new Map<number, PaletteColor>(),
+  nextColorId: 1,
+  sharedBaseColors: [],
+
+  // ===== 新架构：核心函数实现 =====
+
+  getAllFrameRefs: () => {
+    const state = get();
+    const refs: UnifiedFrameRef[] = [];
+    // skillGroupEditor.frames
+    for (const frame of state.skillGroupEditor.frames) {
+      refs.push({
+        id: frame.id,
+        type: 'skillGroup' as const,
+        regionIdTex: frame.regionIdTex || null,
+        bbox: frame.bbox || null,
+      });
+    }
+    // frameDataMap (only entries with rawRegionIdTex)
+    for (const [layerId, fd] of Object.entries(state.frameDataMap)) {
+      if (fd.rawRegionIdTex && fd.rawBbox) {
+        refs.push({
+          id: layerId,
+          type: 'frameData' as const,
+          regionIdTex: fd.rawRegionIdTex,
+          bbox: fd.rawBbox,
+        });
+      }
+    }
+    return refs;
+  },
+
+  addColorToPalette: (hsl, frameId) => {
+    const state = get();
+    const palette = state.palette;
+    const thresholdH = 0.02;
+    const thresholdSL = 0.05;
+
+    // 查找相似颜色
+    let foundId: number | null = null;
+    for (const [id, data] of palette) {
+      const dh = Math.min(Math.abs(data.h - hsl.h), 1 - Math.abs(data.h - hsl.h));
+      if (dh < thresholdH && Math.abs(data.s - hsl.s) < thresholdSL && Math.abs(data.l - hsl.l) < thresholdSL) {
+        foundId = id;
+        break;
+      }
+    }
+
+    if (foundId !== null) {
+      get().incrementColorRef(foundId, frameId);
+      return foundId;
+    }
+
+    // 创建新颜色
+    const newId = state.nextColorId;
+    palette.set(newId, {
+      h: hsl.h, s: hsl.s, l: hsl.l,
+      frameIds: new Set<string>([frameId]),
+    });
+    set({ palette: new Map(palette), nextColorId: newId + 1 });
+    // 同步到 skillGroupEditor（向后兼容）
+    get().sortPaletteByArea();
+    return newId;
+  },
+
+  updateColorValue: (colorId, newHsl) => {
+    const state = get();
+    const palette = state.palette;
+    if (!palette.has(colorId)) return;
+    const data = palette.get(colorId)!;
+    data.h = newHsl.h; data.s = newHsl.s; data.l = newHsl.l;
+    palette.set(colorId, data);
+    set({ palette: new Map(palette) });
+    // 刷新所有引用该颜色的帧纹理
+    for (const frameId of data.frameIds) {
+      get().syncFrameTextures(frameId);
+    }
+    get().sortPaletteByArea();
+  },
+
+  incrementColorRef: (colorId, frameId) => {
+    const state = get();
+    const palette = state.palette;
+    if (!palette.has(colorId)) return;
+    const data = palette.get(colorId)!;
+    data.frameIds.add(frameId);
+    palette.set(colorId, data);
+    set({ palette: new Map(palette) });
+    get().sortPaletteByArea();
+  },
+
+  decrementColorRef: (colorId, frameId) => {
+    const state = get();
+    const palette = state.palette;
+    if (!palette.has(colorId)) return;
+    const data = palette.get(colorId)!;
+    data.frameIds.delete(frameId);
+    palette.set(colorId, data);
+    set({ palette: new Map(palette) });
+    get().sortPaletteByArea();
+  },
+
+  pruneUnusedColors: () => {
+    const state = get();
+    const palette = state.palette;
+    let changed = false;
+    for (const [id, data] of palette) {
+      if (data.frameIds.size === 0) {
+        palette.delete(id);
+        changed = true;
+      }
+    }
+    if (changed) {
+      set({ palette: new Map(palette) });
+      get().sortPaletteByArea();
+    }
+  },
+
+  replaceColorReferences: (oldId, newId) => {
+    if (oldId === newId) return;
+    const state = get();
+    const palette = state.palette;
+    if (!palette.has(oldId) || !palette.has(newId)) return;
+
+    const oldData = palette.get(oldId)!;
+    const newData = palette.get(newId)!;
+
+    // 合并 frameIds
+    for (const fid of oldData.frameIds) newData.frameIds.add(fid);
+    oldData.frameIds.clear();
+
+    // 遍历所有帧（skillGroupEditor 和 frameDataMap），替换像素中的 oldId 为 newId
+    const allRefs = get().getAllFrameRefs();
+    let updatedFrames = state.skillGroupEditor.frames;
+    const updatedFrameDataMap = { ...state.frameDataMap };
+
+    for (const ref of allRefs) {
+      if (!ref.regionIdTex || ref.regionIdTex.length === 0) continue;
+      const tex = ref.regionIdTex;
+      let changed = false;
+      for (let i = 0; i < tex.length; i++) {
+        if (tex[i] === oldId) { tex[i] = newId; changed = true; }
+      }
+      if (!changed) continue;
+      
+      if (ref.type === 'skillGroup') {
+        updatedFrames = updatedFrames.map(f => 
+          f.id === ref.id ? { ...f, regionIdTex: tex } : f
+        );
+      } else {
+        updatedFrameDataMap[ref.id] = { ...updatedFrameDataMap[ref.id], rawRegionIdTex: tex };
+      }
+    }
+
+    palette.delete(oldId);
+    set({
+      palette: new Map(palette),
+      skillGroupEditor: { ...state.skillGroupEditor, frames: updatedFrames },
+      frameDataMap: updatedFrameDataMap,
+    });
+
+    // 刷新所有受影响帧的纹理
+    for (const ref of allRefs) {
+      if (ref.type === 'skillGroup') {
+        get().syncFrameTextures(ref.id);
+      }
+    }
+    get().sortPaletteByArea();
+  },
+
+  extractAndApplyColorsToFrame: (frameId) => {
+    const state = get();
+    const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
+    if (!frame || !frame.bgImageData || !frame.bbox) {
+      console.warn(`[提取] 帧 ${frameId} 缺少背景图或 bbox`);
+      return;
+    }
+
+    const bbox = frame.bbox;
+    const mask = new Uint8Array(bbox.w * bbox.h);
+    if (frame.dashedPolygons && frame.dashedPolygons.length > 0) {
+      const poly = frame.dashedPolygons[0];
+      if (poly.length >= 3) {
+        for (let py = 0; py < bbox.h; py++) {
+          for (let px = 0; px < bbox.w; px++) {
+            const wx = (bbox.x + px) / 512;
+            const wy = (bbox.y + py) / 512;
+            if (isPointInPolygon({ x: wx, y: wy }, poly)) {
+              mask[py * bbox.w + px] = 1;
+            }
+          }
+        }
+      }
+    }
+    // 如果没有有效多边形掩码，使用 bbox 内全部像素
+    const hasPolyMask = mask.some(v => v === 1);
+    if (!hasPolyMask) {
+      mask.fill(1);
+    }
+
+    const { baseColors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
+      mask, bbox, frame.bgImageData, 0.025, 512
+    );
+
+    if (baseColors.length === 0) {
+      console.warn(`[提取] 帧 ${frameId} 未提取到颜色`);
+      return;
+    }
+
+    // 将本地颜色映射为全局 ID（通过 addColorToPalette 校验复用）
+    const localToGlobal = new Map<number, number>();
+    for (let i = 0; i < baseColors.length; i++) {
+      const globalId = get().addColorToPalette(baseColors[i], frameId);
+      localToGlobal.set(i + 1, globalId);
+    }
+
+    // 替换 regionIdTex 中的本地索引为全局 ID
+    const newRegionIdTex = regionIdTex
+      ? new Uint8Array(regionIdTex.length)
+      : new Uint8Array(0);
+    if (regionIdTex) {
+      for (let i = 0; i < regionIdTex.length; i++) {
+        const localIdx = regionIdTex[i];
+        newRegionIdTex[i] = localIdx === 0 ? 0 : (localToGlobal.get(localIdx) || 0);
+      }
+    }
+
+    const updatedFrames = state.skillGroupEditor.frames.map(f =>
+      f.id === frameId ? { ...f, regionIdTex: newRegionIdTex, deltaPacked, blockFlags, baseColorValues: [] } : f
+    );
+    set({ skillGroupEditor: { ...state.skillGroupEditor, frames: updatedFrames } });
+
+    get().syncFrameTextures(frameId);
+    get().sortPaletteByArea();
+  },
+
+  reclusterFrameFromScratch: (frameId) => {
+    get().clearAllColorsInFrame(frameId);
+    get().extractAndApplyColorsToFrame(frameId);
+  },
+
+  deleteColorFromFrame: (frameId, colorId) => {
+    const state = get();
+    const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
+    
+    if (frame && frame.regionIdTex && frame.regionIdTex.length > 0) {
+      const tex = frame.regionIdTex;
+      // 统计该帧内各颜色像素数（排除要删除的 colorId）
+      const colorCount = new Map<number, number>();
+      for (const id of tex) {
+        if (id !== 0 && id !== colorId) {
+          colorCount.set(id, (colorCount.get(id) || 0) + 1);
+        }
+      }
+
+      if (colorCount.size === 0) {
+        get().clearAllColorsInFrame(frameId);
+        return;
+      }
+
+      // 找面积最大的颜色作为替换色
+      let replaceId = 0, maxCount = 0;
+      for (const [id, cnt] of colorCount) {
+        if (cnt > maxCount) { maxCount = cnt; replaceId = id; }
+      }
+
+      const newTex = new Uint8Array(tex);
+      for (let i = 0; i < newTex.length; i++) {
+        if (newTex[i] === colorId) newTex[i] = replaceId;
+      }
+
+      const updatedFrames = state.skillGroupEditor.frames.map(f =>
+        f.id === frameId ? { ...f, regionIdTex: newTex } : f
+      );
+      set({ skillGroupEditor: { ...state.skillGroupEditor, frames: updatedFrames } });
+
+      get().decrementColorRef(colorId, frameId);
+      get().pruneUnusedColors();
+      get().syncFrameTextures(frameId);
+      get().sortPaletteByArea();
+      return;
+    }
+
+    // 尝试 frameDataMap
+    const fd = state.frameDataMap[frameId];
+    if (!fd || !fd.rawRegionIdTex || fd.rawRegionIdTex.length === 0) return;
+
+    const tex = fd.rawRegionIdTex;
+    const colorCount = new Map<number, number>();
+    for (const id of tex) {
+      if (id !== 0 && id !== colorId) {
+        colorCount.set(id, (colorCount.get(id) || 0) + 1);
+      }
+    }
+
+    if (colorCount.size === 0) {
+      get().clearAllColorsInFrame(frameId);
+      return;
+    }
+
+    let replaceId = 0, maxCount = 0;
+    for (const [id, cnt] of colorCount) {
+      if (cnt > maxCount) { maxCount = cnt; replaceId = id; }
+    }
+
+    const newTex = new Uint8Array(tex);
+    for (let i = 0; i < newTex.length; i++) {
+      if (newTex[i] === colorId) newTex[i] = replaceId;
+    }
+
+    set({
+      frameDataMap: {
+        ...state.frameDataMap,
+        [frameId]: { ...fd, rawRegionIdTex: newTex },
+      },
+    });
+
+    get().decrementColorRef(colorId, frameId);
+    get().pruneUnusedColors();
+    get().syncFrameTextures(frameId);
+    get().sortPaletteByArea();
+  },
+
+  clearAllColorsInFrame: (frameId) => {
+    const state = get();
+    
+    // 先尝试 skillGroupEditor.frames
+    const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
+    if (frame) {
+      // 收集该帧引用的所有颜色 ID
+      const usedIds = new Set<number>();
+      if (frame.regionIdTex) {
+        for (const id of frame.regionIdTex) {
+          if (id !== 0) usedIds.add(id);
+        }
+      }
+
+      // 清空像素映射
+      const newTex = frame.regionIdTex ? new Uint8Array(frame.regionIdTex.length) : new Uint8Array(0);
+      const updatedFrames = state.skillGroupEditor.frames.map(f =>
+        f.id === frameId ? { ...f, regionIdTex: newTex, baseTexture: null, residualTexture: null } : f
+      );
+      set({ skillGroupEditor: { ...state.skillGroupEditor, frames: updatedFrames } });
+
+      // 解绑引用
+      for (const id of usedIds) {
+        get().decrementColorRef(id, frameId);
+      }
+      get().pruneUnusedColors();
+      get().sortPaletteByArea();
+      return;
+    }
+
+    // 尝试 frameDataMap
+    const fd = state.frameDataMap[frameId];
+    if (!fd) return;
+
+    const usedIds = new Set<number>();
+    if (fd.rawRegionIdTex) {
+      for (const id of fd.rawRegionIdTex) {
+        if (id !== 0) usedIds.add(id);
+      }
+    }
+
+    const newTex = fd.rawRegionIdTex ? new Uint8Array(fd.rawRegionIdTex.length) : new Uint8Array(0);
+    set({
+      frameDataMap: {
+        ...state.frameDataMap,
+        [frameId]: { ...fd, rawRegionIdTex: newTex, baseTexture: null },
+      },
+    });
+
+    for (const id of usedIds) {
+      get().decrementColorRef(id, frameId);
+    }
+    get().pruneUnusedColors();
+    get().sortPaletteByArea();
+  },
+
+  sortPaletteByArea: () => {
+    const state = get();
+    const palette = state.palette;
+    const areaMap = new Map<number, number>();
+    for (const [id] of palette) areaMap.set(id, 0);
+
+    for (const ref of get().getAllFrameRefs()) {
+      if (!ref.regionIdTex || ref.regionIdTex.length === 0) continue;
+      for (const id of ref.regionIdTex) {
+        if (id !== 0) areaMap.set(id, (areaMap.get(id) || 0) + 1);
+      }
+    }
+
+    const sorted = Array.from(palette.entries())
+      .map(([id, data]) => ({
+        id, h: data.h, s: data.s, l: data.l,
+        frameIds: Array.from(data.frameIds),
+        area: areaMap.get(id) || 0,
+      }))
+      .sort((a, b) => b.area - a.area);
+
+    set({
+      sharedBaseColors: sorted,
+      skillGroupEditor: { ...state.skillGroupEditor, sharedBaseColors: sorted },
+    });
+  },
+
+  syncFrameTextures: (frameId) => {
+    const state = get();
+    
+    // 先尝试 skillGroupEditor.frames
+    const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
+    if (frame && frame.regionIdTex && frame.bbox) {
+      const sortedColors = state.sharedBaseColors;
+      const bbox = frame.bbox;
+      const textureSize = 512;
+      const totalPixels = textureSize * textureSize;
+
+      // 内联 buildBaseTextureFromRegionId
+      const baseData = new Uint8ClampedArray(totalPixels * 4);
+      const colorMap = new Map<number, { h: number; s: number; l: number }>();
+      for (const c of sortedColors) colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
+
+      for (let py = 0; py < bbox.h; py++) {
+        for (let px = 0; px < bbox.w; px++) {
+          const localIdx = py * bbox.w + px;
+          const colorId = frame.regionIdTex[localIdx];
+          const globalIdx = ((bbox.y + py) * textureSize + (bbox.x + px)) * 4;
+          if (colorId === 0) {
+            baseData[globalIdx] = 0; baseData[globalIdx + 1] = 0;
+            baseData[globalIdx + 2] = 0; baseData[globalIdx + 3] = 0;
+            continue;
+          }
+          const c = colorMap.get(colorId);
+          if (!c) {
+            baseData[globalIdx + 3] = 0;
+            continue;
+          }
+          const { r, g, b } = hslToRgb(c.h, c.s, c.l);
+          baseData[globalIdx] = r; baseData[globalIdx + 1] = g;
+          baseData[globalIdx + 2] = b; baseData[globalIdx + 3] = 255;
+        }
+      }
+      const newBase = new ImageData(baseData, textureSize, textureSize);
+
+      // 内联 buildResidualTextureFromPacked
+      const residualData = new Uint8ClampedArray(totalPixels * 4);
+      if (frame.deltaPacked && frame.deltaPacked.length > 0) {
+        for (let py = 0; py < bbox.h; py++) {
+          for (let px = 0; px < bbox.w; px++) {
+            const localIdx = py * bbox.w + px;
+            const colorId = frame.regionIdTex[localIdx];
+            const globalIdx = ((bbox.y + py) * textureSize + (bbox.x + px)) * 4;
+            if (colorId === 0) { residualData[globalIdx + 3] = 0; continue; }
+
+            // 解包 RGB565
+            const packed = frame.deltaPacked[localIdx];
+            const r = (packed >> 11) & 0x1F;
+            const g = (packed >> 5) & 0x3F;
+            const b_val = packed & 0x1F;
+            residualData[globalIdx] = Math.round((r / 31) * 255);
+            residualData[globalIdx + 1] = Math.round((g / 63) * 255);
+            residualData[globalIdx + 2] = Math.round((b_val / 31) * 255);
+            residualData[globalIdx + 3] = 255;
+          }
+        }
+      }
+      const newResidual = new ImageData(residualData, textureSize, textureSize);
+
+      const updatedFrames = state.skillGroupEditor.frames.map(f =>
+        f.id === frameId ? { ...f, baseTexture: newBase, residualTexture: newResidual } : f
+      );
+      set({ skillGroupEditor: { ...state.skillGroupEditor, frames: updatedFrames } });
+      get().triggerCanvasRedraw();
+      return;
+    }
+
+    // 尝试 frameDataMap
+    const fd = state.frameDataMap[frameId];
+    if (fd && fd.rawRegionIdTex && fd.rawBbox) {
+      const sortedColors = state.sharedBaseColors;
+      const bbox = fd.rawBbox;
+      const textureSize = 512;
+      const totalPixels = textureSize * textureSize;
+      const colorMap = new Map<number, { h: number; s: number; l: number }>();
+      for (const c of sortedColors) colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
+
+      const baseData = new Uint8ClampedArray(totalPixels * 4);
+      for (let py = 0; py < bbox.h; py++) {
+        for (let px = 0; px < bbox.w; px++) {
+          const localIdx = py * bbox.w + px;
+          const colorId = fd.rawRegionIdTex[localIdx];
+          const globalIdx = ((bbox.y + py) * textureSize + (bbox.x + px)) * 4;
+          if (colorId === 0) {
+            baseData[globalIdx] = 0; baseData[globalIdx + 1] = 0;
+            baseData[globalIdx + 2] = 0; baseData[globalIdx + 3] = 0;
+            continue;
+          }
+          const c = colorMap.get(colorId);
+          if (!c) { baseData[globalIdx + 3] = 0; continue; }
+          const { r, g, b } = hslToRgb(c.h, c.s, c.l);
+          baseData[globalIdx] = r; baseData[globalIdx + 1] = g;
+          baseData[globalIdx + 2] = b; baseData[globalIdx + 3] = 255;
+        }
+      }
+      const newBase = new ImageData(baseData, textureSize, textureSize);
+
+      set({
+        frameDataMap: {
+          ...state.frameDataMap,
+          [frameId]: {
+            ...fd,
+            baseTexture: newBase,
+            boundBaseTexture: fd.boundRegionId !== null ? newBase : fd.boundBaseTexture,
+          },
+        },
+      });
+      return;
+    }
+  },
+
+  mergeSimilarColors: (threshold = 0.02) => {
+    const state = get();
+    const palette = state.palette;
+    const ids = Array.from(palette.keys());
+
+    const areaMap = new Map<number, number>();
+    for (const ref of get().getAllFrameRefs()) {
+      if (!ref.regionIdTex || ref.regionIdTex.length === 0) continue;
+      for (const id of ref.regionIdTex) {
+        if (id !== 0) areaMap.set(id, (areaMap.get(id) || 0) + 1);
+      }
+    }
+    const sortedIds = ids.sort((a, b) => (areaMap.get(b) || 0) - (areaMap.get(a) || 0));
+    const merged = new Set<number>();
+
+    for (const id of sortedIds) {
+      if (merged.has(id) || !palette.has(id)) continue;
+      const data = palette.get(id)!;
+      for (const otherId of sortedIds) {
+        if (otherId === id || merged.has(otherId) || !palette.has(otherId)) continue;
+        const otherData = palette.get(otherId)!;
+        const dh = Math.min(Math.abs(data.h - otherData.h), 1 - Math.abs(data.h - otherData.h));
+        if (dh < threshold && Math.abs(data.s - otherData.s) < 0.05 && Math.abs(data.l - otherData.l) < 0.05) {
+          get().replaceColorReferences(otherId, id);
+          merged.add(otherId);
+        }
+      }
+    }
+
+    get().pruneUnusedColors();
+    get().sortPaletteByArea();
+    for (const ref of get().getAllFrameRefs()) {
+      get().syncFrameTextures(ref.id);
+    }
+  },
+
+  resetCurrentFrameColors: (frameId) => {
+    get().clearAllColorsInFrame(frameId);
+    get().extractAndApplyColorsToFrame(frameId);
+    get().mergeSimilarColors(0.02);
+    get().pruneUnusedColors();
+    get().sortPaletteByArea();
+    for (const ref of get().getAllFrameRefs()) {
+      get().syncFrameTextures(ref.id);
+    }
+  },
+
   addSkillFrame: (name) => {
     set((state) => {
       const newFrame = {
@@ -1947,7 +2559,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   setSharedBaseColors: (colors) => {
+    const newPalette = new Map<number, PaletteColor>();
+    for (const c of colors) {
+      newPalette.set(c.id, {
+        h: c.h, s: c.s, l: c.l,
+        frameIds: new Set(Array.isArray(c.frameIds) ? c.frameIds : []),
+      });
+    }
     set((state) => ({
+      palette: newPalette,
+      sharedBaseColors: colors,
       skillGroupEditor: {
         ...state.skillGroupEditor,
         sharedBaseColors: colors,
@@ -1984,424 +2605,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   addColorToGlobal: (color, frameId) => {
-    const state = get();
-    const newId = state.skillGroupEditor.nextColorId;
-    const newColors = [
-      ...state.skillGroupEditor.sharedBaseColors,
-      { id: newId, ...color, frameIds: [frameId], area: 0 },
-    ];
-    set({
-      skillGroupEditor: {
-        ...state.skillGroupEditor,
-        sharedBaseColors: newColors,
-        nextColorId: newId + 1,
-      },
-    });
-    return newId;
+    return get().addColorToPalette(color, frameId);
   },
-  updateColorInGlobal: (id, color, sourceFrameId) => {
-    const state = get();
-    const colors = [...state.skillGroupEditor.sharedBaseColors];
-    const idx = colors.findIndex(c => c.id === id);
-    if (idx === -1) return;
-
-    colors[idx].h = color.h;
-    colors[idx].s = color.s;
-    colors[idx].l = color.l;
-
-    set({
-      skillGroupEditor: {
-        ...state.skillGroupEditor,
-        sharedBaseColors: colors,
-      },
-    });
-
-    get().recalculateAllAreas();
-    get().cleanupAndSortColors();
+  updateColorInGlobal: (id, color, _sourceFrameId) => {
+    get().updateColorValue(id, color);
   },
   recalculateAllAreas: () => {
-    const state = get();
-    const { frames, sharedBaseColors } = state.skillGroupEditor;
-
-    const colorMap = new Map<number, SharedBaseColor>();
-    for (const c of sharedBaseColors) {
-      const ids = (Array.isArray(c.frameIds) ? c.frameIds : []);
-      colorMap.set(c.id, { ...c, area: 0, frameIds: [...ids] });
-    }
-
-    for (const frame of frames) {
-      const { regionIdTex, bbox } = frame;
-      if (!regionIdTex || regionIdTex.length === 0 || !bbox) continue;
-
-      const countMap = new Map<number, number>();
-      for (let i = 0; i < regionIdTex.length; i++) {
-        const colorId = regionIdTex[i];
-        if (colorId > 0) {
-          countMap.set(colorId, (countMap.get(colorId) || 0) + 1);
-        }
-      }
-
-      for (const [colorId, count] of countMap) {
-        const color = colorMap.get(colorId);
-        if (color) {
-          color.area += count;
-          if (!color.frameIds.includes(frame.id)) {
-            color.frameIds.push(frame.id);
-          }
-        }
-      }
-    }
-
-    const newColors = Array.from(colorMap.values());
-    set({
-      skillGroupEditor: {
-        ...state.skillGroupEditor,
-        sharedBaseColors: newColors,
-      },
-    });
+    get().sortPaletteByArea();
   },
-  mergeAndSortColors: (updatedColorId) => {
-    const state = get();
-    let colors = state.skillGroupEditor.sharedBaseColors.map(c => {
-      const ids = (Array.isArray(c.frameIds) ? c.frameIds : []);
-      return { ...c, frameIds: [...ids] };
-    });
-    const hslThreshold = 0.025;
-
-    if (updatedColorId !== undefined) {
-      const idx = colors.findIndex(c => c.id === updatedColorId);
-      if (idx === -1) return;
-      const target = colors[idx];
-
-      let mergeTarget: SharedBaseColor | null = null;
-      let mergeIdx = -1;
-      for (let i = 0; i < colors.length; i++) {
-        if (i === idx) continue;
-        const c = colors[i];
-        const dh = Math.min(Math.abs(c.h - target.h), 1 - Math.abs(c.h - target.h));
-        const ds = Math.abs(c.s - target.s);
-        const dl = Math.abs(c.l - target.l);
-        if (dh < hslThreshold && ds < 0.1 && dl < 0.1) {
-          mergeTarget = c;
-          mergeIdx = i;
-          break;
-        }
-      }
-
-      if (mergeTarget) {
-        const keepIdx = target.area >= mergeTarget.area ? idx : mergeIdx;
-        const removeIdx = keepIdx === idx ? mergeIdx : idx;
-        const keep = colors[keepIdx];
-        const remove = colors[removeIdx];
-        const keepId = keep.id;
-        const removeId = remove.id;
-
-        keep.frameIds = Array.from(new Set([...keep.frameIds, ...remove.frameIds]));
-        keep.area += remove.area;
-
-        colors.splice(removeIdx, 1);
-
-        const updatedFrames = state.skillGroupEditor.frames.map(frame => {
-          if (!frame.regionIdTex || frame.regionIdTex.length === 0) return frame;
-          const newTex = new Uint8Array(frame.regionIdTex);
-          for (let i = 0; i < newTex.length; i++) {
-            if (newTex[i] === removeId) newTex[i] = keepId;
-          }
-          return { ...frame, regionIdTex: newTex };
-        });
-
-        set({
-          skillGroupEditor: {
-            ...state.skillGroupEditor,
-            sharedBaseColors: colors,
-            frames: updatedFrames,
-          },
-        });
-        return;
-      }
-    }
-
-    colors.sort((a, b) => b.area - a.area);
-
-    set({
-      skillGroupEditor: {
-        ...state.skillGroupEditor,
-        sharedBaseColors: colors,
-      },
-    });
+  mergeAndSortColors: (_updatedColorId?) => {
+    get().mergeSimilarColors();
   },
 
-  // ===== 全量清理：合并相近颜色 + 移除无像素颜色 + 重排序 =====
   cleanupAndSortColors: () => {
-    const state = get();
-    const { frames, sharedBaseColors } = state.skillGroupEditor;
-    if (sharedBaseColors.length === 0) return;
-
-    let colors = sharedBaseColors.map(c => {
-      const ids = (Array.isArray(c.frameIds) ? c.frameIds : []);
-      return { ...c, frameIds: [...ids] };
-    });
-    let updatedFrames = frames.map(f => ({ ...f, regionIdTex: f.regionIdTex ? new Uint8Array(f.regionIdTex) : new Uint8Array(0) }));
-    const hslThreshold = 0.025;   // 色相合并阈值
-    const slThreshold = 0.08;      // 饱和度/亮度合并阈值
-
-    // ===== 全量合并：两两比较所有颜色对 =====
-    let merged = true;
-    while (merged) {
-      merged = false;
-      for (let i = 0; i < colors.length; i++) {
-        for (let j = i + 1; j < colors.length; j++) {
-          const a = colors[i];
-          const b = colors[j];
-          const dh = Math.min(Math.abs(a.h - b.h), 1 - Math.abs(a.h - b.h));
-          const ds = Math.abs(a.s - b.s);
-          const dl = Math.abs(a.l - b.l);
-          if (dh < hslThreshold && ds < slThreshold && dl < slThreshold) {
-            // 保留面积大的，移除面积小的
-            const keepIdx = a.area >= b.area ? i : j;
-            const removeIdx = keepIdx === i ? j : i;
-            const keep = colors[keepIdx];
-            const remove = colors[removeIdx];
-            const keepId = keep.id;
-            const removeId = remove.id;
-
-            console.log(`[颜色合并] 移除 #${removeId} (H:${remove.h.toFixed(3)}→H:${keep.h.toFixed(3)})，保留 #${keepId}`);
-
-            keep.frameIds = Array.from(new Set([...keep.frameIds, ...remove.frameIds]));
-            keep.area += remove.area;
-
-            colors.splice(removeIdx, 1);
-
-            // 在所有帧的 regionIdTex 中重映射 ID
-            for (const frame of updatedFrames) {
-              if (!frame.regionIdTex || frame.regionIdTex.length === 0) continue;
-              for (let k = 0; k < frame.regionIdTex.length; k++) {
-                if (frame.regionIdTex[k] === removeId) frame.regionIdTex[k] = keepId;
-              }
-            }
-
-            merged = true;
-            break;
-          }
-        }
-        if (merged) break;
-      }
-    }
-
-    // ===== 移除无像素分配的颜色（area === 0 且不在任何帧的 regionIdTex 中）=====
-    const usedIds = new Set<number>();
-    for (const frame of updatedFrames) {
-      if (!frame.regionIdTex || frame.regionIdTex.length === 0) continue;
-      for (const id of frame.regionIdTex) {
-        if (id > 0) usedIds.add(id);
-      }
-    }
-    const removedColors = colors.filter(c => !usedIds.has(c.id));
-    if (removedColors.length > 0) {
-      console.log(`[颜色清理] 移除 ${removedColors.length} 个无像素的颜色: ${removedColors.map(c => c.id).join(', ')}`);
-      colors = colors.filter(c => usedIds.has(c.id));
-    }
-
-    // ===== 按面积降序排列 =====
-    colors.sort((a, b) => b.area - a.area);
-
-    if (colors.length !== sharedBaseColors.length || updatedFrames.some((f, idx) => f.regionIdTex !== frames[idx].regionIdTex)) {
-      set({
-        skillGroupEditor: {
-          ...state.skillGroupEditor,
-          frames: updatedFrames,
-          sharedBaseColors: colors,
-        },
-      });
-      console.log(`[颜色清理] 完成：${sharedBaseColors.length}→${colors.length} 个颜色`);
-    }
+    get().pruneUnusedColors();
+    get().sortPaletteByArea();
   },
 
   reclusterCurrentFrame: () => {
     const state = get();
-    const { activeFrameId, frames, sharedBaseColors } = state.skillGroupEditor;
-    if (!activeFrameId) {
-      console.warn('[重新聚类] 没有激活的帧');
-      return;
-    }
-    const frame = frames.find(f => f.id === activeFrameId);
-    if (!frame) {
-      console.warn('[重新聚类] 帧不存在');
-      return;
-    }
-    if (!frame.bgImageData) {
-      console.warn('[重新聚类] 帧没有背景图像');
-      return;
-    }
-
-    const effectiveBbox = state.skillGroupEditor.globalBbox || frame.bbox;
-    if (!effectiveBbox) {
-      console.warn('[重新聚类] 没有有效的 bbox');
-      return;
-    }
-    const { w, h, x: offsetX, y: offsetY } = effectiveBbox;
-    const totalPixels = w * h;
-
-    // ========== 1. 当前调色板（锁定用户手动调整的值）==========
-    const currentPalette = sharedBaseColors.map(c => ({ ...c }));
-    if (currentPalette.length === 0) {
-      console.warn('[重新聚类] 调色板为空，无法重分配');
-      return;
-    }
-
-    // ========== 2. 构建掩码（从 baseTexture alpha 获取有效区域）==========
-    const mask = new Uint8Array(totalPixels);
-    if (frame.baseTexture) {
-      const baseData = frame.baseTexture.data;
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          const globalIdx = ((offsetY + py) * 512 + (offsetX + px)) * 4;
-          if (baseData[globalIdx + 3] > 0) {
-            mask[py * w + px] = 1;
-          }
-        }
-      }
-    } else {
-      // 如果没有 baseTexture，整个 bbox 都视为有效
-      mask.fill(1);
-    }
-
-    // ========== 3. 像素重分配：每个像素归到最近的调色板颜色 ==========
-    const newRegionIdTex = new Uint8Array(totalPixels);
-    const usedColorIds = new Set<number>();
-    const bgImg = frame.bgImageData;
-
-    // 色相距离（处理环绕）
-    const hueDist = (a: number, b: number): number => {
-      let d = a - b;
-      if (d > 0.5) d -= 1.0;
-      if (d < -0.5) d += 1.0;
-      return Math.abs(d);
-    };
-
-    for (let i = 0; i < totalPixels; i++) {
-      if (mask[i] === 0) {
-        newRegionIdTex[i] = 0;
-        continue;
-      }
-      const px = i % w;
-      const py = Math.floor(i / w);
-      const gx = offsetX + px;
-      const gy = offsetY + py;
-      const pIdx4 = (gy * 512 + gx) * 4;
-      const a = bgImg.data[pIdx4 + 3];
-      if (a < 128) {
-        newRegionIdTex[i] = 0;
-        continue;
-      }
-
-      const hsl = rgbToHsl(bgImg.data[pIdx4], bgImg.data[pIdx4 + 1], bgImg.data[pIdx4 + 2]);
-
-      let minDist = Infinity;
-      let bestId = 0;
-      for (const color of currentPalette) {
-        const dh = hueDist(hsl.h, color.h);
-        const ds = Math.abs(hsl.s - color.s);
-        const dl = Math.abs(hsl.l - color.l);
-        // 色相权重更高（2.0），因为色相感知差异更显著
-        const dist = dh * 2.0 + ds + dl;
-        if (dist < minDist) {
-          minDist = dist;
-          bestId = color.id;
-        }
-      }
-      newRegionIdTex[i] = bestId;
-      if (bestId > 0) usedColorIds.add(bestId);
-    }
-
-    console.log(`[重新聚类] 使用了 ${usedColorIds.size} / ${currentPalette.length} 个颜色`);
-
-    // ========== 4. 清理未使用的颜色 ==========
-    const unusedColors = currentPalette.filter(c => !usedColorIds.has(c.id));
-    if (unusedColors.length > 0) {
-      console.log(`[重新聚类] 移除 ${unusedColors.length} 个未使用的颜色: ${unusedColors.map(c => c.id).join(', ')}`);
-    }
-    const finalPalette = currentPalette.filter(c => usedColorIds.has(c.id));
-
-    // ========== 5. 基于原始 bgImageData 重建 deltaPacked ==========
-    const colorMapById = new Map<number, { h: number; s: number; l: number }>();
-    for (const c of finalPalette) {
-      colorMapById.set(c.id, { h: c.h, s: c.s, l: c.l });
-    }
-
-    const normalizeHueDelta = (delta: number) => {
-      if (delta > 0.5) return delta - 1.0;
-      if (delta < -0.5) return delta + 1.0;
-      return delta;
-    };
-
-    // 保留原有的 blockFlags（范围配置保持不变）
-    const blockFlags = frame.blockFlags || 0;
-    const recomputedDeltaPacked = new Uint16Array(totalPixels);
-
-    for (let py = 0; py < h; py++) {
-      for (let px = 0; px < w; px++) {
-        const idx = py * w + px;
-        const globalId = newRegionIdTex[idx];
-        if (globalId === 0) continue;
-        const base = colorMapById.get(globalId);
-        if (!base) continue;
-
-        const gx = offsetX + px;
-        const gy = offsetY + py;
-        const pIdx4 = (gy * 512 + gx) * 4;
-        const hsl = rgbToHsl(bgImg.data[pIdx4], bgImg.data[pIdx4 + 1], bgImg.data[pIdx4 + 2]);
-        const dH = normalizeHueDelta(hsl.h - base.h);
-        const dS = hsl.s - base.s;
-        const dL = hsl.l - base.l;
-
-        const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-        const range = getRangeForBlock(blockFlags, blockIdx);
-        const qH = quantizeH(dH, range);
-        const qS = quantizeS(dS, range);
-        const qL = quantizeL(dL, range);
-
-        recomputedDeltaPacked[idx] = packRGB565(qS, qH, qL);
-      }
-    }
-
-    // ========== 6. 更新帧数据 ==========
-    const updatedFrame = {
-      ...frame,
-      regionIdTex: newRegionIdTex,
-      deltaPacked: recomputedDeltaPacked,
-      blockFlags,
-    };
-    const updatedFrames = frames.map(f => f.id === activeFrameId ? updatedFrame : f);
-
-    // 更新面积统计
-    const colorAreaMap = new Map<number, number>();
-    for (const f of updatedFrames) {
-      if (!f.regionIdTex || f.regionIdTex.length === 0) continue;
-      for (const id of f.regionIdTex) {
-        if (id > 0) {
-          colorAreaMap.set(id, (colorAreaMap.get(id) || 0) + 1);
-        }
-      }
-    }
-    for (const gc of finalPalette) {
-      gc.area = colorAreaMap.get(gc.id) || 0;
-    }
-    finalPalette.sort((a, b) => b.area - a.area);
-
-    set({
-      skillGroupEditor: {
-        ...state.skillGroupEditor,
-        frames: updatedFrames,
-        sharedBaseColors: finalPalette,
-        // nextColorId 不变——我们只是重分配，不创建新颜色
-      },
-    });
-
-    // 全量清理：合并相邻色 + 移除无用色 + 重排序
-    get().cleanupAndSortColors();
-
-    console.log('[重新聚类] 完成，像素重分配结束');
+    const frameId = state.skillGroupEditor.activeFrameId;
+    if (frameId) get().reclusterFrameFromScratch(frameId);
   },
 
   // 多帧 FTX 导入
@@ -2556,10 +2780,43 @@ export const useAppStore = create<AppState>((set, get) => ({
     const firstLayerId = updatedLayers.length > 0 ? updatedLayers[0].id : state.activeLayerId;
 
     // ---------- 一次性更新状态 ----------
+    // 同时构建新调色板 Map
+    const newPalette = new Map<number, PaletteColor>();
+    for (const c of currentPalette) {
+      newPalette.set(c.id, {
+        h: c.h, s: c.s, l: c.l,
+        frameIds: new Set(Array.isArray(c.frameIds) ? c.frameIds : []),
+      });
+    }
+
+    // 将导入帧的 layerId 加入调色板中对应颜色的 frameIds
+    for (const [layerId, frameData] of Object.entries(newFrameDataMap)) {
+      if (frameData.rawRegionIdTex && frameData.rawRegionIdTex.length > 0) {
+        const usedIds = new Set<number>();
+        for (const id of frameData.rawRegionIdTex) {
+          if (id > 0) usedIds.add(id);
+        }
+        for (const c of currentPalette) {
+          if (usedIds.has(c.id) && !c.frameIds.includes(layerId)) {
+            c.frameIds.push(layerId);
+          }
+        }
+        // 同步更新 newPalette
+        for (const [id, pdata] of newPalette) {
+          if (usedIds.has(id)) {
+            pdata.frameIds.add(layerId);
+          }
+        }
+      }
+    }
+
     set({
       layers: finalLayers,
       frameDataMap: finalFrameDataMap,
       activeLayerId: firstLayerId,
+      palette: newPalette,
+      sharedBaseColors: currentPalette,
+      nextColorId: nextId,
       skillGroupEditor: {
         ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
@@ -2735,54 +2992,3 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
 }));
-
-// ===== 辅助函数：合成图像数据 =====
-function getCompositedImageData(state: AppState): ImageData | null {
-  const { imageState, paintBuffers, layerVisibility, canvasWidth, canvasHeight, activeLayerId, layers } = state;
-  const offCanvas = document.createElement('canvas');
-  offCanvas.width = canvasWidth;
-  offCanvas.height = canvasHeight;
-  const ctx = offCanvas.getContext('2d')!;
-
-  // 1. 绘制背景图片（如果存在且可见）
-  if (layerVisibility.imageLayer && imageState.originalImage && imageState.imageSrc) {
-    const img = imageState.originalImage;
-    const bgOffsetX = imageState.offsetX ?? 0;
-    const bgOffsetY = imageState.offsetY ?? 0;
-    const bgScale = imageState.scale ?? 1;
-
-    if (imageState.selectionRect) {
-      const sel = imageState.selectionRect;
-      const scaleX = canvasWidth / sel.width;
-      const scaleY = canvasHeight / sel.height;
-      const fitScale = Math.min(scaleX, scaleY);
-      const drawWidth = sel.width * fitScale * bgScale;
-      const drawHeight = sel.height * fitScale * bgScale;
-      const offsetX = (canvasWidth - drawWidth) / 2 + bgOffsetX;
-      const offsetY = (canvasHeight - drawHeight) / 2 + bgOffsetY;
-      ctx.drawImage(img, sel.x, sel.y, sel.width, sel.height, offsetX, offsetY, drawWidth, drawHeight);
-    } else {
-      const fitScale = Math.min(canvasWidth / img.width, canvasHeight / img.height);
-      const drawWidth = img.width * fitScale * bgScale;
-      const drawHeight = img.height * fitScale * bgScale;
-      const offsetX = (canvasWidth - drawWidth) / 2 + bgOffsetX;
-      const offsetY = (canvasHeight - drawHeight) / 2 + bgOffsetY;
-      ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
-    }
-  }
-
-  // 2. 绘制绘制层（paintBuffer）
-  if (layerVisibility.drawLayer) {
-    const layerId = activeLayerId || layers[0]?.id;
-    const buffer = paintBuffers[layerId];
-    if (buffer) {
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = buffer.width;
-      tempCanvas.height = buffer.height;
-      tempCanvas.getContext('2d')!.putImageData(buffer, 0, 0);
-      ctx.drawImage(tempCanvas, 0, 0, canvasWidth, canvasHeight);
-    }
-  }
-
-  return ctx.getImageData(0, 0, canvasWidth, canvasHeight);
-}

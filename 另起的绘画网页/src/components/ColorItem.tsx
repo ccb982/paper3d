@@ -9,12 +9,12 @@ interface ColorItemProps {
   isExpanded: boolean;
   onSelect: (id: number) => void;
   onUpdate: (id: number, hsl: { h: number; s: number; l: number }) => void;
-  onRecluster: () => void;
+  onDragEnd: () => void;
   onPickColor: (id: number) => void;
   onToggleExpand: (id: number) => void;
 }
 
-const ColorItem = React.memo(({ colorId, hsl, isSelected, isPicking, isExpanded, onSelect, onUpdate, onRecluster, onPickColor, onToggleExpand }: ColorItemProps) => {
+const ColorItem = React.memo(({ colorId, hsl, isSelected, isPicking, isExpanded, onSelect, onUpdate, onDragEnd, onPickColor, onToggleExpand }: ColorItemProps) => {
   const rgb = hslToRgb(hsl.h, hsl.s, hsl.l);
   const hex = `#${rgb.r.toString(16).padStart(2, '0')}${rgb.g.toString(16).padStart(2, '0')}${rgb.b.toString(16).padStart(2, '0')}`;
 
@@ -83,7 +83,7 @@ const ColorItem = React.memo(({ colorId, hsl, isSelected, isPicking, isExpanded,
               min={0} max={360} step={1}
               value={hsl.h * 360}
               onChange={e => onUpdate(colorId, { ...hsl, h: Number(e.target.value) / 360 })}
-              onMouseUp={() => onRecluster()}
+              onMouseUp={onDragEnd}
               style={{ flex: 1, height: '4px' }}
             />
             <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
@@ -97,7 +97,7 @@ const ColorItem = React.memo(({ colorId, hsl, isSelected, isPicking, isExpanded,
               min={0} max={100} step={1}
               value={hsl.s * 100}
               onChange={e => onUpdate(colorId, { ...hsl, s: Number(e.target.value) / 100 })}
-              onMouseUp={() => onRecluster()}
+              onMouseUp={onDragEnd}
               style={{ flex: 1, height: '4px' }}
             />
             <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
@@ -111,7 +111,7 @@ const ColorItem = React.memo(({ colorId, hsl, isSelected, isPicking, isExpanded,
               min={0} max={100} step={1}
               value={hsl.l * 100}
               onChange={e => onUpdate(colorId, { ...hsl, l: Number(e.target.value) / 100 })}
-              onMouseUp={() => onRecluster()}
+              onMouseUp={onDragEnd}
               style={{ flex: 1, height: '4px' }}
             />
             <span style={{ width: '36px', textAlign: 'right', fontFamily: 'monospace', fontSize: '10px' }}>
