@@ -5,7 +5,7 @@ import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisib
 import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, type ScanlineCache } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
-import { isPointInPolygonWithHoles, isPointInPolygon } from '../utils/regionDetection';
+import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, clusterAndGenerateTexturesV2 } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
@@ -2106,41 +2106,61 @@ export const useAppStore = create<AppState>((set, get) => ({
   extractAndApplyColorsToFrame: (frameId) => {
     const state = get();
     const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
-    if (!frame || !frame.bgImageData || !frame.bbox) {
-      console.warn(`[提取] 帧 ${frameId} 缺少背景图或 bbox`);
+    if (!frame || !frame.bbox) {
+      console.warn(`[提取] 帧 ${frameId} 缺少 bbox`);
+      return;
+    }
+
+    // 颜色源优先级：用户修改后的 baseTexture > 原始背景图
+    const colorSource = frame.baseTexture || frame.bgImageData;
+    if (!colorSource) {
+      console.warn(`[提取] 帧 ${frameId} 没有颜色数据源`);
       return;
     }
 
     const bbox = frame.bbox;
+
+    // 掩码：基于 bbox 内所有不透明像素（不再依赖虚线多边形）
     const mask = new Uint8Array(bbox.w * bbox.h);
-    if (frame.dashedPolygons && frame.dashedPolygons.length > 0) {
-      const poly = frame.dashedPolygons[0];
-      if (poly.length >= 3) {
-        for (let py = 0; py < bbox.h; py++) {
-          for (let px = 0; px < bbox.w; px++) {
-            const wx = (bbox.x + px) / 512;
-            const wy = (bbox.y + py) / 512;
-            if (isPointInPolygon({ x: wx, y: wy }, poly)) {
-              mask[py * bbox.w + px] = 1;
-            }
-          }
+    let maskPixelCount = 0;
+    for (let py = 0; py < bbox.h; py++) {
+      for (let px = 0; px < bbox.w; px++) {
+        const gx = bbox.x + px;
+        const gy = bbox.y + py;
+        const idx = (gy * 512 + gx) * 4;
+        if (colorSource.data[idx + 3] > 0) {
+          mask[py * bbox.w + px] = 1;
+          maskPixelCount++;
         }
       }
     }
-    // 如果没有有效多边形掩码，使用 bbox 内全部像素
-    const hasPolyMask = mask.some(v => v === 1);
-    if (!hasPolyMask) {
-      mask.fill(1);
+    if (maskPixelCount === 0) {
+      console.warn(`[提取] 帧 ${frameId} bbox 内无有效像素`);
+      return;
     }
 
-    const { baseColors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(
-      mask, bbox, frame.bgImageData, 0.025, 512
-    );
+    // 聚类提取（添加异常保护）
+    let baseColors: Array<{ h: number; s: number; l: number }>;
+    let regionIdTex: Uint8Array | null;
+    let deltaPacked: Uint16Array;
+    let blockFlags: number;
+    try {
+      const result = clusterAndGenerateTexturesV2(mask, bbox, colorSource, 0.025, 512);
+      baseColors = result.baseColors;
+      regionIdTex = result.regionIdTex;
+      deltaPacked = result.deltaPacked;
+      blockFlags = result.blockFlags;
+    } catch (err) {
+      console.error(`[提取] 帧 ${frameId} 聚类失败:`, err);
+      return;
+    }
 
     if (baseColors.length === 0) {
       console.warn(`[提取] 帧 ${frameId} 未提取到颜色`);
       return;
     }
+
+    console.log(`[重新聚类] 帧 ${frameId} 提取到 ${baseColors.length} 种基础色 (来自 ${maskPixelCount} 个有效像素)`);
 
     // 将本地颜色映射为全局 ID（通过 addColorToPalette 校验复用）
     const localToGlobal = new Map<number, number>();
@@ -2196,6 +2216,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       get().pruneUnusedColors();
       get().sortPaletteByArea();
+      console.log(`[重新聚类] 帧 ${frameId} 成功，旧颜色已清理`);
     } else {
       console.warn('[重新聚类] 提取失败，保留原有数据');
     }
