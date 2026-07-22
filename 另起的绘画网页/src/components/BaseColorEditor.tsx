@@ -460,6 +460,7 @@ export const BaseColorEditor: React.FC = () => {
   const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
   const {
     skillGroupEditor,
+    canvasWidth,
     addSkillFrame,
     removeSkillFrame,
     switchSkillFrame,
@@ -515,19 +516,15 @@ export const BaseColorEditor: React.FC = () => {
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0n);
-  const [texSize, setTexSize] = useState(512);  // 动态纹理分辨率（根据导入图片尺寸自动调整）
+  const [texSize, setTexSize] = useState(canvasWidth);  // 动态纹理分辨率，与全局画布尺寸同步
 
-  // 同步 texSize：当切换帧或 bgImageData 变化时，自动更新纹理分辨率
+  // ★ 关键修复：texSize 与全局 canvasWidth 同步，确保与主画布尺寸一致
   useEffect(() => {
-    if (bgImageData) {
-      const size = bgImageData.width;
-      if (size !== texSize) {
-        console.log(`[BaseColorEditor] texSize 同步：${texSize} → ${size}（来自 bgImageData 分辨率）`);
-        setTexSize(size);
-      }
+    if (canvasWidth && canvasWidth !== texSize) {
+      console.log(`[BaseColorEditor] texSize 同步：${texSize} → ${canvasWidth}（来自全局画布尺寸）`);
+      setTexSize(canvasWidth);
     }
-    // 不把 texSize 加入 deps，避免循环更新
-  }, [bgImageData]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [canvasWidth]);
 
   const [showColorInfoOnClick, setShowColorInfoOnClick] = useState(false);
   

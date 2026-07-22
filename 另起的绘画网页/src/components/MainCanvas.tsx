@@ -2482,24 +2482,30 @@ useEffect(() => {
         }
 
         if (textureToDraw) {
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = textureToDraw.width;
-          tempCanvas.height = textureToDraw.height;
-          tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
           ctx.save();
           ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
 
-          // 如果未绑定且存在 rawBbox，则只绘制 bbox 区域（画布尺寸已等于 bbox 尺寸）
-          if (!frameData.boundRegionId && frameData.rawBbox) {
-            const bbox = frameData.rawBbox;
-            ctx.drawImage(
-              tempCanvas,
-              bbox.x, bbox.y, bbox.w, bbox.h,  // source
-              0, 0, currentWidth, currentHeight  // dest（画布 = bbox 尺寸，1:1 映射）
-            );
+          // ★ 关键修复：已绑定时，纹理尺寸等于画布尺寸，直接 putImageData 避免任何缩放偏移
+          if (frameData.boundRegionId !== null) {
+            ctx.putImageData(textureToDraw, 0, 0);
           } else {
-            // 已绑定或无 bbox，全图拉伸
-            ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+            // 未绑定或预览，使用 drawImage 拉伸
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = textureToDraw.width;
+            tempCanvas.height = textureToDraw.height;
+            tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
+
+            // 如果未绑定且存在 rawBbox，则只绘制 bbox 区域（画布尺寸已等于 bbox 尺寸）
+            if (frameData.rawBbox) {
+              const bbox = frameData.rawBbox;
+              ctx.drawImage(
+                tempCanvas,
+                bbox.x, bbox.y, bbox.w, bbox.h,  // source
+                0, 0, currentWidth, currentHeight  // dest（画布 = bbox 尺寸，1:1 映射）
+              );
+            } else {
+              ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+            }
           }
 
           ctx.restore();

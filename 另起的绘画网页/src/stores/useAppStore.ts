@@ -688,8 +688,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       layers: state.layers.map((l) => (l.id === id ? { ...l, ...updates } : l)),
     })),
   setActiveLayer: (id) => {
+    const state = get();
     set({ activeLayerId: id });
+    
+    // 如果切换到有帧数据的图层，更新画布尺寸为 bbox 尺寸并重置视图
     if (id) {
+      const frameData = state.frameDataMap[id];
+      if (frameData && frameData.rawBbox) {
+        const bbox = frameData.rawBbox;
+        if (state.canvasWidth !== bbox.w || state.canvasHeight !== bbox.h) {
+          set({
+            canvasWidth: bbox.w,
+            canvasHeight: bbox.h,
+            zoom: 1,
+            panOffset: { x: 0, y: 0 },
+          });
+        }
+      }
+      
       setTimeout(() => {
         get().refreshRegionCache(id);
         get().refreshColorBlockCache(id);
@@ -1249,14 +1265,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const shapes = state.shapes.filter(s => s.layerId === layerId);
     const paintBuffer = state.paintBuffers[layerId];
     
-    // 创建一个 512x512 的透明纹理
-    const size = 512;
+    // ★ 使用实际画布尺寸，而非硬编码 512
+    const width = state.canvasWidth;
+    const height = state.canvasHeight;
     const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, size, size);
-    const texture = ctx.getImageData(0, 0, size, size);
+    ctx.clearRect(0, 0, width, height);
+    const texture = ctx.getImageData(0, 0, width, height);
     
     if (!paintBuffer || shapes.length === 0) {
       set((s) => ({
@@ -1266,7 +1283,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     
     // 只获取虚线闭合区域
-    const dashedRegions = computeAllDashedClosedRegions(shapes, size, size);
+    const dashedRegions = computeAllDashedClosedRegions(shapes, width, height);
     console.log(`[区域图层纹理] 图层 ${layerId} 检测到 ${dashedRegions.length} 个虚线闭合区域`);
     
     if (dashedRegions.length === 0) {
@@ -1281,16 +1298,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (region.polygon.length === 0 || region.polygon[0].length < 3) return;
       
       // 遍历区域内的像素（使用世界坐标）
-      for (let py = 0; py < size; py++) {
-        for (let px = 0; px < size; px++) {
+      for (let py = 0; py < height; py++) {
+        for (let px = 0; px < width; px++) {
           // 将像素坐标转换为世界坐标
-          const worldX = px / size;
-          const worldY = 1 - py / size; // Y轴翻转
+          const worldX = px / width;
+          const worldY = 1 - py / height; // Y轴翻转
           
           // 检查点是否在区域内
           if (isPointInPolygonWithHoles({ x: worldX, y: worldY }, region.polygon)) {
             // 从 paintBuffer 提取颜色
-            const bufIdx = (py * size + px) * 4;
+            const bufIdx = (py * width + px) * 4;
             const r = paintBuffer.data[bufIdx];
             const g = paintBuffer.data[bufIdx + 1];
             const b = paintBuffer.data[bufIdx + 2];
@@ -2937,14 +2954,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // 解码完整的 512x512 纹理（全局调色板直接查找）
+    // ★ 关键修复：使用原始纹理尺寸（sourceResolution），而非硬编码 512
+    const texSize = frameData.sourceResolution || 512;
     const fullBase = decodeFrameWithGlobalPalette(
       raw,
       frameData.rawDeltaPacked,
       globalPalette,
       frameData.rawBbox!,
       frameData.rawBlockFlags,
-      512
+      texSize
     );
 
     // 裁剪为 bbox 区域，确保绑定后纹理尺寸与画布（= bbox 尺寸）匹配
@@ -2981,25 +2999,43 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    set((s) => ({
-      frameDataMap: {
-        ...s.frameDataMap,
-        [layerId]: {
-          ...frameData,
-          boundRegionId: regionId,
-          boundBaseTexture: croppedBase,
-          boundResidualTexture: null,
-          textureOffset: frameData.textureOffset || { x: 0, y: 0 },
-          textureScale: frameData.textureScale || { x: 1, y: 1 },
-          textureRotation: frameData.textureRotation || 0,
-          distortEnabled: frameData.distortEnabled || false,
-          distortAmplitude: frameData.distortAmplitude ?? 0.06,
-          distortFrequency: frameData.distortFrequency ?? 5.0,
-          distortSpeed: frameData.distortSpeed ?? 1.2,
-          distortRotation: frameData.distortRotation ?? 0,
+    set((s) => {
+      const bbox = frameData.rawBbox;
+      return {
+        frameDataMap: {
+          ...s.frameDataMap,
+          [layerId]: {
+            ...frameData,
+            boundRegionId: regionId,
+            boundBaseTexture: croppedBase,
+            boundResidualTexture: null,
+            textureOffset: frameData.textureOffset || { x: 0, y: 0 },
+            textureScale: frameData.textureScale || { x: 1, y: 1 },
+            textureRotation: frameData.textureRotation || 0,
+            distortEnabled: frameData.distortEnabled || false,
+            distortAmplitude: frameData.distortAmplitude ?? 0.06,
+            distortFrequency: frameData.distortFrequency ?? 5.0,
+            distortSpeed: frameData.distortSpeed ?? 1.2,
+            distortRotation: frameData.distortRotation ?? 0,
+          },
         },
-      },
-    }));
+        // 绑定后更新画布尺寸为 bbox 尺寸，并重置视图
+        ...(bbox && (s.canvasWidth !== bbox.w || s.canvasHeight !== bbox.h) ? {
+          canvasWidth: bbox.w,
+          canvasHeight: bbox.h,
+          zoom: 1,
+          panOffset: { x: 0, y: 0 },
+        } : {}),
+      };
+    });
+
+    // ★ 状态更新是异步的，需要延迟刷新确保使用新的画布尺寸
+    setTimeout(() => {
+      // 强制刷新区域实体，确保位移纹理使用新的画布尺寸
+      get().refreshRegionEntities(layerId);
+      // 触发画布重绘
+      get().triggerCanvasRedraw();
+    }, 0);
 
     console.log(`[绑定] 图层 ${layerId} 成功绑定到区域 ${regionId}，有效像素 ${validPixelCount}`);
   },
