@@ -575,6 +575,22 @@ export function Toolbar() {
                   const idToIndex = new Map<number, number>();
                   exportedPalette.forEach((c, idx) => idToIndex.set(c.id, idx));
 
+                  // ===== 导出前 blockFlags 日志 =====
+                  console.log('========================================');
+                  console.log('[多帧导出] 准备导出，原始帧数据 blockFlags:');
+                  console.log('========================================');
+                  for (let i = 0; i < validFrames.length; i++) {
+                    const frame = validFrames[i];
+                    const frameData = frameDataMap[frame.id];
+                    console.log(`[多帧导出] 帧 ${i} "${frame.name}"`);
+                    console.log(`  - bbox: x=${frame.bbox!.x}, y=${frame.bbox!.y}, w=${frame.bbox!.w}, h=${frame.bbox!.h}`);
+                    console.log(`  - rawBlockFlags = 0x${(frameData.rawBlockFlags ?? 0n).toString(16).padStart(16, '0')}`);
+                    console.log(`  - 帧数据存在: ${!!frameData}`);
+                    console.log(`  - deltaPacked 长度: ${frameData.rawDeltaPacked?.length ?? 0}`);
+                    console.log(`  - regionIdTex 长度: ${frameData.rawRegionIdTex?.length ?? 0}`);
+                  }
+                  console.log('========================================');
+
                   const exportFrames = validFrames.map(frame => {
                     const frameData = frameDataMap[frame.id];
                     const raw = frameData.rawRegionIdTex!;
@@ -596,7 +612,7 @@ export function Toolbar() {
                       bbox: frame.bbox!,
                       regionIdTex: newRegionIdTex,
                       deltaPacked: frameData.rawDeltaPacked || new Uint16Array(0),
-                      blockFlags: frameData.rawBlockFlags ?? 0,
+                      blockFlags: BigInt(frameData.rawBlockFlags ?? 0),
                     };
                   });
 

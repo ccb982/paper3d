@@ -185,7 +185,7 @@
     }
 
     function getRangeForBlock(blockFlags, blockIdx) {
-      return (blockFlags & (1 << blockIdx)) ? 0.25 : 0.5;
+      return (blockFlags & (1n << BigInt(blockIdx))) ? 0.25 : 0.5;
     }
 
     function packRGB565(s, h, l) {
@@ -305,7 +305,7 @@
         const bbox = { x, y, w, h };
         const colorCount = dataView.getUint16(offset, true);
         offset += 2;
-        const blockFlags = version === 3 ? dataView.getUint16(offset, true) : 0;
+        const blockFlags = version === 3 ? BigInt(dataView.getUint16(offset, true)) : 0n;
         offset += version === 3 ? 2 : 0;
 
         const baseColors = [];
@@ -414,13 +414,13 @@
         const bh = dataView.getUint16(offset, true); offset += 2;
         const bbox = { x: bx, y: by, w: bw, h: bh };
 
-        let blockFlags = 0;
+        let blockFlags = 0n;
         if (version >= 2) {
-          blockFlags = dataView.getUint16(offset, true);
-          offset += 2;
+          blockFlags = dataView.getBigUint64(offset, true);
+          offset += 8;
         }
 
-        console.log('[FTX3] 帧', fi, 'name:', name, 'size:', width, 'x', height, 'bbox:', bbox, 'blockFlags:', blockFlags);
+        console.log('[FTX3] 帧', fi, 'name:', name, 'size:', width, 'x', height, 'bbox:', bbox, 'blockFlags:', blockFlags.toString(16).padStart(16, '0'));
 
         const regionIdTexLen = dataView.getUint32(offset, true);
         offset += 4;
@@ -560,7 +560,7 @@
 
     function renderRegions(data) {
       for (const region of data.regions) {
-        const { bbox, baseColors, regionIdTexture, deltaTexture, blockFlags = 0 } = region;
+        const { bbox, baseColors, regionIdTexture, deltaTexture, blockFlags = 0n } = region;
         const { x, y, w, h } = bbox;
 
         const regionIdTex = regionIdTexture ? base64ToUint8Array(regionIdTexture) : null;
@@ -608,7 +608,7 @@
           <div>  - 渲染像素: ${renderedCount}</div>
           <div>  - 量化格式: ${data.quantization || 'uint8'}</div>
           <div>  - FTX版本: ${data.version}</div>
-          <div>  - blockFlags: ${blockFlags.toString(2).padStart(16, '0')}</div>
+          <div>  - blockFlags: 0x${blockFlags.toString(16).padStart(16, '0')}</div>
           <div>  - regionIdTex: ${regionIdTex ? regionIdTex.length + ' 字节' : '无（单色调）'}</div>
           <div>  - deltaTex: ${deltaTex.length} 字节</div>
         `;
@@ -619,7 +619,7 @@
       const frame = data.frames[currentFrameIndex];
       if (!frame) return;
 
-      const { bbox, regionIdTex, deltaTex, blockFlags = 0 } = frame;
+      const { bbox, regionIdTex, deltaTex, blockFlags = 0n } = frame;
       const { x, y, w, h } = bbox;
       const palette = data.palette;
 
@@ -797,6 +797,7 @@
 
           const jsonStr = JSON.stringify(currentData, (key, value) => {
             if (value instanceof Uint8Array) return Array.from(value);
+            if (typeof value === 'bigint') return value.toString();
             return value;
           }, 2);
           const blob = new Blob([jsonStr], { type: 'application/json' });

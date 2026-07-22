@@ -977,7 +977,7 @@ export interface CompressedRegionV2 {
   baseColors: Array<{ h: number; s: number; l: number }>;
   regionIdTexture?: string;
   deltaTexture: string;
-  blockFlags: number;
+  blockFlags: bigint;
 }
 
 export interface CompressionResultV2 {
@@ -1119,14 +1119,14 @@ export function clusterAndGenerateTexturesV2(
   paintBuffer: ImageData,
   hueThreshold: number = 0.025,
   sourceWidth: number = PAINT_BUFFER_SIZE
-): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaPacked: Uint16Array; blockFlags: number } {
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaPacked: Uint16Array; blockFlags: bigint } {
   const { w, h } = bbox;
   const totalPixels = w * h;
 
   const { baseColors, regionIdTex } = clusterByColorAndSpace(mask, bbox, paintBuffer, sourceWidth);
 
   if (baseColors.length === 0 || totalPixels === 0) {
-    return { baseColors: [], regionIdTex: null, deltaPacked: new Uint16Array(0), blockFlags: 0 };
+    return { baseColors: [], regionIdTex: null, deltaPacked: new Uint16Array(0), blockFlags: 0n };
   }
 
   const tempDeltas = new Float32Array(totalPixels * 3);
@@ -1181,13 +1181,13 @@ export function clusterAndGenerateTexturesV2(
     }
   }
 
-  let blockFlags = 0;
+  let blockFlags = 0n;
   const ranges = new Float32Array(ADAPTIVE_TOTAL_BLOCKS);
   for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
     if (blockPixelCount[b] > 0) {
       const ratio = blockSmallCount[b] / blockPixelCount[b];
       if (ratio >= 0.95) {
-        blockFlags |= (1 << b);
+        blockFlags |= (1n << BigInt(b));
         ranges[b] = 0.25;
       } else {
         ranges[b] = 0.5;
@@ -1388,7 +1388,7 @@ export function decodeFrameWithRegionColors(
   deltaPacked: Uint16Array | null,
   regionColors: Array<{ h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
-  blockFlags: number,
+  blockFlags: bigint,
   texSize: number = 512
 ): { baseTexture: ImageData; residualTexture: ImageData } {
   const { w, h } = bbox;
@@ -1457,7 +1457,7 @@ export function decodeFrameWithGlobalPalette(
   deltaPacked: Uint16Array,
   palette: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
-  blockFlags: number,
+  blockFlags: bigint,
   textureSize: number = 512
 ): ImageData {
   const { w, h } = bbox;
@@ -1547,45 +1547,80 @@ function bufferToBase64(buffer: ArrayBuffer): string {
 // ==================== 主压缩函数 ====================
 export function compressLayerColors(layerId: string): CompressionResultV2 | null {
   const state = useAppStore.getState();
-  const dashShapes = state.shapes.filter(s => s.color === '#ffaa00' && s.layerId === layerId);
-  if (dashShapes.length === 0) { console.warn('[颜色压缩] 没有虚线图形'); return null; }
 
-  const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
-  const regions = computeRegionsExact(dashShapes, worldBounds, state.bfsResolution);
-  if (regions.length === 0) { console.warn('[颜色压缩] 没有检测到闭合区域'); return null; }
-
-  const buffer = state.paintBuffers[layerId];
-  if (!buffer) { console.warn('[颜色压缩] 当前图层没有 paintBuffer'); return null; }
-
-  const compressedRegions: CompressedRegionV2[] = [];
-  const hueThreshold = 0.025;
-
-  for (let ri = 0; ri < regions.length; ri++) {
-    const region = regions[ri];
-    const bbox = computeBBoxAllRings(region);
-    const mask = rasterizeRegionMaskLocal(region, bbox);
-    const { baseColors, regionIdTex, deltaPacked, blockFlags } = clusterAndGenerateTexturesV2(mask, bbox, buffer, hueThreshold);
-    if (baseColors.length === 0) continue;
-
-    compressedRegions.push({
-      id: ri,
-      bbox,
-      baseColors,
-      regionIdTexture: regionIdTex ? uint8ToBase64(regionIdTex) : undefined,
-      deltaTexture: deltaPacked.length > 0 ? uint8ToBase64(new Uint8Array(deltaPacked.buffer)) : '',
-      blockFlags,
-    });
+  // 优先从 skillGroupEditor.frames 获取当前帧数据（含修正结果）
+  const frame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
+  if (!frame || !frame.regionIdTex || frame.regionIdTex.length === 0) {
+    console.warn('[颜色压缩] 当前帧没有有效数据');
+    return null;
   }
 
-  const result: CompressionResultV2 = {
-    version: 3,
-    resolution: [PAINT_BUFFER_SIZE, PAINT_BUFFER_SIZE],
-    regionCount: compressedRegions.length,
-    regions: compressedRegions,
-    quantization: 'uint8',
-    hueThreshold,
+  // 获取全局调色板（已按面积排序）
+  const palette = state.sharedBaseColors;
+  if (palette.length === 0) {
+    console.warn('[颜色压缩] 调色板为空');
+    return null;
+  }
+
+  // 构建 region 数据：将全局颜色 ID 映射为本地索引（1-based）
+  const idToIndex = new Map<number, number>();
+  palette.forEach((c, idx) => idToIndex.set(c.id, idx + 1));
+
+  const localRegionIdTex = new Uint8Array(frame.regionIdTex.length);
+  for (let i = 0; i < frame.regionIdTex.length; i++) {
+    const globalId = frame.regionIdTex[i];
+    localRegionIdTex[i] = globalId === 0 ? 0 : (idToIndex.get(globalId) || 0);
+  }
+
+  // 构建 baseColors（按本地索引顺序）
+  const baseColors = palette.map(c => ({ h: c.h, s: c.s, l: c.l }));
+
+  const bbox = frame.bbox;
+  if (!bbox) {
+    console.warn('[颜色压缩] 帧缺少 bbox');
+    return null;
+  }
+  const { w, h } = bbox;
+  if (w === 0 || h === 0) {
+    console.warn('[颜色压缩] 帧 bbox 无效');
+    return null;
+  }
+
+  const deltaPacked = frame.deltaPacked || new Uint16Array(0);
+  const blockFlags = frame.blockFlags ?? 0n;
+
+  // 将 deltaPacked 解包为 H/S/L 三通道字节序列
+  const totalPixels = w * h;
+  const hChannel = new Uint8Array(totalPixels);
+  const sChannel = new Uint8Array(totalPixels);
+  const lChannel = new Uint8Array(totalPixels);
+  for (let i = 0; i < totalPixels; i++) {
+    const packed = i < deltaPacked.length ? deltaPacked[i] : 0;
+    const { s, h: qH, l: qL } = unpackRGB565(packed);
+    hChannel[i] = qH;
+    sChannel[i] = s;
+    lChannel[i] = qL;
+  }
+  const deltaBytes = new Uint8Array(totalPixels * 3);
+  deltaBytes.set(hChannel, 0);
+  deltaBytes.set(sChannel, totalPixels);
+  deltaBytes.set(lChannel, totalPixels * 2);
+
+  const region: CompressedRegionV2 = {
+    id: 0, // 单区域
+    bbox,
+    baseColors,
+    regionIdTexture: uint8ToBase64(localRegionIdTex),
+    deltaTexture: uint8ToBase64(deltaBytes),
+    blockFlags,
   };
 
-  console.log('[颜色压缩] 压缩完成，区域数:', compressedRegions.length);
-  return result;
+  return {
+    version: 3,
+    resolution: [512, 512],
+    regionCount: 1,
+    regions: [region],
+    quantization: 'rgb565',
+    hueThreshold: 0.025,
+  };
 }

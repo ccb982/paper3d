@@ -71,7 +71,7 @@ export function refineResidualsAndColors(
   textureSize: number,
   hueThreshold: number = 0.015,
   maxNewColors: number = 3
-): { blockFlags: number; changed: boolean; changedPixelCount: number; badPixels: number[] } {
+): { blockFlags: bigint; changed: boolean; changedPixelCount: number; badPixels: number[] } {
   const { w, h } = bbox;
   const totalPixels = w * h;
   const DELTA_THRESHOLD = 0.25;
@@ -99,12 +99,12 @@ export function refineResidualsAndColors(
     }
   }
 
-  let blockFlags = 0;
+  let blockFlags = 0n;
   for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
     if (blockPixelCount[b] > 0) {
       const ratio = blockSmallCount[b] / blockPixelCount[b];
       if (ratio >= 0.95) {
-        blockFlags |= (1 << b);
+        blockFlags |= (1n << BigInt(b));
       }
     }
   }
@@ -258,7 +258,7 @@ export function refineResidualsAndColors(
 
   blockPixelCount.fill(0);
   blockSmallCount.fill(0);
-  let newBlockFlags = 0;
+  let newBlockFlags = 0n;
   for (let idx = 0; idx < totalPixels; idx++) {
     const colorId = regionIdTex[idx];
     if (colorId === 0) continue;
@@ -279,7 +279,7 @@ export function refineResidualsAndColors(
     if (blockPixelCount[b] > 0) {
       const ratio = blockSmallCount[b] / blockPixelCount[b];
       if (ratio >= 0.95) {
-        newBlockFlags |= (1 << b);
+        newBlockFlags |= (1n << BigInt(b));
       }
     }
   }

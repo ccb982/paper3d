@@ -49,8 +49,8 @@ export function getAdaptiveBlockIndex(x: number, y: number, w: number, h: number
   return row * ADAPTIVE_BLOCK_COLS + col;
 }
 
-export function getRangeForBlock(blockFlags: number, blockIdx: number): number {
-  return (blockFlags & (1 << blockIdx)) ? 0.25 : 0.5;
+export function getRangeForBlock(blockFlags: bigint, blockIdx: number): number {
+  return (blockFlags & (1n << BigInt(blockIdx))) ? 0.25 : 0.5;
 }
 
 export function rleEncode16(data: Uint16Array): Uint8Array {
@@ -332,16 +332,10 @@ export function compressToBinary(result: {
     const deltaBytes = base64ToUint8(deltaTexture);
     if (deltaBytes.length > 0 && bbox.w > 0 && bbox.h > 0) {
       const totalPixels = bbox.w * bbox.h;
-      // 解包成三个独立的 Uint8Array（H, S, L）
-      const hChannel = new Uint8Array(totalPixels);
-      const sChannel = new Uint8Array(totalPixels);
-      const lChannel = new Uint8Array(totalPixels);
-
-      for (let i = 0; i < totalPixels; i++) {
-        hChannel[i] = deltaBytes[i * 3];
-        sChannel[i] = deltaBytes[i * 3 + 1];
-        lChannel[i] = deltaBytes[i * 3 + 2];
-      }
+      // deltaBytes 为连接格式：H...H S...S L...L
+      const hChannel = deltaBytes.slice(0, totalPixels);
+      const sChannel = deltaBytes.slice(totalPixels, totalPixels * 2);
+      const lChannel = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
 
       // 分别做行差分
       const hDiff = applyDelta8(hChannel, bbox.w);
@@ -454,13 +448,11 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
       const sChannel = invertDelta8(sDiff, bbox.w);
       const lChannel = invertDelta8(lDiff, bbox.w);
 
-      // 合并成 HSL 格式（H, S, L 顺序）
+      // 合并成连接格式：H...H S...S L...L
       const decoded8 = new Uint8Array(totalPixels * 3);
-      for (let j = 0; j < totalPixels; j++) {
-        decoded8[j * 3] = hChannel[j];
-        decoded8[j * 3 + 1] = sChannel[j];
-        decoded8[j * 3 + 2] = lChannel[j];
-      }
+      decoded8.set(hChannel, 0);
+      decoded8.set(sChannel, totalPixels);
+      decoded8.set(lChannel, totalPixels * 2);
       deltaTex = uint8ToBase64(decoded8);
     }
 

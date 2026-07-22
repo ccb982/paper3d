@@ -78,7 +78,7 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     rView.setUint16(rOffset, colorCount, true);
     rOffset += 2;
 
-    rView.setUint16(rOffset, region.blockFlags ?? 0, true);
+    rView.setUint16(rOffset, Number(region.blockFlags ?? 0n) & 0xFFFF, true);
     rOffset += 2;
 
     for (const c of baseColors) {
@@ -105,17 +105,10 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     if (deltaTex && deltaTex.length > 0) {
       const totalPixels = bbox.w * bbox.h;
       
-      // 拆分成三个独立通道（H, S, L）
-      const hChannel = new Uint8Array(totalPixels);
-      const sChannel = new Uint8Array(totalPixels);
-      const lChannel = new Uint8Array(totalPixels);
-
-      for (let i = 0; i < totalPixels; i++) {
-        const idx = i * 3;
-        hChannel[i] = deltaTex[idx];
-        sChannel[i] = deltaTex[idx + 1];
-        lChannel[i] = deltaTex[idx + 2];
-      }
+      // deltaTex 为连接格式：H...H S...S L...L（每个通道 totalPixels 字节）
+      const hChannel = deltaTex.slice(0, totalPixels);
+      const sChannel = deltaTex.slice(totalPixels, totalPixels * 2);
+      const lChannel = deltaTex.slice(totalPixels * 2, totalPixels * 3);
 
       // 分别做行差分
       const hDiff = applyDelta8(hChannel, bbox.w);
@@ -181,7 +174,7 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     const colorCount = dataView.getUint16(offset, true);
     offset += 2;
 
-    const blockFlags = version === 3 ? dataView.getUint16(offset, true) : 0;
+    const blockFlags = version === 3 ? BigInt(dataView.getUint16(offset, true)) : 0n;
     offset += version === 3 ? 2 : 0;
 
     const baseColors: Array<{ h: number; s: number; l: number }> = [];
@@ -225,13 +218,11 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
       const sChannel = invertDelta8(sDiff, bbox.w);
       const lChannel = invertDelta8(lDiff, bbox.w);
 
-      // 合并成 HSL 格式（H, S, L 顺序）
+      // 合并成连接格式：H...H S...S L...L
       const decoded8 = new Uint8Array(totalPixels * 3);
-      for (let j = 0; j < totalPixels; j++) {
-        decoded8[j * 3] = hChannel[j];
-        decoded8[j * 3 + 1] = sChannel[j];
-        decoded8[j * 3 + 2] = lChannel[j];
-      }
+      decoded8.set(hChannel, 0);
+      decoded8.set(sChannel, totalPixels);
+      decoded8.set(lChannel, totalPixels * 2);
       deltaTex = uint8ToBase64(decoded8);
     }
 
@@ -310,7 +301,9 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
   const view = new DataView(buffer);
   let offset = 0;
 
+  console.log('========================================');
   console.log('[多帧解包] 开始解析，总长度:', buffer.byteLength, '字节');
+  console.log('========================================');
   
   const magic = view.getUint32(offset, false);
   offset += 4;
@@ -361,8 +354,13 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
     const bboxH = view.getUint16(offset, true); offset += 2;
     const bbox = { x: bboxX, y: bboxY, w: bboxW, h: bboxH };
 
-    const blockFlags = view.getUint16(offset, true);
-    offset += 2;
+    // 读取 blockFlags（64 位，8 字节）
+    const blockFlags = view.getBigUint64(offset, true);
+    offset += 8;
+
+    // ===== blockFlags 详细日志 =====
+    console.log(`[多帧解包] 帧 ${f} "${name}" blockFlags = 0x${blockFlags.toString(16).padStart(16, '0')}`);
+    logBlockFlagsDetail(blockFlags, bbox);
 
     const regionIdTexLen = view.getUint32(offset, true);
     offset += 4;
@@ -406,5 +404,49 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
     frames.push({ name, width, height, bbox, regionIdTex, deltaPacked, blockFlags });
   }
 
+  console.log('========================================');
+  console.log('[多帧解包] 解析完成，共', frames.length, '帧');
+  console.log('========================================');
+
   return { palette, frames };
+}
+
+/**
+ * 详细打印 blockFlags 的每一位含义
+ * blockFlags 是一个 64 位 bigint，每一位代表一个 8x8 分块的量化范围
+ * 1 = 0.25 范围, 0 = 0.5 范围
+ */
+function logBlockFlagsDetail(blockFlags: bigint, bbox: { x: number; y: number; w: number; h: number }) {
+  const ADAPTIVE_BLOCK_COLS = 8;
+  const ADAPTIVE_BLOCK_ROWS = 8;
+  const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
+
+  let detailStr = '[blockFlags 详细信息]\n';
+  detailStr += `  BBox: x=${bbox.x}, y=${bbox.y}, w=${bbox.w}, h=${bbox.h}\n`;
+  detailStr += `  分块网格: ${ADAPTIVE_BLOCK_COLS}x${ADAPTIVE_BLOCK_ROWS} = ${ADAPTIVE_TOTAL_BLOCKS} 块\n`;
+  detailStr += '  每块量化范围:\n';
+  
+  let smallRangeCount = 0;
+  let largeRangeCount = 0;
+  
+  for (let row = 0; row < ADAPTIVE_BLOCK_ROWS; row++) {
+    let line = '    ';
+    for (let col = 0; col < ADAPTIVE_BLOCK_COLS; col++) {
+      const blockIdx = row * ADAPTIVE_BLOCK_COLS + col;
+      const hasSmallRange = (blockFlags & (1n << BigInt(blockIdx))) !== 0n;
+      if (hasSmallRange) {
+        line += '●'; // 0.25 范围
+        smallRangeCount++;
+      } else {
+        line += '○'; // 0.5 范围
+        largeRangeCount++;
+      }
+    }
+    detailStr += line + '\n';
+  }
+  
+  detailStr += `  统计: 小范围(0.25) = ${smallRangeCount} 块, 大范围(0.5) = ${largeRangeCount} 块\n`;
+  detailStr += `  二进制: 0b${blockFlags.toString(2).padStart(64, '0').slice(-64)}`;
+  
+  console.log(detailStr);
 }

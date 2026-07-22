@@ -145,7 +145,7 @@ export interface FrameData {
   rawRegionIdTex: Uint8Array | null;  // 像素值 = 全局颜色 ID
   rawDeltaPacked: Uint16Array | null;
   rawBbox: { x: number; y: number; w: number; h: number } | null;
-  rawBlockFlags: number;
+  rawBlockFlags: bigint;
   sourceResolution: number;           // 原始纹理尺寸（通常512）
 
   // ---------- 显示用纹理（导入后立即生成，供预览） ----------

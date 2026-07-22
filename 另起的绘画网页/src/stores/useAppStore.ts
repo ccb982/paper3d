@@ -357,7 +357,7 @@ interface AppState {
       baseTexture: ImageData | null;
       residualTexture: ImageData | null;
       deltaPacked: Uint16Array;
-      blockFlags: number;
+      blockFlags: bigint;
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint8Array;
       baseColorValues: Array<{ h: number; s: number; l: number }>;
@@ -407,7 +407,7 @@ interface AppState {
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
     deltaPacked: Uint16Array;
-    blockFlags: number;
+    blockFlags: bigint;
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint8Array;
     baseColorValues: Array<{ h: number; s: number; l: number }>;
@@ -2143,13 +2143,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     let baseColors: Array<{ h: number; s: number; l: number }>;
     let regionIdTex: Uint8Array | null;
     let deltaPacked: Uint16Array;
-    let blockFlags: number;
+    let blockFlags: bigint;
     try {
       const result = clusterAndGenerateTexturesV2(mask, bbox, colorSource, 0.025, 512);
       baseColors = result.baseColors;
       regionIdTex = result.regionIdTex;
       deltaPacked = result.deltaPacked;
-      blockFlags = result.blockFlags;
+      blockFlags = BigInt(result.blockFlags);
     } catch (err) {
       console.error(`[提取] 帧 ${frameId} 聚类失败:`, err);
       return;
@@ -2558,7 +2558,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         baseTexture: null,
         residualTexture: null,
         deltaPacked: new Uint16Array(0),
-        blockFlags: 0,
+        blockFlags: 0n,
         bbox: null,
         regionIdTex: new Uint8Array(0),
         baseColorValues: [],
@@ -2780,7 +2780,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawRegionIdTex: mappedRegionIdTex,
         rawDeltaPacked: frame.deltaPacked,
         rawBbox: frame.bbox,
-        rawBlockFlags: frame.blockFlags,
+        rawBlockFlags: BigInt(frame.blockFlags),
         sourceResolution: frame.width,
         baseTexture,
         residualTexture,

@@ -99,7 +99,7 @@ function buildCompositeFromPacked(
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   deltaPacked: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
-  blockFlags: number,
+  blockFlags: bigint,
   textureSize: number
 ): ImageData {
   const { w, h, x: offsetX, y: offsetY } = bbox;
@@ -165,7 +165,7 @@ function extractBaseByClick(
   regionIdTex: Uint8Array;
   texW: number;
   texH: number;
-  blockFlags: number;
+  blockFlags: bigint;
 } | null {
   if (worldPolygons.length === 0) return null;
 
@@ -514,7 +514,7 @@ export const BaseColorEditor: React.FC = () => {
   }, [activeFrameId, updateSkillFrame]);
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
-  const [blockFlags, setBlockFlags] = useState(0);
+  const [blockFlags, setBlockFlags] = useState(0n);
   const [texSize, setTexSize] = useState(512);  // 动态纹理分辨率（根据导入图片尺寸自动调整）
 
   // 同步 texSize：当切换帧或 bgImageData 变化时，自动更新纹理分辨率
@@ -1293,7 +1293,7 @@ export const BaseColorEditor: React.FC = () => {
     // 6. 根据最终 blockFlags 计算范围数组
     const ranges = new Float32Array(ADAPTIVE_TOTAL_BLOCKS);
     for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
-      ranges[b] = (newBlockFlags & (1 << b)) ? 0.25 : 0.5;
+      ranges[b] = (newBlockFlags & (1n << BigInt(b))) ? 0.25 : 0.5;
     }
     setResidualRanges(ranges);
     setBlockFlags(newBlockFlags);
@@ -1350,7 +1350,7 @@ export const BaseColorEditor: React.FC = () => {
                 ...store.frameDataMap,
                 [layerId]: {
                   ...fd,
-                  rawBlockFlags: newBlockFlags,
+                  rawBlockFlags: BigInt(newBlockFlags),
                   rawDeltaPacked: deltaPacked,
                 },
               },
@@ -1635,7 +1635,7 @@ export const BaseColorEditor: React.FC = () => {
     const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
     
     const blockIdx = getAdaptiveBlockIndex(localX, localY, bbox.w, bbox.h);
-    const frameBlockFlags = currentFrame.blockFlags ?? 0;
+    const frameBlockFlags = currentFrame.blockFlags ?? 0n;
     const range = getRangeForBlock(frameBlockFlags, blockIdx);
     
     const dH = dequantizeH(qH, range);
@@ -2491,7 +2491,7 @@ export const BaseColorEditor: React.FC = () => {
                 bbox: frame.bbox!,
                 regionIdTex: newRegionIdTex,
                 deltaPacked: frame.deltaPacked,
-                blockFlags: frame.blockFlags ?? 0,
+                blockFlags: BigInt(frame.blockFlags ?? 0),
               };
             });
 
