@@ -166,8 +166,8 @@
   <script>
     const MAGIC_FTX2 = 0x46545832;
     const MAGIC_FTX3 = 0x46545833;
-    const ADAPTIVE_BLOCK_COLS = 4;
-    const ADAPTIVE_BLOCK_ROWS = 4;
+    const ADAPTIVE_BLOCK_COLS = 8;
+    const ADAPTIVE_BLOCK_ROWS = 8;
     const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
 
     function quantizeH(dH, range) { range = range || 0.5; return Math.round(((dH + range) / (2 * range)) * 63); }

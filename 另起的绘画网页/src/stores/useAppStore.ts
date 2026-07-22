@@ -2827,6 +2827,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 激活第一个导入的帧对应的图层（如果有）
     const firstLayerId = updatedLayers.length > 0 ? updatedLayers[0].id : state.activeLayerId;
 
+    // 取第一帧的 bbox 调整画布尺寸
+    const firstFrame = frames[0];
+    const firstBbox = firstFrame?.bbox;
+
     // ---------- 一次性更新状态 ----------
     // 同时构建新调色板 Map
     const newPalette = new Map<number, PaletteColor>();
@@ -2869,6 +2873,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
       },
+      // 动态调整画布尺寸以匹配 bbox
+      canvasWidth: firstBbox ? firstBbox.w : state.canvasWidth,
+      canvasHeight: firstBbox ? firstBbox.h : state.canvasHeight,
     });
 
     console.log(`[FTX导入] 成功导入 ${frames.length} 帧，调色板 ${palette.length}→${currentPalette.length} 色，更新/创建 ${updatedLayers.length} 个绘制图层`);
@@ -2937,8 +2944,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       512
     );
 
-    // 直接保存完整底图，模板缓冲负责每帧的边界裁剪
-    // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样 fullBase（仅模板=1区域）
+    // 裁剪为 bbox 区域，确保绑定后纹理尺寸与画布（= bbox 尺寸）匹配
+    const cropToBbox = (src: ImageData, bbox: { x: number; y: number; w: number; h: number }): ImageData => {
+      const dst = new ImageData(bbox.w, bbox.h);
+      const srcData = src.data;
+      const dstData = dst.data;
+      for (let r = 0; r < bbox.h; r++) {
+        for (let c = 0; c < bbox.w; c++) {
+          const si = ((bbox.y + r) * src.width + (bbox.x + c)) * 4;
+          const di = (r * bbox.w + c) * 4;
+          dstData[di] = srcData[si];
+          dstData[di + 1] = srcData[si + 1];
+          dstData[di + 2] = srcData[si + 2];
+          dstData[di + 3] = srcData[si + 3];
+        }
+      }
+      return dst;
+    };
+    const croppedBase = frameData.rawBbox
+      ? cropToBbox(fullBase, frameData.rawBbox)
+      : fullBase;
+
+    // 直接保存裁剪后的底图（bbox 尺寸），模板缓冲负责每帧的边界裁剪
+    // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样（仅模板=1区域）
     let validPixelCount = 0;
     const data = fullBase.data;
     for (let i = 3; i < data.length; i += 4) {
@@ -2956,7 +2984,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         [layerId]: {
           ...frameData,
           boundRegionId: regionId,
-          boundBaseTexture: fullBase,
+          boundBaseTexture: croppedBase,
           boundResidualTexture: null,
           textureOffset: frameData.textureOffset || { x: 0, y: 0 },
           textureScale: frameData.textureScale || { x: 1, y: 1 },

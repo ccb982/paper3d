@@ -2488,7 +2488,20 @@ useEffect(() => {
           tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
           ctx.save();
           ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
-          ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+
+          // 如果未绑定且存在 rawBbox，则只绘制 bbox 区域（画布尺寸已等于 bbox 尺寸）
+          if (!frameData.boundRegionId && frameData.rawBbox) {
+            const bbox = frameData.rawBbox;
+            ctx.drawImage(
+              tempCanvas,
+              bbox.x, bbox.y, bbox.w, bbox.h,  // source
+              0, 0, currentWidth, currentHeight  // dest（画布 = bbox 尺寸，1:1 映射）
+            );
+          } else {
+            // 已绑定或无 bbox，全图拉伸
+            ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+          }
+
           ctx.restore();
 
           // 绘制 bbox 边框作为视觉提示
@@ -2498,9 +2511,8 @@ useEffect(() => {
             ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
-            const scaleX = currentWidth / 512;
-            const scaleY = currentHeight / 512;
-            ctx.strokeRect(b.x * scaleX, b.y * scaleY, b.w * scaleX, b.h * scaleY);
+            // 画布尺寸已等于 bbox 尺寸，直接全画布绘制边框
+            ctx.strokeRect(0, 0, currentWidth, currentHeight);
             ctx.restore();
           }
 

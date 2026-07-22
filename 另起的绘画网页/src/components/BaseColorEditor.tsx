@@ -1329,6 +1329,39 @@ export const BaseColorEditor: React.FC = () => {
         deltaPacked: deltaPacked,
         blockFlags: newBlockFlags,
       });
+
+      // 同步 blockFlags 和 deltaPacked 到 frameDataMap（Toolbar 导出需要）
+      const store = useAppStore.getState();
+      const frameDataEntries = store.frameDataMap;
+      let syncedCount = 0;
+      const currentFrame = store.skillGroupEditor.frames.find(f => f.id === activeFrameId);
+      if (currentFrame && currentFrame.bbox && currentFrame.regionIdTex) {
+        for (const [layerId, fd] of Object.entries(frameDataEntries)) {
+          // 通过 bbox 和 regionIdTex 长度匹配（更具唯一性）
+          if (fd.rawBbox && 
+              fd.rawBbox.x === currentFrame.bbox!.x && 
+              fd.rawBbox.y === currentFrame.bbox!.y &&
+              fd.rawBbox.w === currentFrame.bbox!.w &&
+              fd.rawBbox.h === currentFrame.bbox!.h &&
+              fd.rawRegionIdTex && currentFrame.regionIdTex &&
+              fd.rawRegionIdTex.length === currentFrame.regionIdTex.length) {
+            useAppStore.setState({
+              frameDataMap: {
+                ...store.frameDataMap,
+                [layerId]: {
+                  ...fd,
+                  rawBlockFlags: newBlockFlags,
+                  rawDeltaPacked: deltaPacked,
+                },
+              },
+            });
+            syncedCount++;
+          }
+        }
+      }
+      if (syncedCount > 0) {
+        console.log(`[残差计算] blockFlags=0x${newBlockFlags.toString(16)} 同步到 ${syncedCount} 个 frameDataMap 条目`);
+      }
     }
 
     // 10. 强制触发画布重绘（确保合成模式立即更新）
