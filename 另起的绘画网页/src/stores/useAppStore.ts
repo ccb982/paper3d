@@ -2395,7 +2395,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (frame && frame.regionIdTex && frame.bbox) {
       const sortedColors = state.sharedBaseColors;
       const bbox = frame.bbox;
-      const textureSize = 512;
+      const textureSize = frame.bgImageData?.width || 512;
       const totalPixels = textureSize * textureSize;
 
       // 内联 buildBaseTextureFromRegionId
@@ -2462,7 +2462,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (fd && fd.rawRegionIdTex && fd.rawBbox) {
       const sortedColors = state.sharedBaseColors;
       const bbox = fd.rawBbox;
-      const textureSize = 512;
+      const textureSize = fd.sourceResolution || 512;
       const totalPixels = textureSize * textureSize;
       const colorMap = new Map<number, { h: number; s: number; l: number }>();
       for (const c of sortedColors) colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });

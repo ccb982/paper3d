@@ -132,7 +132,7 @@
 
   <div class="container">
     <div>
-      <h3>区域色块预览（画布 512x512）</h3>
+      <h3>区域色块预览（自适应分辨率）</h3>
       <div class="canvas-wrapper">
         <canvas id="previewCanvas" width="512" height="512"></canvas>
       </div>
@@ -479,11 +479,34 @@
     let isPlaying = false;
     let playInterval = null;
     let playSpeed = 10;
+    let texSize = 512;  // 动态纹理分辨率
+
+    function resizeCanvases(size) {
+      texSize = size;
+      const previewCanvas = document.getElementById('previewCanvas');
+      previewCanvas.width = size;
+      previewCanvas.height = size;
+    }
 
     function renderData(data) {
+      // 根据加载的帧数据自适应画布分辨率
+      let resolvedSize = 512;
+      if (data.format === 'ftx3-multiframe' && data.frames.length > 0) {
+        const fw = data.frames[0].width;
+        const fh = data.frames[0].height;
+        resolvedSize = Math.max(fw, fh);
+      } else if (data.regions && data.regions.length > 0) {
+        // 区域模式取 bbox 最大边（或保持 512）
+        for (const region of data.regions) {
+          const { w, h, x, y } = region.bbox;
+          resolvedSize = Math.max(resolvedSize, x + w, y + h);
+        }
+      }
+      resizeCanvases(resolvedSize);
+
       const canvas = document.getElementById('previewCanvas');
       const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, 512, 512);
+      ctx.clearRect(0, 0, texSize, texSize);
 
       const stats = document.getElementById('stats');
       stats.innerHTML = '';
@@ -779,8 +802,8 @@
       zoomInfo.textContent = `点击位置: (${x}, ${y}), 颜色: RGB(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
 
       const zoomSize = 64;
-      const zoomX = Math.max(0, Math.min(512 - zoomSize, x - zoomSize / 2));
-      const zoomY = Math.max(0, Math.min(512 - zoomSize, y - zoomSize / 2));
+      const zoomX = Math.max(0, Math.min(previewCanvas.width - zoomSize, x - zoomSize / 2));
+      const zoomY = Math.max(0, Math.min(previewCanvas.height - zoomSize, y - zoomSize / 2));
 
       zoomCtx.clearRect(0, 0, 256, 256);
       zoomCtx.imageSmoothingEnabled = false;

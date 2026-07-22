@@ -53,14 +53,13 @@ function buildBezierPath(points: Point[]): Point[] {
 }
 
 // ============ 坐标转换 ============
-const TEX_SIZE = 512;
 
-function canvasToWorld(cx: number, cy: number): Point {
-  return { x: cx / TEX_SIZE, y: 1 - cy / TEX_SIZE };
+function canvasToWorld(cx: number, cy: number, textureSize: number): Point {
+  return { x: cx / textureSize, y: 1 - cy / textureSize };
 }
 
-function worldToCanvas(wx: number, wy: number): Point {
-  return { x: wx * TEX_SIZE, y: (1 - wy) * TEX_SIZE };
+function worldToCanvas(wx: number, wy: number, textureSize: number): Point {
+  return { x: wx * textureSize, y: (1 - wy) * textureSize };
 }
 
 function buildResidualTextureFromPacked(
@@ -154,7 +153,7 @@ function extractBaseByClick(
   bgImageData: ImageData,
   worldPolygons: Point[][],
   _clickPixel?: { x: number; y: number },
-  textureSize: number = TEX_SIZE,
+  textureSize: number = 512,
   forcedBbox?: { x: number; y: number; w: number; h: number } | null
 ): {
   baseTexture: ImageData;
@@ -514,7 +513,20 @@ export const BaseColorEditor: React.FC = () => {
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0);
-  
+  const [texSize, setTexSize] = useState(512);  // 动态纹理分辨率（根据导入图片尺寸自动调整）
+
+  // 同步 texSize：当切换帧或 bgImageData 变化时，自动更新纹理分辨率
+  useEffect(() => {
+    if (bgImageData) {
+      const size = bgImageData.width;
+      if (size !== texSize) {
+        console.log(`[BaseColorEditor] texSize 同步：${texSize} → ${size}（来自 bgImageData 分辨率）`);
+        setTexSize(size);
+      }
+    }
+    // 不把 texSize 加入 deps，避免循环更新
+  }, [bgImageData]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [showColorInfoOnClick, setShowColorInfoOnClick] = useState(false);
   
   const [debugShowBadPixels, setDebugShowBadPixels] = useState(false);
@@ -719,7 +731,7 @@ export const BaseColorEditor: React.FC = () => {
 
     gl.bindTexture(gl.TEXTURE_2D, texture);
 
-    const rgbData = new Uint8Array(TEX_SIZE * TEX_SIZE * 3);
+    const rgbData = new Uint8Array(texSize * texSize * 3);
     const { w } = bbox;
 
     for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
@@ -727,8 +739,8 @@ export const BaseColorEditor: React.FC = () => {
       const localX = localIdx % w;
       const globalY = bbox.y + localY;
       const globalX = bbox.x + localX;
-      if (globalY >= 0 && globalY < TEX_SIZE && globalX >= 0 && globalX < TEX_SIZE) {
-        const globalIdx = (globalY * TEX_SIZE + globalX) * 3;
+      if (globalY >= 0 && globalY < texSize && globalX >= 0 && globalX < texSize) {
+        const globalIdx = (globalY * texSize + globalX) * 3;
         const val = regionIdTex[localIdx];
         rgbData[globalIdx] = val;
         rgbData[globalIdx + 1] = val;
@@ -736,7 +748,7 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
 
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, TEX_SIZE, TEX_SIZE, 0, gl.RGB, gl.UNSIGNED_BYTE, rgbData);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, texSize, texSize, 0, gl.RGB, gl.UNSIGNED_BYTE, rgbData);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -748,7 +760,7 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
     textureRef.current = texture;
-  }, [regionIdTex, bbox, webglReady]);
+  }, [regionIdTex, bbox, webglReady, texSize]);
 
   const uploadBaseTexture = useCallback(() => {
     const gl = glRef.current;
@@ -767,7 +779,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, TEX_SIZE, TEX_SIZE, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseTexture.data);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, texSize, texSize, 0, gl.RGBA, gl.UNSIGNED_BYTE, baseTexture.data);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -779,7 +791,7 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
     baseTextureRef.current = texture;
-  }, [baseTexture, webglReady]);
+  }, [baseTexture, webglReady, texSize]);
 
   const drawHighlightGL = useCallback((index: number | null) => {
     const gl = glRef.current;
@@ -991,7 +1003,7 @@ export const BaseColorEditor: React.FC = () => {
     })();
     if (!shouldSnap) return point;
 
-    const canvasPoint = { x: point.x * TEX_SIZE, y: (1 - point.y) * TEX_SIZE };
+    const canvasPoint = { x: point.x * texSize, y: (1 - point.y) * texSize };
     const snapRadiusPx = 10;
     let bestMatch: Point | null = null;
     let bestDist = snapRadiusPx;
@@ -1014,7 +1026,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     for (const p of candidateMap.values()) {
-      const pCanvas = { x: p.x * TEX_SIZE, y: (1 - p.y) * TEX_SIZE };
+      const pCanvas = { x: p.x * texSize, y: (1 - p.y) * texSize };
       const dist = Math.hypot(canvasPoint.x - pCanvas.x, canvasPoint.y - pCanvas.y);
       if (dist < bestDist) {
         bestDist = dist;
@@ -1023,7 +1035,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     return bestMatch || point;
-  }, [snapEnabled, dashedPolygons, drawingPolygon]);
+  }, [snapEnabled, dashedPolygons, drawingPolygon, texSize]);
 
   // 加载背景图
   const handleLoadBackground = useCallback((file: File) => {
@@ -1031,12 +1043,27 @@ export const BaseColorEditor: React.FC = () => {
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
+        // 根据图片原始尺寸计算纹理分辨率
+        let w = img.naturalWidth;
+        let h = img.naturalHeight;
+        const MAX_SIZE = 2048;
+        if (w > MAX_SIZE || h > MAX_SIZE) {
+          const scale = Math.min(MAX_SIZE / w, MAX_SIZE / h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        const newSize = Math.max(w, h);
+        setTexSize(newSize);
+
         const canvas = document.createElement('canvas');
-        canvas.width = TEX_SIZE;
-        canvas.height = TEX_SIZE;
+        canvas.width = newSize;
+        canvas.height = newSize;
         const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(img, 0, 0, TEX_SIZE, TEX_SIZE);
-        const imageData = ctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE);
+        // 居中绘制图片
+        const sx = (newSize - w) / 2;
+        const sy = (newSize - h) / 2;
+        ctx.drawImage(img, sx, sy, w, h);
+        const imageData = ctx.getImageData(0, 0, newSize, newSize);
         setBgImageData(imageData);
         setDashedPolygons([]);
         setDrawingPolygon(null);
@@ -1110,7 +1137,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     if (allPolygons.length === 0) return;
 
-    const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, TEX_SIZE, state.skillGroupEditor.globalBbox);
+    const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, texSize, state.skillGroupEditor.globalBbox);
     if (result) {
       const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, residualTexture, blockFlags } = result;
 
@@ -1118,7 +1145,7 @@ export const BaseColorEditor: React.FC = () => {
         localBaseColors,
         localRegionIdTex,
         bbox,
-        TEX_SIZE
+        texSize
       );
 
       updateSkillFrame(currentActiveFrameId, {
@@ -1147,7 +1174,7 @@ export const BaseColorEditor: React.FC = () => {
         saveToHistory();
       }, 0);
     }
-  }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox]);
+  }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox, texSize]);
 
   const recalculateResidual = useCallback(() => {
     if (!bgImageData || !bbox || baseColors.length === 0) return;
@@ -1173,7 +1200,7 @@ export const BaseColorEditor: React.FC = () => {
         
         const x = bbox.x + px;
         const y = bbox.y + py;
-        const idx = (y * TEX_SIZE + x) * 4;
+        const idx = (y * texSize + x) * 4;
         const origR = bgImageData.data[idx];
         const origG = bgImageData.data[idx + 1];
         const origB = bgImageData.data[idx + 2];
@@ -1255,7 +1282,7 @@ export const BaseColorEditor: React.FC = () => {
       bbox,
       bgImageData,
       tempDeltas,
-      TEX_SIZE,
+      texSize,
       0.015,
       3
     );
@@ -1338,7 +1365,7 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
     
-    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTex, bbox, TEX_SIZE);
+    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTex, bbox, texSize);
     setResidualTexture(residualDisplay);
     
     if (activeFrameId) {
@@ -1349,7 +1376,7 @@ export const BaseColorEditor: React.FC = () => {
       });
     }
     setTimeout(() => saveToHistory(), 0);
-  }, [bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges, addColorToPalette]);
+  }, [bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges, addColorToPalette, texSize]);
 
   // 更新基础色值（仅更新调色板，不重算残差——滑块拖动时性能优化）
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
@@ -1385,13 +1412,13 @@ export const BaseColorEditor: React.FC = () => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const scaleX = TEX_SIZE / rect.width;
-    const scaleY = TEX_SIZE / rect.height;
+    const scaleX = texSize / rect.width;
+    const scaleY = texSize / rect.height;
     return {
       x: Math.round((e.clientX - rect.left) * scaleX),
       y: Math.round((e.clientY - rect.top) * scaleY),
     };
-  }, []);
+  }, [texSize]);
 
   // 取色
   const pickColor = useCallback((px: number, py: number) => {
@@ -1399,11 +1426,11 @@ export const BaseColorEditor: React.FC = () => {
       console.warn('取色器：baseTexture 为空，无法取色');
       return;
     }
-    if (px < 0 || px >= TEX_SIZE || py < 0 || py >= TEX_SIZE) {
+    if (px < 0 || px >= texSize || py < 0 || py >= texSize) {
       console.warn('取色器：坐标超出范围', { px, py });
       return;
     }
-    const idx = (py * TEX_SIZE + px) * 4;
+    const idx = (py * texSize + px) * 4;
     const r = baseTexture.data[idx];
     const g = baseTexture.data[idx + 1];
     const b = baseTexture.data[idx + 2];
@@ -1418,7 +1445,7 @@ export const BaseColorEditor: React.FC = () => {
       .map(v => v.toString(16).padStart(2, '0'))
       .join('');
     setBrushColor(hex);
-  }, [baseTexture]);
+  }, [baseTexture, texSize]);
 
   // 在基础色纹理上涂色
   const paintOnBase = useCallback((px: number, py: number) => {
@@ -1437,8 +1464,8 @@ export const BaseColorEditor: React.FC = () => {
         if (dx * dx + dy * dy > half * half) continue;
         const gx = px + dx;
         const gy = py + dy;
-        if (gx < 0 || gx >= TEX_SIZE || gy < 0 || gy >= TEX_SIZE) continue;
-        const pi = (gy * TEX_SIZE + gx) * 4;
+        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSize) continue;
+        const pi = (gy * texSize + gx) * 4;
         data[pi] = r;
         data[pi + 1] = g;
         data[pi + 2] = b;
@@ -1446,14 +1473,14 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
 
-    const updated = new ImageData(new Uint8ClampedArray(data), TEX_SIZE, TEX_SIZE);
+    const updated = new ImageData(new Uint8ClampedArray(data), texSize, texSize);
     setBaseTexture(updated);
-  }, [baseTexture, brushColor, brushSize]);
+  }, [baseTexture, brushColor, brushSize, texSize]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
-    const world = canvasToWorld(pixel.x, pixel.y);
+    const world = canvasToWorld(pixel.x, pixel.y, texSize);
 
     if (isExtractMode && e.button === 0) {
       handleExtractClick(pixel);
@@ -1533,12 +1560,12 @@ export const BaseColorEditor: React.FC = () => {
       }
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
     setMousePos(pixel);
-    const world = canvasToWorld(pixel.x, pixel.y);
+    const world = canvasToWorld(pixel.x, pixel.y, texSize);
 
     if (currentTool === 'dashed' || currentTool === 'bezier') {
       if (drawingPolygon && drawingPolygon.length > 0) {
@@ -1553,7 +1580,7 @@ export const BaseColorEditor: React.FC = () => {
     if (isDrawing && currentTool === 'paint' && mode === 'base2') {
       paintOnBase(pixel.x, pixel.y);
     }
-  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, drawingPolygon, snapPointToExisting, mode]);
+  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, drawingPolygon, snapPointToExisting, mode, texSize]);
 
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture) {
@@ -1601,7 +1628,7 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
 
-    const bgIdx = (py * TEX_SIZE + px) * 4;
+    const bgIdx = (py * texSize + px) * 4;
     const bgRgb = {
       r: bgImageData.data[bgIdx],
       g: bgImageData.data[bgIdx + 1],
@@ -1658,7 +1685,7 @@ export const BaseColorEditor: React.FC = () => {
       meetsStandard,
       colorId,
     });
-  }, [showColorInfoOnClick, getCanvasPixel, bgImageData, bbox, currentFrame, baseColors, blockFlags]);
+  }, [showColorInfoOnClick, getCanvasPixel, bgImageData, bbox, currentFrame, baseColors, blockFlags, texSize]);
 
   // 右键菜单禁用
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1674,9 +1701,9 @@ export const BaseColorEditor: React.FC = () => {
 
     // ===== 新基础色模式：完全独立的渲染路径 =====
     if (mode === 'base2') {
-      ctx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ctx.clearRect(0, 0, texSize, texSize);
       ctx.fillStyle = '#1a1a1a';
-      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ctx.fillRect(0, 0, texSize, texSize);
 
       if (baseTexture) {
         ctx.save();
@@ -1698,7 +1725,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y));
+        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y, texSize));
         if (poly.length === 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -1742,7 +1769,7 @@ export const BaseColorEditor: React.FC = () => {
         ctx.strokeStyle = '#ffaa00';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
-        const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y));
+        const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y, texSize));
         
         if (currentTool === 'bezier' && drawingPolygon.length === 2) {
           ctx.beginPath();
@@ -1757,9 +1784,9 @@ export const BaseColorEditor: React.FC = () => {
           for (let i = 1; i < pts.length; i++) {
             ctx.lineTo(pts[i].x, pts[i].y);
           }
-          const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y) : null);
+          const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y, texSize) : null);
           if (currentPreview) {
-            const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y);
+            const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize);
             ctx.lineTo(previewCanvas.x, previewCanvas.y);
           }
           ctx.stroke();
@@ -1774,7 +1801,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.lineWidth = 1;
       for (const poly of dashedPolygons) {
         for (const p of poly) {
-          const pt = worldToCanvas(p.x, p.y);
+          const pt = worldToCanvas(p.x, p.y, texSize);
           ctx.beginPath();
           ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
           ctx.fill();
@@ -1783,7 +1810,7 @@ export const BaseColorEditor: React.FC = () => {
       }
       if (drawingPolygon) {
         for (const p of drawingPolygon) {
-          const pt = worldToCanvas(p.x, p.y);
+          const pt = worldToCanvas(p.x, p.y, texSize);
           ctx.beginPath();
           ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
           ctx.fill();
@@ -1800,15 +1827,15 @@ export const BaseColorEditor: React.FC = () => {
         ctx.putImageData(bgImageData, 0, 0);
       } else {
         ctx.fillStyle = '#333';
-        ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+        ctx.fillRect(0, 0, texSize, texSize);
       }
     }
     else if (mode === 'residual') {
       ctx.fillStyle = '#333';
-      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ctx.fillRect(0, 0, texSize, texSize);
       
       if (bbox && currentFrame?.deltaPacked && currentFrame.regionIdTex && baseColors.length > 0) {
-        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, currentFrame.regionIdTex, bbox, TEX_SIZE);
+        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, currentFrame.regionIdTex, bbox, texSize);
         
         ctx.save();
         ctx.beginPath();
@@ -1820,7 +1847,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     else if (mode === 'composite') {
       ctx.fillStyle = '#333';
-      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ctx.fillRect(0, 0, texSize, texSize);
       
       if (bbox && baseTexture && currentFrame?.deltaPacked && currentFrame.regionIdTex && baseColors.length > 0) {
         const compositeData = buildCompositeFromPacked(
@@ -1829,7 +1856,7 @@ export const BaseColorEditor: React.FC = () => {
           currentFrame.deltaPacked,
           bbox,
           currentFrame.blockFlags,
-          TEX_SIZE
+          texSize
         );
         
         ctx.save();
@@ -1851,13 +1878,13 @@ export const BaseColorEditor: React.FC = () => {
     if (isExtractMode) {
       ctx.save();
       ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
-      ctx.fillRect(0, 0, TEX_SIZE, TEX_SIZE);
+      ctx.fillRect(0, 0, texSize, texSize);
       ctx.fillStyle = '#ff0000';
       ctx.font = 'bold 16px Arial';
       ctx.textAlign = 'center';
-      ctx.fillText('提取模式 - 点击区域提取颜色', TEX_SIZE / 2, TEX_SIZE / 2);
+      ctx.fillText('提取模式 - 点击区域提取颜色', texSize / 2, texSize / 2);
       ctx.font = '12px Arial';
-      ctx.fillText('虚线/贝塞尔曲线作为墙，BFS无法穿过', TEX_SIZE / 2, TEX_SIZE / 2 + 24);
+      ctx.fillText('虚线/贝塞尔曲线作为墙，BFS无法穿过', texSize / 2, texSize / 2 + 24);
       ctx.restore();
     }
 
@@ -1869,7 +1896,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y));
+        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y, texSize));
         if (poly.length === 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -1893,12 +1920,12 @@ export const BaseColorEditor: React.FC = () => {
       ctx.strokeStyle = '#ffaa00';
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
-      const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y));
+      const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y, texSize));
       
       if (currentTool === 'bezier' && drawingPolygon.length === 2) {
-        const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y) : null);
+        const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y, texSize) : null);
         if (currentPreview) {
-          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y);
+          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize);
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
           ctx.quadraticCurveTo(previewCanvas.x, previewCanvas.y, pts[1].x, pts[1].y);
@@ -1917,9 +1944,9 @@ export const BaseColorEditor: React.FC = () => {
         for (let i = 1; i < pts.length; i++) {
           ctx.lineTo(pts[i].x, pts[i].y);
         }
-        const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y) : null);
+        const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y, texSize) : null);
         if (currentPreview) {
-          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y);
+          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize);
           ctx.lineTo(previewCanvas.x, previewCanvas.y);
         }
         ctx.stroke();
@@ -1932,7 +1959,7 @@ export const BaseColorEditor: React.FC = () => {
     for (const poly of dashedPolygons) {
       for (let i = 0; i < poly.length; i++) {
         const p = poly[i];
-        const cp = worldToCanvas(p.x, p.y);
+        const cp = worldToCanvas(p.x, p.y, texSize);
         if (poly.length === 3 && i === 2) {
           ctx.fillStyle = '#ff4444';
           ctx.beginPath();
@@ -1949,7 +1976,7 @@ export const BaseColorEditor: React.FC = () => {
     if (drawingPolygon) {
       for (let i = 0; i < drawingPolygon.length; i++) {
         const p = drawingPolygon[i];
-        const cp = worldToCanvas(p.x, p.y);
+        const cp = worldToCanvas(p.x, p.y, texSize);
         if (currentTool === 'bezier' && drawingPolygon.length === 2 && i === 1) {
           ctx.fillStyle = '#ffaa00';
           ctx.beginPath();
@@ -1970,7 +1997,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.save();
       ctx.fillStyle = '#52c41a';
       ctx.beginPath();
-      const sp = worldToCanvas(snapPoint.x, snapPoint.y);
+      const sp = worldToCanvas(snapPoint.x, snapPoint.y, texSize);
       ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
@@ -2030,14 +2057,14 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors, debugShowBadPixels, debugBadPixels]);
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors, debugShowBadPixels, debugBadPixels, texSize]);
 
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
     const octx = overlay.getContext('2d')!;
 
-    octx.clearRect(0, 0, TEX_SIZE, TEX_SIZE);
+    octx.clearRect(0, 0, texSize, texSize);
 
     if (mode === 'base2' && highlightCanvasRef.current) {
       octx.drawImage(highlightCanvasRef.current, 0, 0);
@@ -2464,8 +2491,8 @@ export const BaseColorEditor: React.FC = () => {
               }
               return {
                 name: frame.name || '未命名',
-                width: 512,
-                height: 512,
+                width: texSize,
+                height: texSize,
                 bbox: frame.bbox!,
                 regionIdTex: newRegionIdTex,
                 deltaPacked: frame.deltaPacked,
@@ -2516,8 +2543,8 @@ export const BaseColorEditor: React.FC = () => {
           <div style={{ position: 'relative', display: 'inline-block' }}>
             <canvas
               ref={canvasRef}
-              width={TEX_SIZE}
-              height={TEX_SIZE}
+              width={texSize}
+              height={texSize}
               style={{
                 display: 'block',
                 border: '1px solid #333',
@@ -2535,8 +2562,8 @@ export const BaseColorEditor: React.FC = () => {
             />
             <canvas
               ref={webglCanvasRef}
-              width={TEX_SIZE}
-              height={TEX_SIZE}
+              width={texSize}
+              height={texSize}
               style={{
                 position: 'absolute',
                 top: 0,
@@ -2551,8 +2578,8 @@ export const BaseColorEditor: React.FC = () => {
             />
             <canvas
               ref={overlayRef}
-              width={TEX_SIZE}
-              height={TEX_SIZE}
+              width={texSize}
+              height={texSize}
               style={{
                 position: 'absolute',
                 top: 0,

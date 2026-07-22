@@ -142,12 +142,15 @@ export class RegionEntity {
     const frameSize = vertexCount * 2;
     data.copyWithin((totalFrames - 1) * frameSize, 0, frameSize);
 
+    // 转换为 HalfFloat (16位浮点) 以节省 GPU 显存
+    const halfData = THREE.DataUtils.toHalfFloat(data);
+
     const texture = new THREE.DataTexture(
-      data,
+      halfData,
       vertexCount,
       totalFrames,
       THREE.RGFormat,
-      THREE.FloatType
+      THREE.HalfFloatType
     );
     texture.needsUpdate = true;
     texture.minFilter = THREE.LinearFilter;
@@ -179,14 +182,15 @@ export class RegionEntity {
       this._numFrames = totalFrames;
 
       const data = new Float32Array(totalFrames * vertexCount * 2);
+      const halfData = THREE.DataUtils.toHalfFloat(data);
 
       if (this._displacementTexture) this._displacementTexture.dispose();
       this._displacementTexture = new THREE.DataTexture(
-        data,
+        halfData,
         vertexCount,
         totalFrames,
         THREE.RGFormat,
-        THREE.FloatType
+        THREE.HalfFloatType
       );
       this._displacementTexture.needsUpdate = true;
       this._displacementTexture.wrapS = THREE.ClampToEdgeWrapping;
