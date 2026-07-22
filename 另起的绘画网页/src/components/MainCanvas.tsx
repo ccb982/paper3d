@@ -779,12 +779,13 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // --- 4. UV 生成（像素坐标 → 归一化 UV，直接映射到 512x512 纹理）---
-    const texSize = canvasWidth;
+    // --- 4. UV 生成（像素坐标 → 归一化 UV，正确映射到 canvasWidth x canvasHeight 纹理）---
+    const texWidth = canvasWidth;
+    const texHeight = canvasHeight;
     const uv = new Float32Array(allPoints.length * 2);
     allPoints.forEach((p, i) => {
-      uv[i * 2] = p.x / texSize;
-      uv[i * 2 + 1] = p.y / texSize;
+      uv[i * 2] = p.x / texWidth;
+      uv[i * 2 + 1] = p.y / texHeight;
     });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     
@@ -864,7 +865,7 @@ useEffect(() => {
         THREE.UnsignedByteType
       );
       colorTexture.needsUpdate = true;
-      colorTexture.flipY = false;  // ImageData V-down 坐标系，不翻转
+      colorTexture.flipY = false; // 保持与模板缓冲一致的坐标系，不翻转
       colorTexture.minFilter = THREE.LinearFilter;
       colorTexture.magFilter = THREE.LinearFilter;
       colorTexture.wrapS = THREE.ClampToEdgeWrapping;
@@ -2485,9 +2486,13 @@ useEffect(() => {
           ctx.save();
           ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
 
-          // ★ 关键修复：已绑定时，纹理尺寸等于画布尺寸，直接 putImageData 避免任何缩放偏移
+          // ★ 关键修复：已绑定时，使用 drawImage 替代 putImageData，使纹理跟随视图变换
           if (frameData.boundRegionId !== null) {
-            ctx.putImageData(textureToDraw, 0, 0);
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = textureToDraw.width;
+            tempCanvas.height = textureToDraw.height;
+            tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
+            ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
           } else {
             // 未绑定或预览，使用 drawImage 拉伸
             const tempCanvas = document.createElement('canvas');
