@@ -1663,8 +1663,8 @@ export const BaseColorEditor: React.FC = () => {
     const lightDiff = Math.abs(finalL - bgHsl.l);
     
     const hueThreshold = 0.015;
-    const satThreshold = 0.05;
-    const lightThreshold = 0.05;
+    const satThreshold = 0.015;
+    const lightThreshold = 0.015;
     const meetsStandard = correctedHueDiff <= hueThreshold && satDiff <= satThreshold && lightDiff <= lightThreshold;
 
     setColorInfo({

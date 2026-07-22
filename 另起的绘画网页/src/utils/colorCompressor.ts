@@ -1084,8 +1084,8 @@ function mergeBaseColors(
   baseColors: Array<{ h: number; s: number; l: number }>,
   clusterSizes: number[],
   hueThreshold: number = 0.01,
-  satThreshold: number = 0.05,
-  lightThreshold: number = 0.05
+  satThreshold: number = 0.015,
+  lightThreshold: number = 0.015
 ): {
   mergedColors: Array<{ h: number; s: number; l: number }>;
   oldToNewMap: Uint8Array;

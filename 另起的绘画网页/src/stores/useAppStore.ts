@@ -1969,7 +1969,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const palette = state.palette;
     const thresholdH = 0.02;
-    const thresholdSL = 0.05;
+    const thresholdSL = 0.015;
 
     // 查找相似颜色
     let foundId: number | null = null;
@@ -2523,7 +2523,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (otherId === id || merged.has(otherId) || !palette.has(otherId)) continue;
         const otherData = palette.get(otherId)!;
         const dh = Math.min(Math.abs(data.h - otherData.h), 1 - Math.abs(data.h - otherData.h));
-        if (dh < threshold && Math.abs(data.s - otherData.s) < 0.05 && Math.abs(data.l - otherData.l) < 0.05) {
+        if (dh < threshold && Math.abs(data.s - otherData.s) < 0.015 && Math.abs(data.l - otherData.l) < 0.015) {
           get().replaceColorReferences(otherId, id);
           merged.add(otherId);
         }
@@ -2699,7 +2699,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       let found = false;
       for (const c of currentPalette) {
         const dh = Math.min(Math.abs(c.h - imp.h), 1 - Math.abs(c.h - imp.h));
-        if (dh < 0.02 && Math.abs(c.s - imp.s) < 0.05 && Math.abs(c.l - imp.l) < 0.05) {
+        if (dh < 0.02 && Math.abs(c.s - imp.s) < 0.015 && Math.abs(c.l - imp.l) < 0.015) {
           globalIdMap.set(i + 1, c.id);
           found = true;
           break;

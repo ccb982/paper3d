@@ -43,8 +43,8 @@ function isPixelAcceptable(
   finalHsl: { h: number; s: number; l: number },
   bgHsl: { h: number; s: number; l: number },
   hThresh: number = 0.015,
-  sThresh: number = 0.05,
-  lThresh: number = 0.05
+  sThresh: number = 0.015,
+  lThresh: number = 0.015
 ): boolean {
   const dh = hueDistance(finalHsl.h, bgHsl.h);
   const ds = Math.abs(finalHsl.s - bgHsl.s);
@@ -140,7 +140,7 @@ export function refineResidualsAndColors(
     const finalS = Math.max(0, Math.min(1, base.s + dS_decoded));
     const finalL = Math.max(0, Math.min(1, base.l + dL_decoded));
 
-    if (!isPixelAcceptable({ h: finalH, s: finalS, l: finalL }, bgHsl, hueThreshold, 0.05, 0.05)) {
+    if (!isPixelAcceptable({ h: finalH, s: finalS, l: finalL }, bgHsl, hueThreshold, 0.015, 0.015)) {
       badPixels.push(idx);
     }
   }
@@ -171,7 +171,7 @@ export function refineResidualsAndColors(
         const nBase = colorMapById.get(nColorId);
         if (!nBase) continue;
         const nBgHsl = getBackgroundHslAt(nx, ny, bbox, bgImageData, textureSize);
-        if (isPixelAcceptable(nBase, nBgHsl, hueThreshold, 0.05, 0.05)) {
+        if (isPixelAcceptable(nBase, nBgHsl, hueThreshold, 0.015, 0.015)) {
           candidates.set(nColorId, (candidates.get(nColorId) || 0) + 1);
         }
       }
@@ -203,7 +203,7 @@ export function refineResidualsAndColors(
         let duplicateId: number | null = null;
         const newHsl = { h: bgHsl.h, s: bgHsl.s, l: bgHsl.l };
         for (const c of baseColors) {
-          if (hueDistance(c.h, newHsl.h) < 0.02 && Math.abs(c.s - newHsl.s) < 0.05 && Math.abs(c.l - newHsl.l) < 0.05) {
+          if (hueDistance(c.h, newHsl.h) < 0.02 && Math.abs(c.s - newHsl.s) < 0.015 && Math.abs(c.l - newHsl.l) < 0.015) {
             duplicate = true;
             duplicateId = c.id;
             break;
