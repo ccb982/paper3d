@@ -632,7 +632,7 @@ export class GPUMaskProcessor {
   /**
    * CPU扭曲（用于回退）
    */
-  private applyDistortionCPU(points: Point[], maskEffect: any, time: number): Point[] {
+  public applyDistortionCPU(points: Point[], maskEffect: any, time: number): Point[] {
     if (!maskEffect?.enabled) {
       return points.slice();
     }

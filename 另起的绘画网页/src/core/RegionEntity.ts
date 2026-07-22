@@ -61,6 +61,11 @@ export class RegionEntity {
     maskEffect?: any,
     loopFrames: number = 30
   ): THREE.DataTexture {
+    // ★ 调试日志：定位参数传递问题
+    console.log(`[RegionEntity.buildDisplacementTexture] 输入参数:`);
+    console.log(`  loopFrames=${loopFrames}, canvasWidth=${canvasWidth}, canvasHeight=${canvasHeight}`);
+    console.log(`  maskEffect:`, JSON.stringify(maskEffect));
+    
     const effect = maskEffect || this.maskEffect;
     if (!effect) {
       throw new Error('RegionEntity: 缺少扭曲参数');
@@ -82,6 +87,11 @@ export class RegionEntity {
 
     const totalFrames = 2 * loopFrames;
     this._numFrames = totalFrames;
+    
+    // ★ 调试日志：确认纹理尺寸计算
+    console.log(`[RegionEntity.buildDisplacementTexture] 计算结果:`);
+    console.log(`  vertexCount=${vertexCount}, totalFrames=${totalFrames}, 纹理尺寸=${vertexCount}×${totalFrames}`);
+    
     const data = new Float32Array(totalFrames * vertexCount * 2);
     const hasFixed = this.fixedVertices.size > 0;
 
@@ -94,10 +104,25 @@ export class RegionEntity {
         t = (1 - (reverseIndex + 1) / loopFrames) * 2 * Math.PI;
       }
 
+      // ★ CPU计算调试：记录第0帧和第1帧的关键数据
+      if (frame === 0 || frame === 1) {
+        console.log(`[VAT CPU计算] frame=${frame}, t=${t.toFixed(4)}`);
+      }
+
       const distortedWorldAll: Point[] = [];
       for (const ring of allRings) {
         const distorted = processMaskRingCPU(ring, effect, t);
         distortedWorldAll.push(...distorted);
+      }
+
+      // ★ CPU计算调试：检查第0帧和第1帧的扭曲结果
+      if (frame === 0 || frame === 1) {
+        const firstDistorted = distortedWorldAll[0];
+        const firstOriginal = allVertices[0];
+        console.log(`[VAT CPU计算] frame=${frame} 第1个顶点:`);
+        console.log(`  原始坐标: (${firstOriginal.x.toFixed(4)}, ${firstOriginal.y.toFixed(4)})`);
+        console.log(`  扭曲后坐标: (${firstDistorted.x.toFixed(4)}, ${firstDistorted.y.toFixed(4)})`);
+        console.log(`  偏移: (${(firstDistorted.x - firstOriginal.x).toFixed(6)}, ${(firstDistorted.y - firstOriginal.y).toFixed(6)})`);
       }
 
       const rawDeltas = new Float32Array(vertexCount * 2);
@@ -109,6 +134,15 @@ export class RegionEntity {
         };
         rawDeltas[globalIdx * 2] = distortedPx.x - base.x;
         rawDeltas[globalIdx * 2 + 1] = distortedPx.y - base.y;
+      }
+
+      // ★ CPU计算调试：检查rawDeltas是否全零
+      if (frame === 0 || frame === 1) {
+        const hasNonZeroDelta = rawDeltas.some(v => Math.abs(v) > 0.0001);
+        const maxDelta = Math.max(...rawDeltas.map(v => Math.abs(v)));
+        console.log(`[VAT CPU计算] frame=${frame} rawDeltas:`);
+        console.log(`  是否有非零值: ${hasNonZeroDelta}`);
+        console.log(`  最大绝对值: ${maxDelta.toFixed(6)}`);
       }
 
       let avgDx = 0, avgDy = 0;
@@ -142,16 +176,15 @@ export class RegionEntity {
     const frameSize = vertexCount * 2;
     data.copyWithin((totalFrames - 1) * frameSize, 0, frameSize);
 
-    // 转换为 HalfFloat (16位浮点) 以节省 GPU 显存
-    const halfData = THREE.DataUtils.toHalfFloat(data);
-
+    // 使用 FloatType (32位浮点) 确保兼容性，避免 HalfFloatType 在某些浏览器中上传失败
     const texture = new THREE.DataTexture(
-      halfData,
+      data,
       vertexCount,
       totalFrames,
       THREE.RGFormat,
-      THREE.HalfFloatType
+      THREE.FloatType
     );
+    texture.flipY = false; // 关键修复：禁用 Y 轴翻转，保持数据行序与帧索引一致
     texture.needsUpdate = true;
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
@@ -163,6 +196,12 @@ export class RegionEntity {
     this._lastCanvasHeight = canvasHeight;
     if (this._displacementTexture) this._displacementTexture.dispose();
     this._displacementTexture = texture;
+    
+    // ★ 调试日志：确认纹理创建结果
+    console.log(`[RegionEntity.buildDisplacementTexture] 纹理创建完成:`);
+    console.log(`  纹理尺寸: ${vertexCount} × ${totalFrames}`);
+    console.log(`  数据长度: ${data.length}, 期望长度: ${totalFrames * vertexCount * 2}`);
+    
     return texture;
   }
 
@@ -182,16 +221,16 @@ export class RegionEntity {
       this._numFrames = totalFrames;
 
       const data = new Float32Array(totalFrames * vertexCount * 2);
-      const halfData = THREE.DataUtils.toHalfFloat(data);
 
       if (this._displacementTexture) this._displacementTexture.dispose();
       this._displacementTexture = new THREE.DataTexture(
-        halfData,
+        data,
         vertexCount,
         totalFrames,
         THREE.RGFormat,
-        THREE.HalfFloatType
+        THREE.FloatType
       );
+      this._displacementTexture.flipY = false; // 关键修复：禁用 Y 轴翻转，保持数据行序与帧索引一致
       this._displacementTexture.needsUpdate = true;
       this._displacementTexture.wrapS = THREE.ClampToEdgeWrapping;
       this._displacementTexture.wrapT = THREE.ClampToEdgeWrapping;
@@ -223,7 +262,7 @@ export class RegionEntity {
   }
 
   public getNumFrames(): number {
-    return this._numFrames + 1;
+    return this._numFrames;
   }
 
   public updateDisplacementOnly(canvasWidth: number, canvasHeight: number): void {
@@ -238,7 +277,7 @@ export class RegionEntity {
       return;
     }
 
-    this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, this._numFrames);
+    this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, 30);
   }
 
   // ========== 固定顶点 ==========

@@ -546,19 +546,22 @@ export function MainCanvas() {
 
               // 采样 displacement texture 的前几个像素（帧0位置和当前帧位置）
               let dispSample = 'none';
-              if (dt && dt.image && (dt as any).image.data) {
+              if (dt && dt.image) {
                 const img = (dt as any).image;
-                const tw = img.width || dt.image.width || 0;
+                const tw = dt.width || img.width || 0;
+                const th = dt.height || img.height || 0;
                 const totalFrames = mat.uniforms?.uTotalFrames?.value ?? 1;
                 const fps = mat.uniforms?.uFramesPerSecond?.value ?? 30;
                 const frameIdx = Math.floor((currentTime * fps) % totalFrames);
-                const texY = Math.floor((frameIdx / totalFrames) * (tw || 1));
-                const d = img.data || dt.image.data;
-                // 采样 vertex 0 的位移
-                const idxV0 = (texY * tw + 0) * 4;
-                if (d && idxV0 + 3 < d.length) {
-                  dispSample = `v0@帧${frameIdx}:RG=(${d[idxV0].toFixed(0)},${d[idxV0+1].toFixed(0)})` +
+                const texY = Math.floor((frameIdx / totalFrames) * (th || 1));
+                const d = img.data;
+                // HalfFloatType 使用 Uint16Array，每个通道占2字节
+                if (d && texY * tw * 4 + 3 < d.length) {
+                  const idxV0 = (texY * tw + 0) * 4;
+                  dispSample = `tex=${tw}x${th} v0@帧${frameIdx}:RG=(${d[idxV0]?.toFixed(0)??'?'},${d[idxV0+1]?.toFixed(0)??'?'})` +
                     ` v1:(${d[idxV0+4]?.toFixed(0)??'?'},${d[idxV0+5]?.toFixed(0)??'?'})`;
+                } else {
+                  dispSample = `tex=${tw}x${th} data=${d ? d.length : 'null'}`;
                 }
               }
 
@@ -978,8 +981,9 @@ useEffect(() => {
         return `  #${e.id}: maskEffect=${mf ? `enabled=${mf.enabled} amp=${mf.amplitude?.toFixed(1)} freq=${mf.frequency?.toFixed(2)} twist=${mf.twist?.toFixed(2)}` : 'null'}`;
       }).join('\n');
 
+      const th = img.height || 0;
       group.userData['dispTexInfo'] =
-        `位移纹理: ${tw}x${tw} 总帧=${numFrames} 顶点数=${vc} ` +
+        `位移纹理: ${tw}x${th} 总帧=${numFrames} 顶点数=${vc} ` +
         `非零像素=${nonZeroPixels}/${d.length/4} 最大位移=${maxDisp.toFixed(1)} 最小非零=${minDisp.toFixed(1)}`;
       
       console.log(`[VAT位移纹理诊断]\n${group.userData['dispTexInfo']}\n区域掩码特效:\n${entitiesInfo}`);
