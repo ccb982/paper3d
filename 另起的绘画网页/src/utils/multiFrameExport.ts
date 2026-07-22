@@ -1,4 +1,4 @@
-import { rleEncode8, rleEncode16 } from '../core/ftxCore';
+import { rleEncode8, rleEncode16, applyDelta8, unpackRGB565 } from '../core/ftxCore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 
 export interface FrameExportData {
@@ -22,14 +22,37 @@ export function packMultiFrameToBinary(
   for (const frame of frames) {
     const nameBytes = new TextEncoder().encode(frame.name);
     
-    const deltaEncoded = rleEncode16(frame.deltaPacked);
-    const regionEncoded = rleEncode8(frame.regionIdTex);
+    // regionIdTex: 差分替代 RLE
+    const regionDiff = applyDelta8(frame.regionIdTex, frame.bbox.w);
+
+    // deltaPacked: 解包 RGB565 为 HSL，分别差分
+    const totalPixels = frame.bbox.w * frame.bbox.h;
+    const hChannel = new Uint8Array(totalPixels);
+    const sChannel = new Uint8Array(totalPixels);
+    const lChannel = new Uint8Array(totalPixels);
+    
+    for (let i = 0; i < totalPixels; i++) {
+      const packed = frame.deltaPacked[i];
+      const { s, h, l } = unpackRGB565(packed);
+      hChannel[i] = h;
+      sChannel[i] = s;
+      lChannel[i] = l;
+    }
+    
+    const hDiff = applyDelta8(hChannel, frame.bbox.w);
+    const sDiff = applyDelta8(sChannel, frame.bbox.w);
+    const lDiff = applyDelta8(lChannel, frame.bbox.w);
+    
+    const deltaDiffBytes = new Uint8Array(hDiff.length + sDiff.length + lDiff.length);
+    deltaDiffBytes.set(hDiff, 0);
+    deltaDiffBytes.set(sDiff, hDiff.length);
+    deltaDiffBytes.set(lDiff, hDiff.length + sDiff.length);
 
     let frameSize = 1 + nameBytes.length;
     frameSize += 2 + 2 + 2 + 2 + 2 + 2;
     frameSize += 2;
-    frameSize += 4 + regionEncoded.length;
-    frameSize += 4 + deltaEncoded.length;
+    frameSize += 4 + regionDiff.length;
+    frameSize += 4 + deltaDiffBytes.length;
 
     const frameBuf = new ArrayBuffer(frameSize);
     const view = new DataView(frameBuf);
@@ -43,10 +66,10 @@ export function packMultiFrameToBinary(
     view.setUint16(offset, frame.bbox.w, true); offset += 2;
     view.setUint16(offset, frame.bbox.h, true); offset += 2;
     view.setUint16(offset, frame.blockFlags, true); offset += 2;
-    view.setUint32(offset, regionEncoded.length, true); offset += 4;
-    new Uint8Array(frameBuf, offset, regionEncoded.length).set(regionEncoded); offset += regionEncoded.length;
-    view.setUint32(offset, deltaEncoded.length, true); offset += 4;
-    new Uint8Array(frameBuf, offset, deltaEncoded.length).set(deltaEncoded); offset += deltaEncoded.length;
+    view.setUint32(offset, regionDiff.length, true); offset += 4;
+    new Uint8Array(frameBuf, offset, regionDiff.length).set(regionDiff); offset += regionDiff.length;
+    view.setUint32(offset, deltaDiffBytes.length, true); offset += 4;
+    new Uint8Array(frameBuf, offset, deltaDiffBytes.length).set(deltaDiffBytes); offset += deltaDiffBytes.length;
 
     frameChunks.push(new Uint8Array(frameBuf));
     totalSize += frameSize;

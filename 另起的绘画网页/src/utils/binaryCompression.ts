@@ -20,6 +20,8 @@ import {
   dequantizeL,
   getAdaptiveBlockIndex,
   getRangeForBlock,
+  applyDelta8,
+  invertDelta8,
 } from '../core/ftxCore';
 
 function bakeBaseColor(base: { h: number; s: number; l: number }): { h: number; s: number; l: number } {
@@ -90,33 +92,46 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     buffers.push(new Uint8Array(regionHeader));
 
     if (regionIdTex && regionIdTex.length > 0) {
-      const encoded = rleEncode8(regionIdTex);
+      // 差分替代 RLE
+      const regionDiff = applyDelta8(regionIdTex, bbox.w);
       const lenBuf = new ArrayBuffer(4);
-      new DataView(lenBuf).setUint32(0, encoded.length, true);
+      new DataView(lenBuf).setUint32(0, regionDiff.length, true);
       buffers.push(new Uint8Array(lenBuf));
-      buffers.push(encoded);
+      buffers.push(regionDiff);
     } else {
       buffers.push(new Uint8Array(4));
     }
 
     if (deltaTex && deltaTex.length > 0) {
       const totalPixels = bbox.w * bbox.h;
-      const rgb565Data = new Uint16Array(totalPixels);
+      
+      // 拆分成三个独立通道（H, S, L）
+      const hChannel = new Uint8Array(totalPixels);
+      const sChannel = new Uint8Array(totalPixels);
+      const lChannel = new Uint8Array(totalPixels);
 
       for (let i = 0; i < totalPixels; i++) {
         const idx = i * 3;
-        const encodedH = deltaTex[idx];
-        const encodedS = deltaTex[idx + 1];
-        const encodedL = deltaTex[idx + 2];
-
-        rgb565Data[i] = packRGB565(encodedS, encodedH, encodedL);
+        hChannel[i] = deltaTex[idx];
+        sChannel[i] = deltaTex[idx + 1];
+        lChannel[i] = deltaTex[idx + 2];
       }
 
-      const encoded = rleEncode16(rgb565Data);
+      // 分别做行差分
+      const hDiff = applyDelta8(hChannel, bbox.w);
+      const sDiff = applyDelta8(sChannel, bbox.w);
+      const lDiff = applyDelta8(lChannel, bbox.w);
+
+      // 合并写入
+      const deltaDiffBytes = new Uint8Array(hDiff.length + sDiff.length + lDiff.length);
+      deltaDiffBytes.set(hDiff, 0);
+      deltaDiffBytes.set(sDiff, hDiff.length);
+      deltaDiffBytes.set(lDiff, hDiff.length + sDiff.length);
+
       const lenBuf = new ArrayBuffer(4);
-      new DataView(lenBuf).setUint32(0, encoded.length, true);
+      new DataView(lenBuf).setUint32(0, deltaDiffBytes.length, true);
       buffers.push(new Uint8Array(lenBuf));
-      buffers.push(encoded);
+      buffers.push(deltaDiffBytes);
     } else {
       buffers.push(new Uint8Array(4));
     }
@@ -184,10 +199,11 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     offset += 4;
     let regionIdTex: string | undefined = undefined;
     if (regionIdTexLen > 0) {
-      const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+      const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
       const totalPixels = bbox.w * bbox.h;
-      const decoded = rleDecode8(encoded, totalPixels);
+      // 逆差分还原
+      const decoded = invertDelta8(regionDiff, bbox.w);
       regionIdTex = uint8ToBase64(decoded);
     }
 
@@ -195,19 +211,26 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     offset += 4;
     let deltaTex = '';
     if (deltaTexLen > 0) {
-      const encoded = new Uint8Array(buffer, offset, deltaTexLen);
+      const deltaBytes = new Uint8Array(buffer, offset, deltaTexLen);
       offset += deltaTexLen;
       const totalPixels = bbox.w * bbox.h;
-      const decoded16 = rleDecode16(encoded, totalPixels);
 
+      // 拆分三个通道的差分数据
+      const hDiff = deltaBytes.slice(0, totalPixels);
+      const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+      const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+      // 逆差分还原每个通道
+      const hChannel = invertDelta8(hDiff, bbox.w);
+      const sChannel = invertDelta8(sDiff, bbox.w);
+      const lChannel = invertDelta8(lDiff, bbox.w);
+
+      // 合并成 HSL 格式（H, S, L 顺序）
       const decoded8 = new Uint8Array(totalPixels * 3);
       for (let j = 0; j < totalPixels; j++) {
-        const rgb565 = decoded16[j];
-        const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
-
-        decoded8[j * 3] = encodedH;
-        decoded8[j * 3 + 1] = encodedS;
-        decoded8[j * 3 + 2] = encodedL;
+        decoded8[j * 3] = hChannel[j];
+        decoded8[j * 3 + 1] = sChannel[j];
+        decoded8[j * 3 + 2] = lChannel[j];
       }
       deltaTex = uint8ToBase64(decoded8);
     }
@@ -345,9 +368,10 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
     offset += 4;
     let regionIdTex: Uint8Array;
     if (regionIdTexLen > 0) {
-      const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+      const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
-      regionIdTex = rleDecode8(encoded, bbox.w * bbox.h);
+      // 逆差分还原
+      regionIdTex = invertDelta8(regionDiff, bbox.w);
     } else {
       regionIdTex = new Uint8Array(0);
     }
@@ -356,9 +380,25 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
     offset += 4;
     let deltaPacked: Uint16Array;
     if (deltaPackedLen > 0) {
-      const encoded = new Uint8Array(buffer, offset, deltaPackedLen);
+      const deltaBytes = new Uint8Array(buffer, offset, deltaPackedLen);
       offset += deltaPackedLen;
-      deltaPacked = rleDecode16(encoded, bbox.w * bbox.h);
+      const totalPixels = bbox.w * bbox.h;
+
+      // 拆分三个通道的差分数据
+      const hDiff = deltaBytes.slice(0, totalPixels);
+      const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+      const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+      // 逆差分还原每个通道
+      const hChannel = invertDelta8(hDiff, bbox.w);
+      const sChannel = invertDelta8(sDiff, bbox.w);
+      const lChannel = invertDelta8(lDiff, bbox.w);
+
+      // 重新打包成 RGB565（Uint16Array）
+      deltaPacked = new Uint16Array(totalPixels);
+      for (let j = 0; j < totalPixels; j++) {
+        deltaPacked[j] = packRGB565(sChannel[j], hChannel[j], lChannel[j]);
+      }
     } else {
       deltaPacked = new Uint16Array(0);
     }

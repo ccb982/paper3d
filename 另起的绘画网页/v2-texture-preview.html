@@ -122,9 +122,9 @@
 
   <div class="format-info">
     <strong>FTX 编码格式说明：</strong>
-    <div>• FTX 2.0/3.0：单帧区域压缩，RGB565 + RLE</div>
+    <div>• FTX 2.0/3.0：单帧区域压缩，RGB565 + 行差分滤波</div>
     <div>• FTX 3.0 多帧：共享调色板，每帧独立 regionIdTex + deltaTex</div>
-    <div>• 残差存储：RGB565 打包 (H:6位, S:5位, L:5位)</div>
+    <div>• 残差存储：拆分为 H/S/L 三通道，分别行差分后串联</div>
     <div>• 偏置烘焙：Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)</div>
     <div>• 解码公式：Final_HSL = Base_Shifted + Delta_Encoded</div>
     <div>• FTX 3.0 新增：自适应量化 (4×4空间分区)</div>
@@ -254,6 +254,25 @@
       return result;
     }
 
+    // ==================== 差分滤波（替代 RLE，为 Gzip 优化）====================
+    function applyDelta8(data, stride) {
+      const out = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) {
+        if (i % stride === 0) out[i] = data[i];
+        else out[i] = data[i] - data[i - 1];
+      }
+      return out;
+    }
+
+    function invertDelta8(filtered, stride) {
+      const out = new Uint8Array(filtered.length);
+      for (let i = 0; i < filtered.length; i++) {
+        if (i % stride === 0) out[i] = filtered[i];
+        else out[i] = filtered[i] + out[i - 1];
+      }
+      return out;
+    }
+
     function decompressFromBinary(buffer) {
       const dataView = new DataView(buffer);
       let offset = 0;
@@ -305,10 +324,11 @@
         offset += 4;
         let regionIdTex = undefined;
         if (regionIdTexLen > 0) {
-          const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+          const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
           offset += regionIdTexLen;
           const totalPixels = bbox.w * bbox.h;
-          const decoded = rleDecode8(encoded, totalPixels);
+          // 逆差分还原
+          const decoded = invertDelta8(regionDiff, bbox.w);
           regionIdTex = uint8ArrayToBase64(decoded);
         }
 
@@ -316,17 +336,26 @@
         offset += 4;
         let deltaTex = '';
         if (deltaTexLen > 0) {
-          const encoded = new Uint8Array(buffer, offset, deltaTexLen);
+          const deltaBytes = new Uint8Array(buffer, offset, deltaTexLen);
           offset += deltaTexLen;
           const totalPixels = bbox.w * bbox.h;
-          const decoded16 = rleDecode16(encoded, totalPixels);
+
+          // 拆分三个通道的差分数据
+          const hDiff = deltaBytes.slice(0, totalPixels);
+          const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+          const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+          // 逆差分还原每个通道
+          const hChannel = invertDelta8(hDiff, bbox.w);
+          const sChannel = invertDelta8(sDiff, bbox.w);
+          const lChannel = invertDelta8(lDiff, bbox.w);
+
+          // 合并成 HSL 格式（H, S, L 顺序）
           const decoded8 = new Uint8Array(totalPixels * 3);
           for (let j = 0; j < totalPixels; j++) {
-            const rgb565 = decoded16[j];
-            const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
-            decoded8[j * 3] = encodedH;
-            decoded8[j * 3 + 1] = encodedS;
-            decoded8[j * 3 + 2] = encodedL;
+            decoded8[j * 3] = hChannel[j];
+            decoded8[j * 3 + 1] = sChannel[j];
+            decoded8[j * 3 + 2] = lChannel[j];
           }
           deltaTex = uint8ArrayToBase64(decoded8);
         }
@@ -397,10 +426,11 @@
         offset += 4;
         let regionIdTex = new Uint8Array(0);
         if (regionIdTexLen > 0) {
-          const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+          const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
           offset += regionIdTexLen;
           const totalPixels = bw * bh;
-          regionIdTex = rleDecode8(encoded, totalPixels);
+          // 逆差分还原
+          regionIdTex = invertDelta8(regionDiff, bw);
           console.log('[FTX3] 帧', fi, 'regionIdTex:', regionIdTex.length, '字节 (期望:', totalPixels, ')');
         }
 
@@ -408,17 +438,26 @@
         offset += 4;
         let deltaTex = new Uint8Array(0);
         if (deltaTexLen > 0) {
-          const encoded = new Uint8Array(buffer, offset, deltaTexLen);
+          const deltaBytes = new Uint8Array(buffer, offset, deltaTexLen);
           offset += deltaTexLen;
           const totalPixels = bw * bh;
-          const decoded16 = rleDecode16(encoded, totalPixels);
+
+          // 拆分三个通道的差分数据
+          const hDiff = deltaBytes.slice(0, totalPixels);
+          const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+          const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+          // 逆差分还原每个通道
+          const hChannel = invertDelta8(hDiff, bw);
+          const sChannel = invertDelta8(sDiff, bw);
+          const lChannel = invertDelta8(lDiff, bw);
+
+          // 合并成 HSL 格式（H, S, L 顺序）
           deltaTex = new Uint8Array(totalPixels * 3);
           for (let j = 0; j < totalPixels; j++) {
-            const rgb565 = decoded16[j];
-            const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
-            deltaTex[j * 3] = encodedH;
-            deltaTex[j * 3 + 1] = encodedS;
-            deltaTex[j * 3 + 2] = encodedL;
+            deltaTex[j * 3] = hChannel[j];
+            deltaTex[j * 3 + 1] = sChannel[j];
+            deltaTex[j * 3 + 2] = lChannel[j];
           }
           console.log('[FTX3] 帧', fi, 'deltaTex:', deltaTex.length, '字节 (期望:', totalPixels * 3, ')');
         }

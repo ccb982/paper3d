@@ -166,6 +166,45 @@ export function rleDecode8(encodedData: Uint8Array, expectedPixelCount: number):
   return result;
 }
 
+// ==================== 差分滤波（替代 RLE，为 Gzip 优化）====================
+// 对 Uint8Array 做行差分（每行第一个像素保留原值）
+export function applyDelta8(data: Uint8Array, stride: number): Uint8Array {
+  const out = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    if (i % stride === 0) out[i] = data[i];
+    else out[i] = data[i] - data[i - 1];
+  }
+  return out;
+}
+
+export function invertDelta8(filtered: Uint8Array, stride: number): Uint8Array {
+  const out = new Uint8Array(filtered.length);
+  for (let i = 0; i < filtered.length; i++) {
+    if (i % stride === 0) out[i] = filtered[i];
+    else out[i] = filtered[i] + out[i - 1];
+  }
+  return out;
+}
+
+// 对 Uint16Array 做行差分（原理相同）
+export function applyDelta16(data: Uint16Array, stride: number): Uint16Array {
+  const out = new Uint16Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    if (i % stride === 0) out[i] = data[i];
+    else out[i] = data[i] - data[i - 1];
+  }
+  return out;
+}
+
+export function invertDelta16(filtered: Uint16Array, stride: number): Uint16Array {
+  const out = new Uint16Array(filtered.length);
+  for (let i = 0; i < filtered.length; i++) {
+    if (i % stride === 0) out[i] = filtered[i];
+    else out[i] = filtered[i] + out[i - 1];
+  }
+  return out;
+}
+
 export function base64ToUint8(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -278,22 +317,52 @@ export function compressToBinary(result: {
 
     if (regionIdTexture) {
       const regionIdBytes = base64ToUint8(regionIdTexture);
-      view.setUint32(offset, regionIdBytes.length, true);
+      // 差分替代 RLE
+      const regionDiff = applyDelta8(regionIdBytes, bbox.w);
+      view.setUint32(offset, regionDiff.length, true);
       offset += 4;
-      const regionIdView = new Uint8Array(buffer, offset, regionIdBytes.length);
-      regionIdView.set(regionIdBytes);
-      offset += regionIdBytes.length;
+      const regionIdView = new Uint8Array(buffer, offset, regionDiff.length);
+      regionIdView.set(regionDiff);
+      offset += regionDiff.length;
     } else {
       view.setUint32(offset, 0, true);
       offset += 4;
     }
 
     const deltaBytes = base64ToUint8(deltaTexture);
-    view.setUint32(offset, deltaBytes.length, true);
-    offset += 4;
-    const deltaView = new Uint8Array(buffer, offset, deltaBytes.length);
-    deltaView.set(deltaBytes);
-    offset += deltaBytes.length;
+    if (deltaBytes.length > 0 && bbox.w > 0 && bbox.h > 0) {
+      const totalPixels = bbox.w * bbox.h;
+      // 解包成三个独立的 Uint8Array（H, S, L）
+      const hChannel = new Uint8Array(totalPixels);
+      const sChannel = new Uint8Array(totalPixels);
+      const lChannel = new Uint8Array(totalPixels);
+
+      for (let i = 0; i < totalPixels; i++) {
+        hChannel[i] = deltaBytes[i * 3];
+        sChannel[i] = deltaBytes[i * 3 + 1];
+        lChannel[i] = deltaBytes[i * 3 + 2];
+      }
+
+      // 分别做行差分
+      const hDiff = applyDelta8(hChannel, bbox.w);
+      const sDiff = applyDelta8(sChannel, bbox.w);
+      const lDiff = applyDelta8(lChannel, bbox.w);
+
+      // 合并写入
+      const deltaDiffBytes = new Uint8Array(hDiff.length + sDiff.length + lDiff.length);
+      deltaDiffBytes.set(hDiff, 0);
+      deltaDiffBytes.set(sDiff, hDiff.length);
+      deltaDiffBytes.set(lDiff, hDiff.length + sDiff.length);
+
+      view.setUint32(offset, deltaDiffBytes.length, true);
+      offset += 4;
+      const deltaView = new Uint8Array(buffer, offset, deltaDiffBytes.length);
+      deltaView.set(deltaDiffBytes);
+      offset += deltaDiffBytes.length;
+    } else {
+      view.setUint32(offset, 0, true);
+      offset += 4;
+    }
   }
 
   return new Uint8Array(buffer);
@@ -359,10 +428,11 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
     offset += 4;
     let regionIdTex: string | undefined = undefined;
     if (regionIdTexLen > 0) {
-      const encoded = new Uint8Array(buffer, offset, regionIdTexLen);
+      const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
       const totalPixels = bbox.w * bbox.h;
-      const decoded = rleDecode8(encoded, totalPixels);
+      // 逆差分还原
+      const decoded = invertDelta8(regionDiff, bbox.w);
       regionIdTex = uint8ToBase64(decoded);
     }
 
@@ -370,18 +440,26 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
     offset += 4;
     let deltaTex = '';
     if (deltaTexLen > 0) {
-      const encoded = new Uint8Array(buffer, offset, deltaTexLen);
+      const deltaBytes = new Uint8Array(buffer, offset, deltaTexLen);
       offset += deltaTexLen;
       const totalPixels = bbox.w * bbox.h;
-      const decoded16 = rleDecode16(encoded, totalPixels);
 
+      // 拆分三个通道的差分数据
+      const hDiff = deltaBytes.slice(0, totalPixels);
+      const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+      const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+      // 逆差分还原每个通道
+      const hChannel = invertDelta8(hDiff, bbox.w);
+      const sChannel = invertDelta8(sDiff, bbox.w);
+      const lChannel = invertDelta8(lDiff, bbox.w);
+
+      // 合并成 HSL 格式（H, S, L 顺序）
       const decoded8 = new Uint8Array(totalPixels * 3);
       for (let j = 0; j < totalPixels; j++) {
-        const rgb565 = decoded16[j];
-        const { s: encodedS, h: encodedH, l: encodedL } = unpackRGB565(rgb565);
-        decoded8[j * 3] = encodedH;
-        decoded8[j * 3 + 1] = encodedS;
-        decoded8[j * 3 + 2] = encodedL;
+        decoded8[j * 3] = hChannel[j];
+        decoded8[j * 3 + 1] = sChannel[j];
+        decoded8[j * 3 + 2] = lChannel[j];
       }
       deltaTex = uint8ToBase64(decoded8);
     }
