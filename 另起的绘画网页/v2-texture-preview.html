@@ -127,7 +127,7 @@
     <div>• 残差存储：拆分为 H/S/L 三通道，分别行差分后串联</div>
     <div>• 偏置烘焙：Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)</div>
     <div>• 解码公式：Final_HSL = Base_Shifted + Delta_Encoded</div>
-    <div>• FTX 3.0 新增：自适应量化 (4×4空间分区)</div>
+    <div>• FTX 3.0 新增：自适应量化 (8×8空间分区)</div>
   </div>
 
   <div class="container">
@@ -520,32 +520,33 @@
     let playSpeed = 10;
     let texSize = 512;  // 动态纹理分辨率
 
-    function resizeCanvases(size) {
-      texSize = size;
+    function resizeCanvases(w, h) {
+      texSize = Math.max(w, h);
       const previewCanvas = document.getElementById('previewCanvas');
-      previewCanvas.width = size;
-      previewCanvas.height = size;
+      previewCanvas.width = w;
+      previewCanvas.height = h;
     }
 
     function renderData(data) {
-      // 根据加载的帧数据自适应画布分辨率
-      let resolvedSize = 512;
+      // 根据加载的帧数据自适应画布分辨率（按 bbox 大小）
+      let canvasW = 512, canvasH = 512;
       if (data.format === 'ftx3-multiframe' && data.frames.length > 0) {
-        const fw = data.frames[0].width;
-        const fh = data.frames[0].height;
-        resolvedSize = Math.max(fw, fh);
+        const { w, h } = data.frames[0].bbox;
+        canvasW = w;
+        canvasH = h;
       } else if (data.regions && data.regions.length > 0) {
-        // 区域模式取 bbox 最大边（或保持 512）
+        // 取最大 bbox 尺寸
         for (const region of data.regions) {
-          const { w, h, x, y } = region.bbox;
-          resolvedSize = Math.max(resolvedSize, x + w, y + h);
+          const { w, h } = region.bbox;
+          canvasW = Math.max(canvasW, w);
+          canvasH = Math.max(canvasH, h);
         }
       }
-      resizeCanvases(resolvedSize);
+      resizeCanvases(canvasW, canvasH);
 
       const canvas = document.getElementById('previewCanvas');
       const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, texSize, texSize);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const stats = document.getElementById('stats');
       stats.innerHTML = '';
@@ -595,7 +596,7 @@
 
             const rgb = hslToRgb(finalH, finalS, finalL);
             ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-            ctx.fillRect(x + px, y + py, 1, 1);
+            ctx.fillRect(px, py, 1, 1);
             renderedCount++;
           }
         }
@@ -653,7 +654,7 @@
           const rgb = hslToRgb(finalH, finalS, finalL);
           const ctx = document.getElementById('previewCanvas').getContext('2d');
           ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-          ctx.fillRect(x + px, y + py, 1, 1);
+          ctx.fillRect(px, py, 1, 1);
           renderedCount++;
         }
       }
@@ -662,7 +663,7 @@
       stats.innerHTML = `
         <div>当前帧: ${currentFrameIndex + 1} / ${data.frameCount}</div>
         <div>帧名称: ${frame.name}</div>
-        <div>纹理尺寸: ${frame.width}x${frame.height}</div>
+        <div>纹理尺寸: ${w}x${h}（bbox 区域）</div>
         <div>BBox: (${x}, ${y}, ${w}x${h})</div>
         <div>调色板颜色数: ${data.paletteCount}</div>
         <div>渲染像素: ${renderedCount}</div>

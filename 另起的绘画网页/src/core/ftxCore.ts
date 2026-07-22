@@ -1,7 +1,7 @@
 export const MAGIC = 0x46545832;
 export const VERSION = 3;
-export const ADAPTIVE_BLOCK_COLS = 4;
-export const ADAPTIVE_BLOCK_ROWS = 4;
+export const ADAPTIVE_BLOCK_COLS = 8;
+export const ADAPTIVE_BLOCK_ROWS = 8;
 export const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
 
 export function quantizeH(dH: number, range: number = 0.5): number {
