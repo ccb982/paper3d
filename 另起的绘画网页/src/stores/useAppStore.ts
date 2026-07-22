@@ -2876,6 +2876,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       // 动态调整画布尺寸以匹配 bbox
       canvasWidth: firstBbox ? firstBbox.w : state.canvasWidth,
       canvasHeight: firstBbox ? firstBbox.h : state.canvasHeight,
+      // 🔽 重置视图变换，避免导入后内容偏移和重复绘制
+      zoom: 1.0,
+      panOffset: { x: 0, y: 0 },
     });
 
     console.log(`[FTX导入] 成功导入 ${frames.length} 帧，调色板 ${palette.length}→${currentPalette.length} 色，更新/创建 ${updatedLayers.length} 个绘制图层`);

@@ -1316,13 +1316,14 @@ export function decodeFrameToTextures(
   frame: FrameExportData,
   palette: SharedBaseColor[]
 ): { baseTexture: ImageData; residualTexture: ImageData } {
-  const { bbox, regionIdTex, deltaPacked, blockFlags } = frame;
-  const texSize = 512;
+  const { bbox, regionIdTex, deltaPacked, blockFlags, width, height } = frame;
+  const texWidth = width;
+  const texHeight = height;
   const totalPixels = bbox.w * bbox.h;
 
-  const baseImageData = new ImageData(texSize, texSize);
+  const baseImageData = new ImageData(texWidth, texHeight);
   const baseData = baseImageData.data;
-  const resImageData = new ImageData(texSize, texSize);
+  const resImageData = new ImageData(texWidth, texHeight);
   const resData = resImageData.data;
 
   if (totalPixels === 0 || deltaPacked.length === 0) {
@@ -1364,7 +1365,7 @@ export function decodeFrameToTextures(
 
     const globalX = bbox.x + px;
     const globalY = bbox.y + py;
-    const idx = (globalY * texSize + globalX) * 4;
+    const idx = (globalY * texWidth + globalX) * 4;
 
     // baseTexture = 纯基础色
     baseData[idx] = baseRgb.r;
