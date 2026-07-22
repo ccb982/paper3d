@@ -15,6 +15,7 @@ import {
   getRangeForBlock,
   packRGB565,
   unpackRGB565,
+  ADAPTIVE_TOTAL_BLOCKS,
 } from '../core/ftxCore';
 import type { Point } from '../types';
 import BaseColorList from './BaseColorList';
@@ -470,6 +471,7 @@ export const BaseColorEditor: React.FC = () => {
     syncFrameTextures,
     sortPaletteByArea,
     reclusterFrameFromScratch,
+    triggerCanvasRedraw,
   } = useAppStore();
 
   const { frames, sharedBaseColors, activeFrameId, globalBbox } = skillGroupEditor;
@@ -1178,103 +1180,69 @@ export const BaseColorEditor: React.FC = () => {
 
   const recalculateResidual = useCallback(() => {
     if (!bgImageData || !bbox || baseColors.length === 0) return;
-    
+
     const { w, h } = bbox;
     const totalPixels = w * h;
     const tempDeltas = new Float32Array(totalPixels * 3);
-    
-    // 构建颜色映射：ID -> 基础色（baseColors 排序后索引与 ID 不再对应）
+
+    // 构建颜色映射：ID -> 基础色（使用最新的 baseColors，来自全局调色板）
     const colorMapById = new Map<number, SharedBaseColor>();
     for (const c of baseColors) {
       colorMapById.set(c.id, c);
     }
-    
-    // 直接从 regionIdTex + baseColors 计算残差，不依赖 baseTexture ImageData
-    // 避免 baseTexture 与 baseColors 不同步导致的色相偏差
+
+    // 1. 计算原始残差（基于背景色和基础色）
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         const idx3 = py * w + px;
         const colorId = regionIdTex[idx3];
         const baseHsl = colorMapById.get(colorId);
         if (!baseHsl) continue;
-        
+
         const x = bbox.x + px;
         const y = bbox.y + py;
         const idx = (y * texSize + x) * 4;
-        const origR = bgImageData.data[idx];
-        const origG = bgImageData.data[idx + 1];
-        const origB = bgImageData.data[idx + 2];
-        const origHsl = rgbToHsl(origR, origG, origB);
-        
+        const origHsl = rgbToHsl(bgImageData.data[idx], bgImageData.data[idx + 1], bgImageData.data[idx + 2]);
+
         let dH = origHsl.h - baseHsl.h;
         if (dH > 0.5) dH -= 1.0;
         if (dH < -0.5) dH += 1.0;
-        const dS = origHsl.s - baseHsl.s;
-        const dL = origHsl.l - baseHsl.l;
-        
         tempDeltas[idx3 * 3] = dH;
-        tempDeltas[idx3 * 3 + 1] = dS;
-        tempDeltas[idx3 * 3 + 2] = dL;
+        tempDeltas[idx3 * 3 + 1] = origHsl.s - baseHsl.s;
+        tempDeltas[idx3 * 3 + 2] = origHsl.l - baseHsl.l;
       }
-    }
-    
-    let ranges: Float32Array;
-    let newBlockFlags: number;
-    if (residualRanges) {
-      ranges = residualRanges;
-      newBlockFlags = blockFlags;
-    } else {
-      const blockMax = new Float32Array(16 * 3);
-      const blockPixelCount = new Uint32Array(16);
-      const blockSmallCount = new Uint32Array(16);
-      
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          const idx3 = py * w + px;
-          const colorId = regionIdTex[idx3];
-          if (colorId > 0) {
-            const dH = tempDeltas[idx3 * 3];
-            const dS = tempDeltas[idx3 * 3 + 1];
-            const dL = tempDeltas[idx3 * 3 + 2];
-            
-            const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-            const baseIdx = blockIdx * 3;
-            blockMax[baseIdx] = Math.max(blockMax[baseIdx], Math.abs(dH));
-            blockMax[baseIdx + 1] = Math.max(blockMax[baseIdx + 1], Math.abs(dS));
-            blockMax[baseIdx + 2] = Math.max(blockMax[baseIdx + 2], Math.abs(dL));
-            
-            blockPixelCount[blockIdx]++;
-            if (Math.abs(dH) <= 0.25 && Math.abs(dS) <= 0.25 && Math.abs(dL) <= 0.25) {
-              blockSmallCount[blockIdx]++;
-            }
-          }
-        }
-      }
-      
-      newBlockFlags = 0;
-      ranges = new Float32Array(16);
-      for (let b = 0; b < 16; b++) {
-        if (blockPixelCount[b] > 0) {
-          const ratio = blockSmallCount[b] / blockPixelCount[b];
-          if (ratio >= 0.95) {
-            newBlockFlags |= (1 << b);
-            ranges[b] = 0.25;
-          } else {
-            ranges[b] = 0.5;
-          }
-        } else {
-          ranges[b] = 0.5;
-        }
-      }
-      
-      setResidualRanges(ranges);
-      setBlockFlags(newBlockFlags);
     }
 
-    // ★ 残差修正：对色相偏差大的像素尝试用周围/全局基础色替换
-    //    修正后可让更多块进入窄范围(0.25)，减少 clamp 截断导致的色相偏差
+    // 2. 计算初始 blockFlags（窄范围判断）
+    const blockPixelCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+    const blockSmallCount = new Uint32Array(ADAPTIVE_TOTAL_BLOCKS);
+    for (let idx = 0; idx < totalPixels; idx++) {
+      const colorId = regionIdTex[idx];
+      if (colorId === 0) continue;
+      const px = idx % w;
+      const py = Math.floor(idx / w);
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      blockPixelCount[blockIdx]++;
+
+      const dH = tempDeltas[idx * 3];
+      const dS = tempDeltas[idx * 3 + 1];
+      const dL = tempDeltas[idx * 3 + 2];
+      if (Math.abs(dH) <= 0.25 && Math.abs(dS) <= 0.25 && Math.abs(dL) <= 0.25) {
+        blockSmallCount[blockIdx]++;
+      }
+    }
+
+    let newBlockFlags = 0;
+    for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
+      if (blockPixelCount[b] > 0 && blockSmallCount[b] / blockPixelCount[b] >= 0.95) {
+        newBlockFlags |= (1 << b);
+      }
+    }
+    console.log('[初始 blockFlags]', newBlockFlags.toString(16).padStart(4, '0'));
+
+    // 3. 调用修正（处理坏像素）
     const regionIdTexCopy = new Uint8Array(regionIdTex);
-    const baseColorsCopy = baseColors.map((c: SharedBaseColor) => ({ ...c }));
+    const baseColorsCopy = baseColors.map(c => ({ ...c }));
     const prevColorCount = baseColorsCopy.length;
     const refinementResult = refineResidualsAndColors(
       regionIdTexCopy,
@@ -1287,39 +1255,17 @@ export const BaseColorEditor: React.FC = () => {
       3
     );
 
-    // 保存坏像素列表（用于调试高亮）
-    if (refinementResult.badPixels) {
-      setDebugBadPixels(refinementResult.badPixels);
-      if (refinementResult.badPixels.length > 0 && bbox) {
-        const { x: offsetX, y: offsetY, w } = bbox;
-        const badPixelCoords = refinementResult.badPixels.map(localIdx => {
-          const px = localIdx % w;
-          const py = Math.floor(localIdx / w);
-          return { x: offsetX + px, y: offsetY + py };
-        });
-      }
+    // 4. 采用修正后的 blockFlags（如果修正改变了 blockFlags，则采用新值）
+    if (refinementResult.blockFlags !== newBlockFlags) {
+      console.log(`[残差修正] blockFlags 更新: 0x${newBlockFlags.toString(16)} → 0x${refinementResult.blockFlags.toString(16)}`);
+      newBlockFlags = refinementResult.blockFlags;
     }
 
-    // 无论是否修正，都使用返回的最新 blockFlags 更新
-    // 因为残差可能已变化（用户调HSL），需要重新评估块范围
-    newBlockFlags = refinementResult.blockFlags;
-    setBlockFlags(newBlockFlags);
-
-    // 同步更新 ranges
-    const refinedRanges = new Float32Array(16);
-    for (let b = 0; b < 16; b++) {
-      refinedRanges[b] = (newBlockFlags & (1 << b)) ? 0.25 : 0.5;
-    }
-    setResidualRanges(refinedRanges);
-    ranges = refinedRanges;
-
-    // 如果发生了像素修正，则更新 regionIdTex 和 baseColors
+    // 5. 如果修正修改了 regionIdTex 或 baseColors，则同步到 store
     if (refinementResult.changed) {
-      // 写回修正后的 regionIdTex
       if (activeFrameId) {
         updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
       }
-      // 如果 baseColors 被 push 了新颜色，通过 addColorToPalette 加入全局调色板
       if (baseColorsCopy.length !== prevColorCount) {
         const oldToNewId = new Map<number, number>();
         for (let i = prevColorCount; i < baseColorsCopy.length; i++) {
@@ -1327,56 +1273,72 @@ export const BaseColorEditor: React.FC = () => {
           const globalId = addColorToPalette({ h: c.h, s: c.s, l: c.l }, activeFrameId || '');
           oldToNewId.set(c.id, globalId);
         }
-        // 更新 regionIdTexCopy 中的颜色 ID 为新分配的全局 ID
         for (let i = 0; i < regionIdTexCopy.length; i++) {
           const oldId = regionIdTexCopy[i];
           if (oldToNewId.has(oldId)) {
             regionIdTexCopy[i] = oldToNewId.get(oldId)!;
           }
         }
-        // 重新写回更新后的 regionIdTex（因为 ID 可能变了）
         if (activeFrameId) {
           updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
         }
       }
     }
 
-    const deltaPacked = new Uint16Array(totalPixels);
-    // 使用修正后的 regionIdTex（如果有修正）来判断像素有效性
-    const effectiveRegionIdTex = refinementResult.changed ? regionIdTexCopy : regionIdTex;
-    for (let py = 0; py < h; py++) {
-      for (let px = 0; px < w; px++) {
-        const idx = py * w + px;
-        const colorId = effectiveRegionIdTex[idx];
-        if (colorId > 0) {
-          const dH = tempDeltas[idx * 3];
-          const dS = tempDeltas[idx * 3 + 1];
-          const dL = tempDeltas[idx * 3 + 2];
-          
-          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
-          const range = ranges[blockIdx];
-          
-          const qH = quantizeH(dH, range);
-          const qS = quantizeS(dS, range);
-          const qL = quantizeL(dL, range);
-          
-          deltaPacked[idx] = packRGB565(qS, qH, qL);
-        }
-      }
+    // 保存坏像素列表（用于调试高亮）
+    if (refinementResult.badPixels) {
+      setDebugBadPixels(refinementResult.badPixels);
     }
-    
+
+    // 6. 根据最终 blockFlags 计算范围数组
+    const ranges = new Float32Array(ADAPTIVE_TOTAL_BLOCKS);
+    for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
+      ranges[b] = (newBlockFlags & (1 << b)) ? 0.25 : 0.5;
+    }
+    setResidualRanges(ranges);
+    setBlockFlags(newBlockFlags);
+
+    // 7. 重新打包 deltaPacked（使用最新的 tempDeltas 和 ranges）
+    const effectiveRegionIdTex = refinementResult.changed ? regionIdTexCopy : regionIdTex;
+    const deltaPacked = new Uint16Array(totalPixels);
+    for (let idx = 0; idx < totalPixels; idx++) {
+      const colorId = effectiveRegionIdTex[idx];
+      if (colorId === 0) continue;
+      const px = idx % w;
+      const py = Math.floor(idx / w);
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      const range = ranges[blockIdx];
+
+      const dH = tempDeltas[idx * 3];
+      const dS = tempDeltas[idx * 3 + 1];
+      const dL = tempDeltas[idx * 3 + 2];
+      const qH = quantizeH(dH, range);
+      const qS = quantizeS(dS, range);
+      const qL = quantizeL(dL, range);
+      deltaPacked[idx] = packRGB565(qS, qH, qL);
+    }
+
+    // 8. 生成残差纹理（用于显示）
     const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTex, bbox, texSize);
     setResidualTexture(residualDisplay);
-    
+
+    // 9. 更新帧数据（包含 blockFlags 和 deltaPacked）
     if (activeFrameId) {
-      updateSkillFrame(activeFrameId, { 
+      updateSkillFrame(activeFrameId, {
         residualTexture: residualDisplay,
         deltaPacked: deltaPacked,
         blockFlags: newBlockFlags,
       });
     }
-    setTimeout(() => saveToHistory(), 0);
-  }, [bgImageData, bbox, baseColors.length, saveToHistory, activeFrameId, updateSkillFrame, blockFlags, residualRanges, addColorToPalette, texSize]);
+
+    // 10. 强制触发画布重绘（确保合成模式立即更新）
+    setTimeout(() => {
+      triggerCanvasRedraw();
+      saveToHistory();
+    }, 0);
+
+    console.log(`[残差计算完成] blockFlags=0x${newBlockFlags.toString(16).padStart(4, '0')}, 坏像素=${refinementResult.badPixels?.length || 0}`);
+  }, [bgImageData, bbox, baseColors, regionIdTex, activeFrameId, texSize, addColorToPalette, updateSkillFrame, saveToHistory, triggerCanvasRedraw]);
 
   // 更新基础色值（仅更新调色板，不重算残差——滑块拖动时性能优化）
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
@@ -2057,7 +2019,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors, debugShowBadPixels, debugBadPixels, texSize]);
+    }, [bgImageData, baseTexture, residualTexture, mode, dashedPolygons, drawingPolygon, bbox, globalBbox, isExtractMode, mousePos, sharedBaseColors, debugShowBadPixels, debugBadPixels, texSize, currentFrame?.blockFlags, currentFrame?.deltaPacked, currentFrame?.regionIdTex]);
 
   useEffect(() => {
     const overlay = overlayRef.current;
