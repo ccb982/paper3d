@@ -1394,10 +1394,12 @@ export const BaseColorEditor: React.FC = () => {
       if (currentFrame && currentFrame.regionIdTex) {
         setColorPixelsMap(buildColorPixelsMap(currentFrame.regionIdTex));
       }
-      recalculateResidual();
+      // 刷新纹理和画布（仅显示更新，不重新计算残差）
+      syncFrameTextures(activeFrameId);
+      triggerCanvasRedraw();
       saveToHistory();
     }, 0);
-  }, [activeFrameId, reclusterFrameFromScratch, recalculateResidual, saveToHistory, buildColorPixelsMap, setColorPixelsMap]);
+  }, [activeFrameId, reclusterFrameFromScratch, syncFrameTextures, triggerCanvasRedraw, saveToHistory, buildColorPixelsMap, setColorPixelsMap]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
