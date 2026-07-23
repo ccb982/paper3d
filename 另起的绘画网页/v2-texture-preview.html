@@ -382,12 +382,20 @@
       const dataView = new DataView(buffer);
       const version = dataView.getUint8(offset);
       offset += 1;
+
+      // 版本 3+ 新增 PredictionFlag 字节（1=启用帧间预测，0=禁用）
+      let predictionFlag = 0;
+      if (version >= 3) {
+        predictionFlag = dataView.getUint8(offset);
+        offset += 1;
+      }
+
       const frameCount = dataView.getUint16(offset, true);
       offset += 2;
       const paletteCount = dataView.getUint16(offset, true);
       offset += 2;
 
-      console.log('[FTX3] version:', version, 'frameCount:', frameCount, 'paletteCount:', paletteCount);
+      console.log('[FTX3] version:', version, 'predictionFlag:', predictionFlag, 'frameCount:', frameCount, 'paletteCount:', paletteCount);
 
       const palette = [];
       for (let i = 0; i < paletteCount; i++) {
@@ -399,6 +407,7 @@
       console.log('[FTX3] palette:', palette.length, 'colors');
 
       const frames = [];
+      let prevDecodedRegion = null; // 用于帧间预测解码
       for (let fi = 0; fi < frameCount; fi++) {
         const nameLen = dataView.getUint8(offset);
         offset += 1;
@@ -429,8 +438,39 @@
           const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
           offset += regionIdTexLen;
           const totalPixels = bw * bh;
-          // 逆差分还原
-          regionIdTex = invertDelta8(regionDiff, bw);
+          // 逆差分还原 → 得到原始编码值
+          const processedRegion = invertDelta8(regionDiff, bw);
+
+          if (version >= 3) {
+            // 版本 3：数据经过偏移/预测编码，需要反向还原
+            if (predictionFlag === 1 && prevDecodedRegion !== null) {
+              // 启用帧间预测且非第一帧：完整的预测解码
+              regionIdTex = new Uint8Array(totalPixels);
+              for (let i = 0; i < totalPixels; i++) {
+                const val = processedRegion[i];
+                if (val === 1) {
+                  // 与上一帧相同
+                  regionIdTex[i] = prevDecodedRegion[i];
+                } else {
+                  regionIdTex[i] = val === 0 ? 0 : val - 1;
+                }
+              }
+            } else {
+              // 第一帧 或 未启用预测：仅反向偏移 (val-1)
+              regionIdTex = new Uint8Array(totalPixels);
+              for (let i = 0; i < totalPixels; i++) {
+                const val = processedRegion[i];
+                regionIdTex[i] = val === 0 ? 0 : val - 1;
+              }
+            }
+            // 保存当前解码后的帧作为后续帧的预测参考
+            if (predictionFlag === 1) {
+              prevDecodedRegion = regionIdTex;
+            }
+          } else {
+            // 版本 2：数据直接存储原始 ID
+            regionIdTex = processedRegion;
+          }
           console.log('[FTX3] 帧', fi, 'regionIdTex:', regionIdTex.length, '字节 (期望:', totalPixels, ')');
         }
 
