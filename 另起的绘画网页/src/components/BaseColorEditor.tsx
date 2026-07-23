@@ -480,9 +480,10 @@ export const BaseColorEditor: React.FC = () => {
     sortPaletteByArea,
     reclusterFrameFromScratch,
     triggerCanvasRedraw,
+    setEnableFramePrediction,
   } = useAppStore();
 
-  const { frames, sharedBaseColors, activeFrameId, globalBbox } = skillGroupEditor;
+  const { frames, sharedBaseColors, activeFrameId, globalBbox, enableFramePrediction } = skillGroupEditor;
   const currentFrame = frames.find((f: typeof frames[0]) => f.id === activeFrameId) || null;
 
   const bgImageData = currentFrame?.bgImageData || null;
@@ -2353,6 +2354,14 @@ export const BaseColorEditor: React.FC = () => {
         >
           清除结果
         </button>
+        <label style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', padding: '2px 8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+          <input
+            type="checkbox"
+            checked={enableFramePrediction}
+            onChange={(e) => setEnableFramePrediction(e.target.checked)}
+          />
+          帧间预测
+        </label>
         <button
           onClick={async () => {
             const state = useAppStore.getState();
@@ -2395,12 +2404,13 @@ export const BaseColorEditor: React.FC = () => {
               };
             });
 
-            const binary = packMultiFrameToBinary(sortedColors, exportFrames);
+            const binary = packMultiFrameToBinary(sortedColors, exportFrames, enableFramePrediction);
             console.log('[多帧导出] 二进制数据生成成功，大小:', binary.length, '字节');
             console.log('[多帧导出] 魔数:', binary.slice(0, 4).join(','));
             console.log('[多帧导出] 版本:', binary[4]);
-            console.log('[多帧导出] 帧数:', (binary[5] | (binary[6] << 8)));
-            console.log('[多帧导出] 调色板数:', (binary[7] | (binary[8] << 8)));
+            console.log('[多帧导出] 预测标志:', binary[5]);
+            console.log('[多帧导出] 帧数:', (binary[6] | (binary[7] << 8)));
+            console.log('[多帧导出] 调色板数:', (binary[8] | (binary[9] << 8)));
             const gzipped = await compressToGzip(binary);
             console.log('[多帧导出] Gzip压缩完成，大小:', gzipped.size, '字节');
             const url = URL.createObjectURL(gzipped);

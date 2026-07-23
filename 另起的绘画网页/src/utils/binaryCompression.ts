@@ -295,7 +295,7 @@ export interface MultiFrameData {
 
 /**
  * 解析 packMultiFrameToBinary 生成的二进制数据
- * 格式：Magic(4) + Version(1) + FrameCount(2) + PaletteCount(2) + Palette + Frames
+ * 格式：Magic(4) + Version(1) + PredictionFlag(1) + FrameCount(2) + PaletteCount(2) + Palette + Frames
  */
 export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData {
   const view = new DataView(buffer);
@@ -314,10 +314,16 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
 
   const version = view.getUint8(offset);
   offset += 1;
-  console.log('[多帧解包] 版本:', version, '(预期: 2)');
-  if (version !== 2) {
-    throw new Error(`不支持的多帧版本: ${version}`);
+  console.log('[多帧解包] 版本:', version, '(预期: 3)');
+  if (version !== 3) {
+    throw new Error(`不支持的多帧版本: ${version}，当前仅支持版本3`);
   }
+
+  // PredictionFlag
+  const predictionFlag = view.getUint8(offset);
+  offset += 1;
+  const enablePrediction = predictionFlag === 1;
+  console.log('[多帧解包] 预测标志:', predictionFlag, '(启用:', enablePrediction, ')');
 
   const frameCount = view.getUint16(offset, true);
   offset += 2;
@@ -339,6 +345,8 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
   }
 
   const frames: FrameExportData[] = [];
+  let prevDecodedRegion: Uint8Array | null = null;
+
   for (let f = 0; f < frameCount; f++) {
     const nameLen = view.getUint8(offset);
     offset += 1;
@@ -354,7 +362,6 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
     const bboxH = view.getUint16(offset, true); offset += 2;
     const bbox = { x: bboxX, y: bboxY, w: bboxW, h: bboxH };
 
-    // 读取 blockFlags（64 位，8 字节）
     const blockFlags = view.getBigUint64(offset, true);
     offset += 8;
 
@@ -362,18 +369,52 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
     console.log(`[多帧解包] 帧 ${f} "${name}" blockFlags = 0x${blockFlags.toString(16).padStart(16, '0')}`);
     logBlockFlagsDetail(blockFlags, bbox);
 
+    // 读取 regionIdTex
     const regionIdTexLen = view.getUint32(offset, true);
     offset += 4;
     let regionIdTex: Uint8Array;
     if (regionIdTexLen > 0) {
       const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
-      // 逆差分还原
-      regionIdTex = invertDelta8(regionDiff, bbox.w);
+      // 逆差分还原得到 processedRegion
+      const processedRegion = invertDelta8(regionDiff, bbox.w);
+      
+      // 根据预测标志和帧序号还原真实 ID
+      if (!enablePrediction) {
+        // 未启用预测：直接反向偏移 (val-1)
+        regionIdTex = new Uint8Array(processedRegion.length);
+        for (let i = 0; i < processedRegion.length; i++) {
+          const val = processedRegion[i];
+          regionIdTex[i] = val === 0 ? 0 : val - 1;
+        }
+      } else {
+        // 启用预测：需要帧间还原
+        if (prevDecodedRegion === null) {
+          // 第一帧：仅反向偏移
+          regionIdTex = new Uint8Array(processedRegion.length);
+          for (let i = 0; i < processedRegion.length; i++) {
+            const val = processedRegion[i];
+            regionIdTex[i] = val === 0 ? 0 : val - 1;
+          }
+        } else {
+          regionIdTex = new Uint8Array(processedRegion.length);
+          for (let i = 0; i < processedRegion.length; i++) {
+            const val = processedRegion[i];
+            if (val === 1) {
+              // 与上一帧相同
+              regionIdTex[i] = prevDecodedRegion[i];
+            } else {
+              regionIdTex[i] = val === 0 ? 0 : val - 1;
+            }
+          }
+        }
+        prevDecodedRegion = regionIdTex; // 保存当前还原后的帧
+      }
     } else {
       regionIdTex = new Uint8Array(0);
     }
 
+    // 读取 deltaPacked
     const deltaPackedLen = view.getUint32(offset, true);
     offset += 4;
     let deltaPacked: Uint16Array;
@@ -381,21 +422,17 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
       const deltaBytes = new Uint8Array(buffer, offset, deltaPackedLen);
       offset += deltaPackedLen;
       const totalPixels = bbox.w * bbox.h;
-
-      // 拆分三个通道的差分数据
+      // 拆分三个通道的差分数据并逆差分还原
       const hDiff = deltaBytes.slice(0, totalPixels);
       const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
       const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
-
-      // 逆差分还原每个通道
       const hChannel = invertDelta8(hDiff, bbox.w);
       const sChannel = invertDelta8(sDiff, bbox.w);
       const lChannel = invertDelta8(lDiff, bbox.w);
-
-      // 重新打包成 RGB565（Uint16Array）
+      // 重新打包成 RGB565
       deltaPacked = new Uint16Array(totalPixels);
-      for (let j = 0; j < totalPixels; j++) {
-        deltaPacked[j] = packRGB565(sChannel[j], hChannel[j], lChannel[j]);
+      for (let i = 0; i < totalPixels; i++) {
+        deltaPacked[i] = packRGB565(sChannel[i], hChannel[i], lChannel[i]);
       }
     } else {
       deltaPacked = new Uint16Array(0);

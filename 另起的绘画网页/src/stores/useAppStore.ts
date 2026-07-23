@@ -366,6 +366,7 @@ interface AppState {
     activeFrameId: string | null;
     globalBbox: { x: number; y: number; w: number; h: number } | null;
     nextColorId: number;
+    enableFramePrediction: boolean;  // 帧间预测开关
   };
 
   // ===== 新架构：全局调色板（唯一真相源）=====
@@ -432,6 +433,9 @@ interface AppState {
 
   // 获取某图层可绑定的区域列表
   getBindableRegions: (layerId: string) => Array<{ id: number; name: string }>;
+
+  // 帧间预测开关
+  setEnableFramePrediction: (enabled: boolean) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -1947,6 +1951,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     activeFrameId: null,
     globalBbox: null,
     nextColorId: 1,
+    enableFramePrediction: true,  // 默认开启帧间预测
   },
 
   // ===== 新架构：全局调色板初始状态 =====
@@ -3008,6 +3013,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     return entities.map(entity => ({
       id: entity.id,
       name: `区域 ${entity.id} (${entity.boundary.length} 环)`,
+    }));
+  },
+
+  // ===== 帧间预测开关 =====
+  setEnableFramePrediction: (enabled: boolean) => {
+    set((s) => ({
+      skillGroupEditor: { ...s.skillGroupEditor, enableFramePrediction: enabled },
     }));
   },
 

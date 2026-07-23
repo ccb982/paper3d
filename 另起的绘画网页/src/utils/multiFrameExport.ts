@@ -13,14 +13,17 @@ export interface FrameExportData {
 
 export function packMultiFrameToBinary(
   palette: SharedBaseColor[],
-  frames: FrameExportData[]
+  frames: FrameExportData[],
+  enablePrediction: boolean = true
 ): Uint8Array {
-  let totalSize = 4 + 1 + 2 + 2;
+  // 头部：Magic(4) + Version(1) + PredictionFlag(1) + FrameCount(2) + PaletteCount(2)
+  const headerSize = 4 + 1 + 1 + 2 + 2;
+  let totalSize = headerSize;
   totalSize += palette.length * 12;
 
   // ===== 导出前 blockFlags 调试日志 =====
   console.log('========================================');
-  console.log('[多帧导出] 开始打包，共', frames.length, '帧');
+  console.log('[多帧导出] 开始打包，共', frames.length, '帧，预测:', enablePrediction ? '启用' : '禁用');
   console.log('========================================');
   for (let i = 0; i < frames.length; i++) {
     const frame = frames[i];
@@ -29,56 +32,78 @@ export function packMultiFrameToBinary(
   }
 
   const frameChunks: Uint8Array[] = [];
-  for (const frame of frames) {
-    const nameBytes = new TextEncoder().encode(frame.name);
-    
-    // regionIdTex: 差分替代 RLE
-    const regionDiff = applyDelta8(frame.regionIdTex, frame.bbox.w);
+  let prevRegionIdTex: Uint8Array | null = null;
+  let prevBboxW = 0, prevBboxH = 0;
 
-    // deltaPacked: 解包 RGB565 为 HSL，分别差分
-    const totalPixels = frame.bbox.w * frame.bbox.h;
+  for (const frame of frames) {
+    const { bbox, regionIdTex, deltaPacked, blockFlags, name, width, height } = frame;
+    const nameBytes = new TextEncoder().encode(name);
+    const totalPixels = bbox.w * bbox.h;
+
+    // ----- 1. 帧间预测处理 -----
+    const processedRegion = new Uint8Array(totalPixels);
+    const canPredict = enablePrediction && prevRegionIdTex !== null &&
+                        prevBboxW === bbox.w && prevBboxH === bbox.h;
+
+    if (canPredict) {
+      for (let i = 0; i < totalPixels; i++) {
+        const id = regionIdTex[i];
+        const prevId = prevRegionIdTex![i]; // 非空断言：canPredict 已保证不为 null
+        if (id === prevId) {
+          processedRegion[i] = 1;   // 标记相同
+        } else {
+          processedRegion[i] = id === 0 ? 0 : id + 1;
+        }
+      }
+    } else {
+      // 第一帧 或 不启用预测：直接偏移
+      for (let i = 0; i < totalPixels; i++) {
+        const id = regionIdTex[i];
+        processedRegion[i] = id === 0 ? 0 : id + 1;
+      }
+    }
+
+    // ----- 2. 行差分 -----
+    const regionDiff = applyDelta8(processedRegion, bbox.w);
+
+    // ----- 3. deltaPacked 处理（原有逻辑，不变）-----
     const hChannel = new Uint8Array(totalPixels);
     const sChannel = new Uint8Array(totalPixels);
     const lChannel = new Uint8Array(totalPixels);
-    
     for (let i = 0; i < totalPixels; i++) {
-      const packed = frame.deltaPacked[i];
+      const packed = deltaPacked[i];
       const { s, h, l } = unpackRGB565(packed);
       hChannel[i] = h;
       sChannel[i] = s;
       lChannel[i] = l;
     }
-    
-    const hDiff = applyDelta8(hChannel, frame.bbox.w);
-    const sDiff = applyDelta8(sChannel, frame.bbox.w);
-    const lDiff = applyDelta8(lChannel, frame.bbox.w);
-    
+    const hDiff = applyDelta8(hChannel, bbox.w);
+    const sDiff = applyDelta8(sChannel, bbox.w);
+    const lDiff = applyDelta8(lChannel, bbox.w);
     const deltaDiffBytes = new Uint8Array(hDiff.length + sDiff.length + lDiff.length);
     deltaDiffBytes.set(hDiff, 0);
     deltaDiffBytes.set(sDiff, hDiff.length);
     deltaDiffBytes.set(lDiff, hDiff.length + sDiff.length);
 
-    let frameSize = 1 + nameBytes.length;
-    frameSize += 2 + 2 + 2 + 2 + 2 + 2;
-    frameSize += 8; // blockFlags (64-bit, 8 bytes)
-    frameSize += 4 + regionDiff.length;
-    frameSize += 4 + deltaDiffBytes.length;
+    // ----- 4. 构建帧二进制块 -----
+    let frameSize = 1 + nameBytes.length;          // 名称长度 + 名称
+    frameSize += 2 + 2 + 2 + 2 + 2 + 2;           // width, height, bbox(4个)
+    frameSize += 8;                               // blockFlags (64-bit)
+    frameSize += 4 + regionDiff.length;           // regionIdTex 长度 + 数据
+    frameSize += 4 + deltaDiffBytes.length;       // delta 长度 + 数据
 
     const frameBuf = new ArrayBuffer(frameSize);
     const view = new DataView(frameBuf);
     let offset = 0;
     view.setUint8(offset, nameBytes.length); offset += 1;
     new Uint8Array(frameBuf, offset, nameBytes.length).set(nameBytes); offset += nameBytes.length;
-    view.setUint16(offset, frame.width, true); offset += 2;
-    view.setUint16(offset, frame.height, true); offset += 2;
-    view.setUint16(offset, frame.bbox.x, true); offset += 2;
-    view.setUint16(offset, frame.bbox.y, true); offset += 2;
-    view.setUint16(offset, frame.bbox.w, true); offset += 2;
-    view.setUint16(offset, frame.bbox.h, true); offset += 2;
-    
-    // 写入 blockFlags（64 位，8 字节）
-    view.setBigUint64(offset, frame.blockFlags, true); offset += 8;
-    
+    view.setUint16(offset, width, true); offset += 2;
+    view.setUint16(offset, height, true); offset += 2;
+    view.setUint16(offset, bbox.x, true); offset += 2;
+    view.setUint16(offset, bbox.y, true); offset += 2;
+    view.setUint16(offset, bbox.w, true); offset += 2;
+    view.setUint16(offset, bbox.h, true); offset += 2;
+    view.setBigUint64(offset, blockFlags, true); offset += 8;
     view.setUint32(offset, regionDiff.length, true); offset += 4;
     new Uint8Array(frameBuf, offset, regionDiff.length).set(regionDiff); offset += regionDiff.length;
     view.setUint32(offset, deltaDiffBytes.length, true); offset += 4;
@@ -86,22 +111,35 @@ export function packMultiFrameToBinary(
 
     frameChunks.push(new Uint8Array(frameBuf));
     totalSize += frameSize;
+
+    // 保存当前原始 regionIdTex 供下一帧使用（未偏移、未预测）
+    prevRegionIdTex = regionIdTex;
+    prevBboxW = bbox.w;
+    prevBboxH = bbox.h;
   }
 
+  // ----- 5. 构建最终二进制 -----
   const finalBuffer = new Uint8Array(totalSize);
   let offset = 0;
-
+  // Magic
   new DataView(finalBuffer.buffer).setUint32(offset, 0x46545833, false); offset += 4;
-  finalBuffer[offset++] = 0x02;
+  // Version
+  finalBuffer[offset++] = 0x03;
+  // PredictionFlag
+  finalBuffer[offset++] = enablePrediction ? 1 : 0;
+  // FrameCount
   new DataView(finalBuffer.buffer).setUint16(offset, frames.length, true); offset += 2;
+  // PaletteCount
   new DataView(finalBuffer.buffer).setUint16(offset, palette.length, true); offset += 2;
 
+  // 写入调色板 (每个颜色 3 个 float32)
   for (const color of palette) {
     new DataView(finalBuffer.buffer).setFloat32(offset, color.h, true); offset += 4;
     new DataView(finalBuffer.buffer).setFloat32(offset, color.s, true); offset += 4;
     new DataView(finalBuffer.buffer).setFloat32(offset, color.l, true); offset += 4;
   }
 
+  // 写入各帧
   for (const chunk of frameChunks) {
     finalBuffer.set(chunk, offset);
     offset += chunk.length;
@@ -165,9 +203,10 @@ function verifyPackedBlockFlags(buffer: Uint8Array, originalFrames: FrameExportD
   const view = new DataView(buffer.buffer);
   let offset = 0;
 
-  // 跳过头部
+  // 跳过头部（版本3：Magic(4) + Version(1) + PredictionFlag(1) + FrameCount(2) + PaletteCount(2)）
   view.getUint32(offset, false); offset += 4; // magic
   view.getUint8(offset); offset += 1; // version
+  view.getUint8(offset); offset += 1; // predictionFlag
   const frameCount = view.getUint16(offset, true); offset += 2;
   const paletteCount = view.getUint16(offset, true); offset += 2;
 

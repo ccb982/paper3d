@@ -63,7 +63,11 @@ export function Toolbar() {
     refreshRegionCache,
     generateRegionIdTexture,
     activeLayerId,
+    setEnableFramePrediction,
   } = useAppStore();
+
+  // 获取帧间预测状态
+  const enableFramePrediction = useAppStore((state) => state.skillGroupEditor.enableFramePrediction);
 
   const [showColorExtractMenu, setShowColorExtractMenu] = useState(false);
   const [showShapeMenu, setShowShapeMenu] = useState(false);
@@ -532,6 +536,16 @@ export function Toolbar() {
             >
               导出极致压缩
             </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+              <label style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap' }}>
+                <input
+                  type="checkbox"
+                  checked={enableFramePrediction}
+                  onChange={(e) => setEnableFramePrediction(e.target.checked)}
+                />
+                帧间预测
+              </label>
+            </div>
             <button
               onClick={async () => {
                 const state = useAppStore.getState();
@@ -616,7 +630,8 @@ export function Toolbar() {
                     };
                   });
 
-                  const binary = packMultiFrameToBinary(exportedPalette, exportFrames);
+                  // ★ 传入帧间预测参数
+                  const binary = packMultiFrameToBinary(exportedPalette, exportFrames, enableFramePrediction);
                   const compressToGzip = (await import('../utils/binaryCompression')).compressToGzip;
                   const gzipped = await compressToGzip(binary);
                   const url = URL.createObjectURL(gzipped);
@@ -625,7 +640,7 @@ export function Toolbar() {
                   a.download = `multiframe_export_${Date.now()}.ftx3.gz`;
                   a.click();
                   URL.revokeObjectURL(url);
-                  alert(`导出成功！${exportFrames.length} 帧，${exportedPalette.length} 色`);
+                  alert(`导出成功！${exportFrames.length} 帧，${exportedPalette.length} 色，预测: ${enableFramePrediction ? '启用' : '禁用'}`);
                 } catch (err) {
                   console.error('[多帧导出] 失败:', err);
                   alert('导出失败: ' + (err as Error).message);
