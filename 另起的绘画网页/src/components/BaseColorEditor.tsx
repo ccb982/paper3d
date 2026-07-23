@@ -863,6 +863,25 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [selectedBaseColorId, regionIdTex, bbox, mode, webglReady, uploadTexture, uploadBaseTexture, drawHighlightGL]);
 
+  // 监听 texSize 变化，同步更新 WebGL Canvas 像素尺寸和视口
+  useEffect(() => {
+    const gl = glRef.current;
+    const canvas = webglCanvasRef.current;
+    if (!gl || !canvas) return;
+
+    // 更新 Canvas 像素尺寸
+    canvas.width = texSize;
+    canvas.height = texSize;
+
+    // 更新 WebGL 视口
+    gl.viewport(0, 0, texSize, texSize);
+
+    // 重新上传纹理和重绘
+    uploadTexture();
+    uploadBaseTexture();
+    drawHighlightGL(selectedBaseColorId);
+  }, [texSize, uploadTexture, uploadBaseTexture, drawHighlightGL, selectedBaseColorId]);
+
   useEffect(() => {
     return () => {
       const gl = glRef.current;
