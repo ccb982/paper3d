@@ -451,6 +451,13 @@ function buildBaseTextureFromLocalColors(
   return imageData;
 }
 
+// 色相差值（环形距离）
+function deltaHue(a: number, b: number): number {
+  let d = Math.abs(a - b);
+  if (d > 0.5) d = 1 - d;
+  return d;
+}
+
 // ============ 组件 ============
 export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -595,6 +602,8 @@ export const BaseColorEditor: React.FC = () => {
   const selectedIndexUniformRef = useRef<WebGLUniformLocation | null>(null);
   const positionBufferRef = useRef<WebGLBuffer | null>(null);
   const [webglReady, setWebglReady] = useState(false);
+  const tempPixelsRef = useRef<Set<string>>(new Set());
+  const isProcessingRef = useRef(false);
 
   const handleSelectBaseColor = useCallback((id: number) => {
     const prev = selectedBaseColorId;
@@ -948,6 +957,13 @@ export const BaseColorEditor: React.FC = () => {
     uploadBaseTexture();
     drawHighlightGL(selectedBaseColorId);
   }, [texSize, uploadTexture, uploadBaseTexture, drawHighlightGL, selectedBaseColorId]);
+
+  // 组件卸载时清理临时像素集合
+  useEffect(() => {
+    return () => {
+      tempPixelsRef.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -1487,6 +1503,105 @@ export const BaseColorEditor: React.FC = () => {
     }, 0);
   }, [activeFrameId, reclusterFrameFromScratch, syncFrameTextures, triggerCanvasRedraw, saveToHistory, buildColorPixelsMap, setColorPixelsMap]);
 
+  // 处理临时像素（在鼠标松开时调用）
+  const processPaintedPixels = useCallback(() => {
+    if (!baseTexture || !bbox || !activeFrameId || isProcessingRef.current) return;
+    const tempPixels = tempPixelsRef.current;
+    if (tempPixels.size === 0) return;
+
+    isProcessingRef.current = true;
+
+    // 1. 提取所有临时像素的颜色
+    const pixels: { x: number; y: number; hsl: { h: number; s: number; l: number } }[] = [];
+    const texSizeLocal = texSize;
+    for (const key of tempPixels) {
+      const [x, y] = key.split(',').map(Number);
+      const idx = (y * texSizeLocal + x) * 4;
+      const r = baseTexture.data[idx];
+      const g = baseTexture.data[idx + 1];
+      const b = baseTexture.data[idx + 2];
+      if (baseTexture.data[idx + 3] > 0) {
+        pixels.push({ x, y, hsl: rgbToHsl(r, g, b) });
+      }
+    }
+
+    if (pixels.length === 0) {
+      tempPixels.clear();
+      isProcessingRef.current = false;
+      return;
+    }
+
+    // 2. 颜色聚类（简单硬阈值，基于色相、饱和度、亮度）
+    const clusters: { hsl: { h: number; s: number; l: number }; pixels: typeof pixels }[] = [];
+    const used = new Set<number>();
+    const threshold = 0.025;
+
+    for (let i = 0; i < pixels.length; i++) {
+      if (used.has(i)) continue;
+      const cluster = { hsl: { ...pixels[i].hsl }, pixels: [pixels[i]] };
+      used.add(i);
+      for (let j = i + 1; j < pixels.length; j++) {
+        if (used.has(j)) continue;
+        const dh = deltaHue(pixels[i].hsl.h, pixels[j].hsl.h);
+        const ds = Math.abs(pixels[i].hsl.s - pixels[j].hsl.s);
+        const dl = Math.abs(pixels[i].hsl.l - pixels[j].hsl.l);
+        if (dh < threshold && ds < threshold && dl < threshold) {
+          cluster.pixels.push(pixels[j]);
+          used.add(j);
+        }
+      }
+      // 计算簇的平均 HSL
+      let sumH = 0, sumS = 0, sumL = 0;
+      for (const p of cluster.pixels) {
+        sumH += p.hsl.h;
+        sumS += p.hsl.s;
+        sumL += p.hsl.l;
+      }
+      cluster.hsl = {
+        h: sumH / cluster.pixels.length,
+        s: sumS / cluster.pixels.length,
+        l: sumL / cluster.pixels.length,
+      };
+      clusters.push(cluster);
+    }
+
+    console.log(`[画笔后处理] 聚类 ${pixels.length} 个像素 -> ${clusters.length} 个簇`);
+
+    // 3. 为每个簇分配颜色 ID（复用或新建）
+    const state = useAppStore.getState();
+    const currentFrame = state.skillGroupEditor.frames.find(f => f.id === activeFrameId);
+    if (!currentFrame || !currentFrame.regionIdTex) {
+      isProcessingRef.current = false;
+      return;
+    }
+    const newRegionIdTex = new Uint8Array(currentFrame.regionIdTex);
+    const { w } = bbox;
+
+    for (const cluster of clusters) {
+      const colorId = addColorToPalette(cluster.hsl, activeFrameId);
+      for (const p of cluster.pixels) {
+        const localX = p.x - bbox.x;
+        const localY = p.y - bbox.y;
+        const idx = localY * w + localX;
+        if (idx >= 0 && idx < newRegionIdTex.length) {
+          newRegionIdTex[idx] = colorId;
+        }
+      }
+    }
+
+    // 4. 更新 store 中的 regionIdTex
+    updateSkillFrame(activeFrameId, { regionIdTex: newRegionIdTex });
+
+    // 5. 清空临时集合
+    tempPixels.clear();
+
+    // 6. 重新生成基础色纹理（基于新 regionIdTex）并重排调色板
+    syncFrameTextures(activeFrameId);
+    sortPaletteByArea();
+
+    isProcessingRef.current = false;
+  }, [baseTexture, bbox, activeFrameId, texSize, addColorToPalette, updateSkillFrame, syncFrameTextures, sortPaletteByArea]);
+
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
     const canvas = canvasRef.current;
@@ -1550,12 +1665,14 @@ export const BaseColorEditor: React.FC = () => {
         data[pi + 1] = g;
         data[pi + 2] = b;
         data[pi + 3] = 255;
+        // 记录被修改的像素坐标（用于后续处理）
+        tempPixelsRef.current.add(`${gx},${gy}`);
       }
     }
 
     const updated = new ImageData(new Uint8ClampedArray(data), texSize, texSize);
     setBaseTexture(updated);
-  }, [baseTexture, brushColor, brushSize, texSize]);
+  }, [baseTexture, brushColor, brushSize, texSize, setBaseTexture]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1664,13 +1781,14 @@ export const BaseColorEditor: React.FC = () => {
 
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture) {
-      setTimeout(() => saveToHistory(), 0);
-      if (currentTool === 'paint') {
-        setTimeout(() => handleRecluster(), 0);
-      }
+      setTimeout(() => {
+        saveToHistory();
+        // 处理临时像素（聚类、合并、新建ID）
+        processPaintedPixels();
+      }, 0);
     }
     setIsDrawing(false);
-  }, [isDrawing, baseTexture, saveToHistory, currentTool, handleRecluster]);
+  }, [isDrawing, baseTexture, saveToHistory, processPaintedPixels]);
 
   const handleColorInfoClick = useCallback((e: React.MouseEvent) => {
     if (!showColorInfoOnClick) return;
