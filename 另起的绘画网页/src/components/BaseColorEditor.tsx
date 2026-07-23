@@ -587,12 +587,6 @@ export const BaseColorEditor: React.FC = () => {
   const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
   const [editingFrameName, setEditingFrameName] = useState('');
 
-  const handleSelectBaseColor = useCallback((id: number) => {
-    setSelectedBaseColorId(prev => prev === id ? null : id);
-  }, []);
-
-  const highlightCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
   const webglCanvasRef = useRef<HTMLCanvasElement>(null);
   const glRef = useRef<WebGLRenderingContext | null>(null);
   const programRef = useRef<WebGLProgram | null>(null);
@@ -601,6 +595,25 @@ export const BaseColorEditor: React.FC = () => {
   const selectedIndexUniformRef = useRef<WebGLUniformLocation | null>(null);
   const positionBufferRef = useRef<WebGLBuffer | null>(null);
   const [webglReady, setWebglReady] = useState(false);
+
+  const handleSelectBaseColor = useCallback((id: number) => {
+    const prev = selectedBaseColorId;
+    const newId = prev === id ? null : id;
+    setSelectedBaseColorId(newId);
+
+    // ★ 调试输出：颜色选择详情
+    if (newId !== null) {
+      const color = sharedBaseColors.find(c => c.id === newId);
+      console.log(`[高亮调试] 选中颜色 ID=${newId}`);
+      console.log(`  颜色值: H=${color?.h.toFixed(4) ?? '?'} S=${color?.s.toFixed(4) ?? '?'} L=${color?.l.toFixed(4) ?? '?'}`);
+      console.log(`  区域面积: ${color?.area ?? 0} 像素`);
+      console.log(`  使用帧: ${JSON.stringify(color?.frameIds ?? [])}`);
+      console.log(`  texSize: ${texSize}, bbox: ${bbox ? `(${bbox.x},${bbox.y}) w=${bbox.w} h=${bbox.h}` : 'null'}`);
+      console.log(`  WebGL就绪: ${webglReady}, 区域数量: ${regionIdTex ? regionIdTex.length : 0}`);
+    } else {
+      console.log(`[高亮调试] 取消选中 (前: ID=${prev})`);
+    }
+  }, [selectedBaseColorId, sharedBaseColors, texSize, bbox, webglReady, regionIdTex]);
 
   const initWebGL = useCallback(() => {
     const canvas = webglCanvasRef.current;
@@ -714,8 +727,19 @@ export const BaseColorEditor: React.FC = () => {
 
   const uploadTexture = useCallback(() => {
     const gl = glRef.current;
-    if (!gl || !regionIdTex || regionIdTex.length === 0 || !bbox) return;
-    if (!webglReady) return;
+    if (!gl || !regionIdTex || regionIdTex.length === 0 || !bbox) {
+      console.log(`[高亮调试] uploadTexture 跳过: gl=${!!gl}, regionIdTex=${!!regionIdTex}(${regionIdTex?.length}), bbox=${!!bbox}`);
+      return;
+    }
+    if (!webglReady) {
+      console.log(`[高亮调试] uploadTexture 跳过: webgl未就绪`);
+      return;
+    }
+
+    // ★ 调试输出：上传参数
+    console.log(`[高亮调试] uploadTexture 开始`);
+    console.log(`  texSize: ${texSize}, bbox: (${bbox.x},${bbox.y}) w=${bbox.w} h=${bbox.h}`);
+    console.log(`  regionIdTex长度: ${regionIdTex.length}, 预期区域像素: ${bbox.w * bbox.h}`);
 
     if (textureRef.current) {
       gl.deleteTexture(textureRef.current);
@@ -733,19 +757,30 @@ export const BaseColorEditor: React.FC = () => {
     const rgbData = new Uint8Array(texSize * texSize * 3);
     const { w } = bbox;
 
+    // ★ 统计非零像素数量
+    let nonZeroCount = 0;
+    const idDistribution = new Map<number, number>();
     for (let localIdx = 0; localIdx < regionIdTex.length; localIdx++) {
+      const val = regionIdTex[localIdx];
+      if (val !== 0) {
+        nonZeroCount++;
+        idDistribution.set(val, (idDistribution.get(val) || 0) + 1);
+      }
       const localY = Math.floor(localIdx / w);
       const localX = localIdx % w;
       const globalY = bbox.y + localY;
       const globalX = bbox.x + localX;
       if (globalY >= 0 && globalY < texSize && globalX >= 0 && globalX < texSize) {
         const globalIdx = (globalY * texSize + globalX) * 3;
-        const val = regionIdTex[localIdx];
         rgbData[globalIdx] = val;
         rgbData[globalIdx + 1] = val;
         rgbData[globalIdx + 2] = val;
       }
     }
+
+    // ★ 调试输出：像素统计
+    console.log(`  非零像素: ${nonZeroCount}, 总像素: ${regionIdTex.length}`);
+    console.log(`  ID分布:`, Object.fromEntries(idDistribution));
 
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, texSize, texSize, 0, gl.RGB, gl.UNSIGNED_BYTE, rgbData);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -759,12 +794,24 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
     textureRef.current = texture;
+    console.log(`  [高亮调试] uploadTexture 完成，纹理ID=${texture}`);
   }, [regionIdTex, bbox, webglReady, texSize]);
 
   const uploadBaseTexture = useCallback(() => {
     const gl = glRef.current;
-    if (!gl || !baseTexture) return;
-    if (!webglReady) return;
+    if (!gl || !baseTexture) {
+      console.log(`[高亮调试] uploadBaseTexture 跳过: gl=${!!gl}, baseTexture=${!!baseTexture}`);
+      return;
+    }
+    if (!webglReady) {
+      console.log(`[高亮调试] uploadBaseTexture 跳过: webgl未就绪`);
+      return;
+    }
+
+    // ★ 调试输出：上传参数
+    console.log(`[高亮调试] uploadBaseTexture 开始`);
+    console.log(`  texSize: ${texSize}, baseTexture尺寸: ${baseTexture.width}x${baseTexture.height}`);
+    console.log(`  baseTexture数据长度: ${baseTexture.data.length}, 预期长度: ${texSize * texSize * 4}`);
 
     if (baseTextureRef.current) {
       gl.deleteTexture(baseTextureRef.current);
@@ -790,6 +837,7 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
     baseTextureRef.current = texture;
+    console.log(`  [高亮调试] uploadBaseTexture 完成，纹理ID=${texture}`);
   }, [baseTexture, webglReady, texSize]);
 
   const drawHighlightGL = useCallback((index: number | null) => {
@@ -797,7 +845,15 @@ export const BaseColorEditor: React.FC = () => {
     const program = programRef.current;
     const buffer = positionBufferRef.current;
 
-    if (!gl || !program || !buffer || !webglReady) return;
+    // ★ 调试输出：绘制前状态检查
+    console.log(`[高亮调试] drawHighlightGL(index=${index})`);
+    console.log(`  gl: ${!!gl}, program: ${!!program}, buffer: ${!!buffer}, webglReady: ${webglReady}`);
+    console.log(`  textureRef: ${!!textureRef.current}, baseTextureRef: ${!!baseTextureRef.current}`);
+
+    if (!gl || !program || !buffer || !webglReady) {
+      console.log(`  [高亮调试] 跳过绘制：缺少必要资源`);
+      return;
+    }
 
     if (textureRef.current && !gl.isTexture(textureRef.current)) {
       console.warn('[WebGL] 区域ID纹理无效，重新上传');
@@ -812,12 +868,19 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
 
-    if (!textureRef.current || !baseTextureRef.current) return;
+    if (!textureRef.current || !baseTextureRef.current) {
+      console.log(`  [高亮调试] 跳过绘制：纹理未就绪`);
+      return;
+    }
 
     if (!gl.isProgram(program)) {
       console.warn('[WebGL] Program 无效');
       return;
     }
+
+    // ★ 调试输出：绘制参数
+    const canvas = webglCanvasRef.current;
+    console.log(`  [高亮调试] Canvas尺寸: ${canvas?.width}x${canvas?.height}, texSize: ${texSize}`);
 
     gl.useProgram(program);
 
@@ -835,11 +898,15 @@ export const BaseColorEditor: React.FC = () => {
     const idxLoc = selectedIndexUniformRef.current;
     if (idxLoc !== null) {
       gl.uniform1i(idxLoc, index !== null ? index : 0);
+      console.log(`  [高亮调试] uniform u_selectedIndex = ${index !== null ? index : 0}`);
     }
 
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  }, [webglReady, uploadTexture, uploadBaseTexture]);
+
+    // ★ 调试输出：绘制完成
+    console.log(`  [高亮调试] WebGL绘制完成，选中ID=${index}`);
+  }, [webglReady, uploadTexture, uploadBaseTexture, texSize]);
 
   useEffect(() => {
     if (!glRef.current) {
@@ -2079,8 +2146,8 @@ export const BaseColorEditor: React.FC = () => {
 
     octx.clearRect(0, 0, texSize, texSize);
 
-    if (mode === 'base2' && highlightCanvasRef.current) {
-      octx.drawImage(highlightCanvasRef.current, 0, 0);
+    if (mode === 'base2' && webglCanvasRef.current) {
+      octx.drawImage(webglCanvasRef.current, 0, 0);
     }
 
     if (!mousePos || (currentTool !== 'paint' && currentTool !== 'picker')) return;
