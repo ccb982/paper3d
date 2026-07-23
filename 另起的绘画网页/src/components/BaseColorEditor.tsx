@@ -1670,7 +1670,7 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
 
-    const updated = new ImageData(new Uint8ClampedArray(data), texSize, texSize);
+    const updated = new ImageData(new Uint8ClampedArray(data), baseTexture.width, baseTexture.height);
     setBaseTexture(updated);
   }, [baseTexture, brushColor, brushSize, texSize, setBaseTexture]);
 
