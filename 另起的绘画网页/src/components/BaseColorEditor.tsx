@@ -1652,7 +1652,9 @@ export const BaseColorEditor: React.FC = () => {
     const b = parseInt(rgb[3], 16);
 
     const data = baseTexture.data;
-    const half = Math.floor(brushSize / 2);
+    // 画笔半径（像素）
+    const radiusPx = Math.max(1, brushSize);
+    const half = Math.floor(radiusPx);
 
     for (let dy = -half; dy <= half; dy++) {
       for (let dx = -half; dx <= half; dx++) {
