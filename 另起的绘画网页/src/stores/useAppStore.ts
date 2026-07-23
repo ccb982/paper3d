@@ -2209,34 +2209,134 @@ export const useAppStore = create<AppState>((set, get) => ({
   reclusterFrameFromScratch: (frameId) => {
     const state = get();
     const frame = state.skillGroupEditor.frames.find(f => f.id === frameId);
-    if (!frame) return;
+    if (!frame) {
+      console.warn(`[重新聚类] 帧 ${frameId} 不存在`);
+      return;
+    }
 
-    // 备份旧颜色 ID（用于提取成功后清理）
-    const oldColorIds = new Set<number>();
-    if (frame.regionIdTex) {
-      for (const id of frame.regionIdTex) {
-        if (id !== 0) oldColorIds.add(id);
+    const { regionIdTex } = frame;
+    if (!regionIdTex || regionIdTex.length === 0) {
+      console.warn(`[重新聚类] 帧 ${frameId} 没有 regionIdTex`);
+      return;
+    }
+
+    // ============ 1. 统计当前帧每个 ID 的使用次数 ============
+    const usageCount = new Map<number, number>();
+    for (const id of regionIdTex) {
+      if (id !== 0) {
+        usageCount.set(id, (usageCount.get(id) || 0) + 1);
       }
     }
 
-    // 先尝试提取（不提前清空，失败时保留原数据）
-    get().extractAndApplyColorsToFrame(frameId);
+    if (usageCount.size === 0) {
+      console.warn(`[重新聚类] 帧 ${frameId} 没有有效颜色`);
+      return;
+    }
 
-    // 检查提取是否成功
-    const updatedFrame = get().skillGroupEditor.frames.find(f => f.id === frameId);
-    const hasValidPixels = updatedFrame?.regionIdTex?.some(v => v !== 0) ?? false;
+    // 按使用次数降序排序（大面积颜色优先作为合并目标）
+    const sortedIds = Array.from(usageCount.keys()).sort(
+      (a, b) => (usageCount.get(b) || 0) - (usageCount.get(a) || 0)
+    );
+    console.log(`[重新聚类] 帧 ${frameId} 当前使用 ${sortedIds.length} 种颜色`);
 
-    if (hasValidPixels) {
-      // 提取成功：清理旧颜色引用
-      for (const id of oldColorIds) {
-        get().decrementColorRef(id, frameId);
+    // ============ 2. 合并相似颜色（H/S/L 阈值均为 0.015）============
+    const THRESHOLD = 0.015;
+    const palette = state.palette;
+    const mergeMap = new Map<number, number>(); // oldId → mergedToId
+    const keptIds = new Set<number>();
+
+    for (const candidateId of sortedIds) {
+      if (mergeMap.has(candidateId)) continue; // 已被合并到其他颜色
+      if (!palette.has(candidateId)) continue; // 调色板中不存在（异常）
+
+      const candidateColor = palette.get(candidateId)!;
+      keptIds.add(candidateId);
+
+      // 与后续 ID 比较相似度
+      for (const otherId of sortedIds) {
+        if (otherId === candidateId) continue;
+        if (mergeMap.has(otherId)) continue; // 已被合并
+        if (!palette.has(otherId)) continue;
+
+        const otherColor = palette.get(otherId)!;
+        // 色相环距离
+        const dh = Math.min(
+          Math.abs(candidateColor.h - otherColor.h),
+          1 - Math.abs(candidateColor.h - otherColor.h)
+        );
+        const ds = Math.abs(candidateColor.s - otherColor.s);
+        const dl = Math.abs(candidateColor.l - otherColor.l);
+
+        if (dh < THRESHOLD && ds < THRESHOLD && dl < THRESHOLD) {
+          // 相似 → 合并到 candidateId（大面积优先）
+          mergeMap.set(otherId, candidateId);
+          keptIds.delete(otherId);
+        }
       }
-      get().pruneUnusedColors();
-      get().sortPaletteByArea();
-      console.log(`[重新聚类] 帧 ${frameId} 成功，旧颜色已清理`);
+    }
+
+    // ============ 3. 更新当前帧的 regionIdTex ============
+    if (mergeMap.size > 0) {
+      const newRegionIdTex = new Uint8Array(regionIdTex);
+      for (let i = 0; i < newRegionIdTex.length; i++) {
+        const oldId = newRegionIdTex[i];
+        if (oldId !== 0 && mergeMap.has(oldId)) {
+          newRegionIdTex[i] = mergeMap.get(oldId)!;
+        }
+      }
+
+      // 维护调色板引用计数：被合并的 ID 从当前帧解引用
+      for (const [oldId, newId] of mergeMap) {
+        get().decrementColorRef(oldId, frameId);
+        get().incrementColorRef(newId, frameId);
+      }
+
+      // 更新 store
+      const updatedFrames = state.skillGroupEditor.frames.map(f =>
+        f.id === frameId ? { ...f, regionIdTex: newRegionIdTex } : f
+      );
+      set({
+        skillGroupEditor: {
+          ...state.skillGroupEditor,
+          frames: updatedFrames,
+        },
+      });
+
+      console.log(`[重新聚类] 合并了 ${mergeMap.size} 个相似颜色，保留 ${keptIds.size} 种`);
     } else {
-      console.warn('[重新聚类] 提取失败，保留原有数据');
+      console.log(`[重新聚类] 未发现需要合并的相似颜色`);
     }
+
+    // ============ 4. 清理全局调色板（遍历所有帧，删除无引用的颜色）============
+    // 注意：只删除全局范围内无任何帧引用的颜色，不影响其他帧的可用颜色
+    const allRefs = get().getAllFrameRefs();
+    const globalUsedIds = new Set<number>();
+    for (const ref of allRefs) {
+      if (ref.regionIdTex) {
+        for (const id of ref.regionIdTex) {
+          if (id !== 0) globalUsedIds.add(id);
+        }
+      }
+    }
+
+    let paletteChanged = false;
+    for (const [id] of palette) {
+      if (!globalUsedIds.has(id)) {
+        palette.delete(id);
+        paletteChanged = true;
+      }
+    }
+    if (paletteChanged) {
+      set({ palette: new Map(palette) });
+      console.log(`[重新聚类] 清理了未被任何帧引用的冗余颜色`);
+    }
+
+    // ============ 5. 重新生成 sharedBaseColors 并同步纹理 ============
+    get().sortPaletteByArea();
+    get().syncFrameTextures(frameId);
+    get().triggerCanvasRedraw();
+
+    console.log(`[重新聚类] 帧 ${frameId} 完成，合并 ${mergeMap.size} 个 ID，清理 ${paletteChanged ? '冗余' : '无'} 颜色`);
   },
 
   deleteColorFromFrame: (frameId, colorId) => {
