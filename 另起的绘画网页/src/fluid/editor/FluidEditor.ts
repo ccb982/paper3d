@@ -429,31 +429,16 @@ export class FluidEditor {
       colorCh as 1 | 2 | 3 | 4,
       'uint8',
     );
-    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'uint8');
+    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'half-float');
   }
 
-  /** 初始化场数据：颜色 = 中心圆形水坑，速度 = 零 */
+  /** 初始化场数据：全透明空场 + 零速度 */
   private initFields(): void {
     const { w, h } = this.config.resolution;
 
-    // 默认初始颜色：中心圆形蓝色水坑
+    // 初始颜色场：完全透明（空场），依靠注入源产生动态流体
     const colorData = new Float32Array(w * h * 4);
-    const center = { x: 0.5, y: 0.5 };
-    const radius = 0.2;
-    const color: [number, number, number, number] = [0.2, 0.5, 0.8, 1.0];
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const dx = x / w - center.x;
-        const dy = y / h - center.y;
-        const inside = dx * dx + dy * dy < radius * radius ? 1 : 0;
-        const idx = (y * w + x) * 4;
-        colorData[idx]     = color[0] * inside;
-        colorData[idx + 1] = color[1] * inside;
-        colorData[idx + 2] = color[2] * inside;
-        colorData[idx + 3] = color[3] * inside;
-      }
-    }
+    // 全部置 0（透明），Float32Array 默认值就是 0，无需额外赋值
     this.uploadToGrid(this.colorGrid, colorData, 4);
 
     // 零速度

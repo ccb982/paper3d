@@ -20,14 +20,14 @@ export function useFluidEditor(
     enableAdvection: true,
     enablePressure: false,
     enableLevelSet: false,
-    gravity: -300,
+    gravity: -1000,
     injection: {
       enabled: true,
-      position: { x: 0.5, y: 0.1 },
-      radius: 0.06,
-      rate: 8.0,
-      velocity: { x: 0, y: -400 },
-      color: [0.0, 0.6, 1.0, 1.0],  // 青色
+      position: { x: 0.5, y: 0.05 },
+      radius: 0.1,
+      rate: 15,
+      velocity: { x: 0, y: -800 },
+      color: [0.0, 0.8, 1.0, 1.0],
     },
     ...initialConfig,
   }));
