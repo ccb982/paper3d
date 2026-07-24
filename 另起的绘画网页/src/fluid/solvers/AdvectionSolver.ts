@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FluidGrid, AdvectionMask } from './FluidGrid';
+import type { FluidGrid, AdvectionMask } from '../core/FluidGrid';
 
 /**
  * 平流求解器选项。

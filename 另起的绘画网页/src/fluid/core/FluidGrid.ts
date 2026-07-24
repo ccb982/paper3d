@@ -92,6 +92,11 @@ export class FluidGrid {
     return this.current === 'A' ? this.texA.texture : this.texB.texture;
   }
 
+  /** 当前可读 RenderTarget（用于 readRenderTargetPixels 回读） */
+  get readTarget(): THREE.WebGLRenderTarget {
+    return this.current === 'A' ? this.texA : this.texB;
+  }
+
   /** 当前可写入目标 */
   get write(): THREE.WebGLRenderTarget {
     return this.current === 'A' ? this.texB : this.texA;

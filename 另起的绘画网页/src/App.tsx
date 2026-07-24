@@ -4,12 +4,12 @@ import { ImageImport } from './components/ImageImport';
 import { LayerControl } from './components/LayerControl';
 import { MainCanvas } from './components/MainCanvas';
 import { Toolbar } from './components/Toolbar';
-import { FluidPreview } from './fluid';
+import { FluidEditorUI } from './fluid';
 import { BaseColorEditor } from './components/BaseColorEditor';
 
 function App() {
   const { layerVisibility, loadFromStorage } = useAppStore();
-  const [showFluidPreview, setShowFluidPreview] = useState(false);
+  const [showFluidEditor, setShowFluidEditor] = useState(false);
   const [showBaseColorEditor, setShowBaseColorEditor] = useState(false);
 
   useEffect(() => {
@@ -17,8 +17,8 @@ function App() {
     loadFromStorage();
   }, [loadFromStorage]);
 
-  // 流体独立视图
-  if (showFluidPreview) {
+  // 流体编辑器视图
+  if (showFluidEditor) {
     return (
       <div style={{
         width: '100vw',
@@ -36,9 +36,9 @@ function App() {
           alignItems: 'center',
           gap: '20px',
         }}>
-          <h2 style={{ color: '#e94560', margin: 0 }}>流体模拟视图</h2>
+          <h2 style={{ color: '#e94560', margin: 0, fontSize: '16px' }}>2D 流体编辑器</h2>
           <button
-            onClick={() => setShowFluidPreview(false)}
+            onClick={() => setShowFluidEditor(false)}
             style={{
               padding: '8px 16px',
               background: '#e94560',
@@ -52,18 +52,13 @@ function App() {
             返回绘画视图
           </button>
           <span style={{ color: '#666', fontSize: '12px' }}>
-            点击画布触发爆炸 | 鼠标移动搅动流体
+            逐通道平流 | 实时调控 | 模块化架构
           </span>
         </div>
-        
-        {/* 流体画布区域 */}
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}>
-          <FluidPreview visible={true} />
+
+        {/* 流体编辑器主体（视口 + 控制面板） */}
+        <div style={{ flex: 1 }}>
+          <FluidEditorUI />
         </div>
       </div>
     );
@@ -132,7 +127,7 @@ function App() {
         {/* 流体模拟控制按钮 */}
         <div style={{ padding: '10px', borderTop: '1px solid #333' }}>
           <button
-            onClick={() => setShowFluidPreview(true)}
+            onClick={() => setShowFluidEditor(true)}
             style={{
               width: '100%',
               padding: '8px 12px',
@@ -144,10 +139,10 @@ function App() {
               fontSize: '14px',
             }}
           >
-            打开流体模拟视图
+            打开流体编辑器
           </button>
           <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
-            进入独立的流体模拟视图
+            进入 2D 流体编辑器（新架构）
           </p>
         </div>
         <div style={{ padding: '10px', borderTop: '1px solid #333' }}>
