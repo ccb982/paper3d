@@ -27,6 +27,8 @@ export interface FluidEditorConfig {
     velocity: { x: number; y: number };   // 注入速度（像素/秒）
     color: [number, number, number, number]; // RGBA
   };
+  /** 颜色场平流边界模式：'clamp'（钳制）、'repeat'（重复）、'zero'（越界消失） */
+  colorBoundaryMode?: 'clamp' | 'repeat' | 'zero';
 }
 
 // ============================================================
@@ -315,16 +317,17 @@ export class FluidEditor {
     const mask: AdvectionMask = { r: ch.r, g: ch.g, b: ch.b, a: ch.a };
     if (!mask.r && !mask.g && !mask.b && !mask.a) return;
 
+    const boundaryMode = this.config.colorBoundaryMode || 'clamp';
     this.advectionSolver.advect(
       this.colorGrid,
       this.velocityGrid.read,
       dt,
       mask,
-      { boundaryMode: 'clamp', subSteps: 6 },
+      { boundaryMode, subSteps: 6 },
     );
   }
 
-  /** 边界处理：将纹理边缘速度置零，防止能量泄露 */
+  /** 边界处理：零梯度边界，让速度场能自由流出（配合颜色边界 zero 模式实现水流消失） */
   private applyBoundary(): void {
     const { w, h } = this.config.resolution;
 
@@ -338,9 +341,16 @@ export class FluidEditor {
       void main() {
         vec2 vel = texture2D(velTex, vUv).rg;
         float eps = 1.0 / resolution.x;
-        if (vUv.x < eps || vUv.x > 1.0 - eps ||
-            vUv.y < eps || vUv.y > 1.0 - eps) {
-          vel = vec2(0.0);
+        // 边界处使用内部像素的速度（零梯度），让水流能通过边界自由流出
+        if (vUv.x < eps) {
+          vel = texture2D(velTex, vec2(vUv.x + eps, vUv.y)).rg;
+        } else if (vUv.x > 1.0 - eps) {
+          vel = texture2D(velTex, vec2(vUv.x - eps, vUv.y)).rg;
+        }
+        if (vUv.y < eps) {
+          vel = texture2D(velTex, vec2(vUv.x, vUv.y + eps)).rg;
+        } else if (vUv.y > 1.0 - eps) {
+          vel = texture2D(velTex, vec2(vUv.x, vUv.y - eps)).rg;
         }
         gl_FragColor = vec4(vel, 0.0, 1.0);
       }

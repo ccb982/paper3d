@@ -29,6 +29,7 @@ export function useFluidEditor(
       velocity: { x: 0, y: 200 },
       color: [0.0, 0.8, 1.0, 1.0],
     },
+    colorBoundaryMode: 'clamp',
     ...initialConfig,
   }));
 

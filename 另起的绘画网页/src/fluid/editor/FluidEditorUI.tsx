@@ -286,6 +286,27 @@ export const FluidEditorUI: React.FC = () => {
           </select>
         </div>
 
+        {/* 颜色边界模式 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ whiteSpace: 'nowrap' }}>颜色边界:</span>
+          <select
+            value={config.colorBoundaryMode || 'clamp'}
+            onChange={(e) => updateConfig({ colorBoundaryMode: e.target.value as 'clamp' | 'repeat' | 'zero' })}
+            style={{
+              background: '#0f3460',
+              color: '#e0e0e0',
+              border: '1px solid #1a5276',
+              borderRadius: '3px',
+              padding: '2px 4px',
+              fontSize: '12px',
+            }}
+          >
+            <option value="clamp">钳制 (clamp)</option>
+            <option value="repeat">重复 (repeat)</option>
+            <option value="zero">越界消失 (zero)</option>
+          </select>
+        </div>
+
         {/* 注入开关 */}
         <label style={{
           display: 'flex', alignItems: 'center', gap: '4px',
