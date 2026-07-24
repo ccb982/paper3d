@@ -1,18 +1,11 @@
 /**
- * 流体模拟模块
+ * 流体模拟模块 — 新版模块化架构
  *
- * 新版（FluidEditor 编辑器架构）：
- *   基于 FluidGrid + AdvectionSolver 构建的2D流体编辑器。
- *   - GPUOps 内辅类统一管理全屏 Pass，材质缓存
- *   - 逐通道平流开关（R=H, G=S, B=L, A=Alpha）
- *   - 模块化：平流 / 压力 / Level Set 独立开关
- *   - 实时分辨率调整
- *
- * 旧版（FluidSimulator, 保留兼容）：
- *   原始的流体模拟器，包括分层渲染、PCG 求解器等。
+ * 基于 FluidGrid + AdvectionSolver 构建的 2D 流体编辑器。
+ * - 逐通道平流开关（R=H, G=S, B=L, A=Alpha）
+ * - 模块化：平流 / 压力 / Level Set 独立开关
+ * - 实时分辨率调整
  */
-
-// ======================== 新版 FluidEditor ========================
 
 // 核心管理层
 export { FluidEditor } from './editor/FluidEditor';
@@ -45,26 +38,3 @@ export {
   GLSL_BOUNDARY_CLAMP,
   GLSL_BACKTRACE,
 } from './core/ShaderLibrary';
-
-// ======================== 旧版导出（保留兼容） ========================
-
-// 核心模拟器
-export { FluidSimulator } from './FluidSimulator';
-export type { FluidParams } from './FluidSimulator';
-
-// 适配器
-export { FluidSimulatorAdapter } from './FluidSimulatorAdapter';
-
-// React Hook
-export { useFluidSimulation, type UseFluidSimulationOptions, type UseFluidSimulationReturn } from './useFluidSimulation';
-
-// 组件
-export { FluidPreview, type FluidPreviewProps } from './FluidPreview';
-
-// 工具函数
-export {
-  rasterizePolygonToLevelSet,
-  shapesToLevelSet,
-  shapesToSolidMask,
-  createDefaultWaterLevelSet,
-} from './shapeToLevelSet';
