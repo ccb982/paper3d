@@ -289,7 +289,8 @@ export class FluidEditor {
         float d = distance(vUv, pos);
         float mask = smoothstep(radius, 0.0, d);
         vec2 old = texture2D(velTex, vUv).rg;
-        gl_FragColor = vec4(old + (vel - old) * rate * mask, 0.0, 1.0);
+        // 增量叠加：vel 是每帧增加的速度增量，不是目标速度
+        gl_FragColor = vec4(old + vel * rate * mask, 0.0, 1.0);
       }
     `);
     this.gpu.render(this.renderer, this.velocityGrid.write, velMat);

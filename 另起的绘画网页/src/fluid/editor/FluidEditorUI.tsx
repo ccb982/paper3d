@@ -57,7 +57,7 @@ export const FluidEditorUI: React.FC = () => {
     resolution: { w: 256, h: 256 },
     channels: { r: true, g: true, b: true, a: true },
     enableAdvection: true,
-    gravity: -1000,
+    gravity: 1000,
   });
 
   // ==================== 显示循环（独立 rAF，用 CPU 像素绘制 Canvas 2D） ====================
