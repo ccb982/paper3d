@@ -1599,6 +1599,9 @@ export const useAppStore = create<AppState>((set, get) => ({
             globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
             nextColorId: snapshot.skillGroupEditor.nextColorId,
           } : state.skillGroupEditor,
+          // 恢复顶层共享颜色和调色板 Map
+          sharedBaseColors: snapshot.skillGroupEditor ? [...snapshot.skillGroupEditor.sharedBaseColors] : state.sharedBaseColors,
+          palette: snapshot.skillGroupEditor ? new Map(snapshot.skillGroupEditor.sharedBaseColors.map(c => [c.id, { h: c.h, s: c.s, l: c.l, frameIds: new Set(c.frameIds || []) }])) : state.palette,
         };
         
         // 延迟重置标志并重新计算区域数据
@@ -1681,6 +1684,9 @@ export const useAppStore = create<AppState>((set, get) => ({
             globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
             nextColorId: snapshot.skillGroupEditor.nextColorId,
           } : state.skillGroupEditor,
+          // 恢复顶层共享颜色和调色板 Map
+          sharedBaseColors: snapshot.skillGroupEditor ? [...snapshot.skillGroupEditor.sharedBaseColors] : state.sharedBaseColors,
+          palette: snapshot.skillGroupEditor ? new Map(snapshot.skillGroupEditor.sharedBaseColors.map(c => [c.id, { h: c.h, s: c.s, l: c.l, frameIds: new Set(c.frameIds || []) }])) : state.palette,
         };
         
         // 延迟重置标志并重新计算区域数据

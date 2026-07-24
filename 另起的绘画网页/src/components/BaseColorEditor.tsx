@@ -481,6 +481,11 @@ export const BaseColorEditor: React.FC = () => {
     reclusterFrameFromScratch,
     triggerCanvasRedraw,
     setEnableFramePrediction,
+    undo,           // 全局撤销
+    redo,           // 全局重做
+    saveHistory,    // 全局保存历史
+    historyIndex,   // 全局历史索引
+    historySnapshots, // 全局历史快照
   } = useAppStore();
 
   const { frames, sharedBaseColors, activeFrameId, globalBbox, enableFramePrediction } = skillGroupEditor;
@@ -694,70 +699,7 @@ export const BaseColorEditor: React.FC = () => {
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
 
-  // 撤销历史
-  interface HistoryState {
-    dashedPolygons: Point[][];
-    baseTexture: ImageData | null;
-    residualTexture: ImageData | null;
-    bbox: { x: number; y: number; w: number; h: number } | null;
-    baseColors: SharedBaseColor[];
-  }
-  const [history, setHistory] = useState<HistoryState[]>([]);
-  const [historyIndex, setHistoryIndex] = useState(-1);
-
-  const saveToHistory = useCallback(() => {
-    const newState: HistoryState = {
-      dashedPolygons: dashedPolygons.map((poly: Point[]) => poly.map((p: Point) => ({ ...p }))),
-      baseTexture: baseTexture ? new ImageData(new Uint8ClampedArray(baseTexture.data), baseTexture.width, baseTexture.height) : null,
-      residualTexture: residualTexture ? new ImageData(new Uint8ClampedArray(residualTexture.data), residualTexture.width, residualTexture.height) : null,
-      bbox: bbox ? { ...bbox } : null,
-      baseColors: baseColors.map((c: typeof baseColors[0]) => ({ ...c })),
-    };
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(newState);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  }, [dashedPolygons, baseTexture, residualTexture, bbox, baseColors, history, historyIndex]);
-
-  const undo = useCallback(() => {
-    if (historyIndex <= 0) return;
-    const prevState = history[historyIndex - 1];
-    setDashedPolygons(prevState.dashedPolygons);
-    setBaseTexture(prevState.baseTexture);
-    setResidualTexture(prevState.residualTexture);
-    setBbox(prevState.bbox);
-    // 逐颜色恢复历史值，不直接覆盖全局调色板
-    const currentBaseColors: SharedBaseColor[] = useAppStore.getState().sharedBaseColors;
-    const currentColorMap = new Map<number, SharedBaseColor>(currentBaseColors.map((c: SharedBaseColor) => [c.id, c]));
-    for (const oldColor of prevState.baseColors) {
-      const cur = currentColorMap.get(oldColor.id);
-      if (!cur || cur.h !== oldColor.h || cur.s !== oldColor.s || cur.l !== oldColor.l) {
-        updateColorValue(oldColor.id, { h: oldColor.h, s: oldColor.s, l: oldColor.l });
-      }
-    }
-    setHistoryIndex(historyIndex - 1);
-  }, [history, historyIndex, updateColorValue]);
-
-  const redo = useCallback(() => {
-    if (historyIndex >= history.length - 1) return;
-    const nextState = history[historyIndex + 1];
-    setDashedPolygons(nextState.dashedPolygons);
-    setBaseTexture(nextState.baseTexture);
-    setResidualTexture(nextState.residualTexture);
-    setBbox(nextState.bbox);
-    // 逐颜色恢复历史值，不直接覆盖全局调色板
-    const currentBaseColors: SharedBaseColor[] = useAppStore.getState().sharedBaseColors;
-    const currentColorMap = new Map<number, SharedBaseColor>(currentBaseColors.map((c: SharedBaseColor) => [c.id, c]));
-    for (const oldColor of nextState.baseColors) {
-      const cur = currentColorMap.get(oldColor.id);
-      if (!cur || cur.h !== oldColor.h || cur.s !== oldColor.s || cur.l !== oldColor.l) {
-        updateColorValue(oldColor.id, { h: oldColor.h, s: oldColor.s, l: oldColor.l });
-      }
-    }
-    setHistoryIndex(historyIndex + 1);
-  }, [history, historyIndex, updateColorValue]);
-
-  // 键盘快捷键
+  // 键盘快捷键（使用全局撤销/重做）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
@@ -769,6 +711,13 @@ export const BaseColorEditor: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo]);
+
+  // 全局撤销/重做后，重置本地缓存状态（blockFlags/residualRanges 可能已过时）
+  useEffect(() => {
+    setSelectedBaseColorId(null);
+    setResidualRanges(null);
+    setBlockFlags(0n);
+  }, [currentFrame?.regionIdTex?.length, currentFrame?.deltaPacked?.length, currentFrame?.bbox?.w, currentFrame?.bbox?.h]);
 
   // 滚轮缩放
   // 拖拽平移（中键或空格+左键）
@@ -968,10 +917,10 @@ export const BaseColorEditor: React.FC = () => {
         if (updatedFrame && updatedFrame.regionIdTex.length > 0) {
           setColorPixelsMap(buildColorPixelsMap(updatedFrame.regionIdTex));
         }
-        saveToHistory();
+        saveHistory();
       }, 0);
     }
-  }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, saveToHistory, setGlobalBbox, texSize]);
+  }, [drawingPolygon, updateSkillFrame, setColorPixelsMap, buildColorPixelsMap, autoMergeToGlobal, setGlobalBbox, texSize]);
 
   const recalculateResidual = useCallback(() => {
     if (!bgImageData || !bbox || baseColors.length === 0) return;
@@ -1162,11 +1111,11 @@ export const BaseColorEditor: React.FC = () => {
     // 10. 强制触发画布重绘（确保合成模式立即更新）
     setTimeout(() => {
       triggerCanvasRedraw();
-      saveToHistory();
+      saveHistory();
     }, 0);
 
     console.log(`[残差计算完成] blockFlags=0x${newBlockFlags.toString(16).padStart(4, '0')}, 坏像素=${refinementResult.badPixels?.length || 0}`);
-  }, [bgImageData, bbox, baseColors, regionIdTex, activeFrameId, texSize, addColorToPalette, updateSkillFrame, saveToHistory, triggerCanvasRedraw]);
+  }, [bgImageData, bbox, baseColors, regionIdTex, activeFrameId, texSize, addColorToPalette, updateSkillFrame, triggerCanvasRedraw]);
 
   // 更新基础色值（仅更新调色板，不重算残差——滑块拖动时性能优化）
   const updateBaseColor = useCallback((id: number, newHSL: { h: number; s: number; l: number }) => {
@@ -1195,9 +1144,9 @@ export const BaseColorEditor: React.FC = () => {
       // 刷新纹理和画布（仅显示更新，不重新计算残差）
       syncFrameTextures(activeFrameId);
       triggerCanvasRedraw();
-      saveToHistory();
+      saveHistory();
     }, 0);
-  }, [activeFrameId, reclusterFrameFromScratch, syncFrameTextures, triggerCanvasRedraw, saveToHistory, buildColorPixelsMap, setColorPixelsMap]);
+  }, [activeFrameId, reclusterFrameFromScratch, syncFrameTextures, triggerCanvasRedraw, buildColorPixelsMap, setColorPixelsMap]);
 
   // 处理临时像素（在鼠标松开时调用）
   const processPaintedPixels = useCallback(() => {
@@ -1396,7 +1345,7 @@ export const BaseColorEditor: React.FC = () => {
       const hsl = rgbToHsl(r, g, b);
       updateBaseColor(pickingId, hsl);
       setPickingId(null);
-      setTimeout(() => saveToHistory(), 0);
+      setTimeout(() => saveHistory(), 0);
       return;
     }
 
@@ -1409,7 +1358,7 @@ export const BaseColorEditor: React.FC = () => {
             setDashedPolygons(prev => [...prev, drawingPolygon]);
             setDrawingPolygon(null);
             setPreviewPoint(null);
-            setTimeout(() => saveToHistory(), 0);
+            setTimeout(() => saveHistory(), 0);
             return;
           }
         }
@@ -1435,7 +1384,7 @@ export const BaseColorEditor: React.FC = () => {
           setDashedPolygons(prev => [...prev, newPoly]);
           setDrawingPolygon(null);
           setPreviewPoint(null);
-          setTimeout(() => saveToHistory(), 0);
+          setTimeout(() => saveHistory(), 0);
         } else {
           setDrawingPolygon(prev => prev ? [...prev, snapped] : [snapped]);
         }
@@ -1445,7 +1394,7 @@ export const BaseColorEditor: React.FC = () => {
         console.warn('画笔仅在基础色模式下可用');
         return;
       }
-      saveToHistory();
+      saveHistory();
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'picker') {
@@ -1455,7 +1404,7 @@ export const BaseColorEditor: React.FC = () => {
       }
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveToHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -1480,13 +1429,13 @@ export const BaseColorEditor: React.FC = () => {
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture) {
       setTimeout(() => {
-        saveToHistory();
+        saveHistory();
         // 处理临时像素（聚类、合并、新建ID）
         processPaintedPixels();
       }, 0);
     }
     setIsDrawing(false);
-  }, [isDrawing, baseTexture, saveToHistory, processPaintedPixels]);
+  }, [isDrawing, baseTexture, processPaintedPixels]);
 
   const handleColorInfoClick = useCallback((e: React.MouseEvent) => {
     if (!showColorInfoOnClick) return;
@@ -2133,7 +2082,7 @@ export const BaseColorEditor: React.FC = () => {
         </button>
         <button
           onClick={redo}
-          disabled={historyIndex >= history.length - 1}
+          disabled={historyIndex >= historySnapshots.length - 1}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer', border: '1px solid #d9d9d9' }}
           title="Ctrl+Shift+Z"
         >
