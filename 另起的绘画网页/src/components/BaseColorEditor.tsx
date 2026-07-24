@@ -486,6 +486,7 @@ export const BaseColorEditor: React.FC = () => {
     saveHistory,    // 全局保存历史
     historyIndex,   // 全局历史索引
     historySnapshots, // 全局历史快照
+    mergeSimilarColors,
   } = useAppStore();
 
   const { frames, sharedBaseColors, activeFrameId, globalBbox, enableFramePrediction } = skillGroupEditor;
@@ -907,6 +908,7 @@ export const BaseColorEditor: React.FC = () => {
       setIsExtractMode(false);
 
       autoMergeToGlobal(currentActiveFrameId);
+      mergeSimilarColors(0.005);  // 合并相似颜色后再保存历史
 
       if (!state.skillGroupEditor.globalBbox) {
         setGlobalBbox(result.bbox);
@@ -1126,6 +1128,12 @@ export const BaseColorEditor: React.FC = () => {
     setPickingId(prev => prev === id ? null : id);
   }, []);
 
+  // HSL 滑块拖拽结束后合并相似颜色，再重算残差
+  const handleDragEnd = useCallback(() => {
+    mergeSimilarColors(0.005);
+    recalculateResidual();
+  }, [mergeSimilarColors, recalculateResidual]);
+
   const handleRecluster = useCallback(() => {
     if (!activeFrameId) return;
     
@@ -1243,9 +1251,11 @@ export const BaseColorEditor: React.FC = () => {
     // 6. 重新生成基础色纹理（基于新 regionIdTex）并重排调色板
     syncFrameTextures(activeFrameId);
     sortPaletteByArea();
+    mergeSimilarColors(0.005);  // 合并相似颜色
+    saveHistory();             // 保存合并后的完整状态
 
     isProcessingRef.current = false;
-  }, [baseTexture, bbox, activeFrameId, texSize, addColorToPalette, updateSkillFrame, syncFrameTextures, sortPaletteByArea]);
+  }, [baseTexture, bbox, activeFrameId, texSize, addColorToPalette, updateSkillFrame, syncFrameTextures, sortPaletteByArea, mergeSimilarColors, saveHistory]);
 
   // 获取画布上的像素坐标
   const getCanvasPixel = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -2465,7 +2475,7 @@ export const BaseColorEditor: React.FC = () => {
             pickingId={pickingId}
             onSelect={handleSelectBaseColor}
             onUpdate={updateBaseColor}
-            onDragEnd={recalculateResidual}
+            onDragEnd={handleDragEnd}
             onRecluster={handleRecluster}
             onPickColor={handlePickColor}
           />

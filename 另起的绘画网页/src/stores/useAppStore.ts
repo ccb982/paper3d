@@ -1996,7 +1996,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   addColorToPalette: (hsl, frameId) => {
     const state = get();
     const palette = state.palette;
-    const thresholdH = 0.02;
+    const thresholdH = 0.005;
     const thresholdSL = 0.015;
 
     // 查找相似颜色
@@ -2629,7 +2629,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  mergeSimilarColors: (threshold = 0.02) => {
+  mergeSimilarColors: (threshold = 0.005) => {
     const state = get();
     const palette = state.palette;
     const ids = Array.from(palette.keys());
@@ -2668,7 +2668,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   resetCurrentFrameColors: (frameId) => {
     get().clearAllColorsInFrame(frameId);
     get().extractAndApplyColorsToFrame(frameId);
-    get().mergeSimilarColors(0.02);
+    get().mergeSimilarColors(0.005);
     get().pruneUnusedColors();
     get().sortPaletteByArea();
     for (const ref of get().getAllFrameRefs()) {
