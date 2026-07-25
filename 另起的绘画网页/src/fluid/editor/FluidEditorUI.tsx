@@ -12,7 +12,8 @@ const GeneralPanel: React.FC<{
   onConfigChange: (updates: Partial<FluidEditorConfig>) => void;
   onViewChange: (mode: ViewMode) => void;
   onReset: () => void;
-}> = ({ config, viewMode, onConfigChange, onViewChange, onReset }) => {
+  onExport: () => void;
+}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExport }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -226,6 +227,30 @@ const GeneralPanel: React.FC<{
             🔄 重置流体场
           </button>
         </div>
+
+        {/* 导出按钮 */}
+        <div className="control-group">
+          <button
+            onClick={onExport}
+            style={{
+              width: '100%',
+              padding: '6px 12px',
+              background: '#66bb6a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+              marginTop: '4px',
+            }}
+          >
+            📤 导出状态 JSON
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -407,6 +432,13 @@ export const FluidEditorUI: React.FC = () => {
   const displayRafRef = useRef<number>();
 
   const [rendererReady, setRendererReady] = useState(false);
+
+  // 采样信息（点击 canvas 时填充）
+  const [sampleInfo, setSampleInfo] = useState<{
+    px: number; py: number;
+    h: number; s: number; l: number; a: number;
+    velX: number; velY: number; velMag: number;
+  } | null>(null);
 
   // 压力参数
   const [pressureParams, setPressureParams] = useState({
@@ -661,6 +693,21 @@ export const FluidEditorUI: React.FC = () => {
           onConfigChange={updateConfig}
           onViewChange={setView}
           onReset={reset}
+          onExport={() => {
+            if (!editor) return;
+            const json = editor.exportState();
+            // 下载文件
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fluid-state-${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            console.log('[FluidEditorUI] 导出状态 JSON 完成');
+          }}
         />
 
         {/* 平流 */}
@@ -694,12 +741,114 @@ export const FluidEditorUI: React.FC = () => {
 
       {/* 视口 */}
       <div className="fluid-viewport">
-        <canvas ref={displayCanvasRef} />
+        <canvas
+          ref={displayCanvasRef}
+          onClick={(e) => {
+            if (!editor) return;
+            const canvas = displayCanvasRef.current;
+            if (!canvas) return;
+
+            // 计算 canvas 在屏幕上的边界
+            const rect = canvas.getBoundingClientRect();
+            // 鼠标相对 canvas 左上角的偏移（CSS 像素）
+            const cssX = e.clientX - rect.left;
+            const cssY = e.clientY - rect.top;
+
+            // canvas 显示尺寸（CSS）与像素尺寸的缩放
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+
+            // 转换为 canvas 像素坐标（左上为原点，Y 向下）
+            const pixX = cssX * scaleX;
+            const pixY = cssY * scaleY;
+
+            // 转换为纹理坐标（左下为原点，Y 向上）
+            const texX = pixX;
+            const texY = canvas.height - 1 - pixY;
+
+            console.log(`[FluidEditorUI] 点击 canvas 坐标: css=(${cssX.toFixed(1)},${cssY.toFixed(1)}) pix=(${pixX.toFixed(1)},${pixY.toFixed(1)}) tex=(${texX.toFixed(1)},${texY.toFixed(1)})`);
+
+            // 采样
+            const sample = editor.samplePixel(texX, texY);
+            const velMag = Math.sqrt(sample.velX * sample.velX + sample.velY * sample.velY);
+
+            setSampleInfo({
+              px: Math.floor(texX),
+              py: Math.floor(texY),
+              h: sample.h,
+              s: sample.s,
+              l: sample.l,
+              a: sample.a,
+              velX: sample.velX,
+              velY: sample.velY,
+              velMag,
+            });
+
+            console.log(`[FluidEditorUI] 采样结果: HSLA=(${sample.h.toFixed(3)},${sample.s.toFixed(3)},${sample.l.toFixed(3)},${sample.a.toFixed(3)}) vel=(${sample.velX.toFixed(2)},${sample.velY.toFixed(2)}) |vel|=${velMag.toFixed(2)}`);
+          }}
+          style={{ cursor: 'crosshair' }}
+        />
         <div className="viewport-info">
           <span>{config.resolution.w}×{config.resolution.h}</span>
           <span>{viewMode === 'color' ? '颜色场' : '速度场'}</span>
           <span>{config.enableAdvection ? '平流: ON' : '平流: OFF'}</span>
         </div>
+
+        {/* 采样信息浮窗 */}
+        {sampleInfo && (
+          <div className="sample-info">
+            <div className="sample-header">
+              <span>🔬 像素采样</span>
+              <button
+                onClick={() => setSampleInfo(null)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#666',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  padding: '0 4px',
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">像素坐标</span>
+              <span className="sample-value">({sampleInfo.px}, {sampleInfo.py})</span>
+            </div>
+            <div className="sample-section">颜色场 (HSLA)</div>
+            <div className="sample-row">
+              <span className="sample-label">H 色相</span>
+              <span className="sample-value">{(sampleInfo.h * 360).toFixed(1)}° ({sampleInfo.h.toFixed(3)})</span>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">S 饱和度</span>
+              <span className="sample-value">{(sampleInfo.s * 100).toFixed(1)}% ({sampleInfo.s.toFixed(3)})</span>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">L 亮度</span>
+              <span className="sample-value">{(sampleInfo.l * 100).toFixed(1)}% ({sampleInfo.l.toFixed(3)})</span>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">A 不透明度</span>
+              <span className="sample-value">{(sampleInfo.a * 100).toFixed(1)}% ({sampleInfo.a.toFixed(3)})</span>
+            </div>
+            <div className="sample-section">速度场 (px/s)</div>
+            <div className="sample-row">
+              <span className="sample-label">velX</span>
+              <span className="sample-value">{sampleInfo.velX.toFixed(2)}</span>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">velY</span>
+              <span className="sample-value">{sampleInfo.velY.toFixed(2)}</span>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">|vel|</span>
+              <span className="sample-value">{sampleInfo.velMag.toFixed(2)}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 样式 */}
@@ -965,6 +1114,64 @@ export const FluidEditorUI: React.FC = () => {
           padding: 4px 12px;
           border-radius: 4px;
           border: 1px solid #ddd;
+        }
+
+        /* 采样信息浮窗 */
+        .sample-info {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          background: rgba(255,255,255,0.95);
+          border: 1px solid #ccc;
+          border-radius: 6px;
+          padding: 10px 12px;
+          font-size: 11px;
+          color: #333;
+          min-width: 200px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+          backdrop-filter: blur(4px);
+          z-index: 10;
+        }
+
+        .sample-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-weight: 600;
+          font-size: 12px;
+          color: #1976d2;
+          margin-bottom: 8px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid #eee;
+        }
+
+        .sample-section {
+          font-weight: 600;
+          font-size: 11px;
+          color: #888;
+          margin-top: 8px;
+          margin-bottom: 4px;
+          padding-bottom: 2px;
+          border-bottom: 1px dashed #eee;
+        }
+
+        .sample-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 2px 0;
+        }
+
+        .sample-label {
+          color: #666;
+          min-width: 70px;
+        }
+
+        .sample-value {
+          color: #333;
+          font-family: 'Consolas', 'Monaco', monospace;
+          font-weight: 500;
+          text-align: right;
         }
       `}</style>
     </div>

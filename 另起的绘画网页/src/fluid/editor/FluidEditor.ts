@@ -428,6 +428,81 @@ export class FluidEditor {
     return tex;
   }
 
+  /** 获取当前模拟帧计数 */
+  getFrameCount(): number {
+    return this.frameCount;
+  }
+
+  /** 获取当前模拟时间（秒） */
+  getTime(): number {
+    return this.time;
+  }
+
+  /**
+   * 采样指定像素位置的颜色和速度值。
+   * @param x 像素 X 坐标（0 ~ w-1）
+   * @param y 像素 Y 坐标（0 ~ h-1，注意：这是纹理坐标，Y向上为正）
+   * @returns { h, s, l, a, velX, velY } HSLA 值（0~1）和速度值（像素/秒）
+   */
+  samplePixel(x: number, y: number): {
+    h: number; s: number; l: number; a: number;
+    velX: number; velY: number;
+  } {
+    const { w, h } = this.config.resolution;
+    // 钳制到有效范围
+    const px = Math.max(0, Math.min(w - 1, Math.floor(x)));
+    const py = Math.max(0, Math.min(h - 1, Math.floor(y)));
+
+    // 1. 读取颜色像素（RGBA uint8）
+    const colorPixels = this.readColorPixels();
+    const idx = (py * w + px) * 4;
+    const r = colorPixels[idx] / 255;
+    const g = colorPixels[idx + 1] / 255;
+    const b = colorPixels[idx + 2] / 255;
+    const a = colorPixels[idx + 3] / 255;
+
+    // RGB → HSL 转换
+    const hsl = this.rgbToHsl(r, g, b);
+
+    // 2. 读取速度像素（half-float, RG 双通道）
+    const velRaw = new Uint8Array(4); // 至少 4 字节
+    const target = this.velocityGrid.readTarget;
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(target);
+    // 读取 1x1 像素
+    this.renderer.readRenderTargetPixels(target, px, py, 1, 1, velRaw);
+    this.renderer.setRenderTarget(prevTarget);
+
+    const velX = this.halfFloatToFloat(velRaw[0], velRaw[1]);
+    const velY = this.halfFloatToFloat(velRaw[2], velRaw[3]);
+
+    console.debug(`[FluidEditor.samplePixel] (${px},${py}) HSLA=(${hsl.h.toFixed(3)},${hsl.s.toFixed(3)},${hsl.l.toFixed(3)},${a.toFixed(3)}) vel=(${velX.toFixed(2)},${velY.toFixed(2)})`);
+
+    return { h: hsl.h, s: hsl.s, l: hsl.l, a, velX, velY };
+  }
+
+  /** RGB(0~1) → HSL(0~1) */
+  private rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    let h = 0;
+    let s = 0;
+
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
+    }
+
+    return { h, s, l };
+  }
+
   /**
    * 将颜色场从 GPU 回读到 CPU（Uint8Array RGBA）。
    * 用于 Canvas 2D 显示（跨 WebGL 上下文安全）。
@@ -488,6 +563,85 @@ export class FluidEditor {
     console.debug(`[FluidEditor.readVelocityPixels] 读取 ${w}x${h} 像素, 非零速度=${nonZeroCount}/${raw.length}`);
 
     return rgba;
+  }
+
+  /**
+   * 导出当前状态为 JSON 数据。
+   * 包含：颜色纹理、速度纹理、所有配置参数、帧计数、模拟时间。
+   */
+  exportState(): string {
+    const { w, h } = this.config.resolution;
+    
+    // 1. 回读颜色数据（uint8）
+    const colorPixels = this.readColorPixels();
+    const colorData: number[][] = [];
+    for (let i = 0; i < w * h; i++) {
+      colorData.push([
+        colorPixels[i * 4],
+        colorPixels[i * 4 + 1],
+        colorPixels[i * 4 + 2],
+        colorPixels[i * 4 + 3],
+      ]);
+    }
+    
+    // 2. 回读速度数据（half-float，需要转换）
+    const velPixels = new Uint8Array(w * h * 4); // 使用 4 通道读取以确保对齐
+    const target = this.velocityGrid.readTarget;
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(target);
+    this.renderer.readRenderTargetPixels(target, 0, 0, w, h, velPixels);
+    this.renderer.setRenderTarget(prevTarget);
+    
+    // 将 half-float 转换为 float32
+    const velData: number[][] = [];
+    for (let i = 0; i < w * h; i++) {
+      const velX = this.halfFloatToFloat(velPixels[i * 4], velPixels[i * 4 + 1]);
+      const velY = this.halfFloatToFloat(velPixels[i * 4 + 2], velPixels[i * 4 + 3]);
+      velData.push([velX, velY]);
+    }
+
+    // 3. 构建导出对象
+    const exportData = {
+      timestamp: Date.now(),
+      frameCount: this.frameCount,
+      time: this.time,
+      resolution: { w, h },
+      config: {
+        gravity: this.config.gravity,
+        channels: { ...this.config.channels },
+        enableAdvection: this.config.enableAdvection,
+        enablePressure: this.config.enablePressure,
+        enableLevelSet: this.config.enableLevelSet,
+        injection: { ...this.config.injection },
+        colorBoundaryMode: this.config.colorBoundaryMode,
+      },
+      colorTexture: colorData,
+      velocityTexture: velData,
+    };
+
+    return JSON.stringify(exportData, null, 2);
+  }
+
+  /** 将 half-float (2 bytes) 转换为 float32 */
+  private halfFloatToFloat(byte0: number, byte1: number): number {
+    // 小端序：byte0 是低字节，byte1 是高字节
+    const bits = (byte1 << 8) | byte0;
+    const sign = (bits >> 15) & 1;
+    const exponent = (bits >> 10) & 0x1f;
+    const mantissa = bits & 0x3ff;
+
+    if (exponent === 0) {
+      // 零或非规格化数
+      return sign === 0 ? 0 : -0;
+    } else if (exponent === 31) {
+      // 无穷或 NaN
+      return mantissa === 0 ? (sign === 0 ? Infinity : -Infinity) : NaN;
+    } else {
+      // 规格化数
+      const exp = exponent - 15;
+      const m = mantissa / 1024 + 1;
+      return (sign === 0 ? 1 : -1) * m * Math.pow(2, exp);
+    }
   }
 
   // ==================== 初始化 ====================
