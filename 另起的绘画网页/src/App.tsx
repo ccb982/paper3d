@@ -57,7 +57,7 @@ function App() {
         </div>
 
         {/* 流体编辑器主体（视口 + 控制面板） */}
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           <FluidEditorUI />
         </div>
       </div>
