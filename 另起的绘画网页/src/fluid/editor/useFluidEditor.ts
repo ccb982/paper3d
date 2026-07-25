@@ -106,6 +106,11 @@ export function useFluidEditor(
     }
   }, [viewMode]);
 
+  // ==================== 重置 ====================
+  const reset = useCallback(() => {
+    editorRef.current?.initFields();
+  }, []);
+
   return {
     editor,
     config,
@@ -113,5 +118,6 @@ export function useFluidEditor(
     viewMode,
     setView,
     getDisplayTexture,
+    reset,
   };
 }

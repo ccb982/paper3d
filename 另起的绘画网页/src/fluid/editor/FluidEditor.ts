@@ -444,7 +444,7 @@ export class FluidEditor {
   }
 
   /** 初始化场数据：全透明空场 + 零速度 */
-  private initFields(): void {
+  public initFields(): void {
     const { w, h } = this.config.resolution;
 
     // 初始颜色场：完全透明（空场），依靠注入源产生动态流体

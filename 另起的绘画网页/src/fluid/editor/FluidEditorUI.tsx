@@ -11,7 +11,8 @@ const GeneralPanel: React.FC<{
   viewMode: ViewMode;
   onConfigChange: (updates: Partial<FluidEditorConfig>) => void;
   onViewChange: (mode: ViewMode) => void;
-}> = ({ config, viewMode, onConfigChange, onViewChange }) => {
+  onReset: () => void;
+}> = ({ config, viewMode, onConfigChange, onViewChange, onReset }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -201,6 +202,29 @@ const GeneralPanel: React.FC<{
               </div>
             </div>
           )}
+        </div>
+
+        {/* 刷新按钮 */}
+        <div className="control-group">
+          <button
+            onClick={onReset}
+            style={{
+              width: '100%',
+              padding: '6px 12px',
+              background: '#4fc3f7',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px',
+            }}
+          >
+            🔄 重置流体场
+          </button>
         </div>
       </div>
     </div>
@@ -431,6 +455,7 @@ export const FluidEditorUI: React.FC = () => {
     updateConfig,
     viewMode,
     setView,
+    reset,
   } = useFluidEditor(rendererRef.current, {
     resolution: { w: 256, h: 256 },
     channels: { r: true, g: true, b: true, a: true },
@@ -513,6 +538,7 @@ export const FluidEditorUI: React.FC = () => {
           viewMode={viewMode}
           onConfigChange={updateConfig}
           onViewChange={setView}
+          onReset={reset}
         />
 
         {/* 平流 */}
