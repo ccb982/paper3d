@@ -20,13 +20,13 @@ export function useFluidEditor(
     enableAdvection: true,
     enablePressure: false,
     enableLevelSet: false,
-    gravity: 1000,
+    gravity: 250, // 正值向下（屏幕坐标系）
     injection: {
       enabled: true,
-      position: { x: 0.5, y: 0.05 },
+      position: { x: 0.5, y: 0.25 }, // Y向下为正，0.25 = 靠近顶部（25%位置）
       radius: 0.1,
       rate: 15,
-      velocity: { x: 0, y: 200 },
+      velocity: { x: 0, y: 50 }, // Y向下为正，正值 = 向下喷射
       color: [0.0, 0.8, 1.0, 1.0],
     },
     colorBoundaryMode: 'clamp',
@@ -35,18 +35,23 @@ export function useFluidEditor(
 
   // ==================== 初始化编辑器 ====================
   useEffect(() => {
-    if (!renderer) return;
+    if (!renderer) {
+      console.log('[useFluidEditor] renderer is null, waiting...');
+      return;
+    }
 
+    console.log('[useFluidEditor] 创建 FluidEditor');
     const ed = new FluidEditor(renderer, config);
     editorRef.current = ed;
     setEditor(ed);
 
     return () => {
+      console.log('[useFluidEditor] 清理 FluidEditor');
       ed.dispose();
       editorRef.current = null;
       setEditor(null);
     };
-  }, [renderer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [renderer, config]); // 依赖 renderer 和 config
 
   // ==================== 动画循环 ====================
   useEffect(() => {

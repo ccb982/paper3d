@@ -16,15 +16,15 @@ export interface FluidEditorConfig {
   enableAdvection: boolean;
   enablePressure: boolean;   // 预留
   enableLevelSet: boolean;   // 预留
-  /** 重力加速度（像素/秒²），负值向下 */
+  /** 重力加速度（像素/秒²），正值向下（屏幕坐标系） */
   gravity: number;
   /** 恒定注入源配置 */
   injection: {
     enabled: boolean;
-    position: { x: number; y: number };  // 归一化 (0~1)
+    position: { x: number; y: number };  // 归一化 (0~1)，Y向下为正（0=顶部，1=底部）
     radius: number;                       // 归一化半径
     rate: number;                         // 每帧注入量 (0~1)
-    velocity: { x: number; y: number };   // 注入速度（像素/秒）
+    velocity: { x: number; y: number };   // 注入速度（像素/秒），Y向下为正
     color: [number, number, number, number]; // RGBA
   };
   /** 颜色场平流边界模式：'clamp'（钳制）、'repeat'（重复）、'zero'（越界消失） */
@@ -63,6 +63,7 @@ class GPUOps {
     this.quadGeom = new THREE.PlaneGeometry(2, 2);
     this.quad = new THREE.Mesh(this.quadGeom);
     this.scene.add(this.quad);
+    console.log('[GPUOps] 创建全屏渲染辅助类');
   }
 
   /**
@@ -79,6 +80,7 @@ class GPUOps {
       for (const [name, u] of Object.entries(uniforms)) {
         if (mat.uniforms[name]) mat.uniforms[name].value = u.value;
       }
+      console.debug(`[GPUOps.getMaterial] 复用材质: ${key}`);
       return mat;
     }
     mat = new THREE.ShaderMaterial({
@@ -89,6 +91,7 @@ class GPUOps {
       depthWrite: false,
     });
     this.materials.set(key, mat);
+    console.log(`[GPUOps.getMaterial] 创建新材质: ${key}`);
     return mat;
   }
 
@@ -110,12 +113,14 @@ class GPUOps {
     renderer.setRenderTarget(prevTarget);
 
     this.quad.material = prevMat;
+    console.debug(`[GPUOps.render] 渲染到目标: ${target}`);
   }
 
   dispose(): void {
     for (const mat of this.materials.values()) mat.dispose();
     this.materials.clear();
     this.quadGeom.dispose();
+    console.log('[GPUOps.dispose] 释放资源');
   }
 }
 
@@ -152,18 +157,34 @@ export class FluidEditor {
   // 时间（秒）
   private time = 0;
 
+  // 帧计数（用于调试）
+  private frameCount = 0;
+
   // 复用像素缓冲区，避免每帧分配
   private pixelBuffer: Uint8Array | null = null;
 
   constructor(renderer: THREE.WebGLRenderer, config: FluidEditorConfig) {
+    console.log('[FluidEditor] 构造函数开始');
     this.renderer = renderer;
     this.config = { ...config };
 
+    console.log('[FluidEditor] 创建 GPUOps');
     this.gpu = new GPUOps();
+
+    console.log('[FluidEditor] 创建 AdvectionSolver');
     this.advectionSolver = new AdvectionSolver(renderer);
 
+    console.log('[FluidEditor] 重建网格');
     this.rebuildGrids();
+
+    console.log('[FluidEditor] 初始化场数据');
     this.initFields();
+
+    console.log('[FluidEditor] 构造完成');
+    console.log('  分辨率:', config.resolution);
+    console.log('  通道:', config.channels);
+    console.log('  重力:', config.gravity);
+    console.log('  注入:', config.injection);
   }
 
   // ==================== 配置更新 ====================
@@ -179,10 +200,10 @@ export class FluidEditor {
       updates.resolution &&
       (updates.resolution.w !== oldRes.w || updates.resolution.h !== oldRes.h)
     ) {
-      // 只重建网格（不重新初始化），保持已有状态
-      // 注入源会在下一帧 step 中自动填充新网格
+      console.log(`[FluidEditor.updateConfig] 分辨率变化: ${oldRes.w}x${oldRes.h} → ${updates.resolution.w}x${updates.resolution.h}`);
       this.rebuildGrids();
     }
+    console.debug(`[FluidEditor.updateConfig] 更新配置:`, updates);
   }
 
   // ==================== 每帧更新 ====================
@@ -191,14 +212,29 @@ export class FluidEditor {
   step(dt: number): void {
     if (dt <= 0) return;
 
+    this.frameCount++;
+    
+    // 每 30 帧输出一次详细调试信息
+    if (this.frameCount % 30 === 1) {
+      console.log(`[FluidEditor.step] 帧#${this.frameCount} dt=${dt.toFixed(4)}s time=${this.time.toFixed(2)}s`);
+    }
+
     // 0. 重力
-    if (this.config.gravity !== 0) this.applyGravity(dt);
+    if (this.config.gravity !== 0) {
+      console.debug(`[FluidEditor.step] 施加重力: ${this.config.gravity}`);
+      this.applyGravity(dt);
+    }
 
     // 1. 注入源
-    if (this.config.injection.enabled) this.applyInjection(dt);
+    if (this.config.injection.enabled) {
+      const inj = this.config.injection;
+      console.debug(`[FluidEditor.step] 注入源: pos=(${inj.position.x},${inj.position.y}) rate=${inj.rate}`);
+      this.applyInjection(dt);
+    }
 
     // 2. 平流
     if (this.config.enableAdvection) {
+      console.debug(`[FluidEditor.step] 执行平流`);
       this.advectVelocity(dt);
       this.advectColor(dt);
     }
@@ -210,6 +246,7 @@ export class FluidEditor {
     // if (this.config.enableLevelSet) this.solveLevelSet();
 
     // 5. 边界处理
+    console.debug(`[FluidEditor.step] 边界处理`);
     this.applyBoundary();
 
     this.time += dt;
@@ -219,13 +256,15 @@ export class FluidEditor {
 
   /**
    * 施加重力：向速度场 Y 分量累加 gravity * dt。
+   * 注意：用户接口 Y 向下为正，内部纹理坐标 Y 向上为正，所以需要取反。
    */
   private applyGravity(dt: number): void {
     const g = this.config.gravity;
+    console.debug(`[FluidEditor.applyGravity] g=${g}, dt=${dt}, g*dt=${(g*dt).toFixed(4)}`);
 
     const mat = this.gpu.getMaterial('gravity', {
       velTex: { value: this.velocityGrid.read },
-      gDt: { value: g * dt },
+      gDt: { value: -g * dt }, // 取反：用户Y向下为正，纹理Y向上为正
     }, /* glsl */ `
       uniform sampler2D velTex;
       uniform float gDt;
@@ -244,15 +283,22 @@ export class FluidEditor {
   /**
    * 恒定注入源：在指定位置持续注入颜色和速度。
    * 使用 smoothstep 混合旧值和新值，避免硬边缘。
+   * 注意：用户接口 Y 向下为正，内部纹理坐标 Y 向上为正，所以位置Y和速度Y都需要取反。
    */
   private applyInjection(dt: number): void {
     const inj = this.config.injection;
     const rate = inj.rate * dt;
+    console.debug(`[FluidEditor.applyInjection] rate=${rate.toFixed(4)}, color=${inj.color}`);
+
+    // 位置Y取反：用户Y向下为正（0=顶部），纹理Y向上为正（0=底部）
+    const texPosY = 1.0 - inj.position.y;
+    // 速度Y取反：用户Y向下为正，纹理Y向上为正
+    const texVelY = -inj.velocity.y;
 
     // 颜色注入
     const colorMat = this.gpu.getMaterial('injectColor', {
       colorTex: { value: this.colorGrid.read },
-      pos: { value: new THREE.Vector2(inj.position.x, inj.position.y) },
+      pos: { value: new THREE.Vector2(inj.position.x, texPosY) },
       radius: { value: inj.radius },
       color: { value: new THREE.Vector4(inj.color[0], inj.color[1], inj.color[2], inj.color[3]) },
       rate: { value: rate },
@@ -276,9 +322,9 @@ export class FluidEditor {
     // 速度注入
     const velMat = this.gpu.getMaterial('injectVel', {
       velTex: { value: this.velocityGrid.read },
-      pos: { value: new THREE.Vector2(inj.position.x, inj.position.y) },
+      pos: { value: new THREE.Vector2(inj.position.x, texPosY) },
       radius: { value: inj.radius },
-      vel: { value: new THREE.Vector2(inj.velocity.x, inj.velocity.y) },
+      vel: { value: new THREE.Vector2(inj.velocity.x, texVelY) },
       rate: { value: rate },
     }, /* glsl */ `
       uniform sampler2D velTex;
@@ -291,7 +337,6 @@ export class FluidEditor {
         float d = distance(vUv, pos);
         float mask = smoothstep(radius, 0.0, d);
         vec2 old = texture2D(velTex, vUv).rg;
-        // 增量叠加：vel 是每帧增加的速度增量，不是目标速度
         gl_FragColor = vec4(old + vel * rate * mask, 0.0, 1.0);
       }
     `);
@@ -302,12 +347,15 @@ export class FluidEditor {
   /** 速度自平流 */
   private advectVelocity(dt: number): void {
     const mask: AdvectionMask = { r: true, g: true, b: false, a: false };
+    const subSteps = Math.max(1, Math.ceil(Math.abs(this.config.gravity) * dt / 50));
+    console.debug(`[FluidEditor.advectVelocity] dt=${dt}, subSteps=${subSteps}`);
+    
     this.advectionSolver.advect(
       this.velocityGrid,
       this.velocityGrid.read,
       dt,
       mask,
-      { boundaryMode: 'clamp', subSteps: Math.max(1, Math.ceil(Math.abs(this.config.gravity) * dt / 50)) },
+      { boundaryMode: 'clamp', subSteps },
     );
   }
 
@@ -315,9 +363,14 @@ export class FluidEditor {
   private advectColor(dt: number): void {
     const ch = this.config.channels;
     const mask: AdvectionMask = { r: ch.r, g: ch.g, b: ch.b, a: ch.a };
-    if (!mask.r && !mask.g && !mask.b && !mask.a) return;
+    if (!mask.r && !mask.g && !mask.b && !mask.a) {
+      console.debug('[FluidEditor.advectColor] 无通道启用，跳过');
+      return;
+    }
 
     const boundaryMode = this.config.colorBoundaryMode || 'clamp';
+    console.debug(`[FluidEditor.advectColor] channels=${JSON.stringify(ch)}, boundary=${boundaryMode}`);
+    
     this.advectionSolver.advect(
       this.colorGrid,
       this.velocityGrid.read,
@@ -341,7 +394,6 @@ export class FluidEditor {
       void main() {
         vec2 vel = texture2D(velTex, vUv).rg;
         float eps = 1.0 / resolution.x;
-        // 边界处使用内部像素的速度（零梯度），让水流能通过边界自由流出
         if (vUv.x < eps) {
           vel = texture2D(velTex, vec2(vUv.x + eps, vUv.y)).rg;
         } else if (vUv.x > 1.0 - eps) {
@@ -364,12 +416,16 @@ export class FluidEditor {
 
   /** 获取颜色场纹理（用于显示） */
   getColorTexture(): THREE.Texture {
-    return this.colorGrid.read;
+    const tex = this.colorGrid.read;
+    console.debug(`[FluidEditor.getColorTexture] 返回纹理: ${tex.image?.width}x${tex.image?.height}`);
+    return tex;
   }
 
   /** 获取速度场纹理（RG 通道，需要可视化转换） */
   getVelocityTexture(): THREE.Texture {
-    return this.velocityGrid.read;
+    const tex = this.velocityGrid.read;
+    console.debug(`[FluidEditor.getVelocityTexture] 返回纹理: ${tex.image?.width}x${tex.image?.height}`);
+    return tex;
   }
 
   /**
@@ -390,6 +446,13 @@ export class FluidEditor {
     this.renderer.readRenderTargetPixels(target, 0, 0, w, h, pixels);
     this.renderer.setRenderTarget(prevTarget);
 
+    // 统计非零像素
+    let nonZeroCount = 0;
+    for (let i = 0; i < pixels.length; i++) {
+      if (pixels[i] !== 0) { nonZeroCount++; }
+    }
+    console.debug(`[FluidEditor.readColorPixels] 读取 ${w}x${h} 像素, 非零像素=${nonZeroCount}/${pixels.length}`);
+
     return pixels;
   }
 
@@ -405,19 +468,25 @@ export class FluidEditor {
 
     const prevTarget = this.renderer.getRenderTarget();
     this.renderer.setRenderTarget(target);
-    // Three.js readRenderTargetPixels 根据纹理格式决定读取字节数
-    // RGFormat → w*h*2 字节
     this.renderer.readRenderTargetPixels(target, 0, 0, w, h, raw);
     this.renderer.setRenderTarget(prevTarget);
 
-    // 扩展为 RGBA（ImageData 需要 4 字节/像素）
+    // 扩展为 RGBA
     const rgba = new Uint8Array(w * h * 4);
     for (let i = 0; i < w * h; i++) {
-      rgba[i * 4]     = raw[i * 2];     // R = velX
-      rgba[i * 4 + 1] = raw[i * 2 + 1]; // G = velY
-      rgba[i * 4 + 2] = 0;              // B = 0
-      rgba[i * 4 + 3] = 255;            // A = 255
+      rgba[i * 4]     = raw[i * 2];
+      rgba[i * 4 + 1] = raw[i * 2 + 1];
+      rgba[i * 4 + 2] = 0;
+      rgba[i * 4 + 3] = 255;
     }
+
+    // 统计非零速度
+    let nonZeroCount = 0;
+    for (let i = 0; i < raw.length; i++) {
+      if (raw[i] !== 0) { nonZeroCount++; }
+    }
+    console.debug(`[FluidEditor.readVelocityPixels] 读取 ${w}x${h} 像素, 非零速度=${nonZeroCount}/${raw.length}`);
+
     return rgba;
   }
 
@@ -431,6 +500,8 @@ export class FluidEditor {
         (k) => this.config.channels[k as keyof typeof this.config.channels],
       ).length,
     );
+
+    console.log(`[FluidEditor.rebuildGrids] 颜色通道=${colorCh}, 速度通道=2`);
 
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
@@ -447,39 +518,88 @@ export class FluidEditor {
   public initFields(): void {
     const { w, h } = this.config.resolution;
 
+    console.log(`[FluidEditor.initFields] 初始化 ${w}x${h} 场数据`);
+    console.log(`  colorGrid.dataType=${this.colorGrid.dataType}, velocityGrid.dataType=${this.velocityGrid.dataType}`);
+
     // 初始颜色场：完全透明（空场），依靠注入源产生动态流体
-    const colorData = new Float32Array(w * h * 4);
-    // 全部置 0（透明），Float32Array 默认值就是 0，无需额外赋值
+    // 注意：uint8 网格需要 Uint8Array，half-float 需要 Float32Array
+    let colorData: Float32Array | Uint8Array;
+    if (this.colorGrid.dataType === 'uint8') {
+      colorData = new Uint8Array(w * h * 4); // 默认全零 = 透明
+    } else {
+      colorData = new Float32Array(w * h * 4); // 默认全零 = 透明
+    }
     this.uploadToGrid(this.colorGrid, colorData, 4);
 
     // 零速度
-    const velData = new Float32Array(w * h * 2);
+    let velData: Float32Array | Uint8Array;
+    if (this.velocityGrid.dataType === 'uint8') {
+      velData = new Uint8Array(w * h * 2);
+    } else {
+      velData = new Float32Array(w * h * 2);
+    }
     this.uploadToGrid(this.velocityGrid, velData, 2);
+
+    console.log(`[FluidEditor.initFields] 初始化完成`);
   }
 
   /**
-   * 将 Float32Array CPU 数据上传到 FluidGrid。
+   * 将 CPU 数据上传到 FluidGrid。
    * 使用临时 DataTexture + copy shader 渲染到 grid.write。
+   * 
+   * 注意：确保数据类型与目标网格匹配！
+   * - uint8 网格：数据应在 [0, 255] 范围，使用 Uint8Array
+   * - half-float/float 网格：数据应在 [-1, 1] 或 [0, 1] 范围，使用 Float32Array
    */
   private uploadToGrid(
     grid: FluidGrid,
-    data: Float32Array,
+    data: Float32Array | Uint8Array,
     channels: number,
   ): void {
     const { w, h } = this.config.resolution;
+
+    console.log(`[FluidEditor.uploadToGrid] 上传 ${w}x${h}x${channels} 数据`);
+    console.log(`  grid.dataType=${grid.dataType}, data.constructor=${data.constructor.name}`);
+    console.log(`  data.length=${data.length}, 期望=${w * h * channels}`);
+
+    // 根据目标网格的数据类型选择合适的纹理类型
+    let texType: THREE.TextureDataType;
+    if (grid.dataType === 'uint8') {
+      texType = THREE.UnsignedByteType;
+      // 如果传入的是 Float32Array，需要转换为 Uint8Array（假设数据在 [0, 1] 范围）
+      if (data instanceof Float32Array) {
+        console.warn(`[FluidEditor.uploadToGrid] 警告: uint8 网格收到 Float32Array 数据，将进行转换`);
+        const uint8Data = new Uint8Array(data.length);
+        for (let i = 0; i < data.length; i++) {
+          uint8Data[i] = Math.round(data[i] * 255);
+        }
+        data = uint8Data;
+      }
+    } else {
+      texType = THREE.FloatType;
+      // 如果传入的是 Uint8Array，需要转换为 Float32Array
+      if (data instanceof Uint8Array) {
+        console.warn(`[FluidEditor.uploadToGrid] 警告: float 网格收到 Uint8Array 数据，将进行转换`);
+        const floatData = new Float32Array(data.length);
+        for (let i = 0; i < data.length; i++) {
+          floatData[i] = data[i] / 255;
+        }
+        data = floatData;
+      }
+    }
 
     const tex = new THREE.DataTexture(
       data,
       w,
       h,
       channels === 4 ? THREE.RGBAFormat : THREE.RGFormat,
-      THREE.FloatType,
+      texType,
     );
     tex.needsUpdate = true;
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
 
-    const copyKey = `copy_${channels}ch`;
+    const copyKey = `copy_${channels}ch_${grid.dataType}`;
     const copyMat = this.gpu.getMaterial(copyKey, {
       tex: { value: tex },
     },
@@ -491,11 +611,14 @@ export class FluidEditor {
     this.gpu.render(this.renderer, grid.write, copyMat);
     grid.swap();
     tex.dispose();
+
+    console.log(`[FluidEditor.uploadToGrid] 上传完成，texType=${texType}`);
   }
 
   // ==================== 销毁 ====================
 
   dispose(): void {
+    console.log('[FluidEditor.dispose] 释放所有资源');
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
     this.advectionSolver.dispose();

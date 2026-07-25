@@ -24,6 +24,19 @@ const THREE_TYPE_MAP: Record<TextureDataType, THREE.TextureDataType> = {
   'half-float': THREE.HalfFloatType,
 };
 
+const FORMAT_NAMES: Record<THREE.PixelFormat, string> = {
+  [THREE.RedFormat]: 'RedFormat',
+  [THREE.RGFormat]: 'RGFormat',
+  [THREE.RGBFormat]: 'RGBFormat',
+  [THREE.RGBAFormat]: 'RGBAFormat',
+};
+
+const TYPE_NAMES: Record<THREE.TextureDataType, string> = {
+  [THREE.UnsignedByteType]: 'UnsignedByteType',
+  [THREE.HalfFloatType]: 'HalfFloatType',
+  [THREE.FloatType]: 'FloatType',
+};
+
 /**
  * FluidGrid —— 双缓冲纹理管理器。
  *
@@ -64,9 +77,10 @@ export class FluidGrid {
     };
 
     const threeType = THREE_TYPE_MAP[dataType];
+    const format = formatMap[channels];
 
     this.texA = new THREE.WebGLRenderTarget(resolution.w, resolution.h, {
-      format: formatMap[channels],
+      format,
       type: threeType,
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
@@ -76,7 +90,7 @@ export class FluidGrid {
       stencilBuffer: false,
     });
     this.texB = new THREE.WebGLRenderTarget(resolution.w, resolution.h, {
-      format: formatMap[channels],
+      format,
       type: threeType,
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
@@ -85,21 +99,34 @@ export class FluidGrid {
       depthBuffer: false,
       stencilBuffer: false,
     });
+
+    console.log(`[FluidGrid] 创建双缓冲纹理:`);
+    console.log(`  分辨率: ${resolution.w} × ${resolution.h}`);
+    console.log(`  通道数: ${channels} (格式: ${FORMAT_NAMES[format] || format})`);
+    console.log(`  数据类型: ${TYPE_NAMES[threeType] || threeType}`);
+    console.log(`  texA:`, this.texA.texture);
+    console.log(`  texB:`, this.texB.texture);
   }
 
   /** 当前可读纹理 */
   get read(): THREE.Texture {
-    return this.current === 'A' ? this.texA.texture : this.texB.texture;
+    const tex = this.current === 'A' ? this.texA.texture : this.texB.texture;
+    console.debug(`[FluidGrid.read] current=${this.current}, 返回 tex=${this.current}`);
+    return tex;
   }
 
   /** 当前可读 RenderTarget（用于 readRenderTargetPixels 回读） */
   get readTarget(): THREE.WebGLRenderTarget {
-    return this.current === 'A' ? this.texA : this.texB;
+    const target = this.current === 'A' ? this.texA : this.texB;
+    console.debug(`[FluidGrid.readTarget] current=${this.current}, 返回 target=${this.current}`);
+    return target;
   }
 
   /** 当前可写入目标 */
   get write(): THREE.WebGLRenderTarget {
-    return this.current === 'A' ? this.texB : this.texA;
+    const target = this.current === 'A' ? this.texB : this.texA;
+    console.debug(`[FluidGrid.write] current=${this.current}, 返回 target=${this.current === 'A' ? 'B' : 'A'}`);
+    return target;
   }
 
   /**
@@ -107,10 +134,13 @@ export class FluidGrid {
    * 调用后 read 返回刚写入的数据，write 指向即将被覆盖的旧数据。
    */
   swap(): void {
+    const old = this.current;
     this.current = this.current === 'A' ? 'B' : 'A';
+    console.debug(`[FluidGrid.swap] ${old} → ${this.current}`);
   }
 
   setRenderTargetSize(w: number, h: number): void {
+    console.log(`[FluidGrid.setRenderTargetSize] ${this.resolution.w}×${this.resolution.h} → ${w}×${h}`);
     this.resolution.w = w;
     this.resolution.h = h;
     this.texA.setSize(w, h);
@@ -118,6 +148,7 @@ export class FluidGrid {
   }
 
   dispose(): void {
+    console.log(`[FluidGrid.dispose] 释放纹理`);
     this.texA.dispose();
     this.texB.dispose();
   }

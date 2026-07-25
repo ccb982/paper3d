@@ -402,7 +402,8 @@ const LevelSetPanel: React.FC<{
 // ============================================================
 export const FluidEditorUI: React.FC = () => {
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null); // 唯一的渲染器：计算 + 显示
+  const [rendererState, setRendererState] = useState<THREE.WebGLRenderer | null>(null); // 用于传递给 useFluidEditor
   const displayRafRef = useRef<number>();
 
   const [rendererReady, setRendererReady] = useState(false);
@@ -421,34 +422,35 @@ export const FluidEditorUI: React.FC = () => {
     surfaceTension: 0.1,
   });
 
-  // ==================== 初始化隐藏渲染器 ====================
+  // ==================== 初始化渲染器（计算 + 显示共用） ====================
   useEffect(() => {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    canvas.style.display = 'none';
-    document.body.appendChild(canvas);
+    const canvas = displayCanvasRef.current;
+    if (!canvas) return;
 
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      alpha: true,
+      alpha: false,
       antialias: false,
       powerPreference: 'high-performance',
     });
     renderer.setPixelRatio(1);
-    renderer.setClearColor(0x000000, 0);
+    renderer.setClearColor(0x000000, 1);
     rendererRef.current = renderer;
+    setRendererState(renderer); // 用状态传递，触发 useFluidEditor 重新计算
     setRendererReady(true);
+
+    console.log('[FluidEditorUI] 主渲染器创建完成');
 
     return () => {
       renderer.dispose();
-      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
       rendererRef.current = null;
+      setRendererState(null);
       setRendererReady(false);
+      console.log('[FluidEditorUI] 主渲染器已清理');
     };
   }, []);
 
-  // ==================== 流体编辑 Hook ====================
+  // ==================== 流体编辑 Hook（使用主渲染器） ====================
   const {
     editor,
     config,
@@ -456,65 +458,180 @@ export const FluidEditorUI: React.FC = () => {
     viewMode,
     setView,
     reset,
-  } = useFluidEditor(rendererRef.current, {
+  } = useFluidEditor(rendererState, {
     resolution: { w: 256, h: 256 },
     channels: { r: true, g: true, b: true, a: true },
     enableAdvection: true,
     enablePressure: false,
     enableLevelSet: false,
-    gravity: 1000,
+    gravity: 250, // 正值向下（屏幕坐标系）
     injection: {
       enabled: true,
-      position: { x: 0.5, y: 0.05 },
+      position: { x: 0.5, y: 0.25 }, // Y向下为正，0.25 = 靠近顶部（25%位置）
       radius: 0.1,
       rate: 15,
-      velocity: { x: 0, y: 200 },
+      velocity: { x: 0, y: 50 }, // Y向下为正，正值 = 向下喷射
       color: [0.0, 0.8, 1.0, 1.0],
     },
     colorBoundaryMode: 'clamp',
   });
 
-  // ==================== 显示循环 ====================
+  // ==================== 显示循环（计算 + 显示共用一个渲染器） ====================
   useEffect(() => {
     if (!rendererReady || !editor) return;
 
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
 
+    const renderer = rendererRef.current!;
+    console.log('[FluidEditorUI] 初始化显示循环');
+
+    // 共享相机（正交相机，全屏覆盖）
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    // 颜色场景：HSL → RGB 转换后直接显示
+    const colorScene = new THREE.Scene();
+    const colorQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const colorMat = new THREE.ShaderMaterial({
+      uniforms: { 
+        uColor: { value: editor.getColorTexture() },
+        uDebugMode: { value: 0 }, // 0=正常显示, 1=显示R通道, 2=显示G通道, 3=显示B通道, 4=显示A通道
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uColor;
+        uniform int uDebugMode;
+        varying vec2 vUv;
+        
+        vec3 hsl_to_rgb(float h, float s, float l) {
+          vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+          return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+        }
+        
+        void main() {
+          vec4 hsl = texture2D(uColor, vUv);
+          
+          // 调试模式：显示各通道原始值
+          if (uDebugMode == 1) {
+            gl_FragColor = vec4(hsl.r, hsl.r, hsl.r, 1.0);
+          } else if (uDebugMode == 2) {
+            gl_FragColor = vec4(hsl.g, hsl.g, hsl.g, 1.0);
+          } else if (uDebugMode == 3) {
+            gl_FragColor = vec4(hsl.b, hsl.b, hsl.b, 1.0);
+          } else if (uDebugMode == 4) {
+            gl_FragColor = vec4(hsl.a, hsl.a, hsl.a, 1.0);
+          } else {
+            // 正常模式：HSL转RGB
+            vec3 rgb = hsl_to_rgb(hsl.r, hsl.g, hsl.b);
+            gl_FragColor = vec4(rgb, hsl.a);
+          }
+        }
+      `,
+      transparent: true,
+    });
+    colorQuad.material = colorMat;
+    colorScene.add(colorQuad);
+
+    // 速度场景：方向色可视化
+    const velScene = new THREE.Scene();
+    const velQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const velMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uVel: { value: editor.getVelocityTexture() },
+        uMaxVel: { value: 1000 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D uVel;
+        uniform float uMaxVel;
+        varying vec2 vUv;
+        
+        void main() {
+          vec2 vel = texture2D(uVel, vUv).rg;
+          float len = length(vel);
+          float normalizedLen = min(len / uMaxVel, 1.0);
+          
+          // 速度可视化：红色=X正方向, 绿色=Y正方向, 蓝色=低速
+          vec3 color = vec3(
+            0.5 + vel.x * 0.002,
+            0.5 + vel.y * 0.002,
+            0.5 - (vel.x + vel.y) * 0.001
+          );
+          
+          color *= normalizedLen;
+          color += (1.0 - normalizedLen) * 0.1;
+          
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+    });
+    velQuad.material = velMat;
+    velScene.add(velQuad);
+
+    let frameCount = 0;
     const loop = () => {
+      frameCount++;
       const { w, h } = config.resolution;
 
       // 同步 canvas 尺寸
       if (canvas.width !== w || canvas.height !== h) {
+        console.log(`[FluidEditorUI] 同步 canvas 尺寸: ${canvas.width}x${canvas.height} → ${w}x${h}`);
         canvas.width = w;
         canvas.height = h;
+        renderer.setSize(w, h);
       }
 
-      // 从 GPU 回读像素
-      const pixels = viewMode === 'color'
-        ? editor.readColorPixels()
-        : editor.readVelocityPixels();
+      // 更新纹理引用
+      const colorTex = editor.getColorTexture();
+      const velTex = editor.getVelocityTexture();
+      colorMat.uniforms.uColor.value = colorTex;
+      velMat.uniforms.uVel.value = velTex;
 
-      // 绘制到 Canvas 2D
-      const ctx = canvas.getContext('2d')!;
-      const imageData = new ImageData(new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength), w, h);
-
-      if (viewMode === 'velocity') {
-        // 速度场可视化：将 RG 双通道映射为颜色
-        const d = imageData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const vx = d[i];
-          const vy = d[i + 1];
-          const mx = (vx - 128) * 2;
-          const my = (vy - 128) * 2;
-          d[i]     = Math.max(0, Math.min(255, 128 + mx));
-          d[i + 1] = Math.max(0, Math.min(255, 128 + my));
-          d[i + 2] = 64;
-          d[i + 3] = 255;
-        }
+      // 每 30 帧打印详细调试信息
+      if (frameCount % 30 === 0) {
+        console.log(`\n[FluidEditorUI] ====== 帧#${frameCount} ======`);
+        console.log('[FluidEditorUI] 颜色纹理信息:');
+        console.log('  image:', colorTex?.image);
+        console.log('  width:', colorTex?.image?.width, 'height:', colorTex?.image?.height);
+        console.log('  format:', colorTex?.format);
+        console.log('  type:', colorTex?.type);
+        console.log('  minFilter:', colorTex?.minFilter);
+        console.log('  flipY:', colorTex?.flipY);
+        
+        console.log('[FluidEditorUI] 速度纹理信息:');
+        console.log('  image:', velTex?.image);
+        console.log('  width:', velTex?.image?.width, 'height:', velTex?.image?.height);
+        console.log('  format:', velTex?.format);
+        console.log('  type:', velTex?.type);
+        
+        console.log('[FluidEditorUI] 视图模式:', viewMode);
+        console.log('[FluidEditorUI] canvas 尺寸:', canvas.width, 'x', canvas.height);
+        console.log('[FluidEditorUI] renderer 尺寸:', renderer.domElement.width, 'x', renderer.domElement.height);
       }
 
-      ctx.putImageData(imageData, 0, 0);
+      // 根据视图模式渲染到屏幕
+      const targetScene = viewMode === 'color' ? colorScene : velScene;
+      renderer.render(targetScene, camera);
+
+      // 检查 WebGL 错误
+      const gl = renderer.getContext();
+      const error = gl.getError();
+      if (error !== 0) {
+        console.error(`[FluidEditorUI] WebGL 错误: ${error} (0x${error.toString(16)})`);
+      }
+
       displayRafRef.current = requestAnimationFrame(loop);
     };
 
@@ -524,6 +641,11 @@ export const FluidEditorUI: React.FC = () => {
       if (displayRafRef.current) {
         cancelAnimationFrame(displayRafRef.current);
       }
+      colorMat.dispose();
+      colorQuad.geometry.dispose();
+      velMat.dispose();
+      velQuad.geometry.dispose();
+      console.log('[FluidEditorUI] 显示循环清理完成');
     };
   }, [rendererReady, editor, config.resolution, viewMode]);
 
