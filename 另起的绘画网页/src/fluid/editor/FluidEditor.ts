@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { FluidGrid } from '../core/FluidGrid';
 import type { AdvectionMask } from '../core/FluidGrid';
 import { AdvectionSolver } from '../solvers/AdvectionSolver';
+import { GPUOps } from '../core/GPUOps';
+import { FluidInjector } from '../core/FluidInjector';
+import { FluidOperations, type InjectionConfig } from './FluidOperations';
 
 // ============================================================
 // 类型定义
@@ -21,6 +24,8 @@ export interface FluidEditorConfig {
   pressureOmega: number;
   /** 压力边界模式：'neumann'（零梯度，自由流出）或 'dirichlet'（固定压力=0，容器壁） */
   pressureBoundaryMode: 'dirichlet' | 'neumann';
+  /** 是否启用压力热启动（用上一帧压力作为初始猜测，大幅减少迭代次数） */
+  enableWarmStart: boolean;
   enableLevelSet: boolean;   // 预留
   /** 重力加速度（像素/秒²），正值向下（屏幕坐标系） */
   gravity: number;
@@ -38,103 +43,19 @@ export interface FluidEditorConfig {
 }
 
 // ============================================================
-// GPUOps 内辅类 —— 全屏四边形 + 材质缓存
-// ============================================================
-
-/**
- * 统一的全屏 GPU 渲染辅助类。
- * 持有一个全屏四边形 + 正交相机 + 场景，材质按 key 缓存。
- * 所有 Pass（copy、gravity、injection、boundary）共用这一套基础设施，
- * 避免每帧创建 / 销毁 ShaderMaterial / Scene / Quad 的巨额开销。
- */
-class GPUOps {
-  scene: THREE.Scene;
-  camera: THREE.OrthographicCamera;
-  private quad: THREE.Mesh;
-  private quadGeom: THREE.PlaneGeometry;
-
-  private materials: Map<string, THREE.ShaderMaterial> = new Map();
-
-  private static readonly VS = /* glsl */ `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `;
-
-  constructor() {
-    this.scene = new THREE.Scene();
-    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    this.quadGeom = new THREE.PlaneGeometry(2, 2);
-    this.quad = new THREE.Mesh(this.quadGeom);
-    this.scene.add(this.quad);
-  }
-
-  /**
-   * 获取或创建材质（按 key 缓存）。
-   * 如果材质已存在则只更新 uniforms，避免重新编译着色器。
-   */
-  getMaterial(
-    key: string,
-    uniforms: Record<string, { value: unknown }>,
-    fragmentShader: string,
-  ): THREE.ShaderMaterial {
-    let mat = this.materials.get(key);
-    if (mat) {
-      for (const [name, u] of Object.entries(uniforms)) {
-        if (mat.uniforms[name]) mat.uniforms[name].value = u.value;
-      }
-      return mat;
-    }
-    mat = new THREE.ShaderMaterial({
-      uniforms,
-      vertexShader: GPUOps.VS,
-      fragmentShader,
-      depthTest: false,
-      depthWrite: false,
-    });
-    this.materials.set(key, mat);
-    return mat;
-  }
-
-  /**
-   * 全屏渲染到 RenderTarget。
-   */
-  render(
-    renderer: THREE.WebGLRenderer,
-    target: THREE.WebGLRenderTarget,
-    material: THREE.ShaderMaterial,
-  ): void {
-    const prevMat = this.quad.material;
-    this.quad.material = material;
-
-    const prevTarget = renderer.getRenderTarget();
-    renderer.setRenderTarget(target);
-    renderer.clear();
-    renderer.render(this.scene, this.camera);
-    renderer.setRenderTarget(prevTarget);
-
-    this.quad.material = prevMat;
-  }
-
-  dispose(): void {
-    for (const mat of this.materials.values()) mat.dispose();
-    this.materials.clear();
-    this.quadGeom.dispose();
-  }
-}
-
-// ============================================================
-// FluidEditor —— 核心管理层
+// FluidEditor —— 核心管理层（第3层）
 // ============================================================
 
 /**
  * FluidEditor 是流体模拟的"指挥中心"，持有所有场和求解器。
  *
  * 每帧流程（step）：
- *   重力 → 注入源 → 速度自平流 → 颜色平流 → 边界处理
- *   （压力和 Level Set 模块预留接口）
+ *   重力 → 注入源 → 速度自平流 → 颜色平流 → 边界处理 → 压力投影
+ *
+ * 架构：
+ *   - 注入操作委托给 FluidOperations（第2层），
+ *     FluidOperations 内部调用 FluidInjector（第1层）的原子注入函数。
+ *   - 平流/边界/压力等非注入 Pass 直接使用 this.gpu，不经过注入器。
  *
  * 使用方式：
  *   const editor = new FluidEditor(renderer, config);
@@ -144,6 +65,8 @@ class GPUOps {
 export class FluidEditor {
   private renderer: THREE.WebGLRenderer;
   private gpu: GPUOps;
+  private injector: FluidInjector;
+  private operations: FluidOperations;
 
   /** 可变的配置引用（通过 updateConfig 更新） */
   config: FluidEditorConfig;
@@ -165,11 +88,16 @@ export class FluidEditor {
   // 复用像素缓冲区，避免每帧分配
   private pixelBuffer: Uint8Array | null = null;
 
+  // 待处理注入队列（UI 交互安全入口，避免与渲染循环竞争）
+  private pendingInjection: InjectionConfig | null = null;
+
   constructor(renderer: THREE.WebGLRenderer, config: FluidEditorConfig) {
     this.renderer = renderer;
     this.config = { ...config };
 
     this.gpu = new GPUOps();
+    this.injector = new FluidInjector(renderer, this.gpu);
+    this.operations = new FluidOperations(this.injector);
 
     this.advectionSolver = new AdvectionSolver(renderer);
 
@@ -198,6 +126,14 @@ export class FluidEditor {
 
   // ==================== 每帧更新 ====================
 
+  /**
+   * 将一次注入操作加入队列，下一帧 step 时执行。
+   * 这是 UI 交互的唯一安全入口（避免与渲染循环竞争纹理交换）。
+   */
+  public queueInjection(config: InjectionConfig): void {
+    this.pendingInjection = config;
+  }
+
   /** 执行一帧模拟 */
   step(dt: number): void {
     if (dt <= 0) return;
@@ -208,17 +144,43 @@ export class FluidEditor {
     if (this.frameCount % 30 === 1) {
     }
 
-    // 0. 重力
+    // ★ 0. 处理待定注入队列（UI 交互，在重力之前执行）
+    if (this.pendingInjection) {
+      const injectionDt = Math.min(dt, 0.033); // 限制最大步长，避免一次性注入过多
+      this.operations.applyInjection(
+        this.colorGrid,
+        this.velocityGrid,
+        injectionDt,
+        this.pendingInjection,
+      );
+      this.pendingInjection = null;
+    }
+
+    // 0. 重力（通过操作模块 → 底层注入器）
     if (this.config.gravity !== 0) {
-      this.applyGravity(dt);
+      this.operations.applyGravity(this.velocityGrid, dt, this.config.gravity);
     }
 
-    // 1. 注入源
+    // 1. 注入源（通过操作模块 → 底层注入器）
     if (this.config.injection.enabled) {
-      this.applyInjection(dt);
+      const inj = this.config.injection;
+      const injConfig: InjectionConfig = {
+        enabled: true,
+        position: inj.position,
+        radius: inj.radius,
+        rate: inj.rate,
+        velocity: inj.velocity,
+        color: inj.color,
+      };
+      this.operations.applyInjection(
+        this.colorGrid,
+        this.velocityGrid,
+        dt,
+        injConfig,
+      );
     }
 
-    // 2. 平流
+    // 2. 平流（非注入 Pass，直接使用 this.gpu）
     if (this.config.enableAdvection) {
       this.advectVelocity(dt);
       this.advectColor(dt);
@@ -240,94 +202,6 @@ export class FluidEditor {
   }
 
   // ==================== GPU Pass 实现 ====================
-
-  /**
-   * 施加重力：向速度场 Y 分量累加 gravity * dt。
-   * 注意：用户接口 Y 向下为正，内部纹理坐标 Y 向上为正，所以需要取反。
-   */
-  private applyGravity(dt: number): void {
-    const g = this.config.gravity;
-
-    const mat = this.gpu.getMaterial('gravity', {
-      velTex: { value: this.velocityGrid.read },
-      gDt: { value: -g * dt }, // 取反：用户Y向下为正，纹理Y向上为正
-    }, /* glsl */ `
-      uniform sampler2D velTex;
-      uniform float gDt;
-      varying vec2 vUv;
-      void main() {
-        vec2 vel = texture2D(velTex, vUv).rg;
-        vel.y += gDt;
-        gl_FragColor = vec4(vel, 0.0, 1.0);
-      }
-    `);
-
-    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
-    this.velocityGrid.swap();
-  }
-
-  /**
-   * 恒定注入源：在指定位置持续注入颜色和速度。
-   * 使用 smoothstep 混合旧值和新值，避免硬边缘。
-   * 注意：用户接口 Y 向下为正，内部纹理坐标 Y 向上为正，所以位置Y和速度Y都需要取反。
-   */
-  private applyInjection(dt: number): void {
-    const inj = this.config.injection;
-    const rate = inj.rate * dt;
-
-    // 位置Y取反：用户Y向下为正（0=顶部），纹理Y向上为正（0=底部）
-    const texPosY = 1.0 - inj.position.y;
-    // 速度Y取反：用户Y向下为正，纹理Y向上为正
-    const texVelY = -inj.velocity.y;
-
-    // 颜色注入
-    const colorMat = this.gpu.getMaterial('injectColor', {
-      colorTex: { value: this.colorGrid.read },
-      pos: { value: new THREE.Vector2(inj.position.x, texPosY) },
-      radius: { value: inj.radius },
-      color: { value: new THREE.Vector4(inj.color[0], inj.color[1], inj.color[2], inj.color[3]) },
-      rate: { value: rate },
-    }, /* glsl */ `
-      uniform sampler2D colorTex;
-      uniform vec2 pos;
-      uniform float radius;
-      uniform vec4 color;
-      uniform float rate;
-      varying vec2 vUv;
-      void main() {
-        float d = distance(vUv, pos);
-        float mask = smoothstep(radius, 0.0, d);
-        vec4 old = texture2D(colorTex, vUv);
-        gl_FragColor = old + (color - old) * rate * mask;
-      }
-    `);
-    this.gpu.render(this.renderer, this.colorGrid.write, colorMat);
-    this.colorGrid.swap();
-
-    // 速度注入
-    const velMat = this.gpu.getMaterial('injectVel', {
-      velTex: { value: this.velocityGrid.read },
-      pos: { value: new THREE.Vector2(inj.position.x, texPosY) },
-      radius: { value: inj.radius },
-      vel: { value: new THREE.Vector2(inj.velocity.x, texVelY) },
-      rate: { value: rate },
-    }, /* glsl */ `
-      uniform sampler2D velTex;
-      uniform vec2 pos;
-      uniform float radius;
-      uniform vec2 vel;
-      uniform float rate;
-      varying vec2 vUv;
-      void main() {
-        float d = distance(vUv, pos);
-        float mask = smoothstep(radius, 0.0, d);
-        vec2 old = texture2D(velTex, vUv).rg;
-        gl_FragColor = vec4(old + vel * rate * mask, 0.0, 1.0);
-      }
-    `);
-    this.gpu.render(this.renderer, this.velocityGrid.write, velMat);
-    this.velocityGrid.swap();
-  }
 
   /** 速度自平流 */
   private advectVelocity(dt: number): void {
@@ -408,8 +282,11 @@ export class FluidEditor {
     const { w, h } = this.config.resolution;
     if (w === 0 || h === 0) return;
 
-    // 迭代前先零化压力场
-    this.clearGrid(this.pressureGrid);
+    // 热启动：仅在第一次（无历史值）或禁用热启动时清零
+    // 启用热启动时，用上一帧的压力值作为初始猜测，收敛速度大幅提升
+    if (!this.config.enableWarmStart) {
+      this.clearGrid(this.pressureGrid);
+    }
 
     for (let iter = 0; iter < iterations; iter++) {
       // Pass 1: 更新红色像素 ((x+y) 为奇数 = 红色)

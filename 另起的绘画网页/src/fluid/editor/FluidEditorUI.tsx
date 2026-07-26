@@ -4,6 +4,72 @@ import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
 
 // ============================================================
+// 子组件：操作面板（新增 - 点击注入测试）
+// ============================================================
+const OperationsPanel: React.FC<{
+  onInjectWater: (pos: { x: number; y: number }) => void;
+  onInjectColor: (pos: { x: number; y: number }) => void;
+}> = ({ onInjectWater, onInjectColor }) => {
+  return (
+    <div className="fluid-panel">
+      <div className="panel-header">
+        <span>💧 操作模块</span>
+      </div>
+      <div className="panel-body">
+        <div className="control-group">
+          <label>点击注入</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <button
+              onClick={() => onInjectWater({ x: 0.5, y: 0.3 })}
+              style={{
+                width: '100%', padding: '6px',
+                background: '#29b6f6', color: '#fff', border: 'none',
+                borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
+              }}
+            >
+              🌊 生成水（中心）
+            </button>
+            <button
+              onClick={() => onInjectWater({ x: 0.2, y: 0.7 })}
+              style={{
+                width: '100%', padding: '6px',
+                background: '#4dd0e1', color: '#fff', border: 'none',
+                borderRadius: '4px', cursor: 'pointer', fontSize: '12px',
+              }}
+            >
+              🌊 生成水（左下）
+            </button>
+            <button
+              onClick={() => onInjectWater({ x: 0.8, y: 0.2 })}
+              style={{
+                width: '100%', padding: '6px',
+                background: '#4dd0e1', color: '#fff', border: 'none',
+                borderRadius: '4px', cursor: 'pointer', fontSize: '12px',
+              }}
+            >
+              🌊 生成水（右上）
+            </button>
+            <button
+              onClick={() => onInjectColor({ x: 0.5, y: 0.6 })}
+              style={{
+                width: '100%', padding: '6px',
+                background: '#ef5350', color: '#fff', border: 'none',
+                borderRadius: '4px', cursor: 'pointer', fontSize: '12px',
+              }}
+            >
+              🔴 红色颜料（中心偏下）
+            </button>
+          </div>
+        </div>
+        <div style={{ fontSize: '10px', color: '#999', marginTop: '4px' }}>
+          点击按钮向流体中添加颜色和速度
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
 // 子组件：通用设置面板
 // ============================================================
 const GeneralPanel: React.FC<{
@@ -301,12 +367,14 @@ const PressurePanel: React.FC<{
   iterations: number;
   overRelaxation: number;
   boundaryMode: 'dirichlet' | 'neumann';
+  warmStart: boolean;
   onToggle: () => void;
   onIterationsChange: (val: number) => void;
   onRelaxationChange: (val: number) => void;
   onBoundaryModeChange: (mode: 'dirichlet' | 'neumann') => void;
-}> = ({ enabled, iterations, overRelaxation, boundaryMode,
-       onToggle, onIterationsChange, onRelaxationChange, onBoundaryModeChange }) => {
+  onWarmStartChange: (enabled: boolean) => void;
+}> = ({ enabled, iterations, overRelaxation, boundaryMode, warmStart,
+       onToggle, onIterationsChange, onRelaxationChange, onBoundaryModeChange, onWarmStartChange }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -351,6 +419,22 @@ const PressurePanel: React.FC<{
             <option value="dirichlet">狄利克雷 (固定压力=0)</option>
             <option value="neumann">诺伊曼 (自由边界)</option>
           </select>
+        </div>
+        <div className="control-group">
+          <label className="row">
+            <span>🔥 热启动</span>
+            <span className="hint" title="用上一帧压力作为初始猜测，迭代次数可大幅降低">
+              ({warmStart ? '开' : '关'})
+            </span>
+          </label>
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={warmStart}
+              onChange={(e) => onWarmStartChange(e.target.checked)}
+            />
+            <span className="slider" />
+          </label>
         </div>
       </div>
     </div>
@@ -494,6 +578,8 @@ export const FluidEditorUI: React.FC = () => {
     viewMode,
     setView,
     reset,
+    injectWater,
+    injectColorOnly,
   } = useFluidEditor(rendererState, {
     resolution: { w: 256, h: 256 },
     channels: { r: true, g: true, b: true, a: true },
@@ -671,6 +757,12 @@ export const FluidEditorUI: React.FC = () => {
     <div className="fluid-editor-ui">
       {/* 左侧面板 */}
       <div className="fluid-sidebar">
+        {/* 操作模块（置顶） */}
+        <OperationsPanel
+          onInjectWater={injectWater}
+          onInjectColor={injectColorOnly}
+        />
+
         {/* 通用设置 */}
         <GeneralPanel
           config={config}
@@ -706,10 +798,12 @@ export const FluidEditorUI: React.FC = () => {
           iterations={pressureParams.iterations}
           overRelaxation={pressureParams.overRelaxation}
           boundaryMode={config.pressureBoundaryMode}
+          warmStart={config.enableWarmStart}
           onToggle={() => updateConfig({ enablePressure: !config.enablePressure })}
           onIterationsChange={(val) => { setPressureParams(p => ({ ...p, iterations: val })); updateConfig({ pressureIterations: val }); }}
           onRelaxationChange={(val) => { setPressureParams(p => ({ ...p, overRelaxation: val })); updateConfig({ pressureOmega: val }); }}
           onBoundaryModeChange={(mode) => updateConfig({ pressureBoundaryMode: mode })}
+          onWarmStartChange={(enabled) => updateConfig({ enableWarmStart: enabled })}
         />
 
         {/* Level Set */}

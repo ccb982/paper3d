@@ -22,6 +22,7 @@ export function useFluidEditor(
     pressureIterations: 20,
     pressureOmega: 1.7,
     pressureBoundaryMode: 'neumann',
+    enableWarmStart: true,
     enableLevelSet: false,
     gravity: 250, // 正值向下（屏幕坐标系）
     injection: {
@@ -116,6 +117,62 @@ export function useFluidEditor(
     editorRef.current?.initFields();
   }, []);
 
+  // ==================== 用户交互注入 ====================
+
+  /**
+   * 向流体场注入一坨水（颜色 + 速度）。
+   * 通过 queueInjection 入队，在下一帧 step 循环中安全执行。
+   *
+   * @param pos 归一化位置 (0~1, Y向下为正)
+   * @param radius 归一化半径
+   * @param color RGBA 颜色值 (0~1)
+   * @param velocity 速度矢量 (像素/秒, Y向下为正)
+   */
+  const injectWater = useCallback((
+    pos: { x: number; y: number },
+    radius: number = 0.12,
+    color: [number, number, number, number] = [0.0, 0.8, 1.0, 1.0],
+    velocity: { x: number; y: number } = { x: 0, y: -80 },
+  ) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+
+    ed.queueInjection({
+      enabled: true,
+      position: pos,
+      radius,
+      rate: 0.6, // 注入速率，0.6 * dt 保证平滑融入
+      velocity,
+      color,
+    });
+  }, []);
+
+  /**
+   * 注入一泼颜色（无速度，纯颜料）。
+   * 颜料会跟随现有的速度场流动扩散。
+   *
+   * @param pos 归一化位置 (0~1, Y向下为正)
+   * @param radius 归一化半径
+   * @param color RGBA 颜色值 (0~1)
+   */
+  const injectColorOnly = useCallback((
+    pos: { x: number; y: number },
+    radius: number = 0.1,
+    color: [number, number, number, number] = [1.0, 0.2, 0.2, 1.0],
+  ) => {
+    const ed = editorRef.current;
+    if (!ed) return;
+
+    ed.queueInjection({
+      enabled: true,
+      position: pos,
+      radius,
+      rate: 0.5,
+      velocity: { x: 0, y: 0 },
+      color,
+    });
+  }, []);
+
   return {
     editor,
     config,
@@ -124,5 +181,8 @@ export function useFluidEditor(
     setView,
     getDisplayTexture,
     reset,
+    // 暴露注入方法
+    injectWater,
+    injectColorOnly,
   };
 }

@@ -25,6 +25,13 @@ export {
 // 核心层
 export { FluidGrid } from './core/FluidGrid';
 export type { AdvectionMask, TextureDataType } from './core/FluidGrid';
+export { GPUOps } from './core/GPUOps';
+export { FluidInjector } from './core/FluidInjector';
+export type { InjectionOptions } from './core/FluidInjector';
+
+// 操作模块（第2层）
+export { FluidOperations } from './editor/FluidOperations';
+export type { InjectionConfig, VortexOptions, ExplosionOptions, WindOptions } from './editor/FluidOperations';
 
 // 求解器层
 export { AdvectionSolver } from './solvers/AdvectionSolver';
