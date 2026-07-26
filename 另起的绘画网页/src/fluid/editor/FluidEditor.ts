@@ -144,14 +144,26 @@ export class FluidEditor {
     if (this.frameCount % 30 === 1) {
     }
 
-    // ★ 0. 处理待定注入队列（UI 交互，在重力之前执行）
+    // ★ 0. 处理待定注入队列（UI 交互，一次性注入，不乘 dt）
     if (this.pendingInjection) {
-      const injectionDt = Math.min(dt, 0.033); // 限制最大步长，避免一次性注入过多
-      this.operations.applyInjection(
+      const config = this.pendingInjection;
+      // 将用户坐标（Y向下）转换为纹理坐标（Y向上）
+      const texPos = {
+        position: { x: config.position.x, y: 1.0 - config.position.y },
+        radius: config.radius,
+      };
+      // 颜色注入：直接覆盖（rate=1.0，不受 dt 影响）
+      this.injector.injectColor(
         this.colorGrid,
+        { h: config.color[0], s: config.color[1], l: config.color[2], a: config.color[3] },
+        1.0,
+        texPos,
+      );
+      // 速度注入：直接累加（不乘 dt）
+      this.injector.injectVelocity(
         this.velocityGrid,
-        injectionDt,
-        this.pendingInjection,
+        { x: config.velocity.x, y: -config.velocity.y },
+        texPos,
       );
       this.pendingInjection = null;
     }
