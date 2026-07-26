@@ -19,6 +19,8 @@ export interface FluidEditorConfig {
   pressureIterations: number;
   /** SOR 过松弛因子（1.5~1.8） */
   pressureOmega: number;
+  /** 压力边界模式：'neumann'（零梯度，自由流出）或 'dirichlet'（固定压力=0，容器壁） */
+  pressureBoundaryMode: 'dirichlet' | 'neumann';
   enableLevelSet: boolean;   // 预留
   /** 重力加速度（像素/秒²），正值向下（屏幕坐标系） */
   gravity: number;
@@ -222,6 +224,9 @@ export class FluidEditor {
       this.advectColor(dt);
     }
 
+    // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
+    this.applyBoundary();
+
     // 3. 压力投影（红-黑 SOR）
     if (this.config.enablePressure) {
       this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
@@ -230,9 +235,6 @@ export class FluidEditor {
 
     // 4. Level Set（预留）
     // if (this.config.enableLevelSet) this.solveLevelSet();
-
-    // 5. 边界处理
-    this.applyBoundary();
 
     this.time += dt;
   }
@@ -406,8 +408,8 @@ export class FluidEditor {
     const { w, h } = this.config.resolution;
     if (w === 0 || h === 0) return;
 
-    // 迭代前先清零压力场
-    this.clearGrid(this.pressureGrid, 1);
+    // 迭代前先零化压力场
+    this.clearGrid(this.pressureGrid);
 
     for (let iter = 0; iter < iterations; iter++) {
       // Pass 1: 更新红色像素 ((x+y) 为奇数 = 红色)
@@ -433,15 +435,26 @@ export class FluidEditor {
       uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
       uOmega: { value: omega },
       uColor: { value: color === 'red' ? 0 : 1 },
+      uBoundaryMode: { value: this.config.pressureBoundaryMode === 'dirichlet' ? 1 : 0 },
     }, /* glsl */ `
       uniform sampler2D uPressure;
       uniform sampler2D uVelocity;
       uniform vec2 uInvResolution;
       uniform float uOmega;
       uniform int uColor;
+      uniform int uBoundaryMode;  // 0=Neumann(零梯度), 1=Dirichlet(固定p=0)
       varying vec2 vUv;
 
       void main() {
+        // Dirichlet 边界：边界像素压力固定为 0
+        if (uBoundaryMode == 1) {
+          if (vUv.x <= uInvResolution.x || vUv.x >= 1.0 - uInvResolution.x
+           || vUv.y <= uInvResolution.y || vUv.y >= 1.0 - uInvResolution.y) {
+            gl_FragColor = vec4(0.0);
+            return;
+          }
+        }
+
         ivec2 pos = ivec2(vUv / uInvResolution);
         int isRed = (pos.x + pos.y) & 1;   // 1=红色, 0=黑色
         int target = 1 - uColor;            // uColor=0→target=1(红色), uColor=1→target=0(黑色)
@@ -517,16 +530,14 @@ export class FluidEditor {
     this.velocityGrid.swap();
   }
 
-  /** 将 FluidGrid 清零（用于初始化压力场等） */
-  private clearGrid(grid: FluidGrid, channels: number): void {
-    const { w, h } = this.config.resolution;
-    let data: Float32Array | Uint8Array;
-    if (grid.dataType === 'uint8') {
-      data = new Uint8Array(w * h * channels);
-    } else {
-      data = new Float32Array(w * h * channels);
-    }
-    this.uploadToGrid(grid, data, channels);
+  /** 将 FluidGrid 零化（直接用 clear 代替全屏 Pass，零开销） */
+  private clearGrid(grid: FluidGrid): void {
+    const target = grid.write;
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(target);
+    this.renderer.clear();
+    this.renderer.setRenderTarget(prevTarget);
+    grid.swap();
   }
 
   // ==================== 纹理访问 ====================

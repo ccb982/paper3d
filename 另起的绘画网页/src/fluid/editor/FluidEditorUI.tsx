@@ -1,4 +1,4 @@
-﻿import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
@@ -300,10 +300,13 @@ const PressurePanel: React.FC<{
   enabled: boolean;
   iterations: number;
   overRelaxation: number;
+  boundaryMode: 'dirichlet' | 'neumann';
   onToggle: () => void;
   onIterationsChange: (val: number) => void;
   onRelaxationChange: (val: number) => void;
-}> = ({ enabled, iterations, overRelaxation, onToggle, onIterationsChange, onRelaxationChange }) => {
+  onBoundaryModeChange: (mode: 'dirichlet' | 'neumann') => void;
+}> = ({ enabled, iterations, overRelaxation, boundaryMode,
+       onToggle, onIterationsChange, onRelaxationChange, onBoundaryModeChange }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -341,8 +344,11 @@ const PressurePanel: React.FC<{
         </div>
         <div className="control-group">
           <label>边界条件</label>
-          <select>
-            <option value="dirichlet">狄利克雷 (固定压力)</option>
+          <select
+            value={boundaryMode}
+            onChange={(e) => onBoundaryModeChange(e.target.value as 'dirichlet' | 'neumann')}
+          >
+            <option value="dirichlet">狄利克雷 (固定压力=0)</option>
             <option value="neumann">诺伊曼 (自由边界)</option>
           </select>
         </div>
@@ -699,9 +705,11 @@ export const FluidEditorUI: React.FC = () => {
           enabled={config.enablePressure}
           iterations={pressureParams.iterations}
           overRelaxation={pressureParams.overRelaxation}
+          boundaryMode={config.pressureBoundaryMode}
           onToggle={() => updateConfig({ enablePressure: !config.enablePressure })}
           onIterationsChange={(val) => { setPressureParams(p => ({ ...p, iterations: val })); updateConfig({ pressureIterations: val }); }}
           onRelaxationChange={(val) => { setPressureParams(p => ({ ...p, overRelaxation: val })); updateConfig({ pressureOmega: val }); }}
+          onBoundaryModeChange={(mode) => updateConfig({ pressureBoundaryMode: mode })}
         />
 
         {/* Level Set */}

@@ -21,6 +21,7 @@ export function useFluidEditor(
     enablePressure: false,
     pressureIterations: 20,
     pressureOmega: 1.7,
+    pressureBoundaryMode: 'neumann',
     enableLevelSet: false,
     gravity: 250, // 正值向下（屏幕坐标系）
     injection: {
