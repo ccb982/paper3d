@@ -1,4 +1,4 @@
-﻿import * as THREE from 'three';
+import * as THREE from 'three';
 import { FluidGrid } from '../core/FluidGrid';
 import type { AdvectionMask } from '../core/FluidGrid';
 import { AdvectionSolver } from '../solvers/AdvectionSolver';
@@ -14,7 +14,11 @@ export interface FluidEditorConfig {
   /** 逐通道平流开关（物理 RGBA，逻辑 HSLA：R=H, G=S, B=L, A=Alpha） */
   channels: { r: boolean; g: boolean; b: boolean; a: boolean };
   enableAdvection: boolean;
-  enablePressure: boolean;   // 预留
+  enablePressure: boolean;
+  /** 压力迭代次数（红-黑 SOR，每轮含红+黑两个 Pass） */
+  pressureIterations: number;
+  /** SOR 过松弛因子（1.5~1.8） */
+  pressureOmega: number;
   enableLevelSet: boolean;   // 预留
   /** 重力加速度（像素/秒²），正值向下（屏幕坐标系） */
   gravity: number;
@@ -145,6 +149,7 @@ export class FluidEditor {
   // 场
   colorGrid!: FluidGrid;
   velocityGrid!: FluidGrid;
+  pressureGrid!: FluidGrid;   // 单通道、half-float，用于红-黑 SOR 压力迭代
 
   // 求解器
   private advectionSolver: AdvectionSolver;
@@ -208,7 +213,6 @@ export class FluidEditor {
 
     // 1. 注入源
     if (this.config.injection.enabled) {
-      const inj = this.config.injection;
       this.applyInjection(dt);
     }
 
@@ -218,8 +222,11 @@ export class FluidEditor {
       this.advectColor(dt);
     }
 
-    // 3. 压力投影（预留）
-    // if (this.config.enablePressure) this.solvePressure();
+    // 3. 压力投影（红-黑 SOR）
+    if (this.config.enablePressure) {
+      this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
+      this.applyPressureGradient();
+    }
 
     // 4. Level Set（预留）
     // if (this.config.enableLevelSet) this.solveLevelSet();
@@ -228,19 +235,6 @@ export class FluidEditor {
     this.applyBoundary();
 
     this.time += dt;
-
-    // ==================== 临时调试：打印中心点速度 ====================
-    if (this.frameCount % 30 === 0) {
-      const { w, h } = this.config.resolution;
-      const centerX = Math.floor(w / 2);
-      const centerY = Math.floor(h / 2);
-      const velData = new Float32Array(2);
-      const target = this.velocityGrid.readTarget;
-      const prev = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(target);
-      this.renderer.readRenderTargetPixels(target, centerX, centerY, 1, 1, velData);
-      this.renderer.setRenderTarget(prev);
-    }
   }
 
   // ==================== GPU Pass 实现 ====================
@@ -396,6 +390,143 @@ export class FluidEditor {
 
     this.gpu.render(this.renderer, this.velocityGrid.write, mat);
     this.velocityGrid.swap();
+  }
+
+  // ==================== 压力投影（红-黑 SOR） ====================
+
+  /**
+   * 红-黑 SOR 压力迭代。
+   * 使用 checkerboard 模式交替更新红色和黑色像素，
+   * 每次迭代包含红+黑两个 Pass，压力场为单通道半精度浮点纹理。
+   *
+   * @param iterations 迭代轮数（每轮含红+黑两个 Pass）
+   * @param omega 过松弛因子（推荐 1.5~1.8）
+   */
+  private solvePressure(iterations: number, omega: number): void {
+    const { w, h } = this.config.resolution;
+    if (w === 0 || h === 0) return;
+
+    // 迭代前先清零压力场
+    this.clearGrid(this.pressureGrid, 1);
+
+    for (let iter = 0; iter < iterations; iter++) {
+      // Pass 1: 更新红色像素 ((x+y) 为奇数 = 红色)
+      this.runSORPass('red', omega);
+      // Pass 2: 更新黑色像素 ((x+y) 为偶数 = 黑色)
+      this.runSORPass('black', omega);
+    }
+  }
+
+  /**
+   * 执行单次红或黑 Pass。
+   * 着色器根据 uColor uniform 控制本轮更新红色还是黑色像素：
+   *   isRed = (pos.x + pos.y) & 1  → 1=红色，0=黑色
+   *   当 uColor=0 时，只更新 isRed==1（红色）的像素
+   *   当 uColor=1 时，只更新 isRed==0（黑色）的像素
+   * 不更新的像素直接直传旧值。
+   */
+  private runSORPass(color: 'red' | 'black', omega: number): void {
+    const key = `sor_${color}`;
+    const mat = this.gpu.getMaterial(key, {
+      uPressure: { value: this.pressureGrid.read },
+      uVelocity: { value: this.velocityGrid.read },
+      uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
+      uOmega: { value: omega },
+      uColor: { value: color === 'red' ? 0 : 1 },
+    }, /* glsl */ `
+      uniform sampler2D uPressure;
+      uniform sampler2D uVelocity;
+      uniform vec2 uInvResolution;
+      uniform float uOmega;
+      uniform int uColor;
+      varying vec2 vUv;
+
+      void main() {
+        ivec2 pos = ivec2(vUv / uInvResolution);
+        int isRed = (pos.x + pos.y) & 1;   // 1=红色, 0=黑色
+        int target = 1 - uColor;            // uColor=0→target=1(红色), uColor=1→target=0(黑色)
+        if (isRed != target) {
+          // 不是本轮目标像素，直传旧值
+          gl_FragColor = texture2D(uPressure, vUv);
+          return;
+        }
+
+        vec2 ts = uInvResolution;
+
+        // 采样四邻域压力
+        float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
+        float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
+        float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
+        float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
+
+        // 计算散度（中心差分）
+        vec2 vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).rg;
+        vec2 vL = texture2D(uVelocity, vUv + vec2(-ts.x, 0.0)).rg;
+        vec2 vT = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).rg;
+        vec2 vB = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).rg;
+
+        float div = (vR.x - vL.x) * 0.5 * uInvResolution.x
+                  + (vT.y - vB.y) * 0.5 * uInvResolution.y;
+
+        float pOld = texture2D(uPressure, vUv).r;
+        float pNew = (pL + pR + pT + pB - div) / 4.0;
+        pNew = (1.0 - uOmega) * pOld + uOmega * pNew;
+
+        gl_FragColor = vec4(pNew, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, this.pressureGrid.write, mat);
+    this.pressureGrid.swap();
+  }
+
+  /**
+   * 压力梯度修正：从速度场中减去压力梯度，使速度场散度为零。
+   *   新速度 = 旧速度 - grad(p)
+   *     grad(p) = [ (pR-pL)/2·dx,  (pT-pB)/2·dy ] · resolution
+   */
+  private applyPressureGradient(): void {
+    const mat = this.gpu.getMaterial('pressureGradient', {
+      uPressure: { value: this.pressureGrid.read },
+      uVelocity: { value: this.velocityGrid.read },
+      uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
+    }, /* glsl */ `
+      uniform sampler2D uPressure;
+      uniform sampler2D uVelocity;
+      uniform vec2 uInvResolution;
+      varying vec2 vUv;
+
+      void main() {
+        vec2 ts = uInvResolution;
+
+        float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
+        float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
+        float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
+        float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
+
+        // gradP = [ (pR-pL)/2, (pT-pB)/2 ] * resolution（标量压力梯度 → 像素/秒）
+        vec2 gradP = vec2(pR - pL, pT - pB) * 0.5 / uInvResolution;
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        vel -= gradP;
+
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+    this.velocityGrid.swap();
+  }
+
+  /** 将 FluidGrid 清零（用于初始化压力场等） */
+  private clearGrid(grid: FluidGrid, channels: number): void {
+    const { w, h } = this.config.resolution;
+    let data: Float32Array | Uint8Array;
+    if (grid.dataType === 'uint8') {
+      data = new Uint8Array(w * h * channels);
+    } else {
+      data = new Float32Array(w * h * channels);
+    }
+    this.uploadToGrid(grid, data, channels);
   }
 
   // ==================== 纹理访问 ====================
@@ -618,6 +749,7 @@ export class FluidEditor {
 
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
+    this.pressureGrid?.dispose();
 
     this.colorGrid = new FluidGrid(
       this.config.resolution,
@@ -625,6 +757,7 @@ export class FluidEditor {
       'uint8',
     );
     this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'float'); // 使用 float 而非 half-float，便于 readPixels
+    this.pressureGrid = new FluidGrid(this.config.resolution, 1, 'half-float'); // 压力场：单通道半精度浮点
   }
 
   /** 初始化场数据：全透明空场 + 零速度 */
@@ -695,25 +828,38 @@ export class FluidEditor {
       }
     }
 
+    // 根据通道数选择正确的纹理格式
+    const formatMap: Record<number, THREE.PixelFormat> = {
+      1: THREE.RedFormat,
+      2: THREE.RGFormat,
+      3: THREE.RGBAFormat,
+      4: THREE.RGBAFormat,
+    };
+    const texFormat = formatMap[channels] || THREE.RGBAFormat;
+
     const tex = new THREE.DataTexture(
       data,
       w,
       h,
-      channels === 4 ? THREE.RGBAFormat : THREE.RGFormat,
+      texFormat,
       texType,
     );
     tex.needsUpdate = true;
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
 
+    // 根据通道数选择对应的复制着色器
+    const getCopyFS = (ch: number): string => {
+      switch (ch) {
+        case 1: return /* glsl */ `uniform sampler2D tex; varying vec2 vUv; void main() { float v = texture2D(tex, vUv).r; gl_FragColor = vec4(v, 0.0, 0.0, 1.0); }`;
+        case 2: return /* glsl */ `uniform sampler2D tex; varying vec2 vUv; void main() { vec2 v = texture2D(tex, vUv).rg; gl_FragColor = vec4(v, 0.0, 1.0); }`;
+        default: return /* glsl */ `uniform sampler2D tex; varying vec2 vUv; void main() { gl_FragColor = texture2D(tex, vUv); }`;
+      }
+    };
     const copyKey = `copy_${channels}ch_${grid.dataType}`;
     const copyMat = this.gpu.getMaterial(copyKey, {
       tex: { value: tex },
-    },
-      channels === 4
-        ? /* glsl */ `uniform sampler2D tex; varying vec2 vUv; void main() { gl_FragColor = texture2D(tex, vUv); }`
-        : /* glsl */ `uniform sampler2D tex; varying vec2 vUv; void main() { vec2 v = texture2D(tex, vUv).rg; gl_FragColor = vec4(v, 0.0, 1.0); }`,
-    );
+    }, getCopyFS(channels));
 
     this.gpu.render(this.renderer, grid.write, copyMat);
     grid.swap();
@@ -726,6 +872,7 @@ export class FluidEditor {
   dispose(): void {
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
+    this.pressureGrid?.dispose();
     this.advectionSolver.dispose();
     this.gpu.dispose();
   }

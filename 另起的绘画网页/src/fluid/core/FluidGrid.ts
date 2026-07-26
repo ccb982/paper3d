@@ -26,19 +26,6 @@ const THREE_TYPE_MAP: Record<TextureDataType, THREE.TextureDataType> = {
   'float': THREE.FloatType,
 };
 
-const FORMAT_NAMES: Record<THREE.PixelFormat, string> = {
-  [THREE.RedFormat]: 'RedFormat',
-  [THREE.RGFormat]: 'RGFormat',
-  [THREE.RGBFormat]: 'RGBFormat',
-  [THREE.RGBAFormat]: 'RGBAFormat',
-};
-
-const TYPE_NAMES: Record<THREE.TextureDataType, string> = {
-  [THREE.UnsignedByteType]: 'UnsignedByteType',
-  [THREE.HalfFloatType]: 'HalfFloatType',
-  [THREE.FloatType]: 'FloatType',
-};
-
 /**
  * FluidGrid —— 双缓冲纹理管理器。
  *
@@ -127,7 +114,6 @@ export class FluidGrid {
    * 调用后 read 返回刚写入的数据，write 指向即将被覆盖的旧数据。
    */
   swap(): void {
-    const old = this.current;
     this.current = this.current === 'A' ? 'B' : 'A';
   }
 

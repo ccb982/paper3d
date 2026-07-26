@@ -308,8 +308,8 @@ const PressurePanel: React.FC<{
     <div className="fluid-panel">
       <div className="panel-header">
         <span>📊 压力迭代</span>
-        <label className="toggle-switch" title="暂未实现">
-          <input type="checkbox" checked={enabled} onChange={onToggle} disabled />
+        <label className="toggle-switch">
+          <input type="checkbox" checked={enabled} onChange={onToggle} />
           <span className="slider" />
         </label>
       </div>
@@ -700,8 +700,8 @@ export const FluidEditorUI: React.FC = () => {
           iterations={pressureParams.iterations}
           overRelaxation={pressureParams.overRelaxation}
           onToggle={() => updateConfig({ enablePressure: !config.enablePressure })}
-          onIterationsChange={(val) => setPressureParams(p => ({ ...p, iterations: val }))}
-          onRelaxationChange={(val) => setPressureParams(p => ({ ...p, overRelaxation: val }))}
+          onIterationsChange={(val) => { setPressureParams(p => ({ ...p, iterations: val })); updateConfig({ pressureIterations: val }); }}
+          onRelaxationChange={(val) => { setPressureParams(p => ({ ...p, overRelaxation: val })); updateConfig({ pressureOmega: val }); }}
         />
 
         {/* Level Set */}

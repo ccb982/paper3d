@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { FluidEditor } from './FluidEditor';
 import type { FluidEditorConfig, ViewMode } from './FluidEditor';
@@ -19,6 +19,8 @@ export function useFluidEditor(
     channels: { r: true, g: true, b: true, a: true },
     enableAdvection: true,
     enablePressure: false,
+    pressureIterations: 20,
+    pressureOmega: 1.7,
     enableLevelSet: false,
     gravity: 250, // 正值向下（屏幕坐标系）
     injection: {
