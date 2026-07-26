@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+﻿import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { FluidEditor } from './FluidEditor';
 import type { FluidEditorConfig, ViewMode } from './FluidEditor';
@@ -36,17 +36,14 @@ export function useFluidEditor(
   // ==================== 初始化编辑器 ====================
   useEffect(() => {
     if (!renderer) {
-      console.log('[useFluidEditor] renderer is null, waiting...');
       return;
     }
 
-    console.log('[useFluidEditor] 创建 FluidEditor');
     const ed = new FluidEditor(renderer, config);
     editorRef.current = ed;
     setEditor(ed);
 
     return () => {
-      console.log('[useFluidEditor] 清理 FluidEditor');
       ed.dispose();
       editorRef.current = null;
       setEditor(null);

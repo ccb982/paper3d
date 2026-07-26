@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+﻿import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
@@ -471,14 +471,12 @@ export const FluidEditorUI: React.FC = () => {
     setRendererState(renderer); // 用状态传递，触发 useFluidEditor 重新计算
     setRendererReady(true);
 
-    console.log('[FluidEditorUI] 主渲染器创建完成');
 
     return () => {
       renderer.dispose();
       rendererRef.current = null;
       setRendererState(null);
       setRendererReady(false);
-      console.log('[FluidEditorUI] 主渲染器已清理');
     };
   }, []);
 
@@ -516,7 +514,6 @@ export const FluidEditorUI: React.FC = () => {
     if (!canvas) return;
 
     const renderer = rendererRef.current!;
-    console.log('[FluidEditorUI] 初始化显示循环');
 
     // 共享相机（正交相机，全屏覆盖）
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -619,7 +616,6 @@ export const FluidEditorUI: React.FC = () => {
 
       // 同步 canvas 尺寸
       if (canvas.width !== w || canvas.height !== h) {
-        console.log(`[FluidEditorUI] 同步 canvas 尺寸: ${canvas.width}x${canvas.height} → ${w}x${h}`);
         canvas.width = w;
         canvas.height = h;
         renderer.setSize(w, h);
@@ -633,24 +629,8 @@ export const FluidEditorUI: React.FC = () => {
 
       // 每 30 帧打印详细调试信息
       if (frameCount % 30 === 0) {
-        console.log(`\n[FluidEditorUI] ====== 帧#${frameCount} ======`);
-        console.log('[FluidEditorUI] 颜色纹理信息:');
-        console.log('  image:', colorTex?.image);
-        console.log('  width:', colorTex?.image?.width, 'height:', colorTex?.image?.height);
-        console.log('  format:', colorTex?.format);
-        console.log('  type:', colorTex?.type);
-        console.log('  minFilter:', colorTex?.minFilter);
-        console.log('  flipY:', colorTex?.flipY);
         
-        console.log('[FluidEditorUI] 速度纹理信息:');
-        console.log('  image:', velTex?.image);
-        console.log('  width:', velTex?.image?.width, 'height:', velTex?.image?.height);
-        console.log('  format:', velTex?.format);
-        console.log('  type:', velTex?.type);
         
-        console.log('[FluidEditorUI] 视图模式:', viewMode);
-        console.log('[FluidEditorUI] canvas 尺寸:', canvas.width, 'x', canvas.height);
-        console.log('[FluidEditorUI] renderer 尺寸:', renderer.domElement.width, 'x', renderer.domElement.height);
       }
 
       // 根据视图模式渲染到屏幕
@@ -677,7 +657,6 @@ export const FluidEditorUI: React.FC = () => {
       colorQuad.geometry.dispose();
       velMat.dispose();
       velQuad.geometry.dispose();
-      console.log('[FluidEditorUI] 显示循环清理完成');
     };
   }, [rendererReady, editor, config.resolution, viewMode]);
 
@@ -706,7 +685,6 @@ export const FluidEditorUI: React.FC = () => {
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
-            console.log('[FluidEditorUI] 导出状态 JSON 完成');
           }}
         />
 
@@ -766,7 +744,6 @@ export const FluidEditorUI: React.FC = () => {
             const texX = pixX;
             const texY = canvas.height - 1 - pixY;
 
-            console.log(`[FluidEditorUI] 点击 canvas 坐标: css=(${cssX.toFixed(1)},${cssY.toFixed(1)}) pix=(${pixX.toFixed(1)},${pixY.toFixed(1)}) tex=(${texX.toFixed(1)},${texY.toFixed(1)})`);
 
             // 采样
             const sample = editor.samplePixel(texX, texY);
@@ -784,7 +761,6 @@ export const FluidEditorUI: React.FC = () => {
               velMag,
             });
 
-            console.log(`[FluidEditorUI] 采样结果: HSLA=(${sample.h.toFixed(3)},${sample.s.toFixed(3)},${sample.l.toFixed(3)},${sample.a.toFixed(3)}) vel=(${sample.velX.toFixed(2)},${sample.velY.toFixed(2)}) |vel|=${velMag.toFixed(2)}`);
           }}
           style={{ cursor: 'crosshair' }}
         />

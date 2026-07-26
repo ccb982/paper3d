@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+﻿import * as THREE from 'three';
 
 /**
  * 平流通道掩码 —— 控制 R/G/B/A 中哪些通道参与平流。
@@ -15,13 +15,15 @@ export interface AdvectionMask {
 /**
  * 纹理数据类型。
  * - uint8: 1 字节/通道，匹配 RGB565 精度，带宽仅 Float32 的 1/4
- * - half-float: 2 字节/通道，精度更高但带宽翻倍
+ * - half-float: 2 字节/通道，精度更高但带宽翻倍，readPixels 需要 Uint16Array
+ * - float: 4 字节/通道，精度最高，带宽最大，但 readPixels 可直接用 Float32Array
  */
-export type TextureDataType = 'uint8' | 'half-float';
+export type TextureDataType = 'uint8' | 'half-float' | 'float';
 
 const THREE_TYPE_MAP: Record<TextureDataType, THREE.TextureDataType> = {
   'uint8': THREE.UnsignedByteType,
   'half-float': THREE.HalfFloatType,
+  'float': THREE.FloatType,
 };
 
 const FORMAT_NAMES: Record<THREE.PixelFormat, string> = {
@@ -100,32 +102,23 @@ export class FluidGrid {
       stencilBuffer: false,
     });
 
-    console.log(`[FluidGrid] 创建双缓冲纹理:`);
-    console.log(`  分辨率: ${resolution.w} × ${resolution.h}`);
-    console.log(`  通道数: ${channels} (格式: ${FORMAT_NAMES[format] || format})`);
-    console.log(`  数据类型: ${TYPE_NAMES[threeType] || threeType}`);
-    console.log(`  texA:`, this.texA.texture);
-    console.log(`  texB:`, this.texB.texture);
   }
 
   /** 当前可读纹理 */
   get read(): THREE.Texture {
     const tex = this.current === 'A' ? this.texA.texture : this.texB.texture;
-    console.debug(`[FluidGrid.read] current=${this.current}, 返回 tex=${this.current}`);
     return tex;
   }
 
   /** 当前可读 RenderTarget（用于 readRenderTargetPixels 回读） */
   get readTarget(): THREE.WebGLRenderTarget {
     const target = this.current === 'A' ? this.texA : this.texB;
-    console.debug(`[FluidGrid.readTarget] current=${this.current}, 返回 target=${this.current}`);
     return target;
   }
 
   /** 当前可写入目标 */
   get write(): THREE.WebGLRenderTarget {
     const target = this.current === 'A' ? this.texB : this.texA;
-    console.debug(`[FluidGrid.write] current=${this.current}, 返回 target=${this.current === 'A' ? 'B' : 'A'}`);
     return target;
   }
 
@@ -136,11 +129,9 @@ export class FluidGrid {
   swap(): void {
     const old = this.current;
     this.current = this.current === 'A' ? 'B' : 'A';
-    console.debug(`[FluidGrid.swap] ${old} → ${this.current}`);
   }
 
   setRenderTargetSize(w: number, h: number): void {
-    console.log(`[FluidGrid.setRenderTargetSize] ${this.resolution.w}×${this.resolution.h} → ${w}×${h}`);
     this.resolution.w = w;
     this.resolution.h = h;
     this.texA.setSize(w, h);
@@ -148,7 +139,6 @@ export class FluidGrid {
   }
 
   dispose(): void {
-    console.log(`[FluidGrid.dispose] 释放纹理`);
     this.texA.dispose();
     this.texB.dispose();
   }
