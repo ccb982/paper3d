@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
+import { useAppStore } from '../../stores/useAppStore';
 
 // ============================================================
 // 子组件：操作面板（新增 - 点击注入测试）
@@ -143,6 +144,12 @@ const GeneralPanel: React.FC<{
               onClick={() => onViewChange('velocity')}
             >
               💨 速度
+            </button>
+            <button
+              className={viewMode === 'composite' ? 'active' : ''}
+              onClick={() => onViewChange('composite')}
+            >
+              🖼️ 合成
             </button>
           </div>
         </div>
@@ -520,6 +527,12 @@ export const FluidEditorUI: React.FC = () => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null); // 唯一的渲染器：计算 + 显示
   const [rendererState, setRendererState] = useState<THREE.WebGLRenderer | null>(null); // 用于传递给 useFluidEditor
   const displayRafRef = useRef<number>();
+  /** 缓存的底图纹理 + 上一次的 activeLayerId，避免每帧重建 */
+  const baseTexRef = useRef<THREE.DataTexture | null>(null);
+  const baseLayerIdRef = useRef<string | null>(null);
+  /** 残差量化范围（可调，后续可加 UI 控制） */
+  const residualRangeHRef = useRef(0.5);
+  const residualRangeSLRef = useRef(0.5);
 
   const [rendererReady, setRendererReady] = useState(false);
 
@@ -701,6 +714,114 @@ export const FluidEditorUI: React.FC = () => {
     velQuad.material = velMat;
     velScene.add(velQuad);
 
+    // 合成场景：底图（baseTexture）+ 平流残差（fluid residual）实时混合
+    const compositeScene = new THREE.Scene();
+    const compositeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const compositeMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uBaseTexture: { value: null as THREE.Texture | null },
+        uResidual: { value: editor.getColorTexture() },
+        uResidualRangeH: { value: residualRangeHRef.current },
+        uResidualRangeSL: { value: residualRangeSLRef.current },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uBaseTexture;
+        uniform sampler2D uResidual;
+        uniform float uResidualRangeH;
+        uniform float uResidualRangeSL;
+        varying vec2 vUv;
+
+        vec3 rgb_to_hsl(vec3 rgb) {
+          float cMax = max(max(rgb.r, rgb.g), rgb.b);
+          float cMin = min(min(rgb.r, rgb.g), rgb.b);
+          float delta = cMax - cMin;
+          float l = (cMax + cMin) / 2.0;
+          float h = 0.0;
+          float s = 0.0;
+          if (delta > 0.0) {
+            s = l > 0.5 ? delta / (2.0 - cMax - cMin) : delta / (cMax + cMin);
+            if (cMax == rgb.r) h = (rgb.g - rgb.b) / delta + (rgb.g < rgb.b ? 6.0 : 0.0);
+            else if (cMax == rgb.g) h = (rgb.b - rgb.r) / delta + 2.0;
+            else h = (rgb.r - rgb.g) / delta + 4.0;
+            h /= 6.0;
+          }
+          return vec3(h, s, l);
+        }
+
+        vec3 hsl_to_rgb(vec3 hsl) {
+          float h = hsl.x, s = hsl.y, l = hsl.z;
+          vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+          return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+        }
+
+        void main() {
+          vec4 baseRGBA = texture2D(uBaseTexture, vUv);
+          vec4 residual = texture2D(uResidual, vUv);
+
+          // 基础色 → HSL
+          vec3 baseHSL = rgb_to_hsl(baseRGBA.rgb);
+
+          // 反量化残差（恢复 HSL 增量）
+          float dH = (residual.r / 255.0 - 0.5) * uResidualRangeH;
+          float dS = (residual.g / 255.0 - 0.5) * uResidualRangeSL;
+          float dL = (residual.b / 255.0 - 0.5) * uResidualRangeSL;
+
+          // 叠加（色相环绕，饱和度/明度钳制）
+          float finalH = fract(baseHSL.r + dH);
+          float finalS = clamp(baseHSL.g + dS, 0.0, 1.0);
+          float finalL = clamp(baseHSL.b + dL, 0.0, 1.0);
+
+          vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
+          gl_FragColor = vec4(finalRGB, baseRGBA.a);
+        }
+      `,
+      transparent: true,
+    });
+    compositeQuad.material = compositeMat;
+    compositeScene.add(compositeQuad);
+
+    // 底图纹理更新函数（同步读取 Store，缓存避免每帧重建）
+    const updateBaseTexture = () => {
+      const state = useAppStore.getState();
+      const layerId = state.activeLayerId;
+      if (!layerId) { baseTexRef.current = null; baseLayerIdRef.current = null; return; }
+
+      const frameData = state.frameDataMap[layerId];
+      const baseImageData = frameData?.baseTexture;
+      if (!baseImageData) { baseTexRef.current = null; baseLayerIdRef.current = null; return; }
+
+      // 只在图层切换或首次加载时重建纹理
+      if (baseLayerIdRef.current === layerId && baseTexRef.current) return;
+
+      // 释放旧纹理
+      baseTexRef.current?.dispose();
+
+      const tex = new THREE.DataTexture(
+        new Uint8Array(baseImageData.data.buffer, baseImageData.data.byteOffset, baseImageData.data.byteLength),
+        baseImageData.width,
+        baseImageData.height,
+        THREE.RGBAFormat,
+        THREE.UnsignedByteType,
+      );
+      tex.needsUpdate = true;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.wrapS = THREE.ClampToEdgeWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      // DataTexture 默认 flipY=true，需与 fluid 纹理一致
+      tex.flipY = false;
+
+      baseTexRef.current = tex;
+      baseLayerIdRef.current = layerId;
+    };
+
     let frameCount = 0;
     const loop = () => {
       frameCount++;
@@ -714,19 +835,23 @@ export const FluidEditorUI: React.FC = () => {
       }
 
       // 更新纹理引用
-      const colorTex = editor.getColorTexture();
-      const velTex = editor.getVelocityTexture();
-      colorMat.uniforms.uColor.value = colorTex;
-      velMat.uniforms.uVel.value = velTex;
+      colorMat.uniforms.uColor.value = editor.getColorTexture();
+      velMat.uniforms.uVel.value = editor.getVelocityTexture();
 
-      // 每 30 帧打印详细调试信息
-      if (frameCount % 30 === 0) {
-        
-        
+      // 合成模式：更新底图纹理和残差范围
+      if (viewMode === 'composite') {
+        updateBaseTexture();
+        compositeMat.uniforms.uBaseTexture.value = baseTexRef.current;
+        compositeMat.uniforms.uResidual.value = editor.getColorTexture();
+        compositeMat.uniforms.uResidualRangeH.value = residualRangeHRef.current;
+        compositeMat.uniforms.uResidualRangeSL.value = residualRangeSLRef.current;
       }
 
-      // 根据视图模式渲染到屏幕
-      const targetScene = viewMode === 'color' ? colorScene : velScene;
+      // 根据视图模式选择渲染场景
+      let targetScene: THREE.Scene;
+      if (viewMode === 'color') targetScene = colorScene;
+      else if (viewMode === 'velocity') targetScene = velScene;
+      else targetScene = compositeScene;
       renderer.render(targetScene, camera);
 
       // 检查 WebGL 错误
@@ -749,8 +874,41 @@ export const FluidEditorUI: React.FC = () => {
       colorQuad.geometry.dispose();
       velMat.dispose();
       velQuad.geometry.dispose();
+      compositeMat.dispose();
+      compositeQuad.geometry.dispose();
+      baseTexRef.current?.dispose();
+      baseTexRef.current = null;
+      baseLayerIdRef.current = null;
     };
   }, [rendererReady, editor, config.resolution, viewMode]);
+
+  // ==================== FTX 帧数据 → 流体编辑器加载 ====================
+  /** 手动加载当前活动图层的残差纹理到流体编辑器 */
+  const loadFrameResidual = () => {
+    if (!editor) return;
+
+    const state = useAppStore.getState();
+    const layerId = state.activeLayerId;
+    if (!layerId) {
+      alert('没有活动图层，请先在主画布导入 FTX 帧数据');
+      return;
+    }
+
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData?.residualTexture) {
+      alert(`图层 "${layerId}" 没有残差纹理数据`);
+      return;
+    }
+
+    // 配置流体编辑器（禁用注入和重力，专注平流残差）
+    updateConfig({
+      injection: { ...config.injection, enabled: false },
+      gravity: 0,
+    });
+
+    // 将残差纹理上传到颜色场
+    editor.initializeColorFromImageData(frameData.residualTexture);
+  };
 
   // ==================== 渲染 ====================
   return (
@@ -762,6 +920,28 @@ export const FluidEditorUI: React.FC = () => {
           onInjectWater={injectWater}
           onInjectColor={injectColorOnly}
         />
+
+        {/* FTX 帧数据加载 */}
+        <div className="fluid-panel">
+          <div className="panel-header">
+            <span>📥 FTX 帧导入</span>
+          </div>
+          <div className="panel-body">
+            <button
+              onClick={loadFrameResidual}
+              style={{
+                width: '100%', padding: '8px',
+                background: '#52c41a', color: '#fff', border: 'none',
+                borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
+              }}
+            >
+              🔄 加载当前帧残差
+            </button>
+            <div style={{ fontSize: '10px', color: '#999', marginTop: '4px' }}>
+              从主画布当前活动图层加载残差纹理，切换到「合成」视图查看效果
+            </div>
+          </div>
+        </div>
 
         {/* 通用设置 */}
         <GeneralPanel

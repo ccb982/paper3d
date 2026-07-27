@@ -10,7 +10,7 @@ import { FluidOperations, type InjectionConfig } from './FluidOperations';
 // 类型定义
 // ============================================================
 
-export type ViewMode = 'color' | 'velocity';
+export type ViewMode = 'color' | 'velocity' | 'composite';
 
 export interface FluidEditorConfig {
   resolution: { w: number; h: number };
@@ -664,9 +664,7 @@ export class FluidEditor {
   public initFields(): void {
     const { w, h } = this.config.resolution;
 
-
     // 初始颜色场：完全透明（空场），依靠注入源产生动态流体
-    // 注意：uint8 网格需要 Uint8Array，half-float 需要 Float32Array
     let colorData: Float32Array | Uint8Array;
     if (this.colorGrid.dataType === 'uint8') {
       colorData = new Uint8Array(w * h * 4); // 默认全零 = 透明
@@ -683,7 +681,43 @@ export class FluidEditor {
       velData = new Float32Array(w * h * 2);
     }
     this.uploadToGrid(this.velocityGrid, velData, 2);
+  }
 
+  /**
+   * 从 ImageData 初始化颜色场（供 FTX 残差纹理导入）。
+   *
+   * 残差纹理是量化后的 H/S/L 增量（R=H增量, G=S增量, B=L增量），
+   * 上传后由流体解算器（平流）驱动其流动。
+   *
+   * 如果 ImageData 尺寸与网格分辨率不匹配，自动缩放。
+   */
+  async initializeColorFromImageData(imageData: ImageData): Promise<void> {
+    const { w, h } = this.config.resolution;
+    let data: Uint8ClampedArray | Uint8Array = imageData.data;
+    let width = imageData.width;
+    let height = imageData.height;
+
+    // 尺寸不匹配时缩放
+    if (width !== w || height !== h) {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      const bitmap = await createImageBitmap(imageData);
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      bitmap.close();
+      const scaled = ctx.getImageData(0, 0, w, h);
+      data = scaled.data;
+      width = w;
+      height = h;
+    }
+
+    // 上传到颜色网格（RGBA 四通道 uint8）
+    // 残差的三通道（H/S/L 增量）存储在 R/G/B，A 通道保透明度
+    const uploadData = data instanceof Uint8ClampedArray
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      : new Uint8Array(data);
+    this.uploadToGrid(this.colorGrid, uploadData, 4);
   }
 
   /**
@@ -693,8 +727,10 @@ export class FluidEditor {
    * 注意：确保数据类型与目标网格匹配！
    * - uint8 网格：数据应在 [0, 255] 范围，使用 Uint8Array
    * - half-float/float 网格：数据应在 [-1, 1] 或 [0, 1] 范围，使用 Float32Array
+   *
+   * 公开接口，供外部从 ImageData 初始化残差纹理。
    */
-  private uploadToGrid(
+  uploadToGrid(
     grid: FluidGrid,
     data: Float32Array | Uint8Array,
     channels: number,
