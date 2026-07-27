@@ -605,7 +605,7 @@ export const FluidEditorUI: React.FC = () => {
       position: { x: 0.5, y: 0.25 }, // Y向下为正，0.25 = 靠近顶部（25%位置）
       radius: 0.1,
       rate: 15,
-      velocity: { x: 0, y: 50 }, // Y向下为正，正值 = 向下喷射
+      velocity: { x: 0, y: -50 }, // 负Y=向下
       color: [0.0, 0.8, 1.0, 1.0],
     },
     colorBoundaryMode: 'clamp',
@@ -773,9 +773,10 @@ export const FluidEditorUI: React.FC = () => {
           vec3 baseHSL = rgb_to_hsl(baseRGBA.rgb);
 
           // 反量化残差（恢复 HSL 增量）
-          float dH = (residual.r / 255.0 - 0.5) * uResidualRangeH;
-          float dS = (residual.g / 255.0 - 0.5) * uResidualRangeSL;
-          float dL = (residual.b / 255.0 - 0.5) * uResidualRangeSL;
+          // 注意：WebGL 从 uint8 纹理采样已自动归一化到 [0,1]，无需再除以 255
+          float dH = (residual.r - 0.5) * uResidualRangeH;
+          float dS = (residual.g - 0.5) * uResidualRangeSL;
+          float dL = (residual.b - 0.5) * uResidualRangeSL;
 
           // 叠加（色相环绕，饱和度/明度钳制）
           float finalH = fract(baseHSL.r + dH);
@@ -888,7 +889,7 @@ export const FluidEditorUI: React.FC = () => {
 
   // ==================== FTX 帧数据 → 流体编辑器加载 ====================
   /** 手动加载当前活动图层的残差纹理到流体编辑器 */
-  const loadFrameResidual = async () => {
+  const loadFrameResidual = () => {
     if (!editor) return;
 
     const state = useAppStore.getState();
@@ -939,9 +940,9 @@ export const FluidEditorUI: React.FC = () => {
     });
     console.log(`[FTX导入] 导入后配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
-    // ===== 关键修复 3：等待异步缩放 + 上传完成 =====
+    // ===== 关键修复 3：缩放 + 上传残差 =====
     console.log(`[FTX导入] 步骤3: initializeColorFromImageData() 上传残差...`);
-    await editor.initializeColorFromImageData(frameData.residualTexture);
+    editor.initializeColorFromImageData(frameData.residualTexture);
 
     // ===== 关键修复 4：切到颜色视图验证数据 =====
     console.log(`[FTX导入] 步骤4: 切换到颜色视图`);

@@ -30,7 +30,7 @@ export function useFluidEditor(
       position: { x: 0.5, y: 0.25 }, // Y向下为正，0.25 = 靠近顶部（25%位置）
       radius: 0.1,
       rate: 15,
-      velocity: { x: 0, y: 50 }, // Y向下为正，正值 = 向下喷射
+      velocity: { x: 0, y: -50 }, // 负Y=向下
       color: [0.0, 0.8, 1.0, 1.0],
     },
     colorBoundaryMode: 'clamp',
