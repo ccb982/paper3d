@@ -38,12 +38,13 @@ export function useFluidEditor(
   }));
 
   // ==================== 初始化编辑器 ====================
+  // 只在 renderer 变化时创建/销毁编辑器，config 变化通过 updateConfig 同步
   useEffect(() => {
     if (!renderer) {
       return;
     }
 
-    const ed = new FluidEditor(renderer, config);
+    const ed = new FluidEditor(renderer, configRef.current);
     editorRef.current = ed;
     setEditor(ed);
 
@@ -52,7 +53,14 @@ export function useFluidEditor(
       editorRef.current = null;
       setEditor(null);
     };
-  }, [renderer, config]); // 依赖 renderer 和 config
+  }, [renderer]);
+
+  // config 变化时同步到已有编辑器（不重建）
+  const configRef = useRef(config);
+  configRef.current = config;
+  useEffect(() => {
+    editorRef.current?.updateConfig(config);
+  }, [config]);
 
   // ==================== 动画循环 ====================
   useEffect(() => {

@@ -615,6 +615,10 @@ export const FluidEditorUI: React.FC = () => {
   useEffect(() => {
     if (!rendererReady || !editor) return;
 
+    // ===== 暴露 editor 到 window 供控制台调试 =====
+    (window as any).fluidEditor = editor;
+    console.log(`[FluidEditorUI] editor 已暴露到 window.fluidEditor`);
+
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
 
@@ -815,8 +819,8 @@ export const FluidEditorUI: React.FC = () => {
       tex.magFilter = THREE.LinearFilter;
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      // DataTexture 默认 flipY=true，需与 fluid 纹理一致
-      tex.flipY = false;
+      // flipY=true 是 Three.js 默认值，确保底图与流体纹理 Y 轴方向一致
+      // 两者都使用 flipY=true，UV(0,0)=左下角采样同一空间位置
 
       baseTexRef.current = tex;
       baseLayerIdRef.current = layerId;
@@ -884,7 +888,7 @@ export const FluidEditorUI: React.FC = () => {
 
   // ==================== FTX 帧数据 → 流体编辑器加载 ====================
   /** 手动加载当前活动图层的残差纹理到流体编辑器 */
-  const loadFrameResidual = () => {
+  const loadFrameResidual = async () => {
     if (!editor) return;
 
     const state = useAppStore.getState();
@@ -900,14 +904,49 @@ export const FluidEditorUI: React.FC = () => {
       return;
     }
 
-    // 配置流体编辑器（禁用注入和重力，专注平流残差）
+    // ===== 导入前状态日志 =====
+    console.log(`\n========== [FTX导入] 开始加载残差纹理 ==========`);
+    console.log(`[FTX导入] 活动图层: ${layerId}`);
+    console.log(`[FTX导入] 残差纹理 ImageData: ${frameData.residualTexture.width}x${frameData.residualTexture.height}, dataLen=${frameData.residualTexture.data.length}`);
+    const solverRes = config.resolution;
+    console.log(`[FTX导入] 求解器分辨率: ${solverRes.w}x${solverRes.h}`);
+    console.log(`[FTX导入] 尺寸匹配: ${frameData.residualTexture.width === solverRes.w && frameData.residualTexture.height === solverRes.h}`);
+    
+    // 残差纹理前10像素
+    const rd = frameData.residualTexture.data;
+    console.log(`[FTX导入] 残差前10像素 RGBA: ${Array.from(rd.slice(0, 40)).join(',')}`);
+    
+    // 残差非零像素统计
+    let resNonZero = 0;
+    for (let i = 0; i < rd.length; i += 4) {
+      if (rd[i] !== 0 || rd[i+1] !== 0 || rd[i+2] !== 0) resNonZero++;
+    }
+    console.log(`[FTX导入] 残差非零像素: ${resNonZero}/${rd.length/4} (${(resNonZero*100/(rd.length/4)).toFixed(1)}%)`);
+    
+    // 导入前配置
+    console.log(`[FTX导入] 导入前配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
+
+    // ===== 关键修复 1：强制重置所有物理场 =====
+    console.log(`[FTX导入] 步骤1: initFields() 重置物理场...`);
+    editor.initFields();
+
+    // ===== 关键修复 2：残差模式配置 =====
+    console.log(`[FTX导入] 步骤2: 配置残差模式 (关闭注入/重力, 边界=clamp)...`);
     updateConfig({
       injection: { ...config.injection, enabled: false },
       gravity: 0,
+      colorBoundaryMode: 'clamp',
     });
+    console.log(`[FTX导入] 导入后配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
-    // 将残差纹理上传到颜色场
-    editor.initializeColorFromImageData(frameData.residualTexture);
+    // ===== 关键修复 3：等待异步缩放 + 上传完成 =====
+    console.log(`[FTX导入] 步骤3: initializeColorFromImageData() 上传残差...`);
+    await editor.initializeColorFromImageData(frameData.residualTexture);
+
+    // ===== 关键修复 4：切到颜色视图验证数据 =====
+    console.log(`[FTX导入] 步骤4: 切换到颜色视图`);
+    setView('color');
+    console.log(`========== [FTX导入] 加载完成 ==========\n`);
   };
 
   // ==================== 渲染 ====================

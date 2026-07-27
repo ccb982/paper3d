@@ -91,6 +91,12 @@ export class FluidEditor {
   // 待处理注入队列（UI 交互安全入口，避免与渲染循环竞争）
   private pendingInjection: InjectionConfig | null = null;
 
+  // ===== 残差纹理导入调试追踪 =====
+  /** 残差导入后的帧计数，-1=未追踪，>=0=正在追踪 */
+  private _debugResidualFrameCount = -1;
+  /** 残差导入时的帧号 */
+  private _debugResidualImportedAt = -1;
+
   constructor(renderer: THREE.WebGLRenderer, config: FluidEditorConfig) {
     this.renderer = renderer;
     this.config = { ...config };
@@ -139,9 +145,79 @@ export class FluidEditor {
     if (dt <= 0) return;
 
     this.frameCount++;
-    
-    // 每 30 帧输出一次详细调试信息
-    if (this.frameCount % 30 === 1) {
+
+    // ===== 残差纹理导入后逐帧调试 =====
+    if (this._debugResidualFrameCount >= 0 && this._debugResidualFrameCount < 15) {
+      const frameSinceImport = this._debugResidualFrameCount;
+      console.log(`\n========== [残差调试] 导入后第 ${frameSinceImport} 帧 (总帧#${this.frameCount}) ==========`);
+      console.log(`[残差调试] 配置: advection=${this.config.enableAdvection}, pressure=${this.config.enablePressure}, gravity=${this.config.gravity}, colorBoundary=${this.config.colorBoundaryMode}, injection=${this.config.injection.enabled}`);
+
+      // 回读颜色场统计
+      const colorPixels = this.readColorPixels();
+      const { w, h } = this.config.resolution;
+      let colorNonZero = 0;
+      let colorMaxR = 0, colorMaxG = 0, colorMaxB = 0;
+      for (let i = 0; i < w * h * 4; i += 4) {
+        if (colorPixels[i] !== 0 || colorPixels[i+1] !== 0 || colorPixels[i+2] !== 0) {
+          colorNonZero++;
+          if (colorPixels[i] > colorMaxR) colorMaxR = colorPixels[i];
+          if (colorPixels[i+1] > colorMaxG) colorMaxG = colorPixels[i+1];
+          if (colorPixels[i+2] > colorMaxB) colorMaxB = colorPixels[i+2];
+        }
+      }
+      const totalPixels = w * h;
+      console.log(`[残差调试] 颜色场: 非零像素=${colorNonZero}/${totalPixels} (${(colorNonZero*100/totalPixels).toFixed(1)}%), 最大值 R=${colorMaxR} G=${colorMaxG} B=${colorMaxB}`);
+
+      // 回读中心像素 (w/2, h/2)
+      const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+      const ci = (cy * w + cx) * 4;
+      console.log(`[残差调试] 中心像素(${cx},${cy}): RGBA=(${colorPixels[ci]},${colorPixels[ci+1]},${colorPixels[ci+2]},${colorPixels[ci+3]})`);
+
+      // 回读四个角像素
+      const corners: [string, number, number][] = [
+        ['左上(0,0)', 0, 0],
+        ['右上(w-1,0)', w-1, 0],
+        ['左下(0,h-1)', 0, h-1],
+        ['右下(w-1,h-1)', w-1, h-1],
+      ];
+      for (const [label, px, py] of corners) {
+        const idx = (py * w + px) * 4;
+        console.log(`[残差调试] ${label}: RGBA=(${colorPixels[idx]},${colorPixels[idx+1]},${colorPixels[idx+2]},${colorPixels[idx+3]})`);
+      }
+
+      // 回读速度场统计
+      try {
+        const velRaw = new Float32Array(w * h * 2);
+        const velTarget = this.velocityGrid.readTarget;
+        const prevTarget = this.renderer.getRenderTarget();
+        this.renderer.setRenderTarget(velTarget);
+        this.renderer.readRenderTargetPixels(velTarget, 0, 0, w, h, velRaw);
+        this.renderer.setRenderTarget(prevTarget);
+        let velNonZero = 0, velMaxMag = 0;
+        for (let i = 0; i < w * h; i++) {
+          const vx = velRaw[i * 2], vy = velRaw[i * 2 + 1];
+          const mag = Math.sqrt(vx * vx + vy * vy);
+          if (mag > 0.001) velNonZero++;
+          if (mag > velMaxMag) velMaxMag = mag;
+        }
+        const cvx = velRaw[(cy * w + cx) * 2], cvy = velRaw[(cy * w + cx) * 2 + 1];
+        console.log(`[残差调试] 速度场: 非零像素=${velNonZero}/${totalPixels}, 最大速率=${velMaxMag.toFixed(4)}, 中心速度=(${cvx.toFixed(4)},${cvy.toFixed(4)})`);
+      } catch (e) {
+        console.warn(`[残差调试] 速度场回读失败:`, e);
+      }
+
+      // 检查网格内部状态
+      console.log(`[残差调试] 网格: colorGrid.channelCount=${this.colorGrid.channelCount}, colorGrid.dataType=${this.colorGrid.dataType}, velGrid.channelCount=${this.velocityGrid.channelCount}, velGrid.dataType=${this.velocityGrid.dataType}`);
+      console.log(`[残差调试] colorGrid.read.texture: ${this.colorGrid.read.image?.width}x${this.colorGrid.read.image?.height}, format=${this.colorGrid.read.format}, type=${this.colorGrid.read.type}`);
+      console.log(`========== [残差调试] 第 ${frameSinceImport} 帧结束 ==========\n`);
+
+      this._debugResidualFrameCount++;
+
+      // 15帧后停止追踪
+      if (this._debugResidualFrameCount >= 15) {
+        console.log(`[残差调试] 追踪完成，共记录15帧。导入帧号=${this._debugResidualImportedAt}`);
+        this._debugResidualFrameCount = -1;
+      }
     }
 
     // ★ 0. 处理待定注入队列（UI 交互，一次性注入，不乘 dt）
@@ -195,16 +271,53 @@ export class FluidEditor {
     // 2. 平流（非注入 Pass，直接使用 this.gpu）
     if (this.config.enableAdvection) {
       this.advectVelocity(dt);
+      // ===== 平流速度后调试 =====
+      if (this._debugResidualFrameCount >= 0 && this._debugResidualFrameCount < 15) {
+        const pixels = this.readColorPixels();
+        let nz = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] !== 0 || pixels[i+1] !== 0 || pixels[i+2] !== 0) nz++;
+        }
+        console.log(`[残差调试] 平流速度后: 颜色场非零=${nz}`);
+      }
+      
       this.advectColor(dt);
+      // ===== 平流颜色后调试 =====
+      if (this._debugResidualFrameCount >= 0 && this._debugResidualFrameCount < 15) {
+        const pixels = this.readColorPixels();
+        let nz = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] !== 0 || pixels[i+1] !== 0 || pixels[i+2] !== 0) nz++;
+        }
+        console.log(`[残差调试] 平流颜色后: 颜色场非零=${nz}`);
+      }
     }
 
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
     this.applyBoundary();
+    // ===== 边界处理后调试 =====
+    if (this._debugResidualFrameCount >= 0 && this._debugResidualFrameCount < 15) {
+      const pixels = this.readColorPixels();
+      let nz = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] !== 0 || pixels[i+1] !== 0 || pixels[i+2] !== 0) nz++;
+      }
+      console.log(`[残差调试] 边界处理后: 颜色场非零=${nz}`);
+    }
 
     // 3. 压力投影（红-黑 SOR）
     if (this.config.enablePressure) {
       this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
       this.applyPressureGradient();
+      // ===== 压力投影后调试 =====
+      if (this._debugResidualFrameCount >= 0 && this._debugResidualFrameCount < 15) {
+        const pixels = this.readColorPixels();
+        let nz = 0;
+        for (let i = 0; i < pixels.length; i += 4) {
+          if (pixels[i] !== 0 || pixels[i+1] !== 0 || pixels[i+2] !== 0) nz++;
+        }
+        console.log(`[残差调试] 压力投影后: 颜色场非零=${nz}`);
+      }
     }
 
     // 4. Level Set（预留）
@@ -454,6 +567,24 @@ export class FluidEditor {
   }
 
   /**
+   * 控制台调试专用：打印颜色场统计信息。
+   * 调用方式：window.fluidEditor.printColorStats()
+   */
+  printColorStats(): void {
+    const pixels = this.readColorPixels();
+    const { w, h } = this.config.resolution;
+    let nonZero = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      if (pixels[i] !== 0 || pixels[i+1] !== 0 || pixels[i+2] !== 0) nonZero++;
+    }
+    console.log(`[调试] 颜色场非零像素数: ${nonZero}/${pixels.length/4} (${(nonZero*100/(pixels.length/4)).toFixed(1)}%)`);
+    // 中心像素
+    const cx = Math.floor(w/2), cy = Math.floor(h/2);
+    const idx = (cy * w + cx) * 4;
+    console.log(`[调试] 中心像素 (${cx},${cy}): RGBA=(${pixels[idx]},${pixels[idx+1]},${pixels[idx+2]},${pixels[idx+3]})`);
+  }
+
+  /**
    * 采样指定像素位置的颜色和速度值。
    * @param x 像素 X 坐标（0 ~ w-1）
    * @param y 像素 Y 坐标（0 ~ h-1，注意：这是纹理坐标，Y向上为正）
@@ -663,6 +794,7 @@ export class FluidEditor {
   /** 初始化场数据：全透明空场 + 零速度 */
   public initFields(): void {
     const { w, h } = this.config.resolution;
+    console.log(`[FluidEditor.initFields] 重置物理场, 分辨率=${w}x${h}, 帧#${this.frameCount}`);
 
     // 初始颜色场：完全透明（空场），依靠注入源产生动态流体
     let colorData: Float32Array | Uint8Array;
@@ -681,6 +813,8 @@ export class FluidEditor {
       velData = new Float32Array(w * h * 2);
     }
     this.uploadToGrid(this.velocityGrid, velData, 2);
+
+    console.log(`[FluidEditor.initFields] 完成, colorGrid.dataType=${this.colorGrid.dataType}, velGrid.dataType=${this.velocityGrid.dataType}`);
   }
 
   /**
@@ -697,12 +831,19 @@ export class FluidEditor {
     let width = imageData.width;
     let height = imageData.height;
 
-    // 尺寸不匹配时缩放
+    console.log(`[FluidEditor.initializeColor] 入参: ImageData=${width}x${height}, 网格=${w}x${h}, 帧#${this.frameCount}`);
+    console.log(`[FluidEditor.initializeColor] 入参前10像素 RGBA: ${
+      Array.from(data.slice(0, 40)).join(',')
+    }`);
+
+    // 尺寸不匹配时缩放（最近邻插值，保留残差量化精度）
     if (width !== w || height !== h) {
+      console.log(`[FluidEditor.initializeColor] 尺寸不匹配, 开始缩放 (最近邻)`);
       const canvas = document.createElement('canvas');
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d')!;
+      ctx.imageSmoothingEnabled = false; // 禁用双线性插值，保留量化值
       const bitmap = await createImageBitmap(imageData);
       ctx.drawImage(bitmap, 0, 0, w, h);
       bitmap.close();
@@ -710,14 +851,58 @@ export class FluidEditor {
       data = scaled.data;
       width = w;
       height = h;
+      console.log(`[FluidEditor.initializeColor] 缩放完成: ${width}x${height}, 前10像素: ${
+        Array.from(data.slice(0, 40)).join(',')
+      }`);
     }
 
+    // 统计非零像素
+    let nonZero = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] !== 0 || data[i+1] !== 0 || data[i+2] !== 0) nonZero++;
+    }
+    console.log(`[FluidEditor.initializeColor] 非零像素: ${nonZero}/${data.length/4} (${(nonZero*100/(data.length/4)).toFixed(1)}%)`);
+
     // 上传到颜色网格（RGBA 四通道 uint8）
-    // 残差的三通道（H/S/L 增量）存储在 R/G/B，A 通道保透明度
     const uploadData = data instanceof Uint8ClampedArray
       ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
       : new Uint8Array(data);
+    const expectedLen = w * h * 4;
+    console.log(`[FluidEditor.initializeColor] 准备上传: uploadData.length=${uploadData.length}, 期望=${expectedLen}, 匹配=${uploadData.length === expectedLen}, colorGrid.channelCount=${this.colorGrid.channelCount}, colorGrid.dataType=${this.colorGrid.dataType}`);
     this.uploadToGrid(this.colorGrid, uploadData, 4);
+
+    // ===== 上传后立即回读验证 =====
+    console.log(`[FluidEditor.initializeColor] 上传完成, 立即回读验证...`);
+    const verifyPixels = this.readColorPixels();
+    let verifyNonZero = 0;
+    let verifyMaxR = 0, verifyMaxG = 0, verifyMaxB = 0;
+    for (let i = 0; i < verifyPixels.length; i += 4) {
+      if (verifyPixels[i] !== 0 || verifyPixels[i+1] !== 0 || verifyPixels[i+2] !== 0) {
+        verifyNonZero++;
+        if (verifyPixels[i] > verifyMaxR) verifyMaxR = verifyPixels[i];
+        if (verifyPixels[i+1] > verifyMaxG) verifyMaxG = verifyPixels[i+1];
+        if (verifyPixels[i+2] > verifyMaxB) verifyMaxB = verifyPixels[i+2];
+      }
+    }
+    console.log(`[FluidEditor.initializeColor] 回读验证: 非零像素=${verifyNonZero}/${w*h} (${(verifyNonZero*100/(w*h)).toFixed(1)}%), 最大值 R=${verifyMaxR} G=${verifyMaxG} B=${verifyMaxB}`);
+    
+    // 回读中心像素验证
+    const vcx = Math.floor(w/2), vcy = Math.floor(h/2);
+    const vci = (vcy * w + vcx) * 4;
+    console.log(`[FluidEditor.initializeColor] 回读中心(${vcx},${vcy}): RGBA=(${verifyPixels[vci]},${verifyPixels[vci+1]},${verifyPixels[vci+2]},${verifyPixels[vci+3]})`);
+    
+    if (verifyNonZero === 0) {
+      console.error(`[FluidEditor.initializeColor] ❌ 严重: 上传后回读全为零! 数据未真正写入GPU纹理!`);
+    } else if (verifyNonZero === nonZero) {
+      console.log(`[FluidEditor.initializeColor] ✓ 回读非零像素数与入参一致, 上传成功`);
+    } else {
+      console.warn(`[FluidEditor.initializeColor] ⚠️ 回读非零像素=${verifyNonZero} 与入参=${nonZero} 不一致! 差异=${verifyNonZero - nonZero}`);
+    }
+
+    // 启动逐帧调试追踪
+    this._debugResidualFrameCount = 0;
+    this._debugResidualImportedAt = this.frameCount;
+    console.log(`[FluidEditor.initializeColor] 已启动逐帧调试追踪 (从下帧开始记录15帧), 当前帧#${this.frameCount}`);
   }
 
   /**
@@ -737,6 +922,8 @@ export class FluidEditor {
   ): void {
     const { w, h } = this.config.resolution;
 
+    console.log(`[FluidEditor.uploadToGrid] 入参: dataType=${data.constructor.name}, dataLen=${data.length}, channels=${channels}, 期望Len=${w*h*channels}, 匹配=${data.length === w*h*channels}`);
+    console.log(`[FluidEditor.uploadToGrid] 目标网格: resolution=${grid.resolution.w}x${grid.resolution.h}, channels=${grid.channelCount}, dataType=${grid.dataType}`);
 
     // 根据目标网格的数据类型选择合适的纹理类型
     let texType: THREE.TextureDataType;
@@ -800,6 +987,8 @@ export class FluidEditor {
     this.gpu.render(this.renderer, grid.write, copyMat);
     grid.swap();
     tex.dispose();
+
+    console.log(`[FluidEditor.uploadToGrid] 完成: texFormat=${texFormat}, texType=${texType === THREE.UnsignedByteType ? 'UnsignedByte' : texType === THREE.FloatType ? 'Float' : 'HalfFloat'}, writeTarget=${grid.readTarget.texture.image?.width}x${grid.readTarget.texture.image?.height}`);
 
   }
 
