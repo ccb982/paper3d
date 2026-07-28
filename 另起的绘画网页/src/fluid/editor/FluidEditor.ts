@@ -593,7 +593,10 @@ export class FluidEditor {
    * @returns { h, s, l, a, velX, velY } HSLA 值（0~1）和速度值（像素/秒）
    */
   samplePixel(x: number, y: number): {
-    h: number; s: number; l: number; a: number;
+    residualH: number; // R 通道 = H 增量 (0~1)
+    residualS: number; // G 通道 = S 增量 (0~1)
+    residualL: number; // B 通道 = L 增量 (0~1)
+    alpha: number;
     velX: number; velY: number;
   } {
     const { w, h } = this.config.resolution;
@@ -601,16 +604,13 @@ export class FluidEditor {
     const px = Math.max(0, Math.min(w - 1, Math.floor(x)));
     const py = Math.max(0, Math.min(h - 1, Math.floor(y)));
 
-    // 1. 读取颜色像素（RGBA uint8）
+    // 1. 读取颜色像素（RGBA uint8）—— 颜色场就是 HSLA，直接读取
     const colorPixels = this.readColorPixels();
     const idx = (py * w + px) * 4;
-    const r = colorPixels[idx] / 255;
-    const g = colorPixels[idx + 1] / 255;
-    const b = colorPixels[idx + 2] / 255;
-    const a = colorPixels[idx + 3] / 255;
-
-    // RGB → HSL 转换
-    const hsl = this.rgbToHsl(r, g, b);
+    const r = colorPixels[idx] / 255;     // = H 增量
+    const g = colorPixels[idx + 1] / 255; // = S 增量
+    const b = colorPixels[idx + 2] / 255; // = L 增量
+    const a = colorPixels[idx + 3] / 255; // = Alpha
 
     // 2. 读取速度像素（直接使用 Float32Array，让 Three.js 自动转换 half-float → float32）
     const velData = new Float32Array(2); // 只需两个通道 R (X) 和 G (Y)
@@ -625,8 +625,7 @@ export class FluidEditor {
     const velX = velData[0];
     const velY = velData[1];
 
-
-    return { h: hsl.h, s: hsl.s, l: hsl.l, a, velX, velY };
+    return { residualH: r, residualS: g, residualL: b, alpha: a, velX, velY };
   }
 
   /** RGB(0~1) → HSL(0~1) */
@@ -979,6 +978,7 @@ export class FluidEditor {
     tex.needsUpdate = true;
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
+    tex.colorSpace = THREE.LinearSRGBColorSpace; // 残差纹理存储的是量化HSL增量，不是颜色，禁止sRGB解码
 
     // 根据通道数选择对应的复制着色器
     const getCopyFS = (ch: number): string => {

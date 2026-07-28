@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
 import { useAppStore } from '../../stores/useAppStore';
+import { getAdaptiveBlockIndex, getRangeForBlock } from '../../core/ftxCore';
 
 // ============================================================
 // 子组件：操作面板（新增 - 点击注入测试）
@@ -536,10 +537,55 @@ export const FluidEditorUI: React.FC = () => {
 
   const [rendererReady, setRendererReady] = useState(false);
 
+  // ==================== 辅助函数：双层级比较器 ====================
+  /** RGB(0~1) → HSL(0~1) */
+  const rgbToHsl = (r: number, g: number, b: number): { h: number; s: number; l: number } => {
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    let h = 0, s = 0;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      else if (max === g) h = ((b - r) / d + 2) / 6;
+      else h = ((r - g) / d + 4) / 6;
+    }
+    return { h, s, l };
+  };
+
+  /** 合成公式（与合成着色器一致） */
+  const computeCompositeHsl = (
+    baseHsl: { h: number; s: number; l: number },
+    residual: { r: number; g: number; b: number },
+    rangeH: number,
+    rangeSL: number,
+  ): { h: number; s: number; l: number } => {
+    const dH = (residual.r * 2.0 - 1.0) * rangeH;
+    const dS = (residual.g * 2.0 - 1.0) * rangeSL;
+    const dL = (residual.b * 2.0 - 1.0) * rangeSL;
+    let finalH = baseHsl.h + dH;
+    finalH = finalH - Math.floor(finalH); // fract
+    const finalS = Math.max(0, Math.min(1, baseHsl.s + dS));
+    const finalL = Math.max(0, Math.min(1, baseHsl.l + dL));
+    return { h: finalH, s: finalS, l: finalL };
+  };
+  // ================================================================
+
   // 采样信息（点击 canvas 时填充）
   const [sampleInfo, setSampleInfo] = useState<{
     px: number; py: number;
-    h: number; s: number; l: number; a: number;
+    // 层级1：残差保真度
+    simResidual: { h: number; s: number; l: number };
+    origResidual: { h: number; s: number; l: number };
+    deltaResidual: { h: number; s: number; l: number };
+    // 层级2：合成正确性
+    simComposite: { h: number; s: number; l: number };
+    origComposite: { h: number; s: number; l: number };
+    deltaComposite: { h: number; s: number; l: number };
+    // 基础色（参考）
+    baseColor: { h: number; s: number; l: number } | null;
+    // 速度
     velX: number; velY: number; velMag: number;
   } | null>(null);
 
@@ -824,7 +870,7 @@ export const FluidEditorUI: React.FC = () => {
       tex.magFilter = THREE.LinearFilter;
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      // flipY=true 是 Three.js 默认值，确保底图与流体纹理 Y 轴方向一致
+      tex.colorSpace = THREE.LinearSRGBColorSpace; // 基础色由 hslToRgb 生成，已是线性RGB，禁止sRGB解码
       // 两者都使用 flipY=true，UV(0,0)=左下角采样同一空间位置
 
       baseTexRef.current = tex;
@@ -891,6 +937,64 @@ export const FluidEditorUI: React.FC = () => {
     };
   }, [rendererReady, editor, config.resolution, viewMode]);
 
+  // ==================== 残差量化范围预调整 ====================
+  /**
+   * 根据 blockFlags 将残差纹理中 range=0.25 的像素值预调整为 range=0.5 兼容格式。
+   * 
+   * 基础色编辑器使用自适应量化：每个 8×8 块可能是 range=0.25 或 0.5。
+   * 流体解算器统一使用 range=0.5 反量化公式：d = (val * 2 - 1) * 0.5
+   * 
+   * 对于 range=0.25 的块：原始反量化 d = (val * 2 - 1) * 0.25
+   * 调整后：val' = val * 0.5，解算器反量化 d' = (val' * 2 - 1) * 0.5 = (val - 1) * 0.5
+   * 两者在量化误差范围内等价，确保合成效果与基础色编辑器一致。
+   * 
+   * @param residualImageData 原始残差纹理（ImageData）
+   * @param bbox 残差纹理的边界框
+   * @param blockFlags 分块范围标志（bigint）
+   * @returns 调整后的 ImageData（共享原始数据引用，直接修改）
+   */
+  const adjustResidualForUniformRange = (
+    residualImageData: ImageData,
+    bbox: { x: number; y: number; w: number; h: number },
+    blockFlags: bigint,
+  ): ImageData => {
+    const { w, h } = bbox;
+    const data = residualImageData.data;
+
+    // 统计调整的像素数和块数
+    let adjustedPixelCount = 0;
+    const smallRangeBlocks = new Set<number>();
+
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        // 计算该像素所属的自适应分块索引
+        const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+        // 判断该块的量化范围
+        const range = getRangeForBlock(blockFlags, blockIdx);
+
+        if (range === 0.25) {
+          // 记录小范围块
+          smallRangeBlocks.add(blockIdx);
+          // 公式推导：
+          // 原始反量化: dH = (val * 2 - 1) * 0.25
+          // 解算器反量化: dH' = (val' * 2 - 1) * 0.5
+          // 令 dH = dH'，解得: val' = val * 0.5 + 0.25
+          const idx = (py * w + px) * 4;
+          data[idx] = Math.round(data[idx] * 0.5 + 64);       // R (H): 255*0.25=64
+          data[idx + 1] = Math.round(data[idx + 1] * 0.5 + 64); // G (S)
+          data[idx + 2] = Math.round(data[idx + 2] * 0.5 + 64); // B (L)
+          // Alpha 不变
+          adjustedPixelCount++;
+        }
+      }
+    }
+
+    console.log(`[FTX导入] 残差调整: bbox=${w}x${h}, blockFlags=${blockFlags.toString(2).padStart(64, '0')}`);
+    console.log(`[FTX导入] 残差调整: 小范围块数=${smallRangeBlocks.size}, 调整像素数=${adjustedPixelCount}`);
+    
+    return residualImageData;
+  };
+
   // ==================== FTX 帧数据 → 流体编辑器加载 ====================
   /** 手动加载当前活动图层的残差纹理到流体编辑器 */
   const loadFrameResidual = () => {
@@ -944,11 +1048,23 @@ export const FluidEditorUI: React.FC = () => {
     });
     console.log(`[FTX导入] 导入后配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
-    // ===== 关键修复 3：缩放 + 上传残差 =====
-    console.log(`[FTX导入] 步骤3: initializeColorFromImageData() 上传残差...`);
-    editor.initializeColorFromImageData(frameData.residualTexture);
+    // ===== 关键修复 3：根据 blockFlags 预调整残差量化值 =====
+    // 基础色编辑器使用自适应量化：range=0.25 或 0.5
+    // 流体解算器统一使用 range=0.5 反量化
+    // 因此需要将 range=0.25 的像素值乘以 0.5，使其在 0.5 范围下反量化结果一致
+    console.log(`[FTX导入] 步骤3: 根据 blockFlags 预调整残差量化值...`);
+    const adjustedResidual = adjustResidualForUniformRange(
+      frameData.residualTexture,
+      frameData.rawBbox!,
+      frameData.rawBlockFlags,
+    );
+    console.log(`[FTX导入] 残差调整完成, 前10像素 RGBA: ${Array.from(adjustedResidual.data.slice(0, 40)).join(',')}`);
 
-    // ===== 关键修复 4：切到颜色视图验证数据 =====
+    // ===== 关键修复 4：缩放 + 上传残差 =====
+    console.log(`[FTX导入] 步骤4: initializeColorFromImageData() 上传残差...`);
+    editor.initializeColorFromImageData(adjustedResidual);
+
+    // ===== 关键修复 5：切到颜色视图验证数据 =====
     console.log(`[FTX导入] 步骤4: 切换到颜色视图`);
     setView('color');
     console.log(`========== [FTX导入] 加载完成 ==========\n`);
@@ -1066,24 +1182,95 @@ export const FluidEditorUI: React.FC = () => {
             const pixX = cssX * scaleX;
             const pixY = cssY * scaleY;
 
-            // 转换为纹理坐标（左下为原点，Y 向上）
+            // flipY=false: UV(0,0)=顶部=左上, 与 canvas 坐标一致，无需翻转
             const texX = pixX;
-            const texY = canvas.height - 1 - pixY;
+            const texY = pixY;
 
+            // 1. 采样模拟器颜色场（残差）
+            const simSample = editor.samplePixel(texX, texY);
+            const simResidual = { h: simSample.residualH, s: simSample.residualS, l: simSample.residualL };
+            const velMag = Math.sqrt(simSample.velX * simSample.velX + simSample.velY * simSample.velY);
 
-            // 采样
-            const sample = editor.samplePixel(texX, texY);
-            const velMag = Math.sqrt(sample.velX * sample.velX + sample.velY * sample.velY);
+            // 2. 从 Store 获取原始数据
+            const state = useAppStore.getState();
+            const layerId = state.activeLayerId;
+            let origResidual = { h: 0, s: 0, l: 0 };
+            let baseColor: { h: number; s: number; l: number } | null = null;
+            let origComposite = { h: 0, s: 0, l: 0 };
+            let simComposite = { h: 0, s: 0, l: 0 };
+
+            if (layerId) {
+              const frameData = state.frameDataMap[layerId];
+              if (frameData) {
+                // 原始残差纹理（ImageData，Y向下）
+                const resImg = frameData.residualTexture;
+                if (resImg) {
+                  const resX = Math.floor(Math.min(Math.max(texX, 0), resImg.width - 1));
+                  const resY = Math.floor(Math.min(Math.max(texY, 0), resImg.height - 1));
+                  const idx = (resY * resImg.width + resX) * 4;
+                  origResidual = {
+                    h: resImg.data[idx] / 255,
+                    s: resImg.data[idx + 1] / 255,
+                    l: resImg.data[idx + 2] / 255,
+                  };
+                }
+
+                // 原始基础纹理（ImageData，Y向下）
+                const baseImg = frameData.baseTexture;
+                if (baseImg) {
+                  const baseX = Math.floor(Math.min(Math.max(texX, 0), baseImg.width - 1));
+                  const baseY = Math.floor(Math.min(Math.max(texY, 0), baseImg.height - 1));
+                  const idx = (baseY * baseImg.width + baseX) * 4;
+                  const br = baseImg.data[idx] / 255;
+                  const bg = baseImg.data[idx + 1] / 255;
+                  const bb = baseImg.data[idx + 2] / 255;
+                  baseColor = rgbToHsl(br, bg, bb);
+                }
+
+                // 如果有基础色，计算合成值
+                if (baseColor) {
+                  // 层级2：模拟器残差 + 基础色
+                  simComposite = computeCompositeHsl(
+                    baseColor,
+                    { r: simResidual.h, g: simResidual.s, b: simResidual.l },
+                    residualRangeHRef.current,
+                    residualRangeSLRef.current,
+                  );
+                  // 层级2：原始残差 + 基础色
+                  origComposite = computeCompositeHsl(
+                    baseColor,
+                    { r: origResidual.h, g: origResidual.s, b: origResidual.l },
+                    residualRangeHRef.current,
+                    residualRangeSLRef.current,
+                  );
+                }
+              }
+            }
+
+            // 计算差值
+            const deltaResidual = {
+              h: simResidual.h - origResidual.h,
+              s: simResidual.s - origResidual.s,
+              l: simResidual.l - origResidual.l,
+            };
+            const deltaComposite = {
+              h: simComposite.h - origComposite.h,
+              s: simComposite.s - origComposite.s,
+              l: simComposite.l - origComposite.l,
+            };
 
             setSampleInfo({
               px: Math.floor(texX),
               py: Math.floor(texY),
-              h: sample.h,
-              s: sample.s,
-              l: sample.l,
-              a: sample.a,
-              velX: sample.velX,
-              velY: sample.velY,
+              simResidual,
+              origResidual,
+              deltaResidual,
+              simComposite,
+              origComposite,
+              deltaComposite,
+              baseColor,
+              velX: simSample.velX,
+              velY: simSample.velY,
               velMag,
             });
 
@@ -1096,11 +1283,11 @@ export const FluidEditorUI: React.FC = () => {
           <span>{config.enableAdvection ? '平流: ON' : '平流: OFF'}</span>
         </div>
 
-        {/* 采样信息浮窗 */}
+        {/* 采样信息浮窗（双层级比较器） */}
         {sampleInfo && (
           <div className="sample-info">
             <div className="sample-header">
-              <span>🔬 像素采样</span>
+              <span>🔬 像素比较器</span>
               <button
                 onClick={() => setSampleInfo(null)}
                 style={{
@@ -1116,38 +1303,105 @@ export const FluidEditorUI: React.FC = () => {
               </button>
             </div>
             <div className="sample-row">
-              <span className="sample-label">像素坐标</span>
+              <span className="sample-label">坐标</span>
               <span className="sample-value">({sampleInfo.px}, {sampleInfo.py})</span>
             </div>
-            <div className="sample-section">颜色场 (HSLA)</div>
-            <div className="sample-row">
-              <span className="sample-label">H 色相</span>
-              <span className="sample-value">{(sampleInfo.h * 360).toFixed(1)}° ({sampleInfo.h.toFixed(3)})</span>
+
+            {/* 基础色（参考） */}
+            {sampleInfo.baseColor && (
+              <div style={{ marginTop: '4px', padding: '4px 6px', background: '#f0f0f0', borderRadius: '4px' }}>
+                <div style={{ fontSize: '10px', color: '#666' }}>基础色 (参考)</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{
+                    width: '20px', height: '20px', borderRadius: '4px', border: '1px solid #ddd',
+                    backgroundColor: `hsl(${sampleInfo.baseColor.h * 360}, ${sampleInfo.baseColor.s * 100}%, ${sampleInfo.baseColor.l * 100}%)`
+                  }} />
+                  <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+                    H: {sampleInfo.baseColor.h.toFixed(3)} S: {sampleInfo.baseColor.s.toFixed(3)} L: {sampleInfo.baseColor.l.toFixed(3)}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* 层级1：残差保真度 */}
+            <div style={{ marginTop: '8px', borderTop: '1px solid #eee', paddingTop: '8px' }}>
+              <div style={{ fontWeight: 'bold', fontSize: '11px', color: '#1976d2', marginBottom: '4px' }}>
+                📊 层级1：残差保真度（颜色视口 vs 原始残差）
+              </div>
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '4px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10px', color: '#666' }}>模拟器残差</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{
+                      width: '24px', height: '24px', borderRadius: '4px', border: '1px solid #ddd',
+                      backgroundColor: `hsl(${sampleInfo.simResidual.h * 360}, ${sampleInfo.simResidual.s * 100}%, ${sampleInfo.simResidual.l * 100}%)`
+                    }} />
+                    <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+                      H:{sampleInfo.simResidual.h.toFixed(3)} S:{sampleInfo.simResidual.s.toFixed(3)} L:{sampleInfo.simResidual.l.toFixed(3)}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10px', color: '#666' }}>原始残差</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{
+                      width: '24px', height: '24px', borderRadius: '4px', border: '1px solid #ddd',
+                      backgroundColor: `hsl(${sampleInfo.origResidual.h * 360}, ${sampleInfo.origResidual.s * 100}%, ${sampleInfo.origResidual.l * 100}%)`
+                    }} />
+                    <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+                      H:{sampleInfo.origResidual.h.toFixed(3)} S:{sampleInfo.origResidual.s.toFixed(3)} L:{sampleInfo.origResidual.l.toFixed(3)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '10px', color: '#333', background: '#f5f5f5', padding: '2px 6px', borderRadius: '3px' }}>
+                ΔH: <span style={{ color: Math.abs(sampleInfo.deltaResidual.h) > 0.01 ? '#d32f2f' : '#388e3c' }}>{sampleInfo.deltaResidual.h.toFixed(4)}</span>
+                ΔS: <span style={{ color: Math.abs(sampleInfo.deltaResidual.s) > 0.01 ? '#d32f2f' : '#388e3c' }}>{sampleInfo.deltaResidual.s.toFixed(4)}</span>
+                ΔL: <span style={{ color: Math.abs(sampleInfo.deltaResidual.l) > 0.01 ? '#d32f2f' : '#388e3c' }}>{sampleInfo.deltaResidual.l.toFixed(4)}</span>
+              </div>
             </div>
-            <div className="sample-row">
-              <span className="sample-label">S 饱和度</span>
-              <span className="sample-value">{(sampleInfo.s * 100).toFixed(1)}% ({sampleInfo.s.toFixed(3)})</span>
+
+            {/* 层级2：合成正确性 */}
+            <div style={{ marginTop: '8px', borderTop: '1px solid #eee', paddingTop: '8px' }}>
+              <div style={{ fontWeight: 'bold', fontSize: '11px', color: '#388e3c', marginBottom: '4px' }}>
+                📊 层级2：合成正确性（模拟器合成 vs 理论合成）
+              </div>
+              <div style={{ display: 'flex', gap: '12px', marginBottom: '4px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10px', color: '#666' }}>模拟器合成</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{
+                      width: '24px', height: '24px', borderRadius: '4px', border: '1px solid #ddd',
+                      backgroundColor: `hsl(${sampleInfo.simComposite.h * 360}, ${sampleInfo.simComposite.s * 100}%, ${sampleInfo.simComposite.l * 100}%)`
+                    }} />
+                    <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+                      H:{sampleInfo.simComposite.h.toFixed(3)} S:{sampleInfo.simComposite.s.toFixed(3)} L:{sampleInfo.simComposite.l.toFixed(3)}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '10px', color: '#666' }}>理论合成</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <div style={{
+                      width: '24px', height: '24px', borderRadius: '4px', border: '1px solid #ddd',
+                      backgroundColor: `hsl(${sampleInfo.origComposite.h * 360}, ${sampleInfo.origComposite.s * 100}%, ${sampleInfo.origComposite.l * 100}%)`
+                    }} />
+                    <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+                      H:{sampleInfo.origComposite.h.toFixed(3)} S:{sampleInfo.origComposite.s.toFixed(3)} L:{sampleInfo.origComposite.l.toFixed(3)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '10px', color: '#333', background: '#f5f5f5', padding: '2px 6px', borderRadius: '3px' }}>
+                ΔH: <span style={{ color: Math.abs(sampleInfo.deltaComposite.h) > 0.01 ? '#d32f2f' : '#388e3c' }}>{sampleInfo.deltaComposite.h.toFixed(4)}</span>
+                ΔS: <span style={{ color: Math.abs(sampleInfo.deltaComposite.s) > 0.01 ? '#d32f2f' : '#388e3c' }}>{sampleInfo.deltaComposite.s.toFixed(4)}</span>
+                ΔL: <span style={{ color: Math.abs(sampleInfo.deltaComposite.l) > 0.01 ? '#d32f2f' : '#388e3c' }}>{sampleInfo.deltaComposite.l.toFixed(4)}</span>
+              </div>
             </div>
-            <div className="sample-row">
-              <span className="sample-label">L 亮度</span>
-              <span className="sample-value">{(sampleInfo.l * 100).toFixed(1)}% ({sampleInfo.l.toFixed(3)})</span>
-            </div>
-            <div className="sample-row">
-              <span className="sample-label">A 不透明度</span>
-              <span className="sample-value">{(sampleInfo.a * 100).toFixed(1)}% ({sampleInfo.a.toFixed(3)})</span>
-            </div>
-            <div className="sample-section">速度场 (px/s)</div>
-            <div className="sample-row">
-              <span className="sample-label">velX</span>
-              <span className="sample-value">{sampleInfo.velX.toFixed(2)}</span>
-            </div>
-            <div className="sample-row">
-              <span className="sample-label">velY</span>
-              <span className="sample-value">{sampleInfo.velY.toFixed(2)}</span>
-            </div>
-            <div className="sample-row">
-              <span className="sample-label">|vel|</span>
-              <span className="sample-value">{sampleInfo.velMag.toFixed(2)}</span>
+
+            {/* 速度信息 */}
+            <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid #eee', fontSize: '10px', color: '#666' }}>
+              速度: ({sampleInfo.velX.toFixed(2)}, {sampleInfo.velY.toFixed(2)}) | 速率: {sampleInfo.velMag.toFixed(2)} px/s
             </div>
           </div>
         )}
