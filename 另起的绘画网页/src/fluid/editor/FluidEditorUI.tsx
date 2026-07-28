@@ -537,6 +537,7 @@ export const FluidEditorUI: React.FC = () => {
   const residualRangeSLRef = useRef(0.5);
   /** 导入时 stash 的原始帧数据（供像素比较器使用） */
   const stashedBaseRef = useRef<ImageData | null>(null);
+  const stashedBaseHslRef = useRef<Float32Array | null>(null); // ★ 新增：浮点 HSL 数据
   const stashedResidualRef = useRef<ImageData | null>(null);
   const stashedResidualWRef = useRef(0);
   const stashedResidualHRef = useRef(0);
@@ -790,28 +791,11 @@ export const FluidEditorUI: React.FC = () => {
         }
       `,
       fragmentShader: /* glsl */ `
-        uniform sampler2D uBaseTexture;
-        uniform sampler2D uResidual;
+        uniform sampler2D uBaseTexture;   // FloatType，存储 [H, S, L, A]，范围 0~1
+        uniform sampler2D uResidual;     // Uint8Type，存储量化残差值 [qH, qS, qL, 255]
         uniform float uResidualRangeH;
         uniform float uResidualRangeSL;
         varying vec2 vUv;
-
-        vec3 rgb_to_hsl(vec3 rgb) {
-          float cMax = max(max(rgb.r, rgb.g), rgb.b);
-          float cMin = min(min(rgb.r, rgb.g), rgb.b);
-          float delta = cMax - cMin;
-          float l = (cMax + cMin) / 2.0;
-          float h = 0.0;
-          float s = 0.0;
-          if (delta > 0.0) {
-            s = l > 0.5 ? delta / (2.0 - cMax - cMin) : delta / (cMax + cMin);
-            if (cMax == rgb.r) h = (rgb.g - rgb.b) / delta + (rgb.g < rgb.b ? 6.0 : 0.0);
-            else if (cMax == rgb.g) h = (rgb.b - rgb.r) / delta + 2.0;
-            else h = (rgb.r - rgb.g) / delta + 4.0;
-            h /= 6.0;
-          }
-          return vec3(h, s, l);
-        }
 
         vec3 hsl_to_rgb(vec3 hsl) {
           float h = hsl.x, s = hsl.y, l = hsl.z;
@@ -820,28 +804,25 @@ export const FluidEditorUI: React.FC = () => {
         }
 
         void main() {
-          vec4 baseRGBA = texture2D(uBaseTexture, vUv);
+          // ★ 直接读取 HSL 浮点纹理（不再需要 rgb_to_hsl 转换）
+          vec4 baseHSLA = texture2D(uBaseTexture, vUv);
           vec4 residual = texture2D(uResidual, vUv);
-
-          // 基础色 → HSL
-          vec3 baseHSL = rgb_to_hsl(baseRGBA.rgb);
 
           // 反量化残差（恢复 HSL 增量）
           // 编码公式：qH = round(((dH + range) / (2 * range)) * 255)
           // 解码公式：dH = (qH/255 * 2 - 1) * range = (residual.r * 2.0 - 1.0) * range
-          // 注意：WebGL 从 uint8 纹理采样已自动归一化到 [0,1]（即 qH/255）
-          // 正确范围：[-range, +range]，之前错误地使用 (residual.r - 0.5) * range 导致范围减半
           float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
           float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
           float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
 
-          // 叠加（色相环绕，饱和度/明度钳制）
-          float finalH = fract(baseHSL.r + dH);
-          float finalS = clamp(baseHSL.g + dS, 0.0, 1.0);
-          float finalL = clamp(baseHSL.b + dL, 0.0, 1.0);
+          // ★ HSL 直接加法（色相需要 fract 包裹）
+          float finalH = fract(baseHSLA.r + dH);
+          float finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
+          float finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
 
+          // 只在最后一步转 RGB 用于显示
           vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
-          gl_FragColor = vec4(finalRGB, baseRGBA.a);
+          gl_FragColor = vec4(finalRGB, baseHSLA.a);
         }
       `,
       transparent: true,
@@ -856,13 +837,43 @@ export const FluidEditorUI: React.FC = () => {
       if (!layerId) { baseTexRef.current = null; baseLayerIdRef.current = null; return; }
 
       const frameData = state.frameDataMap[layerId];
+      
+      // ★ 优先使用 baseHslData（Float32 HSL，用于 GPU 合成）
+      const baseHsl = frameData?.baseHslData;
+      if (baseHsl) {
+        // 只在图层切换或首次加载时重建纹理
+        if (baseLayerIdRef.current === layerId && baseTexRef.current) return;
+
+        // 释放旧纹理
+        baseTexRef.current?.dispose();
+
+        const tex = new THREE.DataTexture(
+          baseHsl.data,
+          baseHsl.width,
+          baseHsl.height,
+          THREE.RGBAFormat,
+          THREE.FloatType,  // ★ 关键：32位浮点存储 HSL
+        );
+        tex.needsUpdate = true;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.flipY = false; // 统一坐标系：顶部=UV(0,0)
+        tex.wrapS = THREE.ClampToEdgeWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.colorSpace = THREE.LinearSRGBColorSpace; // 不重要，因为存的不是 RGB 颜色
+
+        baseTexRef.current = tex;
+        baseLayerIdRef.current = layerId;
+        console.log(`[FluidEditorUI.updateBaseTexture] 使用 FloatType HSL 纹理: ${baseHsl.width}x${baseHsl.height}`);
+        return;
+      }
+
+      // 降级：使用 baseTexture（RGB ImageData，仅用于 UI 预览）
       const baseImageData = frameData?.baseTexture;
       if (!baseImageData) { baseTexRef.current = null; baseLayerIdRef.current = null; return; }
 
-      // 只在图层切换或首次加载时重建纹理
       if (baseLayerIdRef.current === layerId && baseTexRef.current) return;
 
-      // 释放旧纹理
       baseTexRef.current?.dispose();
 
       const tex = new THREE.DataTexture(
@@ -874,15 +885,15 @@ export const FluidEditorUI: React.FC = () => {
       );
       tex.needsUpdate = true;
       tex.minFilter = THREE.LinearFilter;
-      tex.flipY = false; // 统一坐标系：顶部=UV(0,0)
+      tex.flipY = false;
       tex.magFilter = THREE.LinearFilter;
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.colorSpace = THREE.LinearSRGBColorSpace; // 基础色由 hslToRgb 生成，已是线性RGB，禁止sRGB解码
-      // 两者都使用 flipY=true，UV(0,0)=左下角采样同一空间位置
+      tex.colorSpace = THREE.LinearSRGBColorSpace;
 
       baseTexRef.current = tex;
       baseLayerIdRef.current = layerId;
+      console.log(`[FluidEditorUI.updateBaseTexture] 使用 Uint8 RGB 纹理: ${baseImageData.width}x${baseImageData.height}`);
     };
 
     let frameCount = 0;
@@ -1007,11 +1018,10 @@ export const FluidEditorUI: React.FC = () => {
   /** 
    * 从原始 FTX 数据独立生成流体编辑器所需的基础色和残差纹理。
    * 
-   * ★ 与 decodeFrameToTextures 的关键区别：
-   *   - baseTexture: 纯基础色 HSL→RGB（一致）
-   *   - residualTexture: 原始量化残差值（qH→R, qS→G, qL→B），而非合成后的 RGB
-   * 
-   * 这样流体解算器的合成着色器可以正确解码残差：d = (val * 2 - 1) * range
+   * ★ 关键改动：
+   *   - baseHslData: Float32Array [H, S, L, A]，直接存储浮点 HSL（用于 GPU 合成）
+   *   - baseTexture: ImageData RGB（仅用于 UI 预览）
+   *   - residualTexture: ImageData 存储量化值（R=qH, G=qS, B=qL）
    */
   const buildFluidTexturesFromRawFrame = (
     rawData: {
@@ -1022,19 +1032,30 @@ export const FluidEditorUI: React.FC = () => {
       sourceResolution: number;
     },
     palette: { h: number; s: number; l: number; id: number }[],
-  ): { baseTexture: ImageData; residualTexture: ImageData } => {
-    const { rawRegionIdTex, rawDeltaPacked, rawBbox, rawBlockFlags, sourceResolution } = rawData;
+  ): { baseHslData: { data: Float32Array; width: number; height: number }; baseTexture: ImageData; residualTexture: ImageData } => {
+    const { rawRegionIdTex, rawDeltaPacked, rawBbox, sourceResolution } = rawData;
     const bbox = rawBbox;
     const texSize = sourceResolution;
     const totalPixels = bbox.w * bbox.h;
 
+    // 1. 基础色 HSL 浮点数据（用于 GPU 合成，直接存储 H/S/L）
+    const hslFloat = new Float32Array(texSize * texSize * 4);
+    hslFloat.fill(0);
+
+    // 2. 基础色 RGB 图像（仅用于 UI 预览）
     const baseImageData = new ImageData(texSize, texSize);
     const baseData = baseImageData.data;
+
+    // 3. 残差纹理（量化值）
     const resImageData = new ImageData(texSize, texSize);
     const resData = resImageData.data;
 
     if (totalPixels === 0 || !rawDeltaPacked || rawDeltaPacked.length === 0) {
-      return { baseTexture: baseImageData, residualTexture: resImageData };
+      return { 
+        baseHslData: { data: hslFloat, width: texSize, height: texSize },
+        baseTexture: baseImageData, 
+        residualTexture: resImageData 
+      };
     }
 
     // 构建调色板映射
@@ -1058,24 +1079,32 @@ export const FluidEditorUI: React.FC = () => {
       const globalY = bbox.y + py;
       const idx = (globalY * texSize + globalX) * 4;
 
-      // baseTexture: 纯基础色 HSL→RGB
+      // ★ baseHslData: 直接存储浮点 HSL，不转 RGB（GPU 合成用）
+      hslFloat[idx]     = baseColor.h;
+      hslFloat[idx + 1] = baseColor.s;
+      hslFloat[idx + 2] = baseColor.l;
+      hslFloat[idx + 3] = 1.0;  // Alpha
+
+      // baseTexture: HSL→RGB（仅用于 UI 预览）
       const baseRgb = hslToRgb(baseColor.h, baseColor.s, baseColor.l);
       baseData[idx] = baseRgb.r;
       baseData[idx + 1] = baseRgb.g;
       baseData[idx + 2] = baseRgb.b;
       baseData[idx + 3] = 255;
 
-      // ★ residualTexture: 存储原始量化残差值（非合成RGB）
+      // ★ residualTexture: 存储原始量化残差值
       // R = qH/63 * 255, G = qS/31 * 255, B = qL/31 * 255
-      // 解算器着色器: dH = (residual.r * 2 - 1) * range
-      //   residual.r = qH/63, dH = (qH/63 * 2 - 1) * range → 与原反量化公式一致
       resData[idx] = Math.round((qH / 63) * 255);
       resData[idx + 1] = Math.round((qS / 31) * 255);
       resData[idx + 2] = Math.round((qL / 31) * 255);
       resData[idx + 3] = 255;
     }
 
-    return { baseTexture: baseImageData, residualTexture: resImageData };
+    return { 
+      baseHslData: { data: hslFloat, width: texSize, height: texSize },
+      baseTexture: baseImageData, 
+      residualTexture: resImageData 
+    };
   };
 
   // ==================== FTX 帧数据 → 流体编辑器加载 ====================
@@ -1096,6 +1125,15 @@ export const FluidEditorUI: React.FC = () => {
       return;
     }
 
+    // ★★★ 关键修复：同步流体分辨率与帧数据尺寸 ★★★
+    // 基础色纹理尺寸 = 帧数据原始尺寸（通常512），流体编辑器默认256，尺寸不匹配会导致UV采样错位
+    const texSize = frameData.sourceResolution || 512;
+    console.log(`[FTX导入] 同步分辨率: 帧数据=${texSize}x${texSize}, 当前流体=${config.resolution.w}x${config.resolution.h}`);
+    if (config.resolution.w !== texSize || config.resolution.h !== texSize) {
+      updateConfig({ resolution: { w: texSize, h: texSize } });
+      console.log(`[FTX导入] 已更新分辨率为 ${texSize}x${texSize}`);
+    }
+
     console.log(`\n========== [FTX导入] 独立解析帧数据 ==========`);
     console.log(`[FTX导入] 活动图层: ${layerId}`);
     console.log(`[FTX导入] 原始数据: bbox=(${frameData.rawBbox.x},${frameData.rawBbox.y},${frameData.rawBbox.w}x${frameData.rawBbox.h}), texSize=${frameData.sourceResolution}`);
@@ -1106,7 +1144,7 @@ export const FluidEditorUI: React.FC = () => {
     console.log(`[FTX导入] 调色板色块数: ${palette.length}`);
 
     // ★ 独立生成正确的纹理（残差 = 量化值，而非合成RGB）
-    const { baseTexture: newBase, residualTexture: newResidual } = buildFluidTexturesFromRawFrame(
+    const { baseHslData, baseTexture: newBase, residualTexture: newResidual } = buildFluidTexturesFromRawFrame(
       {
         rawRegionIdTex: frameData.rawRegionIdTex,
         rawDeltaPacked: frameData.rawDeltaPacked,
@@ -1116,6 +1154,10 @@ export const FluidEditorUI: React.FC = () => {
       },
       palette,
     );
+
+    // 基础色 HSL 统计
+    console.log(`[FTX导入] 基础色 HSL 数据: ${baseHslData.width}x${baseHslData.height}, 数据长度=${baseHslData.data.length}`);
+    console.log(`[FTX导入] 基础色前10个 HSL 值: ${Array.from(baseHslData.data.slice(0, 30)).join(',')}`);
 
     // 残差统计
     const rd = newResidual.data;
@@ -1135,6 +1177,9 @@ export const FluidEditorUI: React.FC = () => {
     stashedResidualWRef.current = newResidual.width;
     stashedResidualHRef.current = newResidual.height;
 
+    // ★ stash 浮点 HSL 数据（用于精确比较）
+    stashedBaseHslRef.current = new Float32Array(baseHslData.data);
+
     stashedBaseRef.current = new ImageData(
       new Uint8ClampedArray(newBase.data),
       newBase.width,
@@ -1142,7 +1187,7 @@ export const FluidEditorUI: React.FC = () => {
     );
     stashedBaseWRef.current = newBase.width;
     stashedBaseHRef.current = newBase.height;
-    console.log(`[FTX导入] stash 完成: base=${newBase.width}x${newBase.height}, residual=${newResidual.width}x${newResidual.height}`);
+    console.log(`[FTX导入] stash 完成: base=${newBase.width}x${newBase.height}, residual=${newResidual.width}x${newResidual.height}, baseHsl=${baseHslData.data.length} floats`);
 
     // ===== 导入前状态日志 =====
     const solverRes = config.resolution;
@@ -1150,20 +1195,35 @@ export const FluidEditorUI: React.FC = () => {
     console.log(`[FTX导入] 尺寸匹配: ${newResidual.width === solverRes.w && newResidual.height === solverRes.h}`);
     console.log(`[FTX导入] 导入前配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
-    // ===== 步骤 1：强制重置所有物理场 =====
-    console.log(`[FTX导入] 步骤1: initFields() 重置物理场...`);
+    // ===== 步骤 1：更新 frameDataMap（合成视图依赖） =====
+    // ★ 关键修复：必须同时更新 baseHslData（GPU合成用）和 baseTexture（UI预览用）
+    console.log(`[FTX导入] 步骤1: 更新 frameDataMap.baseHslData + baseTexture...`);
+    useAppStore.setState({
+      frameDataMap: {
+        ...useAppStore.getState().frameDataMap,
+        [layerId]: {
+          ...frameData,
+          baseHslData,           // ★ GPU合成用：Float32 HSL
+          baseTexture: newBase,  // UI预览用：RGB ImageData
+        },
+      },
+    });
+
+    // ===== 步骤 2：强制重置所有物理场 =====
+    console.log(`[FTX导入] 步骤2: initFields() 重置物理场...`);
     editor.initFields();
 
-    // ===== 步骤 2：残差模式配置 =====
-    console.log(`[FTX导入] 步骤2: 配置残差模式 (关闭注入/重力, 边界=clamp)...`);
+    // ===== 步骤 3：残差模式配置 + 临时关闭平流 =====
+    console.log(`[FTX导入] 步骤3: 配置残差模式 (关闭注入/重力/平流, 边界=clamp)...`);
     updateConfig({
       injection: { ...config.injection, enabled: false },
       gravity: 0,
+      enableAdvection: false,
       colorBoundaryMode: 'clamp',
     });
 
-    // ===== 步骤 3：根据 blockFlags 预调整残差量化值 =====
-    console.log(`[FTX导入] 步骤3: 根据 blockFlags 预调整残差量化值...`);
+    // ===== 步骤 4：根据 blockFlags 预调整残差量化值 =====
+    console.log(`[FTX导入] 步骤4: 根据 blockFlags 预调整残差量化值...`);
     const adjustedResidual = adjustResidualForUniformRange(
       newResidual,
       frameData.rawBbox,
@@ -1171,12 +1231,18 @@ export const FluidEditorUI: React.FC = () => {
     );
     console.log(`[FTX导入] 残差调整完成`);
 
-    // ===== 步骤 4：上传残差 =====
-    console.log(`[FTX导入] 步骤4: initializeColorFromImageData() 上传残差...`);
+    // ===== 步骤 5：上传残差 =====
+    console.log(`[FTX导入] 步骤5: initializeColorFromImageData() 上传残差...`);
     editor.initializeColorFromImageData(adjustedResidual);
 
-    // ===== 步骤 5：切到颜色视图 =====
-    console.log(`[FTX导入] 步骤5: 切换到颜色视图`);
+    // ===== 步骤 6：延迟恢复平流（先让合成视图渲染一帧正确结果） =====
+    setTimeout(() => {
+      console.log(`[FTX导入] 延迟恢复平流...`);
+      updateConfig({ enableAdvection: true });
+    }, 100);
+
+    // ===== 步骤 7：切到颜色视图 =====
+    console.log(`[FTX导入] 步骤7: 切换到颜色视图`);
     setView('color');
     console.log(`========== [FTX导入] 加载完成 ==========\n`);
   };
@@ -1304,6 +1370,7 @@ export const FluidEditorUI: React.FC = () => {
 
             // 2. 从 stash 的原始帧数据读取（loadFrameResidual 时深拷贝存储）
             const origBaseImg = stashedBaseRef.current;
+            const origBaseHsl = stashedBaseHslRef.current; // ★ 浮点 HSL 数据
             const origResImg = stashedResidualRef.current;
             const solverW = config.resolution.w;
             const solverH = config.resolution.h;
@@ -1328,8 +1395,20 @@ export const FluidEditorUI: React.FC = () => {
               };
             }
 
-            // 原始基础色纹理（从 stash 读取）
-            if (origBaseImg) {
+            // ★ 原始基础色（优先使用浮点 HSL 数据，避免 RGB 转换损失）
+            if (origBaseHsl) {
+              const baseW = stashedBaseWRef.current;
+              const baseH = stashedBaseHRef.current;
+              const baseX = Math.floor(Math.min(Math.max(texX / solverW * baseW, 0), baseW - 1));
+              const baseY = Math.floor(Math.min(Math.max(texY / solverH * baseH, 0), baseH - 1));
+              const idx = (baseY * baseW + baseX) * 4;
+              baseColor = {
+                h: origBaseHsl[idx],
+                s: origBaseHsl[idx + 1],
+                l: origBaseHsl[idx + 2],
+              };
+            } else if (origBaseImg) {
+              // 降级：使用 RGB ImageData（会有转换损失）
               const baseW = stashedBaseWRef.current;
               const baseH = stashedBaseHRef.current;
               const baseX = Math.floor(Math.min(Math.max(texX / solverW * baseW, 0), baseW - 1));

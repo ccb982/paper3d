@@ -788,7 +788,7 @@ export class FluidEditor {
       colorCh as 1 | 2 | 3 | 4,
       'uint8',
     );
-    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'float'); // 使用 float 而非 half-float，便于 readPixels
+    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'half-float'); // 使用 half-float 平衡精度与带宽，Three.js readPixels 会自动转换回 Float32
     this.pressureGrid = new FluidGrid(this.config.resolution, 1, 'half-float'); // 压力场：单通道半精度浮点
   }
 

@@ -150,8 +150,16 @@ export interface FrameData {
 
   // ---------- 显示用纹理（导入后立即生成，供预览） ----------
   // 注意：这个纹理是根据原始调色板解码的，但尚未绑定到区域
-  baseTexture: ImageData | null;      // 临时底图（预览用）
-  residualTexture: ImageData | null;  // 临时残差图（预览用）
+  baseTexture: ImageData | null;      // 临时底图（预览用，RGB格式）
+  residualTexture: ImageData | null;  // 临时残差图（预览用，量化值）
+
+  // ---------- GPU合成用基础色HSL浮点数据 ----------
+  // 直接存储H/S/L浮点数，避免RGB转换损失，合成着色器直接读取
+  baseHslData: {
+    data: Float32Array;  // [H, S, L, A]，范围0~1
+    width: number;
+    height: number;
+  } | null;
 
   // ---------- 绑定状态 ----------
   boundRegionId: number | null;       // 绑定的区域 ID（RegionEntity.id），null 表示未绑定
