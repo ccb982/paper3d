@@ -528,17 +528,167 @@ export const BaseColorEditor: React.FC = () => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { regionIdTex: val });
   }, [activeFrameId, updateSkillFrame]);
 
-  const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
-  const [blockFlags, setBlockFlags] = useState(0n);
-  const [texSize, setTexSize] = useState(canvasWidth);  // 动态纹理分辨率，与全局画布尺寸同步
+  // ★ 动态纹理分辨率（必须在 handleResolutionChange 之前声明）
+  const [texSize, setTexSize] = useState(canvasWidth);
 
-  // ★ 关键修复：texSize 与全局 canvasWidth 同步，确保与主画布尺寸一致
+  // ★ 修改：仅在初始化时同步 canvasWidth，后续允许手动调整分辨率
   useEffect(() => {
-    if (canvasWidth && canvasWidth !== texSize) {
-      console.log(`[BaseColorEditor] texSize 同步：${texSize} → ${canvasWidth}（来自全局画布尺寸）`);
+    // 只有在没有任何帧数据时才自动同步（初始化阶段）
+    const hasFrameData = frames.some(f => f.bgImageData || f.baseTexture || f.bbox);
+    if (canvasWidth && canvasWidth !== texSize && !hasFrameData) {
+      console.log(`[BaseColorEditor] texSize 初始化同步：${texSize} → ${canvasWidth}`);
       setTexSize(canvasWidth);
     }
-  }, [canvasWidth]);
+  }, [canvasWidth, frames, texSize]);
+
+  // ★ 分辨率调整功能：缩放所有帧数据到新尺寸
+  const handleResolutionChange = useCallback((newSize: number) => {
+    // ★ 输入验证：确保分辨率在合理范围内
+    const minSize = 64;
+    const maxSize = 2048;
+    
+    if (isNaN(newSize) || newSize < minSize || newSize > maxSize) {
+      console.warn(`[分辨率调整] 无效值 ${newSize}，范围应为 ${minSize}~${maxSize}`);
+      // 恢复显示旧值
+      setTexSize(texSize);
+      return;
+    }
+    
+    if (newSize === texSize) return;
+    
+    console.log(`[分辨率调整] ${texSize}×${texSize} → ${newSize}×${newSize}`);
+    
+    // 保存历史（调整前）
+    saveHistory();
+    
+    const oldSize = texSize;
+    const scaleX = newSize / oldSize;
+    const scaleY = newSize / oldSize;
+    
+    // 缩放所有帧的数据
+    frames.forEach((frame) => {
+      const updates: Record<string, unknown> = {};
+      
+      // 1. 缩放背景图
+      if (frame.bgImageData) {
+        const srcCanvas = document.createElement('canvas');
+        srcCanvas.width = oldSize;
+        srcCanvas.height = oldSize;
+        const srcCtx = srcCanvas.getContext('2d')!;
+        srcCtx.putImageData(frame.bgImageData, 0, 0);
+        
+        const dstCanvas = document.createElement('canvas');
+        dstCanvas.width = newSize;
+        dstCanvas.height = newSize;
+        const dstCtx = dstCanvas.getContext('2d')!;
+        // 使用最近邻插值保留像素清晰度
+        dstCtx.imageSmoothingEnabled = false;
+        dstCtx.drawImage(srcCanvas, 0, 0, newSize, newSize);
+        
+        updates.bgImageData = dstCtx.getImageData(0, 0, newSize, newSize);
+      }
+      
+      // ★ 移除 baseTexture 和 residualTexture 的直接缩放
+      // 因为它们需要根据新的 regionIdTex 重新生成
+      // 将在后面通过 syncFrameTextures 统一生成，确保与 regionIdTex 同步
+      
+      // 4. 缩放 bbox（坐标和尺寸）
+      if (frame.bbox) {
+        const newBbox = {
+          x: Math.round(frame.bbox.x * scaleX),
+          y: Math.round(frame.bbox.y * scaleY),
+          w: Math.round(frame.bbox.w * scaleX),
+          h: Math.round(frame.bbox.h * scaleY),
+        };
+        // ★ 边界检查：确保 bbox 在画布范围内且尺寸有效
+        newBbox.x = Math.max(0, Math.min(newSize - 1, newBbox.x));
+        newBbox.y = Math.max(0, Math.min(newSize - 1, newBbox.y));
+        newBbox.w = Math.max(1, Math.min(newSize - newBbox.x, newBbox.w));
+        newBbox.h = Math.max(1, Math.min(newSize - newBbox.y, newBbox.h));
+        // 如果 bbox 有效则更新
+        if (newBbox.w > 0 && newBbox.h > 0) {
+          updates.bbox = newBbox;
+        } else {
+          console.warn(`[分辨率调整] 帧 ${frame.id} 的 bbox 缩放后无效，已丢弃`);
+        }
+      }
+      
+      // 5. 缩放 regionIdTex 和 deltaPacked（需要重采样）
+      // ★ 只有当 bbox 有效时才进行缩放
+      if (frame.regionIdTex && updates.bbox) {
+        const oldBbox = frame.bbox!;
+        const newBbox = updates.bbox;
+        
+        const oldW = oldBbox.w;
+        const oldH = oldBbox.h;
+        const newW = newBbox.w;
+        const newH = newBbox.h;
+        
+        // 创建新的 regionIdTex
+        const newRegionIdTex = new Uint8Array(newW * newH);
+        newRegionIdTex.fill(0);
+        
+        // 创建新的 deltaPacked
+        const newDeltaPacked = new Uint16Array(newW * newH);
+        newDeltaPacked.fill(0);
+        
+        // 最近邻重采样
+        for (let ny = 0; ny < newH; ny++) {
+          for (let nx = 0; nx < newW; nx++) {
+            // 反向映射到旧坐标
+            const oldPy = Math.min(oldH - 1, Math.floor(ny / scaleY));
+            const oldPx = Math.min(oldW - 1, Math.floor(nx / scaleX));
+            const oldIdx = oldPy * oldW + oldPx;
+            const newIdx = ny * newW + nx;
+            
+            newRegionIdTex[newIdx] = frame.regionIdTex[oldIdx];
+            if (frame.deltaPacked) {
+              newDeltaPacked[newIdx] = frame.deltaPacked[oldIdx];
+            }
+          }
+        }
+        
+        updates.regionIdTex = newRegionIdTex;
+        if (frame.deltaPacked) {
+          updates.deltaPacked = newDeltaPacked;
+        }
+      }
+      
+      // 6. 缩放 dashedPolygons（世界坐标不变，无需修改）
+      // 虚线多边形使用世界坐标 (0~1)，缩放画布尺寸后自动适配
+      
+      if (Object.keys(updates).length > 0) {
+        updateSkillFrame(frame.id, updates);
+      }
+    });
+    
+    // 7. 缩放 globalBbox
+    if (globalBbox) {
+      setGlobalBbox({
+        x: Math.round(globalBbox.x * scaleX),
+        y: Math.round(globalBbox.y * scaleY),
+        w: Math.round(globalBbox.w * scaleX),
+        h: Math.round(globalBbox.h * scaleY),
+      });
+    }
+    
+    // 8. 更新 texSize
+    setTexSize(newSize);
+    
+    // 9. ★ 重新生成所有帧的基础色和残差纹理（基于新的 regionIdTex 和 deltaPacked）
+    // 使用 setTimeout 确保 state 更新完成后再执行
+    setTimeout(() => {
+      for (const frame of frames) {
+        if (frame.regionIdTex && frame.regionIdTex.length > 0 && frame.bbox) {
+          syncFrameTextures(frame.id);
+        }
+      }
+      console.log(`[分辨率调整] 完成，已缩放 ${frames.length} 个帧，已重新生成纹理`);
+    }, 0);
+  }, [texSize, frames, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures]);
+
+  const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
+  const [blockFlags, setBlockFlags] = useState(0n);
 
   const [showColorInfoOnClick, setShowColorInfoOnClick] = useState(false);
   
@@ -2049,6 +2199,64 @@ export const BaseColorEditor: React.FC = () => {
         >
           + 新建帧
         </button>
+        {/* 分辨率选择器（支持自定义输入） */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '8px' }}>
+          <span style={{ fontSize: '11px', color: '#666' }}>分辨率:</span>
+          <input
+            type="text"
+            value={texSize}
+            onChange={(e) => {
+              const value = e.target.value;
+              // 只允许数字输入
+              const numericValue = value.replace(/[^0-9]/g, '');
+              e.target.value = numericValue;
+            }}
+            onBlur={(e) => {
+              const value = parseInt(e.target.value, 10);
+              handleResolutionChange(value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const value = parseInt(e.target.value, 10);
+                handleResolutionChange(value);
+                e.target.blur();
+              } else if (e.key === 'Escape') {
+                e.target.value = texSize.toString();
+                e.target.blur();
+              }
+            }}
+            style={{
+              width: '60px',
+              fontSize: '11px',
+              padding: '1px 4px',
+              textAlign: 'center',
+              border: '1px solid #d9d9d9',
+              borderRadius: '3px',
+            }}
+            title="输入自定义分辨率（64~2048），回车确认"
+          />
+          <span style={{ fontSize: '11px', color: '#999' }}>×{texSize}</span>
+          {/* 快捷尺寸按钮 */}
+          <div style={{ display: 'flex', gap: '2px' }}>
+            {[128, 256, 512, 1024].map(size => (
+              <button
+                key={size}
+                onClick={() => handleResolutionChange(size)}
+                style={{
+                  padding: '1px 6px',
+                  fontSize: '10px',
+                  cursor: 'pointer',
+                  border: texSize === size ? '1px solid #1890ff' : '1px solid #d9d9d9',
+                  background: texSize === size ? '#e6f7ff' : '#fff',
+                  color: texSize === size ? '#1890ff' : '#666',
+                  borderRadius: '2px',
+                }}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
         <button
           onClick={() => syncGlobalBboxFromCurrentFrame()}
           disabled={!currentFrame?.bbox}
