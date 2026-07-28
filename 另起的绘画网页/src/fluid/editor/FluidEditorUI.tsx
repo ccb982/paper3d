@@ -977,8 +977,9 @@ export const FluidEditorUI: React.FC = () => {
     bbox: { x: number; y: number; w: number; h: number },
     blockFlags: bigint,
   ): ImageData => {
-    const { w, h } = bbox;
+    const { x: offsetX, y: offsetY, w, h } = bbox;
     const data = residualImageData.data;
+    const texSize = residualImageData.width; // 全尺寸图像的宽度
 
     // 统计调整的像素数和块数
     let adjustedPixelCount = 0;
@@ -986,7 +987,7 @@ export const FluidEditorUI: React.FC = () => {
 
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
-        // 计算该像素所属的自适应分块索引
+        // 计算该像素所属的自适应分块索引（使用局部坐标，正确）
         const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
         // 判断该块的量化范围
         const range = getRangeForBlock(blockFlags, blockIdx);
@@ -994,11 +995,13 @@ export const FluidEditorUI: React.FC = () => {
         if (range === 0.25) {
           // 记录小范围块
           smallRangeBlocks.add(blockIdx);
-          // 公式推导：
+          // ✅ 修正：使用全局坐标索引 ImageData（与 buildFluidTexturesFromRawFrame 一致）
           // 原始反量化: dH = (val * 2 - 1) * 0.25
           // 解算器反量化: dH' = (val' * 2 - 1) * 0.5
           // 令 dH = dH'，解得: val' = val * 0.5 + 0.25
-          const idx = (py * w + px) * 4;
+          const globalX = offsetX + px;
+          const globalY = offsetY + py;
+          const idx = (globalY * texSize + globalX) * 4;
           data[idx] = Math.round(data[idx] * 0.5 + 64);       // R (H): 255*0.25=64
           data[idx + 1] = Math.round(data[idx + 1] * 0.5 + 64); // G (S)
           data[idx + 2] = Math.round(data[idx + 2] * 0.5 + 64); // B (L)
