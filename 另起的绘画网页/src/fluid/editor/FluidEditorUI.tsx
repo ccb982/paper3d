@@ -3,7 +3,8 @@ import * as THREE from 'three';
 import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
 import { useAppStore } from '../../stores/useAppStore';
-import { getAdaptiveBlockIndex, getRangeForBlock } from '../../core/ftxCore';
+import { getAdaptiveBlockIndex, getRangeForBlock, unpackRGB565 } from '../../core/ftxCore';
+import { hslToRgb } from '../../utils/colorCompressor';
 
 // ============================================================
 // 子组件：操作面板（新增 - 点击注入测试）
@@ -534,6 +535,13 @@ export const FluidEditorUI: React.FC = () => {
   /** 残差量化范围（可调，后续可加 UI 控制） */
   const residualRangeHRef = useRef(0.5);
   const residualRangeSLRef = useRef(0.5);
+  /** 导入时 stash 的原始帧数据（供像素比较器使用） */
+  const stashedBaseRef = useRef<ImageData | null>(null);
+  const stashedResidualRef = useRef<ImageData | null>(null);
+  const stashedResidualWRef = useRef(0);
+  const stashedResidualHRef = useRef(0);
+  const stashedBaseWRef = useRef(0);
+  const stashedBaseHRef = useRef(0);
 
   const [rendererReady, setRendererReady] = useState(false);
 
@@ -995,8 +1003,83 @@ export const FluidEditorUI: React.FC = () => {
     return residualImageData;
   };
 
+  // ==================== 独立解析 FTX 帧数据 ====================
+  /** 
+   * 从原始 FTX 数据独立生成流体编辑器所需的基础色和残差纹理。
+   * 
+   * ★ 与 decodeFrameToTextures 的关键区别：
+   *   - baseTexture: 纯基础色 HSL→RGB（一致）
+   *   - residualTexture: 原始量化残差值（qH→R, qS→G, qL→B），而非合成后的 RGB
+   * 
+   * 这样流体解算器的合成着色器可以正确解码残差：d = (val * 2 - 1) * range
+   */
+  const buildFluidTexturesFromRawFrame = (
+    rawData: {
+      rawRegionIdTex: Uint8Array;
+      rawDeltaPacked: Uint16Array | null;
+      rawBbox: { x: number; y: number; w: number; h: number };
+      rawBlockFlags: bigint;
+      sourceResolution: number;
+    },
+    palette: { h: number; s: number; l: number; id: number }[],
+  ): { baseTexture: ImageData; residualTexture: ImageData } => {
+    const { rawRegionIdTex, rawDeltaPacked, rawBbox, rawBlockFlags, sourceResolution } = rawData;
+    const bbox = rawBbox;
+    const texSize = sourceResolution;
+    const totalPixels = bbox.w * bbox.h;
+
+    const baseImageData = new ImageData(texSize, texSize);
+    const baseData = baseImageData.data;
+    const resImageData = new ImageData(texSize, texSize);
+    const resData = resImageData.data;
+
+    if (totalPixels === 0 || !rawDeltaPacked || rawDeltaPacked.length === 0) {
+      return { baseTexture: baseImageData, residualTexture: resImageData };
+    }
+
+    // 构建调色板映射
+    const colorMap = new Map<number, { h: number; s: number; l: number }>();
+    for (const c of palette) {
+      colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
+    }
+
+    for (let i = 0; i < totalPixels; i++) {
+      const colorId = rawRegionIdTex[i] || 0;
+      if (colorId === 0) continue;
+      const baseColor = colorMap.get(colorId);
+      if (!baseColor) continue;
+
+      const px = i % bbox.w;
+      const py = Math.floor(i / bbox.w);
+      const packed = rawDeltaPacked[i];
+      const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+
+      const globalX = bbox.x + px;
+      const globalY = bbox.y + py;
+      const idx = (globalY * texSize + globalX) * 4;
+
+      // baseTexture: 纯基础色 HSL→RGB
+      const baseRgb = hslToRgb(baseColor.h, baseColor.s, baseColor.l);
+      baseData[idx] = baseRgb.r;
+      baseData[idx + 1] = baseRgb.g;
+      baseData[idx + 2] = baseRgb.b;
+      baseData[idx + 3] = 255;
+
+      // ★ residualTexture: 存储原始量化残差值（非合成RGB）
+      // R = qH/63 * 255, G = qS/31 * 255, B = qL/31 * 255
+      // 解算器着色器: dH = (residual.r * 2 - 1) * range
+      //   residual.r = qH/63, dH = (qH/63 * 2 - 1) * range → 与原反量化公式一致
+      resData[idx] = Math.round((qH / 63) * 255);
+      resData[idx + 1] = Math.round((qS / 31) * 255);
+      resData[idx + 2] = Math.round((qL / 31) * 255);
+      resData[idx + 3] = 255;
+    }
+
+    return { baseTexture: baseImageData, residualTexture: resImageData };
+  };
+
   // ==================== FTX 帧数据 → 流体编辑器加载 ====================
-  /** 手动加载当前活动图层的残差纹理到流体编辑器 */
+  /** 从原始 FTX 数据独立生成纹理并加载到流体编辑器 */
   const loadFrameResidual = () => {
     if (!editor) return;
 
@@ -1008,64 +1091,92 @@ export const FluidEditorUI: React.FC = () => {
     }
 
     const frameData = state.frameDataMap[layerId];
-    if (!frameData?.residualTexture) {
-      alert(`图层 "${layerId}" 没有残差纹理数据`);
+    if (!frameData?.rawRegionIdTex || !frameData?.rawDeltaPacked || !frameData?.rawBbox) {
+      alert(`图层 "${layerId}" 没有完整的 FTX 原始数据`);
       return;
     }
 
-    // ===== 导入前状态日志 =====
-    console.log(`\n========== [FTX导入] 开始加载残差纹理 ==========`);
+    console.log(`\n========== [FTX导入] 独立解析帧数据 ==========`);
     console.log(`[FTX导入] 活动图层: ${layerId}`);
-    console.log(`[FTX导入] 残差纹理 ImageData: ${frameData.residualTexture.width}x${frameData.residualTexture.height}, dataLen=${frameData.residualTexture.data.length}`);
-    const solverRes = config.resolution;
-    console.log(`[FTX导入] 求解器分辨率: ${solverRes.w}x${solverRes.h}`);
-    console.log(`[FTX导入] 尺寸匹配: ${frameData.residualTexture.width === solverRes.w && frameData.residualTexture.height === solverRes.h}`);
-    
-    // 残差纹理前10像素
-    const rd = frameData.residualTexture.data;
-    console.log(`[FTX导入] 残差前10像素 RGBA: ${Array.from(rd.slice(0, 40)).join(',')}`);
-    
-    // 残差非零像素统计
+    console.log(`[FTX导入] 原始数据: bbox=(${frameData.rawBbox.x},${frameData.rawBbox.y},${frameData.rawBbox.w}x${frameData.rawBbox.h}), texSize=${frameData.sourceResolution}`);
+    console.log(`[FTX导入] regionIdTex大小=${frameData.rawRegionIdTex.length}, deltaPacked大小=${frameData.rawDeltaPacked.length}`);
+
+    // ★ 读取共享调色板
+    const palette = state.skillGroupEditor.sharedBaseColors;
+    console.log(`[FTX导入] 调色板色块数: ${palette.length}`);
+
+    // ★ 独立生成正确的纹理（残差 = 量化值，而非合成RGB）
+    const { baseTexture: newBase, residualTexture: newResidual } = buildFluidTexturesFromRawFrame(
+      {
+        rawRegionIdTex: frameData.rawRegionIdTex,
+        rawDeltaPacked: frameData.rawDeltaPacked,
+        rawBbox: frameData.rawBbox,
+        rawBlockFlags: frameData.rawBlockFlags,
+        sourceResolution: frameData.sourceResolution,
+      },
+      palette,
+    );
+
+    // 残差统计
+    const rd = newResidual.data;
     let resNonZero = 0;
     for (let i = 0; i < rd.length; i += 4) {
       if (rd[i] !== 0 || rd[i+1] !== 0 || rd[i+2] !== 0) resNonZero++;
     }
-    console.log(`[FTX导入] 残差非零像素: ${resNonZero}/${rd.length/4} (${(resNonZero*100/(rd.length/4)).toFixed(1)}%)`);
-    
-    // 导入前配置
+    console.log(`[FTX导入] 生成的残差纹理: ${newResidual.width}x${newResidual.height}, 非零像素=${resNonZero}/${newResidual.width*newResidual.height}`);
+    console.log(`[FTX导入] 残差前10像素 RGB: ${Array.from(rd.slice(0, 30)).join(',')}`);
+
+    // ===== stash 原始数据，供像素比较器使用 =====
+    stashedResidualRef.current = new ImageData(
+      new Uint8ClampedArray(newResidual.data),
+      newResidual.width,
+      newResidual.height,
+    );
+    stashedResidualWRef.current = newResidual.width;
+    stashedResidualHRef.current = newResidual.height;
+
+    stashedBaseRef.current = new ImageData(
+      new Uint8ClampedArray(newBase.data),
+      newBase.width,
+      newBase.height,
+    );
+    stashedBaseWRef.current = newBase.width;
+    stashedBaseHRef.current = newBase.height;
+    console.log(`[FTX导入] stash 完成: base=${newBase.width}x${newBase.height}, residual=${newResidual.width}x${newResidual.height}`);
+
+    // ===== 导入前状态日志 =====
+    const solverRes = config.resolution;
+    console.log(`[FTX导入] 求解器分辨率: ${solverRes.w}x${solverRes.h}`);
+    console.log(`[FTX导入] 尺寸匹配: ${newResidual.width === solverRes.w && newResidual.height === solverRes.h}`);
     console.log(`[FTX导入] 导入前配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
-    // ===== 关键修复 1：强制重置所有物理场 =====
+    // ===== 步骤 1：强制重置所有物理场 =====
     console.log(`[FTX导入] 步骤1: initFields() 重置物理场...`);
     editor.initFields();
 
-    // ===== 关键修复 2：残差模式配置 =====
+    // ===== 步骤 2：残差模式配置 =====
     console.log(`[FTX导入] 步骤2: 配置残差模式 (关闭注入/重力, 边界=clamp)...`);
     updateConfig({
       injection: { ...config.injection, enabled: false },
       gravity: 0,
       colorBoundaryMode: 'clamp',
     });
-    console.log(`[FTX导入] 导入后配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
-    // ===== 关键修复 3：根据 blockFlags 预调整残差量化值 =====
-    // 基础色编辑器使用自适应量化：range=0.25 或 0.5
-    // 流体解算器统一使用 range=0.5 反量化
-    // 因此需要将 range=0.25 的像素值乘以 0.5，使其在 0.5 范围下反量化结果一致
+    // ===== 步骤 3：根据 blockFlags 预调整残差量化值 =====
     console.log(`[FTX导入] 步骤3: 根据 blockFlags 预调整残差量化值...`);
     const adjustedResidual = adjustResidualForUniformRange(
-      frameData.residualTexture,
-      frameData.rawBbox!,
+      newResidual,
+      frameData.rawBbox,
       frameData.rawBlockFlags,
     );
-    console.log(`[FTX导入] 残差调整完成, 前10像素 RGBA: ${Array.from(adjustedResidual.data.slice(0, 40)).join(',')}`);
+    console.log(`[FTX导入] 残差调整完成`);
 
-    // ===== 关键修复 4：缩放 + 上传残差 =====
+    // ===== 步骤 4：上传残差 =====
     console.log(`[FTX导入] 步骤4: initializeColorFromImageData() 上传残差...`);
     editor.initializeColorFromImageData(adjustedResidual);
 
-    // ===== 关键修复 5：切到颜色视图验证数据 =====
-    console.log(`[FTX导入] 步骤4: 切换到颜色视图`);
+    // ===== 步骤 5：切到颜色视图 =====
+    console.log(`[FTX导入] 步骤5: 切换到颜色视图`);
     setView('color');
     console.log(`========== [FTX导入] 加载完成 ==========\n`);
   };
@@ -1191,60 +1302,61 @@ export const FluidEditorUI: React.FC = () => {
             const simResidual = { h: simSample.residualH, s: simSample.residualS, l: simSample.residualL };
             const velMag = Math.sqrt(simSample.velX * simSample.velX + simSample.velY * simSample.velY);
 
-            // 2. 从 Store 获取原始数据
-            const state = useAppStore.getState();
-            const layerId = state.activeLayerId;
+            // 2. 从 stash 的原始帧数据读取（loadFrameResidual 时深拷贝存储）
+            const origBaseImg = stashedBaseRef.current;
+            const origResImg = stashedResidualRef.current;
+            const solverW = config.resolution.w;
+            const solverH = config.resolution.h;
+
             let origResidual = { h: 0, s: 0, l: 0 };
             let baseColor: { h: number; s: number; l: number } | null = null;
             let origComposite = { h: 0, s: 0, l: 0 };
             let simComposite = { h: 0, s: 0, l: 0 };
 
-            if (layerId) {
-              const frameData = state.frameDataMap[layerId];
-              if (frameData) {
-                // 原始残差纹理（ImageData，Y向下）
-                const resImg = frameData.residualTexture;
-                if (resImg) {
-                  const resX = Math.floor(Math.min(Math.max(texX, 0), resImg.width - 1));
-                  const resY = Math.floor(Math.min(Math.max(texY, 0), resImg.height - 1));
-                  const idx = (resY * resImg.width + resX) * 4;
-                  origResidual = {
-                    h: resImg.data[idx] / 255,
-                    s: resImg.data[idx + 1] / 255,
-                    l: resImg.data[idx + 2] / 255,
-                  };
-                }
+            // 原始残差纹理（从 stash 读取，尺寸可能与解算器不同）
+            if (origResImg) {
+              const resW = stashedResidualWRef.current;
+              const resH = stashedResidualHRef.current;
+              // 坐标映射：(texX,texY) 在解算器空间 → 原始纹理空间
+              const resX = Math.floor(Math.min(Math.max(texX / solverW * resW, 0), resW - 1));
+              const resY = Math.floor(Math.min(Math.max(texY / solverH * resH, 0), resH - 1));
+              const idx = (resY * resW + resX) * 4;
+              origResidual = {
+                h: origResImg.data[idx] / 255,
+                s: origResImg.data[idx + 1] / 255,
+                l: origResImg.data[idx + 2] / 255,
+              };
+            }
 
-                // 原始基础纹理（ImageData，Y向下）
-                const baseImg = frameData.baseTexture;
-                if (baseImg) {
-                  const baseX = Math.floor(Math.min(Math.max(texX, 0), baseImg.width - 1));
-                  const baseY = Math.floor(Math.min(Math.max(texY, 0), baseImg.height - 1));
-                  const idx = (baseY * baseImg.width + baseX) * 4;
-                  const br = baseImg.data[idx] / 255;
-                  const bg = baseImg.data[idx + 1] / 255;
-                  const bb = baseImg.data[idx + 2] / 255;
-                  baseColor = rgbToHsl(br, bg, bb);
-                }
+            // 原始基础色纹理（从 stash 读取）
+            if (origBaseImg) {
+              const baseW = stashedBaseWRef.current;
+              const baseH = stashedBaseHRef.current;
+              const baseX = Math.floor(Math.min(Math.max(texX / solverW * baseW, 0), baseW - 1));
+              const baseY = Math.floor(Math.min(Math.max(texY / solverH * baseH, 0), baseH - 1));
+              const idx = (baseY * baseW + baseX) * 4;
+              const br = origBaseImg.data[idx] / 255;
+              const bg = origBaseImg.data[idx + 1] / 255;
+              const bb = origBaseImg.data[idx + 2] / 255;
+              baseColor = rgbToHsl(br, bg, bb);
+            }
 
-                // 如果有基础色，计算合成值
-                if (baseColor) {
-                  // 层级2：模拟器残差 + 基础色
-                  simComposite = computeCompositeHsl(
-                    baseColor,
-                    { r: simResidual.h, g: simResidual.s, b: simResidual.l },
-                    residualRangeHRef.current,
-                    residualRangeSLRef.current,
-                  );
-                  // 层级2：原始残差 + 基础色
-                  origComposite = computeCompositeHsl(
-                    baseColor,
-                    { r: origResidual.h, g: origResidual.s, b: origResidual.l },
-                    residualRangeHRef.current,
-                    residualRangeSLRef.current,
-                  );
-                }
-              }
+            // 如果有基础色，计算合成值
+            if (baseColor) {
+              // 层级2：模拟器残差 + 基础色
+              simComposite = computeCompositeHsl(
+                baseColor,
+                { r: simResidual.h, g: simResidual.s, b: simResidual.l },
+                residualRangeHRef.current,
+                residualRangeSLRef.current,
+              );
+              // 层级2：原始残差 + 基础色（原始残差是未调整的，需同样应用 blockFlags 调整）
+              origComposite = computeCompositeHsl(
+                baseColor,
+                { r: origResidual.h, g: origResidual.s, b: origResidual.l },
+                residualRangeHRef.current,
+                residualRangeSLRef.current,
+              );
             }
 
             // 计算差值
@@ -1305,6 +1417,13 @@ export const FluidEditorUI: React.FC = () => {
             <div className="sample-row">
               <span className="sample-label">坐标</span>
               <span className="sample-value">({sampleInfo.px}, {sampleInfo.py})</span>
+            </div>
+            <div className="sample-row">
+              <span className="sample-label">数据源</span>
+              <span className="sample-value" style={{ fontSize: '10px' }}>
+                残差: {stashedResidualRef.current ? `${stashedResidualWRef.current}x${stashedResidualHRef.current}` : '❌ 未加载'} | 
+                基础色: {stashedBaseRef.current ? `${stashedBaseWRef.current}x${stashedBaseHRef.current}` : '❌ 未加载'}
+              </span>
             </div>
 
             {/* 基础色（参考） */}
