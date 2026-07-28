@@ -223,9 +223,11 @@ export class FluidEditor {
     // ★ 0. 处理待定注入队列（UI 交互，一次性注入，不乘 dt）
     if (this.pendingInjection) {
       const config = this.pendingInjection;
-      // 统一坐标系：用户Y(0=顶,1=底) → GPU UV(0=底,1=顶)，负Y=向下
+      // flipY=false: UV(0,0)=顶部，与用户坐标系一致
+      // 位置：用户Y(0=顶,1=底) = UV.y，无需转换
+      // 速度：用户约定负Y=向下，但 flipY=false 时正Y=向下，所以取反
       const texPos = {
-        position: { x: config.position.x, y: 1.0 - config.position.y },
+        position: { x: config.position.x, y: config.position.y },
         radius: config.radius,
       };
       // 颜色注入：直接覆盖（rate=1.0，不受 dt 影响）
@@ -235,10 +237,10 @@ export class FluidEditor {
         1.0,
         texPos,
       );
-      // 速度注入：直接累加（不乘 dt），负Y=向下
+      // 速度注入：负Y=向下，取反后注入
       this.injector.injectVelocity(
         this.velocityGrid,
-        { x: config.velocity.x, y: config.velocity.y },
+        { x: config.velocity.x, y: -config.velocity.y },
         texPos,
       );
       this.pendingInjection = null;
@@ -862,34 +864,6 @@ export class FluidEditor {
       }`);
     }
 
-    // ===== 垂直翻转 =====
-    // 残差纹理来自基础色编辑器（左上原点，Y向下），流体解算器纹理为左下原点（Y向上）。
-    // 解算器默认 flipY=true 会把纹理底部映射到世界左下，但残差数据的"底部"实际是原始图像的顶部，
-    // 因此需要先翻转 ImageData，使翻转后的底部 = 原始顶部，配合 flipY=true 才能正确对齐世界坐标。
-    // 注：此翻转仅影响残差纹理导入，不影响底图等其他纹理。
-    {
-      console.log(`[FluidEditor.initializeColor] 执行垂直翻转 (补偿主画布与流体纹理坐标差异)`);
-      const flipCanvas = document.createElement('canvas');
-      flipCanvas.width = w;
-      flipCanvas.height = h;
-      const flipCtx = flipCanvas.getContext('2d')!;
-      // Y 轴取反 + 平移，使后续 putImageData 的图像上下颠倒
-      flipCtx.translate(0, h);
-      flipCtx.scale(1, -1);
-      // putImageData 不受 transform 影响，需先放入再 drawImage 到自身实现翻转
-      const tmpCanvas = document.createElement('canvas');
-      tmpCanvas.width = w;
-      tmpCanvas.height = h;
-      const tmpCtx = tmpCanvas.getContext('2d')!;
-      tmpCtx.putImageData(new ImageData(new Uint8ClampedArray(data), w, h), 0, 0);
-      flipCtx.drawImage(tmpCanvas, 0, 0);
-      const flipped = flipCtx.getImageData(0, 0, w, h);
-      data = flipped.data;
-      console.log(`[FluidEditor.initializeColor] 翻转完成, 前10像素: ${
-        Array.from(data.slice(0, 40)).join(',')
-      }`);
-    }
-
     // 统计非零像素
     let nonZero = 0;
     for (let i = 0; i < data.length; i += 4) {
@@ -1001,7 +975,7 @@ export class FluidEditor {
       texFormat,
       texType,
     );
-    // flipY=true（默认）：底部-left GPU原点，UV(0,0)=底部，负Y=向下
+    tex.flipY = false; // 统一坐标系：顶部=UV(0,0)，与主画布一致
     tex.needsUpdate = true;
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;

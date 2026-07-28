@@ -89,10 +89,10 @@ export class FluidOperations {
   applyGravity(grid: FluidGrid, dt: number, gravity: number): void {
     if (gravity === 0) return;
 
-    // 统一坐标系：负Y=向下，正gravity → -gravity*dt → 负vel → 向下
+    // flipY=false: 正Y=向下，与用户重力方向一致，直接注入
     this.injector.injectVelocity(
       grid,
-      { x: 0, y: -gravity * dt },
+      { x: 0, y: gravity * dt },
       { global: true },
     );
   }
@@ -118,9 +118,10 @@ export class FluidOperations {
 
     const rate = config.rate * dt;
 
-    // 统一坐标系：用户Y(0=顶,1=底) → GPU UV(0=底,1=顶)，负Y=向下
+    // flipY=false: UV(0,0)=顶部，与用户坐标系一致，位置无需转换
+    // 速度：用户约定负Y=向下，但 flipY=false 时正Y=向下，所以取反
     const texPos: InjectionOptions = {
-      position: { x: config.position.x, y: 1.0 - config.position.y },
+      position: { x: config.position.x, y: config.position.y },
       radius: config.radius,
     };
 
@@ -137,10 +138,10 @@ export class FluidOperations {
       texPos,
     );
 
-    // 速度注入（负Y=向下，不再取反）
+    // 速度注入（负Y=向下，取反后注入）
     this.injector.injectVelocity(
       gridVelocity,
-      { x: config.velocity.x, y: config.velocity.y },
+      { x: config.velocity.x, y: -config.velocity.y },
       texPos,
     );
   }

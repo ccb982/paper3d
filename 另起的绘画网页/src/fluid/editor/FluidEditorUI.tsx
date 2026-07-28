@@ -638,7 +638,7 @@ export const FluidEditorUI: React.FC = () => {
       vertexShader: `
         varying vec2 vUv;
         void main() {
-          vUv = uv;
+          vUv = vec2(uv.x, 1.0 - uv.y); // flipY=false: 补偿平面几何UV(0,0)=底部
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -687,7 +687,7 @@ export const FluidEditorUI: React.FC = () => {
       vertexShader: `
         varying vec2 vUv;
         void main() {
-          vUv = uv;
+          vUv = vec2(uv.x, 1.0 - uv.y); // flipY=false: 补偿平面几何UV(0,0)=底部
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -731,7 +731,7 @@ export const FluidEditorUI: React.FC = () => {
       vertexShader: /* glsl */ `
         varying vec2 vUv;
         void main() {
-          vUv = uv;
+          vUv = vec2(uv.x, 1.0 - uv.y); // flipY=false: 补偿平面几何UV(0,0)=底部
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -773,10 +773,13 @@ export const FluidEditorUI: React.FC = () => {
           vec3 baseHSL = rgb_to_hsl(baseRGBA.rgb);
 
           // 反量化残差（恢复 HSL 增量）
-          // 注意：WebGL 从 uint8 纹理采样已自动归一化到 [0,1]，无需再除以 255
-          float dH = (residual.r - 0.5) * uResidualRangeH;
-          float dS = (residual.g - 0.5) * uResidualRangeSL;
-          float dL = (residual.b - 0.5) * uResidualRangeSL;
+          // 编码公式：qH = round(((dH + range) / (2 * range)) * 255)
+          // 解码公式：dH = (qH/255 * 2 - 1) * range = (residual.r * 2.0 - 1.0) * range
+          // 注意：WebGL 从 uint8 纹理采样已自动归一化到 [0,1]（即 qH/255）
+          // 正确范围：[-range, +range]，之前错误地使用 (residual.r - 0.5) * range 导致范围减半
+          float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
+          float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
+          float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
 
           // 叠加（色相环绕，饱和度/明度钳制）
           float finalH = fract(baseHSL.r + dH);
@@ -817,6 +820,7 @@ export const FluidEditorUI: React.FC = () => {
       );
       tex.needsUpdate = true;
       tex.minFilter = THREE.LinearFilter;
+      tex.flipY = false; // 统一坐标系：顶部=UV(0,0)
       tex.magFilter = THREE.LinearFilter;
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
