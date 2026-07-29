@@ -241,9 +241,7 @@ export class FluidOperations {
     for (const src of this.continuousSources) {
       if (shouldLog) {
         const c = src.config;
-        const incX = c.velocity.x * dt;
-        const incY = c.velocity.y * dt;
-        console.log(`[初速度] 每帧应用 源#${src.id}: 初速度=(${c.velocity.x.toFixed(2)},${c.velocity.y.toFixed(2)}) px/s × dt=${dt.toFixed(4)}s → 每帧增量=(${incX.toFixed(4)},${incY.toFixed(4)}) px`);
+        console.log(`[初速度] 每帧应用 源#${src.id}: 速度=(${c.velocity.x.toFixed(2)},${c.velocity.y.toFixed(2)}) px/s (直接注入，不乘dt), dt=${dt.toFixed(4)}s`);
       }
       this.applyInjection(gridColor, gridVelocity, dt, src.config);
     }
@@ -318,15 +316,20 @@ export class FluidOperations {
    * 注意：config 参数必须已经通过接口适配层转换为纹理坐标。
    * 本方法只负责纯粹的物理注入逻辑，不关心坐标系转换。
    *
+   * ⚠️ 速度注入语义修正：
+   *   config.velocity 直接作为速度值（px/s）注入，不再乘以 dt，
+   *   确保注入速度足够大，能够与重力抗衡。
+   *   因此 dt 参数当前未使用（保留以兼容调度接口）。
+   *
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
-   * @param dt 时间步长（秒）
+   * @param _dt 时间步长（秒）—— 当前未使用，保留以匹配调度接口
    * @param config 注入源配置（已转换为纹理坐标）
    */
   applyInjection(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
-    dt: number,
+    _dt: number,
     config: InjectionConfig,
   ): void {
     if (!config.enabled) return;
@@ -356,11 +359,13 @@ export class FluidOperations {
     );
 
     // ★ 速度注入（持续注入场景）：config.velocity 是速度值（px/s），
-    //   每帧增量 = velocity * dt，避免每帧累加完整速度导致速度场爆炸。
-    //   （一次性注入 applyOneShotInjection 不乘 dt，因为它是瞬时冲量）
+    //   直接注入速度值，不乘以 dt。
+    //   injectVelocity 着色器中直接 current += uVel，uVel 单位是 px/s。
+    //   修正前错误地乘以了 dt，导致注入速度过小（如 80 × 0.007 ≈ 0.56 px/s），
+    //   被重力（250 × 0.007 ≈ 1.75 px/s 每帧增量）迅速淹没，流体只会向下流。
     this.injector.injectVelocity(
       gridVelocity,
-      { x: config.velocity.x * dt, y: config.velocity.y * dt },
+      { x: config.velocity.x, y: config.velocity.y },
       texPos,
     );
   }

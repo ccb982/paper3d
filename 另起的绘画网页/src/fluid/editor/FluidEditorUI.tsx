@@ -11,6 +11,17 @@ import { hslToRgb } from '../../utils/colorCompressor';
 // ============================================================
 type InjectMode = 'water' | 'color' | 'velocity';
 
+// 持续注入源快照类型
+type ContinuousSourceSnapshot = {
+  id: number;
+  position: { x: number; y: number };
+  radius: number;
+  velocity: { x: number; y: number };
+  color: [number, number, number, number];
+  rate: number;
+  enabled: boolean;
+};
+
 const OperationsPanel: React.FC<{
   config: FluidEditorConfig;
   onConfigChange: (updates: Partial<FluidEditorConfig>) => void;
@@ -29,9 +40,10 @@ const OperationsPanel: React.FC<{
   setDirectionY: (v: number) => void;
   speedMagnitude: number;
   setSpeedMagnitude: (v: number) => void;
-  activeContinuousId: number | null;
-  onContinuousParamsChange: () => void;
-  onClearContinuous: () => void;
+  // ★ 多源列表管理
+  sources: ContinuousSourceSnapshot[];
+  onRemoveSource: (id: number) => void;
+  onClearAllSources: () => void;
 }> = ({
   config,
   onConfigChange,
@@ -49,9 +61,9 @@ const OperationsPanel: React.FC<{
   setDirectionY,
   speedMagnitude,
   setSpeedMagnitude,
-  activeContinuousId,
-  onContinuousParamsChange,
-  onClearContinuous,
+  sources,
+  onRemoveSource,
+  onClearAllSources,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
     { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
@@ -94,10 +106,7 @@ const OperationsPanel: React.FC<{
             {modes.map((mode) => (
               <button
                 key={mode.key}
-                onClick={() => {
-                  setInjectMode(mode.key);
-                  onContinuousParamsChange();
-                }}
+                onClick={() => setInjectMode(mode.key)}
                 style={{
                   flex: 1,
                   padding: '6px 4px',
@@ -157,11 +166,7 @@ const OperationsPanel: React.FC<{
             max="0.3"
             step="0.005"
             value={injectRadius}
-            onChange={(e) => {
-              const val = parseFloat(e.target.value);
-              setInjectRadius(val);
-              onContinuousParamsChange();
-            }}
+            onChange={(e) => setInjectRadius(parseFloat(e.target.value))}
             style={{ width: '100%' }}
           />
         </div>
@@ -175,11 +180,7 @@ const OperationsPanel: React.FC<{
             max="3.0"
             step="0.1"
             value={injectStrength}
-            onChange={(e) => {
-              const val = parseFloat(e.target.value);
-              setInjectStrength(val);
-              onContinuousParamsChange();
-            }}
+            onChange={(e) => setInjectStrength(parseFloat(e.target.value))}
             style={{ width: '100%' }}
           />
         </div>
@@ -201,7 +202,6 @@ const OperationsPanel: React.FC<{
                     onClick={() => {
                       setDirectionX(dx);
                       setDirectionY(dy);
-                      onContinuousParamsChange();
                     }}
                     title={title}
                     style={{
@@ -235,10 +235,7 @@ const OperationsPanel: React.FC<{
                 max="500"
                 step="5"
                 value={speedMagnitude}
-                onChange={(e) => {
-                  setSpeedMagnitude(parseFloat(e.target.value));
-                  onContinuousParamsChange();
-                }}
+                onChange={(e) => setSpeedMagnitude(parseFloat(e.target.value))}
                 style={{ flex: 1 }}
               />
               <span className="hint" style={{ width: '60px', textAlign: 'right' }}>{speedMagnitude.toFixed(0)} px/s</span>
@@ -355,9 +352,9 @@ const OperationsPanel: React.FC<{
           }}
         >
           <div>🖱️ <b>点击画布</b>即可在鼠标位置执行注入</div>
-          {activeContinuousId !== null && (
+          {continuousMode && (
             <div style={{ color: '#1976d2', marginTop: '2px' }}>
-              ⚡ 持续注入运行中（源 #{activeContinuousId}）
+              ⚡ 持续注入模式：每次点击<b>新增</b>一个注入源（共 {sources.length} 个活跃源）
             </div>
           )}
           <div style={{ marginTop: '2px' }}>
@@ -368,27 +365,145 @@ const OperationsPanel: React.FC<{
           </div>
         </div>
 
-        {/* 持续注入控制按钮 */}
-        {activeContinuousId !== null && (
-          <div style={{ marginTop: '8px', display: 'flex', gap: '4px' }}>
-            <button
-              onClick={() => {
-                setContinuousMode(false);
-                onClearContinuous();
-              }}
+        {/* 持续注入源列表（仅持续模式下显示） */}
+        {continuousMode && (
+          <div
+            style={{
+              marginTop: '8px',
+              borderTop: '1px solid #eee',
+              paddingTop: '8px',
+            }}
+          >
+            <div
               style={{
-                flex: 1,
-                padding: '6px',
-                fontSize: '11px',
-                background: '#f44336',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '6px',
               }}
             >
-              ⏹ 停止持续注入
-            </button>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  color: '#333',
+                }}
+              >
+                活跃注入源 ({sources.length})
+              </span>
+              {sources.length > 0 && (
+                <button
+                  onClick={onClearAllSources}
+                  style={{
+                    fontSize: '10px',
+                    background: '#f44336',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: '3px',
+                    padding: '2px 8px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  清空所有
+                </button>
+              )}
+            </div>
+            {/* 源列表（可滚动） */}
+            <div
+              style={{
+                maxHeight: '150px',
+                overflowY: 'auto',
+                border: '1px solid #e0e0e0',
+                borderRadius: '4px',
+                background: '#fff',
+              }}
+            >
+              {sources.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: '10px',
+                    color: '#999',
+                    padding: '8px',
+                    textAlign: 'center',
+                  }}
+                >
+                  暂无活跃源，点击画布添加
+                </div>
+              ) : (
+                sources.map((src) => {
+                  const speed = Math.hypot(src.velocity.x, src.velocity.y);
+                  // 根据颜色获取预览色
+                  const [h, s, l] = src.color;
+                  const rgbPreview = hslToRgb(h, s, l);
+                  const previewColor = `rgb(${Math.round(rgbPreview[0] * 255)}, ${Math.round(rgbPreview[1] * 255)}, ${Math.round(rgbPreview[2] * 255)})`;
+                  return (
+                    <div
+                      key={src.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '10px',
+                        padding: '4px 6px',
+                        borderBottom: '1px solid #f0f0f0',
+                        gap: '6px',
+                      }}
+                    >
+                      {/* 颜色预览点 + 源信息 */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          flex: 1,
+                          minWidth: 0,
+                        }}
+                      >
+                        {/* 颜色预览圆点 */}
+                        <div
+                          style={{
+                            width: '10px',
+                            height: '10px',
+                            borderRadius: '50%',
+                            background: previewColor,
+                            border: '1px solid #ccc',
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span
+                          style={{
+                            color: '#555',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={`位置: (${src.position.x.toFixed(2)}, ${src.position.y.toFixed(2)})\n半径: ${src.radius.toFixed(2)}\n速率: ${src.rate.toFixed(2)}\n速度: ${speed.toFixed(0)} px/s`}
+                        >
+                          #{src.id} ({src.position.x.toFixed(2)}, {src.position.y.toFixed(2)}) r={src.radius.toFixed(2)} v={speed.toFixed(0)}
+                        </span>
+                      </div>
+                      {/* 删除按钮 */}
+                      <button
+                        onClick={() => onRemoveSource(src.id)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#f44336',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          padding: '0 2px',
+                          lineHeight: 1,
+                          flexShrink: 0,
+                        }}
+                        title="删除此源"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -893,12 +1008,17 @@ export const FluidEditorUI: React.FC = () => {
     colorBoundaryMode: 'clamp',
   });
 
-  // ★ 持续注入源 ID 引用（null=无活跃源）
-  const continuousSourceIdRef = useRef<number | null>(null);
-  // ★ state 镜像（触发重渲染，让 UI 显示"持续注入运行中"提示）
-  const [activeContinuousId, setActiveContinuousId] = useState<number | null>(null);
-  // ★ 上次设置持续注入源的位置（供参数更新时使用）
-  const lastContinuousPosRef = useRef<{ x: number; y: number }>({ x: 0.5, y: 0.25 });
+  // ★ 持续注入源列表（多源模式，从 FluidEditor 获取快照）
+  const [continuousSources, setContinuousSources] = useState<ContinuousSourceSnapshot[]>([]);
+
+  // ★ 刷新持续注入源列表（增删后调用，同步 UI 状态）
+  const refreshSources = useCallback(() => {
+    if (!editor) {
+      setContinuousSources([]);
+      return;
+    }
+    setContinuousSources(editor.getContinuousSources());
+  }, [editor]);
 
   // ★ 构建注入配置（从当前 UI 状态）
   // 实际速度矢量 = 方向（归一化） × 速度大小（标量）
@@ -934,86 +1054,32 @@ export const FluidEditorUI: React.FC = () => {
     };
   }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude]);
 
-  // ★ 设置/更新持续注入源（点击画布时调用）
-  const setOrUpdateContinuousSource = useCallback((pos: { x: number; y: number }) => {
+  // ★ 删除单个持续注入源
+  const handleRemoveSource = useCallback((id: number) => {
     if (!editor) return;
-    lastContinuousPosRef.current = pos;
-    const config = buildInjectionConfig(pos);
-    const currentId = continuousSourceIdRef.current;
-    if (currentId !== null) {
-      // 使用 upsert 模式更新：如果源不存在会自动添加新源
-      const actualId = editor.updateContinuousInjection(currentId, config);
-      // ★ 如果 upsert 返回了新 ID（说明源被重建），同步 UI 引用
-      if (actualId !== currentId) {
-        continuousSourceIdRef.current = actualId;
-        setActiveContinuousId(actualId);
-      }
-    } else {
-      const newId = editor.addContinuousInjection(config);
-      continuousSourceIdRef.current = newId;
-      setActiveContinuousId(newId); // ★ 触发 UI 更新
-    }
-  }, [editor, buildInjectionConfig]);
+    editor.removeContinuousInjection(id);
+    refreshSources();
+  }, [editor, refreshSources]);
 
-  // ★ 移除持续注入源
-  const clearContinuousSource = useCallback(() => {
-    if (!editor) {
-      continuousSourceIdRef.current = null;
-      setActiveContinuousId(null);
-      return;
-    }
-    const id = continuousSourceIdRef.current;
-    if (id !== null) {
-      editor.removeContinuousInjection(id);
-    }
-    continuousSourceIdRef.current = null;
-    setActiveContinuousId(null);
-  }, [editor]);
-
-  // ★ 更新持续注入源参数（滑块变化时调用，保留位置）
-  const updateContinuousSourceParams = useCallback(() => {
+  // ★ 清空所有持续注入源
+  const handleClearAllSources = useCallback(() => {
     if (!editor) return;
-    const config = buildInjectionConfig(lastContinuousPosRef.current);
-    const currentId = continuousSourceIdRef.current;
-    if (currentId !== null) {
-      const actualId = editor.updateContinuousInjection(currentId, config);
-      // ★ 如果 upsert 返回了新 ID，同步 UI 引用
-      if (actualId !== currentId) {
-        continuousSourceIdRef.current = actualId;
-        setActiveContinuousId(actualId);
-      }
-    } else if (continuousMode) {
-      // ★ continuousMode 开启但没有活跃源 → 自动添加
-      const newId = editor.addContinuousInjection(config);
-      continuousSourceIdRef.current = newId;
-      setActiveContinuousId(newId);
-    }
-  }, [editor, buildInjectionConfig, continuousMode]);
+    editor.clearContinuousInjections();
+    refreshSources();
+  }, [editor, refreshSources]);
 
-  // ★ 当 continuousMode 关闭时，移除持续注入源
+  // ★ 当 continuousMode 关闭时，清空所有持续注入源
   useEffect(() => {
-    if (!continuousMode && continuousSourceIdRef.current !== null && editor) {
-      editor.removeContinuousInjection(continuousSourceIdRef.current);
-      continuousSourceIdRef.current = null;
-      setActiveContinuousId(null);
+    if (!continuousMode && editor) {
+      editor.clearContinuousInjections();
+      setContinuousSources([]);
     }
   }, [continuousMode, editor]);
 
-  // ★ 当 editor 实例变化时（如重建），重置源 ID 追踪
-  // 注意：editor 变化意味着内部 operations 列表已清空，
-  // 此时需要将 continuousSourceIdRef 置 null，后续首次点击会重新添加源
+  // ★ 当 editor 实例变化时（如重建），刷新源列表（旧源已不存在，将得到空列表）
   useEffect(() => {
-    if (!editor) {
-      // editor 为 null 时，清除所有追踪
-      continuousSourceIdRef.current = null;
-      setActiveContinuousId(null);
-    } else if (continuousSourceIdRef.current !== null) {
-      // editor 变了但有旧 ID：旧源已丢失，清除引用让下次点击重新添加
-      continuousSourceIdRef.current = null;
-      setActiveContinuousId(null);
-    }
-    // 同时确保 continuousMode 状态也同步
-  }, [editor]);
+    refreshSources();
+  }, [editor, refreshSources]);
 
   // ==================== 显示循环（计算 + 显示共用一个渲染器） ====================
   useEffect(() => {
@@ -1669,9 +1735,9 @@ export const FluidEditorUI: React.FC = () => {
           setDirectionY={setDirectionY}
           speedMagnitude={speedMagnitude}
           setSpeedMagnitude={setSpeedMagnitude}
-          activeContinuousId={activeContinuousId}
-          onContinuousParamsChange={updateContinuousSourceParams}
-          onClearContinuous={clearContinuousSource}
+          sources={continuousSources}
+          onRemoveSource={handleRemoveSource}
+          onClearAllSources={handleClearAllSources}
         />
 
         {/* FTX 帧数据加载 */}
@@ -1783,8 +1849,10 @@ export const FluidEditorUI: React.FC = () => {
 
             // ★ 根据注入模式执行注入
             if (continuousMode) {
-              // 持续注入模式：直接写入 operations 的持久化源列表
-              setOrUpdateContinuousSource(pos);
+              // 持续注入模式：每次点击新增一个独立的持续注入源（多源列表）
+              const injectConfig = buildInjectionConfig(pos);
+              editor.addContinuousInjection(injectConfig);
+              refreshSources(); // 刷新 UI 源列表
             } else {
               // 一次性注入模式：复用 buildInjectionConfig 统一速度计算
               const injectConfig = buildInjectionConfig(pos);
