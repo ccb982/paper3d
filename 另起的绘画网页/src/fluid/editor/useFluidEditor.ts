@@ -89,11 +89,12 @@ export function useFluidEditor(
 
   // ==================== 配置更新 ====================
   const updateConfig = useCallback(
-    (updates: Partial<FluidEditorConfig>) => {
+    (updates: Partial<FluidEditorConfig> | ((prev: FluidEditorConfig) => Partial<FluidEditorConfig>)) => {
       setConfig((prev) => {
-        const next = { ...prev, ...updates };
+        const nextUpdates = typeof updates === 'function' ? updates(prev) : updates;
+        const next = { ...prev, ...nextUpdates };
         // 同步到 editor（分辨率变化会触发网格重建）
-        editorRef.current?.updateConfig(updates);
+        editorRef.current?.updateConfig(nextUpdates);
         return next;
       });
     },

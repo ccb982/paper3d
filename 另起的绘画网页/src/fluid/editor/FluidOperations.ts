@@ -85,11 +85,30 @@ export class FluidOperations {
   /** 待处理的单次注入队列（UI 交互的一次性注入） */
   private pendingInjections: InjectionConfig[] = [];
 
+  /** 持续注入源列表（每帧都会执行，直到被移除） */
+  private continuousSources: { id: number; config: InjectionConfig }[] = [];
+  private nextSourceId = 1;
+
+  /** 调试：帧计数器，用于日志节流 */
+  private _debugFrameCounter = 0;
+  /** 调试：新源添加后的前 N 帧强制详细日志 */
+  private _debugForceLogFrames = 0;
+
   constructor(injector: FluidInjector) {
     this.injector = injector;
   }
 
-  // ==================== 注入队列管理 ====================
+  /** 内部：节流日志判断（每 30 帧或强制期打印一次） */
+  private _shouldLog(): boolean {
+    this._debugFrameCounter++;
+    if (this._debugForceLogFrames > 0) {
+      this._debugForceLogFrames--;
+      return true;
+    }
+    return this._debugFrameCounter % 30 === 0;
+  }
+
+  // ==================== 注入队列管理（一次性注入） ====================
 
   /**
    * UI 调用的入队接口。
@@ -125,6 +144,126 @@ export class FluidOperations {
 
     // 清空队列
     this.pendingInjections = [];
+  }
+
+  // ==================== 持续注入源管理 ====================
+
+  /**
+   * 新增一个持续注入源（每帧自动执行）。
+   * 返回源 ID，用于后续更新或移除。
+   *
+   * @param config 注入源配置（纹理坐标，已通过 adaptInjectionConfig 转换）
+   * @returns 源 ID
+   */
+  public addContinuousSource(config: InjectionConfig): number {
+    const id = this.nextSourceId++;
+    this.continuousSources.push({ id, config: { ...config } });
+    // ★ 调试：新源添加后强制详细日志 10 帧
+    this._debugForceLogFrames = 10;
+    console.log(`[持续注入] ✅ 新增源 #${id}: 位置(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) 半径=${config.radius} rate=${config.rate} 速度=(${config.velocity.x},${config.velocity.y}) 颜色=(${config.color.join(',')}) enabled=${config.enabled}`);
+    console.log(`[持续注入] 当前源总数: ${this.continuousSources.length}`);
+    return id;
+  }
+
+  /**
+   * 更新指定持续注入源的参数（upsert 模式：不存在则自动添加）。
+   *
+   * @param id 源 ID
+   * @param config 新的注入配置（纹理坐标）
+   * @returns 是否实际添加了新源（用于 UI 同步 ID）
+   */
+  public updateContinuousSource(id: number, config: InjectionConfig): boolean {
+    const src = this.continuousSources.find(s => s.id === id);
+    if (src) {
+      src.config = { ...config };
+      this._debugForceLogFrames = 5; // 更新后强制日志 5 帧
+      console.log(`[持续注入] 🔄 更新源 #${id}: 位置(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) rate=${config.rate} 速度=(${config.velocity.x},${config.velocity.y})`);
+      return false;
+    } else {
+      // ★ upsert 模式：源不存在时自动添加（防止编辑器重建后源丢失的问题）
+      console.warn(`[持续注入] ⚠️ 源 #${id} 不存在（当前源数=${this.continuousSources.length}），自动添加为新源`);
+      const newId = this.nextSourceId++;
+      this.continuousSources.push({ id: newId, config: { ...config } });
+      this._debugForceLogFrames = 10;
+      console.log(`[持续注入] ✅ 自动恢复源: 旧ID=${id} → 新ID=${newId}, 位置(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)})`);
+      return true;
+    }
+  }
+
+  /**
+   * 移除指定持续注入源。
+   *
+   * @param id 源 ID
+   */
+  public removeContinuousSource(id: number): void {
+    const before = this.continuousSources.length;
+    this.continuousSources = this.continuousSources.filter(s => s.id !== id);
+    const after = this.continuousSources.length;
+    console.log(`[持续注入] ❌ 移除源 #${id}: ${before} → ${after}`);
+  }
+
+  /** 清除所有持续注入源 */
+  public clearContinuousSources(): void {
+    const n = this.continuousSources.length;
+    this.continuousSources = [];
+    console.log(`[持续注入] 🧹 清除所有源: ${n} → 0`);
+  }
+
+  /** 获取当前活跃的持续注入源数量 */
+  public get continuousSourceCount(): number {
+    return this.continuousSources.length;
+  }
+
+  /**
+   * 获取所有持续注入源的快照（用于 UI 可视化）。
+   * 返回的是深拷贝，外部修改不影响内部状态。
+   */
+  public getContinuousSourcesSnapshot(): {
+    id: number;
+    position: { x: number; y: number };
+    radius: number;
+    velocity: { x: number; y: number };
+    color: [number, number, number, number];
+    rate: number;
+    enabled: boolean;
+  }[] {
+    return this.continuousSources.map(s => ({
+      id: s.id,
+      position: { ...s.config.position },
+      radius: s.config.radius,
+      velocity: { ...s.config.velocity },
+      color: [...s.config.color] as [number, number, number, number],
+      rate: s.config.rate,
+      enabled: s.config.enabled,
+    }));
+  }
+
+  /**
+   * 在每帧 step 中调用，处理所有活跃的持续注入源。
+   *
+   * @param gridColor 颜色网格
+   * @param gridVelocity 速度网格
+   * @param dt 时间步长（秒）
+   */
+  public processContinuousSources(
+    gridColor: FluidGrid,
+    gridVelocity: FluidGrid,
+    dt: number,
+  ): void {
+    if (this.continuousSources.length === 0) return;
+
+    const shouldLog = this._shouldLog();
+    if (shouldLog) {
+      console.log(`[持续注入] 🎬 processContinuousSources: 源数=${this.continuousSources.length}, dt=${dt.toFixed(4)}s`);
+    }
+
+    for (const src of this.continuousSources) {
+      if (shouldLog) {
+        const c = src.config;
+        console.log(`[持续注入]   源#${src.id}: pos=(${c.position.x.toFixed(3)},${c.position.y.toFixed(3)}) r=${c.radius} rate=${c.rate} → 颜色混合率=${c.rate.toFixed(4)} vel=(${c.velocity.x},${c.velocity.y}) → 每帧增量=(${(c.velocity.x * dt).toFixed(3)},${(c.velocity.y * dt).toFixed(3)}) color=(${c.color.join(',')})`);
+      }
+      this.applyInjection(gridColor, gridVelocity, dt, src.config);
+    }
   }
 
   /**
@@ -209,7 +348,10 @@ export class FluidOperations {
   ): void {
     if (!config.enabled) return;
 
-    const rate = config.rate * dt;
+    // ★ 颜色混合率直接使用 config.rate（不再乘以 dt），并限制在 [0,1]
+    // 持续注入模式下，颜色需要迅速显现以形成稳定的"颜料源"效果，
+    // 与一次性注入一致——每帧都以高混合率向目标色逼近。
+    const rate = Math.min(1.0, Math.max(0.0, config.rate));
 
     // 位置和速度已通过接口适配层转换为纹理坐标，直接使用
     const texPos: InjectionOptions = {
@@ -217,7 +359,7 @@ export class FluidOperations {
       radius: config.radius,
     };
 
-    // 颜色注入
+    // 颜色注入（混合率直接使用 rate，立即显现）
     this.injector.injectColor(
       gridColor,
       {
@@ -230,10 +372,12 @@ export class FluidOperations {
       texPos,
     );
 
-    // 速度注入（已转换为纹理坐标）
+    // ★ 速度注入（持续注入场景）：config.velocity 是速度值（px/s），
+    //   每帧增量 = velocity * dt，避免每帧累加完整速度导致速度场爆炸。
+    //   （一次性注入 applyOneShotInjection 不乘 dt，因为它是瞬时冲量）
     this.injector.injectVelocity(
       gridVelocity,
-      { x: config.velocity.x, y: config.velocity.y },
+      { x: config.velocity.x * dt, y: config.velocity.y * dt },
       texPos,
     );
   }

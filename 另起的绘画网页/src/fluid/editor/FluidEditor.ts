@@ -114,6 +114,7 @@ export class FluidEditor {
 
   /**
    * 运行时更新配置。如果分辨率变化则重建纹理网格。
+   * 重建后立即调用 initFields() 清空新纹理，防止 WebGL 错误 1282（未初始化纹理）。
    */
   updateConfig(updates: Partial<FluidEditorConfig>): void {
     const oldRes = this.config.resolution;
@@ -124,6 +125,9 @@ export class FluidEditor {
       (updates.resolution.w !== oldRes.w || updates.resolution.h !== oldRes.h)
     ) {
       this.rebuildGrids();
+      // ★ 重建纹理后必须立即 initFields()，否则新纹理没有初始化数据，
+      // 后续 injectColor/injectVelocity 等操作会触发 WebGL INVALID_OPERATION (1282)
+      this.initFields();
     }
   }
 
@@ -159,6 +163,61 @@ export class FluidEditor {
     const adaptedConfig = this.adaptInjectionConfig(config);
     // ★ 委托给 operations 管理队列
     this.operations.queueInjection(adaptedConfig);
+  }
+
+  /**
+   * 设置持续注入源（替换旧的 config.injection 方式）。
+   * 新增一个持续注入源，每帧自动执行，直到移除。
+   *
+   * @param config 注入源配置（用户接口坐标，Y向下为正）
+   * @returns 源 ID（用于后续更新或移除）
+   */
+  public addContinuousInjection(config: InjectionConfig): number {
+    const adaptedConfig = this.adaptInjectionConfig(config);
+    return this.operations.addContinuousSource(adaptedConfig);
+  }
+
+  /**
+   * 更新持续注入源参数（upsert 模式：不存在则自动添加新源）。
+   *
+   * @param id 源 ID（来自 addContinuousInjection 返回值）
+   * @param config 新的注入配置（用户接口坐标）
+   * @returns 实际使用的源 ID（如果是 upsert 添加，会返回新 ID）
+   */
+  public updateContinuousInjection(id: number, config: InjectionConfig): number {
+    const adaptedConfig = this.adaptInjectionConfig(config);
+    const wasAdded = this.operations.updateContinuousSource(id, adaptedConfig);
+    // 如果是 upsert 添加（ID 变了），需要返回新 ID 供 UI 更新引用
+    if (wasAdded) {
+      const sources = this.operations.getContinuousSourcesSnapshot();
+      const latestId = sources.length > 0 ? sources[sources.length - 1].id : id;
+      return latestId;
+    }
+    return id;
+  }
+
+  /** 移除指定持续注入源 */
+  public removeContinuousInjection(id: number): void {
+    this.operations.removeContinuousSource(id);
+  }
+
+  /** 清除所有持续注入源 */
+  public clearContinuousInjections(): void {
+    this.operations.clearContinuousSources();
+  }
+
+  /** 获取当前活跃的持续注入源数量 */
+  public get continuousSourceCount(): number {
+    return this.operations.continuousSourceCount;
+  }
+
+  /**
+   * 获取所有持续注入源的快照（用于 UI 可视化绘制注入点位置和半径）。
+   * 注意：返回的位置/速度已经是纹理坐标（adaptInjectionConfig 转换后）。
+   * 纹理坐标系下 Y 向上为正（速度），但位置 Y 与用户坐标系一致（flipY=false）。
+   */
+  public getContinuousSources() {
+    return this.operations.getContinuousSourcesSnapshot();
   }
 
   /** 执行一帧模拟 */
@@ -250,26 +309,8 @@ export class FluidEditor {
       this.operations.applyGravity(this.velocityGrid, dt, this.config.gravity);
     }
 
-    // 1. 注入源（通过操作模块 → 底层注入器）
-    if (this.config.injection.enabled) {
-      const inj = this.config.injection;
-      // ★ 接口适配层：将用户坐标转换为纹理坐标
-      const userConfig: InjectionConfig = {
-        enabled: true,
-        position: inj.position,
-        radius: inj.radius,
-        rate: inj.rate,
-        velocity: inj.velocity,
-        color: inj.color,
-      };
-      const texConfig = this.adaptInjectionConfig(userConfig);
-      this.operations.applyInjection(
-        this.colorGrid,
-        this.velocityGrid,
-        dt,
-        texConfig,
-      );
-    }
+    // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
+    this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt);
 
     // 2. 平流（非注入 Pass，直接使用 this.gpu）
     if (this.config.enableAdvection) {
