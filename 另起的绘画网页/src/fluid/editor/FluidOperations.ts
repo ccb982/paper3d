@@ -7,19 +7,28 @@ import { FluidInjector, type InjectionOptions } from '../core/FluidInjector';
 
 /**
  * 注入源配置。
- * 注意：所有坐标均为用户接口约定：
- *   - Y 向下为正（0=顶部，1=底部）
- *   - 速度 Y 向下为正
+ *
+ * ⚠️ 重要：此接口有两种使用场景：
+ *   1. 用户接口层（InjectionConfig）：Y向下为正，速度Y向下为正
+ *   2. 纹理坐标层（转换后）：Y向上为正，速度Y向上为正
+ *
+ * 分层规范：
+ *   - UI/Editor 层使用用户接口坐标
+ *   - FluidEditor.adaptInjectionConfig() 负责坐标转换
+ *   - FluidOperations 层只处理已转换的纹理坐标
+ *   - FluidInjector 层只处理纯粹的物理注入
+ *
+ * @see FluidEditor.adaptInjectionConfig()
  */
 export interface InjectionConfig {
   enabled: boolean;
-  /** 归一化位置 (0~1)，Y向下为正 */
+  /** 归一化位置 (0~1) */
   position: { x: number; y: number };
   /** 归一化半径 */
   radius: number;
   /** 每帧注入量 (0~1) */
   rate: number;
-  /** 注入速度（像素/秒），Y向下为正 */
+  /** 注入速度（像素/秒） */
   velocity: { x: number; y: number };
   /** RGBA 颜色值 (各分量 0~1) */
   color: [number, number, number, number];
@@ -103,10 +112,13 @@ export class FluidOperations {
    * 在指定位置以指定速率持续注入颜色和速度，
    * 模拟"水龙头"或"喷口"效果。
    *
+   * 注意：config 参数必须已经通过接口适配层转换为纹理坐标。
+   * 本方法只负责纯粹的物理注入逻辑，不关心坐标系转换。
+   *
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
    * @param dt 时间步长（秒）
-   * @param config 注入源配置（用户坐标系）
+   * @param config 注入源配置（已转换为纹理坐标）
    */
   applyInjection(
     gridColor: FluidGrid,
@@ -118,8 +130,7 @@ export class FluidOperations {
 
     const rate = config.rate * dt;
 
-    // flipY=false: UV(0,0)=顶部，与用户坐标系一致，位置无需转换
-    // 速度：用户约定负Y=向下，但 flipY=false 时正Y=向下，所以取反
+    // 位置和速度已通过接口适配层转换为纹理坐标，直接使用
     const texPos: InjectionOptions = {
       position: { x: config.position.x, y: config.position.y },
       radius: config.radius,
@@ -138,10 +149,10 @@ export class FluidOperations {
       texPos,
     );
 
-    // 速度注入（负Y=向下，取反后注入）
+    // 速度注入（已转换为纹理坐标）
     this.injector.injectVelocity(
       gridVelocity,
-      { x: config.velocity.x, y: -config.velocity.y },
+      { x: config.velocity.x, y: config.velocity.y },
       texPos,
     );
   }

@@ -130,6 +130,25 @@ export class FluidEditor {
     }
   }
 
+  // ==================== 接口适配层 ====================
+  // 职责：将用户接口坐标转换为底层纹理坐标
+  // 用户约定：Y向下为正（0=顶部，1=底部）
+  // 纹理坐标系：Y向上为正，位置无需转换；速度Y向上为正，需取反
+
+  /**
+   * 将用户接口的注入配置转换为底层纹理坐标的配置。
+   * 这是唯一的坐标转换入口，Operations 层和 Injector 层不关心坐标系。
+   */
+  private adaptInjectionConfig(config: InjectionConfig): InjectionConfig {
+    return {
+      ...config,
+      // 位置：Y向下为正，纹理坐标也Y向下为正（因为flipY=false），无需转换
+      position: { x: config.position.x, y: config.position.y },
+      // 速度：用户Y向下为正，纹理坐标Y向上为正，取反
+      velocity: { x: config.velocity.x, y: -config.velocity.y },
+    };
+  }
+
   // ==================== 每帧更新 ====================
 
   /**
@@ -222,10 +241,9 @@ export class FluidEditor {
 
     // ★ 0. 处理待定注入队列（UI 交互，一次性注入，不乘 dt）
     if (this.pendingInjection) {
-      const config = this.pendingInjection;
-      // flipY=false: UV(0,0)=顶部，与用户坐标系一致
-      // 位置：用户Y(0=顶,1=底) = UV.y，无需转换
-      // 速度：用户约定负Y=向下，但 flipY=false 时正Y=向下，所以取反
+      const userConfig = this.pendingInjection;
+      // ★ 接口适配层：将用户坐标转换为纹理坐标
+      const config = this.adaptInjectionConfig(userConfig);
       const texPos = {
         position: { x: config.position.x, y: config.position.y },
         radius: config.radius,
@@ -237,10 +255,10 @@ export class FluidEditor {
         1.0,
         texPos,
       );
-      // 速度注入：负Y=向下，取反后注入
+      // 速度注入：已通过 adaptInjectionConfig 转换坐标
       this.injector.injectVelocity(
         this.velocityGrid,
-        { x: config.velocity.x, y: -config.velocity.y },
+        { x: config.velocity.x, y: config.velocity.y },
         texPos,
       );
       this.pendingInjection = null;
@@ -254,7 +272,8 @@ export class FluidEditor {
     // 1. 注入源（通过操作模块 → 底层注入器）
     if (this.config.injection.enabled) {
       const inj = this.config.injection;
-      const injConfig: InjectionConfig = {
+      // ★ 接口适配层：将用户坐标转换为纹理坐标
+      const userConfig: InjectionConfig = {
         enabled: true,
         position: inj.position,
         radius: inj.radius,
@@ -262,11 +281,12 @@ export class FluidEditor {
         velocity: inj.velocity,
         color: inj.color,
       };
+      const texConfig = this.adaptInjectionConfig(userConfig);
       this.operations.applyInjection(
         this.colorGrid,
         this.velocityGrid,
         dt,
-        injConfig,
+        texConfig,
       );
     }
 
