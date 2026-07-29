@@ -88,9 +88,6 @@ export class FluidEditor {
   // 复用像素缓冲区，避免每帧分配
   private pixelBuffer: Uint8Array | null = null;
 
-  // 待处理注入队列（UI 交互安全入口，避免与渲染循环竞争）
-  private pendingInjection: InjectionConfig | null = null;
-
   // ===== 残差纹理导入调试追踪 =====
   /** 残差导入后的帧计数，-1=未追踪，>=0=正在追踪 */
   private _debugResidualFrameCount = -1;
@@ -154,9 +151,14 @@ export class FluidEditor {
   /**
    * 将一次注入操作加入队列，下一帧 step 时执行。
    * 这是 UI 交互的唯一安全入口（避免与渲染循环竞争纹理交换）。
+   *
+   * @param config 注入源配置（用户接口坐标，Y向下为正）
    */
   public queueInjection(config: InjectionConfig): void {
-    this.pendingInjection = config;
+    // ★ 接口适配层：将用户坐标转换为纹理坐标
+    const adaptedConfig = this.adaptInjectionConfig(config);
+    // ★ 委托给 operations 管理队列
+    this.operations.queueInjection(adaptedConfig);
   }
 
   /** 执行一帧模拟 */
@@ -239,30 +241,9 @@ export class FluidEditor {
       }
     }
 
-    // ★ 0. 处理待定注入队列（UI 交互，一次性注入，不乘 dt）
-    if (this.pendingInjection) {
-      const userConfig = this.pendingInjection;
-      // ★ 接口适配层：将用户坐标转换为纹理坐标
-      const config = this.adaptInjectionConfig(userConfig);
-      const texPos = {
-        position: { x: config.position.x, y: config.position.y },
-        radius: config.radius,
-      };
-      // 颜色注入：直接覆盖（rate=1.0，不受 dt 影响）
-      this.injector.injectColor(
-        this.colorGrid,
-        { h: config.color[0], s: config.color[1], l: config.color[2], a: config.color[3] },
-        1.0,
-        texPos,
-      );
-      // 速度注入：已通过 adaptInjectionConfig 转换坐标
-      this.injector.injectVelocity(
-        this.velocityGrid,
-        { x: config.velocity.x, y: config.velocity.y },
-        texPos,
-      );
-      this.pendingInjection = null;
-    }
+    // ★ 0. 处理 UI 注入队列（优先执行，确保本帧生效）
+    // 委托给 operations 处理一次性注入
+    this.operations.processQueue(this.colorGrid, this.velocityGrid, dt);
 
     // 0. 重力（通过操作模块 → 底层注入器）
     if (this.config.gravity !== 0) {

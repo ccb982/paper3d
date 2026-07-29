@@ -82,8 +82,89 @@ export interface WindOptions {
 export class FluidOperations {
   private injector: FluidInjector;
 
+  /** 待处理的单次注入队列（UI 交互的一次性注入） */
+  private pendingInjections: InjectionConfig[] = [];
+
   constructor(injector: FluidInjector) {
     this.injector = injector;
+  }
+
+  // ==================== 注入队列管理 ====================
+
+  /**
+   * UI 调用的入队接口。
+   * 将一次注入操作加入队列，下一帧 processQueue 时执行。
+   * 这是 UI 与物理引擎之间的安全接口，避免与渲染循环竞争纹理交换。
+   *
+   * @param config 注入源配置（纹理坐标，已通过 adaptInjectionConfig 转换）
+   */
+  public queueInjection(config: InjectionConfig): void {
+    // 深拷贝，防止外部修改
+    this.pendingInjections.push({ ...config });
+  }
+
+  /**
+   * 在每帧 step 中调用，处理所有待执行的一次性注入。
+   * 通常在物理计算前调用，确保本帧生效。
+   *
+   * @param gridColor 颜色网格
+   * @param gridVelocity 速度网格
+   * @param dt 时间步长（秒）
+   */
+  public processQueue(
+    gridColor: FluidGrid,
+    gridVelocity: FluidGrid,
+    dt: number,
+  ): void {
+    if (this.pendingInjections.length === 0) return;
+
+    // 批量处理队列中的所有注入
+    for (const config of this.pendingInjections) {
+      this.applyOneShotInjection(gridColor, gridVelocity, config);
+    }
+
+    // 清空队列
+    this.pendingInjections = [];
+  }
+
+  /**
+   * 执行一次独立的注入（一次性注入，忽略 rate，直接覆盖/叠加）。
+   *
+   * @param gridColor 颜色网格
+   * @param gridVelocity 速度网格
+   * @param config 注入源配置（纹理坐标）
+   */
+  private applyOneShotInjection(
+    gridColor: FluidGrid,
+    gridVelocity: FluidGrid,
+    config: InjectionConfig,
+  ): void {
+    if (!config.enabled) return;
+
+    const pos: InjectionOptions = {
+      position: { x: config.position.x, y: config.position.y },
+      radius: config.radius,
+    };
+
+    // 1. 颜色注入（直接设为目标值，混合率 1.0）
+    this.injector.injectColor(
+      gridColor,
+      {
+        h: config.color[0],
+        s: config.color[1],
+        l: config.color[2],
+        a: config.color[3],
+      },
+      1.0,
+      pos,
+    );
+
+    // 2. 速度注入（直接增加速度矢量）
+    this.injector.injectVelocity(
+      gridVelocity,
+      { x: config.velocity.x, y: config.velocity.y },
+      pos,
+    );
   }
 
   // ==================== 基础操作 ====================

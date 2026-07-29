@@ -128,19 +128,21 @@ export function useFluidEditor(
   // ==================== 用户交互注入 ====================
 
   /**
-   * 向流体场注入一坨水（颜色 + 速度）。
-   * 通过 queueInjection 入队，在下一帧 step 循环中安全执行。
+   * 注入一滴水（颜色 + 速度）。
+   * 水会带有向下的冲力，模拟真实水流。
    *
    * @param pos 归一化位置 (0~1, Y向下为正)
    * @param radius 归一化半径
    * @param color RGBA 颜色值 (0~1)
    * @param velocity 速度矢量 (像素/秒, Y向下为正)
+   * @param strength 注入强度倍率 (1.0 = 默认)
    */
   const injectWater = useCallback((
     pos: { x: number; y: number },
     radius: number = 0.12,
     color: [number, number, number, number] = [0.0, 0.8, 1.0, 1.0],
     velocity: { x: number; y: number } = { x: 0, y: -80 },
+    strength: number = 1.0,
   ) => {
     const ed = editorRef.current;
     if (!ed) return;
@@ -149,8 +151,8 @@ export function useFluidEditor(
       enabled: true,
       position: pos,
       radius,
-      rate: 0.6, // 注入速率，0.6 * dt 保证平滑融入
-      velocity,
+      rate: 0.6 * strength, // 注入速率乘以强度倍率
+      velocity: { x: velocity.x * strength, y: velocity.y * strength },
       color,
     });
   }, []);

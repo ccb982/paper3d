@@ -7,23 +7,154 @@ import { getAdaptiveBlockIndex, getRangeForBlock, unpackRGB565 } from '../../cor
 import { hslToRgb } from '../../utils/colorCompressor';
 
 // ============================================================
-// 子组件：操作面板（新增 - 点击注入测试）
+// 子组件：操作面板（注入源配置 + 点击注入测试）
 // ============================================================
 const OperationsPanel: React.FC<{
-  onInjectWater: (pos: { x: number; y: number }) => void;
+  config: FluidEditorConfig;
+  onConfigChange: (updates: Partial<FluidEditorConfig>) => void;
+  onInjectWater: (pos: { x: number; y: number }, strength?: number) => void;
   onInjectColor: (pos: { x: number; y: number }) => void;
-}> = ({ onInjectWater, onInjectColor }) => {
+}> = ({ config, onConfigChange, onInjectWater, onInjectColor }) => {
+  // 实时参数状态
+  const [injectStrength, setInjectStrength] = useState(1.0);
+  const [velocityStrength, setVelocityStrength] = useState(1.0);
+
+  // 计算速度分量（基于强度系数）
+  const vx = 0 * velocityStrength;
+  const vy = -80 * velocityStrength;
+
   return (
     <div className="fluid-panel">
       <div className="panel-header">
         <span>💧 操作模块</span>
       </div>
       <div className="panel-body">
-        <div className="control-group">
-          <label>点击注入</label>
+        {/* 注入源配置 */}
+        <div className="control-group" style={{ marginBottom: '12px' }}>
+          <div className="row">
+            <label>注入源</label>
+            <input
+              type="checkbox"
+              checked={config.injection.enabled}
+              onChange={(e) => onConfigChange({
+                injection: { ...config.injection, enabled: e.target.checked }
+              })}
+            />
+          </div>
+          {config.injection.enabled && (
+            <div className="nested-controls">
+              <div className="row">
+                <span>位置 X</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={config.injection.position.x}
+                  onChange={(e) => onConfigChange({
+                    injection: {
+                      ...config.injection,
+                      position: { x: +e.target.value, y: config.injection.position.y }
+                    }
+                  })}
+                />
+                <span className="hint">{config.injection.position.x.toFixed(2)}</span>
+              </div>
+              <div className="row">
+                <span>位置 Y</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={config.injection.position.y}
+                  onChange={(e) => onConfigChange({
+                    injection: {
+                      ...config.injection,
+                      position: { x: config.injection.position.x, y: +e.target.value }
+                    }
+                  })}
+                />
+                <span className="hint">{config.injection.position.y.toFixed(2)}</span>
+              </div>
+              <div className="row">
+                <span>半径</span>
+                <input
+                  type="range"
+                  min={0.01}
+                  max={0.5}
+                  step={0.005}
+                  value={config.injection.radius}
+                  onChange={(e) => onConfigChange({
+                    injection: { ...config.injection, radius: +e.target.value }
+                  })}
+                />
+                <span className="hint">{config.injection.radius.toFixed(3)}</span>
+              </div>
+              <div className="row">
+                <span>速率</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={50}
+                  step={0.5}
+                  value={config.injection.rate}
+                  onChange={(e) => onConfigChange({
+                    injection: { ...config.injection, rate: +e.target.value }
+                  })}
+                />
+                <span className="hint">{config.injection.rate.toFixed(1)}</span>
+              </div>
+              <div className="row">
+                <span>速度 Y</span>
+                <input
+                  type="number"
+                  step={10}
+                  value={config.injection.velocity.y}
+                  onChange={(e) => onConfigChange({
+                    injection: {
+                      ...config.injection,
+                      velocity: { x: config.injection.velocity.x, y: +e.target.value }
+                    }
+                  })}
+                />
+                <span className="hint">px/s</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 实时参数微调（用于点击注入） */}
+        <div className="control-group" style={{ marginBottom: '12px' }}>
+          <label style={{ fontSize: '11px', color: '#666' }}>点击注入强度: {injectStrength.toFixed(1)}x</label>
+          <input
+            type="range"
+            min="0.1"
+            max="3.0"
+            step="0.1"
+            value={injectStrength}
+            onChange={(e) => setInjectStrength(parseFloat(e.target.value))}
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div className="control-group" style={{ marginBottom: '12px' }}>
+          <label style={{ fontSize: '11px', color: '#666' }}>点击速度强度: {velocityStrength.toFixed(1)}x</label>
+          <input
+            type="range"
+            min="0"
+            max="3.0"
+            step="0.1"
+            value={velocityStrength}
+            onChange={(e) => setVelocityStrength(parseFloat(e.target.value))}
+            style={{ width: '100%' }}
+          />
+        </div>
+
+        <div className="control-group" style={{ marginBottom: '8px' }}>
+          <label>快速注入</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <button
-              onClick={() => onInjectWater({ x: 0.5, y: 0.3 })}
+              onClick={() => onInjectWater({ x: 0.5, y: 0.3 }, injectStrength)}
               style={{
                 width: '100%', padding: '6px',
                 background: '#29b6f6', color: '#fff', border: 'none',
@@ -33,7 +164,7 @@ const OperationsPanel: React.FC<{
               🌊 生成水（中心）
             </button>
             <button
-              onClick={() => onInjectWater({ x: 0.2, y: 0.7 })}
+              onClick={() => onInjectWater({ x: 0.2, y: 0.7 }, injectStrength)}
               style={{
                 width: '100%', padding: '6px',
                 background: '#4dd0e1', color: '#fff', border: 'none',
@@ -43,7 +174,7 @@ const OperationsPanel: React.FC<{
               🌊 生成水（左下）
             </button>
             <button
-              onClick={() => onInjectWater({ x: 0.8, y: 0.2 })}
+              onClick={() => onInjectWater({ x: 0.8, y: 0.2 }, injectStrength)}
               style={{
                 width: '100%', padding: '6px',
                 background: '#4dd0e1', color: '#fff', border: 'none',
@@ -64,8 +195,21 @@ const OperationsPanel: React.FC<{
             </button>
           </div>
         </div>
-        <div style={{ fontSize: '10px', color: '#999', marginTop: '4px' }}>
-          点击按钮向流体中添加颜色和速度
+
+        {/* 当前参数显示 */}
+        <div style={{ fontSize: '10px', color: '#999', marginTop: '8px', padding: '6px', background: '#f5f5f5', borderRadius: '4px' }}>
+          <div>💧 注入源: {config.injection.enabled ? '开启' : '关闭'}</div>
+          <div>💧 位置: ({config.injection.position.x.toFixed(2)}, {config.injection.position.y.toFixed(2)})</div>
+          <div>💧 半径: {config.injection.radius.toFixed(3)}</div>
+          <div>💧 速率: {config.injection.rate.toFixed(1)}</div>
+          <div>💨 速度 Y: {config.injection.velocity.y} px/s</div>
+          <div style={{ marginTop: '4px', paddingTop: '4px', borderTop: '1px solid #e0e0e0' }}>
+            <div>🖱️ 点击注入强度: {injectStrength.toFixed(2)}</div>
+            <div>💨 点击速度: ({vx.toFixed(1)}, {vy.toFixed(1)}) px/s</div>
+          </div>
+        </div>
+        <div style={{ fontSize: '10px', color: '#bbb', marginTop: '4px' }}>
+          提示：注入源为持续注入，点击注入为一次性注入
         </div>
       </div>
     </div>
@@ -183,101 +327,6 @@ const GeneralPanel: React.FC<{
             />
             <span className="hint">px/s²</span>
           </div>
-        </div>
-
-        {/* 注入源 */}
-        <div className="control-group">
-          <div className="row">
-            <label>注入源</label>
-            <input
-              type="checkbox"
-              checked={config.injection.enabled}
-              onChange={(e) => onConfigChange({
-                injection: { ...config.injection, enabled: e.target.checked }
-              })}
-            />
-          </div>
-          {config.injection.enabled && (
-            <div className="nested-controls">
-              <div className="row">
-                <span>位置 X</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={config.injection.position.x}
-                  onChange={(e) => onConfigChange({
-                    injection: {
-                      ...config.injection,
-                      position: { x: +e.target.value, y: config.injection.position.y }
-                    }
-                  })}
-                />
-                <span className="hint">{config.injection.position.x.toFixed(2)}</span>
-              </div>
-              <div className="row">
-                <span>位置 Y</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={config.injection.position.y}
-                  onChange={(e) => onConfigChange({
-                    injection: {
-                      ...config.injection,
-                      position: { x: config.injection.position.x, y: +e.target.value }
-                    }
-                  })}
-                />
-                <span className="hint">{config.injection.position.y.toFixed(2)}</span>
-              </div>
-              <div className="row">
-                <span>半径</span>
-                <input
-                  type="range"
-                  min={0.01}
-                  max={0.5}
-                  step={0.005}
-                  value={config.injection.radius}
-                  onChange={(e) => onConfigChange({
-                    injection: { ...config.injection, radius: +e.target.value }
-                  })}
-                />
-                <span className="hint">{config.injection.radius.toFixed(3)}</span>
-              </div>
-              <div className="row">
-                <span>速率</span>
-                <input
-                  type="range"
-                  min={1}
-                  max={50}
-                  step={0.5}
-                  value={config.injection.rate}
-                  onChange={(e) => onConfigChange({
-                    injection: { ...config.injection, rate: +e.target.value }
-                  })}
-                />
-                <span className="hint">{config.injection.rate.toFixed(1)}</span>
-              </div>
-              <div className="row">
-                <span>速度 Y</span>
-                <input
-                  type="number"
-                  step={10}
-                  value={config.injection.velocity.y}
-                  onChange={(e) => onConfigChange({
-                    injection: {
-                      ...config.injection,
-                      velocity: { x: config.injection.velocity.x, y: +e.target.value }
-                    }
-                  })}
-                />
-                <span className="hint">px/s</span>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* 刷新按钮 */}
@@ -1257,7 +1306,15 @@ export const FluidEditorUI: React.FC = () => {
       <div className="fluid-sidebar">
         {/* 操作模块（置顶） */}
         <OperationsPanel
-          onInjectWater={injectWater}
+          config={config}
+          onConfigChange={updateConfig}
+          onInjectWater={(pos, strength) => injectWater(
+            pos, 
+            0.12,  // radius
+            [0.0, 0.8, 1.0, 1.0],  // color: 蓝色
+            { x: 0, y: -80 },  // velocity: 向下
+            strength || 1.0  // strength
+          )}
           onInjectColor={injectColorOnly}
         />
 
