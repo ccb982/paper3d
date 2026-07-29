@@ -22,10 +22,13 @@ const OperationsPanel: React.FC<{
   setInjectStrength: (s: number) => void;
   continuousMode: boolean;
   setContinuousMode: (v: boolean) => void;
-  velocityX: number;
-  setVelocityX: (v: number) => void;
-  velocityY: number;
-  setVelocityY: (v: number) => void;
+  // ★ 方向（归一化矢量）+ 速度大小（标量）
+  directionX: number;
+  setDirectionX: (v: number) => void;
+  directionY: number;
+  setDirectionY: (v: number) => void;
+  speedMagnitude: number;
+  setSpeedMagnitude: (v: number) => void;
   activeContinuousId: number | null;
   onContinuousParamsChange: () => void;
   onClearContinuous: () => void;
@@ -40,26 +43,43 @@ const OperationsPanel: React.FC<{
   setInjectStrength,
   continuousMode,
   setContinuousMode,
-  velocityX,
-  setVelocityX,
-  velocityY,
-  setVelocityY,
+  directionX,
+  setDirectionX,
+  directionY,
+  setDirectionY,
+  speedMagnitude,
+  setSpeedMagnitude,
   activeContinuousId,
   onContinuousParamsChange,
   onClearContinuous,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
-    { key: 'water', label: '💧 水', desc: '蓝色颜料 + 向下速度' },
+    { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
     { key: 'color', label: '🎨 颜料', desc: '红色颜料（无速度）' },
-    { key: 'velocity', label: '💨 速度', desc: '仅向下速度（无色）' },
+    { key: 'velocity', label: '💨 速度', desc: '仅方向速度（无色）' },
   ];
 
   const currentMode = modes.find((m) => m.key === injectMode)!;
 
-  // 计算速度向量的大小和角度（用于可视化箭头）
-  const velMag = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
-  const velAngleDeg = velMag > 0 ? (Math.atan2(velocityY, velocityX) * 180) / Math.PI : 0;
+  // ★ 计算实际速度矢量（方向 × 大小）和可视化参数
+  const velX = directionX * speedMagnitude;
+  const velY = directionY * speedMagnitude;
+  const velMag = Math.sqrt(velX * velX + velY * velY);
+  const velAngleDeg = velMag > 0 ? (Math.atan2(velY, velX) * 180) / Math.PI : 0;
   const arrowLen = Math.min(velMag / 200, 1); // 归一化箭头长度 (0~1)
+
+  // ★ 预设方向按钮列表（归一化矢量）
+  const directions: { dx: number; dy: number; label: string; title: string }[] = [
+    { dx: -0.707, dy: -0.707, label: '↖', title: '左上' },
+    { dx: 0, dy: -1, label: '↑', title: '上' },
+    { dx: 0.707, dy: -0.707, label: '↗', title: '右上' },
+    { dx: -1, dy: 0, label: '←', title: '左' },
+    { dx: 0, dy: 0, label: '⚪', title: '无方向' },
+    { dx: 1, dy: 0, label: '→', title: '右' },
+    { dx: -0.707, dy: 0.707, label: '↙', title: '左下' },
+    { dx: 0, dy: 1, label: '↓', title: '下' },
+    { dx: 0.707, dy: 0.707, label: '↘', title: '右下' },
+  ];
 
   return (
     <div className="fluid-panel">
@@ -164,49 +184,69 @@ const OperationsPanel: React.FC<{
           />
         </div>
 
-        {/* 速度控制（带可视化箭头） */}
+        {/* 速度控制：方向（归一化矢量）+ 速度大小（标量） */}
         <div className="control-group" style={{ marginBottom: '12px', padding: '8px', background: '#fafafa', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
           <label style={{ marginBottom: '6px' }}>初速度</label>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {/* 速度滑块 */}
-            <div style={{ flex: 1 }}>
-              <div className="row" style={{ marginBottom: '4px' }}>
-                <span style={{ fontSize: '10px', width: '30px' }}>X:</span>
-                <input
-                  type="range"
-                  min="-200"
-                  max="200"
-                  step="10"
-                  value={velocityX}
-                  onChange={(e) => {
-                    const val = +e.target.value;
-                    setVelocityX(val);
-                    onContinuousParamsChange();
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <span className="hint" style={{ width: '50px', textAlign: 'right' }}>{velocityX}</span>
-              </div>
-              <div className="row">
-                <span style={{ fontSize: '10px', width: '30px' }}>Y:</span>
-                <input
-                  type="range"
-                  min="-200"
-                  max="200"
-                  step="10"
-                  value={velocityY}
-                  onChange={(e) => {
-                    const val = +e.target.value;
-                    setVelocityY(val);
-                    onContinuousParamsChange();
-                  }}
-                  style={{ flex: 1 }}
-                />
-                <span className="hint" style={{ width: '50px', textAlign: 'right' }}>{velocityY}</span>
-              </div>
-            </div>
 
-            {/* 可视化箭头 */}
+          {/* 方向选择（3x3 网格的预设方向按钮） */}
+          <div style={{ marginBottom: '8px' }}>
+            <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>方向（归一化矢量）</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+              {directions.map(({ dx, dy, label, title }) => {
+                // 判断当前方向是否被选中（用近似比较，因为 0.707 是浮点数）
+                const isSelected = Math.abs(directionX - dx) < 0.01 && Math.abs(directionY - dy) < 0.01;
+                return (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      setDirectionX(dx);
+                      setDirectionY(dy);
+                      onContinuousParamsChange();
+                    }}
+                    title={title}
+                    style={{
+                      padding: '8px 0',
+                      fontSize: '14px',
+                      fontWeight: 'bold',
+                      border: isSelected ? '2px solid #29b6f6' : '1px solid #ccc',
+                      background: isSelected ? '#e3f2fd' : '#fff',
+                      color: isSelected ? '#1565c0' : '#333',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
+              方向矢量: ({directionX.toFixed(3)}, {directionY.toFixed(3)})
+            </div>
+          </div>
+
+          {/* 速度大小滑块 */}
+          <div style={{ marginBottom: '8px' }}>
+            <div className="row" style={{ marginBottom: '4px' }}>
+              <span style={{ fontSize: '10px', width: '50px' }}>大小:</span>
+              <input
+                type="range"
+                min="0"
+                max="500"
+                step="5"
+                value={speedMagnitude}
+                onChange={(e) => {
+                  setSpeedMagnitude(parseFloat(e.target.value));
+                  onContinuousParamsChange();
+                }}
+                style={{ flex: 1 }}
+              />
+              <span className="hint" style={{ width: '60px', textAlign: 'right' }}>{speedMagnitude.toFixed(0)} px/s</span>
+            </div>
+          </div>
+
+          {/* 可视化箭头 + 实际速度矢量显示 */}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' }}>
             <div
               style={{
                 width: '60px',
@@ -277,9 +317,15 @@ const OperationsPanel: React.FC<{
                 {velMag.toFixed(0)} px/s
               </div>
             </div>
-          </div>
-          <div style={{ fontSize: '9px', color: '#999', marginTop: '16px' }}>
-            速度 Y 负值向下（屏幕坐标系）
+
+            <div style={{ flex: 1, fontSize: '10px', color: '#666' }}>
+              <div>实际速度:</div>
+              <div>X: {velX.toFixed(1)} px/s</div>
+              <div>Y: {velY.toFixed(1)} px/s</div>
+              <div style={{ fontSize: '9px', color: '#999', marginTop: '4px' }}>
+                Y 正值向下（屏幕坐标系）
+              </div>
+            </div>
           </div>
         </div>
 
@@ -345,98 +391,6 @@ const OperationsPanel: React.FC<{
             </button>
           </div>
         )}
-
-        {/* 速度快速预设 */}
-        <div style={{ marginTop: '8px' }}>
-          <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>速度预设</div>
-          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => {
-                setVelocityX(0); setVelocityY(-80);
-                onContinuousParamsChange();
-              }}
-              style={{
-                padding: '4px 8px',
-                fontSize: '10px',
-                border: '1px solid #ddd',
-                background: '#fff',
-                borderRadius: '3px',
-                cursor: 'pointer',
-              }}
-              title="向下"
-            >
-              ⬇️
-            </button>
-            <button
-              onClick={() => {
-                setVelocityX(0); setVelocityY(80);
-                onContinuousParamsChange();
-              }}
-              style={{
-                padding: '4px 8px',
-                fontSize: '10px',
-                border: '1px solid #ddd',
-                background: '#fff',
-                borderRadius: '3px',
-                cursor: 'pointer',
-              }}
-              title="向上"
-            >
-              ⬆️
-            </button>
-            <button
-              onClick={() => {
-                setVelocityX(-80); setVelocityY(0);
-                onContinuousParamsChange();
-              }}
-              style={{
-                padding: '4px 8px',
-                fontSize: '10px',
-                border: '1px solid #ddd',
-                background: '#fff',
-                borderRadius: '3px',
-                cursor: 'pointer',
-              }}
-              title="向左"
-            >
-              ⬅️
-            </button>
-            <button
-              onClick={() => {
-                setVelocityX(80); setVelocityY(0);
-                onContinuousParamsChange();
-              }}
-              style={{
-                padding: '4px 8px',
-                fontSize: '10px',
-                border: '1px solid #ddd',
-                background: '#fff',
-                borderRadius: '3px',
-                cursor: 'pointer',
-              }}
-              title="向右"
-            >
-              ➡️
-            </button>
-            <button
-              onClick={() => {
-                setVelocityX(0); setVelocityY(0);
-                onContinuousParamsChange();
-              }}
-              style={{
-                padding: '4px 8px',
-                fontSize: '10px',
-                border: '1px solid #ddd',
-                background: '#fff',
-                borderRadius: '3px',
-                cursor: 'pointer',
-              }}
-              title="静止"
-            >
-              ⏸️
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -867,8 +821,11 @@ export const FluidEditorUI: React.FC = () => {
 
   // 持续注入模式状态
   const [continuousMode, setContinuousMode] = useState(false);
-  const [velocityX, setVelocityX] = useState(0);
-  const [velocityY, setVelocityY] = useState(-80); // 默认向下（屏幕坐标系Y向下为正，但流体注入约定Y向上为正）
+  // ★ 方向（归一化矢量），默认向下 (0, 1) —— 屏幕坐标系 Y 向下为正
+  const [directionX, setDirectionX] = useState(0);
+  const [directionY, setDirectionY] = useState(1);
+  // ★ 速度大小（标量，px/s）
+  const [speedMagnitude, setSpeedMagnitude] = useState(80);
 
   // 压力参数
   const [pressureParams, setPressureParams] = useState({
@@ -944,6 +901,7 @@ export const FluidEditorUI: React.FC = () => {
   const lastContinuousPosRef = useRef<{ x: number; y: number }>({ x: 0.5, y: 0.25 });
 
   // ★ 构建注入配置（从当前 UI 状态）
+  // 实际速度矢量 = 方向（归一化） × 速度大小（标量）
   const buildInjectionConfig = useCallback((pos: { x: number; y: number }) => {
     let color: [number, number, number, number] = [0.0, 0.8, 1.0, 1.0];
     let rate = 0.6 * injectStrength;
@@ -959,15 +917,22 @@ export const FluidEditorUI: React.FC = () => {
       rate = 0;
     }
 
+    // ★ 速度矢量 = 方向 × 大小
+    const velX = directionX * speedMagnitude;
+    const velY = directionY * speedMagnitude;
+
+    // ★ 初速度调试：记录方向 × 大小 → 速度矢量的构建（用户坐标系，Y向下为正）
+    console.log(`[初速度] 构建: 方向=(${directionX.toFixed(3)},${directionY.toFixed(3)}) × 大小=${speedMagnitude.toFixed(1)} → 速度=(${velX.toFixed(1)},${velY.toFixed(1)}) px/s`);
+
     return {
       enabled: true,
       position: pos,
       radius: injectRadius,
       rate,
-      velocity: { x: velocityX, y: velocityY },
+      velocity: { x: velX, y: velY },
       color,
     };
-  }, [injectMode, injectRadius, injectStrength, velocityX, velocityY]);
+  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude]);
 
   // ★ 设置/更新持续注入源（点击画布时调用）
   const setOrUpdateContinuousSource = useCallback((pos: { x: number; y: number }) => {
@@ -980,7 +945,6 @@ export const FluidEditorUI: React.FC = () => {
       const actualId = editor.updateContinuousInjection(currentId, config);
       // ★ 如果 upsert 返回了新 ID（说明源被重建），同步 UI 引用
       if (actualId !== currentId) {
-        console.log(`[持续注入] 源ID已更新: ${currentId} → ${actualId}`);
         continuousSourceIdRef.current = actualId;
         setActiveContinuousId(actualId);
       }
@@ -1000,7 +964,6 @@ export const FluidEditorUI: React.FC = () => {
     }
     const id = continuousSourceIdRef.current;
     if (id !== null) {
-      console.log(`[持续注入] 手动移除源 #${id}`);
       editor.removeContinuousInjection(id);
     }
     continuousSourceIdRef.current = null;
@@ -1016,13 +979,11 @@ export const FluidEditorUI: React.FC = () => {
       const actualId = editor.updateContinuousInjection(currentId, config);
       // ★ 如果 upsert 返回了新 ID，同步 UI 引用
       if (actualId !== currentId) {
-        console.log(`[持续注入] updateParams: 源ID已更新: ${currentId} → ${actualId}`);
         continuousSourceIdRef.current = actualId;
         setActiveContinuousId(actualId);
       }
     } else if (continuousMode) {
       // ★ continuousMode 开启但没有活跃源 → 自动添加
-      console.log(`[持续注入] updateParams: 无活跃源但 continuousMode=true，自动添加新源`);
       const newId = editor.addContinuousInjection(config);
       continuousSourceIdRef.current = newId;
       setActiveContinuousId(newId);
@@ -1032,7 +993,6 @@ export const FluidEditorUI: React.FC = () => {
   // ★ 当 continuousMode 关闭时，移除持续注入源
   useEffect(() => {
     if (!continuousMode && continuousSourceIdRef.current !== null && editor) {
-      console.log(`[持续注入] continuousMode 关闭，移除源 #${continuousSourceIdRef.current}`);
       editor.removeContinuousInjection(continuousSourceIdRef.current);
       continuousSourceIdRef.current = null;
       setActiveContinuousId(null);
@@ -1049,7 +1009,6 @@ export const FluidEditorUI: React.FC = () => {
       setActiveContinuousId(null);
     } else if (continuousSourceIdRef.current !== null) {
       // editor 变了但有旧 ID：旧源已丢失，清除引用让下次点击重新添加
-      console.log(`[持续注入] editor 变化，旧源ID=${continuousSourceIdRef.current} 已失效，重置追踪`);
       continuousSourceIdRef.current = null;
       setActiveContinuousId(null);
     }
@@ -1062,7 +1021,6 @@ export const FluidEditorUI: React.FC = () => {
 
     // ===== 暴露 editor 到 window 供控制台调试 =====
     (window as any).fluidEditor = editor;
-    console.log(`[FluidEditorUI] editor 已暴露到 window.fluidEditor`);
 
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
@@ -1254,7 +1212,6 @@ export const FluidEditorUI: React.FC = () => {
 
         baseTexRef.current = tex;
         baseLayerIdRef.current = layerId;
-        console.log(`[FluidEditorUI.updateBaseTexture] 使用 FloatType HSL 纹理: ${baseHsl.width}x${baseHsl.height}`);
         return;
       }
 
@@ -1283,7 +1240,6 @@ export const FluidEditorUI: React.FC = () => {
 
       baseTexRef.current = tex;
       baseLayerIdRef.current = layerId;
-      console.log(`[FluidEditorUI.updateBaseTexture] 使用 Uint8 RGB 纹理: ${baseImageData.width}x${baseImageData.height}`);
     };
 
     let frameCount = 0;
@@ -1419,13 +1375,6 @@ export const FluidEditorUI: React.FC = () => {
       else targetScene = compositeScene;
       renderer.render(targetScene, camera);
 
-      // 检查 WebGL 错误
-      const gl = renderer.getContext();
-      const error = gl.getError();
-      if (error !== 0) {
-        console.error(`[FluidEditorUI] WebGL 错误: ${error} (0x${error.toString(16)})`);
-      }
-
       // ★ 持续注入点可视化：在 overlay canvas 上绘制注入源位置、半径、速度箭头
       drawContinuousSourcesOverlay();
 
@@ -1475,10 +1424,6 @@ export const FluidEditorUI: React.FC = () => {
     const data = residualImageData.data;
     const texSize = residualImageData.width; // 全尺寸图像的宽度
 
-    // 统计调整的像素数和块数
-    let adjustedPixelCount = 0;
-    const smallRangeBlocks = new Set<number>();
-
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
         // 计算该像素所属的自适应分块索引（使用局部坐标，正确）
@@ -1487,8 +1432,6 @@ export const FluidEditorUI: React.FC = () => {
         const range = getRangeForBlock(blockFlags, blockIdx);
 
         if (range === 0.25) {
-          // 记录小范围块
-          smallRangeBlocks.add(blockIdx);
           // ✅ 修正：使用全局坐标索引 ImageData（与 buildFluidTexturesFromRawFrame 一致）
           // 原始反量化: dH = (val * 2 - 1) * 0.25
           // 解算器反量化: dH' = (val' * 2 - 1) * 0.5
@@ -1500,14 +1443,10 @@ export const FluidEditorUI: React.FC = () => {
           data[idx + 1] = Math.round(data[idx + 1] * 0.5 + 64); // G (S)
           data[idx + 2] = Math.round(data[idx + 2] * 0.5 + 64); // B (L)
           // Alpha 不变
-          adjustedPixelCount++;
         }
       }
     }
 
-    console.log(`[FTX导入] 残差调整: bbox=${w}x${h}, blockFlags=${blockFlags.toString(2).padStart(64, '0')}`);
-    console.log(`[FTX导入] 残差调整: 小范围块数=${smallRangeBlocks.size}, 调整像素数=${adjustedPixelCount}`);
-    
     return residualImageData;
   };
 
@@ -1625,20 +1564,12 @@ export const FluidEditorUI: React.FC = () => {
     // ★★★ 关键修复：同步流体分辨率与帧数据尺寸 ★★★
     // 基础色纹理尺寸 = 帧数据原始尺寸（通常512），流体编辑器默认256，尺寸不匹配会导致UV采样错位
     const texSize = frameData.sourceResolution || 512;
-    console.log(`[FTX导入] 同步分辨率: 帧数据=${texSize}x${texSize}, 当前流体=${config.resolution.w}x${config.resolution.h}`);
     if (config.resolution.w !== texSize || config.resolution.h !== texSize) {
       updateConfig({ resolution: { w: texSize, h: texSize } });
-      console.log(`[FTX导入] 已更新分辨率为 ${texSize}x${texSize}`);
     }
-
-    console.log(`\n========== [FTX导入] 独立解析帧数据 ==========`);
-    console.log(`[FTX导入] 活动图层: ${layerId}`);
-    console.log(`[FTX导入] 原始数据: bbox=(${frameData.rawBbox.x},${frameData.rawBbox.y},${frameData.rawBbox.w}x${frameData.rawBbox.h}), texSize=${frameData.sourceResolution}`);
-    console.log(`[FTX导入] regionIdTex大小=${frameData.rawRegionIdTex.length}, deltaPacked大小=${frameData.rawDeltaPacked.length}`);
 
     // ★ 读取共享调色板
     const palette = state.skillGroupEditor.sharedBaseColors;
-    console.log(`[FTX导入] 调色板色块数: ${palette.length}`);
 
     // ★ 独立生成正确的纹理（残差 = 量化值，而非合成RGB）
     const { baseHslData, baseTexture: newBase, residualTexture: newResidual } = buildFluidTexturesFromRawFrame(
@@ -1651,19 +1582,6 @@ export const FluidEditorUI: React.FC = () => {
       },
       palette,
     );
-
-    // 基础色 HSL 统计
-    console.log(`[FTX导入] 基础色 HSL 数据: ${baseHslData.width}x${baseHslData.height}, 数据长度=${baseHslData.data.length}`);
-    console.log(`[FTX导入] 基础色前10个 HSL 值: ${Array.from(baseHslData.data.slice(0, 30)).join(',')}`);
-
-    // 残差统计
-    const rd = newResidual.data;
-    let resNonZero = 0;
-    for (let i = 0; i < rd.length; i += 4) {
-      if (rd[i] !== 0 || rd[i+1] !== 0 || rd[i+2] !== 0) resNonZero++;
-    }
-    console.log(`[FTX导入] 生成的残差纹理: ${newResidual.width}x${newResidual.height}, 非零像素=${resNonZero}/${newResidual.width*newResidual.height}`);
-    console.log(`[FTX导入] 残差前10像素 RGB: ${Array.from(rd.slice(0, 30)).join(',')}`);
 
     // ===== stash 原始数据，供像素比较器使用 =====
     stashedResidualRef.current = new ImageData(
@@ -1684,17 +1602,9 @@ export const FluidEditorUI: React.FC = () => {
     );
     stashedBaseWRef.current = newBase.width;
     stashedBaseHRef.current = newBase.height;
-    console.log(`[FTX导入] stash 完成: base=${newBase.width}x${newBase.height}, residual=${newResidual.width}x${newResidual.height}, baseHsl=${baseHslData.data.length} floats`);
-
-    // ===== 导入前状态日志 =====
-    const solverRes = config.resolution;
-    console.log(`[FTX导入] 求解器分辨率: ${solverRes.w}x${solverRes.h}`);
-    console.log(`[FTX导入] 尺寸匹配: ${newResidual.width === solverRes.w && newResidual.height === solverRes.h}`);
-    console.log(`[FTX导入] 导入前配置: advection=${config.enableAdvection}, pressure=${config.enablePressure}, gravity=${config.gravity}, colorBoundary=${config.colorBoundaryMode}, injection=${config.injection.enabled}`);
 
     // ===== 步骤 1：更新 frameDataMap（合成视图依赖） =====
     // ★ 关键修复：必须同时更新 baseHslData（GPU合成用）和 baseTexture（UI预览用）
-    console.log(`[FTX导入] 步骤1: 更新 frameDataMap.baseHslData + baseTexture...`);
     useAppStore.setState({
       frameDataMap: {
         ...useAppStore.getState().frameDataMap,
@@ -1707,11 +1617,9 @@ export const FluidEditorUI: React.FC = () => {
     });
 
     // ===== 步骤 2：强制重置所有物理场 =====
-    console.log(`[FTX导入] 步骤2: initFields() 重置物理场...`);
     editor.initFields();
 
     // ===== 步骤 3：残差模式配置 + 临时关闭平流 =====
-    console.log(`[FTX导入] 步骤3: 配置残差模式 (关闭注入/重力/平流, 边界=clamp)...`);
     updateConfig({
       injection: { ...config.injection, enabled: false },
       gravity: 0,
@@ -1720,28 +1628,22 @@ export const FluidEditorUI: React.FC = () => {
     });
 
     // ===== 步骤 4：根据 blockFlags 预调整残差量化值 =====
-    console.log(`[FTX导入] 步骤4: 根据 blockFlags 预调整残差量化值...`);
     const adjustedResidual = adjustResidualForUniformRange(
       newResidual,
       frameData.rawBbox,
       frameData.rawBlockFlags,
     );
-    console.log(`[FTX导入] 残差调整完成`);
 
     // ===== 步骤 5：上传残差 =====
-    console.log(`[FTX导入] 步骤5: initializeColorFromImageData() 上传残差...`);
     editor.initializeColorFromImageData(adjustedResidual);
 
     // ===== 步骤 6：延迟恢复平流（先让合成视图渲染一帧正确结果） =====
     setTimeout(() => {
-      console.log(`[FTX导入] 延迟恢复平流...`);
       updateConfig({ enableAdvection: true });
     }, 100);
 
     // ===== 步骤 7：切到颜色视图 =====
-    console.log(`[FTX导入] 步骤7: 切换到颜色视图`);
     setView('color');
-    console.log(`========== [FTX导入] 加载完成 ==========\n`);
   };
 
   // ==================== 渲染 ====================
@@ -1761,10 +1663,12 @@ export const FluidEditorUI: React.FC = () => {
           setInjectStrength={setInjectStrength}
           continuousMode={continuousMode}
           setContinuousMode={setContinuousMode}
-          velocityX={velocityX}
-          setVelocityX={setVelocityX}
-          velocityY={velocityY}
-          setVelocityY={setVelocityY}
+          directionX={directionX}
+          setDirectionX={setDirectionX}
+          directionY={directionY}
+          setDirectionY={setDirectionY}
+          speedMagnitude={speedMagnitude}
+          setSpeedMagnitude={setSpeedMagnitude}
           activeContinuousId={activeContinuousId}
           onContinuousParamsChange={updateContinuousSourceParams}
           onClearContinuous={clearContinuousSource}
@@ -1882,35 +1786,9 @@ export const FluidEditorUI: React.FC = () => {
               // 持续注入模式：直接写入 operations 的持久化源列表
               setOrUpdateContinuousSource(pos);
             } else {
-              // 一次性注入模式
-              if (injectMode === 'water') {
-                editor.queueInjection({
-                  enabled: true,
-                  position: pos,
-                  radius: injectRadius,
-                  rate: 0.6 * injectStrength,
-                  velocity: { x: velocityX, y: velocityY },
-                  color: [0.0, 0.8, 1.0, 1.0],
-                });
-              } else if (injectMode === 'color') {
-                editor.queueInjection({
-                  enabled: true,
-                  position: pos,
-                  radius: injectRadius,
-                  rate: 0.5,
-                  velocity: { x: velocityX, y: velocityY },
-                  color: [1.0, 0.2, 0.2, 1.0],
-                });
-              } else if (injectMode === 'velocity') {
-                editor.queueInjection({
-                  enabled: true,
-                  position: pos,
-                  radius: injectRadius,
-                  rate: 0,
-                  velocity: { x: velocityX, y: velocityY },
-                  color: [0, 0, 0, 0],
-                });
-              }
+              // 一次性注入模式：复用 buildInjectionConfig 统一速度计算
+              const injectConfig = buildInjectionConfig(pos);
+              editor.queueInjection(injectConfig);
             }
 
             // 像素坐标用于采样

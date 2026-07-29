@@ -89,23 +89,11 @@ export class FluidOperations {
   private continuousSources: { id: number; config: InjectionConfig }[] = [];
   private nextSourceId = 1;
 
-  /** 调试：帧计数器，用于日志节流 */
-  private _debugFrameCounter = 0;
-  /** 调试：新源添加后的前 N 帧强制详细日志 */
-  private _debugForceLogFrames = 0;
+  /** 初速度调试：帧计数器，用于每帧应用日志节流（每 30 帧打印一次） */
+  private _velDebugFrameCounter = 0;
 
   constructor(injector: FluidInjector) {
     this.injector = injector;
-  }
-
-  /** 内部：节流日志判断（每 30 帧或强制期打印一次） */
-  private _shouldLog(): boolean {
-    this._debugFrameCounter++;
-    if (this._debugForceLogFrames > 0) {
-      this._debugForceLogFrames--;
-      return true;
-    }
-    return this._debugFrameCounter % 30 === 0;
   }
 
   // ==================== 注入队列管理（一次性注入） ====================
@@ -126,14 +114,16 @@ export class FluidOperations {
    * 在每帧 step 中调用，处理所有待执行的一次性注入。
    * 通常在物理计算前调用，确保本帧生效。
    *
+   * 注意：一次性注入是瞬时冲量，不乘以 dt（与持续注入的 velocity*dt 不同）。
+   *
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
-   * @param dt 时间步长（秒）
+   * @param _dt 时间步长（秒）—— 一次性注入不使用 dt，保留参数以匹配调度接口
    */
   public processQueue(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
-    dt: number,
+    _dt: number,
   ): void {
     if (this.pendingInjections.length === 0) return;
 
@@ -158,10 +148,8 @@ export class FluidOperations {
   public addContinuousSource(config: InjectionConfig): number {
     const id = this.nextSourceId++;
     this.continuousSources.push({ id, config: { ...config } });
-    // ★ 调试：新源添加后强制详细日志 10 帧
-    this._debugForceLogFrames = 10;
-    console.log(`[持续注入] ✅ 新增源 #${id}: 位置(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) 半径=${config.radius} rate=${config.rate} 速度=(${config.velocity.x},${config.velocity.y}) 颜色=(${config.color.join(',')}) enabled=${config.enabled}`);
-    console.log(`[持续注入] 当前源总数: ${this.continuousSources.length}`);
+    // ★ 初速度调试：记录新增源的初速度（纹理坐标，Y向上为正）
+    console.log(`[初速度] 新增源 #${id}: 初速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) px/s, 位置=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}), rate=${config.rate}`);
     return id;
   }
 
@@ -176,16 +164,15 @@ export class FluidOperations {
     const src = this.continuousSources.find(s => s.id === id);
     if (src) {
       src.config = { ...config };
-      this._debugForceLogFrames = 5; // 更新后强制日志 5 帧
-      console.log(`[持续注入] 🔄 更新源 #${id}: 位置(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) rate=${config.rate} 速度=(${config.velocity.x},${config.velocity.y})`);
+      // ★ 初速度调试：记录更新后的初速度（纹理坐标，Y向上为正）
+      console.log(`[初速度] 更新源 #${id}: 初速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) px/s, 位置=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}), rate=${config.rate}`);
       return false;
     } else {
       // ★ upsert 模式：源不存在时自动添加（防止编辑器重建后源丢失的问题）
-      console.warn(`[持续注入] ⚠️ 源 #${id} 不存在（当前源数=${this.continuousSources.length}），自动添加为新源`);
+      console.warn(`[初速度] 源 #${id} 不存在（当前源数=${this.continuousSources.length}），自动添加为新源`);
       const newId = this.nextSourceId++;
       this.continuousSources.push({ id: newId, config: { ...config } });
-      this._debugForceLogFrames = 10;
-      console.log(`[持续注入] ✅ 自动恢复源: 旧ID=${id} → 新ID=${newId}, 位置(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)})`);
+      console.log(`[初速度] 自动恢复源: 旧ID=${id} → 新ID=${newId}, 初速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) px/s`);
       return true;
     }
   }
@@ -196,17 +183,12 @@ export class FluidOperations {
    * @param id 源 ID
    */
   public removeContinuousSource(id: number): void {
-    const before = this.continuousSources.length;
     this.continuousSources = this.continuousSources.filter(s => s.id !== id);
-    const after = this.continuousSources.length;
-    console.log(`[持续注入] ❌ 移除源 #${id}: ${before} → ${after}`);
   }
 
   /** 清除所有持续注入源 */
   public clearContinuousSources(): void {
-    const n = this.continuousSources.length;
     this.continuousSources = [];
-    console.log(`[持续注入] 🧹 清除所有源: ${n} → 0`);
   }
 
   /** 获取当前活跃的持续注入源数量 */
@@ -252,15 +234,16 @@ export class FluidOperations {
   ): void {
     if (this.continuousSources.length === 0) return;
 
-    const shouldLog = this._shouldLog();
-    if (shouldLog) {
-      console.log(`[持续注入] 🎬 processContinuousSources: 源数=${this.continuousSources.length}, dt=${dt.toFixed(4)}s`);
-    }
+    // ★ 初速度调试：节流日志（每 30 帧打印一次），记录每帧初速度应用情况
+    this._velDebugFrameCounter++;
+    const shouldLog = this._velDebugFrameCounter % 30 === 0;
 
     for (const src of this.continuousSources) {
       if (shouldLog) {
         const c = src.config;
-        console.log(`[持续注入]   源#${src.id}: pos=(${c.position.x.toFixed(3)},${c.position.y.toFixed(3)}) r=${c.radius} rate=${c.rate} → 颜色混合率=${c.rate.toFixed(4)} vel=(${c.velocity.x},${c.velocity.y}) → 每帧增量=(${(c.velocity.x * dt).toFixed(3)},${(c.velocity.y * dt).toFixed(3)}) color=(${c.color.join(',')})`);
+        const incX = c.velocity.x * dt;
+        const incY = c.velocity.y * dt;
+        console.log(`[初速度] 每帧应用 源#${src.id}: 初速度=(${c.velocity.x.toFixed(2)},${c.velocity.y.toFixed(2)}) px/s × dt=${dt.toFixed(4)}s → 每帧增量=(${incX.toFixed(4)},${incY.toFixed(4)}) px`);
       }
       this.applyInjection(gridColor, gridVelocity, dt, src.config);
     }

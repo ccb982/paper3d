@@ -17,13 +17,6 @@ export interface InjectionOptions {
   global?: boolean;
 }
 
-// ★ 调试：模块级帧计数器，用于注入日志节流（每 30 帧打印一次）
-let _injectorFrameCounter = 0;
-function _injectorShouldLog(): boolean {
-  _injectorFrameCounter++;
-  return _injectorFrameCounter % 30 === 0;
-}
-
 // ============================================================
 // FluidInjector —— 底层注入器（第1层）
 // ============================================================
@@ -136,11 +129,6 @@ export class FluidInjector {
     const key = `inj_color_${global ? 'global' : 'local'}`;
     const clampedRate = Math.min(1.0, Math.max(0.0, rate));
 
-    // ★ 调试日志（节流）：验证颜色注入是否被调用
-    if (_injectorShouldLog() && clampedRate > 0) {
-      console.log(`[注入器] 🎨 injectColor: target=(${color.h},${color.s},${color.l},${color.a}) rate=${clampedRate.toFixed(4)} pos=(${position.x.toFixed(3)},${position.y.toFixed(3)}) r=${radius} global=${global} res=${grid.resolution.w}x${grid.resolution.h}`);
-    }
-
     const mat = this.gpu.getMaterial(key, {
       uColor: { value: grid.read },
       uTargetColor: { value: new THREE.Vector4(color.h, color.s, color.l, color.a) },
@@ -193,12 +181,6 @@ export class FluidInjector {
   ): void {
     const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
     const key = `inj_vel_${global ? 'global' : 'local'}`;
-
-    // ★ 调试日志（节流）：验证速度注入是否被调用
-    const velMag = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
-    if (_injectorShouldLog() && velMag > 0.001) {
-      console.log(`[注入器] 💨 injectVelocity: vel=(${velocity.x.toFixed(3)},${velocity.y.toFixed(3)}) |vel|=${velMag.toFixed(3)} pos=(${position.x.toFixed(3)},${position.y.toFixed(3)}) r=${radius} global=${global}`);
-    }
 
     const mat = this.gpu.getMaterial(key, {
       uVelocity: { value: grid.read },
