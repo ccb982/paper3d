@@ -516,8 +516,8 @@ export class FluidEditor {
 
   /**
    * 采样指定像素位置的颜色和速度值。
-   * @param x 像素 X 坐标（0 ~ w-1）
-   * @param y 像素 Y 坐标（0 ~ h-1，注意：这是纹理坐标，Y向上为正）
+   * @param x 像素 X 坐标（0 ~ w-1，UI 坐标系：左上角为原点）
+   * @param y 像素 Y 坐标（0 ~ h-1，UI 坐标系：Y 向下为正）
    * @returns { h, s, l, a, velX, velY } HSLA 值（0~1）和速度值（像素/秒）
    */
   samplePixel(x: number, y: number): {
@@ -528,30 +528,41 @@ export class FluidEditor {
     velX: number; velY: number;
   } {
     const { w, h } = this.config.resolution;
-    // 钳制到有效范围
+    // ★ 钳制：UI 坐标（左上角 0,0，Y向下）
     const px = Math.max(0, Math.min(w - 1, Math.floor(x)));
     const py = Math.max(0, Math.min(h - 1, Math.floor(y)));
+    // ★ 关键修正：WebGL readRenderTargetPixels 的原点在【左下角】(0,0)，
+    //   而我们传进来的 py 是【左上角】坐标系。必须做 Y 翻转。
+    const readPy = (h - 1) - py;
 
-    // 1. 读取颜色像素（RGBA uint8）—— 颜色场就是 HSLA，直接读取
+    // 1. 读取颜色像素（RGBA uint8）—— 颜色场就是 HSLA，直接读取（同样 Y 翻转）
     const colorPixels = this.readColorPixels();
-    const idx = (py * w + px) * 4;
-    const r = colorPixels[idx] / 255;     // = H 增量
-    const g = colorPixels[idx + 1] / 255; // = S 增量
-    const b = colorPixels[idx + 2] / 255; // = L 增量
-    const a = colorPixels[idx + 3] / 255; // = Alpha
+    const colorIdx = (readPy * w + px) * 4;
+    const r = colorPixels[colorIdx] / 255;     // = H 增量
+    const g = colorPixels[colorIdx + 1] / 255; // = S 增量
+    const b = colorPixels[colorIdx + 2] / 255; // = L 增量
+    const a = colorPixels[colorIdx + 3] / 255; // = Alpha
 
-    // 2. 读取速度像素（直接使用 Float32Array，让 Three.js 自动转换 half-float → float32）
-    const velData = new Float32Array(2); // 只需两个通道 R (X) 和 G (Y)
+    // 2. 读取速度像素（RG 2通道 → float32）
+    // velocityGrid 是 RGFormat + FloatType，每个像素 2 个 float。
+    // readRenderTargetPixels 会严格按通道数返回，所以用 Float32Array(2)。
+    // ★ 注意：部分浏览器对 RGFormat + readPixels 有兼容性问题，
+    //   这里兜底先读 RGBA(4通道) 再取前两通道，确保稳定。
+    const velData = new Float32Array(4);
     const target = this.velocityGrid.readTarget;
     const prevTarget = this.renderer.getRenderTarget();
-    
+
     this.renderer.setRenderTarget(target);
-    // Three.js 会自动将 half-float 或 float 纹理数据转为 32 位浮点数填充到 velData 中
-    this.renderer.readRenderTargetPixels(target, px, py, 1, 1, velData);
+    this.renderer.readRenderTargetPixels(target, px, readPy, 1, 1, velData);
     this.renderer.setRenderTarget(prevTarget);
 
     const velX = velData[0];
     const velY = velData[1];
+
+    // ★ 调试断言：如果读到 NaN 或极端值，输出警告（帮助定位读取问题）
+    if (!(Number.isFinite(velX) && Number.isFinite(velY))) {
+      console.warn(`[samplePixel] ⚠️ 速度读回异常：velX=${velX}, velY=${velY} @ (${px},${py}) readY=${readPy} size=${w}x${h}`);
+    }
 
     return { residualH: r, residualS: g, residualL: b, alpha: a, velX, velY };
   }
@@ -579,12 +590,21 @@ export class FluidEditor {
 
   /**
    * 将速度场从 GPU 回读到 CPU（Uint8Array RGBA，R=velX, G=velY）。
-   * 注意：velocityGrid 是 RG 双通道格式，readRenderTargetPixels 只返回 w*h*2 字节。
-   * 此方法自动将其扩展为 w*h*4 字节的 RGBA 数据，以便 UI 直接构造 ImageData。
+   *
+   * ★ velocityGrid 是 RGFormat + FloatType（32位浮点），每像素 2 个 float = 8 字节。
+   *   readRenderTargetPixels 用 Float32Array 读取后，需要将速度值映射到 [0,255] 用于 ImageData 显示。
+   *   映射规则：以 uMaxVel 为参考最大速度，vel 范围 [-uMaxVel, +uMaxVel] → [0, 255]，
+   *            0 速度 = 128（中灰），正速度 > 128，负速度 < 128。
+   *
+   * 注意：readRenderTargetPixels 返回的数组第 0 行对应纹理底部（WebGL 左下角原点），
+   *       如果用于 putImageData 显示，需要做 Y 翻转（调用方负责）。
+   *
+   * @param maxVel 参考最大速度（用于归一化映射），默认 3000 px/s
    */
-  readVelocityPixels(): Uint8Array {
+  readVelocityPixels(maxVel: number = 3000): Uint8Array {
     const { w, h } = this.config.resolution;
-    const raw = new Uint8Array(w * h * 2);
+    // ★ 用 Float32Array 读取（匹配 FloatType 纹理），每像素 2 通道 = 2 个 float
+    const raw = new Float32Array(w * h * 2);
     const target = this.velocityGrid.readTarget;
 
     const prevTarget = this.renderer.getRenderTarget();
@@ -592,11 +612,15 @@ export class FluidEditor {
     this.renderer.readRenderTargetPixels(target, 0, 0, w, h, raw);
     this.renderer.setRenderTarget(prevTarget);
 
-    // 扩展为 RGBA
+    // 扩展为 RGBA uint8（速度值映射到 0-255 可视化）
     const rgba = new Uint8Array(w * h * 4);
+    const scale = 127.5 / maxVel; // 0 速度 → 128，+maxVel → 255，-maxVel → 1
     for (let i = 0; i < w * h; i++) {
-      rgba[i * 4]     = raw[i * 2];
-      rgba[i * 4 + 1] = raw[i * 2 + 1];
+      const vx = raw[i * 2];
+      const vy = raw[i * 2 + 1];
+      // 钳制并映射：[-maxVel, +maxVel] → [1, 255]，0 → 128
+      rgba[i * 4]     = Math.max(0, Math.min(255, Math.round(128 + vx * scale)));
+      rgba[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(128 + vy * scale)));
       rgba[i * 4 + 2] = 0;
       rgba[i * 4 + 3] = 255;
     }
@@ -682,8 +706,11 @@ export class FluidEditor {
       colorCh as 1 | 2 | 3 | 4,
       'uint8',
     );
-    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'half-float'); // 使用 half-float 平衡精度与带宽，Three.js readPixels 会自动转换回 Float32
-    this.pressureGrid = new FluidGrid(this.config.resolution, 1, 'half-float'); // 压力场：单通道半精度浮点
+    // ★ 使用 float (32-bit) 而非 half-float：解决 readRenderTargetPixels 兼容性问题。
+    // half-float 纹理在不同浏览器/GPU 上，readPixels 可能要求 Uint16Array 或静默失败读到 0，
+    // 直接用 FloatType + Float32Array 读取可 100% 跨平台稳定（速度场尺寸仅 256² 级别，显存增加无影响）。
+    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'float');
+    this.pressureGrid = new FluidGrid(this.config.resolution, 1, 'float');
   }
 
   /** 初始化场数据：全透明空场 + 零速度 */

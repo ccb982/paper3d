@@ -22,6 +22,9 @@ type ContinuousSourceSnapshot = {
   enabled: boolean;
 };
 
+// ★ 爆发倍率：单次注入（非持续模式）瞬间放大速度，冲破重力束缚
+const BOOST_MULTIPLIER = 5;
+
 const OperationsPanel: React.FC<{
   config: FluidEditorConfig;
   onConfigChange: (updates: Partial<FluidEditorConfig>) => void;
@@ -78,7 +81,7 @@ const OperationsPanel: React.FC<{
   const velY = directionY * speedMagnitude;
   const velMag = Math.sqrt(velX * velX + velY * velY);
   const velAngleDeg = velMag > 0 ? (Math.atan2(velY, velX) * 180) / Math.PI : 0;
-  const arrowLen = Math.min(velMag / 200, 1); // 归一化箭头长度 (0~1)
+  const arrowLen = Math.min(velMag / 1000, 1); // 归一化箭头长度 (0~1, 适配最大3000px/s)
 
   // ★ 预设方向按钮列表（归一化矢量）
   const directions: { dx: number; dy: number; label: string; title: string }[] = [
@@ -232,13 +235,13 @@ const OperationsPanel: React.FC<{
               <input
                 type="range"
                 min="0"
-                max="500"
-                step="5"
+                max="3000"
+                step="10"
                 value={speedMagnitude}
                 onChange={(e) => setSpeedMagnitude(parseFloat(e.target.value))}
                 style={{ flex: 1 }}
               />
-              <span className="hint" style={{ width: '60px', textAlign: 'right' }}>{speedMagnitude.toFixed(0)} px/s</span>
+              <span className="hint" style={{ width: '80px', textAlign: 'right' }}>{speedMagnitude.toFixed(0)} px/s</span>
             </div>
           </div>
 
@@ -352,9 +355,13 @@ const OperationsPanel: React.FC<{
           }}
         >
           <div>🖱️ <b>点击画布</b>即可在鼠标位置执行注入</div>
-          {continuousMode && (
+          {continuousMode ? (
             <div style={{ color: '#1976d2', marginTop: '2px' }}>
               ⚡ 持续注入模式：每次点击<b>新增</b>一个注入源（共 {sources.length} 个活跃源）
+            </div>
+          ) : (
+            <div style={{ color: '#ff9800', marginTop: '2px' }}>
+              💥 单次注入模式：速度放大 <b>×{BOOST_MULTIPLIER}</b> 倍（爆发式）
             </div>
           )}
           <div style={{ marginTop: '2px' }}>
@@ -925,8 +932,12 @@ export const FluidEditorUI: React.FC = () => {
     deltaComposite: { h: number; s: number; l: number };
     // 基础色（参考）
     baseColor: { h: number; s: number; l: number } | null;
-    // 速度
-    velX: number; velY: number; velMag: number;
+    // 速度（纹理坐标系：Y向上为正，从 solver 直接读出）
+    velX: number; velY: number; velMag: number; velDirDeg: number;
+    // 速度（用户坐标系：Y向下为正，UI可见方向）
+    userVelX: number; userVelY: number; userVelDirDeg: number;
+    // 方向文字描述（8方向）
+    dirLabel: string;
   } | null>(null);
 
   // 鼠标注入模式状态
@@ -940,7 +951,7 @@ export const FluidEditorUI: React.FC = () => {
   const [directionX, setDirectionX] = useState(0);
   const [directionY, setDirectionY] = useState(1);
   // ★ 速度大小（标量，px/s）
-  const [speedMagnitude, setSpeedMagnitude] = useState(80);
+  const [speedMagnitude, setSpeedMagnitude] = useState(200);
 
   // 压力参数
   const [pressureParams, setPressureParams] = useState({
@@ -1022,6 +1033,7 @@ export const FluidEditorUI: React.FC = () => {
 
   // ★ 构建注入配置（从当前 UI 状态）
   // 实际速度矢量 = 方向（归一化） × 速度大小（标量）
+
   const buildInjectionConfig = useCallback((pos: { x: number; y: number }) => {
     let color: [number, number, number, number] = [0.0, 0.8, 1.0, 1.0];
     let rate = 0.6 * injectStrength;
@@ -1037,12 +1049,18 @@ export const FluidEditorUI: React.FC = () => {
       rate = 0;
     }
 
-    // ★ 速度矢量 = 方向 × 大小
-    const velX = directionX * speedMagnitude;
-    const velY = directionY * speedMagnitude;
+    // ★ 持续注入使用稳定速度；单次注入使用爆发倍率（5x）
+    const finalSpeedMagnitude = continuousMode
+      ? speedMagnitude
+      : speedMagnitude * BOOST_MULTIPLIER;
 
-    // ★ 初速度调试：记录方向 × 大小 → 速度矢量的构建（用户坐标系，Y向下为正）
-    console.log(`[初速度] 构建: 方向=(${directionX.toFixed(3)},${directionY.toFixed(3)}) × 大小=${speedMagnitude.toFixed(1)} → 速度=(${velX.toFixed(1)},${velY.toFixed(1)}) px/s`);
+    // ★ 速度矢量 = 方向 × 最终大小
+    const velX = directionX * finalSpeedMagnitude;
+    const velY = directionY * finalSpeedMagnitude;
+
+    // ★ 初速度调试
+    const modeLabel = continuousMode ? '持续' : `单次×${BOOST_MULTIPLIER}`;
+    console.log(`[初速度] ${modeLabel}: 方向=(${directionX.toFixed(3)},${directionY.toFixed(3)}) × ${speedMagnitude.toFixed(0)} → ${finalSpeedMagnitude.toFixed(0)} px/s → 速度=(${velX.toFixed(1)},${velY.toFixed(1)})`);
 
     return {
       enabled: true,
@@ -1052,7 +1070,7 @@ export const FluidEditorUI: React.FC = () => {
       velocity: { x: velX, y: velY },
       color,
     };
-  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude]);
+  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude, continuousMode]);
 
   // ★ 删除单个持续注入源
   const handleRemoveSource = useCallback((id: number) => {
@@ -1151,7 +1169,8 @@ export const FluidEditorUI: React.FC = () => {
     const velMat = new THREE.ShaderMaterial({
       uniforms: {
         uVel: { value: editor.getVelocityTexture() },
-        uMaxVel: { value: 1000 },
+        // ★ uMaxVel 匹配速度滑块最大范围 3000 px/s（单次注入爆发可达 15000，但可视化以持续注入范围为准）
+        uMaxVel: { value: 3000 },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -1164,22 +1183,27 @@ export const FluidEditorUI: React.FC = () => {
         uniform sampler2D uVel;
         uniform float uMaxVel;
         varying vec2 vUv;
-        
+
         void main() {
           vec2 vel = texture2D(uVel, vUv).rg;
           float len = length(vel);
           float normalizedLen = min(len / uMaxVel, 1.0);
-          
-          // 速度可视化：红色=X正方向, 绿色=Y正方向, 蓝色=低速
-          vec3 color = vec3(
-            0.5 + vel.x * 0.002,
-            0.5 + vel.y * 0.002,
-            0.5 - (vel.x + vel.y) * 0.001
-          );
-          
+
+          // ★ 速度可视化（HSV 色相映射，适配大速度范围）：
+          //   方向 → 色相（H），速度大小 → 亮度（V）
+          //   角度 0°(→) = 红, 90°(↑) = 绿, 180°(←) = 青, 270°(↓) = 蓝
+          float angle = atan(vel.y, vel.x);           // [-π, π]
+          float hue = (angle / 6.28318530718) + 0.5;  // [0, 1]
+          vec3 hsv = vec3(hue, 0.85, normalizedLen);
+          // HSV → RGB 转换
+          vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+          vec3 p = abs(fract(hsv.xxx + K.xyz) * 6.0 - K.www);
+          vec3 color = hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
+
+          // 低速区域暗化（接近黑色），高速区域饱和
           color *= normalizedLen;
-          color += (1.0 - normalizedLen) * 0.1;
-          
+          color += (1.0 - normalizedLen) * 0.05;
+
           gl_FragColor = vec4(color, 1.0);
         }
       `,
@@ -1868,6 +1892,35 @@ export const FluidEditorUI: React.FC = () => {
             const simResidual = { h: simSample.residualH, s: simSample.residualS, l: simSample.residualL };
             const velMag = Math.sqrt(simSample.velX * simSample.velX + simSample.velY * simSample.velY);
 
+            // ★ 速度方向计算（弧度→角度，0°=右，逆时针为正，Math.atan2(y,x)）
+            // 纹理坐标系：Y 向上为正
+            const velDirDeg = velMag > 0.01
+              ? (Math.atan2(simSample.velY, simSample.velX) * 180 / Math.PI)
+              : 0;
+
+            // ★ 用户坐标系：UI 显示的坐标系，Y 向下为正（翻转 Y 分量）
+            const userVelX = simSample.velX;
+            const userVelY = -simSample.velY; // Y 取反
+            const userVelDirDeg = velMag > 0.01
+              ? (Math.atan2(userVelY, userVelX) * 180 / Math.PI)
+              : 0;
+
+            // ★ 8 方向文字标签（基于用户坐标系，UI 方向一致）
+            const getDirLabel = (deg: number, mag: number): string => {
+              if (mag < 0.01) return '静止';
+              // 归一化到 [0, 360)
+              let d = ((deg % 360) + 360) % 360;
+              if (d < 22.5 || d >= 337.5) return '→ 右';
+              if (d < 67.5) return '↘ 右下';
+              if (d < 112.5) return '↓ 下';
+              if (d < 157.5) return '↙ 左下';
+              if (d < 202.5) return '← 左';
+              if (d < 247.5) return '↖ 左上';
+              if (d < 292.5) return '↑ 上';
+              return '↗ 右上';
+            };
+            const dirLabel = getDirLabel(userVelDirDeg, velMag);
+
             // 2. 从 stash 的原始帧数据读取（loadFrameResidual 时深拷贝存储）
             const origBaseImg = stashedBaseRef.current;
             const origBaseHsl = stashedBaseHslRef.current; // ★ 浮点 HSL 数据
@@ -1963,6 +2016,11 @@ export const FluidEditorUI: React.FC = () => {
               velX: simSample.velX,
               velY: simSample.velY,
               velMag,
+              velDirDeg,
+              userVelX,
+              userVelY,
+              userVelDirDeg,
+              dirLabel,
             });
 
           }}
@@ -2103,9 +2161,223 @@ export const FluidEditorUI: React.FC = () => {
               </div>
             </div>
 
-            {/* 速度信息 */}
-            <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid #eee', fontSize: '10px', color: '#666' }}>
-              速度: ({sampleInfo.velX.toFixed(2)}, {sampleInfo.velY.toFixed(2)}) | 速率: {sampleInfo.velMag.toFixed(2)} px/s
+            {/* ========== 速度专场：方向 + 大小 + 双坐标系 ========== */}
+            <div style={{
+              marginTop: '10px',
+              borderTop: '2px solid #ff9800',
+              paddingTop: '8px',
+            }}>
+              <div style={{
+                fontWeight: 'bold',
+                fontSize: '11px',
+                color: '#e65100',
+                marginBottom: '6px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}>
+                <span>🌪️ 速度场采样（像素 ({sampleInfo.px}, {sampleInfo.py})）</span>
+                {/* 方向标签 */}
+                <span style={{
+                  fontSize: '10px',
+                  background: sampleInfo.velMag < 0.01 ? '#e0e0e0' : '#fff3e0',
+                  color: sampleInfo.velMag < 0.01 ? '#9e9e9e' : '#e65100',
+                  padding: '1px 6px',
+                  borderRadius: '3px',
+                  fontWeight: 'bold',
+                  border: '1px solid #ffcc80',
+                }}>
+                  {sampleInfo.dirLabel}
+                </span>
+              </div>
+
+              {/* 可视化箭头 + 速率大数字 */}
+              <div style={{
+                display: 'flex',
+                gap: '10px',
+                marginBottom: '8px',
+                alignItems: 'center',
+              }}>
+                {/* ★ 方向罗盘（SVG 箭头可视化） */}
+                <div style={{
+                  width: '64px',
+                  height: '64px',
+                  borderRadius: '50%',
+                  background: 'radial-gradient(circle, #fff8e1 0%, #ffe0b2 100%)',
+                  border: '2px solid #ff9800',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  position: 'relative',
+                  boxShadow: '0 2px 6px rgba(255,152,0,0.25)',
+                }}>
+                  {/* 罗盘刻度参考：十字线 */}
+                  <div style={{
+                    position: 'absolute',
+                    width: '50%', height: '1px',
+                    background: 'rgba(255,152,0,0.3)',
+                    left: '25%', top: '50%',
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    width: '1px', height: '50%',
+                    background: 'rgba(255,152,0,0.3)',
+                    left: '50%', top: '25%',
+                  }} />
+                  {/* 动态箭头（基于用户坐标系方向） */}
+                  {sampleInfo.velMag > 0.01 ? (
+                    <svg
+                      width="52"
+                      height="52"
+                      viewBox="-26 -26 52 52"
+                      style={{
+                        transform: `rotate(${-(sampleInfo.userVelDirDeg)}deg)`,
+                        // 注意：SVG 默认 0° = 右（+X），我们希望 UI 0°=右，顺时针旋转角度
+                        // Math.atan2(y,x) 得到的角度是"从+x轴逆时针到向量的角度"
+                        // CSS rotate() 是"顺时针正"，所以取反 = 用户看到的屏幕方向
+                      }}
+                    >
+                      {/* 箭头线：长度随速率归一化 */}
+                      {(() => {
+                        // 最大参考速度 3000 px/s 时箭头拉满到 22 半径
+                        const arrowLen = Math.min(22, Math.max(4, 22 * Math.sqrt(sampleInfo.velMag / 3000)));
+                        return (
+                          <>
+                            {/* 箭身 */}
+                            <line
+                              x1="0" y1="0"
+                              x2={arrowLen} y2="0"
+                              stroke="#e65100"
+                              strokeWidth="3"
+                              strokeLinecap="round"
+                            />
+                            {/* 箭头头部三角 */}
+                            <polygon
+                              points={`${arrowLen},0 ${arrowLen - 6},-4 ${arrowLen - 6},4`}
+                              fill="#e65100"
+                            />
+                          </>
+                        );
+                      })()}
+                    </svg>
+                  ) : (
+                    <span style={{ fontSize: '16px', color: '#9e9e9e' }}>●</span>
+                  )}
+                </div>
+
+                {/* 速率数值（大字） */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: '22px',
+                    fontWeight: 'bold',
+                    color: sampleInfo.velMag > 1000 ? '#d32f2f' : sampleInfo.velMag > 200 ? '#f57c00' : '#e65100',
+                    fontFamily: 'monospace',
+                    lineHeight: 1,
+                    marginBottom: '2px',
+                  }}>
+                    {sampleInfo.velMag < 0.01 ? '0.00' : sampleInfo.velMag.toFixed(1)}
+                    <span style={{ fontSize: '11px', color: '#888', fontWeight: 'normal', marginLeft: '3px' }}>
+                      px/s
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#666', marginBottom: '2px' }}>
+                    速率等级：
+                    <span style={{
+                      fontWeight: 'bold',
+                      color: sampleInfo.velMag < 0.01 ? '#9e9e9e' :
+                             sampleInfo.velMag < 50 ? '#4caf50' :
+                             sampleInfo.velMag < 250 ? '#2196f3' :
+                             sampleInfo.velMag < 1000 ? '#ff9800' : '#f44336',
+                    }}>
+                      {sampleInfo.velMag < 0.01 ? '静止' :
+                       sampleInfo.velMag < 50 ? '极慢' :
+                       sampleInfo.velMag < 250 ? '慢速' :
+                       sampleInfo.velMag < 1000 ? '中速' :
+                       sampleInfo.velMag < 2500 ? '高速' : '超速'}
+                    </span>
+                  </div>
+                  {/* 重力影响评估 */}
+                  {sampleInfo.velMag > 0.01 && (
+                    <div style={{ fontSize: '10px', color: '#666' }}>
+                      停止距离：约 <b style={{ color: '#1976d2' }}>{(sampleInfo.velMag * sampleInfo.velMag / 500).toFixed(0)}</b> 像素
+                      {/* 物理估算：v² = 2as → s = v²/(2a), a = g = 250 */}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 双坐标系详细数据 */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '6px',
+                fontSize: '10px',
+              }}>
+                {/* 用户坐标系（屏幕坐标系） */}
+                <div style={{
+                  padding: '5px 7px',
+                  background: '#fff3e0',
+                  border: '1px solid #ffcc80',
+                  borderRadius: '4px',
+                }}>
+                  <div style={{ fontWeight: 'bold', color: '#e65100', marginBottom: '2px' }}>
+                    👁️ 用户坐标 (Y↓)
+                  </div>
+                  <div style={{ fontFamily: 'monospace', color: '#333' }}>
+                    Vx: {sampleInfo.userVelX.toFixed(2)} px/s
+                  </div>
+                  <div style={{ fontFamily: 'monospace', color: '#333' }}>
+                    Vy: {sampleInfo.userVelY.toFixed(2)} px/s
+                  </div>
+                  <div style={{ fontFamily: 'monospace', color: '#555' }}>
+                    θ: {sampleInfo.userVelDirDeg.toFixed(1)}°
+                  </div>
+                </div>
+                {/* 纹理坐标系（求解器内部） */}
+                <div style={{
+                  padding: '5px 7px',
+                  background: '#e3f2fd',
+                  border: '1px solid #90caf9',
+                  borderRadius: '4px',
+                }}>
+                  <div style={{ fontWeight: 'bold', color: '#1565c0', marginBottom: '2px' }}>
+                    ⚙️ 纹理坐标 (Y↑)
+                  </div>
+                  <div style={{ fontFamily: 'monospace', color: '#333' }}>
+                    Vx: {sampleInfo.velX.toFixed(2)} px/s
+                  </div>
+                  <div style={{ fontFamily: 'monospace', color: '#333' }}>
+                    Vy: {sampleInfo.velY.toFixed(2)} px/s
+                  </div>
+                  <div style={{ fontFamily: 'monospace', color: '#555' }}>
+                    θ: {sampleInfo.velDirDeg.toFixed(1)}°
+                  </div>
+                </div>
+              </div>
+
+              {/* 速度矢量分解可视化（小条） */}
+              <div style={{
+                marginTop: '6px',
+                padding: '4px 6px',
+                background: '#f5f5f5',
+                borderRadius: '3px',
+                fontSize: '9px',
+                color: '#666',
+              }}>
+                <span>矢量：</span>
+                <span style={{ fontFamily: 'monospace', color: '#e65100' }}>
+                  {sampleInfo.userVelX >= 0 ? '→' : '←'} {Math.abs(sampleInfo.userVelX).toFixed(1)}
+                </span>
+                <span style={{ margin: '0 4px', color: '#bbb' }}>|</span>
+                <span style={{ fontFamily: 'monospace', color: '#e65100' }}>
+                  {sampleInfo.userVelY >= 0 ? '↓' : '↑'} {Math.abs(sampleInfo.userVelY).toFixed(1)}
+                </span>
+                <span style={{ margin: '0 4px', color: '#bbb' }}>|</span>
+                <span style={{ fontFamily: 'monospace' }}>
+                  ‖v‖ = {sampleInfo.velMag.toFixed(1)} px/s
+                </span>
+              </div>
             </div>
           </div>
         )}

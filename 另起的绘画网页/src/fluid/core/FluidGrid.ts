@@ -1,4 +1,4 @@
-﻿﻿import * as THREE from 'three';
+﻿import * as THREE from 'three';
 
 /**
  * 平流通道掩码 —— 控制 R/G/B/A 中哪些通道参与平流。
