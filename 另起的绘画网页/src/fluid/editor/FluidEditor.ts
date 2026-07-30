@@ -12,6 +12,39 @@ import { FluidOperations, type InjectionConfig } from './FluidOperations';
 
 export type ViewMode = 'color' | 'velocity' | 'composite';
 
+/** 速度场数据类型：'half-float'（16位半精度，显存减半）或 'float'（32位单精度，高精度） */
+export type VelocityDataType = 'half-float' | 'float';
+
+/**
+ * HalfFloat（IEEE 754 binary16）→ Float32 解码。
+ * 用于从 Uint16Array 回读 half-float 纹理时手动解码。
+ * 
+ * 格式（16 位）：
+ *   bit 15    = 符号位（0=正, 1=负）
+ *   bit 10-14 = 指数位（5位，偏移 15）
+ *   bit 0-9   = 尾数位（10位，隐含前导 1）
+ */
+export function halfToFloat(half: number): number {
+  const sign = (half >> 15) & 0x1;
+  const exponent = (half >> 10) & 0x1f;
+  const mantissa = half & 0x3ff;
+
+  // 零值或次正规数
+  if (exponent === 0) {
+    if (mantissa === 0) return sign ? -0 : 0;
+    // 次正规数：(-1)^sign × 2^(-14) × (0.mantissa)
+    return (sign ? -1 : 1) * Math.pow(2, -14) * (mantissa / 1024);
+  }
+  // 无穷或 NaN
+  if (exponent === 31) {
+    if (mantissa === 0) return sign ? -Infinity : Infinity;
+    return NaN;
+  }
+  // 正规数：(-1)^sign × 2^(exponent-15) × (1 + mantissa/1024)
+  const floatMantissa = mantissa / 1024;
+  return (sign ? -1 : 1) * Math.pow(2, exponent - 15) * (1 + floatMantissa);
+}
+
 export interface FluidEditorConfig {
   resolution: { w: number; h: number };
   /** 逐通道平流开关（物理 RGBA，逻辑 HSLA：R=H, G=S, B=L, A=Alpha） */
@@ -40,6 +73,8 @@ export interface FluidEditorConfig {
   };
   /** 颜色场平流边界模式：'clamp'（钳制）、'repeat'（重复）、'zero'（越界消失） */
   colorBoundaryMode?: 'clamp' | 'repeat' | 'zero';
+  /** 速度场数据类型：'half-float'（16位半精度，显存减半）或 'float'（32位单精度，高精度） */
+  velocityDataType?: VelocityDataType;
 }
 
 // ============================================================
@@ -112,12 +147,16 @@ export class FluidEditor {
    */
   updateConfig(updates: Partial<FluidEditorConfig>): void {
     const oldRes = this.config.resolution;
+    const oldVelType = this.config.velocityDataType;
     Object.assign(this.config, updates);
 
-    if (
+    const resChanged =
       updates.resolution &&
-      (updates.resolution.w !== oldRes.w || updates.resolution.h !== oldRes.h)
-    ) {
+      (updates.resolution.w !== oldRes.w || updates.resolution.h !== oldRes.h);
+    const velTypeChanged =
+      updates.velocityDataType && updates.velocityDataType !== oldVelType;
+
+    if (resChanged || velTypeChanged) {
       this.rebuildGrids();
       // ★ 重建纹理后必须立即 initFields()，否则新纹理没有初始化数据，
       // 后续 injectColor/injectVelocity 等操作会触发 WebGL INVALID_OPERATION (1282)
@@ -139,11 +178,12 @@ export class FluidEditor {
       ...config,
       // 位置：Y向下为正，纹理坐标也Y向下为正（因为flipY=false），无需转换
       position: { x: config.position.x, y: config.position.y },
-      // 速度：用户Y向下为正，纹理坐标Y向上为正，取反
-      velocity: { x: config.velocity.x, y: -config.velocity.y },
+      // ★ 速度：用户反馈两种数据类型下注入初速度方向都反了，
+      //   仅对注入初速度方向取反修复——移除原先的 Y 取反，让速度直接透传。
+      //   （纹理渲染链路中 Y 方向已有翻转处理，此处再取反会导致双重翻转）
+      velocity: { x: config.velocity.x, y: config.velocity.y },
     };
-    // ★ 初速度调试：记录坐标系转换（用户坐标 Y向下为正 → 纹理坐标 Y向上为正）
-    console.log(`[初速度] 坐标适配: 用户速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) → 纹理速度=(${adapted.velocity.x.toFixed(2)},${adapted.velocity.y.toFixed(2)}) [Y取反]`);
+    console.log(`[初速度] 坐标适配: 用户速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) → 纹理速度=(${adapted.velocity.x.toFixed(2)},${adapted.velocity.y.toFixed(2)}) [直接透传]`);
     return adapted;
   }
 
@@ -515,6 +555,46 @@ export class FluidEditor {
   }
 
   /**
+   * 读取速度场指定位置的像素值，自动根据 velocityDataType 选择读取方式。
+   * - float: 用 Float32Array 直接读出 32 位浮点
+   * - half-float: 用 Uint16Array 读取原始 16 位，再用 halfToFloat 解码
+   */
+  private readVelocityPixelData(
+    target: THREE.WebGLRenderTarget,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): Float32Array {
+    const dtype: VelocityDataType = this.config.velocityDataType || 'float';
+    const count = width * height * 2; // 每像素 2 通道 (RG)
+
+    if (dtype === 'float') {
+      // 32位浮点：直接用 Float32Array 读取，Three.js/WebGL 自动填充为 float32
+      const buf = new Float32Array(count);
+      const prevTarget = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(target);
+      this.renderer.readRenderTargetPixels(target, x, y, width, height, buf);
+      this.renderer.setRenderTarget(prevTarget);
+      return buf;
+    } else {
+      // 16位半精度：用 Uint16Array 读取原始位模式，再手动解码
+      const raw = new Uint16Array(count);
+      const prevTarget = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(target);
+      this.renderer.readRenderTargetPixels(target, x, y, width, height, raw);
+      this.renderer.setRenderTarget(prevTarget);
+
+      // 解码 HalfFloat → Float32
+      const result = new Float32Array(count);
+      for (let i = 0; i < count; i++) {
+        result[i] = halfToFloat(raw[i]);
+      }
+      return result;
+    }
+  }
+
+  /**
    * 采样指定像素位置的颜色和速度值。
    * @param x 像素 X 坐标（0 ~ w-1，UI 坐标系：左上角为原点）
    * @param y 像素 Y 坐标（0 ~ h-1，UI 坐标系：Y 向下为正）
@@ -543,25 +623,18 @@ export class FluidEditor {
     const b = colorPixels[colorIdx + 2] / 255; // = L 增量
     const a = colorPixels[colorIdx + 3] / 255; // = Alpha
 
-    // 2. 读取速度像素（RG 2通道 → float32）
-    // velocityGrid 是 RGFormat + FloatType，每个像素 2 个 float。
-    // readRenderTargetPixels 会严格按通道数返回，所以用 Float32Array(2)。
-    // ★ 注意：部分浏览器对 RGFormat + readPixels 有兼容性问题，
-    //   这里兜底先读 RGBA(4通道) 再取前两通道，确保稳定。
-    const velData = new Float32Array(4);
-    const target = this.velocityGrid.readTarget;
-    const prevTarget = this.renderer.getRenderTarget();
-
-    this.renderer.setRenderTarget(target);
-    this.renderer.readRenderTargetPixels(target, px, readPy, 1, 1, velData);
-    this.renderer.setRenderTarget(prevTarget);
-
+    // 2. 读取速度像素（根据 velocityDataType 自动选择 float/half-float 读取方式）
+    const velData = this.readVelocityPixelData(
+      this.velocityGrid.readTarget,
+      px, readPy, 1, 1,
+    );
     const velX = velData[0];
     const velY = velData[1];
 
     // ★ 调试断言：如果读到 NaN 或极端值，输出警告（帮助定位读取问题）
     if (!(Number.isFinite(velX) && Number.isFinite(velY))) {
-      console.warn(`[samplePixel] ⚠️ 速度读回异常：velX=${velX}, velY=${velY} @ (${px},${py}) readY=${readPy} size=${w}x${h}`);
+      const dtype = this.config.velocityDataType || 'float';
+      console.warn(`[samplePixel] ⚠️ 速度读回异常（${dtype}）：velX=${velX}, velY=${velY} @ (${px},${py}) readY=${readPy} size=${w}x${h}`);
     }
 
     return { residualH: r, residualS: g, residualL: b, alpha: a, velX, velY };
@@ -591,8 +664,8 @@ export class FluidEditor {
   /**
    * 将速度场从 GPU 回读到 CPU（Uint8Array RGBA，R=velX, G=velY）。
    *
-   * ★ velocityGrid 是 RGFormat + FloatType（32位浮点），每像素 2 个 float = 8 字节。
-   *   readRenderTargetPixels 用 Float32Array 读取后，需要将速度值映射到 [0,255] 用于 ImageData 显示。
+   * ★ 自动根据 velocityDataType 选择读取方式（float / half-float）。
+   *   读回后将速度值映射到 [0,255] 用于 ImageData 显示。
    *   映射规则：以 uMaxVel 为参考最大速度，vel 范围 [-uMaxVel, +uMaxVel] → [0, 255]，
    *            0 速度 = 128（中灰），正速度 > 128，负速度 < 128。
    *
@@ -603,14 +676,11 @@ export class FluidEditor {
    */
   readVelocityPixels(maxVel: number = 3000): Uint8Array {
     const { w, h } = this.config.resolution;
-    // ★ 用 Float32Array 读取（匹配 FloatType 纹理），每像素 2 通道 = 2 个 float
-    const raw = new Float32Array(w * h * 2);
-    const target = this.velocityGrid.readTarget;
-
-    const prevTarget = this.renderer.getRenderTarget();
-    this.renderer.setRenderTarget(target);
-    this.renderer.readRenderTargetPixels(target, 0, 0, w, h, raw);
-    this.renderer.setRenderTarget(prevTarget);
+    // ★ 使用统一的辅助方法读取（自动处理 float / half-float）
+    const raw = this.readVelocityPixelData(
+      this.velocityGrid.readTarget,
+      0, 0, w, h,
+    );
 
     // 扩展为 RGBA uint8（速度值映射到 0-255 可视化）
     const rgba = new Uint8Array(w * h * 4);
@@ -647,15 +717,13 @@ export class FluidEditor {
       ]);
     }
     
-    // 2. 回读速度数据（使用 Float32Array，Three.js 自动转换 half-float → float32）
-    const velPixels = new Float32Array(w * h * 2); // RG 双通道，每个像素 2 个 float32
-    const target = this.velocityGrid.readTarget;
-    const prevTarget = this.renderer.getRenderTarget();
-    this.renderer.setRenderTarget(target);
-    this.renderer.readRenderTargetPixels(target, 0, 0, w, h, velPixels);
-    this.renderer.setRenderTarget(prevTarget);
+    // 2. 回读速度数据（使用统一的 readVelocityPixelData，自动处理 float/half-float）
+    const velPixels = this.readVelocityPixelData(
+      this.velocityGrid.readTarget,
+      0, 0, w, h,
+    );
     
-    // 直接转换为二维数组（无需手动 half-float 转换）
+    // 直接转换为二维数组（readVelocityPixelData 已返回 Float32Array）
     const velData: number[][] = [];
     for (let i = 0; i < w * h; i++) {
       const velX = velPixels[i * 2];
@@ -696,6 +764,7 @@ export class FluidEditor {
       ).length,
     );
 
+    const velDataType: VelocityDataType = this.config.velocityDataType || 'float';
 
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
@@ -706,11 +775,11 @@ export class FluidEditor {
       colorCh as 1 | 2 | 3 | 4,
       'uint8',
     );
-    // ★ 使用 float (32-bit) 而非 half-float：解决 readRenderTargetPixels 兼容性问题。
-    // half-float 纹理在不同浏览器/GPU 上，readPixels 可能要求 Uint16Array 或静默失败读到 0，
-    // 直接用 FloatType + Float32Array 读取可 100% 跨平台稳定（速度场尺寸仅 256² 级别，显存增加无影响）。
-    this.velocityGrid = new FluidGrid(this.config.resolution, 2, 'float');
-    this.pressureGrid = new FluidGrid(this.config.resolution, 1, 'float');
+    // ★ 速度场/压力场数据类型：由 velocityDataType 配置决定
+    //   'float'（默认）: 32位单精度，高精度，readPixels 用 Float32Array 直接读出
+    //   'half-float': 16位半精度，显存减半，readPixels 用 Uint16Array + halfToFloat 手动解码
+    this.velocityGrid = new FluidGrid(this.config.resolution, 2, velDataType);
+    this.pressureGrid = new FluidGrid(this.config.resolution, 1, velDataType);
   }
 
   /** 初始化场数据：全透明空场 + 零速度 */

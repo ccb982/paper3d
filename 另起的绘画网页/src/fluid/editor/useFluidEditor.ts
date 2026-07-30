@@ -25,6 +25,7 @@ export function useFluidEditor(
     enableWarmStart: true,
     enableLevelSet: false,
     gravity: 250, // 正值向下（屏幕坐标系）
+    velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)
     injection: {
       enabled: true,
       position: { x: 0.5, y: 0.25 }, // Y向下为正，0.25 = 靠近顶部（25%位置）

@@ -553,6 +553,54 @@ const GeneralPanel: React.FC<{
           </div>
         </div>
 
+        {/* 速度场数据类型 */}
+        <div className="control-group">
+          <label>速度场精度</label>
+          <div className="row" style={{ gap: '6px' }}>
+            <button
+              type="button"
+              onClick={() => onConfigChange({ velocityDataType: 'float' })}
+              style={{
+                flex: 1,
+                padding: '4px 8px',
+                fontSize: '11px',
+                background: config.velocityDataType === 'float' ? '#2196f3' : '#f5f5f5',
+                color: config.velocityDataType === 'float' ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: config.velocityDataType === 'float' ? 'bold' : 'normal',
+              }}
+              title="32位单精度浮点：高精度，显存翻倍，readPixels 直接读出"
+            >
+              32位 Float
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfigChange({ velocityDataType: 'half-float' })}
+              style={{
+                flex: 1,
+                padding: '4px 8px',
+                fontSize: '11px',
+                background: config.velocityDataType === 'half-float' ? '#ff9800' : '#f5f5f5',
+                color: config.velocityDataType === 'half-float' ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: config.velocityDataType === 'half-float' ? 'bold' : 'normal',
+              }}
+              title="16位半精度浮点：显存减半，readPixels 用 Uint16Array + halfToFloat 解码"
+            >
+              16位 Half
+            </button>
+          </div>
+          <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+            {config.velocityDataType === 'float'
+              ? '32位浮点：高精度，每像素 8 字节（RG×4B）'
+              : '16位半精度：显存减半，每像素 4 字节（RG×2B），精度略低'}
+          </span>
+        </div>
+
         {/* 通道选择 */}
         <div className="control-group">
           <label>平流通道</label>
@@ -1008,6 +1056,7 @@ export const FluidEditorUI: React.FC = () => {
     enablePressure: false,
     enableLevelSet: false,
     gravity: 250, // 正值向下（屏幕坐标系）
+    velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)
     injection: {
       enabled: true,
       position: { x: 0.5, y: 0.25 }, // Y向下为正，0.25 = 靠近顶部（25%位置）
@@ -1382,10 +1431,10 @@ export const FluidEditorUI: React.FC = () => {
         ctx.fill();
 
         // 3. 绘制速度箭头
-        // 注意：src.velocity 已被 adaptInjectionConfig 转换（Y 取反为纹理坐标），
-        // 用户视角 Y 向下为正，所以绘制时把 velocity.y 再取反
+        // 注意：adaptInjectionConfig 已改为直接透传速度（不再 Y 取反），
+        // 所以 src.velocity 就是用户视角速度（Y 向下为正），直接使用即可
         const userVelX = src.velocity.x;
-        const userVelY = -src.velocity.y;
+        const userVelY = src.velocity.y;
         const velMag = Math.sqrt(userVelX * userVelX + userVelY * userVelY);
         if (velMag > 0.1) {
           // 箭头长度：速度大小映射到像素（最大 60px）
