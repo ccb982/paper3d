@@ -335,7 +335,7 @@ const OperationsPanel: React.FC<{
           <div className="row">
             <input
               type="number"
-              step={10}
+              step={0.5}
               value={config.gravity}
               onChange={(e) => onConfigChange({ gravity: +e.target.value })}
             />
@@ -1055,7 +1055,7 @@ export const FluidEditorUI: React.FC = () => {
     enableAdvection: true,
     enablePressure: false,
     enableLevelSet: false,
-    gravity: 250, // 正值向下（屏幕坐标系）
+    gravity: 5, // 正值向下（屏幕坐标系）
     velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)
     injection: {
       enabled: true,

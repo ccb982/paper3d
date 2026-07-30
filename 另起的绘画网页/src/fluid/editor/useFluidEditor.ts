@@ -24,7 +24,7 @@ export function useFluidEditor(
     pressureBoundaryMode: 'neumann',
     enableWarmStart: true,
     enableLevelSet: false,
-    gravity: 250, // 正值向下（屏幕坐标系）
+    gravity: 5, // 正值向下（屏幕坐标系）
     velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)
     injection: {
       enabled: true,
