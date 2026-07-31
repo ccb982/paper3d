@@ -1150,6 +1150,60 @@ export const FluidEditorUI: React.FC = () => {
     };
   }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude, continuousMode]);
 
+  // ★ 鼠标按住状态：单次模式下长按 = 临时持续注入（松开即停）
+  const pointerDownRef = useRef(false);
+  const pointerPosRef = useRef<{ x: number; y: number }>({ x: 0.5, y: 0.5 });
+  // ★ 供 rAF 循环读取的最新 UI 状态（避免闭包捕获旧值）
+  const injectModeRef = useRef(injectMode);
+  injectModeRef.current = injectMode;
+  const continuousModeRef = useRef(continuousMode);
+  continuousModeRef.current = continuousMode;
+  const continuousPausedRef = useRef(continuousPaused);
+  continuousPausedRef.current = continuousPaused;
+  const buildInjectionConfigRef = useRef(buildInjectionConfig);
+  buildInjectionConfigRef.current = buildInjectionConfig;
+
+  // ★ 鼠标按下：单次模式立即注入一次，并记录按住状态（长按则由 rAF 循环每帧持续注入）
+  const handlePointerDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = displayCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const normX = (e.clientX - rect.left) / rect.width;
+    const normY = (e.clientY - rect.top) / rect.height;
+    const pos = { x: normX, y: normY };
+
+    // 记录按住状态和位置（供 rAF 循环持续注入检测）
+    pointerDownRef.current = true;
+    pointerPosRef.current = pos;
+
+    // 单次模式（非持续、非印章）：按下立即注入一次，长按则每帧注入
+    if (editor && !continuousMode && injectMode !== 'stamp') {
+      const injectConfig = buildInjectionConfig(pos);
+      editor.queueInjection(injectConfig);
+    }
+  }, [editor, continuousMode, injectMode, buildInjectionConfig]);
+
+  // ★ 鼠标松开：停止临时持续注入
+  const handlePointerUp = useCallback(() => {
+    pointerDownRef.current = false;
+  }, []);
+
+  // ★ 鼠标在画布上移动：按住时更新注入位置（长按拖动 = 沿轨迹持续注入）
+  const handlePointerMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!pointerDownRef.current) return;
+    const canvas = displayCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const normX = (e.clientX - rect.left) / rect.width;
+    const normY = (e.clientY - rect.top) / rect.height;
+    pointerPosRef.current = { x: normX, y: normY };
+  }, []);
+
+  // ★ 鼠标离开画布：停止临时持续注入
+  const handlePointerLeave = useCallback(() => {
+    pointerDownRef.current = false;
+  }, []);
+
   // ★ 删除单个持续注入源
   const handleRemoveSource = useCallback((id: number) => {
     if (!editor) return;
@@ -1553,6 +1607,17 @@ export const FluidEditorUI: React.FC = () => {
       else targetScene = compositeScene;
       renderer.render(targetScene, camera);
 
+      // ★ 单次模式鼠标长按：每帧临时持续注入（按住期间注入，松开即停）
+      if (
+        pointerDownRef.current &&
+        !continuousModeRef.current &&
+        injectModeRef.current !== 'stamp' &&
+        !continuousPausedRef.current
+      ) {
+        const injectConfig = buildInjectionConfigRef.current(pointerPosRef.current);
+        editor.queueInjection(injectConfig);
+      }
+
       // ★ 持续注入点可视化：在 overlay canvas 上绘制注入源位置、半径、速度箭头
       drawContinuousSourcesOverlay();
 
@@ -1937,6 +2002,10 @@ export const FluidEditorUI: React.FC = () => {
         <div className="canvas-wrapper">
         <canvas
           ref={displayCanvasRef}
+          onMouseDown={handlePointerDown}
+          onMouseUp={handlePointerUp}
+          onMouseMove={handlePointerMove}
+          onMouseLeave={handlePointerLeave}
           onClick={(e) => {
             if (!editor) return;
             const canvas = displayCanvasRef.current;
@@ -2084,11 +2153,9 @@ export const FluidEditorUI: React.FC = () => {
               const injectConfig = buildInjectionConfig(pos);
               editor.addContinuousInjection(injectConfig);
               refreshSources(); // 刷新 UI 源列表
-            } else {
-              // 一次性注入模式：复用 buildInjectionConfig 统一速度计算
-              const injectConfig = buildInjectionConfig(pos);
-              editor.queueInjection(injectConfig);
             }
+            // 单次注入模式：注入已在 onMouseDown 中完成（长按则由 rAF 循环每帧持续注入），
+            // 此处仅执行采样逻辑
 
             // 像素坐标用于采样
             const texX = pixX;
