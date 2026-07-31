@@ -89,6 +89,13 @@ export class FluidOperations {
   private continuousSources: { id: number; config: InjectionConfig }[] = [];
   private nextSourceId = 1;
 
+  /**
+   * 持续注入总开关。
+   * 关闭时暂停所有持续注入源的处理，但保留源列表（队列独立存在）。
+   * 再次开启后，所有源自动恢复注入。
+   */
+  private continuousInjectionEnabled = false;
+
   /** 初速度调试：帧计数器，用于每帧应用日志节流（每 30 帧打印一次） */
   private _velDebugFrameCounter = 0;
 
@@ -191,6 +198,17 @@ export class FluidOperations {
     this.continuousSources = [];
   }
 
+  /**
+   * 设置持续注入总开关。
+   * 关闭时暂停所有持续注入源的处理，但保留源列表（队列独立存在），
+   * 再次开启后所有源自动恢复注入。
+   *
+   * @param enabled 是否启用持续注入
+   */
+  public setContinuousInjectionEnabled(enabled: boolean): void {
+    this.continuousInjectionEnabled = enabled;
+  }
+
   /** 获取当前活跃的持续注入源数量 */
   public get continuousSourceCount(): number {
     return this.continuousSources.length;
@@ -232,6 +250,8 @@ export class FluidOperations {
     gridVelocity: FluidGrid,
     dt: number,
   ): void {
+    // 总开关关闭时暂停所有持续注入源（但保留源列表，重新开启后自动恢复）
+    if (!this.continuousInjectionEnabled) return;
     if (this.continuousSources.length === 0) return;
 
     // ★ 初速度调试：节流日志（每 30 帧打印一次），记录每帧初速度应用情况

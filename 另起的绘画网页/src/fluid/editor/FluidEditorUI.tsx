@@ -9,7 +9,7 @@ import { hslToRgb } from '../../utils/colorCompressor';
 // ============================================================
 // 子组件：操作面板（鼠标点击注入模式）
 // ============================================================
-type InjectMode = 'water' | 'color' | 'velocity';
+type InjectMode = 'water' | 'color' | 'velocity' | 'stamp';
 
 // 持续注入源快照类型
 type ContinuousSourceSnapshot = {
@@ -47,6 +47,9 @@ const OperationsPanel: React.FC<{
   sources: ContinuousSourceSnapshot[];
   onRemoveSource: (id: number) => void;
   onClearAllSources: () => void;
+  // ★ 手动暂停/恢复持续注入（不影响源队列，也不受持续模式开关影响）
+  continuousPaused: boolean;
+  onTogglePaused: () => void;
 }> = ({
   config,
   onConfigChange,
@@ -67,11 +70,14 @@ const OperationsPanel: React.FC<{
   sources,
   onRemoveSource,
   onClearAllSources,
+  continuousPaused,
+  onTogglePaused,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
     { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
     { key: 'color', label: '🎨 颜料', desc: '红色颜料（无速度）' },
     { key: 'velocity', label: '💨 速度', desc: '仅方向速度（无色）' },
+    { key: 'stamp', label: '📎 残差印章', desc: '从FTX残差纹理采样噪点块注入' },
   ];
 
   const currentMode = modes.find((m) => m.key === injectMode)!;
@@ -372,8 +378,8 @@ const OperationsPanel: React.FC<{
           </div>
         </div>
 
-        {/* 持续注入源列表（仅持续模式下显示） */}
-        {continuousMode && (
+        {/* 持续注入源列表（队列独立存在，与持续模式开关、暂停状态均无关） */}
+        {sources.length > 0 && (
           <div
             style={{
               marginTop: '8px',
@@ -396,24 +402,45 @@ const OperationsPanel: React.FC<{
                   color: '#333',
                 }}
               >
-                活跃注入源 ({sources.length})
+                持续注入源 ({sources.length})
+                {continuousPaused && (
+                  <span style={{ color: '#ff9800', fontWeight: 'normal' }}>（已暂停）</span>
+                )}
               </span>
-              {sources.length > 0 && (
-                <button
-                  onClick={onClearAllSources}
-                  style={{
-                    fontSize: '10px',
-                    background: '#f44336',
-                    color: '#fff',
-                    border: 'none',
-                    borderRadius: '3px',
-                    padding: '2px 8px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  清空所有
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                {sources.length > 0 && (
+                  <>
+                    <button
+                      onClick={onTogglePaused}
+                      style={{
+                        fontSize: '10px',
+                        background: continuousPaused ? '#4caf50' : '#ff9800',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '3px',
+                        padding: '2px 8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {continuousPaused ? '▶ 恢复' : '⏸ 暂停'}
+                    </button>
+                    <button
+                      onClick={onClearAllSources}
+                      style={{
+                        fontSize: '10px',
+                        background: '#f44336',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '3px',
+                        padding: '2px 8px',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      清空所有
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
             {/* 源列表（可滚动） */}
             <div
@@ -995,6 +1022,8 @@ export const FluidEditorUI: React.FC = () => {
 
   // 持续注入模式状态
   const [continuousMode, setContinuousMode] = useState(false);
+  // ★ 手动暂停/恢复持续注入（独立控制，不影响持续模式开关和源队列）
+  const [continuousPaused, setContinuousPaused] = useState(false);
   // ★ 方向（归一化矢量），默认向下 (0, 1) —— 屏幕坐标系 Y 向下为正
   const [directionX, setDirectionX] = useState(0);
   const [directionY, setDirectionY] = useState(1);
@@ -1135,13 +1164,23 @@ export const FluidEditorUI: React.FC = () => {
     refreshSources();
   }, [editor, refreshSources]);
 
-  // ★ 当 continuousMode 关闭时，清空所有持续注入源
+  // ★ 暂停/恢复持续注入：仅由手动暂停状态驱动，不影响源队列
   useEffect(() => {
-    if (!continuousMode && editor) {
-      editor.clearContinuousInjections();
-      setContinuousSources([]);
+    if (editor) {
+      editor.setContinuousInjectionEnabled(!continuousPaused);
     }
-  }, [continuousMode, editor]);
+  }, [continuousPaused, editor]);
+
+  // ★ 切换暂停/恢复状态
+  const handleTogglePaused = useCallback(() => {
+    setContinuousPaused((p) => {
+      const next = !p;
+      if (editor) {
+        editor.setContinuousInjectionEnabled(!next);
+      }
+      return next;
+    });
+  }, [editor]);
 
   // ★ 当 editor 实例变化时（如重建），刷新源列表（旧源已不存在，将得到空列表）
   useEffect(() => {
@@ -1811,6 +1850,8 @@ export const FluidEditorUI: React.FC = () => {
           sources={continuousSources}
           onRemoveSource={handleRemoveSource}
           onClearAllSources={handleClearAllSources}
+          continuousPaused={continuousPaused}
+          onTogglePaused={handleTogglePaused}
         />
 
         {/* FTX 帧数据加载 */}
@@ -1921,6 +1962,123 @@ export const FluidEditorUI: React.FC = () => {
             const pos = { x: normX, y: normY };
 
             // ★ 根据注入模式执行注入
+            if (injectMode === 'stamp') {
+              // ====== 残差印章模式：从FTX原始残差纹理采样噪点块注入 ======
+              const srcResidual = stashedResidualRef.current;
+              if (!srcResidual) {
+                console.warn('[残差印章] 请先加载FTX帧数据（导入多帧底图）');
+                return;
+              }
+
+              const { w, h } = config.resolution;
+              const srcWidth = stashedResidualWRef.current;
+              const srcHeight = stashedResidualHRef.current;
+
+              // 1. 创建掩码Canvas (分辨率与流体网格一致)
+              const maskCanvas = document.createElement('canvas');
+              maskCanvas.width = w;
+              maskCanvas.height = h;
+              const maskCtx = maskCanvas.getContext('2d')!;
+              maskCtx.fillStyle = 'black';
+              maskCtx.fillRect(0, 0, w, h);
+
+              // 2. 创建颜色Canvas (同样分辨率)
+              const colorCanvas = document.createElement('canvas');
+              colorCanvas.width = w;
+              colorCanvas.height = h;
+              const colorCtx = colorCanvas.getContext('2d')!;
+              colorCtx.clearRect(0, 0, w, h);
+
+              // 3. 生成随机块状区域
+              const numRects = 15 + Math.floor(Math.random() * 25); // 15~40块
+              const radiusPx = injectRadius * Math.min(w, h);
+              const centerPxX = normX * w;
+              const centerPxY = normY * h; // 所有坐标系 Y 方向一致（Y向下），无需翻转
+
+              for (let i = 0; i < numRects; i++) {
+                const rw = (0.1 + Math.random() * 0.3) * radiusPx * 2;
+                const rh = (0.1 + Math.random() * 0.3) * radiusPx * 2;
+                const rx = centerPxX + (Math.random() - 0.5) * radiusPx * 2 - rw / 2;
+                const ry = centerPxY + (Math.random() - 0.5) * radiusPx * 2 - rh / 2;
+                // 裁剪到画布内
+                const cx = Math.max(0, Math.min(w, rx));
+                const cy = Math.max(0, Math.min(h, ry));
+                const cw = Math.min(w - cx, rw);
+                const ch = Math.min(h - cy, rh);
+                if (cw < 1 || ch < 1) continue;
+                // 在掩码上绘制白色矩形
+                maskCtx.fillStyle = 'white';
+                maskCtx.fillRect(cx, cy, cw, ch);
+              }
+
+              // 4. 扫描掩码，填充颜色Canvas
+              const maskData = maskCtx.getImageData(0, 0, w, h);
+              const colorData = colorCtx.getImageData(0, 0, w, h);
+              const srcData = srcResidual.data;
+
+              // 随机扰动范围 (量化值 0~255)
+              const noiseRange = 8; // ±8
+
+              for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                  const idx = (y * w + x) * 4;
+                  if (maskData.data[idx] === 0) continue; // 不在掩码内
+
+                  // 映射到原残差纹理坐标
+                  const srcX = Math.floor((x / w) * srcWidth);
+                  const srcY = Math.floor((y / h) * srcHeight);
+                  const srcIdx = (srcY * srcWidth + srcX) * 4;
+                  // 读取 R, G, B (量化残差)
+                  let r = srcData[srcIdx];
+                  let g = srcData[srcIdx + 1];
+                  let b = srcData[srcIdx + 2];
+                  // 加上随机扰动
+                  r = Math.max(0, Math.min(255, r + (Math.random() - 0.5) * noiseRange * 2));
+                  g = Math.max(0, Math.min(255, g + (Math.random() - 0.5) * noiseRange * 2));
+                  b = Math.max(0, Math.min(255, b + (Math.random() - 0.5) * noiseRange * 2));
+                  // 写入颜色Canvas
+                  colorData.data[idx] = r;
+                  colorData.data[idx + 1] = g;
+                  colorData.data[idx + 2] = b;
+                  colorData.data[idx + 3] = 255; // 完全不透明
+                }
+              }
+              colorCtx.putImageData(colorData, 0, 0);
+
+              // 5. 创建 THREE.DataTexture
+              const colorTex = new THREE.DataTexture(
+                new Uint8Array(colorData.data.buffer, colorData.data.byteOffset, colorData.data.byteLength),
+                w, h,
+                THREE.RGBAFormat,
+                THREE.UnsignedByteType
+              );
+              colorTex.needsUpdate = true;
+              colorTex.flipY = false;
+
+              const maskTex = new THREE.DataTexture(
+                new Uint8Array(maskData.data.buffer, maskData.data.byteOffset, maskData.data.byteLength),
+                w, h,
+                THREE.RGBAFormat,
+                THREE.UnsignedByteType
+              );
+              maskTex.needsUpdate = true;
+              maskTex.flipY = false;
+
+              // 6. 注入（使用 injectStrength 作为混合率）
+              const rate = Math.min(1.0, Math.max(0.0, injectStrength));
+              editor.injectColorTexture(colorTex, maskTex, rate);
+
+              // 清理临时纹理
+              colorTex.dispose();
+              maskTex.dispose();
+
+              console.log(`[残差印章] 注入完成: ${numRects}块, 半径=${injectRadius.toFixed(2)}, 强度=${rate.toFixed(2)}`);
+              // 清理临时 canvas
+              colorCanvas.remove();
+              maskCanvas.remove();
+              return; // 结束本次点击，不执行后续持续注入逻辑
+            }
+
             if (continuousMode) {
               // 持续注入模式：每次点击新增一个独立的持续注入源（多源列表）
               const injectConfig = buildInjectionConfig(pos);

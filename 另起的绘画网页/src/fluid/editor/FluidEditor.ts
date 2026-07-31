@@ -243,6 +243,17 @@ export class FluidEditor {
     this.operations.clearContinuousSources();
   }
 
+  /**
+   * 设置持续注入总开关。
+   * 关闭时暂停所有持续注入源的处理，但保留源列表（队列独立存在），
+   * 再次开启后所有源自动恢复注入。
+   *
+   * @param enabled 是否启用持续注入
+   */
+  public setContinuousInjectionEnabled(enabled: boolean): void {
+    this.operations.setContinuousInjectionEnabled(enabled);
+  }
+
   /** 获取当前活跃的持续注入源数量 */
   public get continuousSourceCount(): number {
     return this.operations.continuousSourceCount;
@@ -255,6 +266,23 @@ export class FluidEditor {
    */
   public getContinuousSources() {
     return this.operations.getContinuousSourcesSnapshot();
+  }
+
+  /**
+   * 将颜色纹理通过掩码混合注入到颜色场中。
+   * 用于"残差印章"模式：从 FTX 原始残差纹理采样生成的 colorTex，
+   * 按 maskTex 指定的区域（白色=注入），以 rate 为混合率写入颜色场。
+   *
+   * @param colorTex 要注入的颜色纹理（RGBA, uint8）
+   * @param maskTex 掩码纹理（R通道：0=不注入，255=完全注入）
+   * @param rate 混合率 [0,1]，默认 1.0（完全覆盖）
+   */
+  public injectColorTexture(
+    colorTex: THREE.Texture,
+    maskTex: THREE.Texture,
+    rate: number = 1.0,
+  ): void {
+    this.injector.injectColorTexture(this.colorGrid, colorTex, maskTex, rate);
   }
 
   /** 执行一帧模拟 */

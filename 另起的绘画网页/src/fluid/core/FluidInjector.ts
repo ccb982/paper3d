@@ -169,6 +169,51 @@ export class FluidInjector {
     grid.swap();
   }
 
+  // ---- 2.5. 纹理注入（残差印章） ----
+
+  /**
+   * 将一张颜色纹理通过掩码混合注入到颜色场中。
+   * 用于"残差印章"模式：从 FTX 原始残差纹理采样生成的 colorTex，
+   * 按 maskTex 指定的区域（白色=注入），以 rate 为混合率写入颜色场。
+   *
+   * @param grid 颜色网格
+   * @param colorTex 要注入的颜色纹理（RGBA, uint8）
+   * @param maskTex 掩码纹理（R通道：0=不注入，255=完全注入）
+   * @param rate 混合率 [0,1]，1=完全覆盖，0=不注入
+   */
+  injectColorTexture(
+    grid: FluidGrid,
+    colorTex: THREE.Texture,
+    maskTex: THREE.Texture,
+    rate: number,
+  ): void {
+    const clampedRate = Math.min(1.0, Math.max(0.0, rate));
+
+    const mat = this.gpu.getMaterial('inj_color_texture', {
+      uColor: { value: grid.read },
+      uColorTex: { value: colorTex },
+      uMaskTex: { value: maskTex },
+      uRate: { value: clampedRate },
+    }, /* glsl */ `
+      uniform sampler2D uColor;
+      uniform sampler2D uColorTex;
+      uniform sampler2D uMaskTex;
+      uniform float uRate;
+      varying vec2 vUv;
+
+      void main() {
+        float maskVal = texture2D(uMaskTex, vUv).r;
+        vec4 current = texture2D(uColor, vUv);
+        vec4 injected = texture2D(uColorTex, vUv);
+        vec4 mixed = mix(current, injected, uRate * maskVal);
+        gl_FragColor = mixed;
+      }
+    `);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
   // ---- 3. 速度注入 ----
 
   /**
