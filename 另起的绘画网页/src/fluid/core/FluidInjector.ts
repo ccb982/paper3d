@@ -149,6 +149,17 @@ export class FluidInjector {
       uniform sampler2D uMask;
       varying vec2 vUv;
 
+      // ★ 色相环形插值：取色相环上最短路径，避免 mix 线性插值跨越色相环边界产生彩虹色。
+      //   例：current.H=0.95(品红) → target.H=0.05(红)，线性 mix 会经过 0.5(青)，
+      //       环形插值走 0.0/1.0 边界，过渡自然。
+      //   ⚠️ 仅适用于 R 通道语义为色相 H 的颜色场；速度场 R=vx 绝不可用。
+      float hueLerp(float a, float b, float t) {
+        float d = b - a;
+        if (d > 0.5) d -= 1.0;
+        if (d < -0.5) d += 1.0;
+        return fract(a + d * t);
+      }
+
       void main() {
         float maskVal = 1.0;
         if (uGlobal == 0) {
@@ -160,7 +171,13 @@ export class FluidInjector {
         }
 
         vec4 current = texture2D(uColor, vUv);
-        vec4 mixed = mix(current, uTargetColor, uRate * maskVal);
+        float rate = uRate * maskVal;
+        // ★ H 通道用色相环形插值，S/L/A 保持线性
+        vec4 mixed;
+        mixed.r = hueLerp(current.r, uTargetColor.r, rate);
+        mixed.g = mix(current.g, uTargetColor.g, rate);
+        mixed.b = mix(current.b, uTargetColor.b, rate);
+        mixed.a = mix(current.a, uTargetColor.a, rate);
         gl_FragColor = mixed;
       }
     `);

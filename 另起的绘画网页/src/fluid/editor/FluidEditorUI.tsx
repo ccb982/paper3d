@@ -717,7 +717,7 @@ const GeneralPanel: React.FC<{
 
         {/* 通道选择 */}
         <div className="control-group">
-          <label>平流通道</label>
+          <label>平流通道（勾选=跟随速度流动）</label>
           <div className="channel-row">
             {(['r', 'g', 'b', 'a'] as const).map((ch) => (
               <label key={ch} className="channel-label">
@@ -737,6 +737,11 @@ const GeneralPanel: React.FC<{
               </label>
             ))}
           </div>
+          {!config.channels.a && (
+            <div style={{ fontSize: '10px', color: '#e65100', marginTop: '4px', padding: '4px 6px', background: '#fff3e0', borderRadius: '4px', border: '1px solid #ffb74d' }}>
+              ⚠️ 透明度(A)未参与平流：流动的颜料无法携带不透明度，会变透明消失。建议保持 A 开启。
+            </div>
+          )}
         </div>
 
         {/* 视图模式 */}

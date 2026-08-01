@@ -184,39 +184,6 @@ export class AdvectionSolver {
 
       varying vec2 vUv;
 
-      // ---- Catmull-Rom 采样函数 ----
-      // 使用 4x4 邻域替代双线性，在保持速度场细节方面远优于双线性。
-      // 边界 clamp，避免越界采样。
-      vec4 sampleCatmullRom(sampler2D tex, vec2 uv, vec2 texSize) {
-        // 将 UV 转换为像素坐标（-0.5 使采样中心对准像素中心）
-        vec2 pixel = uv * texSize - 0.5;
-        vec2 frac = fract(pixel);
-        vec2 base = floor(pixel);
-
-        // Catmull-Rom 基函数权重（分别对应 offset = -1, 0, 1, 2）
-        vec2 t = frac;
-        vec2 t2 = t * t;
-        vec2 t3 = t2 * t;
-        vec2 w0 = (-t3 + 2.0 * t2 - t) / 2.0;
-        vec2 w1 = (3.0 * t3 - 5.0 * t2 + 2.0) / 2.0;
-        vec2 w2 = (-3.0 * t3 + 4.0 * t2 + t) / 2.0;
-        vec2 w3 = (t3 - t2) / 2.0;
-
-        // 4x4 邻域采样加权和
-        vec4 result = vec4(0.0);
-        for (int i = 0; i < 4; i++) {
-          for (int j = 0; j < 4; j++) {
-            vec2 offset = vec2(float(i) - 1.0, float(j) - 1.0);
-            vec2 coord = (base + offset + 0.5) / texSize;
-            coord = clamp(coord, 0.0, 1.0);
-            float weight = (i == 0 ? w0.x : (i == 1 ? w1.x : (i == 2 ? w2.x : w3.x))) *
-                           (j == 0 ? w0.y : (j == 1 ? w1.y : (j == 2 ? w2.y : w3.y)));
-            result += texture2D(tex, coord) * weight;
-          }
-        }
-        return result;
-      }
-
       void main() {
         vec2 uv = vUv;
 
@@ -227,11 +194,13 @@ export class AdvectionSolver {
         // 2. 边界处理
         ${boundaryFn}
 
-        // 3. 采样静止值和流动值
-        //    staticVal 采样当前像素位置，保留双线性（无需高精度插值，节省性能）
-        //    flowVal 使用 Catmull-Rom 插值，保持速度场细节
+        // 3. 采样静止值和流动值（硬件双线性插值）
+        //    staticVal 采样当前像素位置（mask=0 时直传，原地冻结）
+        //    flowVal 采样回溯点位置（mask=1 时平流），依赖纹理 LinearFilter 做双线性过滤
+        //    ★ 不使用 Catmull-Rom：三阶插值在色相场（wrapHue）和速度场会引入振铃/过冲伪影，
+        //      双线性更平滑稳定，且省 16 倍纹理采样，性能更优。
         vec4 staticVal = texture2D(uInput, uv);
-        vec4 flowVal = sampleCatmullRom(uInput, backUv, uResolution);
+        vec4 flowVal = texture2D(uInput, backUv);
 
         // 4. 逐通道混合：mask=0 → 直传，mask=1 → 平流
         vec4 result;
