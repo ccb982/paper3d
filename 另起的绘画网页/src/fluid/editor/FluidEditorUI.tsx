@@ -36,13 +36,16 @@ const OperationsPanel: React.FC<{
   setInjectStrength: (s: number) => void;
   continuousMode: boolean;
   setContinuousMode: (v: boolean) => void;
-  // ★ 方向（归一化矢量）+ 速度大小（标量）
+  // ★ 方向（归一化矢量，仅显示）+ 速度大小（标量）
+  //   方向设定改为画布摇杆交互，面板只读显示当前方向
   directionX: number;
-  setDirectionX: (v: number) => void;
   directionY: number;
-  setDirectionY: (v: number) => void;
   speedMagnitude: number;
   setSpeedMagnitude: (v: number) => void;
+  // ★ 收藏方向列表（保存/复用方向）
+  savedDirections: Array<{ x: number; y: number; label: string }>;
+  onSaveDirection: () => void;
+  onApplyDirection: (dir: { x: number; y: number }) => void;
   // ★ 多源列表管理
   sources: ContinuousSourceSnapshot[];
   onRemoveSource: (id: number) => void;
@@ -62,11 +65,12 @@ const OperationsPanel: React.FC<{
   continuousMode,
   setContinuousMode,
   directionX,
-  setDirectionX,
   directionY,
-  setDirectionY,
   speedMagnitude,
   setSpeedMagnitude,
+  savedDirections,
+  onSaveDirection,
+  onApplyDirection,
   sources,
   onRemoveSource,
   onClearAllSources,
@@ -88,19 +92,6 @@ const OperationsPanel: React.FC<{
   const velMag = Math.sqrt(velX * velX + velY * velY);
   const velAngleDeg = velMag > 0 ? (Math.atan2(velY, velX) * 180) / Math.PI : 0;
   const arrowLen = Math.min(velMag / 1000, 1); // 归一化箭头长度 (0~1, 适配最大3000px/s)
-
-  // ★ 预设方向按钮列表（归一化矢量）
-  const directions: { dx: number; dy: number; label: string; title: string }[] = [
-    { dx: -0.707, dy: -0.707, label: '↖', title: '左上' },
-    { dx: 0, dy: -1, label: '↑', title: '上' },
-    { dx: 0.707, dy: -0.707, label: '↗', title: '右上' },
-    { dx: -1, dy: 0, label: '←', title: '左' },
-    { dx: 0, dy: 0, label: '⚪', title: '无方向' },
-    { dx: 1, dy: 0, label: '→', title: '右' },
-    { dx: -0.707, dy: 0.707, label: '↙', title: '左下' },
-    { dx: 0, dy: 1, label: '↓', title: '下' },
-    { dx: 0.707, dy: 0.707, label: '↘', title: '右下' },
-  ];
 
   return (
     <div className="fluid-panel">
@@ -161,7 +152,7 @@ const OperationsPanel: React.FC<{
                 border: '1px solid #90caf9',
               }}
             >
-              💡 开启后，点击画布设置持续注入点位置
+              💡 开启后，按下画布出现摇杆，拖动定方向并新增源
             </div>
           )}
         </div>
@@ -198,40 +189,76 @@ const OperationsPanel: React.FC<{
         <div className="control-group" style={{ marginBottom: '12px', padding: '8px', background: '#fafafa', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
           <label style={{ marginBottom: '6px' }}>初速度</label>
 
-          {/* 方向选择（3x3 网格的预设方向按钮） */}
+          {/* ★ 方向：点击画布拖动摇杆设定 + 当前方向显示 + 收藏列表 */}
           <div style={{ marginBottom: '8px' }}>
-            <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>方向（归一化矢量）</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
-              {directions.map(({ dx, dy, label, title }) => {
-                // 判断当前方向是否被选中（用近似比较，因为 0.707 是浮点数）
-                const isSelected = Math.abs(directionX - dx) < 0.01 && Math.abs(directionY - dy) < 0.01;
-                return (
-                  <button
-                    key={label}
-                    onClick={() => {
-                      setDirectionX(dx);
-                      setDirectionY(dy);
-                    }}
-                    title={title}
-                    style={{
-                      padding: '8px 0',
-                      fontSize: '14px',
-                      fontWeight: 'bold',
-                      border: isSelected ? '2px solid #29b6f6' : '1px solid #ccc',
-                      background: isSelected ? '#e3f2fd' : '#fff',
-                      color: isSelected ? '#1565c0' : '#333',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+            <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>
+              方向（🎮 点击画布拖动摇杆设定）
             </div>
-            <div style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
-              方向矢量: ({directionX.toFixed(3)}, {directionY.toFixed(3)})
+
+            {/* 当前方向可视化罗盘 + 矢量/角度 */}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px', background: '#fff', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
+              <div style={{ width: '44px', height: '44px', position: 'relative', borderRadius: '50%', background: 'radial-gradient(circle, #fff8e1 0%, #ffe0b2 100%)', border: '2px solid #ff9800', flexShrink: 0 }}>
+                {velMag > 0 ? (
+                  <svg width="44" height="44" style={{ position: 'absolute', left: 0, top: 0, transform: `rotate(${-(velAngleDeg)}deg)` }}>
+                    <line x1="22" y1="22" x2="40" y2="22" stroke="#e65100" strokeWidth="2.5" strokeLinecap="round" />
+                    <polygon points="40,22 35,19 35,25" fill="#e65100" />
+                  </svg>
+                ) : (
+                  <div style={{ position: 'absolute', left: '50%', top: '50%', width: '6px', height: '6px', marginLeft: '-3px', marginTop: '-3px', background: '#9e9e9e', borderRadius: '50%' }} />
+                )}
+              </div>
+              <div style={{ flex: 1, fontSize: '10px', color: '#666' }}>
+                <div>矢量: ({directionX.toFixed(2)}, {directionY.toFixed(2)})</div>
+                <div>角度: {velMag > 0 ? `${(((velAngleDeg % 360) + 360) % 360).toFixed(0)}°` : '— (无方向)'}</div>
+              </div>
             </div>
+
+            {/* 保存当前方向按钮 */}
+            <button
+              onClick={onSaveDirection}
+              style={{ width: '100%', marginTop: '6px', padding: '5px 8px', fontSize: '11px', background: '#4caf50', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+              title="保存当前方向到收藏列表（下次可点击复用）"
+            >
+              💾 保存当前方向
+            </button>
+
+            {/* 收藏方向列表（点击复用） */}
+            {savedDirections.length > 0 && (
+              <div style={{ marginTop: '6px' }}>
+                <div style={{ fontSize: '10px', color: '#666', marginBottom: '4px' }}>收藏方向（点击复用为当前方向）</div>
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                  {savedDirections.map((d, i) => {
+                    const mag = Math.sqrt(d.x * d.x + d.y * d.y);
+                    const deg = mag > 0 ? (((Math.atan2(d.y, d.x) * 180 / Math.PI) % 360) + 360) % 360 : 0;
+                    const isSelected = Math.abs(directionX - d.x) < 0.01 && Math.abs(directionY - d.y) < 0.01;
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => onApplyDirection({ x: d.x, y: d.y })}
+                        title={`${d.label}\n矢量: (${d.x.toFixed(2)}, ${d.y.toFixed(2)})\n角度: ${deg.toFixed(0)}°`}
+                        style={{
+                          width: '36px', height: '36px', padding: 0,
+                          border: isSelected ? '2px solid #29b6f6' : '1px solid #ccc',
+                          background: isSelected ? '#e3f2fd' : '#fff',
+                          color: isSelected ? '#1565c0' : '#333',
+                          borderRadius: '4px', cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        {mag < 0.01 ? (
+                          <span style={{ fontSize: '14px' }}>⚪</span>
+                        ) : (
+                          <svg width="20" height="20" style={{ transform: `rotate(${-deg}deg)` }}>
+                            <line x1="3" y1="10" x2="14" y2="10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                            <polygon points="14,10 11,8 11,12" fill="currentColor" />
+                          </svg>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 速度大小滑块 */}
@@ -360,14 +387,14 @@ const OperationsPanel: React.FC<{
             borderRadius: '4px',
           }}
         >
-          <div>🖱️ <b>点击画布</b>即可在鼠标位置执行注入</div>
+          <div>🎮 <b>按下画布</b>出现摇杆，<b>拖动</b>设定方向</div>
           {continuousMode ? (
             <div style={{ color: '#1976d2', marginTop: '2px' }}>
-              ⚡ 持续注入模式：每次点击<b>新增</b>一个注入源（共 {sources.length} 个活跃源）
+              ⚡ 持续模式：按下<b>新增源</b>，拖动摇杆实时改方向（共 {sources.length} 个活跃源）
             </div>
           ) : (
             <div style={{ color: '#ff9800', marginTop: '2px' }}>
-              💥 单次注入模式：速度放大 <b>×{BOOST_MULTIPLIER}</b> 倍（爆发式）
+              💥 单次模式：<b>按住</b>持续注入（速度 ×{BOOST_MULTIPLIER}），拖动摇杆实时改方向
             </div>
           )}
           <div style={{ marginTop: '2px' }}>
@@ -469,7 +496,7 @@ const OperationsPanel: React.FC<{
                   // 根据颜色获取预览色
                   const [h, s, l] = src.color;
                   const rgbPreview = hslToRgb(h, s, l);
-                  const previewColor = `rgb(${Math.round(rgbPreview[0] * 255)}, ${Math.round(rgbPreview[1] * 255)}, ${Math.round(rgbPreview[2] * 255)})`;
+                  const previewColor = `rgb(${Math.round(rgbPreview.r * 255)}, ${Math.round(rgbPreview.g * 255)}, ${Math.round(rgbPreview.b * 255)})`;
                   return (
                     <div
                       key={src.id}
@@ -1115,10 +1142,26 @@ export const FluidEditorUI: React.FC = () => {
   // ★ 手动暂停/恢复持续注入（独立控制，不影响持续模式开关和源队列）
   const [continuousPaused, setContinuousPaused] = useState(false);
   // ★ 方向（归一化矢量），默认向下 (0, 1) —— 屏幕坐标系 Y 向下为正
+  //   仅用于面板显示和摇杆初始方向；注入时实时方向读 joystickDirRef
   const [directionX, setDirectionX] = useState(0);
   const [directionY, setDirectionY] = useState(1);
   // ★ 速度大小（标量，px/s）
   const [speedMagnitude, setSpeedMagnitude] = useState(200);
+
+  // ★ 画布浮层摇杆状态（用 ref：rAF 实时读取，避免高频 setState 卡顿）
+  //   按下画布 → 激活摇杆 → 拖动实时改方向 → 松开停用
+  const joystickActiveRef = useRef(false);
+  // 摇杆原点（按下位置，CSS 像素，相对 canvas 左上）
+  const joystickOriginRef = useRef<{ cssX: number; cssY: number }>({ cssX: 0, cssY: 0 });
+  // 实时方向（归一化矢量，屏幕坐标系 Y 向下为正）
+  const joystickDirRef = useRef<{ x: number; y: number }>({ x: 0, y: 1 });
+  // 持续模式按住期间新增的源 ID（拖动时实时更新该源方向）
+  const joystickSourceIdRef = useRef<number | null>(null);
+  // 摇杆最大有效半径（CSS 像素）：超出按方向归一化，不限制拖动距离
+  const JOYSTICK_RADIUS = 60;
+
+  // ★ 收藏方向列表（用户可保存当前方向便于复用）
+  const [savedDirections, setSavedDirections] = useState<Array<{ x: number; y: number; label: string }>>([]);
 
   // 压力参数
   const [pressureParams, setPressureParams] = useState({
@@ -1222,13 +1265,18 @@ export const FluidEditorUI: React.FC = () => {
       ? speedMagnitude
       : speedMagnitude * BOOST_MULTIPLIER;
 
+    // ★ 方向：摇杆激活时用实时方向（拖动实时变），否则用面板方向（收藏/上次记忆）
+    const dir = joystickActiveRef.current
+      ? joystickDirRef.current
+      : { x: directionX, y: directionY };
+
     // ★ 速度矢量 = 方向 × 最终大小
-    const velX = directionX * finalSpeedMagnitude;
-    const velY = directionY * finalSpeedMagnitude;
+    const velX = dir.x * finalSpeedMagnitude;
+    const velY = dir.y * finalSpeedMagnitude;
 
     // ★ 初速度调试
     const modeLabel = continuousMode ? '持续' : `单次×${BOOST_MULTIPLIER}`;
-    console.log(`[初速度] ${modeLabel}: 方向=(${directionX.toFixed(3)},${directionY.toFixed(3)}) × ${speedMagnitude.toFixed(0)} → ${finalSpeedMagnitude.toFixed(0)} px/s → 速度=(${velX.toFixed(1)},${velY.toFixed(1)})`);
+    console.log(`[初速度] ${modeLabel}: 方向=(${dir.x.toFixed(3)},${dir.y.toFixed(3)}) × ${speedMagnitude.toFixed(0)} → ${finalSpeedMagnitude.toFixed(0)} px/s → 速度=(${velX.toFixed(1)},${velY.toFixed(1)})`);
 
     return {
       enabled: true,
@@ -1253,46 +1301,90 @@ export const FluidEditorUI: React.FC = () => {
   const buildInjectionConfigRef = useRef(buildInjectionConfig);
   buildInjectionConfigRef.current = buildInjectionConfig;
 
-  // ★ 鼠标按下：单次模式立即注入一次，并记录按住状态（长按则由 rAF 循环每帧持续注入）
+  // ★ 鼠标按下：激活摇杆 + 触发注入
+  //   - 单次模式：按住期间持续注入（rAF 每帧读摇杆方向），松开停止
+  //   - 持续模式：立即新增源，拖动实时更新源方向，松开固定
+  //   - 印章模式：不走摇杆，由 onClick 处理
   const handlePointerDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (injectMode === 'stamp') return; // 印章模式走 onClick
     const canvas = displayCanvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !editor) return;
     const rect = canvas.getBoundingClientRect();
     const normX = (e.clientX - rect.left) / rect.width;
     const normY = (e.clientY - rect.top) / rect.height;
     const pos = { x: normX, y: normY };
 
-    // 记录按住状态和位置（供 rAF 循环持续注入检测）
-    pointerDownRef.current = true;
+    // ★ 激活摇杆：原点 = 按下位置（CSS 像素），初始方向 = 当前面板方向
+    joystickActiveRef.current = true;
+    joystickOriginRef.current = { cssX: e.clientX - rect.left, cssY: e.clientY - rect.top };
+    joystickDirRef.current = { x: directionX, y: directionY };
+    // 注入位置 = 按下点（持续模式供拖动时 updateContinuousInjection 用，单次模式供 rAF 用）
     pointerPosRef.current = pos;
 
-    // 单次模式（非持续、非印章）：按下立即注入一次，长按则每帧注入
-    if (editor && !continuousMode && injectMode !== 'stamp') {
+    if (continuousMode) {
+      // 持续模式：立即新增源（方向 = 摇杆当前方向），记录 ID 供拖动时更新
       const injectConfig = buildInjectionConfig(pos);
-      editor.queueInjection(injectConfig);
+      const id = editor.addContinuousInjection(injectConfig);
+      joystickSourceIdRef.current = id;
+      refreshSources();
+    } else {
+      // 单次模式：按住期间持续注入（位置固定 = 按下点，方向由摇杆实时控制）
+      pointerDownRef.current = true;
     }
-  }, [editor, continuousMode, injectMode, buildInjectionConfig]);
+  }, [editor, continuousMode, injectMode, directionX, directionY, buildInjectionConfig, refreshSources]);
 
-  // ★ 鼠标松开：停止临时持续注入
+  // ★ 鼠标松开：停用摇杆，保存最终方向到面板（自动记忆）
   const handlePointerUp = useCallback(() => {
+    if (joystickActiveRef.current) {
+      const finalDir = joystickDirRef.current;
+      setDirectionX(finalDir.x);
+      setDirectionY(finalDir.y);
+      joystickActiveRef.current = false;
+      joystickSourceIdRef.current = null;
+      if (continuousModeRef.current) refreshSources();
+    }
     pointerDownRef.current = false;
-  }, []);
+  }, [refreshSources]);
 
-  // ★ 鼠标在画布上移动：按住时更新注入位置（长按拖动 = 沿轨迹持续注入）
+  // ★ 鼠标移动：摇杆激活时计算方向 + 持续模式实时更新源
   const handlePointerMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!pointerDownRef.current) return;
+    if (!joystickActiveRef.current) return;
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const normX = (e.clientX - rect.left) / rect.width;
-    const normY = (e.clientY - rect.top) / rect.height;
-    pointerPosRef.current = { x: normX, y: normY };
-  }, []);
+    const cssX = e.clientX - rect.left;
+    const cssY = e.clientY - rect.top;
 
-  // ★ 鼠标离开画布：停止临时持续注入
+    // 计算摇杆偏移并归一化为方向矢量
+    const dx = cssX - joystickOriginRef.current.cssX;
+    const dy = cssY - joystickOriginRef.current.cssY;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 5) {
+      // 死区：方向归零（无方向注入，仅颜色/重力）
+      joystickDirRef.current = { x: 0, y: 0 };
+    } else {
+      joystickDirRef.current = { x: dx / dist, y: dy / dist };
+    }
+
+    // 持续模式：实时更新源方向（位置不变）
+    if (continuousModeRef.current && joystickSourceIdRef.current !== null && editor) {
+      const injectConfig = buildInjectionConfig(pointerPosRef.current);
+      editor.updateContinuousInjection(joystickSourceIdRef.current, injectConfig);
+    }
+  }, [editor, buildInjectionConfig]);
+
+  // ★ 鼠标离开画布：停用摇杆 + 停止注入（与松开一致）
   const handlePointerLeave = useCallback(() => {
+    if (joystickActiveRef.current) {
+      const finalDir = joystickDirRef.current;
+      setDirectionX(finalDir.x);
+      setDirectionY(finalDir.y);
+      joystickActiveRef.current = false;
+      joystickSourceIdRef.current = null;
+      if (continuousModeRef.current) refreshSources();
+    }
     pointerDownRef.current = false;
-  }, []);
+  }, [refreshSources]);
 
   // ★ 删除单个持续注入源
   const handleRemoveSource = useCallback((id: number) => {
@@ -1325,6 +1417,29 @@ export const FluidEditorUI: React.FC = () => {
       return next;
     });
   }, [editor]);
+
+  // ★ 方向 → 标签（8方向文字 + 角度），用于收藏列表显示
+  const dirToLabel = (x: number, y: number): string => {
+    const mag = Math.sqrt(x * x + y * y);
+    if (mag < 0.01) return '⚪ 无方向';
+    const deg = (((Math.atan2(y, x) * 180 / Math.PI) % 360) + 360) % 360;
+    const dirs = ['→ 右', '↘ 右下', '↓ 下', '↙ 左下', '← 左', '↖ 左上', '↑ 上', '↗ 右上'];
+    const idx = Math.round(deg / 45) % 8;
+    return `${dirs[idx]} ${deg.toFixed(0)}°`;
+  };
+
+  // ★ 保存当前方向到收藏列表
+  const handleSaveDirection = useCallback(() => {
+    const label = dirToLabel(directionX, directionY);
+    setSavedDirections((prev) => [...prev, { x: directionX, y: directionY, label }]);
+  }, [directionX, directionY]);
+
+  // ★ 复用收藏方向：设为当前方向 + 同步摇杆方向 ref
+  const handleApplyDirection = useCallback((dir: { x: number; y: number }) => {
+    setDirectionX(dir.x);
+    setDirectionY(dir.y);
+    joystickDirRef.current = { x: dir.x, y: dir.y };
+  }, []);
 
   // ★ 当 editor 实例变化时（如重建），刷新源列表（旧源已不存在，将得到空列表）
   useEffect(() => {
@@ -1677,6 +1792,125 @@ export const FluidEditorUI: React.FC = () => {
       }
     };
 
+    // ★ 摇杆可视化：在 overlay canvas 上绘制手柄摇杆（按下画布时显示）
+    //   底圈 + 死区 + 十字参考 + 方向箭头 + 手柄圆 + 角度文字
+    const drawJoystick = () => {
+      if (!joystickActiveRef.current) return;
+      const overlay = overlayCanvasRef.current;
+      const display = displayCanvasRef.current;
+      if (!overlay || !display) return;
+      const ctx = overlay.getContext('2d');
+      if (!ctx) return;
+
+      const cx = joystickOriginRef.current.cssX;
+      const cy = joystickOriginRef.current.cssY;
+      const R = JOYSTICK_RADIUS;
+      const dir = joystickDirRef.current;
+      const dirMag = Math.sqrt(dir.x * dir.x + dir.y * dir.y);
+
+      // 1. 外圈底圈（半透明填充 + 描边）
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(41, 182, 246, 0.12)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(41, 182, 246, 0.85)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 2. 死区参考圈（半径 5px，死区内方向归零）
+      ctx.beginPath();
+      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 3. 十字参考线
+      ctx.beginPath();
+      ctx.moveTo(cx - R, cy);
+      ctx.lineTo(cx + R, cy);
+      ctx.moveTo(cx, cy - R);
+      ctx.lineTo(cx, cy + R);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // 4. 中心点
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#1976d2';
+      ctx.fill();
+
+      // 5. 方向箭头 + 手柄（方向非零时）
+      if (dirMag > 0.001) {
+        const handleX = cx + dir.x * R;
+        const handleY = cy + dir.y * R;
+
+        // 方向线（中心 → 手柄）
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(handleX, handleY);
+        ctx.strokeStyle = '#f44336';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // 箭头头部
+        const angle = Math.atan2(dir.y, dir.x);
+        const headLen = 10;
+        ctx.beginPath();
+        ctx.moveTo(handleX, handleY);
+        ctx.lineTo(
+          handleX - headLen * Math.cos(angle - Math.PI / 6),
+          handleY - headLen * Math.sin(angle - Math.PI / 6),
+        );
+        ctx.moveTo(handleX, handleY);
+        ctx.lineTo(
+          handleX - headLen * Math.cos(angle + Math.PI / 6),
+          handleY - headLen * Math.sin(angle + Math.PI / 6),
+        );
+        ctx.strokeStyle = '#f44336';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // 手柄圆（实心）
+        ctx.beginPath();
+        ctx.arc(handleX, handleY, 10, 0, Math.PI * 2);
+        ctx.fillStyle = '#f44336';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 方向角度 + 矢量文字
+        const deg = (Math.atan2(dir.y, dir.x) * 180 / Math.PI + 360) % 360;
+        const label = `${deg.toFixed(0)}°  (${dir.x.toFixed(2)}, ${dir.y.toFixed(2)})`;
+        const labelX = cx + R + 8;
+        const labelY = cy - R - 4;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.strokeStyle = '#1976d2';
+        ctx.lineWidth = 3;
+        ctx.font = 'bold 12px monospace';
+        ctx.strokeText(label, labelX, labelY);
+        ctx.fillText(label, labelX, labelY);
+      } else {
+        // 死区：手柄在中心，显示无方向
+        ctx.beginPath();
+        ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+        ctx.fillStyle = '#9e9e9e';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        const label = '⚪ 无方向（死区）';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.strokeStyle = '#9e9e9e';
+        ctx.lineWidth = 3;
+        ctx.font = 'bold 12px monospace';
+        ctx.strokeText(label, cx + R + 8, cy - R - 4);
+        ctx.fillText(label, cx + R + 8, cy - R - 4);
+      }
+    };
+
     const loop = () => {
       frameCount++;
       const { w, h } = config.resolution;
@@ -1723,6 +1957,8 @@ export const FluidEditorUI: React.FC = () => {
 
       // ★ 持续注入点可视化：在 overlay canvas 上绘制注入源位置、半径、速度箭头
       drawContinuousSourcesOverlay();
+      // ★ 摇杆可视化：按下画布时在 overlay canvas 上绘制手柄摇杆
+      drawJoystick();
 
       displayRafRef.current = requestAnimationFrame(loop);
     };
@@ -2010,11 +2246,12 @@ export const FluidEditorUI: React.FC = () => {
           continuousMode={continuousMode}
           setContinuousMode={setContinuousMode}
           directionX={directionX}
-          setDirectionX={setDirectionX}
           directionY={directionY}
-          setDirectionY={setDirectionY}
           speedMagnitude={speedMagnitude}
           setSpeedMagnitude={setSpeedMagnitude}
+          savedDirections={savedDirections}
+          onSaveDirection={handleSaveDirection}
+          onApplyDirection={handleApplyDirection}
           sources={continuousSources}
           onRemoveSource={handleRemoveSource}
           onClearAllSources={handleClearAllSources}
@@ -2133,7 +2370,6 @@ export const FluidEditorUI: React.FC = () => {
             // 计算归一化坐标 (0~1, Y 向下)
             const normX = cssX / rect.width;
             const normY = cssY / rect.height;
-            const pos = { x: normX, y: normY };
 
             // ★ 根据注入模式执行注入
             if (injectMode === 'stamp') {
@@ -2253,14 +2489,10 @@ export const FluidEditorUI: React.FC = () => {
               return; // 结束本次点击，不执行后续持续注入逻辑
             }
 
-            if (continuousMode) {
-              // 持续注入模式：每次点击新增一个独立的持续注入源（多源列表）
-              const injectConfig = buildInjectionConfig(pos);
-              editor.addContinuousInjection(injectConfig);
-              refreshSources(); // 刷新 UI 源列表
-            }
-            // 单次注入模式：注入已在 onMouseDown 中完成（长按则由 rAF 循环每帧持续注入），
-            // 此处仅执行采样逻辑
+            // ★ 持续/单次注入已在 onMouseDown（摇杆按下）中处理：
+            //   - 持续模式：按下即新增源，拖动实时改方向
+            //   - 单次模式：按住期间持续注入，松开停止
+            // 此处 onClick 仅执行采样逻辑（显示像素比较器）
 
             // 像素坐标用于采样
             const texX = pixX;
