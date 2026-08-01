@@ -295,9 +295,24 @@ export class FluidInjector {
 
     this.gpu.render(this.renderer, grid.write, mat);
     grid.swap();
-  }
 
-  // ---- 3. 速度注入 ----
+    // ★ 诊断：前 5 次注入回读中心点，确认 density 真正写入（排查合成空白）
+    if ((FluidInjector as any)._densityDiagCount === undefined) {
+      (FluidInjector as any)._densityDiagCount = 0;
+    }
+    if ((FluidInjector as any)._densityDiagCount < 5) {
+      (FluidInjector as any)._densityDiagCount++;
+      const { w, h } = grid.resolution;
+      const cx = Math.max(0, Math.min(w - 1, Math.floor(position.x * w)));
+      const cy = Math.max(0, Math.min(h - 1, Math.floor(position.y * h)));
+      const buf = new Uint8Array(4);
+      const prevRT = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(grid.readTarget);
+      this.renderer.readRenderTargetPixels(grid.readTarget, cx, cy, 1, 1, buf);
+      this.renderer.setRenderTarget(prevRT);
+      console.log(`[diag] inj_density readback @(${cx},${cy}): density=${buf[0]}/255, value=${clampedValue}, rate=${clampedRate}`);
+    }
+  }
 
   /**
    * 在指定区域注入速度矢量。
@@ -359,38 +374,8 @@ export class FluidInjector {
       }
     `);
 
-    // ★ 诊断：打印材质实际 uniform 值（排查缓存导致 uniform 未更新的可能）
-    const _uv = mat.uniforms.uVel.value as THREE.Vector2;
-    const _up = mat.uniforms.uPos.value as THREE.Vector2;
-    console.log(`[diag] inj_vel pre-render key=${key}: uVel=(${_uv.x},${_uv.y}), uPos=(${_up.x},${_up.y}), uRadius=${mat.uniforms.uRadius.value}, uGlobal=${mat.uniforms.uGlobal.value}, uHasMask=${mat.uniforms.uHasMask.value}, grid.dataType=${grid.dataType}`);
-
     this.gpu.render(this.renderer, grid.write, mat);
     grid.swap();
-
-    // ★ 诊断：swap 后回读注入点，验证速度是否真正写入速度场
-    // 读取 3x3 区域（中心 + 八邻域），确认径向衰减是否符合预期
-    {
-      const { w, h } = grid.resolution;
-      const cx = Math.max(0, Math.min(w - 1, Math.floor(position.x * w)));
-      const cy = Math.max(0, Math.min(h - 1, Math.floor(position.y * h)));
-      const dtype = grid.dataType;
-      const buf = new Float32Array(4);
-      const prevRT = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(grid.readTarget);
-      // 读中心点
-      this.renderer.readRenderTargetPixels(grid.readTarget, cx, cy, 1, 1, buf);
-      this.renderer.setRenderTarget(prevRT);
-      let vx = buf[0], vy = buf[1];
-      if (dtype === 'half-float') {
-        // half-float 用 Uint16Array 读取，手动解码
-        const raw = new Uint16Array(buf.buffer);
-        vx = raw[0]; vy = raw[1];
-        // 简单解码提示（不做完整 halfToFloat，仅判断是否为 0）
-        console.log(`[diag] inj_vel readback @(${cx},${cy}) [half-float raw]: x=${vx}, y=${vy}, uVel=(${velocity.x},${velocity.y})`);
-      } else {
-        console.log(`[diag] inj_vel readback @(${cx},${cy}) [float]: vel=(${vx.toFixed(2)},${vy.toFixed(2)}), uVel=(${velocity.x},${velocity.y}), uGlobal=${global ? 1 : 0}, uRadius=${radius}`);
-      }
-    }
   }
 
   // ---- 4. 速度限幅（防止速度爆炸） ----

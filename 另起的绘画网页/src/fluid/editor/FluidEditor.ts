@@ -97,14 +97,20 @@ export interface FluidEditorConfig {
   advectionMode?: 'vector' | 'scalar';
 
   /**
-   * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
-   *
-   * 数学模型：finalH = fract(baseH + ΔH × (density/baseline) × hMul)
-   *   - density：1 通道 Uint8 动态场（0~1），参与平流
-   *   - baseline：基准浓度，factor = density / baseline
-   *     baseline=1 时 factor=density（等同原方案）；baseline 越小放大越强
-   *   - mul：各通道系数，负值产生补色等特效
-   */
+           * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
+           *
+           * ★ 数学模型（无基础色、无增量解码——残差本身就是 HSLA 颜色）：
+           *   factor = density / baseline
+           *   outH = fract(residualH × factor × hMul)   // 色相环回绕
+           *   outS = clamp(residualS × factor × sMul, 0, 1)
+           *   outL = clamp(residualL × factor × lMul, 0, 1)
+           *   outA = clamp(residualA × factor × aMul, 0, 1)
+           *   - density：1 通道 Uint8 动态场（0~1），参与平流
+           *   - baseline：基准浓度，factor = density / baseline
+           *     baseline=1 时 factor=density；baseline 越小放大越强
+           *     density < baseline → 削弱；density > baseline → 增强
+           *   - mul：各通道系数（-2~2），负值产生补色等特效
+           */
   scalarConfig?: {
     hMultiplier: number;     // 色相系数，默认 1.0，范围 -2~2
     sMultiplier: number;     // 饱和度系数，默认 1.0
@@ -223,7 +229,6 @@ export class FluidEditor {
       //   （纹理渲染链路中 Y 方向已有翻转处理，此处再取反会导致双重翻转）
       velocity: { x: config.velocity.x, y: config.velocity.y },
     };
-    console.log(`[初速度] 坐标适配: 用户速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) → 纹理速度=(${adapted.velocity.x.toFixed(2)},${adapted.velocity.y.toFixed(2)}) [直接透传]`);
     return adapted;
   }
 
@@ -331,96 +336,44 @@ export class FluidEditor {
 
     this.frameCount++;
 
-    // ★ 临时诊断探针：全场扫描 max|velX|/max|velY| 及位置（每 30 帧 readPixels 一次）
-    // 用于定位横向速度 X 分量是否存在、在哪、何时丢失
-    const _probe = (label: string) => {
-      if (this.frameCount % 30 !== 0) return;
-      const { w, h } = this.config.resolution;
-      const data = this.readVelocityPixelData(this.velocityGrid.readTarget, 0, 0, w, h);
-      let maxX = 0, maxY = 0, maxAbsX = 0, maxAbsY = 0, idxX = 0, idxY = 0;
-      const n = w * h;
-      for (let i = 0; i < n; i++) {
-        const vx = data[i * 2], vy = data[i * 2 + 1];
-        const ax = Math.abs(vx), ay = Math.abs(vy);
-        if (ax > maxAbsX) { maxAbsX = ax; maxX = vx; idxX = i; }
-        if (ay > maxAbsY) { maxAbsY = ay; maxY = vy; idxY = i; }
-      }
-      const xx = idxX % w, xy = Math.floor(idxX / w);
-      const yx = idxY % w, yy = Math.floor(idxY / w);
-      console.log(`[diag] ${label} res=${w}x${h}: maxVelX=${maxX.toFixed(2)} @(${xx},${xy}), maxVelY=${maxY.toFixed(2)} @(${yx},${yy})`);
-    };
-
-    _probe('0.start');
-
     // ★ 0. 处理 UI 注入队列（优先执行，确保本帧生效）
     // 委托给 operations 处理一次性注入
     // ★ MCSDA：scalar 模式下传入 densityGrid，使带 density 字段的注入能写入浓度场
     const _gridDensity = this.config.advectionMode === 'scalar' ? this.densityGrid : null;
     this.operations.processQueue(this.colorGrid, this.velocityGrid, dt, _gridDensity);
-    _probe('1.afterQueue');
 
     // 0. 重力（通过操作模块 → 底层注入器）
     if (this.config.gravity !== 0) {
       this.operations.applyGravity(this.velocityGrid, dt, this.config.gravity);
     }
-    _probe('2.afterGravity');
 
     // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
     this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt, _gridDensity);
-    _probe('3.afterContinuous');
 
     // 2. 平流（非注入 Pass，直接使用 this.gpu）
     if (this.config.enableAdvection) {
-      // ★ 平流诊断：计算回溯目标位置并读取该位置原始速度
-      // 回溯公式: backUv = uv - vel * dt / resolution（与着色器一致）
-      {
-        const { w, h } = this.config.resolution;
-        const subSteps = Math.max(1, Math.ceil((this.config.maxVelocity ?? 5000) * dt / Math.min(w, h)));
-        const subDt = dt / subSteps;
-        for (const [px, py, label] of [[112, 120, 'inj'], [128, 128, 'ctr']] as const) {
-          const vel = this.readVelocityPixelData(this.velocityGrid.readTarget, px, py, 1, 1);
-          const vx = vel[0], vy = vel[1];
-          // 着色器中 uv = vUv ≈ (px+0.5)/w（像素中心）
-          const uvX = (px + 0.5) / w, uvY = (py + 0.5) / h;
-          const backUvX = uvX - vx * subDt / w;
-          const backUvY = uvY - vy * subDt / h;
-          const backPx = Math.max(0, Math.min(w - 1, Math.floor(backUvX * w)));
-          const backPy = Math.max(0, Math.min(h - 1, Math.floor(backUvY * h)));
-          const backVel = this.readVelocityPixelData(this.velocityGrid.readTarget, backPx, backPy, 1, 1);
-          console.log(`[diag] backtrace ${label}: from=(${px},${py}) vel=(${vx.toFixed(1)},${vy.toFixed(1)}) → backPos=(${backPx},${backPy}) backVel=(${backVel[0].toFixed(2)},${backVel[1].toFixed(2)}) subDt=${subDt.toFixed(5)}`);
-        }
-      }
       this.advectVelocity(dt);
-      // ★ 平流诊断：平流后读取同样位置
-      {
-        const p1 = this.readVelocityPixelData(this.velocityGrid.readTarget, 112, 120, 1, 1);
-        const p2 = this.readVelocityPixelData(this.velocityGrid.readTarget, 128, 128, 1, 1);
-        console.log(`[diag] post-advect @(112,120)=(${p1[0].toFixed(2)},${p1[1].toFixed(2)}) @(128,128)=(${p2[0].toFixed(2)},${p2[1].toFixed(2)})`);
-      }
-      _probe('4a.afterAdvectVel');
       // ★ MCSDA 模式分支：
-      //   - 'vector'（旧模式）：平流 4 通道颜色场（HSLA），残差动态流动
-      //   - 'scalar'（标量浓度）：残差静态化（不平流 colorGrid），
-      //     改为平流 1 通道 density 场 + 衰减，合成时用 density×mul 调制残差强度
+      //   - 'vector'（旧模式）：仅平流 4 通道颜色场（HSLA delta），合成=base+delta
+      //   - 'scalar'（标量浓度）：平流颜色场（HSLA 颜色，让其随速度流动）
+      //     + 平流 1 通道 density 场 + 衰减，合成 = 流动颜色 × density × mul
+      //   ⚠️ scalar 模式也必须 advectColor，否则颜色静止在注入点，
+      //      density 流走后合成=0×density=0（合成视图空白）。
+      //      density 提供独立的浓度调制层（基准削弱/增强 + 通道系数）。
+      this.advectColor(dt);
       if (this.config.advectionMode === 'scalar') {
         this.advectDensity(dt);
         this.decayDensity();
-        _probe('4b.afterAdvectDensity');
-      } else {
-        this.advectColor(dt);
-        _probe('4b.afterAdvectColor');
       }
     }
 
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
     this.applyBoundary();
-    _probe('5.afterBoundary');
 
     // 3. 压力投影（红-黑 SOR）
     if (this.config.enablePressure) {
       this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
       this.applyPressureGradient();
-      _probe('6.afterPressure');
     }
 
     // ★ 3.5 全局速度限幅（压力投影之后）
@@ -430,7 +383,6 @@ export class FluidEditor {
     if (maxVel > 0 && isFinite(maxVel)) {
       this.operations.clampVelocity(this.velocityGrid, maxVel);
     }
-    _probe('7.afterClamp');
 
     // 4. Level Set（预留）
     // if (this.config.enableLevelSet) this.solveLevelSet();
@@ -775,19 +727,39 @@ export class FluidEditor {
   }
 
   /**
-   * MCSDA 烘焙导出：把残差（colorGrid）× density × 通道系数 调制为单帧 RGBA Uint8。
+   * ★ 诊断辅助：回读 density 场指定像素到 Uint8Array(4)（R 通道为 density）。
+   */
+  readDensityPixel(x: number, y: number, out: Uint8Array): void {
+    const prevRT = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.densityGrid.readTarget);
+    this.renderer.readRenderTargetPixels(this.densityGrid.readTarget, x, y, 1, 1, out);
+    this.renderer.setRenderTarget(prevRT);
+  }
+
+  /**
+   * ★ 诊断辅助：回读颜色场（残差）指定像素到 Uint8Array(4)（RGBA）。
+   */
+  readColorPixel(x: number, y: number, out: Uint8Array): void {
+    const prevRT = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.colorGrid.readTarget);
+    this.renderer.readRenderTargetPixels(this.colorGrid.readTarget, x, y, 1, 1, out);
+    this.renderer.setRenderTarget(prevRT);
+  }
+
+  /**
+   * MCSDA 烘焙导出：把残差（colorGrid，HSLA 颜色）× density × 通道系数 调制为单帧 RGBA Uint8。
    *
-   * 数学模型（与合成着色器一致）：
-   *   factor = density / baseline
-   *   outH = clamp(residualH × factor × hMul, 0, 1)
+   * ★ 数学模型（与 FluidEditorUI 合成着色器 scalar 分支完全一致，所见即所导）：
+   *   factor = density / baseline（低于基准削弱，高于基准增强）
+   *   outH = fract(residualH × factor × hMul)   // 色相环回绕，mul<0 产生补色
    *   outS = clamp(residualS × factor × sMul, 0, 1)
    *   outL = clamp(residualL × factor × lMul, 0, 1)
    *   outA = clamp(residualA × factor × aMul, 0, 1)
    *
-   * 输出为量化后的残差纹理（与 colorGrid 同分辨率），可直接作为 ftx3 单帧导出。
-   * 注意：density=0 的区域输出 0（无残差贡献），density 高于 baseline 的区域增强。
+   * ⚠️ 标量模式合成无基础色、无增量解码——残差本身就是 HSLA 颜色，density 调制其强度。
+   *    density=0 的区域输出 0（无颜色），density 高于 baseline 的区域增强。
    *
-   * @returns 调制后的 RGBA Uint8Array（分辨率同 colorGrid）
+   * @returns 调制后的 HSLA RGBA Uint8Array（分辨率同 colorGrid）
    */
   bakeResidual(): Uint8Array {
     const { w, h } = this.config.resolution;
@@ -798,13 +770,15 @@ export class FluidEditor {
     const baseline = Math.max(0.01, sc.baselineDensity);
 
     // GPU 烘焙 Pass：输出调制后的残差到临时 RenderTarget
+    // ★ 与 FluidEditorUI 合成着色器 scalar 分支完全一致，确保"所见即所导"：
+    //   H 通道用 fract（色相环回绕，mul<0 产生补色），S/L/A 用 clamp
     const mat = this.gpu.getMaterial('bakeResidual', {
       uResidual: { value: this.colorGrid.read },
       uDensity: { value: this.densityGrid.read },
       uChannelMul: { value: new THREE.Vector4(sc.hMultiplier, sc.sMultiplier, sc.lMultiplier, sc.aMultiplier) },
       uBaseline: { value: baseline },
     }, /* glsl */ `
-      uniform sampler2D uResidual;   // 残差场 RGBA（HSLA uint8，0~1）
+      uniform sampler2D uResidual;   // 残差场 RGBA（HSLA uint8，0~1）——残差本身就是颜色，非增量
       uniform sampler2D uDensity;    // density 场 R（0~1）
       uniform vec4 uChannelMul;      // H/S/L/A 通道系数
       uniform float uBaseline;       // 基准浓度
@@ -813,10 +787,15 @@ export class FluidEditor {
       void main() {
         vec4 residual = texture2D(uResidual, vUv);
         float density = texture2D(uDensity, vUv).r;
-        // 强度因子：density/baseline（baseline 越小放大越强）
-        float factor = density / uBaseline;
-        vec4 modulated = clamp(residual * factor * uChannelMul, 0.0, 1.0);
-        gl_FragColor = modulated;
+        // 强度因子：density/baseline（低于基准削弱，高于基准增强）
+        float factor = density / max(uBaseline, 0.001);
+        // ★ 合成 = 残差 × factor × mul，无基础色、无增量解码
+        //   H 用 fract 包裹（负值回绕=补色），S/L/A 用 clamp
+        float outH = fract(residual.r * factor * uChannelMul.x);
+        float outS = clamp(residual.g * factor * uChannelMul.y, 0.0, 1.0);
+        float outL = clamp(residual.b * factor * uChannelMul.z, 0.0, 1.0);
+        float outA = clamp(residual.a * factor * uChannelMul.w, 0.0, 1.0);
+        gl_FragColor = vec4(outH, outS, outL, outA);
       }
     `);
 

@@ -88,10 +88,6 @@ export interface WindOptions {
 export class FluidOperations {
   private injector: FluidInjector;
 
-  /** ★ 临时诊断：实例 id，用于确认 UI 和 step 是否同一 operations */
-  private static _nextId = 0;
-  private readonly _instanceId = FluidOperations._nextId++;
-
   /** 待处理的单次注入队列（UI 交互的一次性注入） */
   private pendingInjections: InjectionConfig[] = [];
 
@@ -106,12 +102,8 @@ export class FluidOperations {
    */
   private continuousInjectionEnabled = false;
 
-  /** 初速度调试：帧计数器，用于每帧应用日志节流（每 30 帧打印一次） */
-  private _velDebugFrameCounter = 0;
-
   constructor(injector: FluidInjector) {
     this.injector = injector;
-    console.log(`[diag] FluidOperations 构造, id=${this._instanceId}`);
   }
 
   // ==================== 注入队列管理（一次性注入） ====================
@@ -126,7 +118,6 @@ export class FluidOperations {
   public queueInjection(config: InjectionConfig): void {
     // 深拷贝，防止外部修改
     this.pendingInjections.push({ ...config });
-    console.log(`[diag] queueInjection id=${this._instanceId}: push后 len=${this.pendingInjections.length}, vel=(${config.velocity.x},${config.velocity.y}), pos=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}), radius=${config.radius}`);
   }
 
   /**
@@ -146,9 +137,7 @@ export class FluidOperations {
     _dt: number,
     gridDensity: FluidGrid | null = null,
   ): void {
-    const _n = this.pendingInjections.length;
-    if (_n === 0) return;
-    console.log(`[diag] processQueue id=${this._instanceId}: 处理 ${_n} 个注入`);
+    if (this.pendingInjections.length === 0) return;
 
     // 批量处理队列中的所有注入
     for (const config of this.pendingInjections) {
@@ -171,8 +160,6 @@ export class FluidOperations {
   public addContinuousSource(config: InjectionConfig): number {
     const id = this.nextSourceId++;
     this.continuousSources.push({ id, config: { ...config } });
-    // ★ 初速度调试：记录新增源的初速度（纹理坐标，Y向上为正）
-    console.log(`[初速度] 新增源 #${id}: 初速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) px/s, 位置=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}), rate=${config.rate}`);
     return id;
   }
 
@@ -187,15 +174,12 @@ export class FluidOperations {
     const src = this.continuousSources.find(s => s.id === id);
     if (src) {
       src.config = { ...config };
-      // ★ 初速度调试：记录更新后的初速度（纹理坐标，Y向上为正）
-      console.log(`[初速度] 更新源 #${id}: 初速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) px/s, 位置=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}), rate=${config.rate}`);
       return false;
     } else {
       // ★ upsert 模式：源不存在时自动添加（防止编辑器重建后源丢失的问题）
       console.warn(`[初速度] 源 #${id} 不存在（当前源数=${this.continuousSources.length}），自动添加为新源`);
       const newId = this.nextSourceId++;
       this.continuousSources.push({ id: newId, config: { ...config } });
-      console.log(`[初速度] 自动恢复源: 旧ID=${id} → 新ID=${newId}, 初速度=(${config.velocity.x.toFixed(2)},${config.velocity.y.toFixed(2)}) px/s`);
       return true;
     }
   }
@@ -272,15 +256,7 @@ export class FluidOperations {
     if (!this.continuousInjectionEnabled) return;
     if (this.continuousSources.length === 0) return;
 
-    // ★ 初速度调试：节流日志（每 30 帧打印一次），记录每帧初速度应用情况
-    this._velDebugFrameCounter++;
-    const shouldLog = this._velDebugFrameCounter % 30 === 0;
-
     for (const src of this.continuousSources) {
-      if (shouldLog) {
-        const c = src.config;
-        console.log(`[初速度] 每帧应用 源#${src.id}: 速度=(${c.velocity.x.toFixed(2)},${c.velocity.y.toFixed(2)}) px/s (直接注入，不乘dt), dt=${dt.toFixed(4)}s`);
-      }
       this.applyInjection(gridColor, gridVelocity, dt, src.config, gridDensity);
     }
   }

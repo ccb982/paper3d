@@ -1441,6 +1441,8 @@ export const FluidEditorUI: React.FC = () => {
   advectionModeRef.current = config.advectionMode ?? 'vector';
   const scalarConfigRef = useRef(config.scalarConfig);
   scalarConfigRef.current = config.scalarConfig;
+  // ★ scalar 模式合成诊断帧计数器
+  const diagFrameRef = useRef(0);
 
   // ★ 持续注入源列表（多源模式，从 FluidEditor 获取快照）
   const [continuousSources, setContinuousSources] = useState<ContinuousSourceSnapshot[]>([]);
@@ -1485,10 +1487,6 @@ export const FluidEditorUI: React.FC = () => {
     // ★ 速度矢量 = 方向 × 最终大小
     const velX = dir.x * finalSpeedMagnitude;
     const velY = dir.y * finalSpeedMagnitude;
-
-    // ★ 初速度调试
-    const modeLabel = continuousMode ? '持续' : `单次×${BOOST_MULTIPLIER}`;
-    console.log(`[初速度] ${modeLabel}: 方向=(${dir.x.toFixed(3)},${dir.y.toFixed(3)}) × ${speedMagnitude.toFixed(0)} → ${finalSpeedMagnitude.toFixed(0)} px/s → 速度=(${velX.toFixed(1)},${velY.toFixed(1)})`);
 
     // ★ MCSDA 标量模式：摇杆同时注入 density 浓度（被速度推动流动）。
     //   density 浓度固定为 1.0（满浓度），让注入点立即产生满浓度源，
@@ -1880,19 +1878,18 @@ export const FluidEditorUI: React.FC = () => {
           float finalH, finalS, finalL, finalA;
 
           if (uScalarMode == 1) {
-            // ★ MCSDA scalar 模式：残差按 density/baseline × 通道系数 调制
+            // ★ MCSDA scalar 模式：合成 = 残差(HSLA) × factor × mul
+            //   无基础色、无增量解码——残差本身就是颜色，density 调制其强度。
             //   factor = density / baseline（低于基准削弱，高于基准增强）
-            //   finalH = fract(baseH + dH × factor × hMul)
+            //   与 bakeResidual 着色器完全一致，确保所见即所导。
+            //   ⚠️ 此分支不读取 uBaseTexture / uResidualRange*（残差非增量）。
             float density = texture2D(uDensity, vUv).r;
             float factor = density / max(uBaseline, 0.001);
-            float modH = dH * factor * uChannelMul.x;
-            float modS = dS * factor * uChannelMul.y;
-            float modL = dL * factor * uChannelMul.z;
-            float modA = (residual.a * 2.0 - 1.0) * factor * uChannelMul.w;
-            finalH = fract(baseHSLA.r + modH);
-            finalS = clamp(baseHSLA.g + modS, 0.0, 1.0);
-            finalL = clamp(baseHSLA.b + modL, 0.0, 1.0);
-            finalA = clamp(baseHSLA.a + modA, 0.0, 1.0);
+            // H 通道用 fract 包裹：factor<1 削弱、mul<0 产生补色（fract 负值回绕）
+            finalH = fract(residual.r * factor * uChannelMul.x);
+            finalS = clamp(residual.g * factor * uChannelMul.y, 0.0, 1.0);
+            finalL = clamp(residual.b * factor * uChannelMul.z, 0.0, 1.0);
+            finalA = clamp(residual.a * factor * uChannelMul.w, 0.0, 1.0);
           } else {
             // ★ vector 模式（原逻辑）：HSL 直接加法（色相需要 fract 包裹）
             finalH = fract(baseHSLA.r + dH);
@@ -2228,6 +2225,20 @@ export const FluidEditorUI: React.FC = () => {
       );
       compositeMat.uniforms.uBaseline.value = _sc?.baselineDensity ?? 1.0;
       compositeMat.uniforms.uScalarMode.value = _isScalar ? 1 : 0;
+
+      // ★ 诊断：节流（每 60 帧）打印 scalar 模式状态 + 中心点 density/residual 回读
+      if (viewMode === 'composite' && _isScalar) {
+        diagFrameRef.current++;
+        if (diagFrameRef.current % 60 === 1) {
+          const { w, h } = config.resolution;
+          const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+          const dBuf = new Uint8Array(4);
+          const rBuf = new Uint8Array(4);
+          editor.readDensityPixel?.(cx, cy, dBuf);
+          editor.readColorPixel?.(cx, cy, rBuf);
+          console.log(`[diag] composite scalar: uScalarMode=${compositeMat.uniforms.uScalarMode.value}, mul=(${(_sc?.hMultiplier??1).toFixed(2)},${(_sc?.sMultiplier??1).toFixed(2)},${(_sc?.lMultiplier??1).toFixed(2)},${(_sc?.aMultiplier??1).toFixed(2)}), baseline=${(_sc?.baselineDensity??1).toFixed(2)}, center density=${dBuf[0]}/255, residual=(${rBuf[0]},${rBuf[1]},${rBuf[2]},${rBuf[3]})`);
+        }
+      }
 
       // 合成模式：更新底图纹理和残差范围
       if (viewMode === 'composite') {
