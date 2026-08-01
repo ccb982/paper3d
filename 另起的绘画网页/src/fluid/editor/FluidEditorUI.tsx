@@ -555,7 +555,10 @@ const GeneralPanel: React.FC<{
   onViewChange: (mode: ViewMode) => void;
   onReset: () => void;
   onExport: () => void;
-}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExport }) => {
+  // ★ 速度场亮度基准值（uMaxVel）：值越小，低速区域越亮
+  velViewMax: number;
+  setVelViewMax: (v: number) => void;
+}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExport, velViewMax, setVelViewMax }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -628,6 +631,63 @@ const GeneralPanel: React.FC<{
           </span>
         </div>
 
+        {/* 速度限幅 */}
+        <div className="control-group">
+          <label>速度限幅 (px/s)</label>
+          <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+            <input
+              type="number"
+              min={0}
+              max={100000}
+              step={500}
+              value={config.maxVelocity ?? 5000}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onConfigChange({ maxVelocity: isNaN(v) ? 0 : Math.max(0, v) });
+              }}
+              style={{ flex: 1, minWidth: '70px' }}
+              title="每帧对速度场做全局限幅，防止速度爆炸。0 = 禁用限幅"
+            />
+            <button
+              type="button"
+              onClick={() => onConfigChange({ maxVelocity: 0 })}
+              style={{
+                padding: '4px 8px',
+                fontSize: '10px',
+                background: config.maxVelocity === 0 ? '#f44336' : '#f5f5f5',
+                color: config.maxVelocity === 0 ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+              title="禁用限幅（不推荐，可能导致速度爆炸）"
+            >
+              禁用
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfigChange({ maxVelocity: 5000 })}
+              style={{
+                padding: '4px 8px',
+                fontSize: '10px',
+                background: config.maxVelocity === 5000 ? '#4caf50' : '#f5f5f5',
+                color: config.maxVelocity === 5000 ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+              title="恢复默认 5000 px/s"
+            >
+              默认
+            </button>
+          </div>
+          <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+            {config.maxVelocity === 0
+              ? '⚠️ 限幅已禁用，速度可能爆炸'
+              : `上限 ${(config.maxVelocity ?? 5000).toLocaleString()} px/s（0=禁用）`}
+          </span>
+        </div>
+
         {/* 通道选择 */}
         <div className="control-group">
           <label>平流通道</label>
@@ -676,6 +736,30 @@ const GeneralPanel: React.FC<{
             </button>
           </div>
         </div>
+
+        {/* ★ 速度场亮度基准值滑块：仅在速度视图下显示。
+            值越小，低速区域越亮（1 = 1 px/s 即满亮度，极灵敏）。 */}
+        {viewMode === 'velocity' && (
+          <div className="control-group">
+            <label>速度场亮度基准 (px/s)</label>
+            <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+              <input
+                type="range"
+                min={1}
+                max={1000}
+                step={1}
+                value={velViewMax}
+                onChange={(e) => setVelViewMax(parseInt(e.target.value))}
+                style={{ flex: 1 }}
+                title="值越小，低速区域越亮。1 = 1px/s 即满亮度"
+              />
+              <span className="hint" style={{ width: '60px', textAlign: 'right' }}>{velViewMax} px/s</span>
+            </div>
+            <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+              控制速度可视化的灵敏度：值越小，低速区域越亮（1=极灵敏，1000=正常）
+            </span>
+          </div>
+        )}
 
         {/* 边界模式 */}
         <div className="control-group">
@@ -958,6 +1042,12 @@ export const FluidEditorUI: React.FC = () => {
   const stashedBaseHRef = useRef(0);
 
   const [rendererReady, setRendererReady] = useState(false);
+
+  // ★ 速度场可视化亮度基准值（uMaxVel）：值越小，低速区域越亮。
+  //   用户可通过滑块手动调整，最小 1 表示 1 px/s 也能满亮度显示。
+  const [velViewMax, setVelViewMax] = useState(200);
+  const velViewMaxRef = useRef(velViewMax);
+  velViewMaxRef.current = velViewMax;
 
   // ==================== 辅助函数：双层级比较器 ====================
   /** RGB(0~1) → HSL(0~1) */
@@ -1311,8 +1401,11 @@ export const FluidEditorUI: React.FC = () => {
     const velMat = new THREE.ShaderMaterial({
       uniforms: {
         uVel: { value: editor.getVelocityTexture() },
-        // ★ uMaxVel 匹配速度滑块最大范围 3000 px/s（单次注入爆发可达 15000，但可视化以持续注入范围为准）
-        uMaxVel: { value: 3000 },
+        // ★ uMaxVel 控制速度可视化的归一化上限（亮度基准值）。
+        //   值越小，低速区域越亮。可通过 UI 滑块手动调整（velViewMax）。
+        //   初始值 200：20 px/s → 10% 线性 → pow(0.35) → 45% 亮度
+        //   设为 1 时：1 px/s 即满亮度（极灵敏）
+        uMaxVel: { value: velViewMaxRef.current },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -1329,7 +1422,11 @@ export const FluidEditorUI: React.FC = () => {
         void main() {
           vec2 vel = texture2D(uVel, vUv).rg;
           float len = length(vel);
-          float normalizedLen = min(len / uMaxVel, 1.0);
+          // ★ 使用更激进的 pow 曲线提升低速区域可见度：
+          //   pow(x, 0.35) 让极小值也能变成中等亮度
+          //   0.033(20px/600)→0.41  0.1(20px/200)→0.45  0.25(50px/200)→0.63
+          float linearLen = min(len / uMaxVel, 1.0);
+          float normalizedLen = pow(linearLen, 0.35);
 
           // ★ 速度可视化（HSV 色相映射，适配大速度范围）：
           //   方向 → 色相（H），速度大小 → 亮度（V）
@@ -1342,9 +1439,13 @@ export const FluidEditorUI: React.FC = () => {
           vec3 p = abs(fract(hsv.xxx + K.xyz) * 6.0 - K.www);
           vec3 color = hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
 
-          // 低速区域暗化（接近黑色），高速区域饱和
-          color *= normalizedLen;
-          color += (1.0 - normalizedLen) * 0.05;
+          // ★ 整体亮度增强（用户要求即使 20px 也要有亮色）：
+          //   1. 颜色乘以 1.3 倍亮度增益
+          //   2. 低速区域基础亮度提升到 0.2（保证可见）
+          color *= normalizedLen * 1.3;
+          color += (1.0 - normalizedLen) * 0.2;
+          // 限幅防止过曝
+          color = clamp(color, 0.0, 1.0);
 
           gl_FragColor = vec4(color, 1.0);
         }
@@ -1590,6 +1691,8 @@ export const FluidEditorUI: React.FC = () => {
       // 更新纹理引用
       colorMat.uniforms.uColor.value = editor.getColorTexture();
       velMat.uniforms.uVel.value = editor.getVelocityTexture();
+      // ★ 同步速度场亮度基准值（每帧从 ref 读取，确保滑块改动实时生效）
+      velMat.uniforms.uMaxVel.value = velViewMaxRef.current;
 
       // 合成模式：更新底图纹理和残差范围
       if (viewMode === 'composite') {
@@ -1948,6 +2051,8 @@ export const FluidEditorUI: React.FC = () => {
           onConfigChange={updateConfig}
           onViewChange={setView}
           onReset={reset}
+          velViewMax={velViewMax}
+          setVelViewMax={setVelViewMax}
           onExport={() => {
             if (!editor) return;
             const json = editor.exportState();

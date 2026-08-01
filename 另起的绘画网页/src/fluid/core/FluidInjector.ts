@@ -276,6 +276,72 @@ export class FluidInjector {
       }
     `);
 
+    // ★ 诊断：打印材质实际 uniform 值（排查缓存导致 uniform 未更新的可能）
+    const _uv = mat.uniforms.uVel.value as THREE.Vector2;
+    const _up = mat.uniforms.uPos.value as THREE.Vector2;
+    console.log(`[diag] inj_vel pre-render key=${key}: uVel=(${_uv.x},${_uv.y}), uPos=(${_up.x},${_up.y}), uRadius=${mat.uniforms.uRadius.value}, uGlobal=${mat.uniforms.uGlobal.value}, uHasMask=${mat.uniforms.uHasMask.value}, grid.dataType=${grid.dataType}`);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+
+    // ★ 诊断：swap 后回读注入点，验证速度是否真正写入速度场
+    // 读取 3x3 区域（中心 + 八邻域），确认径向衰减是否符合预期
+    {
+      const { w, h } = grid.resolution;
+      const cx = Math.max(0, Math.min(w - 1, Math.floor(position.x * w)));
+      const cy = Math.max(0, Math.min(h - 1, Math.floor(position.y * h)));
+      const dtype = grid.dataType;
+      const buf = new Float32Array(4);
+      const prevRT = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(grid.readTarget);
+      // 读中心点
+      this.renderer.readRenderTargetPixels(grid.readTarget, cx, cy, 1, 1, buf);
+      this.renderer.setRenderTarget(prevRT);
+      let vx = buf[0], vy = buf[1];
+      if (dtype === 'half-float') {
+        // half-float 用 Uint16Array 读取，手动解码
+        const raw = new Uint16Array(buf.buffer);
+        vx = raw[0]; vy = raw[1];
+        // 简单解码提示（不做完整 halfToFloat，仅判断是否为 0）
+        console.log(`[diag] inj_vel readback @(${cx},${cy}) [half-float raw]: x=${vx}, y=${vy}, uVel=(${velocity.x},${velocity.y})`);
+      } else {
+        console.log(`[diag] inj_vel readback @(${cx},${cy}) [float]: vel=(${vx.toFixed(2)},${vy.toFixed(2)}), uVel=(${velocity.x},${velocity.y}), uGlobal=${global ? 1 : 0}, uRadius=${radius}`);
+      }
+    }
+  }
+
+  // ---- 4. 速度限幅（防止速度爆炸） ----
+
+  /**
+   * 全局速度限幅。
+   *
+   * 遍历速度场，将所有速度矢量的长度限制在 maxSpeed 以内。
+   * 用于防止持续注入、压力投影误差累积等导致的速度爆炸。
+   *
+   * @param grid 速度网格
+   * @param maxSpeed 最大速度（px/s），默认 5000
+   */
+  clampVelocity(grid: FluidGrid, maxSpeed: number = 5000): void {
+    if (!isFinite(maxSpeed) || maxSpeed <= 0) return;
+
+    const mat = this.gpu.getMaterial('clampVelocity', {
+      uVelocity: { value: grid.read },
+      uMaxSpeed: { value: maxSpeed },
+    }, /* glsl */ `
+      uniform sampler2D uVelocity;
+      uniform float uMaxSpeed;
+      varying vec2 vUv;
+
+      void main() {
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        float len = length(vel);
+        if (len > uMaxSpeed) {
+          vel = vel / len * uMaxSpeed;
+        }
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+
     this.gpu.render(this.renderer, grid.write, mat);
     grid.swap();
   }

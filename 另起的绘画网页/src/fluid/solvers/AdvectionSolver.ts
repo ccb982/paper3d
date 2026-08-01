@@ -20,6 +20,18 @@ export interface AdvectionOptions {
    * - 'zero'：越界返回 0
    */
   boundaryMode?: 'clamp' | 'repeat' | 'zero';
+
+  /**
+   * 是否对 R 通道应用色相环包裹（fract(r+1)）。
+   *
+   * ⚠️ 仅当 R 通道语义为色相 H（即颜色场平流）时才设为 true。
+   *    速度场平流时 R=vx（像素/秒），必须为 false，否则 fract 会把速度
+   *    截断到 [0,1) 区间，横向速度瞬间被清零（仅剩小数残差），表现为
+   *    "注入横向速度后只有竖向运动"。
+   *
+   * 默认 false（速度场等非色相场的安全默认值）。
+   */
+  wrapHue?: boolean;
 }
 
 /**
@@ -80,10 +92,10 @@ export class AdvectionSolver {
     mask: AdvectionMask,
     options: AdvectionOptions = {},
   ): void {
-    const { subSteps = 1, boundaryMode = 'clamp' } = options;
+    const { subSteps = 1, boundaryMode = 'clamp', wrapHue = false } = options;
     const subDt = dt / subSteps;
 
-    const material = this.getOrCreateMaterial(mask, boundaryMode);
+    const material = this.getOrCreateMaterial(mask, boundaryMode, wrapHue);
 
     // 更新与帧无关的 uniform
     material.uniforms.uVelocity.value = velocity;
@@ -101,27 +113,32 @@ export class AdvectionSolver {
 
   /**
    * 获取或创建指定掩码的 ShaderMaterial（缓存）。
+   *
+   * 缓存 key 包含 wrapHue：速度场（wrapHue=false）与颜色场（wrapHue=true）
+   * 即便掩码相同也会生成不同的着色器，避免色相环包裹误伤速度场。
    */
   private getOrCreateMaterial(
     mask: AdvectionMask,
     boundaryMode: 'clamp' | 'repeat' | 'zero',
+    wrapHue: boolean,
   ): THREE.ShaderMaterial {
-    const key = `${mask.r ? 1 : 0}${mask.g ? 1 : 0}${mask.b ? 1 : 0}${mask.a ? 1 : 0}_${boundaryMode}`;
+    const key = `${mask.r ? 1 : 0}${mask.g ? 1 : 0}${mask.b ? 1 : 0}${mask.a ? 1 : 0}_${boundaryMode}_${wrapHue ? 'h' : 'n'}`;
 
     let material = this.materialCache.get(key);
     if (material) return material;
 
-    material = this.buildMaterial(mask, boundaryMode);
+    material = this.buildMaterial(mask, boundaryMode, wrapHue);
     this.materialCache.set(key, material);
     return material;
   }
 
   /**
-   * 动态构建着色器材质（根据掩码和边界模式生成片段着色器）。
+   * 动态构建着色器材质（根据掩码、边界模式、色相包裹生成片段着色器）。
    */
   private buildMaterial(
     mask: AdvectionMask,
     boundaryMode: 'clamp' | 'repeat' | 'zero',
+    wrapHue: boolean,
   ): THREE.ShaderMaterial {
     const vertexShader = /* glsl */ `
       varying vec2 vUv;
@@ -151,8 +168,10 @@ export class AdvectionSolver {
         break;
     }
 
-    // 色相环保护：仅当 R 通道（Hue）参与平流时启用
-    const hueWrap = mask.r
+    // 色相环保护：仅当 wrapHue=true（颜色场，R=Hue）且 R 通道参与平流时启用。
+    // ★ 速度场平流时 R=vx，wrapHue 必须为 false，否则 fract(vx+1) 会把速度
+    //   截断到 [0,1)，导致横向速度被清零（仅剩小数残差）。
+    const hueWrap = (wrapHue && mask.r)
       ? '  result.r = fract(result.r + 1.0);\n'
       : '';
 
@@ -165,6 +184,39 @@ export class AdvectionSolver {
 
       varying vec2 vUv;
 
+      // ---- Catmull-Rom 采样函数 ----
+      // 使用 4x4 邻域替代双线性，在保持速度场细节方面远优于双线性。
+      // 边界 clamp，避免越界采样。
+      vec4 sampleCatmullRom(sampler2D tex, vec2 uv, vec2 texSize) {
+        // 将 UV 转换为像素坐标（-0.5 使采样中心对准像素中心）
+        vec2 pixel = uv * texSize - 0.5;
+        vec2 frac = fract(pixel);
+        vec2 base = floor(pixel);
+
+        // Catmull-Rom 基函数权重（分别对应 offset = -1, 0, 1, 2）
+        vec2 t = frac;
+        vec2 t2 = t * t;
+        vec2 t3 = t2 * t;
+        vec2 w0 = (-t3 + 2.0 * t2 - t) / 2.0;
+        vec2 w1 = (3.0 * t3 - 5.0 * t2 + 2.0) / 2.0;
+        vec2 w2 = (-3.0 * t3 + 4.0 * t2 + t) / 2.0;
+        vec2 w3 = (t3 - t2) / 2.0;
+
+        // 4x4 邻域采样加权和
+        vec4 result = vec4(0.0);
+        for (int i = 0; i < 4; i++) {
+          for (int j = 0; j < 4; j++) {
+            vec2 offset = vec2(float(i) - 1.0, float(j) - 1.0);
+            vec2 coord = (base + offset + 0.5) / texSize;
+            coord = clamp(coord, 0.0, 1.0);
+            float weight = (i == 0 ? w0.x : (i == 1 ? w1.x : (i == 2 ? w2.x : w3.x))) *
+                           (j == 0 ? w0.y : (j == 1 ? w1.y : (j == 2 ? w2.y : w3.y)));
+            result += texture2D(tex, coord) * weight;
+          }
+        }
+        return result;
+      }
+
       void main() {
         vec2 uv = vUv;
 
@@ -176,8 +228,10 @@ export class AdvectionSolver {
         ${boundaryFn}
 
         // 3. 采样静止值和流动值
+        //    staticVal 采样当前像素位置，保留双线性（无需高精度插值，节省性能）
+        //    flowVal 使用 Catmull-Rom 插值，保持速度场细节
         vec4 staticVal = texture2D(uInput, uv);
-        vec4 flowVal  = texture2D(uInput, backUv);
+        vec4 flowVal = sampleCatmullRom(uInput, backUv, uResolution);
 
         // 4. 逐通道混合：mask=0 → 直传，mask=1 → 平流
         vec4 result;

@@ -35,6 +35,7 @@ export function useFluidEditor(
       color: [0.0, 0.8, 1.0, 1.0],
     },
     colorBoundaryMode: 'clamp',
+    maxVelocity: 5000, // 全局速度限幅上限（px/s），防止速度爆炸
     ...initialConfig,
   }));
 

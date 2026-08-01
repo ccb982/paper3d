@@ -75,6 +75,11 @@ export interface FluidEditorConfig {
   colorBoundaryMode?: 'clamp' | 'repeat' | 'zero';
   /** 速度场数据类型：'half-float'（16位半精度，显存减半）或 'float'（32位单精度，高精度） */
   velocityDataType?: VelocityDataType;
+  /**
+   * 全局速度限幅上限（px/s）。每帧 step 末尾对速度场做限幅，防止速度爆炸。
+   * 设为 0 或 Infinity 表示禁用限幅。默认 5000。
+   */
+  maxVelocity?: number;
 }
 
 // ============================================================
@@ -291,32 +296,94 @@ export class FluidEditor {
 
     this.frameCount++;
 
+    // ★ 临时诊断探针：全场扫描 max|velX|/max|velY| 及位置（每 30 帧 readPixels 一次）
+    // 用于定位横向速度 X 分量是否存在、在哪、何时丢失
+    const _probe = (label: string) => {
+      if (this.frameCount % 30 !== 0) return;
+      const { w, h } = this.config.resolution;
+      const data = this.readVelocityPixelData(this.velocityGrid.readTarget, 0, 0, w, h);
+      let maxX = 0, maxY = 0, maxAbsX = 0, maxAbsY = 0, idxX = 0, idxY = 0;
+      const n = w * h;
+      for (let i = 0; i < n; i++) {
+        const vx = data[i * 2], vy = data[i * 2 + 1];
+        const ax = Math.abs(vx), ay = Math.abs(vy);
+        if (ax > maxAbsX) { maxAbsX = ax; maxX = vx; idxX = i; }
+        if (ay > maxAbsY) { maxAbsY = ay; maxY = vy; idxY = i; }
+      }
+      const xx = idxX % w, xy = Math.floor(idxX / w);
+      const yx = idxY % w, yy = Math.floor(idxY / w);
+      console.log(`[diag] ${label} res=${w}x${h}: maxVelX=${maxX.toFixed(2)} @(${xx},${xy}), maxVelY=${maxY.toFixed(2)} @(${yx},${yy})`);
+    };
+
+    _probe('0.start');
+
     // ★ 0. 处理 UI 注入队列（优先执行，确保本帧生效）
     // 委托给 operations 处理一次性注入
     this.operations.processQueue(this.colorGrid, this.velocityGrid, dt);
+    _probe('1.afterQueue');
 
     // 0. 重力（通过操作模块 → 底层注入器）
     if (this.config.gravity !== 0) {
       this.operations.applyGravity(this.velocityGrid, dt, this.config.gravity);
     }
+    _probe('2.afterGravity');
 
     // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
     this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt);
+    _probe('3.afterContinuous');
 
     // 2. 平流（非注入 Pass，直接使用 this.gpu）
     if (this.config.enableAdvection) {
+      // ★ 平流诊断：计算回溯目标位置并读取该位置原始速度
+      // 回溯公式: backUv = uv - vel * dt / resolution（与着色器一致）
+      {
+        const { w, h } = this.config.resolution;
+        const subSteps = Math.max(1, Math.ceil((this.config.maxVelocity ?? 5000) * dt / Math.min(w, h)));
+        const subDt = dt / subSteps;
+        for (const [px, py, label] of [[112, 120, 'inj'], [128, 128, 'ctr']] as const) {
+          const vel = this.readVelocityPixelData(this.velocityGrid.readTarget, px, py, 1, 1);
+          const vx = vel[0], vy = vel[1];
+          // 着色器中 uv = vUv ≈ (px+0.5)/w（像素中心）
+          const uvX = (px + 0.5) / w, uvY = (py + 0.5) / h;
+          const backUvX = uvX - vx * subDt / w;
+          const backUvY = uvY - vy * subDt / h;
+          const backPx = Math.max(0, Math.min(w - 1, Math.floor(backUvX * w)));
+          const backPy = Math.max(0, Math.min(h - 1, Math.floor(backUvY * h)));
+          const backVel = this.readVelocityPixelData(this.velocityGrid.readTarget, backPx, backPy, 1, 1);
+          console.log(`[diag] backtrace ${label}: from=(${px},${py}) vel=(${vx.toFixed(1)},${vy.toFixed(1)}) → backPos=(${backPx},${backPy}) backVel=(${backVel[0].toFixed(2)},${backVel[1].toFixed(2)}) subDt=${subDt.toFixed(5)}`);
+        }
+      }
       this.advectVelocity(dt);
+      // ★ 平流诊断：平流后读取同样位置
+      {
+        const p1 = this.readVelocityPixelData(this.velocityGrid.readTarget, 112, 120, 1, 1);
+        const p2 = this.readVelocityPixelData(this.velocityGrid.readTarget, 128, 128, 1, 1);
+        console.log(`[diag] post-advect @(112,120)=(${p1[0].toFixed(2)},${p1[1].toFixed(2)}) @(128,128)=(${p2[0].toFixed(2)},${p2[1].toFixed(2)})`);
+      }
+      _probe('4a.afterAdvectVel');
       this.advectColor(dt);
+      _probe('4b.afterAdvectColor');
     }
 
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
     this.applyBoundary();
+    _probe('5.afterBoundary');
 
     // 3. 压力投影（红-黑 SOR）
     if (this.config.enablePressure) {
       this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
       this.applyPressureGradient();
+      _probe('6.afterPressure');
     }
+
+    // ★ 3.5 全局速度限幅（压力投影之后）
+    // 防止持续注入、误差累积导致的速度爆炸
+    // maxVelocity = 0 或 Infinity 表示禁用限幅
+    const maxVel = this.config.maxVelocity ?? 5000;
+    if (maxVel > 0 && isFinite(maxVel)) {
+      this.operations.clampVelocity(this.velocityGrid, maxVel);
+    }
+    _probe('7.afterClamp');
 
     // 4. Level Set（预留）
     // if (this.config.enableLevelSet) this.solveLevelSet();
@@ -326,17 +393,45 @@ export class FluidEditor {
 
   // ==================== GPU Pass 实现 ====================
 
-  /** 速度自平流 */
+  /**
+   * 速度自平流。
+   *
+   * ★ 使用 CFL（Courant-Friedrichs-Lewy）条件动态计算子步数：
+   *   subSteps = ceil(maxSpeed * dt / minGridSpacing)
+   *
+   * 确保每个子步内像素回溯距离 ≤ 1 个网格单元，避免：
+   *   1. 薄墙穿透：高速像素跳过细窄边界
+   *   2. 离散采样缺陷：反向追踪越过细节特征
+   *   3. 重力为 0 时的盲区：原方案仅依赖重力计算 subSteps，无重力时高速注入会失稳
+   *
+   * maxSpeed 取自 config.maxVelocity（速度限幅上限）——这是当前帧速度的硬上界，
+   * 无需采样速度场即可保证 CFL 满足。
+   */
   private advectVelocity(dt: number): void {
     const mask: AdvectionMask = { r: true, g: true, b: false, a: false };
-    const subSteps = Math.max(1, Math.ceil(Math.abs(this.config.gravity) * dt / 50));
-    
+
+    // 1. 基于速度的 CFL 子步（主要稳定性保障）
+    //    使用限幅值作为最大可能速度（当前帧速度场的硬上界）
+    const maxPossibleSpeed = this.config.maxVelocity && this.config.maxVelocity > 0
+      ? this.config.maxVelocity
+      : 5000;
+    const minGridSpacing = Math.min(this.config.resolution.w, this.config.resolution.h);
+    const cflSubSteps = Math.ceil((maxPossibleSpeed * dt) / minGridSpacing);
+
+    // 2. 兼顾重力的子步（重力很大时也需要分步）
+    const gravitySubSteps = Math.ceil(Math.abs(this.config.gravity) * dt / 50);
+
+    // 3. 取两者较大值，至少为 1
+    const subSteps = Math.max(1, Math.max(cflSubSteps, gravitySubSteps));
+
     this.advectionSolver.advect(
       this.velocityGrid,
       this.velocityGrid.read,
       dt,
       mask,
-      { boundaryMode: 'clamp', subSteps },
+      // ★ wrapHue=false：速度场 R=vx（像素/秒），绝不能应用色相环包裹 fract，
+      //   否则速度被截断到 [0,1) 导致横向速度清零。
+      { boundaryMode: 'clamp', subSteps, wrapHue: false },
     );
   }
 
@@ -349,13 +444,24 @@ export class FluidEditor {
     }
 
     const boundaryMode = this.config.colorBoundaryMode || 'clamp';
-    
+
+    // ★ 颜色平流同样使用 CFL 条件，避免颜色穿透薄边界
+    const maxPossibleSpeed = this.config.maxVelocity && this.config.maxVelocity > 0
+      ? this.config.maxVelocity
+      : 5000;
+    const minGridSpacing = Math.min(this.config.resolution.w, this.config.resolution.h);
+    const cflSubSteps = Math.ceil((maxPossibleSpeed * dt) / minGridSpacing);
+    const gravitySubSteps = Math.ceil(Math.abs(this.config.gravity) * dt / 50);
+    const subSteps = Math.max(1, Math.max(cflSubSteps, gravitySubSteps));
+
     this.advectionSolver.advect(
       this.colorGrid,
       this.velocityGrid.read,
       dt,
       mask,
-      { boundaryMode, subSteps: 6 },
+      // ★ wrapHue=true：颜色场 R=Hue（色相），需要 fract 色相环包裹，
+      //   防止 Catmull-Rom 插值越界导致色相跳变。
+      { boundaryMode, subSteps, wrapHue: true },
     );
   }
 

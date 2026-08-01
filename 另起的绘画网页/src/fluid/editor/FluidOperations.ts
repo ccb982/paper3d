@@ -82,6 +82,10 @@ export interface WindOptions {
 export class FluidOperations {
   private injector: FluidInjector;
 
+  /** ★ 临时诊断：实例 id，用于确认 UI 和 step 是否同一 operations */
+  private static _nextId = 0;
+  private readonly _instanceId = FluidOperations._nextId++;
+
   /** 待处理的单次注入队列（UI 交互的一次性注入） */
   private pendingInjections: InjectionConfig[] = [];
 
@@ -101,6 +105,7 @@ export class FluidOperations {
 
   constructor(injector: FluidInjector) {
     this.injector = injector;
+    console.log(`[diag] FluidOperations 构造, id=${this._instanceId}`);
   }
 
   // ==================== 注入队列管理（一次性注入） ====================
@@ -115,6 +120,7 @@ export class FluidOperations {
   public queueInjection(config: InjectionConfig): void {
     // 深拷贝，防止外部修改
     this.pendingInjections.push({ ...config });
+    console.log(`[diag] queueInjection id=${this._instanceId}: push后 len=${this.pendingInjections.length}, vel=(${config.velocity.x},${config.velocity.y}), pos=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}), radius=${config.radius}`);
   }
 
   /**
@@ -132,7 +138,9 @@ export class FluidOperations {
     gridVelocity: FluidGrid,
     _dt: number,
   ): void {
-    if (this.pendingInjections.length === 0) return;
+    const _n = this.pendingInjections.length;
+    if (_n === 0) return;
+    console.log(`[diag] processQueue id=${this._instanceId}: 处理 ${_n} 个注入`);
 
     // 批量处理队列中的所有注入
     for (const config of this.pendingInjections) {
@@ -299,7 +307,9 @@ export class FluidOperations {
       pos,
     );
 
-    // 2. 速度注入（直接增加速度矢量）
+    // 2. 速度注入（一次性注入：瞬时冲量，不乘 dt）
+    //    一次性注入只执行一次，不会累加爆炸，直接注入速度值即可。
+    //    持续注入才会乘 dt 防止累加（见 applyInjection）。
     this.injector.injectVelocity(
       gridVelocity,
       { x: config.velocity.x, y: config.velocity.y },
@@ -336,20 +346,21 @@ export class FluidOperations {
    * 注意：config 参数必须已经通过接口适配层转换为纹理坐标。
    * 本方法只负责纯粹的物理注入逻辑，不关心坐标系转换。
    *
-   * ⚠️ 速度注入语义修正：
-   *   config.velocity 直接作为速度值（px/s）注入，不再乘以 dt，
-   *   确保注入速度足够大，能够与重力抗衡。
-   *   因此 dt 参数当前未使用（保留以兼容调度接口）。
+   * ⚠️ 速度注入语义：
+   *   config.velocity 单位为 px/s，乘以 dt 后为每帧速度增量（px），
+   *   与重力（gravity * dt）物理语义一致。
+   *   持续注入时每帧累加 velocity * dt，相当于加速度为 velocity 的持续推动。
+   *   不会无限制累加爆炸——后续由 clampVelocity 全局限幅。
    *
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
-   * @param _dt 时间步长（秒）—— 当前未使用，保留以匹配调度接口
+   * @param dt 时间步长（秒）
    * @param config 注入源配置（已转换为纹理坐标）
    */
   applyInjection(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
-    _dt: number,
+    dt: number,
     config: InjectionConfig,
   ): void {
     if (!config.enabled) return;
@@ -379,19 +390,32 @@ export class FluidOperations {
     );
 
     // ★ 速度注入（持续注入场景）：config.velocity 是速度值（px/s），
-    //   直接注入速度值，不乘以 dt。
-    //   injectVelocity 着色器中直接 current += uVel，uVel 单位是 px/s。
-    //   修正前错误地乘以了 dt，导致注入速度过小（如 80 × 0.007 ≈ 0.56 px/s），
-    //   被重力（250 × 0.007 ≈ 1.75 px/s 每帧增量）迅速淹没，流体只会向下流。
+    //   乘以 dt 后为每帧速度增量（px），与重力（gravity * dt）物理语义一致。
+    //   持续注入时每帧累加 velocity * dt，相当于加速度为 velocity 的持续推动。
+    //   不会无限制累加爆炸——由 clampVelocity 全局限幅。
     this.injector.injectVelocity(
       gridVelocity,
-      { x: config.velocity.x, y: config.velocity.y },
+      { x: config.velocity.x * dt, y: config.velocity.y * dt },
       texPos,
     );
   }
 
-  // ==================== 高级效果（预留接口，后续按需实现） ====================
+  // ==================== 速度限幅 ====================
 
+  /**
+   * 全局速度限幅。
+   *
+   * 遍历速度场，将所有速度矢量的长度限制在 maxSpeed 以内。
+   * 防止持续注入、压力投影误差累积等导致的速度爆炸。
+   *
+   * @param gridVelocity 速度网格
+   * @param maxSpeed 最大速度（px/s）
+   */
+  clampVelocity(gridVelocity: FluidGrid, maxSpeed: number): void {
+    this.injector.clampVelocity(gridVelocity, maxSpeed);
+  }
+
+  // ==================== 高级效果（预留接口，后续按需实现） ====================
   /**
    * 添加漩涡。
    *
