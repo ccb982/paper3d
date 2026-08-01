@@ -36,6 +36,16 @@ export function useFluidEditor(
     },
     colorBoundaryMode: 'clamp',
     maxVelocity: 5000, // 全局速度限幅上限（px/s），防止速度爆炸
+    // ★ MCSDA 标量浓度平流模式（默认 vector 旧模式，保持兼容）
+    advectionMode: 'vector',
+    scalarConfig: {
+      hMultiplier: 1.0,      // 色相系数，-2~2
+      sMultiplier: 1.0,      // 饱和度系数
+      lMultiplier: 1.0,      // 明度系数
+      aMultiplier: 1.0,      // 透明度系数
+      baselineDensity: 1.0,  // 基准浓度，0.01~1.0（factor = density/baseline）
+      decayRate: 0,          // 衰减速率，0~0.99（每帧 density *= 1-decayRate）
+    },
     ...initialConfig,
   }));
 
@@ -118,6 +128,8 @@ export function useFluidEditor(
         return ed.getColorTexture();
       case 'velocity':
         return ed.getVelocityTexture();
+      case 'density':
+        return ed.getDensityTexture();
       default:
         return null;
     }

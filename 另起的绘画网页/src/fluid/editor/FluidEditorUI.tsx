@@ -585,7 +585,9 @@ const GeneralPanel: React.FC<{
   // ★ 速度场亮度基准值（uMaxVel）：值越小，低速区域越亮
   velViewMax: number;
   setVelViewMax: (v: number) => void;
-}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExport, velViewMax, setVelViewMax }) => {
+  // ★ MCSDA 烘焙导出（scalar 模式下显示）
+  onBakeResidual?: () => void;
+}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExport, velViewMax, setVelViewMax, onBakeResidual }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -715,6 +717,165 @@ const GeneralPanel: React.FC<{
           </span>
         </div>
 
+        {/* ★ MCSDA 平流模式切换：向量模式（旧）/ 标量浓度模式（新） */}
+        <div className="control-group">
+          <label>平流模式</label>
+          <div className="row" style={{ gap: '6px' }}>
+            <button
+              type="button"
+              onClick={() => onConfigChange({ advectionMode: 'vector' })}
+              style={{
+                flex: 1,
+                padding: '4px 8px',
+                fontSize: '11px',
+                background: config.advectionMode !== 'scalar' ? '#673ab7' : '#f5f5f5',
+                color: config.advectionMode !== 'scalar' ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: config.advectionMode !== 'scalar' ? 'bold' : 'normal',
+              }}
+              title="向量模式：4 通道颜色场（HSLA）参与平流，残差动态流动（旧模式）"
+            >
+              🔀 向量模式
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfigChange({ advectionMode: 'scalar' })}
+              style={{
+                flex: 1,
+                padding: '4px 8px',
+                fontSize: '11px',
+                background: config.advectionMode === 'scalar' ? '#009688' : '#f5f5f5',
+                color: config.advectionMode === 'scalar' ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontWeight: config.advectionMode === 'scalar' ? 'bold' : 'normal',
+              }}
+              title="标量浓度模式：1 通道 density 平流，残差静态化，合成时用 density×通道系数调制（MCSDA）"
+            >
+              🧪 标量浓度
+            </button>
+          </div>
+          <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+            {config.advectionMode === 'scalar'
+              ? '标量模式：density 平流驱动视觉流动，残差按浓度×系数调制。用摇杆注入 density'
+              : '向量模式：HSLA 4 通道平流，残差随速度场流动（默认）'}
+          </span>
+        </div>
+
+        {/* ★ MCSDA 标量模式参数（仅 advectionMode='scalar' 时显示） */}
+        {config.advectionMode === 'scalar' && (
+          <>
+            <div className="control-group">
+              <label>H 强度 (-2.0~2.0)</label>
+              <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+                <input
+                  type="range" min={-2} max={2} step={0.01}
+                  value={config.scalarConfig?.hMultiplier ?? 1.0}
+                  onChange={(e) => onConfigChange({
+                    scalarConfig: { ...config.scalarConfig!, hMultiplier: parseFloat(e.target.value) }
+                  })}
+                  style={{ flex: 1 }}
+                  title="色相系数：负值产生补色，0=无残差，1=原样，2=2倍增强"
+                />
+                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.hMultiplier ?? 1.0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <div className="control-group">
+              <label>S 强度 (-2.0~2.0)</label>
+              <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+                <input
+                  type="range" min={-2} max={2} step={0.01}
+                  value={config.scalarConfig?.sMultiplier ?? 1.0}
+                  onChange={(e) => onConfigChange({
+                    scalarConfig: { ...config.scalarConfig!, sMultiplier: parseFloat(e.target.value) }
+                  })}
+                  style={{ flex: 1 }}
+                />
+                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.sMultiplier ?? 1.0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <div className="control-group">
+              <label>L 强度 (-2.0~2.0)</label>
+              <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+                <input
+                  type="range" min={-2} max={2} step={0.01}
+                  value={config.scalarConfig?.lMultiplier ?? 1.0}
+                  onChange={(e) => onConfigChange({
+                    scalarConfig: { ...config.scalarConfig!, lMultiplier: parseFloat(e.target.value) }
+                  })}
+                  style={{ flex: 1 }}
+                />
+                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.lMultiplier ?? 1.0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <div className="control-group">
+              <label>A 强度 (-2.0~2.0)</label>
+              <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+                <input
+                  type="range" min={-2} max={2} step={0.01}
+                  value={config.scalarConfig?.aMultiplier ?? 1.0}
+                  onChange={(e) => onConfigChange({
+                    scalarConfig: { ...config.scalarConfig!, aMultiplier: parseFloat(e.target.value) }
+                  })}
+                  style={{ flex: 1 }}
+                />
+                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.aMultiplier ?? 1.0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+            <div className="control-group">
+              <label>基准浓度 baseline (0.01~1.0)</label>
+              <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+                <input
+                  type="range" min={0.01} max={1} step={0.01}
+                  value={config.scalarConfig?.baselineDensity ?? 1.0}
+                  onChange={(e) => onConfigChange({
+                    scalarConfig: { ...config.scalarConfig!, baselineDensity: parseFloat(e.target.value) }
+                  })}
+                  style={{ flex: 1 }}
+                  title="基准浓度：factor=density/baseline。低于基准削弱，高于基准增强"
+                />
+                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.baselineDensity ?? 1.0).toFixed(2)}
+                </span>
+              </div>
+              <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+                factor = density / baseline：低于基准→削弱，高于基准→增强
+              </span>
+            </div>
+            <div className="control-group">
+              <label>衰减速率 decay (0~0.99)</label>
+              <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+                <input
+                  type="range" min={0} max={0.99} step={0.01}
+                  value={config.scalarConfig?.decayRate ?? 0}
+                  onChange={(e) => onConfigChange({
+                    scalarConfig: { ...config.scalarConfig!, decayRate: parseFloat(e.target.value) }
+                  })}
+                  style={{ flex: 1 }}
+                  title="每帧 density *= (1-decayRate)。0=无衰减，0.1=每帧损失10%"
+                />
+                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.decayRate ?? 0).toFixed(2)}
+                </span>
+              </div>
+              <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+                每帧 density × (1-decayRate)：0=无衰减，0.1=每帧损失10%
+              </span>
+            </div>
+          </>
+        )}
+
         {/* 通道选择 */}
         <div className="control-group">
           <label>平流通道（勾选=跟随速度流动）</label>
@@ -765,6 +926,13 @@ const GeneralPanel: React.FC<{
               onClick={() => onViewChange('composite')}
             >
               🖼️ 合成
+            </button>
+            <button
+              className={viewMode === 'density' ? 'active' : ''}
+              onClick={() => onViewChange('density')}
+              title="浓缩场（density 标量浓度灰度显示，仅标量模式有意义）"
+            >
+              🧪 浓缩
             </button>
           </div>
         </div>
@@ -854,6 +1022,37 @@ const GeneralPanel: React.FC<{
             📤 导出状态 JSON
           </button>
         </div>
+
+        {/* ★ MCSDA 烘焙导出按钮（仅 scalar 模式显示）：
+            把残差×density×通道系数 烘焙为单帧 RGBA，导出为 .bin 文件 */}
+        {config.advectionMode === 'scalar' && onBakeResidual && (
+          <div className="control-group">
+            <button
+              onClick={onBakeResidual}
+              style={{
+                width: '100%',
+                padding: '6px 12px',
+                background: '#ff9800',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px',
+                marginTop: '4px',
+              }}
+              title="把残差×density×通道系数 烘焙为单帧 RGBA 导出"
+            >
+              🧱 烘焙导出残差 (density×mul)
+            </button>
+            <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+              残差 × (density/baseline) × 通道系数 → 单帧 RGBA，导出为 .bin
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1235,6 +1434,14 @@ export const FluidEditorUI: React.FC = () => {
     colorBoundaryMode: 'clamp',
   });
 
+  // ★ MCSDA 模式相关 ref：渲染循环依赖这些值实时更新合成着色器 uniform，
+  //   但 useEffect 不会因 config.advectionMode/scalarConfig 变化而重建场景，
+  //   所以用 ref 在循环内读取最新值（必须在 config 声明之后）。
+  const advectionModeRef = useRef(config.advectionMode ?? 'vector');
+  advectionModeRef.current = config.advectionMode ?? 'vector';
+  const scalarConfigRef = useRef(config.scalarConfig);
+  scalarConfigRef.current = config.scalarConfig;
+
   // ★ 持续注入源列表（多源模式，从 FluidEditor 获取快照）
   const [continuousSources, setContinuousSources] = useState<ContinuousSourceSnapshot[]>([]);
 
@@ -1283,6 +1490,12 @@ export const FluidEditorUI: React.FC = () => {
     const modeLabel = continuousMode ? '持续' : `单次×${BOOST_MULTIPLIER}`;
     console.log(`[初速度] ${modeLabel}: 方向=(${dir.x.toFixed(3)},${dir.y.toFixed(3)}) × ${speedMagnitude.toFixed(0)} → ${finalSpeedMagnitude.toFixed(0)} px/s → 速度=(${velX.toFixed(1)},${velY.toFixed(1)})`);
 
+    // ★ MCSDA 标量模式：摇杆同时注入 density 浓度（被速度推动流动）。
+    //   density 浓度固定为 1.0（满浓度），让注入点立即产生满浓度源，
+    //   后续由衰减/平流自然消散。vector 模式不带 density 字段（兼容）。
+    const isScalar = config.advectionMode === 'scalar';
+    const densityValue = isScalar ? 1.0 : undefined;
+
     return {
       enabled: true,
       position: pos,
@@ -1290,8 +1503,9 @@ export const FluidEditorUI: React.FC = () => {
       rate,
       velocity: { x: velX, y: velY },
       color,
+      ...(densityValue !== undefined ? { density: densityValue } : {}),
     };
-  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude, continuousMode]);
+  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude, continuousMode, config.advectionMode]);
 
   // ★ 鼠标按住状态：单次模式下长按 = 临时持续注入（松开即停）
   const pointerDownRef = useRef(false);
@@ -1574,7 +1788,45 @@ export const FluidEditorUI: React.FC = () => {
     velQuad.material = velMat;
     velScene.add(velQuad);
 
+    // ★ density 场场景（MCSDA 浓缩视口）：灰度显示 density 标量浓度
+    //   density.r ∈ [0,1] → 灰度，并叠加基准浓度参考线（红色横线）
+    const densityScene = new THREE.Scene();
+    const densityQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const densityMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uDensity: { value: editor.getDensityTexture() },
+        uBaseline: { value: scalarConfigRef.current?.baselineDensity ?? 1.0 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = vec2(uv.x, 1.0 - uv.y);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uDensity;
+        uniform float uBaseline;
+        varying vec2 vUv;
+
+        void main() {
+          float d = texture2D(uDensity, vUv).r;
+          // 灰度显示 density，高于 baseline 用青色高亮（增强区域），低于则普通灰度
+          vec3 color = vec3(d);
+          if (d > uBaseline) {
+            // 增强：青色调
+            color = mix(vec3(d), vec3(0.2, 0.9, 0.9), 0.4);
+          }
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+    });
+    densityQuad.material = densityMat;
+    densityScene.add(densityQuad);
+
     // 合成场景：底图（baseTexture）+ 平流残差（fluid residual）实时混合
+    // ★ MCSDA：scalar 模式下残差按 density×通道系数 调制（uScalarMode=1），
+    //   vector 模式保持原逻辑（uScalarMode=0）
     const compositeScene = new THREE.Scene();
     const compositeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
     const compositeMat = new THREE.ShaderMaterial({
@@ -1583,6 +1835,11 @@ export const FluidEditorUI: React.FC = () => {
         uResidual: { value: editor.getColorTexture() },
         uResidualRangeH: { value: residualRangeHRef.current },
         uResidualRangeSL: { value: residualRangeSLRef.current },
+        // ★ MCSDA scalar 模式 uniforms
+        uDensity: { value: editor.getDensityTexture() },            // density 场
+        uChannelMul: { value: new THREE.Vector4(1, 1, 1, 1) },      // H/S/L/A 通道系数
+        uBaseline: { value: 1.0 },                                  // 基准浓度
+        uScalarMode: { value: 0 },                                  // 0=vector, 1=scalar
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -1596,6 +1853,10 @@ export const FluidEditorUI: React.FC = () => {
         uniform sampler2D uResidual;     // Uint8Type，存储量化残差值 [qH, qS, qL, 255]
         uniform float uResidualRangeH;
         uniform float uResidualRangeSL;
+        uniform sampler2D uDensity;      // MCSDA density 场（R 通道，0~1）
+        uniform vec4 uChannelMul;        // H/S/L/A 通道系数（-2~2）
+        uniform float uBaseline;         // 基准浓度
+        uniform int uScalarMode;         // 0=vector（残差直接加），1=scalar（残差×density×mul）
         varying vec2 vUv;
 
         vec3 hsl_to_rgb(vec3 hsl) {
@@ -1616,14 +1877,33 @@ export const FluidEditorUI: React.FC = () => {
           float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
           float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
 
-          // ★ HSL 直接加法（色相需要 fract 包裹）
-          float finalH = fract(baseHSLA.r + dH);
-          float finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
-          float finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
+          float finalH, finalS, finalL, finalA;
+
+          if (uScalarMode == 1) {
+            // ★ MCSDA scalar 模式：残差按 density/baseline × 通道系数 调制
+            //   factor = density / baseline（低于基准削弱，高于基准增强）
+            //   finalH = fract(baseH + dH × factor × hMul)
+            float density = texture2D(uDensity, vUv).r;
+            float factor = density / max(uBaseline, 0.001);
+            float modH = dH * factor * uChannelMul.x;
+            float modS = dS * factor * uChannelMul.y;
+            float modL = dL * factor * uChannelMul.z;
+            float modA = (residual.a * 2.0 - 1.0) * factor * uChannelMul.w;
+            finalH = fract(baseHSLA.r + modH);
+            finalS = clamp(baseHSLA.g + modS, 0.0, 1.0);
+            finalL = clamp(baseHSLA.b + modL, 0.0, 1.0);
+            finalA = clamp(baseHSLA.a + modA, 0.0, 1.0);
+          } else {
+            // ★ vector 模式（原逻辑）：HSL 直接加法（色相需要 fract 包裹）
+            finalH = fract(baseHSLA.r + dH);
+            finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
+            finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
+            finalA = baseHSLA.a;
+          }
 
           // 只在最后一步转 RGB 用于显示
           vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
-          gl_FragColor = vec4(finalRGB, baseHSLA.a);
+          gl_FragColor = vec4(finalRGB, finalA);
         }
       `,
       transparent: true,
@@ -1932,6 +2212,22 @@ export const FluidEditorUI: React.FC = () => {
       velMat.uniforms.uVel.value = editor.getVelocityTexture();
       // ★ 同步速度场亮度基准值（每帧从 ref 读取，确保滑块改动实时生效）
       velMat.uniforms.uMaxVel.value = velViewMaxRef.current;
+      // ★ density 场纹理与基准浓度同步（浓缩视口用）
+      densityMat.uniforms.uDensity.value = editor.getDensityTexture();
+      densityMat.uniforms.uBaseline.value = scalarConfigRef.current?.baselineDensity ?? 1.0;
+
+      // ★ MCSDA：同步合成着色器的 scalar 模式 uniforms（每帧从 ref 读取，滑块实时生效）
+      const _sc = scalarConfigRef.current;
+      const _isScalar = advectionModeRef.current === 'scalar';
+      compositeMat.uniforms.uDensity.value = editor.getDensityTexture();
+      (compositeMat.uniforms.uChannelMul.value as THREE.Vector4).set(
+        _sc?.hMultiplier ?? 1,
+        _sc?.sMultiplier ?? 1,
+        _sc?.lMultiplier ?? 1,
+        _sc?.aMultiplier ?? 1,
+      );
+      compositeMat.uniforms.uBaseline.value = _sc?.baselineDensity ?? 1.0;
+      compositeMat.uniforms.uScalarMode.value = _isScalar ? 1 : 0;
 
       // 合成模式：更新底图纹理和残差范围
       if (viewMode === 'composite') {
@@ -1946,6 +2242,7 @@ export const FluidEditorUI: React.FC = () => {
       let targetScene: THREE.Scene;
       if (viewMode === 'color') targetScene = colorScene;
       else if (viewMode === 'velocity') targetScene = velScene;
+      else if (viewMode === 'density') targetScene = densityScene;
       else targetScene = compositeScene;
       renderer.render(targetScene, camera);
 
@@ -1978,6 +2275,8 @@ export const FluidEditorUI: React.FC = () => {
       colorQuad.geometry.dispose();
       velMat.dispose();
       velQuad.geometry.dispose();
+      densityMat.dispose();
+      densityQuad.geometry.dispose();
       compositeMat.dispose();
       compositeQuad.geometry.dispose();
       baseTexRef.current?.dispose();
@@ -2304,6 +2603,28 @@ export const FluidEditorUI: React.FC = () => {
             const a = document.createElement('a');
             a.href = url;
             a.download = `fluid-state-${Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }}
+          onBakeResidual={() => {
+            if (!editor) return;
+            // ★ MCSDA 烘焙：残差 × density × 通道系数 → 单帧 RGBA Uint8
+            const pixels = editor.bakeResidual();
+            const { w, h } = config.resolution;
+            // 用简单二进制格式导出：[magic(4)][w(4)][h(4)][rgba data...]
+            // magic = 'MCSD'，便于后续导入识别
+            const header = new Uint8Array(12);
+            header[0] = 0x4D; header[1] = 0x43; header[2] = 0x53; header[3] = 0x44; // 'MCSD'
+            const dv = new DataView(header.buffer);
+            dv.setUint32(4, w, true);
+            dv.setUint32(8, h, true);
+            const blob = new Blob([header, pixels], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `baked-residual-${w}x${h}-${Date.now()}.bin`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -2650,8 +2971,9 @@ export const FluidEditorUI: React.FC = () => {
         </div>
         <div className="viewport-info">
           <span>{config.resolution.w}×{config.resolution.h}</span>
-          <span>{viewMode === 'color' ? '颜色场' : '速度场'}</span>
+          <span>{viewMode === 'color' ? '颜色场' : viewMode === 'velocity' ? '速度场' : viewMode === 'density' ? '浓缩场' : '合成场'}</span>
           <span>{config.enableAdvection ? '平流: ON' : '平流: OFF'}</span>
+          {config.advectionMode === 'scalar' && <span style={{ color: '#009688' }}>MCSDA</span>}
         </div>
 
         {/* 采样信息浮窗（双层级比较器） */}

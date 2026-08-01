@@ -231,6 +231,72 @@ export class FluidInjector {
     grid.swap();
   }
 
+  // ---- 2.6. density 注入（MCSDA 标量浓度模式专用） ----
+
+  /**
+   * 在指定区域注入 density 浓度值。
+   *
+   * MCSDA 方案：scalar 模式下，摇杆/注入源同时注入 density（被速度场推动流动），
+   * 合成时 density × 通道系数 调制残差强度。
+   *
+   * 着色器只写 R 通道（densityGrid 是单通道 RedFormat）：
+   *   gl_FragColor.r = mix(current.r, value, rate × maskVal)
+   *
+   * @param grid density 网格（1 通道 Uint8）
+   * @param value 目标浓度值 [0,1]
+   * @param rate 混合率 [0,1]
+   * @param options 注入选项（位置、半径、掩码）
+   */
+  injectDensity(
+    grid: FluidGrid,
+    value: number,
+    rate: number,
+    options: InjectionOptions = {},
+  ): void {
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
+    const clampedValue = Math.min(1.0, Math.max(0.0, value));
+    const clampedRate = Math.min(1.0, Math.max(0.0, rate));
+
+    const mat = this.gpu.getMaterial(`inj_density_${global ? 'global' : 'local'}`, {
+      uDensity: { value: grid.read },
+      uValue: { value: clampedValue },
+      uRate: { value: clampedRate },
+      uPos: { value: new THREE.Vector2(position.x, position.y) },
+      uRadius: { value: radius },
+      uGlobal: { value: global ? 1 : 0 },
+      uHasMask: { value: mask ? 1 : 0 },
+      uMask: { value: mask || this.getDummyWhiteTex() },
+    }, /* glsl */ `
+      uniform sampler2D uDensity;
+      uniform float uValue;
+      uniform float uRate;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform int uGlobal;
+      uniform int uHasMask;
+      uniform sampler2D uMask;
+      varying vec2 vUv;
+
+      void main() {
+        float maskVal = 1.0;
+        if (uGlobal == 0) {
+          float d = distance(vUv, uPos);
+          maskVal = smoothstep(uRadius, 0.0, d);
+        }
+        if (uHasMask == 1) {
+          maskVal *= texture2D(uMask, vUv).r;
+        }
+
+        float current = texture2D(uDensity, vUv).r;
+        float mixed = mix(current, uValue, uRate * maskVal);
+        gl_FragColor = vec4(mixed, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
   // ---- 3. 速度注入 ----
 
   /**

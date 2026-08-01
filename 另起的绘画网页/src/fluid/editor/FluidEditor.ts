@@ -10,7 +10,14 @@ import { FluidOperations, type InjectionConfig } from './FluidOperations';
 // 类型定义
 // ============================================================
 
-export type ViewMode = 'color' | 'velocity' | 'composite';
+/**
+ * 视口模式：
+ * - 'color'：颜色场（HSL→RGB 直接显示）
+ * - 'velocity'：速度场（HSV 方向色可视化）
+ * - 'composite'：合成（底图 + 残差混合）
+ * - 'density'：浓缩场（density 标量场灰度显示，仅 scalar 模式有意义）
+ */
+export type ViewMode = 'color' | 'velocity' | 'composite' | 'density';
 
 /** 速度场数据类型：'half-float'（16位半精度，显存减半）或 'float'（32位单精度，高精度） */
 export type VelocityDataType = 'half-float' | 'float';
@@ -80,6 +87,32 @@ export interface FluidEditorConfig {
    * 设为 0 或 Infinity 表示禁用限幅。默认 5000。
    */
   maxVelocity?: number;
+
+  /**
+   * 平流模式：
+   * - 'vector'（默认，旧模式）：4 通道颜色场（HSLA）参与平流，残差动态流动
+   * - 'scalar'（标量浓度模式）：仅 1 通道 density 场平流，残差静态化，
+   *   合成时用 density × 通道系数调制残差强度（MCSDA 方案）
+   */
+  advectionMode?: 'vector' | 'scalar';
+
+  /**
+   * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
+   *
+   * 数学模型：finalH = fract(baseH + ΔH × (density/baseline) × hMul)
+   *   - density：1 通道 Uint8 动态场（0~1），参与平流
+   *   - baseline：基准浓度，factor = density / baseline
+   *     baseline=1 时 factor=density（等同原方案）；baseline 越小放大越强
+   *   - mul：各通道系数，负值产生补色等特效
+   */
+  scalarConfig?: {
+    hMultiplier: number;     // 色相系数，默认 1.0，范围 -2~2
+    sMultiplier: number;     // 饱和度系数，默认 1.0
+    lMultiplier: number;     // 明度系数，默认 1.0
+    aMultiplier: number;     // 透明度系数，默认 1.0
+    baselineDensity: number; // 基准浓度，默认 1.0，范围 0.01~1.0
+    decayRate: number;       // 衰减速率，默认 0，范围 0~0.99（每帧 density *= 1-decayRate）
+  };
 }
 
 // ============================================================
@@ -115,6 +148,8 @@ export class FluidEditor {
   colorGrid!: FluidGrid;
   velocityGrid!: FluidGrid;
   pressureGrid!: FluidGrid;   // 单通道、half-float，用于红-黑 SOR 压力迭代
+  /** ★ MCSDA 标量浓度场：1 通道 Uint8（RedFormat），仅 advectionMode='scalar' 时参与平流 */
+  densityGrid!: FluidGrid;
 
   // 求解器
   private advectionSolver: AdvectionSolver;
@@ -319,7 +354,9 @@ export class FluidEditor {
 
     // ★ 0. 处理 UI 注入队列（优先执行，确保本帧生效）
     // 委托给 operations 处理一次性注入
-    this.operations.processQueue(this.colorGrid, this.velocityGrid, dt);
+    // ★ MCSDA：scalar 模式下传入 densityGrid，使带 density 字段的注入能写入浓度场
+    const _gridDensity = this.config.advectionMode === 'scalar' ? this.densityGrid : null;
+    this.operations.processQueue(this.colorGrid, this.velocityGrid, dt, _gridDensity);
     _probe('1.afterQueue');
 
     // 0. 重力（通过操作模块 → 底层注入器）
@@ -329,7 +366,7 @@ export class FluidEditor {
     _probe('2.afterGravity');
 
     // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
-    this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt);
+    this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt, _gridDensity);
     _probe('3.afterContinuous');
 
     // 2. 平流（非注入 Pass，直接使用 this.gpu）
@@ -361,8 +398,18 @@ export class FluidEditor {
         console.log(`[diag] post-advect @(112,120)=(${p1[0].toFixed(2)},${p1[1].toFixed(2)}) @(128,128)=(${p2[0].toFixed(2)},${p2[1].toFixed(2)})`);
       }
       _probe('4a.afterAdvectVel');
-      this.advectColor(dt);
-      _probe('4b.afterAdvectColor');
+      // ★ MCSDA 模式分支：
+      //   - 'vector'（旧模式）：平流 4 通道颜色场（HSLA），残差动态流动
+      //   - 'scalar'（标量浓度）：残差静态化（不平流 colorGrid），
+      //     改为平流 1 通道 density 场 + 衰减，合成时用 density×mul 调制残差强度
+      if (this.config.advectionMode === 'scalar') {
+        this.advectDensity(dt);
+        this.decayDensity();
+        _probe('4b.afterAdvectDensity');
+      } else {
+        this.advectColor(dt);
+        _probe('4b.afterAdvectColor');
+      }
     }
 
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
@@ -463,6 +510,65 @@ export class FluidEditor {
       //   防止 Catmull-Rom 插值越界导致色相跳变。
       { boundaryMode, subSteps, wrapHue: true },
     );
+  }
+
+  // ==================== MCSDA 标量浓度平流（scalar 模式专用） ====================
+
+  /**
+   * density 场平流（MCSDA 核心动态场）。
+   *
+   * 复用 AdvectionSolver，mask 仅 R 通道（densityGrid 是单通道 RedFormat），
+   * wrapHue=false（density 是 [0,1] 标量浓度，非色相，绝不能 fract 包裹）。
+   * CFL 子步同 advectColor，保证高速流动时 density 不穿透薄边界。
+   */
+  private advectDensity(dt: number): void {
+    const mask: AdvectionMask = { r: true, g: false, b: false, a: false };
+
+    const maxPossibleSpeed = this.config.maxVelocity && this.config.maxVelocity > 0
+      ? this.config.maxVelocity
+      : 5000;
+    const minGridSpacing = Math.min(this.config.resolution.w, this.config.resolution.h);
+    const cflSubSteps = Math.ceil((maxPossibleSpeed * dt) / minGridSpacing);
+    const gravitySubSteps = Math.ceil(Math.abs(this.config.gravity) * dt / 50);
+    const subSteps = Math.max(1, Math.max(cflSubSteps, gravitySubSteps));
+
+    this.advectionSolver.advect(
+      this.densityGrid,
+      this.velocityGrid.read,
+      dt,
+      mask,
+      // ★ wrapHue=false：density 是 [0,1] 标量浓度，fract 包裹会破坏浓度语义
+      { boundaryMode: 'clamp', subSteps, wrapHue: false },
+    );
+  }
+
+  /**
+   * density 场衰减（MCSDA 浓度消散）。
+   *
+   * 每帧把 density 乘以 (1 - decayRate)，模拟颜料挥发/扩散损失。
+   * decayRate=0 时跳过（无衰减），decayRate=0.1 时每帧损失 10%。
+   * 范围限制 [0, 0.99] 防止一帧清零。
+   */
+  private decayDensity(): void {
+    const decayRate = this.config.scalarConfig?.decayRate ?? 0;
+    if (!decayRate || decayRate <= 0) return;
+    const keep = Math.max(0.01, 1 - Math.min(0.99, decayRate));
+
+    const mat = this.gpu.getMaterial('decayDensity', {
+      uDensity: { value: this.densityGrid.read },
+      uKeep: { value: keep },
+    }, /* glsl */ `
+      uniform sampler2D uDensity;
+      uniform float uKeep;
+      varying vec2 vUv;
+      void main() {
+        float d = texture2D(uDensity, vUv).r;
+        gl_FragColor = vec4(d * uKeep, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, this.densityGrid.write, mat);
+    this.densityGrid.swap();
   }
 
   /** 边界处理：零梯度边界，让速度场能自由流出（配合颜色边界 zero 模式实现水流消失） */
@@ -658,6 +764,84 @@ export class FluidEditor {
   getVelocityTexture(): THREE.Texture {
     const tex = this.velocityGrid.read;
     return tex;
+  }
+
+  /**
+   * 获取 density 场纹理（R 通道，[0,1] 标量浓度）。
+   * 仅 advectionMode='scalar' 时有意义，用于"浓缩"视口显示。
+   */
+  getDensityTexture(): THREE.Texture {
+    return this.densityGrid.read;
+  }
+
+  /**
+   * MCSDA 烘焙导出：把残差（colorGrid）× density × 通道系数 调制为单帧 RGBA Uint8。
+   *
+   * 数学模型（与合成着色器一致）：
+   *   factor = density / baseline
+   *   outH = clamp(residualH × factor × hMul, 0, 1)
+   *   outS = clamp(residualS × factor × sMul, 0, 1)
+   *   outL = clamp(residualL × factor × lMul, 0, 1)
+   *   outA = clamp(residualA × factor × aMul, 0, 1)
+   *
+   * 输出为量化后的残差纹理（与 colorGrid 同分辨率），可直接作为 ftx3 单帧导出。
+   * 注意：density=0 的区域输出 0（无残差贡献），density 高于 baseline 的区域增强。
+   *
+   * @returns 调制后的 RGBA Uint8Array（分辨率同 colorGrid）
+   */
+  bakeResidual(): Uint8Array {
+    const { w, h } = this.config.resolution;
+    const sc = this.config.scalarConfig ?? {
+      hMultiplier: 1, sMultiplier: 1, lMultiplier: 1, aMultiplier: 1,
+      baselineDensity: 1, decayRate: 0,
+    };
+    const baseline = Math.max(0.01, sc.baselineDensity);
+
+    // GPU 烘焙 Pass：输出调制后的残差到临时 RenderTarget
+    const mat = this.gpu.getMaterial('bakeResidual', {
+      uResidual: { value: this.colorGrid.read },
+      uDensity: { value: this.densityGrid.read },
+      uChannelMul: { value: new THREE.Vector4(sc.hMultiplier, sc.sMultiplier, sc.lMultiplier, sc.aMultiplier) },
+      uBaseline: { value: baseline },
+    }, /* glsl */ `
+      uniform sampler2D uResidual;   // 残差场 RGBA（HSLA uint8，0~1）
+      uniform sampler2D uDensity;    // density 场 R（0~1）
+      uniform vec4 uChannelMul;      // H/S/L/A 通道系数
+      uniform float uBaseline;       // 基准浓度
+      varying vec2 vUv;
+
+      void main() {
+        vec4 residual = texture2D(uResidual, vUv);
+        float density = texture2D(uDensity, vUv).r;
+        // 强度因子：density/baseline（baseline 越小放大越强）
+        float factor = density / uBaseline;
+        vec4 modulated = clamp(residual * factor * uChannelMul, 0.0, 1.0);
+        gl_FragColor = modulated;
+      }
+    `);
+
+    // 用临时 RenderTarget 接收烘焙结果，再回读到 CPU
+    const bakeTarget = new THREE.WebGLRenderTarget(w, h, {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      wrapS: THREE.ClampToEdgeWrapping,
+      wrapT: THREE.ClampToEdgeWrapping,
+      depthBuffer: false,
+      stencilBuffer: false,
+    });
+
+    this.gpu.render(this.renderer, bakeTarget, mat);
+
+    const pixels = new Uint8Array(w * h * 4);
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(bakeTarget);
+    this.renderer.readRenderTargetPixels(bakeTarget, 0, 0, w, h, pixels);
+    this.renderer.setRenderTarget(prevTarget);
+    bakeTarget.dispose();
+
+    return pixels;
   }
 
   /** 获取当前模拟帧计数 */
@@ -903,6 +1087,7 @@ export class FluidEditor {
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
+    this.densityGrid?.dispose();
 
     this.colorGrid = new FluidGrid(
       this.config.resolution,
@@ -914,6 +1099,8 @@ export class FluidEditor {
     //   'half-float': 16位半精度，显存减半，readPixels 用 Uint16Array + halfToFloat 手动解码
     this.velocityGrid = new FluidGrid(this.config.resolution, 2, velDataType);
     this.pressureGrid = new FluidGrid(this.config.resolution, 1, velDataType);
+    // ★ MCSDA density 场：1 通道 Uint8（RedFormat），与 colorGrid 分辨率一致
+    this.densityGrid = new FluidGrid(this.config.resolution, 1, 'uint8');
   }
 
   /** 初始化场数据：全透明空场 + 零速度 */
@@ -937,6 +1124,10 @@ export class FluidEditor {
       velData = new Float32Array(w * h * 2);
     }
     this.uploadToGrid(this.velocityGrid, velData, 2);
+
+    // ★ density 场初始化为 0（1 通道 Uint8）
+    const densityData = new Uint8Array(w * h);
+    this.uploadToGrid(this.densityGrid, densityData, 1);
   }
 
   /**
@@ -1069,6 +1260,7 @@ export class FluidEditor {
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
+    this.densityGrid?.dispose();
     this.advectionSolver.dispose();
     this.gpu.dispose();
   }

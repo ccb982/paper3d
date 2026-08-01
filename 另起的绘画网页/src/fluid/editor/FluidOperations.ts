@@ -32,6 +32,12 @@ export interface InjectionConfig {
   velocity: { x: number; y: number };
   /** RGBA 颜色值 (各分量 0~1) */
   color: [number, number, number, number];
+  /**
+   * ★ MCSDA density 浓度注入（仅 advectionMode='scalar' 时生效）。
+   * 提供时会在对应位置注入 density 浓度值，被速度场推动流动。
+   * 不提供（undefined）时跳过 density 注入，兼容 vector 模式。
+   */
+  density?: number;
 }
 
 /** 漩涡参数 */
@@ -132,11 +138,13 @@ export class FluidOperations {
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
    * @param _dt 时间步长（秒）—— 一次性注入不使用 dt，保留参数以匹配调度接口
+   * @param gridDensity density 网格（MCSDA scalar 模式传入，vector 模式传 null）
    */
   public processQueue(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
     _dt: number,
+    gridDensity: FluidGrid | null = null,
   ): void {
     const _n = this.pendingInjections.length;
     if (_n === 0) return;
@@ -144,7 +152,7 @@ export class FluidOperations {
 
     // 批量处理队列中的所有注入
     for (const config of this.pendingInjections) {
-      this.applyOneShotInjection(gridColor, gridVelocity, config);
+      this.applyOneShotInjection(gridColor, gridVelocity, config, gridDensity);
     }
 
     // 清空队列
@@ -252,11 +260,13 @@ export class FluidOperations {
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
    * @param dt 时间步长（秒）
+   * @param gridDensity density 网格（MCSDA scalar 模式传入，vector 模式传 null）
    */
   public processContinuousSources(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
     dt: number,
+    gridDensity: FluidGrid | null = null,
   ): void {
     // 总开关关闭时暂停所有持续注入源（但保留源列表，重新开启后自动恢复）
     if (!this.continuousInjectionEnabled) return;
@@ -271,7 +281,7 @@ export class FluidOperations {
         const c = src.config;
         console.log(`[初速度] 每帧应用 源#${src.id}: 速度=(${c.velocity.x.toFixed(2)},${c.velocity.y.toFixed(2)}) px/s (直接注入，不乘dt), dt=${dt.toFixed(4)}s`);
       }
-      this.applyInjection(gridColor, gridVelocity, dt, src.config);
+      this.applyInjection(gridColor, gridVelocity, dt, src.config, gridDensity);
     }
   }
 
@@ -281,11 +291,13 @@ export class FluidOperations {
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
    * @param config 注入源配置（纹理坐标）
+   * @param gridDensity density 网格（scalar 模式传入，vector 模式传 null）
    */
   private applyOneShotInjection(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
     config: InjectionConfig,
+    gridDensity: FluidGrid | null = null,
   ): void {
     if (!config.enabled) return;
 
@@ -315,6 +327,11 @@ export class FluidOperations {
       { x: config.velocity.x, y: config.velocity.y },
       pos,
     );
+
+    // ★ 3. density 注入（MCSDA scalar 模式）：config.density 有值且 gridDensity 非 null 时注入
+    if (gridDensity && config.density !== undefined) {
+      this.injector.injectDensity(gridDensity, config.density, 1.0, pos);
+    }
   }
 
   // ==================== 基础操作 ====================
@@ -362,6 +379,7 @@ export class FluidOperations {
     gridVelocity: FluidGrid,
     dt: number,
     config: InjectionConfig,
+    gridDensity: FluidGrid | null = null,
   ): void {
     if (!config.enabled) return;
 
@@ -398,6 +416,12 @@ export class FluidOperations {
       { x: config.velocity.x * dt, y: config.velocity.y * dt },
       texPos,
     );
+
+    // ★ density 注入（MCSDA scalar 模式）：config.density 有值且 gridDensity 非 null 时注入
+    //   持续注入场景下，density 也持续注入，形成稳定的浓度源
+    if (gridDensity && config.density !== undefined) {
+      this.injector.injectDensity(gridDensity, config.density, rate, texPos);
+    }
   }
 
   // ==================== 速度限幅 ====================
