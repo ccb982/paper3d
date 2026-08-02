@@ -873,6 +873,50 @@ const GeneralPanel: React.FC<{
                 每帧 density × (1-decayRate)：0=无衰减，0.1=每帧损失10%
               </span>
             </div>
+
+            {/* ★ 合成模式切换：add(基础色+增量) / sub(基础色-增量) */}
+            <div className="control-group">
+              <label>混合模式</label>
+              <div className="row" style={{ gap: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => onConfigChange({ combineMode: 'add' })}
+                  style={{
+                    flex: 1,
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    background: config.combineMode !== 'sub' ? '#4caf50' : '#f5f5f5',
+                    color: config.combineMode !== 'sub' ? '#fff' : '#333',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ➕ 叠加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onConfigChange({ combineMode: 'sub' })}
+                  style={{
+                    flex: 1,
+                    padding: '4px 8px',
+                    fontSize: '11px',
+                    background: config.combineMode === 'sub' ? '#f44336' : '#f5f5f5',
+                    color: config.combineMode === 'sub' ? '#fff' : '#333',
+                    border: '1px solid #ddd',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  ➖ 减去
+                </button>
+              </div>
+              <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+                {config.combineMode === 'sub'
+                  ? '减去：base + delta - (density/baseline × mul)'
+                  : '叠加：base + delta + (density/baseline × mul)'}
+              </span>
+            </div>
           </>
         )}
 
@@ -1297,20 +1341,41 @@ export const FluidEditorUI: React.FC = () => {
     return { h, s, l };
   };
 
-  /** 合成公式（与合成着色器一致） */
+  /**
+   * 合成公式（与合成着色器一致）
+   * ★ scalar 模式：final = base + delta ± (density/baseline × mul)
+   *   - delta 直接叠加（不被 density 调制），density×mul 作为独立偏移项
+   *   - density/baseline/mul 提供时启用 scalar 公式，否则退化为 base + delta（vector）
+   * ★ 通道开关：关闭的通道直接输出残差原值（绕过 base+delta），与 GPU uChannels 一致
+   */
   const computeCompositeHsl = (
     baseHsl: { h: number; s: number; l: number },
     residual: { r: number; g: number; b: number },
     rangeH: number,
     rangeSL: number,
+    mode: 'add' | 'sub' = 'add',
+    scalar?: { density: number; baseline: number; hMul: number; sMul: number; lMul: number },
+    channels?: { r: boolean; g: boolean; b: boolean },
   ): { h: number; s: number; l: number } => {
     const dH = (residual.r * 2.0 - 1.0) * rangeH;
     const dS = (residual.g * 2.0 - 1.0) * rangeSL;
     const dL = (residual.b * 2.0 - 1.0) * rangeSL;
-    let finalH = baseHsl.h + dH;
-    finalH = finalH - Math.floor(finalH); // fract
-    const finalS = Math.max(0, Math.min(1, baseHsl.s + dS));
-    const finalL = Math.max(0, Math.min(1, baseHsl.l + dL));
+    // sign: add=+1, sub=-1（与合成着色器一致）
+    const sign = mode === 'sub' ? -1 : 1;
+    // ★ delta 直接加；scalar 模式下 density×mul 作为独立项 ±
+    const factor = scalar ? scalar.density / Math.max(scalar.baseline, 0.001) : 0;
+    const hExtra = scalar ? sign * factor * scalar.hMul : 0;
+    const sExtra = scalar ? sign * factor * scalar.sMul : 0;
+    const lExtra = scalar ? sign * factor * scalar.lMul : 0;
+    // 正常公式
+    let normalH = baseHsl.h + dH + hExtra;
+    normalH = normalH - Math.floor(normalH); // fract
+    const normalS = Math.max(0, Math.min(1, baseHsl.s + dS + sExtra));
+    const normalL = Math.max(0, Math.min(1, baseHsl.l + dL + lExtra));
+    // ★ 关闭的通道直接输出残差原值（与 GPU mix(residual, normal, uChannels) 一致）
+    const finalH = channels && !channels.r ? residual.r : normalH;
+    const finalS = channels && !channels.g ? residual.g : normalS;
+    const finalL = channels && !channels.b ? residual.b : normalL;
     return { h: finalH, s: finalS, l: finalL };
   };
   // ================================================================
@@ -1838,6 +1903,8 @@ export const FluidEditorUI: React.FC = () => {
         uChannelMul: { value: new THREE.Vector4(1, 1, 1, 1) },      // H/S/L/A 通道系数
         uBaseline: { value: 1.0 },                                  // 基准浓度
         uScalarMode: { value: 0 },                                  // 0=vector, 1=scalar
+        uCombineMode: { value: 0 },                                 // 0=add(基础色+增量), 1=sub(基础色-增量)
+        uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },        // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -1855,6 +1922,8 @@ export const FluidEditorUI: React.FC = () => {
         uniform vec4 uChannelMul;        // H/S/L/A 通道系数（-2~2）
         uniform float uBaseline;         // 基准浓度
         uniform int uScalarMode;         // 0=vector（残差直接加），1=scalar（残差×density×mul）
+        uniform int uCombineMode;        // 0=add(基础色+增量), 1=sub(基础色-增量)，仅scalar生效
+        uniform vec4 uChannels;          // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差值
         varying vec2 vUv;
 
         vec3 hsl_to_rgb(vec3 hsl) {
@@ -1878,22 +1947,23 @@ export const FluidEditorUI: React.FC = () => {
           float finalH, finalS, finalL, finalA;
 
           if (uScalarMode == 1) {
-            // ★ MCSDA scalar 模式：合成 = 基础色 + (残差增量 × 浓度 × 通道系数)
-            //   残差是叠加在基础色上的动态层（增量，非绝对颜色），与矢量模式相同的解码方式。
-            //   density 控制叠加层强度：factor = density / baseline
-            //     - density < baseline → factor<1，增量被削弱（颜色变化小）
-            //     - density > baseline → factor>1，增量被增强（颜色变化大）
-            //     - density = 0 → factor=0，无叠加（只显示基础色）
-            //   mul 为各通道系数：负值产生补色等特效
+            // ★ MCSDA scalar 模式：合成 = 基础色 + 残差增量 ± (密度/基准浓度 × 通道系数)
+            //   残差增量直接叠加到基础色（与矢量模式相同的解码方式，不被 density 调制）。
+            //   density 作为独立项驱动额外偏移：factor = density / baseline
+            //     - density < baseline → factor<1，偏移项小（削弱）
+            //     - density > baseline → factor>1，偏移项大（增强）
+            //     - density = 0 → factor=0，无额外偏移（只显示 base + delta）
+            //   combineMode: add=base+delta+factor×mul, sub=base+delta-factor×mul
+            //   mul 为各通道系数，控制 density 偏移的方向和强度
             float density = texture2D(uDensity, vUv).r;
             float factor = density / max(uBaseline, 0.001);
-            // 复用矢量模式已解码的 dH/dS/dL，按 factor×mul 调制后叠加到基础色
-            finalH = fract(baseHSLA.r + dH * factor * uChannelMul.x);
-            finalS = clamp(baseHSLA.g + dS * factor * uChannelMul.y, 0.0, 1.0);
-            finalL = clamp(baseHSLA.b + dL * factor * uChannelMul.z, 0.0, 1.0);
-            // A 通道也作为增量调制（矢量模式不调 A，标量模式按设计调 A）
+            float sign = (uCombineMode == 0) ? 1.0 : -1.0;
+            // ★ 残差增量直接加（不乘 factor），density×mul 作为独立项 ±
+            finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
+            finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
+            finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
             float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
-            finalA = clamp(baseHSLA.a + dA * factor * uChannelMul.w, 0.0, 1.0);
+            finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
           } else {
             // ★ vector 模式（原逻辑）：HSL 直接加法（色相需要 fract 包裹）
             finalH = fract(baseHSLA.r + dH);
@@ -1901,6 +1971,15 @@ export const FluidEditorUI: React.FC = () => {
             finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
             finalA = baseHSLA.a;
           }
+
+          // ★ 通道开关：关闭的通道直接输出残差值（绕过 base+delta 计算）
+          //   uChannels.x=0 → finalH = residual.r（残差原值，不含基础色）
+          //   uChannels.x=1 → finalH = 正常公式（base + delta ± factor×mul）
+          //   mix(a, b, 0)=a, mix(a, b, 1)=b，无分支，GPU 友好
+          finalH = mix(residual.r, finalH, uChannels.x);
+          finalS = mix(residual.g, finalS, uChannels.y);
+          finalL = mix(residual.b, finalL, uChannels.z);
+          finalA = mix(residual.a, finalA, uChannels.w);
 
           // 只在最后一步转 RGB 用于显示
           vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
@@ -2229,6 +2308,13 @@ export const FluidEditorUI: React.FC = () => {
       );
       compositeMat.uniforms.uBaseline.value = _sc?.baselineDensity ?? 1.0;
       compositeMat.uniforms.uScalarMode.value = _isScalar ? 1 : 0;
+      compositeMat.uniforms.uCombineMode.value = (config.combineMode ?? 'add') === 'sub' ? 1 : 0;
+      compositeMat.uniforms.uChannels.value.set(
+        config.channels.r ? 1 : 0,
+        config.channels.g ? 1 : 0,
+        config.channels.b ? 1 : 0,
+        config.channels.a ? 1 : 0,
+      );
 
       // ★ 诊断：节流（每 60 帧）打印 scalar 模式状态 + 中心点 density/residual 回读
       if (viewMode === 'composite' && _isScalar) {
@@ -2625,9 +2711,13 @@ export const FluidEditorUI: React.FC = () => {
           }}
           onBakeResidual={() => {
             if (!editor) return;
-            // ★ MCSDA 烘焙：残差增量 × density × 通道系数 → 重新量化的单帧 RGBA Uint8
-            //   传入残差量化范围，与合成着色器的 uResidualRangeH/SL 一致
-            const pixels = editor.bakeResidual(residualRangeHRef.current, residualRangeSLRef.current);
+            // ★ MCSDA 烘焙：残差增量 × density × 通道系数 × sign → 重新量化的单帧 RGBA Uint8
+            //   传入残差量化范围和合成模式，与合成着色器一致
+            const pixels = editor.bakeResidual(
+              residualRangeHRef.current,
+              residualRangeSLRef.current,
+              config.combineMode ?? 'add',
+            );
             const { w, h } = config.resolution;
             // 用简单二进制格式导出：[magic(4)][w(4)][h(4)][rgba data...]
             // magic = 'MCSD'，便于后续导入识别
@@ -2928,12 +3018,28 @@ export const FluidEditorUI: React.FC = () => {
 
             // 如果有基础色，计算合成值
             if (baseColor) {
-              // 层级2：模拟器残差 + 基础色
+              // ★ scalar 模式：读取 density 像素，构建 scalar 参数
+              const _sc = config.scalarConfig;
+              const _scalar = isScalar && _sc ? {
+                density: (() => {
+                  const dbuf = new Uint8Array(4);
+                  editor.readDensityPixel(texX, texY, dbuf);
+                  return dbuf[0] / 255;
+                })(),
+                baseline: _sc.baselineDensity ?? 1.0,
+                hMul: _sc.hMultiplier ?? 1.0,
+                sMul: _sc.sMultiplier ?? 1.0,
+                lMul: _sc.lMultiplier ?? 1.0,
+              } : undefined;
+              // 层级2：模拟器残差 + 基础色（按当前 combineMode + scalar 公式计算）
               simComposite = computeCompositeHsl(
                 baseColor,
                 { r: simResidual.h, g: simResidual.s, b: simResidual.l },
                 residualRangeHRef.current,
                 residualRangeSLRef.current,
+                config.combineMode ?? 'add',
+                _scalar,
+                config.channels,
               );
               // 层级2：原始残差 + 基础色（原始残差是未调整的，需同样应用 blockFlags 调整）
               origComposite = computeCompositeHsl(
@@ -2941,6 +3047,9 @@ export const FluidEditorUI: React.FC = () => {
                 { r: origResidual.h, g: origResidual.s, b: origResidual.l },
                 residualRangeHRef.current,
                 residualRangeSLRef.current,
+                config.combineMode ?? 'add',
+                _scalar,
+                config.channels,
               );
             }
 

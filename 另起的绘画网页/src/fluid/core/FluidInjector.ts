@@ -118,15 +118,20 @@ export class FluidInjector {
 
   /**
    * 在指定区域注入颜色，向目标 HSLA 值混合。
+   *
+   * @param channelMask 通道掩码：false 的通道保持原值不注入（冻结）。
+   *   默认全 true（所有通道都注入）。从 FluidEditor.config.channels 同步。
    */
   injectColor(
     grid: FluidGrid,
     color: { h: number; s: number; l: number; a: number },
     rate: number,
     options: InjectionOptions = {},
+    channelMask: { r: boolean; g: boolean; b: boolean; a: boolean } = { r: true, g: true, b: true, a: true },
   ): void {
     const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
-    const key = `inj_color_${global ? 'global' : 'local'}`;
+    // ★ 新 key 强制重建材质（旧缓存无 uChannelMask uniform）
+    const key = `inj_color_v2_${global ? 'global' : 'local'}`;
     const clampedRate = Math.min(1.0, Math.max(0.0, rate));
 
     const mat = this.gpu.getMaterial(key, {
@@ -138,6 +143,12 @@ export class FluidInjector {
       uGlobal: { value: global ? 1 : 0 },
       uHasMask: { value: mask ? 1 : 0 },
       uMask: { value: mask || this.getDummyWhiteTex() },
+      uChannelMask: { value: new THREE.Vector4(
+        channelMask.r ? 1 : 0,
+        channelMask.g ? 1 : 0,
+        channelMask.b ? 1 : 0,
+        channelMask.a ? 1 : 0,
+      ) },
     }, /* glsl */ `
       uniform sampler2D uColor;
       uniform vec4 uTargetColor;
@@ -147,12 +158,10 @@ export class FluidInjector {
       uniform int uGlobal;
       uniform int uHasMask;
       uniform sampler2D uMask;
+      uniform vec4 uChannelMask;  // 通道掩码：1=注入, 0=保持原值（冻结）
       varying vec2 vUv;
 
       // ★ 色相环形插值：取色相环上最短路径，避免 mix 线性插值跨越色相环边界产生彩虹色。
-      //   例：current.H=0.95(品红) → target.H=0.05(红)，线性 mix 会经过 0.5(青)，
-      //       环形插值走 0.0/1.0 边界，过渡自然。
-      //   ⚠️ 仅适用于 R 通道语义为色相 H 的颜色场；速度场 R=vx 绝不可用。
       float hueLerp(float a, float b, float t) {
         float d = b - a;
         if (d > 0.5) d -= 1.0;
@@ -178,7 +187,13 @@ export class FluidInjector {
         mixed.g = mix(current.g, uTargetColor.g, rate);
         mixed.b = mix(current.b, uTargetColor.b, rate);
         mixed.a = mix(current.a, uTargetColor.a, rate);
-        gl_FragColor = mixed;
+        // ★ 通道掩码：false 的通道保持原值（冻结，不注入）
+        gl_FragColor = vec4(
+          mix(current.r, mixed.r, uChannelMask.r),
+          mix(current.g, mixed.g, uChannelMask.g),
+          mix(current.b, mixed.b, uChannelMask.b),
+          mix(current.a, mixed.a, uChannelMask.a)
+        );
       }
     `);
 

@@ -97,22 +97,35 @@ export interface FluidEditorConfig {
   advectionMode?: 'vector' | 'scalar';
 
   /**
+   * 合成模式（仅 advectionMode='scalar' 时生效）。
+   *
+   * ★ 公式：final = base + delta ± (density/baseline × mul)
+   *   - 'add'（默认）：final = base + delta + (factor × mul)
+   *   - 'sub'：final = base + delta - (factor × mul)
+   *
+   * 残差增量 delta 直接叠加到基础色（不被 density 调制），
+   * density/baseline × mul 作为独立偏移项，combineMode 控制其加减方向。
+   */
+  combineMode?: 'add' | 'sub';
+
+  /**
            * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
            *
-           * ★ 数学模型（基础色 + 残差增量 × 浓度 × 通道系数）：
+           * ★ 数学模型：final = base + delta ± (density/baseline × mul)
            *   factor = density / baseline
            *   dH = (residualH × 2 - 1) × rangeH   // 残差解码为增量（与矢量模式相同）
-           *   finalH = fract(baseH + dH × factor × hMul)   // 色相环回绕
-           *   finalS = clamp(baseS + dS × factor × sMul, 0, 1)
-           *   finalL = clamp(baseL + dL × factor × lMul, 0, 1)
-           *   finalA = clamp(baseA + dA × factor × aMul, 0, 1)
-           *   - density：1 通道 Uint8 动态场（0~1），参与平流，控制叠加层强度
+           *   finalH = fract(baseH + dH + sign × factor × hMul)   // 色相环回绕
+           *   finalS = clamp(baseS + dS + sign × factor × sMul, 0, 1)
+           *   finalL = clamp(baseL + dL + sign × factor × lMul, 0, 1)
+           *   finalA = clamp(baseA + dA + sign × factor × aMul, 0, 1)
+           *   - delta 直接叠加（不被 density 调制），density×mul 是独立偏移项
+           *   - density：1 通道 Uint8 动态场（0~1），参与平流
            *   - baseline：基准浓度，factor = density / baseline
-           *     density < baseline → factor<1，增量削弱（颜色变化小）
-           *     density > baseline → factor>1，增量增强（颜色变化大）
-           *     density = 0 → 无叠加（只显示基础色）
-           *   - mul：各通道系数（-2~2），负值产生补色等特效
-           *   - 残差是叠加在基础色上的动态层（增量），与矢量模式相同的解码方式
+           *     density < baseline → factor<1，偏移项小（削弱）
+           *     density > baseline → factor>1，偏移项大（增强）
+           *     density = 0 → 无偏移（只显示 base + delta）
+           *   - mul：各通道系数（-2~2），控制 density 偏移的方向和强度
+           *   - sign：combineMode='add' 时 +1，'sub' 时 -1
            */
   scalarConfig?: {
     hMultiplier: number;     // 色相系数，默认 1.0，范围 -2~2
@@ -179,6 +192,8 @@ export class FluidEditor {
     this.gpu = new GPUOps();
     this.injector = new FluidInjector(renderer, this.gpu);
     this.operations = new FluidOperations(this.injector);
+    // ★ 初始化通道掩码（注入时冻结未勾选的通道）
+    this.operations.setChannelMask(this.config.channels);
 
     this.advectionSolver = new AdvectionSolver(renderer);
 
@@ -198,6 +213,11 @@ export class FluidEditor {
     const oldRes = this.config.resolution;
     const oldVelType = this.config.velocityDataType;
     Object.assign(this.config, updates);
+
+    // ★ 同步通道掩码到 FluidOperations（注入时冻结未勾选的通道）
+    if (updates.channels) {
+      this.operations.setChannelMask(this.config.channels);
+    }
 
     const resChanged =
       updates.resolution &&
@@ -357,16 +377,16 @@ export class FluidEditor {
     if (this.config.enableAdvection) {
       this.advectVelocity(dt);
       // ★ MCSDA 模式分支：
-      //   - 'vector'（旧模式）：仅平流 4 通道颜色场（HSLA delta），合成=base+delta
-      //   - 'scalar'（标量浓度）：平流颜色场（HSLA 颜色，让其随速度流动）
-      //     + 平流 1 通道 density 场 + 衰减，合成 = 流动颜色 × density × mul
-      //   ⚠️ scalar 模式也必须 advectColor，否则颜色静止在注入点，
-      //      density 流走后合成=0×density=0（合成视图空白）。
-      //      density 提供独立的浓度调制层（基准削弱/增强 + 通道系数）。
-      this.advectColor(dt);
+      //   - 'vector'（旧模式）：平流 4 通道颜色场（HSLA delta），合成=base+delta
+      //   - 'scalar'（标量浓度）：颜色纹理 = 静态模板（不注入、不平流），
+      //     仅平流 1 通道 density 场 + 衰减，合成 = base + static_delta ± (flowing_density × mul)
+      //   ★ scalar 模式下所有注入只影响 density，颜色保持预加载的静态模板。
+      //     density 流动提供动态浓度调制（基准削弱/增强 + 通道系数）。
       if (this.config.advectionMode === 'scalar') {
         this.advectDensity(dt);
         this.decayDensity();
+      } else {
+        this.advectColor(dt);
       }
     }
 
@@ -750,29 +770,31 @@ export class FluidEditor {
   }
 
   /**
-   * MCSDA 烘焙导出：把残差增量（colorGrid）× density × 通道系数 调制后重新量化为单帧 RGBA Uint8。
+   * MCSDA 烘焙导出：把残差增量 + density×mul 偏移 调制后重新量化为单帧 RGBA Uint8。
    *
    * ★ 合成显示 vs 烘焙导出：
-   *   合成显示 = base + (delta × factor × mul)   ← 含基础色，用于实时预览
-   *   烘焙导出 = delta × factor × mul（重新量化） ← 不含基础色，可在别处叠加到基础色
+   *   合成显示 = base + delta ± (factor × mul)   ← 含基础色，用于实时预览
+   *   烘焙导出 = delta ± (factor × mul)（重新量化） ← 不含基础色，可在别处叠加到基础色
    *
    *   factor = density / baseline（低于基准削弱，高于基准增强）
+   *   delta 直接叠加（不被 density 调制），density×mul 是独立偏移项
    *
    * ★ 导出的是"调制后的残差增量"（不含基础色），与合成着色器 scalar 分支的增量部分一致：
-   *   合成显示 = base + (delta × factor × mul)
-   *   烘焙导出 = delta × factor × mul（重新量化，可作为新残差纹理在别处叠加到基础色）
+   *   合成显示 = base + delta ± (factor × mul)
+   *   烘焙导出 = delta ± (factor × mul)（重新量化，可作为新残差纹理在别处叠加到基础色）
    *
-   *   解码 → 调制 → 重新量化（保持与输入相同的量化格式）：
+   *   解码 → 叠加 density 偏移 → 重新量化（保持与输入相同的量化格式）：
    *   dH = (residual.r × 2 - 1) × rangeH
-   *   dH_mod = dH × factor × mul
+   *   dH_mod = dH + sign × factor × mul
    *   qH_new = clamp((dH_mod / rangeH + 1) / 2, 0, 1)
-   *   factor=0 → qH_new=0.5（无操作增量）；factor=1,mul=1 → qH_new=原值（不变）
+   *   factor=0 → qH_new=原值（delta 不变）；factor=1,mul=1,add → qH_new=delta+1
    *
    * @param rangeH 残差 H 通道量化范围（与合成着色器 uResidualRangeH 一致）
    * @param rangeSL 残差 S/L/A 通道量化范围（与 uResidualRangeSL 一致）
+   * @param combineMode 合成模式：'add'(正增量) | 'sub'(负增量)，与合成着色器 uCombineMode 一致
    * @returns 调制后的量化残差 RGBA Uint8Array（分辨率同 colorGrid）
    */
-  bakeResidual(rangeH: number, rangeSL: number): Uint8Array {
+  bakeResidual(rangeH: number, rangeSL: number, combineMode: 'add' | 'sub' = 'add'): Uint8Array {
     const { w, h } = this.config.resolution;
     const sc = this.config.scalarConfig ?? {
       hMultiplier: 1, sMultiplier: 1, lMultiplier: 1, aMultiplier: 1,
@@ -788,6 +810,13 @@ export class FluidEditor {
       uBaseline: { value: baseline },
       uRangeH: { value: Math.max(0.001, rangeH) },
       uRangeSL: { value: Math.max(0.001, rangeSL) },
+      uCombineMode: { value: combineMode === 'sub' ? 1 : 0 },
+      uChannels: { value: new THREE.Vector4(
+        this.config.channels.r ? 1 : 0,
+        this.config.channels.g ? 1 : 0,
+        this.config.channels.b ? 1 : 0,
+        this.config.channels.a ? 1 : 0,
+      ) },
     }, /* glsl */ `
       uniform sampler2D uResidual;   // 残差场 RGBA（量化 HSL 增量，uint8 0~1）
       uniform sampler2D uDensity;    // density 场 R（0~1）
@@ -795,12 +824,16 @@ export class FluidEditor {
       uniform float uBaseline;       // 基准浓度
       uniform float uRangeH;         // H 通道量化范围
       uniform float uRangeSL;        // S/L/A 通道量化范围
+      uniform int uCombineMode;      // 0=add(正增量), 1=sub(负增量)
+      uniform vec4 uChannels;        // H/S/L/A 通道开关：1=调制, 0=原残差直通
       varying vec2 vUv;
 
       void main() {
         vec4 residual = texture2D(uResidual, vUv);
         float density = texture2D(uDensity, vUv).r;
         float factor = density / max(uBaseline, 0.001);
+        // sign: add=+1, sub=-1（与合成着色器一致）
+        float sign = (uCombineMode == 0) ? 1.0 : -1.0;
 
         // 1. 解码残差增量（与合成着色器相同）
         float dH = (residual.r * 2.0 - 1.0) * uRangeH;
@@ -808,18 +841,26 @@ export class FluidEditor {
         float dL = (residual.b * 2.0 - 1.0) * uRangeSL;
         float dA = (residual.a * 2.0 - 1.0) * uRangeSL;
 
-        // 2. 按 factor × mul 调制
-        dH *= factor * uChannelMul.x;
-        dS *= factor * uChannelMul.y;
-        dL *= factor * uChannelMul.z;
-        dA *= factor * uChannelMul.w;
+        // 2. ★ 公式：delta + sign × factor × mul（delta 直接加，density×mul 独立项）
+        //    与合成着色器一致：final = base + delta ± factor×mul
+        //    烘焙导出 = delta ± factor×mul（不含 base，重新量化）
+        float dH_mod = dH + sign * factor * uChannelMul.x;
+        float dS_mod = dS + sign * factor * uChannelMul.y;
+        float dL_mod = dL + sign * factor * uChannelMul.z;
+        float dA_mod = dA + sign * factor * uChannelMul.w;
 
         // 3. 重新量化（与输入格式一致，可在别处叠加到基础色）
-        //    qH_new = (dH_mod / range + 1) / 2
-        float qH = clamp((dH / uRangeH + 1.0) * 0.5, 0.0, 1.0);
-        float qS = clamp((dS / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
-        float qL = clamp((dL / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
-        float qA = clamp((dA / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+        float qH = clamp((dH_mod / uRangeH + 1.0) * 0.5, 0.0, 1.0);
+        float qS = clamp((dS_mod / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+        float qL = clamp((dL_mod / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+        float qA = clamp((dA_mod / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+
+        // ★ 关闭的通道直接输出原残差值（不调制，与合成着色器一致）
+        //   uChannels.x=0 → qH = residual.r（原值直通），=1 → 调制后值
+        qH = mix(residual.r, qH, uChannels.x);
+        qS = mix(residual.g, qS, uChannels.y);
+        qL = mix(residual.b, qL, uChannels.z);
+        qA = mix(residual.a, qA, uChannels.w);
 
         gl_FragColor = vec4(qH, qS, qL, qA);
       }

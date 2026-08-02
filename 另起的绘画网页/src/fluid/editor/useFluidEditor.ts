@@ -38,6 +38,7 @@ export function useFluidEditor(
     maxVelocity: 5000, // 全局速度限幅上限（px/s），防止速度爆炸
     // ★ MCSDA 标量浓度平流模式（默认 vector 旧模式，保持兼容）
     advectionMode: 'vector',
+    combineMode: 'add',      // 合成模式：'add'(基础色+增量) | 'sub'(基础色-增量)，仅scalar生效
     scalarConfig: {
       hMultiplier: 1.0,      // 色相系数，-2~2
       sMultiplier: 1.0,      // 饱和度系数

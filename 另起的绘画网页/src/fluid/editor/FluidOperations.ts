@@ -102,6 +102,18 @@ export class FluidOperations {
    */
   private continuousInjectionEnabled = false;
 
+  /**
+   * ★ 通道掩码：控制注入时哪些通道被修改。
+   * false = 冻结（注入时不写入该通道，保持原值不变）。
+   * 从 FluidEditor.config.channels 同步。
+   */
+  private channelMask: { r: boolean; g: boolean; b: boolean; a: boolean } = { r: true, g: true, b: true, a: true };
+
+  /** 设置通道掩码（从 FluidEditor.config.channels 同步） */
+  setChannelMask(mask: { r: boolean; g: boolean; b: boolean; a: boolean }): void {
+    this.channelMask = mask;
+  }
+
   constructor(injector: FluidInjector) {
     this.injector = injector;
   }
@@ -282,18 +294,22 @@ export class FluidOperations {
       radius: config.radius,
     };
 
-    // 1. 颜色注入（直接设为目标值，混合率 1.0）
-    this.injector.injectColor(
-      gridColor,
-      {
-        h: config.color[0],
-        s: config.color[1],
-        l: config.color[2],
-        a: config.color[3],
-      },
-      1.0,
-      pos,
-    );
+    // 1. ★ 颜色注入：仅 vector 模式（gridDensity === null）
+    //    scalar 模式下所有注入只影响 density 纹理，颜色纹理保持静态模板
+    if (gridDensity === null) {
+      this.injector.injectColor(
+        gridColor,
+        {
+          h: config.color[0],
+          s: config.color[1],
+          l: config.color[2],
+          a: config.color[3],
+        },
+        1.0,
+        pos,
+        this.channelMask,
+      );
+    }
 
     // 2. 速度注入（一次性注入：瞬时冲量，不乘 dt）
     //    一次性注入只执行一次，不会累加爆炸，直接注入速度值即可。
@@ -370,18 +386,22 @@ export class FluidOperations {
       radius: config.radius,
     };
 
-    // 颜色注入（混合率直接使用 rate，立即显现）
-    this.injector.injectColor(
-      gridColor,
-      {
-        h: config.color[0],
-        s: config.color[1],
-        l: config.color[2],
-        a: config.color[3],
-      },
-      rate,
-      texPos,
-    );
+    // ★ 颜色注入：仅 vector 模式（gridDensity === null）
+    //   scalar 模式下所有注入只影响 density 纹理，颜色纹理保持静态模板
+    if (gridDensity === null) {
+      this.injector.injectColor(
+        gridColor,
+        {
+          h: config.color[0],
+          s: config.color[1],
+          l: config.color[2],
+          a: config.color[3],
+        },
+        rate,
+        texPos,
+        this.channelMask,
+      );
+    }
 
     // ★ 速度注入（持续注入场景）：config.velocity 是速度值（px/s），
     //   乘以 dt 后为每帧速度增量（px），与重力（gravity * dt）物理语义一致。
