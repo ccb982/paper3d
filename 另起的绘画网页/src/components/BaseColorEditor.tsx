@@ -529,17 +529,35 @@ export const BaseColorEditor: React.FC = () => {
   }, [activeFrameId, updateSkillFrame]);
 
   // ★ 动态纹理分辨率（必须在 handleResolutionChange 之前声明）
-  const [texSize, setTexSize] = useState(canvasWidth);
+  // manualTexSize 是"手动设置值"（导入/分辨率调整时记录），可能滞后于实际帧数据
+  const [manualTexSize, setManualTexSize] = useState(canvasWidth);
 
-  // ★ 修改：仅在初始化时同步 canvasWidth，后续允许手动调整分辨率
+  // ★ 关键修复：texSize 是当前帧的"实际工作尺寸"，必须同步派生自 bgImageData。
+  // 旧实现用 useEffect 异步把 manualTexSize 同步到 bgImageData.width，但切换帧时
+  // bgImageData 立即变为新帧数据，而 manualTexSize 滞后一轮，导致该帧渲染（putImageData
+  // 新尺寸数据到旧尺寸 canvas）、坐标转换、bgImageData.data 索引计算全部错位。
+  // 因此 texSize 同步派生：有 bgImageData 时 = bgImageData.width，否则 = manualTexSize。
+  // 全文件所有"读取当前帧数据/渲染/坐标转换"统一用 texSize（即实际尺寸），
+  // 仅 handleResolutionChange / 导入等"记录目标尺寸"处使用 manualTexSize + setManualTexSize。
+  const texSize = bgImageData ? bgImageData.width : manualTexSize;
+
+  // ★ 仅在初始化时同步 canvasWidth（无帧数据阶段），后续由派生 texSize 接管
   useEffect(() => {
     // 只有在没有任何帧数据时才自动同步（初始化阶段）
     const hasFrameData = frames.some(f => f.bgImageData || f.baseTexture || f.bbox);
-    if (canvasWidth && canvasWidth !== texSize && !hasFrameData) {
-      console.log(`[BaseColorEditor] texSize 初始化同步：${texSize} → ${canvasWidth}`);
-      setTexSize(canvasWidth);
+    if (canvasWidth && canvasWidth !== manualTexSize && !hasFrameData) {
+      console.log(`[BaseColorEditor] manualTexSize 初始化同步：${manualTexSize} → ${canvasWidth}`);
+      setManualTexSize(canvasWidth);
     }
-  }, [canvasWidth, frames, texSize]);
+  }, [canvasWidth, frames, manualTexSize]);
+
+  // ★ 切换帧时同步 manualTexSize（仅用于分辨率输入框显示，不参与渲染/索引）
+  // texSize 已派生，渲染不再依赖此同步；保留是为了让分辨率输入框显示与当前帧一致
+  useEffect(() => {
+    if (bgImageData && bgImageData.width !== manualTexSize) {
+      setManualTexSize(bgImageData.width);
+    }
+  }, [bgImageData]);
 
   // ★ 分辨率调整功能：缩放所有帧数据到新尺寸
   const handleResolutionChange = useCallback((newSize: number) => {
@@ -550,7 +568,7 @@ export const BaseColorEditor: React.FC = () => {
     if (isNaN(newSize) || newSize < minSize || newSize > maxSize) {
       console.warn(`[分辨率调整] 无效值 ${newSize}，范围应为 ${minSize}~${maxSize}`);
       // 恢复显示旧值
-      setTexSize(texSize);
+      setManualTexSize(texSize);
       return;
     }
     
@@ -568,12 +586,16 @@ export const BaseColorEditor: React.FC = () => {
     // 缩放所有帧的数据
     frames.forEach((frame) => {
       const updates: Record<string, unknown> = {};
-      
+      // ★ 各帧用自己的实际尺寸作为缩放基准（防止多帧尺寸不同时用全局 oldSize 错位）
+      const frameOldSize = frame.bgImageData ? frame.bgImageData.width : oldSize;
+      const fScaleX = newSize / frameOldSize;
+      const fScaleY = newSize / frameOldSize;
+
       // 1. 缩放背景图
       if (frame.bgImageData) {
         const srcCanvas = document.createElement('canvas');
-        srcCanvas.width = oldSize;
-        srcCanvas.height = oldSize;
+        srcCanvas.width = frameOldSize;
+        srcCanvas.height = frameOldSize;
         const srcCtx = srcCanvas.getContext('2d')!;
         srcCtx.putImageData(frame.bgImageData, 0, 0);
         
@@ -592,13 +614,13 @@ export const BaseColorEditor: React.FC = () => {
       // 因为它们需要根据新的 regionIdTex 重新生成
       // 将在后面通过 syncFrameTextures 统一生成，确保与 regionIdTex 同步
       
-      // 4. 缩放 bbox（坐标和尺寸）
+      // 4. 缩放 bbox（坐标和尺寸，用各帧自己的 fScale）
       if (frame.bbox) {
         const newBbox = {
-          x: Math.round(frame.bbox.x * scaleX),
-          y: Math.round(frame.bbox.y * scaleY),
-          w: Math.round(frame.bbox.w * scaleX),
-          h: Math.round(frame.bbox.h * scaleY),
+          x: Math.round(frame.bbox.x * fScaleX),
+          y: Math.round(frame.bbox.y * fScaleY),
+          w: Math.round(frame.bbox.w * fScaleX),
+          h: Math.round(frame.bbox.h * fScaleY),
         };
         // ★ 边界检查：确保 bbox 在画布范围内且尺寸有效
         newBbox.x = Math.max(0, Math.min(newSize - 1, newBbox.x));
@@ -635,9 +657,9 @@ export const BaseColorEditor: React.FC = () => {
         // 最近邻重采样
         for (let ny = 0; ny < newH; ny++) {
           for (let nx = 0; nx < newW; nx++) {
-            // 反向映射到旧坐标
-            const oldPy = Math.min(oldH - 1, Math.floor(ny / scaleY));
-            const oldPx = Math.min(oldW - 1, Math.floor(nx / scaleX));
+            // 反向映射到旧坐标（用各帧自己的 fScale）
+            const oldPy = Math.min(oldH - 1, Math.floor(ny / fScaleY));
+            const oldPx = Math.min(oldW - 1, Math.floor(nx / fScaleX));
             const oldIdx = oldPy * oldW + oldPx;
             const newIdx = ny * newW + nx;
             
@@ -673,7 +695,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     
     // 8. 更新 texSize
-    setTexSize(newSize);
+    setManualTexSize(newSize);
     
     // 9. ★ 重新生成所有帧的基础色和残差纹理（基于新的 regionIdTex 和 deltaPacked）
     // 使用 setTimeout 确保 state 更新完成后再执行
@@ -950,7 +972,7 @@ export const BaseColorEditor: React.FC = () => {
           h = Math.round(h * scale);
         }
         const newSize = Math.max(w, h);
-        setTexSize(newSize);
+        setManualTexSize(newSize);
 
         const canvas = document.createElement('canvas');
         canvas.width = newSize;

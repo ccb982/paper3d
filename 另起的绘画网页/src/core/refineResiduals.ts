@@ -13,9 +13,11 @@ function getBackgroundRgbAt(
   bgImageData: ImageData,
   textureSize: number
 ): { r: number; g: number; b: number } {
+  // ★ 使用 bgImageData.width 作为步长（防止 texSize 与 bgImageData 尺寸不一致时索引错位）
+  const stride = bgImageData.width;
   const gx = Math.round(bbox.x + px);
   const gy = Math.round(bbox.y + py);
-  const idx = (gy * textureSize + gx) * 4;
+  const idx = (gy * stride + gx) * 4;
   return {
     r: bgImageData.data[idx],
     g: bgImageData.data[idx + 1],
