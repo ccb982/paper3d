@@ -70,7 +70,13 @@ export function refineResidualsAndColors(
   tempDeltas: Float32Array,
   textureSize: number,
   hueThreshold: number = 0.015,
-  maxNewColors: number = 3
+  maxNewColors: number = 3,
+  /**
+   * ★ 是否自动创建新基础色（默认 false）。
+   * false = 坏像素归到最近的现有基础色，不新增（解耦设计，需手动调用 createMissingBaseColors）
+   * true  = 坏像素距离过远时自动创建新基础色（旧行为）
+   */
+  autoAddColors: boolean = false,
 ): { blockFlags: bigint; changed: boolean; changedPixelCount: number; badPixels: number[] } {
   const { w, h } = bbox;
   const totalPixels = w * h;
@@ -198,7 +204,7 @@ export function refineResidualsAndColors(
           bestId = c.id;
         }
       }
-      if (minDist > hueThreshold * 2 && newColorCount < maxNewColors) {
+      if (autoAddColors && minDist > hueThreshold * 2 && newColorCount < maxNewColors) {
         let duplicate = false;
         let duplicateId: number | null = null;
         const newHsl = { h: bgHsl.h, s: bgHsl.s, l: bgHsl.l };
@@ -285,4 +291,97 @@ export function refineResidualsAndColors(
   }
 
   return { blockFlags: newBlockFlags, changed: true, changedPixelCount: changedCount, badPixels };
+}
+
+/**
+ * ★ 为无法匹配现有基础色的坏像素创建新基础色（从 refineResidualsAndColors 剥离）。
+ *
+ * 逻辑：遍历坏像素，如果背景色与所有现有基础色距离过远（>hueThreshold*2），
+ * 则创建新基础色并更新 regionIdTex。最多创建 maxNewColors 个新色。
+ *
+ * 使用场景：recalculateResidual 默认不自动新增基础色（autoAddColors=false），
+ * 用户确认坏像素列表后，手动调用此函数补充缺失的基础色。
+ *
+ * @param badPixels  来自 refineResidualsAndColors 返回值的坏像素索引列表
+ * @returns 新创建的基础色列表 + 是否有变化 + 变化像素数
+ *   - newColors：新创建的基础色（已 push 到 baseColors 数组）
+ *   - 调用方需将 newColors 同步到全局调色板（addColorToPalette）
+ *   - regionIdTex 已就地更新为新色 ID
+ */
+export function createMissingBaseColors(
+  regionIdTex: Uint8Array,
+  baseColors: Array<{ id: number; h: number; s: number; l: number }>,
+  bbox: { x: number; y: number; w: number; h: number },
+  bgImageData: ImageData,
+  textureSize: number,
+  badPixels: number[],
+  hueThreshold: number = 0.015,
+  maxNewColors: number = 3,
+): {
+  newColors: Array<{ id: number; h: number; s: number; l: number }>;
+  changed: boolean;
+  changedPixelCount: number;
+} {
+  const { w } = bbox;
+  let newColorCount = 0;
+  let changedCount = 0;
+  const newColors: Array<{ id: number; h: number; s: number; l: number }> = [];
+
+  // 找到当前最大 ID
+  let maxId = 0;
+  for (const c of baseColors) {
+    if (c.id > maxId) maxId = c.id;
+  }
+
+  for (const idx of badPixels) {
+    const px = idx % w;
+    const py = Math.floor(idx / w);
+    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
+
+    // 检查与所有现有基础色的距离
+    let minDist = Infinity;
+    let nearestId: number | null = null;
+    for (const c of baseColors) {
+      const dist = hslWeightedDistance(c, bgHsl);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestId = c.id;
+      }
+    }
+
+    // 距离过远且还能创建新色 → 创建新基础色
+    if (minDist > hueThreshold * 2 && newColorCount < maxNewColors) {
+      // 检查重复
+      let duplicate = false;
+      let duplicateId: number | null = null;
+      const newHsl = { h: bgHsl.h, s: bgHsl.s, l: bgHsl.l };
+      for (const c of baseColors) {
+        if (hueDistance(c.h, newHsl.h) < 0.02 && Math.abs(c.s - newHsl.s) < 0.015 && Math.abs(c.l - newHsl.l) < 0.015) {
+          duplicate = true;
+          duplicateId = c.id;
+          break;
+        }
+      }
+      if (!duplicate) {
+        const newId = ++maxId;
+        const newColor = { id: newId, ...newHsl };
+        baseColors.push(newColor);
+        newColors.push(newColor);
+        if (regionIdTex[idx] !== newId) {
+          regionIdTex[idx] = newId;
+          changedCount++;
+        }
+        newColorCount++;
+      } else if (duplicateId !== null && duplicateId !== regionIdTex[idx]) {
+        regionIdTex[idx] = duplicateId;
+        changedCount++;
+      }
+    } else if (nearestId !== null && nearestId !== regionIdTex[idx]) {
+      // 不够远 → 归到最近现有色
+      regionIdTex[idx] = nearestId;
+      changedCount++;
+    }
+  }
+
+  return { newColors, changed: changedCount > 0, changedPixelCount: changedCount };
 }

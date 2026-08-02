@@ -23,7 +23,7 @@ import { useAppStore } from '../stores/useAppStore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 import { packMultiFrameToBinary } from '../utils/multiFrameExport';
 import { compressToGzip } from '../utils/binaryCompression';
-import { refineResidualsAndColors } from '../core/refineResiduals';
+import { refineResidualsAndColors, createMissingBaseColors } from '../core/refineResiduals';
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -1284,6 +1284,140 @@ export const BaseColorEditor: React.FC = () => {
     recalculateResidual();
   }, [mergeSimilarColors, recalculateResidual]);
 
+  /**
+   * ★ 手动补充缺失的基础色（从 recalculateResidual 解耦）。
+   *
+   * recalculateResidual 默认 autoAddColors=false，不自动新增基础色。
+   * 用户确认坏像素后，手动调用此函数：
+   *   1. 用 debugBadPixels 调用 createMissingBaseColors
+   *   2. 新色同步到全局调色板（addColorToPalette）
+   *   3. regionIdTex 中的本地 ID 替换为全局 ID
+   *   4. 重新打包 deltaPacked + 更新帧数据
+   */
+  const addMissingBaseColors = useCallback(() => {
+    if (!bgImageData || !bbox || !activeFrameId || !regionIdTex) {
+      console.warn('[补充基础色] 缺少必要数据（bgImageData/bbox/activeFrameId/regionIdTex）');
+      return;
+    }
+    if (!debugBadPixels || debugBadPixels.length === 0) {
+      console.log('[补充基础色] 没有坏像素，无需补充。请先"重新计算残差"检测坏像素。');
+      return;
+    }
+
+    const { w, h } = bbox;
+    const totalPixels = w * h;
+
+    // 复制 regionIdTex 和 baseColors（避免直接修改原始数据）
+    const regionIdTexCopy = new Uint8Array(regionIdTex);
+    const baseColorsCopy = baseColors.map((c: SharedBaseColor) => ({ ...c }));
+    const prevColorCount = baseColorsCopy.length;
+
+    // 调用剥离后的新色创建函数
+    const result = createMissingBaseColors(
+      regionIdTexCopy,
+      baseColorsCopy,
+      bbox,
+      bgImageData,
+      texSize,
+      debugBadPixels,
+      0.015,
+      3,
+    );
+
+    if (result.newColors.length === 0) {
+      console.log('[补充基础色] 没有需要新增的基础色（所有坏像素都能归到现有色）');
+      // 即使没有新色，也可能有 regionIdTex 变化（坏像素归到最近色）
+      if (result.changed) {
+        updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
+        triggerCanvasRedraw();
+      }
+      return;
+    }
+
+    console.log(`[补充基础色] 新增 ${result.newColors.length} 个基础色:`, result.newColors);
+
+    // 将新色同步到全局调色板，建立 本地ID → 全局ID 映射
+    const oldToNewId = new Map<number, number>();
+    for (let i = prevColorCount; i < baseColorsCopy.length; i++) {
+      const c = baseColorsCopy[i];
+      const globalId = addColorToPalette({ h: c.h, s: c.s, l: c.l }, activeFrameId || '');
+      oldToNewId.set(c.id, globalId);
+    }
+    // 替换 regionIdTex 中的本地 ID 为全局 ID
+    for (let i = 0; i < regionIdTexCopy.length; i++) {
+      const oldId = regionIdTexCopy[i];
+      if (oldToNewId.has(oldId)) {
+        regionIdTexCopy[i] = oldToNewId.get(oldId)!;
+      }
+    }
+
+    updateSkillFrame(activeFrameId, { regionIdTex: regionIdTexCopy });
+
+    // 重新打包 deltaPacked（使用新的 regionIdTex 和现有 ranges）
+    const ranges = new Float32Array(ADAPTIVE_TOTAL_BLOCKS);
+    for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
+      ranges[b] = (blockFlags & (1n << BigInt(b))) ? 0.25 : 0.5;
+    }
+
+    const tempDeltas = new Float32Array(totalPixels * 3);
+    const colorMapById = new Map<number, SharedBaseColor>();
+    // 重建 colorMapById，包含新色
+    for (const c of baseColorsCopy) {
+      const globalId = oldToNewId.get(c.id) ?? c.id;
+      colorMapById.set(globalId, { ...c, id: globalId } as SharedBaseColor);
+    }
+    for (const c of baseColors) {
+      if (!colorMapById.has(c.id)) colorMapById.set(c.id, c);
+    }
+
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const idx3 = py * w + px;
+        const colorId = regionIdTexCopy[idx3];
+        const baseHsl = colorMapById.get(colorId);
+        if (!baseHsl) continue;
+        const x = bbox.x + px;
+        const y = bbox.y + py;
+        const idx = (y * texSize + x) * 4;
+        const origHsl = rgbToHsl(bgImageData.data[idx], bgImageData.data[idx + 1], bgImageData.data[idx + 2]);
+        let dH = origHsl.h - baseHsl.h;
+        if (dH > 0.5) dH -= 1.0;
+        if (dH < -0.5) dH += 1.0;
+        tempDeltas[idx3 * 3] = dH;
+        tempDeltas[idx3 * 3 + 1] = origHsl.s - baseHsl.s;
+        tempDeltas[idx3 * 3 + 2] = origHsl.l - baseHsl.l;
+      }
+    }
+
+    const deltaPacked = new Uint16Array(totalPixels);
+    for (let idx = 0; idx < totalPixels; idx++) {
+      const colorId = regionIdTexCopy[idx];
+      if (colorId === 0) continue;
+      const px = idx % w;
+      const py = Math.floor(idx / w);
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      const range = ranges[blockIdx];
+      const dH = tempDeltas[idx * 3];
+      const dS = tempDeltas[idx * 3 + 1];
+      const dL = tempDeltas[idx * 3 + 2];
+      const qH = quantizeH(dH, range);
+      const qS = quantizeS(dS, range);
+      const qL = quantizeL(dL, range);
+      deltaPacked[idx] = packRGB565(qS, qH, qL);
+    }
+
+    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTexCopy, bbox, texSize);
+    setResidualTexture(residualDisplay);
+    updateSkillFrame(activeFrameId, {
+      residualTexture: residualDisplay,
+      deltaPacked: deltaPacked,
+      regionIdTex: regionIdTexCopy,
+    });
+
+    triggerCanvasRedraw();
+    saveHistory();
+  }, [bgImageData, bbox, baseColors, regionIdTex, activeFrameId, texSize, debugBadPixels, blockFlags, addColorToPalette, updateSkillFrame, triggerCanvasRedraw, saveHistory]);
+
   const handleRecluster = useCallback(() => {
     if (!activeFrameId) return;
     
@@ -2428,18 +2562,35 @@ export const BaseColorEditor: React.FC = () => {
           残差
         </button>
         {mode === 'residual' && (
-          <button
-            onClick={recalculateResidual}
-            disabled={!baseTexture || !bgImageData || !bbox}
-            style={{
-              padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
-              background: '#722ed1',
-              color: '#fff',
-              border: '1px solid #d9d9d9',
-            }}
-          >
-            重新计算残差
-          </button>
+          <>
+            <button
+              onClick={recalculateResidual}
+              disabled={!baseTexture || !bgImageData || !bbox}
+              style={{
+                padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+                background: '#722ed1',
+                color: '#fff',
+                border: '1px solid #d9d9d9',
+              }}
+            >
+              重新计算残差
+            </button>
+            {/* ★ 手动补充基础色（从残差计算解耦，需先"重新计算残差"检测坏像素） */}
+            <button
+              onClick={addMissingBaseColors}
+              disabled={!debugBadPixels || debugBadPixels.length === 0}
+              title={(!debugBadPixels || debugBadPixels.length === 0) ? '请先"重新计算残差"检测坏像素' : `为 ${debugBadPixels.length} 个坏像素补充基础色`}
+              style={{
+                padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+                background: '#13c2c2',
+                color: '#fff',
+                border: '1px solid #d9d9d9',
+                marginLeft: '4px',
+              }}
+            >
+              补充基础色
+            </button>
+          </>
         )}
         <button
           onClick={() => setMode('composite')}
