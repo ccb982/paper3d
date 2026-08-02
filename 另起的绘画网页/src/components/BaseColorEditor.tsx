@@ -716,6 +716,8 @@ export const BaseColorEditor: React.FC = () => {
   
   const [debugShowBadPixels, setDebugShowBadPixels] = useState(false);
   const [debugBadPixels, setDebugBadPixels] = useState<number[]>([]);
+  // ★ 自定义导出文件名（留空则用默认时间戳名）
+  const [exportFileName, setExportFileName] = useState('');
   
   const [colorInfo, setColorInfo] = useState<{
     x: number;
@@ -2702,6 +2704,16 @@ export const BaseColorEditor: React.FC = () => {
           />
           帧间预测
         </label>
+        <label style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', padding: '2px 8px', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+          文件名
+          <input
+            type="text"
+            value={exportFileName}
+            onChange={(e) => setExportFileName(e.target.value)}
+            placeholder="留空用时间戳"
+            style={{ width: '120px', fontSize: '11px', padding: '1px 4px', border: '1px solid #d9d9d9', borderRadius: '2px' }}
+          />
+        </label>
         <button
           onClick={async () => {
             const state = useAppStore.getState();
@@ -2756,7 +2768,15 @@ export const BaseColorEditor: React.FC = () => {
             const url = URL.createObjectURL(gzipped);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `multiframe_export_${Date.now()}.ftx3.gz`;
+            // ★ 自定义文件名：去除非法字符 / : * ? " < > | 和首尾空格，
+            //   并去除用户可能输入的 .ftx3/.gz 扩展名（统一追加），留空则用时间戳
+            const cleanedName = exportFileName.trim()
+              .replace(/[\\/:*?"<>|]/g, '_')
+              .replace(/\.ftx3(\.gz)?$/i, '')
+              .replace(/\.gz$/i, '');
+            a.download = cleanedName
+              ? `${cleanedName}.ftx3.gz`
+              : `multiframe_export_${Date.now()}.ftx3.gz`;
             a.click();
             URL.revokeObjectURL(url);
           }}
