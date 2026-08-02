@@ -837,6 +837,24 @@ export function LayerControl() {
           <button onClick={() => { setCanvasWidth(800); setCanvasHeight(600); }} className="btn btn-secondary">800×600</button>
           <button onClick={() => { setCanvasWidth(1280); setCanvasHeight(720); }} className="btn btn-secondary">1280×720</button>
         </div>
+        {/* ★ 调整至原分辨率：匹配导入的参考背景图原始像素尺寸（1:1 不缩放） */}
+        <button
+          onClick={() => {
+            const img = imageState.originalImage;
+            if (img) {
+              setCanvasWidth(img.naturalWidth);
+              setCanvasHeight(img.naturalHeight);
+            }
+          }}
+          disabled={!imageState.originalImage}
+          className="btn btn-secondary"
+          style={{ width: '100%', marginBottom: '12px', opacity: imageState.originalImage ? 1 : 0.5 }}
+          title={imageState.originalImage ? `调整为参考图原始尺寸：${imageState.originalImage.naturalWidth}×${imageState.originalImage.naturalHeight}` : '请先导入参考图片'}
+        >
+          {imageState.originalImage
+            ? `调整至原分辨率（${imageState.originalImage.naturalWidth}×${imageState.originalImage.naturalHeight}）`
+            : '调整至原分辨率（未导入参考图）'}
+        </button>
         <p style={{ fontSize: '10px', color: '#888', marginTop: '4px' }}>
           调整画布分辨率（64-4096）
         </p>

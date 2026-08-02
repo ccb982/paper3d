@@ -89,6 +89,19 @@ export interface FluidEditorConfig {
   maxVelocity?: number;
 
   /**
+   * 全局速度缩放因子（无方向标量）。
+   *
+   * 每帧 step 末尾对整个速度场乘以此系数：
+   *   - 1.0：无影响（默认）
+   *   - < 1.0：速度扣除（全局阻尼，流体逐渐减速）
+   *   - > 1.0：速度增加（全局加速，流体逐渐加速）
+   *
+   * 不改变速度方向，仅缩放大小。可用于模拟粘性阻力或持续能量注入。
+   * 与重力（有方向加速度）正交，可同时启用。
+   */
+  velocityScale?: number;
+
+  /**
    * 平流模式：
    * - 'vector'（默认，旧模式）：4 通道颜色场（HSLA）参与平流，残差动态流动
    * - 'scalar'（标量浓度模式）：仅 1 通道 density 场平流，残差静态化，
@@ -400,7 +413,14 @@ export class FluidEditor {
       this.applyPressureGradient();
     }
 
-    // ★ 3.5 全局速度限幅（压力投影之后）
+    // ★ 3.5 全局速度缩放（无方向阻尼/加速，压力投影之后）
+    // velocityScale = 1 表示无影响（默认）；< 1 阻尼减速，> 1 加速
+    const velScale = this.config.velocityScale ?? 1;
+    if (velScale !== 1) {
+      this.operations.scaleVelocity(this.velocityGrid, velScale);
+    }
+
+    // ★ 3.6 全局速度限幅（缩放之后，防止加速导致爆炸）
     // 防止持续注入、误差累积导致的速度爆炸
     // maxVelocity = 0 或 Infinity 表示禁用限幅
     const maxVel = this.config.maxVelocity ?? 5000;

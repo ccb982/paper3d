@@ -429,6 +429,40 @@ export class FluidInjector {
     grid.swap();
   }
 
+  // ---- 5. 全局速度缩放（无方向阻尼/加速） ----
+
+  /**
+   * 全局速度缩放。
+   *
+   * 对整个速度场乘以标量系数 scale，不改变方向：
+   *   - scale < 1：阻尼（速度扣除），流体减速
+   *   - scale > 1：加速（速度增加），流体加速
+   *   - scale = 1：无影响
+   *
+   * @param grid 速度网格
+   * @param scale 缩放系数
+   */
+  scaleVelocity(grid: FluidGrid, scale: number): void {
+    if (scale === 1) return;
+
+    const mat = this.gpu.getMaterial('scaleVelocity', {
+      uVelocity: { value: grid.read },
+      uScale: { value: scale },
+    }, /* glsl */ `
+      uniform sampler2D uVelocity;
+      uniform float uScale;
+      varying vec2 vUv;
+
+      void main() {
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        gl_FragColor = vec4(vel * uScale, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
   dispose(): void {
     this.dummyWhiteTex?.dispose();
     this.dummyWhiteTex = null;

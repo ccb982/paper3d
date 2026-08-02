@@ -357,38 +357,33 @@ export class FluidOperations {
    * 注意：config 参数必须已经通过接口适配层转换为纹理坐标。
    * 本方法只负责纯粹的物理注入逻辑，不关心坐标系转换。
    *
-   * ⚠️ 速度注入语义：
-   *   config.velocity 单位为 px/s，乘以 dt 后为每帧速度增量（px），
-   *   与重力（gravity * dt）物理语义一致。
-   *   持续注入时每帧累加 velocity * dt，相当于加速度为 velocity 的持续推动。
-   *   不会无限制累加爆炸——后续由 clampVelocity 全局限幅。
+   * ★ 与单次注入（applyOneShotInjection）完全一致：
+   *   - 颜色/density 混合率 = 1.0（满混合）
+   *   - 速度不乘 dt（每帧注入完整 velocity，等频等量）
+   *   两者唯一差别只在调用时机：单次=按住每帧入队，持续=持久源每帧调用。
+   *   速度累积由 clampVelocity 全局限幅兜底，不会爆炸。
    *
    * @param gridColor 颜色网格
    * @param gridVelocity 速度网格
-   * @param dt 时间步长（秒）
+   * @param _dt 时间步长（保留以匹配调用接口，当前实现不使用——与单次注入一致不乘 dt）
    * @param config 注入源配置（已转换为纹理坐标）
    */
   applyInjection(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
-    dt: number,
+    _dt: number,
     config: InjectionConfig,
     gridDensity: FluidGrid | null = null,
   ): void {
     if (!config.enabled) return;
 
-    // ★ 颜色混合率直接使用 config.rate（不再乘以 dt），并限制在 [0,1]
-    // 持续注入模式下，颜色需要迅速显现以形成稳定的"颜料源"效果，
-    // 与一次性注入一致——每帧都以高混合率向目标色逼近。
-    const rate = Math.min(1.0, Math.max(0.0, config.rate));
-
-    // 位置和速度已通过接口适配层转换为纹理坐标，直接使用
+    // ★ 持续注入与单次注入完全一致：rate=1.0、速度不乘 dt
     const texPos: InjectionOptions = {
       position: { x: config.position.x, y: config.position.y },
       radius: config.radius,
     };
 
-    // ★ 颜色注入：仅 vector 模式（gridDensity === null）
+    // ★ 颜色注入：仅 vector 模式（gridDensity === null），rate=1.0 满混合
     //   scalar 模式下所有注入只影响 density 纹理，颜色纹理保持静态模板
     if (gridDensity === null) {
       this.injector.injectColor(
@@ -399,26 +394,23 @@ export class FluidOperations {
           l: config.color[2],
           a: config.color[3],
         },
-        rate,
+        1.0,
         texPos,
         this.channelMask,
       );
     }
 
-    // ★ 速度注入（持续注入场景）：config.velocity 是速度值（px/s），
-    //   乘以 dt 后为每帧速度增量（px），与重力（gravity * dt）物理语义一致。
-    //   持续注入时每帧累加 velocity * dt，相当于加速度为 velocity 的持续推动。
-    //   不会无限制累加爆炸——由 clampVelocity 全局限幅。
+    // ★ 速度注入：不乘 dt，每帧注入完整 velocity（与单次注入等频等量）
+    //   速度累积由 clampVelocity 全局限幅兜底，不会爆炸。
     this.injector.injectVelocity(
       gridVelocity,
-      { x: config.velocity.x * dt, y: config.velocity.y * dt },
+      { x: config.velocity.x, y: config.velocity.y },
       texPos,
     );
 
-    // ★ density 注入（MCSDA scalar 模式）：config.density 有值且 gridDensity 非 null 时注入
-    //   持续注入场景下，density 也持续注入，形成稳定的浓度源
+    // ★ density 注入（MCSDA scalar 模式）：rate=1.0 满浓度，与单次注入一致
     if (gridDensity && config.density !== undefined) {
-      this.injector.injectDensity(gridDensity, config.density, rate, texPos);
+      this.injector.injectDensity(gridDensity, config.density, 1.0, texPos);
     }
   }
 
@@ -435,6 +427,23 @@ export class FluidOperations {
    */
   clampVelocity(gridVelocity: FluidGrid, maxSpeed: number): void {
     this.injector.clampVelocity(gridVelocity, maxSpeed);
+  }
+
+  // ==================== 全局速度缩放 ====================
+
+  /**
+   * 全局速度缩放（无方向阻尼/加速）。
+   *
+   * 对整个速度场乘以标量 scale：
+   *   - < 1：速度扣除（阻尼）
+   *   - > 1：速度增加（加速）
+   *   - = 1：无影响
+   *
+   * @param gridVelocity 速度网格
+   * @param scale 缩放系数
+   */
+  scaleVelocity(gridVelocity: FluidGrid, scale: number): void {
+    this.injector.scaleVelocity(gridVelocity, scale);
   }
 
   // ==================== 高级效果（预留接口，后续按需实现） ====================

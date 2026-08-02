@@ -36,6 +36,7 @@ export function useFluidEditor(
     },
     colorBoundaryMode: 'clamp',
     maxVelocity: 5000, // 全局速度限幅上限（px/s），防止速度爆炸
+    velocityScale: 1,  // 全局速度缩放因子：1=无影响，<1阻尼减速，>1加速
     // ★ MCSDA 标量浓度平流模式（默认 vector 旧模式，保持兼容）
     advectionMode: 'vector',
     combineMode: 'add',      // 合成模式：'add'(基础色+增量) | 'sub'(基础色-增量)，仅scalar生效

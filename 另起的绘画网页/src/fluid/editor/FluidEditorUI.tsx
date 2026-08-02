@@ -898,6 +898,63 @@ const GeneralPanel: React.FC<{
           </span>
         </div>
 
+        {/* 全局速度缩放（无方向阻尼/加速） */}
+        <div className="control-group">
+          <label>⚖️ 全局速度缩放（无方向）</label>
+          <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+            <input
+              type="range"
+              min={0}
+              max={2}
+              step={0.001}
+              value={config.velocityScale ?? 1}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onConfigChange({ velocityScale: v });
+              }}
+              style={{ flex: 1 }}
+              title="每帧对整个速度场乘以此系数。1=无影响，<1阻尼减速，>1加速"
+            />
+            <input
+              type="number"
+              min={0}
+              max={10}
+              step={0.01}
+              value={Number((config.velocityScale ?? 1).toFixed(3))}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onConfigChange({ velocityScale: isNaN(v) ? 1 : Math.max(0, v) });
+              }}
+              style={{ width: '60px', fontSize: '10px', padding: '2px 4px' }}
+              title="直接输入缩放系数"
+            />
+            <button
+              type="button"
+              onClick={() => onConfigChange({ velocityScale: 1 })}
+              style={{
+                padding: '4px 8px',
+                fontSize: '10px',
+                background: (config.velocityScale ?? 1) === 1 ? '#4caf50' : '#f5f5f5',
+                color: (config.velocityScale ?? 1) === 1 ? '#fff' : '#333',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+              title="恢复默认 1.0（无影响）"
+            >
+              1.0
+            </button>
+          </div>
+          <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+            {(() => {
+              const s = config.velocityScale ?? 1;
+              if (s === 1) return '无影响（默认）';
+              if (s < 1) return `阻尼减速 ×${s.toFixed(3)}（每帧速度衰减 ${(100 * (1 - s)).toFixed(1)}%）`;
+              return `加速 ×${s.toFixed(3)}（每帧速度增加 ${(100 * (s - 1)).toFixed(1)}%）`;
+            })()}
+          </span>
+        </div>
+
         {/* ★ MCSDA 平流模式切换：向量模式（旧）/ 标量浓度模式（新） */}
         <div className="control-group">
           <label>平流模式</label>
@@ -1720,10 +1777,9 @@ export const FluidEditorUI: React.FC = () => {
       rate = 0;
     }
 
-    // ★ 持续注入使用稳定速度；单次注入使用爆发倍率（5x）
-    const finalSpeedMagnitude = continuousMode
-      ? speedMagnitude
-      : speedMagnitude * BOOST_MULTIPLIER;
+    // ★ 持续注入与单次注入速度大小一致（均使用 BOOST_MULTIPLIER 倍率）
+    //   两者唯一的差别是注入时机：单次=按住期间每帧注入，持续=持久源每帧注入
+    const finalSpeedMagnitude = speedMagnitude * BOOST_MULTIPLIER;
 
     // ★ 方向：摇杆激活时用实时方向（拖动实时变），否则用面板方向（收藏/上次记忆）
     const dir = joystickActiveRef.current
