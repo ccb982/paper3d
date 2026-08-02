@@ -1134,7 +1134,7 @@ useEffect(() => {
           if (newState) {
             const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
             if (currentLayerShapes.length > 0) {
-              const worldBounds = BFS_WORLD_BOUNDS;
+              const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 }; // 调试可视化用画布范围 [0,1]（区域注释/查询用 BFS_WORLD_BOUNDS 识别边缘环）
               debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
             }
           } else {
@@ -1186,7 +1186,7 @@ useEffect(() => {
     if (showDebugRegions) {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
-        const worldBounds = BFS_WORLD_BOUNDS;
+        const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 }; // 调试可视化用画布范围 [0,1]
         debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
       }
     }
@@ -2791,8 +2791,8 @@ useEffect(() => {
     if (showGridCells && layerVisibility.drawLayer) {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
-        // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
-        const worldBounds = BFS_WORLD_BOUNDS;
+        // 调试网格可视化用画布范围 [0,1]（扩大范围会导致背景大区域填充变黑）
+        const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
         const gridData = computeGridRegions(currentLayerShapes, worldBounds, 100);
         const { regionIdGrid, stepX, stepY, xMin, yMin, resolution, regions, wallRegions } = gridData;
 
