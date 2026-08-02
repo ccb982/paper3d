@@ -99,17 +99,20 @@ export interface FluidEditorConfig {
   /**
            * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
            *
-           * ★ 数学模型（无基础色、无增量解码——残差本身就是 HSLA 颜色）：
+           * ★ 数学模型（基础色 + 残差增量 × 浓度 × 通道系数）：
            *   factor = density / baseline
-           *   outH = fract(residualH × factor × hMul)   // 色相环回绕
-           *   outS = clamp(residualS × factor × sMul, 0, 1)
-           *   outL = clamp(residualL × factor × lMul, 0, 1)
-           *   outA = clamp(residualA × factor × aMul, 0, 1)
-           *   - density：1 通道 Uint8 动态场（0~1），参与平流
+           *   dH = (residualH × 2 - 1) × rangeH   // 残差解码为增量（与矢量模式相同）
+           *   finalH = fract(baseH + dH × factor × hMul)   // 色相环回绕
+           *   finalS = clamp(baseS + dS × factor × sMul, 0, 1)
+           *   finalL = clamp(baseL + dL × factor × lMul, 0, 1)
+           *   finalA = clamp(baseA + dA × factor × aMul, 0, 1)
+           *   - density：1 通道 Uint8 动态场（0~1），参与平流，控制叠加层强度
            *   - baseline：基准浓度，factor = density / baseline
-           *     baseline=1 时 factor=density；baseline 越小放大越强
-           *     density < baseline → 削弱；density > baseline → 增强
+           *     density < baseline → factor<1，增量削弱（颜色变化小）
+           *     density > baseline → factor>1，增量增强（颜色变化大）
+           *     density = 0 → 无叠加（只显示基础色）
            *   - mul：各通道系数（-2~2），负值产生补色等特效
+           *   - 残差是叠加在基础色上的动态层（增量），与矢量模式相同的解码方式
            */
   scalarConfig?: {
     hMultiplier: number;     // 色相系数，默认 1.0，范围 -2~2
@@ -747,21 +750,29 @@ export class FluidEditor {
   }
 
   /**
-   * MCSDA 烘焙导出：把残差（colorGrid，HSLA 颜色）× density × 通道系数 调制为单帧 RGBA Uint8。
+   * MCSDA 烘焙导出：把残差增量（colorGrid）× density × 通道系数 调制后重新量化为单帧 RGBA Uint8。
    *
-   * ★ 数学模型（与 FluidEditorUI 合成着色器 scalar 分支完全一致，所见即所导）：
+   * ★ 合成显示 vs 烘焙导出：
+   *   合成显示 = base + (delta × factor × mul)   ← 含基础色，用于实时预览
+   *   烘焙导出 = delta × factor × mul（重新量化） ← 不含基础色，可在别处叠加到基础色
+   *
    *   factor = density / baseline（低于基准削弱，高于基准增强）
-   *   outH = fract(residualH × factor × hMul)   // 色相环回绕，mul<0 产生补色
-   *   outS = clamp(residualS × factor × sMul, 0, 1)
-   *   outL = clamp(residualL × factor × lMul, 0, 1)
-   *   outA = clamp(residualA × factor × aMul, 0, 1)
    *
-   * ⚠️ 标量模式合成无基础色、无增量解码——残差本身就是 HSLA 颜色，density 调制其强度。
-   *    density=0 的区域输出 0（无颜色），density 高于 baseline 的区域增强。
+   * ★ 导出的是"调制后的残差增量"（不含基础色），与合成着色器 scalar 分支的增量部分一致：
+   *   合成显示 = base + (delta × factor × mul)
+   *   烘焙导出 = delta × factor × mul（重新量化，可作为新残差纹理在别处叠加到基础色）
    *
-   * @returns 调制后的 HSLA RGBA Uint8Array（分辨率同 colorGrid）
+   *   解码 → 调制 → 重新量化（保持与输入相同的量化格式）：
+   *   dH = (residual.r × 2 - 1) × rangeH
+   *   dH_mod = dH × factor × mul
+   *   qH_new = clamp((dH_mod / rangeH + 1) / 2, 0, 1)
+   *   factor=0 → qH_new=0.5（无操作增量）；factor=1,mul=1 → qH_new=原值（不变）
+   *
+   * @param rangeH 残差 H 通道量化范围（与合成着色器 uResidualRangeH 一致）
+   * @param rangeSL 残差 S/L/A 通道量化范围（与 uResidualRangeSL 一致）
+   * @returns 调制后的量化残差 RGBA Uint8Array（分辨率同 colorGrid）
    */
-  bakeResidual(): Uint8Array {
+  bakeResidual(rangeH: number, rangeSL: number): Uint8Array {
     const { w, h } = this.config.resolution;
     const sc = this.config.scalarConfig ?? {
       hMultiplier: 1, sMultiplier: 1, lMultiplier: 1, aMultiplier: 1,
@@ -769,33 +780,48 @@ export class FluidEditor {
     };
     const baseline = Math.max(0.01, sc.baselineDensity);
 
-    // GPU 烘焙 Pass：输出调制后的残差到临时 RenderTarget
-    // ★ 与 FluidEditorUI 合成着色器 scalar 分支完全一致，确保"所见即所导"：
-    //   H 通道用 fract（色相环回绕，mul<0 产生补色），S/L/A 用 clamp
+    // GPU 烘焙 Pass：解码→调制→重新量化，输出调制后的残差增量
     const mat = this.gpu.getMaterial('bakeResidual', {
       uResidual: { value: this.colorGrid.read },
       uDensity: { value: this.densityGrid.read },
       uChannelMul: { value: new THREE.Vector4(sc.hMultiplier, sc.sMultiplier, sc.lMultiplier, sc.aMultiplier) },
       uBaseline: { value: baseline },
+      uRangeH: { value: Math.max(0.001, rangeH) },
+      uRangeSL: { value: Math.max(0.001, rangeSL) },
     }, /* glsl */ `
-      uniform sampler2D uResidual;   // 残差场 RGBA（HSLA uint8，0~1）——残差本身就是颜色，非增量
+      uniform sampler2D uResidual;   // 残差场 RGBA（量化 HSL 增量，uint8 0~1）
       uniform sampler2D uDensity;    // density 场 R（0~1）
       uniform vec4 uChannelMul;      // H/S/L/A 通道系数
       uniform float uBaseline;       // 基准浓度
+      uniform float uRangeH;         // H 通道量化范围
+      uniform float uRangeSL;        // S/L/A 通道量化范围
       varying vec2 vUv;
 
       void main() {
         vec4 residual = texture2D(uResidual, vUv);
         float density = texture2D(uDensity, vUv).r;
-        // 强度因子：density/baseline（低于基准削弱，高于基准增强）
         float factor = density / max(uBaseline, 0.001);
-        // ★ 合成 = 残差 × factor × mul，无基础色、无增量解码
-        //   H 用 fract 包裹（负值回绕=补色），S/L/A 用 clamp
-        float outH = fract(residual.r * factor * uChannelMul.x);
-        float outS = clamp(residual.g * factor * uChannelMul.y, 0.0, 1.0);
-        float outL = clamp(residual.b * factor * uChannelMul.z, 0.0, 1.0);
-        float outA = clamp(residual.a * factor * uChannelMul.w, 0.0, 1.0);
-        gl_FragColor = vec4(outH, outS, outL, outA);
+
+        // 1. 解码残差增量（与合成着色器相同）
+        float dH = (residual.r * 2.0 - 1.0) * uRangeH;
+        float dS = (residual.g * 2.0 - 1.0) * uRangeSL;
+        float dL = (residual.b * 2.0 - 1.0) * uRangeSL;
+        float dA = (residual.a * 2.0 - 1.0) * uRangeSL;
+
+        // 2. 按 factor × mul 调制
+        dH *= factor * uChannelMul.x;
+        dS *= factor * uChannelMul.y;
+        dL *= factor * uChannelMul.z;
+        dA *= factor * uChannelMul.w;
+
+        // 3. 重新量化（与输入格式一致，可在别处叠加到基础色）
+        //    qH_new = (dH_mod / range + 1) / 2
+        float qH = clamp((dH / uRangeH + 1.0) * 0.5, 0.0, 1.0);
+        float qS = clamp((dS / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+        float qL = clamp((dL / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+        float qA = clamp((dA / uRangeSL + 1.0) * 0.5, 0.0, 1.0);
+
+        gl_FragColor = vec4(qH, qS, qL, qA);
       }
     `);
 

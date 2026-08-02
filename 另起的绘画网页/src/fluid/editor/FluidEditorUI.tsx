@@ -1823,8 +1823,8 @@ export const FluidEditorUI: React.FC = () => {
     densityScene.add(densityQuad);
 
     // 合成场景：底图（baseTexture）+ 平流残差（fluid residual）实时混合
-    // ★ MCSDA：scalar 模式下残差按 density×通道系数 调制（uScalarMode=1），
-    //   vector 模式保持原逻辑（uScalarMode=0）
+    // ★ MCSDA：scalar 模式下残差增量按 density×通道系数 调制后叠加到基础色（uScalarMode=1），
+    //   合成 = base + (delta × factor × mul)；vector 模式直接 base + delta（uScalarMode=0）
     const compositeScene = new THREE.Scene();
     const compositeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
     const compositeMat = new THREE.ShaderMaterial({
@@ -1878,18 +1878,22 @@ export const FluidEditorUI: React.FC = () => {
           float finalH, finalS, finalL, finalA;
 
           if (uScalarMode == 1) {
-            // ★ MCSDA scalar 模式：合成 = 残差(HSLA) × factor × mul
-            //   无基础色、无增量解码——残差本身就是颜色，density 调制其强度。
-            //   factor = density / baseline（低于基准削弱，高于基准增强）
-            //   与 bakeResidual 着色器完全一致，确保所见即所导。
-            //   ⚠️ 此分支不读取 uBaseTexture / uResidualRange*（残差非增量）。
+            // ★ MCSDA scalar 模式：合成 = 基础色 + (残差增量 × 浓度 × 通道系数)
+            //   残差是叠加在基础色上的动态层（增量，非绝对颜色），与矢量模式相同的解码方式。
+            //   density 控制叠加层强度：factor = density / baseline
+            //     - density < baseline → factor<1，增量被削弱（颜色变化小）
+            //     - density > baseline → factor>1，增量被增强（颜色变化大）
+            //     - density = 0 → factor=0，无叠加（只显示基础色）
+            //   mul 为各通道系数：负值产生补色等特效
             float density = texture2D(uDensity, vUv).r;
             float factor = density / max(uBaseline, 0.001);
-            // H 通道用 fract 包裹：factor<1 削弱、mul<0 产生补色（fract 负值回绕）
-            finalH = fract(residual.r * factor * uChannelMul.x);
-            finalS = clamp(residual.g * factor * uChannelMul.y, 0.0, 1.0);
-            finalL = clamp(residual.b * factor * uChannelMul.z, 0.0, 1.0);
-            finalA = clamp(residual.a * factor * uChannelMul.w, 0.0, 1.0);
+            // 复用矢量模式已解码的 dH/dS/dL，按 factor×mul 调制后叠加到基础色
+            finalH = fract(baseHSLA.r + dH * factor * uChannelMul.x);
+            finalS = clamp(baseHSLA.g + dS * factor * uChannelMul.y, 0.0, 1.0);
+            finalL = clamp(baseHSLA.b + dL * factor * uChannelMul.z, 0.0, 1.0);
+            // A 通道也作为增量调制（矢量模式不调 A，标量模式按设计调 A）
+            float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
+            finalA = clamp(baseHSLA.a + dA * factor * uChannelMul.w, 0.0, 1.0);
           } else {
             // ★ vector 模式（原逻辑）：HSL 直接加法（色相需要 fract 包裹）
             finalH = fract(baseHSLA.r + dH);
@@ -2621,8 +2625,9 @@ export const FluidEditorUI: React.FC = () => {
           }}
           onBakeResidual={() => {
             if (!editor) return;
-            // ★ MCSDA 烘焙：残差 × density × 通道系数 → 单帧 RGBA Uint8
-            const pixels = editor.bakeResidual();
+            // ★ MCSDA 烘焙：残差增量 × density × 通道系数 → 重新量化的单帧 RGBA Uint8
+            //   传入残差量化范围，与合成着色器的 uResidualRangeH/SL 一致
+            const pixels = editor.bakeResidual(residualRangeHRef.current, residualRangeSLRef.current);
             const { w, h } = config.resolution;
             // 用简单二进制格式导出：[magic(4)][w(4)][h(4)][rgba data...]
             // magic = 'MCSD'，便于后续导入识别
