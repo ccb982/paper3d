@@ -329,19 +329,21 @@ export class FluidOperations {
   // ==================== 基础操作 ====================
 
   /**
-   * 施加重力（全局速度注入）。
+   * 施加重力/全局力（二维矢量）。
+   *
+   * 对全局速度场注入一个持续加速度（force × dt），模拟"风向"或"全局力场"。
    *
    * @param grid 速度网格
    * @param dt 时间步长（秒）
-   * @param gravity 重力加速度（像素/秒²），正值向下（用户坐标系）
+   * @param force 加速度矢量（像素/秒²），屏幕坐标系：Y向下为正
    */
-  applyGravity(grid: FluidGrid, dt: number, gravity: number): void {
-    if (gravity === 0) return;
+  applyGravity(grid: FluidGrid, dt: number, force: { x: number; y: number }): void {
+    if (force.x === 0 && force.y === 0) return;
 
-    // flipY=false: 正Y=向下，与用户重力方向一致，直接注入
+    // flipY=false: 正Y=向下，与用户坐标一致，直接注入
     this.injector.injectVelocity(
       grid,
-      { x: 0, y: gravity * dt },
+      { x: force.x * dt, y: force.y * dt },
       { global: true },
     );
   }

@@ -86,6 +86,119 @@ const OperationsPanel: React.FC<{
 
   const currentMode = modes.find((m) => m.key === injectMode)!;
 
+  // ★ 全局力（原重力）摇杆：方向 + 大小，替换旧的标量重力输入
+  const joystickCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [localDir, setLocalDir] = useState({ x: 0, y: 1 }); // 归一化方向，默认向下
+  const [gravityMag, setGravityMag] = useState(5); // 标量大小 (px/s²)
+
+  // 从 config 同步初始值（外部更新 config.gravity 时回填）
+  useEffect(() => {
+    const g = config.gravity || { x: 0, y: 5 };
+    const mag = Math.sqrt(g.x * g.x + g.y * g.y);
+    if (mag > 0.001) {
+      setLocalDir({ x: g.x / mag, y: g.y / mag });
+      setGravityMag(mag);
+    } else {
+      setLocalDir({ x: 0, y: 1 });
+      setGravityMag(0);
+    }
+  }, [config.gravity]);
+
+  // 摇杆绘制
+  useEffect(() => {
+    const canvas = joystickCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const draw = (dirX: number, dirY: number) => {
+      const w = canvas.width, h = canvas.height;
+      const cx = w / 2, cy = h / 2;
+      const radius = Math.min(w, h) / 2 - 6;
+      ctx.clearRect(0, 0, w, h);
+
+      // 外圈
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+      ctx.strokeStyle = '#aaa';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 十字参考线
+      ctx.beginPath();
+      ctx.moveTo(cx - radius, cy); ctx.lineTo(cx + radius, cy);
+      ctx.moveTo(cx, cy - radius); ctx.lineTo(cx, cy + radius);
+      ctx.strokeStyle = '#ddd';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // ★ 摇杆=纯方向指示：手柄固定在外圈边缘，与力的大小完全无关
+      const handleX = cx + dirX * radius;
+      const handleY = cy + dirY * radius;
+
+      // 连线（中心 → 手柄）
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(handleX, handleY);
+      ctx.strokeStyle = '#f44336';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // 手柄圆点
+      ctx.beginPath();
+      ctx.arc(handleX, handleY, 8, 0, 2 * Math.PI);
+      ctx.fillStyle = '#f44336';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 手柄中心小点
+      ctx.beginPath();
+      ctx.arc(handleX, handleY, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+    };
+
+    draw(localDir.x, localDir.y);
+  }, [localDir]);
+
+  // 摇杆交互：拖拽设定方向 + 实时更新 config.gravity
+  const updateJoystick = useCallback((clientX: number, clientY: number) => {
+    const canvas = joystickCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const rawX = (clientX - rect.left) * scaleX - cx;
+    const rawY = (clientY - rect.top) * scaleY - cy;
+    const dist = Math.sqrt(rawX * rawX + rawY * rawY);
+    // ★ 死区：仅当指针离开中心足够远才更新方向，否则保持当前方向（不归零）
+    if (dist > 2) {
+      // ★ 方向始终归一化为单位向量（模长=1），强度完全由滑块控制，不受拖动距离影响
+      const normX = rawX / dist;
+      const normY = rawY / dist;
+      setLocalDir({ x: normX, y: normY });
+      // 实时更新 config（保留当前大小）
+      onConfigChange({
+        gravity: { x: normX * gravityMag, y: normY * gravityMag },
+      });
+    }
+  }, [gravityMag, onConfigChange]);
+
+  const handleJoystickDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    setIsDragging(true);
+    updateJoystick(e.clientX, e.clientY);
+  };
+  const handleJoystickMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (isDragging) updateJoystick(e.clientX, e.clientY);
+  };
+  const handleJoystickUp = () => setIsDragging(false);
+  const handleJoystickLeave = () => setIsDragging(false);
+
   // ★ 计算实际速度矢量（方向 × 大小）和可视化参数
   const velX = directionX * speedMagnitude;
   const velY = directionY * speedMagnitude;
@@ -362,18 +475,86 @@ const OperationsPanel: React.FC<{
           </div>
         </div>
 
-        {/* 重力 */}
-        <div className="control-group" style={{ marginBottom: '12px' }}>
-          <label>重力</label>
-          <div className="row">
-            <input
-              type="number"
-              step={0.5}
-              value={config.gravity}
-              onChange={(e) => onConfigChange({ gravity: +e.target.value })}
+        {/* 全局力（原重力）：摇杆 + 幅度滑块 */}
+        <div className="control-group" style={{ marginBottom: '12px', padding: '8px', background: '#fafafa', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
+          <label style={{ marginBottom: '6px' }}>🌍 全局力（方向 + 大小）</label>
+          <div className="row" style={{ gap: '12px', alignItems: 'center' }}>
+            {/* 摇杆 */}
+            <canvas
+              ref={joystickCanvasRef}
+              width={100}
+              height={100}
+              style={{
+                border: '1px solid #ccc',
+                borderRadius: '50%',
+                cursor: 'pointer',
+                background: '#f5f5f5',
+                flexShrink: 0,
+              }}
+              onMouseDown={handleJoystickDown}
+              onMouseMove={handleJoystickMove}
+              onMouseUp={handleJoystickUp}
+              onMouseLeave={handleJoystickLeave}
             />
-            <span className="hint">px/s²</span>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {/* 幅度滑块 */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px' }}>
+                  <span>强度 (px/s²)</span>
+                  <span>{gravityMag.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="200"
+                  step="0.5"
+                  value={gravityMag}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    setGravityMag(val);
+                    onConfigChange({
+                      gravity: { x: localDir.x * val, y: localDir.y * val },
+                    });
+                  }}
+                  style={{ width: '100%' }}
+                />
+              </div>
+              {/* 矢量显示 + 手动输入（上下两行） */}
+              <div style={{ fontSize: '10px', color: '#666', fontFamily: 'monospace', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <span style={{ width: '14px' }}>X:</span>
+                  <input
+                    type="number"
+                    step={0.5}
+                    value={Number(config.gravity.x.toFixed(1))}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0;
+                      onConfigChange({ gravity: { x: val, y: config.gravity.y } });
+                    }}
+                    style={{ width: '46px', fontSize: '10px', padding: '2px 4px', fontFamily: 'monospace' }}
+                  />
+                  <span style={{ fontSize: '9px', color: '#999' }}>px/s²</span>
+                </div>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <span style={{ width: '14px' }}>Y:</span>
+                  <input
+                    type="number"
+                    step={0.5}
+                    value={Number(config.gravity.y.toFixed(1))}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0;
+                      onConfigChange({ gravity: { x: config.gravity.x, y: val } });
+                    }}
+                    style={{ width: '46px', fontSize: '10px', padding: '2px 4px', fontFamily: 'monospace' }}
+                  />
+                  <span style={{ fontSize: '9px', color: '#999' }}>px/s²</span>
+                </div>
+              </div>
+            </div>
           </div>
+          <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+            拖动摇杆设定方向，滑块调节全局力大小（替换原有重力）
+          </span>
         </div>
 
         {/* 状态提示 */}
@@ -1486,7 +1667,7 @@ export const FluidEditorUI: React.FC = () => {
     enableAdvection: true,
     enablePressure: false,
     enableLevelSet: false,
-    gravity: 5, // 正值向下（屏幕坐标系）
+    gravity: { x: 0, y: 5 }, // 二维矢量，默认向下 5 px/s²（屏幕坐标系）
     velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)
     injection: {
       enabled: true,
@@ -2609,7 +2790,7 @@ export const FluidEditorUI: React.FC = () => {
     // ===== 步骤 3：残差模式配置 + 临时关闭平流 =====
     updateConfig({
       injection: { ...config.injection, enabled: false },
-      gravity: 0,
+      gravity: { x: 0, y: 0 },
       enableAdvection: false,
       colorBoundaryMode: 'clamp',
     });

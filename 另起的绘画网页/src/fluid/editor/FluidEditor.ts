@@ -67,8 +67,8 @@ export interface FluidEditorConfig {
   /** 是否启用压力热启动（用上一帧压力作为初始猜测，大幅减少迭代次数） */
   enableWarmStart: boolean;
   enableLevelSet: boolean;   // 预留
-  /** 重力加速度（像素/秒²），正值向下（屏幕坐标系） */
-  gravity: number;
+  /** 全局加速度/力（像素/秒²），二维矢量（屏幕坐标系，Y向下为正） */
+  gravity: { x: number; y: number };
   /** 恒定注入源配置 */
   injection: {
     enabled: boolean;
@@ -365,9 +365,10 @@ export class FluidEditor {
     const _gridDensity = this.config.advectionMode === 'scalar' ? this.densityGrid : null;
     this.operations.processQueue(this.colorGrid, this.velocityGrid, dt, _gridDensity);
 
-    // 0. 重力（通过操作模块 → 底层注入器）
-    if (this.config.gravity !== 0) {
-      this.operations.applyGravity(this.velocityGrid, dt, this.config.gravity);
+    // 0. 重力（通过操作模块 → 底层注入器，二维矢量全局力）
+    const g = this.config.gravity;
+    if (g.x !== 0 || g.y !== 0) {
+      this.operations.applyGravity(this.velocityGrid, dt, g);
     }
 
     // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
@@ -441,7 +442,9 @@ export class FluidEditor {
     const cflSubSteps = Math.ceil((maxPossibleSpeed * dt) / minGridSpacing);
 
     // 2. 兼顾重力的子步（重力很大时也需要分步）
-    const gravitySubSteps = Math.ceil(Math.abs(this.config.gravity) * dt / 50);
+    const g = this.config.gravity;
+    const gMag = Math.sqrt(g.x * g.x + g.y * g.y);
+    const gravitySubSteps = Math.ceil(gMag * dt / 50);
 
     // 3. 取两者较大值，至少为 1
     const subSteps = Math.max(1, Math.max(cflSubSteps, gravitySubSteps));
@@ -473,7 +476,9 @@ export class FluidEditor {
       : 5000;
     const minGridSpacing = Math.min(this.config.resolution.w, this.config.resolution.h);
     const cflSubSteps = Math.ceil((maxPossibleSpeed * dt) / minGridSpacing);
-    const gravitySubSteps = Math.ceil(Math.abs(this.config.gravity) * dt / 50);
+    const g = this.config.gravity;
+    const gMag = Math.sqrt(g.x * g.x + g.y * g.y);
+    const gravitySubSteps = Math.ceil(gMag * dt / 50);
     const subSteps = Math.max(1, Math.max(cflSubSteps, gravitySubSteps));
 
     this.advectionSolver.advect(
@@ -504,7 +509,9 @@ export class FluidEditor {
       : 5000;
     const minGridSpacing = Math.min(this.config.resolution.w, this.config.resolution.h);
     const cflSubSteps = Math.ceil((maxPossibleSpeed * dt) / minGridSpacing);
-    const gravitySubSteps = Math.ceil(Math.abs(this.config.gravity) * dt / 50);
+    const g = this.config.gravity;
+    const gMag = Math.sqrt(g.x * g.x + g.y * g.y);
+    const gravitySubSteps = Math.ceil(gMag * dt / 50);
     const subSteps = Math.max(1, Math.max(cflSubSteps, gravitySubSteps));
 
     this.advectionSolver.advect(
