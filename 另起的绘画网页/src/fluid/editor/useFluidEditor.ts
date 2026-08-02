@@ -40,11 +40,11 @@ export function useFluidEditor(
     advectionMode: 'vector',
     combineMode: 'add',      // 合成模式：'add'(基础色+增量) | 'sub'(基础色-增量)，仅scalar生效
     scalarConfig: {
-      hMultiplier: 1.0,      // 色相系数，-2~2
-      sMultiplier: 1.0,      // 饱和度系数
-      lMultiplier: 1.0,      // 明度系数
-      aMultiplier: 1.0,      // 透明度系数
-      baselineDensity: 1.0,  // 基准浓度，0.01~1.0（factor = density/baseline）
+      hMultiplier: 0.1,      // 色相系数，-0.2~0.2（范围÷10、step 0.0001 精细控制）
+      sMultiplier: 0.1,      // 饱和度系数
+      lMultiplier: 0.1,      // 明度系数
+      aMultiplier: 0.1,      // 透明度系数
+      baselineDensity: 1.0,  // 基准浓度，0.001~1.0（factor = density/baseline）
       decayRate: 0,          // 衰减速率，0~0.99（每帧 density *= 1-decayRate）
     },
     ...initialConfig,

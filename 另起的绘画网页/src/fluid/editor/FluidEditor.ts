@@ -124,16 +124,16 @@ export interface FluidEditorConfig {
            *     density < baseline → factor<1，偏移项小（削弱）
            *     density > baseline → factor>1，偏移项大（增强）
            *     density = 0 → 无偏移（只显示 base + delta）
-           *   - mul：各通道系数（-2~2），控制 density 偏移的方向和强度
-           *   - sign：combineMode='add' 时 +1，'sub' 时 -1
-           */
+           *   - mul：各通道系数（UI 范围 -0.2~0.2，step 0.0001 精细控制；shader 不钳制，键盘可输入更大值），控制 density 偏移的方向和强度
+   *   - sign：combineMode='add' 时 +1，'sub' 时 -1
+   */
   scalarConfig?: {
-    hMultiplier: number;     // 色相系数，默认 1.0，范围 -2~2
-    sMultiplier: number;     // 饱和度系数，默认 1.0
-    lMultiplier: number;     // 明度系数，默认 1.0
-    aMultiplier: number;     // 透明度系数，默认 1.0
-    baselineDensity: number; // 基准浓度，默认 1.0，范围 0.01~1.0
-    decayRate: number;       // 衰减速率，默认 0，范围 0~0.99（每帧 density *= 1-decayRate）
+    hMultiplier: number;     // 色相系数，默认 0.1，UI 范围 -0.2~0.2（step 0.0001）
+    sMultiplier: number;     // 饱和度系数，默认 0.1
+    lMultiplier: number;     // 明度系数，默认 0.1
+    aMultiplier: number;     // 透明度系数，默认 0.1
+    baselineDensity: number; // 基准浓度，默认 1.0，UI 范围 0.001~1.0（step 0.0001）
+    decayRate: number;       // 衰减速率，默认 0，范围 0~0.99（每帧 density *= 1-decayRate，step 0.0001）
   };
 }
 

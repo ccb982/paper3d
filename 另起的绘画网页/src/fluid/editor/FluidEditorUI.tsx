@@ -769,11 +769,11 @@ const GeneralPanel: React.FC<{
         {config.advectionMode === 'scalar' && (
           <>
             <div className="control-group">
-              <label>H 强度 (-2.0~2.0)</label>
+              <label>H 强度 (-0.2~0.2)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-2} max={2} step={0.01}
-                  value={config.scalarConfig?.hMultiplier ?? 1.0}
+                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  value={config.scalarConfig?.hMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, hMultiplier: parseFloat(e.target.value) }
                   })}
@@ -781,63 +781,63 @@ const GeneralPanel: React.FC<{
                   title="色相系数：负值产生补色，0=无残差，1=原样，2=2倍增强"
                 />
                 <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
-                  {(config.scalarConfig?.hMultiplier ?? 1.0).toFixed(2)}
+                  {(config.scalarConfig?.hMultiplier ?? 0.1).toFixed(4)}
                 </span>
               </div>
             </div>
             <div className="control-group">
-              <label>S 强度 (-2.0~2.0)</label>
+              <label>S 强度 (-0.2~0.2)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-2} max={2} step={0.01}
-                  value={config.scalarConfig?.sMultiplier ?? 1.0}
+                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  value={config.scalarConfig?.sMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, sMultiplier: parseFloat(e.target.value) }
                   })}
                   style={{ flex: 1 }}
                 />
                 <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
-                  {(config.scalarConfig?.sMultiplier ?? 1.0).toFixed(2)}
+                  {(config.scalarConfig?.sMultiplier ?? 0.1).toFixed(4)}
                 </span>
               </div>
             </div>
             <div className="control-group">
-              <label>L 强度 (-2.0~2.0)</label>
+              <label>L 强度 (-0.2~0.2)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-2} max={2} step={0.01}
-                  value={config.scalarConfig?.lMultiplier ?? 1.0}
+                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  value={config.scalarConfig?.lMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, lMultiplier: parseFloat(e.target.value) }
                   })}
                   style={{ flex: 1 }}
                 />
                 <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
-                  {(config.scalarConfig?.lMultiplier ?? 1.0).toFixed(2)}
+                  {(config.scalarConfig?.lMultiplier ?? 0.1).toFixed(4)}
                 </span>
               </div>
             </div>
             <div className="control-group">
-              <label>A 强度 (-2.0~2.0)</label>
+              <label>A 强度 (-0.2~0.2)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-2} max={2} step={0.01}
-                  value={config.scalarConfig?.aMultiplier ?? 1.0}
+                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  value={config.scalarConfig?.aMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, aMultiplier: parseFloat(e.target.value) }
                   })}
                   style={{ flex: 1 }}
                 />
                 <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
-                  {(config.scalarConfig?.aMultiplier ?? 1.0).toFixed(2)}
+                  {(config.scalarConfig?.aMultiplier ?? 0.1).toFixed(4)}
                 </span>
               </div>
             </div>
             <div className="control-group">
-              <label>基准浓度 baseline (0.01~1.0)</label>
+              <label>基准浓度 baseline (0.001~1.0)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={0.01} max={1} step={0.01}
+                  type="range" min={0.001} max={1} step={0.0001}
                   value={config.scalarConfig?.baselineDensity ?? 1.0}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, baselineDensity: parseFloat(e.target.value) }
@@ -845,8 +845,8 @@ const GeneralPanel: React.FC<{
                   style={{ flex: 1 }}
                   title="基准浓度：factor=density/baseline。低于基准削弱，高于基准增强"
                 />
-                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
-                  {(config.scalarConfig?.baselineDensity ?? 1.0).toFixed(2)}
+                <span className="hint" style={{ width: '56px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.baselineDensity ?? 1.0).toFixed(4)}
                 </span>
               </div>
               <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
@@ -857,7 +857,7 @@ const GeneralPanel: React.FC<{
               <label>衰减速率 decay (0~0.99)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={0} max={0.99} step={0.01}
+                  type="range" min={0} max={0.99} step={0.0001}
                   value={config.scalarConfig?.decayRate ?? 0}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, decayRate: parseFloat(e.target.value) }
@@ -865,8 +865,8 @@ const GeneralPanel: React.FC<{
                   style={{ flex: 1 }}
                   title="每帧 density *= (1-decayRate)。0=无衰减，0.1=每帧损失10%"
                 />
-                <span className="hint" style={{ width: '46px', textAlign: 'right' }}>
-                  {(config.scalarConfig?.decayRate ?? 0).toFixed(2)}
+                <span className="hint" style={{ width: '56px', textAlign: 'right' }}>
+                  {(config.scalarConfig?.decayRate ?? 0).toFixed(4)}
                 </span>
               </div>
               <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
@@ -3027,9 +3027,9 @@ export const FluidEditorUI: React.FC = () => {
                   return dbuf[0] / 255;
                 })(),
                 baseline: _sc.baselineDensity ?? 1.0,
-                hMul: _sc.hMultiplier ?? 1.0,
-                sMul: _sc.sMultiplier ?? 1.0,
-                lMul: _sc.lMultiplier ?? 1.0,
+                hMul: _sc.hMultiplier ?? 0.1,
+                sMul: _sc.sMultiplier ?? 0.1,
+                lMul: _sc.lMultiplier ?? 0.1,
               } : undefined;
               // 层级2：模拟器残差 + 基础色（按当前 combineMode + scalar 公式计算）
               simComposite = computeCompositeHsl(
