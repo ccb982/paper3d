@@ -1,5 +1,5 @@
 import type { Point, Shape } from '../types';
-import { computeRegionsExact } from './regionDetectionExact';
+import { computeRegionsExact, BFS_WORLD_BOUNDS } from './regionDetectionExact';
 
 // 子区域信息结构（包含 ID）
 // 使用与 Ctrl+G 相同的区域 ID
@@ -63,7 +63,7 @@ export function computeAllDashedClosedRegions(
     return [];
   }
   
-  const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+  const worldBounds = BFS_WORLD_BOUNDS;
   
   // 使用与调试模式相同的区域检测算法，但只使用虚线形状
   // 输入的 dashedShapes 已经全是虚线，不需要再排除

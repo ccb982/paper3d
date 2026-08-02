@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import * as THREE from 'three';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation, ColorBlock } from '../types';
 
-import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, type ScanlineCache } from '../utils/regionDetectionExact';
+import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, BFS_WORLD_BOUNDS, type ScanlineCache } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
@@ -1074,12 +1074,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
 
     // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
-    const worldBounds = {
-      xMin: 0,
-      xMax: 1,
-      yMin: 0,
-      yMax: 1,
-    };
+    const worldBounds = BFS_WORLD_BOUNDS;
 
     const gridData = computeGridRegions(allShapesInLayer, worldBounds, state.bfsResolution, '#ffaa00');  // 排除虚线
     const scanlineCache = computeScanlineIntervals(gridData);

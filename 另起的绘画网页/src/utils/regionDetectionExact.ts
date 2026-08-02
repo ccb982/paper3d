@@ -198,6 +198,21 @@ export function getRegionIdAtPoint(worldX: number, worldY: number, gridData: Gri
   return regionId > 0 ? regionId : null;
 }
 
+/**
+ * ★ BFS 光栅化 / 区域注释的世界坐标范围。
+ * 比画布 [0,1] 向外扩 10% margin，避免贴近画布边缘的闭合环触碰网格边缘
+ * 被 computeRegionsExact 的 touchesEdge 过滤丢弃（"贴近边缘的图形不能正常执行区域注释算法"）。
+ * 所有 computeGridRegions / computeRegionsExact / getDebugRegions 调用应统一使用此常量，
+ * 保证调试模式与区域注释算法范围一致。
+ * 注意：坐标转换（worldToCanvas/canvasToWorld）仍用 [0,1]，此常量仅用于 BFS 网格边界。
+ */
+export const BFS_WORLD_BOUNDS = {
+  xMin: -0.1,
+  xMax: 1.1,
+  yMin: -0.1,
+  yMax: 1.1,
+};
+
 export function computeGridRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },

@@ -1,5 +1,5 @@
 import type { Point, Shape, ColorBlock } from '../types';
-import { computeRegionsExact, computeGridRegions } from './regionDetectionExact';
+import { computeRegionsExact, computeGridRegions, BFS_WORLD_BOUNDS } from './regionDetectionExact';
 
 /**
  * 检测色块：支持同颜色合并和颜色覆盖
@@ -25,12 +25,7 @@ export function detectColorBlocks(
   }
 
   // 世界坐标固定为 [0,1]
-  const worldBounds = {
-    xMin: 0,
-    xMax: 1,
-    yMin: 0,
-    yMax: 1,
-  };
+  const worldBounds = BFS_WORLD_BOUNDS;
 
   const newBlocks: ColorBlock[] = [];
   let nextId = startId;

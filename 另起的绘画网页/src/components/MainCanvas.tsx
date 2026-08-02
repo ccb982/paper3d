@@ -4,7 +4,7 @@ import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
 import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
-import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact, type DebugRegionData } from '../utils/regionDetectionExact';
+import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact, BFS_WORLD_BOUNDS, type DebugRegionData } from '../utils/regionDetectionExact';
 import { findRegionByPoint, findRegionIndexByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
 import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
@@ -1134,7 +1134,7 @@ useEffect(() => {
           if (newState) {
             const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
             if (currentLayerShapes.length > 0) {
-              const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+              const worldBounds = BFS_WORLD_BOUNDS;
               debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
             }
           } else {
@@ -1186,7 +1186,7 @@ useEffect(() => {
     if (showDebugRegions) {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
-        const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+        const worldBounds = BFS_WORLD_BOUNDS;
         debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
       }
     }
@@ -1306,7 +1306,7 @@ useEffect(() => {
     for (const p of points) { cx += p.x; cy += p.y; }
     cx /= points.length; cy /= points.length;
     
-    const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+    const worldBounds = BFS_WORLD_BOUNDS;
     // 获取当前图层的所有图形（排除正在绘制的临时图形）
     const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
     
@@ -2792,12 +2792,7 @@ useEffect(() => {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
         // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
-        const worldBounds = {
-          xMin: 0,
-          xMax: 1,
-          yMin: 0,
-          yMax: 1,
-        };
+        const worldBounds = BFS_WORLD_BOUNDS;
         const gridData = computeGridRegions(currentLayerShapes, worldBounds, 100);
         const { regionIdGrid, stepX, stepY, xMin, yMin, resolution, regions, wallRegions } = gridData;
 
@@ -3739,7 +3734,7 @@ useEffect(() => {
       // ★ 以调试页面（Ctrl+D）的环检测算法为准：实时调用 getDebugRegions，
       //   内部即 computeRegionsExact（排除虚线 #ffaa00），与调试模式看到的环完全一致，
       //   避免 regionPolygonsCache 过期导致"调试能看到但区域注释识别不到"
-      const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+      const worldBounds = BFS_WORLD_BOUNDS;
       const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution);
       const regions = debugRegions.map(d => d.rings);
       
