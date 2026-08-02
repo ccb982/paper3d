@@ -3736,8 +3736,12 @@ useEffect(() => {
       if (currentLayerShapes.length === 0) return;
 
       // 获取BFS区域ID（正数）
-      // 获取 BFS 区域缓存
-      const regions = regionPolygonsCache[activeLayerId] || [];
+      // ★ 以调试页面（Ctrl+D）的环检测算法为准：实时调用 getDebugRegions，
+      //   内部即 computeRegionsExact（排除虚线 #ffaa00），与调试模式看到的环完全一致，
+      //   避免 regionPolygonsCache 过期导致"调试能看到但区域注释识别不到"
+      const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 };
+      const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution);
+      const regions = debugRegions.map(d => d.rings);
       
       // 使用区域索引作为 regionId（确保与 bakeRegionLayerTexture 中的索引一致）
       const regionIndex = findRegionIndexByPoint(worldCoords, regions);
