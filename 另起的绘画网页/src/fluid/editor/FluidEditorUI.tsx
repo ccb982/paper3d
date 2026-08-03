@@ -762,13 +762,12 @@ const GeneralPanel: React.FC<{
   onConfigChange: (updates: Partial<FluidEditorConfig>) => void;
   onViewChange: (mode: ViewMode) => void;
   onReset: () => void;
-  onExport: () => void;
+  // ★ 导出流体库配置 JSON（物理配方，供轻量化无头流体库加载）
+  onExportConfig: () => void;
   // ★ 速度场亮度基准值（uMaxVel）：值越小，低速区域越亮
   velViewMax: number;
   setVelViewMax: (v: number) => void;
-  // ★ MCSDA 烘焙导出（scalar 模式下显示）
-  onBakeResidual?: () => void;
-}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExport, velViewMax, setVelViewMax, onBakeResidual }) => {
+}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExportConfig, velViewMax, setVelViewMax }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -1281,10 +1280,10 @@ const GeneralPanel: React.FC<{
           </button>
         </div>
 
-        {/* 导出按钮 */}
+        {/* ★ 导出流体库配置 JSON（物理配方，供轻量化无头流体库加载） */}
         <div className="control-group">
           <button
-            onClick={onExport}
+            onClick={onExportConfig}
             style={{
               width: '100%',
               padding: '6px 12px',
@@ -1300,41 +1299,14 @@ const GeneralPanel: React.FC<{
               gap: '6px',
               marginTop: '4px',
             }}
+            title="导出物理配方 JSON（核心开关/平流模式/全局力场/Level Set/持续注入源），供轻量化无头流体库加载"
           >
-            📤 导出状态 JSON
+            📤 导出流体配置 JSON
           </button>
+          <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
+            仅导出物理配方（不含场数据），供轻量化库加载
+          </span>
         </div>
-
-        {/* ★ MCSDA 烘焙导出按钮（仅 scalar 模式显示）：
-            把残差×density×通道系数 烘焙为单帧 RGBA，导出为 .bin 文件 */}
-        {config.advectionMode === 'scalar' && onBakeResidual && (
-          <div className="control-group">
-            <button
-              onClick={onBakeResidual}
-              style={{
-                width: '100%',
-                padding: '6px 12px',
-                background: '#ff9800',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px',
-                marginTop: '4px',
-              }}
-              title="把残差×density×通道系数 烘焙为单帧 RGBA 导出"
-            >
-              🧱 烘焙导出残差 (density×mul)
-            </button>
-            <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
-              残差 × (density/baseline) × 通道系数 → 单帧 RGBA，导出为 .bin
-            </span>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -2932,42 +2904,58 @@ export const FluidEditorUI: React.FC = () => {
           onReset={reset}
           velViewMax={velViewMax}
           setVelViewMax={setVelViewMax}
-          onExport={() => {
-            if (!editor) return;
-            const json = editor.exportState();
-            // 下载文件
+          onExportConfig={() => {
+            // ★ 导出流体库物理配方 JSON（五大块），供轻量化无头流体库加载
+            //   仅含物理参数 + 持续注入源列表，不含速度场/颜色场数据
+            const cfg = config;
+            const sources = continuousSources;
+            const recipe = {
+              // A. 核心开关
+              coreSwitches: {
+                enableAdvection: cfg.enableAdvection,
+                enablePressure: cfg.enablePressure,
+                pressureIterations: cfg.pressureIterations,
+                pressureOmega: cfg.pressureOmega,
+                pressureBoundaryMode: cfg.pressureBoundaryMode,
+                enableWarmStart: cfg.enableWarmStart,
+              },
+              // B. 平流模式与合成逻辑
+              advectionAndComposite: {
+                advectionMode: cfg.advectionMode,
+                combineMode: cfg.combineMode,
+                // 通道掩码：物理 RGBA → 逻辑 HSLA（R=H, G=S, B=L, A=Alpha）
+                channels: { h: cfg.channels.r, s: cfg.channels.g, l: cfg.channels.b, a: cfg.channels.a },
+                scalarConfig: cfg.scalarConfig,
+              },
+              // C. 全局环境力场
+              globalForce: {
+                gravity: cfg.gravity,
+                velocityScale: cfg.velocityScale ?? 1,
+                maxVelocity: cfg.maxVelocity ?? 5000,
+                colorBoundaryMode: cfg.colorBoundaryMode ?? 'clamp',
+              },
+              // D. Level Set
+              levelSet: {
+                enableLevelSet: cfg.enableLevelSet,
+              },
+              // E. 持续注入源列表
+              continuousSources: sources.map(s => ({
+                enabled: s.enabled,
+                position: s.position,
+                radius: s.radius,
+                rate: s.rate,
+                velocity: s.velocity,
+                color: s.color,
+              })),
+              // 网格分辨率（轻量化库建场需要）
+              resolution: cfg.resolution,
+            };
+            const json = JSON.stringify(recipe, null, 2);
             const blob = new Blob([json], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `fluid-state-${Date.now()}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-          }}
-          onBakeResidual={() => {
-            if (!editor) return;
-            // ★ MCSDA 烘焙：残差增量 × density × 通道系数 × sign → 重新量化的单帧 RGBA Uint8
-            //   传入残差量化范围和合成模式，与合成着色器一致
-            const pixels = editor.bakeResidual(
-              residualRangeHRef.current,
-              residualRangeSLRef.current,
-              config.combineMode ?? 'add',
-            );
-            const { w, h } = config.resolution;
-            // 用简单二进制格式导出：[magic(4)][w(4)][h(4)][rgba data...]
-            // magic = 'MCSD'，便于后续导入识别
-            const header = new Uint8Array(12);
-            header[0] = 0x4D; header[1] = 0x43; header[2] = 0x53; header[3] = 0x44; // 'MCSD'
-            const dv = new DataView(header.buffer);
-            dv.setUint32(4, w, true);
-            dv.setUint32(8, h, true);
-            const blob = new Blob([header, pixels], { type: 'application/octet-stream' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `baked-residual-${w}x${h}-${Date.now()}.bin`;
+            a.download = `fluid-config-${Date.now()}.json`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
