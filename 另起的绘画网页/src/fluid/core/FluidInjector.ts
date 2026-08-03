@@ -15,6 +15,11 @@ export interface InjectionOptions {
   mask?: THREE.Texture;
   /** 如果为 true，忽略 position/radius，作用于全场 */
   global?: boolean;
+  /**
+   * 可选障碍物纹理（R通道）。
+   * 传入时，墙内像素（R>0.5）将跳过注入，直传原值。
+   */
+  obstacle?: THREE.Texture;
 }
 
 // ============================================================
@@ -37,6 +42,8 @@ export class FluidInjector {
   private gpu: GPUOps;
   /** 1×1 白色哑纹理，用于无 mask 时占位 sampler */
   private dummyWhiteTex: THREE.DataTexture | null = null;
+  /** 1×1 零纹理（R=0），用于无障碍物时的 dummy 采样 */
+  private zeroObstacleTex: THREE.DataTexture | null = null;
 
   constructor(renderer: THREE.WebGLRenderer, gpu: GPUOps) {
     this.renderer = renderer;
@@ -54,6 +61,19 @@ export class FluidInjector {
     return this.dummyWhiteTex;
   }
 
+  private getZeroObstacleTex(): THREE.Texture {
+    if (!this.zeroObstacleTex) {
+      this.zeroObstacleTex = new THREE.DataTexture(
+        new Uint8Array([0]),
+        1, 1, THREE.RedFormat, THREE.UnsignedByteType,
+      );
+      this.zeroObstacleTex.minFilter = THREE.NearestFilter;
+      this.zeroObstacleTex.magFilter = THREE.NearestFilter;
+      this.zeroObstacleTex.needsUpdate = true;
+    }
+    return this.zeroObstacleTex;
+  }
+
   // ---- 1. 散度注入（源/汇） ----
 
   /**
@@ -64,8 +84,8 @@ export class FluidInjector {
     divergence: number,
     options: InjectionOptions = {},
   ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
-    const key = `inj_div_${global ? 'global' : 'local'}`;
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
+    const key = `inj_div_${global ? 'global' : 'local'}_obst`;
 
     const mat = this.gpu.getMaterial(key, {
       uVelocity: { value: grid.read },
@@ -75,6 +95,7 @@ export class FluidInjector {
       uGlobal: { value: global ? 1 : 0 },
       uHasMask: { value: mask ? 1 : 0 },
       uMask: { value: mask || this.getDummyWhiteTex() },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
       uInvRes: { value: new THREE.Vector2(1.0 / grid.resolution.w, 1.0 / grid.resolution.h) },
     }, /* glsl */ `
       uniform sampler2D uVelocity;
@@ -84,10 +105,17 @@ export class FluidInjector {
       uniform int uGlobal;
       uniform int uHasMask;
       uniform sampler2D uMask;
+      uniform sampler2D uObstacle;
       uniform vec2 uInvRes;
       varying vec2 vUv;
 
       void main() {
+        // ★ 墙体屏蔽：墙内像素跳过注入，直传原值
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+
         float maskVal = 1.0;
         if (uGlobal == 0) {
           float d = distance(vUv, uPos);
@@ -129,9 +157,9 @@ export class FluidInjector {
     options: InjectionOptions = {},
     channelMask: { r: boolean; g: boolean; b: boolean; a: boolean } = { r: true, g: true, b: true, a: true },
   ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
     // ★ 新 key 强制重建材质（旧缓存无 uChannelMask uniform）
-    const key = `inj_color_v2_${global ? 'global' : 'local'}`;
+    const key = `inj_color_v2_${global ? 'global' : 'local'}_obst`;
     const clampedRate = Math.min(1.0, Math.max(0.0, rate));
 
     const mat = this.gpu.getMaterial(key, {
@@ -149,6 +177,7 @@ export class FluidInjector {
         channelMask.b ? 1 : 0,
         channelMask.a ? 1 : 0,
       ) },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
     }, /* glsl */ `
       uniform sampler2D uColor;
       uniform vec4 uTargetColor;
@@ -159,6 +188,7 @@ export class FluidInjector {
       uniform int uHasMask;
       uniform sampler2D uMask;
       uniform vec4 uChannelMask;  // 通道掩码：1=注入, 0=保持原值（冻结）
+      uniform sampler2D uObstacle;
       varying vec2 vUv;
 
       // ★ 色相环形插值：取色相环上最短路径，避免 mix 线性插值跨越色相环边界产生彩虹色。
@@ -170,6 +200,12 @@ export class FluidInjector {
       }
 
       void main() {
+        // ★ 墙体屏蔽：墙内像素跳过注入，直传原值
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uColor, vUv);
+          return;
+        }
+
         float maskVal = 1.0;
         if (uGlobal == 0) {
           float d = distance(vUv, uPos);
@@ -268,11 +304,11 @@ export class FluidInjector {
     rate: number,
     options: InjectionOptions = {},
   ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
     const clampedValue = Math.min(1.0, Math.max(0.0, value));
     const clampedRate = Math.min(1.0, Math.max(0.0, rate));
 
-    const mat = this.gpu.getMaterial(`inj_density_${global ? 'global' : 'local'}`, {
+    const mat = this.gpu.getMaterial(`inj_density_${global ? 'global' : 'local'}_obst`, {
       uDensity: { value: grid.read },
       uValue: { value: clampedValue },
       uRate: { value: clampedRate },
@@ -281,6 +317,7 @@ export class FluidInjector {
       uGlobal: { value: global ? 1 : 0 },
       uHasMask: { value: mask ? 1 : 0 },
       uMask: { value: mask || this.getDummyWhiteTex() },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
     }, /* glsl */ `
       uniform sampler2D uDensity;
       uniform float uValue;
@@ -290,9 +327,16 @@ export class FluidInjector {
       uniform int uGlobal;
       uniform int uHasMask;
       uniform sampler2D uMask;
+      uniform sampler2D uObstacle;
       varying vec2 vUv;
 
       void main() {
+        // ★ 墙体屏蔽：墙内像素跳过注入，直传原值
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uDensity, vUv);
+          return;
+        }
+
         float maskVal = 1.0;
         if (uGlobal == 0) {
           float d = distance(vUv, uPos);
@@ -352,8 +396,8 @@ export class FluidInjector {
     velocity: { x: number; y: number },
     options: InjectionOptions = {},
   ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false } = options;
-    const key = `inj_vel_${global ? 'global' : 'local'}`;
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
+    const key = `inj_vel_${global ? 'global' : 'local'}_obst`;
 
     const mat = this.gpu.getMaterial(key, {
       uVelocity: { value: grid.read },
@@ -363,6 +407,7 @@ export class FluidInjector {
       uGlobal: { value: global ? 1 : 0 },
       uHasMask: { value: mask ? 1 : 0 },
       uMask: { value: mask || this.getDummyWhiteTex() },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
     }, /* glsl */ `
       uniform sampler2D uVelocity;
       uniform vec2 uVel;
@@ -371,9 +416,16 @@ export class FluidInjector {
       uniform int uGlobal;
       uniform int uHasMask;
       uniform sampler2D uMask;
+      uniform sampler2D uObstacle;
       varying vec2 vUv;
 
       void main() {
+        // ★ 墙体屏蔽：墙内像素跳过注入，直传原值
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+
         float maskVal = 1.0;
         if (uGlobal == 0) {
           float d = distance(vUv, uPos);
@@ -466,5 +518,7 @@ export class FluidInjector {
   dispose(): void {
     this.dummyWhiteTex?.dispose();
     this.dummyWhiteTex = null;
+    this.zeroObstacleTex?.dispose();
+    this.zeroObstacleTex = null;
   }
 }

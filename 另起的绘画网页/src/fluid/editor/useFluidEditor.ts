@@ -118,6 +118,11 @@ export function useFluidEditor(
   // ==================== 视口模式 ====================
   const setView = useCallback((mode: ViewMode) => {
     setViewMode(mode);
+    // ★ 切换到墙体视图时自动启用障碍物模式（懒创建 obstacleTarget）
+    if (mode === 'obstacle') {
+      console.log('[obstacle] 切换到墙体视图，启用障碍物模式');
+      editorRef.current?.enableObstaclesMode();
+    }
   }, []);
 
   // ==================== 显示纹理 ====================

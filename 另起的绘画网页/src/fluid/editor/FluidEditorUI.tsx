@@ -767,7 +767,28 @@ const GeneralPanel: React.FC<{
   // ★ 速度场亮度基准值（uMaxVel）：值越小，低速区域越亮
   velViewMax: number;
   setVelViewMax: (v: number) => void;
-}> = ({ config, viewMode, onConfigChange, onViewChange, onReset, onExportConfig, velViewMax, setVelViewMax }) => {
+  // ★ 墙体绘制相关 props
+  wallBrushMode: 'brush' | 'eraser';
+  setWallBrushMode: (m: 'brush' | 'eraser') => void;
+  wallBrushRadius: number;
+  setWallBrushRadius: (r: number) => void;
+  onClearObstacles: () => void;
+}> = (props) => {
+  const {
+    config,
+    viewMode,
+    onConfigChange,
+    onViewChange,
+    onReset,
+    onExportConfig,
+    velViewMax,
+    setVelViewMax,
+    wallBrushMode,
+    setWallBrushMode,
+    wallBrushRadius,
+    setWallBrushRadius,
+    onClearObstacles,
+  } = props;
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -1215,6 +1236,19 @@ const GeneralPanel: React.FC<{
             >
               🧪 浓缩
             </button>
+            <button
+              className={viewMode === 'obstacle' ? 'active' : ''}
+              onClick={() => {
+                onViewChange('obstacle');
+                // 切换到墙体模式时自动启用障碍物
+                if (!config.enableObstacles) {
+                  onConfigChange({ enableObstacles: true });
+                }
+              }}
+              title="墙体（绘制障碍物，阻挡流体流动）"
+            >
+              🧱 墙体
+            </button>
           </div>
         </div>
 
@@ -1238,6 +1272,55 @@ const GeneralPanel: React.FC<{
             </div>
             <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
               控制速度可视化的灵敏度：值越小，低速区域越亮（1=极灵敏，1000=正常）
+            </span>
+          </div>
+        )}
+
+        {/* ★ 墙体绘制工具栏（仅在 obstacle 视口下显示） */}
+        {viewMode === 'obstacle' && (
+          <div className="control-group" style={{ borderTop: '1px solid #333', paddingTop: '8px' }}>
+            <label>🧱 墙体绘制</label>
+            <div className="row" style={{ gap: '6px' }}>
+              <button
+                className={wallBrushMode === 'brush' ? 'active' : ''}
+                onClick={() => setWallBrushMode('brush')}
+                style={{ flex: 1, padding: '6px 10px', borderRadius: '4px', border: '1px solid #555', background: wallBrushMode === 'brush' ? '#1a3a5c' : 'transparent', color: '#fff', cursor: 'pointer' }}
+              >
+                🖌️ 画笔
+              </button>
+              <button
+                className={wallBrushMode === 'eraser' ? 'active' : ''}
+                onClick={() => setWallBrushMode('eraser')}
+                style={{ flex: 1, padding: '6px 10px', borderRadius: '4px', border: '1px solid #555', background: wallBrushMode === 'eraser' ? '#3a1a1a' : 'transparent', color: '#fff', cursor: 'pointer' }}
+              >
+                🧽 橡皮
+              </button>
+            </div>
+            <div className="row" style={{ gap: '6px', alignItems: 'center', marginTop: '6px' }}>
+              <label style={{ fontSize: '11px' }}>笔刷大小</label>
+              <input
+                type="range"
+                min={0.005}
+                max={0.15}
+                step={0.005}
+                value={wallBrushRadius}
+                onChange={(e) => setWallBrushRadius(parseFloat(e.target.value))}
+                style={{ flex: 1 }}
+              />
+              <span className="hint" style={{ width: '50px', textAlign: 'right' }}>
+                {Math.round(wallBrushRadius * 100)}%
+              </span>
+            </div>
+            <div className="row" style={{ marginTop: '6px' }}>
+              <button
+                onClick={() => { onClearObstacles(); }}
+                style={{ width: '100%', padding: '6px', borderRadius: '4px', border: '1px solid #555', background: 'transparent', color: '#fff', cursor: 'pointer' }}
+              >
+                🗑️ 清空墙体
+              </button>
+            </div>
+            <span className="hint" style={{ fontSize: '9px', color: '#888', marginTop: '4px', display: 'block' }}>
+              拖拽鼠标绘制墙体，墙体将阻挡流体流动
             </span>
           </div>
         )}
@@ -1616,6 +1699,14 @@ export const FluidEditorUI: React.FC = () => {
   const [injectRadius, setInjectRadius] = useState(0.1);
   const [injectStrength, setInjectStrength] = useState(1.0);
 
+  // ★ 墙体绘制模式状态（仅在 obstacle 视口下生效）
+  const [wallBrushMode, setWallBrushMode] = useState<'brush' | 'eraser'>('brush');
+  const [wallBrushRadius, setWallBrushRadius] = useState(0.03); // 归一化半径（相对于画布）
+  const wallBrushRadiusRef = useRef<number>(wallBrushRadius);
+  wallBrushRadiusRef.current = wallBrushRadius;
+  const wallBrushModeRef = useRef<'brush' | 'eraser'>(wallBrushMode);
+  wallBrushModeRef.current = wallBrushMode;
+
   // 持续注入模式状态
   const [continuousMode, setContinuousMode] = useState(false);
   // ★ 手动暂停/恢复持续注入（独立控制，不影响持续模式开关和源队列）
@@ -1716,8 +1807,6 @@ export const FluidEditorUI: React.FC = () => {
   advectionModeRef.current = config.advectionMode ?? 'vector';
   const scalarConfigRef = useRef(config.scalarConfig);
   scalarConfigRef.current = config.scalarConfig;
-  // ★ scalar 模式合成诊断帧计数器
-  const diagFrameRef = useRef(0);
 
   // ★ 持续注入源列表（多源模式，从 FluidEditor 获取快照）
   const [continuousSources, setContinuousSources] = useState<ContinuousSourceSnapshot[]>([]);
@@ -1789,6 +1878,8 @@ export const FluidEditorUI: React.FC = () => {
   continuousModeRef.current = continuousMode;
   const continuousPausedRef = useRef(continuousPaused);
   continuousPausedRef.current = continuousPaused;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
   const buildInjectionConfigRef = useRef(buildInjectionConfig);
   buildInjectionConfigRef.current = buildInjectionConfig;
 
@@ -1796,14 +1887,29 @@ export const FluidEditorUI: React.FC = () => {
   //   - 单次模式：按住期间持续注入（rAF 每帧读摇杆方向），松开停止
   //   - 持续模式：立即新增源，拖动实时更新源方向，松开固定
   //   - 印章模式：不走摇杆，由 onClick 处理
+  //   - 墙体模式：直接在 obstacleGrid 上绘制墙体
   const handlePointerDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (injectMode === 'stamp') return; // 印章模式走 onClick
     const canvas = displayCanvasRef.current;
     if (!canvas || !editor) return;
     const rect = canvas.getBoundingClientRect();
     const normX = (e.clientX - rect.left) / rect.width;
     const normY = (e.clientY - rect.top) / rect.height;
     const pos = { x: normX, y: normY };
+
+    // ★ 墙体绘制模式：直接在障碍物纹理上绘制
+    if (viewModeRef.current === 'obstacle') {
+      editor.enableObstaclesMode();
+      const value = wallBrushModeRef.current === 'brush' ? 255 : 0;
+      // 最小半径 2 像素（防止隧道效应），半径以归一化坐标传递
+      const minRadius = 2 / Math.max(config.resolution.w, config.resolution.h);
+      const effectiveRadius = Math.max(wallBrushRadiusRef.current, minRadius);
+      editor.updateObstacle(pos, effectiveRadius, value as 0 | 255);
+      pointerPosRef.current = pos;
+      pointerDownRef.current = true;
+      return;
+    }
+
+    if (injectMode === 'stamp') return; // 印章模式走 onClick
 
     // ★ 激活摇杆：原点 = 按下位置（CSS 像素），初始方向 = 当前面板方向
     joystickActiveRef.current = true;
@@ -1837,14 +1943,28 @@ export const FluidEditorUI: React.FC = () => {
     pointerDownRef.current = false;
   }, [refreshSources]);
 
-  // ★ 鼠标移动：摇杆激活时计算方向 + 持续模式实时更新源
+  // ★ 鼠标移动：摇杆激活时计算方向 + 持续模式实时更新源 + 墙体模式绘制
   const handlePointerMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!joystickActiveRef.current) return;
     const canvas = displayCanvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const cssX = e.clientX - rect.left;
     const cssY = e.clientY - rect.top;
+
+    // ★ 墙体绘制模式：鼠标移动时持续绘制墙体
+    if (viewModeRef.current === 'obstacle' && pointerDownRef.current && editor) {
+      const normX = cssX / rect.width;
+      const normY = cssY / rect.height;
+      const pos = { x: normX, y: normY };
+      pointerPosRef.current = pos;
+      const value = wallBrushModeRef.current === 'brush' ? 255 : 0;
+      const minRadius = 2 / Math.max(config.resolution.w, config.resolution.h);
+      const effectiveRadius = Math.max(wallBrushRadiusRef.current, minRadius);
+      editor.updateObstacle(pos, effectiveRadius, value as 0 | 255);
+      return;
+    }
+
+    if (!joystickActiveRef.current) return;
 
     // 计算摇杆偏移并归一化为方向矢量
     const dx = cssX - joystickOriginRef.current.cssX;
@@ -1931,6 +2051,13 @@ export const FluidEditorUI: React.FC = () => {
     setDirectionY(dir.y);
     joystickDirRef.current = { x: dir.x, y: dir.y };
   }, []);
+
+  // ★ 清空墙体 handler
+  const clearObstaclesHandler = () => {
+    if (editor) {
+      editor.clearObstacles();
+    }
+  };
 
   // ★ 当 editor 实例变化时（如重建），刷新源列表（旧源已不存在，将得到空列表）
   useEffect(() => {
@@ -2095,6 +2222,40 @@ export const FluidEditorUI: React.FC = () => {
     });
     densityQuad.material = densityMat;
     densityScene.add(densityQuad);
+
+    // ★ 障碍物场景：显示墙体掩码纹理
+    //   白色=墙体（R>0.5），黑色=流体区域
+    //   叠加半透明蓝色调便于观察
+    const obstacleScene = new THREE.Scene();
+    const obstacleQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const obstacleMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uObstacle: { value: editor.getObstacleTexture() },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = vec2(uv.x, 1.0 - uv.y);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uObstacle;
+        varying vec2 vUv;
+
+        void main() {
+          float wall = texture2D(uObstacle, vUv).r;
+          vec3 bgColor = vec3(0.08, 0.08, 0.12);
+          vec3 wallColor = vec3(0.7, 0.85, 1.0);
+          // 抗锯齿：对墙体边界做 smoothstep 平滑（阈值 0.5，过渡带 0.02）
+          float wallSmooth = smoothstep(0.48, 0.52, wall);
+          vec3 color = mix(bgColor, wallColor, wallSmooth);
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+    });
+    obstacleQuad.material = obstacleMat;
+    obstacleScene.add(obstacleQuad);
 
     // 合成场景：底图（baseTexture）+ 平流残差（fluid residual）实时混合
     // ★ MCSDA：scalar 模式下残差增量按 density×通道系数 调制后叠加到基础色（uScalarMode=1），
@@ -2485,6 +2646,45 @@ export const FluidEditorUI: React.FC = () => {
       }
     };
 
+    // ★ 墙体笔刷光标绘制（在 obstacle 视口下显示鼠标位置的笔刷预览圈）
+    const drawWallBrushCursor = () => {
+      if (viewModeRef.current !== 'obstacle') return;
+      const overlay = overlayCanvasRef.current;
+      const display = displayCanvasRef.current;
+      if (!overlay || !display) return;
+      const ctx = overlay.getContext('2d');
+      if (!ctx) return;
+
+      const rect = display.getBoundingClientRect();
+      // 使用 pointerPosRef 中的位置（归一化坐标）
+      const pos = pointerPosRef.current;
+      const cssX = pos.x * rect.width;
+      const cssY = pos.y * rect.height;
+      const minRadius = 2 / Math.max(config.resolution.w, config.resolution.h);
+      const effectiveRadius = Math.max(wallBrushRadiusRef.current, minRadius);
+      const cssRadius = effectiveRadius * Math.max(rect.width, rect.height);
+
+      // 绘制笔刷预览圈
+      ctx.beginPath();
+      ctx.arc(cssX, cssY, cssRadius, 0, Math.PI * 2);
+      if (wallBrushModeRef.current === 'brush') {
+        ctx.fillStyle = 'rgba(100, 180, 255, 0.15)';
+        ctx.strokeStyle = 'rgba(100, 180, 255, 0.8)';
+      } else {
+        ctx.fillStyle = 'rgba(255, 150, 150, 0.15)';
+        ctx.strokeStyle = 'rgba(255, 150, 150, 0.8)';
+      }
+      ctx.lineWidth = 2;
+      ctx.fill();
+      ctx.stroke();
+
+      // 中心点
+      ctx.beginPath();
+      ctx.arc(cssX, cssY, 2, 0, Math.PI * 2);
+      ctx.fillStyle = wallBrushModeRef.current === 'brush' ? '#64b4ff' : '#ff9696';
+      ctx.fill();
+    };
+
     const loop = () => {
       frameCount++;
       const { w, h } = config.resolution;
@@ -2525,20 +2725,6 @@ export const FluidEditorUI: React.FC = () => {
         config.channels.a ? 1 : 0,
       );
 
-      // ★ 诊断：节流（每 60 帧）打印 scalar 模式状态 + 中心点 density/residual 回读
-      if (viewMode === 'composite' && _isScalar) {
-        diagFrameRef.current++;
-        if (diagFrameRef.current % 60 === 1) {
-          const { w, h } = config.resolution;
-          const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
-          const dBuf = new Uint8Array(4);
-          const rBuf = new Uint8Array(4);
-          editor.readDensityPixel?.(cx, cy, dBuf);
-          editor.readColorPixel?.(cx, cy, rBuf);
-          console.log(`[diag] composite scalar: uScalarMode=${compositeMat.uniforms.uScalarMode.value}, mul=(${(_sc?.hMultiplier??1).toFixed(2)},${(_sc?.sMultiplier??1).toFixed(2)},${(_sc?.lMultiplier??1).toFixed(2)},${(_sc?.aMultiplier??1).toFixed(2)}), baseline=${(_sc?.baselineDensity??1).toFixed(2)}, center density=${dBuf[0]}/255, residual=(${rBuf[0]},${rBuf[1]},${rBuf[2]},${rBuf[3]})`);
-        }
-      }
-
       // 合成模式：更新底图纹理和残差范围
       if (viewMode === 'composite') {
         updateBaseTexture();
@@ -2548,11 +2734,17 @@ export const FluidEditorUI: React.FC = () => {
         compositeMat.uniforms.uResidualRangeSL.value = residualRangeSLRef.current;
       }
 
+      // ★ 障碍物模式：每帧同步障碍物纹理（启用后 obstacleTarget 会被懒创建）
+      if (viewMode === 'obstacle') {
+        obstacleMat.uniforms.uObstacle.value = editor.getObstacleTexture();
+      }
+
       // 根据视图模式选择渲染场景
       let targetScene: THREE.Scene;
       if (viewMode === 'color') targetScene = colorScene;
       else if (viewMode === 'velocity') targetScene = velScene;
       else if (viewMode === 'density') targetScene = densityScene;
+      else if (viewMode === 'obstacle') targetScene = obstacleScene;
       else targetScene = compositeScene;
       renderer.render(targetScene, camera);
 
@@ -2561,16 +2753,30 @@ export const FluidEditorUI: React.FC = () => {
         pointerDownRef.current &&
         !continuousModeRef.current &&
         injectModeRef.current !== 'stamp' &&
-        !continuousPausedRef.current
+        !continuousPausedRef.current &&
+        viewModeRef.current !== 'obstacle'
       ) {
         const injectConfig = buildInjectionConfigRef.current(pointerPosRef.current);
         editor.queueInjection(injectConfig);
+      }
+
+      // ★ 墙体绘制模式：每帧在当前位置持续涂抹（用于 rAF 循环保持连续绘制）
+      if (
+        pointerDownRef.current &&
+        viewModeRef.current === 'obstacle'
+      ) {
+        const value = wallBrushModeRef.current === 'brush' ? 255 : 0;
+        const minRadius = 2 / Math.max(config.resolution.w, config.resolution.h);
+        const effectiveRadius = Math.max(wallBrushRadiusRef.current, minRadius);
+        editor.updateObstacle(pointerPosRef.current, effectiveRadius, value as 0 | 255);
       }
 
       // ★ 持续注入点可视化：在 overlay canvas 上绘制注入源位置、半径、速度箭头
       drawContinuousSourcesOverlay();
       // ★ 摇杆可视化：按下画布时在 overlay canvas 上绘制手柄摇杆
       drawJoystick();
+      // ★ 墙体笔刷光标：在 obstacle 视口下显示笔刷位置和大小预览
+      drawWallBrushCursor();
 
       displayRafRef.current = requestAnimationFrame(loop);
     };
@@ -2904,6 +3110,11 @@ export const FluidEditorUI: React.FC = () => {
           onReset={reset}
           velViewMax={velViewMax}
           setVelViewMax={setVelViewMax}
+          wallBrushMode={wallBrushMode}
+          setWallBrushMode={setWallBrushMode}
+          wallBrushRadius={wallBrushRadius}
+          setWallBrushRadius={setWallBrushRadius}
+          onClearObstacles={clearObstaclesHandler}
           onExportConfig={() => {
             // ★ 导出流体库物理配方 JSON（五大块），供轻量化无头流体库加载
             //   仅含物理参数 + 持续注入源列表，不含速度场/颜色场数据
@@ -3245,7 +3456,7 @@ export const FluidEditorUI: React.FC = () => {
             if (baseColor) {
               // ★ scalar 模式：读取 density 像素，构建 scalar 参数
               const _sc = config.scalarConfig;
-              const _scalar = isScalar && _sc ? {
+              const _scalar = advectionModeRef.current === 'scalar' && _sc ? {
                 density: (() => {
                   const dbuf = new Uint8Array(4);
                   editor.readDensityPixel(texX, texY, dbuf);
@@ -3321,7 +3532,7 @@ export const FluidEditorUI: React.FC = () => {
         </div>
         <div className="viewport-info">
           <span>{config.resolution.w}×{config.resolution.h}</span>
-          <span>{viewMode === 'color' ? '颜色场' : viewMode === 'velocity' ? '速度场' : viewMode === 'density' ? '浓缩场' : '合成场'}</span>
+          <span>{viewMode === 'color' ? '颜色场' : viewMode === 'velocity' ? '速度场' : viewMode === 'density' ? '浓缩场' : viewMode === 'obstacle' ? '墙体' : '合成场'}</span>
           <span>{config.enableAdvection ? '平流: ON' : '平流: OFF'}</span>
           {config.advectionMode === 'scalar' && <span style={{ color: '#009688' }}>MCSDA</span>}
         </div>

@@ -1,3 +1,4 @@
+import type * as THREE from 'three';
 import type { FluidGrid } from '../core/FluidGrid';
 import { FluidInjector, type InjectionOptions } from '../core/FluidInjector';
 
@@ -87,6 +88,14 @@ export interface WindOptions {
  */
 export class FluidOperations {
   private injector: FluidInjector;
+
+  /** 障碍物掩码纹理（静态，只读），设为 null 时注入无墙体屏蔽 */
+  private obstacleTexture: THREE.Texture | null = null;
+
+  /** 设置障碍物掩码纹理（由 FluidEditor 在启用/禁用墙体模式时调用） */
+  setObstacleTexture(tex: THREE.Texture | null): void {
+    this.obstacleTexture = tex;
+  }
 
   /** 待处理的单次注入队列（UI 交互的一次性注入） */
   private pendingInjections: InjectionConfig[] = [];
@@ -292,6 +301,7 @@ export class FluidOperations {
     const pos: InjectionOptions = {
       position: { x: config.position.x, y: config.position.y },
       radius: config.radius,
+      obstacle: this.obstacleTexture || undefined,
     };
 
     // 1. ★ 颜色注入：仅 vector 模式（gridDensity === null）
@@ -344,7 +354,7 @@ export class FluidOperations {
     this.injector.injectVelocity(
       grid,
       { x: force.x * dt, y: force.y * dt },
-      { global: true },
+      { global: true, obstacle: this.obstacleTexture || undefined },
     );
   }
 
@@ -381,6 +391,7 @@ export class FluidOperations {
     const texPos: InjectionOptions = {
       position: { x: config.position.x, y: config.position.y },
       radius: config.radius,
+      obstacle: this.obstacleTexture || undefined,
     };
 
     // ★ 颜色注入：仅 vector 模式（gridDensity === null），rate=1.0 满混合

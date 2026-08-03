@@ -16,8 +16,9 @@ import { FluidOperations, type InjectionConfig } from './FluidOperations';
  * - 'velocity'：速度场（HSV 方向色可视化）
  * - 'composite'：合成（底图 + 残差混合）
  * - 'density'：浓缩场（density 标量场灰度显示，仅 scalar 模式有意义）
+ * - 'obstacle'：障碍物掩码（墙体灰白可视化）
  */
-export type ViewMode = 'color' | 'velocity' | 'composite' | 'density';
+export type ViewMode = 'color' | 'velocity' | 'composite' | 'density' | 'obstacle';
 
 /** 速度场数据类型：'half-float'（16位半精度，显存减半）或 'float'（32位单精度，高精度） */
 export type VelocityDataType = 'half-float' | 'float';
@@ -122,22 +123,22 @@ export interface FluidEditorConfig {
   combineMode?: 'add' | 'sub';
 
   /**
-           * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
-           *
-           * ★ 数学模型：final = base + delta ± (density/baseline × mul)
-           *   factor = density / baseline
-           *   dH = (residualH × 2 - 1) × rangeH   // 残差解码为增量（与矢量模式相同）
-           *   finalH = fract(baseH + dH + sign × factor × hMul)   // 色相环回绕
-           *   finalS = clamp(baseS + dS + sign × factor × sMul, 0, 1)
-           *   finalL = clamp(baseL + dL + sign × factor × lMul, 0, 1)
-           *   finalA = clamp(baseA + dA + sign × factor × aMul, 0, 1)
-           *   - delta 直接叠加（不被 density 调制），density×mul 是独立偏移项
-           *   - density：1 通道 Uint8 动态场（0~1），参与平流
-           *   - baseline：基准浓度，factor = density / baseline
-           *     density < baseline → factor<1，偏移项小（削弱）
-           *     density > baseline → factor>1，偏移项大（增强）
-           *     density = 0 → 无偏移（只显示 base + delta）
-           *   - mul：各通道系数（UI 范围 -0.2~0.2，step 0.0001 精细控制；shader 不钳制，键盘可输入更大值），控制 density 偏移的方向和强度
+   * 标量浓度模式配置（仅 advectionMode='scalar' 时生效）。
+   *
+   * ★ 数学模型：final = base + delta ± (density/baseline × mul)
+   *   factor = density / baseline
+   *   dH = (residualH × 2 - 1) × rangeH   // 残差解码为增量（与矢量模式相同）
+   *   finalH = fract(baseH + dH + sign × factor × hMul)   // 色相环回绕
+   *   finalS = clamp(baseS + dS + sign × factor × sMul, 0, 1)
+   *   finalL = clamp(baseL + dL + sign × factor × lMul, 0, 1)
+   *   finalA = clamp(baseA + dA + sign × factor × aMul, 0, 1)
+   *   - delta 直接叠加（不被 density 调制），density×mul 是独立偏移项
+   *   - density：1 通道 Uint8 动态场（0~1），参与平流
+   *   - baseline：基准浓度，factor = density / baseline
+   *     density < baseline → factor<1，偏移项小（削弱）
+   *     density > baseline → factor>1，偏移项大（增强）
+   *     density = 0 → 无偏移（只显示 base + delta）
+   *   - mul：各通道系数（UI 范围 -0.2~0.2，step 0.0001 精细控制；shader 不钳制，键盘可输入更大值），控制 density 偏移的方向和强度
    *   - sign：combineMode='add' 时 +1，'sub' 时 -1
    */
   scalarConfig?: {
@@ -148,6 +149,14 @@ export interface FluidEditorConfig {
     baselineDensity: number; // 基准浓度，默认 1.0，UI 范围 0.001~1.0（step 0.0001）
     decayRate: number;       // 衰减速率，默认 0，范围 0~0.99（每帧 density *= 1-decayRate，step 0.0001）
   };
+
+  /**
+   * 障碍物（墙体）开关。
+   * 启用后，可通过画笔在 obstacleGrid 上涂抹墙体，
+   * 流体无法穿墙（平流被拦截、压力归零、注入被屏蔽）。
+   * 关闭时自动释放 obstacleGrid 显存。
+   */
+  enableObstacles?: boolean;
 }
 
 // ============================================================
@@ -185,6 +194,17 @@ export class FluidEditor {
   pressureGrid!: FluidGrid;   // 单通道、half-float，用于红-黑 SOR 压力迭代
   /** ★ MCSDA 标量浓度场：1 通道 Uint8（RedFormat），仅 advectionMode='scalar' 时参与平流 */
   densityGrid!: FluidGrid;
+
+  /**
+   * ★ 障碍物（墙体）掩码纹理 —— 静态单通道 Uint8（RedFormat + NearestFilter）。
+   * 0=流体（空），255=墙体（满）。不需要 swap/ping-pong，墙体是静态的。
+   * 仅当 enableObstacles=true 时创建；关闭时使用 dummyWhiteTex 代替。
+   */
+  private obstacleTarget: THREE.WebGLRenderTarget | null = null;
+  /** 障碍物临时副本（用于绘制时 copy-before-draw，避免读写同一纹理） */
+  private obstacleTempTarget: THREE.WebGLRenderTarget | null = null;
+  /** 1×1 白色哑纹理，用于障碍物关闭时替代 obstacleTarget 传入各着色器 */
+  private dummyObstacleTex: THREE.DataTexture | null = null;
 
   // 求解器
   private advectionSolver: AdvectionSolver;
@@ -225,6 +245,7 @@ export class FluidEditor {
   updateConfig(updates: Partial<FluidEditorConfig>): void {
     const oldRes = this.config.resolution;
     const oldVelType = this.config.velocityDataType;
+    const oldEnableObstacles = this.config.enableObstacles;
     Object.assign(this.config, updates);
 
     // ★ 同步通道掩码到 FluidOperations（注入时冻结未勾选的通道）
@@ -237,6 +258,20 @@ export class FluidEditor {
       (updates.resolution.w !== oldRes.w || updates.resolution.h !== oldRes.h);
     const velTypeChanged =
       updates.velocityDataType && updates.velocityDataType !== oldVelType;
+
+    // ★ 处理障碍物开关变化
+    if (updates.enableObstacles !== undefined && updates.enableObstacles !== oldEnableObstacles) {
+      if (updates.enableObstacles) {
+        this.enableObstaclesMode();
+      } else {
+        this.disableObstaclesMode();
+      }
+    }
+
+    // ★ 分辨率变化时重建障碍物目标（如果已启用）
+    if (resChanged && this.config.enableObstacles && this.obstacleTarget) {
+      this.recreateObstacleTarget();
+    }
 
     if (resChanged || velTypeChanged) {
       this.rebuildGrids();
@@ -372,6 +407,9 @@ export class FluidEditor {
 
     this.frameCount++;
 
+    // ★ 同步障碍物纹理到 operations（注入屏蔽）
+    this.operations.setObstacleTexture(this.getObstacleTexture());
+
     // ★ 0. 处理 UI 注入队列（优先执行，确保本帧生效）
     // 委托给 operations 处理一次性注入
     // ★ MCSDA：scalar 模式下传入 densityGrid，使带 density 字段的注入能写入浓度场
@@ -476,7 +514,7 @@ export class FluidEditor {
       mask,
       // ★ wrapHue=false：速度场 R=vx（像素/秒），绝不能应用色相环包裹 fract，
       //   否则速度被截断到 [0,1) 导致横向速度清零。
-      { boundaryMode: 'clamp', subSteps, wrapHue: false },
+      { boundaryMode: 'clamp', subSteps, wrapHue: false, obstacleTexture: this.getObstacleTexture() },
     );
   }
 
@@ -508,7 +546,7 @@ export class FluidEditor {
       mask,
       // ★ wrapHue=true：颜色场 R=Hue（色相），需要 fract 色相环包裹，
       //   防止 Catmull-Rom 插值越界导致色相跳变。
-      { boundaryMode, subSteps, wrapHue: true },
+      { boundaryMode, subSteps, wrapHue: true, obstacleTexture: this.getObstacleTexture() },
     );
   }
 
@@ -540,7 +578,7 @@ export class FluidEditor {
       dt,
       mask,
       // ★ wrapHue=false：density 是 [0,1] 标量浓度，fract 包裹会破坏浓度语义
-      { boundaryMode: 'clamp', subSteps, wrapHue: false },
+      { boundaryMode: 'clamp', subSteps, wrapHue: false, obstacleTexture: this.getObstacleTexture() },
     );
   }
 
@@ -642,10 +680,11 @@ export class FluidEditor {
    * 不更新的像素直接直传旧值。
    */
   private runSORPass(color: 'red' | 'black', omega: number): void {
-    const key = `sor_${color}`;
+    const key = `sor_${color}_obstacle`;
     const mat = this.gpu.getMaterial(key, {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTexture() },
       uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
       uOmega: { value: omega },
       uColor: { value: color === 'red' ? 0 : 1 },
@@ -653,6 +692,7 @@ export class FluidEditor {
     }, /* glsl */ `
       uniform sampler2D uPressure;
       uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
       uniform vec2 uInvResolution;
       uniform float uOmega;
       uniform int uColor;
@@ -660,6 +700,12 @@ export class FluidEditor {
       varying vec2 vUv;
 
       void main() {
+        // ★ 墙体像素：压力强制为 0（墙体是不可压缩的硬边界）
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = vec4(0.0);
+          return;
+        }
+
         // Dirichlet 边界：边界像素压力固定为 0
         if (uBoundaryMode == 1) {
           if (vUv.x <= uInvResolution.x || vUv.x >= 1.0 - uInvResolution.x
@@ -680,11 +726,17 @@ export class FluidEditor {
 
         vec2 ts = uInvResolution;
 
-        // 采样四邻域压力
+        // 采样四邻域压力（墙体邻居的压力视为 0）
         float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
         float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
         float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
         float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
+
+        // ★ 邻居是墙体时，该方向压力视为 0（硬边界）
+        if (texture2D(uObstacle, vUv + vec2(-ts.x, 0.0)).r > 0.5) pL = 0.0;
+        if (texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5) pR = 0.0;
+        if (texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5) pT = 0.0;
+        if (texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5) pB = 0.0;
 
         // 计算散度（中心差分）
         vec2 vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).rg;
@@ -713,17 +765,25 @@ export class FluidEditor {
    *     grad(p) = [ (pR-pL)/2·dx,  (pT-pB)/2·dy ] · resolution
    */
   private applyPressureGradient(): void {
-    const mat = this.gpu.getMaterial('pressureGradient', {
+    const mat = this.gpu.getMaterial('pressureGradient_obstacle', {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTexture() },
       uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
     }, /* glsl */ `
       uniform sampler2D uPressure;
       uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
       uniform vec2 uInvResolution;
       varying vec2 vUv;
 
       void main() {
+        // ★ 墙体像素：速度强制归零
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+          return;
+        }
+
         vec2 ts = uInvResolution;
 
         float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
@@ -998,6 +1058,11 @@ export class FluidEditor {
     this.pressureGrid = new FluidGrid(this.config.resolution, 1, velDataType);
     // ★ MCSDA density 场：1 通道 Uint8（RedFormat），与 colorGrid 分辨率一致
     this.densityGrid = new FluidGrid(this.config.resolution, 1, 'uint8');
+
+    // ★ 障碍物纹理：分辨率变化时重建（仅当已启用时）
+    if (this.config.enableObstacles && this.obstacleTarget) {
+      this.recreateObstacleTarget();
+    }
   }
 
   /** 初始化场数据：全透明空场 + 零速度 */
@@ -1025,6 +1090,190 @@ export class FluidEditor {
     // ★ density 场初始化为 0（1 通道 Uint8）
     const densityData = new Uint8Array(w * h);
     this.uploadToGrid(this.densityGrid, densityData, 1);
+  }
+
+  // ==================== 障碍物（墙体）管理 ====================
+
+  /**
+   * 获取当前障碍物纹理 —— 启用时返回 obstacleTarget.texture，否则返回 dummy 白色纹理。
+   * 这样所有着色器都可以安全采样，无需每次检查 enableObstacles。
+   */
+  getObstacleTexture(): THREE.Texture {
+    if (this.config.enableObstacles && this.obstacleTarget) {
+      return this.obstacleTarget.texture;
+    }
+    return this.getDummyObstacleTex();
+  }
+
+  /**
+   * 启用障碍物模式 —— 创建 obstacleTarget（懒初始化）。
+   * 如果已创建则直接返回。
+   */
+  enableObstaclesMode(): void {
+    if (this.config.enableObstacles && this.obstacleTarget) return;
+    this.config.enableObstacles = true;
+    this.createObstacleTarget();
+  }
+
+  /**
+   * 禁用障碍物模式 —— 释放 obstacleTarget 显存。
+   */
+  disableObstaclesMode(): void {
+    this.config.enableObstacles = false;
+    this.disposeObstacleTarget();
+  }
+
+  /**
+   * 在障碍物纹理上绘制一个圆形笔刷（GPU 渲染）。
+   * @param uv 中心位置（归一化 0~1）
+   * @param radius 半径（归一化 0~1）
+   * @param value 0=擦除，255=绘制墙体
+   */
+  updateObstacle(uv: { x: number; y: number }, radius: number, value: 0 | 255): void {
+    if (!this.config.enableObstacles) return;
+    this.ensureObstacleTarget();
+    if (!this.obstacleTarget || !this.obstacleTempTarget) return;
+
+    // ★ 关键修复：先把 obstacleTarget 复制到 obstacleTempTarget，
+    //   然后着色器从 temp 采样（旧内容），写入 obstacleTarget（新内容）。
+    //   避免 gpu.render 的 clear() 破坏原始内容。
+    const copyMat = this.gpu.getMaterial('copyObstacle', {
+      uSource: { value: this.obstacleTarget.texture },
+    }, /* glsl */ `
+      uniform sampler2D uSource;
+      varying vec2 vUv;
+      void main() {
+        gl_FragColor = texture2D(uSource, vUv);
+      }
+    `);
+    this.gpu.render(this.renderer, this.obstacleTempTarget!, copyMat);
+
+    // ★ 绘制笔刷：从 temp 采样旧内容，合成新内容到 obstacleTarget
+    const mat = this.gpu.getMaterial('drawObstacle', {
+      uObstacle: { value: this.obstacleTempTarget.texture },  // 从副本读
+      uPos: { value: new THREE.Vector2(uv.x, uv.y) },
+      uRadius: { value: radius },
+      uValue: { value: value / 255 },
+    }, /* glsl */ `
+      uniform sampler2D uObstacle;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform float uValue;
+      varying vec2 vUv;
+
+      void main() {
+        float current = texture2D(uObstacle, vUv).r;
+        float d = distance(vUv, uPos);
+        float brush = smoothstep(uRadius, uRadius * 0.5, d);
+        // value=1.0: 写入墙体；value=0.0: 擦除墙体
+        float next = (uValue > 0.5)
+          ? max(current, brush)   // 绘制：取 max（不会擦除已有墙体）
+          : max(current - brush, 0.0);  // 擦除：减去笔刷影响
+        gl_FragColor = vec4(next, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, this.obstacleTarget!, mat);
+
+    // ★ 调试输出（节流：每 60 帧打印一次）
+    if (Math.random() < 0.02) {
+      const buf = new Uint8Array(4);
+      const cx = Math.floor(uv.x * this.config.resolution.w);
+      const cy = Math.floor(uv.y * this.config.resolution.h);
+      this.readObstaclePixel(cx, cy, buf);
+      console.log(`[obstacle] 画笔绘制: uv=(${uv.x.toFixed(3)},${uv.y.toFixed(3)}) r=${radius.toFixed(4)} v=${value} → 像素R=${buf[0]}`);
+    }
+  }
+
+  /** 清空所有障碍物 */
+  clearObstacles(): void {
+    if (!this.config.enableObstacles) return;
+    this.ensureObstacleTarget();
+
+    const prevTarget = this.renderer.getRenderTarget();
+    if (this.obstacleTarget) {
+      this.renderer.setRenderTarget(this.obstacleTarget);
+      this.renderer.clear();
+    }
+    if (this.obstacleTempTarget) {
+      this.renderer.setRenderTarget(this.obstacleTempTarget);
+      this.renderer.clear();
+    }
+    this.renderer.setRenderTarget(prevTarget);
+    console.log('[obstacle] 清空所有障碍物');
+  }
+
+  /** 读取障碍物像素（诊断用） */
+  readObstaclePixel(x: number, y: number, out: Uint8Array): void {
+    if (!this.obstacleTarget) return;
+    const prevRT = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.obstacleTarget);
+    this.renderer.readRenderTargetPixels(this.obstacleTarget, x, y, 1, 1, out);
+    this.renderer.setRenderTarget(prevRT);
+  }
+
+  /** 创建 obstacleTarget + obstacleTempTarget（懒初始化） */
+  private createObstacleTarget(): void {
+    this.disposeObstacleTarget();
+    const { w, h } = this.config.resolution;
+    const rtOpts: THREE.RenderTargetOptions = {
+      format: THREE.RedFormat,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      wrapS: THREE.ClampToEdgeWrapping,
+      wrapT: THREE.ClampToEdgeWrapping,
+      depthBuffer: false,
+      stencilBuffer: false,
+    };
+    this.obstacleTarget = new THREE.WebGLRenderTarget(w, h, rtOpts);
+    this.obstacleTempTarget = new THREE.WebGLRenderTarget(w, h, rtOpts);
+    // 初始化为全 0（无障碍物）
+    const prevRT = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.obstacleTarget);
+    this.renderer.clear();
+    this.renderer.setRenderTarget(this.obstacleTempTarget);
+    this.renderer.clear();
+    this.renderer.setRenderTarget(prevRT);
+    console.log('[obstacle] 创建 obstacleTarget', { w, h });
+  }
+
+  /** 分辨率变化时重建 obstacleTarget（保留已有内容的简化版 —— 直接清空） */
+  private recreateObstacleTarget(): void {
+    this.createObstacleTarget();
+  }
+
+  /** 确保 obstacleTarget 存在 */
+  private ensureObstacleTarget(): void {
+    if (!this.obstacleTarget) {
+      this.createObstacleTarget();
+    }
+  }
+
+  /** 销毁 obstacleTarget + obstacleTempTarget */
+  private disposeObstacleTarget(): void {
+    if (this.obstacleTarget) {
+      this.obstacleTarget.dispose();
+      this.obstacleTarget = null;
+    }
+    if (this.obstacleTempTarget) {
+      this.obstacleTempTarget.dispose();
+      this.obstacleTempTarget = null;
+    }
+  }
+
+  /** 获取或创建 1×1 空白哑纹理（R=0 表示无障碍物） */
+  private getDummyObstacleTex(): THREE.Texture {
+    if (!this.dummyObstacleTex) {
+      this.dummyObstacleTex = new THREE.DataTexture(
+        new Uint8Array([0]),
+        1, 1, THREE.RedFormat, THREE.UnsignedByteType,
+      );
+      this.dummyObstacleTex.minFilter = THREE.NearestFilter;
+      this.dummyObstacleTex.magFilter = THREE.NearestFilter;
+      this.dummyObstacleTex.needsUpdate = true;
+    }
+    return this.dummyObstacleTex;
   }
 
   /**
@@ -1158,6 +1407,9 @@ export class FluidEditor {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this.disposeObstacleTarget();
+    this.dummyObstacleTex?.dispose();
+    this.dummyObstacleTex = null;
     this.advectionSolver.dispose();
     this.gpu.dispose();
   }
