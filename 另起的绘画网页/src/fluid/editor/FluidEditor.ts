@@ -1212,6 +1212,44 @@ export class FluidEditor {
     this.renderer.setRenderTarget(prevRT);
   }
 
+  /**
+   * 获取墙纹理的位图压缩数据（1 bit / 像素）
+   * @returns 包含位图数据和尺寸的对象，若未启用墙体则返回 null
+   */
+  public getObstacleBitmap(): { data: Uint8Array; width: number; height: number } | null {
+    if (!this.obstacleTarget) {
+      return null;
+    }
+
+    const { w, h } = this.config.resolution;
+    const pixels = new Uint8Array(w * h * 4);
+
+    // 从 GPU 回读墙纹理
+    const prevRT = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.obstacleTarget);
+    this.renderer.readRenderTargetPixels(this.obstacleTarget, 0, 0, w, h, pixels);
+    this.renderer.setRenderTarget(prevRT);
+
+    // 打包为位图（1 bit / 像素）
+    const byteLength = Math.ceil((w * h) / 8);
+    const bitmap = new Uint8Array(byteLength);
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        // R 通道 > 127 表示墙体（0=空，255=墙体）
+        if (pixels[idx] > 127) {
+          const pixelIndex = y * w + x;
+          const byteIndex = Math.floor(pixelIndex / 8);
+          const bitIndex = pixelIndex % 8;
+          bitmap[byteIndex] |= (1 << bitIndex);
+        }
+      }
+    }
+
+    return { data: bitmap, width: w, height: h };
+  }
+
   /** 创建 obstacleTarget + obstacleTempTarget（懒初始化） */
   private createObstacleTarget(): void {
     this.disposeObstacleTarget();

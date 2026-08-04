@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useFluidEditor } from './useFluidEditor';
 import type { ViewMode, FluidEditorConfig } from './FluidEditor';
 import { useAppStore } from '../../stores/useAppStore';
-import { getAdaptiveBlockIndex, getRangeForBlock, unpackRGB565 } from '../../core/ftxCore';
+import { getAdaptiveBlockIndex, getRangeForBlock, unpackRGB565, uint8ToBase64 } from '../../core/ftxCore';
 import { hslToRgb } from '../../utils/colorCompressor';
 
 // ============================================================
@@ -3160,7 +3160,22 @@ export const FluidEditorUI: React.FC = () => {
               })),
               // 网格分辨率（轻量化库建场需要）
               resolution: cfg.resolution,
-            };
+            } as any;
+
+            // ★ 新增：墙纹理导出（位图压缩，1 bit / 像素）
+            if (editor) {
+              const obstacleBitmap = editor.getObstacleBitmap();
+              if (obstacleBitmap) {
+                recipe.obstacle = {
+                  width: obstacleBitmap.width,
+                  height: obstacleBitmap.height,
+                  data: uint8ToBase64(obstacleBitmap.data), // Base64 编码的位图
+                };
+              } else {
+                recipe.obstacle = null; // 未启用墙体
+              }
+            }
+
             const json = JSON.stringify(recipe, null, 2);
             const blob = new Blob([json], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
