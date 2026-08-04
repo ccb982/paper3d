@@ -773,6 +773,9 @@ const GeneralPanel: React.FC<{
   wallBrushRadius: number;
   setWallBrushRadius: (r: number) => void;
   onClearObstacles: () => void;
+  // ★ 持续注入源 UI 可见性开关
+  showInjectionUI: boolean;
+  setShowInjectionUI: (v: boolean) => void;
 }> = (props) => {
   const {
     config,
@@ -788,6 +791,8 @@ const GeneralPanel: React.FC<{
     wallBrushRadius,
     setWallBrushRadius,
     onClearObstacles,
+    showInjectionUI,
+    setShowInjectionUI,
   } = props;
   return (
     <div className="fluid-panel">
@@ -1252,6 +1257,21 @@ const GeneralPanel: React.FC<{
           </div>
         </div>
 
+        {/* ★ 注入源 UI 可见性开关：控制画布上持续注入源的蓝色圆圈+红色箭头是否显示 */}
+        <div className="control-group">
+          <label>画布叠加 UI</label>
+          <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+            <button
+              className={showInjectionUI ? 'active' : ''}
+              onClick={() => setShowInjectionUI(!showInjectionUI)}
+              style={{ flex: 1, padding: '6px 10px', borderRadius: '4px', border: '1px solid #555', background: showInjectionUI ? '#1a3a5c' : 'transparent', color: '#fff', cursor: 'pointer' }}
+              title="切换持续注入源可视化（蓝色圆圈+红色箭头）的显示"
+            >
+              {showInjectionUI ? '👁️ 显示注入源 UI' : '🙈 隐藏注入源 UI'}
+            </button>
+          </div>
+        </div>
+
         {/* ★ 速度场亮度基准值滑块：仅在速度视图下显示。
             值越小，低速区域越亮（1 = 1 px/s 即满亮度，极灵敏）。 */}
         {viewMode === 'velocity' && (
@@ -1616,6 +1636,11 @@ export const FluidEditorUI: React.FC = () => {
   const [velViewMax, setVelViewMax] = useState(200);
   const velViewMaxRef = useRef(velViewMax);
   velViewMaxRef.current = velViewMax;
+
+  // ★ 持续注入源 UI 可见性开关（蓝色圆圈 + 红色箭头），默认显示
+  const [showInjectionUI, setShowInjectionUI] = useState(true);
+  const showInjectionUIRef = useRef(showInjectionUI);
+  showInjectionUIRef.current = showInjectionUI;
 
   // ==================== 辅助函数：双层级比较器 ====================
   /** RGB(0~1) → HSL(0~1) */
@@ -2772,7 +2797,17 @@ export const FluidEditorUI: React.FC = () => {
       }
 
       // ★ 持续注入点可视化：在 overlay canvas 上绘制注入源位置、半径、速度箭头
-      drawContinuousSourcesOverlay();
+      //   受 showInjectionUI 开关控制（用户可隐藏以免遮挡画布）
+      if (showInjectionUIRef.current) {
+        drawContinuousSourcesOverlay();
+      } else {
+        // 隐藏时清空 overlay，避免残留旧绘制
+        const overlay = overlayCanvasRef.current;
+        if (overlay) {
+          const ctx = overlay.getContext('2d');
+          if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
+        }
+      }
       // ★ 摇杆可视化：按下画布时在 overlay canvas 上绘制手柄摇杆
       drawJoystick();
       // ★ 墙体笔刷光标：在 obstacle 视口下显示笔刷位置和大小预览
@@ -3115,6 +3150,8 @@ export const FluidEditorUI: React.FC = () => {
           wallBrushRadius={wallBrushRadius}
           setWallBrushRadius={setWallBrushRadius}
           onClearObstacles={clearObstaclesHandler}
+          showInjectionUI={showInjectionUI}
+          setShowInjectionUI={setShowInjectionUI}
           onExportConfig={() => {
             // ★ 导出流体库物理配方 JSON（五大块），供轻量化无头流体库加载
             //   仅含物理参数 + 持续注入源列表，不含速度场/颜色场数据
