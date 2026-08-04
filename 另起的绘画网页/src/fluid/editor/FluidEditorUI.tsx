@@ -2162,6 +2162,10 @@ export const FluidEditorUI: React.FC = () => {
   const handleRemoveSource = useCallback((id: number) => {
     if (!editor) return;
     editor.removeContinuousInjection(id);
+    // ★ 如果删除的正是正在录制路径的源，自动退出录制模式（否则会卡住所有注入操作）
+    if (recordingWaypointSourceIdRef.current === id) {
+      setRecordingWaypointSourceId(null);
+    }
     refreshSources();
   }, [editor, refreshSources]);
 
@@ -2293,6 +2297,8 @@ export const FluidEditorUI: React.FC = () => {
   const handleClearAllSources = useCallback(() => {
     if (!editor) return;
     editor.clearContinuousInjections();
+    // ★ 清空所有源时也退出路径录制模式
+    setRecordingWaypointSourceId(null);
     refreshSources();
   }, [editor, refreshSources]);
 
@@ -3633,6 +3639,32 @@ export const FluidEditorUI: React.FC = () => {
 
       {/* 视口 */}
       <div className="fluid-viewport">
+        {/* ★ 路径录制浮动按钮：录制激活时显示，一键停止 */}
+        {recordingWaypointSourceId !== null && (
+          <button
+            onClick={() => setRecordingWaypointSourceId(null)}
+            style={{
+              position: 'absolute',
+              top: '8px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 100,
+              padding: '8px 20px',
+              borderRadius: '20px',
+              border: '2px solid #f44336',
+              background: 'rgba(244, 67, 54, 0.9)',
+              color: '#fff',
+              fontSize: '13px',
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
+              animation: 'pulse-rec 1.5s ease-in-out infinite',
+            }}
+            title="停止录制路径"
+          >
+            ⏹ 停止录制 (源 #{recordingWaypointSourceId}) — 已添加航点
+          </button>
+        )}
         <div className="canvas-wrapper">
         <canvas
           ref={displayCanvasRef}
@@ -4553,6 +4585,12 @@ export const FluidEditorUI: React.FC = () => {
           align-items: center;
           justify-content: center;
           overflow: hidden;
+        }
+
+        /* 路径录制按钮脉冲动画 */
+        @keyframes pulse-rec {
+          0%, 100% { opacity: 1; box-shadow: 0 2px 8px rgba(244,67,54,0.4); }
+          50% { opacity: 0.85; box-shadow: 0 2px 16px rgba(244,67,54,0.8); }
         }
 
         /* canvas 包裹层：让 overlay 能绝对定位覆盖 display canvas */
