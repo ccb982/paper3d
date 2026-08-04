@@ -19,6 +19,8 @@ type WaveConfig = {
   phase?: number;      // 弧度
 };
 
+type WaypointMode = 'forward' | 'backward' | 'pingpong';
+
 type ContinuousSourceSnapshot = {
   id: number;
   position: { x: number; y: number };
@@ -28,6 +30,9 @@ type ContinuousSourceSnapshot = {
   rate: number;
   enabled: boolean;
   wave?: WaveConfig;
+  waypoints?: { x: number; y: number }[];
+  waypointMode?: WaypointMode;
+  waypointSpeed?: number;
 };
 
 // ★ 爆发倍率：单次注入（非持续模式）瞬间放大速度，冲破重力束缚
@@ -62,6 +67,13 @@ const OperationsPanel: React.FC<{
   onHighlightSource: (id: number) => void;
   // ★ 更新源的波形参数
   onUpdateSourceWave: (id: number, wave: WaveConfig) => void;
+  // ★ 路径点控制
+  recordingWaypointSourceId: number | null;
+  onStartWaypointRecording: (id: number) => void;
+  onStopWaypointRecording: () => void;
+  onClearWaypoints: (id: number) => void;
+  onUpdateWaypointMode: (id: number, mode: WaypointMode) => void;
+  onUpdateWaypointSpeed: (id: number, speed: number) => void;
   // ★ 手动暂停/恢复持续注入（不影响源队列，也不受持续模式开关影响）
   continuousPaused: boolean;
   onTogglePaused: () => void;
@@ -88,6 +100,12 @@ const OperationsPanel: React.FC<{
   onClearAllSources,
   onHighlightSource,
   onUpdateSourceWave,
+  recordingWaypointSourceId,
+  onStartWaypointRecording,
+  onStopWaypointRecording,
+  onClearWaypoints,
+  onUpdateWaypointMode,
+  onUpdateWaypointSpeed,
   continuousPaused,
   onTogglePaused,
 }) => {
@@ -778,6 +796,71 @@ const OperationsPanel: React.FC<{
                             />
                             <span style={{ width: '40px', textAlign: 'right', color: '#999' }}>{wave.frequency.toFixed(1)} Hz</span>
                           </div>
+                        </div>
+                      )}
+
+                      {/* ★ 路径点控制面板（展开时显示） */}
+                      {isExpanded && (
+                        <div style={{ padding: '6px 8px 8px 20px', background: '#f5f0ff', fontSize: '10px', borderTop: '1px dashed #d1c4e9' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: 'bold', color: '#5e35b1' }}>📍 路径巡游</span>
+                            <span style={{ color: '#999' }}>
+                              {src.waypoints && src.waypoints.length > 0 ? `${src.waypoints.length} 个航点` : '未设置'}
+                            </span>
+                          </div>
+                          {/* 录制/停止录制按钮 */}
+                          <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
+                            {recordingWaypointSourceId === src.id ? (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onStopWaypointRecording(); }}
+                                style={{ flex: 1, padding: '4px', borderRadius: '3px', border: '1px solid #f44336', background: '#ffebee', color: '#c62828', cursor: 'pointer', fontSize: '10px' }}
+                              >
+                                ⏹ 停止录制（点击画布添加点）
+                              </button>
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onStartWaypointRecording(src.id); }}
+                                style={{ flex: 1, padding: '4px', borderRadius: '3px', border: '1px solid #7e57c2', background: '#ede7f6', color: '#4527a0', cursor: 'pointer', fontSize: '10px' }}
+                              >
+                                🔴 录制路径
+                              </button>
+                            )}
+                            {src.waypoints && src.waypoints.length > 0 && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onClearWaypoints(src.id); }}
+                                style={{ padding: '4px 8px', borderRadius: '3px', border: '1px solid #999', background: 'transparent', color: '#666', cursor: 'pointer', fontSize: '10px' }}
+                              >
+                                清空
+                              </button>
+                            )}
+                          </div>
+                          {/* 模式选择 */}
+                          {src.waypoints && src.waypoints.length >= 2 && (
+                            <>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                                <label style={{ width: '50px', color: '#666' }}>模式</label>
+                                <select
+                                  value={src.waypointMode || 'forward'}
+                                  onChange={(e) => onUpdateWaypointMode(src.id, e.target.value as WaypointMode)}
+                                  style={{ flex: 1, fontSize: '10px', padding: '2px', borderRadius: '3px', border: '1px solid #ccc' }}
+                                >
+                                  <option value="forward">正序循环 →→→</option>
+                                  <option value="backward">逆序循环 ←←←</option>
+                                  <option value="pingpong">往返 ↔↔↔</option>
+                                </select>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <label style={{ width: '50px', color: '#666' }}>速度</label>
+                                <input
+                                  type="range" min={0.1} max={5} step={0.1}
+                                  value={src.waypointSpeed ?? 1.0}
+                                  onChange={(e) => onUpdateWaypointSpeed(src.id, parseFloat(e.target.value))}
+                                  style={{ flex: 1 }}
+                                />
+                                <span style={{ width: '50px', textAlign: 'right', color: '#999' }}>{(src.waypointSpeed ?? 1.0).toFixed(1)} /s</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1963,6 +2046,12 @@ export const FluidEditorUI: React.FC = () => {
   const handlePointerDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = displayCanvasRef.current;
     if (!canvas || !editor) return;
+
+    // ★ 路径录制模式：拦截所有鼠标按下，不激活摇杆（航点通过 onClick 添加）
+    if (recordingWaypointSourceIdRef.current !== null) {
+      return;
+    }
+
     const rect = canvas.getBoundingClientRect();
     const normX = (e.clientX - rect.left) / rect.width;
     const normY = (e.clientY - rect.top) / rect.height;
@@ -2091,6 +2180,111 @@ export const FluidEditorUI: React.FC = () => {
       velocity: src.velocity,
       color: src.color,
       wave,
+      waypoints: src.waypoints,
+      waypointMode: src.waypointMode,
+      waypointSpeed: src.waypointSpeed,
+    });
+    refreshSources();
+  }, [editor, refreshSources]);
+
+  // ★ ========== 路径点（Waypoint）控制 ==========
+  const [recordingWaypointSourceId, setRecordingWaypointSourceId] = useState<number | null>(null);
+  const recordingWaypointSourceIdRef = useRef<number | null>(null);
+  recordingWaypointSourceIdRef.current = recordingWaypointSourceId;
+
+  // 开始录制：进入路径录制模式，后续画布点击将添加航点
+  const handleStartWaypointRecording = useCallback((id: number) => {
+    setRecordingWaypointSourceId(id);
+  }, []);
+
+  // 停止录制
+  const handleStopWaypointRecording = useCallback(() => {
+    setRecordingWaypointSourceId(null);
+  }, []);
+
+  // 画布点击添加航点（由 onClick 调用）
+  const handleAddWaypoint = useCallback((point: { x: number; y: number }) => {
+    const id = recordingWaypointSourceIdRef.current;
+    if (id === null || !editor) return;
+    const sources = editor.getContinuousSources();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    const currentWps = src.waypoints ? [...src.waypoints] : [];
+    currentWps.push({ x: point.x, y: point.y });
+    editor.updateContinuousInjection(id, {
+      enabled: src.enabled,
+      position: src.position,
+      radius: src.radius,
+      rate: src.rate,
+      velocity: src.velocity,
+      color: src.color,
+      wave: src.wave,
+      waypoints: currentWps,
+      waypointMode: src.waypointMode || 'forward',
+      waypointSpeed: src.waypointSpeed ?? 1.0,
+    });
+    refreshSources();
+  }, [editor, refreshSources]);
+
+  // 清空航点
+  const handleClearWaypoints = useCallback((id: number) => {
+    if (!editor) return;
+    const sources = editor.getContinuousSources();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    editor.updateContinuousInjection(id, {
+      enabled: src.enabled,
+      position: src.position,
+      radius: src.radius,
+      rate: src.rate,
+      velocity: src.velocity,
+      color: src.color,
+      wave: src.wave,
+      waypoints: undefined,
+      waypointMode: undefined,
+      waypointSpeed: undefined,
+    });
+    refreshSources();
+  }, [editor, refreshSources]);
+
+  // 更新路径模式
+  const handleUpdateWaypointMode = useCallback((id: number, mode: WaypointMode) => {
+    if (!editor) return;
+    const sources = editor.getContinuousSources();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    editor.updateContinuousInjection(id, {
+      enabled: src.enabled,
+      position: src.position,
+      radius: src.radius,
+      rate: src.rate,
+      velocity: src.velocity,
+      color: src.color,
+      wave: src.wave,
+      waypoints: src.waypoints,
+      waypointMode: mode,
+      waypointSpeed: src.waypointSpeed ?? 1.0,
+    });
+    refreshSources();
+  }, [editor, refreshSources]);
+
+  // 更新路径速度
+  const handleUpdateWaypointSpeed = useCallback((id: number, speed: number) => {
+    if (!editor) return;
+    const sources = editor.getContinuousSources();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    editor.updateContinuousInjection(id, {
+      enabled: src.enabled,
+      position: src.position,
+      radius: src.radius,
+      rate: src.rate,
+      velocity: src.velocity,
+      color: src.color,
+      wave: src.wave,
+      waypoints: src.waypoints,
+      waypointMode: src.waypointMode || 'forward',
+      waypointSpeed: speed,
     });
     refreshSources();
   }, [editor, refreshSources]);
@@ -2615,6 +2809,46 @@ export const FluidEditorUI: React.FC = () => {
         const labelY = cy - 8;
         ctx.strokeText(label, labelX, labelY);
         ctx.fillText(label, labelX, labelY);
+
+        // 5. ★ 路径点可视化：绘制航点连线 + 编号点
+        const wps = src.waypoints;
+        if (wps && wps.length > 0) {
+          const mode = src.waypointMode || 'forward';
+          // 绘制连线（虚线）
+          ctx.beginPath();
+          ctx.setLineDash([5, 5]);
+          ctx.strokeStyle = 'rgba(255, 235, 59, 0.7)';
+          ctx.lineWidth = 1.5;
+          for (let i = 0; i < wps.length; i++) {
+            const wx = wps[i].x * overlay.width;
+            const wy = wps[i].y * overlay.height;
+            if (i === 0) ctx.moveTo(wx, wy);
+            else ctx.lineTo(wx, wy);
+          }
+          // 正序/逆序模式闭合路径
+          if (mode === 'forward' || mode === 'backward') {
+            ctx.lineTo(wps[0].x * overlay.width, wps[0].y * overlay.height);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // 绘制航点（编号圆点）
+          for (let i = 0; i < wps.length; i++) {
+            const wx = wps[i].x * overlay.width;
+            const wy = wps[i].y * overlay.height;
+            ctx.beginPath();
+            ctx.arc(wx, wy, 5, 0, Math.PI * 2);
+            ctx.fillStyle = i === 0 ? '#4caf50' : '#ffeb3b';
+            ctx.fill();
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            // 编号
+            ctx.fillStyle = '#333';
+            ctx.font = 'bold 9px monospace';
+            ctx.fillText(`${i + 1}`, wx - 3, wy + 3);
+          }
+        }
       }
     };
 
@@ -2864,7 +3098,8 @@ export const FluidEditorUI: React.FC = () => {
 
       // ★ 持续注入点可视化：在 overlay canvas 上绘制注入源位置、半径、速度箭头
       //   受 showInjectionUI 开关控制（用户可隐藏以免遮挡画布）
-      if (showInjectionUIRef.current) {
+      //   路径录制模式下强制显示（用户需要看到已添加的航点）
+      if (showInjectionUIRef.current || recordingWaypointSourceIdRef.current !== null) {
         drawContinuousSourcesOverlay();
       } else {
         // 隐藏时清空 overlay，避免残留旧绘制
@@ -3237,6 +3472,12 @@ export const FluidEditorUI: React.FC = () => {
           onClearAllSources={handleClearAllSources}
           onHighlightSource={handleHighlightSource}
           onUpdateSourceWave={handleUpdateSourceWave}
+          recordingWaypointSourceId={recordingWaypointSourceId}
+          onStartWaypointRecording={handleStartWaypointRecording}
+          onStopWaypointRecording={handleStopWaypointRecording}
+          onClearWaypoints={handleClearWaypoints}
+          onUpdateWaypointMode={handleUpdateWaypointMode}
+          onUpdateWaypointSpeed={handleUpdateWaypointSpeed}
           continuousPaused={continuousPaused}
           onTogglePaused={handleTogglePaused}
         />
@@ -3322,6 +3563,9 @@ export const FluidEditorUI: React.FC = () => {
                 velocity: s.velocity,
                 color: s.color,
                 wave: s.wave,
+                waypoints: s.waypoints,
+                waypointMode: s.waypointMode,
+                waypointSpeed: s.waypointSpeed,
               })),
               // 网格分辨率（轻量化库建场需要）
               resolution: cfg.resolution,
@@ -3418,6 +3662,12 @@ export const FluidEditorUI: React.FC = () => {
             // 计算归一化坐标 (0~1, Y 向下)
             const normX = cssX / rect.width;
             const normY = cssY / rect.height;
+
+            // ★ 路径录制模式：优先拦截，点击画布添加航点
+            if (recordingWaypointSourceIdRef.current !== null) {
+              handleAddWaypoint({ x: normX, y: normY });
+              return;
+            }
 
             // ★ 根据注入模式执行注入
             if (injectMode === 'stamp') {

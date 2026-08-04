@@ -49,6 +49,20 @@ export interface InjectionConfig {
     frequency: number;   // Hz，摆动频率
     phase?: number;      // 初始相位（弧度），默认 0
   };
+  /**
+   * ★ 路径点列表：注入源将按顺序在这些点之间移动。
+   * 若提供此数组且长度 >= 2，则覆盖静态 position，源会巡游。
+   */
+  waypoints?: { x: number; y: number }[];
+  /**
+   * 路径移动模式：
+   * - 'forward'：正向循环 (0->1->...->n-1->0)
+   * - 'backward'：反向循环 (n-1->...->0->n-1)
+   * - 'pingpong'：往返 (0->1->...->n-1->...->0->...)
+   */
+  waypointMode?: 'forward' | 'backward' | 'pingpong';
+  /** 移动速度（航点/秒），默认 1.0 */
+  waypointSpeed?: number;
 }
 
 /** 漩涡参数 */
@@ -113,6 +127,17 @@ export class FluidOperations {
   /** 持续注入源列表（每帧都会执行，直到被移除） */
   private continuousSources: { id: number; config: InjectionConfig }[] = [];
   private nextSourceId = 1;
+
+  /**
+   * ★ 路径点运行时状态：记录每个源的当前逻辑步进、段内进度、插值位置。
+   * key = sourceId，仅在源配置了 waypoints 时使用。
+   */
+  private waypointStates: Map<number, {
+    logicalStep: number;
+    progress: number;
+    currentPosition: { x: number; y: number };
+    lastWaypointCount: number;
+  }> = new Map();
 
   /**
    * 持续注入总开关。
@@ -222,11 +247,13 @@ export class FluidOperations {
    */
   public removeContinuousSource(id: number): void {
     this.continuousSources = this.continuousSources.filter(s => s.id !== id);
+    this.waypointStates.delete(id);
   }
 
   /** 清除所有持续注入源 */
   public clearContinuousSources(): void {
     this.continuousSources = [];
+    this.waypointStates.clear();
   }
 
   /**
@@ -258,17 +285,31 @@ export class FluidOperations {
     rate: number;
     enabled: boolean;
     wave?: InjectionConfig['wave'];
+    waypoints?: { x: number; y: number }[];
+    waypointMode?: 'forward' | 'backward' | 'pingpong';
+    waypointSpeed?: number;
   }[] {
-    return this.continuousSources.map(s => ({
-      id: s.id,
-      position: { ...s.config.position },
-      radius: s.config.radius,
-      velocity: { ...s.config.velocity },
-      color: [...s.config.color] as [number, number, number, number],
-      rate: s.config.rate,
-      enabled: s.config.enabled,
-      wave: s.config.wave ? { ...s.config.wave } : undefined,
-    }));
+    return this.continuousSources.map(s => {
+      // 若启用了路径点，返回插值后的当前位置（而非静态 position）
+      const wps = s.config.waypoints;
+      const wpState = wps && wps.length >= 2 ? this.waypointStates.get(s.id) : undefined;
+      const position = wpState
+        ? { ...wpState.currentPosition }
+        : { ...s.config.position };
+      return {
+        id: s.id,
+        position,
+        radius: s.config.radius,
+        velocity: { ...s.config.velocity },
+        color: [...s.config.color] as [number, number, number, number],
+        rate: s.config.rate,
+        enabled: s.config.enabled,
+        wave: s.config.wave ? { ...s.config.wave } : undefined,
+        waypoints: wps ? wps.map(p => ({ ...p })) : undefined,
+        waypointMode: s.config.waypointMode,
+        waypointSpeed: s.config.waypointSpeed,
+      };
+    });
   }
 
   /**
@@ -293,18 +334,78 @@ export class FluidOperations {
 
     for (const src of this.continuousSources) {
       let config = src.config;
-      // ★ 波形控制：若启用 wave，用 sin 函数旋转基础速度方向
+
+      // ========== ★ 路径点插值：覆盖 position ===========
+      const waypoints = config.waypoints;
+      if (waypoints && waypoints.length >= 2) {
+        const mode = config.waypointMode || 'forward';
+        const speed = config.waypointSpeed ?? 1.0;
+        const total = waypoints.length;
+
+        // 获取或初始化运行时状态
+        let state = this.waypointStates.get(src.id);
+        if (!state || state.lastWaypointCount !== total) {
+          // 首次或航点数变化时重置
+          const startPos = mode === 'backward' ? waypoints[total - 1] : waypoints[0];
+          state = {
+            logicalStep: 0,
+            progress: 0,
+            currentPosition: { ...startPos },
+            lastWaypointCount: total,
+          };
+          this.waypointStates.set(src.id, state);
+        }
+
+        // 推进进度
+        state.progress += dt * speed;
+        while (state.progress >= 1.0) {
+          state.progress -= 1.0;
+          state.logicalStep++;
+        }
+
+        // 根据模式计算当前段的起止索引
+        let idx0: number, idx1: number;
+        if (mode === 'forward') {
+          idx0 = ((state.logicalStep % total) + total) % total;
+          idx1 = (idx0 + 1) % total;
+        } else if (mode === 'backward') {
+          idx0 = total - 1 - ((state.logicalStep % total) + total) % total;
+          idx1 = total - 1 - (((state.logicalStep + 1) % total) + total) % total;
+        } else { // pingpong
+          const cycle = total > 1 ? (total - 1) * 2 : 1;
+          const pos = ((state.logicalStep % cycle) + cycle) % cycle;
+          if (pos < total - 1) {
+            idx0 = pos;
+            idx1 = pos + 1;
+          } else {
+            const rev = cycle - pos; // total-1 → 0
+            idx0 = rev;
+            idx1 = Math.max(0, rev - 1);
+          }
+        }
+
+        const p0 = waypoints[idx0];
+        const p1 = waypoints[idx1];
+        const t = state.progress;
+        state.currentPosition = {
+          x: p0.x + (p1.x - p0.x) * t,
+          y: p0.y + (p1.y - p0.y) * t,
+        };
+
+        // 用插值位置覆盖静态 position
+        config = { ...config, position: { ...state.currentPosition } };
+      }
+
+      // ========== 波形控制：旋转速度方向 ==========
       if (config.wave?.enabled) {
         const { amplitude, frequency, phase = 0 } = config.wave;
         const angle = amplitude * Math.sin(2 * Math.PI * frequency * time + phase);
-        // 提取基础方向和速度大小
         const baseAngle = Math.atan2(config.velocity.y, config.velocity.x);
-        const speed = Math.hypot(config.velocity.x, config.velocity.y);
+        const speedMag = Math.hypot(config.velocity.x, config.velocity.y);
         const newAngle = baseAngle + angle;
-        // 复制配置，替换速度方向（大小不变）
         config = {
           ...config,
-          velocity: { x: speed * Math.cos(newAngle), y: speed * Math.sin(newAngle) },
+          velocity: { x: speedMag * Math.cos(newAngle), y: speedMag * Math.sin(newAngle) },
         };
       }
       this.applyInjection(gridColor, gridVelocity, dt, config, gridDensity);
