@@ -423,7 +423,7 @@ export class FluidEditor {
     }
 
     // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
-    this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt, _gridDensity);
+    this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt, _gridDensity, this.time);
 
     // 2. 平流（非注入 Pass，直接使用 this.gpu）
     if (this.config.enableAdvection) {

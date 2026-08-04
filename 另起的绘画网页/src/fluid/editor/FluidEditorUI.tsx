@@ -12,6 +12,13 @@ import { hslToRgb } from '../../utils/colorCompressor';
 type InjectMode = 'water' | 'color' | 'velocity' | 'stamp';
 
 // 持续注入源快照类型
+type WaveConfig = {
+  enabled: boolean;
+  amplitude: number;   // 弧度
+  frequency: number;   // Hz
+  phase?: number;      // 弧度
+};
+
 type ContinuousSourceSnapshot = {
   id: number;
   position: { x: number; y: number };
@@ -20,6 +27,7 @@ type ContinuousSourceSnapshot = {
   color: [number, number, number, number];
   rate: number;
   enabled: boolean;
+  wave?: WaveConfig;
 };
 
 // ★ 爆发倍率：单次注入（非持续模式）瞬间放大速度，冲破重力束缚
@@ -52,6 +60,8 @@ const OperationsPanel: React.FC<{
   onClearAllSources: () => void;
   // ★ 点击列表项时高亮画布上对应的源
   onHighlightSource: (id: number) => void;
+  // ★ 更新源的波形参数
+  onUpdateSourceWave: (id: number, wave: WaveConfig) => void;
   // ★ 手动暂停/恢复持续注入（不影响源队列，也不受持续模式开关影响）
   continuousPaused: boolean;
   onTogglePaused: () => void;
@@ -77,6 +87,7 @@ const OperationsPanel: React.FC<{
   onRemoveSource,
   onClearAllSources,
   onHighlightSource,
+  onUpdateSourceWave,
   continuousPaused,
   onTogglePaused,
 }) => {
@@ -88,6 +99,9 @@ const OperationsPanel: React.FC<{
   ];
 
   const currentMode = modes.find((m) => m.key === injectMode)!;
+
+  // ★ 源列表展开状态：记录当前展开的源 ID（null = 全部折叠）
+  const [expandedSourceId, setExpandedSourceId] = useState<number | null>(null);
 
   // ★ 全局力（原重力）摇杆：方向 + 大小，替换旧的标量重力输入
   const joystickCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -681,75 +695,91 @@ const OperationsPanel: React.FC<{
                   const [h, s, l] = src.color;
                   const rgbPreview = hslToRgb(h, s, l);
                   const previewColor = `rgb(${Math.round(rgbPreview.r * 255)}, ${Math.round(rgbPreview.g * 255)}, ${Math.round(rgbPreview.b * 255)})`;
+                  const isExpanded = expandedSourceId === src.id;
+                  const wave = src.wave ?? { enabled: false, amplitude: 0.3, frequency: 1.0 };
                   return (
                     <div
                       key={src.id}
-                      onClick={() => onHighlightSource(src.id)}
                       style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        fontSize: '10px',
-                        padding: '4px 6px',
                         borderBottom: '1px solid #f0f0f0',
-                        gap: '6px',
-                        cursor: 'pointer',
-                        transition: 'background 0.15s',
                       }}
-                      onMouseEnter={(e) => { e.currentTarget.style.background = '#e3f2fd'; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.background = ''; }}
-                      title={`点击高亮画布上的此源 | 位置: (${src.position.x.toFixed(2)}, ${src.position.y.toFixed(2)})\n半径: ${src.radius.toFixed(2)}\n速率: ${src.rate.toFixed(2)}\n速度: ${speed.toFixed(0)} px/s`}
                     >
-                      {/* 颜色预览点 + 源信息 */}
                       <div
+                        onClick={() => onHighlightSource(src.id)}
                         style={{
                           display: 'flex',
+                          justifyContent: 'space-between',
                           alignItems: 'center',
+                          fontSize: '10px',
+                          padding: '4px 6px',
                           gap: '6px',
-                          flex: 1,
-                          minWidth: 0,
-                        }}
-                      >
-                        {/* 颜色预览圆点 */}
-                        <div
-                          style={{
-                            width: '10px',
-                            height: '10px',
-                            borderRadius: '50%',
-                            background: previewColor,
-                            border: '1px solid #ccc',
-                            flexShrink: 0,
-                          }}
-                        />
-                        <span
-                          style={{
-                            color: '#555',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }}
-                          title={`位置: (${src.position.x.toFixed(2)}, ${src.position.y.toFixed(2)})\n半径: ${src.radius.toFixed(2)}\n速率: ${src.rate.toFixed(2)}\n速度: ${speed.toFixed(0)} px/s`}
-                        >
-                          #{src.id} ({src.position.x.toFixed(2)}, {src.position.y.toFixed(2)}) r={src.radius.toFixed(2)} v={speed.toFixed(0)}
-                        </span>
-                      </div>
-                      {/* 删除按钮 */}
-                      <button
-                      onClick={(e) => { e.stopPropagation(); onRemoveSource(src.id); }}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#f44336',
                           cursor: 'pointer',
-                          fontSize: '12px',
-                          padding: '0 2px',
-                          lineHeight: 1,
-                          flexShrink: 0,
+                          transition: 'background 0.15s',
                         }}
-                        title="删除此源"
+                        onMouseEnter={(e) => { e.currentTarget.style.background = '#e3f2fd'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = ''; }}
+                        title={`点击高亮画布上的此源 | 位置: (${src.position.x.toFixed(2)}, ${src.position.y.toFixed(2)})\n半径: ${src.radius.toFixed(2)}\n速率: ${src.rate.toFixed(2)}\n速度: ${speed.toFixed(0)} px/s`}
                       >
-                        ✕
-                      </button>
+                        {/* 颜色预览点 + 源信息 */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0 }}>
+                          <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: previewColor, border: '1px solid #ccc', flexShrink: 0 }} />
+                          <span style={{ color: '#555', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            #{src.id} ({src.position.x.toFixed(2)}, {src.position.y.toFixed(2)}) r={src.radius.toFixed(2)} v={speed.toFixed(0)}
+                            {wave.enabled && <span style={{ color: '#7e57c2', fontWeight: 'bold' }}> 〰</span>}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '2px', alignItems: 'center', flexShrink: 0 }}>
+                          {/* 展开/折叠波形设置按钮 */}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setExpandedSourceId(isExpanded ? null : src.id); }}
+                            style={{ background: 'none', border: 'none', color: isExpanded ? '#7e57c2' : '#999', cursor: 'pointer', fontSize: '12px', padding: '0 2px', lineHeight: 1 }}
+                            title={isExpanded ? '收起波形设置' : '展开波形设置'}
+                          >
+                            {isExpanded ? '▼' : '⚙'}
+                          </button>
+                          {/* 删除按钮 */}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onRemoveSource(src.id); }}
+                            style={{ background: 'none', border: 'none', color: '#f44336', cursor: 'pointer', fontSize: '12px', padding: '0 2px', lineHeight: 1 }}
+                            title="删除此源"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                      {/* ★ 波形控制面板（展开时显示） */}
+                      {isExpanded && (
+                        <div style={{ padding: '6px 8px 8px 20px', background: '#fafafa', fontSize: '10px' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                            <input
+                              type="checkbox"
+                              checked={wave.enabled}
+                              onChange={(e) => onUpdateSourceWave(src.id, { ...wave, enabled: e.target.checked })}
+                            />
+                            <span style={{ fontWeight: 'bold', color: '#7e57c2' }}>〰 波形摆动（sin）</span>
+                          </label>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                            <label style={{ width: '50px', color: '#666' }}>幅度</label>
+                            <input
+                              type="range" min={0} max={3.14} step={0.01}
+                              value={wave.amplitude}
+                              onChange={(e) => onUpdateSourceWave(src.id, { ...wave, amplitude: parseFloat(e.target.value) })}
+                              style={{ flex: 1 }}
+                            />
+                            <span style={{ width: '40px', textAlign: 'right', color: '#999' }}>{wave.amplitude.toFixed(2)} rad</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <label style={{ width: '50px', color: '#666' }}>频率</label>
+                            <input
+                              type="range" min={0.1} max={5} step={0.1}
+                              value={wave.frequency}
+                              onChange={(e) => onUpdateSourceWave(src.id, { ...wave, frequency: parseFloat(e.target.value) })}
+                              style={{ flex: 1 }}
+                            />
+                            <span style={{ width: '40px', textAlign: 'right', color: '#999' }}>{wave.frequency.toFixed(1)} Hz</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -2046,6 +2076,25 @@ export const FluidEditorUI: React.FC = () => {
     refreshSources();
   }, [editor, refreshSources]);
 
+  // ★ 更新源的波形参数（不改变位置/速度/颜色等基础属性）
+  const handleUpdateSourceWave = useCallback((id: number, wave: WaveConfig) => {
+    if (!editor) return;
+    const sources = editor.getContinuousSources();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    // 保留原有配置，仅更新 wave 字段
+    editor.updateContinuousInjection(id, {
+      enabled: src.enabled,
+      position: src.position,
+      radius: src.radius,
+      rate: src.rate,
+      velocity: src.velocity,
+      color: src.color,
+      wave,
+    });
+    refreshSources();
+  }, [editor, refreshSources]);
+
   // ★ 清空所有持续注入源
   const handleClearAllSources = useCallback(() => {
     if (!editor) return;
@@ -3187,6 +3236,7 @@ export const FluidEditorUI: React.FC = () => {
           onRemoveSource={handleRemoveSource}
           onClearAllSources={handleClearAllSources}
           onHighlightSource={handleHighlightSource}
+          onUpdateSourceWave={handleUpdateSourceWave}
           continuousPaused={continuousPaused}
           onTogglePaused={handleTogglePaused}
         />
@@ -3271,6 +3321,7 @@ export const FluidEditorUI: React.FC = () => {
                 rate: s.rate,
                 velocity: s.velocity,
                 color: s.color,
+                wave: s.wave,
               })),
               // 网格分辨率（轻量化库建场需要）
               resolution: cfg.resolution,

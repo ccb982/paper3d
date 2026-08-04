@@ -39,6 +39,16 @@ export interface InjectionConfig {
    * 不提供（undefined）时跳过 density 注入，兼容 vector 模式。
    */
   density?: number;
+  /**
+   * ★ 波形控制：用复变函数（sin）驱动方向向量旋转。
+   * 启用后注入速度方向会按正弦规律左右摆动，保留速度大小不变。
+   */
+  wave?: {
+    enabled: boolean;
+    amplitude: number;   // 弧度，最大偏移角（0~π/2）
+    frequency: number;   // Hz，摆动频率
+    phase?: number;      // 初始相位（弧度），默认 0
+  };
 }
 
 /** 漩涡参数 */
@@ -247,6 +257,7 @@ export class FluidOperations {
     color: [number, number, number, number];
     rate: number;
     enabled: boolean;
+    wave?: InjectionConfig['wave'];
   }[] {
     return this.continuousSources.map(s => ({
       id: s.id,
@@ -256,6 +267,7 @@ export class FluidOperations {
       color: [...s.config.color] as [number, number, number, number],
       rate: s.config.rate,
       enabled: s.config.enabled,
+      wave: s.config.wave ? { ...s.config.wave } : undefined,
     }));
   }
 
@@ -266,19 +278,36 @@ export class FluidOperations {
    * @param gridVelocity 速度网格
    * @param dt 时间步长（秒）
    * @param gridDensity density 网格（MCSDA scalar 模式传入，vector 模式传 null）
+   * @param time 当前模拟时间（秒），用于波形驱动的方向旋转
    */
   public processContinuousSources(
     gridColor: FluidGrid,
     gridVelocity: FluidGrid,
     dt: number,
     gridDensity: FluidGrid | null = null,
+    time: number = 0,
   ): void {
     // 总开关关闭时暂停所有持续注入源（但保留源列表，重新开启后自动恢复）
     if (!this.continuousInjectionEnabled) return;
     if (this.continuousSources.length === 0) return;
 
     for (const src of this.continuousSources) {
-      this.applyInjection(gridColor, gridVelocity, dt, src.config, gridDensity);
+      let config = src.config;
+      // ★ 波形控制：若启用 wave，用 sin 函数旋转基础速度方向
+      if (config.wave?.enabled) {
+        const { amplitude, frequency, phase = 0 } = config.wave;
+        const angle = amplitude * Math.sin(2 * Math.PI * frequency * time + phase);
+        // 提取基础方向和速度大小
+        const baseAngle = Math.atan2(config.velocity.y, config.velocity.x);
+        const speed = Math.hypot(config.velocity.x, config.velocity.y);
+        const newAngle = baseAngle + angle;
+        // 复制配置，替换速度方向（大小不变）
+        config = {
+          ...config,
+          velocity: { x: speed * Math.cos(newAngle), y: speed * Math.sin(newAngle) },
+        };
+      }
+      this.applyInjection(gridColor, gridVelocity, dt, config, gridDensity);
     }
   }
 
