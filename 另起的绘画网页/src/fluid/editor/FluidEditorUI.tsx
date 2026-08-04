@@ -50,6 +50,8 @@ const OperationsPanel: React.FC<{
   sources: ContinuousSourceSnapshot[];
   onRemoveSource: (id: number) => void;
   onClearAllSources: () => void;
+  // ★ 点击列表项时高亮画布上对应的源
+  onHighlightSource: (id: number) => void;
   // ★ 手动暂停/恢复持续注入（不影响源队列，也不受持续模式开关影响）
   continuousPaused: boolean;
   onTogglePaused: () => void;
@@ -74,6 +76,7 @@ const OperationsPanel: React.FC<{
   sources,
   onRemoveSource,
   onClearAllSources,
+  onHighlightSource,
   continuousPaused,
   onTogglePaused,
 }) => {
@@ -681,6 +684,7 @@ const OperationsPanel: React.FC<{
                   return (
                     <div
                       key={src.id}
+                      onClick={() => onHighlightSource(src.id)}
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
@@ -689,7 +693,12 @@ const OperationsPanel: React.FC<{
                         padding: '4px 6px',
                         borderBottom: '1px solid #f0f0f0',
                         gap: '6px',
+                        cursor: 'pointer',
+                        transition: 'background 0.15s',
                       }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = '#e3f2fd'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = ''; }}
+                      title={`点击高亮画布上的此源 | 位置: (${src.position.x.toFixed(2)}, ${src.position.y.toFixed(2)})\n半径: ${src.radius.toFixed(2)}\n速率: ${src.rate.toFixed(2)}\n速度: ${speed.toFixed(0)} px/s`}
                     >
                       {/* 颜色预览点 + 源信息 */}
                       <div
@@ -726,7 +735,7 @@ const OperationsPanel: React.FC<{
                       </div>
                       {/* 删除按钮 */}
                       <button
-                        onClick={() => onRemoveSource(src.id)}
+                      onClick={(e) => { e.stopPropagation(); onRemoveSource(src.id); }}
                         style={{
                           background: 'none',
                           border: 'none',
@@ -1641,6 +1650,14 @@ export const FluidEditorUI: React.FC = () => {
   const [showInjectionUI, setShowInjectionUI] = useState(true);
   const showInjectionUIRef = useRef(showInjectionUI);
   showInjectionUIRef.current = showInjectionUI;
+
+  // ★ 注入源高亮：点击列表项时在画布上脉冲高亮对应源（不受 showInjectionUI 影响）
+  const highlightedSourceIdRef = useRef<number | null>(null);
+  const highlightExpireRef = useRef<number>(0);
+  const handleHighlightSource = useCallback((id: number) => {
+    highlightedSourceIdRef.current = id;
+    highlightExpireRef.current = performance.now() + 2500; // 高亮 2.5 秒
+  }, []);
 
   // ==================== 辅助函数：双层级比较器 ====================
   /** RGB(0~1) → HSL(0~1) */
@@ -2808,6 +2825,65 @@ export const FluidEditorUI: React.FC = () => {
           if (ctx) ctx.clearRect(0, 0, overlay.width, overlay.height);
         }
       }
+
+      // ★ 注入源高亮：点击列表项后在画布上脉冲高亮对应源（不受 showInjectionUI 影响）
+      const now = performance.now();
+      const hlId = highlightedSourceIdRef.current;
+      if (hlId !== null && now < highlightExpireRef.current) {
+        const overlay = overlayCanvasRef.current;
+        const display = displayCanvasRef.current;
+        if (overlay && display) {
+          const rect = display.getBoundingClientRect();
+          const cssW = rect.width;
+          const cssH = rect.height;
+          if (overlay.width !== Math.round(cssW) || overlay.height !== Math.round(cssH)) {
+            overlay.width = Math.round(cssW);
+            overlay.height = Math.round(cssH);
+            overlay.style.width = `${cssW}px`;
+            overlay.style.height = `${cssH}px`;
+          }
+          const ctx = overlay.getContext('2d');
+          if (ctx) {
+            const sources = editor.getContinuousSources();
+            const src = sources.find(s => s.id === hlId);
+            if (src) {
+              const cx = src.position.x * overlay.width;
+              const cy = src.position.y * overlay.height;
+              const r = src.radius * Math.min(overlay.width, overlay.height);
+              // 脉冲动画：剩余时间占比 → 透明度+缩放
+              const remain = (highlightExpireRef.current - now) / 2500; // 1→0
+              const pulse = 0.5 + 0.5 * Math.sin(now * 0.012); // 0~1 脉冲
+              const alpha = remain * (0.4 + 0.4 * pulse);
+              const expandR = r * (1.3 + 0.3 * pulse);
+              // 外圈脉冲环
+              ctx.beginPath();
+              ctx.arc(cx, cy, expandR, 0, Math.PI * 2);
+              ctx.strokeStyle = `rgba(255, 235, 59, ${alpha})`; // 黄色脉冲
+              ctx.lineWidth = 3 + 2 * pulse;
+              ctx.stroke();
+              // 内圈高亮
+              ctx.beginPath();
+              ctx.arc(cx, cy, r, 0, Math.PI * 2);
+              ctx.fillStyle = `rgba(255, 235, 59, ${alpha * 0.3})`;
+              ctx.fill();
+              ctx.strokeStyle = `rgba(255, 152, 0, ${alpha})`; // 橙色描边
+              ctx.lineWidth = 2.5;
+              ctx.stroke();
+              // ID 标签
+              ctx.fillStyle = `rgba(255, 235, 59, ${alpha})`;
+              ctx.strokeStyle = `rgba(0, 0, 0, ${alpha * 0.7})`;
+              ctx.lineWidth = 3;
+              ctx.font = 'bold 16px monospace';
+              const label = `#${src.id}`;
+              ctx.strokeText(label, cx + 12, cy - 12);
+              ctx.fillText(label, cx + 12, cy - 12);
+            }
+          }
+        }
+      } else if (hlId !== null) {
+        // 高亮过期，清除
+        highlightedSourceIdRef.current = null;
+      }
       // ★ 摇杆可视化：按下画布时在 overlay canvas 上绘制手柄摇杆
       drawJoystick();
       // ★ 墙体笔刷光标：在 obstacle 视口下显示笔刷位置和大小预览
@@ -3110,6 +3186,7 @@ export const FluidEditorUI: React.FC = () => {
           sources={continuousSources}
           onRemoveSource={handleRemoveSource}
           onClearAllSources={handleClearAllSources}
+          onHighlightSource={handleHighlightSource}
           continuousPaused={continuousPaused}
           onTogglePaused={handleTogglePaused}
         />
