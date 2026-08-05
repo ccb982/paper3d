@@ -665,9 +665,26 @@ class FluidPlayer {
     // ★ 调整 canvas 绘图缓冲区为纹理原生分辨率（CSS 显示尺寸不变）
     this.resizeCanvas();
 
+    // ★ 清理上一个 FTX 的预览残差纹理（避免残留数据）
+    if (this._previewResidualTex) {
+      this._previewResidualTex.dispose();
+      this._previewResidualTex = null;
+    }
+
     // 构建第 0 帧纹理
     this.currentFrameIndex = 0;
     this._buildTexturesForFrame(0);
+
+    // ★ 如果配置已加载，同步更新 colorGrid + 重置场数据（避免残留上一个纹理的残差）
+    if (this.config) {
+      this.config.resolution = { w: this.texSize, h: this.texSize };
+      this.rebuildGrids();
+      if (this._pendingResidual) {
+        this.uploadToColorGrid(this._pendingResidual);
+        this._pendingResidual = null;
+      }
+      this.initFields();
+    }
 
     // 如果是多帧，填充帧选择器
     if (this.parsedFTX.type === 'multi' && this.parsedFTX.data.frameCount > 1) {
@@ -1579,6 +1596,9 @@ class FluidPlayer {
     } else {
       // 更新动态 uniforms
       const u = this._compositeMat.uniforms;
+      // ★ 必须更新 uBaseTexture：loadFTX 会销毁重建 baseHslTex，
+      //   不更新会导致 uniform 仍指向已销毁的旧纹理 → 残留上一个纹理的数据
+      u.uBaseTexture.value = this.baseHslTex;
       u.uResidual.value = this.colorGrid.read;
       u.uDensity.value = this.densityGrid.read;
       u.uChannelMul.value.set(sc.hMultiplier ?? 1, sc.sMultiplier ?? 1, sc.lMultiplier ?? 1, sc.aMultiplier ?? 1);
