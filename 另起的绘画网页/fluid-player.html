@@ -597,7 +597,15 @@ class FluidGrid {
 // GPUOps — 全屏四边形渲染 + 材质缓存
 // ============================================================
 class GPUOps {
-  constructor() { this.materialCache = new Map(); }
+  constructor() {
+    this.materialCache = new Map();
+    // ★ 与编辑器 GPUOps.ts 一致：复用 scene/camera/quad，避免每帧创建
+    //   PlaneGeometry 导致 GPU 内存泄漏
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    this.scene.add(this.quad);
+  }
   getMaterial(key, uniforms, fragmentShader) {
     if (this.materialCache.has(key)) {
       const mat = this.materialCache.get(key);
@@ -607,23 +615,29 @@ class GPUOps {
       }
       return mat;
     }
+    // ★ 与编辑器 GPUOps.ts 一致：GPU Pass 使用 vUv=uv（不翻转 Y）
+    //   仅合成/预览着色器才 Y-flip（用于屏幕显示校正）。
+    //   若 GPU Pass 也 Y-flip，render target 会与 DataTexture（flipY=false）
+    //   产生纵向错位：baseHslTex 顶部对应 colorGrid 底部 → 合成出现噪点/错位。
+    //   且平流 backUv=uv-vel*dt/res 的 Y 方向会被反转（重力倒流）。
     const mat = new THREE.ShaderMaterial({
       uniforms,
-      vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
       fragmentShader,
     });
     this.materialCache.set(key, mat);
     return mat;
   }
   render(renderer, target, material) {
-    const scene = new THREE.Scene();
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
-    scene.add(mesh);
-    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    // ★ 与编辑器 GPUOps.ts 一致：复用 quad，clear 后渲染
+    const prevMat = this.quad.material;
+    this.quad.material = material;
     const prev = renderer.getRenderTarget();
     renderer.setRenderTarget(target);
-    renderer.render(scene, cam);
+    renderer.clear();
+    renderer.render(this.scene, this.camera);
     renderer.setRenderTarget(prev);
+    this.quad.material = prevMat;
   }
 }
 
@@ -935,13 +949,17 @@ class FluidPlayer {
 
   rebuildGrids() {
     const res = this.config.resolution;
-    const ch = this.config.channels;
-    const colorCh = ['r','g','b','a'].filter(k => ch[k]).length;
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
-    this.colorGrid = new FluidGrid(res, Math.max(1, colorCh), 'uint8');
+    // ★ colorGrid 固定 4 通道 RGBA uint8：
+    //   FTX 残差数据总是 RGBA（H/S/L/A 四通道量化值），
+    //   channels 配置只影响平流 mask 和合成着色器通道开关，不影响存储格式。
+    //   如果按 channels 减少通道数（如只开 H → 1ch RedFormat），
+    //   uploadToColorGrid 的 RGBA 数据写入 RedFormat target 时 GBA 丢失 →
+    //   合成着色器采样 .gba=0 → dS/dL=-0.5 → 严重色偏噪点。
+    this.colorGrid = new FluidGrid(res, 4, 'uint8');
     // ★ colorGrid 存储量化残差值（H:0-63, S/L:0-31 编码在 0-255），
     //   LinearFilter 插值会产生无意义中间值 → 噪点
     //   必须用 NearestFilter 确保精确采样
@@ -949,7 +967,7 @@ class FluidPlayer {
       t.minFilter = THREE.NearestFilter;
       t.magFilter = THREE.NearestFilter;
     });
-    // 速度场/压力场强制 half-float（2字节/通道）
+    // 速度场/压力场 half-float（2字节/通道，精度足够且省显存）
     this.velocityGrid = new FluidGrid(res, 2, 'half-float');
     this.pressureGrid = new FluidGrid(res, 1, 'half-float');
     this.densityGrid = new FluidGrid(res, 1, 'uint8');
@@ -957,17 +975,30 @@ class FluidPlayer {
 
   uploadToColorGrid(data) {
     const { w, h } = this.config.resolution;
-    const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+    // ★ 依照编辑器 uploadToGrid 方式：根据数据通道数选择 DataTexture format + copy shader
+    //   FTX 残差数据总是 RGBA 4 通道（buildTexturesFromFTX 生成），
+    //   colorGrid 也固定 4 通道 RGBA → 格式完全匹配，不会丢通道
+    const dataChannels = 4;
+    const formatMap = { 1: THREE.RedFormat, 2: THREE.RGFormat, 3: THREE.RGBAFormat, 4: THREE.RGBAFormat };
+    const tex = new THREE.DataTexture(data, w, h, formatMap[dataChannels], THREE.UnsignedByteType);
     tex.needsUpdate = true;
     tex.flipY = false;
     // ★ 残差是量化值，用 NearestFilter 避免复制时插值产生噪点
     tex.minFilter = THREE.NearestFilter;
     tex.magFilter = THREE.NearestFilter;
-    // 用 copy shader 上传到 colorGrid
+    // ★ 根据数据通道数选择 copy shader（与编辑器 getCopyFS 一致）
+    const copyFS = dataChannels === 1
+      ? `uniform sampler2D uTex; varying vec2 vUv; void main(){ float v=texture2D(uTex,vUv).r; gl_FragColor=vec4(v,0.0,0.0,1.0); }`
+      : dataChannels === 2
+      ? `uniform sampler2D uTex; varying vec2 vUv; void main(){ vec2 v=texture2D(uTex,vUv).rg; gl_FragColor=vec4(v,0.0,1.0); }`
+      : `uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor=texture2D(uTex,vUv); }`;
+    // ★ 与编辑器 uploadToGrid 一致：copy pass 使用 vUv=uv（不翻转 Y）
+    //   这样 colorGrid（render target）与 baseHslTex（DataTexture flipY=false）
+    //   在 UV 空间方向一致，合成时不会纵向错位。
     const mat = new THREE.ShaderMaterial({
       uniforms: { uTex: { value: tex } },
-      vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-      fragmentShader: `uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor=texture2D(uTex,vUv); }`,
+      vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader: copyFS,
     });
     this.gpu.render(this.renderer, this.colorGrid.write, mat);
     this.colorGrid.swap();
@@ -997,24 +1028,22 @@ class FluidPlayer {
 
   // ---------- 初始化场 ----------
   initFields() {
-    const { w, h } = this.config.resolution;
     // colorGrid 已经由 FTX residual 上传，不重置
     // 速度场清零
-    this.uploadZero(this.velocityGrid, w * h * 2);
+    this.clearGrid(this.velocityGrid);
     // density 场清零
-    this.uploadZero(this.densityGrid, w * h);
+    this.clearGrid(this.densityGrid);
   }
 
-  uploadZero(grid, length) {
-    // ★ 用 shader 直接输出零，避免 DataTexture 类型不匹配
-    //   (velocityGrid 是 half-float，但原来用 Uint8Array+UnsignedByteType 上传，
-    //    某些 WebGL 实现会拒绝这种类型不匹配 → 场数据未清零 → 残留垃圾数据 → 噪点)
-    const mat = new THREE.ShaderMaterial({
-      uniforms: {},
-      vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-      fragmentShader: `void main(){ gl_FragColor=vec4(0.0, 0.0, 0.0, 0.0); }`,
-    });
-    this.gpu.render(this.renderer, grid.write, mat);
+  // ★ 使用 renderer.clear() 直接清空渲染目标，比 shader 输出 vec4(0.0) 更可靠
+  //   对于 RedFormat 单通道密度场，shader 输出的 R 通道可能未被完全覆盖
+  //   （某些 WebGL 实现对单通道渲染目标有特殊限制），
+  //   renderer.clear() 直接操作 framebuffer，确保所有通道被清零
+  clearGrid(grid) {
+    const prev = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(grid.write);
+    this.renderer.clear(true, true, true);  // clear color + depth + stencil
+    this.renderer.setRenderTarget(prev);
     grid.swap();
   }
 
@@ -1394,10 +1423,6 @@ class FluidPlayer {
     `);
     this.gpu.render(this.renderer, this.pressureGrid.write, mat);
     this.pressureGrid.swap();
-  }
-
-  clearGrid(grid) {
-    this.uploadZero(grid, grid.resolution.w * grid.resolution.h * grid.channelCount);
   }
 
   applyPressureGradient() {
