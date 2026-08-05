@@ -139,6 +139,9 @@ export class FluidOperations {
     lastWaypointCount: number;
   }> = new Map();
 
+  /** 调试帧计数器，用于限频日志输出 */
+  private frameCounter = 0;
+
   /**
    * 持续注入总开关。
    * 关闭时暂停所有持续注入源的处理，但保留源列表（队列独立存在）。
@@ -288,6 +291,9 @@ export class FluidOperations {
     waypoints?: { x: number; y: number }[];
     waypointMode?: 'forward' | 'backward' | 'pingpong';
     waypointSpeed?: number;
+    density?: number;
+    /** ★ 原始完整配置，供 UI 保留未显式暴露的扩展字段（如 density） */
+    config: InjectionConfig;
   }[] {
     return this.continuousSources.map(s => {
       // 若启用了路径点，返回插值后的当前位置（而非静态 position）
@@ -308,6 +314,8 @@ export class FluidOperations {
         waypoints: wps ? wps.map(p => ({ ...p })) : undefined,
         waypointMode: s.config.waypointMode,
         waypointSpeed: s.config.waypointSpeed,
+        density: s.config.density,
+        config: { ...s.config },
       };
     });
   }
@@ -331,6 +339,11 @@ export class FluidOperations {
     // 总开关关闭时暂停所有持续注入源（但保留源列表，重新开启后自动恢复）
     if (!this.continuousInjectionEnabled) return;
     if (this.continuousSources.length === 0) return;
+
+    // ★ 入口日志：每 300 帧打印一次源数量和关键状态
+    if (this.frameCounter % 300 === 0) {
+        console.log(`[processContinuousSources] sources=${this.continuousSources.length} enabled=${this.continuousInjectionEnabled} dt=${dt.toFixed(4)} time=${time.toFixed(2)} mode=${gridDensity ? 'scalar' : 'vector'}`);
+    }
 
     for (const src of this.continuousSources) {
       let config = src.config;
@@ -392,6 +405,11 @@ export class FluidOperations {
           y: p0.y + (p1.y - p0.y) * t,
         };
 
+        // ★ NaN 防护：确保插值位置有效
+        if (!isFinite(state.currentPosition.x) || !isFinite(state.currentPosition.y)) {
+          state.currentPosition = { ...waypoints[0] };
+        }
+
         // 用插值位置覆盖静态 position
         config = { ...config, position: { ...state.currentPosition } };
       }
@@ -399,15 +417,25 @@ export class FluidOperations {
       // ========== 波形控制：旋转速度方向 ==========
       if (config.wave?.enabled) {
         const { amplitude, frequency, phase = 0 } = config.wave;
-        const angle = amplitude * Math.sin(2 * Math.PI * frequency * time + phase);
-        const baseAngle = Math.atan2(config.velocity.y, config.velocity.x);
         const speedMag = Math.hypot(config.velocity.x, config.velocity.y);
-        const newAngle = baseAngle + angle;
-        config = {
-          ...config,
-          velocity: { x: speedMag * Math.cos(newAngle), y: speedMag * Math.sin(newAngle) },
-        };
+        // ★ NaN/Infinity 防护：确保 amplitude 和 frequency 有效，且速度非零
+        if (isFinite(amplitude) && isFinite(frequency) && isFinite(speedMag) && speedMag > 0) {
+          const angle = amplitude * Math.sin(2 * Math.PI * frequency * time + phase);
+          const baseAngle = Math.atan2(config.velocity.y, config.velocity.x);
+          const newAngle = baseAngle + angle;
+          config = {
+            ...config,
+            velocity: { x: speedMag * Math.cos(newAngle), y: speedMag * Math.sin(newAngle) },
+          };
+        }
       }
+
+      // ★ 调试日志：每 60 帧打印一次源的状态（仅当 wave/waypoint 启用时）
+      if ((config.wave?.enabled || (config.waypoints && config.waypoints.length >= 2)) && (this.frameCounter++ % 60 === 0)) {
+        const velMag = Math.hypot(config.velocity.x, config.velocity.y);
+        console.log(`[fluid src#${src.id}] enabled=${config.enabled} pos=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) vel=(${config.velocity.x.toFixed(0)},${config.velocity.y.toFixed(0)}) |v|=${velMag.toFixed(0)} color=hsl(${config.color[0].toFixed(2)},${config.color[1].toFixed(2)},${config.color[2].toFixed(2)}) wave=${config.wave?.enabled ? 'on' : 'off'} wps=${config.waypoints?.length || 0} gridDensity=${gridDensity ? 'scalar' : 'vector'}`);
+      }
+
       this.applyInjection(gridColor, gridVelocity, dt, config, gridDensity);
     }
   }
@@ -516,6 +544,16 @@ export class FluidOperations {
     gridDensity: FluidGrid | null = null,
   ): void {
     if (!config.enabled) return;
+
+    // ★ NaN/Infinity 防护：如果位置或速度无效，跳过注入
+    if (!isFinite(config.position.x) || !isFinite(config.position.y)) return;
+    if (!isFinite(config.velocity.x) || !isFinite(config.velocity.y)) return;
+
+    // ★ 调试日志：每 120 帧打印一次 applyInjection 被调用的详情
+    if ((config.wave?.enabled || (config.waypoints && config.waypoints.length >= 2)) && (this.frameCounter % 120 === 0)) {
+        const velMag = Math.hypot(config.velocity.x, config.velocity.y);
+        console.log(`[applyInjection] enabled=${config.enabled} pos=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) vel=(${config.velocity.x.toFixed(0)},${config.velocity.y.toFixed(0)}) |v|=${velMag.toFixed(0)} color=[${config.color.map(c=>c.toFixed(2)).join(',')}] radius=${config.radius.toFixed(3)} mode=${gridDensity ? 'scalar' : 'vector'}`);
+    }
 
     // ★ 持续注入与单次注入完全一致：rate=1.0、速度不乘 dt
     const texPos: InjectionOptions = {

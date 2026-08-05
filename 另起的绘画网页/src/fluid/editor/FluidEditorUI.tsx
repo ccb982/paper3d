@@ -2175,18 +2175,10 @@ export const FluidEditorUI: React.FC = () => {
     const sources = editor.getContinuousSources();
     const src = sources.find(s => s.id === id);
     if (!src) return;
-    // 保留原有配置，仅更新 wave 字段
+    // 保留原有所有配置（含 density），仅更新 wave 字段
     editor.updateContinuousInjection(id, {
-      enabled: src.enabled,
-      position: src.position,
-      radius: src.radius,
-      rate: src.rate,
-      velocity: src.velocity,
-      color: src.color,
+      ...src.config,
       wave,
-      waypoints: src.waypoints,
-      waypointMode: src.waypointMode,
-      waypointSpeed: src.waypointSpeed,
     });
     refreshSources();
   }, [editor, refreshSources]);
@@ -2215,14 +2207,9 @@ export const FluidEditorUI: React.FC = () => {
     if (!src) return;
     const currentWps = src.waypoints ? [...src.waypoints] : [];
     currentWps.push({ x: point.x, y: point.y });
+    // 保留原有所有配置（含 density），仅更新 waypoints 相关字段
     editor.updateContinuousInjection(id, {
-      enabled: src.enabled,
-      position: src.position,
-      radius: src.radius,
-      rate: src.rate,
-      velocity: src.velocity,
-      color: src.color,
-      wave: src.wave,
+      ...src.config,
       waypoints: currentWps,
       waypointMode: src.waypointMode || 'forward',
       waypointSpeed: src.waypointSpeed ?? 1.0,
@@ -2236,14 +2223,9 @@ export const FluidEditorUI: React.FC = () => {
     const sources = editor.getContinuousSources();
     const src = sources.find(s => s.id === id);
     if (!src) return;
+    // 保留原有所有配置（含 density），清空 waypoints 相关字段
     editor.updateContinuousInjection(id, {
-      enabled: src.enabled,
-      position: src.position,
-      radius: src.radius,
-      rate: src.rate,
-      velocity: src.velocity,
-      color: src.color,
-      wave: src.wave,
+      ...src.config,
       waypoints: undefined,
       waypointMode: undefined,
       waypointSpeed: undefined,
@@ -2257,15 +2239,9 @@ export const FluidEditorUI: React.FC = () => {
     const sources = editor.getContinuousSources();
     const src = sources.find(s => s.id === id);
     if (!src) return;
+    // 保留原有所有配置（含 density），仅更新 waypointMode
     editor.updateContinuousInjection(id, {
-      enabled: src.enabled,
-      position: src.position,
-      radius: src.radius,
-      rate: src.rate,
-      velocity: src.velocity,
-      color: src.color,
-      wave: src.wave,
-      waypoints: src.waypoints,
+      ...src.config,
       waypointMode: mode,
       waypointSpeed: src.waypointSpeed ?? 1.0,
     });
@@ -2278,16 +2254,9 @@ export const FluidEditorUI: React.FC = () => {
     const sources = editor.getContinuousSources();
     const src = sources.find(s => s.id === id);
     if (!src) return;
+    // 保留原有所有配置（含 density），仅更新 waypointSpeed
     editor.updateContinuousInjection(id, {
-      enabled: src.enabled,
-      position: src.position,
-      radius: src.radius,
-      rate: src.rate,
-      velocity: src.velocity,
-      color: src.color,
-      wave: src.wave,
-      waypoints: src.waypoints,
-      waypointMode: src.waypointMode || 'forward',
+      ...src.config,
       waypointSpeed: speed,
     });
     refreshSources();
