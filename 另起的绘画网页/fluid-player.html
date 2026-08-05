@@ -772,43 +772,129 @@ class FluidPlayer {
 
   // ---------- 加载 JSON 配置 ----------
   loadConfig(json) {
-    this.config = this.parseConfig(json);
-    const cfg = this.config;
-    log(`配置加载: 模式=${cfg.advectionMode}, 分辨率=${cfg.resolution.w}×${cfg.resolution.h}, 源=${cfg.continuousSources.length}`, 'info');
-
-    // 如果 JSON 中的分辨率与 FTX 不同，以 FTX 为准（FTX 是纹理数据源）
-    cfg.resolution = { w: this.texSize, h: this.texSize };
-
-    // 重建 Grid
-    this.rebuildGrids();
-
-    // 上传 residual 到 colorGrid
-    if (this._pendingResidual) {
-      this.uploadToColorGrid(this._pendingResidual);
-      this._pendingResidual = null;
+    // ★ 检查 FTX 是否已导入
+    if (!this.texSize || !this.baseHslTex) {
+      log('错误: 请先导入 FTX 纹理数据！', 'error');
+      return;
     }
 
-    // 加载障碍物
+    log('='.repeat(50), 'info');
+    log(`【loadConfig 开始】导入物理场数据后对纹理的完整操作流程：`, 'info');
+
+    this.config = this.parseConfig(json);
+    const cfg = this.config;
+    const _isScalar = cfg.advectionMode === 'scalar';
+    log(`① 配置解析完成: mode=${cfg.advectionMode}(${_isScalar?'标量浓度':'矢量颜色'}) combine=${cfg.combineMode}`, 'info');
+
+    // 以 FTX 分辨率为准（FTX 是纹理数据源）
+    const _oldRes = json.resolution || '?';
+    cfg.resolution = { w: this.texSize, h: this.texSize };
+    log(`② 分辨率锁定: JSON=${JSON.stringify(_oldRes)} → FTX=${this.texSize}×${this.texSize} (强制覆盖)`, 'info');
+
+    // 重建 Grid
+    log(`③ 重建 4 个双缓冲场纹理（WebGLRenderTarget）：`, 'info');
+    this.rebuildGrids();
+    const _cCh = ['r','g','b','a'].filter(k => cfg.channels[k]).length;
+    log(`   colorGrid: ${cfg.resolution.w}×${cfg.resolution.h}, ${_cCh}ch uint8 (存储${_isScalar?'静态残差模板':'量化HSLA残差'})`, 'info');
+    log(`   velocityGrid: ${cfg.resolution.w}×${cfg.resolution.h}, 2ch half-float (存储速度vx,vy)`, 'info');
+    log(`   pressureGrid: ${cfg.resolution.w}×${cfg.resolution.h}, 1ch half-float (存储压力)`, 'info');
+    log(`   densityGrid:  ${cfg.resolution.w}×${cfg.resolution.h}, 1ch uint8 (存储浓度${_isScalar?'（标量模式核心动态场）':'（备用）'})`, 'info');
+    log(`   colorGrid 纹理过滤: NearestFilter ✅（防止量化残差插值噪点）`, 'info');
+
+    // 上传 residual
+    if (this._pendingResidual) {
+      const _n = cfg.resolution.w * cfg.resolution.h;
+      const _r = this._pendingResidual;
+      // 采样几个像素看残差数值范围
+      let _rmax=0, _rmin=255, _smax=0, _smin=255, _lmax=0, _lmin=255;
+      for (let _i=0; _i<Math.min(_n, 100000); _i++) {
+        const _j = _i*4;
+        if (_r[_j]>_rmax)_rmax=_r[_j]; if (_r[_j]<_rmin)_rmin=_r[_j];
+        if (_r[_j+1]>_smax)_smax=_r[_j+1]; if (_r[_j+1]<_smin)_smin=_r[_j+1];
+        if (_r[_j+2]>_lmax)_lmax=_r[_j+2]; if (_r[_j+2]<_lmin)_lmin=_r[_j+2];
+      }
+      log(`④ 上传 FTX 残差 → colorGrid: ${this._pendingResidual.length} 字节 (${_n}像素×4ch)`, 'info');
+      log(`   残差采样范围[0~10万像素]: R(H)=${_rmin}~${_rmax} G(S)=${_smin}~${_smax} B(L)=${_lmin}~${_lmax}`, 'info');
+      log(`   (正确范围: R=0~255 对应 6bit 量化 H 映射到 0.5 范围, G/B=0~255 对应 5bit 量化 S/L)`, 'info');
+      log(`   使用 NearestFilter copy shader → colorGrid.write → swap → colorGrid.read`, 'info');
+      this.uploadToColorGrid(this._pendingResidual);
+      this._pendingResidual = null;
+      log(`   ✅ colorGrid.read 现在持有 FTX 残差原始量化值`, 'info');
+    } else {
+      log('④ ⚠ 警告: 没有待上传的残差数据！colorGrid 初始化时可能全 0 → 合成时 base+0 = 纯基础色', 'warn');
+    }
+
+    // 障碍物
     if (json.obstacle && json.obstacle.data) {
+      log(`⑤ 加载障碍物纹理: ${json.obstacle.width}×${json.obstacle.height}, base64 ${Math.round(json.obstacle.data.length/1024)}KB`, 'info');
       this.loadObstacle(json.obstacle);
+    } else {
+      log(`⑤ 无障碍物纹理：全部注入/平流不受墙体阻挡`, 'info');
     }
 
     // 加载持续注入源
-    this.continuousSources = cfg.continuousSources.map(s => ({
+    const _srcs = cfg.continuousSources;
+    const _densityFallback = _isScalar ? 1.0 : undefined;
+    this.continuousSources = _srcs.map(s => ({
       id: this.continuousSources.length,
-      config: { ...s, density: s.density ?? (cfg.advectionMode === 'scalar' ? 1.0 : undefined) },
+      config: { ...s, density: s.density ?? _densityFallback },
     }));
+    log(`⑥ 加载 ${_srcs.length} 个持续注入源${_isScalar?' (scalar模式: 仅注入速度 + 密度, 不注入颜色!)':''}：`, 'info');
+    if (_isScalar) {
+      log(`   ★ scalar 模式关键语义: colorGrid = 静态残差模板（不平流、不注入！）`, 'info');
+      log(`   ★ 只平流 + 注入 densityGrid + velocityGrid（通过 density/baseline × mul 调制颜色）`, 'info');
+    }
+    for (let i = 0; i < Math.min(_srcs.length, 3); i++) {
+      const s = this.continuousSources[i].config;
+      log(`   src#${i}: enabled=${s.enabled} pos=(${s.position.x.toFixed(2)},${s.position.y.toFixed(2)}) r=${s.radius} |v|=${Math.hypot(s.velocity.x,s.velocity.y).toFixed(0)} ${s.density!==undefined?'density='+s.density.toFixed(2):''} ${s.wave?.enabled?'[wave]':''} ${s.waypoints?.length>=2?'[wp='+s.waypoints.length+']':''}`, 'info');
+    }
 
-    // 渲染源列表 UI
+    // 初始化场
+    log(`⑦ initFields()：`, 'info');
+    log(`   velocityGrid → 全 0 清零 (shader 输出 vec4(0.0)，无 DataTexture 类型不匹配问题)`, 'info');
+    log(`   densityGrid  → 全 0 清零`, 'info');
+    log(`   colorGrid    → ⚠ 不清零！保留 FTX 上传的残差作为${_isScalar?'静态模板':'动态平流源'} ✅`, 'info');
+    this.initFields();
+
+    // 渲染 UI
     this.renderSourceList();
+
+    // 立即渲染第一帧合成视图
+    log(`⑧ 首次合成渲染 render()：baseHslTex(FloatType HSL) + colorGrid(Uint8 量化残差) → HSL→RGB → canvas`, 'info');
+    log(`   scalar 模式合成公式: final = base + (残差反量化 delta) + sign×(density/baseline × mul)`, 'info');
+    log(`   vector 模式合成公式: final = base + (残差反量化 delta)`, 'info');
+    log(`  (注意: densityGrid 此刻全 0 → scalar 模式下 density×mul 项=0 → 画面 = base + delta = 与 renderPreview 视觉一致)`, 'info');
+    this.render();
+
+    log(`【loadConfig 完成 ✅】播放时每帧 step 流程: 注入 → 平流 → 压力 → 合成渲染`, 'info');
+    log('='.repeat(50), 'info');
   }
 
   parseConfig(json) {
     const cs = json.coreSwitches || {};
     const ac = json.advectionAndComposite || {};
     const gf = json.globalForce || {};
-    const channels = ac.channels || { h: true, s: true, l: true, a: true };
-    return {
+    // ★ JSON 导出格式：ac.channels = { h, s, l, a }（编辑器物理 RGBA → 逻辑 HSLA）
+    //   内部格式：config.channels = { r:H, g:S, b:L, a:A }（保持一致）
+    const _ch = ac.channels || { h: true, s: true, l: true, a: true };
+    // 兼容两种格式：如果 JSON 中直接是 {r,g,b,a} 则直接使用
+    const channels = (_ch.r !== undefined)
+      ? { r: !!_ch.r, g: !!_ch.g, b: !!_ch.b, a: !!_ch.a }
+      : { r: !!_ch.h, g: !!_ch.s, b: !!_ch.l, a: !!_ch.a };
+
+    // ★ scalarConfig 默认值需与编辑器完全一致（useFluidEditor.ts L43-50）
+    //   编辑器默认: hMul/sMul/lMul/aMul=0.1, baseline=1.0, decay=0
+    const sc = ac.scalarConfig || {};
+    const scalarConfig = {
+      hMultiplier: sc.hMultiplier ?? 0.1,
+      sMultiplier: sc.sMultiplier ?? 0.1,
+      lMultiplier: sc.lMultiplier ?? 0.1,
+      aMultiplier: sc.aMultiplier ?? 0.1,
+      baselineDensity: sc.baselineDensity ?? 1.0,
+      decayRate: sc.decayRate ?? 0,
+    };
+
+    const result = {
       enableAdvection: cs.enableAdvection ?? true,
       enablePressure: cs.enablePressure ?? true,
       pressureIterations: cs.pressureIterations ?? 20,
@@ -817,8 +903,8 @@ class FluidPlayer {
       enableWarmStart: cs.enableWarmStart ?? true,
       advectionMode: ac.advectionMode || 'vector',
       combineMode: ac.combineMode || 'add',
-      channels: { r: channels.h, g: channels.s, b: channels.l, a: channels.a },
-      scalarConfig: ac.scalarConfig || { hMultiplier: 1, sMultiplier: 1, lMultiplier: 1, aMultiplier: 1, baselineDensity: 1, decayRate: 0 },
+      channels,
+      scalarConfig,
       gravity: gf.gravity || { x: 0, y: 0 },
       velocityScale: gf.velocityScale ?? 1,
       maxVelocity: gf.maxVelocity ?? 5000,
@@ -826,6 +912,25 @@ class FluidPlayer {
       resolution: json.resolution ? (typeof json.resolution === 'number' ? { w: json.resolution, h: json.resolution } : json.resolution) : { w: this.texSize, h: this.texSize },
       continuousSources: json.continuousSources || [],
     };
+
+    // ============ 详细调试输出 ============
+    const _d = (v) => typeof v === 'number' ? v.toFixed(3) : JSON.stringify(v);
+    log(`【解析配置 Debug】`, 'info');
+    log(`  advectionMode=${result.advectionMode} (0=vector, 1=scalar)`, 'info');
+    log(`  combineMode=${result.combineMode}`, 'info');
+    log(`  channels: H=${result.channels.r} S=${result.channels.g} L=${result.channels.b} A=${result.channels.a}`, 'info');
+    log(`  scalarConfig: hMul=${_d(scalarConfig.hMultiplier)} sMul=${_d(scalarConfig.sMultiplier)} lMul=${_d(scalarConfig.lMultiplier)} aMul=${_d(scalarConfig.aMultiplier)} baseline=${_d(scalarConfig.baselineDensity)} decay=${_d(scalarConfig.decayRate)}`, 'info');
+    log(`  物理开关: adv=${result.enableAdvection} pressure=${result.enablePressure} warm=${result.enableWarmStart}`, 'info');
+    log(`  压力: iter=${result.pressureIterations} omega=${_d(result.pressureOmega)} boundary=${result.pressureBoundaryMode}`, 'info');
+    log(`  全局力: gravity=(${_d(result.gravity.x)},${_d(result.gravity.y)}) velScale=${_d(result.velocityScale)} maxVel=${result.maxVelocity}`, 'info');
+    log(`  持续注入源: ${result.continuousSources.length} 个`, 'info');
+    for (let i = 0; i < Math.min(result.continuousSources.length, 3); i++) {
+      const s = result.continuousSources[i];
+      log(`    src[${i}] enabled=${s.enabled} pos=(${s.position.x.toFixed(2)},${s.position.y.toFixed(2)}) vel=(${s.velocity.x.toFixed(0)},${s.velocity.y.toFixed(0)}) dens=${s.density ?? 'N/A'}`, 'info');
+    }
+    log(`【解析配置 End】`, 'info');
+
+    return result;
   }
 
   rebuildGrids() {
@@ -837,7 +942,14 @@ class FluidPlayer {
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
     this.colorGrid = new FluidGrid(res, Math.max(1, colorCh), 'uint8');
-    // ★ 速度场/压力场强制 half-float（2字节/通道）
+    // ★ colorGrid 存储量化残差值（H:0-63, S/L:0-31 编码在 0-255），
+    //   LinearFilter 插值会产生无意义中间值 → 噪点
+    //   必须用 NearestFilter 确保精确采样
+    [this.colorGrid.texA.texture, this.colorGrid.texB.texture].forEach(t => {
+      t.minFilter = THREE.NearestFilter;
+      t.magFilter = THREE.NearestFilter;
+    });
+    // 速度场/压力场强制 half-float（2字节/通道）
     this.velocityGrid = new FluidGrid(res, 2, 'half-float');
     this.pressureGrid = new FluidGrid(res, 1, 'half-float');
     this.densityGrid = new FluidGrid(res, 1, 'uint8');
@@ -848,8 +960,9 @@ class FluidPlayer {
     const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
     tex.needsUpdate = true;
     tex.flipY = false;
-    tex.minFilter = THREE.LinearFilter;
-    tex.magFilter = THREE.LinearFilter;
+    // ★ 残差是量化值，用 NearestFilter 避免复制时插值产生噪点
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
     // 用 copy shader 上传到 colorGrid
     const mat = new THREE.ShaderMaterial({
       uniforms: { uTex: { value: tex } },
@@ -893,19 +1006,16 @@ class FluidPlayer {
   }
 
   uploadZero(grid, length) {
-    const data = new Uint8Array(length);
-    const tex = new THREE.DataTexture(data, grid.resolution.w, grid.resolution.h,
-      grid.channelCount === 1 ? THREE.RedFormat : (grid.channelCount === 2 ? THREE.RGFormat : THREE.RGBAFormat),
-      THREE.UnsignedByteType);
-    tex.needsUpdate = true; tex.flipY = false;
+    // ★ 用 shader 直接输出零，避免 DataTexture 类型不匹配
+    //   (velocityGrid 是 half-float，但原来用 Uint8Array+UnsignedByteType 上传，
+    //    某些 WebGL 实现会拒绝这种类型不匹配 → 场数据未清零 → 残留垃圾数据 → 噪点)
     const mat = new THREE.ShaderMaterial({
-      uniforms: { uTex: { value: tex } },
+      uniforms: {},
       vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
-      fragmentShader: `uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor=texture2D(uTex,vUv); }`,
+      fragmentShader: `void main(){ gl_FragColor=vec4(0.0, 0.0, 0.0, 0.0); }`,
     });
     this.gpu.render(this.renderer, grid.write, mat);
     grid.swap();
-    tex.dispose();
   }
 
   // ---------- 平流 ----------
@@ -1389,27 +1499,49 @@ class FluidPlayer {
     const isScalar = cfg.advectionMode === 'scalar';
     const gridDensity = isScalar ? this.densityGrid : null;
 
+    // ============ step 调试日志（每 60 帧 + 前 10 帧打印） ============
+    const _dbg = (this.frameCount <= 10) || (this.frameCount % 60 === 0);
+    if (_dbg) {
+      log(`--- step#${this.frameCount} (dt=${dt.toFixed(4)}s, mode=${isScalar?'SCALAR':'VECTOR'}) ---`, 'info');
+    }
+
     // 0. 重力
     this.applyGravity(dt);
+    if (_dbg && (cfg.gravity.x!==0||cfg.gravity.y!==0))
+      log(`  0.重力: (${cfg.gravity.x},${cfg.gravity.y})`, 'info');
 
     // 1. 持续注入源
     this.processContinuousSources(dt);
+    if (_dbg && this.continuousSources.length>0) {
+      const _n = Math.min(this.continuousSources.length, 2);
+      const _srcs = [];
+      for (let _i=0; _i<_n; _i++) {
+        const s = this.continuousSources[_i].config;
+        if (!s.enabled) continue;
+        const _inj = isScalar ? `density=${s.density?.toFixed(2)}` : `color=[${s.color?.map(c=>c?.toFixed(2)).join(',')}]`;
+        _srcs.push(`#${_i}[${_inj}]`);
+      }
+      log(`  1.持续注入: ${this.continuousSources.filter(s=>s.config.enabled).length}个激活 → ${isScalar?'注入速度+density到densityGrid(不修改colorGrid)':'注入速度+颜色到colorGrid'} ${_srcs.join(' ')}`, 'info');
+    }
 
     // 2. 平流
     if (cfg.enableAdvection) {
       // 速度自平流
       this.advect(this.velocityGrid, this.velocityGrid.read, dt,
         { r: true, g: true, b: false, a: false }, 'clamp', false);
+      if (_dbg) log(`  2a.速度自平流: velocityGrid(2ch half-float) self-advection`, 'info');
       // 颜色/density 平流
       if (isScalar) {
         this.advect(this.densityGrid, this.velocityGrid.read, dt,
           { r: true, g: false, b: false, a: false }, 'clamp', false);
         this.decayDensity();
+        if (_dbg) log(`  2b.SCALAR: densityGrid 平流 + decay(density=${cfg.scalarConfig?.decayRate?.toFixed(3)})  ★ colorGrid 保持静态！完全不平流！`, 'info');
       } else {
         this.advect(this.colorGrid, this.velocityGrid.read, dt,
           cfg.channels, cfg.colorBoundaryMode || 'clamp', true);
+        if (_dbg) log(`  2b.VECTOR: colorGrid 平流 (wrapHue=true on R 色相随速度移动)`, 'info');
       }
-    }
+    } else if (_dbg) log(`  2.平流已跳过 (enableAdvection=false)`, 'warn');
 
     // 2.5 边界
     this.applyBoundary();
@@ -1550,6 +1682,28 @@ class FluidPlayer {
       uCombineMode: { value: (cfg.combineMode || 'add') === 'sub' ? 1 : 0 },
       uChannels: { value: new THREE.Vector4(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0) },
     };
+
+    // ============ render 调试日志（仅每 60 帧打印一次，避免刷屏）============
+    if (!this._renderLogCnt) this._renderLogCnt = 0;
+    const _doLog = (this._renderLogCnt++ % 60 === 0);
+    if (_doLog) {
+      const _mode = isScalar ? 'SCALAR' : 'VECTOR';
+      log(`[render#${this.frameCount||0}] 【合成着色器 Debug | ${_mode}模式】`, 'info');
+      log(`   uBaseTexture : baseHslTex (FloatType RGBA, HSL 范围 0~1)  flipY=${this.baseHslTex?.flipY}`, 'info');
+      log(`   uResidual    : colorGrid.read [${this.colorGrid.read.width}x${this.colorGrid.read.height}] filter=${this.colorGrid.texA.texture.minFilter===1008?'Linear':'Nearest(✅防噪点)'}`, 'info');
+      log(`   uResidualRangeH=0.5, RangeSL=0.5 (固定值: range=0.25 块已在 buildTextures* 中重映射到 0.5 范围)`, 'info');
+      log(`   uDensity     : densityGrid.read [${this.densityGrid.read.width}x${this.densityGrid.read.height}]`, 'info');
+      log(`   uChannelMul  : (H=${sc.hMultiplier?.toFixed(3)}, S=${sc.sMultiplier?.toFixed(3)}, L=${sc.lMultiplier?.toFixed(3)}, A=${sc.aMultiplier?.toFixed(3)})`, 'info');
+      log(`   uBaseline    : ${sc.baselineDensity?.toFixed(3)}   (factor = density / baseline)`, 'info');
+      log(`   uChannels    : H=${ch.r?1:0} S=${ch.g?1:0} L=${ch.b?1:0} A=${ch.a?1:0} (1=正常公式, 0=绕过 base+delta 直接输出残差)`, 'info');
+      log(`   scalarMode=${isScalar?1:0} combineMode=${(cfg.combineMode||'add')==='sub'?'sub(-1)':'add(+1)'}`, 'info');
+      if (isScalar) {
+        log(`   ★ SCALAR 公式: final = base + delta ± factor × mul  (density=0 → factor=0 → 只显示 base+delta)`, 'info');
+        log(`   ★ SCALAR 关键: colorGrid 是静态模板！不平流不注入！流体变化全部来自 density×mul 调制项`, 'info');
+      } else {
+        log(`   ★ VECTOR 公式: final = base + delta  (colorGrid 不平流就不动)`, 'info');
+      }
+    }
 
     if (!this._compositeMat) {
       this._compositeMat = new THREE.ShaderMaterial({
@@ -1735,9 +1889,7 @@ document.getElementById('file-json').onchange = async (e) => {
     document.getElementById('info-smul').textContent = sc.sMultiplier ?? '-';
     document.getElementById('info-lmul').textContent = sc.lMultiplier ?? '-';
     document.getElementById('info-amul').textContent = sc.aMultiplier ?? '-';
-    // 初始化场并渲染第一帧
-    player.initFields();
-    player.render();
+    // loadConfig 已内置 initFields + render，这里只需更新 UI
     log('准备就绪，点击播放', 'info');
   } catch (err) {
     log(`JSON 加载失败: ${err.message}`, 'error');
