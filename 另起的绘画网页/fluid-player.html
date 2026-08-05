@@ -1421,19 +1421,29 @@ class FluidPlayer {
         } else {
           if (parity == 1) { gl_FragColor = texture2D(uPressure, vUv); return; }
         }
-        // 邻居压力（墙内邻居视为 0）
-        float pL = texture2D(uObstacle, vUv + vec2(-ts.x, 0.0)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
-        float pR = texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
-        float pT = texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
-        float pB = texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
-        // 速度散度
-        float vL = texture2D(uVelocity, vUv + vec2(-ts.x, 0.0)).r;
-        float vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).r;
-        float vB = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).g;
-        float vT = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).g;
-        float div = (vR - vL) * 0.5 / ts.x + (vT - vB) * 0.5 / ts.y;
+        // 邻居压力（墙内邻居视为 0，与编辑器 FluidEditor.ts runSORPass 一致）
+        float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
+        float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
+        float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
+        float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
+        // ★ 邻居是墙体时，压力视为 0（硬边界，编辑器 runSORPass 单独 if 语句）
+        if (texture2D(uObstacle, vUv + vec2(-ts.x, 0.0)).r > 0.5) pL = 0.0;
+        if (texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5) pR = 0.0;
+        if (texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5) pT = 0.0;
+        if (texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5) pB = 0.0;
+        // 速度散度（中心差分，从 velocity RG 向量取对应分量，与编辑器一致）
+        // ★ 关键：编辑器 div = (vR.x - vL.x) * 0.5 * uInvResolution.x
+        //   之前播放器错误写成 / ts（= ÷ (1/res) = ×res），与编辑器差了 res² 倍！
+        //   正确：ts = 1/res，编辑器 *uInvRes = *ts，所以播放器应该 *ts 而非 /ts
+        vec2 vR2 = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).rg;
+        vec2 vL2 = texture2D(uVelocity, vUv + vec2(-ts.x, 0.0)).rg;
+        vec2 vT2 = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).rg;
+        vec2 vB2 = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).rg;
+        float div = (vR2.x - vL2.x) * 0.5 * ts.x + (vT2.y - vB2.y) * 0.5 * ts.y;
+        // 压力 Jacobi + SOR 松弛（与编辑器完全相同的顺序）
         float pOld = texture2D(uPressure, vUv).r;
-        float pNew = (1.0 - uOmega) * pOld + uOmega * (pL + pR + pT + pB - div) * 0.25;
+        float pNew = (pL + pR + pT + pB - div) / 4.0;
+        pNew = (1.0 - uOmega) * pOld + uOmega * pNew;
         gl_FragColor = vec4(pNew, 0.0, 0.0, 1.0);
       }
     `);
