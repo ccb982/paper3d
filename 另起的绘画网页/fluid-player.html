@@ -114,13 +114,28 @@
       </div>
     </div>
     <div class="panel">
-      <div class="panel-title">物理参数</div>
+      <div class="panel-title">流体库参数</div>
       <div class="control-row"><label>平流模式</label><span class="val" id="info-mode">-</span></div>
+      <div class="control-row"><label>合成模式</label><span class="val" id="info-combine">-</span></div>
       <div class="control-row"><label>分辨率</label><span class="val" id="info-res">-</span></div>
-      <div class="control-row"><label>重力</label><span class="val" id="info-gravity">-</span></div>
-      <div class="control-row"><label>最大速度</label><span class="val" id="info-maxvel">-</span></div>
+      <div class="control-row"><label>通道</label><span class="val" id="info-channels">-</span></div>
+      <div class="control-row"><label>启用平流</label><span class="val" id="info-adv">-</span></div>
+      <div class="control-row"><label>启用压力</label><span class="val" id="info-press">-</span></div>
       <div class="control-row"><label>压力迭代</label><span class="val" id="info-pressure">-</span></div>
+      <div class="control-row"><label>松弛因子</label><span class="val" id="info-omega">-</span></div>
+      <div class="control-row"><label>压力边界</label><span class="val" id="info-pbound">-</span></div>
+      <div class="control-row"><label>热启动</label><span class="val" id="info-warm">-</span></div>
+      <div class="control-row"><label>重力</label><span class="val" id="info-gravity">-</span></div>
+      <div class="control-row"><label>速度缩放</label><span class="val" id="info-vscale">-</span></div>
+      <div class="control-row"><label>最大速度</label><span class="val" id="info-maxvel">-</span></div>
+      <div class="control-row"><label>颜色边界</label><span class="val" id="info-cbound">-</span></div>
       <div class="control-row"><label>墙体</label><span class="val" id="info-obstacle">-</span></div>
+      <div class="control-row"><label>密度基准</label><span class="val" id="info-baseline">-</span></div>
+      <div class="control-row"><label>衰减率</label><span class="val" id="info-decay">-</span></div>
+      <div class="control-row"><label>H乘数</label><span class="val" id="info-hmul">-</span></div>
+      <div class="control-row"><label>S乘数</label><span class="val" id="info-smul">-</span></div>
+      <div class="control-row"><label>L乘数</label><span class="val" id="info-lmul">-</span></div>
+      <div class="control-row"><label>A乘数</label><span class="val" id="info-amul">-</span></div>
     </div>
     <div class="panel">
       <div class="panel-title">持续注入源 (<span id="info-src-count">0</span>)</div>
@@ -1696,13 +1711,30 @@ document.getElementById('file-json').onchange = async (e) => {
     document.getElementById('status-json').className = 'status-badge status-loaded';
     document.getElementById('btn-play').disabled = false;
     document.getElementById('btn-reset').disabled = false;
-    // 更新信息面板
+    // 更新信息面板 — 显示所有流体库参数
     const cfg = player.config;
+    const sc = cfg.scalarConfig || {};
     document.getElementById('info-mode').textContent = cfg.advectionMode;
+    document.getElementById('info-combine').textContent = cfg.combineMode || 'add';
+    document.getElementById('info-res').textContent = `${cfg.resolution.w}×${cfg.resolution.h}`;
+    document.getElementById('info-channels').textContent = `${cfg.channels.r?'H':'·'}${cfg.channels.g?'S':'·'}${cfg.channels.b?'L':'·'}${cfg.channels.a?'A':'·'}`;
+    document.getElementById('info-adv').textContent = cfg.enableAdvection ? '✅' : '❌';
+    document.getElementById('info-press').textContent = cfg.enablePressure ? '✅' : '❌';
+    document.getElementById('info-pressure').textContent = `${cfg.pressureIterations}×`;
+    document.getElementById('info-omega').textContent = cfg.pressureOmega;
+    document.getElementById('info-pbound').textContent = cfg.pressureBoundaryMode;
+    document.getElementById('info-warm').textContent = cfg.enableWarmStart ? '✅' : '❌';
     document.getElementById('info-gravity').textContent = `(${cfg.gravity.x}, ${cfg.gravity.y})`;
+    document.getElementById('info-vscale').textContent = cfg.velocityScale;
     document.getElementById('info-maxvel').textContent = cfg.maxVelocity;
-    document.getElementById('info-pressure').textContent = `${cfg.pressureIterations}× ${cfg.pressureOmega}`;
+    document.getElementById('info-cbound').textContent = cfg.colorBoundaryMode;
     document.getElementById('info-obstacle').textContent = player.obstacleTex ? '有' : '无';
+    document.getElementById('info-baseline').textContent = sc.baselineDensity ?? '-';
+    document.getElementById('info-decay').textContent = sc.decayRate ?? '-';
+    document.getElementById('info-hmul').textContent = sc.hMultiplier ?? '-';
+    document.getElementById('info-smul').textContent = sc.sMultiplier ?? '-';
+    document.getElementById('info-lmul').textContent = sc.lMultiplier ?? '-';
+    document.getElementById('info-amul').textContent = sc.aMultiplier ?? '-';
     // 初始化场并渲染第一帧
     player.initFields();
     player.render();
