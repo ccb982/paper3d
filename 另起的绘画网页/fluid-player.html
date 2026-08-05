@@ -195,7 +195,10 @@ function getAdaptiveBlockIndex(x, y, w, h) {
 }
 
 function getRangeForBlock(blockFlags, blockIdx) {
-  return (blockFlags & (1 << blockIdx)) ? 0.25 : 0.5;
+  // 统一转为 BigInt 运算，避免 Number 位移溢出
+  // （JS 中 1 << n 只取低 5 位，当 blockIdx >= 32 时 1<<32 == 1<<0，导致高索引块误判）
+  const flags = typeof blockFlags === 'bigint' ? blockFlags : BigInt(blockFlags);
+  return (flags & (1n << BigInt(blockIdx))) ? 0.25 : 0.5;
 }
 
 function base64ToUint8(base64) {
@@ -1417,6 +1420,7 @@ class FluidPlayer {
       this._previewResidualTex.minFilter = THREE.LinearFilter;
       this._previewResidualTex.magFilter = THREE.LinearFilter;
       this._previewResidualTex.flipY = false;
+      this._previewResidualTex.needsUpdate = true;
     } else {
       this._previewResidualTex.image = { data: this._pendingResidual, width: w, height: h };
       this._previewResidualTex.needsUpdate = true;
