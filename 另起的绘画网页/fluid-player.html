@@ -1,0 +1,1453 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>轻量流体播放器</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+  #header { background: #16213e; padding: 10px 20px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #0f3460; flex-shrink: 0; }
+  #header h1 { font-size: 16px; color: #e94560; white-space: nowrap; }
+  .import-group { display: flex; gap: 8px; align-items: center; }
+  .btn { padding: 6px 14px; border: 1px solid #0f3460; background: #1a1a2e; color: #e0e0e0; border-radius: 4px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+  .btn:hover { background: #0f3460; border-color: #e94560; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-primary { background: #e94560; border-color: #e94560; color: #fff; }
+  .btn-primary:hover { background: #c81e45; }
+  .status-badge { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+  .status-pending { background: #3a3a5e; color: #999; }
+  .status-loaded { background: #1b5e20; color: #4caf50; }
+  .status-active { background: #4a148c; color: #ba68c8; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+  #main { flex: 1; display: flex; overflow: hidden; }
+  #canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #0d0d1a; position: relative; overflow: hidden; }
+  #fluid-canvas { background: #111; box-shadow: 0 0 20px rgba(0,0,0,0.5); image-rendering: pixelated; }
+  #sidebar { width: 280px; background: #16213e; border-left: 1px solid #0f3460; padding: 12px; overflow-y: auto; flex-shrink: 0; }
+  .panel { margin-bottom: 12px; }
+  .panel-title { font-size: 11px; color: #e94560; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; border-bottom: 1px solid #0f3460; padding-bottom: 3px; }
+  .control-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+  .control-row label { color: #aaa; }
+  .control-row input[type="range"] { width: 120px; }
+  .control-row input[type="number"] { width: 60px; background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0; padding: 2px 4px; border-radius: 3px; font-size: 11px; }
+  .control-row select { background: #1a1a2e; border: 1px solid #0f3460; color: #e0e0e0; padding: 2px 4px; border-radius: 3px; font-size: 11px; }
+  .control-row .val { color: #e94560; font-weight: bold; min-width: 50px; text-align: right; }
+  #log { position: absolute; bottom: 8px; left: 8px; right: 8px; max-height: 120px; overflow-y: auto; background: rgba(0,0,0,0.7); border-radius: 4px; padding: 6px; font-size: 10px; color: #4caf50; font-family: monospace; pointer-events: none; }
+  .log-error { color: #f44336; }
+  .log-warn { color: #ff9800; }
+  .log-info { color: #4caf50; }
+  #drop-zone { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+  .drop-hint { background: rgba(233,69,96,0.15); border: 2px dashed #e94560; border-radius: 12px; padding: 30px 50px; text-align: center; color: #e94560; font-size: 14px; }
+  .source-item { background: #1a1a2e; border: 1px solid #0f3460; border-radius: 4px; padding: 6px; margin-bottom: 4px; font-size: 11px; }
+  .source-item .src-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+  .source-item .src-id { color: #e94560; font-weight: bold; }
+  .source-item .src-detail { color: #aaa; font-size: 10px; }
+  .source-item .src-wave { color: #7e57c2; }
+  .source-item .src-wp { color: #26a69a; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>🌊 轻量流体播放器</h1>
+  <div class="import-group">
+    <button class="btn" id="btn-import-ftx">📁 导入 FTX 纹理</button>
+    <span class="status-badge status-pending" id="status-ftx">未加载</span>
+  </div>
+  <div class="import-group">
+    <button class="btn" id="btn-import-json" disabled>⚙ 导入流体配置 JSON</button>
+    <span class="status-badge status-pending" id="status-json">未加载</span>
+  </div>
+  <div class="import-group">
+    <button class="btn btn-primary" id="btn-play" disabled>▶ 播放</button>
+    <button class="btn" id="btn-reset" disabled>↻ 重置</button>
+  </div>
+  <input type="file" id="file-ftx" accept=".ftx" style="display:none">
+  <input type="file" id="file-json" accept=".json,application/json" style="display:none">
+</div>
+<div id="main">
+  <div id="canvas-wrap">
+    <canvas id="fluid-canvas" width="512" height="512"></canvas>
+    <div id="drop-zone">
+      <div class="drop-hint" id="drop-hint">请先导入 FTX 纹理数据，再导入流体配置 JSON</div>
+    </div>
+    <div id="log"></div>
+  </div>
+  <div id="sidebar">
+    <div class="panel">
+      <div class="panel-title">播放控制</div>
+      <div class="control-row">
+        <label>速度</label>
+        <input type="range" id="ctrl-speed" min="0.1" max="3" step="0.1" value="1">
+        <span class="val" id="val-speed">1.0x</span>
+      </div>
+      <div class="control-row">
+        <label>帧率</label>
+        <span class="val" id="val-fps">0 fps</span>
+      </div>
+      <div class="control-row">
+        <label>帧数</label>
+        <span class="val" id="val-frame">0</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">渲染选项</div>
+      <div class="control-row">
+        <label>背景</label>
+        <select id="ctrl-bg">
+          <option value="#111">深灰</option>
+          <option value="#000">纯黑</option>
+          <option value="#fff">白色</option>
+          <option value="transparent">透明</option>
+        </select>
+      </div>
+      <div class="control-row">
+        <label>缩放</label>
+        <input type="range" id="ctrl-zoom" min="0.5" max="3" step="0.1" value="1">
+        <span class="val" id="val-zoom">1.0x</span>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">物理参数</div>
+      <div class="control-row"><label>平流模式</label><span class="val" id="info-mode">-</span></div>
+      <div class="control-row"><label>分辨率</label><span class="val" id="info-res">-</span></div>
+      <div class="control-row"><label>重力</label><span class="val" id="info-gravity">-</span></div>
+      <div class="control-row"><label>最大速度</label><span class="val" id="info-maxvel">-</span></div>
+      <div class="control-row"><label>压力迭代</label><span class="val" id="info-pressure">-</span></div>
+      <div class="control-row"><label>墙体</label><span class="val" id="info-obstacle">-</span></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">持续注入源 (<span id="info-src-count">0</span>)</div>
+      <div id="source-list"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">手动注入</div>
+      <div class="control-row">
+        <label>颜色</label>
+        <input type="color" id="manual-color" value="#ff0000" style="width:40px;height:20px;border:none;background:none;cursor:pointer">
+      </div>
+      <div class="control-row">
+        <label>速度</label>
+        <input type="range" id="manual-speed" min="0" max="20000" step="100" value="5000">
+        <span class="val" id="val-manual-speed">5000</span>
+      </div>
+      <div class="control-row">
+        <label>半径</label>
+        <input type="range" id="manual-radius" min="0.02" max="0.3" step="0.01" value="0.08">
+        <span class="val" id="val-manual-radius">0.08</span>
+      </div>
+      <div class="control-row" style="font-size:10px;color:#888;">
+        点击画布注入
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.170.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ============================================================
+// 日志工具
+// ============================================================
+const logEl = document.getElementById('log');
+function log(msg, level = 'info') {
+  const line = document.createElement('div');
+  line.className = `log-${level}`;
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  logEl.appendChild(line);
+  while (logEl.children.length > 30) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(`[${level}] ${msg}`);
+}
+
+// ============================================================
+// FTX 解析器（移植自 ftxCore.ts）
+// ============================================================
+const FTX_MAGIC = 0x46545832;
+const ADAPTIVE_BLOCK_COLS = 8, ADAPTIVE_BLOCK_ROWS = 8;
+
+function unpackRGB565(packed) {
+  return { s: (packed >> 11) & 0x1F, h: (packed >> 5) & 0x3F, l: packed & 0x1F };
+}
+
+function invertDelta8(filtered, stride) {
+  const out = new Uint8Array(filtered.length);
+  for (let i = 0; i < filtered.length; i++) {
+    out[i] = (i % stride === 0) ? filtered[i] : (filtered[i] + out[i - 1]) & 0xFF;
+  }
+  return out;
+}
+
+function getAdaptiveBlockIndex(x, y, w, h) {
+  const col = Math.min(Math.floor((x / w) * ADAPTIVE_BLOCK_COLS), ADAPTIVE_BLOCK_COLS - 1);
+  const row = Math.min(Math.floor((y / h) * ADAPTIVE_BLOCK_ROWS), ADAPTIVE_BLOCK_ROWS - 1);
+  return row * ADAPTIVE_BLOCK_COLS + col;
+}
+
+function getRangeForBlock(blockFlags, blockIdx) {
+  return (blockFlags & (1 << blockIdx)) ? 0.25 : 0.5;
+}
+
+function base64ToUint8(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function decompressFTX(buffer) {
+  const dv = new DataView(buffer);
+  let off = 0;
+  const magic = dv.getUint32(off, false); off += 4;
+  if (magic !== FTX_MAGIC) throw new Error('无效的 FTX 文件');
+  const version = dv.getUint8(off); off += 1;
+  if (version !== 2 && version !== 3) throw new Error(`不支持的版本: ${version}`);
+  const regionCount = dv.getUint16(off, true); off += 2;
+  const resolution = dv.getUint32(off, true); off += 4;
+  const hueThreshold = dv.getFloat32(off, true); off += 4;
+  const regions = [];
+  for (let i = 0; i < regionCount; i++) {
+    const id = dv.getUint16(off, true); off += 2;
+    const x = dv.getUint16(off, true); off += 2;
+    const y = dv.getUint16(off, true); off += 2;
+    const w = dv.getUint16(off, true); off += 2;
+    const h = dv.getUint16(off, true); off += 2;
+    const bbox = { x, y, w, h };
+    const colorCount = dv.getUint16(off, true); off += 2;
+    const blockFlags = version === 3 ? dv.getUint16(off, true) : 0;
+    off += version === 3 ? 2 : 0;
+    const baseColors = [];
+    for (let j = 0; j < colorCount; j++) {
+      const bh = dv.getFloat32(off, true) + 0.5; off += 4;
+      const bs = dv.getFloat32(off, true) + 1.0; off += 4;
+      const bl = dv.getFloat32(off, true) + 1.0; off += 4;
+      baseColors.push({ h: ((bh % 1) + 1) % 1, s: Math.max(0, Math.min(1, bs)), l: Math.max(0, Math.min(1, bl)) });
+    }
+    // regionIdTex
+    const ridLen = dv.getUint32(off, true); off += 4;
+    let regionIdTex = null;
+    if (ridLen > 0) {
+      const ridDiff = new Uint8Array(buffer, off, ridLen); off += ridLen;
+      regionIdTex = invertDelta8(ridDiff, bbox.w);
+    }
+    // deltaTex
+    const dtLen = dv.getUint32(off, true); off += 4;
+    let deltaTex = null;
+    if (dtLen > 0) {
+      const dtBytes = new Uint8Array(buffer, off, dtLen); off += dtLen;
+      const total = bbox.w * bbox.h;
+      const hDiff = dtBytes.slice(0, total);
+      const sDiff = dtBytes.slice(total, total * 2);
+      const lDiff = dtBytes.slice(total * 2, total * 3);
+      const hCh = invertDelta8(hDiff, bbox.w);
+      const sCh = invertDelta8(sDiff, bbox.w);
+      const lCh = invertDelta8(lDiff, bbox.w);
+      // FTX delta 存储：分离的 H/S/L Uint8 通道（H:0-63, S:0-31, L:0-31）
+      deltaTex = { h: hCh, s: sCh, l: lCh };
+    }
+    regions.push({ id, bbox, baseColors, regionIdTex, deltaTex, blockFlags });
+  }
+  return { version, resolution: [resolution, resolution], regionCount, regions, hueThreshold };
+}
+
+// ============================================================
+// FTX → GPU 纹理数据转换
+// ============================================================
+function buildTexturesFromFTX(ftxData) {
+  const texSize = ftxData.resolution[0];
+  const totalPixels = texSize * texSize;
+
+  // baseHsl: Float32 RGBA [H, S, L, A]
+  const baseHsl = new Float32Array(totalPixels * 4);
+  // residual: Uint8 RGBA [qH_norm, qS_norm, qL_norm, 255]
+  const residual = new Uint8Array(totalPixels * 4);
+
+  for (const region of ftxData.regions) {
+    const { bbox, baseColors, regionIdTex, deltaTex, blockFlags } = region;
+    if (!regionIdTex || !deltaTex || bbox.w === 0 || bbox.h === 0) continue;
+
+    // 构建调色板映射: regionIdTex 值 → baseColor 索引
+    // baseColors 数组的索引就是 regionIdTex 中的值（从 1 开始）
+    const colorMap = new Map();
+    baseColors.forEach((c, idx) => colorMap.set(idx + 1, c));
+
+    for (let py = 0; py < bbox.h; py++) {
+      for (let px = 0; px < bbox.w; px++) {
+        const localIdx = py * bbox.w + px;
+        const colorId = regionIdTex[localIdx] || 0;
+        if (colorId === 0) continue;
+        const baseColor = colorMap.get(colorId);
+        if (!baseColor) continue;
+
+        const globalX = bbox.x + px;
+        const globalY = bbox.y + py;
+        const gIdx = (globalY * texSize + globalX) * 4;
+
+        // baseHsl: 直接存浮点 HSL
+        baseHsl[gIdx] = baseColor.h;
+        baseHsl[gIdx + 1] = baseColor.s;
+        baseHsl[gIdx + 2] = baseColor.l;
+        baseHsl[gIdx + 3] = 1.0;
+
+        // residual: 从分离的 H/S/L 通道读取量化值
+        const qH = deltaTex.h[localIdx]; // 0-63 (6 bit)
+        const qS = deltaTex.s[localIdx]; // 0-31 (5 bit)
+        const qL = deltaTex.l[localIdx]; // 0-31 (5 bit)
+
+        // 归一化到 0-255
+        let rVal = Math.round((qH / 63) * 255);
+        let gVal = Math.round((qS / 31) * 255);
+        let bVal = Math.round((qL / 31) * 255);
+
+        // ★ blockFlags 调整：range=0.25 的块需要重映射到 0.5 范围
+        // 公式: val' = val * 0.5 + 64 (255*0.25 ≈ 64)
+        const blockIdx = getAdaptiveBlockIndex(px, py, bbox.w, bbox.h);
+        const range = getRangeForBlock(blockFlags, blockIdx);
+        if (range === 0.25) {
+          rVal = Math.round(rVal * 0.5 + 64);
+          gVal = Math.round(gVal * 0.5 + 64);
+          bVal = Math.round(bVal * 0.5 + 64);
+        }
+
+        residual[gIdx] = rVal;
+        residual[gIdx + 1] = gVal;
+        residual[gIdx + 2] = bVal;
+        residual[gIdx + 3] = 255;
+      }
+    }
+  }
+
+  return { baseHsl, residual, texSize };
+}
+
+// ============================================================
+// FluidGrid — 双缓冲纹理管理（速度场强制 half-float）
+// ============================================================
+class FluidGrid {
+  constructor(resolution, channels, dataType) {
+    this.resolution = { w: resolution.w, h: resolution.h };
+    this.channelCount = channels;
+    this.dataType = dataType;
+    const formatMap = { 1: THREE.RedFormat, 2: THREE.RGFormat, 3: THREE.RGBAFormat, 4: THREE.RGBAFormat };
+    const typeMap = { 'uint8': THREE.UnsignedByteType, 'half-float': THREE.HalfFloatType, 'float': THREE.FloatType };
+    const opts = {
+      format: formatMap[channels],
+      type: typeMap[dataType],
+      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+      wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping,
+      depthBuffer: false, stencilBuffer: false,
+    };
+    this.texA = new THREE.WebGLRenderTarget(resolution.w, resolution.h, opts);
+    this.texB = new THREE.WebGLRenderTarget(resolution.w, resolution.h, opts);
+    this.current = 'A';
+  }
+  get read() { return (this.current === 'A' ? this.texA : this.texB).texture; }
+  get readTarget() { return this.current === 'A' ? this.texA : this.texB; }
+  get write() { return this.current === 'A' ? this.texB : this.texA; }
+  swap() { this.current = this.current === 'A' ? 'B' : 'A'; }
+  dispose() { this.texA.dispose(); this.texB.dispose(); }
+}
+
+// ============================================================
+// GPUOps — 全屏四边形渲染 + 材质缓存
+// ============================================================
+class GPUOps {
+  constructor() { this.materialCache = new Map(); }
+  getMaterial(key, uniforms, fragmentShader) {
+    if (this.materialCache.has(key)) {
+      const mat = this.materialCache.get(key);
+      // 更新 uniforms（保留纹理引用）
+      for (const u in uniforms) {
+        if (mat.uniforms[u]) mat.uniforms[u].value = uniforms[u].value;
+      }
+      return mat;
+    }
+    const mat = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader,
+    });
+    this.materialCache.set(key, mat);
+    return mat;
+  }
+  render(renderer, target, material) {
+    const scene = new THREE.Scene();
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+    scene.add(mesh);
+    const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(target);
+    renderer.render(scene, cam);
+    renderer.setRenderTarget(prev);
+  }
+}
+
+// ============================================================
+// 零障碍物纹理（1×1，R=0）
+// ============================================================
+let _zeroObstacleTex = null;
+function getZeroObstacleTex() {
+  if (_zeroObstacleTex) return _zeroObstacleTex;
+  const data = new Uint8Array([0]);
+  _zeroObstacleTex = new THREE.DataTexture(data, 1, 1, THREE.RedFormat, THREE.UnsignedByteType);
+  _zeroObstacleTex.needsUpdate = true;
+  _zeroObstacleTex.minFilter = THREE.NearestFilter;
+  _zeroObstacleTex.magFilter = THREE.NearestFilter;
+  return _zeroObstacleTex;
+}
+
+// ============================================================
+// 流体播放器主类
+// ============================================================
+class FluidPlayer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true });
+    this.renderer.setPixelRatio(1);
+    this.gpu = new GPUOps();
+    this.config = null;
+    this.ftxData = null;
+    this.texSize = 512;
+    this.colorGrid = null;
+    this.velocityGrid = null;
+    this.pressureGrid = null;
+    this.densityGrid = null;
+    this.obstacleTex = null;
+    this.baseHslTex = null;
+    this.time = 0;
+    this.frameCount = 0;
+    this.waypointStates = new Map();
+    this.continuousSources = [];
+    this.manualInjection = null;
+  }
+
+  // ---------- 加载 FTX ----------
+  loadFTX(arrayBuffer) {
+    this.ftxData = decompressFTX(arrayBuffer);
+    this.texSize = this.ftxData.resolution[0];
+    log(`FTX 加载成功: ${this.ftxData.regionCount} 个区域, 分辨率 ${this.texSize}×${this.texSize}`, 'info');
+
+    const { baseHsl, residual } = buildTexturesFromFTX(this.ftxData);
+
+    // 创建 baseHsl 纹理（Float32 RGBA）
+    if (this.baseHslTex) this.baseHslTex.dispose();
+    this.baseHslTex = new THREE.DataTexture(
+      baseHsl, this.texSize, this.texSize, THREE.RGBAFormat, THREE.FloatType
+    );
+    this.baseHslTex.needsUpdate = true;
+    this.baseHslTex.minFilter = THREE.LinearFilter;
+    this.baseHslTex.magFilter = THREE.LinearFilter;
+    this.baseHslTex.flipY = false;
+
+    // 存储 residual 数据供 JSON 加载后上传
+    this._pendingResidual = residual;
+  }
+
+  // ---------- 加载 JSON 配置 ----------
+  loadConfig(json) {
+    this.config = this.parseConfig(json);
+    const cfg = this.config;
+    log(`配置加载: 模式=${cfg.advectionMode}, 分辨率=${cfg.resolution.w}×${cfg.resolution.h}, 源=${cfg.continuousSources.length}`, 'info');
+
+    // 如果 JSON 中的分辨率与 FTX 不同，以 FTX 为准（FTX 是纹理数据源）
+    cfg.resolution = { w: this.texSize, h: this.texSize };
+
+    // 重建 Grid
+    this.rebuildGrids();
+
+    // 上传 residual 到 colorGrid
+    if (this._pendingResidual) {
+      this.uploadToColorGrid(this._pendingResidual);
+      this._pendingResidual = null;
+    }
+
+    // 加载障碍物
+    if (json.obstacle && json.obstacle.data) {
+      this.loadObstacle(json.obstacle);
+    }
+
+    // 加载持续注入源
+    this.continuousSources = cfg.continuousSources.map(s => ({
+      id: this.continuousSources.length,
+      config: { ...s, density: s.density ?? (cfg.advectionMode === 'scalar' ? 1.0 : undefined) },
+    }));
+
+    // 渲染源列表 UI
+    this.renderSourceList();
+  }
+
+  parseConfig(json) {
+    const cs = json.coreSwitches || {};
+    const ac = json.advectionAndComposite || {};
+    const gf = json.globalForce || {};
+    const channels = ac.channels || { h: true, s: true, l: true, a: true };
+    return {
+      enableAdvection: cs.enableAdvection ?? true,
+      enablePressure: cs.enablePressure ?? true,
+      pressureIterations: cs.pressureIterations ?? 20,
+      pressureOmega: cs.pressureOmega ?? 1.7,
+      pressureBoundaryMode: cs.pressureBoundaryMode ?? 'dirichlet',
+      enableWarmStart: cs.enableWarmStart ?? true,
+      advectionMode: ac.advectionMode || 'vector',
+      combineMode: ac.combineMode || 'add',
+      channels: { r: channels.h, g: channels.s, b: channels.l, a: channels.a },
+      scalarConfig: ac.scalarConfig || { hMultiplier: 1, sMultiplier: 1, lMultiplier: 1, aMultiplier: 1, baselineDensity: 1, decayRate: 0 },
+      gravity: gf.gravity || { x: 0, y: 0 },
+      velocityScale: gf.velocityScale ?? 1,
+      maxVelocity: gf.maxVelocity ?? 5000,
+      colorBoundaryMode: gf.colorBoundaryMode || 'clamp',
+      resolution: json.resolution ? (typeof json.resolution === 'number' ? { w: json.resolution, h: json.resolution } : json.resolution) : { w: this.texSize, h: this.texSize },
+      continuousSources: json.continuousSources || [],
+    };
+  }
+
+  rebuildGrids() {
+    const res = this.config.resolution;
+    const ch = this.config.channels;
+    const colorCh = ['r','g','b','a'].filter(k => ch[k]).length;
+    this.colorGrid?.dispose();
+    this.velocityGrid?.dispose();
+    this.pressureGrid?.dispose();
+    this.densityGrid?.dispose();
+    this.colorGrid = new FluidGrid(res, Math.max(1, colorCh), 'uint8');
+    // ★ 速度场/压力场强制 half-float（2字节/通道）
+    this.velocityGrid = new FluidGrid(res, 2, 'half-float');
+    this.pressureGrid = new FluidGrid(res, 1, 'half-float');
+    this.densityGrid = new FluidGrid(res, 1, 'uint8');
+  }
+
+  uploadToColorGrid(data) {
+    const { w, h } = this.config.resolution;
+    const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.needsUpdate = true;
+    tex.flipY = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    // 用 copy shader 上传到 colorGrid
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTex: { value: tex } },
+      vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader: `uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor=texture2D(uTex,vUv); }`,
+    });
+    this.gpu.render(this.renderer, this.colorGrid.write, mat);
+    this.colorGrid.swap();
+    tex.dispose();
+  }
+
+  loadObstacle(obstacleData) {
+    const { width, height, data } = obstacleData;
+    const bytes = base64ToUint8(data);
+    // data 是 1-bit/pixel 位图，展开为 1-byte/pixel (0 或 255)
+    const expanded = new Uint8Array(width * height);
+    for (let i = 0; i < width * height; i++) {
+      const byteIdx = i >> 3;
+      const bitIdx = 7 - (i & 7);
+      expanded[i] = (bytes[byteIdx] & (1 << bitIdx)) ? 255 : 0;
+    }
+    if (this.obstacleTex) this.obstacleTex.dispose();
+    this.obstacleTex = new THREE.DataTexture(expanded, width, height, THREE.RedFormat, THREE.UnsignedByteType);
+    this.obstacleTex.needsUpdate = true;
+    this.obstacleTex.minFilter = THREE.NearestFilter;
+    this.obstacleTex.magFilter = THREE.NearestFilter;
+    this.obstacleTex.flipY = false;
+    log(`墙体加载: ${width}×${height}, ${(expanded.filter(v => v > 0).length / expanded.length * 100).toFixed(1)}% 填充`, 'info');
+  }
+
+  getObstacleTex() { return this.obstacleTex || getZeroObstacleTex(); }
+
+  // ---------- 初始化场 ----------
+  initFields() {
+    const { w, h } = this.config.resolution;
+    // colorGrid 已经由 FTX residual 上传，不重置
+    // 速度场清零
+    this.uploadZero(this.velocityGrid, w * h * 2);
+    // density 场清零
+    this.uploadZero(this.densityGrid, w * h);
+  }
+
+  uploadZero(grid, length) {
+    const data = new Uint8Array(length);
+    const tex = new THREE.DataTexture(data, grid.resolution.w, grid.resolution.h,
+      grid.channelCount === 1 ? THREE.RedFormat : (grid.channelCount === 2 ? THREE.RGFormat : THREE.RGBAFormat),
+      THREE.UnsignedByteType);
+    tex.needsUpdate = true; tex.flipY = false;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uTex: { value: tex } },
+      vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+      fragmentShader: `uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor=texture2D(uTex,vUv); }`,
+    });
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+    tex.dispose();
+  }
+
+  // ---------- 平流 ----------
+  advect(grid, velocityTex, dt, mask, boundaryMode, wrapHue) {
+    const subSteps = this.computeSubSteps(dt);
+    const subDt = dt / subSteps;
+    const maskVec = new THREE.Vector4(mask.r?1:0, mask.g?1:0, mask.b?1:0, mask.a?1:0);
+
+    let boundaryFn = 'backUv = clamp(backUv, vec2(0.0), vec2(1.0));';
+    if (boundaryMode === 'repeat') boundaryFn = 'backUv = fract(backUv);';
+    else if (boundaryMode === 'zero') {
+      boundaryFn = `bool _oob; _oob = any(lessThan(backUv, vec2(0.0))) || any(greaterThan(backUv, vec2(1.0))); if(_oob){ gl_FragColor=vec4(0.0); return; }`;
+    }
+    const hueWrap = wrapHue && mask.r ? 'result.r = fract(result.r + 1.0);' : '';
+
+    const key = `advect_${mask.r?'1':'0'}${mask.g?'1':'0'}${mask.b?'1':'0'}${mask.a?'1':'0'}_${boundaryMode}_${wrapHue?'1':'0'}`;
+    const mat = this.gpu.getMaterial(key, {
+      uInput: { value: grid.read },
+      uVelocity: { value: velocityTex },
+      uObstacle: { value: this.getObstacleTex() },
+      uDt: { value: subDt },
+      uResolution: { value: new THREE.Vector2(grid.resolution.w, grid.resolution.h) },
+      uMask: { value: maskVec },
+    }, `
+      uniform sampler2D uInput;
+      uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
+      uniform float uDt;
+      uniform vec2 uResolution;
+      uniform vec4 uMask;
+      varying vec2 vUv;
+      void main(){
+        vec2 uv = vUv;
+        vec2 vel = texture2D(uVelocity, uv).rg;
+        vec2 backUv = uv - vel * uDt / uResolution;
+        ${boundaryFn}
+        vec4 staticVal = texture2D(uInput, uv);
+        vec4 flowVal;
+        if (texture2D(uObstacle, backUv).r > 0.5) {
+          flowVal = staticVal;
+        } else {
+          flowVal = texture2D(uInput, backUv);
+        }
+        vec4 result;
+        result.r = mix(staticVal.r, flowVal.r, uMask.r);
+        result.g = mix(staticVal.g, flowVal.g, uMask.g);
+        result.b = mix(staticVal.b, flowVal.b, uMask.b);
+        result.a = mix(staticVal.a, flowVal.a, uMask.a);
+        ${hueWrap}
+        gl_FragColor = result;
+      }
+    `);
+
+    for (let s = 0; s < subSteps; s++) {
+      mat.uniforms.uInput.value = grid.read;
+      mat.uniforms.uDt.value = subDt;
+      this.gpu.render(this.renderer, grid.write, mat);
+      grid.swap();
+    }
+  }
+
+  computeSubSteps(dt) {
+    const maxVel = this.config.maxVelocity || 5000;
+    const minGrid = Math.min(this.config.resolution.w, this.config.resolution.h);
+    const cfl = Math.ceil((maxVel * dt) / minGrid);
+    const g = this.config.gravity;
+    const gMag = Math.sqrt(g.x * g.x + g.y * g.y);
+    const gSub = Math.ceil(gMag * dt / 50);
+    return Math.max(1, Math.max(cfl, gSub));
+  }
+
+  // ---------- 注入 ----------
+  injectColor(grid, color, rate, pos, channelMask) {
+    const mat = this.gpu.getMaterial('inj_color', {
+      uColor: { value: grid.read },
+      uTargetColor: { value: new THREE.Vector4(color.h, color.s, color.l, color.a) },
+      uRate: { value: rate },
+      uPos: { value: new THREE.Vector2(pos.position.x, pos.position.y) },
+      uRadius: { value: pos.radius },
+      uGlobal: { value: pos.global ? 1 : 0 },
+      uChannelMask: { value: new THREE.Vector4(channelMask.r?1:0, channelMask.g?1:0, channelMask.b?1:0, channelMask.a?1:0) },
+      uObstacle: { value: pos.obstacle || this.getObstacleTex() },
+    }, `
+      uniform sampler2D uColor;
+      uniform vec4 uTargetColor;
+      uniform float uRate;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform int uGlobal;
+      uniform vec4 uChannelMask;
+      uniform sampler2D uObstacle;
+      varying vec2 vUv;
+      float hueLerp(float a, float b, float t) {
+        float d = b - a;
+        if (d > 0.5) d -= 1.0;
+        if (d < -0.5) d += 1.0;
+        return fract(a + d * t);
+      }
+      void main() {
+        if (texture2D(uObstacle, vUv).r > 0.5) { gl_FragColor = texture2D(uColor, vUv); return; }
+        float maskVal = 1.0;
+        if (uGlobal == 0) {
+          float d = distance(vUv, uPos);
+          maskVal = smoothstep(uRadius, 0.0, d);
+        }
+        vec4 current = texture2D(uColor, vUv);
+        float rate = uRate * maskVal;
+        vec4 mixed;
+        mixed.r = hueLerp(current.r, uTargetColor.r, rate);
+        mixed.g = mix(current.g, uTargetColor.g, rate);
+        mixed.b = mix(current.b, uTargetColor.b, rate);
+        mixed.a = mix(current.a, uTargetColor.a, rate);
+        gl_FragColor = vec4(
+          mix(current.r, mixed.r, uChannelMask.r),
+          mix(current.g, mixed.g, uChannelMask.g),
+          mix(current.b, mixed.b, uChannelMask.b),
+          mix(current.a, mixed.a, uChannelMask.a)
+        );
+      }
+    `);
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
+  injectVelocity(grid, velocity, pos) {
+    const mat = this.gpu.getMaterial('inj_vel', {
+      uVelocity: { value: grid.read },
+      uVel: { value: new THREE.Vector2(velocity.x, velocity.y) },
+      uPos: { value: new THREE.Vector2(pos.position.x, pos.position.y) },
+      uRadius: { value: pos.radius },
+      uGlobal: { value: pos.global ? 1 : 0 },
+      uObstacle: { value: pos.obstacle || this.getObstacleTex() },
+    }, `
+      uniform sampler2D uVelocity;
+      uniform vec2 uVel;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform int uGlobal;
+      uniform sampler2D uObstacle;
+      varying vec2 vUv;
+      void main() {
+        if (texture2D(uObstacle, vUv).r > 0.5) { gl_FragColor = texture2D(uVelocity, vUv); return; }
+        float maskVal = 1.0;
+        if (uGlobal == 0) {
+          float d = distance(vUv, uPos);
+          maskVal = smoothstep(uRadius, 0.0, d);
+        }
+        vec2 current = texture2D(uVelocity, vUv).rg;
+        vec2 added = uVel * maskVal;
+        gl_FragColor = vec4(current + added, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
+  injectDensity(grid, value, rate, pos) {
+    const mat = this.gpu.getMaterial('inj_density', {
+      uDensity: { value: grid.read },
+      uValue: { value: value },
+      uRate: { value: rate },
+      uPos: { value: new THREE.Vector2(pos.position.x, pos.position.y) },
+      uRadius: { value: pos.radius },
+      uGlobal: { value: pos.global ? 1 : 0 },
+      uObstacle: { value: pos.obstacle || this.getObstacleTex() },
+    }, `
+      uniform sampler2D uDensity;
+      uniform float uValue;
+      uniform float uRate;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform int uGlobal;
+      uniform sampler2D uObstacle;
+      varying vec2 vUv;
+      void main() {
+        if (texture2D(uObstacle, vUv).r > 0.5) { gl_FragColor = texture2D(uDensity, vUv); return; }
+        float maskVal = 1.0;
+        if (uGlobal == 0) {
+          float d = distance(vUv, uPos);
+          maskVal = smoothstep(uRadius, 0.0, d);
+        }
+        float current = texture2D(uDensity, vUv).r;
+        float mixed = mix(current, uValue, uRate * maskVal);
+        gl_FragColor = vec4(mixed, 0.0, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
+  // ---------- 重力 ----------
+  applyGravity(dt) {
+    const g = this.config.gravity;
+    if (g.x === 0 && g.y === 0) return;
+    this.injectVelocity(this.velocityGrid, { x: g.x * dt, y: g.y * dt }, { global: true });
+  }
+
+  // ---------- 持续注入源处理 ----------
+  processContinuousSources(dt) {
+    if (this.continuousSources.length === 0) return;
+    const isScalar = this.config.advectionMode === 'scalar';
+    const ch = this.config.channels;
+
+    for (const src of this.continuousSources) {
+      if (!src.config.enabled) continue;
+      let config = { ...src.config };
+
+      // 路径点插值
+      const wps = config.waypoints;
+      if (wps && wps.length >= 2) {
+        const mode = config.waypointMode || 'forward';
+        const speed = config.waypointSpeed ?? 1.0;
+        const total = wps.length;
+        let state = this.waypointStates.get(src.id);
+        if (!state || state.lastWaypointCount !== total) {
+          const startPos = mode === 'backward' ? wps[total - 1] : wps[0];
+          state = { logicalStep: 0, progress: 0, currentPosition: { ...startPos }, lastWaypointCount: total };
+          this.waypointStates.set(src.id, state);
+        }
+        state.progress += dt * speed;
+        while (state.progress >= 1.0) { state.progress -= 1.0; state.logicalStep++; }
+        let idx0, idx1;
+        if (mode === 'forward') {
+          idx0 = ((state.logicalStep % total) + total) % total;
+          idx1 = (idx0 + 1) % total;
+        } else if (mode === 'backward') {
+          idx0 = total - 1 - ((state.logicalStep % total) + total) % total;
+          idx1 = total - 1 - (((state.logicalStep + 1) % total) + total) % total;
+        } else {
+          const cycle = total > 1 ? (total - 1) * 2 : 1;
+          const pos = ((state.logicalStep % cycle) + cycle) % cycle;
+          if (pos < total - 1) { idx0 = pos; idx1 = pos + 1; }
+          else { const rev = cycle - pos; idx0 = rev; idx1 = Math.max(0, rev - 1); }
+        }
+        const p0 = wps[idx0], p1 = wps[idx1], t = state.progress;
+        state.currentPosition = { x: p0.x + (p1.x - p0.x) * t, y: p0.y + (p1.y - p0.y) * t };
+        if (!isFinite(state.currentPosition.x) || !isFinite(state.currentPosition.y)) {
+          state.currentPosition = { ...wps[0] };
+        }
+        config.position = { ...state.currentPosition };
+      }
+
+      // 波形控制
+      if (config.wave?.enabled) {
+        const { amplitude, frequency, phase = 0 } = config.wave;
+        const speedMag = Math.hypot(config.velocity.x, config.velocity.y);
+        if (isFinite(amplitude) && isFinite(frequency) && isFinite(speedMag) && speedMag > 0) {
+          const angle = amplitude * Math.sin(2 * Math.PI * frequency * this.time + phase);
+          const baseAngle = Math.atan2(config.velocity.y, config.velocity.x);
+          const newAngle = baseAngle + angle;
+          config.velocity = { x: speedMag * Math.cos(newAngle), y: speedMag * Math.sin(newAngle) };
+        }
+      }
+
+      // 执行注入
+      if (!isFinite(config.position.x) || !isFinite(config.position.y)) continue;
+      if (!isFinite(config.velocity.x) || !isFinite(config.velocity.y)) continue;
+
+      const texPos = { position: config.position, radius: config.radius, obstacle: this.getObstacleTex() };
+
+      // 颜色注入（仅 vector 模式）
+      if (!isScalar) {
+        this.injectColor(this.colorGrid, {
+          h: config.color[0], s: config.color[1], l: config.color[2], a: config.color[3],
+        }, 1.0, texPos, ch);
+      }
+
+      // 速度注入
+      this.injectVelocity(this.velocityGrid, { x: config.velocity.x, y: config.velocity.y }, texPos);
+
+      // density 注入（仅 scalar 模式）
+      if (isScalar && config.density !== undefined) {
+        this.injectDensity(this.densityGrid, config.density, 1.0, texPos);
+      }
+    }
+  }
+
+  // ---------- 边界处理 ----------
+  applyBoundary() {
+    const { w, h } = this.config.resolution;
+    const mat = this.gpu.getMaterial('boundary', {
+      velTex: { value: this.velocityGrid.read },
+      resolution: { value: new THREE.Vector2(w, h) },
+    }, `
+      uniform sampler2D velTex;
+      uniform vec2 resolution;
+      varying vec2 vUv;
+      void main() {
+        vec2 vel = texture2D(velTex, vUv).rg;
+        float eps = 1.0 / resolution.x;
+        if (vUv.x < eps) vel = texture2D(velTex, vec2(vUv.x + eps, vUv.y)).rg;
+        else if (vUv.x > 1.0 - eps) vel = texture2D(velTex, vec2(vUv.x - eps, vUv.y)).rg;
+        if (vUv.y < eps) vel = texture2D(velTex, vec2(vUv.x, vUv.y + eps)).rg;
+        else if (vUv.y > 1.0 - eps) vel = texture2D(velTex, vec2(vUv.x, vUv.y - eps)).rg;
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+    this.velocityGrid.swap();
+  }
+
+  // ---------- 压力投影（红-黑 SOR）----------
+  solvePressure(iterations, omega) {
+    const { w, h } = this.config.resolution;
+    if (w === 0 || h === 0) return;
+    if (!this.config.enableWarmStart) this.clearGrid(this.pressureGrid);
+
+    for (let iter = 0; iter < iterations; iter++) {
+      this.runSORPass('red', omega);
+      this.runSORPass('black', omega);
+    }
+  }
+
+  runSORPass(passColor, omega) {
+    const { w, h } = this.config.resolution;
+    const isRedPass = passColor === 'red';
+    const boundaryMode = this.config.pressureBoundaryMode || 'dirichlet';
+
+    const mat = this.gpu.getMaterial(`sor_${isRedPass ? 'red' : 'black'}_${boundaryMode}`, {
+      uPressure: { value: this.pressureGrid.read },
+      uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTex() },
+      uOmega: { value: omega },
+      uInvRes: { value: new THREE.Vector2(1.0 / w, 1.0 / h) },
+      uIsRed: { value: isRedPass ? 1 : 0 },
+      uBoundaryMode: { value: boundaryMode === 'neumann' ? 1 : 0 },
+    }, `
+      uniform sampler2D uPressure;
+      uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
+      uniform float uOmega;
+      uniform vec2 uInvRes;
+      uniform int uIsRed;
+      uniform int uBoundaryMode;
+      varying vec2 vUv;
+      void main() {
+        // 墙内压力强制为 0
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+          return;
+        }
+        vec2 ts = uInvRes;
+        // 边界处理
+        if (uBoundaryMode == 0) {
+          // Dirichlet: 边缘压力 = 0
+          if (vUv.x < ts.x || vUv.x > 1.0 - ts.x || vUv.y < ts.y || vUv.y > 1.0 - ts.y) {
+            gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+          }
+        }
+        // 红黑判断：基于像素坐标
+        vec2 pixel = vUv / ts;
+        ivec2 ipixel = ivec2(int(pixel.x), int(pixel.y));
+        int parity = (ipixel.x + ipixel.y) & 1;
+        // isRed=1 → 更新 parity==1 的像素; isRed=0 → 更新 parity==0 的像素
+        if (uIsRed == 1) {
+          if (parity == 0) { gl_FragColor = texture2D(uPressure, vUv); return; }
+        } else {
+          if (parity == 1) { gl_FragColor = texture2D(uPressure, vUv); return; }
+        }
+        // 邻居压力（墙内邻居视为 0）
+        float pL = texture2D(uObstacle, vUv + vec2(-ts.x, 0.0)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
+        float pR = texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
+        float pT = texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
+        float pB = texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5 ? 0.0 : texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
+        // 速度散度
+        float vL = texture2D(uVelocity, vUv + vec2(-ts.x, 0.0)).r;
+        float vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).r;
+        float vB = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).g;
+        float vT = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).g;
+        float div = (vR - vL) * 0.5 / ts.x + (vT - vB) * 0.5 / ts.y;
+        float pOld = texture2D(uPressure, vUv).r;
+        float pNew = (1.0 - uOmega) * pOld + uOmega * (pL + pR + pT + pB - div) * 0.25;
+        gl_FragColor = vec4(pNew, 0.0, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, this.pressureGrid.write, mat);
+    this.pressureGrid.swap();
+  }
+
+  clearGrid(grid) {
+    this.uploadZero(grid, grid.resolution.w * grid.resolution.h * grid.channelCount);
+  }
+
+  applyPressureGradient() {
+    const { w, h } = this.config.resolution;
+    const mat = this.gpu.getMaterial('pressureGradient', {
+      uPressure: { value: this.pressureGrid.read },
+      uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTex() },
+      uInvRes: { value: new THREE.Vector2(1.0 / w, 1.0 / h) },
+    }, `
+      uniform sampler2D uPressure;
+      uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
+      uniform vec2 uInvRes;
+      varying vec2 vUv;
+      void main() {
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+          return;
+        }
+        vec2 ts = uInvRes;
+        float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
+        float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
+        float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
+        float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
+        vec2 gradP = vec2(pR - pL, pT - pB) * 0.5 / ts;
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        vel -= gradP;
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+    this.velocityGrid.swap();
+  }
+
+  // ---------- 速度限幅/缩放 ----------
+  clampVelocity(maxSpeed) {
+    const mat = this.gpu.getMaterial('clampVel', {
+      uVelocity: { value: this.velocityGrid.read },
+      uMaxSpeed: { value: maxSpeed },
+    }, `
+      uniform sampler2D uVelocity;
+      uniform float uMaxSpeed;
+      varying vec2 vUv;
+      void main() {
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        float len = length(vel);
+        if (len > uMaxSpeed) vel = vel / len * uMaxSpeed;
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+    this.velocityGrid.swap();
+  }
+
+  scaleVelocity(scale) {
+    const mat = this.gpu.getMaterial('scaleVel', {
+      uVelocity: { value: this.velocityGrid.read },
+      uScale: { value: scale },
+    }, `
+      uniform sampler2D uVelocity;
+      uniform float uScale;
+      varying vec2 vUv;
+      void main() {
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        gl_FragColor = vec4(vel * uScale, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+    this.velocityGrid.swap();
+  }
+
+  // ---------- density 衰减 ----------
+  decayDensity() {
+    const decayRate = this.config.scalarConfig?.decayRate ?? 0;
+    if (!decayRate || decayRate <= 0) return;
+    const keep = Math.max(0.01, 1 - Math.min(0.99, decayRate));
+    const mat = this.gpu.getMaterial('decayDensity', {
+      uDensity: { value: this.densityGrid.read },
+      uKeep: { value: keep },
+    }, `
+      uniform sampler2D uDensity;
+      uniform float uKeep;
+      varying vec2 vUv;
+      void main() {
+        float d = texture2D(uDensity, vUv).r;
+        gl_FragColor = vec4(d * uKeep, 0.0, 0.0, 1.0);
+      }
+    `);
+    this.gpu.render(this.renderer, this.densityGrid.write, mat);
+    this.densityGrid.swap();
+  }
+
+  // ---------- 单步模拟 ----------
+  step(dt) {
+    if (dt <= 0) return;
+    this.frameCount++;
+    const cfg = this.config;
+    const isScalar = cfg.advectionMode === 'scalar';
+    const gridDensity = isScalar ? this.densityGrid : null;
+
+    // 0. 重力
+    this.applyGravity(dt);
+
+    // 1. 持续注入源
+    this.processContinuousSources(dt);
+
+    // 2. 平流
+    if (cfg.enableAdvection) {
+      // 速度自平流
+      this.advect(this.velocityGrid, this.velocityGrid.read, dt,
+        { r: true, g: true, b: false, a: false }, 'clamp', false);
+      // 颜色/density 平流
+      if (isScalar) {
+        this.advect(this.densityGrid, this.velocityGrid.read, dt,
+          { r: true, g: false, b: false, a: false }, 'clamp', false);
+        this.decayDensity();
+      } else {
+        this.advect(this.colorGrid, this.velocityGrid.read, dt,
+          cfg.channels, cfg.colorBoundaryMode || 'clamp', true);
+      }
+    }
+
+    // 2.5 边界
+    this.applyBoundary();
+
+    // 3. 压力投影
+    if (cfg.enablePressure) {
+      this.solvePressure(cfg.pressureIterations, cfg.pressureOmega);
+      this.applyPressureGradient();
+    }
+
+    // 3.5 速度缩放
+    const velScale = cfg.velocityScale ?? 1;
+    if (velScale !== 1) this.scaleVelocity(velScale);
+
+    // 3.6 速度限幅
+    const maxVel = cfg.maxVelocity ?? 5000;
+    if (maxVel > 0 && isFinite(maxVel)) this.clampVelocity(maxVel);
+
+    // 4. 手动注入（点击画布）
+    if (this.manualInjection) {
+      const inj = this.manualInjection;
+      const texPos = { position: inj.position, radius: inj.radius, obstacle: this.getObstacleTex() };
+      if (!isScalar) {
+        this.injectColor(this.colorGrid, inj.color, 1.0, texPos, cfg.channels);
+      } else if (inj.density !== undefined) {
+        this.injectDensity(this.densityGrid, inj.density, 1.0, texPos);
+      }
+      this.injectVelocity(this.velocityGrid, inj.velocity, texPos);
+      this.manualInjection = null;
+    }
+
+    this.time += dt;
+  }
+
+  // ---------- 合成渲染 ----------
+  render() {
+    const cfg = this.config;
+    const isScalar = cfg.advectionMode === 'scalar';
+    const sc = cfg.scalarConfig || {};
+    const ch = cfg.channels;
+
+    const uniforms = {
+      uBaseTexture: { value: this.baseHslTex },
+      uResidual: { value: this.colorGrid.read },
+      uResidualRangeH: { value: 0.5 },
+      uResidualRangeSL: { value: 0.5 },
+      uDensity: { value: this.densityGrid.read },
+      uChannelMul: { value: new THREE.Vector4(sc.hMultiplier ?? 1, sc.sMultiplier ?? 1, sc.lMultiplier ?? 1, sc.aMultiplier ?? 1) },
+      uBaseline: { value: sc.baselineDensity ?? 1.0 },
+      uScalarMode: { value: isScalar ? 1 : 0 },
+      uCombineMode: { value: (cfg.combineMode || 'add') === 'sub' ? 1 : 0 },
+      uChannels: { value: new THREE.Vector4(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0) },
+    };
+
+    if (!this._compositeMat) {
+      this._compositeMat = new THREE.ShaderMaterial({
+        uniforms,
+        vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+        fragmentShader: `
+          uniform sampler2D uBaseTexture;
+          uniform sampler2D uResidual;
+          uniform float uResidualRangeH;
+          uniform float uResidualRangeSL;
+          uniform sampler2D uDensity;
+          uniform vec4 uChannelMul;
+          uniform float uBaseline;
+          uniform int uScalarMode;
+          uniform int uCombineMode;
+          uniform vec4 uChannels;
+          varying vec2 vUv;
+          vec3 hsl_to_rgb(vec3 hsl) {
+            float h = hsl.x, s = hsl.y, l = hsl.z;
+            vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+            return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+          }
+          void main() {
+            vec4 baseHSLA = texture2D(uBaseTexture, vUv);
+            vec4 residual = texture2D(uResidual, vUv);
+            float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
+            float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
+            float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
+            float finalH, finalS, finalL, finalA;
+            if (uScalarMode == 1) {
+              float density = texture2D(uDensity, vUv).r;
+              float factor = density / max(uBaseline, 0.001);
+              float sign = (uCombineMode == 0) ? 1.0 : -1.0;
+              finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
+              finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
+              finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
+              float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
+              finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
+            } else {
+              finalH = fract(baseHSLA.r + dH);
+              finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
+              finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
+              finalA = baseHSLA.a;
+            }
+            finalH = mix(residual.r, finalH, uChannels.x);
+            finalS = mix(residual.g, finalS, uChannels.y);
+            finalL = mix(residual.b, finalL, uChannels.z);
+            finalA = mix(residual.a, finalA, uChannels.w);
+            vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
+            gl_FragColor = vec4(finalRGB, finalA);
+          }
+        `,
+        transparent: true,
+      });
+      this._compositeScene = new THREE.Scene();
+      this._compositeMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this._compositeMat);
+      this._compositeScene.add(this._compositeMesh);
+      this._compositeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    } else {
+      // 更新动态 uniforms
+      const u = this._compositeMat.uniforms;
+      u.uResidual.value = this.colorGrid.read;
+      u.uDensity.value = this.densityGrid.read;
+      u.uChannelMul.value.set(sc.hMultiplier ?? 1, sc.sMultiplier ?? 1, sc.lMultiplier ?? 1, sc.aMultiplier ?? 1);
+      u.uBaseline.value = sc.baselineDensity ?? 1.0;
+      u.uScalarMode.value = isScalar ? 1 : 0;
+      u.uCombineMode.value = (cfg.combineMode || 'add') === 'sub' ? 1 : 0;
+      u.uChannels.value.set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
+    }
+
+    this.renderer.render(this._compositeScene, this._compositeCam);
+  }
+
+  // ---------- 源列表 UI ----------
+  renderSourceList() {
+    const listEl = document.getElementById('source-list');
+    document.getElementById('info-src-count').textContent = this.continuousSources.length;
+    listEl.innerHTML = '';
+    for (const src of this.continuousSources) {
+      const c = src.config;
+      const speed = Math.hypot(c.velocity.x, c.velocity.y);
+      const item = document.createElement('div');
+      item.className = 'source-item';
+      let html = `<div class="src-header"><span class="src-id">#${src.id}</span><span>${c.enabled ? '✅' : '⏸'}</span></div>`;
+      html += `<div class="src-detail">pos=(${c.position.x.toFixed(2)}, ${c.position.y.toFixed(2)}) r=${c.radius.toFixed(2)} v=${speed.toFixed(0)}</div>`;
+      if (c.wave?.enabled) html += `<div class="src-wave">〰 amp=${c.wave.amplitude.toFixed(2)} freq=${c.wave.frequency.toFixed(1)}Hz</div>`;
+      if (c.waypoints && c.waypoints.length >= 2) html += `<div class="src-wp">📍 ${c.waypoints.length}点 ${c.waypointMode || 'forward'} ${c.waypointSpeed?.toFixed(1)}/s</div>`;
+      item.innerHTML = html;
+      listEl.appendChild(item);
+    }
+  }
+
+  // ---------- 重置 ----------
+  reset() {
+    this.time = 0;
+    this.frameCount = 0;
+    this.waypointStates.clear();
+    this.initFields();
+    if (this._pendingResidual) {
+      this.uploadToColorGrid(this._pendingResidual);
+    }
+    log('场已重置', 'info');
+  }
+
+  dispose() {
+    this.colorGrid?.dispose();
+    this.velocityGrid?.dispose();
+    this.pressureGrid?.dispose();
+    this.densityGrid?.dispose();
+    this.baseHslTex?.dispose();
+    this.obstacleTex?.dispose();
+    this.renderer.dispose();
+  }
+}
+
+// ============================================================
+// UI 控制 + 主循环
+// ============================================================
+const canvas = document.getElementById('fluid-canvas');
+const player = new FluidPlayer(canvas);
+let playing = false;
+let speed = 1.0;
+let lastTime = 0;
+
+// 文件导入
+document.getElementById('btn-import-ftx').onclick = () => document.getElementById('file-ftx').click();
+document.getElementById('btn-import-json').onclick = () => document.getElementById('file-json').click();
+
+document.getElementById('file-ftx').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const buf = await file.arrayBuffer();
+    player.loadFTX(buf);
+    document.getElementById('status-ftx').textContent = '已加载';
+    document.getElementById('status-ftx').className = 'status-badge status-loaded';
+    document.getElementById('btn-import-json').disabled = false;
+    document.getElementById('drop-hint').style.display = 'none';
+    document.getElementById('info-res').textContent = `${player.texSize}×${player.texSize}`;
+  } catch (err) {
+    log(`FTX 加载失败: ${err.message}`, 'error');
+  }
+};
+
+document.getElementById('file-json').onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const json = JSON.parse(text);
+    player.loadConfig(json);
+    document.getElementById('status-json').textContent = '已加载';
+    document.getElementById('status-json').className = 'status-badge status-loaded';
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-reset').disabled = false;
+    // 更新信息面板
+    const cfg = player.config;
+    document.getElementById('info-mode').textContent = cfg.advectionMode;
+    document.getElementById('info-gravity').textContent = `(${cfg.gravity.x}, ${cfg.gravity.y})`;
+    document.getElementById('info-maxvel').textContent = cfg.maxVelocity;
+    document.getElementById('info-pressure').textContent = `${cfg.pressureIterations}× ${cfg.pressureOmega}`;
+    document.getElementById('info-obstacle').textContent = player.obstacleTex ? '有' : '无';
+    // 初始化场并渲染第一帧
+    player.initFields();
+    player.render();
+    log('准备就绪，点击播放', 'info');
+  } catch (err) {
+    log(`JSON 加载失败: ${err.message}`, 'error');
+  }
+};
+
+// 播放/暂停
+document.getElementById('btn-play').onclick = () => {
+  playing = !playing;
+  const btn = document.getElementById('btn-play');
+  btn.textContent = playing ? '⏸ 暂停' : '▶ 播放';
+  document.getElementById('status-json').textContent = playing ? '播放中' : '已加载';
+  document.getElementById('status-json').className = `status-badge ${playing ? 'status-active' : 'status-loaded'}`;
+  if (playing) {
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+  }
+};
+
+// 重置
+document.getElementById('btn-reset').onclick = () => {
+  player.reset();
+  player.render();
+  document.getElementById('val-frame').textContent = '0';
+  log('已重置到初始状态', 'info');
+};
+
+// 速度控制
+document.getElementById('ctrl-speed').oninput = (e) => {
+  speed = parseFloat(e.target.value);
+  document.getElementById('val-speed').textContent = speed.toFixed(1) + 'x';
+};
+
+// 背景控制
+document.getElementById('ctrl-bg').onchange = (e) => {
+  const v = e.target.value;
+  canvas.style.background = v === 'transparent' ? 'transparent' : v;
+};
+
+// 缩放控制
+document.getElementById('ctrl-zoom').oninput = (e) => {
+  const z = parseFloat(e.target.value);
+  document.getElementById('val-zoom').textContent = z.toFixed(1) + 'x';
+  canvas.style.width = (512 * z) + 'px';
+  canvas.style.height = (512 * z) + 'px';
+};
+
+// 手动注入参数
+document.getElementById('manual-speed').oninput = (e) => {
+  document.getElementById('val-manual-speed').textContent = e.target.value;
+};
+document.getElementById('manual-radius').oninput = (e) => {
+  document.getElementById('val-manual-radius').textContent = parseFloat(e.target.value).toFixed(2);
+};
+
+// 画布点击注入
+canvas.onclick = (e) => {
+  if (!player.config) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = (e.clientX - rect.left) / rect.width;
+  const y = (e.clientY - rect.top) / rect.height;
+  const speedVal = parseFloat(document.getElementById('manual-speed').value);
+  const radius = parseFloat(document.getElementById('manual-radius').value);
+  const hex = document.getElementById('manual-color').value;
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  // RGB → HSL
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
+  }
+  player.manualInjection = {
+    position: { x, y },
+    radius,
+    velocity: { x: 0, y: speedVal },
+    color: { h, s, l, a: 1.0 },
+    density: player.config.advectionMode === 'scalar' ? 1.0 : undefined,
+  };
+  log(`手动注入: (${x.toFixed(2)}, ${y.toFixed(2)}) v=${speedVal}`, 'info');
+};
+
+// 主循环
+let fpsStartTime = 0, fpsFrameCount = 0;
+function loop(now) {
+  if (!playing) return;
+  const dt = Math.min(0.033, (now - lastTime) / 1000) * speed; // 限制最大 dt，防止卡顿后大跳
+  lastTime = now;
+
+  player.step(dt);
+  player.render();
+
+  // FPS 统计（每秒更新一次）
+  fpsFrameCount++;
+  if (fpsStartTime === 0) fpsStartTime = now;
+  if (now - fpsStartTime >= 1000) {
+    currentFps = Math.round((fpsFrameCount * 1000) / (now - fpsStartTime));
+    document.getElementById('val-fps').textContent = `${currentFps} fps`;
+    fpsStartTime = now;
+    fpsFrameCount = 0;
+  }
+  document.getElementById('val-frame').textContent = player.frameCount;
+
+  requestAnimationFrame(loop);
+}
+
+// 拖放支持
+const wrap = document.getElementById('canvas-wrap');
+wrap.ondragover = (e) => { e.preventDefault(); };
+wrap.ondrop = async (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  if (file.name.endsWith('.ftx')) {
+    const buf = await file.arrayBuffer();
+    player.loadFTX(buf);
+    document.getElementById('status-ftx').textContent = '已加载';
+    document.getElementById('status-ftx').className = 'status-badge status-loaded';
+    document.getElementById('btn-import-json').disabled = false;
+    document.getElementById('drop-hint').style.display = 'none';
+    document.getElementById('info-res').textContent = `${player.texSize}×${player.texSize}`;
+  } else if (file.name.endsWith('.json')) {
+    const text = await file.text();
+    const json = JSON.parse(text);
+    player.loadConfig(json);
+    document.getElementById('status-json').textContent = '已加载';
+    document.getElementById('status-json').className = 'status-badge status-loaded';
+    document.getElementById('btn-play').disabled = false;
+    document.getElementById('btn-reset').disabled = false;
+    player.initFields();
+    player.render();
+  }
+};
+
+log('播放器初始化完成，等待导入数据', 'info');
+</script>
+</body>
+</html>
