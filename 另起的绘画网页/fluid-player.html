@@ -61,7 +61,7 @@
     <button class="btn btn-primary" id="btn-play" disabled>▶ 播放</button>
     <button class="btn" id="btn-reset" disabled>↻ 重置</button>
   </div>
-  <input type="file" id="file-ftx" accept=".ftx" style="display:none">
+  <input type="file" id="file-ftx" accept=".ftx,.ftx3,.ftx.gz,.ftx3.gz" style="display:none">
   <input type="file" id="file-json" accept=".json,application/json" style="display:none">
 </div>
 <div id="main">
@@ -104,6 +104,13 @@
         <label>缩放</label>
         <input type="range" id="ctrl-zoom" min="0.5" max="3" step="0.1" value="1">
         <span class="val" id="val-zoom">1.0x</span>
+      </div>
+    </div>
+    <div class="panel" id="panel-frames" style="display:none;">
+      <div class="panel-title">帧选择 (<span id="info-frame-count">0</span> 帧)</div>
+      <div class="control-row">
+        <label>当前帧</label>
+        <select id="ctrl-frame" style="flex:1;"></select>
       </div>
     </div>
     <div class="panel">
@@ -254,7 +261,224 @@ function decompressFTX(buffer) {
 }
 
 // ============================================================
-// FTX → GPU 纹理数据转换
+// Gzip 检测 + 解压（使用浏览器原生 DecompressionStream）
+// ============================================================
+async function maybeDecompressGzip(arrayBuffer) {
+  const u8 = new Uint8Array(arrayBuffer);
+  // Gzip 魔数: 0x1f 0x8b
+  if (u8.length >= 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+    const blob = new Blob([u8]);
+    const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+    const decompressed = await new Response(stream).blob();
+    return await decompressed.arrayBuffer();
+  }
+  return arrayBuffer;
+}
+
+// ============================================================
+// 多帧 FTX3 解析器（移植自 binaryCompression.ts unpackMultiFrameFromBinary）
+// Magic: 0x46545833 ("FTX3")
+// ============================================================
+const FTX3_MAGIC = 0x46545833;
+
+function unpackMultiFrameFTX(buffer) {
+  const view = new DataView(buffer);
+  let off = 0;
+
+  const magic = view.getUint32(off, false); off += 4;
+  if (magic !== FTX3_MAGIC) throw new Error('无效的多帧 FTX3 文件');
+
+  const version = view.getUint8(off); off += 1;
+  if (version !== 3) throw new Error(`不支持的多帧版本: ${version}`);
+
+  const predictionFlag = view.getUint8(off); off += 1;
+  const enablePrediction = predictionFlag === 1;
+
+  const frameCount = view.getUint16(off, true); off += 2;
+  const paletteCount = view.getUint16(off, true); off += 2;
+
+  // 读取全局共享调色板
+  const palette = [];
+  for (let i = 0; i < paletteCount; i++) {
+    palette.push({
+      id: i + 1,
+      h: view.getFloat32(off, true),
+      s: view.getFloat32(off + 4, true),
+      l: view.getFloat32(off + 8, true),
+    });
+    off += 12;
+  }
+
+  // 逐帧解析
+  const frames = [];
+  let prevDecodedRegion = null;
+
+  for (let f = 0; f < frameCount; f++) {
+    const nameLen = view.getUint8(off); off += 1;
+    const name = new TextDecoder().decode(new Uint8Array(buffer, off, nameLen));
+    off += nameLen;
+
+    const width = view.getUint16(off, true); off += 2;
+    const height = view.getUint16(off, true); off += 2;
+    const bx = view.getUint16(off, true); off += 2;
+    const by = view.getUint16(off, true); off += 2;
+    const bw = view.getUint16(off, true); off += 2;
+    const bh = view.getUint16(off, true); off += 2;
+    const bbox = { x: bx, y: by, w: bw, h: bh };
+
+    // ★ 多帧格式 blockFlags 是 64 位（BigUint64），单帧格式是 16 位
+    const blockFlags = view.getBigUint64(off, true); off += 8;
+
+    // regionIdTex（含帧间预测编码）
+    const ridLen = view.getUint32(off, true); off += 4;
+    let regionIdTex = null;
+    if (ridLen > 0) {
+      const ridDiff = new Uint8Array(buffer, off, ridLen); off += ridLen;
+      const processed = invertDelta8(ridDiff, bbox.w);
+
+      // 逆预测编码
+      regionIdTex = new Uint8Array(processed.length);
+      if (!enablePrediction || prevDecodedRegion === null) {
+        for (let i = 0; i < processed.length; i++) {
+          const v = processed[i];
+          regionIdTex[i] = v === 0 ? 0 : v - 1;
+        }
+      } else {
+        for (let i = 0; i < processed.length; i++) {
+          const v = processed[i];
+          if (v === 1) {
+            regionIdTex[i] = prevDecodedRegion[i];
+          } else {
+            regionIdTex[i] = v === 0 ? 0 : v - 1;
+          }
+        }
+      }
+      prevDecodedRegion = regionIdTex;
+    } else {
+      regionIdTex = new Uint8Array(0);
+    }
+
+    // deltaPacked（分离 H/S/L 通道，差分编码）
+    const dtLen = view.getUint32(off, true); off += 4;
+    let deltaTex = null;
+    if (dtLen > 0) {
+      const dtBytes = new Uint8Array(buffer, off, dtLen); off += dtLen;
+      const total = bbox.w * bbox.h;
+      const hCh = invertDelta8(dtBytes.slice(0, total), bbox.w);
+      const sCh = invertDelta8(dtBytes.slice(total, total * 2), bbox.w);
+      const lCh = invertDelta8(dtBytes.slice(total * 2, total * 3), bbox.w);
+      deltaTex = { h: hCh, s: sCh, l: lCh };
+    }
+
+    frames.push({ name, width, height, bbox, blockFlags, regionIdTex, deltaTex });
+  }
+
+  return { palette, frames, frameCount, resolution: frames[0]?.width || 512 };
+}
+
+// ============================================================
+// 统一格式检测 + 解析入口
+// ============================================================
+async function parseFTXFile(arrayBuffer) {
+  // 1. gzip 解压
+  const decompressed = await maybeDecompressGzip(arrayBuffer);
+  const view = new DataView(decompressed);
+  if (decompressed.byteLength < 4) throw new Error('文件过小');
+  const magic = view.getUint32(0, false);
+
+  // 2. 根据魔数选择解析器
+  if (magic === FTX3_MAGIC) {
+    // 多帧 FTX3 格式
+    const multiData = unpackMultiFrameFTX(decompressed);
+    log(`多帧 FTX3: ${multiData.frameCount} 帧, 调色板 ${multiData.palette.length} 色, 分辨率 ${multiData.resolution}`, 'info');
+    return { type: 'multi', data: multiData };
+  } else if (magic === FTX_MAGIC) {
+    // 单帧 FTX2 格式
+    const ftxData = decompressFTX(decompressed);
+    log(`单帧 FTX: ${ftxData.regionCount} 区域, 分辨率 ${ftxData.resolution[0]}`, 'info');
+    return { type: 'single', data: ftxData };
+  } else {
+    throw new Error(`未知的文件格式 (Magic: 0x${magic.toString(16).toUpperCase()})`);
+  }
+}
+
+// ============================================================
+// 统一纹理构建（支持单帧和多帧格式）
+// ============================================================
+function buildTexturesFromAnyFTX(parsedFTX, frameIndex = 0) {
+  if (parsedFTX.type === 'single') {
+    return buildTexturesFromFTX(parsedFTX.data);
+  } else {
+    return buildTexturesFromMultiFrame(parsedFTX.data, frameIndex);
+  }
+}
+
+function buildTexturesFromMultiFrame(multiData, frameIndex) {
+  const frame = multiData.frames[frameIndex];
+  if (!frame) throw new Error(`帧 ${frameIndex} 不存在`);
+
+  const texSize = multiData.resolution;
+  const totalPixels = texSize * texSize;
+  const baseHsl = new Float32Array(totalPixels * 4);
+  const residual = new Uint8Array(totalPixels * 4);
+
+  const { bbox, regionIdTex, deltaTex, blockFlags } = frame;
+  if (!regionIdTex || !deltaTex || bbox.w === 0 || bbox.h === 0) {
+    return { baseHsl, residual, texSize };
+  }
+
+  // 调色板映射: id → {h, s, l}
+  const colorMap = new Map();
+  for (const c of multiData.palette) {
+    colorMap.set(c.id, c);
+  }
+
+  for (let py = 0; py < bbox.h; py++) {
+    for (let px = 0; px < bbox.w; px++) {
+      const localIdx = py * bbox.w + px;
+      const colorId = regionIdTex[localIdx] || 0;
+      if (colorId === 0) continue;
+      const baseColor = colorMap.get(colorId);
+      if (!baseColor) continue;
+
+      const globalX = bbox.x + px;
+      const globalY = bbox.y + py;
+      const gIdx = (globalY * texSize + globalX) * 4;
+
+      baseHsl[gIdx] = baseColor.h;
+      baseHsl[gIdx + 1] = baseColor.s;
+      baseHsl[gIdx + 2] = baseColor.l;
+      baseHsl[gIdx + 3] = 1.0;
+
+      const qH = deltaTex.h[localIdx];
+      const qS = deltaTex.s[localIdx];
+      const qL = deltaTex.l[localIdx];
+
+      let rVal = Math.round((qH / 63) * 255);
+      let gVal = Math.round((qS / 31) * 255);
+      let bVal = Math.round((qL / 31) * 255);
+
+      // blockFlags 调整（64 位，每个 bit 对应一个 8×8 块）
+      const blockIdx = getAdaptiveBlockIndex(px, py, bbox.w, bbox.h);
+      const range = (blockFlags & (1n << BigInt(blockIdx))) ? 0.25 : 0.5;
+      if (range === 0.25) {
+        rVal = Math.round(rVal * 0.5 + 64);
+        gVal = Math.round(gVal * 0.5 + 64);
+        bVal = Math.round(bVal * 0.5 + 64);
+      }
+
+      residual[gIdx] = rVal;
+      residual[gIdx + 1] = gVal;
+      residual[gIdx + 2] = bVal;
+      residual[gIdx + 3] = 255;
+    }
+  }
+
+  return { baseHsl, residual, texSize };
+}
+
+// ============================================================
+// FTX → GPU 纹理数据转换（单帧格式）
 // ============================================================
 function buildTexturesFromFTX(ftxData) {
   const texSize = ftxData.resolution[0];
@@ -424,18 +648,37 @@ class FluidPlayer {
     this.manualInjection = null;
   }
 
-  // ---------- 加载 FTX ----------
-  loadFTX(arrayBuffer) {
-    this.ftxData = decompressFTX(arrayBuffer);
-    this.texSize = this.ftxData.resolution[0];
-    log(`FTX 加载成功: ${this.ftxData.regionCount} 个区域, 分辨率 ${this.texSize}×${this.texSize}`, 'info');
+  // ---------- 加载 FTX（支持单帧 FTX2 / 多帧 FTX3 / gzip 压缩）----------
+  async loadFTX(arrayBuffer) {
+    this.parsedFTX = await parseFTXFile(arrayBuffer);
 
-    const { baseHsl, residual } = buildTexturesFromFTX(this.ftxData);
+    // 提取分辨率
+    if (this.parsedFTX.type === 'single') {
+      this.texSize = this.parsedFTX.data.resolution[0];
+    } else {
+      this.texSize = this.parsedFTX.data.resolution;
+    }
+
+    // 构建第 0 帧纹理
+    this.currentFrameIndex = 0;
+    this._buildTexturesForFrame(0);
+
+    // 如果是多帧，填充帧选择器
+    if (this.parsedFTX.type === 'multi' && this.parsedFTX.data.frameCount > 1) {
+      this._populateFrameSelector();
+    } else {
+      document.getElementById('panel-frames').style.display = 'none';
+    }
+  }
+
+  _buildTexturesForFrame(frameIndex) {
+    const { baseHsl, residual, texSize } = buildTexturesFromAnyFTX(this.parsedFTX, frameIndex);
+    this.texSize = texSize;
 
     // 创建 baseHsl 纹理（Float32 RGBA）
     if (this.baseHslTex) this.baseHslTex.dispose();
     this.baseHslTex = new THREE.DataTexture(
-      baseHsl, this.texSize, this.texSize, THREE.RGBAFormat, THREE.FloatType
+      baseHsl, texSize, texSize, THREE.RGBAFormat, THREE.FloatType
     );
     this.baseHslTex.needsUpdate = true;
     this.baseHslTex.minFilter = THREE.LinearFilter;
@@ -444,6 +687,41 @@ class FluidPlayer {
 
     // 存储 residual 数据供 JSON 加载后上传
     this._pendingResidual = residual;
+    this.currentFrameIndex = frameIndex;
+  }
+
+  _populateFrameSelector() {
+    const panel = document.getElementById('panel-frames');
+    const select = document.getElementById('ctrl-frame');
+    const countEl = document.getElementById('info-frame-count');
+    const frames = this.parsedFTX.data.frames;
+    countEl.textContent = frames.length;
+    select.innerHTML = '';
+    frames.forEach((f, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${i}: ${f.name || 'frame_' + i} (${f.bbox.w}×${f.bbox.h})`;
+      select.appendChild(opt);
+    });
+    panel.style.display = 'block';
+  }
+
+  switchFrame(frameIndex) {
+    if (!this.parsedFTX || this.parsedFTX.type !== 'multi') return;
+    this._buildTexturesForFrame(frameIndex);
+    log(`切换到帧 ${frameIndex}`, 'info');
+
+    // 如果配置已加载，重新上传 residual 并重置场
+    if (this.config) {
+      this.config.resolution = { w: this.texSize, h: this.texSize };
+      this.rebuildGrids();
+      if (this._pendingResidual) {
+        this.uploadToColorGrid(this._pendingResidual);
+        this._pendingResidual = null;
+      }
+      this.initFields();
+      this.render();
+    }
   }
 
   // ---------- 加载 JSON 配置 ----------
@@ -1272,7 +1550,7 @@ document.getElementById('file-ftx').onchange = async (e) => {
   if (!file) return;
   try {
     const buf = await file.arrayBuffer();
-    player.loadFTX(buf);
+    await player.loadFTX(buf);
     document.getElementById('status-ftx').textContent = '已加载';
     document.getElementById('status-ftx').className = 'status-badge status-loaded';
     document.getElementById('btn-import-json').disabled = false;
@@ -1335,6 +1613,11 @@ document.getElementById('btn-reset').onclick = () => {
 document.getElementById('ctrl-speed').oninput = (e) => {
   speed = parseFloat(e.target.value);
   document.getElementById('val-speed').textContent = speed.toFixed(1) + 'x';
+};
+
+// 帧切换
+document.getElementById('ctrl-frame').onchange = (e) => {
+  player.switchFrame(parseInt(e.target.value));
 };
 
 // 背景控制
@@ -1426,15 +1709,16 @@ wrap.ondrop = async (e) => {
   e.preventDefault();
   const file = e.dataTransfer.files[0];
   if (!file) return;
-  if (file.name.endsWith('.ftx')) {
+  const lowerName = file.name.toLowerCase();
+  if (lowerName.endsWith('.ftx') || lowerName.endsWith('.ftx3') || lowerName.endsWith('.ftx.gz') || lowerName.endsWith('.ftx3.gz')) {
     const buf = await file.arrayBuffer();
-    player.loadFTX(buf);
+    await player.loadFTX(buf);
     document.getElementById('status-ftx').textContent = '已加载';
     document.getElementById('status-ftx').className = 'status-badge status-loaded';
     document.getElementById('btn-import-json').disabled = false;
     document.getElementById('drop-hint').style.display = 'none';
     document.getElementById('info-res').textContent = `${player.texSize}×${player.texSize}`;
-  } else if (file.name.endsWith('.json')) {
+  } else if (lowerName.endsWith('.json')) {
     const text = await file.text();
     const json = JSON.parse(text);
     player.loadConfig(json);
