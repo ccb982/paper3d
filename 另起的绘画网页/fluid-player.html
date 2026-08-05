@@ -708,9 +708,9 @@ class FluidPlayer {
     if (this.config) {
       this.config.resolution = { w: this.texSize, h: this.texSize };
       this.rebuildGrids();
+      // ★ _pendingResidual 不再置 null：保留原始残差供后续 reset/重新导入使用
       if (this._pendingResidual) {
         this.uploadToColorGrid(this._pendingResidual);
-        this._pendingResidual = null;
       }
       this.initFields();
     }
@@ -772,9 +772,9 @@ class FluidPlayer {
     if (this.config) {
       this.config.resolution = { w: this.texSize, h: this.texSize };
       this.rebuildGrids();
+      // ★ _pendingResidual 不再置 null：保留原始残差供后续 reset/重新导入使用
       if (this._pendingResidual) {
         this.uploadToColorGrid(this._pendingResidual);
-        this._pendingResidual = null;
       }
       this.initFields();
       this.render();
@@ -794,6 +794,20 @@ class FluidPlayer {
 
     log('='.repeat(50), 'info');
     log(`【loadConfig 开始】导入物理场数据后对纹理的完整操作流程：`, 'info');
+
+    // ★ 清除上一个配置的残留状态（重新导入时必须重置）
+    this.waypointStates.clear();       // 旧路径点状态
+    this.frameCount = 0;               // 帧计数器
+    this.time = 0;                     // 模拟时间
+    this.manualInjection = null;       // 待执行的手动注入
+    // ★ 释放预览材质（config 加载后 render() 用 _compositeMat，不再需要预览）
+    if (this._previewResidualTex) { this._previewResidualTex.dispose(); this._previewResidualTex = null; }
+    if (this._previewMat) { this._previewMat.dispose(); this._previewMat = null; }
+    // ★ 若新配置无墙体，释放旧障碍物纹理
+    if (!(json.obstacle && json.obstacle.data) && this.obstacleTex) {
+      this.obstacleTex.dispose();
+      this.obstacleTex = null;
+    }
 
     this.config = this.parseConfig(json);
     const cfg = this.config;
@@ -816,6 +830,7 @@ class FluidPlayer {
     log(`   colorGrid 纹理过滤: NearestFilter ✅（防止量化残差插值噪点）`, 'info');
 
     // 上传 residual
+    // ★ _pendingResidual 不再置 null：保留原始残差数据，供重新导入 config 或 reset 时恢复
     if (this._pendingResidual) {
       const _n = cfg.resolution.w * cfg.resolution.h;
       const _r = this._pendingResidual;
@@ -832,7 +847,6 @@ class FluidPlayer {
       log(`   (正确范围: R=0~255 对应 6bit 量化 H 映射到 0.5 范围, G/B=0~255 对应 5bit 量化 S/L)`, 'info');
       log(`   使用 NearestFilter copy shader → colorGrid.write → swap → colorGrid.read`, 'info');
       this.uploadToColorGrid(this._pendingResidual);
-      this._pendingResidual = null;
       log(`   ✅ colorGrid.read 现在持有 FTX 残差原始量化值`, 'info');
     } else {
       log('④ ⚠ 警告: 没有待上传的残差数据！colorGrid 初始化时可能全 0 → 合成时 base+0 = 纯基础色', 'warn');
@@ -849,8 +863,10 @@ class FluidPlayer {
     // 加载持续注入源
     const _srcs = cfg.continuousSources;
     const _densityFallback = _isScalar ? 1.0 : undefined;
-    this.continuousSources = _srcs.map(s => ({
-      id: this.continuousSources.length,
+    // ★ id 用 map 索引（0,1,2...），不能用 this.continuousSources.length
+    //   （map 执行时 this.continuousSources 仍是旧数组，长度非 0 → ID 从旧值开始）
+    this.continuousSources = _srcs.map((s, i) => ({
+      id: i,
       config: { ...s, density: s.density ?? _densityFallback },
     }));
     log(`⑥ 加载 ${_srcs.length} 个持续注入源${_isScalar?' (scalar模式: 仅注入速度 + 密度, 不注入颜色!)':''}：`, 'info');
@@ -2059,8 +2075,7 @@ wrap.ondrop = async (e) => {
     document.getElementById('status-json').className = 'status-badge status-loaded';
     document.getElementById('btn-play').disabled = false;
     document.getElementById('btn-reset').disabled = false;
-    player.initFields();
-    player.render();
+    // loadConfig 已内置 initFields + render，无需重复调用
   }
 };
 
