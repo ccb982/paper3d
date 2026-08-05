@@ -669,6 +669,9 @@ class FluidPlayer {
     } else {
       document.getElementById('panel-frames').style.display = 'none';
     }
+
+    // ★ 立即显示 FTX 纹理合成预览（无需等待 JSON 配置导入）
+    this.render();
   }
 
   _buildTexturesForFrame(frameIndex) {
@@ -720,6 +723,9 @@ class FluidPlayer {
         this._pendingResidual = null;
       }
       this.initFields();
+      this.render();
+    } else {
+      // 无 config 时显示预览合成视图
       this.render();
     }
   }
@@ -1398,8 +1404,80 @@ class FluidPlayer {
     this.time += dt;
   }
 
+  // ---------- 预览渲染（仅 FTX 导入后，无 config 时显示 base+residual 合成视图）----------
+  renderPreview() {
+    if (!this.baseHslTex || !this._pendingResidual) return;
+    const w = this.texSize, h = this.texSize;
+
+    // 创建/更新预览用 residual 纹理（直接从 _pendingResidual Uint8Array RGBA 上传）
+    if (!this._previewResidualTex) {
+      this._previewResidualTex = new THREE.DataTexture(
+        this._pendingResidual, w, h, THREE.RGBAFormat, THREE.UnsignedByteType
+      );
+      this._previewResidualTex.minFilter = THREE.LinearFilter;
+      this._previewResidualTex.magFilter = THREE.LinearFilter;
+      this._previewResidualTex.flipY = false;
+    } else {
+      this._previewResidualTex.image = { data: this._pendingResidual, width: w, height: h };
+      this._previewResidualTex.needsUpdate = true;
+    }
+
+    // 创建/复用预览合成材质（vector 模式：final = base + delta，无 density 调制）
+    if (!this._previewMat) {
+      this._previewMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uBaseTexture: { value: this.baseHslTex },
+          uResidual: { value: this._previewResidualTex },
+          uResidualRangeH: { value: 0.5 },
+          uResidualRangeSL: { value: 0.5 },
+        },
+        vertexShader: `varying vec2 vUv; void main(){ vUv=vec2(uv.x,1.0-uv.y); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+        fragmentShader: `
+          uniform sampler2D uBaseTexture;
+          uniform sampler2D uResidual;
+          uniform float uResidualRangeH;
+          uniform float uResidualRangeSL;
+          varying vec2 vUv;
+          vec3 hsl_to_rgb(vec3 hsl) {
+            float h = hsl.x, s = hsl.y, l = hsl.z;
+            vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+            return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+          }
+          void main() {
+            vec4 baseHSLA = texture2D(uBaseTexture, vUv);
+            vec4 residual = texture2D(uResidual, vUv);
+            float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
+            float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
+            float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
+            float finalH = fract(baseHSLA.r + dH);
+            float finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
+            float finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
+            float finalA = baseHSLA.a;
+            vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
+            gl_FragColor = vec4(finalRGB, finalA);
+          }
+        `,
+        transparent: true,
+      });
+      this._previewScene = new THREE.Scene();
+      this._previewMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this._previewMat);
+      this._previewScene.add(this._previewMesh);
+      this._previewCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    } else {
+      this._previewMat.uniforms.uBaseTexture.value = this.baseHslTex;
+      this._previewMat.uniforms.uResidual.value = this._previewResidualTex;
+    }
+
+    this.renderer.render(this._previewScene, this._previewCam);
+  }
+
   // ---------- 合成渲染 ----------
   render() {
+    // 无 config 时（仅导入 FTX 后），退化为预览渲染
+    if (!this.config) {
+      this.renderPreview();
+      return;
+    }
     const cfg = this.config;
     const isScalar = cfg.advectionMode === 'scalar';
     const sc = cfg.scalarConfig || {};
@@ -1679,7 +1757,7 @@ canvas.onclick = (e) => {
 };
 
 // 主循环
-let fpsStartTime = 0, fpsFrameCount = 0;
+let fpsStartTime = 0, fpsFrameCount = 0, currentFps = 0;
 function loop(now) {
   if (!playing) return;
   const dt = Math.min(0.033, (now - lastTime) / 1000) * speed; // 限制最大 dt，防止卡顿后大跳
