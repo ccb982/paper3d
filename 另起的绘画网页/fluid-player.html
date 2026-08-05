@@ -1407,18 +1407,72 @@ class FluidPlayer {
     this.time += dt;
   }
 
+  // ---------- 合成渲染目标（原生分辨率）+ 画布上采样 ----------
+  // ★ 解决 canvas(512) 与 FTX 纹理分辨率不一致时 LinearFilter 插值量化值产生噪点的问题
+  // 策略：先在 texSize×texSize 原生分辨率下渲染合成视图（1:1 采样，无缩放插值），
+  //       再将最终 RGB 结果用 LinearFilter 上/下采样到 512×512 canvas（RGB 插值有意义）
+  getCompositeTarget() {
+    const w = this.texSize, h = this.texSize;
+    if (this._compositeTarget && this._compositeTarget.width === w && this._compositeTarget.height === h) {
+      return this._compositeTarget;
+    }
+    if (this._compositeTarget) this._compositeTarget.dispose();
+    this._compositeTarget = new THREE.WebGLRenderTarget(w, h, {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+    });
+    return this._compositeTarget;
+  }
+
+  // 将渲染目标纹理 blit 到 canvas（带 LinearFilter 上/下采样）
+  // ★ blit 着色器使用 vUv=uv（不做 Y 翻转），因为合成着色器已做 Y 翻转写入 RT，
+  //   RT 纹理 flipY=false，直接采样即可保持正确方向
+  blitToCanvas(srcTexture) {
+    if (!this._blitMat) {
+      this._blitMat = new THREE.ShaderMaterial({
+        uniforms: { uTex: { value: null } },
+        vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+        fragmentShader: `uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor=texture2D(uTex,vUv); }`,
+        depthTest: false, depthWrite: false,
+      });
+      this._blitScene = new THREE.Scene();
+      this._blitMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this._blitMat);
+      this._blitScene.add(this._blitMesh);
+      this._blitCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    }
+    this._blitMat.uniforms.uTex.value = srcTexture;
+    this.renderer.setRenderTarget(null); // 渲染到 canvas
+    this.renderer.render(this._blitScene, this._blitCam);
+  }
+
+  // 在原生分辨率渲染目标上渲染场景，再 blit 到 canvas
+  renderToCanvas(scene, camera) {
+    const target = this.getCompositeTarget();
+    const prev = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(target);
+    this.renderer.render(scene, camera);
+    this.renderer.setRenderTarget(prev);
+    this.blitToCanvas(target.texture);
+  }
+
   // ---------- 预览渲染（仅 FTX 导入后，无 config 时显示 base+residual 合成视图）----------
   renderPreview() {
     if (!this.baseHslTex || !this._pendingResidual) return;
     const w = this.texSize, h = this.texSize;
 
     // 创建/更新预览用 residual 纹理（直接从 _pendingResidual Uint8Array RGBA 上传）
+    // ★ 使用 NearestFilter：残差存储的是量化值（H:0-63, S/L:0-31 编码在 0-255），
+    //   LinearFilter 会在相邻量化值间插值产生无意义中间值→噪点
     if (!this._previewResidualTex) {
       this._previewResidualTex = new THREE.DataTexture(
         this._pendingResidual, w, h, THREE.RGBAFormat, THREE.UnsignedByteType
       );
-      this._previewResidualTex.minFilter = THREE.LinearFilter;
-      this._previewResidualTex.magFilter = THREE.LinearFilter;
+      this._previewResidualTex.minFilter = THREE.NearestFilter;
+      this._previewResidualTex.magFilter = THREE.NearestFilter;
       this._previewResidualTex.flipY = false;
       this._previewResidualTex.needsUpdate = true;
     } else {
@@ -1472,7 +1526,8 @@ class FluidPlayer {
       this._previewMat.uniforms.uResidual.value = this._previewResidualTex;
     }
 
-    this.renderer.render(this._previewScene, this._previewCam);
+    // ★ 在原生分辨率渲染合成视图，再上采样到 canvas（避免量化值插值噪点）
+    this.renderToCanvas(this._previewScene, this._previewCam);
   }
 
   // ---------- 合成渲染 ----------
@@ -1569,7 +1624,8 @@ class FluidPlayer {
       u.uChannels.value.set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
     }
 
-    this.renderer.render(this._compositeScene, this._compositeCam);
+    // ★ 在原生分辨率渲染合成视图，再上/下采样到 canvas（避免量化值插值噪点）
+    this.renderToCanvas(this._compositeScene, this._compositeCam);
   }
 
   // ---------- 源列表 UI ----------
@@ -1610,6 +1666,11 @@ class FluidPlayer {
     this.densityGrid?.dispose();
     this.baseHslTex?.dispose();
     this.obstacleTex?.dispose();
+    this._compositeTarget?.dispose();
+    this._previewResidualTex?.dispose();
+    this._previewMat?.dispose();
+    this._compositeMat?.dispose();
+    this._blitMat?.dispose();
     this.renderer.dispose();
   }
 }
