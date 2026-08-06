@@ -222,6 +222,18 @@ export class FluidSolver {
     if (!this._pendingResidual) return;
     const w = this._residualWidth;
     const h = this._residualHeight;
+
+    // 调试：打印残差数据的统计信息
+    let minR = 255, maxR = 0, sumR = 0;
+    for (let i = 0; i < this._pendingResidual.length; i += 4) {
+      const r = this._pendingResidual[i];
+      minR = Math.min(minR, r);
+      maxR = Math.max(maxR, r);
+      sumR += r;
+    }
+    const avgR = sumR / (this._pendingResidual.length / 4);
+    console.log(`[uploadResidual] 残差数据统计: min=${minR} max=${maxR} avg=${avgR.toFixed(1)} bytes=${this._pendingResidual.length}`);
+
     const tex = new THREE.DataTexture(
       this._pendingResidual,
       w, h, THREE.RGBAFormat, THREE.UnsignedByteType,
@@ -231,6 +243,8 @@ export class FluidSolver {
     tex.flipY = false;
     tex.colorSpace = THREE.LinearSRGBColorSpace; // ★ 禁止 sRGB 解码，残差是量化 HSL 增量
     tex.needsUpdate = true;
+
+    console.log(`[uploadResidual] tex.colorSpace=${tex.colorSpace} (should be ${THREE.LinearSRGBColorSpace})`);
 
     // copy pass：DataTexture → colorGrid（GPUOps 已用 vUv=uv，与 DataTexture flipY=false 对齐）
     const mat = this.gpu.getMaterial('fluid_copy_residual', {
@@ -678,6 +692,18 @@ export class FluidSolver {
     this.frameCount++;
     const cfg = this.config;
     const isScalar = cfg.advectionMode === 'scalar';
+
+    // 调试：每 60 帧打印状态
+    if (this.frameCount % 60 === 0) {
+      console.log(`[FluidSolver.step] frame=${this.frameCount} dt=${dt.toFixed(4)} mode=${isScalar ? 'scalar' : 'vector'} ` +
+        `continuousSources=${this.continuousSources.length} gravity=(${cfg.gravity.x.toFixed(1)},${cfg.gravity.y.toFixed(1)})`);
+      if (this.continuousSources.length > 0) {
+        const src = this.continuousSources[0];
+        console.log(`  source[0]: enabled=${src.enabled} pos=(${src.position.x.toFixed(2)},${src.position.y.toFixed(2)}) ` +
+          `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) ` +
+          `density=${src.density} color=${src.color ? src.color.map(c => c.toFixed(2)).join(',') : 'none'}`);
+      }
+    }
 
     // 0. 一次性注入队列（优先执行，本帧生效）
     this.processInjectionQueue();

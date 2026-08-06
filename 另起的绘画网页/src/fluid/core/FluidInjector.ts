@@ -354,23 +354,6 @@ export class FluidInjector {
 
     this.gpu.render(this.renderer, grid.write, mat);
     grid.swap();
-
-    // ★ 诊断：前 5 次注入回读中心点，确认 density 真正写入（排查合成空白）
-    if ((FluidInjector as any)._densityDiagCount === undefined) {
-      (FluidInjector as any)._densityDiagCount = 0;
-    }
-    if ((FluidInjector as any)._densityDiagCount < 5) {
-      (FluidInjector as any)._densityDiagCount++;
-      const { w, h } = grid.resolution;
-      const cx = Math.max(0, Math.min(w - 1, Math.floor(position.x * w)));
-      const cy = Math.max(0, Math.min(h - 1, Math.floor(position.y * h)));
-      const buf = new Uint8Array(4);
-      const prevRT = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(grid.readTarget);
-      this.renderer.readRenderTargetPixels(grid.readTarget, cx, cy, 1, 1, buf);
-      this.renderer.setRenderTarget(prevRT);
-      console.log(`[diag] inj_density readback @(${cx},${cy}): density=${buf[0]}/255, value=${clampedValue}, rate=${clampedRate}`);
-    }
   }
 
   /**
