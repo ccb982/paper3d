@@ -136,7 +136,9 @@ export function FluidPanel() {
       <input ref={fileInputRef} type="file" accept=".json,application/json" style={{ display: 'none' }}
         onChange={handleImportFile} />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-        <strong style={{ color: '#e94560' }}>流体特效（残差平流）</strong>
+        <strong style={{ color: '#e94560' }}>
+          流体特效（{cfg?.advectionMode === 'scalar' ? '浓度平流' : '残差平流'}）
+        </strong>
         <button
           style={{ ...BTN, background: enabled ? '#e94560' : '#333', color: enabled ? '#fff' : '#aaa' }}
           onClick={toggleEnable}

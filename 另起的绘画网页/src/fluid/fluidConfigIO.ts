@@ -77,7 +77,10 @@ export function parseImportedFluidConfig(
     decayRate: sc.decayRate ?? 0,
   };
 
-  console.log('[parseImportedFluidConfig] scalarConfig:', JSON.stringify(scalarConfig), 'advectionMode:', ac.advectionMode || 'vector');
+  console.log('[parseImportedFluidConfig] raw JSON advectionAndComposite.advectionMode:', ac.advectionMode,
+    '→ parsed:', ac.advectionMode || 'vector');
+  console.log('[parseImportedFluidConfig] scalarConfig:', JSON.stringify(scalarConfig));
+  console.log('[parseImportedFluidConfig] full advectionAndComposite keys:', Object.keys(ac));
 
   const resolution = json.resolution
     ? (typeof json.resolution === 'number'

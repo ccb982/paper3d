@@ -29,6 +29,7 @@ type ContinuousSourceSnapshot = {
   color: [number, number, number, number];
   rate: number;
   enabled: boolean;
+  density?: number;   // ★ 标量模式核心参数：浓度值
   wave?: WaveConfig;
   waypoints?: { x: number; y: number }[];
   waypointMode?: WaypointMode;
@@ -3537,6 +3538,7 @@ export const FluidEditorUI: React.FC = () => {
                 rate: s.rate,
                 velocity: s.velocity,
                 color: s.color,
+                density: s.density,  // ★ 标量模式核心参数：浓度值
                 wave: s.wave,
                 waypoints: s.waypoints,
                 waypointMode: s.waypointMode,
