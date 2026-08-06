@@ -308,19 +308,22 @@ export class FluidSolver {
   private fillGrid(grid: FluidGrid, value: number): void {
     const w = grid.resolution.w;
     const h = grid.resolution.h;
-    const ch = grid.channelCount;
 
     if (grid.dataType === 'uint8') {
-      // Uint8 格式：value 0~1 → 0~255
+      // Uint8 格式
       const uintVal = Math.round(value * 255);
-      const data = new Uint8Array(w * h * Math.max(ch, 1));
+      // 对于 RedFormat（1通道），创建 R 通道数据
+      // 对于 RGBAFormat（4通道），创建 RGBA 数据
+      const ch = grid.channelCount;
+      const data = new Uint8Array(w * h * ch);
       for (let i = 0; i < w * h; i++) {
         data[i * ch + 0] = uintVal;
         if (ch >= 2) data[i * ch + 1] = 0;
         if (ch >= 3) data[i * ch + 2] = 0;
         if (ch >= 4) data[i * ch + 3] = 255;
       }
-      const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+      const texFormat = ch === 1 ? THREE.RedFormat : THREE.RGBAFormat;
+      const tex = new THREE.DataTexture(data, w, h, texFormat, THREE.UnsignedByteType);
       tex.minFilter = THREE.NearestFilter;
       tex.magFilter = THREE.NearestFilter;
       tex.flipY = false;
@@ -328,7 +331,11 @@ export class FluidSolver {
 
       const mat = this.gpu.getMaterial('fluid_fill', {
         uTex: { value: tex },
-      }, `
+      }, ch === 1 ? `
+        uniform sampler2D uTex;
+        varying vec2 vUv;
+        void main(){ gl_FragColor = vec4(texture2D(uTex, vUv).r, 0.0, 0.0, 1.0); }
+      ` : `
         uniform sampler2D uTex;
         varying vec2 vUv;
         void main(){ gl_FragColor = texture2D(uTex, vUv); }
@@ -342,11 +349,13 @@ export class FluidSolver {
       tex.dispose();
     } else {
       // Float 格式
-      const data = new Float32Array(w * h * 4);
+      const ch = grid.channelCount;
+      const data = new Float32Array(w * h * Math.max(ch, 4));
       for (let i = 0; i < w * h; i++) {
-        data[i * 4] = value;
+        data[i * Math.max(ch, 4)] = value;
       }
-      const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+      const texFormat = ch === 1 ? THREE.RedFormat : THREE.RGBAFormat;
+      const tex = new THREE.DataTexture(data, w, h, texFormat, THREE.FloatType);
       tex.minFilter = THREE.NearestFilter;
       tex.magFilter = THREE.NearestFilter;
       tex.flipY = false;
@@ -354,7 +363,11 @@ export class FluidSolver {
 
       const mat = this.gpu.getMaterial('fluid_fill', {
         uTex: { value: tex },
-      }, `
+      }, ch === 1 ? `
+        uniform sampler2D uTex;
+        varying vec2 vUv;
+        void main(){ gl_FragColor = vec4(texture2D(uTex, vUv).r, 0.0, 0.0, 1.0); }
+      ` : `
         uniform sampler2D uTex;
         varying vec2 vUv;
         void main(){ gl_FragColor = texture2D(uTex, vUv); }
@@ -745,9 +758,8 @@ export class FluidSolver {
     // 调试：每 60 帧打印状态
     if (this.frameCount % 60 === 0 && cfg.continuousSources.length > 0) {
       const src = cfg.continuousSources[0];
-      console.log(`[FluidSolver.step] frame=${this.frameCount} mode=${isScalar ? 'scalar' : 'vector'} ` +
-        `source.pos=(${src.position.x.toFixed(2)},${src.position.y.toFixed(2)}) ` +
-        `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) density=${src.density}`);
+      console.log(`[FluidSolver] frame=${this.frameCount} mode=${isScalar ? 'scalar' : 'vector'} ` +
+        `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)})`);
     }
 
     // 0. 一次性注入队列（优先执行，本帧生效）
@@ -839,6 +851,13 @@ export class FluidSolver {
       u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
       const ch = this.config.channels;
       (u.uChannels.value as THREE.Vector4).set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
+
+      // 调试：每 60 帧打印一次 uniform 值
+      if (this.frameCount % 60 === 0) {
+        console.log(`[FluidSolver.composite] channels=(${ch.r},${ch.g},${ch.b},${ch.a}) ` +
+          `baseline=${sc.baselineDensity} mode=${this.config.advectionMode} ` +
+          `combine=${this.config.combineMode}`);
+      }
     } else {
       // direct 模式：直接采样 colorGrid
       u.uColorTex.value = this.colorGrid.read;
@@ -947,11 +966,12 @@ export class FluidSolver {
             finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
             finalA = clamp(baseHSLA.a + dA, 0.0, 1.0);
           }
-          // 通道开关：关闭的通道直接输出残差原值
-          finalH = mix(residual.r, finalH, uChannels.x);
-          finalS = mix(residual.g, finalS, uChannels.y);
-          finalL = mix(residual.b, finalL, uChannels.z);
-          finalA = mix(residual.a, finalA, uChannels.w);
+          // 通道开关：关闭的通道保持 baseHSL 值（不添加 delta）
+          //   之前错误地设为 residual 值，导致颜色变灰
+          finalH = mix(baseHSLA.r, finalH, uChannels.x);
+          finalS = mix(baseHSLA.g, finalS, uChannels.y);
+          finalL = mix(baseHSLA.b, finalL, uChannels.z);
+          finalA = mix(baseHSLA.a, finalA, uChannels.w);
 
           vec3 rgb = hsl2rgb(vec3(finalH, finalS, finalL));
           gl_FragColor = vec4(rgb, finalA);

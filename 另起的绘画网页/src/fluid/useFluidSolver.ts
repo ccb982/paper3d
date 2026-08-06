@@ -108,11 +108,17 @@ export function useFluidSolver(
     }
 
     // MCSDA：反推 baseHsl，使 composite = base + 平流(残差)
-    const baseHsl = buildBaseHslFromFrame(frameData!);
-    if (baseHsl) {
-      solver.setBaseHsl(baseHsl.data, baseHsl.width, baseHsl.height);
-    } else {
-      // 无 baseHsl 时退化为 direct（colorGrid 即合成色，流体平流整帧）
+    //   有 boundBaseTexture 时，始终用 MCSDA 模式（即使没有 residual，不减 delta）
+    //   只有完全没有纹理时才退化为 Direct 模式
+    let isMCSDA = false;
+    if (baseTex) {
+      const baseHsl = buildBaseHslFromFrame(frameData!);
+      if (baseHsl) {
+        solver.setBaseHsl(baseHsl.data, baseHsl.width, baseHsl.height);
+        isMCSDA = true;
+      }
+    }
+    if (!isMCSDA) {
       solver.clearBaseHsl();
     }
 
@@ -129,9 +135,8 @@ export function useFluidSolver(
     solver.composite();
 
     console.log(
-      `[useFluidSolver] 创建/更新解算器 layer="${activeLayerId}" region=#${boundRegionId} ` +
-      `res=${resolution.w}x${resolution.h} mode=${residualTex ? 'MCSDA(残差平流)' : 'direct(整帧平流)'} ` +
-      `obstacle=${boundEntity ? '✓' : '✗'}`,
+      `[useFluidSolver] layer="${activeLayerId}" region=#${boundRegionId} ` +
+      `mode=${isMCSDA ? 'MCSDA' : 'direct'} res=${resolution.w}x${resolution.h}`,
     );
 
     // 清理函数：仅在组件卸载或下一次 effect 重跑前调用

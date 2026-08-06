@@ -80,7 +80,7 @@ export function parseImportedFluidConfig(
   console.log('[parseImportedFluidConfig] raw JSON advectionAndComposite.advectionMode:', ac.advectionMode,
     '→ parsed:', ac.advectionMode || 'vector');
   console.log('[parseImportedFluidConfig] scalarConfig:', JSON.stringify(scalarConfig));
-  console.log('[parseImportedFluidConfig] full advectionAndComposite keys:', Object.keys(ac));
+  console.log('[parseImportedFluidConfig] channels:', JSON.stringify(channels));
 
   const resolution = json.resolution
     ? (typeof json.resolution === 'number'
