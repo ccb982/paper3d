@@ -546,67 +546,6 @@ export function MainCanvas() {
         currentTime = currentTime % 1000;
         useAppStore.getState().setRegionAnimationTime(currentTime);
 
-        // ===== 全面调试：模板缓冲全流程 =====
-        const debugDetail = frameCounter < 15 || frameCounter % 60 === 0;
-        if (debugDetail) {
-          const group = rootGroupRef.current;
-          if (group) {
-            console.groupCollapsed(`[模板缓冲调试] 帧#${frameCounter} time=${currentTime.toFixed(3)}s`);
-            
-            let fillCount = 0, colorCount = 0;
-            group.children.forEach((child, ci) => {
-              if (!(child instanceof THREE.Mesh)) return;
-              const mat = child.material as THREE.ShaderMaterial;
-              const hasStencil = (mat as any).stencilTest === true;
-              const hasWrite = (mat as any).stencilWrite === true;
-              const stencilFunc = (mat as any).stencilFunc ?? 'N/A';
-              const ro = child.renderOrder;
-              const ut = mat.uniforms?.uTime?.value ?? -1;
-              const vc = mat.uniforms?.uVertexCount?.value ?? -1;
-              const hasTex = !!mat.uniforms?.uColorTex;
-              const dt = mat.uniforms?.uDisplacementTex?.value;
-
-              if (hasWrite) fillCount++;
-              if (hasTex) colorCount++;
-
-              // 采样 displacement texture 的前几个像素（帧0位置和当前帧位置）
-              let dispSample = 'none';
-              if (dt && dt.image) {
-                const img = (dt as any).image;
-                const tw = dt.width || img.width || 0;
-                const th = dt.height || img.height || 0;
-                const totalFrames = mat.uniforms?.uTotalFrames?.value ?? 1;
-                const fps = mat.uniforms?.uFramesPerSecond?.value ?? 30;
-                const frameIdx = Math.floor((currentTime * fps) % totalFrames);
-                const texY = Math.floor((frameIdx / totalFrames) * (th || 1));
-                const d = img.data;
-                // HalfFloatType 使用 Uint16Array，每个通道占2字节
-                if (d && texY * tw * 4 + 3 < d.length) {
-                  const idxV0 = (texY * tw + 0) * 4;
-                  dispSample = `tex=${tw}x${th} v0@帧${frameIdx}:RG=(${d[idxV0]?.toFixed(0)??'?'},${d[idxV0+1]?.toFixed(0)??'?'})` +
-                    ` v1:(${d[idxV0+4]?.toFixed(0)??'?'},${d[idxV0+5]?.toFixed(0)??'?'})`;
-                } else {
-                  dispSample = `tex=${tw}x${th} data=${d ? d.length : 'null'}`;
-                }
-              }
-
-              console.log(
-                `  child#${ci} ro=${ro} type=${hasWrite?'FILL':hasTex?'COLOR':'?'}` +
-                ` stencilTest=${hasStencil} stencilWrite=${hasWrite} stencilFunc=${stencilFunc}` +
-                ` uTime=${ut?.toFixed(3)??'N/A'} vtxCnt=${vc}` +
-                ` | dispTex=${dispSample}`
-              );
-            });
-            
-            // 网格构建时数据统计
-            const dispTexInfo = group.userData?.['dispTexInfo'] as string | undefined;
-            if (dispTexInfo) console.log(`  【构建时】${dispTexInfo}`);
-
-            console.log(`  小结: fillMesh=${fillCount} colorMesh=${colorCount}`);
-            console.groupEnd();
-          }
-        }
-
         const group = rootGroupRef.current;
         if (group) {
           // 每帧更新 uniforms
@@ -724,15 +663,10 @@ useEffect(() => {
   
   let meshCount = 0, texCount = 0;
 
-  console.log(`[VAT网格构建] 图层="${activeLayerId}" 实体数=${entities.length} 帧数据=${!!frameDataMap[activeLayerId]} boundRegionId=${frameDataMap[activeLayerId]?.boundRegionId}`);
-
   for (const entity of entities) {
     try {
     const anno = regionAnnotationsForLayer.find(a => Number(a.regionId) === entity.id);
-    const hasAnnotation = !!anno;
     const hasMaskEffect = anno?.maskEffect?.enabled;
-
-    console.log(`[VAT区域#${entity.id}] 注释=${hasAnnotation ? `id=${anno!.id} regionId=${anno!.regionId}` : '无'} 蒙版特效=${hasMaskEffect ? '启用' : '未启用'} 顶点数=${entity.getTotalVertices()} 帧数=${entity.getNumFrames()}`);
 
     const bbox = entity.worldBbox;
     if (!bbox) { continue; }
@@ -928,13 +862,8 @@ useEffect(() => {
         if (uvArray[i + 1] > uvMaxY) uvMaxY = uvArray[i + 1];
       }
       
-      console.log(`[COLOR诊断] 区域#${entity.id}`);
-      console.log(`  boundBaseTexture: ${boundTex.width}x${boundTex.height} 有效像素=${validPx}/${boundTex.width*boundTex.height}`);
-      console.log(`  首像素颜色: ${firstPixel}`);
-      console.log(`  UV范围: X=[${uvMinX.toFixed(4)}, ${uvMaxX.toFixed(4)}] Y=[${uvMinY.toFixed(4)}, ${uvMaxY.toFixed(4)}]`);
-      console.log(`  期望UV范围: [0,1]（纹理尺寸=512x512，像素坐标0~512 → 归一化后0~1）`);
       if (uvMinX < 0 || uvMaxX > 1 || uvMinY < 0 || uvMaxY > 1) {
-        console.warn(`  ⚠️ UV超出[0,1]范围！纹理采样可能异常`);
+        console.warn(`[COLOR] 区域#${entity.id} UV超出[0,1]范围！纹理采样可能异常`);
       }
 
       // 将 ImageData 转换为 Three.js DataTexture
@@ -1040,8 +969,6 @@ useEffect(() => {
   }
   }
 
-  console.log(`[VAT网格构建] 完成：创建 ${meshCount} 个填充网格, ${texCount} 个纹理网格, rootGroup子节点=${group.children.length}`);
-
   // ===== 位移纹理诊断数据（存入 group.userData，供动画循环读取）=====
   if (entities.length > 0) {
     const firstEntity = entities[0];
@@ -1063,31 +990,13 @@ useEffect(() => {
       }
       if (minDisp === Infinity) minDisp = 0;
       
-      const entitiesInfo = entities.map(e => {
-        const mf = e.maskEffect;
-        return `  #${e.id}: maskEffect=${mf ? `enabled=${mf.enabled} amp=${mf.amplitude?.toFixed(1)} freq=${mf.frequency?.toFixed(2)} twist=${mf.twist?.toFixed(2)}` : 'null'}`;
-      }).join('\n');
-
       const th = img.height || 0;
       group.userData['dispTexInfo'] =
         `位移纹理: ${tw}x${th} 总帧=${numFrames} 顶点数=${vc} ` +
         `非零像素=${nonZeroPixels}/${d.length/4} 最大位移=${maxDisp.toFixed(1)} 最小非零=${minDisp.toFixed(1)}`;
-      
-      console.log(`[VAT位移纹理诊断]\n${group.userData['dispTexInfo']}\n区域掩码特效:\n${entitiesInfo}`);
     } else {
-      console.warn('[VAT位移纹理诊断] ⚠️ 位移纹理为空或无数据！maskEffect 可能为 null');
+      console.warn('[VAT] 位移纹理为空或无数据！maskEffect 可能为 null');
       group.userData['dispTexInfo'] = '⚠️ 位移纹理为空';
-    }
-
-    // 绑定纹理诊断
-    const fd = frameDataMap[activeLayerId];
-    if (fd?.boundBaseTexture) {
-      const bt = fd.boundBaseTexture;
-      let btValid = 0;
-      for (let i = 3; i < bt.data.length; i += 4) { if (bt.data[i] > 0) btValid++; }
-      console.log(`[VAT绑定纹理] boundRegionId=${fd.boundRegionId} 尺寸=${bt.width}x${bt.height} 有效像素=${btValid}/${bt.width * bt.height}`);
-    } else {
-      console.log('[VAT绑定纹理] ⚠️ 无绑定纹理 (boundBaseTexture 为空)');
     }
   }
 }, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL, frameDataMap]);

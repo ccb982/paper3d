@@ -133,11 +133,6 @@ export function buildBaseHslFromFrame(
     const b = base.data[i * 4 + 2];
     const a = base.data[i * 4 + 3];
 
-    // ★ 与编辑器一致：全程 sRGB 空间，不做 sRGB→线性 转换。
-    //   残差 delta 在 sRGB-HSL 空间量化，反推的 baseH 也必须在 sRGB-HSL 空间，
-    //   合成着色器 hsl2rgb 直接输出 sRGB 值写入 RenderTarget，才能 base+delta 完美还原。
-    //   若在此处做 srgbToLinear，会导致 baseH 落在线性-HSL 空间，与 delta 错位，
-    //   合成后初始色相就发生偏移（向量模式 bug 根因）。
     const fHSL = rgbToHsl(r, g, b);
     let bH = fHSL.h;
     let bS = fHSL.s;

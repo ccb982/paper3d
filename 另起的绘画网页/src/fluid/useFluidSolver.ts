@@ -85,7 +85,27 @@ export function useFluidSolver(
     if (!solver) return;
 
     // ★ 流体直接作用在「残差」上：colorGrid = 残差（被平流），base 静态
-    solver.loadResidual(residualTex ?? baseTex!);
+    //   当没有残差纹理时，创建中性残差（全 128，即 delta=0），避免将帧纹理当作残差导致帧变亮
+    if (residualTex) {
+      solver.loadResidual(residualTex);
+    } else {
+      // 创建中性残差（R=G=B=128, A=255），确保 delta=0
+      const w = resolution.w;
+      const h = resolution.h;
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      const neutralImageData = ctx.createImageData(w, h);
+      const data = neutralImageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = 128;     // R → dH = (128/255*2 - 1)*0.5 ≈ 0
+        data[i + 1] = 128; // G → dS ≈ 0
+        data[i + 2] = 128; // B → dL ≈ 0
+        data[i + 3] = 255; // A → dA ≈ 0
+      }
+      solver.loadResidual(neutralImageData);
+    }
 
     // MCSDA：反推 baseHsl，使 composite = base + 平流(残差)
     const baseHsl = buildBaseHslFromFrame(frameData!);

@@ -222,17 +222,6 @@ export class FluidSolver {
     const w = this._residualWidth;
     const h = this._residualHeight;
 
-    // 调试：打印残差数据的统计信息
-    let minR = 255, maxR = 0, sumR = 0;
-    for (let i = 0; i < this._pendingResidual.length; i += 4) {
-      const r = this._pendingResidual[i];
-      minR = Math.min(minR, r);
-      maxR = Math.max(maxR, r);
-      sumR += r;
-    }
-    const avgR = sumR / (this._pendingResidual.length / 4);
-    console.log(`[uploadResidual] 残差数据统计: min=${minR} max=${maxR} avg=${avgR.toFixed(1)} bytes=${this._pendingResidual.length}`);
-
     const tex = new THREE.DataTexture(
       this._pendingResidual,
       w, h, THREE.RGBAFormat, THREE.UnsignedByteType,
@@ -241,8 +230,6 @@ export class FluidSolver {
     tex.magFilter = THREE.NearestFilter;
     tex.flipY = false;
     tex.needsUpdate = true;
-
-    console.log(`[uploadResidual] tex.colorSpace=${tex.colorSpace} (should be ${THREE.LinearSRGBColorSpace})`);
 
     // copy pass：DataTexture → colorGrid（GPUOps 已用 vUv=uv，与 DataTexture flipY=false 对齐）
     const mat = this.gpu.getMaterial('fluid_copy_residual', {
@@ -690,15 +677,11 @@ export class FluidSolver {
     const isScalar = cfg.advectionMode === 'scalar';
 
     // 调试：每 60 帧打印状态
-    if (this.frameCount % 60 === 0) {
-      console.log(`[FluidSolver.step] frame=${this.frameCount} dt=${dt.toFixed(4)} mode=${isScalar ? 'scalar' : 'vector'} ` +
-        `continuousSources=${cfg.continuousSources.length} gravity=(${cfg.gravity.x.toFixed(1)},${cfg.gravity.y.toFixed(1)})`);
-      if (cfg.continuousSources.length > 0) {
-        const src = cfg.continuousSources[0];
-        console.log(`  source[0]: enabled=${src.enabled} pos=(${src.position.x.toFixed(2)},${src.position.y.toFixed(2)}) ` +
-          `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) ` +
-          `density=${src.density} color=${src.color ? src.color.map(c => c.toFixed(2)).join(',') : 'none'}`);
-      }
+    if (this.frameCount % 60 === 0 && cfg.continuousSources.length > 0) {
+      const src = cfg.continuousSources[0];
+      console.log(`[FluidSolver.step] frame=${this.frameCount} mode=${isScalar ? 'scalar' : 'vector'} ` +
+        `source.pos=(${src.position.x.toFixed(2)},${src.position.y.toFixed(2)}) ` +
+        `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) density=${src.density}`);
     }
 
     // 0. 一次性注入队列（优先执行，本帧生效）
@@ -790,13 +773,6 @@ export class FluidSolver {
       u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
       const ch = this.config.channels;
       (u.uChannels.value as THREE.Vector4).set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
-
-      // 调试：每 60 帧打印一次 uniform 值
-      if (this.frameCount % 60 === 0) {
-        console.log(`[FluidSolver.composite] scalarMode=${u.uScalarMode.value} combineMode=${u.uCombineMode.value} ` +
-          `channelMul=(${sc.hMultiplier.toFixed(2)},${sc.sMultiplier.toFixed(2)},${sc.lMultiplier.toFixed(2)},${sc.aMultiplier.toFixed(2)}) ` +
-          `baseline=${sc.baselineDensity.toFixed(2)}`);
-      }
     } else {
       // direct 模式：直接采样 colorGrid
       u.uColorTex.value = this.colorGrid.read;
@@ -885,6 +861,11 @@ export class FluidSolver {
           float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
           float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
           float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
+
+          // ★ 调试：中心像素打印（通过特殊颜色标记）
+          //   我们用一种特殊方法：如果 UV 在中心区域，让输出偏红
+          //   实际上我们无法直接从 GLSL 打印日志，所以这个调试不可行
+          //   但我们可以检查 buildBaseHslFromFrame 的实现
 
           float finalH, finalS, finalL, finalA;
           if (uScalarMode == 1) {
