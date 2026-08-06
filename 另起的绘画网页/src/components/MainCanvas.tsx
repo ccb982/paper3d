@@ -11,6 +11,7 @@ import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor'
 import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, DashedSubRegion } from '../utils/colorExtractionUtils';
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 import earcut from 'earcut';
+import { useFluidSolver } from '../fluid/useFluidSolver';
 const PAINT_BUFFER_SIZE = 512; // 绘制缓冲区固定尺寸
 
 // ========== VAT 顶点着色器（读取预计算位移纹理，GPU自计算帧索引）==========
@@ -273,6 +274,14 @@ export function MainCanvas() {
   const rootGroupRef = useRef<THREE.Group | null>(null); // 根Group，负责缩放归一化坐标到画布
   const regionUniformsMapRef = useRef<Array<{ regionId: number; uniforms: any }>>([]); // 存储每个区域的 uniforms
   const animationFrameIdRef = useRef<number | null>(null); // 动画循环 ID
+  // ★ 流体集成：存储每个区域 COLOR mesh 的 uniforms，用于在 animate 循环中把
+  //   uColorTex 从静态 boundBaseTexture 交换为 FluidSolver 的 compositeTexture。
+  //   每次重建网格时清空并重新填充。
+  const colorMeshUniformsRef = useRef<Array<{
+    regionId: number;
+    uniforms: any;
+    staticColorTex: THREE.Texture;
+  }>>([]);
   const {
     imageState,
     layerVisibility,
@@ -375,6 +384,18 @@ export function MainCanvas() {
     frameDataMap,
     bfsResolution,
   } = useAppStore();
+
+  // ★ 流体解算器生命周期（创建/加载数据/障碍物/配置更新/销毁）。
+  //   解算器直接作用在区域实体帧纹理的「残差」上：colorGrid = 残差（被平流），
+  //   baseHsl 静态，composite = base + 平流(残差) → compositeTexture。
+  //   animate 循环读取 solverRef.current 驱动 step+composite，并把
+  //   绑定区域 COLOR mesh 的 uColorTex 交换为 compositeTexture。
+  const fluidSolverRef = useFluidSolver(
+    webglRendererRef,
+    activeLayerId,
+    frameDataMap[activeLayerId ?? ''],
+    regionEntities[activeLayerId ?? ''] ?? [],
+  );
 
   // 使用 ref 追踪恢复状态，避免触发 useEffect
   const isRestoringRef = useRef(false);
@@ -595,9 +616,59 @@ export function MainCanvas() {
           });
         }
 
+        // ===== 流体解算器驱动 =====
+        // 流体直接作用在区域实体帧纹理的「残差」上：step 平流残差，composite 产出
+        // compositeTexture，再把绑定区域 COLOR mesh 的 uColorTex 换成它。
+        // 复用模板缓冲裁剪（stencilTest=Equal）+ VAT 位移 + textureOffset/Scale/Rotation，
+        // 故流体仅在区域内部可见，且随区域一起扭曲/变换。
+        const solver = fluidSolverRef.current;
+        const st = useAppStore.getState();
+        const aLayerId = st.activeLayerId;
+        const fd = aLayerId ? st.frameDataMap[aLayerId] : undefined;
+        const rt = fd?.fluidRuntime;
+        if (solver && fd) {
+          // 重置标志：resetFluid() 置位 → 此处执行 solver.reset() 并清除
+          if (rt?._needsReset) {
+            solver.reset();
+            useAppStore.setState({
+              frameDataMap: {
+                ...st.frameDataMap,
+                [aLayerId!]: {
+                  ...fd,
+                  fluidRuntime: { ...rt, _needsReset: false, currentTime: 0, frameCount: 0 },
+                },
+              },
+            } as any);
+          }
+          if (rt?.isPlaying) {
+            // dt 限幅，避免切标签页后大步长导致爆炸
+            const fluidDt = Math.min(delta, 1 / 30) * (rt.speed ?? 1);
+            if (fluidDt > 0) {
+              solver.step(fluidDt);
+              if (rt) rt.currentTime += fluidDt;
+            }
+          }
+          // 始终 composite，使暂停态也能显示当前帧（含重置后的初始残差）
+          solver.composite();
+          const compTex = solver.getCompositeTexture();
+          const boundId = fd.boundRegionId;
+          for (const entry of colorMeshUniformsRef.current) {
+            if (compTex && entry.regionId === boundId) {
+              entry.uniforms.uColorTex.value = compTex;
+            } else {
+              entry.uniforms.uColorTex.value = entry.staticColorTex;
+            }
+          }
+        } else {
+          // 无流体：恢复静态纹理
+          for (const entry of colorMeshUniformsRef.current) {
+            entry.uniforms.uColorTex.value = entry.staticColorTex;
+          }
+        }
+
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
-        
+
         frameCounter++;
 
         animationFrameIdRef.current = requestAnimationFrame(animate);
@@ -638,6 +709,9 @@ useEffect(() => {
     }
     group.remove(child);
   }
+
+  // ★ 清空流体 uniforms 注册表（即将重建，animate 循环会读取最新内容）
+  colorMeshUniformsRef.current = [];
 
   const entities = regionEntities[activeLayerId] || [];
   if (entities.length === 0) return;
@@ -904,6 +978,15 @@ useEffect(() => {
       colorMesh = new THREE.Mesh(fillGeom, texMat);
       colorMesh.renderOrder = 1;
       colorMesh.frustumCulled = false;
+
+      // ★ 注册到流体 uniforms 表：animate 循环据此把 uColorTex 交换为
+      //   FluidSolver 的 compositeTexture（流体直接绘制在残差之上，复用模板裁剪 +
+      //   VAT 位移 + textureOffset/Scale/Rotation）。无流体时保持静态 colorTexture。
+      colorMeshUniformsRef.current.push({
+        regionId: entity.id,
+        uniforms: texMat.uniforms,
+        staticColorTex: colorTexture,
+      });
     }
 
     // --- 7. 边框：为每个环单独创建 LineLoop ---

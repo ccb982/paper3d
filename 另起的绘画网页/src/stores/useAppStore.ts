@@ -9,6 +9,7 @@ import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, clusterAndGenerateTexturesV2 } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
+import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime } from '../fluid/fluidConfigIO';
 
 export interface SharedBaseColor {
   id: number;
@@ -436,6 +437,21 @@ interface AppState {
 
   // 帧间预测开关
   setEnableFramePrediction: (enabled: boolean) => void;
+
+  // ===== 流体特效（轻量解算器 FluidSolver）=====
+  // 流体配置/运行时强绑定到 frameDataMap[layerId]，切图层即切流体状态
+  updateFluidConfig: (layerId: string, partial: Partial<import('../fluid/FluidSolver').FluidSolverConfig>) => void;
+  toggleFluidPlaying: (layerId: string) => void;
+  setFluidSpeed: (layerId: string, speed: number) => void;
+  setFluidViewMode: (layerId: string, mode: import('../types').FluidRuntime['viewMode']) => void;
+  resetFluid: (layerId: string) => void;
+  addFluidSource: (layerId: string, source: import('../fluid/FluidSolver').InjectionConfig) => void;
+  removeFluidSource: (layerId: string, index: number) => void;
+  updateFluidSource: (layerId: string, index: number, partial: Partial<import('../fluid/FluidSolver').InjectionConfig>) => void;
+  /** 从外部 JSON（fluid-player.html 格式）导入流体配置，整替换 fluidConfig + 初始化 runtime + 标记重置 */
+  importFluidConfig: (layerId: string, json: any) => boolean;
+  /** 导出当前流体配置为外部 JSON 格式（fluid-player.html 可读）；无配置返回 null */
+  exportFluidConfig: (layerId: string) => any;
 }
 
 const defaultAxis: AxisConfig = {
@@ -3217,6 +3233,165 @@ export const useAppStore = create<AppState>((set, get) => ({
         },
       },
     }));
+  },
+
+  // ===== 流体特效 actions =====
+  updateFluidConfig: (layerId, partial) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return;
+    const prev = frameData.fluidConfig ?? {};
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          fluidConfig: {
+            ...prev,
+            ...partial,
+            scalarConfig: { ...(prev.scalarConfig ?? {}), ...(partial.scalarConfig ?? {}) },
+            resolution: partial.resolution ?? prev.resolution ?? { w: frameData.sourceResolution || 512, h: frameData.sourceResolution || 512 },
+          } as any,
+        },
+      },
+    }));
+  },
+
+  toggleFluidPlaying: (layerId) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return;
+    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: 'composite' as const, frameCount: 0 };
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: { ...frameData, fluidRuntime: { ...rt, isPlaying: !rt.isPlaying } },
+      },
+    }));
+  },
+
+  setFluidSpeed: (layerId, speed) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return;
+    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: 'composite' as const, frameCount: 0 };
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: { ...frameData, fluidRuntime: { ...rt, speed } },
+      },
+    }));
+  },
+
+  setFluidViewMode: (layerId, mode) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return;
+    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: mode, frameCount: 0 };
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: { ...frameData, fluidRuntime: { ...rt, viewMode: mode } },
+      },
+    }));
+  },
+
+  resetFluid: (layerId) => {
+    // 仅重置运行时状态；解算器实例的 reset() 由 MainCanvas 在渲染循环检测到时调用
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return;
+    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: 'composite' as const, frameCount: 0 };
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: { ...frameData, fluidRuntime: { ...rt, currentTime: 0, frameCount: 0, _needsReset: true } },
+      },
+    }));
+  },
+
+  addFluidSource: (layerId, source) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return;
+    const cfg = frameData.fluidConfig ?? { continuousSources: [] as any[] } as any;
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          fluidConfig: { ...cfg, continuousSources: [...(cfg.continuousSources ?? []), source] },
+        },
+      },
+    }));
+  },
+
+  removeFluidSource: (layerId, index) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData || !frameData.fluidConfig) return;
+    const sources = [...(frameData.fluidConfig.continuousSources ?? [])];
+    sources.splice(index, 1);
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          fluidConfig: { ...frameData.fluidConfig!, continuousSources: sources },
+        },
+      },
+    }));
+  },
+
+  updateFluidSource: (layerId, index, partial) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData || !frameData.fluidConfig) return;
+    const sources = [...(frameData.fluidConfig.continuousSources ?? [])];
+    if (index < 0 || index >= sources.length) return;
+    sources[index] = { ...sources[index], ...partial };
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          fluidConfig: { ...frameData.fluidConfig!, continuousSources: sources },
+        },
+      },
+    }));
+  },
+
+  importFluidConfig: (layerId, json) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData) return false;
+    // 分辨率锁定到绑定纹理尺寸（与 fluid-player.html 锁定 FTX 一致；内联避免循环依赖）
+    const r = frameData.boundResidualTexture;
+    const b = frameData.boundBaseTexture;
+    const fallbackRes = (r && r.width > 0 && r.height > 0) ? { w: r.width, h: r.height }
+      : (b && b.width > 0 && b.height > 0) ? { w: b.width, h: b.height }
+      : { w: frameData.sourceResolution || 512, h: frameData.sourceResolution || 512 };
+    // 解析外部 JSON → 内部 FluidSolverConfig
+    const cfg = parseImportedFluidConfig(json, fallbackRes);
+    cfg.resolution = { ...fallbackRes };
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: {
+          ...frameData,
+          fluidConfig: cfg,
+          fluidRuntime: { ...defaultFluidRuntime() },
+        },
+      },
+    }));
+    return true;
+  },
+
+  exportFluidConfig: (layerId) => {
+    const state = get();
+    const frameData = state.frameDataMap[layerId];
+    if (!frameData?.fluidConfig) return null;
+    return serializeFluidConfigToJSON(frameData.fluidConfig);
   },
 
 }));

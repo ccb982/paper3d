@@ -6,6 +6,7 @@ import { MainCanvas } from './components/MainCanvas';
 import { Toolbar } from './components/Toolbar';
 import { FluidEditorUI } from './fluid';
 import { BaseColorEditor } from './components/BaseColorEditor';
+import { FluidPanel } from './components/FluidPanel';
 
 function App() {
   const { layerVisibility, loadFromStorage } = useAppStore();
@@ -124,6 +125,8 @@ function App() {
       <aside className="sidebar">
         <ImageImport />
         <LayerControl />
+        {/* 流体特效控制面板（残差平流，直接绘制在区域实体模板缓冲之上） */}
+        <FluidPanel />
         {/* 流体模拟控制按钮 */}
         <div style={{ padding: '10px', borderTop: '1px solid #333' }}>
           <button

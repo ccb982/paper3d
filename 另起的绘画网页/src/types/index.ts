@@ -175,4 +175,23 @@ export interface FrameData {
   distortFrequency: number;                  // 扭曲频率（默认5.0）
   distortSpeed: number;                      // 扭曲速度（默认1.2）
   distortRotation: number;                   // 扭曲方向旋转（弧度，0=水平）
+
+  // ---------- 流体特效（轻量解算器 FluidSolver）----------
+  // 流体直接绘制在区域实体模板缓冲的帧纹理之上：解算器每帧把合成结果
+  // （base HSL + 平流残差 + density 调制）渲染到 compositeTarget，
+  // MainCanvas 把区域 COLOR mesh 的 uColorTex 换成该纹理，复用模板裁剪 +
+  // VAT 位移 + textureOffset/Scale/Rotation。
+  fluidConfig?: import('../fluid/FluidSolver').FluidSolverConfig;
+  fluidRuntime?: FluidRuntime;
+}
+
+/** 流体运行时状态（播放控制、视图模式，不持久化） */
+export interface FluidRuntime {
+  isPlaying: boolean;
+  speed: number;                              // 播放速度倍率
+  currentTime: number;                        // 模拟累计时间（秒）
+  viewMode: 'color' | 'velocity' | 'composite' | 'density' | 'obstacle';
+  frameCount: number;
+  /** MainCanvas 渲染循环检测到 true 时调用 solver.reset()，然后清除此标志 */
+  _needsReset?: boolean;
 }
