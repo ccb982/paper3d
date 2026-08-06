@@ -88,14 +88,9 @@ export class FluidGrid {
       depthBuffer: false,
       stencilBuffer: false,
     });
-
-    // ★ 关键：设置 colorSpace = LinearSRGB，禁止 Three.js 自动 sRGB 解码
-    //   FluidGrid 存储的是量化残差（HSL 增量）或速度/密度值，不是颜色数据。
-    //   若不设置，Three.js 默认将 RGBA UnsignedByteType 视为 SRGBColorSpace，
-    //   GPU 采样时会执行 sRGB→线性 解码，导致 HSL 增量值被扭曲（如 0.5→0.73），
-    //   合成后画面变白/色偏。与 FluidEditor.ts:1421 的处理一致。
-    this.texA.texture.colorSpace = THREE.LinearSRGBColorSpace;
-    this.texB.texture.colorSpace = THREE.LinearSRGBColorSpace;
+    // ★ 注意：WebGLRenderTarget 的 colorSpace 默认为 NoColorSpace，
+    //   ShaderMaterial 不会基于 texture.colorSpace 注入颜色空间转换，
+    //   因此此处无需设置 colorSpace，保持默认行为即可。
 
   }
 

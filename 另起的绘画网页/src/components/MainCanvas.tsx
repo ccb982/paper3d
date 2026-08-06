@@ -450,6 +450,10 @@ export function MainCanvas() {
     renderer.setPixelRatio(1);
     renderer.setClearColor(0x000000, 0);
     renderer.autoClear = false;
+    // ★ 关键：设置输出颜色空间为线性，禁用 Three.js 的 linear→sRGB 自动转换
+    //   因为所有自定义着色器（hsl2rgb、位移着色器等）输出的是 sRGB 值，
+    //   如果再做一次 linear→sRGB 转换，会导致双重 sRGB → 画面发亮/色偏
+    renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     webglRendererRef.current = renderer;
 
     // 创建场景

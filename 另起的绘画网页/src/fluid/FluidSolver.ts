@@ -197,9 +197,8 @@ export class FluidSolver {
       depthBuffer: false,
       stencilBuffer: false,
     });
-    // ★ compositeTarget 存储 hsl2rgb 输出的 sRGB 值，但作为 RenderTarget 需要禁止自动解码
-    //   否则后续采样时会被再次 sRGB→线性，导致颜色变淡
-    this.compositeTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
+    // ★ 不设置 colorSpace：WebGLRenderTarget 默认 NoColorSpace，
+    //   ShaderMaterial 采样时不会注入颜色空间转换。
   }
 
   // ==================== 数据加载 ====================
@@ -238,10 +237,9 @@ export class FluidSolver {
       this._pendingResidual,
       w, h, THREE.RGBAFormat, THREE.UnsignedByteType,
     );
-    tex.minFilter = THREE.NearestFilter;  // ★ 量化值禁用线性插值，避免中间值噪点
+    tex.minFilter = THREE.NearestFilter;
     tex.magFilter = THREE.NearestFilter;
     tex.flipY = false;
-    tex.colorSpace = THREE.LinearSRGBColorSpace; // ★ 禁止 sRGB 解码，残差是量化 HSL 增量
     tex.needsUpdate = true;
 
     console.log(`[uploadResidual] tex.colorSpace=${tex.colorSpace} (should be ${THREE.LinearSRGBColorSpace})`);
@@ -267,7 +265,6 @@ export class FluidSolver {
    */
   setBaseHsl(data: Float32Array, width: number, height: number): void {
     if (width <= 0 || height <= 0 || data.length < width * height * 4) {
-      // 非法尺寸视为清除 → 退化为 direct 模式
       this.clearBaseHsl();
       return;
     }
@@ -278,7 +275,6 @@ export class FluidSolver {
     this.baseHslTex.minFilter = THREE.LinearFilter;
     this.baseHslTex.magFilter = THREE.LinearFilter;
     this.baseHslTex.flipY = false;
-    this.baseHslTex.colorSpace = THREE.LinearSRGBColorSpace; // ★ HSL 浮点值，禁止 sRGB 解码
     this.baseHslTex.needsUpdate = true;
   }
 
@@ -696,9 +692,9 @@ export class FluidSolver {
     // 调试：每 60 帧打印状态
     if (this.frameCount % 60 === 0) {
       console.log(`[FluidSolver.step] frame=${this.frameCount} dt=${dt.toFixed(4)} mode=${isScalar ? 'scalar' : 'vector'} ` +
-        `continuousSources=${this.continuousSources.length} gravity=(${cfg.gravity.x.toFixed(1)},${cfg.gravity.y.toFixed(1)})`);
-      if (this.continuousSources.length > 0) {
-        const src = this.continuousSources[0];
+        `continuousSources=${cfg.continuousSources.length} gravity=(${cfg.gravity.x.toFixed(1)},${cfg.gravity.y.toFixed(1)})`);
+      if (cfg.continuousSources.length > 0) {
+        const src = cfg.continuousSources[0];
         console.log(`  source[0]: enabled=${src.enabled} pos=(${src.position.x.toFixed(2)},${src.position.y.toFixed(2)}) ` +
           `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) ` +
           `density=${src.density} color=${src.color ? src.color.map(c => c.toFixed(2)).join(',') : 'none'}`);
