@@ -315,7 +315,6 @@ export function MainCanvas() {
     saveToStorage,
     regionPolygonsCache,
     refreshRegionCache,
-    generateRegionIdTexture,
     colorBlockRegionsCache,
     refreshColorBlockCache,
     dashedSubRegionsCache,
@@ -1696,13 +1695,13 @@ useEffect(() => {
   }, [shapes]);
 
   // 虚线添加/删除后同步刷新区域的函数
-  const syncRefreshRegion = useCallback((layerId: string) => {
+  const syncRefreshRegion = useCallback(async (layerId: string) => {
     if (!layerId) return;
-    // 同步重新计算区域（不使用 setTimeout）
-    refreshRegionCache(layerId, { clearPaintData: false });
-    // 立即生成区域ID纹理
-    generateRegionIdTexture(layerId);
-  }, [refreshRegionCache, generateRegionIdTexture]);
+    // ★ refreshRegionCache 已异步化（BFS 在 Worker），await 后 regionPolygonsCache + regionIdTexture
+    //   均已在 refreshRegionCache 内部更新（flatRegionGrid 降采样，i+1 方案与旧 generateRegionIdTexture 一致）。
+    //   不再外部调用 generateRegionIdTexture（点测试 50~100ms 主线程开销），BFS 降采样在 800+ 分辨率下边界误差 <1px。
+    await refreshRegionCache(layerId, { clearPaintData: false });
+  }, [refreshRegionCache]);
 
   // 监听虚线添加后的区域刷新
   useEffect(() => {
@@ -3153,8 +3152,8 @@ useEffect(() => {
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
   useEffect(() => {
-    refreshRegionCache(activeLayerId);
-    refreshColorBlockCache(activeLayerId);
+    // ★ refreshRegionCache 异步化（BFS 在 Worker），内部已刷新 refreshColorBlockCache，无需外部同步再调（那样会读到 stale cache）。
+    void refreshRegionCache(activeLayerId);
     // 确保 paintBuffer 被初始化
     if (!paintBuffers[activeLayerId]) {
       initPaintBuffer(activeLayerId);
@@ -3900,8 +3899,8 @@ useEffect(() => {
       saveHistory();
       const layerId = activeLayerId || layers[0]?.id;
       if (layerId) {
-        refreshRegionCache(layerId);
-        refreshColorBlockCache(layerId);
+        // ★ refreshRegionCache 异步化（BFS 在 Worker），内部已刷新 refreshColorBlockCache，无需外部同步再调。
+        void refreshRegionCache(layerId);
       }
       drawCanvas();
       return;

@@ -61,7 +61,6 @@ export function Toolbar() {
     setColorExtractWaiting,
     clearExtractedColorBlocks,
     refreshRegionCache,
-    generateRegionIdTexture,
     activeLayerId,
     setEnableFramePrediction,
   } = useAppStore();
@@ -432,9 +431,10 @@ export function Toolbar() {
                   console.log('[颜色提取] 已清空所有虚线和对应的 shapes');
                   // 清空后同步刷新区域
                   if (activeLayerId) {
-                    refreshRegionCache(activeLayerId, { clearPaintData: false });
-                    generateRegionIdTexture(activeLayerId);
-                    console.log('[颜色提取] 已重新计算区域');
+                    // ★ refreshRegionCache 异步化（BFS 在 Worker），内部已生成 regionIdTexture（i+1 方案），无需外部再调 generateRegionIdTexture。
+                    void refreshRegionCache(activeLayerId, { clearPaintData: false }).then(() => {
+                      console.log('[颜色提取] 已重新计算区域');
+                    });
                   }
                 }
                 // 保持菜单打开，不关闭

@@ -958,16 +958,26 @@ function polygonArea(points: Point[]): number {
 }
 
 // ========== 5. 主函数：计算所有封闭区域 ==========
-export function computeRegionsExact(
+/**
+ * ★ 合并函数：一次 BFS 同时产出 regions（多边形）+ gridData（网格数据）+ regionGridIds。
+ * 避免 computeRegionsExact 内部调用 computeGridRegions 后，主线程又调一次 computeGridRegions 的重复计算。
+ * Worker 迁移专用：Worker 内调此函数，一次 BFS 把 regions 和 gridData 都拿到。
+ *
+ * regionGridIds[i] = result[i] 对应的 BFS GridRegion.id（原始 gridId）。
+ * 主线程据此把 flatRegionGrid 的原始 gridId 重映射为 i+1（与旧 generateRegionIdTexture 的 i+1 方案一致，
+ * 保证 regionPixelsMap 键、colorExtractRegionId 比较不回归）。
+ */
+export function computeRegionsAndGrid(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
   resolution: number = 600,
   excludeColor?: string  // 排除的颜色，传入 '#ffaa00' 则排除虚线
-): Point[][][] {
+): { regions: Point[][][]; gridData: GridData; regionGridIds: number[] } {
   const gridData = computeGridRegions(shapes, worldBounds, resolution, excludeColor);
   const mainRegions = gridData.regions.filter(r => !r.touchesEdge && r.cells.length >= 10);
 
   const result: Point[][][] = [];
+  const regionGridIds: number[] = [];
   const { stepX, stepY } = gridData;
   const step = Math.min(stepX, stepY);
 
@@ -1009,17 +1019,28 @@ export function computeRegionsExact(
     });
 
     const regionPolygon: Point[][] = [outer, ...innerRings];
-    
+
     // 对每个区域的所有环进行 Douglas-Peucker 简化
     const simplifyEpsilon = step * 1.0;
     for (let ri = 0; ri < regionPolygon.length; ri++) {
         regionPolygon[ri] = simplifyPolygonDP(regionPolygon[ri], simplifyEpsilon);
     }
-    
+
     result.push(regionPolygon);
+    regionGridIds.push(region.id); // 记录此 result 项对应的原始 BFS gridId
   }
 
-  return result;
+  return { regions: result, gridData, regionGridIds };
+}
+
+export function computeRegionsExact(
+  shapes: Shape[],
+  worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
+  resolution: number = 600,
+  excludeColor?: string  // 排除的颜色，传入 '#ffaa00' 则排除虚线
+): Point[][][] {
+  // ★ 复用 computeRegionsAndGrid，避免重复 BFS（向后兼容旧调用方）
+  return computeRegionsAndGrid(shapes, worldBounds, resolution, excludeColor).regions;
 }
 
 // ========== 6. 调试辅助 ==========

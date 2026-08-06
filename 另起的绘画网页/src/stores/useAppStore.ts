@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import * as THREE from 'three';
 import type { Group, Shape, ImageImportState, AxisConfig, GridConfig, LayerVisibility, Point, ToolType, Layer, PointAnnotation, RegionAnnotation, ColorBlock } from '../types';
 
-import { computeRegionsExact, computeScanlineIntervals, computeGridRegions, BFS_WORLD_BOUNDS, type ScanlineCache } from '../utils/regionDetectionExact';
+import { computeRegionsExact, BFS_WORLD_BOUNDS, type ScanlineCache } from '../utils/regionDetectionExact';
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
@@ -10,6 +10,8 @@ import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, clusterAndGenerateTexturesV2 } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
 import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime } from '../fluid/fluidConfigIO';
+import { regionWorkerPool } from './regionWorkerPool';
+import type { RegionDetectionRequest, RegionDetectionResponse } from '../types/regionWorker';
 
 export interface SharedBaseColor {
   id: number;
@@ -212,7 +214,7 @@ interface AppState {
   // 区域检测缓存
   regionPolygonsCache: Record<string, Point[][][]>;
   regionScanlineCache: Record<string, ScanlineCache>;
-  refreshRegionCache: (layerId: string, options?: { clearPaintData?: boolean }) => void;
+  refreshRegionCache: (layerId: string, options?: { clearPaintData?: boolean }) => Promise<void>;
 
   // 色块区域检测缓存（独立存储，使用相同算法）
   colorBlockRegionsCache: Record<string, Point[][][]>;
@@ -726,11 +728,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
       
-      setTimeout(() => {
-        get().refreshRegionCache(id);
-        get().refreshColorBlockCache(id);
-        get().refreshRegionEntities(id);   // ← 总是刷新，独立于区域图层可见性
-      }, 0);
+      // ★ refreshRegionCache 已异步化（BFS 在 Worker），内部会调用 refreshColorBlockCache + refreshRegionEntities。
+      // 此处仅触发一次，下游刷新在 Worker 返回后由 refreshRegionCache 内部统一完成，避免读到 stale cache。
+      setTimeout(() => { void get().refreshRegionCache(id); }, 0);
     }
   },
   toggleLayerVisibility: (id) =>
@@ -767,14 +767,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   addShape: (shape) =>
     set((state) => {
       const newShape = { ...shape };
+      // ★ refreshRegionCache 异步化（BFS 在 Worker），内部完成 refreshColorBlockCache + refreshRegionEntities。
+      // updateColorBlocksForLayer 依赖 colorBlockRegionsCache（由 refreshRegionCache 内部刷新），故放在 .then() 之后。
       setTimeout(() => {
-        get().refreshRegionCache(shape.layerId);
-        get().refreshColorBlockCache(shape.layerId);
-        get().updateColorBlocksForLayer(shape.layerId);
-        // 自动更新区域色块图层（如果可见）
-        if (state.layerVisibility.regionLayer) {
-          get().refreshRegionEntities(shape.layerId);
-        }
+        void get().refreshRegionCache(shape.layerId).then(() => {
+          get().updateColorBlocksForLayer(shape.layerId);
+        });
       }, 0);
       return { shapes: [...state.shapes, newShape] };
     }),
@@ -784,13 +782,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (shape) {
         const layerId = shape.layerId;
         setTimeout(() => {
-          get().refreshRegionCache(layerId);
-          get().refreshColorBlockCache(layerId);
-          get().updateColorBlocksForLayer(layerId);
-          // 自动更新区域色块图层（如果可见）
-          if (state.layerVisibility.regionLayer) {
-            get().refreshRegionEntities(layerId);
-          }
+          void get().refreshRegionCache(layerId).then(() => {
+            get().updateColorBlocksForLayer(layerId);
+          });
         }, 0);
       }
       return { shapes: state.shapes.filter((s) => s.id !== id) };
@@ -801,13 +795,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!oldShape) return state;
       const newShape = { ...oldShape, ...updates };
       setTimeout(() => {
-        get().refreshRegionCache(newShape.layerId);
-        get().refreshColorBlockCache(newShape.layerId);
-        get().updateColorBlocksForLayer(newShape.layerId);
-        // 自动更新区域色块图层（如果可见）
-        if (state.layerVisibility.regionLayer) {
-          get().refreshRegionEntities(newShape.layerId);
-        }
+        void get().refreshRegionCache(newShape.layerId).then(() => {
+          get().updateColorBlocksForLayer(newShape.layerId);
+        });
       }, 0);
       return { shapes: state.shapes.map((s) => (s.id === id ? newShape : s)) };
     }),
@@ -1085,63 +1075,77 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   regionPolygonsCache: {},
   regionScanlineCache: {},
-  refreshRegionCache: (layerId, options?: { clearPaintData?: boolean }) => {
+  refreshRegionCache: async (layerId, options?: { clearPaintData?: boolean }) => {
     const state = get();
     const allShapesInLayer = state.shapes.filter(s => s.layerId === layerId);
 
     // 世界坐标固定为 [0,1]，与坐标轴显示范围无关
     const worldBounds = BFS_WORLD_BOUNDS;
 
-    const gridData = computeGridRegions(allShapesInLayer, worldBounds, state.bfsResolution, '#ffaa00');  // 排除虚线
-    const scanlineCache = computeScanlineIntervals(gridData);
-    const regions = computeRegionsExact(allShapesInLayer, worldBounds, state.bfsResolution, '#ffaa00');  // 排除虚线
-    
-    // 区域重计算后，仅在需要时清空该图层的画笔缓冲区和区域像素记录
-    // 默认不清空（用于撤销/重做后的重新计算），仅在添加/删除形状时手动调用清空
+    // ★ clearPaintData 时机不变（Worker 计算前同步清，避免 Worker 返回前用户看到旧画笔）
     if (options?.clearPaintData !== false) {
       state.clearPaintBuffer(layerId);
       state.clearRegionPixels();
     }
-    
+
+    // ★ 构造 Worker 请求（BFS 全链路在 Worker 执行，主线程不阻塞）
+    const req: RegionDetectionRequest = {
+      taskId: `${layerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      layerId,
+      resolution: state.bfsResolution,
+      shapes: allShapesInLayer,
+      worldBounds,
+      excludeColor: '#ffaa00',
+    };
+
+    let resp: RegionDetectionResponse;
+    try {
+      resp = await regionWorkerPool.detect(req);
+    } catch {
+      // 被 abort（新任务到来）或 Worker 错误：静默返回，保持旧 cache
+      return;
+    }
+
+    // ★ taskId 过期检查（pool 已保证，双保险）
+    if (resp.taskId !== req.taskId) return;
+
+    // 1. 更新 regionPolygonsCache + regionScanlineCache（scanline 是 no-op，保留空对象）
     set((s) => ({
-      regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: regions },
-      regionScanlineCache: { ...s.regionScanlineCache, [layerId]: scanlineCache },
+      regionPolygonsCache: { ...s.regionPolygonsCache, [layerId]: resp.regions },
+      regionScanlineCache: { ...s.regionScanlineCache, [layerId]: {} },
     }));
-    
-    // 直接从 gridData.regionIdGrid 生成 regionIdTexture（使用合并后的实际 ID）
-    // 这样可以保证 regionIdTexture 与 getRegionIdAtPoint 返回的 ID 一致
+
+    // 2. 从 flatRegionGrid（Int32Array，Worker transferable）降采样到 512×512 regionIdTexture
     const texWidth = 512;
     const texHeight = 512;
     const regionIdMap = new Uint8Array(texWidth * texHeight); // 初始为0
-    
-    const { regionIdGrid, stepX, stepY, xMin, yMin, resolution } = gridData;
-    
+
+    const { flatRegionGrid, gridWidth, stepX, stepY, xMin, yMin, resolution } = resp;
+
     for (let ty = 0; ty < texHeight; ty++) {
       for (let tx = 0; tx < texWidth; tx++) {
         // 将纹理坐标转换为世界坐标 [0,1]
         const worldX = tx / texWidth;
         const worldY = 1 - ty / texHeight; // Y轴翻转
-        
         // 将世界坐标转换为 grid 坐标
         const gx = Math.floor((worldX - xMin) / stepX);
         const gy = Math.floor((worldY - yMin) / stepY);
-        
         if (gx >= 0 && gx < resolution && gy >= 0 && gy < resolution) {
-          const gridId = regionIdGrid[gy][gx];
-          // gridId > 0 表示有效区域（负数为墙）
-          // 但纹理中存储的是 1-based 索引，所以需要转换
-          // 实际上 getRegionIdAtPoint 返回的是 gridId > 0 ? gridId : null
-          // 所以我们直接存储 gridId（如果是正数）
-          regionIdMap[ty * texWidth + tx] = gridId > 0 ? gridId : 0;
+          // ★ flatRegionGrid 已在 Worker 端重映射：值 = i+1（regions 数组下标+1，与旧
+          //   generateRegionIdTexture 的 i+1 方案一致），0 = 空/墙/被过滤的区域。
+          //   这样 regionPixelsMap 键、colorExtractRegionId 比较与迁移前行为完全一致。
+          const regionId = flatRegionGrid[gy * gridWidth + gx];
+          regionIdMap[ty * texWidth + tx] = regionId > 0 ? regionId : 0;
         }
       }
     }
-    
+
     set((s) => ({
       regionIdTexture: new Map(s.regionIdTexture).set(layerId, regionIdMap),
     }));
 
-    // 自动刷新区域实体（使绑定下拉框总能获取到本图层的区域 ID）
+    // 3. ★ 下游刷新纳入管线内部（解决异步化后外部同步读 cache 的风险）
+    get().refreshColorBlockCache(layerId);
     get().refreshRegionEntities(layerId);
   },
 
@@ -1616,17 +1620,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         };
         
         // 延迟重置标志并重新计算区域数据
+        // ★ refreshRegionCache 已异步化（BFS 在 Worker）。单 Worker 一次只处理一个任务，
+        // 故多图层需顺序 await（并发 detect 会互相 abort，仅最后一个图层会真正完成）。
+        // refreshRegionCache 内部已统一刷新 refreshColorBlockCache + refreshRegionEntities，无需外部再调。
+        // isRestoringHistory 必须等所有图层刷新完成后再置 false，避免恢复期间触发 saveHistory。
         setTimeout(() => {
-          const state = get();
-          // 重新计算所有图层的区域数据，但不清空绘画数据
-          const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
-          layerIds.forEach(layerId => {
-            state.refreshRegionCache(layerId, { clearPaintData: false });
-            if (state.layerVisibility.regionLayer) {
-              state.refreshRegionEntities(layerId);
+          void (async () => {
+            const state = get();
+            const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
+            for (const layerId of layerIds) {
+              await state.refreshRegionCache(layerId, { clearPaintData: false });
             }
-          });
-          set({ isRestoringHistory: false });
+            set({ isRestoringHistory: false });
+          })();
         }, 0);
         
         return newState;
@@ -1701,17 +1707,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         };
         
         // 延迟重置标志并重新计算区域数据
+        // ★ refreshRegionCache 已异步化（BFS 在 Worker）。单 Worker 一次只处理一个任务，
+        // 故多图层需顺序 await（并发 detect 会互相 abort，仅最后一个图层会真正完成）。
+        // refreshRegionCache 内部已统一刷新 refreshColorBlockCache + refreshRegionEntities，无需外部再调。
+        // isRestoringHistory 必须等所有图层刷新完成后再置 false，避免恢复期间触发 saveHistory。
         setTimeout(() => {
-          const state = get();
-          // 重新计算所有图层的区域数据，但不清空绘画数据
-          const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
-          layerIds.forEach(layerId => {
-            state.refreshRegionCache(layerId, { clearPaintData: false });
-            if (state.layerVisibility.regionLayer) {
-              state.refreshRegionEntities(layerId);
+          void (async () => {
+            const state = get();
+            const layerIds = [...new Set(state.shapes.map(s => s.layerId))];
+            for (const layerId of layerIds) {
+              await state.refreshRegionCache(layerId, { clearPaintData: false });
             }
-          });
-          set({ isRestoringHistory: false });
+            set({ isRestoringHistory: false });
+          })();
         }, 0);
         
         return newState;
@@ -1886,10 +1894,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.log('[loadFromStorage] 加载图形数量:', data.shapes?.length || 0);
       set((state) => {
         const activeLayerId = data.activeLayerId || state.activeLayerId;
-        setTimeout(() => {
-          get().refreshRegionCache(activeLayerId);
-          get().refreshColorBlockCache(activeLayerId);
-        }, 0);
+        // ★ refreshRegionCache 异步化（BFS 在 Worker），内部已刷新 refreshColorBlockCache，无需外部再调。
+        setTimeout(() => { void get().refreshRegionCache(activeLayerId); }, 0);
         return {
           ...state,
           shapes: data.shapes || [],

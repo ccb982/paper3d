@@ -22,7 +22,6 @@ export function MaskEffectPanel() {
     setShowRegionBorderWebGL,
     showRegionBorder2D,
     setShowRegionBorder2D,
-    refreshRegionEntities,
     refreshRegionCache,
   } = useAppStore();
 
@@ -35,14 +34,14 @@ export function MaskEffectPanel() {
   }, [regionAnnotations, activeLayerId]);
 
   // 当 activeLayerId 变化时，重置选中状态，并刷新区域实体
+  // ★ refreshRegionCache 已异步化（BFS 在 Worker），内部会调用 refreshRegionEntities，无需外部同步再调（那样会读到 stale cache）。
   useEffect(() => {
     setSelectedAnnotationId(null);
     setEditingAnno(null);
     if (activeLayerId) {
-      refreshRegionCache(activeLayerId);
-      refreshRegionEntities(activeLayerId);
+      void refreshRegionCache(activeLayerId);
     }
-  }, [activeLayerId, refreshRegionCache, refreshRegionEntities]);
+  }, [activeLayerId, refreshRegionCache]);
 
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [editingAnno, setEditingAnno] = useState<RegionAnnotation | null>(null);
@@ -399,11 +398,12 @@ export function MaskEffectPanel() {
             当前图层没有区域注释。请先绘制闭合实线区域，然后添加区域注释。
           </div>
           <button
-            onClick={() => {
+            onClick={async () => {
               console.log('[蒙版特效] 强制刷新并检测区域...');
               if (activeLayerId) {
-                refreshRegionCache(activeLayerId);
-                refreshRegionEntities(activeLayerId);
+                // ★ await refreshRegionCache（BFS 在 Worker 完成）后再读 state，确保 regionEntities 已刷新。
+                // refreshRegionCache 内部已调用 refreshRegionEntities，无需外部再调。
+                await refreshRegionCache(activeLayerId);
                 const currentAnnotations = useAppStore.getState().regionAnnotations.filter((a: RegionAnnotation) => a.layerId === activeLayerId);
                 const currentEntities = useAppStore.getState().regionEntities[activeLayerId] || [];
                 console.log(`[蒙版特效] 检测结果：区域实体=${currentEntities.length}个，区域注释=${currentAnnotations.length}个`);
@@ -435,11 +435,11 @@ export function MaskEffectPanel() {
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
           {/* 强制刷新按钮 */}
           <button
-            onClick={() => {
+            onClick={async () => {
               console.log('[蒙版特效] 强制刷新并检测区域...');
               if (activeLayerId) {
-                refreshRegionCache(activeLayerId);
-                refreshRegionEntities(activeLayerId);
+                // ★ await refreshRegionCache（BFS 在 Worker 完成）后再读 state，确保 regionEntities 已刷新。
+                await refreshRegionCache(activeLayerId);
                 const currentAnnotations = useAppStore.getState().regionAnnotations.filter((a: RegionAnnotation) => a.layerId === activeLayerId);
                 const currentEntities = useAppStore.getState().regionEntities[activeLayerId] || [];
                 console.log(`[蒙版特效] 检测结果：区域实体=${currentEntities.length}个，区域注释=${currentAnnotations.length}个`);
