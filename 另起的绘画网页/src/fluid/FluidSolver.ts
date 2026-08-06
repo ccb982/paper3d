@@ -70,10 +70,10 @@ export const defaultFluidConfig: FluidSolverConfig = {
   advectionMode: 'vector',
   combineMode: 'add',
   scalarConfig: {
-    hMultiplier: 0.1,
-    sMultiplier: 0.1,
-    lMultiplier: 0.1,
-    aMultiplier: 0.1,
+    hMultiplier: 1,
+    sMultiplier: 1,
+    lMultiplier: 1,
+    aMultiplier: 1,
     baselineDensity: 1.0,
     decayRate: 0,
   },
@@ -197,6 +197,9 @@ export class FluidSolver {
       depthBuffer: false,
       stencilBuffer: false,
     });
+    // ★ compositeTarget 存储 hsl2rgb 输出的 sRGB 值，但作为 RenderTarget 需要禁止自动解码
+    //   否则后续采样时会被再次 sRGB→线性，导致颜色变淡
+    this.compositeTarget.texture.colorSpace = THREE.LinearSRGBColorSpace;
   }
 
   // ==================== 数据加载 ====================
@@ -226,6 +229,7 @@ export class FluidSolver {
     tex.minFilter = THREE.NearestFilter;  // ★ 量化值禁用线性插值，避免中间值噪点
     tex.magFilter = THREE.NearestFilter;
     tex.flipY = false;
+    tex.colorSpace = THREE.LinearSRGBColorSpace; // ★ 禁止 sRGB 解码，残差是量化 HSL 增量
     tex.needsUpdate = true;
 
     // copy pass：DataTexture → colorGrid（GPUOps 已用 vUv=uv，与 DataTexture flipY=false 对齐）
@@ -260,6 +264,7 @@ export class FluidSolver {
     this.baseHslTex.minFilter = THREE.LinearFilter;
     this.baseHslTex.magFilter = THREE.LinearFilter;
     this.baseHslTex.flipY = false;
+    this.baseHslTex.colorSpace = THREE.LinearSRGBColorSpace; // ★ HSL 浮点值，禁止 sRGB 解码
     this.baseHslTex.needsUpdate = true;
   }
 
@@ -763,6 +768,13 @@ export class FluidSolver {
       u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
       const ch = this.config.channels;
       (u.uChannels.value as THREE.Vector4).set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
+
+      // 调试：每 60 帧打印一次 uniform 值
+      if (this.frameCount % 60 === 0) {
+        console.log(`[FluidSolver.composite] scalarMode=${u.uScalarMode.value} combineMode=${u.uCombineMode.value} ` +
+          `channelMul=(${sc.hMultiplier.toFixed(2)},${sc.sMultiplier.toFixed(2)},${sc.lMultiplier.toFixed(2)},${sc.aMultiplier.toFixed(2)}) ` +
+          `baseline=${sc.baselineDensity.toFixed(2)}`);
+      }
     } else {
       // direct 模式：直接采样 colorGrid
       u.uColorTex.value = this.colorGrid.read;

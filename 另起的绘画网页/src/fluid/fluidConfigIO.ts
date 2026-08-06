@@ -69,13 +69,15 @@ export function parseImportedFluidConfig(
 
   const sc = ac.scalarConfig || {};
   const scalarConfig = {
-    hMultiplier: sc.hMultiplier ?? 0.1,
-    sMultiplier: sc.sMultiplier ?? 0.1,
-    lMultiplier: sc.lMultiplier ?? 0.1,
-    aMultiplier: sc.aMultiplier ?? 0.1,
+    hMultiplier: sc.hMultiplier ?? 1,
+    sMultiplier: sc.sMultiplier ?? 1,
+    lMultiplier: sc.lMultiplier ?? 1,
+    aMultiplier: sc.aMultiplier ?? 1,
     baselineDensity: sc.baselineDensity ?? 1.0,
     decayRate: sc.decayRate ?? 0,
   };
+
+  console.log('[parseImportedFluidConfig] scalarConfig:', JSON.stringify(scalarConfig), 'advectionMode:', ac.advectionMode || 'vector');
 
   const resolution = json.resolution
     ? (typeof json.resolution === 'number'

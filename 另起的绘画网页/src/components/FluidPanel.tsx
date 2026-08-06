@@ -185,20 +185,15 @@ export function FluidPanel() {
           <Slider label="播放速度" value={speed} min={0.1} max={4} step={0.1}
             onChange={v => setFluidSpeed(activeLayerId!, v)} fmt={v => `${v.toFixed(1)}×`} />
 
-          {/* 模式 */}
-          <div style={LABEL}><span>平流模式</span></div>
-          <div style={{ display: 'flex', gap: '6px' }}>
-            {(['vector', 'scalar'] as const).map(m => (
-              <button key={m} style={{
-                ...BTN, flex: 1,
-                background: cfg!.advectionMode === m ? '#e94560' : '#333', color: cfg!.advectionMode === m ? '#fff' : '#aaa',
-              }} onClick={() => updateFluidConfig(activeLayerId!, { advectionMode: m })}>
-                {m === 'vector' ? '向量(残差)' : '标量(浓度)'}
-              </button>
-            ))}
+          {/* 模式（只读，由导入配置决定） */}
+          <div style={LABEL}>
+            <span>平流模式</span>
+            <span style={{ color: '#e94560', fontWeight: 'bold' }}>
+              {cfg!.advectionMode === 'vector' ? '向量(残差)' : '标量(浓度)'}
+            </span>
           </div>
           <p style={{ fontSize: '11px', color: '#777', marginTop: '4px' }}>
-            向量模式：直接平流残差 HSLA（特效默认）。标量模式：残差静止，浓度场流动调制。
+            向量模式：直接平流残差 HSLA。标量模式：残差静止，浓度场流动调制。
           </p>
 
           {/* 重力 */}
