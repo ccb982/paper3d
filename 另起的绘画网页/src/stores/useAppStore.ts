@@ -3240,7 +3240,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) return;
-    const prev = frameData.fluidConfig ?? {};
+    const prev = (frameData.fluidConfig ?? {}) as Record<string, any>;
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
@@ -3250,6 +3250,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...prev,
             ...partial,
             scalarConfig: { ...(prev.scalarConfig ?? {}), ...(partial.scalarConfig ?? {}) },
+            // ★ Level Set 配置深度合并（与 scalarConfig 同处理）
+            levelSetConfig: { ...(prev.levelSetConfig ?? {}), ...(partial.levelSetConfig ?? {}) },
             resolution: partial.resolution ?? prev.resolution ?? { w: frameData.sourceResolution || 512, h: frameData.sourceResolution || 512 },
           } as any,
         },

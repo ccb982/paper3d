@@ -24,6 +24,13 @@ export function useFluidEditor(
     pressureBoundaryMode: 'neumann',
     enableWarmStart: true,
     enableLevelSet: false,
+    // ★ Level Set 模块参数（enableLevelSet=true 时生效）
+    levelSetConfig: {
+      reinitInterval: 10,      // 重初始化间隔（帧数）
+      reinitIterations: 2,     // 每次重初始化迭代次数（红-黑 SOR 轮数）
+      surfaceTension: 0.1,     // 表面张力系数 σ（0=禁用）
+      narrowBandWidth: 5,      // 窄带宽度/作用半径（像素）
+    },
     gravity: { x: 0, y: 5 }, // 二维矢量，默认向下 5 px/s²（屏幕坐标系）
     velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)
     injection: {

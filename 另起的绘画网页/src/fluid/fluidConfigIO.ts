@@ -88,6 +88,15 @@ export function parseImportedFluidConfig(
         : { w: Number(json.resolution.w), h: Number(json.resolution.h) })
     : { ...fallbackRes };
 
+  // ★ Level Set 模块配置（与 fluid-player.html 互操作）
+  const ls = json.levelSet || {};
+  const levelSetConfig = {
+    enabled: !!ls.enabled,
+    reinitIterations: ls.reinitIterations ?? 2,
+    surfaceTension: ls.surfaceTension ?? 0,
+    smoothingRadius: ls.smoothingRadius ?? 2,
+  };
+
   return {
     enableAdvection: cs.enableAdvection ?? true,
     enablePressure: cs.enablePressure ?? true,
@@ -99,6 +108,7 @@ export function parseImportedFluidConfig(
     combineMode: ac.combineMode || 'add',
     channels,
     scalarConfig,
+    levelSetConfig,
     gravity: gf.gravity || { x: 0, y: 0 },
     velocityScale: gf.velocityScale ?? 1,
     maxVelocity: gf.maxVelocity ?? 5000,
@@ -137,6 +147,13 @@ export function serializeFluidConfigToJSON(config: FluidSolverConfig): any {
       colorBoundaryMode: config.colorBoundaryMode,
     },
     resolution: { w: config.resolution.w, h: config.resolution.h },
+    // ★ Level Set 模块配置
+    levelSet: {
+      enabled: config.levelSetConfig?.enabled ?? false,
+      reinitIterations: config.levelSetConfig?.reinitIterations ?? 2,
+      surfaceTension: config.levelSetConfig?.surfaceTension ?? 0,
+      smoothingRadius: config.levelSetConfig?.smoothingRadius ?? 2,
+    },
     continuousSources: config.continuousSources.map(s => ({
       enabled: s.enabled,
       position: { ...s.position },

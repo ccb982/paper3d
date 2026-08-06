@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FluidGrid, type AdvectionMask } from './core/FluidGrid';
 import { GPUOps } from './core/GPUOps';
 import { AdvectionSolver } from './solvers/AdvectionSolver';
+import { LevelSetSolver } from './solvers/LevelSetSolver';
 import { FluidInjector } from './core/FluidInjector';
 
 // ============================================================
@@ -51,6 +52,13 @@ export interface FluidSolverConfig {
     baselineDensity: number;
     decayRate: number;
   };
+  /** Level Set 模块配置（轻量化，默认关闭） */
+  levelSetConfig: {
+    enabled: boolean;            // 总开关
+    reinitIterations: number;    // 重初始化迭代次数（默认 2）
+    surfaceTension: number;      // 表面张力系数 σ（0=禁用）
+    smoothingRadius: number;     // 表面张力作用半径（像素）
+  };
   continuousSources: InjectionConfig[];
 }
 
@@ -76,6 +84,12 @@ export const defaultFluidConfig: FluidSolverConfig = {
     aMultiplier: 1,
     baselineDensity: 1.0,
     decayRate: 0,
+  },
+  levelSetConfig: {
+    enabled: false,
+    reinitIterations: 2,
+    surfaceTension: 0,
+    smoothingRadius: 2,
   },
   continuousSources: [],
 };
@@ -112,6 +126,7 @@ export class FluidSolver {
   private renderer: THREE.WebGLRenderer;
   private gpu: GPUOps;
   private advectionSolver: AdvectionSolver;
+  private levelSetSolver: LevelSetSolver;
   private injector: FluidInjector;
 
   config: FluidSolverConfig;
@@ -121,6 +136,9 @@ export class FluidSolver {
   velocityGrid!: FluidGrid;  // RG HalfFloat，像素/秒
   pressureGrid!: FluidGrid;  // R HalfFloat，压力
   densityGrid!: FluidGrid;   // R Uint8，标量浓度（scalar 模式）
+
+  // ★ Level Set φ 场（懒加载，仅启用时分配显存）
+  private _phiGrid: FluidGrid | null = null;
 
   // 基础色纹理（FloatType RGBA HSLA，0~1）——合成用
   private baseHslTex: THREE.DataTexture | null = null;
@@ -155,10 +173,16 @@ export class FluidSolver {
     resolution: { w: number; h: number },
   ) {
     this.renderer = renderer;
-    this.config = { ...config, resolution: { ...resolution }, scalarConfig: { ...config.scalarConfig } };
+    this.config = {
+      ...config,
+      resolution: { ...resolution },
+      scalarConfig: { ...config.scalarConfig },
+      levelSetConfig: { ...config.levelSetConfig },
+    };
 
     this.gpu = new GPUOps();
     this.advectionSolver = new AdvectionSolver(renderer);
+    this.levelSetSolver = new LevelSetSolver(renderer, this.gpu);
     this.injector = new FluidInjector(renderer, this.gpu);
 
     // 合成场景（全屏四边形，Y-flip 用于显示）
@@ -169,6 +193,21 @@ export class FluidSolver {
 
     this.rebuildGrids();
     this.initFields();
+
+    // ★ 若配置启用 Level Set，立即初始化 φ 场
+    if (this.config.levelSetConfig?.enabled) {
+      this.enableLevelSet();
+    }
+  }
+
+  // ★ Level Set φ 场懒加载 getter
+  private get phiGrid(): FluidGrid {
+    if (!this._phiGrid) {
+      const { w, h } = this.config.resolution;
+      this._phiGrid = new FluidGrid({ w, h }, 1, 'half-float');
+      this.initPhiField();
+    }
+    return this._phiGrid;
   }
 
   // ==================== 网格构建 ====================
@@ -184,6 +223,13 @@ export class FluidSolver {
     this.velocityGrid = new FluidGrid({ w, h }, 2, 'half-float');
     this.pressureGrid = new FluidGrid({ w, h }, 1, 'half-float');
     this.densityGrid = new FluidGrid({ w, h }, 1, 'uint8');
+
+    // ★ Level Set φ 场同步重建（仅当已存在时）
+    if (this._phiGrid) {
+      this._phiGrid.dispose();
+      this._phiGrid = new FluidGrid({ w, h }, 1, 'half-float');
+      this.initPhiField();
+    }
 
     // 重建合成目标（分辨率跟随）
     this.compositeTarget?.dispose();
@@ -291,6 +337,66 @@ export class FluidSolver {
       this._zeroObstacleFallback.needsUpdate = true;
     }
     return this._zeroObstacleFallback;
+  }
+
+  // ==================== Level Set 公共 API ====================
+
+  /**
+   * 启用 Level Set 演化（热插拔开）。
+   * 首次调用时懒加载创建 phiGrid 并初始化 φ 场。
+   */
+  enableLevelSet(): void {
+    if (!this.config.levelSetConfig) return;
+    this.config.levelSetConfig.enabled = true;
+    // 触发 phiGrid getter 创建并初始化（赋值给 _ 避免无副作用表达式警告）
+    const _ = this.phiGrid;
+    void _;
+    console.log('[FluidSolver] Level Set 已启用');
+  }
+
+  /**
+   * 禁用 Level Set 演化（热插拔关）。
+   * 释放 phiGrid 显存，后续 step() 跳过所有 Level Set 计算。
+   */
+  disableLevelSet(): void {
+    if (!this.config.levelSetConfig) return;
+    this.config.levelSetConfig.enabled = false;
+    this._phiGrid?.dispose();
+    this._phiGrid = null;
+    console.log('[FluidSolver] Level Set 已禁用，显存已释放');
+  }
+
+  /**
+   * 重置 φ 场为初始距离场（清除流动痕迹）。
+   */
+  resetLevelSet(): void {
+    if (!this._phiGrid) return;
+    this.initPhiField();
+    console.log('[FluidSolver] Level Set φ 场已重置');
+  }
+
+  /**
+   * 动态调整表面张力系数（不需要重建网格）。
+   */
+  setSurfaceTension(sigma: number): void {
+    if (!this.config.levelSetConfig) return;
+    this.config.levelSetConfig.surfaceTension = sigma;
+  }
+
+  /**
+   * φ 场初始化：基于 density（scalar 模式）或 colorGrid.alpha（vector 模式）推断 SDF。
+   *   density > 0.5 → φ < 0（内部）
+   *   density < 0.5 → φ > 0（外部）
+   */
+  private initPhiField(): void {
+    if (!this._phiGrid) return;
+    const ls = this.config.levelSetConfig;
+    const scale = ls?.smoothingRadius ?? 2;
+    const isScalar = this.config.advectionMode === 'scalar';
+    // scalar 模式用 densityGrid；vector 模式用 colorGrid.alpha
+    const sourceTex = isScalar ? this.densityGrid.read : this.colorGrid.read;
+    const mode: 0 | 1 = isScalar ? 0 : 1;
+    this.levelSetSolver.initPhiField(this._phiGrid, sourceTex, mode, scale);
   }
 
   // ==================== 场清零 ====================
@@ -788,6 +894,26 @@ export class FluidSolver {
       }
     }
 
+    // 3.2 ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
+    const ls = this.config.levelSetConfig;
+    if (ls?.enabled && this._phiGrid) {
+      // (1) φ 平流（跟随速度场流动）
+      this.levelSetSolver.advectPhi(
+        this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTex(),
+      );
+      // (2) 轻量级重初始化（红-黑 SOR，默认 2 轮，保持 SDF 接近 |∇φ|=1）
+      this.levelSetSolver.reinit(
+        this._phiGrid, this.getObstacleTex(), ls.reinitIterations, 0.5,
+      );
+      // (3) 表面张力注入（CSF 模型，σ>0 时启用）
+      if (ls.surfaceTension > 0) {
+        this.levelSetSolver.applySurfaceTension(
+          this.velocityGrid, this._phiGrid.read, this.getObstacleTex(),
+          ls.surfaceTension, dt, ls.smoothingRadius,
+        );
+      }
+    }
+
     // 3.5 边界处理（压力投影之前，避免与梯度修正拮抗）
     this.applyBoundary();
 
@@ -863,6 +989,13 @@ export class FluidSolver {
       u.uColorTex.value = this.colorGrid.read;
     }
 
+    // ★ Level Set alpha 裁切（热插拔）
+    const lsEnabled = !!(this.config.levelSetConfig?.enabled && this._phiGrid);
+    u.uEnableLevelSet.value = lsEnabled ? 1 : 0;
+    if (lsEnabled) {
+      u.uPhiTexture.value = this._phiGrid!.read;
+    }
+
     const prev = this.renderer.getRenderTarget();
     this.renderer.setRenderTarget(this.compositeTarget);
     this.renderer.clear(true, true, true);
@@ -892,12 +1025,27 @@ export class FluidSolver {
     if (!hasBase) {
       // direct 模式：colorGrid 即合成色，直接输出
       return new THREE.ShaderMaterial({
-        uniforms: { uColorTex: { value: null } },
+        uniforms: {
+          uColorTex: { value: null },
+          uPhiTexture: { value: null },
+          uEnableLevelSet: { value: 0 },
+        },
         vertexShader,
         fragmentShader: /* glsl */ `
           uniform sampler2D uColorTex;
+          uniform sampler2D uPhiTexture;
+          uniform int uEnableLevelSet;
           varying vec2 vUv;
-          void main(){ gl_FragColor = texture2D(uColorTex, vUv); }
+          void main(){
+            gl_FragColor = texture2D(uColorTex, vUv);
+            // ★ Level Set alpha 裁切
+            if (uEnableLevelSet == 1) {
+              float phi = texture2D(uPhiTexture, vUv).r;
+              // 表面附近（|φ|<1像素）alpha=1，远离表面（|φ|>3像素）alpha=0
+              float alphaMask = 1.0 - smoothstep(1.0, 3.0, abs(phi));
+              gl_FragColor.a *= alphaMask;
+            }
+          }
         `,
         depthTest: false,
         depthWrite: false,
@@ -917,6 +1065,8 @@ export class FluidSolver {
         uChannelMul: { value: new THREE.Vector4(0.1, 0.1, 0.1, 0.1) },
         uBaseline: { value: 1.0 },
         uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },
+        uPhiTexture: { value: null },
+        uEnableLevelSet: { value: 0 },
       },
       vertexShader,
       fragmentShader: /* glsl */ `
@@ -930,6 +1080,8 @@ export class FluidSolver {
         uniform vec4 uChannelMul;
         uniform float uBaseline;
         uniform vec4 uChannels;
+        uniform sampler2D uPhiTexture;
+        uniform int uEnableLevelSet;
         varying vec2 vUv;
 
         vec3 hsl2rgb(vec3 hsl){
@@ -975,6 +1127,14 @@ export class FluidSolver {
 
           vec3 rgb = hsl2rgb(vec3(finalH, finalS, finalL));
           gl_FragColor = vec4(rgb, finalA);
+
+          // ★ Level Set alpha 裁切（表面羽化）
+          if (uEnableLevelSet == 1) {
+            float phi = texture2D(uPhiTexture, vUv).r;
+            // 表面附近（|φ|<1像素）alpha=1，远离表面（|φ|>3像素）alpha=0
+            float alphaMask = 1.0 - smoothstep(1.0, 3.0, abs(phi));
+            gl_FragColor.a *= alphaMask;
+          }
         }
       `,
       depthTest: false,
@@ -1001,15 +1161,29 @@ export class FluidSolver {
 
   updateConfig(updates: Partial<FluidSolverConfig>): void {
     const oldRes = this.config.resolution;
+    const oldLsEnabled = this.config.levelSetConfig?.enabled;
+
     Object.assign(this.config, updates);
     if (updates.scalarConfig) {
       this.config.scalarConfig = { ...this.config.scalarConfig, ...updates.scalarConfig };
     }
+    if (updates.levelSetConfig) {
+      this.config.levelSetConfig = { ...this.config.levelSetConfig, ...updates.levelSetConfig };
+      // ★ Level Set 启用状态切换
+      const newEnabled = this.config.levelSetConfig.enabled;
+      if (newEnabled && !oldLsEnabled) {
+        this.enableLevelSet();
+      } else if (!newEnabled && oldLsEnabled) {
+        this.disableLevelSet();
+      }
+    }
+
     const resChanged = updates.resolution &&
       (updates.resolution.w !== oldRes.w || updates.resolution.h !== oldRes.h);
     if (resChanged) {
       this.rebuildGrids();
       this.initFields();
+      // ★ 分辨率变化时 phiGrid 已在 rebuildGrids 中同步重建
     }
   }
 
@@ -1020,11 +1194,14 @@ export class FluidSolver {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this._phiGrid?.dispose();
+    this._phiGrid = null;
     this.compositeTarget?.dispose();
     this.baseHslTex?.dispose();
     this.compositeMat?.dispose();
     (this.compositeQuad.geometry as THREE.BufferGeometry).dispose();
     this.gpu.dispose();
     this.advectionSolver.dispose();
+    this.levelSetSolver.dispose();
   }
 }

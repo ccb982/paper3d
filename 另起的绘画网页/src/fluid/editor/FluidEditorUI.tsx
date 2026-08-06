@@ -1675,8 +1675,8 @@ const LevelSetPanel: React.FC<{
     <div className="fluid-panel">
       <div className="panel-header">
         <span>🌀 Level Set</span>
-        <label className="toggle-switch" title="暂未实现">
-          <input type="checkbox" checked={enabled} onChange={onToggle} disabled />
+        <label className="toggle-switch" title="Level Set：φ 场平流 + 周期性重初始化 + 表面张力">
+          <input type="checkbox" checked={enabled} onChange={onToggle} />
           <span className="slider" />
         </label>
       </div>
@@ -3602,9 +3602,18 @@ export const FluidEditorUI: React.FC = () => {
           narrowBandWidth={levelsetParams.narrowBandWidth}
           surfaceTension={levelsetParams.surfaceTension}
           onToggle={() => updateConfig({ enableLevelSet: !config.enableLevelSet })}
-          onReinitChange={(val) => setLevelsetParams(p => ({ ...p, reinitInterval: val }))}
-          onBandWidthChange={(val) => setLevelsetParams(p => ({ ...p, narrowBandWidth: val }))}
-          onTensionChange={(val) => setLevelsetParams(p => ({ ...p, surfaceTension: val }))}
+          onReinitChange={(val) => {
+            setLevelsetParams(p => ({ ...p, reinitInterval: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, reinitInterval: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          onBandWidthChange={(val) => {
+            setLevelsetParams(p => ({ ...p, narrowBandWidth: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, narrowBandWidth: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          onTensionChange={(val) => {
+            setLevelsetParams(p => ({ ...p, surfaceTension: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, surfaceTension: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
         />
       </div>
 

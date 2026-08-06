@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { FluidGrid } from '../core/FluidGrid';
 import type { AdvectionMask } from '../core/FluidGrid';
 import { AdvectionSolver } from '../solvers/AdvectionSolver';
+import { LevelSetSolver } from '../solvers/LevelSetSolver';
 import { GPUOps } from '../core/GPUOps';
 import { FluidInjector } from '../core/FluidInjector';
 import { FluidOperations, type InjectionConfig } from './FluidOperations';
@@ -67,7 +68,7 @@ export interface FluidEditorConfig {
   pressureBoundaryMode: 'dirichlet' | 'neumann';
   /** 是否启用压力热启动（用上一帧压力作为初始猜测，大幅减少迭代次数） */
   enableWarmStart: boolean;
-  enableLevelSet: boolean;   // 预留
+  enableLevelSet: boolean;   // Level Set 总开关（驱动 phiGrid 创建/释放与 step 计算）
   /** 全局加速度/力（像素/秒²），二维矢量（屏幕坐标系，Y向下为正） */
   gravity: { x: number; y: number };
   /** 恒定注入源配置 */
@@ -151,6 +152,23 @@ export interface FluidEditorConfig {
   };
 
   /**
+   * Level Set 模块配置（轻量化，默认关闭，热插拔）。
+   * 仅当 enableLevelSet=true 时生效：创建 phiGrid 并在 step 中执行
+   *   φ 平流 → 周期性重初始化 → 表面张力注入（CSF 模型）。
+   * φ 场初始化来源：scalar 模式取 densityGrid.R，vector 模式取 colorGrid.A。
+   */
+  levelSetConfig?: {
+    /** 重初始化间隔（帧数）：每 N 帧执行一次 reinit，默认 10 */
+    reinitInterval: number;
+    /** 每次重初始化的迭代次数（红-黑 SOR 轮数），默认 2 */
+    reinitIterations: number;
+    /** 表面张力系数 σ（0=禁用张力），默认 0 */
+    surfaceTension: number;
+    /** 窄带宽度/作用半径（像素），表面张力仅在 |φ|<radius 区域施力，默认 5 */
+    narrowBandWidth: number;
+  };
+
+  /**
    * 障碍物（墙体）开关。
    * 启用后，可通过画笔在 obstacleGrid 上涂抹墙体，
    * 流体无法穿墙（平流被拦截、压力归零、注入被屏蔽）。
@@ -208,6 +226,12 @@ export class FluidEditor {
 
   // 求解器
   private advectionSolver: AdvectionSolver;
+  /** Level Set 求解器（φ 平流/重初始化/表面张力，热插拔） */
+  private levelSetSolver: LevelSetSolver;
+  /** Level Set φ 场（1 通道 half-float，懒加载，enableLevelSet=true 时创建） */
+  private _phiGrid: FluidGrid | null = null;
+  /** reinit 间隔帧数计数器（每 reinitInterval 帧执行一次重初始化） */
+  private levelSetFrameCount = 0;
 
   // 时间（秒）
   private time = 0;
@@ -229,6 +253,7 @@ export class FluidEditor {
     this.operations.setChannelMask(this.config.channels);
 
     this.advectionSolver = new AdvectionSolver(renderer);
+    this.levelSetSolver = new LevelSetSolver(renderer, this.gpu);
 
     this.rebuildGrids();
 
@@ -246,6 +271,7 @@ export class FluidEditor {
     const oldRes = this.config.resolution;
     const oldVelType = this.config.velocityDataType;
     const oldEnableObstacles = this.config.enableObstacles;
+    const oldEnableLevelSet = this.config.enableLevelSet;
     Object.assign(this.config, updates);
 
     // ★ 同步通道掩码到 FluidOperations（注入时冻结未勾选的通道）
@@ -265,6 +291,15 @@ export class FluidEditor {
         this.enableObstaclesMode();
       } else {
         this.disableObstaclesMode();
+      }
+    }
+
+    // ★ 处理 Level Set 开关变化（热插拔 phiGrid）
+    if (updates.enableLevelSet !== undefined && updates.enableLevelSet !== oldEnableLevelSet) {
+      if (updates.enableLevelSet) {
+        this.enableLevelSetMode();
+      } else {
+        this.disableLevelSetMode();
       }
     }
 
@@ -466,8 +501,32 @@ export class FluidEditor {
       this.operations.clampVelocity(this.velocityGrid, maxVel);
     }
 
-    // 4. Level Set（预留）
-    // if (this.config.enableLevelSet) this.solveLevelSet();
+    // 4. ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
+    //    φ 平流 → 周期性重初始化（保持 SDF） → 表面张力注入（CSF 模型）
+    if (this.config.enableLevelSet && this._phiGrid) {
+      const lsCfg = this.config.levelSetConfig;
+      // (1) φ 平流（跟随速度场流动）
+      this.levelSetSolver.advectPhi(
+        this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTexture(),
+      );
+      // (2) 周期性重初始化（每 reinitInterval 帧，红-黑 SOR 保持 |∇φ|≈1）
+      this.levelSetFrameCount++;
+      const interval = lsCfg?.reinitInterval ?? 10;
+      if (this.levelSetFrameCount >= interval) {
+        this.levelSetFrameCount = 0;
+        this.levelSetSolver.reinit(
+          this._phiGrid, this.getObstacleTexture(), lsCfg?.reinitIterations ?? 2, 0.5,
+        );
+      }
+      // (3) 表面张力注入（CSF 模型，σ>0 时启用，仅在 |φ|<narrowBandWidth 窄带内施力）
+      const sigma = lsCfg?.surfaceTension ?? 0;
+      if (sigma > 0) {
+        this.levelSetSolver.applySurfaceTension(
+          this.velocityGrid, this._phiGrid.read, this.getObstacleTexture(),
+          sigma, dt, lsCfg?.narrowBandWidth ?? 5,
+        );
+      }
+    }
 
     this.time += dt;
   }
@@ -1045,6 +1104,9 @@ export class FluidEditor {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    // ★ Level Set phiGrid：分辨率变化时释放，下次 step 前由 enableLevelSetMode 重建
+    this._phiGrid?.dispose();
+    this._phiGrid = null;
 
     this.colorGrid = new FluidGrid(
       this.config.resolution,
@@ -1121,6 +1183,55 @@ export class FluidEditor {
   disableObstaclesMode(): void {
     this.config.enableObstacles = false;
     this.disposeObstacleTarget();
+  }
+
+  // ==================== Level Set 模块（热插拔） ====================
+
+  /**
+   * 启用 Level Set 模式 —— 懒创建 phiGrid（1 通道 half-float）并初始化 φ 场。
+   * 已创建则直接返回。φ 场来源：scalar 模式取 densityGrid.R，vector 模式取 colorGrid.A。
+   */
+  enableLevelSetMode(): void {
+    if (this._phiGrid) return;  // 已创建
+    const { w, h } = this.config.resolution;
+    this._phiGrid = new FluidGrid({ w, h }, 1, 'half-float');
+    this.levelSetFrameCount = 0;
+    this.initPhiField();
+  }
+
+  /**
+   * 禁用 Level Set 模式 —— 释放 phiGrid 显存，后续 step() 跳过所有 Level Set 计算。
+   */
+  disableLevelSetMode(): void {
+    this._phiGrid?.dispose();
+    this._phiGrid = null;
+  }
+
+  /**
+   * 重新基于当前 density/colorGrid 初始化 φ 场（启用状态下可调用以重置 SDF）。
+   */
+  resetLevelSetPhi(): void {
+    if (!this._phiGrid) return;
+    this.initPhiField();
+  }
+
+  /**
+   * 基于密度场（scalar）或颜色场 alpha（vector）推断初始 SDF。
+   *   density > 0.5 / alpha > 0.5 → φ < 0（内部）
+   *   density < 0.5 / alpha < 0.5 → φ > 0（外部）
+   * 粗略初始化，需配合 reinit 才能得到真正的 SDF（|∇φ|≈1）。
+   */
+  private initPhiField(): void {
+    if (!this._phiGrid) return;
+    const lsCfg = this.config.levelSetConfig;
+    const radius = lsCfg?.narrowBandWidth ?? 5;
+    if (this.config.advectionMode === 'scalar') {
+      // scalar 模式：density 场 R 通道
+      this.levelSetSolver.initPhiField(this._phiGrid, this.densityGrid.read, 0, radius);
+    } else {
+      // vector 模式：颜色场 A 通道
+      this.levelSetSolver.initPhiField(this._phiGrid, this.colorGrid.read, 1, radius);
+    }
   }
 
   /**
@@ -1445,10 +1556,13 @@ export class FluidEditor {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this._phiGrid?.dispose();
+    this._phiGrid = null;
     this.disposeObstacleTarget();
     this.dummyObstacleTex?.dispose();
     this.dummyObstacleTex = null;
     this.advectionSolver.dispose();
+    this.levelSetSolver.dispose();
     this.gpu.dispose();
   }
 }

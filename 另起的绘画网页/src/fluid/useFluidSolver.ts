@@ -68,6 +68,8 @@ export function useFluidSolver(
       ...defaultFluidConfig,
       ...fluidConfig,
       scalarConfig: { ...defaultFluidConfig.scalarConfig, ...(fluidConfig.scalarConfig ?? {}) },
+      // ★ Level Set 配置合并（轻量化默认关闭）
+      levelSetConfig: { ...defaultFluidConfig.levelSetConfig, ...(fluidConfig.levelSetConfig ?? {}) },
       resolution: { ...resolution },
     };
 
@@ -80,6 +82,9 @@ export function useFluidSolver(
       if (solver) solver.dispose();
       solver = new FluidSolver(renderer, cfg, resolution);
       solverRef.current = solver;
+    } else if (solver) {
+      // ★ 复用现有 solver 时，同步更新配置（包括 levelSetConfig 启用状态切换）
+      solver.updateConfig(cfg);
     }
     // needRebuild=false 时 solver 必非空；needRebuild=true 时已赋值。TS 无法推断，显式断言：
     if (!solver) return;
@@ -131,12 +136,20 @@ export function useFluidSolver(
       solver.setObstacleTexture(null);
     }
 
+    // ★ Level Set：若已启用，基于实际 density/colorGrid 数据重新初始化 φ 场
+    //   构造函数中 enableLevelSet 在 density 注入前调用，phi 会是空的，
+    //   这里在数据就绪后重置一次，确保 φ 场反映真实浓度分布
+    if (cfg.levelSetConfig?.enabled) {
+      solver.resetLevelSet();
+    }
+
     // 首帧合成，立即产出可显示的 compositeTarget
     solver.composite();
 
     console.log(
       `[useFluidSolver] layer="${activeLayerId}" region=#${boundRegionId} ` +
-      `mode=${isMCSDA ? 'MCSDA' : 'direct'} res=${resolution.w}x${resolution.h}`,
+      `mode=${isMCSDA ? 'MCSDA' : 'direct'} res=${resolution.w}x${resolution.h} ` +
+      `levelSet=${cfg.levelSetConfig?.enabled ? 'ON' : 'off'}`,
     );
 
     // 清理函数：仅在组件卸载或下一次 effect 重跑前调用

@@ -214,6 +214,38 @@ export function FluidPanel() {
           <Slider label="最大速度" value={cfg!.maxVelocity} min={100} max={10000} step={100}
             onChange={v => updateFluidConfig(activeLayerId!, { maxVelocity: v })} fmt={v => v.toFixed(0)} />
 
+          {/* ★ Level Set 模块（热插拔） */}
+          <div style={{ ...LABEL, marginTop: '12px', borderTop: '1px dashed #333', paddingTop: '8px' }}>
+            <span style={{ color: '#6c5ce7' }}>Level Set 模块</span>
+            <button
+              style={{ ...BTN, background: cfg!.levelSetConfig?.enabled ? '#6c5ce7' : '#333', color: cfg!.levelSetConfig?.enabled ? '#fff' : '#aaa', padding: '2px 8px', fontSize: '11px' }}
+              onClick={() => updateFluidConfig(activeLayerId!, {
+                levelSetConfig: { ...cfg!.levelSetConfig, enabled: !cfg!.levelSetConfig?.enabled },
+              })}
+            >
+              {cfg!.levelSetConfig?.enabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+          {cfg!.levelSetConfig?.enabled && (
+            <>
+              <p style={{ fontSize: '11px', color: '#777', marginTop: '4px' }}>
+                Level Set：基于 φ 距离场跟踪流体表面，支持表面张力与边缘羽化。
+              </p>
+              <Slider label="重初始化迭代" value={cfg!.levelSetConfig.reinitIterations} min={1} max={8} step={1}
+                onChange={v => updateFluidConfig(activeLayerId!, {
+                  levelSetConfig: { ...cfg!.levelSetConfig, reinitIterations: Math.round(v) },
+                })} fmt={v => v.toFixed(0)} />
+              <Slider label="表面张力 σ" value={cfg!.levelSetConfig.surfaceTension} min={0} max={200} step={1}
+                onChange={v => updateFluidConfig(activeLayerId!, {
+                  levelSetConfig: { ...cfg!.levelSetConfig, surfaceTension: v },
+                })} fmt={v => v.toFixed(0)} />
+              <Slider label="作用半径 (px)" value={cfg!.levelSetConfig.smoothingRadius} min={1} max={10} step={0.5}
+                onChange={v => updateFluidConfig(activeLayerId!, {
+                  levelSetConfig: { ...cfg!.levelSetConfig, smoothingRadius: v },
+                })} fmt={v => v.toFixed(1)} />
+            </>
+          )}
+
           {/* 注入源 */}
           <div style={LABEL}><span>持续注入源（{sources.length}）</span>
             <button style={{ ...BTN, background: '#333', color: '#fff', padding: '2px 8px', fontSize: '12px' }}

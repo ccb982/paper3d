@@ -36,6 +36,8 @@ export type { InjectionConfig, VortexOptions, ExplosionOptions, WindOptions } fr
 // 求解器层
 export { AdvectionSolver } from './solvers/AdvectionSolver';
 export type { AdvectionOptions } from './solvers/AdvectionSolver';
+export { LevelSetSolver } from './solvers/LevelSetSolver';
+export type { LevelSetOptions } from './solvers/LevelSetSolver';
 
 // 公共 GLSL 函数库
 export {
