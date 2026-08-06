@@ -304,11 +304,77 @@ export class FluidSolver {
     grid.swap();
   }
 
+  /** 用特定值填充网格（用于 density 初始化） */
+  private fillGrid(grid: FluidGrid, value: number): void {
+    const w = grid.resolution.w;
+    const h = grid.resolution.h;
+    const ch = grid.channelCount;
+
+    if (grid.dataType === 'uint8') {
+      // Uint8 格式：value 0~1 → 0~255
+      const uintVal = Math.round(value * 255);
+      const data = new Uint8Array(w * h * Math.max(ch, 1));
+      for (let i = 0; i < w * h; i++) {
+        data[i * ch + 0] = uintVal;
+        if (ch >= 2) data[i * ch + 1] = 0;
+        if (ch >= 3) data[i * ch + 2] = 0;
+        if (ch >= 4) data[i * ch + 3] = 255;
+      }
+      const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.UnsignedByteType);
+      tex.minFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.flipY = false;
+      tex.needsUpdate = true;
+
+      const mat = this.gpu.getMaterial('fluid_fill', {
+        uTex: { value: tex },
+      }, `
+        uniform sampler2D uTex;
+        varying vec2 vUv;
+        void main(){ gl_FragColor = texture2D(uTex, vUv); }
+      `);
+      const prev = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(grid.write);
+      this.renderer.clear(true, true, true);
+      this.gpu.render(this.renderer, grid.write, mat);
+      this.renderer.setRenderTarget(prev);
+      grid.swap();
+      tex.dispose();
+    } else {
+      // Float 格式
+      const data = new Float32Array(w * h * 4);
+      for (let i = 0; i < w * h; i++) {
+        data[i * 4] = value;
+      }
+      const tex = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.FloatType);
+      tex.minFilter = THREE.NearestFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.flipY = false;
+      tex.needsUpdate = true;
+
+      const mat = this.gpu.getMaterial('fluid_fill', {
+        uTex: { value: tex },
+      }, `
+        uniform sampler2D uTex;
+        varying vec2 vUv;
+        void main(){ gl_FragColor = texture2D(uTex, vUv); }
+      `);
+      const prev = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(grid.write);
+      this.renderer.clear(true, true, true);
+      this.gpu.render(this.renderer, grid.write, mat);
+      this.renderer.setRenderTarget(prev);
+      grid.swap();
+      tex.dispose();
+    }
+  }
+
   /** 初始化场：colorGrid 已由残差上传，仅清零速度/压力/密度 */
   initFields(): void {
     this.clearGrid(this.velocityGrid);
     this.clearGrid(this.pressureGrid);
-    this.clearGrid(this.densityGrid);
+    // ★ density 初始化为 baseline（1.0 = 255 in Uint8），确保无注入时 factor=0
+    this.fillGrid(this.densityGrid, 1.0);
     // colorGrid 重新上传残差，恢复初始静态残差
     this.uploadResidualToColorGrid();
   }
@@ -862,15 +928,14 @@ export class FluidSolver {
           float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
           float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
 
-          // ★ 调试：中心像素打印（通过特殊颜色标记）
-          //   我们用一种特殊方法：如果 UV 在中心区域，让输出偏红
-          //   实际上我们无法直接从 GLSL 打印日志，所以这个调试不可行
-          //   但我们可以检查 buildBaseHslFromFrame 的实现
-
           float finalH, finalS, finalL, finalA;
           if (uScalarMode == 1) {
             float density = texture2D(uDensity, vUv).r;
-            float factor = density / max(0.0001, uBaseline);
+            // ★ 关键修复：factor = density/baseline - 1
+            //   当 density=baseline 时，factor=0，不修改颜色（正确的基准状态）
+            //   当 density<baseline 时，factor<0，加上负偏移（sub 模式变暗）
+            //   当 density>baseline 时，factor>0，加上正偏移（添加模式变亮）
+            float factor = density / max(0.0001, uBaseline) - 1.0;
             float sign = (uCombineMode == 1) ? -1.0 : 1.0;
             finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
             finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);

@@ -89,7 +89,7 @@ export function useFluidSolver(
     if (residualTex) {
       solver.loadResidual(residualTex);
     } else {
-      // 创建中性残差（R=G=B=128, A=255），确保 delta=0
+      // 创建中性残差（R=G=B=A=128），确保所有 delta≈0
       const w = resolution.w;
       const h = resolution.h;
       const canvas = document.createElement('canvas');
@@ -102,7 +102,7 @@ export function useFluidSolver(
         data[i] = 128;     // R → dH = (128/255*2 - 1)*0.5 ≈ 0
         data[i + 1] = 128; // G → dS ≈ 0
         data[i + 2] = 128; // B → dL ≈ 0
-        data[i + 3] = 255; // A → dA ≈ 0
+        data[i + 3] = 128; // A → dA ≈ 0（之前是255，会导致dA=0.5！）
       }
       solver.loadResidual(neutralImageData);
     }
