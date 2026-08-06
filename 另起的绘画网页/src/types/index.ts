@@ -190,7 +190,7 @@ export interface FluidRuntime {
   isPlaying: boolean;
   speed: number;                              // 播放速度倍率
   currentTime: number;                        // 模拟累计时间（秒）
-  viewMode: 'color' | 'velocity' | 'composite' | 'density' | 'obstacle';
+  viewMode: 'color' | 'velocity' | 'composite' | 'density' | 'obstacle' | 'levelset';
   frameCount: number;
   /** MainCanvas 渲染循环检测到 true 时调用 solver.reset()，然后清除此标志 */
   _needsReset?: boolean;

@@ -18,8 +18,9 @@ import { FluidOperations, type InjectionConfig } from './FluidOperations';
  * - 'composite'：合成（底图 + 残差混合）
  * - 'density'：浓缩场（density 标量场灰度显示，仅 scalar 模式有意义）
  * - 'obstacle'：障碍物掩码（墙体灰白可视化）
+ * - 'levelset'：Level Set φ 场（signed distance 可视化：红=内部/蓝=外部/白=零等值线）
  */
-export type ViewMode = 'color' | 'velocity' | 'composite' | 'density' | 'obstacle';
+export type ViewMode = 'color' | 'velocity' | 'composite' | 'density' | 'obstacle' | 'levelset';
 
 /** 速度场数据类型：'half-float'（16位半精度，显存减半）或 'float'（32位单精度，高精度） */
 export type VelocityDataType = 'half-float' | 'float';
@@ -517,6 +518,7 @@ export class FluidEditor {
         this.levelSetSolver.reinit(
           this._phiGrid, this.getObstacleTexture(), lsCfg?.reinitIterations ?? 2, 0.5,
         );
+        console.log(`[LevelSet] reinit @ frame ${this.frameCount}：interval=${interval}，iterations=${lsCfg?.reinitIterations ?? 2}`);
       }
       // (3) 表面张力注入（CSF 模型，σ>0 时启用，仅在 |φ|<narrowBandWidth 窄带内施力）
       const sigma = lsCfg?.surfaceTension ?? 0;
@@ -896,6 +898,14 @@ export class FluidEditor {
   }
 
   /**
+   * 获取 Level Set φ 场纹理（R 通道 half-float signed distance）。
+   * 未启用 LevelSet 时返回 dummy 纹理（φ=0，视口显示为全白零等值线）。
+   */
+  getLevelSetTexture(): THREE.Texture {
+    return this._phiGrid?.read ?? this.getDummyObstacleTex();
+  }
+
+  /**
    * ★ 诊断辅助：回读 density 场指定像素到 Uint8Array(4)（R 通道为 density）。
    */
   readDensityPixel(x: number, y: number, out: Uint8Array): void {
@@ -1192,17 +1202,24 @@ export class FluidEditor {
    * 已创建则直接返回。φ 场来源：scalar 模式取 densityGrid.R，vector 模式取 colorGrid.A。
    */
   enableLevelSetMode(): void {
-    if (this._phiGrid) return;  // 已创建
+    if (this._phiGrid) {
+      console.log('[LevelSet] 已启用，phiGrid 已存在，跳过创建');
+      return;  // 已创建
+    }
     const { w, h } = this.config.resolution;
     this._phiGrid = new FluidGrid({ w, h }, 1, 'half-float');
     this.levelSetFrameCount = 0;
     this.initPhiField();
+    const src = this.config.advectionMode === 'scalar' ? 'densityGrid.R' : 'colorGrid.A';
+    const lsCfg = this.config.levelSetConfig;
+    console.log(`[LevelSet] ✅ 启用：phiGrid ${w}x${h} half-float，φ 来源=${src}，窄带=${lsCfg?.narrowBandWidth ?? 5}px，reinitInterval=${lsCfg?.reinitInterval ?? 10}帧，σ=${lsCfg?.surfaceTension ?? 0}`);
   }
 
   /**
    * 禁用 Level Set 模式 —— 释放 phiGrid 显存，后续 step() 跳过所有 Level Set 计算。
    */
   disableLevelSetMode(): void {
+    console.log('[LevelSet] ❌ 禁用：释放 phiGrid');
     this._phiGrid?.dispose();
     this._phiGrid = null;
   }

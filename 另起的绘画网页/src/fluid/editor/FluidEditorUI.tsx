@@ -1377,6 +1377,13 @@ const GeneralPanel: React.FC<{
             >
               🧱 墙体
             </button>
+            <button
+              className={viewMode === 'levelset' ? 'active' : ''}
+              onClick={() => onViewChange('levelset')}
+              title="Level Set φ 场（红=内部/蓝=外部/白=零等值线，调试 SDF）"
+            >
+              🌀 φ场
+            </button>
           </div>
         </div>
 
@@ -2518,6 +2525,47 @@ export const FluidEditorUI: React.FC = () => {
     obstacleQuad.material = obstacleMat;
     obstacleScene.add(obstacleQuad);
 
+    // ★ Level Set φ 场场景：signed distance 可视化
+    //   φ < 0 → 内部（红），φ > 0 → 外部（蓝），|φ|≈0 → 零等值线（白）
+    //   窄带（|φ| < narrowBandWidth）渐变高亮，用于调试 SDF 是否正确跟踪流体边界
+    const levelsetScene = new THREE.Scene();
+    const levelsetQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+    const levelsetMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uPhi: { value: editor.getLevelSetTexture() },
+        uBandWidth: { value: config.levelSetConfig?.narrowBandWidth ?? 5 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        void main() {
+          vUv = vec2(uv.x, 1.0 - uv.y);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D uPhi;
+        uniform float uBandWidth;
+        varying vec2 vUv;
+
+        void main() {
+          float phi = texture2D(uPhi, vUv).r;
+          // φ < 0 内部（红），φ > 0 外部（蓝）
+          vec3 insideColor = vec3(0.85, 0.25, 0.25);
+          vec3 outsideColor = vec3(0.15, 0.35, 0.85);
+          vec3 color = phi < 0.0 ? insideColor : outsideColor;
+          // 窄带高亮（|φ| < bandWidth）：渐变到亮色，观察 SDF 窄带范围
+          float band = 1.0 - smoothstep(0.0, max(uBandWidth, 0.001), abs(phi));
+          color = mix(color, vec3(0.9, 0.95, 1.0), band * 0.4);
+          // 零等值线（|φ| < 1px）：白色高亮，即流体边界
+          float contour = 1.0 - smoothstep(0.0, 1.0, abs(phi));
+          color = mix(color, vec3(1.0), contour * 0.85);
+          gl_FragColor = vec4(color, 1.0);
+        }
+      `,
+    });
+    levelsetQuad.material = levelsetMat;
+    levelsetScene.add(levelsetQuad);
+
     // 合成场景：底图（baseTexture）+ 平流残差（fluid residual）实时混合
     // ★ MCSDA：scalar 模式下残差增量按 density×通道系数 调制后叠加到基础色（uScalarMode=1），
     //   合成 = base + (delta × factor × mul)；vector 模式直接 base + delta（uScalarMode=0）
@@ -3040,12 +3088,19 @@ export const FluidEditorUI: React.FC = () => {
         obstacleMat.uniforms.uObstacle.value = editor.getObstacleTexture();
       }
 
+      // ★ Level Set 模式：每帧同步 φ 场纹理（phiGrid.read 会 swap）和窄带宽度
+      if (viewMode === 'levelset') {
+        levelsetMat.uniforms.uPhi.value = editor.getLevelSetTexture();
+        levelsetMat.uniforms.uBandWidth.value = config.levelSetConfig?.narrowBandWidth ?? 5;
+      }
+
       // 根据视图模式选择渲染场景
       let targetScene: THREE.Scene;
       if (viewMode === 'color') targetScene = colorScene;
       else if (viewMode === 'velocity') targetScene = velScene;
       else if (viewMode === 'density') targetScene = densityScene;
       else if (viewMode === 'obstacle') targetScene = obstacleScene;
+      else if (viewMode === 'levelset') targetScene = levelsetScene;
       else targetScene = compositeScene;
       renderer.render(targetScene, camera);
 
@@ -3974,7 +4029,7 @@ export const FluidEditorUI: React.FC = () => {
         </div>
         <div className="viewport-info">
           <span>{config.resolution.w}×{config.resolution.h}</span>
-          <span>{viewMode === 'color' ? '颜色场' : viewMode === 'velocity' ? '速度场' : viewMode === 'density' ? '浓缩场' : viewMode === 'obstacle' ? '墙体' : '合成场'}</span>
+          <span>{viewMode === 'color' ? '颜色场' : viewMode === 'velocity' ? '速度场' : viewMode === 'density' ? '浓缩场' : viewMode === 'obstacle' ? '墙体' : viewMode === 'levelset' ? 'φ场' : '合成场'}</span>
           <span>{config.enableAdvection ? '平流: ON' : '平流: OFF'}</span>
           {config.advectionMode === 'scalar' && <span style={{ color: '#009688' }}>MCSDA</span>}
         </div>

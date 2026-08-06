@@ -130,6 +130,13 @@ export function useFluidEditor(
       console.log('[obstacle] 切换到墙体视图，启用障碍物模式');
       editorRef.current?.enableObstaclesMode();
     }
+    // ★ 切换到 φ 场视图时输出 LevelSet 状态（便于调试）
+    if (mode === 'levelset') {
+      const ed = editorRef.current;
+      const enabled = ed?.config.enableLevelSet;
+      const lsCfg = ed?.config.levelSetConfig;
+      console.log(`[levelset] 切换到 φ 场视图 | enableLevelSet=${enabled} | reinitInterval=${lsCfg?.reinitInterval ?? '?'} | σ=${lsCfg?.surfaceTension ?? '?'} | 窄带=${lsCfg?.narrowBandWidth ?? '?'}px${enabled ? '' : '（⚠️ 未启用 LevelSet，视口将显示全白零等值线；请在 Level Set 面板打开开关）'}`);
+    }
   }, []);
 
   // ==================== 显示纹理 ====================
@@ -144,6 +151,8 @@ export function useFluidEditor(
         return ed.getVelocityTexture();
       case 'density':
         return ed.getDensityTexture();
+      case 'levelset':
+        return ed.getLevelSetTexture();
       default:
         return null;
     }
