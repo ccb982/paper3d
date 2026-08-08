@@ -109,7 +109,19 @@ export class Asset {
     return ctrl;
   }
 
-  getFrameRenderData(index: number): { baseTexture: THREE.DataTexture; residualTexture: THREE.DataTexture; entities: EntityMeshData[] } | null {
+  getFrameRenderData(index: number): {
+    baseTexture: THREE.DataTexture;
+    residualTexture: THREE.DataTexture;
+    entities: EntityMeshData[];
+    textureOffset: { x: number; y: number };
+    textureScale: { x: number; y: number };
+    textureRotation: number;
+    distortEnabled: boolean;
+    distortAmplitude: number;
+    distortFrequency: number;
+    distortSpeed: number;
+    distortRotation: number;
+  } | null {
     if (index < 0 || index >= this.frames.length) return null;
     const fd = this.frames[index];
     const baseTex = fd.textureIndex >= 0 && fd.textureIndex < this.baseTextures.length
@@ -121,7 +133,19 @@ export class Asset {
       const m = this._entityMeshMap.get(`${index}:${ed.id}`);
       if (m) entities.push(m);
     }
-    return { baseTexture: baseTex, residualTexture: resTex, entities };
+    return {
+      baseTexture: baseTex,
+      residualTexture: resTex,
+      entities,
+      textureOffset: fd.textureOffset ?? { x: 0, y: 0 },
+      textureScale: fd.textureScale ?? { x: 1, y: 1 },
+      textureRotation: fd.textureRotation ?? 0,
+      distortEnabled: fd.distortEnabled ?? false,
+      distortAmplitude: fd.distortAmplitude ?? 0.06,
+      distortFrequency: fd.distortFrequency ?? 5.0,
+      distortSpeed: fd.distortSpeed ?? 1.2,
+      distortRotation: fd.distortRotation ?? 0,
+    };
   }
 
   disposeController(ctrl: FramePlaybackController): void { ctrl.dispose(); this._controllers.delete(ctrl); }

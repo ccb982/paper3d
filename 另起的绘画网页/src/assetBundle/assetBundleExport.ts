@@ -183,6 +183,15 @@ export async function exportMainCanvasAssetBundle(
         fixedVertices: Array.from(en.fixedVertices).sort((a, b) => a - b),
       })),
       physics: e.fd?.fluidConfig ?? null,
+      // ★ 底图变换 + 呼吸式扭曲参数（播放器渲染用）
+      textureOffset: e.fd?.textureOffset ?? { x: 0, y: 0 },
+      textureScale: e.fd?.textureScale ?? { x: 1, y: 1 },
+      textureRotation: e.fd?.textureRotation ?? 0,
+      distortEnabled: e.fd?.distortEnabled ?? false,
+      distortAmplitude: e.fd?.distortAmplitude ?? 0.06,
+      distortFrequency: e.fd?.distortFrequency ?? 5.0,
+      distortSpeed: e.fd?.distortSpeed ?? 1.2,
+      distortRotation: e.fd?.distortRotation ?? 0,
     };
 
     // ===== ★ 调试输出：导出后显示物理注入源情况 =====

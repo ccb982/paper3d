@@ -118,19 +118,63 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
     fragmentShader: /* glsl */ `
       uniform sampler2D uBaseTexture;
       uniform sampler2D uResidual;
+      uniform vec2 uBboxOffset;
+      uniform vec2 uBboxScale;
       uniform vec2 uTexOffset;
       uniform vec2 uTexScale;
+      uniform float uTexRotation;
+      uniform float uTime;
+      uniform float uDistortEnabled;
+      uniform float uDistortAmplitude;
+      uniform float uDistortFrequency;
+      uniform float uDistortSpeed;
+      uniform float uDistortRotation;
       varying vec2 vUv;
       vec3 hsl2rgb(float h, float s, float l) {
         vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0,4.0,2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
         return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
       }
       void main() {
-        vec2 uv = (vUv - uTexOffset) / uTexScale;
+        // ========== 0. bbox 映射（世界坐标 → 纹理 bbox 空间） ==========
+        vec2 uv = (vUv - uBboxOffset) / uBboxScale;
+        // ========== 1. 呼吸式扭曲（屏幕空间，独立于底图变换） ==========
+        if (uDistortEnabled > 0.5) {
+          float time = uTime;
+          float cosDR = cos(uDistortRotation);
+          float sinDR = sin(uDistortRotation);
+          vec2 dUv = uv - 0.5;
+          vec2 rotUv = vec2(
+            dUv.x * cosDR - dUv.y * sinDR,
+            dUv.x * sinDR + dUv.y * cosDR
+          );
+          rotUv += 0.5;
+          float amplitude = uDistortAmplitude * (0.5 + 0.5 * sin(time * 0.4));
+          float frequency = uDistortFrequency;
+          float phase = time * uDistortSpeed + 0.5 * sin(time * 0.3);
+          float offsetX = amplitude * sin(frequency * rotUv.y + phase);
+          rotUv.x += offsetX;
+          float secondaryAmp = amplitude * 0.3;
+          float secondaryFreq = frequency * 1.8;
+          float secondaryPhase = time * 2.5;
+          rotUv.x += secondaryAmp * sin(secondaryFreq * rotUv.y + secondaryPhase);
+          vec2 backUv = rotUv - 0.5;
+          uv = vec2(
+            backUv.x * cosDR + backUv.y * sinDR,
+            -backUv.x * sinDR + backUv.y * cosDR
+          );
+          uv += 0.5;
+        }
+        // ========== 2. 底图变换（用户参数：旋转 → 偏移/缩放） ==========
+        float cosRot = cos(uTexRotation);
+        float sinRot = sin(uTexRotation);
+        uv -= 0.5;
+        uv = vec2(uv.x * cosRot - uv.y * sinRot, uv.x * sinRot + uv.y * cosRot);
+        uv += 0.5;
+        uv = (uv - uTexOffset) / uTexScale;
+        // ========== 3. 合成（基础色 + 残差统一 0.5 范围） ==========
         vec4 base = texture2D(uBaseTexture, uv);
         if (base.a < 0.5) discard;
         vec4 res = texture2D(uResidual, uv);
-        // 残差统一 0.5 范围：d = (val*2-1)*0.5
         float dH = (res.r * 2.0 - 1.0) * 0.5;
         float dS = (res.g * 2.0 - 1.0) * 0.5;
         float dL = (res.b * 2.0 - 1.0) * 0.5;
@@ -149,8 +193,16 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       uVertexCount: { value: vertexCount },
       uBaseTexture: { value: null },
       uResidual: { value: null },
+      uBboxOffset: { value: new THREE.Vector2() },
+      uBboxScale: { value: new THREE.Vector2(1, 1) },
       uTexOffset: { value: new THREE.Vector2() },
-      uTexScale: { value: new THREE.Vector2() },
+      uTexScale: { value: new THREE.Vector2(1, 1) },
+      uTexRotation: { value: 0 },
+      uDistortEnabled: { value: 0 },
+      uDistortAmplitude: { value: 0.06 },
+      uDistortFrequency: { value: 5.0 },
+      uDistortSpeed: { value: 1.2 },
+      uDistortRotation: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -215,7 +267,19 @@ export function buildEntityMesh(
 }
 
 export function renderFrameData(
-  data: { baseTexture: THREE.DataTexture; residualTexture: THREE.DataTexture; entities: EntityMeshData[] },
+  data: {
+    baseTexture: THREE.DataTexture;
+    residualTexture: THREE.DataTexture;
+    entities: EntityMeshData[];
+    textureOffset: { x: number; y: number };
+    textureScale: { x: number; y: number };
+    textureRotation: number;
+    distortEnabled: boolean;
+    distortAmplitude: number;
+    distortFrequency: number;
+    distortSpeed: number;
+    distortRotation: number;
+  },
   animationTime: number,
   vatFps: number,
   transform: { position: { x: number; y: number; z: number }; scale: { x: number; y: number }; rotation: number },
@@ -253,8 +317,19 @@ export function renderFrameData(
     cm.uniforms.uFramesPerSecond.value = vatFps;
     cm.uniforms.uBaseTexture.value = data.baseTexture;
     cm.uniforms.uResidual.value = data.residualTexture;
-    (cm.uniforms.uTexOffset.value as THREE.Vector2).set(em.texBbox.x / em.frameWidth, em.texBbox.y / em.frameWidth);
-    (cm.uniforms.uTexScale.value as THREE.Vector2).set(em.texBbox.w / em.frameWidth, em.texBbox.h / em.frameWidth);
+    // bbox 映射（世界坐标 → 纹理 bbox 空间）
+    (cm.uniforms.uBboxOffset.value as THREE.Vector2).set(em.texBbox.x / em.frameWidth, em.texBbox.y / em.frameWidth);
+    (cm.uniforms.uBboxScale.value as THREE.Vector2).set(em.texBbox.w / em.frameWidth, em.texBbox.h / em.frameWidth);
+    // 用户底图变换
+    (cm.uniforms.uTexOffset.value as THREE.Vector2).set(data.textureOffset.x, data.textureOffset.y);
+    (cm.uniforms.uTexScale.value as THREE.Vector2).set(data.textureScale.x, data.textureScale.y);
+    cm.uniforms.uTexRotation.value = data.textureRotation;
+    // 呼吸扭曲
+    cm.uniforms.uDistortEnabled.value = data.distortEnabled ? 1 : 0;
+    cm.uniforms.uDistortAmplitude.value = data.distortAmplitude;
+    cm.uniforms.uDistortFrequency.value = data.distortFrequency;
+    cm.uniforms.uDistortSpeed.value = data.distortSpeed;
+    cm.uniforms.uDistortRotation.value = data.distortRotation;
     em.mesh.position.set(position.x, position.y, position.z);
     em.mesh.scale.set(scale.x, scale.y, 1);
     em.mesh.rotation.z = rotation;

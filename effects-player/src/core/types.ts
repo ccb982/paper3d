@@ -69,6 +69,15 @@ export interface PerFrameData {
   boundRegionId: number | null;
   regionEntities: SerializedRegionEntity[];
   physics: PhysicsConfig | null;
+  /** 底图变换 + 呼吸式扭曲（播放器渲染用） */
+  textureOffset?: { x: number; y: number };
+  textureScale?: { x: number; y: number };
+  textureRotation?: number;
+  distortEnabled?: boolean;
+  distortAmplitude?: number;
+  distortFrequency?: number;
+  distortSpeed?: number;
+  distortRotation?: number;
 }
 
 export interface Manifest {
