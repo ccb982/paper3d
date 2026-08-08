@@ -3489,6 +3489,7 @@ export const FluidEditorUI: React.FC = () => {
     };
     console.log('[FTX导入] baseHslData 尺寸:', baseHslData.width, 'x', baseHslData.height,
       '非零像素:', Array.from(baseHslData.data).filter((v, i) => i % 4 === 3 && v > 0).length);
+    editor.clearContinuousInjections();
     editor.initFields();
     updateConfig({
       injection: { ...config.injection, enabled: false },
