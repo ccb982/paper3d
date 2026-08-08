@@ -9,7 +9,7 @@ import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
-import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime, mapSourcesIntoRegion } from '../fluid/fluidConfigIO';
+import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime, mapSourcesIntoRegion, inverseMapSourcesFromRegion } from '../fluid/fluidConfigIO';
 import { regionWorkerPool } from './regionWorkerPool';
 import type { RegionDetectionRequest, RegionDetectionResponse } from '../types/regionWorker';
 
@@ -3458,11 +3458,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 解析外部 JSON → 内部 FluidSolverConfig
     const cfg = parseImportedFluidConfig(json, fallbackRes);
     cfg.resolution = { ...fallbackRes };
-    // ★ 注入源 position 是区域 bbox 局部比例，映射回全帧归一化 UV
-    const boundEntity = (state.regionEntities[layerId] || []).find((e) => e.id === frameData.boundRegionId);
-    if (cfg.continuousSources && boundEntity?.worldBbox) {
-      cfg.continuousSources = mapSourcesIntoRegion(cfg.continuousSources, boundEntity.worldBbox);
-    }
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
@@ -3530,13 +3525,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         : undefined;
       const sameRes = !!srcRes && Math.abs(srcRes.w - (fd.sourceResolution || 512)) < 1
         && Math.abs(srcRes.h - (fd.sourceResolution || 512)) < 1;
-      // ★ 注入源 position 是「区域 bbox 局部比例（0-1）」，映射回全帧归一化 UV 给 solver 用。
-      //   用 worldBbox（0-1 全帧坐标）做 局部→全帧 映射（mapSourcesIntoRegion 的公式）。
+      if (cfg.continuousSources) {
+        cfg.continuousSources = mapSourcesIntoRegion(cfg.continuousSources, {
+          x: (fd.rawBbox?.x ?? 0), y: (fd.rawBbox?.y ?? 0),
+          w: (fd.rawBbox?.w ?? res.w), h: (fd.rawBbox?.h ?? res.h),
+        });
+      }
       let space: any = sameRes ? { kind: 'bbox-local' } : null;
       const entities = state.regionEntities[layer.id] || [];
       const boundEntity = entities.find((e) => e.id === fd.boundRegionId);
-      if (cfg.continuousSources && boundEntity?.worldBbox) {
-        cfg.continuousSources = mapSourcesIntoRegion(cfg.continuousSources, boundEntity.worldBbox);
+      if (sameRes && boundEntity?.worldBbox) {
+        if (cfg.continuousSources) {
+          cfg.continuousSources = inverseMapSourcesFromRegion(cfg.continuousSources, boundEntity.worldBbox);
+        }
         space = { kind: 'region', regionId: boundEntity.id, bbox: { ...boundEntity.worldBbox } };
       }
       newMap[layer.id] = {
