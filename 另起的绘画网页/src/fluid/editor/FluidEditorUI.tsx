@@ -3119,10 +3119,14 @@ export const FluidEditorUI: React.FC = () => {
       const panY = previewPanRef.current.y || 0;
       canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
       canvas.style.transformOrigin = 'center center';
-      // ★ 叠加层只跟随平移（尺寸已同步为 getBoundingClientRect 缩放后尺寸，不能再 scale）
+      // ★ 叠加层补偿缩放中心偏移：scale(zoom) 绕中心放大后，视觉左上角移动了 (1-zoom)*buffer/2
       const overlay = overlayCanvasRef.current;
       if (overlay) {
-        overlay.style.transform = `translate(${panX}px, ${panY}px)`;
+        const bufW = canvas.width || w;
+        const bufH = canvas.height || h;
+        const ox = panX + (bufW * (1 - zoom)) / 2;
+        const oy = panY + (bufH * (1 - zoom)) / 2;
+        overlay.style.transform = `translate(${ox}px, ${oy}px)`;
       }
 
       // 更新纹理引用
