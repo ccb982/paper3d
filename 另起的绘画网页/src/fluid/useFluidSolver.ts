@@ -181,6 +181,8 @@ export function useFluidSolver(
   useEffect(() => {
     const solver = solverRef.current;
     if (!solver || !fluidConfig) return;
+    console.log(`[useFluidSolver] 配置热更新，continuousSources=${(fluidConfig.continuousSources ?? []).length}`, 
+      fluidConfig.continuousSources?.map((s: any) => `(${(s.position?.x ?? 0).toFixed(2)},${(s.position?.y ?? 0).toFixed(2)})r=${s.radius}`).join(' '));
     // updateConfig 内部仅在 resolution 变化时 rebuild，其余字段直接合并
     solver.updateConfig({
       ...fluidConfig,
