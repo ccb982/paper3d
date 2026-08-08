@@ -3424,6 +3424,14 @@ export const FluidEditorUI: React.FC = () => {
       if (ftxRawFrames.length === 0) { alert('FTX 文件不含任何帧'); return; }
       setFtxFrames(ftxRawFrames.map((f: any, i: number) => ({ ...f, _palette: ftxPalette })));
       setSelectedFtxIndex(-1);
+      // ★ 自动选中第一帧，让窗口立即按帧分辨率调整
+      const firstFrame = ftxRawFrames[0];
+      if (firstFrame) {
+        const texSize = firstFrame.width || 512;
+        if (config.resolution.w !== texSize || config.resolution.h !== texSize) {
+          updateConfig({ resolution: { w: texSize, h: texSize } });
+        }
+      }
     } catch (err) {
       console.error('[FluidEditor] FTX导入失败:', err);
       alert('导入失败: ' + (err as Error).message);
