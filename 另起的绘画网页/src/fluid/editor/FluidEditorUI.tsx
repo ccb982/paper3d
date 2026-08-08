@@ -3494,6 +3494,13 @@ export const FluidEditorUI: React.FC = () => {
     });
     const adjustedResidual = adjustResidualForUniformRange(newResidual, bbox, blockFlags);
     editor.initializeColorFromImageData(adjustedResidual);
+    // ★ 调试：确认残差上传后的状态
+    let resNonZero = 0;
+    const rd = adjustedResidual.data;
+    for (let j = 0; j < rd.length; j += 4) {
+      if (rd[j] !== 0 || rd[j+1] !== 0 || rd[j+2] !== 0) resNonZero++;
+    }
+    console.log(`[FTX加载] 帧#${index} "${frame.name || ''}" 残差非零像素: ${resNonZero}, 期望分辨率: ${texSize}x${texSize}`);
     setTimeout(() => { updateConfig({ enableAdvection: true }); }, 100);
     setView('composite');
   };
