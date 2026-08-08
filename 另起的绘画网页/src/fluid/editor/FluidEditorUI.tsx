@@ -3439,7 +3439,8 @@ export const FluidEditorUI: React.FC = () => {
   /** 加载指定 FTX 帧到流体编辑器 */
   const loadFtxFrame = (frame: any, index: number) => {
     setSelectedFtxIndex(index);
-    if (!editor) return;
+    if (!editor) { console.log('[FTX加载] editor为空，跳过'); return; }
+    console.log('[FTX加载] 开始加载帧', index, 'frame存在:', !!frame);
     const palette = frame._palette as { h: number; s: number; l: number; id: number }[];
     const regionIdTex = frame.regionIdTex as Uint8Array;
     const deltaPacked = frame.deltaPacked as Uint16Array;
@@ -3450,6 +3451,9 @@ export const FluidEditorUI: React.FC = () => {
       { rawRegionIdTex: regionIdTex, rawDeltaPacked: deltaPacked, rawBbox: bbox, rawBlockFlags: blockFlags, sourceResolution },
       palette,
     );
+    console.log('[FTX加载] 解码完成, 残差尺寸:', newResidual.width, 'x', newResidual.height,
+      '残差非零:', (() => { let n = 0; const d = newResidual.data; for (let j = 0; j < d.length; j += 4) if (d[j] !== 0 || d[j+1] !== 0 || d[j+2] !== 0) n++; return n; })(),
+      'bbox:', JSON.stringify(bbox));
     const texSize = sourceResolution || 512;
     if (config.resolution.w !== texSize || config.resolution.h !== texSize) {
       updateConfig({ resolution: { w: texSize, h: texSize } });
