@@ -3592,21 +3592,25 @@ export const FluidEditorUI: React.FC = () => {
     };
     console.log('[FTX导入] baseHslData 尺寸:', baseHslData.width, 'x', baseHslData.height,
       '非零像素:', Array.from(baseHslData.data).filter((v, i) => i % 4 === 3 && v > 0).length);
-    editor.clearContinuousInjections();
-    editor.initFields();
+    // ★ 延迟到下一帧执行 GPU 上传（避免与渲染循环同时读写纹理 → WebGL 反馈循环）
+    const adjustedResidual = adjustResidualForUniformRange(newResidual, bbox, blockFlags);
+    requestAnimationFrame(() => {
+      if (!editor) return;
+      editor.clearContinuousInjections();
+      editor.initFields();
+      try {
+        editor.initializeColorFromImageData(adjustedResidual);
+        console.log('[FTX加载] 残差已上传到solver');
+      } catch (err) {
+        console.error('[FTX加载] 残差上传失败:', err);
+      }
+    });
     updateConfig({
       injection: { ...config.injection, enabled: false },
       gravity: { x: 0, y: 0 },
       enableAdvection: false,
       colorBoundaryMode: 'clamp',
     });
-    const adjustedResidual = adjustResidualForUniformRange(newResidual, bbox, blockFlags);
-    try {
-      editor.initializeColorFromImageData(adjustedResidual);
-      console.log('[FTX加载] 残差已上传到solver');
-    } catch (err) {
-      console.error('[FTX加载] 残差上传失败:', err);
-    }
     // ★ 调试：确认残差上传后的状态
     let resNonZero = 0;
     const rd = adjustedResidual.data;
@@ -3614,7 +3618,7 @@ export const FluidEditorUI: React.FC = () => {
       if (rd[j] !== 0 || rd[j+1] !== 0 || rd[j+2] !== 0) resNonZero++;
     }
     console.log(`[FTX加载] 帧#${index} "${frame.name || ''}" 残差非零像素: ${resNonZero}, bbox分辨率: ${bboxW}x${bboxH}`);
-    setTimeout(() => { updateConfig({ enableAdvection: true }); }, 100);
+    setTimeout(() => { updateConfig({ enableAdvection: true }); }, 200);
     setView('composite');
   };
   return (
