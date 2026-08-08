@@ -3455,22 +3455,35 @@ export const FluidEditorUI: React.FC = () => {
     e.target.value = '';
   };
 
-  /** 将 Float32Array HSL 数据（RGBA 4通道）最近邻缩放到目标尺寸 */
+  /** 将 Float32Array HSL 数据（RGBA 4通道）双线性缩放到目标尺寸 */
   const resizeHslFloat = (
     src: Float32Array, srcW: number, srcH: number,
     dstW: number, dstH: number,
   ): Float32Array => {
     const out = new Float32Array(dstW * dstH * 4);
+    const sample = (x: number, y: number, ch: number): number => {
+      const cx = Math.max(0, Math.min(srcW - 1, x));
+      const cy = Math.max(0, Math.min(srcH - 1, y));
+      return src[(cy * srcW + cx) * 4 + ch];
+    };
     for (let y = 0; y < dstH; y++) {
-      const sy = Math.min(Math.floor((y * srcH) / dstH), srcH - 1);
+      const srcY = (y + 0.5) * srcH / dstH - 0.5;
+      const y0 = Math.floor(srcY);
+      const fy = srcY - y0;
       for (let x = 0; x < dstW; x++) {
-        const sx = Math.min(Math.floor((x * srcW) / dstW), srcW - 1);
-        const si = (sy * srcW + sx) * 4;
+        const srcX = (x + 0.5) * srcW / dstW - 0.5;
+        const x0 = Math.floor(srcX);
+        const fx = srcX - x0;
         const di = (y * dstW + x) * 4;
-        out[di] = src[si];
-        out[di+1] = src[si+1];
-        out[di+2] = src[si+2];
-        out[di+3] = src[si+3];
+        for (let ch = 0; ch < 4; ch++) {
+          const v00 = sample(x0, y0, ch);
+          const v10 = sample(x0 + 1, y0, ch);
+          const v01 = sample(x0, y0 + 1, ch);
+          const v11 = sample(x0 + 1, y0 + 1, ch);
+          const top = v00 * (1 - fx) + v10 * fx;
+          const bottom = v01 * (1 - fx) + v11 * fx;
+          out[di + ch] = top * (1 - fy) + bottom * fy;
+        }
       }
     }
     return out;
@@ -4189,7 +4202,9 @@ export const FluidEditorUI: React.FC = () => {
                     backgroundColor: `hsl(${sampleInfo.baseColor.h * 360}, ${sampleInfo.baseColor.s * 100}%, ${sampleInfo.baseColor.l * 100}%)`
                   }} />
                   <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
-                    H: {sampleInfo.baseColor.h.toFixed(3)} S: {sampleInfo.baseColor.s.toFixed(3)} L: {sampleInfo.baseColor.l.toFixed(3)}
+                    {sampleInfo.baseColor
+                      ? `H: ${sampleInfo.baseColor.h.toFixed(3)} S: ${sampleInfo.baseColor.s.toFixed(3)} L: ${sampleInfo.baseColor.l.toFixed(3)}`
+                      : 'H: - S: - L: -'}
                   </span>
                 </div>
               </div>
