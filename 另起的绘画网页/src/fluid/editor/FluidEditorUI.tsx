@@ -3298,9 +3298,9 @@ export const FluidEditorUI: React.FC = () => {
     bbox: { x: number; y: number; w: number; h: number },
     blockFlags: bigint,
   ): ImageData => {
-    const { x: offsetX, y: offsetY, w, h } = bbox;
+    const { w, h } = bbox;
     const data = residualImageData.data;
-    const texSize = residualImageData.width; // 全尺寸图像的宽度
+    const texSize = residualImageData.width; // ★ bbox 局部尺寸（或全尺寸，取决于构建模式）
 
     for (let py = 0; py < h; py++) {
       for (let px = 0; px < w; px++) {
@@ -3310,13 +3310,8 @@ export const FluidEditorUI: React.FC = () => {
         const range = getRangeForBlock(blockFlags, blockIdx);
 
         if (range === 0.25) {
-          // ✅ 修正：使用全局坐标索引 ImageData（与 buildFluidTexturesFromRawFrame 一致）
-          // 原始反量化: dH = (val * 2 - 1) * 0.25
-          // 解算器反量化: dH' = (val' * 2 - 1) * 0.5
-          // 令 dH = dH'，解得: val' = val * 0.5 + 0.25
-          const globalX = offsetX + px;
-          const globalY = offsetY + py;
-          const idx = (globalY * texSize + globalX) * 4;
+          // ★ 修正：使用 bbox 局部坐标索引（与 buildFluidTexturesFromRawFrame bbox 模式一致）
+          const idx = (py * texSize + px) * 4;
           data[idx] = Math.round(data[idx] * 0.5 + 64);       // R (H): 255*0.25=64
           data[idx + 1] = Math.round(data[idx + 1] * 0.5 + 64); // G (S)
           data[idx + 2] = Math.round(data[idx + 2] * 0.5 + 64); // B (L)
@@ -3347,26 +3342,29 @@ export const FluidEditorUI: React.FC = () => {
     },
     palette: { h: number; s: number; l: number; id: number }[],
   ): { baseHslData: { data: Float32Array; width: number; height: number }; baseTexture: ImageData; residualTexture: ImageData } => {
-    const { rawRegionIdTex, rawDeltaPacked, rawBbox, sourceResolution } = rawData;
+    const { rawRegionIdTex, rawDeltaPacked, rawBbox } = rawData;
     const bbox = rawBbox;
-    const texSize = sourceResolution;
     const totalPixels = bbox.w * bbox.h;
 
+    // ★ bbox 尺寸纹理：内容只占 bbox 区域，直接以 bbox.w × bbox.h 构建
+    const bboxW = bbox.w;
+    const bboxH = bbox.h;
+
     // 1. 基础色 HSL 浮点数据（用于 GPU 合成，直接存储 H/S/L）
-    const hslFloat = new Float32Array(texSize * texSize * 4);
+    const hslFloat = new Float32Array(bboxW * bboxH * 4);
     hslFloat.fill(0);
 
     // 2. 基础色 RGB 图像（仅用于 UI 预览）
-    const baseImageData = new ImageData(texSize, texSize);
+    const baseImageData = new ImageData(bboxW, bboxH);
     const baseData = baseImageData.data;
 
     // 3. 残差纹理（量化值）
-    const resImageData = new ImageData(texSize, texSize);
+    const resImageData = new ImageData(bboxW, bboxH);
     const resData = resImageData.data;
 
     if (totalPixels === 0 || !rawDeltaPacked || rawDeltaPacked.length === 0) {
       return { 
-        baseHslData: { data: hslFloat, width: texSize, height: texSize },
+        baseHslData: { data: hslFloat, width: bboxW, height: bboxH },
         baseTexture: baseImageData, 
         residualTexture: resImageData 
       };
@@ -3389,9 +3387,8 @@ export const FluidEditorUI: React.FC = () => {
       const packed = rawDeltaPacked[i];
       const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
 
-      const globalX = bbox.x + px;
-      const globalY = bbox.y + py;
-      const idx = (globalY * texSize + globalX) * 4;
+      // ★ bbox 局部坐标（不再加 bbox.x/bbox.y 偏移）
+      const idx = (py * bboxW + px) * 4;
 
       // ★ baseHslData: 直接存储浮点 HSL，不转 RGB（GPU 合成用）
       hslFloat[idx]     = baseColor.h;
@@ -3415,7 +3412,7 @@ export const FluidEditorUI: React.FC = () => {
     }
 
     return { 
-      baseHslData: { data: hslFloat, width: texSize, height: texSize },
+      baseHslData: { data: hslFloat, width: bboxW, height: bboxH },
       baseTexture: baseImageData, 
       residualTexture: resImageData 
     };
@@ -3507,10 +3504,13 @@ export const FluidEditorUI: React.FC = () => {
     console.log('[FTX加载] 解码完成, 残差尺寸:', newResidual.width, 'x', newResidual.height,
       '残差非零:', (() => { let n = 0; const d = newResidual.data; for (let j = 0; j < d.length; j += 4) if (d[j] !== 0 || d[j+1] !== 0 || d[j+2] !== 0) n++; return n; })(),
       'bbox:', JSON.stringify(bbox));
-    const texSize = sourceResolution || 512;
-    // ★ 不再强制把 solver 分辨率改成源尺寸。保持当前分辨率，
-    //   把 baseHslData 缩放到 solver 分辨率，预览页独立缩放。
-    const solverRes = config.resolution;  // 例如 256×256
+    // ★ 分辨率 = bbox 尺寸（内容只占 bbox，solver 直接按 bbox 建场）
+    const bboxW = bbox.w;
+    const bboxH = bbox.h;
+    if (config.resolution.w !== bboxW || config.resolution.h !== bboxH) {
+      updateConfig({ resolution: { w: bboxW, h: bboxH } });
+    }
+    const solverRes = { w: bboxW, h: bboxH };
     let baseData = baseHslData.data;
     let baseW = baseHslData.width;
     let baseH = baseHslData.height;
@@ -3567,7 +3567,7 @@ export const FluidEditorUI: React.FC = () => {
     for (let j = 0; j < rd.length; j += 4) {
       if (rd[j] !== 0 || rd[j+1] !== 0 || rd[j+2] !== 0) resNonZero++;
     }
-    console.log(`[FTX加载] 帧#${index} "${frame.name || ''}" 残差非零像素: ${resNonZero}, 期望分辨率: ${texSize}x${texSize}`);
+    console.log(`[FTX加载] 帧#${index} "${frame.name || ''}" 残差非零像素: ${resNonZero}, bbox分辨率: ${bboxW}x${bboxH}`);
     setTimeout(() => { updateConfig({ enableAdvection: true }); }, 100);
     setView('composite');
   };
@@ -4199,11 +4199,13 @@ export const FluidEditorUI: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <div style={{
                     width: '20px', height: '20px', borderRadius: '4px', border: '1px solid #ddd',
-                    backgroundColor: `hsl(${sampleInfo.baseColor.h * 360}, ${sampleInfo.baseColor.s * 100}%, ${sampleInfo.baseColor.l * 100}%)`
+                    backgroundColor: sampleInfo.baseColor?.h != null
+                      ? `hsl(${sampleInfo.baseColor.h * 360}, ${(sampleInfo.baseColor.s ?? 0) * 100}%, ${(sampleInfo.baseColor.l ?? 0) * 100}%)`
+                      : '#eee'
                   }} />
                   <span style={{ fontSize: '10px', fontFamily: 'monospace' }}>
-                    {sampleInfo.baseColor
-                      ? `H: ${sampleInfo.baseColor.h.toFixed(3)} S: ${sampleInfo.baseColor.s.toFixed(3)} L: ${sampleInfo.baseColor.l.toFixed(3)}`
+                    {sampleInfo.baseColor?.h != null
+                      ? `H: ${sampleInfo.baseColor.h.toFixed(3)} S: ${(sampleInfo.baseColor.s ?? 0).toFixed(3)} L: ${(sampleInfo.baseColor.l ?? 0).toFixed(3)}`
                       : 'H: - S: - L: -'}
                   </span>
                 </div>
