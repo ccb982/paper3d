@@ -3758,6 +3758,10 @@ export const FluidEditorUI: React.FC = () => {
               // D. Level Set
               levelSet: {
                 enableLevelSet: cfg.enableLevelSet,
+                enabled: cfg.enableLevelSet,
+                reinitIterations: cfg.levelSetConfig?.reinitIterations ?? 2,
+                surfaceTension: cfg.levelSetConfig?.surfaceTension ?? 0,
+                smoothingRadius: cfg.levelSetConfig?.smoothingRadius ?? cfg.levelSetConfig?.narrowBandWidth ?? 2,
               },
               // E. 持续注入源列表
               continuousSources: sources.map(s => ({
