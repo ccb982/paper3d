@@ -880,17 +880,27 @@ export class FluidSolver {
           `color=${src.color ? `[${src.color.map(c => c.toFixed(2)).join(',')}]` : '无'} ` +
           `density=${src.density ?? '-'} rate=${src.rate ?? '-'} wave=${src.wave?.enabled ? 'ON' : 'OFF'} wps=${src.waypoints?.length ?? 0}`);
       }
-      // ★ 调试：读回速度场/密度场（确认注入是否生效）
-      try {
-        const vW = cfg.resolution.w;
-        const vH = cfg.resolution.h;
-        const velBuf = new Float32Array(4);
-        this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, Math.floor(vW / 2), Math.floor(vH / 2), 1, 1, velBuf);
-        const denBuf = new Float32Array(4);
-        this.renderer.readRenderTargetPixels(this.densityGrid.readTarget, Math.floor(vW / 2), Math.floor(vH / 2), 1, 1, denBuf);
-        console.log(`[FluidSolver]   读回 中心像素: vel=(${velBuf[0].toFixed(2)},${velBuf[1].toFixed(2)}) density=${denBuf[0].toFixed(3)}`);
-      } catch (e) {
-        console.warn('[FluidSolver] 读回失败:', e);
+      // ★ 调试：读回注入源位置的 vel/density（确认注入是否生效）
+      const halfToFloat = (h: number) => {
+        const s = (h & 0x8000) ? -1 : 1;
+        const e = (h >> 10) & 0x1f;
+        const m = h & 0x3ff;
+        if (e === 0) return s * m * Math.pow(2, -24);
+        if (e === 31) return m ? NaN : s * Infinity;
+        return s * (1 + m / 1024) * Math.pow(2, e - 15);
+      };
+      for (const src of srcs) {
+        const sx = Math.floor((src.position.x ?? 0.5) * cfg.resolution.w);
+        const sy = Math.floor((src.position.y ?? 0.5) * cfg.resolution.h);
+        try {
+          const velBuf = new Uint16Array(4);
+          this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, sx, sy, 1, 1, velBuf);
+          const denBuf = new Uint8Array(4);
+          this.renderer.readRenderTargetPixels(this.densityGrid.readTarget, sx, sy, 1, 1, denBuf);
+          console.log(`[FluidSolver]   注入点(${sx},${sy}) 读回: vel=(${halfToFloat(velBuf[0]).toFixed(2)},${halfToFloat(velBuf[1]).toFixed(2)}) density=${(denBuf[0] / 255).toFixed(3)}`);
+        } catch (e) {
+          console.warn('[FluidSolver] 读回失败:', e);
+        }
       }
     }
 
