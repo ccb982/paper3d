@@ -1138,11 +1138,9 @@ export class FluidSolver {
           float finalH, finalS, finalL, finalA;
           if (uScalarMode == 1) {
             float density = texture2D(uDensity, vUv).r;
-            // ★ 关键修复：factor = density/baseline - 1
-            //   当 density=baseline 时，factor=0，不修改颜色（正确的基准状态）
-            //   当 density<baseline 时，factor<0，加上负偏移（sub 模式变暗）
-            //   当 density>baseline 时，factor>0，加上正偏移（添加模式变亮）
-            float factor = density / max(0.0001, uBaseline) - 1.0;
+            // ★ 与流体编辑器保持一致：factor = density / baseline
+            //   当 density=baseline 时 factor=1（有偏移，效果明显）
+            float factor = density / max(0.0001, uBaseline);
             float sign = (uCombineMode == 1) ? -1.0 : 1.0;
             finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
             finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
