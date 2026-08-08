@@ -3608,6 +3608,10 @@ export const FluidEditorUI: React.FC = () => {
       try {
         editor.initializeColorFromImageData(adjustedResidual);
         console.log('[FTX加载] 残差已上传到solver');
+        // ★ 回读验证：检查 colorGrid 是否真的有数据
+        const colorTex = editor.getColorTexture();
+        const img = (colorTex as any)?.image;
+        console.log('[FTX加载] colorGrid类型:', (colorTex as any)?.type, '尺寸:', img?.width ?? '?', 'x', img?.height ?? '?');
       } catch (err) {
         console.error('[FTX加载] 残差上传失败:', err);
       }
