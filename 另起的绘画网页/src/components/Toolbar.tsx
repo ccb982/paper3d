@@ -1,23 +1,7 @@
 import { useAppStore } from '../stores/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useState, useCallback } from 'react';
 import type { ToolType } from '../types';
-
-const tools: { type: ToolType; icon: string; label: string; hint?: string }[] = [
-  { type: 'select', icon: '⬚', label: '选择' },
-  { type: 'point', icon: '•', label: '点' },
-  { type: 'line', icon: '/', label: '线段' },
-  { type: 'rectangle', icon: '□', label: '矩形' },
-  { type: 'circle', icon: '○', label: '圆形' },
-  { type: 'triangle', icon: '△', label: '三角形' },
-  { type: 'quadratic', icon: '⌒', label: '贝塞尔' },
-  { type: 'brush', icon: '✎', label: '画笔' },
-  { type: 'paintBrush', icon: '🖌️', label: '上色画笔', hint: '拖拽涂抹，自动提取区域' },
-  { type: 'picker', icon: '🎨', label: '取色器', hint: '点击画布取色' },
-  { type: 'move', icon: '✋', label: '移动', hint: '拖拽移动封闭图形' },
-  { type: 'eraser', icon: '✕', label: '橡皮' },
-  { type: 'pointAnnotation', icon: '📍', label: '点注释' },
-  { type: 'regionAnnotation', icon: '🗺️', label: '区域注释', hint: '完成绘图后再添加' },
-];
 
 // 预设颜色
 const presetColors = [
@@ -63,7 +47,43 @@ export function Toolbar() {
     refreshRegionCache,
     activeLayerId,
     setEnableFramePrediction,
-  } = useAppStore();
+  } = useAppStore(useShallow(s => ({
+    currentTool: s.currentTool,
+    setCurrentTool: s.setCurrentTool,
+    snapRadius: s.snapRadius,
+    setSnapRadius: s.setSnapRadius,
+    snapEnabled: s.snapEnabled,
+    setSnapEnabled: s.setSnapEnabled,
+    lineWidth: s.lineWidth,
+    setLineWidth: s.setLineWidth,
+    bfsResolution: s.bfsResolution,
+    setBfsResolution: s.setBfsResolution,
+    undo: s.undo,
+    saveToStorage: s.saveToStorage,
+    loadFromStorage: s.loadFromStorage,
+    exportToJson: s.exportToJson,
+    currentColor: s.currentColor,
+    setCurrentColor: s.setCurrentColor,
+    paintBrushSize: s.paintBrushSize,
+    setPaintBrushSize: s.setPaintBrushSize,
+    colorExtractMode: s.colorExtractMode,
+    setColorExtractMode: s.setColorExtractMode,
+    colorExtractTool: s.colorExtractTool,
+    setColorExtractTool: s.setColorExtractTool,
+    clearColorExtractPoints: s.clearColorExtractPoints,
+    setColorExtractPreviewPoint: s.setColorExtractPreviewPoint,
+    setColorExtractWaitingFor: s.setColorExtractWaitingFor,
+    colorExtractCurves: s.colorExtractCurves,
+    clearColorExtractCurvesAndShapes: s.clearColorExtractCurvesAndShapes,
+    colorExtractEraserMode: s.colorExtractEraserMode,
+    setColorExtractEraserMode: s.setColorExtractEraserMode,
+    colorExtractWaiting: s.colorExtractWaiting,
+    setColorExtractWaiting: s.setColorExtractWaiting,
+    clearExtractedColorBlocks: s.clearExtractedColorBlocks,
+    refreshRegionCache: s.refreshRegionCache,
+    activeLayerId: s.activeLayerId,
+    setEnableFramePrediction: s.setEnableFramePrediction,
+  })));
 
   // 获取帧间预测状态
   const enableFramePrediction = useAppStore((state) => state.skillGroupEditor.enableFramePrediction);
@@ -453,30 +473,24 @@ export function Toolbar() {
             </button>
             <button
               onClick={() => {
-                // 动态导入压缩模块
-                import('../utils/colorCompressor').then(({ compressLayerColors }) => {
-                  const result = compressLayerColors(activeLayerId);
-                  if (result) {
-                    console.log('[压缩结果]', result);
-                    // 下载 JSON 文件
-                    const json = JSON.stringify(result, null, 2);
-                    const blob = new Blob([json], { type: 'application/json' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `color_compression_${Date.now()}.json`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    alert(`压缩完成！共 ${result.regionCount} 个区域`);
-                    // 新增：刷新区域实体
-                    useAppStore.getState().refreshRegionEntities(activeLayerId);
-                  } else {
-                    alert('压缩失败，请确保有虚线围成的闭合区域');
-                  }
-                }).catch(err => {
-                  console.error('[颜色压缩] 导入失败:', err);
-                  alert('压缩功能加载失败');
-                });
+                const result = useAppStore.getState().compressLayerColorsForExport();
+                if (result) {
+                  console.log('[压缩结果]', result);
+                  // 下载 JSON 文件
+                  const json = JSON.stringify(result, null, 2);
+                  const blob = new Blob([json], { type: 'application/json' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `color_compression_${Date.now()}.json`;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  alert(`压缩完成！共 ${result.regionCount} 个区域`);
+                  // 新增：刷新区域实体
+                  useAppStore.getState().refreshRegionEntities(activeLayerId!);
+                } else {
+                  alert('压缩失败，请确保有虚线围成的闭合区域');
+                }
               }}
               style={{
                 padding: '4px 8px',
@@ -494,10 +508,9 @@ export function Toolbar() {
               onClick={async () => {
                 setShowColorExtractMenu(false);
                 try {
-                  const { compressLayerColors } = await import('../utils/colorCompressor');
                   const { compressToBinary, compressToGzip } = await import('../utils/binaryCompression');
 
-                  const result = compressLayerColors(activeLayerId);
+                  const result = useAppStore.getState().compressLayerColorsForExport();
                   if (!result) {
                     alert('压缩失败，请确保有虚线围成的闭合区域');
                     return;
@@ -962,4 +975,3 @@ export function Toolbar() {
     </div>
   );
 }
-

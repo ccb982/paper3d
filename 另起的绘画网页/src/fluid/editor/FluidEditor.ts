@@ -315,12 +315,22 @@ export class FluidEditor {
       // 后续 injectColor/injectVelocity 等操作会触发 WebGL INVALID_OPERATION (1282)
       this.initFields();
     }
+
+    // ★ 分辨率变化时 rebuildGrids() 会释放 _phiGrid 并置 null。
+    // 若 LevelSet 仍启用，此处重建 phiGrid，避免 LevelSet 静默失效
+    // （enableLevelSetMode 内部已做存在性检查，重复调用安全）。
+    if (resChanged && this.config.enableLevelSet) {
+      this.enableLevelSetMode();
+    }
   }
 
   // ==================== 接口适配层 ====================
   // 职责：将用户接口坐标转换为底层纹理坐标
   // 用户约定：Y向下为正（0=顶部，1=底部）
-  // 纹理坐标系：Y向上为正，位置无需转换；速度Y向上为正，需取反
+  // ★ 当前实现为直通（不做任何取反/翻转）：
+  //   - 位置：flipY=false 使纹理 Y 向下为正，与用户坐标系一致，无需转换
+  //   - 速度：渲染链路中 Y 方向已有翻转处理，此处再取反会造成双重翻转
+  //     （历史上因此出现过注入初速度方向反了的 bug，切勿恢复取反）
 
   /**
    * 将用户接口的注入配置转换为底层纹理坐标的配置。
@@ -685,16 +695,18 @@ export class FluidEditor {
       varying vec2 vUv;
       void main() {
         vec2 vel = texture2D(velTex, vUv).rg;
-        float eps = 1.0 / resolution.x;
-        if (vUv.x < eps) {
-          vel = texture2D(velTex, vec2(vUv.x + eps, vUv.y)).rg;
-        } else if (vUv.x > 1.0 - eps) {
-          vel = texture2D(velTex, vec2(vUv.x - eps, vUv.y)).rg;
+        // ★ 分轴 eps：X/Y 分辨率不同时各用各的像素尺寸，避免非正方形网格边界判断偏移
+        float epsX = 1.0 / resolution.x;
+        float epsY = 1.0 / resolution.y;
+        if (vUv.x < epsX) {
+          vel = texture2D(velTex, vec2(vUv.x + epsX, vUv.y)).rg;
+        } else if (vUv.x > 1.0 - epsX) {
+          vel = texture2D(velTex, vec2(vUv.x - epsX, vUv.y)).rg;
         }
-        if (vUv.y < eps) {
-          vel = texture2D(velTex, vec2(vUv.x, vUv.y + eps)).rg;
-        } else if (vUv.y > 1.0 - eps) {
-          vel = texture2D(velTex, vec2(vUv.x, vUv.y - eps)).rg;
+        if (vUv.y < epsY) {
+          vel = texture2D(velTex, vec2(vUv.x, vUv.y + epsY)).rg;
+        } else if (vUv.y > 1.0 - epsY) {
+          vel = texture2D(velTex, vec2(vUv.x, vUv.y - epsY)).rg;
         }
         gl_FragColor = vec4(vel, 0.0, 1.0);
       }
@@ -1015,12 +1027,16 @@ export class FluidEditor {
     const readPy = (h - 1) - py;
 
     // 1. 读取颜色像素（RGBA uint8）—— 颜色场就是 HSLA，直接读取（同样 Y 翻转）
-    const colorPixels = this.readColorPixels();
-    const colorIdx = (readPy * w + px) * 4;
-    const r = colorPixels[colorIdx] / 255;     // = H 增量
-    const g = colorPixels[colorIdx + 1] / 255; // = S 增量
-    const b = colorPixels[colorIdx + 2] / 255; // = L 增量
-    const a = colorPixels[colorIdx + 3] / 255; // = Alpha
+    //    ★ 只回读 1 像素（而非整张纹理），与速度读取方式一致，避免逐像素全图 readback
+    const colorPixels = new Uint8Array(4);
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(this.colorGrid.readTarget);
+    this.renderer.readRenderTargetPixels(this.colorGrid.readTarget, px, readPy, 1, 1, colorPixels);
+    this.renderer.setRenderTarget(prevTarget);
+    const r = colorPixels[0] / 255;     // = H 增量
+    const g = colorPixels[1] / 255;     // = S 增量
+    const b = colorPixels[2] / 255;     // = L 增量
+    const a = colorPixels[3] / 255;     // = Alpha
 
     // 2. 读取速度像素（根据 velocityDataType 自动选择 float/half-float 读取方式）
     const velData = this.readVelocityPixelData(
@@ -1376,6 +1392,57 @@ export class FluidEditor {
     }
 
     return { data: bitmap, width: w, height: h };
+  }
+
+  /**
+   * 从 1 bit/像素 位图数据恢复墙体纹理（供多帧物理配置导入/切帧恢复）。
+   * 与 getObstacleBitmap 的打包约定严格对称（LSB-first）；尺寸不匹配时最近邻缩放。
+   */
+  public setObstacleBitmap(bitmap: { data: Uint8Array; width: number; height: number }): void {
+    const { w, h } = this.config.resolution;
+    this.enableObstaclesMode();
+    if (!this.obstacleTarget) return;
+
+    const srcW = bitmap.width;
+    const srcH = bitmap.height;
+    const unpacked = new Uint8Array(srcW * srcH);
+    for (let i = 0; i < srcW * srcH; i++) {
+      if (bitmap.data[Math.floor(i / 8)] & (1 << (i % 8))) unpacked[i] = 255;
+    }
+
+    let data = unpacked;
+    if (srcW !== w || srcH !== h) {
+      data = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) {
+        const sy = Math.min(Math.floor((y * srcH) / h), srcH - 1);
+        for (let x = 0; x < w; x++) {
+          const sx = Math.min(Math.floor((x * srcW) / w), srcW - 1);
+          data[y * w + x] = unpacked[sy * srcW + sx];
+        }
+      }
+    }
+
+    const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat, THREE.UnsignedByteType);
+    tex.flipY = false; // 与 getObstacleBitmap 读回方向一致（row 0 = 顶部）
+    tex.needsUpdate = true;
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+
+    const copyMat = this.gpu.getMaterial('copyObstacleBitmap', {
+      tex: { value: tex },
+    }, /* glsl */ `
+      uniform sampler2D tex;
+      varying vec2 vUv;
+      void main() {
+        float v = texture2D(tex, vUv).r;
+        gl_FragColor = vec4(v, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, this.obstacleTarget, copyMat);
+    tex.dispose();
+    console.log(`[obstacle] 从位图恢复墙体 ${srcW}x${srcH} → ${w}x${h}`);
   }
 
   /** 创建 obstacleTarget + obstacleTempTarget（懒初始化） */

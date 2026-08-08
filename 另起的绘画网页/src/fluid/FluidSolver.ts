@@ -60,6 +60,11 @@ export interface FluidSolverConfig {
     smoothingRadius: number;     // 表面张力作用半径（像素）
   };
   continuousSources: InjectionConfig[];
+  /**
+   * 墙体掩码（1 bit/像素位图压缩，data = base64）。
+   * 主绘画页面导入多帧物理配置时可选携带；存在时优先于区域边界光栅化。
+   */
+  obstacle?: { width: number; height: number; data: string };
 }
 
 export const defaultFluidConfig: FluidSolverConfig = {
@@ -861,11 +866,20 @@ export class FluidSolver {
     const cfg = this.config;
     const isScalar = cfg.advectionMode === 'scalar';
 
-    // 调试：每 60 帧打印状态
-    if (this.frameCount % 60 === 0 && cfg.continuousSources.length > 0) {
-      const src = cfg.continuousSources[0];
+    // 调试：每 60 帧打印状态（含每个注入源的位置，用于核对坐标是否落在区域内）
+    if (this.frameCount % 60 === 0) {
+      const srcs = cfg.continuousSources.filter((s) => s.enabled);
       console.log(`[FluidSolver] frame=${this.frameCount} mode=${isScalar ? 'scalar' : 'vector'} ` +
-        `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)})`);
+        `sources=${srcs.length}/${cfg.continuousSources.length} res=${cfg.resolution.w}×${cfg.resolution.h}`);
+      for (const src of srcs) {
+        const px = (src.position.x ?? 0.5) * cfg.resolution.w;
+        const py = (src.position.y ?? 0.5) * cfg.resolution.h;
+        console.log(`[FluidSolver]   源# pos=(${(src.position.x ?? 0.5).toFixed(3)},${(src.position.y ?? 0.5).toFixed(3)})` +
+          ` → 网格像素(${px.toFixed(0)},${py.toFixed(0)}) radius=${src.radius} ` +
+          `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) ` +
+          `color=${src.color ? `[${src.color.map(c => c.toFixed(2)).join(',')}]` : '无'} ` +
+          `density=${src.density ?? '-'} rate=${src.rate ?? '-'} wave=${src.wave?.enabled ? 'ON' : 'OFF'} wps=${src.waypoints?.length ?? 0}`);
+      }
     }
 
     // 0. 一次性注入队列（优先执行，本帧生效）

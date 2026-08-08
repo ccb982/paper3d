@@ -11,12 +11,14 @@ import { FluidInjector, type InjectionOptions } from '../core/FluidInjector';
  *
  * ⚠️ 重要：此接口有两种使用场景：
  *   1. 用户接口层（InjectionConfig）：Y向下为正，速度Y向下为正
- *   2. 纹理坐标层（转换后）：Y向上为正，速度Y向上为正
+ *   2. 纹理坐标层（当前实现为直通，见下方分层规范）
  *
  * 分层规范：
  *   - UI/Editor 层使用用户接口坐标
  *   - FluidEditor.adaptInjectionConfig() 负责坐标转换
- *   - FluidOperations 层只处理已转换的纹理坐标
+ *     ★ 当前为直通：位置（flipY=false，纹理 Y 向下为正）与速度
+ *       （渲染链路已有 Y 翻转处理，取反会造成双重翻转）均无需转换。
+ *   - FluidOperations 层只处理已转换（此处即原样）的坐标
  *   - FluidInjector 层只处理纯粹的物理注入
  *
  * @see FluidEditor.adaptInjectionConfig()
@@ -464,6 +466,7 @@ export class FluidOperations {
 
     // 1. ★ 颜色注入：仅 vector 模式（gridDensity === null）
     //    scalar 模式下所有注入只影响 density 纹理，颜色纹理保持静态模板
+    //    ★ 混合率 = config.rate（0~1，injector 内部钳制），rate 控制注入强度
     if (gridDensity === null) {
       this.injector.injectColor(
         gridColor,
@@ -473,7 +476,7 @@ export class FluidOperations {
           l: config.color[2],
           a: config.color[3],
         },
-        1.0,
+        config.rate,
         pos,
         this.channelMask,
       );
@@ -489,8 +492,9 @@ export class FluidOperations {
     );
 
     // ★ 3. density 注入（MCSDA scalar 模式）：config.density 有值且 gridDensity 非 null 时注入
+    //    ★ 混合率 = config.rate（与颜色注入一致，统一受强度控制）
     if (gridDensity && config.density !== undefined) {
-      this.injector.injectDensity(gridDensity, config.density, 1.0, pos);
+      this.injector.injectDensity(gridDensity, config.density, config.rate, pos);
     }
   }
 
@@ -526,7 +530,7 @@ export class FluidOperations {
    * 本方法只负责纯粹的物理注入逻辑，不关心坐标系转换。
    *
    * ★ 与单次注入（applyOneShotInjection）完全一致：
-   *   - 颜色/density 混合率 = 1.0（满混合）
+   *   - 颜色/density 混合率 = config.rate（0~1，injector 内部钳制）
    *   - 速度不乘 dt（每帧注入完整 velocity，等频等量）
    *   两者唯一差别只在调用时机：单次=按住每帧入队，持续=持久源每帧调用。
    *   速度累积由 clampVelocity 全局限幅兜底，不会爆炸。
@@ -555,14 +559,14 @@ export class FluidOperations {
         console.log(`[applyInjection] enabled=${config.enabled} pos=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) vel=(${config.velocity.x.toFixed(0)},${config.velocity.y.toFixed(0)}) |v|=${velMag.toFixed(0)} color=[${config.color.map(c=>c.toFixed(2)).join(',')}] radius=${config.radius.toFixed(3)} mode=${gridDensity ? 'scalar' : 'vector'}`);
     }
 
-    // ★ 持续注入与单次注入完全一致：rate=1.0、速度不乘 dt
+    // ★ 持续注入与单次注入完全一致：颜色/density 混合率 = config.rate、速度不乘 dt
     const texPos: InjectionOptions = {
       position: { x: config.position.x, y: config.position.y },
       radius: config.radius,
       obstacle: this.obstacleTexture || undefined,
     };
 
-    // ★ 颜色注入：仅 vector 模式（gridDensity === null），rate=1.0 满混合
+    // ★ 颜色注入：仅 vector 模式（gridDensity === null），混合率 = config.rate
     //   scalar 模式下所有注入只影响 density 纹理，颜色纹理保持静态模板
     if (gridDensity === null) {
       this.injector.injectColor(
@@ -573,7 +577,7 @@ export class FluidOperations {
           l: config.color[2],
           a: config.color[3],
         },
-        1.0,
+        config.rate,
         texPos,
         this.channelMask,
       );
@@ -587,9 +591,9 @@ export class FluidOperations {
       texPos,
     );
 
-    // ★ density 注入（MCSDA scalar 模式）：rate=1.0 满浓度，与单次注入一致
+    // ★ density 注入（MCSDA scalar 模式）：混合率 = config.rate，与颜色注入一致
     if (gridDensity && config.density !== undefined) {
-      this.injector.injectDensity(gridDensity, config.density, 1.0, texPos);
+      this.injector.injectDensity(gridDensity, config.density, config.rate, texPos);
     }
   }
 
@@ -695,32 +699,6 @@ export class FluidOperations {
   //   intensity: number,
   // ): void {
   //   // 注入随机速度 + 可选散度
-  //   // TODO: 实现
-  // }
-
-  /**
-   * 颜色清除（全局）。
-   *
-   * 将整个颜色场向透明渐变，模拟颜色衰减/消失。
-   *
-   * @param grid 颜色网格
-   * @param fadeRate 衰减速率 (0~1)
-   */
-  // fadeColor(grid: FluidGrid, fadeRate: number): void {
-  //   // 全局 injectColor 向透明混合
-  //   // TODO: 实现
-  // }
-
-  /**
-   * 速度衰减（全局）。
-   *
-   * 将整个速度场乘以衰减系数，模拟粘性耗散。
-   *
-   * @param grid 速度网格
-   * @param damping 衰减系数 (0~1, 1=无衰减)
-   */
-  // dampVelocity(grid: FluidGrid, damping: number): void {
-  //   // 全局 injectVelocity(0) 配合 rate=1-damping
   //   // TODO: 实现
   // }
 }

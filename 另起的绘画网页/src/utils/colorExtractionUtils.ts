@@ -94,9 +94,7 @@ export function computeAllDashedClosedRegions(
 // ========== 根据点击位置查找区域 ==========
 export function findRegionAtPoint(
   point: Point,
-  regions: DashedSubRegion[],
-  canvasWidth: number,
-  canvasHeight: number
+  regions: DashedSubRegion[]
 ): DashedSubRegion | null {
   for (const region of regions) {
     if (region.polygon.length > 0 && region.polygon[0].length >= 3) {

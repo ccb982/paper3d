@@ -1,5 +1,6 @@
 import { useMemo, useRef } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import type { InjectionConfig } from '../fluid/FluidSolver';
 import { defaultFluidConfig } from '../fluid/FluidSolver';
 
@@ -55,9 +56,25 @@ export function FluidPanel() {
     addFluidSource,
     removeFluidSource,
     updateFluidSource,
+    setFluidUseWallMask,
     importFluidConfig,
+    importMultiFrameFluidConfig,
     exportFluidConfig,
-  } = useAppStore();
+  } = useAppStore(useShallow(s => ({
+    activeLayerId: s.activeLayerId,
+    frameDataMap: s.frameDataMap,
+    updateFluidConfig: s.updateFluidConfig,
+    toggleFluidPlaying: s.toggleFluidPlaying,
+    setFluidSpeed: s.setFluidSpeed,
+    resetFluid: s.resetFluid,
+    addFluidSource: s.addFluidSource,
+    removeFluidSource: s.removeFluidSource,
+    updateFluidSource: s.updateFluidSource,
+    setFluidUseWallMask: s.setFluidUseWallMask,
+    importFluidConfig: s.importFluidConfig,
+    importMultiFrameFluidConfig: s.importMultiFrameFluidConfig,
+    exportFluidConfig: s.exportFluidConfig,
+  })));
   const frameData = activeLayerId ? frameDataMap[activeLayerId] : undefined;
 
   const cfg = frameData?.fluidConfig;
@@ -67,6 +84,7 @@ export function FluidPanel() {
   const enabled = !!cfg;
   const isPlaying = rt?.isPlaying ?? false;
   const speed = rt?.speed ?? 1;
+  const useWallMask = rt?.useWallMask ?? true;
 
   const sources = useMemo<InjectionConfig[]>(() => cfg?.continuousSources ?? [], [cfg]);
 
@@ -75,19 +93,30 @@ export function FluidPanel() {
 
   if (!activeLayerId) return null;
 
-  // 导入流体配置 JSON（fluid-player.html 格式）—— 配置流体的主要手段
+  // 导入流体配置 JSON（fluid-player.html 单帧格式 / v2 多帧格式）—— 配置流体的主要手段
   const handleImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !activeLayerId) return;
+    if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
         const json = JSON.parse(String(reader.result));
-        const ok = importFluidConfig(activeLayerId, json);
-        if (ok) {
-          console.log(`[FluidPanel] 已导入流体配置: ${file.name}`);
+        const isMulti = Array.isArray(json?.frames) && json.frames.length > 0;
+        if (isMulti) {
+          const applied = importMultiFrameFluidConfig(json);
+          if (applied > 0) {
+            console.log(`[FluidPanel] 已导入多帧物理配置: ${file.name}（${applied} 帧）`);
+          } else {
+            alert('多帧配置导入失败：没有可映射的帧图层（请先导入 FTX 多帧底图）');
+          }
         } else {
-          alert('导入失败：当前图层无帧数据');
+          if (!activeLayerId) return;
+          const ok = importFluidConfig(activeLayerId, json);
+          if (ok) {
+            console.log(`[FluidPanel] 已导入流体配置: ${file.name}`);
+          } else {
+            alert('导入失败：当前图层无帧数据');
+          }
         }
       } catch (err) {
         alert('配置 JSON 解析失败: ' + (err as Error).message);
@@ -98,21 +127,49 @@ export function FluidPanel() {
     e.target.value = '';
   };
 
-  // 导出当前流体配置为 JSON 文件（fluid-player.html 可读）
+  // 导出流体配置为 JSON（多帧帧图层 >1 时导出 v2 多帧格式，否则单帧格式）
   const handleExport = () => {
+    const s: any = useAppStore.getState();
+    const bgLayerId: string | undefined = s.imageState.imageLayerId;
+    const frameLayers: Array<import('../types').Layer> = s.layers
+      .filter((l: import('../types').Layer) => l.id !== bgLayerId && s.frameDataMap[l.id]?.fluidConfig)
+      .sort((a: import('../types').Layer, b: import('../types').Layer) => (a.displayId || 0) - (b.displayId || 0));
+
+    const download = (payload: any, filename: string) => {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    if (frameLayers.length > 1) {
+      // v2 多帧导出（与流体编辑器导出格式一致）
+      const payload = {
+        version: 2,
+        type: 'fluid-multiframe',
+        frames: frameLayers.map(l => {
+          const recipe = exportFluidConfig(l.id);
+          return { name: l.name || l.id, recipe: recipe ?? undefined };
+        }).filter((f: { name: string; recipe: any }) => f.recipe),
+      };
+      if (payload.frames.length === 0) {
+        alert('没有可导出的流体配置');
+        return;
+      }
+      download(payload, 'fluid-config-multiframe.json');
+      return;
+    }
+
     if (!activeLayerId) return;
     const json = exportFluidConfig(activeLayerId);
     if (!json) {
       alert('当前图层无流体配置可导出');
       return;
     }
-    const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `fluid-config-${activeLayerId}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    download(json, `fluid-config-${activeLayerId}.json`);
   };
 
   const toggleEnable = () => {
@@ -244,6 +301,24 @@ export function FluidPanel() {
                   levelSetConfig: { ...cfg!.levelSetConfig, smoothingRadius: v },
                 })} fmt={v => v.toFixed(1)} />
             </>
+          )}
+
+          {/* ★ 墙体来源：配置内墙掩码 / 区域边界 */}
+          <div style={{ ...LABEL, marginTop: '12px', borderTop: '1px dashed #333', paddingTop: '8px' }}>
+            <span style={{ color: '#e17055' }}>墙体来源</span>
+            <button
+              style={{ ...BTN, background: useWallMask ? '#e17055' : '#333', color: useWallMask ? '#fff' : '#aaa', padding: '2px 8px', fontSize: '11px' }}
+              onClick={() => setFluidUseWallMask(activeLayerId!, !useWallMask)}
+              disabled={!cfg!.obstacle}
+              title={cfg!.obstacle ? (useWallMask ? '当前使用配置内墙掩码建墙' : '当前使用绑定区域边界建墙') : '当前配置无墙掩码，使用区域边界建墙'}
+            >
+              {useWallMask ? '掩码' : '区域边界'}
+            </button>
+          </div>
+          {cfg!.obstacle && (
+            <p style={{ fontSize: '11px', color: '#777', marginTop: '4px' }}>
+              墙掩码随流体配置一起导入（1bit/像素压缩）：ON 用它建墙，OFF 用区域边界。
+            </p>
           )}
 
           {/* 注入源 */}

@@ -10,8 +10,7 @@ function hueDistance(h1: number, h2: number): number {
 function getBackgroundRgbAt(
   px: number, py: number,
   bbox: { x: number; y: number; w: number; h: number },
-  bgImageData: ImageData,
-  textureSize: number
+  bgImageData: ImageData
 ): { r: number; g: number; b: number } {
   // ★ 使用 bgImageData.width 作为步长（防止 texSize 与 bgImageData 尺寸不一致时索引错位）
   const stride = bgImageData.width;
@@ -28,10 +27,9 @@ function getBackgroundRgbAt(
 function getBackgroundHslAt(
   px: number, py: number,
   bbox: { x: number; y: number; w: number; h: number },
-  bgImageData: ImageData,
-  textureSize: number
+  bgImageData: ImageData
 ): { h: number; s: number; l: number } {
-  const rgb = getBackgroundRgbAt(px, py, bbox, bgImageData, textureSize);
+  const rgb = getBackgroundRgbAt(px, py, bbox, bgImageData);
   return rgbToHsl(rgb.r, rgb.g, rgb.b);
 }
 
@@ -70,7 +68,6 @@ export function refineResidualsAndColors(
   bbox: { x: number; y: number; w: number; h: number },
   bgImageData: ImageData,
   tempDeltas: Float32Array,
-  textureSize: number,
   hueThreshold: number = 0.015,
   maxNewColors: number = 3,
   /**
@@ -126,7 +123,7 @@ export function refineResidualsAndColors(
 
     const px = idx % w;
     const py = Math.floor(idx / w);
-    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
+    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData);
 
     const dH = tempDeltas[idx * 3];
     const dS = tempDeltas[idx * 3 + 1];
@@ -163,7 +160,7 @@ export function refineResidualsAndColors(
   for (const idx of badPixels) {
     const px = idx % w;
     const py = Math.floor(idx / w);
-    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
+    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData);
 
     const candidates = new Map<number, number>();
     const searchRadius = 3;
@@ -178,7 +175,7 @@ export function refineResidualsAndColors(
         if (nColorId === 0) continue;
         const nBase = colorMapById.get(nColorId);
         if (!nBase) continue;
-        const nBgHsl = getBackgroundHslAt(nx, ny, bbox, bgImageData, textureSize);
+        const nBgHsl = getBackgroundHslAt(nx, ny, bbox, bgImageData);
         if (isPixelAcceptable(nBase, nBgHsl, hueThreshold, 0.015, 0.015)) {
           candidates.set(nColorId, (candidates.get(nColorId) || 0) + 1);
         }
@@ -253,7 +250,7 @@ export function refineResidualsAndColors(
 
     const px = idx % w;
     const py = Math.floor(idx / w);
-    const bgRgb = getBackgroundRgbAt(px, py, bbox, bgImageData, textureSize);
+    const bgRgb = getBackgroundRgbAt(px, py, bbox, bgImageData);
     const hsl = rgbToHsl(bgRgb.r, bgRgb.g, bgRgb.b);
 
     const dH = normalizeHueDelta(hsl.h - base.h);
@@ -315,7 +312,6 @@ export function createMissingBaseColors(
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
   bgImageData: ImageData,
-  textureSize: number,
   badPixels: number[],
   hueThreshold: number = 0.015,
   maxNewColors: number = 3,
@@ -338,7 +334,7 @@ export function createMissingBaseColors(
   for (const idx of badPixels) {
     const px = idx % w;
     const py = Math.floor(idx / w);
-    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData, textureSize);
+    const bgHsl = getBackgroundHslAt(px, py, bbox, bgImageData);
 
     // 检查与所有现有基础色的距离
     let minDist = Infinity;

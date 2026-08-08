@@ -424,7 +424,6 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
     if (regionIdTexLen > 0) {
       const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
-      const totalPixels = bbox.w * bbox.h;
       // 逆差分还原
       const decoded = invertDelta8(regionDiff, bbox.w);
       regionIdTex = uint8ToBase64(decoded);

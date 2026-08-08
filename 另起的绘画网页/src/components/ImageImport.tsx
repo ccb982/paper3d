@@ -1,5 +1,6 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import type { Point } from '../types';
 
 export function ImageImport() {
@@ -13,7 +14,15 @@ export function ImageImport() {
     isPreviewStage,
     setPreviewStage,
     applySelectionToCanvas,
-  } = useAppStore();
+  } = useAppStore(useShallow(s => ({
+    imageState: s.imageState,
+    setOriginalImage: s.setOriginalImage,
+    setSelectionRect: s.setSelectionRect,
+    clearImage: s.clearImage,
+    isPreviewStage: s.isPreviewStage,
+    setPreviewStage: s.setPreviewStage,
+    applySelectionToCanvas: s.applySelectionToCanvas,
+  })));
   const saveHistory = useCallback(() => {
     useAppStore.getState().saveHistory();
   }, []);
@@ -24,7 +33,7 @@ export function ImageImport() {
   const [clippedImageSrc, setClippedImageSrc] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState<'rect' | 'polygon'>('rect');
   const [polygonPoints, setPolygonPoints] = useState<Point[]>([]);
-  const [isDrawingPolygon, setIsDrawingPolygon] = useState(false);
+  const [, setIsDrawingPolygon] = useState(false);
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {

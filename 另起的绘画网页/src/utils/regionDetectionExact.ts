@@ -841,7 +841,7 @@ export function downsampleBoundaryPointsByOutsideId(
 
   const result: BoundaryPoint[] = [];
 
-  for (const [outsideId, points] of groups) {
+  for (const [, points] of groups) {
     if (points.length === 0) continue;
 
     const kept: BoundaryPoint[] = [points[0]];
@@ -864,97 +864,6 @@ export function downsampleBoundaryPointsByOutsideId(
 
   // console.log(`[降采样] 阈值=${minDistance.toFixed(6)}, 原始点数=${boundaryPoints.length}, 降采样后=${result.length}`);
   return result;
-}
-
-// ========== 4. 多边形构建（极角排序）==========
-function buildClosedRing(points: Point[]): Point[] {
-  if (points.length < 3) return [];
-  const uniqueMap = new Map<string, Point>();
-  for (const p of points) {
-    const key = `${Math.round(p.x * 1e9)}_${Math.round(p.y * 1e9)}`;
-    if (!uniqueMap.has(key)) uniqueMap.set(key, p);
-  }
-  let unique = Array.from(uniqueMap.values());
-  if (unique.length < 3) return [];
-
-  let cx = 0, cy = 0;
-  for (const p of unique) { cx += p.x; cy += p.y; }
-  cx /= unique.length; cy /= unique.length;
-
-  unique.sort((a, b) => {
-    const angleA = Math.atan2(a.y - cy, a.x - cx);
-    const angleB = Math.atan2(b.y - cy, b.x - cx);
-    return angleA - angleB;
-  });
-
-  if (Math.hypot(unique[0].x - unique[unique.length - 1].x, unique[0].y - unique[unique.length - 1].y) > 1e-6) {
-    unique.push(unique[0]);
-  }
-  return unique;
-}
-
-function buildClosedRingsByDistanceGrouping(points: Point[], distanceThresholdFactor: number = 0.3): { rings: Point[][], groups: Point[][] } {
-  if (points.length < 3) return { rings: [], groups: [] };
-
-  const uniqueMap = new Map<string, Point>();
-  for (const p of points) {
-    const key = `${p.x.toFixed(9)},${p.y.toFixed(9)}`;
-    if (!uniqueMap.has(key)) uniqueMap.set(key, p);
-  }
-  const unique = Array.from(uniqueMap.values());
-  if (unique.length < 3) return { rings: [], groups: [] };
-
-  let cx = 0, cy = 0;
-  for (const p of unique) { cx += p.x; cy += p.y; }
-  cx /= unique.length; cy /= unique.length;
-
-  const pointsWithInfo = unique.map(p => ({
-    point: p,
-    angle: Math.atan2(p.y - cy, p.x - cx),
-    dist: Math.hypot(p.x - cx, p.y - cy)
-  }));
-
-  pointsWithInfo.sort((a, b) => a.angle - b.angle);
-
-  const avgDist = pointsWithInfo.reduce((sum, p) => sum + p.dist, 0) / pointsWithInfo.length;
-  const distThreshold = avgDist * distanceThresholdFactor;
-
-  const groups: Point[][] = [];
-  let currentGroup: Point[] = [pointsWithInfo[0].point];
-  const n = pointsWithInfo.length;
-
-  for (let i = 1; i < n; i++) {
-    const prevDist = pointsWithInfo[i - 1].dist;
-    const currDist = pointsWithInfo[i].dist;
-    const distDiff = Math.abs(currDist - prevDist);
-
-    if (distDiff > distThreshold && currentGroup.length >= 3) {
-      groups.push(currentGroup);
-      currentGroup = [pointsWithInfo[i].point];
-    } else {
-      currentGroup.push(pointsWithInfo[i].point);
-    }
-  }
-  if (currentGroup.length >= 3) groups.push(currentGroup);
-  else if (currentGroup.length > 0 && groups.length > 0) {
-    groups[groups.length - 1].push(...currentGroup);
-  }
-
-  const rings: Point[][] = [];
-  for (const group of groups) {
-    const ring = buildClosedRing(group);
-    if (ring.length >= 3) rings.push(ring);
-  }
-  return { rings, groups };
-}
-
-function polygonArea(points: Point[]): number {
-  let area = 0;
-  const n = points.length;
-  for (let i = 0, j = n - 1; i < n; j = i++) {
-    area += points[j].x * points[i].y - points[j].y * points[i].x;
-  }
-  return area / 2;
 }
 
 // ========== 5. 主函数：计算所有封闭区域 ==========
@@ -1222,12 +1131,7 @@ export function reclusterBoundaryPointsByPolarAngle(
 export function getDebugRegions(
   shapes: Shape[],
   worldBounds: { xMin: number; xMax: number; yMin: number; yMax: number },
-  resolution: number = 1000,
-  distanceThresholdFactor: number = 1.2,
-  radialThresholdFactor: number = 2,
-  downsampleDistanceFactor: number = 0.5,
-  ringDistanceThreshold: number = 2,
-  ringRadialThreshold: number = 2
+  resolution: number = 1000
 ): DebugRegionData[] {
   const regions = computeRegionsExact(shapes, worldBounds, resolution, '#ffaa00');
 
@@ -1289,12 +1193,6 @@ export interface SegmentForMatching {
   start: Point;
   end: Point;
   closed: boolean;
-}
-
-interface OpenRing {
-  points: Point[];
-  first: Point;
-  last: Point;
 }
 
 // ========== 改进版：基于极角排序的片段连接算法 ==========

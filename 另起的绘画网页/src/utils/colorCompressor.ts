@@ -1,5 +1,3 @@
-import { useAppStore } from '../stores/useAppStore';
-import { computeRegionsExact } from './regionDetectionExact';
 import { isPointInPolygonWithHoles } from './regionDetection';
 import type { Point } from '../types';
 import {
@@ -206,405 +204,6 @@ export function bfsHueClustering(
   return clusters;
 }
 
-// ============ K-means + 连通分量 聚类算法 ============
-
-function samplePixels(
-  mask: Uint8Array,
-  bbox: { x: number; y: number; w: number; h: number },
-  paintBuffer: ImageData,
-  sourceWidth: number
-): { pixelColors: Float32Array; pixelIndices: Uint32Array; count: number } {
-  const { w, h, x: offsetX, y: offsetY } = bbox;
-  const totalPixels = w * h;
-  let count = 0;
-  for (let i = 0; i < totalPixels; i++) {
-    if (mask[i] === 1) count++;
-  }
-  if (count === 0) {
-    return { pixelColors: new Float32Array(0), pixelIndices: new Uint32Array(0), count: 0 };
-  }
-
-  const pixelColors = new Float32Array(count * 3);
-  const pixelIndices = new Uint32Array(count);
-  let idx = 0;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const localIdx = y * w + x;
-      if (mask[localIdx] === 1) {
-        const globalX = offsetX + x;
-        const globalY = offsetY + y;
-        const pixelIdx = (globalY * sourceWidth + globalX) * 4;
-        pixelColors[idx * 3] = paintBuffer.data[pixelIdx];
-        pixelColors[idx * 3 + 1] = paintBuffer.data[pixelIdx + 1];
-        pixelColors[idx * 3 + 2] = paintBuffer.data[pixelIdx + 2];
-        pixelIndices[idx] = localIdx;
-        idx++;
-      }
-    }
-  }
-  return { pixelColors, pixelIndices, count };
-}
-
-function filterByBackgroundHue(
-  pixelColors: Float32Array,
-  pixelIndices: Uint32Array,
-  mask: Uint8Array,
-  bbox: { x: number; y: number; w: number; h: number },
-  paintBuffer: ImageData,
-  sourceWidth: number,
-  hueThreshold: number = 0.05,
-  minRetainCount: number = 10
-): { pixelColors: Float32Array; pixelIndices: Uint32Array } {
-  const count = pixelColors.length / 3;
-  if (count === 0) return { pixelColors, pixelIndices };
-
-  let sumR = 0, sumG = 0, sumB = 0;
-  for (let i = 0; i < count; i++) {
-    sumR += pixelColors[i * 3];
-    sumG += pixelColors[i * 3 + 1];
-    sumB += pixelColors[i * 3 + 2];
-  }
-  const avgR = sumR / count;
-  const avgG = sumG / count;
-  const avgB = sumB / count;
-  const bgHsl = rgbToHsl(avgR, avgG, avgB);
-
-  const keepFlags = new Uint8Array(count);
-  let keepCount = 0;
-
-  for (let i = 0; i < count; i++) {
-    const r = pixelColors[i * 3];
-    const g = pixelColors[i * 3 + 1];
-    const b = pixelColors[i * 3 + 2];
-    const hsl = rgbToHsl(r, g, b);
-
-    let dh = Math.abs(hsl.h - bgHsl.h);
-    if (dh > 0.5) dh = 1 - dh;
-
-    if (dh <= hueThreshold) {
-      keepFlags[i] = 1;
-      keepCount++;
-    }
-  }
-
-  if (keepCount < minRetainCount) {
-    return { pixelColors, pixelIndices };
-  }
-
-  const filteredColors = new Float32Array(keepCount * 3);
-  const filteredIndices = new Uint32Array(keepCount);
-  let writeIdx = 0;
-
-  for (let i = 0; i < count; i++) {
-    if (keepFlags[i] === 1) {
-      filteredColors[writeIdx * 3] = pixelColors[i * 3];
-      filteredColors[writeIdx * 3 + 1] = pixelColors[i * 3 + 1];
-      filteredColors[writeIdx * 3 + 2] = pixelColors[i * 3 + 2];
-      filteredIndices[writeIdx] = pixelIndices[i];
-      writeIdx++;
-    }
-  }
-
-  return { pixelColors: filteredColors, pixelIndices: filteredIndices };
-}
-
-function filterColorsByNeighborhood(
-  pixelColors: Float32Array,
-  pixelIndices: Uint32Array,
-  mask: Uint8Array,
-  bbox: { x: number; y: number; w: number; h: number },
-  paintBuffer: ImageData,
-  sourceWidth: number,
-  hueThreshold: number = 0.05
-): Float32Array {
-  const { w, h, x: offsetX, y: offsetY } = bbox;
-  const count = pixelColors.length / 3;
-  const filteredColors = new Float32Array(count * 3);
-
-  const indexMap = new Map<number, number>();
-  for (let i = 0; i < count; i++) {
-    indexMap.set(pixelIndices[i], i);
-  }
-
-  const dirs = [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]];
-
-  for (let i = 0; i < count; i++) {
-    const localIdx = pixelIndices[i];
-    const px = localIdx % w;
-    const py = Math.floor(localIdx / w);
-    const globalX = offsetX + px;
-    const globalY = offsetY + py;
-    const centerPixelIdx = (globalY * sourceWidth + globalX) * 4;
-
-    const centerR = paintBuffer.data[centerPixelIdx];
-    const centerG = paintBuffer.data[centerPixelIdx + 1];
-    const centerB = paintBuffer.data[centerPixelIdx + 2];
-    const centerHsl = rgbToHsl(centerR, centerG, centerB);
-
-    let sumR = centerR, sumG = centerG, sumB = centerB;
-    let validCount = 1;
-
-    for (const [dx, dy] of dirs) {
-      const nx = px + dx;
-      const ny = py + dy;
-      if (nx >= 0 && nx < w && ny >= 0 && ny < h) {
-        const nLocalIdx = ny * w + nx;
-        if (mask[nLocalIdx] === 1) {
-          const nGlobalX = offsetX + nx;
-          const nGlobalY = offsetY + ny;
-          const nPixelIdx = (nGlobalY * sourceWidth + nGlobalX) * 4;
-
-          const nR = paintBuffer.data[nPixelIdx];
-          const nG = paintBuffer.data[nPixelIdx + 1];
-          const nB = paintBuffer.data[nPixelIdx + 2];
-          const nHsl = rgbToHsl(nR, nG, nB);
-
-          const dh = Math.min(Math.abs(nHsl.h - centerHsl.h), 1 - Math.abs(nHsl.h - centerHsl.h));
-          if (dh < hueThreshold) {
-            sumR += nR;
-            sumG += nG;
-            sumB += nB;
-            validCount++;
-          }
-        }
-      }
-    }
-
-    filteredColors[i * 3] = sumR / validCount;
-    filteredColors[i * 3 + 1] = sumG / validCount;
-    filteredColors[i * 3 + 2] = sumB / validCount;
-  }
-
-  return filteredColors;
-}
-
-function kmeansPlusPlusInit(
-  pixels: Float32Array,
-  k: number,
-  seed: number
-): Float32Array[] {
-  const n = pixels.length / 3;
-  const centroids: Float32Array[] = [];
-  let rng = seed;
-  const rand = () => {
-    rng = (rng * 9301 + 49297) % 233280;
-    return rng / 233280;
-  };
-
-  const firstIdx = Math.floor(rand() * n);
-  centroids.push(new Float32Array([pixels[firstIdx * 3], pixels[firstIdx * 3 + 1], pixels[firstIdx * 3 + 2]]));
-
-  const dists = new Float32Array(n);
-  for (let iter = 1; iter < k; iter++) {
-    let sumDist = 0;
-    for (let i = 0; i < n; i++) {
-      let minDist = Infinity;
-      for (const c of centroids) {
-        const dx = pixels[i * 3] - c[0];
-        const dy = pixels[i * 3 + 1] - c[1];
-        const dz = pixels[i * 3 + 2] - c[2];
-        const d = dx * dx + dy * dy + dz * dz;
-        if (d < minDist) minDist = d;
-      }
-      dists[i] = minDist;
-      sumDist += minDist;
-    }
-    let target = rand() * sumDist;
-    let chosen = -1;
-    for (let i = 0; i < n; i++) {
-      target -= dists[i];
-      if (target <= 0) { chosen = i; break; }
-    }
-    if (chosen === -1) chosen = n - 1;
-    centroids.push(new Float32Array([pixels[chosen * 3], pixels[chosen * 3 + 1], pixels[chosen * 3 + 2]]));
-  }
-  return centroids;
-}
-
-function kmeans(
-  pixels: Float32Array,
-  k: number,
-  maxIter: number = 20,
-  seed: number = 42
-): { centroids: Float32Array[]; labels: Uint8Array } {
-  const n = pixels.length / 3;
-  if (n === 0 || k === 0) {
-    return { centroids: [], labels: new Uint8Array(0) };
-  }
-  if (k > n) k = n;
-
-  let centroids = kmeansPlusPlusInit(pixels, k, seed);
-  const labels = new Uint8Array(n);
-
-  for (let iter = 0; iter < maxIter; iter++) {
-    let changed = false;
-    for (let i = 0; i < n; i++) {
-      let minDist = Infinity;
-      let bestLabel = 0;
-      for (let c = 0; c < centroids.length; c++) {
-        const dx = pixels[i * 3] - centroids[c][0];
-        const dy = pixels[i * 3 + 1] - centroids[c][1];
-        const dz = pixels[i * 3 + 2] - centroids[c][2];
-        const d = dx * dx + dy * dy + dz * dz;
-        if (d < minDist) {
-          minDist = d;
-          bestLabel = c;
-        }
-      }
-      if (labels[i] !== bestLabel) {
-        labels[i] = bestLabel;
-        changed = true;
-      }
-    }
-    if (!changed) break;
-
-    const counts = new Uint32Array(centroids.length);
-    const sums = centroids.map(() => new Float32Array(3));
-    for (let i = 0; i < n; i++) {
-      const c = labels[i];
-      counts[c]++;
-      sums[c][0] += pixels[i * 3];
-      sums[c][1] += pixels[i * 3 + 1];
-      sums[c][2] += pixels[i * 3 + 2];
-    }
-    for (let c = 0; c < centroids.length; c++) {
-      if (counts[c] > 0) {
-        centroids[c][0] = sums[c][0] / counts[c];
-        centroids[c][1] = sums[c][1] / counts[c];
-        centroids[c][2] = sums[c][2] / counts[c];
-      }
-    }
-  }
-  return { centroids, labels };
-}
-
-function mergeCentroids(
-  centroids: Float32Array[],
-  labels: Uint8Array,
-  mergeThreshold: number = 5.0
-): { centroids: Float32Array[]; labels: Uint8Array } {
-  if (centroids.length <= 1) return { centroids, labels };
-
-  const counts = new Uint32Array(centroids.length);
-  for (let i = 0; i < labels.length; i++) {
-    counts[labels[i]]++;
-  }
-
-  let merged = true;
-  let currentCentroids = centroids.map(c => new Float32Array(c));
-  let currentLabels = new Uint8Array(labels);
-
-  while (merged) {
-    merged = false;
-    const k = currentCentroids.length;
-    if (k <= 1) break;
-
-    let minDist = Infinity;
-    let mergeA = -1, mergeB = -1;
-    for (let i = 0; i < k; i++) {
-      for (let j = i + 1; j < k; j++) {
-        const dx = currentCentroids[i][0] - currentCentroids[j][0];
-        const dy = currentCentroids[i][1] - currentCentroids[j][1];
-        const dz = currentCentroids[i][2] - currentCentroids[j][2];
-        const d = dx * dx + dy * dy + dz * dz;
-        if (d < minDist) {
-          minDist = d;
-          mergeA = i;
-          mergeB = j;
-        }
-      }
-    }
-
-    if (minDist < mergeThreshold * mergeThreshold) {
-      merged = true;
-      const newCentroids: Float32Array[] = [];
-      const total = counts[mergeA] + counts[mergeB];
-      const mergedCentroid = new Float32Array(3);
-      for (let d = 0; d < 3; d++) {
-        mergedCentroid[d] = (currentCentroids[mergeA][d] * counts[mergeA] + currentCentroids[mergeB][d] * counts[mergeB]) / total;
-      }
-
-      const newCounts: number[] = [];
-      const mapOldToNew = new Map<number, number>();
-      let newIdx = 0;
-      for (let i = 0; i < k; i++) {
-        if (i === mergeA || i === mergeB) {
-          if (i === mergeA) {
-            newCentroids.push(mergedCentroid);
-            newCounts.push(total);
-            mapOldToNew.set(mergeA, newIdx);
-            mapOldToNew.set(mergeB, newIdx);
-            newIdx++;
-          }
-        } else {
-          newCentroids.push(currentCentroids[i]);
-          newCounts.push(counts[i]);
-          mapOldToNew.set(i, newIdx);
-          newIdx++;
-        }
-      }
-
-      const newLabels = new Uint8Array(currentLabels.length);
-      for (let i = 0; i < currentLabels.length; i++) {
-        newLabels[i] = mapOldToNew.get(currentLabels[i])!;
-      }
-      currentCentroids = newCentroids;
-      currentLabels = newLabels;
-      counts.set(new Uint32Array(newCounts));
-    } else {
-      break;
-    }
-  }
-  return { centroids: currentCentroids, labels: currentLabels };
-}
-
-function extractConnectedComponents(
-  labelMask: Uint8Array,
-  w: number,
-  h: number,
-  targetLabel: number
-): { componentPixels: Uint32Array[] } {
-  const visited = new Uint8Array(w * h);
-  const components: Uint32Array[] = [];
-  const dirs = [
-    [-1, -1], [-1, 0], [-1, 1],
-    [0, -1],           [0, 1],
-    [1, -1],  [1, 0],  [1, 1]
-  ];
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = y * w + x;
-      if (labelMask[idx] === targetLabel && visited[idx] === 0) {
-        const queue: number[] = [idx];
-        visited[idx] = 1;
-        const pixels: number[] = [];
-        while (queue.length > 0) {
-          const cur = queue.shift()!;
-          pixels.push(cur);
-          const cy = Math.floor(cur / w);
-          const cx = cur % w;
-          for (const [dy, dx] of dirs) {
-            const ny = cy + dy;
-            const nx = cx + dx;
-            if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
-              const nIdx = ny * w + nx;
-              if (labelMask[nIdx] === targetLabel && visited[nIdx] === 0) {
-                visited[nIdx] = 1;
-                queue.push(nIdx);
-              }
-            }
-          }
-        }
-        if (pixels.length > 0) {
-          components.push(new Uint32Array(pixels));
-        }
-      }
-    }
-  }
-  return { componentPixels: components };
-}
-
 function clusterByColorAndSpace(
   mask: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
@@ -612,7 +211,7 @@ function clusterByColorAndSpace(
   sourceWidth: number = 512,
   maxColors: number = 256
 ): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array } {
-  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const { w, h } = bbox;
   const totalPixels = w * h;
 
   const sampled = samplePixelsWithCoords(mask, bbox, paintBuffer, sourceWidth);
@@ -664,7 +263,7 @@ function clusterByColorAndSpace(
         const h = hsl[i * 3];
         const s = hsl[i * 3 + 1];
         const l = hsl[i * 3 + 2];
-        for (const [oldIdx, newIdx] of oldToNew) {
+        for (const [, newIdx] of oldToNew) {
           const c = newColors[newIdx];
           const dh = deltaHue(h, c.h);
           const ds = Math.abs(s - c.s);
@@ -953,13 +552,6 @@ function hardRadiusClustering(
   return { baseColors, regionIdTex };
 }
 
-function shuffle(array: number[]): void {
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-}
-
 function deltaHue(a: number, b: number): number {
   let d = a - b;
   if (d > 0.5) d -= 1.0;
@@ -1061,63 +653,10 @@ function normalizeHueDelta(delta: number): number {
   return delta;
 }
 
-function hueDistance(h1: number, h2: number): number {
-  let d = h2 - h1;
-  if (d > 0.5) d -= 1.0;
-  else if (d < -0.5) d += 1.0;
-  return Math.abs(d);
-}
-
-function areColorsSimilar(
-  a: { h: number; s: number; l: number },
-  b: { h: number; s: number; l: number },
-  hThresh: number,
-  sThresh: number,
-  lThresh: number
-): boolean {
-  let dh = Math.abs(a.h - b.h);
-  if (dh > 0.5) dh = 1 - dh;
-  return dh < hThresh && Math.abs(a.s - b.s) < sThresh && Math.abs(a.l - b.l) < lThresh;
-}
-
-function mergeBaseColors(
-  baseColors: Array<{ h: number; s: number; l: number }>,
-  clusterSizes: number[],
-  hueThreshold: number = 0.01,
-  satThreshold: number = 0.015,
-  lightThreshold: number = 0.015
-): {
-  mergedColors: Array<{ h: number; s: number; l: number }>;
-  oldToNewMap: Uint8Array;
-} {
-  const sortedIndices = baseColors.map((_, i) => i).sort((a, b) => clusterSizes[b] - clusterSizes[a]);
-  const merged: Array<{ h: number; s: number; l: number }> = [];
-  const map = new Uint8Array(baseColors.length + 1);
-
-  for (const idx of sortedIndices) {
-    let assigned = false;
-    for (let m = 0; m < merged.length; m++) {
-      const rep = merged[m];
-      if (areColorsSimilar(baseColors[idx], rep, hueThreshold, satThreshold, lightThreshold)) {
-        map[idx + 1] = m + 1;
-        assigned = true;
-        break;
-      }
-    }
-    if (!assigned) {
-      map[idx + 1] = merged.length + 1;
-      merged.push({ ...baseColors[idx] });
-    }
-  }
-
-  return { mergedColors: merged, oldToNewMap: map };
-}
-
 export function clusterAndGenerateTexturesV2(
   mask: Uint8Array,
   bbox: { x: number; y: number; w: number; h: number },
   paintBuffer: ImageData,
-  hueThreshold: number = 0.025,
   sourceWidth: number = PAINT_BUFFER_SIZE
 ): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaPacked: Uint16Array; blockFlags: bigint } {
   const { w, h } = bbox;
@@ -1509,6 +1048,63 @@ export function decodeFrameWithGlobalPalette(
 }
 
 /**
+ * 解码「残差纹理」（量化 delta），供 FluidSolver MCSDA/浓度平流使用。
+ *
+ * 与编辑器 buildFluidTexturesFromRawFrame 的残差编码完全一致：
+ *   R = qH/63*255, G = qS/31*255, B = qL/31*255, A = 255
+ * （FluidSolver.loadResidual / 合成着色器按同一约定反量化，固定 range 0.5）
+ *
+ * 主绘画页面绑定区域时也用本函数生成 boundResidualTexture，使浓度/速度
+ * 平流作用于「真实残差」而非中性空场（否则注入永远不可见）。
+ *
+ * @param regionIdTex 区域 ID 纹理（全局 ID，0 = 未绘制）
+ * @param deltaPacked 量化 delta（RGB565 打包）
+ * @param palette     全局调色板（仅用于判断哪些像素已绘制）
+ * @param bbox        帧数据 bbox（像素坐标，row 0 = 顶部）
+ * @param textureSize 全帧纹理尺寸（sourceResolution）
+ * @returns 全帧尺寸残差 ImageData（像素置于全局坐标，外部像素 0）
+ */
+export function decodeResidualFromFrame(
+  regionIdTex: Uint8Array,
+  deltaPacked: Uint16Array,
+  palette: Array<{ id: number; h: number; s: number; l: number }>,
+  bbox: { x: number; y: number; w: number; h: number },
+  textureSize: number = 512,
+): ImageData {
+  const { w, h } = bbox;
+  const totalPixels = w * h;
+  const imageData = new ImageData(textureSize, textureSize);
+  const data = imageData.data;
+  data.fill(0);
+
+  if (!deltaPacked || deltaPacked.length === 0) return imageData;
+
+  const colorMap = new Map<number, { h: number; s: number; l: number }>();
+  for (const c of palette) colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
+
+  for (let i = 0; i < totalPixels; i++) {
+    const colorId = regionIdTex[i];
+    if (colorId === 0) continue;
+    if (!colorMap.has(colorId)) continue;
+
+    const px = i % w;
+    const py = Math.floor(i / w);
+    const packed = deltaPacked[i];
+    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+
+    const globalX = bbox.x + px;
+    const globalY = bbox.y + py;
+    const idx = (globalY * textureSize + globalX) * 4;
+    data[idx] = Math.round((qH / 63) * 255);
+    data[idx + 1] = Math.round((qS / 31) * 255);
+    data[idx + 2] = Math.round((qL / 31) * 255);
+    data[idx + 3] = 255;
+  }
+
+  return imageData;
+}
+
+/**
  * 根据多边形掩码裁剪纹理，外部像素置为透明。
  * polygon 使用世界坐标 [0,1]，与 region 边界一致。
  */
@@ -1538,26 +1134,27 @@ export function cropTextureByPolygon(
   return result;
 }
 
-function bufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+// ==================== 主压缩函数 ====================
+export interface CompressLayerColorsInput {
+  frame: {
+    regionIdTex: Uint8Array;
+    bbox: { x: number; y: number; w: number; h: number } | null;
+    deltaPacked?: Uint16Array;
+    blockFlags?: bigint;
+  } | null;
+  palette: Array<{ id: number; h: number; s: number; l: number }>;
 }
 
-// ==================== 主压缩函数 ====================
-export function compressLayerColors(layerId: string): CompressionResultV2 | null {
-  const state = useAppStore.getState();
+export function compressLayerColors(input: CompressLayerColorsInput): CompressionResultV2 | null {
+  const { frame, palette } = input;
 
   // 优先从 skillGroupEditor.frames 获取当前帧数据（含修正结果）
-  const frame = state.skillGroupEditor.frames.find(f => f.id === state.skillGroupEditor.activeFrameId);
   if (!frame || !frame.regionIdTex || frame.regionIdTex.length === 0) {
     console.warn('[颜色压缩] 当前帧没有有效数据');
     return null;
   }
 
   // 获取全局调色板（已按面积排序）
-  const palette = state.sharedBaseColors;
   if (palette.length === 0) {
     console.warn('[颜色压缩] 调色板为空');
     return null;

@@ -2,8 +2,6 @@ import type { CompressionResultV2, CompressedRegionV2 } from './colorCompressor'
 import type { SharedBaseColor } from '../stores/useAppStore';
 import type { FrameExportData } from './multiFrameExport';
 import {
-  compressToBinary as coreCompress,
-  decompressFromBinary as coreDecompress,
   uint8ToBase64,
   base64ToUint8,
   rleEncode8,
@@ -194,7 +192,6 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
     if (regionIdTexLen > 0) {
       const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
       offset += regionIdTexLen;
-      const totalPixels = bbox.w * bbox.h;
       // 逆差分还原
       const decoded = invertDelta8(regionDiff, bbox.w);
       regionIdTex = uint8ToBase64(decoded);
@@ -446,6 +443,73 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
   console.log('========================================');
 
   return { palette, frames };
+}
+
+// ============================================================
+// 墙体掩码位图工具（1 bit / 像素，LSB-first，与 FluidEditor.getObstacleBitmap 对称）
+// ============================================================
+
+/**
+ * 将墙体像素数组打包为 1 bit/像素 位图（LSB-first，与 getObstacleBitmap 同约定）。
+ * pixels: Uint8Array(width*height)，0=空，非0=墙体。
+ */
+export function packPixelsToBitmask(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+): Uint8Array {
+  const byteLength = Math.ceil((width * height) / 8);
+  const bitmap = new Uint8Array(byteLength);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (pixels[y * width + x]) {
+        const pixelIndex = y * width + x;
+        const byteIndex = Math.floor(pixelIndex / 8);
+        const bitIndex = pixelIndex % 8;
+        bitmap[byteIndex] |= (1 << bitIndex);
+      }
+    }
+  }
+  return bitmap;
+}
+
+/**
+ * 将 1 bit/像素 位图解包为像素数组（Uint8Array(width*height)，0=空，255=墙体）。
+ * 与 getObstacleBitmap / packPixelsToBitmask 的打包顺序严格对称。
+ */
+export function unpackBitmaskToPixels(
+  bitmap: Uint8Array,
+  width: number,
+  height: number,
+): Uint8Array {
+  const pixels = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    const byte = bitmap[Math.floor(i / 8)];
+    if (byte & (1 << (i % 8))) pixels[i] = 255;
+  }
+  return pixels;
+}
+
+/**
+ * 墙体掩码最近邻缩放到目标分辨率（与 config.resolution 对齐时避免 UV 采样错位）。
+ */
+export function rescaleBitmaskPixels(
+  pixels: Uint8Array,
+  srcW: number,
+  srcH: number,
+  dstW: number,
+  dstH: number,
+): Uint8Array {
+  if (srcW === dstW && srcH === dstH) return pixels;
+  const out = new Uint8Array(dstW * dstH);
+  for (let y = 0; y < dstH; y++) {
+    const sy = Math.min(Math.floor((y * srcH) / dstH), srcH - 1);
+    for (let x = 0; x < dstW; x++) {
+      const sx = Math.min(Math.floor((x * srcW) / dstW), srcW - 1);
+      out[y * dstW + x] = pixels[sy * srcW + sx];
+    }
+  }
+  return out;
 }
 
 /**

@@ -21,7 +21,6 @@ const FIXED_WORLD_MAX = 1;
 /**
  * 将世界坐标（0~1）映射到画布坐标
  * worldX, worldY: 世界坐标，范围 [0,1]
- * axis: 坐标轴配置（仅用于 applyViewTransform 时保持兼容，不影响映射）
  * canvasWidth: 画布宽度
  * canvasHeight: 画布高度
  * options: 转换选项
@@ -31,7 +30,6 @@ const FIXED_WORLD_MAX = 1;
 export function worldToCanvas(
   worldX: number,
   worldY: number,
-  axis: Axis,
   canvasWidth: number,
   canvasHeight: number,
   options?: TransformOptions,
@@ -56,7 +54,6 @@ export function worldToCanvas(
 /**
  * 将画布坐标映射到世界坐标（0~1）
  * canvasX, canvasY: 画布像素坐标
- * axis: 坐标轴配置（仅用于保持兼容，不影响映射）
  * canvasWidth: 画布宽度
  * canvasHeight: 画布高度
  * zoom: 缩放因子
@@ -65,7 +62,6 @@ export function worldToCanvas(
 export function canvasToWorld(
   canvasX: number,
   canvasY: number,
-  axis: Axis,
   canvasWidth: number,
   canvasHeight: number,
   zoom: number = 1,

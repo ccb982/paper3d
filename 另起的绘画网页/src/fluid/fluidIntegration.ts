@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Point, FrameData } from '../types';
 import { rgbToHsl } from '../utils/colorCompressor';
+import { base64ToUint8 } from '../core/ftxCore';
 
 // ============================================================
 // 流体集成工具集（主编辑器 ↔ FluidSolver 桥接）
@@ -85,6 +86,63 @@ export function rasterizeBoundaryToObstacle(
   }
 
   const tex = new THREE.DataTexture(data, width, height, THREE.RedFormat, THREE.UnsignedByteType);
+  tex.minFilter = THREE.NearestFilter;
+  tex.magFilter = THREE.NearestFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.flipY = false; // ★ row 0 = world 顶部，与 colorGrid 对齐
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// ============================================================
+// 1b. 墙体掩码（1 bit/像素 base64）→ 障碍物纹理
+// ============================================================
+
+/**
+ * 将多帧物理配置中的墙体掩码解码为障碍物纹理（RedFormat，Uint8）。
+ * 与 FluidEditor.getObstacleBitmap 打包约定严格对称（LSB-first）。
+ *
+ * @param width   掩码原始宽度
+ * @param height  掩码原始高度
+ * @param data    掩码 base64（1 bit/像素）
+ * @param targetW 目标纹理宽度（config.resolution.w），不匹配时最近邻缩放
+ * @param targetH 目标纹理高度
+ */
+export function buildObstacleTextureFromBitmask(
+  width: number,
+  height: number,
+  data: string,
+  targetW: number,
+  targetH: number,
+): THREE.DataTexture | null {
+  if (!data || width <= 0 || height <= 0) return null;
+  let bitmap: Uint8Array;
+  try {
+    bitmap = base64ToUint8(data);
+  } catch {
+    return null;
+  }
+  const totalPixels = width * height;
+  const unpacked = new Uint8Array(totalPixels);
+  for (let i = 0; i < totalPixels; i++) {
+    if (bitmap[Math.floor(i / 8)] & (1 << (i % 8))) unpacked[i] = 255;
+  }
+
+  // 目标分辨率与掩码一致时直接用；否则最近邻缩放（保留墙边界，避免抗锯齿缝隙）
+  let out = unpacked;
+  if (width !== targetW || height !== targetH) {
+    out = new Uint8Array(targetW * targetH);
+    for (let y = 0; y < targetH; y++) {
+      const sy = Math.min(Math.floor((y * height) / targetH), height - 1);
+      for (let x = 0; x < targetW; x++) {
+        const sx = Math.min(Math.floor((x * width) / targetW), width - 1);
+        out[y * targetW + x] = unpacked[sy * width + sx];
+      }
+    }
+  }
+
+  const tex = new THREE.DataTexture(out, targetW, targetH, THREE.RedFormat, THREE.UnsignedByteType);
   tex.minFilter = THREE.NearestFilter;
   tex.magFilter = THREE.NearestFilter;
   tex.wrapS = THREE.ClampToEdgeWrapping;
@@ -185,4 +243,3 @@ export function resolveFluidResolution(frameData: FrameData): { w: number; h: nu
 // 注：流体配置 JSON 导入/导出转换器已移至 ./fluidConfigIO.ts（独立文件，
 // 仅依赖 FluidSolver 类型，避免与 useAppStore 形成循环依赖）。
 // 需要时直接从 fluidConfigIO 导入：parseImportedFluidConfig / serializeFluidConfigToJSON / defaultFluidRuntime。
-

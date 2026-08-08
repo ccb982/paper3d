@@ -183,15 +183,21 @@ export interface FrameData {
   // VAT 位移 + textureOffset/Scale/Rotation。
   fluidConfig?: import('../fluid/FluidSolver').FluidSolverConfig;
   fluidRuntime?: FluidRuntime;
+
+  // ---------- 注入源坐标空间（导入/绑定时区域坐标重映射的依据） ----------
+  //   null='未知'（主页面再导出 JSON 直接导入），'bbox-local'=未做区域映射，
+  //   'region'=已按区域 worldBbox 映射为 world UV（含映射时 bbox 快照，用于换区域逆映射）。
+  fluidSourceSpace?: import('../fluid/fluidConfigIO').FluidSourceSpace;
 }
 
 /** 流体运行时状态（播放控制、视图模式，不持久化） */
 export interface FluidRuntime {
   isPlaying: boolean;
   speed: number;                              // 播放速度倍率
-  currentTime: number;                        // 模拟累计时间（秒）
   viewMode: 'color' | 'velocity' | 'composite' | 'density' | 'obstacle' | 'levelset';
   frameCount: number;
+  /** 墙体来源开关：true = 优先导入墙掩码（无则回退区域边界）；false = 只用区域边界 */
+  useWallMask: boolean;
   /** MainCanvas 渲染循环检测到 true 时调用 solver.reset()，然后清除此标志 */
   _needsReset?: boolean;
 }

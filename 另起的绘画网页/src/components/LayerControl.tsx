@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import { MaskEffectPanel } from './MaskEffectPanel';
 
 export function LayerControl() {
@@ -36,14 +37,45 @@ export function LayerControl() {
     canvasHeight,
     setCanvasWidth,
     setCanvasHeight,
-    // 区域色块图层
-    regionLayerCanvas,
     // ===== 新增：多帧导入绑定 =====
     frameDataMap,
     bindFrameToLayer,
     getBindableRegions,
-    regionEntities,
-  } = useAppStore();
+  } = useAppStore(useShallow(s => ({
+    layers: s.layers,
+    activeLayerId: s.activeLayerId,
+    addLayer: s.addLayer,
+    removeLayer: s.removeLayer,
+    updateLayer: s.updateLayer,
+    setActiveLayer: s.setActiveLayer,
+    toggleLayerVisibility: s.toggleLayerVisibility,
+    reorderLayers: s.reorderLayers,
+    layerVisibility: s.layerVisibility,
+    toggleLayer: s.toggleLayer,
+    axis: s.axis,
+    setAxis: s.setAxis,
+    resetAxis: s.resetAxis,
+    grid: s.grid,
+    setGrid: s.setGrid,
+    mousePosition: s.mousePosition,
+    zoom: s.zoom,
+    setZoom: s.setZoom,
+    resetView: s.resetView,
+    isPanMode: s.isPanMode,
+    setPanMode: s.setPanMode,
+    imageState: s.imageState,
+    setBackgroundOffset: s.setBackgroundOffset,
+    setBackgroundScale: s.setBackgroundScale,
+    resetBackgroundTransform: s.resetBackgroundTransform,
+    setBackgroundDragging: s.setBackgroundDragging,
+    canvasWidth: s.canvasWidth,
+    canvasHeight: s.canvasHeight,
+    setCanvasWidth: s.setCanvasWidth,
+    setCanvasHeight: s.setCanvasHeight,
+    frameDataMap: s.frameDataMap,
+    bindFrameToLayer: s.bindFrameToLayer,
+    getBindableRegions: s.getBindableRegions,
+  })));
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
@@ -74,15 +106,6 @@ export function LayerControl() {
   const isBound = (layerId: string): boolean => {
     const frame = frameDataMap[layerId];
     return !!frame && frame.boundRegionId !== null;
-  };
-
-  // 获取图层当前绑定的区域名称
-  const getBoundRegionName = (layerId: string): string => {
-    const frame = frameDataMap[layerId];
-    if (!frame || frame.boundRegionId === null) return '未绑定';
-    const regions = getBindableRegions(layerId);
-    const found = regions.find(r => r.id === frame.boundRegionId);
-    return found ? found.name : `区域 ${frame.boundRegionId}`;
   };
 
   const handleAddLayer = () => {

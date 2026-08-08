@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAppStore } from '../stores/useAppStore';
+import { useShallow } from 'zustand/react/shallow';
 import type { RegionAnnotation } from '../types';
 
 export function MaskEffectPanel() {
@@ -23,7 +24,27 @@ export function MaskEffectPanel() {
     showRegionBorder2D,
     setShowRegionBorder2D,
     refreshRegionCache,
-  } = useAppStore();
+  } = useAppStore(useShallow(s => ({
+    regionAnnotations: s.regionAnnotations,
+    activeLayerId: s.activeLayerId,
+    updateRegionDisplacementOnly: s.updateRegionDisplacementOnly,
+    layerVisibility: s.layerVisibility,
+    triggerCanvasRedraw: s.triggerCanvasRedraw,
+    forceCPUMode: s.forceCPUMode,
+    regionAnimationSpeed: s.regionAnimationSpeed,
+    setRegionAnimationSpeed: s.setRegionAnimationSpeed,
+    isVertexPinMode: s.isVertexPinMode,
+    setVertexPinMode: s.setVertexPinMode,
+    vertexPinRadius: s.vertexPinRadius,
+    setVertexPinRadius: s.setVertexPinRadius,
+    isVertexPinEraserMode: s.isVertexPinEraserMode,
+    setVertexPinEraserMode: s.setVertexPinEraserMode,
+    showRegionBorderWebGL: s.showRegionBorderWebGL,
+    setShowRegionBorderWebGL: s.setShowRegionBorderWebGL,
+    showRegionBorder2D: s.showRegionBorder2D,
+    setShowRegionBorder2D: s.setShowRegionBorder2D,
+    refreshRegionCache: s.refreshRegionCache,
+  })));
 
   // 用 useMemo 缓存当前图层注释，并过滤掉无效 regionId
   const layerAnnotations = useMemo(() => {

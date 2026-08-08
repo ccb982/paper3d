@@ -41,13 +41,6 @@ const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onU
     }
   }, [currentPage, totalPages]);
 
-  const handleGoToPage = useCallback((page: number) => {
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page);
-      setExpandedId(null);
-    }
-  }, [totalPages]);
-
   return (
     <div style={{
       position: 'absolute',

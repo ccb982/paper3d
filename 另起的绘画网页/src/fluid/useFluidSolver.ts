@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import type { FrameData } from '../types';
 import type { RegionEntity } from '../core/RegionEntity';
 import { FluidSolver, defaultFluidConfig, type FluidSolverConfig } from './FluidSolver';
-import { buildBaseHslFromFrame, rasterizeBoundaryToObstacle, resolveFluidResolution } from './fluidIntegration';
+import { buildBaseHslFromFrame, rasterizeBoundaryToObstacle, buildObstacleTextureFromBitmask, resolveFluidResolution } from './fluidIntegration';
 
 // ============================================================
 // useFluidSolver —— FluidSolver 生命周期 hook
@@ -39,6 +39,10 @@ export function useFluidSolver(
   const baseTex = frameData?.boundBaseTexture ?? null;
   // 区域实体列表 identity 变化时重建障碍物
   const entitiesKey = regionEntities.map(e => `${e.id}:${e.boundary.length}`).join('|');
+  // ★ 墙掩码引用跟踪：热更新 effect 据此判断是否需重建障碍物纹理
+  const lastObstacleRef = useRef<FluidSolverConfig['obstacle'] | undefined>(undefined);
+  // ★ 墙掩码使用开关跟踪：切换时热更新重建障碍物纹理
+  const lastWallMaskToggleRef = useRef<boolean | undefined>(undefined);
 
   // ---- 创建 / 销毁 ----
   useEffect(() => {
@@ -127,14 +131,26 @@ export function useFluidSolver(
       solver.clearBaseHsl();
     }
 
-    // 障碍物：当前绑定区域的边界
-    const boundEntity = regionEntities.find(e => e.id === boundRegionId);
-    if (boundEntity && boundEntity.boundary.length > 0) {
-      const obstacle = rasterizeBoundaryToObstacle(boundEntity.boundary, resolution.w, resolution.h);
-      solver.setObstacleTexture(obstacle);
-    } else {
-      solver.setObstacleTexture(null);
+    // 障碍物：优先使用导入的墙掩码（多帧物理配置），否则用当前绑定区域的边界
+    const obstacleMask = fluidConfig.obstacle;
+    const useWallMask = frameData?.fluidRuntime?.useWallMask ?? true;
+    let obstacle: THREE.DataTexture | null = null;
+    if (useWallMask && obstacleMask && obstacleMask.data) {
+      obstacle = buildObstacleTextureFromBitmask(
+        obstacleMask.width,
+        obstacleMask.height,
+        obstacleMask.data,
+        resolution.w,
+        resolution.h,
+      );
     }
+    if (!obstacle) {
+      const boundEntity = regionEntities.find(e => e.id === boundRegionId);
+      if (boundEntity && boundEntity.boundary.length > 0) {
+        obstacle = rasterizeBoundaryToObstacle(boundEntity.boundary, resolution.w, resolution.h);
+      }
+    }
+    solver.setObstacleTexture(obstacle);
 
     // ★ Level Set：若已启用，基于实际 density/colorGrid 数据重新初始化 φ 场
     //   构造函数中 enableLevelSet 在 density 注入前调用，phi 会是空的，
@@ -171,7 +187,32 @@ export function useFluidSolver(
       // 分辨率交由上面的创建 effect 控制（避免此处触发 rebuild 与之冲突）
       resolution: solver.config.resolution,
     });
-  }, [fluidConfig]);
+    // ★ 墙掩码引用或使用开关变化时重建障碍物纹理（创建 effect 之外，避免整库重建）
+    const useWallMask = frameData?.fluidRuntime?.useWallMask ?? true;
+    if (lastObstacleRef.current !== fluidConfig.obstacle || lastWallMaskToggleRef.current !== useWallMask) {
+      lastObstacleRef.current = fluidConfig.obstacle;
+      lastWallMaskToggleRef.current = useWallMask;
+      const obstacleMask = fluidConfig.obstacle;
+      let obstacle: THREE.DataTexture | null = null;
+      if (useWallMask && obstacleMask && obstacleMask.data) {
+        obstacle = buildObstacleTextureFromBitmask(
+          obstacleMask.width,
+          obstacleMask.height,
+          obstacleMask.data,
+          solver.config.resolution.w,
+          solver.config.resolution.h,
+        );
+      }
+      if (!obstacle) {
+        const boundEntity = regionEntities.find(e => e.id === boundRegionId);
+        if (boundEntity && boundEntity.boundary.length > 0) {
+          obstacle = rasterizeBoundaryToObstacle(boundEntity.boundary, solver.config.resolution.w, solver.config.resolution.h);
+        }
+      }
+    solver.setObstacleTexture(obstacle);
+    lastObstacleRef.current = fluidConfig.obstacle;
+    }
+  }, [fluidConfig, frameData?.fluidRuntime?.useWallMask]);
 
   // ---- 组件卸载时释放 ----
   useEffect(() => {
