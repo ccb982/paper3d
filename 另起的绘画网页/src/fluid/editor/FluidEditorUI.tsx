@@ -1747,6 +1747,8 @@ export const FluidEditorUI: React.FC = () => {
   /** 缓存的底图纹理 + 上一次的 activeLayerId，避免每帧重建 */
   const baseTexRef = useRef<THREE.DataTexture | null>(null);
   const baseLayerIdRef = useRef<string | null>(null);
+  /** 独立 FTX 导入的 baseHslData 备份（effect 重建后恢复纹理用） */
+  const ftxBaseDataRef = useRef<{ data: Float32Array; width: number; height: number } | null>(null);
   /** 残差量化范围（可调，后续可加 UI 控制） */
   const residualRangeHRef = useRef(0.5);
   const residualRangeSLRef = useRef(0.5);
@@ -2673,7 +2675,26 @@ export const FluidEditorUI: React.FC = () => {
     // 底图纹理更新函数（同步读取 Store，缓存避免每帧重建）
     const updateBaseTexture = () => {
       // ★ 独立 FTX 导入模式：保留手动上传的纹理，不读 store
-      if (baseLayerIdRef.current === '__ftx_import__' && baseTexRef.current) return;
+      if (baseLayerIdRef.current === '__ftx_import__') {
+        if (baseTexRef.current) return;  // 纹理还在，直接用
+        // 纹理被 effect 重建清掉了，从备份恢复
+        const backup = ftxBaseDataRef.current;
+        if (backup) {
+          const tex = new THREE.DataTexture(
+            backup.data, backup.width, backup.height,
+            THREE.RGBAFormat, THREE.FloatType,
+          );
+          tex.needsUpdate = true;
+          tex.minFilter = THREE.LinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.flipY = false;
+          tex.wrapS = THREE.ClampToEdgeWrapping;
+          tex.wrapT = THREE.ClampToEdgeWrapping;
+          tex.colorSpace = THREE.LinearSRGBColorSpace;
+          baseTexRef.current = tex;
+        }
+        return;
+      }
 
       const state = useAppStore.getState();
       const layerId = state.activeLayerId;
@@ -3230,7 +3251,10 @@ export const FluidEditorUI: React.FC = () => {
       compositeQuad.geometry.dispose();
       baseTexRef.current?.dispose();
       baseTexRef.current = null;
-      baseLayerIdRef.current = null;
+      // ★ 独立 FTX 导入：保留 baseLayerIdRef 标记，让 updateBaseTexture 从备份恢复
+      if (baseLayerIdRef.current !== '__ftx_import__') {
+        baseLayerIdRef.current = null;
+      }
     };
   }, [rendererReady, editor, config.resolution, viewMode]);
 
@@ -3511,6 +3535,12 @@ export const FluidEditorUI: React.FC = () => {
                       baseTex.colorSpace = THREE.LinearSRGBColorSpace;
                       baseTexRef.current = baseTex;
                       baseLayerIdRef.current = '__ftx_import__';
+                      // ★ 备份数据（effect 因 viewMode 变化重建后会清空纹理，用它恢复）
+                      ftxBaseDataRef.current = {
+                        data: new Float32Array(baseHslData.data),
+                        width: baseHslData.width,
+                        height: baseHslData.height,
+                      };
                       console.log('[FTX导入] baseHslData 尺寸:', baseHslData.width, 'x', baseHslData.height,
                         '非零像素:', Array.from(baseHslData.data).filter((v, i) => i % 4 === 3 && v > 0).length);
                       editor.initFields();
