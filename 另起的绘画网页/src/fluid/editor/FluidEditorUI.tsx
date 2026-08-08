@@ -3601,7 +3601,12 @@ export const FluidEditorUI: React.FC = () => {
       colorBoundaryMode: 'clamp',
     });
     const adjustedResidual = adjustResidualForUniformRange(newResidual, bbox, blockFlags);
-    editor.initializeColorFromImageData(adjustedResidual);
+    try {
+      editor.initializeColorFromImageData(adjustedResidual);
+      console.log('[FTX加载] 残差已上传到solver');
+    } catch (err) {
+      console.error('[FTX加载] 残差上传失败:', err);
+    }
     // ★ 调试：确认残差上传后的状态
     let resNonZero = 0;
     const rd = adjustedResidual.data;
