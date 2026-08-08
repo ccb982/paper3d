@@ -7,16 +7,44 @@ import { Toolbar } from './components/Toolbar';
 import { FluidEditorUI } from './fluid';
 import { BaseColorEditor } from './components/BaseColorEditor';
 import { FluidPanel } from './components/FluidPanel';
+import { exportMainCanvasAssetBundle } from './assetBundle/assetBundleExport';
 
 function App() {
   const { layerVisibility, loadFromStorage } = useAppStore();
   const [showFluidEditor, setShowFluidEditor] = useState(false);
   const [showBaseColorEditor, setShowBaseColorEditor] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportFileName, setExportFileName] = useState('scene_package');
 
   useEffect(() => {
     console.log('[App] 初始化加载数据...');
     loadFromStorage();
   }, [loadFromStorage]);
+
+  const handleExportScenePackage = async () => {
+    setExporting(true);
+    try {
+      const state = useAppStore.getState();
+      const result = await exportMainCanvasAssetBundle(state, { enablePrediction: true });
+      const blob = new Blob([result.bytes], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const name = exportFileName.trim() || 'scene_package';
+      a.href = url;
+      a.download = `${name}.scene.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      const msg = `素材包导出成功！${result.frameCount} 个图层（含 ${result.textureFrameCount} 个纹理帧），${result.paletteCount} 色${result.annotationCount > 0 ? `，${result.annotationCount} 个独立区域注释` : ''}`;
+      alert(result.skippedLayers.length > 0
+        ? `${msg}\n\n跳过的空图层/仅物理/仅注释层: ${result.skippedLayers.join(', ')}`
+        : msg);
+    } catch (err: any) {
+      console.error('[场景包导出] 失败:', err);
+      alert('导出失败: ' + (err.message || '未知错误'));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // 流体编辑器视图
   if (showFluidEditor) {
@@ -165,7 +193,45 @@ function App() {
             打开基础色编辑器
           </button>
           <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
-            独立的基础色纹理编辑视图
+             独立的基础色纹理编辑视图
+          </p>
+        </div>
+        <div style={{ padding: '10px', borderTop: '1px solid #333' }}>
+          <input
+            type="text"
+            value={exportFileName}
+            onChange={(e) => setExportFileName(e.target.value)}
+            placeholder="导出文件名"
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              marginBottom: '8px',
+              background: '#222',
+              color: '#fff',
+              border: '1px solid #555',
+              borderRadius: '4px',
+              fontSize: '13px',
+              boxSizing: 'border-box',
+            }}
+          />
+          <button
+            onClick={handleExportScenePackage}
+            disabled={exporting}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              background: exporting ? '#555' : '#52c41a',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: exporting ? 'not-allowed' : 'pointer',
+              fontSize: '14px',
+            }}
+          >
+            {exporting ? '导出中...' : '导出素材包 (.scene.zip)'}
+          </button>
+          <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
+            导出特效播放器可用的场景包
           </p>
         </div>
       </aside>
