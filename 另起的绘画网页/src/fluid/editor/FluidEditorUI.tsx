@@ -3436,6 +3436,27 @@ export const FluidEditorUI: React.FC = () => {
     e.target.value = '';
   };
 
+  /** 将 Float32Array HSL 数据（RGBA 4通道）最近邻缩放到目标尺寸 */
+  const resizeHslFloat = (
+    src: Float32Array, srcW: number, srcH: number,
+    dstW: number, dstH: number,
+  ): Float32Array => {
+    const out = new Float32Array(dstW * dstH * 4);
+    for (let y = 0; y < dstH; y++) {
+      const sy = Math.min(Math.floor((y * srcH) / dstH), srcH - 1);
+      for (let x = 0; x < dstW; x++) {
+        const sx = Math.min(Math.floor((x * srcW) / dstW), srcW - 1);
+        const si = (sy * srcW + sx) * 4;
+        const di = (y * dstW + x) * 4;
+        out[di] = src[si];
+        out[di+1] = src[si+1];
+        out[di+2] = src[si+2];
+        out[di+3] = src[si+3];
+      }
+    }
+    return out;
+  };
+
   /** 加载指定 FTX 帧到流体编辑器 */
   const loadFtxFrame = (frame: any, index: number) => {
     setSelectedFtxIndex(index);
@@ -3455,21 +3476,30 @@ export const FluidEditorUI: React.FC = () => {
       '残差非零:', (() => { let n = 0; const d = newResidual.data; for (let j = 0; j < d.length; j += 4) if (d[j] !== 0 || d[j+1] !== 0 || d[j+2] !== 0) n++; return n; })(),
       'bbox:', JSON.stringify(bbox));
     const texSize = sourceResolution || 512;
-    if (config.resolution.w !== texSize || config.resolution.h !== texSize) {
-      updateConfig({ resolution: { w: texSize, h: texSize } });
+    // ★ 不再强制把 solver 分辨率改成源尺寸。保持当前分辨率，
+    //   把 baseHslData 缩放到 solver 分辨率，预览页独立缩放。
+    const solverRes = config.resolution;  // 例如 256×256
+    let baseData = baseHslData.data;
+    let baseW = baseHslData.width;
+    let baseH = baseHslData.height;
+    if (baseW !== solverRes.w || baseH !== solverRes.h) {
+      const scaled = resizeHslFloat(baseData, baseW, baseH, solverRes.w, solverRes.h);
+      baseData = scaled;
+      baseW = solverRes.w;
+      baseH = solverRes.h;
     }
     stashedResidualRef.current = new ImageData(new Uint8ClampedArray(newResidual.data), newResidual.width, newResidual.height);
     stashedResidualWRef.current = newResidual.width;
     stashedResidualHRef.current = newResidual.height;
-    stashedBaseHslRef.current = new Float32Array(baseHslData.data);
+    stashedBaseHslRef.current = new Float32Array(baseData);
     stashedBaseRef.current = new ImageData(new Uint8ClampedArray(newBase.data), newBase.width, newBase.height);
     stashedBaseWRef.current = newBase.width;
     stashedBaseHRef.current = newBase.height;
 
-    // ★ 上传 baseHslData 到 GPU（合成视图依赖）
+    // ★ 上传 baseHslData 到 GPU（合成视图依赖，尺寸 = solver 分辨率）
     baseTexRef.current?.dispose();
     const baseTex = new THREE.DataTexture(
-      baseHslData.data, baseHslData.width, baseHslData.height,
+      baseData, baseW, baseH,
       THREE.RGBAFormat, THREE.FloatType,
     );
     baseTex.needsUpdate = true;
@@ -3483,9 +3513,9 @@ export const FluidEditorUI: React.FC = () => {
     baseLayerIdRef.current = '__ftx_import__';
     // ★ 备份数据（effect 因 viewMode 变化重建后会清空纹理，用它恢复）
     ftxBaseDataRef.current = {
-      data: new Float32Array(baseHslData.data),
-      width: baseHslData.width,
-      height: baseHslData.height,
+      data: new Float32Array(baseData),
+      width: baseW,
+      height: baseH,
     };
     console.log('[FTX导入] baseHslData 尺寸:', baseHslData.width, 'x', baseHslData.height,
       '非零像素:', Array.from(baseHslData.data).filter((v, i) => i % 4 === 3 && v > 0).length);
