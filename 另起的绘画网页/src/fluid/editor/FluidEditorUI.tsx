@@ -2672,6 +2672,9 @@ export const FluidEditorUI: React.FC = () => {
 
     // 底图纹理更新函数（同步读取 Store，缓存避免每帧重建）
     const updateBaseTexture = () => {
+      // ★ 独立 FTX 导入模式：保留手动上传的纹理，不读 store
+      if (baseLayerIdRef.current === '__ftx_import__' && baseTexRef.current) return;
+
       const state = useAppStore.getState();
       const layerId = state.activeLayerId;
       if (!layerId) { baseTexRef.current = null; baseLayerIdRef.current = null; return; }
