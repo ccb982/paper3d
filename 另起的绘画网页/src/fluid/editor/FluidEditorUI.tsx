@@ -3119,6 +3119,11 @@ export const FluidEditorUI: React.FC = () => {
       const panY = previewPanRef.current.y || 0;
       canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
       canvas.style.transformOrigin = 'center center';
+      // ★ 叠加层只跟随平移（尺寸已同步为 getBoundingClientRect 缩放后尺寸，不能再 scale）
+      const overlay = overlayCanvasRef.current;
+      if (overlay) {
+        overlay.style.transform = `translate(${panX}px, ${panY}px)`;
+      }
 
       // 更新纹理引用
       colorMat.uniforms.uColor.value = editor.getColorTexture();
