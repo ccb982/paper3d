@@ -826,11 +826,9 @@ useEffect(() => {
       stencilZFail: THREE.InvertStencilOp,
       stencilZPass: THREE.InvertStencilOp,
     });
-    // Three.js r170 的 ShaderMaterial 构造函数不处理继承属性，需创建后设置
-    fillMat.stencilTest = true;
     fillMat.depthTest = false;
     fillMat.depthWrite = false;
-    fillMat.colorWrite = [false, false, false, false];
+    fillMat.colorWrite = false;
     const fillMesh = new THREE.Mesh(fillGeom, fillMat);
     fillMesh.renderOrder = 0;
     fillMesh.frustumCulled = false;
@@ -903,7 +901,7 @@ useEffect(() => {
         depthWrite: true,
         side: THREE.DoubleSide,  // ★ earcut生成的三角形方向可能不一致，DoubleSide确保都能渲染
       });
-      texMat.stencilTest = true;
+      texMat.stencilWrite = false;
       texMat.stencilRef = 1;
       texMat.stencilFunc = THREE.EqualStencilFunc;
       // 共享 fillGeom，确保 GPU 按 gl_VertexID 索引的顶点顺序完全一致
@@ -1130,7 +1128,7 @@ useEffect(() => {
             const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
             if (currentLayerShapes.length > 0) {
               const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 }; // 调试可视化用画布范围 [0,1]（区域注释/查询用 BFS_WORLD_BOUNDS 识别边缘环）
-              debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+              debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution);
             }
           } else {
             debugRegionsCache.current = null;
@@ -1144,11 +1142,9 @@ useEffect(() => {
         return;
       }
       if (e.ctrlKey && e.key === 'G') {
-        setShowColorExtractDebug(prev => {
-          const newValue = !prev;
-          console.log(`[颜色提取] 调试模式 ${newValue ? '开启' : '关闭'}`);
-          return newValue;
-        });
+        const newValue = !showColorExtractDebug;
+        console.log(`[颜色提取] 调试模式 ${newValue ? '开启' : '关闭'}`);
+        setShowColorExtractDebug(newValue);
         return;
       }
       if (e.key === 'Escape') {
@@ -1182,7 +1178,7 @@ useEffect(() => {
       const currentLayerShapes = shapes.filter(s => s.layerId === activeLayerId && s.id !== 'current_shape');
       if (currentLayerShapes.length > 0) {
         const worldBounds = { xMin: 0, xMax: 1, yMin: 0, yMax: 1 }; // 调试可视化用画布范围 [0,1]
-        debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution, debugDistanceThreshold, debugRadialThreshold, debugDownsampleFactor, debugRingDistanceThreshold, debugRingRadialThreshold);
+        debugRegionsCache.current = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution);
       }
     }
   }, [showDebugRegions, shapes, activeLayerId, bfsResolution]);
@@ -1427,7 +1423,7 @@ useEffect(() => {
     // 颜色阈值（可调）
     const colorThreshold = 30;
 
-    const isSimilar = (c1: Uint8ClampedArray, c2: Uint8ClampedArray) => {
+    const isSimilar = (c1: Uint8ClampedArray | number[], c2: Uint8ClampedArray | number[]) => {
       return (Math.abs(c1[0] - c2[0]) < colorThreshold &&
               Math.abs(c1[1] - c2[1]) < colorThreshold &&
               Math.abs(c1[2] - c2[2]) < colorThreshold);
@@ -1738,6 +1734,7 @@ useEffect(() => {
   // ========== 颜色提取：贝塞尔曲线提取函数 ==========
   const performBezierColorExtract = useCallback((points: Point[]) => {
     if (points.length !== 3) return;
+    if (!activeLayerId) return;
     const [start, end, ctrl] = points;
     console.log('[颜色提取] 贝塞尔曲线已保存');
     console.log('  起点:', `(${start.x.toFixed(4)}, ${start.y.toFixed(4)})`);
@@ -1768,16 +1765,16 @@ useEffect(() => {
 
   // ========== 坐标转换函数 ==========
   const canvasToWorldFn = useCallback((canvasX: number, canvasY: number): Point => {
-    return canvasToWorld(canvasX, canvasY, axis, canvasWidth, canvasHeight, zoom, panOffset);
-  }, [axis, canvasWidth, canvasHeight, zoom, panOffset]);
+    return canvasToWorld(canvasX, canvasY, canvasWidth, canvasHeight, zoom, panOffset);
+  }, [canvasWidth, canvasHeight, zoom, panOffset]);
 
   const worldToCanvasFn = useCallback((worldX: number, worldY: number): Point => {
-    return worldToCanvas(worldX, worldY, axis, canvasWidth, canvasHeight, { applyViewTransform: false });
-  }, [axis, canvasWidth, canvasHeight]);
+    return worldToCanvas(worldX, worldY, canvasWidth, canvasHeight, { applyViewTransform: false });
+  }, [canvasWidth, canvasHeight]);
 
   const worldToCanvasForSnap = useCallback((worldX: number, worldY: number): Point => {
-    return worldToCanvas(worldX, worldY, axis, canvasWidth, canvasHeight, { applyViewTransform: true }, zoom, panOffset);
-  }, [axis, canvasWidth, canvasHeight, zoom, panOffset]);
+    return worldToCanvas(worldX, worldY, canvasWidth, canvasHeight, { applyViewTransform: true }, zoom, panOffset);
+  }, [canvasWidth, canvasHeight, zoom, panOffset]);
 
   // ========== 点吸附 ==========
   const snapToExistingPoint = useCallback((
@@ -2362,35 +2359,6 @@ useEffect(() => {
         break;
     }
 
-    if (!isPreview) {
-      if (shape.annotation) {
-        let centerX = 0, centerY = 0;
-        if (points.length > 0) {
-          const canvasPoints = points.map(p => worldToCanvasFn(p.x, p.y));
-          centerX = canvasPoints.reduce((sum, p) => sum + p.x, 0) / canvasPoints.length;
-          centerY = canvasPoints.reduce((sum, p) => sum + p.y, 0) / canvasPoints.length;
-        }
-        ctx.save();
-        ctx.fillStyle = '#1890ff'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(centerX + 10, centerY - 10, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText('A', centerX + 10, centerY - 10);
-        ctx.restore();
-      }
-      for (let i = 0; i < points.length; i++) {
-        const p = points[i];
-        if (p.annotation) {
-          const cp = worldToCanvasFn(p.x, p.y);
-          ctx.save();
-          ctx.fillStyle = '#52c41a'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.arc(cp.x + 8, cp.y - 8, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-          ctx.fillStyle = '#fff'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-          ctx.fillText('a', cp.x + 8, cp.y - 8);
-          ctx.restore();
-        }
-      }
-    }
-    
     // 恢复实线样式，避免影响其他绘制
     ctx.setLineDash([]);
   }, [worldToCanvasFn, lineWidth, currentColor]);
@@ -2616,10 +2584,10 @@ useEffect(() => {
       ctx.globalAlpha = 1;
       // 绘制临时图形（绘制中）
       if (tempPoints.length > 0) {
-        const tempShape: Shape = { id: 'temp', groupId: 'temp', type: currentTool as any, points: tempPoints, color: '#666' };
+        const tempShape: Shape = { id: 'temp', groupId: 'temp', layerId: activeLayerId!, type: currentTool as any, points: tempPoints, color: '#666' };
         drawShape(ctx, tempShape, true);
         if (previewPoint) {
-          const previewShape: Shape = { id: 'preview', groupId: 'temp', type: currentTool as any, points: [...tempPoints, previewPoint], color: '#999' };
+          const previewShape: Shape = { id: 'preview', groupId: 'temp', layerId: activeLayerId!, type: currentTool as any, points: [...tempPoints, previewPoint], color: '#999' };
           drawShape(ctx, previewShape, true);
         }
       }
@@ -3152,6 +3120,7 @@ useEffect(() => {
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
 
   useEffect(() => {
+    if (!activeLayerId) return;
     // ★ refreshRegionCache 异步化（BFS 在 Worker），内部已刷新 refreshColorBlockCache，无需外部同步再调（那样会读到 stale cache）。
     void refreshRegionCache(activeLayerId);
     // 确保 paintBuffer 被初始化
@@ -3235,6 +3204,7 @@ useEffect(() => {
   // ========== 鼠标事件 ==========
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (isPinning && isVertexPinMode) {
+      if (!activeLayerId) return;
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
 
@@ -3478,6 +3448,7 @@ useEffect(() => {
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (isVertexPinMode && e.button === 0) {
+      if (!activeLayerId) return;
       const coords = getCanvasCoords(e);
       const worldCoords = canvasToWorldFn(coords.x, coords.y);
       setIsPinning(true);
@@ -3641,7 +3612,7 @@ useEffect(() => {
             const shape = {
               id: shapeId,
               groupId: activeGroupId || 'default',
-              layerId: activeLayerId,
+              layerId: activeLayerId!,
               type: 'polyline' as const,
               points: [...colorExtractPoints],
               color: '#ffaa00',
@@ -3731,7 +3702,7 @@ useEffect(() => {
       //   避免 regionPolygonsCache 过期导致"调试能看到但区域注释识别不到"
       const worldBounds = BFS_WORLD_BOUNDS;
       const debugRegions = getDebugRegions(currentLayerShapes, worldBounds, bfsResolution);
-      const regions = debugRegions.map(d => d.rings);
+      const regions = debugRegions.map(d => d.rings).filter((r): r is Point[][] => !!r);
       
       // 使用区域索引作为 regionId（确保与 bakeRegionLayerTexture 中的索引一致）
       const regionIndex = findRegionIndexByPoint(worldCoords, regions);
@@ -4016,7 +3987,7 @@ useEffect(() => {
       }
       
       // 3. 使用 findRegionAtPoint 查找点击位置对应的区域
-      const clickedRegion = findRegionAtPoint(worldCoords, regions, canvasWidth, canvasHeight);
+      const clickedRegion = findRegionAtPoint(worldCoords, regions);
       
       if (!clickedRegion) {
         alert('请点击一个虚线闭合区域内部');
@@ -4112,7 +4083,8 @@ useEffect(() => {
       addPointAnnotation({
         text,
         position: editor.position,
-        layerId: activeLayerId || layers[0]?.id,
+        layerId: activeLayerId || layers[0]?.id || '',
+        color: '#1890ff',
       });
     }
     saveHistory();
@@ -4134,8 +4106,9 @@ useEffect(() => {
       addRegionAnnotation({
         text,
         polygon: editor.polygon,
-        layerId: activeLayerId || layers[0]?.id,
+        layerId: activeLayerId || layers[0]?.id || '',
         regionId: editor.regionId,
+        color: '#1890ff',
       });
     }
     

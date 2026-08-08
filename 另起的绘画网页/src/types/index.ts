@@ -196,6 +196,7 @@ export interface FluidRuntime {
   speed: number;                              // 播放速度倍率
   viewMode: 'color' | 'velocity' | 'composite' | 'density' | 'obstacle' | 'levelset';
   frameCount: number;
+  currentTime: number;                        // 当前时间（秒），用于步进
   /** 墙体来源开关：true = 优先导入墙掩码（无则回退区域边界）；false = 只用区域边界 */
   useWallMask: boolean;
   /** MainCanvas 渲染循环检测到 true 时调用 solver.reset()，然后清除此标志 */

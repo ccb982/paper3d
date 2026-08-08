@@ -285,6 +285,14 @@ interface AppState {
     regionAnnotations: RegionAnnotation[]; 
     regionPixelsMap: Map<number, string[]>;
     paintBuffers: Record<string, { width: number; height: number; data: number[] }>;
+    skillGroupEditor?: {
+      frames: any[];
+      sharedBaseColors: SharedBaseColor[];
+      activeFrameId: string | null;
+      globalBbox: { x: number; y: number; w: number; h: number } | null;
+      nextColorId: number;
+      enableFramePrediction?: boolean;
+    };
     // 操作统计
     stats: {
       shapeCount: number;           // 线条总数
@@ -457,6 +465,34 @@ interface AppState {
   exportFluidConfig: (layerId: string) => any;
   setFluidUseWallMask: (layerId: string, useWallMask: boolean) => void;
   importMultiFrameFluidConfig: (json: any) => number;
+
+  // ===== 画笔/背景变换（恢复缺失的接口声明）=====
+  currentColor: string;
+  setCurrentColor: (color: string) => void;
+  paintBrushSize: number;
+  setPaintBrushSize: (size: number) => void;
+  setBackgroundOffset: (offsetX: number, offsetY: number) => void;
+  setBackgroundScale: (scale: number) => void;
+  setBackgroundDragging: (dragging: boolean) => void;
+  startBackgroundDrag: (x: number, y: number) => void;
+  updateBackgroundDrag: (x: number, y: number) => void;
+  endBackgroundDrag: () => void;
+  resetBackgroundTransform: () => void;
+
+  // ===== 帧纹理变换/扭曲（恢复缺失的接口声明）=====
+  setFrameTextureTransform: (
+    layerId: string,
+    offset: { x: number; y: number },
+    scale: { x: number; y: number },
+    rotation?: number,
+    distortEnabled?: boolean,
+  ) => void;
+  toggleFrameDistort: (layerId: string) => void;
+  setFrameDistortParams: (
+    layerId: string,
+    params: { amplitude?: number; frequency?: number; speed?: number; rotation?: number },
+  ) => void;
+  updateRegionDisplacementOnly: (layerId: string) => void;
 }
 
 const defaultAxis: AxisConfig = {
@@ -856,7 +892,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   })),
   clearColorExtractCurves: () => set({ colorExtractCurves: [] }),
   clearColorExtractCurvesAndShapes: () => {
-    const state = useAppStore.getState();
+    const state = get();
     // 删除所有对应的 shapes
     for (const curve of state.colorExtractCurves) {
       if (curve.shapeId) {
@@ -867,7 +903,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ colorExtractCurves: [] });
   },
   getDashedShapeIds: () => {
-    const state = useAppStore.getState();
+    const state = get();
     return state.colorExtractCurves
       .map(curve => curve.shapeId)
       .filter((id): id is string => !!id);
@@ -1482,6 +1518,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     regionAnnotations: [], 
     regionPixelsMap: new Map(), 
     paintBuffers: {},
+    skillGroupEditor: {
+      frames: [],
+      sharedBaseColors: [],
+      activeFrameId: null,
+      globalBbox: null,
+      nextColorId: 1,
+      enableFramePrediction: true,
+    },
     stats: { shapeCount: 0, shapeTypes: [], pointAnnotationCount: 0, regionAnnotationCount: 0, paintedPixelCount: 0 }
   }],
   historyIndex: 0,
@@ -1616,6 +1660,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             activeFrameId: snapshot.skillGroupEditor.activeFrameId,
             globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
             nextColorId: snapshot.skillGroupEditor.nextColorId,
+            enableFramePrediction: (snapshot.skillGroupEditor as any).enableFramePrediction ?? state.skillGroupEditor.enableFramePrediction,
           } : state.skillGroupEditor,
           // 恢复顶层共享颜色和调色板 Map
           sharedBaseColors: snapshot.skillGroupEditor ? [...snapshot.skillGroupEditor.sharedBaseColors] : state.sharedBaseColors,
@@ -1703,6 +1748,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             activeFrameId: snapshot.skillGroupEditor.activeFrameId,
             globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
             nextColorId: snapshot.skillGroupEditor.nextColorId,
+            enableFramePrediction: (snapshot.skillGroupEditor as any).enableFramePrediction ?? state.skillGroupEditor.enableFramePrediction,
           } : state.skillGroupEditor,
           // 恢复顶层共享颜色和调色板 Map
           sharedBaseColors: snapshot.skillGroupEditor ? [...snapshot.skillGroupEditor.sharedBaseColors] : state.sharedBaseColors,
@@ -1735,16 +1781,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
   canUndo: () => {
-    const state = useAppStore.getState();
+    const state = get();
     return state.historyIndex > 0;
   },
   canRedo: () => {
-    const state = useAppStore.getState();
+    const state = get();
     return state.historyIndex < state.historySnapshots.length - 1;
   },
 
   saveToStorage: () => {
-    const state = useAppStore.getState();
+    const state = get();
     const imageLayerId = state.imageState.imageLayerId;
     
     const data = {
@@ -1764,7 +1810,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     localStorage.setItem('drawing-app-data', JSON.stringify(data));
   },
   exportToJson: () => {
-    const state = useAppStore.getState();
+    const state = get();
     const imageLayerId = state.imageState.imageLayerId;
 
     // 计算正式区域信息（使用正式算法）
@@ -2193,7 +2239,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     let deltaPacked: Uint16Array;
     let blockFlags: bigint;
     try {
-      const result = clusterAndGenerateTexturesV2(mask, bbox, colorSource, 0.025, 512);
+      const result = clusterAndGenerateTexturesV2(mask, bbox, colorSource, 512);
       baseColors = result.baseColors;
       regionIdTex = result.regionIdTex;
       deltaPacked = result.deltaPacked;

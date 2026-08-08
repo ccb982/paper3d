@@ -273,7 +273,6 @@ function extractBaseByClick(
     localMask,
     pxBbox,
     bgImageData,
-    0.025,
     textureSize
   );
 
@@ -321,7 +320,6 @@ function extractBaseByClick(
       pxBbox,
       bgImageData,
       tempDeltas,
-      textureSize,
       0.015,
       3
     );
@@ -639,7 +637,7 @@ export const BaseColorEditor: React.FC = () => {
       // ★ 只有当 bbox 有效时才进行缩放
       if (frame.regionIdTex && updates.bbox) {
         const oldBbox = frame.bbox!;
-        const newBbox = updates.bbox;
+        const newBbox = updates.bbox as { x: number; y: number; w: number; h: number };
         
         const oldW = oldBbox.w;
         const oldH = oldBbox.h;
@@ -1049,7 +1047,7 @@ export const BaseColorEditor: React.FC = () => {
     const state = useAppStore.getState();
     const currentActiveFrameId = state.skillGroupEditor.activeFrameId;
     const currentFrameData = state.skillGroupEditor.frames.find(f => f.id === currentActiveFrameId);
-    if (!currentFrameData?.bgImageData) return;
+    if (!currentFrameData?.bgImageData || !currentActiveFrameId) return;
 
     const currentDashedPolygons = currentFrameData.dashedPolygons || [];
     let allPolygons = currentDashedPolygons;
@@ -1152,10 +1150,10 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
 
-    let newBlockFlags = 0;
+    let newBlockFlags = 0n;
     for (let b = 0; b < ADAPTIVE_TOTAL_BLOCKS; b++) {
       if (blockPixelCount[b] > 0 && blockSmallCount[b] / blockPixelCount[b] >= 0.95) {
-        newBlockFlags |= (1 << b);
+        newBlockFlags |= (1n << BigInt(b));
       }
     }
     console.log('[初始 blockFlags]', newBlockFlags.toString(16).padStart(4, '0'));
@@ -1170,7 +1168,6 @@ export const BaseColorEditor: React.FC = () => {
       bbox,
       bgImageData,
       tempDeltas,
-      texSize,
       0.015,
       3
     );
@@ -1342,7 +1339,6 @@ export const BaseColorEditor: React.FC = () => {
       baseColorsCopy,
       bbox,
       bgImageData,
-      texSize,
       debugBadPixels,
       0.015,
       3,
@@ -1449,7 +1445,7 @@ export const BaseColorEditor: React.FC = () => {
 
     setSelectedBaseColorId(null);
     setResidualRanges(null);
-    setBlockFlags(0);
+    setBlockFlags(0n);
 
     setTimeout(() => {
       const state = useAppStore.getState();
@@ -2374,13 +2370,14 @@ export const BaseColorEditor: React.FC = () => {
               handleResolutionChange(value);
             }}
             onKeyDown={(e) => {
+              const input = e.target as HTMLInputElement;
               if (e.key === 'Enter') {
-                const value = parseInt(e.target.value, 10);
+                const value = parseInt(input.value, 10);
                 handleResolutionChange(value);
-                e.target.blur();
+                input.blur();
               } else if (e.key === 'Escape') {
-                e.target.value = texSize.toString();
-                e.target.blur();
+                input.value = texSize.toString();
+                input.blur();
               }
             }}
             style={{
@@ -2689,7 +2686,7 @@ export const BaseColorEditor: React.FC = () => {
             setResidualTexture(null);
             setBbox(null);
             setResidualRanges(null);
-            setBlockFlags(0);
+            setBlockFlags(0n);
           }}
           disabled={!baseTexture && !residualTexture}
           style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
