@@ -1785,6 +1785,15 @@ export const FluidEditorUI: React.FC = () => {
   const previewZoomRef = useRef(1);
   previewZoomRef.current = previewZoom;
 
+  // ★ 预览平移（拖动画布移动纹理显示位置）
+  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
+  const previewPanRef = useRef({ x: 0, y: 0 });
+  previewPanRef.current = previewPan;
+  const [panMode, setPanMode] = useState(false);
+  const panModeRef = useRef(panMode);
+  panModeRef.current = panMode;
+  const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
+
   // ★ 注入源高亮：点击列表项时在画布上脉冲高亮对应源（不受 showInjectionUI 影响）
   const highlightedSourceIdRef = useRef<number | null>(null);
   const highlightExpireRef = useRef<number>(0);
@@ -2068,6 +2077,17 @@ export const FluidEditorUI: React.FC = () => {
     const canvas = displayCanvasRef.current;
     if (!canvas || !editor) return;
 
+    // ★ 平移模式：按住拖动画布移动纹理显示
+    if (panModeRef.current) {
+      panDragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        panX: previewPanRef.current.x,
+        panY: previewPanRef.current.y,
+      };
+      return;
+    }
+
     // ★ 路径录制模式：拦截所有鼠标按下，不激活摇杆（航点通过 onClick 添加）
     if (recordingWaypointSourceIdRef.current !== null) {
       return;
@@ -2114,6 +2134,10 @@ export const FluidEditorUI: React.FC = () => {
 
   // ★ 鼠标松开：停用摇杆，保存最终方向到面板（自动记忆）
   const handlePointerUp = useCallback(() => {
+    if (panDragRef.current) {
+      panDragRef.current = null;
+      return;
+    }
     if (joystickActiveRef.current) {
       const finalDir = joystickDirRef.current;
       setDirectionX(finalDir.x);
@@ -2132,6 +2156,16 @@ export const FluidEditorUI: React.FC = () => {
     const rect = canvas.getBoundingClientRect();
     const cssX = e.clientX - rect.left;
     const cssY = e.clientY - rect.top;
+
+    // ★ 平移模式：拖动画布移动纹理显示
+    const drag = panDragRef.current;
+    if (drag) {
+      const nz = previewZoomRef.current || 1;
+      const nx = drag.panX + (e.clientX - drag.startX) / nz;
+      const ny = drag.panY + (e.clientY - drag.startY) / nz;
+      setPreviewPan({ x: nx, y: ny });
+      return;
+    }
 
     // ★ 墙体绘制模式：鼠标移动时持续绘制墙体
     if (viewModeRef.current === 'obstacle' && pointerDownRef.current && editor) {
@@ -3079,14 +3113,12 @@ export const FluidEditorUI: React.FC = () => {
         canvas.height = h;
         renderer.setSize(w, h);
       }
-      // ★ 预览缩放：仅改 CSS 显示尺寸，不动真实纹理分辨率
+      // ★ 预览缩放 + 平移：仅改 CSS transform，不动真实纹理分辨率
       const zoom = previewZoomRef.current || 1;
-      const targetW = Math.round(w * zoom);
-      const targetH = Math.round(h * zoom);
-      if (canvas.style.width !== `${targetW}px` || canvas.style.height !== `${targetH}px`) {
-        canvas.style.width = `${targetW}px`;
-        canvas.style.height = `${targetH}px`;
-      }
+      const panX = previewPanRef.current.x || 0;
+      const panY = previewPanRef.current.y || 0;
+      canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+      canvas.style.transformOrigin = 'center center';
 
       // 更新纹理引用
       colorMat.uniforms.uColor.value = editor.getColorTexture();
@@ -3799,6 +3831,15 @@ export const FluidEditorUI: React.FC = () => {
           <button onClick={() => setPreviewZoom(z => Math.min(8, +(z + 0.25).toFixed(2)))}
             style={{ ...zoomBtnStyle }} title="放大">+</button>
           <button onClick={() => setPreviewZoom(1)} style={{ ...zoomBtnStyle }} title="重置缩放">1:1</button>
+          <button onClick={() => {
+            const next = !panModeRef.current;
+            setPanMode(next);
+            if (next) setPreviewPan({ x: 0, y: 0 });  // 进入平移模式时重置偏移
+          }}
+            style={{ ...zoomBtnStyle, background: panMode ? '#2c6ecb' : '#333', cursor: 'pointer' }}
+            title="拖动画布移动纹理显示">
+            {panMode ? '拖动中' : '🖐 平移'}
+          </button>
         </div>
 
         {/* ★ 路径录制浮动按钮：录制激活时显示，一键停止 */}
