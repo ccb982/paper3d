@@ -1,0 +1,36 @@
+{
+  "name": "effects-player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/effects-player.umd.js",
+  "module": "./dist/effects-player.es.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/effects-player.es.js",
+      "require": "./dist/effects-player.umd.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "three": ">=0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "three": "^0.185.1",
+    "typescript": "~5.5.3",
+    "vite": "^5.4.0"
+  },
+  "dependencies": {
+    "earcut": "^3.2.3"
+  }
+}
