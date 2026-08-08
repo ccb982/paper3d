@@ -11,6 +11,12 @@ import { hslToRgb } from '../../utils/colorCompressor';
 // ============================================================
 type InjectMode = 'water' | 'color' | 'velocity' | 'stamp';
 
+const zoomBtnStyle: React.CSSProperties = {
+  background: '#333', color: '#fff', border: '1px solid #666',
+  borderRadius: '4px', cursor: 'pointer', padding: '2px 8px',
+  fontSize: '13px', lineHeight: '1.4',
+};
+
 // 持续注入源快照类型
 type WaveConfig = {
   enabled: boolean;
@@ -1774,6 +1780,11 @@ export const FluidEditorUI: React.FC = () => {
   const showInjectionUIRef = useRef(showInjectionUI);
   showInjectionUIRef.current = showInjectionUI;
 
+  // ★ 预览缩放（仅影响显示尺寸，不改真实纹理分辨率）
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const previewZoomRef = useRef(1);
+  previewZoomRef.current = previewZoom;
+
   // ★ 注入源高亮：点击列表项时在画布上脉冲高亮对应源（不受 showInjectionUI 影响）
   const highlightedSourceIdRef = useRef<number | null>(null);
   const highlightExpireRef = useRef<number>(0);
@@ -3068,6 +3079,14 @@ export const FluidEditorUI: React.FC = () => {
         canvas.height = h;
         renderer.setSize(w, h);
       }
+      // ★ 预览缩放：仅改 CSS 显示尺寸，不动真实纹理分辨率
+      const zoom = previewZoomRef.current || 1;
+      const targetW = Math.round(w * zoom);
+      const targetH = Math.round(h * zoom);
+      if (canvas.style.width !== `${targetW}px` || canvas.style.height !== `${targetH}px`) {
+        canvas.style.width = `${targetW}px`;
+        canvas.style.height = `${targetH}px`;
+      }
 
       // 更新纹理引用
       colorMat.uniforms.uColor.value = editor.getColorTexture();
@@ -3752,6 +3771,23 @@ export const FluidEditorUI: React.FC = () => {
 
       {/* 视口 */}
       <div className="fluid-viewport">
+        {/* ★ 预览缩放工具栏（左上角浮动） */}
+        <div style={{
+          position: 'absolute', top: '8px', left: '8px', zIndex: 90,
+          display: 'flex', alignItems: 'center', gap: '4px',
+          background: 'rgba(0,0,0,0.6)', padding: '4px 8px',
+          borderRadius: '6px', fontSize: '12px', color: '#fff',
+        }}>
+          <span title="实际纹理分辨率">{config.resolution.w}×{config.resolution.h}</span>
+          <span style={{ color: '#999' }}>|</span>
+          <button onClick={() => setPreviewZoom(z => Math.max(0.25, +(z - 0.25).toFixed(2)))}
+            style={{ ...zoomBtnStyle }} title="缩小">−</button>
+          <span style={{ minWidth: '44px', textAlign: 'center' }}>{Math.round(previewZoom * 100)}%</span>
+          <button onClick={() => setPreviewZoom(z => Math.min(8, +(z + 0.25).toFixed(2)))}
+            style={{ ...zoomBtnStyle }} title="放大">+</button>
+          <button onClick={() => setPreviewZoom(1)} style={{ ...zoomBtnStyle }} title="重置缩放">1:1</button>
+        </div>
+
         {/* ★ 路径录制浮动按钮：录制激活时显示，一键停止 */}
         {recordingWaypointSourceId !== null && (
           <button
