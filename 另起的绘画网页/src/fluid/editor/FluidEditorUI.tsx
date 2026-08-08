@@ -3488,6 +3488,22 @@ export const FluidEditorUI: React.FC = () => {
                       stashedBaseRef.current = new ImageData(new Uint8ClampedArray(newBase.data), newBase.width, newBase.height);
                       stashedBaseWRef.current = newBase.width;
                       stashedBaseHRef.current = newBase.height;
+
+                      // ★ 上传 baseHslData 到 GPU（合成视图依赖）
+                      baseTexRef.current?.dispose();
+                      const baseTex = new THREE.DataTexture(
+                        baseHslData.data, baseHslData.width, baseHslData.height,
+                        THREE.RGBAFormat, THREE.FloatType,
+                      );
+                      baseTex.needsUpdate = true;
+                      baseTex.minFilter = THREE.LinearFilter;
+                      baseTex.magFilter = THREE.LinearFilter;
+                      baseTex.flipY = false;
+                      baseTex.wrapS = THREE.ClampToEdgeWrapping;
+                      baseTex.wrapT = THREE.ClampToEdgeWrapping;
+                      baseTex.colorSpace = THREE.LinearSRGBColorSpace;
+                      baseTexRef.current = baseTex;
+                      baseLayerIdRef.current = '__ftx_import__';
                       editor.initFields();
                       updateConfig({
                         injection: { ...config.injection, enabled: false },
