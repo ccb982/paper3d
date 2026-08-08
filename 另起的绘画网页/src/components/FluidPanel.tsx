@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
 import type { InjectionConfig } from '../fluid/FluidSolver';
@@ -87,6 +87,45 @@ export function FluidPanel() {
   const useWallMask = rt?.useWallMask ?? true;
 
   const sources = useMemo<InjectionConfig[]>(() => cfg?.continuousSources ?? [], [cfg]);
+
+  // ★ FTX 独立导入（不影响主画布，仅流体编辑器使用）
+  const ftxFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [ftxFrames, setFtxFrames] = useState<any[]>([]);
+  const [selectedFtxIndex, setSelectedFtxIndex] = useState(-1);
+
+  const handleFtxImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) { console.log('[FluidPanel:FTX] 用户取消选择'); return; }
+    console.log('[FluidPanel:FTX] 选择文件:', file.name, '大小:', file.size, '字节');
+    try {
+      let buffer = await file.arrayBuffer();
+      const raw = new Uint8Array(buffer);
+      const isGzip = raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b;
+      if (isGzip) {
+        const blob = new Blob([raw]);
+        const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+        buffer = await new Response(stream).arrayBuffer();
+      }
+      const { unpackMultiFrameFromBinary } = await import('../utils/binaryCompression');
+      const { decodeFrameToTextures } = await import('../utils/colorCompressor');
+      const { palette, frames } = unpackMultiFrameFromBinary(buffer);
+      if (frames.length === 0) { alert('FTX 文件不含任何帧'); return; }
+      const paletteSimple = palette.map(c => ({ h: c.h, s: c.s, l: c.l, id: 'id' in c ? (c as any).id : 0 }));
+      const decoded = frames.map((f: any, idx: number) => {
+        const { baseTexture, residualTexture } = decodeFrameToTextures({
+          ...f, blockFlags: BigInt(f.blockFlags),
+        } as any, paletteSimple as any);
+        return { id: `${Date.now()}_${idx}`, name: f.name || `帧 ${idx + 1}`, baseTexture, residualTexture, bbox: f.bbox, blockFlags: f.blockFlags };
+      });
+      setFtxFrames(decoded);
+      setSelectedFtxIndex(-1);
+      console.log(`[FluidPanel:FTX] 导入完成，共 ${decoded.length} 帧`);
+    } catch (err) {
+      console.error('[FluidPanel:FTX] 导入失败:', err);
+      alert('FTX 导入失败: ' + (err as Error).message);
+    }
+    e.target.value = '';
+  };
 
   // 隐藏文件输入（导入配置）
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -204,6 +243,32 @@ export function FluidPanel() {
         >
           {enabled ? '已启用' : '启用'}
         </button>
+      </div>
+
+      {/* ★ FTX 多帧导入（独立解析，不影响主画布） */}
+      <div style={SECTION}>
+        <span style={{ fontWeight: 'bold' }}>📥 FTX 多帧导入</span>
+        <input ref={ftxFileInputRef} type="file" accept=".ftx3.gz,.ftx3,.ftx" style={{ display: 'none' }} onChange={handleFtxImport} />
+        <button style={{ width: '100%', padding: '8px', marginTop: '6px', background: '#52c41a', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+          onClick={() => ftxFileInputRef.current?.click()}>
+          📦 导入 FTX 文件
+        </button>
+        <div style={{ fontSize: '10px', color: '#999', marginTop: '4px' }}>
+          独立解析 FTX 多帧数据（文件内调色板，不影响主画布），支持 .ftx3.gz / .ftx3
+        </div>
+        {ftxFrames.length > 0 && (
+          <div style={{ marginTop: '8px' }}>
+            <div style={{ fontSize: '11px', color: '#ccc', marginBottom: '4px' }}>帧选择（共 {ftxFrames.length} 帧）</div>
+            <div style={{ maxHeight: '120px', overflowY: 'auto', border: '1px solid #333', borderRadius: '4px' }}>
+              {ftxFrames.map((f, i) => (
+                <div key={f.id} onClick={() => setSelectedFtxIndex(i)}
+                  style={{ padding: '4px 8px', fontSize: '11px', cursor: 'pointer', background: i === selectedFtxIndex ? '#2c6ecb' : 'transparent', color: i === selectedFtxIndex ? '#fff' : '#ddd', borderBottom: '1px solid #222' }}>
+                  {i + 1}. {f.name}{i === selectedFtxIndex ? ' ●' : ''}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ★ 导入/导出流体配置（主要手段）：导入即启用并重置；导出可在 fluid-player.html 互换 */}
