@@ -24,7 +24,8 @@ export interface LoadOptions {
 export class Asset {
   readonly manifest: Manifest;
   readonly frames: PerFrameData[];
-  readonly frameTextures: THREE.DataTexture[];
+  readonly baseTextures: THREE.DataTexture[];
+  readonly residualTextures: THREE.DataTexture[];
   readonly annotations: PureAnnotationExport[];
   readonly resolution: number;
   readonly frameCount: number;
@@ -37,9 +38,12 @@ export class Asset {
     const multiFrame = decodeMultiFrame(raw.ftxBinary.buffer);
     const { palette, frames: ftxFrames } = multiFrame;
 
-    const frameTextures: THREE.DataTexture[] = [];
+    const baseTextures: THREE.DataTexture[] = [];
+    const residualTextures: THREE.DataTexture[] = [];
     for (const ftxFrame of ftxFrames) {
-      frameTextures.push(buildFrameTexture(ftxFrame, palette));
+      const { base, residual } = buildFrameTexture(ftxFrame, palette);
+      baseTextures.push(base);
+      residualTextures.push(residual);
     }
 
     for (let frameIdx = 0; frameIdx < raw.frames.length; frameIdx++) {
@@ -86,7 +90,8 @@ export class Asset {
 
     this.manifest = raw.manifest;
     this.frames = raw.frames;
-    this.frameTextures = frameTextures;
+    this.baseTextures = baseTextures;
+    this.residualTextures = residualTextures;
     this.annotations = raw.annotations?.annotations ?? [];
     this.resolution = resolution;
     this.frameCount = raw.manifest.totalFrames;
@@ -104,17 +109,19 @@ export class Asset {
     return ctrl;
   }
 
-  getFrameRenderData(index: number): { colorTexture: THREE.DataTexture; entities: EntityMeshData[] } | null {
+  getFrameRenderData(index: number): { baseTexture: THREE.DataTexture; residualTexture: THREE.DataTexture; entities: EntityMeshData[] } | null {
     if (index < 0 || index >= this.frames.length) return null;
     const fd = this.frames[index];
-    const colorTex = fd.textureIndex >= 0 && fd.textureIndex < this.frameTextures.length
-      ? this.frameTextures[fd.textureIndex] : this.frameTextures[0];
+    const baseTex = fd.textureIndex >= 0 && fd.textureIndex < this.baseTextures.length
+      ? this.baseTextures[fd.textureIndex] : this.baseTextures[0];
+    const resTex = fd.textureIndex >= 0 && fd.textureIndex < this.residualTextures.length
+      ? this.residualTextures[fd.textureIndex] : this.residualTextures[0];
     const entities: EntityMeshData[] = [];
     for (const ed of fd.regionEntities) {
       const m = this._entityMeshMap.get(`${index}:${ed.id}`);
       if (m) entities.push(m);
     }
-    return { colorTexture: colorTex, entities };
+    return { baseTexture: baseTex, residualTexture: resTex, entities };
   }
 
   disposeController(ctrl: FramePlaybackController): void { ctrl.dispose(); this._controllers.delete(ctrl); }
@@ -122,7 +129,8 @@ export class Asset {
   dispose(): void {
     for (const ctrl of this._controllers) ctrl.dispose();
     this._controllers.clear();
-    for (const tex of this.frameTextures) tex.dispose();
+    for (const tex of this.baseTextures) tex.dispose();
+    for (const tex of this.residualTextures) tex.dispose();
     for (const [, em] of this._entityMeshMap) {
       em.displacementTexture.dispose();
       em.mesh.geometry.dispose();
@@ -131,6 +139,7 @@ export class Asset {
       (em.fillMesh.material as THREE.Material).dispose();
     }
     this._entityMeshMap.clear();
-    this.frameTextures.length = 0;
+    this.baseTextures.length = 0;
+    this.residualTextures.length = 0;
   }
 }

@@ -116,7 +116,8 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform sampler2D uColorTex;
+      uniform sampler2D uBaseTexture;
+      uniform sampler2D uResidual;
       uniform vec2 uTexOffset;
       uniform vec2 uTexScale;
       varying vec2 vUv;
@@ -126,10 +127,18 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       }
       void main() {
         vec2 uv = (vUv - uTexOffset) / uTexScale;
-        vec4 hsl = texture2D(uColorTex, uv);
-        if (hsl.a < 0.5) discard;
-        vec3 rgb = hsl2rgb(hsl.r, hsl.g, hsl.b);
-        gl_FragColor = vec4(rgb, hsl.a);
+        vec4 base = texture2D(uBaseTexture, uv);
+        if (base.a < 0.5) discard;
+        vec4 res = texture2D(uResidual, uv);
+        // 残差统一 0.5 范围：d = (val*2-1)*0.5
+        float dH = (res.r * 2.0 - 1.0) * 0.5;
+        float dS = (res.g * 2.0 - 1.0) * 0.5;
+        float dL = (res.b * 2.0 - 1.0) * 0.5;
+        float finalH = fract(base.r + dH);
+        float finalS = clamp(base.g + dS, 0.0, 1.0);
+        float finalL = clamp(base.b + dL, 0.0, 1.0);
+        vec3 rgb = hsl2rgb(finalH, finalS, finalL);
+        gl_FragColor = vec4(rgb, base.a);
       }
     `,
     uniforms: {
@@ -138,7 +147,8 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       uFramesPerSecond: { value: 30 },
       uTotalFrames: { value: totalFrames },
       uVertexCount: { value: vertexCount },
-      uColorTex: { value: null },
+      uBaseTexture: { value: null },
+      uResidual: { value: null },
       uTexOffset: { value: new THREE.Vector2() },
       uTexScale: { value: new THREE.Vector2() },
     },
@@ -205,7 +215,7 @@ export function buildEntityMesh(
 }
 
 export function renderFrameData(
-  data: { colorTexture: THREE.DataTexture; entities: EntityMeshData[] },
+  data: { baseTexture: THREE.DataTexture; residualTexture: THREE.DataTexture; entities: EntityMeshData[] },
   animationTime: number,
   vatFps: number,
   transform: { position: { x: number; y: number; z: number }; scale: { x: number; y: number }; rotation: number },
@@ -241,7 +251,8 @@ export function renderFrameData(
     const cm = em.mesh.material as THREE.ShaderMaterial;
     cm.uniforms.uTime.value = animationTime;
     cm.uniforms.uFramesPerSecond.value = vatFps;
-    cm.uniforms.uColorTex.value = data.colorTexture;
+    cm.uniforms.uBaseTexture.value = data.baseTexture;
+    cm.uniforms.uResidual.value = data.residualTexture;
     (cm.uniforms.uTexOffset.value as THREE.Vector2).set(em.texBbox.x / em.frameWidth, em.texBbox.y / em.frameWidth);
     (cm.uniforms.uTexScale.value as THREE.Vector2).set(em.texBbox.w / em.frameWidth, em.texBbox.h / em.frameWidth);
     em.mesh.position.set(position.x, position.y, position.z);

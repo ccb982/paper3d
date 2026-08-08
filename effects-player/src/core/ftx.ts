@@ -136,11 +136,11 @@ export function decodeMultiFrame(buffer: ArrayBuffer): DecodedMultiFrame {
   return { palette, frames };
 }
 
-export function buildHslTextureData(
+export function buildBaseHslData(
   frame: FrameTextureData,
   palette: PaletteColor[],
 ): { data: Float32Array; width: number; height: number } | null {
-  const { bbox, regionIdTex, deltaPacked } = frame;
+  const { bbox, regionIdTex } = frame;
   const w = bbox.w;
   const h = bbox.h;
   if (w === 0 || h === 0) return null;
@@ -153,34 +153,68 @@ export function buildHslTextureData(
     const colorId = regionIdTex.length > 0 ? regionIdTex[i] : 0;
 
     if (colorId === 0) {
-      data[idx4] = 0;
-      data[idx4 + 1] = 0;
-      data[idx4 + 2] = 0;
       data[idx4 + 3] = 0;
     } else {
       const paletteIdx = colorId - 1;
       const base = paletteIdx < palette.length ? palette[paletteIdx] : { h: 0, s: 0, l: 0 };
-
-      let dh = 0, ds = 0, dl = 0;
-      if (deltaPacked.length > 0) {
-        const { s, h, l } = unpackRGB565(deltaPacked[i]);
-        const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
-        const range = getRangeForBlock(frame.blockFlags, blockIdx);
-        dh = dequantizeH(h, range);
-        ds = dequantizeS(s, range);
-        dl = dequantizeL(l, range);
-      }
-
-      let H = base.h + dh;
-      H = ((H % 1) + 1) % 1;
-      const S = Math.max(0, Math.min(1, base.s + ds));
-      const L = Math.max(0, Math.min(1, base.l + dl));
-
-      data[idx4] = H;
-      data[idx4 + 1] = S;
-      data[idx4 + 2] = L;
+      data[idx4] = base.h;
+      data[idx4 + 1] = base.s;
+      data[idx4 + 2] = base.l;
       data[idx4 + 3] = 1.0;
     }
+  }
+
+  return { data, width: w, height: h };
+}
+
+/**
+ * 生成残差纹理（Uint8，每通道 1 字节，统一 0.5 范围）。
+ * 0.25 范围的块转换为 0.5 等价值（与编辑器 adjustResidualForUniformRange 一致）：
+ *   8bit 空间: val' = val * 0.5 + 64
+ * 这样 GPU shader 统一按 range=0.5 反量化，残差可参与通道平流。
+ */
+export function buildResidualData(
+  frame: FrameTextureData,
+): { data: Uint8Array; width: number; height: number } | null {
+  const { bbox, deltaPacked, blockFlags } = frame;
+  const w = bbox.w;
+  const h = bbox.h;
+  if (w === 0 || h === 0) return null;
+
+  const totalPixels = w * h;
+  const data = new Uint8Array(totalPixels * 4);
+
+  if (deltaPacked.length === 0) {
+    // 无残差：值填中间（0.5 表示 delta=0）
+    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    return { data, width: w, height: h };
+  }
+
+  for (let i = 0; i < totalPixels; i++) {
+    const idx4 = i * 4;
+    const packed = deltaPacked[i];
+    const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+
+    // 每块实际 range
+    const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
+    const isSmall = (blockFlags & (1n << BigInt(blockIdx))) !== 0n;
+
+    // 8bit 归一化：qH(0-63)→0-255, qS/qL(0-31)→0-255
+    let r8 = Math.round((qH / 63) * 255);
+    let g8 = Math.round((qS / 31) * 255);
+    let b8 = Math.round((qL / 31) * 255);
+
+    if (isSmall) {
+      // 0.25 范围块 → 统一 0.5 范围等价转换（8bit: val' = val*0.5 + 64）
+      r8 = Math.round(r8 * 0.5 + 64);
+      g8 = Math.round(g8 * 0.5 + 64);
+      b8 = Math.round(b8 * 0.5 + 64);
+    }
+
+    data[idx4] = r8;
+    data[idx4 + 1] = g8;
+    data[idx4 + 2] = b8;
+    data[idx4 + 3] = 255;
   }
 
   return { data, width: w, height: h };
@@ -189,24 +223,34 @@ export function buildHslTextureData(
 export function buildFrameTexture(
   frame: FrameTextureData,
   palette: PaletteColor[],
-): THREE.DataTexture {
-  const hslData = buildHslTextureData(frame, palette);
-  if (!hslData) throw new Error('无法构建 HSL 数据');
+): { base: THREE.DataTexture; residual: THREE.DataTexture } {
+  const baseHsl = buildBaseHslData(frame, palette);
+  const residual = buildResidualData(frame);
+  if (!baseHsl || !residual) throw new Error('无法构建 HSL/残差数据');
 
-  const tex = new THREE.DataTexture(
-    hslData.data,
-    hslData.width,
-    hslData.height,
-    THREE.RGBAFormat,
-    THREE.FloatType,
+  const baseTex = new THREE.DataTexture(
+    baseHsl.data, baseHsl.width, baseHsl.height,
+    THREE.RGBAFormat, THREE.FloatType,
   );
-  tex.flipY = false;
-  tex.needsUpdate = true;
-  tex.minFilter = THREE.NearestFilter;
-  tex.magFilter = THREE.NearestFilter;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  return tex;
+  baseTex.flipY = false;
+  baseTex.needsUpdate = true;
+  baseTex.minFilter = THREE.NearestFilter;
+  baseTex.magFilter = THREE.NearestFilter;
+  baseTex.wrapS = THREE.ClampToEdgeWrapping;
+  baseTex.wrapT = THREE.ClampToEdgeWrapping;
+
+  const resTex = new THREE.DataTexture(
+    residual.data, residual.width, residual.height,
+    THREE.RGBAFormat, THREE.UnsignedByteType,
+  );
+  resTex.flipY = false;
+  resTex.needsUpdate = true;
+  resTex.minFilter = THREE.NearestFilter;
+  resTex.magFilter = THREE.NearestFilter;
+  resTex.wrapS = THREE.ClampToEdgeWrapping;
+  resTex.wrapT = THREE.ClampToEdgeWrapping;
+
+  return { base: baseTex, residual: resTex };
 }
 
 const ADAPTIVE_BLOCK_COLS = 8;
