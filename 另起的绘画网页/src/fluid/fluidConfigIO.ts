@@ -562,6 +562,7 @@ export function defaultFluidRuntime() {
     speed: 1,
     viewMode: 'composite' as const,
     frameCount: 0,
+    currentTime: 0,
     useWallMask: true,
     _needsReset: true,
   };

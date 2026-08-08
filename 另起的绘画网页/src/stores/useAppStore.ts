@@ -2974,6 +2974,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // 存入 frameDataMap（包含原始数据和预览纹理）
+      // ★ 构建 baseHslData（Float32 HSL，供 GPU 合成）：从 palette + regionIdTex 直接生成
+      const bboxW2 = frame.bbox.w;
+      const bboxH2 = frame.bbox.h;
+      const hslFloat = new Float32Array(bboxW2 * bboxH2 * 4);
+      const colorMapForHsl = new Map<number, SharedBaseColor>();
+      for (const c of currentPalette) colorMapForHsl.set(c.id, c);
+      for (let pi = 0; pi < mappedRegionIdTex.length; pi++) {
+        const cid = mappedRegionIdTex[pi];
+        if (cid === 0) continue;
+        const c = colorMapForHsl.get(cid);
+        if (!c) continue;
+        const p4 = pi * 4;
+        hslFloat[p4] = c.h;
+        hslFloat[p4 + 1] = c.s;
+        hslFloat[p4 + 2] = c.l;
+        hslFloat[p4 + 3] = 1.0;
+      }
       newFrameDataMap[layerId] = {
         id: layerId,
         rawRegionIdTex: mappedRegionIdTex,
@@ -2981,6 +2998,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawBbox: frame.bbox,
         rawBlockFlags: BigInt(frame.blockFlags),
         sourceResolution: frame.width,
+        baseHslData: { data: hslFloat, width: bboxW2, height: bboxH2 },
         baseTexture,
         residualTexture,
         boundRegionId: null,
@@ -3145,6 +3163,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // ★ 关键修复：使用原始纹理尺寸（sourceResolution），而非硬编码 512
     const texSize = frameData.sourceResolution || 512;
+    if (!frameData.rawDeltaPacked) {
+      console.warn(`[绑定] 图层 ${layerId} 没有残差数据`);
+      return;
+    }
     const fullBase = decodeFrameWithGlobalPalette(
       raw,
       frameData.rawDeltaPacked,
@@ -3323,7 +3345,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) return;
-    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: 'composite' as const, frameCount: 0 };
+    const rt = frameData.fluidRuntime ?? defaultFluidRuntime();
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
@@ -3336,7 +3358,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) return;
-    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: 'composite' as const, frameCount: 0 };
+    const rt = frameData.fluidRuntime ?? defaultFluidRuntime();
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
@@ -3349,7 +3371,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) return;
-    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: mode, frameCount: 0 };
+    const rt = frameData.fluidRuntime ?? defaultFluidRuntime();
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
@@ -3363,7 +3385,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const frameData = state.frameDataMap[layerId];
     if (!frameData) return;
-    const rt = frameData.fluidRuntime ?? { isPlaying: false, speed: 1, currentTime: 0, viewMode: 'composite' as const, frameCount: 0 };
+    const rt = frameData.fluidRuntime ?? defaultFluidRuntime();
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,

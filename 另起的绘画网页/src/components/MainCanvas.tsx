@@ -7,7 +7,6 @@ import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact, BFS_WORLD_BOUNDS, type DebugRegionData } from '../utils/regionDetectionExact';
 import { findRegionByPoint, findRegionIndexByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
-import { bfsHueClustering, rasterizeRegionMask } from '../utils/colorCompressor';
 import { computeAllDashedClosedRegions, findRegionAtPoint, findRegionById, DashedSubRegion } from '../utils/colorExtractionUtils';
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
 import earcut from 'earcut';
@@ -638,6 +637,7 @@ const TOTAL_FRAMES = 60;
 useEffect(() => {
   const group = rootGroupRef.current;
   if (!group) return;
+  if (!activeLayerId) return;
 
   while (group.children.length > 0) {
     const child = group.children[0];
@@ -1291,6 +1291,7 @@ useEffect(() => {
   // 新增辅助函数：获取虚线所在区域的完整多边形
   const getRegionPolygonFromPoints = useCallback((points: Point[]): Point[][] | null => {
     if (points.length < 3) return null;
+    if (!activeLayerId) return null;
     
     // 计算重心（或使用第一个点）
     let cx = 0, cy = 0;
@@ -1319,6 +1320,7 @@ useEffect(() => {
 
   // 新增辅助函数：通过区域ID获取区域多边形
   const getRegionPolygonById = useCallback((regionId: number): Point[][] | null => {
+    if (!activeLayerId) return null;
     const regionsCache = regionPolygonsCache[activeLayerId];
     if (!regionsCache || regionId < 0 || regionId >= regionsCache.length) {
       console.log('[颜色提取] 区域缓存不存在或索引超出范围，regionId:', regionId);
@@ -2865,7 +2867,7 @@ useEffect(() => {
 
     // ========== 绘制固定顶点 ==========
     if (isVertexPinMode || layerVisibility.regionLayer) {
-      const entities = regionEntities[activeLayerId] || [];
+      const entities = activeLayerId ? (regionEntities[activeLayerId] || []) : [];
       for (const entity of entities) {
         if (entity.fixedVertices.size === 0) continue;
         let globalIdx = 0;
