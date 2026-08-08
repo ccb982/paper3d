@@ -2651,6 +2651,7 @@ export const FluidEditorUI: React.FC = () => {
         uniform int uScalarMode;         // 0=vector（残差直接加），1=scalar（残差×density×mul）
         uniform int uCombineMode;        // 0=add(基础色+增量), 1=sub(基础色-增量)，仅scalar生效
         uniform vec4 uChannels;          // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差值
+        uniform float uDebugResidual;    // ★ 调试：1=直接输出残差纹理
         varying vec2 vUv;
 
         vec3 hsl_to_rgb(vec3 hsl) {
@@ -3555,7 +3556,9 @@ export const FluidEditorUI: React.FC = () => {
     // ★ 分辨率 = bbox 尺寸（内容只占 bbox，solver 直接按 bbox 建场）
     const bboxW = bbox.w;
     const bboxH = bbox.h;
+    console.log('[FTX加载] 当前config.resolution:', config.resolution.w, 'x', config.resolution.h, '目标:', bboxW, 'x', bboxH);
     if (config.resolution.w !== bboxW || config.resolution.h !== bboxH) {
+      console.log('[FTX加载] 更新 resolution →', bboxW, 'x', bboxH);
       updateConfig({ resolution: { w: bboxW, h: bboxH } });
     }
     const solverRes = { w: bboxW, h: bboxH };
