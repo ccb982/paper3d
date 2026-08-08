@@ -193,20 +193,12 @@ export function buildFrameTexture(
   const hslData = buildHslTextureData(frame, palette);
   if (!hslData) throw new Error('无法构建 HSL 数据');
 
-  const bytes = new Uint8Array(hslData.data.length);
-  for (let i = 0; i < hslData.data.length; i++) {
-    bytes[i] = Math.round(Math.max(0, Math.min(1, hslData.data[i])) * 255);
-  }
-  for (let i = 3; i < bytes.length; i += 4) {
-    bytes[i] = 255;
-  }
-
   const tex = new THREE.DataTexture(
-    bytes,
+    hslData.data,
     hslData.width,
     hslData.height,
     THREE.RGBAFormat,
-    THREE.UnsignedByteType,
+    THREE.FloatType,
   );
   tex.flipY = false;
   tex.needsUpdate = true;

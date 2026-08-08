@@ -126,7 +126,8 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       }
       void main() {
         vec2 uv = (vUv - uTexOffset) / uTexScale;
-        vec4 hsl = texture2D(uColorTex, uv) / 255.0;
+        vec4 hsl = texture2D(uColorTex, uv);
+        if (hsl.a < 0.5) discard;
         vec3 rgb = hsl2rgb(hsl.r, hsl.g, hsl.b);
         gl_FragColor = vec4(rgb, hsl.a);
       }
@@ -173,17 +174,23 @@ export function buildEntityMesh(
   fillGeo.setAttribute('position', new THREE.BufferAttribute(positions, 2));
   fillGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   fillGeo.setIndex(indices);
+  fillGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0.5, 0.5, 0), 1);
+  fillGeo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, -0.01), new THREE.Vector3(1, 1, 0.01));
 
   const fillMat = makeFillMaterial(displacementTexture, vc, totalFrames);
   const fillMesh = new THREE.Mesh(fillGeo, fillMat);
+  fillMesh.frustumCulled = false;
 
   const colorGeo = new THREE.BufferGeometry();
   colorGeo.setAttribute('position', new THREE.BufferAttribute(positions.slice(), 2));
   colorGeo.setAttribute('uv', new THREE.BufferAttribute(uvs.slice(), 2));
   colorGeo.setIndex([...indices]);
+  colorGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0.5, 0.5, 0), 1);
+  colorGeo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, -0.01), new THREE.Vector3(1, 1, 0.01));
 
   const colorMat = makeColorMaterial(displacementTexture, vc, totalFrames);
   const mesh = new THREE.Mesh(colorGeo, colorMat);
+  mesh.frustumCulled = false;
 
   return {
     entity,
