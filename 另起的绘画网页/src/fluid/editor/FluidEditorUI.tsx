@@ -3466,12 +3466,15 @@ export const FluidEditorUI: React.FC = () => {
                   {ftxFrames.map((f, i) => (
                     <div key={i} onClick={() => {
                       setSelectedFtxIndex(i);
-                      // ★ 加载选中帧到流体编辑器
                       if (!editor) return;
-                      const palette = f._palette;
-                      const { rawRegionIdTex, rawDeltaPacked, rawBbox, rawBlockFlags, width: sourceResolution } = f;
+                      const palette = f._palette as { h: number; s: number; l: number; id: number }[];
+                      const regionIdTex = f.regionIdTex as Uint8Array;
+                      const deltaPacked = f.deltaPacked as Uint16Array;
+                      const bbox = f.bbox as { x: number; y: number; w: number; h: number };
+                      const blockFlags = f.blockFlags as bigint;
+                      const sourceResolution = f.width as number;
                       const { baseHslData, baseTexture: newBase, residualTexture: newResidual } = buildFluidTexturesFromRawFrame(
-                        { rawRegionIdTex, rawDeltaPacked, rawBbox, rawBlockFlags: BigInt(rawBlockFlags), sourceResolution },
+                        { rawRegionIdTex: regionIdTex, rawDeltaPacked: deltaPacked, rawBbox: bbox, rawBlockFlags: blockFlags, sourceResolution },
                         palette,
                       );
                       const texSize = sourceResolution || 512;
@@ -3492,7 +3495,7 @@ export const FluidEditorUI: React.FC = () => {
                         enableAdvection: false,
                         colorBoundaryMode: 'clamp',
                       });
-                      const adjustedResidual = adjustResidualForUniformRange(newResidual, rawBbox, BigInt(rawBlockFlags));
+                      const adjustedResidual = adjustResidualForUniformRange(newResidual, bbox, blockFlags);
                       editor.initializeColorFromImageData(adjustedResidual);
                       setTimeout(() => { updateConfig({ enableAdvection: true }); }, 100);
                       setView('composite');
