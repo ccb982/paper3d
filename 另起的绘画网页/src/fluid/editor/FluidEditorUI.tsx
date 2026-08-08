@@ -3371,9 +3371,34 @@ export const FluidEditorUI: React.FC = () => {
     };
   };
 
-  // ==================== FTX 帧数据 → 流体编辑器加载 ====================
-  /** 从原始 FTX 数据独立生成纹理并加载到流体编辑器 */
-  const loadFrameResidual = () => {
+  // ★ FTX 自主文件导入状态
+  const ftxFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [ftxFrames, setFtxFrames] = useState<any[]>([]);
+  const [selectedFtxIndex, setSelectedFtxIndex] = useState(-1);
+
+  const handleFtxFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      let buffer = await file.arrayBuffer();
+      const raw = new Uint8Array(buffer);
+      const isGzip = raw.length >= 2 && raw[0] === 0x1f && raw[1] === 0x8b;
+      if (isGzip) {
+        const blob = new Blob([raw]);
+        const stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+        buffer = await new Response(stream).arrayBuffer();
+      }
+      const { unpackMultiFrameFromBinary } = await import('../../utils/binaryCompression');
+      const { palette: ftxPalette, frames: ftxRawFrames } = unpackMultiFrameFromBinary(buffer);
+      if (ftxRawFrames.length === 0) { alert('FTX 文件不含任何帧'); return; }
+      setFtxFrames(ftxRawFrames.map((f: any, i: number) => ({ ...f, _palette: ftxPalette })));
+      setSelectedFtxIndex(-1);
+    } catch (err) {
+      console.error('[FluidEditor] FTX导入失败:', err);
+      alert('导入失败: ' + (err as Error).message);
+    }
+    e.target.value = '';
+  };
     if (!editor) return;
 
     const state = useAppStore.getState();
@@ -3519,19 +3544,65 @@ export const FluidEditorUI: React.FC = () => {
             <span>📥 FTX 帧导入</span>
           </div>
           <div className="panel-body">
+            <input ref={ftxFileInputRef} type="file" accept=".ftx3.gz,.ftx3,.ftx" style={{ display: 'none' }} onChange={handleFtxFileImport} />
             <button
-              onClick={loadFrameResidual}
+              onClick={() => ftxFileInputRef.current?.click()}
               style={{
                 width: '100%', padding: '8px',
                 background: '#52c41a', color: '#fff', border: 'none',
                 borderRadius: '4px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
               }}
             >
-              🔄 加载当前帧残差
+              📦 导入 FTX 文件
             </button>
             <div style={{ fontSize: '10px', color: '#999', marginTop: '4px' }}>
-              从主画布当前活动图层加载残差纹理，切换到「合成」视图查看效果
+              手动选择 .ftx3.gz 文件，独立解析帧数据（不影响主画布）
             </div>
+            {ftxFrames.length > 0 && (
+              <div style={{ marginTop: '8px' }}>
+                <div style={{ fontSize: '11px', color: '#ccc', marginBottom: '4px' }}>帧选择（共 {ftxFrames.length} 帧）</div>
+                <div style={{ maxHeight: '120px', overflowY: 'auto', border: '1px solid #333', borderRadius: '4px' }}>
+                  {ftxFrames.map((f, i) => (
+                    <div key={i} onClick={() => {
+                      setSelectedFtxIndex(i);
+                      // ★ 加载选中帧到流体编辑器
+                      if (!editor) return;
+                      const palette = f._palette;
+                      const { rawRegionIdTex, rawDeltaPacked, rawBbox, rawBlockFlags, width: sourceResolution } = f;
+                      const { baseHslData, baseTexture: newBase, residualTexture: newResidual } = buildFluidTexturesFromRawFrame(
+                        { rawRegionIdTex, rawDeltaPacked, rawBbox, rawBlockFlags: BigInt(rawBlockFlags), sourceResolution },
+                        palette,
+                      );
+                      const texSize = sourceResolution || 512;
+                      if (config.resolution.w !== texSize || config.resolution.h !== texSize) {
+                        updateConfig({ resolution: { w: texSize, h: texSize } });
+                      }
+                      stashedResidualRef.current = new ImageData(new Uint8ClampedArray(newResidual.data), newResidual.width, newResidual.height);
+                      stashedResidualWRef.current = newResidual.width;
+                      stashedResidualHRef.current = newResidual.height;
+                      stashedBaseHslRef.current = new Float32Array(baseHslData.data);
+                      stashedBaseRef.current = new ImageData(new Uint8ClampedArray(newBase.data), newBase.width, newBase.height);
+                      stashedBaseWRef.current = newBase.width;
+                      stashedBaseHRef.current = newBase.height;
+                      editor.initFields();
+                      updateConfig({
+                        injection: { ...config.injection, enabled: false },
+                        gravity: { x: 0, y: 0 },
+                        enableAdvection: false,
+                        colorBoundaryMode: 'clamp',
+                      });
+                      const adjustedResidual = adjustResidualForUniformRange(newResidual, rawBbox, BigInt(rawBlockFlags));
+                      editor.initializeColorFromImageData(adjustedResidual);
+                      setTimeout(() => { updateConfig({ enableAdvection: true }); }, 100);
+                      setView('composite');
+                    }}
+                      style={{ padding: '4px 8px', fontSize: '11px', cursor: 'pointer', background: i === selectedFtxIndex ? '#2c6ecb' : 'transparent', color: i === selectedFtxIndex ? '#fff' : '#ddd', borderBottom: '1px solid #222' }}>
+                      {i + 1}. {f.name || `帧 ${i + 1}`}{i === selectedFtxIndex ? ' ●' : ''}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
