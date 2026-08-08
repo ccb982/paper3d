@@ -7,9 +7,9 @@ import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
-import { hslToRgb, clusterAndGenerateTexturesV2 } from '../utils/colorCompressor';
+import { hslToRgb, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
 import { RegionEntity } from '../core/RegionEntity';
-import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime } from '../fluid/fluidConfigIO';
+import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime, mapSourcesIntoRegion, inverseMapSourcesFromRegion } from '../fluid/fluidConfigIO';
 import { regionWorkerPool } from './regionWorkerPool';
 import type { RegionDetectionRequest, RegionDetectionResponse } from '../types/regionWorker';
 
@@ -420,6 +420,7 @@ interface AppState {
   setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
   syncGlobalBboxFromCurrentFrame: () => void;
   setNextColorId: (nextId: number) => void;
+  compressLayerColorsForExport: () => any;
   addColorToGlobal: (color: { h: number; s: number; l: number }, frameId: string) => number;
   updateColorInGlobal: (id: number, color: { h: number; s: number; l: number }, sourceFrameId?: string) => void;
   recalculateAllAreas: () => void;
@@ -454,6 +455,8 @@ interface AppState {
   importFluidConfig: (layerId: string, json: any) => boolean;
   /** 导出当前流体配置为外部 JSON 格式（fluid-player.html 可读）；无配置返回 null */
   exportFluidConfig: (layerId: string) => any;
+  setFluidUseWallMask: (layerId: string, useWallMask: boolean) => void;
+  importMultiFrameFluidConfig: (json: any) => number;
 }
 
 const defaultAxis: AxisConfig = {
@@ -2797,6 +2800,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
     }));
   },
+  compressLayerColorsForExport: () => {
+    const state = get();
+    const frame = state.skillGroupEditor.frames.find((f) => f.id === state.skillGroupEditor.activeFrameId) ?? null;
+    return compressLayerColors({ frame, palette: state.sharedBaseColors });
+  },
   addColorToGlobal: (color, frameId) => {
     return get().addColorToPalette(color, frameId);
   },
@@ -3400,6 +3408,80 @@ export const useAppStore = create<AppState>((set, get) => ({
     const frameData = state.frameDataMap[layerId];
     if (!frameData?.fluidConfig) return null;
     return serializeFluidConfigToJSON(frameData.fluidConfig);
+  },
+
+  setFluidUseWallMask: (layerId: string, useWallMask: boolean) => {
+    const state = get();
+    const fd = state.frameDataMap[layerId];
+    if (!fd) return;
+    const fr = fd.fluidRuntime ?? defaultFluidRuntime();
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: { ...fd, fluidRuntime: { ...fr, useWallMask } },
+      },
+    }));
+  },
+
+  importMultiFrameFluidConfig: (json: any) => {
+    const frames = Array.isArray(json?.frames) ? json.frames : null;
+    if (!frames || frames.length === 0) return 0;
+    const state = get();
+    const bgLayerId = state.imageState.imageLayerId;
+    const layers = state.layers
+      .filter((l) => l.id !== bgLayerId && state.frameDataMap[l.id])
+      .sort((a, b) => (a.displayId || 0) - (b.displayId || 0));
+    let count = 0;
+    const newMap = { ...state.frameDataMap };
+    for (let i = 0; i < frames.length; i++) {
+      const entry = frames[i];
+      const recipe = entry && typeof entry === 'object' && entry.recipe ? entry.recipe : entry;
+      if (!recipe || typeof recipe !== 'object') continue;
+      const physics = recipe.physics && typeof recipe.physics === 'object' ? recipe.physics : recipe;
+      if (!physics || typeof physics !== 'object') continue;
+      const layer = layers[i];
+      if (!layer) continue;
+      const fd = newMap[layer.id];
+      if (!fd) continue;
+      const res: { w: number; h: number } = fd.boundResidualTexture?.width
+        ? { w: fd.boundResidualTexture.width, h: fd.boundResidualTexture.height }
+        : fd.boundBaseTexture?.width
+          ? { w: fd.boundBaseTexture.width, h: fd.boundBaseTexture.height }
+          : { w: fd.sourceResolution || 512, h: fd.sourceResolution || 512 };
+      const cfg = parseImportedFluidConfig(physics, res);
+      cfg.resolution = { ...res };
+      const srcRes = physics?.resolution
+        ? typeof physics.resolution === 'number'
+          ? { w: physics.resolution, h: physics.resolution }
+          : { w: Number(physics.resolution.w), h: Number(physics.resolution.h) }
+        : undefined;
+      const sameRes = !!srcRes && Math.abs(srcRes.w - (fd.sourceResolution || 512)) < 1
+        && Math.abs(srcRes.h - (fd.sourceResolution || 512)) < 1;
+      if (cfg.continuousSources) {
+        cfg.continuousSources = mapSourcesIntoRegion(cfg.continuousSources, {
+          x: (fd.rawBbox?.x ?? 0), y: (fd.rawBbox?.y ?? 0),
+          w: (fd.rawBbox?.w ?? res.w), h: (fd.rawBbox?.h ?? res.h),
+        });
+      }
+      let space: any = sameRes ? { kind: 'bbox-local' } : null;
+      const entities = state.regionEntities[layer.id] || [];
+      const boundEntity = entities.find((e) => e.id === fd.boundRegionId);
+      if (sameRes && boundEntity?.worldBbox) {
+        if (cfg.continuousSources) {
+          cfg.continuousSources = inverseMapSourcesFromRegion(cfg.continuousSources, boundEntity.worldBbox);
+        }
+        space = { kind: 'region', regionId: boundEntity.id, bbox: { ...boundEntity.worldBbox } };
+      }
+      newMap[layer.id] = {
+        ...fd,
+        fluidConfig: cfg,
+        fluidRuntime: { ...defaultFluidRuntime(), isPlaying: true },
+        fluidSourceSpace: space,
+      };
+      count++;
+    }
+    set({ frameDataMap: newMap });
+    return count;
   },
 
 }));
