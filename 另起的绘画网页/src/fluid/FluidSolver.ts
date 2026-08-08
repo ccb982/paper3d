@@ -880,6 +880,18 @@ export class FluidSolver {
           `color=${src.color ? `[${src.color.map(c => c.toFixed(2)).join(',')}]` : '无'} ` +
           `density=${src.density ?? '-'} rate=${src.rate ?? '-'} wave=${src.wave?.enabled ? 'ON' : 'OFF'} wps=${src.waypoints?.length ?? 0}`);
       }
+      // ★ 调试：读回速度场/密度场（确认注入是否生效）
+      try {
+        const vW = cfg.resolution.w;
+        const vH = cfg.resolution.h;
+        const velBuf = new Float32Array(4);
+        this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, Math.floor(vW / 2), Math.floor(vH / 2), 1, 1, velBuf);
+        const denBuf = new Float32Array(4);
+        this.renderer.readRenderTargetPixels(this.densityGrid.readTarget, Math.floor(vW / 2), Math.floor(vH / 2), 1, 1, denBuf);
+        console.log(`[FluidSolver]   读回 中心像素: vel=(${velBuf[0].toFixed(2)},${velBuf[1].toFixed(2)}) density=${denBuf[0].toFixed(3)}`);
+      } catch (e) {
+        console.warn('[FluidSolver] 读回失败:', e);
+      }
     }
 
     // 0. 一次性注入队列（优先执行，本帧生效）
