@@ -2631,6 +2631,7 @@ export const FluidEditorUI: React.FC = () => {
         uScalarMode: { value: 0 },                                  // 0=vector, 1=scalar
         uCombineMode: { value: 0 },                                 // 0=add(基础色+增量), 1=sub(基础色-增量)
         uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },        // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差
+        uDebugResidual: { value: 0 },                                // ★ 调试：1=直接输出残差纹理
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -2709,6 +2710,11 @@ export const FluidEditorUI: React.FC = () => {
 
           // 只在最后一步转 RGB 用于显示
           vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
+          if (uDebugResidual > 0.5) {
+            // ★ 调试：直接输出残差纹理（R=qH, G=qS, B=qL 归一化值）
+            gl_FragColor = vec4(residual.rgb, 1.0);
+            return;
+          }
           gl_FragColor = vec4(finalRGB, finalA);
         }
       `,
@@ -3165,6 +3171,7 @@ export const FluidEditorUI: React.FC = () => {
         compositeMat.uniforms.uResidual.value = editor.getColorTexture();
         compositeMat.uniforms.uResidualRangeH.value = residualRangeHRef.current;
         compositeMat.uniforms.uResidualRangeSL.value = residualRangeSLRef.current;
+        compositeMat.uniforms.uDebugResidual.value = (window as any).__DBG_RESIDUAL ? 1 : 0;
         if ((window as any).__dbgFTX === undefined) {
           (window as any).__dbgFTX = 1;
           console.log('[FTX复合] baseTex:', baseTexRef.current, '残差纹理尺寸:', (editor.getColorTexture() as any)?.image?.width ?? '?');
