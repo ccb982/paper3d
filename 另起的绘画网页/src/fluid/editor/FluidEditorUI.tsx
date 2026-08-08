@@ -3835,12 +3835,9 @@ export const FluidEditorUI: React.FC = () => {
           <span style={{ minWidth: '44px', textAlign: 'center' }}>{Math.round(previewZoom * 100)}%</span>
           <button onClick={() => setPreviewZoom(z => Math.min(8, +(z + 0.25).toFixed(2)))}
             style={{ ...zoomBtnStyle }} title="放大">+</button>
-          <button onClick={() => setPreviewZoom(1)} style={{ ...zoomBtnStyle }} title="重置缩放">1:1</button>
-          <button onClick={() => {
-            const next = !panModeRef.current;
-            setPanMode(next);
-            if (next) setPreviewPan({ x: 0, y: 0 });  // 进入平移模式时重置偏移
-          }}
+          <button onClick={() => { setPreviewZoom(1); setPreviewPan({ x: 0, y: 0 }); }}
+            style={{ ...zoomBtnStyle }} title="重置缩放和平移">1:1</button>
+          <button onClick={() => setPanMode(m => !m)}
             style={{ ...zoomBtnStyle, background: panMode ? '#2c6ecb' : '#333', cursor: 'pointer' }}
             title="拖动画布移动纹理显示">
             {panMode ? '拖动中' : '🖐 平移'}
