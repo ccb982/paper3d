@@ -45,7 +45,33 @@ export interface SerializedRegionEntity {
 }
 
 export interface PhysicsConfig {
-  advectionMode?: string;
+  enableAdvection?: boolean;
+  enablePressure?: boolean;
+  pressureIterations?: number;
+  pressureOmega?: number;
+  pressureBoundaryMode?: 'dirichlet' | 'neumann';
+  enableWarmStart?: boolean;
+  advectionMode?: 'vector' | 'scalar';
+  combineMode?: 'add' | 'sub';
+  channels?: { r?: boolean; g?: boolean; b?: boolean; a?: boolean; h?: boolean; s?: boolean; l?: boolean };
+  scalarConfig?: {
+    hMultiplier?: number;
+    sMultiplier?: number;
+    lMultiplier?: number;
+    aMultiplier?: number;
+    baselineDensity?: number;
+    decayRate?: number;
+  };
+  levelSetConfig?: {
+    enabled?: boolean;
+    reinitIterations?: number;
+    surfaceTension?: number;
+    smoothingRadius?: number;
+  };
+  gravity?: { x: number; y: number };
+  velocityScale?: number;
+  maxVelocity?: number;
+  colorBoundaryMode?: 'clamp' | 'repeat' | 'zero';
   resolution?: { w: number; h: number };
   continuousSources?: Array<{
     enabled?: boolean;
@@ -58,6 +84,7 @@ export interface PhysicsConfig {
     wave?: { enabled: boolean; amplitude?: number; frequency?: number; speed?: number };
     waypoints?: Array<{ x: number; y: number }>;
   }>;
+  obstacle?: { width: number; height: number; data: string };
 }
 
 export interface PerFrameData {

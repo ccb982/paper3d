@@ -9,9 +9,6 @@ import { FluidInjector } from './core/FluidInjector';
 // 类型定义
 // ============================================================
 
-/** 视口模式（与编辑器一致，但本解算器主要用于 composite 输出） */
-export type FluidViewMode = 'color' | 'velocity' | 'composite' | 'density' | 'obstacle';
-
 /** 持续注入源 / 一次性注入配置 */
 export interface InjectionConfig {
   enabled: boolean;
@@ -21,9 +18,7 @@ export interface InjectionConfig {
   color?: [number, number, number, number];    // HSLA (vector 模式注入颜色)
   density?: number;                            // 0~1 (scalar 模式注入浓度)
   rate?: number;                               // 混合率 0~1
-  /** 波形方向控制 */
   wave?: { enabled: boolean; amplitude: number; frequency: number; phase?: number };
-  /** 路径点巡游 */
   waypoints?: { x: number; y: number }[];
   waypointMode?: 'forward' | 'backward' | 'pingpong';
   waypointSpeed?: number;
@@ -54,16 +49,12 @@ export interface FluidSolverConfig {
   };
   /** Level Set 模块配置（轻量化，默认关闭） */
   levelSetConfig: {
-    enabled: boolean;            // 总开关
-    reinitIterations: number;    // 重初始化迭代次数（默认 2）
-    surfaceTension: number;      // 表面张力系数 σ（0=禁用）
-    smoothingRadius: number;     // 表面张力作用半径（像素）
+    enabled: boolean;
+    reinitIterations: number;
+    surfaceTension: number;
+    smoothingRadius: number;
   };
   continuousSources: InjectionConfig[];
-  /**
-   * 墙体掩码（1 bit/像素位图压缩，data = base64）。
-   * 主绘画页面导入多帧物理配置时可选携带；存在时优先于区域边界光栅化。
-   */
   obstacle?: { width: number; height: number; data: string };
 }
 
@@ -110,23 +101,20 @@ interface WaypointState {
 }
 
 // ============================================================
-// FluidSolver —— 轻量解算器门面（主编辑器版）
+// FluidSolver —— 轻量解算器门面（播放器版）
 // ============================================================
 //
-// 设计要点（对照 fluid-player.html 移植，携带 4 个关键 bug 修复）：
-//   1. GPU Pass 的 Y-flip 约定：复用的 GPUOps/AdvectionSolver 已用 vUv=uv（不翻转 Y）；
-//      只有 composite() 显示着色器用 vUv=vec2(uv.x,1.0-uv.y)。切勿在 GPU Pass 翻转。
-//   2. 压力 SOR 散度公式：div = (vR.x-vL.x)*0.5*uInvRes.x + ...（乘 invRes，不是除）。
-//   3. clearGrid 用 renderer.clear()，不用 shader 输出 vec4(0)（单通道密度场可能清不干净）。
-//   4. 残差原始数据永不被消耗：_pendingResidual 上传后不置 null，供 reset / 重新加载恢复。
+// 移植自主编辑器 FluidSolver（另起的绘画网页），保留全部物理语义：
+//   - GPU Pass 使用 vUv=uv（不翻转 Y）；composite() 渲染到内部 RenderTarget
+//   - 压力 SOR 散度公式：div = (vR.x-vL.x)*0.5*uInvRes.x + ...（乘 invRes）
+//   - clearGrid 用 renderer.clear()（单通道密度场安全）
+//   - 残差原始数据永不被消耗：_pendingResidual 上传后不置 null
 //
-// 与 fluid-player.html 的差异：
-//   - 不自建 canvas/renderer，直接接收主画布的 WebGLRenderer。
-//   - composite() 渲染到内部 RenderTarget（不直接上屏），由 MainCanvas 把
-//     getCompositeTexture() 喂给区域 COLOR mesh 的 uColorTex，复用模板缓冲裁剪 +
-//     VAT 位移 + textureOffset/Scale/Rotation，让流体直接绘制在区域帧纹理之上。
-//   - 复用底层 core 类（FluidGrid/GPUOps/AdvectionSolver/FluidInjector），不引入
-//     FluidEditor/FluidOperations/FluidEditorUI。
+// 播放器用法：
+//   - loadResidual(residualData, w, h)：上传量化残差（RGBA Uint8，R=H 量化 6bit 等）
+//   - setBaseHsl(data, w, h)：上传 Float32 HSLA 基础色（MCSDA 合成）
+//   - step(dt)：单步模拟；composite()：产出合成纹理
+//   - getCompositeTexture()：喂给渲染网格的 uColorTex
 export class FluidSolver {
   private renderer: THREE.WebGLRenderer;
   private gpu: GPUOps;
@@ -155,7 +143,7 @@ export class FluidSolver {
   // 障碍物纹理（从区域实体 boundary 光栅化而来）
   private obstacleTex: THREE.Texture | null = null;
 
-  // 合成输出目标（每帧 composite() 写入，MainCanvas 读取其 texture）
+  // 合成输出目标（每帧 composite() 写入，渲染层读取其 texture）
   private compositeTarget: THREE.WebGLRenderTarget | null = null;
   private compositeScene: THREE.Scene;
   private compositeCamera: THREE.OrthographicCamera;
@@ -190,7 +178,7 @@ export class FluidSolver {
     this.levelSetSolver = new LevelSetSolver(renderer, this.gpu);
     this.injector = new FluidInjector(renderer, this.gpu);
 
-    // 合成场景（全屏四边形，Y-flip 用于显示）
+    // 合成场景（全屏四边形）
     this.compositeScene = new THREE.Scene();
     this.compositeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.compositeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
@@ -199,7 +187,6 @@ export class FluidSolver {
     this.rebuildGrids();
     this.initFields();
 
-    // ★ 若配置启用 Level Set，立即初始化 φ 场
     if (this.config.levelSetConfig?.enabled) {
       this.enableLevelSet();
     }
@@ -229,14 +216,12 @@ export class FluidSolver {
     this.pressureGrid = new FluidGrid({ w, h }, 1, 'half-float');
     this.densityGrid = new FluidGrid({ w, h }, 1, 'uint8');
 
-    // ★ Level Set φ 场同步重建（仅当已存在时）
     if (this._phiGrid) {
       this._phiGrid.dispose();
       this._phiGrid = new FluidGrid({ w, h }, 1, 'half-float');
       this.initPhiField();
     }
 
-    // 重建合成目标（分辨率跟随）
     this.compositeTarget?.dispose();
     this.compositeTarget = new THREE.WebGLRenderTarget(w, h, {
       format: THREE.RGBAFormat,
@@ -248,23 +233,20 @@ export class FluidSolver {
       depthBuffer: false,
       stencilBuffer: false,
     });
-    // ★ 不设置 colorSpace：WebGLRenderTarget 默认 NoColorSpace，
-    //   ShaderMaterial 采样时不会注入颜色空间转换。
   }
 
   // ==================== 数据加载 ====================
 
   /**
-   * 上传残差 ImageData 到 colorGrid。
-   * 期望格式（与编辑器 buildFluidTexturesFromRawFrame 一致）：
+   * 上传量化残差到 colorGrid。
+   * 期望格式（RGBA Uint8）：
    *   R = qH/63*255, G = qS/31*255, B = qL/31*255, A = 255
    * 合成着色器反量化：dH = (r/255 * 2 - 1) * uResidualRangeH（uResidualRangeH=0.5）
    */
-  loadResidual(imageData: ImageData): void {
-    const data = new Uint8Array(imageData.data.buffer.slice(0));
-    this._pendingResidual = data;
-    this._residualWidth = imageData.width;
-    this._residualHeight = imageData.height;
+  loadResidual(data: Uint8Array, width: number, height: number): void {
+    this._pendingResidual = new Uint8Array(data);
+    this._residualWidth = width;
+    this._residualHeight = height;
     this.uploadResidualToColorGrid();
   }
 
@@ -282,7 +264,6 @@ export class FluidSolver {
     tex.flipY = false;
     tex.needsUpdate = true;
 
-    // copy pass：DataTexture → colorGrid（GPUOps 已用 vUv=uv，与 DataTexture flipY=false 对齐）
     const mat = this.gpu.getMaterial('fluid_copy_residual', {
       uTex: { value: tex },
     }, `
@@ -299,7 +280,6 @@ export class FluidSolver {
 
   /**
    * 设置基础色 HSL 浮点纹理（FloatType RGBA，HSLA 0~1）。
-   * 用于合成视口的 base + delta ± density 调制。
    */
   setBaseHsl(data: Float32Array, width: number, height: number): void {
     if (width <= 0 || height <= 0 || data.length < width * height * 4) {
@@ -346,43 +326,25 @@ export class FluidSolver {
 
   // ==================== Level Set 公共 API ====================
 
-  /**
-   * 启用 Level Set 演化（热插拔开）。
-   * 首次调用时懒加载创建 phiGrid 并初始化 φ 场。
-   */
   enableLevelSet(): void {
     if (!this.config.levelSetConfig) return;
     this.config.levelSetConfig.enabled = true;
-    // 触发 phiGrid getter 创建并初始化（赋值给 _ 避免无副作用表达式警告）
     const _ = this.phiGrid;
     void _;
-    console.log('[FluidSolver] Level Set 已启用');
   }
 
-  /**
-   * 禁用 Level Set 演化（热插拔关）。
-   * 释放 phiGrid 显存，后续 step() 跳过所有 Level Set 计算。
-   */
   disableLevelSet(): void {
     if (!this.config.levelSetConfig) return;
     this.config.levelSetConfig.enabled = false;
     this._phiGrid?.dispose();
     this._phiGrid = null;
-    console.log('[FluidSolver] Level Set 已禁用，显存已释放');
   }
 
-  /**
-   * 重置 φ 场为初始距离场（清除流动痕迹）。
-   */
   resetLevelSet(): void {
     if (!this._phiGrid) return;
     this.initPhiField();
-    console.log('[FluidSolver] Level Set φ 场已重置');
   }
 
-  /**
-   * 动态调整表面张力系数（不需要重建网格）。
-   */
   setSurfaceTension(sigma: number): void {
     if (!this.config.levelSetConfig) return;
     this.config.levelSetConfig.surfaceTension = sigma;
@@ -390,15 +352,12 @@ export class FluidSolver {
 
   /**
    * φ 场初始化：基于 density（scalar 模式）或 colorGrid.alpha（vector 模式）推断 SDF。
-   *   density > 0.5 → φ < 0（内部）
-   *   density < 0.5 → φ > 0（外部）
    */
   private initPhiField(): void {
     if (!this._phiGrid) return;
     const ls = this.config.levelSetConfig;
     const scale = ls?.smoothingRadius ?? 2;
     const isScalar = this.config.advectionMode === 'scalar';
-    // scalar 模式用 densityGrid；vector 模式用 colorGrid.alpha
     const sourceTex = isScalar ? this.densityGrid.read : this.colorGrid.read;
     const mode: 0 | 1 = isScalar ? 0 : 1;
     this.levelSetSolver.initPhiField(this._phiGrid, sourceTex, mode, scale);
@@ -413,84 +372,6 @@ export class FluidSolver {
     this.renderer.clear(true, true, true);
     this.renderer.setRenderTarget(prev);
     grid.swap();
-  }
-
-  /** 用特定值填充网格（保留：density 等单值场初始化） */
-  private fillGrid(grid: FluidGrid, value: number): void {
-    const w = grid.resolution.w;
-    const h = grid.resolution.h;
-
-    if (grid.dataType === 'uint8') {
-      // Uint8 格式
-      const uintVal = Math.round(value * 255);
-      // 对于 RedFormat（1通道），创建 R 通道数据
-      // 对于 RGBAFormat（4通道），创建 RGBA 数据
-      const ch = grid.channelCount;
-      const data = new Uint8Array(w * h * ch);
-      for (let i = 0; i < w * h; i++) {
-        data[i * ch + 0] = uintVal;
-        if (ch >= 2) data[i * ch + 1] = 0;
-        if (ch >= 3) data[i * ch + 2] = 0;
-        if (ch >= 4) data[i * ch + 3] = 255;
-      }
-      const texFormat = ch === 1 ? THREE.RedFormat : THREE.RGBAFormat;
-      const tex = new THREE.DataTexture(data, w, h, texFormat, THREE.UnsignedByteType);
-      tex.minFilter = THREE.NearestFilter;
-      tex.magFilter = THREE.NearestFilter;
-      tex.flipY = false;
-      tex.needsUpdate = true;
-
-      const mat = this.gpu.getMaterial('fluid_fill', {
-        uTex: { value: tex },
-      }, ch === 1 ? `
-        uniform sampler2D uTex;
-        varying vec2 vUv;
-        void main(){ gl_FragColor = vec4(texture2D(uTex, vUv).r, 0.0, 0.0, 1.0); }
-      ` : `
-        uniform sampler2D uTex;
-        varying vec2 vUv;
-        void main(){ gl_FragColor = texture2D(uTex, vUv); }
-      `);
-      const prev = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(grid.write);
-      this.renderer.clear(true, true, true);
-      this.gpu.render(this.renderer, grid.write, mat);
-      this.renderer.setRenderTarget(prev);
-      grid.swap();
-      tex.dispose();
-    } else {
-      // Float 格式
-      const ch = grid.channelCount;
-      const data = new Float32Array(w * h * Math.max(ch, 4));
-      for (let i = 0; i < w * h; i++) {
-        data[i * Math.max(ch, 4)] = value;
-      }
-      const texFormat = ch === 1 ? THREE.RedFormat : THREE.RGBAFormat;
-      const tex = new THREE.DataTexture(data, w, h, texFormat, THREE.FloatType);
-      tex.minFilter = THREE.NearestFilter;
-      tex.magFilter = THREE.NearestFilter;
-      tex.flipY = false;
-      tex.needsUpdate = true;
-
-      const mat = this.gpu.getMaterial('fluid_fill', {
-        uTex: { value: tex },
-      }, ch === 1 ? `
-        uniform sampler2D uTex;
-        varying vec2 vUv;
-        void main(){ gl_FragColor = vec4(texture2D(uTex, vUv).r, 0.0, 0.0, 1.0); }
-      ` : `
-        uniform sampler2D uTex;
-        varying vec2 vUv;
-        void main(){ gl_FragColor = texture2D(uTex, vUv); }
-      `);
-      const prev = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(grid.write);
-      this.renderer.clear(true, true, true);
-      this.gpu.render(this.renderer, grid.write, mat);
-      this.renderer.setRenderTarget(prev);
-      grid.swap();
-      tex.dispose();
-    }
   }
 
   /** 初始化场：colorGrid 已由残差上传，仅清零速度/压力/密度 */
@@ -535,7 +416,6 @@ export class FluidSolver {
   private applyGravity(dt: number): void {
     const g = this.config.gravity;
     if (g.x === 0 && g.y === 0) return;
-    // 重力是持续加速度：每帧注入 g*dt（速度增量）
     this.injector.injectVelocity(
       this.velocityGrid,
       { x: g.x * dt, y: g.y * dt },
@@ -671,11 +551,12 @@ export class FluidSolver {
       varying vec2 vUv;
       void main(){
         vec2 vel = texture2D(velTex, vUv).rg;
-        float eps = 1.0 / resolution.x;
-        if (vUv.x < eps) vel = texture2D(velTex, vec2(vUv.x + eps, vUv.y)).rg;
-        else if (vUv.x > 1.0 - eps) vel = texture2D(velTex, vec2(vUv.x - eps, vUv.y)).rg;
-        if (vUv.y < eps) vel = texture2D(velTex, vec2(vUv.x, vUv.y + eps)).rg;
-        else if (vUv.y > 1.0 - eps) vel = texture2D(velTex, vec2(vUv.x, vUv.y - eps)).rg;
+        float epsX = 1.0 / resolution.x;
+        float epsY = 1.0 / resolution.y;
+        if (vUv.x < epsX) vel = texture2D(velTex, vec2(vUv.x + epsX, vUv.y)).rg;
+        else if (vUv.x > 1.0 - epsX) vel = texture2D(velTex, vec2(vUv.x - epsX, vUv.y)).rg;
+        if (vUv.y < epsY) vel = texture2D(velTex, vec2(vUv.x, vUv.y + epsY)).rg;
+        else if (vUv.y > 1.0 - epsY) vel = texture2D(velTex, vec2(vUv.x, vUv.y - epsY)).rg;
         gl_FragColor = vec4(vel, 0.0, 1.0);
       }
     `);
@@ -867,44 +748,6 @@ export class FluidSolver {
     const cfg = this.config;
     const isScalar = cfg.advectionMode === 'scalar';
 
-    // 调试：每 60 帧打印状态（含每个注入源的位置，用于核对坐标是否落在区域内）
-    if (this.frameCount % 60 === 0) {
-      const srcs = cfg.continuousSources.filter((s) => s.enabled);
-      console.log(`[FluidSolver] frame=${this.frameCount} mode=${isScalar ? 'scalar' : 'vector'} ` +
-        `sources=${srcs.length}/${cfg.continuousSources.length} res=${cfg.resolution.w}×${cfg.resolution.h}`);
-      for (const src of srcs) {
-        const px = (src.position.x ?? 0.5) * cfg.resolution.w;
-        const py = (src.position.y ?? 0.5) * cfg.resolution.h;
-        console.log(`[FluidSolver]   源# pos=(${(src.position.x ?? 0.5).toFixed(3)},${(src.position.y ?? 0.5).toFixed(3)})` +
-          ` → 网格像素(${px.toFixed(0)},${py.toFixed(0)}) radius=${src.radius} ` +
-          `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) ` +
-          `color=${src.color ? `[${src.color.map(c => c.toFixed(2)).join(',')}]` : '无'} ` +
-          `density=${src.density ?? '-'} rate=${src.rate ?? '-'} wave=${src.wave?.enabled ? 'ON' : 'OFF'} wps=${src.waypoints?.length ?? 0}`);
-      }
-      // ★ 调试：读回注入源位置的 vel/density（确认注入是否生效）
-      const halfToFloat = (h: number) => {
-        const s = (h & 0x8000) ? -1 : 1;
-        const e = (h >> 10) & 0x1f;
-        const m = h & 0x3ff;
-        if (e === 0) return s * m * Math.pow(2, -24);
-        if (e === 31) return m ? NaN : s * Infinity;
-        return s * (1 + m / 1024) * Math.pow(2, e - 15);
-      };
-      for (const src of srcs) {
-        const sx = Math.floor((src.position.x ?? 0.5) * cfg.resolution.w);
-        const sy = Math.floor((src.position.y ?? 0.5) * cfg.resolution.h);
-        try {
-          const velBuf = new Uint16Array(4);
-          this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, sx, sy, 1, 1, velBuf);
-          const denBuf = new Uint8Array(4);
-          this.renderer.readRenderTargetPixels(this.densityGrid.readTarget, sx, sy, 1, 1, denBuf);
-          console.log(`[FluidSolver]   注入点(${sx},${sy}) 读回: vel=(${halfToFloat(velBuf[0]).toFixed(2)},${halfToFloat(velBuf[1]).toFixed(2)}) density=${(denBuf[0] / 255).toFixed(3)}`);
-        } catch (e) {
-          console.warn('[FluidSolver] 读回失败:', e);
-        }
-      }
-    }
-
     // 0. 一次性注入队列（优先执行，本帧生效）
     this.processInjectionQueue();
 
@@ -924,7 +767,6 @@ export class FluidSolver {
         this.advect(this.densityGrid, this.velocityGrid.read, dt,
           { r: true, g: false, b: false, a: false }, 'clamp', false);
         this.decayDensity();
-        // ★ scalar 模式：colorGrid 保持静态（不平流），density 流动提供动态调制
       } else {
         this.advect(this.colorGrid, this.velocityGrid.read, dt,
           cfg.channels, cfg.colorBoundaryMode || 'clamp', true);
@@ -934,15 +776,12 @@ export class FluidSolver {
     // 3.2 ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
     const ls = this.config.levelSetConfig;
     if (ls?.enabled && this._phiGrid) {
-      // (1) φ 平流（跟随速度场流动）
       this.levelSetSolver.advectPhi(
         this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTex(),
       );
-      // (2) 轻量级重初始化（红-黑 SOR，默认 2 轮，保持 SDF 接近 |∇φ|=1）
       this.levelSetSolver.reinit(
         this._phiGrid, this.getObstacleTex(), ls.reinitIterations, 0.5,
       );
-      // (3) 表面张力注入（CSF 模型，σ>0 时启用）
       if (ls.surfaceTension > 0) {
         this.levelSetSolver.applySurfaceTension(
           this.velocityGrid, this._phiGrid.read, this.getObstacleTex(),
@@ -977,18 +816,8 @@ export class FluidSolver {
    * 合成视口 → compositeTarget。
    *
    * 两种模式（根据 baseHslTex 是否存在自动选择）：
-   *
-   * 1. direct 模式（baseHslTex === null）：
-   *    colorGrid 直接持有合成色 RGBA（来自 frameData.residualTexture，已 base+delta）。
-   *    composite 直接采样 colorGrid 输出，流体平流的是帧纹理本身。
-   *    ★ 这是主编辑器现有数据的默认模式（baseHslData 未填充时）。
-   *
-   * 2. MCSDA 模式（baseHslTex 存在）：
-   *    colorGrid = 量化残差 delta，baseHslTex = Float32 HSL。
-   *    final = base + delta ± (density/baseline × mul)
-   *    与编辑器 ShaderLibrary 合成着色器公式完全一致。
-   *
-   * MainCanvas 读取 getCompositeTexture() 喂给区域 COLOR mesh 的 uColorTex。
+   * 1. direct 模式（baseHslTex === null）：colorGrid 即合成色，直接输出。
+   * 2. MCSDA 模式（baseHslTex 存在）：final = base + delta ± (density/baseline × mul)
    */
   composite(): void {
     if (!this.compositeTarget) return;
@@ -1014,15 +843,7 @@ export class FluidSolver {
       u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
       const ch = this.config.channels;
       (u.uChannels.value as THREE.Vector4).set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
-
-      // 调试：每 60 帧打印一次 uniform 值
-      if (this.frameCount % 60 === 0) {
-        console.log(`[FluidSolver.composite] channels=(${ch.r},${ch.g},${ch.b},${ch.a}) ` +
-          `baseline=${sc.baselineDensity} mode=${this.config.advectionMode} ` +
-          `combine=${this.config.combineMode}`);
-      }
     } else {
-      // direct 模式：直接采样 colorGrid
       u.uColorTex.value = this.colorGrid.read;
     }
 
@@ -1041,16 +862,6 @@ export class FluidSolver {
   }
 
   private buildCompositeMat(hasBase: boolean): THREE.ShaderMaterial {
-    // ★ MainCanvas 约定：区域 COLOR mesh 的 UV.y = 1 - world.y（见 MainCanvas 三角剖分处
-    //   uv[i*2+1] = p.y / texHeight，而 p.y = (1-world.y)*canvasHeight）。
-    //   因此 uColorTex 数据 row 0 = world y=1（顶部）。
-    //   boundBaseTexture/boundResidualTexture 均用 flipY=false 上传，数据 row 0 = world 顶部。
-    //   colorGrid 经 loadResidual 的 copy pass（vUv=uv）同样保持 row 0 = world 顶部。
-    //
-    //   composite 渲染到 RenderTarget：UV(0,0) 在底部。若 vUv=uv（不翻转），
-    //   target 底部(UV.y=0) 采样 colorGrid row 0 = world 顶部 →
-    //   compositeTarget UV.y=0 = world 顶部，与 boundBaseTexture 完全一致。
-    //   ★ 故此处不能再 Y-flip（fluid-player.html 的 vUv=vec2(uv.x,1.0-uv.y) 会双重翻转）。
     const vertexShader = /* glsl */ `
       varying vec2 vUv;
       void main(){
@@ -1060,7 +871,6 @@ export class FluidSolver {
     `;
 
     if (!hasBase) {
-      // direct 模式：colorGrid 即合成色，直接输出
       return new THREE.ShaderMaterial({
         uniforms: {
           uColorTex: { value: null },
@@ -1075,10 +885,8 @@ export class FluidSolver {
           varying vec2 vUv;
           void main(){
             gl_FragColor = texture2D(uColorTex, vUv);
-            // ★ Level Set alpha 裁切
             if (uEnableLevelSet == 1) {
               float phi = texture2D(uPhiTexture, vUv).r;
-              // 表面附近（|φ|<1像素）alpha=1，远离表面（|φ|>3像素）alpha=0
               float alphaMask = 1.0 - smoothstep(1.0, 3.0, abs(phi));
               gl_FragColor.a *= alphaMask;
             }
@@ -1140,7 +948,6 @@ export class FluidSolver {
           if (uScalarMode == 1) {
             float density = texture2D(uDensity, vUv).r;
             // ★ 与流体编辑器保持一致：factor = density / baseline
-            //   当 density=baseline 时 factor=1（有偏移，效果明显）
             float factor = density / max(0.0001, uBaseline);
             float sign = (uCombineMode == 1) ? -1.0 : 1.0;
             finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
@@ -1154,7 +961,6 @@ export class FluidSolver {
             finalA = clamp(baseHSLA.a + dA, 0.0, 1.0);
           }
           // 通道开关：关闭的通道保持 baseHSL 值（不添加 delta）
-          //   之前错误地设为 residual 值，导致颜色变灰
           finalH = mix(baseHSLA.r, finalH, uChannels.x);
           finalS = mix(baseHSLA.g, finalS, uChannels.y);
           finalL = mix(baseHSLA.b, finalL, uChannels.z);
@@ -1166,7 +972,6 @@ export class FluidSolver {
           // ★ Level Set alpha 裁切（表面羽化）
           if (uEnableLevelSet == 1) {
             float phi = texture2D(uPhiTexture, vUv).r;
-            // 表面附近（|φ|<1像素）alpha=1，远离表面（|φ|>3像素）alpha=0
             float alphaMask = 1.0 - smoothstep(1.0, 3.0, abs(phi));
             gl_FragColor.a *= alphaMask;
           }
@@ -1177,7 +982,7 @@ export class FluidSolver {
     });
   }
 
-  /** 获取合成结果纹理（MainCanvas 喂给区域 COLOR mesh 的 uColorTex） */
+  /** 获取合成结果纹理（渲染层喂给网格的 uColorTex） */
   getCompositeTexture(): THREE.Texture | null {
     return this.compositeTarget ? this.compositeTarget.texture : null;
   }
@@ -1204,7 +1009,6 @@ export class FluidSolver {
     }
     if (updates.levelSetConfig) {
       this.config.levelSetConfig = { ...this.config.levelSetConfig, ...updates.levelSetConfig };
-      // ★ Level Set 启用状态切换
       const newEnabled = this.config.levelSetConfig.enabled;
       if (newEnabled && !oldLsEnabled) {
         this.enableLevelSet();
@@ -1218,7 +1022,6 @@ export class FluidSolver {
     if (resChanged) {
       this.rebuildGrids();
       this.initFields();
-      // ★ 分辨率变化时 phiGrid 已在 rebuildGrids 中同步重建
     }
   }
 

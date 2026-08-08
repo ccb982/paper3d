@@ -118,6 +118,8 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
     fragmentShader: /* glsl */ `
       uniform sampler2D uBaseTexture;
       uniform sampler2D uResidual;
+      uniform sampler2D uFluidTex;
+      uniform float uUseFluid;
       uniform vec2 uBboxOffset;
       uniform vec2 uBboxScale;
       uniform vec2 uTexOffset;
@@ -171,7 +173,15 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
         uv = vec2(uv.x * cosRot - uv.y * sinRot, uv.x * sinRot + uv.y * cosRot);
         uv += 0.5;
         uv = (uv - uTexOffset) / uTexScale;
-        // ========== 3. 合成（基础色 + 残差统一 0.5 范围） ==========
+        // ========== 3. 合成 ==========
+        // ★ 流体模式：直接采样解算器 composite 纹理（base+delta±density 已在其中）
+        if (uUseFluid > 0.5) {
+          vec4 fluid = texture2D(uFluidTex, uv);
+          if (fluid.a < 0.5) discard;
+          gl_FragColor = fluid;
+          return;
+        }
+        // 非流体：基础色 + 残差统一 0.5 范围
         vec4 base = texture2D(uBaseTexture, uv);
         if (base.a < 0.5) discard;
         vec4 res = texture2D(uResidual, uv);
@@ -193,6 +203,8 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       uVertexCount: { value: vertexCount },
       uBaseTexture: { value: null },
       uResidual: { value: null },
+      uFluidTex: { value: null },
+      uUseFluid: { value: 0 },
       uBboxOffset: { value: new THREE.Vector2() },
       uBboxScale: { value: new THREE.Vector2(1, 1) },
       uTexOffset: { value: new THREE.Vector2() },
@@ -286,6 +298,7 @@ export function renderFrameData(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
   camera: THREE.OrthographicCamera,
+  fluidTexture?: THREE.Texture | null,
 ): void {
   if (data.entities.length === 0) return;
 
@@ -298,6 +311,7 @@ export function renderFrameData(
   gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
 
   const { position, scale, rotation } = transform;
+  const useFluid = !!fluidTexture;
 
   for (const em of data.entities) {
     const fm = em.fillMesh.material as THREE.ShaderMaterial;
@@ -317,6 +331,9 @@ export function renderFrameData(
     cm.uniforms.uFramesPerSecond.value = vatFps;
     cm.uniforms.uBaseTexture.value = data.baseTexture;
     cm.uniforms.uResidual.value = data.residualTexture;
+    // ★ 流体模式：composite 纹理替代 base+residual 合成
+    cm.uniforms.uUseFluid.value = useFluid ? 1 : 0;
+    if (useFluid && fluidTexture) cm.uniforms.uFluidTex.value = fluidTexture;
     // bbox 映射（世界坐标 → 纹理 bbox 空间）
     (cm.uniforms.uBboxOffset.value as THREE.Vector2).set(em.texBbox.x / em.frameWidth, em.texBbox.y / em.frameWidth);
     (cm.uniforms.uBboxScale.value as THREE.Vector2).set(em.texBbox.w / em.frameWidth, em.texBbox.h / em.frameWidth);

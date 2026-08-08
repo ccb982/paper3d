@@ -192,7 +192,17 @@
 
       const data = asset.getFrameRenderData(ctrl.frameIndex);
       if (data) {
-        renderFrameData(data, animTime, 30, STYLE, ctx.renderer, ctx.scene, ctx.camera);
+        // ★ 流体：持续解算（与播放/暂停无关，暂停只控制帧切换）
+        //   仅当前帧有流体配置时驱动解算器；换帧后旧帧效果自动停止推进
+        let fluidTex = null;
+        if (asset.hasPhysics(ctrl.frameIndex)) {
+          const eff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer);
+          if (eff) {
+            eff.step(dt);
+            fluidTex = eff.getCompositeTexture();
+          }
+        }
+        renderFrameData(data, animTime, 30, STYLE, ctx.renderer, ctx.scene, ctx.camera, fluidTex);
       }
     }
     tick();

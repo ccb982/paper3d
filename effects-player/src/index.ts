@@ -1,20 +1,23 @@
 import * as THREE from 'three';
 import { loadBundle, type BundleLoadResult } from './core/bundle';
-import { decodeMultiFrame, buildFrameTexture } from './core/ftx';
+import { decodeMultiFrame, buildFrameTexture, type DecodedMultiFrame } from './core/ftx';
 import { buildDisplacementTextureData } from './core/entity';
 import { buildEntityMesh, type EntityMeshData } from './gl/renderer';
 import { FramePlaybackController } from './core/controller';
 import type { PlaybackConfig, FramePlaybackCallbacks } from './core/controller';
+import { FluidEffect } from './fluid/FluidEffect';
 import type {
   Manifest, PerFrameData, AnnotationsFile,
   SerializedRegionEntity, PaletteColor, FrameTextureData, PureAnnotationExport,
+  PhysicsConfig,
 } from './core/types';
 
-export type { Manifest, PerFrameData, AnnotationsFile, SerializedRegionEntity, PaletteColor, PureAnnotationExport };
+export type { Manifest, PerFrameData, AnnotationsFile, SerializedRegionEntity, PaletteColor, PureAnnotationExport, PhysicsConfig };
 export type { PlaybackConfig, PlaybackOrder, ControllerState, FramePlaybackCallbacks } from './core/controller';
 export type { EntityMeshData };
 export { renderFrameData, createThreeContext } from './gl/renderer';
 export { FramePlaybackController };
+export { FluidEffect } from './fluid/FluidEffect';
 
 export interface LoadOptions {
   resolution?: number;
@@ -30,13 +33,18 @@ export class Asset {
   readonly resolution: number;
   readonly frameCount: number;
 
+  /** FTX 解码数据（构建流体效果用） */
+  private _ftx: DecodedMultiFrame | null = null;
+
   private _entityMeshMap: Map<string, EntityMeshData> = new Map();
   private _controllers: Set<FramePlaybackController> = new Set();
+  private _fluidEffects: Map<number, FluidEffect> = new Map();
 
   constructor(raw: BundleLoadResult, options: { resolution: number }) {
     const resolution = options.resolution ?? 512;
     const multiFrame = decodeMultiFrame(raw.ftxBinary.buffer);
     const { palette, frames: ftxFrames } = multiFrame;
+    this._ftx = multiFrame;
 
     const baseTextures: THREE.DataTexture[] = [];
     const residualTextures: THREE.DataTexture[] = [];
@@ -150,6 +158,57 @@ export class Asset {
 
   disposeController(ctrl: FramePlaybackController): void { ctrl.dispose(); this._controllers.delete(ctrl); }
 
+  /** 该帧是否有流体物理配置 */
+  hasPhysics(index: number): boolean {
+    const fd = this.frames[index];
+    return !!fd && !!fd.physics;
+  }
+
+  /** 获取该帧流体配置（无则 null） */
+  getPhysicsConfig(index: number): PhysicsConfig | null {
+    const fd = this.frames[index];
+    return fd?.physics ?? null;
+  }
+
+  /** 获取该帧 FTX 原始数据（构建流体效果用），无则 null */
+  getFtxFrame(index: number): FrameTextureData | null {
+    if (!this._ftx) return null;
+    const fd = this.frames[index];
+    if (!fd) return null;
+    const ftxIdx = fd.textureIndex;
+    if (ftxIdx < 0 || ftxIdx >= this._ftx.frames.length) return null;
+    return this._ftx.frames[ftxIdx];
+  }
+
+  /** 获取或惰性创建该帧的流体效果（需要渲染器）。返回 null 表示该帧无流体配置。 */
+  getFluidEffect(index: number, renderer: THREE.WebGLRenderer): FluidEffect | null {
+    if (index < 0 || index >= this.frames.length) return null;
+    const cached = this._fluidEffects.get(index);
+    if (cached) return cached;
+
+    const physics = this.frames[index].physics;
+    if (!physics) return null;
+    const ftxFrame = this.getFtxFrame(index);
+    if (!ftxFrame) return null;
+    const palette = this._ftx!.palette;
+
+    // 合并该帧所有实体（用于障碍物光栅化）
+    const entities: SerializedRegionEntity[] = [];
+    for (const ed of this.frames[index].regionEntities) {
+      entities.push(ed);
+    }
+
+    const effect = new FluidEffect(renderer, physics, ftxFrame, palette, entities);
+    this._fluidEffects.set(index, effect);
+    return effect;
+  }
+
+  /** 释放所有流体效果（重新加载或 dispose 时调用） */
+  clearFluidEffects(): void {
+    for (const [, eff] of this._fluidEffects) eff.dispose();
+    this._fluidEffects.clear();
+  }
+
   dispose(): void {
     for (const ctrl of this._controllers) ctrl.dispose();
     this._controllers.clear();
@@ -163,6 +222,7 @@ export class Asset {
       (em.fillMesh.material as THREE.Material).dispose();
     }
     this._entityMeshMap.clear();
+    this.clearFluidEffects();
     this.baseTextures.length = 0;
     this.residualTextures.length = 0;
   }
