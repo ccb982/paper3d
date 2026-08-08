@@ -3084,6 +3084,10 @@ export const FluidEditorUI: React.FC = () => {
         compositeMat.uniforms.uResidual.value = editor.getColorTexture();
         compositeMat.uniforms.uResidualRangeH.value = residualRangeHRef.current;
         compositeMat.uniforms.uResidualRangeSL.value = residualRangeSLRef.current;
+        if ((window as any).__dbgFTX === undefined) {
+          (window as any).__dbgFTX = 1;
+          console.log('[FTX复合] baseTex:', baseTexRef.current, '残差纹理尺寸:', (editor.getColorTexture() as any)?.image?.width ?? '?');
+        }
       }
 
       // ★ 障碍物模式：每帧同步障碍物纹理（启用后 obstacleTarget 会被懒创建）
@@ -3507,6 +3511,8 @@ export const FluidEditorUI: React.FC = () => {
                       baseTex.colorSpace = THREE.LinearSRGBColorSpace;
                       baseTexRef.current = baseTex;
                       baseLayerIdRef.current = '__ftx_import__';
+                      console.log('[FTX导入] baseHslData 尺寸:', baseHslData.width, 'x', baseHslData.height,
+                        '非零像素:', Array.from(baseHslData.data).filter((v, i) => i % 4 === 3 && v > 0).length);
                       editor.initFields();
                       updateConfig({
                         injection: { ...config.injection, enabled: false },
