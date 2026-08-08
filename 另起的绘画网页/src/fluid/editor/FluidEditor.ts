@@ -269,6 +269,9 @@ export class FluidEditor {
    * 重建后立即调用 initFields() 清空新纹理，防止 WebGL 错误 1282（未初始化纹理）。
    */
   updateConfig(updates: Partial<FluidEditorConfig>): void {
+    if (updates.resolution) {
+      console.log('[FluidEditor.updateConfig] resolution 更新:', updates.resolution.w, 'x', updates.resolution.h, '(当前:', this.config.resolution.w, 'x', this.config.resolution.h, ')');
+    }
     const oldRes = this.config.resolution;
     const oldVelType = this.config.velocityDataType;
     const oldEnableObstacles = this.config.enableObstacles;
@@ -1117,6 +1120,7 @@ export class FluidEditor {
 
   /** 根据当前 config 重新创建 FluidGrid */
   private rebuildGrids(): void {
+    console.log('[FluidEditor.rebuildGrids] 分辨率:', this.config.resolution.w, 'x', this.config.resolution.h);
     const colorCh = Math.max(
       1,
       ['r', 'g', 'b', 'a'].filter(
