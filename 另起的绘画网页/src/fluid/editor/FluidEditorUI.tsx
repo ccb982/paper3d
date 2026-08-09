@@ -2614,42 +2614,42 @@ export const FluidEditorUI: React.FC = () => {
     levelsetScene.add(levelsetQuad);
 
     // 合成场景：底图（baseTexture）+ 平流残差（fluid residual）实时混合
-    // ★ MCSDA：scalar 模式下残差增量按 density×通道系数 调制后叠加到基础色（uScalarMode=1），
-    //   合成 = base + (delta × factor × mul)；vector 模式直接 base + delta（uScalarMode=0）
-    const compositeScene = new THREE.Scene();
-    const compositeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
-    const compositeMat = new THREE.ShaderMaterial({
-      uniforms: {
-        uBaseTexture: { value: null as THREE.Texture | null },
-        uResidual: { value: editor.getColorTexture() },
-        uResidualRangeH: { value: residualRangeHRef.current },
-        uResidualRangeSL: { value: residualRangeSLRef.current },
-        // ★ MCSDA scalar 模式 uniforms
-        uDensity: { value: editor.getDensityTexture() },            // density 场
-        uChannelMul: { value: new THREE.Vector4(1, 1, 1, 1) },      // H/S/L/A 通道系数
-        uBaseline: { value: 1.0 },                                  // 基准浓度
-        uScalarMode: { value: 0 },                                  // 0=vector, 1=scalar
-        uCombineMode: { value: 0 },                                 // 0=add(基础色+增量), 1=sub(基础色-增量)
-        uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },        // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差
-        uDebugResidual: { value: 0 },                                // ★ 调试：1=直接输出残差纹理
-      },
-      vertexShader: /* glsl */ `
-        varying vec2 vUv;
-        void main() {
-          vUv = vec2(uv.x, 1.0 - uv.y); // flipY=false: 补偿平面几何UV(0,0)=底部
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: /* glsl */ `
+    // ★ MCSDA：scalar 模式下残差增量按 density×通道系数 调制后叠加到基础色，
+    //   合成 = base + (delta × factor × mul)；vector 模式直接 base + delta。
+    //   ★ 编译期分离：shader 按 advectionMode 生成（vector 版不采样 density、
+    //     无 factor/combine 逻辑），模式切换时重建材质，避免 GPU 同时编译两套逻辑。
+    const buildCompositeFragment = (isScalar: boolean) => {
+      const vectorBody = /* glsl */ `
+        // vector 模式：HSL 直接加法（色相需要 fract 包裹），无 density 采样
+        finalH = fract(baseHSLA.r + dH);
+        finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
+        finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
+        finalA = baseHSLA.a;
+      `;
+      const scalarBody = /* glsl */ `
+        // ★ MCSDA scalar 模式：合成 = 基础色 + 残差增量 ± (密度/基准浓度 × 通道系数)
+        //   combineMode: add=base+delta+factor×mul, sub=base+delta-factor×mul（sign 统一）
+        float density = texture2D(uDensity, vUv).r;
+        float factor = density / max(uBaseline, 0.001);
+        float sign = (uCombineMode == 0) ? 1.0 : -1.0;
+        // ★ 残差增量直接加（不乘 factor），density×mul 作为独立项 ±
+        finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
+        finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
+        finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
+        float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
+        finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
+      `;
+      return /* glsl */ `
         uniform sampler2D uBaseTexture;   // FloatType，存储 [H, S, L, A]，范围 0~1
         uniform sampler2D uResidual;     // Uint8Type，存储量化残差值 [qH, qS, qL, 255]
         uniform float uResidualRangeH;
         uniform float uResidualRangeSL;
+        ${isScalar ? `
         uniform sampler2D uDensity;      // MCSDA density 场（R 通道，0~1）
         uniform vec4 uChannelMul;        // H/S/L/A 通道系数（-2~2）
         uniform float uBaseline;         // 基准浓度
-        uniform int uScalarMode;         // 0=vector（残差直接加），1=scalar（残差×density×mul）
         uniform int uCombineMode;        // 0=add(基础色+增量), 1=sub(基础色-增量)，仅scalar生效
+        ` : ''}
         uniform vec4 uChannels;          // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差值
         uniform float uDebugResidual;    // ★ 调试：1=直接输出残差纹理
         varying vec2 vUv;
@@ -2666,43 +2666,15 @@ export const FluidEditorUI: React.FC = () => {
           vec4 residual = texture2D(uResidual, vUv);
 
           // 反量化残差（恢复 HSL 增量）
-          // 编码公式：qH = round(((dH + range) / (2 * range)) * 255)
-          // 解码公式：dH = (qH/255 * 2 - 1) * range = (residual.r * 2.0 - 1.0) * range
           float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
           float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
           float dL = (residual.b * 2.0 - 1.0) * uResidualRangeSL;
 
           float finalH, finalS, finalL, finalA;
 
-          if (uScalarMode == 1) {
-            // ★ MCSDA scalar 模式：合成 = 基础色 + 残差增量 ± (密度/基准浓度 × 通道系数)
-            //   残差增量直接叠加到基础色（与矢量模式相同的解码方式，不被 density 调制）。
-            //   density 作为独立项驱动额外偏移：factor = density / baseline
-            //     - density < baseline → factor<1，偏移项小（削弱）
-            //     - density > baseline → factor>1，偏移项大（增强）
-            //     - density = 0 → factor=0，无额外偏移（只显示 base + delta）
-            //   combineMode: add=base+delta+factor×mul, sub=base+delta-factor×mul
-            //   mul 为各通道系数，控制 density 偏移的方向和强度
-            float density = texture2D(uDensity, vUv).r;
-            float factor = density / max(uBaseline, 0.001);
-            float sign = (uCombineMode == 0) ? 1.0 : -1.0;
-            // ★ 残差增量直接加（不乘 factor），density×mul 作为独立项 ±
-            finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
-            finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
-            finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
-            float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
-            finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
-          } else {
-            // ★ vector 模式（原逻辑）：HSL 直接加法（色相需要 fract 包裹）
-            finalH = fract(baseHSLA.r + dH);
-            finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
-            finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
-            finalA = baseHSLA.a;
-          }
+          ${isScalar ? scalarBody : vectorBody}
 
           // ★ 通道开关：关闭的通道直接输出残差值（绕过 base+delta 计算）
-          //   uChannels.x=0 → finalH = residual.r（残差原值，不含基础色）
-          //   uChannels.x=1 → finalH = 正常公式（base + delta ± factor×mul）
           //   mix(a, b, 0)=a, mix(a, b, 1)=b，无分支，GPU 友好
           finalH = mix(residual.r, finalH, uChannels.x);
           finalS = mix(residual.g, finalS, uChannels.y);
@@ -2718,9 +2690,43 @@ export const FluidEditorUI: React.FC = () => {
           }
           gl_FragColor = vec4(finalRGB, finalA);
         }
-      `,
-      transparent: true,
-    });
+      `;
+    };
+
+    const buildCompositeMaterial = (isScalar: boolean) => {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uBaseTexture: { value: null as THREE.Texture | null },
+          uResidual: { value: editor.getColorTexture() },
+          uResidualRangeH: { value: residualRangeHRef.current },
+          uResidualRangeSL: { value: residualRangeSLRef.current },
+          // ★ MCSDA scalar 模式 uniforms（vector 版不声明，节省纹理采样）
+          ...(isScalar ? {
+            uDensity: { value: editor.getDensityTexture() },
+            uChannelMul: { value: new THREE.Vector4(1, 1, 1, 1) },
+            uBaseline: { value: 1.0 },
+            uCombineMode: { value: 0 },
+          } : {}),
+          uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },
+          uDebugResidual: { value: 0 },
+        },
+        vertexShader: /* glsl */ `
+          varying vec2 vUv;
+          void main() {
+            vUv = vec2(uv.x, 1.0 - uv.y); // flipY=false: 补偿平面几何UV(0,0)=底部
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: buildCompositeFragment(isScalar),
+        transparent: true,
+      });
+      mat.userData.scalarMode = isScalar;
+      return mat;
+    };
+
+    let compositeMat = buildCompositeMaterial((config.advectionMode ?? 'vector') === 'scalar');
+    const compositeScene = new THREE.Scene();
+    const compositeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
     compositeQuad.material = compositeMat;
     compositeScene.add(compositeQuad);
 
@@ -3148,16 +3154,23 @@ export const FluidEditorUI: React.FC = () => {
       // ★ MCSDA：同步合成着色器的 scalar 模式 uniforms（每帧从 ref 读取，滑块实时生效）
       const _sc = scalarConfigRef.current;
       const _isScalar = advectionModeRef.current === 'scalar';
-      compositeMat.uniforms.uDensity.value = editor.getDensityTexture();
-      (compositeMat.uniforms.uChannelMul.value as THREE.Vector4).set(
-        _sc?.hMultiplier ?? 1,
-        _sc?.sMultiplier ?? 1,
-        _sc?.lMultiplier ?? 1,
-        _sc?.aMultiplier ?? 1,
-      );
-      compositeMat.uniforms.uBaseline.value = _sc?.baselineDensity ?? 1.0;
-      compositeMat.uniforms.uScalarMode.value = _isScalar ? 1 : 0;
-      compositeMat.uniforms.uCombineMode.value = (config.combineMode ?? 'add') === 'sub' ? 1 : 0;
+      // ★ 模式切换 → 重建合成材质（编译期分离，避免 GPU 混编两套逻辑）
+      if (compositeMat.userData.scalarMode !== _isScalar) {
+        compositeMat.dispose();
+        compositeMat = buildCompositeMaterial(_isScalar);
+        compositeQuad.material = compositeMat;
+      }
+      if (_isScalar) {
+        compositeMat.uniforms.uDensity.value = editor.getDensityTexture();
+        (compositeMat.uniforms.uChannelMul.value as THREE.Vector4).set(
+          _sc?.hMultiplier ?? 1,
+          _sc?.sMultiplier ?? 1,
+          _sc?.lMultiplier ?? 1,
+          _sc?.aMultiplier ?? 1,
+        );
+        compositeMat.uniforms.uBaseline.value = _sc?.baselineDensity ?? 1.0;
+        compositeMat.uniforms.uCombineMode.value = (config.combineMode ?? 'add') === 'sub' ? 1 : 0;
+      }
       compositeMat.uniforms.uChannels.value.set(
         config.channels.r ? 1 : 0,
         config.channels.g ? 1 : 0,

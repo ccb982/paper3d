@@ -822,7 +822,10 @@ export class FluidSolver {
   composite(): void {
     if (!this.compositeTarget) return;
     const hasBase = !!this.baseHslTex;
-    const key = hasBase ? 'fluid_composite_mcsda' : 'fluid_composite_direct';
+    // ★ key 包含 advectionMode：scalar/vector 编译期分离，模式切换时重建材质
+    const key = hasBase
+      ? `fluid_composite_mcsda_${this.config.advectionMode === 'scalar' ? 'scalar' : 'vector'}`
+      : 'fluid_composite_direct';
 
     if (!this.compositeMat || this.compositeMat.userData.key !== key) {
       this.compositeMat?.dispose();
@@ -835,13 +838,14 @@ export class FluidSolver {
     if (hasBase) {
       u.uBaseTexture.value = this.baseHslTex;
       u.uResidual.value = this.colorGrid.read;
-      u.uDensity.value = this.densityGrid.read;
       const sc = this.config.scalarConfig;
-      (u.uChannelMul.value as THREE.Vector4).set(sc.hMultiplier, sc.sMultiplier, sc.lMultiplier, sc.aMultiplier);
-      u.uBaseline.value = sc.baselineDensity;
-      u.uScalarMode.value = this.config.advectionMode === 'scalar' ? 1 : 0;
-      u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
       const ch = this.config.channels;
+      if (this.config.advectionMode === 'scalar') {
+        u.uDensity.value = this.densityGrid.read;
+        (u.uChannelMul.value as THREE.Vector4).set(sc.hMultiplier, sc.sMultiplier, sc.lMultiplier, sc.aMultiplier);
+        u.uBaseline.value = sc.baselineDensity;
+        u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
+      }
       (u.uChannels.value as THREE.Vector4).set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
     } else {
       u.uColorTex.value = this.colorGrid.read;
@@ -897,18 +901,37 @@ export class FluidSolver {
       });
     }
 
-    // MCSDA 模式：base + delta ± density 调制
+    // MCSDA 模式：base + delta ± density 调制（★ 编译期分离：vector 版无 density 采样）
+    const isScalar = this.config.advectionMode === 'scalar';
+    const scalarUniforms: Record<string, { value: unknown }> = isScalar ? {
+      uDensity: { value: null },
+      uCombineMode: { value: 0 },
+      uChannelMul: { value: new THREE.Vector4(0.1, 0.1, 0.1, 0.1) },
+      uBaseline: { value: 1.0 },
+    } : {};
+    const scalarBody = isScalar ? /* glsl */ `
+      float density = texture2D(uDensity, vUv).r;
+      // ★ 与流体编辑器保持一致：factor = density / baseline
+      float factor = density / max(0.0001, uBaseline);
+      float sign = (uCombineMode == 1) ? -1.0 : 1.0;
+      finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
+      finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
+      finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
+      finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
+    ` : /* glsl */ `
+      finalH = fract(baseHSLA.r + dH);
+      finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
+      finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
+      finalA = clamp(baseHSLA.a + dA, 0.0, 1.0);
+    `;
+
     return new THREE.ShaderMaterial({
       uniforms: {
         uBaseTexture: { value: null },
         uResidual: { value: null },
-        uDensity: { value: null },
         uResidualRangeH: { value: 0.5 },
         uResidualRangeSL: { value: 0.5 },
-        uScalarMode: { value: 0 },
-        uCombineMode: { value: 0 },
-        uChannelMul: { value: new THREE.Vector4(0.1, 0.1, 0.1, 0.1) },
-        uBaseline: { value: 1.0 },
+        ...scalarUniforms,
         uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },
         uPhiTexture: { value: null },
         uEnableLevelSet: { value: 0 },
@@ -917,13 +940,14 @@ export class FluidSolver {
       fragmentShader: /* glsl */ `
         uniform sampler2D uBaseTexture;
         uniform sampler2D uResidual;
-        uniform sampler2D uDensity;
         uniform float uResidualRangeH;
         uniform float uResidualRangeSL;
-        uniform int uScalarMode;
+        ${isScalar ? `
+        uniform sampler2D uDensity;
         uniform int uCombineMode;
         uniform vec4 uChannelMul;
         uniform float uBaseline;
+        ` : ''}
         uniform vec4 uChannels;
         uniform sampler2D uPhiTexture;
         uniform int uEnableLevelSet;
@@ -945,21 +969,7 @@ export class FluidSolver {
           float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
 
           float finalH, finalS, finalL, finalA;
-          if (uScalarMode == 1) {
-            float density = texture2D(uDensity, vUv).r;
-            // ★ 与流体编辑器保持一致：factor = density / baseline
-            float factor = density / max(0.0001, uBaseline);
-            float sign = (uCombineMode == 1) ? -1.0 : 1.0;
-            finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
-            finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
-            finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
-            finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
-          } else {
-            finalH = fract(baseHSLA.r + dH);
-            finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
-            finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
-            finalA = clamp(baseHSLA.a + dA, 0.0, 1.0);
-          }
+          ${scalarBody}
           // 通道开关：关闭的通道保持 baseHSL 值（不添加 delta）
           finalH = mix(baseHSLA.r, finalH, uChannels.x);
           finalS = mix(baseHSLA.g, finalS, uChannels.y);
