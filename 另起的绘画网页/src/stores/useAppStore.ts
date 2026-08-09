@@ -464,6 +464,8 @@ interface AppState {
   /** 导出当前流体配置为外部 JSON 格式（fluid-player.html 可读）；无配置返回 null */
   exportFluidConfig: (layerId: string) => any;
   setFluidUseWallMask: (layerId: string, useWallMask: boolean) => void;
+  /** 切换手动注入开关：开启后点击画布向流体解算器注入 */
+  toggleFluidManualInject: (layerId: string) => void;
   importMultiFrameFluidConfig: (json: any) => number;
 
   // ===== 画笔/背景变换（恢复缺失的接口声明）=====
@@ -3487,6 +3489,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       frameDataMap: {
         ...s.frameDataMap,
         [layerId]: { ...fd, fluidRuntime: { ...fr, useWallMask } },
+      },
+    }));
+  },
+
+  toggleFluidManualInject: (layerId) => {
+    const state = get();
+    const fd = state.frameDataMap[layerId];
+    if (!fd) return;
+    const fr = fd.fluidRuntime ?? defaultFluidRuntime();
+    set((s) => ({
+      frameDataMap: {
+        ...s.frameDataMap,
+        [layerId]: { ...fd, fluidRuntime: { ...fr, manualInject: !(fr.manualInject ?? false) } },
       },
     }));
   },

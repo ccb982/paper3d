@@ -199,6 +199,8 @@ export interface FluidRuntime {
   currentTime: number;                        // 当前时间（秒），用于步进
   /** 墙体来源开关：true = 优先导入墙掩码（无则回退区域边界）；false = 只用区域边界 */
   useWallMask: boolean;
+  /** 手动注入开关：开启后点击画布向流体解算器注入（位置/速度） */
+  manualInject?: boolean;
   /** MainCanvas 渲染循环检测到 true 时调用 solver.reset()，然后清除此标志 */
   _needsReset?: boolean;
 }

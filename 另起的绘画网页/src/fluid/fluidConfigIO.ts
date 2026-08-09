@@ -78,11 +78,6 @@ export function parseImportedFluidConfig(
     decayRate: sc.decayRate ?? 0,
   };
 
-  console.log('[parseImportedFluidConfig] raw JSON advectionAndComposite.advectionMode:', ac.advectionMode,
-    '→ parsed:', ac.advectionMode || 'vector');
-  console.log('[parseImportedFluidConfig] scalarConfig:', JSON.stringify(scalarConfig));
-  console.log('[parseImportedFluidConfig] channels:', JSON.stringify(channels));
-
   const resolution = json.resolution
     ? (typeof json.resolution === 'number'
         ? { w: json.resolution, h: json.resolution }
@@ -564,6 +559,8 @@ export function defaultFluidRuntime() {
     frameCount: 0,
     currentTime: 0,
     useWallMask: true,
+    /** 手动注入开关：开启后点击画布会向流体解算器注入（位置/速度） */
+    manualInject: false,
     _needsReset: true,
   };
 }

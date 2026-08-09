@@ -356,7 +356,6 @@ export class FluidSolver {
     // 触发 phiGrid getter 创建并初始化（赋值给 _ 避免无副作用表达式警告）
     const _ = this.phiGrid;
     void _;
-    console.log('[FluidSolver] Level Set 已启用');
   }
 
   /**
@@ -368,7 +367,6 @@ export class FluidSolver {
     this.config.levelSetConfig.enabled = false;
     this._phiGrid?.dispose();
     this._phiGrid = null;
-    console.log('[FluidSolver] Level Set 已禁用，显存已释放');
   }
 
   /**
@@ -377,7 +375,6 @@ export class FluidSolver {
   resetLevelSet(): void {
     if (!this._phiGrid) return;
     this.initPhiField();
-    console.log('[FluidSolver] Level Set φ 场已重置');
   }
 
   /**
@@ -867,44 +864,6 @@ export class FluidSolver {
     const cfg = this.config;
     const isScalar = cfg.advectionMode === 'scalar';
 
-    // 调试：每 60 帧打印状态（含每个注入源的位置，用于核对坐标是否落在区域内）
-    if (this.frameCount % 60 === 0) {
-      const srcs = cfg.continuousSources.filter((s) => s.enabled);
-      console.log(`[FluidSolver] frame=${this.frameCount} mode=${isScalar ? 'scalar' : 'vector'} ` +
-        `sources=${srcs.length}/${cfg.continuousSources.length} res=${cfg.resolution.w}×${cfg.resolution.h}`);
-      for (const src of srcs) {
-        const px = (src.position.x ?? 0.5) * cfg.resolution.w;
-        const py = (src.position.y ?? 0.5) * cfg.resolution.h;
-        console.log(`[FluidSolver]   源# pos=(${(src.position.x ?? 0.5).toFixed(3)},${(src.position.y ?? 0.5).toFixed(3)})` +
-          ` → 网格像素(${px.toFixed(0)},${py.toFixed(0)}) radius=${src.radius} ` +
-          `vel=(${src.velocity.x.toFixed(0)},${src.velocity.y.toFixed(0)}) ` +
-          `color=${src.color ? `[${src.color.map(c => c.toFixed(2)).join(',')}]` : '无'} ` +
-          `density=${src.density ?? '-'} rate=${src.rate ?? '-'} wave=${src.wave?.enabled ? 'ON' : 'OFF'} wps=${src.waypoints?.length ?? 0}`);
-      }
-      // ★ 调试：读回注入源位置的 vel/density（确认注入是否生效）
-      const halfToFloat = (h: number) => {
-        const s = (h & 0x8000) ? -1 : 1;
-        const e = (h >> 10) & 0x1f;
-        const m = h & 0x3ff;
-        if (e === 0) return s * m * Math.pow(2, -24);
-        if (e === 31) return m ? NaN : s * Infinity;
-        return s * (1 + m / 1024) * Math.pow(2, e - 15);
-      };
-      for (const src of srcs) {
-        const sx = Math.floor((src.position.x ?? 0.5) * cfg.resolution.w);
-        const sy = Math.floor((src.position.y ?? 0.5) * cfg.resolution.h);
-        try {
-          const velBuf = new Uint16Array(4);
-          this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, sx, sy, 1, 1, velBuf);
-          const denBuf = new Uint8Array(4);
-          this.renderer.readRenderTargetPixels(this.densityGrid.readTarget, sx, sy, 1, 1, denBuf);
-          console.log(`[FluidSolver]   注入点(${sx},${sy}) 读回: vel=(${halfToFloat(velBuf[0]).toFixed(2)},${halfToFloat(velBuf[1]).toFixed(2)}) density=${(denBuf[0] / 255).toFixed(3)}`);
-        } catch (e) {
-          console.warn('[FluidSolver] 读回失败:', e);
-        }
-      }
-    }
-
     // 0. 一次性注入队列（优先执行，本帧生效）
     this.processInjectionQueue();
 
@@ -1014,13 +973,6 @@ export class FluidSolver {
       u.uCombineMode.value = this.config.combineMode === 'sub' ? 1 : 0;
       const ch = this.config.channels;
       (u.uChannels.value as THREE.Vector4).set(ch.r ? 1 : 0, ch.g ? 1 : 0, ch.b ? 1 : 0, ch.a ? 1 : 0);
-
-      // 调试：每 60 帧打印一次 uniform 值
-      if (this.frameCount % 60 === 0) {
-        console.log(`[FluidSolver.composite] channels=(${ch.r},${ch.g},${ch.b},${ch.a}) ` +
-          `baseline=${sc.baselineDensity} mode=${this.config.advectionMode} ` +
-          `combine=${this.config.combineMode}`);
-      }
     } else {
       // direct 模式：直接采样 colorGrid
       u.uColorTex.value = this.colorGrid.read;

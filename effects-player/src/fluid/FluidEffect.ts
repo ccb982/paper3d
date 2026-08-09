@@ -88,6 +88,27 @@ export class FluidEffect {
     this.solver.composite();
   }
 
+  /**
+   * 手动注入：在纹理 UV 坐标（0~1，Y 向下）处注入流体。
+   * 以第一个启用源为模板（颜色/浓度/速度），位置替换为注入点。
+   */
+  injectAt(uv: { x: number; y: number }): void {
+    const src = this.solver.config.continuousSources.find(s => s.enabled)
+      ?? this.solver.config.continuousSources[0];
+    this.solver.queueInjection({
+      enabled: true,
+      position: {
+        x: Math.min(1, Math.max(0, uv.x)),
+        y: Math.min(1, Math.max(0, uv.y)),
+      },
+      radius: 0.08,
+      velocity: src?.velocity ?? { x: 0, y: 300 },
+      ...(src?.color ? { color: src.color } : {}),
+      ...(src?.density !== undefined ? { density: src.density } : {}),
+      rate: 1.0,
+    });
+  }
+
   getCompositeTexture(): THREE.Texture | null {
     return this.solver.getCompositeTexture();
   }

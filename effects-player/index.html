@@ -76,6 +76,7 @@
     let ctrl = null;
     let lastTime = performance.now();
     let animTime = 0;  // 独立动画时钟，永不停，给 VAT 用
+    let pendingInject = null;  // 待处理的点击注入 { frame, x, y }（canvas 像素坐标）
 
     const $ = (id) => document.getElementById(id);
     const frameSlider = $('frameSlider');
@@ -195,17 +196,47 @@
         // ★ 流体：持续解算（与播放/暂停无关，暂停只控制帧切换）
         //   仅当前帧有流体配置时驱动解算器；换帧后旧帧效果自动停止推进
         let fluidTex = null;
+        let fluidEff = null;
         if (asset.hasPhysics(ctrl.frameIndex)) {
-          const eff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer);
-          if (eff) {
-            eff.step(dt);
-            fluidTex = eff.getCompositeTexture();
+          fluidEff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer);
+          if (fluidEff) {
+            fluidEff.step(dt);
+            fluidTex = fluidEff.getCompositeTexture();
           }
         }
         renderFrameData(data, animTime, 30, STYLE, ctx.renderer, ctx.scene, ctx.camera, fluidTex);
+        // ★ 手动注入交互：点击画面 → 转 bbox 局部 UV → 注入流体
+        if (fluidEff && pendingInject && pendingInject.frame === ctrl.frameIndex) {
+          const hit = data.entities[0];
+          if (hit) {
+            const fw = hit.frameWidth;
+            const bbox = hit.texBbox;
+            const cx = pendingInject.x / canvas.width;   // 归一化画布坐标 (0~1)
+            const cy = pendingInject.y / canvas.height;
+            // 与 shader 一致：vUv = [x, 1-y] → bbox 局部 UV
+            const uv = {
+              x: (cx - bbox.x / fw) / (bbox.w / fw),
+              y: (cy - bbox.y / fw) / (bbox.h / fw),
+            };
+            if (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1) {
+              fluidEff.injectAt(uv);
+            }
+          }
+          pendingInject = null;
+        }
       }
     }
     tick();
+
+    // ★ 手动注入：点击画面记录注入点，渲染循环内转 UV 并注入
+    canvas.addEventListener('click', (e) => {
+      if (!asset || !ctrl) return;
+      if (!asset.hasPhysics(ctrl.frameIndex)) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+      pendingInject = { frame: ctrl.frameIndex, x, y };
+    });
   </script>
 </body>
 </html>

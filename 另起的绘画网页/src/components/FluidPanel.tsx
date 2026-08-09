@@ -57,6 +57,7 @@ export function FluidPanel() {
     removeFluidSource,
     updateFluidSource,
     setFluidUseWallMask,
+    toggleFluidManualInject,
     importFluidConfig,
     importMultiFrameFluidConfig,
     exportFluidConfig,
@@ -71,6 +72,7 @@ export function FluidPanel() {
     removeFluidSource: s.removeFluidSource,
     updateFluidSource: s.updateFluidSource,
     setFluidUseWallMask: s.setFluidUseWallMask,
+    toggleFluidManualInject: s.toggleFluidManualInject,
     importFluidConfig: s.importFluidConfig,
     importMultiFrameFluidConfig: s.importMultiFrameFluidConfig,
     exportFluidConfig: s.exportFluidConfig,
@@ -85,6 +87,7 @@ export function FluidPanel() {
   const isPlaying = rt?.isPlaying ?? false;
   const speed = rt?.speed ?? 1;
   const useWallMask = rt?.useWallMask ?? true;
+  const manualInject = rt?.manualInject ?? false;
 
   const sources = useMemo<InjectionConfig[]>(() => cfg?.continuousSources ?? [], [cfg]);
 
@@ -243,6 +246,23 @@ export function FluidPanel() {
           </div>
           <Slider label="播放速度" value={speed} min={0.1} max={4} step={0.1}
             onChange={v => setFluidSpeed(activeLayerId!, v)} fmt={v => `${v.toFixed(1)}×`} />
+
+          {/* ★ 手动注入开关：点击画布向流体注入 */}
+          <div style={{ ...LABEL, marginTop: '8px' }}>
+            <span style={{ color: manualInject ? '#ffd166' : '#bbb' }}>手动注入</span>
+            <button
+              style={{ ...BTN, background: manualInject ? '#ffd166' : '#333', color: manualInject ? '#122' : '#aaa', padding: '2px 8px', fontSize: '11px' }}
+              onClick={() => toggleFluidManualInject(activeLayerId!)}
+              title="开启后点击画布会在点击位置注入流体（颜色+速度）"
+            >
+              {manualInject ? 'ON' : 'OFF'}
+            </button>
+          </div>
+          {manualInject && (
+            <p style={{ fontSize: '11px', color: '#777', marginTop: '4px' }}>
+              开启：点击画布注入流体（跟随当前注入源的配置，含颜色/浓度与速度）。
+            </p>
+          )}
 
           {/* 模式（只读，由导入配置决定） */}
           <div style={LABEL}>

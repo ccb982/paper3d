@@ -195,43 +195,6 @@ export async function exportMainCanvasAssetBundle(
     };
 
     // ===== ★ 调试输出：导出后显示物理注入源情况 =====
-    if (e.hasPhysics && perFrame.physics) {
-      const cfg = perFrame.physics;
-      const srcList = cfg.continuousSources ?? [];
-      const texSize = e.fd?.sourceResolution || 512;
-      const bbox = e.fd?.rawBbox;
-      console.group(`[素材包] frame_${i} "${perFrame.name}" 物理注入源情况`);
-      console.log(`  advectionMode=${cfg.advectionMode} resolution=${cfg.resolution?.w}×${cfg.resolution?.h}`);
-      console.log(`  帧纹理源尺寸=${texSize}  rawBbox=${bbox ? `(${bbox.x},${bbox.y}) ${bbox.w}×${bbox.h}` : '无'}`);
-      console.log(`  注入源数量: ${srcList.length}`);
-      for (let si = 0; si < srcList.length; si++) {
-        const s = srcList[si];
-        const pos = s.position || { x: 0.5, y: 0.5 };
-        console.log(`  源#${si}: enabled=${s.enabled} pos=(${pos.x.toFixed(3)}, ${pos.y.toFixed(3)})` +
-          ` radius=${s.radius} vel=(${s.velocity?.x ?? 0},${s.velocity?.y ?? 0})` +
-          ` color=${s.color ? `[${s.color.map(c => c.toFixed(2)).join(',')}]` : '无'}` +
-          ` density=${s.density ?? '-'} rate=${s.rate ?? '-'}` +
-          ` wave=${s.wave?.enabled ? 'ON' : 'OFF'} waypoints=${s.waypoints?.length ?? 0}`);
-        // 映射到帧纹理全局像素（bbox 局部 → 全帧像素）
-        const bboxPx = bbox ? {
-          x: bbox.x + pos.x * bbox.w,
-          y: bbox.y + pos.y * bbox.h,
-        } : { x: pos.x * texSize, y: pos.y * texSize };
-        // 转换到区域实体使用的 world 坐标（Y 向上，0~1）
-        const world = { x: bboxPx.x / texSize, y: 1 - bboxPx.y / texSize };
-        console.log(`      ↳ 帧像素≈(${bboxPx.x.toFixed(1)}, ${bboxPx.y.toFixed(1)})` +
-          `  world(Y-up)=(${world.x.toFixed(3)}, ${world.y.toFixed(3)})`);
-      }
-      console.log(`  区域实体 bbox（world Y-up，供对照注入源是否落在区域内）:`);
-      for (const en of e.entities) {
-        const wb = en.worldBbox;
-        if (wb) {
-          console.log(`    区域#${en.id}: worldBbox=(${wb.x.toFixed(3)}, ${wb.y.toFixed(3)}) ${wb.w.toFixed(3)}×${wb.h.toFixed(3)}`);
-        }
-      }
-      console.log(`  坐标约定提示：注入源 position 为 bbox 局部归一化、Y 向下为正（0=顶部）；区域 worldBbox 为 Y 向上（0=底部）。两者对照需 Y 翻转。`);
-      console.groupEnd();
-    }
     const data = encoder.encode(JSON.stringify(perFrame));
     frameJsonFiles.push({ path: `per_frame_data/frame_${i}.json`, name: perFrame.name, data });
   }

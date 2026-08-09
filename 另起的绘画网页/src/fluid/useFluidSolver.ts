@@ -162,12 +162,6 @@ export function useFluidSolver(
     // 首帧合成，立即产出可显示的 compositeTarget
     solver.composite();
 
-    console.log(
-      `[useFluidSolver] layer="${activeLayerId}" region=#${boundRegionId} ` +
-      `mode=${isMCSDA ? 'MCSDA' : 'direct'} res=${resolution.w}x${resolution.h} ` +
-      `levelSet=${cfg.levelSetConfig?.enabled ? 'ON' : 'off'}`,
-    );
-
     // 清理函数：仅在组件卸载或下一次 effect 重跑前调用
     return () => {
       // 注意：不在这里 dispose，因为 StrictMode 双调用会误删；
@@ -181,8 +175,6 @@ export function useFluidSolver(
   useEffect(() => {
     const solver = solverRef.current;
     if (!solver || !fluidConfig) return;
-    console.log(`[useFluidSolver] 配置热更新，continuousSources=${(fluidConfig.continuousSources ?? []).length}`, 
-      fluidConfig.continuousSources?.map((s: any) => `(${(s.position?.x ?? 0).toFixed(2)},${(s.position?.y ?? 0).toFixed(2)})r=${s.radius}`).join(' '));
     // updateConfig 内部仅在 resolution 变化时 rebuild，其余字段直接合并
     solver.updateConfig({
       ...fluidConfig,

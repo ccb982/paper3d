@@ -3935,6 +3935,44 @@ useEffect(() => {
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
+    // ★ 流体手动注入：开关开启且解算器存在时，点击画布注入流体
+    const miState = useAppStore.getState();
+    const miLayer = miState.activeLayerId;
+    const miFd = miLayer ? miState.frameDataMap[miLayer] : undefined;
+    if (miFd?.fluidRuntime?.manualInject && miFd?.fluidConfig) {
+      const solver = fluidSolverRef.current;
+      if (solver) {
+        const coords = getCanvasCoords(e);
+        const world = canvasToWorldFn(coords.x, coords.y);
+        // 全帧像素（Y 向下为正，与纹理约定一致）
+        const texSize = miFd.sourceResolution || 512;
+        const bbox = miFd.rawBbox;
+        const px = world.x * texSize;
+        const py = (1 - world.y) * texSize;
+        let uv: { x: number; y: number };
+        if (bbox && bbox.w > 0 && bbox.h > 0) {
+          uv = { x: (px - bbox.x) / bbox.w, y: (py - bbox.y) / bbox.h };
+        } else {
+          uv = { x: world.x, y: 1 - world.y };
+        }
+        uv.x = Math.min(1, Math.max(0, uv.x));
+        uv.y = Math.min(1, Math.max(0, uv.y));
+        // 以第一个启用源为模板（颜色/浓度/速度），位置替换为点击处
+        const src = solver.config.continuousSources.find(s => s.enabled)
+          ?? solver.config.continuousSources[0];
+        solver.queueInjection({
+          enabled: true,
+          position: uv,
+          radius: 0.08,
+          velocity: src?.velocity ?? { x: 0, y: 300 },
+          ...(src?.color ? { color: src.color } : {}),
+          ...(src?.density !== undefined ? { density: src.density } : {}),
+          rate: 1.0,
+        });
+        return;
+      }
+    }
+
     if (currentTool === 'picker') {
       const canvas = canvasRef.current;
       if (!canvas) return;
