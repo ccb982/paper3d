@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>纹理预览测试 (FTX 2.0/3.0/多帧)</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    h1 { color: #fff; }
+    .container { display: flex; gap: 20px; flex-wrap: wrap; }
+    .canvas-wrapper {
+      border: 1px solid #333;
+      background-image: 
+        linear-gradient(45deg, #333 25%, transparent 25%), 
+        linear-gradient(-45deg, #333 25%, transparent 25%), 
+        linear-gradient(45deg, transparent 75%, #333 75%), 
+        linear-gradient(-45deg, transparent 75%, #333 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+    }
+    canvas { display: block; background: transparent; }
+    .info {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #888;
+    }
+    .controls { margin: 20px 0; }
+    button {
+      padding: 8px 16px;
+      margin-right: 10px;
+      background: #722ed1;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover { background: #5a1f9e; }
+    button.active { background: #1890ff; }
+    button.secondary { background: #333; }
+    button.play { background: #52c41a; }
+    button.stop { background: #f5222d; }
+    input[type="file"] { margin: 10px 0; }
+    .stats {
+      margin-top: 10px;
+      padding: 10px;
+      background: #2a2a2a;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .file-info { margin-top: 10px; font-size: 12px; color: #888; }
+    .format-info {
+      margin-top: 10px;
+      padding: 10px;
+      background: #1e3a5f;
+      border-radius: 4px;
+      font-size: 12px;
+      border-left: 4px solid #722ed1;
+    }
+    .frame-controls {
+      margin-top: 15px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .frame-list {
+      max-height: 100px;
+      overflow-y: auto;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .frame-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+      background: #333;
+      color: #fff;
+      border: 1px solid #555;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    .frame-btn.active {
+      background: #722ed1;
+      border-color: #722ed1;
+    }
+    .frame-btn:hover {
+      background: #444;
+    }
+    .frame-info {
+      font-size: 12px;
+      color: #888;
+      margin-left: 10px;
+    }
+    .speed-control {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .speed-control label {
+      font-size: 12px;
+      color: #888;
+    }
+    .speed-control input {
+      width: 80px;
+    }
+  </style>
+</head>
+<body>
+  <h1>纹理预览测试 (FTX 2.0/3.0/多帧)</h1>
+
+  <div class="controls">
+    <button onclick="loadFile()">加载文件</button>
+    <span style="color:#888;margin-left:20px;">支持 JSON、FTX 2.0/3.0、FTX3 多帧格式（任意文件扩展名）</span>
+  </div>
+
+  <input type="file" id="fileInput" accept="*" style="display:none" onchange="handleFile(this)">
+
+  <div class="format-info">
+    <strong>FTX 编码格式说明：</strong>
+    <div>• FTX 2.0/3.0：单帧区域压缩，RGB565 + 行差分滤波</div>
+    <div>• FTX 3.0 多帧：共享调色板，每帧独立 regionIdTex + deltaTex</div>
+    <div>• 残差存储：拆分为 H/S/L 三通道，分别行差分后串联</div>
+    <div>• 偏置烘焙：Base_Shifted = (Base_H - 0.5, Base_S - 1.0, Base_L - 1.0)</div>
+    <div>• 解码公式：Final_HSL = Base_Shifted + Delta_Encoded</div>
+    <div>• FTX 3.0 新增：自适应量化 (8×8空间分区)</div>
+  </div>
+
+  <div class="container">
+    <div>
+      <h3>区域色块预览（自适应分辨率）</h3>
+      <div class="canvas-wrapper">
+        <canvas id="previewCanvas" width="512" height="512"></canvas>
+      </div>
+      <div class="info">左键点击画布查看像素颜色</div>
+      <div class="stats" id="stats"></div>
+      <div class="file-info" id="fileInfo"></div>
+
+      <div class="frame-controls" id="frameControls" style="display:none;">
+        <button class="play" onclick="togglePlay()">播放</button>
+        <button class="secondary" onclick="prevFrame()">上一帧</button>
+        <button class="secondary" onclick="nextFrame()">下一帧</button>
+        <div class="speed-control">
+          <label>速度:</label>
+          <input type="range" id="speedRange" min="1" max="30" value="10" onchange="updateSpeed()">
+          <span id="speedValue">10</span> fps
+        </div>
+        <div class="frame-info" id="frameInfo"></div>
+        <div class="frame-list" id="frameList"></div>
+      </div>
+    </div>
+
+    <div>
+      <h3>局部放大（点击区域后显示）</h3>
+      <div class="canvas-wrapper">
+        <canvas id="zoomCanvas" width="256" height="256"></canvas>
+      </div>
+      <div class="info" id="zoomInfo">点击上方画布查看局部</div>
+    </div>
+  </div>
+
+  <script>
+    const MAGIC_FTX2 = 0x46545832;
+    const MAGIC_FTX3 = 0x46545833;
+    const ADAPTIVE_BLOCK_COLS = 8;
+    const ADAPTIVE_BLOCK_ROWS = 8;
+    const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
+
+    function quantizeH(dH, range) { range = range || 0.5; return Math.round(((dH + range) / (2 * range)) * 63); }
+    function quantizeS(dS, range) { range = range || 0.5; return Math.round(((dS + range) / (2 * range)) * 31); }
+    function quantizeL(dL, range) { range = range || 0.5; return Math.round(((dL + range) / (2 * range)) * 31); }
+    
+    function dequantizeH(encoded, range) { range = range || 0.5; return ((encoded / 63) * 2 * range) - range; }
+    function dequantizeS(encoded, range) { range = range || 0.5; return ((encoded / 31) * 2 * range) - range; }
+    function dequantizeL(encoded, range) { range = range || 0.5; return ((encoded / 31) * 2 * range) - range; }
+
+    function getAdaptiveBlockIndex(x, y, w, h) {
+      const col = Math.min(Math.floor((x / w) * ADAPTIVE_BLOCK_COLS), ADAPTIVE_BLOCK_COLS - 1);
+      const row = Math.min(Math.floor((y / h) * ADAPTIVE_BLOCK_ROWS), ADAPTIVE_BLOCK_ROWS - 1);
+      return row * ADAPTIVE_BLOCK_COLS + col;
+    }
+
+    function getRangeForBlock(blockFlags, blockIdx) {
+      return (blockFlags & (1n << BigInt(blockIdx))) ? 0.25 : 0.5;
+    }
+
+    function packRGB565(s, h, l) {
+      return ((s & 0x1F) << 11) | ((h & 0x3F) << 5) | (l & 0x1F);
+    }
+
+    function unpackRGB565(packed) {
+      return {
+        s: (packed >> 11) & 0x1F,
+        h: (packed >> 5) & 0x3F,
+        l: packed & 0x1F
+      };
+    }
+
+    function base64ToUint8Array(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function uint8ArrayToBase64(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary);
+    }
+
+    function rleDecode8(encodedData, expectedPixelCount) {
+      if (encodedData.length === 0) return new Uint8Array(0);
+      const result = new Uint8Array(expectedPixelCount);
+      let readOffset = 0;
+      let writeOffset = 0;
+      const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
+      while (readOffset + 3 <= encodedData.length && writeOffset < expectedPixelCount) {
+        const count = dataView.getUint16(readOffset, true);
+        readOffset += 2;
+        const pixel = encodedData[readOffset++];
+        const actualCount = Math.min(count, expectedPixelCount - writeOffset);
+        for (let i = 0; i < actualCount; i++) {
+          result[writeOffset++] = pixel;
+        }
+      }
+      return result;
+    }
+
+    function rleDecode16(encodedData, expectedPixelCount) {
+      if (encodedData.length === 0) return new Uint16Array(0);
+      const result = new Uint16Array(expectedPixelCount);
+      let readOffset = 0;
+      let writeOffset = 0;
+      const dataView = new DataView(encodedData.buffer, encodedData.byteOffset, encodedData.byteLength);
+      while (readOffset + 4 <= encodedData.length && writeOffset < expectedPixelCount) {
+        const count = dataView.getUint16(readOffset, true);
+        readOffset += 2;
+        const pixel = dataView.getUint16(readOffset, true);
+        readOffset += 2;
+        const actualCount = Math.min(count, expectedPixelCount - writeOffset);
+        for (let i = 0; i < actualCount; i++) {
+          result[writeOffset++] = pixel;
+        }
+      }
+      return result;
+    }
+
+    // ==================== 差分滤波（替代 RLE，为 Gzip 优化）====================
+    function applyDelta8(data, stride) {
+      const out = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) {
+        if (i % stride === 0) out[i] = data[i];
+        else out[i] = data[i] - data[i - 1];
+      }
+      return out;
+    }
+
+    function invertDelta8(filtered, stride) {
+      const out = new Uint8Array(filtered.length);
+      for (let i = 0; i < filtered.length; i++) {
+        if (i % stride === 0) out[i] = filtered[i];
+        else out[i] = filtered[i] + out[i - 1];
+      }
+      return out;
+    }
+
+    function decompressFromBinary(buffer) {
+      const dataView = new DataView(buffer);
+      let offset = 0;
+      const magic = dataView.getUint32(offset, false);
+      offset += 4;
+
+      if (magic === MAGIC_FTX3) {
+        return decompressFTX3(buffer, offset);
+      }
+
+      if (magic !== MAGIC_FTX2) throw new Error('无效的文件格式 (Magic 不匹配)');
+      const version = dataView.getUint8(offset);
+      offset += 1;
+      if (version !== 2 && version !== 3) throw new Error(`不支持的版本: ${version}`);
+      const regionCount = dataView.getUint16(offset, true);
+      offset += 2;
+      const resolution = dataView.getUint32(offset, true);
+      offset += 4;
+      const hueThreshold = dataView.getFloat32(offset, true);
+      offset += 4;
+
+      const regions = [];
+      for (let i = 0; i < regionCount; i++) {
+        const id = dataView.getUint16(offset, true);
+        offset += 2;
+        const x = dataView.getUint16(offset, true); offset += 2;
+        const y = dataView.getUint16(offset, true); offset += 2;
+        const w = dataView.getUint16(offset, true); offset += 2;
+        const h = dataView.getUint16(offset, true); offset += 2;
+        const bbox = { x, y, w, h };
+        const colorCount = dataView.getUint16(offset, true);
+        offset += 2;
+        const blockFlags = version === 3 ? BigInt(dataView.getUint16(offset, true)) : 0n;
+        offset += version === 3 ? 2 : 0;
+
+        const baseColors = [];
+        for (let j = 0; j < colorCount; j++) {
+          const h = dataView.getFloat32(offset, true) + 0.5; offset += 4;
+          const s = dataView.getFloat32(offset, true) + 1.0; offset += 4;
+          const l = dataView.getFloat32(offset, true) + 1.0; offset += 4;
+          baseColors.push({ 
+            h: ((h % 1) + 1) % 1, 
+            s: Math.max(0, Math.min(1, s)), 
+            l: Math.max(0, Math.min(1, l)) 
+          });
+        }
+
+        const regionIdTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let regionIdTex = undefined;
+        if (regionIdTexLen > 0) {
+          const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
+          offset += regionIdTexLen;
+          const totalPixels = bbox.w * bbox.h;
+          // 逆差分还原
+          const decoded = invertDelta8(regionDiff, bbox.w);
+          regionIdTex = uint8ArrayToBase64(decoded);
+        }
+
+        const deltaTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let deltaTex = '';
+        if (deltaTexLen > 0) {
+          const deltaBytes = new Uint8Array(buffer, offset, deltaTexLen);
+          offset += deltaTexLen;
+          const totalPixels = bbox.w * bbox.h;
+
+          // 拆分三个通道的差分数据
+          const hDiff = deltaBytes.slice(0, totalPixels);
+          const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+          const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+          // 逆差分还原每个通道
+          const hChannel = invertDelta8(hDiff, bbox.w);
+          const sChannel = invertDelta8(sDiff, bbox.w);
+          const lChannel = invertDelta8(lDiff, bbox.w);
+
+          // 合并成 HSL 格式（H, S, L 顺序）
+          const decoded8 = new Uint8Array(totalPixels * 3);
+          for (let j = 0; j < totalPixels; j++) {
+            decoded8[j * 3] = hChannel[j];
+            decoded8[j * 3 + 1] = sChannel[j];
+            decoded8[j * 3 + 2] = lChannel[j];
+          }
+          deltaTex = uint8ArrayToBase64(decoded8);
+        }
+
+        regions.push({
+          id, bbox, baseColors,
+          regionIdTexture: regionIdTex ?? "",
+          deltaTexture: deltaTex ?? "",
+          blockFlags,
+        });
+      }
+
+      return {
+        version,
+        resolution: [resolution, resolution],
+        regionCount,
+        regions,
+        quantization: 'rgb565',
+        hueThreshold,
+      };
+    }
+
+    function decompressFTX3(buffer, offset) {
+      const dataView = new DataView(buffer);
+      const version = dataView.getUint8(offset);
+      offset += 1;
+
+      // 版本 3+ 新增 PredictionFlag 字节（1=启用帧间预测，0=禁用）
+      let predictionFlag = 0;
+      if (version >= 3) {
+        predictionFlag = dataView.getUint8(offset);
+        offset += 1;
+      }
+
+      const frameCount = dataView.getUint16(offset, true);
+      offset += 2;
+      const paletteCount = dataView.getUint16(offset, true);
+      offset += 2;
+
+      console.log('[FTX3] version:', version, 'predictionFlag:', predictionFlag, 'frameCount:', frameCount, 'paletteCount:', paletteCount);
+
+      const palette = [];
+      for (let i = 0; i < paletteCount; i++) {
+        const h = dataView.getFloat32(offset, true); offset += 4;
+        const s = dataView.getFloat32(offset, true); offset += 4;
+        const l = dataView.getFloat32(offset, true); offset += 4;
+        palette.push({ h: ((h % 1) + 1) % 1, s: Math.max(0, Math.min(1, s)), l: Math.max(0, Math.min(1, l)) });
+      }
+      console.log('[FTX3] palette:', palette.length, 'colors');
+
+      const frames = [];
+      let prevDecodedRegion = null; // 用于帧间预测解码
+      for (let fi = 0; fi < frameCount; fi++) {
+        const nameLen = dataView.getUint8(offset);
+        offset += 1;
+        const nameBytes = new Uint8Array(buffer, offset, nameLen);
+        offset += nameLen;
+        const name = new TextDecoder().decode(nameBytes);
+
+        const width = dataView.getUint16(offset, true); offset += 2;
+        const height = dataView.getUint16(offset, true); offset += 2;
+        const bx = dataView.getUint16(offset, true); offset += 2;
+        const by = dataView.getUint16(offset, true); offset += 2;
+        const bw = dataView.getUint16(offset, true); offset += 2;
+        const bh = dataView.getUint16(offset, true); offset += 2;
+        const bbox = { x: bx, y: by, w: bw, h: bh };
+
+        let blockFlags = 0n;
+        if (version >= 2) {
+          blockFlags = dataView.getBigUint64(offset, true);
+          offset += 8;
+        }
+
+        console.log('[FTX3] 帧', fi, 'name:', name, 'size:', width, 'x', height, 'bbox:', bbox, 'blockFlags:', blockFlags.toString(16).padStart(16, '0'));
+
+        const regionIdTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let regionIdTex = new Uint8Array(0);
+        if (regionIdTexLen > 0) {
+          const regionDiff = new Uint8Array(buffer, offset, regionIdTexLen);
+          offset += regionIdTexLen;
+          const totalPixels = bw * bh;
+          // 逆差分还原 → 得到原始编码值
+          const processedRegion = invertDelta8(regionDiff, bw);
+
+          if (version >= 3) {
+            // 版本 3：数据经过偏移/预测编码，需要反向还原
+            if (predictionFlag === 1 && prevDecodedRegion !== null) {
+              // 启用帧间预测且非第一帧：完整的预测解码
+              regionIdTex = new Uint8Array(totalPixels);
+              for (let i = 0; i < totalPixels; i++) {
+                const val = processedRegion[i];
+                if (val === 1) {
+                  // 与上一帧相同
+                  regionIdTex[i] = prevDecodedRegion[i];
+                } else {
+                  regionIdTex[i] = val === 0 ? 0 : val - 1;
+                }
+              }
+            } else {
+              // 第一帧 或 未启用预测：仅反向偏移 (val-1)
+              regionIdTex = new Uint8Array(totalPixels);
+              for (let i = 0; i < totalPixels; i++) {
+                const val = processedRegion[i];
+                regionIdTex[i] = val === 0 ? 0 : val - 1;
+              }
+            }
+            // 保存当前解码后的帧作为后续帧的预测参考
+            if (predictionFlag === 1) {
+              prevDecodedRegion = regionIdTex;
+            }
+          } else {
+            // 版本 2：数据直接存储原始 ID
+            regionIdTex = processedRegion;
+          }
+          console.log('[FTX3] 帧', fi, 'regionIdTex:', regionIdTex.length, '字节 (期望:', totalPixels, ')');
+        }
+
+        const deltaTexLen = dataView.getUint32(offset, true);
+        offset += 4;
+        let deltaTex = new Uint8Array(0);
+        if (deltaTexLen > 0) {
+          const deltaBytes = new Uint8Array(buffer, offset, deltaTexLen);
+          offset += deltaTexLen;
+          const totalPixels = bw * bh;
+
+          // 拆分三个通道的差分数据
+          const hDiff = deltaBytes.slice(0, totalPixels);
+          const sDiff = deltaBytes.slice(totalPixels, totalPixels * 2);
+          const lDiff = deltaBytes.slice(totalPixels * 2, totalPixels * 3);
+
+          // 逆差分还原每个通道
+          const hChannel = invertDelta8(hDiff, bw);
+          const sChannel = invertDelta8(sDiff, bw);
+          const lChannel = invertDelta8(lDiff, bw);
+
+          // 合并成 HSL 格式（H, S, L 顺序）
+          deltaTex = new Uint8Array(totalPixels * 3);
+          for (let j = 0; j < totalPixels; j++) {
+            deltaTex[j * 3] = hChannel[j];
+            deltaTex[j * 3 + 1] = sChannel[j];
+            deltaTex[j * 3 + 2] = lChannel[j];
+          }
+          console.log('[FTX3] 帧', fi, 'deltaTex:', deltaTex.length, '字节 (期望:', totalPixels * 3, ')');
+        }
+
+        frames.push({
+          name,
+          width,
+          height,
+          bbox,
+          regionIdTex,
+          deltaTex,
+          blockFlags,
+        });
+      }
+
+      console.log('[FTX3] 解压完成, 总帧数:', frames.length);
+
+      return {
+        version: 3,
+        format: 'ftx3-multiframe',
+        frameCount,
+        paletteCount,
+        palette,
+        frames,
+        regions: [],
+        quantization: 'rgb565',
+      };
+    }
+
+    function hslToRgb(h, s, l) {
+      let r, g, b;
+      if (s === 0) {
+        r = g = b = l;
+      } else {
+        const hue2rgb = (p, q, t) => {
+          if (t < 0) t += 1;
+          if (t > 1) t -= 1;
+          if (t < 1/6) return p + (q - p) * 6 * t;
+          if (t < 1/2) return q;
+          if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+          return p;
+        };
+        const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        const p = 2 * l - q;
+        r = hue2rgb(p, q, h + 1/3);
+        g = hue2rgb(p, q, h);
+        b = hue2rgb(p, q, h - 1/3);
+      }
+      return {
+        r: Math.round(r * 255),
+        g: Math.round(g * 255),
+        b: Math.round(b * 255)
+      };
+    }
+
+    let currentData = null;
+    let currentFrameIndex = 0;
+    let isPlaying = false;
+    let playInterval = null;
+    let playSpeed = 10;
+    let texSize = 512;  // 动态纹理分辨率
+
+    function resizeCanvases(w, h) {
+      texSize = Math.max(w, h);
+      const previewCanvas = document.getElementById('previewCanvas');
+      previewCanvas.width = w;
+      previewCanvas.height = h;
+    }
+
+    function renderData(data) {
+      // 根据加载的帧数据自适应画布分辨率（按 bbox 大小）
+      let canvasW = 512, canvasH = 512;
+      if (data.format === 'ftx3-multiframe' && data.frames.length > 0) {
+        const { w, h } = data.frames[0].bbox;
+        canvasW = w;
+        canvasH = h;
+      } else if (data.regions && data.regions.length > 0) {
+        // 取最大 bbox 尺寸
+        for (const region of data.regions) {
+          const { w, h } = region.bbox;
+          canvasW = Math.max(canvasW, w);
+          canvasH = Math.max(canvasH, h);
+        }
+      }
+      resizeCanvases(canvasW, canvasH);
+
+      const canvas = document.getElementById('previewCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const stats = document.getElementById('stats');
+      stats.innerHTML = '';
+
+      if (data.format === 'ftx3-multiframe') {
+        renderMultiFrame(data);
+      } else {
+        renderRegions(data);
+      }
+    }
+
+    function renderRegions(data) {
+      for (const region of data.regions) {
+        const { bbox, baseColors, regionIdTexture, deltaTexture, blockFlags = 0n } = region;
+        const { x, y, w, h } = bbox;
+
+        const regionIdTex = regionIdTexture ? base64ToUint8Array(regionIdTexture) : null;
+        const deltaTex = base64ToUint8Array(deltaTexture);
+
+        let renderedCount = 0;
+        for (let py = 0; py < h; py++) {
+          for (let px = 0; px < w; px++) {
+            const localIdx = py * w + px;
+
+            if (regionIdTex && regionIdTex[localIdx] === 0) continue;
+
+            let baseIdx = regionIdTex ? regionIdTex[localIdx] - 1 : 0;
+            if (baseIdx < 0 || baseIdx >= baseColors.length) {
+              console.warn(`调色板索引 ${baseIdx} 超出范围 (调色板大小 ${baseColors.length})，跳过该像素`);
+              continue;
+            }
+            const base = baseColors[baseIdx];
+
+            let dH = 0, dS = 0, dL = 0;
+            if (deltaTex.length > 0) {
+              const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+              const range = getRangeForBlock(blockFlags, blockIdx);
+              dH = dequantizeH(deltaTex[localIdx * 3], range);
+              dS = dequantizeS(deltaTex[localIdx * 3 + 1], range);
+              dL = dequantizeL(deltaTex[localIdx * 3 + 2], range);
+            }
+
+            let finalH = base.h + dH;
+            finalH = ((finalH % 1) + 1) % 1;
+            const finalS = Math.max(0, Math.min(1, base.s + dS));
+            const finalL = Math.max(0, Math.min(1, base.l + dL));
+
+            const rgb = hslToRgb(finalH, finalS, finalL);
+            ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+            ctx.fillRect(px, py, 1, 1);
+            renderedCount++;
+          }
+        }
+
+        stats.innerHTML += `
+          <div>区域 ${region.id}:</div>
+          <div>  - BBox: (${x}, ${y}, ${w}x${h})</div>
+          <div>  - 基础色调数: ${baseColors.length}</div>
+          <div>  - 渲染像素: ${renderedCount}</div>
+          <div>  - 量化格式: ${data.quantization || 'uint8'}</div>
+          <div>  - FTX版本: ${data.version}</div>
+          <div>  - blockFlags: 0x${blockFlags.toString(16).padStart(16, '0')}</div>
+          <div>  - regionIdTex: ${regionIdTex ? regionIdTex.length + ' 字节' : '无（单色调）'}</div>
+          <div>  - deltaTex: ${deltaTex.length} 字节</div>
+        `;
+      }
+    }
+
+    function renderMultiFrame(data) {
+      const frame = data.frames[currentFrameIndex];
+      if (!frame) return;
+
+      const { bbox, regionIdTex, deltaTex, blockFlags = 0n } = frame;
+      const { x, y, w, h } = bbox;
+      const palette = data.palette;
+
+      let renderedCount = 0;
+      for (let py = 0; py < h; py++) {
+        for (let px = 0; px < w; px++) {
+          const localIdx = py * w + px;
+
+          if (regionIdTex && regionIdTex[localIdx] === 0) continue;
+
+          let baseIdx = regionIdTex ? regionIdTex[localIdx] - 1 : 0;
+          if (baseIdx < 0 || baseIdx >= palette.length) {
+            console.warn(`调色板索引 ${baseIdx} 超出范围 (调色板大小 ${palette.length})，跳过该像素`);
+            continue;
+          }
+          const base = palette[baseIdx];
+
+          let dH = 0, dS = 0, dL = 0;
+          if (deltaTex.length > 0) {
+            const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+            const range = getRangeForBlock(blockFlags, blockIdx);
+            dH = dequantizeH(deltaTex[localIdx * 3], range);
+            dS = dequantizeS(deltaTex[localIdx * 3 + 1], range);
+            dL = dequantizeL(deltaTex[localIdx * 3 + 2], range);
+          }
+
+          let finalH = base.h + dH;
+          finalH = ((finalH % 1) + 1) % 1;
+          const finalS = Math.max(0, Math.min(1, base.s + dS));
+          const finalL = Math.max(0, Math.min(1, base.l + dL));
+
+          const rgb = hslToRgb(finalH, finalS, finalL);
+          const ctx = document.getElementById('previewCanvas').getContext('2d');
+          ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+          ctx.fillRect(px, py, 1, 1);
+          renderedCount++;
+        }
+      }
+
+      const stats = document.getElementById('stats');
+      stats.innerHTML = `
+        <div>当前帧: ${currentFrameIndex + 1} / ${data.frameCount}</div>
+        <div>帧名称: ${frame.name}</div>
+        <div>纹理尺寸: ${w}x${h}（bbox 区域）</div>
+        <div>BBox: (${x}, ${y}, ${w}x${h})</div>
+        <div>调色板颜色数: ${data.paletteCount}</div>
+        <div>渲染像素: ${renderedCount}</div>
+        <div>regionIdTex: ${regionIdTex ? regionIdTex.length + ' 字节' : '无'}</div>
+        <div>deltaTex: ${deltaTex.length} 字节</div>
+      `;
+
+      updateFrameInfo(data);
+    }
+
+    function updateFrameInfo(data) {
+      const frameInfo = document.getElementById('frameInfo');
+      const frameList = document.getElementById('frameList');
+
+      if (data.format !== 'ftx3-multiframe') {
+        document.getElementById('frameControls').style.display = 'none';
+        return;
+      }
+
+      document.getElementById('frameControls').style.display = 'flex';
+      frameInfo.textContent = `帧 ${currentFrameIndex + 1} / ${data.frameCount}: ${data.frames[currentFrameIndex]?.name || '未命名'}`;
+
+      frameList.innerHTML = '';
+      data.frames.forEach((frame, idx) => {
+        const btn = document.createElement('button');
+        btn.className = `frame-btn ${idx === currentFrameIndex ? 'active' : ''}`;
+        btn.textContent = `${idx + 1}: ${frame.name}`;
+        btn.onclick = () => selectFrame(idx);
+        frameList.appendChild(btn);
+      });
+    }
+
+    function selectFrame(idx) {
+      currentFrameIndex = idx;
+      isPlaying = false;
+      updatePlayButton();
+      renderData(currentData);
+    }
+
+    function prevFrame() {
+      if (!currentData || currentData.format !== 'ftx3-multiframe') return;
+      currentFrameIndex = (currentFrameIndex - 1 + currentData.frameCount) % currentData.frameCount;
+      renderData(currentData);
+    }
+
+    function nextFrame() {
+      if (!currentData || currentData.format !== 'ftx3-multiframe') return;
+      currentFrameIndex = (currentFrameIndex + 1) % currentData.frameCount;
+      renderData(currentData);
+    }
+
+    function togglePlay() {
+      if (!currentData || currentData.format !== 'ftx3-multiframe') return;
+
+      isPlaying = !isPlaying;
+      updatePlayButton();
+
+      if (isPlaying) {
+        playInterval = setInterval(() => {
+          currentFrameIndex = (currentFrameIndex + 1) % currentData.frameCount;
+          renderData(currentData);
+        }, 1000 / playSpeed);
+      } else {
+        if (playInterval) {
+          clearInterval(playInterval);
+          playInterval = null;
+        }
+      }
+    }
+
+    function updatePlayButton() {
+      const btn = document.querySelector('.play');
+      if (btn) {
+        btn.textContent = isPlaying ? '停止' : '播放';
+        btn.className = isPlaying ? 'stop' : 'play';
+      }
+    }
+
+    function updateSpeed() {
+      playSpeed = parseInt(document.getElementById('speedRange').value);
+      document.getElementById('speedValue').textContent = playSpeed;
+      if (isPlaying) {
+        togglePlay();
+        togglePlay();
+      }
+    }
+
+    function loadFile() {
+      const input = document.getElementById('fileInput');
+      input.accept = '*';
+      input.click();
+    }
+
+    async function handleFile(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const fileInfo = document.getElementById('fileInfo');
+      fileInfo.textContent = `正在加载: ${file.name} (${(file.size / 1024).toFixed(1)} KB)...`;
+
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        console.log('[DEBUG] 文件大小:', file.size, '字节');
+        console.log('[DEBUG] 前10字节:', uint8Array.slice(0, 10));
+        
+        const isGzipped = uint8Array.length >= 2 && uint8Array[0] === 0x1f && uint8Array[1] === 0x8b;
+        console.log('[DEBUG] 是否Gzip:', isGzipped);
+        
+        let dataBuffer = arrayBuffer;
+
+        if (isGzipped) {
+          const blob = new Blob([uint8Array]);
+          const decompressedStream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
+          const decompressedBlob = await new Response(decompressedStream).blob();
+          dataBuffer = await decompressedBlob.arrayBuffer();
+          console.log('[DEBUG] 解压后大小:', dataBuffer.byteLength, '字节');
+        }
+
+        const magic = new DataView(dataBuffer).getUint32(0, false);
+        console.log('[DEBUG] Magic:', magic.toString(16).toUpperCase(), '(FTX2:', MAGIC_FTX2.toString(16), 'FTX3:', MAGIC_FTX3.toString(16), ')');
+        
+        if (magic === MAGIC_FTX2 || magic === MAGIC_FTX3) {
+          currentData = decompressFromBinary(dataBuffer);
+          currentFrameIndex = 0;
+          isPlaying = false;
+          updatePlayButton();
+          renderData(currentData);
+          fileInfo.textContent = `已加载 ${magic === MAGIC_FTX3 ? 'FTX3 多帧' : 'FTX 2.0'} 文件: ${file.name}`;
+
+          const jsonStr = JSON.stringify(currentData, (key, value) => {
+            if (value instanceof Uint8Array) return Array.from(value);
+            if (typeof value === 'bigint') return value.toString();
+            return value;
+          }, 2);
+          const blob = new Blob([jsonStr], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `decoded_from_ftx_${Date.now()}.json`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } else {
+          const text = new TextDecoder().decode(dataBuffer);
+          currentData = JSON.parse(text);
+          currentFrameIndex = 0;
+          isPlaying = false;
+          updatePlayButton();
+          renderData(currentData);
+          fileInfo.textContent = `已加载 JSON 文件: ${file.name}`;
+        }
+      } catch (err) {
+        console.error('[ERROR] 文件加载失败:', err);
+        alert('文件加载失败: ' + err.message + '\n\n请打开开发者工具(F12)查看详细错误信息');
+        fileInfo.textContent = '';
+      }
+
+      input.value = '';
+    }
+
+    const previewCanvas = document.getElementById('previewCanvas');
+    const zoomCanvas = document.getElementById('zoomCanvas');
+    const zoomCtx = zoomCanvas.getContext('2d');
+    const zoomInfo = document.getElementById('zoomInfo');
+
+    previewCanvas.addEventListener('click', (e) => {
+      const rect = previewCanvas.getBoundingClientRect();
+      const scaleX = previewCanvas.width / rect.width;
+      const scaleY = previewCanvas.height / rect.height;
+      const x = Math.floor((e.clientX - rect.left) * scaleX);
+      const y = Math.floor((e.clientY - rect.top) * scaleY);
+
+      const ctx = previewCanvas.getContext('2d');
+      const pixel = ctx.getImageData(x, y, 1, 1).data;
+
+      zoomInfo.textContent = `点击位置: (${x}, ${y}), 颜色: RGB(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
+
+      const zoomSize = 64;
+      const zoomX = Math.max(0, Math.min(previewCanvas.width - zoomSize, x - zoomSize / 2));
+      const zoomY = Math.max(0, Math.min(previewCanvas.height - zoomSize, y - zoomSize / 2));
+
+      zoomCtx.clearRect(0, 0, 256, 256);
+      zoomCtx.imageSmoothingEnabled = false;
+      zoomCtx.drawImage(previewCanvas, zoomX, zoomY, zoomSize, zoomSize, 0, 0, 256, 256);
+
+      const borderX = (x - zoomX) * 4;
+      const borderY = (y - zoomY) * 4;
+      zoomCtx.strokeStyle = '#722ed1';
+      zoomCtx.lineWidth = 2;
+      zoomCtx.strokeRect(borderX - 2, borderY - 2, 4, 4);
+    });
+  </script>
+</body>
+</html>

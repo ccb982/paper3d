@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>特效播放器 Demo</title>
+  <style>
+    body { margin:0; background:#111; display:flex; flex-direction:column; align-items:center; font-family:Microsoft YaHei,sans-serif; }
+    canvas { width:auto; height:auto; border:1px solid #333; margin-top:8px; image-rendering:pixelated; }
+    #controls { color:#fff; width:520px; margin:8px 0; }
+    #controls .row { display:flex; align-items:center; gap:6px; margin:3px 0; }
+    button { padding:4px 8px; cursor:pointer; background:#333; color:#fff; border:1px solid #555; border-radius:3px; font-size:13px; }
+    button:hover { background:#444; }
+    button:disabled { opacity:0.3; cursor:default; }
+    input[type=file] { display:none; }
+    input[type=range] { width:120px; }
+    input[type=number] { width:50px; background:#222; color:#fff; border:1px solid #555; padding:2px 4px; }
+    select { background:#222; color:#fff; border:1px solid #555; padding:2px 4px; }
+    #frameSlider { flex:1; min-width:160px; }
+    #info { color:#aaa; font-size:12px; }
+    .label { color:#888; font-size:12px; min-width:36px; }
+  </style>
+</head>
+<body>
+  <canvas id="c" width="512" height="512"></canvas>
+  <div id="controls">
+    <div class="row">
+      <button onclick="document.getElementById('file').click()">加载特效包</button>
+      <input type="file" id="file" accept=".zip" />
+      <span id="info">未加载</span>
+    </div>
+    <div class="row">
+      <span class="label">帧选择</span>
+      <input type="range" id="frameSlider" min="1" max="1" value="1" disabled />
+      <input type="number" id="frameNum" min="1" max="1" value="1" disabled style="width:45px" />
+      <button id="btnGoto" disabled>跳转</button>
+    </div>
+    <div class="row">
+      <button id="btnPlay" disabled>▶ 播放</button>
+      <button id="btnPause" disabled>⏸ 暂停</button>
+      <button id="btnStop" disabled>⏹ 停止</button>
+      <span class="label">顺序</span>
+      <select id="orderSelect" disabled>
+        <option value="loop">循环</option>
+        <option value="linear">顺序</option>
+        <option value="reverse">倒序</option>
+        <option value="pingpong">往返</option>
+      </select>
+      <span class="label">速度</span>
+      <input type="number" id="speedInput" value="1" step="0.1" min="-5" max="5" disabled style="width:50px" />
+    </div>
+    <div class="row">
+      <button id="btnHold" disabled>📌 冻结帧</button>
+      <button id="btnStepF" disabled>+1 前进</button>
+      <button id="btnStepB" disabled>-1 后退</button>
+      <span id="holdState" class="label" style="color:#ff0"></span>
+    </div>
+  </div>
+  <script type="module">
+    import { Asset, createThreeContext, renderFrameData } from './src/index.ts';
+
+    const canvas = document.getElementById('c');
+    const ctx = createThreeContext(canvas);
+    ctx.renderer.setSize(512, 512);
+
+    function resizeToAsset() {
+      if (!asset) return;
+      const sz = asset.resolution;
+      canvas.width = sz;
+      canvas.height = sz;
+      canvas.style.width = sz + 'px';
+      canvas.style.height = sz + 'px';
+      ctx.renderer.setSize(sz, sz);
+    }
+
+    let asset = null;
+    let ctrl = null;
+    let lastTime = performance.now();
+    let animTime = 0;  // 独立动画时钟，永不停，给 VAT 用
+    let pendingInject = null;  // 按住注入状态 { frame, x, y, active }（canvas 像素坐标）
+    let injectTick = 0;        // 注入节流计数器（每 3 帧一次 ≈ 10Hz）
+
+    const $ = (id) => document.getElementById(id);
+    const frameSlider = $('frameSlider');
+    const frameNum = $('frameNum');
+    const info = $('info');
+
+    function enableUI() {
+      ['btnPlay','btnPause','btnStop','btnHold','btnStepF','btnStepB','btnGoto',
+       'orderSelect','speedInput','frameSlider','frameNum'].forEach(
+        id => $(id).disabled = false
+      );
+    }
+
+    function refreshSlider() {
+      if (!ctrl) return;
+      frameSlider.max = ctrl.frameCount;
+      frameSlider.value = fmtFrame(ctrl.frameIndex);
+      frameNum.max = ctrl.frameCount;
+      frameNum.value = fmtFrame(ctrl.frameIndex);
+    }
+
+    const STYLE = { position:{x:0,y:0,z:0}, scale:{x:1,y:1}, rotation:0 };
+
+    const ORDER_MAP = { '循环':'loop', '顺序':'linear', '倒序':'reverse', '往返':'pingpong' };
+
+    function fmtFrame(idx) { return idx + 1; }
+    function unfmtFrame(f) { return Math.max(0, f - 1); }
+
+    $('file').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (asset) { ctrl?.dispose(); asset.dispose(); }
+      try {
+        asset = await Asset.load(await file.arrayBuffer(), { resolution: 512 });
+        const order = $('orderSelect').value;
+        ctrl = asset.createController({ fps: 3, order: ORDER_MAP[order] || 'loop' });
+        ctrl.callbacks.onFrameChange = (idx) => {
+          frameSlider.value = fmtFrame(idx);
+          frameNum.value = fmtFrame(idx);
+          info.textContent = `帧${fmtFrame(idx)}/${ctrl.frameCount} | 第${ctrl.currentLoop+1}轮 | ${ctrl.localTime.toFixed(1)}s | ${ctrl.state}`;
+        };
+        ctrl.callbacks.onComplete = () => { info.textContent += ' [播放完毕]'; };
+        ctrl.callbacks.onStateChange = (s) => {
+          info.textContent = `帧${fmtFrame(ctrl.frameIndex)}/${ctrl.frameCount} | ${s}`;
+        };
+        enableUI();
+        refreshSlider();
+        resizeToAsset();
+        lastTime = performance.now();
+      } catch (err) {
+        info.textContent = '加载失败: ' + err.message;
+        console.error(err);
+      }
+    };
+
+    $('btnPlay').onclick = () => ctrl?.play();
+    $('btnPause').onclick = () => ctrl?.pause();
+    $('btnStop').onclick = () => ctrl?.stop();
+    $('btnHold').onclick = () => {
+      if (!ctrl) return;
+      if (ctrl.isHolding) {
+        ctrl.release();
+        $('holdState').textContent = '';
+        $('btnHold').textContent = '📌 冻结帧';
+      } else {
+        ctrl.hold();
+        $('holdState').textContent = '已冻结';
+        $('btnHold').textContent = '📌 解除冻结';
+      }
+      refreshSlider();
+    };
+    $('btnStepF').onclick = () => { ctrl?.stepForward(); refreshSlider(); };
+    $('btnStepB').onclick = () => { ctrl?.stepBackward(); refreshSlider(); };
+    $('btnGoto').onclick = () => {
+      if (!ctrl) return;
+      ctrl.goto(unfmtFrame(parseInt($('frameNum').value, 10)));
+      refreshSlider();
+    };
+
+    frameSlider.oninput = () => {
+      if (!ctrl) return;
+      const n = parseInt(frameSlider.value, 10);
+      ctrl.goto(unfmtFrame(n));
+      frameNum.value = n;
+    };
+    frameNum.onchange = () => {
+      if (!ctrl) return;
+      ctrl.goto(unfmtFrame(parseInt(frameNum.value, 10)));
+      refreshSlider();
+    };
+    $('orderSelect').onchange = () => {
+      if (!ctrl) return;
+      const val = $('orderSelect').value;
+      ctrl.reset({ order: ORDER_MAP[val] || 'loop' });
+    };
+    $('speedInput').onchange = () => {
+      if (!ctrl) return;
+      ctrl.reset({ speed: parseFloat($('speedInput').value) || 1 });
+    };
+
+    function tick() {
+      requestAnimationFrame(tick);
+      if (!asset || !ctrl) return;
+
+      const now = performance.now();
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
+
+      // 动画时钟：永远推进，不受帧暂停/跳转影响
+      animTime += dt;
+
+      // 帧切换：由 Controller 控制，可暂停/跳帧
+      ctrl.advance(dt);
+
+      const data = asset.getFrameRenderData(ctrl.frameIndex);
+      if (data) {
+        // ★ 流体：持续解算（与播放/暂停无关，暂停只控制帧切换）
+        //   仅当前帧有流体配置时驱动解算器；换帧后旧帧效果自动停止推进
+        let fluidTex = null;
+        let fluidEff = null;
+        if (asset.hasPhysics(ctrl.frameIndex)) {
+          fluidEff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer);
+          if (fluidEff) {
+            fluidEff.step(dt);
+            fluidTex = fluidEff.getCompositeTexture();
+          }
+        }
+        renderFrameData(data, animTime, 30, STYLE, ctx.renderer, ctx.scene, ctx.camera, fluidTex);
+        // ★ 手动注入交互：按住画面 → 转 bbox 局部 UV → 持续注入（节流 ~10Hz）
+        if (fluidEff && pendingInject && pendingInject.active && pendingInject.frame === ctrl.frameIndex) {
+          injectTick++;
+          if (injectTick >= 3) {
+            injectTick = 0;
+            const hit = data.entities[0];
+            if (hit) {
+              const fw = hit.frameWidth;
+              const bbox = hit.texBbox;
+              const cx = pendingInject.x / canvas.width;   // 归一化画布坐标 (0~1)
+              const cy = pendingInject.y / canvas.height;
+              // 与 shader 一致：vUv = [x, 1-y] → bbox 局部 UV
+              const uv = {
+                x: (cx - bbox.x / fw) / (bbox.w / fw),
+                y: (cy - bbox.y / fw) / (bbox.h / fw),
+              };
+              if (uv.x >= 0 && uv.x <= 1 && uv.y >= 0 && uv.y <= 1) {
+                fluidEff.injectAt(uv);
+              }
+            }
+          }
+        }
+      }
+    }
+    tick();
+
+    // ★ 手动注入：按住画面持续注入（pointer 事件，兼容鼠标/触屏）
+    function injectPosFromEvent(e) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: (e.clientX - rect.left) * (canvas.width / rect.width),
+        y: (e.clientY - rect.top) * (canvas.height / rect.height),
+      };
+    }
+    canvas.addEventListener('pointerdown', (e) => {
+      if (!asset || !ctrl) return;
+      if (!asset.hasPhysics(ctrl.frameIndex)) return;
+      canvas.setPointerCapture?.(e.pointerId);
+      const p = injectPosFromEvent(e);
+      pendingInject = { frame: ctrl.frameIndex, x: p.x, y: p.y, active: true };
+      injectTick = 0;
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!pendingInject || !pendingInject.active) return;
+      const p = injectPosFromEvent(e);
+      pendingInject.x = p.x;
+      pendingInject.y = p.y;
+    });
+    const endInject = () => { if (pendingInject) pendingInject.active = false; };
+    canvas.addEventListener('pointerup', endInject);
+    canvas.addEventListener('pointercancel', endInject);
+    canvas.addEventListener('pointerleave', endInject);
+  </script>
+</body>
+</html>
