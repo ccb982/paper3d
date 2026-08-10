@@ -560,6 +560,8 @@ export const BaseColorEditor: React.FC = () => {
   }, [bgImageData]);
 
   // ★ 分辨率调整功能：缩放所有帧数据到新尺寸
+  // ★ 分辨率调整功能：先缩放背景色，再用缩放后的背景重新生成基础色和残差
+  //   （不重采样旧的 regionIdTex/deltaPacked——那会导致边界错位/精度丢失 → 噪点）
   const handleResolutionChange = useCallback((newSize: number) => {
     // ★ 输入验证：确保分辨率在合理范围内
     const minSize = 64;
@@ -582,132 +584,100 @@ export const BaseColorEditor: React.FC = () => {
     const oldSize = texSize;
     const scaleX = newSize / oldSize;
     const scaleY = newSize / oldSize;
-    
-    // 缩放所有帧的数据
-    frames.forEach((frame) => {
-      const updates: Record<string, unknown> = {};
-      // ★ 各帧用自己的实际尺寸作为缩放基准（防止多帧尺寸不同时用全局 oldSize 错位）
-      const frameOldSize = frame.bgImageData ? frame.bgImageData.width : oldSize;
-      const fScaleX = newSize / frameOldSize;
-      const fScaleY = newSize / frameOldSize;
 
-      // 1. 缩放背景图
-      if (frame.bgImageData) {
-        const srcCanvas = document.createElement('canvas');
-        srcCanvas.width = frameOldSize;
-        srcCanvas.height = frameOldSize;
-        const srcCtx = srcCanvas.getContext('2d')!;
-        srcCtx.putImageData(frame.bgImageData, 0, 0);
-        
-        const dstCanvas = document.createElement('canvas');
-        dstCanvas.width = newSize;
-        dstCanvas.height = newSize;
-        const dstCtx = dstCanvas.getContext('2d')!;
-        // 使用最近邻插值保留像素清晰度
-        dstCtx.imageSmoothingEnabled = false;
-        dstCtx.drawImage(srcCanvas, 0, 0, newSize, newSize);
-        
-        updates.bgImageData = dstCtx.getImageData(0, 0, newSize, newSize);
-      }
+    // ★ 缩放后的 globalBbox（作为重新提取的 forcedBbox）
+    const newGlobalBbox = globalBbox ? {
+      x: Math.round(globalBbox.x * scaleX),
+      y: Math.round(globalBbox.y * scaleY),
+      w: Math.round(globalBbox.w * scaleX),
+      h: Math.round(globalBbox.h * scaleY),
+    } : null;
+
+    // 对每个帧：缩放背景 → 重新提取生成 regionIdTex/baseColors/deltaPacked/blockFlags
+    const store = useAppStore.getState();
+    const updatedFrameIds: string[] = [];
+
+    frames.forEach((frame) => {
+      if (!frame.bgImageData) return;
+      const frameOldSize = frame.bgImageData.width;
+
+      // 1. 缩放背景图（最近邻，保留像素清晰度）
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = frameOldSize;
+      srcCanvas.height = frameOldSize;
+      const srcCtx = srcCanvas.getContext('2d')!;
+      srcCtx.putImageData(frame.bgImageData, 0, 0);
       
-      // ★ 移除 baseTexture 和 residualTexture 的直接缩放
-      // 因为它们需要根据新的 regionIdTex 重新生成
-      // 将在后面通过 syncFrameTextures 统一生成，确保与 regionIdTex 同步
+      const dstCanvas = document.createElement('canvas');
+      dstCanvas.width = newSize;
+      dstCanvas.height = newSize;
+      const dstCtx = dstCanvas.getContext('2d')!;
+      dstCtx.imageSmoothingEnabled = false;
+      dstCtx.drawImage(srcCanvas, 0, 0, newSize, newSize);
+      const newBg = dstCtx.getImageData(0, 0, newSize, newSize);
       
-      // 4. 缩放 bbox（坐标和尺寸，用各帧自己的 fScale）
-      if (frame.bbox) {
-        const newBbox = {
-          x: Math.round(frame.bbox.x * fScaleX),
-          y: Math.round(frame.bbox.y * fScaleY),
-          w: Math.round(frame.bbox.w * fScaleX),
-          h: Math.round(frame.bbox.h * fScaleY),
-        };
-        // ★ 边界检查：确保 bbox 在画布范围内且尺寸有效
-        newBbox.x = Math.max(0, Math.min(newSize - 1, newBbox.x));
-        newBbox.y = Math.max(0, Math.min(newSize - 1, newBbox.y));
-        newBbox.w = Math.max(1, Math.min(newSize - newBbox.x, newBbox.w));
-        newBbox.h = Math.max(1, Math.min(newSize - newBbox.y, newBbox.h));
-        // 如果 bbox 有效则更新
-        if (newBbox.w > 0 && newBbox.h > 0) {
-          updates.bbox = newBbox;
-        } else {
-          console.warn(`[分辨率调整] 帧 ${frame.id} 的 bbox 缩放后无效，已丢弃`);
+      // 2. 先用缩放后的背景更新 frame（供 extractBaseByClick 使用）
+      updateSkillFrame(frame.id, { bgImageData: newBg });
+
+      // 3. 重新提取：用缩放后的背景 + 区域多边形（世界坐标 0~1，自动适配新尺寸）
+      const polygons = frame.dashedPolygons || [];
+      if (polygons.length === 0) return;
+
+      const result = extractBaseByClick(newBg, polygons, undefined, newSize, newGlobalBbox);
+      if (result) {
+        const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, blockFlags } = result;
+
+        // ★ 本地索引 → 全局 id（内联 autoMergeToGlobal 逻辑）
+        const st = useAppStore.getState();
+        const localToGlobal = new Map<number, number>();
+        for (let i = 0; i < localBaseColors.length; i++) {
+          const globalId = st.addColorToPalette(localBaseColors[i], frame.id);
+          localToGlobal.set(i + 1, globalId);
         }
-      }
-      
-      // 5. 缩放 regionIdTex 和 deltaPacked（需要重采样）
-      // ★ 只有当 bbox 有效时才进行缩放
-      if (frame.regionIdTex && updates.bbox) {
-        const oldBbox = frame.bbox!;
-        const newBbox = updates.bbox as { x: number; y: number; w: number; h: number };
-        
-        const oldW = oldBbox.w;
-        const oldH = oldBbox.h;
-        const newW = newBbox.w;
-        const newH = newBbox.h;
-        
-        // 创建新的 regionIdTex
-        const newRegionIdTex = new Uint8Array(newW * newH);
-        newRegionIdTex.fill(0);
-        
-        // 创建新的 deltaPacked
-        const newDeltaPacked = new Uint16Array(newW * newH);
-        newDeltaPacked.fill(0);
-        
-        // 最近邻重采样
-        for (let ny = 0; ny < newH; ny++) {
-          for (let nx = 0; nx < newW; nx++) {
-            // 反向映射到旧坐标（用各帧自己的 fScale）
-            const oldPy = Math.min(oldH - 1, Math.floor(ny / fScaleY));
-            const oldPx = Math.min(oldW - 1, Math.floor(nx / fScaleX));
-            const oldIdx = oldPy * oldW + oldPx;
-            const newIdx = ny * newW + nx;
-            
-            newRegionIdTex[newIdx] = frame.regionIdTex[oldIdx];
-            if (frame.deltaPacked) {
-              newDeltaPacked[newIdx] = frame.deltaPacked[oldIdx];
-            }
-          }
+        const mergedRegionIdTex = new Uint8Array(localRegionIdTex.length);
+        for (let i = 0; i < localRegionIdTex.length; i++) {
+          const li = localRegionIdTex[i];
+          mergedRegionIdTex[i] = li === 0 ? 0 : (localToGlobal.get(li) || 0);
         }
-        
-        updates.regionIdTex = newRegionIdTex;
-        if (frame.deltaPacked) {
-          updates.deltaPacked = newDeltaPacked;
-        }
-      }
-      
-      // 6. 缩放 dashedPolygons（世界坐标不变，无需修改）
-      // 虚线多边形使用世界坐标 (0~1)，缩放画布尺寸后自动适配
-      
-      if (Object.keys(updates).length > 0) {
-        updateSkillFrame(frame.id, updates);
+
+        const newBaseTexture = buildBaseTextureFromLocalColors(
+          localBaseColors, mergedRegionIdTex, bbox, newSize
+        );
+
+        updateSkillFrame(frame.id, {
+          baseColorValues: [],
+          baseTexture: newBaseTexture,
+          bbox: bbox,
+          regionIdTex: mergedRegionIdTex,
+          deltaPacked: deltaPacked,
+          blockFlags: blockFlags,
+        });
+
+        updatedFrameIds.push(frame.id);
       }
     });
-    
-    // 7. 缩放 globalBbox
-    if (globalBbox) {
-      setGlobalBbox({
-        x: Math.round(globalBbox.x * scaleX),
-        y: Math.round(globalBbox.y * scaleY),
-        w: Math.round(globalBbox.w * scaleX),
-        h: Math.round(globalBbox.h * scaleY),
-      });
+
+    // 4. 更新 globalBbox
+    if (newGlobalBbox) {
+      setGlobalBbox(newGlobalBbox);
     }
     
-    // 8. 更新 texSize
+    // 5. 更新 texSize
     setManualTexSize(newSize);
     
-    // 9. ★ 重新生成所有帧的基础色和残差纹理（基于新的 regionIdTex 和 deltaPacked）
-    // 使用 setTimeout 确保 state 更新完成后再执行
+    // 6. 重新生成显示纹理（用 setTimeout 确保 state 更新完成）
     setTimeout(() => {
-      for (const frame of frames) {
-        if (frame.regionIdTex && frame.regionIdTex.length > 0 && frame.bbox) {
-          syncFrameTextures(frame.id);
+      const curStore = useAppStore.getState();
+      for (const fid of updatedFrameIds) {
+        const fr = curStore.skillGroupEditor.frames.find(f => f.id === fid);
+        if (fr && fr.regionIdTex && fr.regionIdTex.length > 0 && fr.bbox) {
+          syncFrameTextures(fid);
         }
       }
-      console.log(`[分辨率调整] 完成，已缩放 ${frames.length} 个帧，已重新生成纹理`);
+      sortPaletteByArea();
+      console.log(`[分辨率调整] 完成：缩放背景并重新生成 ${updatedFrameIds.length} 帧的基础色/残差`);
     }, 0);
-  }, [texSize, frames, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures]);
+  }, [texSize, frames, globalBbox, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures, sortPaletteByArea]);
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0n);
@@ -1718,6 +1688,27 @@ export const BaseColorEditor: React.FC = () => {
 
     // 修正（操作 bbox 局部数据；baseColors 用共享列表的 id 映射）
     const colorsWithId = sharedBaseColors.map((c) => ({ id: c.id, h: c.h, s: c.s, l: c.l }));
+
+    // ★ 诊断：regionIdTex 的 id 与 sharedBaseColors 的匹配率（缩放后可能错位）
+    const colorIdSet = new Set(colorsWithId.map(c => c.id));
+    let totalIds = 0, matchedIds = 0;
+    const missingIdSet = new Set<number>();
+    for (let i = 0; i < frameRegionIdTex.length; i++) {
+      const rid = frameRegionIdTex[i];
+      if (rid === 0) continue;
+      totalIds++;
+      if (colorIdSet.has(rid)) matchedIds++;
+      else missingIdSet.add(rid);
+    }
+    if (totalIds > 0 && matchedIds < totalIds) {
+      console.warn('[强制修正] ⚠️ regionIdTex 部分 id 不在共享色板中！', {
+        匹配: `${matchedIds}/${totalIds}`,
+        缺失id: [...missingIdSet].slice(0, 10),
+        sharedBaseColors数: colorsWithId.length,
+        bbox, texSize, lx, ly,
+      });
+    }
+
     const result = forcedFixBrush(
       frameRegionIdTex,
       colorsWithId,
