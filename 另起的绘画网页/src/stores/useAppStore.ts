@@ -2218,6 +2218,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     const bbox = frame.bbox;
+    // ★ 用 colorSource 的实际宽度做采样（缩放后 texSize≠512，硬编码会行错位）
+    const sourceWidth = colorSource.width;
 
     // 掩码：基于 bbox 内所有不透明像素（不再依赖虚线多边形）
     const mask = new Uint8Array(bbox.w * bbox.h);
@@ -2226,7 +2228,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       for (let px = 0; px < bbox.w; px++) {
         const gx = bbox.x + px;
         const gy = bbox.y + py;
-        const idx = (gy * 512 + gx) * 4;
+        const idx = (gy * sourceWidth + gx) * 4;
         if (colorSource.data[idx + 3] > 0) {
           mask[py * bbox.w + px] = 1;
           maskPixelCount++;
@@ -2244,7 +2246,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     let deltaPacked: Uint16Array;
     let blockFlags: bigint;
     try {
-      const result = clusterAndGenerateTexturesV2(mask, bbox, colorSource, 512);
+      const result = clusterAndGenerateTexturesV2(mask, bbox, colorSource, sourceWidth);
       baseColors = result.baseColors;
       regionIdTex = result.regionIdTex;
       deltaPacked = result.deltaPacked;
@@ -2808,18 +2810,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   setSharedBaseColors: (colors) => {
     const newPalette = new Map<number, PaletteColor>();
+    let maxId = 0;
     for (const c of colors) {
       newPalette.set(c.id, {
         h: c.h, s: c.s, l: c.l,
         frameIds: new Set(Array.isArray(c.frameIds) ? c.frameIds : []),
       });
+      if (c.id > maxId) maxId = c.id;
     }
+    // ★ 同步 nextColorId（防止后续 addColorToPalette 复用已存在的 id 覆盖颜色）
+    const nextId = maxId + 1;
     set((state) => ({
       palette: newPalette,
       sharedBaseColors: colors,
+      nextColorId: nextId,
       skillGroupEditor: {
         ...state.skillGroupEditor,
         sharedBaseColors: colors,
+        nextColorId: nextId,
       },
     }));
   },

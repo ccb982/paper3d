@@ -978,6 +978,22 @@ export function forcedFixBrush(
       }
 
       // 新建 base = target，残差 0（合成色 = target，必然达标）
+      if (maxBaseId >= 255) {
+        // ★ 色板已满（Uint8Array 上限 255）：不能新建（会溢出→像素变0），
+        //   退回复用最接近的现有 base（残差 0，尽量接近 target）
+        let fallbackId = colorIdx;
+        let fallbackDist = Infinity;
+        for (const c of baseColors) {
+          const d = colorDist(c, target);
+          if (d < fallbackDist) { fallbackDist = d; fallbackId = c.id; }
+        }
+        regionIdTex[idx] = fallbackId;
+        tempDeltas[idx * 3] = 0;
+        tempDeltas[idx * 3 + 1] = 0;
+        tempDeltas[idx * 3 + 2] = 0;
+        changedCount++;
+        continue;
+      }
       const newId = maxBaseId + 1;
       maxBaseId = newId;
       const newBase = { id: newId, ...target };

@@ -634,13 +634,12 @@ export const BaseColorEditor: React.FC = () => {
           mergedRegionIdTex[i] = li === 0 ? 0 : (localToGlobal.get(li) || 0);
         }
 
-        const newBaseTexture = buildBaseTextureFromLocalColors(
-          localBaseColors, mergedRegionIdTex, bbox, newSize
-        );
-
+        // ★ 不在此处构建 baseTexture：全局 id 与本地数组索引不匹配，
+        //   buildBaseTextureFromLocalColors 用数组索引会越界产生黑像素噪点。
+        //   baseTexture/residualTexture 由 setTimeout 里的 syncFrameTextures
+        //   按全局 id 查 sharedBaseColors 正确重建。
         updateSkillFrame(frame.id, {
           baseColorValues: [],
-          baseTexture: newBaseTexture,
           bbox: bbox,
           regionIdTex: mergedRegionIdTex,
           deltaPacked: deltaPacked,
@@ -1806,21 +1805,41 @@ export const BaseColorEditor: React.FC = () => {
     }
     console.groupEnd();
 
+    // ★ 新色去重同步到全局调色板：forcedFixBrush 新建的 base 先经
+    //   addColorToPalette 去重复用（相似色复用旧 id），防止色板膨胀超过
+    //   Uint8Array 的 255 上限；再把新 id 映射回 regionIdTex
+    const origColorIds = new Set(sharedBaseColors.map((c) => c.id));
+    const localToGlobal = new Map<number, number>();
+    for (const c of result.baseColors) {
+      if (!origColorIds.has(c.id)) {
+        const globalId = addColorToPalette({ h: c.h, s: c.s, l: c.l }, frame.id || '');
+        localToGlobal.set(c.id, globalId);
+      }
+    }
+    let finalRegionIdTex = result.regionIdTex;
+    if (localToGlobal.size > 0) {
+      finalRegionIdTex = new Uint8Array(result.regionIdTex.length);
+      for (let i = 0; i < result.regionIdTex.length; i++) {
+        const rid = result.regionIdTex[i];
+        finalRegionIdTex[i] = rid === 0 ? 0 : (localToGlobal.get(rid) ?? rid);
+      }
+    }
+
     // 同步回帧（regionIdTex + deltaPacked + blockFlags）
     updateSkillFrame(frame.id, {
-      regionIdTex: result.regionIdTex,
+      regionIdTex: finalRegionIdTex,
       deltaPacked: result.deltaPacked,
       blockFlags: result.blockFlags,
     });
-    // ★ 重置基础色列表：合并 forcedFixBrush 结果进共享列表
-    //   保留原 id 的颜色（含 frameIds/area），新增的颜色补全字段
+    // ★ 合并 forcedFixBrush 结果进共享列表（新色用去重后的全局 id）
     const newSharedColors: SharedBaseColor[] = result.baseColors.map((c) => {
-      const existing = sharedBaseColors.find((sc) => sc.id === c.id);
+      const gid = localToGlobal.get(c.id) ?? c.id;
+      const existing = sharedBaseColors.find((sc) => sc.id === gid);
       if (existing) {
         return { ...existing, h: c.h, s: c.s, l: c.l };
       }
       return {
-        id: c.id,
+        id: gid,
         h: c.h,
         s: c.s,
         l: c.l,
@@ -1833,7 +1852,7 @@ export const BaseColorEditor: React.FC = () => {
     // ★ 重建显示纹理（baseTexture/residualTexture）→ 画面立即更新
     syncFrameTextures(frame.id);
     triggerCanvasRedraw?.();
-  }, [bgImageData, bbox, currentFrame, sharedBaseColors, texSize, updateSkillFrame, setSharedBaseColors, triggerCanvasRedraw, syncFrameTextures]);
+  }, [bgImageData, bbox, currentFrame, sharedBaseColors, texSize, updateSkillFrame, setSharedBaseColors, triggerCanvasRedraw, syncFrameTextures, addColorToPalette]);
 
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
