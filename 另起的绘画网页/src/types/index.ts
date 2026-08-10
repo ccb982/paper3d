@@ -142,7 +142,7 @@ export interface FrameData {
   id: string;                         // 对应图层ID
 
   // ---------- 原始导入数据（永远保留，用于重新绑定） ----------
-  rawRegionIdTex: Uint8Array | null;  // 像素值 = 全局颜色 ID
+  rawRegionIdTex: Uint16Array | null;  // 像素值 = 全局颜色 ID（支持 >255）
   rawDeltaPacked: Uint16Array | null;
   rawBbox: { x: number; y: number; w: number; h: number } | null;
   rawBlockFlags: bigint;

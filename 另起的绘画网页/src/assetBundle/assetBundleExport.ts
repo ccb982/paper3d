@@ -143,7 +143,7 @@ export async function exportMainCanvasAssetBundle(
     if (!e.hasTexture) continue;
     const fd = e.fd!;
     const raw = fd.rawRegionIdTex!;
-    const newRegionIdTex = new Uint8Array(raw.length);
+    const newRegionIdTex = new Uint16Array(raw.length);
     for (let i = 0; i < raw.length; i++) {
       const globalId = raw[i];
       newRegionIdTex[i] = globalId === 0 ? 0 : (idToIndex.get(globalId) ?? 0) + 1;

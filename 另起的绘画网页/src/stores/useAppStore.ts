@@ -35,7 +35,7 @@ interface PaletteColor {
 interface UnifiedFrameRef {
   id: string;
   type: 'skillGroup' | 'frameData';
-  regionIdTex: Uint8Array | null;
+  regionIdTex: Uint16Array | null;
   bbox: { x: number; y: number; w: number; h: number } | null;
 }
 
@@ -347,7 +347,7 @@ interface AppState {
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
     baseColors: Array<{ h: number; s: number; l: number }>;
-    regionIdTex: Uint8Array;
+    regionIdTex: Uint16Array;
     bgImageData: ImageData | null;
   };
   setBaseColorEditorState: (state: Partial<{
@@ -355,7 +355,7 @@ interface AppState {
     residualTexture: ImageData | null;
     bbox: { x: number; y: number; w: number; h: number } | null;
     baseColors: Array<{ h: number; s: number; l: number }>;
-    regionIdTex: Uint8Array;
+    regionIdTex: Uint16Array;
     bgImageData: ImageData | null;
   }>) => void;
   clearBaseColorEditorState: () => void;
@@ -374,7 +374,7 @@ interface AppState {
       deltaPacked: Uint16Array;
       blockFlags: bigint;
       bbox: { x: number; y: number; w: number; h: number } | null;
-      regionIdTex: Uint8Array;
+      regionIdTex: Uint16Array;
       baseColorValues: Array<{ h: number; s: number; l: number }>;
     }>;
     sharedBaseColors: Array<SharedBaseColor>;
@@ -426,7 +426,7 @@ interface AppState {
     deltaPacked: Uint16Array;
     blockFlags: bigint;
     bbox: { x: number; y: number; w: number; h: number } | null;
-    regionIdTex: Uint8Array;
+    regionIdTex: Uint16Array;
     baseColorValues: Array<{ h: number; s: number; l: number }>;
   }>) => void;
   setSharedBaseColors: (colors: SharedBaseColor[]) => void;
@@ -1646,7 +1646,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           baseTexture: deserializeImageData(frame.baseTexture),
           residualTexture: deserializeImageData(frame.residualTexture),
           deltaPacked: new Uint16Array(frame.deltaPacked || []),
-          regionIdTex: new Uint8Array(frame.regionIdTex),
+          regionIdTex: new Uint16Array(frame.regionIdTex),
           colorPixelsMap: null,
         })) || [];
         
@@ -1728,7 +1728,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           baseTexture: deserializeImageData(frame.baseTexture),
           residualTexture: deserializeImageData(frame.residualTexture),
           deltaPacked: new Uint16Array(frame.deltaPacked || []),
-          regionIdTex: new Uint8Array(frame.regionIdTex),
+          regionIdTex: new Uint16Array(frame.regionIdTex),
           colorPixelsMap: null,
         })) || [];
         
@@ -2006,7 +2006,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     residualTexture: null,
     bbox: null,
     baseColors: [],
-    regionIdTex: new Uint8Array(0),
+    regionIdTex: new Uint16Array(0),
     bgImageData: null,
   },
   setBaseColorEditorState: (updates) => set((state) => ({
@@ -2018,7 +2018,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       residualTexture: null,
       bbox: null,
       baseColors: [],
-      regionIdTex: new Uint8Array(0),
+      regionIdTex: new Uint16Array(0),
       bgImageData: null,
     },
   }),
@@ -2244,7 +2244,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 聚类提取（添加异常保护）
     let baseColors: Array<{ h: number; s: number; l: number }>;
-    let regionIdTex: Uint8Array | null;
+    let regionIdTex: Uint16Array | null;
     let deltaPacked: Uint16Array;
     let blockFlags: bigint;
     try {
@@ -2274,8 +2274,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // 替换 regionIdTex 中的本地索引为全局 ID
     const newRegionIdTex = regionIdTex
-      ? new Uint8Array(regionIdTex.length)
-      : new Uint8Array(0);
+      ? new Uint16Array(regionIdTex.length)
+      : new Uint16Array(0);
     if (regionIdTex) {
       for (let i = 0; i < regionIdTex.length; i++) {
         const localIdx = regionIdTex[i];
@@ -2363,7 +2363,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // ============ 3. 更新当前帧的 regionIdTex ============
     if (mergeMap.size > 0) {
-      const newRegionIdTex = new Uint8Array(regionIdTex);
+      const newRegionIdTex = new Uint16Array(regionIdTex);
       for (let i = 0; i < newRegionIdTex.length; i++) {
         const oldId = newRegionIdTex[i];
         if (oldId !== 0 && mergeMap.has(oldId)) {
@@ -2397,7 +2397,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 复用 mergeTinyRegions（refineResiduals.ts）：统计每个 id 像素数，count < 10
     // 视为可抛弃；归并到 8 邻域保留色（无则色距最近）；残差按新 base 重算 +
     // 量化往返校验（合成色 vs 目标 ≤ 0.02）通过才归并，否则保留原色。
-    const currentTex = new Uint8Array(regionIdTex);
+    const currentTex = new Uint16Array(regionIdTex);
     if (mergeMap.size > 0) {
       for (let i = 0; i < currentTex.length; i++) {
         const oldId = currentTex[i];
@@ -2496,7 +2496,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (cnt > maxCount) { maxCount = cnt; replaceId = id; }
       }
 
-      const newTex = new Uint8Array(tex);
+      const newTex = new Uint16Array(tex);
       for (let i = 0; i < newTex.length; i++) {
         if (newTex[i] === colorId) newTex[i] = replaceId;
       }
@@ -2535,7 +2535,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (cnt > maxCount) { maxCount = cnt; replaceId = id; }
     }
 
-    const newTex = new Uint8Array(tex);
+    const newTex = new Uint16Array(tex);
     for (let i = 0; i < newTex.length; i++) {
       if (newTex[i] === colorId) newTex[i] = replaceId;
     }
@@ -2568,7 +2568,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // 清空像素映射
-      const newTex = frame.regionIdTex ? new Uint8Array(frame.regionIdTex.length) : new Uint8Array(0);
+      const newTex = frame.regionIdTex ? new Uint16Array(frame.regionIdTex.length) : new Uint16Array(0);
       const updatedFrames = state.skillGroupEditor.frames.map(f =>
         f.id === frameId ? { ...f, regionIdTex: newTex, baseTexture: null, residualTexture: null } : f
       );
@@ -2594,7 +2594,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
-    const newTex = fd.rawRegionIdTex ? new Uint8Array(fd.rawRegionIdTex.length) : new Uint8Array(0);
+    const newTex = fd.rawRegionIdTex ? new Uint16Array(fd.rawRegionIdTex.length) : new Uint16Array(0);
     set({
       frameDataMap: {
         ...state.frameDataMap,
@@ -2810,7 +2810,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         deltaPacked: new Uint16Array(0),
         blockFlags: 0n,
         bbox: null,
-        regionIdTex: new Uint8Array(0),
+        regionIdTex: new Uint16Array(0),
         baseColorValues: [],
       };
       return {
@@ -2990,7 +2990,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const frame = frames[i];
 
       // 将 regionIdTex 从导入索引映射到全局 ID
-      const mappedRegionIdTex = new Uint8Array(frame.regionIdTex.length);
+      const mappedRegionIdTex = new Uint16Array(frame.regionIdTex.length);
       for (let j = 0; j < frame.regionIdTex.length; j++) {
         const oldId = frame.regionIdTex[j];
         mappedRegionIdTex[j] = oldId === 0 ? 0 : (globalIdMap.get(oldId) || 0);

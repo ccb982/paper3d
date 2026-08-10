@@ -6,7 +6,7 @@ export interface FrameExportData {
   width: number;
   height: number;
   bbox: { x: number; y: number; w: number; h: number };
-  regionIdTex: Uint8Array;
+  regionIdTex: Uint16Array;
   deltaPacked: Uint16Array;
   blockFlags: bigint; // 64 位，每一位表示一个块的量化范围（1=窄，0=宽）
 }
@@ -16,6 +16,21 @@ export function packMultiFrameToBinary(
   frames: FrameExportData[],
   enablePrediction: boolean = true
 ): Uint8Array {
+  // ★ 导出限制：多帧格式 regionIdTex 为 8bit（0 保留，id+1 编码 → 上限 254）。
+  //   编辑器内允许 >255 颜色，但导出时若超出则明确报错，绝不静默截断
+  //   （截断会导致 id 溢出 → 纹理变灰/花）。
+  const exportMaxId = 254;
+  let maxPaletteId = 0;
+  for (const c of palette) {
+    if (c.id > maxPaletteId) maxPaletteId = c.id;
+  }
+  if (palette.length > exportMaxId || maxPaletteId > exportMaxId) {
+    throw new Error(
+      `[多帧导出] 调色板 ${palette.length} 种颜色 / 最大 id ${maxPaletteId}，超过 8bit 格式上限 ${exportMaxId}。` +
+      `请先使用"重新聚类/合并黑色"清理颜色后再导出（导出格式仅支持 254 色）。`
+    );
+  }
+
   // 头部：Magic(4) + Version(1) + PredictionFlag(1) + FrameCount(2) + PaletteCount(2)
   const headerSize = 4 + 1 + 1 + 2 + 2;
   let totalSize = headerSize;
@@ -32,7 +47,7 @@ export function packMultiFrameToBinary(
   }
 
   const frameChunks: Uint8Array[] = [];
-  let prevRegionIdTex: Uint8Array | null = null;
+  let prevRegionIdTex: Uint16Array | null = null;
   let prevBboxW = 0, prevBboxH = 0;
 
   for (const frame of frames) {

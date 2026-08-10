@@ -63,7 +63,7 @@ function hslWeightedDistance(
 }
 
 export function refineResidualsAndColors(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
   bgImageData: ImageData,
@@ -308,7 +308,7 @@ export function refineResidualsAndColors(
  *   - regionIdTex 已就地更新为新色 ID
  */
 export function createMissingBaseColors(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
   bgImageData: ImageData,
@@ -407,7 +407,7 @@ export function createMissingBaseColors(
  * @param threshold    达标阈值（默认 0.02，≥ 量化步长避免误判）
  */
 export function mergeTinyRegions(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   deltaPacked: Uint16Array,
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },

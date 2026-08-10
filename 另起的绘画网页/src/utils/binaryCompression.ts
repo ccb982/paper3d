@@ -435,7 +435,7 @@ export function unpackMultiFrameFromBinary(buffer: ArrayBuffer): MultiFrameData 
       deltaPacked = new Uint16Array(0);
     }
 
-    frames.push({ name, width, height, bbox, regionIdTex, deltaPacked, blockFlags });
+    frames.push({ name, width, height, bbox, regionIdTex: new Uint16Array(regionIdTex), deltaPacked, blockFlags });
   }
 
   console.log('========================================');

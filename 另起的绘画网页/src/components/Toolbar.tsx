@@ -621,7 +621,7 @@ export function Toolbar() {
                   const exportFrames = validFrames.map(frame => {
                     const frameData = frameDataMap[frame.id];
                     const raw = frameData.rawRegionIdTex!;
-                    const newRegionIdTex = new Uint8Array(raw.length);
+                    const newRegionIdTex = new Uint16Array(raw.length);
                     for (let i = 0; i < raw.length; i++) {
                       const globalId = raw[i];
                       if (globalId === 0) {

@@ -66,7 +66,7 @@ function worldToCanvas(wx: number, wy: number, textureSize: number): Point {
 
 function buildResidualTextureFromPacked(
   deltaPacked: Uint16Array,
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
   textureSize: number
 ): ImageData {
@@ -96,7 +96,7 @@ function buildResidualTextureFromPacked(
 }
 
 function buildCompositeFromPacked(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   deltaPacked: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
@@ -163,7 +163,7 @@ function extractBaseByClick(
   deltaPacked: Uint16Array;
   bbox: { x: number; y: number; w: number; h: number };
   baseColors: Array<{ h: number; s: number; l: number }>;
-  regionIdTex: Uint8Array;
+  regionIdTex: Uint16Array;
   texW: number;
   texH: number;
   blockFlags: bigint;
@@ -312,7 +312,7 @@ function extractBaseByClick(
 
     // 添加 id 字段以便 refineResidualsAndColors 使用
     const colorsWithId = colors.map((c, i) => ({ id: i + 1, ...c }));
-    const regionIdTexCopy = new Uint8Array(regionIdTex);
+    const regionIdTexCopy = new Uint16Array(regionIdTex);
 
     // 调用修正函数（★ 阈值 0.02：≥ range=0.5 块量化往返最大误差 0.016，
     //   避免量化固有误差被判为"坏像素"导致反复归并碎片化噪点）
@@ -428,7 +428,7 @@ function extractBaseByClick(
     deltaPacked,
     bbox: pxBbox,
     baseColors: colors,
-    regionIdTex: regionIdTex || new Uint8Array(0),
+    regionIdTex: regionIdTex || new Uint16Array(0),
     texW: w,
     texH: h,
     blockFlags,
@@ -437,7 +437,7 @@ function extractBaseByClick(
 
 function buildBaseTextureFromLocalColors(
   colors: Array<{ h: number; s: number; l: number }>,
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
   textureSize: number
 ): ImageData {
@@ -517,7 +517,7 @@ export const BaseColorEditor: React.FC = () => {
   const baseTexture = currentFrame?.baseTexture || null;
   const residualTexture = currentFrame?.residualTexture || null;
   const bbox = currentFrame?.bbox || null;
-  const regionIdTex = currentFrame?.regionIdTex || new Uint8Array(0);
+  const regionIdTex = currentFrame?.regionIdTex || new Uint16Array(0);
   const baseColors = sharedBaseColors;
 
   const setBgImageData = useCallback((val: ImageData | null) => {
@@ -544,7 +544,7 @@ export const BaseColorEditor: React.FC = () => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { bbox: val });
   }, [activeFrameId, updateSkillFrame]);
 
-  const setRegionIdTex = useCallback((val: Uint8Array) => {
+  const setRegionIdTex = useCallback((val: Uint16Array) => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { regionIdTex: val });
   }, [activeFrameId, updateSkillFrame]);
 
@@ -648,7 +648,7 @@ export const BaseColorEditor: React.FC = () => {
           const globalId = st.addColorToPalette(localBaseColors[i], frame.id);
           localToGlobal.set(i + 1, globalId);
         }
-        const mergedRegionIdTex = new Uint8Array(localRegionIdTex.length);
+        const mergedRegionIdTex = new Uint16Array(localRegionIdTex.length);
         for (let i = 0; i < localRegionIdTex.length; i++) {
           const li = localRegionIdTex[i];
           mergedRegionIdTex[i] = li === 0 ? 0 : (localToGlobal.get(li) || 0);
@@ -731,7 +731,7 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [frames.length, addSkillFrame]);
 
-  const buildColorPixelsMap = useCallback((regionIdTex: Uint8Array): Map<number, number[]> => {
+  const buildColorPixelsMap = useCallback((regionIdTex: Uint16Array): Map<number, number[]> => {
     const map = new Map<number, number[]>();
     for (let i = 0; i < regionIdTex.length; i++) {
       const globalId = regionIdTex[i];
@@ -1019,7 +1019,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 替换 regionIdTex 中的本地索引为全局 ID
-    const newRegionIdTex = new Uint8Array(frame.regionIdTex.length);
+    const newRegionIdTex = new Uint16Array(frame.regionIdTex.length);
     for (let i = 0; i < frame.regionIdTex.length; i++) {
       const localIdx = frame.regionIdTex[i];
       newRegionIdTex[i] = localIdx === 0 ? 0 : (localToGlobal.get(localIdx) || 0);
@@ -1152,7 +1152,7 @@ export const BaseColorEditor: React.FC = () => {
     console.log('[初始 blockFlags]', newBlockFlags.toString(16).padStart(4, '0'));
 
     // 3. 调用修正（处理坏像素）
-    const regionIdTexCopy = new Uint8Array(regionIdTex);
+    const regionIdTexCopy = new Uint16Array(regionIdTex);
     const baseColorsCopy = baseColors.map(c => ({ ...c }));
     const prevColorCount = baseColorsCopy.length;
     const refinementResult = refineResidualsAndColors(
@@ -1322,7 +1322,7 @@ export const BaseColorEditor: React.FC = () => {
     const totalPixels = w * h;
 
     // 复制 regionIdTex 和 baseColors（避免直接修改原始数据）
-    const regionIdTexCopy = new Uint8Array(regionIdTex);
+    const regionIdTexCopy = new Uint16Array(regionIdTex);
     const baseColorsCopy = baseColors.map((c: SharedBaseColor) => ({ ...c }));
     const prevColorCount = baseColorsCopy.length;
 
@@ -1473,16 +1473,8 @@ export const BaseColorEditor: React.FC = () => {
     console.log(`[合并黑色] 找到 ${nearBlackIds.size} 个近黑基础色:`, [...nearBlackIds]);
 
     // 2. 纯黑 id（addColorToPalette 去重：已有纯黑则复用）
-    let blackId = store.addColorToPalette({ h: 0, s: 0, l: 0 }, frames[0].id || '');
-    // 防御：色板已满（>255 会溢出 Uint8Array）→ 回退用近黑中最黑的 id
-    if (blackId > 255) {
-      let fallbackId = -1, minL = Infinity;
-      for (const c of store.sharedBaseColors) {
-        if (nearBlackIds.has(c.id) && c.l < minL) { minL = c.l; fallbackId = c.id; }
-      }
-      blackId = fallbackId !== -1 ? fallbackId : -1;
-      console.warn('[合并黑色] ⚠️ 色板已满，回退使用现有近黑 id', blackId);
-    }
+    // ★ regionIdTex 已是 Uint16Array（上限 65535），编辑器内不限制 255
+    const blackId = store.addColorToPalette({ h: 0, s: 0, l: 0 }, frames[0].id || '');
 
     // 3. 每帧：近黑 id 引用 → 纯黑 id，残差重算（合成色 ≈ 原色，视觉不变）
     const updatedIds: string[] = [];
@@ -1490,7 +1482,7 @@ export const BaseColorEditor: React.FC = () => {
       if (!frame.regionIdTex || !frame.bbox || !frame.bgImageData) continue;
       const { w, h, x: ox, y: oy } = frame.bbox;
       const texSize = frame.bgImageData.width;
-      const regionIdTex = new Uint8Array(frame.regionIdTex);
+      const regionIdTex = new Uint16Array(frame.regionIdTex);
       const deltaPacked = frame.deltaPacked ? new Uint16Array(frame.deltaPacked) : new Uint16Array(regionIdTex.length);
       let changed = false;
       for (let i = 0; i < regionIdTex.length; i++) {
@@ -1619,7 +1611,7 @@ export const BaseColorEditor: React.FC = () => {
       isProcessingRef.current = false;
       return;
     }
-    const newRegionIdTex = new Uint8Array(currentFrame.regionIdTex);
+    const newRegionIdTex = new Uint16Array(currentFrame.regionIdTex);
     const { w } = bbox;
 
     for (const cluster of clusters) {
@@ -1732,7 +1724,7 @@ export const BaseColorEditor: React.FC = () => {
       return;
     }
     const frame = currentFrame;
-    const frameRegionIdTex = frame.regionIdTex || new Uint8Array(0);
+    const frameRegionIdTex = frame.regionIdTex || new Uint16Array(0);
     const frameDeltaPacked = frame.deltaPacked || new Uint16Array(0);
     if (frameRegionIdTex.length === 0 || frameDeltaPacked.length === 0) {
       console.warn('[强制修正] regionIdTex/deltaPacked 为空，跳过（请先提取）');
@@ -1748,7 +1740,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 修正前回读（调试）
-    const readbackPixels = (regionId: Uint8Array, delta: Uint16Array, flags: bigint): Array<{
+    const readbackPixels = (regionId: Uint16Array, delta: Uint16Array, flags: bigint): Array<{
       x: number; y: number; regionId: number;
       base: string; delta: string; target: string; err: string;
     }> => {
@@ -1933,7 +1925,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     let finalRegionIdTex = result.regionIdTex;
     if (localToGlobal.size > 0) {
-      finalRegionIdTex = new Uint8Array(result.regionIdTex.length);
+      finalRegionIdTex = new Uint16Array(result.regionIdTex.length);
       for (let i = 0; i < result.regionIdTex.length; i++) {
         const rid = result.regionIdTex[i];
         finalRegionIdTex[i] = rid === 0 ? 0 : (localToGlobal.get(rid) ?? rid);
@@ -3079,6 +3071,7 @@ export const BaseColorEditor: React.FC = () => {
         </label>
         <button
           onClick={async () => {
+            try {
             const state = useAppStore.getState();
             const { frames, sharedBaseColors } = state.skillGroupEditor;
             const validFrames = frames.filter(f => f.bbox && f.regionIdTex && f.regionIdTex.length > 0);
@@ -3093,7 +3086,7 @@ export const BaseColorEditor: React.FC = () => {
 
             const exportFrames = validFrames.map(frame => {
               const origRegionIdTex = frame.regionIdTex!;
-              const newRegionIdTex = new Uint8Array(origRegionIdTex.length);
+              const newRegionIdTex = new Uint16Array(origRegionIdTex.length);
               for (let i = 0; i < origRegionIdTex.length; i++) {
                 const id = origRegionIdTex[i];
                 if (id === 0) {
@@ -3142,6 +3135,9 @@ export const BaseColorEditor: React.FC = () => {
               : `multiframe_export_${Date.now()}.ftx3.gz`;
             a.click();
             URL.revokeObjectURL(url);
+          } catch (err) {
+            alert('导出失败: ' + (err as Error).message);
+          }
           }}
           style={{
             padding: '2px 8px', fontSize: '11px', cursor: 'pointer',

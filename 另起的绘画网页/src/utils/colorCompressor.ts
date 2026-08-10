@@ -210,13 +210,13 @@ function clusterByColorAndSpace(
   paintBuffer: ImageData,
   sourceWidth: number = 512,
   maxColors: number = 256
-): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array } {
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint16Array } {
   const { w, h } = bbox;
   const totalPixels = w * h;
 
   const sampled = samplePixelsWithCoords(mask, bbox, paintBuffer, sourceWidth);
   if (sampled.count === 0) {
-    return { baseColors: [], regionIdTex: new Uint8Array(totalPixels) };
+    return { baseColors: [], regionIdTex: new Uint16Array(totalPixels) };
   }
 
   const { rgb, coords, count } = sampled;
@@ -252,7 +252,7 @@ function clusterByColorAndSpace(
       oldToNew.set(oldIdx, i);
       newColors.push(baseColors[oldIdx]);
     }
-    const newRegionId = new Uint8Array(count);
+    const newRegionId = new Uint16Array(count);
     for (let i = 0; i < count; i++) {
       const oldId = rawRegionId[i] - 1;
       if (keepSet.has(oldId)) {
@@ -278,7 +278,7 @@ function clusterByColorAndSpace(
     rawRegionId = newRegionId;
   }
 
-  const regionIdTex = new Uint8Array(totalPixels);
+  const regionIdTex = new Uint16Array(totalPixels);
   for (let i = 0; i < count; i++) {
     const pixelIdx = sampled.pixelIndices[i];
     regionIdTex[pixelIdx] = rawRegionId[i];
@@ -343,7 +343,7 @@ function hardRadiusClustering(
   hsl: Float32Array,
   coords: Float32Array,
   count: number
-): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array } {
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint16Array } {
   const RADIUS = 0.25;
   const MIN_PIXELS = Math.max(10, count * 0.005);
   const MAX_ITER = 5;
@@ -542,7 +542,7 @@ function hardRadiusClustering(
     l: c.centerL
   }));
 
-  const regionIdTex = new Uint8Array(count);
+  const regionIdTex = new Uint16Array(count);
   for (let cIdx = 0; cIdx < finalClusters.length; cIdx++) {
     for (const idx of finalClusters[cIdx].pixels) {
       regionIdTex[idx] = cIdx + 1;
@@ -658,7 +658,7 @@ export function clusterAndGenerateTexturesV2(
   bbox: { x: number; y: number; w: number; h: number },
   paintBuffer: ImageData,
   sourceWidth: number = PAINT_BUFFER_SIZE
-): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint8Array | null; deltaPacked: Uint16Array; blockFlags: bigint } {
+): { baseColors: Array<{ h: number; s: number; l: number }>; regionIdTex: Uint16Array | null; deltaPacked: Uint16Array; blockFlags: bigint } {
   const { w, h } = bbox;
   const totalPixels = w * h;
 
@@ -776,7 +776,7 @@ export function clusterAndGenerateTexturesV2(
 // 修正后同步重置 baseColors 列表（从新 regionIdTex 重新统计）。
 
 export interface ForcedFixResult {
-  regionIdTex: Uint8Array;
+  regionIdTex: Uint16Array;
   deltaPacked: Uint16Array;
   baseColors: Array<{ id: number; h: number; s: number; l: number }>;
   blockFlags: bigint;
@@ -832,7 +832,7 @@ function quantizeRoundTrip(
  *   - 不复用"量化后可能不达标"的邻居 base → 无碎片化噪点
  */
 export function forcedFixBrush(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   baseColors: Array<{ id: number; h: number; s: number; l: number }>,
   deltaPacked: Uint16Array,
   blockFlags: bigint,
@@ -978,22 +978,8 @@ export function forcedFixBrush(
       }
 
       // 新建 base = target，残差 0（合成色 = target，必然达标）
-      if (maxBaseId >= 255) {
-        // ★ 色板已满（Uint8Array 上限 255）：不能新建（会溢出→像素变0），
-        //   退回复用最接近的现有 base（残差 0，尽量接近 target）
-        let fallbackId = colorIdx;
-        let fallbackDist = Infinity;
-        for (const c of baseColors) {
-          const d = colorDist(c, target);
-          if (d < fallbackDist) { fallbackDist = d; fallbackId = c.id; }
-        }
-        regionIdTex[idx] = fallbackId;
-        tempDeltas[idx * 3] = 0;
-        tempDeltas[idx * 3 + 1] = 0;
-        tempDeltas[idx * 3 + 2] = 0;
-        changedCount++;
-        continue;
-      }
+      // ★ regionIdTex 已是 Uint16Array（上限 65535），编辑器内不再限制 255；
+      //   255 限制移到导出阶段（导出格式为 8bit id+1，palette 超限会报错提示）
       const newId = maxBaseId + 1;
       maxBaseId = newId;
       const newBase = { id: newId, ...target };
@@ -1217,7 +1203,7 @@ export function decodeFrameToTextures(
 
 // ===== 辅助函数：用区域颜色列表解码帧（用于绑定操作）=====
 export function decodeFrameWithRegionColors(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   deltaPacked: Uint16Array | null,
   regionColors: Array<{ h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
@@ -1286,7 +1272,7 @@ export function decodeFrameWithRegionColors(
  * regionIdTex 中的值直接就是全局调色板 ID，无需再做映射。
  */
 export function decodeFrameWithGlobalPalette(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   deltaPacked: Uint16Array,
   palette: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
@@ -1358,7 +1344,7 @@ export function decodeFrameWithGlobalPalette(
  * @returns 全帧尺寸残差 ImageData（像素置于全局坐标，外部像素 0）
  */
 export function decodeResidualFromFrame(
-  regionIdTex: Uint8Array,
+  regionIdTex: Uint16Array,
   deltaPacked: Uint16Array,
   palette: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
@@ -1430,7 +1416,7 @@ export function cropTextureByPolygon(
 // ==================== 主压缩函数 ====================
 export interface CompressLayerColorsInput {
   frame: {
-    regionIdTex: Uint8Array;
+    regionIdTex: Uint16Array;
     bbox: { x: number; y: number; w: number; h: number } | null;
     deltaPacked?: Uint16Array;
     blockFlags?: bigint;
@@ -1453,11 +1439,19 @@ export function compressLayerColors(input: CompressLayerColorsInput): Compressio
     return null;
   }
 
+  // ★ 导出限制：单区域 base64 格式为 8bit id（0 保留，id+1 编码 → 上限 254），
+  //   超出时明确报错，绝不静默截断（截断会导致纹理变灰/花）
+  const exportMaxId = 254;
+  if (palette.length > exportMaxId) {
+    console.warn(`[颜色压缩] 导出失败：调色板有 ${palette.length} 种颜色，超过 8bit 格式上限 ${exportMaxId}，请先合并/清理颜色`);
+    return null;
+  }
+
   // 构建 region 数据：将全局颜色 ID 映射为本地索引（1-based）
   const idToIndex = new Map<number, number>();
   palette.forEach((c, idx) => idToIndex.set(c.id, idx + 1));
 
-  const localRegionIdTex = new Uint8Array(frame.regionIdTex.length);
+  const localRegionIdTex = new Uint16Array(frame.regionIdTex.length);
   for (let i = 0; i < frame.regionIdTex.length; i++) {
     const globalId = frame.regionIdTex[i];
     localRegionIdTex[i] = globalId === 0 ? 0 : (idToIndex.get(globalId) || 0);
@@ -1501,7 +1495,8 @@ export function compressLayerColors(input: CompressLayerColorsInput): Compressio
     id: 0, // 单区域
     bbox,
     baseColors,
-    regionIdTexture: uint8ToBase64(localRegionIdTex),
+    // 导出限制后本地索引 ≤ palette.length ≤ 254，安全转 8bit
+    regionIdTexture: uint8ToBase64(new Uint8Array(localRegionIdTex)),
     deltaTexture: uint8ToBase64(deltaBytes),
     blockFlags,
   };
