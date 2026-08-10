@@ -585,28 +585,22 @@ export const BaseColorEditor: React.FC = () => {
     const scaleX = newSize / oldSize;
     const scaleY = newSize / oldSize;
 
-    // ★ 缩放后的 globalBbox（作为重新提取的 forcedBbox）
-    const newGlobalBbox = globalBbox ? {
-      x: Math.round(globalBbox.x * scaleX),
-      y: Math.round(globalBbox.y * scaleY),
-      w: Math.round(globalBbox.w * scaleX),
-      h: Math.round(globalBbox.h * scaleY),
-    } : null;
-
     // 对每个帧：缩放背景 → 重新提取生成 regionIdTex/baseColors/deltaPacked/blockFlags
-    const store = useAppStore.getState();
+    // ★ 让 extractBaseByClick 根据区域多边形自动计算 bbox（世界坐标 0~1，与分辨率无关）
     const updatedFrameIds: string[] = [];
 
     frames.forEach((frame) => {
       if (!frame.bgImageData) return;
-      const frameOldSize = frame.bgImageData.width;
+      // ★ 用原始背景（导入时保存）作为缩放源，避免反复调整分辨率累积模糊
+      const srcImage = frame.originalBgImageData || frame.bgImageData;
+      const srcSize = srcImage.width;
 
-      // 1. 缩放背景图（最近邻，保留像素清晰度）
+      // 1. 从原始背景缩放到目标尺寸（最近邻，保留像素清晰度）
       const srcCanvas = document.createElement('canvas');
-      srcCanvas.width = frameOldSize;
-      srcCanvas.height = frameOldSize;
+      srcCanvas.width = srcSize;
+      srcCanvas.height = srcSize;
       const srcCtx = srcCanvas.getContext('2d')!;
-      srcCtx.putImageData(frame.bgImageData, 0, 0);
+      srcCtx.putImageData(srcImage, 0, 0);
       
       const dstCanvas = document.createElement('canvas');
       dstCanvas.width = newSize;
@@ -623,7 +617,7 @@ export const BaseColorEditor: React.FC = () => {
       const polygons = frame.dashedPolygons || [];
       if (polygons.length === 0) return;
 
-      const result = extractBaseByClick(newBg, polygons, undefined, newSize, newGlobalBbox);
+      const result = extractBaseByClick(newBg, polygons, undefined, newSize, null);
       if (result) {
         const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, blockFlags } = result;
 
@@ -657,9 +651,13 @@ export const BaseColorEditor: React.FC = () => {
       }
     });
 
-    // 4. 更新 globalBbox
-    if (newGlobalBbox) {
-      setGlobalBbox(newGlobalBbox);
+    // 4. 更新 globalBbox（用第一帧新生成的 bbox；extractBaseByClick 已自动算）
+    if (updatedFrameIds.length > 0) {
+      const st0 = useAppStore.getState();
+      const firstFrame = st0.skillGroupEditor.frames.find(f => f.id === updatedFrameIds[0]);
+      if (firstFrame?.bbox) {
+        setGlobalBbox(firstFrame.bbox);
+      }
     }
     
     // 5. 更新 texSize
@@ -956,6 +954,10 @@ export const BaseColorEditor: React.FC = () => {
         ctx.drawImage(img, sx, sy, w, h);
         const imageData = ctx.getImageData(0, 0, newSize, newSize);
         setBgImageData(imageData);
+        // ★ 保存原始背景（缩放前），分辨率调整时基于它重新缩放，避免反复缩放累积模糊
+        if (activeFrameId) {
+          updateSkillFrame(activeFrameId, { originalBgImageData: imageData });
+        }
         setDashedPolygons([]);
         setDrawingPolygon(null);
         setBaseTexture(null);
@@ -965,7 +967,7 @@ export const BaseColorEditor: React.FC = () => {
       img.src = e.target?.result as string;
     };
     reader.readAsDataURL(file);
-  }, [setBgImageData, setDashedPolygons, setBaseTexture, setResidualTexture, setBbox]);
+  }, [setBgImageData, setDashedPolygons, setBaseTexture, setResidualTexture, setBbox, activeFrameId, updateSkillFrame]);
 
   // 进入提取模式
   const handleAutoExtract = useCallback(() => {

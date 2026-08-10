@@ -364,6 +364,8 @@ interface AppState {
       id: string;
       name: string;
       bgImageData: ImageData | null;
+      /** 原始导入背景（缩放前），分辨率调整时基于它重新缩放，避免反复缩放累积模糊 */
+      originalBgImageData: ImageData | null;
       dashedPolygons: Point[][];
       baseTexture: ImageData | null;
       residualTexture: ImageData | null;
@@ -415,6 +417,7 @@ interface AppState {
   updateSkillFrame: (frameId: string, data: Partial<{
     name: string;
     bgImageData: ImageData | null;
+    originalBgImageData: ImageData | null;
     dashedPolygons: Point[][];
     baseTexture: ImageData | null;
     residualTexture: ImageData | null;
@@ -2750,6 +2753,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         id: `frame_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         name: name || `帧 ${state.skillGroupEditor.frames.length + 1}`,
         bgImageData: null,
+        originalBgImageData: null,
         dashedPolygons: [],
         baseTexture: null,
         residualTexture: null,
