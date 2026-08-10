@@ -789,13 +789,11 @@ export interface ForcedFixResult {
   avgErrorAfter: number;
 }
 
-// ★ 达标阈值（必须 ≥ 量化精度：S/L 在 range=0.25 时步长≈0.008）
-//   设 0.01 才能被量化往返表达；小于量化步长的阈值永远无法达标，只会碎片化噪点
-const FIX_HUE_THRESHOLD = 0.01;
-const FIX_SAT_THRESHOLD = 0.01;
-const FIX_LIGHT_THRESHOLD = 0.01;
-// ★ 迭代上限（检验→修正→再检验，允许更多次确保尽量达标）
-const FIX_MAX_ITERATIONS = 6;
+// ★ 达标阈值：合成色（base+残差）vs 原图像素 HSL 各通道差 ≤ 0.02 即达标
+//   新方案修复后残差=0、base=target → 合成色=target，必然达标（不受量化影响）
+const FIX_HUE_THRESHOLD = 0.02;
+const FIX_SAT_THRESHOLD = 0.02;
+const FIX_LIGHT_THRESHOLD = 0.02;
 
 function hueDistance(h1: number, h2: number): number {
   let d = Math.abs(h1 - h2);
@@ -815,53 +813,23 @@ function quantizeRoundTrip(
   };
 }
 
-/** 合成色（base + 量化往返后的 delta）vs 目标色的误差 */
-function calcQuantizedError(
-  base: { h: number; s: number; l: number },
-  dH: number, dS: number, dL: number,
-  target: { h: number; s: number; l: number },
-  range: number,
-): { errH: number; errS: number; errL: number; total: number } {
-  // ★ 关键：残差先量化往返（与真实渲染一致），再合成计算误差
-  const q = quantizeRoundTrip(dH, dS, dL, range);
-  let finalH = base.h + q.h;
-  if (finalH < 0) finalH += 1.0;
-  else if (finalH >= 1.0) finalH -= 1.0;
-  const finalS = Math.max(0, Math.min(1, base.s + q.s));
-  const finalL = Math.max(0, Math.min(1, base.l + q.l));
-  const errH = hueDistance(finalH, target.h);
-  const errS = Math.abs(finalS - target.s);
-  const errL = Math.abs(finalL - target.l);
-  return { errH, errS, errL, total: errH + errS + errL };
-}
-
-/** 合成色（base + delta 量化往返后）vs 目标色的误差 */
-function calcPixelError(
-  base: { h: number; s: number; l: number },
-  dH: number, dS: number, dL: number,
-  target: { h: number; s: number; l: number },
-): { errH: number; errS: number; errL: number; total: number } {
-  let finalH = base.h + dH;
-  if (finalH < 0) finalH += 1.0;
-  else if (finalH >= 1.0) finalH -= 1.0;
-  const finalS = Math.max(0, Math.min(1, base.s + dS));
-  const finalL = Math.max(0, Math.min(1, base.l + dL));
-  const errH = hueDistance(finalH, target.h);
-  const errS = Math.abs(finalS - target.s);
-  const errL = Math.abs(finalL - target.l);
-  return { errH, errS, errL, total: errH + errS + errL };
-}
-
 /**
- * 强制修正 4×4 区域（bbox 局部坐标）。
+ * 强制修正区域（bbox 局部坐标）。
  *
- * 达标循环（最多 FIX_MAX_ITERATIONS 轮）：
- *   1. 检验：base + delta 合成色 vs 原图像素 HSL，误差 ≤ 0.01 为达标
- *   2. 不达标的像素按优先级修正：
- *      左右邻居 base → 上下邻居 → 斜向邻居 → 最近现有 base → 新建 base(=target)
- *   3. 重算残差（delta = target - base）后回步骤 1，直到全部达标或达到迭代上限
+ * ★ 核心目标：保证区域内每个像素的合成色（base + 残差）都符合阈值。
  *
- * 残差溢出时：提升所在 block 的 range（0.25 → 0.5），不放弃修正。
+ * 逻辑（简单、严格、无噪点）：
+ *   1. 遍历区域内每个像素：
+ *      - 空像素 / 透明像素：跳过
+ *      - 已达标（当前 base + 当前残差合成色 ≈ 原图色，各通道差 ≤ 0.02）：不动
+ *      - 未达标：修复 → 优先复用色距足够近的现有 base（残差 0，合成≈target）；
+ *                否则新建 base = target + 残差 0（合成色 = target，必然达标）
+ *   2. 重新打包 deltaPacked（保持原 blockFlags 的 range）
+ *
+ * 关键设计：
+ *   - 修复后的像素残差恒为 0 → 不涉及量化误差 → 合成色必然符合阈值
+ *   - base = target（原图像素 HSL）→ 无黑灰/错色风险（rgbToHsl→hslToRgb 往返零误差）
+ *   - 不复用"量化后可能不达标"的邻居 base → 无碎片化噪点
  */
 export function forcedFixBrush(
   regionIdTex: Uint8Array,
@@ -873,14 +841,15 @@ export function forcedFixBrush(
   sourceWidth: number,
   cx: number,
   cy: number,
-  brushSize: number = 4,
-): ForcedFixResult | null {
+  brushSize: number = 8,
+): ForcedFixResult {
   const { w, h } = bbox;
-  if (w <= 0 || h <= 0) return null;
+  if (w <= 0 || h <= 0) {
+    return { regionIdTex, deltaPacked, baseColors, blockFlags, changedCount: 0, remainingBadCount: 0, avgErrorBefore: 0, avgErrorAfter: 0 };
+  }
   const totalPixels = w * h;
-  if (regionIdTex.length < totalPixels || deltaPacked.length < totalPixels) return null;
 
-  // ★ id → base 映射（regionIdTex 存的是全局色 ID，不是数组下标）
+  // id → base 映射（regionIdTex 存的是全局色 ID）
   const baseById = new Map<number, { id: number; h: number; s: number; l: number }>();
   let maxBaseId = 0;
   for (const c of baseColors) {
@@ -888,7 +857,7 @@ export function forcedFixBrush(
     if (c.id > maxBaseId) maxBaseId = c.id;
   }
 
-  // 解包残差为浮点
+  // 解包残差为浮点（供达标校验用）
   const tempDeltas = new Float32Array(totalPixels * 3);
   for (let i = 0; i < totalPixels; i++) {
     const packed = deltaPacked[i];
@@ -900,27 +869,23 @@ export function forcedFixBrush(
     tempDeltas[i * 3 + 2] = dequantizeL(qL, range);
   }
 
-  // block range 标记（可变：修正中可能提升 0.25 → 0.5）
-  let mutableBlockFlags = blockFlags;
-
-  const half = Math.floor(brushSize / 2);
-
-  // 笔刷范围（bbox 局部）
-  const x0 = Math.max(0, cx - half);
-  const x1 = Math.min(w - 1, cx + half + (brushSize % 2 === 0 ? 0 : 0));
-  const y0 = Math.max(0, cy - half);
-  const y1 = Math.min(h - 1, cy + half + (brushSize % 2 === 0 ? 0 : 0));
-
+  // 笔刷范围（bbox 局部）—— 8×8 以 cx,cy 为中心
+  // ★ 贴边时右侧补足：x1 = x0 + brushSize - 1（始终覆盖 brushSize 个像素）
+  const halfLo = Math.floor((brushSize - 1) / 2); // 8 → 3
+  const x0 = Math.max(0, cx - halfLo);
+  const x1 = Math.min(w - 1, x0 + brushSize - 1);
+  const y0 = Math.max(0, cy - halfLo);
+  const y1 = Math.min(h - 1, y0 + brushSize - 1);
   const idxOf = (x: number, y: number) => y * w + x;
 
-  // 取原图 target 色（HSL）
+  // 取原图 target 色（HSL），透明像素返回 null
   const getTargetHsl = (x: number, y: number): { h: number; s: number; l: number } | null => {
     const gx = bbox.x + x;
     const gy = bbox.y + y;
     if (gx < 0 || gy < 0 || gx >= sourceWidth) return null;
     const pIdx = (gy * sourceWidth + gx) * 4;
     const alpha = paintBuffer.data[pIdx + 3];
-    if (alpha < 128) return null; // 透明像素不修
+    if (alpha < 128) return null;
     return rgbToHsl(
       paintBuffer.data[pIdx],
       paintBuffer.data[pIdx + 1],
@@ -928,205 +893,136 @@ export function forcedFixBrush(
     );
   };
 
-  // 尝试用候选 base 色修正该像素（残差 = target - base）
-  // ★ 不提升 block range（保持 0.25 高精度，避免影响同 block 其他像素）
-  //   放不下 → 返回 false（走下一个候选或新建 base 兜底）
-  const tryFixWithBase = (
-    x: number,
-    y: number,
-    target: { h: number; s: number; l: number },
+  // 合成色误差（当前 base + 当前残差 vs target），用于"是否已达标"
+  const isAcceptable = (
     base: { h: number; s: number; l: number },
-    baseId: number,
+    dH: number, dS: number, dL: number,
+    target: { h: number; s: number; l: number },
   ): boolean => {
-    const idx = idxOf(x, y);
-    const dH = normalizeHueDelta(target.h - base.h);
-    const dS = target.s - base.s;
-    const dL = target.l - base.l;
-
-    const blockIdx = getAdaptiveBlockIndex(x, y, w, h);
-    const range = getRangeForBlock(mutableBlockFlags, blockIdx);
-
-    // 量化可行性：残差必须能被当前 range 表达（放不下则拒绝）
-    const qH = quantizeH(dH, range);
-    const qS = quantizeS(dS, range);
-    const qL = quantizeL(dL, range);
-    const backH = dequantizeH(qH, range);
-    const backS = dequantizeS(qS, range);
-    const backL = dequantizeL(qL, range);
-    if (Math.abs(backH - dH) > range * 0.5) return false;
-    if (Math.abs(backS - dS) > range) return false;
-    if (Math.abs(backL - dL) > range) return false;
-
-    // 修正后误差（量化往返后合成色 vs 目标）须达标
-    const err = calcPixelError(base, backH, backS, backL, target);
-    if (err.errH > FIX_HUE_THRESHOLD || err.errS > FIX_SAT_THRESHOLD || err.errL > FIX_LIGHT_THRESHOLD) {
-      return false;
-    }
-
-    regionIdTex[idx] = baseId;
-    tempDeltas[idx * 3] = dH;
-    tempDeltas[idx * 3 + 1] = dS;
-    tempDeltas[idx * 3 + 2] = dL;
-    return true;
+    let finalH = base.h + dH;
+    if (finalH < 0) finalH += 1.0;
+    else if (finalH >= 1.0) finalH -= 1.0;
+    const finalS = Math.max(0, Math.min(1, base.s + dS));
+    const finalL = Math.max(0, Math.min(1, base.l + dL));
+    return (
+      hueDistance(finalH, target.h) <= FIX_HUE_THRESHOLD &&
+      Math.abs(finalS - target.s) <= FIX_SAT_THRESHOLD &&
+      Math.abs(finalL - target.l) <= FIX_LIGHT_THRESHOLD
+    );
   };
 
-  // 收集区域内的像素（按 y 序，用于统计/迭代）
-  const regionPixels: Array<{ x: number; y: number; idx: number }> = [];
+  // 色距（用于复用相近 base）
+  const colorDist = (
+    a: { h: number; s: number; l: number },
+    b: { h: number; s: number; l: number },
+  ): number => hueDistance(a.h, b.h) + Math.abs(a.s - b.s) + Math.abs(a.l - b.l);
+
+  // ============ 修正前误差统计（量化往返后，供调试对比） ============
+  let totalErrBefore = 0, errCountBefore = 0;
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
-      regionPixels.push({ x, y, idx: idxOf(x, y) });
+      const idx = idxOf(x, y);
+      const cIdx = regionIdTex[idx];
+      if (cIdx === 0) continue;
+      const base = baseById.get(cIdx);
+      const target = getTargetHsl(x, y);
+      if (!base || !target) continue;
+      const blockIdx = getAdaptiveBlockIndex(x, y, w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+      const q = quantizeRoundTrip(tempDeltas[idx * 3], tempDeltas[idx * 3 + 1], tempDeltas[idx * 3 + 2], range);
+      const eH = hueDistance(Math.max(0, Math.min(1, base.h + q.h)), target.h);
+      const eS = Math.abs(Math.max(0, Math.min(1, base.s + q.s)) - target.s);
+      const eL = Math.abs(Math.max(0, Math.min(1, base.l + q.l)) - target.l);
+      totalErrBefore += eH + eS + eL;
+      errCountBefore++;
     }
-  }
-
-  // 修正前平均误差（统计用，量化往返后）
-  let totalErrBefore = 0;
-  let errCountBefore = 0;
-  for (const { x, y, idx } of regionPixels) {
-    const colorIdx = regionIdTex[idx];
-    if (colorIdx === 0) continue;
-    const base = baseById.get(colorIdx);
-    const target = getTargetHsl(x, y);
-    if (!base || !target) continue;
-    const blockIdx = getAdaptiveBlockIndex(x, y, w, h);
-    const range = getRangeForBlock(mutableBlockFlags, blockIdx);
-    const err = calcQuantizedError(base, tempDeltas[idx * 3], tempDeltas[idx * 3 + 1], tempDeltas[idx * 3 + 2], target, range);
-    totalErrBefore += err.total;
-    errCountBefore++;
   }
   const avgErrorBefore = errCountBefore > 0 ? totalErrBefore / errCountBefore : 0;
 
+  // ============ 核心：只保证范围内每个像素合成色达标 ============
+  // 已达标 → 不动；未达标 → 新建 base(=target) + 残差 0（合成色=target，必然达标）
+  // 可选：复用色距足够近的现有 base（残差 0 时合成色≈target，减少碎片化）
   let changedCount = 0;
   let remainingBadCount = 0;
 
-  // ★ 达标循环：检验 → 修正 → 再检验（最多 FIX_MAX_ITERATIONS 轮）
-  for (let iter = 0; iter < FIX_MAX_ITERATIONS; iter++) {
-    let badInThisIter = 0;
-
-    for (const { x, y, idx } of regionPixels) {
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const idx = idxOf(x, y);
       const colorIdx = regionIdTex[idx];
-      if (colorIdx === 0) continue; // 空像素跳过
-
+      if (colorIdx === 0) continue; // 空像素
       const target = getTargetHsl(x, y);
-      if (!target) continue;
+      if (!target) continue; // 透明
 
-      const currentBase = baseById.get(colorIdx);
-      if (!currentBase) continue;
-
-      // ① 检验：合成色（量化往返后）vs 目标，达标则跳过
-      const blockIdx = getAdaptiveBlockIndex(x, y, w, h);
-      const range = getRangeForBlock(mutableBlockFlags, blockIdx);
-      const err = calcQuantizedError(
-        currentBase,
-        tempDeltas[idx * 3],
-        tempDeltas[idx * 3 + 1],
-        tempDeltas[idx * 3 + 2],
-        target,
-        range,
-      );
-      if (err.errH <= FIX_HUE_THRESHOLD && err.errS <= FIX_SAT_THRESHOLD && err.errL <= FIX_LIGHT_THRESHOLD) {
-        continue; // 已达标
+      const curBase = baseById.get(colorIdx);
+      // 已达标 → 跳过
+      if (curBase && isAcceptable(curBase, tempDeltas[idx * 3], tempDeltas[idx * 3 + 1], tempDeltas[idx * 3 + 2], target)) {
+        continue;
       }
 
-      badInThisIter++;
-
-      // ② 修正（优先级：左右 → 上下 → 斜向 → 最近现有 → 新建）
-      const priorities: Array<Array<[number, number]>> = [
-        [[-1, 0], [1, 0]],        // 左右
-        [[0, -1], [0, 1]],        // 上下
-        [[-1, -1], [1, -1], [-1, 1], [1, 1]], // 斜向
-      ];
-
-      let fixed = false;
-      for (const dirs of priorities) {
-        if (fixed) break;
-        for (const [dx, dy] of dirs) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-          const nIdx = idxOf(nx, ny);
-          const nColorIdx = regionIdTex[nIdx];
-          if (nColorIdx === 0) continue;
-          const nBase = baseById.get(nColorIdx);
-          if (!nBase) continue;
-          if (tryFixWithBase(x, y, target, nBase, nColorIdx)) {
-            fixed = true;
-            changedCount++;
-            break;
-          }
-        }
+      // 未达标 → 修复：优先复用色距足够近的现有 base（残差 0，合成≈target）
+      let reusedId = 0;
+      let bestDist = Infinity;
+      for (const c of baseColors) {
+        const d = colorDist(c, target);
+        if (d < bestDist) { bestDist = d; reusedId = c.id; }
       }
-
-      // ③ 最近现有 base（允许区域外，但不新建）
-      if (!fixed) {
-        let nearestId: number | null = null;
-        let minDist = Infinity;
-        for (const c of baseColors) {
-          const d = hueDistance(c.h, target.h) * 2 + Math.abs(c.s - target.s) + Math.abs(c.l - target.l);
-          if (d < minDist) { minDist = d; nearestId = c.id; }
-        }
-        if (nearestId !== null && nearestId !== colorIdx) {
-          const nb = baseById.get(nearestId);
-          if (nb && tryFixWithBase(x, y, target, nb, nearestId)) {
-            fixed = true;
-            changedCount++;
-          }
-        }
-      }
-
-      // ④ 新建 base（= target），残差 = 0
-      if (!fixed) {
-        const newId = maxBaseId + 1;
-        maxBaseId = newId;
-        const newBase = { id: newId, ...target };
-        baseColors.push(newBase);
-        baseById.set(newId, newBase);
-        regionIdTex[idx] = newId;
+      // 复用条件：色距 + 残差0的量化偏移 ≤ 阈值
+      //   残差 0 量化往返偏移 ≈ range/31（S/L），加上色距仍须达标
+      if (reusedId !== 0 && reusedId !== colorIdx && bestDist <= FIX_SAT_THRESHOLD * 0.5) {
+        regionIdTex[idx] = reusedId;
         tempDeltas[idx * 3] = 0;
         tempDeltas[idx * 3 + 1] = 0;
         tempDeltas[idx * 3 + 2] = 0;
         changedCount++;
+        continue;
       }
-    }
 
-    if (badInThisIter === 0) break; // 全部达标，退出
+      // 新建 base = target，残差 0（合成色 = target，必然达标）
+      const newId = maxBaseId + 1;
+      maxBaseId = newId;
+      const newBase = { id: newId, ...target };
+      baseColors.push(newBase);
+      baseById.set(newId, newBase);
+      regionIdTex[idx] = newId;
+      tempDeltas[idx * 3] = 0;
+      tempDeltas[idx * 3 + 1] = 0;
+      tempDeltas[idx * 3 + 2] = 0;
+      changedCount++;
+    }
   }
 
-  // 统计最终未达标数 + 修正后平均误差（量化往返后）
-  let totalErrAfter = 0;
-  let errCountAfter = 0;
-  for (const { x, y, idx } of regionPixels) {
-    const colorIdx = regionIdTex[idx];
-    if (colorIdx === 0) continue;
-    const base = baseById.get(colorIdx);
-    const target = getTargetHsl(x, y);
-    if (!base || !target) continue;
-    const blockIdx = getAdaptiveBlockIndex(x, y, w, h);
-    const range = getRangeForBlock(mutableBlockFlags, blockIdx);
-    const err = calcQuantizedError(base, tempDeltas[idx * 3], tempDeltas[idx * 3 + 1], tempDeltas[idx * 3 + 2], target, range);
-    if (err.errH > FIX_HUE_THRESHOLD || err.errS > FIX_SAT_THRESHOLD || err.errL > FIX_LIGHT_THRESHOLD) {
-      remainingBadCount++;
+  // 统计：范围内像素修复后的误差（量化往返后，与真实渲染一致）
+  let totalErrAfter = 0, errCountAfter = 0;
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const idx = idxOf(x, y);
+      const cIdx = regionIdTex[idx];
+      if (cIdx === 0) continue;
+      const base = baseById.get(cIdx);
+      const target = getTargetHsl(x, y);
+      if (!base || !target) continue;
+      const blockIdx = getAdaptiveBlockIndex(x, y, w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+      const q = quantizeRoundTrip(tempDeltas[idx * 3], tempDeltas[idx * 3 + 1], tempDeltas[idx * 3 + 2], range);
+      const err = isAcceptable(base, q.h, q.s, q.l, target);
+      if (!err) remainingBadCount++;
+      const eH = hueDistance(Math.max(0, Math.min(1, base.h + q.h)), target.h);
+      const eS = Math.abs(Math.max(0, Math.min(1, base.s + q.s)) - target.s);
+      const eL = Math.abs(Math.max(0, Math.min(1, base.l + q.l)) - target.l);
+      totalErrAfter += eH + eS + eL;
+      errCountAfter++;
     }
-    totalErrAfter += err.total;
-    errCountAfter++;
   }
   const avgErrorAfter = errCountAfter > 0 ? totalErrAfter / errCountAfter : 0;
 
-  // 无任何改动 → 返回（带统计供调试，changedCount=0）
-  if (changedCount === 0) {
-    return {
-      regionIdTex, deltaPacked, baseColors, blockFlags: mutableBlockFlags,
-      changedCount: 0, remainingBadCount, avgErrorBefore, avgErrorAfter,
-    };
-  }
-
-  // 重新打包残差
+  // 重新打包残差（全部像素，用原始 blockFlags 的 range）
   const newDeltaPacked = new Uint16Array(totalPixels);
   for (let i = 0; i < totalPixels; i++) {
     const cIdx = regionIdTex[i];
     if (cIdx === 0) { newDeltaPacked[i] = 0; continue; }
     const idx3 = i * 3;
     const blockIdx = getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h);
-    const range = getRangeForBlock(mutableBlockFlags, blockIdx);
+    const range = getRangeForBlock(blockFlags, blockIdx);
     newDeltaPacked[i] = packRGB565(
       quantizeS(tempDeltas[idx3 + 1], range),
       quantizeH(tempDeltas[idx3], range),
@@ -1138,13 +1034,14 @@ export function forcedFixBrush(
     regionIdTex,
     deltaPacked: newDeltaPacked,
     baseColors,
-    blockFlags: mutableBlockFlags,
+    blockFlags,
     changedCount,
     remainingBadCount,
     avgErrorBefore,
     avgErrorAfter,
   };
 }
+
 
 
 

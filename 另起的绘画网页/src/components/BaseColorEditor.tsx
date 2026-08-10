@@ -1795,6 +1795,22 @@ export const BaseColorEditor: React.FC = () => {
       avgErrBefore: result.avgErrorBefore.toFixed(4),
       avgErrAfter: result.avgErrorAfter.toFixed(4),
     });
+    // ★ 完整性检查：修正后 regionIdTex 引用的所有 id 是否都在 result.baseColors 里
+    //   若缺失 → 合成渲染输出黑（buildCompositeFromPacked 的 !base → continue → 黑）
+    const resultBaseIds = new Set<number>();
+    for (const c of result.baseColors) resultBaseIds.add(c.id);
+    const missingIds = new Set<number>();
+    for (let i = 0; i < result.regionIdTex.length; i++) {
+      const rid = result.regionIdTex[i];
+      if (rid !== 0 && !resultBaseIds.has(rid)) missingIds.add(rid);
+    }
+    console.log('完整性：', {
+      regionIdTex引用id数: resultBaseIds.size,
+      缺失id: missingIds.size > 0 ? [...missingIds] : '无',
+    });
+    if (missingIds.size > 0) {
+      console.warn('[强制修正] ⚠️ regionIdTex 引用缺失的 base id！会导致合成渲染输出黑色噪点');
+    }
     console.groupEnd();
 
     // 同步回帧（regionIdTex + deltaPacked + blockFlags）
@@ -2406,9 +2422,8 @@ export const BaseColorEditor: React.FC = () => {
       ctx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
       ctx.setLineDash(currentTool === 'fixbrush' ? [] : []);
       if (currentTool === 'fixbrush') {
-        // 8×8 修正范围：方形圈
-        const half = 4;
-        ctx.strokeRect(mousePos.x - half, mousePos.y - half, 4, 4);
+        // 8×8 修正范围：方形圈（与 forcedFixBrush 范围一致：x0=cx-3, 宽 8）
+        ctx.strokeRect(mousePos.x - 3, mousePos.y - 3, 8, 8);
       } else {
         ctx.beginPath();
         ctx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
@@ -2444,8 +2459,7 @@ export const BaseColorEditor: React.FC = () => {
     octx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
     octx.setLineDash([]);
     if (currentTool === 'fixbrush') {
-      const half = 4;
-      octx.strokeRect(mousePos.x - half, mousePos.y - half, 4, 4);
+      octx.strokeRect(mousePos.x - 3, mousePos.y - 3, 8, 8);
     } else {
       octx.beginPath();
       octx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
