@@ -24,7 +24,7 @@ import { useAppStore } from '../stores/useAppStore';
 import type { SharedBaseColor } from '../stores/useAppStore';
 import { packMultiFrameToBinary } from '../utils/multiFrameExport';
 import { compressToGzip } from '../utils/binaryCompression';
-import { refineResidualsAndColors, createMissingBaseColors } from '../core/refineResiduals';
+import { refineResidualsAndColors, createMissingBaseColors, mergeTinyRegions } from '../core/refineResiduals';
 
 // ========== 贝塞尔曲线辅助函数 ==========
 function sampleQuadraticBezier(p0: Point, p1: Point, ctrl: Point, segments = 20): Point[] {
@@ -314,14 +314,15 @@ function extractBaseByClick(
     const colorsWithId = colors.map((c, i) => ({ id: i + 1, ...c }));
     const regionIdTexCopy = new Uint8Array(regionIdTex);
 
-    // 调用修正函数
+    // 调用修正函数（★ 阈值 0.02：≥ range=0.5 块量化往返最大误差 0.016，
+    //   避免量化固有误差被判为"坏像素"导致反复归并碎片化噪点）
     const refinementResult = refineResidualsAndColors(
       regionIdTexCopy,
       colorsWithId,
       pxBbox,
       bgImageData,
       tempDeltas,
-      0.015,
+      0.02,
       3
     );
 
@@ -354,6 +355,25 @@ function extractBaseByClick(
 
       newDeltaPacked[idx] = packRGB565(qS, qH, qL);
     }
+    deltaPacked = newDeltaPacked;
+
+    // ★ 碎簇清理：把像素数 <10 的小量颜色归并到周围（残差重算 + 阈值校验），
+    //   消除缩放纹理/砖缝噪声产生的斑点噪点。校验不通过的原色保留。
+    const tinyResult = mergeTinyRegions(
+      regionIdTexCopy,
+      newDeltaPacked,
+      colorsWithId,
+      pxBbox,
+      bgImageData,
+      textureSize,
+      blockFlags,
+      10,
+      0.02,
+    );
+    if (tinyResult.mergedPixels > 0) {
+      console.log(`[提取] 碎簇清理：归并 ${tinyResult.mergedPixels}px，保留 ${tinyResult.keptPixels}px，清除小色 ${tinyResult.removedIds.length} 个`);
+    }
+    regionIdTex = regionIdTexCopy;
     deltaPacked = newDeltaPacked;
   }
 

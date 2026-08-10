@@ -1,5 +1,5 @@
 import { rgbToHsl } from '../utils/colorCompressor';
-import { getAdaptiveBlockIndex, ADAPTIVE_TOTAL_BLOCKS, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getRangeForBlock } from './ftxCore';
+import { getAdaptiveBlockIndex, ADAPTIVE_TOTAL_BLOCKS, quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getRangeForBlock, packRGB565, unpackRGB565 } from './ftxCore';
 
 function hueDistance(h1: number, h2: number): number {
   let d = Math.abs(h1 - h2);
@@ -42,9 +42,9 @@ function normalizeHueDelta(d: number): number {
 function isPixelAcceptable(
   finalHsl: { h: number; s: number; l: number },
   bgHsl: { h: number; s: number; l: number },
-  hThresh: number = 0.015,
-  sThresh: number = 0.015,
-  lThresh: number = 0.015
+  hThresh: number = 0.02,
+  sThresh: number = 0.02,
+  lThresh: number = 0.02
 ): boolean {
   const dh = hueDistance(finalHsl.h, bgHsl.h);
   const ds = Math.abs(finalHsl.s - bgHsl.s);
@@ -68,7 +68,7 @@ export function refineResidualsAndColors(
   bbox: { x: number; y: number; w: number; h: number },
   bgImageData: ImageData,
   tempDeltas: Float32Array,
-  hueThreshold: number = 0.015,
+  hueThreshold: number = 0.02,
   maxNewColors: number = 3,
   /**
    * ★ 是否自动创建新基础色（默认 false）。
@@ -145,7 +145,7 @@ export function refineResidualsAndColors(
     const finalS = Math.max(0, Math.min(1, base.s + dS_decoded));
     const finalL = Math.max(0, Math.min(1, base.l + dL_decoded));
 
-    if (!isPixelAcceptable({ h: finalH, s: finalS, l: finalL }, bgHsl, hueThreshold, 0.015, 0.015)) {
+    if (!isPixelAcceptable({ h: finalH, s: finalS, l: finalL }, bgHsl, hueThreshold, 0.02, 0.02)) {
       badPixels.push(idx);
     }
   }
@@ -176,7 +176,7 @@ export function refineResidualsAndColors(
         const nBase = colorMapById.get(nColorId);
         if (!nBase) continue;
         const nBgHsl = getBackgroundHslAt(nx, ny, bbox, bgImageData);
-        if (isPixelAcceptable(nBase, nBgHsl, hueThreshold, 0.015, 0.015)) {
+        if (isPixelAcceptable(nBase, nBgHsl, hueThreshold, 0.02, 0.02)) {
           candidates.set(nColorId, (candidates.get(nColorId) || 0) + 1);
         }
       }
@@ -382,4 +382,248 @@ export function createMissingBaseColors(
   }
 
   return { newColors, changed: changedCount > 0, changedPixelCount: changedCount };
+}
+
+/**
+ * ★ 碎簇清理：把面积 < minArea 像素的孤立小区域归并到周围像素的颜色。
+ *
+ * 用途：缩放/提取/重新聚类后，聚类会留下孤立小簇（砖缝、噪声、缩放伪影），
+ * 在画面上呈现为斑点噪点。此函数按"连通区域"统计面积（同一 id 可能分成
+ * 多个区域：大区域保留、小区域归并），把小区域像素归并到 8 邻域中占多数的
+ * 稳定颜色（邻域无稳定色时用色距最近的色），并重算残差。
+ *
+ * ★ 校验（必须保证阈值以内）：残差按新 base 重算 → 量化往返 → 合成色
+ *   (base + 残差) 与目标像素三通道差 ≤ threshold 才归并；
+ *   校验不通过 → 保留原色，绝不强行归并产生超阈值误差。
+ *
+ * @param regionIdTex  区域 id 纹理（bbox 局部，就地修改）
+ * @param deltaPacked  RGB565 打包残差（bbox 局部，就地修改）
+ * @param baseColors   基础色（含 id，与 regionIdTex 的 id 语义一致：本地或全局）
+ * @param bbox         区域矩形（纹理全局坐标）
+ * @param bgImageData  背景图（用其真实宽度做采样步长）
+ * @param sourceWidth  bgImageData 的宽度
+ * @param blockFlags   块级 range 标志
+ * @param minArea      连通区域面积小于此值视为可归并（默认 10 = 个位数）
+ * @param threshold    达标阈值（默认 0.02，≥ 量化步长避免误判）
+ */
+export function mergeTinyRegions(
+  regionIdTex: Uint8Array,
+  deltaPacked: Uint16Array,
+  baseColors: Array<{ id: number; h: number; s: number; l: number }>,
+  bbox: { x: number; y: number; w: number; h: number },
+  bgImageData: ImageData,
+  sourceWidth: number,
+  blockFlags: bigint,
+  minArea: number = 10,
+  threshold: number = 0.02,
+): { mergedPixels: number; keptPixels: number; removedIds: number[] } {
+  const { w, h, x: offsetX, y: offsetY } = bbox;
+  const totalPixels = w * h;
+  const removedIds: number[] = [];
+
+  const colorMapById = new Map<number, { h: number; s: number; l: number }>();
+  for (const c of baseColors) colorMapById.set(c.id, c);
+  const hueRingDist = (a: number, b: number): number => {
+    let d = Math.abs(a - b);
+    if (d > 0.5) d = 1 - d;
+    return d;
+  };
+
+  // ============ 2. 解包残差为浮点 ============
+  const tempDeltas = new Float32Array(totalPixels * 3);
+  for (let i = 0; i < totalPixels; i++) {
+    const packed = deltaPacked[i];
+    const { s, h: qH, l: qL } = unpackRGB565(packed);
+    const range = getRangeForBlock(blockFlags, getAdaptiveBlockIndex(i % w, Math.floor(i / w), w, h));
+    tempDeltas[i * 3] = dequantizeH(qH, range);
+    tempDeltas[i * 3 + 1] = dequantizeS(s, range);
+    tempDeltas[i * 3 + 2] = dequantizeL(qL, range);
+  }
+
+  let mergedPixels = 0;
+  let keptPixels = 0;
+  const stillUsed = new Set<number>(); // 归并后仍被引用的 id
+
+  // ============ 3. 迭代归并：标记小区域 → 归并，直到无小区域 ============
+  // 迭代原因：归并后的像素若被 0/其他色隔开，可能形成新的小区域（candId 孤立块），
+  // 需要重复扫描直到稳定；每次迭代最多 10 轮（防死循环）。
+  const DIRS8: Array<[number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  for (let iter = 0; iter < 10; iter++) {
+    // 3a. 按连通区域（8 邻域，斜向也算连通）统计，标记小区域
+    // 8 邻域：避免斜线/对角像素在 4 邻域下被误拆成碎簇（墙线/砖缝是斜向的）
+    const smallRegion = new Uint8Array(totalPixels); // 1 = 小区域像素（可归并）
+    const visited = new Uint8Array(totalPixels);
+    for (let i = 0; i < totalPixels; i++) {
+      if (regionIdTex[i] === 0 || visited[i]) continue;
+      const id = regionIdTex[i];
+      const stack: number[] = [i];
+      visited[i] = 1;
+      const pixels: number[] = [];
+      while (stack.length > 0) {
+        const cur = stack.pop()!;
+        pixels.push(cur);
+        const cx = cur % w;
+        const cy = Math.floor(cur / w);
+        for (const [dx, dy] of DIRS8) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+          const ni = ny * w + nx;
+          if (!visited[ni] && regionIdTex[ni] === id) {
+            visited[ni] = 1;
+            stack.push(ni);
+          }
+        }
+      }
+      if (pixels.length < minArea) {
+        for (const p of pixels) smallRegion[p] = 1;
+      }
+    }
+
+    // 没有小区域 → 完成
+    let hasSmall = false;
+    for (let i = 0; i < totalPixels; i++) {
+      if (smallRegion[i] === 1) { hasSmall = true; break; }
+    }
+    if (!hasSmall) break;
+
+    // 稳定 id 集合：全纹理像素数 ≥ minArea 的 id（候选 2 只归并到稳定 id，
+    // 避免归并到另一个小色 id 形成新碎簇）
+    const idPixelCount = new Map<number, number>();
+    for (let i = 0; i < totalPixels; i++) {
+      const rid = regionIdTex[i];
+      if (rid !== 0) idPixelCount.set(rid, (idPixelCount.get(rid) || 0) + 1);
+    }
+    const stableIds = new Set<number>();
+    for (const [id, n] of idPixelCount) {
+      if (n >= minArea) stableIds.add(id);
+    }
+    if (stableIds.size === 0) break; // 没有稳定色可归并 → 完成
+
+    // 3b. 归并本轮小区域像素
+    let iterMerged = 0;
+    for (let idx = 0; idx < totalPixels; idx++) {
+      const rid = regionIdTex[idx];
+      if (rid === 0) continue;
+      if (smallRegion[idx] === 0) {
+        stillUsed.add(rid);
+        continue;
+      }
+      const px = idx % w;
+      const py = Math.floor(idx / w);
+
+      // 候选 1：8 邻域中非本区域、非 0 的颜色（出现最多）
+      const neighborCount = new Map<number, number>();
+      for (let ny = Math.max(0, py - 1); ny <= Math.min(h - 1, py + 1); ny++) {
+        for (let nx = Math.max(0, px - 1); nx <= Math.min(w - 1, px + 1); nx++) {
+          const ni = ny * w + nx;
+          const nid = regionIdTex[ni];
+          if (nid !== 0 && nid !== rid && smallRegion[ni] === 0) {
+            neighborCount.set(nid, (neighborCount.get(nid) || 0) + 1);
+          }
+        }
+      }
+      let candId = 0;
+      if (neighborCount.size > 0) {
+        let bestN = -1;
+        for (const [nid, n] of neighborCount) {
+          if (n > bestN || (n === bestN && nid < candId)) { bestN = n; candId = nid; }
+        }
+      } else {
+        // 候选 2：色距最近的稳定色（只归并到 ≥ minArea 的 id，避免形成新碎簇）
+        const pIdx = ((offsetY + py) * sourceWidth + (offsetX + px)) * 4;
+        const target = rgbToHsl(
+          bgImageData.data[pIdx],
+          bgImageData.data[pIdx + 1],
+          bgImageData.data[pIdx + 2],
+        );
+        let bestD = Infinity;
+        for (const cid of stableIds) {
+          const c = colorMapById.get(cid);
+          if (!c || cid === rid) continue;
+          const d = hueRingDist(c.h, target.h) + Math.abs(c.s - target.s) + Math.abs(c.l - target.l);
+          if (d < bestD) { bestD = d; candId = cid; }
+        }
+        if (candId === 0) {
+          // 没有任何稳定色 → 保留原像素
+          stillUsed.add(rid);
+          continue;
+        }
+      }
+      if (candId === 0) {
+        stillUsed.add(rid);
+        continue;
+      }
+      const base = colorMapById.get(candId);
+      if (!base) {
+        stillUsed.add(rid);
+        continue;
+      }
+
+      // 残差按新 base 重算
+      const pIdx = ((offsetY + py) * sourceWidth + (offsetX + px)) * 4;
+      const target = rgbToHsl(
+        bgImageData.data[pIdx],
+        bgImageData.data[pIdx + 1],
+        bgImageData.data[pIdx + 2],
+      );
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      const range = getRangeForBlock(blockFlags, blockIdx);
+      let dH = target.h - base.h;
+      if (dH > 0.5) dH -= 1.0;
+      if (dH < -0.5) dH += 1.0;
+      const dS = target.s - base.s;
+      const dL = target.l - base.l;
+
+      // ★ 达标校验：量化往返后合成色 vs 目标 ≤ threshold
+      let finalH = base.h + dequantizeH(quantizeH(dH, range), range);
+      if (finalH < 0) finalH += 1.0;
+      else if (finalH >= 1.0) finalH -= 1.0;
+      const finalS = Math.max(0, Math.min(1, base.s + dequantizeS(quantizeS(dS, range), range)));
+      const finalL = Math.max(0, Math.min(1, base.l + dequantizeL(quantizeL(dL, range), range)));
+      const ok =
+        hueRingDist(finalH, target.h) <= threshold &&
+        Math.abs(finalS - target.s) <= threshold &&
+        Math.abs(finalL - target.l) <= threshold;
+
+      if (ok) {
+        regionIdTex[idx] = candId;
+        tempDeltas[idx * 3] = dH;
+        tempDeltas[idx * 3 + 1] = dS;
+        tempDeltas[idx * 3 + 2] = dL;
+        mergedPixels++;
+        iterMerged++;
+        stillUsed.add(candId);
+      } else {
+        // 校验不通过 → 保留原色（绝不强行归并产生超阈值误差）
+        keptPixels++;
+        stillUsed.add(rid);
+      }
+    }
+    if (iterMerged === 0) break; // 本轮无归并（剩余全是校验失败）→ 完成
+  }
+
+  // ============ 4. 重新打包残差 ============
+  for (let idx = 0; idx < totalPixels; idx++) {
+    const rid = regionIdTex[idx];
+    if (rid === 0) continue;
+    const blockIdx = getAdaptiveBlockIndex(idx % w, Math.floor(idx / w), w, h);
+    const range = getRangeForBlock(blockFlags, blockIdx);
+    deltaPacked[idx] = packRGB565(
+      quantizeS(tempDeltas[idx * 3 + 1], range),
+      quantizeH(tempDeltas[idx * 3], range),
+      quantizeL(tempDeltas[idx * 3 + 2], range),
+    );
+  }
+
+  // 归并后不再被引用的 id → 报告（供调用方清理调色板）
+  const allIds = new Set<number>();
+  for (let i = 0; i < totalPixels; i++) {
+    if (regionIdTex[i] !== 0) allIds.add(regionIdTex[i]);
+  }
+  for (const [id] of colorMapById) {
+    if (!stillUsed.has(id) && !allIds.has(id)) removedIds.push(id);
+  }
+
+  return { mergedPixels, keptPixels, removedIds };
 }
