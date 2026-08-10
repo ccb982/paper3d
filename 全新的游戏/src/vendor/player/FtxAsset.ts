@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { decodeMultiFrame, buildBaseHslData, buildResidualData } from './core/ftx';
+import { FrameResolver, type FrameNameEntry } from './core/frameResolver';
 import type { FrameTextureData, PaletteColor, PhysicsConfig } from './core/types';
 import { FluidEffect } from './fluid/FluidEffect';
+import { FramePlaybackController, type PlaybackConfig, type FramePlaybackCallbacks } from './core/controller';
 
 // ============================================================
 // FtxAsset —— 纯 FTX 纹理包（无 .scene.zip 结构）
@@ -14,21 +16,29 @@ import { FluidEffect } from './fluid/FluidEffect';
 //   - 每帧持有 base(HSL Float32) + residual(Uint8) 两个 DataTexture
 //   - getCompositeMaterial() 返回合成 shader（base+residual → RGB）
 //   - 后续可对 residual 纹理做流体平流等操作（残差纹理保留可访问）
+//
+// ★ 帧名解析：解码时已读取每帧 name，FrameResolver 提供
+//   getFrameNames()/resolveFrame(name) 等按名字取帧接口。
 
 export class FtxAsset {
   readonly frames: FrameTextureData[];
   readonly palette: PaletteColor[];
   readonly frameCount: number;
 
+  /** 帧名解析器（名字 → 帧索引） */
+  readonly resolver: FrameResolver;
+
   /** 每帧的 base + residual 纹理对 */
   private _frameTextures: { base: THREE.DataTexture; residual: THREE.DataTexture }[] = [];
   private _fluidEffects: Map<number, FluidEffect> = new Map();
+  private _controllers: Set<FramePlaybackController> = new Set();
 
   constructor(buffer: ArrayBuffer) {
     const decoded = decodeMultiFrame(buffer);
     this.frames = decoded.frames;
     this.palette = decoded.palette;
     this.frameCount = decoded.frames.length;
+    this.resolver = new FrameResolver(this.frames.map((f) => f.name));
 
     for (let i = 0; i < this.frames.length; i++) {
       const pair = this.buildFramePair(i);
@@ -178,6 +188,42 @@ export class FtxAsset {
     return effect;
   }
 
+  // ============ 帧名解析（FrameResolver） ============
+
+  /** 全部帧清单（名字 + 索引） */
+  getFrameNames(): FrameNameEntry[] {
+    return this.resolver.list();
+  }
+
+  /** 全部帧名（按顺序） */
+  frameNames(): string[] {
+    return this.resolver.names();
+  }
+
+  /** 名字 → 帧索引；不存在返回 null */
+  resolveFrame(name: string): number | null {
+    return this.resolver.resolve(name);
+  }
+
+  /** 是否存在该帧名 */
+  hasFrame(name: string): boolean {
+    return this.resolver.contains(name);
+  }
+
+  /** 按名字跳帧（驱动所有已创建的播放控制器） */
+  gotoFrame(name: string): boolean {
+    const idx = this.resolver.resolve(name);
+    if (idx === null) return false;
+    for (const ctrl of this._controllers) ctrl.goto(idx);
+    return true;
+  }
+
+  createController(config?: PlaybackConfig, callbacks?: FramePlaybackCallbacks): FramePlaybackController {
+    const ctrl = new FramePlaybackController(this as any, this.frameCount, config, callbacks);
+    this._controllers.add(ctrl);
+    return ctrl;
+  }
+
   /** 清除某帧（或全部）流体效果（重新注入参数后调用） */
   clearFluidEffect(index?: number): void {
     if (index === undefined) {
@@ -193,6 +239,8 @@ export class FtxAsset {
   }
 
   dispose(): void {
+    for (const ctrl of this._controllers) ctrl.dispose();
+    this._controllers.clear();
     for (const pair of this._frameTextures) {
       pair.base.dispose();
       pair.residual.dispose();

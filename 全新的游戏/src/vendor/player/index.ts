@@ -5,6 +5,7 @@ import { buildDisplacementTextureData } from './core/entity';
 import { buildEntityMesh, type EntityMeshData } from './gl/renderer';
 import { FramePlaybackController } from './core/controller';
 import type { PlaybackConfig, FramePlaybackCallbacks } from './core/controller';
+import { FrameResolver, type FrameNameEntry } from './core/frameResolver';
 import { FluidEffect } from './fluid/FluidEffect';
 import type {
   Manifest, PerFrameData, AnnotationsFile,
@@ -15,6 +16,7 @@ import type {
 export type { Manifest, PerFrameData, AnnotationsFile, SerializedRegionEntity, PaletteColor, PureAnnotationExport, PhysicsConfig };
 export type { PlaybackConfig, PlaybackOrder, ControllerState, FramePlaybackCallbacks } from './core/controller';
 export type { EntityMeshData };
+export type { FrameNameEntry } from './core/frameResolver';
 export { renderFrameData } from './gl/renderer';
 export { FramePlaybackController };
 export { FluidEffect } from './fluid/FluidEffect';
@@ -39,6 +41,9 @@ export class Asset {
   readonly resolution: number;
   readonly frameCount: number;
 
+  /** 帧名解析器（名字 → 帧索引，基于 PerFrameData.name） */
+  readonly resolver: FrameResolver;
+
   /** FTX 解码数据（构建流体效果用） */
   private _ftx: DecodedMultiFrame | null = null;
 
@@ -51,6 +56,7 @@ export class Asset {
     const multiFrame = decodeMultiFrame(raw.ftxBinary.buffer);
     const { palette, frames: ftxFrames } = multiFrame;
     this._ftx = multiFrame;
+    this.resolver = new FrameResolver(raw.frames.map((f) => f.name));
 
     const baseTextures: THREE.DataTexture[] = [];
     const residualTextures: THREE.DataTexture[] = [];
@@ -163,6 +169,36 @@ export class Asset {
   }
 
   disposeController(ctrl: FramePlaybackController): void { ctrl.dispose(); this._controllers.delete(ctrl); }
+
+  // ============ 帧名解析（FrameResolver） ============
+
+  /** 全部帧清单（名字 + 索引） */
+  getFrameNames(): FrameNameEntry[] {
+    return this.resolver.list();
+  }
+
+  /** 全部帧名（按顺序） */
+  frameNames(): string[] {
+    return this.resolver.names();
+  }
+
+  /** 名字 → 帧索引；不存在返回 null */
+  resolveFrame(name: string): number | null {
+    return this.resolver.resolve(name);
+  }
+
+  /** 是否存在该帧名 */
+  hasFrame(name: string): boolean {
+    return this.resolver.contains(name);
+  }
+
+  /** 按名字跳帧（驱动所有已创建的播放控制器） */
+  gotoFrame(name: string): boolean {
+    const idx = this.resolver.resolve(name);
+    if (idx === null) return false;
+    for (const ctrl of this._controllers) ctrl.goto(idx);
+    return true;
+  }
 
   /** 该帧是否有流体物理配置 */
   hasPhysics(index: number): boolean {
