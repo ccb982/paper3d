@@ -7,7 +7,8 @@ import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
-import { hslToRgb, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
+import { hslToRgb, rgbToHsl, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
+import { quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getAdaptiveBlockIndex, getRangeForBlock, packRGB565, unpackRGB565 } from '../core/ftxCore';
 import { RegionEntity } from '../core/RegionEntity';
 import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime, mapSourcesIntoRegion, inverseMapSourcesFromRegion } from '../fluid/fluidConfigIO';
 import { regionWorkerPool } from './regionWorkerPool';
@@ -2389,6 +2390,163 @@ export const useAppStore = create<AppState>((set, get) => ({
       console.log(`[重新聚类] 合并了 ${mergeMap.size} 个相似颜色，保留 ${keptIds.size} 种`);
     } else {
       console.log(`[重新聚类] 未发现需要合并的相似颜色`);
+    }
+
+    // ============ 3.5 小量颜色归并（个位数像素的颜色 → 归并到周围像素）============
+    // 规则：
+    //   - 统计当前帧每个 id 的像素数，count < 10（个位数）视为可抛弃
+    //   - 候选目标：① 8 邻域内出现最多的"保留色"；② 邻域无保留色时用色距最近的保留色
+    //   - ★ 校验（必须保证阈值以内）：残差按新 base 重算 → 量化往返 → 合成色
+    //     (base + 残差) 与目标像素差 ≤ 0.02（H/S/L 三通道）才归并，否则保留原色不归并
+    const MIN_KEEP_PIXELS = 10;
+    const FIX_HUE_THRESHOLD = 0.02;
+    const FIX_SAT_THRESHOLD = 0.02;
+    const FIX_LIGHT_THRESHOLD = 0.02;
+    const hueRingDist = (a: number, b: number): number => {
+      let d = Math.abs(a - b);
+      if (d > 0.5) d = 1 - d;
+      return d;
+    };
+
+    // 归并基准纹理：合并相似色后的 regionIdTex（复制，避免污染原数据）
+    const currentTex = new Uint8Array(regionIdTex);
+    if (mergeMap.size > 0) {
+      for (let i = 0; i < currentTex.length; i++) {
+        const oldId = currentTex[i];
+        if (oldId !== 0 && mergeMap.has(oldId)) currentTex[i] = mergeMap.get(oldId)!;
+      }
+    }
+
+    const countMap = new Map<number, number>();
+    for (const id of currentTex) {
+      if (id !== 0) countMap.set(id, (countMap.get(id) || 0) + 1);
+    }
+    const smallIds = new Set<number>();
+    for (const [id, n] of countMap) {
+      if (n < MIN_KEEP_PIXELS) smallIds.add(id);
+    }
+    const keptSmallIds = new Set<number>();
+    for (const id of countMap.keys()) {
+      if (!smallIds.has(id)) keptSmallIds.add(id);
+    }
+
+    let smallMergedCount = 0;
+    let smallFailCount = 0;
+    const smallMergedPairs = new Map<number, number>(); // oldId → candId（引用计数用）
+    if (smallIds.size > 0 && keptSmallIds.size > 0 && frame.bbox && frame.bgImageData) {
+      const { w, h, x: ox, y: oy } = frame.bbox;
+      const texSize = frame.bgImageData.width;
+      const blockFlags = frame.blockFlags ?? 0n;
+      const newDeltaPacked = frame.deltaPacked
+        ? new Uint16Array(frame.deltaPacked)
+        : new Uint16Array(w * h);
+
+      for (let idx = 0; idx < currentTex.length; idx++) {
+        const rid = currentTex[idx];
+        if (rid === 0 || !smallIds.has(rid)) continue;
+        const px = idx % w;
+        const py = Math.floor(idx / w);
+
+        // 候选 1：8 邻域内出现最多的保留色
+        const neighborCount = new Map<number, number>();
+        for (let ny = Math.max(0, py - 1); ny <= Math.min(h - 1, py + 1); ny++) {
+          for (let nx = Math.max(0, px - 1); nx <= Math.min(w - 1, px + 1); nx++) {
+            const nid = currentTex[ny * w + nx];
+            if (nid !== 0 && keptSmallIds.has(nid)) {
+              neighborCount.set(nid, (neighborCount.get(nid) || 0) + 1);
+            }
+          }
+        }
+        let candId = 0;
+        if (neighborCount.size > 0) {
+          let bestN = -1;
+          for (const [nid, n] of neighborCount) {
+            if (n > bestN || (n === bestN && nid < candId)) { bestN = n; candId = nid; }
+          }
+        } else {
+          // 候选 2：邻域无保留色 → 色距最近的保留色
+          const pIdx = ((oy + py) * texSize + (ox + px)) * 4;
+          const target = rgbToHsl(
+            frame.bgImageData.data[pIdx],
+            frame.bgImageData.data[pIdx + 1],
+            frame.bgImageData.data[pIdx + 2],
+          );
+          let bestD = Infinity;
+          for (const kid of keptSmallIds) {
+            const pc = palette.get(kid);
+            if (!pc) continue;
+            const d = hueRingDist(pc.h, target.h) + Math.abs(pc.s - target.s) + Math.abs(pc.l - target.l);
+            if (d < bestD) { bestD = d; candId = kid; }
+          }
+        }
+        if (candId === 0) continue;
+        const base = palette.get(candId);
+        if (!base) continue;
+
+        // 残差按新 base 重算
+        const pIdx = ((oy + py) * texSize + (ox + px)) * 4;
+        const target = rgbToHsl(
+          frame.bgImageData.data[pIdx],
+          frame.bgImageData.data[pIdx + 1],
+          frame.bgImageData.data[pIdx + 2],
+        );
+        const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+        const range = getRangeForBlock(blockFlags, blockIdx);
+        let dH = target.h - base.h;
+        if (dH > 0.5) dH -= 1.0;
+        if (dH < -0.5) dH += 1.0;
+        const dS = target.s - base.s;
+        const dL = target.l - base.l;
+
+        // ★ 达标校验：量化往返后合成色 vs 目标 ≤ 0.02
+        const qH = dequantizeH(quantizeH(dH, range), range);
+        const qS = dequantizeS(quantizeS(dS, range), range);
+        const qL = dequantizeL(quantizeL(dL, range), range);
+        let finalH = base.h + qH;
+        if (finalH < 0) finalH += 1.0;
+        else if (finalH >= 1.0) finalH -= 1.0;
+        const finalS = Math.max(0, Math.min(1, base.s + qS));
+        const finalL = Math.max(0, Math.min(1, base.l + qL));
+        const ok =
+          hueRingDist(finalH, target.h) <= FIX_HUE_THRESHOLD &&
+          Math.abs(finalS - target.s) <= FIX_SAT_THRESHOLD &&
+          Math.abs(finalL - target.l) <= FIX_LIGHT_THRESHOLD;
+
+        if (ok) {
+          currentTex[idx] = candId;
+          newDeltaPacked[idx] = packRGB565(
+            quantizeS(dS, range),
+            quantizeH(dH, range),
+            quantizeL(dL, range),
+          );
+          smallMergedCount++;
+          if (smallMergedPairs.get(rid) !== candId) smallMergedPairs.set(rid, candId);
+        } else {
+          // 校验不通过 → 保留原色（绝不强行归并产生超阈值误差）
+          smallFailCount++;
+        }
+      }
+
+      if (smallMergedCount > 0) {
+        // 维护调色板引用计数
+        for (const [oldId, newId] of smallMergedPairs) {
+          get().decrementColorRef(oldId, frameId);
+          get().incrementColorRef(newId, frameId);
+        }
+        // 更新 store（regionIdTex + deltaPacked）
+        const framesAfter = get().skillGroupEditor.frames.map(f =>
+          f.id === frameId ? { ...f, regionIdTex: currentTex, deltaPacked: newDeltaPacked } : f
+        );
+        set({
+          skillGroupEditor: {
+            ...get().skillGroupEditor,
+            frames: framesAfter,
+          },
+        });
+      }
+      if (smallIds.size > 0) {
+        console.log(`[重新聚类] 小量颜色归并：可抛弃 ${smallIds.size} 种（<${MIN_KEEP_PIXELS}px），成功归并 ${smallMergedCount} 像素，校验不通过保留 ${smallFailCount} 像素`);
+      }
     }
 
     // ============ 4. 清理全局调色板（遍历所有帧，删除无引用的颜色）============
