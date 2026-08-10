@@ -1433,6 +1433,101 @@ export const BaseColorEditor: React.FC = () => {
     }, 0);
   }, [activeFrameId, reclusterFrameFromScratch, syncFrameTextures, triggerCanvasRedraw, buildColorPixelsMap, setColorPixelsMap]);
 
+  // ============ 合并黑色：把几乎接近黑色的基础色全部合并为纯黑 ============
+  const handleMergeBlacks = useCallback(() => {
+    const store = useAppStore.getState();
+    const frames = store.skillGroupEditor.frames;
+    if (frames.length === 0) return;
+
+    // 1. 找近黑基础色：低亮度且低饱和（"几乎黑"）
+    const BLACK_L_THRESHOLD = 0.12;
+    const BLACK_S_THRESHOLD = 0.25;
+    const nearBlackIds = new Set<number>();
+    for (const c of store.sharedBaseColors) {
+      if (c.l <= BLACK_L_THRESHOLD && c.s <= BLACK_S_THRESHOLD) nearBlackIds.add(c.id);
+    }
+    if (nearBlackIds.size === 0) {
+      console.log('[合并黑色] 没有接近黑色的基础色');
+      return;
+    }
+    console.log(`[合并黑色] 找到 ${nearBlackIds.size} 个近黑基础色:`, [...nearBlackIds]);
+
+    // 2. 纯黑 id（addColorToPalette 去重：已有纯黑则复用）
+    let blackId = store.addColorToPalette({ h: 0, s: 0, l: 0 }, frames[0].id || '');
+    // 防御：色板已满（>255 会溢出 Uint8Array）→ 回退用近黑中最黑的 id
+    if (blackId > 255) {
+      let fallbackId = -1, minL = Infinity;
+      for (const c of store.sharedBaseColors) {
+        if (nearBlackIds.has(c.id) && c.l < minL) { minL = c.l; fallbackId = c.id; }
+      }
+      blackId = fallbackId !== -1 ? fallbackId : -1;
+      console.warn('[合并黑色] ⚠️ 色板已满，回退使用现有近黑 id', blackId);
+    }
+
+    // 3. 每帧：近黑 id 引用 → 纯黑 id，残差重算（合成色 ≈ 原色，视觉不变）
+    const updatedIds: string[] = [];
+    for (const frame of frames) {
+      if (!frame.regionIdTex || !frame.bbox || !frame.bgImageData) continue;
+      const { w, h, x: ox, y: oy } = frame.bbox;
+      const texSize = frame.bgImageData.width;
+      const regionIdTex = new Uint8Array(frame.regionIdTex);
+      const deltaPacked = frame.deltaPacked ? new Uint16Array(frame.deltaPacked) : new Uint16Array(regionIdTex.length);
+      let changed = false;
+      for (let i = 0; i < regionIdTex.length; i++) {
+        const rid = regionIdTex[i];
+        if (rid !== 0 && nearBlackIds.has(rid)) {
+          regionIdTex[i] = blackId;
+          // 残差重算：delta = target(原图像素) - 纯黑(0,0,0)，按原块 range 量化
+          const px = i % w;
+          const py = Math.floor(i / w);
+          const pIdx = ((oy + py) * texSize + (ox + px)) * 4;
+          const target = rgbToHsl(
+            frame.bgImageData.data[pIdx],
+            frame.bgImageData.data[pIdx + 1],
+            frame.bgImageData.data[pIdx + 2],
+          );
+          const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+          const range = getRangeForBlock(frame.blockFlags ?? 0n, blockIdx);
+          let dH = target.h;
+          if (dH > 0.5) dH -= 1.0;
+          if (dH < -0.5) dH += 1.0;
+          deltaPacked[i] = packRGB565(
+            quantizeS(target.s, range),
+            quantizeH(dH, range),
+            quantizeL(target.l, range),
+          );
+          changed = true;
+        }
+      }
+      if (changed) {
+        updateSkillFrame(frame.id, { regionIdTex, deltaPacked });
+        updatedIds.push(frame.id);
+      }
+    }
+
+    // 4. 移除近黑 id（保留纯黑 id，色值统一为纯黑）→ 列表只留一个黑
+    const newSharedColors = store.sharedBaseColors
+      .filter((c) => !nearBlackIds.has(c.id) || c.id === blackId)
+      .map((c) => (c.id === blackId ? { ...c, h: 0, s: 0, l: 0 } : c));
+    if (!newSharedColors.some((c) => c.id === blackId)) {
+      newSharedColors.push({
+        id: blackId,
+        h: 0, s: 0, l: 0,
+        frameIds: frames.map((f) => f.id),
+        area: 0,
+        tempFlag: true,
+      });
+    }
+    setSharedBaseColors(newSharedColors);
+
+    // 5. 刷新纹理
+    for (const fid of updatedIds) syncFrameTextures(fid);
+    triggerCanvasRedraw?.();
+    saveHistory();
+    console.log(`[合并黑色] 完成：${nearBlackIds.size} 个近黑色合并为纯黑 (id=${blackId})`);
+  }, [addColorToPalette, updateSkillFrame, setSharedBaseColors, syncFrameTextures, triggerCanvasRedraw, saveHistory]);
+
+
   // 处理临时像素（在鼠标松开时调用）
   const processPaintedPixels = useCallback(() => {
     if (!baseTexture || !bbox || !activeFrameId || isProcessingRef.current) return;
@@ -3126,6 +3221,7 @@ export const BaseColorEditor: React.FC = () => {
             onUpdate={updateBaseColor}
             onDragEnd={handleDragEnd}
             onRecluster={handleRecluster}
+            onMergeBlacks={handleMergeBlacks}
             onPickColor={handlePickColor}
           />
         )}

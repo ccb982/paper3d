@@ -9,12 +9,13 @@ interface BaseColorListProps {
   onUpdate: (id: number, hsl: { h: number; s: number; l: number }) => void;
   onDragEnd: () => void;
   onRecluster: () => void;
+  onMergeBlacks: () => void;
   onPickColor: (id: number) => void;
 }
 
 const PAGE_SIZE = 100;
 
-const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onUpdate, onDragEnd, onRecluster, onPickColor }: BaseColorListProps) => {
+const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onUpdate, onDragEnd, onRecluster, onMergeBlacks, onPickColor }: BaseColorListProps) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -60,20 +61,37 @@ const BaseColorList = React.memo(({ colors, selectedId, pickingId, onSelect, onU
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
         <h4 style={{ margin: 0 }}>基础色列表 ({colors.length})</h4>
-        <button
-          onClick={onRecluster}
-          style={{
-            padding: '4px 8px',
-            fontSize: '11px',
-            border: '1px solid #52c41a',
-            background: '#fff',
-            color: '#52c41a',
-            borderRadius: '3px',
-            cursor: 'pointer',
-          }}
-        >
-          重新聚类
-        </button>
+        <div style={{ display: 'flex', gap: '4px' }}>
+          <button
+            onClick={onRecluster}
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+              border: '1px solid #52c41a',
+              background: '#fff',
+              color: '#52c41a',
+              borderRadius: '3px',
+              cursor: 'pointer',
+            }}
+          >
+            重新聚类
+          </button>
+          <button
+            onClick={onMergeBlacks}
+            title="将几乎接近黑色的基础色合并为纯黑"
+            style={{
+              padding: '4px 8px',
+              fontSize: '11px',
+              border: '1px solid #333',
+              background: '#fff',
+              color: '#333',
+              borderRadius: '3px',
+              cursor: 'pointer',
+            }}
+          >
+            合并黑色
+          </button>
+        </div>
       </div>
       
       <div style={{ flex: 1, overflowY: 'auto' }}>
