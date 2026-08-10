@@ -3,6 +3,7 @@ import {
   clusterAndGenerateTexturesV2,
   hslToRgb,
   rgbToHsl,
+  forcedFixBrush,
 } from '../utils/colorCompressor';
 import {
   quantizeH,
@@ -461,7 +462,7 @@ export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
-  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select'>('dashed');
+  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select' | 'fixbrush'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
   const {
     skillGroupEditor,
@@ -471,6 +472,7 @@ export const BaseColorEditor: React.FC = () => {
     switchSkillFrame,
     updateSkillFrame,
     setGlobalBbox,
+    setSharedBaseColors,
     syncGlobalBboxFromCurrentFrame,
     updateColorValue,
     addColorToPalette,
@@ -1635,6 +1637,195 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(updated);
   }, [baseTexture, brushColor, brushSize, texSize, setBaseTexture]);
 
+  // ★ 强制修正笔刷（8×8）：刷到后强制修正残差和基础色
+  //   修正策略：左右 → 上下 → 斜向 → 新建基础色（见 forcedFixBrush）
+  const FIX_BRUSH_SIZE = 8;
+  const fixBrushAt = useCallback((px: number, py: number) => {
+    if (!bgImageData || !bbox || !currentFrame) {
+      console.warn('[强制修正] 缺少 bgImageData/bbox/currentFrame，跳过');
+      return;
+    }
+    const frame = currentFrame;
+    const frameRegionIdTex = frame.regionIdTex || new Uint8Array(0);
+    const frameDeltaPacked = frame.deltaPacked || new Uint16Array(0);
+    if (frameRegionIdTex.length === 0 || frameDeltaPacked.length === 0) {
+      console.warn('[强制修正] regionIdTex/deltaPacked 为空，跳过（请先提取）');
+      return;
+    }
+
+    // 屏幕/全画布坐标 → bbox 局部坐标
+    const lx = px - bbox.x;
+    const ly = py - bbox.y;
+    if (lx < 0 || ly < 0 || lx >= bbox.w || ly >= bbox.h) {
+      console.warn('[强制修正] 点击在 bbox 外', { px, py, bbox });
+      return;
+    }
+
+    // 修正前回读（调试）
+    const readbackPixels = (regionId: Uint8Array, delta: Uint16Array, flags: bigint): Array<{
+      x: number; y: number; regionId: number;
+      base: string; delta: string; target: string; err: string;
+    }> => {
+      const out: Array<{
+        x: number; y: number; regionId: number;
+        base: string; delta: string; target: string; err: string;
+      }> = [];
+      const colorMap = new Map<number, SharedBaseColor>();
+      for (const c of sharedBaseColors) colorMap.set(c.id, c);
+      for (let dy = -3; dy <= 4; dy++) {
+        for (let dx = -3; dx <= 4; dx++) {
+          const x = lx + dx;
+          const y = ly + dy;
+          if (x < 0 || y < 0 || x >= bbox.w || y >= bbox.h) continue;
+          const idx = y * bbox.w + x;
+          const rid = regionId[idx];
+          if (rid === 0) continue;
+          const base = colorMap.get(rid);
+          if (!base) continue;
+          const gx = bbox.x + x;
+          const gy = bbox.y + y;
+          const pIdx = (gy * texSize + gx) * 4;
+          const target = rgbToHsl(bgImageData.data[pIdx], bgImageData.data[pIdx + 1], bgImageData.data[pIdx + 2]);
+          const packed = delta[idx];
+          const { s, h: qH, l: qL } = unpackRGB565(packed);
+          const blockIdx = getAdaptiveBlockIndex(x, y, bbox.w, bbox.h);
+          const range = getRangeForBlock(flags, blockIdx);
+          const dH = dequantizeH(qH, range);
+          const dS = dequantizeS(s, range);
+          const dL = dequantizeL(qL, range);
+          let finalH = base.h + dH;
+          if (finalH < 0) finalH += 1.0;
+          else if (finalH >= 1.0) finalH -= 1.0;
+          const finalS = Math.max(0, Math.min(1, base.s + dS));
+          const finalL = Math.max(0, Math.min(1, base.l + dL));
+          let errH = Math.abs(finalH - target.h);
+          if (errH > 0.5) errH = 1 - errH;
+          const errS = Math.abs(finalS - target.s);
+          const errL = Math.abs(finalL - target.l);
+          out.push({
+            x, y, regionId: rid,
+            base: `(${base.h.toFixed(3)},${base.s.toFixed(3)},${base.l.toFixed(3)})`,
+            delta: `(${dH.toFixed(3)},${dS.toFixed(3)},${dL.toFixed(3)})`,
+            target: `(${target.h.toFixed(3)},${target.s.toFixed(3)},${target.l.toFixed(3)})`,
+            err: `(${errH.toFixed(3)},${errS.toFixed(3)},${errL.toFixed(3)})`,
+          });
+        }
+      }
+      return out;
+    };
+
+    const before = readbackPixels(frameRegionIdTex, frameDeltaPacked, frame.blockFlags ?? 0n);
+
+    // 修正（操作 bbox 局部数据；baseColors 用共享列表的 id 映射）
+    const colorsWithId = sharedBaseColors.map((c) => ({ id: c.id, h: c.h, s: c.s, l: c.l }));
+    const result = forcedFixBrush(
+      frameRegionIdTex,
+      colorsWithId,
+      frameDeltaPacked,
+      frame.blockFlags ?? 0n,
+      bbox,
+      bgImageData,
+      texSize,
+      lx,
+      ly,
+      FIX_BRUSH_SIZE,
+    );
+    if (!result) {
+      console.warn('[强制修正] forcedFixBrush 返回 null（无改动）', {
+        修正前误差: before,
+      });
+      return;
+    }
+
+    // ★ 回读调试：修正前后对比（after 用 result 的数据 + 新 baseColors）
+    const afterColorMap = new Map<number, { h: number; s: number; l: number }>();
+    for (const c of result.baseColors) afterColorMap.set(c.id, c);
+    const after = (() => {
+      const out: Array<{
+        x: number; y: number; regionId: number;
+        base: string; delta: string; target: string; err: string;
+      }> = [];
+      for (let dy = -3; dy <= 4; dy++) {
+        for (let dx = -3; dx <= 4; dx++) {
+          const x = lx + dx;
+          const y = ly + dy;
+          if (x < 0 || y < 0 || x >= bbox.w || y >= bbox.h) continue;
+          const idx = y * bbox.w + x;
+          const rid = result.regionIdTex[idx];
+          if (rid === 0) continue;
+          const base = afterColorMap.get(rid);
+          if (!base) continue;
+          const gx = bbox.x + x;
+          const gy = bbox.y + y;
+          const pIdx = (gy * texSize + gx) * 4;
+          const target = rgbToHsl(bgImageData.data[pIdx], bgImageData.data[pIdx + 1], bgImageData.data[pIdx + 2]);
+          const packed = result.deltaPacked[idx];
+          const { s, h: qH, l: qL } = unpackRGB565(packed);
+          const blockIdx = getAdaptiveBlockIndex(x, y, bbox.w, bbox.h);
+          const range = getRangeForBlock(result.blockFlags, blockIdx);
+          const dH = dequantizeH(qH, range);
+          const dS = dequantizeS(s, range);
+          const dL = dequantizeL(qL, range);
+          let finalH = base.h + dH;
+          if (finalH < 0) finalH += 1.0;
+          else if (finalH >= 1.0) finalH -= 1.0;
+          const finalS = Math.max(0, Math.min(1, base.s + dS));
+          const finalL = Math.max(0, Math.min(1, base.l + dL));
+          let errH = Math.abs(finalH - target.h);
+          if (errH > 0.5) errH = 1 - errH;
+          const errS = Math.abs(finalS - target.s);
+          const errL = Math.abs(finalL - target.l);
+          out.push({
+            x, y, regionId: rid,
+            base: `(${base.h.toFixed(3)},${base.s.toFixed(3)},${base.l.toFixed(3)})`,
+            delta: `(${dH.toFixed(3)},${dS.toFixed(3)},${dL.toFixed(3)})`,
+            target: `(${target.h.toFixed(3)},${target.s.toFixed(3)},${target.l.toFixed(3)})`,
+            err: `(${errH.toFixed(3)},${errS.toFixed(3)},${errL.toFixed(3)})`,
+          });
+        }
+      }
+      return out;
+    })();
+    console.group(`[强制修正] 笔刷@(${lx},${ly}) 区域8×8`);
+    console.log('修正前：', before);
+    console.log('修正后：', after);
+    console.log('统计：', {
+      changedCount: result.changedCount,
+      remainingBad: result.remainingBadCount,
+      avgErrBefore: result.avgErrorBefore.toFixed(4),
+      avgErrAfter: result.avgErrorAfter.toFixed(4),
+    });
+    console.groupEnd();
+
+    // 同步回帧（regionIdTex + deltaPacked + blockFlags）
+    updateSkillFrame(frame.id, {
+      regionIdTex: result.regionIdTex,
+      deltaPacked: result.deltaPacked,
+      blockFlags: result.blockFlags,
+    });
+    // ★ 重置基础色列表：合并 forcedFixBrush 结果进共享列表
+    //   保留原 id 的颜色（含 frameIds/area），新增的颜色补全字段
+    const newSharedColors: SharedBaseColor[] = result.baseColors.map((c) => {
+      const existing = sharedBaseColors.find((sc) => sc.id === c.id);
+      if (existing) {
+        return { ...existing, h: c.h, s: c.s, l: c.l };
+      }
+      return {
+        id: c.id,
+        h: c.h,
+        s: c.s,
+        l: c.l,
+        frameIds: frame.id ? [frame.id] : [],
+        area: 0,
+        tempFlag: true,
+      };
+    });
+    setSharedBaseColors(newSharedColors);
+    // ★ 重建显示纹理（baseTexture/residualTexture）→ 画面立即更新
+    syncFrameTextures(frame.id);
+    triggerCanvasRedraw?.();
+  }, [bgImageData, bbox, currentFrame, sharedBaseColors, texSize, updateSkillFrame, setSharedBaseColors, triggerCanvasRedraw, syncFrameTextures]);
+
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -1711,6 +1902,10 @@ export const BaseColorEditor: React.FC = () => {
       saveHistory();
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
+    } else if (currentTool === 'fixbrush') {
+      // ★ 强制修正任意模式可用（不限制 base2）
+      setIsDrawing(true);
+      fixBrushAt(pixel.x, pixel.y);
     } else if (currentTool === 'picker') {
       if (mode !== 'base2') {
         console.warn('取色器仅在基础色模式下可用');
@@ -1718,7 +1913,7 @@ export const BaseColorEditor: React.FC = () => {
       }
       pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, pickColor, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, fixBrushAt, pickColor, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -1738,18 +1933,25 @@ export const BaseColorEditor: React.FC = () => {
     if (isDrawing && currentTool === 'paint' && mode === 'base2') {
       paintOnBase(pixel.x, pixel.y);
     }
-  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, drawingPolygon, snapPointToExisting, mode, texSize]);
+    // ★ 强制修正任意模式可用（不限制 base2）
+    if (isDrawing && currentTool === 'fixbrush') {
+      fixBrushAt(pixel.x, pixel.y);
+    }
+  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, fixBrushAt, drawingPolygon, snapPointToExisting, mode, texSize]);
 
   const handleMouseUp = useCallback(() => {
-    if (isDrawing && baseTexture) {
+    if (isDrawing && baseTexture && currentTool === 'paint') {
       setTimeout(() => {
         saveHistory();
         // 处理临时像素（聚类、合并、新建ID）
         processPaintedPixels();
       }, 0);
     }
+    if (isDrawing && currentTool === 'fixbrush') {
+      setTimeout(() => saveHistory(), 0);
+    }
     setIsDrawing(false);
-  }, [isDrawing, baseTexture, processPaintedPixels]);
+  }, [isDrawing, baseTexture, currentTool, processPaintedPixels]);
 
   const handleColorInfoClick = useCallback((e: React.MouseEvent) => {
     if (!showColorInfoOnClick) return;
@@ -2198,14 +2400,20 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 7. 画笔光标
-    if (mousePos && (currentTool === 'paint' || currentTool === 'picker')) {
+    if (mousePos && (currentTool === 'paint' || currentTool === 'picker' || currentTool === 'fixbrush')) {
       ctx.save();
-      ctx.strokeStyle = currentTool === 'picker' ? '#1890ff' : brushColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([]);
-      ctx.beginPath();
-      ctx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : brushColor;
+      ctx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
+      ctx.setLineDash(currentTool === 'fixbrush' ? [] : []);
+      if (currentTool === 'fixbrush') {
+        // 8×8 修正范围：方形圈
+        const half = 4;
+        ctx.strokeRect(mousePos.x - half, mousePos.y - half, 4, 4);
+      } else {
+        ctx.beginPath();
+        ctx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       if (currentTool === 'picker') {
         ctx.beginPath();
         ctx.arc(mousePos.x, mousePos.y, 2, 0, Math.PI * 2);
@@ -2229,15 +2437,20 @@ export const BaseColorEditor: React.FC = () => {
       octx.drawImage(highlightCanvasRef.current, 0, 0);
     }
 
-    if (!mousePos || (currentTool !== 'paint' && currentTool !== 'picker')) return;
+    if (!mousePos || (currentTool !== 'paint' && currentTool !== 'picker' && currentTool !== 'fixbrush')) return;
 
     octx.save();
-    octx.strokeStyle = currentTool === 'picker' ? '#1890ff' : brushColor;
-    octx.lineWidth = 1;
+    octx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : brushColor;
+    octx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
     octx.setLineDash([]);
-    octx.beginPath();
-    octx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
-    octx.stroke();
+    if (currentTool === 'fixbrush') {
+      const half = 4;
+      octx.strokeRect(mousePos.x - half, mousePos.y - half, 4, 4);
+    } else {
+      octx.beginPath();
+      octx.arc(mousePos.x, mousePos.y, brushSize / 2, 0, Math.PI * 2);
+      octx.stroke();
+    }
     if (currentTool === 'picker') {
       octx.beginPath();
       octx.arc(mousePos.x, mousePos.y, 2, 0, Math.PI * 2);
@@ -2530,6 +2743,18 @@ export const BaseColorEditor: React.FC = () => {
           }}
         >
           取色
+        </button>
+        <button
+          onClick={() => { setCurrentTool('fixbrush'); setDrawingPolygon(null); }}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: currentTool === 'fixbrush' ? '#52c41a' : '#f0f0f0',
+            color: currentTool === 'fixbrush' ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+          title="8×8 强制修正：左右→上下→斜向→新建基础色（任意模式可用）"
+        >
+          强制修正
         </button>
         <input
           type="color"

@@ -19,6 +19,7 @@ export { renderFrameData } from './gl/renderer';
 export { FramePlaybackController };
 export { FluidEffect } from './fluid/FluidEffect';
 export type { FrameTextureData };
+export { FtxAsset } from './FtxAsset';
 
 export interface LoadOptions {
   resolution?: number;
