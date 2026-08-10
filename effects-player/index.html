@@ -26,6 +26,8 @@
     <div class="row">
       <button onclick="document.getElementById('file').click()">加载特效包</button>
       <input type="file" id="file" accept=".zip" />
+      <button onclick="document.getElementById('ftxFile').click()">加载纹理包(.ftx3)</button>
+      <input type="file" id="ftxFile" accept=".ftx3,.ftx3.gz,.gz,.bin" />
       <span id="info">未加载</span>
     </div>
     <div class="row">
@@ -54,9 +56,17 @@
       <button id="btnStepB" disabled>-1 后退</button>
       <span id="holdState" class="label" style="color:#ff0"></span>
     </div>
+    <div class="row">
+      <span class="label" style="min-width:90px">物理注入</span>
+      <button id="physFire">🔥 火焰</button>
+      <button id="physWater">💧 水流</button>
+      <button id="physPoison">☠️ 毒雾</button>
+      <button id="physNone">✖ 清除</button>
+      <span id="physState" class="label" style="color:#0ff"></span>
+    </div>
   </div>
   <script type="module">
-    import { Asset, createThreeContext, renderFrameData } from './src/index.ts';
+    import { Asset, FtxAsset, createThreeContext, renderFrameData, renderFtxFrame, disposeFtxQuad } from './src/index.ts';
 
     const canvas = document.getElementById('c');
     const ctx = createThreeContext(canvas);
@@ -64,7 +74,7 @@
 
     function resizeToAsset() {
       if (!asset) return;
-      const sz = asset.resolution;
+      const sz = asset.resolution ?? asset.width;
       canvas.width = sz;
       canvas.height = sz;
       canvas.style.width = sz + 'px';
@@ -74,6 +84,7 @@
 
     let asset = null;
     let ctrl = null;
+    let injectedPhysics = null;  // ★ 公共物理参数（.phys.json 注入，可作用任意纹理）
     let lastTime = performance.now();
     let animTime = 0;  // 独立动画时钟，永不停，给 VAT 用
     let pendingInject = null;  // 按住注入状态 { frame, x, y, active }（canvas 像素坐标）
@@ -109,7 +120,7 @@
     $('file').onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
-      if (asset) { ctrl?.dispose(); asset.dispose(); }
+      if (asset) { ctrl?.dispose(); asset.dispose(); disposeFtxQuad(ctx.scene); }
       try {
         asset = await Asset.load(await file.arrayBuffer(), { resolution: 512 });
         const order = $('orderSelect').value;
@@ -127,6 +138,35 @@
         refreshSlider();
         resizeToAsset();
         lastTime = performance.now();
+      } catch (err) {
+        info.textContent = '加载失败: ' + err.message;
+        console.error(err);
+      }
+    };
+
+    // ★ 轻量纹理包加载（FTX3 多帧，无需 bundle）
+    $('ftxFile').onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      if (asset) { ctrl?.dispose(); asset.dispose(); disposeFtxQuad(ctx.scene); }
+      try {
+        asset = await FtxAsset.load(await file.arrayBuffer());
+        const order = $('orderSelect').value;
+        ctrl = asset.createController({ fps: 3, order: ORDER_MAP[order] || 'loop' });
+        ctrl.callbacks.onFrameChange = (idx) => {
+          frameSlider.value = fmtFrame(idx);
+          frameNum.value = fmtFrame(idx);
+          info.textContent = `帧${fmtFrame(idx)}/${ctrl.frameCount} | 第${ctrl.currentLoop+1}轮 | ${ctrl.localTime.toFixed(1)}s | ${ctrl.state}`;
+        };
+        ctrl.callbacks.onComplete = () => { info.textContent += ' [播放完毕]'; };
+        ctrl.callbacks.onStateChange = (s) => {
+          info.textContent = `帧${fmtFrame(ctrl.frameIndex)}/${ctrl.frameCount} | ${s}`;
+        };
+        enableUI();
+        refreshSlider();
+        resizeToAsset();
+        lastTime = performance.now();
+        info.textContent = `纹理包: ${asset.frameCount}帧 @ ${asset.width}×${asset.height}`;
       } catch (err) {
         info.textContent = '加载失败: ' + err.message;
         console.error(err);
@@ -178,6 +218,48 @@
       ctrl.reset({ speed: parseFloat($('speedInput').value) || 1 });
     };
 
+    // ★ 公共物理参数预设（.phys.json 内容，注入后作用到当前资产任意帧）
+    const PHYS_PRESETS = {
+      fire: {
+        enableAdvection: true, enablePressure: true, pressureIterations: 12,
+        advectionMode: 'vector', combineMode: 'add',
+        channels: { r: true, g: true, b: true, a: true, h: true, s: true, l: true },
+        scalarConfig: { hMultiplier: 0.4, sMultiplier: 0.6, lMultiplier: 0.9, aMultiplier: 0.3, baselineDensity: 0, decayRate: 0.1 },
+        gravity: { x: 0, y: 120 }, velocityScale: 1.0, maxVelocity: 500,
+        continuousSources: [{ enabled: true, position: { x: 0.5, y: 0.85 }, radius: 0.12, velocity: { x: 0, y: -180 }, color: [0.9, 0.35, 0.1], density: 0.9, rate: 0.9 }],
+      },
+      water: {
+        enableAdvection: true, enablePressure: true, pressureIterations: 20,
+        pressureBoundaryMode: 'neumann', enableWarmStart: true,
+        advectionMode: 'vector', combineMode: 'sub',
+        channels: { h: true, s: true, l: true },
+        scalarConfig: { hMultiplier: 0.15, sMultiplier: 0.1, lMultiplier: 0.05, aMultiplier: 0.4, baselineDensity: 0.15, decayRate: 0.02 },
+        gravity: { x: 0, y: 200 }, velocityScale: 0.9, maxVelocity: 400,
+        continuousSources: [{ enabled: true, position: { x: 0.5, y: 0.15 }, radius: 0.1, velocity: { x: 0, y: 160 }, color: [0.15, 0.45, 0.8], density: 0.7, rate: 0.7 }],
+      },
+      poison: {
+        enableAdvection: true, enablePressure: false, advectionMode: 'scalar',
+        combineMode: 'sub', channels: { h: true, s: true, l: true, a: true },
+        scalarConfig: { hMultiplier: 0.05, sMultiplier: 0.5, lMultiplier: 0.2, aMultiplier: 0.6, baselineDensity: 0.3, decayRate: 0.03 },
+        velocityScale: 0.3, maxVelocity: 120,
+        continuousSources: [{ enabled: true, position: { x: 0.5, y: 0.8 }, radius: 0.2, velocity: { x: 0, y: -30 }, color: [0.35, 0.8, 0.2], density: 0.5, rate: 0.5, wave: { enabled: true, amplitude: 0.05, frequency: 2, speed: 1.5 } }],
+      },
+    };
+    function injectPhysics(key) {
+      if (!asset || !ctrl) return;
+      injectedPhysics = key ? PHYS_PRESETS[key] : null;
+      if (asset instanceof FtxAsset) {
+        asset.clearFluidEffect(ctrl.frameIndex);
+      } else {
+        asset.injectPhysics(ctrl.frameIndex, injectedPhysics);
+      }
+      $('physState').textContent = key ? `已注入: ${key}` : '无';
+    }
+    $('physFire').onclick = () => injectPhysics('fire');
+    $('physWater').onclick = () => injectPhysics('water');
+    $('physPoison').onclick = () => injectPhysics('poison');
+    $('physNone').onclick = () => injectPhysics(null);
+
     function tick() {
       requestAnimationFrame(tick);
       if (!asset || !ctrl) return;
@@ -191,6 +273,20 @@
 
       // 帧切换：由 Controller 控制，可暂停/跳帧
       ctrl.advance(dt);
+
+      // ★ 轻量纹理包：直接合成渲染（无实体/流体），支持注入公共物理参数
+      if (asset instanceof FtxAsset) {
+        let fluidTex = null;
+        if (injectedPhysics) {
+          const eff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer, injectedPhysics);
+          if (eff) {
+            eff.step(dt);
+            fluidTex = eff.getCompositeTexture();
+          }
+        }
+        renderFtxFrame(asset, ctrl.frameIndex, ctx.renderer, ctx.scene, ctx.camera, fluidTex);
+        return;
+      }
 
       const data = asset.getFrameRenderData(ctrl.frameIndex);
       if (data) {

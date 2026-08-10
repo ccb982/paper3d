@@ -1,0 +1,37 @@
+{
+  "name": "fire",
+  "category": "fluid",
+  "description": "火焰效果：强平流 + 上浮重力 + 底部连续源，颜色随密度燃烧偏移",
+  "enableAdvection": true,
+  "enablePressure": true,
+  "pressureIterations": 12,
+  "pressureOmega": 1.7,
+  "pressureBoundaryMode": "dirichlet",
+  "enableWarmStart": true,
+  "advectionMode": "vector",
+  "combineMode": "add",
+  "channels": { "r": true, "g": true, "b": true, "a": true, "h": true, "s": true, "l": true },
+  "scalarConfig": {
+    "hMultiplier": 0.4,
+    "sMultiplier": 0.6,
+    "lMultiplier": 0.9,
+    "aMultiplier": 0.3,
+    "baselineDensity": 0,
+    "decayRate": 0.1
+  },
+  "gravity": { "x": 0, "y": 120 },
+  "velocityScale": 1.0,
+  "maxVelocity": 500,
+  "colorBoundaryMode": "clamp",
+  "continuousSources": [
+    {
+      "enabled": true,
+      "position": { "x": 0.5, "y": 0.85 },
+      "radius": 0.12,
+      "velocity": { "x": 0, "y": -180 },
+      "color": [0.9, 0.35, 0.1],
+      "density": 0.9,
+      "rate": 0.9
+    }
+  ]
+}

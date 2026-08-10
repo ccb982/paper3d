@@ -1,0 +1,37 @@
+{
+  "name": "poison",
+  "category": "fluid",
+  "description": "毒雾：标量扩散（无压力）+ 波形摆动源 + 慢速漂移",
+  "enableAdvection": true,
+  "enablePressure": false,
+  "pressureIterations": 8,
+  "pressureBoundaryMode": "dirichlet",
+  "enableWarmStart": false,
+  "advectionMode": "scalar",
+  "combineMode": "sub",
+  "channels": { "h": true, "s": true, "l": true, "a": true },
+  "scalarConfig": {
+    "hMultiplier": 0.05,
+    "sMultiplier": 0.5,
+    "lMultiplier": 0.2,
+    "aMultiplier": 0.6,
+    "baselineDensity": 0.3,
+    "decayRate": 0.03
+  },
+  "gravity": { "x": 0, "y": -10 },
+  "velocityScale": 0.3,
+  "maxVelocity": 120,
+  "colorBoundaryMode": "clamp",
+  "continuousSources": [
+    {
+      "enabled": true,
+      "position": { "x": 0.5, "y": 0.8 },
+      "radius": 0.2,
+      "velocity": { "x": 0, "y": -30 },
+      "color": [0.35, 0.8, 0.2],
+      "density": 0.5,
+      "rate": 0.5,
+      "wave": { "enabled": true, "amplitude": 0.05, "frequency": 2, "speed": 1.5 }
+    }
+  ]
+}

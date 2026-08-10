@@ -186,6 +186,17 @@ export class Asset {
     return this._ftx.frames[ftxIdx];
   }
 
+  /**
+   * ★ 物理参数注入（解耦）：用公共物理参数（.phys.json）覆盖某帧的内嵌参数。
+   * 同一份参数可注入任意特效/纹理；注入后已创建的流体效果自动失效重建。
+   */
+  injectPhysics(frameIndex: number, config: import('./core/types').PhysicsConfig | null): void {
+    const fd = this.frames[frameIndex];
+    if (!fd) return;
+    fd.physics = config;
+    this._fluidEffects.delete(frameIndex);
+  }
+
   /** 获取或惰性创建该帧的流体效果（需要渲染器）。返回 null 表示该帧无流体配置。 */
   getFluidEffect(index: number, renderer: THREE.WebGLRenderer): FluidEffect | null {
     if (index < 0 || index >= this.frames.length) return null;

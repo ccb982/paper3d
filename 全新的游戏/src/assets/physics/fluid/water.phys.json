@@ -1,0 +1,38 @@
+{
+  "name": "water",
+  "category": "fluid",
+  "description": "水流/液体：高压力迭代 + 表面张力 + 向下重力，顶部连续源",
+  "enableAdvection": true,
+  "enablePressure": true,
+  "pressureIterations": 20,
+  "pressureOmega": 1.7,
+  "pressureBoundaryMode": "neumann",
+  "enableWarmStart": true,
+  "advectionMode": "vector",
+  "combineMode": "sub",
+  "channels": { "h": true, "s": true, "l": true },
+  "scalarConfig": {
+    "hMultiplier": 0.15,
+    "sMultiplier": 0.1,
+    "lMultiplier": 0.05,
+    "aMultiplier": 0.4,
+    "baselineDensity": 0.15,
+    "decayRate": 0.02
+  },
+  "gravity": { "x": 0, "y": 200 },
+  "velocityScale": 0.9,
+  "maxVelocity": 400,
+  "colorBoundaryMode": "clamp",
+  "levelSetConfig": { "enabled": true, "reinitIterations": 8, "surfaceTension": 0.1, "smoothingRadius": 1.5 },
+  "continuousSources": [
+    {
+      "enabled": true,
+      "position": { "x": 0.5, "y": 0.15 },
+      "radius": 0.1,
+      "velocity": { "x": 0, "y": 160 },
+      "color": [0.15, 0.45, 0.8],
+      "density": 0.7,
+      "rate": 0.7
+    }
+  ]
+}

@@ -5,6 +5,7 @@ import { buildDisplacementTextureData } from './core/entity';
 import { buildEntityMesh, type EntityMeshData } from './gl/renderer';
 import { FramePlaybackController } from './core/controller';
 import type { PlaybackConfig, FramePlaybackCallbacks } from './core/controller';
+import { FtxAsset } from './core/ftxAsset';
 import { FluidEffect } from './fluid/FluidEffect';
 import type {
   Manifest, PerFrameData, AnnotationsFile,
@@ -16,6 +17,8 @@ export type { Manifest, PerFrameData, AnnotationsFile, SerializedRegionEntity, P
 export type { PlaybackConfig, PlaybackOrder, ControllerState, FramePlaybackCallbacks } from './core/controller';
 export type { EntityMeshData };
 export { renderFrameData, createThreeContext } from './gl/renderer';
+export { renderFtxFrame, disposeFtxQuad } from './gl/ftxRenderer';
+export { FtxAsset } from './core/ftxAsset';
 export { FramePlaybackController };
 export { FluidEffect } from './fluid/FluidEffect';
 
@@ -162,6 +165,18 @@ export class Asset {
   hasPhysics(index: number): boolean {
     const fd = this.frames[index];
     return !!fd && !!fd.physics;
+  }
+
+  /**
+   * ★ 物理参数注入（解耦）：用公共物理参数覆盖某帧的内嵌参数。
+   * 同一份 .phys.json 参数可注入到任意特效/纹理，换纹理不重做物理。
+   * 注入后已创建的流体效果自动失效（下次 getFluidEffect 重建）。
+   */
+  injectPhysics(frameIndex: number, config: PhysicsConfig | null): void {
+    const fd = this.frames[frameIndex];
+    if (!fd) return;
+    fd.physics = config;
+    this._fluidEffects.delete(frameIndex);
   }
 
   /** 获取该帧流体配置（无则 null） */

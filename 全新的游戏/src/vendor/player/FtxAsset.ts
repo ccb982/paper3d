@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { decodeMultiFrame, buildBaseHslData, buildResidualData } from './core/ftx';
-import type { FrameTextureData, PaletteColor } from './core/types';
+import type { FrameTextureData, PaletteColor, PhysicsConfig } from './core/types';
+import { FluidEffect } from './fluid/FluidEffect';
 
 // ============================================================
 // FtxAsset —— 纯 FTX 纹理包（无 .scene.zip 结构）
@@ -21,6 +22,7 @@ export class FtxAsset {
 
   /** 每帧的 base + residual 纹理对 */
   private _frameTextures: { base: THREE.DataTexture; residual: THREE.DataTexture }[] = [];
+  private _fluidEffects: Map<number, FluidEffect> = new Map();
 
   constructor(buffer: ArrayBuffer) {
     const decoded = decodeMultiFrame(buffer);
@@ -131,8 +133,11 @@ export class FtxAsset {
         }
 
         void main() {
-          vec4 baseHSLA = texture2D(uBase, vUv);
-          vec4 residual = texture2D(uResidual, vUv);
+          // ★ vUv 左下原点 → 翻转 v（纹理数据 row0=顶部，flipY=false），
+          //   避免与 effects-player 相同的上下颠倒问题
+          vec2 uv = vec2(vUv.x, 1.0 - vUv.y);
+          vec4 baseHSLA = texture2D(uBase, uv);
+          vec4 residual = texture2D(uResidual, uv);
 
           float dH = (residual.r * 2.0 - 1.0) * uResidualRangeH;
           float dS = (residual.g * 2.0 - 1.0) * uResidualRangeSL;
@@ -158,11 +163,41 @@ export class FtxAsset {
     return { width: f.bbox.w, height: f.bbox.h };
   }
 
+  /**
+   * ★ 物理流体参数注入：纯纹理 + 公共物理参数（.phys.json）→ 流体效果。
+   * 纯纹理无实体边界 → 无障碍物（全图平流 + 连续源注入），
+   * 同一份参数可注入任意纹理（物理与纹理解耦）。
+   */
+  getFluidEffect(index: number, renderer: THREE.WebGLRenderer, physics: PhysicsConfig): FluidEffect | null {
+    const frame = this.frames[index];
+    if (!frame) return null;
+    const cached = this._fluidEffects.get(index);
+    if (cached) return cached;
+    const effect = new FluidEffect(renderer, physics, frame, this.palette, []);
+    this._fluidEffects.set(index, effect);
+    return effect;
+  }
+
+  /** 清除某帧（或全部）流体效果（重新注入参数后调用） */
+  clearFluidEffect(index?: number): void {
+    if (index === undefined) {
+      for (const [, eff] of this._fluidEffects) eff.dispose();
+      this._fluidEffects.clear();
+      return;
+    }
+    const eff = this._fluidEffects.get(index);
+    if (eff) {
+      eff.dispose();
+      this._fluidEffects.delete(index);
+    }
+  }
+
   dispose(): void {
     for (const pair of this._frameTextures) {
       pair.base.dispose();
       pair.residual.dispose();
     }
     this._frameTextures.length = 0;
+    this.clearFluidEffect();
   }
 }
