@@ -21,6 +21,8 @@ export interface AITransitionDef {
 export interface AIStateDef {
   behaviors: AIBehaviorDef[];
   transitions: AITransitionDef[];
+  /** ★ 最短停留时间（秒）：进入该状态后至少停留这么久才允许转移（防状态抖动） */
+  minStay?: number;
 }
 
 export interface AIConfig {
@@ -28,14 +30,16 @@ export interface AIConfig {
   initial: string;
 }
 
-/** ★ 普瑞赛斯（基准敌人）：巡逻 → 索敌 → 追击 → 近战 → 脱战回追/游走 */
+/** ★ 普瑞赛斯（基准敌人）：巡逻 → 索敌 → 追击 → 近战 → 脱离回巡逻游走 */
 export const PRESERVER_AI: AIConfig = {
   states: {
     patrol: {
-      behaviors: [{ name: 'wander', params: { speed: 1.2 } }],
+      behaviors: [{ name: 'wander', params: { speed: 2 } }],
       transitions: [
         { cond: 'seePlayer', params: { radius: 8 }, to: 'chase' },
       ],
+      // ★ 脱离后至少游走 3 秒才重新索敌（否则 patrol 闪一帧就被拉回 chase）
+      minStay: 3,
     },
     chase: {
       behaviors: [{ name: 'moveToTarget', params: { speed: 2.5 } }],
@@ -47,7 +51,9 @@ export const PRESERVER_AI: AIConfig = {
     attack: {
       behaviors: [{ name: 'meleeSwing', params: { duration: 0.6 } }],
       transitions: [
-        { cond: 'outOfRange', params: { radius: 2 }, to: 'chase' },
+        // ★ 挥击播完（一次性）→ 回 patrol 游走；玩家脱离攻击距离也直接走
+        { cond: 'attackFinished', to: 'patrol' },
+        { cond: 'outOfRange', params: { radius: 2 }, to: 'patrol' },
       ],
     },
   },

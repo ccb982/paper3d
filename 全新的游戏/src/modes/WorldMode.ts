@@ -41,6 +41,9 @@ export class WorldMode {
     target: null,
     findTarget: () => null,
   };
+  /** 状态播报 HUD */
+  private hudEl: HTMLDivElement | null = null;
+  private hudTimer = 0;
 
   constructor(
     private scene: THREE.Scene,
@@ -80,6 +83,12 @@ export class WorldMode {
 
     // ---- 地图视觉（3D 地形网格，当前平地占位） ----
     this.mapRender = new MapRender(scene, map);
+
+    // ---- ★ 状态播报 HUD（左上角显示敌人 AI 状态） ----
+    const hud = document.createElement('div');
+    hud.style.cssText = 'position:fixed;top:8px;left:8px;background:rgba(0,0,0,0.6);color:#0f0;padding:6px 10px;border-radius:4px;font:12px monospace;z-index:999;pointer-events:none;white-space:pre';
+    document.body.appendChild(hud);
+    this.hudEl = hud;
 
     // ---- ★ 测试敌人（普瑞赛斯：特效包 + AI 配置驱动） ----
     if (enemyAsset) {
@@ -139,6 +148,17 @@ export class WorldMode {
 
     // ---- AI 驱动（敌人自主行为；ctx 注入索敌回调 = 玩家位置） ----
     aiSystem.updateAll(dt, this.aiCtx);
+
+    // ---- ★ 状态播报（每 0.2 秒刷新一次 HUD） ----
+    this.hudTimer -= dt;
+    if (this.hudTimer <= 0 && this.hudEl) {
+      this.hudTimer = 0.2;
+      const lines = this.entities.allBases().filter(e => e instanceof EnemyBase).map(e => {
+        const st = (e as EnemyBase).aiStateMachine?.stateName ?? '无AI';
+        return `${e.constructor.name}: ${st}`;
+      });
+      this.hudEl.textContent = lines.length ? lines.join('\n') : '';
+    }
 
     // ---- 地图边界钳制（经 MapQuery） ----
     const p2 = this.player.controllerPosition;

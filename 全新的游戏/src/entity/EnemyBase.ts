@@ -31,6 +31,8 @@ export class EnemyBase extends CharacterBase {
   aiStateMachine: AIStateMachine | null = null;
   aiTurnTimer = 0;
   aiAttackTimer = 0;
+  /** ★ 本次挥击是否已播完（attackFinished 条件用） */
+  aiSwingDone = false;
   aiMoveDir = { x: 1, z: 0 };
   /** 巡逻目标点（wander 用；null = 选新目标） */
   aiWaypoint: { x: number; z: number } | null = null;

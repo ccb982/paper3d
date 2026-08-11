@@ -69,11 +69,15 @@ registerBehavior('moveToTarget', (entity, ctx, params) => {
   entity.moveBy(dx / len, dz / len, ctx.dt, speed);
 });
 
-/** 近战攻击：原地停顿（挥砍动画由攻击帧/扭曲表现） */
+/** 近战攻击：一次性挥击（计时播完 → attackFinished 条件退出，不再循环） */
 registerBehavior('meleeSwing', (entity, ctx, params) => {
   const duration = params.duration ?? 0.6;
-  entity.aiAttackTimer -= ctx.dt;
+  // 挥击未开始/已播完（含首次进入）→ 重新开始一轮挥击
   if (entity.aiAttackTimer <= 0) {
     entity.aiAttackTimer = duration;
+    entity.aiSwingDone = false;
   }
+  // 倒计时；播完 → 标记完成（状态机据此退出 attack）
+  entity.aiAttackTimer -= ctx.dt;
+  if (entity.aiAttackTimer <= 0) entity.aiSwingDone = true;
 });

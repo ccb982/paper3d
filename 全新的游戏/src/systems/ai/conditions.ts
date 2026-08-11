@@ -46,6 +46,9 @@ registerCondition('outOfRange', (_entity, ctx, params) => {
   return Math.hypot(t.x - _entity.entity.position.x, t.z - _entity.entity.position.z) > radius;
 });
 
+/** ★ 挥击播完（一次性攻击结束 → 回游走） */
+registerCondition('attackFinished', (entity) => entity.aiSwingDone === true);
+
 /** 目标丢失（超距/消失）→ 回巡逻 */
 registerCondition('loseTarget', (_entity, ctx, params) => {
   const radius = params.radius ?? 12;
