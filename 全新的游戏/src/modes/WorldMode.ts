@@ -20,10 +20,12 @@ import { MapRender } from '../services/map/MapRender';
 import type { InputActions } from '../platform/input/InputActions';
 import { drainInteractions } from '../platform/input/InputActions';
 
-/** 相机斜俯视参数（透视） */
-const CAM_HEIGHT = 6;
-const CAM_DISTANCE = 6;
-const CAM_FOV = 50;
+/** 相机斜俯视参数（透视）——低机位平视 + 看向前方（角色位于画面下方） */
+const CAM_HEIGHT = 2;
+const CAM_DISTANCE = 3.5;
+const CAM_FOV = 55;
+/** 相机注视点前移量（角色落到画面下方，前方视野开阔） */
+const LOOK_AHEAD = 2.5;
 
 export class WorldMode {
   private anim: FrameAnimatorBase;
@@ -116,14 +118,15 @@ export class WorldMode {
     renderer.render(this.scene, this.camera);
   }
 
-  /** 透视相机斜俯视跟随玩家（lerp 平滑） */
+  /** 透视相机斜俯视跟随玩家（lerp 平滑；注视点前移 → 角色在画面下方） */
   private syncCamera(alpha: number): void {
     const p = this.controller.position;
     const groundY = this.map.getHeight(p.x, p.y);
     const targetPos = new THREE.Vector3(p.x, groundY + CAM_HEIGHT, p.y + CAM_DISTANCE);
     this.cameraTarget.lerp(targetPos, alpha);
     this.camera.position.copy(this.cameraTarget);
-    this.camera.lookAt(p.x, groundY, p.y);
+    // ★ 看向角色前方（z 减小 = 玩法"下"方向），角色落在画面下方
+    this.camera.lookAt(p.x, groundY, p.y - LOOK_AHEAD);
   }
 
   get playerPosition(): { x: number; y: number } {

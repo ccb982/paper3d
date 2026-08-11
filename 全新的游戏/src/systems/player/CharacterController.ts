@@ -49,10 +49,11 @@ export class CharacterController {
     const axis = normalizeAxis(input.moveAxis);
     const moving = hasMovement(axis);
 
-    // 移动（★ 世界 y 向上为正：输入"下"(axis.y>0) → 世界 y 减小 = 屏幕下方）
+    // 移动（★ 世界 z 减小 = 画面深处（相机在 z+ 侧看前方）：
+    //   输入"上"(W, axis.y<0) → 世界 z 减小 = 前进；"下"(S) → z 增大 = 后退）
     if (moving) {
       this.position.x += axis.x * this.moveSpeed * dt;
-      this.position.y -= axis.y * this.moveSpeed * dt;
+      this.position.y += axis.y * this.moveSpeed * dt;
     }
 
     // 朝向（★ 只由新输入方向修改，动画切换不重置 flipX）
