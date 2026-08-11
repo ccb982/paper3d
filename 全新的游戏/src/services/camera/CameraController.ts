@@ -26,16 +26,16 @@ export interface CameraFrame {
 export class CameraController {
   /** 目标角度（鼠标控制） */
   private targetYaw = 0;
-  private targetPitch = 0.45;
+  private targetPitch = 0.65;
   /** 实际角度（阻尼插值） */
   private yaw = 0;
-  private pitch = 0.45;
+  private pitch = 0.65;
   /** 相机到目标距离 */
   distance = 5;
   /** 注视点前移量（前方视野） */
-  lookAhead = 2.5;
-  /** ★ 角色身高（标准第三人称：相机高 = 角色半高，lookAt = 角色肩/头） */
-  characterHeight = 1.2;
+  lookAhead = 1.8;
+  /** ★ 角色贴片高度（标准第三人称：lookAt 在头顶之上，角色落画面下方，不挡准星） */
+  characterHeight = 1.5;
   /** 灵敏度（弧度/像素） */
   sensitivity = 0.003;
   /** 角度阻尼系数（越大越跟手） */
@@ -58,18 +58,18 @@ export class CameraController {
     const cp = this.distance * Math.cos(this.pitch);
     const sx = Math.sin(this.yaw);
     const cz = Math.cos(this.yaw);
-    const camY = target.height + this.characterHeight * 0.5 + this.distance * Math.sin(this.pitch);
+    const camY = target.height + this.characterHeight * 0.6 + this.distance * Math.sin(this.pitch);
     this.camera.position.set(
       target.x + sx * cp,
       camY,
       target.z + cz * cp,
     );
 
-    // ---- 看向角色肩/头部（★ 角色落到画面下方，准星不被遮挡） ----
+    // ---- 看向角色头顶之上（★ 头顶不挡准星；角色占据画面下方） ----
     const f = this.getFrame();
     this.camera.lookAt(
       target.x + f.forward.x * this.lookAhead,
-      target.height + this.characterHeight * 0.8,
+      target.height + this.characterHeight * 1.1,
       target.z + f.forward.z * this.lookAhead,
     );
   }
@@ -86,7 +86,7 @@ export class CameraController {
   }
 
   /** 重置视角（模式切换/新场景时调用） */
-  reset(yaw = 0, pitch = 0.45): void {
+  reset(yaw = 0, pitch = 0.65): void {
     this.targetYaw = yaw;
     this.targetPitch = pitch;
     this.yaw = yaw;
