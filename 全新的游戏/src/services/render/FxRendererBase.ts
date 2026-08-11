@@ -28,6 +28,11 @@ export class FxRendererBase {
     if (this.mesh) this.mesh.position.set(x, y, z);
   }
 
+  /** ★ 贴片可见性（第一人称隐藏自身等；true=还原） */
+  setVisible(visible: boolean): void {
+    if (this.mesh) this.mesh.visible = visible;
+  }
+
   /** 基准缩放（flip 状态保持） */
   setScale(sx: number, sy: number): void {
     this.baseScale.set(sx, sy, 1);

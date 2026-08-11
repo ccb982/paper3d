@@ -117,8 +117,8 @@ export class CameraController {
     const sx = Math.sin(this.yaw);
     const cz = Math.cos(this.yaw);
     const t = this.smoothedTarget;
-    // 第一人称：相机在眼睛高度（0.9×身高）；第三人称：半高 + 俯仰高度
-    const camY = t.y - this.characterHeight * 0.8 + this.characterHeight * (isFirstPerson ? 0.9 : 0.6)
+    // 第一人称：相机在眼睛高度（0.9×身高）；第三人称：聚焦点上抬（越过角色头顶，准星不被头挡）
+    const camY = t.y - this.characterHeight * 0.8 + this.characterHeight * (isFirstPerson ? 0.9 : 1.2)
       + (isFirstPerson ? 0 : Math.max(0, this.distance * Math.sin(this.pitch)));
     this.camera.position.set(
       t.x + sx * cp,

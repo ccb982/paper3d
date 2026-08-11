@@ -49,8 +49,16 @@ export abstract class EntityBase {
   readonly state: FrameState | null;
   /** 物理同步模式（子类构造时设定） */
   physicsMode: PhysicsMode = 'none';
-  /** 可见性（第一人称时隐藏角色自身） */
-  visible = true;
+  /** ★ 可见性（第一人称时隐藏角色自身；setter 同步贴片 mesh.visible，
+   *   渲染跳过只是不更新，mesh 仍挂场景 → 必须直接隐藏） */
+  get visible(): boolean {
+    return this._visible;
+  }
+  set visible(v: boolean) {
+    this._visible = v;
+    if (this.renderer) this.renderer.setVisible(v);
+  }
+  private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
   billboard = true;
 

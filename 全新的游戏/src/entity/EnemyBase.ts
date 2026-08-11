@@ -75,20 +75,8 @@ export class EnemyBase extends CharacterBase {
 
   /** ★ AI 驱动入口（AISystem 每帧调用） */
   updateAI(dt: number, ctx: BehaviorContext): void {
-    // ★ 运行时诊断（低频，确认 AI 实际驱动 + 三维坐标）
-    if (this.aiDebugTimer <= 0) {
-      this.aiDebugTimer = 1;
-      const p = this.entity.position;
-      const rb = this.entity.rigidBody;
-      const phys = rb && this.em.physics ? this.em.physics.getPosition(rb.handle) : null;
-      console.log(`[AI] ${this.aiStateMachine?.stateName ?? '无AI'} x=${p.x.toFixed(2)} y=${p.y.toFixed(2)} z=${p.z.toFixed(2)}` +
-        (phys ? ` 刚体(x=${phys.x.toFixed(2)},y=${phys.y.toFixed(2)},z=${phys.z.toFixed(2)})` : ' 无刚体') +
-        ` 显示=${this.showFacing} 帧=${this.anim?.state.frameIndex} yaw=${this.yawBase.toFixed(2)}`);
-    }
-    this.aiDebugTimer -= dt;
     this.aiStateMachine?.update(this, ctx);
   }
-  private aiDebugTimer = 0;
 
   /** ★ 移动（统一走 CharacterController 基类函数，与玩家一致）：
    *   controller.position → entity.position → syncPhysics(write) → rapier
