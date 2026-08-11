@@ -37,6 +37,7 @@ export class WorldMode {
   /** AI 上下文（索敌 = 玩家位置） */
   private aiCtx: BehaviorContext = {
     dt: 0,
+    time: 0,
     target: null,
     findTarget: () => null,
   };
@@ -98,6 +99,7 @@ export class WorldMode {
         aggressive: true,
         aiConfig: PRESERVER_AI,
       }, camera);
+      // ★ 贴片世界朝向（绕 Y 旋转跟随移动方向）；显示帧/转身由相机判定（EnemyBase.onUpdate）
       this.enemy.billboard = false;
     }
 
@@ -112,8 +114,9 @@ export class WorldMode {
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
 
-    // AI 上下文（本帧 dt + 索敌 = 玩家位置）
+    // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
+    this.aiCtx.time += dt;
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
 
     // 玩家 y = 地形高度（模式层同步，实体不依赖地图）
