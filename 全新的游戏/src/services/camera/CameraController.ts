@@ -35,19 +35,33 @@ export class CameraController {
   private smoothedTarget = new THREE.Vector3();
   /** target 平滑系数（越大越跟手；跳跃要跟、高频抖动要滤） */
   targetDamp = 12;
-  /** ★ 第一人称脚步抖动（移动时）：随机节拍/幅度——完全一致的抖动不如不抖 */
+  /** ★ 第一人称脚步晃动（head bob，移动时）——行业标准（CS/COD 类）：
+   *   步频 3~4Hz，振幅 ~0.04（走路），水平 = 垂直 2 倍频（8 字形步态）；
+   *   幅度每步平滑过渡（随机但不跳变） */
   footstepShake = {
     enabled: true,
-    /** 基础振幅（世界单位，随速度缩放） */
-    baseAmplitude: 0.012,
-    /** 随机节拍区间（秒）：每次脉动重新随机 */
+    /** 基础振幅（世界单位，走路标准） */
+    baseAmplitude: 0.04,
+    /** 垂直 bob 频率（Hz；步频） */
+    bobFrequency: 5.5,
+    /** 随机节拍区间（秒）：每步重新随机 */
     beatMin: 0.12,
-    beatMax: 0.28,
+    beatMax: 0.18,
+  };
+  /** ★ 静止呼吸（第一人称，不移动时）：低频微幅上下起伏（换气感） */
+  breathing = {
+    enabled: true,
+    /** 幅度（世界单位，轻微） */
+    amplitude: 0.08,
+    /** 呼吸频率（Hz；正常呼吸 12~20 次/分钟 → 0.2~0.33） */
+    frequency: 0.45,
   };
   private shakeTimer = 0;
+  private bobTime = 0;
   private shakeAmpX = 0;
   private shakeAmpY = 0;
-  private shakePhase = 0;
+  private shakeTargetAmp = 0;
+  private breathTime = 0;
   /** 相机到目标距离（滚轮缩放，clamp；最小 = 贴脸第一人称） */
   distance = 4.2;
   distanceMin = 0.2;
@@ -108,35 +122,40 @@ export class CameraController {
       t.z + cz * cp,
     );
 
-    // ---- ★ 视线 = 相机位置 + 方向（由 pitch 决定）——准星从脚下到天空全覆盖 ----
+    // ---- ★ 视线 = 相机位置 + 方向（由 pitch 决定）——准星从脚下到天空全覆盖；
+    //      第一人称移动 → head bob 作用于视线目标（画面摆动，sin 对称复原） ----
     const f = this.getFrame();
     const dir = new THREE.Vector3(
       f.forward.x * Math.cos(this.pitch),
       -Math.sin(this.pitch),
       f.forward.z * Math.cos(this.pitch),
     );
-    this.camera.lookAt(
-      this.camera.position.x + dir.x * this.lookAhead,
-      this.camera.position.y + dir.y * this.lookAhead,
-      this.camera.position.z + dir.z * this.lookAhead,
-    );
+    let lookX = this.camera.position.x + dir.x * this.lookAhead;
+    let lookY = this.camera.position.y + dir.y * this.lookAhead;
+    let lookZ = this.camera.position.z + dir.z * this.lookAhead;
 
-    // ---- ★ 第一人称脚步抖动（移动时，随机节拍/幅度）：
-    //      每 beat 重新随机幅度与相位 → 走路的不规则感
-    //      （完全一致的 sin 抖动 = 机械感，不如不抖） ----
     if (this.footstepShake.enabled && isFirstPerson && moving) {
+      // 每步随机节拍 → 步长节奏不规则；幅度目标平滑过渡（不跳变）
       this.shakeTimer -= dt;
       if (this.shakeTimer <= 0) {
-        // 随机节拍（0.12~0.28s）+ 随机幅度（0.5~1.5 倍基础值）+ 随机相位
         this.shakeTimer = this.footstepShake.beatMin + Math.random() * (this.footstepShake.beatMax - this.footstepShake.beatMin);
-        this.shakeAmpX = this.footstepShake.baseAmplitude * (0.5 + Math.random());
-        this.shakeAmpY = this.shakeAmpX * (0.4 + Math.random() * 0.4);
-        this.shakePhase = Math.random() * Math.PI * 2;
+        this.shakeTargetAmp = this.footstepShake.baseAmplitude * (0.7 + Math.random() * 0.6);
       }
-      const t = performance.now() / 1000;
-      this.camera.position.x += Math.sin(t * 11 + this.shakePhase) * this.shakeAmpX;
-      this.camera.position.y += Math.sin(t * 15 + this.shakePhase * 1.7) * this.shakeAmpY;
+      // 幅度平滑过渡（避免跳变）；相位完全连续（一个周期：起→落→复原）
+      this.shakeAmpY += (this.shakeTargetAmp - this.shakeAmpY) * Math.min(1, dt * 3);
+      this.shakeAmpX = this.shakeAmpY * 0.5;
+      // bob 相位连续推进（无随机相位）
+      this.bobTime += dt * this.footstepShake.bobFrequency;
+      // 8 字形步态：垂直 sin(t)（一个完整周期复原）、水平 cos(2t)
+      lookY += Math.sin(this.bobTime) * this.shakeAmpY;
+      lookX += Math.cos(this.bobTime * 2) * this.shakeAmpX * f.right.x;
+      lookZ += Math.cos(this.bobTime * 2) * this.shakeAmpX * f.right.z;
+    } else if (this.breathing.enabled && isFirstPerson && !moving) {
+      // ★ 静止呼吸（换气感）：低频微幅上下起伏，相位连续
+      this.breathTime += dt * this.breathing.frequency;
+      lookY += Math.sin(this.breathTime) * this.breathing.amplitude;
     }
+    this.camera.lookAt(lookX, lookY, lookZ);
   }
 
   /** ★ 当前是否第一人称（角色贴片应隐藏） */
