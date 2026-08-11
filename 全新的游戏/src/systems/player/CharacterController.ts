@@ -16,6 +16,7 @@
 
 import type { FrameAnimatorBase } from '../../services/fx/FrameAnimatorBase';
 import type { InputActions } from '../../platform/input/InputActions';
+import type { CameraFrame } from '../../services/camera/CameraController';
 import { normalizeAxis, hasMovement } from '../../platform/input/InputActions';
 
 export interface CharacterAnimMap {
@@ -44,25 +45,37 @@ export class CharacterController {
     this.moveSpeed = moveSpeed;
   }
 
-  /** 每帧驱动：输入 → 移动/动画/朝向 */
-  update(dt: number, input: InputActions): void {
+  /**
+   * 每帧驱动：输入 + 相机坐标系 → 相机相对移动 / 朝向判定 / 动画状态。
+   * ★ 主流第三人称做法：W 永远朝画面深处，A/D 永远屏幕左右，
+   *   角色朝向 = 移动方向相对相机的判定（视角转，角色跟着转）。
+   */
+  update(dt: number, input: InputActions, frame: CameraFrame): void {
     const axis = normalizeAxis(input.moveAxis);
     const moving = hasMovement(axis);
 
-    // 移动（★ 世界 z 减小 = 画面深处（相机在 z+ 侧看前方）：
-    //   输入"上"(W, axis.y<0) → 世界 z 减小 = 前进；"下"(S) → z 增大 = 后退）
+    // ---- 相机相对移动（世界方向 = right*x + forward*(-y)） ----
+    const mvX = frame.right.x * axis.x + frame.forward.x * (-axis.y);
+    const mvZ = frame.right.z * axis.x + frame.forward.z * (-axis.y);
     if (moving) {
-      this.position.x += axis.x * this.moveSpeed * dt;
-      this.position.y += axis.y * this.moveSpeed * dt;
+      this.position.x += mvX * this.moveSpeed * dt;
+      this.position.y += mvZ * this.moveSpeed * dt; // 玩法 y ↔ 世界 z
     }
 
-    // 朝向（★ 只由新输入方向修改，动画切换不重置 flipX）
-    if (axis.y > 0) this.anim.setFacing('前');
-    else if (axis.y < 0) this.anim.setFacing('后');
-    if (axis.x < 0) this.anim.setFlipX(true);
-    else if (axis.x > 0) this.anim.setFlipX(false);
+    // ---- 朝向判定（相对相机） ----
+    // facing：移动方向与画面深处的夹角 → 前/后帧组
+    const fDot = mvX * frame.forward.x + mvZ * frame.forward.z;
+    if (fDot > 0.35) {
+      this.anim.setFacing('后'); // 朝画面深处 = 背对相机
+    } else if (fDot < -0.35) {
+      this.anim.setFacing('前'); // 朝相机 = 脸朝玩家
+    }
+    // flipX：移动方向与画面右侧的夹角 → 左右反转
+    const rDot = mvX * frame.right.x + mvZ * frame.right.z;
+    if (rDot < -0.35) this.anim.setFlipX(true);
+    else if (rDot > 0.35) this.anim.setFlipX(false);
 
-    // 动画状态
+    // ---- 动画状态 ----
     const nextState = moving ? 'walk' : 'idle';
     if (nextState !== this.currentState) {
       this.currentState = nextState;

@@ -22,6 +22,8 @@ export class DesktopBinding {
   private state: InputActions;
   private keyState = new Map<string, boolean>();
   private disposers: Array<() => void> = [];
+  private lastMouse = { x: 0, y: 0 };
+  private hasMouse = false;
 
   constructor(target?: HTMLElement | Window) {
     this.state = createInputActions();
@@ -49,6 +51,13 @@ export class DesktopBinding {
         x: e.clientX / window.innerWidth,
         y: e.clientY / window.innerHeight,
       };
+      // ★ lookAxis 增量（像素，消费式：update() 读取后清零）
+      if (this.hasMouse) {
+        this.state.lookAxis.x += e.clientX - this.lastMouse.x;
+        this.state.lookAxis.y += e.clientY - this.lastMouse.y;
+      }
+      this.lastMouse = { x: e.clientX, y: e.clientY };
+      this.hasMouse = true;
     };
     // ★ 交互事件：鼠标 → 抽象语义（tap/hold/drag），触屏 Binding 填同样的语义
     let pointerDown = false;
@@ -108,7 +117,7 @@ export class DesktopBinding {
     );
   }
 
-  /** 每帧读取前调用：从按键状态聚合移动轴向 + 重置消费式按键 */
+  /** 每帧读取前调用：从按键状态聚合移动轴向 + 重置消费式按键 + 读取 lookAxis 增量 */
   update(): void {
     let x = 0, y = 0;
     for (const [code, down] of this.keyState) {
@@ -119,6 +128,14 @@ export class DesktopBinding {
       if (dir.y) y += dir.y;
     }
     this.state.moveAxis = { x, y };
+    // lookAxis：读出的增量即本帧值（消费式，用完归零）
+  }
+
+  /** 消费视角增量（返回并清零 lookAxis） */
+  consumeLook(): { x: number; y: number } {
+    const v = { ...this.state.lookAxis };
+    this.state.lookAxis = { x: 0, y: 0 };
+    return v;
   }
 
   /** 消费攻击键（返回是否按下并清除） */

@@ -80,8 +80,8 @@ async function boot() {
     // 输入 → 控制（解耦：绑定填语义，游戏消费语义）
     binding.update();
 
-    // 驱动世界模式（含交互消费/相机跟随/动画推进）
-    mode.update(dt, binding.input, binding.consumeAttack());
+    // 驱动世界模式（交互消费/相机跟随/动画推进；look = 鼠标视角增量）
+    mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook());
 
     // ---- 物理步进 + 主角位置同步（游戏坐标 → 物理 x/z 平面） ----
     acc += dt;

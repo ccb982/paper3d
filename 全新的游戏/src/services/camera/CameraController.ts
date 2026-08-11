@@ -1,0 +1,92 @@
+// ============================================================
+// CameraController —— 相机控制（服务层，独立模块）
+// ============================================================
+// 主流第三人称做法：
+//   - 鼠标控制"目标角度"（targetYaw/targetPitch），相机阻尼插值过去
+//     （跟手但不瞬跳）
+//   - 提供相机坐标系（forward/right 水平投影）——角色移动/朝向用它
+//   - 跟随目标（角色位置 + 地形高度）+ 注视点前移（角色在画面下方）
+// 解耦：只消费抽象 lookAxis 与目标位置，不碰设备。
+
+import * as THREE from 'three';
+
+export interface CameraTarget {
+  x: number;
+  y: number; // 目标脚底世界坐标（玩法 x/z 平面）
+  z: number;
+  height: number; // 目标所处地面高度（地形 y）
+}
+
+/** 相机水平坐标系（供角色移动/朝向判定） */
+export interface CameraFrame {
+  forward: { x: number; z: number }; // 画面深处方向（W 方向）
+  right: { x: number; z: number };   // 画面右侧方向（D 方向）
+}
+
+export class CameraController {
+  /** 目标角度（鼠标控制） */
+  private targetYaw = 0;
+  private targetPitch = 0.52;
+  /** 实际角度（阻尼插值） */
+  private yaw = 0;
+  private pitch = 0.52;
+  /** 相机到目标距离 */
+  distance = 4;
+  /** 注视点前移量（角色落在画面下方） */
+  lookAhead = 2.5;
+  /** 灵敏度（弧度/像素） */
+  sensitivity = 0.003;
+  /** 角度阻尼系数（越大越跟手） */
+  damp = 10;
+
+  constructor(private camera: THREE.PerspectiveCamera) {}
+
+  /** 每帧驱动：lookAxis（增量）→ 目标角度 → 阻尼 → 定位 */
+  update(dt: number, look: { x: number; y: number }, target: CameraTarget): void {
+    // ---- 目标角度（鼠标控制） ----
+    this.targetYaw -= look.x * this.sensitivity;
+    this.targetPitch = Math.max(0.25, Math.min(1.1, this.targetPitch - look.y * this.sensitivity));
+
+    // ---- 阻尼插值（角度不瞬跳，跟手但平滑） ----
+    const k = 1 - Math.exp(-dt * this.damp);
+    this.yaw += (this.targetYaw - this.yaw) * k;
+    this.pitch += (this.targetPitch - this.pitch) * k;
+
+    // ---- 球坐标定位（yaw 绕目标，pitch 控制俯仰） ----
+    const cp = this.distance * Math.cos(this.pitch);
+    const sx = Math.sin(this.yaw);
+    const cz = Math.cos(this.yaw);
+    this.camera.position.set(
+      target.x + sx * cp,
+      target.height + this.distance * Math.sin(this.pitch),
+      target.z + cz * cp,
+    );
+
+    // ---- 看向目标前方（"前" = 画面深处方向） ----
+    const f = this.getFrame();
+    this.camera.lookAt(
+      target.x + f.forward.x * this.lookAhead,
+      target.height,
+      target.z + f.forward.z * this.lookAhead,
+    );
+  }
+
+  /** ★ 相机水平坐标系（角色移动/朝向用） */
+  getFrame(): CameraFrame {
+    const sx = Math.sin(this.yaw);
+    const cz = Math.cos(this.yaw);
+    // forward：画面深处 = 相机水平朝向的反方向（相机在角色后上方）
+    return {
+      forward: { x: -sx, z: -cz },
+      right: { x: cz, z: -sx },
+    };
+  }
+
+  /** 重置视角（模式切换/新场景时调用） */
+  reset(yaw = 0, pitch = 0.52): void {
+    this.targetYaw = yaw;
+    this.targetPitch = pitch;
+    this.yaw = yaw;
+    this.pitch = pitch;
+  }
+}

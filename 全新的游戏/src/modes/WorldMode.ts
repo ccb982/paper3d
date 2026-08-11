@@ -15,25 +15,21 @@ import { FtxAsset } from '../vendor/player/FtxAsset';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { CharacterController } from '../systems/player/CharacterController';
+import { CameraController } from '../services/camera/CameraController';
+import { Crosshair } from '../services/ui/Crosshair';
 import { MapQuery } from '../services/map/MapQuery';
 import { MapRender } from '../services/map/MapRender';
 import type { InputActions } from '../platform/input/InputActions';
 import { drainInteractions } from '../platform/input/InputActions';
 
-/** 相机斜俯视参数（透视）——低机位平视 + 看向前方（角色位于画面下方） */
-const CAM_HEIGHT = 2;
-const CAM_DISTANCE = 3.5;
-const CAM_FOV = 55;
-/** 相机注视点前移量（角色落到画面下方，前方视野开阔） */
-const LOOK_AHEAD = 2.5;
-
 export class WorldMode {
   private anim: FrameAnimatorBase;
   private quad: FTXQuad;
   private controller: CharacterController;
+  private cameraCtrl: CameraController;
   private mapRender: MapRender;
   private map: MapQuery;
-  private cameraTarget = new THREE.Vector3(0, 0, 0);
+  private crosshair: Crosshair;
   private lastTapWorld: { x: number; y: number } | null = null;
 
   constructor(
@@ -61,48 +57,71 @@ export class WorldMode {
       fps: { idle: 2, walk: 6, attack: 8 },
     }, 2.5);
 
+    // ---- 相机（独立模块：环绕/俯仰/跟随） ----
+    this.cameraCtrl = new CameraController(camera);
+
+    // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
+    this.crosshair = new Crosshair();
+
     // ---- 玩家出生在地图中心（玩法坐标 x/z 平面） ----
     const b = map.getBounds();
     const center = (b.min + b.max) / 2;
     this.controller.position = { x: center, y: center };
-
-    // ---- 相机初始化（斜俯视跟随玩家） ----
-    this.syncCamera(1);
   }
 
-  /** 每帧驱动（输入 → 控制 → 动画 → 相机） */
-  update(dt: number, input: InputActions, attackPressed: boolean): void {
-    // ---- 控制层（消费抽象输入，不碰按键） ----
-    if (attackPressed) this.controller.attack();
-    this.controller.update(dt, input);
+  /** 每帧驱动（输入 → 相机 → 控制 → 动画 → 交互） */
+  update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }): void {
     const p = this.controller.position;
 
+    // ---- 相机（鼠标视角控制，先更新 → 提供坐标系给角色移动/朝向） ----
+    this.cameraCtrl.update(dt, look, {
+      x: p.x,
+      y: 0,
+      z: p.y,
+      height: this.map.getHeight(p.x, p.y),
+    });
+
+    // ---- 控制层（相机相对移动 + 朝向判定，输入解耦） ----
+    if (attackPressed) this.controller.attack();
+    this.controller.update(dt, input, this.cameraCtrl.getFrame());
+
     // ---- 地图边界钳制（玩法坐标 x/z 平面，经 MapQuery） ----
+    const p2 = this.controller.position;
     const b = this.map.getBounds();
-    this.controller.position.x = Math.max(b.min, Math.min(b.max, p.x));
-    this.controller.position.y = Math.max(b.min, Math.min(b.max, p.y));
+    this.controller.position.x = Math.max(b.min, Math.min(b.max, p2.x));
+    this.controller.position.y = Math.max(b.min, Math.min(b.max, p2.y));
 
     // ---- 动画时间轴推进 ----
     this.anim.update(dt);
 
-    // ---- 相机跟随（lerp 平滑） ----
-    this.syncCamera(Math.min(1, dt * 5));
-
-    // ---- 交互消费（屏幕→世界换算在游戏层，与设备无关） ----
-    const rayPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-    const rayNdc = new THREE.Vector2();
+    // ---- 交互消费（★ 以准星为基准：射线固定从屏幕中心发出，
+    //      与鼠标设备位置解耦——触屏/手柄同样以中心为准） ----
+    const rayNdc = new THREE.Vector2(0, 0);
     const raycast = new THREE.Raycaster();
     for (const it of drainInteractions(input)) {
       if (it.type === 'tap') {
-        rayNdc.set(it.x * 2 - 1, -(it.y * 2 - 1));
         raycast.setFromCamera(rayNdc, this.camera);
         const hit = new THREE.Vector3();
-        if (raycast.ray.intersectPlane(rayPlane, hit)) {
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        if (raycast.ray.intersectPlane(plane, hit)) {
           this.lastTapWorld = { x: hit.x, y: hit.z };
-          console.log('[WorldMode] tap 世界坐标:', this.lastTapWorld);
+          console.log('[WorldMode] 准星目标:', this.lastTapWorld);
         }
       }
     }
+  }
+
+  /** 屏幕归一化坐标 → 世界（raycaster 与地形平面求交） */
+  private screenToWorld(sx: number, sy: number): { x: number; z: number } | null {
+    const ndc = new THREE.Vector2(sx * 2 - 1, -(sy * 2 - 1));
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(ndc, this.camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const hit = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(plane, hit)) {
+      return { x: hit.x, z: hit.z };
+    }
+    return null;
   }
 
   /** 渲染：读 FrameState → 纹理 → quad（billboard 立在地形上） → 画面 */
@@ -118,16 +137,7 @@ export class WorldMode {
     renderer.render(this.scene, this.camera);
   }
 
-  /** 透视相机斜俯视跟随玩家（lerp 平滑；注视点前移 → 角色在画面下方） */
-  private syncCamera(alpha: number): void {
-    const p = this.controller.position;
-    const groundY = this.map.getHeight(p.x, p.y);
-    const targetPos = new THREE.Vector3(p.x, groundY + CAM_HEIGHT, p.y + CAM_DISTANCE);
-    this.cameraTarget.lerp(targetPos, alpha);
-    this.camera.position.copy(this.cameraTarget);
-    // ★ 看向角色前方（z 减小 = 玩法"下"方向），角色落在画面下方
-    this.camera.lookAt(p.x, groundY, p.y - LOOK_AHEAD);
-  }
+  /** 透视相机斜俯视跟随玩家（由 CameraController 负责） */
 
   get playerPosition(): { x: number; y: number } {
     return { ...this.controller.position };
@@ -157,5 +167,6 @@ export class WorldMode {
     this.anim.dispose();
     this.quad.dispose();
     this.mapRender.dispose();
+    this.crosshair.dispose();
   }
 }
