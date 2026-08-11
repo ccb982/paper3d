@@ -21,11 +21,21 @@ export interface InputActions {
   moveAxis: { x: number; y: number };
   /** ★ 视角轴向（鼠标增量，像素；触屏 = 拖拽增量，同语义） */
   lookAxis: { x: number; y: number };
+  /** ★ 缩放输入（滚轮增量，消费式；触屏 = 双指捏合，同语义） */
+  zoomAxis: number;
   /** 指针位置（屏幕归一化 0..1，左上原点；null = 无指针） */
   pointer: { x: number; y: number } | null;
-  /** 按键按下（攻击/闪避/技能/交互），消费式读取 */
+  /** 按键按下（攻击/闪避/技能/交互/跳跃），消费式读取 */
   pressed: {
     attack: boolean;
+    dodge: boolean;
+    skill: boolean;
+    interact: boolean;
+    jump: boolean;
+  };
+  /** ★ 按住状态（持续，非消费式；长按语义用——如按住跳跃=连跳） */
+  held: {
+    jump: boolean;
     dodge: boolean;
     skill: boolean;
     interact: boolean;
@@ -39,8 +49,10 @@ export function createInputActions(): InputActions {
   return {
     moveAxis: { x: 0, y: 0 },
     lookAxis: { x: 0, y: 0 },
+    zoomAxis: 0,
     pointer: null,
-    pressed: { attack: false, dodge: false, skill: false, interact: false },
+    pressed: { attack: false, dodge: false, skill: false, interact: false, jump: false },
+    held: { jump: false, dodge: false, skill: false, interact: false },
     interactions: [],
   };
 }

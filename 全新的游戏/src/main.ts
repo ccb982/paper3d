@@ -81,7 +81,7 @@ async function boot() {
     binding.update();
 
     // 驱动世界模式（交互消费/相机跟随/动画推进；look = 鼠标视角增量）
-    mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook());
+    mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook(), binding.consumeZoom());
 
     // ---- 物理步进 + 主角位置同步（游戏坐标 → 物理 x/z 平面） ----
     acc += dt;

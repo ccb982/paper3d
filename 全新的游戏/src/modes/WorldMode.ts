@@ -70,11 +70,11 @@ export class WorldMode {
   }
 
   /** 每帧驱动（输入 → 相机 → 控制 → 动画 → 交互） */
-  update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }): void {
+  update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const p = this.controller.position;
 
     // ---- 相机（鼠标视角控制，先更新 → 提供坐标系给角色移动/朝向） ----
-    this.cameraCtrl.update(dt, look, {
+    this.cameraCtrl.update(dt, look, zoom, {
       x: p.x,
       y: 0,
       z: p.y,
@@ -129,7 +129,7 @@ export class WorldMode {
     const p = this.controller.position;
     // ★ 玩法坐标 x/z → 世界坐标；y = 地形高度（与地形架构交互点）
     const groundY = this.map.getHeight(p.x, p.y);
-    this.quad.setPosition(p.x, groundY + 0.75, p.y);
+    this.quad.setPosition(p.x, groundY + 0.75 + this.controller.getHeightOffset(), p.y);
     this.quad.setScale(1.5, 1.5);
     this.quad.setFlip(this.anim.state.flipX, this.anim.state.flipY);
     this.quad.setBillboard(this.camera);

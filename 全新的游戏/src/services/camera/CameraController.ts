@@ -30,8 +30,12 @@ export class CameraController {
   /** 实际角度（阻尼插值） */
   private yaw = 0;
   private pitch = 0.65;
-  /** 相机到目标距离 */
+  /** 相机到目标距离（滚轮缩放，clamp） */
   distance = 5;
+  distanceMin = 2.5;
+  distanceMax = 12;
+  /** 缩放灵敏度（距离单位/滚轮增量） */
+  zoomSensitivity = 0.012;
   /** 注视点前移量（前方视野） */
   lookAhead = 1.8;
   /** ★ 角色贴片高度（标准第三人称：lookAt 在头顶之上，角色落画面下方，不挡准星） */
@@ -43,8 +47,11 @@ export class CameraController {
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
-  /** 每帧驱动：lookAxis（增量）→ 目标角度 → 阻尼 → 定位 */
-  update(dt: number, look: { x: number; y: number }, target: CameraTarget): void {
+  /** 每帧驱动：lookAxis（视角）/ zoom（滚轮缩放）/ target（跟随） */
+  update(dt: number, look: { x: number; y: number }, zoom: number, target: CameraTarget): void {
+    // ---- 滚轮缩放（标准第三人称：滚轮 = 相机距离，视觉上高低/远近变化） ----
+    this.distance = Math.max(this.distanceMin, Math.min(this.distanceMax, this.distance + zoom * this.zoomSensitivity));
+
     // ---- 目标角度（鼠标控制） ----
     this.targetYaw -= look.x * this.sensitivity;
     this.targetPitch = Math.max(0.2, Math.min(1.1, this.targetPitch - look.y * this.sensitivity));

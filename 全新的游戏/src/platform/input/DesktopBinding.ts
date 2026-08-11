@@ -36,10 +36,11 @@ export class DesktopBinding {
       }
       if (!this.keyState.get(e.code)) {
         // 上升沿：记录按下（消费式）
-        if (e.code === 'KeyJ' || e.code === 'Space') this.state.pressed.attack = true;
+        if (e.code === 'KeyJ') this.state.pressed.attack = true;
         if (e.code === 'KeyK') this.state.pressed.dodge = true;
         if (e.code === 'KeyL') this.state.pressed.skill = true;
         if (e.code === 'KeyE') this.state.pressed.interact = true;
+        if (e.code === 'Space') this.state.pressed.jump = true;
       }
       this.keyState.set(e.code, true);
     };
@@ -89,11 +90,16 @@ export class DesktopBinding {
       const p = normPos(e);
       this.state.interactions.push({ type: 'tap', x: p.x, y: p.y, dx: 0, dy: 0 });
     };
+    const onWheel = (e: WheelEvent) => {
+      // ★ 滚轮 → 缩放增量（消费式：update 后由 consumeZoom 读取）
+      this.state.zoomAxis += e.deltaY;
+    };
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
-      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false };
+      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false };
       this.state.interactions = [];
+      this.state.zoomAxis = 0;
       pointerDown = false;
     };
 
@@ -103,6 +109,7 @@ export class DesktopBinding {
     window.addEventListener('mousedown', onPointerDown);
     window.addEventListener('mousemove', onPointerMove);
     window.addEventListener('mouseup', onPointerUp);
+    window.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('blur', onBlur);
     this.disposers.push(
       () => {
@@ -112,6 +119,7 @@ export class DesktopBinding {
         window.removeEventListener('mousedown', onPointerDown);
         window.removeEventListener('mousemove', onPointerMove);
         window.removeEventListener('mouseup', onPointerUp);
+        window.removeEventListener('wheel', onWheel);
         window.removeEventListener('blur', onBlur);
       },
     );
@@ -128,6 +136,13 @@ export class DesktopBinding {
       if (dir.y) y += dir.y;
     }
     this.state.moveAxis = { x, y };
+    // ★ held 按住状态（长按语义：如按住跳跃 = 落地连跳）
+    this.state.held = {
+      jump: !!this.keyState.get('Space'),
+      dodge: !!this.keyState.get('KeyK'),
+      skill: !!this.keyState.get('KeyL'),
+      interact: !!this.keyState.get('KeyE'),
+    };
     // lookAxis：读出的增量即本帧值（消费式，用完归零）
   }
 
@@ -138,10 +153,24 @@ export class DesktopBinding {
     return v;
   }
 
+  /** 消费缩放增量（返回并清零 zoomAxis） */
+  consumeZoom(): number {
+    const v = this.state.zoomAxis;
+    this.state.zoomAxis = 0;
+    return v;
+  }
+
   /** 消费攻击键（返回是否按下并清除） */
   consumeAttack(): boolean {
     const v = this.state.pressed.attack;
     this.state.pressed.attack = false;
+    return v;
+  }
+
+  /** 消费跳跃键（返回是否按下并清除） */
+  consumeJump(): boolean {
+    const v = this.state.pressed.jump;
+    this.state.pressed.jump = false;
     return v;
   }
 

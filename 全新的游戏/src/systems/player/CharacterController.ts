@@ -39,6 +39,14 @@ export class CharacterController {
   /** 世界位置（渲染管线/逻辑层读取） */
   position = { x: 0, y: 0 };
 
+  // ---- 跳跃状态（简单抛物线，与移动/物理解耦：只输出高度偏移） ----
+  private jumpVel = 0;
+  private jumpOffset = 0;
+  private onGround = true;
+  /** 跳跃初速 / 重力 */
+  jumpSpeed = 4.2;
+  gravity = 12;
+
   constructor(anim: FrameAnimatorBase, animMap: CharacterAnimMap, moveSpeed = 60) {
     this.anim = anim;
     this.animMap = animMap;
@@ -81,6 +89,33 @@ export class CharacterController {
       this.currentState = nextState;
       this.playState(nextState);
     }
+
+    // ---- 跳跃物理（抛物线：高度偏移，落地复位；★ 按住跳跃 = 落地自动连跳） ----
+    if (!this.onGround) {
+      this.jumpVel -= this.gravity * dt;
+      this.jumpOffset += this.jumpVel * dt;
+      if (this.jumpOffset <= 0) {
+        this.jumpOffset = 0;
+        this.onGround = true;
+      }
+    }
+    // 长按跳跃（held，非边沿）：落地瞬间 onGround=true → 立即再跳
+    if (input.held.jump && this.onGround) {
+      this.jumpVel = this.jumpSpeed;
+      this.onGround = false;
+    }
+  }
+
+  /** 触发跳跃（仅在地面时；空跳无效） */
+  jump(): void {
+    if (!this.onGround) return;
+    this.jumpVel = this.jumpSpeed;
+    this.onGround = false;
+  }
+
+  /** 当前高度偏移（渲染层：角色 y = 地形高度 + 贴片偏移 + 跳高） */
+  getHeightOffset(): number {
+    return this.jumpOffset;
   }
 
   /** 攻击（单次，播完自动回 idle——由 FrameAnimator 回调驱动） */
