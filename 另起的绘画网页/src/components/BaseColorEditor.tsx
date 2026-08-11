@@ -56,22 +56,26 @@ function buildBezierPath(points: Point[]): Point[] {
 
 // ============ 坐标转换 ============
 
-function canvasToWorld(cx: number, cy: number, textureSize: number): Point {
-  return { x: cx / textureSize, y: 1 - cy / textureSize };
+function canvasToWorld(cx: number, cy: number, textureSize: number, textureSizeY?: number): Point {
+  const texH = textureSizeY ?? textureSize;
+  return { x: cx / textureSize, y: 1 - cy / texH };
 }
 
-function worldToCanvas(wx: number, wy: number, textureSize: number): Point {
-  return { x: wx * textureSize, y: (1 - wy) * textureSize };
+function worldToCanvas(wx: number, wy: number, textureSize: number, textureSizeY?: number): Point {
+  const texH = textureSizeY ?? textureSize;
+  return { x: wx * textureSize, y: (1 - wy) * texH };
 }
 
 function buildResidualTextureFromPacked(
   deltaPacked: Uint16Array,
   regionIdTex: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
-  textureSize: number
+  textureSize: number,
+  textureSizeY?: number
 ): ImageData {
   const { w, h, x: offsetX, y: offsetY } = bbox;
-  const imageData = new ImageData(textureSize, textureSize);
+  const texH = textureSizeY ?? textureSize;
+  const imageData = new ImageData(textureSize, texH);
   const data = imageData.data;
   data.fill(0);
 
@@ -101,10 +105,12 @@ function buildCompositeFromPacked(
   deltaPacked: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
   blockFlags: bigint,
-  textureSize: number
+  textureSize: number,
+  textureSizeY?: number
 ): ImageData {
   const { w, h, x: offsetX, y: offsetY } = bbox;
-  const imageData = new ImageData(textureSize, textureSize);
+  const texH = textureSizeY ?? textureSize;
+  const imageData = new ImageData(textureSize, texH);
   const data = imageData.data;
   data.fill(0);
 
@@ -155,7 +161,7 @@ function extractBaseByClick(
   bgImageData: ImageData,
   worldPolygons: Point[][],
   _clickPixel?: { x: number; y: number },
-  textureSize: number = 512,
+  textureSize: { w: number; h: number } = { w: 512, h: 512 },
   forcedBbox?: { x: number; y: number; w: number; h: number } | null
 ): {
   baseTexture: ImageData;
@@ -169,6 +175,8 @@ function extractBaseByClick(
   blockFlags: bigint;
 } | null {
   if (worldPolygons.length === 0) return null;
+  const texW = textureSize.w;
+  const texH = textureSize.h;
 
   const rasterizablePolygons = worldPolygons.map(poly => {
     if (poly.length === 3) {
@@ -177,7 +185,7 @@ function extractBaseByClick(
     return poly.slice();
   });
 
-  const wallMask = new Uint8Array(textureSize * textureSize);
+  const wallMask = new Uint8Array(texW * texH);
   
   for (const poly of rasterizablePolygons) {
     if (poly.length < 2) continue;
@@ -186,10 +194,10 @@ function extractBaseByClick(
       const p1 = poly[i];
       const p2 = poly[i + 1];
       
-      const x1 = Math.round(p1.x * textureSize);
-      const y1 = Math.round((1 - p1.y) * textureSize);
-      const x2 = Math.round(p2.x * textureSize);
-      const y2 = Math.round((1 - p2.y) * textureSize);
+      const x1 = Math.round(p1.x * texW);
+      const y1 = Math.round((1 - p1.y) * texH);
+      const x2 = Math.round(p2.x * texW);
+      const y2 = Math.round((1 - p2.y) * texH);
       
       const dx = Math.abs(x2 - x1);
       const dy = Math.abs(y2 - y1);
@@ -200,11 +208,11 @@ function extractBaseByClick(
       let y = y1;
       
       while (true) {
-        if (x >= 0 && x < textureSize && y >= 0 && y < textureSize) {
+        if (x >= 0 && x < texW && y >= 0 && y < texH) {
           for (let nx = x - 2; nx <= x + 2; nx++) {
             for (let ny = y - 2; ny <= y + 2; ny++) {
-              if (nx >= 0 && nx < textureSize && ny >= 0 && ny < textureSize) {
-                wallMask[ny * textureSize + nx] = 1;
+              if (nx >= 0 && nx < texW && ny >= 0 && ny < texH) {
+                wallMask[ny * texW + nx] = 1;
               }
             }
           }
@@ -222,11 +230,11 @@ function extractBaseByClick(
   if (forcedBbox) {
     pxBbox = { ...forcedBbox };
   } else {
-    let minX = textureSize, minY = textureSize, maxX = -1, maxY = -1;
+    let minX = texW, minY = texH, maxX = -1, maxY = -1;
     for (const poly of rasterizablePolygons) {
       for (const p of poly) {
-        const px = Math.round(p.x * textureSize);
-        const py = Math.round((1 - p.y) * textureSize);
+        const px = Math.round(p.x * texW);
+        const py = Math.round((1 - p.y) * texH);
         if (px < minX) minX = px;
         if (py < minY) minY = py;
         if (px > maxX) maxX = px;
@@ -236,8 +244,8 @@ function extractBaseByClick(
     
     minX = Math.max(0, minX - 10);
     minY = Math.max(0, minY - 10);
-    maxX = Math.min(textureSize - 1, maxX + 10);
-    maxY = Math.min(textureSize - 1, maxY + 10);
+    maxX = Math.min(texW - 1, maxX + 10);
+    maxY = Math.min(texH - 1, maxY + 10);
     
     pxBbox = {
       x: minX,
@@ -248,14 +256,14 @@ function extractBaseByClick(
   }
   
   // 构建mask时跳过透明像素（alpha < 128），避免透明背景被当作黑色聚类
-  const bfsVisited = new Uint8Array(textureSize * textureSize);
+  const bfsVisited = new Uint8Array(texW * texH);
   let visitedCount = 0;
   for (let y = pxBbox.y; y < pxBbox.y + pxBbox.h; y++) {
     for (let x = pxBbox.x; x < pxBbox.x + pxBbox.w; x++) {
-      const pIdx = (y * textureSize + x) * 4;
+      const pIdx = (y * texW + x) * 4;
       const alpha = bgImageData.data[pIdx + 3];
       if (alpha >= 128) {
-        bfsVisited[y * textureSize + x] = 1;
+        bfsVisited[y * texW + x] = 1;
         visitedCount++;
       }
     }
@@ -265,7 +273,7 @@ function extractBaseByClick(
   const localMask = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      const globalIdx = (pxBbox.y + y) * textureSize + (pxBbox.x + x);
+      const globalIdx = (pxBbox.y + y) * texW + (pxBbox.x + x);
       localMask[y * w + x] = bfsVisited[globalIdx];
     }
   }
@@ -274,7 +282,7 @@ function extractBaseByClick(
     localMask,
     pxBbox,
     bgImageData,
-    textureSize
+    texW
   );
 
   if (colors.length === 0) return null;
@@ -365,7 +373,7 @@ function extractBaseByClick(
       colorsWithId,
       pxBbox,
       bgImageData,
-      textureSize,
+      texW,
       blockFlags,
       10,
       0.02,
@@ -378,10 +386,10 @@ function extractBaseByClick(
   }
 
   const baseCanvas = document.createElement('canvas');
-  baseCanvas.width = textureSize;
-  baseCanvas.height = textureSize;
+  baseCanvas.width = texW;
+  baseCanvas.height = texW;
   const baseCtx = baseCanvas.getContext('2d')!;
-  const baseImageData = baseCtx.createImageData(textureSize, textureSize);
+  const baseImageData = baseCtx.createImageData(texW, texW);
   const baseData = baseImageData.data;
 
   if (regionIdTex) {
@@ -396,7 +404,7 @@ function extractBaseByClick(
         const localX = localIdx % w;
         const globalY = pxBbox.y + localY;
         const globalX = pxBbox.x + localX;
-        const idx = (globalY * textureSize + globalX) * 4;
+        const idx = (globalY * texW + globalX) * 4;
         
         baseData[idx] = rgb.r;
         baseData[idx + 1] = rgb.g;
@@ -411,7 +419,7 @@ function extractBaseByClick(
       for (let localX = 0; localX < w; localX++) {
         const globalY = pxBbox.y + localY;
         const globalX = pxBbox.x + localX;
-        const idx = (globalY * textureSize + globalX) * 4;
+        const idx = (globalY * texW + globalX) * 4;
         baseData[idx] = rgb.r;
         baseData[idx + 1] = rgb.g;
         baseData[idx + 2] = rgb.b;
@@ -420,7 +428,7 @@ function extractBaseByClick(
     }
   }
 
-  const residualTexture = buildResidualTextureFromPacked(deltaPacked, regionIdTex!, pxBbox, textureSize);
+  const residualTexture = buildResidualTextureFromPacked(deltaPacked, regionIdTex!, pxBbox, texW, texH);
 
   return {
     baseTexture: baseImageData,
@@ -439,14 +447,16 @@ function buildBaseTextureFromLocalColors(
   colors: Array<{ h: number; s: number; l: number }>,
   regionIdTex: Uint16Array,
   bbox: { x: number; y: number; w: number; h: number },
-  textureSize: number
+  textureSize: number,
+  textureSizeY?: number
 ): ImageData {
   const { w, h, x: offsetX, y: offsetY } = bbox;
+  const texH = textureSizeY ?? textureSize;
   const canvas = document.createElement('canvas');
   canvas.width = textureSize;
-  canvas.height = textureSize;
+  canvas.height = texH;
   const ctx = canvas.getContext('2d')!;
-  const imageData = ctx.createImageData(textureSize, textureSize);
+  const imageData = ctx.createImageData(textureSize, texH);
   const data = imageData.data;
   data.fill(0);
 
@@ -551,6 +561,8 @@ export const BaseColorEditor: React.FC = () => {
   // ★ 动态纹理分辨率（必须在 handleResolutionChange 之前声明）
   // manualTexSize 是"手动设置值"（导入/分辨率调整时记录），可能滞后于实际帧数据
   const [manualTexSize, setManualTexSize] = useState(canvasWidth);
+  // ★ 原图宽高比（导入时记录；分辨率调整时锁定比例：改高度 → 宽度 = 高度 × 比例）
+  const originalAspectRef = useRef<number>(1);
 
   // ★ 关键修复：texSize 是当前帧的"实际工作尺寸"，必须同步派生自 bgImageData。
   // 旧实现用 useEffect 异步把 manualTexSize 同步到 bgImageData.width，但切换帧时
@@ -559,7 +571,9 @@ export const BaseColorEditor: React.FC = () => {
   // 因此 texSize 同步派生：有 bgImageData 时 = bgImageData.width，否则 = manualTexSize。
   // 全文件所有"读取当前帧数据/渲染/坐标转换"统一用 texSize（即实际尺寸），
   // 仅 handleResolutionChange / 导入等"记录目标尺寸"处使用 manualTexSize + setManualTexSize。
+  // ★ texSizeY = 高度（非正方形纹理：锁定原图比例，见 handleLoadBackground/handleResolutionChange）
   const texSize = bgImageData ? bgImageData.width : manualTexSize;
+  const texSizeY = bgImageData ? bgImageData.height : manualTexSize;
 
   // ★ 仅在初始化时同步 canvasWidth（无帧数据阶段），后续由派生 texSize 接管
   useEffect(() => {
@@ -579,31 +593,32 @@ export const BaseColorEditor: React.FC = () => {
     }
   }, [bgImageData]);
 
-  // ★ 分辨率调整功能：缩放所有帧数据到新尺寸
   // ★ 分辨率调整功能：先缩放背景色，再用缩放后的背景重新生成基础色和残差
   //   （不重采样旧的 regionIdTex/deltaPacked——那会导致边界错位/精度丢失 → 噪点）
+  // ★ 锁定原图比例：输入"高度"目标值 → 宽度 = 高度 × 原图宽高比（保持比例不拉伸）
   const handleResolutionChange = useCallback((newSize: number) => {
     // ★ 输入验证：确保分辨率在合理范围内
     const minSize = 64;
     const maxSize = 2048;
-    
+
     if (isNaN(newSize) || newSize < minSize || newSize > maxSize) {
       console.warn(`[分辨率调整] 无效值 ${newSize}，范围应为 ${minSize}~${maxSize}`);
-      // 恢复显示旧值
-      setManualTexSize(texSize);
+      // 恢复显示旧值（输入框显示高度）
+      setManualTexSize(texSizeY);
       return;
     }
-    
-    if (newSize === texSize) return;
-    
-    console.log(`[分辨率调整] ${texSize}×${texSize} → ${newSize}×${newSize}`);
+
+    if (newSize === texSizeY) return;
+
+    // ★ 高度目标 → 宽度按原图比例锁定
+    const newH = newSize;
+    const newW = Math.max(minSize, Math.round(newH * originalAspectRef.current));
+    console.log(`[分辨率调整] ${texSize}×${texSizeY} → ${newW}×${newH}（锁定比例 ${originalAspectRef.current.toFixed(3)}）`);
     
     // 保存历史（调整前）
     saveHistory();
     
     const oldSize = texSize;
-    const scaleX = newSize / oldSize;
-    const scaleY = newSize / oldSize;
 
     // 对每个帧：缩放背景 → 重新提取生成 regionIdTex/baseColors/deltaPacked/blockFlags
     // ★ 让 extractBaseByClick 根据区域多边形自动计算 bbox（世界坐标 0~1，与分辨率无关）
@@ -613,22 +628,23 @@ export const BaseColorEditor: React.FC = () => {
       if (!frame.bgImageData) return;
       // ★ 用原始背景（导入时保存）作为缩放源，避免反复调整分辨率累积模糊
       const srcImage = frame.originalBgImageData || frame.bgImageData;
-      const srcSize = srcImage.width;
+      const srcW = srcImage.width;
+      const srcH = srcImage.height;
 
-      // 1. 从原始背景缩放到目标尺寸（最近邻，保留像素清晰度）
+      // 1. 从原始背景缩放到目标尺寸（最近邻，保留像素清晰度；★ 非正方形按比例）
       const srcCanvas = document.createElement('canvas');
-      srcCanvas.width = srcSize;
-      srcCanvas.height = srcSize;
+      srcCanvas.width = srcW;
+      srcCanvas.height = srcH;
       const srcCtx = srcCanvas.getContext('2d')!;
       srcCtx.putImageData(srcImage, 0, 0);
       
       const dstCanvas = document.createElement('canvas');
-      dstCanvas.width = newSize;
-      dstCanvas.height = newSize;
+      dstCanvas.width = newW;
+      dstCanvas.height = newH;
       const dstCtx = dstCanvas.getContext('2d')!;
       dstCtx.imageSmoothingEnabled = false;
-      dstCtx.drawImage(srcCanvas, 0, 0, newSize, newSize);
-      const newBg = dstCtx.getImageData(0, 0, newSize, newSize);
+      dstCtx.drawImage(srcCanvas, 0, 0, newW, newH);
+      const newBg = dstCtx.getImageData(0, 0, newW, newH);
       
       // 2. 先用缩放后的背景更新 frame（供 extractBaseByClick 使用）
       updateSkillFrame(frame.id, { bgImageData: newBg });
@@ -637,7 +653,7 @@ export const BaseColorEditor: React.FC = () => {
       const polygons = frame.dashedPolygons || [];
       if (polygons.length === 0) return;
 
-      const result = extractBaseByClick(newBg, polygons, undefined, newSize, null);
+      const result = extractBaseByClick(newBg, polygons, undefined, { w: newW, h: newH }, null);
       if (result) {
         const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, blockFlags } = result;
 
@@ -679,8 +695,8 @@ export const BaseColorEditor: React.FC = () => {
       }
     }
     
-    // 5. 更新 texSize
-    setManualTexSize(newSize);
+    // 5. 更新 texSize（记录目标高度；宽度由比例派生）
+    setManualTexSize(newH);
     
     // 6. 重新生成显示纹理（用 setTimeout 确保 state 更新完成）
     setTimeout(() => {
@@ -692,9 +708,9 @@ export const BaseColorEditor: React.FC = () => {
         }
       }
       sortPaletteByArea();
-      console.log(`[分辨率调整] 完成：缩放背景并重新生成 ${updatedFrameIds.length} 帧的基础色/残差`);
+      console.log(`[分辨率调整] 完成：${newW}×${newH} 缩放背景并重新生成 ${updatedFrameIds.length} 帧的基础色/残差`);
     }, 0);
-  }, [texSize, frames, globalBbox, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures, sortPaletteByArea]);
+  }, [texSize, texSizeY, frames, globalBbox, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures, sortPaletteByArea]);
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0n);
@@ -796,9 +812,9 @@ export const BaseColorEditor: React.FC = () => {
     if (!canvas) return;
 
     // 尺寸与 texSize 同步
-    if (canvas.width !== texSize || canvas.height !== texSize) {
+    if (canvas.width !== texSize || canvas.height !== texSizeY) {
       canvas.width = texSize;
-      canvas.height = texSize;
+      canvas.height = texSizeY;
     }
 
     const ctx = canvas.getContext('2d');
@@ -806,12 +822,12 @@ export const BaseColorEditor: React.FC = () => {
 
     // 如果模式不是 base2 或没有选中颜色，清空画布
     if (mode !== 'base2' || selectedBaseColorId === null || !regionIdTex || regionIdTex.length === 0 || !bbox) {
-      ctx.clearRect(0, 0, texSize, texSize);
+      ctx.clearRect(0, 0, texSize, texSizeY);
       return;
     }
 
     const { w, h, x: offsetX, y: offsetY } = bbox;
-    const imageData = ctx.createImageData(texSize, texSize);
+    const imageData = ctx.createImageData(texSize, texSizeY);
     const data = imageData.data;
 
     // 先全部透明
@@ -951,7 +967,7 @@ export const BaseColorEditor: React.FC = () => {
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
-        // 根据图片原始尺寸计算纹理分辨率
+        // 根据图片原始尺寸计算纹理分辨率（★ 保持原图宽高比，不强制正方形）
         let w = img.naturalWidth;
         let h = img.naturalHeight;
         const MAX_SIZE = 2048;
@@ -960,18 +976,16 @@ export const BaseColorEditor: React.FC = () => {
           w = Math.round(w * scale);
           h = Math.round(h * scale);
         }
-        const newSize = Math.max(w, h);
-        setManualTexSize(newSize);
+        // ★ 记录原图比例（分辨率调整时按比例锁定：改高度 → 宽度自动算）
+        originalAspectRef.current = w / h;
+        setManualTexSize(Math.max(w, h));
 
         const canvas = document.createElement('canvas');
-        canvas.width = newSize;
-        canvas.height = newSize;
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext('2d')!;
-        // 居中绘制图片
-        const sx = (newSize - w) / 2;
-        const sy = (newSize - h) / 2;
-        ctx.drawImage(img, sx, sy, w, h);
-        const imageData = ctx.getImageData(0, 0, newSize, newSize);
+        ctx.drawImage(img, 0, 0, w, h);
+        const imageData = ctx.getImageData(0, 0, w, h);
         setBgImageData(imageData);
         // ★ 保存原始背景（缩放前），分辨率调整时基于它重新缩放，避免反复缩放累积模糊
         if (activeFrameId) {
@@ -1049,7 +1063,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     if (allPolygons.length === 0) return;
 
-    const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, texSize, state.skillGroupEditor.globalBbox);
+    const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, { w: texSize, h: texSizeY }, state.skillGroupEditor.globalBbox);
     if (result) {
       const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, residualTexture, blockFlags } = result;
 
@@ -1057,7 +1071,8 @@ export const BaseColorEditor: React.FC = () => {
         localBaseColors,
         localRegionIdTex,
         bbox,
-        texSize
+        texSize,
+        texSizeY
       );
 
       updateSkillFrame(currentActiveFrameId, {
@@ -1229,7 +1244,7 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 8. 生成残差纹理（用于显示）
-    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTex, bbox, texSize);
+    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTex, bbox, texSize, texSizeY);
     setResidualTexture(residualDisplay);
 
     // 9. 更新帧数据（包含 blockFlags 和 deltaPacked）
@@ -1419,7 +1434,7 @@ export const BaseColorEditor: React.FC = () => {
       deltaPacked[idx] = packRGB565(qS, qH, qL);
     }
 
-    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTexCopy, bbox, texSize);
+    const residualDisplay = buildResidualTextureFromPacked(deltaPacked, regionIdTexCopy, bbox, texSize, texSizeY);
     setResidualTexture(residualDisplay);
     updateSkillFrame(activeFrameId, {
       residualTexture: residualDisplay,
@@ -1647,12 +1662,12 @@ export const BaseColorEditor: React.FC = () => {
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const scaleX = texSize / rect.width;
-    const scaleY = texSize / rect.height;
+    const scaleY = texSizeY / rect.height;
     return {
       x: Math.round((e.clientX - rect.left) * scaleX),
       y: Math.round((e.clientY - rect.top) * scaleY),
     };
-  }, [texSize]);
+  }, [texSize, texSizeY]);
 
   // 取色
   const pickColor = useCallback((px: number, py: number) => {
@@ -1660,7 +1675,7 @@ export const BaseColorEditor: React.FC = () => {
       console.warn('取色器：baseTexture 为空，无法取色');
       return;
     }
-    if (px < 0 || px >= texSize || py < 0 || py >= texSize) {
+    if (px < 0 || px >= texSize || py < 0 || py >= texSizeY) {
       console.warn('取色器：坐标超出范围', { px, py });
       return;
     }
@@ -1679,7 +1694,7 @@ export const BaseColorEditor: React.FC = () => {
       .map(v => v.toString(16).padStart(2, '0'))
       .join('');
     setBrushColor(hex);
-  }, [baseTexture, texSize]);
+  }, [baseTexture, texSize, texSizeY]);
 
   // 在基础色纹理上涂色
   const paintOnBase = useCallback((px: number, py: number) => {
@@ -1964,7 +1979,7 @@ export const BaseColorEditor: React.FC = () => {
   // 鼠标事件
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
-    const world = canvasToWorld(pixel.x, pixel.y, texSize);
+    const world = canvasToWorld(pixel.x, pixel.y, texSize, texSizeY);
 
     if (isExtractMode && e.button === 0) {
       handleExtractClick(pixel);
@@ -2053,7 +2068,7 @@ export const BaseColorEditor: React.FC = () => {
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
     setMousePos(pixel);
-    const world = canvasToWorld(pixel.x, pixel.y, texSize);
+    const world = canvasToWorld(pixel.x, pixel.y, texSize, texSizeY);
 
     if (currentTool === 'dashed' || currentTool === 'bezier') {
       if (drawingPolygon && drawingPolygon.length > 0) {
@@ -2197,9 +2212,9 @@ export const BaseColorEditor: React.FC = () => {
 
     // ===== 新基础色模式：完全独立的渲染路径 =====
     if (mode === 'base2') {
-      ctx.clearRect(0, 0, texSize, texSize);
+      ctx.clearRect(0, 0, texSize, texSizeY);
       ctx.fillStyle = '#1a1a1a';
-      ctx.fillRect(0, 0, texSize, texSize);
+      ctx.fillRect(0, 0, texSize, texSizeY);
 
       if (baseTexture) {
         ctx.save();
@@ -2221,7 +2236,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y, texSize));
+        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y, texSize, texSizeY));
         if (poly.length === 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -2265,7 +2280,7 @@ export const BaseColorEditor: React.FC = () => {
         ctx.strokeStyle = '#ffaa00';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
-        const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y, texSize));
+        const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y, texSize, texSizeY));
         
         if (currentTool === 'bezier' && drawingPolygon.length === 2) {
           ctx.beginPath();
@@ -2282,7 +2297,7 @@ export const BaseColorEditor: React.FC = () => {
           }
           const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y, texSize) : null);
           if (currentPreview) {
-            const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize);
+            const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize, texSizeY);
             ctx.lineTo(previewCanvas.x, previewCanvas.y);
           }
           ctx.stroke();
@@ -2297,7 +2312,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.lineWidth = 1;
       for (const poly of dashedPolygons) {
         for (const p of poly) {
-          const pt = worldToCanvas(p.x, p.y, texSize);
+          const pt = worldToCanvas(p.x, p.y, texSize, texSizeY);
           ctx.beginPath();
           ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
           ctx.fill();
@@ -2306,7 +2321,7 @@ export const BaseColorEditor: React.FC = () => {
       }
       if (drawingPolygon) {
         for (const p of drawingPolygon) {
-          const pt = worldToCanvas(p.x, p.y, texSize);
+          const pt = worldToCanvas(p.x, p.y, texSize, texSizeY);
           ctx.beginPath();
           ctx.arc(pt.x, pt.y, 3, 0, Math.PI * 2);
           ctx.fill();
@@ -2323,15 +2338,15 @@ export const BaseColorEditor: React.FC = () => {
         ctx.putImageData(bgImageData, 0, 0);
       } else {
         ctx.fillStyle = '#333';
-        ctx.fillRect(0, 0, texSize, texSize);
+        ctx.fillRect(0, 0, texSize, texSizeY);
       }
     }
     else if (mode === 'residual') {
       ctx.fillStyle = '#333';
-      ctx.fillRect(0, 0, texSize, texSize);
+      ctx.fillRect(0, 0, texSize, texSizeY);
       
       if (bbox && currentFrame?.deltaPacked && currentFrame.regionIdTex && baseColors.length > 0) {
-        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, currentFrame.regionIdTex, bbox, texSize);
+        const residualDisplay = buildResidualTextureFromPacked(currentFrame.deltaPacked, currentFrame.regionIdTex, bbox, texSize, texSizeY);
         
         ctx.save();
         ctx.beginPath();
@@ -2343,7 +2358,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     else if (mode === 'composite') {
       ctx.fillStyle = '#333';
-      ctx.fillRect(0, 0, texSize, texSize);
+      ctx.fillRect(0, 0, texSize, texSizeY);
       
       if (bbox && baseTexture && currentFrame?.deltaPacked && currentFrame.regionIdTex && baseColors.length > 0) {
         const compositeData = buildCompositeFromPacked(
@@ -2352,7 +2367,8 @@ export const BaseColorEditor: React.FC = () => {
           currentFrame.deltaPacked,
           bbox,
           currentFrame.blockFlags,
-          texSize
+          texSize,
+          texSizeY
         );
         
         ctx.save();
@@ -2374,7 +2390,7 @@ export const BaseColorEditor: React.FC = () => {
     if (isExtractMode) {
       ctx.save();
       ctx.fillStyle = 'rgba(255, 0, 0, 0.2)';
-      ctx.fillRect(0, 0, texSize, texSize);
+      ctx.fillRect(0, 0, texSize, texSizeY);
       ctx.fillStyle = '#ff0000';
       ctx.font = 'bold 16px Arial';
       ctx.textAlign = 'center';
@@ -2392,7 +2408,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.setLineDash([6, 4]);
       for (const poly of dashedPolygons) {
         if (poly.length < 2) continue;
-        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y, texSize));
+        const pts = poly.map((p: Point) => worldToCanvas(p.x, p.y, texSize, texSizeY));
         if (poly.length === 3) {
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
@@ -2416,12 +2432,12 @@ export const BaseColorEditor: React.FC = () => {
       ctx.strokeStyle = '#ffaa00';
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
-      const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y, texSize));
+      const pts = drawingPolygon.map(p => worldToCanvas(p.x, p.y, texSize, texSizeY));
       
       if (currentTool === 'bezier' && drawingPolygon.length === 2) {
         const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y, texSize) : null);
         if (currentPreview) {
-          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize);
+          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize, texSizeY);
           ctx.beginPath();
           ctx.moveTo(pts[0].x, pts[0].y);
           ctx.quadraticCurveTo(previewCanvas.x, previewCanvas.y, pts[1].x, pts[1].y);
@@ -2442,7 +2458,7 @@ export const BaseColorEditor: React.FC = () => {
         }
         const currentPreview = previewPoint || (mousePos ? canvasToWorld(mousePos.x, mousePos.y, texSize) : null);
         if (currentPreview) {
-          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize);
+          const previewCanvas = worldToCanvas(currentPreview.x, currentPreview.y, texSize, texSizeY);
           ctx.lineTo(previewCanvas.x, previewCanvas.y);
         }
         ctx.stroke();
@@ -2455,7 +2471,7 @@ export const BaseColorEditor: React.FC = () => {
     for (const poly of dashedPolygons) {
       for (let i = 0; i < poly.length; i++) {
         const p = poly[i];
-        const cp = worldToCanvas(p.x, p.y, texSize);
+        const cp = worldToCanvas(p.x, p.y, texSize, texSizeY);
         if (poly.length === 3 && i === 2) {
           ctx.fillStyle = '#ff4444';
           ctx.beginPath();
@@ -2472,7 +2488,7 @@ export const BaseColorEditor: React.FC = () => {
     if (drawingPolygon) {
       for (let i = 0; i < drawingPolygon.length; i++) {
         const p = drawingPolygon[i];
-        const cp = worldToCanvas(p.x, p.y, texSize);
+        const cp = worldToCanvas(p.x, p.y, texSize, texSizeY);
         if (currentTool === 'bezier' && drawingPolygon.length === 2 && i === 1) {
           ctx.fillStyle = '#ffaa00';
           ctx.beginPath();
@@ -2493,7 +2509,7 @@ export const BaseColorEditor: React.FC = () => {
       ctx.save();
       ctx.fillStyle = '#52c41a';
       ctx.beginPath();
-      const sp = worldToCanvas(snapPoint.x, snapPoint.y, texSize);
+      const sp = worldToCanvas(snapPoint.x, snapPoint.y, texSize, texSizeY);
       ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
@@ -2565,7 +2581,7 @@ export const BaseColorEditor: React.FC = () => {
     if (!overlay) return;
     const octx = overlay.getContext('2d')!;
 
-    octx.clearRect(0, 0, texSize, texSize);
+    octx.clearRect(0, 0, texSize, texSizeY);
 
     if (mode === 'base2' && highlightCanvasRef.current) {
       octx.drawImage(highlightCanvasRef.current, 0, 0);
@@ -2699,12 +2715,12 @@ export const BaseColorEditor: React.FC = () => {
         >
           + 新建帧
         </button>
-        {/* 分辨率选择器（支持自定义输入） */}
+        {/* 分辨率选择器（★ 锁定原图比例：输入"高度"，宽度按比例自动算） */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '8px' }}>
           <span style={{ fontSize: '11px', color: '#666' }}>分辨率:</span>
           <input
             type="text"
-            value={texSize}
+            value={texSizeY}
             onChange={(e) => {
               const value = e.target.value;
               // 只允许数字输入
@@ -2722,7 +2738,7 @@ export const BaseColorEditor: React.FC = () => {
                 handleResolutionChange(value);
                 input.blur();
               } else if (e.key === 'Escape') {
-                input.value = texSize.toString();
+                input.value = texSizeY.toString();
                 input.blur();
               }
             }}
@@ -2734,10 +2750,10 @@ export const BaseColorEditor: React.FC = () => {
               border: '1px solid #d9d9d9',
               borderRadius: '3px',
             }}
-            title="输入自定义分辨率（64~2048），回车确认"
+            title="输入目标高度（64~2048），宽度按原图比例锁定自动计算，回车确认"
           />
-          <span style={{ fontSize: '11px', color: '#999' }}>×{texSize}</span>
-          {/* 快捷尺寸按钮 */}
+          <span style={{ fontSize: '11px', color: '#999' }}>×{texSizeY}（宽 {texSize}，锁定比例）</span>
+          {/* 快捷尺寸按钮（高度目标） */}
           <div style={{ display: 'flex', gap: '2px' }}>
             {[128, 256, 512, 1024].map(size => (
               <button
@@ -2747,9 +2763,9 @@ export const BaseColorEditor: React.FC = () => {
                   padding: '1px 6px',
                   fontSize: '10px',
                   cursor: 'pointer',
-                  border: texSize === size ? '1px solid #1890ff' : '1px solid #d9d9d9',
-                  background: texSize === size ? '#e6f7ff' : '#fff',
-                  color: texSize === size ? '#1890ff' : '#666',
+                  border: texSizeY === size ? '1px solid #1890ff' : '1px solid #d9d9d9',
+                  background: texSizeY === size ? '#e6f7ff' : '#fff',
+                  color: texSizeY === size ? '#1890ff' : '#666',
                   borderRadius: '2px',
                 }}
               >
@@ -3104,7 +3120,7 @@ export const BaseColorEditor: React.FC = () => {
               return {
                 name: frame.name || '未命名',
                 width: texSize,
-                height: texSize,
+                height: texSizeY,
                 bbox: frame.bbox!,
                 regionIdTex: newRegionIdTex,
                 deltaPacked: frame.deltaPacked,
@@ -3168,7 +3184,7 @@ export const BaseColorEditor: React.FC = () => {
             <canvas
               ref={canvasRef}
               width={texSize}
-              height={texSize}
+              height={texSizeY}
               style={{
                 display: 'block',
                 border: '1px solid #333',

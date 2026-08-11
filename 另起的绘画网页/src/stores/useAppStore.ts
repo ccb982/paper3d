@@ -2645,7 +2645,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const sortedColors = state.sharedBaseColors;
       const bbox = frame.bbox;
       const textureSize = frame.bgImageData?.width || 512;
-      const totalPixels = textureSize * textureSize;
+      const textureSizeY = frame.bgImageData?.height || textureSize;
+      const totalPixels = textureSize * textureSizeY;
 
       // 内联 buildBaseTextureFromRegionId
       const baseData = new Uint8ClampedArray(totalPixels * 4);
