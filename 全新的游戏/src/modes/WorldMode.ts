@@ -83,9 +83,9 @@ export class WorldMode {
     // ---- ★ 测试敌人（普瑞赛斯：特效包 + AI 配置驱动） ----
     if (enemyAsset) {
       this.enemy = new EnemyBase(this.entities, scene, enemyAsset, {
-        x: center + 3,
+        x: center + 12,
         y: 0,
-        z: center + 2,
+        z: center + 8,
         animMap: {
           states: {
             idle: { 前: ['前'], 后: ['后'] },

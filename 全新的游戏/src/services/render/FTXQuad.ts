@@ -96,10 +96,23 @@ export class FTXQuad extends FxRendererBase {
   private _bbox = new THREE.Vector4(0, 0, 512, 512);
   /** 纹理宽高比（h/w，非正方形纹理保持比例用） */
   private _texAspect = 1;
+  /** ★ 贴片底部锚点（脚踩地面）：setPosition 时 y 自动 + 贴片半高 */
+  private anchorBottom = true;
 
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
     this.setScale(baseSize, baseSize * this._texAspect);
+  }
+
+  /** ★ 覆写 setPosition：底部锚点 → y 自动抬升贴片半高（脚踩地面，不在地底） */
+  override setPosition(x: number, y: number, z = 0): void {
+    const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
+    super.setPosition(x, y + halfH, z);
+  }
+
+  /** 切换底部锚点（默认 true：脚踩地面） */
+  setAnchorBottom(v: boolean): void {
+    this.anchorBottom = v;
   }
 
   constructor(

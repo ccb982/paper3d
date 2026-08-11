@@ -88,10 +88,9 @@ async function boot() {
 
     mode.render(renderer);
 
-    // 帧变化日志（低频）
+    // 敌人 AI 日志（低频，保留）——角色移动日志已移除
     if (mode.frameIndex !== lastFrame) {
       lastFrame = mode.frameIndex;
-      console.log(`[boot] 帧=${lastFrame} 状态=${mode.playerState} 朝向=${mode.playerFacing} flipX=${mode.playerFlipX} 位置=(${mode.playerPosition.x.toFixed(1)}, ${mode.playerPosition.y.toFixed(1)})`);
     }
   }
   animate();

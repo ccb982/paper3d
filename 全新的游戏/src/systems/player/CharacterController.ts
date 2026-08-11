@@ -118,6 +118,15 @@ export class CharacterController {
     return this.jumpOffset;
   }
 
+  /**
+   * ★ AI 定向移动（无输入）：沿方向移动，与玩家走同一套位置逻辑。
+   * 供敌人/AI 行为调用（玩家走 update 输入驱动）。
+   */
+  moveToward(dx: number, dz: number, dt: number, speed: number): void {
+    this.position.x += dx * speed * dt;
+    this.position.y += dz * speed * dt; // 玩法 y ↔ 世界 z
+  }
+
   /** 攻击（单次，播完自动回 idle——由 FrameAnimator 回调驱动） */
   attack(): void {
     if (this.currentState === 'attack') return;

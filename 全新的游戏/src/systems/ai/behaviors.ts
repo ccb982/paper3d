@@ -24,17 +24,27 @@ export function registerBehavior(name: string, fn: BehaviorFn): void {
   behaviorTable[name] = fn;
 }
 
-/** 游走：随机方向缓行，定期换方向 */
+/** 游走：目标点巡逻（大步走向随机远处目标点，走完再选新目标——明显移动） */
 registerBehavior('wander', (entity, ctx, params) => {
-  const speed = params.speed ?? 1.2;
-  entity.aiTurnTimer -= ctx.dt;
-  if (entity.aiTurnTimer <= 0) {
-    // 随机方向（八方向）
-    const angle = Math.floor(Math.random() * 8) * (Math.PI / 4);
-    entity.aiMoveDir = { x: Math.cos(angle), z: Math.sin(angle) };
-    entity.aiTurnTimer = 2 + Math.random() * 2;
+  const speed = params.speed ?? 2.5;
+  // 无目标 → 选随机远点（距当前 5~12 单位）
+  if (!entity.aiWaypoint) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 5 + Math.random() * 7;
+    entity.aiWaypoint = {
+      x: entity.entity.position.x + Math.cos(angle) * dist,
+      z: entity.entity.position.z + Math.sin(angle) * dist,
+    };
   }
-  entity.moveBy(entity.aiMoveDir.x, entity.aiMoveDir.z, ctx.dt, speed);
+  const dx = entity.aiWaypoint.x - entity.entity.position.x;
+  const dz = entity.aiWaypoint.z - entity.entity.position.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.5) {
+    // 到达目标点 → 清除，下帧选新目标
+    entity.aiWaypoint = null;
+    return;
+  }
+  entity.moveBy(dx / len, dz / len, ctx.dt, speed);
 });
 
 /** 追击：朝目标直线移动 */

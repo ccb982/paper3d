@@ -32,6 +32,8 @@ export class EnemyBase extends CharacterBase {
   aiTurnTimer = 0;
   aiAttackTimer = 0;
   aiMoveDir = { x: 1, z: 0 };
+  /** 巡逻目标点（wander 用；null = 选新目标） */
+  aiWaypoint: { x: number; z: number } | null = null;
 
   constructor(
     em: EntityManager,
@@ -71,14 +73,29 @@ export class EnemyBase extends CharacterBase {
 
   /** ★ AI 驱动入口（AISystem 每帧调用） */
   updateAI(dt: number, ctx: BehaviorContext): void {
+    // ★ 运行时诊断（低频，确认 AI 实际驱动 + 三维坐标）
+    if (this.aiDebugTimer <= 0) {
+      this.aiDebugTimer = 1;
+      const p = this.entity.position;
+      const rb = this.entity.rigidBody;
+      const phys = rb && this.em.physics ? this.em.physics.getPosition(rb.handle) : null;
+      console.log(`[AI] ${this.aiStateMachine?.stateName ?? '无AI'} x=${p.x.toFixed(2)} y=${p.y.toFixed(2)} z=${p.z.toFixed(2)}` +
+        (phys ? ` 刚体(x=${phys.x.toFixed(2)},y=${phys.y.toFixed(2)},z=${phys.z.toFixed(2)})` : ' 无刚体') +
+        ` facing=${this.curFacing} 帧=${this.anim?.state.frameIndex}`);
+    }
+    this.aiDebugTimer -= dt;
     this.aiStateMachine?.update(this, ctx);
   }
+  private aiDebugTimer = 0;
 
-  /** ★ 移动（纯位移；朝向由相机相对方位决定，见 onUpdate） */
+  /** ★ 移动（统一走 CharacterController 基类函数，与玩家一致）：
+   *   controller.position → entity.position → syncPhysics(write) → rapier */
   moveBy(dx: number, dz: number, dt: number, speed: number): void {
-    const p = this.entity.position;
-    p.x += dx * speed * dt;
-    p.z += dz * speed * dt;
+    this.controller.moveToward(dx, dz, dt, speed);
+    // controller（玩法 x/y）→ 实体世界坐标（x/z）
+    const cp = this.controller.position;
+    this.entity.position.x = cp.x;
+    this.entity.position.z = cp.y;
   }
 
   /** 设置朝向（切帧 + 贴片转身 180°）——切了才动，避免每帧重复调用 */
