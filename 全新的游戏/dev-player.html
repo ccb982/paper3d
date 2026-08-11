@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dev - 播放器管线验证</title>
+  <style>
+    body { margin: 0; background: #1a1a2e; color: #eee; font-family: monospace; overflow: hidden; }
+    #game { display: block; width: 100vw; height: 100vh; }
+    #info {
+      position: fixed; top: 8px; left: 8px; background: rgba(0,0,0,0.7);
+      padding: 8px 12px; border-radius: 6px; font-size: 13px; line-height: 1.6; z-index: 10;
+      white-space: pre; pointer-events: none;
+    }
+    #hint { position: fixed; bottom: 8px; left: 8px; font-size: 12px; color: #888; z-index: 10; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="info">加载中...</div>
+  <div id="hint">WASD/方向键：移动（S=前帧，W=后帧，A/D=左右反转 flipX）｜ J：攻击（单次动画）｜ 移动鼠标：指针位置</div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { FtxAsset } from '/src/vendor/player/FtxAsset';
+    import { FrameAnimatorBase } from '/src/services/fx/FrameAnimatorBase';
+    import { FTXQuad } from '/src/services/render/FTXQuad';
+    import { CharacterController } from '/src/systems/player/CharacterController';
+    import { DesktopBinding } from '/src/platform/input/DesktopBinding';
+
+    const info = document.getElementById('info');
+    const canvas = document.getElementById('game');
+    // 捕获 console 错误显示到面板
+    const errLog = [];
+    const origErr = console.error;
+    console.error = (...args) => {
+      errLog.push(args.map(String).join(' ').slice(0, 200));
+      if (errLog.length > 5) errLog.shift();
+      origErr(...args);
+    };
+    window.onerror = (msg, src, line) => {
+      info.textContent = `❌ 错误: ${msg}\n${src}:${line}`;
+      console.error(msg, src, line);
+    };
+
+    // ---------- 渲染环境（正交，世界坐标 0..1 正方形，y 向下） ----------
+    // ★ 画布保持正方形：世界空间 0..1 与角色坐标空间一致，quad 不变形
+    let viewSize = Math.min(window.innerWidth, window.innerHeight);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setSize(viewSize, viewSize);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x1a1a2e, 1);
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+    window.addEventListener('resize', () => {
+      viewSize = Math.min(window.innerWidth, window.innerHeight);
+      renderer.setSize(viewSize, viewSize);
+    });
+
+    // 网格背景（显示世界空间）
+    const grid = new THREE.GridHelper(10, 10, 0x333355, 0x222244);
+    grid.position.set(0.5, 0.5, -0.5);
+    grid.scale.set(0.1, 0.1, 0.1);
+    scene.add(grid);
+
+    // ★ 诊断：纯色 quad（验证场景/相机/渲染器工作；能看见红色方块 = 场景 OK）
+    const diag = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.2, 0.2),
+      new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.8 }),
+    );
+    diag.position.set(0.1, 0.9, 0);
+    scene.add(diag);
+
+    // ---------- 加载维维美 ----------
+    info.textContent = '加载中...';
+    let asset;
+    try {
+      asset = await FtxAsset.load(encodeURI('/src/assets/characters/protagonist/维维美.ftx3.gz'));
+      info.textContent = `已加载: ${asset.frameNames().join(', ')} | 帧数 ${asset.frameCount} | palette ${asset.palette.length}`;
+    } catch (e) {
+      info.textContent = `❌ 加载失败: ${e.message}`;
+      throw e;
+    }
+    // 诊断：检查纹理数据
+    const pair0 = asset.getFramePair(0);
+    if (!pair0) {
+      info.textContent = '❌ getFramePair(0) 返回 null';
+      throw new Error('getFramePair(0) null');
+    }
+    console.log('[diag] frame0 base:', pair0.base.image.width, 'x', pair0.base.image.height,
+      'data[0..7]=', Array.from(pair0.base.image.data.slice(0, 8)));
+    console.log('[diag] frame0 residual:', pair0.residual.image.width, 'x', pair0.residual.image.height,
+      'data[0..7]=', Array.from(pair0.residual.image.data.slice(0, 8)));
+
+    // 动画配置（帧组：前/后，5 帧包只有 idle 帧，walk 复用高帧率）
+    const anim = new FrameAnimatorBase(asset);
+    const quad = new FTXQuad(scene, asset);
+    const ctrl = new CharacterController(anim, {
+      states: {
+        idle: { 前: ['前0', '前1'], 后: ['后0', '后1', '后2'] },
+        walk: { 前: ['前0', '前1'], 后: ['后0', '后1', '后2'] },
+        attack: { 前: ['前0', '前1'], 后: ['后0', '后1', '后2'] },
+      },
+      fps: { idle: 2, walk: 6, attack: 8 },
+    }, 0.3);
+    ctrl.position = { x: 0.5, y: 0.5 };
+
+    // bbox 映射（当前帧数据 → quad）
+    const frame0 = asset.frames[0];
+    quad.setFrameMapping({ width: frame0.width, height: frame0.height }, frame0.bbox);
+
+    // 输入绑定（桌面）
+    const binding = new DesktopBinding(window);
+
+    // 主角世界位置（0..1 空间）
+    const playerPos = { x: 0.5, y: 0.5 };
+
+    // ---------- 主循环 ----------
+    const clock = new THREE.Clock();
+    let lastFrame = -1;
+    let animInfo = '';
+
+    function tick() {
+      requestAnimationFrame(tick);
+      const dt = Math.min(clock.getDelta(), 0.1);
+
+      // 输入 → 控制层（解耦：绑定只填语义，控制器只消费语义）
+      binding.update();
+      const input = binding.input;
+
+      // 攻击键（消费式）
+      if (binding.consumeAttack()) ctrl.attack();
+
+      // 控制器驱动（移动 + 动画 + 朝向 + flipX）
+      ctrl.update(dt, input);
+      playerPos.x = ctrl.position.x;
+      playerPos.y = ctrl.position.y;
+      // 钳制在世界范围（正方形 0..1）
+      playerPos.x = Math.max(0, Math.min(1, playerPos.x));
+      playerPos.y = Math.max(0, Math.min(1, playerPos.y));
+
+      // 动画推进（时间轴）
+      anim.update(dt);
+
+      // 渲染管线（FrameState → 纹理 → quad → 画面）
+      quad.setPosition(playerPos.x, playerPos.y);
+      quad.setScale(0.35, 0.35);
+      quad.setFlip(anim.state.flipX, anim.state.flipY);
+      quad.render(anim.state);
+      renderer.render(scene, camera);
+
+      // 信息面板
+      if (anim.state.frameIndex !== lastFrame || animInfo !== `${ctrl.state}@${anim.state.facing}`) {
+        lastFrame = anim.state.frameIndex;
+        animInfo = `${ctrl.state}@${anim.state.facing}`;
+        info.textContent =
+`状态: ${ctrl.state} | 朝向: ${anim.state.facing} | flipX: ${anim.state.flipX}
+帧: ${anim.state.frameIndex} (${asset.frameNames()[anim.state.frameIndex] ?? '?'})
+位置: (${playerPos.x.toFixed(2)}, ${playerPos.y.toFixed(2)})
+指针: ${input.pointer ? `(${input.pointer.x.toFixed(2)}, ${input.pointer.y.toFixed(2)})` : '无'}
+移动输入: (${input.moveAxis.x.toFixed(1)}, ${input.moveAxis.y.toFixed(1)})
+${errLog.length > 0 ? '控制台错误:\n' + errLog.join('\n') : ''}`;
+      }
+    }
+    tick();
+
+    console.log('[dev-player] 管线就绪：加载 → 动画 → 渲染 全链路');
+  </script>
+</body>
+</html>

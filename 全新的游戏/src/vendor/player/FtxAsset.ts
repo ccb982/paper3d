@@ -55,7 +55,7 @@ export class FtxAsset {
     } else {
       buf = input;
     }
-    return new FtxAsset(buf);
+    return new FtxAsset(await maybeGunzip(buf));
   }
 
   /** 构建第 i 帧的 base + residual 纹理（数据保留，合成在 GPU） */
@@ -247,5 +247,18 @@ export class FtxAsset {
     }
     this._frameTextures.length = 0;
     this.clearFluidEffect();
+  }
+}
+
+/** 自动识别 gzip（1f 8b 魔数）并解压 */
+async function maybeGunzip(buffer: ArrayBuffer): Promise<ArrayBuffer> {
+  const bytes = new Uint8Array(buffer);
+  const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+  if (!isGzip) return buffer;
+  try {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return await new Response(stream).arrayBuffer();
+  } catch (err) {
+    throw new Error('Gzip 解压失败: ' + (err as Error).message);
   }
 }

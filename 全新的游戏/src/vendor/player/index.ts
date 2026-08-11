@@ -187,6 +187,13 @@ export class Asset {
     return this.resolver.resolve(name);
   }
 
+  /** 第 index 帧的纹理对（统一资产接口 FrameAssetSource 用） */
+  getFramePair(index: number): { base: THREE.DataTexture; residual: THREE.DataTexture } | null {
+    const d = this.getFrameRenderData(index);
+    if (!d) return null;
+    return { base: d.baseTexture, residual: d.residualTexture };
+  }
+
   /** 是否存在该帧名 */
   hasFrame(name: string): boolean {
     return this.resolver.contains(name);
