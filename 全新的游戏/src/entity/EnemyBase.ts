@@ -1,28 +1,37 @@
 // ============================================================
-// EnemyBase —— 敌人基类（CharacterBase 子类）
+// EnemyBase —— 敌人基类（CharacterBase 子类 + AI 模块）
 // ============================================================
 // 使用特效包（.scene.zip，Asset 源）：
-//   - 帧动画（前/后帧组）+ FTXQuad 渲染
-//   - ★ 每帧应用扭曲参数（distort）——第一帧参数已由 Asset
-//     构造时继承到所有帧（见 vendor/player/index.ts）
-//   - 随机抖动：distort 的呼吸式扭曲自带随机感（正弦叠加）
-// 子类扩展：AI 行为（巡逻/索敌/攻击，后续）
+//   - 帧动画（前/后帧组）+ FTXQuad 渲染 + 扭曲参数（第一帧继承）
+//   - ★ AI 模块：状态机驱动（巡逻/索敌/攻击，配置驱动）
+//   - ★ 朝向由移动方向决定（非相机）——敌人自主转身，玩家可绕背看后帧
 
 import * as THREE from 'three';
 import { CharacterBase, type CharacterBaseOptions } from './CharacterBase';
 import type { EntityManager } from './EntityManager';
 import type { Asset } from '../vendor/player';
 import { FTXQuad } from '../services/render/FTXQuad';
+import { AIStateMachine } from '../systems/ai/AIStateMachine';
+import type { BehaviorContext } from '../systems/ai/behaviors';
+import { aiSystem } from '../systems/ai/AISystem';
+import type { AIConfig } from '../systems/ai/aiconfig';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
-  /** 攻击行为标记（后续 AI 用） */
+  /** 攻击行为标记（预留） */
   aggressive?: boolean;
+  /** AI 配置（无 → 静止） */
+  aiConfig?: AIConfig;
 }
 
 export class EnemyBase extends CharacterBase {
   private assetRef: Asset;
   readonly aggressive: boolean;
-  private curFacing: '前' | '后' | null = null;
+
+  // ---- AI 状态（behaviors/conditions 访问） ----
+  aiStateMachine: AIStateMachine | null = null;
+  aiTurnTimer = 0;
+  aiAttackTimer = 0;
+  aiMoveDir = { x: 1, z: 0 };
 
   constructor(
     em: EntityManager,
@@ -35,8 +44,7 @@ export class EnemyBase extends CharacterBase {
     this.assetRef = asset;
     this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);
-    // bbox 映射（帧数据 → quad；★ 纹理实际尺寸 = bbox.w×bbox.h，
-    //   不能直接用 frame.width/height（导出时可能与 bbox 不一致 → 只显示部分））
+    // bbox 映射（纹理实际尺寸 = bbox.w×bbox.h，不能直接用 frame.width/height）
     const ftxFrame = asset.getFtxFrame(0);
     if (ftxFrame && this.renderer) {
       (this.renderer as FTXQuad).setFrameMapping(
@@ -44,10 +52,16 @@ export class EnemyBase extends CharacterBase {
         ftxFrame.bbox,
       );
     }
-    // ★ 锁定到指定朝向的帧（否则动画控制器默认全资产循环 → 正反面不停交替）
-    this.playFacing((opts.facing ?? '前') as '前' | '后');
-    // ★ 按纹理宽高比缩放（240×600 竖长纹理 → 不压扁）
+    // 锁定初始朝向帧
+    this.setFacingAnimated((opts.facing ?? '前') as '前' | '后');
+    // 纹理宽高比缩放（不压扁）
     this.applyRenderScale(1.5);
+
+    // ---- AI：配置驱动状态机 + 注册到系统 ----
+    if (opts.aiConfig) {
+      this.aiStateMachine = new AIStateMachine(opts.aiConfig);
+      aiSystem.register(this);
+    }
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {
@@ -55,28 +69,36 @@ export class EnemyBase extends CharacterBase {
     return new FTXQuad(scene, source);
   }
 
-  protected override onUpdate(dt: number): void {
-    // 敌人无输入驱动（AI 行为后续接入）
+  /** ★ AI 驱动入口（AISystem 每帧调用） */
+  updateAI(dt: number, ctx: BehaviorContext): void {
+    this.aiStateMachine?.update(this, ctx);
+  }
 
-    // ★ 非 billboard：固定朝向（贴片不面相机）。相机相对位置决定 facing：
-    //   相机在敌人前方（+z 侧）→ 前帧；绕到背后（-z 侧）→ 转身显示后帧。
-    //   这样能检查背面帧，且有立体感（不是始终面向玩家）。
+  /** ★ 移动（纯位移；朝向由相机相对方位决定，见 onUpdate） */
+  moveBy(dx: number, dz: number, dt: number, speed: number): void {
+    const p = this.entity.position;
+    p.x += dx * speed * dt;
+    p.z += dz * speed * dt;
+  }
+
+  /** 设置朝向（切帧 + 贴片转身 180°）——切了才动，避免每帧重复调用 */
+  private setFacingAnimated(facing: '前' | '后'): void {
+    if (this.curFacing === facing) return;
+    this.curFacing = facing;
+    this.anim!.playFrames([facing], { loop: true, fps: 1 });
+    if (this.renderer && 'setYaw' in this.renderer) {
+      (this.renderer as { setYaw(r: number): void }).setYaw(facing === '后' ? Math.PI : 0);
+    }
+  }
+  private curFacing: '前' | '后' | null = null;
+
+  protected override onUpdate(dt: number): void {
+    // ★ 正反面显示由相机相对方位决定（转身朝向玩家视角 → 背面不消失）：
+    //   相机在 +z 侧 → 前帧；绕到 -z 侧 → 转身显示后帧
     if (this.camera) {
-      const px = this.entity.position.x;
       const pz = this.entity.position.z;
-      const camDirZ = this.camera.position.z - pz;
-      const camDirX = this.camera.position.x - px;
-      // 以贴片朝向（+z）为基准：相机在朝向侧 → 前，反侧 → 后
-      const facing: '前' | '后' = camDirZ >= 0 ? '前' : '后';
-      if (facing !== this.curFacing) {
-        this.curFacing = facing;
-        this.playFacing(facing);
-        // 转身：后帧时贴片绕 Y 转 180°（背面朝向相机，内容为"后"帧）
-        if (this.renderer && 'setYaw' in this.renderer) {
-          (this.renderer as { setYaw(r: number): void }).setYaw(facing === '后' ? Math.PI : 0);
-        }
-      }
-      void camDirX;
+      const facing: '前' | '后' = (this.camera.position.z - pz) >= 0 ? '前' : '后';
+      this.setFacingAnimated(facing);
     }
 
     // ★ 每帧应用当前帧的扭曲参数（特效包参数，第一帧已继承到所有帧）
@@ -93,8 +115,9 @@ export class EnemyBase extends CharacterBase {
     }
   }
 
-  /** 播放朝向（前/后帧组）——与主角 facing 逻辑一致 */
-  playFacing(facing: '前' | '后'): void {
-    this.anim!.playFrames([facing], { loop: true, fps: 2 });
+  /** 销毁：同时从 AI 系统注销 */
+  override dispose(): void {
+    aiSystem.unregister(this);
+    super.dispose();
   }
 }

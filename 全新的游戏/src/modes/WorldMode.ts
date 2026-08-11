@@ -21,6 +21,9 @@ import { MapRender } from '../services/map/MapRender';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import type { InputActions } from '../platform/input/InputActions';
 import { drainInteractions } from '../platform/input/InputActions';
+import { aiSystem } from '../systems/ai/AISystem';
+import type { BehaviorContext } from '../systems/ai/behaviors';
+import { PRESERVER_AI } from '../systems/ai/aiconfig';
 
 export class WorldMode {
   readonly entities: EntityManager;
@@ -31,6 +34,12 @@ export class WorldMode {
   private map: MapQuery;
   private crosshair: Crosshair;
   private lastTapWorld: { x: number; y: number } | null = null;
+  /** AI 上下文（索敌 = 玩家位置） */
+  private aiCtx: BehaviorContext = {
+    dt: 0,
+    target: null,
+    findTarget: () => null,
+  };
 
   constructor(
     private scene: THREE.Scene,
@@ -71,7 +80,7 @@ export class WorldMode {
     // ---- 地图视觉（3D 地形网格，当前平地占位） ----
     this.mapRender = new MapRender(scene, map);
 
-    // ---- ★ 测试敌人（普瑞赛斯：特效包，2 帧前/后 + 扭曲参数） ----
+    // ---- ★ 测试敌人（普瑞赛斯：特效包 + AI 配置驱动） ----
     if (enemyAsset) {
       this.enemy = new EnemyBase(this.entities, scene, enemyAsset, {
         x: center + 3,
@@ -87,9 +96,9 @@ export class WorldMode {
         },
         facing: '前',
         aggressive: true,
+        aiConfig: PRESERVER_AI,
       }, camera);
       this.enemy.billboard = false;
-      this.enemy.playFacing('前');
     }
 
     // ---- 相机（独立模块） ----
@@ -99,9 +108,13 @@ export class WorldMode {
     this.crosshair = new Crosshair();
   }
 
-  /** 每帧驱动（输入 → 相机 → 实体管线 → 交互） */
+  /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
+
+    // AI 上下文（本帧 dt + 索敌 = 玩家位置）
+    this.aiCtx.dt = dt;
+    this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
 
     // 玩家 y = 地形高度（模式层同步，实体不依赖地图）
     this.player.entity.position.y = this.map.getHeight(pp.x, pp.y);
@@ -120,6 +133,9 @@ export class WorldMode {
     // ---- 实体管线驱动（攻击由模式层转发，输入/相机坐标系传入） ----
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
+
+    // ---- AI 驱动（敌人自主行为；ctx 注入索敌回调 = 玩家位置） ----
+    aiSystem.updateAll(dt, this.aiCtx);
 
     // ---- 地图边界钳制（经 MapQuery） ----
     const p2 = this.player.controllerPosition;
