@@ -10,8 +10,10 @@
 
 import * as THREE from 'three';
 import { FtxAsset } from '../vendor/player/FtxAsset';
+import type { Asset } from '../vendor/player';
 import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
+import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
 import { MapQuery } from '../services/map/MapQuery';
@@ -23,6 +25,7 @@ import { drainInteractions } from '../platform/input/InputActions';
 export class WorldMode {
   readonly entities: EntityManager;
   readonly player: Player;
+  enemy: EnemyBase | null = null;
   private cameraCtrl: CameraController;
   private mapRender: MapRender;
   private map: MapQuery;
@@ -35,6 +38,7 @@ export class WorldMode {
     asset: FtxAsset,
     map: MapQuery,
     physics: PhysicsWorld,
+    enemyAsset?: Asset,
   ) {
     this.map = map;
     // ---- 实体管线（管理 + 物理 + 基类实例） ----
@@ -66,6 +70,25 @@ export class WorldMode {
 
     // ---- 地图视觉（3D 地形网格，当前平地占位） ----
     this.mapRender = new MapRender(scene, map);
+
+    // ---- ★ 测试敌人（普瑞赛斯：特效包，2 帧前/后 + 扭曲参数） ----
+    if (enemyAsset) {
+      this.enemy = new EnemyBase(this.entities, scene, enemyAsset, {
+        x: center + 3,
+        y: 0,
+        z: center + 2,
+        animMap: {
+          states: {
+            idle: { 前: ['前'], 后: ['后'] },
+            walk: { 前: ['前'], 后: ['后'] },
+            attack: { 前: ['前'], 后: ['后'] },
+          },
+          fps: { idle: 1, walk: 1, attack: 1 },
+        },
+        facing: '前',
+        aggressive: true,
+      });
+    }
 
     // ---- 相机（独立模块） ----
     this.cameraCtrl = new CameraController(camera);

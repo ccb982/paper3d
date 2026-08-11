@@ -18,11 +18,11 @@ export class Player extends CharacterBase {
   ) {
     super(em, { ...opts, kind: 'player', asset });
     this.attachToScene(scene);
-    // bbox 映射（帧数据 → quad）
-    const source = asset as unknown as { frames: Array<{ width: number; height: number; bbox: { x: number; y: number; w: number; h: number } }> };
+    // bbox 映射（帧数据 → quad；★ 纹理实际尺寸 = bbox 尺寸，与 EnemyBase 一致）
+    const source = asset as unknown as { frames: Array<{ bbox: { x: number; y: number; w: number; h: number } }> };
     const frame0 = source.frames[0];
     (this.renderer as FTXQuad).setFrameMapping(
-      { width: frame0.width, height: frame0.height },
+      { width: frame0.bbox.w, height: frame0.bbox.h },
       frame0.bbox,
     );
   }

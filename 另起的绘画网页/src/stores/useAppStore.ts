@@ -2713,7 +2713,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const sortedColors = state.sharedBaseColors;
       const bbox = fd.rawBbox;
       const textureSize = fd.sourceResolution || 512;
-      const totalPixels = textureSize * textureSize;
+      const textureSizeY = fd.sourceHeight || textureSize;
+      const totalPixels = textureSize * textureSizeY;
       const colorMap = new Map<number, { h: number; s: number; l: number }>();
       for (const c of sortedColors) colorMap.set(c.id, { h: c.h, s: c.s, l: c.l });
 
@@ -3061,6 +3062,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawBbox: frame.bbox,
         rawBlockFlags: BigInt(frame.blockFlags),
         sourceResolution: frame.width,
+        sourceHeight: frame.height,
         baseHslData: { data: hslFloat, width: bboxW2, height: bboxH2 },
         baseTexture,
         residualTexture,
@@ -3224,8 +3226,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
-    // ★ 关键修复：使用原始纹理尺寸（sourceResolution），而非硬编码 512
+    // ★ 关键修复：使用原始纹理尺寸（sourceResolution/sourceHeight），而非硬编码 512
     const texSize = frameData.sourceResolution || 512;
+    const texSizeH = frameData.sourceHeight || texSize;
     if (!frameData.rawDeltaPacked) {
       console.warn(`[绑定] 图层 ${layerId} 没有残差数据`);
       return;
@@ -3236,31 +3239,33 @@ export const useAppStore = create<AppState>((set, get) => ({
       globalPalette,
       frameData.rawBbox!,
       frameData.rawBlockFlags,
-      texSize
+      texSize,
+      texSizeH
     );
 
-    // 裁剪为 bbox 区域，确保绑定后纹理尺寸与画布（= bbox 尺寸）匹配
-    const cropToBbox = (src: ImageData, bbox: { x: number; y: number; w: number; h: number }): ImageData => {
-      const dst = new ImageData(bbox.w, bbox.h);
-      const srcData = src.data;
-      const dstData = dst.data;
-      for (let r = 0; r < bbox.h; r++) {
-        for (let c = 0; c < bbox.w; c++) {
-          const si = ((bbox.y + r) * src.width + (bbox.x + c)) * 4;
-          const di = (r * bbox.w + c) * 4;
-          dstData[di] = srcData[si];
-          dstData[di + 1] = srcData[si + 1];
-          dstData[di + 2] = srcData[si + 2];
-          dstData[di + 3] = srcData[si + 3];
+    // ★ 区域形状裁剪（不是矩形 bbox）：全帧尺寸，区域多边形内部保留、外部透明。
+    //   满足绑定后画面覆盖该区域形状内部的需求（形状外不显示）。
+    const maskBase = new ImageData(fullBase.width, fullBase.height);
+    const srcData = fullBase.data;
+    const maskData = maskBase.data;
+    for (let py = 0; py < fullBase.height; py++) {
+      for (let px = 0; px < fullBase.width; px++) {
+        // 像素 → world 坐标（0~1，y 向上；boundary 为世界坐标）
+        const wx = px / fullBase.width;
+        const wy = 1 - py / fullBase.height;
+        if (isPointInPolygonWithHoles({ x: wx, y: wy }, entity.boundary)) {
+          const si = (py * fullBase.width + px) * 4;
+          maskData[si] = srcData[si];
+          maskData[si + 1] = srcData[si + 1];
+          maskData[si + 2] = srcData[si + 2];
+          maskData[si + 3] = srcData[si + 3] > 0 ? 255 : 0;
         }
+        // 形状外保持透明（alpha=0）
       }
-      return dst;
-    };
-    const croppedBase = frameData.rawBbox
-      ? cropToBbox(fullBase, frameData.rawBbox)
-      : fullBase;
+    }
+    const croppedBase = maskBase;
 
-    // 直接保存裁剪后的底图（bbox 尺寸），模板缓冲负责每帧的边界裁剪
+    // 直接保存裁剪后的底图（全帧尺寸 + 区域形状 mask），模板缓冲负责每帧的边界裁剪
     // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样（仅模板=1区域）
     let validPixelCount = 0;
     const data = fullBase.data;
@@ -3397,7 +3402,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             scalarConfig: { ...(prev.scalarConfig ?? {}), ...(partial.scalarConfig ?? {}) },
             // ★ Level Set 配置深度合并（与 scalarConfig 同处理）
             levelSetConfig: { ...(prev.levelSetConfig ?? {}), ...(partial.levelSetConfig ?? {}) },
-            resolution: partial.resolution ?? prev.resolution ?? { w: frameData.sourceResolution || 512, h: frameData.sourceResolution || 512 },
+            resolution: partial.resolution ?? prev.resolution ?? { w: frameData.sourceResolution || 512, h: frameData.sourceHeight || frameData.sourceResolution || 512 },
           } as any,
         },
       },

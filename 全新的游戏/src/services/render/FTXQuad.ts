@@ -32,9 +32,42 @@ const FRAGMENT_SHADER = /* glsl */ `
     vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
     return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
   }
+  uniform float uTime;
+  uniform float uDistortEnabled;
+  uniform float uDistortAmplitude;
+  uniform float uDistortFrequency;
+  uniform float uDistortSpeed;
+  uniform float uDistortRotation;
   void main() {
     // 纹理数据 row0=顶部（flipY=false）→ vUv 左下原点，翻转 v
     vec2 texUV = (vec2(vUv.x, 1.0 - vUv.y) * uFrameSize - uBbox.xy) / uBbox.zw;
+    // ★ 呼吸式扭曲（特效包每帧参数；标准实现：旋转 → 正弦偏移 → 反向旋转）
+    if (uDistortEnabled > 0.5) {
+      float time = uTime;
+      float cosDR = cos(uDistortRotation);
+      float sinDR = sin(uDistortRotation);
+      vec2 dUv = texUV - 0.5;
+      vec2 rotUv = vec2(
+        dUv.x * cosDR - dUv.y * sinDR,
+        dUv.x * sinDR + dUv.y * cosDR
+      );
+      rotUv += 0.5;
+      float amplitude = uDistortAmplitude * (0.5 + 0.5 * sin(time * 0.4));
+      float frequency = uDistortFrequency;
+      float phase = time * uDistortSpeed + 0.5 * sin(time * 0.3);
+      float offsetX = amplitude * sin(frequency * rotUv.y + phase);
+      rotUv.x += offsetX;
+      float secondaryAmp = amplitude * 0.3;
+      float secondaryFreq = frequency * 1.8;
+      float secondaryPhase = time * 2.5;
+      rotUv.x += secondaryAmp * sin(secondaryFreq * rotUv.y + secondaryPhase);
+      vec2 backUv = rotUv - 0.5;
+      texUV = vec2(
+        backUv.x * cosDR + backUv.y * sinDR,
+        -backUv.x * sinDR + backUv.y * cosDR
+      );
+      texUV += 0.5;
+    }
     if (texUV.x < 0.0 || texUV.x > 1.0 || texUV.y < 0.0 || texUV.y > 1.0) {
       discard;
     }
@@ -77,6 +110,12 @@ export class FTXQuad extends FxRendererBase {
         uUseFluid: { value: 0 },
         uFrameSize: { value: this._frameSize },
         uBbox: { value: this._bbox },
+        uTime: { value: 0 },
+        uDistortEnabled: { value: 0 },
+        uDistortAmplitude: { value: 0.06 },
+        uDistortFrequency: { value: 5.0 },
+        uDistortSpeed: { value: 1.2 },
+        uDistortRotation: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -94,6 +133,7 @@ export class FTXQuad extends FxRendererBase {
     const u = this.material.uniforms;
     u.uBaseTexture.value = pair.base;
     u.uResidual.value = pair.residual;
+    u.uTime.value = performance.now() / 1000;
     if (fluidTexture) {
       u.uFluidTex.value = fluidTexture;
       u.uUseFluid.value = 1;
@@ -117,6 +157,16 @@ export class FTXQuad extends FxRendererBase {
       this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
     }
     this.applyFlip();
+  }
+
+  /** ★ 设置呼吸式扭曲参数（特效包每帧参数；关 = 停用） */
+  setDistort(opts: { enabled: boolean; amplitude: number; frequency: number; speed: number; rotation: number }): void {
+    const u = this.material.uniforms;
+    u.uDistortEnabled.value = opts.enabled ? 1 : 0;
+    u.uDistortAmplitude.value = opts.amplitude;
+    u.uDistortFrequency.value = opts.frequency;
+    u.uDistortSpeed.value = opts.speed;
+    u.uDistortRotation.value = opts.rotation;
   }
 
   /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可） */

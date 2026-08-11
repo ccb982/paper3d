@@ -646,7 +646,10 @@ export const BaseColorEditor: React.FC = () => {
       dstCanvas.width = newW;
       dstCanvas.height = newH;
       const dstCtx = dstCanvas.getContext('2d')!;
-      dstCtx.imageSmoothingEnabled = false;
+      // ★ 平滑缩放（非最近邻）：降采样时把 N×N 像素平均为 1 像素，
+      //   细线条/轮廓保持连续（最近邻"抽稀"会让高分辨率原图的细线断裂）
+      dstCtx.imageSmoothingEnabled = true;
+      dstCtx.imageSmoothingQuality = 'high';
       dstCtx.drawImage(srcCanvas, 0, 0, newW, newH);
       const newBg = dstCtx.getImageData(0, 0, newW, newH);
       

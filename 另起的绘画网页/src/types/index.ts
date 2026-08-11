@@ -146,7 +146,8 @@ export interface FrameData {
   rawDeltaPacked: Uint16Array | null;
   rawBbox: { x: number; y: number; w: number; h: number } | null;
   rawBlockFlags: bigint;
-  sourceResolution: number;           // 原始纹理尺寸（通常512）
+  sourceResolution: number;           // 原始纹理宽度（通常512）
+  sourceHeight: number;               // 原始纹理高度（支持非正方形帧）
 
   // ---------- 显示用纹理（导入后立即生成，供预览） ----------
   // 注意：这个纹理是根据原始调色板解码的，但尚未绑定到区域

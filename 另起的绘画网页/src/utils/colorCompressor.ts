@@ -1277,11 +1277,13 @@ export function decodeFrameWithGlobalPalette(
   palette: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
   blockFlags: bigint,
-  textureSize: number = 512
+  textureSize: number = 512,
+  textureSizeY?: number
 ): ImageData {
   const { w, h } = bbox;
   const totalPixels = w * h;
-  const imageData = new ImageData(textureSize, textureSize);
+  const texH = textureSizeY ?? textureSize;
+  const imageData = new ImageData(textureSize, texH);
   const data = imageData.data;
   data.fill(0);
 

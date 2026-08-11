@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { WebAdapter } from './platform/WebAdapter';
 import { FtxAsset } from './vendor/player/FtxAsset';
+import { Asset } from './vendor/player';
 import { WorldMode } from './modes/WorldMode';
 import { DesktopBinding } from './platform/input/DesktopBinding';
 import { generateFlatMap } from './services/map/MapGenerator';
@@ -40,6 +41,10 @@ async function boot() {
   const asset = await FtxAsset.load(encodeURI('/src/assets/characters/protagonist/维维美.ftx3.gz'));
   console.log('[boot] 主角已加载:', asset.frameNames().join(', '));
 
+  // ★ 加载测试敌人（普瑞赛斯：特效包，2 帧前/后 + 扭曲参数）
+  const enemyAsset = await Asset.load(encodeURI('/src/assets/characters/enemies/普瑞赛斯.scene.zip'));
+  console.log('[boot] 敌人已加载:', enemyAsset.frameNames().join(', '), '帧');
+
   // 输入绑定（桌面，双端解耦；点击画布 → 指针锁定/隐藏光标，可 360° 转视角）
   const binding = new DesktopBinding(window, canvas);
 
@@ -50,8 +55,8 @@ async function boot() {
   // ---- 物理世界（唯一碰 rapier 的封装） ----
   const physics = new PhysicsWorld();
 
-  // ---- 世界模式（实体管线：地面/主角实体 + 相机 + 地图 + 交互） ----
-  const mode = new WorldMode(scene, camera, asset, map, physics);
+  // ---- 世界模式（实体管线：地面/主角/敌人实体 + 相机 + 地图 + 交互） ----
+  const mode = new WorldMode(scene, camera, asset, map, physics, enemyAsset);
 
   // 碰撞事件（后续阵营过滤/伤害结算）
   physics.onCollision((e) => {

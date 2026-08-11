@@ -58,6 +58,20 @@ export class Asset {
     this._ftx = multiFrame;
     this.resolver = new FrameResolver(raw.frames.map((f) => f.name));
 
+    // ★ 帧参数继承：如果后序帧的扭曲/变换参数未设置（编辑器只做了第一帧），
+    //   沿用第一帧的参数（前后帧参数一致）
+    const f0 = raw.frames[0];
+    for (const fd of raw.frames) {
+      if (fd.distortEnabled === undefined) fd.distortEnabled = f0?.distortEnabled ?? false;
+      if (fd.distortAmplitude === undefined) fd.distortAmplitude = f0?.distortAmplitude ?? 0.06;
+      if (fd.distortFrequency === undefined) fd.distortFrequency = f0?.distortFrequency ?? 5.0;
+      if (fd.distortSpeed === undefined) fd.distortSpeed = f0?.distortSpeed ?? 1.2;
+      if (fd.distortRotation === undefined) fd.distortRotation = f0?.distortRotation ?? 0;
+      if (fd.textureOffset === undefined) fd.textureOffset = f0?.textureOffset;
+      if (fd.textureScale === undefined) fd.textureScale = f0?.textureScale;
+      if (fd.textureRotation === undefined) fd.textureRotation = f0?.textureRotation;
+    }
+
     const baseTextures: THREE.DataTexture[] = [];
     const residualTextures: THREE.DataTexture[] = [];
     for (const ftxFrame of ftxFrames) {
