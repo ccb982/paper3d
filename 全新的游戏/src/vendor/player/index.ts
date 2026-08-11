@@ -58,15 +58,22 @@ export class Asset {
     this._ftx = multiFrame;
     this.resolver = new FrameResolver(raw.frames.map((f) => f.name));
 
-    // ★ 帧参数继承：如果后序帧的扭曲/变换参数未设置（编辑器只做了第一帧），
-    //   沿用第一帧的参数（前后帧参数一致）
+    // ★ 帧参数继承：第一帧的扭曲/变换参数用于所有帧。
+    //   用户通常只做第一帧（前后参数一致），后序帧即使导出了
+    //   distortEnabled=false（导出默认值）也统一沿用第一帧的开启状态。
     const f0 = raw.frames[0];
+    const f0Enabled = f0?.distortEnabled ?? false;
     for (const fd of raw.frames) {
-      if (fd.distortEnabled === undefined) fd.distortEnabled = f0?.distortEnabled ?? false;
-      if (fd.distortAmplitude === undefined) fd.distortAmplitude = f0?.distortAmplitude ?? 0.06;
-      if (fd.distortFrequency === undefined) fd.distortFrequency = f0?.distortFrequency ?? 5.0;
-      if (fd.distortSpeed === undefined) fd.distortSpeed = f0?.distortSpeed ?? 1.2;
-      if (fd.distortRotation === undefined) fd.distortRotation = f0?.distortRotation ?? 0;
+      if (f0Enabled) {
+        // 第一帧开启扭曲 → 所有帧统一开启 + 缺失参数沿用第一帧
+        if (!fd.distortEnabled) fd.distortEnabled = true;
+        if (fd.distortAmplitude === undefined) fd.distortAmplitude = f0?.distortAmplitude ?? 0.06;
+        if (fd.distortFrequency === undefined) fd.distortFrequency = f0?.distortFrequency ?? 5.0;
+        if (fd.distortSpeed === undefined) fd.distortSpeed = f0?.distortSpeed ?? 1.2;
+        if (fd.distortRotation === undefined) fd.distortRotation = f0?.distortRotation ?? 0;
+      } else {
+        if (fd.distortEnabled === undefined) fd.distortEnabled = false;
+      }
       if (fd.textureOffset === undefined) fd.textureOffset = f0?.textureOffset;
       if (fd.textureScale === undefined) fd.textureScale = f0?.textureScale;
       if (fd.textureRotation === undefined) fd.textureRotation = f0?.textureRotation;
