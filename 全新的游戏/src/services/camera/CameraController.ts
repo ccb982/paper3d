@@ -30,6 +30,24 @@ export class CameraController {
   /** 实际角度（阻尼插值） */
   private yaw = 0;
   private pitch = 0.35;
+  /** ★ 平滑聚焦点（标准 TPS：相机围绕 target 旋转 + 视线过 target；
+   *      target 用 lerp 跟随角色 → 跳跃跟随 / 抖动过滤） */
+  private smoothedTarget = new THREE.Vector3();
+  /** target 平滑系数（越大越跟手；跳跃要跟、高频抖动要滤） */
+  targetDamp = 12;
+  /** ★ 第一人称脚步抖动（移动时）：随机节拍/幅度——完全一致的抖动不如不抖 */
+  footstepShake = {
+    enabled: true,
+    /** 基础振幅（世界单位，随速度缩放） */
+    baseAmplitude: 0.012,
+    /** 随机节拍区间（秒）：每次脉动重新随机 */
+    beatMin: 0.12,
+    beatMax: 0.28,
+  };
+  private shakeTimer = 0;
+  private shakeAmpX = 0;
+  private shakeAmpY = 0;
+  private shakePhase = 0;
   /** 相机到目标距离（滚轮缩放，clamp；最小 = 贴脸第一人称） */
   distance = 4.2;
   distanceMin = 0.2;
@@ -49,8 +67,8 @@ export class CameraController {
 
   constructor(private camera: THREE.PerspectiveCamera) {}
 
-  /** 每帧驱动：lookAxis（视角）/ zoom（滚轮缩放）/ target（跟随） */
-  update(dt: number, look: { x: number; y: number }, zoom: number, target: CameraTarget): void {
+  /** 每帧驱动：lookAxis（视角）/ zoom（滚轮缩放）/ target（跟随）/ moving（脚步抖动） */
+  update(dt: number, look: { x: number; y: number }, zoom: number, target: CameraTarget, moving = false): void {
     // ---- 滚轮缩放（标准第三人称：滚轮 = 相机距离，视觉上高低/远近变化） ----
     this.distance = Math.max(this.distanceMin, Math.min(this.distanceMax, this.distance + zoom * this.zoomSensitivity));
 
@@ -65,23 +83,32 @@ export class CameraController {
     this.yaw += (this.targetYaw - this.yaw) * k;
     this.pitch += (this.targetPitch - this.pitch) * k;
 
-    // ---- 球坐标定位（相机在角色后上方；俯仰负（仰视）时相机不低于半高） ----
+    // ---- ★ 聚焦点平滑跟随（标准 TPS）：
+    //      期望聚焦点 = 角色位置 + 肩部高度（含跳跃偏移，由模式层传入 height）
+    //      smoothedTarget lerp → 跳跃跟随 / 抖动过滤 ----
+    const desiredTarget = new THREE.Vector3(
+      target.x,
+      target.height + this.characterHeight * 0.8,
+      target.z,
+    );
+    this.smoothedTarget.lerp(desiredTarget, Math.min(1, dt * this.targetDamp));
+
+    // ---- 球坐标定位（相机围绕聚焦点；俯仰负（仰视）时相机不低于半高） ----
     const isFirstPerson = this.distance <= this.firstPersonDistance;
     const cp = this.distance * Math.cos(this.pitch);
     const sx = Math.sin(this.yaw);
     const cz = Math.cos(this.yaw);
-    // 第一人称：眼睛高度（0.9×身高，固定）；第三人称：半高 + 俯仰高度（仰视不低于半高）
-    const camY = target.height + this.characterHeight * (isFirstPerson ? 0.9 : 0.6)
+    const t = this.smoothedTarget;
+    // 第一人称：相机在眼睛高度（0.9×身高）；第三人称：半高 + 俯仰高度
+    const camY = t.y - this.characterHeight * 0.8 + this.characterHeight * (isFirstPerson ? 0.9 : 0.6)
       + (isFirstPerson ? 0 : Math.max(0, this.distance * Math.sin(this.pitch)));
     this.camera.position.set(
-      target.x + sx * cp,
+      t.x + sx * cp,
       camY,
-      target.z + cz * cp,
+      t.z + cz * cp,
     );
 
-    // ---- ★ 视线方向由 pitch 完全决定（准星 = 屏幕中心 = 视线方向）：
-    //      lookAt = 相机位置 + 视线方向 × 前移距离
-    //      → 准星从脚下地面（pitch↑）指到头顶天空（pitch↓）全覆盖 ----
+    // ---- ★ 视线 = 相机位置 + 方向（由 pitch 决定）——准星从脚下到天空全覆盖 ----
     const f = this.getFrame();
     const dir = new THREE.Vector3(
       f.forward.x * Math.cos(this.pitch),
@@ -93,6 +120,23 @@ export class CameraController {
       this.camera.position.y + dir.y * this.lookAhead,
       this.camera.position.z + dir.z * this.lookAhead,
     );
+
+    // ---- ★ 第一人称脚步抖动（移动时，随机节拍/幅度）：
+    //      每 beat 重新随机幅度与相位 → 走路的不规则感
+    //      （完全一致的 sin 抖动 = 机械感，不如不抖） ----
+    if (this.footstepShake.enabled && isFirstPerson && moving) {
+      this.shakeTimer -= dt;
+      if (this.shakeTimer <= 0) {
+        // 随机节拍（0.12~0.28s）+ 随机幅度（0.5~1.5 倍基础值）+ 随机相位
+        this.shakeTimer = this.footstepShake.beatMin + Math.random() * (this.footstepShake.beatMax - this.footstepShake.beatMin);
+        this.shakeAmpX = this.footstepShake.baseAmplitude * (0.5 + Math.random());
+        this.shakeAmpY = this.shakeAmpX * (0.4 + Math.random() * 0.4);
+        this.shakePhase = Math.random() * Math.PI * 2;
+      }
+      const t = performance.now() / 1000;
+      this.camera.position.x += Math.sin(t * 11 + this.shakePhase) * this.shakeAmpX;
+      this.camera.position.y += Math.sin(t * 15 + this.shakePhase * 1.7) * this.shakeAmpY;
+    }
   }
 
   /** ★ 当前是否第一人称（角色贴片应隐藏） */

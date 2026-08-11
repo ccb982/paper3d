@@ -61,4 +61,9 @@ export abstract class CharacterBase extends EntityBase {
   get controllerPosition(): { x: number; y: number } {
     return { ...this.controller.position };
   }
+
+  /** ★ 当前跳跃高度偏移（相机聚焦点跟随用：跳跃时相机跟着升） */
+  get jumpHeight(): number {
+    return this.controller.getHeightOffset();
+  }
 }

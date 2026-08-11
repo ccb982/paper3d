@@ -145,4 +145,9 @@ export class CharacterController {
   get state(): 'idle' | 'walk' | 'attack' {
     return this.currentState;
   }
+
+  /** 是否在移动（相机脚步抖动用） */
+  get isMoving(): boolean {
+    return this.currentState === 'walk';
+  }
 }

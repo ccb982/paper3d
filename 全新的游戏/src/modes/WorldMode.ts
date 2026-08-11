@@ -81,13 +81,14 @@ export class WorldMode {
     // 玩家 y = 地形高度（模式层同步，实体不依赖地图）
     this.player.entity.position.y = this.map.getHeight(pp.x, pp.y);
 
-    // ---- 相机（先更新 → 提供坐标系给角色移动；第一人称隐藏角色自身） ----
+    // ---- 相机（聚焦点 = 角色 + 跳跃偏移 → 跳跃跟随；平滑 lerp → 抖动过滤；
+    //      第一人称移动 → 脚步随机抖动） ----
     this.cameraCtrl.update(dt, look, zoom, {
       x: pp.x,
       y: 0,
       z: pp.y,
-      height: this.player.entity.position.y,
-    });
+      height: this.player.entity.position.y + this.player.jumpHeight,
+    }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
     // ---- 实体管线驱动（攻击由模式层转发，输入/相机坐标系传入） ----
