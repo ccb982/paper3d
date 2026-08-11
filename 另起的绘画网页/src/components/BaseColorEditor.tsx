@@ -563,7 +563,8 @@ export const BaseColorEditor: React.FC = () => {
   const [manualTexSize, setManualTexSize] = useState(canvasWidth);
   // ★ 原图宽高比（导入时记录；分辨率调整时锁定比例：改高度 → 宽度 = 高度 × 比例）
   const originalAspectRef = useRef<number>(1);
-
+  // ★ 分辨率输入框本地值（受控：允许手动输入，blur/Enter 提交）
+  const [resInput, setResInput] = useState<string>('512');
   // ★ 关键修复：texSize 是当前帧的"实际工作尺寸"，必须同步派生自 bgImageData。
   // 旧实现用 useEffect 异步把 manualTexSize 同步到 bgImageData.width，但切换帧时
   // bgImageData 立即变为新帧数据，而 manualTexSize 滞后一轮，导致该帧渲染（putImageData
@@ -574,6 +575,10 @@ export const BaseColorEditor: React.FC = () => {
   // ★ texSizeY = 高度（非正方形纹理：锁定原图比例，见 handleLoadBackground/handleResolutionChange）
   const texSize = bgImageData ? bgImageData.width : manualTexSize;
   const texSizeY = bgImageData ? bgImageData.height : manualTexSize;
+  // 纹理高度变化（导入/切帧/调整）时同步输入框显示
+  useEffect(() => {
+    setResInput(String(texSizeY));
+  }, [texSizeY]);
 
   // ★ 仅在初始化时同步 canvasWidth（无帧数据阶段），后续由派生 texSize 接管
   useEffect(() => {
@@ -610,11 +615,6 @@ export const BaseColorEditor: React.FC = () => {
 
     if (newSize === texSizeY) return;
 
-    // ★ 高度目标 → 宽度按原图比例锁定
-    const newH = newSize;
-    const newW = Math.max(minSize, Math.round(newH * originalAspectRef.current));
-    console.log(`[分辨率调整] ${texSize}×${texSizeY} → ${newW}×${newH}（锁定比例 ${originalAspectRef.current.toFixed(3)}）`);
-    
     // 保存历史（调整前）
     saveHistory();
     
@@ -630,6 +630,10 @@ export const BaseColorEditor: React.FC = () => {
       const srcImage = frame.originalBgImageData || frame.bgImageData;
       const srcW = srcImage.width;
       const srcH = srcImage.height;
+      // ★ 每帧按原图实际宽高比锁定（不依赖外部 ref，多帧各自正确）
+      const newH = newSize;
+      const newW = Math.max(64, Math.round(newH * (srcW / srcH)));
+      console.log(`[分辨率调整] ${texSize}×${texSizeY} → ${newW}×${newH}（锁定比例 ${(srcW / srcH).toFixed(3)}）`);
 
       // 1. 从原始背景缩放到目标尺寸（最近邻，保留像素清晰度；★ 非正方形按比例）
       const srcCanvas = document.createElement('canvas');
@@ -696,7 +700,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     
     // 5. 更新 texSize（记录目标高度；宽度由比例派生）
-    setManualTexSize(newH);
+    setManualTexSize(newSize);
     
     // 6. 重新生成显示纹理（用 setTimeout 确保 state 更新完成）
     setTimeout(() => {
@@ -708,7 +712,7 @@ export const BaseColorEditor: React.FC = () => {
         }
       }
       sortPaletteByArea();
-      console.log(`[分辨率调整] 完成：${newW}×${newH} 缩放背景并重新生成 ${updatedFrameIds.length} 帧的基础色/残差`);
+      console.log(`[分辨率调整] 完成：缩放背景并重新生成 ${updatedFrameIds.length} 帧的基础色/残差`);
     }, 0);
   }, [texSize, texSizeY, frames, globalBbox, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures, sortPaletteByArea]);
 
@@ -2720,26 +2724,30 @@ export const BaseColorEditor: React.FC = () => {
           <span style={{ fontSize: '11px', color: '#666' }}>分辨率:</span>
           <input
             type="text"
-            value={texSizeY}
+            value={resInput}
             onChange={(e) => {
-              const value = e.target.value;
-              // 只允许数字输入
-              const numericValue = value.replace(/[^0-9]/g, '');
-              e.target.value = numericValue;
+              // 只允许数字输入（受控：更新本地输入值，blur/Enter 提交）
+              const numericValue = e.target.value.replace(/[^0-9]/g, '');
+              setResInput(numericValue);
             }}
             onBlur={(e) => {
               const value = parseInt(e.target.value, 10);
-              handleResolutionChange(value);
+              if (!isNaN(value)) {
+                handleResolutionChange(value);
+              } else {
+                setResInput(texSizeY.toString());
+              }
             }}
             onKeyDown={(e) => {
-              const input = e.target as HTMLInputElement;
               if (e.key === 'Enter') {
-                const value = parseInt(input.value, 10);
-                handleResolutionChange(value);
-                input.blur();
+                const value = parseInt((e.target as HTMLInputElement).value, 10);
+                if (!isNaN(value)) {
+                  handleResolutionChange(value);
+                }
+                (e.target as HTMLInputElement).blur();
               } else if (e.key === 'Escape') {
-                input.value = texSizeY.toString();
-                input.blur();
+                setResInput(texSizeY.toString());
+                (e.target as HTMLInputElement).blur();
               }
             }}
             style={{
