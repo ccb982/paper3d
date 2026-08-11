@@ -15,6 +15,8 @@ export interface CameraTarget {
   y: number; // 目标脚底世界坐标（玩法 x/z 平面）
   z: number;
   height: number; // 目标所处地面高度（地形 y）
+  /** 跳跃高度偏移（单独传入，按人称应用增益） */
+  jump?: number;
 }
 
 /** 相机水平坐标系（供角色移动/朝向判定） */
@@ -30,6 +32,8 @@ export class CameraController {
   /** 实际角度（阻尼插值） */
   private yaw = 0;
   private pitch = 0.35;
+  /** ★ 第一人称跳跃增益（跳跃时相机上抬更明显；第三人称 = 1 正常跟随） */
+  jumpGainFirstPerson = 2.5;
   /** ★ 平滑聚焦点（标准 TPS：相机围绕 target 旋转 + 视线过 target；
    *      target 用 lerp 跟随角色 → 跳跃跟随 / 抖动过滤） */
   private smoothedTarget = new THREE.Vector3();
@@ -98,17 +102,17 @@ export class CameraController {
     this.pitch += (this.targetPitch - this.pitch) * k;
 
     // ---- ★ 聚焦点平滑跟随（标准 TPS）：
-    //      期望聚焦点 = 角色位置 + 肩部高度（含跳跃偏移，由模式层传入 height）
+    //      期望聚焦点 = 角色位置 + 肩部高度 + 跳跃偏移（按人称增益）
     //      smoothedTarget lerp → 跳跃跟随 / 抖动过滤 ----
+    const isFirstPerson = this.distance <= this.firstPersonDistance;
     const desiredTarget = new THREE.Vector3(
       target.x,
-      target.height + this.characterHeight * 0.8,
+      target.height + this.characterHeight * 0.8 + (target.jump ?? 0) * (isFirstPerson ? this.jumpGainFirstPerson : 1),
       target.z,
     );
     this.smoothedTarget.lerp(desiredTarget, Math.min(1, dt * this.targetDamp));
 
     // ---- 球坐标定位（相机围绕聚焦点；俯仰负（仰视）时相机不低于半高） ----
-    const isFirstPerson = this.distance <= this.firstPersonDistance;
     const cp = this.distance * Math.cos(this.pitch);
     const sx = Math.sin(this.yaw);
     const cz = Math.cos(this.yaw);
