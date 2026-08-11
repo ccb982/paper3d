@@ -15,26 +15,34 @@ import { FtxAsset } from '../vendor/player/FtxAsset';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { CharacterController } from '../systems/player/CharacterController';
+import { MapQuery } from '../services/map/MapQuery';
+import { MapRender } from '../services/map/MapRender';
 import type { InputActions } from '../platform/input/InputActions';
 import { drainInteractions } from '../platform/input/InputActions';
 
-/** 世界尺寸（0..WORLD_SIZE，玩家在其中移动，相机跟随） */
-const WORLD_SIZE = 10;
-/** 相机视锥尺寸（世界单位，正交） */
-const VIEW_SIZE = 2.2;
+/** 相机斜俯视参数（透视） */
+const CAM_HEIGHT = 6;
+const CAM_DISTANCE = 6;
+const CAM_FOV = 50;
 
 export class WorldMode {
   private anim: FrameAnimatorBase;
   private quad: FTXQuad;
   private controller: CharacterController;
-  private cameraTarget = new THREE.Vector3(WORLD_SIZE / 2, WORLD_SIZE / 2, 0);
+  private mapRender: MapRender;
+  private map: MapQuery;
+  private cameraTarget = new THREE.Vector3(0, 0, 0);
   private lastTapWorld: { x: number; y: number } | null = null;
 
   constructor(
     private scene: THREE.Scene,
-    private camera: THREE.OrthographicCamera,
+    private camera: THREE.PerspectiveCamera,
     private asset: FtxAsset,
+    map: MapQuery,
   ) {
+    this.map = map;
+    // ---- 地图视觉（3D 地形网格，当前平地占位） ----
+    this.mapRender = new MapRender(scene, map);
     // ---- 动画管线 ----
     this.anim = new FrameAnimatorBase(asset);
     // ---- 渲染管线 ----
@@ -50,15 +58,14 @@ export class WorldMode {
       },
       fps: { idle: 2, walk: 6, attack: 8 },
     }, 2.5);
-    this.controller.position = { x: WORLD_SIZE / 2, y: WORLD_SIZE / 2 };
 
-    // ---- 相机初始化（跟随玩家） ----
+    // ---- 玩家出生在地图中心（玩法坐标 x/z 平面） ----
+    const b = map.getBounds();
+    const center = (b.min + b.max) / 2;
+    this.controller.position = { x: center, y: center };
+
+    // ---- 相机初始化（斜俯视跟随玩家） ----
     this.syncCamera(1);
-
-    // ---- 世界网格（参考系） ----
-    const grid = new THREE.GridHelper(WORLD_SIZE, WORLD_SIZE, 0x333355, 0x222244);
-    grid.position.set(WORLD_SIZE / 2, WORLD_SIZE / 2, -0.5);
-    scene.add(grid);
   }
 
   /** 每帧驱动（输入 → 控制 → 动画 → 相机） */
@@ -68,9 +75,10 @@ export class WorldMode {
     this.controller.update(dt, input);
     const p = this.controller.position;
 
-    // ---- 钳制在世界范围 ----
-    this.controller.position.x = Math.max(0, Math.min(WORLD_SIZE, p.x));
-    this.controller.position.y = Math.max(0, Math.min(WORLD_SIZE, p.y));
+    // ---- 地图边界钳制（玩法坐标 x/z 平面，经 MapQuery） ----
+    const b = this.map.getBounds();
+    this.controller.position.x = Math.max(b.min, Math.min(b.max, p.x));
+    this.controller.position.y = Math.max(b.min, Math.min(b.max, p.y));
 
     // ---- 动画时间轴推进 ----
     this.anim.update(dt);
@@ -78,43 +86,44 @@ export class WorldMode {
     // ---- 相机跟随（lerp 平滑） ----
     this.syncCamera(Math.min(1, dt * 5));
 
-    // ---- 交互消费（屏幕→世界换算，与设备无关） ----
+    // ---- 交互消费（屏幕→世界换算在游戏层，与设备无关） ----
+    const rayPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const rayNdc = new THREE.Vector2();
+    const raycast = new THREE.Raycaster();
     for (const it of drainInteractions(input)) {
       if (it.type === 'tap') {
-        this.lastTapWorld = this.screenToWorld(it.x, it.y);
-        console.log('[WorldMode] tap 世界坐标:', this.lastTapWorld);
+        rayNdc.set(it.x * 2 - 1, -(it.y * 2 - 1));
+        raycast.setFromCamera(rayNdc, this.camera);
+        const hit = new THREE.Vector3();
+        if (raycast.ray.intersectPlane(rayPlane, hit)) {
+          this.lastTapWorld = { x: hit.x, y: hit.z };
+          console.log('[WorldMode] tap 世界坐标:', this.lastTapWorld);
+        }
       }
     }
   }
 
-  /** 渲染：读 FrameState → 纹理 → quad → 画面 */
+  /** 渲染：读 FrameState → 纹理 → quad（billboard 立在地形上） → 画面 */
   render(renderer: THREE.WebGLRenderer): void {
     const p = this.controller.position;
-    this.quad.setPosition(p.x, p.y);
-    this.quad.setScale(VIEW_SIZE * 0.3, VIEW_SIZE * 0.3);
+    // ★ 玩法坐标 x/z → 世界坐标；y = 地形高度（与地形架构交互点）
+    const groundY = this.map.getHeight(p.x, p.y);
+    this.quad.setPosition(p.x, groundY + 0.75, p.y);
+    this.quad.setScale(1.5, 1.5);
     this.quad.setFlip(this.anim.state.flipX, this.anim.state.flipY);
+    this.quad.setBillboard(this.camera);
     this.quad.render(this.anim.state);
     renderer.render(this.scene, this.camera);
   }
 
-  /** 正交相机跟随：视锥中心 = 玩家位置（lerp） */
+  /** 透视相机斜俯视跟随玩家（lerp 平滑） */
   private syncCamera(alpha: number): void {
     const p = this.controller.position;
-    this.cameraTarget.lerp(new THREE.Vector3(p.x, p.y, 0), alpha);
-    // 正交相机视锥：中心跟随（position 平移 = 视锥平移）
-    const half = VIEW_SIZE / 2;
-    this.camera.left = this.cameraTarget.x - half;
-    this.camera.right = this.cameraTarget.x + half;
-    this.camera.top = this.cameraTarget.y + half;
-    this.camera.bottom = this.cameraTarget.y - half;
-    this.camera.updateProjectionMatrix();
-  }
-
-  /** 屏幕归一化坐标（0..1，左上原点）→ 世界坐标（相机视锥内换算） */
-  private screenToWorld(sx: number, sy: number): { x: number; y: number } {
-    const x = this.camera.left + sx * (this.camera.right - this.camera.left);
-    const y = this.camera.top - sy * (this.camera.top - this.camera.bottom);
-    return { x, y };
+    const groundY = this.map.getHeight(p.x, p.y);
+    const targetPos = new THREE.Vector3(p.x, groundY + CAM_HEIGHT, p.y + CAM_DISTANCE);
+    this.cameraTarget.lerp(targetPos, alpha);
+    this.camera.position.copy(this.cameraTarget);
+    this.camera.lookAt(p.x, groundY, p.y);
   }
 
   get playerPosition(): { x: number; y: number } {
@@ -144,5 +153,6 @@ export class WorldMode {
   dispose(): void {
     this.anim.dispose();
     this.quad.dispose();
+    this.mapRender.dispose();
   }
 }

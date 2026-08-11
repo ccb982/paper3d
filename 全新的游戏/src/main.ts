@@ -4,6 +4,8 @@ import { WebAdapter } from './platform/WebAdapter';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { WorldMode } from './modes/WorldMode';
 import { DesktopBinding } from './platform/input/DesktopBinding';
+import { generateFlatMap } from './services/map/MapGenerator';
+import { MapQuery } from './services/map/MapQuery';
 
 // ============================================================
 // 启动引导（播放器管线验证 → 正式游戏入口的过渡）
@@ -15,24 +17,23 @@ async function boot() {
   const canvas = adapter.createCanvas();
   document.body.appendChild(canvas);
 
-  // 画布正方形（世界空间 0..1 一致，纹理不变形）
-  const size = Math.min(window.innerWidth, window.innerHeight);
-  canvas.style.position = 'fixed';
-  canvas.style.left = '50%';
-  canvas.style.top = '50%';
-  canvas.style.transform = 'translate(-50%, -50%)';
-  canvas.style.background = '#1a1a2e';
-
+  // ★ 全屏画布（3D 场景，相机 aspect 自适应）
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setSize(size, size);
+  renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(adapter.info.dpr);
   renderer.setClearColor(0x1a1a2e, 1);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+  const sun = new THREE.DirectionalLight(0xffffff, 1);
+  sun.position.set(20, 40, 10);
+  scene.add(sun);
+  // ★ 透视相机（3D 场景：地形立体感 + 斜俯视视角）
+  const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
   window.addEventListener('resize', () => {
-    const s = Math.min(window.innerWidth, window.innerHeight);
-    renderer.setSize(s, s);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
   });
 
   // 加载主角纹理包（gzip 自动解压）
@@ -42,20 +43,24 @@ async function boot() {
   // 输入绑定（桌面，双端解耦：换设备只换 Binding）
   const binding = new DesktopBinding(window);
 
-  // 世界模式（控制 + 动画 + 渲染 + 相机跟随）
-  const mode = new WorldMode(scene, camera, asset);
+  // ---- 地图（占位平地，64×64；等地形算法/地面素材就位后扩展） ----
+  const mapData = generateFlatMap(Math.floor(Date.now() / 1000) % 100000, 64);
+  const map = new MapQuery(mapData);
+
+  // 世界模式（控制 + 动画 + 渲染 + 相机跟随 + 地图）
+  const mode = new WorldMode(scene, camera, asset, map);
 
   // ---- rapier 物理世界（2D 玩法：游戏 x/y → 物理 x/z 平面） ----
   const physics = new RAPIER.World({ x: 0, y: 0, z: 0 });
 
-  // 地面（参考碰撞体）
+  // 地面（参考碰撞体，匹配 64×64 地图）
   const groundBody = physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  physics.createCollider(RAPIER.ColliderDesc.cuboid(5, 0.5, 5), groundBody);
+  physics.createCollider(RAPIER.ColliderDesc.cuboid(32, 0.5, 32), groundBody);
 
   // ★ 主角物理实体（dynamic 球体，可碰撞；位置由输入驱动，每帧同步）
   const playerBody = physics.createRigidBody(
     RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(5, 0, 5)
+      .setTranslation(32, 0, 32)
       .setLinearDamping(8)
       .setCanSleep(false),
   );
@@ -102,4 +107,10 @@ async function boot() {
   console.log('[boot] 播放器管线就绪：加载 → 动画 → 渲染 → 相机跟随 → 物理实体');
 }
 
-boot().catch((err) => console.error('[boot] 启动失败:', err));
+boot().catch((err) => {
+  console.error('[boot] 启动失败:', err);
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:8px;left:8px;color:#f66;background:#000;padding:8px;z-index:99;font:12px monospace;white-space:pre;max-width:90vw';
+  d.textContent = '启动失败: ' + (err as Error).message + '\n' + String(err);
+  document.body.appendChild(d);
+});

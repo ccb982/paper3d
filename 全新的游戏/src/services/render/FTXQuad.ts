@@ -102,6 +102,14 @@ export class FTXQuad extends FxRendererBase {
     }
   }
 
+  /** ★ billboard：贴片永远面向相机（2D 角色/物品融入 3D 场景） */
+  setBillboard(camera: THREE.Camera): void {
+    if (this.mesh) {
+      this.mesh.quaternion.copy(camera.quaternion);
+      this.applyFlip();
+    }
+  }
+
   /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可） */
   setFrameMapping(frameSize: { width: number; height: number }, bbox: { x: number; y: number; w: number; h: number }): void {
     this._frameSize.set(frameSize.width, frameSize.height);
