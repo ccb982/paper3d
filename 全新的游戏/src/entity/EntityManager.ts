@@ -11,6 +11,7 @@ import type { PhysicsWorld, BodyOptions } from '../services/physics/PhysicsWorld
 import type { EntityBase } from './EntityBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
+import { SpatialGrid } from '../services/space/SpatialGrid';
 
 export interface EntityCreateOptions {
   kind: EntityKind;
@@ -25,6 +26,8 @@ export class EntityManager {
   private entities = new Map<number, Entity>();
   /** 基类实例集合（管线驱动：update/renderAll） */
   private bases = new Map<number, EntityBase>();
+  /** ★ 空间索引（分块遍历：渲染裁剪 / 索敌 / 范围查询；架构 4.1a） */
+  private grid = new SpatialGrid<EntityBase>(8);
   private nextId = 1;
 
   constructor(private physicsWorld: PhysicsWorld | null = null) {}
@@ -54,11 +57,19 @@ export class EntityManager {
   /** 注册基类实例（EntityBase 构造时自动调用） */
   register(base: EntityBase): void {
     this.bases.set(base.entity.id, base);
+    this.grid.insert(base);
   }
 
   /** 注销基类实例（EntityBase.dispose 时自动调用） */
   unregister(base: EntityBase): void {
     this.bases.delete(base.entity.id);
+    this.grid.remove(base);
+  }
+
+  /** ★ 实体位置集中刷新（EntityBase.update 末尾调用；
+   *   空间索引移块，hash 比较，静止实体零成本） */
+  onEntityMoved(base: EntityBase): void {
+    this.grid.move(base);
   }
 
   /** ★ 每帧驱动所有基类实体（统一管线入口：行为→物理→动画→渲染同步） */
@@ -68,9 +79,9 @@ export class EntityManager {
     }
   }
 
-  /** ★ 渲染阶段：遍历所有实体画当前帧 */
+  /** ★ 渲染阶段：只遍历视野覆盖块内的实体（分块裁剪，架构 4.1a） */
   renderAll(camera: Parameters<EntityBase['render']>[0]): void {
-    for (const base of this.bases.values()) {
+    for (const base of this.grid.queryVisible(camera as Parameters<EntityBase['render']>[0])) {
       base.render(camera);
     }
   }
@@ -90,9 +101,14 @@ export class EntityManager {
     return [...this.entities.values()].filter((e) => e.kind === kind);
   }
 
-  /** 全部基类实例（模式层组合用） */
+  /** 全部基类实例（模式层组合/调试用） */
   allBases(): EntityBase[] {
     return [...this.bases.values()];
+  }
+
+  /** ★ 空间查询：半径内实体（AI 索敌/子弹/技能/拾取） */
+  querySphere(x: number, z: number, r: number): EntityBase[] {
+    return this.grid.querySphere(x, z, r);
   }
 
   get count(): number {
@@ -104,5 +120,6 @@ export class EntityManager {
     for (const base of this.bases.values()) base.dispose();
     this.bases.clear();
     this.entities.clear();
+    this.grid.clear();
   }
 }

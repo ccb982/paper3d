@@ -10,6 +10,16 @@
   </style>
 </head>
 <body>
+  <!-- ★ three / rapier 运行时从 CDN 下载（主包不含它们，首屏只 ~40kB gzip）
+       本地回退：node_modules 版本，部署时同源托管亦可 -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+      "@dimforge/rapier3d": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d@0.14.0/+esm"
+    }
+  }
+  </script>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

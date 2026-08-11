@@ -43,6 +43,10 @@ export interface EntityBaseOptions {
 
 export abstract class EntityBase {
   readonly entity: Entity;
+  /** ★ 位置（世界 x/y/z；空间索引/查询统一入口） */
+  get position(): { x: number; y: number; z: number } {
+    return this.entity.position;
+  }
   /** 动画管线（无 asset 时为 null） */
   readonly anim: FrameAnimatorBase | null;
   /** 动画状态（渲染管线读取的衔接层） */
@@ -94,6 +98,7 @@ export abstract class EntityBase {
     this.syncPhysics();                     // ② 物理同步
     this.anim?.update(dt);                  // ③ 动画推进
     this.syncRender();                      // ④ 渲染同步
+    this.em.onEntityMoved(this);            // ⑤ 空间索引移块（集中刷新点）
   }
 
   /** 子类行为逻辑（覆写） */
