@@ -49,10 +49,10 @@ export class CharacterController {
     const axis = normalizeAxis(input.moveAxis);
     const moving = hasMovement(axis);
 
-    // 移动
+    // 移动（★ 世界 y 向上为正：输入"下"(axis.y>0) → 世界 y 减小 = 屏幕下方）
     if (moving) {
       this.position.x += axis.x * this.moveSpeed * dt;
-      this.position.y += axis.y * this.moveSpeed * dt;
+      this.position.y -= axis.y * this.moveSpeed * dt;
     }
 
     // 朝向（★ 只由新输入方向修改，动画切换不重置 flipX）

@@ -5,6 +5,17 @@
 // 桌面（WASD/鼠标）和触屏（虚拟摇杆/点击）都填充同一结构。
 // 双端解耦：换设备只换 Binding，游戏代码不变。
 
+/** 抽象交互事件（点击/长按/拖拽——桌面=鼠标，触屏=手指，语义一致） */
+export interface InputInteraction {
+  type: 'tap' | 'hold' | 'drag';
+  /** 屏幕归一化坐标 0..1（左上原点） */
+  x: number;
+  y: number;
+  /** 拖拽增量（drag 事件用；tap/hold 为 0） */
+  dx: number;
+  dy: number;
+}
+
 export interface InputActions {
   /** 移动轴向 -1..1（y 向下为正：y>0 = 向下/前，y<0 = 向上/后） */
   moveAxis: { x: number; y: number };
@@ -17,6 +28,8 @@ export interface InputActions {
     skill: boolean;
     interact: boolean;
   };
+  /** ★ 交互事件队列（消费式读取；语义与设备无关，供多端复用） */
+  interactions: InputInteraction[];
 }
 
 /** 创建空输入状态 */
@@ -25,7 +38,15 @@ export function createInputActions(): InputActions {
     moveAxis: { x: 0, y: 0 },
     pointer: null,
     pressed: { attack: false, dodge: false, skill: false, interact: false },
+    interactions: [],
   };
+}
+
+/** 消费并清空交互事件队列 */
+export function drainInteractions(input: InputActions): InputInteraction[] {
+  const list = input.interactions;
+  input.interactions = [];
+  return list;
 }
 
 /** 归一化移动轴向（斜向长度 = 1，避免斜走更快） */

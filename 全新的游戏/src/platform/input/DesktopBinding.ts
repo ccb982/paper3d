@@ -50,21 +50,59 @@ export class DesktopBinding {
         y: e.clientY / window.innerHeight,
       };
     };
+    // ★ 交互事件：鼠标 → 抽象语义（tap/hold/drag），触屏 Binding 填同样的语义
+    let pointerDown = false;
+    let lastPointer = { x: 0, y: 0 };
+    const normPos = (e: MouseEvent) => ({
+      x: e.clientX / window.innerWidth,
+      y: e.clientY / window.innerHeight,
+    });
+    const onPointerDown = (e: MouseEvent) => {
+      pointerDown = true;
+      lastPointer = normPos(e);
+      this.state.pointer = { ...lastPointer };
+    };
+    const onPointerMove = (e: MouseEvent) => {
+      const p = normPos(e);
+      this.state.pointer = { ...p };
+      if (pointerDown) {
+        this.state.interactions.push({
+          type: 'drag',
+          x: p.x, y: p.y,
+          dx: p.x - lastPointer.x, dy: p.y - lastPointer.y,
+        });
+        lastPointer = p;
+      }
+    };
+    const onPointerUp = (e: MouseEvent) => {
+      if (!pointerDown) return;
+      pointerDown = false;
+      const p = normPos(e);
+      this.state.interactions.push({ type: 'tap', x: p.x, y: p.y, dx: 0, dy: 0 });
+    };
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
       this.state.pressed = { attack: false, dodge: false, skill: false, interact: false };
+      this.state.interactions = [];
+      pointerDown = false;
     };
 
     el.addEventListener('keydown', onKeyDown as EventListener);
     el.addEventListener('keyup', onKeyUp as EventListener);
     window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
     window.addEventListener('blur', onBlur);
     this.disposers.push(
       () => {
         el.removeEventListener('keydown', onKeyDown as EventListener);
         el.removeEventListener('keyup', onKeyUp as EventListener);
         window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mousedown', onPointerDown);
+        window.removeEventListener('mousemove', onPointerMove);
+        window.removeEventListener('mouseup', onPointerUp);
         window.removeEventListener('blur', onBlur);
       },
     );
