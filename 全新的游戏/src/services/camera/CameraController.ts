@@ -26,14 +26,16 @@ export interface CameraFrame {
 export class CameraController {
   /** 目标角度（鼠标控制） */
   private targetYaw = 0;
-  private targetPitch = 0.52;
+  private targetPitch = 0.45;
   /** 实际角度（阻尼插值） */
   private yaw = 0;
-  private pitch = 0.52;
+  private pitch = 0.45;
   /** 相机到目标距离 */
-  distance = 4;
-  /** 注视点前移量（角色落在画面下方） */
+  distance = 5;
+  /** 注视点前移量（前方视野） */
   lookAhead = 2.5;
+  /** ★ 角色身高（标准第三人称：相机高 = 角色半高，lookAt = 角色肩/头） */
+  characterHeight = 1.2;
   /** 灵敏度（弧度/像素） */
   sensitivity = 0.003;
   /** 角度阻尼系数（越大越跟手） */
@@ -45,28 +47,29 @@ export class CameraController {
   update(dt: number, look: { x: number; y: number }, target: CameraTarget): void {
     // ---- 目标角度（鼠标控制） ----
     this.targetYaw -= look.x * this.sensitivity;
-    this.targetPitch = Math.max(0.25, Math.min(1.1, this.targetPitch - look.y * this.sensitivity));
+    this.targetPitch = Math.max(0.2, Math.min(1.1, this.targetPitch - look.y * this.sensitivity));
 
     // ---- 阻尼插值（角度不瞬跳，跟手但平滑） ----
     const k = 1 - Math.exp(-dt * this.damp);
     this.yaw += (this.targetYaw - this.yaw) * k;
     this.pitch += (this.targetPitch - this.pitch) * k;
 
-    // ---- 球坐标定位（yaw 绕目标，pitch 控制俯仰） ----
+    // ---- 球坐标定位（标准第三人称：相机在角色后上方，高度含角色半高） ----
     const cp = this.distance * Math.cos(this.pitch);
     const sx = Math.sin(this.yaw);
     const cz = Math.cos(this.yaw);
+    const camY = target.height + this.characterHeight * 0.5 + this.distance * Math.sin(this.pitch);
     this.camera.position.set(
       target.x + sx * cp,
-      target.height + this.distance * Math.sin(this.pitch),
+      camY,
       target.z + cz * cp,
     );
 
-    // ---- 看向目标前方（"前" = 画面深处方向） ----
+    // ---- 看向角色肩/头部（★ 角色落到画面下方，准星不被遮挡） ----
     const f = this.getFrame();
     this.camera.lookAt(
       target.x + f.forward.x * this.lookAhead,
-      target.height,
+      target.height + this.characterHeight * 0.8,
       target.z + f.forward.z * this.lookAhead,
     );
   }
@@ -83,7 +86,7 @@ export class CameraController {
   }
 
   /** 重置视角（模式切换/新场景时调用） */
-  reset(yaw = 0, pitch = 0.52): void {
+  reset(yaw = 0, pitch = 0.45): void {
     this.targetYaw = yaw;
     this.targetPitch = pitch;
     this.yaw = yaw;
