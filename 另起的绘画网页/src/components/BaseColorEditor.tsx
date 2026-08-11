@@ -3211,13 +3211,12 @@ export const BaseColorEditor: React.FC = () => {
             <canvas
               ref={highlightCanvasRef}
               width={texSize}
-              height={texSize}
+              height={texSizeY}
               style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 display: 'block',
-                border: '1px solid #333',
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                 transformOrigin: 'center center',
                 pointerEvents: 'none',
@@ -3227,13 +3226,12 @@ export const BaseColorEditor: React.FC = () => {
             <canvas
               ref={overlayRef}
               width={texSize}
-              height={texSize}
+              height={texSizeY}
               style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 display: 'block',
-                border: '1px solid #333',
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
                 transformOrigin: 'center center',
                 pointerEvents: 'none',
