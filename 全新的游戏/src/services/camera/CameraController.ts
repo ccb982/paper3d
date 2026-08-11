@@ -26,18 +26,20 @@ export interface CameraFrame {
 export class CameraController {
   /** 目标角度（鼠标控制） */
   private targetYaw = 0;
-  private targetPitch = 0.5;
+  private targetPitch = 0.35;
   /** 实际角度（阻尼插值） */
   private yaw = 0;
-  private pitch = 0.5;
-  /** 相机到目标距离（滚轮缩放，clamp） */
-  distance = 4.5;
-  distanceMin = 2.5;
+  private pitch = 0.35;
+  /** 相机到目标距离（滚轮缩放，clamp；最小 = 贴脸第一人称） */
+  distance = 4.2;
+  distanceMin = 0.2;
   distanceMax = 12;
+  /** 进入第一人称的距离阈值 */
+  firstPersonDistance = 0.6;
   /** 缩放灵敏度（距离单位/滚轮增量） */
   zoomSensitivity = 0.012;
   /** 注视点前移量（前方视野） */
-  lookAhead = 2.2;
+  lookAhead = 1.5;
   /** ★ 角色贴片高度（标准第三人称：lookAt 在头顶之上，角色落画面下方，不挡准星） */
   characterHeight = 1.5;
   /** 灵敏度（弧度/像素） */
@@ -52,33 +54,50 @@ export class CameraController {
     // ---- 滚轮缩放（标准第三人称：滚轮 = 相机距离，视觉上高低/远近变化） ----
     this.distance = Math.max(this.distanceMin, Math.min(this.distanceMax, this.distance + zoom * this.zoomSensitivity));
 
-    // ---- 目标角度（鼠标控制） ----
+    // ---- 目标角度（鼠标控制；★ 上下 ±88°：准星视线可覆盖天空到地面） ----
     this.targetYaw -= look.x * this.sensitivity;
-    this.targetPitch = Math.max(0.2, Math.min(1.1, this.targetPitch - look.y * this.sensitivity));
+    const pitchMin = -1.55;
+    const pitchMax = 1.55;
+    this.targetPitch = Math.max(pitchMin, Math.min(pitchMax, this.targetPitch - look.y * this.sensitivity));
 
     // ---- 阻尼插值（角度不瞬跳，跟手但平滑） ----
     const k = 1 - Math.exp(-dt * this.damp);
     this.yaw += (this.targetYaw - this.yaw) * k;
     this.pitch += (this.targetPitch - this.pitch) * k;
 
-    // ---- 球坐标定位（标准第三人称：相机在角色后上方，高度含角色半高） ----
+    // ---- 球坐标定位（相机在角色后上方；俯仰负（仰视）时相机不低于半高） ----
+    const isFirstPerson = this.distance <= this.firstPersonDistance;
     const cp = this.distance * Math.cos(this.pitch);
     const sx = Math.sin(this.yaw);
     const cz = Math.cos(this.yaw);
-    const camY = target.height + this.characterHeight * 0.6 + this.distance * Math.sin(this.pitch);
+    // 第一人称：眼睛高度（0.9×身高，固定）；第三人称：半高 + 俯仰高度（仰视不低于半高）
+    const camY = target.height + this.characterHeight * (isFirstPerson ? 0.9 : 0.6)
+      + (isFirstPerson ? 0 : Math.max(0, this.distance * Math.sin(this.pitch)));
     this.camera.position.set(
       target.x + sx * cp,
       camY,
       target.z + cz * cp,
     );
 
-    // ---- 看向角色头顶之上（★ 头顶不挡准星；角色占据画面下方） ----
+    // ---- ★ 视线方向由 pitch 完全决定（准星 = 屏幕中心 = 视线方向）：
+    //      lookAt = 相机位置 + 视线方向 × 前移距离
+    //      → 准星从脚下地面（pitch↑）指到头顶天空（pitch↓）全覆盖 ----
     const f = this.getFrame();
-    this.camera.lookAt(
-      target.x + f.forward.x * this.lookAhead,
-      target.height + this.characterHeight * 0.9,
-      target.z + f.forward.z * this.lookAhead,
+    const dir = new THREE.Vector3(
+      f.forward.x * Math.cos(this.pitch),
+      -Math.sin(this.pitch),
+      f.forward.z * Math.cos(this.pitch),
     );
+    this.camera.lookAt(
+      this.camera.position.x + dir.x * this.lookAhead,
+      this.camera.position.y + dir.y * this.lookAhead,
+      this.camera.position.z + dir.z * this.lookAhead,
+    );
+  }
+
+  /** ★ 当前是否第一人称（角色贴片应隐藏） */
+  get isFirstPerson(): boolean {
+    return this.distance <= this.firstPersonDistance;
   }
 
   /** ★ 相机水平坐标系（角色移动/朝向用） */
@@ -93,7 +112,7 @@ export class CameraController {
   }
 
   /** 重置视角（模式切换/新场景时调用） */
-  reset(yaw = 0, pitch = 0.5): void {
+  reset(yaw = 0, pitch = 0.35): void {
     this.targetYaw = yaw;
     this.targetPitch = pitch;
     this.yaw = yaw;
