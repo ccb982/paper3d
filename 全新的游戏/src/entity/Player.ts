@@ -25,6 +25,8 @@ export class Player extends CharacterBase {
       { width: frame0.bbox.w, height: frame0.bbox.h },
       frame0.bbox,
     );
+    // ★ 按纹理宽高比缩放（角色站立比例）
+    this.applyRenderScale(1.5);
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {

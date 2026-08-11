@@ -44,6 +44,8 @@ export class EnemyBase extends CharacterBase {
     }
     // ★ 锁定到指定朝向的帧（否则动画控制器默认全资产循环 → 正反面不停交替）
     this.playFacing((opts.facing ?? '前') as '前' | '后');
+    // ★ 按纹理宽高比缩放（240×600 竖长纹理 → 不压扁）
+    this.applyRenderScale(1.5);
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {

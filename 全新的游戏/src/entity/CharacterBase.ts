@@ -57,6 +57,13 @@ export abstract class CharacterBase extends EntityBase {
     return this.controller.getHeightOffset();
   }
 
+  /** ★ 按纹理宽高比设置角色缩放（避免竖长/横长纹理被压扁）——子类 attach 后调用 */
+  protected applyRenderScale(baseSize = 1.5): void {
+    if (this.renderer && 'setScaleKeepAspect' in this.renderer) {
+      (this.renderer as { setScaleKeepAspect(s: number): void }).setScaleKeepAspect(baseSize);
+    }
+  }
+
   /** 角色玩法坐标（x/z）——相机/模式层读取 */
   get controllerPosition(): { x: number; y: number } {
     return { ...this.controller.position };

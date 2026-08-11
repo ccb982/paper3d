@@ -94,6 +94,13 @@ export class FTXQuad extends FxRendererBase {
   protected material: THREE.ShaderMaterial;
   private _frameSize = new THREE.Vector2(512, 512);
   private _bbox = new THREE.Vector4(0, 0, 512, 512);
+  /** 纹理宽高比（h/w，非正方形纹理保持比例用） */
+  private _texAspect = 1;
+
+  /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
+  setScaleKeepAspect(baseSize: number): void {
+    this.setScale(baseSize, baseSize * this._texAspect);
+  }
 
   constructor(
     scene: THREE.Scene,
@@ -169,10 +176,11 @@ export class FTXQuad extends FxRendererBase {
     u.uDistortRotation.value = opts.rotation;
   }
 
-  /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可） */
+  /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可；★ 记录纹理宽高比） */
   setFrameMapping(frameSize: { width: number; height: number }, bbox: { x: number; y: number; w: number; h: number }): void {
     this._frameSize.set(frameSize.width, frameSize.height);
     this._bbox.set(bbox.x, bbox.y, bbox.w, bbox.h);
+    this._texAspect = frameSize.height / frameSize.width;
     this.material.uniforms.uFrameSize.value.needsUpdate = true;
   }
 }
