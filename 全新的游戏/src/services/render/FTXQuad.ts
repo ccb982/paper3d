@@ -176,6 +176,13 @@ export class FTXQuad extends FxRendererBase {
     u.uDistortRotation.value = opts.rotation;
   }
 
+  /** ★ 非 billboard 固定朝向：绕 Y 轴旋转（0=朝 +z，π=朝 -z） */
+  setYaw(rad: number): void {
+    if (!this.mesh) return;
+    this.mesh.rotation.y = rad;
+    this.applyFlip();
+  }
+
   /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可；★ 记录纹理宽高比） */
   setFrameMapping(frameSize: { width: number; height: number }, bbox: { x: number; y: number; w: number; h: number }): void {
     this._frameSize.set(frameSize.width, frameSize.height);

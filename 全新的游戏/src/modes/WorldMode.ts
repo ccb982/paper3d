@@ -87,7 +87,9 @@ export class WorldMode {
         },
         facing: '前',
         aggressive: true,
-      });
+      }, camera);
+      this.enemy.billboard = false;
+      this.enemy.playFacing('前');
     }
 
     // ---- 相机（独立模块） ----

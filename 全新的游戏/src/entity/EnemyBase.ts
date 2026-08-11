@@ -22,12 +22,14 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
 export class EnemyBase extends CharacterBase {
   private assetRef: Asset;
   readonly aggressive: boolean;
+  private curFacing: '前' | '后' | null = null;
 
   constructor(
     em: EntityManager,
     scene: THREE.Scene,
     asset: Asset,
     opts: EnemyOptions,
+    private camera?: THREE.Camera,
   ) {
     super(em, { ...opts, kind: 'enemy', asset });
     this.assetRef = asset;
@@ -55,7 +57,27 @@ export class EnemyBase extends CharacterBase {
 
   protected override onUpdate(dt: number): void {
     // 敌人无输入驱动（AI 行为后续接入）
-    // 位置保持不变（由 AI 移动后更新）
+
+    // ★ 非 billboard：固定朝向（贴片不面相机）。相机相对位置决定 facing：
+    //   相机在敌人前方（+z 侧）→ 前帧；绕到背后（-z 侧）→ 转身显示后帧。
+    //   这样能检查背面帧，且有立体感（不是始终面向玩家）。
+    if (this.camera) {
+      const px = this.entity.position.x;
+      const pz = this.entity.position.z;
+      const camDirZ = this.camera.position.z - pz;
+      const camDirX = this.camera.position.x - px;
+      // 以贴片朝向（+z）为基准：相机在朝向侧 → 前，反侧 → 后
+      const facing: '前' | '后' = camDirZ >= 0 ? '前' : '后';
+      if (facing !== this.curFacing) {
+        this.curFacing = facing;
+        this.playFacing(facing);
+        // 转身：后帧时贴片绕 Y 转 180°（背面朝向相机，内容为"后"帧）
+        if (this.renderer && 'setYaw' in this.renderer) {
+          (this.renderer as { setYaw(r: number): void }).setYaw(facing === '后' ? Math.PI : 0);
+        }
+      }
+      void camDirX;
+    }
 
     // ★ 每帧应用当前帧的扭曲参数（特效包参数，第一帧已继承到所有帧）
     const idx = this.anim!.state.frameIndex;

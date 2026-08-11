@@ -51,6 +51,8 @@ export abstract class EntityBase {
   physicsMode: PhysicsMode = 'none';
   /** 可见性（第一人称时隐藏角色自身） */
   visible = true;
+  /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
+  billboard = true;
 
   protected renderer: FxRendererBase | null = null;
 
@@ -123,8 +125,8 @@ export abstract class EntityBase {
   /** 渲染当前帧（模式层 render 阶段遍历调用；不可见时跳过） */
   render(camera: THREE.Camera): void {
     if (!this.visible || !this.renderer || !this.state) return;
-    // billboard：2D 贴片永远面向相机（3D 场景）
-    if ('setBillboard' in this.renderer) {
+    // billboard：2D 贴片永远面向相机（3D 场景）；否则固定朝向（setYaw 由子类控制）
+    if (this.billboard && 'setBillboard' in this.renderer) {
       (this.renderer as { setBillboard(c: THREE.Camera): void }).setBillboard(camera);
     }
     this.renderer.render(this.state, null);
