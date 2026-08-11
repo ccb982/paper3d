@@ -35,6 +35,7 @@ registerBehavior('wander', (entity, ctx, params) => {
   const baseSpeed = params.speed ?? 2;
   const turnRate = params.turnRate ?? 0.5; // 每帧最大转向（rad）
   const turnInterval = params.turnInterval ?? 0.4; // 转向频率（秒）
+  const playerBias = params.playerBias ?? 0.04; // ★ 转向时拉向玩家方向的比例（0=纯随机）
 
   // 当前方向（无 → 初始随机方向）
   if (entity.aiMoveDir.x === 0 && entity.aiMoveDir.z === 0) {
@@ -45,7 +46,18 @@ registerBehavior('wander', (entity, ctx, params) => {
   entity.aiTurnTimer -= ctx.dt;
   if (entity.aiTurnTimer <= 0) {
     entity.aiTurnTimer = turnInterval * (0.6 + Math.random() * 0.8);
-    const angle = (Math.random() - 0.5) * 2 * turnRate;
+    // 随机转向角
+    const rand = (Math.random() - 0.5) * 2 * turnRate;
+    let angle = rand;
+    // ★ 转向时略微偏向玩家方向（只拉一部分夹角，不逐帧追）
+    const t = ctx.findTarget('player');
+    if (t) {
+      const toPlayer = Math.atan2(t.z - entity.entity.position.z, t.x - entity.entity.position.x);
+      let diff = toPlayer - Math.atan2(entity.aiMoveDir.z, entity.aiMoveDir.x);
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      angle = rand + diff * playerBias;
+    }
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
     const dx = entity.aiMoveDir.x * cosA - entity.aiMoveDir.z * sinA;
