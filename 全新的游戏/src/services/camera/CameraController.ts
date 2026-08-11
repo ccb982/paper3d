@@ -26,18 +26,18 @@ export interface CameraFrame {
 export class CameraController {
   /** 目标角度（鼠标控制） */
   private targetYaw = 0;
-  private targetPitch = 0.65;
+  private targetPitch = 0.5;
   /** 实际角度（阻尼插值） */
   private yaw = 0;
-  private pitch = 0.65;
+  private pitch = 0.5;
   /** 相机到目标距离（滚轮缩放，clamp） */
-  distance = 5;
+  distance = 4.5;
   distanceMin = 2.5;
   distanceMax = 12;
   /** 缩放灵敏度（距离单位/滚轮增量） */
   zoomSensitivity = 0.012;
   /** 注视点前移量（前方视野） */
-  lookAhead = 1.8;
+  lookAhead = 2.2;
   /** ★ 角色贴片高度（标准第三人称：lookAt 在头顶之上，角色落画面下方，不挡准星） */
   characterHeight = 1.5;
   /** 灵敏度（弧度/像素） */
@@ -76,7 +76,7 @@ export class CameraController {
     const f = this.getFrame();
     this.camera.lookAt(
       target.x + f.forward.x * this.lookAhead,
-      target.height + this.characterHeight * 1.1,
+      target.height + this.characterHeight * 0.9,
       target.z + f.forward.z * this.lookAhead,
     );
   }
@@ -93,7 +93,7 @@ export class CameraController {
   }
 
   /** 重置视角（模式切换/新场景时调用） */
-  reset(yaw = 0, pitch = 0.65): void {
+  reset(yaw = 0, pitch = 0.5): void {
     this.targetYaw = yaw;
     this.targetPitch = pitch;
     this.yaw = yaw;

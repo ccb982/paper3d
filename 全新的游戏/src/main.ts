@@ -40,8 +40,8 @@ async function boot() {
   const asset = await FtxAsset.load(encodeURI('/src/assets/characters/protagonist/维维美.ftx3.gz'));
   console.log('[boot] 主角已加载:', asset.frameNames().join(', '));
 
-  // 输入绑定（桌面，双端解耦：换设备只换 Binding）
-  const binding = new DesktopBinding(window);
+  // 输入绑定（桌面，双端解耦；点击画布 → 指针锁定/隐藏光标，可 360° 转视角）
+  const binding = new DesktopBinding(window, canvas);
 
   // ---- 地图（占位平地，64×64；等地形算法/地面素材就位后扩展） ----
   const mapData = generateFlatMap(Math.floor(Date.now() / 1000) % 100000, 64);

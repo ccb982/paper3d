@@ -24,10 +24,22 @@ export class DesktopBinding {
   private disposers: Array<() => void> = [];
   private lastMouse = { x: 0, y: 0 };
   private hasMouse = false;
+  private isLocked = false;
 
-  constructor(target?: HTMLElement | Window) {
+  constructor(target?: HTMLElement | Window, lockEl?: HTMLElement) {
     this.state = createInputActions();
     const el = target ?? window;
+
+    // ★ 指针锁定（FPS/TPS 标准）：点击画布 → 隐藏光标 + 锁定，
+    //   锁定后鼠标无限移动（movementX/Y），视角可 360° 旋转
+    if (lockEl) {
+      lockEl.addEventListener('click', () => {
+        lockEl.requestPointerLock?.();
+      });
+    }
+    document.addEventListener('pointerlockchange', () => {
+      this.isLocked = document.pointerLockElement === (lockEl ?? null);
+    });
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (KEY_MAP[e.code]) {
@@ -52,7 +64,13 @@ export class DesktopBinding {
         x: e.clientX / window.innerWidth,
         y: e.clientY / window.innerHeight,
       };
-      // ★ lookAxis 增量（像素，消费式：update() 读取后清零）
+      // ★ 锁定状态：用 movementX/Y（无限增量，不受屏幕边界限制）
+      if (this.isLocked) {
+        this.state.lookAxis.x += e.movementX;
+        this.state.lookAxis.y += e.movementY;
+        return;
+      }
+      // 未锁定：clientX 增量（调试/窗口模式）
       if (this.hasMouse) {
         this.state.lookAxis.x += e.clientX - this.lastMouse.x;
         this.state.lookAxis.y += e.clientY - this.lastMouse.y;

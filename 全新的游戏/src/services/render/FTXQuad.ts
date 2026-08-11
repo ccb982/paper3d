@@ -102,12 +102,21 @@ export class FTXQuad extends FxRendererBase {
     }
   }
 
-  /** ★ billboard：贴片永远面向相机（2D 角色/物品融入 3D 场景） */
+  /**
+   * ★ yaw-only billboard：贴片垂直地面（立牌式），只绕 Y 轴水平面向相机。
+   * 相机俯视时看到角色的"正面上部"、侧面看是薄片——有 3D 立体感
+   * （方舟/八方旅人式 2D 角色融入 3D 场景的标准做法）。
+   * 注：全姿态 billboard 会让角色永远平视贴屏幕，没有"站立"感。
+   */
   setBillboard(camera: THREE.Camera): void {
-    if (this.mesh) {
-      this.mesh.quaternion.copy(camera.quaternion);
-      this.applyFlip();
+    if (!this.mesh) return;
+    const dir = new THREE.Vector3().subVectors(camera.position, this.mesh.position);
+    dir.y = 0; // 只取水平方向
+    if (dir.lengthSq() > 1e-8) {
+      dir.normalize();
+      this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
     }
+    this.applyFlip();
   }
 
   /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可） */
