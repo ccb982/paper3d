@@ -6,14 +6,14 @@
 export interface AIBehaviorDef {
   /** 行为名（behaviorTable 查表） */
   name: string;
-  /** 行为参数 */
-  params?: Record<string, number>;
+  /** 行为参数（数值/字符串，如 speed/targetBias/camp） */
+  params?: Record<string, string | number>;
 }
 
 export interface AITransitionDef {
   /** 条件名（conditionTable 查表） */
   cond: string;
-  params?: Record<string, number>;
+  params?: Record<string, string | number>;
   /** 转移目标状态 */
   to: string;
 }
@@ -34,11 +34,14 @@ export interface AIConfig {
 export const PRESERVER_AI: AIConfig = {
   states: {
     patrol: {
-      behaviors: [{ name: 'wander', params: { speed: 2 } }],
+      // speed 游走速度 / turnRate 转向幅度 / turnInterval 转向间隔
+      // targetBias 游走略微偏向目标的强度(0=纯随机,0.04≈轻微) / biasCamp 偏谁('player'/'ally'/''=不偏)
+      behaviors: [{ name: 'wander', params: { speed: 2, turnRate: 0.5, turnInterval: 0.4, targetBias: 0.04, biasCamp: 'player' } }],
       transitions: [
-        { cond: 'seePlayer', params: { radius: 8 }, to: 'chase' },
+        // radius 索敌半径 / camp 索敌阵营('player'/'ally'/'player,ally')
+        { cond: 'seePlayer', params: { radius: 8, camp: 'player' }, to: 'chase' },
       ],
-      // ★ 脱离后至少游走 3 秒才重新索敌（否则 patrol 闪一帧就被拉回 chase）
+      // ★ 最短停留时间（秒）：进入该状态后至少停留这么久才允许转移（防状态抖动）
       minStay: 3,
     },
     chase: {
@@ -49,9 +52,9 @@ export const PRESERVER_AI: AIConfig = {
       ],
     },
     attack: {
+      // ★ 一次性近战挥击：播完（duration 秒）→ attackFinished 自动退出
       behaviors: [{ name: 'meleeSwing', params: { duration: 0.6 } }],
       transitions: [
-        // ★ 挥击播完（一次性）→ 回 patrol 游走；玩家脱离攻击距离也直接走
         { cond: 'attackFinished', to: 'patrol' },
         { cond: 'outOfRange', params: { radius: 2 }, to: 'patrol' },
       ],

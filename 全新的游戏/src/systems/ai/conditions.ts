@@ -4,9 +4,10 @@
 // 条件返回 true → 状态转移。索敌在 seePlayer 内完成并写入 ctx.target。
 
 import type { EnemyBase } from '../../entity/EnemyBase';
+import { pnum, pstr } from './behaviors';
 import type { BehaviorContext } from './behaviors';
 
-export type ConditionFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, number>) => boolean;
+export type ConditionFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, string | number>) => boolean;
 
 /** 条件注册表 */
 export const conditionTable: Record<string, ConditionFn> = {};
@@ -15,10 +16,15 @@ export function registerCondition(name: string, fn: ConditionFn): void {
   conditionTable[name] = fn;
 }
 
-/** 索敌：视野半径内找到目标（camp='player'/'ally'）→ 写入 ctx.target */
+/** 索敌：视野半径内找到目标（camp 参数指定阵营，逗号分隔多选）→ 写入 ctx.target */
 registerCondition('seePlayer', (entity, ctx, params) => {
-  const radius = params.radius ?? 8;
-  const t = ctx.findTarget('player') ?? ctx.findTarget('ally');
+  const radius = pnum(params, 'radius', 8);
+  const camps = pstr(params, 'camp', 'player').split(',');
+  let t: { x: number; z: number } | null = null;
+  for (const c of camps) {
+    t = ctx.findTarget(c);
+    if (t) break;
+  }
   if (!t) return false;
   const dx = t.x - entity.entity.position.x;
   const dz = t.z - entity.entity.position.z;
@@ -32,7 +38,7 @@ registerCondition('seePlayer', (entity, ctx, params) => {
 
 /** 目标在攻击距离内 */
 registerCondition('inRange', (_entity, ctx, params) => {
-  const radius = params.radius ?? 1.5;
+  const radius = pnum(params, 'radius', 1.5);
   const t = ctx.target;
   if (!t) return false;
   return Math.hypot(t.x - _entity.entity.position.x, t.z - _entity.entity.position.z) <= radius;
@@ -40,7 +46,7 @@ registerCondition('inRange', (_entity, ctx, params) => {
 
 /** 目标超出攻击距离（脱战回追） */
 registerCondition('outOfRange', (_entity, ctx, params) => {
-  const radius = params.radius ?? 2;
+  const radius = pnum(params, 'radius', 2);
   const t = ctx.target;
   if (!t) return true;
   return Math.hypot(t.x - _entity.entity.position.x, t.z - _entity.entity.position.z) > radius;
@@ -51,7 +57,7 @@ registerCondition('attackFinished', (entity) => entity.aiSwingDone === true);
 
 /** 目标丢失（超距/消失）→ 回巡逻 */
 registerCondition('loseTarget', (_entity, ctx, params) => {
-  const radius = params.radius ?? 12;
+  const radius = pnum(params, 'radius', 12);
   const t = ctx.target;
   if (!t) return true;
   return Math.hypot(t.x - _entity.entity.position.x, t.z - _entity.entity.position.z) > radius;

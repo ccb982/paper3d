@@ -17,7 +17,18 @@ export interface BehaviorContext {
   findTarget: (camp: string) => { x: number; z: number } | null;
 }
 
-export type BehaviorFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, number>) => void;
+export type BehaviorFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, string | number>) => void;
+
+/** 参数取值工具：数值（不存在 → 默认） */
+export function pnum(p: Record<string, string | number> | undefined, key: string, def: number): number {
+  const v = p?.[key];
+  return v === undefined ? def : Number(v);
+}
+/** 参数取值工具：字符串（不存在 → 默认） */
+export function pstr(p: Record<string, string | number> | undefined, key: string, def: string): string {
+  const v = p?.[key];
+  return v === undefined ? def : String(v);
+}
 
 /** 行为注册表 */
 export const behaviorTable: Record<string, BehaviorFn> = {};
@@ -32,10 +43,12 @@ export function registerBehavior(name: string, fn: BehaviorFn): void {
  *   - 速度波动（走走停停感，非匀速直线）
  */
 registerBehavior('wander', (entity, ctx, params) => {
-  const baseSpeed = params.speed ?? 2;
-  const turnRate = params.turnRate ?? 0.5; // 每帧最大转向（rad）
-  const turnInterval = params.turnInterval ?? 0.4; // 转向频率（秒）
-  const playerBias = params.playerBias ?? 0.04; // ★ 转向时拉向玩家方向的比例（0=纯随机）
+  const baseSpeed = pnum(params, 'speed', 2);
+  const turnRate = pnum(params, 'turnRate', 0.5); // 每帧最大转向（rad）
+  const turnInterval = pnum(params, 'turnInterval', 0.4); // 转向频率（秒）
+  // ★ 通用参数：游走转向时略微偏向某阵营（0 = 纯随机；'' = 不偏）
+  const targetBias = pnum(params, 'targetBias', 0.04);
+  const biasCamp = pstr(params, 'biasCamp', 'player');
 
   // 当前方向（无 → 初始随机方向）
   if (entity.aiMoveDir.x === 0 && entity.aiMoveDir.z === 0) {
@@ -49,14 +62,14 @@ registerBehavior('wander', (entity, ctx, params) => {
     // 随机转向角
     const rand = (Math.random() - 0.5) * 2 * turnRate;
     let angle = rand;
-    // ★ 转向时略微偏向玩家方向（只拉一部分夹角，不逐帧追）
-    const t = ctx.findTarget('player');
-    if (t) {
-      const toPlayer = Math.atan2(t.z - entity.entity.position.z, t.x - entity.entity.position.x);
-      let diff = toPlayer - Math.atan2(entity.aiMoveDir.z, entity.aiMoveDir.x);
+    // ★ 转向时略微偏向指定阵营目标（只拉一部分夹角，不逐帧追）
+    const t = biasCamp ? ctx.findTarget(biasCamp) : null;
+    if (t && targetBias > 0) {
+      const toTarget = Math.atan2(t.z - entity.entity.position.z, t.x - entity.entity.position.x);
+      let diff = toTarget - Math.atan2(entity.aiMoveDir.z, entity.aiMoveDir.x);
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      angle = rand + diff * playerBias;
+      angle = rand + diff * targetBias;
     }
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
@@ -71,7 +84,7 @@ registerBehavior('wander', (entity, ctx, params) => {
 
 /** 追击：朝目标直线移动 */
 registerBehavior('moveToTarget', (entity, ctx, params) => {
-  const speed = params.speed ?? 2.5;
+  const speed = pnum(params, 'speed', 2.5);
   const t = ctx.target;
   if (!t) return;
   const dx = t.x - entity.entity.position.x;
@@ -83,7 +96,7 @@ registerBehavior('moveToTarget', (entity, ctx, params) => {
 
 /** 近战攻击：一次性挥击（计时播完 → attackFinished 条件退出，不再循环） */
 registerBehavior('meleeSwing', (entity, ctx, params) => {
-  const duration = params.duration ?? 0.6;
+  const duration = pnum(params, 'duration', 0.6);
   // 挥击未开始/已播完（含首次进入）→ 重新开始一轮挥击
   if (entity.aiAttackTimer <= 0) {
     entity.aiAttackTimer = duration;
