@@ -1,15 +1,15 @@
 import * as THREE from 'three';
-import RAPIER from '@dimforge/rapier3d';
 import { WebAdapter } from './platform/WebAdapter';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { WorldMode } from './modes/WorldMode';
 import { DesktopBinding } from './platform/input/DesktopBinding';
 import { generateFlatMap } from './services/map/MapGenerator';
 import { MapQuery } from './services/map/MapQuery';
+import { PhysicsWorld } from './services/physics/PhysicsWorld';
 
 // ============================================================
-// 启动引导（播放器管线验证 → 正式游戏入口的过渡）
-// 加载主角 ftx3 → WorldMode（控制 + 动画 + 渲染 + 相机跟随）
+// 启动引导（实体管线驱动的正式入口）
+// 加载主角 ftx3 → WorldMode（实体管线 + 相机 + 地图 + 交互）
 // ============================================================
 
 async function boot() {
@@ -47,26 +47,16 @@ async function boot() {
   const mapData = generateFlatMap(Math.floor(Date.now() / 1000) % 100000, 64);
   const map = new MapQuery(mapData);
 
-  // 世界模式（控制 + 动画 + 渲染 + 相机跟随 + 地图）
-  const mode = new WorldMode(scene, camera, asset, map);
+  // ---- 物理世界（唯一碰 rapier 的封装） ----
+  const physics = new PhysicsWorld();
 
-  // ---- rapier 物理世界（2D 玩法：游戏 x/y → 物理 x/z 平面） ----
-  const physics = new RAPIER.World({ x: 0, y: 0, z: 0 });
+  // ---- 世界模式（实体管线：地面/主角实体 + 相机 + 地图 + 交互） ----
+  const mode = new WorldMode(scene, camera, asset, map, physics);
 
-  // 地面（参考碰撞体，匹配 64×64 地图）
-  const groundBody = physics.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  physics.createCollider(RAPIER.ColliderDesc.cuboid(32, 0.5, 32), groundBody);
-
-  // ★ 主角物理实体（dynamic 球体，可碰撞；位置由输入驱动，每帧同步）
-  const playerBody = physics.createRigidBody(
-    RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(32, 0, 32)
-      .setLinearDamping(8)
-      .setCanSleep(false),
-  );
-  physics.createCollider(RAPIER.ColliderDesc.ball(0.15), playerBody);
-  const physicsPlayerId = playerBody.handle;
-  console.log('[boot] 主角物理实体已注册 (handle=', physicsPlayerId, ')');
+  // 碰撞事件（后续阵营过滤/伤害结算）
+  physics.onCollision((e) => {
+    console.log('[phys] 碰撞:', e.a, '<->', e.b, e.started ? '开始' : '结束');
+  });
 
   // ---- 主循环 ----
   const clock = new THREE.Clock();
@@ -80,16 +70,13 @@ async function boot() {
     // 输入 → 控制（解耦：绑定填语义，游戏消费语义）
     binding.update();
 
-    // 驱动世界模式（交互消费/相机跟随/动画推进；look = 鼠标视角增量）
+    // 世界模式（实体管线驱动 + 相机 + 交互；look/zoom 鼠标输入）
     mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook(), binding.consumeZoom());
 
-    // ---- 物理步进 + 主角位置同步（游戏坐标 → 物理 x/z 平面） ----
+    // ---- 物理固定步长（玩家刚体由实体基类 write 同步，见 EntityBase.syncPhysics） ----
     acc += dt;
     const FIXED = 1 / 60;
     while (acc >= FIXED) {
-      // 主角位置由控制层驱动（强制同步到物理体）
-      const p = mode.playerPosition;
-      playerBody.setTranslation({ x: p.x, y: 0, z: p.y }, true);
       physics.step();
       acc -= FIXED;
     }
@@ -104,7 +91,7 @@ async function boot() {
   }
   animate();
 
-  console.log('[boot] 播放器管线就绪：加载 → 动画 → 渲染 → 相机跟随 → 物理实体');
+  console.log('[boot] 实体管线就绪：加载 → 实体基类 → 物理/动画/渲染联动');
 }
 
 boot().catch((err) => {
