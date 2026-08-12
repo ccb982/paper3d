@@ -153,12 +153,13 @@ export class PhysicsWorld {
     body.setLinvel({ x, y, z }, true);
   }
 
-  /** ★ 只覆盖 x/z 速度（保留 y：角色移动同步用，不干扰重力下落） */
+  /** ★ 只覆盖 x/z 速度；y 速度仅保留下落（禁止向上残留——
+   *   重力接触解算的反弹会产生微小正 vy → 上升再落回 → 静止抖动） */
   setVelocityXZ(id: number, x: number, z: number): void {
     const body = this.getBody(id);
-    if (!body) { return; }
+    if (!body) return;
     const v = body.linvel();
-    body.setLinvel({ x, y: v.y, z }, true);
+    body.setLinvel({ x, y: Math.min(v.y, 0), z }, true);
   }
 
   /** 读刚体速度 */

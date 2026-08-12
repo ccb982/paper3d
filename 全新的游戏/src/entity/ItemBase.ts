@@ -43,9 +43,9 @@ export class ItemBase extends EntityBase {
             type: 'dynamic',
             options: {
               shape: { type: 'cuboid', hx: 0.22, hy: 0.22, hz: 0.1 }, // ★ 薄片（正反面扁）
-              linearDamping: 4, // ★ 高阻尼：落地即停，不滑远
+              linearDamping: 4, // 高阻尼：落地即停，不滑远
               gravityScale: 1,  // 掉落物受重力落地
-              density: 3,       // ★ 重：玩家推不动（不会"没接触就跑开"）
+              // density 默认 1：玩家可推、子弹可打动（之前 3 太重推不动）
             },
           }
         : undefined,

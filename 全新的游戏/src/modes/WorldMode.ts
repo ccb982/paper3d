@@ -317,17 +317,18 @@ export class WorldMode {
     line.visible = true;
   }
 
-  /** ★ 物品钳制：贴地（y ≥ 0，防无限下落/NaN）+ 地图边界；实体与刚体同步 */
+  /** ★ 物品钳制：只做 x/z 地图边界（防掉出地图 → 无限下坠）。
+   *   ★ 不碰 y——物品是纯物理实体（read），落地/弹起由物理管理，
+   *     钳 y 会打断接触解算 → 推不动 + 抖动 */
   private clampItem(e: EntityBase): void {
     const p = e.position;
     const b = this.map.getBounds();
     const nx = Math.max(b.min, Math.min(b.max, p.x));
     const nz = Math.max(b.min, Math.min(b.max, p.z));
-    const ny = Math.max(0, Math.min(0.4, p.y)); // 底部贴地（球心 = y + 半径），抬升上限防顶飞
-    if (nx !== p.x || nz !== p.z || ny !== p.y) {
-      p.x = nx; p.y = ny; p.z = nz;
+    if (nx !== p.x || nz !== p.z) {
+      p.x = nx; p.z = nz;
       const rb = e.entity.rigidBody;
-      if (rb) this.entities.physics?.setPosition(rb.handle, nx, ny + e.bodyOffsetY, nz);
+      if (rb) this.entities.physics?.setPosition(rb.handle, nx, p.y + e.bodyOffsetY, nz);
     }
   }
 
@@ -337,7 +338,8 @@ export class WorldMode {
     renderer.render(this.scene, this.camera);
   }
 
-  /** ★ 角色钳制：贴地（防顶飞 + ★ 防下坠：地图边缘失去地面支撑会无限下落）+ 地图边界。
+  /** ★ 角色钳制：y 恒 = 地形高度（角色物理无重力，y 由模式层钉死——
+   *   彻底消除重力/接触解算的 y 抖动、顶飞、边缘下坠）+ 地图边界。
    *   放模式层：只有它知道地形高度与地图范围（实体不依赖地图） */
   private clampCharacter(e: CharacterBase): void {
     const p = e.position;
@@ -345,8 +347,7 @@ export class WorldMode {
     const b = this.map.getBounds();
     const nx = Math.max(b.min, Math.min(b.max, p.x));
     const nz = Math.max(b.min, Math.min(b.max, p.z));
-    // ★ 上下都夹：下坠（p.y < g）拉回地面；顶飞（> g+0.4）压回
-    const ny = Math.max(g, Math.min(g + 0.4, p.y));
+    const ny = g; // ★ 无条件贴地（物理不参与 y）
     if (nx !== p.x || nz !== p.z || ny !== p.y) {
       p.x = nx; p.y = ny; p.z = nz;
       const rb = e.entity.rigidBody;

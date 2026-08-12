@@ -44,9 +44,11 @@ export abstract class CharacterBase extends EntityBase {
       kind: opts.kind,
       x: opts.x, y: opts.y, z: opts.z,
       // ★ 物理创建用碰撞体积声明（super 前字段未初始化 → 用常量）
+      //   gravityScale 0：角色 y 不参与物理（由模式层钉地形高度）——
+      //   否则重力/接触解算的 y 震荡导致静止/移动抖动
       physics: opts.physics ?? {
         type: 'dynamic',
-        options: { shape: DEFAULT_COLLISION_VOLUME.shape, linearDamping: 8, canSleep: false },
+        options: { shape: DEFAULT_COLLISION_VOLUME.shape, linearDamping: 8, canSleep: false, gravityScale: 0 },
       },
       asset: opts.asset,
       animInitial: opts.facing ? { facing: opts.facing } : undefined,
