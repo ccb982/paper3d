@@ -103,10 +103,6 @@ export abstract class EntityBase {
 
   // ============ 更新骨架 ============
 
-  /** 上一帧位置（碰撞回退用） */
-  private prevX = 0;
-  private prevZ = 0;
-
   /** 每帧驱动（模式层/EntityManager 调用） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
     this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（含速度目标计算）
@@ -177,7 +173,7 @@ export abstract class EntityBase {
 
   // ============ 生命周期 ============
 
-  /** ★ 碰撞回调（实体管线按刚体 handle 分发；覆写 = 命中处理）
+  /** ★ 碰撞回调（实体管线按 userData=实体 id 分发；覆写 = 命中处理）
    *   other = 碰撞对方实体；null = 静态世界（地面/墙）
    *   started = 接触开始（true）/ 结束（false） */
   onCollision(_other: EntityBase | null, _started: boolean): void {

@@ -40,6 +40,8 @@ export class WorldMode {
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
   private bulletCooldown = 0;
+  /** ★ 准星射线落点调试标记（红点显示瞄准落点） */
+  private aimMarker: THREE.Mesh;
   /** AI 上下文（索敌 = 玩家位置） */
   private aiCtx: BehaviorContext = {
     dt: 0,
@@ -115,6 +117,13 @@ export class WorldMode {
 
     // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
     this.crosshair = new Crosshair();
+
+    // ---- ★ 瞄准落点调试标记（红点：摄像机 → 准星射线的落点） ----
+    this.aimMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 10, 10),
+      new THREE.MeshBasicMaterial({ color: 0xff3344, transparent: true, opacity: 0.9 }),
+    );
+    scene.add(this.aimMarker);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -137,6 +146,15 @@ export class WorldMode {
       jump: this.player.jumpHeight,
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
+
+    // ---- ★ 瞄准落点调试（红点跟随准星射线落点） ----
+    const aim = this.aimRaycast();
+    if (aim) {
+      this.aimMarker.visible = true;
+      this.aimMarker.position.set(aim.x, aim.y, aim.z);
+    } else {
+      this.aimMarker.visible = false;
+    }
 
     // ---- AI 驱动（敌人自主行为；★ 在实体管线之前：本帧方向本帧生效，移动零滞后） ----
     aiSystem.updateAll(dt, this.aiCtx);
@@ -167,40 +185,54 @@ export class WorldMode {
         const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
         if (raycast.ray.intersectPlane(plane, hit)) {
           this.lastTapWorld = { x: hit.x, y: hit.z };
-          console.log('[WorldMode] 准星目标:', this.lastTapWorld);
         }
       }
     }
   }
 
-  /** ★ 玩家发射：方向 = 角色枪口 → 准星指向点（TPS 标准做法）
-   *   准星射线与枪口水平面求交 → 水平方向朝该点 */
-  private firePlayerBullet(): void {
-    const p = this.player.position;
-    const muzzleY = p.y + 1.1; // 枪口高度
+  /** ★ 准星射线查询（摄像机沿准星方向 → 落点；排除玩家自身；null = 无命中） */
+  private aimRaycast(): { x: number; y: number; z: number } | null {
     this.camera.updateMatrixWorld();
     const rayDir = new THREE.Vector3();
     this.camera.getWorldDirection(rayDir);
     const cam = this.camera.position;
-    // 准星射线与枪口水平面的交点（向下看才有效）
-    let dx: number, dz: number;
-    if (rayDir.y < -0.001) {
-      const t = (muzzleY - cam.y) / rayDir.y;
-      const hitX = cam.x + rayDir.x * t;
-      const hitZ = cam.z + rayDir.z * t;
-      dx = hitX - p.x;
-      dz = hitZ - p.z;
+    const rb = this.player.entity.rigidBody;
+    const hit = this.entities.physics?.castRay(
+      { x: cam.x, y: cam.y, z: cam.z },
+      { x: rayDir.x, y: rayDir.y, z: rayDir.z },
+      200,
+      rb?.handle,
+    );
+    return hit ? hit.point : null;
+  }
+
+  /** ★ 玩家发射（TPS 标准）：
+   *   ① 摄像机沿准星方向发一条射线 → 落点（命中目标实体/地面，排除玩家自身）
+   *   ② 角色枪口 → 落点 = 发射方向（3D：带俯仰） */
+  private firePlayerBullet(): void {
+    const p = this.player.position;
+    const muzzle = { x: p.x, y: p.y + 1.1, z: p.z }; // 枪口
+    // ① 准星射线 → 落点
+    const aim = this.aimRaycast();
+    let tx: number, ty: number, tz: number;
+    if (aim) {
+      tx = aim.x; ty = aim.y; tz = aim.z;
     } else {
-      dx = rayDir.x;
-      dz = rayDir.z;
+      this.camera.updateMatrixWorld();
+      const rayDir = new THREE.Vector3();
+      this.camera.getWorldDirection(rayDir);
+      const cam = this.camera.position;
+      tx = cam.x + rayDir.x * 200; ty = cam.y + rayDir.y * 200; tz = cam.z + rayDir.z * 200;
     }
-    const len = Math.hypot(dx, dz) || 1;
+    // ② 枪口 → 落点（3D 方向）
+    const dx = tx - muzzle.x, dy = ty - muzzle.y, dz = tz - muzzle.z;
+    const len = Math.hypot(dx, dy, dz) || 1;
     new BulletBase(this.entities, this.scene, this.bulletAsset, {
-      x: p.x + (dx / len) * 0.8,
-      y: muzzleY,
-      z: p.z + (dz / len) * 0.8,
+      x: muzzle.x + (dx / len) * 0.8,
+      y: muzzle.y + (dy / len) * 0.8,
+      z: muzzle.z + (dz / len) * 0.8,
       dirX: dx / len,
-      dirY: 0,
+      dirY: dy / len,
       dirZ: dz / len,
       speed: 12,
       camp: 'player',
@@ -258,5 +290,9 @@ export class WorldMode {
     this.entities.clear();
     this.mapRender.dispose();
     this.crosshair.dispose();
+    // ★ 瞄准调试标记
+    this.aimMarker.geometry.dispose();
+    (this.aimMarker.material as THREE.Material).dispose();
+    this.scene.remove(this.aimMarker);
   }
 }

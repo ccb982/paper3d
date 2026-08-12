@@ -24,10 +24,8 @@ export interface EntityCreateOptions {
 
 export class EntityManager {
   private entities = new Map<number, Entity>();
-  /** 基类实例集合（管线驱动：update/renderAll） */
+  /** 基类实例集合（管线驱动：update/renderAll；★ 按 entity.id 索引，碰撞分发用） */
   private bases = new Map<number, EntityBase>();
-  /** ★ 刚体 handle → 实体基类（碰撞事件分发用） */
-  private bodyMap = new Map<number, EntityBase>();
   /** ★ 空间索引（分块遍历：渲染裁剪 / 索敌 / 范围查询；架构 4.1a） */
   private grid = new SpatialGrid<EntityBase>(8);
   private nextId = 1;
@@ -37,10 +35,11 @@ export class EntityManager {
     physicsWorld?.onCollision((e) => this.dispatchCollision(e));
   }
 
-  /** ★ 碰撞事件分发（对方无实体 = 静态世界 null） */
-  private dispatchCollision(e: { a: number; b: number; started: boolean }): void {
-    const a = this.bodyMap.get(e.a);
-    const b = this.bodyMap.get(e.b);
+  /** ★ 碰撞事件分发（按 userData=entity.id 查实体；★ 不能用 handle——
+   *   rapier handle 复用会让旧事件误伤新实体。0/缺失 = 静态世界 null） */
+  private dispatchCollision(e: { aId: number; bId: number; started: boolean }): void {
+    const a = this.bases.get(e.aId);
+    const b = this.bases.get(e.bId);
     if (a && b) {
       a.onCollision(b, e.started);
       b.onCollision(a, e.started);
@@ -56,17 +55,18 @@ export class EntityManager {
     return this.physicsWorld;
   }
 
-  /** 创建实体（带物理则自动注册刚体） */
+  /** 创建实体（带物理则自动注册刚体；★ userData = entity.id 注入碰撞体） */
   create(opts: EntityCreateOptions): Entity {
+    const id = this.nextId++;
     const entity: Entity = {
-      id: this.nextId++,
+      id,
       kind: opts.kind,
       position: { x: opts.x, y: opts.y, z: opts.z },
     };
     if (opts.physics && this.physicsWorld) {
       const handle = opts.physics.type === 'fixed'
-        ? this.physicsWorld.addFixed({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape)
-        : this.physicsWorld.addDynamic({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options);
+        ? this.physicsWorld.addFixed({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id)
+        : this.physicsWorld.addDynamic({ x: opts.x, y: opts.y, z: opts.z }, { ...opts.physics.options, userData: id });
       entity.rigidBody = { handle, type: opts.physics.type };
     }
     this.entities.set(entity.id, entity);
@@ -77,19 +77,12 @@ export class EntityManager {
   register(base: EntityBase): void {
     this.bases.set(base.entity.id, base);
     this.grid.insert(base);
-    // ★ 碰撞分发映射（有刚体的实体）
-    if (base.entity.rigidBody) {
-      this.bodyMap.set(base.entity.rigidBody.handle, base);
-    }
   }
 
   /** 注销基类实例（EntityBase.dispose 时自动调用） */
   unregister(base: EntityBase): void {
     this.bases.delete(base.entity.id);
     this.grid.remove(base);
-    if (base.entity.rigidBody) {
-      this.bodyMap.delete(base.entity.rigidBody.handle);
-    }
   }
 
   /** ★ 实体位置集中刷新（EntityBase.update 末尾调用；
@@ -151,6 +144,5 @@ export class EntityManager {
     this.bases.clear();
     this.entities.clear();
     this.grid.clear();
-    this.bodyMap.clear();
   }
 }

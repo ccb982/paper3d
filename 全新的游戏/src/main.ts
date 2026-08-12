@@ -58,11 +58,10 @@ async function boot() {
   // ---- 世界模式（实体管线：地面/主角/敌人实体 + 相机 + 地图 + 交互） ----
   const mode = new WorldMode(scene, camera, asset, map, physics, enemyAsset);
 
-  // ★ 碰撞事件已由实体管线接管（EntityManager 按刚体 handle 分发 → 实体 onCollision）
+  // ★ 碰撞事件已由实体管线接管（EntityManager 按 userData=实体 id 分发 → 实体 onCollision）
 
   // ---- 主循环 ----
   const clock = new THREE.Clock();
-  let lastFrame = -1;
   let acc = 0;
 
   function animate() {
@@ -75,7 +74,7 @@ async function boot() {
     // 世界模式（实体管线驱动 + 相机 + 交互；look/zoom 鼠标输入）
     mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook(), binding.consumeZoom());
 
-    // ---- 物理固定步长（玩家刚体由实体基类 write 同步，见 EntityBase.syncPhysics） ----
+    // ---- 物理固定步长（角色 velocity 驱动 / 子弹 read，见 EntityBase.syncPhysics） ----
     acc += dt;
     const FIXED = 1 / 60;
     while (acc >= FIXED) {
@@ -84,11 +83,6 @@ async function boot() {
     }
 
     mode.render(renderer);
-
-    // 敌人 AI 日志（低频，保留）——角色移动日志已移除
-    if (mode.frameIndex !== lastFrame) {
-      lastFrame = mode.frameIndex;
-    }
   }
   animate();
 
