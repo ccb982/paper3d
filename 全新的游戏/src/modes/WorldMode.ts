@@ -42,6 +42,10 @@ export class WorldMode {
   private bulletCooldown = 0;
   /** ★ 准星射线落点调试标记（红点显示瞄准落点） */
   private aimMarker: THREE.Mesh;
+  /** ★ 准星射线可视化（摄像机 → 落点，青色） */
+  private aimLine: THREE.Line;
+  /** ★ 射击方向可视化（角色枪口 → 落点，橙色） */
+  private shootLine: THREE.Line;
   /** AI 上下文（索敌 = 玩家位置） */
   private aiCtx: BehaviorContext = {
     dt: 0,
@@ -124,6 +128,19 @@ export class WorldMode {
       new THREE.MeshBasicMaterial({ color: 0xff3344, transparent: true, opacity: 0.9 }),
     );
     scene.add(this.aimMarker);
+
+    // ---- ★ 瞄准可视化线：准星射线（摄像机→落点，青色）+ 射击方向（枪口→落点，橙色） ----
+    this.aimLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0x44ccff, transparent: true, opacity: 0.55 }),
+    );
+    this.shootLine = new THREE.Line(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.8 }),
+    );
+    this.aimLine.visible = false;
+    this.shootLine.visible = false;
+    scene.add(this.aimLine, this.shootLine);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -147,13 +164,26 @@ export class WorldMode {
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
-    // ---- ★ 瞄准落点调试（红点跟随准星射线落点） ----
+    // ---- ★ 瞄准落点调试（红点 + 射线线 + 射击方向线） ----
     const aim = this.aimRaycast();
     if (aim) {
       this.aimMarker.visible = true;
       this.aimMarker.position.set(aim.x, aim.y, aim.z);
+      // 准星射线：摄像机 → 落点
+      this.setLine(this.aimLine, [
+        this.camera.position.x, this.camera.position.y, this.camera.position.z,
+        aim.x, aim.y, aim.z,
+      ]);
+      // 射击方向：角色枪口 → 落点
+      const p = this.player.position;
+      this.setLine(this.shootLine, [
+        p.x, p.y + 1.1, p.z,
+        aim.x, aim.y, aim.z,
+      ]);
     } else {
       this.aimMarker.visible = false;
+      this.aimLine.visible = false;
+      this.shootLine.visible = false;
     }
 
     // ---- AI 驱动（敌人自主行为；★ 在实体管线之前：本帧方向本帧生效，移动零滞后） ----
@@ -190,20 +220,65 @@ export class WorldMode {
     }
   }
 
-  /** ★ 准星射线查询（摄像机沿准星方向 → 落点；排除玩家自身；null = 无命中） */
+  /** ★ 准星射线查询（摄像机沿准星方向 → 落点；排除玩家自身；null = 无命中）
+   *   ① 实体优先：射线 vs 每个实体碰撞体（球近似）→ 命中敌人必中（辅助瞄准）
+   *   ② 物理兜底：rapier castRay（地面/墙落点） */
   private aimRaycast(): { x: number; y: number; z: number } | null {
     this.camera.updateMatrixWorld();
     const rayDir = new THREE.Vector3();
     this.camera.getWorldDirection(rayDir);
     const cam = this.camera.position;
+    const origin = { x: cam.x, y: cam.y, z: cam.z };
+    const dir = { x: rayDir.x, y: rayDir.y, z: rayDir.z };
+
+    // ① 实体检测（每帧遍历；命中实体碰撞体球 → 必中）
+    let best: { x: number; y: number; z: number } | null = null;
+    let bestT = Infinity;
+    for (const b of this.entities.allBases()) {
+      if (b === this.player) continue;            // 排除自己
+      if (b.entity.kind === 'bullet') continue;   // 排除子弹（飞行中不应阻挡瞄准）
+      const cv = b.collisionVolume;
+      if (!cv) continue;
+      // 球近似：中心 = 实体位置 + offsetY，半径 = 半长（胶囊）+ 球半径
+      const center = { x: b.position.x, y: b.position.y + cv.offsetY, z: b.position.z };
+      const radius = cv.offsetY + (cv.shape.type === 'ball' ? cv.shape.radius : 0.35);
+      const t = WorldMode.raySphereHit(origin, dir, center, radius);
+      if (t !== null && t > 0.1 && t < bestT) {
+        bestT = t;
+        best = {
+          x: origin.x + dir.x * t,
+          y: origin.y + dir.y * t,
+          z: origin.z + dir.z * t,
+        };
+      }
+    }
+    if (best) return best;
+
+    // ② 物理射线兜底（地面/墙）
     const rb = this.player.entity.rigidBody;
-    const hit = this.entities.physics?.castRay(
-      { x: cam.x, y: cam.y, z: cam.z },
-      { x: rayDir.x, y: rayDir.y, z: rayDir.z },
-      200,
-      rb?.handle,
-    );
+    const hit = this.entities.physics?.castRay(origin, dir, 200, rb?.handle);
     return hit ? hit.point : null;
+  }
+
+  /** ★ 射线 vs 球（二次方程）：返回 t（沿射线距离）；null = 不交 */
+  private static raySphereHit(
+    o: { x: number; y: number; z: number },
+    d: { x: number; y: number; z: number },
+    c: { x: number; y: number; z: number },
+    r: number,
+  ): number | null {
+    const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;
+    const a = d.x * d.x + d.y * d.y + d.z * d.z;
+    const b = 2 * (ox * d.x + oy * d.y + oz * d.z);
+    const cc = ox * ox + oy * oy + oz * oz - r * r;
+    const disc = b * b - 4 * a * cc;
+    if (disc < 0) return null;
+    const sqrtD = Math.sqrt(disc);
+    const t1 = (-b - sqrtD) / (2 * a);
+    const t2 = (-b + sqrtD) / (2 * a);
+    if (t1 >= 0) return t1;
+    if (t2 >= 0) return t2;
+    return null;
   }
 
   /** ★ 玩家发射（TPS 标准）：
@@ -238,6 +313,14 @@ export class WorldMode {
       camp: 'player',
       lifetime: 2,
     });
+  }
+
+  /** ★ 更新一条可视化线（6 个浮点 = 2 点 × xyz） */
+  private setLine(line: THREE.Line, pts: number[]): void {
+    const geo = line.geometry as THREE.BufferGeometry;
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    geo.computeBoundingSphere();
+    line.visible = true;
   }
 
   /** 渲染：实体管线遍历画 + 地图 + 场景 */
@@ -290,9 +373,15 @@ export class WorldMode {
     this.entities.clear();
     this.mapRender.dispose();
     this.crosshair.dispose();
-    // ★ 瞄准调试标记
+    // ★ 瞄准调试（红点 + 两条线）
     this.aimMarker.geometry.dispose();
     (this.aimMarker.material as THREE.Material).dispose();
     this.scene.remove(this.aimMarker);
+    this.aimLine.geometry.dispose();
+    (this.aimLine.material as THREE.Material).dispose();
+    this.scene.remove(this.aimLine);
+    this.shootLine.geometry.dispose();
+    (this.shootLine.material as THREE.Material).dispose();
+    this.scene.remove(this.shootLine);
   }
 }
