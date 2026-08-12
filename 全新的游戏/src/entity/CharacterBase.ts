@@ -53,8 +53,6 @@ export abstract class CharacterBase extends EntityBase {
     this.physicsMode = 'velocity';
     if (!this.anim) throw new Error('CharacterBase 需要动画资产');
     this.controller = new CharacterController(this.anim, opts.animMap, opts.moveSpeed ?? 2.5);
-    // 玩法坐标（x/z 平面）初始化
-    this.controller.position = { x: opts.x, y: opts.z };
   }
 
   protected override onUpdate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {

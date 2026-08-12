@@ -32,7 +32,6 @@ export class BulletBase extends EntityBase {
     offsetY: 0,
   };
   private lifetime: number;
-  private fired = false;
 
   constructor(
     em: EntityManager,
@@ -65,7 +64,6 @@ export class BulletBase extends EntityBase {
       const len = Math.hypot(dx, dz) || 1;
       em.physics?.setLinearVelocity(rb.handle, (dx / len) * opts.speed, 0, (dz / len) * opts.speed);
     }
-    this.fired = true;
   }
 
   /** ★ 命中处理（实体管线碰撞分发）：同阵营/发射穿透忽略；命中 → 销毁

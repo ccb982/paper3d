@@ -133,12 +133,12 @@ export class WorldMode {
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
+    // ---- AI 驱动（敌人自主行为；★ 在实体管线之前：本帧方向本帧生效，移动零滞后） ----
+    aiSystem.updateAll(dt, this.aiCtx);
+
     // ---- 实体管线驱动（攻击由模式层转发，输入/相机坐标系传入） ----
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
-
-    // ---- AI 驱动（敌人自主行为；ctx 注入索敌回调 = 玩家位置） ----
-    aiSystem.updateAll(dt, this.aiCtx);
 
     // ---- ★ 角色钳制（模式层知道地形/地图）：贴地（防"顶飞"：抬升 >0.4 拉回地面+刚体）
     //         + 地图边界；实体与刚体同步 ----

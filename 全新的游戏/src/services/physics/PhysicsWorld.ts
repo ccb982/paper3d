@@ -99,6 +99,12 @@ export class PhysicsWorld {
     this.world.getRigidBody(handle).setTranslation({ x, y, z }, true);
   }
 
+  /** ★ 移除刚体（实体销毁联动：不移除 = 物理世界泄漏膨胀） */
+  removeBody(handle: number): void {
+    const body = this.world.getRigidBody(handle);
+    this.world.removeRigidBody(body);
+  }
+
   /** 读取刚体位置（同步到实体时用） */
   getPosition(handle: number): { x: number; y: number; z: number } {
     return this.world.getRigidBody(handle).translation();

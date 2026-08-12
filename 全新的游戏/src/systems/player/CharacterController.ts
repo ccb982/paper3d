@@ -37,9 +37,6 @@ export class CharacterController {
   moveSpeed: number;
   private currentState: 'idle' | 'walk' | 'attack' = 'idle';
 
-  /** 世界位置（AI/初始化用；★ 实际位置以物理刚体读回为准） */
-  position = { x: 0, y: 0 };
-
   /** ★ 期望移动方向（世界系 x/z，已归一化；0 = 静止）——速度驱动/朝向判定用 */
   moveDir = { x: 0, y: 0 };
 

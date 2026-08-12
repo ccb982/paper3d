@@ -112,8 +112,12 @@ export class EntityManager {
     }
   }
 
-  /** 销毁实体（刚体由 PhysicsWorld 管理，后续补 removeBody） */
+  /** 销毁实体（★ 刚体同步从物理世界移除，防止泄漏） */
   destroy(id: number): void {
+    const e = this.entities.get(id);
+    if (e?.rigidBody) {
+      this.physicsWorld?.removeBody(e.rigidBody.handle);
+    }
     this.entities.delete(id);
   }
 
