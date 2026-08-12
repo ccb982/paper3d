@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import type { Entity, EntityKind } from './Entity';
 import type { EntityManager } from './EntityManager';
-import type { BodyOptions } from '../services/physics/PhysicsWorld';
+import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { FrameState } from '../services/fx/FrameState';
@@ -68,6 +68,10 @@ export abstract class EntityBase {
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
   billboard = true;
+
+  /** ★ 碰撞体积（实例基类属性：形状 + 刚体 y 偏移；null = 无碰撞声明）
+   *   子类覆写（角色=胶囊 / 子弹=球）；物理创建与刚体偏移统一从这里取 */
+  readonly collisionVolume: { shape: ColliderShape; offsetY: number } | null = null;
 
   protected renderer: FxRendererBase | null = null;
 
@@ -125,9 +129,9 @@ export abstract class EntityBase {
     return 0;
   }
 
-  /** ★ 刚体位置相对实体位置的 y 偏移（脚底系 → 刚体中心；如角色胶囊中心在脚底上方） */
+  /** ★ 刚体位置相对实体位置的 y 偏移（脚底系 → 刚体中心）——默认取碰撞体积声明 */
   protected physicsBodyOffsetY(): number {
-    return 0;
+    return this.collisionVolume?.offsetY ?? 0;
   }
   /** 刚体中心偏移（公开：模式层贴地钳制等外部同步用） */
   get bodyOffsetY(): number {

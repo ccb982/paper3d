@@ -26,6 +26,11 @@ export interface BulletOptions extends Omit<EntityBaseOptions, 'physics' | 'kind
 }
 
 export class BulletBase extends EntityBase {
+  /** ★ 子弹碰撞体积（实例基类属性：球体） */
+  readonly collisionVolume: { shape: import('../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
+    shape: { type: 'ball', radius: 0.08 },
+    offsetY: 0,
+  };
   private lifetime: number;
   private fired = false;
 

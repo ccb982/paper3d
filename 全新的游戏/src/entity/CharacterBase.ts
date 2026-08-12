@@ -2,7 +2,7 @@
 // CharacterBase —— 角色基类（EntityBase 子类）
 // ============================================================
 // 集成：CharacterController（相机相对移动/跳跃/朝向）+ 动画/渲染管线
-// 物理：write 模式（位置由控制层驱动 → 刚体）
+// 物理：velocity 模式（速度驱动 + 位置读回，碰撞交给 rapier）
 // 子类：Player（输入驱动）/ Ally / Enemy（AI 驱动）
 
 import * as THREE from 'three';
@@ -22,8 +22,18 @@ export interface CharacterBaseOptions extends EntityBaseOptions {
   facing?: string;
 }
 
+/** ★ 角色默认碰撞体积（胶囊：halfHeight 0.7 + radius 0.35 ≈ 贴片占地；
+ *   总半长 = 0.7+0.35 = 1.05 → offsetY 1.05 使胶囊底部 = 脚底 y=0）
+ *   模块级常量：super() 时字段尚未初始化，构造参数只能引用常量 */
+const DEFAULT_COLLISION_VOLUME = {
+  shape: { type: 'capsule', halfHeight: 0.7, radius: 0.35 } as const,
+  offsetY: 1.05,
+};
+
 export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
+  /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
+  readonly collisionVolume: { shape: import('../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = DEFAULT_COLLISION_VOLUME;
 
   constructor(
     em: EntityManager,
@@ -32,11 +42,10 @@ export abstract class CharacterBase extends EntityBase {
     super(em, {
       kind: opts.kind,
       x: opts.x, y: opts.y, z: opts.z,
-      // ★ 角色碰撞体：胶囊（半高 0.7 + 半径 0.35 ≈ 贴片占地）而不是 0.15 小球；
-      //   刚体 y = 实体 y + 0.7（胶囊底部 = 脚底）
+      // ★ 物理创建用碰撞体积声明（super 前字段未初始化 → 用常量）
       physics: opts.physics ?? {
         type: 'dynamic',
-        options: { shape: { type: 'capsule', halfHeight: 0.7, radius: 0.35 }, linearDamping: 8, canSleep: false },
+        options: { shape: DEFAULT_COLLISION_VOLUME.shape, linearDamping: 8, canSleep: false },
       },
       asset: opts.asset,
       animInitial: opts.facing ? { facing: opts.facing } : undefined,
@@ -46,11 +55,6 @@ export abstract class CharacterBase extends EntityBase {
     this.controller = new CharacterController(this.anim, opts.animMap, opts.moveSpeed ?? 2.5);
     // 玩法坐标（x/z 平面）初始化
     this.controller.position = { x: opts.x, y: opts.z };
-  }
-
-  /** ★ 刚体写入偏移：胶囊中心 = 脚底 + 半长(1.05)（刚体创建/位置读回共用） */
-  protected override physicsBodyOffsetY(): number {
-    return 1.05;
   }
 
   protected override onUpdate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
