@@ -179,6 +179,9 @@ export class WorldMode {
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
 
+    // ★ 小地图每帧更新（玩家中心 + 地形滚动 + 玩家图标朝上）
+    this.minimap.update(pp.x, pp.y);
+
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
     this.aiCtx.time += dt;
@@ -334,7 +337,7 @@ export class WorldMode {
     renderer.render(this.scene, this.camera);
   }
 
-  /** ★ 角色钳制：贴地（防顶飞：抬升超 0.4 拉回，刚体同步）+ 地图边界。
+  /** ★ 角色钳制：贴地（防顶飞 + ★ 防下坠：地图边缘失去地面支撑会无限下落）+ 地图边界。
    *   放模式层：只有它知道地形高度与地图范围（实体不依赖地图） */
   private clampCharacter(e: CharacterBase): void {
     const p = e.position;
@@ -342,7 +345,8 @@ export class WorldMode {
     const b = this.map.getBounds();
     const nx = Math.max(b.min, Math.min(b.max, p.x));
     const nz = Math.max(b.min, Math.min(b.max, p.z));
-    const ny = Math.min(g + 0.4, p.y);
+    // ★ 上下都夹：下坠（p.y < g）拉回地面；顶飞（> g+0.4）压回
+    const ny = Math.max(g, Math.min(g + 0.4, p.y));
     if (nx !== p.x || nz !== p.z || ny !== p.y) {
       p.x = nx; p.y = ny; p.z = nz;
       const rb = e.entity.rigidBody;
