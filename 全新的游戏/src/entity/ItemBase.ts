@@ -59,6 +59,10 @@ export class ItemBase extends EntityBase {
     this.displayName = opts.displayName ?? opts.itemId ?? '物品';
     this.physicsMode = opts.physical ? 'read' : 'none';
     this.attachToScene(scene);
+    // ★ 贴片尺寸对齐碰撞球（直径 0.5；默认 scale 1×1 会与球体严重不符）
+    if (this.renderer) {
+      this.renderer.setScale(0.5, 0.5);
+    }
   }
 
   /** ★ 拾取判定（实体管线碰撞分发）：玩家/友军接触 → 尝试拾取 */

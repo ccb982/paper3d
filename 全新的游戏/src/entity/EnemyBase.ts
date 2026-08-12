@@ -60,7 +60,7 @@ export class EnemyBase extends CharacterBase {
     // 初始朝向（贴片朝 +z；显示帧由相机判定）
     this.setFrameAnimated((opts.facing ?? '前') as '前' | '后');
     // 纹理宽高比缩放（不压扁）
-    this.applyRenderScale(1.5);
+    this.applyRenderScale(1.0); // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）
 
     // ---- AI：配置驱动状态机 + 注册到系统 ----
     if (opts.aiConfig) {

@@ -147,22 +147,6 @@ export class WorldMode {
     // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
     this.crosshair = new Crosshair();
 
-    // ★ 诊断：网格/实体/相机（定位"没有地面"；正常后删除）
-    const gmesh = (this.mapRender as unknown as { mesh: THREE.Mesh }).mesh;
-    gmesh?.geometry.computeBoundingBox();
-    gmesh?.geometry.computeBoundingSphere();
-    console.log('[diag] 网格AABB=',
-      gmesh?.geometry.boundingBox?.min.toArray(),
-      gmesh?.geometry.boundingBox?.max.toArray(),
-      '包围球=', gmesh?.geometry.boundingSphere?.center.toArray(),
-      '半径=', gmesh?.geometry.boundingSphere?.radius,
-      'mesh可见=', gmesh?.visible,
-      'frustumCulled=', gmesh?.frustumCulled,
-      '材质=', gmesh?.material,
-      '顶点数=', gmesh?.geometry.attributes.position.count,
-      '相机=', this.camera.position.toArray(),
-      '网格位置=', gmesh?.position.toArray());
-
     // ---- ★ 瞄准落点调试标记（红点：摄像机 → 准星射线的落点） ----
     this.aimMarker = new THREE.Mesh(
       new THREE.SphereGeometry(0.12, 10, 10),
@@ -185,17 +169,8 @@ export class WorldMode {
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
-  private static diagOnce = false;
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
-
-    // ★ 诊断：第一帧后确认相机/玩家实际位置（定位"没有地面"；正常后删除）
-    if (!WorldMode.diagOnce) {
-      WorldMode.diagOnce = true;
-      console.log('[diag] 运行中: 相机=', this.camera.position.toArray(),
-        '玩家=', this.player.position,
-        '玩家玩法=', [pp.x.toFixed(1), pp.y.toFixed(1)]);
-    }
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
