@@ -17,30 +17,18 @@ export class RasterMap {
   readonly size: number;
   /** 地块高度网格（cell 中心采样，size×size） */
   private heights: Float32Array;
-  /** 装饰噪点（1 = 亮点 cell；确定性随机） */
-  private decor: Uint8Array;
   /** ★ 实体索引：cell key → 实体集合 */
   private cells = new Map<number, Set<EntityBase>>();
   /** 实体当前 cell（移块判定） */
   private cellOf = new Map<EntityBase, number>();
 
-  constructor(map: MapQuery, seed = 12345) {
+  constructor(map: MapQuery) {
     this.size = map.size;
     this.heights = new Float32Array(this.size * this.size);
     for (let z = 0; z < this.size; z++) {
       for (let x = 0; x < this.size; x++) {
         this.heights[z * this.size + x] = map.getHeight(x + 0.5, z + 0.5);
       }
-    }
-    // 确定性噪点（同 seed 同分布——3D 标记与小地图一一对应）
-    this.decor = new Uint8Array(this.size * this.size);
-    let s = seed;
-    const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
-    const count = Math.floor(this.size * this.size * 0.05);
-    for (let i = 0; i < count; i++) {
-      const x = Math.floor(rnd() * this.size);
-      const z = Math.floor(rnd() * this.size);
-      this.decor[z * this.size + x] = 1;
     }
   }
 
@@ -51,13 +39,7 @@ export class RasterMap {
     return this.heights[z * this.size + x];
   }
 
-  isDecor(x: number, z: number): boolean {
-    if (x < 0 || z < 0 || x >= this.size || z >= this.size) return false;
-    return this.decor[z * this.size + x] === 1;
-  }
-
   terrainColorAt(x: number, z: number): [number, number, number] {
-    if (this.isDecor(x, z)) return [255, 220, 90];
     const h = this.heightAt(x, z);
     const t = Math.max(0, Math.min(1, h / 8));
     const r = Math.round(45 + (150 - 45) * t);

@@ -23,7 +23,6 @@ import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { RasterMap } from '../services/map/RasterMap';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
-import { drainInteractions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
@@ -41,20 +40,11 @@ export class WorldMode {
   private mapRender: MapRender;
   private map: MapQuery;
   private crosshair: Crosshair;
-  private lastTapWorld: { x: number; y: number } | null = null;
   /** ★ 小地图（左上角；RasterMap 静态地形 → Minimap 渲染） */
   private minimap: Minimap;
-  /** 噪点 3D 标记（验证小地图算法用） */
-  private noiseMarks: THREE.Mesh[] = [];
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
   private bulletCooldown = 0;
-  /** ★ 准星射线落点调试标记（红点显示瞄准落点） */
-  private aimMarker: THREE.Mesh;
-  /** ★ 准星射线可视化（摄像机 → 落点，青色） */
-  private aimLine: THREE.Line;
-  /** ★ 射击方向可视化（角色枪口 → 落点，橙色） */
-  private shootLine: THREE.Line;
   /** AI 上下文（索敌 = 玩家位置） */
   private aiCtx: BehaviorContext = {
     dt: 0,
@@ -73,7 +63,7 @@ export class WorldMode {
   ) {
     this.map = map;
     // ---- ★ 统一空间层（RasterMap：地形 + 实体索引 + 梯形剔除；架构 3.10） ----
-    const raster = new RasterMap(map, 12345);
+    const raster = new RasterMap(map);
     // ---- 实体管线（管理 + 物理 + 基类实例） ----
     this.entities = new EntityManager(physics, raster);
 
@@ -170,41 +160,6 @@ export class WorldMode {
 
     // ---- ★ 小地图（RasterMap 光栅化静态地形 → Minimap 左上角绘制） ----
     this.minimap = new Minimap(raster);
-
-    // ---- ★ 噪点 3D 标记（与小地图同一 seed/算法 → 一一对应，验证滚动/位置） ----
-    let noiseSeed = 12345;
-    const noiseRnd = () => (noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0) / 4294967296;
-    const noiseCount = Math.floor(raster.size * raster.size * 0.05);
-    const markGeo = new THREE.BoxGeometry(0.25, 0.25, 0.25);
-    const markMat = new THREE.MeshBasicMaterial({ color: 0xffdd55 });
-    for (let i = 0; i < noiseCount; i++) {
-      const x = Math.floor(noiseRnd() * raster.size);
-      const z = Math.floor(noiseRnd() * raster.size);
-      const mark = new THREE.Mesh(markGeo, markMat);
-      mark.position.set(x + 0.5, 0.2, z + 0.5);
-      scene.add(mark);
-      this.noiseMarks.push(mark);
-    }
-
-    // ---- ★ 瞄准落点调试标记（红点：摄像机 → 准星射线的落点） ----
-    this.aimMarker = new THREE.Mesh(
-      new THREE.SphereGeometry(0.12, 10, 10),
-      new THREE.MeshBasicMaterial({ color: 0xff3344, transparent: true, opacity: 0.9 }),
-    );
-    scene.add(this.aimMarker);
-
-    // ---- ★ 瞄准可视化线：准星射线（摄像机→落点，青色）+ 射击方向（枪口→落点，橙色） ----
-    this.aimLine = new THREE.Line(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: 0x44ccff, transparent: true, opacity: 0.55 }),
-    );
-    this.shootLine = new THREE.Line(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.8 }),
-    );
-    this.aimLine.visible = false;
-    this.shootLine.visible = false;
-    scene.add(this.aimLine, this.shootLine);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -231,28 +186,6 @@ export class WorldMode {
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
-    // ---- ★ 瞄准落点调试（红点 + 射线线 + 射击方向线） ----
-    const aim = this.aimRaycast();
-    if (aim) {
-      this.aimMarker.visible = true;
-      this.aimMarker.position.set(aim.x, aim.y, aim.z);
-      // 准星射线：摄像机 → 落点
-      this.setLine(this.aimLine, [
-        this.camera.position.x, this.camera.position.y, this.camera.position.z,
-        aim.x, aim.y, aim.z,
-      ]);
-      // 射击方向：角色枪口 → 落点
-      const p = this.player.position;
-      this.setLine(this.shootLine, [
-        p.x, p.y + 1.1, p.z,
-        aim.x, aim.y, aim.z,
-      ]);
-    } else {
-      this.aimMarker.visible = false;
-      this.aimLine.visible = false;
-      this.shootLine.visible = false;
-    }
-
     // ---- AI 驱动（敌人自主行为；★ 在实体管线之前：本帧方向本帧生效，移动零滞后） ----
     aiSystem.updateAll(dt, this.aiCtx);
 
@@ -271,31 +204,26 @@ export class WorldMode {
     //         纯数据操作，无刚体同步（刚体由 syncPhysics 驱动） ----
     this.clampCharacter(this.player);
     if (this.enemy) this.clampCharacter(this.enemy);
-
-    // ---- 交互消费（★ 以准星为基准：中心射线，与设备解耦） ----
-    const rayNdc = new THREE.Vector2(0, 0);
-    const raycast = new THREE.Raycaster();
-    for (const it of drainInteractions(input)) {
-      if (it.type === 'tap') {
-        raycast.setFromCamera(rayNdc, this.camera);
-        const hit = new THREE.Vector3();
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-        if (raycast.ray.intersectPlane(plane, hit)) {
-          this.lastTapWorld = { x: hit.x, y: hit.z };
-        }
-      }
-    }
   }
 
-  /** ★ 准星射线查询（公共瞄准服务：实体优先 → 物理兜底，见 services/combat/Targeting） */
-  private aimRaycast(): { x: number; y: number; z: number } | null {
+  /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */
+  private cameraRay(): { origin: { x: number; y: number; z: number }; dir: { x: number; y: number; z: number } } {
     this.camera.updateMatrixWorld();
     const rayDir = new THREE.Vector3();
     this.camera.getWorldDirection(rayDir);
     const cam = this.camera.position;
-    const hit = aimRaycast(this.entities, {
+    return {
       origin: { x: cam.x, y: cam.y, z: cam.z },
       dir: { x: rayDir.x, y: rayDir.y, z: rayDir.z },
+    };
+  }
+
+  /** ★ 准星射线查询（公共瞄准服务：实体优先 → 物理兜底，见 services/combat/Targeting） */
+  private aimRaycast(): { x: number; y: number; z: number } | null {
+    const ray = this.cameraRay();
+    const hit = aimRaycast(this.entities, {
+      origin: ray.origin,
+      dir: ray.dir,
       maxDist: 200,
       exclude: this.player,
     });
@@ -308,17 +236,16 @@ export class WorldMode {
   private firePlayerBullet(): void {
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z }; // 枪口
-    // ① 准星射线 → 落点
+    // ① 准星射线 → 落点（无命中 → 远处兜底点）
+    const ray = this.cameraRay();
     const aim = this.aimRaycast();
     let tx: number, ty: number, tz: number;
     if (aim) {
       tx = aim.x; ty = aim.y; tz = aim.z;
     } else {
-      this.camera.updateMatrixWorld();
-      const rayDir = new THREE.Vector3();
-      this.camera.getWorldDirection(rayDir);
-      const cam = this.camera.position;
-      tx = cam.x + rayDir.x * 200; ty = cam.y + rayDir.y * 200; tz = cam.z + rayDir.z * 200;
+      tx = ray.origin.x + ray.dir.x * 200;
+      ty = ray.origin.y + ray.dir.y * 200;
+      tz = ray.origin.z + ray.dir.z * 200;
     }
     // ② 枪口 → 落点（3D 方向）
     const dx = tx - muzzle.x, dy = ty - muzzle.y, dz = tz - muzzle.z;
@@ -334,14 +261,6 @@ export class WorldMode {
       camp: 'player',
       lifetime: 2,
     });
-  }
-
-  /** ★ 更新一条可视化线（6 个浮点 = 2 点 × xyz） */
-  private setLine(line: THREE.Line, pts: number[]): void {
-    const geo = line.geometry as THREE.BufferGeometry;
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    geo.computeBoundingSphere();
-    line.visible = true;
   }
 
   /** 渲染：实体管线遍历画 + 地图 + 场景 */
@@ -360,49 +279,10 @@ export class WorldMode {
     p.y = this.map.getHeight(p.x, p.z);
   }
 
-  get playerPosition(): { x: number; y: number } {
-    return this.player.controllerPosition;
-  }
-
-  get playerState(): string {
-    return this.player.controller.state;
-  }
-
-  get playerFacing(): string {
-    return this.player.anim!.state.facing;
-  }
-
-  get playerFlipX(): boolean {
-    return this.player.anim!.state.flipX;
-  }
-
-  get frameIndex(): number {
-    return this.player.anim!.state.frameIndex;
-  }
-
-  get lastTap(): { x: number; y: number } | null {
-    return this.lastTapWorld;
-  }
-
   dispose(): void {
     this.entities.clear();
     this.mapRender.dispose();
     this.crosshair.dispose();
     this.minimap.dispose();
-    // 噪点标记（共享几何/材质，只移除 mesh）
-    for (const m of this.noiseMarks) {
-      this.scene.remove(m);
-    }
-    this.noiseMarks = [];
-    // ★ 瞄准调试（红点 + 两条线）
-    this.aimMarker.geometry.dispose();
-    (this.aimMarker.material as THREE.Material).dispose();
-    this.scene.remove(this.aimMarker);
-    this.aimLine.geometry.dispose();
-    (this.aimLine.material as THREE.Material).dispose();
-    this.scene.remove(this.aimLine);
-    this.shootLine.geometry.dispose();
-    (this.shootLine.material as THREE.Material).dispose();
-    this.scene.remove(this.shootLine);
   }
 }
