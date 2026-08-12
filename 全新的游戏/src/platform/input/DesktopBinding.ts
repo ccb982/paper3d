@@ -21,6 +21,8 @@ const KEY_MAP: Record<string, { x?: number; y?: number }> = {
 export class DesktopBinding {
   private state: InputActions;
   private keyState = new Map<string, boolean>();
+  /** ★ 左键按住状态（长按攻击用；mouseup 释放） */
+  private leftDown = false;
   private disposers: Array<() => void> = [];
   private lastMouse = { x: 0, y: 0 };
   private hasMouse = false;
@@ -89,6 +91,15 @@ export class DesktopBinding {
       pointerDown = true;
       lastPointer = normPos(e);
       this.state.pointer = { ...lastPointer };
+      // ★ 左键 = 攻击：单次按下 + 按住状态（长按持续发射）
+      if (e.button === 0) {
+        this.state.pressed.attack = true;
+        this.leftDown = true;
+      }
+    };
+    // ★ 左键释放 → 停止按住（长按攻击用）
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button === 0) this.leftDown = false;
     };
     const onPointerMove = (e: MouseEvent) => {
       const p = normPos(e);
@@ -119,6 +130,7 @@ export class DesktopBinding {
       this.state.interactions = [];
       this.state.zoomAxis = 0;
       pointerDown = false;
+      this.leftDown = false;
     };
 
     el.addEventListener('keydown', onKeyDown as EventListener);
@@ -127,6 +139,7 @@ export class DesktopBinding {
     window.addEventListener('mousedown', onPointerDown);
     window.addEventListener('mousemove', onPointerMove);
     window.addEventListener('mouseup', onPointerUp);
+    window.addEventListener('mouseup', onMouseUp);
     window.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('blur', onBlur);
     this.disposers.push(
@@ -137,6 +150,7 @@ export class DesktopBinding {
         window.removeEventListener('mousedown', onPointerDown);
         window.removeEventListener('mousemove', onPointerMove);
         window.removeEventListener('mouseup', onPointerUp);
+        window.removeEventListener('mouseup', onMouseUp);
         window.removeEventListener('wheel', onWheel);
         window.removeEventListener('blur', onBlur);
       },
@@ -154,8 +168,9 @@ export class DesktopBinding {
       if (dir.y) y += dir.y;
     }
     this.state.moveAxis = { x, y };
-    // ★ held 按住状态（长按语义：如按住跳跃 = 落地连跳）
+    // ★ held 按住状态（长按语义：如按住跳跃 = 落地连跳；按住左键/J = 持续发射）
     this.state.held = {
+      attack: this.leftDown || !!this.keyState.get('KeyJ'),
       jump: !!this.keyState.get('Space'),
       dodge: !!this.keyState.get('KeyK'),
       skill: !!this.keyState.get('KeyL'),

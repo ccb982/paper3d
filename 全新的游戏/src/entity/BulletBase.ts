@@ -12,12 +12,13 @@ import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 
 export interface BulletOptions extends Omit<EntityBaseOptions, 'physics' | 'kind'> {
-  /** 发射方向（世界 x/z 平面） */
+  /** 发射方向（3D 单位向量；含竖直分量 dirY = 准星俯仰） */
   dirX: number;
+  dirY: number;
   dirZ: number;
   /** 初速（世界单位/秒） */
   speed: number;
-  /** 阵营（碰撞过滤） */
+  /** 阵营（碰撞过滤：同阵营不伤） */
   camp: 'player' | 'ally' | 'enemy';
   /** 存活时间（秒），超时自动销毁 */
   lifetime?: number;
@@ -57,20 +58,36 @@ export class BulletBase extends EntityBase {
     this.physicsMode = 'read'; // 物理飞行 → 位置读回
     this.attachToScene(scene);
 
-    // 发射（初速）
+    // 贴片配置：中心锚点（贴片中心 = 物理球心）+ 小尺寸 + 纹理映射
+    const pair = asset.getFramePair(0);
+    if (pair && this.renderer) {
+      (this.renderer as FTXQuad).setAnchorBottom(false);
+      (this.renderer as FTXQuad).setFrameMapping(
+        { width: pair.base.image.width, height: pair.base.image.height },
+        { x: 0, y: 0, w: pair.base.image.width, h: pair.base.image.height },
+      );
+      this.renderer.setScale(0.12, 0.12);
+    }
+
+    // 发射（初速，3D 方向：含竖直分量）
     const rb = this.entity.rigidBody;
     if (rb) {
-      const dx = opts.dirX, dz = opts.dirZ;
-      const len = Math.hypot(dx, dz) || 1;
-      em.physics?.setLinearVelocity(rb.handle, (dx / len) * opts.speed, 0, (dz / len) * opts.speed);
+      const len = Math.hypot(opts.dirX, opts.dirY, opts.dirZ) || 1;
+      em.physics?.setLinearVelocity(
+        rb.handle,
+        (opts.dirX / len) * opts.speed,
+        (opts.dirY / len) * opts.speed,
+        (opts.dirZ / len) * opts.speed,
+      );
     }
   }
 
-  /** ★ 命中处理（实体管线碰撞分发）：同阵营/发射穿透忽略；命中 → 销毁
-   *   null = 命中静态世界（地面/墙）→ 同样销毁 */
+  /** ★ 命中处理（实体管线碰撞分发）：同阵营忽略 → 命中销毁（含静态世界）
+   *   ⚠ 伤害结算后续接（当前只验证飞行与碰撞） */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!started) return;
     if (other && other.camp === this.camp) return; // 同阵营不伤（friend 不伤 friend）
+    console.log(`[bullet] 命中 ${other ? other.constructor.name : '静态世界'}，销毁`);
     this.dispose();
   }
 

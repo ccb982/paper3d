@@ -25,6 +25,8 @@ import { drainInteractions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
+import { BulletBase } from '../entity/BulletBase';
+import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 
 export class WorldMode {
   readonly entities: EntityManager;
@@ -35,6 +37,9 @@ export class WorldMode {
   private map: MapQuery;
   private crosshair: Crosshair;
   private lastTapWorld: { x: number; y: number } | null = null;
+  /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
+  private bulletAsset = createSolidBulletAsset();
+  private bulletCooldown = 0;
   /** AI 上下文（索敌 = 玩家位置） */
   private aiCtx: BehaviorContext = {
     dt: 0,
@@ -140,6 +145,13 @@ export class WorldMode {
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
 
+    // ---- ★ 玩家发射（左键：单次按下立即一发；长按 = 间隔持续发射） ----
+    this.bulletCooldown -= dt;
+    if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
+      this.bulletCooldown = 0.15;
+      this.firePlayerBullet();
+    }
+
     // ---- ★ 角色钳制（模式层知道地形/地图）：贴地（防"顶飞"：抬升 >0.4 拉回地面+刚体）
     //         + 地图边界；实体与刚体同步 ----
     this.clampCharacter(this.player);
@@ -159,6 +171,41 @@ export class WorldMode {
         }
       }
     }
+  }
+
+  /** ★ 玩家发射：方向 = 角色枪口 → 准星指向点（TPS 标准做法）
+   *   准星射线与枪口水平面求交 → 水平方向朝该点 */
+  private firePlayerBullet(): void {
+    const p = this.player.position;
+    const muzzleY = p.y + 1.1; // 枪口高度
+    this.camera.updateMatrixWorld();
+    const rayDir = new THREE.Vector3();
+    this.camera.getWorldDirection(rayDir);
+    const cam = this.camera.position;
+    // 准星射线与枪口水平面的交点（向下看才有效）
+    let dx: number, dz: number;
+    if (rayDir.y < -0.001) {
+      const t = (muzzleY - cam.y) / rayDir.y;
+      const hitX = cam.x + rayDir.x * t;
+      const hitZ = cam.z + rayDir.z * t;
+      dx = hitX - p.x;
+      dz = hitZ - p.z;
+    } else {
+      dx = rayDir.x;
+      dz = rayDir.z;
+    }
+    const len = Math.hypot(dx, dz) || 1;
+    new BulletBase(this.entities, this.scene, this.bulletAsset, {
+      x: p.x + (dx / len) * 0.8,
+      y: muzzleY,
+      z: p.z + (dz / len) * 0.8,
+      dirX: dx / len,
+      dirY: 0,
+      dirZ: dz / len,
+      speed: 12,
+      camp: 'player',
+      lifetime: 2,
+    });
   }
 
   /** 渲染：实体管线遍历画 + 地图 + 场景 */
