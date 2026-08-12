@@ -26,7 +26,6 @@ export interface BulletOptions extends Omit<EntityBaseOptions, 'physics' | 'kind
 }
 
 export class BulletBase extends EntityBase {
-  readonly camp: string;
   private lifetime: number;
   private fired = false;
 
@@ -62,6 +61,14 @@ export class BulletBase extends EntityBase {
       em.physics?.setLinearVelocity(rb.handle, (dx / len) * opts.speed, 0, (dz / len) * opts.speed);
     }
     this.fired = true;
+  }
+
+  /** ★ 命中处理（实体管线碰撞分发）：同阵营/发射穿透忽略；命中 → 销毁
+   *   null = 命中静态世界（地面/墙）→ 同样销毁 */
+  override onCollision(other: EntityBase | null, started: boolean): void {
+    if (!started) return;
+    if (other && other.camp === this.camp) return; // 同阵营不伤（friend 不伤 friend）
+    this.dispose();
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {

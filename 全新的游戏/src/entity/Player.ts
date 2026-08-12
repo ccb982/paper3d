@@ -17,6 +17,7 @@ export class Player extends CharacterBase {
     opts: Omit<CharacterBaseOptions, 'kind' | 'asset'>,
   ) {
     super(em, { ...opts, kind: 'player', asset });
+    this.camp = 'player';
     this.attachToScene(scene);
     // bbox 映射（帧数据 → quad；★ 纹理实际尺寸 = bbox 尺寸，与 EnemyBase 一致）
     const source = asset as unknown as { frames: Array<{ bbox: { x: number; y: number; w: number; h: number } }> };

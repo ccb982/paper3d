@@ -26,11 +26,30 @@ export class EntityManager {
   private entities = new Map<number, Entity>();
   /** 基类实例集合（管线驱动：update/renderAll） */
   private bases = new Map<number, EntityBase>();
+  /** ★ 刚体 handle → 实体基类（碰撞事件分发用） */
+  private bodyMap = new Map<number, EntityBase>();
   /** ★ 空间索引（分块遍历：渲染裁剪 / 索敌 / 范围查询；架构 4.1a） */
   private grid = new SpatialGrid<EntityBase>(8);
   private nextId = 1;
 
-  constructor(private physicsWorld: PhysicsWorld | null = null) {}
+  constructor(private physicsWorld: PhysicsWorld | null = null) {
+    // ★ 碰撞系统解耦进实体管线：物理事件 → 按 handle 分发 → 实体 onCollision 钩子
+    physicsWorld?.onCollision((e) => this.dispatchCollision(e));
+  }
+
+  /** ★ 碰撞事件分发（对方无实体 = 静态世界 null） */
+  private dispatchCollision(e: { a: number; b: number; started: boolean }): void {
+    const a = this.bodyMap.get(e.a);
+    const b = this.bodyMap.get(e.b);
+    if (a && b) {
+      a.onCollision(b, e.started);
+      b.onCollision(a, e.started);
+    } else if (a) {
+      a.onCollision(null, e.started);
+    } else if (b) {
+      b.onCollision(null, e.started);
+    }
+  }
 
   /** 物理世界（实体基类同步用） */
   get physics(): PhysicsWorld | null {
@@ -58,12 +77,19 @@ export class EntityManager {
   register(base: EntityBase): void {
     this.bases.set(base.entity.id, base);
     this.grid.insert(base);
+    // ★ 碰撞分发映射（有刚体的实体）
+    if (base.entity.rigidBody) {
+      this.bodyMap.set(base.entity.rigidBody.handle, base);
+    }
   }
 
   /** 注销基类实例（EntityBase.dispose 时自动调用） */
   unregister(base: EntityBase): void {
     this.bases.delete(base.entity.id);
     this.grid.remove(base);
+    if (base.entity.rigidBody) {
+      this.bodyMap.delete(base.entity.rigidBody.handle);
+    }
   }
 
   /** ★ 实体位置集中刷新（EntityBase.update 末尾调用；
@@ -121,5 +147,6 @@ export class EntityManager {
     this.bases.clear();
     this.entities.clear();
     this.grid.clear();
+    this.bodyMap.clear();
   }
 }

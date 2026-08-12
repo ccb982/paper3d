@@ -45,6 +45,7 @@ export class EnemyBase extends CharacterBase {
     private camera?: THREE.Camera,
   ) {
     super(em, { ...opts, kind: 'enemy', asset });
+    this.camp = 'enemy';
     this.assetRef = asset;
     this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);

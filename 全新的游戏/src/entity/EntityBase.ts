@@ -44,6 +44,8 @@ export interface EntityBaseOptions {
 
 export abstract class EntityBase {
   readonly entity: Entity;
+  /** ★ 阵营标签（player/ally/enemy/neutral；碰撞过滤/伤害判定用，架构 4.3） */
+  camp = 'neutral';
   /** ★ 位置（世界 x/y/z；空间索引/查询统一入口） */
   get position(): { x: number; y: number; z: number } {
     return this.entity.position;
@@ -127,6 +129,10 @@ export abstract class EntityBase {
   protected physicsBodyOffsetY(): number {
     return 0;
   }
+  /** 刚体中心偏移（公开：模式层贴地钳制等外部同步用） */
+  get bodyOffsetY(): number {
+    return this.physicsBodyOffsetY();
+  }
 
   private syncPhysics(): void {
     const rb = this.entity.rigidBody;
@@ -166,6 +172,13 @@ export abstract class EntityBase {
   }
 
   // ============ 生命周期 ============
+
+  /** ★ 碰撞回调（实体管线按刚体 handle 分发；覆写 = 命中处理）
+   *   other = 碰撞对方实体；null = 静态世界（地面/墙）
+   *   started = 接触开始（true）/ 结束（false） */
+  onCollision(_other: EntityBase | null, _started: boolean): void {
+    // 默认无处理（角色碰撞由物理响应，子弹/伤害逻辑覆写）
+  }
 
   /** 死亡钩子（子类覆写：掉落/结算） */
   onDeath(): void {

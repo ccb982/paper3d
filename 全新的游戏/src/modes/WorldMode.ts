@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { FtxAsset } from '../vendor/player/FtxAsset';
 import type { Asset } from '../vendor/player';
+import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
@@ -139,11 +140,10 @@ export class WorldMode {
     // ---- AI 驱动（敌人自主行为；ctx 注入索敌回调 = 玩家位置） ----
     aiSystem.updateAll(dt, this.aiCtx);
 
-    // ---- 地图边界钳制（经 MapQuery） ----
-    const p2 = this.player.controllerPosition;
-    const bounds = this.map.getBounds();
-    this.player.controller.position.x = Math.max(bounds.min, Math.min(bounds.max, p2.x));
-    this.player.controller.position.y = Math.max(bounds.min, Math.min(bounds.max, p2.y));
+    // ---- ★ 角色钳制（模式层知道地形/地图）：贴地（防"顶飞"：抬升 >0.4 拉回地面+刚体）
+    //         + 地图边界；实体与刚体同步 ----
+    this.clampCharacter(this.player);
+    if (this.enemy) this.clampCharacter(this.enemy);
 
     // ---- 交互消费（★ 以准星为基准：中心射线，与设备解耦） ----
     const rayNdc = new THREE.Vector2(0, 0);
@@ -165,6 +165,22 @@ export class WorldMode {
   render(renderer: THREE.WebGLRenderer): void {
     this.entities.renderAll(this.camera);
     renderer.render(this.scene, this.camera);
+  }
+
+  /** ★ 角色钳制：贴地（防顶飞：抬升超 0.4 拉回，刚体同步）+ 地图边界。
+   *   放模式层：只有它知道地形高度与地图范围（实体不依赖地图） */
+  private clampCharacter(e: CharacterBase): void {
+    const p = e.position;
+    const g = this.map.getHeight(p.x, p.z);
+    const b = this.map.getBounds();
+    const nx = Math.max(b.min, Math.min(b.max, p.x));
+    const nz = Math.max(b.min, Math.min(b.max, p.z));
+    const ny = Math.min(g + 0.4, p.y);
+    if (nx !== p.x || nz !== p.z || ny !== p.y) {
+      p.x = nx; p.y = ny; p.z = nz;
+      const rb = e.entity.rigidBody;
+      if (rb) this.entities.physics?.setPosition(rb.handle, nx, ny + e.bodyOffsetY, nz);
+    }
   }
 
   get playerPosition(): { x: number; y: number } {

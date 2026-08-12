@@ -58,10 +58,7 @@ async function boot() {
   // ---- 世界模式（实体管线：地面/主角/敌人实体 + 相机 + 地图 + 交互） ----
   const mode = new WorldMode(scene, camera, asset, map, physics, enemyAsset);
 
-  // 碰撞事件（后续阵营过滤/伤害结算）
-  physics.onCollision((e) => {
-    console.log('[phys] 碰撞:', e.a, '<->', e.b, e.started ? '开始' : '结束');
-  });
+  // ★ 碰撞事件已由实体管线接管（EntityManager 按刚体 handle 分发 → 实体 onCollision）
 
   // ---- 主循环 ----
   const clock = new THREE.Clock();
