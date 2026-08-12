@@ -4,7 +4,7 @@
 // 1m cell 网格，同时承载：
 //   静态：地形高度 / 装饰噪点（小地图数据源、射击阻挡后续）
 //   动态：实体索引（insert/move/remove，哈希移块）
-// 查询（替代 SpatialGrid）：
+// 查询（统一空间层）：
 //   querySphere / queryRay / queryFrustum（★ 2D 梯形：相机视锥地面投影，
 //   精确覆盖前方视野，身后/远处不遍历——LOD 的"硬剔除"基础）
 // LOD：梯形内实体按距离分级（距离表由调用方/实体层定，本类只提供梯形范围）
@@ -12,19 +12,6 @@
 import type { EntityBase } from '../../entity/EntityBase';
 import type { MapQuery } from './MapQuery';
 import * as THREE from 'three';
-
-/** 点是否在多边形内（射线法，任意凸/凹多边形） */
-function pointInPolygon(px: number, pz: number, pts: { x: number; z: number }[]): boolean {
-  let inside = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const xi = pts[i].x, zi = pts[i].z;
-    const xj = pts[j].x, zj = pts[j].z;
-    if ((zi > pz) !== (zj > pz) && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
 
 export class RasterMap {
   readonly size: number;
@@ -79,7 +66,7 @@ export class RasterMap {
     return [r, g, b];
   }
 
-  // ============ 实体索引（替代 SpatialGrid） ============
+  // ============ 实体索引 ============
 
   private keyOf(x: number, z: number): number {
     return z * this.size + x;
@@ -191,12 +178,13 @@ export class RasterMap {
     return out;
   }
 
-  /** ★ 2D 梯形查询（相机视锥地面投影，架构 3.10）：
-   *   far 4 角投影到 y=0 → 四边形（梯形）→ 覆盖 AABB 内 cell 做点在多边形测试
-   *   → 只返回前方视野内的实体（身后/远处不遍历）。maxDist 钳制远角。 */
+  /** ★ 视锥矩形查询（架构 3.10）：far 4 角投影到 y=0 → 覆盖矩形 →
+   *   直接遍历矩形内 cell 取实体（★ 不做逐 cell 点测试——矩形近似，
+   *   检测成本与旧 AABB 同级，远低于逐点判定）。maxDist 钳制远角。 */
   queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
     camera.updateMatrixWorld();
-    const pts: { x: number; z: number }[] = [];
+    // far 4 角投影到 y=0 → 覆盖矩形
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     const ndc = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
     const tmp = new THREE.Vector3();
     for (const [nx, ny] of ndc) {
@@ -204,32 +192,19 @@ export class RasterMap {
       const dir = tmp.sub(camera.position);
       if (Math.abs(dir.y) < 1e-6) dir.y = 1e-6;
       const t = -camera.position.y / dir.y;
-      if (t <= 0) {
-        // 射线向上（仰视）→ 钳制到 maxDist（保守，保证多边形闭合）
-        pts.push({
-          x: camera.position.x + dir.normalize().x * maxDist,
-          z: camera.position.z + dir.z * maxDist,
-        });
-      } else if (t > maxDist) {
-        pts.push({
-          x: camera.position.x + dir.x * maxDist,
-          z: camera.position.z + dir.z * maxDist,
-        });
-      } else {
-        pts.push({ x: camera.position.x + dir.x * t, z: camera.position.z + dir.z * t });
-      }
+      // 射线向上（仰视）→ 钳制到 maxDist；超过 maxDist → 截断
+      const clampT = t <= 0 || t > maxDist ? maxDist : t;
+      const px = camera.position.x + dir.x * clampT;
+      const pz = camera.position.z + dir.z * clampT;
+      minX = Math.min(minX, px); maxX = Math.max(maxX, px);
+      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
     }
-    // 覆盖 AABB
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    for (const p of pts) {
-      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z);
-    }
-    // 相机附近（近处地面在四边形内，兜底纳入）
+    // 相机附近（近处地面在矩形内，兜底纳入）
     minX = Math.min(minX, camera.position.x - 1);
     maxX = Math.max(maxX, camera.position.x + 1);
     minZ = Math.min(minZ, camera.position.z - 1);
     maxZ = Math.max(maxZ, camera.position.z + 1);
+    // ★ 直接遍历矩形内 cell 取实体（无点测试，与旧 AABB 同级成本）
     const out: EntityBase[] = [];
     const seen = new Set<EntityBase>();
     const cx0 = Math.max(0, Math.floor(minX));
@@ -238,8 +213,6 @@ export class RasterMap {
     const cz1 = Math.min(this.size - 1, Math.floor(maxZ));
     for (let cz = cz0; cz <= cz1; cz++) {
       for (let cx = cx0; cx <= cx1; cx++) {
-        // ★ 点在四边形内才遍历（梯形精确，不进 AABB 冗余区）
-        if (!pointInPolygon(cx + 0.5, cz + 0.5, pts)) continue;
         const set = this.cells.get(this.keyOf(cx, cz));
         if (!set) continue;
         for (const e of set) {

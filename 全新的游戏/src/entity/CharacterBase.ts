@@ -80,7 +80,7 @@ export abstract class CharacterBase extends EntityBase {
     const p = this.entity.position;
     const me = shapeExtents(vol.shape);
     if (me.hx <= 0 || me.hz <= 0) return;
-    // 分块查询（SpatialGrid）：半径 = 自身半宽 + 最大角色半宽余量（可调参）
+    // 分块查询（RasterMap）：半径 = 自身半宽 + 最大角色半宽余量（可调参）
     const near = this.em.querySphere(p.x, p.z, me.hx + 0.6);
     for (const o of near) {
       if (o === this || !(o instanceof CharacterBase)) continue;
