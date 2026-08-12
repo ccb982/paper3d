@@ -42,18 +42,20 @@ export class ItemBase extends EntityBase {
         ? {
             type: 'dynamic',
             options: {
-              shape: { type: 'ball', radius: opts.pickupRadius ?? 0.25 },
-              linearDamping: 2,
-              gravityScale: 1, // 掉落物受重力落地
+              shape: { type: 'cuboid', hx: 0.22, hy: 0.22, hz: 0.1 }, // ★ 薄片（正反面扁）
+              linearDamping: 4, // ★ 高阻尼：落地即停，不滑远
+              gravityScale: 1,  // 掉落物受重力落地
+              density: 3,       // ★ 重：玩家推不动（不会"没接触就跑开"）
             },
           }
         : undefined,
       asset,
     });
-    // ★ 碰撞体积声明（实体 y = 底部/贴地，球心 = y + 半径；与角色脚底语义一致）
+    // ★ 碰撞体积声明（实体 y = 底部/贴地；2D 贴片正反面都扁：
+    //   正面 0.44 宽 × 0.44 高，厚度 0.2 薄片）
     this.collisionVolume = {
-      shape: { type: 'ball', radius: opts.pickupRadius ?? 0.25 },
-      offsetY: opts.pickupRadius ?? 0.25,
+      shape: { type: 'cuboid', hx: 0.22, hy: 0.22, hz: 0.1 },
+      offsetY: 0.22,
     };
     this.itemId = opts.itemId;
     this.displayName = opts.displayName ?? opts.itemId ?? '物品';

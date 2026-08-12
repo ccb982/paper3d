@@ -54,6 +54,8 @@ export interface BodyOptions {
   sensor?: boolean;
   /** ★ 重力缩放（默认 1；子弹 0 = 直线弹道） */
   gravityScale?: number;
+  /** ★ 碰撞体密度（默认 1；物品调大 → 更重，玩家推不动/不滑远） */
+  density?: number;
   /** ★ 实体身份标记（entity.id，碰撞事件携带；★ handle 会被 rapier 复用，
    *   不能用 handle 对应实体——userData 才是稳定身份） */
   userData?: number;
@@ -111,13 +113,14 @@ export class PhysicsWorld {
       .setGravityScale(opts.gravityScale ?? 1);
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    this.attachCollider(body, opts.shape, opts.sensor ?? false);
+    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density);
     return this.registerBody(body); // ★ 自管 id，不信任 body.handle
   }
 
-  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false): void {
+  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number): void {
     const desc = makeColliderDesc(shape);
     if (sensor) desc.setSensor(true);
+    if (density !== undefined) desc.setDensity(density);
     this.world.createCollider(desc, body);
   }
 

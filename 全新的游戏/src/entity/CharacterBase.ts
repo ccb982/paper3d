@@ -22,13 +22,13 @@ export interface CharacterBaseOptions extends EntityBaseOptions {
   facing?: string;
 }
 
-/** ★ 角色默认碰撞体积（胶囊与贴片视觉对齐：
- *   贴片 scale 1.0 → 宽 1.0 × 高 2.5（纹理宽高比）
- *   胶囊 halfHeight 0.75 + radius 0.5 → 总高 2.5、直径 1.0 → 完全匹配）
+/** ★ 角色默认碰撞体积（长方体，2D 贴片正反面都扁：
+ *   正面（x）宽 0.56 对齐贴片宽度；厚度（z）0.3 薄片；
+ *   高 2.0（贴片 2.5 的 80%，脚底到肩部）
  *   模块级常量：super() 时字段尚未初始化，构造参数只能引用常量 */
 const DEFAULT_COLLISION_VOLUME = {
-  shape: { type: 'capsule', halfHeight: 0.75, radius: 0.5 } as const,
-  offsetY: 1.25,
+  shape: { type: 'cuboid', hx: 0.28, hy: 1.0, hz: 0.15 } as const,
+  offsetY: 1.0,
 };
 
 export abstract class CharacterBase extends EntityBase {
