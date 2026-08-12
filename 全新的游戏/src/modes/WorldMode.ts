@@ -44,6 +44,8 @@ export class WorldMode {
   private lastTapWorld: { x: number; y: number } | null = null;
   /** ★ 小地图（左上角；RasterMap 静态地形 → Minimap 渲染） */
   private minimap: Minimap;
+  /** 噪点 3D 标记（验证小地图算法用） */
+  private noiseMarks: THREE.Mesh[] = [];
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
   private bulletCooldown = 0;
@@ -165,7 +167,23 @@ export class WorldMode {
     this.crosshair = new Crosshair();
 
     // ---- ★ 小地图（RasterMap 光栅化静态地形 → Minimap 左上角绘制） ----
-    this.minimap = new Minimap(new RasterMap(map));
+    const raster = new RasterMap(map, 12345);
+    this.minimap = new Minimap(raster);
+
+    // ---- ★ 噪点 3D 标记（与小地图同一 seed/算法 → 一一对应，验证滚动/位置） ----
+    let noiseSeed = 12345;
+    const noiseRnd = () => (noiseSeed = (noiseSeed * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const noiseCount = Math.floor(raster.size * raster.size * 0.05);
+    const markGeo = new THREE.BoxGeometry(0.25, 0.25, 0.25);
+    const markMat = new THREE.MeshBasicMaterial({ color: 0xffdd55 });
+    for (let i = 0; i < noiseCount; i++) {
+      const x = Math.floor(noiseRnd() * raster.size);
+      const z = Math.floor(noiseRnd() * raster.size);
+      const mark = new THREE.Mesh(markGeo, markMat);
+      mark.position.set(x + 0.5, 0.2, z + 0.5);
+      scene.add(mark);
+      this.noiseMarks.push(mark);
+    }
 
     // ---- ★ 瞄准落点调试标记（红点：摄像机 → 准星射线的落点） ----
     this.aimMarker = new THREE.Mesh(
@@ -370,6 +388,11 @@ export class WorldMode {
     this.mapRender.dispose();
     this.crosshair.dispose();
     this.minimap.dispose();
+    // 噪点标记（共享几何/材质，只移除 mesh）
+    for (const m of this.noiseMarks) {
+      this.scene.remove(m);
+    }
+    this.noiseMarks = [];
     // ★ 瞄准调试（红点 + 两条线）
     this.aimMarker.geometry.dispose();
     (this.aimMarker.material as THREE.Material).dispose();

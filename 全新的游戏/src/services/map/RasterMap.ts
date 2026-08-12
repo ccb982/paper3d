@@ -12,8 +12,10 @@ export class RasterMap {
   readonly size: number;
   /** 地块高度网格（cell 中心采样，size×size） */
   private heights: Float32Array;
+  /** ★ 装饰噪点（1 = 亮点 cell；确定性随机，验证小地图算法用） */
+  private decor: Uint8Array;
 
-  constructor(map: MapQuery) {
+  constructor(map: MapQuery, seed = 12345) {
     this.size = map.size;
     this.heights = new Float32Array(this.size * this.size);
     for (let z = 0; z < this.size; z++) {
@@ -21,6 +23,16 @@ export class RasterMap {
         // 1×1 地块 → cell 中心采样高度
         this.heights[z * this.size + x] = map.getHeight(x + 0.5, z + 0.5);
       }
+    }
+    // ★ 确定性噪点（同 seed 同分布——3D 标记与小地图一一对应）
+    this.decor = new Uint8Array(this.size * this.size);
+    let s = seed;
+    const rnd = () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296;
+    const count = Math.floor(this.size * this.size * 0.05);
+    for (let i = 0; i < count; i++) {
+      const x = Math.floor(rnd() * this.size);
+      const z = Math.floor(rnd() * this.size);
+      this.decor[z * this.size + x] = 1;
     }
   }
 
@@ -30,9 +42,15 @@ export class RasterMap {
     return this.heights[z * this.size + x];
   }
 
-  /** ★ 地形颜色（高度 → 颜色映射；平地绿，越高越亮/褐色）
-   *   后续扩展：阻挡深色、水域蓝色、可通行标记 */
+  /** 该地块是否装饰噪点（3D 标记同步生成用） */
+  isDecor(x: number, z: number): boolean {
+    if (x < 0 || z < 0 || x >= this.size || z >= this.size) return false;
+    return this.decor[z * this.size + x] === 1;
+  }
+
+  /** ★ 地形颜色（高度 → 颜色映射；平地绿，越高越亮/褐；噪点 = 黄色亮点） */
   terrainColorAt(x: number, z: number): [number, number, number] {
+    if (this.isDecor(x, z)) return [255, 220, 90]; // ★ 噪点亮点
     const h = this.heightAt(x, z);
     // 平地基准绿（与 MapRender 一致 0x2d5a27）；高度 → 越亮越偏黄（地形感）
     const t = Math.max(0, Math.min(1, h / 8));
