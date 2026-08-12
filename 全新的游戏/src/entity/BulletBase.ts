@@ -50,6 +50,7 @@ export class BulletBase extends EntityBase {
           canSleep: false,
           gravityScale: 0, // ★ 无重力：直线弹道
           ccd: true,       // ★ 连续碰撞检测：12m/s × 1/60步 ≈ 0.2m > 薄目标 → 防隧穿
+          restitution: 0.8, // ★ 反弹：打地面/墙弹起
         },
       },
       asset,
@@ -83,13 +84,15 @@ export class BulletBase extends EntityBase {
     }
   }
 
-  /** ★ 命中处理（实体管线碰撞分发）：同阵营忽略 → 命中销毁（含静态世界）
-   *   ⚠ 伤害结算后续接（当前只验证飞行与碰撞） */
+  /** ★ 命中处理（实体管线碰撞分发）：
+   *   - 同阵营 → 忽略
+   *   - 命中实体 → 穿透继续飞（伤害结算后续接）
+   *   - 命中地面/墙 → ★ 反弹（restitution 0.8，不销毁）
+   *   - 生命周期结束（超时）→ 销毁 */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!started) return;
     if (other && other.camp === this.camp) return; // 同阵营不伤（friend 不伤 friend）
-    console.log(`[bullet] 命中 ${other ? other.constructor.name : '静态世界'}，销毁`);
-    this.dispose();
+    console.log(other ? `[bullet] 命中 ${other.constructor.name}，穿透` : '[bullet] 命中 地面，反弹');
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {

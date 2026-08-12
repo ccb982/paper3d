@@ -143,27 +143,10 @@ export class WorldMode {
 
     // ---- ★ 小地图（RasterMap 光栅化地形 → Minimap 左上角绘制） ----
     this.minimap = new Minimap(this.raster);
-
-    // ★ 诊断：物理刚体存在性（定位"子弹不碰撞地面"；正常后删除）
-    console.log('[diag] chunk刚体=', this.chunkBodies.size,
-      '实体=', this.entities.count,
-      '物理刚体=', physics.bodyCount);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
-  private static diagErrOnce = false;
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
-    try {
-      this.updateInner(dt, input, attackPressed, look, zoom);
-    } catch (err) {
-      if (!WorldMode.diagErrOnce) {
-        WorldMode.diagErrOnce = true;
-        console.error('[diag] update 异常（每帧触发）:', err);
-      }
-    }
-  }
-
-  private updateInner(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
 
     // ★ 无限地图扩张（玩家跨 chunk → 新 chunk 加载：数据 + 地面刚体 + 视觉网格）

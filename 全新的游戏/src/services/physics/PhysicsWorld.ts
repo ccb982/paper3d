@@ -32,18 +32,6 @@ function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
   }
 }
 
-/** 形状 → 查询用几何体（intersectionWithShape 用） */
-function makeShape(shape: ColliderShape): RAPIER.Shape {
-  switch (shape.type) {
-    case 'ball':
-      return new RAPIER.Ball(shape.radius);
-    case 'cuboid':
-      return new RAPIER.Cuboid(shape.hx, shape.hy, shape.hz);
-    case 'capsule':
-      return new RAPIER.Capsule(shape.halfHeight, shape.radius);
-  }
-}
-
 export interface BodyOptions {
   shape: ColliderShape;
   /** 线性阻尼（越大越"黏"，玩家用高阻尼防滑） */
@@ -61,6 +49,8 @@ export interface BodyOptions {
   userData?: number;
   /** ★ 连续碰撞检测（子弹：高速薄目标防隧穿） */
   ccd?: boolean;
+  /** ★ 恢复系数（反弹：子弹打地面/墙弹起；默认 0 不弹） */
+  restitution?: number;
 }
 
 export interface CollisionEvent {
@@ -95,11 +85,6 @@ export class PhysicsWorld {
    *   或已删除实体的一帧遗留；防御返回默认值即可，不再告警刷屏） */
   private getBody(id: number): RAPIER.RigidBody | null {
     return this.bodyById.get(id) ?? null;
-  }
-
-  /** 刚体总数（诊断） */
-  get bodyCount(): number {
-    return this.bodyById.size;
   }
 
   /** 创建固定刚体（地面/墙/静态障碍） */
@@ -140,14 +125,15 @@ export class PhysicsWorld {
     }
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density);
+    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution);
     return this.registerBody(body);
   }
 
-  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number): void {
+  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number, restitution?: number): void {
     const desc = makeColliderDesc(shape);
     if (sensor) desc.setSensor(true);
     if (density !== undefined) desc.setDensity(density);
+    if (restitution !== undefined) desc.setRestitution(restitution);
     // ★ 碰撞事件（默认 NONE → 事件从不产生；子弹命中/拾取/碰撞分发全部依赖）
     desc.setActiveEvents(ActiveEvents.COLLISION_EVENTS);
     this.world.createCollider(desc, body);
@@ -259,23 +245,6 @@ export class PhysicsWorld {
       exclude = c;
     }
     return hits;
-  }
-
-  /** ★ 移动探测：位置处放置形状，是否与任意碰撞体相交（排除自身刚体）
-   *   返回命中实体的 userData（实体 id）；null = 无碰撞；-1 = 查询异常 */
-  intersects(position: { x: number; y: number; z: number }, shape: ColliderShape, excludeBodyId?: number): number | null {
-    try {
-      const s = makeShape(shape);
-      const rot = new RAPIER.Quaternion(0, 0, 0, 1);
-      const excl = excludeBodyId !== undefined ? (this.getBody(excludeBodyId) ?? undefined) : undefined;
-      const c = this.world.intersectionWithShape(position, rot, s, undefined, undefined, undefined, excl);
-      if (!c) return null;
-      const parent = c.parent();
-      return parent ? (parent.userData as number) : null;
-    } catch (err) {
-      console.error('[physics] intersects 查询异常:', err);
-      return -1;
-    }
   }
 
   /** 碰撞事件监听（阵营过滤在游戏层做） */
