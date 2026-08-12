@@ -44,6 +44,7 @@ export class BulletBase extends EntityBase {
         options: {
           shape: { type: 'ball', radius: opts.radius ?? 0.08 },
           canSleep: false,
+          gravityScale: 0, // ★ 无重力：直线弹道
         },
       },
       asset,

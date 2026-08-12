@@ -55,12 +55,13 @@ export class WorldMode {
     this.entities = new EntityManager(physics);
 
     // 地面实体（固定碰撞体，匹配 64×64 地图；纯数据实体，无行为）
+    // ★ 薄板顶面 = y0：角色脚底落在其上（重力站立支撑面）
     const b = map.getBounds();
     const center = (b.min + b.max) / 2;
     this.entities.create({
       kind: 'ground',
-      x: center, y: 0, z: center,
-      physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: 32, hy: 0.5, hz: 32 } } },
+      x: center, y: -0.05, z: center,
+      physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: 32, hy: 0.05, hz: 32 } } },
     });
 
     // ★ 主角（CharacterBase 实例：物理/动画/渲染全由基类联动）
@@ -119,16 +120,14 @@ export class WorldMode {
     this.aiCtx.time += dt;
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
 
-    // 玩家 y = 地形高度（模式层同步，实体不依赖地图）
-    this.player.entity.position.y = this.map.getHeight(pp.x, pp.y);
-
-    // ---- 相机（聚焦点 = 角色 + 跳跃偏移（按人称增益）；平滑 lerp → 抖动过滤；
-    //      第一人称移动 → 脚步随机晃动） ----
+    // ★ 玩家 y 由物理读回（重力/被顶起真实可见）——模式层不再钉死
+    // 相机高度 = 玩法高度（地形+跳跃），不跟随物理 y 浮动（否则撞人时相机猛跳"错位"）
+    const groundY = this.map.getHeight(pp.x, pp.y);
     this.cameraCtrl.update(dt, look, zoom, {
       x: pp.x,
       y: 0,
       z: pp.y,
-      height: this.player.entity.position.y,
+      height: groundY,
       jump: this.player.jumpHeight,
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;

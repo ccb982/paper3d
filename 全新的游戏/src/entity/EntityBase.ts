@@ -25,8 +25,9 @@ import type { FxRendererBase } from '../services/render/FxRendererBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 
-/** 物理同步模式：write=位置→刚体（玩家/运动学）；read=刚体→位置（敌人/子弹） */
-export type PhysicsMode = 'none' | 'write' | 'read';
+/** 物理同步模式：velocity=速度驱动+位置读回（角色/运动体，碰撞由 rapier 处理）；
+ *  read=纯物理驱动（子弹：发射后自由飞行） */
+export type PhysicsMode = 'none' | 'velocity' | 'read';
 
 export interface EntityBaseOptions {
   kind: EntityKind;
@@ -80,6 +81,10 @@ export abstract class EntityBase {
     this.anim = opts.asset ? new FrameAnimatorBase(opts.asset, opts.animInitial) : null;
     this.state = this.anim ? this.anim.state : null;
     em.register(this);
+    // ★ 刚体初始位置修正：刚体中心 = 实体脚底 + 偏移（如角色胶囊中心在脚底上方）
+    if (this.entity.rigidBody && this.physicsBodyOffsetY() !== 0) {
+      em.physics?.setPosition(this.entity.rigidBody.handle, opts.x, opts.y + this.physicsBodyOffsetY(), opts.z);
+    }
   }
 
   /** 子类实现：创建渲染器（FTXQuad / 特效网格） */
@@ -92,10 +97,14 @@ export abstract class EntityBase {
 
   // ============ 更新骨架 ============
 
+  /** 上一帧位置（碰撞回退用） */
+  private prevX = 0;
+  private prevZ = 0;
+
   /** 每帧驱动（模式层/EntityManager 调用） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
-    this.onUpdate(dt, input, cameraFrame); // ① 子类行为
-    this.syncPhysics();                     // ② 物理同步
+    this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（含速度目标计算）
+    this.syncPhysics();                     // ② 物理同步（velocity→速度写入；read→位置读回）
     this.anim?.update(dt);                  // ③ 动画推进
     this.syncRender();                      // ④ 渲染同步
     this.em.onEntityMoved(this);            // ⑤ 空间索引移块（集中刷新点）
@@ -106,8 +115,16 @@ export abstract class EntityBase {
     // 默认无行为
   }
 
+  /** ★ 期望速度（velocity 模式：syncPhysics 写入刚体；角色子类设置） */
+  moveVelocity = { x: 0, z: 0 };
+
   /** 额外高度偏移（子类覆写：跳跃等） */
   protected heightOffset(): number {
+    return 0;
+  }
+
+  /** ★ 刚体位置相对实体位置的 y 偏移（脚底系 → 刚体中心；如角色胶囊中心在脚底上方） */
+  protected physicsBodyOffsetY(): number {
     return 0;
   }
 
@@ -116,13 +133,16 @@ export abstract class EntityBase {
     const physics = this.em.physics;
     if (!rb || !physics || this.physicsMode === 'none') return;
     const p = this.entity.position;
-    if (this.physicsMode === 'write') {
-      // 位置 → 刚体（玩家/运动学：输入驱动）
-      physics.setPosition(rb.handle, p.x, p.y, p.z);
-    } else if (this.physicsMode === 'read') {
-      // 刚体 → 位置（敌人/子弹：物理驱动）
+    if (this.physicsMode === 'velocity') {
+      // ★ 速度驱动：只覆盖 x/z（保留 y 速度 → 重力下落不被清零）；碰撞交给 rapier
+      physics.setVelocityXZ(rb.handle, this.moveVelocity.x, this.moveVelocity.z);
+      // 位置读回（物理结算结果 → 实体；y 减胶囊中心偏移回脚底系）
       const gp = physics.getPosition(rb.handle);
-      p.x = gp.x; p.y = gp.y; p.z = gp.z;
+      p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
+    } else if (this.physicsMode === 'read') {
+      // 刚体 → 位置（子弹：物理驱动）
+      const gp = physics.getPosition(rb.handle);
+      p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
     }
   }
 

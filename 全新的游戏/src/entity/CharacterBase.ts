@@ -32,25 +32,36 @@ export abstract class CharacterBase extends EntityBase {
     super(em, {
       kind: opts.kind,
       x: opts.x, y: opts.y, z: opts.z,
-      physics: opts.physics ?? { type: 'dynamic', options: { shape: { type: 'ball', radius: 0.15 }, linearDamping: 8, canSleep: false } },
+      // ★ 角色碰撞体：胶囊（半高 0.7 + 半径 0.35 ≈ 贴片占地）而不是 0.15 小球；
+      //   刚体 y = 实体 y + 0.7（胶囊底部 = 脚底）
+      physics: opts.physics ?? {
+        type: 'dynamic',
+        options: { shape: { type: 'capsule', halfHeight: 0.7, radius: 0.35 }, linearDamping: 8, canSleep: false },
+      },
       asset: opts.asset,
       animInitial: opts.facing ? { facing: opts.facing } : undefined,
     });
-    this.physicsMode = 'write';
+    this.physicsMode = 'velocity';
     if (!this.anim) throw new Error('CharacterBase 需要动画资产');
     this.controller = new CharacterController(this.anim, opts.animMap, opts.moveSpeed ?? 2.5);
     // 玩法坐标（x/z 平面）初始化
     this.controller.position = { x: opts.x, y: opts.z };
   }
 
+  /** ★ 刚体写入偏移：胶囊中心 = 脚底 + 半长(1.05)（刚体创建/位置读回共用） */
+  protected override physicsBodyOffsetY(): number {
+    return 1.05;
+  }
+
   protected override onUpdate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
     if (input && cameraFrame) {
       this.controller.update(dt, input, cameraFrame);
     }
-    // 玩法坐标 → 实体世界坐标（x/z 平面；y = 地面高度由模式层设置）
-    const cp = this.controller.position;
-    this.entity.position.x = cp.x;
-    this.entity.position.z = cp.y;
+    // ★ 期望速度 → 物理（碰撞交给 rapier；位置下一帧从刚体读回）
+    const dir = this.controller.moveDir;
+    const speed = this.controller.moveSpeed;
+    this.moveVelocity.x = dir.x * speed;
+    this.moveVelocity.z = dir.y * speed;
   }
 
   protected override heightOffset(): number {
@@ -64,9 +75,9 @@ export abstract class CharacterBase extends EntityBase {
     }
   }
 
-  /** 角色玩法坐标（x/z）——相机/模式层读取 */
+  /** 角色世界位置（物理读回后，x/z）——相机/模式层读取 */
   get controllerPosition(): { x: number; y: number } {
-    return { ...this.controller.position };
+    return { x: this.entity.position.x, y: this.entity.position.z };
   }
 
   /** ★ 当前跳跃高度偏移（相机聚焦点跟随用：跳跃时相机跟着升） */

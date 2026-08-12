@@ -33,11 +33,15 @@ export interface CharacterAnimMap {
 export class CharacterController {
   readonly anim: FrameAnimatorBase;
   private animMap: CharacterAnimMap;
-  private moveSpeed: number;
+  /** 移动速度（世界单位/秒；速度驱动用） */
+  moveSpeed: number;
   private currentState: 'idle' | 'walk' | 'attack' = 'idle';
 
-  /** 世界位置（渲染管线/逻辑层读取） */
+  /** 世界位置（AI/初始化用；★ 实际位置以物理刚体读回为准） */
   position = { x: 0, y: 0 };
+
+  /** ★ 期望移动方向（世界系 x/z，已归一化；0 = 静止）——速度驱动/朝向判定用 */
+  moveDir = { x: 0, y: 0 };
 
   // ---- 跳跃状态（简单抛物线，与移动/物理解耦：只输出高度偏移） ----
   private jumpVel = 0;
@@ -62,12 +66,17 @@ export class CharacterController {
     const axis = normalizeAxis(input.moveAxis);
     const moving = hasMovement(axis);
 
-    // ---- 相机相对移动（世界方向 = right*x + forward*(-y)） ----
+    // ---- 相机相对移动（世界方向 = right*x + forward*(-y)）----
     const mvX = frame.right.x * axis.x + frame.forward.x * (-axis.y);
     const mvZ = frame.right.z * axis.x + frame.forward.z * (-axis.y);
-    if (moving) {
-      this.position.x += mvX * this.moveSpeed * dt;
-      this.position.y += mvZ * this.moveSpeed * dt; // 玩法 y ↔ 世界 z
+    // ★ 期望方向（速度驱动：物理按此设速度，位置由 rapier 结算）
+    const len = Math.hypot(mvX, mvZ);
+    if (len > 0.001) {
+      this.moveDir.x = mvX / len;
+      this.moveDir.y = mvZ / len;
+    } else {
+      this.moveDir.x = 0;
+      this.moveDir.y = 0;
     }
 
     // ---- 朝向判定（相对相机） ----
@@ -119,12 +128,19 @@ export class CharacterController {
   }
 
   /**
-   * ★ AI 定向移动（无输入）：沿方向移动，与玩家走同一套位置逻辑。
+   * ★ AI 定向移动（无输入）：设置期望方向（速度驱动，物理结算位置）。
    * 供敌人/AI 行为调用（玩家走 update 输入驱动）。
    */
   moveToward(dx: number, dz: number, dt: number, speed: number): void {
-    this.position.x += dx * speed * dt;
-    this.position.y += dz * speed * dt; // 玩法 y ↔ 世界 z
+    const len = Math.hypot(dx, dz);
+    if (len > 0.001) {
+      this.moveDir.x = dx / len;
+      this.moveDir.y = dz / len; // 玩法 y ↔ 世界 z
+    } else {
+      this.moveDir.x = 0;
+      this.moveDir.y = 0;
+    }
+    this.moveSpeed = speed;
   }
 
   /** 攻击（单次，播完自动回 idle——由 FrameAnimator 回调驱动） */
