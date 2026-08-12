@@ -10,15 +10,7 @@
 // 玩家图标恒朝上（代表前进方向）。
 
 import { RasterMap } from '../map/RasterMap';
-
-/** 实体点信息（展示层只消费位置+类型，不依赖实体对象） */
-export interface MinimapEntity {
-  x: number;
-  z: number;
-  kind: string;
-  /** 是否移动中（物品用：移动中的物品不显示） */
-  moving?: boolean;
-}
+import type { EntityBase } from '../../entity/EntityBase';
 
 export class Minimap {
   private canvas: HTMLCanvasElement;
@@ -91,8 +83,9 @@ export class Minimap {
     document.body.appendChild(this.canvas);
   }
 
-  /** ★ 每帧更新：探索点亮黑雾 → 实体层重绘 → 三层合成（玩家中心，地图滚动） */
-  update(px: number, pz: number, entities: MinimapEntity[]): void {
+  /** ★ 每帧更新：探索点亮黑雾 → 实体层重绘 → 三层合成（玩家中心，地图滚动）
+   *   实体 = 实体基类实例（直接消费 position + minimapInfo 属性） */
+  update(px: number, pz: number, entities: EntityBase[]): void {
     // ③ 黑雾：玩家周围半径点亮（持久探索）
     this.reveal(px, pz);
 
@@ -101,11 +94,12 @@ export class Minimap {
     const ectx = this.entityLayer.getContext('2d')!;
     ectx.clearRect(0, 0, this.size, this.size);
     for (const e of entities) {
-      const ex = Math.floor(e.x);
-      const ez = Math.floor(e.z);
-      if (e.kind === 'enemy' && !this.visited[ez * this.size + ex]) continue;
-      if (e.kind === 'item' && e.moving) continue;
-      const color = e.kind === 'player' ? '#ffffff' : e.kind === 'enemy' ? '#ff4444' : '#ffdd55';
+      const ex = Math.floor(e.position.x);
+      const ez = Math.floor(e.position.z);
+      const info = e.minimapInfo;
+      if (info.kind === 'enemy' && !this.visited[ez * this.size + ex]) continue;
+      if (info.kind === 'item' && info.moving) continue;
+      const color = info.kind === 'player' ? '#ffffff' : info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
       ectx.fillStyle = color;
       ectx.fillRect(ex - 1, ez - 1, 3, 3);
     }

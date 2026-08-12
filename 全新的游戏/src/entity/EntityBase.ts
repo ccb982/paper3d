@@ -73,6 +73,36 @@ export abstract class EntityBase {
    *   子类覆写/构造赋值（角色=胶囊 / 子弹=球 / 物品=球）；物理创建与刚体偏移统一从这里取 */
   collisionVolume: { shape: ColliderShape; offsetY: number } | null = null;
 
+  /** ★ 小地图展示属性（实体基类提供，Minimap 直接消费；子类可覆写 moving）
+   *   kind = 实体类型（小地图配色）；moving = 移动中（如移动中的物品不显示） */
+  get minimapInfo(): { kind: string; moving: boolean } {
+    return { kind: this.entity.kind, moving: false };
+  }
+
+  // ============ LOD（所有实体共有，统一联动动画/渲染管线） ============
+
+  private _lodLevel = 0;
+  /** 当前 LOD 等级（0 近 / 1 中 / 2 远渐隐 / 3 消失） */
+  get lodLevel(): number {
+    return this._lodLevel;
+  }
+
+  /** ★ 统一 LOD 应用入口：联动动画管线 + 渲染管线 + 子类表现降级。
+   *   分级评估在驱动层（renderAll 查距离表），实体只响应 */
+  setLodLevel(level: number): void {
+    const lv = Math.max(0, Math.min(3, Math.floor(level)));
+    if (lv === this._lodLevel) return;
+    this._lodLevel = lv;
+    this.anim?.setLodLevel(lv);       // 动画管线：时间轴暂停/节流
+    this.renderer?.setLodLevel(lv);   // 渲染管线：LOD/渐隐（渲染器实现）
+    this.onLodChange(lv);             // 子类钩子：表现参数降级
+  }
+
+  /** 子类钩子：LOD 变化时的表现参数降级（如 EnemyBase lod1+ 关扭曲） */
+  protected onLodChange(_level: number): void {
+    // 默认无
+  }
+
   protected renderer: FxRendererBase | null = null;
 
   constructor(

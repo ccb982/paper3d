@@ -127,16 +127,30 @@ export class EnemyBase extends CharacterBase {
       }
     }
 
-    // ★ 每帧应用当前帧的扭曲参数（特效包参数，第一帧已继承到所有帧）
+    // ★ 每帧应用当前帧的扭曲参数（特效包参数，第一帧已继承到所有帧；
+    //   ★ LOD 降级：lod1+ 不应用扭曲——省计算，视觉可接受）
     const idx = this.anim!.state.frameIndex;
     const d = this.assetRef.getFrameRenderData(idx);
     if (d && this.renderer) {
       (this.renderer as FTXQuad).setDistort({
-        enabled: d.distortEnabled,
+        enabled: this.lodLevel === 0 && d.distortEnabled,
         amplitude: d.distortAmplitude,
         frequency: d.distortFrequency,
         speed: d.distortSpeed,
         rotation: d.distortRotation,
+      });
+    }
+  }
+
+  /** ★ LOD 变化：lod1+ 立即关扭曲（不等下一帧渲染） */
+  protected override onLodChange(level: number): void {
+    if (level > 0 && this.renderer) {
+      (this.renderer as FTXQuad).setDistort({
+        enabled: false,
+        amplitude: 0,
+        frequency: 0,
+        speed: 0,
+        rotation: 0,
       });
     }
   }

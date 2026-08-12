@@ -11,7 +11,8 @@ import type { PhysicsWorld, BodyOptions } from '../services/physics/PhysicsWorld
 import type { EntityBase } from './EntityBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
-import { SpatialGrid } from '../services/space/SpatialGrid';
+import type { RasterMap } from '../services/map/RasterMap';
+import { levelForDistance, LOD_MAX_DIST } from '../services/lod';
 
 export interface EntityCreateOptions {
   kind: EntityKind;
@@ -26,13 +27,15 @@ export class EntityManager {
   private entities = new Map<number, Entity>();
   /** 基类实例集合（管线驱动：update/renderAll；★ 按 entity.id 索引，碰撞分发用） */
   private bases = new Map<number, EntityBase>();
-  /** ★ 空间索引（分块遍历：渲染裁剪 / 索敌 / 范围查询；架构 4.1a） */
-  private grid = new SpatialGrid<EntityBase>(8);
+  /** ★ 统一空间层（RasterMap：实体索引 + 梯形剔除 + 地形数据；架构 3.10） */
+  private raster: RasterMap;
   private nextId = 1;
 
-  constructor(private physicsWorld: PhysicsWorld | null = null) {
+  constructor(private physicsWorld: PhysicsWorld | null = null, raster?: RasterMap) {
     // ★ 碰撞系统解耦进实体管线：物理事件 → 按 handle 分发 → 实体 onCollision 钩子
     physicsWorld?.onCollision((e) => this.dispatchCollision(e));
+    if (!raster) throw new Error('EntityManager 需要 RasterMap（统一空间层）');
+    this.raster = raster;
   }
 
   /** ★ 碰撞事件分发（按 userData=entity.id 查实体；★ 不能用 handle——
@@ -78,19 +81,19 @@ export class EntityManager {
   /** 注册基类实例（EntityBase 构造时自动调用） */
   register(base: EntityBase): void {
     this.bases.set(base.entity.id, base);
-    this.grid.insert(base);
+    this.raster.insert(base);
   }
 
   /** 注销基类实例（EntityBase.dispose 时自动调用） */
   unregister(base: EntityBase): void {
     this.bases.delete(base.entity.id);
-    this.grid.remove(base);
+    this.raster.remove(base);
   }
 
   /** ★ 实体位置集中刷新（EntityBase.update 末尾调用；
-   *   空间索引移块，hash 比较，静止实体零成本） */
+   *   空间层移块，hash 比较，静止实体零成本） */
   onEntityMoved(base: EntityBase): void {
-    this.grid.move(base);
+    this.raster.move(base);
   }
 
   /** ★ 每帧驱动所有基类实体（统一管线入口：行为→物理→动画→渲染同步） */
@@ -100,10 +103,16 @@ export class EntityManager {
     }
   }
 
-  /** ★ 渲染阶段：只遍历视野覆盖块内的实体（分块裁剪，架构 4.1a） */
+  /** ★ 渲染阶段：2D 梯形（相机视锥地面投影）内实体 → 距离分级 LOD →
+   *   lod0-2 渲染（lod2 渐隐）、lod3 消失不渲染（架构 3.10） */
   renderAll(camera: Parameters<EntityBase['render']>[0]): void {
-    for (const base of this.grid.queryVisible(camera as Parameters<EntityBase['render']>[0])) {
-      base.render(camera);
+    const cam = camera.position;
+    for (const base of this.raster.queryFrustum(camera as Parameters<EntityBase['render']>[0], LOD_MAX_DIST)) {
+      const dx = base.position.x - cam.x;
+      const dz = base.position.z - cam.z;
+      const lv = levelForDistance(Math.hypot(dx, dz));
+      base.setLodLevel(lv);
+      if (lv < 3) base.render(camera);
     }
   }
 
@@ -133,12 +142,12 @@ export class EntityManager {
 
   /** ★ 空间查询：半径内实体（AI 索敌/子弹/技能/拾取） */
   querySphere(x: number, z: number, r: number): EntityBase[] {
-    return this.grid.querySphere(x, z, r);
+    return this.raster.querySphere(x, z, r);
   }
 
-  /** ★ 射线路径查询：只返回射线经过的块内的实体（瞄准检测候选集） */
+  /** ★ 射线路径查询：只返回射线经过的 cell 内的实体（瞄准检测候选集） */
   queryRay(origin: { x: number; z: number }, dir: { x: number; z: number }, maxDist: number): EntityBase[] {
-    return this.grid.queryRay(origin, dir, maxDist);
+    return this.raster.queryRay(origin, dir, maxDist);
   }
 
   get count(): number {
@@ -150,6 +159,6 @@ export class EntityManager {
     for (const base of this.bases.values()) base.dispose();
     this.bases.clear();
     this.entities.clear();
-    this.grid.clear();
+    this.raster.clear();
   }
 }

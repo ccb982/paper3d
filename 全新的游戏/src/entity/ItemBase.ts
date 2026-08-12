@@ -71,6 +71,17 @@ export class ItemBase extends EntityBase {
     return this.collisionVolume?.offsetY ?? 0.22;
   }
 
+  /** ★ 小地图：物品只显示静止的（物理速度 > 阈值 = 移动中，不显示） */
+  override get minimapInfo(): { kind: string; moving: boolean } {
+    let moving = false;
+    const rb = this.entity.rigidBody;
+    if (rb && this.em.physics) {
+      const v = this.em.physics.getLinearVelocity(rb.handle);
+      moving = Math.hypot(v.x, v.z) > 0.1;
+    }
+    return { kind: this.entity.kind, moving };
+  }
+
   /** ★ 拾取判定（实体管线碰撞分发）：玩家/友军接触 → 尝试拾取 */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!started || !other) return;

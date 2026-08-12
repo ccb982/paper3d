@@ -34,6 +34,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   }
   uniform float uTime;
   uniform float uDistortEnabled;
+  uniform float uFadeAlpha;
   uniform float uDistortAmplitude;
   uniform float uDistortFrequency;
   uniform float uDistortSpeed;
@@ -86,7 +87,7 @@ const FRAGMENT_SHADER = /* glsl */ `
     float finalH = fract(base.r + dH);
     float finalS = clamp(base.g + dS, 0.0, 1.0);
     float finalL = clamp(base.b + dL, 0.0, 1.0);
-    gl_FragColor = vec4(hsl2rgb(finalH, finalS, finalL), base.a);
+    gl_FragColor = vec4(hsl2rgb(finalH, finalS, finalL), base.a * uFadeAlpha);
   }
 `;
 
@@ -132,6 +133,7 @@ export class FTXQuad extends FxRendererBase {
         uBbox: { value: this._bbox },
         uTime: { value: 0 },
         uDistortEnabled: { value: 0 },
+        uFadeAlpha: { value: 1 },
         uDistortAmplitude: { value: 0.06 },
         uDistortFrequency: { value: 5.0 },
         uDistortSpeed: { value: 1.2 },
@@ -187,6 +189,17 @@ export class FTXQuad extends FxRendererBase {
     u.uDistortFrequency.value = opts.frequency;
     u.uDistortSpeed.value = opts.speed;
     u.uDistortRotation.value = opts.rotation;
+  }
+
+  /** ★ 渐隐透明度（0~1；LOD 远距离 → 半透明"看不清"） */
+  setFadeAlpha(a: number): void {
+    this.material.uniforms.uFadeAlpha.value = Math.max(0, Math.min(1, a));
+  }
+
+  /** ★ LOD 响应（基类节流 + 渐隐映射：lod2 → 半透明，lod3 → 全透明） */
+  override setLodLevel(level: number): void {
+    super.setLodLevel(level);
+    this.setFadeAlpha(level >= 3 ? 0 : level === 2 ? 0.45 : 1);
   }
 
   /** ★ 非 billboard 固定朝向：绕 Y 轴旋转（0=朝 +z，π=朝 -z） */

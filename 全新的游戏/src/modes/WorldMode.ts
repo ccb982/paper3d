@@ -72,8 +72,10 @@ export class WorldMode {
     enemyAsset?: Asset,
   ) {
     this.map = map;
+    // ---- ★ 统一空间层（RasterMap：地形 + 实体索引 + 梯形剔除；架构 3.10） ----
+    const raster = new RasterMap(map, 12345);
     // ---- 实体管线（管理 + 物理 + 基类实例） ----
-    this.entities = new EntityManager(physics);
+    this.entities = new EntityManager(physics, raster);
 
     // 地面实体（固定碰撞体，匹配 64×64 地图；纯数据实体，无行为）
     // ★ 薄板顶面 = y0：物品/子弹落在地面上（物理支撑面）
@@ -167,7 +169,6 @@ export class WorldMode {
     this.crosshair = new Crosshair();
 
     // ---- ★ 小地图（RasterMap 光栅化静态地形 → Minimap 左上角绘制） ----
-    const raster = new RasterMap(map, 12345);
     this.minimap = new Minimap(raster);
 
     // ---- ★ 噪点 3D 标记（与小地图同一 seed/算法 → 一一对应，验证滚动/位置） ----
@@ -210,17 +211,8 @@ export class WorldMode {
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
 
-    // ★ 小地图每帧更新（三层：地面/实体/黑雾；实体点从管线同步）
-    //   物品 moving = 物理速度 > 阈值（移动中的物品不显示）
-    const miniEntities = this.entities.allBases().map((b) => {
-      let moving: boolean | undefined;
-      if (b.entity.kind === 'item' && b.entity.rigidBody && this.entities.physics) {
-        const v = this.entities.physics.getLinearVelocity(b.entity.rigidBody.handle);
-        moving = Math.hypot(v.x, v.z) > 0.1;
-      }
-      return { x: b.position.x, z: b.position.z, kind: b.entity.kind, moving };
-    });
-    this.minimap.update(pp.x, pp.y, miniEntities);
+    // ★ 小地图每帧更新（三层：地面/实体/黑雾；实体基类直接提供展示属性）
+    this.minimap.update(pp.x, pp.y, this.entities.allBases());
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
