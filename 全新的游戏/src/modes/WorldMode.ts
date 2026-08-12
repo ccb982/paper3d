@@ -166,8 +166,8 @@ export class WorldMode {
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
 
-    // ★ 小地图每帧更新（三层：地面/实体/黑雾；实体基类直接提供展示属性）
-    this.minimap.update(pp.x, pp.y, this.entities.allBases());
+    // ★ 小地图每帧更新（三层：地面/实体/黑雾；玩家居中 + 箭头=摄像机朝向）
+    this.minimap.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases());
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;

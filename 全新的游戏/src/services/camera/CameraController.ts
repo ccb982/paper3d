@@ -178,6 +178,11 @@ export class CameraController {
     };
   }
 
+  /** ★ 相机世界朝向角（atan2(dx,dz)，+z=0；小地图箭头等用） */
+  get worldYaw(): number {
+    return this.yaw + Math.PI;
+  }
+
   /** 重置视角（模式切换/新场景时调用） */
   reset(yaw = 0, pitch = 0.35): void {
     this.targetYaw = yaw;

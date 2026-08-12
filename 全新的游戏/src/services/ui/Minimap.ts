@@ -11,6 +11,7 @@
 
 import { RasterMap } from '../map/RasterMap';
 import type { EntityBase } from '../../entity/EntityBase';
+import { LOD_MAX_DIST } from '../lod';
 
 export class Minimap {
   private canvas: HTMLCanvasElement;
@@ -29,10 +30,12 @@ export class Minimap {
   /** 可见半径（米）：玩家周围点亮黑雾 */
   private viewRadius: number;
 
-  constructor(raster: RasterMap, displaySize = 128, windowHalf = 16, viewRadius = 10) {
+  constructor(raster: RasterMap, displaySize = 160, windowHalf = 80, viewRadius = LOD_MAX_DIST) {
     this.size = raster.size;
     this.displaySize = displaySize;
-    this.windowHalf = Math.min(windowHalf, this.size / 2);
+    // ★ 窗口 ±80 米（160px 显示 160m → 1m/px，与 RasterMap 1 地块=1 像素对应；
+    //   窗口远超开雾范围（LOD_MAX_DIST 60m）→ 窗口内可见黑雾边界）
+    this.windowHalf = windowHalf;
     this.viewRadius = viewRadius;
     this.visited = new Uint8Array(this.size * this.size);
 
@@ -83,9 +86,10 @@ export class Minimap {
     document.body.appendChild(this.canvas);
   }
 
-  /** ★ 每帧更新：探索点亮黑雾 → 实体层重绘 → 三层合成（玩家中心，地图滚动）
-   *   实体 = 实体基类实例（直接消费 position + minimapInfo 属性） */
-  update(px: number, pz: number, entities: EntityBase[]): void {
+  /** ★ 每帧更新：探索点亮黑雾 → 实体层重绘 → 三层合成。
+   *   跟随式：玩家恒居中，地图相对滚动（目标偏移绘制，窗口可超出地图 = 黑）。
+   *   playerYaw = 玩家世界朝向角（atan2(dx,dz)，+z=0；箭头方向） */
+  update(px: number, pz: number, playerYaw: number, entities: EntityBase[]): void {
     // ③ 黑雾：玩家周围半径点亮（持久探索）
     this.reveal(px, pz);
 
@@ -104,32 +108,47 @@ export class Minimap {
       ectx.fillRect(ex - 1, ez - 1, 3, 3);
     }
 
-    // 合成（玩家中心窗口 + 地形滚动）
+    // 合成：玩家恒居中（目标偏移），窗口 = 玩家 ±windowHalf
     const ctx = this.ctx;
     const win = this.windowHalf * 2;
-    const sx = Math.max(0, Math.min(this.size - win, px - this.windowHalf));
-    const sz = Math.max(0, Math.min(this.size - win, pz - this.windowHalf));
-    const pxOff = px - sx;
-    const pzOff = pz - sz;
+    const cx = this.displaySize / 2;
+    const cy = this.displaySize / 2;
+    // 期望源矩形（可出界）→ 与地图求交 → 目标偏移绘制
+    const srcX = px - this.windowHalf;
+    const srcZ = pz - this.windowHalf;
+    const sX0 = Math.max(0, srcX);
+    const sX1 = Math.min(this.size, srcX + win);
+    const sZ0 = Math.max(0, srcZ);
+    const sZ1 = Math.min(this.size, srcZ + win);
+    const dX0 = cx - this.windowHalf + (sX0 - srcX);
+    const dZ0 = cy - this.windowHalf + (sZ0 - srcZ);
+    const w = Math.max(0, sX1 - sX0);
+    const h = Math.max(0, sZ1 - sZ0);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, this.displaySize, this.displaySize);
-    ctx.drawImage(this.terrain, sx, sz, win, win, 0, 0, this.displaySize, this.displaySize);
-    ctx.drawImage(this.entityLayer, sx, sz, win, win, 0, 0, this.displaySize, this.displaySize);
-    ctx.drawImage(this.fog, sx, sz, win, win, 0, 0, this.displaySize, this.displaySize);
+    if (w > 0 && h > 0) {
+      ctx.drawImage(this.terrain, sX0, sZ0, w, h, dX0, dZ0, w, h);
+      ctx.drawImage(this.entityLayer, sX0, sZ0, w, h, dX0, dZ0, w, h);
+      ctx.drawImage(this.fog, sX0, sZ0, w, h, dX0, dZ0, w, h);
+    }
 
-    // ★ 玩家图标：中心，恒朝上（三角箭头）
-    const cx = (pxOff / win) * this.displaySize;
-    const cy = (pzOff / win) * this.displaySize;
+    // ★ 玩家箭头：居中，方向 = 角色朝向（世界角 θ → canvas 角 φ = π - θ）
+    const phi = Math.PI - playerYaw;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(phi);
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#111';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(cx, cy - 5);
-    ctx.lineTo(cx - 4, cy + 4);
-    ctx.lineTo(cx + 4, cy + 4);
+    ctx.moveTo(0, -6);
+    ctx.lineTo(-4.5, 5);
+    ctx.lineTo(0, 2.5);
+    ctx.lineTo(4.5, 5);
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+    ctx.restore();
   }
 
   /** ★ 探索点亮：玩家周围 viewRadius 内的地块标记已见 */
