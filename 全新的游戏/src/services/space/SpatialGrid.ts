@@ -20,7 +20,7 @@ export class SpatialGrid<T extends SpatialPosition> {
   /** 实体当前块（移块判定） */
   private cellOf = new Map<T, number>();
 
-  constructor(private blockSize = 8) {}
+  constructor(private blockSize = 8, private maxQueryRange = 128) {}
 
   /** 块 key（负数安全：偏移编码） */
   private keyOf(cx: number, cz: number): number {
@@ -119,23 +119,24 @@ export class SpatialGrid<T extends SpatialPosition> {
   }
 
   /** ★ 视野查询：视锥 8 角点投影到 y=0 平面 → AABB → 覆盖块集合
-   *   保守（投影比视锥更大），不误剔除 */
+   *   保守（投影比视锥更大），不误剔除
+   *   ★ 必须先 updateMatrixWorld：renderAll 在 renderer.render 之前调用，
+   *     矩阵未更新则 unproject 用上一帧姿态 → 边缘实体闪没 */
   queryVisible(camera: THREE.Camera): T[] {
+    camera.updateMatrixWorld();
     const tmp = new THREE.Vector3();
     const corners: THREE.Vector3[] = [];
     const ndc = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
     for (const [nx, ny] of ndc) {
       // far 平面角点（世界）
       tmp.set(nx, ny, 1).unproject(camera);
-      // 相机原点 → far 角点射线与 y=0 交点（视野内的地面覆盖）
-      const dir = tmp.clone().sub(camera.position);
-      if (Math.abs(dir.y) < 1e-6) {
-        // 视线平行地面（极端）→ 用远距离兜底
-        dir.y = 1e-6;
-      }
+      const dir = tmp.sub(camera.position);
+      if (Math.abs(dir.y) < 1e-6) dir.y = 1e-6; // 视线平行地面（极端）兜底
       const t = -camera.position.y / dir.y;
       if (t <= 0) {
-        corners.push(tmp.clone());
+        // 射线向上（相机下方不可见，仰视/平视的上角）：钳制到最大查询范围，
+        // 防止天上点把 AABB 拉到失控（覆盖失控 = 裁剪失效）
+        corners.push(camera.position.clone().addScaledVector(dir.normalize(), this.maxQueryRange));
       } else {
         corners.push(camera.position.clone().addScaledVector(dir, t));
       }
