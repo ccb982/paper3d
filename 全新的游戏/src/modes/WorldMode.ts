@@ -17,10 +17,8 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
-import { MapQuery } from '../services/map/MapQuery';
-import { MapRender } from '../services/map/MapRender';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
-import { RasterMap } from '../services/map/RasterMap';
+import { RasterMap, CHUNK_SIZE, chunkKeyOf } from '../services/map/RasterMap';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -37,14 +35,21 @@ export class WorldMode {
   readonly player: Player;
   enemy: EnemyBase | null = null;
   private cameraCtrl: CameraController;
-  private mapRender: MapRender;
-  private map: MapQuery;
+  /** ★ 统一空间层（无限 chunk 地图：地形 + 实体索引 + 梯形剔除；架构 3.8/3.10） */
+  private raster: RasterMap;
   private crosshair: Crosshair;
-  /** ★ 小地图（左上角；RasterMap 静态地形 → Minimap 渲染） */
+  /** ★ 小地图（左上角；RasterMap 地形 → Minimap 渲染） */
   private minimap: Minimap;
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
   private bulletCooldown = 0;
+  /** chunk 视觉网格（chunkKey → Mesh；天内只增不删，天结束统一回收） */
+  private chunkMeshes = new Map<number, THREE.Mesh>();
+  /** chunk 地面刚体（chunkKey → 已建标记；防重复） */
+  private chunkBodies = new Set<number>();
+  /** chunk 共享网格/材质（占位平地；★ 旋转到 XZ 平面——PlaneGeometry 默认 XY 竖立） */
+  private static chunkGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE).rotateX(-Math.PI / 2);
+  private static chunkMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.9, metalness: 0 });
   /** AI 上下文（索敌 = 玩家位置） */
   private aiCtx: BehaviorContext = {
     dt: 0,
@@ -57,42 +62,23 @@ export class WorldMode {
     private scene: THREE.Scene,
     private camera: THREE.PerspectiveCamera,
     asset: FtxAsset,
-    map: MapQuery,
     physics: PhysicsWorld,
     enemyAsset?: Asset,
   ) {
-    this.map = map;
-    // ---- ★ 统一空间层（RasterMap：地形 + 实体索引 + 梯形剔除；架构 3.10） ----
-    const raster = new RasterMap(map);
+    // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张；架构 3.8） ----
+    this.raster = new RasterMap();
     // ---- 实体管线（管理 + 物理 + 基类实例） ----
-    this.entities = new EntityManager(physics, raster);
+    this.entities = new EntityManager(physics, this.raster);
 
-    // 地面实体（固定碰撞体，匹配 64×64 地图；纯数据实体，无行为）
-    // ★ 薄板顶面 = y0：物品/子弹落在地面上（物理支撑面）
-    const b = map.getBounds();
-    const center = (b.min + b.max) / 2;
-    this.entities.create({
-      kind: 'ground',
-      x: center, y: -0.05, z: center,
-      physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: 32, hy: 0.05, hz: 32 } } },
-    });
-    // ★ 地图边界物理墙（物品/子弹出界防护——物理自然挡住，无需代码钳制）
-    const W = 1, H = 8, half = (b.max - b.min) / 2;
-    const mkWall = (x: number, z: number, hx: number, hz: number) => {
-      this.entities.create({
-        kind: 'ground',
-        x, y: H / 2, z,
-        physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx, hy: H / 2, hz } } },
-      });
-    };
-    mkWall(b.min - W, center, W, half + W);           // 西
-    mkWall(b.max + W, center, W, half + W);           // 东
-    mkWall(center, b.min - W, half + W, W);           // 北
-    mkWall(center, b.max + W, half + W, W);           // 南
+    // 玩家出生 = 中心 chunk 中心（(30,30)，3×3 初始世界 [-60,120)² 正中央）
+    const spawn = { x: CHUNK_SIZE / 2, z: CHUNK_SIZE / 2 };
+
+    // ---- ★ 初始 3×3 chunk 的地面刚体 + 视觉网格（后续 chunk 由 updateChunks 扩张） ----
+    this.syncChunks(spawn.x, spawn.z);
 
     // ★ 主角（CharacterBase 实例：物理/动画/渲染全由基类联动）
     this.player = new Player(this.entities, scene, asset, {
-      x: center, y: 0, z: center,
+      x: spawn.x, y: 0, z: spawn.z,
       animMap: {
         states: {
           idle: { 前: ['前0', '前1'], 后: ['后0', '后1', '后2'] },
@@ -105,11 +91,8 @@ export class WorldMode {
       facing: '后',
     });
 
-    // ---- 地图视觉（3D 地形网格，当前平地占位） ----
-    this.mapRender = new MapRender(scene, map);
-
     // ---- ★ 测试物品（程序图标圆点；走近拾取验证，后续接配置表/背包） ----
-    // 生成位置 = 地面高度（实体 y = 底部贴地；球心自动 = y + 半径）
+    // 生成位置 = 地面高度（实体 y = 底部贴地）
     const itemIcons = [
       createSolidBulletAsset(64, 0.05, 0.85, 0.6), // 绿
       createSolidBulletAsset(64, 0.12, 0.9, 0.55), // 黄
@@ -117,9 +100,9 @@ export class WorldMode {
     ];
     for (let i = 0; i < itemIcons.length; i++) {
       const item = new ItemBase(this.entities, scene, itemIcons[i], {
-        x: center + 6 + i * 2.5,
-        y: map.getHeight(center + 6 + i * 2.5, center + 6),
-        z: center + 6,
+        x: spawn.x + 6 + i * 2.5,
+        y: this.raster.heightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
+        z: spawn.z + 6,
         itemId: `test_item_${i + 1}`,
         displayName: `测试物品${i + 1}`,
         physical: true,
@@ -133,9 +116,9 @@ export class WorldMode {
     // ---- ★ 测试敌人（普瑞赛斯：特效包 + AI 配置驱动） ----
     if (enemyAsset) {
       this.enemy = new EnemyBase(this.entities, scene, enemyAsset, {
-        x: center + 12,
+        x: spawn.x + 12,
         y: 0,
-        z: center + 8,
+        z: spawn.z + 8,
         animMap: {
           states: {
             idle: { 前: ['前'], 后: ['后'] },
@@ -158,13 +141,33 @@ export class WorldMode {
     // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
     this.crosshair = new Crosshair();
 
-    // ---- ★ 小地图（RasterMap 光栅化静态地形 → Minimap 左上角绘制） ----
-    this.minimap = new Minimap(raster);
+    // ---- ★ 小地图（RasterMap 光栅化地形 → Minimap 左上角绘制） ----
+    this.minimap = new Minimap(this.raster);
+
+    // ★ 诊断：物理刚体存在性（定位"子弹不碰撞地面"；正常后删除）
+    console.log('[diag] chunk刚体=', this.chunkBodies.size,
+      '实体=', this.entities.count,
+      '物理刚体=', physics.bodyCount);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
+  private static diagErrOnce = false;
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
+    try {
+      this.updateInner(dt, input, attackPressed, look, zoom);
+    } catch (err) {
+      if (!WorldMode.diagErrOnce) {
+        WorldMode.diagErrOnce = true;
+        console.error('[diag] update 异常（每帧触发）:', err);
+      }
+    }
+  }
+
+  private updateInner(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
+
+    // ★ 无限地图扩张（玩家跨 chunk → 新 chunk 加载：数据 + 地面刚体 + 视觉网格）
+    this.syncChunks(pp.x, pp.y);
 
     // ★ 小地图每帧更新（三层：地面/实体/黑雾；玩家居中 + 箭头=摄像机朝向）
     this.minimap.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases());
@@ -174,9 +177,9 @@ export class WorldMode {
     this.aiCtx.time += dt;
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
 
-    // ★ 玩家 y 由物理读回（重力/被顶起真实可见）——模式层不再钉死
+    // ★ 玩家 y 由地形高度（无限地图：raster 无界采样）——模式层钉
     // 相机高度 = 玩法高度（地形+跳跃），不跟随物理 y 浮动（否则撞人时相机猛跳"错位"）
-    const groundY = this.map.getHeight(pp.x, pp.y);
+    const groundY = this.raster.heightAt(pp.x, pp.y);
     this.cameraCtrl.update(dt, look, zoom, {
       x: pp.x,
       y: 0,
@@ -236,13 +239,13 @@ export class WorldMode {
   private firePlayerBullet(): void {
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z }; // 枪口
-    // ① 准星射线 → 落点（无命中 → 远处兜底点）
-    const ray = this.cameraRay();
+    // ① 准星射线 → 落点（aimRaycast 内部已算相机射线，无命中 → 远处兜底）
     const aim = this.aimRaycast();
     let tx: number, ty: number, tz: number;
     if (aim) {
       tx = aim.x; ty = aim.y; tz = aim.z;
     } else {
+      const ray = this.cameraRay();
       tx = ray.origin.x + ray.dir.x * 200;
       ty = ray.origin.y + ray.dir.y * 200;
       tz = ray.origin.z + ray.dir.z * 200;
@@ -269,20 +272,60 @@ export class WorldMode {
     renderer.render(this.scene, this.camera);
   }
 
-  /** ★ 角色位置控制（kinematic）：y = 地形高度 + xz 地图边界。
-   *   纯位置数据（刚体由 EntityBase.syncPhysics 驱动），无任何物理修正 */
+  /** ★ 无限地图 chunk 同步：数据（RasterMap）+ 地面刚体 + 视觉网格。
+   *   天内只增不删；天结束（dispose/clearAll）统一回收 */
+  private syncChunks(px: number, pz: number): void {
+    const added = this.raster.updateChunks(px, pz);
+    for (const { cx, cz } of added) {
+      const key = chunkKeyOf(cx, cz);
+      if (!this.chunkBodies.has(key)) {
+        this.chunkBodies.add(key);
+        // 地面刚体（60×60 薄板，物理支撑面）
+        this.entities.create({
+          kind: 'ground',
+          x: cx * CHUNK_SIZE + CHUNK_SIZE / 2,
+          y: -0.05,
+          z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+          physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: CHUNK_SIZE / 2, hy: 0.05, hz: CHUNK_SIZE / 2 } } },
+        });
+      }
+      if (!this.chunkMeshes.has(key)) {
+        // 视觉网格（占位平地，共享几何/材质）
+        const mesh = new THREE.Mesh(WorldMode.chunkGeo, WorldMode.chunkMat);
+        mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+        mesh.receiveShadow = true;
+        this.scene.add(mesh);
+        this.chunkMeshes.set(key, mesh);
+      }
+    }
+  }
+
+  /** ★ 天结束统一回收（世界重建：raster 重置 3×3 + chunk 网格/刚体清理） */
+  resetDay(): void {
+    this.raster.clearAll();
+    for (const m of this.chunkMeshes.values()) {
+      this.scene.remove(m);
+    }
+    this.chunkMeshes.clear();
+    this.chunkBodies.clear();
+    this.syncChunks(this.player.position.x, this.player.position.z);
+  }
+
+  /** ★ 角色位置控制（kinematic）：y = 地形高度；★ 世界无限，无 xz 边界 */
   private clampCharacter(e: CharacterBase): void {
     const p = e.position;
-    const b = this.map.getBounds();
-    p.x = Math.max(b.min, Math.min(b.max, p.x));
-    p.z = Math.max(b.min, Math.min(b.max, p.z));
-    p.y = this.map.getHeight(p.x, p.z);
+    p.y = this.raster.heightAt(p.x, p.z);
   }
 
   dispose(): void {
     this.entities.clear();
-    this.mapRender.dispose();
     this.crosshair.dispose();
     this.minimap.dispose();
+    // chunk 视觉网格（天内统一回收）
+    for (const m of this.chunkMeshes.values()) {
+      this.scene.remove(m);
+    }
+    this.chunkMeshes.clear();
+    this.chunkBodies.clear();
   }
 }

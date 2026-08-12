@@ -28,10 +28,10 @@ export interface CameraFrame {
 export class CameraController {
   /** 目标角度（鼠标控制） */
   private targetYaw = 0;
-  private targetPitch = 0.35;
+  private targetPitch = 0.12;
   /** 实际角度（阻尼插值） */
   private yaw = 0;
-  private pitch = 0.35;
+  private pitch = 0.12;
   /** ★ 第一人称跳跃增益（跳跃时相机上抬更明显；第三人称 = 1 正常跟随） */
   jumpGainFirstPerson = 2.5;
   /** ★ 平滑聚焦点（标准 TPS：相机围绕 target 旋转 + 视线过 target；
@@ -184,7 +184,7 @@ export class CameraController {
   }
 
   /** 重置视角（模式切换/新场景时调用） */
-  reset(yaw = 0, pitch = 0.35): void {
+  reset(yaw = 0, pitch = 0.12): void {
     this.targetYaw = yaw;
     this.targetPitch = pitch;
     this.yaw = yaw;

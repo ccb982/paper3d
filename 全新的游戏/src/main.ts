@@ -4,8 +4,6 @@ import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset } from './vendor/player';
 import { WorldMode } from './modes/WorldMode';
 import { DesktopBinding } from './platform/input/DesktopBinding';
-import { generateFlatMap } from './services/map/MapGenerator';
-import { MapQuery } from './services/map/MapQuery';
 import { PhysicsWorld } from './services/physics/PhysicsWorld';
 
 // ============================================================
@@ -14,11 +12,13 @@ import { PhysicsWorld } from './services/physics/PhysicsWorld';
 // ============================================================
 
 async function boot() {
+  console.time('[boot] 总启动');
   const adapter = new WebAdapter();
   const canvas = adapter.createCanvas();
   document.body.appendChild(canvas);
 
   // ★ 全屏画布（3D 场景，相机 aspect 自适应）
+  console.time('[boot] renderer/场景');
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(adapter.info.dpr);
@@ -36,36 +36,43 @@ async function boot() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
   });
+  console.timeEnd('[boot] renderer/场景');
 
   // 加载主角纹理包（gzip 自动解压；素材随构建复制进 dist/characters）
+  console.time('[boot] 加载主角');
   const asset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
   console.log('[boot] 主角已加载:', asset.frameNames().join(', '));
+  console.timeEnd('[boot] 加载主角');
 
   // ★ 加载测试敌人（普瑞赛斯：特效包，2 帧前/后 + 扭曲参数）
+  console.time('[boot] 加载敌人');
   const enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
   console.log('[boot] 敌人已加载:', enemyAsset.frameNames().join(', '), '帧');
+  console.timeEnd('[boot] 加载敌人');
 
   // 输入绑定（桌面，双端解耦；点击画布 → 指针锁定/隐藏光标，可 360° 转视角）
   const binding = new DesktopBinding(window, canvas);
 
-  // ---- 地图（占位平地，64×64；等地形算法/地面素材就位后扩展） ----
-  const mapData = generateFlatMap(Math.floor(Date.now() / 1000) % 100000, 64);
-  const map = new MapQuery(mapData);
-
   // ---- 物理世界（唯一碰 rapier 的封装） ----
+  console.time('[boot] WorldMode 构造');
   const physics = new PhysicsWorld();
 
-  // ---- 世界模式（实体管线：地面/主角/敌人实体 + 相机 + 地图 + 交互） ----
-  const mode = new WorldMode(scene, camera, asset, map, physics, enemyAsset);
+  // ---- 世界模式（实体管线：主角/敌人/物品实体 + 无限 chunk 地图 + 相机 + 交互） ----
+  const mode = new WorldMode(scene, camera, asset, physics, enemyAsset);
+  console.timeEnd('[boot] WorldMode 构造');
+  console.timeEnd('[boot] 总启动');
 
   // ★ 碰撞事件已由实体管线接管（EntityManager 按 userData=实体 id 分发 → 实体 onCollision）
 
   // ---- 主循环 ----
   const clock = new THREE.Clock();
   let acc = 0;
+  let frameCount = 0;
+  const frameTimes: number[] = [];
 
   function animate() {
     requestAnimationFrame(animate);
+    const t0 = performance.now();
     const dt = Math.min(clock.getDelta(), 0.1);
 
     // 输入 → 控制（解耦：绑定填语义，游戏消费语义）
@@ -87,6 +94,15 @@ async function boot() {
     if (steps >= 5) acc = 0;
 
     mode.render(renderer);
+
+    // 首 10 帧耗时统计（定位"黑屏卡死"）
+    frameCount++;
+    if (frameCount <= 10) {
+      frameTimes.push(performance.now() - t0);
+      if (frameCount === 10) {
+        console.log('[diag] 首 10 帧耗时(ms):', frameTimes.map((t) => t.toFixed(1)).join(', '));
+      }
+    }
   }
   animate();
 

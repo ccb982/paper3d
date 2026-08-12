@@ -105,15 +105,23 @@ export class EntityManager {
 
   /** ★ 渲染阶段：2D 梯形（相机视锥地面投影）内实体 → 距离分级 LOD →
    *   lod0-2 渲染（lod2 渐隐）、lod3 消失不渲染（架构 3.10）。
-   *   实体不持有 LOD 状态——只接收距离（applyViewDistance），表现即时应用 */
+   *   ★ 子弹排除在裁剪/LOD 之外：生命周期短（2s）+ 数量少 → 全量直接渲染
+   *   （不做梯形剔除/距离衰减，避免高速小物体被裁剪漏画） */
   renderAll(camera: Parameters<EntityBase['render']>[0]): void {
     const cam = camera.position;
     for (const base of this.raster.queryFrustum(camera as Parameters<EntityBase['render']>[0], LOD_MAX_DIST)) {
+      if (base.entity.kind === 'bullet') continue; // 子弹走全量渲染
       const dx = base.position.x - cam.x;
       const dz = base.position.z - cam.z;
       const d = Math.hypot(dx, dz);
       base.applyViewDistance(d);
       if (levelForDistance(d) < 3) base.render(camera);
+    }
+    // ★ 子弹：全量渲染（不裁剪、不 LOD 衰减）
+    for (const base of this.bases.values()) {
+      if (base.entity.kind !== 'bullet') continue;
+      base.applyViewDistance(0);
+      base.render(camera);
     }
   }
 

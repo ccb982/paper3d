@@ -49,6 +49,7 @@ export class BulletBase extends EntityBase {
           shape: { type: 'ball', radius: opts.radius ?? 0.08 },
           canSleep: false,
           gravityScale: 0, // ★ 无重力：直线弹道
+          ccd: true,       // ★ 连续碰撞检测：12m/s × 1/60步 ≈ 0.2m > 薄目标 → 防隧穿
         },
       },
       asset,
@@ -66,7 +67,7 @@ export class BulletBase extends EntityBase {
         { width: pair.base.image.width, height: pair.base.image.height },
         { x: 0, y: 0, w: pair.base.image.width, h: pair.base.image.height },
       );
-      this.renderer.setScale(0.12, 0.12);
+      this.renderer.setScale(0.2, 0.2);
     }
 
     // 发射（初速，3D 方向：含竖直分量）

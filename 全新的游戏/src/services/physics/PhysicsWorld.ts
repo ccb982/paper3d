@@ -5,7 +5,7 @@
 // 提供：刚体创建（按形状）、位置驱动（玩家/运动学）、固定步进、
 // 碰撞事件转发（contact / sensor）、球体查询（爆炸/范围）。
 
-import RAPIER from '@dimforge/rapier3d';
+import RAPIER, { ActiveEvents } from '@dimforge/rapier3d';
 
 /** ⚠ 关键经验（踩坑记录）：
  *   rapier 0.14.0 的 createRigidBody 返回值是坏的（wasm 绑定错读）——
@@ -59,6 +59,8 @@ export interface BodyOptions {
   /** ★ 实体身份标记（entity.id，碰撞事件携带；★ handle 会被 rapier 复用，
    *   不能用 handle 对应实体——userData 才是稳定身份） */
   userData?: number;
+  /** ★ 连续碰撞检测（子弹：高速薄目标防隧穿） */
+  ccd?: boolean;
 }
 
 export interface CollisionEvent {
@@ -95,6 +97,11 @@ export class PhysicsWorld {
     return this.bodyById.get(id) ?? null;
   }
 
+  /** 刚体总数（诊断） */
+  get bodyCount(): number {
+    return this.bodyById.size;
+  }
+
   /** 创建固定刚体（地面/墙/静态障碍） */
   addFixed(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0): number {
     const desc = RAPIER.RigidBodyDesc.fixed().setTranslation(position.x, position.y, position.z);
@@ -127,6 +134,10 @@ export class PhysicsWorld {
       .setLinearDamping(opts.linearDamping ?? 0)
       .setCanSleep(opts.canSleep ?? true)
       .setGravityScale(opts.gravityScale ?? 1);
+    if (opts.ccd) {
+      // ★ 连续碰撞检测（子弹高速薄目标防隧穿）
+      desc.setCcdEnabled(true);
+    }
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
     this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density);
@@ -137,6 +148,8 @@ export class PhysicsWorld {
     const desc = makeColliderDesc(shape);
     if (sensor) desc.setSensor(true);
     if (density !== undefined) desc.setDensity(density);
+    // ★ 碰撞事件（默认 NONE → 事件从不产生；子弹命中/拾取/碰撞分发全部依赖）
+    desc.setActiveEvents(ActiveEvents.COLLISION_EVENTS);
     this.world.createCollider(desc, body);
   }
 

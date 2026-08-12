@@ -82,11 +82,17 @@ export class ItemBase extends EntityBase {
     return { kind: this.entity.kind, moving };
   }
 
-  /** ★ 拾取判定（实体管线碰撞分发）：玩家/友军接触 → 尝试拾取 */
+  /** ★ 拾取判定（实体管线碰撞分发）：★ 只玩家角色接触才拾取
+   *   （kind 判定而非 camp——玩家子弹 camp 也是 'player'，误判成拾取） */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!started || !other) return;
-    if (other.camp !== 'player' && other.camp !== 'ally') return;
+    if (other.entity.kind !== 'player') return;
     if (this.onPickup(this, other)) this.dispose();
+  }
+
+  /** ★ 坠落保护：无限地图中掉出已加载区（无地面）→ 无限下落 → NaN 卡死；深度超限销毁 */
+  protected override onUpdate(dt: number): void {
+    if (this.entity.position.y < -20) this.dispose();
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {
