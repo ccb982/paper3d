@@ -24,11 +24,11 @@ import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
-import { BulletBase } from '../entity/BulletBase';
 import { ItemBase } from '../entity/ItemBase';
 import type { EntityBase } from '../entity/EntityBase';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { aimRaycast } from '../services/combat/Targeting';
+import { BulletManager } from '../services/combat/BulletManager';
 
 export class WorldMode {
   readonly entities: EntityManager;
@@ -42,6 +42,8 @@ export class WorldMode {
   private minimap: Minimap;
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
+  /** ★ 子弹池（预创建 100 颗反复使用；超时回池，不销毁重建） */
+  private bullets: BulletManager;
   private bulletCooldown = 0;
   /** chunk 视觉网格（chunkKey → Mesh；天内只增不删，天结束统一回收） */
   private chunkMeshes = new Map<number, THREE.Mesh>();
@@ -143,6 +145,9 @@ export class WorldMode {
 
     // ---- ★ 小地图（RasterMap 光栅化地形 → Minimap 左上角绘制） ----
     this.minimap = new Minimap(this.raster);
+
+    // ---- ★ 子弹池（100 颗常驻复用） ----
+    this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -236,7 +241,7 @@ export class WorldMode {
     // ② 枪口 → 落点（3D 方向）
     const dx = tx - muzzle.x, dy = ty - muzzle.y, dz = tz - muzzle.z;
     const len = Math.hypot(dx, dy, dz) || 1;
-    new BulletBase(this.entities, this.scene, this.bulletAsset, {
+    this.bullets.spawn({
       x: muzzle.x + (dx / len) * 0.8,
       y: muzzle.y + (dy / len) * 0.8,
       z: muzzle.z + (dz / len) * 0.8,
@@ -304,6 +309,7 @@ export class WorldMode {
     this.entities.clear();
     this.crosshair.dispose();
     this.minimap.dispose();
+    this.bullets.dispose();
     // chunk 视觉网格（天内统一回收）
     for (const m of this.chunkMeshes.values()) {
       this.scene.remove(m);
