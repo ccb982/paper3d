@@ -27,6 +27,7 @@ import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
 import { BulletBase } from '../entity/BulletBase';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
+import { aimRaycast } from '../services/combat/Targeting';
 
 export class WorldMode {
   readonly entities: EntityManager;
@@ -220,66 +221,19 @@ export class WorldMode {
     }
   }
 
-  /** ★ 准星射线查询（摄像机沿准星方向 → 落点；排除玩家自身；null = 无命中）
-   *   ① 实体优先：射线 vs 每个实体碰撞体（球近似）→ 命中敌人必中（辅助瞄准）
-   *   ② 物理兜底：rapier castRay（地面/墙落点） */
+  /** ★ 准星射线查询（公共瞄准服务：实体优先 → 物理兜底，见 services/combat/Targeting） */
   private aimRaycast(): { x: number; y: number; z: number } | null {
     this.camera.updateMatrixWorld();
     const rayDir = new THREE.Vector3();
     this.camera.getWorldDirection(rayDir);
     const cam = this.camera.position;
-    const origin = { x: cam.x, y: cam.y, z: cam.z };
-    const dir = { x: rayDir.x, y: rayDir.y, z: rayDir.z };
-
-    // ① 实体检测（★ 射线路径分块遍历：只测射线经过的块内的实体 → 3D 射线-碰撞体测试）
-    let best: { x: number; y: number; z: number } | null = null;
-    let bestT = Infinity;
-    const candidates = this.entities.queryRay({ x: cam.x, z: cam.z }, { x: rayDir.x, z: rayDir.z }, 200);
-    for (const b of candidates) {
-      if (b === this.player) continue;            // 排除自己
-      if (b.entity.kind === 'bullet') continue;   // 排除子弹（飞行中不应阻挡瞄准）
-      const cv = b.collisionVolume;
-      if (!cv) continue;
-      // 球近似：中心 = 实体位置 + offsetY，半径 = 半长（胶囊）+ 球半径
-      const center = { x: b.position.x, y: b.position.y + cv.offsetY, z: b.position.z };
-      const radius = cv.offsetY + (cv.shape.type === 'ball' ? cv.shape.radius : 0.35);
-      const t = WorldMode.raySphereHit(origin, dir, center, radius);
-      if (t !== null && t > 0.1 && t < bestT) {
-        bestT = t;
-        best = {
-          x: origin.x + dir.x * t,
-          y: origin.y + dir.y * t,
-          z: origin.z + dir.z * t,
-        };
-      }
-    }
-    if (best) return best;
-
-    // ② 物理射线兜底（地面/墙）
-    const rb = this.player.entity.rigidBody;
-    const hit = this.entities.physics?.castRay(origin, dir, 200, rb?.handle);
+    const hit = aimRaycast(this.entities, {
+      origin: { x: cam.x, y: cam.y, z: cam.z },
+      dir: { x: rayDir.x, y: rayDir.y, z: rayDir.z },
+      maxDist: 200,
+      exclude: this.player,
+    });
     return hit ? hit.point : null;
-  }
-
-  /** ★ 射线 vs 球（二次方程）：返回 t（沿射线距离）；null = 不交 */
-  private static raySphereHit(
-    o: { x: number; y: number; z: number },
-    d: { x: number; y: number; z: number },
-    c: { x: number; y: number; z: number },
-    r: number,
-  ): number | null {
-    const ox = o.x - c.x, oy = o.y - c.y, oz = o.z - c.z;
-    const a = d.x * d.x + d.y * d.y + d.z * d.z;
-    const b = 2 * (ox * d.x + oy * d.y + oz * d.z);
-    const cc = ox * ox + oy * oy + oz * oz - r * r;
-    const disc = b * b - 4 * a * cc;
-    if (disc < 0) return null;
-    const sqrtD = Math.sqrt(disc);
-    const t1 = (-b - sqrtD) / (2 * a);
-    const t2 = (-b + sqrtD) / (2 * a);
-    if (t1 >= 0) return t1;
-    if (t2 >= 0) return t2;
-    return null;
   }
 
   /** ★ 玩家发射（TPS 标准）：
