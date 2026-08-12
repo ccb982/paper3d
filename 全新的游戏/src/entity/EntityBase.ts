@@ -70,8 +70,8 @@ export abstract class EntityBase {
   billboard = true;
 
   /** ★ 碰撞体积（实例基类属性：形状 + 刚体 y 偏移；null = 无碰撞声明）
-   *   子类覆写（角色=胶囊 / 子弹=球）；物理创建与刚体偏移统一从这里取 */
-  readonly collisionVolume: { shape: ColliderShape; offsetY: number } | null = null;
+   *   子类覆写/构造赋值（角色=胶囊 / 子弹=球 / 物品=球）；物理创建与刚体偏移统一从这里取 */
+  collisionVolume: { shape: ColliderShape; offsetY: number } | null = null;
 
   protected renderer: FxRendererBase | null = null;
 
@@ -144,11 +144,18 @@ export abstract class EntityBase {
       physics.setVelocityXZ(rb.handle, this.moveVelocity.x, this.moveVelocity.z);
       // 位置读回（物理结算结果 → 实体；y 减胶囊中心偏移回脚底系）
       const gp = physics.getPosition(rb.handle);
-      p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
+      if (Number.isFinite(gp.x) && Number.isFinite(gp.z)) {
+        p.x = gp.x; p.z = gp.z;
+      }
+      if (Number.isFinite(gp.y)) {
+        p.y = gp.y - this.physicsBodyOffsetY();
+      }
     } else if (this.physicsMode === 'read') {
-      // 刚体 → 位置（子弹：物理驱动）
+      // 刚体 → 位置（子弹/物品：物理驱动）
       const gp = physics.getPosition(rb.handle);
-      p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
+      if (Number.isFinite(gp.x) && Number.isFinite(gp.y) && Number.isFinite(gp.z)) {
+        p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
+      }
     }
   }
 

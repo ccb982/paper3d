@@ -74,13 +74,17 @@ async function boot() {
     // 世界模式（实体管线驱动 + 相机 + 交互；look/zoom 鼠标输入）
     mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook(), binding.consumeZoom());
 
-    // ---- 物理固定步长（角色 velocity 驱动 / 子弹 read，见 EntityBase.syncPhysics） ----
+    // ---- 物理固定步长（角色 velocity 驱动 / 子弹 read，见 EntityBase.syncPhysics）
+    //      ★ 防死亡螺旋：物理慢于帧率时最多补 5 步，追不上丢弃（否则 acc 无限累积 → 卡死） ----
     acc += dt;
     const FIXED = 1 / 60;
-    while (acc >= FIXED) {
+    let steps = 0;
+    while (acc >= FIXED && steps < 5) {
       physics.step();
       acc -= FIXED;
+      steps++;
     }
+    if (steps >= 5) acc = 0;
 
     mode.render(renderer);
   }

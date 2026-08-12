@@ -18,6 +18,7 @@ export class MapRender {
       color: 0x2d5a27,
       roughness: 0.9,
       metalness: 0,
+      side: THREE.DoubleSide, // ★ 地形不参与背面剔除（防法线方向问题导致不可见）
     });
 
     this.mesh = this.buildTerrainMesh(map);
@@ -35,13 +36,18 @@ export class MapRender {
     const pos = geometry.attributes.position as THREE.BufferAttribute;
 
     for (let i = 0; i < pos.count; i++) {
-      // 旋转后：本地 x → 世界 x；-本地 y → 世界 z（-32..32 → 0..64）
+      // ★ 顶点平移：本地 [-32..32] → 世界 [0..64]（与逻辑坐标/物理地面一致）
       const wx = pos.getX(i) + size / 2;
       const wz = -pos.getZ(i) + size / 2;
+      pos.setX(i, wx);
+      pos.setZ(i, wz);
       // ★ 世界 y = 地形高度（双线性采样 heightmap）
       pos.setY(i, map.getHeight(wx, wz));
     }
     geometry.computeVertexNormals();
+    // ★ 顶点已平移（中心 → 32,32）→ 必须重算包围球，否则视锥剔除误剔网格
+    geometry.computeBoundingSphere();
+    geometry.computeBoundingBox();
 
     // UV 平铺（1 世界单位 = 1 纹理单元，未来 ftx 地面纹理按此平铺）
     const uv = geometry.attributes.uv as THREE.BufferAttribute;
@@ -55,6 +61,7 @@ export class MapRender {
 
     const mesh = new THREE.Mesh(geometry, this.material);
     mesh.receiveShadow = true;
+    mesh.frustumCulled = false; // ★ 地形永不剔除（大地物，包围球剔除对地形不可靠）
     return mesh;
   }
 

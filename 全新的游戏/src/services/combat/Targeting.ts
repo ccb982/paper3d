@@ -49,9 +49,14 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
     if (!filter(b)) continue;
     const cv = b.collisionVolume;
     if (!cv) continue;
-    // 球近似：中心 = 实体位置 + offsetY；半径 = 半长（胶囊 offsetY）+ 球半径
+    // 球近似：中心 = 实体位置 + offsetY；半径按碰撞体类型估
     const center = { x: b.position.x, y: b.position.y + cv.offsetY, z: b.position.z };
-    const radius = cv.offsetY + (cv.shape.type === 'ball' ? cv.shape.radius : 0.35);
+    let radius: number;
+    switch (cv.shape.type) {
+      case 'ball': radius = cv.shape.radius * 2; break;
+      case 'capsule': radius = cv.offsetY + cv.shape.radius; break;
+      case 'cuboid': radius = Math.hypot(cv.shape.hx, cv.shape.hy, cv.shape.hz); break;
+    }
     const t = raySphereHit(o, d, center, radius);
     if (t !== null && t > 0.1 && t < bestT) {
       bestT = t;
@@ -64,6 +69,16 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
     }
   }
   if (bestPoint) {
+    // ★ 遮挡校验：物理射线确认目标之前无遮挡（墙后目标不算命中）
+    const rb = opts.exclude?.entity.rigidBody;
+    const wallHit = em.physics?.castRay(o, d, bestT + 0.1, rb?.handle);
+    if (wallHit) {
+      const dWall = Math.hypot(wallHit.point.x - o.x, wallHit.point.y - o.y, wallHit.point.z - o.z);
+      if (dWall < bestT) {
+        // 墙/其他实体挡在目标前 → 落点 = 遮挡物
+        return { point: wallHit.point, target: null, distance: dWall };
+      }
+    }
     return { point: bestPoint, target: bestTarget, distance: bestT };
   }
 

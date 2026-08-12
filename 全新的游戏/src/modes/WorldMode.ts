@@ -26,6 +26,8 @@ import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
 import { BulletBase } from '../entity/BulletBase';
+import { ItemBase } from '../entity/ItemBase';
+import type { EntityBase } from '../entity/EntityBase';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { aimRaycast } from '../services/combat/Targeting';
 
@@ -95,6 +97,28 @@ export class WorldMode {
     // ---- 地图视觉（3D 地形网格，当前平地占位） ----
     this.mapRender = new MapRender(scene, map);
 
+    // ---- ★ 测试物品（程序图标圆点；走近拾取验证，后续接配置表/背包） ----
+    // 生成位置 = 地面高度（实体 y = 底部贴地；球心自动 = y + 半径）
+    const itemIcons = [
+      createSolidBulletAsset(64, 0.05, 0.85, 0.6), // 绿
+      createSolidBulletAsset(64, 0.12, 0.9, 0.55), // 黄
+      createSolidBulletAsset(64, 0.85, 0.8, 0.5),  // 紫
+    ];
+    for (let i = 0; i < itemIcons.length; i++) {
+      const item = new ItemBase(this.entities, scene, itemIcons[i], {
+        x: center + 6 + i * 2.5,
+        y: map.getHeight(center + 6 + i * 2.5, center + 6),
+        z: center + 6,
+        itemId: `test_item_${i + 1}`,
+        displayName: `测试物品${i + 1}`,
+        physical: true,
+      });
+      item.onPickup = (it, picker) => {
+        console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.displayName}」(${it.itemId})`);
+        return true;
+      };
+    }
+
     // ---- ★ 测试敌人（普瑞赛斯：特效包 + AI 配置驱动） ----
     if (enemyAsset) {
       this.enemy = new EnemyBase(this.entities, scene, enemyAsset, {
@@ -123,6 +147,22 @@ export class WorldMode {
     // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
     this.crosshair = new Crosshair();
 
+    // ★ 诊断：网格/实体/相机（定位"没有地面"；正常后删除）
+    const gmesh = (this.mapRender as unknown as { mesh: THREE.Mesh }).mesh;
+    gmesh?.geometry.computeBoundingBox();
+    gmesh?.geometry.computeBoundingSphere();
+    console.log('[diag] 网格AABB=',
+      gmesh?.geometry.boundingBox?.min.toArray(),
+      gmesh?.geometry.boundingBox?.max.toArray(),
+      '包围球=', gmesh?.geometry.boundingSphere?.center.toArray(),
+      '半径=', gmesh?.geometry.boundingSphere?.radius,
+      'mesh可见=', gmesh?.visible,
+      'frustumCulled=', gmesh?.frustumCulled,
+      '材质=', gmesh?.material,
+      '顶点数=', gmesh?.geometry.attributes.position.count,
+      '相机=', this.camera.position.toArray(),
+      '网格位置=', gmesh?.position.toArray());
+
     // ---- ★ 瞄准落点调试标记（红点：摄像机 → 准星射线的落点） ----
     this.aimMarker = new THREE.Mesh(
       new THREE.SphereGeometry(0.12, 10, 10),
@@ -145,8 +185,17 @@ export class WorldMode {
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
+  private static diagOnce = false;
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
+
+    // ★ 诊断：第一帧后确认相机/玩家实际位置（定位"没有地面"；正常后删除）
+    if (!WorldMode.diagOnce) {
+      WorldMode.diagOnce = true;
+      console.log('[diag] 运行中: 相机=', this.camera.position.toArray(),
+        '玩家=', this.player.position,
+        '玩家玩法=', [pp.x.toFixed(1), pp.y.toFixed(1)]);
+    }
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
@@ -205,6 +254,11 @@ export class WorldMode {
     //         + 地图边界；实体与刚体同步 ----
     this.clampCharacter(this.player);
     if (this.enemy) this.clampCharacter(this.enemy);
+
+    // ---- ★ 物品钳制（贴地 + 边界；★ 防"推出地图 → 无限下落 → NaN → 物理卡死"） ----
+    for (const b of this.entities.allBases()) {
+      if (b.entity.kind === 'item') this.clampItem(b);
+    }
 
     // ---- 交互消费（★ 以准星为基准：中心射线，与设备解耦） ----
     const rayNdc = new THREE.Vector2(0, 0);
@@ -276,6 +330,20 @@ export class WorldMode {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
     geo.computeBoundingSphere();
     line.visible = true;
+  }
+
+  /** ★ 物品钳制：贴地（y ≥ 0，防无限下落/NaN）+ 地图边界；实体与刚体同步 */
+  private clampItem(e: EntityBase): void {
+    const p = e.position;
+    const b = this.map.getBounds();
+    const nx = Math.max(b.min, Math.min(b.max, p.x));
+    const nz = Math.max(b.min, Math.min(b.max, p.z));
+    const ny = Math.max(0, Math.min(0.4, p.y)); // 底部贴地（球心 = y + 半径），抬升上限防顶飞
+    if (nx !== p.x || nz !== p.z || ny !== p.y) {
+      p.x = nx; p.y = ny; p.z = nz;
+      const rb = e.entity.rigidBody;
+      if (rb) this.entities.physics?.setPosition(rb.handle, nx, ny + e.bodyOffsetY, nz);
+    }
   }
 
   /** 渲染：实体管线遍历画 + 地图 + 场景 */
