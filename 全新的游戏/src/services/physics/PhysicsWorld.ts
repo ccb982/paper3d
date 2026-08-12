@@ -101,10 +101,26 @@ export class PhysicsWorld {
     desc.userData = userData; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
     this.attachCollider(body, shape);
-    return this.registerBody(body); // ★ 自管 id，不信任 body.handle
+    return this.registerBody(body);
   }
 
-  /** 创建动态刚体（角色/敌人/子弹/掉落物） */
+  /** 创建运动学刚体（角色/敌人：位置 100% 代码驱动，推挤 dynamic，不受力/重力） */
+  addKinematic(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0): number {
+    const desc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(position.x, position.y, position.z);
+    desc.userData = userData;
+    const body = this.world.createRigidBody(desc);
+    this.attachCollider(body, shape);
+    return this.registerBody(body);
+  }
+
+  /** ★ 运动学位置驱动（step 前调用；rapier 自动计算对 dynamic 的推挤） */
+  setKinematicPosition(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) return;
+    body.setNextKinematicTranslation({ x, y, z });
+  }
+
+  /** 创建动态刚体（物品/子弹/掉落物——纯物理，零代码修正） */
   addDynamic(position: { x: number; y: number; z: number }, opts: BodyOptions): number {
     const desc = RAPIER.RigidBodyDesc.dynamic()
       .setTranslation(position.x, position.y, position.z)
@@ -114,7 +130,7 @@ export class PhysicsWorld {
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
     this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density);
-    return this.registerBody(body); // ★ 自管 id，不信任 body.handle
+    return this.registerBody(body);
   }
 
   private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number): void {
@@ -146,20 +162,11 @@ export class PhysicsWorld {
     return body.translation();
   }
 
-  /** 设刚体速度（子弹发射/敌人追击） */
+  /** 设刚体速度（子弹发射） */
   setLinearVelocity(id: number, x: number, y: number, z: number): void {
     const body = this.getBody(id);
     if (!body) { return; }
     body.setLinvel({ x, y, z }, true);
-  }
-
-  /** ★ 只覆盖 x/z 速度；y 速度仅保留下落（禁止向上残留——
-   *   重力接触解算的反弹会产生微小正 vy → 上升再落回 → 静止抖动） */
-  setVelocityXZ(id: number, x: number, z: number): void {
-    const body = this.getBody(id);
-    if (!body) return;
-    const v = body.linvel();
-    body.setLinvel({ x, y: Math.min(v.y, 0), z }, true);
   }
 
   /** 读刚体速度 */

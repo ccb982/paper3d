@@ -43,17 +43,16 @@ export abstract class CharacterBase extends EntityBase {
     super(em, {
       kind: opts.kind,
       x: opts.x, y: opts.y, z: opts.z,
-      // ★ 物理创建用碰撞体积声明（super 前字段未初始化 → 用常量）
-      //   gravityScale 0：角色 y 不参与物理（由模式层钉地形高度）——
-      //   否则重力/接触解算的 y 震荡导致静止/移动抖动
+      // ★ 角色 = 运动学刚体：位置 100% 代码驱动（x/z 输入/AI、y 模式层钉地形），
+      //   物理只做推挤（踢开物品/子弹碰撞事件），不受重力/力 → 无抖动/无爆炸
       physics: opts.physics ?? {
-        type: 'dynamic',
-        options: { shape: DEFAULT_COLLISION_VOLUME.shape, linearDamping: 8, canSleep: false, gravityScale: 0 },
+        type: 'kinematic',
+        options: { shape: DEFAULT_COLLISION_VOLUME.shape },
       },
       asset: opts.asset,
       animInitial: opts.facing ? { facing: opts.facing } : undefined,
     });
-    this.physicsMode = 'velocity';
+    this.physicsMode = 'kinematic';
     if (!this.anim) throw new Error('CharacterBase 需要动画资产');
     this.controller = new CharacterController(this.anim, opts.animMap, opts.moveSpeed ?? 2.5);
   }
@@ -62,11 +61,12 @@ export abstract class CharacterBase extends EntityBase {
     if (input && cameraFrame) {
       this.controller.update(dt, input, cameraFrame);
     }
-    // ★ 期望速度 → 物理（碰撞交给 rapier；位置下一帧从刚体读回）
+    // ★ 位置推进（kinematic：直接移动实体位置 → syncPhysics 驱动刚体；
+    //   y = 地形高度由模式层每帧设置）
     const dir = this.controller.moveDir;
     const speed = this.controller.moveSpeed;
-    this.moveVelocity.x = dir.x * speed;
-    this.moveVelocity.z = dir.y * speed;
+    this.entity.position.x += dir.x * speed * dt;
+    this.entity.position.z += dir.y * speed * dt;
   }
 
   protected override heightOffset(): number {

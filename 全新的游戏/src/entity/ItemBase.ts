@@ -43,9 +43,10 @@ export class ItemBase extends EntityBase {
             type: 'dynamic',
             options: {
               shape: { type: 'cuboid', hx: 0.22, hy: 0.22, hz: 0.1 }, // ★ 薄片（正反面扁）
-              linearDamping: 4, // 高阻尼：落地即停，不滑远
-              gravityScale: 1,  // 掉落物受重力落地
-              // density 默认 1：玩家可推、子弹可打动（之前 3 太重推不动）
+              linearDamping: 2,  // 中等阻尼：被踢开滑一小段即停（有接触感）
+              gravityScale: 1,   // 掉落物受重力落地
+              density: 1.5,      // ★ 适中质量：踢开但不会瞬间弹飞
+              canSleep: false,   // ★ 不休眠：被撞必响应（休眠刚体可能不响应推挤）
             },
           }
         : undefined,

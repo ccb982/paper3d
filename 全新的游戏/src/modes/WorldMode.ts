@@ -74,7 +74,7 @@ export class WorldMode {
     this.entities = new EntityManager(physics);
 
     // 地面实体（固定碰撞体，匹配 64×64 地图；纯数据实体，无行为）
-    // ★ 薄板顶面 = y0：角色脚底落在其上（重力站立支撑面）
+    // ★ 薄板顶面 = y0：物品/子弹落在地面上（物理支撑面）
     const b = map.getBounds();
     const center = (b.min + b.max) / 2;
     this.entities.create({
@@ -82,6 +82,19 @@ export class WorldMode {
       x: center, y: -0.05, z: center,
       physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: 32, hy: 0.05, hz: 32 } } },
     });
+    // ★ 地图边界物理墙（物品/子弹出界防护——物理自然挡住，无需代码钳制）
+    const W = 1, H = 8, half = (b.max - b.min) / 2;
+    const mkWall = (x: number, z: number, hx: number, hz: number) => {
+      this.entities.create({
+        kind: 'ground',
+        x, y: H / 2, z,
+        physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx, hy: H / 2, hz } } },
+      });
+    };
+    mkWall(b.min - W, center, W, half + W);           // 西
+    mkWall(b.max + W, center, W, half + W);           // 东
+    mkWall(center, b.min - W, half + W, W);           // 北
+    mkWall(center, b.max + W, half + W, W);           // 南
 
     // ★ 主角（CharacterBase 实例：物理/动画/渲染全由基类联动）
     this.player = new Player(this.entities, scene, asset, {
@@ -235,15 +248,10 @@ export class WorldMode {
       this.firePlayerBullet();
     }
 
-    // ---- ★ 角色钳制（模式层知道地形/地图）：贴地（防"顶飞"：抬升 >0.4 拉回地面+刚体）
-    //         + 地图边界；实体与刚体同步 ----
+    // ---- ★ 角色位置控制（kinematic：位置 = 代码；y 地形 + xz 边界）
+    //         纯数据操作，无刚体同步（刚体由 syncPhysics 驱动） ----
     this.clampCharacter(this.player);
     if (this.enemy) this.clampCharacter(this.enemy);
-
-    // ---- ★ 物品钳制（贴地 + 边界；★ 防"推出地图 → 无限下落 → NaN → 物理卡死"） ----
-    for (const b of this.entities.allBases()) {
-      if (b.entity.kind === 'item') this.clampItem(b);
-    }
 
     // ---- 交互消费（★ 以准星为基准：中心射线，与设备解耦） ----
     const rayNdc = new THREE.Vector2(0, 0);
@@ -317,42 +325,20 @@ export class WorldMode {
     line.visible = true;
   }
 
-  /** ★ 物品钳制：只做 x/z 地图边界（防掉出地图 → 无限下坠）。
-   *   ★ 不碰 y——物品是纯物理实体（read），落地/弹起由物理管理，
-   *     钳 y 会打断接触解算 → 推不动 + 抖动 */
-  private clampItem(e: EntityBase): void {
-    const p = e.position;
-    const b = this.map.getBounds();
-    const nx = Math.max(b.min, Math.min(b.max, p.x));
-    const nz = Math.max(b.min, Math.min(b.max, p.z));
-    if (nx !== p.x || nz !== p.z) {
-      p.x = nx; p.z = nz;
-      const rb = e.entity.rigidBody;
-      if (rb) this.entities.physics?.setPosition(rb.handle, nx, p.y + e.bodyOffsetY, nz);
-    }
-  }
-
   /** 渲染：实体管线遍历画 + 地图 + 场景 */
   render(renderer: THREE.WebGLRenderer): void {
     this.entities.renderAll(this.camera);
     renderer.render(this.scene, this.camera);
   }
 
-  /** ★ 角色钳制：y 恒 = 地形高度（角色物理无重力，y 由模式层钉死——
-   *   彻底消除重力/接触解算的 y 抖动、顶飞、边缘下坠）+ 地图边界。
-   *   放模式层：只有它知道地形高度与地图范围（实体不依赖地图） */
+  /** ★ 角色位置控制（kinematic）：y = 地形高度 + xz 地图边界。
+   *   纯位置数据（刚体由 EntityBase.syncPhysics 驱动），无任何物理修正 */
   private clampCharacter(e: CharacterBase): void {
     const p = e.position;
-    const g = this.map.getHeight(p.x, p.z);
     const b = this.map.getBounds();
-    const nx = Math.max(b.min, Math.min(b.max, p.x));
-    const nz = Math.max(b.min, Math.min(b.max, p.z));
-    const ny = g; // ★ 无条件贴地（物理不参与 y）
-    if (nx !== p.x || nz !== p.z || ny !== p.y) {
-      p.x = nx; p.y = ny; p.z = nz;
-      const rb = e.entity.rigidBody;
-      if (rb) this.entities.physics?.setPosition(rb.handle, nx, ny + e.bodyOffsetY, nz);
-    }
+    p.x = Math.max(b.min, Math.min(b.max, p.x));
+    p.z = Math.max(b.min, Math.min(b.max, p.z));
+    p.y = this.map.getHeight(p.x, p.z);
   }
 
   get playerPosition(): { x: number; y: number } {

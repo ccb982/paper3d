@@ -12,7 +12,6 @@ export interface RigidBodyRef {
   /** 刚体类型 */
   type: 'dynamic' | 'fixed' | 'kinematic';
 }
-
 export interface Entity {
   id: number;
   kind: EntityKind;

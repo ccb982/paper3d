@@ -18,8 +18,8 @@ export interface EntityCreateOptions {
   x: number;
   y: number;
   z: number;
-  /** 需要物理时传入（动态/固定由 shape+调用方决定） */
-  physics?: { type: 'dynamic' | 'fixed'; options: BodyOptions };
+  /** 需要物理时传入（动态/运动学/固定由 shape+调用方决定） */
+  physics?: { type: 'dynamic' | 'kinematic' | 'fixed'; options: BodyOptions };
 }
 
 export class EntityManager {
@@ -66,7 +66,9 @@ export class EntityManager {
     if (opts.physics && this.physicsWorld) {
       const handle = opts.physics.type === 'fixed'
         ? this.physicsWorld.addFixed({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id)
-        : this.physicsWorld.addDynamic({ x: opts.x, y: opts.y, z: opts.z }, { ...opts.physics.options, userData: id });
+        : opts.physics.type === 'kinematic'
+          ? this.physicsWorld.addKinematic({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id)
+          : this.physicsWorld.addDynamic({ x: opts.x, y: opts.y, z: opts.z }, { ...opts.physics.options, userData: id });
       entity.rigidBody = { handle, type: opts.physics.type };
     }
     this.entities.set(entity.id, entity);

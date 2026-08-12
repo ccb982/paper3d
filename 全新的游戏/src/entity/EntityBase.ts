@@ -25,9 +25,9 @@ import type { FxRendererBase } from '../services/render/FxRendererBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 
-/** 物理同步模式：velocity=速度驱动+位置读回（角色/运动体，碰撞由 rapier 处理）；
- *  read=纯物理驱动（子弹：发射后自由飞行） */
-export type PhysicsMode = 'none' | 'velocity' | 'read';
+/** 物理同步模式：kinematic=位置代码驱动（角色/敌人：setNextKinematicTranslation，
+ *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
+export type PhysicsMode = 'none' | 'kinematic' | 'read';
 
 export interface EntityBaseOptions {
   kind: EntityKind;
@@ -35,7 +35,7 @@ export interface EntityBaseOptions {
   y: number;
   z: number;
   /** 需要物理时传入 */
-  physics?: { type: 'dynamic' | 'fixed'; options: BodyOptions };
+  physics?: { type: 'dynamic' | 'kinematic' | 'fixed'; options: BodyOptions };
   /** 动画资产（有 → 建 FrameAnimator + FrameState） */
   asset?: FrameAssetSource;
   /** 初始动画状态（朝向等） */
@@ -117,9 +117,6 @@ export abstract class EntityBase {
     // 默认无行为
   }
 
-  /** ★ 期望速度（velocity 模式：syncPhysics 写入刚体；角色子类设置） */
-  moveVelocity = { x: 0, z: 0 };
-
   /** 额外高度偏移（子类覆写：跳跃等） */
   protected heightOffset(): number {
     return 0;
@@ -139,23 +136,13 @@ export abstract class EntityBase {
     const physics = this.em.physics;
     if (!rb || !physics || this.physicsMode === 'none') return;
     const p = this.entity.position;
-    if (this.physicsMode === 'velocity') {
-      // ★ 速度驱动：只覆盖 x/z（保留 y 速度 → 重力下落不被清零）；碰撞交给 rapier
-      physics.setVelocityXZ(rb.handle, this.moveVelocity.x, this.moveVelocity.z);
-      // 位置读回（物理结算结果 → 实体；y 减胶囊中心偏移回脚底系）
-      const gp = physics.getPosition(rb.handle);
-      if (Number.isFinite(gp.x) && Number.isFinite(gp.z)) {
-        p.x = gp.x; p.z = gp.z;
-      }
-      if (Number.isFinite(gp.y)) {
-        p.y = gp.y - this.physicsBodyOffsetY();
-      }
+    if (this.physicsMode === 'kinematic') {
+      // ★ 位置 100% 代码驱动（角色：输入/AI 移动 + y 地形由模式层设置）
+      physics.setKinematicPosition(rb.handle, p.x, p.y + this.physicsBodyOffsetY(), p.z);
     } else if (this.physicsMode === 'read') {
-      // 刚体 → 位置（子弹/物品：物理驱动）
+      // 刚体 → 位置（子弹/物品：纯物理驱动）
       const gp = physics.getPosition(rb.handle);
-      if (Number.isFinite(gp.x) && Number.isFinite(gp.y) && Number.isFinite(gp.z)) {
-        p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
-      }
+      p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
     }
   }
 
