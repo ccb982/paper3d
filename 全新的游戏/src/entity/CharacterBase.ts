@@ -12,6 +12,7 @@ import { CharacterController, type CharacterAnimMap } from '../systems/player/Ch
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
+import { shapeExtents, separateXZ } from '../services/physics/Collision';
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -30,20 +31,6 @@ const DEFAULT_COLLISION_VOLUME = {
   shape: { type: 'cuboid', hx: 0.28, hy: 1.0, hz: 0.15 } as const,
   offsetY: 1.0,
 };
-
-/** 碰撞形状 → xz 半宽（角色间推挤判定用；球/胶囊按半径，cuboid 取 hx/hz） */
-function halfExtents(shape: { type: string; hx?: number; hz?: number; radius?: number }): [number, number] {
-  switch (shape.type) {
-    case 'cuboid':
-      return [shape.hx ?? 0, shape.hz ?? 0];
-    case 'ball':
-      return [shape.radius ?? 0, shape.radius ?? 0];
-    case 'capsule':
-      return [shape.radius ?? 0, shape.radius ?? 0];
-    default:
-      return [0, 0];
-  }
-}
 
 export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
@@ -85,16 +72,16 @@ export abstract class CharacterBase extends EntityBase {
     this.separateFromOthers();
   }
 
-  /** ★ 角色间推挤：分块查询邻近角色（querySphere）→ xz 重叠 → 最小分离轴推开
-   *   （各推一半）。物品/子弹不参与（它们是 dynamic，走物理推挤） */
+  /** ★ 角色间推挤：分块查询邻近角色（querySphere）→ 水平重叠 → 最小分离轴推开
+   *   （公共规则库 separateXZ，各推一半）。物品/子弹不参与（dynamic，走物理） */
   private separateFromOthers(): void {
     const vol = this.collisionVolume;
     if (!vol) return;
     const p = this.entity.position;
-    const [hx, hz] = halfExtents(vol.shape);
-    if (hx <= 0 || hz <= 0) return;
-    // 分块查询（SpatialGrid）：半径 = 自身半宽 + 最大角色半宽余量
-    const near = this.em.querySphere(p.x, p.z, hx + 0.6);
+    const me = shapeExtents(vol.shape);
+    if (me.hx <= 0 || me.hz <= 0) return;
+    // 分块查询（SpatialGrid）：半径 = 自身半宽 + 最大角色半宽余量（可调参）
+    const near = this.em.querySphere(p.x, p.z, me.hx + 0.6);
     for (const o of near) {
       if (o === this || !(o instanceof CharacterBase)) continue;
       const ov = o.collisionVolume;
@@ -102,22 +89,13 @@ export abstract class CharacterBase extends EntityBase {
       const op = o.entity.position;
       // 高度差过大（不同层）不分离
       if (Math.abs(p.y - op.y) > 1.5) continue;
-      const [ohx, ohz] = halfExtents(ov.shape);
-      const dx = p.x - op.x;
-      const dz = p.z - op.z;
-      const overlapX = hx + ohx - Math.abs(dx);
-      const overlapZ = hz + ohz - Math.abs(dz);
-      if (overlapX <= 0 || overlapZ <= 0) continue;
-      // 最小分离轴（各推一半）
-      if (overlapX < overlapZ) {
-        const dir = dx >= 0 ? 1 : -1;
-        p.x += dir * overlapX / 2;
-        op.x -= dir * overlapX / 2;
-      } else {
-        const dir = dz >= 0 ? 1 : -1;
-        p.z += dir * overlapZ / 2;
-        op.z -= dir * overlapZ / 2;
-      }
+      const other = shapeExtents(ov.shape);
+      const sep = separateXZ(p.x, p.z, me.hx, me.hz, op.x, op.z, other.hx, other.hz);
+      if (!sep) continue;
+      p.x += sep.ax;
+      p.z += sep.az;
+      op.x += sep.bx;
+      op.z += sep.bz;
     }
   }
 

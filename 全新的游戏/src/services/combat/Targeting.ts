@@ -9,6 +9,7 @@
 
 import type { EntityManager } from '../../entity/EntityManager';
 import type { EntityBase } from '../../entity/EntityBase';
+import { estimateRadius } from '../physics/Collision';
 
 export interface AimHit {
   /** 落点（世界坐标） */
@@ -49,14 +50,9 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
     if (!filter(b)) continue;
     const cv = b.collisionVolume;
     if (!cv) continue;
-    // 球近似：中心 = 实体位置 + offsetY；半径按碰撞体类型估
+    // 球近似（公共规则库：按碰撞体类型估半径，保守不漏判）
     const center = { x: b.position.x, y: b.position.y + cv.offsetY, z: b.position.z };
-    let radius: number;
-    switch (cv.shape.type) {
-      case 'ball': radius = cv.shape.radius * 2; break;
-      case 'capsule': radius = cv.offsetY + cv.shape.radius; break;
-      case 'cuboid': radius = Math.hypot(cv.shape.hx, cv.shape.hy, cv.shape.hz); break;
-    }
+    const radius = estimateRadius(cv.shape);
     const t = raySphereHit(o, d, center, radius);
     if (t !== null && t > 0.1 && t < bestT) {
       bestT = t;
