@@ -140,7 +140,7 @@ export class PhysicsWorld {
     this.world.createCollider(desc, body);
   }
 
-  /** 强制设刚体位置（玩家输入驱动 / 运动学位移） */
+  /** 强制设刚体位置（初始位置修正/边界同步） */
   setPosition(id: number, x: number, y: number, z: number): void {
     const body = this.getBody(id);
     if (!body) { return; }

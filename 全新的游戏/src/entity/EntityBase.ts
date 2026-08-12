@@ -105,8 +105,8 @@ export abstract class EntityBase {
 
   /** 每帧驱动（模式层/EntityManager 调用） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
-    this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（含速度目标计算）
-    this.syncPhysics();                     // ② 物理同步（velocity→速度写入；read→位置读回）
+    this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
+    this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
     this.anim?.update(dt);                  // ③ 动画推进
     this.syncRender();                      // ④ 渲染同步
     this.em.onEntityMoved(this);            // ⑤ 空间索引移块（集中刷新点）

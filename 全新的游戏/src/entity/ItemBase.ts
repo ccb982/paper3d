@@ -1,7 +1,7 @@
 // ============================================================
 // ItemBase —— 物品基类（EntityBase 子类）
 // ============================================================
-// 掉落物：dynamic 球体 + read 模式（物理落地）+ 拾取碰撞（管线分发）
+// 掉落物：dynamic 薄片 + read 模式（纯物理落地/被踢开）+ 拾取碰撞（管线分发）
 // 数据：itemId 引用配置表 / displayName / 拾取回调
 // 拾取：与玩家/友军碰撞（onCollision 管线分发）→ onPickup 回调 → 销毁
 // 静态资源点（采集交互）：physical=false（无刚体，后续采集系统）
@@ -19,8 +19,6 @@ export interface ItemOptions extends Omit<EntityBaseOptions, 'kind'> {
   displayName?: string;
   /** 是否受物理影响（掉落物 true / 静态装饰/资源点 false） */
   physical?: boolean;
-  /** 拾取判定半径（默认 0.25；略大于视觉，手感宽松） */
-  pickupRadius?: number;
 }
 
 export class ItemBase extends EntityBase {
@@ -62,10 +60,15 @@ export class ItemBase extends EntityBase {
     this.displayName = opts.displayName ?? opts.itemId ?? '物品';
     this.physicsMode = opts.physical ? 'read' : 'none';
     this.attachToScene(scene);
-    // ★ 贴片尺寸对齐碰撞球（直径 0.5；默认 scale 1×1 会与球体严重不符）
+    // ★ 贴片尺寸对齐碰撞体（0.5×0.5 = 正面 0.44 宽；默认 scale 1×1 会与碰撞体严重不符）
     if (this.renderer) {
       this.renderer.setScale(0.5, 0.5);
     }
+  }
+
+  /** ★ 刚体偏移：构造时 collisionVolume 尚未初始化（super 后）→ fallback 0.22 */
+  protected override physicsBodyOffsetY(): number {
+    return this.collisionVolume?.offsetY ?? 0.22;
   }
 
   /** ★ 拾取判定（实体管线碰撞分发）：玩家/友军接触 → 尝试拾取 */

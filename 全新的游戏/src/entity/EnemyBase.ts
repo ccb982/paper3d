@@ -105,7 +105,7 @@ export class EnemyBase extends CharacterBase {
   private showFacing: '前' | '后' | null = null;
 
   protected override onUpdate(dt: number): void {
-    // ★ 基类速度驱动（moveDir × speed → moveVelocity；无输入时 controller.update 不跑）
+    // ★ 基类位置推进（moveDir × speed → 位置；无输入时 controller.update 不跑）
     super.onUpdate(dt);
     // ★ 显示帧 + 转身由相机判定（旁观者视角）：
     //   相机在角色正面侧 → 前帧 + 贴片保持移动方向朝向

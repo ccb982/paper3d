@@ -125,6 +125,12 @@ export abstract class CharacterBase extends EntityBase {
     return this.controller.getHeightOffset();
   }
 
+  /** ★ 刚体偏移：构造时 collisionVolume 尚未初始化（super 后）→ fallback 常量，
+   *   否则初始刚体位置不修正（kinematic 不受力，不会自动推正 → 埋地） */
+  protected override physicsBodyOffsetY(): number {
+    return this.collisionVolume?.offsetY ?? DEFAULT_COLLISION_VOLUME.offsetY;
+  }
+
   /** ★ 按纹理宽高比设置角色缩放（避免竖长/横长纹理被压扁）——子类 attach 后调用 */
   protected applyRenderScale(baseSize = 1.5): void {
     if (this.renderer && 'setScaleKeepAspect' in this.renderer) {
