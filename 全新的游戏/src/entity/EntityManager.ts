@@ -134,6 +134,11 @@ export class EntityManager {
     return this.grid.querySphere(x, z, r);
   }
 
+  /** ★ 射线路径查询：只返回射线经过的块内的实体（瞄准检测候选集） */
+  queryRay(origin: { x: number; z: number }, dir: { x: number; z: number }, maxDist: number): EntityBase[] {
+    return this.grid.queryRay(origin, dir, maxDist);
+  }
+
   get count(): number {
     return this.entities.size;
   }

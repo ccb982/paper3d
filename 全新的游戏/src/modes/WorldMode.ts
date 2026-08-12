@@ -231,10 +231,11 @@ export class WorldMode {
     const origin = { x: cam.x, y: cam.y, z: cam.z };
     const dir = { x: rayDir.x, y: rayDir.y, z: rayDir.z };
 
-    // ① 实体检测（每帧遍历；命中实体碰撞体球 → 必中）
+    // ① 实体检测（★ 射线路径分块遍历：只测射线经过的块内的实体 → 3D 射线-碰撞体测试）
     let best: { x: number; y: number; z: number } | null = null;
     let bestT = Infinity;
-    for (const b of this.entities.allBases()) {
+    const candidates = this.entities.queryRay({ x: cam.x, z: cam.z }, { x: rayDir.x, z: rayDir.z }, 200);
+    for (const b of candidates) {
       if (b === this.player) continue;            // 排除自己
       if (b.entity.kind === 'bullet') continue;   // 排除子弹（飞行中不应阻挡瞄准）
       const cv = b.collisionVolume;

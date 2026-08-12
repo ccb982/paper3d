@@ -118,6 +118,54 @@ export class SpatialGrid<T extends SpatialPosition> {
     return out;
   }
 
+  /** ★ 射线路径遍历（DDA 网格采样）：只返回射线经过的块内的实体（去重）
+   *   瞄准检测用：先收窄候选集，再做 3D 射线-碰撞体测试 */
+  queryRay(origin: { x: number; z: number }, dir: { x: number; z: number }, maxDist: number): T[] {
+    const out: T[] = [];
+    const seen = new Set<T>();
+    const bs = this.blockSize;
+    const x0 = origin.x, z0 = origin.z;
+    const dx = dir.x, dz = dir.z;
+    // DDA 初始化：各轴到下一个块边界的 t（沿射线参数）
+    let tMaxX: number;
+    let tMaxZ: number;
+    if (dx > 0) tMaxX = ((Math.floor(x0 / bs) + 1) * bs - x0) / dx;
+    else if (dx < 0) tMaxX = (Math.floor(x0 / bs) * bs - x0) / dx;
+    else tMaxX = Infinity;
+    if (dz > 0) tMaxZ = ((Math.floor(z0 / bs) + 1) * bs - z0) / dz;
+    else if (dz < 0) tMaxZ = (Math.floor(z0 / bs) * bs - z0) / dz;
+    else tMaxZ = Infinity;
+    const tDeltaX = dx !== 0 ? Math.abs(bs / dx) : Infinity;
+    const tDeltaZ = dz !== 0 ? Math.abs(bs / dz) : Infinity;
+    const stepX = dx > 0 ? 1 : -1;
+    const stepZ = dz > 0 ? 1 : -1;
+    let x = x0, z = z0, t = 0;
+    // 步数上限（防死循环）：路径块数 = maxDist/bs + 2
+    const maxSteps = Math.ceil(maxDist / bs) + 2;
+    for (let i = 0; i < maxSteps; i++) {
+      if (t > maxDist) break;
+      const set = this.blocks.get(this.keyOf(Math.floor(x / bs), Math.floor(z / bs)));
+      if (set) {
+        for (const e of set) {
+          if (!seen.has(e)) {
+            seen.add(e);
+            out.push(e);
+          }
+        }
+      }
+      if (tMaxX < tMaxZ) {
+        t = tMaxX;
+        tMaxX += tDeltaX;
+        x += stepX * bs;
+      } else {
+        t = tMaxZ;
+        tMaxZ += tDeltaZ;
+        z += stepZ * bs;
+      }
+    }
+    return out;
+  }
+
   /** ★ 视野查询：视锥 8 角点投影到 y=0 平面 → AABB → 覆盖块集合
    *   保守（投影比视锥更大），不误剔除
    *   ★ 必须先 updateMatrixWorld：renderAll 在 renderer.render 之前调用，
