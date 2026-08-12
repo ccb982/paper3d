@@ -20,6 +20,8 @@ import { Crosshair } from '../services/ui/Crosshair';
 import { MapQuery } from '../services/map/MapQuery';
 import { MapRender } from '../services/map/MapRender';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
+import { RasterMap } from '../services/map/RasterMap';
+import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { drainInteractions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -40,6 +42,8 @@ export class WorldMode {
   private map: MapQuery;
   private crosshair: Crosshair;
   private lastTapWorld: { x: number; y: number } | null = null;
+  /** ★ 小地图（左上角；RasterMap 静态地形 → Minimap 渲染） */
+  private minimap: Minimap;
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
   private bulletCooldown = 0;
@@ -146,6 +150,9 @@ export class WorldMode {
 
     // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
     this.crosshair = new Crosshair();
+
+    // ---- ★ 小地图（RasterMap 光栅化静态地形 → Minimap 左上角绘制） ----
+    this.minimap = new Minimap(new RasterMap(map));
 
     // ---- ★ 瞄准落点调试标记（红点：摄像机 → 准星射线的落点） ----
     this.aimMarker = new THREE.Mesh(
@@ -371,6 +378,7 @@ export class WorldMode {
     this.entities.clear();
     this.mapRender.dispose();
     this.crosshair.dispose();
+    this.minimap.dispose();
     // ★ 瞄准调试（红点 + 两条线）
     this.aimMarker.geometry.dispose();
     (this.aimMarker.material as THREE.Material).dispose();
