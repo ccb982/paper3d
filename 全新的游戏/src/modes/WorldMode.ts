@@ -210,8 +210,17 @@ export class WorldMode {
   update(dt: number, input: InputActions, attackPressed: boolean, look: { x: number; y: number }, zoom: number): void {
     const pp = this.player.controllerPosition;
 
-    // ★ 小地图每帧更新（玩家中心 + 地形滚动 + 玩家图标朝上）
-    this.minimap.update(pp.x, pp.y);
+    // ★ 小地图每帧更新（三层：地面/实体/黑雾；实体点从管线同步）
+    //   物品 moving = 物理速度 > 阈值（移动中的物品不显示）
+    const miniEntities = this.entities.allBases().map((b) => {
+      let moving: boolean | undefined;
+      if (b.entity.kind === 'item' && b.entity.rigidBody && this.entities.physics) {
+        const v = this.entities.physics.getLinearVelocity(b.entity.rigidBody.handle);
+        moving = Math.hypot(v.x, v.z) > 0.1;
+      }
+      return { x: b.position.x, z: b.position.z, kind: b.entity.kind, moving };
+    });
+    this.minimap.update(pp.x, pp.y, miniEntities);
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
