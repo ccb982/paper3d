@@ -146,6 +146,9 @@ export class FTXQuad extends FxRendererBase {
     const geometry = new THREE.PlaneGeometry(1, 1);
     this.mesh = new THREE.Mesh(geometry, this.material);
     this.mesh.position.set(0, 0, 0);
+    // ★ 渲染剔除完全由小地图 2D 视锥（RasterMap.queryFrustum）决定，
+    //   关闭 three 3D 视锥兜底（避免双剔除 + O(场景mesh) 遍历）
+    this.mesh.frustumCulled = false;
     scene.add(this.mesh);
   }
 

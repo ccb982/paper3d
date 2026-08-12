@@ -4,8 +4,8 @@
 // 分级决策：xz 距离 → lodLevel（可调参，集中一处）
 // 渲染遍历（renderAll）消费；未来小地图/其他系统也可用。
 
-/** LOD 距离阈值（米）：lod0 < 10 < lod1 < 20 < lod2 < 30 ≤ lod3 */
-export const LOD_RANGES = [10, 20, 30] as const;
+/** LOD 距离阈值（米）：lod0 < 20 < lod1 < 40 < lod2 < 60 ≤ lod3 */
+export const LOD_RANGES = [20, 40, 60] as const;
 
 /** 距离 → lodLevel（0 近 / 1 中 / 2 远渐隐 / 3 消失不渲染） */
 export function levelForDistance(d: number): number {

@@ -15,6 +15,7 @@ import { AIStateMachine } from '../systems/ai/AIStateMachine';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
+import { levelForDistance } from '../services/lod';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
@@ -104,6 +105,17 @@ export class EnemyBase extends CharacterBase {
   /** 当前显示帧（相机判定） */
   private showFacing: '前' | '后' | null = null;
 
+  /** ★ 渲染距离应用（基类联动动画/渲染管线）+ 扭曲降级（子类自管：
+   *   lod1+ 关扭曲省计算；onUpdate 每帧按 viewLod 应用扭曲开关） */
+  override applyViewDistance(distance: number): void {
+    this.viewLod = levelForDistance(distance);
+    super.applyViewDistance(distance);
+    // 立即按等级应用扭曲开关（不等下一帧 onUpdate）
+    this.applyDistort();
+  }
+  /** 私有表现等级（子类用；基类不持有 LOD 状态） */
+  private viewLod = 0;
+
   protected override onUpdate(dt: number): void {
     // ★ 基类位置推进（moveDir × speed → 位置；无输入时 controller.update 不跑）
     super.onUpdate(dt);
@@ -128,29 +140,21 @@ export class EnemyBase extends CharacterBase {
     }
 
     // ★ 每帧应用当前帧的扭曲参数（特效包参数，第一帧已继承到所有帧；
-    //   ★ LOD 降级：lod1+ 不应用扭曲——省计算，视觉可接受）
+    //   ★ LOD 降级：viewLod 1+ 不应用扭曲——省计算，视觉可接受）
+    this.applyDistort();
+  }
+
+  /** 应用当前帧扭曲参数（按 viewLod 开关） */
+  private applyDistort(): void {
     const idx = this.anim!.state.frameIndex;
     const d = this.assetRef.getFrameRenderData(idx);
     if (d && this.renderer) {
       (this.renderer as FTXQuad).setDistort({
-        enabled: this.lodLevel === 0 && d.distortEnabled,
+        enabled: this.viewLod === 0 && d.distortEnabled,
         amplitude: d.distortAmplitude,
         frequency: d.distortFrequency,
         speed: d.distortSpeed,
         rotation: d.distortRotation,
-      });
-    }
-  }
-
-  /** ★ LOD 变化：lod1+ 立即关扭曲（不等下一帧渲染） */
-  protected override onLodChange(level: number): void {
-    if (level > 0 && this.renderer) {
-      (this.renderer as FTXQuad).setDistort({
-        enabled: false,
-        amplitude: 0,
-        frequency: 0,
-        speed: 0,
-        rotation: 0,
       });
     }
   }

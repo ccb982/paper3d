@@ -104,15 +104,16 @@ export class EntityManager {
   }
 
   /** ★ 渲染阶段：2D 梯形（相机视锥地面投影）内实体 → 距离分级 LOD →
-   *   lod0-2 渲染（lod2 渐隐）、lod3 消失不渲染（架构 3.10） */
+   *   lod0-2 渲染（lod2 渐隐）、lod3 消失不渲染（架构 3.10）。
+   *   实体不持有 LOD 状态——只接收距离（applyViewDistance），表现即时应用 */
   renderAll(camera: Parameters<EntityBase['render']>[0]): void {
     const cam = camera.position;
     for (const base of this.raster.queryFrustum(camera as Parameters<EntityBase['render']>[0], LOD_MAX_DIST)) {
       const dx = base.position.x - cam.x;
       const dz = base.position.z - cam.z;
-      const lv = levelForDistance(Math.hypot(dx, dz));
-      base.setLodLevel(lv);
-      if (lv < 3) base.render(camera);
+      const d = Math.hypot(dx, dz);
+      base.applyViewDistance(d);
+      if (levelForDistance(d) < 3) base.render(camera);
     }
   }
 

@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import type { Entity, EntityKind } from './Entity';
 import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
+import { levelForDistance } from '../services/lod';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { FrameState } from '../services/fx/FrameState';
@@ -79,28 +80,12 @@ export abstract class EntityBase {
     return { kind: this.entity.kind, moving: false };
   }
 
-  // ============ LOD（所有实体共有，统一联动动画/渲染管线） ============
-
-  private _lodLevel = 0;
-  /** 当前 LOD 等级（0 近 / 1 中 / 2 远渐隐 / 3 消失） */
-  get lodLevel(): number {
-    return this._lodLevel;
-  }
-
-  /** ★ 统一 LOD 应用入口：联动动画管线 + 渲染管线 + 子类表现降级。
-   *   分级评估在驱动层（renderAll 查距离表），实体只响应 */
-  setLodLevel(level: number): void {
-    const lv = Math.max(0, Math.min(3, Math.floor(level)));
-    if (lv === this._lodLevel) return;
-    this._lodLevel = lv;
+  /** ★ 渲染距离应用（renderAll 每帧传入；★ 实体不持有 LOD 状态——
+   *   内部按距离表算级，联动动画/渲染管线响应。子类可覆写做表现降级） */
+  applyViewDistance(distance: number): void {
+    const lv = levelForDistance(distance);
     this.anim?.setLodLevel(lv);       // 动画管线：时间轴暂停/节流
-    this.renderer?.setLodLevel(lv);   // 渲染管线：LOD/渐隐（渲染器实现）
-    this.onLodChange(lv);             // 子类钩子：表现参数降级
-  }
-
-  /** 子类钩子：LOD 变化时的表现参数降级（如 EnemyBase lod1+ 关扭曲） */
-  protected onLodChange(_level: number): void {
-    // 默认无
+    this.renderer?.setLodLevel(lv);   // 渲染管线：渐隐（渲染器实现）
   }
 
   protected renderer: FxRendererBase | null = null;

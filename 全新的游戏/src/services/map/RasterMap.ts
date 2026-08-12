@@ -178,13 +178,14 @@ export class RasterMap {
     return out;
   }
 
-  /** ★ 视锥矩形查询（架构 3.10）：far 4 角投影到 y=0 → 覆盖矩形 →
-   *   直接遍历矩形内 cell 取实体（★ 不做逐 cell 点测试——矩形近似，
-   *   检测成本与旧 AABB 同级，远低于逐点判定）。maxDist 钳制远角。 */
+  /** ★ 视锥梯形查询（架构 3.10）：far 4 角投影到 y=0 → 梯形 →
+   *   行扫描法：每 z 行求梯形与该行的 x 区间，只遍历区间内 cell
+   *   （★ 梯形精确 + 非逐 cell 点测试，按行直接圈定范围）。
+   *   maxDist 钳制远角。成本 O(梯形行数 + 区间 cell)，与实体总数解耦。 */
   queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
     camera.updateMatrixWorld();
-    // far 4 角投影到 y=0 → 覆盖矩形
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    // far 平面 4 角投影到 y=0（far 角四边形 = 完整地面覆盖，含近处；无需 near 平面）
+    const pts: { x: number; z: number }[] = [];
     const ndc = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
     const tmp = new THREE.Vector3();
     for (const [nx, ny] of ndc) {
@@ -194,25 +195,42 @@ export class RasterMap {
       const t = -camera.position.y / dir.y;
       // 射线向上（仰视）→ 钳制到 maxDist；超过 maxDist → 截断
       const clampT = t <= 0 || t > maxDist ? maxDist : t;
-      const px = camera.position.x + dir.x * clampT;
-      const pz = camera.position.z + dir.z * clampT;
-      minX = Math.min(minX, px); maxX = Math.max(maxX, px);
-      minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
+      pts.push({
+        x: camera.position.x + dir.x * clampT,
+        z: camera.position.z + dir.z * clampT,
+      });
     }
-    // 相机附近（近处地面在矩形内，兜底纳入）
-    minX = Math.min(minX, camera.position.x - 1);
-    maxX = Math.max(maxX, camera.position.x + 1);
-    minZ = Math.min(minZ, camera.position.z - 1);
-    maxZ = Math.max(maxZ, camera.position.z + 1);
-    // ★ 直接遍历矩形内 cell 取实体（无点测试，与旧 AABB 同级成本）
+    // 相机附近兜底（近处地面/仰视退化时）
+    pts.push({ x: camera.position.x - 1, z: camera.position.z - 1 });
+    pts.push({ x: camera.position.x + 1, z: camera.position.z + 1 });
+    // z 行范围（4 点）
+    let zMin = Infinity, zMax = -Infinity;
+    for (const p of pts) {
+      zMin = Math.min(zMin, p.z);
+      zMax = Math.max(zMax, p.z);
+    }
+    const czMin = Math.max(0, Math.floor(zMin));
+    const czMax = Math.min(this.size - 1, Math.ceil(zMax));
     const out: EntityBase[] = [];
     const seen = new Set<EntityBase>();
-    const cx0 = Math.max(0, Math.floor(minX));
-    const cx1 = Math.min(this.size - 1, Math.floor(maxX));
-    const cz0 = Math.max(0, Math.floor(minZ));
-    const cz1 = Math.min(this.size - 1, Math.floor(maxZ));
-    for (let cz = cz0; cz <= cz1; cz++) {
-      for (let cx = cx0; cx <= cx1; cx++) {
+    for (let cz = czMin; cz <= czMax; cz++) {
+      const z = cz + 0.5; // cell 中心行
+      // ★ 求梯形（4 点四边形）与该行的 x 交点区间（每条边一次线性插值）
+      const xs: number[] = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        if ((a.z <= z && b.z >= z) || (a.z >= z && b.z <= z)) {
+          const t = (z - a.z) / (b.z - a.z);
+          xs.push(a.x + (b.x - a.x) * t);
+        }
+      }
+      if (xs.length < 2) continue;
+      let x0 = Math.min(xs[0], xs[1]);
+      let x1 = Math.max(xs[0], xs[1]);
+      x0 = Math.max(0, Math.floor(x0));
+      x1 = Math.min(this.size - 1, Math.ceil(x1));
+      for (let cx = x0; cx <= x1; cx++) {
         const set = this.cells.get(this.keyOf(cx, cz));
         if (!set) continue;
         for (const e of set) {
