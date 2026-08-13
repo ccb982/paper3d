@@ -91,10 +91,12 @@ export class CameraController {
     this.distance = Math.max(this.distanceMin, Math.min(this.distanceMax, this.distance + zoom * this.zoomSensitivity));
 
     // ---- 目标角度（鼠标控制；★ 上下 ±88°：准星视线可覆盖天空到地面） ----
+    // ★ 水平：鼠标右移 → yaw 减小 → 相机绕玩家左转 → 画面右转（标准 TPS/FPS）
     this.targetYaw -= look.x * this.sensitivity;
     const pitchMin = -1.55;
     const pitchMax = 1.55;
-    this.targetPitch = Math.max(pitchMin, Math.min(pitchMax, this.targetPitch - look.y * this.sensitivity));
+    // ★ 垂直：鼠标上移（look.y<0）→ pitch 减小 → 抬头（标准 FPS；此前 -= 导致上下反）
+    this.targetPitch = Math.max(pitchMin, Math.min(pitchMax, this.targetPitch + look.y * this.sensitivity));
 
     // ---- 阻尼插值（角度不瞬跳，跟手但平滑） ----
     const k = 1 - Math.exp(-dt * this.damp);
@@ -189,5 +191,10 @@ export class CameraController {
     this.targetPitch = pitch;
     this.yaw = yaw;
     this.pitch = pitch;
+  }
+
+  /** ★ 瞬移跟随（传送/场景切换：聚焦点立即落到目标，无飞线过渡） */
+  snapTo(x: number, groundY: number, z: number): void {
+    this.smoothedTarget.set(x, groundY + this.characterHeight * 0.8, z);
   }
 }

@@ -109,6 +109,12 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
         blockTypes[bz * BLOCKS_PER_SIDE + bx] = BLOCK_FLAT;
         continue;
       }
+      // ★ 出生安全区：chunk(0,0) 中心 2×2 region 强制平地（玩家出生/摔死传送点，
+      //   保证出生区无坑洞/高台）
+      if (chunkX === 0 && chunkZ === 0 && lrx >= 2 && lrx <= 3 && lrz >= 2 && lrz <= 3) {
+        blockTypes[bz * BLOCKS_PER_SIDE + bx] = BLOCK_FLAT;
+        continue;
+      }
       const n = hash2(rx, rz, seed);
       blockTypes[bz * BLOCKS_PER_SIDE + bx] = n < T_PIT ? BLOCK_PIT : n > T_PLATFORM ? BLOCK_PLATFORM : BLOCK_FLAT;
     }

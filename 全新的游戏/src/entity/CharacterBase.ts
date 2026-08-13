@@ -36,6 +36,8 @@ export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   readonly collisionVolume: { shape: import('../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = DEFAULT_COLLISION_VOLUME;
+  /** ★ 垂直下落速度（假重力：模式层 clampCharacter 驱动——坑洞掉落加速用） */
+  velY = 0;
 
   constructor(
     em: EntityManager,

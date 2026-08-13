@@ -19,7 +19,7 @@ import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
-import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
+import { CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_PLATFORM, BLOCK_PIT } from '../services/map/ChunkGenerator';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -51,6 +51,10 @@ export class WorldMode {
   private chunkMeshes = new Map<number, THREE.Mesh>();
   /** chunk 地面刚体（chunkKey → 已建标记；防重复） */
   private chunkBodies = new Set<number>();
+  /** ★ 调试标记柱（红=高台 蓝=坑洞，悬空 6m；定位视觉 vs 数据错位后移除） */
+  private chunkMarkers: THREE.Mesh[] = [];
+  /** ★ 调试 HUD：玩家脚下块类型（数据层 vs 视觉对照用，定位错位后移除） */
+  private blockHud = document.createElement('div');
   /** chunk 共享材质（顶点色：块类型着色——高台沙黄/平地绿/坑洞黑） */
   private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   /** AI 上下文（索敌 = 玩家位置 + 攻击意图 = 统一攻击管线） */
@@ -61,6 +65,8 @@ export class WorldMode {
     findTarget: () => null,
     attack: () => undefined,
   };
+  /** ★ 玩家出生/摔死传送点（出生安全区：ChunkGenerator 强制平地） */
+  private readonly spawnPoint = { x: CHUNK_SIZE / 2, z: CHUNK_SIZE / 2 };
 
   constructor(
     private scene: THREE.Scene,
@@ -75,7 +81,7 @@ export class WorldMode {
     this.entities = new EntityManager(physics, this.raster);
 
     // 玩家出生 = 中心 chunk 中心（(30,30)，3×3 初始世界 [-60,120)² 正中央）
-    const spawn = { x: CHUNK_SIZE / 2, z: CHUNK_SIZE / 2 };
+    const spawn = this.spawnPoint;
 
     // ---- ★ 初始 3×3 chunk 的地面刚体 + 视觉网格（后续 chunk 由 updateChunks 扩张） ----
     this.syncChunks(spawn.x, spawn.z);
@@ -152,6 +158,12 @@ export class WorldMode {
     this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
     // ★ AI 攻击意图 = 统一攻击管线（近战/远程/范围分派 → 伤害管线）
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
+
+    // ---- ★ 调试 HUD（右下角：脚下块类型/高度——定位小地图错位用） ----
+    this.blockHud.style.cssText =
+      'position:fixed;bottom:8px;right:8px;color:#fff;background:rgba(0,0,0,0.7);' +
+      'padding:6px 10px;z-index:999;font:12px monospace;white-space:pre;';
+    document.body.appendChild(this.blockHud);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -169,24 +181,27 @@ export class WorldMode {
     this.aiCtx.time += dt;
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
 
-    // ★ 玩家 y 由地形高度（无限地图：raster 无界采样）——模式层钉
-    // 相机高度 = 玩法高度（地形+跳跃），不跟随物理 y 浮动（否则撞人时相机猛跳"错位"）
-    const groundY = this.raster.heightAt(pp.x, pp.y);
-    this.cameraCtrl.update(dt, look, zoom, {
-      x: pp.x,
-      y: 0,
-      z: pp.y,
-      height: groundY,
-      jump: this.player.jumpHeight,
-    }, this.player.controller.isMoving);
-    this.player.visible = !this.cameraCtrl.isFirstPerson;
-
     // ---- AI 驱动（敌人自主行为；★ 在实体管线之前：本帧方向本帧生效，移动零滞后） ----
     aiSystem.updateAll(dt, this.aiCtx);
 
     // ---- 实体管线驱动（攻击由模式层转发，输入/相机坐标系传入） ----
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
+
+    // ---- ★ 角色位置控制（kinematic：位置 = 代码；y 平滑过渡地形高度）
+    //         ★ 先于相机更新：相机用本帧玩家 y → 上高台/下落相机实时跟随，不嵌立面 ----
+    this.clampCharacter(this.player, dt);
+    if (this.enemy) this.clampCharacter(this.enemy, dt);
+
+    // ---- 相机（跟随玩家实际脚底高度：爬升/掉落平滑时相机同样平滑） ----
+    this.cameraCtrl.update(dt, look, zoom, {
+      x: this.player.position.x,
+      y: 0,
+      z: this.player.position.z,
+      height: this.player.position.y,
+      jump: this.player.jumpHeight,
+    }, this.player.controller.isMoving);
+    this.player.visible = !this.cameraCtrl.isFirstPerson;
 
     // ---- ★ 玩家发射（左键：单次按下立即一发；长按 = 间隔持续发射） ----
     this.bulletCooldown -= dt;
@@ -195,10 +210,12 @@ export class WorldMode {
       this.firePlayerBullet();
     }
 
-    // ---- ★ 角色位置控制（kinematic：位置 = 代码；y 地形 + xz 边界）
-    //         纯数据操作，无刚体同步（刚体由 syncPhysics 驱动） ----
-    this.clampCharacter(this.player);
-    if (this.enemy) this.clampCharacter(this.enemy);
+    // ---- 调试 HUD：脚下块类型（对照 3D 视觉与小地图） ----
+    const p = this.player.position;
+    const t = this.raster.blockTypeAt(p.x, p.z);
+    const typeName = t === 1 ? '高台' : t === 2 ? '坑洞' : '平地';
+    this.blockHud.textContent =
+      `脚下块: ${typeName}\n世界坐标: (${p.x.toFixed(1)}, ${p.z.toFixed(1)})\n高度: ${this.raster.heightAt(p.x, p.z).toFixed(2)}`;
   }
 
   /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */
@@ -315,7 +332,9 @@ export class WorldMode {
     const tmpN = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
       const lx = pos.getX(i) + CHUNK_SIZE / 2;
-      const lz = -pos.getZ(i) + CHUNK_SIZE / 2;
+      // ★ 局部 z 直接用旋转后坐标（+30 平移）——此前用 -getZ 导致高度场沿 z 镜像
+      //   （顶点实际在 z=0 却采样 z=60 的高度 → 高台/坑洞图案全部错位）
+      const lz = pos.getZ(i) + CHUNK_SIZE / 2;
       const wx = cx * CHUNK_SIZE + lx;
       const wz = cz * CHUNK_SIZE + lz;
       // ★ 顶点高度 = 世界采样（跨 chunk）——边界顶点（lx=60）自动取邻 chunk 同点高度，
@@ -343,6 +362,32 @@ export class WorldMode {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
     this.chunkMeshes.set(key, mesh);
+
+    // ---- ★ 调试标记柱（数据块类型可视化：红=高台 蓝=坑洞） ----
+    const data = this.raster.getChunkData(cx, cz);
+    if (data) {
+      for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
+        for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
+          const t = data.blockTypes[bz * BLOCKS_PER_SIDE + bx];
+          if (t !== BLOCK_PLATFORM && t !== BLOCK_PIT) continue;
+          const marker = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, 7, 0.6),
+            new THREE.MeshBasicMaterial({
+              color: t === BLOCK_PLATFORM ? 0xff4444 : 0x4488ff,
+              transparent: true,
+              opacity: 0.55,
+            }),
+          );
+          marker.position.set(
+            cx * CHUNK_SIZE + bx * BLOCK_SIZE + BLOCK_SIZE / 2,
+            3.5,
+            cz * CHUNK_SIZE + bz * BLOCK_SIZE + BLOCK_SIZE / 2,
+          );
+          this.scene.add(marker);
+          this.chunkMarkers.push(marker);
+        }
+      }
+    }
   }
 
   /** 重建 chunk 网格（边界修正后：移除旧 mesh → 重建） */
@@ -365,17 +410,46 @@ export class WorldMode {
     }
     this.chunkMeshes.clear();
     this.chunkBodies.clear();
+    for (const mk of this.chunkMarkers) {
+      this.scene.remove(mk);
+    }
+    this.chunkMarkers = [];
     this.syncChunks(this.player.position.x, this.player.position.z);
   }
 
-  /** ★ 角色位置控制（kinematic）：y = 地形高度；★ 世界无限，无 xz 边界；
-   *   坑洞（地形 y < -1.5）→ 摔死（onDeath + 复位到安全高度） */
-  private clampCharacter(e: CharacterBase): void {
+  /** ★ 角色垂直运动（kinematic：模式层驱动）：
+   *   - 平地/高台：y 限速趋近地形高度——爬升 7.5m/s（上 1.5m 高台 ≈ 0.2s 平滑攀爬，
+   *     不瞬移）；下落 20m/s（走下高台快速落地）
+   *   - 坑洞：假重力加速下落 → 触底 → 摔死（玩家传送回出生点；敌人销毁置空） */
+  private clampCharacter(e: CharacterBase, dt: number): void {
     const p = e.position;
-    p.y = this.raster.heightAt(p.x, p.z);
-    if (p.y < -1.5) {
-      e.onDeath(null); // 摔死（玩家：日志/后续结算；敌人：销毁）
-      p.y = 0;         // 复位（玩家死亡后位置回安全高度）
+    const targetY = this.raster.heightAt(p.x, p.z);
+    const dy = targetY - p.y;
+    if (targetY >= -1.5) {
+      e.velY = 0;
+      if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
+      else p.y += Math.max(dy, -20 * dt);
+      return;
+    }
+    // 坑洞：假重力加速下落（velY 累积：走进坑 → 越掉越快）
+    if (e.velY < 0.01) console.log(`[坑洞] ${e.entity.kind} 进入坑洞 (${p.x.toFixed(1)},${p.z.toFixed(1)}) targetY=${targetY.toFixed(2)}`);
+    e.velY += 20 * dt;
+    p.y -= e.velY * dt;
+    if (p.y <= targetY + 0.05) {
+      // 触底：摔死（一次性）
+      e.velY = 0;
+      console.log(`[坑洞] ${e.entity.kind} 触底 (${p.x.toFixed(1)},${p.z.toFixed(1)}) y=${p.y.toFixed(2)} → 摔死`);
+      e.onDeath(null);
+      if (e === this.player) {
+        // 玩家：传送回出生点（出生安全区，强制平地 → 不循环死亡）
+        p.x = this.spawnPoint.x;
+        p.z = this.spawnPoint.z;
+        p.y = this.raster.heightAt(p.x, p.z);
+        this.cameraCtrl.snapTo(p.x, p.y, p.z);
+        console.log(`[坑洞] 玩家传送回出生点 (${p.x},${p.z})`);
+      } else {
+        this.enemy = null;
+      }
     }
   }
 
@@ -384,11 +458,16 @@ export class WorldMode {
     this.crosshair.dispose();
     this.minimap.dispose();
     this.bullets.dispose();
+    this.blockHud.remove();
     // chunk 视觉网格（天内统一回收）
     for (const m of this.chunkMeshes.values()) {
       this.scene.remove(m);
     }
     this.chunkMeshes.clear();
     this.chunkBodies.clear();
+    for (const mk of this.chunkMarkers) {
+      this.scene.remove(mk);
+    }
+    this.chunkMarkers = [];
   }
 }
