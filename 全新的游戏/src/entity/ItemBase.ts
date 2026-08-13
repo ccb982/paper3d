@@ -11,6 +11,7 @@ import { EntityBase, type EntityBaseOptions } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
+import { HealthBar } from '../services/fx/HealthBar';
 
 export interface ItemOptions extends Omit<EntityBaseOptions, 'kind'> {
   /** 配置表 itemId（物品唯一标识） */
@@ -19,6 +20,8 @@ export interface ItemOptions extends Omit<EntityBaseOptions, 'kind'> {
   displayName?: string;
   /** 是否受物理影响（掉落物 true / 静态装饰/资源点 false） */
   physical?: boolean;
+  /** 生命值（可被打烂；默认 20 = 2 发子弹） */
+  hp?: number;
 }
 
 export class ItemBase extends EntityBase {
@@ -59,11 +62,14 @@ export class ItemBase extends EntityBase {
     this.itemId = opts.itemId;
     this.displayName = opts.displayName ?? opts.itemId ?? '物品';
     this.physicsMode = opts.physical ? 'read' : 'none';
+    this.hp = opts.hp ?? 20; // ★ 物品可被打烂（2 发子弹）
     this.attachToScene(scene);
     // ★ 贴片尺寸对齐碰撞体（0.5×0.5 = 正面 0.44 宽；默认 scale 1×1 会与碰撞体严重不符）
     if (this.renderer) {
       this.renderer.setScale(0.5, 0.5);
     }
+    // ★ 物品血条（贴片 0.5 高 → offsetY 0.75 悬在头顶上方）
+    this.attachEffect('health', new HealthBar(scene, this, { width: 0.5, offsetY: 0.75 }));
   }
 
   /** ★ 刚体偏移：构造时 collisionVolume 尚未初始化（super 后）→ fallback 0.22 */

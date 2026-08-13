@@ -16,6 +16,7 @@ import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { levelForDistance } from '../services/lod';
+import { HealthBar } from '../services/fx/HealthBar';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
@@ -50,9 +51,11 @@ export class EnemyBase extends CharacterBase {
     super(em, { ...opts, kind: 'enemy', asset });
     this.camp = 'enemy';
     this.hp = opts.hp ?? 30; // ★ 敌人生命（普瑞赛斯 30；子弹 10 伤害 × 3 发）
-    this.assetRef = asset;
-    this.aggressive = opts.aggressive ?? false;
+    this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);
+
+    // ★ 头顶血条（附属特效管线：EntityBase.attachEffect；offsetY 高于贴片 2.5 → 不挡头）
+    this.attachEffect('health', new HealthBar(scene, this, { width: 0.8, offsetY: 2.8 }));
     // bbox 映射（纹理实际尺寸 = bbox.w×bbox.h，不能直接用 frame.width/height）
     const ftxFrame = asset.getFtxFrame(0);
     if (ftxFrame && this.renderer) {

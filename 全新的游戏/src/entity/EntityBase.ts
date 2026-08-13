@@ -88,6 +88,44 @@ export abstract class EntityBase {
     this.renderer?.setLodLevel(lv);   // 渲染管线：渐隐（渲染器实现）
   }
 
+  // ============ 附属特效管线（表现层，跟随实体；属于实体基类） ============
+
+  /** ★ 特效槽（血条/技能特效/受击/光环；与主贴片渲染管线分开） */
+  private effectSlots = new Map<string, import('../services/fx/EntityEffect').EntityEffect>();
+
+  /** 挂特效（同名覆盖；跟随实体位置/生命周期由本骨架驱动） */
+  attachEffect(name: string, effect: import('../services/fx/EntityEffect').EntityEffect): void {
+    this.detachEffect(name);
+    this.effectSlots.set(name, effect);
+  }
+
+  /** 卸特效 */
+  detachEffect(name: string): void {
+    const fx = this.effectSlots.get(name);
+    if (fx) {
+      fx.dispose();
+      this.effectSlots.delete(name);
+    }
+  }
+
+  /** 取特效（子类/外部读取状态用） */
+  getEffect<T extends import('../services/fx/EntityEffect').EntityEffect>(name: string): T | undefined {
+    return this.effectSlots.get(name) as T | undefined;
+  }
+
+  /** 特效槽每帧驱动（更新骨架内：跟随位置 + 时间轴 + 回收） */
+  private updateEffects(dt: number): void {
+    if (this.effectSlots.size === 0) return;
+    const p = this.entity.position;
+    for (const [name, fx] of this.effectSlots) {
+      const done = fx.update(dt, p.x, p.y, p.z);
+      if (done) {
+        fx.dispose();
+        this.effectSlots.delete(name);
+      }
+    }
+  }
+
   // ============ 生命与战斗属性（伤害管线 modifiers 链，架构 4.1） ============
 
   /** 生命值（子类构造可覆写初始值） */
@@ -155,7 +193,8 @@ export abstract class EntityBase {
     this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
     this.anim?.update(dt);                  // ③ 动画推进
     this.syncRender();                      // ④ 渲染同步
-    this.em.onEntityMoved(this);            // ⑤ 空间索引移块（集中刷新点）
+    this.updateEffects(dt);                 // ⑤ 附属特效驱动（跟随/时间轴/回收）
+    this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
   }
 
   /** 子类行为逻辑（覆写） */
@@ -209,6 +248,8 @@ export abstract class EntityBase {
       (this.renderer as { setBillboard(c: THREE.Camera): void }).setBillboard(camera);
     }
     this.renderer.render(this.state, null);
+    // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
+    for (const fx of this.effectSlots.values()) fx.render(camera);
   }
 
   // ============ 生命周期 ============
@@ -229,6 +270,8 @@ export abstract class EntityBase {
   dispose(): void {
     this.anim?.dispose();
     this.renderer?.dispose();
+    for (const fx of this.effectSlots.values()) fx.dispose();
+    this.effectSlots.clear();
     this.em.unregister(this);
     this.em.destroy(this.entity.id);
   }
