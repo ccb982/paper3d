@@ -125,17 +125,6 @@ export class RasterMap {
     return (chunk.walkable[lz * CHUNK_SIZE + lx] ?? 1) === 1;
   }
 
-  /** ★ 世界块类型（0 平地 / 1 高台 / 2 坑洞；调试/玩法查询用） */
-  blockTypeAt(x: number, z: number): number {
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
-    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
-    if (!chunk) return 0;
-    const lx = Math.floor(x - cx * CHUNK_SIZE);
-    const lz = Math.floor(z - cz * CHUNK_SIZE);
-    return chunk.blockTypes[Math.floor(lz / BLOCK_SIZE) * BLOCKS_PER_SIDE + Math.floor(lx / BLOCK_SIZE)] ?? 0;
-  }
-
   /** 地形颜色（按块类型：高台亮黄 / 平地绿 / 坑洞深黑；未加载深灰） */
   terrainColorAt(x: number, z: number): [number, number, number] {
     const cx = Math.floor(x / CHUNK_SIZE);

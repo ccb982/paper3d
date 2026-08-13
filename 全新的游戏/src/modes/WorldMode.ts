@@ -19,7 +19,7 @@ import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
-import { CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_PLATFORM, BLOCK_PIT } from '../services/map/ChunkGenerator';
+import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -51,10 +51,6 @@ export class WorldMode {
   private chunkMeshes = new Map<number, THREE.Mesh>();
   /** chunk 地面刚体（chunkKey → 已建标记；防重复） */
   private chunkBodies = new Set<number>();
-  /** ★ 调试标记柱（红=高台 蓝=坑洞，悬空 6m；定位视觉 vs 数据错位后移除） */
-  private chunkMarkers: THREE.Mesh[] = [];
-  /** ★ 调试 HUD：玩家脚下块类型（数据层 vs 视觉对照用，定位错位后移除） */
-  private blockHud = document.createElement('div');
   /** chunk 共享材质（顶点色：块类型着色——高台沙黄/平地绿/坑洞黑） */
   private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   /** AI 上下文（索敌 = 玩家位置 + 攻击意图 = 统一攻击管线） */
@@ -158,12 +154,6 @@ export class WorldMode {
     this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
     // ★ AI 攻击意图 = 统一攻击管线（近战/远程/范围分派 → 伤害管线）
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
-
-    // ---- ★ 调试 HUD（右下角：脚下块类型/高度——定位小地图错位用） ----
-    this.blockHud.style.cssText =
-      'position:fixed;bottom:8px;right:8px;color:#fff;background:rgba(0,0,0,0.7);' +
-      'padding:6px 10px;z-index:999;font:12px monospace;white-space:pre;';
-    document.body.appendChild(this.blockHud);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -209,13 +199,6 @@ export class WorldMode {
       this.bulletCooldown = 0.15;
       this.firePlayerBullet();
     }
-
-    // ---- 调试 HUD：脚下块类型（对照 3D 视觉与小地图） ----
-    const p = this.player.position;
-    const t = this.raster.blockTypeAt(p.x, p.z);
-    const typeName = t === 1 ? '高台' : t === 2 ? '坑洞' : '平地';
-    this.blockHud.textContent =
-      `脚下块: ${typeName}\n世界坐标: (${p.x.toFixed(1)}, ${p.z.toFixed(1)})\n高度: ${this.raster.heightAt(p.x, p.z).toFixed(2)}`;
   }
 
   /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */
@@ -362,32 +345,6 @@ export class WorldMode {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
     this.chunkMeshes.set(key, mesh);
-
-    // ---- ★ 调试标记柱（数据块类型可视化：红=高台 蓝=坑洞） ----
-    const data = this.raster.getChunkData(cx, cz);
-    if (data) {
-      for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
-        for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
-          const t = data.blockTypes[bz * BLOCKS_PER_SIDE + bx];
-          if (t !== BLOCK_PLATFORM && t !== BLOCK_PIT) continue;
-          const marker = new THREE.Mesh(
-            new THREE.BoxGeometry(0.6, 7, 0.6),
-            new THREE.MeshBasicMaterial({
-              color: t === BLOCK_PLATFORM ? 0xff4444 : 0x4488ff,
-              transparent: true,
-              opacity: 0.55,
-            }),
-          );
-          marker.position.set(
-            cx * CHUNK_SIZE + bx * BLOCK_SIZE + BLOCK_SIZE / 2,
-            3.5,
-            cz * CHUNK_SIZE + bz * BLOCK_SIZE + BLOCK_SIZE / 2,
-          );
-          this.scene.add(marker);
-          this.chunkMarkers.push(marker);
-        }
-      }
-    }
   }
 
   /** 重建 chunk 网格（边界修正后：移除旧 mesh → 重建） */
@@ -410,10 +367,6 @@ export class WorldMode {
     }
     this.chunkMeshes.clear();
     this.chunkBodies.clear();
-    for (const mk of this.chunkMarkers) {
-      this.scene.remove(mk);
-    }
-    this.chunkMarkers = [];
     this.syncChunks(this.player.position.x, this.player.position.z);
   }
 
@@ -432,13 +385,11 @@ export class WorldMode {
       return;
     }
     // 坑洞：假重力加速下落（velY 累积：走进坑 → 越掉越快）
-    if (e.velY < 0.01) console.log(`[坑洞] ${e.entity.kind} 进入坑洞 (${p.x.toFixed(1)},${p.z.toFixed(1)}) targetY=${targetY.toFixed(2)}`);
     e.velY += 20 * dt;
     p.y -= e.velY * dt;
     if (p.y <= targetY + 0.05) {
       // 触底：摔死（一次性）
       e.velY = 0;
-      console.log(`[坑洞] ${e.entity.kind} 触底 (${p.x.toFixed(1)},${p.z.toFixed(1)}) y=${p.y.toFixed(2)} → 摔死`);
       e.onDeath(null);
       if (e === this.player) {
         // 玩家：传送回出生点（出生安全区，强制平地 → 不循环死亡）
@@ -446,7 +397,6 @@ export class WorldMode {
         p.z = this.spawnPoint.z;
         p.y = this.raster.heightAt(p.x, p.z);
         this.cameraCtrl.snapTo(p.x, p.y, p.z);
-        console.log(`[坑洞] 玩家传送回出生点 (${p.x},${p.z})`);
       } else {
         this.enemy = null;
       }
@@ -458,16 +408,11 @@ export class WorldMode {
     this.crosshair.dispose();
     this.minimap.dispose();
     this.bullets.dispose();
-    this.blockHud.remove();
     // chunk 视觉网格（天内统一回收）
     for (const m of this.chunkMeshes.values()) {
       this.scene.remove(m);
     }
     this.chunkMeshes.clear();
     this.chunkBodies.clear();
-    for (const mk of this.chunkMarkers) {
-      this.scene.remove(mk);
-    }
-    this.chunkMarkers = [];
   }
 }
