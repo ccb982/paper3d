@@ -21,10 +21,15 @@ export const BLOCK_FLAT = 0;     // 平地
 export const BLOCK_PLATFORM = 1; // 高台
 export const BLOCK_PIT = 2;      // 坑洞（摔死）
 
+/** ★ region 尺寸（块）：3×3 块一个区域。chunk 15 块 = 5×5 region（15%3==0）
+ *   → region 边界与 chunk 边界对齐 → 高台/坑洞区域【永不跨 chunk 切半】，
+ *     同一 region 的块无论落在哪个 chunk 类型完全一致（完整生成） */
+const REGION = 3;
+
 /** 块基准高度 */
 const BASE_HEIGHT = [0, 1.5, -2] as const;
 
-/** 类型阈值（value noise 0-1） */
+/** 类型阈值（hash 0-1） */
 const T_PIT = 0.04;      // < 0.04 → 坑洞（≤5%）
 const T_PLATFORM = 0.62; // > 0.62 → 高台（~30%）
 
@@ -70,14 +75,7 @@ function valueNoise(x: number, z: number, seed: number, scale: number): number {
   return lerp(lerp(a, b, fx), lerp(c, d, fx), fz);
 }
 
-/** 两层噪声混合（大区域 + 细节） */
-function terrainNoise(bx: number, bz: number, seed: number): number {
-  const large = valueNoise(bx, bz, seed, 4.5);   // 大块区域
-  const detail = valueNoise(bx, bz, seed + 7, 2); // 细节
-  return large * 0.7 + detail * 0.3;
-}
-
-/** 每米微起伏（±0.2 的像素级落差） */
+/** 每米微起伏（±0.2 的像素级落差；★ 导出：边界修正降块时重算平地高度） */
 function microRelief(x: number, z: number, seed: number): number {
   return (valueNoise(x, z, seed + 13, 1.5) - 0.5) * 0.4;
 }
@@ -92,50 +90,29 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   const wx0 = chunkX * BLOCKS_PER_SIDE;
   const wz0 = chunkZ * BLOCKS_PER_SIDE;
 
-  // ① 块类型（两层噪声阈值分类；世界块坐标采样 → 边界连续）
+  // ① 块类型 = region 类型（★ 跨 chunk 完整生成）：
+  //   region（3×3 块）类型由【region 世界坐标】确定性 hash 决定。
+  //   ★ 严丝合缝保证：chunk 边界一圈 region【强制平地】——
+  //     高台/坑洞只出现在 chunk 内部（中间 3×3 region），
+  //     缝两侧永远是"平地对平地"→ 不存在边界截断/半块高台/角色站虚空
   const blockTypes = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);
+  const REGIONS = BLOCKS_PER_SIDE / REGION; // 5
   for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
     for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
-      const n = terrainNoise(wx0 + bx, wz0 + bz, seed);
+      const rx = Math.floor((wx0 + bx) / REGION);
+      const rz = Math.floor((wz0 + bz) / REGION);
+      // region 在本 chunk 内的索引（0..4）
+      const lrx = rx - Math.floor(wx0 / REGION);
+      const lrz = rz - Math.floor(wz0 / REGION);
+      // ★ 边界 region（贴 chunk 边缘一圈）→ 强制平地（严丝合缝）
+      if (lrx === 0 || lrx === REGIONS - 1 || lrz === 0 || lrz === REGIONS - 1) {
+        blockTypes[bz * BLOCKS_PER_SIDE + bx] = BLOCK_FLAT;
+        continue;
+      }
+      const n = hash2(rx, rz, seed);
       blockTypes[bz * BLOCKS_PER_SIDE + bx] = n < T_PIT ? BLOCK_PIT : n > T_PLATFORM ? BLOCK_PLATFORM : BLOCK_FLAT;
     }
   }
-
-  // ② 元胞平滑：孤立碎块合并（3×3 邻域多数投票，1 轮）
-  //   ⚠ 仅本 chunk 内邻域（边界块与邻居 chunk 的关系由世界连续场保证，
-  //     平滑只在 chunk 内做，不破坏跨 chunk 连续性）
-  const smoothed = new Uint8Array(blockTypes);
-  for (let bz = 1; bz < BLOCKS_PER_SIDE - 1; bz++) {
-    for (let bx = 1; bx < BLOCKS_PER_SIDE - 1; bx++) {
-      const self = blockTypes[bz * BLOCKS_PER_SIDE + bx];
-      let same = 0;
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (blockTypes[(bz + dz) * BLOCKS_PER_SIDE + (bx + dx)] === self) same++;
-        }
-      }
-      // 邻域内同类 < 4（孤立/边缘碎块）→ 并入周围最多数的类型
-      if (same < 4) {
-        const counts = [0, 0, 0];
-        for (let dz = -1; dz <= 1; dz++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dz === 0) continue;
-            counts[blockTypes[(bz + dz) * BLOCKS_PER_SIDE + (bx + dx)]]++;
-          }
-        }
-        let best = BLOCK_FLAT;
-        let bestCount = -1;
-        for (let t = 0; t < 3; t++) {
-          if (counts[t] > bestCount) {
-            bestCount = counts[t];
-            best = t;
-          }
-        }
-        smoothed[bz * BLOCKS_PER_SIDE + bx] = best;
-      }
-    }
-  }
-  blockTypes.set(smoothed);
 
   // ③ 每米数据（高度 + 阻挡 + 可通行）
   const heights = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);

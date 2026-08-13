@@ -269,9 +269,11 @@ export class WorldMode {
   }
 
   /** ★ 无限地图 chunk 同步：数据（RasterMap）+ 地面刚体 + 视觉网格。
-   *   天内只增不删；天结束（dispose/clearAll）统一回收 */
+   *   天内只增不删；天结束（dispose/clearAll）统一回收
+   *   ★ 边界严丝合缝由生成约束保证（边界 region 强制平地），无需修补 */
   private syncChunks(px: number, pz: number): void {
     const added = this.raster.updateChunks(px, pz);
+    // ★ ① 新增 chunk：地面刚体 + 网格
     for (const { cx, cz } of added) {
       const key = chunkKeyOf(cx, cz);
       if (!this.chunkBodies.has(key)) {
@@ -285,35 +287,74 @@ export class WorldMode {
           physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: CHUNK_SIZE / 2, hy: 0.05, hz: CHUNK_SIZE / 2 } } },
         });
       }
-      if (!this.chunkMeshes.has(key)) {
-        // ★ 视觉网格：高度场（每米细分，顶点按 chunk 地形高度抬升 + 顶点色块类型着色）
-        const data = this.raster.getChunkData(cx, cz);
-        const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
-        geo.rotateX(-Math.PI / 2);
-        const pos = geo.attributes.position as THREE.BufferAttribute;
-        const colors = new Float32Array(pos.count * 3);
-        for (let i = 0; i < pos.count; i++) {
-          // chunk 本地 [-30,30] → 世界偏移
-          const lx = pos.getX(i) + CHUNK_SIZE / 2;
-          const lz = -pos.getZ(i) + CHUNK_SIZE / 2;
-          const wx = cx * CHUNK_SIZE + lx;
-          const wz = cz * CHUNK_SIZE + lz;
-          const h = data ? data.heights[Math.floor(lz) * CHUNK_SIZE + Math.floor(lx)] ?? 0 : 0;
-          pos.setY(i, h);
-          const [r, g, b] = this.raster.terrainColorAt(wx, wz);
-          colors[i * 3] = r / 255;
-          colors[i * 3 + 1] = g / 255;
-          colors[i * 3 + 2] = b / 255;
+      this.buildChunkMesh(cx, cz);
+    }
+    // ★ ② 新增 chunk 的已存在邻居：网格重建——
+    //   网格顶点高度 = 世界采样（跨 chunk），生成时邻 chunk 未加载 → 边界
+    //   顶点高度被写成 0（heightAt 兜底）→ 视觉边界低带。
+    //   邻居加载后必须重建旧网格。
+    for (const { cx, cz } of added) {
+      for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nkey = chunkKeyOf(cx + nx, cz + nz);
+        if (this.chunkMeshes.has(nkey)) {
+          this.rebuildChunkMesh(cx + nx, cz + nz);
         }
-        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        geo.computeVertexNormals();
-        const mesh = new THREE.Mesh(geo, WorldMode.chunkMat);
-        mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-        mesh.receiveShadow = true;
-        this.scene.add(mesh);
-        this.chunkMeshes.set(key, mesh);
       }
     }
+  }
+
+  /** 建/重建 chunk 视觉网格（高度场 + 顶点色 + 跨 chunk 法线） */
+  private buildChunkMesh(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    if (this.chunkMeshes.has(key)) return;
+    const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const colors = new Float32Array(pos.count * 3);
+    const normals = new Float32Array(pos.count * 3);
+    const tmpN = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i) + CHUNK_SIZE / 2;
+      const lz = -pos.getZ(i) + CHUNK_SIZE / 2;
+      const wx = cx * CHUNK_SIZE + lx;
+      const wz = cz * CHUNK_SIZE + lz;
+      // ★ 顶点高度 = 世界采样（跨 chunk）——边界顶点（lx=60）自动取邻 chunk 同点高度，
+      //   避免本地数组越界（heights 只有 60×60）导致边界高度归 0 → 台阶裂缝
+      const h = this.raster.heightAt(wx, wz);
+      pos.setY(i, h);
+      const [r, g, b] = this.raster.terrainColorAt(wx, wz);
+      colors[i * 3] = r / 255;
+      colors[i * 3 + 1] = g / 255;
+      colors[i * 3 + 2] = b / 255;
+      // ★ 手动法线：世界高度采样（跨 chunk）→ 边界法线连续（无光照接缝）
+      const hL = this.raster.heightAt(wx - 1, wz);
+      const hR = this.raster.heightAt(wx + 1, wz);
+      const hD = this.raster.heightAt(wx, wz - 1);
+      const hU = this.raster.heightAt(wx, wz + 1);
+      tmpN.set(hL - hR, 2, hD - hU).normalize();
+      normals[i * 3] = tmpN.x;
+      normals[i * 3 + 1] = tmpN.y;
+      normals[i * 3 + 2] = tmpN.z;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+    const mesh = new THREE.Mesh(geo, WorldMode.chunkMat);
+    mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    mesh.receiveShadow = true;
+    this.scene.add(mesh);
+    this.chunkMeshes.set(key, mesh);
+  }
+
+  /** 重建 chunk 网格（边界修正后：移除旧 mesh → 重建） */
+  private rebuildChunkMesh(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    const old = this.chunkMeshes.get(key);
+    if (old) {
+      this.scene.remove(old);
+      old.geometry.dispose();
+      this.chunkMeshes.delete(key);
+    }
+    this.buildChunkMesh(cx, cz);
   }
 
   /** ★ 天结束统一回收（世界重建：raster 重置 3×3 + chunk 网格/刚体清理） */

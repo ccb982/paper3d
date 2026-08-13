@@ -11,7 +11,10 @@
 
 import type { EntityBase } from '../../entity/EntityBase';
 import * as THREE from 'three';
-import { generateChunk, type ChunkData, CHUNK_SIZE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT } from './ChunkGenerator';
+import {
+  generateChunk, type ChunkData,
+  CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT,
+} from './ChunkGenerator';
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
