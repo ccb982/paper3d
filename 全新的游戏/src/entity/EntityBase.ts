@@ -88,18 +88,26 @@ export abstract class EntityBase {
     this.renderer?.setLodLevel(lv);   // 渲染管线：渐隐（渲染器实现）
   }
 
-  // ============ 生命与战斗属性（伤害管线，架构 4.1） ============
+  // ============ 生命与战斗属性（伤害管线 modifiers 链，架构 4.1） ============
 
   /** 生命值（子类构造可覆写初始值） */
   hp = 100;
-  /** 攻击力加成（伤害管线：final = base + attackPower - defense） */
+  /** 攻击力加成（modifierDefense：damage + attackPower - defense） */
   attackPower = 0;
-  /** 防御减伤（伤害管线） */
+  /** 防御（减法减伤） */
   defense = 0;
-  /** 暴击率 0-1（伤害管线 roll） */
+  /** 暴击率 0-1（modifierCrit） */
   critRate = 0;
   /** 暴击倍率 */
   critMult = 1.5;
+  /** 闪避率 0-1（modifierDodge） */
+  dodgeRate = 0;
+  /** 格挡率 0-1（modifierBlock） */
+  blockRate = 0;
+  /** 格挡减伤倍率（格挡时伤害 × blockMult） */
+  blockMult = 0.5;
+  /** 护盾值（modifierShield：先扣护盾再扣血） */
+  shield = 0;
 
   /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
   onTakeDamage(dmg: number, source: EntityBase | null): void {

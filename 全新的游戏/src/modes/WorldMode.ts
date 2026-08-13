@@ -29,6 +29,7 @@ import type { EntityBase } from '../entity/EntityBase';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager } from '../services/combat/BulletManager';
+import { executeAttack } from '../services/combat/Attack';
 
 export class WorldMode {
   readonly entities: EntityManager;
@@ -52,13 +53,13 @@ export class WorldMode {
   /** chunk 共享网格/材质（占位平地；★ 旋转到 XZ 平面——PlaneGeometry 默认 XY 竖立） */
   private static chunkGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE).rotateX(-Math.PI / 2);
   private static chunkMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.9, metalness: 0 });
-  /** AI 上下文（索敌 = 玩家位置 + 子弹发射回调 = 子弹管线） */
+  /** AI 上下文（索敌 = 玩家位置 + 攻击意图 = 统一攻击管线） */
   private aiCtx: BehaviorContext = {
     dt: 0,
     time: 0,
     target: null,
     findTarget: () => null,
-    spawnBullet: () => undefined,
+    attack: () => undefined,
   };
 
   constructor(
@@ -149,8 +150,8 @@ export class WorldMode {
 
     // ---- ★ 子弹池（100 颗常驻复用） ----
     this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
-    // ★ AI 攻击发射 = 子弹管线（近战/远程统一；敌人攻击弹 camp='enemy'）
-    this.aiCtx.spawnBullet = (opts) => this.bullets.spawn(opts);
+    // ★ AI 攻击意图 = 统一攻击管线（近战/远程/范围分派 → 伤害管线）
+    this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -244,7 +245,10 @@ export class WorldMode {
     // ② 枪口 → 落点（3D 方向）
     const dx = tx - muzzle.x, dy = ty - muzzle.y, dz = tz - muzzle.z;
     const len = Math.hypot(dx, dy, dz) || 1;
-    this.bullets.spawn({
+    // ★ 玩家射击 = 统一攻击管线（projectile 意图）
+    executeAttack(this.entities, this.bullets, {
+      type: 'projectile',
+      source: this.player,
       x: muzzle.x + (dx / len) * 0.8,
       y: muzzle.y + (dy / len) * 0.8,
       z: muzzle.z + (dz / len) * 0.8,

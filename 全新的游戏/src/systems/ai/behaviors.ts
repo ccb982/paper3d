@@ -5,7 +5,7 @@
 // 加新行为 = 写函数 + 注册，敌人配置直接引用。
 
 import type { EnemyBase } from '../../entity/EnemyBase';
-import type { SpawnBulletOptions } from '../../services/combat/BulletManager';
+import type { AttackOptions } from '../../services/combat/Attack';
 
 export interface BehaviorContext {
   /** 当前帧步长 */
@@ -16,9 +16,8 @@ export interface BehaviorContext {
   target: { x: number; z: number } | null;
   /** 索敌回调（camp → 目标位置；WorldMode 注入：敌人找玩家） */
   findTarget: (camp: string) => { x: number; z: number } | null;
-  /** ★ 子弹发射回调（模式层注入 = BulletManager.spawn——
-   *   近战/远程攻击统一走子弹管线） */
-  spawnBullet: (opts: SpawnBulletOptions) => void;
+  /** ★ 攻击意图入口（模式层注入 = executeAttack——近战/远程/范围统一分派） */
+  attack: (opts: AttackOptions) => void;
 }
 
 export type BehaviorFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, string | number>) => void;
@@ -99,31 +98,26 @@ registerBehavior('moveToTarget', (entity, ctx, params) => {
 });
 
 /** 近战攻击：一次性挥击（计时播完 → attackFinished 条件退出，不再循环）；
- *   ★ 挥击 = 子弹管线发射短寿命攻击弹（近战/远程统一：命中结算走伤害管线） */
+ *   ★ 挥击 = 攻击意图（type:'melee'）→ 执行器做范围判定 → 伤害管线 */
 registerBehavior('meleeSwing', (entity, ctx, params) => {
   const duration = pnum(params, 'duration', 0.6);
+  const range = pnum(params, 'range', 1.8);
   const damage = pnum(params, 'damage', 8);
   // 挥击未开始/已播完（含首次进入）→ 重新开始一轮挥击
   if (entity.aiAttackTimer <= 0) {
     entity.aiAttackTimer = duration;
     entity.aiSwingDone = false;
-    // ★ 挥击瞬间：发射短寿命攻击弹（朝目标；飞 ~1.2m 后消失 = 近战范围）
-    const t = ctx.target;
-    if (t) {
-      const dx = t.x - entity.position.x;
-      const dz = t.z - entity.position.z;
-      const len = Math.hypot(dx, dz) || 1;
-      ctx.spawnBullet({
-        x: entity.position.x + (dx / len) * 0.8,
+    // ★ 挥击瞬间：发出近战攻击意图（以自身为挥击中心，范围内目标才命中）
+    if (ctx.target) {
+      ctx.attack({
+        type: 'melee',
+        source: entity,
+        x: entity.position.x,
         y: entity.position.y + 1.0,
-        z: entity.position.z + (dz / len) * 0.8,
-        dirX: dx / len,
-        dirY: 0,
-        dirZ: dz / len,
-        speed: 8,
-        camp: 'enemy',
-        lifetime: 0.15, // 短寿命：攻击范围 ≈ 1.2m
+        z: entity.position.z,
+        range,
         damage,
+        camp: 'enemy',
       });
     }
   }
