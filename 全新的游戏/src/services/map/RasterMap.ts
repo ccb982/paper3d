@@ -11,9 +11,7 @@
 
 import type { EntityBase } from '../../entity/EntityBase';
 import * as THREE from 'three';
-
-/** chunk 尺寸（米/地块） */
-export const CHUNK_SIZE = 60;
+import { generateChunk, type ChunkData, CHUNK_SIZE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT } from './ChunkGenerator';
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -26,8 +24,8 @@ export function cellKeyOf(x: number, z: number): number {
 }
 
 export class RasterMap {
-  /** 地形 chunk：chunkKey → heights（CHUNK_SIZE²，平地占位全 0） */
-  private chunks = new Map<number, Float32Array>();
+  /** 地形 chunk：chunkKey → ChunkData（块状地形：平地/高台/坑洞） */
+  private chunks = new Map<number, ChunkData>();
   /** 实体索引：cellKey（全局）→ 实体集合 */
   private cells = new Map<number, Set<EntityBase>>();
   /** 实体当前 cell（移块判定） */
@@ -39,17 +37,17 @@ export class RasterMap {
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
 
-  constructor() {
+  constructor(private seed = 12345) {
     // 初始不预生成：首次 updateChunks（syncChunks）统一生成 3×3（加载半径 2）
   }
 
   // ============ chunk 加载（玩家驱动扩张） ============
 
-  /** 确保单个 chunk 存在（占位平地） */
+  /** 确保单个 chunk 存在（块状地形生成，确定性） */
   private ensureChunk(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
     if (this.chunks.has(key)) return;
-    this.chunks.set(key, new Float32Array(CHUNK_SIZE * CHUNK_SIZE));
+    this.chunks.set(key, generateChunk(this.seed, cx, cz));
   }
 
   /** ★ 玩家驱动加载：跨 chunk 时按加载半径扩张，返回本次新增 chunk 列表
@@ -86,28 +84,76 @@ export class RasterMap {
 
   // ============ 静态地形（无界采样） ============
 
+  /** 取 chunk 数据（视觉/物理生成用） */
+  getChunkData(cx: number, cz: number): ChunkData | undefined {
+    return this.chunks.get(chunkKeyOf(cx, cz));
+  }
+
   /** 世界高度（无 chunk = 0 占位） */
   heightAt(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
-    const hm = this.chunks.get(chunkKeyOf(cx, cz));
-    if (!hm) return 0;
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return 0;
     const lx = Math.floor(x - cx * CHUNK_SIZE);
     const lz = Math.floor(z - cz * CHUNK_SIZE);
-    return hm[lz * CHUNK_SIZE + lx] ?? 0;
+    return chunk.heights[lz * CHUNK_SIZE + lx] ?? 0;
   }
 
-  /** 地形颜色（已加载 = 绿地；未加载 = 深灰——小地图上可见"未探索世界"） */
+  /** 世界阻挡高度（高台立面；射击 rayMarch 用） */
+  blockHeightAt(x: number, z: number): number {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return 0;
+    const lx = Math.floor(x - cx * CHUNK_SIZE);
+    const lz = Math.floor(z - cz * CHUNK_SIZE);
+    return chunk.blockHeight[lz * CHUNK_SIZE + lx] ?? 0;
+  }
+
+  /** 世界可通行（坑洞 = false；AI 寻路/移动判定用） */
+  isWalkable(x: number, z: number): boolean {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return true; // 未加载区默认可走（防止边界卡死）
+    const lx = Math.floor(x - cx * CHUNK_SIZE);
+    const lz = Math.floor(z - cz * CHUNK_SIZE);
+    return (chunk.walkable[lz * CHUNK_SIZE + lx] ?? 1) === 1;
+  }
+
+  /** 地形颜色（按块类型：高台亮黄 / 平地绿 / 坑洞深黑；未加载深灰） */
   terrainColorAt(x: number, z: number): [number, number, number] {
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
-    if (!this.chunks.has(chunkKeyOf(cx, cz))) return [25, 25, 30]; // 未加载
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return [25, 25, 30]; // 未加载
+    const lx = Math.floor(x - cx * CHUNK_SIZE);
+    const lz = Math.floor(z - cz * CHUNK_SIZE);
+    const bx = Math.floor(lx / 4);
+    const bz = Math.floor(lz / 4);
+    const t = chunk.blockTypes[bz * 15 + bx];
     const h = this.heightAt(x, z);
-    const t = Math.max(0, Math.min(1, h / 8));
-    const r = Math.round(45 + (150 - 45) * t);
-    const g = Math.round(90 + (140 - 90) * t);
-    const b = Math.round(39 + (60 - 39) * t);
-    return [r, g, b];
+    // 微起伏亮度（±0.2 高度 → 颜色微调，肉眼可见像素级落差）
+    const relief = Math.max(-0.2, Math.min(0.2, h - (t === BLOCK_PLATFORM ? 1.5 : t === BLOCK_PIT ? -2 : 0)));
+    const k = 1 + relief * 0.8; // 亮度系数
+    let r: number, g: number, b: number;
+    switch (t) {
+      case BLOCK_PLATFORM:
+        r = 150; g = 135; b = 80; // 高台：沙黄
+        break;
+      case BLOCK_PIT:
+        r = 18; g = 16; b = 20; // 坑洞：深黑
+        break;
+      default:
+        r = 45; g = 90; b = 39; // 平地：绿
+        break;
+    }
+    return [
+      Math.round(Math.min(255, r * k)),
+      Math.round(Math.min(255, g * k)),
+      Math.round(Math.min(255, b * k)),
+    ];
   }
 
   // ============ 实体索引（全局 cell，无限） ============

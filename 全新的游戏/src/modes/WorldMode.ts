@@ -18,7 +18,8 @@ import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
-import { RasterMap, CHUNK_SIZE, chunkKeyOf } from '../services/map/RasterMap';
+import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
+import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -50,9 +51,8 @@ export class WorldMode {
   private chunkMeshes = new Map<number, THREE.Mesh>();
   /** chunk 地面刚体（chunkKey → 已建标记；防重复） */
   private chunkBodies = new Set<number>();
-  /** chunk 共享网格/材质（占位平地；★ 旋转到 XZ 平面——PlaneGeometry 默认 XY 竖立） */
-  private static chunkGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE).rotateX(-Math.PI / 2);
-  private static chunkMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.9, metalness: 0 });
+  /** chunk 共享材质（顶点色：块类型着色——高台沙黄/平地绿/坑洞黑） */
+  private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   /** AI 上下文（索敌 = 玩家位置 + 攻击意图 = 统一攻击管线） */
   private aiCtx: BehaviorContext = {
     dt: 0,
@@ -286,8 +286,28 @@ export class WorldMode {
         });
       }
       if (!this.chunkMeshes.has(key)) {
-        // 视觉网格（占位平地，共享几何/材质）
-        const mesh = new THREE.Mesh(WorldMode.chunkGeo, WorldMode.chunkMat);
+        // ★ 视觉网格：高度场（每米细分，顶点按 chunk 地形高度抬升 + 顶点色块类型着色）
+        const data = this.raster.getChunkData(cx, cz);
+        const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+        geo.rotateX(-Math.PI / 2);
+        const pos = geo.attributes.position as THREE.BufferAttribute;
+        const colors = new Float32Array(pos.count * 3);
+        for (let i = 0; i < pos.count; i++) {
+          // chunk 本地 [-30,30] → 世界偏移
+          const lx = pos.getX(i) + CHUNK_SIZE / 2;
+          const lz = -pos.getZ(i) + CHUNK_SIZE / 2;
+          const wx = cx * CHUNK_SIZE + lx;
+          const wz = cz * CHUNK_SIZE + lz;
+          const h = data ? data.heights[Math.floor(lz) * CHUNK_SIZE + Math.floor(lx)] ?? 0 : 0;
+          pos.setY(i, h);
+          const [r, g, b] = this.raster.terrainColorAt(wx, wz);
+          colors[i * 3] = r / 255;
+          colors[i * 3 + 1] = g / 255;
+          colors[i * 3 + 2] = b / 255;
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geo.computeVertexNormals();
+        const mesh = new THREE.Mesh(geo, WorldMode.chunkMat);
         mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
         mesh.receiveShadow = true;
         this.scene.add(mesh);
@@ -307,10 +327,15 @@ export class WorldMode {
     this.syncChunks(this.player.position.x, this.player.position.z);
   }
 
-  /** ★ 角色位置控制（kinematic）：y = 地形高度；★ 世界无限，无 xz 边界 */
+  /** ★ 角色位置控制（kinematic）：y = 地形高度；★ 世界无限，无 xz 边界；
+   *   坑洞（地形 y < -1.5）→ 摔死（onDeath + 复位到安全高度） */
   private clampCharacter(e: CharacterBase): void {
     const p = e.position;
     p.y = this.raster.heightAt(p.x, p.z);
+    if (p.y < -1.5) {
+      e.onDeath(null); // 摔死（玩家：日志/后续结算；敌人：销毁）
+      p.y = 0;         // 复位（玩家死亡后位置回安全高度）
+    }
   }
 
   dispose(): void {
