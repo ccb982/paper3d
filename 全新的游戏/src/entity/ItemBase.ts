@@ -63,6 +63,7 @@ export class ItemBase extends EntityBase {
     this.displayName = opts.displayName ?? opts.itemId ?? '物品';
     this.physicsMode = opts.physical ? 'read' : 'none';
     this.hp = opts.hp ?? 20; // ★ 物品可被打烂（2 发子弹）
+    this.maxHp = this.hp;
     this.attachToScene(scene);
     // ★ 贴片尺寸对齐碰撞体（0.5×0.5 = 正面 0.44 宽；默认 scale 1×1 会与碰撞体严重不符）
     if (this.renderer) {

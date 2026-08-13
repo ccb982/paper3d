@@ -20,7 +20,7 @@ import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
-import { Minimap } from '../services/ui/Minimap';
+import { UILayer } from '../services/ui/UILayer';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
@@ -40,8 +40,8 @@ export class WorldMode {
   /** ★ 统一空间层（无限 chunk 地图：地形 + 实体索引 + 梯形剔除；架构 3.8/3.10） */
   private raster: RasterMap;
   private crosshair: Crosshair;
-  /** ★ 小地图（左上角；RasterMap 地形 → Minimap 渲染） */
-  private minimap: Minimap;
+  /** ★ UI 层（左上角：小地图 + 血量 HUD；展示层统一入口，模式层不直接画 UI） */
+  private ui: UILayer;
   /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
   private bulletAsset = createSolidBulletAsset();
   /** ★ 子弹池（预创建 100 颗反复使用；超时回池，不销毁重建） */
@@ -148,8 +148,8 @@ export class WorldMode {
     // ---- 准星（固定屏幕中心，瞄准/交互基准） ----
     this.crosshair = new Crosshair();
 
-    // ---- ★ 小地图（RasterMap 光栅化地形 → Minimap 左上角绘制） ----
-    this.minimap = new Minimap(this.raster);
+    // ---- ★ UI 层（小地图 + 血量 HUD，展示层统一入口） ----
+    this.ui = new UILayer(this.raster);
 
     // ---- ★ 子弹池（100 颗常驻复用） ----
     this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
@@ -165,7 +165,7 @@ export class WorldMode {
     this.syncChunks(pp.x, pp.y);
 
     // ★ 小地图每帧更新（三层：地面/实体/黑雾；玩家居中 + 箭头=摄像机朝向）
-    this.minimap.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases());
+    this.ui.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases(), this.player.hp, this.player.maxHp);
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置 + 攻击发射 = 子弹管线）
     this.aiCtx.dt = dt;
@@ -430,7 +430,7 @@ export class WorldMode {
     this.chunkBodies.clear();
     this.entities.clear();
     this.crosshair.dispose();
-    this.minimap.dispose();
+    this.ui.dispose();
     this.bullets.dispose();
     // chunk 视觉网格（天内统一回收）
     for (const m of this.chunkMeshes.values()) {

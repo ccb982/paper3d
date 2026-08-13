@@ -130,6 +130,8 @@ export abstract class EntityBase {
 
   /** 生命值（子类构造可覆写初始值） */
   hp = 100;
+  /** 生命上限（HUD/结算显示用；构造后与 hp 同步） */
+  maxHp = 100;
   /** 攻击力加成（modifierDefense：damage + attackPower - defense） */
   attackPower = 0;
   /** 防御（减法减伤） */
