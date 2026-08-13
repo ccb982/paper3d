@@ -19,7 +19,7 @@ import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
-import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
+import { CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_PLATFORM } from '../services/map/ChunkGenerator';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -49,8 +49,8 @@ export class WorldMode {
   private bulletCooldown = 0;
   /** chunk 视觉网格（chunkKey → Mesh；天内只增不删，天结束统一回收） */
   private chunkMeshes = new Map<number, THREE.Mesh>();
-  /** chunk 地面刚体（chunkKey → 已建标记；防重复） */
-  private chunkBodies = new Set<number>();
+  /** chunk 地面/高台刚体（chunkKey → 刚体实体 id 列表；天内只增不删，天结束统一回收） */
+  private chunkBodies = new Map<number, number[]>();
   /** chunk 共享材质（顶点色：块类型着色——高台沙黄/平地绿/坑洞黑） */
   private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   /** AI 上下文（索敌 = 玩家位置 + 攻击意图 = 统一攻击管线） */
@@ -273,19 +273,39 @@ export class WorldMode {
    *   ★ 边界严丝合缝由生成约束保证（边界 region 强制平地），无需修补 */
   private syncChunks(px: number, pz: number): void {
     const added = this.raster.updateChunks(px, pz);
-    // ★ ① 新增 chunk：地面刚体 + 网格
+    // ★ ① 新增 chunk：地面刚体 + 高台块刚体 + 网格
     for (const { cx, cz } of added) {
       const key = chunkKeyOf(cx, cz);
       if (!this.chunkBodies.has(key)) {
-        this.chunkBodies.add(key);
+        const ids: number[] = [];
         // 地面刚体（60×60 薄板，物理支撑面）
-        this.entities.create({
+        const slab = this.entities.create({
           kind: 'ground',
           x: cx * CHUNK_SIZE + CHUNK_SIZE / 2,
           y: -0.05,
           z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
           physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: CHUNK_SIZE / 2, hy: 0.05, hz: CHUNK_SIZE / 2 } } },
         });
+        ids.push(slab.id);
+        // ★ 高台块固定刚体（4×1.5×4 实心体）：子弹/物品撞立面/台面有物理响应
+        //   （数据层 blockHeight 只供射线 rayMarch，物理子弹需要真实碰撞体）
+        const data = this.raster.getChunkData(cx, cz);
+        if (data) {
+          for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
+            for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
+              if (data.blockTypes[bz * BLOCKS_PER_SIDE + bx] !== BLOCK_PLATFORM) continue;
+              const block = this.entities.create({
+                kind: 'ground',
+                x: cx * CHUNK_SIZE + bx * BLOCK_SIZE + BLOCK_SIZE / 2,
+                y: 0.75,
+                z: cz * CHUNK_SIZE + bz * BLOCK_SIZE + BLOCK_SIZE / 2,
+                physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: BLOCK_SIZE / 2, hy: 0.75, hz: BLOCK_SIZE / 2 } } },
+              });
+              ids.push(block.id);
+            }
+          }
+        }
+        this.chunkBodies.set(key, ids);
       }
       this.buildChunkMesh(cx, cz);
     }
@@ -366,6 +386,10 @@ export class WorldMode {
       this.scene.remove(m);
     }
     this.chunkMeshes.clear();
+    // ★ 刚体实体从物理世界移除（薄板 + 高台块；防泄漏/重复）
+    for (const ids of this.chunkBodies.values()) {
+      for (const id of ids) this.entities.destroy(id);
+    }
     this.chunkBodies.clear();
     this.syncChunks(this.player.position.x, this.player.position.z);
   }
@@ -404,6 +428,11 @@ export class WorldMode {
   }
 
   dispose(): void {
+    // ★ 地形刚体先移出物理世界（薄板 + 高台块）
+    for (const ids of this.chunkBodies.values()) {
+      for (const id of ids) this.entities.destroy(id);
+    }
+    this.chunkBodies.clear();
     this.entities.clear();
     this.crosshair.dispose();
     this.minimap.dispose();
@@ -413,6 +442,5 @@ export class WorldMode {
       this.scene.remove(m);
     }
     this.chunkMeshes.clear();
-    this.chunkBodies.clear();
   }
 }

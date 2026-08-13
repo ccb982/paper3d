@@ -3,9 +3,10 @@
 // ============================================================
 // generateChunk(seed, chunkX, chunkZ) → ChunkData（60×60 区域）
 // ★ 方舟风块状地形：三类型 平地 / 高台 / 坑洞（≤5%）
-//   - 两层 value noise（确定性 hash）→ 阈值分类（区域聚集，非碎斑）
-//   - 元胞平滑：孤立碎块合并（邻域多数投票 1 轮）
-//   - 高度：块基准（0 / 1.5 / -2）+ 每米微起伏 ±0.2（平地也有像素级落差）
+//   - 块类型 = region（3×3 块）类型：region 世界坐标确定性 hash → 阈值分类
+//   - ★ 边界严丝合缝：chunk 边界一圈 region 强制平地（高台/坑洞只在内部）
+//   - ★ 出生安全区：chunk(0,0) 中心 2×2 region 强制平地
+//   - 高度：块基准（0 / 1.5 / -2）+ 每米微起伏 ±0.2（世界坐标连续）
 //   - 确定性：同 (seed, chunkX, chunkZ) 永远同结果（每天地形一致，架构 3.8）
 // 不 import three/rapier/播放器——纯数据生成。
 
@@ -75,7 +76,7 @@ function valueNoise(x: number, z: number, seed: number, scale: number): number {
   return lerp(lerp(a, b, fx), lerp(c, d, fx), fz);
 }
 
-/** 每米微起伏（±0.2 的像素级落差；★ 导出：边界修正降块时重算平地高度） */
+/** 每米微起伏（±0.2 的像素级落差；世界坐标采样 → 跨 chunk 连续） */
 function microRelief(x: number, z: number, seed: number): number {
   return (valueNoise(x, z, seed + 13, 1.5) - 0.5) * 0.4;
 }
