@@ -412,8 +412,8 @@ export class WorldMode {
         // ★ 攀爬中
         if (p.y >= e.climbTargetY - 0.05) {
           // 达标：沿进入边跨入块内（越过立面刚体，站上台面）
-          // step = 推回缓冲 0.6 + 块内深度 0.45
-          const step = 1.05;
+          // step = 末端贴边缓冲 ~0.15 + 块内深度 0.4
+          const step = 0.55;
           if (e.climbEdge === 'l') p.x = e.climbBlockX * BLOCK_SIZE + step;
           else if (e.climbEdge === 'r') p.x = (e.climbBlockX + 1) * BLOCK_SIZE - step;
           else if (e.climbEdge === 'u') p.z = e.climbBlockZ * BLOCK_SIZE + step;
@@ -447,8 +447,23 @@ export class WorldMode {
         }
       }
       const dy = target - p.y;
-      if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
-      else p.y += Math.max(dy, -20 * dt);
+      // ★ 攀爬用慢速（3m/s：0.5s 爬完 1.5m，边升边贴墙的斜向轨迹可见）；
+      //   平地跟随用快速（7.5m/s）
+      const riseRate = e.climbTargetY > 0 ? 3 : 7.5;
+      if (dy > 0) {
+        p.y += Math.min(dy, riseRate * dt);
+      } else if (dy < -0.3) {
+        // ★ 真下落（走下高台）：假重力加速渐进（不瞬落）→ 落地贴附
+        e.velY -= 20 * dt;
+        p.y += e.velY * dt;
+        if (p.y <= target) {
+          p.y = target;
+          e.velY = 0;
+        }
+      } else {
+        // 微贴地（微起伏/防抖）：快速吸附
+        p.y += Math.max(dy, -20 * dt);
+      }
       return;
     }
     // 坑洞：假重力加速下落（velY 累积：走进坑 → 越掉越快）
@@ -471,13 +486,14 @@ export class WorldMode {
     }
   }
 
-  /** ★ 脚底圆采样：脚底中心 + 前后左右 0.3m 五点取最高地形高度。
+  /** ★ 脚底圆采样：脚底中心 + 前后左右 0.25m 五点取最高地形高度。
    *   站块边缘（半脚在台上）→ 仍判台上（不掉落/不抖动）；
    *   完全出块 → 判平地（走下台才下落）；
-   *   坑洞同理：贴坑边走不判坑，走进坑中心才触发摔落 */
+   *   坑洞同理：贴坑边走不判坑，走进坑中心才触发摔落
+   *   （半径 0.25：与下落假重力配合，走下台悬空感最小化） */
   private groundHeightAt(e: CharacterBase): number {
     const p = e.position;
-    const r = 0.3;
+    const r = 0.25;
     let h = this.raster.heightAt(p.x, p.z);
     h = Math.max(h, this.raster.heightAt(p.x + r, p.z));
     h = Math.max(h, this.raster.heightAt(p.x - r, p.z));
@@ -501,13 +517,15 @@ export class WorldMode {
   }
 
   /** ★ 沿攀爬块的固定边推回（贴边爬升，防埋进立面）。
-   *   缓冲 0.6：贴片半宽 0.5 + 深度安全余量（贴片与立面过近会 z-fighting，
-   *   且贴片宽于碰撞体——缓冲必须大于贴片半宽，否则贴片插进立面） */
+   *   ★ 缓冲随爬升进度收缩 0.6 → 0.15（边升边贴近墙——斜向轨迹，
+   *   避免纯垂直"电梯式"爬升）：
+   *   起点 0.6 = 贴片半宽 0.5 + 深度安全余量；末端 0.15 = 仅防插墙 */
   private pushToClimbEdge(e: CharacterBase): void {
     const p = e.position;
     const bx = e.climbBlockX;
     const bz = e.climbBlockZ;
-    const push = 0.6;
+    const progress = Math.min(1, Math.max(0, p.y / Math.max(0.1, e.climbTargetY)));
+    const push = 0.6 - 0.45 * progress;
     if (e.climbEdge === 'l') p.x = bx * BLOCK_SIZE - push;
     else if (e.climbEdge === 'r') p.x = (bx + 1) * BLOCK_SIZE + push;
     else if (e.climbEdge === 'u') p.z = bz * BLOCK_SIZE - push;
