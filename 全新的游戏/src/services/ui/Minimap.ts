@@ -39,8 +39,8 @@ export class Minimap {
     document.body.appendChild(this.canvas);
   }
 
-  /** ★ 每帧更新：地形+黑雾（一次 ImageData）→ 实体点 → 玩家箭头（居中，= 摄像机朝向） */
-  update(px: number, pz: number, playerYaw: number, entities: EntityBase[]): void {
+  /** ★ 每帧更新：地形+黑雾（一次 ImageData）→ 实体点 → 梯形调试 → 玩家箭头 */
+  update(px: number, pz: number, playerYaw: number, entities: EntityBase[], frustum?: { x: number; z: number }[]): void {
     this.reveal(px, pz);
     const ctx = this.ctx;
     const ds = this.displaySize;
@@ -82,6 +82,21 @@ export class Minimap {
       const color = info.kind === 'player' ? '#ffffff' : info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
       ctx.fillStyle = color;
       ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
+    }
+
+    // ★ 梯形调试绘制（LOD 裁剪范围可视化：世界顶点 → 窗口像素 → 红框）
+    if (frustum && frustum.length >= 4) {
+      ctx.strokeStyle = 'rgba(255,60,60,0.9)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < frustum.length; i++) {
+        const wx = frustum[i].x - x0;
+        const wz = frustum[i].z - z0;
+        if (i === 0) ctx.moveTo(wx, wz);
+        else ctx.lineTo(wx, wz);
+      }
+      ctx.closePath();
+      ctx.stroke();
     }
 
     // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 角 φ = π - θ）

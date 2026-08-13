@@ -218,34 +218,53 @@ export class RasterMap {
     return out;
   }
 
-  /** ★ 视锥梯形查询：far 4 角投影到 y=0 → 梯形 → 行扫描区间（无界）
-   *   ⚠ 踩坑记录：
-   *   ① dir 必须归一化再乘 t（未归一 → 投影点上万单位外 → 迭代爆炸卡死）
-   *   ② 梯形顶点必须构成【凸四边形】：near 底边两角（近边）+ far 顶边两角（远边）
-   *      ——此前 far 4 角 + 相机 ±1 兜底点 = 6 点乱多边形 → 行扫描交点错乱
-   *      → 大量可见 cell 漏遍历（子弹等小物体 3D 不渲染） */
-  queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
+  /** ★ 视锥梯形 4 顶点（世界 xz；调试绘制/查询共用）：
+   *   下边 = 下边界视线与 y=0 交点（近处）；上边 = 上视线水平延伸 maxDist（远处）
+   *   ⚠ 上视线指向天空时（俯视）不能钳到相机位置（退化三角），见 queryFrustum */
+  frustumCorners(camera: THREE.Camera, maxDist = 100): { x: number; z: number }[] {
     camera.updateMatrixWorld();
     const pts: { x: number; z: number }[] = [];
-    // 凸梯形四角：near 底边两角（近边）+ far 顶边两角（远边），投影到 y=0
-    const corners = [
-      { nx: -1, ny: -1, zz: 0.1 }, // 近边左
-      { nx: 1, ny: -1, zz: 0.1 },  // 近边右
-      { nx: 1, ny: 1, zz: 1 },     // 远边右
-      { nx: -1, ny: 1, zz: 1 },    // 远边左
-    ];
+    const ndc = [[-1, -1], [1, -1], [1, 1], [-1, 1]]; // 左下、右下、右上、左上
     const tmp = new THREE.Vector3();
-    for (const c of corners) {
-      tmp.set(c.nx, c.ny, c.zz).unproject(camera);
-      const dir = tmp.sub(camera.position).normalize(); // ★ 归一化（长度 1）
-      if (Math.abs(dir.y) < 1e-6) dir.y = 1e-6;
-      const t = -camera.position.y / dir.y;
-      const clampT = Math.min(Math.max(t, 0), maxDist); // 钳到 [0, maxDist]
-      pts.push({
-        x: camera.position.x + dir.x * clampT,
-        z: camera.position.z + dir.z * clampT,
-      });
+    for (const [nx, ny] of ndc) {
+      tmp.set(nx, ny, 1).unproject(camera);
+      const dir = tmp.sub(camera.position).normalize();
+      let px: number;
+      let pz: number;
+      if (Math.abs(dir.y) < 1e-6) {
+        const hl = Math.hypot(dir.x, dir.z);
+        const hx = hl > 1e-6 ? dir.x / hl : 0;
+        const hz = hl > 1e-6 ? dir.z / hl : 0;
+        px = camera.position.x + hx * maxDist;
+        pz = camera.position.z + hz * maxDist;
+      } else {
+        const t = -camera.position.y / dir.y;
+        if (t > 0 && t <= maxDist) {
+          px = camera.position.x + dir.x * t;
+          pz = camera.position.z + dir.z * t;
+        } else {
+          const hl = Math.hypot(dir.x, dir.z);
+          const hx = hl > 1e-6 ? dir.x / hl : 0;
+          const hz = hl > 1e-6 ? dir.z / hl : 0;
+          px = camera.position.x + hx * maxDist;
+          pz = camera.position.z + hz * maxDist;
+        }
+      }
+      pts.push({ x: px, z: pz });
     }
+    return pts;
+  }
+
+  /** ★ 视锥梯形查询：视锥 4 条角点视线投影到 y=0 → 凸梯形 → 行扫描区间（无界）
+   *   ⚠ 踩坑记录：
+   *   ① dir 必须归一化再乘 t（未归一 → 投影点上万单位外 → 迭代爆炸卡死）
+   *   ② 上边界视线指向天空（t<0）时不能把投影点钳到相机位置——
+   *      那会让四边形退化成三角形（相机+两个近处地面点），只覆盖近处，
+   *      中远距离实体全部漏遍历。正确做法：上视线用【水平方向延伸 maxDist】
+   *      的远处地面点（地面可见区由 far 距离截断）
+   *   ③ 扫描范围钳到相机 ±2×maxDist（防投影异常迭代爆炸） */
+  queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
+    const pts = this.frustumCorners(camera, maxDist);
     let zMin = Infinity, zMax = -Infinity;
     for (const p of pts) {
       zMin = Math.min(zMin, p.z);
