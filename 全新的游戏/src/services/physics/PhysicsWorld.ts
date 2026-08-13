@@ -18,7 +18,10 @@ export type ColliderShape =
   | { type: 'ball'; radius: number }
   | { type: 'cuboid'; hx: number; hy: number; hz: number }
   /** 胶囊（角色用：贴片宽/高更真实）；halfHeight=半高（不含帽），radius=半径，轴=Y */
-  | { type: 'capsule'; halfHeight: number; radius: number };
+  | { type: 'capsule'; halfHeight: number; radius: number }
+  /** ★ 三角网格（地形用：视觉网格几何直接复用 = 视觉/物理同源）；
+   *   vertices = 扁平 [x,y,z,...]，indices = 三角形索引 */
+  | { type: 'trimesh'; vertices: Float32Array; indices: Uint32Array };
 
 /** 形状 → rapier 碰撞体描述 */
 function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
@@ -29,6 +32,8 @@ function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
       return RAPIER.ColliderDesc.cuboid(shape.hx, shape.hy, shape.hz);
     case 'capsule':
       return RAPIER.ColliderDesc.capsule(shape.halfHeight, shape.radius);
+    case 'trimesh':
+      return RAPIER.ColliderDesc.trimesh(shape.vertices, shape.indices);
   }
 }
 

@@ -92,7 +92,7 @@ export class RasterMap {
     return this.chunks.get(chunkKeyOf(cx, cz));
   }
 
-  /** 世界高度（无 chunk = 0 占位） */
+  /** 世界高度（格值，无 chunk = 0 占位） */
   heightAt(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
@@ -101,6 +101,29 @@ export class RasterMap {
     const lx = Math.floor(x - cx * CHUNK_SIZE);
     const lz = Math.floor(z - cz * CHUNK_SIZE);
     return chunk.heights[lz * CHUNK_SIZE + lx] ?? 0;
+  }
+
+  /** ★ 视觉面顶点值（格线交点）= 周围 2×2 格高度取 max——
+   *   直角立面：块边界顶点取台面高（否则视觉斜坡 → 角色站在斜坡上方悬空） */
+  vertexHeightAt(x: number, z: number): number {
+    return Math.max(
+      this.heightAt(x - 1, z - 1), this.heightAt(x, z - 1),
+      this.heightAt(x - 1, z), this.heightAt(x, z),
+    );
+  }
+
+  /** ★ 视觉面一致采样（角色脚底 y 用）：顶点值双线性插值——
+   *   与网格渲染完全一致（同一顶点值 + 同插值）→ 角色永贴视觉面（不陷地） */
+  surfaceHeightAt(x: number, z: number): number {
+    const gx = Math.floor(x);
+    const gz = Math.floor(z);
+    const fx = x - gx;
+    const fz = z - gz;
+    const h00 = this.vertexHeightAt(gx, gz);
+    const h10 = this.vertexHeightAt(gx + 1, gz);
+    const h01 = this.vertexHeightAt(gx, gz + 1);
+    const h11 = this.vertexHeightAt(gx + 1, gz + 1);
+    return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
   }
 
   /** 世界阻挡高度（高台立面；射击 rayMarch 用） */

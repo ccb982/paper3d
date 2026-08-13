@@ -19,7 +19,7 @@ import { CameraController } from '../services/camera/CameraController';
 import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
-import { CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_PLATFORM } from '../services/map/ChunkGenerator';
+import { CHUNK_SIZE, BLOCK_SIZE } from '../services/map/ChunkGenerator';
 import { Minimap } from '../services/ui/Minimap';
 import type { InputActions } from '../platform/input/InputActions';
 import { aiSystem } from '../systems/ai/AISystem';
@@ -49,8 +49,9 @@ export class WorldMode {
   private bulletCooldown = 0;
   /** chunk 视觉网格（chunkKey → Mesh；天内只增不删，天结束统一回收） */
   private chunkMeshes = new Map<number, THREE.Mesh>();
-  /** chunk 地面/高台刚体（chunkKey → 刚体实体 id 列表；天内只增不删，天结束统一回收） */
-  private chunkBodies = new Map<number, number[]>();
+  /** chunk 地面碰撞刚体（chunkKey → 实体 id；trimesh 复用视觉网格几何；
+   *   天内只增不删，天结束统一回收） */
+  private chunkBodies = new Map<number, number>();
   /** chunk 共享材质（顶点色：块类型着色——高台沙黄/平地绿/坑洞黑） */
   private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   /** AI 上下文（索敌 = 玩家位置 + 攻击意图 = 统一攻击管线） */
@@ -107,7 +108,7 @@ export class WorldMode {
     for (let i = 0; i < itemIcons.length; i++) {
       const item = new ItemBase(this.entities, scene, itemIcons[i], {
         x: spawn.x + 6 + i * 2.5,
-        y: this.raster.heightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
+        y: this.raster.surfaceHeightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
         z: spawn.z + 6,
         itemId: `test_item_${i + 1}`,
         displayName: `测试物品${i + 1}`,
@@ -273,40 +274,8 @@ export class WorldMode {
    *   ★ 边界严丝合缝由生成约束保证（边界 region 强制平地），无需修补 */
   private syncChunks(px: number, pz: number): void {
     const added = this.raster.updateChunks(px, pz);
-    // ★ ① 新增 chunk：地面刚体 + 高台块刚体 + 网格
+    // ★ ① 新增 chunk：视觉网格（trimesh 碰撞体随网格几何同源创建，见 buildChunkMesh）
     for (const { cx, cz } of added) {
-      const key = chunkKeyOf(cx, cz);
-      if (!this.chunkBodies.has(key)) {
-        const ids: number[] = [];
-        // 地面刚体（60×60 薄板，物理支撑面）
-        const slab = this.entities.create({
-          kind: 'ground',
-          x: cx * CHUNK_SIZE + CHUNK_SIZE / 2,
-          y: -0.05,
-          z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
-          physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: CHUNK_SIZE / 2, hy: 0.05, hz: CHUNK_SIZE / 2 } } },
-        });
-        ids.push(slab.id);
-        // ★ 高台块固定刚体（4×1.5×4 实心体）：子弹/物品撞立面/台面有物理响应
-        //   （数据层 blockHeight 只供射线 rayMarch，物理子弹需要真实碰撞体）
-        const data = this.raster.getChunkData(cx, cz);
-        if (data) {
-          for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
-            for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
-              if (data.blockTypes[bz * BLOCKS_PER_SIDE + bx] !== BLOCK_PLATFORM) continue;
-              const block = this.entities.create({
-                kind: 'ground',
-                x: cx * CHUNK_SIZE + bx * BLOCK_SIZE + BLOCK_SIZE / 2,
-                y: 0.75,
-                z: cz * CHUNK_SIZE + bz * BLOCK_SIZE + BLOCK_SIZE / 2,
-                physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: BLOCK_SIZE / 2, hy: 0.75, hz: BLOCK_SIZE / 2 } } },
-              });
-              ids.push(block.id);
-            }
-          }
-        }
-        this.chunkBodies.set(key, ids);
-      }
       this.buildChunkMesh(cx, cz);
     }
     // ★ ② 新增 chunk 的已存在邻居：网格重建——
@@ -323,7 +292,9 @@ export class WorldMode {
     }
   }
 
-  /** 建/重建 chunk 视觉网格（高度场 + 顶点色 + 跨 chunk 法线） */
+  /** 建/重建 chunk 视觉网格（高度场 + 顶点色 + 跨 chunk 法线）；
+   *   ★ 视觉/物理同源：同一几何 → mesh 渲染 + trimesh 固定碰撞体
+   *   （子弹/物品贴起伏面滚动、撞高台立面——无需手工碰撞体） */
   private buildChunkMesh(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
     if (this.chunkMeshes.has(key)) return;
@@ -340,9 +311,10 @@ export class WorldMode {
       const lz = pos.getZ(i) + CHUNK_SIZE / 2;
       const wx = cx * CHUNK_SIZE + lx;
       const wz = cz * CHUNK_SIZE + lz;
-      // ★ 顶点高度 = 世界采样（跨 chunk）——边界顶点（lx=60）自动取邻 chunk 同点高度，
-      //   避免本地数组越界（heights 只有 60×60）导致边界高度归 0 → 台阶裂缝
-      const h = this.raster.heightAt(wx, wz);
+      // ★ 顶点高度 = 视觉面顶点值（2×2 格 max，地图层统一函数）——
+      //   直角立面：数据二值（块内 1.5/块外 0），单格采样时块边界顶点=0
+      //   → 视觉斜坡 → 角色站在视觉斜坡上方悬空；max 采样取台面高
+      const h = this.raster.vertexHeightAt(wx, wz);
       pos.setY(i, h);
       const [r, g, b] = this.raster.terrainColorAt(wx, wz);
       colors[i * 3] = r / 255;
@@ -365,9 +337,29 @@ export class WorldMode {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
     this.chunkMeshes.set(key, mesh);
+
+    // ---- ★ 碰撞体 = 视觉网格几何（顶点已含高度，本地坐标 + mesh 同位置）----
+    if (!this.chunkBodies.has(key)) {
+      const verts = pos.array as Float32Array;
+      const idx = new Uint32Array(geo.index!.array); // rapier 需要 Uint32Array（three 可能 Uint16）
+      const body = this.entities.create({
+        kind: 'ground',
+        x: mesh.position.x,
+        y: 0,
+        z: mesh.position.z,
+        physics: {
+          type: 'fixed',
+          options: {
+            shape: { type: 'trimesh', vertices: verts, indices: idx },
+          },
+        },
+      });
+      this.chunkBodies.set(key, body.id);
+    }
   }
 
-  /** 重建 chunk 网格（边界修正后：移除旧 mesh → 重建） */
+  /** 重建 chunk 网格（邻居加载后：移除旧 mesh → 重建；
+   *   ★ 碰撞体同步重建——旧 trimesh 顶点是"邻居未加载"时的数据，必须与视觉一致） */
   private rebuildChunkMesh(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
     const old = this.chunkMeshes.get(key);
@@ -375,6 +367,11 @@ export class WorldMode {
       this.scene.remove(old);
       old.geometry.dispose();
       this.chunkMeshes.delete(key);
+    }
+    const oldBody = this.chunkBodies.get(key);
+    if (oldBody !== undefined) {
+      this.entities.destroy(oldBody);
+      this.chunkBodies.delete(key);
     }
     this.buildChunkMesh(cx, cz);
   }
@@ -387,27 +384,24 @@ export class WorldMode {
       m.geometry.dispose(); // ★ 显式释放 GPU 缓冲（three 不会随 GC 自动释放）
     }
     this.chunkMeshes.clear();
-    // ★ 刚体实体从物理世界移除（薄板 + 高台块；防泄漏/重复）
-    for (const ids of this.chunkBodies.values()) {
-      for (const id of ids) this.entities.destroy(id);
+    // ★ 碰撞刚体从物理世界移除（trimesh；防泄漏/重复）
+    for (const id of this.chunkBodies.values()) {
+      this.entities.destroy(id);
     }
     this.chunkBodies.clear();
     this.syncChunks(this.player.position.x, this.player.position.z);
   }
 
   /** ★ 角色垂直运动（kinematic：模式层驱动）：
-   *   - 平地/高台：y 限速趋近地形高度——爬升 7.5m/s（上 1.5m 高台 ≈ 0.2s 平滑攀爬，
-   *     不瞬移）；下落 20m/s（走下高台快速落地）
-   *   - ★ 高台攀爬：y 未达台面高度前 x/z 被挡在块外（贴边爬升，不埋进立面刚体）；
-   *     达标后沿进入边跨上台面
-   *   - 坑洞：假重力加速下落 → 触底 → 摔死（玩家传送回出生点；敌人销毁置空） */
+   *   - 爬升：限速趋近（攀爬 3m/s；平地跟随 7.5m/s）
+   *   - 下落：普通限速下落 25m/s（无假重力/无状态——下坡最简单代码）
+   *   - ★ 高台攀爬：y 未达台面高度前 x/z 被挡在块外（贴边爬升，不埋进
+   *     立面刚体）；达标后沿进入边跨上台面
+   *   - 坑洞：限速下落 → 触底 → 摔死（玩家传送回出生点；敌人销毁置空） */
   private clampCharacter(e: CharacterBase, dt: number): void {
     const p = e.position;
-    // ★ 脚底圆采样（±0.3 五点取最高）：站块边缘（半脚在台上）不掉落——
-    //   否则块边界 targetY 二值切换（1.5/0），角色贴边走 y 高频震荡
     const targetY = this.groundHeightAt(e);
     if (targetY >= -1.5) {
-      e.velY = 0;
       let target = targetY;
       if (e.climbTargetY > 0) {
         // ★ 攀爬中
@@ -421,7 +415,7 @@ export class WorldMode {
           else p.z = (e.climbBlockZ + 1) * BLOCK_SIZE - step;
           p.y = e.climbTargetY;
           e.climbTargetY = 0; // 完成：清除攀爬状态
-          target = this.raster.heightAt(p.x, p.z);
+          target = this.raster.surfaceHeightAt(p.x, p.z);
         } else {
           // 未达标：沿【固定进入边】推回贴边爬升（★ 不每帧重算最近边——
           //   斜贴边时最近边在 l/r/u/d 间切换 → 推回位置横跳 → 高频闪动）
@@ -433,7 +427,7 @@ export class WorldMode {
         //   脚底圆采样触边不算——否则贴台边走会被反复吸上台）
         const bx = Math.floor(p.x / BLOCK_SIZE);
         const bz = Math.floor(p.z / BLOCK_SIZE);
-        const centerBlockY = this.raster.heightAt(bx * BLOCK_SIZE + BLOCK_SIZE / 2, bz * BLOCK_SIZE + BLOCK_SIZE / 2);
+        const centerBlockY = this.raster.surfaceHeightAt(bx * BLOCK_SIZE + BLOCK_SIZE / 2, bz * BLOCK_SIZE + BLOCK_SIZE / 2);
         if (centerBlockY - p.y > 0.5) {
           // ★ 触发攀爬：前方高台（高度差 > 0.5m；微起伏 ±0.2 不触发）
           e.climbTargetY = centerBlockY;
@@ -447,39 +441,24 @@ export class WorldMode {
           target = p.y;
         }
       }
+      // ★ 统一限速趋近：爬升（攀爬 3m/s / 平地 7.5m/s）、下落 25m/s——
+      //   出边即落（1.5m ≈ 0.06s，几乎即时贴地，无"虚空飘落"）
       const dy = target - p.y;
-      // ★ 攀爬用慢速（3m/s：0.5s 爬完 1.5m，边升边贴墙的斜向轨迹可见）；
-      //   平地跟随用快速（7.5m/s）
       const riseRate = e.climbTargetY > 0 ? 3 : 7.5;
-      if (dy > 0) {
-        p.y += Math.min(dy, riseRate * dt);
-      } else if (dy < -0.3) {
-        // ★ 真下落（走下高台）：假重力加速渐进（不瞬落）→ 落地贴附
-        e.velY -= 20 * dt;
-        p.y += e.velY * dt;
-        if (p.y <= target) {
-          p.y = target;
-          e.velY = 0;
-        }
-      } else {
-        // 微贴地（微起伏/防抖）：快速吸附
-        p.y += Math.max(dy, -20 * dt);
-      }
+      if (dy > 0) p.y += Math.min(dy, riseRate * dt);
+      else p.y += Math.max(dy, -25 * dt);
       return;
     }
-    // 坑洞：假重力加速下落（velY 累积：走进坑 → 越掉越快）
-    e.velY += 20 * dt;
-    p.y -= e.velY * dt;
+    // 坑洞：限速下落 → 触底 → 摔死（一次性）
+    p.y += Math.max(targetY - p.y, -25 * dt);
     if (p.y <= targetY + 0.05) {
-      // 触底：摔死（一次性）
-      e.velY = 0;
       e.climbTargetY = 0;
       e.onDeath(null);
       if (e === this.player) {
         // 玩家：传送回出生点（出生安全区，强制平地 → 不循环死亡）
         p.x = this.spawnPoint.x;
         p.z = this.spawnPoint.z;
-        p.y = this.raster.heightAt(p.x, p.z);
+        p.y = this.raster.surfaceHeightAt(p.x, p.z);
         this.cameraCtrl.snapTo(p.x, p.y, p.z);
       } else {
         this.enemy = null;
@@ -487,20 +466,20 @@ export class WorldMode {
     }
   }
 
-  /** ★ 脚底圆采样：脚底中心 + 前后左右 0.25m 五点取最高地形高度。
-   *   站块边缘（半脚在台上）→ 仍判台上（不掉落/不抖动）；
-   *   完全出块 → 判平地（走下台才下落）；
-   *   坑洞同理：贴坑边走不判坑，走进坑中心才触发摔落
-   *   （半径 0.25：与下落假重力配合，走下台悬空感最小化） */
+  /** ★ 前瞻式地面采样（移动方向感知）：
+   *   ├ 静止：只取中心——站台边（中心出块）→ 掉，不悬空站虚空
+   *   ├ 移动：只取前瞻点（中心 + 移动方向 × 0.25）：
+   *   │   ├ 走下高台：前瞻点一出块即判低地 → 立即下落（不等中心出块）
+   *   │   ├ 贴边走：前瞻点沿边仍在台上 → 保持（防抖：y 不震荡）
+   *   │   ├ 走向高台：前瞻点入块 → 触发攀爬
+   *   │   └ 斜朝外/拐过块角：前瞻点出块 → 掉（自然，微朝外即下台）
+   *   └ ★ 采样用 surfaceHeightAt（与视觉网格同一插值函数）→ 角色脚底
+   *     永贴视觉面（不陷地） */
   private groundHeightAt(e: CharacterBase): number {
     const p = e.position;
-    const r = 0.25;
-    let h = this.raster.heightAt(p.x, p.z);
-    h = Math.max(h, this.raster.heightAt(p.x + r, p.z));
-    h = Math.max(h, this.raster.heightAt(p.x - r, p.z));
-    h = Math.max(h, this.raster.heightAt(p.x, p.z + r));
-    h = Math.max(h, this.raster.heightAt(p.x, p.z - r));
-    return h;
+    const m = e.controller.moveDir; // { x, y } 其中 y = 世界 z（玩法命名）
+    if (m.x === 0 && m.y === 0) return this.raster.surfaceHeightAt(p.x, p.z);
+    return this.raster.surfaceHeightAt(p.x + m.x * 0.25, p.z + m.y * 0.25);
   }
 
   /** ★ 攀爬块的最近边（触发攀爬时判定一次：角色进块时离哪条边最近） */
@@ -534,9 +513,9 @@ export class WorldMode {
   }
 
   dispose(): void {
-    // ★ 地形刚体先移出物理世界（薄板 + 高台块）
-    for (const ids of this.chunkBodies.values()) {
-      for (const id of ids) this.entities.destroy(id);
+    // ★ 地形碰撞体先移出物理世界（trimesh）
+    for (const id of this.chunkBodies.values()) {
+      this.entities.destroy(id);
     }
     this.chunkBodies.clear();
     this.entities.clear();

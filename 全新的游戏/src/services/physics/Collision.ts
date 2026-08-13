@@ -19,6 +19,9 @@ export function shapeExtents(shape: ColliderShape): { hx: number; hy: number; hz
       return { hx: shape.radius, hy: shape.halfHeight + shape.radius, hz: shape.radius };
     case 'cuboid':
       return { hx: shape.hx, hy: shape.hy, hz: shape.hz };
+    case 'trimesh':
+      // 地形网格：无规则包围体 → 0（角色推挤/距离判定不涉及地形）
+      return { hx: 0, hy: 0, hz: 0 };
   }
 }
 

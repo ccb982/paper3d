@@ -112,7 +112,12 @@ export class CameraController {
       target.height + this.characterHeight * 0.8 + (target.jump ?? 0) * (isFirstPerson ? this.jumpGainFirstPerson : 1),
       target.z,
     );
-    this.smoothedTarget.lerp(desiredTarget, Math.min(1, dt * this.targetDamp));
+    // ★ 人称差异化阻尼：第三人称 5（~0.2s 滞后）——上/下高台时相机滞后于
+    //   角色升降 → 画面中角色先动、相机跟上 → 高度变化有明确反馈（否则
+    //   角色与相机同步升降 = 相对位置不变，体感"什么都没发生"）；
+    //   第一人称 12（眼睛必须贴角色，滞后会晕）
+    const targetFollowDamp = isFirstPerson ? 12 : 5;
+    this.smoothedTarget.lerp(desiredTarget, Math.min(1, dt * targetFollowDamp));
 
     // ---- 球坐标定位（相机围绕聚焦点；俯仰负（仰视）时相机不低于半高） ----
     const cp = this.distance * Math.cos(this.pitch);
