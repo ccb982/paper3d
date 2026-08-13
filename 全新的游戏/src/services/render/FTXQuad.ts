@@ -141,7 +141,9 @@ export class FTXQuad extends FxRendererBase {
       },
       transparent: true,
       depthWrite: false,
-      depthTest: false,
+      // ★ depthTest 开启：贴片读深度缓冲 → 被地形（高台/墙）挡住的实体
+      //   自动被深度裁剪（地形先渲染写深度，透明贴片后渲染读深度）
+      depthTest: true,
     });
     const geometry = new THREE.PlaneGeometry(1, 1);
     this.mesh = new THREE.Mesh(geometry, this.material);
