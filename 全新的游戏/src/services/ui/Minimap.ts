@@ -48,10 +48,11 @@ export class Minimap {
     const z0 = Math.floor(pz - this.windowHalf);
 
     // 地形 + 黑雾（窗口内逐像素：已探索 = 地形色，未探索 = 雾黑）
-    // ★ z 轴翻转：canvas y 向下 = 世界 z 减小（canvas 上方 = 北 +z，与 3D 俯视一致）
+    // ★ 屏幕对齐映射：canvas 上 = 3D 屏幕上方（-z，玩家初始朝向）、
+    //   canvas 右 = 3D 屏幕右（+x）→ 右方物体在箭头右手边（符合直觉）
     const img = ctx.createImageData(ds, ds);
     for (let iy = 0; iy < ds; iy++) {
-      const wz = z0 + ds - 1 - iy;
+      const wz = z0 + iy;
       for (let ix = 0; ix < ds; ix++) {
         const wx = x0 + ix;
         const i = (iy * ds + ix) * 4;
@@ -78,18 +79,18 @@ export class Minimap {
       if (info.kind === 'enemy' && !this.visited.has(cellKeyOf(ex, ez))) continue;
       if (info.kind === 'item' && info.moving) continue;
       const pxw = ex - x0;
-      const pzw = ds - 1 - (ez - z0);
+      const pzw = ez - z0;
       if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
       const color = info.kind === 'player' ? '#ffffff' : info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
       ctx.fillStyle = color;
       ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
     }
 
-    // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 旋转角 = θ；
-    //   世界方向 (sinθ,cosθ) → canvas (sinθ,-cosθ)（canvas 上=+z 北））
+    // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 旋转角 = π - θ；
+    //   世界 +z → canvas 下方 → (sinθ,cosθ) → canvas (sinθ,+cosθ)）
     const cx = ds / 2;
     const cy = ds / 2;
-    const phi = playerYaw;
+    const phi = Math.PI - playerYaw;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(phi);
