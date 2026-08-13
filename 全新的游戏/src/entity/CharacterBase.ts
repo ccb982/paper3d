@@ -36,13 +36,6 @@ export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   readonly collisionVolume: { shape: import('../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = DEFAULT_COLLISION_VOLUME;
-  /** ★ 攀爬状态（模式层 clampCharacter 驱动）：高台立面实心刚体，
-   *   角色 y 未达台面高度前 x/z 被挡在块外（贴边爬升，防埋进立面）；
-   *   达标后沿进入边跨上台面 */
-  climbTargetY = 0;
-  climbBlockX = 0;
-  climbBlockZ = 0;
-  climbEdge: 'l' | 'r' | 'u' | 'd' = 'l';
 
   constructor(
     em: EntityManager,
