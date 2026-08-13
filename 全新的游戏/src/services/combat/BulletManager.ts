@@ -10,6 +10,20 @@ import { BulletBase, type BulletOptions } from '../../entity/BulletBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import type { FrameAssetSource } from '../fx/AssetSource';
 
+/** ★ 轻量发射参数（AI 行为/近战/远程共用；不依赖实体构造细节） */
+export interface SpawnBulletOptions {
+  x: number;
+  y: number;
+  z: number;
+  dirX: number;
+  dirY: number;
+  dirZ: number;
+  speed: number;
+  camp: 'player' | 'ally' | 'enemy';
+  lifetime?: number;
+  damage?: number;
+}
+
 export class BulletManager {
   private pool: BulletBase[] = [];
   private capacity: number;
@@ -24,6 +38,7 @@ export class BulletManager {
     for (let i = 0; i < capacity; i++) {
       // 池中子弹初始失活（构造末尾已 deactivate，藏在地图外）
       const b = new BulletBase(em, scene, asset, {
+        kind: 'bullet',
         x: 0, y: -50, z: 0,
         dirX: 1, dirY: 0, dirZ: 0,
         speed: 0,
@@ -35,10 +50,14 @@ export class BulletManager {
   }
 
   /** ★ 发射：从池取一颗激活；池空返回 null */
-  spawn(opts: BulletOptions): BulletBase | null {
+  spawn(opts: SpawnBulletOptions): BulletBase | null {
     const b = this.pool.pop();
     if (!b) return null;
-    b.activate(opts);
+    const full: BulletOptions = {
+      ...opts,
+      kind: 'bullet' as const,
+    };
+    b.activate(full);
     return b;
   }
 

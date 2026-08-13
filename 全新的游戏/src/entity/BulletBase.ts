@@ -11,8 +11,9 @@ import { EntityBase, type EntityBaseOptions } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
+import { applyDamage } from '../services/combat/DamagePipeline';
 
-export interface BulletOptions extends Omit<EntityBaseOptions, 'physics' | 'kind'> {
+export interface BulletOptions extends Omit<EntityBaseOptions, 'physics'> {
   /** 发射方向（3D 单位向量；含竖直分量 dirY = 准星俯仰） */
   dirX: number;
   dirY: number;
@@ -25,6 +26,8 @@ export interface BulletOptions extends Omit<EntityBaseOptions, 'physics' | 'kind
   lifetime?: number;
   /** 半径 */
   radius?: number;
+  /** ★ 伤害值（穿透命中实体时结算） */
+  damage?: number;
 }
 
 export class BulletBase extends EntityBase {
@@ -34,6 +37,8 @@ export class BulletBase extends EntityBase {
     offsetY: 0,
   };
   private lifetime = 0;
+  /** ★ 伤害值（激活时设置） */
+  private damage = 0;
   /** ★ 激活状态（失活 = 在池中，不更新不渲染不碰撞处理） */
   private active = false;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
@@ -83,6 +88,7 @@ export class BulletBase extends EntityBase {
   activate(opts: BulletOptions): void {
     this.camp = opts.camp;
     this.lifetime = opts.lifetime ?? 2;
+    this.damage = opts.damage ?? 10;
     this.entity.position.x = opts.x;
     this.entity.position.y = opts.y;
     this.entity.position.z = opts.z;
@@ -119,14 +125,19 @@ export class BulletBase extends EntityBase {
 
   /** ★ 命中处理（实体管线碰撞分发）：
    *   - 同阵营 → 忽略
-   *   - 命中实体 → 穿透继续飞（伤害结算后续接）
+   *   - 命中实体 → ★ 穿透 + 伤害管线结算（增益/防御/暴击 → onTakeDamage）
    *   - 命中地面/墙 → 反弹（restitution 0.8，不销毁）
    *   - 超时 → 回收（回池） */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!this.active) return;
     if (!started) return;
     if (other && other.camp === this.camp) return; // 同阵营不伤（friend 不伤 friend）
-    console.log(other ? `[bullet] 命中 ${other.constructor.name}，穿透` : '[bullet] 命中 地面，反弹');
+    if (other) {
+      const r = applyDamage(this.damage, this, other); // ★ 伤害管线统一结算
+      console.log(`[bullet] 命中 ${other.constructor.name}，穿透${r.crit ? '【暴击】' : ''}（-${r.final}）`);
+      return;
+    }
+    console.log('[bullet] 命中 地面，反弹');
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {

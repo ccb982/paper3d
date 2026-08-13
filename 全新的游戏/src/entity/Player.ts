@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { CharacterBase, type CharacterBaseOptions } from './CharacterBase';
+import type { EntityBase } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
@@ -39,5 +40,10 @@ export class Player extends CharacterBase {
   /** 攻击（消费式按键由模式层转发） */
   attack(): void {
     this.controller.attack();
+  }
+
+  /** ★ 玩家死亡（暂：不销毁主角——记录 + 扣血表现后续接；结算/重生后续） */
+  override onDeath(source: EntityBase | null): void {
+    console.log(`[玩家] 被 ${source?.constructor.name ?? '未知'} 击杀！`);
   }
 }

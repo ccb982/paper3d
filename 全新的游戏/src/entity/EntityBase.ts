@@ -88,6 +88,29 @@ export abstract class EntityBase {
     this.renderer?.setLodLevel(lv);   // 渲染管线：渐隐（渲染器实现）
   }
 
+  // ============ 生命与战斗属性（伤害管线，架构 4.1） ============
+
+  /** 生命值（子类构造可覆写初始值） */
+  hp = 100;
+  /** 攻击力加成（伤害管线：final = base + attackPower - defense） */
+  attackPower = 0;
+  /** 防御减伤（伤害管线） */
+  defense = 0;
+  /** 暴击率 0-1（伤害管线 roll） */
+  critRate = 0;
+  /** 暴击倍率 */
+  critMult = 1.5;
+
+  /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
+  onTakeDamage(dmg: number, source: EntityBase | null): void {
+    if (this.hp <= 0) return;
+    this.hp -= dmg;
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.onDeath(source);
+    }
+  }
+
   protected renderer: FxRendererBase | null = null;
 
   constructor(
@@ -189,9 +212,9 @@ export abstract class EntityBase {
     // 默认无处理（角色碰撞由物理响应，子弹/伤害逻辑覆写）
   }
 
-  /** 死亡钩子（子类覆写：掉落/结算） */
-  onDeath(): void {
-    // 默认：从管线销毁
+  /** 死亡钩子（子类覆写：掉落/结算；默认销毁） */
+  onDeath(_source: EntityBase | null): void {
+    this.dispose();
   }
 
   /** 销毁（动画/渲染/管线资源全释放） */

@@ -52,12 +52,13 @@ export class WorldMode {
   /** chunk 共享网格/材质（占位平地；★ 旋转到 XZ 平面——PlaneGeometry 默认 XY 竖立） */
   private static chunkGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE).rotateX(-Math.PI / 2);
   private static chunkMat = new THREE.MeshStandardMaterial({ color: 0x2d5a27, roughness: 0.9, metalness: 0 });
-  /** AI 上下文（索敌 = 玩家位置） */
+  /** AI 上下文（索敌 = 玩家位置 + 子弹发射回调 = 子弹管线） */
   private aiCtx: BehaviorContext = {
     dt: 0,
     time: 0,
     target: null,
     findTarget: () => null,
+    spawnBullet: () => undefined,
   };
 
   constructor(
@@ -148,6 +149,8 @@ export class WorldMode {
 
     // ---- ★ 子弹池（100 颗常驻复用） ----
     this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
+    // ★ AI 攻击发射 = 子弹管线（近战/远程统一；敌人攻击弹 camp='enemy'）
+    this.aiCtx.spawnBullet = (opts) => this.bullets.spawn(opts);
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -160,7 +163,7 @@ export class WorldMode {
     // ★ 小地图每帧更新（三层：地面/实体/黑雾；玩家居中 + 箭头=摄像机朝向）
     this.minimap.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases());
 
-    // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
+    // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置 + 攻击发射 = 子弹管线）
     this.aiCtx.dt = dt;
     this.aiCtx.time += dt;
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
@@ -251,6 +254,7 @@ export class WorldMode {
       speed: 12,
       camp: 'player',
       lifetime: 2,
+      damage: 10, // ★ 穿透伤害（敌人 30 血 → 3 发）
     });
   }
 

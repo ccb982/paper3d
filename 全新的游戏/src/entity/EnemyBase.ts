@@ -22,6 +22,8 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   aggressive?: boolean;
   /** AI 配置（无 → 静止） */
   aiConfig?: AIConfig;
+  /** 生命值（默认 30） */
+  hp?: number;
 }
 
 export class EnemyBase extends CharacterBase {
@@ -47,6 +49,7 @@ export class EnemyBase extends CharacterBase {
   ) {
     super(em, { ...opts, kind: 'enemy', asset });
     this.camp = 'enemy';
+    this.hp = opts.hp ?? 30; // ★ 敌人生命（普瑞赛斯 30；子弹 10 伤害 × 3 发）
     this.assetRef = asset;
     this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);
