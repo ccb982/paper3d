@@ -384,6 +384,7 @@ export class WorldMode {
     this.raster.clearAll();
     for (const m of this.chunkMeshes.values()) {
       this.scene.remove(m);
+      m.geometry.dispose(); // ★ 显式释放 GPU 缓冲（three 不会随 GC 自动释放）
     }
     this.chunkMeshes.clear();
     // ★ 刚体实体从物理世界移除（薄板 + 高台块；防泄漏/重复）
@@ -545,6 +546,7 @@ export class WorldMode {
     // chunk 视觉网格（天内统一回收）
     for (const m of this.chunkMeshes.values()) {
       this.scene.remove(m);
+      m.geometry.dispose();
     }
     this.chunkMeshes.clear();
   }
