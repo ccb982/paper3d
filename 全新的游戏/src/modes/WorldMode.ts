@@ -397,13 +397,31 @@ export class WorldMode {
   /** ★ 角色垂直运动（kinematic：模式层驱动）：
    *   - 平地/高台：y 限速趋近地形高度——爬升 7.5m/s（上 1.5m 高台 ≈ 0.2s 平滑攀爬，
    *     不瞬移）；下落 20m/s（走下高台快速落地）
+   *   - ★ 高台攀爬：y 未达台面高度前 x/z 被挡在块外（贴边爬升，不埋进立面刚体）
    *   - 坑洞：假重力加速下落 → 触底 → 摔死（玩家传送回出生点；敌人销毁置空） */
   private clampCharacter(e: CharacterBase, dt: number): void {
     const p = e.position;
     const targetY = this.raster.heightAt(p.x, p.z);
-    const dy = targetY - p.y;
     if (targetY >= -1.5) {
       e.velY = 0;
+      let target = targetY;
+      if (e.climbTargetY > 0) {
+        // ★ 攀爬中：持续向台面高度爬升（即使脚下已推回平地）
+        target = e.climbTargetY;
+        if (p.y >= e.climbTargetY - 0.05) {
+          e.climbTargetY = 0; // 达标：放行 x/z，角色跨上台面
+        } else {
+          this.blockAtBlockEdge(e);
+        }
+      } else if (targetY - p.y > 0.5) {
+        // ★ 触发攀爬：前方高台（高度差 > 0.5m，微起伏 ±0.2 不触发）
+        const bx = Math.floor(p.x / BLOCK_SIZE);
+        const bz = Math.floor(p.z / BLOCK_SIZE);
+        e.climbTargetY = this.raster.heightAt(bx * BLOCK_SIZE + BLOCK_SIZE / 2, bz * BLOCK_SIZE + BLOCK_SIZE / 2);
+        target = e.climbTargetY;
+        this.blockAtBlockEdge(e);
+      }
+      const dy = target - p.y;
       if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
       else p.y += Math.max(dy, -20 * dt);
       return;
@@ -425,6 +443,24 @@ export class WorldMode {
         this.enemy = null;
       }
     }
+  }
+
+  /** ★ 攀爬阻挡：角色当前所在高台块 → 推回最近边（贴边爬升，防埋进立面）
+   *   缓冲 = 碰撞半宽 0.28 + 余量 */
+  private blockAtBlockEdge(e: CharacterBase): void {
+    const p = e.position;
+    const bx = Math.floor(p.x / BLOCK_SIZE);
+    const bz = Math.floor(p.z / BLOCK_SIZE);
+    const bMinX = bx * BLOCK_SIZE, bMaxX = bMinX + BLOCK_SIZE;
+    const bMinZ = bz * BLOCK_SIZE, bMaxZ = bMinZ + BLOCK_SIZE;
+    const dl = p.x - bMinX, dr = bMaxX - p.x;
+    const du = p.z - bMinZ, dd = bMaxZ - p.z;
+    const minD = Math.min(dl, dr, du, dd);
+    const push = 0.35;
+    if (minD === dl) p.x = bMinX - push;
+    else if (minD === dr) p.x = bMaxX + push;
+    else if (minD === du) p.z = bMinZ - push;
+    else p.z = bMaxZ + push;
   }
 
   dispose(): void {
