@@ -29,7 +29,6 @@ import type { EntityBase } from '../entity/EntityBase';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager } from '../services/combat/BulletManager';
-import { LOD_MAX_DIST } from '../services/lod';
 
 export class WorldMode {
   readonly entities: EntityManager;
@@ -158,11 +157,8 @@ export class WorldMode {
     // ★ 无限地图扩张（玩家跨 chunk → 新 chunk 加载：数据 + 地面刚体 + 视觉网格）
     this.syncChunks(pp.x, pp.y);
 
-    // ★ 小地图每帧更新（三层：地面/实体/黑雾；玩家居中 + 箭头=摄像机朝向 + 梯形调试）
-    this.minimap.update(
-      pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases(),
-      this.raster.frustumCorners(this.camera, LOD_MAX_DIST),
-    );
+    // ★ 小地图每帧更新（三层：地面/实体/黑雾；玩家居中 + 箭头=摄像机朝向）
+    this.minimap.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases());
 
     // AI 上下文（本帧 dt/累计时间 + 索敌 = 玩家位置）
     this.aiCtx.dt = dt;
