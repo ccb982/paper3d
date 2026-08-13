@@ -397,29 +397,54 @@ export class WorldMode {
   /** ★ 角色垂直运动（kinematic：模式层驱动）：
    *   - 平地/高台：y 限速趋近地形高度——爬升 7.5m/s（上 1.5m 高台 ≈ 0.2s 平滑攀爬，
    *     不瞬移）；下落 20m/s（走下高台快速落地）
-   *   - ★ 高台攀爬：y 未达台面高度前 x/z 被挡在块外（贴边爬升，不埋进立面刚体）
+   *   - ★ 高台攀爬：y 未达台面高度前 x/z 被挡在块外（贴边爬升，不埋进立面刚体）；
+   *     达标后沿进入边跨上台面
    *   - 坑洞：假重力加速下落 → 触底 → 摔死（玩家传送回出生点；敌人销毁置空） */
   private clampCharacter(e: CharacterBase, dt: number): void {
     const p = e.position;
-    const targetY = this.raster.heightAt(p.x, p.z);
+    // ★ 脚底圆采样（±0.3 五点取最高）：站块边缘（半脚在台上）不掉落——
+    //   否则块边界 targetY 二值切换（1.5/0），角色贴边走 y 高频震荡
+    const targetY = this.groundHeightAt(e);
     if (targetY >= -1.5) {
       e.velY = 0;
       let target = targetY;
       if (e.climbTargetY > 0) {
-        // ★ 攀爬中：持续向台面高度爬升（即使脚下已推回平地）
-        target = e.climbTargetY;
+        // ★ 攀爬中
         if (p.y >= e.climbTargetY - 0.05) {
-          e.climbTargetY = 0; // 达标：放行 x/z，角色跨上台面
+          // 达标：沿进入边跨入块内（越过立面刚体，站上台面）
+          // step = 推回缓冲 0.6 + 块内深度 0.45
+          const step = 1.05;
+          if (e.climbEdge === 'l') p.x = e.climbBlockX * BLOCK_SIZE + step;
+          else if (e.climbEdge === 'r') p.x = (e.climbBlockX + 1) * BLOCK_SIZE - step;
+          else if (e.climbEdge === 'u') p.z = e.climbBlockZ * BLOCK_SIZE + step;
+          else p.z = (e.climbBlockZ + 1) * BLOCK_SIZE - step;
+          p.y = e.climbTargetY;
+          e.climbTargetY = 0; // 完成：清除攀爬状态
+          target = this.raster.heightAt(p.x, p.z);
         } else {
-          this.blockAtBlockEdge(e);
+          // 未达标：沿【固定进入边】推回贴边爬升（★ 不每帧重算最近边——
+          //   斜贴边时最近边在 l/r/u/d 间切换 → 推回位置横跳 → 高频闪动）
+          target = e.climbTargetY;
+          this.pushToClimbEdge(e);
         }
       } else if (targetY - p.y > 0.5) {
-        // ★ 触发攀爬：前方高台（高度差 > 0.5m，微起伏 ±0.2 不触发）
+        // ★ 潜在攀爬：脚底中心必须真实踩进高台块才触发（贴边走/路过时
+        //   脚底圆采样触边不算——否则贴台边走会被反复吸上台）
         const bx = Math.floor(p.x / BLOCK_SIZE);
         const bz = Math.floor(p.z / BLOCK_SIZE);
-        e.climbTargetY = this.raster.heightAt(bx * BLOCK_SIZE + BLOCK_SIZE / 2, bz * BLOCK_SIZE + BLOCK_SIZE / 2);
-        target = e.climbTargetY;
-        this.blockAtBlockEdge(e);
+        const centerBlockY = this.raster.heightAt(bx * BLOCK_SIZE + BLOCK_SIZE / 2, bz * BLOCK_SIZE + BLOCK_SIZE / 2);
+        if (centerBlockY - p.y > 0.5) {
+          // ★ 触发攀爬：前方高台（高度差 > 0.5m；微起伏 ±0.2 不触发）
+          e.climbTargetY = centerBlockY;
+          e.climbBlockX = bx;
+          e.climbBlockZ = bz;
+          e.climbEdge = this.nearestEdgeOf(e, bx, bz);
+          this.pushToClimbEdge(e);
+          target = e.climbTargetY;
+        } else {
+          // 路过贴边：y 保持（不吸高、不攀爬），等角色真正进块或离开
+          target = p.y;
+        }
       }
       const dy = target - p.y;
       if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
@@ -432,6 +457,7 @@ export class WorldMode {
     if (p.y <= targetY + 0.05) {
       // 触底：摔死（一次性）
       e.velY = 0;
+      e.climbTargetY = 0;
       e.onDeath(null);
       if (e === this.player) {
         // 玩家：传送回出生点（出生安全区，强制平地 → 不循环死亡）
@@ -445,22 +471,47 @@ export class WorldMode {
     }
   }
 
-  /** ★ 攀爬阻挡：角色当前所在高台块 → 推回最近边（贴边爬升，防埋进立面）
-   *   缓冲 = 碰撞半宽 0.28 + 余量 */
-  private blockAtBlockEdge(e: CharacterBase): void {
+  /** ★ 脚底圆采样：脚底中心 + 前后左右 0.3m 五点取最高地形高度。
+   *   站块边缘（半脚在台上）→ 仍判台上（不掉落/不抖动）；
+   *   完全出块 → 判平地（走下台才下落）；
+   *   坑洞同理：贴坑边走不判坑，走进坑中心才触发摔落 */
+  private groundHeightAt(e: CharacterBase): number {
     const p = e.position;
-    const bx = Math.floor(p.x / BLOCK_SIZE);
-    const bz = Math.floor(p.z / BLOCK_SIZE);
-    const bMinX = bx * BLOCK_SIZE, bMaxX = bMinX + BLOCK_SIZE;
-    const bMinZ = bz * BLOCK_SIZE, bMaxZ = bMinZ + BLOCK_SIZE;
-    const dl = p.x - bMinX, dr = bMaxX - p.x;
-    const du = p.z - bMinZ, dd = bMaxZ - p.z;
+    const r = 0.3;
+    let h = this.raster.heightAt(p.x, p.z);
+    h = Math.max(h, this.raster.heightAt(p.x + r, p.z));
+    h = Math.max(h, this.raster.heightAt(p.x - r, p.z));
+    h = Math.max(h, this.raster.heightAt(p.x, p.z + r));
+    h = Math.max(h, this.raster.heightAt(p.x, p.z - r));
+    return h;
+  }
+
+  /** ★ 攀爬块的最近边（触发攀爬时判定一次：角色进块时离哪条边最近） */
+  private nearestEdgeOf(e: CharacterBase, bx: number, bz: number): 'l' | 'r' | 'u' | 'd' {
+    const p = e.position;
+    const dl = p.x - bx * BLOCK_SIZE;
+    const dr = (bx + 1) * BLOCK_SIZE - p.x;
+    const du = p.z - bz * BLOCK_SIZE;
+    const dd = (bz + 1) * BLOCK_SIZE - p.z;
     const minD = Math.min(dl, dr, du, dd);
-    const push = 0.35;
-    if (minD === dl) p.x = bMinX - push;
-    else if (minD === dr) p.x = bMaxX + push;
-    else if (minD === du) p.z = bMinZ - push;
-    else p.z = bMaxZ + push;
+    if (minD === dl) return 'l';
+    if (minD === dr) return 'r';
+    if (minD === du) return 'u';
+    return 'd';
+  }
+
+  /** ★ 沿攀爬块的固定边推回（贴边爬升，防埋进立面）。
+   *   缓冲 0.6：贴片半宽 0.5 + 深度安全余量（贴片与立面过近会 z-fighting，
+   *   且贴片宽于碰撞体——缓冲必须大于贴片半宽，否则贴片插进立面） */
+  private pushToClimbEdge(e: CharacterBase): void {
+    const p = e.position;
+    const bx = e.climbBlockX;
+    const bz = e.climbBlockZ;
+    const push = 0.6;
+    if (e.climbEdge === 'l') p.x = bx * BLOCK_SIZE - push;
+    else if (e.climbEdge === 'r') p.x = (bx + 1) * BLOCK_SIZE + push;
+    else if (e.climbEdge === 'u') p.z = bz * BLOCK_SIZE - push;
+    else p.z = (bz + 1) * BLOCK_SIZE + push;
   }
 
   dispose(): void {

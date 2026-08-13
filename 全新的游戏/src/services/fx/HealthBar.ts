@@ -35,12 +35,20 @@ export class HealthBar implements EntityEffect {
 
     const bgGeo = new THREE.PlaneGeometry(w, this.height);
     // ★ depthTest 开启 + depthWrite 关闭：血条读深度（被地形遮挡时正确隐藏），
-    //   不写深度（透明排序安全）
-    const bgMat = new THREE.MeshBasicMaterial({ color: 0x1a1a1a, transparent: true, opacity: 0.7, depthTest: true, depthWrite: false });
+    //   不写深度（透明排序安全）；polygonOffset 防与地形面 z-fighting
+    const bgMat = new THREE.MeshBasicMaterial({
+      color: 0x1a1a1a, transparent: true, opacity: 0.7,
+      depthTest: true, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+    });
     const bg = new THREE.Mesh(bgGeo, bgMat);
 
     const fgGeo = new THREE.PlaneGeometry(w, this.height);
-    const fgMat = new THREE.MeshBasicMaterial({ color: opts?.color ?? 0xff3333, transparent: true, opacity: 0.9, depthTest: true, depthWrite: false });
+    const fgMat = new THREE.MeshBasicMaterial({
+      color: opts?.color ?? 0xff3333, transparent: true, opacity: 0.9,
+      depthTest: true, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+    });
     this.fg = new THREE.Mesh(fgGeo, fgMat);
     // ★ 锚点左端：几何平移到右侧 + 位置对齐背景左端 → scale.x 从左侧收缩
     this.fg.geometry.translate(w / 2, 0, 0);
