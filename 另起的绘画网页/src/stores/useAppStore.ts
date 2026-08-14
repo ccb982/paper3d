@@ -3060,6 +3060,29 @@ export const useAppStore = create<AppState>((set, get) => ({
         hslFloat[p4 + 2] = c.l;
         hslFloat[p4 + 3] = 1.0;
       }
+      // ★ 全帧量化残差（流体编码：R=qH/63*255、G=qS/31*255、B=qL/31*255，
+      //   中性 128 = delta≈0；bbox 外中性）——导入后流体立即平流真实残差
+      //   （此前 boundResidualTexture=null → 中性残差，"只显示第一帧基础色"）
+      const residTex = new ImageData(frame.width, frame.height);
+      for (let i = 0; i < residTex.data.length; i += 4) {
+        residTex.data[i] = 128;
+        residTex.data[i + 1] = 128;
+        residTex.data[i + 2] = 128;
+        residTex.data[i + 3] = 128;
+      }
+      for (let pi = 0; pi < mappedRegionIdTex.length; pi++) {
+        const cid = mappedRegionIdTex[pi];
+        if (cid === 0) continue;
+        const packed = frame.deltaPacked[pi];
+        const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+        const px = pi % bboxW2;
+        const py = Math.floor(pi / bboxW2);
+        const gi = ((frame.bbox.y + py) * frame.width + (frame.bbox.x + px)) * 4;
+        residTex.data[gi] = Math.round((qH / 63) * 255);
+        residTex.data[gi + 1] = Math.round((qS / 31) * 255);
+        residTex.data[gi + 2] = Math.round((qL / 31) * 255);
+        residTex.data[gi + 3] = 128;
+      }
       newFrameDataMap[layerId] = {
         id: layerId,
         rawRegionIdTex: mappedRegionIdTex,
@@ -3072,8 +3095,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         baseTexture,
         residualTexture,
         boundRegionId: null,
-        boundBaseTexture: null,
-        boundResidualTexture: null,
+        // ★ 未绑定区域前：boundBaseTexture = 叠加色（最终帧 = 基础色+残差，
+        //   decodeFrameToTextures 的 residualTexture 即叠加色）——此前赋
+        //   baseTexture（纯基础色）→ 只显示基础色，点帧触发重建后才见合成
+        boundBaseTexture: residualTexture,
+        boundResidualTexture: residTex,
         textureOffset: { x: 0, y: 0 },
         textureScale: { x: 1, y: 1 },
         textureRotation: 0,
@@ -3160,9 +3186,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
       },
-      // 动态调整画布尺寸以匹配 bbox
-      canvasWidth: firstBbox ? firstBbox.w : state.canvasWidth,
-      canvasHeight: firstBbox ? firstBbox.h : state.canvasHeight,
+      // ★ 画布尺寸 = 源分辨率（帧 width/height），不是 bbox——与 setActiveLayer
+      //   一致；bbox 是数据层紧凑框，画布用 bbox 会导致 WebGL 区域色块 UV
+      //   错位（内容变窄）+ "点帧选择才显示正确"（点帧触发 setActiveLayer 修正）
+      canvasWidth: firstFrame ? (firstFrame.width || (firstBbox ? firstBbox.w : state.canvasWidth)) : state.canvasWidth,
+      canvasHeight: firstFrame ? (firstFrame.height || (firstBbox ? firstBbox.h : state.canvasHeight)) : state.canvasHeight,
       // 🔽 重置视图变换，避免导入后内容偏移和重复绘制
       zoom: 1.0,
       panOffset: { x: 0, y: 0 },
@@ -3288,6 +3316,33 @@ export const useAppStore = create<AppState>((set, get) => ({
     const croppedBase = maskBase;
     console.log(`[绑定诊断] boundBaseTexture（bbox 局部）: ${bboxLocal.w}×${bboxLocal.h}，框像素多边形顶点数=${polyPx[0]?.length ?? 0}`);
 
+    // ★ 残差纹理（bbox 局部，与 boundBaseTexture 同尺寸）——绑定即生成，
+    //   流体平流直接作用于残差（此前 boundResidualTexture 恒 null →
+    //   流体拿到中性残差："导入帧后必须点帧才显示残差、重置即消失"）
+    //   编码约定（与 decodeResidualFromFrame 一致）：R=qH/63*255、G=qS/31*255、
+    //   B=qL/31*255；中性 = 128（delta≈0）。框外 = 中性（流体作用区外无残差）。
+    const residBase = new ImageData(bboxLocal.w, bboxLocal.h);
+    for (let i = 0; i < residBase.data.length; i += 4) {
+      residBase.data[i] = 128;
+      residBase.data[i + 1] = 128;
+      residBase.data[i + 2] = 128;
+      residBase.data[i + 3] = 128;
+    }
+    for (let by = 0; by < bboxLocal.h; by++) {
+      for (let bx = 0; bx < bboxLocal.w; bx++) {
+        if (!isPointInPolygonWithHoles({ x: bx, y: by }, polyPx)) continue;
+        const li = by * bboxLocal.w + bx;
+        const packed = frameData.rawDeltaPacked[li];
+        if (packed === undefined) continue;
+        const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
+        const di = li * 4;
+        residBase.data[di] = Math.round((qH / 63) * 255);
+        residBase.data[di + 1] = Math.round((qS / 31) * 255);
+        residBase.data[di + 2] = Math.round((qL / 31) * 255);
+        residBase.data[di + 3] = 128;
+      }
+    }
+
     // 直接保存裁剪后的底图（全帧尺寸 + 区域形状 mask），模板缓冲负责每帧的边界裁剪
     // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样（仅模板=1区域）
     let validPixelCount = 0;
@@ -3310,7 +3365,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ...frameData,
             boundRegionId: regionId,
             boundBaseTexture: croppedBase,
-            boundResidualTexture: null,
+            boundResidualTexture: residBase,
             textureOffset: frameData.textureOffset || { x: 0, y: 0 },
             textureScale: frameData.textureScale || { x: 1, y: 1 },
             textureRotation: frameData.textureRotation || 0,
