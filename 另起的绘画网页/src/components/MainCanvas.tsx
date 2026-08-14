@@ -793,15 +793,23 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // --- 4. UV 生成（像素坐标 → 归一化 UV，正确映射到 canvasWidth x canvasHeight 纹理）---
-    const texWidth = canvasWidth;
-    const texHeight = canvasHeight;
+    // --- 4. UV 生成：★ bbox 局部归一（与 store 的 boundBaseTexture bbox 局部
+    //   输出一致）——画布像素坐标（= bbox 空间）直接除以 bbox 尺寸：
+    //   框覆盖哪显示哪，不依赖"画布 = 源分辨率"
+    const fdForUv = frameDataMap[activeLayerId];
+    const uvBbox = fdForUv?.rawBbox;
     const uv = new Float32Array(allPoints.length * 2);
     allPoints.forEach((p, i) => {
-      uv[i * 2] = p.x / texWidth;
-      uv[i * 2 + 1] = p.y / texHeight;
+      if (uvBbox) {
+        uv[i * 2] = p.x / uvBbox.w;
+        uv[i * 2 + 1] = p.y / uvBbox.h;
+      } else {
+        uv[i * 2] = p.x / canvasWidth;
+        uv[i * 2 + 1] = p.y / canvasHeight;
+      }
     });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    console.log(`[UV诊断] 区域#${entity.id} UV=画布像素/bbox(${uvBbox ? `${uvBbox.w}×${uvBbox.h}` : `画布 ${canvasWidth}×${canvasHeight}`})`);
     
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---

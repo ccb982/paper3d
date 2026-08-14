@@ -149,12 +149,15 @@ export async function exportMainCanvasAssetBundle(
       newRegionIdTex[i] = globalId === 0 ? 0 : (idToIndex.get(globalId) ?? 0) + 1;
     }
     const size = fd.sourceResolution || 512;
+    // ★ 高 = sourceHeight（非强制方形）：非方形纹理打包后按真实比例解码，
+    //   否则绑定区域时内容被压进方形 → 变窄/拉伸
+    const sizeH = fd.sourceHeight || size;
     e.textureIndex = textureIndex++;
     exportFrames.push({
       name: e.layer.name || '未命名',
       width: size,
-      height: size,
-      bbox: fd.rawBbox || { x: 0, y: 0, w: size, h: size },
+      height: sizeH,
+      bbox: fd.rawBbox || { x: 0, y: 0, w: size, h: sizeH },
       regionIdTex: newRegionIdTex,
       deltaPacked: fd.rawDeltaPacked || new Uint16Array(0),
       blockFlags: BigInt(fd.rawBlockFlags ?? 0),

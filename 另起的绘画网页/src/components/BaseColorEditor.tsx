@@ -492,7 +492,7 @@ export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
-  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'picker' | 'select' | 'fixbrush'>('dashed');
+  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'eraser' | 'picker' | 'select' | 'fixbrush'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
   const {
     skillGroupEditor,
@@ -517,6 +517,7 @@ export const BaseColorEditor: React.FC = () => {
     historyIndex,   // 全局历史索引
     historySnapshots, // 全局历史快照
     mergeSimilarColors,
+    pruneUnusedColors,
   } = useAppStore();
 
   const { frames, sharedBaseColors, activeFrameId, globalBbox, enableFramePrediction } = skillGroupEditor;
@@ -787,6 +788,8 @@ export const BaseColorEditor: React.FC = () => {
 
   const highlightCanvasRef = useRef<HTMLCanvasElement>(null);
   const tempPixelsRef = useRef<Set<string>>(new Set());
+  /** ★ 橡皮擦：本次擦除笔画的像素集合（松开时统一清 regionIdTex） */
+  const erasedPixelsRef = useRef<Set<string>>(new Set());
   const isProcessingRef = useRef(false);
 
   const handleSelectBaseColor = useCallback((id: number) => {
@@ -1703,6 +1706,37 @@ export const BaseColorEditor: React.FC = () => {
     setBrushColor(hex);
   }, [baseTexture, texSize, texSizeY]);
 
+  // ★ 取色右键：把点击处像素所属颜色【全部变透明】（regionIdTex 该 ID 清零）
+  const eraseColorAt = useCallback((px: number, py: number) => {
+    if (!bbox || !activeFrameId || !regionIdTex || regionIdTex.length === 0) {
+      console.warn('[清空颜色] 缺少 bbox/activeFrameId/regionIdTex');
+      return;
+    }
+    const lx = px - bbox.x;
+    const ly = py - bbox.y;
+    const idx = ly * bbox.w + lx;
+    if (idx < 0 || idx >= regionIdTex.length) return;
+    const colorId = regionIdTex[idx];
+    if (colorId === 0) {
+      console.warn('[清空颜色] 点击处已是透明');
+      return;
+    }
+    const newTex = new Uint16Array(regionIdTex);
+    let cleared = 0;
+    for (let i = 0; i < newTex.length; i++) {
+      if (newTex[i] === colorId) {
+        newTex[i] = 0;
+        cleared++;
+      }
+    }
+    updateSkillFrame(activeFrameId, { regionIdTex: newTex });
+    saveHistory();
+    syncFrameTextures(activeFrameId);
+    sortPaletteByArea();
+    pruneUnusedColors();
+    console.log(`[清空颜色] 颜色 ID=${colorId} → 透明，清除 ${cleared} 像素`);
+  }, [bbox, activeFrameId, regionIdTex, updateSkillFrame, saveHistory, syncFrameTextures, sortPaletteByArea, pruneUnusedColors]);
+
   // 在基础色纹理上涂色
   const paintOnBase = useCallback((px: number, py: number) => {
     if (!baseTexture) return;
@@ -1736,6 +1770,54 @@ export const BaseColorEditor: React.FC = () => {
     const updated = new ImageData(new Uint8ClampedArray(data), baseTexture.width, baseTexture.height);
     setBaseTexture(updated);
   }, [baseTexture, brushColor, brushSize, texSize, setBaseTexture]);
+
+  // ★ 橡皮擦：把基础色纹理像素擦为透明（alpha=0），笔画松开时统一清 regionIdTex
+  const eraseOnBase = useCallback((px: number, py: number) => {
+    if (!baseTexture) return;
+    const data = baseTexture.data;
+    const radiusPx = Math.max(1, brushSize);
+    const half = Math.floor(radiusPx);
+    for (let dy = -half; dy <= half; dy++) {
+      for (let dx = -half; dx <= half; dx++) {
+        if (dx * dx + dy * dy > half * half) continue;
+        const gx = px + dx;
+        const gy = py + dy;
+        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSize) continue;
+        const pi = (gy * texSize + gx) * 4;
+        data[pi + 3] = 0;
+        erasedPixelsRef.current.add(`${gx},${gy}`);
+      }
+    }
+    const updated = new ImageData(new Uint8ClampedArray(data), baseTexture.width, baseTexture.height);
+    setBaseTexture(updated);
+  }, [baseTexture, brushSize, texSize, setBaseTexture]);
+
+  // ★ 擦除笔画结束：把本次擦除的像素在 regionIdTex 中清零（ID=0 → 透明）
+  const applyErase = useCallback(() => {
+    const erased = erasedPixelsRef.current;
+    if (erased.size === 0 || !bbox || !activeFrameId) return;
+    const state = useAppStore.getState();
+    const frame = state.skillGroupEditor.frames.find(f => f.id === activeFrameId);
+    if (!frame || !frame.regionIdTex || frame.regionIdTex.length === 0) {
+      erased.clear();
+      return;
+    }
+    const newRegionIdTex = new Uint16Array(frame.regionIdTex);
+    const { w } = bbox;
+    for (const key of erased) {
+      const [x, y] = key.split(',').map(Number);
+      const lx = x - bbox.x;
+      const ly = y - bbox.y;
+      const idx = ly * w + lx;
+      if (idx >= 0 && idx < newRegionIdTex.length) {
+        newRegionIdTex[idx] = 0;
+      }
+    }
+    erased.clear();
+    updateSkillFrame(activeFrameId, { regionIdTex: newRegionIdTex });
+    syncFrameTextures(activeFrameId);
+    sortPaletteByArea();
+  }, [bbox, activeFrameId, updateSkillFrame, syncFrameTextures, sortPaletteByArea]);
 
   // ★ 强制修正笔刷（8×8）：刷到后强制修正残差和基础色
   //   修正策略：左右 → 上下 → 斜向 → 新建基础色（见 forcedFixBrush）
@@ -2059,6 +2141,14 @@ export const BaseColorEditor: React.FC = () => {
       saveHistory();
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
+    } else if (currentTool === 'eraser') {
+      if (mode !== 'base2') {
+        console.warn('橡皮擦仅在基础色模式下可用');
+        return;
+      }
+      saveHistory();
+      setIsDrawing(true);
+      eraseOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'fixbrush') {
       // ★ 强制修正任意模式可用（不限制 base2）
       setIsDrawing(true);
@@ -2068,9 +2158,11 @@ export const BaseColorEditor: React.FC = () => {
         console.warn('取色器仅在基础色模式下可用');
         return;
       }
-      pickColor(pixel.x, pixel.y);
+      // ★ 右键 = 把该颜色全部变透明；左键 = 正常取色
+      if (e.button === 2) eraseColorAt(pixel.x, pixel.y);
+      else pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, fixBrushAt, pickColor, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, fixBrushAt, pickColor, eraseColorAt, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -2090,11 +2182,14 @@ export const BaseColorEditor: React.FC = () => {
     if (isDrawing && currentTool === 'paint' && mode === 'base2') {
       paintOnBase(pixel.x, pixel.y);
     }
+    if (isDrawing && currentTool === 'eraser' && mode === 'base2') {
+      eraseOnBase(pixel.x, pixel.y);
+    }
     // ★ 强制修正任意模式可用（不限制 base2）
     if (isDrawing && currentTool === 'fixbrush') {
       fixBrushAt(pixel.x, pixel.y);
     }
-  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, fixBrushAt, drawingPolygon, snapPointToExisting, mode, texSize]);
+  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, eraseOnBase, fixBrushAt, drawingPolygon, snapPointToExisting, mode, texSize]);
 
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture && currentTool === 'paint') {
@@ -2104,11 +2199,17 @@ export const BaseColorEditor: React.FC = () => {
         processPaintedPixels();
       }, 0);
     }
+    if (isDrawing && currentTool === 'eraser') {
+      setTimeout(() => {
+        saveHistory();
+        applyErase();
+      }, 0);
+    }
     if (isDrawing && currentTool === 'fixbrush') {
       setTimeout(() => saveHistory(), 0);
     }
     setIsDrawing(false);
-  }, [isDrawing, baseTexture, currentTool, processPaintedPixels]);
+  }, [isDrawing, baseTexture, currentTool, processPaintedPixels, applyErase]);
 
   const handleColorInfoClick = useCallback((e: React.MouseEvent) => {
     if (!showColorInfoOnClick) return;
@@ -2558,9 +2659,9 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 7. 画笔光标
-    if (mousePos && (currentTool === 'paint' || currentTool === 'picker' || currentTool === 'fixbrush')) {
+    if (mousePos && (currentTool === 'paint' || currentTool === 'eraser' || currentTool === 'picker' || currentTool === 'fixbrush')) {
       ctx.save();
-      ctx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : brushColor;
+      ctx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : currentTool === 'eraser' ? '#ffffff' : brushColor;
       ctx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
       ctx.setLineDash(currentTool === 'fixbrush' ? [] : []);
       if (currentTool === 'fixbrush') {
@@ -2594,10 +2695,10 @@ export const BaseColorEditor: React.FC = () => {
       octx.drawImage(highlightCanvasRef.current, 0, 0);
     }
 
-    if (!mousePos || (currentTool !== 'paint' && currentTool !== 'picker' && currentTool !== 'fixbrush')) return;
+    if (!mousePos || (currentTool !== 'paint' && currentTool !== 'eraser' && currentTool !== 'picker' && currentTool !== 'fixbrush')) return;
 
     octx.save();
-    octx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : brushColor;
+    octx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : currentTool === 'eraser' ? '#ffffff' : brushColor;
     octx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
     octx.setLineDash([]);
     if (currentTool === 'fixbrush') {
@@ -2893,6 +2994,19 @@ export const BaseColorEditor: React.FC = () => {
           画笔
         </button>
         <button
+          onClick={() => { setCurrentTool('eraser'); setDrawingPolygon(null); }}
+          disabled={!baseTexture || mode !== 'base2'}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: currentTool === 'eraser' ? '#fa8c16' : '#f0f0f0',
+            color: currentTool === 'eraser' ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+          title="橡皮擦：擦为透明（松开时同步清除区域 ID）"
+        >
+          橡皮
+        </button>
+        <button
           onClick={() => { setCurrentTool('picker'); setDrawingPolygon(null); }}
           disabled={mode !== 'base2'}
           style={{
@@ -2901,6 +3015,7 @@ export const BaseColorEditor: React.FC = () => {
             color: currentTool === 'picker' ? '#fff' : '#333',
             border: '1px solid #d9d9d9',
           }}
+          title="取色：左键取样；右键 = 把该颜色全部变透明"
         >
           取色
         </button>
@@ -2923,16 +3038,18 @@ export const BaseColorEditor: React.FC = () => {
           style={{ width: '24px', height: '24px', padding: 0, border: 'none', cursor: 'pointer' }}
           title="画笔颜色"
         />
-        <select
-          value={brushSize}
-          onChange={(e) => setBrushSize(Number(e.target.value))}
-          style={{ fontSize: '11px', padding: '1px 4px' }}
-          title="笔刷大小"
-        >
-          {[2, 4, 6, 8, 12, 16, 24, 32].map(s => (
-            <option key={s} value={s}>{s}px</option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <input
+            type="range"
+            min={1}
+            max={64}
+            value={brushSize}
+            onChange={(e) => setBrushSize(Number(e.target.value))}
+            style={{ width: '64px', cursor: 'pointer' }}
+            title="笔刷大小（1~64 像素）"
+          />
+          <span style={{ fontSize: '11px', minWidth: '30px', textAlign: 'center' }}>{brushSize}px</span>
+        </div>
         <button
           onClick={() => setMode('base')}
           style={{

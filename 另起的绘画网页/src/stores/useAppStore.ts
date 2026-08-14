@@ -759,15 +759,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     set({ activeLayerId: id });
     
-    // 如果切换到有帧数据的图层，更新画布尺寸为 bbox 尺寸并重置视图
+    // 如果切换到有帧数据的图层，更新画布尺寸并重置视图
     if (id) {
       const frameData = state.frameDataMap[id];
       if (frameData && frameData.rawBbox) {
-        const bbox = frameData.rawBbox;
-        if (state.canvasWidth !== bbox.w || state.canvasHeight !== bbox.h) {
+        // ★ 画布尺寸 = 源分辨率（导入纹理实际宽高），不是 bbox——
+        //   bbox 是数据层紧凑包围盒；区域色块纹理按源分辨率解码，
+        //   画布用 bbox 尺寸会导致 WebGL 区域色块 UV 比例错（内容压窄/
+        //   拉伸）+ 区域色块框与 2D 实线框大小不一致
+        const w = frameData.sourceResolution || frameData.rawBbox.w;
+        const h = frameData.sourceHeight || frameData.rawBbox.h;
+        if (state.canvasWidth !== w || state.canvasHeight !== h) {
           set({
-            canvasWidth: bbox.w,
-            canvasHeight: bbox.h,
+            canvasWidth: w,
+            canvasHeight: h,
             zoom: 1,
             panOffset: { x: 0, y: 0 },
           });
@@ -2673,7 +2678,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           baseData[globalIdx + 2] = b; baseData[globalIdx + 3] = 255;
         }
       }
-      const newBase = new ImageData(baseData, textureSize, textureSize);
+      const newBase = new ImageData(baseData, textureSize, textureSizeY);
 
       // 内联 buildResidualTextureFromPacked
       const residualData = new Uint8ClampedArray(totalPixels * 4);
@@ -2697,7 +2702,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           }
         }
       }
-      const newResidual = new ImageData(residualData, textureSize, textureSize);
+      const newResidual = new ImageData(residualData, textureSize, textureSizeY);
 
       const updatedFrames = state.skillGroupEditor.frames.map(f =>
         f.id === frameId ? { ...f, baseTexture: newBase, residualTexture: newResidual } : f
@@ -2736,7 +2741,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           baseData[globalIdx + 2] = b; baseData[globalIdx + 3] = 255;
         }
       }
-      const newBase = new ImageData(baseData, textureSize, textureSize);
+      const newBase = new ImageData(baseData, textureSize, textureSizeY);
 
       set({
         frameDataMap: {
@@ -3243,27 +3248,45 @@ export const useAppStore = create<AppState>((set, get) => ({
       texSizeH
     );
 
-    // ★ 区域形状裁剪（不是矩形 bbox）：全帧尺寸，区域多边形内部保留、外部透明。
-    //   满足绑定后画面覆盖该区域形状内部的需求（形状外不显示）。
-    const maskBase = new ImageData(fullBase.width, fullBase.height);
+    // ★ 绑定诊断日志（定位"内容变窄/错位"）：
+    //   sourceResolution/Height = 纹理全帧尺寸；rawBbox = 帧内容区域（像素）；
+    //   entity.worldBbox = 画的区域框（世界 0~1）；canvasWidth/Height = 画布
+    console.log('[绑定诊断] ========================================');
+    console.log(`[绑定诊断] 源分辨率: ${texSize}×${texSizeH}（sourceResolution=${frameData.sourceResolution}, sourceHeight=${frameData.sourceHeight}）`);
+    console.log(`[绑定诊断] 帧 bbox（像素，内容区域）: (${frameData.rawBbox!.x},${frameData.rawBbox!.y}) ${frameData.rawBbox!.w}×${frameData.rawBbox!.h}`);
+    console.log(`[绑定诊断] 画的区域框（世界 0~1）: x∈[${entity.worldBbox!.x.toFixed(3)},${(entity.worldBbox!.x + entity.worldBbox!.w).toFixed(3)}] y∈[${entity.worldBbox!.y.toFixed(3)},${(entity.worldBbox!.y + entity.worldBbox!.h).toFixed(3)}]`);
+    console.log(`[绑定诊断] 区域框换算像素（×画布）: ${(entity.worldBbox!.w * state.canvasWidth).toFixed(0)}×${(entity.worldBbox!.h * state.canvasHeight).toFixed(0)}`);
+    console.log(`[绑定诊断] 画布: ${state.canvasWidth}×${state.canvasHeight}，fullBase: ${fullBase.width}×${fullBase.height}`);
+    console.log(`[绑定诊断] bbox 占全帧比例: ${(frameData.rawBbox!.w / texSize * 100).toFixed(1)}% × ${(frameData.rawBbox!.h / texSizeH * 100).toFixed(1)}%`);
+    console.log('[绑定诊断] ========================================');
+
+    // ★ 区域形状裁剪（不是矩形 bbox）：★ 输出 bbox 局部纹理——
+    //   内容按 bbox 空间对齐：框（世界坐标）× 画布 → 画布像素多边形
+    //   （bbox 空间），fullBase 像素 - bbox 偏移 → bbox 局部坐标，
+    //   框内保留。渲染侧 UV 同按 bbox 归一 → 框覆盖哪显示哪，
+    //   不依赖"画布 = 源分辨率"（此前两空间错配 → 内容变窄/错位）
+    const bboxLocal = frameData.rawBbox!;
+    const maskBase = new ImageData(bboxLocal.w, bboxLocal.h);
     const srcData = fullBase.data;
     const maskData = maskBase.data;
-    for (let py = 0; py < fullBase.height; py++) {
-      for (let px = 0; px < fullBase.width; px++) {
-        // 像素 → world 坐标（0~1，y 向上；boundary 为世界坐标）
-        const wx = px / fullBase.width;
-        const wy = 1 - py / fullBase.height;
-        if (isPointInPolygonWithHoles({ x: wx, y: wy }, entity.boundary)) {
-          const si = (py * fullBase.width + px) * 4;
-          maskData[si] = srcData[si];
-          maskData[si + 1] = srcData[si + 1];
-          maskData[si + 2] = srcData[si + 2];
-          maskData[si + 3] = srcData[si + 3] > 0 ? 255 : 0;
-        }
+    // 框多边形 → 画布像素坐标（= bbox 空间；boundary 世界坐标 × 画布）
+    const polyPx = entity.boundary.map(ring =>
+      ring.map(p => ({ x: p.x * state.canvasWidth, y: (1 - p.y) * state.canvasHeight }))
+    );
+    for (let by = 0; by < bboxLocal.h; by++) {
+      for (let bx = 0; bx < bboxLocal.w; bx++) {
+        if (!isPointInPolygonWithHoles({ x: bx, y: by }, polyPx)) continue;
+        const si = ((bboxLocal.y + by) * fullBase.width + (bboxLocal.x + bx)) * 4;
+        const di = (by * bboxLocal.w + bx) * 4;
+        maskData[di] = srcData[si];
+        maskData[di + 1] = srcData[si + 1];
+        maskData[di + 2] = srcData[si + 2];
+        maskData[di + 3] = srcData[si + 3] > 0 ? 255 : 0;
         // 形状外保持透明（alpha=0）
       }
     }
     const croppedBase = maskBase;
+    console.log(`[绑定诊断] boundBaseTexture（bbox 局部）: ${bboxLocal.w}×${bboxLocal.h}，框像素多边形顶点数=${polyPx[0]?.length ?? 0}`);
 
     // 直接保存裁剪后的底图（全帧尺寸 + 区域形状 mask），模板缓冲负责每帧的边界裁剪
     // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样（仅模板=1区域）
