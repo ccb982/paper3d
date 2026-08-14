@@ -763,12 +763,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (id) {
       const frameData = state.frameDataMap[id];
       if (frameData && frameData.rawBbox) {
-        // ★ 画布尺寸 = 源分辨率（导入纹理实际宽高），不是 bbox——
-        //   bbox 是数据层紧凑包围盒；区域色块纹理按源分辨率解码，
-        //   画布用 bbox 尺寸会导致 WebGL 区域色块 UV 比例错（内容压窄/
-        //   拉伸）+ 区域色块框与 2D 实线框大小不一致
-        const w = frameData.sourceResolution || frameData.rawBbox.w;
-        const h = frameData.sourceHeight || frameData.rawBbox.h;
+        // ★ 画布尺寸 = bbox 尺寸（帧内容紧凑框）：帧内容 1:1 显示，与导入时
+        //   一致；WebGL 区域色块 UV 已改为 bbox 局部归一（MainCanvas UV 生成），
+        //   不依赖画布=源分辨率
+        const w = frameData.rawBbox.w;
+        const h = frameData.rawBbox.h;
         if (state.canvasWidth !== w || state.canvasHeight !== h) {
           set({
             canvasWidth: w,
@@ -3186,11 +3185,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
       },
-      // ★ 画布尺寸 = 源分辨率（帧 width/height），不是 bbox——与 setActiveLayer
-      //   一致；bbox 是数据层紧凑框，画布用 bbox 会导致 WebGL 区域色块 UV
-      //   错位（内容变窄）+ "点帧选择才显示正确"（点帧触发 setActiveLayer 修正）
-      canvasWidth: firstFrame ? (firstFrame.width || (firstBbox ? firstBbox.w : state.canvasWidth)) : state.canvasWidth,
-      canvasHeight: firstFrame ? (firstFrame.height || (firstBbox ? firstBbox.h : state.canvasHeight)) : state.canvasHeight,
+      // ★ 画布尺寸 = bbox 尺寸（帧内容紧凑框）：预览/绘制以帧内容 1:1 显示，
+      //   与 MainCanvas 未绑定预览（只绘制 bbox 区域）一致。WebGL 区域色块 UV
+      //   已改为 bbox 局部归一（MainCanvas UV 生成），不再依赖画布=源分辨率
+      canvasWidth: firstBbox ? firstBbox.w : (firstFrame ? firstFrame.width : state.canvasWidth),
+      canvasHeight: firstBbox ? firstBbox.h : (firstFrame ? firstFrame.height : state.canvasHeight),
       // 🔽 重置视图变换，避免导入后内容偏移和重复绘制
       zoom: 1.0,
       panOffset: { x: 0, y: 0 },

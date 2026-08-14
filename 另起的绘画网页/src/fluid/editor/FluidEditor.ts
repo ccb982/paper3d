@@ -280,11 +280,23 @@ export class FluidEditor {
     const oldVelType = this.config.velocityDataType;
     const oldEnableObstacles = this.config.enableObstacles;
     const oldEnableLevelSet = this.config.enableLevelSet;
+    const oldChannels = { ...this.config.channels };
     Object.assign(this.config, updates);
 
     // ★ 同步通道掩码到 FluidOperations（注入时冻结未勾选的通道）
     if (updates.channels) {
       this.operations.setChannelMask(this.config.channels);
+      // ★ 取消勾选的通道：恢复默认残差模板值（该通道回归导入时的静态残差，
+      //   勾选的通道保持当前流动状态）
+      const restoreMask = {
+        r: oldChannels.r && !this.config.channels.r,
+        g: oldChannels.g && !this.config.channels.g,
+        b: oldChannels.b && !this.config.channels.b,
+        a: oldChannels.a && !this.config.channels.a,
+      };
+      if (restoreMask.r || restoreMask.g || restoreMask.b || restoreMask.a) {
+        this.restoreChannelsFromTemplate(restoreMask);
+      }
     }
 
     const resChanged =
@@ -320,11 +332,8 @@ export class FluidEditor {
       this.rebuildGrids();
       // ★ 重建纹理后必须立即 initFields()，否则新纹理没有初始化数据，
       // 后续 injectColor/injectVelocity 等操作会触发 WebGL INVALID_OPERATION (1282)
+      //   initFields 内部自动恢复残差模板（_pendingResidualImage）
       this.initFields();
-      // ★ 恢复残差模板（重建会清空 colorGrid）
-      if (this._pendingResidualImage) {
-        this.initializeColorFromImageData(this._pendingResidualImage);
-      }
     }
 
     // ★ 分辨率变化时 rebuildGrids() 会释放 _phiGrid 并置 null。
@@ -1190,6 +1199,11 @@ export class FluidEditor {
     // ★ density 场初始化为 0（1 通道 Uint8）
     const densityData = new Uint8Array(w * h);
     this.uploadToGrid(this.densityGrid, densityData, 1);
+
+    // ★ 恢复残差模板（重置/网格重建清场后——否则残差纹理丢失）
+    if (this._pendingResidualImage) {
+      this.initializeColorFromImageData(this._pendingResidualImage);
+    }
   }
 
   // ==================== 障碍物（墙体）管理 ====================
@@ -1648,6 +1662,73 @@ export class FluidEditor {
 
     this.gpu.render(this.renderer, grid.write, copyMat);
     grid.swap();
+    tex.dispose();
+  }
+
+  /**
+   * ★ 取消勾选通道时恢复默认残差模板值：被取消的通道 = 导入时的静态残差，
+   *   其余通道保持当前（流动中）状态。GPU mix pass：
+   *   colorGrid = mix(当前, 模板, 取消通道掩码)
+   */
+  public restoreChannelsFromTemplate(restoreMask: { r: boolean; g: boolean; b: boolean; a: boolean }): void {
+    if (!this._pendingResidualImage) return;
+    const { w, h } = this.config.resolution;
+
+    // 模板 → 缩放适配当前网格分辨率（最近邻，保留量化值）
+    let tmpl = this._pendingResidualImage.data;
+    let tw = this._pendingResidualImage.width;
+    let th = this._pendingResidualImage.height;
+    if (tw !== w || th !== h) {
+      const srcCanvas = document.createElement('canvas');
+      srcCanvas.width = tw;
+      srcCanvas.height = th;
+      const srcCtx = srcCanvas.getContext('2d')!;
+      srcCtx.putImageData(this._pendingResidualImage, 0, 0);
+      const dstCanvas = document.createElement('canvas');
+      dstCanvas.width = w;
+      dstCanvas.height = h;
+      const dstCtx = dstCanvas.getContext('2d')!;
+      dstCtx.imageSmoothingEnabled = false;
+      dstCtx.drawImage(srcCanvas, 0, 0, w, h);
+      const scaled = dstCtx.getImageData(0, 0, w, h);
+      tmpl = scaled.data;
+      tw = w;
+      th = h;
+    }
+
+    const tex = new THREE.DataTexture(
+      new Uint8Array(tmpl),
+      tw, th,
+      THREE.RGBAFormat, THREE.UnsignedByteType,
+    );
+    tex.flipY = false;
+    tex.needsUpdate = true;
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+
+    const mat = this.gpu.getMaterial('restoreChannelsFromTemplate', {
+      uCurrent: { value: this.colorGrid.read },
+      uTemplate: { value: tex },
+      uMask: { value: new THREE.Vector4(
+        restoreMask.r ? 1 : 0,
+        restoreMask.g ? 1 : 0,
+        restoreMask.b ? 1 : 0,
+        restoreMask.a ? 1 : 0,
+      ) },
+    }, /* glsl */ `
+      uniform sampler2D uCurrent;
+      uniform sampler2D uTemplate;
+      uniform vec4 uMask;
+      varying vec2 vUv;
+      void main() {
+        vec4 cur = texture2D(uCurrent, vUv);
+        vec4 tmpl = texture2D(uTemplate, vUv);
+        gl_FragColor = mix(cur, tmpl, uMask);
+      }
+    `);
+    this.gpu.render(this.renderer, this.colorGrid.write, mat);
+    this.colorGrid.swap();
     tex.dispose();
   }
 

@@ -1840,21 +1840,18 @@ export const FluidEditorUI: React.FC = () => {
     const dL = (residual.b * 2.0 - 1.0) * rangeSL;
     // sign: add=+1, sub=-1（与合成着色器一致）
     const sign = mode === 'sub' ? -1 : 1;
-    // ★ delta 直接加；scalar 模式下 density×mul 作为独立项 ±
+    // ★ delta 直接加；scalar 模式下 density×mul 作为独立项 ±（×通道开关：
+    //   取消勾选的通道不跟随流动，只保留静态残差 delta）
     const factor = scalar ? scalar.density / Math.max(scalar.baseline, 0.001) : 0;
-    const hExtra = scalar ? sign * factor * scalar.hMul : 0;
-    const sExtra = scalar ? sign * factor * scalar.sMul : 0;
-    const lExtra = scalar ? sign * factor * scalar.lMul : 0;
-    // 正常公式
+    const hExtra = scalar ? sign * factor * scalar.hMul * (channels && !channels.r ? 0 : 1) : 0;
+    const sExtra = scalar ? sign * factor * scalar.sMul * (channels && !channels.g ? 0 : 1) : 0;
+    const lExtra = scalar ? sign * factor * scalar.lMul * (channels && !channels.b ? 0 : 1) : 0;
+    // 正常公式（取消通道 = base + 默认残差 delta，与 GPU shader 一致）
     let normalH = baseHsl.h + dH + hExtra;
     normalH = normalH - Math.floor(normalH); // fract
     const normalS = Math.max(0, Math.min(1, baseHsl.s + dS + sExtra));
     const normalL = Math.max(0, Math.min(1, baseHsl.l + dL + lExtra));
-    // ★ 关闭的通道直接输出残差原值（与 GPU mix(residual, normal, uChannels) 一致）
-    const finalH = channels && !channels.r ? residual.r : normalH;
-    const finalS = channels && !channels.g ? residual.g : normalS;
-    const finalL = channels && !channels.b ? residual.b : normalL;
-    return { h: finalH, s: finalS, l: finalL };
+    return { h: normalH, s: normalS, l: normalL };
   };
   // ================================================================
 
@@ -2628,6 +2625,8 @@ export const FluidEditorUI: React.FC = () => {
     const buildCompositeFragment = (isScalar: boolean) => {
       const vectorBody = /* glsl */ `
         // vector 模式：HSL 直接加法（色相需要 fract 包裹），无 density 采样
+        // ★ 取消勾选的通道：colorGrid 该通道已保持默认残差（不平流 + 取消时
+        //   恢复模板）→ 正常公式直接算出"默认残差显示"，无需通道分支
         finalH = fract(baseHSLA.r + dH);
         finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
         finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
@@ -2636,15 +2635,16 @@ export const FluidEditorUI: React.FC = () => {
       const scalarBody = /* glsl */ `
         // ★ MCSDA scalar 模式：合成 = 基础色 + 残差增量 ± (密度/基准浓度 × 通道系数)
         //   combineMode: add=base+delta+factor×mul, sub=base+delta-factor×mul（sign 统一）
+        //   ★ 取消勾选的通道：density 偏移项 × uChannels = 0（不跟随流动），
+        //     只保留静态残差 delta（默认残差值）
         float density = texture2D(uDensity, vUv).r;
         float factor = density / max(uBaseline, 0.001);
         float sign = (uCombineMode == 0) ? 1.0 : -1.0;
-        // ★ 残差增量直接加（不乘 factor），density×mul 作为独立项 ±
-        finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
-        finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
-        finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
+        finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x * uChannels.x);
+        finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y * uChannels.y, 0.0, 1.0);
+        finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z * uChannels.z, 0.0, 1.0);
         float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
-        finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
+        finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w * uChannels.w, 0.0, 1.0);
       `;
       return /* glsl */ `
         uniform sampler2D uBaseTexture;   // FloatType，存储 [H, S, L, A]，范围 0~1
@@ -2681,12 +2681,10 @@ export const FluidEditorUI: React.FC = () => {
 
           ${isScalar ? scalarBody : vectorBody}
 
-          // ★ 通道开关：关闭的通道直接输出残差值（绕过 base+delta 计算）
-          //   mix(a, b, 0)=a, mix(a, b, 1)=b，无分支，GPU 友好
-          finalH = mix(residual.r, finalH, uChannels.x);
-          finalS = mix(residual.g, finalS, uChannels.y);
-          finalL = mix(residual.b, finalL, uChannels.z);
-          finalA = mix(residual.a, finalA, uChannels.w);
+          // ★ 取消勾选的通道：colorGrid 该通道 = 默认残差（不平流+恢复），
+          //   正常公式已给出"默认残差显示"——不再需要通道 mix 分支
+          //   （此前 mix(residual.r, finalH, uChannels) 把量化残差值当最终
+          //   HSL 分量显示 → 取消通道"归零"）
 
           // 只在最后一步转 RGB 用于显示
           vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
