@@ -1992,6 +1992,13 @@ export const FluidEditorUI: React.FC = () => {
   advectionModeRef.current = config.advectionMode ?? 'vector';
   const scalarConfigRef = useRef(config.scalarConfig);
   scalarConfigRef.current = config.scalarConfig;
+  // ★ combineMode/channels 同样走 ref：rAF 循环闭包读最新值（effect 不因
+  //   它们重建——此前循环用旧闭包 config，"叠加/减去"切换与平流通道
+  //   勾选的合成 uniform 不实时更新）
+  const combineModeRef = useRef(config.combineMode ?? 'add');
+  combineModeRef.current = config.combineMode ?? 'add';
+  const channelsRef = useRef(config.channels);
+  channelsRef.current = config.channels;
 
   // ★ 持续注入源列表（多源模式，从 FluidEditor 获取快照）
   const [continuousSources, setContinuousSources] = useState<ContinuousSourceSnapshot[]>([]);
@@ -3169,13 +3176,13 @@ export const FluidEditorUI: React.FC = () => {
           _sc?.aMultiplier ?? 1,
         );
         compositeMat.uniforms.uBaseline.value = _sc?.baselineDensity ?? 1.0;
-        compositeMat.uniforms.uCombineMode.value = (config.combineMode ?? 'add') === 'sub' ? 1 : 0;
+        compositeMat.uniforms.uCombineMode.value = (combineModeRef.current ?? 'add') === 'sub' ? 1 : 0;
       }
       compositeMat.uniforms.uChannels.value.set(
-        config.channels.r ? 1 : 0,
-        config.channels.g ? 1 : 0,
-        config.channels.b ? 1 : 0,
-        config.channels.a ? 1 : 0,
+        channelsRef.current.r ? 1 : 0,
+        channelsRef.current.g ? 1 : 0,
+        channelsRef.current.b ? 1 : 0,
+        channelsRef.current.a ? 1 : 0,
       );
 
       // 合成模式：更新底图纹理和残差范围
