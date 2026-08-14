@@ -231,6 +231,10 @@ export class FluidEditor {
   private levelSetSolver: LevelSetSolver;
   /** Level Set φ 场（1 通道 half-float，懒加载，enableLevelSet=true 时创建） */
   private _phiGrid: FluidGrid | null = null;
+  /** ★ 残差模板缓存（initializeColorFromImageData 时深拷贝）——
+   *   分辨率/速度场精度切换会 rebuildGrids + initFields（colorGrid 清空），
+   *   重建后自动重新上传，否则残差纹理丢失 */
+  private _pendingResidualImage: ImageData | null = null;
   /** reinit 间隔帧数计数器（每 reinitInterval 帧执行一次重初始化） */
   private levelSetFrameCount = 0;
 
@@ -317,6 +321,10 @@ export class FluidEditor {
       // ★ 重建纹理后必须立即 initFields()，否则新纹理没有初始化数据，
       // 后续 injectColor/injectVelocity 等操作会触发 WebGL INVALID_OPERATION (1282)
       this.initFields();
+      // ★ 恢复残差模板（重建会清空 colorGrid）
+      if (this._pendingResidualImage) {
+        this.initializeColorFromImageData(this._pendingResidualImage);
+      }
     }
 
     // ★ 分辨率变化时 rebuildGrids() 会释放 _phiGrid 并置 null。
@@ -1522,6 +1530,12 @@ export class FluidEditor {
    * 如果 ImageData 尺寸与网格分辨率不匹配，自动缩放。
    */
   initializeColorFromImageData(imageData: ImageData): void {
+    // ★ 缓存残差模板（网格重建后恢复用）
+    this._pendingResidualImage = new ImageData(
+      new Uint8ClampedArray(imageData.data),
+      imageData.width,
+      imageData.height,
+    );
     const { w, h } = this.config.resolution;
     let data: Uint8ClampedArray | Uint8Array = imageData.data;
     let width = imageData.width;
