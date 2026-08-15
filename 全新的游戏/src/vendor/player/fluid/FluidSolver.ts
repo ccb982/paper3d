@@ -914,11 +914,15 @@ export class FluidSolver {
       // ★ 与流体编辑器保持一致：factor = density / baseline
       float factor = density / max(0.0001, uBaseline);
       float sign = (uCombineMode == 1) ? -1.0 : 1.0;
-      finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
-      finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
-      finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
-      finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
+      // ★ 与编辑器 ShaderLibrary 一致：取消勾选的通道仅关闭 density 调制项
+      //   （×uChannels），静态残差 delta 始终参与合成（见 FluidEditorUI 合成注释）
+      finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x * uChannels.x);
+      finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y * uChannels.y, 0.0, 1.0);
+      finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z * uChannels.z, 0.0, 1.0);
+      finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w * uChannels.w, 0.0, 1.0);
     ` : /* glsl */ `
+      // vector 模式：残差 delta 无条件叠加到 baseHSL（通道开关只控制平流，
+      //   不参与合成——与编辑器语义一致，避免"导入参数后色相突变"）
       finalH = fract(baseHSLA.r + dH);
       finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
       finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
@@ -970,11 +974,10 @@ export class FluidSolver {
 
           float finalH, finalS, finalL, finalA;
           ${scalarBody}
-          // 通道开关：关闭的通道保持 baseHSL 值（不添加 delta）
-          finalH = mix(baseHSLA.r, finalH, uChannels.x);
-          finalS = mix(baseHSLA.g, finalS, uChannels.y);
-          finalL = mix(baseHSLA.b, finalL, uChannels.z);
-          finalA = mix(baseHSLA.a, finalA, uChannels.w);
+          // ★ 通道开关不再做整通道 mix（此前 mix(baseHSLA, final, uChannels) 在
+          //   取消勾选时丢弃整个残差 delta → "导入物理参数后 HSL 突变"）：
+          //   取消的通道仅在 scalar 模式关闭 density 调制项（scalarBody ×uChannels），
+          //   vector 模式无通道分支，与编辑器 ShaderLibrary 合成公式一致。
 
           vec3 rgb = hsl2rgb(vec3(finalH, finalS, finalL));
           gl_FragColor = vec4(rgb, finalA);

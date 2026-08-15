@@ -1351,6 +1351,7 @@ export function decodeResidualFromFrame(
   palette: Array<{ id: number; h: number; s: number; l: number }>,
   bbox: { x: number; y: number; w: number; h: number },
   textureSize: number = 512,
+  blockFlags: bigint = 0n,
 ): ImageData {
   const { w, h } = bbox;
   const totalPixels = w * h;
@@ -1382,6 +1383,54 @@ export function decodeResidualFromFrame(
     data[idx + 3] = 255;
   }
 
+  // ★ 0.25 范围块 → 0.5 兼容格式（否则流体合成时 delta 放大 → 色相偏移）
+  adjustResidualForUniformRange(imageData, bbox, blockFlags);
+
+  return imageData;
+}
+
+/**
+ * 残差量化范围预调整（0.25 范围块 → 0.5 兼容格式）。
+ *
+ * 基础色编辑器使用自适应量化：每个 8×8 块可能是 range=0.25 或 0.5。
+ * 流体解算器统一使用 range=0.5 反量化公式：d = (val*2 - 1) * 0.5。
+ * 对 range=0.25 的块：原始反量化 d = (val*2 - 1) * 0.25，
+ * 调整后 val' = val*0.5 + 64，解算器反量化 d' = (val'*2-1)*0.5 ≈ d（量化误差范围内）。
+ * 不加此转换 → 0.25 块残差被当作 0.5 范围反量化 → delta 放大 → 色相偏移。
+ *
+ * 与流体编辑器 FluidEditorUI.adjustResidualForUniformRange 逻辑一致。
+ *
+ * @param imageData 残差纹理（bbox 局部尺寸 或 全帧尺寸，内容在 bbox 内）
+ * @param bbox      帧内容 bbox（像素）
+ * @param blockFlags 分块范围标志（bigint，1=0.25，0=0.5）
+ * @returns 原引用（就地修改）
+ */
+export function adjustResidualForUniformRange(
+  imageData: ImageData,
+  bbox: { x: number; y: number; w: number; h: number },
+  blockFlags: bigint,
+): ImageData {
+  const { w, h } = bbox;
+  if (w <= 0 || h <= 0) return imageData;
+  const data = imageData.data;
+  const texW = imageData.width;
+  const texH = imageData.height;
+  // 纹理 = bbox 尺寸（局部）还是全帧尺寸（内容偏移在 bbox.x/y）？
+  const isLocal = texW === w && texH === h;
+
+  for (let py = 0; py < h; py++) {
+    for (let px = 0; px < w; px++) {
+      const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+      if (getRangeForBlock(blockFlags, blockIdx) !== 0.25) continue;
+      const sx = isLocal ? px : bbox.x + px;
+      const sy = isLocal ? py : bbox.y + py;
+      if (sx < 0 || sx >= texW || sy < 0 || sy >= texH) continue;
+      const idx = (sy * texW + sx) * 4;
+      data[idx] = Math.round(data[idx] * 0.5 + 64);       // R (H)
+      data[idx + 1] = Math.round(data[idx + 1] * 0.5 + 64); // G (S)
+      data[idx + 2] = Math.round(data[idx + 2] * 0.5 + 64); // B (L)
+    }
+  }
   return imageData;
 }
 

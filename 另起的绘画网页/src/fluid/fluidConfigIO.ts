@@ -58,6 +58,15 @@ export function parseImportedFluidConfig(
   json: any,
   fallbackRes: { w: number; h: number },
 ): FluidSolverConfig {
+  // ★ 兼容内部扁平格式（.phys.json 公共物理参数库 / 素材包 physics 字段）：
+  //   这类 JSON 无 coreSwitches 五块结构，字段直接在顶层
+  //   （enableAdvection/gravity/continuousSources/...）。此前只读五块格式 →
+  //   扁平格式导入时除 continuousSources 外全部字段丢失（gravity/levelSet/
+  //   advectionMode 全回默认值），特效与编辑器里调好的完全不同。
+  if (isInternalFluidConfig(json)) {
+    return parseInternalFluidConfig(json, fallbackRes);
+  }
+
   const cs = json.coreSwitches || {};
   const ac = json.advectionAndComposite || {};
   const gf = json.globalForce || {};
@@ -421,12 +430,17 @@ export function transformObstacleToBboxLocal(
 }
 
 /**
- * 检测 JSON 是否为内部 FluidSolverConfig 扁平格式（素材包 physics 字段）。
+ * 检测 JSON 是否为内部 FluidSolverConfig 扁平格式（素材包 physics 字段 / .phys.json）。
+ * 判定：顶层存在扁平格式特征字段（enableAdvection/enablePressure/gravity/velocityScale 任一），
+ * 且无五块格式的 coreSwitches 标志。
  */
 export function isInternalFluidConfig(json: any): boolean {
   return !!json && typeof json === 'object'
-    && (typeof json.enableAdvection === 'boolean' || typeof json.enablePressure === 'boolean')
-    && Array.isArray(json.continuousSources);
+    && !json.coreSwitches && !json.advectionAndComposite && !json.globalForce
+    && (typeof json.enableAdvection === 'boolean'
+      || typeof json.enablePressure === 'boolean'
+      || typeof json.gravity === 'object'
+      || typeof json.velocityScale === 'number');
 }
 
 /**

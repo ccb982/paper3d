@@ -41,6 +41,10 @@ export function useFluidSolver(
   const entitiesKey = regionEntities.map(e => `${e.id}:${e.boundary.length}`).join('|');
   // ★ 墙掩码引用跟踪：热更新 effect 据此判断是否需重建障碍物纹理
   const lastObstacleRef = useRef<FluidSolverConfig['obstacle'] | undefined>(undefined);
+  // ★ 残差纹理引用跟踪：绑定/重新导入导致 boundResidualTexture 变化时强制重建 solver，
+  //   否则 solver 复用（分辨率相同）→ colorGrid 保留旧残差，而 baseHsl 用新残差反推
+  //   → 合成错位 → "导入参数后色相突变"
+  const lastResidualRef = useRef<ImageData | null>(null);
   // ★ 墙掩码使用开关跟踪：切换时热更新重建障碍物纹理
   const lastWallMaskToggleRef = useRef<boolean | undefined>(undefined);
 
@@ -78,10 +82,14 @@ export function useFluidSolver(
     };
 
     // 若已存在解算器且分辨率相同，复用（避免重建丢失状态）；否则新建
+    // ★ 残差引用变化也强制重建（colorGrid 必须与 baseHsl 反推用同一份残差）
     let solver: FluidSolver | null = solverRef.current;
+    const residualChanged = lastResidualRef.current !== residualTex;
+    lastResidualRef.current = residualTex;
     const needRebuild = !solver
       || solver.config.resolution.w !== resolution.w
-      || solver.config.resolution.h !== resolution.h;
+      || solver.config.resolution.h !== resolution.h
+      || residualChanged;
     if (needRebuild) {
       if (solver) solver.dispose();
       solver = new FluidSolver(renderer, cfg, resolution);

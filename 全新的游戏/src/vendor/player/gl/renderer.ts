@@ -11,6 +11,7 @@ export interface EntityMeshData {
   totalFrames: number;
   texBbox: { x: number; y: number; w: number; h: number };
   frameWidth: number;
+  frameHeight: number;
 }
 
 function triangulateBoundary(
@@ -234,6 +235,7 @@ export function buildEntityMesh(
   vertexCount: number,
   totalFrames: number,
   canvasSize: number,
+  canvasSizeY?: number,
 ): EntityMeshData | null {
   const boundary = entity.boundary.map((ring) =>
     ring.map((p) => [p.x, p.y] as [number, number]),
@@ -275,6 +277,7 @@ export function buildEntityMesh(
     totalFrames,
     texBbox: ftxBbox,
     frameWidth: canvasSize,
+    frameHeight: canvasSizeY ?? canvasSize,
   };
 }
 
@@ -335,8 +338,11 @@ export function renderFrameData(
     cm.uniforms.uUseFluid.value = useFluid ? 1 : 0;
     if (useFluid && fluidTexture) cm.uniforms.uFluidTex.value = fluidTexture;
     // bbox 映射（世界坐标 → 纹理 bbox 空间）
-    (cm.uniforms.uBboxOffset.value as THREE.Vector2).set(em.texBbox.x / em.frameWidth, em.texBbox.y / em.frameWidth);
-    (cm.uniforms.uBboxScale.value as THREE.Vector2).set(em.texBbox.w / em.frameWidth, em.texBbox.h / em.frameWidth);
+    // bbox 映射（世界坐标 → 纹理 bbox 空间）
+    // ★ X/Y 分别用帧宽/帧高归一化（此前 Y 也除 frameWidth → 非正方形帧
+    //   （如 424×512）时 bbox 被压扁 + 底部内容被裁掉）
+    (cm.uniforms.uBboxOffset.value as THREE.Vector2).set(em.texBbox.x / em.frameWidth, em.texBbox.y / em.frameHeight);
+    (cm.uniforms.uBboxScale.value as THREE.Vector2).set(em.texBbox.w / em.frameWidth, em.texBbox.h / em.frameHeight);
     // 用户底图变换
     (cm.uniforms.uTexOffset.value as THREE.Vector2).set(data.textureOffset.x, data.textureOffset.y);
     (cm.uniforms.uTexScale.value as THREE.Vector2).set(data.textureScale.x, data.textureScale.y);

@@ -261,6 +261,30 @@ function sampleQuadraticCurve(p0: Point, p1: Point, ctrl: Point, segments = 30):
   return points;
 }
 
+// ========== 颜色工具 ==========
+/** ★ 读主 framebuffer 像素（three 的 readRenderTargetPixels(null) 会抛错，必须用 gl.readPixels） */
+function readScreenPixel(renderer: THREE.WebGLRenderer, x: number, y: number): Uint8Array {
+  const gl = renderer.getContext();
+  const px = new Uint8Array(4);
+  gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  return px;
+}
+function rgbToHslVal(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const dd = max - min;
+    s = l > 0.5 ? dd / (2 - max - min) : dd / (max + min);
+    if (max === r) h = (g - b) / dd + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / dd + 2;
+    else h = (r - g) / dd + 4;
+    h /= 6;
+  }
+  return { h, s, l };
+}
+
 export function MainCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -281,6 +305,34 @@ export function MainCanvas() {
     uniforms: any;
     staticColorTex: THREE.Texture;
   }>>([]);
+  // ★ 像素对比面板状态（localStorage.debugRGB='1' 开启；鼠标移动实时更新）
+  const [pixelCompare, setPixelCompare] = useState<{
+    px: number; py: number;
+    worldX: number; worldY: number;
+    frameCanvas: string | null;
+    webglCanvas: string | null;
+    frameData: string | null;
+    regionData: string | null;
+    regionSource: string;
+    canvasW: number; canvasH: number;
+    boundBase: string;
+    boundResid: string;
+    solverRes: string;
+    frameDataNoFlip: string | null;
+    frameDataFlipped: string | null;
+    regionIdAtPoint: number;
+    webglStats: string;
+    regionLayerVisible: boolean;
+    meshDiag: string;
+    webglRT: string | null;
+    webglRTHSL: string | null;
+    webglRTStats: string;
+    residCheck: string;
+    baseHslCheck: string;
+  } | null>(null);
+  const pixelCompareLastRef = useRef(0);
+  // ★ 调试读回 RT（无模板缓冲：绕开 stencil，验证"是否被模板裁掉"）
+  const debugReadbackRTRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const {
     imageState,
     layerVisibility,
@@ -443,6 +495,7 @@ export function MainCanvas() {
       alpha: true,
       antialias: false,
       stencil: true,
+      preserveDrawingBuffer: true, // ★ 调试需要：允许点击时读回主 framebuffer 像素
     });
     renderer.setSize(canvasWidth, canvasHeight);
     renderer.setPixelRatio(1);
@@ -609,6 +662,16 @@ export function MainCanvas() {
 
         renderer.clear(true, true, true);
         renderer.render(scene, camera);
+
+        // ★ 调试：动画循环内主缓冲读回（每 10 帧报一次中心像素，确认 WebGL 是否真的渲染）
+        if (frameCounter % 10 === 0) {
+          try {
+            const dbgPx = readScreenPixel(renderer, Math.floor(canvasWidth / 2), Math.floor(canvasHeight / 2));
+            console.log(`[animate] 主缓冲中心=(${dbgPx[0]},${dbgPx[1]},${dbgPx[2]},${dbgPx[3]}) frame=${frameCounter} visible=${currentVisible} canvas=${canvasWidth}x${canvasHeight}`);
+          } catch (e) {
+            console.log('[animate] 主缓冲读回失败:', (e as Error).message);
+          }
+        }
 
         frameCounter++;
 
@@ -793,23 +856,33 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // --- 4. UV 生成：★ bbox 局部归一（与 store 的 boundBaseTexture bbox 局部
-    //   输出一致）——画布像素坐标（= bbox 空间）直接除以 bbox 尺寸：
-    //   框覆盖哪显示哪，不依赖"画布 = 源分辨率"
+    // --- 4. UV 生成：★ 映射到帧内容 bbox 局部归一（与 store 的 boundBaseTexture
+    //   bbox 局部输出一致）。
+    //   p = 画布像素坐标（= world × canvas 尺寸）。正确映射取决于画布尺寸：
+    //   · 画布 = bbox 尺寸（导入帧后默认）：帧内容铺满画布 → uv = p/bbox = world ∈[0,1]
+    //   · 画布 = 源分辨率（旧状态/未同步）：帧内容位于画布 (bbox.x,bbox.y) 起 → uv = (p-bbox)/bbox
+    //   此前固定用 p/bbox → 画布≠bbox 时 UV 放大 canvas/bbox 倍 → 超出 [0,1]
+    //   → 区域色块图层采样到纹理外（clamp 到边缘色）→ 与帧图层显示不一致
     const fdForUv = frameDataMap[activeLayerId];
     const uvBbox = fdForUv?.rawBbox;
     const uv = new Float32Array(allPoints.length * 2);
+    const isCanvasBbox = !!uvBbox && canvasWidth === uvBbox.w && canvasHeight === uvBbox.h;
     allPoints.forEach((p, i) => {
       if (uvBbox) {
-        uv[i * 2] = p.x / uvBbox.w;
-        uv[i * 2 + 1] = p.y / uvBbox.h;
+        if (isCanvasBbox) {
+          uv[i * 2] = p.x / uvBbox.w;
+          uv[i * 2 + 1] = p.y / uvBbox.h;
+        } else {
+          uv[i * 2] = (p.x - uvBbox.x) / uvBbox.w;
+          uv[i * 2 + 1] = (p.y - uvBbox.y) / uvBbox.h;
+        }
       } else {
         uv[i * 2] = p.x / canvasWidth;
         uv[i * 2 + 1] = p.y / canvasHeight;
       }
     });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    console.log(`[UV诊断] 区域#${entity.id} UV=画布像素/bbox(${uvBbox ? `${uvBbox.w}×${uvBbox.h}` : `画布 ${canvasWidth}×${canvasHeight}`})`);
+    console.log(`[UV诊断] 区域#${entity.id} UV=画布像素/bbox(${uvBbox ? `${uvBbox.w}×${uvBbox.h}` : `画布 ${canvasWidth}×${canvasHeight}`}) 画布=${canvasWidth}×${canvasHeight} isCanvasBbox=${isCanvasBbox}`);
     
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---
@@ -910,7 +983,8 @@ useEffect(() => {
         side: THREE.DoubleSide,  // ★ earcut生成的三角形方向可能不一致，DoubleSide确保都能渲染
       });
       texMat.stencilWrite = false;
-      texMat.stencilRef = 1;
+      (texMat as any).stencilTest = false;  // ★ 显式禁用 stencil 测试（此前即使 ref 匹配也全被裁 → 主缓冲全透明）
+      texMat.stencilRef = 0xFF;
       texMat.stencilFunc = THREE.EqualStencilFunc;
       // 共享 fillGeom，确保 GPU 按 gl_VertexID 索引的顶点顺序完全一致
       colorMesh = new THREE.Mesh(fillGeom, texMat);
@@ -3447,7 +3521,7 @@ useEffect(() => {
     if (tempPoints.length > 0 && currentTool !== 'select') {
       setPreviewPoint(worldCoords);
     }
-  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, getAnnotationsToEraseAtPoint, eraseAnnotations, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview, colorExtractEraserMode, colorExtractCurves, isPointNearCurve, getRegionIdAtWorldPoint, colorExtractRegionId]);
+  }, [isPanning, panStart, panOffset, getCanvasCoords, canvasToWorldFn, setMousePosition, setPanOffset, isErasing, currentTool, getShapesToEraseAtPoint, eraseShapes, getAnnotationsToEraseAtPoint, eraseAnnotations, tempPoints, isPainting, paintBrushSize, activeLayerId, layers, currentColor, paintBuffers, initPaintBuffer, updatePaintBuffer, recordCirclePixelsToRegions, regionIdTexture, imageState, updateBackgroundDrag, drawCanvas, colorExtractMode, colorExtractPoints, colorExtractPreviewPoint, setColorExtractPreviewPoint, snapColorExtractPreview, colorExtractEraserMode, colorExtractCurves, isPointNearCurve, getRegionIdAtWorldPoint, colorExtractRegionId, canvasWidth, canvasHeight, webglRendererRef, colorMeshUniformsRef, fluidSolverRef, canvasRef]);
 
   const handleMouseLeave = useCallback(() => {
     setIsPanning(false);
@@ -3943,6 +4017,253 @@ useEffect(() => {
 
   // 单击绘图逻辑（非擦除、非平移、非选择工具时）
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
+    // ★ 像素对比面板：点击取样（帧图层 2D canvas / WebGL 画布 / 帧数据 / 区域色块数据）
+    {
+      const coords = getCanvasCoords(e);
+      const cx = Math.floor(coords.x), cy = Math.floor(coords.y);
+      const world = canvasToWorldFn(coords.x, coords.y);
+      const w = world.x, wy = world.y;
+
+      // ① 帧图层：2D canvas 物理像素
+      let frameCanvas: string | null = null;
+      const canvas2d = canvasRef.current;
+      if (canvas2d) {
+        try {
+          const ctx2d = canvas2d.getContext('2d');
+          const p = ctx2d?.getImageData(cx, cy, 1, 1);
+          if (p) frameCanvas = `(${p.data[0]},${p.data[1]},${p.data[2]},${p.data[3]})`;
+        } catch { /* 越界忽略 */ }
+      }
+
+      // ② WebGL 画布物理像素（区域色块图层渲染结果；readRenderTargetPixels y=0 在底部）
+      let webglCanvas: string | null = null;
+      let webglStats = '';
+      // ★ 离屏 RT 直读（无 stencil 缓冲，绕开模板裁剪）——WebGL 层"真实渲染颜色"
+      let webglRT: string | null = null;
+      let webglRTHSL: string | null = null;
+      let webglRTStats = '';
+      const glRenderer = webglRendererRef.current;
+      if (glRenderer && cx >= 0 && cx < canvasWidth && cy >= 0 && cy < canvasHeight) {
+        try {
+          const gp = readScreenPixel(glRenderer, cx, canvasHeight - 1 - cy);
+          webglCanvas = `(${gp[0]},${gp[1]},${gp[2]},${gp[3]})`;
+        } catch { webglCanvas = '读取失败'; }
+        // 3×3 采样统计：非透明像素数
+        try {
+          let opaque = 0;
+          for (let gy = 0; gy < 3; gy++) {
+            for (let gx = 0; gx < 3; gx++) {
+              const sx = Math.floor((gx + 0.5) * canvasWidth / 3);
+              const sy = Math.floor((gy + 0.5) * canvasHeight / 3);
+              const sp = readScreenPixel(glRenderer, sx, canvasHeight - 1 - sy);
+              if (sp[3] > 0) opaque++;
+            }
+          }
+          webglStats = `WebGL主缓冲3×3: ${opaque}/9`;
+        } catch { webglStats = 'WebGL 采样失败'; }
+
+        // ★ 离屏 RT 直读：scene 重新渲染到无模板 RT，读该点 + 3×3
+        const sceneD = webglSceneRef.current;
+        const camD2 = webglCameraRef.current;
+        if (sceneD && camD2) {
+          try {
+            let rt = debugReadbackRTRef.current;
+            if (!rt || rt.width !== canvasWidth || rt.height !== canvasHeight) {
+              rt?.dispose();
+              rt = new THREE.WebGLRenderTarget(canvasWidth, canvasHeight, {
+                format: THREE.RGBAFormat,
+                type: THREE.UnsignedByteType,
+                minFilter: THREE.NearestFilter,
+                magFilter: THREE.NearestFilter,
+                depthBuffer: false,
+                stencilBuffer: false,
+              });
+              debugReadbackRTRef.current = rt;
+            }
+            const prevTarget = glRenderer.getRenderTarget();
+            glRenderer.setRenderTarget(rt);
+            glRenderer.clear();
+            glRenderer.render(sceneD, camD2);
+            const rp = new Uint8Array(4);
+            glRenderer.readRenderTargetPixels(rt, cx, canvasHeight - 1 - cy, 1, 1, rp);
+            glRenderer.setRenderTarget(prevTarget);
+            webglRT = `(${rp[0]},${rp[1]},${rp[2]},${rp[3]})`;
+            if (rp[3] > 0) {
+              const h = rgbToHslVal(rp[0], rp[1], rp[2]);
+              webglRTHSL = `HSL=(${h.h.toFixed(3)},${h.s.toFixed(3)},${h.l.toFixed(3)})`;
+            }
+            // 3×3（RT）
+            let rtOpaque = 0;
+            for (let gy = 0; gy < 3; gy++) {
+              for (let gx = 0; gx < 3; gx++) {
+                const sx = Math.floor((gx + 0.5) * canvasWidth / 3);
+                const sy = Math.floor((gy + 0.5) * canvasHeight / 3);
+                const sp = new Uint8Array(4);
+                glRenderer.readRenderTargetPixels(rt, sx, canvasHeight - 1 - sy, 1, 1, sp);
+                if (sp[3] > 0) rtOpaque++;
+              }
+            }
+            webglRTStats = `RT直读3×3: ${rtOpaque}/9`;
+          } catch (err) {
+            webglRT = `RT渲染失败: ${(err as Error).message}`;
+          }
+        }
+      }
+
+      // ③ 帧图层数据（boundBaseTexture / baseTexture）
+      const st = useAppStore.getState();
+      const aLayer = st.activeLayerId;
+      const fd = aLayer ? st.frameDataMap[aLayer] : undefined;
+      const frameTex = fd?.boundBaseTexture || fd?.baseTexture;
+      const residTexDbg = fd?.boundResidualTexture ?? null;
+      const solverDbg = fluidSolverRef.current;
+      const solverRes = solverDbg ? `${solverDbg.config.resolution.w}x${solverDbg.config.resolution.h}` : '无';
+      let frameData: string | null = null;
+      let frameDataNoFlip: string | null = null;   // 物理同位置（无 Y 翻转）
+      let frameDataFlipped: string | null = null;  // 物理同位置（Y 翻转）
+      if (frameTex) {
+        const tw = frameTex.width, th = frameTex.height;
+        const isBboxLocal = fd?.boundBaseTexture === frameTex && !!fd?.rawBbox;
+        const bb = fd?.rawBbox;
+        const fx = isBboxLocal ? Math.floor(w * tw) : (bb ? bb.x + Math.floor(w * bb.w) : Math.floor(w * tw));
+        const fy = isBboxLocal ? Math.floor((1 - wy) * th) : (bb ? bb.y + Math.floor((1 - wy) * bb.h) : Math.floor((1 - wy) * th));
+        if (fx >= 0 && fx < tw && fy >= 0 && fy < th) {
+          const idx = (fy * tw + fx) * 4;
+          frameData = `(${frameTex.data[idx]},${frameTex.data[idx + 1]},${frameTex.data[idx + 2]},${frameTex.data[idx + 3]})`;
+        }
+        // 无翻转（2D 物理像素 = 数据同 row）
+        if (cx >= 0 && cx < tw && cy >= 0 && cy < th) {
+          const i2 = (cy * tw + cx) * 4;
+          frameDataNoFlip = `(${frameTex.data[i2]},${frameTex.data[i2 + 1]},${frameTex.data[i2 + 2]},${frameTex.data[i2 + 3]})`;
+          const i3 = ((th - 1 - cy) * tw + cx) * 4;
+          frameDataFlipped = `(${frameTex.data[i3]},${frameTex.data[i3 + 1]},${frameTex.data[i3 + 2]},${frameTex.data[i3 + 3]})`;
+        }
+      }
+      // ⑤ colorGrid vs boundResidualTexture 一致性（判断 solver 是否用了旧残差）
+      let residCheck = '';
+      const solverC = fluidSolverRef.current;
+      const residTexC = fd?.boundResidualTexture ?? null;
+      if (solverC && residTexC && glRenderer) {
+        const grid = (solverC as any).colorGrid as { readTarget: THREE.WebGLRenderTarget } | undefined;
+        if (grid) {
+          try {
+            const fx = Math.floor(w * residTexC.width);
+            const fy = Math.floor((1 - wy) * residTexC.height);
+            const gp = new Uint8Array(4);
+            glRenderer.readRenderTargetPixels(grid.readTarget, fx, fy, 1, 1, gp);
+            const ri = (fy * residTexC.width + fx) * 4;
+            residCheck = `colorGrid=(${gp[0]},${gp[1]},${gp[2]}) resid=(${residTexC.data[ri]},${residTexC.data[ri + 1]},${residTexC.data[ri + 2]})`;
+          } catch {
+            residCheck = 'colorGrid 读取失败';
+          }
+        }
+      }
+      // ⑥ baseHsl 诊断：CPU 反推（buildBaseHslFromFrame 逻辑）vs GPU baseHslTex 数据
+      let baseHslCheck = '';
+      const baseTexD = fd?.boundBaseTexture ?? null;
+      if (baseTexD && residTexC) {
+        const tw = baseTexD.width, th = baseTexD.height;
+        const fx2 = Math.floor(w * tw);
+        const fy2 = Math.floor((1 - wy) * th);
+        const i2 = (fy2 * tw + fx2) * 4;
+        if (i2 + 3 < baseTexD.data.length && i2 + 3 < residTexC.data.length) {
+          const br = baseTexD.data[i2], bg = baseTexD.data[i2 + 1], bb = baseTexD.data[i2 + 2];
+          const fh = rgbToHslVal(br, bg, bb);
+          const rr = residTexC.data[i2] / 255, rg = residTexC.data[i2 + 1] / 255, rb = residTexC.data[i2 + 2] / 255;
+          const dH = (rr * 2 - 1) * 0.5, dS = (rg * 2 - 1) * 0.5, dL = (rb * 2 - 1) * 0.5;
+          const bH = ((fh.h - dH) % 1 + 1) % 1;
+          const bS = Math.max(0, Math.min(1, fh.s - dS));
+          const bL = Math.max(0, Math.min(1, fh.l - dL));
+          // GPU baseHslTex（DataTexture.image.data 为 Float32Array）
+          let gpuHsl = '无';
+          if (solverC) {
+            const bTex = (solverC as any).baseHslTex as THREE.DataTexture | null;
+            if (bTex && (bTex as any).image?.data) {
+              const gd = (bTex as any).image.data as Float32Array;
+              if (i2 + 3 < gd.length) {
+                gpuHsl = `(${gd[i2].toFixed(3)},${gd[i2 + 1].toFixed(3)},${gd[i2 + 2].toFixed(3)})`;
+              }
+            }
+          }
+          baseHslCheck = `baseHsl CPU反推=(${bH.toFixed(3)},${bS.toFixed(3)},${bL.toFixed(3)}) GPU纹理=${gpuHsl}`;
+        }
+      }
+      const regionIdAtPoint = getRegionIdAtWorldPoint ? getRegionIdAtWorldPoint(world) : 0;
+      const boundId = fd?.boundRegionId;
+      // 区域色块图层可见性（WebGL 渲染开关）
+      const regionLayerVisible = !!st.layerVisibility?.regionLayer
+        && !!(st.layers.find((l: { id: string }) => l.id === aLayer)?.visible ?? true);
+
+      // ★ WebGL mesh 位置诊断：顶点范围 / rootGroup 变换 / camera
+      let meshDiag = '';
+      const grp = rootGroupRef.current;
+      const camD = webglCameraRef.current;
+      if (camD) meshDiag += `cam=(l:${camD.left.toFixed(0)},r:${camD.right.toFixed(0)},t:${camD.top.toFixed(0)},b:${camD.bottom.toFixed(0)})`;
+      if (grp) {
+        meshDiag += ` root=(x:${grp.position.x.toFixed(0)},y:${grp.position.y.toFixed(0)},s:${grp.scale.x.toFixed(2)})`;
+        for (const child of grp.children) {
+          if (!(child instanceof THREE.Mesh)) continue;
+          const mat = child.material as THREE.ShaderMaterial;
+          if (!mat?.uniforms?.uColorTex) continue;
+          const pos = child.geometry.attributes.position;
+          if (pos) {
+            let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+            for (let i = 0; i < pos.count; i++) {
+              const vx = pos.getX(i), vy = pos.getY(i);
+              if (vx < minX) minX = vx; if (vx > maxX) maxX = vx;
+              if (vy < minY) minY = vy; if (vy > maxY) maxY = vy;
+            }
+            meshDiag += ` | colorMesh顶点 x:[${minX.toFixed(0)},${maxX.toFixed(0)}] y:[${minY.toFixed(0)},${maxY.toFixed(0)}] count=${pos.count}`;
+            break;
+          }
+        }
+      }
+      // ④ 区域色块数据（uColorTex：staticColorTex 或 compositeTarget）
+      let regionData: string | null = null;
+      let regionSource = '无 colorMesh';
+      for (const entry of colorMeshUniformsRef.current) {
+        if (entry.regionId !== boundId) continue;
+        const tex = entry.uniforms.uColorTex.value as THREE.Texture;
+        const img = (tex as any).image as ImageData | null;
+        if (img && img.data) {
+          const fx = Math.floor(w * img.width);
+          const fy = Math.floor((1 - wy) * img.height);
+          const idx = (fy * img.width + fx) * 4;
+          regionData = `(${img.data[idx]},${img.data[idx + 1]},${img.data[idx + 2]},${img.data[idx + 3]})`;
+          regionSource = 'staticColorTex';
+        } else if (tex && (tex as any).isRenderTargetTexture) {
+          const solver = fluidSolverRef.current;
+          const target = solver ? (solver as any).compositeTarget as THREE.WebGLRenderTarget : null;
+          if (target && glRenderer) {
+            const p = new Uint8Array(4);
+            const fx = Math.floor(w * target.width);
+            const fy = Math.floor((1 - wy) * target.height);
+            if (fx >= 0 && fx < target.width && fy >= 0 && fy < target.height) {
+              glRenderer.readRenderTargetPixels(target, fx, fy, 1, 1, p);
+              regionData = `(${p[0]},${p[1]},${p[2]},${p[3]})`;
+              regionSource = 'compositeTarget';
+            }
+          } else {
+            regionSource = 'compositeTarget 不可用';
+          }
+        } else {
+          regionSource = `未知: ${tex ? (tex as any).type || tex.constructor.name : 'null'}`;
+        }
+        break;
+      }
+
+        setPixelCompare({
+          px: cx, py: cy, worldX: w, worldY: wy,
+          frameCanvas, webglCanvas, frameData, regionData, regionSource,
+          canvasW: canvasWidth, canvasH: canvasHeight,
+          boundBase: frameTex ? `${frameTex.width}x${frameTex.height}` : '无',
+          boundResid: residTexDbg ? `${residTexDbg.width}x${residTexDbg.height}` : '无',
+          solverRes,
+          frameDataNoFlip, frameDataFlipped, regionIdAtPoint, webglStats,
+          regionLayerVisible, meshDiag, webglRT, webglRTHSL, webglRTStats, residCheck, baseHslCheck,
+        });
+    }
+
     // ★ 流体手动注入：开关开启且解算器存在时，点击画布注入流体
     const miState = useAppStore.getState();
     const miLayer = miState.activeLayerId;
@@ -4086,7 +4407,7 @@ useEffect(() => {
         setPreviewPoint(null);
       }
     }
-  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers, currentColor, performColorExtractionOnRegion, getRegionPolygonById, shapes]);
+  }, [isPanning, isPanMode, currentTool, getCanvasCoords, canvasToWorldFn, snapToExistingPoint, tempPoints, activeGroupId, activeLayerId, layers, currentColor, performColorExtractionOnRegion, getRegionPolygonById, shapes, canvasWidth, canvasHeight, webglRendererRef, colorMeshUniformsRef, fluidSolverRef, canvasRef, getRegionIdAtWorldPoint, rootGroupRef, webglCameraRef, webglSceneRef, debugReadbackRTRef]);
 
   // 同步临时图形到 store
   useEffect(() => {
@@ -4507,6 +4828,38 @@ useEffect(() => {
           />
         </div>
       </div>
+      {/* ★ 像素对比面板（鼠标移到画布上实时对比；× 关闭） */}
+      {pixelCompare && (
+        <div style={{
+          position: 'fixed', right: 8, top: 8, zIndex: 9999,
+          background: 'rgba(0,0,0,0.85)', color: '#0f0',
+          font: '11px/1.5 Consolas,monospace', padding: '8px 10px',
+          borderRadius: 6, whiteSpace: 'pre', maxWidth: 500,
+          pointerEvents: 'auto', border: '1px solid #0f04',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <span style={{ color: '#ff9', fontWeight: 'bold' }}>像素对比</span>
+            <button
+              onClick={() => setPixelCompare(null)}
+              style={{ background: 'none', border: 'none', color: '#f66', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}
+            >✕</button>
+          </div>
+{`鼠标(${pixelCompare.px},${pixelCompare.py}) world=(${pixelCompare.worldX.toFixed(4)},${pixelCompare.worldY.toFixed(4)}) 画布=${pixelCompare.canvasW}x${pixelCompare.canvasH}
+帧图层 2D canvas : ${pixelCompare.frameCanvas ?? '越界/无'}
+WebGL 主缓冲     : ${pixelCompare.webglCanvas ?? '越界/无'}  ${pixelCompare.webglStats}
+WebGL RT直读     : ${pixelCompare.webglRT ?? '-'} ${pixelCompare.webglRTHSL ?? ''}  ${pixelCompare.webglRTStats}
+帧图层数据(world映射) : ${pixelCompare.frameData ?? '无纹理'}
+数据同位置(无翻转)    : ${pixelCompare.frameDataNoFlip ?? '-'}
+数据Y翻转行           : ${pixelCompare.frameDataFlipped ?? '-'}
+区域色块(${pixelCompare.regionSource}) : ${pixelCompare.regionData ?? '无'}
+${pixelCompare.residCheck}
+${pixelCompare.baseHslCheck}
+该点区域ID: ${pixelCompare.regionIdAtPoint}
+区域色块图层开关: ${pixelCompare.regionLayerVisible ? '开启' : '关闭(WebGL不渲染)'}
+${pixelCompare.meshDiag}
+尺寸: boundBase=${pixelCompare.boundBase} boundResid=${pixelCompare.boundResid} solver=${pixelCompare.solverRes}`}
+        </div>
+      )}
       {pointAnnotationEditor && (
         <AnnotationEditor
           x={pointAnnotationEditor.x}

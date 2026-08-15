@@ -8,10 +8,11 @@ import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtil
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, rgbToHsl, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
+import { adjustResidualForUniformRange } from '../utils/colorCompressor';
 import { quantizeH, quantizeS, quantizeL, dequantizeH, dequantizeS, dequantizeL, getAdaptiveBlockIndex, getRangeForBlock, packRGB565, unpackRGB565 } from '../core/ftxCore';
 import { RegionEntity } from '../core/RegionEntity';
 import { mergeTinyRegions } from '../core/refineResiduals';
-import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime, mapSourcesIntoRegion, inverseMapSourcesFromRegion } from '../fluid/fluidConfigIO';
+import { parseImportedFluidConfig, serializeFluidConfigToJSON, defaultFluidRuntime, mapSourcesIntoRegion, inverseMapSourcesFromRegion, transformSourcesToBboxLocal } from '../fluid/fluidConfigIO';
 import { regionWorkerPool } from './regionWorkerPool';
 import type { RegionDetectionRequest, RegionDetectionResponse } from '../types/regionWorker';
 
@@ -23,6 +24,15 @@ export interface SharedBaseColor {
   frameIds: string[];
   area: number;
   tempFlag?: boolean;
+}
+
+/** 提取 JSON 中声明的分辨率（编辑器导出坐标空间判定用；无则 undefined） */
+function resOfJson(json: any): { w: number; h: number } | undefined {
+  const res = json?.resolution;
+  if (!res) return undefined;
+  if (typeof res === 'number') return { w: res, h: res };
+  const w = Number(res.w), h = Number(res.h);
+  return (isFinite(w) && isFinite(h) && w > 0 && h > 0) ? { w, h } : undefined;
 }
 
 interface PaletteColor {
@@ -3082,6 +3092,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         residTex.data[gi + 2] = Math.round((qL / 31) * 255);
         residTex.data[gi + 3] = 128;
       }
+      // ★ 0.25 范围块 → 0.5 兼容格式（与编辑器 adjustResidualForUniformRange 一致，
+      //   否则流体合成时 delta 放大 → 部分区域色相偏移）
+      adjustResidualForUniformRange(residTex, frame.bbox, BigInt(frame.blockFlags));
       newFrameDataMap[layerId] = {
         id: layerId,
         rawRegionIdTex: mappedRegionIdTex,
@@ -3341,6 +3354,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         residBase.data[di + 3] = 128;
       }
     }
+    // ★ 0.25 范围块 → 0.5 兼容格式（与编辑器 adjustResidualForUniformRange 一致，
+    //   否则流体合成时 delta 放大 → 部分区域色相偏移）
+    adjustResidualForUniformRange(residBase, bboxLocal, frameData.rawBlockFlags ?? 0n);
 
     // 直接保存裁剪后的底图（全帧尺寸 + 区域形状 mask），模板缓冲负责每帧的边界裁剪
     // VAT 驱动网格顶点扭曲 → 填充网格写入模板缓冲 → 颜色网格采样（仅模板=1区域）
@@ -3603,6 +3619,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     // 解析外部 JSON → 内部 FluidSolverConfig
     const cfg = parseImportedFluidConfig(json, fallbackRes);
     cfg.resolution = { ...fallbackRes };
+    // ★ 注入源坐标转换（编辑器全帧坐标 → bbox 局部坐标）：
+    //   编辑器在"全帧 canvas"上排版源（json.resolution = sourceResolution），
+    //   主页面解算器作用于 bbox 裁剪纹理 → 必须按 bbox 重映射，
+    //   否则源位置错位（注入到错误区域/越界不可见）。
+    //   transformSourcesToBboxLocal 内部判定：仅 JSON resolution == sourceResolution
+    //   （编辑器全帧导出）才转换；已是 bbox 尺寸（主页面再导出）直接透传。
+    cfg.continuousSources = transformSourcesToBboxLocal(
+      cfg.continuousSources,
+      frameData,
+      resOfJson(json),
+    );
     set((s) => ({
       frameDataMap: {
         ...s.frameDataMap,
@@ -3676,32 +3703,39 @@ export const useAppStore = create<AppState>((set, get) => ({
           : { w: fd.sourceResolution || 512, h: fd.sourceResolution || 512 };
       const cfg = parseImportedFluidConfig(physics, res);
       cfg.resolution = { ...res };
-      const srcRes = physics?.resolution
-        ? typeof physics.resolution === 'number'
-          ? { w: physics.resolution, h: physics.resolution }
-          : { w: Number(physics.resolution.w), h: Number(physics.resolution.h) }
-        : undefined;
+      const srcRes = resOfJson(physics);
       const sameRes = !!srcRes && Math.abs(srcRes.w - (fd.sourceResolution || 512)) < 1
         && Math.abs(srcRes.h - (fd.sourceResolution || 512)) < 1;
+      // ★ 注入源坐标转换（编辑器全帧坐标 → bbox 局部坐标）：
+      //   mapSourcesIntoRegion 要求 world 0~1 的 regionBbox，此前误传像素单位 rawBbox →
+      //   源 position 全部越界（如 50~250），注入器距离判断失败 → 源完全不注入。
+      //   正确路径：transformSourcesToBboxLocal（内部判定仅 JSON resolution ==
+      //   sourceResolution 才转换，bbox 尺寸直传）。
       if (cfg.continuousSources) {
-        cfg.continuousSources = mapSourcesIntoRegion(cfg.continuousSources, {
-          x: (fd.rawBbox?.x ?? 0), y: (fd.rawBbox?.y ?? 0),
-          w: (fd.rawBbox?.w ?? res.w), h: (fd.rawBbox?.h ?? res.h),
-        });
+        cfg.continuousSources = transformSourcesToBboxLocal(
+          cfg.continuousSources,
+          fd,
+          srcRes,
+        );
       }
+      // ★ 绑定区域：源位置映射进区域实体 worldBbox（bbox 局部 → world UV），
+      //   保证源落在区域多边形内（区域外 = 墙，注入被屏蔽）
       let space: any = sameRes ? { kind: 'bbox-local' } : null;
       const entities = state.regionEntities[layer.id] || [];
       const boundEntity = entities.find((e) => e.id === fd.boundRegionId);
-      if (sameRes && boundEntity?.worldBbox) {
+      if (boundEntity?.worldBbox) {
         if (cfg.continuousSources) {
-          cfg.continuousSources = inverseMapSourcesFromRegion(cfg.continuousSources, boundEntity.worldBbox);
+          cfg.continuousSources = mapSourcesIntoRegion(cfg.continuousSources, boundEntity.worldBbox);
         }
         space = { kind: 'region', regionId: boundEntity.id, bbox: { ...boundEntity.worldBbox } };
       }
       newMap[layer.id] = {
         ...fd,
         fluidConfig: cfg,
-        fluidRuntime: { ...defaultFluidRuntime(), isPlaying: true },
+        // ★ 导入参数不改播放状态（与单帧导入一致，默认不播放）：
+        //   此前强制 isPlaying: true → 导入后立即 step → gravity/注入源
+        //   立刻驱动残差流动 → "导入参数后纹理色相突变（尽管没点播放）"
+        fluidRuntime: { ...defaultFluidRuntime(), isPlaying: false },
         fluidSourceSpace: space,
       };
       count++;

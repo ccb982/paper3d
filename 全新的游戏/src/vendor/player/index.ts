@@ -96,6 +96,9 @@ export class Asset {
       const frameWidth = hasFtx
         ? ftxFrames[frameData.textureIndex].width
         : resolution;
+      const frameHeight = hasFtx
+        ? ftxFrames[frameData.textureIndex].height
+        : resolution;
 
       for (const entityData of frameData.regionEntities) {
         const dispResult = buildDisplacementTextureData(
@@ -121,7 +124,7 @@ export class Asset {
 
         const meshData = buildEntityMesh(
           entityData, ftxBbox, dispTex,
-          dispResult.width, dispResult.height, frameWidth,
+          dispResult.width, dispResult.height, frameWidth, frameHeight,
         );
         if (!meshData) continue;
 

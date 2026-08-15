@@ -1788,21 +1788,22 @@ class FluidPlayer {
               float density = texture2D(uDensity, vUv).r;
               float factor = density / max(uBaseline, 0.001);
               float sign = (uCombineMode == 0) ? 1.0 : -1.0;
-              finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x);
-              finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y, 0.0, 1.0);
-              finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z, 0.0, 1.0);
+              finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x * uChannels.x);
+              finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y * uChannels.y, 0.0, 1.0);
+              finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z * uChannels.z, 0.0, 1.0);
               float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
-              finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w, 0.0, 1.0);
+              finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w * uChannels.w, 0.0, 1.0);
             } else {
               finalH = fract(baseHSLA.r + dH);
               finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
               finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
               finalA = baseHSLA.a;
             }
-            finalH = mix(residual.r, finalH, uChannels.x);
-            finalS = mix(residual.g, finalS, uChannels.y);
-            finalL = mix(residual.b, finalL, uChannels.z);
-            finalA = mix(residual.a, finalA, uChannels.w);
+            // ★ 通道开关不再做整通道 mix（此前 mix(residual, final, uChannels)
+            //   在取消勾选时丢弃整个残差 delta，甚至把量化残差值当最终 HSL
+            //   分量显示 → "导入参数后 HSL 突变"）：与编辑器 ShaderLibrary 一致，
+            //   取消的通道仅在 scalar 分支关闭 density 调制项（×uChannels），
+            //   vector 分支残差 delta 始终参与合成。
             vec3 finalRGB = hsl_to_rgb(vec3(finalH, finalS, finalL));
             gl_FragColor = vec4(finalRGB, finalA);
           }
