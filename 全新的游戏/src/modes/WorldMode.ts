@@ -265,7 +265,7 @@ export class WorldMode {
       dirX: dx,
       dirY: dy,
       dirZ: dz,
-      speed: 15,
+      speed: 20,
       camp: 'player',
       lifetime: 2,
       damage: 10, // ★ 穿透伤害（敌人 30 血 → 3 发）

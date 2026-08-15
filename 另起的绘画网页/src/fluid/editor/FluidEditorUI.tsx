@@ -3858,6 +3858,8 @@ export const FluidEditorUI: React.FC = () => {
                 waypoints: s.waypoints,
                 waypointMode: s.waypointMode,
                 waypointSpeed: s.waypointSpeed,
+                // ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环
+                ...(s.intermittent ? { intermittent: { ...s.intermittent } } : {}),
               })),
               // 网格分辨率（轻量化库建场需要）
               resolution: cfg.resolution,

@@ -383,6 +383,26 @@ export function FluidPanel() {
                     <Slider label="浓度" value={src.density ?? 0.5} min={0} max={1} step={0.05}
                       onChange={v => updateFluidSource(activeLayerId!, i, { density: v })} />
                   )}
+                  {/* ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环 */}
+                  <div style={{ ...LABEL, marginTop: '6px', borderTop: '1px dashed #333', paddingTop: '6px' }}>
+                    <span style={{ color: '#2ecc71' }}>⏱ 间歇注入</span>
+                    <button
+                      style={{ ...BTN, background: src.intermittent ? '#2ecc71' : '#333', color: src.intermittent ? '#fff' : '#aaa', padding: '2px 8px', fontSize: '11px' }}
+                      onClick={() => updateFluidSource(activeLayerId!, i, src.intermittent
+                        ? { intermittent: undefined }
+                        : { intermittent: { onDuration: 1.0, offDuration: 1.0 } })}
+                    >
+                      {src.intermittent ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
+                  {src.intermittent && (
+                    <>
+                      <Slider label="注入 (s)" value={src.intermittent.onDuration} min={0.1} max={5} step={0.1}
+                        onChange={v => updateFluidSource(activeLayerId!, i, { intermittent: { ...src.intermittent!, onDuration: v } })} fmt={v => v.toFixed(1)} />
+                      <Slider label="暂停 (s)" value={src.intermittent.offDuration} min={0} max={5} step={0.1}
+                        onChange={v => updateFluidSource(activeLayerId!, i, { intermittent: { ...src.intermittent!, offDuration: v } })} fmt={v => v.toFixed(1)} />
+                    </>
+                  )}
                 </>
               )}
             </div>
