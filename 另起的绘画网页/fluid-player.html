@@ -1268,6 +1268,14 @@ class FluidPlayer {
       if (!src.config.enabled) continue;
       let config = { ...src.config };
 
+      // ★ 间歇注入脉冲门控（与主页面/播放器语义一致）
+      const _int = config.intermittent;
+      if (_int && _int.onDuration > 0) {
+        const _period = _int.onDuration + Math.max(0, _int.offDuration || 0);
+        if (_period <= 0) continue;
+        if (this.time % _period >= _int.onDuration) continue; // 间歇期：本帧不注入
+      }
+
       // 路径点插值
       const wps = config.waypoints;
       if (wps && wps.length >= 2) {

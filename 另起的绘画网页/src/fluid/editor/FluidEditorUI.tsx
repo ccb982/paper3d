@@ -40,6 +40,8 @@ type ContinuousSourceSnapshot = {
   waypoints?: { x: number; y: number }[];
   waypointMode?: WaypointMode;
   waypointSpeed?: number;
+  /** ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环 */
+  intermittent?: { onDuration: number; offDuration: number };
 };
 
 // ★ 爆发倍率：单次注入（非持续模式）瞬间放大速度，冲破重力束缚
@@ -74,6 +76,8 @@ const OperationsPanel: React.FC<{
   onHighlightSource: (id: number) => void;
   // ★ 更新源的波形参数
   onUpdateSourceWave: (id: number, wave: WaveConfig) => void;
+  // ★ 更新源的间歇注入参数（undefined = 关闭）
+  onUpdateSourceIntermittent: (id: number, intermittent: { onDuration: number; offDuration: number } | undefined) => void;
   // ★ 路径点控制
   recordingWaypointSourceId: number | null;
   onStartWaypointRecording: (id: number) => void;
@@ -107,6 +111,7 @@ const OperationsPanel: React.FC<{
   onClearAllSources,
   onHighlightSource,
   onUpdateSourceWave,
+  onUpdateSourceIntermittent,
   recordingWaypointSourceId,
   onStartWaypointRecording,
   onStopWaypointRecording,
@@ -803,6 +808,51 @@ const OperationsPanel: React.FC<{
                             />
                             <span style={{ width: '40px', textAlign: 'right', color: '#999' }}>{wave.frequency.toFixed(1)} Hz</span>
                           </div>
+                        </div>
+                      )}
+
+                      {/* ★ 间歇注入面板（展开时显示）：脉冲注入增强视觉对比 */}
+                      {isExpanded && (
+                        <div style={{ padding: '6px 8px 8px 20px', background: '#e8f5e9', fontSize: '10px', borderTop: '1px dashed #a5d6a7' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                            <input
+                              type="checkbox"
+                              checked={!!src.intermittent}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  onUpdateSourceIntermittent(src.id, { onDuration: src.intermittent?.onDuration ?? 1.0, offDuration: src.intermittent?.offDuration ?? 1.0 });
+                                } else {
+                                  onUpdateSourceIntermittent(src.id, undefined);
+                                }
+                              }}
+                            />
+                            <span style={{ fontWeight: 'bold', color: '#2e7d32' }}>⏱ 间歇注入（脉冲）</span>
+                            {src.intermittent && <span style={{ color: '#999' }}>开启</span>}
+                          </label>
+                          {src.intermittent && (
+                            <>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+                                <label style={{ width: '50px', color: '#666' }}>注入</label>
+                                <input
+                                  type="range" min={0.1} max={5} step={0.1}
+                                  value={src.intermittent.onDuration}
+                                  onChange={(e) => onUpdateSourceIntermittent(src.id, { ...src.intermittent!, onDuration: parseFloat(e.target.value) })}
+                                  style={{ flex: 1 }}
+                                />
+                                <span style={{ width: '50px', textAlign: 'right', color: '#999' }}>{src.intermittent.onDuration.toFixed(1)} s</span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <label style={{ width: '50px', color: '#666' }}>暂停</label>
+                                <input
+                                  type="range" min={0} max={5} step={0.1}
+                                  value={src.intermittent.offDuration}
+                                  onChange={(e) => onUpdateSourceIntermittent(src.id, { ...src.intermittent!, offDuration: parseFloat(e.target.value) })}
+                                  style={{ flex: 1 }}
+                                />
+                                <span style={{ width: '50px', textAlign: 'right', color: '#999' }}>{src.intermittent.offDuration.toFixed(1)} s</span>
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
 
@@ -2238,6 +2288,19 @@ export const FluidEditorUI: React.FC = () => {
     editor.updateContinuousInjection(id, {
       ...src.config,
       wave,
+    });
+    refreshSources();
+  }, [editor, refreshSources]);
+
+  // ★ 更新源的间歇注入参数（脉冲：注入/暂停时长；undefined = 关闭=持续注入）
+  const handleUpdateSourceIntermittent = useCallback((id: number, intermittent: { onDuration: number; offDuration: number } | undefined) => {
+    if (!editor) return;
+    const sources = editor.getContinuousSources();
+    const src = sources.find(s => s.id === id);
+    if (!src) return;
+    editor.updateContinuousInjection(id, {
+      ...src.config,
+      intermittent,
     });
     refreshSources();
   }, [editor, refreshSources]);
@@ -3681,6 +3744,7 @@ export const FluidEditorUI: React.FC = () => {
           onClearAllSources={handleClearAllSources}
           onHighlightSource={handleHighlightSource}
           onUpdateSourceWave={handleUpdateSourceWave}
+          onUpdateSourceIntermittent={handleUpdateSourceIntermittent}
           recordingWaypointSourceId={recordingWaypointSourceId}
           onStartWaypointRecording={handleStartWaypointRecording}
           onStopWaypointRecording={handleStopWaypointRecording}

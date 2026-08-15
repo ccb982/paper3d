@@ -65,6 +65,11 @@ export interface InjectionConfig {
   waypointMode?: 'forward' | 'backward' | 'pingpong';
   /** 移动速度（航点/秒），默认 1.0 */
   waypointSpeed?: number;
+  /**
+   * ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环。
+   * 间歇切换增强视觉对比（连续注入会糊成一片）。undefined = 持续注入。
+   */
+  intermittent?: { onDuration: number; offDuration: number };
 }
 
 /** 漩涡参数 */
@@ -291,6 +296,8 @@ export class FluidOperations {
     waypointMode?: 'forward' | 'backward' | 'pingpong';
     waypointSpeed?: number;
     density?: number;
+    /** ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环 */
+    intermittent?: InjectionConfig['intermittent'];
     /** ★ 原始完整配置，供 UI 保留未显式暴露的扩展字段（如 density） */
     config: InjectionConfig;
   }[] {
@@ -314,6 +321,7 @@ export class FluidOperations {
         waypointMode: s.config.waypointMode,
         waypointSpeed: s.config.waypointSpeed,
         density: s.config.density,
+        intermittent: s.config.intermittent ? { ...s.config.intermittent } : undefined,
         config: { ...s.config },
       };
     });
@@ -341,6 +349,14 @@ export class FluidOperations {
 
     for (const src of this.continuousSources) {
       let config = src.config;
+
+      // ========== ★ 间歇注入脉冲门控（与主页面/播放器语义一致） ===========
+      const int = config.intermittent;
+      if (int && int.onDuration > 0) {
+        const period = int.onDuration + Math.max(0, int.offDuration || 0);
+        if (period <= 0) continue;
+        if (time % period >= int.onDuration) continue; // 间歇期：本帧不注入
+      }
 
       // ========== ★ 路径点插值：覆盖 position ===========
       const waypoints = config.waypoints;

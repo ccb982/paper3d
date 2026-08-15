@@ -44,6 +44,13 @@ export function normalizeInjectionSource(s: any): InjectionConfig {
     waypoints: Array.isArray(s.waypoints) ? s.waypoints.map((w: any) => ({ x: Number(w.x), y: Number(w.y) })) : undefined,
     waypointMode: s.waypointMode || 'forward',
     waypointSpeed: s.waypointSpeed !== undefined ? Number(s.waypointSpeed) : 1.0,
+    // ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环
+    intermittent: s.intermittent
+      ? {
+          onDuration: Math.max(0, Number(s.intermittent.onDuration) || 0),
+          offDuration: Math.max(0, Number(s.intermittent.offDuration) || 0),
+        }
+      : undefined,
   };
 }
 
@@ -558,6 +565,7 @@ export function serializeFluidConfigToJSON(config: FluidSolverConfig): any {
       ...(s.waypoints ? { waypoints: s.waypoints.map(w => ({ ...w })) } : {}),
       waypointMode: s.waypointMode,
       waypointSpeed: s.waypointSpeed,
+      ...(s.intermittent ? { intermittent: { ...s.intermittent } } : {}),
     })),
     // ★ 墙体掩码（1 bit/像素 base64），供主绘画页面优先于区域边界光栅化
     ...(config.obstacle ? { obstacle: { ...config.obstacle } } : {}),

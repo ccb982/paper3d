@@ -41,6 +41,13 @@ export function normalizeInjectionSource(s: any): InjectionConfig {
     waypoints: Array.isArray(s.waypoints) ? s.waypoints.map((w: any) => ({ x: Number(w.x), y: Number(w.y) })) : undefined,
     waypointMode: s.waypointMode || 'forward',
     waypointSpeed: s.waypointSpeed !== undefined ? Number(s.waypointSpeed) : 1.0,
+    // ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环
+    intermittent: s.intermittent
+      ? {
+          onDuration: Math.max(0, Number(s.intermittent.onDuration) || 0),
+          offDuration: Math.max(0, Number(s.intermittent.offDuration) || 0),
+        }
+      : undefined,
   };
 }
 

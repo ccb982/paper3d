@@ -426,7 +426,6 @@ export function MainCanvas() {
   // ========== WebGL 环境初始化（使用画布像素坐标，与 2D Canvas 一致）==========
   useEffect(() => {
     if (!canvasWrapperRef.current) return;
-    console.log('[webgl] 环境初始化 canvasSize=', canvasWidth, canvasHeight, ' wrapper=', !!canvasWrapperRef.current);
 
     // 创建 WebGL canvas 并插入到容器（覆盖在主 canvas 上方，居中对齐）
     const webglCanvas = document.createElement('canvas');
@@ -660,7 +659,6 @@ useEffect(() => {
   colorMeshUniformsRef.current = [];
 
   const entities = regionEntities[activeLayerId] || [];
-  console.log('[regionMesh] 重建: 实体=', entities.length, ' boundTex=', !!(frameDataMap[activeLayerId]?.boundBaseTexture), ' canvas=', canvasWidth, canvasHeight);
   if (entities.length === 0) return;
 
   const regionAnnotationsForLayer = regionAnnotations.filter(a => a.layerId === activeLayerId);

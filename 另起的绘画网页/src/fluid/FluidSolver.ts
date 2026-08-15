@@ -27,6 +27,9 @@ export interface InjectionConfig {
   waypoints?: { x: number; y: number }[];
   waypointMode?: 'forward' | 'backward' | 'pingpong';
   waypointSpeed?: number;
+  /** ★ 间歇注入（脉冲）：注入 onDuration 秒 → 暂停 offDuration 秒 → 循环。
+   *   间歇切换增强视觉对比（连续注入会糊成一片）。无该字段 = 持续注入。 */
+  intermittent?: { onDuration: number; offDuration: number };
 }
 
 export interface FluidSolverConfig {
@@ -549,6 +552,16 @@ export class FluidSolver {
     for (let i = 0; i < this.config.continuousSources.length; i++) {
       const src = this.config.continuousSources[i];
       if (!src.enabled) continue;
+
+      // ★ 间歇注入脉冲门控：onDuration 秒注入 → offDuration 秒暂停 → 循环。
+      //   用解算器累计时间（this.time）驱动，暂停/续播时相位连续、不跳变。
+      const int = src.intermittent;
+      if (int && int.onDuration > 0) {
+        const period = int.onDuration + Math.max(0, int.offDuration || 0);
+        if (period <= 0) continue;
+        if (this.time % period >= int.onDuration) continue; // 间歇期：本帧不注入
+      }
+
       const config = { ...src };
 
       // 路径点插值

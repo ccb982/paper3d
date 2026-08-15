@@ -243,8 +243,8 @@ export class BulletEntity extends EntityBase {
     target[offset + 15] = 1;
   }
 
-  /** ★ 世界尺寸（基类公共函数）：宽 = baseWidth（默认 2/3），高按纹理宽高比 */
-  static computeWorldSize(asset: FrameAssetSource, baseWidth = 2 / 3): { width: number; height: number } {
+  /** ★ 世界尺寸（基类公共函数）：宽 = baseWidth（默认 3.0），高按纹理宽高比 */
+  static computeWorldSize(asset: FrameAssetSource, baseWidth = 3.0): { width: number; height: number } {
     const pair = asset.getFramePair(0);
     const aspect = pair ? pair.base.image.height / pair.base.image.width : 3.79;
     return { width: baseWidth, height: baseWidth * aspect };
