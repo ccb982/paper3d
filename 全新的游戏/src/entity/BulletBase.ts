@@ -82,7 +82,8 @@ export class BulletBase extends EntityBase {
         { x: 0, y: 0, w: pair.base.image.width, h: pair.base.image.height },
       );
       // ★ 竖长纹理（如爆裂黎明子弹 134×508）保持宽高比，不被压成正方形
-      (this.renderer as FTXQuad).setScaleKeepAspect(0.18);
+      //   宽度 ≈ 1.0 世界单位再收窄 1/3 → 0.667
+      (this.renderer as FTXQuad).setScaleKeepAspect(2 / 3);
       // ★ 交叉双平面：体积感子弹，任何视角都不显"纸片/竖直立牌"
       (this.renderer as FTXQuad).enableCrossPlane(true);
       // ★ 弹头锚点：纹理上端 = 弹头，压在物理碰撞点上 →

@@ -252,9 +252,10 @@ export class WorldMode {
     executeAttack(this.entities, this.bullets, {
       type: 'projectile',
       source: this.player,
-      x: muzzle.x + dx * 0.8,
-      y: muzzle.y + dy * 0.8,
-      z: muzzle.z + dz * 0.8,
+      // ★ 枪口前方 1.5m 生成（子弹拖尾长，前移避免从枪口/身后穿出）
+      x: muzzle.x + dx * 1.5,
+      y: muzzle.y + dy * 1.5,
+      z: muzzle.z + dz * 1.5,
       dirX: dx,
       dirY: dy,
       dirZ: dz,
