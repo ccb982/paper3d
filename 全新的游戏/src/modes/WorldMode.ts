@@ -197,7 +197,7 @@ export class WorldMode {
     // ---- ★ 玩家发射（左键：单次按下立即一发；长按 = 间隔持续发射） ----
     this.bulletCooldown -= dt;
     if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
-      this.bulletCooldown = 0.15;
+      this.bulletCooldown = 0.3;
       this.firePlayerBullet();
     }
   }
