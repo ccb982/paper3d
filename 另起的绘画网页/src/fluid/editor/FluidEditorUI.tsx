@@ -1161,10 +1161,10 @@ const GeneralPanel: React.FC<{
         {config.advectionMode === 'scalar' && (
           <>
             <div className="control-group">
-              <label>H 强度 (-0.2~0.2)</label>
+              <label>H 强度 (-0.8~0.8)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  type="range" min={-0.8} max={0.8} step={0.0001}
                   value={config.scalarConfig?.hMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, hMultiplier: parseFloat(e.target.value) }
@@ -1178,10 +1178,10 @@ const GeneralPanel: React.FC<{
               </div>
             </div>
             <div className="control-group">
-              <label>S 强度 (-0.2~0.2)</label>
+              <label>S 强度 (-0.8~0.8)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  type="range" min={-0.8} max={0.8} step={0.0001}
                   value={config.scalarConfig?.sMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, sMultiplier: parseFloat(e.target.value) }
@@ -1194,10 +1194,10 @@ const GeneralPanel: React.FC<{
               </div>
             </div>
             <div className="control-group">
-              <label>L 强度 (-0.2~0.2)</label>
+              <label>L 强度 (-0.8~0.8)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  type="range" min={-0.8} max={0.8} step={0.0001}
                   value={config.scalarConfig?.lMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, lMultiplier: parseFloat(e.target.value) }
@@ -1210,10 +1210,10 @@ const GeneralPanel: React.FC<{
               </div>
             </div>
             <div className="control-group">
-              <label>A 强度 (-0.2~0.2)</label>
+              <label>A 强度 (-0.8~0.8)</label>
               <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
                 <input
-                  type="range" min={-0.2} max={0.2} step={0.0001}
+                  type="range" min={-0.8} max={0.8} step={0.0001}
                   value={config.scalarConfig?.aMultiplier ?? 0.1}
                   onChange={(e) => onConfigChange({
                     scalarConfig: { ...config.scalarConfig!, aMultiplier: parseFloat(e.target.value) }

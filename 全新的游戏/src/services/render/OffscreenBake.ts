@@ -34,7 +34,7 @@ export class OffscreenBake {
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
   }
 
-  /** ★ 开始离屏绘制：切 RT + 透明清屏（颜色/深度/模板）。
+  /** ★ 开始离屏绘制：切 RT + 透明清屏（颜色/深度/模板）+ 解绑纹理单元。
    *   渲染完成后必须调用 end() 还原。 */
   protected begin(): void {
     const r = this.renderer;
@@ -42,6 +42,14 @@ export class OffscreenBake {
     r.getClearColor(this.prevClearColor);
     this.prevClearAlpha = r.getClearAlpha();
     this.prevAutoClear = r.autoClear;
+    // ★ 解绑所有纹理单元：上次绘制可能把本 RT 的纹理留在采样单元上
+    //   （three 不自动解绑）→ 同一纹理既是目标又是输入 = Feedback loop → 绘制被丢弃
+    const gl = r.getContext();
+    for (let u = 0; u < 16; u++) {
+      gl.activeTexture(gl.TEXTURE0 + u);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+    gl.activeTexture(gl.TEXTURE0);
     r.setRenderTarget(this.rt);
     r.setClearColor(0x000000, 0);
     r.autoClear = false;

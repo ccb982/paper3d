@@ -186,7 +186,7 @@ export function buildResidualData(
 
   if (deltaPacked.length === 0) {
     // 无残差：值填中间（0.5 表示 delta=0）
-    for (let i = 3; i < data.length; i += 4) data[i] = 255;
+    for (let i = 3; i < data.length; i += 4) data[i] = 128; // alpha 中性（delta=0）
     return { data, width: w, height: h };
   }
 
@@ -214,7 +214,7 @@ export function buildResidualData(
     data[idx4] = r8;
     data[idx4 + 1] = g8;
     data[idx4 + 2] = b8;
-    data[idx4 + 3] = 255;
+    data[idx4 + 3] = 128; // alpha 中性（delta=0，255→dA=+0.5 致半透明黑边）
   }
 
   return { data, width: w, height: h };

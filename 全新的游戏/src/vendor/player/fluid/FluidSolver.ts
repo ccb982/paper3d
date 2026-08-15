@@ -864,12 +864,25 @@ export class FluidSolver {
     const prevClearColor = new THREE.Color();
     this.renderer.getClearColor(prevClearColor);
     const prevClearAlpha = this.renderer.getClearAlpha();
+    // ★ 解绑所有纹理单元：上次绘制可能把 compositeTarget.texture 留在采样单元上
+    //   （three 不自动解绑）→ 同一纹理既是目标又是输入 = Feedback loop → 绘制被丢弃
+    this.unbindTextureUnits();
     this.renderer.setRenderTarget(this.compositeTarget);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.compositeScene, this.compositeCamera);
     this.renderer.setClearColor(prevClearColor, prevClearAlpha);
     this.renderer.setRenderTarget(prev);
+  }
+
+  /** 解绑所有 2D 纹理单元（离屏渲染前调用，防 Feedback loop） */
+  private unbindTextureUnits(): void {
+    const gl = this.renderer.getContext();
+    for (let u = 0; u < 16; u++) {
+      gl.activeTexture(gl.TEXTURE0 + u);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+    gl.activeTexture(gl.TEXTURE0);
   }
 
   private buildCompositeMat(hasBase: boolean): THREE.ShaderMaterial {
