@@ -859,9 +859,16 @@ export class FluidSolver {
     }
 
     const prev = this.renderer.getRenderTarget();
+    // ★ 透明底：compositeTarget 区域外必须 alpha=0（用渲染器当前 clear color
+    //   会是不透明深蓝 → 烘焙/叠加后子弹边缘变黑；编辑器是透明底所以正常）
+    const prevClearColor = new THREE.Color();
+    this.renderer.getClearColor(prevClearColor);
+    const prevClearAlpha = this.renderer.getClearAlpha();
     this.renderer.setRenderTarget(this.compositeTarget);
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.compositeScene, this.compositeCamera);
+    this.renderer.setClearColor(prevClearColor, prevClearAlpha);
     this.renderer.setRenderTarget(prev);
   }
 
