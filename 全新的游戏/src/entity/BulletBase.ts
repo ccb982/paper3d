@@ -155,21 +155,26 @@ export class BulletBase extends EntityBase {
     return new FTXQuad(scene, source);
   }
 
-  protected override onUpdate(dt: number, _input?: InputActions, cameraFrame?: CameraFrame): void {
+  protected override onUpdate(dt: number, _input?: InputActions, _cameraFrame?: CameraFrame): void {
     if (!this.active) return;
-    // ★ 弹道式朝向：长轴对齐飞行方向（物理速度，反弹自动跟随）+ 交叉双平面
-    const rb = this.entity.rigidBody;
-    if (rb && this.em.physics && this.renderer) {
-      const v = this.em.physics.getLinearVelocity(rb.handle);
-      const fwd = cameraFrame?.forward ?? { x: 0, z: 1 };
-      // ★ 纹理上端 = 弹头 → 长轴对齐速度（本地 +y 指向 axis）：
-      //   弹头朝前、拖尾在后
-      (this.renderer as FTXQuad).setAlignToAxis(v, fwd);
-    }
     this.lifetime -= dt;
     if (this.lifetime <= 0) {
       this.deactivate(); // 超时回池（复用，不销毁）
       this.recycle?.();
     }
+  }
+
+  /** ★ 渲染阶段驱动弹道式朝向（有真实相机位置：俯视/仰视自适应十字厚度） */
+  override render(camera: THREE.Camera): void {
+    if (this.active && this.renderer) {
+      const rb = this.entity.rigidBody;
+      if (rb && this.em.physics) {
+        const v = this.em.physics.getLinearVelocity(rb.handle);
+        const p = this.position;
+        // ★ 纹理上端 = 弹头 → 长轴对齐速度（本地 +y 指向 axis）：弹头朝前、拖尾在后
+        (this.renderer as FTXQuad).setAlignToAxis(v, camera.position, p);
+      }
+    }
+    super.render(camera);
   }
 }

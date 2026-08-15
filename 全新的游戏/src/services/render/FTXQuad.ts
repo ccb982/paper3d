@@ -239,32 +239,40 @@ export class FTXQuad extends FxRendererBase {
   }
 
   /**
-   * ★ 弹道式朝向（交叉双平面版，永不显纸片）：
+   * ★ 弹道式朝向（交叉双平面，视角自适应）：
    *   - 长轴（本地 +y，弹头端）精确对齐飞行方向 axis
-   *   - 法线（本地 +z）绕长轴旋转到尽量朝相机 → 交叉双平面共同呈现体积感
-   *   - 正对/背对相机时平面交叉成"十字小点"（弹头正面观），不会竖直立牌
+   *   - 平面1 法线尽量朝相机（viewV 投影 ⊥ 长轴）
+   *   - ★ 视角越接近正上方/正下方，双平面绕长轴越转 45°（十字体感）：
+   *     俯视时两平面各露半面 → 有厚度；平视（TPS 常规）保持贴脸横拖尾
    *   - 无 NaN 分支，任何角度都可见
    */
-  setAlignToAxis(axis: { x: number; y: number; z: number }, camDir: { x: number; z: number }): void {
+  setAlignToAxis(
+    axis: { x: number; y: number; z: number },
+    camPos: { x: number; y: number; z: number },
+    pos: { x: number; y: number; z: number },
+  ): void {
     if (!this.mesh) return;
     const v = new THREE.Vector3(axis.x, axis.y, axis.z);
     if (v.lengthSq() < 1e-8) return;
     v.normalize();
     this._alignAxis.copy(v);
-    // 相机方向（水平，指向相机）
-    let c = new THREE.Vector3(-camDir.x, 0, -camDir.z);
-    if (c.lengthSq() < 1e-8) c.set(0, 0, -1);
-    c.normalize();
-    // 平面1 法线 = 相机方向投影 ⊥ 长轴（正对长轴时用世界 up 兜底，绝不 NaN）
-    let n1 = c.clone().addScaledVector(v, -c.dot(v));
+    // 视线方向（子弹 → 相机，含俯仰）
+    let viewV = new THREE.Vector3(camPos.x - pos.x, camPos.y - pos.y, camPos.z - pos.z);
+    if (viewV.lengthSq() < 1e-8) viewV.set(0, 0, -1);
+    viewV.normalize();
+    // 平面1 法线基准 = 视线投影 ⊥ 长轴（正对长轴时用世界 up 兜底，绝不 NaN）
+    let n1 = viewV.clone().addScaledVector(v, -viewV.dot(v));
     if (n1.lengthSq() < 1e-6) {
       n1.set(0, 1, 0).addScaledVector(v, -v.y);
       if (n1.lengthSq() < 1e-6) n1.set(1, 0, 0).addScaledVector(v, -v.x);
     }
     n1.normalize();
-    // 平面2 法线 = 长轴 × 平面1 法线（两平面 90° 相交）
-    const n2 = new THREE.Vector3().crossVectors(v, n1).normalize();
-    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n2, v, n1));
+    // ★ 自适应交叉角：视线越竖直，双平面越转 45°（俯视有厚度；平视保持贴脸）
+    const elev = Math.abs(viewV.y);
+    const theta = (Math.PI / 4) * Math.max(0, Math.min(1, (elev - 0.15) / 0.55));
+    const n1a = n1.clone().applyAxisAngle(v, theta).normalize();
+    const n1b = new THREE.Vector3().crossVectors(v, n1a).normalize();
+    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n1b, v, n1a));
     this.applyFlip(); // 内部同步 mesh2
   }
 
