@@ -80,11 +80,11 @@ export class BulletRenderer {
   private mesh: THREE.InstancedMesh;
   private material: THREE.ShaderMaterial;
   private matrices: Float32Array;
-  /** 每实例上次非零水平方向（零速时保持朝向，无状态残留） */
+  /** 每实例上次速度方向（零速保持，基类 resolveFlightDirection 消费） */
   private dirs: Float32Array;
   private readonly capacity: number;
-  private readonly quadW: number;
-  private readonly quadH: number;
+  /** 实例世界尺寸（宽/高，由 BulletEntity.computeWorldSize 提供） */
+  private readonly size: { width: number; height: number };
 
   constructor(
     scene: THREE.Scene,
@@ -92,8 +92,7 @@ export class BulletRenderer {
     opts: { width: number; height: number },
   ) {
     this.capacity = capacity;
-    this.quadW = opts.width;
-    this.quadH = opts.height;
+    this.size = { ...opts };
     this.matrices = new Float32Array(capacity * 16);
     this.dirs = new Float32Array(capacity * 3);
 
@@ -164,15 +163,15 @@ export class BulletRenderer {
   }
 
   /**
-   * ★ 每帧同步：实体快照 → instance matrix（单次 draw call 的输入）
-   * 朝向由子弹基类函数 BulletEntity.computeRenderTransform 决定：
-   * 头尾轴 = 飞行方向（头向前），绕头尾轴滚转使平面法线尽量朝相机
-   * → 摄像机看到的子弹面积最大。
+   * ★ 每帧同步：实体快照 → instance matrix（单次 draw call 的输入）。
+   * 全部朝向/锚点/矩阵逻辑 = BulletEntity 基类公共函数：
+   *   resolveFlightDirection（零速保持上次）→ computeRenderTransform
+   *   （头尾轴 = 速度 3D 共线 + 滚转到面积最大）→ writeRenderMatrix（零分配写入）。
    */
   sync(sources: ArrayLike<BulletInstanceSource>, camera: THREE.Camera): void {
     this.material.uniforms.uTime.value = performance.now() / 1000;
     const m = this.matrices;
-    const halfH = this.quadH / 2;
+    const camPos = camera.position;
     for (let i = 0; i < this.capacity; i++) {
       const o = i * 16;
       const src = sources[i];
@@ -183,24 +182,12 @@ export class BulletRenderer {
         m[o + 12] = m[o + 13] = m[o + 14] = m[o + 15] = 0;
         continue;
       }
-      // 零速：保持上次速度方向（3D，反弹/静止无跳变）
-      let vx = src.velocity.x, vy = src.velocity.y, vz = src.velocity.z;
-      if (Math.hypot(vx, vy, vz) < 1e-6) {
-        const di = i * 3;
-        vx = this.dirs[di]; vy = this.dirs[di + 1]; vz = this.dirs[di + 2];
-      } else {
-        this.dirs[i * 3] = vx; this.dirs[i * 3 + 1] = vy; this.dirs[i * 3 + 2] = vz;
-      }
-      // ★ 基类公共函数：头尾轴与速度 3D 共线 + 滚转到面积最大
-      const t = BulletEntity.computeRenderTransform(src.position, { x: vx, y: vy, z: vz }, camera.position);
-      // 弹头锚点：quad 中心 = 实体位置 - long * 半高（弹头端压在碰撞点）
-      const cx = src.position.x - t.long.x * halfH;
-      const cy = src.position.y - t.long.y * halfH;
-      const cz = src.position.z - t.long.z * halfH;
-      m[o] = t.right.x * this.quadW; m[o + 1] = t.right.y * this.quadW; m[o + 2] = t.right.z * this.quadW; m[o + 3] = 0;
-      m[o + 4] = t.long.x * this.quadH; m[o + 5] = t.long.y * this.quadH; m[o + 6] = t.long.z * this.quadH; m[o + 7] = 0;
-      m[o + 8] = t.normal.x; m[o + 9] = t.normal.y; m[o + 10] = t.normal.z; m[o + 11] = 0;
-      m[o + 12] = cx; m[o + 13] = cy; m[o + 14] = cz; m[o + 15] = 1;
+      // ★ 基类函数：零速保持上次方向（3D，反弹/静止无跳变）
+      const last = { x: this.dirs[i * 3], y: this.dirs[i * 3 + 1], z: this.dirs[i * 3 + 2] };
+      const dir = BulletEntity.resolveFlightDirection(src.velocity, last);
+      this.dirs[i * 3] = dir.x; this.dirs[i * 3 + 1] = dir.y; this.dirs[i * 3 + 2] = dir.z;
+      // ★ 基类函数：头尾轴 + 滚转 + 弹头锚点 + 缩放 → 零分配写入矩阵
+      BulletEntity.writeRenderMatrix(m, o, src.position, dir, camPos, this.size);
     }
     this.mesh.instanceMatrix.array.set(this.matrices);
     this.mesh.instanceMatrix.needsUpdate = true;

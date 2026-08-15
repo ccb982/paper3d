@@ -48,14 +48,9 @@ export class BulletManager {
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
     this.visual = glRenderer ? new BulletVisual(glRenderer, asset) : null;
 
-    // ---- ③ 3D 渲染器（InstancedMesh；世界尺寸 = 宽 2/3，高按纹理宽高比）----
-    const pair = asset.getFramePair(0);
-    const aspect = pair ? pair.base.image.height / pair.base.image.width : 3.79;
-    const quadW = 2 / 3;
-    this.renderer = new BulletRenderer(scene, capacity, {
-      width: quadW,
-      height: quadW * aspect,
-    });
+    // ---- ③ 3D 渲染器（InstancedMesh；世界尺寸 = 基类函数计算）----
+    const quadSize = BulletEntity.computeWorldSize(asset);
+    this.renderer = new BulletRenderer(scene, capacity, quadSize);
     this.renderer.setTexture(this.visual ? this.visual.getTexture() : null);
     // ★ 扭曲/纹理旋转参数（素材包 per_frame_data 携带；纯纹理包无 → 关闭）
     const anyBundle = asset as {

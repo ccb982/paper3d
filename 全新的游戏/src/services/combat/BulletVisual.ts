@@ -1,7 +1,7 @@
 // ============================================================
 // BulletVisual —— 离屏子弹实体（2D 纹理空间，不感知 3D 世界）
 // ============================================================
-// 自包含的子弹"画面生产者"：
+// 自包含的子弹"画面生产者"（继承 OffscreenBake：RT 管线在基类）：
 //   - 流体（素材包 physics → FluidEffect，残差流动/注入）
 //   - 蒙版/VAT（素材包区域实体 → 模板裁剪 + 顶点位移）
 //   - 全部渲染进【1 张离屏 RT】→ 对外只暴露 getTexture()
@@ -10,6 +10,7 @@
 // 唯一接口 = 一张纹理（100 颗子弹的渲染器统一采样）。
 
 import * as THREE from 'three';
+import { OffscreenBake } from '../render/OffscreenBake';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import type { EntityMeshData } from '../../vendor/player/gl/renderer';
 import type { FrameAssetSource } from '../fx/AssetSource';
@@ -64,23 +65,25 @@ function makeCompositeMaterial(): THREE.ShaderMaterial {
   });
 }
 
-export class BulletVisual {
+export class BulletVisual extends OffscreenBake {
   private fluid: FluidEffect | null = null;
-  /** 离屏烘焙（蒙版实体存在 = 模板/VAT 路径；否则全幅合成路径） */
-  private bake: {
-    rt: THREE.WebGLRenderTarget;
-    scene: THREE.Scene;
-    camera: THREE.OrthographicCamera;
-    entities: EntityMeshData[];
-    baseTex: THREE.Texture;
-    residualTex: THREE.Texture;
-    fullQuad: THREE.Mesh | null; // 无蒙版实体时的全幅合成 quad
-    fullMat: THREE.ShaderMaterial;
-  } | null = null;
-  private renderer: THREE.WebGLRenderer | null;
+  /** 蒙版场景内容（区域实体；空 = 全幅合成路径） */
+  private scene: THREE.Scene;
+  private entities: EntityMeshData[] = [];
+  private baseTex: THREE.Texture;
+  private residualTex: THREE.Texture;
+  private fullQuad: THREE.Mesh | null;
+  private fullMat: THREE.ShaderMaterial;
 
   constructor(renderer: THREE.WebGLRenderer, asset: FrameAssetSource) {
-    this.renderer = renderer;
+    const pair = asset.getFramePair(0);
+    const w = pair?.base.image.width ?? 134;
+    const h = pair?.base.image.height ?? 508;
+    super(renderer, w, h);
+    this.scene = new THREE.Scene();
+    this.baseTex = pair!.base;
+    this.residualTex = pair!.residual;
+
     // ---- 流体（素材包 physics；纯纹理包无物理 → null） ----
     const anyAsset = asset as { getFluidEffect?: (idx: number, r: THREE.WebGLRenderer) => FluidEffect | null };
     if (anyAsset.getFluidEffect) {
@@ -90,28 +93,11 @@ export class BulletVisual {
         this.fluid = null;
       }
     }
-    // ---- 离屏烘焙 ----
-    const pair = asset.getFramePair(0);
-    if (!pair) return;
-    const w = pair.base.image.width;
-    const h = pair.base.image.height;
-    const rt = new THREE.WebGLRenderTarget(w, h, {
-      format: THREE.RGBAFormat,
-      type: THREE.UnsignedByteType,
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      wrapS: THREE.ClampToEdgeWrapping,
-      wrapT: THREE.ClampToEdgeWrapping,
-      depthBuffer: false,
-      stencilBuffer: true,
-    });
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-    // 蒙版实体（素材包区域实体 → 模板裁剪 + VAT 位移）
+    // ---- 蒙版实体（素材包区域实体 → 模板裁剪 + VAT 位移） ----
     const anyBundle = asset as { getFrameRenderData?: (i: number) => { entities?: EntityMeshData[] } | null };
-    const entities = anyBundle.getFrameRenderData?.(0)?.entities ?? [];
-    for (const em of entities) {
+    this.entities = anyBundle.getFrameRenderData?.(0)?.entities ?? [];
+    for (const em of this.entities) {
       const cm = em.mesh.material as THREE.ShaderMaterial;
       cm.depthTest = false;
       cm.depthWrite = false;
@@ -128,18 +114,16 @@ export class BulletVisual {
       em.mesh.position.set(0, 0, 0);
       em.mesh.scale.set(1, 1, 1);
       em.mesh.quaternion.identity();
-      scene.add(em.fillMesh);
-      scene.add(em.mesh);
+      this.scene.add(em.fillMesh);
+      this.scene.add(em.mesh);
     }
 
-    // 无蒙版实体时的全幅合成 quad（同一 RT）
-    const fullMat = makeCompositeMaterial();
-    const fullQuad = entities.length === 0
-      ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), fullMat)
+    // ---- 无蒙版实体时的全幅合成 quad（同一 RT） ----
+    this.fullMat = makeCompositeMaterial();
+    this.fullQuad = this.entities.length === 0
+      ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.fullMat)
       : null;
-    if (fullQuad) scene.add(fullQuad);
-
-    this.bake = { rt, scene, camera, entities, baseTex: pair.base, residualTex: pair.residual, fullQuad, fullMat };
+    if (this.fullQuad) this.scene.add(this.fullQuad);
   }
 
   /** ★ 每帧驱动：流体 step + 烘焙（管理器仅在"有子弹在飞"时调用） */
@@ -157,78 +141,55 @@ export class BulletVisual {
     }
   }
 
-  /** ★ 输出烘焙纹理（渲染器唯一采样源） */
-  getTexture(): THREE.Texture | null {
-    return this.bake ? this.bake.rt.texture : null;
-  }
-
   /** 离屏烘焙：模板裁剪 + VAT 位移 + 流体合成 → 一张纹理 */
   private bakeFrame(): void {
-    const b = this.bake;
-    const renderer = this.renderer;
-    if (!b || !renderer) return;
     const time = performance.now() / 1000;
     const useFluid = !!this.fluid;
 
-    for (const em of b.entities) {
+    for (const em of this.entities) {
       (em.fillMesh.material as THREE.ShaderMaterial).uniforms.uTime.value = time;
       (em.fillMesh.material as THREE.ShaderMaterial).uniforms.uFramesPerSecond.value = 30;
       const cm = em.mesh.material as THREE.ShaderMaterial;
       cm.uniforms.uTime.value = time;
       cm.uniforms.uFramesPerSecond.value = 30;
-      cm.uniforms.uBaseTexture.value = b.baseTex;
-      cm.uniforms.uResidual.value = b.residualTex;
+      cm.uniforms.uBaseTexture.value = this.baseTex;
+      cm.uniforms.uResidual.value = this.residualTex;
       cm.uniforms.uUseFluid.value = useFluid ? 1 : 0;
       if (useFluid) cm.uniforms.uFluidTex.value = this.fluid!.getCompositeTexture();
       cm.uniforms.uDistortEnabled.value = 0;
     }
-    if (b.fullQuad) {
-      const m = b.fullMat.uniforms;
-      m.uBase.value = b.baseTex;
-      m.uResidual.value = b.residualTex;
+    if (this.fullQuad) {
+      const m = this.fullMat.uniforms;
+      m.uBase.value = this.baseTex;
+      m.uResidual.value = this.residualTex;
       m.uUseFluid.value = useFluid ? 1 : 0;
       if (useFluid) m.uFluidTex.value = this.fluid!.getCompositeTexture();
     }
 
-    const prevTarget = renderer.getRenderTarget();
-    const prevClearColor = new THREE.Color();
-    renderer.getClearColor(prevClearColor);
-    const prevClearAlpha = renderer.getClearAlpha();
-    renderer.setRenderTarget(b.rt);
-    renderer.setClearColor(0x000000, 0);
-    const autoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    const gl = renderer.getContext();
+    const gl = this.renderer.getContext();
     gl.enable(gl.STENCIL_TEST);
-    renderer.clear(true, true, true); // 清颜色+模板（透明底）
-
-    if (b.entities.length > 0) {
+    this.begin();
+    if (this.entities.length > 0) {
       // ① fill 遍：区域多边形写模板（invert）
-      for (const em of b.entities) em.fillMesh.visible = true;
-      renderer.render(b.scene, b.camera);
+      for (const em of this.entities) em.fillMesh.visible = true;
+      this.renderer.render(this.scene, this.camera);
       // ② color 遍：模板 Equal 1 内采样（base+residual / 流体 + VAT）
-      for (const em of b.entities) em.fillMesh.visible = false;
-      renderer.render(b.scene, b.camera);
-      for (const em of b.entities) em.fillMesh.visible = true;
-    } else if (b.fullQuad) {
+      for (const em of this.entities) em.fillMesh.visible = false;
+      this.renderer.render(this.scene, this.camera);
+      for (const em of this.entities) em.fillMesh.visible = true;
+    } else if (this.fullQuad) {
       // 无蒙版：全幅合成
-      renderer.render(b.scene, b.camera);
+      this.renderer.render(this.scene, this.camera);
     }
-
     gl.disable(gl.STENCIL_TEST);
-    renderer.autoClear = autoClear;
-    renderer.setClearColor(prevClearColor, prevClearAlpha);
-    renderer.setRenderTarget(prevTarget);
+    this.end();
   }
 
-  dispose(): void {
+  override dispose(): void {
     this.fluid?.dispose();
     this.fluid = null;
-    if (this.bake) {
-      this.bake.rt.dispose();
-      this.bake.fullMat.dispose();
-      this.bake.fullQuad?.geometry.dispose();
-      this.bake = null;
-    }
+    this.fullMat.dispose();
+    this.fullQuad?.geometry.dispose();
+    super.dispose();
   }
 }

@@ -7,6 +7,7 @@
 
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
+import type { FrameAssetSource } from '../fx/AssetSource';
 import { applyDamage } from './DamagePipeline';
 
 export interface BulletEntityOptions {
@@ -145,6 +146,23 @@ export class BulletEntity extends EntityBase {
   }
 
   /**
+   * ★ 飞行方向解析（基类公共函数）：
+   *   速度 3D 方向；零速（静止/纯竖直前的一帧）→ 保持上次方向（反弹/静止无跳变）。
+   */
+  static resolveFlightDirection(
+    velocity: { x: number; y: number; z: number },
+    last: { x: number; y: number; z: number } | null,
+  ): { x: number; y: number; z: number } {
+    if (Math.hypot(velocity.x, velocity.y, velocity.z) > 1e-6) {
+      return { x: velocity.x, y: velocity.y, z: velocity.z };
+    }
+    if (last && Math.hypot(last.x, last.y, last.z) > 1e-6) {
+      return { x: last.x, y: last.y, z: last.z };
+    }
+    return { x: 0, y: 0, z: 1 };
+  }
+
+  /**
    * ★ 渲染朝向（提取为子弹基类公共函数，只绕头尾轴旋转）：
    *   - 长轴（头尾，头向前）= 【速度方向全 3D 共线】——反弹后速度变向，
    *     头尾轴自动跟随新方向（不会"横着走"）
@@ -190,5 +208,45 @@ export class BulletEntity extends EntityBase {
       long: { x: lx, y: ly, z: lz },
       normal: { x: nx, y: ny, z: nz },
     };
+  }
+
+  /**
+   * ★ 实例矩阵（基类公共函数）：computeRenderTransform + 弹头锚点 + 缩放
+   *   → 列主序 16 元素写入 target[offset..offset+16]（零分配，渲染器直接消费）。
+   *   弹头锚点：quad 中心 = 实体位置 - long × 半高（弹头端压在碰撞点）。
+   */
+  static writeRenderMatrix(
+    target: Float32Array | number[],
+    offset: number,
+    position: { x: number; y: number; z: number },
+    velocity: { x: number; y: number; z: number },
+    camPos: { x: number; y: number; z: number },
+    size: { width: number; height: number },
+  ): void {
+    const t = this.computeRenderTransform(position, velocity, camPos);
+    const halfH = size.height / 2;
+    target[offset] = t.right.x * size.width;
+    target[offset + 1] = t.right.y * size.width;
+    target[offset + 2] = t.right.z * size.width;
+    target[offset + 3] = 0;
+    target[offset + 4] = t.long.x * size.height;
+    target[offset + 5] = t.long.y * size.height;
+    target[offset + 6] = t.long.z * size.height;
+    target[offset + 7] = 0;
+    target[offset + 8] = t.normal.x;
+    target[offset + 9] = t.normal.y;
+    target[offset + 10] = t.normal.z;
+    target[offset + 11] = 0;
+    target[offset + 12] = position.x - t.long.x * halfH;
+    target[offset + 13] = position.y - t.long.y * halfH;
+    target[offset + 14] = position.z - t.long.z * halfH;
+    target[offset + 15] = 1;
+  }
+
+  /** ★ 世界尺寸（基类公共函数）：宽 = baseWidth（默认 2/3），高按纹理宽高比 */
+  static computeWorldSize(asset: FrameAssetSource, baseWidth = 2 / 3): { width: number; height: number } {
+    const pair = asset.getFramePair(0);
+    const aspect = pair ? pair.base.image.height / pair.base.image.width : 3.79;
+    return { width: baseWidth, height: baseWidth * aspect };
   }
 }
