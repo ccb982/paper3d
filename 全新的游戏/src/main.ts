@@ -39,9 +39,16 @@ async function boot() {
   const asset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
   console.log('[boot] 主角已加载:', asset.frameNames().join(', '));
 
-  // ★ 加载爆裂黎明子弹纹理包（主角射击使用；池中 100 颗子弹共用同一资产）
-  const bulletAsset = await FtxAsset.load(encodeURI('/fx/bullets/维什戴尔子弹.ftx3.gz'));
-  console.log('[boot] 子弹已加载:', bulletAsset.frameNames().join(', '));
+  // ★ 加载爆裂黎明子弹资产（优先素材包 .scene.zip：携带扭曲参数 + 流体物理；
+  //   缺省回退纯纹理包 .ftx3.gz（无扭曲/无流体））
+  let bulletAsset: FtxAsset | Asset;
+  try {
+    bulletAsset = await Asset.load(encodeURI('/fx/bullets/维什戴尔子弹.scene.zip'));
+    console.log('[boot] 子弹素材包已加载:', bulletAsset.frameNames().join(', '));
+  } catch {
+    bulletAsset = await FtxAsset.load(encodeURI('/fx/bullets/维什戴尔子弹.ftx3.gz'));
+    console.log('[boot] 子弹回退纯纹理包:', bulletAsset.frameNames().join(', '));
+  }
 
   // ★ 加载测试敌人（普瑞赛斯：特效包，2 帧前/后 + 扭曲参数）
   const enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
@@ -54,7 +61,7 @@ async function boot() {
   const physics = new PhysicsWorld();
 
   // ---- 世界模式（实体管线：主角/敌人/物品实体 + 无限 chunk 地图 + 相机 + 交互） ----
-  const mode = new WorldMode(scene, camera, asset, physics, enemyAsset, bulletAsset);
+  const mode = new WorldMode(scene, camera, renderer, asset, physics, enemyAsset, bulletAsset);
 
   // ★ 碰撞事件已由实体管线接管（EntityManager 按 userData=实体 id 分发 → 实体 onCollision）
 

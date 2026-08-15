@@ -11,6 +11,7 @@
 import * as THREE from 'three';
 import { FxRendererBase } from './FxRendererBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
+import type { EntityMeshData } from '../../vendor/player/gl/renderer';
 
 const VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -107,6 +108,16 @@ export class FTXQuad extends FxRendererBase {
   private mesh2: THREE.Mesh | null = null;
   private crossPlane = false;
   private qY90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+  /** ★ 蒙版特效实体（素材包区域实体：模板裁剪 + VAT 顶点位移；★ 全池共享场景） */
+  private _maskEntities: EntityMeshData[] = [];
+  private _maskScene: THREE.Scene | null = null;
+
+  /** ★ 挂载共享蒙版资源（BulletManager 建立一次，全池子弹共用；
+   *   renderMaskPass 每颗子弹用自身变换渲染同一份网格） */
+  setMaskShared(mask: { entities: EntityMeshData[]; scene: THREE.Scene } | null): void {
+    this._maskEntities = mask ? mask.entities : [];
+    this._maskScene = mask ? mask.scene : null;
+  }
 
   /** ★ 交叉双平面开关（子弹用）：第二块贴片绕长轴旋转 90°，
    *   与主贴片十字相交 → 体积感，永不出现"竖着的纸片" */
@@ -150,6 +161,83 @@ export class FTXQuad extends FxRendererBase {
    *   拖尾纯视觉不参与碰撞。偏移量 = 贴片半长，需在 setScale* 之后调用 */
   setHeadAnchored(on: boolean): void {
     this._headAnchorLen = on ? Math.abs(this.baseScale.y) / 2 : 0;
+  }
+
+  /** ★ 蒙版特效渲染（在场景渲染之后调用，保证蒙版覆盖在主贴片之上）：
+   *   ① fill 遍：区域多边形写模板（invert，evenodd 孔洞）
+   *   ② color 遍：模板 Equal 1 内采样纹理（base+residual / 流体 / 扭曲）
+   *   与主贴片同位置/缩放/朝向（含交叉双平面第二遍）；只清模板不动 color */
+  renderMaskPass(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
+    if (this._maskEntities.length === 0 || !this._maskScene) return;
+    const u = this.material.uniforms;
+    const time = performance.now() / 1000;
+    const quadPos = this.mesh!.position;
+    const quadScale = this.mesh!.scale;
+    const baseQ = this.mesh!.quaternion;
+
+    const applyTransform = (em: EntityMeshData, q: THREE.Quaternion, timeNow: number) => {
+      em.fillMesh.position.copy(quadPos);
+      em.fillMesh.scale.copy(quadScale);
+      em.fillMesh.quaternion.copy(q);
+      em.mesh.position.copy(quadPos);
+      em.mesh.scale.copy(quadScale);
+      em.mesh.quaternion.copy(q);
+      const fm = em.fillMesh.material as THREE.ShaderMaterial;
+      fm.uniforms.uTime.value = timeNow;
+      fm.uniforms.uFramesPerSecond.value = 30;
+      const cm = em.mesh.material as THREE.ShaderMaterial;
+      cm.uniforms.uTime.value = timeNow;
+      cm.uniforms.uFramesPerSecond.value = 30;
+      cm.uniforms.uBaseTexture.value = u.uBaseTexture.value;
+      cm.uniforms.uResidual.value = u.uResidual.value;
+      cm.uniforms.uUseFluid.value = u.uUseFluid.value;
+      if (u.uUseFluid.value > 0.5) cm.uniforms.uFluidTex.value = u.uFluidTex.value;
+      cm.uniforms.uDistortEnabled.value = u.uDistortEnabled.value;
+      cm.uniforms.uDistortAmplitude.value = u.uDistortAmplitude.value;
+      cm.uniforms.uDistortFrequency.value = u.uDistortFrequency.value;
+      cm.uniforms.uDistortSpeed.value = u.uDistortSpeed.value;
+      cm.uniforms.uDistortRotation.value = u.uDistortRotation.value;
+    };
+
+    const gl = renderer.getContext();
+    // ★ 关闭 autoClear：renderer.render 默认会清掉整屏（颜色/深度/模板）——
+    //   蒙版 pass 只清模板，必须保留主场景画面
+    const autoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    gl.enable(gl.STENCIL_TEST);
+    renderer.clear(false, false, true); // 只清模板
+
+    // ① fill 遍（写模板；color 遍的 colorMesh 此时被模板剔除，零输出）
+    for (const em of this._maskEntities) {
+      em.fillMesh.visible = true;
+      applyTransform(em, baseQ, time);
+    }
+    renderer.render(this._maskScene, camera);
+    // ② color 遍（模板 Equal 1 内采样；隐藏 fill 防二次反转）
+    for (const em of this._maskEntities) {
+      em.fillMesh.visible = false;
+      applyTransform(em, baseQ, time);
+    }
+    renderer.render(this._maskScene, camera);
+    // ③ 交叉双平面：第二平面绕长轴 90° 再来一遍（体积感一致）
+    if (this.crossPlane) {
+      const q2 = new THREE.Quaternion().copy(baseQ).multiply(this.qY90);
+      renderer.clear(false, false, true);
+      for (const em of this._maskEntities) {
+        em.fillMesh.visible = true;
+        applyTransform(em, q2, time);
+      }
+      renderer.render(this._maskScene, camera);
+      for (const em of this._maskEntities) {
+        em.fillMesh.visible = false;
+        applyTransform(em, q2, time);
+      }
+      renderer.render(this._maskScene, camera);
+    }
+    // 恢复 fill 可见（下次调用）
+    for (const em of this._maskEntities) em.fillMesh.visible = true;
+    gl.disable(gl.STENCIL_TEST);
+    renderer.autoClear = autoClear;
   }
 
   /** 切换底部锚点（默认 true：脚踩地面） */

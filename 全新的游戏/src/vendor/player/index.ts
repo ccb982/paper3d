@@ -116,8 +116,10 @@ export class Asset {
           THREE.RGFormat, THREE.FloatType,
         );
         dispTex.needsUpdate = true;
-        dispTex.minFilter = THREE.LinearFilter;
-        dispTex.magFilter = THREE.LinearFilter;
+        // ★ Nearest：RG Float32 在 WebGL2 不可线性过滤（采样未定义），
+        //   且 VAT 按顶点索引/帧精确取点，最近邻即正确
+        dispTex.minFilter = THREE.NearestFilter;
+        dispTex.magFilter = THREE.NearestFilter;
         dispTex.wrapS = THREE.ClampToEdgeWrapping;
         dispTex.wrapT = THREE.ClampToEdgeWrapping;
         dispTex.flipY = false;

@@ -46,6 +46,13 @@ export class BulletBase extends EntityBase {
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
   recycle: (() => void) | null = null;
 
+  /** ★ 挂载共享蒙版资源（BulletManager 建立一次；全池子弹共用同一套网格/场景） */
+  setMaskShared(mask: { entities: import('../vendor/player/gl/renderer').EntityMeshData[]; scene: THREE.Scene } | null): void {
+    if (this.renderer) {
+      (this.renderer as FTXQuad).setMaskShared(mask);
+    }
+  }
+
   constructor(
     em: EntityManager,
     scene: THREE.Scene,
@@ -89,6 +96,25 @@ export class BulletBase extends EntityBase {
       // ★ 弹头锚点：纹理上端 = 弹头，压在物理碰撞点上 →
       //   "只有子弹头有碰撞体积"（拖尾纯视觉，不参与碰撞）
       (this.renderer as FTXQuad).setHeadAnchored(true);
+    }
+
+    // ★ 扭曲参数（素材包 .scene.zip 的 per_frame_data 携带；纯纹理包/程序圆点无 →
+    //   不设置 = 无扭曲，与旧行为一致）
+    const bundleAsset = asset as {
+      getFrameRenderData?: (idx: number) => {
+        distortEnabled: boolean; distortAmplitude: number; distortFrequency: number;
+        distortSpeed: number; distortRotation: number;
+      } | null;
+    };
+    const fd0 = bundleAsset.getFrameRenderData?.(0);
+    if (fd0 && this.renderer) {
+      (this.renderer as FTXQuad).setDistort({
+        enabled: fd0.distortEnabled,
+        amplitude: fd0.distortAmplitude,
+        frequency: fd0.distortFrequency,
+        speed: fd0.distortSpeed,
+        rotation: fd0.distortRotation,
+      });
     }
 
     // ★ 初始即失活（入池状态）：退出管线 + 藏到地图外
@@ -177,5 +203,11 @@ export class BulletBase extends EntityBase {
       }
     }
     super.render(camera);
+  }
+
+  /** ★ 蒙版特效渲染（WorldMode 场景渲染后调用：模板裁剪 + VAT 位移，见 FTXQuad） */
+  renderMaskPass(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
+    if (!this.active || !this.renderer) return;
+    (this.renderer as FTXQuad).renderMaskPass(renderer, camera);
   }
 }

@@ -66,11 +66,13 @@ export class WorldMode {
   constructor(
     private scene: THREE.Scene,
     private camera: THREE.PerspectiveCamera,
+    /** ★ WebGL 渲染器（子弹共享流体效果创建需要） */
+    private renderer: THREE.WebGLRenderer,
     asset: FtxAsset,
     physics: PhysicsWorld,
     enemyAsset?: Asset,
-    /** ★ 爆裂黎明子弹资产（FTX 纹理包；缺省回退到程序生成发光圆点） */
-    bulletAsset?: FtxAsset,
+    /** ★ 爆裂黎明子弹资产（素材包 scene.zip 或纹理包 ftx3；缺省回退到程序生成发光圆点） */
+    bulletAsset?: Asset | FtxAsset,
   ) {
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张；架构 3.8） ----
     this.raster = new RasterMap();
@@ -151,8 +153,9 @@ export class WorldMode {
     // ---- ★ UI 层（小地图 + 血量 HUD，展示层统一入口） ----
     this.ui = new UILayer(this.raster);
 
-    // ---- ★ 子弹池（100 颗常驻复用；资产 = 爆裂黎明子弹 FTX，缺省回退发光圆点） ----
-    this.bullets = new BulletManager(this.entities, scene, bulletAsset ?? createSolidBulletAsset(), 100);
+    // ---- ★ 子弹池（100 颗常驻复用；资产 = 爆裂黎明子弹，缺省回退发光圆点；
+    //        渲染器传入供共享流体效果创建） ----
+    this.bullets = new BulletManager(this.entities, scene, bulletAsset ?? createSolidBulletAsset(), 100, this.renderer);
     // ★ AI 攻击意图 = 统一攻击管线（近战/远程/范围分派 → 伤害管线）
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
   }
@@ -197,9 +200,12 @@ export class WorldMode {
     // ---- ★ 玩家发射（左键：单次按下立即一发；长按 = 间隔持续发射） ----
     this.bulletCooldown -= dt;
     if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
-      this.bulletCooldown = 0.3;
+      this.bulletCooldown = 0.45;
       this.firePlayerBullet();
     }
+
+    // ---- ★ 共享流体效果驱动（子弹纹理流动；无流体配置时零开销） ----
+    this.bullets.update(dt);
   }
 
   /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */
@@ -259,17 +265,19 @@ export class WorldMode {
       dirX: dx,
       dirY: dy,
       dirZ: dz,
-      speed: 12,
+      speed: 0,
       camp: 'player',
       lifetime: 2,
       damage: 10, // ★ 穿透伤害（敌人 30 血 → 3 发）
     });
   }
 
-  /** 渲染：实体管线遍历画 + 地图 + 场景 */
+  /** 渲染：实体管线遍历画 + 地图 + 场景 + 蒙版特效（模板/VAT，覆盖在场景之上） */
   render(renderer: THREE.WebGLRenderer): void {
     this.entities.renderAll(this.camera);
     renderer.render(this.scene, this.camera);
+    // ★ 蒙版特效（区域实体模板裁剪 + VAT 顶点位移）；无蒙版实体时零开销
+    this.bullets.renderMaskPass(renderer, this.camera);
   }
 
   /** ★ 无限地图 chunk 同步：数据（RasterMap）+ 地面刚体 + 视觉网格。

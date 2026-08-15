@@ -65,11 +65,13 @@ function makeFillMaterial(displacementTexture: THREE.DataTexture, vertexCount: n
       uniform float uFramesPerSecond;
       uniform float uTotalFrames;
       uniform float uVertexCount;
+      attribute float aIndex;
       varying vec2 vUv;
       void main() {
         float frame = mod(uTime * uFramesPerSecond, uTotalFrames);
         float texY = frame / uTotalFrames;
-        float texX = (float(gl_VertexID) + 0.5) / uVertexCount;
+        // ★ 显式顶点索引（不用 gl_VertexID：索引/非索引绘制、WebGL1/2 语义一致）
+        float texX = (aIndex + 0.5) / uVertexCount;
         vec2 displacement = texture2D(uDisplacementTex, vec2(texX, texY)).rg;
         vUv = uv;
         vec3 pos = position + vec3(displacement, 0.0);
@@ -105,11 +107,13 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
       uniform float uFramesPerSecond;
       uniform float uTotalFrames;
       uniform float uVertexCount;
+      attribute float aIndex;
       varying vec2 vUv;
       void main() {
         float frame = mod(uTime * uFramesPerSecond, uTotalFrames);
         float texY = frame / uTotalFrames;
-        float texX = (float(gl_VertexID) + 0.5) / uVertexCount;
+        // ★ 显式顶点索引（不用 gl_VertexID：索引/非索引绘制、WebGL1/2 语义一致）
+        float texX = (aIndex + 0.5) / uVertexCount;
         vec2 displacement = texture2D(uDisplacementTex, vec2(texX, texY)).rg;
         vUv = uv;
         vec3 pos = position + vec3(displacement, 0.0);
@@ -246,9 +250,14 @@ export function buildEntityMesh(
 
   const { positions, uvs, indices, vertexCount: vc } = tri;
 
+  // ★ 显式顶点索引属性（VAT 位移采样用；与位移纹理行序一致）
+  const indexAttr = new Float32Array(vc);
+  for (let i = 0; i < vc; i++) indexAttr[i] = i;
+
   const fillGeo = new THREE.BufferGeometry();
   fillGeo.setAttribute('position', new THREE.BufferAttribute(positions, 2));
   fillGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  fillGeo.setAttribute('aIndex', new THREE.BufferAttribute(indexAttr, 1));
   fillGeo.setIndex(indices);
   fillGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0.5, 0.5, 0), 1);
   fillGeo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, -0.01), new THREE.Vector3(1, 1, 0.01));
@@ -260,6 +269,7 @@ export function buildEntityMesh(
   const colorGeo = new THREE.BufferGeometry();
   colorGeo.setAttribute('position', new THREE.BufferAttribute(positions.slice(), 2));
   colorGeo.setAttribute('uv', new THREE.BufferAttribute(uvs.slice(), 2));
+  colorGeo.setAttribute('aIndex', new THREE.BufferAttribute(indexAttr.slice(), 1));
   colorGeo.setIndex([...indices]);
   colorGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0.5, 0.5, 0), 1);
   colorGeo.boundingBox = new THREE.Box3(new THREE.Vector3(0, 0, -0.01), new THREE.Vector3(1, 1, 0.01));
