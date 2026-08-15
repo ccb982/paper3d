@@ -99,16 +99,57 @@ export class FTXQuad extends FxRendererBase {
   private _texAspect = 1;
   /** ★ 贴片底部锚点（脚踩地面）：setPosition 时 y 自动 + 贴片半高 */
   private anchorBottom = true;
+  /** ★ 对齐轴（setAlignToAxis 记录：本地 +y 的世界方向） */
+  private _alignAxis = new THREE.Vector3(0, 0, 1);
+  /** ★ 弹头锚点偏移量（0 = 居中；>0 = 贴片沿对齐轴回移半长，弹头上端压在碰撞点） */
+  private _headAnchorLen = 0;
+  /** ★ 交叉第二平面（子弹立体感：绕长轴 90°，任何视角不显纸片） */
+  private mesh2: THREE.Mesh | null = null;
+  private crossPlane = false;
+  private qY90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+
+  /** ★ 交叉双平面开关（子弹用）：第二块贴片绕长轴旋转 90°，
+   *   与主贴片十字相交 → 体积感，永不出现"竖着的纸片" */
+  enableCrossPlane(on: boolean): void {
+    this.crossPlane = on;
+    this.syncMesh2();
+  }
+
+  /** 同步第二平面（位置/缩放/四元数 = 主贴片绕本地 y 再转 90°；可见性跟随） */
+  private syncMesh2(): void {
+    if (!this.mesh2 || !this.mesh) return;
+    this.mesh2.position.copy(this.mesh.position);
+    this.mesh2.scale.copy(this.mesh.scale);
+    this.mesh2.quaternion.copy(this.mesh.quaternion).multiply(this.qY90);
+    this.mesh2.visible = this.crossPlane && this.mesh.visible;
+  }
 
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
     this.setScale(baseSize, baseSize * this._texAspect);
   }
 
-  /** ★ 覆写 setPosition：底部锚点 → y 自动抬升贴片半高（脚踩地面，不在地底） */
+  /** ★ 覆写 setPosition：底部锚点 → y 自动抬升贴片半高（脚踩地面，不在地底）；
+   *   弹头锚点 → 贴片沿对齐轴回移半长，使弹头上端（本地 +y = 飞行前方）压在碰撞点 */
   override setPosition(x: number, y: number, z = 0): void {
-    const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
-    super.setPosition(x, y + halfH, z);
+    if (this._headAnchorLen > 0) {
+      // 弹头上端 = mesh.position + axis*len → 平移后压在中心点（碰撞点）
+      super.setPosition(
+        x - this._headAnchorLen * this._alignAxis.x,
+        y - this._headAnchorLen * this._alignAxis.y,
+        z - this._headAnchorLen * this._alignAxis.z,
+      );
+    } else {
+      const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
+      super.setPosition(x, y + halfH, z);
+    }
+    this.syncMesh2();
+  }
+
+  /** ★ 弹头锚点开关（子弹用）：弹头上端（纹理上端 = 飞行前方）对准碰撞点，
+   *   拖尾纯视觉不参与碰撞。偏移量 = 贴片半长，需在 setScale* 之后调用 */
+  setHeadAnchored(on: boolean): void {
+    this._headAnchorLen = on ? Math.abs(this.baseScale.y) / 2 : 0;
   }
 
   /** 切换底部锚点（默认 true：脚踩地面） */
@@ -156,6 +197,30 @@ export class FTXQuad extends FxRendererBase {
     //   关闭 three 3D 视锥兜底（避免双剔除 + O(场景mesh) 遍历）
     this.mesh.frustumCulled = false;
     scene.add(this.mesh);
+    // ★ 交叉第二平面（共享几何/材质；默认隐藏，enableCrossPlane 开启）
+    this.mesh2 = new THREE.Mesh(geometry, this.material);
+    this.mesh2.frustumCulled = false;
+    this.mesh2.visible = false;
+    scene.add(this.mesh2);
+  }
+
+  /** ★ 可见性（主贴片 + 交叉平面同步；LOD 渐隐同材质自动生效） */
+  override setVisible(visible: boolean): void {
+    super.setVisible(visible);
+    this.syncMesh2();
+  }
+
+  protected override applyFlip(): void {
+    super.applyFlip();
+    this.syncMesh2();
+  }
+
+  override dispose(): void {
+    if (this.mesh2) {
+      this.mesh2.parent?.remove(this.mesh2);
+      this.mesh2 = null;
+    }
+    super.dispose();
   }
 
   override render(state: { frameIndex: number }, fluidTexture?: THREE.Texture | null): void {
@@ -174,6 +239,36 @@ export class FTXQuad extends FxRendererBase {
   }
 
   /**
+   * ★ 弹道式朝向（交叉双平面版，永不显纸片）：
+   *   - 长轴（本地 +y，弹头端）精确对齐飞行方向 axis
+   *   - 法线（本地 +z）绕长轴旋转到尽量朝相机 → 交叉双平面共同呈现体积感
+   *   - 正对/背对相机时平面交叉成"十字小点"（弹头正面观），不会竖直立牌
+   *   - 无 NaN 分支，任何角度都可见
+   */
+  setAlignToAxis(axis: { x: number; y: number; z: number }, camDir: { x: number; z: number }): void {
+    if (!this.mesh) return;
+    const v = new THREE.Vector3(axis.x, axis.y, axis.z);
+    if (v.lengthSq() < 1e-8) return;
+    v.normalize();
+    this._alignAxis.copy(v);
+    // 相机方向（水平，指向相机）
+    let c = new THREE.Vector3(-camDir.x, 0, -camDir.z);
+    if (c.lengthSq() < 1e-8) c.set(0, 0, -1);
+    c.normalize();
+    // 平面1 法线 = 相机方向投影 ⊥ 长轴（正对长轴时用世界 up 兜底，绝不 NaN）
+    let n1 = c.clone().addScaledVector(v, -c.dot(v));
+    if (n1.lengthSq() < 1e-6) {
+      n1.set(0, 1, 0).addScaledVector(v, -v.y);
+      if (n1.lengthSq() < 1e-6) n1.set(1, 0, 0).addScaledVector(v, -v.x);
+    }
+    n1.normalize();
+    // 平面2 法线 = 长轴 × 平面1 法线（两平面 90° 相交）
+    const n2 = new THREE.Vector3().crossVectors(v, n1).normalize();
+    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n2, v, n1));
+    this.applyFlip(); // 内部同步 mesh2
+  }
+
+  /**
    * ★ yaw-only billboard：贴片垂直地面（立牌式），只绕 Y 轴水平面向相机。
    * 相机俯视时看到角色的"正面上部"、侧面看是薄片——有 3D 立体感
    * （方舟/八方旅人式 2D 角色融入 3D 场景的标准做法）。
@@ -187,7 +282,7 @@ export class FTXQuad extends FxRendererBase {
       dir.normalize();
       this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
     }
-    this.applyFlip();
+    this.applyFlip(); // 内部同步 mesh2
   }
 
   /** ★ 设置呼吸式扭曲参数（特效包每帧参数；关 = 停用） */
@@ -215,7 +310,7 @@ export class FTXQuad extends FxRendererBase {
   setYaw(rad: number): void {
     if (!this.mesh) return;
     this.mesh.rotation.y = rad;
-    this.applyFlip();
+    this.applyFlip(); // 内部同步 mesh2
   }
 
   /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可；★ 记录纹理宽高比） */

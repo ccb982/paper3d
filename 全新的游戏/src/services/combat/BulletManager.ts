@@ -49,10 +49,13 @@ export class BulletManager {
     }
   }
 
-  /** ★ 发射：从池取一颗激活；池空返回 null */
+  /** ★ 发射：从池取一颗激活；池空（100 颗全在飞）返回 null（短暂无弹，等回收） */
   spawn(opts: SpawnBulletOptions): BulletBase | null {
     const b = this.pool.pop();
-    if (!b) return null;
+    if (!b) {
+      console.warn('[bullet] 池空：100 颗都在飞行中，等待超时回收');
+      return null;
+    }
     const full: BulletOptions = {
       ...opts,
       kind: 'bullet' as const,

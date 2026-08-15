@@ -80,9 +80,18 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
 
   // ② 物理兜底（地面/墙）
   const rb = opts.exclude?.entity.rigidBody;
-  const hit = em.physics?.castRay(o, d, maxDist, rb?.handle);
+  let hit = em.physics?.castRay(o, d, maxDist, rb?.handle);
+  // ★ 飞行中的子弹不算瞄准落点：向天发射时准星路径上可能有上一发子弹，
+  //   否则新子弹会"追着子弹"飞（无命中 → 由调用方沿相机射线兜底发射）
+  if (hit) {
+    const hitEntity = em.get(hit.handle);
+    if (hitEntity && hitEntity.kind === 'bullet') hit = null;
+  }
   if (!hit) return null;
   const dist = Math.hypot(hit.point.x - o.x, hit.point.y - o.y, hit.point.z - o.z);
+  // ★ 落点过近（射线起点在碰撞体内 → rapier 返回 TOI≈0）→ 视为无命中，
+  //   由调用方走备用瞄准（相机射线远处落点），避免子弹朝自己/脚下打
+  if (dist < 0.5) return null;
   return { point: hit.point, target: null, distance: dist };
 }
 

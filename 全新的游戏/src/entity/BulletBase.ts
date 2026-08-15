@@ -12,6 +12,8 @@ import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { applyDamage } from '../services/combat/DamagePipeline';
+import type { InputActions } from '../platform/input/InputActions';
+import type { CameraFrame } from '../services/camera/CameraController';
 
 export interface BulletOptions extends Omit<EntityBaseOptions, 'physics'> {
   /** 发射方向（3D 单位向量；含竖直分量 dirY = 准星俯仰） */
@@ -67,6 +69,8 @@ export class BulletBase extends EntityBase {
     });
     this.camp = opts.camp;
     this.physicsMode = 'read'; // 物理飞行 → 位置读回
+    // ★ 弹道式朝向：长轴 = 飞行方向（onUpdate 按物理速度对齐）+ 交叉双平面
+    this.billboard = false;
     this.attachToScene(scene);
 
     // 贴片配置：中心锚点（贴片中心 = 物理球心）+ 尺寸 + 纹理映射
@@ -77,7 +81,13 @@ export class BulletBase extends EntityBase {
         { width: pair.base.image.width, height: pair.base.image.height },
         { x: 0, y: 0, w: pair.base.image.width, h: pair.base.image.height },
       );
-      this.renderer.setScale(0.2, 0.2);
+      // ★ 竖长纹理（如爆裂黎明子弹 134×508）保持宽高比，不被压成正方形
+      (this.renderer as FTXQuad).setScaleKeepAspect(0.18);
+      // ★ 交叉双平面：体积感子弹，任何视角都不显"纸片/竖直立牌"
+      (this.renderer as FTXQuad).enableCrossPlane(true);
+      // ★ 弹头锚点：纹理上端 = 弹头，压在物理碰撞点上 →
+      //   "只有子弹头有碰撞体积"（拖尾纯视觉，不参与碰撞）
+      (this.renderer as FTXQuad).setHeadAnchored(true);
     }
 
     // ★ 初始即失活（入池状态）：退出管线 + 藏到地图外
@@ -145,8 +155,17 @@ export class BulletBase extends EntityBase {
     return new FTXQuad(scene, source);
   }
 
-  protected override onUpdate(dt: number): void {
+  protected override onUpdate(dt: number, _input?: InputActions, cameraFrame?: CameraFrame): void {
     if (!this.active) return;
+    // ★ 弹道式朝向：长轴对齐飞行方向（物理速度，反弹自动跟随）+ 交叉双平面
+    const rb = this.entity.rigidBody;
+    if (rb && this.em.physics && this.renderer) {
+      const v = this.em.physics.getLinearVelocity(rb.handle);
+      const fwd = cameraFrame?.forward ?? { x: 0, z: 1 };
+      // ★ 纹理上端 = 弹头 → 长轴对齐速度（本地 +y 指向 axis）：
+      //   弹头朝前、拖尾在后
+      (this.renderer as FTXQuad).setAlignToAxis(v, fwd);
+    }
     this.lifetime -= dt;
     if (this.lifetime <= 0) {
       this.deactivate(); // 超时回池（复用，不销毁）

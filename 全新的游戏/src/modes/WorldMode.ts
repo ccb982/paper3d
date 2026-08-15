@@ -42,8 +42,6 @@ export class WorldMode {
   private crosshair: Crosshair;
   /** ★ UI 层（左上角：小地图 + 血量 HUD；展示层统一入口，模式层不直接画 UI） */
   private ui: UILayer;
-  /** 测试子弹资产（程序生成发光圆点；正式资产就绪后替换） */
-  private bulletAsset = createSolidBulletAsset();
   /** ★ 子弹池（预创建 100 颗反复使用；超时回池，不销毁重建） */
   private bullets: BulletManager;
   private bulletCooldown = 0;
@@ -71,6 +69,8 @@ export class WorldMode {
     asset: FtxAsset,
     physics: PhysicsWorld,
     enemyAsset?: Asset,
+    /** ★ 爆裂黎明子弹资产（FTX 纹理包；缺省回退到程序生成发光圆点） */
+    bulletAsset?: FtxAsset,
   ) {
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张；架构 3.8） ----
     this.raster = new RasterMap();
@@ -151,8 +151,8 @@ export class WorldMode {
     // ---- ★ UI 层（小地图 + 血量 HUD，展示层统一入口） ----
     this.ui = new UILayer(this.raster);
 
-    // ---- ★ 子弹池（100 颗常驻复用） ----
-    this.bullets = new BulletManager(this.entities, scene, this.bulletAsset, 100);
+    // ---- ★ 子弹池（100 颗常驻复用；资产 = 爆裂黎明子弹 FTX，缺省回退发光圆点） ----
+    this.bullets = new BulletManager(this.entities, scene, bulletAsset ?? createSolidBulletAsset(), 100);
     // ★ AI 攻击意图 = 统一攻击管线（近战/远程/范围分派 → 伤害管线）
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
   }
@@ -226,36 +226,38 @@ export class WorldMode {
     return hit ? hit.point : null;
   }
 
-  /** ★ 玩家发射（TPS 标准）：
-   *   ① 摄像机沿准星方向发一条射线 → 落点（命中目标实体/地面，排除玩家自身）
-   *   ② 角色枪口 → 落点 = 发射方向（3D：带俯仰） */
+  /** ★ 玩家发射（粗暴稳定版：无条件发射，方向永远有值）：
+   *   ① 方向默认 = 相机准星方向（永远可用：瞄天/无落点/任何异常都能打）
+   *   ② 准星落点命中（实体/地面）→ 用「枪口→落点」方向修正（更准）
+   *   ③ 落点缺失/异常（无命中、NaN、过近）→ 保持相机方向，照常发射 */
   private firePlayerBullet(): void {
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z }; // 枪口
-    // ① 准星射线 → 落点（aimRaycast 内部已算相机射线，无命中 → 远处兜底）
-    const aim = this.aimRaycast();
-    let tx: number, ty: number, tz: number;
-    if (aim) {
-      tx = aim.x; ty = aim.y; tz = aim.z;
-    } else {
-      const ray = this.cameraRay();
-      tx = ray.origin.x + ray.dir.x * 200;
-      ty = ray.origin.y + ray.dir.y * 200;
-      tz = ray.origin.z + ray.dir.z * 200;
-    }
-    // ② 枪口 → 落点（3D 方向）
-    const dx = tx - muzzle.x, dy = ty - muzzle.y, dz = tz - muzzle.z;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    // ★ 玩家射击 = 统一攻击管线（projectile 意图）
+    const ray = this.cameraRay();
+    // ① 默认方向：相机准星方向
+    let dx = ray.dir.x, dy = ray.dir.y, dz = ray.dir.z;
+    // ② 准星落点修正（try/catch：射线任何异常都不阻断发射）
+    try {
+      const aim = this.aimRaycast();
+      if (aim && isFinite(aim.x) && isFinite(aim.y) && isFinite(aim.z)) {
+        const ax = aim.x - muzzle.x, ay = aim.y - muzzle.y, az = aim.z - muzzle.z;
+        const alen2 = ax * ax + ay * ay + az * az;
+        if (alen2 >= 1) {
+          const alen = Math.sqrt(alen2);
+          dx = ax / alen; dy = ay / alen; dz = az / alen;
+        }
+      }
+    } catch { /* 忽略：保持相机方向 */ }
+    // ③ 发射（无条件）
     executeAttack(this.entities, this.bullets, {
       type: 'projectile',
       source: this.player,
-      x: muzzle.x + (dx / len) * 0.8,
-      y: muzzle.y + (dy / len) * 0.8,
-      z: muzzle.z + (dz / len) * 0.8,
-      dirX: dx / len,
-      dirY: dy / len,
-      dirZ: dz / len,
+      x: muzzle.x + dx * 0.8,
+      y: muzzle.y + dy * 0.8,
+      z: muzzle.z + dz * 0.8,
+      dirX: dx,
+      dirY: dy,
+      dirZ: dz,
       speed: 12,
       camp: 'player',
       lifetime: 2,
