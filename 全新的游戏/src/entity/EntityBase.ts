@@ -69,8 +69,6 @@ export abstract class EntityBase {
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
   billboard = true;
-  /** ★ 流体合成纹理提供者（子弹共享流体效果；null = 普通贴片渲染） */
-  fluidTextureProvider: (() => THREE.Texture | null) | null = null;
 
   /** ★ 碰撞体积（实例基类属性：形状 + 刚体 y 偏移；null = 无碰撞声明）
    *   子类覆写/构造赋值（角色=胶囊 / 子弹=球 / 物品=球）；物理创建与刚体偏移统一从这里取 */
@@ -251,8 +249,7 @@ export abstract class EntityBase {
     if (this.billboard && 'setBillboard' in this.renderer) {
       (this.renderer as { setBillboard(c: THREE.Camera): void }).setBillboard(camera);
     }
-    // ★ 流体合成纹理（共享流体效果 → uFluidTex 分支；无 → 普通 base+residual）
-    this.renderer.render(this.state, this.fluidTextureProvider?.() ?? null);
+    this.renderer.render(this.state, null);
     // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
     for (const fx of this.effectSlots.values()) fx.render(camera);
   }

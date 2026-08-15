@@ -205,7 +205,7 @@ export class WorldMode {
     }
 
     // ---- ★ 共享流体效果驱动（子弹纹理流动；无流体配置时零开销） ----
-    this.bullets.update(dt);
+    this.bullets.update(dt, this.camera);
   }
 
   /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */

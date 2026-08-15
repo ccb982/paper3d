@@ -36,7 +36,9 @@ export class DesktopBinding {
     //   锁定后鼠标无限移动（movementX/Y），视角可 360° 旋转
     if (lockEl) {
       lockEl.addEventListener('click', () => {
-        lockEl.requestPointerLock?.();
+        // ★ 刚退出锁定时浏览器禁止立即重新请求（SecurityError）→ 吞掉并忽略
+        const p = (lockEl.requestPointerLock as unknown as (() => Promise<void>) | undefined)?.();
+        p?.catch?.(() => {});
       });
     }
     document.addEventListener('pointerlockchange', () => {

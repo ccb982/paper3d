@@ -99,36 +99,16 @@ export class FTXQuad extends FxRendererBase {
   private _texAspect = 1;
   /** ★ 贴片底部锚点（脚踩地面）：setPosition 时 y 自动 + 贴片半高 */
   private anchorBottom = true;
-  /** ★ 对齐轴（setAlignToAxis 记录：本地 +y 的世界方向） */
-  private _alignAxis = new THREE.Vector3(0, 0, 1);
-  /** ★ 弹头锚点偏移量（0 = 居中；>0 = 贴片沿对齐轴回移半长，弹头上端压在碰撞点） */
-  private _headAnchorLen = 0;
 
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
     this.setScale(baseSize, baseSize * this._texAspect);
   }
 
-  /** ★ 覆写 setPosition：底部锚点 → y 自动抬升贴片半高（脚踩地面，不在地底）；
-   *   弹头锚点 → 贴片沿对齐轴回移半长，使弹头上端（本地 +y = 飞行前方）压在碰撞点 */
+  /** ★ 覆写 setPosition：底部锚点 → y 自动抬升贴片半高（脚踩地面，不在地底） */
   override setPosition(x: number, y: number, z = 0): void {
-    if (this._headAnchorLen > 0) {
-      // 弹头上端 = mesh.position + axis*len → 平移后压在中心点（碰撞点）
-      super.setPosition(
-        x - this._headAnchorLen * this._alignAxis.x,
-        y - this._headAnchorLen * this._alignAxis.y,
-        z - this._headAnchorLen * this._alignAxis.z,
-      );
-    } else {
-      const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
-      super.setPosition(x, y + halfH, z);
-    }
-  }
-
-  /** ★ 弹头锚点开关（子弹用）：弹头上端（纹理上端 = 飞行前方）对准碰撞点，
-   *   拖尾纯视觉不参与碰撞。偏移量 = 贴片半长，需在 setScale* 之后调用 */
-  setHeadAnchored(on: boolean): void {
-    this._headAnchorLen = on ? Math.abs(this.baseScale.y) / 2 : 0;
+    const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
+    super.setPosition(x, y + halfH, z);
   }
 
   /** 切换底部锚点（默认 true：脚踩地面） */
@@ -191,30 +171,6 @@ export class FTXQuad extends FxRendererBase {
     } else {
       u.uUseFluid.value = 0;
     }
-  }
-
-  /**
-   * ★ 恒水平弹道朝向（单平面，不随相机转）：
-   *   - 长轴（本地 +y = 弹头端）沿【水平飞行方向】（速度的 XZ 投影，恒水平）
-   *   - 平面法线 = 世界 up → 贴片永远水平躺着（不是竖直立牌面对相机）
-   *   - 纯竖直飞行（XZ≈0）→ 保持上一次水平朝向，绝不产生竖直贴片
-   */
-  setAlignToAxis(axis: { x: number; y: number; z: number }): void {
-    if (!this.mesh) return;
-    // 长轴 = 水平飞行方向（XZ 投影）
-    let v = new THREE.Vector3(axis.x, 0, axis.z);
-    if (v.lengthSq() < 1e-6) {
-      // 纯竖直飞行（朝天/朝地）：保持上一次的水平朝向
-      if (this._alignAxis.lengthSq() > 0.5) v.copy(this._alignAxis);
-      else v.set(1, 0, 0);
-    }
-    v.normalize();
-    this._alignAxis.copy(v);
-    // 平面水平躺平：法线 = up，长轴 = v，侧向 = up × v
-    const up = new THREE.Vector3(0, 1, 0);
-    const side = new THREE.Vector3().crossVectors(up, v).normalize();
-    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, v, up));
-    this.applyFlip();
   }
 
   /**
