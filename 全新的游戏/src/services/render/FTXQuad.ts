@@ -11,7 +11,6 @@
 import * as THREE from 'three';
 import { FxRendererBase } from './FxRendererBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
-import type { EntityMeshData } from '../../vendor/player/gl/renderer';
 
 const VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
@@ -104,36 +103,6 @@ export class FTXQuad extends FxRendererBase {
   private _alignAxis = new THREE.Vector3(0, 0, 1);
   /** ★ 弹头锚点偏移量（0 = 居中；>0 = 贴片沿对齐轴回移半长，弹头上端压在碰撞点） */
   private _headAnchorLen = 0;
-  /** ★ 交叉第二平面（子弹立体感：绕长轴 90°，任何视角不显纸片） */
-  private mesh2: THREE.Mesh | null = null;
-  private crossPlane = false;
-  private qY90 = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
-  /** ★ 蒙版特效实体（素材包区域实体：模板裁剪 + VAT 顶点位移；★ 全池共享场景） */
-  private _maskEntities: EntityMeshData[] = [];
-  private _maskScene: THREE.Scene | null = null;
-
-  /** ★ 挂载共享蒙版资源（BulletManager 建立一次，全池子弹共用；
-   *   renderMaskPass 每颗子弹用自身变换渲染同一份网格） */
-  setMaskShared(mask: { entities: EntityMeshData[]; scene: THREE.Scene } | null): void {
-    this._maskEntities = mask ? mask.entities : [];
-    this._maskScene = mask ? mask.scene : null;
-  }
-
-  /** ★ 交叉双平面开关（子弹用）：第二块贴片绕长轴旋转 90°，
-   *   与主贴片十字相交 → 体积感，永不出现"竖着的纸片" */
-  enableCrossPlane(on: boolean): void {
-    this.crossPlane = on;
-    this.syncMesh2();
-  }
-
-  /** 同步第二平面（位置/缩放/四元数 = 主贴片绕本地 y 再转 90°；可见性跟随） */
-  private syncMesh2(): void {
-    if (!this.mesh2 || !this.mesh) return;
-    this.mesh2.position.copy(this.mesh.position);
-    this.mesh2.scale.copy(this.mesh.scale);
-    this.mesh2.quaternion.copy(this.mesh.quaternion).multiply(this.qY90);
-    this.mesh2.visible = this.crossPlane && this.mesh.visible;
-  }
 
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
@@ -154,90 +123,12 @@ export class FTXQuad extends FxRendererBase {
       const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
       super.setPosition(x, y + halfH, z);
     }
-    this.syncMesh2();
   }
 
   /** ★ 弹头锚点开关（子弹用）：弹头上端（纹理上端 = 飞行前方）对准碰撞点，
    *   拖尾纯视觉不参与碰撞。偏移量 = 贴片半长，需在 setScale* 之后调用 */
   setHeadAnchored(on: boolean): void {
     this._headAnchorLen = on ? Math.abs(this.baseScale.y) / 2 : 0;
-  }
-
-  /** ★ 蒙版特效渲染（在场景渲染之后调用，保证蒙版覆盖在主贴片之上）：
-   *   ① fill 遍：区域多边形写模板（invert，evenodd 孔洞）
-   *   ② color 遍：模板 Equal 1 内采样纹理（base+residual / 流体 / 扭曲）
-   *   与主贴片同位置/缩放/朝向（含交叉双平面第二遍）；只清模板不动 color */
-  renderMaskPass(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
-    if (this._maskEntities.length === 0 || !this._maskScene) return;
-    const u = this.material.uniforms;
-    const time = performance.now() / 1000;
-    const quadPos = this.mesh!.position;
-    const quadScale = this.mesh!.scale;
-    const baseQ = this.mesh!.quaternion;
-
-    const applyTransform = (em: EntityMeshData, q: THREE.Quaternion, timeNow: number) => {
-      em.fillMesh.position.copy(quadPos);
-      em.fillMesh.scale.copy(quadScale);
-      em.fillMesh.quaternion.copy(q);
-      em.mesh.position.copy(quadPos);
-      em.mesh.scale.copy(quadScale);
-      em.mesh.quaternion.copy(q);
-      const fm = em.fillMesh.material as THREE.ShaderMaterial;
-      fm.uniforms.uTime.value = timeNow;
-      fm.uniforms.uFramesPerSecond.value = 30;
-      const cm = em.mesh.material as THREE.ShaderMaterial;
-      cm.uniforms.uTime.value = timeNow;
-      cm.uniforms.uFramesPerSecond.value = 30;
-      cm.uniforms.uBaseTexture.value = u.uBaseTexture.value;
-      cm.uniforms.uResidual.value = u.uResidual.value;
-      cm.uniforms.uUseFluid.value = u.uUseFluid.value;
-      if (u.uUseFluid.value > 0.5) cm.uniforms.uFluidTex.value = u.uFluidTex.value;
-      cm.uniforms.uDistortEnabled.value = u.uDistortEnabled.value;
-      cm.uniforms.uDistortAmplitude.value = u.uDistortAmplitude.value;
-      cm.uniforms.uDistortFrequency.value = u.uDistortFrequency.value;
-      cm.uniforms.uDistortSpeed.value = u.uDistortSpeed.value;
-      cm.uniforms.uDistortRotation.value = u.uDistortRotation.value;
-    };
-
-    const gl = renderer.getContext();
-    // ★ 关闭 autoClear：renderer.render 默认会清掉整屏（颜色/深度/模板）——
-    //   蒙版 pass 只清模板，必须保留主场景画面
-    const autoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    gl.enable(gl.STENCIL_TEST);
-    renderer.clear(false, false, true); // 只清模板
-
-    // ① fill 遍（写模板；color 遍的 colorMesh 此时被模板剔除，零输出）
-    for (const em of this._maskEntities) {
-      em.fillMesh.visible = true;
-      applyTransform(em, baseQ, time);
-    }
-    renderer.render(this._maskScene, camera);
-    // ② color 遍（模板 Equal 1 内采样；隐藏 fill 防二次反转）
-    for (const em of this._maskEntities) {
-      em.fillMesh.visible = false;
-      applyTransform(em, baseQ, time);
-    }
-    renderer.render(this._maskScene, camera);
-    // ③ 交叉双平面：第二平面绕长轴 90° 再来一遍（体积感一致）
-    if (this.crossPlane) {
-      const q2 = new THREE.Quaternion().copy(baseQ).multiply(this.qY90);
-      renderer.clear(false, false, true);
-      for (const em of this._maskEntities) {
-        em.fillMesh.visible = true;
-        applyTransform(em, q2, time);
-      }
-      renderer.render(this._maskScene, camera);
-      for (const em of this._maskEntities) {
-        em.fillMesh.visible = false;
-        applyTransform(em, q2, time);
-      }
-      renderer.render(this._maskScene, camera);
-    }
-    // 恢复 fill 可见（下次调用）
-    for (const em of this._maskEntities) em.fillMesh.visible = true;
-    gl.disable(gl.STENCIL_TEST);
-    renderer.autoClear = autoClear;
   }
 
   /** 切换底部锚点（默认 true：脚踩地面） */
@@ -285,30 +176,6 @@ export class FTXQuad extends FxRendererBase {
     //   关闭 three 3D 视锥兜底（避免双剔除 + O(场景mesh) 遍历）
     this.mesh.frustumCulled = false;
     scene.add(this.mesh);
-    // ★ 交叉第二平面（共享几何/材质；默认隐藏，enableCrossPlane 开启）
-    this.mesh2 = new THREE.Mesh(geometry, this.material);
-    this.mesh2.frustumCulled = false;
-    this.mesh2.visible = false;
-    scene.add(this.mesh2);
-  }
-
-  /** ★ 可见性（主贴片 + 交叉平面同步；LOD 渐隐同材质自动生效） */
-  override setVisible(visible: boolean): void {
-    super.setVisible(visible);
-    this.syncMesh2();
-  }
-
-  protected override applyFlip(): void {
-    super.applyFlip();
-    this.syncMesh2();
-  }
-
-  override dispose(): void {
-    if (this.mesh2) {
-      this.mesh2.parent?.remove(this.mesh2);
-      this.mesh2 = null;
-    }
-    super.dispose();
   }
 
   override render(state: { frameIndex: number }, fluidTexture?: THREE.Texture | null): void {
@@ -327,41 +194,27 @@ export class FTXQuad extends FxRendererBase {
   }
 
   /**
-   * ★ 弹道式朝向（交叉双平面，视角自适应）：
-   *   - 长轴（本地 +y，弹头端）精确对齐飞行方向 axis
-   *   - 平面1 法线尽量朝相机（viewV 投影 ⊥ 长轴）
-   *   - ★ 视角越接近正上方/正下方，双平面绕长轴越转 45°（十字体感）：
-   *     俯视时两平面各露半面 → 有厚度；平视（TPS 常规）保持贴脸横拖尾
-   *   - 无 NaN 分支，任何角度都可见
+   * ★ 恒水平弹道朝向（单平面，不随相机转）：
+   *   - 长轴（本地 +y = 弹头端）沿【水平飞行方向】（速度的 XZ 投影，恒水平）
+   *   - 平面法线 = 世界 up → 贴片永远水平躺着（不是竖直立牌面对相机）
+   *   - 纯竖直飞行（XZ≈0）→ 保持上一次水平朝向，绝不产生竖直贴片
    */
-  setAlignToAxis(
-    axis: { x: number; y: number; z: number },
-    camPos: { x: number; y: number; z: number },
-    pos: { x: number; y: number; z: number },
-  ): void {
+  setAlignToAxis(axis: { x: number; y: number; z: number }): void {
     if (!this.mesh) return;
-    const v = new THREE.Vector3(axis.x, axis.y, axis.z);
-    if (v.lengthSq() < 1e-8) return;
+    // 长轴 = 水平飞行方向（XZ 投影）
+    let v = new THREE.Vector3(axis.x, 0, axis.z);
+    if (v.lengthSq() < 1e-6) {
+      // 纯竖直飞行（朝天/朝地）：保持上一次的水平朝向
+      if (this._alignAxis.lengthSq() > 0.5) v.copy(this._alignAxis);
+      else v.set(1, 0, 0);
+    }
     v.normalize();
     this._alignAxis.copy(v);
-    // 视线方向（子弹 → 相机，含俯仰）
-    let viewV = new THREE.Vector3(camPos.x - pos.x, camPos.y - pos.y, camPos.z - pos.z);
-    if (viewV.lengthSq() < 1e-8) viewV.set(0, 0, -1);
-    viewV.normalize();
-    // 平面1 法线基准 = 视线投影 ⊥ 长轴（正对长轴时用世界 up 兜底，绝不 NaN）
-    let n1 = viewV.clone().addScaledVector(v, -viewV.dot(v));
-    if (n1.lengthSq() < 1e-6) {
-      n1.set(0, 1, 0).addScaledVector(v, -v.y);
-      if (n1.lengthSq() < 1e-6) n1.set(1, 0, 0).addScaledVector(v, -v.x);
-    }
-    n1.normalize();
-    // ★ 自适应交叉角：视线越竖直，双平面越转 45°（俯视有厚度；平视保持贴脸）
-    const elev = Math.abs(viewV.y);
-    const theta = (Math.PI / 4) * Math.max(0, Math.min(1, (elev - 0.15) / 0.55));
-    const n1a = n1.clone().applyAxisAngle(v, theta).normalize();
-    const n1b = new THREE.Vector3().crossVectors(v, n1a).normalize();
-    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(n1b, v, n1a));
-    this.applyFlip(); // 内部同步 mesh2
+    // 平面水平躺平：法线 = up，长轴 = v，侧向 = up × v
+    const up = new THREE.Vector3(0, 1, 0);
+    const side = new THREE.Vector3().crossVectors(up, v).normalize();
+    this.mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(side, v, up));
+    this.applyFlip();
   }
 
   /**
@@ -378,7 +231,7 @@ export class FTXQuad extends FxRendererBase {
       dir.normalize();
       this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
     }
-    this.applyFlip(); // 内部同步 mesh2
+    this.applyFlip();
   }
 
   /** ★ 设置呼吸式扭曲参数（特效包每帧参数；关 = 停用） */
@@ -406,7 +259,7 @@ export class FTXQuad extends FxRendererBase {
   setYaw(rad: number): void {
     if (!this.mesh) return;
     this.mesh.rotation.y = rad;
-    this.applyFlip(); // 内部同步 mesh2
+    this.applyFlip();
   }
 
   /** 按资产帧数据更新 bbox 映射（资产加载后调用一次即可；★ 记录纹理宽高比） */

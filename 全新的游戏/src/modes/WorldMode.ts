@@ -265,19 +265,17 @@ export class WorldMode {
       dirX: dx,
       dirY: dy,
       dirZ: dz,
-      speed: 0,
+      speed: 15,
       camp: 'player',
       lifetime: 2,
       damage: 10, // ★ 穿透伤害（敌人 30 血 → 3 发）
     });
   }
 
-  /** 渲染：实体管线遍历画 + 地图 + 场景 + 蒙版特效（模板/VAT，覆盖在场景之上） */
+  /** 渲染：实体管线遍历画 + 地图 + 场景（蒙版/VAT 已离屏烘焙进子弹纹理） */
   render(renderer: THREE.WebGLRenderer): void {
     this.entities.renderAll(this.camera);
     renderer.render(this.scene, this.camera);
-    // ★ 蒙版特效（区域实体模板裁剪 + VAT 顶点位移）；无蒙版实体时零开销
-    this.bullets.renderMaskPass(renderer, this.camera);
   }
 
   /** ★ 无限地图 chunk 同步：数据（RasterMap）+ 地面刚体 + 视觉网格。

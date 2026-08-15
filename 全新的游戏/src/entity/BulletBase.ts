@@ -46,13 +46,6 @@ export class BulletBase extends EntityBase {
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
   recycle: (() => void) | null = null;
 
-  /** ★ 挂载共享蒙版资源（BulletManager 建立一次；全池子弹共用同一套网格/场景） */
-  setMaskShared(mask: { entities: import('../vendor/player/gl/renderer').EntityMeshData[]; scene: THREE.Scene } | null): void {
-    if (this.renderer) {
-      (this.renderer as FTXQuad).setMaskShared(mask);
-    }
-  }
-
   constructor(
     em: EntityManager,
     scene: THREE.Scene,
@@ -91,8 +84,6 @@ export class BulletBase extends EntityBase {
       // ★ 竖长纹理（如爆裂黎明子弹 134×508）保持宽高比，不被压成正方形
       //   宽度 ≈ 1.0 世界单位再收窄 1/3 → 0.667
       (this.renderer as FTXQuad).setScaleKeepAspect(2 / 3);
-      // ★ 交叉双平面：体积感子弹，任何视角都不显"纸片/竖直立牌"
-      (this.renderer as FTXQuad).enableCrossPlane(true);
       // ★ 弹头锚点：纹理上端 = 弹头，压在物理碰撞点上 →
       //   "只有子弹头有碰撞体积"（拖尾纯视觉，不参与碰撞）
       (this.renderer as FTXQuad).setHeadAnchored(true);
@@ -191,23 +182,16 @@ export class BulletBase extends EntityBase {
     }
   }
 
-  /** ★ 渲染阶段驱动弹道式朝向（有真实相机位置：俯视/仰视自适应十字厚度） */
+  /** ★ 渲染阶段驱动恒水平弹道朝向（长轴 = 水平飞行方向，贴片躺平不随相机转） */
   override render(camera: THREE.Camera): void {
     if (this.active && this.renderer) {
       const rb = this.entity.rigidBody;
       if (rb && this.em.physics) {
         const v = this.em.physics.getLinearVelocity(rb.handle);
-        const p = this.position;
-        // ★ 纹理上端 = 弹头 → 长轴对齐速度（本地 +y 指向 axis）：弹头朝前、拖尾在后
-        (this.renderer as FTXQuad).setAlignToAxis(v, camera.position, p);
+        // ★ 纹理上端 = 弹头 → 长轴沿水平飞行方向：弹头朝前、拖尾在后、恒水平
+        (this.renderer as FTXQuad).setAlignToAxis(v);
       }
     }
     super.render(camera);
-  }
-
-  /** ★ 蒙版特效渲染（WorldMode 场景渲染后调用：模板裁剪 + VAT 位移，见 FTXQuad） */
-  renderMaskPass(renderer: THREE.WebGLRenderer, camera: THREE.Camera): void {
-    if (!this.active || !this.renderer) return;
-    (this.renderer as FTXQuad).renderMaskPass(renderer, camera);
   }
 }
