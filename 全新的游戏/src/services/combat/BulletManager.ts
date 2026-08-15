@@ -57,11 +57,11 @@ export class BulletManager {
       height: quadW * aspect,
     });
     this.renderer.setTexture(this.visual ? this.visual.getTexture() : null);
-    // ★ 扭曲参数（素材包 per_frame_data 携带；纯纹理包无 → 关闭）
+    // ★ 扭曲/纹理旋转参数（素材包 per_frame_data 携带；纯纹理包无 → 关闭）
     const anyBundle = asset as {
       getFrameRenderData?: (idx: number) => {
         distortEnabled: boolean; distortAmplitude: number; distortFrequency: number;
-        distortSpeed: number; distortRotation: number;
+        distortSpeed: number; distortRotation: number; textureRotation: number;
       } | null;
     };
     const fd0 = anyBundle.getFrameRenderData?.(0);
@@ -73,6 +73,8 @@ export class BulletManager {
         speed: fd0.distortSpeed,
         rotation: fd0.distortRotation,
       });
+      // ★ 纹理旋转：只绕平面法线 Z 轴（2D UV 旋转）
+      this.renderer.setTextureRotation(fd0.textureRotation ?? 0);
     }
 
     // ---- ② 纯实体池 ----
@@ -111,7 +113,7 @@ export class BulletManager {
     return b;
   }
 
-  /** ★ 每帧驱动：离屏视觉 step（流体+烘焙）→ 渲染器同步实例变换（需相机朝向） */
+  /** ★ 每帧驱动：离屏视觉 step（流体+烘焙）→ 渲染器同步实例变换（需相机算滚转） */
   update(dt: number, camera: THREE.Camera): void {
     if (this.activeCount > 0) {
       this.visual?.step(dt);

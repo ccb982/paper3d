@@ -11,6 +11,7 @@
 // 绘制方式（材质/实例化）完全自决，不知道纹理是怎么烘焙出来的。
 
 import * as THREE from 'three';
+import { BulletEntity } from '../combat/BulletEntity';
 
 /** 渲染器消费的实体快照（纯数据，不持有实体） */
 export interface BulletInstanceSource {
@@ -27,12 +28,20 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uDistortFrequency;
   uniform float uDistortSpeed;
   uniform float uDistortRotation;
+  uniform float uTexRotation;
   uniform float uFadeAlpha;
   varying vec2 vUv;
 
   void main() {
     // 纹理数据 row0=顶部（烘焙约定）→ vUv 左下原点，翻转 v
     vec2 texUV = vec2(vUv.x, 1.0 - vUv.y);
+    // ★ 纹理旋转（只走 Z 轴 = 平面法线）：2D UV 旋转，与底图变换语义一致
+    if (abs(uTexRotation) > 0.001) {
+      float cosR = cos(uTexRotation);
+      float sinR = sin(uTexRotation);
+      vec2 d = texUV - 0.5;
+      texUV = vec2(d.x * cosR - d.y * sinR, d.x * sinR + d.y * cosR) + 0.5;
+    }
     // ★ 呼吸式扭曲（UV 空间，与 FTXQuad 一致；烘焙时已关闭，这里统一应用）
     if (uDistortEnabled > 0.5) {
       float time = uTime;
@@ -108,6 +117,7 @@ export class BulletRenderer {
         uDistortFrequency: { value: 5.0 },
         uDistortSpeed: { value: 1.2 },
         uDistortRotation: { value: 0 },
+        uTexRotation: { value: 0 },
         uFadeAlpha: { value: 1 },
       },
       transparent: true,
@@ -148,16 +158,21 @@ export class BulletRenderer {
     u.uDistortRotation.value = opts.rotation;
   }
 
+  /** ★ 纹理旋转（rad，绕平面法线 Z 轴；素材包底图变换参数） */
+  setTextureRotation(rad: number): void {
+    this.material.uniforms.uTexRotation.value = rad;
+  }
+
   /**
    * ★ 每帧同步：实体快照 → instance matrix（单次 draw call 的输入）
-   * 朝向：平面法线 = 水平朝相机（可见）；长轴（弹头/拖尾）= 速度水平投影
-   * （恒水平；正对/背对飞行时投影≈0 → 水平兜底 = 相机右侧，绝不竖直）
+   * 朝向由子弹基类函数 BulletEntity.computeRenderTransform 决定：
+   * 头尾轴 = 飞行方向（头向前），绕头尾轴滚转使平面法线尽量朝相机
+   * → 摄像机看到的子弹面积最大。
    */
   sync(sources: ArrayLike<BulletInstanceSource>, camera: THREE.Camera): void {
     this.material.uniforms.uTime.value = performance.now() / 1000;
     const m = this.matrices;
     const halfH = this.quadH / 2;
-    const cp = camera.position;
     for (let i = 0; i < this.capacity; i++) {
       const o = i * 16;
       const src = sources[i];
@@ -168,35 +183,23 @@ export class BulletRenderer {
         m[o + 12] = m[o + 13] = m[o + 14] = m[o + 15] = 0;
         continue;
       }
-      const px = src.position.x, py = src.position.y, pz = src.position.z;
-      // 平面法线：水平朝相机（子弹 → 相机的 XZ 投影）
-      let nx = cp.x - px, nz = cp.z - pz;
-      const nlen = Math.hypot(nx, nz);
-      if (nlen < 1e-6) { nx = 1; nz = 0; }
-      else { nx /= nlen; nz /= nlen; }
-      // 长轴（弹头/拖尾）：速度水平投影 ⊥ 法线；零投影 → 保持上次/水平兜底
-      let sx = src.velocity.x - nx * (src.velocity.x * nx + src.velocity.z * nz);
-      let sz = src.velocity.z - nz * (src.velocity.x * nx + src.velocity.z * nz);
-      const slen = Math.hypot(sx, sz);
-      const di = i * 3;
-      if (slen < 1e-6) {
-        sx = this.dirs[di]; sz = this.dirs[di + 1];
-        if (Math.hypot(sx, sz) < 1e-6) { sx = -nz; sz = nx; } // 相机右侧（恒水平）
+      // 零速：保持上次速度方向（3D，反弹/静止无跳变）
+      let vx = src.velocity.x, vy = src.velocity.y, vz = src.velocity.z;
+      if (Math.hypot(vx, vy, vz) < 1e-6) {
+        const di = i * 3;
+        vx = this.dirs[di]; vy = this.dirs[di + 1]; vz = this.dirs[di + 2];
       } else {
-        sx /= slen; sz /= slen;
-        this.dirs[di] = sx; this.dirs[di + 1] = sz;
+        this.dirs[i * 3] = vx; this.dirs[i * 3 + 1] = vy; this.dirs[i * 3 + 2] = vz;
       }
-      // 基（右手系）：X = Y×Z（竖直），Y = 长轴，Z = 法线
-      const xy = sz * nx - sx * nz;
-      const xl = Math.abs(xy) || 1;
-      const ux = 0, uy = xy / xl, uz = 0;
-      // 弹头锚点：quad 中心 = 实体位置 - Y * 半高（弹头端压在碰撞点）
-      const cx = px - sx * halfH;
-      const cy = py;
-      const cz = pz - sz * halfH;
-      m[o] = ux * this.quadW; m[o + 1] = uy * this.quadW; m[o + 2] = uz * this.quadW; m[o + 3] = 0;
-      m[o + 4] = sx * this.quadH; m[o + 5] = 0; m[o + 6] = sz * this.quadH; m[o + 7] = 0;
-      m[o + 8] = nx; m[o + 9] = 0; m[o + 10] = nz; m[o + 11] = 0;
+      // ★ 基类公共函数：头尾轴与速度 3D 共线 + 滚转到面积最大
+      const t = BulletEntity.computeRenderTransform(src.position, { x: vx, y: vy, z: vz }, camera.position);
+      // 弹头锚点：quad 中心 = 实体位置 - long * 半高（弹头端压在碰撞点）
+      const cx = src.position.x - t.long.x * halfH;
+      const cy = src.position.y - t.long.y * halfH;
+      const cz = src.position.z - t.long.z * halfH;
+      m[o] = t.right.x * this.quadW; m[o + 1] = t.right.y * this.quadW; m[o + 2] = t.right.z * this.quadW; m[o + 3] = 0;
+      m[o + 4] = t.long.x * this.quadH; m[o + 5] = t.long.y * this.quadH; m[o + 6] = t.long.z * this.quadH; m[o + 7] = 0;
+      m[o + 8] = t.normal.x; m[o + 9] = t.normal.y; m[o + 10] = t.normal.z; m[o + 11] = 0;
       m[o + 12] = cx; m[o + 13] = cy; m[o + 14] = cz; m[o + 15] = 1;
     }
     this.mesh.instanceMatrix.array.set(this.matrices);

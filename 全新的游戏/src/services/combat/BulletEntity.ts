@@ -143,4 +143,52 @@ export class BulletEntity extends EntityBase {
     if (rb && this.em.physics) return this.em.physics.getLinearVelocity(rb.handle);
     return { x: 0, y: 0, z: 0 };
   }
+
+  /**
+   * ★ 渲染朝向（提取为子弹基类公共函数，只绕头尾轴旋转）：
+   *   - 长轴（头尾，头向前）= 【速度方向全 3D 共线】——反弹后速度变向，
+   *     头尾轴自动跟随新方向（不会"横着走"）
+   *   - 绕长轴滚转使【平面法线尽量朝相机】→ 摄像机看到的子弹面积最大
+   *     （标准 velocity-aligned billboard）
+   *   - 视线沿长轴（正对/背对飞行）→ 法线退化为世界 up ⊥ 长轴
+   * 返回右手系基：long（头尾）、normal（平面法线）、right = long × normal（宽）。
+   */
+  static computeRenderTransform(
+    position: { x: number; y: number; z: number },
+    velocity: { x: number; y: number; z: number },
+    camPos: { x: number; y: number; z: number },
+  ): {
+    right: { x: number; y: number; z: number };
+    long: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+  } {
+    // 长轴（头尾，头向前）：与速度方向全 3D 共线（取反：纹理上端 = 弹头朝前）
+    let lx = -velocity.x, ly = -velocity.y, lz = -velocity.z;
+    const llen = Math.hypot(lx, ly, lz);
+    if (llen < 1e-6) { lx = 1; ly = 0; lz = 0; } else { lx /= llen; ly /= llen; lz /= llen; }
+    // 视线（子弹 → 相机）
+    let vx = camPos.x - position.x, vy = camPos.y - position.y, vz = camPos.z - position.z;
+    const vlen = Math.hypot(vx, vy, vz);
+    if (vlen < 1e-6) { vx = 0; vy = 1; vz = 0; } else { vx /= vlen; vy /= vlen; vz /= vlen; }
+    // 法线 = 视线投影 ⊥ 长轴（绕头尾轴滚转到最朝相机 → 面积最大）
+    const dot = vx * lx + vy * ly + vz * lz;
+    let nx = vx - lx * dot, ny = vy - ly * dot, nz = vz - lz * dot;
+    const nlen = Math.hypot(nx, ny, nz);
+    if (nlen < 1e-6) {
+      // 视线沿长轴（正对/背对飞行）：世界 up ⊥ 长轴兜底；长轴竖直时用 +x
+      nx = 0; ny = 1; nz = 0;
+      if (Math.abs(ly) > 0.99) { nx = 1; ny = 0; nz = 0; }
+    } else {
+      nx /= nlen; ny /= nlen; nz /= nlen;
+    }
+    // right = long × normal（右手系）
+    const rx = ly * nz - lz * ny;
+    const ry = lz * nx - lx * nz;
+    const rz = lx * ny - ly * nx;
+    return {
+      right: { x: rx, y: ry, z: rz },
+      long: { x: lx, y: ly, z: lz },
+      normal: { x: nx, y: ny, z: nz },
+    };
+  }
 }
