@@ -130,18 +130,16 @@ export function EffectShapePanel() {
     updateDef(layerId, outline, { params: { ...def.params, [key]: { ...def.params[key], ...patch } } });
   };
 
-  /** ★ 取背景色：按主画布同一背景变换，采样背景图在区域质心位置的颜色 */
-  const pickBackgroundColor = (layerId: string, outline: { x: number; y: number }[]) => {
+  /** ★ 取色模式：点击画布采样该像素的背景色（null = 未激活） */
+  const [pickMode, setPickMode] = useState<{ layerId: string; outline: { x: number; y: number }[] } | null>(null);
+
+  /** 采样背景图在【画布像素】位置的颜色 → 填充色 */
+  const sampleBackgroundAt = (layerId: string, outline: { x: number; y: number }[], px: number, py: number) => {
     const img = imageState.originalImage;
     if (!img || !imageState.imageSrc) {
       alert('未加载背景图，无法取背景色');
       return;
     }
-    let cx = 0, cy = 0;
-    for (const p of outline) { cx += p.x; cy += p.y; }
-    cx /= outline.length; cy /= outline.length;
-    const px = cx * canvasWidth;
-    const py = (1 - cy) * canvasHeight;
     let ox: number, oy: number, dw: number, dh: number;
     if (imageState.selectionRect) {
       const sel = imageState.selectionRect;
@@ -155,8 +153,7 @@ export function EffectShapePanel() {
       const c = document.createElement('canvas');
       c.width = 1; c.height = 1;
       c.getContext('2d')!.drawImage(img, sel.x + sx * sel.width, sel.y + sy * sel.height, 1, 1, 0, 0, 1, 1);
-      const d = c.getContext('2d')!.getImageData(0, 0, 1, 1).data;
-      applySampledColor(layerId, outline, d);
+      applySampledColor(layerId, outline, c.getContext('2d')!.getImageData(0, 0, 1, 1).data);
     } else {
       const fitScale = Math.min(canvasWidth / img.width, canvasHeight / img.height) * (imageState.scale ?? 1);
       dw = img.width * fitScale;
@@ -169,10 +166,35 @@ export function EffectShapePanel() {
       const c = document.createElement('canvas');
       c.width = 1; c.height = 1;
       c.getContext('2d')!.drawImage(img, ix, iy, 1, 1, 0, 0, 1, 1);
-      const d = c.getContext('2d')!.getImageData(0, 0, 1, 1).data;
-      applySampledColor(layerId, outline, d);
+      applySampledColor(layerId, outline, c.getContext('2d')!.getImageData(0, 0, 1, 1).data);
     }
   };
+
+  /** ★ 取背景色（质心方式保留：点击按钮默认取区域质心，交互友好则用取色模式） */
+  const pickBackgroundColor = (layerId: string, outline: { x: number; y: number }[]) => {
+    let cx = 0, cy = 0;
+    for (const p of outline) { cx += p.x; cy += p.y; }
+    cx /= outline.length; cy /= outline.length;
+    sampleBackgroundAt(layerId, outline, cx * canvasWidth, (1 - cy) * canvasHeight);
+  };
+
+  // ★ 取色模式：激活时监听画布点击，采样点击像素的背景色
+  useEffect(() => {
+    if (!pickMode) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const canvas = target.closest('canvas');
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      const px = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const py = (e.clientY - rect.top) * (canvas.height / rect.height);
+      if (px < 0 || px >= canvas.width || py < 0 || py >= canvas.height) return;
+      sampleBackgroundAt(pickMode.layerId, pickMode.outline, px, py);
+      setPickMode(null);
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [pickMode]);
 
   const applySampledColor = (layerId: string, outline: { x: number; y: number }[], d: Uint8ClampedArray) => {
     if (d[3] === 0) return;
@@ -290,10 +312,10 @@ export function EffectShapePanel() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ color: '#ddd' }}>图层 {i + 1} · {s.name}</span>
                   <div style={{ display: 'flex', gap: '4px' }}>
-                    <button style={{ ...BTN, background: '#00b894', color: '#fff', padding: '2px 8px', fontSize: '11px' }}
-                      onClick={() => pickBackgroundColor(s.layerId, s.outline)}
-                      title="取背景色：采样背景图在区域质心位置的颜色">
-                      🎯 取背景色
+                    <button style={{ ...BTN, background: pickMode?.layerId === s.layerId ? '#e17055' : '#00b894', color: '#fff', padding: '2px 8px', fontSize: '11px' }}
+                      onClick={() => setPickMode(pickMode?.layerId === s.layerId ? null : { layerId: s.layerId, outline: s.outline })}
+                      title="进入取色模式：点击主画布任意位置，采样该像素的背景色作为填充">
+                      {pickMode?.layerId === s.layerId ? '🎯 点击画布取色…' : '🎯 取背景色'}
                     </button>
                     <button style={{ ...BTN, background: `rgb(${fr},${fg},${fb})`, color: (def.fill.l > 0.6 ? '#111' : '#fff'), padding: '2px 8px', fontSize: '11px', border: def.fill.a < 1 ? '2px solid #fff' : 'none' }}
                       onClick={() => patchShape(s.layerId, s.outline, { fill: { ...def.fill, a: def.fill.a < 1 ? 1 : def.fill.a } })}
