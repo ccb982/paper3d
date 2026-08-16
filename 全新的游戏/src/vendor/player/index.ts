@@ -23,6 +23,7 @@ export { FluidEffect } from './fluid/FluidEffect';
 export type { FrameTextureData };
 export { FtxAsset } from './FtxAsset';
 export { HitEffectView } from './hitEffect/HitEffectView';
+export type { HitEffectViewOptions } from './hitEffect/HitEffectView';
 export type { HitEffectShapeExport, HitEffectSolidFill, HitEffectFtxFill, HitEffectResidualLayer, HitEffectsFile } from './core/types';
 export { randomSeed, shapeSeed, generateVariant, tickVariant, variantDuration } from './hitEffect/variantGenerator';
 export type { EffectShapeDef, EffectShapeParams } from './hitEffect/types';

@@ -14,7 +14,8 @@ import { BulletRenderer } from '../render/BulletRenderer';
 import type { EntityManager } from '../../entity/EntityManager';
 import type { EntityBase } from '../../entity/EntityBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
-import { HitEffectView } from '../../vendor/player';
+import { attachHitEffect } from '../fx/attachHitEffect';
+import type { HitEffectView } from '../../vendor/player';
 import type { HitEffectShapeExport } from '../../vendor/player';
 
 /** ★ 轻量发射参数（AI 行为/近战/远程共用；不依赖实体构造细节） */
@@ -142,23 +143,14 @@ export class BulletManager {
     for (const item of this.terrainFxViews) item.fx.render(camera);
   }
 
-  /** ★ 命中特效挂载：
-   *   实体 → 记录「击中点相对实体」的偏移，attachEffect 后特效在击中点跟着实体走；
-   *   地形 → 固定点列表（命中坐标原地播放） */
+  /** ★ 命中特效挂载（共用服务层函数 attachHitEffect）：
+   *   实体 → 函数内完成偏移计算 + attachEffect（击中点跟着实体走）；
+   *   地形 → 返回 fx 进固定点列表（命中坐标原地播放） */
   private spawnHitEffect(b: BulletEntity, other: EntityBase | null): void {
     if (this.hitEffectShapes.length === 0) return;
-    const fx = new HitEffectView(this.scene, this.hitEffectShapes, { worldSize: 3 });
     const p = b.entity.position;
-    if (other) {
-      const e = other.entity.position;
-      // ★ 击中点相对实体偏移（实体槽每帧传实体位置 → 特效 = 实体位置 + 偏移 = 击中点跟随）
-      fx.play(p.x, p.y, p.z);
-      fx.setFollowOffset(p.x - e.x, p.y - e.y, p.z - e.z);
-      other.attachEffect('hit', fx);
-    } else {
-      fx.play(p.x, p.y, p.z);
-      this.terrainFxViews.push({ fx, x: p.x, y: p.y, z: p.z });
-    }
+    const fx = attachHitEffect(this.scene, this.hitEffectShapes, { x: p.x, y: p.y, z: p.z }, other, { worldSize: 3 });
+    if (fx) this.terrainFxViews.push({ fx, x: p.x, y: p.y, z: p.z });
   }
 
   dispose(): void {
