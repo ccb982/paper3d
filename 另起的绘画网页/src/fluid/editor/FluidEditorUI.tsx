@@ -599,8 +599,8 @@ const OperationsPanel: React.FC<{
                 <input
                   type="range"
                   min="0"
-                  max="200"
-                  step="0.5"
+                  max="20000"
+                  step="10"
                   value={gravityMag}
                   onChange={(e) => {
                     const val = parseFloat(e.target.value);
@@ -1715,7 +1715,7 @@ const PressurePanel: React.FC<{
           <input
             type="number"
             min={1}
-            max={100}
+            max={1000}
             step={1}
             value={iterations}
             onChange={(e) => onIterationsChange(+e.target.value)}
@@ -1774,12 +1774,24 @@ const LevelSetPanel: React.FC<{
   reinitInterval: number;
   narrowBandWidth: number;
   surfaceTension: number;
+  constrainLiquid: boolean;
+  clampAirPhi: boolean;
+  compensateWaterPhi: boolean;
+  waterRender: boolean;
+  waterCompRate: number;
+  onWaterRenderChange: (val: boolean) => void;
+  onCompRateChange: (val: number) => void;
   onToggle: () => void;
   onReinitChange: (val: number) => void;
   onBandWidthChange: (val: number) => void;
   onTensionChange: (val: number) => void;
-}> = ({ enabled, reinitInterval, narrowBandWidth, surfaceTension,
-       onToggle, onReinitChange, onBandWidthChange, onTensionChange }) => {
+  onConstrainChange: (val: boolean) => void;
+  onClampAirChange: (val: boolean) => void;
+  onCompensateWaterChange: (val: boolean) => void;
+}> = ({ enabled, reinitInterval, narrowBandWidth, surfaceTension, constrainLiquid,
+       clampAirPhi, compensateWaterPhi, waterRender, waterCompRate, onWaterRenderChange, onCompRateChange,
+       onToggle, onReinitChange, onBandWidthChange, onTensionChange, onConstrainChange,
+       onClampAirChange, onCompensateWaterChange }) => {
   return (
     <div className="fluid-panel">
       <div className="panel-header">
@@ -1824,12 +1836,81 @@ const LevelSetPanel: React.FC<{
             <input
               type="range"
               min={0}
-              max={1}
-              step={0.01}
+              max={100000}
+              step={100}
               value={surfaceTension}
               onChange={(e) => onTensionChange(+e.target.value)}
             />
-            <span className="hint">{surfaceTension.toFixed(2)}</span>
+            <span className="hint">{surfaceTension.toFixed(0)}</span>
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            σ 需极大才可见（force≈σ×κ×δ，κ/δ≈0.1×0.1）：建议 1000~50000 起调
+          </div>
+        </div>
+        <div className="control-group">
+          <div className="row" style={{ alignItems: 'center' }}>
+            <label style={{ margin: 0 }}>💧 约束液体</label>
+            <input
+              type="checkbox"
+              checked={constrainLiquid}
+              onChange={(e) => onConstrainChange(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            φ 外部渐隐 → 液体被收拢成紧凑圆润的团块
+          </div>
+        </div>
+        <div className="control-group">
+          <div className="row" style={{ alignItems: 'center', gap: '12px' }}>
+            <label style={{ margin: 0, fontSize: '11px' }}>🛡 空气钳制</label>
+            <input
+              type="checkbox"
+              checked={clampAirPhi}
+              onChange={(e) => onClampAirChange(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+            <label style={{ margin: 0, fontSize: '11px' }}>💦 水体补偿</label>
+            <input
+              type="checkbox"
+              checked={compensateWaterPhi}
+              onChange={(e) => onCompensateWaterChange(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            φ 后处理：空气不泄漏进水 + 水体不流失（水感关键）
+          </div>
+        </div>
+        <div className="control-group">
+          <label>水体补偿速率: {waterCompRate.toFixed(2)}</label>
+          <div className="row">
+            <input
+              type="range"
+              min={0}
+              max={5}
+              step={0.05}
+              value={waterCompRate}
+              onChange={(e) => onCompRateChange(+e.target.value)}
+            />
+            <span className="hint">像素/帧</span>
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            补偿快 → 水体不易流失但表面偏硬；0 = 关闭补偿
+          </div>
+        </div>
+        <div className="control-group">
+          <div className="row" style={{ alignItems: 'center' }}>
+            <label style={{ margin: 0, fontSize: '11px' }}>🌊 分层水渲染</label>
+            <input
+              type="checkbox"
+              checked={waterRender}
+              onChange={(e) => onWaterRenderChange(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            合成视口水色渐变 + 边缘/镜面高光 + 流动感（纯显示后处理）
           </div>
         </div>
       </div>
@@ -2018,7 +2099,7 @@ export const FluidEditorUI: React.FC = () => {
 
   // 压力参数
   const [pressureParams, setPressureParams] = useState({
-    iterations: 20,
+    iterations: 50,
     overRelaxation: 1.7,
     boundaryCondition: 'dirichlet' as 'dirichlet' | 'neumann',
   });
@@ -2027,8 +2108,16 @@ export const FluidEditorUI: React.FC = () => {
   const [levelsetParams, setLevelsetParams] = useState({
     reinitInterval: 10,
     narrowBandWidth: 5,
-    surfaceTension: 0.1,
+    surfaceTension: 10000,
+    constrainLiquid: false,
+    clampAirPhi: true,
+    compensateWaterPhi: true,
+    waterCompRate: 0.1,
   });
+  // ★ 分层水渲染开关（合成视口可选后处理，默认关闭）
+  const [waterRender, setWaterRender] = useState(false);
+  const waterRenderRef = useRef(false);
+  waterRenderRef.current = waterRender;
 
   // ==================== 初始化渲染器（计算 + 显示共用） ====================
   useEffect(() => {
@@ -2793,12 +2882,27 @@ export const FluidEditorUI: React.FC = () => {
         ` : ''}
         uniform vec4 uChannels;          // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差值
         uniform float uDebugResidual;    // ★ 调试：1=直接输出残差纹理
+        // ★ 分层水渲染（可选后处理，默认关闭）：水色渐变 + 边缘高光 + 镜面高光 + 流动感
+        uniform float uWaterRender;      // 1=水渲染，0=普通合成
+        uniform vec3 uWaterColor;
+        uniform vec3 uDeepColor;
+        uniform float uEdgeWidth;
+        uniform float uEdgeIntensity;
+        uniform float uSpecularIntensity;
+        uniform float uFlowIntensity;
+        uniform float uTime;
+        uniform vec2 uResolution;
         varying vec2 vUv;
 
         vec3 hsl_to_rgb(vec3 hsl) {
           float h = hsl.x, s = hsl.y, l = hsl.z;
           vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
           return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
+        }
+
+        // 简单伪随机噪声（镜面高光/流动感用）
+        float hash21(vec2 p) {
+          return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
         }
 
         void main() {
@@ -2827,6 +2931,40 @@ export const FluidEditorUI: React.FC = () => {
             gl_FragColor = vec4(residual.rgb, 1.0);
             return;
           }
+
+          // ★ 分层水渲染（可选）：水色渐变 + 边缘高光 + 镜面高光 + 流动感
+          //   输入 = 合成 HSL（finalH/finalS/finalL）与 alpha（液体量）
+          if (uWaterRender > 0.5) {
+            float waterA = finalA;
+            // 1. 水体掩码：alpha 低 → 不是水，直接原样输出
+            if (waterA < 0.02) {
+              gl_FragColor = vec4(finalRGB, finalA);
+              return;
+            }
+            // 2. 水色渐变：浅水=waterColor，深水=deepColor（按 alpha 深度）
+            vec3 baseWater = mix(uWaterColor, uDeepColor, smoothstep(0.0, 0.9, waterA));
+            // 3. 深度调制：残留 HSL 亮度微调水体明暗（保留液体流动的明暗变化）
+            vec3 waterShaded = baseWater * (0.85 + 0.35 * finalL);
+            // 4. 边缘高光：alpha 梯度大 = 液面边界 → 亮边
+            vec2 px = vec2(1.0) / uResolution;   // 需要 uResolution
+            float aL = texture2D(uResidual, vUv - vec2(px.x, 0.0)).a;
+            float aR = texture2D(uResidual, vUv + vec2(px.x, 0.0)).a;
+            float aB = texture2D(uResidual, vUv - vec2(0.0, px.y)).a;
+            float aT = texture2D(uResidual, vUv + vec2(0.0, px.y)).a;
+            float gradA = length(vec2(aR - aL, aT - aB));
+            float edge = smoothstep(uEdgeWidth, 0.0, gradA);
+            vec3 color = waterShaded + uEdgeIntensity * edge * vec3(1.0, 1.0, 1.0);
+            // 5. 镜面高光：噪声闪烁（液面反光），只在水体内部
+            float specNoise = hash21(vUv * 120.0 + vec2(uTime * 1.5, uTime * 0.8));
+            float spec = pow(specNoise, 6.0) * uSpecularIntensity * waterA;
+            color += spec * vec3(1.0, 1.0, 1.0);
+            // 6. 流动感：轻微流动噪声调制亮度（水面波动）
+            float flowNoise = hash21(vUv * 40.0 + vec2(uTime * 0.6, -uTime * 0.4));
+            color *= 1.0 + uFlowIntensity * (flowNoise - 0.5) * 0.3;
+            gl_FragColor = vec4(color, waterA);
+            return;
+          }
+
           gl_FragColor = vec4(finalRGB, finalA);
         }
       `;
@@ -2848,6 +2986,16 @@ export const FluidEditorUI: React.FC = () => {
           } : {}),
           uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },
           uDebugResidual: { value: 0 },
+          // ★ 分层水渲染 uniforms（可选后处理，默认关闭）
+          uWaterRender: { value: 0 },
+          uWaterColor: { value: new THREE.Color(0.2, 0.6, 0.9) },
+          uDeepColor: { value: new THREE.Color(0.05, 0.2, 0.4) },
+          uEdgeWidth: { value: 0.05 },
+          uEdgeIntensity: { value: 0.3 },
+          uSpecularIntensity: { value: 0.5 },
+          uFlowIntensity: { value: 0.3 },
+          uTime: { value: 0 },
+          uResolution: { value: new THREE.Vector2(config.resolution.w, config.resolution.h) },
         },
         vertexShader: /* glsl */ `
           varying vec2 vUv;
@@ -3325,6 +3473,10 @@ export const FluidEditorUI: React.FC = () => {
         compositeMat.uniforms.uResidualRangeH.value = residualRangeHRef.current;
         compositeMat.uniforms.uResidualRangeSL.value = residualRangeSLRef.current;
         compositeMat.uniforms.uDebugResidual.value = (window as any).__DBG_RESIDUAL ? 1 : 0;
+        // ★ 分层水渲染：每帧同步开关 + 时间（流动感动画）
+        compositeMat.uniforms.uWaterRender.value = waterRenderRef.current ? 1 : 0;
+        compositeMat.uniforms.uTime.value = editor.getTime?.() ?? 0;
+        compositeMat.uniforms.uResolution.value.set(config.resolution.w, config.resolution.h);
         if ((window as any).__dbgFTX === undefined) {
           (window as any).__dbgFTX = 1;
           console.log('[FTX复合] baseTex:', baseTexRef.current, '残差纹理尺寸:', (editor.getColorTexture() as any)?.image?.width ?? '?');
@@ -4005,6 +4157,28 @@ export const FluidEditorUI: React.FC = () => {
           onTensionChange={(val) => {
             setLevelsetParams(p => ({ ...p, surfaceTension: val }));
             updateConfig({ levelSetConfig: { ...config.levelSetConfig, surfaceTension: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          constrainLiquid={levelsetParams.constrainLiquid}
+          onConstrainChange={(val) => {
+            setLevelsetParams(p => ({ ...p, constrainLiquid: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, constrainLiquid: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          clampAirPhi={levelsetParams.clampAirPhi}
+          onClampAirChange={(val) => {
+            setLevelsetParams(p => ({ ...p, clampAirPhi: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, clampAirPhi: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          compensateWaterPhi={levelsetParams.compensateWaterPhi}
+          onCompensateWaterChange={(val) => {
+            setLevelsetParams(p => ({ ...p, compensateWaterPhi: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, compensateWaterPhi: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          waterRender={waterRender}
+          onWaterRenderChange={setWaterRender}
+          waterCompRate={levelsetParams.waterCompRate}
+          onCompRateChange={(val) => {
+            setLevelsetParams(p => ({ ...p, waterCompRate: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, waterCompensationRate: val } as NonNullable<typeof config.levelSetConfig> });
           }}
         />
       </div>

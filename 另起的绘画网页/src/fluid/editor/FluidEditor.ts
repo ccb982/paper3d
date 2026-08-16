@@ -159,14 +159,24 @@ export interface FluidEditorConfig {
    * φ 场初始化来源：scalar 模式取 densityGrid.R，vector 模式取 colorGrid.A。
    */
   levelSetConfig?: {
-    /** 重初始化间隔（帧数）：每 N 帧执行一次 reinit，默认 10 */
+    /** 重初始化间隔（帧数）：每 N 帧执行一次「φ 重建 + reinit」，默认 10 */
     reinitInterval: number;
-    /** 每次重初始化的迭代次数（红-黑 SOR 轮数），默认 2 */
+    /** 每次重初始化的迭代次数（Godunov 上风轮数），默认 2 */
     reinitIterations: number;
     /** 表面张力系数 σ（0=禁用张力），默认 0 */
     surfaceTension: number;
     /** 窄带宽度/作用半径（像素），表面张力仅在 |φ|<radius 区域施力，默认 5 */
     narrowBandWidth: number;
+    /** ★ φ 直接约束液体（外部渐隐 → 液体紧凑圆润）；默认 false */
+    constrainLiquid?: boolean;
+    /** ★ 空气区 φ 钳制（φ>maxAirPhi 压回，防空气泄漏进水） */
+    clampAirPhi?: boolean;
+    /** 空气区 φ 上限（默认 0 = 空气区压到 0） */
+    maxAirPhi?: number;
+    /** ★ 水体区负向补偿（φ<0 向负推进，防水体流失） */
+    compensateWaterPhi?: boolean;
+    /** 水体补偿速率（像素/帧，默认 0.1） */
+    waterCompensationRate?: number;
   };
 
   /**
@@ -533,29 +543,52 @@ export class FluidEditor {
     }
 
     // 4. ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
-    //    φ 平流 → 周期性重初始化（保持 SDF） → 表面张力注入（CSF 模型）
+    //    两种模式：
+    //      A. 约束模式（constrainLiquid=true）→ 每帧「φ 重建 + reinit + 约束」：
+    //         φ 始终与当前液体同步，液体被持续收拢成紧凑圆润团块（稳定水感）
+    //      B. 追踪模式（默认）→ φ 平流 + 周期性重建 + 表面张力
     if (this.config.enableLevelSet && this._phiGrid) {
       const lsCfg = this.config.levelSetConfig;
-      // (1) φ 平流（跟随速度场流动）
-      this.levelSetSolver.advectPhi(
-        this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTexture(),
-      );
-      // (2) 周期性重初始化（每 reinitInterval 帧，红-黑 SOR 保持 |∇φ|≈1）
-      this.levelSetFrameCount++;
-      const interval = lsCfg?.reinitInterval ?? 10;
-      if (this.levelSetFrameCount >= interval) {
-        this.levelSetFrameCount = 0;
-        this.levelSetSolver.reinit(
-          this._phiGrid, this.getObstacleTexture(), lsCfg?.reinitIterations ?? 2, 0.5,
-        );
-        console.log(`[LevelSet] reinit @ frame ${this.frameCount}：interval=${interval}，iterations=${lsCfg?.reinitIterations ?? 2}`);
-      }
-      // (3) 表面张力注入（CSF 模型，σ>0 时启用，仅在 |φ|<narrowBandWidth 窄带内施力）
       const sigma = lsCfg?.surfaceTension ?? 0;
+      const band = lsCfg?.narrowBandWidth ?? 5;
+      const constrain = lsCfg?.constrainLiquid ?? false;
+      const iterations = lsCfg?.reinitIterations ?? 2;
+
+      if (constrain) {
+        // ★ 约束模式：每帧从当前液体场重建 φ（注入即同步）+ Godunov reinit + 约束
+        this.initPhiField();
+        this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTexture(), iterations, 0.5);
+        // φ 后处理（空气钳制 + 水体补偿）：修正符号平衡，防水泄漏/流失
+        this.applyPhiCorrection();
+        const mode = this.config.advectionMode === 'scalar' ? 0 : 1;
+        const targetGrid = this.config.advectionMode === 'scalar' ? this.densityGrid : this.colorGrid;
+        this.levelSetSolver.applyLiquidConstraint(
+          targetGrid, this._phiGrid.read, this.getObstacleTexture(), mode, band, 0.02,
+        );
+      } else {
+        // (1) φ 平流（跟随速度场流动）
+        this.levelSetSolver.advectPhi(
+          this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTexture(),
+        );
+        // (2) 周期性「φ 重建 + Godunov 重初始化」
+        //   ★ 注入同步：先用当前 density/alpha 场重建 φ 初值（注入的新液体才有表面），
+        //     再 Godunov 上风重初始化（保持 |∇φ|≈1，距离场真正收敛）
+        this.levelSetFrameCount++;
+        const interval = lsCfg?.reinitInterval ?? 10;
+        if (this.levelSetFrameCount >= interval) {
+          this.levelSetFrameCount = 0;
+          this.initPhiField();
+          this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTexture(), iterations, 0.5);
+          this.applyPhiCorrection();
+          console.log(`[LevelSet] 注入同步 + reinit @ frame ${this.frameCount}：interval=${interval}，iterations=${iterations}`);
+        }
+      }
+
+      // (3) 表面张力注入（CSF 模型，σ>0 时启用，δ(φ) 归一化窄带施力）
       if (sigma > 0) {
         this.levelSetSolver.applySurfaceTension(
           this.velocityGrid, this._phiGrid.read, this.getObstacleTexture(),
-          sigma, dt, lsCfg?.narrowBandWidth ?? 5,
+          sigma, dt, band,
         );
       }
     }
@@ -1291,6 +1324,22 @@ export class FluidEditor {
       // vector 模式：颜色场 A 通道
       this.levelSetSolver.initPhiField(this._phiGrid, this.colorGrid.read, 1, radius);
     }
+  }
+
+  /**
+   * ★ φ 场后处理（空气钳制 + 水体补偿）——老版本 FluidSimulator 的水感关键机制。
+   * 读取配置 → 委托 LevelSetSolver.applyPhiCorrection。
+   */
+  private applyPhiCorrection(): void {
+    if (!this._phiGrid) return;
+    const lsCfg = this.config.levelSetConfig;
+    const clampAir = lsCfg?.clampAirPhi ?? true;
+    const maxAirPhi = lsCfg?.maxAirPhi ?? 0;
+    const compensate = lsCfg?.compensateWaterPhi ?? true;
+    const compRate = lsCfg?.waterCompensationRate ?? 0.1;
+    this.levelSetSolver.applyPhiCorrection(
+      this._phiGrid, this.getObstacleTexture(), clampAir, maxAirPhi, compensate, compRate,
+    );
   }
 
   /**

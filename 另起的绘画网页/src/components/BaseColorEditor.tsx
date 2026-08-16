@@ -1771,12 +1771,14 @@ export const BaseColorEditor: React.FC = () => {
     setBaseTexture(updated);
   }, [baseTexture, brushColor, brushSize, texSize, setBaseTexture]);
 
-  // ★ 橡皮擦：把基础色纹理像素擦为透明（alpha=0），笔画松开时统一清 regionIdTex
+  // ★ 橡皮擦：把基础色纹理像素擦为透明（alpha=0），同时实时同步 regionIdTex（ID=0）
+  //   ★ 叠加模式下合成画面直接读 regionIdTex → 每帧同步才能在叠加视图中实时看到擦除效果
   const eraseOnBase = useCallback((px: number, py: number) => {
     if (!baseTexture) return;
     const data = baseTexture.data;
     const radiusPx = Math.max(1, brushSize);
     const half = Math.floor(radiusPx);
+    let touched = false;
     for (let dy = -half; dy <= half; dy++) {
       for (let dx = -half; dx <= half; dx++) {
         if (dx * dx + dy * dy > half * half) continue;
@@ -1786,11 +1788,33 @@ export const BaseColorEditor: React.FC = () => {
         const pi = (gy * texSize + gx) * 4;
         data[pi + 3] = 0;
         erasedPixelsRef.current.add(`${gx},${gy}`);
+        touched = true;
       }
     }
+    if (!touched) return;
     const updated = new ImageData(new Uint8ClampedArray(data), baseTexture.width, baseTexture.height);
     setBaseTexture(updated);
-  }, [baseTexture, brushSize, texSize, setBaseTexture]);
+
+    // ★ 每帧实时同步 regionIdTex（叠加合成直接读它 → 画布立即反映擦除）
+    if (bbox && activeFrameId) {
+      const state = useAppStore.getState();
+      const frame = state.skillGroupEditor.frames.find(f => f.id === activeFrameId);
+      if (frame && frame.regionIdTex && frame.regionIdTex.length > 0) {
+        const newRegionIdTex = new Uint16Array(frame.regionIdTex);
+        const { w } = bbox;
+        for (const key of erasedPixelsRef.current) {
+          const [x, y] = key.split(',').map(Number);
+          const lx = x - bbox.x;
+          const ly = y - bbox.y;
+          const idx = ly * w + lx;
+          if (idx >= 0 && idx < newRegionIdTex.length) {
+            newRegionIdTex[idx] = 0;
+          }
+        }
+        updateSkillFrame(activeFrameId, { regionIdTex: newRegionIdTex });
+      }
+    }
+  }, [baseTexture, brushSize, texSize, bbox, activeFrameId, updateSkillFrame, setBaseTexture]);
 
   // ★ 擦除笔画结束：把本次擦除的像素在 regionIdTex 中清零（ID=0 → 透明）
   const applyErase = useCallback(() => {
@@ -2142,8 +2166,8 @@ export const BaseColorEditor: React.FC = () => {
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'eraser') {
-      if (mode !== 'base2') {
-        console.warn('橡皮擦仅在基础色模式下可用');
+      if (mode !== 'base2' && mode !== 'composite') {
+        console.warn('橡皮擦仅在基础色/叠加模式下可用');
         return;
       }
       saveHistory();
@@ -2182,7 +2206,7 @@ export const BaseColorEditor: React.FC = () => {
     if (isDrawing && currentTool === 'paint' && mode === 'base2') {
       paintOnBase(pixel.x, pixel.y);
     }
-    if (isDrawing && currentTool === 'eraser' && mode === 'base2') {
+    if (isDrawing && currentTool === 'eraser' && (mode === 'base2' || mode === 'composite')) {
       eraseOnBase(pixel.x, pixel.y);
     }
     // ★ 强制修正任意模式可用（不限制 base2）
@@ -2995,14 +3019,14 @@ export const BaseColorEditor: React.FC = () => {
         </button>
         <button
           onClick={() => { setCurrentTool('eraser'); setDrawingPolygon(null); }}
-          disabled={!baseTexture || mode !== 'base2'}
+          disabled={!baseTexture || (mode !== 'base2' && mode !== 'composite')}
           style={{
             padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
             background: currentTool === 'eraser' ? '#fa8c16' : '#f0f0f0',
             color: currentTool === 'eraser' ? '#fff' : '#333',
             border: '1px solid #d9d9d9',
           }}
-          title="橡皮擦：擦为透明（松开时同步清除区域 ID）"
+          title="橡皮擦：擦为透明（松开时同步清除区域 ID）；基础色/叠加模式下可用"
         >
           橡皮
         </button>

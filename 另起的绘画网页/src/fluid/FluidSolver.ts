@@ -59,8 +59,15 @@ export interface FluidSolverConfig {
   levelSetConfig: {
     enabled: boolean;            // 总开关
     reinitIterations: number;    // 重初始化迭代次数（默认 2）
-    surfaceTension: number;      // 表面张力系数 σ（0=禁用）
+    surfaceTension: number;      // 表面张力系数 σ（0=禁用；δ 归一化后建议 1~5）
     smoothingRadius: number;     // 表面张力作用半径（像素）
+    reinitInterval?: number;     // φ 重建+reinit 间隔帧数（默认 10）
+    narrowBandWidth?: number;    // 窄带半宽（像素；张力 δ 与液体约束带）
+    constrainLiquid?: boolean;   // φ 直接约束液体（外部渐隐，紧凑圆润）
+    clampAirPhi?: boolean;       // 空气区 φ 钳制（防空气泄漏进水）
+    maxAirPhi?: number;          // 空气区 φ 上限（默认 0）
+    compensateWaterPhi?: boolean;// 水体区负向补偿（防水体流失）
+    waterCompensationRate?: number; // 水体补偿速率（默认 0.1）
   };
   continuousSources: InjectionConfig[];
   /**
@@ -75,7 +82,7 @@ export const defaultFluidConfig: FluidSolverConfig = {
   channels: { r: true, g: true, b: true, a: true },
   enableAdvection: true,
   enablePressure: true,
-  pressureIterations: 20,
+  pressureIterations: 50,
   pressureOmega: 1.7,
   pressureBoundaryMode: 'dirichlet',
   enableWarmStart: true,
@@ -96,8 +103,15 @@ export const defaultFluidConfig: FluidSolverConfig = {
   levelSetConfig: {
     enabled: false,
     reinitIterations: 2,
-    surfaceTension: 0,
+    surfaceTension: 10000,
     smoothingRadius: 2,
+    reinitInterval: 10,
+    narrowBandWidth: 5,
+    constrainLiquid: false,
+    clampAirPhi: true,
+    maxAirPhi: 0,
+    compensateWaterPhi: true,
+    waterCompensationRate: 0.1,
   },
   continuousSources: [],
 };

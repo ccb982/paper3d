@@ -106,8 +106,15 @@ export function parseImportedFluidConfig(
   const levelSetConfig = {
     enabled: !!(ls.enabled ?? ls.enableLevelSet),
     reinitIterations: ls.reinitIterations ?? 2,
-    surfaceTension: ls.surfaceTension ?? 0,
+    surfaceTension: ls.surfaceTension ?? 10000,
     smoothingRadius: ls.smoothingRadius ?? 2,
+    reinitInterval: ls.reinitInterval ?? 10,
+    narrowBandWidth: ls.narrowBandWidth ?? 5,
+    constrainLiquid: !!ls.constrainLiquid,
+    clampAirPhi: !!(ls.clampAirPhi ?? true),
+    maxAirPhi: ls.maxAirPhi ?? 0,
+    compensateWaterPhi: !!(ls.compensateWaterPhi ?? true),
+    waterCompensationRate: ls.waterCompensationRate ?? 0.1,
   };
 
   // ★ 墙体掩码（多帧物理配置导出携带；主绘画页面优先于区域边界）
@@ -122,7 +129,7 @@ export function parseImportedFluidConfig(
   return {
     enableAdvection: cs.enableAdvection ?? true,
     enablePressure: cs.enablePressure ?? true,
-    pressureIterations: cs.pressureIterations ?? 20,
+    pressureIterations: cs.pressureIterations ?? 50,
     pressureOmega: cs.pressureOmega ?? 1.7,
     pressureBoundaryMode: cs.pressureBoundaryMode ?? 'dirichlet',
     enableWarmStart: cs.enableWarmStart ?? true,
@@ -151,7 +158,7 @@ const INTERNAL_DEFAULTS: FluidSolverConfig = {
   channels: { r: true, g: true, b: true, a: true },
   enableAdvection: true,
   enablePressure: true,
-  pressureIterations: 20,
+  pressureIterations: 50,
   pressureOmega: 1.7,
   pressureBoundaryMode: 'dirichlet',
   enableWarmStart: true,
@@ -162,7 +169,7 @@ const INTERNAL_DEFAULTS: FluidSolverConfig = {
   advectionMode: 'vector',
   combineMode: 'add',
   scalarConfig: { hMultiplier: 1, sMultiplier: 1, lMultiplier: 1, aMultiplier: 1, baselineDensity: 1.0, decayRate: 0 },
-  levelSetConfig: { enabled: false, reinitIterations: 2, surfaceTension: 0, smoothingRadius: 2 },
+  levelSetConfig: { enabled: false, reinitIterations: 2, surfaceTension: 10000, smoothingRadius: 2, reinitInterval: 10, narrowBandWidth: 5, constrainLiquid: false, clampAirPhi: true, maxAirPhi: 0, compensateWaterPhi: true, waterCompensationRate: 0.1 },
   continuousSources: [],
 };
 
@@ -475,7 +482,7 @@ export function parseInternalFluidConfig(
     },
     enableAdvection: bool(raw.enableAdvection, true),
     enablePressure: bool(raw.enablePressure, true),
-    pressureIterations: Math.round(num(raw.pressureIterations, 20)),
+    pressureIterations: Math.round(num(raw.pressureIterations, 50)),
     pressureOmega: num(raw.pressureOmega, 1.7),
     pressureBoundaryMode: raw.pressureBoundaryMode === 'neumann' ? 'neumann' : 'dirichlet',
     enableWarmStart: bool(raw.enableWarmStart, true),
@@ -497,8 +504,15 @@ export function parseInternalFluidConfig(
     levelSetConfig: {
       enabled: bool(raw.levelSetConfig?.enabled, false),
       reinitIterations: Math.round(num(raw.levelSetConfig?.reinitIterations, 2)),
-      surfaceTension: num(raw.levelSetConfig?.surfaceTension, 0),
+      surfaceTension: num(raw.levelSetConfig?.surfaceTension, 10000),
       smoothingRadius: num(raw.levelSetConfig?.smoothingRadius, 2),
+      reinitInterval: Math.round(num(raw.levelSetConfig?.reinitInterval, 10)),
+      narrowBandWidth: num(raw.levelSetConfig?.narrowBandWidth, 5),
+      constrainLiquid: bool(raw.levelSetConfig?.constrainLiquid, false),
+      clampAirPhi: bool(raw.levelSetConfig?.clampAirPhi, true),
+      maxAirPhi: num(raw.levelSetConfig?.maxAirPhi, 0),
+      compensateWaterPhi: bool(raw.levelSetConfig?.compensateWaterPhi, true),
+      waterCompensationRate: num(raw.levelSetConfig?.waterCompensationRate, 0.1),
     },
     continuousSources: (Array.isArray(raw.continuousSources) ? raw.continuousSources : [])
       .map(normalizeInjectionSource),
@@ -550,8 +564,15 @@ export function serializeFluidConfigToJSON(config: FluidSolverConfig): any {
       enabled: config.levelSetConfig?.enabled ?? false,
       enableLevelSet: config.levelSetConfig?.enabled ?? false,
       reinitIterations: config.levelSetConfig?.reinitIterations ?? 2,
-      surfaceTension: config.levelSetConfig?.surfaceTension ?? 0,
+      surfaceTension: config.levelSetConfig?.surfaceTension ?? 10000,
       smoothingRadius: config.levelSetConfig?.smoothingRadius ?? 2,
+      reinitInterval: config.levelSetConfig?.reinitInterval ?? 10,
+      narrowBandWidth: config.levelSetConfig?.narrowBandWidth ?? 5,
+      constrainLiquid: !!config.levelSetConfig?.constrainLiquid,
+      clampAirPhi: config.levelSetConfig?.clampAirPhi ?? true,
+      maxAirPhi: config.levelSetConfig?.maxAirPhi ?? 0,
+      compensateWaterPhi: config.levelSetConfig?.compensateWaterPhi ?? true,
+      waterCompensationRate: config.levelSetConfig?.waterCompensationRate ?? 0.1,
     },
     continuousSources: config.continuousSources.map(s => ({
       enabled: s.enabled,
