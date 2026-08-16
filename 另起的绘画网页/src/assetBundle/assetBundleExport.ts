@@ -12,6 +12,7 @@
 import { packMultiFrameToBinary, type FrameExportData } from '../utils/multiFrameExport';
 import { compressToGzip } from '../utils/binaryCompression';
 import { packZip, fnv1a32, type ZipEntry } from './zipStore';
+import { serializeHitEffect } from '../effectShape/export';
 import type { Layer, FrameData, RegionAnnotation, Point } from '../types';
 import type { SharedBaseColor } from '../stores/useAppStore';
 import type { RegionEntity } from '../core/RegionEntity';
@@ -22,6 +23,8 @@ export interface AssetBundleSourceState {
   regionEntities: Record<string, RegionEntity[]>;
   regionAnnotations: RegionAnnotation[];
   sharedBaseColors: SharedBaseColor[];
+  /** ★ 击中特效形状（按图层 id；并入 hit_effects.json） */
+  effectShapes?: Record<string, import('../effectShape/types').EffectShapeDef>;
 }
 
 export interface AssetBundleExportOptions {
@@ -213,6 +216,36 @@ export async function exportMainCanvasAssetBundle(
     annotationBytes = encoder.encode(JSON.stringify(annotationsJson, null, 2));
   }
 
+  // ★ 6b. 击中特效定义（hit_effects.json，随素材包一并导出）：
+  //   图层特效形状 + 纯色/FTX帧纹理填充 + 残差层 + 变体参数
+  let hitEffectBytes: Uint8Array | null = null;
+  const effectShapes = source.effectShapes ?? {};
+  const hitEntries = Object.entries(effectShapes);
+  if (hitEntries.length > 0) {
+    // ★ 播放顺序 = 图层 displayId 升序（帧 1 先播放/在下层，帧 3 后播放/在上层）
+    hitEntries.sort((a, b) => {
+      const da = layers.find(l => l.id === a[0])?.displayId ?? 0;
+      const db = layers.find(l => l.id === b[0])?.displayId ?? 0;
+      return da - db;
+    });
+    const hitDefs = hitEntries.map(([layerId, def]) => {
+      const layer = layers.find(l => l.id === layerId);
+      return { layerId, ...def, id: 0, name: layer?.name ?? layerId };
+    });
+    const ftxMap: Record<string, { baseHsl: NonNullable<FrameData['baseHslData']>; residual: ImageData }> = {};
+    const residualMap: Record<string, ImageData> = {};
+    for (const def of hitDefs) {
+      const fd = frameDataMap[def.layerId];
+      // ★ 兼容区域色块图层内部为 FTX 帧纹理：嵌入 baseHsl + 量化残差
+      if (fd?.baseHslData && fd.boundResidualTexture) {
+        ftxMap[def.name] = { baseHsl: fd.baseHslData, residual: fd.boundResidualTexture };
+      }
+      if (def.residualTex) residualMap[def.name] = def.residualTex;
+    }
+    const hitJson = serializeHitEffect(hitDefs, ftxMap, residualMap);
+    hitEffectBytes = encoder.encode(JSON.stringify(hitJson, null, 2));
+  }
+
   // 7. manifest（清单 + 轻量校验）
   const ftxHash = fnv1a32(gzBytes);
   const hashes: Record<string, string> = { 'textures/frames.ftx3.gz': ftxHash };
@@ -221,6 +254,9 @@ export async function exportMainCanvasAssetBundle(
   }
   if (annotationBytes) {
     hashes['annotations.json'] = fnv1a32(annotationBytes);
+  }
+  if (hitEffectBytes) {
+    hashes['hit_effects.json'] = fnv1a32(hitEffectBytes);
   }
 
   const manifest = {
@@ -237,6 +273,8 @@ export async function exportMainCanvasAssetBundle(
     paletteCount: exportedPalette.length,
     annotationCount: exportedAnnotations.length,
     annotationFile: annotationBytes ? 'annotations.json' : null,
+    // ★ 击中特效定义文件（有特效形状时存在）
+    hitEffectFile: hitEffectBytes ? 'hit_effects.json' : null,
     hashes,
   };
   const manifestBytes = encoder.encode(JSON.stringify(manifest, null, 2));
@@ -249,6 +287,9 @@ export async function exportMainCanvasAssetBundle(
   ];
   if (annotationBytes) {
     zipEntries.push({ path: 'annotations.json', data: annotationBytes });
+  }
+  if (hitEffectBytes) {
+    zipEntries.push({ path: 'hit_effects.json', data: hitEffectBytes });
   }
   const bytes = packZip(zipEntries);
 

@@ -121,7 +121,54 @@ export interface Manifest {
   paletteCount: number;
   annotationCount: number;
   annotationFile: string | null;
+  /** 击中特效（矢量动画）定义文件（素材包内 hit_effects.json；无则 null） */
+  hitEffectFile: string | null;
   hashes: Record<string, string>;
+}
+
+// ============ 击中特效（矢量动画）============
+
+/** 击中特效形状填充（纯色） */
+export interface HitEffectSolidFill {
+  h: number; s: number; l: number; a: number;
+}
+
+/** 击中特效形状填充（FTX 帧纹理嵌入） */
+export interface HitEffectFtxFill {
+  baseHslBase64: string;
+  residualBase64: string;
+  width: number;
+  height: number;
+}
+
+/** 击中特效外置残差层 */
+export interface HitEffectResidualLayer {
+  dataBase64: string;
+  width: number;
+  height: number;
+}
+
+/** 击中特效形状（与编辑器导出一致） */
+export interface HitEffectShapeExport {
+  name: string;
+  outline: Point[];
+  fillMode: 'solid' | 'ftx';
+  solid: HitEffectSolidFill | null;
+  ftx: HitEffectFtxFill | null;
+  residualLayer: HitEffectResidualLayer | null;
+  params: {
+    distortion: { amplitude: number; frequency: number; randomRange: number };
+    rotation: { min: number; max: number };
+    expand: { xMin: number; xMax: number; yMin: number; yMax: number; duration: number; easing: 'linear' | 'easeOut' };
+    spinWhileExpand: boolean;
+    spinSpeed: number;
+  };
+}
+
+export interface HitEffectsFile {
+  version: number;
+  type: string;
+  shapes: HitEffectShapeExport[];
 }
 
 export interface PureAnnotationExport {

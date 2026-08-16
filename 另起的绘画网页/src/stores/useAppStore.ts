@@ -455,6 +455,10 @@ interface AppState {
   frameDataMap: Record<string, import('../types').FrameData>;
   importMultiFrameData: (buffer: ArrayBuffer) => void;
 
+  // ★ 击中特效形状（按图层 id；导出素材包时并入 hit_effects.json）
+  effectShapes: Record<string, import('../effectShape/types').EffectShapeDef>;
+  setEffectShape: (layerId: string, def: import('../effectShape/types').EffectShapeDef | undefined) => void;
+
   // 绑定图层到区域
   bindFrameToLayer: (layerId: string, regionId: number | null) => Promise<void>;
 
@@ -2955,6 +2959,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // 多帧 FTX 导入
   frameDataMap: {},
+
+  // ★ 击中特效形状（按图层 id；导出素材包时并入 hit_effects.json）
+  effectShapes: {},
+  setEffectShape: (layerId, def) => {
+    set((s) => {
+      const next = { ...s.effectShapes };
+      if (def) next[layerId] = def;
+      else delete next[layerId];
+      return { effectShapes: next };
+    });
+  },
 
   importMultiFrameData: async (buffer: ArrayBuffer) => {
     const { unpackMultiFrameFromBinary } = await import('../utils/binaryCompression');

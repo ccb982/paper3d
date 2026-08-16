@@ -66,7 +66,9 @@ export function EffectShapePanel() {
   const canvasHeight = useAppStore(s => s.canvasHeight);
   const activeLayerId = useAppStore(s => s.activeLayerId);
   const refreshRegionCache = useAppStore(s => s.refreshRegionCache);
-  const [configs, setConfigs] = useState<Record<string, EffectShapeDef>>({});
+  const frameDataMap = useAppStore(s => s.frameDataMap);
+  const effectShapes = useAppStore(s => s.effectShapes);
+  const setEffectShape = useAppStore(s => s.setEffectShape);
   const [playing, setPlaying] = useState(false);
   const [seed, setSeed] = useState(() => randomSeed());
   const [showPanel, setShowPanel] = useState(false);
@@ -102,7 +104,7 @@ export function EffectShapePanel() {
 
   /** 每层配置（存在且轮廓匹配则保留；partial 配置合并进默认值，绝不崩溃） */
   const defOf = (layerId: string, outline: { x: number; y: number }[]): EffectShapeDef => {
-    const prev = configs[layerId];
+    const prev = effectShapes[layerId];
     const base: Partial<EffectShapeDef> = prev && prev.outline && prev.outline.length === outline.length ? prev : {};
     return {
       id: 0,
@@ -117,7 +119,7 @@ export function EffectShapePanel() {
 
   /** 所有写入都存完整 def（含当前轮廓），避免 partial 被 defOf 丢弃 */
   const updateDef = (layerId: string, outline: { x: number; y: number }[], patch: Partial<EffectShapeDef>) => {
-    setConfigs(m => ({ ...m, [layerId]: { ...defOf(layerId, outline), ...patch } }));
+    setEffectShape(layerId, { ...defOf(layerId, outline), ...patch });
   };
   const patchShape = (layerId: string, outline: { x: number; y: number }[], patch: Partial<EffectShapeDef>) => {
     updateDef(layerId, outline, patch);
@@ -207,6 +209,8 @@ export function EffectShapePanel() {
     setPlaying(true);
   };
 
+
+
   // ★ 预览动画：所有图层同时变形（每层独立种子），叠加播放
   useEffect(() => {
     if (!playing || layerShapes.length === 0) return;
@@ -271,7 +275,7 @@ export function EffectShapePanel() {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [playing, layerShapes, configs, seed]);
+  }, [playing, layerShapes, effectShapes, seed]);
 
   return (
     <div style={{ padding: '10px', borderTop: '1px solid #333' }}>
@@ -310,7 +314,12 @@ export function EffectShapePanel() {
             return (
               <div key={s.layerId} style={{ background: '#1a1a2e', borderRadius: '4px', padding: '8px', margin: '8px 0', border: '1px solid #333', fontSize: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ color: '#ddd' }}>图层 {i + 1} · {s.name}</span>
+                  <span style={{ color: '#ddd' }}>
+                    图层 {i + 1} · {s.name}
+                    {frameDataMap[s.layerId]?.baseHslData && frameDataMap[s.layerId]?.boundResidualTexture && (
+                      <span style={{ color: '#0984e3', fontSize: '10px', marginLeft: '6px' }}>🎞 FTX帧纹理</span>
+                    )}
+                  </span>
                   <div style={{ display: 'flex', gap: '4px' }}>
                     <button style={{ ...BTN, background: pickMode?.layerId === s.layerId ? '#e17055' : '#00b894', color: '#fff', padding: '2px 8px', fontSize: '11px' }}
                       onClick={() => setPickMode(pickMode?.layerId === s.layerId ? null : { layerId: s.layerId, outline: s.outline })}

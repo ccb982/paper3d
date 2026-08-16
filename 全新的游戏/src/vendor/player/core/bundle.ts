@@ -1,4 +1,4 @@
-import type { Manifest, PerFrameData, AnnotationsFile } from './types';
+import type { Manifest, PerFrameData, AnnotationsFile, HitEffectsFile } from './types';
 
 const LOCAL_HEADER_SIG = 0x04034b50;
 const CENTRAL_HEADER_SIG = 0x02014b50;
@@ -96,6 +96,7 @@ export interface BundleLoadResult {
   ftxBinary: Uint8Array;
   frames: PerFrameData[];
   annotations: AnnotationsFile | null;
+  hitEffects: HitEffectsFile | null;
 }
 
 export async function loadBundle(
@@ -144,5 +145,13 @@ export async function loadBundle(
     }
   }
 
-  return { manifest, ftxBinary, frames, annotations };
+  let hitEffects: HitEffectsFile | null = null;
+  if (manifest.hitEffectFile) {
+    const heRaw = files.get(manifest.hitEffectFile);
+    if (heRaw) {
+      hitEffects = JSON.parse(new TextDecoder().decode(heRaw));
+    }
+  }
+
+  return { manifest, ftxBinary, frames, annotations, hitEffects };
 }

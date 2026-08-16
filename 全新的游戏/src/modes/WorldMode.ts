@@ -10,7 +10,8 @@
 
 import * as THREE from 'three';
 import { FtxAsset } from '../vendor/player/FtxAsset';
-import type { Asset } from '../vendor/player';
+import type { Asset, HitEffectShapeExport } from '../vendor/player';
+import { HitEffectView } from '../vendor/player';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
@@ -45,6 +46,10 @@ export class WorldMode {
   /** ★ 子弹池（预创建 100 颗反复使用；超时回池，不销毁重建） */
   private bullets: BulletManager;
   private bulletCooldown = 0;
+  /** ★ 矢量动画（击中特效）播放器实例列表（调试触发/后续挂实体槽） */
+  private hitFxViews: HitEffectView[] = [];
+  /** 击中特效形状定义（来自素材包 hit_effects.json；空 = 无） */
+  private hitEffectShapes: HitEffectShapeExport[] = [];
   /** chunk 视觉网格（chunkKey → Mesh；天内只增不删，天结束统一回收） */
   private chunkMeshes = new Map<number, THREE.Mesh>();
   /** chunk 地面碰撞刚体（chunkKey → 实体 id；trimesh 复用视觉网格几何；
@@ -73,6 +78,8 @@ export class WorldMode {
     enemyAsset?: Asset,
     /** ★ 爆裂黎明子弹资产（素材包 scene.zip 或纹理包 ftx3；缺省回退到程序生成发光圆点） */
     bulletAsset?: Asset | FtxAsset,
+    /** ★ 击中特效（矢量动画）资产（素材包含 hit_effects.json；缺省无矢量动画） */
+    hitEffectAsset?: Asset,
   ) {
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张；架构 3.8） ----
     this.raster = new RasterMap();
@@ -158,6 +165,9 @@ export class WorldMode {
     this.bullets = new BulletManager(this.entities, scene, bulletAsset ?? createSolidBulletAsset(), 100, this.renderer);
     // ★ AI 攻击意图 = 统一攻击管线（近战/远程/范围分派 → 伤害管线）
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
+
+    // ---- ★ 矢量动画（击中特效）播放器：调试触发（F 键 → 玩家脚底） ----
+    this.hitEffectShapes = hitEffectAsset?.hitEffects ?? [];
   }
 
   /** 每帧驱动（输入 → 相机 → 实体管线 → AI → 交互） */
@@ -206,6 +216,19 @@ export class WorldMode {
 
     // ---- ★ 共享流体效果驱动（子弹纹理流动；无流体配置时零开销） ----
     this.bullets.update(dt, this.camera);
+
+    // ---- ★ 矢量动画调试触发（F 键：玩家脚底播放击中特效；验证播放器能力，与子弹无关） ----
+    if (input.pressed.debug && this.hitEffectShapes.length > 0) {
+      const fx = new HitEffectView(this.scene, this.hitEffectShapes, { worldSize: 1.5 });
+      fx.play(this.player.position.x, this.player.position.y + 1, this.player.position.z);
+      this.hitFxViews.push(fx);
+    }
+    for (let i = this.hitFxViews.length - 1; i >= 0; i--) {
+      if (this.hitFxViews[i].update(dt)) {
+        this.hitFxViews[i].dispose();
+        this.hitFxViews.splice(i, 1);
+      }
+    }
   }
 
   /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */
@@ -275,6 +298,7 @@ export class WorldMode {
   /** 渲染：实体管线遍历画 + 地图 + 场景（蒙版/VAT 已离屏烘焙进子弹纹理） */
   render(renderer: THREE.WebGLRenderer): void {
     this.entities.renderAll(this.camera);
+    for (const fx of this.hitFxViews) fx.render(this.camera);
     renderer.render(this.scene, this.camera);
   }
 

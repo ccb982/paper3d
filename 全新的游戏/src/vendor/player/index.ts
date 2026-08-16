@@ -10,7 +10,7 @@ import { FluidEffect } from './fluid/FluidEffect';
 import type {
   Manifest, PerFrameData, AnnotationsFile,
   SerializedRegionEntity, PaletteColor, FrameTextureData, PureAnnotationExport,
-  PhysicsConfig,
+  PhysicsConfig, HitEffectShapeExport,
 } from './core/types';
 
 export type { Manifest, PerFrameData, AnnotationsFile, SerializedRegionEntity, PaletteColor, PureAnnotationExport, PhysicsConfig };
@@ -22,6 +22,10 @@ export { FramePlaybackController };
 export { FluidEffect } from './fluid/FluidEffect';
 export type { FrameTextureData };
 export { FtxAsset } from './FtxAsset';
+export { HitEffectView } from './hitEffect/HitEffectView';
+export type { HitEffectShapeExport, HitEffectSolidFill, HitEffectFtxFill, HitEffectResidualLayer, HitEffectsFile } from './core/types';
+export { randomSeed, shapeSeed, generateVariant, tickVariant, variantDuration } from './hitEffect/variantGenerator';
+export type { EffectShapeDef, EffectShapeParams } from './hitEffect/types';
 
 export interface LoadOptions {
   resolution?: number;
@@ -40,6 +44,8 @@ export class Asset {
   readonly annotations: PureAnnotationExport[];
   readonly resolution: number;
   readonly frameCount: number;
+  /** 击中特效（矢量动画）形状定义（素材包无则空数组） */
+  readonly hitEffects: HitEffectShapeExport[];
 
   /** 帧名解析器（名字 → 帧索引，基于 PerFrameData.name） */
   readonly resolver: FrameResolver;
@@ -141,6 +147,7 @@ export class Asset {
     this.annotations = raw.annotations?.annotations ?? [];
     this.resolution = resolution;
     this.frameCount = raw.manifest.totalFrames;
+    this.hitEffects = raw.hitEffects?.shapes ?? [];
   }
 
   static async load(input: ArrayBuffer | Uint8Array | string, options: LoadOptions = {}): Promise<Asset> {

@@ -121,6 +121,8 @@ export interface Manifest {
   paletteCount: number;
   annotationCount: number;
   annotationFile: string | null;
+  /** ★ 击中特效定义文件（有特效形状时存在） */
+  hitEffectFile: string | null;
   hashes: Record<string, string>;
 }
 

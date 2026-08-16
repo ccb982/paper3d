@@ -96,6 +96,8 @@ export interface BundleLoadResult {
   ftxBinary: Uint8Array;
   frames: PerFrameData[];
   annotations: AnnotationsFile | null;
+  /** ★ 击中特效定义（素材包 hit_effects.json；无 = null） */
+  hitEffects: unknown;
 }
 
 export async function loadBundle(
@@ -137,6 +139,7 @@ export async function loadBundle(
   }
 
   let annotations: AnnotationsFile | null = null;
+  let hitEffects: unknown = null;
   if (manifest.annotationFile) {
     const annRaw = files.get(manifest.annotationFile);
     if (annRaw) {
@@ -144,5 +147,11 @@ export async function loadBundle(
     }
   }
 
-  return { manifest, ftxBinary, frames, annotations };
+  // ★ 击中特效定义（hit_effects.json，随素材包一并导出）
+  if (manifest.hitEffectFile) {
+    const hitRaw = files.get(manifest.hitEffectFile);
+    if (hitRaw) hitEffects = JSON.parse(new TextDecoder().decode(hitRaw));
+  }
+
+  return { manifest, ftxBinary, frames, annotations, hitEffects };
 }

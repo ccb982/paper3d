@@ -34,6 +34,8 @@ export class Asset {
   readonly residualTextures: THREE.DataTexture[];
   readonly annotations: PureAnnotationExport[];
   readonly resolution: number;
+  /** ★ 击中特效定义（素材包 hit_effects.json；无 = null） */
+  readonly hitEffects: unknown;
   readonly frameCount: number;
 
   /** FTX 解码数据（构建流体效果用） */
@@ -107,6 +109,8 @@ export class Asset {
     this.baseTextures = baseTextures;
     this.residualTextures = residualTextures;
     this.annotations = raw.annotations?.annotations ?? [];
+    /** ★ 击中特效定义（素材包 hit_effects.json；无 = null） */
+    this.hitEffects = raw.hitEffects ?? null;
     this.resolution = resolution;
     this.frameCount = raw.manifest.totalFrames;
   }

@@ -64,9 +64,17 @@
       <button id="physNone">✖ 清除</button>
       <span id="physState" class="label" style="color:#0ff"></span>
     </div>
+    <div class="row">
+      <span class="label" style="min-width:90px">击中特效</span>
+      <button id="btnHitPreview">💥 预览击中特效</button>
+      <button id="btnHitStop" disabled>⏹ 停止</button>
+      <span id="hitState" class="label" style="color:#ffd166"></span>
+    </div>
   </div>
   <script type="module">
+    import * as THREE from 'three';
     import { Asset, FtxAsset, createThreeContext, renderFrameData, renderFtxFrame, disposeFtxQuad } from './src/index.ts';
+    import { generateVariant, randomSeed, shapeSeed, tickVariant, variantDuration } from './src/hitEffect/variantGenerator.ts';
 
     const canvas = document.getElementById('c');
     const ctx = createThreeContext(canvas);
@@ -138,6 +146,9 @@
         refreshSlider();
         resizeToAsset();
         lastTime = performance.now();
+        if (asset.hitEffects && asset.hitEffects.shapes && asset.hitEffects.shapes.length > 0) {
+          $('hitState').textContent = `素材包含 ${asset.hitEffects.shapes.length} 个击中特效形状，可点💥预览`;
+        }
       } catch (err) {
         info.textContent = '加载失败: ' + err.message;
         console.error(err);
@@ -260,8 +271,212 @@
     $('physPoison').onclick = () => injectPhysics('poison');
     $('physNone').onclick = () => injectPhysics(null);
 
+    // ========== ★ 击中特效预览（素材包 hit_effects.json） ==========
+    let hitDefs = null;        // 解析后的特效形状列表
+    let hitFtxImages = new Map(); // 形状名 → FTX 合成后的 RGB 图（CPU 合成一次）
+    let hitStart = 0;
+    let hitVariants = [];
+    let hitTotal = 0;
+    let hitPlaying = false;
+    // ★ 击中特效在主窗口(#c)播放：离屏 2D 画帧 → 纹理 → WebGL 满屏 quad
+    let hitCanvas2d = null;      // 离屏 2D 画布
+    let hitTexture = null;       // 上传到 WebGL 的纹理
+    let hitQuad = null;          // 满屏 quad（独立场景，不干扰帧渲染）
+    let hitScene = null;
+
+    function base64ToBytes(b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    function base64ToFloat(b64) { return new Float32Array(base64ToBytes(b64).buffer); }
+    function hsl2rgb(h, s, l) {
+      h = ((h % 1) + 1) % 1;
+      const a = s * Math.min(l, 1 - l);
+      const f = (n) => { const k = (n + h * 12) % 12; return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)); };
+      return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+    }
+    /** FTX 嵌入（baseHsl + 量化残差）→ RGB 画布（CPU 合成一次，供预览绘制） */
+    function buildFtxImage(ftx) {
+      const hsl = base64ToFloat(ftx.baseHslBase64);
+      const res = base64ToBytes(ftx.residualBase64);
+      const w = ftx.width, h = ftx.height;
+      const img = new ImageData(w, h);
+      for (let i = 0; i < w * h; i++) {
+        const o = i * 4;
+        const baseA = hsl[o + 3];
+        if (baseA < 0.5) continue;
+        const dH = (res[o] / 255 * 2 - 1) * 0.5;
+        const dS = (res[o + 1] / 255 * 2 - 1) * 0.5;
+        const dL = (res[o + 2] / 255 * 2 - 1) * 0.5;
+        const fh = (hsl[o] + dH + 1) % 1;
+        const fs = Math.max(0, Math.min(1, hsl[o + 1] + dS));
+        const fl = Math.max(0, Math.min(1, hsl[o + 2] + dL));
+        const [r, g, b] = hsl2rgb(fh, fs, fl);
+        img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
+      }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').putImageData(img, 0, 0);
+      return c;
+    }
+    /** 从素材包 hit_effects.json 准备预览 */
+    function prepareHitPreview() {
+      const raw = asset?.hitEffects;
+      if (!raw || !raw.shapes || raw.shapes.length === 0) return false;
+      hitDefs = raw.shapes;
+      hitFtxImages.clear();
+      for (const sh of hitDefs) {
+        if (sh.ftx) hitFtxImages.set(sh.name, buildFtxImage(sh.ftx));
+      }
+      return true;
+    }
+    function startHitPreview() {
+      if (!prepareHitPreview()) {
+        $('hitState').textContent = '无击中特效定义';
+        return;
+      }
+      // 构造生成器可消费的 def（outline + fill + params）
+      const defs = hitDefs.map((sh, i) => ({
+        id: i,
+        name: sh.name,
+        outline: sh.outline,
+        fill: sh.solid ?? { h: 0.55, s: 0.8, l: 0.6, a: 1 },
+        params: sh.params,
+      }));
+      const seed = randomSeed();
+      hitVariants = defs.map((d, i) => generateVariant(d, shapeSeed(seed, i)));
+      hitTotal = Math.max(...defs.map(variantDuration));
+      hitStart = performance.now();
+      // 离屏 2D 画布（与主画布同尺寸）
+      hitCanvas2d = document.createElement('canvas');
+      hitCanvas2d.width = canvas.width;
+      hitCanvas2d.height = canvas.height;
+      // WebGL 满屏 quad：独立场景，纹理每帧更新
+      hitTexture = new THREE.Texture(hitCanvas2d);
+      hitTexture.minFilter = THREE.LinearFilter;
+      hitTexture.magFilter = THREE.LinearFilter;
+      hitScene = new THREE.Scene();
+      const hitMat = new THREE.ShaderMaterial({
+        vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+        fragmentShader: 'uniform sampler2D uTex; varying vec2 vUv; void main(){ gl_FragColor = texture2D(uTex, vec2(vUv.x, 1.0 - vUv.y)); }',
+        uniforms: { uTex: { value: hitTexture } },
+        depthTest: false,
+      });
+      hitQuad = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), hitMat);
+      hitQuad.position.set(0.5, 0.5, 0);
+      hitQuad.frustumCulled = false;
+      hitScene.add(hitQuad);
+      hitPlaying = true;
+      $('btnHitPreview').disabled = true;
+      $('btnHitStop').disabled = false;
+      $('hitState').textContent = `播放中（${hitDefs.length} 形状，${hitTotal.toFixed(2)}s）`;
+    }
+    function stopHitPreview() {
+      hitPlaying = false;
+      if (hitQuad) { hitScene?.remove(hitQuad); hitQuad.geometry.dispose(); hitQuad.material.dispose(); hitQuad = null; }
+      if (hitTexture) { hitTexture.dispose(); hitTexture = null; }
+      hitScene = null;
+      hitCanvas2d = null;
+      $('btnHitPreview').disabled = false;
+      $('btnHitStop').disabled = true;
+      $('hitState').textContent = '';
+    }
+    $('btnHitPreview').onclick = () => {
+      try {
+        startHitPreview();
+      } catch (e) {
+        $('hitState').textContent = '预览失败: ' + e.message;
+        console.error('[hitEffect] 预览失败:', e);
+      }
+    };
+    $('btnHitStop').onclick = () => {
+      try { stopHitPreview(); } catch (e) { console.error(e); }
+    };
+
+    /** 击中特效 2D 绘制（预览模式，叠加纯色/FTX纹理填充 + 外扩动画） */
+    function drawHitPreview(t) {
+      if (!hitCanvas2d) return;
+      const c2d = hitCanvas2d.getContext('2d');
+      const W = hitCanvas2d.width, H = hitCanvas2d.height;
+      c2d.clearRect(0, 0, W, H);
+      for (let i = 0; i < hitDefs.length; i++) {
+        const sh = hitDefs[i];
+        const v = hitVariants[i];
+        const pose = tickVariant(v, t, {
+          params: sh.params,
+          outline: sh.outline,
+          fill: sh.solid ?? { h: 0, s: 0, l: 0, a: 1 },
+        });
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of v.vertices) {
+          if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+          if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+        }
+        const span = Math.max(1e-6, Math.max(maxX - minX, maxY - minY));
+        const pad = 40;
+        const s = (Math.min(W, H) - pad * 2) / span;
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        c2d.save();
+        c2d.translate(W / 2, H / 2);
+        c2d.rotate(pose.angle);
+        c2d.scale(pose.scaleX, pose.scaleY);
+        c2d.translate(-cx * s, -cy * s);
+        c2d.beginPath();
+        v.vertices.forEach((p, j) => {
+          const px = p.x * s, py = p.y * s;
+          if (j === 0) c2d.moveTo(px, py); else c2d.lineTo(px, py);
+        });
+        c2d.closePath();
+        // 填充：FTX 帧纹理（clip 内）或纯色
+        const ftxImg = hitFtxImages.get(sh.name);
+        if (sh.fillMode === 'ftx' && ftxImg) {
+          c2d.save();
+          c2d.clip();
+          c2d.imageSmoothingEnabled = false;
+          c2d.drawImage(ftxImg, 0, 0, W, H);
+          c2d.restore();
+        } else if (sh.solid) {
+          const [fr, fg, fb] = hsl2rgb(sh.solid.h, sh.solid.s, sh.solid.l);
+          c2d.fillStyle = `rgba(${fr},${fg},${fb},${sh.solid.a ?? 1})`;
+          c2d.fill();
+        }
+        // 外置残差层（可选，clip 内平铺）
+        if (sh.residualLayer) {
+          const rc = document.createElement('canvas');
+          rc.width = sh.residualLayer.width;
+          rc.height = sh.residualLayer.height;
+          rc.getContext('2d').putImageData(new ImageData(
+            new Uint8ClampedArray(base64ToBytes(sh.residualLayer.dataBase64)),
+            sh.residualLayer.width, sh.residualLayer.height
+          ), 0, 0);
+          c2d.save();
+          c2d.clip();
+          c2d.imageSmoothingEnabled = false;
+          c2d.drawImage(rc, 0, 0, W, H);
+          c2d.restore();
+        }
+        c2d.strokeStyle = 'rgba(255,255,255,0.35)';
+        c2d.lineWidth = 1;
+        c2d.stroke();
+        c2d.restore();
+      }
+    }
+
     function tick() {
       requestAnimationFrame(tick);
+      if (hitPlaying) {
+        const t = (performance.now() - hitStart) / 1000;
+        drawHitPreview(t);
+        if (hitTexture && hitQuad) {
+          hitTexture.needsUpdate = true;
+          ctx.renderer.clear(true, true, true);
+          ctx.renderer.render(hitScene, ctx.camera);
+        }
+        if (t >= hitTotal) stopHitPreview();
+        return;
+      }
       if (!asset || !ctrl) return;
 
       const now = performance.now();

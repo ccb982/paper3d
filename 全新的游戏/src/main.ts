@@ -54,6 +54,15 @@ async function boot() {
   const enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
   console.log('[boot] 敌人已加载:', enemyAsset.frameNames().join(', '), '帧');
 
+  // ★ 加载击中特效（矢量动画）素材包（hit_effects.json；缺省无矢量动画能力）
+  let hitEffectAsset: Asset | null = null;
+  try {
+    hitEffectAsset = await Asset.load(encodeURI('/fx/bullets/主角子弹击中特效.scene.zip'));
+    console.log('[boot] 击中特效素材包已加载:', hitEffectAsset.hitEffects.length, '个矢量形状');
+  } catch (e) {
+    console.warn('[boot] 击中特效素材包加载失败，矢量动画不可用:', e);
+  }
+
   // 输入绑定（桌面，双端解耦；点击画布 → 指针锁定/隐藏光标，可 360° 转视角）
   const binding = new DesktopBinding(window, canvas);
 
@@ -61,7 +70,7 @@ async function boot() {
   const physics = new PhysicsWorld();
 
   // ---- 世界模式（实体管线：主角/敌人/物品实体 + 无限 chunk 地图 + 相机 + 交互） ----
-  const mode = new WorldMode(scene, camera, renderer, asset, physics, enemyAsset, bulletAsset);
+  const mode = new WorldMode(scene, camera, renderer, asset, physics, enemyAsset, bulletAsset, hitEffectAsset ?? undefined);
 
   // ★ 碰撞事件已由实体管线接管（EntityManager 按 userData=实体 id 分发 → 实体 onCollision）
 

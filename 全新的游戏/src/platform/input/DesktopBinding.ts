@@ -57,6 +57,7 @@ export class DesktopBinding {
         if (e.code === 'KeyL') this.state.pressed.skill = true;
         if (e.code === 'KeyE') this.state.pressed.interact = true;
         if (e.code === 'Space') this.state.pressed.jump = true;
+        if (e.code === 'KeyF') this.state.pressed.debug = true;
       }
       this.keyState.set(e.code, true);
     };
@@ -128,7 +129,7 @@ export class DesktopBinding {
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
-      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false };
+      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, debug: false };
       this.state.interactions = [];
       this.state.zoomAxis = 0;
       pointerDown = false;
