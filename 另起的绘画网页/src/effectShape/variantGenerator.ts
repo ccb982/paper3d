@@ -45,25 +45,27 @@ function centroid(pts: { x: number; y: number }[]): { x: number; y: number } {
   return { x: cx / n, y: cy / n };
 }
 
-/** 沿轮廓法线（邻边垂直方向）正弦扰动 —— NV 扭曲 */
-function nvDistort(
+/** 沿质心径向正弦扰动 —— NV 扭曲（★ 拓扑安全版）：
+ *   沿【质心→顶点】方向位移（而非邻边法线）：尖刺/星形轮廓不产生
+ *   自相交/三角形碎片，拓扑关系不变；位移钳制在径向距离一半以内 */
+function radialDistort(
   pts: { x: number; y: number }[],
+  centroid: { x: number; y: number },
   amplitude: number,
   frequency: number,
   phase: number,
 ): { x: number; y: number }[] {
-  const n = pts.length;
-  if (n < 3) return pts.slice();
-  return pts.map((p, i) => {
-    const prev = pts[(i - 1 + n) % n];
-    const next = pts[(i + 1) % n];
-    const tx = next.x - prev.x, ty = next.y - prev.y;
-    const len = Math.hypot(tx, ty);
-    if (len < 1e-9) return { ...p };
-    // 法线（垂直邻边方向）
-    const nx = -ty / len, ny = tx / len;
-    const offset = amplitude * Math.sin(frequency * (p.x + p.y) + phase);
-    return { x: p.x + nx * offset, y: p.y + ny * offset };
+  return pts.map(p => {
+    const dx = p.x - centroid.x, dy = p.y - centroid.y;
+    const r = Math.hypot(dx, dy);
+    if (r < 1e-9) return { ...p };
+    const theta = Math.atan2(dy, dx);
+    let offset = amplitude * Math.sin(frequency * theta + phase);
+    // ★ 拓扑安全：位移不超过径向距离的一半（防止顶点越过质心/互相穿越）
+    const maxOff = r * 0.5;
+    offset = Math.max(-maxOff, Math.min(maxOff, offset));
+    const s = (r + offset) / r;
+    return { x: centroid.x + dx * s, y: centroid.y + dy * s };
   });
 }
 
@@ -89,10 +91,10 @@ export function generateVariant(def: EffectShapeDef, seed: number): EffectShapeV
     return { x: c.x + dx * cosA - dy * sinA, y: c.y + dx * sinA + dy * cosA };
   });
 
-  // ③ NV 扭曲（振幅在 randomRange 内随机）
+  // ③ NV 扭曲（振幅在 randomRange 内随机；径向位移，拓扑安全）
   const amp = p.distortion.amplitude * (1 - p.distortion.randomRange + rand() * 2 * p.distortion.randomRange);
   const phase = rand() * Math.PI * 2;
-  vertices = nvDistort(vertices, Math.max(0, amp), Math.max(0.1, p.distortion.frequency), phase);
+  vertices = radialDistort(vertices, c, Math.max(0, amp), Math.max(0.1, p.distortion.frequency), phase);
 
   // ④ x/y 外扩目标（独立随机）
   const scaleX = p.expand.xMin + rand() * (p.expand.xMax - p.expand.xMin);
