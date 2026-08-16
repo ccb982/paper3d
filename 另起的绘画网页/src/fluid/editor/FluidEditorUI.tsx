@@ -88,6 +88,11 @@ const OperationsPanel: React.FC<{
   // ★ 手动暂停/恢复持续注入（不影响源队列，也不受持续模式开关影响）
   continuousPaused: boolean;
   onTogglePaused: () => void;
+  // ★ 注入颜色自定义（hex）+ 提取（点击画布取色）
+  injectColorHex: string;
+  setInjectColorHex: (hex: string) => void;
+  pickColorActive: boolean;
+  onTogglePickColor: () => void;
 }> = ({
   config,
   onConfigChange,
@@ -120,6 +125,10 @@ const OperationsPanel: React.FC<{
   onUpdateWaypointSpeed,
   continuousPaused,
   onTogglePaused,
+  injectColorHex,
+  setInjectColorHex,
+  pickColorActive,
+  onTogglePickColor,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
     { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
@@ -288,6 +297,43 @@ const OperationsPanel: React.FC<{
             {currentMode.desc}
           </div>
         </div>
+
+        {/* 注入颜色自定义（水/颜料模式；速度/印章无颜色概念） */}
+        {(injectMode === 'water' || injectMode === 'color') && (
+          <div className="control-group" style={{ marginBottom: '12px' }}>
+            <div className="row" style={{ alignItems: 'center', gap: '6px' }}>
+              <label style={{ margin: 0 }}>🎨 注入颜色</label>
+              <input
+                type="color"
+                value={injectColorHex}
+                onChange={(e) => setInjectColorHex(e.target.value)}
+                style={{ width: '32px', height: '24px', padding: 0, border: 'none', cursor: 'pointer' }}
+                title="自定义注入颜色"
+              />
+              <button
+                onClick={onTogglePickColor}
+                style={{
+                  padding: '3px 8px',
+                  fontSize: '10px',
+                  border: pickColorActive ? '2px solid #f57c00' : '1px solid #ddd',
+                  background: pickColorActive ? '#fff3e0' : '#fff',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  color: pickColorActive ? '#e65100' : '#333',
+                  fontWeight: pickColorActive ? 'bold' : 'normal',
+                }}
+                title="点击后，在画布上点取颜色作为注入颜色"
+              >
+                {pickColorActive ? '🎯 点击画布取色…' : '🎯 提取'}
+              </button>
+            </div>
+            {pickColorActive && (
+              <div style={{ fontSize: '10px', color: '#e65100', marginTop: '4px', padding: '4px 6px', background: '#fff3e0', borderRadius: '4px', border: '1px solid #ffcc80' }}>
+                💡 在画布上点击位置 → 提取该处合成色为注入颜色
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 持续注入开关 */}
         <div className="control-group" style={{ marginBottom: '12px' }}>
@@ -1930,6 +1976,11 @@ export const FluidEditorUI: React.FC = () => {
   const [injectMode, setInjectMode] = useState<InjectMode>('water');
   const [injectRadius, setInjectRadius] = useState(0.1);
   const [injectStrength, setInjectStrength] = useState(1.0);
+  // ★ 注入颜色（hex；水=蓝，颜料=红默认）+ 取色模式
+  const [injectColorHex, setInjectColorHex] = useState('#1e90ff');
+  const [pickColorActive, setPickColorActive] = useState(false);
+  const pickColorActiveRef = useRef(false);
+  pickColorActiveRef.current = pickColorActive;
 
   // ★ 墙体绘制模式状态（仅在 obstacle 视口下生效）
   const [wallBrushMode, setWallBrushMode] = useState<'brush' | 'eraser'>('brush');
@@ -2063,14 +2114,34 @@ export const FluidEditorUI: React.FC = () => {
   // 实际速度矢量 = 方向（归一化） × 速度大小（标量）
 
   const buildInjectionConfig = useCallback((pos: { x: number; y: number }) => {
+    // ★ 注入颜色：hex → RGB → HSL（与流体颜色场 HSLA 语义一致）
+    const hexToHsl = (hex: string): { h: number; s: number; l: number } => {
+      const r = parseInt(hex.slice(1, 3), 16) / 255;
+      const g = parseInt(hex.slice(3, 5), 16) / 255;
+      const b = parseInt(hex.slice(5, 7), 16) / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      let h = 0, s = 0;
+      if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (max === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+      }
+      return { h, s, l };
+    };
+
     let color: [number, number, number, number] = [0.0, 0.8, 1.0, 1.0];
     let rate = 0.6 * injectStrength;
 
     if (injectMode === 'water') {
-      color = [0.0, 0.8, 1.0, 1.0];
+      const c = hexToHsl(injectColorHex);
+      color = [c.h, c.s, c.l, 1.0];
       rate = 0.6 * injectStrength;
     } else if (injectMode === 'color') {
-      color = [1.0, 0.2, 0.2, 1.0];
+      const c = hexToHsl(injectColorHex);
+      color = [c.h, c.s, c.l, 1.0];
       rate = 0.5;
     } else if (injectMode === 'velocity') {
       color = [0, 0, 0, 0];
@@ -2105,7 +2176,7 @@ export const FluidEditorUI: React.FC = () => {
       color,
       ...(densityValue !== undefined ? { density: densityValue } : {}),
     };
-  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude, continuousMode, config.advectionMode]);
+  }, [injectMode, injectRadius, injectStrength, directionX, directionY, speedMagnitude, continuousMode, config.advectionMode, injectColorHex]);
 
   // ★ 鼠标按住状态：单次模式下长按 = 临时持续注入（松开即停）
   const pointerDownRef = useRef(false);
@@ -3753,6 +3824,10 @@ export const FluidEditorUI: React.FC = () => {
           onUpdateWaypointSpeed={handleUpdateWaypointSpeed}
           continuousPaused={continuousPaused}
           onTogglePaused={handleTogglePaused}
+          injectColorHex={injectColorHex}
+          setInjectColorHex={setInjectColorHex}
+          pickColorActive={pickColorActive}
+          onTogglePickColor={() => setPickColorActive((v) => !v)}
         />
 
         {/* FTX 帧数据加载 */}
@@ -4014,6 +4089,63 @@ export const FluidEditorUI: React.FC = () => {
             // 计算归一化坐标 (0~1, Y 向下)
             const normX = cssX / rect.width;
             const normY = cssY / rect.height;
+
+            // ★ 提取取色模式：点击画布 → 读取该处模拟器合成色 → 设为注入颜色
+            if (pickColorActiveRef.current) {
+              try {
+                const simSample = editor.samplePixel(pixX, pixY);
+                // 合成色 = 基础色 + 残差（按当前合成公式），与画面显示一致
+                let compHsl: { h: number; s: number; l: number } | null = null;
+                const texX = pixX, texY = pixY;
+                const solverW = config.resolution.w, solverH = config.resolution.h;
+                const baseHslData = stashedBaseHslRef.current;
+                const baseW = stashedBaseWRef.current, baseH = stashedBaseHRef.current;
+                if (baseHslData && baseW > 0 && baseH > 0) {
+                  const baseX = Math.floor(Math.min(Math.max(texX / solverW * baseW, 0), baseW - 1));
+                  const baseY = Math.floor(Math.min(Math.max(texY / solverH * baseH, 0), baseH - 1));
+                  const idx = (baseY * baseW + baseX) * 4;
+                  const base = { h: baseHslData[idx], s: baseHslData[idx + 1], l: baseHslData[idx + 2] };
+                  const res = { r: simSample.residualH, g: simSample.residualS, b: simSample.residualL };
+                  compHsl = computeCompositeHsl(
+                    base, res,
+                    residualRangeHRef.current,
+                    residualRangeSLRef.current,
+                    config.combineMode ?? 'add',
+                    advectionModeRef.current === 'scalar' && config.scalarConfig
+                      ? (() => {
+                        const dbuf = new Uint8Array(4);
+                        editor.readDensityPixel(texX, texY, dbuf);
+                        return {
+                          density: dbuf[0] / 255,
+                          baseline: config.scalarConfig?.baselineDensity ?? 1.0,
+                          hMul: config.scalarConfig?.hMultiplier ?? 0.1,
+                          sMul: config.scalarConfig?.sMultiplier ?? 0.1,
+                          lMul: config.scalarConfig?.lMultiplier ?? 0.1,
+                        };
+                      })()
+                      : undefined,
+                    config.channels,
+                  );
+                }
+                if (!compHsl) compHsl = { h: simSample.residualH, s: simSample.residualS, l: simSample.residualL };
+                // HSL → hex（与 rgbToHsl 反向）
+                const hslToHex = (h: number, s: number, l: number): string => {
+                  const a = s * Math.min(l, 1 - l);
+                  const f = (n: number) => {
+                    const k = (n + h * 12) % 12;
+                    return Math.round((l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255);
+                  };
+                  const toHex = (v: number) => v.toString(16).padStart(2, '0');
+                  return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+                };
+                setInjectColorHex(hslToHex(compHsl.h, compHsl.s, compHsl.l));
+                setPickColorActive(false);
+                console.log('[注入颜色] 已从画布提取:', hslToHex(compHsl.h, compHsl.s, compHsl.l));
+              } catch (err) {
+                console.warn('[注入颜色] 提取失败:', err);
+              }
+              return;
+            }
 
             // ★ 路径录制模式：优先拦截，点击画布添加航点
             if (recordingWaypointSourceIdRef.current !== null) {
