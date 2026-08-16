@@ -387,9 +387,9 @@ function extractBaseByClick(
 
   const baseCanvas = document.createElement('canvas');
   baseCanvas.width = texW;
-  baseCanvas.height = texW;
+  baseCanvas.height = texH;
   const baseCtx = baseCanvas.getContext('2d')!;
-  const baseImageData = baseCtx.createImageData(texW, texW);
+  const baseImageData = baseCtx.createImageData(texW, texH);
   const baseData = baseImageData.data;
 
   if (regionIdTex) {
@@ -1756,7 +1756,7 @@ export const BaseColorEditor: React.FC = () => {
         if (dx * dx + dy * dy > half * half) continue;
         const gx = px + dx;
         const gy = py + dy;
-        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSize) continue;
+        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSizeY) continue;
         const pi = (gy * texSize + gx) * 4;
         data[pi] = r;
         data[pi + 1] = g;
@@ -1784,7 +1784,7 @@ export const BaseColorEditor: React.FC = () => {
         if (dx * dx + dy * dy > half * half) continue;
         const gx = px + dx;
         const gy = py + dy;
-        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSize) continue;
+        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSizeY) continue;
         const pi = (gy * texSize + gx) * 4;
         data[pi + 3] = 0;
         erasedPixelsRef.current.add(`${gx},${gy}`);
@@ -2158,6 +2158,7 @@ export const BaseColorEditor: React.FC = () => {
         }
       }
     } else if (currentTool === 'paint') {
+      if (e.button !== 0) return; // 只响应左键（滚轮中键/右键不绘制）
       if (mode !== 'base2') {
         console.warn('画笔仅在基础色模式下可用');
         return;
@@ -2166,6 +2167,7 @@ export const BaseColorEditor: React.FC = () => {
       setIsDrawing(true);
       paintOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'eraser') {
+      if (e.button !== 0) return; // 只响应左键（滚轮中键/右键不擦除）
       if (mode !== 'base2' && mode !== 'composite') {
         console.warn('橡皮擦仅在基础色/叠加模式下可用');
         return;
@@ -2174,6 +2176,7 @@ export const BaseColorEditor: React.FC = () => {
       setIsDrawing(true);
       eraseOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'fixbrush') {
+      if (e.button !== 0) return; // 只响应左键
       // ★ 强制修正任意模式可用（不限制 base2）
       setIsDrawing(true);
       fixBrushAt(pixel.x, pixel.y);
