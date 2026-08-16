@@ -65,7 +65,7 @@ export function EffectShapePanel() {
   const canvasWidth = useAppStore(s => s.canvasWidth);
   const canvasHeight = useAppStore(s => s.canvasHeight);
   const activeLayerId = useAppStore(s => s.activeLayerId);
-  const refreshRegionEntities = useAppStore(s => s.refreshRegionEntities);
+  const refreshRegionCache = useAppStore(s => s.refreshRegionCache);
   const [configs, setConfigs] = useState<Record<string, EffectShapeDef>>({});
   const [playing, setPlaying] = useState(false);
   const [seed, setSeed] = useState(() => randomSeed());
@@ -74,10 +74,11 @@ export function EffectShapePanel() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const residualCanvasCache = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
-  /** ★ 刷新：对当前图层生成区域实体（复用 store 动作），并强制重读图层绑定 */
-  const refresh = () => {
+  /** ★ 刷新：对当前图层跑完整区域管线（BFS Worker → 区域缓存 + 区域实体 + 色块），
+   *   只调用 refreshRegionEntities 会从 stale 缓存重建并把旧实体清空 */
+  const refresh = async () => {
     if (activeLayerId) {
-      refreshRegionEntities(activeLayerId);
+      await refreshRegionCache(activeLayerId, { clearPaintData: false });
     }
     setRefreshTick(t => t + 1);
   };
@@ -99,33 +100,34 @@ export function EffectShapePanel() {
       .filter((s): s is NonNullable<typeof s> => s !== null);
   }, [layers, regionEntities, imageState.imageLayerId, refreshTick]);
 
-  /** 每层配置（存在保留，缺省用默认） */
+  /** 每层配置（存在且轮廓匹配则保留；partial 配置合并进默认值，绝不崩溃） */
   const defOf = (layerId: string, outline: { x: number; y: number }[]): EffectShapeDef => {
     const prev = configs[layerId];
-    return prev && prev.outline.length === outline.length
-      ? { ...prev, outline }
-      : {
-          id: 0,
-          name: '',
-          outline,
-          fill: prev?.fill ?? { h: 0.55, s: 0.8, l: 0.6, a: 1 },
-          residualTex: prev?.residualTex,
-          visible: prev?.visible ?? true,
-          params: prev?.params ?? JSON.parse(JSON.stringify(DEFAULT_PARAMS)),
-        };
+    const base: Partial<EffectShapeDef> = prev && prev.outline && prev.outline.length === outline.length ? prev : {};
+    return {
+      id: 0,
+      name: '',
+      outline,
+      fill: base.fill ?? { h: 0.55, s: 0.8, l: 0.6, a: 1 },
+      residualTex: base.residualTex,
+      visible: base.visible ?? true,
+      params: base.params ?? JSON.parse(JSON.stringify(DEFAULT_PARAMS)),
+    };
   };
 
-  const patchShape = (layerId: string, patch: Partial<EffectShapeDef>) => {
-    setConfigs(m => ({ ...m, [layerId]: { ...m[layerId], ...patch } }));
+  /** 所有写入都存完整 def（含当前轮廓），避免 partial 被 defOf 丢弃 */
+  const updateDef = (layerId: string, outline: { x: number; y: number }[], patch: Partial<EffectShapeDef>) => {
+    setConfigs(m => ({ ...m, [layerId]: { ...defOf(layerId, outline), ...patch } }));
   };
-  const patchParams = (layerId: string, patch: Partial<EffectShapeParams>) => {
-    setConfigs(m => ({ ...m, [layerId]: { ...m[layerId], params: { ...m[layerId].params, ...patch } } }));
+  const patchShape = (layerId: string, outline: { x: number; y: number }[], patch: Partial<EffectShapeDef>) => {
+    updateDef(layerId, outline, patch);
   };
-  const patchNested = (layerId: string, key: 'distortion' | 'rotation' | 'expand', patch: Record<string, number>) => {
-    setConfigs(m => ({
-      ...m,
-      [layerId]: { ...m[layerId], params: { ...m[layerId].params, [key]: { ...m[layerId].params[key], ...patch } } },
-    }));
+  const patchParams = (layerId: string, outline: { x: number; y: number }[], patch: Partial<EffectShapeParams>) => {
+    updateDef(layerId, outline, { params: { ...defOf(layerId, outline).params, ...patch } });
+  };
+  const patchNested = (layerId: string, outline: { x: number; y: number }[], key: 'distortion' | 'rotation' | 'expand', patch: Record<string, number>) => {
+    const def = defOf(layerId, outline);
+    updateDef(layerId, outline, { params: { ...def.params, [key]: { ...def.params[key], ...patch } } });
   };
 
   /** ★ 取背景色：按主画布同一背景变换，采样背景图在区域质心位置的颜色 */
@@ -154,7 +156,7 @@ export function EffectShapePanel() {
       c.width = 1; c.height = 1;
       c.getContext('2d')!.drawImage(img, sel.x + sx * sel.width, sel.y + sy * sel.height, 1, 1, 0, 0, 1, 1);
       const d = c.getContext('2d')!.getImageData(0, 0, 1, 1).data;
-      applySampledColor(layerId, d);
+      applySampledColor(layerId, outline, d);
     } else {
       const fitScale = Math.min(canvasWidth / img.width, canvasHeight / img.height) * (imageState.scale ?? 1);
       dw = img.width * fitScale;
@@ -168,14 +170,14 @@ export function EffectShapePanel() {
       c.width = 1; c.height = 1;
       c.getContext('2d')!.drawImage(img, ix, iy, 1, 1, 0, 0, 1, 1);
       const d = c.getContext('2d')!.getImageData(0, 0, 1, 1).data;
-      applySampledColor(layerId, d);
+      applySampledColor(layerId, outline, d);
     }
   };
 
-  const applySampledColor = (layerId: string, d: Uint8ClampedArray) => {
+  const applySampledColor = (layerId: string, outline: { x: number; y: number }[], d: Uint8ClampedArray) => {
     if (d[3] === 0) return;
     const { h, s, l } = rgbToHsl(d[0], d[1], d[2]);
-    patchShape(layerId, { fill: { h, s, l, a: d[3] / 255 } });
+    patchShape(layerId, outline, { fill: { h, s, l, a: d[3] / 255 } });
   };
 
   const playOnce = () => {
@@ -275,8 +277,8 @@ export function EffectShapePanel() {
           {layerShapes.length === 0 && (
             <p style={{ fontSize: '11px', color: '#777', marginTop: '6px' }}>
               暂无带区域实体的图层（共 {layers.length} 图层）。
-              在图层中画好形状后点「🔄 刷新图层」（会为当前图层生成区域实体）；
-              或先在图层面板完成区域实体生成。
+              在图层中画好形状后点「🔄 刷新图层」——会跑完整区域管线
+              （BFS Worker → 区域缓存 + 区域实体 + 区域色块）。
             </p>
           )}
 
@@ -294,12 +296,12 @@ export function EffectShapePanel() {
                       🎯 取背景色
                     </button>
                     <button style={{ ...BTN, background: `rgb(${fr},${fg},${fb})`, color: (def.fill.l > 0.6 ? '#111' : '#fff'), padding: '2px 8px', fontSize: '11px', border: def.fill.a < 1 ? '2px solid #fff' : 'none' }}
-                      onClick={() => patchShape(s.layerId, { fill: { ...def.fill, a: def.fill.a < 1 ? 1 : def.fill.a } })}
+                      onClick={() => patchShape(s.layerId, s.outline, { fill: { ...def.fill, a: def.fill.a < 1 ? 1 : def.fill.a } })}
                       title="给区域内部填充纯色（当前 H/S/L；不透明度滑杆控制浓度）">
                       🎨 填充
                     </button>
                     <button style={{ ...BTN, background: (def.visible ?? true) ? '#52c41a' : '#333', color: '#fff', padding: '2px 8px', fontSize: '11px' }}
-                      onClick={() => patchShape(s.layerId, { visible: !(def.visible ?? true) })}>
+                      onClick={() => patchShape(s.layerId, s.outline, { visible: !(def.visible ?? true) })}>
                       {(def.visible ?? true) ? '显示' : '隐藏'}
                     </button>
                   </div>
@@ -307,64 +309,64 @@ export function EffectShapePanel() {
 
                 <div style={{ ...LABEL, marginTop: '6px' }}><span>填充 H</span>
                   <input type="range" min={0} max={1} step={0.01} value={def.fill.h} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchShape(s.layerId, { fill: { ...def.fill, h: parseFloat(e.target.value) } })} /></div>
+                    onChange={e => patchShape(s.layerId, s.outline, { fill: { ...def.fill, h: parseFloat(e.target.value) } })} /></div>
                 <div style={{ ...LABEL }}><span>填充 S</span>
                   <input type="range" min={0} max={1} step={0.01} value={def.fill.s} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchShape(s.layerId, { fill: { ...def.fill, s: parseFloat(e.target.value) } })} /></div>
+                    onChange={e => patchShape(s.layerId, s.outline, { fill: { ...def.fill, s: parseFloat(e.target.value) } })} /></div>
                 <div style={{ ...LABEL }}><span>填充 L</span>
                   <input type="range" min={0} max={1} step={0.01} value={def.fill.l} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchShape(s.layerId, { fill: { ...def.fill, l: parseFloat(e.target.value) } })} /></div>
+                    onChange={e => patchShape(s.layerId, s.outline, { fill: { ...def.fill, l: parseFloat(e.target.value) } })} /></div>
                 <div style={{ ...LABEL }}><span>不透明度</span>
                   <input type="range" min={0} max={1} step={0.01} value={def.fill.a} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchShape(s.layerId, { fill: { ...def.fill, a: parseFloat(e.target.value) } })} /></div>
+                    onChange={e => patchShape(s.layerId, s.outline, { fill: { ...def.fill, a: parseFloat(e.target.value) } })} /></div>
 
                 <div style={{ ...LABEL, borderTop: '1px dashed #444', paddingTop: '4px' }}><span style={{ color: '#a29bfe' }}>NV 扭曲</span></div>
                 <div style={{ ...LABEL }}><span>振幅</span>
                   <input type="range" min={0} max={0.1} step={0.001} value={def.params.distortion.amplitude} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'distortion', { amplitude: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'distortion', { amplitude: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>频率</span>
                   <input type="range" min={1} max={30} step={0.5} value={def.params.distortion.frequency} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'distortion', { frequency: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'distortion', { frequency: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>随机幅度</span>
                   <input type="range" min={0} max={1} step={0.05} value={def.params.distortion.randomRange} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'distortion', { randomRange: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'distortion', { randomRange: parseFloat(e.target.value) })} /></div>
 
                 <div style={{ ...LABEL, borderTop: '1px dashed #444', paddingTop: '4px' }}><span style={{ color: '#a29bfe' }}>初始旋转(弧度)</span></div>
                 <div style={{ ...LABEL }}><span>最小</span>
                   <input type="range" min={-Math.PI} max={Math.PI} step={0.1} value={def.params.rotation.min} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'rotation', { min: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'rotation', { min: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>最大</span>
                   <input type="range" min={-Math.PI} max={Math.PI} step={0.1} value={def.params.rotation.max} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'rotation', { max: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'rotation', { max: parseFloat(e.target.value) })} /></div>
 
                 <div style={{ ...LABEL, borderTop: '1px dashed #444', paddingTop: '4px' }}><span style={{ color: '#a29bfe' }}>外扩倍率</span></div>
                 <div style={{ ...LABEL }}><span>X 最小</span>
                   <input type="range" min={1} max={4} step={0.1} value={def.params.expand.xMin} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'expand', { xMin: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'expand', { xMin: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>X 最大</span>
                   <input type="range" min={1} max={4} step={0.1} value={def.params.expand.xMax} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'expand', { xMax: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'expand', { xMax: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>Y 最小</span>
                   <input type="range" min={1} max={4} step={0.1} value={def.params.expand.yMin} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'expand', { yMin: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'expand', { yMin: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>Y 最大</span>
                   <input type="range" min={1} max={4} step={0.1} value={def.params.expand.yMax} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'expand', { yMax: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'expand', { yMax: parseFloat(e.target.value) })} /></div>
                 <div style={{ ...LABEL }}><span>时长</span>
                   <input type="range" min={0.1} max={2} step={0.05} value={def.params.expand.duration} style={{ flex: 1, margin: '0 6px' }}
-                    onChange={e => patchNested(s.layerId, 'expand', { duration: parseFloat(e.target.value) })} /></div>
+                    onChange={e => patchNested(s.layerId, s.outline, 'expand', { duration: parseFloat(e.target.value) })} /></div>
 
                 <div style={{ ...LABEL }}>
                   <span>外扩继续旋转</span>
                   <button style={{ ...BTN, background: def.params.spinWhileExpand ? '#e17055' : '#333', padding: '2px 8px', fontSize: '11px' }}
-                    onClick={() => patchParams(s.layerId, { spinWhileExpand: !def.params.spinWhileExpand })}>
+                    onClick={() => patchParams(s.layerId, s.outline, { spinWhileExpand: !def.params.spinWhileExpand })}>
                     {def.params.spinWhileExpand ? 'ON' : 'OFF'}
                   </button>
                 </div>
                 {def.params.spinWhileExpand && (
                   <div style={{ ...LABEL }}><span>转速</span>
                     <input type="range" min={0} max={6} step={0.1} value={def.params.spinSpeed} style={{ flex: 1, margin: '0 6px' }}
-                      onChange={e => patchParams(s.layerId, { spinSpeed: parseFloat(e.target.value) })} /></div>
+                      onChange={e => patchParams(s.layerId, s.outline, { spinSpeed: parseFloat(e.target.value) })} /></div>
                 )}
 
                 <div style={{ ...LABEL }}>
@@ -382,7 +384,7 @@ export function EffectShapePanel() {
                           const c = document.createElement('canvas');
                           c.width = img.width; c.height = img.height;
                           c.getContext('2d')!.drawImage(img, 0, 0);
-                          patchShape(s.layerId, { residualTex: c.getContext('2d')!.getImageData(0, 0, c.width, c.height) });
+                          patchShape(s.layerId, s.outline, { residualTex: c.getContext('2d')!.getImageData(0, 0, c.width, c.height) });
                         };
                         img.src = URL.createObjectURL(f);
                       };
@@ -393,7 +395,7 @@ export function EffectShapePanel() {
                 </div>
                 {def.residualTex && (
                   <button style={{ ...BTN, background: '#c0392b', padding: '2px 8px', fontSize: '11px', marginTop: '4px' }}
-                    onClick={() => patchShape(s.layerId, { residualTex: undefined })}>清除残差层</button>
+                    onClick={() => patchShape(s.layerId, s.outline, { residualTex: undefined })}>清除残差层</button>
                 )}
               </div>
             );
