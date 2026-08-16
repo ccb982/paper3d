@@ -492,7 +492,7 @@ export const BaseColorEditor: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const [drawingPolygon, setDrawingPolygon] = useState<Point[] | null>(null);
-  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'eraser' | 'picker' | 'select' | 'fixbrush'>('dashed');
+  const [currentTool, setCurrentTool] = useState<'dashed' | 'bezier' | 'paint' | 'eraser' | 'restore' | 'picker' | 'select' | 'fixbrush'>('dashed');
   const [mode, setMode] = useState<'base' | 'residual' | 'composite' | 'base2'>('base');
   const {
     skillGroupEditor,
@@ -530,6 +530,10 @@ export const BaseColorEditor: React.FC = () => {
   const bbox = currentFrame?.bbox || null;
   const regionIdTex = currentFrame?.regionIdTex || new Uint16Array(0);
   const baseColors = sharedBaseColors;
+
+  // ★ 初始快照（提取时的原始纹理：基础色 + regionIdTex），复原笔刷用它恢复被擦除的像素
+  const initialBaseRef = useRef<ImageData | null>(null);
+  const initialRegionIdRef = useRef<Uint16Array | null>(null);
 
   const setBgImageData = useCallback((val: ImageData | null) => {
     if (activeFrameId) updateSkillFrame(activeFrameId, { bgImageData: val });
@@ -1094,6 +1098,14 @@ export const BaseColorEditor: React.FC = () => {
         deltaPacked: deltaPacked,
         blockFlags: blockFlags,
       });
+
+      // ★ 初始快照：提取的原始纹理（复原笔刷恢复被擦除像素的依据）
+      initialBaseRef.current = new ImageData(
+        new Uint8ClampedArray(newBaseTexture.data),
+        newBaseTexture.width,
+        newBaseTexture.height,
+      );
+      initialRegionIdRef.current = new Uint16Array(localRegionIdTex);
 
       setIsExtractMode(false);
 
@@ -1843,6 +1855,62 @@ export const BaseColorEditor: React.FC = () => {
     sortPaletteByArea();
   }, [bbox, activeFrameId, updateSkillFrame, syncFrameTextures, sortPaletteByArea]);
 
+  // ★ 复原笔刷：把被擦除的像素恢复为初始提取时的基础色 + regionIdTex
+  //   依据 = initialBaseRef（提取快照基础色）/ initialRegionIdRef（快照区域ID）
+  const restoreOnBase = useCallback((px: number, py: number) => {
+    if (!baseTexture || !initialBaseRef.current || !initialRegionIdRef.current) {
+      console.warn('复原笔刷：需要先提取纹理（无初始快照）');
+      return;
+    }
+    const data = baseTexture.data;
+    const initData = initialBaseRef.current.data;
+    const radiusPx = Math.max(1, brushSize);
+    const half = Math.floor(radiusPx);
+    let touched = false;
+    for (let dy = -half; dy <= half; dy++) {
+      for (let dx = -half; dx <= half; dx++) {
+        if (dx * dx + dy * dy > half * half) continue;
+        const gx = px + dx;
+        const gy = py + dy;
+        if (gx < 0 || gx >= texSize || gy < 0 || gy >= texSizeY) continue;
+        const pi = (gy * texSize + gx) * 4;
+        // 恢复基础色 RGBA
+        data[pi] = initData[pi];
+        data[pi + 1] = initData[pi + 1];
+        data[pi + 2] = initData[pi + 2];
+        data[pi + 3] = initData[pi + 3];
+        touched = true;
+      }
+    }
+    if (!touched) return;
+    const updated = new ImageData(new Uint8ClampedArray(data), baseTexture.width, baseTexture.height);
+    setBaseTexture(updated);
+
+    // ★ 同步恢复 regionIdTex（叠加合成实时反映）
+    if (bbox && activeFrameId) {
+      const state = useAppStore.getState();
+      const frame = state.skillGroupEditor.frames.find(f => f.id === activeFrameId);
+      if (frame && frame.regionIdTex && frame.regionIdTex.length > 0) {
+        const newRegionIdTex = new Uint16Array(frame.regionIdTex);
+        const { w } = bbox;
+        for (let ly = 0; ly < bbox.h; ly++) {
+          for (let lx = 0; lx < bbox.w; lx++) {
+            const gx = bbox.x + lx;
+            const gy = bbox.y + ly;
+            if (gx < px - half || gx > px + half) continue;
+            if (gy < py - half || gy > py + half) continue;
+            if ((gx - px) * (gx - px) + (gy - py) * (gy - py) > half * half) continue;
+            const idx = ly * w + lx;
+            if (idx >= 0 && idx < initialRegionIdRef.current.length) {
+              newRegionIdTex[idx] = initialRegionIdRef.current[idx];
+            }
+          }
+        }
+        updateSkillFrame(activeFrameId, { regionIdTex: newRegionIdTex });
+      }
+    }
+  }, [baseTexture, brushSize, texSize, texSizeY, bbox, activeFrameId, updateSkillFrame, setBaseTexture]);
+
   // ★ 强制修正笔刷（8×8）：刷到后强制修正残差和基础色
   //   修正策略：左右 → 上下 → 斜向 → 新建基础色（见 forcedFixBrush）
   const FIX_BRUSH_SIZE = 8;
@@ -2175,6 +2243,15 @@ export const BaseColorEditor: React.FC = () => {
       saveHistory();
       setIsDrawing(true);
       eraseOnBase(pixel.x, pixel.y);
+    } else if (currentTool === 'restore') {
+      if (e.button !== 0) return; // 只响应左键
+      if (mode !== 'base2' && mode !== 'composite') {
+        console.warn('复原笔刷仅在基础色/叠加模式下可用');
+        return;
+      }
+      saveHistory();
+      setIsDrawing(true);
+      restoreOnBase(pixel.x, pixel.y);
     } else if (currentTool === 'fixbrush') {
       if (e.button !== 0) return; // 只响应左键
       // ★ 强制修正任意模式可用（不限制 base2）
@@ -2189,7 +2266,7 @@ export const BaseColorEditor: React.FC = () => {
       if (e.button === 2) eraseColorAt(pixel.x, pixel.y);
       else pickColor(pixel.x, pixel.y);
     }
-  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, fixBrushAt, pickColor, eraseColorAt, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
+  }, [currentTool, getCanvasPixel, drawingPolygon, paintOnBase, restoreOnBase, fixBrushAt, pickColor, eraseColorAt, saveHistory, snapPointToExisting, pickingId, bgImageData, updateBaseColor, mode, texSize]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const pixel = getCanvasPixel(e);
@@ -2212,11 +2289,15 @@ export const BaseColorEditor: React.FC = () => {
     if (isDrawing && currentTool === 'eraser' && (mode === 'base2' || mode === 'composite')) {
       eraseOnBase(pixel.x, pixel.y);
     }
+    // ★ 复原笔刷：把被擦除的像素恢复为初始提取纹理（基础色 + regionIdTex）
+    if (isDrawing && currentTool === 'restore' && (mode === 'base2' || mode === 'composite')) {
+      restoreOnBase(pixel.x, pixel.y);
+    }
     // ★ 强制修正任意模式可用（不限制 base2）
     if (isDrawing && currentTool === 'fixbrush') {
       fixBrushAt(pixel.x, pixel.y);
     }
-  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, eraseOnBase, fixBrushAt, drawingPolygon, snapPointToExisting, mode, texSize]);
+  }, [isDrawing, currentTool, getCanvasPixel, paintOnBase, eraseOnBase, restoreOnBase, fixBrushAt, drawingPolygon, snapPointToExisting, mode, texSize]);
 
   const handleMouseUp = useCallback(() => {
     if (isDrawing && baseTexture && currentTool === 'paint') {
@@ -2231,6 +2312,10 @@ export const BaseColorEditor: React.FC = () => {
         saveHistory();
         applyErase();
       }, 0);
+    }
+    if (isDrawing && currentTool === 'restore') {
+      // ★ 复原笔刷：regionIdTex 已实时同步（restoreOnBase），松开仅保存历史
+      setTimeout(() => saveHistory(), 0);
     }
     if (isDrawing && currentTool === 'fixbrush') {
       setTimeout(() => saveHistory(), 0);
@@ -2686,9 +2771,9 @@ export const BaseColorEditor: React.FC = () => {
     }
 
     // 7. 画笔光标
-    if (mousePos && (currentTool === 'paint' || currentTool === 'eraser' || currentTool === 'picker' || currentTool === 'fixbrush')) {
+    if (mousePos && (currentTool === 'paint' || currentTool === 'eraser' || currentTool === 'restore' || currentTool === 'picker' || currentTool === 'fixbrush')) {
       ctx.save();
-      ctx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : currentTool === 'eraser' ? '#ffffff' : brushColor;
+      ctx.strokeStyle = currentTool === 'picker' ? '#1890ff' : currentTool === 'fixbrush' ? '#52c41a' : currentTool === 'eraser' ? '#ffffff' : currentTool === 'restore' ? '#13c2c2' : brushColor;
       ctx.lineWidth = currentTool === 'fixbrush' ? 1.5 : 1;
       ctx.setLineDash(currentTool === 'fixbrush' ? [] : []);
       if (currentTool === 'fixbrush') {
@@ -3032,6 +3117,19 @@ export const BaseColorEditor: React.FC = () => {
           title="橡皮擦：擦为透明（松开时同步清除区域 ID）；基础色/叠加模式下可用"
         >
           橡皮
+        </button>
+        <button
+          onClick={() => { setCurrentTool('restore'); setDrawingPolygon(null); }}
+          disabled={!baseTexture || (mode !== 'base2' && mode !== 'composite')}
+          style={{
+            padding: '2px 8px', fontSize: '11px', cursor: 'pointer',
+            background: currentTool === 'restore' ? '#13c2c2' : '#f0f0f0',
+            color: currentTool === 'restore' ? '#fff' : '#333',
+            border: '1px solid #d9d9d9',
+          }}
+          title="复原笔刷：把擦除的像素恢复为最初提取纹理的基础色与残差；基础色/叠加模式下可用"
+        >
+          复原
         </button>
         <button
           onClick={() => { setCurrentTool('picker'); setDrawingPolygon(null); }}
