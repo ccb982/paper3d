@@ -7,6 +7,7 @@ import { Toolbar } from './components/Toolbar';
 import { FluidEditorUI } from './fluid';
 import { BaseColorEditor } from './components/BaseColorEditor';
 import { FluidPanel } from './components/FluidPanel';
+import { EffectShapePanel } from './effectShape/EffectShapePanel';
 import { exportMainCanvasAssetBundle } from './assetBundle/assetBundleExport';
 
 function App() {
@@ -155,6 +156,8 @@ function App() {
         <LayerControl />
         {/* 流体特效控制面板（残差平流，直接绘制在区域实体模板缓冲之上） */}
         <FluidPanel />
+        {/* ★ 程序化击中特效形状（独立模块：矢量形状 + 随机变体 + 预览） */}
+        <EffectShapePanel />
         {/* 流体模拟控制按钮 */}
         <div style={{ padding: '10px', borderTop: '1px solid #333' }}>
           <button
