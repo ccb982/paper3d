@@ -83,10 +83,15 @@ export class HitEffectView {
   private elapsed = -1; // <0 = 未开始
   private worldSize: number;
   private bakeSize: number;
+  /** ★ 统一烘焙缩放：按「最大轮廓跨度 × 最大外扩 × 旋转余量」预计算，
+   *   保证任何变体/任意旋转角都完整落在画布内（不再裁剪溢出） */
+  private fitScale = 1;
+  /** ★ 跟随偏移（击中点相对被跟随实体的偏移；实体槽每帧传实体位置时叠加） */
+  private followOffset = { x: 0, y: 0, z: 0 };
 
   constructor(scene: THREE.Scene, shapes: HitEffectShapeExport[], options?: HitEffectViewOptions) {
     this.worldSize = options?.worldSize ?? 1.5;
-    this.bakeSize = options?.bakeSize ?? 256;
+    this.bakeSize = options?.bakeSize ?? 128;
 
     // 导出形状 → 生成器可消费的 def
     this.defs = shapes.map((sh, i) => ({
@@ -100,6 +105,23 @@ export class HitEffectView {
       if (sh.fillMode === 'ftx' && sh.ftx) this.ftxImages.set(sh.name, buildFtxImage(sh.ftx));
       if (sh.residualLayer) this.residualImages.set(sh.name, buildResidualImage(sh.residualLayer));
     }
+
+    // ★ 预计算统一缩放基准：最大「轮廓跨度 × 最大外扩目标」，再加旋转余量（√2 ≈ 1.42 + 裕度）。
+    //   所有变体/任意旋转角/最大外扩时都不超出画布（修复特效超出纹理边界被裁剪）
+    let maxSpan = 1e-6;
+    for (const sh of shapes) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of sh.outline) {
+        if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+      }
+      const span = Math.max(maxX - minX, maxY - minY);
+      const maxExpand = Math.max(sh.params.expand.xMax, sh.params.expand.yMax);
+      maxSpan = Math.max(maxSpan, span * maxExpand);
+    }
+    // 画布可用区 = bakeSize - 2×pad；旋转最坏 √2 倍跨度 + 10% 裕度
+    const pad = 16;
+    this.fitScale = ((this.bakeSize - pad * 2) / (maxSpan * 1.42 * 1.1));
 
     // 离屏 2D 画布 + 纹理
     this.bakeCanvas = document.createElement('canvas');
@@ -119,6 +141,8 @@ export class HitEffectView {
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
     this.mesh.visible = false;
     this.mesh.frustumCulled = false;
+    // ★ 世界尺寸：quad 缩放 = worldSize（此前漏设，特效一直是 1×1 单位 → 看起来极小）
+    this.mesh.scale.set(this.worldSize, this.worldSize, 1);
     this.group = new THREE.Group();
     this.group.add(this.mesh);
     scene.add(this.group);
@@ -134,10 +158,21 @@ export class HitEffectView {
     this.mesh.visible = true;
   }
 
-  /** 每帧推进；返回 true = 播完（调用方可回收） */
-  update(dt: number): boolean {
+  /** ★ 设置跟随偏移：特效位置 = 跟随点 + 偏移。
+   *  实体命中时 = 击中点相对实体的偏移（击中点跟着实体走）；
+   *  地形/固定点 = 不调用（偏移 0，传固定坐标） */
+  setFollowOffset(dx: number, dy: number, dz: number): void {
+    this.followOffset.x = dx;
+    this.followOffset.y = dy;
+    this.followOffset.z = dz;
+  }
+
+  /** 每帧推进并跟随传入坐标（EntityEffect 契约：实体槽传入实体位置 = 跟随；
+   *  位置 = 传入坐标 + 跟随偏移，命中点随实体移动）。返回 true = 播完（调用方可回收） */
+  update(dt: number, x: number, y: number, z: number): boolean {
     if (this.elapsed < 0) return true;
     this.elapsed += dt;
+    this.group.position.set(x + this.followOffset.x, y + this.followOffset.y, z + this.followOffset.z);
     if (this.elapsed >= this.totalDuration) {
       this.elapsed = -1;
       this.mesh.visible = false;
@@ -148,16 +183,18 @@ export class HitEffectView {
     return false;
   }
 
-  /** 渲染：billboard 面相机（实体 render 时调用） */
+  /** 渲染：billboard 面相机（实体 render 时调用；全轴对相机，玩家视角最大化可见） */
   render(camera: THREE.Camera): void {
     this.group.quaternion.copy(camera.quaternion);
   }
 
-  /** 逐帧 2D 烘焙：所有形状叠加绘制（纯色/FTX 填充 + 残差层 + 轮廓） */
+  /** 逐帧 2D 烘焙：所有形状叠加绘制（纯色/FTX 填充 + 残差层 + 轮廓）。
+   *  ★ 统一用预计算 fitScale：任意变体/旋转/外扩都不超出画布边界 */
   private drawFrame(t: number): void {
     const c2d = this.c2d;
     const S = this.bakeSize;
     c2d.clearRect(0, 0, S, S);
+    const s = this.fitScale;
     for (let i = 0; i < this.defs.length; i++) {
       const sh = this.defs[i];
       const v = this.variants[i];
@@ -167,9 +204,6 @@ export class HitEffectView {
         if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
         if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
       }
-      const span = Math.max(1e-6, Math.max(maxX - minX, maxY - minY));
-      const pad = 16;
-      const s = (S - pad * 2) / span;
       const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
       c2d.save();
       c2d.translate(S / 2, S / 2);

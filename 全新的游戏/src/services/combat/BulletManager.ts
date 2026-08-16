@@ -12,7 +12,10 @@ import { BulletEntity, type BulletEntityOptions } from './BulletEntity';
 import { BulletVisual } from './BulletVisual';
 import { BulletRenderer } from '../render/BulletRenderer';
 import type { EntityManager } from '../../entity/EntityManager';
+import type { EntityBase } from '../../entity/EntityBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
+import { HitEffectView } from '../../vendor/player';
+import type { HitEffectShapeExport } from '../../vendor/player';
 
 /** ★ 轻量发射参数（AI 行为/近战/远程共用；不依赖实体构造细节） */
 export interface SpawnBulletOptions {
@@ -37,6 +40,10 @@ export class BulletManager {
   private activeCount = 0;
   private visual: BulletVisual | null;
   private renderer: BulletRenderer;
+  /** ★ 地形命中特效（固定点播放列表：fx + 命中坐标；播完自回收） */
+  private terrainFxViews: { fx: HitEffectView; x: number; y: number; z: number }[] = [];
+  /** 击中特效形状定义（素材包 hit_effects.json；空 = 无矢量动画） */
+  private hitEffectShapes: HitEffectShapeExport[];
 
   constructor(
     private em: EntityManager,
@@ -44,7 +51,9 @@ export class BulletManager {
     private asset: FrameAssetSource,
     capacity = 100,
     glRenderer?: THREE.WebGLRenderer,
+    hitEffectShapes: HitEffectShapeExport[] = [],
   ) {
+    this.hitEffectShapes = hitEffectShapes;
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
     this.visual = glRenderer ? new BulletVisual(glRenderer, asset) : null;
 
@@ -85,6 +94,10 @@ export class BulletManager {
         this.activeBullets.delete(b);
         this.activeCount = Math.max(0, this.activeCount - 1);
       };
+      // ★ 命中特效（每次碰撞只触发一次）：
+      //   命中实体 → attachEffect 挂实体槽（实体骨架驱动坐标 → 自动跟随 + 播完自动回收）
+      //   命中地形 → 固定点播放列表（每帧重传同一命中坐标）
+      b.hitFx = (other: EntityBase | null) => this.spawnHitEffect(b, other);
       this.allBullets.push(b);
       this.pool.push(b);
     }
@@ -114,6 +127,38 @@ export class BulletManager {
       this.visual?.step(dt);
     }
     this.renderer.sync(this.allBullets, camera);
+    // ★ 地形命中特效驱动（固定点：播完回收）
+    for (let i = this.terrainFxViews.length - 1; i >= 0; i--) {
+      const item = this.terrainFxViews[i];
+      if (item.fx.update(dt, item.x, item.y, item.z)) {
+        item.fx.dispose();
+        this.terrainFxViews.splice(i, 1);
+      }
+    }
+  }
+
+  /** ★ 命中特效 billboard 朝向（render 前调用；实体槽特效由实体骨架驱动） */
+  syncHitEffects(camera: THREE.Camera): void {
+    for (const item of this.terrainFxViews) item.fx.render(camera);
+  }
+
+  /** ★ 命中特效挂载：
+   *   实体 → 记录「击中点相对实体」的偏移，attachEffect 后特效在击中点跟着实体走；
+   *   地形 → 固定点列表（命中坐标原地播放） */
+  private spawnHitEffect(b: BulletEntity, other: EntityBase | null): void {
+    if (this.hitEffectShapes.length === 0) return;
+    const fx = new HitEffectView(this.scene, this.hitEffectShapes, { worldSize: 3 });
+    const p = b.entity.position;
+    if (other) {
+      const e = other.entity.position;
+      // ★ 击中点相对实体偏移（实体槽每帧传实体位置 → 特效 = 实体位置 + 偏移 = 击中点跟随）
+      fx.play(p.x, p.y, p.z);
+      fx.setFollowOffset(p.x - e.x, p.y - e.y, p.z - e.z);
+      other.attachEffect('hit', fx);
+    } else {
+      fx.play(p.x, p.y, p.z);
+      this.terrainFxViews.push({ fx, x: p.x, y: p.y, z: p.z });
+    }
   }
 
   dispose(): void {
@@ -121,6 +166,8 @@ export class BulletManager {
     this.allBullets = [];
     this.pool = [];
     this.activeBullets.clear();
+    for (const item of this.terrainFxViews) item.fx.dispose();
+    this.terrainFxViews = [];
     this.visual?.dispose();
     this.visual = null;
     this.renderer.dispose();

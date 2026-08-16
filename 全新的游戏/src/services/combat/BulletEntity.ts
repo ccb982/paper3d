@@ -42,6 +42,9 @@ export class BulletEntity extends EntityBase {
   private active = false;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
   recycle: (() => void) | null = null;
+  /** ★ 命中特效回调（BulletManager 注册：每次碰撞开始只调用一次；
+   *   other=null 表示地形；由组合层决定挂实体槽/固定点播放） */
+  hitFx: ((other: EntityBase | null) => void) | null = null;
 
   get isActive(): boolean {
     return this.active;
@@ -111,11 +114,13 @@ export class BulletEntity extends EntityBase {
     }
   }
 
-  /** ★ 命中处理：同阵营忽略 / 命中实体穿透+伤害管线 / 地面反弹 */
+  /** ★ 命中处理：同阵营忽略 / 命中实体穿透+伤害管线 / 地面反弹。
+   *   每次碰撞开始（started）只触发一次命中特效（不再一直播放） */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!this.active) return;
     if (!started) return;
     if (other && other.camp === this.camp) return;
+    this.hitFx?.(other);
     if (other) {
       const r = applyDamage(this.damage, this, other);
       console.log(`[bullet] 命中 ${other.constructor.name}，穿透${r.crit ? '【暴击】' : ''}（-${r.final}）`);
