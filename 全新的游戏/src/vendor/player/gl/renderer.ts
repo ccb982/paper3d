@@ -180,9 +180,10 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
         uv = (uv - uTexOffset) / uTexScale;
         // ========== 3. 合成 ==========
         // ★ 流体模式：直接采样解算器 composite 纹理（base+delta±density 已在其中）
+        //   ★ 不用 discard：残差平流到基础色=0 区域时 alpha 渐变衰减（<0.5），
+        //     discard 会丢掉流动痕迹 → 看不到残差流动。alpha 混合保留渐变
         if (uUseFluid > 0.5) {
           vec4 fluid = texture2D(uFluidTex, uv);
-          if (fluid.a < 0.5) discard;
           gl_FragColor = fluid;
           return;
         }

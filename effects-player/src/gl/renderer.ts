@@ -174,14 +174,16 @@ function makeColorMaterial(displacementTexture: THREE.DataTexture, vertexCount: 
         uv = vec2(uv.x * cosRot - uv.y * sinRot, uv.x * sinRot + uv.y * cosRot);
         uv += 0.5;
         uv = (uv - uTexOffset) / uTexScale;
-        // ========== 3. 合成 ==========
-        // ★ 流体模式：直接采样解算器 composite 纹理（base+delta±density 已在其中）
-        if (uUseFluid > 0.5) {
-          vec4 fluid = texture2D(uFluidTex, uv);
-          if (fluid.a < 0.5) discard;
-          gl_FragColor = fluid;
-          return;
-        }
+         // ========== 3. 合成 ==========
+         // ★ 流体模式：直接采样解算器 composite 纹理（base+delta±density 已在其中）
+         //   ★ 不用 discard：残差平流到基础色=0 区域时 alpha 渐变衰减（半拉格朗日
+         //     插值 <0.5），discard 会丢掉这些流动痕迹 → 看不到残差流动。改为
+         //     alpha 混合保留渐变（透明部分由 composite alpha=0 自然处理）
+         if (uUseFluid > 0.5) {
+           vec4 fluid = texture2D(uFluidTex, uv);
+           gl_FragColor = fluid;
+           return;
+         }
         // 非流体：基础色 + 残差统一 0.5 范围
         vec4 base = texture2D(uBaseTexture, uv);
         if (base.a < 0.5) discard;
