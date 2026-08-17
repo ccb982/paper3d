@@ -13,7 +13,8 @@ import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import { shapeExtents, separateXZ } from '../services/physics/Collision';
-import { DeathAnimManager } from '../services/fx/DeathAnimManager';
+import { CharacterFxManager } from '../services/fx/CharacterFxManager';
+import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -71,6 +72,13 @@ export abstract class CharacterBase extends EntityBase {
     this.entity.position.z += dir.y * speed * dt;
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
     this.separateFromOthers();
+    // ★ 受击染料推进（矢量平流 + 计时释放）
+    this.updateHitDye(dt);
+  }
+
+  /** ★ 受击染料流体纹理（有染料时贴片采样 composite；Timer 结束后恢复 null） */
+  protected override getFluidTexture(): THREE.Texture | null {
+    return this.hitDye ? this.hitDye.getCompositeTexture() : null;
   }
 
   /** ★ 角色间推挤：分块查询邻近角色（querySphere）→ 水平重叠 → 最小分离轴推开
@@ -122,12 +130,88 @@ export abstract class CharacterBase extends EntityBase {
    *   死亡动画开关（玩家死亡 = 传送复活，不销毁 → 走 onDeath 覆写跳过） */
   protected deathAnimEnabled = true;
 
+  // ★ 受击染料管线（矢量平流注红 + 速度阻尼；变色表示受伤，缓停后恢复）
+  protected hitDye: FluidEffect | null = null;
+  /** 受击染料存活计时（超时释放 → 恢复原纹理） */
+  private hitDyeTimer = 0;
+  /** 受击染料时长（秒，默认 1.2） */
+  protected hitDyeDuration = 1.2;
+  /** 受击染料开关（不需要的角色可关，默认开；★ 仅最高档 LOD(0) 启用，远距离省算） */
+  protected hitDyeEnabled = true;
+  /** ★ 受击染料注入参数（H/S/L/A + 速率；红色系，高饱和/高亮更明显） */
+  protected hitDyeColor: [number, number, number, number] = [0.0, 0.95, 0.6, 0.9];
+  /** 受击染料注入半径（归一化，默认 0.45） */
+  protected hitDyeRadius = 0.45;
+
+  /** ★ 受击：注入红色染料（矢量平流晕开；已有则重置计时重新注入）。
+   *   仅 viewLod===0（最高档）启用——远程 LOD 省算、不干扰远焦。 */
+  protected spawnHitDye(at: { x: number; y: number }): void {
+    if (!this.hitDyeEnabled || this.viewLod !== 0) return;
+    const renderer = CharacterFxManager.renderer;
+    const source = this.anim?.source as unknown as {
+      createHitDyeEffect?: (renderer: THREE.WebGLRenderer, frameIndex: number) => FluidEffect | null;
+    };
+    if (!renderer || !source?.createHitDyeEffect) return;
+
+    const frameIndex = this.anim?.state.frameIndex ?? 0;
+    if (!this.hitDye || this.hitDyeTimer <= 0) {
+      // 首次受击（或已超时释放）：新建独立流体
+      this.hitDye?.dispose();
+      this.hitDye = source.createHitDyeEffect(renderer, frameIndex) ?? null;
+    }
+    if (!this.hitDye) return;
+
+    this.hitDyeTimer = this.hitDyeDuration;
+    // ★ 注入红色染料（矢量平流；速度很小 → 靠阻尼缓停）
+    this.hitDye.solver.queueInjection({
+      enabled: true,
+      position: { x: at.x, y: at.y },
+      radius: this.hitDyeRadius,
+      velocity: { x: 0, y: 0 },
+      color: this.hitDyeColor,
+      rate: 0.6,
+    });
+  }
+
+  /** ★ 受击染料每帧驱动（update 内调用） */
+  private updateHitDye(dt: number): void {
+    if (this.hitDye && this.hitDyeTimer > 0) {
+      this.hitDye.step(dt);
+      this.hitDyeTimer -= dt;
+      if (this.hitDyeTimer <= 0) {
+        // ★ 计时结束：释放流体 → 恢复原纹理（下次受击重建）
+        this.hitDye.dispose();
+        this.hitDye = null;
+      }
+    } else if (this.hitDye && this.hitDyeTimer <= 0) {
+      this.hitDye.dispose();
+      this.hitDye = null;
+    }
+  }
+
+  /** ★ 受伤钩子：受击染红 + 死亡动画（正常扣血/死亡流程不变） */
+  override onTakeDamage(dmg: number, source: EntityBase | null): void {
+    // ★ 受击染料：注入点 = 上半身（x 居中微偏，y=0.35 胸口附近）
+    this.spawnHitDye({
+      x: 0.5 + (Math.random() - 0.5) * 0.2,
+      y: 0.35 + (Math.random() - 0.5) * 0.2,
+    });
+    super.onTakeDamage(dmg, source);
+  }
+
   /** ★ 只触发死亡动画（不销毁实体）——玩家死亡（传送复活）用 */
   playDeathAnim(): void {
     if (!this.deathAnimEnabled) return;
     const frameIndex = this.anim?.state.frameIndex ?? 0;
     const p = this.entity.position;
-    DeathAnimManager.spawn(this.anim!.source, frameIndex, p.x, p.y, p.z);
+    CharacterFxManager.spawnDeathAnim(this.anim!.source, frameIndex, p.x, p.y, p.z);
+  }
+
+  /** ★ 销毁：释放受击染料流体（恢复原纹理资源） */
+  override dispose(): void {
+    this.hitDye?.dispose();
+    this.hitDye = null;
+    super.dispose();
   }
 
   /** ★ 死亡：先触发死亡动画（冻结死亡帧 → 流体消散），再走默认销毁 */
@@ -135,7 +219,7 @@ export abstract class CharacterBase extends EntityBase {
     if (this.deathAnimEnabled) {
       const frameIndex = this.anim?.state.frameIndex ?? 0;
       const p = this.entity.position;
-      DeathAnimManager.spawn(this.anim!.source, frameIndex, p.x, p.y, p.z);
+      CharacterFxManager.spawnDeathAnim(this.anim!.source, frameIndex, p.x, p.y, p.z);
     }
     super.onDeath(source);
   }

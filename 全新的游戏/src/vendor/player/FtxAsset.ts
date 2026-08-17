@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { CharacterFxAssetSource } from '../../services/fx/AssetSource';
 import { decodeMultiFrame, buildBaseHslData, buildResidualData } from './core/ftx';
 import { FrameResolver, type FrameNameEntry } from './core/frameResolver';
 import type { FrameTextureData, PaletteColor, PhysicsConfig } from './core/types';
@@ -20,7 +21,7 @@ import { FramePlaybackController, type PlaybackConfig, type FramePlaybackCallbac
 // ★ 帧名解析：解码时已读取每帧 name，FrameResolver 提供
 //   getFrameNames()/resolveFrame(name) 等按名字取帧接口。
 
-export class FtxAsset {
+export class FtxAsset implements CharacterFxAssetSource {
   readonly frames: FrameTextureData[];
   readonly palette: PaletteColor[];
   readonly frameCount: number;
@@ -205,6 +206,30 @@ export class FtxAsset {
       maxVelocity: 20000,
     };
     return new FluidEffect(renderer, physics, frame, this.palette, []);
+  }
+
+  /**
+   * ★ 创建独立受击染料流体（角色受伤时注入红色；矢量平流 + 速度阻尼，
+   * 红色晕开后因阻尼停下，dispose 即恢复原纹理）
+   */
+  createHitDyeEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null {
+    const frame = this.frames[frameIndex];
+    if (!frame) return null;
+    const physics: PhysicsConfig = {
+      enableAdvection: true,
+      enablePressure: true,
+      pressureIterations: 20,
+      advectionMode: 'vector',
+      gravity: { x: 0, y: 0 },
+      velocityScale: 0.85,        // ★ 速度阻尼：红色晕开但不会乱飞，缓慢停下
+      maxVelocity: 3000,
+    };
+    return new FluidEffect(renderer, physics, frame, this.palette, []);
+  }
+
+  /** 第 index 帧的 FTX 帧数据 */
+  getFtxFrame(index: number): import('./core/types').FrameTextureData | null {
+    return this.frames[index] ?? null;
   }
 
   // ============ 帧名解析（FrameResolver） ============

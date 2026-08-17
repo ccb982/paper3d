@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import type { CharacterFxAssetSource } from '../../services/fx/AssetSource';
 import { loadBundle, type BundleLoadResult } from './core/bundle';
 import { decodeMultiFrame, buildFrameTexture, type DecodedMultiFrame } from './core/ftx';
 import { buildDisplacementTextureData } from './core/entity';
@@ -37,7 +38,7 @@ export interface LoadOptions {
  * Asset —— 无头播放器核心（无 UI，纯资源加载 + 播放控制 + 渲染输出）
  * 游戏通过 getFrameRenderData / getFluidEffect 驱动特效挂接。
  */
-export class Asset {
+export class Asset implements CharacterFxAssetSource {
   readonly manifest: Manifest;
   readonly frames: PerFrameData[];
   readonly baseTextures: THREE.DataTexture[];
@@ -330,6 +331,36 @@ export class Asset {
       gravity: { x: 0, y: 4000 },
       velocityScale: 0.98,
       maxVelocity: 20000,
+    };
+
+    return new FluidEffect(renderer, physics, ftxFrame, palette, entities);
+  }
+
+  /**
+   * ★ 创建独立受击染料流体（角色受伤时注入红色；矢量平流 + 速度阻尼，
+   * 红色晕开后停下，dispose 即恢复原纹理）
+   */
+  createHitDyeEffect(
+    renderer: THREE.WebGLRenderer,
+    frameIndex: number,
+  ): FluidEffect | null {
+    const ftxFrame = this.getFtxFrame(frameIndex);
+    if (!ftxFrame) return null;
+    const palette = this._ftx!.palette;
+
+    const entities: SerializedRegionEntity[] = [];
+    for (const ed of this.frames[frameIndex].regionEntities) {
+      entities.push(ed);
+    }
+
+    const physics: PhysicsConfig = {
+      enableAdvection: true,
+      enablePressure: true,
+      pressureIterations: 20,
+      advectionMode: 'vector',
+      gravity: { x: 0, y: 0 },
+      velocityScale: 0.85,        // ★ 速度阻尼：红色晕开但不会乱飞，缓慢停下
+      maxVelocity: 3000,
     };
 
     return new FluidEffect(renderer, physics, ftxFrame, palette, entities);

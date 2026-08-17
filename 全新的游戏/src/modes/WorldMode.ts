@@ -28,7 +28,7 @@ import { PRESERVER_AI } from '../systems/ai/aiconfig';
 import { ItemBase } from '../entity/ItemBase';
 import type { EntityBase } from '../entity/EntityBase';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
-import { DeathAnimManager } from '../services/fx/DeathAnimManager';
+import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager } from '../services/combat/BulletManager';
 import { executeAttack } from '../services/combat/Attack';
@@ -126,7 +126,7 @@ export class WorldMode {
     }
 
     // ---- ★ 死亡动画管线初始化（静态单例：角色基类死亡自动注册） ----
-    DeathAnimManager.init(this.scene, this.renderer);
+    CharacterFxManager.init(this.scene, this.renderer);
 
     // ---- ★ 测试敌人（普瑞赛斯：特效包 + AI 配置驱动） ----
     if (enemyAsset) {
@@ -214,7 +214,7 @@ export class WorldMode {
     this.bullets.update(dt, this.camera);
 
     // ---- ★ 死亡动画驱动（流体推进 + 淡出 + 播完回收） ----
-    DeathAnimManager.update(dt, this.camera);
+    CharacterFxManager.update(dt, this.camera);
   }
 
   /** ★ 相机准星射线（公共：瞄准检测/发射兜底共用，避免重复计算） */
@@ -451,7 +451,7 @@ export class WorldMode {
     this.crosshair.dispose();
     this.ui.dispose();
     this.bullets.dispose();
-    DeathAnimManager.dispose();
+    CharacterFxManager.dispose();
     // chunk 视觉网格（天内统一回收）
     for (const m of this.chunkMeshes.values()) {
       this.scene.remove(m);

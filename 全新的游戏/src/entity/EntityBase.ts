@@ -80,10 +80,15 @@ export abstract class EntityBase {
     return { kind: this.entity.kind, moving: false };
   }
 
+  /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
+   *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
+  viewLod = 0;
+
   /** ★ 渲染距离应用（renderAll 每帧传入；★ 实体不持有 LOD 状态——
    *   内部按距离表算级，联动动画/渲染管线响应。子类可覆写做表现降级） */
   applyViewDistance(distance: number): void {
     const lv = levelForDistance(distance);
+    this.viewLod = lv;
     this.anim?.setLodLevel(lv);       // 动画管线：时间轴暂停/节流
     this.renderer?.setLodLevel(lv);   // 渲染管线：渐隐（渲染器实现）
   }
@@ -249,9 +254,15 @@ export abstract class EntityBase {
     if (this.billboard && 'setBillboard' in this.renderer) {
       (this.renderer as { setBillboard(c: THREE.Camera): void }).setBillboard(camera);
     }
-    this.renderer.render(this.state, null);
+    // ★ 流体纹理钩子（子类覆写：受击染料/技能附着的 composite 纹理；null=普通贴片）
+    this.renderer.render(this.state, this.getFluidTexture());
     // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
     for (const fx of this.effectSlots.values()) fx.render(camera);
+  }
+
+  /** ★ 流体纹理钩子（子类覆写返回要喂给贴片的 composite 纹理；默认 null） */
+  protected getFluidTexture(): THREE.Texture | null {
+    return null;
   }
 
   // ============ 生命周期 ============

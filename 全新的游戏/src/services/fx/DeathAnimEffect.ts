@@ -4,20 +4,14 @@
 // 实体死亡 → 纹理所有权转移：冻结在死亡帧，交给独立流体求解器
 // （矢量模式）撕碎消散。实体正常销毁（掉落/结算不阻塞），
 // 本类只做三件事：
-//   ① PUSH     —— 随机方向大重力（把纹理整体推离）
-//   ② FRAGMENT —— 一次随机散度爆炸（撕裂/推散，指数包络防填满）
-//   ③ FADE     —— alpha 平滑淡出 → 销毁
+//   ① PUSH    —— 随机方向大重力（把纹理整体推离）
+//   ② 速度冲击 —— 随机方向/强度冲量（撕裂纹理）
+//   ③ FADE    —— alpha 平滑淡出 → 销毁
 // 渲染：世界空间 quad 采样流体 composite 纹理，面向相机 billboard。
 
 import * as THREE from 'three';
+import type { CharacterFxAssetSource } from './AssetSource';
 import type { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
-
-/** ★ 死亡动画资产接口（Asset / FtxAsset 都实现；CreateDeathFluidEffect 见各实现） */
-export interface DeathAnimAssetSource {
-  getFramePair(index: number): { base: THREE.DataTexture; residual: THREE.DataTexture } | null;
-  getFtxFrame(index: number): { bbox: { w: number; h: number } } | null;
-  createDeathFluidEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null;
-}
 
 export interface DeathAnimOptions {
   /** 世界尺寸（quad 边长，默认 2.0；角色贴片约 2m 高） */
@@ -53,7 +47,7 @@ export class DeathAnimEffect {
 
   constructor(
     private scene: THREE.Scene,
-    asset: DeathAnimAssetSource,
+    asset: CharacterFxAssetSource,
     frameIndex: number,
     renderer: THREE.WebGLRenderer,
     opts?: DeathAnimOptions,

@@ -15,7 +15,6 @@ import { AIStateMachine } from '../systems/ai/AIStateMachine';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
-import { levelForDistance } from '../services/lod';
 import { HealthBar } from '../services/fx/HealthBar';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
@@ -112,16 +111,12 @@ export class EnemyBase extends CharacterBase {
   /** 当前显示帧（相机判定） */
   private showFacing: '前' | '后' | null = null;
 
-  /** ★ 渲染距离应用（基类联动动画/渲染管线）+ 扭曲降级（子类自管：
-   *   lod1+ 关扭曲省计算；onUpdate 每帧按 viewLod 应用扭曲开关） */
+  /** ★ 渲染距离应用（基类联动动画/渲染管线；基类 viewLod 供子类降级表现） */
   override applyViewDistance(distance: number): void {
-    this.viewLod = levelForDistance(distance);
     super.applyViewDistance(distance);
     // 立即按等级应用扭曲开关（不等下一帧 onUpdate）
     this.applyDistort();
   }
-  /** 私有表现等级（子类用；基类不持有 LOD 状态） */
-  private viewLod = 0;
 
   protected override onUpdate(dt: number): void {
     // ★ 基类位置推进（moveDir × speed → 位置；无输入时 controller.update 不跑）

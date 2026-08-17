@@ -10,6 +10,8 @@ import type {
   PlaybackConfig,
   FramePlaybackCallbacks,
 } from '../../vendor/player/core/controller';
+import type { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
+import type { FrameTextureData } from '../../vendor/player/core/types';
 
 export interface FrameAssetSource {
   frameCount: number;
@@ -21,4 +23,17 @@ export interface FrameAssetSource {
   resolveFrame(name: string): number | null;
   /** 是否存在该帧名 */
   hasFrame(name: string): boolean;
+}
+
+/**
+ * ★ 角色表现特效资产接口（Asset / FtxAsset 显式实现；CharacterBase 自动管线用）。
+ * 受击染料 / 死亡动画都需要：独立流体实例（不缓存，与共享播放实例隔离）。
+ */
+export interface CharacterFxAssetSource extends FrameAssetSource {
+  /** 第 index 帧 FTX 帧数据（bbox 宽高比/区域实体用） */
+  getFtxFrame(index: number): FrameTextureData | null;
+  /** ★ 死亡动画流体：矢量模式 + 强重力 + 大速度上限（撕碎消散） */
+  createDeathFluidEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null;
+  /** ★ 受击染料流体：矢量平流 + 速度阻尼（红色晕开缓停） */
+  createHitDyeEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null;
 }
