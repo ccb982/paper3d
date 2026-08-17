@@ -2015,14 +2015,13 @@ export const FluidEditorUI: React.FC = () => {
     const dH = (residual.r * 2.0 - 1.0) * rangeH;
     const dS = (residual.g * 2.0 - 1.0) * rangeSL;
     const dL = (residual.b * 2.0 - 1.0) * rangeSL;
-    // sign: add=+1, sub=-1（与合成着色器一致）
-    const sign = mode === 'sub' ? -1 : 1;
-    // ★ delta 直接加；scalar 模式下 density×mul 作为独立项 ±（×通道开关：
-    //   取消勾选的通道不跟随流动，只保留静态残差 delta）
+    // ★ sign/偏移（与合成着色器一致）：add = +factor×mul；sub = -|factor×mul|
+    //   sub 取绝对值：残差为 0 的区域依旧被密度拉出雾气（减法总是"减去"）
     const factor = scalar ? scalar.density / Math.max(scalar.baseline, 0.001) : 0;
-    const hExtra = scalar ? sign * factor * scalar.hMul * (channels && !channels.r ? 0 : 1) : 0;
-    const sExtra = scalar ? sign * factor * scalar.sMul * (channels && !channels.g ? 0 : 1) : 0;
-    const lExtra = scalar ? sign * factor * scalar.lMul * (channels && !channels.b ? 0 : 1) : 0;
+    const off = (m: number) => mode === 'sub' ? -Math.abs(factor * m) : factor * m;
+    const hExtra = scalar ? off(scalar.hMul) * (channels && !channels.r ? 0 : 1) : 0;
+    const sExtra = scalar ? off(scalar.sMul) * (channels && !channels.g ? 0 : 1) : 0;
+    const lExtra = scalar ? off(scalar.lMul) * (channels && !channels.b ? 0 : 1) : 0;
     // 正常公式（取消通道 = base + 默认残差 delta，与 GPU shader 一致）
     let normalH = baseHsl.h + dH + hExtra;
     normalH = normalH - Math.floor(normalH); // fract
@@ -2126,12 +2125,14 @@ export const FluidEditorUI: React.FC = () => {
 
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      alpha: false,
+      alpha: true,
       antialias: false,
       powerPreference: 'high-performance',
     });
     renderer.setPixelRatio(1);
-    renderer.setClearColor(0x000000, 1);
+    // ★ 透明背景（不再是黑色）：合成视口 alpha 直接透出页面背景
+    renderer.setClearColor(0x000000, 0);
+    renderer.autoClear = false; // 每帧手动清屏（带透明色）
     rendererRef.current = renderer;
     setRendererState(renderer); // 用状态传递，触发 useFluidEditor 重新计算
     setRendererReady(true);
@@ -2857,17 +2858,23 @@ export const FluidEditorUI: React.FC = () => {
       `;
       const scalarBody = /* glsl */ `
         // ★ MCSDA scalar 模式：合成 = 基础色 + 残差增量 ± (密度/基准浓度 × 通道系数)
-        //   combineMode: add=base+delta+factor×mul, sub=base+delta-factor×mul（sign 统一）
+        //   combineMode: add=base+delta+factor×mul, sub=base+delta-|factor×mul|（sign 统一）
+        //   ★ sub 对 density 偏移取绝对值：残差为 0 的区域依旧被密度拉出雾气
+        //     （减法总是"减去"，不会因残差 0 / 负 factor 而变成加法）
         //   ★ 取消勾选的通道：density 偏移项 × uChannels = 0（不跟随流动），
         //     只保留静态残差 delta（默认残差值）
         float density = texture2D(uDensity, vUv).r;
         float factor = density / max(uBaseline, 0.001);
         float sign = (uCombineMode == 0) ? 1.0 : -1.0;
-        finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x * uChannels.x);
-        finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y * uChannels.y, 0.0, 1.0);
-        finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z * uChannels.z, 0.0, 1.0);
+        float offH = (uCombineMode == 0) ? (factor * uChannelMul.x) : (-abs(factor * uChannelMul.x));
+        float offS = (uCombineMode == 0) ? (factor * uChannelMul.y) : (-abs(factor * uChannelMul.y));
+        float offL = (uCombineMode == 0) ? (factor * uChannelMul.z) : (-abs(factor * uChannelMul.z));
+        float offA = (uCombineMode == 0) ? (factor * uChannelMul.w) : (-abs(factor * uChannelMul.w));
+        finalH = fract(baseHSLA.r + dH + offH * uChannels.x);
+        finalS = clamp(baseHSLA.g + dS + offS * uChannels.y, 0.0, 1.0);
+        finalL = clamp(baseHSLA.b + dL + offL * uChannels.z, 0.0, 1.0);
         float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
-        finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w * uChannels.w, 0.0, 1.0);
+        finalA = clamp(baseHSLA.a + dA + offA * uChannels.w, 0.0, 1.0);
       `;
       return /* glsl */ `
         uniform sampler2D uBaseTexture;   // FloatType，存储 [H, S, L, A]，范围 0~1
@@ -3502,6 +3509,8 @@ export const FluidEditorUI: React.FC = () => {
       else if (viewMode === 'obstacle') targetScene = obstacleScene;
       else if (viewMode === 'levelset') targetScene = levelsetScene;
       else targetScene = compositeScene;
+      // ★ 手动清屏（autoClear=false + 透明清屏色）：背景透出而非残留上一帧
+      renderer.clear(true, true, true);
       renderer.render(targetScene, camera);
 
       // ★ 单次模式鼠标长按：每帧临时持续注入（按住期间注入，松开即停）
