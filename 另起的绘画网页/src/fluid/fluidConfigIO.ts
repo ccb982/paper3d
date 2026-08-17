@@ -16,6 +16,20 @@ import { base64ToUint8, uint8ToBase64 } from '../core/ftxCore';
 //   ③ 修改任何 levelSet/合成参数时：FluidEditorUI(显示) + FluidSolver(计算) +
 //      fluidConfigIO(导出) + effects-player/游戏 config.ts(读取) 五处必须同步。
 //
+// ★★ 残差纹理 alpha 约定（四端必须一致，改一处必须同步三处）★★
+//   alpha = "区域存在度"：shape 外（regionIdTex=0 / 多边形外 / 纹理透明像素）= 0，
+//   shape 内 = 255。中性 RGB=128（delta≈0），shape 外填 128（中性灰）。
+//   理由：合成 alpha = max(baseA, residual.a)，shape 外残差 alpha=0 →
+//   背景纯透明；残差平流时 alpha 随速度扩散 → 基础色=0 区域也能看到
+//   残差流动渐变（尾迹雾气）。
+//   四端位置：
+//     ① 编辑器：buildFluidTexturesFromRawFrame（bbox 局部，区域外默认 0）
+//     ② 主绘画页面：useAppStore residTex/residBase（全帧/bbox 局部）+ 反推不反推 alpha
+//     ③ 特效播放器：effects-player/src/core/ftx.ts buildResidualData
+//     ④ 游戏端：全新的游戏/src/vendor/player/core/ftx.ts buildResidualData（与③同款）
+//   ★ 播放器/游戏实体 shader 的流体模式禁止 discard（alpha<0.5 丢弃会把
+//     残差流动渐变切掉）——用 alpha 混合保留（renderer.ts / ftxRenderer.ts / FTXQuad.ts）。
+//
 // 独立成文件：只依赖 FluidSolver 类型，不引入 colorCompressor/THREE，
 // 避免与 useAppStore 形成循环依赖（useAppStore ↔ colorCompressor 已有环）。
 //
