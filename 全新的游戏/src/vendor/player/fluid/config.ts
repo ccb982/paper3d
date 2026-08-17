@@ -99,8 +99,15 @@ export function parsePhysicsConfig(raw: any, fallbackRes: { w: number; h: number
     levelSetConfig: {
       enabled: bool(ls.enabled, false),
       reinitIterations: Math.round(num(ls.reinitIterations, 2)),
-      surfaceTension: num(ls.surfaceTension, 0),
+      surfaceTension: num(ls.surfaceTension, 10000),
       smoothingRadius: num(ls.smoothingRadius, 2),
+      reinitInterval: Math.round(num(ls.reinitInterval, 10)),
+      narrowBandWidth: num(ls.narrowBandWidth, 5),
+      constrainLiquid: bool(ls.constrainLiquid, false),
+      clampAirPhi: bool(ls.clampAirPhi, true),
+      maxAirPhi: num(ls.maxAirPhi, 0),
+      compensateWaterPhi: bool(ls.compensateWaterPhi, true),
+      waterCompensationRate: num(ls.waterCompensationRate, 0.1),
     },
     continuousSources: srcs.map(normalizeInjectionSource),
   };

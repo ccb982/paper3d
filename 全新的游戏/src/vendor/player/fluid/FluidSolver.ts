@@ -56,6 +56,13 @@ export interface FluidSolverConfig {
     reinitIterations: number;
     surfaceTension: number;
     smoothingRadius: number;
+    reinitInterval?: number;
+    narrowBandWidth?: number;
+    constrainLiquid?: boolean;
+    clampAirPhi?: boolean;
+    maxAirPhi?: number;
+    compensateWaterPhi?: boolean;
+    waterCompensationRate?: number;
   };
   continuousSources: InjectionConfig[];
   obstacle?: { width: number; height: number; data: string };
@@ -87,8 +94,15 @@ export const defaultFluidConfig: FluidSolverConfig = {
   levelSetConfig: {
     enabled: false,
     reinitIterations: 2,
-    surfaceTension: 0,
+    surfaceTension: 10000,
     smoothingRadius: 2,
+    reinitInterval: 10,
+    narrowBandWidth: 5,
+    constrainLiquid: false,
+    clampAirPhi: true,
+    maxAirPhi: 0,
+    compensateWaterPhi: true,
+    waterCompensationRate: 0.1,
   },
   continuousSources: [],
 };
@@ -135,6 +149,8 @@ export class FluidSolver {
 
   // ★ Level Set φ 场（懒加载，仅启用时分配显存）
   private _phiGrid: FluidGrid | null = null;
+  /** ★ Level Set 重建间隔帧计数（每 reinitInterval 帧执行一次「φ 重建 + reinit」） */
+  private levelSetFrameCount = 0;
 
   // 基础色纹理（FloatType RGBA HSLA，0~1）——合成用
   private baseHslTex: THREE.DataTexture | null = null;
@@ -364,6 +380,21 @@ export class FluidSolver {
     const sourceTex = isScalar ? this.densityGrid.read : this.colorGrid.read;
     const mode: 0 | 1 = isScalar ? 0 : 1;
     this.levelSetSolver.initPhiField(this._phiGrid, sourceTex, mode, scale);
+  }
+
+  /**
+   * ★ φ 场后处理（空气钳制 + 水体补偿）——与流体编辑器一致。
+   */
+  private applyPhiCorrection(): void {
+    if (!this._phiGrid) return;
+    const ls = this.config.levelSetConfig;
+    const clampAir = ls?.clampAirPhi ?? true;
+    const maxAirPhi = ls?.maxAirPhi ?? 0;
+    const compensate = ls?.compensateWaterPhi ?? true;
+    const compRate = ls?.waterCompensationRate ?? 0.1;
+    this.levelSetSolver.applyPhiCorrection(
+      this._phiGrid, this.getObstacleTex(), clampAir, maxAirPhi, compensate, compRate,
+    );
   }
 
   // ==================== 场清零 ====================
@@ -787,18 +818,42 @@ export class FluidSolver {
     }
 
     // 3.2 ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
+    //    两种模式（与流体编辑器一致）：
+    //      A. 约束模式（constrainLiquid=true）→ 每帧「φ 重建 + reinit + 约束」
+    //      B. 追踪模式（默认）→ φ 平流 + 周期性重建 + 表面张力
     const ls = this.config.levelSetConfig;
     if (ls?.enabled && this._phiGrid) {
-      this.levelSetSolver.advectPhi(
-        this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTex(),
-      );
-      this.levelSetSolver.reinit(
-        this._phiGrid, this.getObstacleTex(), ls.reinitIterations, 0.5,
-      );
+      const iterations = ls.reinitIterations;
+      const band = ls.narrowBandWidth ?? ls.smoothingRadius ?? 5;
+      const constrain = !!ls.constrainLiquid;
+
+      if (constrain) {
+        this.initPhiField();
+        this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTex(), iterations, 0.5);
+        this.applyPhiCorrection();
+        const mode = this.config.advectionMode === 'scalar' ? 0 : 1;
+        const targetGrid = this.config.advectionMode === 'scalar' ? this.densityGrid : this.colorGrid;
+        this.levelSetSolver.applyLiquidConstraint(
+          targetGrid, this._phiGrid.read, this.getObstacleTex(), mode, band, 0.02,
+        );
+      } else {
+        this.levelSetSolver.advectPhi(
+          this._phiGrid, this.velocityGrid.read, dt, this.getObstacleTex(),
+        );
+        // 周期性「φ 重建 + Godunov reinit」：注入的新液体才有表面
+        this.levelSetFrameCount++;
+        const interval = ls.reinitInterval ?? 10;
+        if (this.levelSetFrameCount >= interval) {
+          this.levelSetFrameCount = 0;
+          this.initPhiField();
+          this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTex(), iterations, 0.5);
+          this.applyPhiCorrection();
+        }
+      }
       if (ls.surfaceTension > 0) {
         this.levelSetSolver.applySurfaceTension(
           this.velocityGrid, this._phiGrid.read, this.getObstacleTex(),
-          ls.surfaceTension, dt, ls.smoothingRadius,
+          ls.surfaceTension, dt, band,
         );
       }
     }
@@ -946,20 +1001,29 @@ export class FluidSolver {
       float density = texture2D(uDensity, vUv).r;
       // ★ 与流体编辑器保持一致：factor = density / baseline
       float factor = density / max(0.0001, uBaseline);
-      float sign = (uCombineMode == 1) ? -1.0 : 1.0;
-      // ★ 与编辑器 ShaderLibrary 一致：取消勾选的通道仅关闭 density 调制项
-      //   （×uChannels），静态残差 delta 始终参与合成（见 FluidEditorUI 合成注释）
-      finalH = fract(baseHSLA.r + dH + sign * factor * uChannelMul.x * uChannels.x);
-      finalS = clamp(baseHSLA.g + dS + sign * factor * uChannelMul.y * uChannels.y, 0.0, 1.0);
-      finalL = clamp(baseHSLA.b + dL + sign * factor * uChannelMul.z * uChannels.z, 0.0, 1.0);
-      finalA = clamp(baseHSLA.a + dA + sign * factor * uChannelMul.w * uChannels.w, 0.0, 1.0);
+      // ★ 与编辑器一致：add = +factor×mul；sub 时 H/S/L 取 -abs（残差为 0 处依旧
+      //   被密度拉出雾气），A 通道取 +abs（雾气越浓越实，不被减去模式压没）
+      float offH = (uCombineMode == 0) ? (factor * uChannelMul.x) : (-abs(factor * uChannelMul.x));
+      float offS = (uCombineMode == 0) ? (factor * uChannelMul.y) : (-abs(factor * uChannelMul.y));
+      float offL = (uCombineMode == 0) ? (factor * uChannelMul.z) : (-abs(factor * uChannelMul.z));
+      float offA = (uCombineMode == 0) ? (factor * uChannelMul.w) : (abs(factor * uChannelMul.w));
+      // ★ 与编辑器一致：取消勾选的通道仅关闭 density 调制项（×uChannels），
+      //   静态残差 delta 始终参与合成
+      finalH = fract(baseHSLA.r + dH + offH * uChannels.x);
+      finalS = clamp(baseHSLA.g + dS + offS * uChannels.y, 0.0, 1.0);
+      finalL = clamp(baseHSLA.b + dL + offL * uChannels.z, 0.0, 1.0);
+      // ★ 显示 alpha = 基础色 alpha 与残差 alpha 的并集 + 密度项：
+      //   残差平流时 alpha 随颜色流动，流到透明区域（基础色 alpha=0）仍显示；
+      //   ★ 残差纹理约定：区域外 alpha=0（与编辑器统一）→ 背景保持透明
+      finalA = clamp(max(baseHSLA.a, residual.a) + offA * uChannels.w, 0.0, 1.0);
     ` : /* glsl */ `
       // vector 模式：残差 delta 无条件叠加到 baseHSL（通道开关只控制平流，
       //   不参与合成——与编辑器语义一致，避免"导入参数后色相突变"）
       finalH = fract(baseHSLA.r + dH);
       finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
       finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
-      finalA = clamp(baseHSLA.a + dA, 0.0, 1.0);
+      // ★ 显示 alpha = 基础色 alpha 与残差 alpha 的并集：残差流入透明区域仍显示
+      finalA = max(baseHSLA.a, residual.a);
     `;
 
     return new THREE.ShaderMaterial({

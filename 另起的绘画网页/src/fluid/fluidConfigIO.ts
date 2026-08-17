@@ -5,6 +5,17 @@ import { base64ToUint8, uint8ToBase64 } from '../core/ftxCore';
 // 流体配置 JSON 导入/导出（与 fluid-player.html 同格式）
 // ============================================================
 //
+// ★ 参数流转架构（重要）：
+//   ① 流体编辑器（fluid/editor/FluidEditor）buildRecipe 导出的参数
+//      → 只给绘画主页面使用（parseImportedFluidConfig 读入 → frameData.fluidConfig）
+//   ② 绘画主页面（MainCanvas）导出才是最终使用版本：
+//      assetBundleExport 把 frameData.fluidConfig 写进 per_frame_data 的
+//      physics 字段（内部扁平格式：channels{r,g,b,a} + levelSetConfig{...}）
+//      → 特效播放器（effects-player）与游戏（全新的游戏）读取同一格式：
+//      parsePhysicsConfig(raw) 里 const ls = raw?.levelSetConfig（键名必须一致！）
+//   ③ 修改任何 levelSet/合成参数时：FluidEditorUI(显示) + FluidSolver(计算) +
+//      fluidConfigIO(导出) + effects-player/游戏 config.ts(读取) 五处必须同步。
+//
 // 独立成文件：只依赖 FluidSolver 类型，不引入 colorCompressor/THREE，
 // 避免与 useAppStore 形成循环依赖（useAppStore ↔ colorCompressor 已有环）。
 //

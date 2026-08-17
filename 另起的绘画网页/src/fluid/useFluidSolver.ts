@@ -119,7 +119,7 @@ export function useFluidSolver(
         data[i] = 128;     // R → dH = (128/255*2 - 1)*0.5 ≈ 0
         data[i + 1] = 128; // G → dS ≈ 0
         data[i + 2] = 128; // B → dL ≈ 0
-        data[i + 3] = 128; // A → dA ≈ 0（之前是255，会导致dA=0.5！）
+        data[i + 3] = 0;   // A=0（无残差内容，合成显示透明；与编辑器约定统一）
       }
       solver.loadResidual(neutralImageData);
     }

@@ -1357,7 +1357,16 @@ export function decodeResidualFromFrame(
   const totalPixels = w * h;
   const imageData = new ImageData(textureSize, textureSize);
   const data = imageData.data;
-  data.fill(0);
+  // ★ 全图填充中性残差（R=G=B=128, A=0）：区域外 = 中性（delta≈0）+ 透明。
+  //   与主绘画页面 residTex/residBase 的约定统一：
+  //   - 合成 alpha 用「残差非中性度」判定（区域外中性 → 不显示 → 纯透明背景）
+  //   - 区域内量化残差覆盖 RGB，alpha=255
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 128;
+    data[i + 1] = 128;
+    data[i + 2] = 128;
+    data[i + 3] = 0;
+  }
 
   if (!deltaPacked || deltaPacked.length === 0) return imageData;
 

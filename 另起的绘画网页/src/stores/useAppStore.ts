@@ -3092,7 +3092,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         residTex.data[i] = 128;
         residTex.data[i + 1] = 128;
         residTex.data[i + 2] = 128;
-        residTex.data[i + 3] = 128;
+        // ★ 与编辑器约定统一：区域外 alpha=0（无残差内容，合成显示透明）；
+        //   此前全图 alpha=128（中性半透明）→ 合成 max(baseA, residual.a) 时
+        //   背景半透明变色/黑。区域内残差 alpha 由下方循环覆盖。
+        residTex.data[i + 3] = 0;
       }
       for (let pi = 0; pi < mappedRegionIdTex.length; pi++) {
         const cid = mappedRegionIdTex[pi];
@@ -3105,7 +3108,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         residTex.data[gi] = Math.round((qH / 63) * 255);
         residTex.data[gi + 1] = Math.round((qS / 31) * 255);
         residTex.data[gi + 2] = Math.round((qL / 31) * 255);
-        residTex.data[gi + 3] = 128;
+        residTex.data[gi + 3] = 255;
       }
       // ★ 0.25 范围块 → 0.5 兼容格式（与编辑器 adjustResidualForUniformRange 一致，
       //   否则流体合成时 delta 放大 → 部分区域色相偏移）
@@ -3353,12 +3356,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       residBase.data[i] = 128;
       residBase.data[i + 1] = 128;
       residBase.data[i + 2] = 128;
-      residBase.data[i + 3] = 128;
+      // ★ 与编辑器约定统一：框外 alpha=0（无残差内容，合成显示透明）
+      residBase.data[i + 3] = 0;
     }
     for (let by = 0; by < bboxLocal.h; by++) {
       for (let bx = 0; bx < bboxLocal.w; bx++) {
         if (!isPointInPolygonWithHoles({ x: bx, y: by }, polyPx)) continue;
         const li = by * bboxLocal.w + bx;
+        const si = ((bboxLocal.y + by) * fullBase.width + (bboxLocal.x + bx)) * 4;
         const packed = frameData.rawDeltaPacked[li];
         if (packed === undefined) continue;
         const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
@@ -3366,7 +3371,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         residBase.data[di] = Math.round((qH / 63) * 255);
         residBase.data[di + 1] = Math.round((qS / 31) * 255);
         residBase.data[di + 2] = Math.round((qL / 31) * 255);
-        residBase.data[di + 3] = 128;
+        // ★ 残差 alpha 与 base alpha 完全同源（srcData 像素 alpha>0）：
+        //   与编辑器"有基础色才绘制"逻辑一致——多边形框内、但纹理透明的
+        //   像素（srcData alpha=0）残差 alpha=0 → 合成 max(baseA,0)=0 透明，
+        //   不再出现"多边形内透明像素 → 残差 255 → 显示黑"的bug
+        residBase.data[di + 3] = srcData[si + 3] > 0 ? 255 : 0;
       }
     }
     // ★ 0.25 范围块 → 0.5 兼容格式（与编辑器 adjustResidualForUniformRange 一致，

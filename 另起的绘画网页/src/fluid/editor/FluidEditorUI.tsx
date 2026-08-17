@@ -2854,7 +2854,10 @@ export const FluidEditorUI: React.FC = () => {
         finalH = fract(baseHSLA.r + dH);
         finalS = clamp(baseHSLA.g + dS, 0.0, 1.0);
         finalL = clamp(baseHSLA.b + dL, 0.0, 1.0);
-        finalA = baseHSLA.a;
+        // ★ 显示 alpha = 基础色 alpha 与残差 alpha 的并集：
+        //   残差（HSL 四通道）平流时 alpha 随颜色一起流动，残差流到透明区域
+        //   （基础色 alpha=0）时仍应显示，而不是被基础色掩码裁掉
+        finalA = max(baseHSLA.a, residual.a);
       `;
       const scalarBody = /* glsl */ `
         // ★ MCSDA scalar 模式：合成 = 基础色 + 残差增量 ± (密度/基准浓度 × 通道系数)
@@ -2869,12 +2872,16 @@ export const FluidEditorUI: React.FC = () => {
         float offH = (uCombineMode == 0) ? (factor * uChannelMul.x) : (-abs(factor * uChannelMul.x));
         float offS = (uCombineMode == 0) ? (factor * uChannelMul.y) : (-abs(factor * uChannelMul.y));
         float offL = (uCombineMode == 0) ? (factor * uChannelMul.z) : (-abs(factor * uChannelMul.z));
-        float offA = (uCombineMode == 0) ? (factor * uChannelMul.w) : (-abs(factor * uChannelMul.w));
+        // ★ A 通道（透明度）特殊：sub 模式不取负——雾气需要"越浓越实"，
+        //   若随 H/S/L 一起减去，密度高的地方反而透明（雾气被压没）
+        float offA = (uCombineMode == 0) ? (factor * uChannelMul.w) : (abs(factor * uChannelMul.w));
         finalH = fract(baseHSLA.r + dH + offH * uChannels.x);
         finalS = clamp(baseHSLA.g + dS + offS * uChannels.y, 0.0, 1.0);
         finalL = clamp(baseHSLA.b + dL + offL * uChannels.z, 0.0, 1.0);
         float dA = (residual.a * 2.0 - 1.0) * uResidualRangeSL;
-        finalA = clamp(baseHSLA.a + dA + offA * uChannels.w, 0.0, 1.0);
+        // ★ 显示 alpha = 基础色 alpha 与残差 alpha 的并集 + 密度偏移项：
+        //   残差平流时 alpha 随颜色流动，流到透明区域仍显示
+        finalA = clamp(max(baseHSLA.a, residual.a) + offA * uChannels.w, 0.0, 1.0);
       `;
       return /* glsl */ `
         uniform sampler2D uBaseTexture;   // FloatType，存储 [H, S, L, A]，范围 0~1

@@ -160,18 +160,19 @@ export function buildObstacleTextureFromBitmask(
  * 由 boundBaseTexture（base+delta 烘焙后的最终帧）与 boundResidualTexture（量化残差）
  * 反推基础色 HSL 浮点数据，供 FluidSolver MCSDA 合成使用。
  *
- * 反推公式（与 FluidSolver.buildCompositeMat 反量化一致）：
- *   finalHSL = rgbToHsl(boundBaseTexture)
- *   dH = (r/255 * 2 - 1) * 0.5,  dS/dL/dA = (.. * 2 - 1) * 0.5
- *   baseH = fract(finalH - dH)   （色相环形）
- *   baseS = clamp01(finalS - dS)
- *   baseL = clamp01(finalL - dL)
- *   baseA = clamp01(finalA - dA)
- *
- * 这样：composite = base + 平流(残差) = 正确重建，且残差随流体流动。
- *
- * 返回 null 时调用方应回退到 direct 模式（直接平流 boundBaseTexture）。
- */
+  * 反推公式（与 FluidSolver.buildCompositeMat 反量化一致）：
+  *   finalHSL = rgbToHsl(boundBaseTexture)
+  *   dH = (r/255 * 2 - 1) * 0.5,  dS/dL = (.. * 2 - 1) * 0.5
+  *   baseH = fract(finalH - dH)   （色相环形）
+  *   baseS = clamp01(finalS - dS)
+  *   baseL = clamp01(finalL - dL)
+  *   baseA = finalA（★ 不反推：alpha 是原始纹理存在度，非合成颜色分量；
+  *   残差 alpha 是"残差存在度"（区域外 0 / 区域内 255），不能混入基础色 alpha）
+  *
+  * 这样：composite = base + 平流(残差) = 正确重建，且残差随流体流动。
+  *
+  * 返回 null 时调用方应回退到 direct 模式（直接平流 boundBaseTexture）。
+  */
 export function buildBaseHslFromFrame(
   frameData: FrameData,
 ): { data: Float32Array; width: number; height: number } | null {
@@ -201,17 +202,16 @@ export function buildBaseHslFromFrame(
       const rr = resid.data[i * 4] / 255;
       const rg = resid.data[i * 4 + 1] / 255;
       const rb = resid.data[i * 4 + 2] / 255;
-      const ra = resid.data[i * 4 + 3] / 255;
       const dH = (rr * 2 - 1) * rangeH;
       const dS = (rg * 2 - 1) * rangeSL;
       const dL = (rb * 2 - 1) * rangeSL;
-      const dA = (ra * 2 - 1) * rangeSL;
       bH = bH - dH;
       if (bH < 0) bH += 1;
       else if (bH >= 1) bH -= 1;
       bS = Math.max(0, Math.min(1, bS - dS));
       bL = Math.max(0, Math.min(1, bL - dL));
-      bA = Math.max(0, Math.min(1, bA - dA));
+      // ★ alpha 不反推：base alpha = 原始纹理 alpha（0/255），
+      //   不参与残差 delta 反推（残差 alpha 是"残差存在度"，非颜色分量）
     }
 
     out[i * 4] = bH;
