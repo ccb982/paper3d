@@ -9,7 +9,7 @@ import { hslToRgb } from '../../utils/colorCompressor';
 // ============================================================
 // 子组件：操作面板（鼠标点击注入模式）
 // ============================================================
-type InjectMode = 'water' | 'color' | 'velocity' | 'stamp';
+type InjectMode = 'water' | 'color' | 'velocity' | 'stamp' | 'explode';
 
 const zoomBtnStyle: React.CSSProperties = {
   background: '#333', color: '#fff', border: '1px solid #666',
@@ -93,6 +93,13 @@ const OperationsPanel: React.FC<{
   setInjectColorHex: (hex: string) => void;
   pickColorActive: boolean;
   onTogglePickColor: () => void;
+  // ★ 爆炸注入参数（参照旧库 explode；点击画布位置爆炸）
+  explodeStrength: number;
+  onExplodeStrengthChange: (v: number) => void;
+  explodeRadius: number;
+  onExplodeRadiusChange: (v: number) => void;
+  explodeWater: boolean;
+  onExplodeWaterChange: (v: boolean) => void;
 }> = ({
   config,
   onConfigChange,
@@ -129,12 +136,19 @@ const OperationsPanel: React.FC<{
   setInjectColorHex,
   pickColorActive,
   onTogglePickColor,
+  explodeStrength,
+  onExplodeStrengthChange,
+  explodeRadius,
+  onExplodeRadiusChange,
+  explodeWater,
+  onExplodeWaterChange,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
     { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
     { key: 'color', label: '🎨 颜料', desc: '红色颜料（无速度）' },
     { key: 'velocity', label: '💨 速度', desc: '仅方向速度（无色）' },
     { key: 'stamp', label: '📎 残差印章', desc: '从FTX残差纹理采样噪点块注入' },
+    { key: 'explode', label: '💥 爆炸', desc: '散度脉冲（点击位置爆炸，可调强度/半径/水团）' },
   ];
 
   const currentMode = modes.find((m) => m.key === injectMode)!;
@@ -362,6 +376,44 @@ const OperationsPanel: React.FC<{
             </div>
           )}
         </div>
+
+        {/* ★ 爆炸注入（参照旧库 explode：散度脉冲 + 水量 + 时间包络；点击画布位置爆炸） */}
+        {injectMode === 'explode' && (
+          <div className="control-group" style={{ marginBottom: '12px', padding: '8px', background: '#fff1f0', borderRadius: '6px', border: '1px solid #ffccc7' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={{ margin: 0, fontSize: '10px', color: '#666', minWidth: '28px' }}>强度</label>
+              <input
+                type="range"
+                min="-50000"
+                max="50000"
+                step="500"
+                value={explodeStrength}
+                onChange={(e) => onExplodeStrengthChange(+e.target.value)}
+                style={{ flex: 1 }}
+                title="散度强度：负=向外爆炸，正=向内收缩"
+              />
+              <span style={{ fontSize: '10px', minWidth: '52px', textAlign: 'right', fontFamily: 'monospace' }}>{explodeStrength}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={{ margin: 0, fontSize: '10px', color: '#666', minWidth: '28px' }}>半径</label>
+              <input
+                type="range"
+                min="0.02"
+                max="0.4"
+                step="0.01"
+                value={explodeRadius}
+                onChange={(e) => onExplodeRadiusChange(+e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: '10px', minWidth: '52px', textAlign: 'right', fontFamily: 'monospace' }}>{explodeRadius.toFixed(2)}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '10px' }}>
+              <label style={{ margin: 0 }}>生成水团</label>
+              <input type="checkbox" checked={explodeWater} onChange={(e) => onExplodeWaterChange(e.target.checked)} style={{ cursor: 'pointer' }} />
+              <span style={{ color: '#999', marginLeft: '4px' }}>在画布点击位置爆炸</span>
+            </div>
+          </div>
+        )}
 
         {/* 半径滑块 */}
         <div className="control-group" style={{ marginBottom: '12px' }}>
@@ -2056,6 +2108,16 @@ export const FluidEditorUI: React.FC = () => {
   const [injectMode, setInjectMode] = useState<InjectMode>('water');
   const [injectRadius, setInjectRadius] = useState(0.1);
   const [injectStrength, setInjectStrength] = useState(1.0);
+  // ★ 爆炸注入参数（参照旧库 explode；点击画布位置爆炸）
+  const [explodeStrength, setExplodeStrength] = useState(-25000);
+  const [explodeRadius, setExplodeRadius] = useState(0.15);
+  const [explodeWater, setExplodeWater] = useState(true);
+  const explodeStrengthRef = useRef(explodeStrength);
+  explodeStrengthRef.current = explodeStrength;
+  const explodeRadiusRef = useRef(explodeRadius);
+  explodeRadiusRef.current = explodeRadius;
+  const explodeWaterRef = useRef(explodeWater);
+  explodeWaterRef.current = explodeWater;
   // ★ 注入颜色（hex；水=蓝，颜料=红默认）+ 取色模式
   const [injectColorHex, setInjectColorHex] = useState('#1e90ff');
   const [pickColorActive, setPickColorActive] = useState(false);
@@ -2327,6 +2389,20 @@ export const FluidEditorUI: React.FC = () => {
     }
 
     if (injectMode === 'stamp') return; // 印章模式走 onClick
+
+    // ★ 爆炸模式：点击即爆炸（位置 = 点击处；单次，不走摇杆/持续注入）
+    if (injectMode === 'explode') {
+      editor.explode({
+        cx: pos.x,
+        cy: pos.y,
+        radius: explodeRadiusRef.current,
+        strength: explodeStrengthRef.current,
+        createWater: explodeWaterRef.current,
+        duration: 0.1,
+        perturbation: 0.4,
+      });
+      return;
+    }
 
     // ★ 激活摇杆：原点 = 按下位置（CSS 像素），初始方向 = 当前面板方向
     joystickActiveRef.current = true;
@@ -3525,6 +3601,7 @@ export const FluidEditorUI: React.FC = () => {
         pointerDownRef.current &&
         !continuousModeRef.current &&
         injectModeRef.current !== 'stamp' &&
+        injectModeRef.current !== 'explode' &&
         !continuousPausedRef.current &&
         viewModeRef.current !== 'obstacle'
       ) {
@@ -3996,6 +4073,12 @@ export const FluidEditorUI: React.FC = () => {
           setInjectColorHex={setInjectColorHex}
           pickColorActive={pickColorActive}
           onTogglePickColor={() => setPickColorActive((v) => !v)}
+          explodeStrength={explodeStrength}
+          onExplodeStrengthChange={setExplodeStrength}
+          explodeRadius={explodeRadius}
+          onExplodeRadiusChange={setExplodeRadius}
+          explodeWater={explodeWater}
+          onExplodeWaterChange={setExplodeWater}
         />
 
         {/* FTX 帧数据加载 */}
@@ -4342,6 +4425,9 @@ export const FluidEditorUI: React.FC = () => {
               handleAddWaypoint({ x: normX, y: normY });
               return;
             }
+
+            // ★ 爆炸模式：mousedown 已触发爆炸，点击不执行采样/比较器
+            if (injectMode === 'explode') return;
 
             // ★ 根据注入模式执行注入
             if (injectMode === 'stamp') {

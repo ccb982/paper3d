@@ -395,6 +395,14 @@ export class FluidEditor {
   }
 
   /**
+   * ★ 爆炸注入（参照旧库 explode）：散度脉冲 + 水量 + 时间包络 + 各向异性/扰动。
+   * 参数均为纹理坐标（归一化 0~1，Y向下为正），与 queueInjection 一致。
+   */
+  public explode(config: import('../FluidSolver').ExplosionConfig): void {
+    this.operations.explode(config);
+  }
+
+  /**
    * 设置持续注入源（替换旧的 config.injection 方式）。
    * 新增一个持续注入源，每帧自动执行，直到移除。
    *
@@ -491,6 +499,9 @@ export class FluidEditor {
     // ★ MCSDA：scalar 模式下传入 densityGrid，使带 density 字段的注入能写入浓度场
     const _gridDensity = this.config.advectionMode === 'scalar' ? this.densityGrid : null;
     this.operations.processQueue(this.colorGrid, this.velocityGrid, dt, _gridDensity);
+
+    // 0.5 ★ 爆炸注入（时间包络逐帧推进；动量先于本帧平流传导）
+    this.operations.processExplosions(this.colorGrid, this.velocityGrid, dt, _gridDensity);
 
     // 0. 重力（通过操作模块 → 底层注入器，二维矢量全局力）
     const g = this.config.gravity;

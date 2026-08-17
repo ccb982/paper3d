@@ -32,6 +32,36 @@ export interface InjectionConfig {
   intermittent?: { onDuration: number; offDuration: number };
 }
 
+/**
+ * ★ 爆炸注入配置（参照旧库 FluidSimulatorAdapter.explode）。
+ * 散度脉冲（径向推/吸）+ 可选水量 + 时间包络 + 各向异性/扰动。
+ * 旧库参数参考：strength 25000→5000（5连爆递减）、radius 0.15、duration 0.1s、
+ *   createWater 首末次 true、waterMultiplier 末次 2、扰动 offset ±0.01。
+ */
+export interface ExplosionConfig {
+  /** 爆炸中心（归一化 0~1，Y向下为正） */
+  cx: number;
+  cy: number;
+  /** 归一化半径 */
+  radius: number;
+  /** 散度强度：负 = 向外爆炸（源），正 = 向内收缩（汇）。旧库爆炸用 25000 量级 */
+  strength: number;
+  /** 是否注入水团（vector=颜色 alpha，scalar=密度） */
+  createWater?: boolean;
+  /** 包络时长（秒，默认 0.1）；强度按 1-t/duration 线性衰减 */
+  duration?: number;
+  /** 水量倍数（默认 1；旧库末次爆炸 2） */
+  waterMultiplier?: number;
+  /** 各向异性模式：0=各向同性, 1=四极子, 2=偶极子（旧库 explodeAnisotropic） */
+  anisotropyMode?: 0 | 1 | 2;
+  /** 各向异性相位（弧度） */
+  anisotropyPhase?: number;
+  /** 各向异性强度 0~1 */
+  anisotropyStrength?: number;
+  /** 随机扰动强度（碎片感/不规则冲击波，默认 0） */
+  perturbation?: number;
+}
+
 export interface FluidSolverConfig {
   resolution: { w: number; h: number };
   channels: { r: boolean; g: boolean; b: boolean; a: boolean }; // 物理 RGBA，逻辑 HSLA
@@ -190,6 +220,9 @@ export class FluidSolver {
 
   // 待执行的一次性注入队列
   private injectionQueue: InjectionConfig[] = [];
+
+  // ★ 活跃爆炸队列（step 内逐帧推进包络，播完移除）
+  private activeExplosions: Array<ExplosionConfig & { elapsed: number }> = [];
 
   constructor(
     renderer: THREE.WebGLRenderer,
@@ -700,6 +733,99 @@ export class FluidSolver {
     this.injectionQueue.length = 0;
   }
 
+  // ==================== 爆炸注入（参照旧库 explode）====================
+
+  /**
+   * ★ 触发一次爆炸（参照旧库 FluidSimulatorAdapter.explode）：
+   *   散度脉冲（径向推/吸）+ 可选水量 + 时间包络 + 各向异性/扰动。
+   *   进入活跃队列，step 内按包络逐帧注入，播完自动移除。
+   *   旧库参数参考：strength 25000（爆炸）/ -2000（恒定膨胀）、radius 0.15、
+   *   duration 0.1、首末次 createWater=true、末次 waterMultiplier=2、
+   *   扰动 offset ±0.01（perturbation 0.4 → 碎片感）。
+   */
+  explode(config: ExplosionConfig): void {
+    this.activeExplosions.push({ ...config, elapsed: 0 });
+  }
+
+  /** 活跃爆炸逐帧推进：包络强度 + 散度/水量注入（step 内调用） */
+  private processExplosions(dt: number): void {
+    if (this.activeExplosions.length === 0) return;
+    const isScalar = this.config.advectionMode === 'scalar';
+    const ch = this.config.channels;
+
+    for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
+      const ex = this.activeExplosions[i];
+      const duration = ex.duration ?? 0.1;
+      ex.elapsed += dt;
+
+      // ★ 时间包络：强度线性衰减 1-t/duration（旧库 0.1s 冲击波）
+      const t = Math.min(1, ex.elapsed / Math.max(0.001, duration));
+      const envelope = 1 - t;
+      if (envelope <= 0) {
+        this.activeExplosions.splice(i, 1);
+        continue;
+      }
+
+      const opts = {
+        position: { x: ex.cx, y: ex.cy },
+        radius: ex.radius,
+        obstacle: this.obstacleTex || undefined,
+      };
+
+      // ① 散度脉冲：径向速度场（负散度 = 向外爆炸；正 = 向内收缩）
+      //    加随机扰动（碎片感）：中心/半径微偏移 → 非完美同心圆
+      const perturb = ex.perturbation ?? 0;
+      const jitterX = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
+      const jitterY = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
+      this.injector.injectDivergence(this.velocityGrid, ex.strength * envelope, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
+        obstacle: this.obstacleTex || undefined,
+      });
+
+      // ② 各向异性修正（模式 1=四极子, 2=偶极子）：方向权重叠加径向散度
+      const mode = ex.anisotropyMode ?? 0;
+      const anisoStrength = ex.anisotropyStrength ?? 0;
+      if (mode > 0 && anisoStrength > 0) {
+        const phase = ex.anisotropyPhase ?? 0;
+        const weight = (m: number, a: number) => {
+          if (mode === 1) return Math.cos(2 * a + phase);      // 四极子
+          return Math.cos(a + phase);                           // 偶极子
+        };
+        // 用两次四方向速度注入近似角向权重（各向异性拉长冲击波）
+        const dirs = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+        for (const a of dirs) {
+          const w = weight(mode, a) * anisoStrength * ex.strength * envelope;
+          if (Math.abs(w) < 1e-6) continue;
+          this.injector.injectVelocity(this.velocityGrid, {
+            x: Math.cos(a) * w * dt,
+            y: Math.sin(a) * w * dt,
+          }, {
+            position: { x: ex.cx, y: ex.cy },
+            radius: ex.radius,
+            obstacle: this.obstacleTex || undefined,
+          });
+        }
+      }
+
+      // ③ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
+      const waterMult = ex.waterMultiplier ?? 1;
+      if (ex.createWater && waterMult > 0) {
+        const rate = Math.min(1, 0.6 * envelope * waterMult);
+        if (isScalar) {
+          this.injector.injectDensity(this.densityGrid, rate, rate, opts);
+        } else {
+          // 白色水团（HSL: h 任意, s 低, l 高, a=rate）
+          this.injector.injectColor(
+            this.colorGrid,
+            { h: 0.55, s: 0.3, l: 0.85, a: rate },
+            rate, opts, ch,
+          );
+        }
+      }
+    }
+  }
+
   // ==================== 边界处理（零梯度，自由流出）====================
 
   private applyBoundary(): void {
@@ -911,6 +1037,9 @@ export class FluidSolver {
 
     // 0. 一次性注入队列（优先执行，本帧生效）
     this.processInjectionQueue();
+
+    // 0.5 ★ 爆炸注入（时间包络逐帧推进；动量先于本帧平流传导）
+    this.processExplosions(dt);
 
     // 1. 重力
     this.applyGravity(dt);

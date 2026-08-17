@@ -1,6 +1,7 @@
 import type * as THREE from 'three';
 import type { FluidGrid } from '../core/FluidGrid';
 import { FluidInjector, type InjectionOptions } from '../core/FluidInjector';
+import type { ExplosionConfig } from '../FluidSolver';
 
 // ============================================================
 // 类型定义
@@ -135,6 +136,9 @@ export class FluidOperations {
   private continuousSources: { id: number; config: InjectionConfig }[] = [];
   private nextSourceId = 1;
 
+  /** ★ 活跃爆炸队列（参照旧库 explode；step 内按包络逐帧推进，播完移除） */
+  private activeExplosions: Array<ExplosionConfig & { elapsed: number }> = [];
+
   /**
    * ★ 路径点运行时状态：记录每个源的当前逻辑步进、段内进度、插值位置。
    * key = sourceId，仅在源配置了 waypoints 时使用。
@@ -209,6 +213,100 @@ export class FluidOperations {
 
     // 清空队列
     this.pendingInjections = [];
+  }
+
+  // ==================== 爆炸注入（参照旧库 explode）====================
+
+  /**
+   * ★ 触发一次爆炸（参照旧库 FluidSimulatorAdapter.explode）：
+   *   散度脉冲（径向推/吸）+ 可选水量 + 时间包络 + 各向异性/扰动。
+   *   进入活跃队列，step 内按包络逐帧注入，播完自动移除。
+   *   旧库参数参考：strength 25000（爆炸）、radius 0.15、duration 0.1、
+   *   首末次 createWater=true、末次 waterMultiplier=2、扰动 ±0.01。
+   */
+  explode(config: ExplosionConfig): void {
+    this.activeExplosions.push({ ...config, elapsed: 0 });
+  }
+
+  /** 活跃爆炸逐帧推进（step 内调用；参数与 processQueue 一致） */
+  public processExplosions(
+    gridColor: FluidGrid,
+    gridVelocity: FluidGrid,
+    dt: number,
+    gridDensity: FluidGrid | null = null,
+  ): void {
+    if (this.activeExplosions.length === 0) return;
+    const ch = this.channelMask;
+
+    for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
+      const ex = this.activeExplosions[i];
+      const duration = ex.duration ?? 0.1;
+      ex.elapsed += dt;
+
+      // ★ 时间包络：强度线性衰减 1-t/duration（旧库 0.1s 冲击波）
+      const t = Math.min(1, ex.elapsed / Math.max(0.001, duration));
+      const envelope = 1 - t;
+      if (envelope <= 0) {
+        this.activeExplosions.splice(i, 1);
+        continue;
+      }
+
+      const obstacle = this.obstacleTexture || undefined;
+
+      // ① 散度脉冲：径向速度场（负散度 = 向外爆炸；正 = 向内收缩）
+      //    加随机扰动（碎片感）：中心/半径微偏移 → 非完美同心圆
+      const perturb = ex.perturbation ?? 0;
+      const jitterX = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
+      const jitterY = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
+      this.injector.injectDivergence(gridVelocity, ex.strength * envelope, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
+        obstacle,
+      });
+
+      // ② 各向异性修正（模式 1=四极子, 2=偶极子）：角向权重叠加速度
+      const mode = ex.anisotropyMode ?? 0;
+      const anisoStrength = ex.anisotropyStrength ?? 0;
+      if (mode > 0 && anisoStrength > 0) {
+        const phase = ex.anisotropyPhase ?? 0;
+        const dirs = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
+        for (const a of dirs) {
+          // 四极子：cos(2a+φ) 两对正负瓣；偶极子：cos(a+φ) 一对正负瓣
+          const w = (mode === 1 ? Math.cos(2 * a + phase) : Math.cos(a + phase))
+            * anisoStrength * ex.strength * envelope;
+          if (Math.abs(w) < 1e-6) continue;
+          this.injector.injectVelocity(gridVelocity, {
+            x: Math.cos(a) * w * dt,
+            y: Math.sin(a) * w * dt,
+          }, {
+            position: { x: ex.cx, y: ex.cy },
+            radius: ex.radius,
+            obstacle,
+          });
+        }
+      }
+
+      // ③ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
+      const waterMult = ex.waterMultiplier ?? 1;
+      if (ex.createWater && waterMult > 0) {
+        const rate = Math.min(1, 0.6 * envelope * waterMult);
+        const opts = {
+          position: { x: ex.cx, y: ex.cy },
+          radius: ex.radius,
+          obstacle,
+        };
+        if (gridDensity) {
+          this.injector.injectDensity(gridDensity, rate, rate, opts);
+        } else {
+          // 白色水团（HSL: h 任意, s 低, l 高, a=rate）
+          this.injector.injectColor(
+            gridColor,
+            { h: 0.55, s: 0.3, l: 0.85, a: rate },
+            rate, opts, ch,
+          );
+        }
+      }
+    }
   }
 
   // ==================== 持续注入源管理 ====================
