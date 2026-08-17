@@ -221,6 +221,8 @@ export class FluidEditor {
   colorGrid!: FluidGrid;
   velocityGrid!: FluidGrid;
   pressureGrid!: FluidGrid;   // 单通道、half-float，用于红-黑 SOR 压力迭代
+  /** ★ 散度源场（爆炸/源汇的压力方程源项；solvePressure 前注入、消费后清空） */
+  divergenceGrid!: FluidGrid;
   /** ★ MCSDA 标量浓度场：1 通道 Uint8（RedFormat），仅 advectionMode='scalar' 时参与平流 */
   densityGrid!: FluidGrid;
 
@@ -500,9 +502,6 @@ export class FluidEditor {
     const _gridDensity = this.config.advectionMode === 'scalar' ? this.densityGrid : null;
     this.operations.processQueue(this.colorGrid, this.velocityGrid, dt, _gridDensity);
 
-    // 0.5 ★ 爆炸注入（时间包络逐帧推进；动量先于本帧平流传导）
-    this.operations.processExplosions(this.colorGrid, this.velocityGrid, dt, _gridDensity);
-
     // 0. 重力（通过操作模块 → 底层注入器，二维矢量全局力）
     const g = this.config.gravity;
     if (g.x !== 0 || g.y !== 0) {
@@ -532,11 +531,18 @@ export class FluidEditor {
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
     this.applyBoundary();
 
-    // 3. 压力投影（红-黑 SOR）
+    // 2.6 ★ 爆炸散度源注入（压力投影之前：∇²p = ∇·u + f，散度源成为压力源 →
+    //   压力梯度推动流体向外 → 真正的爆炸推力/水体撕裂）
+    this.operations.processExplosions(this.colorGrid, this.velocityGrid, dt, _gridDensity, this.divergenceGrid);
+
+    // 3. 压力投影（红-黑 SOR；消费散度源）
     if (this.config.enablePressure) {
       this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
       this.applyPressureGradient();
     }
+
+    // 3.1 ★ 清空散度源场（一次性消费；不参与平流/衰减）
+    this.clearGrid(this.divergenceGrid);
 
     // ★ 3.5 全局速度缩放（无方向阻尼/加速，压力投影之后）
     // velocityScale = 1 表示无影响（默认）；< 1 阻尼减速，> 1 加速
@@ -821,6 +827,7 @@ export class FluidEditor {
     const mat = this.gpu.getMaterial(key, {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
+      uDivSource: { value: this.divergenceGrid.read },
       uObstacle: { value: this.getObstacleTexture() },
       uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
       uOmega: { value: omega },
@@ -829,6 +836,7 @@ export class FluidEditor {
     }, /* glsl */ `
       uniform sampler2D uPressure;
       uniform sampler2D uVelocity;
+      uniform sampler2D uDivSource;
       uniform sampler2D uObstacle;
       uniform vec2 uInvResolution;
       uniform float uOmega;
@@ -883,6 +891,8 @@ export class FluidEditor {
 
         float div = (vR.x - vL.x) * 0.5 * uInvResolution.x
                   + (vT.y - vB.y) * 0.5 * uInvResolution.y;
+        // ★ 散度源项：∇²p = ∇·u + f（爆炸/源汇；负散度源 → 高压 → 向外推）
+        div += texture2D(uDivSource, vUv).r;
 
         float pOld = texture2D(uPressure, vUv).r;
         float pNew = (pL + pR + pT + pB - div) / 4.0;
@@ -1193,6 +1203,7 @@ export class FluidEditor {
 
     this.colorGrid?.dispose();
     this.velocityGrid?.dispose();
+    this.divergenceGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
     // ★ Level Set phiGrid：分辨率变化时释放，下次 step 前由 enableLevelSetMode 重建
@@ -1209,6 +1220,8 @@ export class FluidEditor {
     //   'half-float': 16位半精度，显存减半，readPixels 用 Uint16Array + halfToFloat 手动解码
     this.velocityGrid = new FluidGrid(this.config.resolution, 2, velDataType);
     this.pressureGrid = new FluidGrid(this.config.resolution, 1, velDataType);
+    // ★ 散度源场（爆炸/源汇压力源项）
+    this.divergenceGrid = new FluidGrid(this.config.resolution, 1, velDataType);
     // ★ MCSDA density 场：1 通道 Uint8（RedFormat），与 colorGrid 分辨率一致
     this.densityGrid = new FluidGrid(this.config.resolution, 1, 'uint8');
 
@@ -1796,6 +1809,7 @@ export class FluidEditor {
 
   dispose(): void {
     this.colorGrid?.dispose();
+    this.divergenceGrid?.dispose();
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();

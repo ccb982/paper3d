@@ -234,6 +234,7 @@ export class FluidOperations {
     gridVelocity: FluidGrid,
     dt: number,
     gridDensity: FluidGrid | null = null,
+    gridDivergence: FluidGrid | null = null,
   ): void {
     if (this.activeExplosions.length === 0) return;
     const ch = this.channelMask;
@@ -253,21 +254,45 @@ export class FluidOperations {
 
       const obstacle = this.obstacleTexture || undefined;
 
-      // ① 散度脉冲：径向速度场（负散度 = 向外爆炸；正 = 向内收缩）
-      //    加随机扰动（碎片感）：中心/半径微偏移 → 非完美同心圆
+      // ① ★ 散度源注入（旧库 addDivergenceImpulse 的正确物理）：
+      //   写入散度源场 → 压力方程源项 ∇²p = ∇·u + f →
+      //   压力梯度推动周围流体向外（爆炸推力，水体被真正推开/撕裂）
+      //   加随机扰动（碎片感）：中心/半径微偏移 → 非完美同心圆
       const perturb = ex.perturbation ?? 0;
       const jitterX = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
       const jitterY = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
-      this.injector.injectDivergence(gridVelocity, ex.strength * envelope, {
+      if (gridDivergence) {
+        this.injector.injectDivergenceSource(gridDivergence, ex.strength * envelope, {
+          position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+          radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
+          obstacle,
+        });
+      } else {
+        // 无散度源场（异常降级）：直接径向速度冲击
+        this.injector.injectDivergence(gridVelocity, ex.strength * envelope, {
+          position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+          radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
+          obstacle,
+        });
+      }
+
+      // ② 直接速度冲击（撕裂感：先给速度场冲量，与压力梯度叠加成碎片感）
+      //   强度 = 散度的 ~8%（主推力走压力传导，冲量给撕裂边缘）
+      const velImpulse = ex.strength * envelope * 0.08;
+      const jitterAngle = Math.random() * Math.PI * 2;
+      this.injector.injectVelocity(gridVelocity, {
+        x: Math.cos(jitterAngle) * velImpulse * dt,
+        y: Math.sin(jitterAngle) * velImpulse * dt,
+      }, {
         position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
-        radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
+        radius: ex.radius,
         obstacle,
       });
 
-      // ② 各向异性修正（模式 1=四极子, 2=偶极子）：角向权重叠加速度
+      // ③ 各向异性修正（模式 1=四极子, 2=偶极子）：角向权重 → 偏移的散度源
       const mode = ex.anisotropyMode ?? 0;
       const anisoStrength = ex.anisotropyStrength ?? 0;
-      if (mode > 0 && anisoStrength > 0) {
+      if (mode > 0 && anisoStrength > 0 && gridDivergence) {
         const phase = ex.anisotropyPhase ?? 0;
         const dirs = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
         for (const a of dirs) {
@@ -275,18 +300,18 @@ export class FluidOperations {
           const w = (mode === 1 ? Math.cos(2 * a + phase) : Math.cos(a + phase))
             * anisoStrength * ex.strength * envelope;
           if (Math.abs(w) < 1e-6) continue;
-          this.injector.injectVelocity(gridVelocity, {
-            x: Math.cos(a) * w * dt,
-            y: Math.sin(a) * w * dt,
-          }, {
-            position: { x: ex.cx, y: ex.cy },
-            radius: ex.radius,
+          this.injector.injectDivergenceSource(gridDivergence, w * 0.5, {
+            position: {
+              x: ex.cx + Math.cos(a) * ex.radius * 0.4,
+              y: ex.cy + Math.sin(a) * ex.radius * 0.4,
+            },
+            radius: ex.radius * 0.5,
             obstacle,
           });
         }
       }
 
-      // ③ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
+      // ④ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
       const waterMult = ex.waterMultiplier ?? 1;
       if (ex.createWater && waterMult > 0) {
         const rate = Math.min(1, 0.6 * envelope * waterMult);

@@ -188,6 +188,8 @@ export class FluidSolver {
   velocityGrid!: FluidGrid;  // RG HalfFloat，像素/秒
   pressureGrid!: FluidGrid;  // R HalfFloat，压力
   densityGrid!: FluidGrid;   // R Uint8，标量浓度（scalar 模式）
+  /** ★ 散度源场（爆炸/源汇的压力方程源项；solvePressure 前注入、消费后清空） */
+  divergenceGrid!: FluidGrid;
 
   // ★ Level Set φ 场（懒加载，仅启用时分配显存）
   private _phiGrid: FluidGrid | null = null;
@@ -275,11 +277,14 @@ export class FluidSolver {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this.divergenceGrid?.dispose();
 
     this.colorGrid = new FluidGrid({ w, h }, 4, 'uint8');
     this.velocityGrid = new FluidGrid({ w, h }, 2, 'half-float');
     this.pressureGrid = new FluidGrid({ w, h }, 1, 'half-float');
     this.densityGrid = new FluidGrid({ w, h }, 1, 'uint8');
+    // ★ 散度源场（爆炸/注入源的压力方程源项；solvePressure 消费后清空）
+    this.divergenceGrid = new FluidGrid({ w, h }, 1, 'half-float');
 
     // ★ Level Set φ 场同步重建（仅当已存在时）
     if (this._phiGrid) {
@@ -772,18 +777,33 @@ export class FluidSolver {
         obstacle: this.obstacleTex || undefined,
       };
 
-      // ① 散度脉冲：径向速度场（负散度 = 向外爆炸；正 = 向内收缩）
-      //    加随机扰动（碎片感）：中心/半径微偏移 → 非完美同心圆
+      // ① ★ 散度源注入（旧库 addDivergenceImpulse 的正确物理）：
+      //   写入 divergenceGrid → 压力方程源项 ∇²p = ∇·u + f →
+      //   压力梯度推动周围流体向外（爆炸推力，水体被真正推开/撕裂）
+      //   加随机扰动（碎片感）：中心/半径微偏移 → 非完美同心圆
       const perturb = ex.perturbation ?? 0;
       const jitterX = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
       const jitterY = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
-      this.injector.injectDivergence(this.velocityGrid, ex.strength * envelope, {
+      this.injector.injectDivergenceSource(this.divergenceGrid, ex.strength * envelope, {
         position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
         radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
         obstacle: this.obstacleTex || undefined,
       });
 
-      // ② 各向异性修正（模式 1=四极子, 2=偶极子）：方向权重叠加径向散度
+      // ② 直接速度冲击（撕裂感：先给速度场冲量，与压力梯度叠加成碎片感）
+      //   强度 = 散度的 ~8%（主推力走压力传导，冲量给撕裂边缘）
+      const velImpulse = ex.strength * envelope * 0.08;
+      const jitterAngle = Math.random() * Math.PI * 2;
+      this.injector.injectVelocity(this.velocityGrid, {
+        x: Math.cos(jitterAngle) * velImpulse * dt,
+        y: Math.sin(jitterAngle) * velImpulse * dt,
+      }, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius,
+        obstacle: this.obstacleTex || undefined,
+      });
+
+      // ③ 各向异性修正（模式 1=四极子, 2=偶极子）：角向权重 → 偏移的散度源
       const mode = ex.anisotropyMode ?? 0;
       const anisoStrength = ex.anisotropyStrength ?? 0;
       if (mode > 0 && anisoStrength > 0) {
@@ -792,23 +812,23 @@ export class FluidSolver {
           if (mode === 1) return Math.cos(2 * a + phase);      // 四极子
           return Math.cos(a + phase);                           // 偶极子
         };
-        // 用两次四方向速度注入近似角向权重（各向异性拉长冲击波）
+        // 角向偏移的散度源 → 冲击波被拉长/不对称（撕裂方向感）
         const dirs = [0, Math.PI / 2, Math.PI, Math.PI * 1.5];
         for (const a of dirs) {
           const w = weight(mode, a) * anisoStrength * ex.strength * envelope;
           if (Math.abs(w) < 1e-6) continue;
-          this.injector.injectVelocity(this.velocityGrid, {
-            x: Math.cos(a) * w * dt,
-            y: Math.sin(a) * w * dt,
-          }, {
-            position: { x: ex.cx, y: ex.cy },
-            radius: ex.radius,
+          this.injector.injectDivergenceSource(this.divergenceGrid, w * 0.5, {
+            position: {
+              x: ex.cx + Math.cos(a) * ex.radius * 0.4,
+              y: ex.cy + Math.sin(a) * ex.radius * 0.4,
+            },
+            radius: ex.radius * 0.5,
             obstacle: this.obstacleTex || undefined,
           });
         }
       }
 
-      // ③ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
+      // ④ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
       const waterMult = ex.waterMultiplier ?? 1;
       if (ex.createWater && waterMult > 0) {
         const rate = Math.min(1, 0.6 * envelope * waterMult);
@@ -871,6 +891,7 @@ export class FluidSolver {
     const mat = this.gpu.getMaterial(`fluid_sor_${isRedPass ? 'red' : 'black'}_${boundaryMode}`, {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
+      uDivSource: { value: this.divergenceGrid.read },
       uObstacle: { value: this.getObstacleTex() },
       uOmega: { value: omega },
       uInvRes: { value: new THREE.Vector2(1.0 / w, 1.0 / h) },
@@ -879,6 +900,7 @@ export class FluidSolver {
     }, `
       uniform sampler2D uPressure;
       uniform sampler2D uVelocity;
+      uniform sampler2D uDivSource;
       uniform sampler2D uObstacle;
       uniform float uOmega;
       uniform vec2 uInvRes;
@@ -924,6 +946,8 @@ export class FluidSolver {
         vec2 vT = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).rg;
         vec2 vB = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).rg;
         float div = (vR.x - vL.x) * 0.5 * ts.x + (vT.y - vB.y) * 0.5 * ts.y;
+        // ★ 散度源项：∇²p = ∇·u + f（爆炸/源汇；负散度源 → 高压 → 向外推）
+        div += texture2D(uDivSource, vUv).r;
         float pOld = texture2D(uPressure, vUv).r;
         float pNew = (pL + pR + pT + pB - div) / 4.0;
         pNew = (1.0 - uOmega) * pOld + uOmega * pNew;
@@ -1038,9 +1062,6 @@ export class FluidSolver {
     // 0. 一次性注入队列（优先执行，本帧生效）
     this.processInjectionQueue();
 
-    // 0.5 ★ 爆炸注入（时间包络逐帧推进；动量先于本帧平流传导）
-    this.processExplosions(dt);
-
     // 1. 重力
     this.applyGravity(dt);
 
@@ -1112,11 +1133,18 @@ export class FluidSolver {
     // 3.5 边界处理（压力投影之前，避免与梯度修正拮抗）
     this.applyBoundary();
 
-    // 4. 压力投影
+    // 3.6 ★ 爆炸散度源注入（压力投影之前：∇²p = ∇·u + f，散度源成为压力源 →
+    //   压力梯度推动流体向外 → 真正的爆炸推力/水体撕裂）
+    this.processExplosions(dt);
+
+    // 4. 压力投影（消费散度源；SOR 迭代期间源场保持有效）
     if (cfg.enablePressure) {
       this.solvePressure(cfg.pressureIterations, cfg.pressureOmega);
       this.applyPressureGradient();
     }
+
+    // 4.5 ★ 清空散度源场（一次性消费；不参与平流/衰减）
+    this.clearGrid(this.divergenceGrid);
 
     // 5. 速度缩放（阻尼/加速）
     const velScale = cfg.velocityScale ?? 1;
@@ -1414,6 +1442,7 @@ export class FluidSolver {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this.divergenceGrid?.dispose();
     this._phiGrid?.dispose();
     this._phiGrid = null;
     this.compositeTarget?.dispose();

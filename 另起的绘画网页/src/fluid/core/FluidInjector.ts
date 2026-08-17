@@ -142,6 +142,72 @@ export class FluidInjector {
     grid.swap();
   }
 
+  /**
+   * ★ 散度源注入（旧库 addDivergenceImpulse 的正确物理）：
+   * 把散度值写入**散度源场**（divergenceGrid），作为压力方程源项
+   * `∇²p = ∇·u + f` 的一部分。压力投影后压力梯度推动周围流体向外
+   * （爆炸推力），而不是直接改速度场（直接改会被投影反向抵消 → 推不动）。
+   *
+   * 累积模式：叠加到源场现有值（多次爆炸/连续注入可叠加）。
+   *
+   * @param grid         散度源场（R 单通道）
+   * @param divergence   源强度（负=源/向外推，正=汇/向内吸）
+   * @param options      位置/半径/障碍物
+   */
+  injectDivergenceSource(
+    grid: FluidGrid,
+    divergence: number,
+    options: InjectionOptions = {},
+  ): void {
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
+    const key = `inj_div_source_v1`;
+
+    const mat = this.gpu.getMaterial(key, {
+      uSource: { value: grid.read },
+      uDivergence: { value: divergence },
+      uPos: { value: new THREE.Vector2(position.x, position.y) },
+      uRadius: { value: radius },
+      uGlobal: { value: global ? 1 : 0 },
+      uHasMask: { value: mask ? 1 : 0 },
+      uMask: { value: mask || this.getDummyWhiteTex() },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
+    }, /* glsl */ `
+      uniform sampler2D uSource;
+      uniform float uDivergence;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform int uGlobal;
+      uniform int uHasMask;
+      uniform sampler2D uMask;
+      uniform sampler2D uObstacle;
+      varying vec2 vUv;
+
+      void main() {
+        // 墙内不注入（直传原值）
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uSource, vUv);
+          return;
+        }
+
+        float maskVal = 1.0;
+        if (uGlobal == 0) {
+          float d = distance(vUv, uPos);
+          maskVal = smoothstep(uRadius, 0.0, d);
+        }
+        if (uHasMask == 1) {
+          maskVal *= texture2D(uMask, vUv).r;
+        }
+
+        // ★ 累积叠加：源场现值 + 新散度（中心强、边缘平滑衰减）
+        float cur = texture2D(uSource, vUv).r;
+        gl_FragColor = vec4(cur + uDivergence * maskVal, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
   // ---- 2. 颜色注入（HSLA） ----
 
   /**
