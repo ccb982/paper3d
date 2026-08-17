@@ -142,6 +142,62 @@ export class FluidInjector {
     grid.swap();
   }
 
+  /**
+   * ★ 散度源注入（正确物理）：把散度写入散度源场（divergenceGrid），
+   * 作为压力方程源项 ∇²p = ∇·u + f。压力投影后压力梯度推动流体向外
+   * （爆炸推力），而非直接改速度场（直接改会被投影反向抵消）。
+   * 累积模式：叠加到源场现有值。
+   */
+  injectDivergenceSource(
+    grid: FluidGrid,
+    divergence: number,
+    options: InjectionOptions = {},
+  ): void {
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
+    const key = `inj_div_source_v1`;
+
+    const mat = this.gpu.getMaterial(key, {
+      uSource: { value: grid.read },
+      uDivergence: { value: divergence },
+      uPos: { value: new THREE.Vector2(position.x, position.y) },
+      uRadius: { value: radius },
+      uGlobal: { value: global ? 1 : 0 },
+      uHasMask: { value: mask ? 1 : 0 },
+      uMask: { value: mask || this.getDummyWhiteTex() },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
+    }, /* glsl */ `
+      uniform sampler2D uSource;
+      uniform float uDivergence;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform int uGlobal;
+      uniform int uHasMask;
+      uniform sampler2D uMask;
+      uniform sampler2D uObstacle;
+      varying vec2 vUv;
+
+      void main() {
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uSource, vUv);
+          return;
+        }
+        float maskVal = 1.0;
+        if (uGlobal == 0) {
+          float d = distance(vUv, uPos);
+          maskVal = smoothstep(uRadius, 0.0, d);
+        }
+        if (uHasMask == 1) {
+          maskVal *= texture2D(uMask, vUv).r;
+        }
+        float cur = texture2D(uSource, vUv).r;
+        gl_FragColor = vec4(cur + uDivergence * maskVal, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
   // ---- 2. 颜色注入（HSLA） ----
 
   /**

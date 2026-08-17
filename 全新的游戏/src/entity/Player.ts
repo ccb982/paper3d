@@ -45,5 +45,7 @@ export class Player extends CharacterBase {
   /** ★ 玩家死亡（暂：不销毁主角——记录 + 扣血表现后续接；结算/重生后续） */
   override onDeath(source: EntityBase | null): void {
     console.log(`[玩家] 被 ${source?.constructor.name ?? '未知'} 击杀！`);
+    // ★ 死亡动画（自动管线：只播动画不销毁实体，传送复活）
+    this.playDeathAnim();
   }
 }

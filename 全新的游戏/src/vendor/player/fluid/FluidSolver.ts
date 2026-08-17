@@ -27,6 +27,33 @@ export interface InjectionConfig {
   intermittent?: { onDuration: number; offDuration: number };
 }
 
+/**
+ * ★ 爆炸注入配置（参照旧库 FluidSimulatorAdapter.explode）。
+ * 散度脉冲（压力源，推开流体）+ 可选水量 + 指数时间包络 + 扰动。
+ */
+export interface ExplosionConfig {
+  /** 爆炸中心（归一化 0~1，Y向下为正） */
+  cx: number;
+  cy: number;
+  /** 归一化半径 */
+  radius: number;
+  /** 散度强度：负 = 向外爆炸（源），正 = 向内收缩（汇）。旧库爆炸用 25000 量级 */
+  strength: number;
+  /** 是否注入水团（vector=颜色 alpha，scalar=密度） */
+  createWater?: boolean;
+  /** 水团颜色（HSLA，vector 模式；缺省白色 h=0.55 s=0.3 l=0.85） */
+  waterColor?: [number, number, number, number];
+  /** 硬性截止时长（秒，默认 0.1） */
+  duration?: number;
+  /** ★ 每帧衰减系数（0~1，默认 0.9）：指数包络 envelope ×= decay，
+   *   防止前几帧高压持续注入导致速度场膨胀填满纹理 */
+  decay?: number;
+  /** 水量倍数（默认 1） */
+  waterMultiplier?: number;
+  /** 随机扰动强度（碎片感/不规则冲击波，默认 0） */
+  perturbation?: number;
+}
+
 export interface FluidSolverConfig {
   resolution: { w: number; h: number };
   channels: { r: boolean; g: boolean; b: boolean; a: boolean }; // 物理 RGBA，逻辑 HSLA
@@ -146,6 +173,8 @@ export class FluidSolver {
   velocityGrid!: FluidGrid;  // RG HalfFloat，像素/秒
   pressureGrid!: FluidGrid;  // R HalfFloat，压力
   densityGrid!: FluidGrid;   // R Uint8，标量浓度（scalar 模式）
+  /** ★ 散度源场（爆炸/源汇压力源项；solvePressure 消费后清空） */
+  divergenceGrid!: FluidGrid;
 
   // ★ Level Set φ 场（懒加载，仅启用时分配显存）
   private _phiGrid: FluidGrid | null = null;
@@ -178,6 +207,8 @@ export class FluidSolver {
 
   // 待执行的一次性注入队列
   private injectionQueue: InjectionConfig[] = [];
+  /** ★ 活跃爆炸队列（step 内按指数包络逐帧推进，播完移除） */
+  private activeExplosions: Array<ExplosionConfig & { elapsed: number; envelope: number }> = [];
 
   constructor(
     renderer: THREE.WebGLRenderer,
@@ -229,11 +260,14 @@ export class FluidSolver {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this.divergenceGrid?.dispose();
 
     this.colorGrid = new FluidGrid({ w, h }, 4, 'uint8');
     this.velocityGrid = new FluidGrid({ w, h }, 2, 'half-float');
     this.pressureGrid = new FluidGrid({ w, h }, 1, 'half-float');
     this.densityGrid = new FluidGrid({ w, h }, 1, 'uint8');
+    // ★ 散度源场（爆炸/源汇压力源项；solvePressure 消费后清空）
+    this.divergenceGrid = new FluidGrid({ w, h }, 1, 'half-float');
 
     if (this._phiGrid) {
       this._phiGrid.dispose();
@@ -582,6 +616,80 @@ export class FluidSolver {
     this.injectionQueue.length = 0;
   }
 
+  // ==================== 爆炸注入（散度源 → 压力源 → 推开流体）====================
+
+  /** ★ 触发一次爆炸（参照旧库 explode）：散度源（压力源→推开流体）+ 直接速度冲击 */
+  explode(config: ExplosionConfig): void {
+    this.activeExplosions.push({ ...config, elapsed: 0, envelope: 1 });
+  }
+
+  /** 活跃爆炸逐帧推进（step 内、压力投影前调用） */
+  private processExplosions(dt: number): void {
+    if (this.activeExplosions.length === 0) return;
+    const isScalar = this.config.advectionMode === 'scalar';
+    const ch = this.config.channels;
+
+    for (let i = this.activeExplosions.length - 1; i >= 0; i--) {
+      const ex = this.activeExplosions[i];
+      const duration = ex.duration ?? 0.1;
+      ex.elapsed += dt;
+
+      // ★ 指数包络：envelope ×= decay（防前几帧高压持续注入 → 填满纹理）
+      const decay = ex.decay ?? 0.9;
+      ex.envelope *= Math.max(0, Math.min(1, decay));
+      const envelope = ex.envelope;
+      if (envelope <= 0.01 || ex.elapsed >= duration) {
+        this.activeExplosions.splice(i, 1);
+        continue;
+      }
+
+      const obstacle = this.obstacleTex || undefined;
+      const perturb = ex.perturbation ?? 0;
+      const jitterX = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
+      const jitterY = perturb > 0 ? (Math.random() - 0.5) * 2 * perturb * ex.radius : 0;
+
+      // ① 散度源注入（压力方程源项 → 压力梯度推开流体）
+      this.injector.injectDivergenceSource(this.divergenceGrid, ex.strength * envelope, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius * (1 + perturb * (Math.random() - 0.5)),
+        obstacle,
+      });
+
+      // ② 直接速度冲击（撕裂感；主推力走压力传导，冲量给撕裂边缘）
+      const velImpulse = ex.strength * envelope * 0.08;
+      const jitterAngle = Math.random() * Math.PI * 2;
+      this.injector.injectVelocity(this.velocityGrid, {
+        x: Math.cos(jitterAngle) * velImpulse * dt,
+        y: Math.sin(jitterAngle) * velImpulse * dt,
+      }, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius,
+        obstacle,
+      });
+
+      // ③ 水量注入（可选）：vector = 颜色 alpha，scalar = 密度
+      const waterMult = ex.waterMultiplier ?? 1;
+      if (ex.createWater && waterMult > 0) {
+        const rate = Math.min(1, 0.6 * envelope * waterMult);
+        const opts = {
+          position: { x: ex.cx, y: ex.cy },
+          radius: ex.radius,
+          obstacle,
+        };
+        if (isScalar) {
+          this.injector.injectDensity(this.densityGrid, rate, rate, opts);
+        } else {
+          const wc = ex.waterColor ?? [0.55, 0.3, 0.85, rate];
+          this.injector.injectColor(
+            this.colorGrid,
+            { h: wc[0], s: wc[1], l: wc[2], a: wc[3] },
+            rate, opts, ch,
+          );
+        }
+      }
+    }
+  }
+
   // ==================== 边界处理（零梯度，自由流出）====================
 
   private applyBoundary(): void {
@@ -628,6 +736,7 @@ export class FluidSolver {
     const mat = this.gpu.getMaterial(`fluid_sor_${isRedPass ? 'red' : 'black'}_${boundaryMode}`, {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
+      uDivSource: { value: this.divergenceGrid.read },
       uObstacle: { value: this.getObstacleTex() },
       uOmega: { value: omega },
       uInvRes: { value: new THREE.Vector2(1.0 / w, 1.0 / h) },
@@ -635,6 +744,7 @@ export class FluidSolver {
       uBoundaryMode: { value: boundaryMode === 'neumann' ? 1 : 0 },
     }, `
       uniform sampler2D uPressure;
+      uniform sampler2D uDivSource;
       uniform sampler2D uVelocity;
       uniform sampler2D uObstacle;
       uniform float uOmega;
@@ -681,6 +791,8 @@ export class FluidSolver {
         vec2 vT = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).rg;
         vec2 vB = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).rg;
         float div = (vR.x - vL.x) * 0.5 * ts.x + (vT.y - vB.y) * 0.5 * ts.y;
+        // ★ 散度源项：∇²p = ∇·u + f（爆炸/源汇；负散度源 → 高压 → 向外推）
+        div += texture2D(uDivSource, vUv).r;
         float pOld = texture2D(uPressure, vUv).r;
         float pNew = (pL + pR + pT + pB - div) / 4.0;
         pNew = (1.0 - uOmega) * pOld + uOmega * pNew;
@@ -861,11 +973,17 @@ export class FluidSolver {
     // 3.5 边界处理（压力投影之前，避免与梯度修正拮抗）
     this.applyBoundary();
 
-    // 4. 压力投影
+    // 3.6 ★ 爆炸散度源注入（压力投影之前：∇²p = ∇·u + f → 压力梯度推动流体向外）
+    this.processExplosions(dt);
+
+    // 4. 压力投影（消费散度源）
     if (cfg.enablePressure) {
       this.solvePressure(cfg.pressureIterations, cfg.pressureOmega);
       this.applyPressureGradient();
     }
+
+    // 4.5 ★ 清空散度源场（一次性消费；不参与平流/衰减）
+    this.clearGrid(this.divergenceGrid);
 
     // 5. 速度缩放（阻尼/加速）
     const velScale = cfg.velocityScale ?? 1;
@@ -1142,6 +1260,7 @@ export class FluidSolver {
     this.velocityGrid?.dispose();
     this.pressureGrid?.dispose();
     this.densityGrid?.dispose();
+    this.divergenceGrid?.dispose();
     this._phiGrid?.dispose();
     this._phiGrid = null;
     this.compositeTarget?.dispose();

@@ -188,6 +188,25 @@ export class FtxAsset {
     return effect;
   }
 
+  /**
+   * ★ 创建独立流体效果（死亡动画用）：不缓存、与共享实例隔离。
+   * 纯纹理包：无实体边界 → 无障碍物（全图平流）。强制矢量模式 + 大速度上限。
+   */
+  createDeathFluidEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null {
+    const frame = this.frames[frameIndex];
+    if (!frame) return null;
+    const physics: PhysicsConfig = {
+      enableAdvection: true,
+      enablePressure: true,
+      pressureIterations: 30,
+      advectionMode: 'vector',
+      gravity: { x: 0, y: 4000 },
+      velocityScale: 0.98,
+      maxVelocity: 20000,
+    };
+    return new FluidEffect(renderer, physics, frame, this.palette, []);
+  }
+
   // ============ 帧名解析（FrameResolver） ============
 
   /** 全部帧清单（名字 + 索引） */

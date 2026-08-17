@@ -13,6 +13,7 @@ import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import { shapeExtents, separateXZ } from '../services/physics/Collision';
+import { DeathAnimManager } from '../services/fx/DeathAnimManager';
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -114,6 +115,29 @@ export abstract class CharacterBase extends EntityBase {
     if (this.renderer && 'setScaleKeepAspect' in this.renderer) {
       (this.renderer as { setScaleKeepAspect(s: number): void }).setScaleKeepAspect(baseSize);
     }
+  }
+
+  /** ★ 死亡动画自动管线：任何角色死亡 → 纹理所有权转移给死亡动画
+   *   （独立流体撕碎消散，纯表现，不阻塞掉落/结算）。
+   *   死亡动画开关（玩家死亡 = 传送复活，不销毁 → 走 onDeath 覆写跳过） */
+  protected deathAnimEnabled = true;
+
+  /** ★ 只触发死亡动画（不销毁实体）——玩家死亡（传送复活）用 */
+  playDeathAnim(): void {
+    if (!this.deathAnimEnabled) return;
+    const frameIndex = this.anim?.state.frameIndex ?? 0;
+    const p = this.entity.position;
+    DeathAnimManager.spawn(this.anim!.source, frameIndex, p.x, p.y, p.z);
+  }
+
+  /** ★ 死亡：先触发死亡动画（冻结死亡帧 → 流体消散），再走默认销毁 */
+  override onDeath(source: EntityBase | null): void {
+    if (this.deathAnimEnabled) {
+      const frameIndex = this.anim?.state.frameIndex ?? 0;
+      const p = this.entity.position;
+      DeathAnimManager.spawn(this.anim!.source, frameIndex, p.x, p.y, p.z);
+    }
+    super.onDeath(source);
   }
 
   /** 角色世界位置（物理读回后，x/z）——相机/模式层读取 */

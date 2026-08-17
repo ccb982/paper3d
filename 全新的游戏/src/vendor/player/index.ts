@@ -302,6 +302,39 @@ export class Asset {
     this._fluidEffects.clear();
   }
 
+  /**
+   * ★ 创建独立流体效果（死亡动画用）：不缓存、与共享实例隔离。
+   * 若该帧有 physics 配置则用之，否则用默认矢量配置（死亡动画强制矢量模式）。
+   * 返回 null 表示无法构建（无 FTX 帧数据）。
+   */
+  createDeathFluidEffect(
+    renderer: THREE.WebGLRenderer,
+    frameIndex: number,
+  ): FluidEffect | null {
+    const ftxFrame = this.getFtxFrame(frameIndex);
+    if (!ftxFrame) return null;
+    const palette = this._ftx!.palette;
+
+    const entities: SerializedRegionEntity[] = [];
+    for (const ed of this.frames[frameIndex].regionEntities) {
+      entities.push(ed);
+    }
+
+    // ★ 死亡动画强制矢量模式 + 强重力 + 大速度上限（流体消散用）
+    const physics: PhysicsConfig = {
+      ...(this.frames[frameIndex].physics ?? {}),
+      enableAdvection: true,
+      enablePressure: true,
+      pressureIterations: 30,
+      advectionMode: 'vector',
+      gravity: { x: 0, y: 4000 },
+      velocityScale: 0.98,
+      maxVelocity: 20000,
+    };
+
+    return new FluidEffect(renderer, physics, ftxFrame, palette, entities);
+  }
+
   dispose(): void {
     for (const ctrl of this._controllers) ctrl.dispose();
     this._controllers.clear();
