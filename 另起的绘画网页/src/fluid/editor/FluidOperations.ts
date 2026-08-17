@@ -137,7 +137,7 @@ export class FluidOperations {
   private nextSourceId = 1;
 
   /** ★ 活跃爆炸队列（参照旧库 explode；step 内按包络逐帧推进，播完移除） */
-  private activeExplosions: Array<ExplosionConfig & { elapsed: number }> = [];
+  private activeExplosions: Array<ExplosionConfig & { elapsed: number; envelope: number }> = [];
 
   /**
    * ★ 路径点运行时状态：记录每个源的当前逻辑步进、段内进度、插值位置。
@@ -225,7 +225,12 @@ export class FluidOperations {
    *   首末次 createWater=true、末次 waterMultiplier=2、扰动 ±0.01。
    */
   explode(config: ExplosionConfig): void {
-    this.activeExplosions.push({ ...config, elapsed: 0 });
+    this.activeExplosions.push({ ...config, elapsed: 0, envelope: 1 });
+  }
+
+  /** ★ 清空全部活跃爆炸（重置/清场时调用，立即停止播放中的爆炸） */
+  clearExplosions(): void {
+    this.activeExplosions.length = 0;
   }
 
   /** 活跃爆炸逐帧推进（step 内调用；参数与 processQueue 一致） */
@@ -244,10 +249,14 @@ export class FluidOperations {
       const duration = ex.duration ?? 0.1;
       ex.elapsed += dt;
 
-      // ★ 时间包络：强度线性衰减 1-t/duration（旧库 0.1s 冲击波）
-      const t = Math.min(1, ex.elapsed / Math.max(0.001, duration));
-      const envelope = 1 - t;
-      if (envelope <= 0) {
+      // ★ 时间包络：指数衰减 envelope ×= decay（默认 0.9）。
+      //   线性包络（1-t）前几帧强度≈1 持续高压注入 → 速度场膨胀填满纹理；
+      //   指数衰减让冲击波快速消退、尾部平滑，不会持续填充。
+      //   duration 仍是硬性截止（elapsed 超过后移除）。
+      const decay = ex.decay ?? 0.9;
+      ex.envelope *= Math.max(0, Math.min(1, decay));
+      const envelope = ex.envelope;
+      if (envelope <= 0.01 || ex.elapsed >= duration) {
         this.activeExplosions.splice(i, 1);
         continue;
       }
@@ -311,7 +320,7 @@ export class FluidOperations {
         }
       }
 
-      // ④ 水量注入（旧库 createWater）：vector = 颜色 alpha，scalar = 密度
+      // ④ 水量注入（旧库 createWater）：vector = 颜色 alpha（可自定义颜色），scalar = 密度
       const waterMult = ex.waterMultiplier ?? 1;
       if (ex.createWater && waterMult > 0) {
         const rate = Math.min(1, 0.6 * envelope * waterMult);
@@ -323,10 +332,11 @@ export class FluidOperations {
         if (gridDensity) {
           this.injector.injectDensity(gridDensity, rate, rate, opts);
         } else {
-          // 白色水团（HSL: h 任意, s 低, l 高, a=rate）
+          // 水团颜色：默认白色（h 0.55, s 0.3, l 0.85），可用 waterColor 自定义 HSLA
+          const wc = ex.waterColor ?? [0.55, 0.3, 0.85, rate];
           this.injector.injectColor(
             gridColor,
-            { h: 0.55, s: 0.3, l: 0.85, a: rate },
+            { h: wc[0], s: wc[1], l: wc[2], a: wc[3] },
             rate, opts, ch,
           );
         }

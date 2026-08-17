@@ -1257,6 +1257,20 @@ export class FluidEditor {
     const densityData = new Uint8Array(w * h);
     this.uploadToGrid(this.densityGrid, densityData, 1);
 
+    // ★ 散度源场清零（爆炸残留的散度源不参与重置后的模拟）
+    this.clearGrid(this.divergenceGrid);
+
+    // ★ 压力场清零（无论热启动开关，重置即从零压力开始）
+    this.clearGrid(this.pressureGrid);
+
+    // ★ 爆炸队列清空（重置时正在播放的爆炸立即停止）
+    this.operations.clearExplosions();
+
+    // ★ Level Set φ 场重建（启用时水体形状随重置归零）
+    if (this._phiGrid) {
+      this.initPhiField();
+    }
+
     // ★ 恢复残差模板（重置/网格重建清场后——否则残差纹理丢失）
     if (this._pendingResidualImage) {
       this.initializeColorFromImageData(this._pendingResidualImage);

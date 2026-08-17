@@ -100,6 +100,10 @@ const OperationsPanel: React.FC<{
   onExplodeRadiusChange: (v: number) => void;
   explodeWater: boolean;
   onExplodeWaterChange: (v: boolean) => void;
+  explodeDecay: number;
+  onExplodeDecayChange: (v: number) => void;
+  explodeColor: string;
+  onExplodeColorChange: (hex: string) => void;
 }> = ({
   config,
   onConfigChange,
@@ -142,6 +146,10 @@ const OperationsPanel: React.FC<{
   onExplodeRadiusChange,
   explodeWater,
   onExplodeWaterChange,
+  explodeDecay,
+  onExplodeDecayChange,
+  explodeColor,
+  onExplodeColorChange,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
     { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
@@ -407,9 +415,31 @@ const OperationsPanel: React.FC<{
               />
               <span style={{ fontSize: '10px', minWidth: '52px', textAlign: 'right', fontFamily: 'monospace' }}>{explodeRadius.toFixed(2)}</span>
             </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={{ margin: 0, fontSize: '10px', color: '#666', minWidth: '28px' }}>衰减</label>
+              <input
+                type="range"
+                min="0.5"
+                max="0.99"
+                step="0.01"
+                value={explodeDecay}
+                onChange={(e) => onExplodeDecayChange(+e.target.value)}
+                style={{ flex: 1 }}
+                title="每帧衰减系数：小=冲击波更短促（防填满纹理），大=更持久"
+              />
+              <span style={{ fontSize: '10px', minWidth: '40px', textAlign: 'right', fontFamily: 'monospace' }}>{explodeDecay.toFixed(2)}</span>
+            </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '10px' }}>
               <label style={{ margin: 0 }}>生成水团</label>
               <input type="checkbox" checked={explodeWater} onChange={(e) => onExplodeWaterChange(e.target.checked)} style={{ cursor: 'pointer' }} />
+              <label style={{ margin: 0, marginLeft: '6px' }}>水团颜色</label>
+              <input
+                type="color"
+                value={explodeColor}
+                onChange={(e) => onExplodeColorChange(e.target.value)}
+                style={{ width: '28px', height: '20px', padding: 0, border: 'none', cursor: 'pointer' }}
+                title="爆炸水团颜色（hex → HSL 注入）"
+              />
               <span style={{ color: '#999', marginLeft: '4px' }}>在画布点击位置爆炸</span>
             </div>
           </div>
@@ -2112,12 +2142,19 @@ export const FluidEditorUI: React.FC = () => {
   const [explodeStrength, setExplodeStrength] = useState(-25000);
   const [explodeRadius, setExplodeRadius] = useState(0.15);
   const [explodeWater, setExplodeWater] = useState(true);
+  const [explodeDecay, setExplodeDecay] = useState(0.9);
+  // ★ 爆炸水团颜色（hex，→ HSL 注入）
+  const [explodeColor, setExplodeColor] = useState('#d9f0ff');
   const explodeStrengthRef = useRef(explodeStrength);
   explodeStrengthRef.current = explodeStrength;
   const explodeRadiusRef = useRef(explodeRadius);
   explodeRadiusRef.current = explodeRadius;
   const explodeWaterRef = useRef(explodeWater);
   explodeWaterRef.current = explodeWater;
+  const explodeDecayRef = useRef(explodeDecay);
+  explodeDecayRef.current = explodeDecay;
+  const explodeColorRef = useRef(explodeColor);
+  explodeColorRef.current = explodeColor;
   // ★ 注入颜色（hex；水=蓝，颜料=红默认）+ 取色模式
   const [injectColorHex, setInjectColorHex] = useState('#1e90ff');
   const [pickColorActive, setPickColorActive] = useState(false);
@@ -2392,13 +2429,30 @@ export const FluidEditorUI: React.FC = () => {
 
     // ★ 爆炸模式：点击即爆炸（位置 = 点击处；单次，不走摇杆/持续注入）
     if (injectMode === 'explode') {
+      // 水团颜色 hex → HSLA（与 buildInjectionConfig 的 hexToHsl 相同逻辑）
+      const hex = explodeColorRef.current;
+      const r = parseInt(hex.slice(1, 3), 16) / 255;
+      const g = parseInt(hex.slice(3, 5), 16) / 255;
+      const b = parseInt(hex.slice(5, 7), 16) / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      const l = (max + min) / 2;
+      let h = 0, s = 0;
+      if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (max === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+      }
       editor.explode({
         cx: pos.x,
         cy: pos.y,
         radius: explodeRadiusRef.current,
         strength: explodeStrengthRef.current,
         createWater: explodeWaterRef.current,
+        waterColor: [h, s, l, 1.0],
         duration: 0.1,
+        decay: explodeDecayRef.current,
         perturbation: 0.4,
       });
       return;
@@ -4079,6 +4133,10 @@ export const FluidEditorUI: React.FC = () => {
           onExplodeRadiusChange={setExplodeRadius}
           explodeWater={explodeWater}
           onExplodeWaterChange={setExplodeWater}
+          explodeDecay={explodeDecay}
+          onExplodeDecayChange={setExplodeDecay}
+          explodeColor={explodeColor}
+          onExplodeColorChange={setExplodeColor}
         />
 
         {/* FTX 帧数据加载 */}
