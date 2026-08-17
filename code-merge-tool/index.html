@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CodeMergeTool —— 项目代码合并导出</title>
+<style>
+  :root { --accent: #2563eb; --bg: #f8fafc; --card: #fff; --border: #e2e8f0; --text: #0f172a; --muted: #64748b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { font-size: 24px; margin: 0 0 6px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .row + .row { margin-top: 10px; }
+  label { font-size: 13px; color: var(--muted); min-width: 110px; }
+  input[type="text"] { flex: 1; min-width: 200px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  input[type="number"] { width: 90px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+  .btn { padding: 9px 18px; border: none; border-radius: 7px; font-size: 14px; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; }
+  .btn-ghost { background: #e2e8f0; color: #1e293b; }
+  .btn:hover:not(:disabled) { filter: brightness(1.06); }
+  #status { font-size: 13px; color: var(--muted); margin-top: 10px; white-space: pre-wrap; line-height: 1.6; }
+  #status .ok { color: #16a34a; }
+  #status .warn { color: #d97706; }
+  #status .err { color: #dc2626; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .filelist { max-height: 180px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font-size: 12px; font-family: Consolas, monospace; background: #f1f5f9; margin-top: 10px; display: none; }
+  .filelist.show { display: block; }
+  .filelist div { line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧰 CodeMergeTool</h1>
+  <p class="sub">选择项目文件夹 → 把全部源码合并为单个文本文件（带文件路径 + 行号标记 + 替换指令说明）→ 直接下载，供 AI 网页审阅并给出精确修改指令。</p>
+
+  <div class="card">
+    <h2>① 选择项目文件夹</h2>
+    <div class="row">
+      <button id="pickBtn" class="btn btn-primary">📁 选择文件夹</button>
+      <span id="dirName" style="font-size:13px;color:var(--muted)"></span>
+    </div>
+    <div class="hint">需要 Chrome / Edge 浏览器（File System Access API）。只能读取，不会修改你的项目。</div>
+  </div>
+
+  <div class="card">
+    <h2>② 扫描选项（可选）</h2>
+    <div class="row">
+      <label for="extInput">包含扩展名</label>
+      <input type="text" id="extInput" value=".js,.mjs,.cjs,.ts,.tsx,.jsx,.json,.css,.scss,.html,.md,.vue,.py,.go,.rs,.java,.sql,.sh,.yml,.yaml,.xml" placeholder="逗号分隔，留空 = 全部">
+    </div>
+    <div class="row">
+      <label for="ignoreInput">忽略目录/文件</label>
+      <input type="text" id="ignoreInput" value="node_modules,dist,build,.git,.svn,coverage,.next,.nuxt,out,target,__pycache__,.venv,venv,package-lock.json,yarn.lock,pnpm-lock.yaml,_merged.txt" placeholder="逗号分隔（支持 * 通配如 *.lock）">
+    </div>
+    <div class="row">
+      <label for="maxBytes">单文件上限 (KB)</label>
+      <input type="number" id="maxBytes" value="300" min="10">
+      <label style="min-width:auto">忽略超大的文件</label>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>③ 生成并下载</h2>
+    <div class="row">
+      <button id="genBtn" class="btn btn-primary" disabled>⚡ 扫描并合并</button>
+      <button id="dlBtn" class="btn btn-ghost" disabled>⬇️ 下载合并文件</button>
+      <span id="countTag" style="font-size:13px;color:var(--muted)"></span>
+    </div>
+    <div id="status"></div>
+    <div id="filelist" class="filelist"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  const $ = (id) => document.getElementById(id);
+  const pickBtn = $('pickBtn'), genBtn = $('genBtn'), dlBtn = $('dlBtn');
+  const status = $('status'), filelist = $('filelist');
+
+  let dirHandle = null;   // 已选择的目录
+  let mergedBlob = null;  // 生成的下载内容
+
+  // ---------- 状态输出 ----------
+  function log(msg, cls) {
+    status.innerHTML += (cls ? `<span class="${cls}">${msg}</span>` : msg) + '\n';
+  }
+
+  // ---------- ① 选择文件夹 ----------
+  pickBtn.addEventListener('click', async () => {
+    try {
+      dirHandle = await window.showDirectoryPicker();
+      $('dirName').textContent = '已选择：' + (dirHandle.name || '（根目录）');
+      genBtn.disabled = false;
+      log('[✓] 已选择文件夹：「' + dirHandle.name + '」\n', 'ok');
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        $('dirName').textContent = '选择失败：' + (e.message || e);
+        log('[✗] 选择失败（需 Chrome/Edge，且需 HTTPS 或 localhost）\n', 'err');
+      }
+    }
+  });
+
+  // ---------- 遍历目录 ----------
+  async function walk(handle, relPath, cfg, files) {
+    let entries;
+    try {
+      entries = [];
+      for await (const e of handle.values()) entries.push(e);
+    } catch { return; }
+    // 目录优先，名称排序
+    entries.sort((a, b) => {
+      const ad = a.kind === 'directory', bd = b.kind === 'directory';
+      if (ad !== bd) return ad ? -1 : 1;
+      return a.name.localeCompare(b.name, 'zh');
+    });
+    for (const ent of entries) {
+      const rel = relPath ? relPath + '/' + ent.name : ent.name;
+      if (ent.kind === 'directory') {
+        if (cfg.shouldIgnore(ent.name, rel)) continue;
+        await walk(ent, rel, cfg, files);
+      } else {
+        if (cfg.shouldIgnore(ent.name, rel)) continue;
+        const dot = ent.name.lastIndexOf('.');
+        const ext = dot >= 0 ? ent.name.slice(dot).toLowerCase() : '';
+        if (cfg.exts.size > 0 && !cfg.exts.has(ext)) continue;
+        files.push({ name: rel, handle: ent });
+      }
+    }
+  }
+
+  // ---------- 读取单文件 ----------
+  async function readText(entry) {
+    const f = await entry.handle.getFile();
+    if (f.size > cfg.maxBytes) return { skipped: true, size: f.size };
+    const text = await f.text();
+    return { skipped: false, text };
+  }
+
+  // ---------- 配置 ----------
+  let cfg = {
+    exts: new Set(),
+    maxBytes: 0,
+    ignore: [],
+    shouldIgnore(name, rel) {
+      const parts = rel.split('/');
+      const hasDotStar = this.ignore.some((p) => p.includes('*'));
+      for (const pat of this.ignore) {
+        if (pat.includes('*')) {
+          // 目录名/文件名 glob 匹配（* 匹配任意字符）
+          const re = new RegExp('^' + pat.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+          if (re.test(name)) return true;
+        } else if (pat.includes('/')) {
+          if (rel === pat || rel.startsWith(pat + '/')) return true;
+        } else if (parts.includes(pat)) {
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+
+  function readConfig() {
+    const extRaw = $('extInput').value.trim();
+    const exts = new Set();
+    if (extRaw) {
+      for (const e of extRaw.split(',')) {
+        const t = e.trim().toLowerCase();
+        if (!t) continue;
+        exts.add(t.startsWith('.') ? t : '.' + t);
+      }
+    }
+    const ignRaw = $('ignoreInput').value.trim();
+    const ignore = ignRaw ? ignRaw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    const kb = parseFloat($('maxBytes').value) || 300;
+    cfg.exts = exts;
+    cfg.ignore = ignore;
+    cfg.maxBytes = Math.max(1, kb) * 1024;
+  }
+
+  // ---------- 生成合并文本 ----------
+  function buildMerged(files, rootName, tree) {
+    const head = `================================================================
+ 项目代码合并文件 —— 供 AI 网页审阅与精确修改
+================================================================
+
+这个文件包含项目「${rootName}」的 ${files.length} 个源码文件，已全部合并。
+合并格式如下，请严格遵循，以便你能精确定位并给出修改指令。
+
+【合并格式说明】
+- 每个文件的代码段以分隔线开始，格式为：
+    ================== FILE: <相对路径> ==================
+- 该文件内每一行前面都有【行号】，每行花式从 1 开始编号：
+    1 | <第 1 行内容>
+    2 | <第 2 行内容>
+    ...
+- 每个新文件的【行号都重新从 1 开始】计数。
+
+【你的输出要求】
+当你需要修改代码时，必须以【精确的替换指令】形式输出，格式如下：
+
+--------------------------------
+### 修改指令 #N
+
+文件：<相对路径，例如 src/components/Foo.tsx>
+
+替换范围：从第 <X> 行 到第 <Y> 行
+
+↓ 将此范围内的内容，全部替换为以下内容 ↓
+\`\`\`
+<新的代码，注意不要带行号前缀；原行号范围仅供参考>
+\`\`\`
+--------------------------------
+
+要求：
+1. 「文件」必须写完整相对路径（与 ==== FILE: 后的一模一样，区分大小写）。
+2. 「行号范围」必须对应上方合并文件里该段标注的行号。
+3. 若是在某处【新增】代码（不是替换），请写：
+    文件：xxx / 新增位置：在第 <X> 行之后插入以下内容
+4. 若需删除，写：文件：xxx / 删除范围：从第 X 行到第 Y 行。
+5. 每个修改指令只针对一个文件的一处连续区域；多处修改请编号 #1 #2 #3...
+6. 不要输出完整合并文件，只输出【修改指令列表】；若无需修改则明确说明。
+
+【项目文件结构（供定位参考）】
+${tree}
+
+【源码开始】
+================================================================
+`;
+    let body = '';
+    for (const f of files) {
+      const lines = f.text.split(/\r?\n/);
+      while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+      body += '\n================== FILE: ' + f.name + ' ==================\n';
+      lines.forEach((line, i) => {
+        body += String(i + 1).padStart(5) + ' | ' + line + '\n';
+      });
+    }
+    return head + body + '\n================== END OF FILE ==================\n';
+  }
+
+  // ---------- ③ 扫描并合并 ----------
+  genBtn.addEventListener('click', async () => {
+    if (!dirHandle) return;
+    readConfig();
+    status.innerHTML = '';
+    filelist.classList.remove('show');
+    genBtn.disabled = true;
+    dlBtn.disabled = true;
+    mergedBlob = null;
+
+    log('正在扫描…（目录多时稍等）');
+    const files = [];
+    await walk(dirHandle, '', cfg, files);
+
+    log('[✓] 共发现 ' + files.length + ' 个候选文件，正在读取…', 'ok');
+
+    const collected = [];
+    let skippedBig = 0, failed = 0;
+    for (let i = 0; i < files.length; i++) {
+      if (i % 20 === 0) log('  读取 ' + i + '/' + files.length + ' …');
+      const f = files[i];
+      try {
+        const r = await readText(f);
+        if (r.skipped) { skippedBig++; continue; }
+        collected.push({ name: f.name, text: r.text });
+      } catch {
+        failed++;
+        log('[!] 读取失败（跳过）: ' + f.name, 'warn');
+      }
+    }
+
+    if (collected.length === 0) {
+      log('[✗] 没有可合并的文件（检查扩展名/忽略配置）', 'err');
+      genBtn.disabled = false;
+      return;
+    }
+
+    // 文件结构树
+    const treeLines = collected.map((f) => {
+      const depth = f.name.split('/').length;
+      return '  '.repeat(Math.max(0, depth - 1)) + f.name;
+    });
+    const tree = treeLines.join('\n');
+
+    const merged = buildMerged(collected, dirHandle.name || 'project', tree);
+    mergedBlob = new Blob([merged], { type: 'text/plain;charset=utf-8' });
+
+    const kb = (collected.reduce((s, f) => s + f.text.length, 0) / 1024).toFixed(1);
+    const lines = merged.split('\n').length;
+    log('\n[✓] 合并完成：' + collected.length + ' 个文件 / ' + kb + ' KB / ' + lines + ' 行', 'ok');
+    if (skippedBig) log('    跳过超大文件 ' + skippedBig + ' 个', 'warn');
+    if (failed) log('    读取失败 ' + failed + ' 个', 'warn');
+
+    // 文件清单
+    filelist.innerHTML = collected.map((f) => '<div>' + f.name + '（' + f.text.split('\n').length + ' 行）</div>').join('');
+    filelist.classList.add('show');
+
+    $('countTag').textContent = '';
+    genBtn.disabled = false;
+    dlBtn.disabled = false;
+  });
+
+  // ---------- 下载 ----------
+  dlBtn.addEventListener('click', () => {
+    if (!mergedBlob || !dirHandle) return;
+    const a = document.createElement('a');
+    const name = (dirHandle.name || 'project') + '_merged.txt';
+    a.href = URL.createObjectURL(mergedBlob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    log('\n[✓] 已开始下载：' + name, 'ok');
+  });
+
+})();
+</script>
+</body>
+</html>
