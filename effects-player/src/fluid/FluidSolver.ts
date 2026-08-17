@@ -1093,6 +1093,11 @@ export class FluidSolver {
     return this.compositeTarget ? this.compositeTarget.texture : null;
   }
 
+  /** ★ 调试：残差纹理（colorGrid 原始内容，RGBA 量化残差） */
+  getColorTexture(): THREE.Texture | null {
+    return this.colorGrid ? this.colorGrid.read : null;
+  }
+
   // ==================== 重置 ====================
 
   reset(): void {

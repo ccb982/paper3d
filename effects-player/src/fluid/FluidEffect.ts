@@ -113,6 +113,11 @@ export class FluidEffect {
     return this.solver.getCompositeTexture();
   }
 
+  /** ★ 调试：残差纹理（colorGrid）原始内容——验证残差存在于哪些像素（含基础色=0 区域） */
+  getResidualTexture(): THREE.Texture | null {
+    return this.solver.getColorTexture?.() ?? null;
+  }
+
   dispose(): void {
     this.solver.dispose();
   }

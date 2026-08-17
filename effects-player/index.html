@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <title>特效播放器 Demo</title>
   <style>
-    body { margin:0; background:#111; display:flex; flex-direction:column; align-items:center; font-family:Microsoft YaHei,sans-serif; }
+    body { margin:0; background:#fff; display:flex; flex-direction:column; align-items:center; font-family:Microsoft YaHei,sans-serif; }
     canvas { width:auto; height:auto; border:1px solid #333; margin-top:8px; image-rendering:pixelated; }
     #controls { color:#fff; width:520px; margin:8px 0; }
     #controls .row { display:flex; align-items:center; gap:6px; margin:3px 0; }
@@ -70,6 +70,12 @@
       <button id="btnHitStop" disabled>⏹ 停止</button>
       <span id="hitState" class="label" style="color:#ffd166"></span>
     </div>
+    <div class="row">
+      <span class="label" style="min-width:90px">调试</span>
+      <button id="btnResidView">🔬 残差视图</button>
+      <button id="btnCompositeView">🖼️ 合成视图</button>
+      <span id="viewState" class="label" style="color:#7cf"></span>
+    </div>
   </div>
   <script type="module">
     import * as THREE from 'three';
@@ -97,6 +103,10 @@
     let animTime = 0;  // 独立动画时钟，永不停，给 VAT 用
     let pendingInject = null;  // 按住注入状态 { frame, x, y, active }（canvas 像素坐标）
     let injectTick = 0;        // 注入节流计数器（每 3 帧一次 ≈ 10Hz）
+    // ★ 调试视图：'composite'（默认合成）| 'residual'（残差纹理原样）
+    let viewMode = 'composite';
+    // ★ 残差调试 quad（全屏显示 colorGrid 纹理，映射为可视化颜色）
+    let residScene = null, residQuad = null;
 
     const $ = (id) => document.getElementById(id);
     const frameSlider = $('frameSlider');
@@ -395,6 +405,32 @@
       try { stopHitPreview(); } catch (e) { console.error(e); }
     };
 
+    // ★ 调试视图切换：合成视图 ↔ 残差视图（验证残差是否存在于基础色=0 区域）
+    function ensureResidScene() {
+      if (residScene) return;
+      residScene = new THREE.Scene();
+      residQuad = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.ShaderMaterial({
+          vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+          fragmentShader: 'uniform sampler2D uTex; varying vec2 vUv; void main(){ vec4 c = texture2D(uTex, vec2(vUv.x, 1.0 - vUv.y)); gl_FragColor = vec4(c.rgb, 1.0); }',
+          uniforms: { uTex: { value: null } },
+        }),
+      );
+      residQuad.position.set(0.5, 0.5, 0);
+      residQuad.frustumCulled = false;
+      residScene.add(residQuad);
+    }
+    $('btnResidView').onclick = () => {
+      viewMode = 'residual';
+      ensureResidScene();
+      $('viewState').textContent = '残差视图（RGB=量化残差，验证基础色=0处是否有残差）';
+    };
+    $('btnCompositeView').onclick = () => {
+      viewMode = 'composite';
+      $('viewState').textContent = '';
+    };
+
     /** 击中特效 2D 绘制（预览模式，叠加纯色/FTX纹理填充 + 外扩动画） */
     function drawHitPreview(t) {
       if (!hitCanvas2d) return;
@@ -488,6 +524,36 @@
 
       // 帧切换：由 Controller 控制，可暂停/跳帧
       ctrl.advance(dt);
+
+      // ★ 残差视图：显示 colorGrid 原始残差纹理（验证基础色=0 处是否有残差）
+      if (viewMode === 'residual') {
+        let residualTex = null;
+        if (asset instanceof FtxAsset) {
+          // 纹理包需要注入物理参数才有流体解算器
+          if (injectedPhysics) {
+            const eff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer, injectedPhysics);
+            if (eff) {
+              eff.step(dt);
+              residualTex = eff.getResidualTexture();
+            }
+          }
+        } else if (asset.hasPhysics(ctrl.frameIndex)) {
+          const eff = asset.getFluidEffect(ctrl.frameIndex, ctx.renderer);
+          if (eff) {
+            eff.step(dt);
+            residualTex = eff.getResidualTexture();
+          }
+        }
+        if (residQuad && residualTex) {
+          residQuad.material.uniforms.uTex.value = residualTex;
+          ctx.renderer.clear(true, true, true);
+          ctx.renderer.render(residScene, ctx.camera);
+        } else {
+          ctx.renderer.clear(true, true, true);
+          ctx.renderer.render(ctx.scene, ctx.camera);
+        }
+        return;
+      }
 
       // ★ 轻量纹理包：直接合成渲染（无实体/流体），支持注入公共物理参数
       if (asset instanceof FtxAsset) {

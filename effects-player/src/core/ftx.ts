@@ -183,15 +183,26 @@ export function buildResidualData(
 
   const totalPixels = w * h;
   const data = new Uint8Array(totalPixels * 4);
+  // ★ 预填充中性残差（R=G=B=128, A=0）：shape 外 = 中性（delta≈0）+ 透明。
+  //   与主绘画页面/编辑器约定统一：合成 alpha 用残差 alpha（shape 外 0 → 背景纯透明），
+  //   shape 内真实残差覆盖（alpha=255）。
+  for (let i = 0; i < totalPixels; i++) {
+    data[i * 4] = 128;
+    data[i * 4 + 1] = 128;
+    data[i * 4 + 2] = 128;
+    data[i * 4 + 3] = 0;
+  }
 
   if (deltaPacked.length === 0) {
-    // 无残差：值填中间（0.5 表示 delta=0）
-    for (let i = 3; i < data.length; i += 4) data[i] = 128; // alpha 中性（delta=0）
+    // 无残差：保持中性 + alpha=0（无残差内容 → 合成透明）
     return { data, width: w, height: h };
   }
 
   for (let i = 0; i < totalPixels; i++) {
     const idx4 = i * 4;
+    const colorId = frame.regionIdTex.length > 0 ? frame.regionIdTex[i] : 0;
+    if (colorId === 0) continue; // shape 外：保持中性+透明
+
     const packed = deltaPacked[i];
     const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
 
@@ -214,7 +225,7 @@ export function buildResidualData(
     data[idx4] = r8;
     data[idx4 + 1] = g8;
     data[idx4 + 2] = b8;
-    data[idx4 + 3] = 128; // alpha 中性（delta=0，255→dA=+0.5 致半透明黑边）
+    data[idx4 + 3] = 255; // shape 内 alpha=255（区域存在度）
   }
 
   return { data, width: w, height: h };
