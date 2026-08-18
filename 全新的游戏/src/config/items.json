@@ -1,0 +1,65 @@
+{
+  "items": [
+    {
+      "id": "healing_potion",
+      "name": "治疗药水",
+      "type": "consumable",
+      "description": "恢复 30 点生命值",
+      "maxStack": 10,
+      "effect": {
+        "heal": 30
+      }
+    },
+    {
+      "id": "ammo_pack",
+      "name": "弹药包",
+      "type": "ammo",
+      "description": "补充 50 发弹药",
+      "maxStack": 20,
+      "effect": {
+        "ammo": 50
+      }
+    },
+    {
+      "id": "iron_ore",
+      "name": "铁矿石",
+      "type": "material",
+      "description": "基础冶炼材料",
+      "maxStack": 99
+    },
+    {
+      "id": "originium_shard",
+      "name": "源石碎片",
+      "type": "material",
+      "description": "稀有源石结晶体",
+      "maxStack": 99
+    },
+    {
+      "id": "food_ration",
+      "name": "应急口粮",
+      "type": "consumable",
+      "description": "恢复 15 点生命值",
+      "maxStack": 20,
+      "effect": {
+        "heal": 15
+      }
+    },
+    {
+      "id": "scrap_metal",
+      "name": "废金属",
+      "type": "material",
+      "description": "可回收的金属废料",
+      "maxStack": 99
+    },
+    {
+      "id": "medkit",
+      "name": "医疗包",
+      "type": "consumable",
+      "description": "恢复全部生命值",
+      "maxStack": 5,
+      "effect": {
+        "heal": 999
+      }
+    }
+  ]
+}

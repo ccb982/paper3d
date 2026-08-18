@@ -1,0 +1,74 @@
+{
+  "pool": {
+    "name": "罗德岛干员招募",
+    "description": "基础干员招募池",
+    "pity6Star": 50,
+    "pity5Star": 10
+  },
+  "characters": [
+    {
+      "id": "amiya",
+      "name": "阿米娅",
+      "rarity": 5,
+      "weight": 10,
+      "backpackSlots": 9,
+      "description": "罗德岛公开领袖"
+    },
+    {
+      "id": "texas",
+      "name": "德克萨斯",
+      "rarity": 5,
+      "weight": 10,
+      "backpackSlots": 12,
+      "description": "企鹅物流信使"
+    },
+    {
+      "id": "exusiai",
+      "name": "能天使",
+      "rarity": 6,
+      "weight": 4,
+      "backpackSlots": 6,
+      "description": "企鹅物流职员"
+    },
+    {
+      "id": "saria",
+      "name": "塞雷娅",
+      "rarity": 6,
+      "weight": 4,
+      "backpackSlots": 8,
+      "description": "莱茵生命防卫科主任"
+    },
+    {
+      "id": "silverash",
+      "name": "银灰",
+      "rarity": 6,
+      "weight": 4,
+      "backpackSlots": 10,
+      "description": "谢拉格军阀"
+    },
+    {
+      "id": "melantha",
+      "name": "玫兰莎",
+      "rarity": 3,
+      "weight": 30,
+      "backpackSlots": 6,
+      "description": "近卫干员"
+    },
+    {
+      "id": "fang",
+      "name": "芬",
+      "rarity": 3,
+      "weight": 30,
+      "backpackSlots": 6,
+      "description": "先锋干员"
+    },
+    {
+      "id": "hibiscus",
+      "name": "芙蓉",
+      "rarity": 3,
+      "weight": 30,
+      "backpackSlots": 6,
+      "description": "医疗干员"
+    }
+  ]
+}

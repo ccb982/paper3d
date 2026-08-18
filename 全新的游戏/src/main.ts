@@ -1,22 +1,60 @@
+// ============================================================
+// main.ts —— 游戏入口
+// 架构：BOOT → SHIP(日常) → WORLD(战斗) → 返回 SHIP → ...
+// 核心运行时：Session + SaveSystem + ModeManager + GameLoop
+// ============================================================
+
 import * as THREE from 'three';
 import { WebAdapter } from './platform/WebAdapter';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset } from './vendor/player';
 import { WorldMode } from './modes/WorldMode';
+import { ShipMode } from './modes/ShipMode';
 import { DesktopBinding } from './platform/input/DesktopBinding';
 import { PhysicsWorld } from './services/physics/PhysicsWorld';
+import { SaveSystem } from './core/SaveSystem';
+import { createNewSession, computeCombatStats, type GameSession, type PlayerCombatStats } from './core/Session';
+import { RELIC_CONFIG } from './config/relics';
+import { ModeManager } from './core/ModeManager';
+import type { Mode } from './core/ModeManager';
 
 // ============================================================
-// 启动引导（实体管线驱动的正式入口）
-// 加载主角 ftx3 → WorldMode（实体管线 + 相机 + 地图 + 交互）
+// 全局状态
+// ============================================================
+
+let currentSession: GameSession | null = null;
+let currentWorldMode: WorldMode | null = null;
+let worldPhysics: PhysicsWorld | null = null;
+let worldBinding: DesktopBinding | null = null;
+
+/** ★ WorldMode 的 Mode 适配器：注册到 ModeManager 时，将 onExit 委托给 dispose */
+class WorldModeAdapter implements Mode {
+  readonly id = 'world' as const;
+  constructor(private wm: WorldMode) {}
+  onEnter(): void {}
+  onExit(): void { this.wm.dispose(); }
+  update(_dt: number): void {}
+  render(): void {}
+}
+let clock: THREE.Clock;
+let acc = 0;
+
+// 资产（全局持有，避免重复加载）
+let protagonistAsset: FtxAsset;
+let bulletAsset: Asset | FtxAsset;
+let enemyAsset: Asset;
+let hitEffectAsset: Asset | null;
+
+// ============================================================
+// 启动引导
 // ============================================================
 
 async function boot() {
+  // ---- 1. 平台初始化 ----
   const adapter = new WebAdapter();
   const canvas = adapter.createCanvas();
   document.body.appendChild(canvas);
 
-  // ★ 全屏画布（3D 场景，相机 aspect 自适应）
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(adapter.info.dpr);
@@ -27,7 +65,7 @@ async function boot() {
   const sun = new THREE.DirectionalLight(0xffffff, 1);
   sun.position.set(20, 40, 10);
   scene.add(sun);
-  // ★ 透视相机（3D 场景：地形立体感 + 斜俯视视角）
+
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
   window.addEventListener('resize', () => {
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -35,77 +73,215 @@ async function boot() {
     camera.updateProjectionMatrix();
   });
 
-  // 加载主角纹理包（gzip 自动解压；素材随构建复制进 dist/characters）
-  const asset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
-  console.log('[boot] 主角已加载:', asset.frameNames().join(', '));
+  // ---- 2. 加载资产 ----
+  protagonistAsset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
+  console.log('[boot] 主角已加载:', protagonistAsset.frameNames().join(', '));
 
-  // ★ 加载爆裂黎明子弹资产（优先素材包 .scene.zip：携带扭曲参数 + 流体物理；
-  //   缺省回退纯纹理包 .ftx3.gz（无扭曲/无流体））
-  let bulletAsset: FtxAsset | Asset;
   try {
     bulletAsset = await Asset.load(encodeURI('/fx/bullets/维什戴尔子弹.scene.zip'));
-    console.log('[boot] 子弹素材包已加载:', bulletAsset.frameNames().join(', '));
   } catch {
     bulletAsset = await FtxAsset.load(encodeURI('/fx/bullets/维什戴尔子弹.ftx3.gz'));
-    console.log('[boot] 子弹回退纯纹理包:', bulletAsset.frameNames().join(', '));
   }
+  console.log('[boot] 子弹资产已加载');
 
-  // ★ 加载测试敌人（普瑞赛斯：特效包，2 帧前/后 + 扭曲参数）
-  const enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
+  enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
   console.log('[boot] 敌人已加载:', enemyAsset.frameNames().join(', '), '帧');
 
-  // ★ 加载击中特效（矢量动画）素材包（hit_effects.json；缺省无矢量动画能力）
-  let hitEffectAsset: Asset | null = null;
   try {
     hitEffectAsset = await Asset.load(encodeURI('/fx/bullets/主角子弹击中特效.scene.zip'));
-    console.log('[boot] 击中特效素材包已加载:', hitEffectAsset.hitEffects.length, '个矢量形状');
-  } catch (e) {
-    console.warn('[boot] 击中特效素材包加载失败，矢量动画不可用:', e);
+  } catch {
+    hitEffectAsset = null;
   }
 
-  // 输入绑定（桌面，双端解耦；点击画布 → 指针锁定/隐藏光标，可 360° 转视角）
-  const binding = new DesktopBinding(window, canvas);
+  // ---- 3. 读取或创建存档 ----
+  currentSession = SaveSystem.load();
+  if (!currentSession) {
+    currentSession = createNewSession();
+    SaveSystem.save(currentSession);
+    console.log('[boot] 新游戏存档已创建');
+  }
 
-  // ---- 物理世界（唯一碰 rapier 的封装） ----
-  const physics = new PhysicsWorld();
+  // ★★★★★ 修复：如果标志为 true 但游戏刚启动，说明上次出击未正常返回 ★★★★★
+  if (currentSession && currentSession.dayProgress.hasDepartedToday) {
+    console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），自动结算并推进一天');
+    currentSession.meta.day += 1;
+    currentSession.meta.totalDaysSurvived += 1;
+    currentSession.dayProgress.hasDepartedToday = false;
+    SaveSystem.save(currentSession);
+    console.log(`[boot] 已自动恢复，当前第 ${currentSession.meta.day} 天`);
+  }
 
-  // ---- 世界模式（实体管线：主角/敌人/物品实体 + 无限 chunk 地图 + 相机 + 交互） ----
-  const mode = new WorldMode(scene, camera, renderer, asset, physics, enemyAsset, bulletAsset, hitEffectAsset ?? undefined);
+  // ---- 4. 创建模式管理器 ----
+  const modeManager = new ModeManager();
 
-  // ★ 碰撞事件已由实体管线接管（EntityManager 按 userData=实体 id 分发 → 实体 onCollision）
+  // ---- 5. 注册 ShipMode ----
+  const shipMode = new ShipMode();
+  modeManager.register(shipMode);
 
-  // ---- 主循环 ----
-  const clock = new THREE.Clock();
-  let acc = 0;
+  // ---- 6. 启动主循环 ----
+  clock = new THREE.Clock();
 
   function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.1);
 
-    // 输入 → 控制（解耦：绑定填语义，游戏消费语义）
-    binding.update();
-
-    // 世界模式（实体管线驱动 + 相机 + 交互；look/zoom 鼠标输入）
-    mode.update(dt, binding.input, binding.consumeAttack(), binding.consumeLook(), binding.consumeZoom());
-
-    // ---- 物理固定步长（角色 velocity 驱动 / 子弹 read，见 EntityBase.syncPhysics）
-    //      ★ 防死亡螺旋：物理慢于帧率时最多补 5 步，追不上丢弃（否则 acc 无限累积 → 卡死） ----
-    acc += dt;
-    const FIXED = 1 / 60;
-    let steps = 0;
-    while (acc >= FIXED && steps < 5) {
-      physics.step();
-      acc -= FIXED;
-      steps++;
+    const current = modeManager.getCurrent();
+    if (!current) {
+      renderer.render(scene, camera);
+      return;
     }
-    if (steps >= 5) acc = 0;
 
-    mode.render(renderer);
+    // 当前模式更新 + 渲染
+    if (current.id === 'ship') {
+      // ShipMode：直接更新
+      current.update(dt);
+      current.render();
+    } else if (current.id === 'world' && currentWorldMode) {
+      // WorldMode：需要输入/物理驱动
+      if (worldBinding) {
+        worldBinding.update();
+        const input = worldBinding.input;
+        const attackPressed = worldBinding.consumeAttack();
+        const look = worldBinding.consumeLook();
+        const zoom = worldBinding.consumeZoom();
+
+        // 按 E 键返回舰船（held 状态，每帧重新计算）
+        if (input.held.interact) {
+          returnToShip(modeManager, scene, camera, renderer);
+          return;
+        }
+
+        currentWorldMode.update(dt, input, attackPressed, look, zoom);
+
+        // 物理固定步长
+        acc += dt;
+        const FIXED = 1 / 60;
+        let steps = 0;
+        while (acc >= FIXED && steps < 5) {
+          worldPhysics?.step();
+          acc -= FIXED;
+          steps++;
+        }
+        if (steps >= 5) acc = 0;
+
+        currentWorldMode.render(renderer);
+      }
+    } else {
+      renderer.render(scene, camera);
+    }
   }
-  animate();
 
-  console.log('[boot] 实体管线就绪：加载 → 实体基类 → 物理/动画/渲染联动');
+  // ---- 7. 进入 ShipMode（默认模式） ----
+  enterShipMode(modeManager, scene, camera, renderer);
+
+  animate();
+  console.log('[boot] 架构就绪：BOOT → SHIP → WORLD 模式切换');
 }
+
+// ============================================================
+// 模式切换函数
+// ============================================================
+
+/** 进入舰船模式 */
+function enterShipMode(
+  modeManager: ModeManager,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer,
+): void {
+  // 清理战斗模式引用（WorldMode.onExit 已通过模式切换自动调用 dispose）
+  currentWorldMode = null;
+  worldPhysics = null;
+  if (worldBinding) {
+    worldBinding.dispose();
+    worldBinding = null;
+  }
+
+  // 保存存档
+  if (currentSession) {
+    SaveSystem.save(currentSession);
+  }
+
+  // 切换到 ShipMode
+  modeManager.switchMode('ship', {
+    session: currentSession!,
+    scene,
+    camera,
+    renderer,
+    onDepart: (day: number, combatStats: PlayerCombatStats) => {
+      departToWorld(modeManager, scene, camera, renderer, day, combatStats);
+    },
+  });
+}
+
+/** 出击到世界模式 */
+function departToWorld(
+  modeManager: ModeManager,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer,
+  day: number,
+  combatStats: PlayerCombatStats,
+): void {
+  // 创建物理世界
+  worldPhysics = new PhysicsWorld();
+
+  // 创建输入绑定
+  worldBinding = new DesktopBinding(window, document.querySelector('canvas')!);
+
+  // 创建 WorldMode
+  currentWorldMode = new WorldMode(
+    scene, camera, renderer,
+    protagonistAsset,
+    worldPhysics,
+    enemyAsset,
+    bulletAsset,
+    hitEffectAsset ?? undefined,
+  );
+
+  // 注册 WorldMode 适配器到模式管理器，切换到世界模式（会先退出当前模式）
+  modeManager.register(new WorldModeAdapter(currentWorldMode));
+  modeManager.switchMode('world');
+
+  // 应用战斗属性到玩家实体
+  if (currentWorldMode.player) {
+    currentWorldMode.player.maxHp = combatStats.maxHp;
+    currentWorldMode.player.hp = combatStats.hp;
+    (currentWorldMode.player as any).attackPower = combatStats.attackPower;
+    (currentWorldMode.player as any).defense = combatStats.defense;
+  }
+
+  console.log(`[出击] 第 ${day} 天，战斗属性: HP ${combatStats.maxHp}, 攻击 ${combatStats.attackPower}, 防御 ${combatStats.defense}`);
+}
+
+/** 返回舰船 */
+function returnToShip(
+  modeManager: ModeManager,
+  scene: THREE.Scene,
+  camera: THREE.PerspectiveCamera,
+  renderer: THREE.WebGLRenderer,
+): void {
+  // 回写玩家血量
+  if (currentWorldMode && currentSession) {
+    currentSession.player.hp = currentWorldMode.player.hp;
+    currentSession.player.maxHp = currentWorldMode.player.maxHp;
+  }
+
+  // 推进天数
+  if (currentSession) {
+    currentSession.meta.day++;
+    currentSession.meta.totalDaysSurvived++;
+    currentSession.dayProgress.hasDepartedToday = false;
+  }
+
+  // 进入舰船（自动保存）
+  enterShipMode(modeManager, scene, camera, renderer);
+  console.log(`[返回] 已返回舰船，第 ${currentSession?.meta.day} 天`);
+}
+
+// ============================================================
+// 启动
+// ============================================================
 
 boot().catch((err) => {
   console.error('[boot] 启动失败:', err);

@@ -1,3 +1,715 @@
+🏛️ 完整架构设计（综合版）
+以下设计综合了：
+
+你的《架构设计.md》（模式切换、Session、四层背包、AI 行为库等）
+
+你已有的代码实现（EntityBase 体系、RasterMap、BulletManager、DamagePipeline 等）
+
+我们对话中达成的共识（存档点时机、藏品配置驱动、四层背包、黑冠等）
+
+0. 架构总览图
+text
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                              应用层（Game Modes）                                   │
+│  ┌──────┐    ┌──────┐    ┌──────┐    ┌──────┐    ┌────────┐    ┌────────┐        │
+│  │ BOOT  │ →  │ SHIP │ →  │WORLD │ →  │ BOSS │ →  │ RESULT │ →  │ BOOT   │        │
+│  │ 启动  │    │ 舰船  │    │ 战斗  │    │ 决战  │    │ 结算   │    │ (循环) │        │
+│  └──────┘    └──────┘    └──────┘    └──────┘    └────────┘    └────────┘        │
+│                     │           │                       │                          │
+│                     ▼           ▼                       ▼                          │
+│              ┌──────────┐ ┌──────────┐          ┌────────────┐                    │
+│              │ ModeManager│ │ Session  │          │  EventBus  │                    │
+│              │ 场景切换   │ │ 持久数据  │          │  事件总线   │                    │
+│              └──────────┘ └──────────┘          └────────────┘                    │
+├──────────────────────────────────────────────────────────────────────────────────────┤
+│                              系统层（Systems）                                      │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐  │
+│  │  实体系统    │ │  战斗系统    │ │  地图系统    │ │  抽卡系统   │ │  背包系统   │  │
+│  │ EntityBase  │ │ DamagePipe  │ │ RasterMap   │ │ GachaPool  │ │ Inventory  │  │
+│  │ + 子类体系  │ │ AIStateMachine│ │ ChunkGen   │ │ 保底/结果  │ │ 四层网格   │  │
+│  │ + 特效槽    │ │ Attack执行器 │ │ 空间索引    │ │            │ │ 合成/采集  │  │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘  │
+├──────────────────────────────────────────────────────────────────────────────────────┤
+│                              服务层（Services）                                     │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐            │
+│  │  物理     │ │  渲染    │ │  相机    │ │  资源    │ │  特效播放器  │            │
+│  │PhysicsWorld│ │FXRenderer│ │CameraCtrl│ │Asset    │ │FluidEffect  │            │
+│  │Collision  │ │FTXQuad   │ │ 跟随/瞄准 │ │FtxAsset │ │HitEffectView│            │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘            │
+├──────────────────────────────────────────────────────────────────────────────────────┤
+│                              核心运行时（Core Runtime）                              │
+│  ┌──────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐              │
+│  │ GameLoop │ │ StateMachine │ │   Session    │ │   SaveSystem     │              │
+│  │ rAF驱动   │ │ 模式状态机   │ │  可序列化    │ │  安全点触发      │              │
+│  └──────────┘ └──────────────┘ └──────────────┘ └──────────────────┘              │
+├──────────────────────────────────────────────────────────────────────────────────────┤
+│                              平台抽象层（Platform Abstraction）                      │
+│  ┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐        │
+│  │ PlatformAdapter│ │ InputActions │ │  Storage     │ │  Audio           │        │
+│  │ Canvas/GL      │ │ 抽象输入语义  │ │  localStorage │ │  BGM/SFX         │        │
+│  └────────────────┘ └──────────────┘ └──────────────┘ └──────────────────┘        │
+├──────────────────────────────────────────────────────────────────────────────────────┤
+│                              平台实现（Platforms）                                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐                                           │
+│  │   Web    │ │  微信    │ │  抖音    │                                           │
+│  │  开发默认 │ │  小游戏   │ │  小游戏   │                                           │
+│  └──────────┘ └──────────┘ └──────────┘                                           │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+1. 模式状态机（ModeManager + 状态流转）
+1.1 状态定义
+typescript
+type ModeId = 'boot' | 'ship' | 'world' | 'boss' | 'result';
+
+interface Mode {
+  id: ModeId;
+  onEnter(ctx: ModeContext): void;
+  onExit(): void;
+  update(dt: number): void;
+  render(): void;
+}
+1.2 模式切换与数据保留规则
+text
+BOOT（启动）
+  ├── 加载核心资源（WebAdapter、Renderer、Scene、Camera）
+  ├── 读取存档（SaveSystem.load）
+  │   ├── 有存档 → 重建 Session → 进入 SHIP
+  │   └── 无存档 → createNewSession() → 保存 → 进入 SHIP
+  └── 进入 SHIP
+
+SHIP（舰船日常）
+  ├── 持有完整的 Session（所有持久数据）
+  ├── 3D 舰船场景（MapLayer：地面 + 舰船模型 + L1仓库 + 出口 + NPC）
+  ├── UI 三层面板（行动/编队/干员）
+  ├── 交互：
+  │   ├── 点击 L1 仓库 → 打开仓库弹窗
+  │   ├── 点击出口 → 切换到“行动”面板
+  │   ├── 点击“招募抽卡” → 抽卡逻辑 → 保存 → 更新 UI
+  │   └── 点击“出击” → 计算战斗属性 → 进入 WORLD
+  └── 安全点：任何“返回舰船”时刻都调用 SaveSystem.save
+
+WORLD（大世界战斗）
+  ├── 接收：day（地图种子）+ PlayerCombatStats（战斗属性）+ onReturn 回调
+  ├── 运行时数据（不存档）：
+  │   ├── 地图地形（RasterMap）
+  │   ├── 实体（玩家/敌人/物品/子弹）
+  │   ├── 特效（死亡动画/受击染料）
+  │   └── 战斗中状态（技能 CD、AI 状态等）
+  ├── 退出时：
+  │   ├── 只回写：player.hp、player.maxHp
+  │   ├── 调用 onReturn 回调（上层负责保存）
+  │   └── 地图/实体/特效全部丢弃
+  └── 返回 SHIP
+
+BOSS（决战）- 预留
+RESULT（结算）- 预留
+2. Session 数据结构（最终版）
+只存“舰船上的永恒状态”，所有加成在出击时由 computeCombatStats 统一计算。
+
+typescript
+// src/core/Session.ts
+
+// ---- 1. 基础类型 ----
+
+/** 单个物品实例 */
+export interface ItemInstance {
+  itemId: string;      // 配置表 items.json 的 id
+  stackSize: number;   // 当前堆叠数量
+}
+
+/** 网格背包：二维数组，null 表示空格 */
+export type InventoryGrid = (ItemInstance | null)[][];
+
+/** 炮塔状态 */
+export interface TurretState {
+  slotId: number;
+  turretId: string;
+  ammo: number;
+}
+
+// ---- 2. 根对象 ----
+
+export interface GameSession {
+  // ----- ① 元信息 -----
+  meta: {
+    version: string;
+    day: number;                // ★ 当前天数（既是进度，也是地图种子来源）
+    totalDaysSurvived: number;
+    createdAt: string;
+    lastSavedAt: string;
+  };
+
+  // ----- ② ★ 玩家“裸装”基础属性（不含任何加成）-----
+  player: {
+    hp: number;
+    maxHp: number;
+    attackPower: number;
+    defense: number;
+  };
+
+  // ----- ③ ★ 四层背包 -----
+  inventories: {
+    base: InventoryGrid;        // L1: 舰船基地仓库（超大，如 30×30）
+    ship: InventoryGrid;        // L2: 探索飞船仓库（适中，如 8×10）
+    player: InventoryGrid;      // L3: 玩家自身背包（小型，如 4×6）
+    allies: Record<string, InventoryGrid>; // L4: 队友背包
+  };
+
+  // ----- ④ ★ 藏品/遗物（只存 ID 列表，效果由配置表驱动）-----
+  relics: {
+    owned: string[];            // 所有藏品 ID，包括黑冠
+    slots: (string | null)[];   // 槽位（快捷展示）
+  };
+
+  // ----- ⑤ 友军/干员 -----
+  allies: {
+    roster: string[];           // 已招募的干员 id 列表
+  };
+
+  // ----- ⑥ 舰船状态 -----
+  ship: {
+    hp: number;
+    maxHp: number;
+    shield: number;
+    armor: number;
+    techTree: string[];
+    turrets: TurretState[];
+  };
+
+  // ----- ⑦ 抽卡保底 -----
+  gacha: {
+    pityCounter: number;
+    totalPulls: number;
+  };
+
+  // ----- ⑧ 每日进度 -----
+  dayProgress: {
+    hasDepartedToday: boolean;
+  };
+}
+
+// ---- 3. 工具函数 ----
+
+export function createEmptyGrid(rows: number, cols: number): InventoryGrid {
+  return Array.from({ length: rows }, () => Array(cols).fill(null));
+}
+
+export function createNewSession(): GameSession {
+  return {
+    meta: {
+      version: '0.1.0',
+      day: 1,
+      totalDaysSurvived: 0,
+      createdAt: new Date().toISOString(),
+      lastSavedAt: new Date().toISOString(),
+    },
+    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2 },
+    inventories: {
+      base: createEmptyGrid(30, 30),
+      ship: createEmptyGrid(8, 10),
+      player: createEmptyGrid(4, 6),
+      allies: {},
+    },
+    relics: {
+      owned: ['black_crown'],
+      slots: Array(5).fill(null),
+    },
+    allies: { roster: [] },
+    ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
+    gacha: { pityCounter: 0, totalPulls: 0 },
+    dayProgress: { hasDepartedToday: false },
+  };
+}
+
+// ---- 4. ★ 唯一加成计算入口（出击时调用，完全配置驱动）----
+
+export interface RelicConfigEntry {
+  id: string;
+  type: 'carry' | 'permanent';
+  effect?: {
+    attackBonus?: number;
+    defenseBonus?: number;
+    hpBonus?: number;
+    multiplier?: number;
+    flatBonus?: { attackBonus?: number; defenseBonus?: number; hpBonus?: number };
+  };
+}
+
+export function computeCombatStats(
+  session: GameSession,
+  relicConfig: Record<string, RelicConfigEntry>,
+): PlayerCombatStats {
+  const base = session.player;
+  const day = session.meta.day;
+  const owned = session.relics.owned;
+
+  let bonusAttack = 0, bonusDefense = 0, bonusMaxHp = 0;
+  let multiplier = 1;
+
+  for (const id of owned) {
+    const cfg = relicConfig[id];
+    if (!cfg) continue;
+    if (cfg.type === 'carry') {
+      bonusAttack += cfg.effect?.attackBonus || 0;
+      bonusDefense += cfg.effect?.defenseBonus || 0;
+      bonusMaxHp += cfg.effect?.hpBonus || 0;
+    } else if (cfg.type === 'permanent') {
+      if (cfg.effect?.multiplier) {
+        multiplier *= Math.pow(cfg.effect.multiplier, day);
+      }
+      bonusAttack += cfg.effect?.flatBonus?.attackBonus || 0;
+      bonusDefense += cfg.effect?.flatBonus?.defenseBonus || 0;
+      bonusMaxHp += cfg.effect?.flatBonus?.hpBonus || 0;
+    }
+  }
+
+  return {
+    hp: base.hp,
+    maxHp: Math.floor(base.maxHp * multiplier) + bonusMaxHp,
+    attackPower: Math.floor(base.attackPower * multiplier) + bonusAttack,
+    defense: Math.floor(base.defense * multiplier) + bonusDefense,
+  };
+}
+3. 数据流（纵向与横向）
+3.1 纵向数据流（模式 → 系统 → 服务 → 平台）
+text
+┌──────────────────────────────────────────────────────────────────────────┐
+│  配置 JSON（内容）                                                       │
+│  ├── relics.json（藏品定义）                                            │
+│  ├── items.json（物品定义）                                             │
+│  ├── enemies.json（敌人定义）                                           │
+│  ├── gachaPool.json（卡池定义）                                         │
+│  └── ...                                                               │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  系统层（Systems）读取配置 → 生成运行时数据                              │
+│  ├── RelicSystem → 持有藏品 ID 列表，出击时计算加成                     │
+│  ├── InventorySystem → 持有四层网格，管理物品                          │
+│  ├── GachaSystem → 持有卡池配置 + 保底计数（Session 存储）             │
+│  └── AISystem → 持有行为/条件注册表 + 敌人状态机                       │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  核心运行时（Core Runtime）调度                                          │
+│  ├── ModeManager：切换模式（SHIP ↔ WORLD）                             │
+│  ├── Session：贯穿全局的持久数据                                        │
+│  └── EventBus：横向解耦通信                                            │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  服务层（Services）执行具体操作                                          │
+│  ├── PhysicsWorld：物理步进 + 碰撞检测                                 │
+│  ├── RasterMap：地形数据 + 空间索引                                    │
+│  ├── CameraController：相机跟随 + 瞄准                                 │
+│  └── 特效播放器：FluidEffect + HitEffectView                          │
+└────────────────────────────┬─────────────────────────────────────────────┘
+                             ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  平台抽象层 → 平台实现                                                   │
+│  ├── WebAdapter（开发）/ WeChatAdapter（发布）                         │
+│  ├── localStorage（存档）                                              │
+│  └── Audio（BGM/SFX）                                                 │
+└──────────────────────────────────────────────────────────────────────────┘
+3.2 横向通信（EventBus 规则）
+text
+判断标准 = "有没有非战斗系统要听这个事件"
+
+走总线（跨系统解耦）：
+├── UI 需要监听：拾取/抽卡/警报/对话/死亡/结算
+├── 跨模块通知：背包变动/遗物获得/科技树解锁
+└── 模式切换：ShipMode ↔ WorldMode 切换信号
+
+不走总线（模块内部直接调用）：
+├── 战斗内部：伤害/子弹命中/受击/死亡判定
+│   └── 战斗模块（combat/）集中处理，不 emit 到总线
+├── 每帧高频路径：移动/特效/相机（直接调用）
+└── 实体内部：EntityBase.update 骨架（模板方法）
+4. 实体系统架构（已有代码 + 设计对齐）
+4.1 实体基类体系
+text
+EntityBase（抽象基类）- 公共骨架
+├── 物理联动：physicsMode ('none' | 'kinematic' | 'read')
+├── 动画管线：assetRef + FrameAnimator + FrameState
+├── 渲染管线：FXRenderer（FTXQuad/特效网格）
+├── 附属特效：effectSlots（Map<name, EntityEffect>）
+├── 生命周期：update(行为→物理→动画→渲染→特效→空间索引) → dispose
+├── 钩子：onTakeDamage / onDeath / onCollision
+│
+├── CharacterBase（角色基类）- 继承 EntityBase
+│   ├── controller: CharacterController（输入/AI 驱动）
+│   ├── collisionVolume: ColliderShape + offsetY
+│   ├── 受击染料：hitDye（FluidEffect）
+│   ├── 死亡动画：playDeathAnim()
+│   │
+│   ├── Player（玩家）
+│   │   ├── 输入驱动（CharacterController.update）
+│   │   ├── 攻击：controller.attack()
+│   │   └── 死亡：播放死亡动画 + 传送复活（不销毁）
+│   │
+│   ├── Enemy（敌人）- 继承 CharacterBase
+│   │   ├── AIStateMachine（配置驱动）
+│   │   ├── 朝向：移动方向决定（非相机）
+│   │   ├── 注册/注销：aiSystem
+│   │   └── 死亡：动画 + 销毁
+│   │
+│   └── Ally（友军）- 预留
+│       ├── AIStateMachine（守卫/跟随模式）
+│       └── Ammo 组件（弹药驱动）
+│
+├── BulletEntity（子弹）- 继承 EntityBase
+│   ├── 无 asset（纯物理实体）
+│   ├── physicsMode: 'read'
+│   ├── 池化：activate/deactivate + recycle 回调
+│   ├── 命中：hitFx 回调 → attachHitEffect
+│   └── 渲染：BulletRenderer 消费快照
+│
+├── ItemBase（物品）- 继承 EntityBase
+│   ├── 物理：dynamic（掉落物）或 none（资源点）
+│   ├── 拾取：onCollision（玩家接触 → onPickup 回调）
+│   └── 血条：HealthBar（附属特效）
+│
+└── EffectBase - 预留（纯视觉特效实体）
+4.2 实体管理器
+typescript
+class EntityManager {
+  // 核心数据
+  private entities: Map<number, Entity>;      // 纯数据容器
+  private bases: Map<number, EntityBase>;     // 基类实例
+  private raster: RasterMap;                  // 空间索引
+
+  // 生命周期
+  create(opts: EntityCreateOptions): Entity;
+  register(base: EntityBase): void;
+  unregister(base: EntityBase): void;
+  destroy(id: number): void;
+  clear(): void;
+
+  // 每帧驱动
+  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void;
+  renderAll(camera: Camera): void;
+
+  // 查询（委托 RasterMap）
+  querySphere(x: number, z: number, r: number): EntityBase[];
+  queryRay(origin, dir, maxDist): EntityBase[];
+}
+5. 战斗系统架构
+5.1 伤害管线（可插拔 modifiers）
+typescript
+// DamagePipeline.ts
+type DamageModifier = (ctx: DamageContext) => void;
+
+const PIPELINE: DamageModifier[] = [
+  modifierDodge,    // 闪避 → 伤害归零
+  modifierBlock,    // 格挡 → ×blockMult
+  modifierShield,   // 护盾 → 先扣护盾
+  modifierDefense,  // 减法防御
+  modifierCrit,     // 暴击 → ×critMult
+  modifierClamp,    // 下限取整
+];
+
+function resolveDamage(base, source, target, type): DamageResult;
+function applyDamage(base, source, target, type): DamageResult;
+5.2 攻击抽象（统一入口）
+typescript
+// Attack.ts
+type AttackOptions =
+  | { type: 'projectile'; source: EntityBase; x, y, z, dirX, dirY, dirZ, speed, camp, damage }
+  | { type: 'melee'; source: EntityBase; x, y, z, range, damage, camp }
+  | { type: 'aoe'; source: EntityBase; x, y, z, radius, damage, camp, delay? };
+
+function executeAttack(em, bullets, opts): void;
+5.3 子弹系统（四层解耦）
+text
+① BulletVisual（离屏视觉）
+   ├── 继承 OffscreenBake
+   ├── 流体：素材包 physics → FluidEffect
+   ├── 蒙版/VAT：模板裁剪 + 顶点位移
+   └── 输出：getTexture() → 一张纹理
+
+② BulletEntity（纯物理实体）
+   ├── 无 asset，纯物理
+   ├── physicsMode: 'read'
+   ├── 池化：activate/deactivate + recycle
+   └── 命中：hitFx 回调
+
+③ BulletRenderer（InstancedMesh 渲染）
+   ├── 消费：① 的纹理 + ② 的快照（position/velocity/isActive）
+   ├── 一次 draw call
+   └── 朝向：velocity-aligned billboard（基类静态函数）
+
+④ BulletManager（组合层）
+   ├── 池化生命周期
+   ├── 每帧：visual.step → renderer.sync
+   └── 命中特效：attachHitEffect
+5.4 AI 系统（配置驱动 + 共用行为库）
+typescript
+// AIConfig（数据）
+interface AIConfig {
+  states: Record<string, { behaviors: BehaviorDef[], transitions: TransitionDef[], minStay?: number }>;
+  initial: string;
+}
+
+// AIStateMachine（解释器）
+class AIStateMachine {
+  currentState: string;
+  stayTimer: number;
+  update(entity: EnemyBase, ctx: BehaviorContext): void;
+}
+
+// 行为注册表（敌人/友军共用）
+behaviorTable = { wander, moveToTarget, meleeSwing, shootBurst, deployGuard, followFormation, ... };
+
+// 条件注册表
+conditionTable = { seePlayer, inRange, outOfRange, attackFinished, loseTarget, ... };
+6. 地图与空间索引
+6.1 RasterMap（统一空间层）
+text
+职责：
+├── ① 地形数据：chunk → ChunkData（heights/blockTypes/blockHeight/walkable）
+├── ② 实体索引：cellKey → Set<EntityBase>（1m cell，全局无限）
+├── ③ 视锥梯形查询：queryFrustum（2D 行扫描，O(区域)）
+├── ④ 范围查询：querySphere（圆覆盖 cell → 距离过滤）
+├── ⑤ 射线路径查询：queryRay（DDA 网格采样）
+
+关键函数：
+├── heightAt(x, z): 格值高度
+├── vertexHeightAt(x, z): 2×2 格 max（视觉面顶点）
+├── surfaceHeightAt(x, z): 双线性插值（角色脚底采样）
+├── terrainColorAt(x, z): 块类型三色（高台沙黄/平地绿/坑洞深黑）
+├── insert/move/remove: 实体索引管理
+└── queryFrustum/querySphere/queryRay: 查询 API
+6.2 LOD 系统
+text
+决策顺序（先视锥剔除 → 后 LOD 分级）：
+① queryFrustum 圈定可见范围（行扫描，O(区域)）
+② 只对可见实体算距离分级（O(N_visible)）
+③ 距离表 [20, 40, 60] → lod0/1/2/3
+④ lod3 不渲染（消失，小地图仍标点）
+
+应用（EntityBase.applyViewDistance）：
+├── anim.setLodLevel（lod1 节流 / lod2 时间轴暂停）
+├── renderer.setLodLevel（lod2 渐隐 / lod3 全透明）
+└── 子类覆写：EnemyBase lod1+ 关扭曲
+7. 存档系统（关键规则）
+7.1 触发时机（仅安全点）
+text
+✅ 保存（调用 SaveSystem.save）：
+├── 返回舰船（WorldMode → ShipMode）
+└── 抽卡后（GachaSystem 更新 Session）
+
+❌ 不保存：
+├── 战斗中任何状态（地图/实体/特效/子弹/技能 CD）
+├── 玩家死亡（只扣血，不触发存档）
+├── 拾取物品（只在返回舰船时批量写入）
+└── WorldMode.dispose()（只清理资源，不保存）
+7.2 存档边界
+text
+存（Session 字段）：
+├── meta（day, totalDaysSurvived）
+├── player 裸装属性（hp, maxHp, attackPower, defense）
+├── 四层背包（base/ship/player/allies 网格）
+├── relics.owned（ID 列表）
+├── allies.roster（干员 ID 列表）
+├── ship（hp, shield, armor, techTree, turrets）
+└── gacha（pityCounter, totalPulls）
+
+不存：
+├── 地图数据（RasterMap/ChunkData）
+├── 玩家坐标（固定在舰船出口）
+├── 战斗中实体（敌人/物品/子弹/特效）
+├── 技能 CD（舰船上重置）
+└── 任何 THREE/Rapier 运行时引用
+8. 架构分层依赖规则
+text
+① modes → systems → core/services → platform（单向依赖）
+② systems → config（读配置，不进 core）
+③ services 不依赖 systems（可独立测试）
+④ platform 不依赖任何游戏代码（只实现接口）
+⑤ 禁止反向 import（如 core 引入 modes）
+
+模块归属：
+├── modes/：应用层（ShipMode/WorldMode/BossMode）
+├── systems/：玩法系统（combat/map/gacha/inventory/dialogue/ship）
+├── core/：核心运行时（GameLoop/ModeManager/EventBus/Session/SaveSystem）
+├── services/：技术服务（physics/render/camera/assets/fx/audio）
+├── entity/：实体系统（EntityBase + 子类 + EntityManager）
+├── platform/：平台抽象（Adapter + InputActions）
+├── config/：内容配置（JSON）
+└── ui/：Canvas 自绘 UI（UIEngine + screens）
+9. 目录结构对齐
+text
+src/
+├── main.ts                     # 入口：平台检测 → 选 Adapter → 启动 ModeManager
+│
+├── core/                       # ★ 核心运行时（无平台依赖）★
+│   ├── GameLoop.ts             # rAF 驱动 + fixedUpdate/update/render
+│   ├── ModeManager.ts          # 模式切换（注册/切换/卸载）
+│   ├── EventBus.ts             # 类型安全事件总线
+│   ├── Session.ts              # ★ 一局数据（可序列化）★
+│   └── SaveSystem.ts           # ★ 安全点存档 ★
+│
+├── entity/                     # ★ 实体系统（已有代码）★
+│   ├── Entity.ts               # 纯数据容器
+│   ├── EntityBase.ts           # 实体基类（骨架）
+│   ├── EntityManager.ts        # 管理器（创建/遍历/销毁/查询）
+│   ├── CharacterBase.ts        # 角色基类
+│   ├── Player.ts               # 玩家
+│   ├── EnemyBase.ts            # 敌人（AI 驱动）
+│   ├── ItemBase.ts             # 物品
+│   └── BulletEntity.ts         # 子弹实体
+│
+├── systems/                    # ★ 玩法系统（只消费抽象）★
+│   ├── combat/
+│   │   ├── DamagePipeline.ts   # 伤害结算（可插拔 modifiers）
+│   │   ├── Attack.ts           # 攻击意图执行器
+│   │   ├── BulletManager.ts    # 子弹组合层（池 + 渲染串联）
+│   │   ├── BulletVisual.ts     # 离屏视觉
+│   │   └── Targeting.ts        # 瞄准/射线检测
+│   ├── ai/
+│   │   ├── AISystem.ts         # AI 管理器
+│   │   ├── AIStateMachine.ts   # 状态机解释器
+│   │   ├── aiconfig.ts         # AI 配置类型 + 默认配置
+│   │   ├── behaviors.ts        # 行为注册表
+│   │   └── conditions.ts       # 条件注册表
+│   ├── map/
+│   │   ├── RasterMap.ts        # ★ 统一空间层 ★
+│   │   └── ChunkGenerator.ts   # 地形生成（纯函数）
+│   ├── gacha/                  # 抽卡系统（待实现）
+│   ├── inventory/              # 背包系统（待实现）
+│   ├── dialogue/               # 对话系统（待实现）
+│   └── ship/                   # 舰船守卫（待实现）
+│
+├── services/                   # ★ 技术服务（跨系统复用）★
+│   ├── physics/
+│   │   ├── PhysicsWorld.ts     # Rapier 封装
+│   │   └── Collision.ts        # 公共碰撞规则库
+│   ├── render/
+│   │   ├── FTXQuad.ts          # 纯纹理帧渲染器
+│   │   ├── BulletRenderer.ts   # 子弹 InstancedMesh 渲染器
+│   │   ├── FxRendererBase.ts   # 渲染管线基类
+│   │   └── OffscreenBake.ts    # 离屏烘焙基类
+│   ├── camera/
+│   │   └── CameraController.ts # 相机控制（TPS/FPS）
+│   ├── fx/
+│   │   ├── AssetSource.ts      # 统一资产接口
+│   │   ├── FrameAnimatorBase.ts# 动画管线基类
+│   │   ├── FrameState.ts       # 帧状态衔接层
+│   │   ├── EntityEffect.ts     # 实体特效接口
+│   │   ├── HealthBar.ts        # 血条特效
+│   │   ├── CharacterFxManager.ts # 角色特效运行时
+│   │   ├── DeathAnimEffect.ts  # 死亡动画
+│   │   └── attachHitEffect.ts  # 击中特效挂载
+│   ├── assets/
+│   │   ├── Asset.ts            # 特效包加载器
+│   │   └── FtxAsset.ts         # 纯纹理包加载器
+│   ├── ui/
+│   │   ├── UILayer.ts          # UI 层统一入口
+│   │   ├── Minimap.ts          # 小地图
+│   │   ├── PlayerHud.ts        # 玩家 HUD
+│   │   └── Crosshair.ts        # 准星
+│   └── audio/                  # 音频统一入口（预留）
+│
+├── modes/                      # ★ 应用层 ★
+│   ├── ShipMode.ts             # 舰船日常（★ 已设计 ★）
+│   ├── WorldMode.ts            # 大世界战斗（已有代码）
+│   └── BossMode.ts             # 决战（预留）
+│
+├── ui/                         # Canvas 自绘 UI（待实现）
+│   ├── UIEngine.ts             # 组件树/命中测试/脏标记
+│   └── screens/                # HUD/背包/抽卡/菜单
+│
+├── platform/                   # ★ 平台抽象 ★
+│   ├── PlatformAdapter.ts      # 接口定义
+│   ├── WebAdapter.ts           # 浏览器实现
+│   ├── WeChatAdapter.ts        # 微信小游戏（预留）
+│   ├── DouyinAdapter.ts        # 抖音小游戏（预留）
+│   └── input/
+│       ├── InputActions.ts     # 抽象输入语义
+│       ├── DesktopBinding.ts   # 键鼠映射
+│       └── TouchBinding.ts     # 触屏映射（预留）
+│
+├── config/                     # ★ 内容配置 ★
+│   ├── relics.json             # 藏品配置
+│   ├── items.json              # 物品配置
+│   ├── enemies.json            # 敌人配置
+│   ├── gachaPool.json          # 卡池配置
+│   └── ...
+│
+└── vendor/                     # 第三方/播放器内核
+    └── player/                 # FTX 播放器（已有代码）
+        ├── index.ts
+        ├── FtxAsset.ts
+        ├── core/
+        └── fluid/
+10. 开发里程碑（修正版）
+text
+M0 ✅ 平台验证：three.js + rapier + 播放器 跑通（已完成）
+M1 ✅ 最小闭环：移动 billboard 角色 + 攻击子弹 + 敌人 + 伤害（已完成）
+M2 ✅ chunk 流式：无限地图扩展 + LOD + 小地图（已完成）
+M3 ✅ 战斗完整：敌人 AI + 伤害管线 + 子弹系统 + 命中特效（已完成）
+
+M4 🔄 模式切换 + 存档（当前重点）
+├── 4.1 Session + SaveSystem（数据结构 + localStorage）
+├── 4.2 ShipMode（舰船界面 + 三面板 + 抽卡模拟）
+├── 4.3 模式切换（ShipMode ↔ WorldMode 数据流转）
+└── 4.4 自动存档（返回舰船时保存）
+
+M5 🔜 背包系统
+├── 5.1 四层网格数据结构
+├── 5.2 背包 UI（网格显示 + 拖拽交互）
+├── 5.3 物品拾取 + 背包管理
+└── 5.4 合成/采集系统
+
+M6 🔜 抽卡 + 友军
+├── 6.1 卡池 + 保底逻辑
+├── 6.2 抽卡 UI
+├── 6.3 友军部署/跟随 AI
+└── 6.4 友军弹药系统
+
+M7 🔜 Boss 决战
+M8 🔜 内容填充 + 平衡
+M9 🔜 平台发布
+11. 关键设计原则（汇总）
+text
+① 单向数据流：
+   Session（只读，不直接修改）→ 计算临时属性 → 模式使用 → 回写基础属性 → 保存
+
+② 存档只存基础属性：
+   藏品加成在出击时由 computeCombatStats 计算，不存盘
+
+③ 地图不存档：
+   day 作为种子，每天重新生成，ChunkData 不序列化
+
+④ 实体生命周期：
+   create → register → update → (死亡) → dispose → destroy
+
+⑤ 组合优于继承：
+   行为骨架走继承（EntityBase 体系），能力复用走组件（Health/AI/Weapon）
+
+⑥ 配置驱动：
+   AI 行为/条件、藏品效果、敌人属性全部由 JSON 配置，代码不改
+
+⑦ 平台抽象：
+   唯一接触浏览器 API 的地方是 platform/，游戏核心零依赖
+12. 接下来要做的（按顺序）
+根据上面的架构设计，你的下一步行动清单：
+
+text
+1. 创建 core/Session.ts（数据结构 + computeCombatStats）
+2. 创建 core/SaveSystem.ts（localStorage 读写）
+3. 创建 modes/ShipMode.ts（舰船界面 + 三面板 + 抽卡模拟）
+4. 修改 modes/WorldMode.ts（接收 day + combatStats + onReturn 回调）
+5. 修改 main.ts（启动流程：读档 → ShipMode → 出击回调 → WorldMode → 返回保存）
+6. 测试：刷新页面，进度保留
+这个架构设计就是你现在要手写代码的蓝图。每写一段代码之前，先对照这份设计确认“这个数据该放哪层”、“这个逻辑该归哪个系统管”。
+
+
+
+
+
+
+
+
 我们来把这四层背包体系彻底理清，并定义它们的数据结构和交互规则。
 
 🎒 四层背包定义与职责
