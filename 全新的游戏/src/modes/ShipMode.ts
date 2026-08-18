@@ -4,7 +4,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import type { Mode } from '../core/ModeManager';
+import type { IGameMode, IGameModeContext } from '../core/IGameMode';
 import type { GameSession, InventoryGrid, PlayerCombatStats } from '../core/Session';
 import { createEmptyGrid, countItemsInGrid, addItemToGrid, computeCombatStats } from '../core/Session';
 import { SaveSystem } from '../core/SaveSystem';
@@ -16,14 +16,6 @@ import { RELIC_CONFIG } from '../config/relics';
 // ============================================================
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'inventory' | 'gacha' | 'none';
-
-interface ShipModeContext {
-  session: GameSession;
-  onDepart: (day: number, combatStats: any) => void;
-  scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  renderer: THREE.WebGLRenderer;
-}
 
 // ============================================================
 // 舰船场景布局（简单占位地图）
@@ -46,9 +38,7 @@ const ROOM_LAYOUT = {
 // ShipMode 类
 // ============================================================
 
-export class ShipMode implements Mode {
-  readonly id = 'ship' as const;
-
+export class ShipMode implements IGameMode {
   // 场景对象
   private scene: THREE.Scene | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
@@ -58,7 +48,7 @@ export class ShipMode implements Mode {
 
   // 数据
   private session: GameSession | null = null;
-  private onDepart: ((day: number, combatStats: any) => void) | null = null;
+  private onDepart: IGameModeContext['onDepart'] = undefined;
 
   // UI 状态
   private currentPanel: ShipPanel = 'none';
@@ -66,10 +56,10 @@ export class ShipMode implements Mode {
   private clock = new THREE.Clock();
 
   // ============================================================
-  // Mode 接口实现
+  // IGameMode 接口实现
   // ============================================================
 
-  onEnter(ctx: ShipModeContext): void {
+  enter(ctx: IGameModeContext): void {
     this.scene = ctx.scene;
     this.camera = ctx.camera;
     this.renderer = ctx.renderer;
@@ -90,11 +80,11 @@ export class ShipMode implements Mode {
     console.log('[ShipMode] 舰船场景已加载');
   }
 
-  onExit(): void {
+  exit(): void {
     this.disposeShipScene();
     this.disposeUI();
     this.session = null;
-    this.onDepart = null;
+    this.onDepart = undefined;
     console.log('[ShipMode] 舰船场景已卸载');
   }
 

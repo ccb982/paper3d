@@ -1,43 +1,30 @@
 // ============================================================
-// main.ts —— 游戏入口
+// main.ts —— 游戏入口（路由器模式）
+// 职责：初始化共享资源 + 响应模式切换事件
+// 不做的：物理步进、输入处理、实体管理、资源清理
+// ============================================================
 // 架构：BOOT → SHIP(日常) → WORLD(战斗) → 返回 SHIP → ...
-// 核心运行时：Session + SaveSystem + ModeManager + GameLoop
+// 核心原则：main.ts 只做"路由器"，不做"管家"
+// 每个 Mode 拥有自己的私有领地，enter/exit 自管理
 // ============================================================
 
 import * as THREE from 'three';
 import { WebAdapter } from './platform/WebAdapter';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset } from './vendor/player';
-import { WorldMode } from './modes/WorldMode';
+import type { IGameMode } from './core/IGameMode';
 import { ShipMode } from './modes/ShipMode';
-import { DesktopBinding } from './platform/input/DesktopBinding';
-import { PhysicsWorld } from './services/physics/PhysicsWorld';
+import { WorldMode } from './modes/WorldMode';
+import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
-import { createNewSession, computeCombatStats, type GameSession, type PlayerCombatStats } from './core/Session';
-import { RELIC_CONFIG } from './config/relics';
-import { ModeManager } from './core/ModeManager';
-import type { Mode } from './core/ModeManager';
+import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
 
 // ============================================================
-// 全局状态
+// 全局状态（最小化：只保留 shared 资源和当前模式引用）
 // ============================================================
 
+let currentMode: IGameMode | null = null;
 let currentSession: GameSession | null = null;
-let currentWorldMode: WorldMode | null = null;
-let worldPhysics: PhysicsWorld | null = null;
-let worldBinding: DesktopBinding | null = null;
-
-/** ★ WorldMode 的 Mode 适配器：注册到 ModeManager 时，将 onExit 委托给 dispose */
-class WorldModeAdapter implements Mode {
-  readonly id = 'world' as const;
-  constructor(private wm: WorldMode) {}
-  onEnter(): void {}
-  onExit(): void { this.wm.dispose(); }
-  update(_dt: number): void {}
-  render(): void {}
-}
-let clock: THREE.Clock;
-let acc = 0;
 
 // 资产（全局持有，避免重复加载）
 let protagonistAsset: FtxAsset;
@@ -111,172 +98,97 @@ async function boot() {
     console.log(`[boot] 已自动恢复，当前第 ${currentSession.meta.day} 天`);
   }
 
-  // ---- 4. 创建模式管理器 ----
-  const modeManager = new ModeManager();
-
-  // ---- 5. 注册 ShipMode ----
-  const shipMode = new ShipMode();
-  modeManager.register(shipMode);
-
-  // ---- 6. 启动主循环 ----
-  clock = new THREE.Clock();
+  // ---- 4. 启动主循环 ----
+  const clock = new THREE.Clock();
 
   function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.1);
 
-    const current = modeManager.getCurrent();
-    if (!current) {
-      renderer.render(scene, camera);
-      return;
-    }
-
-    // 当前模式更新 + 渲染
-    if (current.id === 'ship') {
-      // ShipMode：直接更新
-      current.update(dt);
-      current.render();
-    } else if (current.id === 'world' && currentWorldMode) {
-      // WorldMode：需要输入/物理驱动
-      if (worldBinding) {
-        worldBinding.update();
-        const input = worldBinding.input;
-        const attackPressed = worldBinding.consumeAttack();
-        const look = worldBinding.consumeLook();
-        const zoom = worldBinding.consumeZoom();
-
-        // 按 E 键返回舰船（held 状态，每帧重新计算）
-        if (input.held.interact) {
-          returnToShip(modeManager, scene, camera, renderer);
-          return;
-        }
-
-        currentWorldMode.update(dt, input, attackPressed, look, zoom);
-
-        // 物理固定步长
-        acc += dt;
-        const FIXED = 1 / 60;
-        let steps = 0;
-        while (acc >= FIXED && steps < 5) {
-          worldPhysics?.step();
-          acc -= FIXED;
-          steps++;
-        }
-        if (steps >= 5) acc = 0;
-
-        currentWorldMode.render(renderer);
-      }
+    if (currentMode) {
+      currentMode.update(dt);
+      currentMode.render();
     } else {
       renderer.render(scene, camera);
     }
   }
 
-  // ---- 7. 进入 ShipMode（默认模式） ----
-  enterShipMode(modeManager, scene, camera, renderer);
+  // ---- 5. 进入 ShipMode（默认模式） ----
+  enterShipMode(scene, camera, renderer);
 
   animate();
-  console.log('[boot] 架构就绪：BOOT → SHIP → WORLD 模式切换');
+  console.log('[boot] 架构就绪：main.ts 作为路由器，委托模式管理');
 }
 
 // ============================================================
-// 模式切换函数
+// 模式切换函数（main.ts 的唯一额外职责）
 // ============================================================
 
 /** 进入舰船模式 */
 function enterShipMode(
-  modeManager: ModeManager,
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   renderer: THREE.WebGLRenderer,
 ): void {
-  // 清理战斗模式引用（WorldMode.onExit 已通过模式切换自动调用 dispose）
-  currentWorldMode = null;
-  worldPhysics = null;
-  if (worldBinding) {
-    worldBinding.dispose();
-    worldBinding = null;
-  }
+  // 1. 如果有旧模式，彻底清理
+  currentMode?.exit();
+  currentMode = null;
 
-  // 保存存档
+  // 2. 保存存档
   if (currentSession) {
     SaveSystem.save(currentSession);
   }
 
-  // 切换到 ShipMode
-  modeManager.switchMode('ship', {
+  // 3. 创建新 ShipMode
+  const ship = new ShipMode();
+  ship.enter({
+    scene, camera, renderer,
     session: currentSession!,
-    scene,
-    camera,
-    renderer,
     onDepart: (day: number, combatStats: PlayerCombatStats) => {
-      departToWorld(modeManager, scene, camera, renderer, day, combatStats);
+      enterWorldMode(scene, camera, renderer, day, combatStats);
     },
   });
+  currentMode = ship;
+  console.log(`[main] 进入 ShipMode，当前第 ${currentSession?.meta.day} 天`);
 }
 
 /** 出击到世界模式 */
-function departToWorld(
-  modeManager: ModeManager,
+function enterWorldMode(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   renderer: THREE.WebGLRenderer,
   day: number,
   combatStats: PlayerCombatStats,
 ): void {
-  // 创建物理世界
-  worldPhysics = new PhysicsWorld();
+  // 1. 清理旧模式
+  currentMode?.exit();
+  currentMode = null;
 
-  // 创建输入绑定
-  worldBinding = new DesktopBinding(window, document.querySelector('canvas')!);
-
-  // 创建 WorldMode
-  currentWorldMode = new WorldMode(
+  // 2. 创建 WorldMode（完全自包含：PhysicsWorld/DesktopBinding 内部创建）
+  const world = new WorldMode();
+  const ctx: WorldModeEnterContext = {
     scene, camera, renderer,
+    session: currentSession!,
+    day,
+    combatStats,
     protagonistAsset,
-    worldPhysics,
-    enemyAsset,
     bulletAsset,
-    hitEffectAsset ?? undefined,
-  );
+    enemyAsset,
+    hitEffectAsset: hitEffectAsset ?? undefined,
+    onReturn: () => {
+      // 返回时：推进天数 + 进入 ShipMode
+      if (currentSession) {
+        currentSession.meta.day++;
+        currentSession.meta.totalDaysSurvived++;
+        currentSession.dayProgress.hasDepartedToday = false;
+      }
+      enterShipMode(scene, camera, renderer);
+    },
+  };
+  world.enter(ctx);
+  currentMode = world;
 
-  // 注册 WorldMode 适配器到模式管理器，切换到世界模式（会先退出当前模式）
-  modeManager.register(new WorldModeAdapter(currentWorldMode));
-  modeManager.switchMode('world');
-
-  // 应用战斗属性到玩家实体
-  if (currentWorldMode.player) {
-    currentWorldMode.player.maxHp = combatStats.maxHp;
-    currentWorldMode.player.hp = combatStats.hp;
-    (currentWorldMode.player as any).attackPower = combatStats.attackPower;
-    (currentWorldMode.player as any).defense = combatStats.defense;
-  }
-
-  console.log(`[出击] 第 ${day} 天，战斗属性: HP ${combatStats.maxHp}, 攻击 ${combatStats.attackPower}, 防御 ${combatStats.defense}`);
-}
-
-/** 返回舰船 */
-function returnToShip(
-  modeManager: ModeManager,
-  scene: THREE.Scene,
-  camera: THREE.PerspectiveCamera,
-  renderer: THREE.WebGLRenderer,
-): void {
-  // 回写玩家血量
-  if (currentWorldMode && currentSession) {
-    currentSession.player.hp = currentWorldMode.player.hp;
-    currentSession.player.maxHp = currentWorldMode.player.maxHp;
-  }
-
-  // 推进天数
-  if (currentSession) {
-    currentSession.meta.day++;
-    currentSession.meta.totalDaysSurvived++;
-    currentSession.dayProgress.hasDepartedToday = false;
-  }
-
-  // 进入舰船（自动保存）
-  enterShipMode(modeManager, scene, camera, renderer);
-  console.log(`[返回] 已返回舰船，第 ${currentSession?.meta.day} 天`);
+  console.log(`[main] 进入 WorldMode，第 ${day} 天，战斗属性: HP ${combatStats.maxHp}`);
 }
 
 // ============================================================
