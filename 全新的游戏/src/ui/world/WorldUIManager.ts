@@ -15,6 +15,7 @@ import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
+import { createButton } from '../components/Button';
 
 export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
@@ -33,6 +34,16 @@ export class WorldUIManager extends BaseInteractionUI {
   ) {
     super();
     this.gridRenderer = new InventoryGridRenderer(this.itemManager);
+
+    // overlay 弹窗根
+    this.overlayRoot = document.createElement('div');
+    this.overlayRoot.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
+      'background:rgba(0,0,0,0.5)', 'display:none', 'z-index:300',
+      'pointer-events:auto', 'align-items:center', 'justify-content:center',
+    ].join(';');
+    document.body.appendChild(this.overlayRoot);
+
     this.minimap = new Minimap(raster);
     this.hud = new PlayerHud();
     this.crosshair = new Crosshair();
@@ -169,7 +180,9 @@ export class WorldUIManager extends BaseInteractionUI {
       if (Array.isArray(grid)) {
         const cols = grid[0]?.length ?? 0;
         const cellSize = Math.min(48, Math.floor(540 / cols));
-        this.gridRenderer.render(gridView, grid, layer, undefined, cellSize);
+        this.gridRenderer.render(gridView, grid, layer, (e) => {
+          this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
+        }, cellSize);
       }
     };
 
@@ -181,6 +194,89 @@ export class WorldUIManager extends BaseInteractionUI {
       onClose: () => { this.inventoryOpen = false; },
       render: () => content,
     });
+  }
+
+  /** 物品详情（带使用/丢弃/转移） */
+  private openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
+    if (layer === 'allies') return;
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const slot = grid?.[row]?.[col];
+    if (!slot) return;
+    const config = this.itemManager.getItemConfig(slot.itemId);
+
+    this.openPanel({
+      id: 'item-detail',
+      onOpen: () => {},
+      onClose: () => {},
+      render: () => {
+        const div = document.createElement('div');
+        div.style.cssText = 'background:rgba(20,20,40,0.95);border:1px solid #4466aa;border-radius:8px;padding:16px;min-width:260px;';
+        div.innerHTML = `
+          <h3 style="color:#8af;margin:0 0 8px 0;">${slot.itemId}</h3>
+          <p style="margin:4px 0;color:#aaa;">数量: ${slot.stackSize}</p>
+          <p style="margin:4px 0;color:#aaa;">类型: ${config?.type ?? '未知'}</p>
+          <p style="margin:4px 0 12px 0;color:#888;font-size:12px;">${config?.description ?? ''}</p>
+        `;
+
+        // 使用按钮（消耗品）
+        if (config?.type === 'consumable') {
+          div.appendChild(createButton({
+            label: '使用', size: 'sm', style: 'primary',
+            onClick: () => {
+              const result = this.itemManager.useItem(layer, row, col);
+              if (result.success) {
+                this.closePanel('item-detail');
+                this.renderInventoryPanel();
+              }
+            },
+          }));
+        }
+
+        // 转移到基地（非 base 层）
+        if (layer !== 'base') {
+          const btn = createButton({
+            label: '转移到基地', size: 'sm', style: 'ghost',
+            onClick: () => {
+              const moved = this.itemManager.moveItem(layer, 'base', slot.itemId, 1);
+              if (moved) {
+                this.closePanel('item-detail');
+                this.renderInventoryPanel();
+              }
+            },
+          });
+          btn.style.marginLeft = '8px';
+          div.appendChild(btn);
+        }
+
+        // 丢弃按钮
+        const dropBtn = createButton({
+          label: '丢弃', size: 'sm', style: 'danger',
+          onClick: () => {
+            this.itemManager.removeItem(layer, slot.itemId, 1);
+            this.closePanel('item-detail');
+            this.renderInventoryPanel();
+          },
+        });
+        dropBtn.style.marginLeft = '8px';
+        div.appendChild(dropBtn);
+
+        // 关闭按钮
+        const closeBtn = createButton({
+          label: '关闭', size: 'sm', style: 'ghost',
+          onClick: () => this.closePanel('item-detail'),
+        });
+        closeBtn.style.marginTop = '8px';
+        div.appendChild(closeBtn);
+        return div;
+      },
+    });
+  }
+
+  /** 刷新背包面板（如果已打开） */
+  refreshIfOpen(): void {
+    if (this.inventoryOpen) {
+      this.renderInventoryPanel();
+    }
   }
 
   override dispose(): void {

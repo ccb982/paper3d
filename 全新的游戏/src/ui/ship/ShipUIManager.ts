@@ -482,6 +482,34 @@ export class ShipUIManager extends BaseInteractionUI {
           }));
         }
 
+        // 转移到基地（非 base 层）
+        if (layer !== 'base') {
+          const btn = createButton({
+            label: '转移到基地', size: 'sm', style: 'ghost',
+            onClick: () => {
+              const moved = this.itemManager.moveItem(layer, 'base', slot.itemId, 1);
+              if (moved) {
+                this.closePanel('item-detail');
+                this.renderPanel(this.currentPanel);
+              }
+            },
+          });
+          btn.style.marginLeft = '8px';
+          div.appendChild(btn);
+        }
+
+        // 丢弃按钮
+        const dropBtn = createButton({
+          label: '丢弃', size: 'sm', style: 'danger',
+          onClick: () => {
+            this.itemManager.removeItem(layer, slot.itemId, 1);
+            this.closePanel('item-detail');
+            this.renderPanel(this.currentPanel);
+          },
+        });
+        dropBtn.style.marginLeft = '8px';
+        div.appendChild(dropBtn);
+
         div.appendChild(createButton({
           label: '关闭', size: 'sm', style: 'ghost',
           onClick: () => this.closePanel('item-detail'),

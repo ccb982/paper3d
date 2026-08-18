@@ -158,8 +158,18 @@ export class WorldMode implements IGameMode {
         physical: true,
       });
       item.onPickup = (it, picker) => {
-        console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.displayName}」(${it.itemId})`);
-        return true;
+        // ★ 1. 加入玩家内存背包
+        const success = this.itemManager.addItem('player', it.itemId!, 1);
+        if (success) {
+          console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.displayName}」(${it.itemId})`);
+          // ★ 2. 通知 UI 刷新
+          this.worldUIManager.showPickupResult(it.itemId!, true);
+          this.worldUIManager.refreshIfOpen();
+          return true;
+        } else {
+          this.worldUIManager.showPickupResult(it.itemId!, false);
+          return false;
+        }
       };
     }
 
