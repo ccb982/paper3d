@@ -216,5 +216,9 @@ export class DesktopBinding {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers.length = 0;
+    // ★ 释放指针锁定（回到 ShipMode 时鼠标可见）
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
   }
 }
