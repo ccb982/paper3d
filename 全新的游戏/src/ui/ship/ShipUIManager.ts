@@ -10,7 +10,7 @@ import { createEmptyGrid, countItemsInGrid, addItemToGrid } from '../../core/Ses
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { CraftingManager } from '../../systems/inventory/CraftingManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
-import { renderItemSlot, renderEmptySlot } from '../components/ItemSlot';
+import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
 import { SaveSystem } from '../../core/SaveSystem';
@@ -23,6 +23,7 @@ export class ShipUIManager extends BaseInteractionUI {
   private root: HTMLDivElement;
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
+  private gridRenderer: InventoryGridRenderer;
 
   constructor(
     private session: GameSession,
@@ -32,6 +33,7 @@ export class ShipUIManager extends BaseInteractionUI {
     private onDepart: (() => void) | null,
   ) {
     super();
+    this.gridRenderer = new InventoryGridRenderer(this.itemManager);
     this.root = document.createElement('div');
     this.root.id = 'ship-ui-root';
     this.root.style.cssText = [
@@ -259,31 +261,13 @@ export class ShipUIManager extends BaseInteractionUI {
       container.innerHTML = '<div style="color:#666;">空网格</div>';
       return;
     }
-
-    const rows = grid.length;
     const cols = grid[0]?.length ?? 0;
     const cellSize = Math.min(48, Math.floor(540 / cols));
-
-    const gridDiv = document.createElement('div');
-    gridDiv.style.cssText = `display:grid;grid-template-columns:repeat(${cols},${cellSize}px);gap:2px;justify-content:center;`;
-
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const slot = grid[r][c];
-        if (slot) {
-          const el = renderItemSlot(
-            { itemId: slot.itemId, stackSize: slot.stackSize, row: r, col: c },
-            { cellSize, onClick: () => this.openItemDetail(layer as any, r, c) },
-          );
-          gridDiv.appendChild(el);
-        } else {
-          gridDiv.appendChild(renderEmptySlot(cellSize));
-        }
-      }
-    }
-
-    container.innerHTML = '';
-    container.appendChild(gridDiv);
+    this.gridRenderer.render(
+      container, grid, layer,
+      (e) => this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col),
+      cellSize,
+    );
   }
 
   // ============================================================

@@ -6,9 +6,10 @@
 // ============================================================
 
 import { BaseInteractionUI } from '../BaseInteractionUI';
-import type { GameSession } from '../../core/Session';
+import type { GameSession, InventoryGrid } from '../../core/Session';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
+import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
 import { Minimap } from '../../services/ui/Minimap';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
@@ -21,6 +22,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private crosshair: Crosshair;
   private interactPrompt: HTMLDivElement;
   private floatingTexts: { el: HTMLDivElement; life: number; maxLife: number }[] = [];
+  private gridRenderer: InventoryGridRenderer;
+  private inventoryOpen = false;
 
   constructor(
     private session: GameSession,
@@ -29,6 +32,7 @@ export class WorldUIManager extends BaseInteractionUI {
     raster: RasterMap,
   ) {
     super();
+    this.gridRenderer = new InventoryGridRenderer(this.itemManager);
     this.minimap = new Minimap(raster);
     this.hud = new PlayerHud();
     this.crosshair = new Crosshair();
@@ -108,6 +112,75 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 准星显隐 */
   setCrosshairVisible(v: boolean): void {
     this.crosshair.setVisible(v);
+  }
+
+  /** 打开/关闭背包面板 */
+  toggleInventory(): void {
+    this.inventoryOpen = !this.inventoryOpen;
+    if (this.inventoryOpen) {
+      this.renderInventoryPanel();
+    } else {
+      this.closePanel();
+    }
+  }
+
+  private renderInventoryPanel(): void {
+    const inv = this.session.inventories;
+    const layers = Object.keys(inv) as (keyof typeof inv)[];
+
+    // 用标签页切换显示各层
+    let currentLayer = layers[0];
+
+    const content = document.createElement('div');
+    content.style.cssText = 'padding:8px;background:rgba(20,20,40,0.95);border-radius:8px;min-width:500px;';
+
+    // 标题
+    const title = document.createElement('div');
+    title.style.cssText = 'color:#aac;font-size:16px;font-weight:bold;margin-bottom:8px;';
+    title.textContent = '背包';
+    content.appendChild(title);
+
+    // 标签栏
+    const tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;gap:4px;margin-bottom:8px;';
+    for (const layer of layers) {
+      const tab = document.createElement('button');
+      tab.textContent = layer;
+      tab.style.cssText = [
+        'background:rgba(68,102,170,0.3)', 'border:1px solid #4466aa',
+        'color:#aac', 'padding:4px 12px', 'border-radius:4px',
+        'cursor:pointer', 'font-size:12px',
+      ].join(';');
+      tab.addEventListener('click', () => {
+        currentLayer = layer;
+        showGrid(currentLayer);
+      });
+      tabBar.appendChild(tab);
+    }
+    content.appendChild(tabBar);
+
+    // 网格容器
+    const gridView = document.createElement('div');
+    gridView.id = 'world-inv-grid-view';
+    content.appendChild(gridView);
+
+    const showGrid = (layer: keyof typeof inv) => {
+      const grid = inv[layer];
+      if (Array.isArray(grid)) {
+        const cols = grid[0]?.length ?? 0;
+        const cellSize = Math.min(48, Math.floor(540 / cols));
+        this.gridRenderer.render(gridView, grid, layer, undefined, cellSize);
+      }
+    };
+
+    showGrid(currentLayer);
+
+    this.openPanel({
+      id: 'inventory-panel',
+      onOpen: () => {},
+      onClose: () => { this.inventoryOpen = false; },
+      render: () => content,
+    });
   }
 
   override dispose(): void {

@@ -224,6 +224,11 @@ export class WorldMode implements IGameMode {
     const look = this.binding.consumeLook();
     const zoom = this.binding.consumeZoom();
 
+    // ★ 按 I 键打开/关闭背包
+    if (this.binding.consumeInventory()) {
+      this.worldUIManager.toggleInventory();
+    }
+
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
     if (input.held.interact) {
       this.onReturn?.();

@@ -56,6 +56,7 @@ export class DesktopBinding {
         if (e.code === 'KeyK') this.state.pressed.dodge = true;
         if (e.code === 'KeyL') this.state.pressed.skill = true;
         if (e.code === 'KeyE') this.state.pressed.interact = true;
+        if (e.code === 'KeyI') this.state.pressed.inventory = true;
         if (e.code === 'Space') this.state.pressed.jump = true;
       }
       this.keyState.set(e.code, true);
@@ -128,7 +129,7 @@ export class DesktopBinding {
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
-      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false };
+      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false };
       this.state.interactions = [];
       this.state.zoomAxis = 0;
       pointerDown = false;
@@ -206,6 +207,13 @@ export class DesktopBinding {
   consumeJump(): boolean {
     const v = this.state.pressed.jump;
     this.state.pressed.jump = false;
+    return v;
+  }
+
+  /** 消费背包键（返回是否按下并清除） */
+  consumeInventory(): boolean {
+    const v = this.state.pressed.inventory;
+    this.state.pressed.inventory = false;
     return v;
   }
 

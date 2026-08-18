@@ -1,722 +1,337 @@
-你说得对，这就是一个“三层共享架构”。我先画出整体分层，再逐层展开：
+你的设计思路完全正确，而且非常专业——这正是“配置层（表） → 数据层（存档） → 表现层（UI）”三层解耦的标准范式。让我逐条验证你的想法，并告诉你你的项目里这些东西当前处于什么状态，以及怎么改才能达到你想要的效果。
 
-🏛️ 完整三层架构图
-text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         应用层（Modes）                                │
-│  ┌─────────────────────────┐    ┌─────────────────────────────────┐   │
-│  │       ShipMode          │    │          WorldMode              │   │
-│  │  （鼠标点击驱动，低频）  │    │   （按E/走近驱动，高频实时）    │   │
-│  └───────────┬─────────────┘    └───────────────┬─────────────────┘   │
-│              │                                   │                     │
-│              ▼                                   ▼                     │
-│  ┌─────────────────────────┐    ┌─────────────────────────────────┐   │
-│  │     ShipUIManager       │    │        WorldUIManager           │   │
-│  │  · 三面板（行动/编队/干员）│    │  · HUD（血条/小地图/准星）     │   │
-│  │  · 背包网格（L1~L4查看）│    │  · 交互提示（按E拾取/对话）    │   │
-│  │  · 合成台面板          │    │  · 浮动伤害数字                │   │
-│  │  · 物品详情弹窗        │    │  · 临时背包快捷栏              │   │
-│  │  · 对话气泡            │    │  · 对话气泡（战斗中轻量版）    │   │
-│  └─────────────────────────┘    └─────────────────────────────────┘   │
-│              │                                   │                     │
-│              └───────────────┬───────────────────┘                     │
-│                              ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                    共享 UI 组件层                               │   │
-│  │  ItemSlot / DialogBubble / Button / ModalContainer / Toast     │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                              │                                         │
-│                              ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   业务逻辑层（三大模块）                        │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐    │   │
-│  │  │ ItemManager │  │Interaction  │  │  CraftingManager    │    │   │
-│  │  │ · 物品增删  │  │ · 拾取      │  │  · 配方注册         │    │   │
-│  │  │ · 堆叠/移动 │  │ · 对话触发  │  │  · 材料检查         │    │   │
-│  │  │ · 使用效果  │  │ · 交互目标  │  │  · 产出物生成       │    │   │
-│  │  │ · 持久化    │  │ · 上下文    │  │  · 合成台类型判断   │    │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────────────┘    │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-│                              │                                         │
-│                              ▼                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │                   核心运行时（Core）                           │   │
-│  │  Session（可序列化数据） │ SaveSystem │ EventBus               │   │
-│  └─────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
-🧩 第一部分：业务逻辑层（三大模块）
-这是舰船和世界共用的纯逻辑，不涉及任何 UI 渲染，只操作 Session 数据。
+1. 你的设计 vs 项目现状（对照分析）
+你的设计构想	当前项目现状	评价
+① 物品表（只读配置）
+存所有物品的元数据，只查不改。	✅ 已有 config/items.json
+包含 id、name、type、maxStack、effect。	符合要求，但缺少纹理字段（后面补）。
+② 物品纹理资产库
+ftx 格式纹理，按 id 索引。	❌ 当前用的是程序生成的 SolidBulletAsset（纯色圆点），没有真正的 ftx 纹理映射。	需要新增：一个 ItemIconRegistry 负责根据 itemId 返回 FtxAsset 或程序化颜色。
+③ 多个背包数据容器
+只存 itemId + 数量，可持久化。	✅ 完全符合！
+Session.inventories 里有 base、ship、player、allies，每个都是二维网格 (ItemInstance | null)[][]，存的就是 { itemId, stackSize }。	已实现，且完全符合你的设计。
+④ 网格位置持久化
+UI 的放置位置也要存。	✅ 网格的 row 和 col 就是持久化的位置！
+grid[row][col] = ItemInstance。你在 Session.ts 里的 addItemToGrid / moveItemBetweenGrids 操作的就是这个。	注意：位置是数据层的属性，不是 UI 层单独存的。UI 只是“渲染”这个网格状态。
+⑤ UI 与数据解耦
+UI 只负责展示，不持有数据逻辑。	⚠️ 部分实现。
+当前 ShipUIManager.renderGrid 直接读 Session 渲染，但拖拽逻辑、右键菜单还没抽象出来。	需要封装一个纯渲染组件。
+⑥ 背包 UI 在世界和舰船共用	❌ 目前只有 ShipUIManager 有背包面板，WorldMode 里没有“按 I 打开背包”的功能。	需要新增：WorldMode 也接入同一个背包 UI 组件。
+2. 你的架构怎么搭（我帮你细化成可落地的文件结构）
+根据你的思路，我建议在项目里新增/修改以下模块：
 
-1. ItemManager（物品管理）
+📁 新增文件
+services/item/ItemIconRegistry.ts（物品纹理映射）
+
+负责根据 itemId 返回 FtxAsset 或 THREE.Texture。
+
+没有 ftx 文件时，自动生成带颜色的 SolidBulletAsset 兜底。
+
+ui/shared/InventoryGridRenderer.ts（背包网格纯渲染器）
+
+入参：grid: InventoryGrid、layerName: string、onSlotClick?: (row, col) => void。
+
+不持有任何 Session 引用，只负责把网格数据渲染成 HTML 格子。
+
+这样 ShipUIManager 和 WorldUIManager 都能复用。
+
+ui/shared/InventoryDragController.ts（拖拽状态机）
+
+跨层复用，处理鼠标/触屏的拖拽动作。
+
+拖拽结束时调用 ItemManager.moveItemBetweenGrids（传入源网格和目标网格）。
+
+📁 修改文件
+config/items.json
+
+给每个物品加一个 icon 字段，比如 "icon": "items/healing_potion.ftx3.gz"。
+
+或者简单点：加 "color": { "h": 0.0, "s": 0.9, "l": 0.5 }，让 ItemIconRegistry 直接生成色块（无需额外的 ftx 文件，省体积）。
+
+modes/WorldMode.ts
+
+在 update 里监听键盘 I 或 Tab，打开背包 UI 面板（复用 InventoryGridRenderer）。
+
+modes/ShipMode.ts
+
+它的 ShipUIManager 里调用 InventoryGridRenderer 来渲染三个标签页（基地/飞船/玩家），而不是自己写 renderGrid。
+
+3. 具体修改指令（按你的格式）
+🔧 修改 1：配置表增加纹理/颜色信息（让 UI 知道怎么画）
+文件：config/items.json
+
+替换范围：全部替换（增加 color 字段）
+
+json
+{
+  "items": [
+    {
+      "id": "healing_potion",
+      "name": "治疗药水",
+      "type": "consumable",
+      "description": "恢复 30 点生命值",
+      "maxStack": 10,
+      "color": { "h": 0.0, "s": 0.9, "l": 0.6 },
+      "effect": { "heal": 30 }
+    },
+    {
+      "id": "ammo_pack",
+      "name": "弹药包",
+      "type": "ammo",
+      "description": "补充 50 发弹药",
+      "maxStack": 20,
+      "color": { "h": 0.1, "s": 0.9, "l": 0.6 },
+      "effect": { "ammo": 50 }
+    },
+    {
+      "id": "iron_ore",
+      "name": "铁矿石",
+      "type": "material",
+      "description": "基础冶炼材料",
+      "maxStack": 99,
+      "color": { "h": 0.08, "s": 0.3, "l": 0.5 }
+    },
+    {
+      "id": "originium_shard",
+      "name": "源石碎片",
+      "type": "material",
+      "description": "稀有源石结晶体",
+      "maxStack": 99,
+      "color": { "h": 0.8, "s": 0.9, "l": 0.6 }
+    },
+    {
+      "id": "food_ration",
+      "name": "应急口粮",
+      "type": "consumable",
+      "description": "恢复 15 点生命值",
+      "maxStack": 20,
+      "color": { "h": 0.05, "s": 0.7, "l": 0.5 },
+      "effect": { "heal": 15 }
+    },
+    {
+      "id": "scrap_metal",
+      "name": "废金属",
+      "type": "material",
+      "description": "可回收的金属废料",
+      "maxStack": 99,
+      "color": { "h": 0.0, "s": 0.0, "l": 0.4 }
+    },
+    {
+      "id": "medkit",
+      "name": "医疗包",
+      "type": "consumable",
+      "description": "恢复全部生命值",
+      "maxStack": 5,
+      "color": { "h": 0.0, "s": 0.9, "l": 0.7 },
+      "effect": { "heal": 999 }
+    }
+  ]
+}
+🔧 修改 2：创建物品图标服务（根据配置生成纹理）
+新建文件：services/item/ItemIconRegistry.ts
+
 typescript
-// src/systems/inventory/ItemManager.ts
-import { GameSession, InventoryGrid, ItemInstance, addItemToGrid, removeItemFromGrid, moveItemBetweenGrids } from '../../core/Session';
-import itemsConfig from '../../config/items.json';
+import * as THREE from 'three';
+import type { ItemManager } from '../../systems/inventory/ItemManager';
+import { createSolidBulletAsset } from '../fx/SolidBulletAsset';
 
-export interface UseItemResult {
-  success: boolean;
-  message?: string;
-  healAmount?: number;
-  ammoAmount?: number;
+export class ItemIconRegistry {
+  private cache = new Map<string, THREE.Texture>();
+
+  constructor(private itemManager: ItemManager) {}
+
+  /** 获取物品图标纹理（优先从缓存取，无则生成） */
+  getIcon(itemId: string): THREE.Texture {
+    if (this.cache.has(itemId)) return this.cache.get(itemId)!;
+
+    const config = this.itemManager.getItemConfig(itemId);
+    const color = config?.color || { h: 0.55, s: 0.8, l: 0.6 };
+    // 用 SolidBulletAsset 生成色块（后续可替换为真正的 ftx 加载）
+    const asset = createSolidBulletAsset(64, color.h, color.s, color.l);
+    const pair = asset.getFramePair(0);
+    if (!pair) throw new Error(`无法生成物品图标: ${itemId}`);
+    this.cache.set(itemId, pair.base);
+    return pair.base;
+  }
+}
+🔧 修改 3：创建共享背包网格渲染器（UI 与数据完全解耦）
+新建文件：ui/shared/InventoryGridRenderer.ts
+
+typescript
+import type { InventoryGrid, ItemInstance } from '../../core/Session';
+import type { ItemManager } from '../../systems/inventory/ItemManager';
+import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
+
+export interface InventorySlotClickEvent {
+  layer: string;
+  row: number;
+  col: number;
+  item: ItemInstance | null;
 }
 
-export class ItemManager {
-  constructor(private session: GameSession) {}
+export class InventoryGridRenderer {
+  private iconRegistry: ItemIconRegistry;
 
-  // ---- 增删改（直接操作 Session.inventories） ----
-  
-  /** 添加物品到指定网格（自动堆叠） */
-  addItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    const grid = this.session.inventories[layer];
-    if (!grid) return false;
-    const maxStack = itemsConfig.items.find(i => i.id === itemId)?.maxStack || 99;
-    return addItemToGrid(grid as InventoryGrid, itemId, count, maxStack);
+  constructor(itemManager: ItemManager) {
+    this.iconRegistry = new ItemIconRegistry(itemManager);
   }
 
-  /** 从指定网格移除物品 */
-  removeItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    const grid = this.session.inventories[layer];
-    if (!grid) return false;
-    return removeItemFromGrid(grid as InventoryGrid, itemId, count);
-  }
+  /**
+   * 渲染一个网格到容器
+   * @param container 目标 HTMLElement
+   * @param grid 数据网格
+   * @param layerName 层级名（用于事件回调）
+   * @param onSlotClick 点击回调
+   * @param cellSize 格子大小（px）
+   */
+  render(
+    container: HTMLElement,
+    grid: InventoryGrid,
+    layerName: string,
+    onSlotClick?: (e: InventorySlotClickEvent) => void,
+    cellSize = 48,
+  ): void {
+    container.innerHTML = '';
+    const rows = grid.length;
+    const cols = grid[0]?.length || 0;
 
-  /** 移动物品（L1↔L2↔L3↔L4，跨层） */
-  moveItem(srcLayer: keyof GameSession['inventories'], dstLayer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    const srcGrid = this.session.inventories[srcLayer];
-    const dstGrid = this.session.inventories[dstLayer];
-    if (!srcGrid || !dstGrid) return false;
-    const maxStack = itemsConfig.items.find(i => i.id === itemId)?.maxStack || 99;
-    return moveItemBetweenGrids(srcGrid as InventoryGrid, dstGrid as InventoryGrid, itemId, count, maxStack);
-  }
+    const gridDiv = document.createElement('div');
+    gridDiv.style.cssText = `display:grid;grid-template-columns:repeat(${cols},${cellSize}px);gap:2px;`;
 
-  /** 获取网格中所有物品列表（供 UI 渲染） */
-  getItems(layer: keyof GameSession['inventories']): { itemId: string; stackSize: number; row: number; col: number }[] {
-    const grid = this.session.inventories[layer];
-    const result: { itemId: string; stackSize: number; row: number; col: number }[] = [];
-    if (!grid) return result;
-    for (let r = 0; r < grid.length; r++) {
-      for (let c = 0; c < grid[r].length; c++) {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
         const slot = grid[r][c];
-        if (slot) result.push({ itemId: slot.itemId, stackSize: slot.stackSize, row: r, col: c });
+        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick);
+        gridDiv.appendChild(cell);
       }
     }
-    return result;
+    container.appendChild(gridDiv);
   }
 
-  // ---- 物品使用（消耗品/材料） ----
-  
-  /** 使用物品（由 UI 层调用） */
-  useItem(layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
-    const grid = this.session.inventories[layer];
-    if (!grid || !grid[row] || !grid[row][col]) {
-      return { success: false, message: '物品不存在' };
-    }
-    const slot = grid[row][col]!;
-    const config = itemsConfig.items.find(i => i.id === slot.itemId);
-    if (!config || config.type !== 'consumable') {
-      return { success: false, message: '该物品无法使用' };
-    }
-
-    // ★ 根据配置执行效果
-    let result: UseItemResult = { success: true };
-    if (config.effect?.heal) {
-      const healed = Math.min(this.session.player.maxHp - this.session.player.hp, config.effect.heal);
-      this.session.player.hp += healed;
-      result.healAmount = healed;
-    }
-    if (config.effect?.ammo) {
-      // 弹药逻辑后续挂接玩家武器系统
-      result.ammoAmount = config.effect.ammo;
-    }
-
-    // 扣减物品
-    this.removeItem(layer, slot.itemId, 1);
-    return result;
-  }
-
-  /** 检查是否有足够空间（常用于拾取前判断） */
-  hasSpace(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    // 简单实现：遍历找空位
-    const grid = this.session.inventories[layer];
-    if (!grid) return false;
-    let emptySlots = 0;
-    for (const row of grid) {
-      for (const cell of row) {
-        if (cell === null) emptySlots++;
-        else if (cell.itemId === itemId) {
-          const maxStack = itemsConfig.items.find(i => i.id === itemId)?.maxStack || 99;
-          emptySlots += maxStack - cell.stackSize;
-        }
-        if (emptySlots >= count) return true;
-      }
-    }
-    return false;
-  }
-}
-2. CraftingManager（合成管理）
-typescript
-// src/systems/inventory/CraftingManager.ts
-import { GameSession } from '../../core/Session';
-import { ItemManager } from './ItemManager';
-import craftingRecipes from '../../config/craftRecipes.json';
-
-export interface Recipe {
-  id: string;
-  name: string;
-  inputs: { itemId: string; count: number }[];
-  output: { itemId: string; count: number };
-  station: 'ship' | 'portable'; // 舰船合成台 / 便携合成台
-}
-
-export class CraftingManager {
-  private recipes: Recipe[] = craftingRecipes.recipes;
-
-  constructor(private session: GameSession, private itemManager: ItemManager) {}
-
-  /** 获取当前合成台可用的配方 */
-  getAvailableRecipes(station: 'ship' | 'portable'): Recipe[] {
-    return this.recipes.filter(r => r.station === station || r.station === 'ship');
-  }
-
-  /** 检查玩家是否拥有足够材料 */
-  canCraft(recipeId: string, srcLayer: keyof GameSession['inventories']): boolean {
-    const recipe = this.recipes.find(r => r.id === recipeId);
-    if (!recipe) return false;
-    const grid = this.session.inventories[srcLayer];
-    if (!grid) return false;
-
-    // 临时拷贝网格计数
-    const available = new Map<string, number>();
-    for (const row of grid) {
-      for (const cell of row) {
-        if (cell) available.set(cell.itemId, (available.get(cell.itemId) || 0) + cell.stackSize);
-      }
-    }
-    for (const input of recipe.inputs) {
-      if ((available.get(input.itemId) || 0) < input.count) return false;
-    }
-    return true;
-  }
-
-  /** 执行合成 */
-  craft(recipeId: string, srcLayer: keyof GameSession['inventories'], dstLayer: keyof GameSession['inventories']): boolean {
-    const recipe = this.recipes.find(r => r.id === recipeId);
-    if (!recipe || !this.canCraft(recipeId, srcLayer)) return false;
-
-    // 扣材料
-    for (const input of recipe.inputs) {
-      this.itemManager.removeItem(srcLayer, input.itemId, input.count);
-    }
-
-    // 产出物（先判断目标网格是否有空间）
-    const output = recipe.output;
-    if (!this.itemManager.hasSpace(dstLayer, output.itemId, output.count)) {
-      // 回滚材料
-      for (const input of recipe.inputs) {
-        this.itemManager.addItem(srcLayer, input.itemId, input.count);
-      }
-      return false;
-    }
-    this.itemManager.addItem(dstLayer, output.itemId, output.count);
-    return true;
-  }
-}
-3. InteractionManager（交互管理）
-typescript
-// src/systems/interaction/InteractionManager.ts
-import { GameSession } from '../../core/Session';
-import { ItemManager } from '../inventory/ItemManager';
-
-export interface Interactable {
-  id: string;
-  type: 'item' | 'npc' | 'crafting_table' | 'container' | 'exit';
-  data?: any;
-}
-
-export interface InteractionContext {
-  session: GameSession;
-  itemManager: ItemManager;
-  // 对话系统后续接入
-}
-
-export class InteractionManager {
-  constructor(private ctx: InteractionContext) {}
-
-  // ---- 核心：处理任何交互 ----
-  interact(target: Interactable): { action: string; payload?: any; message?: string } {
-    switch (target.type) {
-      case 'item':
-        return this.handleItem(target);
-      case 'crafting_table':
-        return this.handleCraftingTable(target);
-      case 'npc':
-        return this.handleNpc(target);
-      case 'container':
-        return this.handleContainer(target);
-      case 'exit':
-        return { action: 'exit', message: '返回舰船' };
-      default:
-        return { action: 'none', message: '无法交互' };
-    }
-  }
-
-  private handleItem(target: Interactable): { action: string; payload?: any } {
-    // 物品交互：返回物品详情，UI 层决定展示什么
-    return {
-      action: 'show_item_detail',
-      payload: {
-        itemId: target.data?.itemId,
-        grid: target.data?.grid,
-        row: target.data?.row,
-        col: target.data?.col,
-      }
-    };
-  }
-
-  private handleCraftingTable(target: Interactable): { action: string; payload?: any } {
-    return {
-      action: 'open_crafting',
-      payload: {
-        station: target.data?.level || 'portable', // 'ship' 或 'portable'
-      }
-    };
-  }
-
-  private handleNpc(target: Interactable): { action: string; payload?: any } {
-    return {
-      action: 'start_dialogue',
-      payload: {
-        npcId: target.data?.npcId,
-        dialogueTree: target.data?.dialogueTree || 'default',
-      }
-    };
-  }
-
-  private handleContainer(target: Interactable): { action: string; payload?: any } {
-    // 容器（箱子/补给箱）交互
-    return {
-      action: 'open_container',
-      payload: {
-        containerId: target.data?.containerId,
-        inventory: target.data?.inventory, // 容器内的物品列表
-      }
-    };
-  }
-
-  // ---- 快捷辅助：拾取（WorldMode 专用） ----
-  pickup(itemId: string, fromWorld: boolean = true): boolean {
-    // 从世界拾取 → 进入玩家背包 (L3)
-    return this.ctx.itemManager.addItem('player', itemId, 1);
-  }
-}
-🖥️ 第二部分：UI 层（舰船与世界的专属管理器）
-4. ShipUIManager（舰船 UI）
-typescript
-// src/ui/ship/ShipUIManager.ts
-import { BaseInteractionUI } from '../BaseInteractionUI';
-import { GameSession } from '../../core/Session';
-import { ItemManager } from '../../systems/inventory/ItemManager';
-import { CraftingManager } from '../../systems/inventory/CraftingManager';
-import { InteractionManager } from '../../systems/interaction/InteractionManager';
-import { renderItemSlot } from '../components/ItemSlot';
-import { renderDialog } from '../components/DialogBubble';
-
-export class ShipUIManager extends BaseInteractionUI {
-  private currentTab: 'action' | 'formation' | 'operators' = 'action';
-  private inventoryLayer: keyof GameSession['inventories'] = 'base';
-  private root: HTMLDivElement;
-
-  // ★ 持有业务逻辑层
-  constructor(
-    private session: GameSession,
-    private itemManager: ItemManager,
-    private craftingManager: CraftingManager,
-    private interactionManager: InteractionManager,
-  ) {
-    super();
-    this.buildRoot();
-  }
-
-  private buildRoot(): void {
-    this.root = document.createElement('div');
-    this.root.id = 'ship-ui-root';
-    this.root.style.cssText = `
-      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      pointer-events: none; z-index: 100;
+  private createCell(
+    slot: ItemInstance | null,
+    size: number,
+    layer: string,
+    row: number,
+    col: number,
+    onSlotClick?: (e: InventorySlotClickEvent) => void,
+  ): HTMLElement {
+    const el = document.createElement('div');
+    el.style.cssText = `
+      width:${size}px; height:${size}px;
+      background:rgba(255,255,255,0.05);
+      border:1px solid ${slot ? '#4466aa' : '#2a2a4a'};
+      border-radius:2px;
+      display:flex; align-items:center; justify-content:center;
+      font-size:10px; color:#8af; position:relative;
+      cursor:${slot ? 'pointer' : 'default'};
+      overflow:hidden;
     `;
-    document.body.appendChild(this.root);
 
-    // 标题栏
-    // 三面板按钮（行动/编队/干员）
-    // 面板容器
-    this.render();
-  }
-
-  render(): void {
-    // 清空面板区，根据 currentTab 重新渲染
-    // 调用 ItemManager.getItems() 获取数据
-    // 用 renderItemSlot 生成网格
-  }
-
-  // ---- Tab 切换（由按钮事件触发） ----
-  switchTab(tab: 'action' | 'formation' | 'operators'): void {
-    this.currentTab = tab;
-    this.render();
-  }
-
-  // ---- 切换到特定背包层（编队面板内） ----
-  showInventoryLayer(layer: keyof GameSession['inventories']): void {
-    this.inventoryLayer = layer;
-    this.render();
-  }
-
-  // ---- ★ 打开合成台面板（由 InteractionManager 触发） ----
-  openCrafting(station: 'ship' | 'portable'): void {
-    const recipes = this.craftingManager.getAvailableRecipes(station);
-    this.openPanel({
-      id: 'crafting-panel',
-      onOpen: () => { /* 记录打开状态 */ },
-      onClose: () => { /* 清理 */ },
-      render: () => {
-        const div = document.createElement('div');
-        div.dataset.panelId = 'crafting-panel';
-        div.innerHTML = `<h3>${station === 'ship' ? '舰船' : '便携'}合成台</h3>`;
-        // 渲染配方列表
-        recipes.forEach(r => {
-          const btn = document.createElement('button');
-          btn.textContent = `${r.name} (${r.inputs.map(i => `${i.itemId}x${i.count}`).join('+')})`;
-          btn.onclick = () => {
-            if (this.craftingManager.craft(r.id, 'player', 'player')) {
-              // 合成成功，刷新 UI
-              this.render();
-            }
-          };
-          div.appendChild(btn);
-        });
-        // 关闭按钮
-        const close = document.createElement('button');
-        close.textContent = '关闭';
-        close.onclick = () => this.closePanel();
-        div.appendChild(close);
-        return div;
+    if (slot) {
+      // ★ 显示物品图标（纹理）
+      try {
+        const tex = this.iconRegistry.getIcon(slot.itemId);
+        const img = document.createElement('img');
+        // 将纹理转为图片（简便做法，生产环境建议用 Canvas 或直接 background-image）
+        const canvas = document.createElement('canvas');
+        canvas.width = tex.image.width;
+        canvas.height = tex.image.height;
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(tex.image, 0, 0);
+        img.src = canvas.toDataURL();
+        img.style.cssText = `width:80%;height:80%;object-fit:contain;`;
+        el.appendChild(img);
+      } catch {
+        // 降级显示文字
+        el.textContent = slot.itemId.slice(0, 3);
       }
-    });
-  }
 
-  // ---- ★ 打开物品详情（由网格点击触发） ----
-  openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
-    const slot = this.session.inventories[layer]?.[row]?.[col];
-    if (!slot) return;
-    this.openPanel({
-      id: 'item-detail',
-      onOpen: () => {},
-      onClose: () => {},
-      render: () => {
-        const div = document.createElement('div');
-        div.dataset.panelId = 'item-detail';
-        div.innerHTML = `
-          <h3>${slot.itemId}</h3>
-          <p>数量: ${slot.stackSize}</p>
-          <button data-action="use">使用</button>
-          <button data-action="drop">丢弃</button>
-          <button data-action="close">关闭</button>
+      // 数量角标
+      if (slot.stackSize > 1) {
+        const count = document.createElement('span');
+        count.style.cssText = `
+          position:absolute; bottom:1px; right:3px;
+          font-size:9px; color:#6af; text-shadow:0 0 3px #000;
         `;
-        div.querySelector('[data-action="use"]')?.addEventListener('click', () => {
-          const result = this.itemManager.useItem(layer, row, col);
-          if (result.success) {
-            this.closePanel();
-            this.render(); // 刷新背包
-          }
-        });
-        div.querySelector('[data-action="close"]')?.addEventListener('click', () => this.closePanel());
-        return div;
+        count.textContent = `x${slot.stackSize}`;
+        el.appendChild(count);
       }
-    });
-  }
 
-  // ---- ★ 打开对话（由 InteractionManager 触发） ----
-  openDialogue(npcId: string, dialogueTree: string): void {
-    this.openPanel({
-      id: `dialogue-${npcId}`,
-      onOpen: () => {},
-      onClose: () => {},
-      render: () => {
-        const div = document.createElement('div');
-        div.dataset.panelId = `dialogue-${npcId}`;
-        div.innerHTML = `<div class="dialogue-bubble">${npcId}: 你好，博士</div>`;
-        // 模拟对话选项
-        const closeBtn = document.createElement('button');
-        closeBtn.textContent = '结束对话';
-        closeBtn.onclick = () => this.closePanel();
-        div.appendChild(closeBtn);
-        return div;
-      }
-    });
-  }
-
-  override dispose(): void {
-    super.dispose();
-    this.root.remove();
-  }
-}
-5. WorldUIManager（世界 UI）
-typescript
-// src/ui/world/WorldUIManager.ts（重写自 UILayer）
-import { BaseInteractionUI } from '../BaseInteractionUI';
-import { Minimap } from './Minimap';
-import { PlayerHud } from './PlayerHud';
-import { Crosshair } from './Crosshair';
-import { FloatingText } from './FloatingText';
-import { GameSession } from '../../core/Session';
-import { ItemManager } from '../../systems/inventory/ItemManager';
-import { InteractionManager } from '../../systems/interaction/InteractionManager';
-
-export class WorldUIManager extends BaseInteractionUI {
-  private minimap: Minimap;
-  private hud: PlayerHud;
-  private crosshair: Crosshair;
-  private floatingTexts: FloatingText[] = [];
-
-  // ★ 交互提示（按E拾取）
-  private interactPrompt: HTMLDivElement;
-
-  constructor(
-    private session: GameSession,
-    private itemManager: ItemManager,
-    private interactionManager: InteractionManager,
-  ) {
-    super();
-    this.minimap = new Minimap(/* raster */);
-    this.hud = new PlayerHud();
-    this.crosshair = new Crosshair();
-    this.buildInteractPrompt();
-  }
-
-  private buildInteractPrompt(): void {
-    this.interactPrompt = document.createElement('div');
-    this.interactPrompt.style.cssText = `
-      position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
-      color: #fff; background: rgba(0,0,0,0.7); padding: 8px 16px;
-      border-radius: 4px; display: none; z-index: 200;
-      font-size: 14px; pointer-events: none;
-    `;
-    this.interactPrompt.textContent = '按 E 拾取';
-    document.body.appendChild(this.interactPrompt);
-  }
-
-  // ---- 每帧更新（高频） ----
-  update(dt: number, ctx: {
-    px: number; pz: number; yaw: number;
-    entities: any[];
-    hp: number; maxHp: number;
-    nearbyItem?: { itemId: string; distance: number };
-  }): void {
-    this.minimap.update(ctx.px, ctx.pz, ctx.yaw, ctx.entities);
-    this.hud.update(ctx.hp, ctx.maxHp);
-
-    // 交互提示
-    if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
-      this.interactPrompt.textContent = `按 E 拾取 ${ctx.nearbyItem.itemId}`;
-      this.interactPrompt.style.display = 'block';
-    } else {
-      this.interactPrompt.style.display = 'none';
-    }
-
-    // 浮动文字（自动飘动消失）
-    for (let i = this.floatingTexts.length - 1; i >= 0; i--) {
-      if (this.floatingTexts[i].update(dt)) {
-        this.floatingTexts[i].dispose();
-        this.floatingTexts.splice(i, 1);
-      }
-    }
-  }
-
-  // ---- ★ 显示浮动伤害数字（WorldMode 调用） ----
-  showFloatingText(x: number, y: number, text: string, color: string = '#ff4444'): void {
-    const ft = new FloatingText(x, y, text, color);
-    this.floatingTexts.push(ft);
-  }
-
-  // ---- ★ 打开对话（WorldMode 触发，轻量版，不阻塞操作） ----
-  openDialogue(npcId: string, text: string): void {
-    // 世界中的对话不阻塞操作，显示在角落
-    const bubble = document.createElement('div');
-    bubble.style.cssText = `
-      position: fixed; bottom: 200px; left: 50%; transform: translateX(-50%);
-      background: rgba(0,0,0,0.85); color: #fff; padding: 16px 24px;
-      border-radius: 8px; max-width: 400px; z-index: 150;
-      border: 1px solid #4466aa;
-    `;
-    bubble.textContent = `${npcId}: ${text}`;
-    document.body.appendChild(bubble);
-    setTimeout(() => bubble.remove(), 3000);
-  }
-
-  // ---- ★ 打开容器/拾取结果（WorldMode 触发） ----
-  showPickupResult(itemId: string, success: boolean): void {
-    const msg = success ? `拾取了 ${itemId}` : `背包已满，无法拾取 ${itemId}`;
-    // 用浮动文字展示
-    this.showFloatingText(0, -50, msg, success ? '#44dd88' : '#ff4444');
-  }
-
-  override dispose(): void {
-    super.dispose();
-    this.minimap.dispose();
-    this.hud.dispose();
-    this.crosshair.dispose();
-    this.interactPrompt.remove();
-    this.floatingTexts.forEach(ft => ft.dispose());
-    this.floatingTexts = [];
-  }
-}
-🔌 第三部分：连接器（在 Mode 中组装）
-ShipMode 的组装方式
-typescript
-// src/modes/ShipMode.ts（片段）
-export class ShipMode implements IGameMode {
-  private itemManager!: ItemManager;
-  private craftingManager!: CraftingManager;
-  private interactionManager!: InteractionManager;
-  private uiManager!: ShipUIManager;
-
-  enter(ctx: IGameModeContext): void {
-    // ① 初始化业务逻辑层
-    this.itemManager = new ItemManager(ctx.session);
-    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
-    this.interactionManager = new InteractionManager({
-      session: ctx.session,
-      itemManager: this.itemManager,
-    });
-
-    // ② 初始化 UI 层
-    this.uiManager = new ShipUIManager(
-      ctx.session,
-      this.itemManager,
-      this.craftingManager,
-      this.interactionManager,
-    );
-
-    // ③ 设置 3D 点击交互：点击建筑 → 调用 interactionManager.interact()
-    this.setupRaycaster((target) => {
-      const result = this.interactionManager.interact(target);
-      // 根据 result.action 决定 UI 行为
-      if (result.action === 'open_crafting') {
-        this.uiManager.openCrafting(result.payload.station);
-      } else if (result.action === 'show_item_detail') {
-        this.uiManager.openItemDetail(
-          result.payload.grid,
-          result.payload.row,
-          result.payload.col,
-        );
-      } else if (result.action === 'start_dialogue') {
-        this.uiManager.openDialogue(result.payload.npcId, result.payload.dialogueTree);
-      }
-    });
-  }
-
-  exit(): void {
-    this.uiManager.dispose();
-    // 业务逻辑层无需销毁（无状态）
-  }
-}
-WorldMode 的组装方式
-typescript
-// src/modes/WorldMode.ts（片段）
-export class WorldMode implements IGameMode {
-  private itemManager!: ItemManager;
-  private craftingManager!: CraftingManager;
-  private interactionManager!: InteractionManager;
-  private uiManager!: WorldUIManager;
-
-  enter(ctx: WorldModeEnterContext): void {
-    // ① 业务逻辑层（与 ShipMode 共享同样的类，但实例独立）
-    this.itemManager = new ItemManager(ctx.session);
-    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
-    this.interactionManager = new InteractionManager({
-      session: ctx.session,
-      itemManager: this.itemManager,
-    });
-
-    // ② UI 层（世界专用）
-    this.uiManager = new WorldUIManager(ctx.session, this.itemManager, this.interactionManager);
-  }
-
-  update(dt: number): void {
-    // ... 现有战斗逻辑 ...
-
-    // ★ 检测附近可交互物品
-    const nearbyItem = this.findNearestItem();
-    this.uiManager.update(dt, {
-      px: this.player.position.x,
-      pz: this.player.position.z,
-      yaw: this.cameraCtrl.worldYaw,
-      entities: this.entities.allBases(),
-      hp: this.player.hp,
-      maxHp: this.player.maxHp,
-      nearbyItem: nearbyItem,
-    });
-
-    // ★ 按 E 交互
-    if (input.held.interact && nearbyItem) {
-      const result = this.interactionManager.interact({
-        type: 'item',
-        id: nearbyItem.itemId!,
-        data: { itemId: nearbyItem.itemId!, grid: 'player' },
+      el.addEventListener('click', () => {
+        onSlotClick?.({ layer, row, col, item: slot });
       });
-      if (result.action === 'show_item_detail') {
-        // 世界模式中拾取直接入包，不弹详情
-        const success = this.itemManager.addItem('player', nearbyItem.itemId!, 1);
-        this.uiManager.showPickupResult(nearbyItem.itemId!, success);
-        if (success) nearbyItem.dispose(); // 销毁世界中的物品实体
-      }
     }
-  }
 
-  exit(): void {
-    this.uiManager.dispose();
-    // 业务逻辑层随模式销毁
+    return el;
   }
 }
-📁 最终目录结构
-text
-src/
-├── core/                      # 不变
-├── entity/                    # 不变
-├── modes/
-│   ├── ShipMode.ts            # 组装 ShipUIManager + 业务层
-│   └── WorldMode.ts           # 组装 WorldUIManager + 业务层
-├── systems/                   # ★ 业务逻辑层（无 UI 依赖）
-│   ├── inventory/
-│   │   ├── ItemManager.ts     # 物品增删改查、使用
-│   │   └── CraftingManager.ts # 配方管理、合成
-│   └── interaction/
-│       └── InteractionManager.ts # 交互分发器
-├── ui/                        # ★ UI 层
-│   ├── BaseInteractionUI.ts   # 弹窗栈 + 输入阻塞（共用基类）
-│   ├── components/            # ★ 共享 UI 零件
-│   │   ├── ItemSlot.ts
-│   │   ├── DialogBubble.ts
-│   │   └── Button.ts
-│   ├── ship/                  # 舰船专用（低频、复杂面板）
-│   │   └── ShipUIManager.ts
-│   └── world/                 # 世界专用（高频、轻量 HUD）
-│       ├── WorldUIManager.ts
-│       ├── Minimap.ts
-│       ├── PlayerHud.ts
-│       ├── FloatingText.ts
-│       └── Crosshair.ts
-├── config/
-│   ├── items.json             # 物品配置（含 maxStack、effect）
-│   ├── craftRecipes.json      # 合成配方
-│   └── dialogues.json         # 对话树（后续）
-└── platform/input/
-    └── DesktopBinding.ts      # 增加 __UI_BLOCKING__ 检查
-✅ 这套架构的核心优势
-优势	说明
-业务逻辑与 UI 完全解耦	ItemManager/CraftingManager 不知道自己在舰船还是世界中被调用。
-舰船与世界 UI 独立进化	ShipUIManager 可以添加复杂的拖拽、右键菜单；WorldUIManager 只需轻量 HUD。
-共用的 UI 基类	BaseInteractionUI 统一管理弹窗栈和输入阻塞，新面板只需继承。
-共用的 UI 组件	renderItemSlot 在舰船和世界的背包/拾取提示中保持一致。
-开闭原则	加新交互（如“商店”）只需：① 在 Interactable 加类型；② 在 InteractionManager 加 handler；③ 在 UI 加面板渲染。
-可测试	ItemManager 可以脱离 UI 单独测试，只需传入 Mock Session。
-你现在可以并行开发：一个人（或同一时间）做 ShipUIManager 的复杂面板，另一个人做 WorldUIManager 的 HUD，底层 ItemManager 共用，互不干扰。
+🔧 修改 4：在 ShipUIManager 中接入共享渲染器
+文件：ui/ship/ShipUIManager.ts
+
+替换范围：第 257 行到第 287 行（renderGrid 方法）全部替换为：
+
+typescript
+  /** 使用共享渲染器绘制网格 */
+  private renderGrid(container: HTMLElement, grid: InventoryGrid, layer: string): void {
+    if (!grid || grid.length === 0) {
+      container.innerHTML = '<div style="color:#666;">空网格</div>';
+      return;
+    }
+    // 使用共享渲染器（需在构造时或此处创建）
+    if (!this.gridRenderer) {
+      this.gridRenderer = new InventoryGridRenderer(this.itemManager);
+    }
+    this.gridRenderer.render(
+      container,
+      grid,
+      layer,
+      (e) => this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col),
+      48,
+    );
+  }
+并修改 ShipUIManager 的字段声明（在类顶部 private gridRenderer: InventoryGridRenderer | null = null; 并 import）。
+
+🔧 修改 5：在 WorldMode 中增加“按 I 打开背包”功能
+文件：modes/WorldMode.ts
+
+在 update 方法内（约 220 行，this.binding.update(); 之后）增加：
+
+typescript
+    // ★ 按 I 键打开/关闭背包（Tab 或 I）
+    if (this.binding.consumeInventory()) {
+      this.worldUIManager.toggleInventory();
+    }
+在 DesktopBinding.ts 中增加按键映射和消费方法：
+
+typescript
+// 在 KEY_MAP 附近加（非方向键，只检测按下）
+// 在 onKeyDown 中增加：
+if (e.code === 'KeyI') this.state.pressed.inventory = true;
+
+// 在 DesktopBinding 类中加方法：
+consumeInventory(): boolean {
+  const v = this.state.pressed.inventory;
+  this.state.pressed.inventory = false;
+  return v;
+}
+并在 InputActions.ts 中给 pressed 加字段 inventory: boolean。
+
+4. 总结（你的设计完全成立）
+你设想的这套架构，90% 已经存在于你的 Session + ItemManager 里了，你缺的只是：
+
+一个纹理映射服务（ItemIconRegistry，把 itemId 变成可视图标）。
+
+一个纯渲染组件（InventoryGridRenderer，让 Ship 和 World 共用）。
+
+把“打开背包”的入口加到 WorldMode。
+
+做完这一步，你的背包系统就会变成：
+
+数据层：Session.inventories（多个容器，网格位置持久化）。
+
+服务层：ItemManager（增删改查）+ ItemIconRegistry（图标映射）。
+
+UI 层：InventoryGridRenderer（纯展示，无 Session 依赖，完全解耦）。
+
+这和你的构想严丝合缝。你现在的代码底座非常扎实，只需要把 UI 层抽出来复用就行了。要我把上面这 5 个修改指令整理成你要求的格式（带文件路径和行号）一次性发给你吗？

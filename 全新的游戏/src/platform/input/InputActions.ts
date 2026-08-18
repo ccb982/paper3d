@@ -32,6 +32,7 @@ export interface InputActions {
     skill: boolean;
     interact: boolean;
     jump: boolean;
+    inventory: boolean;
   };
   /** ★ 按住状态（持续，非消费式；长按语义用——如按住跳跃=连跳、按住攻击=持续发射） */
   held: {
@@ -52,7 +53,7 @@ export function createInputActions(): InputActions {
     lookAxis: { x: 0, y: 0 },
     zoomAxis: 0,
     pointer: null,
-    pressed: { attack: false, dodge: false, skill: false, interact: false, jump: false },
+    pressed: { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false },
     held: { attack: false, jump: false, dodge: false, skill: false, interact: false },
     interactions: [],
   };
