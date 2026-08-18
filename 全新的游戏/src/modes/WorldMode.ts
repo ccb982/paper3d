@@ -19,12 +19,10 @@ import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
-import { Crosshair } from '../services/ui/Crosshair';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
-import { UILayer } from '../services/ui/UILayer';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
@@ -34,6 +32,10 @@ import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager } from '../services/combat/BulletManager';
 import { executeAttack } from '../services/combat/Attack';
+import { ItemManager } from '../systems/inventory/ItemManager';
+import { CraftingManager } from '../systems/inventory/CraftingManager';
+import { InteractionManager } from '../systems/interaction/InteractionManager';
+import { WorldUIManager } from '../ui/world/WorldUIManager';
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -70,8 +72,15 @@ export class WorldMode implements IGameMode {
 
   private cameraCtrl!: CameraController;
   private raster!: RasterMap;
-  private crosshair!: Crosshair;
-  private ui!: UILayer;
+
+  // ★ 业务逻辑层（共享模块）
+  private itemManager!: ItemManager;
+  private craftingManager!: CraftingManager;
+  private interactionManager!: InteractionManager;
+
+  // ★ UI 层（世界专属）
+  private worldUIManager!: WorldUIManager;
+
   private bullets!: BulletManager;
   private bulletCooldown = 0;
   private chunkMeshes = new Map<number, THREE.Mesh>();
@@ -180,11 +189,18 @@ export class WorldMode implements IGameMode {
     // ---- 相机 ----
     this.cameraCtrl = new CameraController(this.camera);
 
-    // ---- 准星 ----
-    this.crosshair = new Crosshair();
+    // ---- ★ 初始化业务逻辑层（共享模块） ----
+    this.itemManager = new ItemManager(ctx.session);
+    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
+    this.interactionManager = new InteractionManager({
+      session: ctx.session,
+      itemManager: this.itemManager,
+    });
 
-    // ---- UI 层 ----
-    this.ui = new UILayer(this.raster);
+    // ---- ★ UI 层（世界专属） ----
+    this.worldUIManager = new WorldUIManager(
+      ctx.session, this.itemManager, this.interactionManager, this.raster,
+    );
 
     // ---- 子弹池 ----
     this.bullets = new BulletManager(
@@ -220,7 +236,12 @@ export class WorldMode implements IGameMode {
     this.syncChunks(pp.x, pp.y);
 
     // ★ 小地图更新
-    this.ui.update(pp.x, pp.y, this.cameraCtrl.worldYaw, this.entities.allBases(), this.player.hp, this.player.maxHp);
+    this.worldUIManager.update(dt, {
+      px: pp.x, pz: pp.y,
+      yaw: this.cameraCtrl.worldYaw,
+      entities: this.entities.allBases(),
+      hp: this.player.hp, maxHp: this.player.maxHp,
+    });
 
     // AI 上下文
     this.aiCtx.dt = dt;
@@ -295,8 +316,7 @@ export class WorldMode implements IGameMode {
     this.entities.clear();
 
     // ---- 准星 / UI / 子弹 ----
-    this.crosshair?.dispose();
-    this.ui?.dispose();
+    this.worldUIManager?.dispose();
     this.bullets?.dispose();
     CharacterFxManager.dispose();
 

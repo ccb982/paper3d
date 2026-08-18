@@ -1,2971 +1,722 @@
-🏛️ 完整架构设计（综合版）
-以下设计综合了：
+你说得对，这就是一个“三层共享架构”。我先画出整体分层，再逐层展开：
 
-你的《架构设计.md》（模式切换、Session、四层背包、AI 行为库等）
-
-你已有的代码实现（EntityBase 体系、RasterMap、BulletManager、DamagePipeline 等）
-
-我们对话中达成的共识（存档点时机、藏品配置驱动、四层背包、黑冠等）
-
-0. 架构总览图
+🏛️ 完整三层架构图
 text
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                              应用层（Game Modes）                                   │
-│  ┌──────┐    ┌──────┐    ┌──────┐    ┌──────┐    ┌────────┐    ┌────────┐        │
-│  │ BOOT  │ →  │ SHIP │ →  │WORLD │ →  │ BOSS │ →  │ RESULT │ →  │ BOOT   │        │
-│  │ 启动  │    │ 舰船  │    │ 战斗  │    │ 决战  │    │ 结算   │    │ (循环) │        │
-│  └──────┘    └──────┘    └──────┘    └──────┘    └────────┘    └────────┘        │
-│                     │           │                       │                          │
-│                     ▼           ▼                       ▼                          │
-│              ┌──────────┐ ┌──────────┐          ┌────────────┐                    │
-│              │ ModeManager│ │ Session  │          │  EventBus  │                    │
-│              │ 场景切换   │ │ 持久数据  │          │  事件总线   │                    │
-│              └──────────┘ └──────────┘          └────────────┘                    │
-├──────────────────────────────────────────────────────────────────────────────────────┤
-│                              系统层（Systems）                                      │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌────────────┐  │
-│  │  实体系统    │ │  战斗系统    │ │  地图系统    │ │  抽卡系统   │ │  背包系统   │  │
-│  │ EntityBase  │ │ DamagePipe  │ │ RasterMap   │ │ GachaPool  │ │ Inventory  │  │
-│  │ + 子类体系  │ │ AIStateMachine│ │ ChunkGen   │ │ 保底/结果  │ │ 四层网格   │  │
-│  │ + 特效槽    │ │ Attack执行器 │ │ 空间索引    │ │            │ │ 合成/采集  │  │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘ └────────────┘  │
-├──────────────────────────────────────────────────────────────────────────────────────┤
-│                              服务层（Services）                                     │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐            │
-│  │  物理     │ │  渲染    │ │  相机    │ │  资源    │ │  特效播放器  │            │
-│  │PhysicsWorld│ │FXRenderer│ │CameraCtrl│ │Asset    │ │FluidEffect  │            │
-│  │Collision  │ │FTXQuad   │ │ 跟随/瞄准 │ │FtxAsset │ │HitEffectView│            │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────────┘            │
-├──────────────────────────────────────────────────────────────────────────────────────┤
-│                              核心运行时（Core Runtime）                              │
-│  ┌──────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐              │
-│  │ GameLoop │ │ StateMachine │ │   Session    │ │   SaveSystem     │              │
-│  │ rAF驱动   │ │ 模式状态机   │ │  可序列化    │ │  安全点触发      │              │
-│  └──────────┘ └──────────────┘ └──────────────┘ └──────────────────┘              │
-├──────────────────────────────────────────────────────────────────────────────────────┤
-│                              平台抽象层（Platform Abstraction）                      │
-│  ┌────────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐        │
-│  │ PlatformAdapter│ │ InputActions │ │  Storage     │ │  Audio           │        │
-│  │ Canvas/GL      │ │ 抽象输入语义  │ │  localStorage │ │  BGM/SFX         │        │
-│  └────────────────┘ └──────────────┘ └──────────────┘ └──────────────────┘        │
-├──────────────────────────────────────────────────────────────────────────────────────┤
-│                              平台实现（Platforms）                                   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐                                           │
-│  │   Web    │ │  微信    │ │  抖音    │                                           │
-│  │  开发默认 │ │  小游戏   │ │  小游戏   │                                           │
-│  └──────────┘ └──────────┘ └──────────┘                                           │
-└──────────────────────────────────────────────────────────────────────────────────────┘
-1. 模式状态机（ModeManager + 状态流转）
-1.1 状态定义
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         应用层（Modes）                                │
+│  ┌─────────────────────────┐    ┌─────────────────────────────────┐   │
+│  │       ShipMode          │    │          WorldMode              │   │
+│  │  （鼠标点击驱动，低频）  │    │   （按E/走近驱动，高频实时）    │   │
+│  └───────────┬─────────────┘    └───────────────┬─────────────────┘   │
+│              │                                   │                     │
+│              ▼                                   ▼                     │
+│  ┌─────────────────────────┐    ┌─────────────────────────────────┐   │
+│  │     ShipUIManager       │    │        WorldUIManager           │   │
+│  │  · 三面板（行动/编队/干员）│    │  · HUD（血条/小地图/准星）     │   │
+│  │  · 背包网格（L1~L4查看）│    │  · 交互提示（按E拾取/对话）    │   │
+│  │  · 合成台面板          │    │  · 浮动伤害数字                │   │
+│  │  · 物品详情弹窗        │    │  · 临时背包快捷栏              │   │
+│  │  · 对话气泡            │    │  · 对话气泡（战斗中轻量版）    │   │
+│  └─────────────────────────┘    └─────────────────────────────────┘   │
+│              │                                   │                     │
+│              └───────────────┬───────────────────┘                     │
+│                              ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    共享 UI 组件层                               │   │
+│  │  ItemSlot / DialogBubble / Button / ModalContainer / Toast     │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                         │
+│                              ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                   业务逻辑层（三大模块）                        │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐    │   │
+│  │  │ ItemManager │  │Interaction  │  │  CraftingManager    │    │   │
+│  │  │ · 物品增删  │  │ · 拾取      │  │  · 配方注册         │    │   │
+│  │  │ · 堆叠/移动 │  │ · 对话触发  │  │  · 材料检查         │    │   │
+│  │  │ · 使用效果  │  │ · 交互目标  │  │  · 产出物生成       │    │   │
+│  │  │ · 持久化    │  │ · 上下文    │  │  · 合成台类型判断   │    │   │
+│  │  └─────────────┘  └─────────────┘  └─────────────────────┘    │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              │                                         │
+│                              ▼                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                   核心运行时（Core）                           │   │
+│  │  Session（可序列化数据） │ SaveSystem │ EventBus               │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────┘
+🧩 第一部分：业务逻辑层（三大模块）
+这是舰船和世界共用的纯逻辑，不涉及任何 UI 渲染，只操作 Session 数据。
+
+1. ItemManager（物品管理）
 typescript
-type ModeId = 'boot' | 'ship' | 'world' | 'boss' | 'result';
+// src/systems/inventory/ItemManager.ts
+import { GameSession, InventoryGrid, ItemInstance, addItemToGrid, removeItemFromGrid, moveItemBetweenGrids } from '../../core/Session';
+import itemsConfig from '../../config/items.json';
 
-interface Mode {
-  id: ModeId;
-  onEnter(ctx: ModeContext): void;
-  onExit(): void;
-  update(dt: number): void;
-  render(): void;
-}
-1.2 模式切换与数据保留规则
-text
-BOOT（启动）
-  ├── 加载核心资源（WebAdapter、Renderer、Scene、Camera）
-  ├── 读取存档（SaveSystem.load）
-  │   ├── 有存档 → 重建 Session → 进入 SHIP
-  │   └── 无存档 → createNewSession() → 保存 → 进入 SHIP
-  └── 进入 SHIP
-
-SHIP（舰船日常）
-  ├── 持有完整的 Session（所有持久数据）
-  ├── 3D 舰船场景（MapLayer：地面 + 舰船模型 + L1仓库 + 出口 + NPC）
-  ├── UI 三层面板（行动/编队/干员）
-  ├── 交互：
-  │   ├── 点击 L1 仓库 → 打开仓库弹窗
-  │   ├── 点击出口 → 切换到“行动”面板
-  │   ├── 点击“招募抽卡” → 抽卡逻辑 → 保存 → 更新 UI
-  │   └── 点击“出击” → 计算战斗属性 → 进入 WORLD
-  └── 安全点：任何“返回舰船”时刻都调用 SaveSystem.save
-
-WORLD（大世界战斗）
-  ├── 接收：day（地图种子）+ PlayerCombatStats（战斗属性）+ onReturn 回调
-  ├── 运行时数据（不存档）：
-  │   ├── 地图地形（RasterMap）
-  │   ├── 实体（玩家/敌人/物品/子弹）
-  │   ├── 特效（死亡动画/受击染料）
-  │   └── 战斗中状态（技能 CD、AI 状态等）
-  ├── 退出时：
-  │   ├── 只回写：player.hp、player.maxHp
-  │   ├── 调用 onReturn 回调（上层负责保存）
-  │   └── 地图/实体/特效全部丢弃
-  └── 返回 SHIP
-
-BOSS（决战）- 预留
-RESULT（结算）- 预留
-2. Session 数据结构（最终版）
-只存“舰船上的永恒状态”，所有加成在出击时由 computeCombatStats 统一计算。
-
-typescript
-// src/core/Session.ts
-
-// ---- 1. 基础类型 ----
-
-/** 单个物品实例 */
-export interface ItemInstance {
-  itemId: string;      // 配置表 items.json 的 id
-  stackSize: number;   // 当前堆叠数量
+export interface UseItemResult {
+  success: boolean;
+  message?: string;
+  healAmount?: number;
+  ammoAmount?: number;
 }
 
-/** 网格背包：二维数组，null 表示空格 */
-export type InventoryGrid = (ItemInstance | null)[][];
+export class ItemManager {
+  constructor(private session: GameSession) {}
 
-/** 炮塔状态 */
-export interface TurretState {
-  slotId: number;
-  turretId: string;
-  ammo: number;
-}
-
-// ---- 2. 根对象 ----
-
-export interface GameSession {
-  // ----- ① 元信息 -----
-  meta: {
-    version: string;
-    day: number;                // ★ 当前天数（既是进度，也是地图种子来源）
-    totalDaysSurvived: number;
-    createdAt: string;
-    lastSavedAt: string;
-  };
-
-  // ----- ② ★ 玩家“裸装”基础属性（不含任何加成）-----
-  player: {
-    hp: number;
-    maxHp: number;
-    attackPower: number;
-    defense: number;
-  };
-
-  // ----- ③ ★ 四层背包 -----
-  inventories: {
-    base: InventoryGrid;        // L1: 舰船基地仓库（超大，如 30×30）
-    ship: InventoryGrid;        // L2: 探索飞船仓库（适中，如 8×10）
-    player: InventoryGrid;      // L3: 玩家自身背包（小型，如 4×6）
-    allies: Record<string, InventoryGrid>; // L4: 队友背包
-  };
-
-  // ----- ④ ★ 藏品/遗物（只存 ID 列表，效果由配置表驱动）-----
-  relics: {
-    owned: string[];            // 所有藏品 ID，包括黑冠
-    slots: (string | null)[];   // 槽位（快捷展示）
-  };
-
-  // ----- ⑤ 友军/干员 -----
-  allies: {
-    roster: string[];           // 已招募的干员 id 列表
-  };
-
-  // ----- ⑥ 舰船状态 -----
-  ship: {
-    hp: number;
-    maxHp: number;
-    shield: number;
-    armor: number;
-    techTree: string[];
-    turrets: TurretState[];
-  };
-
-  // ----- ⑦ 抽卡保底 -----
-  gacha: {
-    pityCounter: number;
-    totalPulls: number;
-  };
-
-  // ----- ⑧ 每日进度 -----
-  dayProgress: {
-    hasDepartedToday: boolean;
-  };
-}
-
-// ---- 3. 工具函数 ----
-
-export function createEmptyGrid(rows: number, cols: number): InventoryGrid {
-  return Array.from({ length: rows }, () => Array(cols).fill(null));
-}
-
-export function createNewSession(): GameSession {
-  return {
-    meta: {
-      version: '0.1.0',
-      day: 1,
-      totalDaysSurvived: 0,
-      createdAt: new Date().toISOString(),
-      lastSavedAt: new Date().toISOString(),
-    },
-    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2 },
-    inventories: {
-      base: createEmptyGrid(30, 30),
-      ship: createEmptyGrid(8, 10),
-      player: createEmptyGrid(4, 6),
-      allies: {},
-    },
-    relics: {
-      owned: ['black_crown'],
-      slots: Array(5).fill(null),
-    },
-    allies: { roster: [] },
-    ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
-    gacha: { pityCounter: 0, totalPulls: 0 },
-    dayProgress: { hasDepartedToday: false },
-  };
-}
-
-// ---- 4. ★ 唯一加成计算入口（出击时调用，完全配置驱动）----
-
-export interface RelicConfigEntry {
-  id: string;
-  type: 'carry' | 'permanent';
-  effect?: {
-    attackBonus?: number;
-    defenseBonus?: number;
-    hpBonus?: number;
-    multiplier?: number;
-    flatBonus?: { attackBonus?: number; defenseBonus?: number; hpBonus?: number };
-  };
-}
-
-export function computeCombatStats(
-  session: GameSession,
-  relicConfig: Record<string, RelicConfigEntry>,
-): PlayerCombatStats {
-  const base = session.player;
-  const day = session.meta.day;
-  const owned = session.relics.owned;
-
-  let bonusAttack = 0, bonusDefense = 0, bonusMaxHp = 0;
-  let multiplier = 1;
-
-  for (const id of owned) {
-    const cfg = relicConfig[id];
-    if (!cfg) continue;
-    if (cfg.type === 'carry') {
-      bonusAttack += cfg.effect?.attackBonus || 0;
-      bonusDefense += cfg.effect?.defenseBonus || 0;
-      bonusMaxHp += cfg.effect?.hpBonus || 0;
-    } else if (cfg.type === 'permanent') {
-      if (cfg.effect?.multiplier) {
-        multiplier *= Math.pow(cfg.effect.multiplier, day);
-      }
-      bonusAttack += cfg.effect?.flatBonus?.attackBonus || 0;
-      bonusDefense += cfg.effect?.flatBonus?.defenseBonus || 0;
-      bonusMaxHp += cfg.effect?.flatBonus?.hpBonus || 0;
-    }
+  // ---- 增删改（直接操作 Session.inventories） ----
+  
+  /** 添加物品到指定网格（自动堆叠） */
+  addItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    const grid = this.session.inventories[layer];
+    if (!grid) return false;
+    const maxStack = itemsConfig.items.find(i => i.id === itemId)?.maxStack || 99;
+    return addItemToGrid(grid as InventoryGrid, itemId, count, maxStack);
   }
 
-  return {
-    hp: base.hp,
-    maxHp: Math.floor(base.maxHp * multiplier) + bonusMaxHp,
-    attackPower: Math.floor(base.attackPower * multiplier) + bonusAttack,
-    defense: Math.floor(base.defense * multiplier) + bonusDefense,
-  };
-}
-3. 数据流（纵向与横向）
-3.1 纵向数据流（模式 → 系统 → 服务 → 平台）
-text
-┌──────────────────────────────────────────────────────────────────────────┐
-│  配置 JSON（内容）                                                       │
-│  ├── relics.json（藏品定义）                                            │
-│  ├── items.json（物品定义）                                             │
-│  ├── enemies.json（敌人定义）                                           │
-│  ├── gachaPool.json（卡池定义）                                         │
-│  └── ...                                                               │
-└────────────────────────────┬─────────────────────────────────────────────┘
-                             ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  系统层（Systems）读取配置 → 生成运行时数据                              │
-│  ├── RelicSystem → 持有藏品 ID 列表，出击时计算加成                     │
-│  ├── InventorySystem → 持有四层网格，管理物品                          │
-│  ├── GachaSystem → 持有卡池配置 + 保底计数（Session 存储）             │
-│  └── AISystem → 持有行为/条件注册表 + 敌人状态机                       │
-└────────────────────────────┬─────────────────────────────────────────────┘
-                             ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  核心运行时（Core Runtime）调度                                          │
-│  ├── ModeManager：切换模式（SHIP ↔ WORLD）                             │
-│  ├── Session：贯穿全局的持久数据                                        │
-│  └── EventBus：横向解耦通信                                            │
-└────────────────────────────┬─────────────────────────────────────────────┘
-                             ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  服务层（Services）执行具体操作                                          │
-│  ├── PhysicsWorld：物理步进 + 碰撞检测                                 │
-│  ├── RasterMap：地形数据 + 空间索引                                    │
-│  ├── CameraController：相机跟随 + 瞄准                                 │
-│  └── 特效播放器：FluidEffect + HitEffectView                          │
-└────────────────────────────┬─────────────────────────────────────────────┘
-                             ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│  平台抽象层 → 平台实现                                                   │
-│  ├── WebAdapter（开发）/ WeChatAdapter（发布）                         │
-│  ├── localStorage（存档）                                              │
-│  └── Audio（BGM/SFX）                                                 │
-└──────────────────────────────────────────────────────────────────────────┘
-3.2 横向通信（EventBus 规则）
-text
-判断标准 = "有没有非战斗系统要听这个事件"
-
-走总线（跨系统解耦）：
-├── UI 需要监听：拾取/抽卡/警报/对话/死亡/结算
-├── 跨模块通知：背包变动/遗物获得/科技树解锁
-└── 模式切换：ShipMode ↔ WorldMode 切换信号
-
-不走总线（模块内部直接调用）：
-├── 战斗内部：伤害/子弹命中/受击/死亡判定
-│   └── 战斗模块（combat/）集中处理，不 emit 到总线
-├── 每帧高频路径：移动/特效/相机（直接调用）
-└── 实体内部：EntityBase.update 骨架（模板方法）
-4. 实体系统架构（已有代码 + 设计对齐）
-4.1 实体基类体系
-text
-EntityBase（抽象基类）- 公共骨架
-├── 物理联动：physicsMode ('none' | 'kinematic' | 'read')
-├── 动画管线：assetRef + FrameAnimator + FrameState
-├── 渲染管线：FXRenderer（FTXQuad/特效网格）
-├── 附属特效：effectSlots（Map<name, EntityEffect>）
-├── 生命周期：update(行为→物理→动画→渲染→特效→空间索引) → dispose
-├── 钩子：onTakeDamage / onDeath / onCollision
-│
-├── CharacterBase（角色基类）- 继承 EntityBase
-│   ├── controller: CharacterController（输入/AI 驱动）
-│   ├── collisionVolume: ColliderShape + offsetY
-│   ├── 受击染料：hitDye（FluidEffect）
-│   ├── 死亡动画：playDeathAnim()
-│   │
-│   ├── Player（玩家）
-│   │   ├── 输入驱动（CharacterController.update）
-│   │   ├── 攻击：controller.attack()
-│   │   └── 死亡：播放死亡动画 + 传送复活（不销毁）
-│   │
-│   ├── Enemy（敌人）- 继承 CharacterBase
-│   │   ├── AIStateMachine（配置驱动）
-│   │   ├── 朝向：移动方向决定（非相机）
-│   │   ├── 注册/注销：aiSystem
-│   │   └── 死亡：动画 + 销毁
-│   │
-│   └── Ally（友军）- 预留
-│       ├── AIStateMachine（守卫/跟随模式）
-│       └── Ammo 组件（弹药驱动）
-│
-├── BulletEntity（子弹）- 继承 EntityBase
-│   ├── 无 asset（纯物理实体）
-│   ├── physicsMode: 'read'
-│   ├── 池化：activate/deactivate + recycle 回调
-│   ├── 命中：hitFx 回调 → attachHitEffect
-│   └── 渲染：BulletRenderer 消费快照
-│
-├── ItemBase（物品）- 继承 EntityBase
-│   ├── 物理：dynamic（掉落物）或 none（资源点）
-│   ├── 拾取：onCollision（玩家接触 → onPickup 回调）
-│   └── 血条：HealthBar（附属特效）
-│
-└── EffectBase - 预留（纯视觉特效实体）
-4.2 实体管理器
-typescript
-class EntityManager {
-  // 核心数据
-  private entities: Map<number, Entity>;      // 纯数据容器
-  private bases: Map<number, EntityBase>;     // 基类实例
-  private raster: RasterMap;                  // 空间索引
-
-  // 生命周期
-  create(opts: EntityCreateOptions): Entity;
-  register(base: EntityBase): void;
-  unregister(base: EntityBase): void;
-  destroy(id: number): void;
-  clear(): void;
-
-  // 每帧驱动
-  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void;
-  renderAll(camera: Camera): void;
-
-  // 查询（委托 RasterMap）
-  querySphere(x: number, z: number, r: number): EntityBase[];
-  queryRay(origin, dir, maxDist): EntityBase[];
-}
-5. 战斗系统架构
-5.1 伤害管线（可插拔 modifiers）
-typescript
-// DamagePipeline.ts
-type DamageModifier = (ctx: DamageContext) => void;
-
-const PIPELINE: DamageModifier[] = [
-  modifierDodge,    // 闪避 → 伤害归零
-  modifierBlock,    // 格挡 → ×blockMult
-  modifierShield,   // 护盾 → 先扣护盾
-  modifierDefense,  // 减法防御
-  modifierCrit,     // 暴击 → ×critMult
-  modifierClamp,    // 下限取整
-];
-
-function resolveDamage(base, source, target, type): DamageResult;
-function applyDamage(base, source, target, type): DamageResult;
-5.2 攻击抽象（统一入口）
-typescript
-// Attack.ts
-type AttackOptions =
-  | { type: 'projectile'; source: EntityBase; x, y, z, dirX, dirY, dirZ, speed, camp, damage }
-  | { type: 'melee'; source: EntityBase; x, y, z, range, damage, camp }
-  | { type: 'aoe'; source: EntityBase; x, y, z, radius, damage, camp, delay? };
-
-function executeAttack(em, bullets, opts): void;
-5.3 子弹系统（四层解耦）
-text
-① BulletVisual（离屏视觉）
-   ├── 继承 OffscreenBake
-   ├── 流体：素材包 physics → FluidEffect
-   ├── 蒙版/VAT：模板裁剪 + 顶点位移
-   └── 输出：getTexture() → 一张纹理
-
-② BulletEntity（纯物理实体）
-   ├── 无 asset，纯物理
-   ├── physicsMode: 'read'
-   ├── 池化：activate/deactivate + recycle
-   └── 命中：hitFx 回调
-
-③ BulletRenderer（InstancedMesh 渲染）
-   ├── 消费：① 的纹理 + ② 的快照（position/velocity/isActive）
-   ├── 一次 draw call
-   └── 朝向：velocity-aligned billboard（基类静态函数）
-
-④ BulletManager（组合层）
-   ├── 池化生命周期
-   ├── 每帧：visual.step → renderer.sync
-   └── 命中特效：attachHitEffect
-5.4 AI 系统（配置驱动 + 共用行为库）
-typescript
-// AIConfig（数据）
-interface AIConfig {
-  states: Record<string, { behaviors: BehaviorDef[], transitions: TransitionDef[], minStay?: number }>;
-  initial: string;
-}
-
-// AIStateMachine（解释器）
-class AIStateMachine {
-  currentState: string;
-  stayTimer: number;
-  update(entity: EnemyBase, ctx: BehaviorContext): void;
-}
-
-// 行为注册表（敌人/友军共用）
-behaviorTable = { wander, moveToTarget, meleeSwing, shootBurst, deployGuard, followFormation, ... };
-
-// 条件注册表
-conditionTable = { seePlayer, inRange, outOfRange, attackFinished, loseTarget, ... };
-6. 地图与空间索引
-6.1 RasterMap（统一空间层）
-text
-职责：
-├── ① 地形数据：chunk → ChunkData（heights/blockTypes/blockHeight/walkable）
-├── ② 实体索引：cellKey → Set<EntityBase>（1m cell，全局无限）
-├── ③ 视锥梯形查询：queryFrustum（2D 行扫描，O(区域)）
-├── ④ 范围查询：querySphere（圆覆盖 cell → 距离过滤）
-├── ⑤ 射线路径查询：queryRay（DDA 网格采样）
-
-关键函数：
-├── heightAt(x, z): 格值高度
-├── vertexHeightAt(x, z): 2×2 格 max（视觉面顶点）
-├── surfaceHeightAt(x, z): 双线性插值（角色脚底采样）
-├── terrainColorAt(x, z): 块类型三色（高台沙黄/平地绿/坑洞深黑）
-├── insert/move/remove: 实体索引管理
-└── queryFrustum/querySphere/queryRay: 查询 API
-6.2 LOD 系统
-text
-决策顺序（先视锥剔除 → 后 LOD 分级）：
-① queryFrustum 圈定可见范围（行扫描，O(区域)）
-② 只对可见实体算距离分级（O(N_visible)）
-③ 距离表 [20, 40, 60] → lod0/1/2/3
-④ lod3 不渲染（消失，小地图仍标点）
-
-应用（EntityBase.applyViewDistance）：
-├── anim.setLodLevel（lod1 节流 / lod2 时间轴暂停）
-├── renderer.setLodLevel（lod2 渐隐 / lod3 全透明）
-└── 子类覆写：EnemyBase lod1+ 关扭曲
-7. 存档系统（关键规则）
-7.1 触发时机（仅安全点）
-text
-✅ 保存（调用 SaveSystem.save）：
-├── 返回舰船（WorldMode → ShipMode）
-└── 抽卡后（GachaSystem 更新 Session）
-
-❌ 不保存：
-├── 战斗中任何状态（地图/实体/特效/子弹/技能 CD）
-├── 玩家死亡（只扣血，不触发存档）
-├── 拾取物品（只在返回舰船时批量写入）
-└── WorldMode.dispose()（只清理资源，不保存）
-7.2 存档边界
-text
-存（Session 字段）：
-├── meta（day, totalDaysSurvived）
-├── player 裸装属性（hp, maxHp, attackPower, defense）
-├── 四层背包（base/ship/player/allies 网格）
-├── relics.owned（ID 列表）
-├── allies.roster（干员 ID 列表）
-├── ship（hp, shield, armor, techTree, turrets）
-└── gacha（pityCounter, totalPulls）
-
-不存：
-├── 地图数据（RasterMap/ChunkData）
-├── 玩家坐标（固定在舰船出口）
-├── 战斗中实体（敌人/物品/子弹/特效）
-├── 技能 CD（舰船上重置）
-└── 任何 THREE/Rapier 运行时引用
-8. 架构分层依赖规则
-text
-① modes → systems → core/services → platform（单向依赖）
-② systems → config（读配置，不进 core）
-③ services 不依赖 systems（可独立测试）
-④ platform 不依赖任何游戏代码（只实现接口）
-⑤ 禁止反向 import（如 core 引入 modes）
-
-模块归属：
-├── modes/：应用层（ShipMode/WorldMode/BossMode）
-├── systems/：玩法系统（combat/map/gacha/inventory/dialogue/ship）
-├── core/：核心运行时（GameLoop/ModeManager/EventBus/Session/SaveSystem）
-├── services/：技术服务（physics/render/camera/assets/fx/audio）
-├── entity/：实体系统（EntityBase + 子类 + EntityManager）
-├── platform/：平台抽象（Adapter + InputActions）
-├── config/：内容配置（JSON）
-└── ui/：Canvas 自绘 UI（UIEngine + screens）
-9. 目录结构对齐
-text
-src/
-├── main.ts                     # 入口：平台检测 → 选 Adapter → 启动 ModeManager
-│
-├── core/                       # ★ 核心运行时（无平台依赖）★
-│   ├── GameLoop.ts             # rAF 驱动 + fixedUpdate/update/render
-│   ├── ModeManager.ts          # 模式切换（注册/切换/卸载）
-│   ├── EventBus.ts             # 类型安全事件总线
-│   ├── Session.ts              # ★ 一局数据（可序列化）★
-│   └── SaveSystem.ts           # ★ 安全点存档 ★
-│
-├── entity/                     # ★ 实体系统（已有代码）★
-│   ├── Entity.ts               # 纯数据容器
-│   ├── EntityBase.ts           # 实体基类（骨架）
-│   ├── EntityManager.ts        # 管理器（创建/遍历/销毁/查询）
-│   ├── CharacterBase.ts        # 角色基类
-│   ├── Player.ts               # 玩家
-│   ├── EnemyBase.ts            # 敌人（AI 驱动）
-│   ├── ItemBase.ts             # 物品
-│   └── BulletEntity.ts         # 子弹实体
-│
-├── systems/                    # ★ 玩法系统（只消费抽象）★
-│   ├── combat/
-│   │   ├── DamagePipeline.ts   # 伤害结算（可插拔 modifiers）
-│   │   ├── Attack.ts           # 攻击意图执行器
-│   │   ├── BulletManager.ts    # 子弹组合层（池 + 渲染串联）
-│   │   ├── BulletVisual.ts     # 离屏视觉
-│   │   └── Targeting.ts        # 瞄准/射线检测
-│   ├── ai/
-│   │   ├── AISystem.ts         # AI 管理器
-│   │   ├── AIStateMachine.ts   # 状态机解释器
-│   │   ├── aiconfig.ts         # AI 配置类型 + 默认配置
-│   │   ├── behaviors.ts        # 行为注册表
-│   │   └── conditions.ts       # 条件注册表
-│   ├── map/
-│   │   ├── RasterMap.ts        # ★ 统一空间层 ★
-│   │   └── ChunkGenerator.ts   # 地形生成（纯函数）
-│   ├── gacha/                  # 抽卡系统（待实现）
-│   ├── inventory/              # 背包系统（待实现）
-│   ├── dialogue/               # 对话系统（待实现）
-│   └── ship/                   # 舰船守卫（待实现）
-│
-├── services/                   # ★ 技术服务（跨系统复用）★
-│   ├── physics/
-│   │   ├── PhysicsWorld.ts     # Rapier 封装
-│   │   └── Collision.ts        # 公共碰撞规则库
-│   ├── render/
-│   │   ├── FTXQuad.ts          # 纯纹理帧渲染器
-│   │   ├── BulletRenderer.ts   # 子弹 InstancedMesh 渲染器
-│   │   ├── FxRendererBase.ts   # 渲染管线基类
-│   │   └── OffscreenBake.ts    # 离屏烘焙基类
-│   ├── camera/
-│   │   └── CameraController.ts # 相机控制（TPS/FPS）
-│   ├── fx/
-│   │   ├── AssetSource.ts      # 统一资产接口
-│   │   ├── FrameAnimatorBase.ts# 动画管线基类
-│   │   ├── FrameState.ts       # 帧状态衔接层
-│   │   ├── EntityEffect.ts     # 实体特效接口
-│   │   ├── HealthBar.ts        # 血条特效
-│   │   ├── CharacterFxManager.ts # 角色特效运行时
-│   │   ├── DeathAnimEffect.ts  # 死亡动画
-│   │   └── attachHitEffect.ts  # 击中特效挂载
-│   ├── assets/
-│   │   ├── Asset.ts            # 特效包加载器
-│   │   └── FtxAsset.ts         # 纯纹理包加载器
-│   ├── ui/
-│   │   ├── UILayer.ts          # UI 层统一入口
-│   │   ├── Minimap.ts          # 小地图
-│   │   ├── PlayerHud.ts        # 玩家 HUD
-│   │   └── Crosshair.ts        # 准星
-│   └── audio/                  # 音频统一入口（预留）
-│
-├── modes/                      # ★ 应用层 ★
-│   ├── ShipMode.ts             # 舰船日常（★ 已设计 ★）
-│   ├── WorldMode.ts            # 大世界战斗（已有代码）
-│   └── BossMode.ts             # 决战（预留）
-│
-├── ui/                         # Canvas 自绘 UI（待实现）
-│   ├── UIEngine.ts             # 组件树/命中测试/脏标记
-│   └── screens/                # HUD/背包/抽卡/菜单
-│
-├── platform/                   # ★ 平台抽象 ★
-│   ├── PlatformAdapter.ts      # 接口定义
-│   ├── WebAdapter.ts           # 浏览器实现
-│   ├── WeChatAdapter.ts        # 微信小游戏（预留）
-│   ├── DouyinAdapter.ts        # 抖音小游戏（预留）
-│   └── input/
-│       ├── InputActions.ts     # 抽象输入语义
-│       ├── DesktopBinding.ts   # 键鼠映射
-│       └── TouchBinding.ts     # 触屏映射（预留）
-│
-├── config/                     # ★ 内容配置 ★
-│   ├── relics.json             # 藏品配置
-│   ├── items.json              # 物品配置
-│   ├── enemies.json            # 敌人配置
-│   ├── gachaPool.json          # 卡池配置
-│   └── ...
-│
-└── vendor/                     # 第三方/播放器内核
-    └── player/                 # FTX 播放器（已有代码）
-        ├── index.ts
-        ├── FtxAsset.ts
-        ├── core/
-        └── fluid/
-10. 开发里程碑（修正版）
-text
-M0 ✅ 平台验证：three.js + rapier + 播放器 跑通（已完成）
-M1 ✅ 最小闭环：移动 billboard 角色 + 攻击子弹 + 敌人 + 伤害（已完成）
-M2 ✅ chunk 流式：无限地图扩展 + LOD + 小地图（已完成）
-M3 ✅ 战斗完整：敌人 AI + 伤害管线 + 子弹系统 + 命中特效（已完成）
-
-M4 🔄 模式切换 + 存档（当前重点）
-├── 4.1 Session + SaveSystem（数据结构 + localStorage）
-├── 4.2 ShipMode（舰船界面 + 三面板 + 抽卡模拟）
-├── 4.3 模式切换（ShipMode ↔ WorldMode 数据流转）
-└── 4.4 自动存档（返回舰船时保存）
-
-M5 🔜 背包系统
-├── 5.1 四层网格数据结构
-├── 5.2 背包 UI（网格显示 + 拖拽交互）
-├── 5.3 物品拾取 + 背包管理
-└── 5.4 合成/采集系统
-
-M6 🔜 抽卡 + 友军
-├── 6.1 卡池 + 保底逻辑
-├── 6.2 抽卡 UI
-├── 6.3 友军部署/跟随 AI
-└── 6.4 友军弹药系统
-
-M7 🔜 Boss 决战
-M8 🔜 内容填充 + 平衡
-M9 🔜 平台发布
-11. 关键设计原则（汇总）
-text
-① 单向数据流：
-   Session（只读，不直接修改）→ 计算临时属性 → 模式使用 → 回写基础属性 → 保存
-
-② 存档只存基础属性：
-   藏品加成在出击时由 computeCombatStats 计算，不存盘
-
-③ 地图不存档：
-   day 作为种子，每天重新生成，ChunkData 不序列化
-
-④ 实体生命周期：
-   create → register → update → (死亡) → dispose → destroy
-
-⑤ 组合优于继承：
-   行为骨架走继承（EntityBase 体系），能力复用走组件（Health/AI/Weapon）
-
-⑥ 配置驱动：
-   AI 行为/条件、藏品效果、敌人属性全部由 JSON 配置，代码不改
-
-⑦ 平台抽象：
-   唯一接触浏览器 API 的地方是 platform/，游戏核心零依赖
-12. 接下来要做的（按顺序）
-根据上面的架构设计，你的下一步行动清单：
-
-text
-1. 创建 core/Session.ts（数据结构 + computeCombatStats）
-2. 创建 core/SaveSystem.ts（localStorage 读写）
-3. 创建 modes/ShipMode.ts（舰船界面 + 三面板 + 抽卡模拟）
-4. 修改 modes/WorldMode.ts（接收 day + combatStats + onReturn 回调）
-5. 修改 main.ts（启动流程：读档 → ShipMode → 出击回调 → WorldMode → 返回保存）
-6. 测试：刷新页面，进度保留
-这个架构设计就是你现在要手写代码的蓝图。每写一段代码之前，先对照这份设计确认“这个数据该放哪层”、“这个逻辑该归哪个系统管”。
-
-
-
-
-
-
-
-
-我们来把这四层背包体系彻底理清，并定义它们的数据结构和交互规则。
-
-🎒 四层背包定义与职责
-层级	名称	容量	数据生命周期	可访问场景
-L1	舰船基地仓库	超大（几乎无限）	永久存档（跨天、跨局）	仅在 ShipMode（舰船） 可访问
-L2	探索飞船仓库	适中（如 8×10 格）	永久存档（跨天）	ShipMode + WorldMode（地图上）
-L3	玩家背包	较小（如 4×6 格）	永久存档（跨天）	ShipMode + WorldMode
-L4	队友背包	各不相同（由干员配置决定）	永久存档（跨天）	ShipMode + WorldMode
-🔄 数据流转与存取规则（关键）
-1. 出战（舰船 → 大世界）
-
-玩家从 L1（基地） 挑选物资，转移到 L2（飞船仓库） 和 L3（玩家背包）。
-
-L1 不进入地图。地图上只加载 Session 中的 L2、L3、L4。
-
-地图种子由 day 决定，与背包无关。
-
-2. 回归（大世界 → 舰船）
-
-玩家回到舰船时，L2、L3、L4 中所有物品保留（不自动上缴）。
-
-玩家可以在舰船上手动把 L2/L3/L4 的物品转移到 L1（仓库）进行囤积。
-
-存档触发点：从 WorldMode 回到 ShipMode 的那一刻，全量保存 L1~L4 的所有数据。
-
-3. 队友背包（L4）的特殊性
-
-每个友军干员配置里有一个 backpackSlots 字段（如 6 格）。
-
-如果该干员未被部署（在舰船待命），其背包依然存在，可在舰船界面整理。
-
-如果该干员被部署到地图上（AI 跟随），其背包自动合并为队伍可用容量的一部分（玩家可以放入/取出物品，相当于随身携带的额外仓库）。
-
-如果干员阵亡/离队，其背包中的物品需要掉落或返还（规则待定，先设计成“返还到飞船仓库”）。
-
-📦 数据结构落地（修改 Session）
-根据这个四层设计，你的 Session 需要这样组织：
-
-typescript
-// src/core/Session.ts
-
-/** 单个物品实例（极简，只存引用和数量） */
-export interface ItemInstance {
-  itemId: string;       // 配置表引用（items.json）
-  stackSize: number;    // 当前堆叠数量
-}
-
-/** 网格背包：二维数组，null 表示空格 */
-export type InventoryGrid = (ItemInstance | null)[][];
-
-export interface GameSession {
-  // ----- 基础进度 -----
-  day: number;
-
-  // ----- 玩家状态 -----
-  player: {
-    hp: number;
-    maxHp: number;
-    // ... 其他基础属性
-  };
-
-  // ----- ★ 四层背包 ★ -----
-  inventories: {
-    // L1: 舰船基地仓库（超大容量，如 20x30）
-    base: InventoryGrid;
-    
-    // L2: 探索飞船仓库（中型，如 8x10）
-    ship: InventoryGrid;
-    
-    // L3: 玩家自身背包（小型，如 4x6）
-    player: InventoryGrid;
-    
-    // L4: 队友背包（按干员 id 索引，每个干员一个独立网格）
-    allies: Record<string, InventoryGrid>;  // key: 干员 id
-  };
-
-  // ----- 其他（遗物、友军列表等）-----
-  relics: string[];
-  alliesList: string[];     // 已抽到的干员 id 列表
-  gachaPity: number;
-}
-关键设计决策：
-
-不存坐标：L2/L3/L4 不记录物品的“世界位置”，只记录“网格位置”。
-
-不存实体对象：所有物品通过 itemId 引用 items.json 配置，stackSize 记录数量。
-
-队友背包自动扩容：当玩家在 WorldMode 中查看背包时，实际可用容量 = player 网格 + 所有已部署队友的网格。
-
-🧩 交互规则（供 UI 开发参考）
-当你做背包 UI 时，需要支持这四层之间的拖拽转移：
-
-源	目标	是否允许	说明
-L1（基地）	L2（飞船）	✅ 是	出征前补给物资
-L1（基地）	L3（玩家）	✅ 是	直接塞身上
-L2（飞船）	L3（玩家）	✅ 是	地图上转移
-L3（玩家）	L4（队友）	✅ 是	让队友帮忙背东西
-L2（飞船）	L4（队友）	✅ 是	直接给队友装包
-L1（基地）	L4（队友）	✅ 是	舰船上整理队友背包
-L4（队友）	L4（另一位队友）	✅ 是	交换背包物品
-特殊规则：
-
-堆叠合并：拖动相同 itemId 的物品到已有堆上时，自动合并，超出 maxStack 则溢出为新格。
-
-容量拒绝：目标网格满了，不允许放置（高亮红框提示）。
-
-L1 不进入 WorldMode：在 WorldMode 中，base 网格不可见、不可操作（只读不到，或直接隐藏该标签页）。
-
-🚀 按这个设计的开发顺序建议
-先改数据模型：按上面的 Session 结构，修改你的 createNewSession()，初始化四层网格（大小可配置）。
-
-把网格放进 SaveSystem：确保 JSON.stringify 能序列化（二维数组 + 基础类型，天然支持）。
-
-先不做 UI 拖拽，先做简单的列表式显示（用 HTML 表格把格子打印出来），确认数据能存能读。
-
-接入 ShipMode：在你的舰船 HTML 覆盖层里，加一个“仓库”按钮，弹窗显示 L1/L2/L3/L4 的网格预览（先只读）。
-
-最后做拖拽 UI：等数据链路通了，再写 Canvas 或 HTML 拖拽交互。
-
-🎯 队友背包容量配置示例
-json
-// config/allies.json
-{
-  "allies": [
-    {
-      "id": "amiya",
-      "name": "阿米娅",
-      "backpackSlots": 9,   // 3x3 网格
-      "skills": [...]
-    },
-    {
-      "id": "texas",
-      "name": "德克萨斯",
-      "backpackSlots": 12,  // 3x4 网格
-      "skills": [...]
-    }
-  ]
-}
-这样每个队友的背包大小不一样，有的干员天生就能多背东西，符合游戏策略深度。
-
-这个四层设计完全贴合你的《架构设计.md》5.5 节，且把“存档触发点”严格限制在“回舰船”那一刻。现在你要做的是：把 L1~L4 的数据结构落地到 Session 里，并验证 JSON 序列化能跑通。
-
-需要我帮你写出 createNewSession() 里初始化四层网格的完整代码，以及对应的 SaveSystem 测试吗
-
-
-
-
-
-
-
-
-
-
-
-
-下面是完整的存档系统代码，包含三个文件：
-
-Session.ts —— 数据结构 + 辅助函数 + 统一加成计算
-
-SaveSystem.ts —— 本地存储（Web localStorage）
-
-relics.ts —— 藏品配置表（完全配置驱动，无硬编码）
-
-📁 1. 核心数据结构：src/core/Session.ts
-typescript
-// src/core/Session.ts
-// ============================================================
-// 存档数据结构 —— 只存“舰船上的永恒状态”
-// 所有加成在出击时由 computeCombatStats 统一计算
-// 不存：地图/坐标/战斗临时状态/预计算的加成数值
-// ============================================================
-
-// ============================================================
-// 1. 基础类型
-// ============================================================
-
-/** 单个物品实例（极简，只存引用和数量） */
-export interface ItemInstance {
-  itemId: string; // 配置表 items.json 的 id
-  stackSize: number; // 当前堆叠数量（1 ~ maxStack）
-}
-
-/** 网格背包：二维数组，null 表示空格 */
-export type InventoryGrid = (ItemInstance | null)[][];
-
-/** 炮塔状态（舰船固定防御） */
-export interface TurretState {
-  slotId: number; // 炮塔槽位编号
-  turretId: string; // turrets.json 的 id
-  ammo: number; // 当前弹药量
-}
-
-// ============================================================
-// 2. 游戏存档根对象（回舰船时全量写入）
-// ============================================================
-
-export interface GameSession {
-  // ----- ① 元信息 -----
-  meta: {
-    version: string; // 存档版本号（用于兼容性检查）
-    day: number; // ★ 当前天数（既是进度标识，也是地图种子来源）
-    totalDaysSurvived: number; // 累计存活天数（结算用）
-    createdAt: string; // 存档创建时间（ISO 字符串）
-    lastSavedAt: string; // 最后保存时间
-  };
-
-  // ----- ② ★ 玩家“裸装”基础属性（不含任何加成）-----
-  player: {
-    hp: number;
-    maxHp: number;
-    attackPower: number;
-    defense: number;
-  };
-
-  // ----- ③ ★ 四层背包（弹药/食物/材料全部在这里）-----
-  inventories: {
-    // L1: 舰船基地仓库（超大容量，30x30）
-    base: InventoryGrid;
-    // L2: 探索飞船仓库（中型，8x10）
-    ship: InventoryGrid;
-    // L3: 玩家自身背包（小型，4x6）
-    player: InventoryGrid;
-    // L4: 队友背包（按干员 id 索引）
-    allies: Record<string, InventoryGrid>;
-  };
-
-  // ----- ④ ★ 藏品/遗物（只存 ID 列表，效果由配置表驱动）-----
-  relics: {
-    // ★ 所有藏品 ID，包括黑冠（'black_crown'）
-    owned: string[];
-    // 槽位（快捷展示用，不影响效果判定）
-    slots: (string | null)[]; // 固定长度如 5
-  };
-
-  // ----- ⑤ 友军/干员系统（已招募）-----
-  allies: {
-    roster: string[]; // 已招募的干员 id 列表
-  };
-
-  // ----- ⑥ 舰船状态（防卫/科技）-----
-  ship: {
-    hp: number;
-    maxHp: number;
-    shield: number;
-    armor: number;
-    techTree: string[]; // 已解锁的科技节点 ID 列表
-    turrets: TurretState[];
-  };
-
-  // ----- ⑦ 抽卡系统（保底计数）-----
-  gacha: {
-    pityCounter: number; // 6★ 保底计数
-    totalPulls: number; // 总抽卡次数
-  };
-
-  // ----- ⑧ 每日进度标记 -----
-  dayProgress: {
-    hasDepartedToday: boolean;
-  };
-}
-
-// ============================================================
-// 3. 网格工具函数
-// ============================================================
-
-/** 创建空网格 */
-export function createEmptyGrid(rows: number, cols: number): InventoryGrid {
-  return Array.from({ length: rows }, () => Array(cols).fill(null));
-}
-
-/** 深拷贝网格（防御性） */
-export function cloneGrid(grid: InventoryGrid): InventoryGrid {
-  return grid.map((row) => row.map((slot) => (slot ? { ...slot } : null)));
-}
-
-/** 统计网格中的物品总数 */
-export function countItemsInGrid(grid: InventoryGrid): number {
-  let count = 0;
-  for (const row of grid) {
-    for (const slot of row) {
-      if (slot !== null) count++;
-    }
+  /** 从指定网格移除物品 */
+  removeItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    const grid = this.session.inventories[layer];
+    if (!grid) return false;
+    return removeItemFromGrid(grid as InventoryGrid, itemId, count);
   }
-  return count;
-}
 
-/** 在网格中查找特定物品的第一个位置 */
-export function findItemInGrid(
-  grid: InventoryGrid,
-  itemId: string,
-): { row: number; col: number; item: ItemInstance } | null {
-  for (let r = 0; r < grid.length; r++) {
-    for (let c = 0; c < grid[r].length; c++) {
-      const slot = grid[r][c];
-      if (slot && slot.itemId === itemId) {
-        return { row: r, col: c, item: slot };
+  /** 移动物品（L1↔L2↔L3↔L4，跨层） */
+  moveItem(srcLayer: keyof GameSession['inventories'], dstLayer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    const srcGrid = this.session.inventories[srcLayer];
+    const dstGrid = this.session.inventories[dstLayer];
+    if (!srcGrid || !dstGrid) return false;
+    const maxStack = itemsConfig.items.find(i => i.id === itemId)?.maxStack || 99;
+    return moveItemBetweenGrids(srcGrid as InventoryGrid, dstGrid as InventoryGrid, itemId, count, maxStack);
+  }
+
+  /** 获取网格中所有物品列表（供 UI 渲染） */
+  getItems(layer: keyof GameSession['inventories']): { itemId: string; stackSize: number; row: number; col: number }[] {
+    const grid = this.session.inventories[layer];
+    const result: { itemId: string; stackSize: number; row: number; col: number }[] = [];
+    if (!grid) return result;
+    for (let r = 0; r < grid.length; r++) {
+      for (let c = 0; c < grid[r].length; c++) {
+        const slot = grid[r][c];
+        if (slot) result.push({ itemId: slot.itemId, stackSize: slot.stackSize, row: r, col: c });
       }
     }
+    return result;
   }
-  return null;
-}
 
-/** 找第一个空位 */
-export function findEmptySlot(grid: InventoryGrid): { row: number; col: number } | null {
-  for (let r = 0; r < grid.length; r++) {
-    for (let c = 0; c < grid[r].length; c++) {
-      if (grid[r][c] === null) {
-        return { row: r, col: c };
-      }
+  // ---- 物品使用（消耗品/材料） ----
+  
+  /** 使用物品（由 UI 层调用） */
+  useItem(layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    const grid = this.session.inventories[layer];
+    if (!grid || !grid[row] || !grid[row][col]) {
+      return { success: false, message: '物品不存在' };
     }
-  }
-  return null;
-}
+    const slot = grid[row][col]!;
+    const config = itemsConfig.items.find(i => i.id === slot.itemId);
+    if (!config || config.type !== 'consumable') {
+      return { success: false, message: '该物品无法使用' };
+    }
 
-/** 新增物品到网格（自动堆叠，否则放空位） */
-export function addItemToGrid(
-  grid: InventoryGrid,
-  itemId: string,
-  stackSize: number,
-  maxStack: number = 99,
-): boolean {
-  // 1. 先堆叠到已有同物品堆
-  for (let r = 0; r < grid.length; r++) {
-    for (let c = 0; c < grid[r].length; c++) {
-      const slot = grid[r][c];
-      if (slot && slot.itemId === itemId && slot.stackSize < maxStack) {
-        const space = maxStack - slot.stackSize;
-        if (space >= stackSize) {
-          slot.stackSize += stackSize;
-          return true;
-        } else {
-          slot.stackSize = maxStack;
-          stackSize -= space;
+    // ★ 根据配置执行效果
+    let result: UseItemResult = { success: true };
+    if (config.effect?.heal) {
+      const healed = Math.min(this.session.player.maxHp - this.session.player.hp, config.effect.heal);
+      this.session.player.hp += healed;
+      result.healAmount = healed;
+    }
+    if (config.effect?.ammo) {
+      // 弹药逻辑后续挂接玩家武器系统
+      result.ammoAmount = config.effect.ammo;
+    }
+
+    // 扣减物品
+    this.removeItem(layer, slot.itemId, 1);
+    return result;
+  }
+
+  /** 检查是否有足够空间（常用于拾取前判断） */
+  hasSpace(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    // 简单实现：遍历找空位
+    const grid = this.session.inventories[layer];
+    if (!grid) return false;
+    let emptySlots = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell === null) emptySlots++;
+        else if (cell.itemId === itemId) {
+          const maxStack = itemsConfig.items.find(i => i.id === itemId)?.maxStack || 99;
+          emptySlots += maxStack - cell.stackSize;
         }
+        if (emptySlots >= count) return true;
       }
     }
+    return false;
   }
-
-  // 2. 放空位
-  while (stackSize > 0) {
-    const pos = findEmptySlot(grid);
-    if (!pos) return false; // 背包满了
-    const put = Math.min(stackSize, maxStack);
-    grid[pos.row][pos.col] = { itemId, stackSize: put };
-    stackSize -= put;
-  }
-  return true;
 }
+2. CraftingManager（合成管理）
+typescript
+// src/systems/inventory/CraftingManager.ts
+import { GameSession } from '../../core/Session';
+import { ItemManager } from './ItemManager';
+import craftingRecipes from '../../config/craftRecipes.json';
 
-// ============================================================
-// 4. 战斗属性计算（★ 唯一加成入口，完全配置驱动）
-// ============================================================
-
-/** 战斗属性 = 基础属性 + 所有藏品加成（临时，不存档） */
-export interface PlayerCombatStats {
-  hp: number;
-  maxHp: number;
-  attackPower: number;
-  defense: number;
-}
-
-/** 藏品配置条目（由外部配置表提供） */
-export interface RelicConfigEntry {
+export interface Recipe {
   id: string;
   name: string;
-  type: 'carry' | 'permanent';
-  description: string;
-  effect?: {
-    // 携带型（carry）：固定数值
-    attackBonus?: number;
-    defenseBonus?: number;
-    hpBonus?: number;
-    // 永久型（permanent）：每日倍率
-    multiplier?: number;
-    // 永久型也可以有固定加成
-    flatBonus?: {
-      attackBonus?: number;
-      defenseBonus?: number;
-      hpBonus?: number;
-    };
-  };
+  inputs: { itemId: string; count: number }[];
+  output: { itemId: string; count: number };
+  station: 'ship' | 'portable'; // 舰船合成台 / 便携合成台
 }
 
-/**
- * ★ 从 Session 计算战斗属性（出击时调用）
- * 完全配置驱动，没有任何硬编码的特例
- */
-export function computeCombatStats(
-  session: GameSession,
-  relicConfig: Record<string, RelicConfigEntry>,
-): PlayerCombatStats {
-  const base = session.player;
-  const owned = session.relics.owned;
-  const day = session.meta.day;
+export class CraftingManager {
+  private recipes: Recipe[] = craftingRecipes.recipes;
 
-  let bonusAttack = 0;
-  let bonusDefense = 0;
-  let bonusMaxHp = 0;
-  let multiplier = 1;
+  constructor(private session: GameSession, private itemManager: ItemManager) {}
 
-  for (const id of owned) {
-    const cfg = relicConfig[id];
-    if (!cfg) continue;
+  /** 获取当前合成台可用的配方 */
+  getAvailableRecipes(station: 'ship' | 'portable'): Recipe[] {
+    return this.recipes.filter(r => r.station === station || r.station === 'ship');
+  }
 
-    if (cfg.type === 'carry') {
-      // 携带型：固定数值加成
-      bonusAttack += cfg.effect?.attackBonus || 0;
-      bonusDefense += cfg.effect?.defenseBonus || 0;
-      bonusMaxHp += cfg.effect?.hpBonus || 0;
-    } else if (cfg.type === 'permanent') {
-      // 永久型：每日倍率（如黑冠）
-      if (cfg.effect?.multiplier) {
-        multiplier *= Math.pow(cfg.effect.multiplier, day);
+  /** 检查玩家是否拥有足够材料 */
+  canCraft(recipeId: string, srcLayer: keyof GameSession['inventories']): boolean {
+    const recipe = this.recipes.find(r => r.id === recipeId);
+    if (!recipe) return false;
+    const grid = this.session.inventories[srcLayer];
+    if (!grid) return false;
+
+    // 临时拷贝网格计数
+    const available = new Map<string, number>();
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell) available.set(cell.itemId, (available.get(cell.itemId) || 0) + cell.stackSize);
       }
-      // 永久型也可以有固定加成
-      bonusAttack += cfg.effect?.flatBonus?.attackBonus || 0;
-      bonusDefense += cfg.effect?.flatBonus?.defenseBonus || 0;
-      bonusMaxHp += cfg.effect?.flatBonus?.hpBonus || 0;
     }
+    for (const input of recipe.inputs) {
+      if ((available.get(input.itemId) || 0) < input.count) return false;
+    }
+    return true;
   }
 
-  return {
-    hp: base.hp,
-    maxHp: Math.floor(base.maxHp * multiplier) + bonusMaxHp,
-    attackPower: Math.floor(base.attackPower * multiplier) + bonusAttack,
-    defense: Math.floor(base.defense * multiplier) + bonusDefense,
-  };
-}
+  /** 执行合成 */
+  craft(recipeId: string, srcLayer: keyof GameSession['inventories'], dstLayer: keyof GameSession['inventories']): boolean {
+    const recipe = this.recipes.find(r => r.id === recipeId);
+    if (!recipe || !this.canCraft(recipeId, srcLayer)) return false;
 
-// ============================================================
-// 5. 创建新游戏存档
-// ============================================================
-
-export function createNewSession(): GameSession {
-  return {
-    meta: {
-      version: '0.1.0',
-      day: 1,
-      totalDaysSurvived: 0,
-      createdAt: new Date().toISOString(),
-      lastSavedAt: new Date().toISOString(),
-    },
-
-    player: {
-      hp: 100,
-      maxHp: 100,
-      attackPower: 10,
-      defense: 2,
-    },
-
-    inventories: {
-      base: createEmptyGrid(30, 30),
-      ship: createEmptyGrid(8, 10),
-      player: createEmptyGrid(4, 6),
-      allies: {},
-    },
-
-    relics: {
-      // ★ 初始自带黑冠（作为普通藏品存入）
-      owned: ['black_crown'],
-      slots: Array(5).fill(null),
-    },
-
-    allies: {
-      roster: [],
-    },
-
-    ship: {
-      hp: 1000,
-      maxHp: 1000,
-      shield: 200,
-      armor: 5,
-      techTree: [],
-      turrets: [],
-    },
-
-    gacha: {
-      pityCounter: 0,
-      totalPulls: 0,
-    },
-
-    dayProgress: {
-      hasDepartedToday: false,
-    },
-  };
-}
-💾 2. 存储系统：src/core/SaveSystem.ts
-typescript
-// src/core/SaveSystem.ts
-// ============================================================
-// 存档系统 —— 唯一存档入口
-// 触发时机：① 返回舰船 ② 抽卡后
-// 存储介质：localStorage（Web）/ 后续可替换为 Adapter
-// ============================================================
-
-import type { GameSession } from './Session';
-
-const STORAGE_KEY = 'arknights_rogue_save';
-
-export const SaveSystem = {
-  /**
-   * ★ 保存存档（仅在安全点调用）
-   * 调用前需确保 session 中不含任何运行时引用（Three/Rapier 对象）
-   */
-  save(session: GameSession): void {
-    try {
-      // 更新时间戳
-      session.meta.lastSavedAt = new Date().toISOString();
-
-      const json = JSON.stringify(session);
-      localStorage.setItem(STORAGE_KEY, json);
-
-      console.log(`[存档] ✅ 第 ${session.meta.day} 天已保存至舰船`);
-      console.log(`[存档] 📦 背包物品: 舰船 ${countItems(session.inventories.base)} 件, ` +
-        `飞船 ${countItems(session.inventories.ship)} 件, ` +
-        `玩家 ${countItems(session.inventories.player)} 件`);
-    } catch (e) {
-      console.error('[存档] ❌ 保存失败:', e);
-      // 可考虑降级方案（如内存缓存）
+    // 扣材料
+    for (const input of recipe.inputs) {
+      this.itemManager.removeItem(srcLayer, input.itemId, input.count);
     }
-  },
 
-  /**
-   * 读取存档
-   * @returns 存档对象，不存在或损坏返回 null
-   */
-  load(): GameSession | null {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        console.log('[存档] 📭 未找到存档，将开始新游戏');
-        return null;
+    // 产出物（先判断目标网格是否有空间）
+    const output = recipe.output;
+    if (!this.itemManager.hasSpace(dstLayer, output.itemId, output.count)) {
+      // 回滚材料
+      for (const input of recipe.inputs) {
+        this.itemManager.addItem(srcLayer, input.itemId, input.count);
       }
-
-      const data = JSON.parse(raw) as GameSession;
-
-      // ★ 版本兼容性检查（未来扩展）
-      if (!data.meta || !data.meta.version) {
-        console.warn('[存档] ⚠️ 存档版本不兼容，将丢弃');
-        return null;
-      }
-
-      console.log(`[存档] 📖 读取成功，第 ${data.meta.day} 天`);
-      return data;
-    } catch (e) {
-      console.error('[存档] ❌ 读取失败:', e);
-      return null;
+      return false;
     }
-  },
-
-  /**
-   * ★ 清除存档（舰船被毁 / 通关 / 手动开新局）
-   */
-  clear(): void {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-      console.log('[存档] 🗑️ 存档已清除');
-    } catch (e) {
-      console.warn('[存档] 清除失败:', e);
-    }
-  },
-
-  /**
-   * 检查是否存在存档
-   */
-  hasSave(): boolean {
-    return localStorage.getItem(STORAGE_KEY) !== null;
-  },
-
-  /**
-   * 获取存档大小（调试用）
-   */
-  getSize(): number {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? raw.length : 0;
-  },
-};
-
-// ---- 辅助：统计物品数量 ----
-function countItems(grid: (any | null)[][]): number {
-  let count = 0;
-  for (const row of grid) {
-    for (const cell of row) {
-      if (cell !== null) count++;
-    }
-  }
-  return count;
-}
-⚙️ 3. 藏品配置表：src/config/relics.ts
-typescript
-// src/config/relics.ts
-// ============================================================
-// 藏品配置表 —— 完全配置驱动，无硬编码
-// 新增藏品 = 加一条配置，不改任何代码
-// ============================================================
-
-import type { RelicConfigEntry } from '../core/Session';
-
-export const RELIC_CONFIG: Record<string, RelicConfigEntry> = {
-  // ---- 永久型藏品（局外全局加成） ----
-
-  black_crown: {
-    id: 'black_crown',
-    name: '黑冠',
-    type: 'permanent',
-    description: '每日全属性 ×1.01',
-    effect: {
-      multiplier: 1.01,
-    },
-  },
-
-  ancient_tome: {
-    id: 'ancient_tome',
-    name: '源石技艺古卷',
-    type: 'permanent',
-    description: '每日全属性 ×1.005，且攻击力 +2',
-    effect: {
-      multiplier: 1.005,
-      flatBonus: {
-        attackBonus: 2,
-      },
-    },
-  },
-
-  // ---- 携带型藏品（需占背包格，持有即生效） ----
-
-  relic_001: {
-    id: 'relic_001',
-    name: '能天使的祝福',
-    type: 'carry',
-    description: '攻击力 +5',
-    effect: {
-      attackBonus: 5,
-    },
-  },
-
-  relic_002: {
-    id: 'relic_002',
-    name: '塞雷娅的护盾',
-    type: 'carry',
-    description: '防御力 +3，生命上限 +10',
-    effect: {
-      defenseBonus: 3,
-      hpBonus: 10,
-    },
-  },
-
-  relic_003: {
-    id: 'relic_003',
-    name: '银灰的战术指挥',
-    type: 'carry',
-    description: '攻击力 +3，防御力 +2',
-    effect: {
-      attackBonus: 3,
-      defenseBonus: 2,
-    },
-  },
-
-  // 新增藏品只需在这里加配置，代码零改动
-  // relic_004: { ... }
-};
-🚀 4. 使用示例（main.ts 启动流程）
-typescript
-// src/main.ts（精简示例）
-
-import { SaveSystem } from './core/SaveSystem';
-import { createNewSession, computeCombatStats, type GameSession } from './core/Session';
-import { RELIC_CONFIG } from './config/relics';
-
-async function boot() {
-  // 1. 加载或创建存档
-  let session = SaveSystem.load();
-  if (!session) {
-    session = createNewSession();
-    SaveSystem.save(session); // ★ 首次保存
-  }
-
-  // 2. ★ 出击时计算战斗属性（只读，不修改 session）
-  const combatStats = computeCombatStats(session, RELIC_CONFIG);
-  console.log(`[出击] 最终属性: HP ${combatStats.maxHp}, 攻击 ${combatStats.attackPower}, 防御 ${combatStats.defense}`);
-
-  // 3. 创建 WorldMode，传入 combatStats
-  const mode = new WorldMode(
-    scene, camera, renderer,
-    // ...
-    session.meta.day,      // 地图种子
-    combatStats,           // 战斗属性
-  );
-
-  // 4. 返回舰船时保存
-  function returnToShip() {
-    // 从 WorldMode 读取最新状态
-    session.player.hp = mode.getPlayerHp();
-    // ★ 唯一存档点
-    SaveSystem.save(session);
-    // 切换回 ShipMode
+    this.itemManager.addItem(dstLayer, output.itemId, output.count);
+    return true;
   }
 }
-✅ 总结：完整存档系统的关键特性
-特性	实现
-数据结构	GameSession 只存“舰船永恒状态”，不存地图/坐标
-四层背包	base / ship / player / allies 完全分离
-藏品系统	只存 relics.owned ID 列表，效果由配置表驱动
-加成计算	computeCombatStats 统一入口，完全配置驱动，无任何硬编码特例
-存档时机	仅 SaveSystem.save() 在“返回舰船”和“抽卡后”调用
-存储介质	Web localStorage，后续可替换为 PlatformAdapter
-版本兼容	meta.version 字段预留
-黑冠不再特殊：它只是 RELIC_CONFIG 里一条 type: 'permanent' 的普通配置，与任何其他永久型藏品一视同仁。
-
-
-
-
-
-
-
-好的，我完全理解了。你重新梳理后的三层架构更符合“明日方舟”的舰船体验：行动 → 抽卡 → 出击是主流程，编队是背包管理，干员是队伍与藏品查看。
-
-🏛️ ShipMode 重新架构（三层 UI）
-text
-┌─────────────────────────────────────────────────────────────────┐
-│                         ShipMode                                │
-│                  （舰船日常 → 出击准备）                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   ┌─────────┐  ┌─────────┐  ┌─────────┐                       │
-│   │  行动    │  │  编队    │  │  干员    │                       │
-│   │ (主流程) │  │ (背包)   │  │ (队伍)   │                       │
-│   └────┬────┘  └────┬────┘  └────┬────┘                       │
-│        │            │            │                             │
-│        ▼            ▼            ▼                             │
-│   ┌─────────┐  ┌─────────┐  ┌─────────┐                       │
-│   │ 抽卡 →   │  │ L2+L3+L4 │  │ 藏品    │                       │
-│   │ 出击     │  │ 整合视图  │  │ 干员属性 │                       │
-│   └─────────┘  └─────────┘  └─────────┘                       │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-三大面板职责
-面板	职责	数据来源	操作
-行动	主流程入口	session.meta.day、session.gacha	点击 → 抽卡演出 → 出击进入 WorldMode
-编队	管理“带出去的东西”	inventories.ship + inventories.player + inventories.allies	查看/整理 L2+L3+L4 整合视图
-干员	查看队伍状态	allies.roster + relics.owned	查看干员属性、藏品效果
-📁 完整代码
-1. 类型定义：src/modes/ShipModeTypes.ts
+3. InteractionManager（交互管理）
 typescript
-// src/modes/ShipModeTypes.ts
-// ============================================================
-// ShipMode 类型定义 —— 三层架构：行动/编队/干员
-// ============================================================
+// src/systems/interaction/InteractionManager.ts
+import { GameSession } from '../../core/Session';
+import { ItemManager } from '../inventory/ItemManager';
 
-import type { GameSession } from '../core/Session';
-
-/** 舰船三大面板 */
-export type ShipTab = 'action' | 'squad' | 'operators';
-
-/** 舰船交互事件（地图点击 → UI 响应） */
-export interface ShipInteractionEvent {
-  type: 'click' | 'hover';
-  target: 'floor' | 'npc' | 'facility' | 'ship' | 'unknown';
-  position?: { x: number; z: number };
+export interface Interactable {
+  id: string;
+  type: 'item' | 'npc' | 'crafting_table' | 'container' | 'exit';
   data?: any;
 }
 
-/** 行动流程状态 */
-export type ActionFlowState = 'idle' | 'gacha_pulling' | 'gacha_done' | 'departing';
-
-/** ShipMode 回调（与上层通信） */
-export interface ShipModeCallbacks {
-  /** 用户完成“行动”流程 → 进入 WorldMode */
-  onDepart: (session: GameSession) => void;
-  /** 返回舰船时保存 */
-  onSave: (session: GameSession) => void;
-}
-2. UI 层：src/modes/ship/UILayer.ts
-typescript
-// src/modes/ship/UILayer.ts
-// ============================================================
-// 舰船 UI 层 —— 三大面板：行动 / 编队 / 干员
-// 纯 Canvas/HTML 展示，数据由 ShipMode 驱动
-// ============================================================
-
-import type { GameSession } from '../../core/Session';
-import type { ShipTab, ActionFlowState } from '../ShipModeTypes';
-import { SaveSystem } from '../../core/SaveSystem';
-
-export interface UILayerOptions {
-  container: HTMLElement;
+export interface InteractionContext {
   session: GameSession;
-  onAction: (action: 'depart' | 'gacha_pull') => void;
-  onTabSwitch: (tab: ShipTab) => void;
+  itemManager: ItemManager;
+  // 对话系统后续接入
 }
 
-export class UILayer {
-  private container: HTMLElement;
-  private session: GameSession;
-  private onAction: (action: 'depart' | 'gacha_pull') => void;
-  private onTabSwitch: (tab: ShipTab) => void;
+export class InteractionManager {
+  constructor(private ctx: InteractionContext) {}
 
-  // DOM 元素
-  private root: HTMLDivElement;
-  private tabButtons: Record<ShipTab, HTMLButtonElement>;
-  private panels: Record<ShipTab, HTMLDivElement>;
-
-  // 当前选中的 Tab
-  private currentTab: ShipTab = 'action';
-
-  // 行动流程状态
-  private actionState: ActionFlowState = 'idle';
-
-  constructor(options: UILayerOptions) {
-    this.container = options.container;
-    this.session = options.session;
-    this.onAction = options.onAction;
-    this.onTabSwitch = options.onTabSwitch;
-
-    this.tabButtons = {} as any;
-    this.panels = {} as any;
-
-    this.buildUI();
-    this.render();
+  // ---- 核心：处理任何交互 ----
+  interact(target: Interactable): { action: string; payload?: any; message?: string } {
+    switch (target.type) {
+      case 'item':
+        return this.handleItem(target);
+      case 'crafting_table':
+        return this.handleCraftingTable(target);
+      case 'npc':
+        return this.handleNpc(target);
+      case 'container':
+        return this.handleContainer(target);
+      case 'exit':
+        return { action: 'exit', message: '返回舰船' };
+      default:
+        return { action: 'none', message: '无法交互' };
+    }
   }
 
-  // ---- 构建 UI ----
-
-  private buildUI(): void {
-    this.root = document.createElement('div');
-    this.root.style.cssText = `
-      position: fixed;
-      top: 0; left: 0;
-      width: 100%; height: 100%;
-      pointer-events: none;
-      z-index: 100;
-      font-family: 'Courier New', monospace;
-      color: #c8d0e0;
-    `;
-
-    // ---- 顶部栏 ----
-    const topBar = document.createElement('div');
-    topBar.style.cssText = `
-      position: absolute;
-      top: 12px; left: 12px; right: 12px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      pointer-events: none;
-      background: rgba(10, 10, 20, 0.75);
-      padding: 8px 16px;
-      border-radius: 8px;
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(100, 120, 180, 0.2);
-    `;
-    topBar.innerHTML = `
-      <div>
-        <span style="color: #88bbdd; font-weight: bold;">🚀 罗德岛</span>
-        <span style="margin-left: 16px; color: #8899aa;">第 ${this.session.meta.day} 天</span>
-      </div>
-      <div style="display: flex; gap: 16px; align-items: center; font-size: 13px;">
-        <span>❤️ ${this.session.player.hp}/${this.session.player.maxHp}</span>
-        <span>⚔️ ${this.session.player.attackPower}</span>
-        <span>🛡️ ${this.session.player.defense}</span>
-        <span style="color: #ffaa44;">💠 ${this.session.relics.owned.length}</span>
-        <span style="color: #66ddff;">👥 ${this.session.allies.roster.length}</span>
-      </div>
-    `;
-    this.root.appendChild(topBar);
-
-    // ---- Tab 导航栏 ----
-    const tabBar = document.createElement('div');
-    tabBar.style.cssText = `
-      position: absolute;
-      bottom: 100px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 4px;
-      pointer-events: auto;
-      background: rgba(10, 10, 20, 0.8);
-      padding: 6px;
-      border-radius: 10px;
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(100, 120, 180, 0.2);
-    `;
-    this.root.appendChild(tabBar);
-
-    // ---- 三个 Tab 按钮 ----
-    const tabs: { id: ShipTab; label: string; icon: string; color: string }[] = [
-      { id: 'action', label: '行动', icon: '⚔️', color: '#ff6644' },
-      { id: 'squad', label: '编队', icon: '🎒', color: '#44dd88' },
-      { id: 'operators', label: '干员', icon: '👥', color: '#66aaff' },
-    ];
-
-    for (const tab of tabs) {
-      const btn = document.createElement('button');
-      btn.textContent = `${tab.icon} ${tab.label}`;
-      btn.style.cssText = `
-        pointer-events: auto;
-        padding: 8px 24px;
-        border: none;
-        border-radius: 6px;
-        background: transparent;
-        color: #667;
-        cursor: pointer;
-        font-size: 15px;
-        font-family: inherit;
-        transition: all 0.2s;
-        font-weight: ${this.currentTab === tab.id ? 'bold' : 'normal'};
-      `;
-      btn.addEventListener('click', () => {
-        this.switchTab(tab.id);
-      });
-      tabBar.appendChild(btn);
-      this.tabButtons[tab.id] = btn;
-    }
-
-    // ---- 面板容器 ----
-    const panelContainer = document.createElement('div');
-    panelContainer.style.cssText = `
-      position: absolute;
-      bottom: 170px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 90%;
-      max-width: 700px;
-      max-height: 50vh;
-      pointer-events: auto;
-      background: rgba(10, 10, 20, 0.85);
-      border-radius: 12px;
-      border: 1px solid rgba(100, 120, 180, 0.2);
-      backdrop-filter: blur(8px);
-      padding: 20px 24px;
-      overflow-y: auto;
-      display: none;
-    `;
-    this.root.appendChild(panelContainer);
-
-    // ---- 三个面板内容 ----
-    this.panels.action = this.buildActionPanel();
-    this.panels.squad = this.buildSquadPanel();
-    this.panels.operators = this.buildOperatorsPanel();
-
-    for (const [key, panel] of Object.entries(this.panels)) {
-      panelContainer.appendChild(panel);
-    }
-
-    this.container.appendChild(this.root);
-
-    // 默认显示当前 Tab
-    this.switchTab(this.currentTab);
-  }
-
-  // ---- ① 行动面板 ----
-
-  private buildActionPanel(): HTMLDivElement {
-    const panel = document.createElement('div');
-    panel.style.cssText = 'display: none;';
-
-    // 标题
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size: 20px; font-weight: bold; margin-bottom: 12px; color: #ff6644;';
-    title.textContent = '⚔️ 行动准备';
-    panel.appendChild(title);
-
-    // 行动说明
-    const desc = document.createElement('div');
-    desc.style.cssText = 'font-size: 14px; color: #8899aa; margin-bottom: 16px; line-height: 1.6;';
-    desc.innerHTML = `
-      <p>出击前需要先进行<strong style="color: #ffaa44;">招募抽卡</strong>，获得友军和藏品后才能出发。</p>
-      <p style="font-size: 12px; color: #667;">当前可抽次数：<span id="gacha-info">${this.session.gacha.pityCounter}/50 保底</span></p>
-    `;
-    panel.appendChild(desc);
-
-    // 状态提示
-    const stateEl = document.createElement('div');
-    stateEl.id = 'action-state';
-    stateEl.style.cssText = `
-      padding: 12px 16px;
-      border-radius: 8px;
-      margin-bottom: 16px;
-      background: rgba(255, 100, 68, 0.1);
-      border: 1px solid rgba(255, 100, 68, 0.2);
-      font-size: 14px;
-    `;
-    stateEl.textContent = '🎯 点击下方按钮进行招募抽卡';
-    panel.appendChild(stateEl);
-
-    // 按钮区
-    const btnGroup = document.createElement('div');
-    btnGroup.style.cssText = 'display: flex; gap: 12px; flex-wrap: wrap;';
-
-    // 抽卡按钮
-    const gachaBtn = document.createElement('button');
-    gachaBtn.id = 'btn-gacha';
-    gachaBtn.textContent = '⭐ 招募抽卡';
-    gachaBtn.style.cssText = `
-      padding: 10px 24px;
-      border: 1px solid #ffaa44;
-      border-radius: 8px;
-      background: rgba(255, 170, 68, 0.15);
-      color: #ffaa44;
-      cursor: pointer;
-      font-size: 16px;
-      font-family: inherit;
-      transition: all 0.2s;
-      flex: 1;
-      min-width: 120px;
-    `;
-    gachaBtn.addEventListener('mouseenter', () => {
-      gachaBtn.style.background = 'rgba(255, 170, 68, 0.3)';
-    });
-    gachaBtn.addEventListener('mouseleave', () => {
-      gachaBtn.style.background = 'rgba(255, 170, 68, 0.15)';
-    });
-    gachaBtn.addEventListener('click', () => {
-      this.onAction('gacha_pull');
-    });
-    btnGroup.appendChild(gachaBtn);
-
-    // 出击按钮
-    const departBtn = document.createElement('button');
-    departBtn.id = 'btn-depart';
-    departBtn.textContent = '🚀 出击！';
-    departBtn.style.cssText = `
-      padding: 10px 24px;
-      border: 1px solid #44dd88;
-      border-radius: 8px;
-      background: rgba(68, 221, 136, 0.15);
-      color: #44dd88;
-      cursor: pointer;
-      font-size: 16px;
-      font-family: inherit;
-      transition: all 0.2s;
-      flex: 1;
-      min-width: 120px;
-      opacity: 0.4;
-      pointer-events: none;
-    `;
-    departBtn.addEventListener('mouseenter', () => {
-      if (departBtn.style.opacity !== '0.4') {
-        departBtn.style.background = 'rgba(68, 221, 136, 0.3)';
+  private handleItem(target: Interactable): { action: string; payload?: any } {
+    // 物品交互：返回物品详情，UI 层决定展示什么
+    return {
+      action: 'show_item_detail',
+      payload: {
+        itemId: target.data?.itemId,
+        grid: target.data?.grid,
+        row: target.data?.row,
+        col: target.data?.col,
       }
-    });
-    departBtn.addEventListener('mouseleave', () => {
-      departBtn.style.background = 'rgba(68, 221, 136, 0.15)';
-    });
-    departBtn.addEventListener('click', () => {
-      this.onAction('depart');
-    });
-    btnGroup.appendChild(departBtn);
-
-    panel.appendChild(btnGroup);
-
-    // 保存引用
-    (panel as any).gachaBtn = gachaBtn;
-    (panel as any).departBtn = departBtn;
-    (panel as any).stateEl = stateEl;
-
-    return panel;
+    };
   }
 
-  // ---- ② 编队面板（L2+L3+L4 整合视图） ----
-
-  private buildSquadPanel(): HTMLDivElement {
-    const panel = document.createElement('div');
-    panel.style.cssText = 'display: none;';
-
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size: 20px; font-weight: bold; margin-bottom: 12px; color: #44dd88;';
-    title.textContent = '🎒 编队物资';
-    panel.appendChild(title);
-
-    // 总结信息
-    const summary = document.createElement('div');
-    summary.id = 'squad-summary';
-    summary.style.cssText = 'font-size: 13px; color: #8899aa; margin-bottom: 16px;';
-    panel.appendChild(summary);
-
-    // 三层背包视图
-    const grids = document.createElement('div');
-    grids.id = 'squad-grids';
-    grids.style.cssText = 'display: flex; flex-direction: column; gap: 12px; max-height: 250px; overflow-y: auto;';
-    panel.appendChild(grids);
-
-    return panel;
+  private handleCraftingTable(target: Interactable): { action: string; payload?: any } {
+    return {
+      action: 'open_crafting',
+      payload: {
+        station: target.data?.level || 'portable', // 'ship' 或 'portable'
+      }
+    };
   }
 
-  // ---- ③ 干员面板（藏品 + 干员属性） ----
-
-  private buildOperatorsPanel(): HTMLDivElement {
-    const panel = document.createElement('div');
-    panel.style.cssText = 'display: none;';
-
-    const title = document.createElement('div');
-    title.style.cssText = 'font-size: 20px; font-weight: bold; margin-bottom: 12px; color: #66aaff;';
-    title.textContent = '👥 干员与藏品';
-    panel.appendChild(title);
-
-    const content = document.createElement('div');
-    content.id = 'operators-content';
-    content.style.cssText = 'font-size: 14px; color: #aab; line-height: 1.8;';
-    panel.appendChild(content);
-
-    return panel;
+  private handleNpc(target: Interactable): { action: string; payload?: any } {
+    return {
+      action: 'start_dialogue',
+      payload: {
+        npcId: target.data?.npcId,
+        dialogueTree: target.data?.dialogueTree || 'default',
+      }
+    };
   }
 
-  // ---- Tab 切换 ----
+  private handleContainer(target: Interactable): { action: string; payload?: any } {
+    // 容器（箱子/补给箱）交互
+    return {
+      action: 'open_container',
+      payload: {
+        containerId: target.data?.containerId,
+        inventory: target.data?.inventory, // 容器内的物品列表
+      }
+    };
+  }
 
-  private switchTab(tab: ShipTab): void {
-    this.currentTab = tab;
+  // ---- 快捷辅助：拾取（WorldMode 专用） ----
+  pickup(itemId: string, fromWorld: boolean = true): boolean {
+    // 从世界拾取 → 进入玩家背包 (L3)
+    return this.ctx.itemManager.addItem('player', itemId, 1);
+  }
+}
+🖥️ 第二部分：UI 层（舰船与世界的专属管理器）
+4. ShipUIManager（舰船 UI）
+typescript
+// src/ui/ship/ShipUIManager.ts
+import { BaseInteractionUI } from '../BaseInteractionUI';
+import { GameSession } from '../../core/Session';
+import { ItemManager } from '../../systems/inventory/ItemManager';
+import { CraftingManager } from '../../systems/inventory/CraftingManager';
+import { InteractionManager } from '../../systems/interaction/InteractionManager';
+import { renderItemSlot } from '../components/ItemSlot';
+import { renderDialog } from '../components/DialogBubble';
 
-    // 更新按钮样式
-    for (const [id, btn] of Object.entries(this.tabButtons)) {
-      const isActive = id === tab;
-      btn.style.color = isActive ? '#fff' : '#667';
-      btn.style.fontWeight = isActive ? 'bold' : 'normal';
-      btn.style.background = isActive ? 'rgba(255,255,255,0.05)' : 'transparent';
-    }
+export class ShipUIManager extends BaseInteractionUI {
+  private currentTab: 'action' | 'formation' | 'operators' = 'action';
+  private inventoryLayer: keyof GameSession['inventories'] = 'base';
+  private root: HTMLDivElement;
 
-    // 切换面板
-    for (const [id, panel] of Object.entries(this.panels)) {
-      panel.style.display = id === tab ? 'block' : 'none';
-    }
+  // ★ 持有业务逻辑层
+  constructor(
+    private session: GameSession,
+    private itemManager: ItemManager,
+    private craftingManager: CraftingManager,
+    private interactionManager: InteractionManager,
+  ) {
+    super();
+    this.buildRoot();
+  }
 
-    // 通知外部
-    this.onTabSwitch(tab);
+  private buildRoot(): void {
+    this.root = document.createElement('div');
+    this.root.id = 'ship-ui-root';
+    this.root.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; z-index: 100;
+    `;
+    document.body.appendChild(this.root);
 
-    // 刷新数据
+    // 标题栏
+    // 三面板按钮（行动/编队/干员）
+    // 面板容器
     this.render();
   }
-
-  // ---- 渲染（刷新所有面板数据） ----
 
   render(): void {
-    this.renderTopBar();
-    this.renderActionPanel();
-    this.renderSquadPanel();
-    this.renderOperatorsPanel();
+    // 清空面板区，根据 currentTab 重新渲染
+    // 调用 ItemManager.getItems() 获取数据
+    // 用 renderItemSlot 生成网格
   }
 
-  private renderTopBar(): void {
-    // 顶部栏在 buildUI 时已构造，这里通过 querySelector 更新
-    const topBar = this.root.querySelector('div:first-child');
-    if (topBar) {
-      topBar.innerHTML = `
-        <div>
-          <span style="color: #88bbdd; font-weight: bold;">🚀 罗德岛</span>
-          <span style="margin-left: 16px; color: #8899aa;">第 ${this.session.meta.day} 天</span>
-        </div>
-        <div style="display: flex; gap: 16px; align-items: center; font-size: 13px;">
-          <span>❤️ ${this.session.player.hp}/${this.session.player.maxHp}</span>
-          <span>⚔️ ${this.session.player.attackPower}</span>
-          <span>🛡️ ${this.session.player.defense}</span>
-          <span style="color: #ffaa44;">💠 ${this.session.relics.owned.length}</span>
-          <span style="color: #66ddff;">👥 ${this.session.allies.roster.length}</span>
-        </div>
-      `;
-    }
-  }
-
-  private renderActionPanel(): void {
-    const panel = this.panels.action;
-    if (!panel) return;
-
-    const stateEl = panel.querySelector('#action-state') as HTMLElement;
-    const gachaBtn = (panel as any).gachaBtn;
-    const departBtn = (panel as any).departBtn;
-    const gachaInfo = panel.querySelector('#gacha-info');
-
-    if (gachaInfo) {
-      gachaInfo.textContent = `${this.session.gacha.pityCounter}/50 保底（已抽 ${this.session.gacha.totalPulls} 次）`;
-    }
-
-    // 判断是否可出击（至少抽过一次卡，或已有干员）
-    const hasAllies = this.session.allies.roster.length > 0;
-    const canDepart = hasAllies;
-
-    if (stateEl) {
-      if (hasAllies) {
-        stateEl.textContent = `✅ 已招募 ${this.session.allies.roster.length} 名干员，可以出击！`;
-        stateEl.style.borderColor = 'rgba(68, 221, 136, 0.3)';
-        stateEl.style.background = 'rgba(68, 221, 136, 0.1)';
-        stateEl.style.color = '#88dd88';
-      } else {
-        stateEl.textContent = '🎯 点击下方按钮进行招募抽卡，获得干员和藏品';
-        stateEl.style.borderColor = 'rgba(255, 100, 68, 0.2)';
-        stateEl.style.background = 'rgba(255, 100, 68, 0.1)';
-        stateEl.style.color = '#c8d0e0';
-      }
-    }
-
-    if (departBtn) {
-      if (canDepart) {
-        departBtn.style.opacity = '1';
-        departBtn.style.pointerEvents = 'auto';
-        departBtn.textContent = '🚀 出击！（编队中）';
-      } else {
-        departBtn.style.opacity = '0.4';
-        departBtn.style.pointerEvents = 'none';
-        departBtn.textContent = '🚀 出击（需先抽卡）';
-      }
-    }
-  }
-
-  private renderSquadPanel(): void {
-    const panel = this.panels.squad;
-    if (!panel) return;
-
-    const summary = panel.querySelector('#squad-summary');
-    const grids = panel.querySelector('#squad-grids');
-
-    if (summary) {
-      const shipCount = this.countItems(this.session.inventories.ship);
-      const playerCount = this.countItems(this.session.inventories.player);
-      const allyCount = Object.values(this.session.inventories.allies).reduce(
-        (sum, g) => sum + this.countItems(g), 0
-      );
-      summary.innerHTML = `
-        飞船仓库: ${shipCount} 件 | 随身背包: ${playerCount} 件 | 队友背包: ${allyCount} 件
-      `;
-    }
-
-    if (grids) {
-      grids.innerHTML = `
-        <div style="background: rgba(68, 221, 136, 0.05); border-radius: 6px; padding: 10px 12px; border-left: 3px solid #44dd88;">
-          <div style="font-size: 12px; color: #44dd88; font-weight: bold;">🛸 飞船仓库 (L2)</div>
-          <div style="font-size: 13px; color: #aab; margin-top: 4px;">${this.listItems(this.session.inventories.ship)}</div>
-        </div>
-        <div style="background: rgba(255, 170, 68, 0.05); border-radius: 6px; padding: 10px 12px; border-left: 3px solid #ffaa44;">
-          <div style="font-size: 12px; color: #ffaa44; font-weight: bold;">🎒 随身背包 (L3)</div>
-          <div style="font-size: 13px; color: #aab; margin-top: 4px;">${this.listItems(this.session.inventories.player)}</div>
-        </div>
-        <div style="background: rgba(102, 170, 255, 0.05); border-radius: 6px; padding: 10px 12px; border-left: 3px solid #66aaff;">
-          <div style="font-size: 12px; color: #66aaff; font-weight: bold;">👥 队友背包 (L4)</div>
-          <div style="font-size: 13px; color: #aab; margin-top: 4px;">
-            ${Object.entries(this.session.inventories.allies).map(([id, grid]) =>
-              `<div>${id}: ${this.listItems(grid)}</div>`
-            ).join('') || '（暂无队友背包）'}
-          </div>
-        </div>
-      `;
-    }
-  }
-
-  private renderOperatorsPanel(): void {
-    const panel = this.panels.operators;
-    if (!panel) return;
-
-    const content = panel.querySelector('#operators-content');
-    if (!content) return;
-
-    // 藏品列表
-    const relicList = this.session.relics.owned.map(id => {
-      // 从配置表获取名称（这里简化显示）
-      return `💠 ${id}`;
-    }).join('\n') || '（暂无藏品）';
-
-    // 干员列表
-    const allyList = this.session.allies.roster.map(id => {
-      return `👤 ${id} (背包: ${this.countItems(this.session.inventories.allies[id] || [])} 件)`;
-    }).join('\n') || '（暂无干员）';
-
-    content.innerHTML = `
-      <div style="margin-bottom: 16px;">
-        <div style="color: #ffaa44; font-weight: bold; font-size: 15px;">💠 藏品 (${this.session.relics.owned.length})</div>
-        <div style="font-size: 13px; color: #8899aa; white-space: pre-wrap; margin-top: 4px;">${relicList}</div>
-      </div>
-      <div>
-        <div style="color: #66aaff; font-weight: bold; font-size: 15px;">👥 干员 (${this.session.allies.roster.length})</div>
-        <div style="font-size: 13px; color: #8899aa; white-space: pre-wrap; margin-top: 4px;">${allyList}</div>
-      </div>
-    `;
-  }
-
-  // ---- 行动流程控制 ----
-
-  setActionState(state: ActionFlowState): void {
-    this.actionState = state;
-    this.renderActionPanel();
-  }
-
-  // ---- 辅助函数 ----
-
-  private countItems(grid: (any | null)[][]): number {
-    let count = 0;
-    for (const row of grid) {
-      for (const cell of row) {
-        if (cell !== null) count++;
-      }
-    }
-    return count;
-  }
-
-  private listItems(grid: (any | null)[][]): string {
-    const items: string[] = [];
-    for (const row of grid) {
-      for (const cell of row) {
-        if (cell !== null) {
-          items.push(`${cell.itemId} ×${cell.stackSize}`);
-        }
-      }
-    }
-    return items.length > 0 ? items.join('、') : '（空）';
-  }
-
-  // ---- 更新（外部驱动） ----
-
-  update(session: GameSession): void {
-    this.session = session;
+  // ---- Tab 切换（由按钮事件触发） ----
+  switchTab(tab: 'action' | 'formation' | 'operators'): void {
+    this.currentTab = tab;
     this.render();
   }
 
-  // ---- 清理 ----
+  // ---- 切换到特定背包层（编队面板内） ----
+  showInventoryLayer(layer: keyof GameSession['inventories']): void {
+    this.inventoryLayer = layer;
+    this.render();
+  }
 
-  dispose(): void {
+  // ---- ★ 打开合成台面板（由 InteractionManager 触发） ----
+  openCrafting(station: 'ship' | 'portable'): void {
+    const recipes = this.craftingManager.getAvailableRecipes(station);
+    this.openPanel({
+      id: 'crafting-panel',
+      onOpen: () => { /* 记录打开状态 */ },
+      onClose: () => { /* 清理 */ },
+      render: () => {
+        const div = document.createElement('div');
+        div.dataset.panelId = 'crafting-panel';
+        div.innerHTML = `<h3>${station === 'ship' ? '舰船' : '便携'}合成台</h3>`;
+        // 渲染配方列表
+        recipes.forEach(r => {
+          const btn = document.createElement('button');
+          btn.textContent = `${r.name} (${r.inputs.map(i => `${i.itemId}x${i.count}`).join('+')})`;
+          btn.onclick = () => {
+            if (this.craftingManager.craft(r.id, 'player', 'player')) {
+              // 合成成功，刷新 UI
+              this.render();
+            }
+          };
+          div.appendChild(btn);
+        });
+        // 关闭按钮
+        const close = document.createElement('button');
+        close.textContent = '关闭';
+        close.onclick = () => this.closePanel();
+        div.appendChild(close);
+        return div;
+      }
+    });
+  }
+
+  // ---- ★ 打开物品详情（由网格点击触发） ----
+  openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
+    const slot = this.session.inventories[layer]?.[row]?.[col];
+    if (!slot) return;
+    this.openPanel({
+      id: 'item-detail',
+      onOpen: () => {},
+      onClose: () => {},
+      render: () => {
+        const div = document.createElement('div');
+        div.dataset.panelId = 'item-detail';
+        div.innerHTML = `
+          <h3>${slot.itemId}</h3>
+          <p>数量: ${slot.stackSize}</p>
+          <button data-action="use">使用</button>
+          <button data-action="drop">丢弃</button>
+          <button data-action="close">关闭</button>
+        `;
+        div.querySelector('[data-action="use"]')?.addEventListener('click', () => {
+          const result = this.itemManager.useItem(layer, row, col);
+          if (result.success) {
+            this.closePanel();
+            this.render(); // 刷新背包
+          }
+        });
+        div.querySelector('[data-action="close"]')?.addEventListener('click', () => this.closePanel());
+        return div;
+      }
+    });
+  }
+
+  // ---- ★ 打开对话（由 InteractionManager 触发） ----
+  openDialogue(npcId: string, dialogueTree: string): void {
+    this.openPanel({
+      id: `dialogue-${npcId}`,
+      onOpen: () => {},
+      onClose: () => {},
+      render: () => {
+        const div = document.createElement('div');
+        div.dataset.panelId = `dialogue-${npcId}`;
+        div.innerHTML = `<div class="dialogue-bubble">${npcId}: 你好，博士</div>`;
+        // 模拟对话选项
+        const closeBtn = document.createElement('button');
+        closeBtn.textContent = '结束对话';
+        closeBtn.onclick = () => this.closePanel();
+        div.appendChild(closeBtn);
+        return div;
+      }
+    });
+  }
+
+  override dispose(): void {
+    super.dispose();
     this.root.remove();
   }
 }
-3. ShipMode 主类：src/modes/ShipMode.ts
+5. WorldUIManager（世界 UI）
 typescript
-// src/modes/ShipMode.ts
-// ============================================================
-// ShipMode —— 舰船模式（三层 UI：行动/编队/干员）
-// ============================================================
+// src/ui/world/WorldUIManager.ts（重写自 UILayer）
+import { BaseInteractionUI } from '../BaseInteractionUI';
+import { Minimap } from './Minimap';
+import { PlayerHud } from './PlayerHud';
+import { Crosshair } from './Crosshair';
+import { FloatingText } from './FloatingText';
+import { GameSession } from '../../core/Session';
+import { ItemManager } from '../../systems/inventory/ItemManager';
+import { InteractionManager } from '../../systems/interaction/InteractionManager';
 
-import * as THREE from 'three';
-import type { GameSession } from '../core/Session';
-import { SaveSystem } from '../core/SaveSystem';
-import { computeCombatStats, RELIC_CONFIG } from '../core/Session';
-import { MapLayer } from './ship/MapLayer';
-import { UILayer } from './ship/UILayer';
-import type { ShipTab, ActionFlowState, ShipModeCallbacks } from './ShipModeTypes';
+export class WorldUIManager extends BaseInteractionUI {
+  private minimap: Minimap;
+  private hud: PlayerHud;
+  private crosshair: Crosshair;
+  private floatingTexts: FloatingText[] = [];
 
-export interface ShipModeOptions {
-  scene: THREE.Scene;
-  camera: THREE.Camera;
-  renderer: THREE.WebGLRenderer;
-  session: GameSession;
-  container: HTMLElement;
-  callbacks: ShipModeCallbacks;
-}
+  // ★ 交互提示（按E拾取）
+  private interactPrompt: HTMLDivElement;
 
-export class ShipMode {
-  private scene: THREE.Scene;
-  private camera: THREE.Camera;
-  private renderer: THREE.WebGLRenderer;
-  private session: GameSession;
-  private callbacks: ShipModeCallbacks;
-
-  private mapLayer: MapLayer;
-  private uiLayer: UILayer;
-
-  private isActive = true;
-
-  // ★ 行动流程状态
-  private actionState: ActionFlowState = 'idle';
-
-  constructor(options: ShipModeOptions) {
-    this.scene = options.scene;
-    this.camera = options.camera;
-    this.renderer = options.renderer;
-    this.session = options.session;
-    this.callbacks = options.callbacks;
-
-    // 相机位置（俯视舰船）
-    this.camera.position.set(8, 10, 12);
-    this.camera.lookAt(0, 0, 0);
-
-    // 地图层
-    this.mapLayer = new MapLayer({
-      scene: this.scene,
-      camera: this.camera,
-      renderer: this.renderer,
-      onInteraction: (event) => this.handleMapInteraction(event),
-    });
-
-    // UI 层
-    this.uiLayer = new UILayer({
-      container: options.container,
-      session: this.session,
-      onAction: (action) => this.handleUIAction(action),
-      onTabSwitch: (tab) => this.handleTabSwitch(tab),
-    });
-
-    this.uiLayer.render();
+  constructor(
+    private session: GameSession,
+    private itemManager: ItemManager,
+    private interactionManager: InteractionManager,
+  ) {
+    super();
+    this.minimap = new Minimap(/* raster */);
+    this.hud = new PlayerHud();
+    this.crosshair = new Crosshair();
+    this.buildInteractPrompt();
   }
 
-  // ---- 交互处理 ----
-
-  private handleMapInteraction(event: import('./ShipModeTypes').ShipInteractionEvent): void {
-    // 地图点击可触发一些视觉反馈，但主要交互在 UI
-    console.log('[ShipMode] 地图交互:', event.target);
+  private buildInteractPrompt(): void {
+    this.interactPrompt = document.createElement('div');
+    this.interactPrompt.style.cssText = `
+      position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%);
+      color: #fff; background: rgba(0,0,0,0.7); padding: 8px 16px;
+      border-radius: 4px; display: none; z-index: 200;
+      font-size: 14px; pointer-events: none;
+    `;
+    this.interactPrompt.textContent = '按 E 拾取';
+    document.body.appendChild(this.interactPrompt);
   }
 
-  private handleTabSwitch(tab: ShipTab): void {
-    console.log('[ShipMode] 切换到:', tab);
-  }
+  // ---- 每帧更新（高频） ----
+  update(dt: number, ctx: {
+    px: number; pz: number; yaw: number;
+    entities: any[];
+    hp: number; maxHp: number;
+    nearbyItem?: { itemId: string; distance: number };
+  }): void {
+    this.minimap.update(ctx.px, ctx.pz, ctx.yaw, ctx.entities);
+    this.hud.update(ctx.hp, ctx.maxHp);
 
-  private handleUIAction(action: 'depart' | 'gacha_pull'): void {
-    if (action === 'gacha_pull') {
-      this.doGachaPull();
-    } else if (action === 'depart') {
-      this.doDepart();
-    }
-  }
-
-  // ---- ⭐ 抽卡逻辑 ----
-
-  private doGachaPull(): void {
-    // 检查是否还能抽
-    if (this.session.gacha.totalPulls >= 60) {
-      this.uiLayer.setActionState('idle');
-      // TODO: 显示“今日抽卡已达上限”
-      return;
-    }
-
-    // ★ 这里接入真正的抽卡逻辑（GachaSystem）
-    // 简单模拟：随机给一个干员或藏品
-    const result = this.simulateGacha();
-
-    if (result.type === 'ally') {
-      // 友军：加入 roster，初始化 L4 背包
-      if (!this.session.allies.roster.includes(result.id)) {
-        this.session.allies.roster.push(result.id);
-        // 创建该干员的背包（如 3x3）
-        this.session.inventories.allies[result.id] = this.createAllyInventory(result.id);
-      }
-    } else if (result.type === 'relic') {
-      // 藏品：加入 owned
-      if (!this.session.relics.owned.includes(result.id)) {
-        this.session.relics.owned.push(result.id);
-      }
-    }
-
-    // 更新保底
-    this.session.gacha.pityCounter += 1;
-    this.session.gacha.totalPulls += 1;
-
-    // ★ 抽卡后自动保存
-    SaveSystem.save(this.session);
-
-    // 刷新 UI
-    this.uiLayer.update(this.session);
-    this.uiLayer.render();
-
-    // 检查是否可出击
-    if (this.session.allies.roster.length > 0) {
-      this.uiLayer.setActionState('gacha_done');
-    }
-  }
-
-  private simulateGacha(): { type: 'ally' | 'relic'; id: string } {
-    // 模拟：50% 概率给干员，50% 给藏品
-    const isAlly = Math.random() < 0.5;
-
-    if (isAlly) {
-      const allies = ['amiya', 'texas', 'exusiai', 'silverash', 'hoshiguma'];
-      return { type: 'ally', id: allies[Math.floor(Math.random() * allies.length)] };
+    // 交互提示
+    if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
+      this.interactPrompt.textContent = `按 E 拾取 ${ctx.nearbyItem.itemId}`;
+      this.interactPrompt.style.display = 'block';
     } else {
-      const relics = ['relic_001', 'relic_002', 'relic_003'];
-      return { type: 'relic', id: relics[Math.floor(Math.random() * relics.length)] };
+      this.interactPrompt.style.display = 'none';
+    }
+
+    // 浮动文字（自动飘动消失）
+    for (let i = this.floatingTexts.length - 1; i >= 0; i--) {
+      if (this.floatingTexts[i].update(dt)) {
+        this.floatingTexts[i].dispose();
+        this.floatingTexts.splice(i, 1);
+      }
     }
   }
 
-  private createAllyInventory(allyId: string): (any | null)[][] {
-    // 每个干员 3x3 背包
-    return Array.from({ length: 3 }, () => Array(3).fill(null));
+  // ---- ★ 显示浮动伤害数字（WorldMode 调用） ----
+  showFloatingText(x: number, y: number, text: string, color: string = '#ff4444'): void {
+    const ft = new FloatingText(x, y, text, color);
+    this.floatingTexts.push(ft);
   }
 
-  // ---- 🚀 出击 ----
-
-  private doDepart(): void {
-    // 检查是否有干员
-    if (this.session.allies.roster.length === 0) {
-      return;
-    }
-
-    // ★ 计算最终战斗属性（所有藏品统一结算）
-    const combatStats = computeCombatStats(this.session, RELIC_CONFIG);
-
-    // ★ 保存当前状态
-    SaveSystem.save(this.session);
-
-    // ★ 通知上层进入 WorldMode
-    this.callbacks.onDepart(this.session);
+  // ---- ★ 打开对话（WorldMode 触发，轻量版，不阻塞操作） ----
+  openDialogue(npcId: string, text: string): void {
+    // 世界中的对话不阻塞操作，显示在角落
+    const bubble = document.createElement('div');
+    bubble.style.cssText = `
+      position: fixed; bottom: 200px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.85); color: #fff; padding: 16px 24px;
+      border-radius: 8px; max-width: 400px; z-index: 150;
+      border: 1px solid #4466aa;
+    `;
+    bubble.textContent = `${npcId}: ${text}`;
+    document.body.appendChild(bubble);
+    setTimeout(() => bubble.remove(), 3000);
   }
 
-  // ---- 每帧更新 ----
-
-  update(dt: number): void {
-    if (!this.isActive) return;
-    this.mapLayer.update(dt);
-    // UI 由外部事件触发刷新，不需要每帧更新
+  // ---- ★ 打开容器/拾取结果（WorldMode 触发） ----
+  showPickupResult(itemId: string, success: boolean): void {
+    const msg = success ? `拾取了 ${itemId}` : `背包已满，无法拾取 ${itemId}`;
+    // 用浮动文字展示
+    this.showFloatingText(0, -50, msg, success ? '#44dd88' : '#ff4444');
   }
 
-  render(): void {
-    if (!this.isActive) return;
-    this.renderer.render(this.scene, this.camera);
-  }
-
-  // ---- 外部通信 ----
-
-  updateSession(session: GameSession): void {
-    this.session = session;
-    this.uiLayer.update(session);
-    this.uiLayer.render();
-    SaveSystem.save(session);
-  }
-
-  save(): void {
-    SaveSystem.save(this.session);
-  }
-
-  // ---- 清理 ----
-
-  dispose(): void {
-    this.isActive = false;
-    this.mapLayer.dispose();
-    this.uiLayer.dispose();
-
-    while (this.scene.children.length > 0) {
-      const child = this.scene.children[0];
-      if (child.type === 'Scene') continue;
-      this.scene.remove(child);
-    }
+  override dispose(): void {
+    super.dispose();
+    this.minimap.dispose();
+    this.hud.dispose();
+    this.crosshair.dispose();
+    this.interactPrompt.remove();
+    this.floatingTexts.forEach(ft => ft.dispose());
+    this.floatingTexts = [];
   }
 }
-✅ 架构总结
-面板	数据来源	操作结果
-行动	session.gacha、session.allies.roster	抽卡 → 保存 → 可出击
-编队	inventories.ship + inventories.player + inventories.allies	查看/整理（后续可拖拽）
-干员	relics.owned + allies.roster	查看属性/藏品
-行动流程：
-
-text
-点击“行动” → 查看状态 → 点击“招募抽卡” → 获得干员/藏品 → 自动存档 → 点击“出击” → 进入 WorldMode
-编队展示 L2+L3+L4 三层背包整合视图，L1（舰船仓库）由上层管理，不在这里显示。
-干员展示藏品和干员列表，后续可扩展为详细的属性面板。
-
-
-
-
-你说得对！L1（舰船基地仓库）是舰船地图上最重要的设施之一，它应该是一个可见的 3D 建筑，玩家点击它就能打开仓库界面。而整个舰船地图本身就是 Three.js 3D 场景。
-
-让我重新设计 MapLayer，让 L1 仓库在地图上显眼可见、可交互，并且三个 UI 面板（行动/编队/干员）与地图完全联动。
-
-🏛️ 修正后的架构
-text
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ShipMode                                    │
-│              （3D 舰船地图 + 三层 UI 面板）                         │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│   ┌─────────────── 3D 地图 (Three.js) ───────────────┐             │
-│   │                                                    │             │
-│   │   ┌─────────────────────────────────────────┐      │             │
-│   │   │  📦 L1 仓库（显眼建筑，点击可打开）     │      │             │
-│   │   │  ⚙️ 合成台（点击打开合成）              │      │             │
-│   │   │  👥 干员休息区（点击查看干员）          │      │             │
-│   │   │  🚀 舰船出口（点击触发行动流程）        │      │             │
-│   │   └─────────────────────────────────────────┘      │             │
-│   │                                                    │             │
-│   └────────────────────────────────────────────────────┘             │
-│                              │                                      │
-│                              ▼ 点击交互                            │
-│   ┌─────────────────────────────────────────────────────────┐       │
-│   │                    UI 三层面板                          │       │
-│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐              │       │
-│   │  │  行动     │ │  编队     │ │  干员     │              │       │
-│   │  │  抽卡→出击 │ │  L2+L3+L4 │ │  藏品+干员│              │       │
-│   │  └──────────┘ └──────────┘ └──────────┘              │       │
-│   │                                                      │       │
-│   │  ★ L1 仓库 = 地图点击 → 弹窗（或独立面板）          │       │
-│   └─────────────────────────────────────────────────────────┘       │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-📁 完整代码
-1. 类型定义：src/modes/ShipModeTypes.ts
+🔌 第三部分：连接器（在 Mode 中组装）
+ShipMode 的组装方式
 typescript
-// src/modes/ShipModeTypes.ts
-// ============================================================
-// ShipMode 类型定义
-// ============================================================
+// src/modes/ShipMode.ts（片段）
+export class ShipMode implements IGameMode {
+  private itemManager!: ItemManager;
+  private craftingManager!: CraftingManager;
+  private interactionManager!: InteractionManager;
+  private uiManager!: ShipUIManager;
 
-import type { GameSession } from '../core/Session';
-
-/** 舰船三大面板 */
-export type ShipTab = 'action' | 'squad' | 'operators';
-
-/** 地图上可交互的设施类型 */
-export type FacilityType = 'warehouse' | 'craft' | 'gacha' | 'barracks' | 'exit';
-
-/** 地图交互事件 */
-export interface ShipInteractionEvent {
-  type: 'click' | 'hover' | 'exit';
-  target: 'floor' | 'facility' | 'npc' | 'exit' | 'unknown';
-  facilityType?: FacilityType;
-  position?: { x: number; y: number; z: number };
-  data?: any;
-}
-
-/** 行动流程状态 */
-export type ActionFlowState = 'idle' | 'gacha_pulling' | 'gacha_done' | 'departing';
-
-/** ShipMode 回调 */
-export interface ShipModeCallbacks {
-  onDepart: (session: GameSession) => void;
-  onSave: (session: GameSession) => void;
-}
-2. 地图层：src/modes/ship/MapLayer.ts
-typescript
-// src/modes/ship/MapLayer.ts
-// ============================================================
-// 舰船 3D 地图层 —— Three.js 场景
-// 包含：地面、舰船模型、L1仓库（显眼设施）、合成台、干员区、出口
-// ============================================================
-
-import * as THREE from 'three';
-import type { FacilityType, ShipInteractionEvent } from '../ShipModeTypes';
-
-export interface MapLayerOptions {
-  scene: THREE.Scene;
-  camera: THREE.Camera;
-  renderer: THREE.WebGLRenderer;
-  onInteraction: (event: ShipInteractionEvent) => void;
-}
-
-/** 设施定义 */
-interface FacilityDef {
-  type: FacilityType;
-  label: string;
-  position: { x: number; y: number; z: number };
-  color: number;
-  size: { w: number; h: number; d: number };
-}
-
-export class MapLayer {
-  private scene: THREE.Scene;
-  private camera: THREE.Camera;
-  private renderer: THREE.WebGLRenderer;
-  private onInteraction: (event: ShipInteractionEvent) => void;
-
-  // 地图元素
-  private floor: THREE.Mesh;
-  private shipModel: THREE.Group;
-  private facilities: Map<FacilityType, THREE.Mesh> = new Map();
-  private facilityLabels: Map<FacilityType, THREE.Sprite> = new Map();
-  private npcs: THREE.Mesh[] = [];
-
-  // 交互
-  private raycaster: THREE.Raycaster;
-  private pointer: THREE.Vector2;
-  private hoveredObject: THREE.Object3D | null = null;
-
-  constructor(options: MapLayerOptions) {
-    this.scene = options.scene;
-    this.camera = options.camera;
-    this.renderer = options.renderer;
-    this.onInteraction = options.onInteraction;
-
-    this.raycaster = new THREE.Raycaster();
-    this.pointer = new THREE.Vector2();
-
-    this.buildMap();
-    this.setupInteraction();
-  }
-
-  // ---- 构建地图 ----
-
-  private buildMap(): void {
-    // ① 地面（舰船甲板）
-    this.buildFloor();
-
-    // ② 舰船主体
-    this.buildShip();
-
-    // ③ ★ L1 仓库（最显眼的设施）
-    this.buildWarehouse();
-
-    // ④ 其他设施（合成台、干员区、出口）
-    this.buildOtherFacilities();
-
-    // ⑤ NPC 干员（站岗/巡逻）
-    this.buildNPCs();
-
-    // ⑥ 灯光
-    this.buildLights();
-  }
-
-  private buildFloor(): void {
-    const geo = new THREE.PlaneGeometry(50, 50);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0x1a1a2e,
-      roughness: 0.8,
-      metalness: 0.2,
-      side: THREE.DoubleSide,
+  enter(ctx: IGameModeContext): void {
+    // ① 初始化业务逻辑层
+    this.itemManager = new ItemManager(ctx.session);
+    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
+    this.interactionManager = new InteractionManager({
+      session: ctx.session,
+      itemManager: this.itemManager,
     });
-    this.floor = new THREE.Mesh(geo, mat);
-    this.floor.rotation.x = -Math.PI / 2;
-    this.floor.position.y = -0.05;
-    this.floor.receiveShadow = true;
-    this.floor.userData = { type: 'floor' };
-    this.scene.add(this.floor);
 
-    // 网格辅助
-    const grid = new THREE.GridHelper(50, 25, 0x334466, 0x223355);
-    grid.position.y = 0.01;
-    this.scene.add(grid);
-  }
-
-  private buildShip(): void {
-    this.shipModel = new THREE.Group();
-
-    // 船体（扁长方体）
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x334466,
-      roughness: 0.5,
-      metalness: 0.4,
-    });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(14, 2.5, 8), bodyMat);
-    body.position.set(0, 1.25, 0);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    this.shipModel.add(body);
-
-    // 上层建筑
-    const cabinMat = new THREE.MeshStandardMaterial({
-      color: 0x556688,
-      roughness: 0.4,
-      metalness: 0.3,
-    });
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(7, 2, 5), cabinMat);
-    cabin.position.set(0, 3.25, -0.5);
-    cabin.castShadow = true;
-    this.shipModel.add(cabin);
-
-    // 驾驶舱窗口（发光）
-    const glassMat = new THREE.MeshStandardMaterial({
-      color: 0x4488ff,
-      emissive: 0x4488ff,
-      emissiveIntensity: 0.3,
-      transparent: true,
-      opacity: 0.6,
-    });
-    const glass = new THREE.Mesh(new THREE.BoxGeometry(3, 0.8, 0.5), glassMat);
-    glass.position.set(0, 3.5, 2.3);
-    this.shipModel.add(glass);
-
-    // 天线
-    const antMat = new THREE.MeshStandardMaterial({
-      color: 0x88bbdd,
-      emissive: 0x224466,
-      emissiveIntensity: 0.2,
-    });
-    const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.8), antMat);
-    ant.position.set(0, 4.8, -0.5);
-    this.shipModel.add(ant);
-
-    // 信号灯（闪烁）
-    const lightMat = new THREE.MeshStandardMaterial({
-      color: 0xff4444,
-      emissive: 0xff2222,
-      emissiveIntensity: 0.5,
-    });
-    const light = new THREE.Mesh(new THREE.SphereGeometry(0.15, 8, 8), lightMat);
-    light.position.set(0, 5.2, 0);
-    light.userData = { isSignalLight: true };
-    this.shipModel.add(light);
-
-    this.scene.add(this.shipModel);
-  }
-
-  // ---- ★ L1 仓库（最显眼） ----
-
-  private buildWarehouse(): void {
-    const group = new THREE.Group();
-    const pos = { x: -7, z: 4 };
-
-    // 底座（发光平台）
-    const baseMat = new THREE.MeshStandardMaterial({
-      color: 0x223355,
-      roughness: 0.3,
-      metalness: 0.6,
-      emissive: 0x224488,
-      emissiveIntensity: 0.15,
-    });
-    const base = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.3, 3.5), baseMat);
-    base.position.set(pos.x, 0.15, pos.z);
-    base.receiveShadow = true;
-    group.add(base);
-
-    // 仓库主体（半透明玻璃风格）
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: 0x4488cc,
-      roughness: 0.2,
-      metalness: 0.4,
-      transparent: true,
-      opacity: 0.7,
-      emissive: 0x224488,
-      emissiveIntensity: 0.1,
-    });
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(2.8, 2.2, 2.8), wallMat);
-    wall.position.set(pos.x, 1.25, pos.z);
-    wall.castShadow = true;
-    group.add(wall);
-
-    // 发光边框（科技感）
-    const edgeMat = new THREE.MeshStandardMaterial({
-      color: 0x66ccff,
-      emissive: 0x4488ff,
-      emissiveIntensity: 0.3,
-    });
-    const edge = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.08, 2.9), edgeMat);
-    edge.position.set(pos.x, 0.3, pos.z);
-    group.add(edge);
-
-    const edge2 = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.08, 2.9), edgeMat);
-    edge2.position.set(pos.x, 2.2, pos.z);
-    group.add(edge2);
-
-    // 仓库标志（发光圆点）
-    const logoMat = new THREE.MeshStandardMaterial({
-      color: 0x66ddff,
-      emissive: 0x44ccff,
-      emissiveIntensity: 0.8,
-    });
-    const logo = new THREE.Mesh(new THREE.SphereGeometry(0.25, 12, 12), logoMat);
-    logo.position.set(pos.x, 2.4, pos.z);
-    group.add(logo);
-
-    // 保存引用
-    const mainMesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.1)); // dummy
-    mainMesh.userData = { type: 'facility', facilityType: 'warehouse', label: '📦 舰船仓库 (L1)' };
-    mainMesh.position.set(pos.x, 1.25, pos.z);
-    // 用 group 作为交互目标，但为了 raycaster，用主 mesh
-    group.userData = { type: 'facility', facilityType: 'warehouse', label: '📦 舰船仓库 (L1)' };
-    this.scene.add(group);
-
-    // 存储引用（用于点击检测）
-    this.facilities.set('warehouse', group as any);
-  }
-
-  // ---- 其他设施 ----
-
-  private buildOtherFacilities(): void {
-    const facilities: FacilityDef[] = [
-      {
-        type: 'craft',
-        label: '🔧 合成台',
-        position: { x: 7, y: 0.3, z: 4 },
-        color: 0xdd8833,
-        size: { w: 1.6, h: 1.2, d: 1.6 },
-      },
-      {
-        type: 'gacha',
-        label: '⭐ 抽卡机',
-        position: { x: -7, y: 0.3, z: -4 },
-        color: 0xcc44cc,
-        size: { w: 1.2, h: 1.8, d: 1.2 },
-      },
-      {
-        type: 'barracks',
-        label: '👥 干员区',
-        position: { x: 7, y: 0.3, z: -4 },
-        color: 0x44bbdd,
-        size: { w: 2.0, h: 1.0, d: 2.0 },
-      },
-      {
-        type: 'exit',
-        label: '🚀 舰桥出口',
-        position: { x: 0, y: 0.3, z: 7 },
-        color: 0x44dd88,
-        size: { w: 1.8, h: 0.5, d: 1.8 },
-      },
-    ];
-
-    for (const def of facilities) {
-      const group = new THREE.Group();
-
-      // 底座
-      const baseMat = new THREE.MeshStandardMaterial({
-        color: def.color,
-        roughness: 0.4,
-        metalness: 0.5,
-        emissive: def.color,
-        emissiveIntensity: 0.08,
-      });
-      const base = new THREE.Mesh(
-        new THREE.BoxGeometry(def.size.w, 0.2, def.size.d),
-        baseMat,
-      );
-      base.position.set(def.position.x, def.position.y, def.position.z);
-      base.receiveShadow = true;
-      group.add(base);
-
-      // 主体（每个设施不同形状）
-      if (def.type === 'craft') {
-        // 合成台：带工作台面
-        const topMat = new THREE.MeshStandardMaterial({
-          color: 0x886633,
-          roughness: 0.6,
-          metalness: 0.2,
-        });
-        const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.6, 1.2), topMat);
-        top.position.set(def.position.x, def.position.y + 0.4, def.position.z);
-        group.add(top);
-
-        // 发光面
-        const glowMat = new THREE.MeshStandardMaterial({
-          color: 0xff8833,
-          emissive: 0xff6611,
-          emissiveIntensity: 0.2,
-        });
-        const glow = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.8), glowMat);
-        glow.rotation.x = -Math.PI / 2;
-        glow.position.set(def.position.x, def.position.y + 0.7, def.position.z);
-        group.add(glow);
-      } else if (def.type === 'gacha') {
-        // 抽卡机：柱状
-        const poleMat = new THREE.MeshStandardMaterial({
-          color: 0x663388,
-          roughness: 0.3,
-          metalness: 0.3,
-          emissive: 0x8833aa,
-          emissiveIntensity: 0.1,
-        });
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.4), poleMat);
-        pole.position.set(def.position.x, def.position.y + 0.8, def.position.z);
-        group.add(pole);
-
-        // 球顶
-        const ballMat = new THREE.MeshStandardMaterial({
-          color: 0xcc44cc,
-          emissive: 0xcc44cc,
-          emissiveIntensity: 0.3,
-        });
-        const ball = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12), ballMat);
-        ball.position.set(def.position.x, def.position.y + 1.5, def.position.z);
-        group.add(ball);
-      } else if (def.type === 'barracks') {
-        // 干员区：长条座椅
-        const seatMat = new THREE.MeshStandardMaterial({
-          color: 0x446688,
-          roughness: 0.5,
-          metalness: 0.2,
-        });
-        const seat = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.3, 0.6), seatMat);
-        seat.position.set(def.position.x, def.position.y + 0.15, def.position.z);
-        group.add(seat);
-
-        const backMat = new THREE.MeshStandardMaterial({
-          color: 0x335577,
-          roughness: 0.5,
-          metalness: 0.2,
-        });
-        const back = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.6, 0.1), backMat);
-        back.position.set(def.position.x, def.position.y + 0.45, def.position.z + 0.3);
-        group.add(back);
-
-        // 干员休息标记（小光点阵列）
-        for (let i = -1; i <= 1; i++) {
-          const dotMat = new THREE.MeshStandardMaterial({
-            color: 0x66ddff,
-            emissive: 0x44bbff,
-            emissiveIntensity: 0.2,
-          });
-          const dot = new THREE.Mesh(new THREE.SphereGeometry(0.08, 6, 6), dotMat);
-          dot.position.set(def.position.x + i * 0.5, def.position.y + 0.4, def.position.z - 0.5);
-          group.add(dot);
-        }
-      } else if (def.type === 'exit') {
-        // 出口：发光门
-        const doorMat = new THREE.MeshStandardMaterial({
-          color: 0x44dd88,
-          roughness: 0.3,
-          metalness: 0.2,
-          emissive: 0x44dd88,
-          emissiveIntensity: 0.15,
-        });
-        const door = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.4, 0.2), doorMat);
-        door.position.set(def.position.x, def.position.y + 0.25, def.position.z);
-        group.add(door);
-
-        // 光柱
-        const beamMat = new THREE.MeshStandardMaterial({
-          color: 0x44dd88,
-          emissive: 0x44dd88,
-          emissiveIntensity: 0.1,
-          transparent: true,
-          opacity: 0.15,
-        });
-        const beam = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.8, 0.1), beamMat);
-        beam.position.set(def.position.x, def.position.y + 0.6, def.position.z);
-        group.add(beam);
-
-        // 引导光（地面光晕）
-        const haloMat = new THREE.MeshStandardMaterial({
-          color: 0x44dd88,
-          emissive: 0x44dd88,
-          emissiveIntensity: 0.1,
-          transparent: true,
-          opacity: 0.2,
-          side: THREE.DoubleSide,
-        });
-        const halo = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.9, 32), haloMat);
-        halo.rotation.x = -Math.PI / 2;
-        halo.position.set(def.position.x, 0.02, def.position.z);
-        group.add(halo);
-      }
-
-      group.userData = {
-        type: 'facility',
-        facilityType: def.type,
-        label: def.label,
-      };
-      this.scene.add(group);
-      this.facilities.set(def.type, group as any);
-    }
-  }
-
-  // ---- NPC 干员 ----
-
-  private buildNPCs(): void {
-    const positions = [
-      { x: -4, z: 0, color: 0xff6666, label: '阿米娅' },
-      { x: 4, z: -2, color: 0x66ff66, label: '德克萨斯' },
-      { x: -3, z: -5, color: 0x6666ff, label: '能天使' },
-    ];
-
-    for (const pos of positions) {
-      const group = new THREE.Group();
-
-      // 身体
-      const bodyMat = new THREE.MeshStandardMaterial({
-        color: pos.color,
-        roughness: 0.3,
-        metalness: 0.1,
-      });
-      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.3, 0.6, 8, 12), bodyMat);
-      body.position.y = 0.45;
-      group.add(body);
-
-      // 头
-      const headMat = new THREE.MeshStandardMaterial({
-        color: 0xffeecc,
-        roughness: 0.4,
-        metalness: 0.0,
-      });
-      const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12), headMat);
-      head.position.y = 0.9;
-      group.add(head);
-
-      // 名字标签用 Sprite（简化，这里省略）
-
-      group.position.set(pos.x, 0, pos.z);
-      group.userData = { type: 'npc', label: pos.label };
-      this.scene.add(group);
-      this.npcs.push(group);
-    }
-  }
-
-  // ---- 灯光 ----
-
-  private buildLights(): void {
-    const ambient = new THREE.AmbientLight(0x334466, 0.5);
-    this.scene.add(ambient);
-
-    const dirLight = new THREE.DirectionalLight(0xffeedd, 1.0);
-    dirLight.position.set(10, 20, 10);
-    dirLight.castShadow = true;
-    this.scene.add(dirLight);
-
-    const fillLight = new THREE.DirectionalLight(0x4488ff, 0.3);
-    fillLight.position.set(-10, 5, -10);
-    this.scene.add(fillLight);
-  }
-
-  // ---- 交互 ----
-
-  private setupInteraction(): void {
-    const el = this.renderer.domElement;
-    el.addEventListener('click', this.onClick.bind(this));
-    el.addEventListener('pointermove', this.onPointerMove.bind(this));
-  }
-
-  private onClick(e: MouseEvent): void {
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-
-    // 检测所有可交互对象
-    const targets: THREE.Object3D[] = [this.floor];
-    for (const [, mesh] of this.facilities) {
-      targets.push(mesh);
-    }
-    for (const npc of this.npcs) {
-      targets.push(npc);
-    }
-    // 舰船主体也可以交互
-    targets.push(this.shipModel);
-
-    const intersects = this.raycaster.intersectObjects(targets, true);
-
-    if (intersects.length > 0) {
-      let obj = intersects[0].object;
-      // 向上查找 userData
-      while (obj && !obj.userData?.type) {
-        obj = obj.parent as THREE.Object3D;
-      }
-
-      if (obj?.userData?.type) {
-        const data = obj.userData;
-        const point = intersects[0].point;
-
-        if (data.type === 'facility') {
-          this.onInteraction({
-            type: 'click',
-            target: 'facility',
-            facilityType: data.facilityType,
-            position: point,
-            data: data,
-          });
-        } else if (data.type === 'npc') {
-          this.onInteraction({
-            type: 'click',
-            target: 'npc',
-            position: point,
-            data: data,
-          });
-        } else if (data.type === 'floor') {
-          this.onInteraction({
-            type: 'click',
-            target: 'floor',
-            position: point,
-          });
-        }
-      }
-    }
-  }
-
-  private onPointerMove(e: MouseEvent): void {
-    // Hover 检测（改变光标）
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-
-    const targets: THREE.Object3D[] = [this.floor];
-    for (const [, mesh] of this.facilities) {
-      targets.push(mesh);
-    }
-    for (const npc of this.npcs) {
-      targets.push(npc);
-    }
-
-    const intersects = this.raycaster.intersectObjects(targets, true);
-    const hit = intersects.length > 0;
-
-    this.renderer.domElement.style.cursor = hit ? 'pointer' : 'default';
-
-    // Hover 高亮效果（可扩展）
-  }
-
-  // ---- 更新 ----
-
-  update(dt: number): void {
-    const time = Date.now() / 1000;
-
-    // 信号灯闪烁
-    const signalLight = this.shipModel.children.find(
-      (c) => c.userData?.isSignalLight,
-    ) as THREE.Mesh;
-    if (signalLight) {
-      const intensity = 0.3 + Math.sin(time * 2) * 0.3;
-      (signalLight.material as THREE.MeshStandardMaterial).emissiveIntensity = Math.max(0, intensity);
-    }
-
-    // NPC 浮动
-    for (let i = 0; i < this.npcs.length; i++) {
-      const npc = this.npcs[i];
-      npc.position.y = Math.sin(time * 1.2 + i * 2) * 0.05;
-    }
-
-    // L1 仓库脉冲光
-    const warehouse = this.facilities.get('warehouse');
-    if (warehouse) {
-      // 找到发光圆点
-      const logo = warehouse.children.find(
-        (c) => c.type === 'Mesh' && (c as THREE.Mesh).geometry.type === 'SphereGeometry',
-      ) as THREE.Mesh;
-      if (logo) {
-        const intensity = 0.5 + Math.sin(time * 1.5) * 0.3;
-        (logo.material as THREE.MeshStandardMaterial).emissiveIntensity = Math.max(0.1, intensity);
-      }
-    }
-  }
-
-  // ---- 清理 ----
-
-  dispose(): void {
-    const el = this.renderer.domElement;
-    el.removeEventListener('click', this.onClick.bind(this));
-    el.removeEventListener('pointermove', this.onPointerMove.bind(this));
-
-    // 递归清理场景（简化）
-    while (this.scene.children.length > 0) {
-      const child = this.scene.children[0];
-      this.scene.remove(child);
-      if ((child as THREE.Mesh).geometry) {
-        (child as THREE.Mesh).geometry?.dispose();
-        if (Array.isArray((child as THREE.Mesh).material)) {
-          (child as THREE.Mesh).material.forEach(m => m.dispose());
-        } else {
-          (child as THREE.Mesh).material?.dispose();
-        }
-      }
-    }
-  }
-}
-3. UI 层 + ShipMode 主类（保持不变）
-UI 层和 ShipMode 主类与上一轮完全一致，唯一变化是：
-
-点击 L1 仓库设施 → 打开仓库弹窗
-
-在 ShipMode.handleMapInteraction 中添加：
-
-typescript
-// src/modes/ShipMode.ts
-
-private handleMapInteraction(event: ShipInteractionEvent): void {
-  if (event.target === 'facility' && event.facilityType === 'warehouse') {
-    // ★ 打开 L1 仓库
-    const count = this.countItems(this.session.inventories.base);
-    this.uiLayer.openModal(
-      'warehouse',
-      '📦 舰船基地仓库 (L1)',
-      `容量：30×30（${count} 件）\n\n` +
-      `当前物品：\n${this.listItems(this.session.inventories.base)}`
+    // ② 初始化 UI 层
+    this.uiManager = new ShipUIManager(
+      ctx.session,
+      this.itemManager,
+      this.craftingManager,
+      this.interactionManager,
     );
-    return;
+
+    // ③ 设置 3D 点击交互：点击建筑 → 调用 interactionManager.interact()
+    this.setupRaycaster((target) => {
+      const result = this.interactionManager.interact(target);
+      // 根据 result.action 决定 UI 行为
+      if (result.action === 'open_crafting') {
+        this.uiManager.openCrafting(result.payload.station);
+      } else if (result.action === 'show_item_detail') {
+        this.uiManager.openItemDetail(
+          result.payload.grid,
+          result.payload.row,
+          result.payload.col,
+        );
+      } else if (result.action === 'start_dialogue') {
+        this.uiManager.openDialogue(result.payload.npcId, result.payload.dialogueTree);
+      }
+    });
   }
 
-  if (event.target === 'facility' && event.facilityType === 'exit') {
-    // ★ 点击出口 → 切换到“行动”面板
-    this.uiLayer.switchTab('action');
-    return;
+  exit(): void {
+    this.uiManager.dispose();
+    // 业务逻辑层无需销毁（无状态）
   }
-
-  // ... 其他设施
 }
-✅ 架构总结
-层级	职责	关键交互
-MapLayer	3D 场景渲染 + 点击检测	L1 仓库显眼建筑 + 出口可点击
-UILayer	三大面板（行动/编队/干员）	显示数据、抽卡、触发出击
-ShipMode	持有两层 + 交互总线	地图点击 → 打开仓库弹窗 / 切换面板
-L1 仓库：在地图上是一个发光的半透明科技建筑，点击后弹出仓库界面，展示 L1 的巨量物品。
-出口：在地图上是发光门 + 光柱，点击后切换到“行动”面板，引导玩家走完抽卡→出击流程。
+WorldMode 的组装方式
+typescript
+// src/modes/WorldMode.ts（片段）
+export class WorldMode implements IGameMode {
+  private itemManager!: ItemManager;
+  private craftingManager!: CraftingManager;
+  private interactionManager!: InteractionManager;
+  private uiManager!: WorldUIManager;
 
+  enter(ctx: WorldModeEnterContext): void {
+    // ① 业务逻辑层（与 ShipMode 共享同样的类，但实例独立）
+    this.itemManager = new ItemManager(ctx.session);
+    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
+    this.interactionManager = new InteractionManager({
+      session: ctx.session,
+      itemManager: this.itemManager,
+    });
 
+    // ② UI 层（世界专用）
+    this.uiManager = new WorldUIManager(ctx.session, this.itemManager, this.interactionManager);
+  }
+
+  update(dt: number): void {
+    // ... 现有战斗逻辑 ...
+
+    // ★ 检测附近可交互物品
+    const nearbyItem = this.findNearestItem();
+    this.uiManager.update(dt, {
+      px: this.player.position.x,
+      pz: this.player.position.z,
+      yaw: this.cameraCtrl.worldYaw,
+      entities: this.entities.allBases(),
+      hp: this.player.hp,
+      maxHp: this.player.maxHp,
+      nearbyItem: nearbyItem,
+    });
+
+    // ★ 按 E 交互
+    if (input.held.interact && nearbyItem) {
+      const result = this.interactionManager.interact({
+        type: 'item',
+        id: nearbyItem.itemId!,
+        data: { itemId: nearbyItem.itemId!, grid: 'player' },
+      });
+      if (result.action === 'show_item_detail') {
+        // 世界模式中拾取直接入包，不弹详情
+        const success = this.itemManager.addItem('player', nearbyItem.itemId!, 1);
+        this.uiManager.showPickupResult(nearbyItem.itemId!, success);
+        if (success) nearbyItem.dispose(); // 销毁世界中的物品实体
+      }
+    }
+  }
+
+  exit(): void {
+    this.uiManager.dispose();
+    // 业务逻辑层随模式销毁
+  }
+}
+📁 最终目录结构
+text
+src/
+├── core/                      # 不变
+├── entity/                    # 不变
+├── modes/
+│   ├── ShipMode.ts            # 组装 ShipUIManager + 业务层
+│   └── WorldMode.ts           # 组装 WorldUIManager + 业务层
+├── systems/                   # ★ 业务逻辑层（无 UI 依赖）
+│   ├── inventory/
+│   │   ├── ItemManager.ts     # 物品增删改查、使用
+│   │   └── CraftingManager.ts # 配方管理、合成
+│   └── interaction/
+│       └── InteractionManager.ts # 交互分发器
+├── ui/                        # ★ UI 层
+│   ├── BaseInteractionUI.ts   # 弹窗栈 + 输入阻塞（共用基类）
+│   ├── components/            # ★ 共享 UI 零件
+│   │   ├── ItemSlot.ts
+│   │   ├── DialogBubble.ts
+│   │   └── Button.ts
+│   ├── ship/                  # 舰船专用（低频、复杂面板）
+│   │   └── ShipUIManager.ts
+│   └── world/                 # 世界专用（高频、轻量 HUD）
+│       ├── WorldUIManager.ts
+│       ├── Minimap.ts
+│       ├── PlayerHud.ts
+│       ├── FloatingText.ts
+│       └── Crosshair.ts
+├── config/
+│   ├── items.json             # 物品配置（含 maxStack、effect）
+│   ├── craftRecipes.json      # 合成配方
+│   └── dialogues.json         # 对话树（后续）
+└── platform/input/
+    └── DesktopBinding.ts      # 增加 __UI_BLOCKING__ 检查
+✅ 这套架构的核心优势
+优势	说明
+业务逻辑与 UI 完全解耦	ItemManager/CraftingManager 不知道自己在舰船还是世界中被调用。
+舰船与世界 UI 独立进化	ShipUIManager 可以添加复杂的拖拽、右键菜单；WorldUIManager 只需轻量 HUD。
+共用的 UI 基类	BaseInteractionUI 统一管理弹窗栈和输入阻塞，新面板只需继承。
+共用的 UI 组件	renderItemSlot 在舰船和世界的背包/拾取提示中保持一致。
+开闭原则	加新交互（如“商店”）只需：① 在 Interactable 加类型；② 在 InteractionManager 加 handler；③ 在 UI 加面板渲染。
+可测试	ItemManager 可以脱离 UI 单独测试，只需传入 Mock Session。
+你现在可以并行开发：一个人（或同一时间）做 ShipUIManager 的复杂面板，另一个人做 WorldUIManager 的 HUD，底层 ItemManager 共用，互不干扰。

@@ -88,14 +88,12 @@ async function boot() {
     console.log('[boot] 新游戏存档已创建');
   }
 
-  // ★★★★★ 修复：如果标志为 true 但游戏刚启动，说明上次出击未正常返回 ★★★★★
+  // ★★★★★ 修复：如果标志为 true 但游戏刚启动，说明上次出击未正常执行 ★★★★★
   if (currentSession && currentSession.dayProgress.hasDepartedToday) {
-    console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），自动结算并推进一天');
-    currentSession.meta.day += 1;
-    currentSession.meta.totalDaysSurvived += 1;
+    console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），战斗未正常执行，维持当天存档');
     currentSession.dayProgress.hasDepartedToday = false;
     SaveSystem.save(currentSession);
-    console.log(`[boot] 已自动恢复，当前第 ${currentSession.meta.day} 天`);
+    console.log(`[boot] 已重置出击标志，当前仍为第 ${currentSession.meta.day} 天`);
   }
 
   // ---- 4. 启动主循环 ----

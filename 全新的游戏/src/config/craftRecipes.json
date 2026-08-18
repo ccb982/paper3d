@@ -1,0 +1,43 @@
+{
+  "recipes": [
+    {
+      "id": "healing_potion",
+      "name": "治疗药水",
+      "inputs": [
+        { "itemId": "food_ration", "count": 2 },
+        { "itemId": "iron_ore", "count": 1 }
+      ],
+      "output": { "itemId": "healing_potion", "count": 1 },
+      "station": "ship"
+    },
+    {
+      "id": "food_ration",
+      "name": "应急口粮",
+      "inputs": [
+        { "itemId": "scrap_metal", "count": 2 }
+      ],
+      "output": { "itemId": "food_ration", "count": 1 },
+      "station": "ship"
+    },
+    {
+      "id": "medkit",
+      "name": "医疗包",
+      "inputs": [
+        { "itemId": "healing_potion", "count": 3 },
+        { "itemId": "originium_shard", "count": 1 }
+      ],
+      "output": { "itemId": "medkit", "count": 1 },
+      "station": "ship"
+    },
+    {
+      "id": "ammo_pack",
+      "name": "弹药包",
+      "inputs": [
+        { "itemId": "iron_ore", "count": 2 },
+        { "itemId": "scrap_metal", "count": 3 }
+      ],
+      "output": { "itemId": "ammo_pack", "count": 1 },
+      "station": "portable"
+    }
+  ]
+}
