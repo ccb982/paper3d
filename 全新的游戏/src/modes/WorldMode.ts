@@ -37,6 +37,7 @@ import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { WorldUIManager } from '../ui/world/WorldUIManager';
+import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -85,6 +86,7 @@ export class WorldMode implements IGameMode {
   private bullets!: BulletManager;
   private bulletCooldown = 0;
   private chunkMeshes = new Map<number, THREE.Mesh>();
+  private chunkEdgeLines = new Map<number, THREE.LineSegments>();
   private chunkBodies = new Map<number, number>();
   private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
   private aiCtx: BehaviorContext = {
@@ -95,6 +97,7 @@ export class WorldMode implements IGameMode {
   private readonly spawnPoint = { x: CHUNK_SIZE / 2, z: CHUNK_SIZE / 2 };
   private acc = 0;
   private damageUnsub?: () => void;
+  private pickupGlows: PickupGlowEffect[] = [];
 
   // ============================================================
   // IGameMode 接口实现
@@ -202,6 +205,10 @@ export class WorldMode implements IGameMode {
         const success = this.itemManager.addItem('player', it.archetype.id, 1);
         if (success) {
           console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.archetype.name}」(${it.archetype.id})`);
+          // ★ 金色发光粒子
+          const pos = it.position;
+          this.pickupGlows.push(new PickupGlowEffect(this.scene!, pos.x, pos.y + 0.3, pos.z));
+          // ★ HUD 浮动文字 + 格子闪烁
           this.worldUIManager.showPickupResult(it.archetype.id, true);
           this.worldUIManager.refreshIfOpen();
           return true;
@@ -315,6 +322,13 @@ export class WorldMode implements IGameMode {
     this.bullets.update(dt, this.camera);
     CharacterFxManager.update(dt, this.camera);
 
+    // ---- 拾取发光粒子 ----
+    for (let i = this.pickupGlows.length - 1; i >= 0; i--) {
+      if (this.pickupGlows[i].update(dt)) {
+        this.pickupGlows.splice(i, 1);
+      }
+    }
+
     // ---- 物理固定步长 ----
     this.acc += dt;
     const FIXED = 1 / 60;
@@ -361,12 +375,23 @@ export class WorldMode implements IGameMode {
     this.bullets?.dispose();
     CharacterFxManager.dispose();
 
+    // ---- 拾取发光粒子 ----
+    for (const g of this.pickupGlows) g.dispose();
+    this.pickupGlows = [];
+
     // ---- chunk 视觉网格 ----
     for (const m of this.chunkMeshes.values()) {
       this.scene?.remove(m);
       m.geometry.dispose();
     }
     this.chunkMeshes.clear();
+    // ★ 清理棱边
+    for (const el of this.chunkEdgeLines.values()) {
+      this.scene?.remove(el);
+      el.geometry.dispose();
+      (el.material as THREE.Material).dispose();
+    }
+    this.chunkEdgeLines.clear();
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -494,6 +519,54 @@ export class WorldMode implements IGameMode {
       });
       this.chunkBodies.set(key, body.id);
     }
+
+    // ---- ★ 发光棱边（高度突变处加亮线） ----
+    this.buildChunkEdgeLines(cx, cz, key);
+  }
+
+  /** 生成发光棱边：在高度突变的网格棱边处绘制亮线 */
+  private buildChunkEdgeLines(cx: number, cz: number, key: number): void {
+    const lines: THREE.Vector3[] = [];
+    const threshold = 0.08; // 高度差阈值
+    for (let z = 0; z < CHUNK_SIZE; z++) {
+      for (let x = 0; x < CHUNK_SIZE; x++) {
+        const wx = cx * CHUNK_SIZE + x;
+        const wz = cz * CHUNK_SIZE + z;
+        const h = this.raster.heightAt(wx, wz);
+        // 检查右侧（X+1）和下方（Z+1）的邻居
+        if (x < CHUNK_SIZE - 1) {
+          const hr = this.raster.heightAt(wx + 1, wz);
+          if (Math.abs(h - hr) > threshold) {
+            lines.push(new THREE.Vector3(wx + 0.5, Math.max(h, hr), wz + 0.5));
+            lines.push(new THREE.Vector3(wx + 0.5, Math.min(h, hr), wz + 0.5));
+          }
+        }
+        if (z < CHUNK_SIZE - 1) {
+          const hd = this.raster.heightAt(wx, wz + 1);
+          if (Math.abs(h - hd) > threshold) {
+            lines.push(new THREE.Vector3(wx + 0.5, Math.max(h, hd), wz + 0.5));
+            lines.push(new THREE.Vector3(wx + 0.5, Math.min(h, hd), wz + 0.5));
+          }
+        }
+      }
+    }
+    if (lines.length === 0) return;
+    const geo = new THREE.BufferGeometry();
+    const positions = new Float32Array(lines.length * 3);
+    for (let i = 0; i < lines.length; i++) {
+      positions[i * 3] = lines[i].x;
+      positions[i * 3 + 1] = lines[i].y;
+      positions[i * 3 + 2] = lines[i].z;
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({
+      color: 0x66aaff,
+      transparent: true,
+      opacity: 0.25,
+    });
+    const edgeMesh = new THREE.LineSegments(geo, mat);
+    this.scene!.add(edgeMesh);
+    this.chunkEdgeLines.set(key, edgeMesh);
   }
 
   private rebuildChunkMesh(cx: number, cz: number): void {
@@ -503,6 +576,14 @@ export class WorldMode implements IGameMode {
       this.scene!.remove(old);
       old.geometry.dispose();
       this.chunkMeshes.delete(key);
+    }
+    // ★ 清理旧棱边
+    const oldEdge = this.chunkEdgeLines.get(key);
+    if (oldEdge) {
+      this.scene!.remove(oldEdge);
+      oldEdge.geometry.dispose();
+      (oldEdge.material as THREE.Material).dispose();
+      this.chunkEdgeLines.delete(key);
     }
     const oldBody = this.chunkBodies.get(key);
     if (oldBody !== undefined) {

@@ -31,6 +31,7 @@ export class InventoryGridRenderer {
    * @param layerName 层级名（用于事件回调）
    * @param onSlotClick 点击回调
    * @param cellSize 格子大小（px）
+   * @param flashItemId 闪烁的物品 ID（拾取后高亮）
    */
   render(
     container: HTMLElement,
@@ -38,6 +39,7 @@ export class InventoryGridRenderer {
     layerName: string,
     onSlotClick?: (e: InventorySlotClickEvent) => void,
     cellSize = 48,
+    flashItemId?: string,
   ): void {
     container.innerHTML = '';
     const rows = grid.length;
@@ -49,7 +51,7 @@ export class InventoryGridRenderer {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const slot = grid[r][c];
-        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick);
+        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick, flashItemId);
         gridDiv.appendChild(cell);
       }
     }
@@ -63,6 +65,7 @@ export class InventoryGridRenderer {
     row: number,
     col: number,
     onSlotClick?: (e: InventorySlotClickEvent) => void,
+    flashItemId?: string,
   ): HTMLElement {
     const el = document.createElement('div');
     el.style.cssText = [
@@ -77,6 +80,11 @@ export class InventoryGridRenderer {
     ].join(';');
 
     if (slot) {
+      // ★ 拾取闪烁：如果该格子物品匹配 flashItemId，添加闪烁类
+      if (flashItemId && slot.itemId === flashItemId) {
+        el.classList.add('ui-slot-flash');
+      }
+
       // ★ 显示物品图标（纹理色块）
       try {
         const tex = this.iconRegistry.getIcon(slot.itemId);

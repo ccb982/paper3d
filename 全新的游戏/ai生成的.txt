@@ -1,486 +1,74 @@
-好的。这是物品系统的最终完整设计，涵盖配置、原形、背包数据、世界实体（含物品基类和子弹基类）、效果注册表、管理器以及完整数据流。这份设计是你后续编码的唯一纲领。
-
-一、设计哲学（四条铁律）
-铁律	说明
-单一数据源	所有物品数据唯一定义在 config/items.json，代码中绝无硬编码 ID 或数值。
-组合优于继承	效果通过 effects 数组组合，通过注册表执行，不建 HealPotion extends ItemBase 这种类。
-序列化安全	背包里的 ItemInstance 只存 itemId + stackSize，不含任何方法或引用。
-原形驱动	ItemArchetype 是配置的运行时镜像，负责生产世界实体和执行背包效果。
-二、四层架构总览
-层级	文件位置	类/结构	是否可序列化	职责
-① 配置层	config/items.json	JSON 对象	✅ 是	唯一数据源，含所有静态字段、世界参数、效果列表。
-② 原形层（逻辑镜像）	core/ItemArchetype.ts	ItemArchetype 类	❌ 否	加载 JSON 生成的内存缓存。持有配置数据，提供 use(ctx) 和 createWorldEntity(...) 方法。
-③ 背包数据层	core/Session.ts	ItemInstance 类型	✅ 是	极简容器：{ itemId, stackSize }。零行为，纯数据。
-④ 世界实体层	entity/ItemBase.ts
-entity/BulletEntity.ts	ItemBase / BulletEntity 类	❌ 否	3D 场景里的物理掉落物 / 飞行子弹。由原形驱动生成，拾取后转为背包数据并自毁。
-ItemArchetype 既不是背包物品也不是世界实体，它是配置表的“活镜像”——两者之间的桥梁。
-
-三、配置表结构（config/items.json）
-为“世界表现”和“背包效果”分别预留字段，支持多效果组合：
-
-json
-{
-  "items": [
-    {
-      "id": "healing_potion",
-      "name": "治疗药水",
-      "type": "consumable",
-      "description": "恢复 30 点生命值",
-      "maxStack": 10,
-      "color": { "h": 0.0, "s": 0.9, "l": 0.6 },
-      "world": {
-        "shape": { "type": "cuboid", "hx": 0.22, "hy": 0.22, "hz": 0.1 },
-        "scale": 0.5,
-        "pickupRadius": 1.5
-      },
-      "effects": [
-        { "type": "heal", "value": 30 }
-      ]
-    },
-    {
-      "id": "strength_potion",
-      "name": "力量药剂",
-      "type": "consumable",
-      "maxStack": 5,
-      "color": { "h": 0.05, "s": 0.9, "l": 0.6 },
-      "world": { "shape": { "type": "ball", "radius": 0.25 }, "scale": 0.6 },
-      "effects": [
-        { "type": "heal", "value": 10 },
-        { "type": "buff_attack", "value": 5, "duration": 30 }
-      ]
-    },
-    {
-      "id": "iron_ore",
-      "name": "铁矿石",
-      "type": "material",
-      "maxStack": 99,
-      "color": { "h": 0.08, "s": 0.3, "l": 0.5 },
-      "world": { "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.2 }, "scale": 0.4 },
-      "effects": []
-    }
-  ]
-}
-四、效果注册表（core/ItemEffect.ts）
-所有效果的具体实现集中注册于此，新增效果只需加一个条目，不修改任何其他代码。
-
-typescript
-// core/ItemEffect.ts
-import type { GameSession } from './Session';
-import type { EntityBase } from '../entity/EntityBase';
-import type { BuffSystem } from '../systems/buff/BuffSystem'; // 预留
-
-export interface ItemEffectContext {
-  session: GameSession;
-  user: EntityBase | null;
-  targetLayer: string;
-  row: number;
-  col: number;
-  buffSystem?: BuffSystem; // 未来扩展
-  _accumulatedHeal?: number; // 用于跨效果累加
-}
-
-export interface ItemEffectResult {
-  success: boolean;
-  message?: string;
-  healAmount?: number;
-  // 任意扩展字段
-}
-
-export type ItemEffectHandler = (params: any, ctx: ItemEffectContext) => ItemEffectResult;
-
-/** 全局效果注册表 */
-export const effectRegistry = new Map<string, ItemEffectHandler>();
-
-// ===== 内置效果注册 =====
-
-effectRegistry.set('heal', (params, ctx) => {
-  const player = ctx.session.player;
-  const actual = Math.min(player.maxHp - player.hp, params.value ?? 30);
-  player.hp += actual;
-  return { success: true, healAmount: actual, message: `回复 ${actual} 点生命` };
-});
-
-effectRegistry.set('buff_attack', (params, ctx) => {
-  // 此处预留 Buff 系统接口
-  console.log(`[效果] 攻击力 +${params.value}，持续 ${params.duration ?? 10} 秒`);
-  return { success: true, message: `攻击力提升 ${params.value}` };
-});
-
-effectRegistry.set('ammo', (params, ctx) => {
-  // 弹药补给逻辑
-  return { success: true, message: `补充 ${params.value ?? 50} 发弹药` };
-});
-
-// 后续无限扩展：'teleport', 'summon', 'shield', 'poison' ...
-五、原形类（core/ItemArchetype.ts）
-typescript
-// core/ItemArchetype.ts
-import * as THREE from 'three';
-import type { EntityManager } from '../entity/EntityManager';
-import type { ItemBase } from '../entity/ItemBase';
-import type { ColliderShape } from '../services/physics/PhysicsWorld';
-import { effectRegistry, type ItemEffectContext, type ItemEffectResult } from './ItemEffect';
-
-export interface ItemEffectDef {
-  type: string;
-  value?: number;
-  duration?: number;
-  [key: string]: any;
-}
-
-export class ItemArchetype {
-  readonly id: string;
-  readonly name: string;
-  readonly type: string;
-  readonly description: string;
-  readonly maxStack: number;
-  readonly color: { h: number; s: number; l: number };
-  readonly worldShape: ColliderShape;
-  readonly worldScale: number;
-  readonly pickupRadius: number;
-  private readonly _effects: ItemEffectDef[];
-
-  constructor(data: any) {
-    this.id = data.id;
-    this.name = data.name;
-    this.type = data.type;
-    this.description = data.description ?? '';
-    this.maxStack = data.maxStack ?? 99;
-    this.color = data.color ?? { h: 0.5, s: 0.5, l: 0.5 };
-    this.worldShape = data.world?.shape ?? { type: 'cuboid', hx: 0.2, hy: 0.2, hz: 0.1 };
-    this.worldScale = data.world?.scale ?? 0.5;
-    this.pickupRadius = data.world?.pickupRadius ?? 1.5;
-    this._effects = data.effects ?? [];
-  }
-
-  /** ★ 背包中使用：遍历所有效果，逐条交给注册表执行 */
-  use(ctx: ItemEffectContext): ItemEffectResult {
-    let allSuccess = true;
-    let lastMessage = '使用成功';
-    let totalHeal = 0;
-
-    for (const def of this._effects) {
-      const handler = effectRegistry.get(def.type);
-      if (!handler) {
-        console.warn(`[ItemArchetype] 未知效果类型: ${def.type}，跳过`);
-        continue;
-      }
-      const result = handler(def, ctx);
-      if (!result.success) {
-        allSuccess = false;
-        lastMessage = result.message ?? `效果 ${def.type} 执行失败`;
-      } else if (result.message) {
-        lastMessage = result.message;
-      }
-      if (result.healAmount) totalHeal += result.healAmount;
-    }
-
-    return { success: allSuccess, message: lastMessage, healAmount: totalHeal };
-  }
-
-  /** ★ 世界实体工厂：生成一个 3D 掉落物 */
-  createWorldEntity(
-    em: EntityManager,
-    scene: THREE.Scene,
-    x: number,
-    y: number,
-    z: number,
-    itemManager: any, // 避免循环依赖，传入 ItemManager 实例
-  ): ItemBase {
-    // 动态导入 ItemBase 避免循环依赖（或使用工厂函数）
-    const { ItemBase } = require('../entity/ItemBase');
-    return new ItemBase(em, scene, this, x, y, z, itemManager);
-  }
-}
-六、背包数据（core/Session.ts 中的定义）
-保持极简，仅作数据容器：
-
-typescript
-// core/Session.ts (节选)
-export interface ItemInstance {
-  itemId: string;
-  stackSize: number;
-}
-
-export type InventoryGrid = (ItemInstance | null)[][];
-七、世界物品基类（entity/ItemBase.ts）
-由 ItemArchetype 驱动生成，拾取后自动转为背包数据。
-
-typescript
-// entity/ItemBase.ts
-import * as THREE from 'three';
-import { EntityBase } from './EntityBase';
-import type { EntityManager } from './EntityManager';
-import type { ItemArchetype } from '../core/ItemArchetype';
-import type { ItemManager } from '../systems/inventory/ItemManager';
-import { FTXQuad } from '../services/render/FTXQuad';
-import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
-
-export class ItemBase extends EntityBase {
-  readonly archetype: ItemArchetype;
-  private itemManager: ItemManager;
-
-  constructor(
-    em: EntityManager,
-    scene: THREE.Scene,
-    archetype: ItemArchetype,
-    x: number,
-    y: number,
-    z: number,
-    itemManager: ItemManager,
-  ) {
-    // 用原形的颜色生成临时贴图（后续可替换为真正的 FTX 资产）
-    const asset = createSolidBulletAsset(64, archetype.color.h, archetype.color.s, archetype.color.l);
-    
-    super(em, {
-      kind: 'item',
-      x, y, z,
-      physics: {
-        type: 'dynamic',
-        options: {
-          shape: archetype.worldShape,
-          linearDamping: 2,
-          gravityScale: 1,
-          density: 1.5,
-          canSleep: false,
-        },
-      },
-      asset,
-    });
-
-    this.archetype = archetype;
-    this.itemManager = itemManager;
-    this.camp = 'neutral';
-    this.physicsMode = 'read';
-    this.hp = 20;
-    this.maxHp = 20;
-
-    // 碰撞体积声明
-    this.collisionVolume = {
-      shape: archetype.worldShape,
-      offsetY: 0.22,
-    };
-
-    this.attachToScene(scene);
-    if (this.renderer) {
-      this.renderer.setScale(archetype.worldScale, archetype.worldScale);
-    }
-  }
-
-  /** ★ 拾取碰撞：只有玩家角色接触才触发 */
-  override onCollision(other: EntityBase | null, started: boolean): void {
-    if (!started || !other) return;
-    if (other.entity.kind !== 'player') return;
-    
-    // 尝试加入玩家背包
-    const success = this.itemManager.addItem('player', this.archetype.id, 1);
-    if (success) {
-      console.log(`[拾取] ${other.constructor.name} 拾取了「${this.archetype.name}」`);
-      this.dispose();
-    } else {
-      console.warn(`[拾取] 背包已满，无法拾取「${this.archetype.name}」`);
-    }
-  }
-
-  protected createRenderer(scene: THREE.Scene): FTXQuad {
-    const source = this.anim!.source;
-    return new FTXQuad(scene, source);
-  }
-
-  protected override onUpdate(dt: number): void {
-    // 坠落保护：掉出地图销毁
-    if (this.entity.position.y < -20) this.dispose();
-  }
-}
-八、子弹基类（entity/BulletEntity.ts）
-子弹是一种特殊的“世界实体”，但它通常不由 items.json 直接驱动（除非你做“投掷物”）。为保持一致性，它也可以共享颜色和尺寸配置。
-
-typescript
-// entity/BulletEntity.ts (节选)
-// 子弹有自己的独立配置（通常来自攻击参数），
-// 但如果你希望“弹药包”掉落物和“子弹”视觉一致，
-// 可以让 BulletEntity 也接收一个轻量的 ItemArchetype 用于读取颜色和尺寸。
-当前 BulletEntity 已有自己的构造参数，不需要强行套用 ItemArchetype。但如果你未来做“手雷”或“投掷药水”，可以直接复用 ItemBase 的拾取逻辑，生成后调用 executeAttack 发射。
-
-九、物品管理器（systems/inventory/ItemManager.ts）
-统一对外接口，持有原形缓存，负责所有背包操作。
-
-typescript
-// systems/inventory/ItemManager.ts
-import type { GameSession, InventoryGrid } from '../../core/Session';
-import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids } from '../../core/Session';
-import { ItemArchetype } from '../../core/ItemArchetype';
-import { type ItemEffectContext } from '../../core/ItemEffect';
-import itemsConfig from '../../config/items.json';
-
-export class ItemManager {
-  private archetypes = new Map<string, ItemArchetype>();
-
-  constructor(private session: GameSession) {
-    this.loadArchetypes();
-  }
-
-  private loadArchetypes(): void {
-    for (const raw of itemsConfig.items) {
-      const arch = new ItemArchetype(raw);
-      this.archetypes.set(arch.id, arch);
-    }
-    console.log(`[ItemManager] 已加载 ${this.archetypes.size} 个物品原形`);
-  }
-
-  /** 获取原形（供 UI 查询颜色/名称/最大堆叠） */
-  getArchetype(itemId: string): ItemArchetype | null {
-    return this.archetypes.get(itemId) ?? null;
-  }
-
-  /** 添加物品到指定网格（自动堆叠） */
-  addItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    if (layer === 'allies') return false;
-    const arch = this.archetypes.get(itemId);
-    if (!arch) return false;
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    if (!Array.isArray(grid)) return false;
-    return addItemToGrid(grid, itemId, count, arch.maxStack);
-  }
-
-  /** 从指定网格移除物品 */
-  removeItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    if (layer === 'allies') return false;
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    if (!Array.isArray(grid)) return false;
-    return removeItemFromGrid(grid, itemId, count);
-  }
-
-  /** 跨层移动（原子回滚） */
-  moveItem(srcLayer: keyof GameSession['inventories'], dstLayer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    if (srcLayer === 'allies' || dstLayer === 'allies') return false;
-    const arch = this.archetypes.get(itemId);
-    if (!arch) return false;
-    const src = this.session.inventories[srcLayer] as InventoryGrid;
-    const dst = this.session.inventories[dstLayer] as InventoryGrid;
-    return moveItemBetweenGrids(src, dst, itemId, count, arch.maxStack);
-  }
-
-  /** 使用物品（核心逻辑：查原形 → 执行效果 → 扣减） */
-  useItem(layer: keyof GameSession['inventories'], row: number, col: number): { success: boolean; message?: string; healAmount?: number } {
-    if (layer === 'allies') return { success: false, message: '无法使用队友背包的物品' };
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    if (!grid?.[row]?.[col]) return { success: false, message: '物品不存在' };
-
-    const slot = grid[row][col]!;
-    const arch = this.archetypes.get(slot.itemId);
-    if (!arch) return { success: false, message: '未知物品' };
-    if (arch.type !== 'consumable') return { success: false, message: '该物品无法使用' };
-
-    const ctx: ItemEffectContext = {
-      session: this.session,
-      user: null,
-      targetLayer: layer,
-      row,
-      col,
-    };
-
-    const result = arch.use(ctx);
-    if (result.success) {
-      // 扣减一个
-      this.removeItem(layer, slot.itemId, 1);
-    }
-    return result;
-  }
-
-  /** 查询某层所有物品列表（供 UI 渲染） */
-  getItems(layer: keyof GameSession['inventories']): { itemId: string; stackSize: number; row: number; col: number }[] {
-    if (layer === 'allies') return [];
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    const result: any[] = [];
-    for (let r = 0; r < grid.length; r++) {
-      for (let c = 0; c < grid[r].length; c++) {
-        const slot = grid[r][c];
-        if (slot) result.push({ itemId: slot.itemId, stackSize: slot.stackSize, row: r, col: c });
-      }
-    }
-    return result;
-  }
-
-  hasSpace(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    // 复用 Session 工具函数
-    const arch = this.archetypes.get(itemId);
-    if (!arch) return false;
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    // ... 遍历计算剩余空间
-    return true; // 简化示例
-  }
-}
-十、完整数据流闭环（从掉落到存盘）
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-十一、类图总览
-text
-┌─────────────────────────────────────────────────────────────────┐
-│                        config/items.json                       │
-│                    (唯一数据源，含 world + effects)             │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │ 加载
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    core/ItemArchetype.ts                       │
-│              (运行时原形缓存，不可序列化)                       │
-│  + id, name, maxStack, color, worldShape, worldScale          │
-│  + use(ctx): ItemEffectResult                                  │
-│  + createWorldEntity(...): ItemBase                            │
-└───────────────┬─────────────────────────────┬───────────────────┘
-                │                             │
-                │ 生产                        │ 调度
-                ▼                             ▼
-┌───────────────────────────┐   ┌──────────────────────────────────┐
-│    entity/ItemBase.ts     │   │      core/ItemEffect.ts          │
-│   (3D 世界实体)           │   │    (全局效果注册表)               │
-│  + archetype 引用          │   │   Map<string, Handler>           │
-│  + onPickup → addItem     │   │   'heal' → 回血逻辑              │
-│  + 物理/贴片由原形驱动     │   │   'buff' → 加攻逻辑              │
-└───────────┬───────────────┘   └──────────────────┬───────────────┘
-            │ 拾取后                               │ 被调用
-            ▼                                      ▼
-┌───────────────────────────┐   ┌──────────────────────────────────┐
-│   core/Session.ts         │   │ systems/inventory/ItemManager.ts │
-│   (背包数据，可序列化)     │   │   (统筹管理器)                  │
-│  ItemInstance = {         │   │  + archetypes 缓存               │
-│    itemId, stackSize      │   │  + addItem / removeItem          │
-│  }                        │   │  + useItem → 查原形→执行效果     │
-└───────────────────────────┘   └──────────────────────────────────┘
-十二、执行路线图（按优先级）
-步骤	任务	预计耗时
-1	新建 core/ItemEffect.ts，定义注册表 + 内置 heal/ammo 处理器	30 分钟
-2	新建 core/ItemArchetype.ts，实现构造、use()、createWorldEntity()	1 小时
-3	改造 ItemManager，加入 archetypes 缓存，重构 useItem	1 小时
-4	改造 ItemBase，构造时接收 ItemArchetype 替代零散参数	1 小时
-5	重构 items.json，把 effect 改成 effects 数组，补充 world 字段	30 分钟
-6	在 WorldMode 生成测试掉落物时传入 archetype	15 分钟
-7	冻结此架构，开始做 UI	🎉
-最终结论
-ItemArchetype + effectRegistry 是连接配置表、背包数据和世界实体的桥梁。
-
-背包里只有轻量的 ItemInstance（ID+数量）。
-
-世界里有 ItemBase（物理掉落物）和 BulletEntity（子弹），前者由原形驱动，后者保持独立。
-
-合成台只调用 ItemManager 的增减接口，完全不触碰效果逻辑。
-
-新增任何物品：只需改 items.json（加一条配置），无需写一行 TS 代码。
-
-新增任何效果：只需在 effectRegistry 中注册一个新处理器，无需改动 ItemArchetype 或 ItemManager。
-
-这份设计已经完全闭环，你现在可以放心开始编码和 UI 制作了。
+你说得完全对，我上一轮彻底跑偏了。
+
+我不该把“方舟风格”硬套成“塔防规则”（红蓝门、固定路线）。既然这是3D肉鸽动作游戏，高台、坑洞、平地的唯一意义就是：为“战斗走位”和“视觉辨识度”服务的立体战场。
+
+《明日方舟》那种“棋盘感”，在这类3D动作游戏里，真正该抄的是：清晰到近乎偏执的“模块化几何感”（极简、锐利、高对比），而不是自然生成的丘陵。
+
+所以，把“Perlin噪声”彻底扔掉。我们要给3D肉鸽设计的理想地图，应该像《Hades》的房间 + 方舟的工业几何美学。
+
+新设计哲学：用“战术竞技场”替代“随机地皮”
+现在的算法是“在一块大画布上随机涂颜色”。我们要改成：“在有限空间里，摆出几个明确形态的立体擂台”。
+
+对于3D动作肉鸽，一张好地图（Chunk）只做三件事：
+
+制造视野遮挡（不让玩家一眼看穿全场，增加探索压迫感）
+
+制造高低差战术（站在高处打低处有优势，或跳下去逃离包围）
+
+制造陷阱/风险区（掉坑即死，逼迫玩家在战斗中注意走位）
+
+基于这三点，地图生成算法应该这样重构（纯设计稿）：
+
+第一步：算法核心从“像素级”变成“宏观结构生成”
+别再遍历 60x60 的每个格子去填类型了。改为 “先画骨架，再填肉”。
+
+新流程：
+
+确定“竞技场形状”：每个 Chunk（60x60）从库中随机抽一个“宏观布局模板”（见下文）。
+
+高度平滑化（关键！）：3D动作游戏频繁移动，坚决不要“悬崖式”的直上直下（除非是坑洞边界），改为 “缓坡式”过渡。高台周围必须带 2-3 格宽的斜坡（坡度 30°-45°），让玩家可以跑酷冲上去，而不是傻傻跳上去。
+
+生成“连接走廊”：相邻 Chunk 之间强制生成 4-6 格宽的平坦“通道”，确保玩家不会在 Chunk 边界被卡住或摔死。
+
+第二步：设计“战术竞技场模板”（取代随机填色）
+不再允许“坑洞、高台、平地”在空间上随机乱排。我们要预制 5-6 种“竞技场布局”，每种都经过设计，有明确的战术意图。
+
+模板名	形态（俯瞰）	3D动作肉鸽中的战术作用
+环形剧场	中心是下沉圆形坑（-2m），外围是环状高台（+1.5m），由缓坡连接。	玩家在高台射箭，但远程敌人也在对面高台；被迫跳入中央近战肉搏，或被包围。
+十字天桥	中央是十字形高架桥（高出地面 2m），下方是平地通道，四个角落有缓坡上去。	玩家站在桥上居高临下，但桥面狭窄易被远程射中；跳下去可快速脱离战斗。
+柱林掩体	地面上均匀分布 6-8 个方形高台柱（3x3 大小，高 1.5m），像国际象棋棋盘。	提供大量卡视野、绕柱走的机会，非常适合打游击战（射一箭躲柱子后）。
+断崖裂隙	地图中央横贯一条宽 3m 的深坑（-5m 秒杀），左右各有一座独木桥（宽 2m）。	考验玩家走位，敌人也可能冲过来；利用击退技能把敌人推下坑是核心玩法。
+三阶平台	像蛋糕一样，从低到高分为三层（0m / +2m / +4m），每层边缘有斜坡。	典型的“高地争夺战”，最顶层有稀有宝箱，但敌人狙击手也在那。
+生成逻辑：当一个 Chunk 被加载时，根据 (chunkX + chunkZ + seed) 哈希选一个模板，再随机旋转 0°/90°/180°/270°。相邻 Chunk 不需要逻辑匹配（因为中间有“连接走廊”缓冲）。
+
+第三步：引入“地形动态事件”（肉鸽的变异感）
+既然你每天的地图都会刷新，那仅仅静态模板还不够肉鸽。可以在地图生成后，随机给当前 Chunk 加一个 “地形变异Buff”：
+
+“地刺区”：某一块平地每隔 3 秒冒出地刺，站在上面持续扣血。
+
+“加速带”：某一条走廊上，玩家移速提升 50%（逃命或快速突进用）。
+
+“重力异常”：高台区域的跳跃高度翻倍，但下落速度减半（可以跳到更离谱的位置）。
+
+“迷雾区”：某个区域完全被黑雾笼罩（单纯遮挡视野，但敌人能看到你），增加紧张感。
+
+这些变异不需要改底层高度图，只需要在 RasterMap 里加一个 specialZones 层，渲染时画特殊颜色光效，玩家踩上去触发 EffectSlot。
+
+第四步：视觉上强化“方舟工业棋盘感”（不动逻辑，只改配色）
+地形算法改成模板后，视觉渲染直接起飞：
+
+分区着色：不同模板的“功能区”用截然不同的色调——高台用暖黄/沙色混凝土，平地用冷灰/深蓝合金板，坑洞边缘用亮红色警示光带。
+
+添加“描边光效”：在 buildChunkMesh 里，给每个高度变化的“棱边”加一条发光的线（LineLoop）。这会让地图看起来像方舟的“战术投影地图”，科技感拉满。
+
+斜坡添加“箭头纹理”：用 UV 重复贴图，在斜坡表面画上方向箭头，提示玩家“此路可上”。
+
+总结：你的新地图生成策略
+旧方案（不要了）	新方案（立刻设计）
+每格单独判断类型（平地/高台/坑洞）	整个 Chunk 抽取“战术模板”（环形/十字/柱林/断崖/三阶）
+高度突变（悬崖）	高台边缘带 2-3 格缓坡（适应 3D 跑动）
+地形完全随机无意义	每个模板有明确的 “战斗走位意图”
+视觉是模糊的自然色块	清晰的工业风分区着色 + 发光棱边
+无动态机制	随机叠加 “地形变异（地刺/加速/迷雾）”
+最后给你的建议：
+先放下代码，拿纸笔画出上面 5 个模板的 15x15 网格草图（标出高/低/坑/坡）。画完之后，你会发现，你的大脑已经自动在模拟“玩家怎么在这张图上战斗”了——这才是3D肉鸽地图该有的设计流程。等草图画爽了，我们再聊怎么把模板转成数据结构和生成代码。

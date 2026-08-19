@@ -37,6 +37,7 @@ export class WorldUIManager extends BaseInteractionUI {
   private gridRenderer: InventoryGridRenderer;
   private inventoryOpen = false;
   private eventUnsub?: () => void;
+  private flashItemId: string | null = null;
 
   constructor(
     private session: GameSession,
@@ -160,6 +161,12 @@ export class WorldUIManager extends BaseInteractionUI {
     const msg = success ? `拾取了 ${itemId}` : `背包已满，无法拾取 ${itemId}`;
     // 屏幕中央偏下显示
     this.showFloatingText(window.innerWidth / 2, window.innerHeight / 2 - 50, msg, 'pickup');
+    // ★ 记录闪烁物品 ID，下次渲染背包时格子闪黄光
+    if (success) {
+      this.flashItemId = itemId;
+      // 动画完成后清除
+      setTimeout(() => { this.flashItemId = null; }, 700);
+    }
   }
 
   /** 打开对话（世界轻量版） */
@@ -226,7 +233,7 @@ export class WorldUIManager extends BaseInteractionUI {
         const cellSize = Math.min(48, Math.floor(540 / cols));
         this.gridRenderer.render(gridView, grid, layer, (e) => {
           this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
-        }, cellSize);
+        }, cellSize, this.flashItemId ?? undefined);
       }
     };
 
