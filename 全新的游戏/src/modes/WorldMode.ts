@@ -151,37 +151,6 @@ export class WorldMode implements IGameMode {
       itemManager: this.itemManager,
     });
 
-    // ---- ★ 测试物品（使用原形驱动） ----
-    const testArchetypes = [
-      this.itemManager.getArchetype('healing_potion')!,
-      this.itemManager.getArchetype('iron_ore')!,
-      this.itemManager.getArchetype('originium_shard')!,
-    ];
-    for (let i = 0; i < testArchetypes.length; i++) {
-      const arch = testArchetypes[i];
-      const item = new ItemBase(this.entities, this.scene, arch,
-        spawn.x + 6 + i * 2.5,
-        this.raster.surfaceHeightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
-        spawn.z + 6,
-        this.itemManager,
-        { physical: true },
-      );
-      item.onPickup = (it, picker) => {
-        // ★ 1. 加入玩家内存背包（使用原形 ID）
-        const success = this.itemManager.addItem('player', it.archetype.id, 1);
-        if (success) {
-          console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.archetype.name}」(${it.archetype.id})`);
-          // ★ 2. 通知 UI 刷新
-          this.worldUIManager.showPickupResult(it.archetype.id, true);
-          this.worldUIManager.refreshIfOpen();
-          return true;
-        } else {
-          this.worldUIManager.showPickupResult(it.archetype.id, false);
-          return false;
-        }
-      };
-    }
-
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
 
@@ -212,6 +181,35 @@ export class WorldMode implements IGameMode {
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
     );
+
+    // ---- ★ 测试物品（UI 初始化后创建，避免碰撞回调时 worldUIManager 未就绪） ----
+    const testArchetypes = [
+      this.itemManager.getArchetype('healing_potion')!,
+      this.itemManager.getArchetype('iron_ore')!,
+      this.itemManager.getArchetype('originium_shard')!,
+    ];
+    for (let i = 0; i < testArchetypes.length; i++) {
+      const arch = testArchetypes[i];
+      const item = new ItemBase(this.entities, this.scene, arch,
+        spawn.x + 6 + i * 2.5,
+        this.raster.surfaceHeightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
+        spawn.z + 6,
+        this.itemManager,
+        { physical: true },
+      );
+      item.onPickup = (it, picker) => {
+        const success = this.itemManager.addItem('player', it.archetype.id, 1);
+        if (success) {
+          console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.archetype.name}」(${it.archetype.id})`);
+          this.worldUIManager.showPickupResult(it.archetype.id, true);
+          this.worldUIManager.refreshIfOpen();
+          return true;
+        } else {
+          this.worldUIManager.showPickupResult(it.archetype.id, false);
+          return false;
+        }
+      };
+    }
 
     // ---- 子弹池 ----
     this.bullets = new BulletManager(
