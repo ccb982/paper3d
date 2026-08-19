@@ -7,7 +7,31 @@
       "description": "恢复 30 点生命值",
       "maxStack": 10,
       "color": { "h": 0.0, "s": 0.9, "l": 0.6 },
-      "effect": { "heal": 30 }
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.22, "hy": 0.22, "hz": 0.1 },
+        "scale": 0.5,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "heal", "value": 30 }
+      ]
+    },
+    {
+      "id": "strength_potion",
+      "name": "力量药剂",
+      "type": "consumable",
+      "description": "力量增强",
+      "maxStack": 5,
+      "color": { "h": 0.05, "s": 0.9, "l": 0.6 },
+      "world": {
+        "shape": { "type": "ball", "radius": 0.25 },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "heal", "value": 10 },
+        { "type": "buff_attack", "value": 5, "duration": 30 }
+      ]
     },
     {
       "id": "ammo_pack",
@@ -16,7 +40,14 @@
       "description": "补充 50 发弹药",
       "maxStack": 20,
       "color": { "h": 0.1, "s": 0.9, "l": 0.6 },
-      "effect": { "ammo": 50 }
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.2 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "ammo", "value": 50 }
+      ]
     },
     {
       "id": "iron_ore",
@@ -24,7 +55,13 @@
       "type": "material",
       "description": "基础冶炼材料",
       "maxStack": 99,
-      "color": { "h": 0.08, "s": 0.3, "l": 0.5 }
+      "color": { "h": 0.08, "s": 0.3, "l": 0.5 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.2 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
     },
     {
       "id": "originium_shard",
@@ -32,7 +69,13 @@
       "type": "material",
       "description": "稀有源石结晶体",
       "maxStack": 99,
-      "color": { "h": 0.8, "s": 0.9, "l": 0.6 }
+      "color": { "h": 0.8, "s": 0.9, "l": 0.6 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.18, "hy": 0.18, "hz": 0.18 },
+        "scale": 0.35,
+        "pickupRadius": 1.5
+      },
+      "effects": []
     },
     {
       "id": "food_ration",
@@ -41,7 +84,14 @@
       "description": "恢复 15 点生命值",
       "maxStack": 20,
       "color": { "h": 0.05, "s": 0.7, "l": 0.5 },
-      "effect": { "heal": 15 }
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.15 },
+        "scale": 0.45,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "heal", "value": 15 }
+      ]
     },
     {
       "id": "scrap_metal",
@@ -49,7 +99,13 @@
       "type": "material",
       "description": "可回收的金属废料",
       "maxStack": 99,
-      "color": { "h": 0.0, "s": 0.0, "l": 0.4 }
+      "color": { "h": 0.0, "s": 0.0, "l": 0.4 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.1, "hz": 0.15 },
+        "scale": 0.35,
+        "pickupRadius": 1.5
+      },
+      "effects": []
     },
     {
       "id": "medkit",
@@ -58,7 +114,14 @@
       "description": "恢复全部生命值",
       "maxStack": 5,
       "color": { "h": 0.0, "s": 0.9, "l": 0.7 },
-      "effect": { "heal": 999 }
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.25, "hy": 0.15, "hz": 0.2 },
+        "scale": 0.55,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "heal", "value": 999 }
+      ]
     }
   ]
 }

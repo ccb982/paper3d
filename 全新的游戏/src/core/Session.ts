@@ -112,6 +112,49 @@ export function countItemsInGrid(grid: InventoryGrid): number {
   return count;
 }
 
+/** 网格尺寸期望配置 */
+export const GRID_DIMENSIONS: Record<string, { rows: number; cols: number }> = {
+  base: { rows: 30, cols: 30 },
+  ship: { rows: 8, cols: 10 },
+  player: { rows: 4, cols: 6 },
+};
+
+/**
+ * 修复网格尺寸（迁移旧数据到新网格）
+ * 防止 createEmptyGrid 调整行列数后旧存档静默越界
+ */
+export function migrateGrid(
+  grid: InventoryGrid | undefined | null,
+  expectedRows: number,
+  expectedCols: number,
+  label: string,
+): InventoryGrid {
+  if (!grid || !Array.isArray(grid) || grid.length === 0) {
+    console.warn(`[迁移] ${label} 网格为空/无效，重建 ${expectedRows}x${expectedCols}`);
+    return createEmptyGrid(expectedRows, expectedCols);
+  }
+  const actualRows = grid.length;
+  const actualCols = grid[0]?.length ?? 0;
+  if (actualRows === expectedRows && actualCols === expectedCols) {
+    return grid; // 尺寸一致，无需迁移
+  }
+  console.warn(
+    `[迁移] ${label} 尺寸不匹配 (${actualRows}x${actualCols} → ${expectedRows}x${expectedCols})，迁移物品`,
+  );
+  const newGrid = createEmptyGrid(expectedRows, expectedCols);
+  for (let r = 0; r < Math.min(actualRows, expectedRows); r++) {
+    const srcRow = grid[r];
+    if (!srcRow) continue;
+    for (let c = 0; c < Math.min(srcRow.length, expectedCols); c++) {
+      const item = srcRow[c];
+      if (item) {
+        newGrid[r][c] = { ...item };
+      }
+    }
+  }
+  return newGrid;
+}
+
 /** 在网格中查找特定物品的第一个位置 */
 export function findItemInGrid(
   grid: InventoryGrid,

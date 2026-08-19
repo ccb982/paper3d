@@ -28,8 +28,8 @@ export class ItemIconRegistry {
   getIcon(itemId: string): THREE.Texture {
     if (this.cache.has(itemId)) return this.cache.get(itemId)!;
 
-    const config = this.itemManager.getItemConfig(itemId);
-    const color: ItemIconConfig = config?.color || { h: 0.55, s: 0.8, l: 0.6 };
+    const arch = this.itemManager.getArchetype(itemId);
+    const color = arch?.color || { h: 0.55, s: 0.8, l: 0.6 };
     // 用 SolidBulletAsset 生成色块（后续可替换为真正的 ftx 加载）
     const asset = createSolidBulletAsset(64, color.h, color.s, color.l);
     const pair = asset.getFramePair(0);

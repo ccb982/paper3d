@@ -27,6 +27,7 @@ import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
 import { ItemBase } from '../entity/ItemBase';
+import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
@@ -142,32 +143,40 @@ export class WorldMode implements IGameMode {
     (this.player as any).attackPower = ctx.combatStats.attackPower;
     (this.player as any).defense = ctx.combatStats.defense;
 
-    // ---- ★ 测试物品 ----
-    const itemIcons = [
-      createSolidBulletAsset(64, 0.05, 0.85, 0.6),
-      createSolidBulletAsset(64, 0.12, 0.9, 0.55),
-      createSolidBulletAsset(64, 0.85, 0.8, 0.5),
+    // ---- ★ 初始化业务逻辑层（共享模块） ----
+    this.itemManager = new ItemManager(ctx.session);
+    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
+    this.interactionManager = new InteractionManager({
+      session: ctx.session,
+      itemManager: this.itemManager,
+    });
+
+    // ---- ★ 测试物品（使用原形驱动） ----
+    const testArchetypes = [
+      this.itemManager.getArchetype('healing_potion')!,
+      this.itemManager.getArchetype('iron_ore')!,
+      this.itemManager.getArchetype('originium_shard')!,
     ];
-    for (let i = 0; i < itemIcons.length; i++) {
-      const item = new ItemBase(this.entities, this.scene, itemIcons[i], {
-        x: spawn.x + 6 + i * 2.5,
-        y: this.raster.surfaceHeightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
-        z: spawn.z + 6,
-        itemId: `test_item_${i + 1}`,
-        displayName: `测试物品${i + 1}`,
-        physical: true,
-      });
+    for (let i = 0; i < testArchetypes.length; i++) {
+      const arch = testArchetypes[i];
+      const item = new ItemBase(this.entities, this.scene, arch,
+        spawn.x + 6 + i * 2.5,
+        this.raster.surfaceHeightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
+        spawn.z + 6,
+        this.itemManager,
+        { physical: true },
+      );
       item.onPickup = (it, picker) => {
-        // ★ 1. 加入玩家内存背包
-        const success = this.itemManager.addItem('player', it.itemId!, 1);
+        // ★ 1. 加入玩家内存背包（使用原形 ID）
+        const success = this.itemManager.addItem('player', it.archetype.id, 1);
         if (success) {
-          console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.displayName}」(${it.itemId})`);
+          console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.archetype.name}」(${it.archetype.id})`);
           // ★ 2. 通知 UI 刷新
-          this.worldUIManager.showPickupResult(it.itemId!, true);
+          this.worldUIManager.showPickupResult(it.archetype.id, true);
           this.worldUIManager.refreshIfOpen();
           return true;
         } else {
-          this.worldUIManager.showPickupResult(it.itemId!, false);
+          this.worldUIManager.showPickupResult(it.archetype.id, false);
           return false;
         }
       };
@@ -198,14 +207,6 @@ export class WorldMode implements IGameMode {
 
     // ---- 相机 ----
     this.cameraCtrl = new CameraController(this.camera);
-
-    // ---- ★ 初始化业务逻辑层（共享模块） ----
-    this.itemManager = new ItemManager(ctx.session);
-    this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
-    this.interactionManager = new InteractionManager({
-      session: ctx.session,
-      itemManager: this.itemManager,
-    });
 
     // ---- ★ UI 层（世界专属） ----
     this.worldUIManager = new WorldUIManager(

@@ -5,6 +5,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from './Session';
+import { migrateGrid, GRID_DIMENSIONS } from './Session';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -44,6 +45,17 @@ export const SaveSystem = {
         console.warn('[存档] 缺少 inventories 字段，将丢弃');
         return null;
       }
+
+      // ★ 修复网格尺寸（防止旧存档行列数不匹配导致越界）
+      const inv = data.inventories;
+      inv.base = migrateGrid(inv.base, GRID_DIMENSIONS.base.rows, GRID_DIMENSIONS.base.cols, 'base');
+      inv.ship = migrateGrid(inv.ship, GRID_DIMENSIONS.ship.rows, GRID_DIMENSIONS.ship.cols, 'ship');
+      inv.player = migrateGrid(inv.player, GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols, 'player');
+      // allies 是 Record<string, InventoryGrid>，每个队友网格不定尺寸，不做迁移（仅兜底为空）
+      if (!inv.allies || typeof inv.allies !== 'object') {
+        inv.allies = {};
+      }
+
       console.log(`[存档] 读取成功，第 ${data.meta.day} 天`);
       return data;
     } catch (e) {
