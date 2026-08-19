@@ -13,8 +13,7 @@ import type { EntityBase } from '../../entity/EntityBase';
 import * as THREE from 'three';
 import {
   generateChunk, type ChunkData,
-  CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT, BLOCK_SLOPE,
-  type SpecialZone,
+  CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT, BLOCK_WATER,
 } from './ChunkGenerator';
 
 /** chunkKey（负数安全偏移编码） */
@@ -160,61 +159,26 @@ export class RasterMap {
     const bx = Math.floor(lx / 4);
     const bz = Math.floor(lz / 4);
     const t = chunk.blockTypes[bz * 15 + bx];
-    const h = this.heightAt(x, z);
-    // 微起伏亮度
-    const baseH = t === BLOCK_PLATFORM ? 1.5 : t === BLOCK_PIT ? -2 : t === BLOCK_SLOPE ? 0.75 : 0;
-    const relief = Math.max(-0.2, Math.min(0.2, h - baseH));
-    const k = 1 + relief * 0.8;
     let r: number, g: number, b: number;
-    // ★ 按模板类型分区着色
-    const template = chunk.template;
     switch (t) {
       case BLOCK_PLATFORM:
-        // 高台：暖色系（沙黄/混凝土）
+        // 高台：暖色系（沙黄）
         r = 180; g = 155; b = 90;
-        // 柱林模板的柱子更亮（突出掩体）
-        if (template === 'pillar_forest') { r = 200; g = 175; b = 100; }
         break;
       case BLOCK_PIT:
         // 坑洞：深红警示
         r = 30; g = 12; b = 15;
-        // 断崖裂隙的深坑更黑
-        if (template === 'cliff_rift') { r = 10; g = 8; b = 12; }
         break;
-      case BLOCK_SLOPE:
-        // 斜坡：过渡色（平台色 + 平地色混合）
-        r = 110; g = 110; b = 80;
+      case BLOCK_WATER:
+        // 水域：深蓝
+        r = 20; g = 40; b = 70;
         break;
       default:
-        // 平地：冷灰/深蓝合金
+        // 平地：冷灰合金
         r = 55; g = 60; b = 65;
-        // 十字天桥的桥下通道更暗
-        if (template === 'cross_bridge') { r = 40; g = 45; b = 50; }
         break;
     }
-    return [
-      Math.round(Math.min(255, r * k)),
-      Math.round(Math.min(255, g * k)),
-      Math.round(Math.min(255, b * k)),
-    ];
-  }
-
-  /** 获取指定 chunk 的模板名称 */
-  getTemplate(cx: number, cz: number): string | undefined {
-    return this.chunks.get(chunkKeyOf(cx, cz))?.template;
-  }
-
-  /** 获取指定位置所在的特殊区域列表 */
-  specialZonesAt(x: number, z: number): SpecialZone[] {
-    const cx = Math.floor(x / CHUNK_SIZE);
-    const cz = Math.floor(z / CHUNK_SIZE);
-    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
-    if (!chunk) return [];
-    return chunk.specialZones.filter(zone => {
-      const dx = x - zone.x;
-      const dz = z - zone.z;
-      return Math.hypot(dx, dz) <= zone.radius;
-    });
+    return [r, g, b];
   }
 
   // ============ 实体索引（全局 cell，无限） ============
