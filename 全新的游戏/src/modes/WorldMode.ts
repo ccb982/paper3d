@@ -251,10 +251,10 @@ export class WorldMode implements IGameMode {
 
     // ★ 小地图更新
     this.worldUIManager.update(dt, {
-      px: pp.x, pz: pp.y,
-      yaw: this.cameraCtrl.worldYaw,
+      playerPosition: { x: pp.x, z: pp.y },
+      cameraYaw: this.cameraCtrl.worldYaw,
       entities: this.entities.allBases(),
-      hp: this.player.hp, maxHp: this.player.maxHp,
+      playerStats: { hp: this.player.hp, maxHp: this.player.maxHp },
     });
 
     // AI 上下文

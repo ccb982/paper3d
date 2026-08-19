@@ -7,6 +7,7 @@
 
 import { BaseInteractionUI } from '../BaseInteractionUI';
 import type { GameSession, InventoryGrid } from '../../core/Session';
+import type { WorldUIState } from '../../core/WorldUIState';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
 import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
@@ -16,6 +17,7 @@ import { Crosshair } from '../../services/ui/Crosshair';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
+import { CSS } from '../shared/UIConstants';
 
 export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
@@ -37,11 +39,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
     // overlay 弹窗根
     this.overlayRoot = document.createElement('div');
-    this.overlayRoot.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
-      'background:rgba(0,0,0,0.5)', 'display:none', 'z-index:300',
-      'pointer-events:auto', 'align-items:center', 'justify-content:center',
-    ].join(';');
+    this.overlayRoot.className = CSS.overlay;
     document.body.appendChild(this.overlayRoot);
 
     this.minimap = new Minimap(raster);
@@ -50,25 +48,15 @@ export class WorldUIManager extends BaseInteractionUI {
 
     // 交互提示
     this.interactPrompt = document.createElement('div');
-    this.interactPrompt.style.cssText = [
-      'position:fixed', 'bottom:120px', 'left:50%', 'transform:translateX(-50%)',
-      'color:#fff', 'background:rgba(0,0,0,0.7)', 'padding:8px 16px',
-      'border-radius:4px', 'display:none', 'z-index:200',
-      'font-size:14px', 'pointer-events:none',
-    ].join(';');
+    this.interactPrompt.className = CSS.interactPrompt;
     this.interactPrompt.textContent = '按 E 拾取';
     document.body.appendChild(this.interactPrompt);
   }
 
   /** 每帧更新（高频调用） */
-  update(dt: number, ctx: {
-    px: number; pz: number; yaw: number;
-    entities: any[];
-    hp: number; maxHp: number;
-    nearbyItem?: { itemId: string; distance: number } | null;
-  }): void {
-    this.minimap.update(ctx.px, ctx.pz, ctx.yaw, ctx.entities);
-    this.hud.update(ctx.hp, ctx.maxHp);
+  update(dt: number, ctx: WorldUIState): void {
+    this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
+    this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
 
     // 交互提示
     if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
@@ -95,14 +83,8 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 显示浮动文字 */
   showFloatingText(x: number, y: number, text: string, color: string = '#ff4444'): void {
     const el = document.createElement('div');
-    el.style.cssText = [
-      'position:fixed', 'left:50%', 'bottom:50%',
-      'color:' + color, 'font-size:18px', 'font-weight:bold',
-      'pointer-events:none', 'z-index:250',
-      'text-shadow:0 0 4px rgba(0,0,0,0.8)',
-      'transform:translate(-50%, 0)',
-      'transition:opacity 0.1s',
-    ].join(';');
+    el.className = CSS.floatingText;
+    el.style.color = color;
     el.textContent = text;
     document.body.appendChild(el);
     this.floatingTexts.push({ el, life: 1.5, maxLife: 1.5 });
@@ -143,25 +125,21 @@ export class WorldUIManager extends BaseInteractionUI {
     let currentLayer = layers[0];
 
     const content = document.createElement('div');
-    content.style.cssText = 'padding:8px;background:rgba(20,20,40,0.95);border-radius:8px;min-width:500px;';
+    content.className = 'ui-panel-inner';
 
     // 标题
     const title = document.createElement('div');
-    title.style.cssText = 'color:#aac;font-size:16px;font-weight:bold;margin-bottom:8px;';
+    title.className = CSS.panelTitle;
     title.textContent = '背包';
     content.appendChild(title);
 
     // 标签栏
     const tabBar = document.createElement('div');
-    tabBar.style.cssText = 'display:flex;gap:4px;margin-bottom:8px;';
+    tabBar.className = CSS.tabBar;
     for (const layer of layers) {
       const tab = document.createElement('button');
       tab.textContent = layer;
-      tab.style.cssText = [
-        'background:rgba(68,102,170,0.3)', 'border:1px solid #4466aa',
-        'color:#aac', 'padding:4px 12px', 'border-radius:4px',
-        'cursor:pointer', 'font-size:12px',
-      ].join(';');
+      tab.className = CSS.tabButton;
       tab.addEventListener('click', () => {
         currentLayer = layer;
         showGrid(currentLayer);
@@ -210,12 +188,12 @@ export class WorldUIManager extends BaseInteractionUI {
       onClose: () => {},
       render: () => {
         const div = document.createElement('div');
-        div.style.cssText = 'background:rgba(20,20,40,0.95);border:1px solid #4466aa;border-radius:8px;padding:16px;min-width:260px;';
+        div.className = CSS.panel;
         div.innerHTML = `
-          <h3 style="color:#8af;margin:0 0 8px 0;">${slot.itemId}</h3>
-          <p style="margin:4px 0;color:#aaa;">数量: ${slot.stackSize}</p>
-          <p style="margin:4px 0;color:#aaa;">类型: ${config?.type ?? '未知'}</p>
-          <p style="margin:4px 0 12px 0;color:#888;font-size:12px;">${config?.description ?? ''}</p>
+          <h3 class="ui-detail-title">${slot.itemId}</h3>
+          <p class="ui-panel-text">数量: ${slot.stackSize}</p>
+          <p class="ui-panel-text">类型: ${config?.type ?? '未知'}</p>
+          <p class="ui-panel-desc">${config?.description ?? ''}</p>
         `;
 
         // 使用按钮（消耗品）

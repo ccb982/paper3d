@@ -1,0 +1,149 @@
+/* ============================================================
+   ui-styles.css —— 全局 UI 样式类
+   抽离高频 style.cssText 字符串，统一管理。
+   ============================================================ */
+
+/* ---- 全屏遮罩弹窗层 ---- */
+.ui-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: none;
+  z-index: 300;
+  pointer-events: auto;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---- 底部居中交互提示 ---- */
+.ui-interact-prompt {
+  position: fixed;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fff;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 8px 16px;
+  border-radius: 4px;
+  display: none;
+  z-index: 200;
+  font-size: 14px;
+  pointer-events: none;
+}
+
+/* ---- 浮动文字（拾取/伤害数值） ---- */
+.ui-floating-text {
+  position: fixed;
+  left: 50%;
+  bottom: 50%;
+  font-size: 18px;
+  font-weight: bold;
+  pointer-events: none;
+  z-index: 250;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+  transform: translate(-50%, 0);
+  transition: opacity 0.1s;
+}
+
+/* ---- 深色面板 ---- */
+.ui-panel {
+  background: rgba(20, 20, 40, 0.95);
+  border: 1px solid #4466aa;
+  border-radius: 8px;
+  padding: 16px;
+  min-width: 260px;
+}
+
+/* ---- 背包内部面板容器 ---- */
+.ui-panel-inner {
+  padding: 8px;
+  background: rgba(20, 20, 40, 0.95);
+  border-radius: 8px;
+  min-width: 500px;
+}
+
+/* ---- 面板标题 ---- */
+.ui-panel-title {
+  color: #aac;
+  font-size: 16px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+/* ---- 面板文本行 ---- */
+.ui-panel-text {
+  margin: 4px 0;
+  color: #aaa;
+}
+
+/* ---- 面板描述 ---- */
+.ui-panel-desc {
+  margin: 4px 0 12px 0;
+  color: #888;
+  font-size: 12px;
+}
+
+/* ---- 背包标签栏 ---- */
+.ui-tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+/* ---- 标签按钮 ---- */
+.ui-tab-btn {
+  background: rgba(68, 102, 170, 0.3);
+  border: 1px solid #4466aa;
+  color: #aac;
+  padding: 4px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* ---- 物品格子 ---- */
+.ui-slot {
+  width: 48px;
+  height: 48px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #8af;
+  position: relative;
+  overflow: hidden;
+}
+
+/* ---- 物品图标 ---- */
+.ui-slot-icon {
+  width: 80%;
+  height: 80%;
+  object-fit: contain;
+}
+
+/* ---- 数量角标 ---- */
+.ui-slot-count {
+  position: absolute;
+  bottom: 1px;
+  right: 3px;
+  font-size: 9px;
+  color: #6af;
+  text-shadow: 0 0 3px #000;
+}
+
+/* ---- 物品详情标题 ---- */
+.ui-detail-title {
+  color: #8af;
+  margin: 0 0 8px 0;
+}
+
+/* ---- 详情面板 h3 特殊样式 ---- */
+.ui-detail-panel h3 {
+  color: #8af;
+  margin: 0 0 8px 0;
+}
