@@ -94,6 +94,7 @@ export class WorldMode implements IGameMode {
   };
   private readonly spawnPoint = { x: CHUNK_SIZE / 2, z: CHUNK_SIZE / 2 };
   private acc = 0;
+  private damageUnsub?: () => void;
 
   // ============================================================
   // IGameMode 接口实现
@@ -221,6 +222,28 @@ export class WorldMode implements IGameMode {
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
 
     console.log(`[WorldMode] 进入战场，第 ${ctx.day} 天，HP ${ctx.combatStats.maxHp}`);
+
+    // ---- ★ 订阅伤害事件，显示浮动数字 ----
+    import('../core/EventBus').then(({ eventBus }) => {
+      this.damageUnsub = eventBus.on('damage', (payload) => {
+        const target = payload.target;
+        const pos = target.position;
+        // 将世界坐标投影到屏幕
+        const vec = new THREE.Vector3(pos.x, pos.y + 1.0, pos.z);
+        vec.project(this.camera!);
+        const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+        const y = (-vec.y * 0.5 + 0.5) * window.innerHeight;
+        // 只显示实际造成的伤害（大于0），并且没有被闪避/格挡免疫
+        if (payload.damage > 0) {
+          const type = payload.crit ? 'crit' : 'normal';
+          this.worldUIManager.showFloatingText(x, y - 30, String(payload.damage), type);
+        } else if (payload.dodged) {
+          this.worldUIManager.showFloatingText(x, y - 30, 'Miss', 'miss');
+        } else if (payload.blocked) {
+          this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
+        }
+      });
+    });
   }
 
   /** 每帧驱动（自包含：输入 → 物理 → 相机 → 实体 → AI） */
@@ -314,6 +337,10 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
+    // ---- 取消伤害事件订阅 ----
+    this.damageUnsub?.();
+    this.damageUnsub = undefined;
+
     // ---- 回写玩家血量到 Session ----
     if (this.session && this.player) {
       this.session.player.hp = this.player.hp;

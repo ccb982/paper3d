@@ -123,6 +123,10 @@ export class BulletEntity extends EntityBase {
     this.hitFx?.(other);
     if (other) {
       const r = applyDamage(this.damage, this, other);
+      // ★ 发送伤害事件（供 UI 显示数字）
+      import('../../core/EventBus').then(({ eventBus }) => {
+        eventBus.emit('damage', { target: other, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+      });
       console.log(`[bullet] 命中 ${other.constructor.name}，穿透${r.crit ? '【暴击】' : ''}（-${r.final}）`);
       return;
     }

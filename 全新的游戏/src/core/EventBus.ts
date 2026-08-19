@@ -29,6 +29,14 @@ export interface EventMap {
   'save_complete': {};
   // 每日进度
   'day_advance': { day: number };
+  // ★ 伤害事件（用于显示伤害数字）
+  'damage': {
+    target: import('../entity/EntityBase').EntityBase;
+    damage: number;
+    crit: boolean;
+    dodged: boolean;
+    blocked: boolean;
+  };
 }
 
 export type EventKey = keyof EventMap;

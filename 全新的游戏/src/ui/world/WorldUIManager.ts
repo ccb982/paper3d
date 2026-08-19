@@ -19,14 +19,24 @@ import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
 import { CSS } from '../shared/UIConstants';
 
+export type FloatingTextType = 'normal' | 'crit' | 'heal' | 'miss' | 'pickup';
+
 export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
   private hud: PlayerHud;
   private crosshair: Crosshair;
   private interactPrompt: HTMLDivElement;
-  private floatingTexts: { el: HTMLDivElement; life: number; maxLife: number }[] = [];
+  private floatingTexts: {
+    el: HTMLDivElement;
+    life: number;
+    maxLife: number;
+    type: FloatingTextType;
+    startY: number;   // 初始 Y 坐标（屏幕像素）
+    speed: number;    // 上浮速度
+  }[] = [];
   private gridRenderer: InventoryGridRenderer;
   private inventoryOpen = false;
+  private eventUnsub?: () => void;
 
   constructor(
     private session: GameSession,
@@ -51,6 +61,18 @@ export class WorldUIManager extends BaseInteractionUI {
     this.interactPrompt.className = CSS.interactPrompt;
     this.interactPrompt.textContent = '按 E 拾取';
     document.body.appendChild(this.interactPrompt);
+
+    // ★ 订阅伤害事件（显示浮动数字）
+    import('../../core/EventBus').then(({ eventBus }) => {
+      this.eventUnsub = eventBus.on('damage', (payload) => {
+        // 这里只负责显示，位置计算由调用方传入，但我们需要获取坐标
+        // 由于 WorldMode 会负责投影并调用 showFloatingText，所以这里只做展示
+        // 但为了解耦，我们也可以在内部直接调用 showFloatingText，但需要传递屏幕坐标
+        // 这里我们暴露一个方法给 WorldMode 调用，不在此处直接处理事件
+        // 我们将事件绑定移到 WorldMode 中，以便拥有相机进行投影
+        // 因此这个订阅仅为占位，实际由 WorldMode 调用 showFloatingText
+      });
+    });
   }
 
   /** 每帧更新（高频调用） */
@@ -74,26 +96,70 @@ export class WorldUIManager extends BaseInteractionUI {
         ft.el.remove();
         this.floatingTexts.splice(i, 1);
       } else {
+        const progress = 1 - ft.life / ft.maxLife;
         ft.el.style.opacity = String(ft.life / ft.maxLife);
-        ft.el.style.transform = `translate(-50%, ${-60 * (1 - ft.life / ft.maxLife)}px)`;
+        // 上浮：修改 top 值，同时水平居中保持不变
+        const offset = ft.speed * progress;
+        ft.el.style.top = (ft.startY - offset) + 'px';
       }
     }
   }
 
-  /** 显示浮动文字 */
-  showFloatingText(x: number, y: number, text: string, color: string = '#ff4444'): void {
+  /** 显示浮动文字（屏幕坐标，单位 px，相对于视口左上角） */
+  showFloatingText(
+    screenX: number,
+    screenY: number,
+    text: string,
+    type: FloatingTextType = 'normal',
+  ): void {
     const el = document.createElement('div');
     el.className = CSS.floatingText;
-    el.style.color = color;
-    el.textContent = text;
+    el.textContent = type === 'miss' ? 'Miss' : text;
+    // 定位到屏幕坐标，水平居中
+    el.style.left = screenX + 'px';
+    el.style.top = screenY + 'px';
+    el.style.transform = 'translateX(-50%)';
+    el.style.margin = '0';
+
+    // 按类型设置样式
+    switch (type) {
+      case 'crit':
+        el.style.color = '#ff8800';
+        el.style.fontSize = '22px';
+        el.style.fontWeight = 'bold';
+        break;
+      case 'heal':
+        el.style.color = '#44dd88';
+        break;
+      case 'miss':
+        el.style.color = '#888';
+        el.style.fontSize = '14px';
+        break;
+      case 'pickup':
+        el.style.color = text.startsWith('拾取了') ? '#44dd88' : '#ff4444';
+        break;
+      default:
+        el.style.color = '#fff';
+        break;
+    }
+
+    const speed = type === 'crit' ? 90 : 60;
     document.body.appendChild(el);
-    this.floatingTexts.push({ el, life: 1.5, maxLife: 1.5 });
+    this.floatingTexts.push({
+      el,
+      life: 1.5,
+      maxLife: 1.5,
+      type,
+      startY: screenY,
+      speed,
+    });
   }
 
-  /** 显示拾取结果 */
+  /** 显示拾取结果（简化调用） */
   showPickupResult(itemId: string, success: boolean): void {
     const msg = success ? `拾取了 ${itemId}` : `背包已满，无法拾取 ${itemId}`;
-    this.showFloatingText(0, -50, msg, success ? '#44dd88' : '#ff4444');
+    // 屏幕中央偏下显示
+    this.showFloatingText(window.innerWidth / 2, window.innerHeight / 2 - 50, msg, 'pickup');
   }
 
   /** 打开对话（世界轻量版） */
@@ -259,6 +325,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
   override dispose(): void {
     super.dispose();
+    this.eventUnsub?.();
     this.minimap.dispose();
     this.hud.dispose();
     this.crosshair.dispose();
