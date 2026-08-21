@@ -28,7 +28,7 @@ export const BLOCK_SLOPE = 3;     // 保留（未使用）
 export const BLOCK_WATER = 4;     // 水域（不可通行，阻挡）
 
 // ============ 地形类型（内部） ============
-enum TileType { ROAD, WATER, PIT, PLATFORM }
+enum TileType { UNKNOWN = 0, ROAD = 1, WATER = 2, PIT = 3, PLATFORM = 4 }
 
 // ============ 端口数据结构 ============
 interface Ports {
@@ -109,15 +109,12 @@ function neighbors(idx: number): number[] {
 
 // ============ 阶段 1：迷宫生成（Growing Tree 算法） ============
 //
-// 从端口出发，逐步向相邻的"墙"单元格挖路，直到约 50% 的格子变成路。
-// 这保证：
-//   - 所有端口连通
-//   - 约 50% 格子是路（passage），50% 是墙（wall）
-//   - 墙区后续可分类为水域/坑洞/高台/死路
+// 从端口出发，逐步向相邻的"墙"单元格挖路，直到达到目标路占比。
+// targetPassageRatio 控制墙密度：0.3 = 墙密集（窄迷宫），0.7 = 墙稀疏（开阔地）
 //
 // 返回值：passage[i] = 1 表示格子 i 是路（可通行）
 
-function generateMaze(seed: number, cx: number, cz: number, ports: Ports): Uint8Array {
+function generateMaze(seed: number, cx: number, cz: number, ports: Ports, targetPassageRatio: number): Uint8Array {
   const N = 225;
   const passage = new Uint8Array(N); // 1 = 路
   const frontier: number[] = [];     // 边界格子列表
@@ -134,6 +131,7 @@ function generateMaze(seed: number, cx: number, cz: number, ports: Ports): Uint8
   }
 
   let mazeSeed = (hash2(cx, cz, seed + 505) * 1000000) | 0;
+  const targetCount = Math.floor(N * targetPassageRatio);
 
   // 持续从边界中随机选格子，将其挖成路
   while (frontier.length > 0) {
@@ -161,11 +159,10 @@ function generateMaze(seed: number, cx: number, cz: number, ports: Ports): Uint8
     frontier[fi] = frontier[frontier.length - 1];
     frontier.pop();
 
-    // ★ 当路已占 ~50% 时停止（保证有足够的墙区用于分类）
-    // 统计已通路数
+    // ★ 达到目标路数后停止
     let roadCount = 0;
     for (let i = 0; i < N; i++) if (passage[i]) roadCount++;
-    if (roadCount >= 115) break; // 约 51%
+    if (roadCount >= targetCount) break;
   }
 
   return passage;
@@ -180,116 +177,129 @@ function classifyTerrain(
   passage: Uint8Array, ports: Ports,
 ): Uint8Array {
   const N = 225;
-  const tileType = new Uint8Array(N); // 0=ROAD, 1=WATER, 2=PIT, 3=PLATFORM
+  const tileType = new Uint8Array(N); // 默认 UNKNOWN = 0
 
-  // 所有迷宫通路 = ROAD
+  // 1. 标记所有 passage 为 ROAD（迷宫走廊）
   for (let i = 0; i < N; i++) {
-    if (passage[i]) {
-      tileType[i] = TileType.ROAD;
-    }
+    if (passage[i]) tileType[i] = TileType.ROAD;
   }
 
-  // 端口强制 ROAD
+  // 2. 端口强制 ROAD
   for (const portList of [ports.top, ports.bottom, ports.left, ports.right]) {
     for (const p of portList) {
       tileType[p] = TileType.ROAD;
     }
   }
 
-  // 收集墙区（非树节点且非端口）
-  const wallCells: number[] = [];
+  // 3. 收集墙区（UNKNOWN）→ 这些将成为迷宫墙（高台），少量被水/坑替换
+  const wallSet = new Set<number>();
   for (let i = 0; i < N; i++) {
-    if (tileType[i] === TileType.ROAD) continue;
-    // 跳过端口（已经设为 ROAD）
-    wallCells.push(i);
+    if (tileType[i] === 0) wallSet.add(i);
   }
 
-  if (wallCells.length === 0) return tileType;
+  if (wallSet.size === 0) return tileType;
 
-  // 洗牌墙区（确定性）
+  // 4. 洗牌墙区池（确定性）
+  let wallPool = [...wallSet];
   let terrSeed = (hash2(cx, cz, seed + 1010) * 1000000) | 0;
-  for (let i = wallCells.length - 1; i > 0; i--) {
+  for (let i = wallPool.length - 1; i > 0; i--) {
     terrSeed = (terrSeed + 1) % 1000000;
     const j = Math.floor(hash2(terrSeed, 0, seed + 1111) * (i + 1));
-    [wallCells[i], wallCells[j]] = [wallCells[j], wallCells[i]];
+    [wallPool[i], wallPool[j]] = [wallPool[j], wallPool[i]];
   }
 
-  // 按比例分配墙区
-  const total = wallCells.length;
-  const waterCount = Math.floor(total * 0.30);
-  const pitCount = Math.floor(total * 0.30);
-  const platformCount = Math.floor(total * 0.20);
-  const flatCount = total - waterCount - pitCount - platformCount;
+  const used = new Uint8Array(N);
+  const total = wallPool.length;
 
-  // 水域（前 30%）
-  for (let i = 0; i < waterCount; i++) {
-    tileType[wallCells[i]] = TileType.WATER;
+  // ---- BFS 生长集群 ----
+  function growCluster(sizeMin: number, sizeMax: number, filter?: (idx: number) => boolean): number[] {
+    let seedCell = -1;
+    for (const c of wallPool) {
+      if (!used[c] && (!filter || filter(c))) { seedCell = c; break; }
+    }
+    if (seedCell === -1) return [];
+
+    const targetSize = Math.min(sizeMin + Math.floor(hash2(terrSeed, 0, seed + 1313) * (sizeMax - sizeMin + 1)), total);
+
+    const cluster: number[] = [];
+    const frontier: number[] = [seedCell];
+    const visited = new Set<number>();
+    visited.add(seedCell);
+
+    while (frontier.length > 0 && cluster.length < targetSize) {
+      terrSeed = (terrSeed + 1) % 1000000;
+      const fi = Math.floor(hash2(terrSeed, 0, seed + 1414) * frontier.length);
+      const cur = frontier[fi];
+      frontier[fi] = frontier[frontier.length - 1];
+      frontier.pop();
+
+      if (used[cur]) continue;
+      if (filter && !filter(cur)) continue;
+
+      cluster.push(cur);
+      used[cur] = 1;
+
+      for (const nb of neighbors(cur)) {
+        if (!visited.has(nb) && !used[nb] && (!filter || filter(nb))) {
+          visited.add(nb);
+          frontier.push(nb);
+        }
+      }
+    }
+    return cluster;
   }
-  // 坑洞（接下来 30%）
-  for (let i = waterCount; i < waterCount + pitCount; i++) {
-    tileType[wallCells[i]] = TileType.PIT;
+
+  // 5. 墙区分配：大部分 → 高台（迷宫墙），少量 → 水/坑
+  const targetWater = Math.floor(total * 0.15);
+  const targetPit = Math.floor(total * 0.15);
+
+  // 水体：3~6 格连续集群（湖泊）
+  let waterCount = 0;
+  while (waterCount < targetWater) {
+    const rem = targetWater - waterCount;
+    const cluster = growCluster(Math.min(3, rem), Math.min(6, rem));
+    for (const c of cluster) { tileType[c] = TileType.WATER; waterCount++; }
+    if (cluster.length === 0) break;
   }
-  // 高台（接下来 20%，需要紧挨树节点）
-  for (let i = waterCount + pitCount; i < waterCount + pitCount + platformCount; i++) {
-    const idx = wallCells[i];
-    // 检查是否紧挨树节点（ROAD）
-    const nbrs = neighbors(idx);
-    const hasRoadNeighbor = nbrs.some(nb => tileType[nb] === TileType.ROAD);
-    if (hasRoadNeighbor) {
-      tileType[idx] = TileType.PLATFORM;
-    } else {
-      // 没有紧挨路，降级为死路平地
-      tileType[idx] = TileType.ROAD;
+
+  // 坑洞：2~4 格连续集群（陷阱）
+  let pitCount = 0;
+  while (pitCount < targetPit) {
+    const rem = targetPit - pitCount;
+    const cluster = growCluster(Math.min(2, rem), Math.min(4, rem));
+    for (const c of cluster) { tileType[c] = TileType.PIT; pitCount++; }
+    if (cluster.length === 0) break;
+  }
+
+  // 6. 剩余墙区 → 高台（迷宫墙）+ 少数死路平地
+  let platformCount = 0;
+  const targetPlatform = Math.floor(total * 0.60);
+  for (const c of wallPool) {
+    if (used[c]) continue;
+    if (platformCount < targetPlatform) {
+      tileType[c] = TileType.PLATFORM;
+      used[c] = 1;
+      platformCount++;
     }
   }
-  // 剩余墙区 = 死路平地（ROAD）
-  for (let i = waterCount + pitCount + platformCount; i < total; i++) {
-    tileType[wallCells[i]] = TileType.ROAD;
+  // 再剩余的 → 死路平地（ROAD）
+  for (const c of wallPool) {
+    if (!used[c]) tileType[c] = TileType.ROAD;
   }
 
   return tileType;
 }
 
-// ============ 阶段 4：连通性修复 ============
+// ============ 阶段 4：端口连通性兜底 ============
+//
+// 只保证端口不被水/坑堵死，不强制全局连通。
+// 每个连通分量可以独立生长，但端口必须可以通行。
 
 function repairConnectivity(tileType: Uint8Array, ports: Ports): void {
-  const N = 225;
   const allPorts = [...new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right])];
-
-  // BFS 从所有端口出发
-  const visited = new Uint8Array(N);
-  const queue: number[] = [...allPorts];
-  for (const p of allPorts) visited[p] = 1;
-
-  let head = 0;
-  while (head < queue.length) {
-    const cur = queue[head++];
-    if (tileType[cur] === TileType.WATER || tileType[cur] === TileType.PIT) continue;
-    for (const nb of neighbors(cur)) {
-      if (visited[nb]) continue;
-      if (tileType[nb] === TileType.WATER || tileType[nb] === TileType.PIT) continue;
-      visited[nb] = 1;
-      queue.push(nb);
-    }
-  }
-
-  // 修复所有未访问的 ROAD/PLATFORM 节点
-  for (let i = 0; i < N; i++) {
-    if (!visited[i] && (tileType[i] === TileType.ROAD || tileType[i] === TileType.PLATFORM)) {
-      // 强制恢复为 ROAD（如果上面有高台则降级，有水/坑则填平）
-      tileType[i] = TileType.ROAD;
-      // 从该节点重新 BFS（确保修复后的节点能传播连通性）
-      visited[i] = 1;
-      queue.push(i);
-      while (head < queue.length) {
-        const cur = queue[head++];
-        for (const nb of neighbors(cur)) {
-          if (visited[nb]) continue;
-          if (tileType[nb] === TileType.WATER || tileType[nb] === TileType.PIT) continue;
-          visited[nb] = 1;
-          queue.push(nb);
-        }
-      }
+  for (const p of allPorts) {
+    if (tileType[p] === TileType.WATER || tileType[p] === TileType.PIT) {
+      tileType[p] = TileType.ROAD;
     }
   }
 }
@@ -300,14 +310,23 @@ function assignHeights(tileType: Uint8Array, ports: Ports): Float32Array {
   const heights = new Float32Array(225);
   const allPorts = new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right]);
 
+  // 高度扰动（确定性）
+  // ROAD: -0.1 ~ +0.3；PLATFORM: 0.0 ~ +0.4；WATER/PIT: 无扰动
+  function perturb(h: number, i: number, base: number, range: number): number {
+    return h + (hash2(i, 0, 1212) * range + base);
+  }
+
   for (let i = 0; i < 225; i++) {
     switch (tileType[i]) {
       case TileType.ROAD:
-        // 边界出口 = 0.0（无扰动）；内部路 = 0.0 + 微扰动
-        heights[i] = allPorts.has(i) ? 0 : 0;
+        if (allPorts.has(i)) {
+          heights[i] = 0; // 端口无扰动（保证跨块顺滑）
+        } else {
+          heights[i] = perturb(0, i, -0.1, 0.4);
+        }
         break;
       case TileType.PLATFORM:
-        heights[i] = 1.8;
+        heights[i] = perturb(1.8, i, 0, 0.4);
         break;
       case TileType.WATER:
         heights[i] = -0.5;
@@ -315,6 +334,8 @@ function assignHeights(tileType: Uint8Array, ports: Ports): Float32Array {
       case TileType.PIT:
         heights[i] = -3.0;
         break;
+      default:
+        heights[i] = 0;
     }
   }
   return heights;
@@ -349,6 +370,7 @@ function toChunkData(
         case TileType.WATER:
           blockTypes[ti] = BLOCK_WATER;
           break;
+        case TileType.ROAD:
         default:
           blockTypes[ti] = BLOCK_FLAT;
           break;
@@ -379,10 +401,14 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   // 阶段 0：端口派生
   const ports = generatePorts(seed, chunkX, chunkZ);
 
-  // 阶段 1：生成迷宫（Growing Tree）
-  const passage = generateMaze(seed, chunkX, chunkZ, ports);
+  // ★ 墙密度：0.3（墙密集）~ 0.7（墙稀疏），每 chunk 不同
+  const density = hash2(chunkX, chunkZ, seed + 1818);
+  const targetPassageRatio = 0.3 + density * 0.4;
 
-  // 阶段 2：地形分类
+  // 阶段 1：生成迷宫（Growing Tree，可变密度）
+  const passage = generateMaze(seed, chunkX, chunkZ, ports, targetPassageRatio);
+
+  // 阶段 2：地形分类（墙区 → 高台迷宫墙 + 少量水坑）
   const tileType = classifyTerrain(seed, chunkX, chunkZ, passage, ports);
 
   // 阶段 3：连通性修复
