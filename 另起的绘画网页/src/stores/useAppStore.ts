@@ -392,6 +392,7 @@ interface AppState {
     globalBbox: { x: number; y: number; w: number; h: number } | null;
     nextColorId: number;
     enableFramePrediction: boolean;  // 帧间预测开关
+    bboxMode: 'unified' | 'independent';  // bbox 模式：统一/独立
   };
 
   // ===== 新架构：全局调色板（唯一真相源）=====
@@ -442,6 +443,7 @@ interface AppState {
   setSharedBaseColors: (colors: SharedBaseColor[]) => void;
   setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
   syncGlobalBboxFromCurrentFrame: () => void;
+  setBboxMode: (mode: 'unified' | 'independent') => void;
   setNextColorId: (nextId: number) => void;
   compressLayerColorsForExport: () => any;
   addColorToGlobal: (color: { h: number; s: number; l: number }, frameId: string) => number;
@@ -1621,6 +1623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           activeFrameId: state.skillGroupEditor.activeFrameId,
           globalBbox: state.skillGroupEditor.globalBbox ? { ...state.skillGroupEditor.globalBbox } : null,
           nextColorId: state.skillGroupEditor.nextColorId,
+          bboxMode: state.skillGroupEditor.bboxMode,
         },
         stats: {
           shapeCount: state.shapes.length,
@@ -1686,6 +1689,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
             nextColorId: snapshot.skillGroupEditor.nextColorId,
             enableFramePrediction: (snapshot.skillGroupEditor as any).enableFramePrediction ?? state.skillGroupEditor.enableFramePrediction,
+            bboxMode: (snapshot.skillGroupEditor as any).bboxMode ?? state.skillGroupEditor.bboxMode,
           } : state.skillGroupEditor,
           // 恢复顶层共享颜色和调色板 Map
           sharedBaseColors: snapshot.skillGroupEditor ? [...snapshot.skillGroupEditor.sharedBaseColors] : state.sharedBaseColors,
@@ -1774,6 +1778,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             globalBbox: snapshot.skillGroupEditor.globalBbox ? { ...snapshot.skillGroupEditor.globalBbox } : null,
             nextColorId: snapshot.skillGroupEditor.nextColorId,
             enableFramePrediction: (snapshot.skillGroupEditor as any).enableFramePrediction ?? state.skillGroupEditor.enableFramePrediction,
+            bboxMode: (snapshot.skillGroupEditor as any).bboxMode ?? state.skillGroupEditor.bboxMode,
           } : state.skillGroupEditor,
           // 恢复顶层共享颜色和调色板 Map
           sharedBaseColors: snapshot.skillGroupEditor ? [...snapshot.skillGroupEditor.sharedBaseColors] : state.sharedBaseColors,
@@ -2049,6 +2054,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     globalBbox: null,
     nextColorId: 1,
     enableFramePrediction: true,  // 默认开启帧间预测
+    bboxMode: 'unified',  // 默认统一 bbox
   },
 
   // ===== 新架构：全局调色板初始状态 =====
@@ -2917,6 +2923,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       skillGroupEditor: {
         ...state.skillGroupEditor,
         globalBbox: { ...frame.bbox! },
+      },
+    }));
+  },
+  setBboxMode: (mode) => {
+    set((state) => ({
+      skillGroupEditor: {
+        ...state.skillGroupEditor,
+        bboxMode: mode,
       },
     }));
   },

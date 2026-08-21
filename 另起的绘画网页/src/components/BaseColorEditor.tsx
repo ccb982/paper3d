@@ -504,6 +504,7 @@ export const BaseColorEditor: React.FC = () => {
     setGlobalBbox,
     setSharedBaseColors,
     syncGlobalBboxFromCurrentFrame,
+    setBboxMode,
     updateColorValue,
     addColorToPalette,
     syncFrameTextures,
@@ -520,7 +521,7 @@ export const BaseColorEditor: React.FC = () => {
     pruneUnusedColors,
   } = useAppStore();
 
-  const { frames, sharedBaseColors, activeFrameId, globalBbox, enableFramePrediction } = skillGroupEditor;
+  const { frames, sharedBaseColors, activeFrameId, globalBbox, enableFramePrediction, bboxMode } = skillGroupEditor;
   const currentFrame = frames.find((f: typeof frames[0]) => f.id === activeFrameId) || null;
 
   const bgImageData = currentFrame?.bgImageData || null;
@@ -665,7 +666,7 @@ export const BaseColorEditor: React.FC = () => {
       const polygons = frame.dashedPolygons || [];
       if (polygons.length === 0) return;
 
-      const result = extractBaseByClick(newBg, polygons, undefined, { w: newW, h: newH }, null);
+      const result = extractBaseByClick(newBg, polygons, undefined, { w: newW, h: newH }, bboxMode === 'unified' ? globalBbox : null);
       if (result) {
         const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, blockFlags } = result;
 
@@ -698,8 +699,8 @@ export const BaseColorEditor: React.FC = () => {
       }
     });
 
-    // 4. 更新 globalBbox（用第一帧新生成的 bbox；extractBaseByClick 已自动算）
-    if (updatedFrameIds.length > 0) {
+    // 4. 统一模式：更新 globalBbox（用第一帧新生成的 bbox）
+    if (bboxMode === 'unified' && updatedFrameIds.length > 0) {
       const st0 = useAppStore.getState();
       const firstFrame = st0.skillGroupEditor.frames.find(f => f.id === updatedFrameIds[0]);
       if (firstFrame?.bbox) {
@@ -1077,7 +1078,7 @@ export const BaseColorEditor: React.FC = () => {
     }
     if (allPolygons.length === 0) return;
 
-    const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, { w: texSize, h: texSizeY }, state.skillGroupEditor.globalBbox);
+    const result = extractBaseByClick(currentFrameData.bgImageData, allPolygons, pixel, { w: texSize, h: texSizeY }, bboxMode === 'unified' ? state.skillGroupEditor.globalBbox : null);
     if (result) {
       const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, residualTexture, blockFlags } = result;
 
@@ -1112,7 +1113,7 @@ export const BaseColorEditor: React.FC = () => {
       autoMergeToGlobal(currentActiveFrameId);
       mergeSimilarColors(0.005);  // 合并相似颜色后再保存历史
 
-      if (!state.skillGroupEditor.globalBbox) {
+      if (bboxMode === 'unified' && !state.skillGroupEditor.globalBbox) {
         setGlobalBbox(result.bbox);
       }
 
@@ -2998,25 +2999,50 @@ export const BaseColorEditor: React.FC = () => {
             ))}
           </div>
         </div>
-        <button
-          onClick={() => syncGlobalBboxFromCurrentFrame()}
-          disabled={!currentFrame?.bbox}
-          style={{
-            padding: '2px 8px',
-            fontSize: '11px',
-            cursor: currentFrame?.bbox ? 'pointer' : 'not-allowed',
-            border: '1px solid #d9d9d9',
-            background: currentFrame?.bbox ? '#fff' : '#f5f5f5',
-            color: currentFrame?.bbox ? '#333' : '#999',
-          }}
-          title="将当前帧的 bbox 设为全局统一 bbox"
-        >
-          统一 bbox
-        </button>
+        {/* ★ bbox 模式切换：统一 / 独立 */}
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <button
+            onClick={() => {
+              setBboxMode('unified');
+              if (!globalBbox && currentFrame?.bbox) {
+                syncGlobalBboxFromCurrentFrame();
+              }
+            }}
+            style={{
+              padding: '2px 8px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              border: bboxMode === 'unified' ? '1px solid #1890ff' : '1px solid #d9d9d9',
+              background: bboxMode === 'unified' ? '#e6f7ff' : '#fff',
+              color: bboxMode === 'unified' ? '#1890ff' : '#333',
+              fontWeight: bboxMode === 'unified' ? 'bold' : 'normal',
+            }}
+            title="所有帧使用统一的 bbox 大小"
+          >
+            统一 bbox
+          </button>
+          <button
+            onClick={() => setBboxMode('independent')}
+            style={{
+              padding: '2px 8px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              border: bboxMode === 'independent' ? '1px solid #1890ff' : '1px solid #d9d9d9',
+              background: bboxMode === 'independent' ? '#e6f7ff' : '#fff',
+              color: bboxMode === 'independent' ? '#1890ff' : '#333',
+              fontWeight: bboxMode === 'independent' ? 'bold' : 'normal',
+            }}
+            title="每帧独立计算自己的 bbox"
+          >
+            独立 bbox
+          </button>
+          {bboxMode === 'unified' && globalBbox && (
+            <span style={{ fontSize: '11px', color: '#999' }}>
+              {globalBbox.w}×{globalBbox.h}
+            </span>
+          )}
+        </div>
         <span style={{ fontSize: '11px', color: '#999' }}>
-          {globalBbox ? `全局bbox: ${globalBbox.w}×${globalBbox.h}` : '全局bbox: 未设置'}
-        </span>
-        <span style={{ marginLeft: 'auto', fontSize: '11px', color: '#999' }}>
           共享基础色: {sharedBaseColors.length} 个
         </span>
       </div>
