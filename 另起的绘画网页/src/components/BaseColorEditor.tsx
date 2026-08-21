@@ -576,11 +576,15 @@ export const BaseColorEditor: React.FC = () => {
   // bgImageData 立即变为新帧数据，而 manualTexSize 滞后一轮，导致该帧渲染（putImageData
   // 新尺寸数据到旧尺寸 canvas）、坐标转换、bgImageData.data 索引计算全部错位。
   // 因此 texSize 同步派生：有 bgImageData 时 = bgImageData.width，否则 = manualTexSize。
+  // ★ 每帧独立分辨率：当帧有 bgImageData 时，texSize = bgImageData 尺寸；
+  //   当无 bgImageData 但有帧存储 texSize 时，使用帧存储值；否则回退到 manualTexSize。
   // 全文件所有"读取当前帧数据/渲染/坐标转换"统一用 texSize（即实际尺寸），
   // 仅 handleResolutionChange / 导入等"记录目标尺寸"处使用 manualTexSize + setManualTexSize。
   // ★ texSizeY = 高度（非正方形纹理：锁定原图比例，见 handleLoadBackground/handleResolutionChange）
-  const texSize = bgImageData ? bgImageData.width : manualTexSize;
-  const texSizeY = bgImageData ? bgImageData.height : manualTexSize;
+  const frameTexSize = currentFrame?.texSize;
+  const frameTexSizeY = currentFrame?.texSizeY;
+  const texSize = bgImageData ? bgImageData.width : (frameTexSize || manualTexSize);
+  const texSizeY = bgImageData ? bgImageData.height : (frameTexSizeY || manualTexSize);
   // 纹理高度变化（导入/切帧/调整）时同步输入框显示
   useEffect(() => {
     setResInput(String(texSizeY));
@@ -598,20 +602,24 @@ export const BaseColorEditor: React.FC = () => {
 
   // ★ 切换帧时同步 manualTexSize（仅用于分辨率输入框显示，不参与渲染/索引）
   // texSize 已派生，渲染不再依赖此同步；保留是为了让分辨率输入框显示与当前帧一致
+  // ★ 每帧独立：优先使用帧存储的 texSize，其次使用 bgImageData 尺寸
   useEffect(() => {
-    if (bgImageData && bgImageData.width !== manualTexSize) {
-      setManualTexSize(bgImageData.width);
+    const targetSize = bgImageData ? bgImageData.width : (currentFrame?.texSize || 0);
+    if (targetSize > 0 && targetSize !== manualTexSize) {
+      setManualTexSize(targetSize);
     }
-  }, [bgImageData]);
+  }, [bgImageData, currentFrame?.texSize]);
 
-  // ★ 分辨率调整功能：先缩放背景色，再用缩放后的背景重新生成基础色和残差
+  // ★ 分辨率调整功能：仅影响当前帧，先缩放背景色，再用缩放后的背景重新生成基础色和残差
   //   （不重采样旧的 regionIdTex/deltaPacked——那会导致边界错位/精度丢失 → 噪点）
   // ★ 锁定原图比例：输入"高度"目标值 → 宽度 = 高度 × 原图宽高比（保持比例不拉伸）
+  // ★ 每帧独立分辨率：texSize/texSizeY 存储在帧数据中，切换到该帧时恢复
   const handleResolutionChange = useCallback((newSize: number) => {
     // ★ 输入验证：确保分辨率在合理范围内
     const minSize = 64;
     const maxSize = 2048;
 
+    if (!activeFrameId) return;
     if (isNaN(newSize) || newSize < minSize || newSize > maxSize) {
       console.warn(`[分辨率调整] 无效值 ${newSize}，范围应为 ${minSize}~${maxSize}`);
       // 恢复显示旧值（输入框显示高度）
@@ -621,51 +629,51 @@ export const BaseColorEditor: React.FC = () => {
 
     if (newSize === texSizeY) return;
 
+    const frame = frames.find((f: { id: string }) => f.id === activeFrameId);
+    if (!frame || !frame.bgImageData) return;
+
     // 保存历史（调整前）
     saveHistory();
     
     const oldSize = texSize;
 
-    // 对每个帧：缩放背景 → 重新提取生成 regionIdTex/baseColors/deltaPacked/blockFlags
+    // ★ 仅调整当前帧：缩放背景 → 重新提取生成 regionIdTex/baseColors/deltaPacked/blockFlags
     // ★ 让 extractBaseByClick 根据区域多边形自动计算 bbox（世界坐标 0~1，与分辨率无关）
-    const updatedFrameIds: string[] = [];
+    let updatedFrameId: string | null = null;
 
-    frames.forEach((frame) => {
-      if (!frame.bgImageData) return;
-      // ★ 用原始背景（导入时保存）作为缩放源，避免反复调整分辨率累积模糊
-      const srcImage = frame.originalBgImageData || frame.bgImageData;
-      const srcW = srcImage.width;
-      const srcH = srcImage.height;
-      // ★ 每帧按原图实际宽高比锁定（不依赖外部 ref，多帧各自正确）
-      const newH = newSize;
-      const newW = Math.max(64, Math.round(newH * (srcW / srcH)));
-      console.log(`[分辨率调整] ${texSize}×${texSizeY} → ${newW}×${newH}（锁定比例 ${(srcW / srcH).toFixed(3)}）`);
+    // ★ 用原始背景（导入时保存）作为缩放源，避免反复调整分辨率累积模糊
+    const srcImage = frame.originalBgImageData || frame.bgImageData;
+    const srcW = srcImage.width;
+    const srcH = srcImage.height;
+    // ★ 每帧按原图实际宽高比锁定
+    const newH = newSize;
+    const newW = Math.max(64, Math.round(newH * (srcW / srcH)));
+    console.log(`[分辨率调整] 帧 "${frame.name}": ${texSize}×${texSizeY} → ${newW}×${newH}（锁定比例 ${(srcW / srcH).toFixed(3)}）`);
 
-      // 1. 从原始背景缩放到目标尺寸（最近邻，保留像素清晰度；★ 非正方形按比例）
-      const srcCanvas = document.createElement('canvas');
-      srcCanvas.width = srcW;
-      srcCanvas.height = srcH;
-      const srcCtx = srcCanvas.getContext('2d')!;
-      srcCtx.putImageData(srcImage, 0, 0);
-      
-      const dstCanvas = document.createElement('canvas');
-      dstCanvas.width = newW;
-      dstCanvas.height = newH;
-      const dstCtx = dstCanvas.getContext('2d')!;
-      // ★ 平滑缩放（非最近邻）：降采样时把 N×N 像素平均为 1 像素，
-      //   细线条/轮廓保持连续（最近邻"抽稀"会让高分辨率原图的细线断裂）
-      dstCtx.imageSmoothingEnabled = true;
-      dstCtx.imageSmoothingQuality = 'high';
-      dstCtx.drawImage(srcCanvas, 0, 0, newW, newH);
-      const newBg = dstCtx.getImageData(0, 0, newW, newH);
-      
-      // 2. 先用缩放后的背景更新 frame（供 extractBaseByClick 使用）
-      updateSkillFrame(frame.id, { bgImageData: newBg });
+    // 1. 从原始背景缩放到目标尺寸
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = srcW;
+    srcCanvas.height = srcH;
+    const srcCtx = srcCanvas.getContext('2d')!;
+    srcCtx.putImageData(srcImage, 0, 0);
+    
+    const dstCanvas = document.createElement('canvas');
+    dstCanvas.width = newW;
+    dstCanvas.height = newH;
+    const dstCtx = dstCanvas.getContext('2d')!;
+    // ★ 平滑缩放（非最近邻）：降采样时把 N×N 像素平均为 1 像素，
+    //   细线条/轮廓保持连续（最近邻"抽稀"会让高分辨率原图的细线断裂）
+    dstCtx.imageSmoothingEnabled = true;
+    dstCtx.imageSmoothingQuality = 'high';
+    dstCtx.drawImage(srcCanvas, 0, 0, newW, newH);
+    const newBg = dstCtx.getImageData(0, 0, newW, newH);
+    
+    // 2. 先用缩放后的背景更新 frame（供 extractBaseByClick 使用）+ 存储分辨率
+    updateSkillFrame(frame.id, { bgImageData: newBg, texSize: newW, texSizeY: newH });
 
-      // 3. 重新提取：用缩放后的背景 + 区域多边形（世界坐标 0~1，自动适配新尺寸）
-      const polygons = frame.dashedPolygons || [];
-      if (polygons.length === 0) return;
-
+    // 3. 重新提取：用缩放后的背景 + 区域多边形（世界坐标 0~1，自动适配新尺寸）
+    const polygons = frame.dashedPolygons || [];
+    if (polygons.length > 0) {
       const result = extractBaseByClick(newBg, polygons, undefined, { w: newW, h: newH }, bboxMode === 'unified' ? globalBbox : null);
       if (result) {
         const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, blockFlags } = result;
@@ -695,35 +703,35 @@ export const BaseColorEditor: React.FC = () => {
           blockFlags: blockFlags,
         });
 
-        updatedFrameIds.push(frame.id);
+        updatedFrameId = frame.id;
       }
-    });
+    }
 
-    // 4. 统一模式：更新 globalBbox（用第一帧新生成的 bbox）
-    if (bboxMode === 'unified' && updatedFrameIds.length > 0) {
+    // 4. 统一模式：更新 globalBbox（用当前帧新生成的 bbox）
+    if (bboxMode === 'unified' && updatedFrameId) {
       const st0 = useAppStore.getState();
-      const firstFrame = st0.skillGroupEditor.frames.find(f => f.id === updatedFrameIds[0]);
-      if (firstFrame?.bbox) {
-        setGlobalBbox(firstFrame.bbox);
+      const updatedFrame = st0.skillGroupEditor.frames.find(f => f.id === updatedFrameId);
+      if (updatedFrame?.bbox) {
+        setGlobalBbox(updatedFrame.bbox);
       }
     }
     
-    // 5. 更新 texSize（记录目标高度；宽度由比例派生）
+    // 5. 更新 manualTexSize（记录目标高度；宽度由比例派生）
     setManualTexSize(newSize);
     
     // 6. 重新生成显示纹理（用 setTimeout 确保 state 更新完成）
-    setTimeout(() => {
-      const curStore = useAppStore.getState();
-      for (const fid of updatedFrameIds) {
-        const fr = curStore.skillGroupEditor.frames.find(f => f.id === fid);
+    if (updatedFrameId) {
+      setTimeout(() => {
+        const curStore = useAppStore.getState();
+        const fr = curStore.skillGroupEditor.frames.find(f => f.id === updatedFrameId);
         if (fr && fr.regionIdTex && fr.regionIdTex.length > 0 && fr.bbox) {
-          syncFrameTextures(fid);
+          syncFrameTextures(updatedFrameId!);
         }
-      }
-      sortPaletteByArea();
-      console.log(`[分辨率调整] 完成：缩放背景并重新生成 ${updatedFrameIds.length} 帧的基础色/残差`);
-    }, 0);
-  }, [texSize, texSizeY, frames, globalBbox, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures, sortPaletteByArea]);
+        sortPaletteByArea();
+        console.log(`[分辨率调整] 完成：帧 "${fr?.name || updatedFrameId}" 缩放背景并重新生成基础色/残差`);
+      }, 0);
+    }
+  }, [texSize, texSizeY, activeFrameId, frames, globalBbox, updateSkillFrame, setGlobalBbox, saveHistory, syncFrameTextures, sortPaletteByArea, bboxMode, extractBaseByClick]);
 
   const [residualRanges, setResidualRanges] = useState<Float32Array | null>(null);
   const [blockFlags, setBlockFlags] = useState(0n);
@@ -1003,8 +1011,9 @@ export const BaseColorEditor: React.FC = () => {
         const imageData = ctx.getImageData(0, 0, w, h);
         setBgImageData(imageData);
         // ★ 保存原始背景（缩放前），分辨率调整时基于它重新缩放，避免反复缩放累积模糊
+        // ★ 同时存储帧独立分辨率 texSize/texSizeY
         if (activeFrameId) {
-          updateSkillFrame(activeFrameId, { originalBgImageData: imageData });
+          updateSkillFrame(activeFrameId, { originalBgImageData: imageData, texSize: w, texSizeY: h });
         }
         setDashedPolygons([]);
         setDrawingPolygon(null);
@@ -3396,10 +3405,13 @@ export const BaseColorEditor: React.FC = () => {
                   }
                 }
               }
+              // ★ 每帧独立分辨率：使用帧存储的 texSize/texSizeY，或 bgImageData 尺寸，最后回退到当前帧 texSize
+              const frameW = frame.texSize || (frame.bgImageData ? frame.bgImageData.width : texSize);
+              const frameH = frame.texSizeY || (frame.bgImageData ? frame.bgImageData.height : texSizeY);
               return {
                 name: frame.name || '未命名',
-                width: texSize,
-                height: texSizeY,
+                width: frameW,
+                height: frameH,
                 bbox: frame.bbox!,
                 regionIdTex: newRegionIdTex,
                 deltaPacked: frame.deltaPacked,

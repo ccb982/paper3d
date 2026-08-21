@@ -439,6 +439,8 @@ interface AppState {
     bbox: { x: number; y: number; w: number; h: number } | null;
     regionIdTex: Uint16Array;
     baseColorValues: Array<{ h: number; s: number; l: number }>;
+    texSize: number;
+    texSizeY: number;
   }>) => void;
   setSharedBaseColors: (colors: SharedBaseColor[]) => void;
   setGlobalBbox: (bbox: { x: number; y: number; w: number; h: number } | null) => void;
@@ -2838,6 +2840,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         bbox: null,
         regionIdTex: new Uint16Array(0),
         baseColorValues: [],
+        texSize: 512,
+        texSizeY: 512,
       };
       return {
         skillGroupEditor: {
