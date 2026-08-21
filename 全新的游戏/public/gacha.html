@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>罗德岛干员招募</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      margin: 0; background: #000; overflow: hidden; 
+      font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    canvas { display: block; }
+
+    #info {
+      position: fixed; top: 8px; left: 8px;
+      background: rgba(0,0,0,0.7); color: #8af;
+      padding: 6px 10px; border-radius: 6px;
+      font-size: 12px; z-index: 10; pointer-events: none;
+      white-space: pre;
+    }
+
+    #resource-bar {
+      position: fixed;
+      pointer-events: none;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      color: #ffd700;
+      font-size: 14px;
+      font-weight: bold;
+      text-shadow: 0 0 8px rgba(0,0,0,0.8);
+    }
+    #resource-bar .resource-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #resource-bar .resource-icon { font-size: 18px; }
+
+    #result-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    #result-overlay.show { display: flex; }
+    #result-panel {
+      background: linear-gradient(135deg, rgba(20,20,40,0.98), rgba(40,20,60,0.98));
+      border: 2px solid #aa44aa;
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+      max-width: 420px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 0 40px rgba(170,68,170,0.3);
+    }
+    #result-panel h2 {
+      color: #c8a0ff;
+      margin: 0 0 16px 0;
+      font-size: 20px;
+    }
+    #result-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .result-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      border-left: 3px solid #666;
+    }
+    .result-item.rarity-6 { border-left-color: #ffd700; background: rgba(255,215,0,0.1); }
+    .result-item.rarity-5 { border-left-color: #aa44aa; background: rgba(170,68,170,0.1); }
+    .result-item.rarity-4 { border-left-color: #4488ff; background: rgba(68,136,255,0.05); }
+    .result-item.rarity-3 { border-left-color: #44aa44; }
+    .result-name { color: #eee; font-size: 15px; font-weight: bold; }
+    .result-rarity {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .rarity-6 .result-rarity { color: #ffd700; background: rgba(255,215,0,0.2); }
+    .rarity-5 .result-rarity { color: #c8a0ff; background: rgba(170,68,170,0.2); }
+    .rarity-4 .result-rarity { color: #8af; background: rgba(68,136,255,0.2); }
+    .rarity-3 .result-rarity { color: #8c8; background: rgba(68,170,68,0.2); }
+    .result-desc { color: #888; font-size: 12px; margin-top: 2px; }
+    #close-result {
+      margin-top: 12px;
+      padding: 10px 32px;
+      background: #aa44aa;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: opacity 0.2s;
+    }
+    #close-result:hover { opacity: 0.85; }
+    #close-result:active { opacity: 0.7; }
+
+    #pity-info {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.4);
+      font-size: 12px;
+      z-index: 5;
+      pointer-events: none;
+      text-shadow: 0 0 4px rgba(0,0,0,0.8);
+    }
+
+    #loading {
+      position: fixed; inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0a0a1a;
+      z-index: 200;
+      color: #8af;
+      font-size: 16px;
+    }
+    #loading.hidden { display: none; }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid rgba(136,170,255,0.2);
+      border-top-color: #8af;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 12px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <span>加载中...</span>
+  </div>
+
+  <canvas id="game"></canvas>
+  <div id="info">加载中...</div>
+
+  <div id="resource-bar">
+    <div class="resource-item">
+      <span class="resource-icon">&#x1F48E;</span>
+      <span id="gacha-tickets">招募凭证: 999</span>
+    </div>
+    <div class="resource-item">
+      <span class="resource-icon">&#x2B50;</span>
+      <span id="gacha-pity">保底计数: 0</span>
+    </div>
+  </div>
+
+  <div id="pity-info">每 90 抽必出 &#x2605;6 干员</div>
+
+  <div id="result-overlay">
+    <div id="result-panel">
+      <h2>招募结果</h2>
+      <div id="result-list"></div>
+      <button id="close-result">确定</button>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+      "@dimforge/rapier3d": "https://cdn.jsdelivr.net/npm/@dimforge/rapier3d@0.14.0/+esm"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { FtxAsset } from '/src/vendor/player/FtxAsset';
+    import { Asset } from '/src/vendor/player/index';
+    import gachaPool from '/src/config/gachaPool.json';
+
+    // ============================================================
+    // DOM 引用
+    // ============================================================
+    const info = document.getElementById('info');
+    const canvas = document.getElementById('game');
+    const loading = document.getElementById('loading');
+    const resultOverlay = document.getElementById('result-overlay');
+    const resultList = document.getElementById('result-list');
+    const closeBtn = document.getElementById('close-result');
+    const gachaTicketsEl = document.getElementById('gacha-tickets');
+    const gachaPityEl = document.getElementById('gacha-pity');
+
+    // ============================================================
+    // 抽卡状态
+    // ============================================================
+    const gacha = {
+      tickets: 999,
+      pityCounter: 0,
+      totalPulls: 0,
+      roster: [],
+      backgroundAsset: null,
+      buttonAsset: null,
+      characterAsset: null,
+    };
+
+    // ============================================================
+    // Three.js 渲染环境
+    // ============================================================
+    let viewSize = Math.min(window.innerWidth, window.innerHeight);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setSize(viewSize, viewSize);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x0a0a1a, 1);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+    window.addEventListener('resize', () => {
+      viewSize = Math.min(window.innerWidth, window.innerHeight);
+      renderer.setSize(viewSize, viewSize);
+      syncUIOverlay();
+    });
+
+    // 点击区域（世界坐标 0..1）
+    const buttonHit = {
+      left: { x: 0, y: 0, w: 0, h: 0 },
+      right: { x: 0, y: 0, w: 0, h: 0 },
+    };
+
+    // ============================================================
+    // 基础 HSL 合成 Shader（用于 FtxAsset 纹理渲染）
+    // ============================================================
+    const HSL_VERT = `
+      varying vec2 vUv;
+      void main() {
+        vUv = vec2(uv.x, 1.0 - uv.y);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const HSL_FRAG = `
+      precision highp float;
+      varying vec2 vUv;
+      uniform sampler2D uBase;
+      uniform sampler2D uResidual;
+      uniform float uAlpha;
+
+      vec3 hsl2rgb(vec3 c) {
+        vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+        return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+      }
+
+      void main() {
+        vec4 base = texture2D(uBase, vUv);
+        if (base.a < 0.5) discard;
+        vec4 res = texture2D(uResidual, vUv);
+        float dH = (res.r * 2.0 - 1.0) * 0.5;
+        float dS = (res.g * 2.0 - 1.0) * 0.5;
+        float dL = (res.b * 2.0 - 1.0) * 0.5;
+        float h = fract(base.r + dH);
+        float s = clamp(base.g + dS, 0.0, 1.0);
+        float l = clamp(base.b + dL, 0.0, 1.0);
+        gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+      }
+    `;
+
+    function makeHSLMat(base, residual, alpha) {
+      return new THREE.ShaderMaterial({
+        uniforms: {
+          uBase: { value: base },
+          uResidual: { value: residual },
+          uAlpha: { value: alpha != null ? alpha : 1.0 },
+        },
+        vertexShader: HSL_VERT,
+        fragmentShader: HSL_FRAG,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+      });
+    }
+
+    // ============================================================
+    // 资源加载
+    // ============================================================
+    async function loadAssets() {
+      info.textContent = '加载背景...';
+      gacha.backgroundAsset = await FtxAsset.load('/ui/抽卡背景页面.ftx3.gz');
+
+      info.textContent = '加载按钮...';
+      gacha.buttonAsset = await FtxAsset.load('/ui/抽卡按钮.ftx3.gz');
+
+      info.textContent = '加载角色...';
+      gacha.characterAsset = await Asset.load('/characters/enemies/普瑞赛斯.scene.zip');
+
+      info.textContent = '已加载 | 背景: ' + gacha.backgroundAsset.frameCount + '帧 | 按钮: ' + gacha.buttonAsset.frameCount + '帧';
+    }
+
+    // ============================================================
+    // FtxAsset 帧尺寸获取
+    // ============================================================
+    function getFtxFrameSize(asset, index) {
+      const f = asset.frames && asset.frames[index];
+      if (f) return { w: f.width || 512, h: f.height || 512 };
+      return { w: 512, h: 512 };
+    }
+
+    // ============================================================
+    // 创建背景
+    // ============================================================
+    function createBackground() {
+      const pair = gacha.backgroundAsset.getFramePair(0);
+      if (!pair) return;
+      const size = getFtxFrameSize(gacha.backgroundAsset, 0);
+      const mat = makeHSLMat(pair.base, pair.residual, 1.0);
+      const geo = new THREE.PlaneGeometry(1, 1);
+      const mesh = new THREE.Mesh(geo, mat);
+
+      const aspect = size.w / size.h;
+      let sx, sy;
+      if (aspect > 1) { sx = 1; sy = 1 / aspect; }
+      else { sx = aspect; sy = 1; }
+      mesh.scale.set(sx, sy, 1);
+      mesh.position.set(0.5, 0.5, 0);
+      scene.add(mesh);
+    }
+
+    // ============================================================
+    // 创建角色（普瑞赛斯）
+    // ============================================================
+    function createCharacter() {
+      const asset = gacha.characterAsset;
+      if (!asset) return;
+
+      // 使用 Asset 的 getFramePair 和 getFtxFrame
+      const pair = asset.getFramePair(0);
+      if (!pair) return;
+
+      // 获取 FTX 帧尺寸
+      const ftxFrame = asset.getFtxFrame(0);
+      const fw = ftxFrame ? ftxFrame.width : 512;
+      const fh = ftxFrame ? ftxFrame.height : 512;
+
+      const mat = makeHSLMat(pair.base, pair.residual, 1.0);
+      const geo = new THREE.PlaneGeometry(1, 1);
+      const mesh = new THREE.Mesh(geo, mat);
+
+      const charAspect = fw / fh;
+      // 标注区域: (0.60, 0.31) ~ (0.77, 0.63)
+      let charW = 0.17;
+      let charH = charW / charAspect;
+      const maxCharH = 0.32;
+      if (charH > maxCharH) {
+        charH = maxCharH;
+        charW = charH * charAspect;
+      }
+      mesh.scale.set(charW, charH, 1);
+      mesh.position.set(0.60 + charW / 2, 0.31 + charH / 2, 0);
+      scene.add(mesh);
+    }
+
+    // ============================================================
+    // 创建按钮（左右分割）
+    // ============================================================
+    function createButton() {
+      const pair = gacha.buttonAsset.getFramePair(0);
+      if (!pair) return;
+      const size = getFtxFrameSize(gacha.buttonAsset, 0);
+      const mat = makeHSLMat(pair.base, pair.residual, 1.0);
+      const geo = new THREE.PlaneGeometry(1, 1);
+      const mesh = new THREE.Mesh(geo, mat);
+
+      const btnX = 0.60, btnY = 0.29;
+      const btnW = 0.25, btnH = 0.07;
+      const btnAspect = size.w / size.h;
+      let scaleW = btnW;
+      let scaleH = scaleW / btnAspect;
+      if (scaleH > btnH) { scaleH = btnH; scaleW = scaleH * btnAspect; }
+
+      mesh.scale.set(scaleW, scaleH, 1);
+      mesh.position.set(btnX + scaleW / 2, btnY + scaleH / 2, 0);
+      scene.add(mesh);
+
+      // 点击区域（左右平分）
+      buttonHit.left = { x: btnX, y: btnY, w: scaleW / 2, h: scaleH };
+      buttonHit.right = { x: btnX + scaleW / 2, y: btnY, w: scaleW / 2, h: scaleH };
+
+      // 文字覆盖（单抽 / 10抽）
+      const labelCanvas = document.createElement('canvas');
+      labelCanvas.width = 256;
+      labelCanvas.height = 64;
+      const ctx = labelCanvas.getContext('2d');
+      ctx.clearRect(0, 0, 256, 64);
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = 'bold 24px "PingFang SC", "Microsoft YaHei", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('单抽', 64, 32);
+      ctx.fillText('10抽', 192, 32);
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(128, 8);
+      ctx.lineTo(128, 56);
+      ctx.stroke();
+
+      const labelTex = new THREE.CanvasTexture(labelCanvas);
+      labelTex.needsUpdate = true;
+      const labelMat = new THREE.MeshBasicMaterial({ map: labelTex, transparent: true, depthWrite: false, depthTest: false });
+      const labelMesh = new THREE.Mesh(new THREE.PlaneGeometry(scaleW, scaleH), labelMat);
+      labelMesh.position.set(btnX + scaleW / 2, btnY + scaleH / 2, 0.01);
+      scene.add(labelMesh);
+    }
+
+    // ============================================================
+    // UI 覆盖层同步
+    // ============================================================
+    function syncUIOverlay() {
+      const rect = canvas.getBoundingClientRect();
+      const bar = document.getElementById('resource-bar');
+      bar.style.left = (rect.left + rect.width * 0.59) + 'px';
+      bar.style.top = (rect.top + rect.height * 0.69) + 'px';
+      bar.style.width = (rect.width * 0.40) + 'px';
+    }
+
+    // ============================================================
+    // 点击处理
+    // ============================================================
+    canvas.addEventListener('pointerdown', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const wx = (e.clientX - rect.left) / rect.width;
+      const wy = (e.clientY - rect.top) / rect.height;
+      const { left, right } = buttonHit;
+
+      if (wx >= left.x && wx <= left.x + left.w + right.w &&
+          wy >= left.y && wy <= left.y + left.h) {
+        if (wx <= left.x + left.w) {
+          doGacha(1);
+        } else {
+          doGacha(10);
+        }
+      }
+    });
+
+    // ============================================================
+    // 抽卡逻辑
+    // ============================================================
+    function doGacha(count) {
+      if (gacha.tickets < count) {
+        showResult([{ name: '招募凭证不足', rarity: 0, description: '需要 ' + count + ' 张招募凭证', isNew: false }]);
+        return;
+      }
+
+      gacha.tickets -= count;
+      const chars = gachaPool.characters;
+      let totalWeight = 0;
+      for (const ch of chars) totalWeight += ch.weight;
+
+      const results = [];
+      for (let i = 0; i < count; i++) {
+        gacha.totalPulls++;
+        gacha.pityCounter++;
+
+        let roll = Math.random() * totalWeight;
+        let picked = chars[0];
+
+        if (gacha.pityCounter >= 90) {
+          const sixStars = chars.filter(function(c) { return c.rarity === 6; });
+          if (sixStars.length > 0) {
+            picked = sixStars[Math.floor(Math.random() * sixStars.length)];
+            gacha.pityCounter = 0;
+          }
+        } else {
+          for (const ch of chars) {
+            roll -= ch.weight;
+            if (roll <= 0) { picked = ch; break; }
+          }
+        }
+
+        const isNew = gacha.roster.indexOf(picked.id) === -1;
+        results.push({
+          name: picked.name,
+          rarity: picked.rarity,
+          description: picked.description,
+          isNew: isNew,
+        });
+
+        if (isNew) {
+          gacha.roster.push(picked.id);
+        }
+        if (picked.rarity === 6) {
+          gacha.pityCounter = 0;
+        }
+      }
+
+      updateResources();
+      showResult(results);
+    }
+
+    function updateResources() {
+      gachaTicketsEl.textContent = '招募凭证: ' + gacha.tickets;
+      gachaPityEl.textContent = '保底计数: ' + gacha.pityCounter;
+    }
+
+    function showResult(results) {
+      resultList.innerHTML = '';
+      for (const r of results) {
+        const item = document.createElement('div');
+        var cls = 'result-item';
+        if (r.rarity >= 6) cls += ' rarity-6';
+        else if (r.rarity >= 5) cls += ' rarity-5';
+        else if (r.rarity >= 4) cls += ' rarity-4';
+        else cls += ' rarity-3';
+        item.className = cls;
+
+        var rarityLabel = '';
+        if (r.rarity >= 6) rarityLabel = '\u26056';
+        else if (r.rarity >= 5) rarityLabel = '\u26055';
+        else if (r.rarity >= 4) rarityLabel = '\u26054';
+        else rarityLabel = '\u26053';
+
+        var newBadge = r.isNew ? ' \uD83C\uDD95' : '';
+
+        var nameDiv = document.createElement('div');
+        nameDiv.innerHTML = '<div class="result-name">' + r.name + newBadge + '</div>' +
+          (r.description ? '<div class="result-desc">' + r.description + '</div>' : '');
+
+        var raritySpan = document.createElement('span');
+        raritySpan.className = 'result-rarity';
+        raritySpan.textContent = rarityLabel;
+
+        item.appendChild(nameDiv);
+        item.appendChild(raritySpan);
+        resultList.appendChild(item);
+      }
+      resultOverlay.classList.add('show');
+    }
+
+    closeBtn.addEventListener('click', function() {
+      resultOverlay.classList.remove('show');
+    });
+
+    // ============================================================
+    // 主循环
+    // ============================================================
+    function tick() {
+      requestAnimationFrame(tick);
+      renderer.render(scene, camera);
+    }
+
+    // ============================================================
+    // 启动
+    // ============================================================
+    async function main() {
+      try {
+        await loadAssets();
+        createBackground();
+        createCharacter();
+        createButton();
+        syncUIOverlay();
+        updateResources();
+        tick();
+        loading.classList.add('hidden');
+      } catch (e) {
+        info.textContent = '\u274C 加载失败: ' + e.message;
+        console.error(e);
+        loading.classList.add('hidden');
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>

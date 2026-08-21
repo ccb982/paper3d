@@ -13,8 +13,6 @@ import { InteractionManager } from '../../systems/interaction/InteractionManager
 import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
-import { SaveSystem } from '../../core/SaveSystem';
-import { eventBus } from '../../core/EventBus';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
 
@@ -311,88 +309,7 @@ export class ShipUIManager extends BaseInteractionUI {
       </div>
     `;
 
-    const gachaBtn = createButton({
-      label: '🎰 招募（抽卡）', size: 'lg', style: 'primary', fullWidth: true,
-      onClick: () => this.doGacha(),
-    });
-    gachaBtn.style.background = '#aa44aa';
-    div.appendChild(gachaBtn);
-
     this.panelContainer.appendChild(div);
-  }
-
-  // ============================================================
-  // 抽卡
-  // ============================================================
-
-  private async doGacha(): Promise<void> {
-    const s = this.session;
-    const mod = await import('../../config/gachaPool.json');
-    const pool = mod.default;
-    const characters = pool.characters;
-
-    let totalWeight = 0;
-    for (const ch of characters) totalWeight += ch.weight;
-
-    const pullResult: string[] = [];
-    for (let i = 0; i < 10; i++) {
-      s.gacha.totalPulls++;
-      s.gacha.pityCounter++;
-
-      let roll = Math.random() * totalWeight;
-      let picked = characters[0];
-
-      if (s.gacha.pityCounter >= 90) {
-        const sixStars = characters.filter(ch => ch.rarity === 6);
-        if (sixStars.length > 0) {
-          picked = sixStars[Math.floor(Math.random() * sixStars.length)];
-          s.gacha.pityCounter = 0;
-        }
-      } else {
-        for (const ch of characters) {
-          roll -= ch.weight;
-          if (roll <= 0) { picked = ch; break; }
-        }
-      }
-
-      if (picked) {
-        pullResult.push(picked.id);
-        if (!s.allies.roster.includes(picked.id)) {
-          s.allies.roster.push(picked.id);
-          if (!s.inventories.allies[picked.id]) {
-            s.inventories.allies[picked.id] = createEmptyGrid(3, 2);
-          }
-        }
-        if (picked.rarity === 6) s.gacha.pityCounter = 0;
-      }
-    }
-
-    SaveSystem.save(s);
-    eventBus.emit('gacha_result', { result: pullResult });
-    this.showGachaResult(pullResult);
-  }
-
-  private showGachaResult(result: string[]): void {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
-      'background:rgba(0,0,0,0.7)', 'display:flex', 'align-items:center',
-      'justify-content:center', 'z-index:300', 'pointer-events:auto',
-    ].join(';');
-    overlay.innerHTML = `
-      <div style="background:rgba(20,20,40,0.95);border:2px solid #aa44aa;border-radius:12px;padding:24px;text-align:center;max-width:400px;">
-        <h2 style="color:#f8f;margin:0 0 16px 0;">招募结果</h2>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:16px;">
-          ${result.map(id => `<span style="padding:8px 16px;background:rgba(170,68,170,0.3);border:1px solid #aa44aa;border-radius:6px;color:#f8f;font-size:14px;">${id}</span>`).join('')}
-        </div>
-        <button id="gacha-close-btn" style="padding:8px 20px;background:#4488ff;color:#fff;border:none;border-radius:4px;cursor:pointer;">确定</button>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    overlay.querySelector('#gacha-close-btn')?.addEventListener('click', () => {
-      document.body.removeChild(overlay);
-      this.renderPanel('operator');
-    });
   }
 
   // ============================================================

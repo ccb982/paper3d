@@ -16,6 +16,7 @@ import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { ShipUIManager } from '../ui/ship/ShipUIManager';
+import { GachaOverlay } from '../ui/ship/GachaOverlay';
 
 // ============================================================
 // 舰船场景布局（简单占位地图）
@@ -57,6 +58,9 @@ export class ShipMode implements IGameMode {
   // ★ UI 层（舰船专属）
   private uiManager!: ShipUIManager;
 
+  // ★ 抽卡覆盖层（行动后默认显示）
+  private gachaOverlay!: GachaOverlay;
+
   // ============================================================
   // IGameMode 接口实现
   // ============================================================
@@ -89,19 +93,28 @@ export class ShipMode implements IGameMode {
     this.buildShipScene();
     this.setupCamera();
 
+    // ④ 创建抽卡覆盖层（行动后默认显示）
+    this.gachaOverlay = new GachaOverlay(ctx.session);
+    this.gachaOverlay.load().then(() => {
+      this.gachaOverlay.show(() => this.doDepart());
+    });
+
     // 触发存档事件
     eventBus.emit('save_complete', {});
     console.log('[ShipMode] 舰船场景已加载');
   }
 
   exit(): void {
-    // ① 销毁 UI 层
+    // ① 销毁抽卡覆盖层
+    this.gachaOverlay?.dispose();
+
+    // ② 销毁 UI 层
     this.uiManager?.dispose();
 
-    // ② 销毁 3D 场景
+    // ③ 销毁 3D 场景
     this.disposeShipScene();
 
-    // ③ 清空引用
+    // ④ 清空引用
     this.session = null;
     this.onDepart = undefined;
     console.log('[ShipMode] 舰船场景已卸载');

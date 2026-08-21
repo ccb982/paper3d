@@ -326,6 +326,7 @@ interface AppState {
   // 保存/加载
   saveToStorage: () => void;
   exportToJson: () => void;
+  exportRegionAnnotationsJson: () => void;
   loadFromStorage: () => void;
   /** 触发画布重绘（用于蒙版特效参数修改后立即更新实时预览） */
   redrawTrigger: number;
@@ -386,6 +387,8 @@ interface AppState {
       bbox: { x: number; y: number; w: number; h: number } | null;
       regionIdTex: Uint16Array;
       baseColorValues: Array<{ h: number; s: number; l: number }>;
+      texSize?: number;    // 每帧独立分辨率宽（导出用）
+      texSizeY?: number;   // 每帧独立分辨率高（导出用）
     }>;
     sharedBaseColors: Array<SharedBaseColor>;
     activeFrameId: string | null;
@@ -1017,8 +1020,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
     return set((state) => {
       // 如果该区域已有注释，先移除旧注释（确保一个区域只有一个注释）
+      // ★ 修正：按 regionId + layerId 联合过滤，防止不同图层的同 regionId 注释互相挤占
       const filteredAnnotations = annotation.regionId
-        ? state.regionAnnotations.filter(a => a.regionId !== annotation.regionId)
+        ? state.regionAnnotations.filter(a => 
+            a.regionId !== annotation.regionId || a.layerId !== annotation.layerId
+          )
         : state.regionAnnotations;
       
       return {
@@ -1967,6 +1973,69 @@ export const useAppStore = create<AppState>((set, get) => ({
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   },
+
+  /** 纯导出区域注释数据的 JSON（按图层分组，不含图形/点注释等） */
+  exportRegionAnnotationsJson: () => {
+    const state = get();
+    const imageLayerId = state.imageState.imageLayerId;
+    const drawLayers = state.layers.filter(l => l.id !== imageLayerId);
+
+    // 按图层分组区域注释
+    const annotationsByLayer: Record<string, {
+      layerId: string;
+      layerName: string;
+      displayId: number;
+      annotations: typeof state.regionAnnotations;
+    }> = {};
+
+    for (const layer of drawLayers) {
+      const layerAnnotations = state.regionAnnotations.filter(a => a.layerId === layer.id);
+      if (layerAnnotations.length > 0) {
+        annotationsByLayer[layer.id] = {
+          layerId: layer.id,
+          layerName: layer.name,
+          displayId: layer.displayId || 0,
+          annotations: layerAnnotations,
+        };
+      }
+    }
+
+    // 收集未归属任何绘制图层的注释（可能属于背景层）
+    const orphanAnnotations = state.regionAnnotations.filter(a => {
+      return !drawLayers.some(l => l.id === a.layerId);
+    });
+
+    const exportData = {
+      version: '1.0',
+      exportTime: new Date().toISOString(),
+      totalAnnotations: state.regionAnnotations.length,
+      // 按图层分组的区域注释
+      layers: Object.values(annotationsByLayer).sort((a, b) => a.displayId - b.displayId),
+      // 未归属的注释（如有）
+      ...(orphanAnnotations.length > 0 ? { orphanAnnotations } : {}),
+      // 图层定义（不含图形，仅用于映射 layerId → layerName）
+      layerDefinitions: drawLayers.map(l => ({
+        id: l.id,
+        name: l.name,
+        displayId: l.displayId || 0,
+        visible: l.visible,
+        locked: l.locked,
+      })),
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `region-annotations-export-${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  },
+
   loadFromStorage: () => {
     const stored = localStorage.getItem('drawing-app-data');
     if (!stored) return;
@@ -2877,14 +2946,43 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   updateSkillFrame: (frameId, data) => {
-    set((state) => ({
-      skillGroupEditor: {
-        ...state.skillGroupEditor,
-        frames: state.skillGroupEditor.frames.map((f) =>
-          f.id === frameId ? { ...f, ...data } : f
-        ),
-      },
-    }));
+    set((state) => {
+      // ★ 同步 frameDataMap 中的 sourceResolution/sourceHeight
+      //   当 texSize/texSizeY 变化时，更新对应帧的 frameDataMap 条目
+      let updatedFrameDataMap = state.frameDataMap;
+      if (data.texSize !== undefined || data.texSizeY !== undefined) {
+        const frameIndex = state.skillGroupEditor.frames.findIndex(f => f.id === frameId);
+        if (frameIndex >= 0) {
+          const bgLayerId = state.imageState.imageLayerId;
+          const drawLayers = state.layers
+            .filter(l => l.id !== bgLayerId)
+            .sort((a, b) => a.displayId - b.displayId);
+          if (frameIndex < drawLayers.length) {
+            const layerId = drawLayers[frameIndex].id;
+            const fd = state.frameDataMap[layerId];
+            if (fd) {
+              updatedFrameDataMap = {
+                ...state.frameDataMap,
+                [layerId]: {
+                  ...fd,
+                  sourceResolution: data.texSize ?? fd.sourceResolution,
+                  sourceHeight: data.texSizeY ?? fd.sourceHeight,
+                },
+              };
+            }
+          }
+        }
+      }
+      return {
+        ...(updatedFrameDataMap !== state.frameDataMap ? { frameDataMap: updatedFrameDataMap } : {}),
+        skillGroupEditor: {
+          ...state.skillGroupEditor,
+          frames: state.skillGroupEditor.frames.map((f) =>
+            f.id === frameId ? { ...f, ...data } : f
+          ),
+        },
+      };
+    });
   },
   setSharedBaseColors: (colors) => {
     const newPalette = new Map<number, PaletteColor>();
@@ -3105,7 +3203,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       // ★ 全帧量化残差（流体编码：R=qH/63*255、G=qS/31*255、B=qL/31*255，
       //   中性 128 = delta≈0；bbox 外中性）——导入后流体立即平流真实残差
       //   （此前 boundResidualTexture=null → 中性残差，"只显示第一帧基础色"）
-      const residTex = new ImageData(frame.width, frame.height);
+      // ★ 每帧独立分辨率：优先使用帧存储的 texSize/texSizeY，否则回退 bgImageData 尺寸
+      const frameW = frame.texSize ?? frame.bgImageData?.width ?? 512;
+      const frameH = frame.texSizeY ?? frame.bgImageData?.height ?? frameW;
+      // ★ 残差纹理实际像素步长使用 bgImageData 宽度（非导出分辨率）
+      const stride = frame.bgImageData?.width ?? frameW;
+      const residTex = new ImageData(frameW, frameH);
       for (let i = 0; i < residTex.data.length; i += 4) {
         residTex.data[i] = 128;
         residTex.data[i + 1] = 128;
@@ -3122,7 +3225,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
         const px = pi % bboxW2;
         const py = Math.floor(pi / bboxW2);
-        const gi = ((frame.bbox.y + py) * frame.width + (frame.bbox.x + px)) * 4;
+        const gi = ((frame.bbox.y + py) * stride + (frame.bbox.x + px)) * 4;
         residTex.data[gi] = Math.round((qH / 63) * 255);
         residTex.data[gi + 1] = Math.round((qS / 31) * 255);
         residTex.data[gi + 2] = Math.round((qL / 31) * 255);
@@ -3137,8 +3240,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawDeltaPacked: frame.deltaPacked,
         rawBbox: frame.bbox,
         rawBlockFlags: BigInt(frame.blockFlags),
-        sourceResolution: frame.width,
-        sourceHeight: frame.height,
+        sourceResolution: frameW,
+        sourceHeight: frameH,
         baseHslData: { data: hslFloat, width: bboxW2, height: bboxH2 },
         baseTexture,
         residualTexture,

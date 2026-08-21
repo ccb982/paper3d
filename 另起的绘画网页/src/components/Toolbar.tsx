@@ -26,6 +26,7 @@ export function Toolbar() {
     saveToStorage,
     loadFromStorage,
     exportToJson,
+    exportRegionAnnotationsJson,
     currentColor,
     setCurrentColor,
     paintBrushSize,
@@ -62,6 +63,7 @@ export function Toolbar() {
     saveToStorage: s.saveToStorage,
     loadFromStorage: s.loadFromStorage,
     exportToJson: s.exportToJson,
+    exportRegionAnnotationsJson: s.exportRegionAnnotationsJson,
     currentColor: s.currentColor,
     setCurrentColor: s.setCurrentColor,
     paintBrushSize: s.paintBrushSize,
@@ -140,6 +142,11 @@ export function Toolbar() {
   const handleExport = () => {
     exitColorExtractMode();
     exportToJson();
+  };
+
+  const handleExportRegionAnnotations = () => {
+    exitColorExtractMode();
+    exportRegionAnnotationsJson();
   };
 
   return (
@@ -774,6 +781,26 @@ export function Toolbar() {
         }}
       >
         📥
+      </button>
+
+      <button
+        onClick={handleExportRegionAnnotations}
+        title="导出区域注释JSON"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: 'transparent',
+          color: '#333',
+          fontSize: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        🗺️
       </button>
 
       <div style={{ height: '8px' }} />
