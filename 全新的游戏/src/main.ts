@@ -48,7 +48,7 @@ async function boot() {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(adapter.info.dpr);
-  renderer.setClearColor(0x1a1a2e, 1);
+  renderer.setClearColor(0xcccccc, 1);
 
   const scene = new THREE.Scene();
   scene.add(new THREE.AmbientLight(0xffffff, 0.7));

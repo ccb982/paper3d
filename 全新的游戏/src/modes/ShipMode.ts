@@ -530,6 +530,36 @@ export class ShipMode implements IGameMode {
       // ★ 区域编号标签（已移除）
     }
 
+    // ★ 装饰性透明灰色梯形 UI（根据标注文件，取四角）
+    const DECO_TRAPEZOID = {
+      tl: { x: 0.945, y: 0.425 },
+      tr: { x: 0.999, y: 0.423 },
+      bl: { x: 0.945, y: 0.576 },
+      br: { x: 0.999, y: 0.578 },
+    };
+    const dtl = { x: DECO_TRAPEZOID.tl.x * aspect, y: DECO_TRAPEZOID.tl.y };
+    const dtr = { x: DECO_TRAPEZOID.tr.x * aspect, y: DECO_TRAPEZOID.tr.y };
+    const dbl = { x: DECO_TRAPEZOID.bl.x * aspect, y: DECO_TRAPEZOID.bl.y };
+    const dbr = { x: DECO_TRAPEZOID.br.x * aspect, y: DECO_TRAPEZOID.br.y };
+    const decoGeo = new THREE.BufferGeometry();
+    const decoVerts = new Float32Array([
+      dbl.x, dbl.y, 0,   dbr.x, dbr.y, 0,   dtr.x, dtr.y, 0,
+      dbl.x, dbl.y, 0,   dtr.x, dtr.y, 0,   dtl.x, dtl.y, 0,
+    ]);
+    decoGeo.setAttribute('position', new THREE.BufferAttribute(decoVerts, 3));
+    const decoMat = new THREE.MeshBasicMaterial({
+      color: 0x1a1a1a,
+      transparent: true,
+      opacity: 0.98,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const decoMesh = new THREE.Mesh(decoGeo, decoMat);
+    decoMesh.position.z = 0.05;
+    this._btnScene!.add(decoMesh);
+    this._btnMeshes.push(decoMesh);
+
     // 点击事件
     const onClick = (e: PointerEvent) => this.handleButtonClick(e);
     this._btnBoundClick = onClick;
