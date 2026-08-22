@@ -592,6 +592,31 @@ export class GachaOverlay {
     this._btnLeftDefaultScale = { x: leftHalfW, y: texH };
     this.scene.add(this._btnLeftMesh);
 
+    // 左按钮底部白光 glow
+    const leftGlowCvs = document.createElement('canvas');
+    leftGlowCvs.width = 64;
+    leftGlowCvs.height = 64;
+    const lgctx = leftGlowCvs.getContext('2d')!;
+    const lgGrad = lgctx.createLinearGradient(0, 64, 0, 0);
+    lgGrad.addColorStop(0, 'rgba(255,255,255,0.9)');
+    lgGrad.addColorStop(0.3, 'rgba(255,255,255,0.5)');
+    lgGrad.addColorStop(0.6, 'rgba(255,255,255,0.15)');
+    lgGrad.addColorStop(1, 'rgba(255,255,255,0)');
+    lgctx.fillStyle = lgGrad;
+    lgctx.fillRect(0, 0, 64, 64);
+    const leftGlowTex = new THREE.CanvasTexture(leftGlowCvs);
+    leftGlowTex.flipY = false;
+    leftGlowTex.colorSpace = THREE.LinearSRGBColorSpace;
+    const leftGlowMat = new THREE.MeshBasicMaterial({ map: leftGlowTex, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, depthTest: false });
+    const leftGlowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), leftGlowMat);
+    const lgW = leftHalfW * 0.96;
+    const lgH = texH * 0.08;
+    leftGlowMesh.scale.set(lgW, lgH, 1);
+    // 左 glow：右侧对齐中线，左侧超出按钮
+    const leftGlowCx = cx - lgW / 2;
+    leftGlowMesh.position.set(leftGlowCx, cy - texH / 2 + lgH * 0.3 + 0.007, 0.19);
+    this.scene.add(leftGlowMesh);
+
     // 右半（十连）
     const rightMat = this.makeHSLMat(pair.base, pair.residual, { x: 0.5, y: 0, w: 0.5, h: 1 });
     const rightCx = cx + leftHalfW / 2;
@@ -600,6 +625,31 @@ export class GachaOverlay {
     this._btnRightMesh.position.set(rightCx, cy, 0.2);
     this._btnRightDefaultScale = { x: leftHalfW, y: texH };
     this.scene.add(this._btnRightMesh);
+
+    // 右按钮底部黄光 glow
+    const rightGlowCvs = document.createElement('canvas');
+    rightGlowCvs.width = 64;
+    rightGlowCvs.height = 64;
+    const rgctx = rightGlowCvs.getContext('2d')!;
+    const rgGrad = rgctx.createLinearGradient(0, 64, 0, 0);
+    rgGrad.addColorStop(0, 'rgba(255,200,0,0.9)');
+    rgGrad.addColorStop(0.3, 'rgba(255,200,0,0.5)');
+    rgGrad.addColorStop(0.6, 'rgba(255,200,0,0.15)');
+    rgGrad.addColorStop(1, 'rgba(255,200,0,0)');
+    rgctx.fillStyle = rgGrad;
+    rgctx.fillRect(0, 0, 64, 64);
+    const rightGlowTex = new THREE.CanvasTexture(rightGlowCvs);
+    rightGlowTex.flipY = false;
+    rightGlowTex.colorSpace = THREE.LinearSRGBColorSpace;
+    const rightGlowMat = new THREE.MeshBasicMaterial({ map: rightGlowTex, transparent: true, opacity: 1, side: THREE.DoubleSide, depthWrite: false, depthTest: false });
+    const rightGlowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), rightGlowMat);
+    const rgW = leftHalfW * 0.97;
+    const rgH = texH * 0.08;
+    rightGlowMesh.scale.set(rgW, rgH, 1);
+    // 右 glow：左侧对齐中线，右侧超出按钮
+    const rightGlowCx = cx + rgW / 2;
+    rightGlowMesh.position.set(rightGlowCx, cy - texH / 2 + rgH * 0.3 + 0.007, 0.19);
+    this.scene.add(rightGlowMesh);
   }
 
   // ============================================================
