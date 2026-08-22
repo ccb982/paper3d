@@ -568,12 +568,12 @@
     }
 
     function renderData(data) {
-      // 根据加载的帧数据自适应画布分辨率（按 bbox 大小）
+      // 根据当前帧的完整分辨率设置画布大小
       let canvasW = 512, canvasH = 512;
       if (data.format === 'ftx3-multiframe' && data.frames.length > 0) {
-        const { w, h } = data.frames[0].bbox;
-        canvasW = w;
-        canvasH = h;
+        const frame = data.frames[currentFrameIndex] || data.frames[0];
+        canvasW = frame.width;
+        canvasH = frame.height;
       } else if (data.regions && data.regions.length > 0) {
         // 取最大 bbox 尺寸
         for (const region of data.regions) {
@@ -659,14 +659,18 @@
       const frame = data.frames[currentFrameIndex];
       if (!frame) return;
 
-      const { bbox, regionIdTex, deltaTex, blockFlags = 0n } = frame;
-      const { x, y, w, h } = bbox;
+      const { bbox, regionIdTex, deltaTex, blockFlags = 0n, width: frameW, height: frameH } = frame;
+      const { x: bx, y: by, w: bw, h: bh } = bbox;
       const palette = data.palette;
 
+      const canvas = document.getElementById('previewCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
       let renderedCount = 0;
-      for (let py = 0; py < h; py++) {
-        for (let px = 0; px < w; px++) {
-          const localIdx = py * w + px;
+      for (let py = 0; py < bh; py++) {
+        for (let px = 0; px < bw; px++) {
+          const localIdx = py * bw + px;
 
           if (regionIdTex && regionIdTex[localIdx] === 0) continue;
 
@@ -679,7 +683,7 @@
 
           let dH = 0, dS = 0, dL = 0;
           if (deltaTex.length > 0) {
-            const blockIdx = getAdaptiveBlockIndex(px, py, w, h);
+            const blockIdx = getAdaptiveBlockIndex(px, py, bw, bh);
             const range = getRangeForBlock(blockFlags, blockIdx);
             dH = dequantizeH(deltaTex[localIdx * 3], range);
             dS = dequantizeS(deltaTex[localIdx * 3 + 1], range);
@@ -692,9 +696,9 @@
           const finalL = Math.max(0, Math.min(1, base.l + dL));
 
           const rgb = hslToRgb(finalH, finalS, finalL);
-          const ctx = document.getElementById('previewCanvas').getContext('2d');
+          // ★ 使用 bbox 偏移量定位像素（全帧 canvas 坐标）
           ctx.fillStyle = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
-          ctx.fillRect(px, py, 1, 1);
+          ctx.fillRect(bx + px, by + py, 1, 1);
           renderedCount++;
         }
       }
@@ -703,8 +707,8 @@
       stats.innerHTML = `
         <div>当前帧: ${currentFrameIndex + 1} / ${data.frameCount}</div>
         <div>帧名称: ${frame.name}</div>
-        <div>纹理尺寸: ${w}x${h}（bbox 区域）</div>
-        <div>BBox: (${x}, ${y}, ${w}x${h})</div>
+        <div>全帧分辨率: ${frameW}x${frameH}</div>
+        <div>BBox: (${bx}, ${by}, ${bw}x${bh})</div>
         <div>调色板颜色数: ${data.paletteCount}</div>
         <div>渲染像素: ${renderedCount}</div>
         <div>regionIdTex: ${regionIdTex ? regionIdTex.length + ' 字节' : '无'}</div>
