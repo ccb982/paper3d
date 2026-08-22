@@ -74,7 +74,6 @@ export class GachaOverlay {
   
   private resultOverlay: HTMLDivElement;
   private resultList: HTMLDivElement;
-  private debugAxis: HTMLDivElement;
   private tickets: number;
 
   constructor(
@@ -102,20 +101,16 @@ export class GachaOverlay {
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-    // 调试坐标轴
-    this.debugAxis = document.createElement('div');
-    this.debugAxis.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
-      'z-index:999', 'pointer-events:none', 'font-size:11px', 'font-family:monospace',
-      'color:#0ff', 'text-shadow:0 0 4px #000',
-    ].join(';');
-    this.debugAxis.innerHTML = [
-      '<span style="position:absolute;top:0;left:0;">(0,0) 左上</span>',
-      '<span style="position:absolute;top:0;right:0;">(1,0) 右上</span>',
-      '<span style="position:absolute;bottom:0;left:0;">(0,1) 左下</span>',
-      '<span style="position:absolute;bottom:0;right:0;">(1,1) 右下</span>',
+    // 调试：标注区域位置
+    const debugRegions = document.createElement('div');
+    debugRegions.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:998;pointer-events:none;';
+    debugRegions.innerHTML = [
+      // 区域1（1.1倍，顶部不变）
+      '<div style="position:absolute;left:57.749%;top:78.537%;width:31.702%;height:16.093%;background:rgba(255,100,0,0.3);border:2px solid #ff6400;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#ff6400;text-shadow:0 0 4px #000;padding:2px;">区域1</div>',
+      // 区域2（0.8倍，紧贴右上角）
+      '<div style="position:absolute;left:55.84%;top:0%;width:44.16%;height:12%;background:rgba(0,150,255,0.3);border:2px solid #0096ff;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#0096ff;text-shadow:0 0 4px #000;padding:2px;">区域2</div>',
     ].join('');
-    this.root.appendChild(this.debugAxis);
+    this.root.appendChild(debugRegions);
 
     // 结果弹窗
     this.resultOverlay = document.createElement('div');
@@ -169,13 +164,13 @@ export class GachaOverlay {
     this.renderBackground(bg);
     if (charAsset) this.renderCharacter(charAsset);
 
-    // 抽卡按钮（frame 0）→ 纹理位置使用原始坐标，hit area 需要 Y 翻转
+    // 抽卡按钮（frame 0）→ 区域1：1.1倍，顶部位置不变
     const aspect = window.innerWidth / window.innerHeight;
     const btnArea = {
-      x: 0.605 * aspect,
-      y: 0.103,               // 纹理渲染使用原始坐标
-      w: (0.867 - 0.605) * aspect,
-      h: 0.236 - 0.103,
+      x: 0.57749 * aspect,
+      y: 0.0537,       // 顶部不变
+      w: 0.31702 * aspect,
+      h: 0.16093,
     };
     const f0 = ui.frames[0];
     const fw0 = f0?.bbox.w || 512;
@@ -192,27 +187,9 @@ export class GachaOverlay {
     this.renderResourceUI(ui);
 
     // hit area 需要 Y 翻转（JSON y=0 底部 → camera y=0 顶部）
-    const hitOffY = (1 - 0.236) + (btnArea.h - sH0) / 2;
+    const hitOffY = (1 - (btnArea.y + btnArea.h)) + (btnArea.h - sH0) / 2;
     this.buttonHit.left = { x: texOffX, y: hitOffY, w: sW0 / 2, h: sH0 };
     this.buttonHit.right = { x: texOffX + sW0 / 2, y: hitOffY, w: sW0 / 2, h: sH0 };
-
-    // 调试：绘制点击区域
-    this.debugDrawHitAreas();
-
-    // 更新调试标注
-    if (this.debugAxis) {
-      const normX = texOffX / aspect;
-      const normY = texOffY;
-      const normHalfW = (sW0 / 2) / aspect;
-      this.debugAxis.innerHTML = [
-        '<span style="position:absolute;top:0;left:0;">(0,0) 左上</span>',
-        '<span style="position:absolute;top:0;right:0;">(1,0) 右上</span>',
-        '<span style="position:absolute;bottom:0;left:0;">(0,1) 左下</span>',
-        '<span style="position:absolute;bottom:0;right:0;">(1,1) 右下</span>',
-        '<span style="position:absolute;top:' + (normY * 100) + '%;left:' + (normX * 100) + '%;background:rgba(255,0,0,0.3);padding:1px 4px;border:1px solid #f00;font-size:10px;color:#f00;">抽卡按钮 左半</span>',
-        '<span style="position:absolute;top:' + (normY * 100) + '%;left:' + ((normX + normHalfW) * 100) + '%;background:rgba(0,255,0,0.3);padding:1px 4px;border:1px solid #0f0;font-size:10px;color:#0f0;">抽卡按钮 右半</span>',
-      ].join('');
-    }
 
     this.ready = true;
   }
@@ -242,30 +219,6 @@ export class GachaOverlay {
     mesh.scale.set(scaleX, scaleY, 1);
     mesh.position.set(posX, posY, z);
     this.scene.add(mesh);
-  }
-
-  // ============================================================
-  // 调试：绘制点击区域
-  // ============================================================
-
-  private debugDrawHitAreas(): void {
-    const leftMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
-    const rightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
-
-    const l = this.buttonHit.left;
-    const r = this.buttonHit.right;
-
-    // 左半（单抽） - 红色半透明
-    const leftMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), leftMat);
-    leftMesh.scale.set(l.w, l.h, 1);
-    leftMesh.position.set(l.x + l.w / 2, l.y + l.h / 2, 0.5);
-    this.scene.add(leftMesh);
-
-    // 右半（10抽） - 绿色半透明
-    const rightMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), rightMat);
-    rightMesh.scale.set(r.w, r.h, 1);
-    rightMesh.position.set(r.x + r.w / 2, r.y + r.h / 2, 0.5);
-    this.scene.add(rightMesh);
   }
 
   // ============================================================
@@ -352,12 +305,12 @@ export class GachaOverlay {
     const fw = f?.bbox.w || 512;
     const fh = f?.bbox.h || 512;
 
-    // 纹理绘制在右上区域
+    // 纹理绘制在右上区域（区域2：0.8倍，紧贴右上角）
     const aspect = window.innerWidth / window.innerHeight;
-    const resX = 0.725 * aspect;
-    const resY = 0.836;
-    const resW = (1.001 - 0.725) * aspect;
-    const resH = 0.911 - 0.836;
+    const resX = 0.5584 * aspect;
+    const resY = 0.88;
+    const resW = 0.4416 * aspect;
+    const resH = 0.12;
 
     const texAspect = fw / fh;
     let scaleW = resW;
