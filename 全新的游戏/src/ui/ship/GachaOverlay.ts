@@ -15,6 +15,8 @@ import gachaPool from '../../config/gachaPool.json';
 import type { GameSession } from '../../core/Session';
 import { createEmptyGrid } from '../../core/Session';
 import { SaveSystem } from '../../core/SaveSystem';
+import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
+import type { PhysicsConfig } from '../../vendor/player/core/types';
 
 // ============================================================
 // 基础 HSL 合成 Shader（FTX 纹理渲染用，含 UV 偏移支持）
@@ -130,6 +132,10 @@ export class GachaOverlay {
   private resultList: HTMLDivElement;
   private tickets: number;
   private _charMats: THREE.ShaderMaterial[] = [];
+  private bgFluidEffect: FluidEffect | null = null;
+  private isPointerDown = false;
+  private lastTickTime = 0;
+  private _fluidStarted = false; // 首次交互后才步进流体模拟
 
   constructor(
     private session: GameSession,
@@ -156,17 +162,6 @@ export class GachaOverlay {
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-    // 调试：标注区域位置
-    const debugRegions = document.createElement('div');
-    debugRegions.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:998;pointer-events:none;';
-    debugRegions.innerHTML = [
-      // 区域1（1.1倍，顶部不变）
-      '<div style="position:absolute;left:57.749%;top:78.537%;width:31.702%;height:16.093%;background:rgba(255,100,0,0.3);border:2px solid #ff6400;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#ff6400;text-shadow:0 0 4px #000;padding:2px;">区域1</div>',
-      // 区域2（1.02倍，紧贴右上角）
-      '<div style="position:absolute;left:59.56922368%;top:0%;width:40.43077632%;height:10.986624%;background:rgba(0,150,255,0.3);border:2px solid #0096ff;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#0096ff;text-shadow:0 0 4px #000;padding:2px;">区域2</div>',
-    ].join('');
-    this.root.appendChild(debugRegions);
-
     // 结果弹窗
     this.resultOverlay = document.createElement('div');
     this.resultOverlay.style.cssText = [
@@ -192,6 +187,9 @@ export class GachaOverlay {
 
     // 画布点击
     this.canvas.addEventListener('pointerdown', (e) => this.handleCanvasClick(e));
+    this.canvas.addEventListener('pointermove', (e) => this.handlePointerMove(e));
+    this.canvas.addEventListener('pointerup', () => { this.isPointerDown = false; });
+    this.canvas.addEventListener('pointerleave', () => { this.isPointerDown = false; });
 
     // 窗口大小变化
     window.addEventListener('resize', this.onResize);
@@ -216,7 +214,7 @@ export class GachaOverlay {
       charAsset = null;
     }
 
-    this.renderBackground(bg);
+    this.initBgFluidEffect(bg);
     if (charAsset) this.renderCharacter(charAsset);
 
     // 抽卡按钮（frame 0）→ 区域1：1.1倍，顶部位置不变
@@ -277,12 +275,76 @@ export class GachaOverlay {
   }
 
   // ============================================================
-  // 渲染背景（Layer 1 - 全屏）
+  // 背景流体效果（Layer 1 - 向量模式速度注入）
   // ============================================================
 
-  private renderBackground(bgAsset: FtxAsset): void {
-    const pair = bgAsset.getFramePair(0);
-    if (!pair) return;
+  private initBgFluidEffect(bgAsset: FtxAsset): void {
+    const frame = bgAsset.frames[0];
+    if (!frame) {
+      // 回退到无流体渲染
+      const pair = bgAsset.getFramePair(0);
+      if (pair) this.renderBackgroundFallback(pair);
+      return;
+    }
+
+    const physics: PhysicsConfig = {
+      enableAdvection: true,
+      enablePressure: true,
+      pressureIterations: 30,
+      advectionMode: 'vector',
+      velocityScale: 0.95,
+      maxVelocity: 5000,
+    };
+
+    this.bgFluidEffect = new FluidEffect(
+      this.renderer,
+      physics,
+      frame,
+      bgAsset.palette,
+      [],
+    );
+
+    this.renderFluidBackground();
+  }
+
+  private renderFluidBackground(): void {
+    const compositeTex = this.bgFluidEffect?.getCompositeTexture();
+    if (!compositeTex) {
+      // 回退到无流体渲染（不会发生，仅防御）
+      return;
+    }
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uColorTex: { value: compositeTex },
+        uAlpha: { value: 1.0 },
+      },
+      vertexShader: HSL_VERT,
+      fragmentShader: `
+        precision highp float;
+        varying vec2 vUv;
+        uniform sampler2D uColorTex;
+        uniform float uAlpha;
+        void main() {
+          vec4 color = texture2D(uColorTex, vUv);
+          gl_FragColor = vec4(color.rgb, color.a * uAlpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    });
+
+    const aspect = window.innerWidth / window.innerHeight;
+    if (aspect > 1) {
+      this.addQuad(mat, aspect, 1, aspect / 2, 0.5, 0);
+    } else {
+      this.addQuad(mat, 1, 1 / aspect, 0.5, 0.5 / aspect, 0);
+    }
+  }
+
+  /** 无流体回退渲染 */
+  private renderBackgroundFallback(pair: { base: THREE.DataTexture; residual: THREE.DataTexture }): void {
     const mat = this.makeHSLMat(pair.base, pair.residual);
     const aspect = window.innerWidth / window.innerHeight;
     if (aspect > 1) {
@@ -433,7 +495,38 @@ export class GachaOverlay {
       } else {
         this.doGacha(10);
       }
+      return; // ★ 按钮区域不注入流体
     }
+
+    // 点击背景 → 注入流体
+    this.isPointerDown = true;
+    this.injectFluidAt(e);
+  }
+
+  /** 在鼠标位置注入水（颜色 + 速度） */
+  private injectFluidAt(e: PointerEvent): void {
+    if (!this.bgFluidEffect) return;
+    if (!this._fluidStarted) this._fluidStarted = true;
+    const rect = this.canvas.getBoundingClientRect();
+    const uv = {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height,
+    };
+    // 注入水和速度：水颜色 HSLA (浅蓝白)，速度向下驱动流动
+    this.bgFluidEffect.solver.queueInjection({
+      enabled: true,
+      position: uv,
+      radius: 0.08,
+      velocity: { x: 0, y: 300 },
+      color: [0.55, 0.3, 0.9, 0.9],
+      rate: 1.0,
+    });
+  }
+
+  /** 拖拽时持续注入流体 */
+  private handlePointerMove(e: PointerEvent): void {
+    if (!this.isPointerDown || !this.bgFluidEffect) return;
+    this.injectFluidAt(e);
   }
 
   // ============================================================
@@ -575,8 +668,16 @@ export class GachaOverlay {
 
   private tick(): void {
     if (this.root.style.display === 'none') return;
-    // 更新时间
     const now = performance.now() / 1000;
+    const dt = this.lastTickTime > 0 ? now - this.lastTickTime : 0;
+    this.lastTickTime = now;
+
+    // 步进流体模拟（首次交互后才启动）
+    if (this.bgFluidEffect && this._fluidStarted) {
+      this.bgFluidEffect.step(dt);
+    }
+
+    // 更新时间
     for (const mat of this._charMats) {
       if (mat.uniforms.uTime) mat.uniforms.uTime.value = now;
     }
@@ -588,6 +689,10 @@ export class GachaOverlay {
     this.hide();
     window.removeEventListener('resize', this.onResize);
     this._charMats.length = 0;
+    if (this.bgFluidEffect) {
+      this.bgFluidEffect.dispose();
+      this.bgFluidEffect = null;
+    }
     this.renderer.dispose();
     document.body.removeChild(this.root);
   }
