@@ -169,13 +169,13 @@ export class GachaOverlay {
     this.renderBackground(bg);
     if (charAsset) this.renderCharacter(charAsset);
 
-    // 抽卡按钮（frame 0）→ 右下（JSON y:0.103~0.236，需翻转Y）
+    // 抽卡按钮（frame 0）→ 纹理位置使用原始坐标，hit area 需要 Y 翻转
     const aspect = window.innerWidth / window.innerHeight;
     const btnArea = {
       x: 0.605 * aspect,
-      y: 1 - 0.236,           // JSON y_start=0.103, y_end=0.236 → 翻转后 top=1-0.236=0.764
+      y: 0.103,               // 纹理渲染使用原始坐标
       w: (0.867 - 0.605) * aspect,
-      h: 0.236 - 0.103,       // 高度不变
+      h: 0.236 - 0.103,
     };
     const f0 = ui.frames[0];
     const fw0 = f0?.bbox.w || 512;
@@ -191,9 +191,10 @@ export class GachaOverlay {
     this.renderButtonUI(ui, texOffX, texOffY, sW0, sH0);
     this.renderResourceUI(ui);
 
-    // 设置hit area（与纹理位置完全一致）
-    this.buttonHit.left = { x: texOffX, y: texOffY, w: sW0 / 2, h: sH0 };
-    this.buttonHit.right = { x: texOffX + sW0 / 2, y: texOffY, w: sW0 / 2, h: sH0 };
+    // hit area 需要 Y 翻转（JSON y=0 底部 → camera y=0 顶部）
+    const hitOffY = (1 - 0.236) + (btnArea.h - sH0) / 2;
+    this.buttonHit.left = { x: texOffX, y: hitOffY, w: sW0 / 2, h: sH0 };
+    this.buttonHit.right = { x: texOffX + sW0 / 2, y: hitOffY, w: sW0 / 2, h: sH0 };
 
     // 调试：绘制点击区域
     this.debugDrawHitAreas();
@@ -304,12 +305,12 @@ export class GachaOverlay {
     }
     if (!pair) return;
 
-    // ★ 标注区域 (JSON 坐标系 y=0 底部, y=1 顶部，需翻转)
+    // ★ 标注区域
     const aspect = window.innerWidth / window.innerHeight;
     const areaX = 0.627 * aspect;
-    const areaY = 1 - 0.791;  // 翻转：JSON y_end=0.791 → camera top=0.209
+    const areaY = 0.103;
     const areaW = (0.867 - 0.627) * aspect;
-    const areaH = 0.791 - 0.103; // 高度不变
+    const areaH = 0.791 - 0.103;
 
     const texAspect = fw / fh;
 
@@ -351,12 +352,12 @@ export class GachaOverlay {
     const fw = f?.bbox.w || 512;
     const fh = f?.bbox.h || 512;
 
-    // 纹理绘制在右上区域（JSON y:0.836~0.911，需翻转Y）
+    // 纹理绘制在右上区域
     const aspect = window.innerWidth / window.innerHeight;
     const resX = 0.725 * aspect;
-    const resY = 1 - 0.911;   // 翻转：JSON y_end=0.911 → camera top=0.089
+    const resY = 0.836;
     const resW = (1.001 - 0.725) * aspect;
-    const resH = 0.911 - 0.836; // 高度不变
+    const resH = 0.911 - 0.836;
 
     const texAspect = fw / fh;
     let scaleW = resW;
