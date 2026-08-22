@@ -36,6 +36,7 @@ const HSL_FRAG = `
   uniform sampler2D uResidual;
   uniform float uAlpha;
   uniform vec4 uUvClip; // (x, y, w, h) 裁剪纹理区域，默认 (0,0,1,1)
+  uniform float uGray; // 0=原色, 1=灰度
 
   vec3 hsl2rgb(vec3 c) {
     vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -53,7 +54,9 @@ const HSL_FRAG = `
     float h = fract(base.r + dH);
     float s = clamp(base.g + dS, 0.0, 1.0);
     float l = clamp(base.b + dL, 0.0, 1.0);
-    gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+    vec3 color = hsl2rgb(vec3(h, s, l));
+    float gray = dot(color, vec3(0.299, 0.587, 0.114));
+    gl_FragColor = vec4(mix(color, vec3(gray), uGray), base.a * uAlpha);
   }
 `;
 
@@ -143,11 +146,90 @@ export class GachaOverlay {
   private _pullCountTexture: THREE.CanvasTexture | null = null;
   private _starsMesh: THREE.Mesh | null = null;
   private _questionMesh: THREE.Mesh | null = null;
+  private _btnLeftMesh: THREE.Mesh | null = null; // 抽卡按钮左半（单抽）
+  private _btnRightMesh: THREE.Mesh | null = null; // 抽卡按钮右半（十连）
+  private _btnLeftDefaultScale: { x: number; y: number } | null = null;
+  private _btnRightDefaultScale: { x: number; y: number } | null = null;
+  private _isHoverLeft = false;
+  private _isHoverRight = false;
 
   // 概率显示页面
   private _probAsset: FtxAsset | null = null;
   private _probOverlay: HTMLDivElement | null = null;
   private _probButtonHit: { x: number; y: number; w: number; h: number } | null = null;
+
+  // 按钮按压效果
+  private pressLeftBtn(): void {
+    if (!this._btnLeftMesh || !this._btnLeftDefaultScale) return;
+    const s = 1.15;
+    this._btnLeftMesh.scale.set(this._btnLeftDefaultScale.x * s, this._btnLeftDefaultScale.y * s, 1);
+    (this._btnLeftMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = 1;
+  }
+  private releaseLeftBtn(): void {
+    if (!this._btnLeftMesh || !this._btnLeftDefaultScale) return;
+    const s = this._isHoverLeft ? 1.05 : 1;
+    this._btnLeftMesh.scale.set(this._btnLeftDefaultScale.x * s, this._btnLeftDefaultScale.y * s, 1);
+    (this._btnLeftMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = this._isHoverLeft ? 0.2 : 0;
+  }
+  private pressRightBtn(): void {
+    if (!this._btnRightMesh || !this._btnRightDefaultScale) return;
+    const s = 1.15;
+    this._btnRightMesh.scale.set(this._btnRightDefaultScale.x * s, this._btnRightDefaultScale.y * s, 1);
+    (this._btnRightMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = 1;
+  }
+  private releaseRightBtn(): void {
+    if (!this._btnRightMesh || !this._btnRightDefaultScale) return;
+    const s = this._isHoverRight ? 1.05 : 1;
+    this._btnRightMesh.scale.set(this._btnRightDefaultScale.x * s, this._btnRightDefaultScale.y * s, 1);
+    (this._btnRightMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = this._isHoverRight ? 0.2 : 0;
+  }
+  private setBtnHover(mesh: THREE.Mesh | null, defScale: { x: number; y: number } | null, isHover: boolean): void {
+    if (!mesh || !defScale) return;
+    const s = isHover ? 1.05 : 1;
+    mesh.scale.set(defScale.x * s, defScale.y * s, 1);
+    (mesh.material as THREE.ShaderMaterial).uniforms.uGray.value = isHover ? 0.2 : 0;
+  }
+  private updateButtonHover(wx: number, wy: number): void {
+    const { left, right } = this.buttonHit;
+    const onLeft = wx >= left.x && wx <= left.x + left.w && wy >= left.y && wy <= left.y + left.h;
+    const onRight = wx >= left.x + left.w && wx <= left.x + left.w + right.w && wy >= left.y && wy <= left.y + left.h;
+    if (onLeft !== this._isHoverLeft) {
+      this._isHoverLeft = onLeft;
+      this.setBtnHover(this._btnLeftMesh, this._btnLeftDefaultScale, onLeft);
+    }
+    if (onRight !== this._isHoverRight) {
+      this._isHoverRight = onRight;
+      this.setBtnHover(this._btnRightMesh, this._btnRightDefaultScale, onRight);
+    }
+  }
+  private clearHover(): void {
+    if (this._isHoverLeft) {
+      this._isHoverLeft = false;
+      this.setBtnHover(this._btnLeftMesh, this._btnLeftDefaultScale, false);
+    }
+    if (this._isHoverRight) {
+      this._isHoverRight = false;
+      this.setBtnHover(this._btnRightMesh, this._btnRightDefaultScale, false);
+    }
+  }
+  private handlePointerMove(e: PointerEvent): void {
+    if (!this.ready) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const aspect = window.innerWidth / window.innerHeight;
+    let wx: number, wy: number;
+    if (aspect > 1) {
+      wx = ((e.clientX - rect.left) / rect.width) * aspect;
+      wy = (e.clientY - rect.top) / rect.height;
+    } else {
+      wx = (e.clientX - rect.left) / rect.width;
+      wy = ((e.clientY - rect.top) / rect.height) * (1 / aspect);
+    }
+    this.updateButtonHover(wx, wy);
+    // 拖拽时持续注入流体
+    if (this.isPointerDown && this.bgFluidEffect) {
+      this.injectFluidAt(e);
+    }
+  }
 
   // 粒子效果
   private _particles: THREE.Points | null = null;
@@ -207,7 +289,10 @@ export class GachaOverlay {
     this.canvas.addEventListener('pointerdown', (e) => this.handleCanvasClick(e));
     this.canvas.addEventListener('pointermove', (e) => this.handlePointerMove(e));
     this.canvas.addEventListener('pointerup', () => { this.isPointerDown = false; });
-    this.canvas.addEventListener('pointerleave', () => { this.isPointerDown = false; });
+    this.canvas.addEventListener('pointerleave', () => {
+      this.isPointerDown = false;
+      this.clearHover();
+    });
 
     // 窗口大小变化
     window.addEventListener('resize', this.onResize);
@@ -297,6 +382,7 @@ export class GachaOverlay {
         uResidual: { value: residual },
         uAlpha: { value: 1.0 },
         uUvClip: { value: uvClip ? new THREE.Vector4(uvClip.x, uvClip.y, uvClip.w, uvClip.h) : new THREE.Vector4(0, 0, 1, 1) },
+        uGray: { value: 0 },
       },
       vertexShader: HSL_VERT,
       fragmentShader: HSL_FRAG,
@@ -471,8 +557,25 @@ export class GachaOverlay {
     if (!pair) return;
     const cx = offX + texW / 2;
     const cy = offY + texH / 2;
-    const mat = this.makeHSLMat(pair.base, pair.residual);
-    this.addQuad(mat, texW, texH, cx, cy, 0.2);
+
+    // 左半（单抽）
+    const leftMat = this.makeHSLMat(pair.base, pair.residual, { x: 0, y: 0, w: 0.5, h: 1 });
+    const leftHalfW = texW / 2;
+    const leftCx = cx - leftHalfW / 2;
+    this._btnLeftMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), leftMat);
+    this._btnLeftMesh.scale.set(leftHalfW, texH, 1);
+    this._btnLeftMesh.position.set(leftCx, cy, 0.2);
+    this._btnLeftDefaultScale = { x: leftHalfW, y: texH };
+    this.scene.add(this._btnLeftMesh);
+
+    // 右半（十连）
+    const rightMat = this.makeHSLMat(pair.base, pair.residual, { x: 0.5, y: 0, w: 0.5, h: 1 });
+    const rightCx = cx + leftHalfW / 2;
+    this._btnRightMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), rightMat);
+    this._btnRightMesh.scale.set(leftHalfW, texH, 1);
+    this._btnRightMesh.position.set(rightCx, cy, 0.2);
+    this._btnRightDefaultScale = { x: leftHalfW, y: texH };
+    this.scene.add(this._btnRightMesh);
   }
 
   // ============================================================
@@ -713,8 +816,14 @@ export class GachaOverlay {
     if (wx >= left.x && wx <= left.x + left.w + right.w &&
         wy >= left.y && wy <= left.y + left.h) {
       if (wx <= left.x + left.w) {
+        // 左半（单抽）→ 按钮按下效果
+        this.pressLeftBtn();
+        setTimeout(() => this.releaseLeftBtn(), 150);
         this.doGacha(1);
       } else {
+        // 右半（十连）→ 按钮按下效果
+        this.pressRightBtn();
+        setTimeout(() => this.releaseRightBtn(), 150);
         this.doGacha(10);
       }
       return; // ★ 按钮区域不注入流体
@@ -746,10 +855,6 @@ export class GachaOverlay {
   }
 
   /** 拖拽时持续注入流体 */
-  private handlePointerMove(e: PointerEvent): void {
-    if (!this.isPointerDown || !this.bgFluidEffect) return;
-    this.injectFluidAt(e);
-  }
 
   // ============================================================
   // 抽卡逻辑
@@ -1042,6 +1147,16 @@ export class GachaOverlay {
       else mat.dispose();
       this.scene.remove(this._questionMesh);
       this._questionMesh = null;
+    }
+    if (this._btnLeftMesh) {
+      (this._btnLeftMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._btnLeftMesh);
+      this._btnLeftMesh = null;
+    }
+    if (this._btnRightMesh) {
+      (this._btnRightMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._btnRightMesh);
+      this._btnRightMesh = null;
     }
     if (this._particles) {
       this._particles.geometry.dispose();
