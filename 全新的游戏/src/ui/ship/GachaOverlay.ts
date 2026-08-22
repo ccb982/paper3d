@@ -768,6 +768,8 @@ export class GachaOverlay {
       'display:flex', 'align-items:flex-start', 'justify-content:center',
       'padding-top:100px',
       'background:rgba(0,0,0,0.5)',
+      'backdrop-filter:blur(12px)',
+      '-webkit-backdrop-filter:blur(12px)',
     ].join(';');
 
     canvas.style.width = fw + 'px';
