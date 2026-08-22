@@ -33,24 +33,24 @@ interface ButtonAnno {
 
 const BUTTON_ANNOTATIONS: ButtonAnno[] = [
   {
-    id: 'operator', label: '干员', frameIndex: 0,
+    id: 'action', label: '行动', frameIndex: 0,
+    corners: {
+      tl: { x: 0.600, y: 0.591 }, tr: { x: 1.000, y: 0.600 },
+      bl: { x: 0.600, y: 0.785 }, br: { x: 1.000, y: 0.835 },
+    },
+  },
+  {
+    id: 'operator', label: '干员', frameIndex: 1,
     corners: {
       tl: { x: 0.750, y: 0.570 }, tr: { x: 0.931, y: 0.578 },
       bl: { x: 0.750, y: 0.436 }, br: { x: 0.931, y: 0.426 },
     },
   },
   {
-    id: 'formation', label: '编队', frameIndex: 1,
+    id: 'formation', label: '编队', frameIndex: 2,
     corners: {
       tl: { x: 0.581, y: 0.573 }, tr: { x: 0.740, y: 0.566 },
       bl: { x: 0.581, y: 0.447 }, br: { x: 0.740, y: 0.451 },
-    },
-  },
-  {
-    id: 'action', label: '行动', frameIndex: 2,
-    corners: {
-      tl: { x: 0.600, y: 0.591 }, tr: { x: 1.000, y: 0.600 },
-      bl: { x: 0.600, y: 0.785 }, br: { x: 1.000, y: 0.835 },
     },
   },
 ];
@@ -87,6 +87,23 @@ const HSL_FRAG = `
     float s = clamp(base.g + dS, 0.0, 1.0);
     float l = clamp(base.b + dL, 0.0, 1.0);
     gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+  }
+`;
+
+// ★ 调试：直接输出 HSL 基础色（跳过残差）
+const HSL_FRAG_RAW = `
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D uBase;
+  uniform float uAlpha;
+  vec3 hsl2rgb(vec3 c) {
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+  }
+  void main() {
+    vec4 base = texture2D(uBase, vUv);
+    vec3 rgb = hsl2rgb(vec3(base.r, base.g, base.b));
+    gl_FragColor = vec4(rgb, base.a * uAlpha);
   }
 `;
 
@@ -138,8 +155,10 @@ export class ShipMode implements IGameMode {
   private _btnCamera: THREE.OrthographicCamera | null = null;
   private _btnMeshes: THREE.Mesh[] = [];
   private _btnDebugLines: THREE.LineLoop[] = [];
+  private _btnLabels: THREE.Sprite[] = [];
   private _btnHitAreas: { id: string; x: number; y: number; w: number; h: number }[] = [];
   private _btnBoundClick: ((e: PointerEvent) => void) | null = null;
+  private _debugReadbackDone = false;
 
   // ============================================================
   // IGameMode 接口实现
@@ -226,6 +245,11 @@ export class ShipMode implements IGameMode {
       // 渲染按钮覆盖层
       if (this._btnScene && this._btnCamera) {
         this.renderer.render(this._btnScene, this._btnCamera);
+        // 首次渲染后回读行动按钮像素
+        if (!this._debugReadbackDone) {
+          this._debugReadbackDone = true;
+          this.debugReadbackActionButton();
+        }
       }
     }
   }
@@ -351,9 +375,25 @@ export class ShipMode implements IGameMode {
 
     this._btnHitAreas = [];
 
+    console.log('[ShipMode] 按钮FTX帧数:', btnAsset.frameCount, '帧名:', btnAsset.frameNames());
+
     for (const anno of BUTTON_ANNOTATIONS) {
       const pair = btnAsset.getFramePair(anno.frameIndex);
-      if (!pair) continue;
+      if (!pair) {
+        console.warn('[ShipMode] 跳过无纹理按钮:', anno.label, '帧索引:', anno.frameIndex);
+        continue;
+      }
+      // 调试：检查纹理数据
+      const baseTex = pair.base;
+      const baseData = baseTex.image.data as unknown as Float32Array;
+      let alphaMax = 0, alphaCount = 0;
+      const step = Math.max(1, Math.floor(baseData.length / 4000)); // 最多采样~1000个像素
+      for (let i = 3; i < baseData.length; i += step * 4) {
+        if (baseData[i] > alphaMax) alphaMax = baseData[i];
+        if (baseData[i] > 0.5) alphaCount++;
+      }
+      alphaCount *= step; // 估算总数
+      console.log(`[ShipMode] ${anno.label} 纹理:`, baseTex.image.width, 'x', baseTex.image.height, `alpha>0.5约:${alphaCount}px, maxAlpha:${alphaMax}`);
 
       // 创建梯形几何体
       const { tl, tr, bl, br } = this.screenToThree(anno.corners, aspect);
@@ -370,18 +410,79 @@ export class ShipMode implements IGameMode {
       geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
       geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-      const mat = new THREE.ShaderMaterial({
-        uniforms: {
-          uBase: { value: pair.base },
-          uResidual: { value: pair.residual },
-          uAlpha: { value: 1.0 },
-        },
-        vertexShader: HSL_VERT,
-        fragmentShader: HSL_FRAG,
-        transparent: true,
-        depthWrite: false,
-        depthTest: false,
-      });
+      const mat = (() => {
+        // sRGB → 线性转换
+        const srgbToLinear = (v: number) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+        // 将 HSL 数据 + 残差转成 Canvas 纹理（线性空间）
+        const baseData = pair.base.image.data as unknown as Float32Array;
+        const bw = pair.base.image.width;
+        const bh = pair.base.image.height;
+        const resTex = pair.residual;
+        const resData = resTex.image.data as Uint8Array;
+        const rw = resTex.image.width;
+        const rh = resTex.image.height;
+        // 如果残差尺寸不匹配，打印警告
+        if (bw !== rw || bh !== rh) {
+          console.warn(`[ShipMode] ${anno.label} 基础色和残差尺寸不匹配: base=${bw}x${bh} residual=${rw}x${rh}`);
+        }
+        const cvs = document.createElement('canvas');
+        cvs.width = bw;
+        cvs.height = bh;
+        const ctx = cvs.getContext('2d')!;
+        const imgData = ctx.createImageData(bw, bh);
+        const w = bw, h = bh;
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = (y * w + x) * 4;
+            let hVal = baseData[idx];
+            let sVal = baseData[idx + 1];
+            let lVal = baseData[idx + 2];
+            const aVal = baseData[idx + 3];
+            // 应用残差（如果尺寸匹配）
+            if (bw === rw && bh === rh) {
+              const dH = (resData[idx] / 255 * 2 - 1) * 0.5;
+              const dS = (resData[idx + 1] / 255 * 2 - 1) * 0.5;
+              const dL = (resData[idx + 2] / 255 * 2 - 1) * 0.5;
+              hVal = (hVal + dH) % 1;
+              if (hVal < 0) hVal += 1;
+              sVal = Math.max(0, Math.min(1, sVal + dS));
+              lVal = Math.max(0, Math.min(1, lVal + dL));
+            }
+            // HSL → RGB
+            const c = (1 - Math.abs(2 * lVal - 1)) * sVal;
+            const xc = c * (1 - Math.abs((hVal * 6) % 2 - 1));
+            const m = lVal - c / 2;
+            let r = 0, g = 0, b = 0;
+            const hi = Math.floor(hVal * 6);
+            switch (hi) {
+              case 0: r = c; g = xc; break;
+              case 1: r = xc; g = c; break;
+              case 2: g = c; b = xc; break;
+              case 3: g = xc; b = c; break;
+              case 4: r = xc; b = c; break;
+              default: r = c; b = xc; break;
+            }
+            imgData.data[idx] = srgbToLinear(r + m) * 255;
+            imgData.data[idx + 1] = srgbToLinear(g + m) * 255;
+            imgData.data[idx + 2] = srgbToLinear(b + m) * 255;
+            imgData.data[idx + 3] = aVal * 255;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        const tex = new THREE.CanvasTexture(cvs);
+        // 根据标注坐标判断是否需要翻转 Y
+        tex.flipY = anno.corners.tl.y < anno.corners.bl.y;
+        // Canvas 数据为 sRGB，但渲染器输出为 LinearSRGBColorSpace，
+        // 设 LinearColorSpace 避免渲染器额外 sRGB 编码导致颜色翻倍
+        tex.colorSpace = THREE.LinearSRGBColorSpace;
+        return new THREE.MeshBasicMaterial({
+          map: tex,
+          transparent: true,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          depthTest: false,
+        });
+      })();
 
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.z = 0.1;
@@ -423,6 +524,14 @@ export class ShipMode implements IGameMode {
       const hitLine = new THREE.LineLoop(hitGeo, hitMat);
       this._btnScene.add(hitLine);
       this._btnDebugLines.push(hitLine);
+
+      // ★ 调试：区域编号标签
+      const labelSprite = this.createLabel(anno.label, debugColor);
+      const cx = (tl.x + tr.x + bl.x + br.x) / 4;
+      const cy = (tl.y + tr.y + bl.y + br.y) / 4;
+      labelSprite.position.set(cx, cy, 0.2);
+      this._btnScene.add(labelSprite);
+      this._btnLabels.push(labelSprite);
     }
 
     // 点击事件
@@ -473,6 +582,84 @@ export class ShipMode implements IGameMode {
     }
   }
 
+  /** 回读行动按钮区域的像素值（调试用） */
+  private debugReadbackActionButton(): void {
+    const actionAnno = BUTTON_ANNOTATIONS.find(a => a.id === 'action');
+    if (!actionAnno || !this._btnCamera) return;
+    const gl = this.renderer!.getContext();
+    const canvas = this.renderer!.domElement;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const aspect = this._btnCamera.right;
+    // 行动按钮中心在相机坐标
+    const { tl, tr, bl, br } = actionAnno.corners;
+    const cx = (tl.x + tr.x + bl.x + br.x) / 4;
+    const cy = (tl.y + tr.y + bl.y + br.y) / 4;
+    // 相机坐标 → 屏幕像素（readPixels Y=0 底部）
+    // 相机: OrthographicCamera(0, aspect, 1, 0)
+    // ndcX = camX/aspect*2-1, ndcY = camY*2-1
+    // screenX = (ndcX+1)/2*cw, screenY = (ndcY+1)/2*ch
+    const sx = Math.round(cx / aspect * cw);
+    const sy = Math.round(cy * ch);
+    // 读取 3x3 网格
+    const pixels = new Uint8Array(9 * 4);
+    gl.readPixels(sx - 1, sy - 1, 3, 3, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const rows: string[] = [];
+    for (let r = 0; r < 3; r++) {
+      const cols: string[] = [];
+      for (let c = 0; c < 3; c++) {
+        const i = (r * 3 + c) * 4;
+        cols.push(`(${pixels[i]},${pixels[i+1]},${pixels[i+2]},${pixels[i+3]})`);
+      }
+      rows.push(`  [${cols.join(', ')}]`);
+    }
+    console.log(`[ShipMode] 行动按钮回读 中心(${cx.toFixed(3)},${cy.toFixed(3)})→屏幕(${sx},${sy}) canvas=${cw}x${ch} aspect=${aspect.toFixed(3)}`);
+    console.log(rows.join('\n'));
+    // 额外读取干员和编队按钮中心对比
+    for (const anno of BUTTON_ANNOTATIONS) {
+      if (anno.id === 'action') continue;
+      const acx = (anno.corners.tl.x + anno.corners.tr.x + anno.corners.bl.x + anno.corners.br.x) / 4;
+      const acy = (anno.corners.tl.y + anno.corners.tr.y + anno.corners.bl.y + anno.corners.br.y) / 4;
+      const asx = Math.round(acx / aspect * cw);
+      const asy = Math.round(acy * ch);
+      const apx = new Uint8Array(4);
+      gl.readPixels(asx, asy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, apx);
+      console.log(`[ShipMode] ${anno.label} 中心(${acx.toFixed(3)},${acy.toFixed(3)})→(${asx},${asy}): rgba(${apx[0]},${apx[1]},${apx[2]},${apx[3]})`);
+    }
+  }
+
+  /** 创建文字标签精灵 */
+  private createLabel(text: string, color: number): THREE.Sprite {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    // 背景
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.roundRect(0, 0, 256, 64, 8);
+    ctx.fill();
+    // 边框
+    const r = (color >> 16) & 0xff;
+    const g = (color >> 8) & 0xff;
+    const b = color & 0xff;
+    ctx.strokeStyle = `rgb(${r},${g},${b})`;
+    ctx.lineWidth = 2;
+    ctx.roundRect(0, 0, 256, 64, 8);
+    ctx.stroke();
+    // 文字
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.font = 'bold 28px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 128, 34);
+    // 创建纹理
+    const tex = new THREE.CanvasTexture(canvas);
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(0.4, 0.1, 1);
+    return sprite;
+  }
+
   private disposeMainButtons(): void {
     if (this._btnBoundClick && this.renderer) {
       this.renderer.domElement.removeEventListener('pointerdown', this._btnBoundClick);
@@ -500,6 +687,13 @@ export class ShipMode implements IGameMode {
       this._btnScene?.remove(line);
     }
     this._btnDebugLines = [];
+    // 清理标签
+    for (const sprite of this._btnLabels) {
+      sprite.material.map?.dispose();
+      sprite.material.dispose();
+      this._btnScene?.remove(sprite);
+    }
+    this._btnLabels = [];
     this._btnHitAreas = [];
     this._btnScene = null;
     this._btnCamera = null;
