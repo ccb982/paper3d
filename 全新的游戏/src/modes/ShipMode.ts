@@ -525,13 +525,7 @@ export class ShipMode implements IGameMode {
       this._btnScene.add(hitLine);
       this._btnDebugLines.push(hitLine);
 
-      // ★ 调试：区域编号标签
-      const labelSprite = this.createLabel(anno.label, debugColor);
-      const cx = (tl.x + tr.x + bl.x + br.x) / 4;
-      const cy = (tl.y + tr.y + bl.y + br.y) / 4;
-      labelSprite.position.set(cx, cy, 0.2);
-      this._btnScene.add(labelSprite);
-      this._btnLabels.push(labelSprite);
+      // ★ 调试：区域编号标签（已移除）
     }
 
     // 点击事件
