@@ -55,6 +55,60 @@ const HSL_FRAG = `
   }
 `;
 
+const HSL_FRAG_CHAR = `
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D uBase;
+  uniform sampler2D uResidual;
+  uniform float uAlpha;
+  uniform float uTime;
+  uniform float uDistortEnabled;
+  uniform float uDistortAmplitude;
+  uniform float uDistortFrequency;
+  uniform float uDistortSpeed;
+  uniform float uDistortRotation;
+
+  vec3 hsl2rgb(vec3 c) {
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+  }
+
+  void main() {
+    vec2 uv = vUv;
+    // 呼吸式扭曲
+    if (uDistortEnabled > 0.5) {
+      float time = uTime;
+      float cosDR = cos(uDistortRotation);
+      float sinDR = sin(uDistortRotation);
+      vec2 dUv = uv - 0.5;
+      vec2 rotUv = vec2(dUv.x * cosDR - dUv.y * sinDR, dUv.x * sinDR + dUv.y * cosDR);
+      rotUv += 0.5;
+      float amplitude = uDistortAmplitude * (0.5 + 0.5 * sin(time * 0.4));
+      float frequency = uDistortFrequency;
+      float phase = time * uDistortSpeed + 0.5 * sin(time * 0.3);
+      float offsetX = amplitude * sin(frequency * rotUv.y + phase);
+      rotUv.x += offsetX;
+      float secondaryAmp = amplitude * 0.3;
+      float secondaryFreq = frequency * 1.8;
+      float secondaryPhase = time * 2.5;
+      rotUv.x += secondaryAmp * sin(secondaryFreq * rotUv.y + secondaryPhase);
+      vec2 backUv = rotUv - 0.5;
+      uv = vec2(backUv.x * cosDR + backUv.y * sinDR, -backUv.x * sinDR + backUv.y * cosDR);
+      uv += 0.5;
+    }
+    vec4 base = texture2D(uBase, uv);
+    if (base.a < 0.5) discard;
+    vec4 res = texture2D(uResidual, uv);
+    float dH = (res.r * 2.0 - 1.0) * 0.5;
+    float dS = (res.g * 2.0 - 1.0) * 0.5;
+    float dL = (res.b * 2.0 - 1.0) * 0.5;
+    float h = fract(base.r + dH);
+    float s = clamp(base.g + dS, 0.0, 1.0);
+    float l = clamp(base.b + dL, 0.0, 1.0);
+    gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+  }
+`;
+
 export class GachaOverlay {
   private root: HTMLDivElement;
   private canvas: HTMLCanvasElement;
@@ -75,6 +129,7 @@ export class GachaOverlay {
   private resultOverlay: HTMLDivElement;
   private resultList: HTMLDivElement;
   private tickets: number;
+  private _charMats: THREE.ShaderMaterial[] = [];
 
   constructor(
     private session: GameSession,
@@ -107,8 +162,8 @@ export class GachaOverlay {
     debugRegions.innerHTML = [
       // 区域1（1.1倍，顶部不变）
       '<div style="position:absolute;left:57.749%;top:78.537%;width:31.702%;height:16.093%;background:rgba(255,100,0,0.3);border:2px solid #ff6400;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#ff6400;text-shadow:0 0 4px #000;padding:2px;">区域1</div>',
-      // 区域2（0.8倍，紧贴右上角）
-      '<div style="position:absolute;left:55.84%;top:0%;width:44.16%;height:12%;background:rgba(0,150,255,0.3);border:2px solid #0096ff;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#0096ff;text-shadow:0 0 4px #000;padding:2px;">区域2</div>',
+      // 区域2（1.02倍，紧贴右上角）
+      '<div style="position:absolute;left:59.56922368%;top:0%;width:40.43077632%;height:10.986624%;background:rgba(0,150,255,0.3);border:2px solid #0096ff;box-sizing:border-box;display:flex;align-items:flex-start;justify-content:flex-start;font:12px monospace;color:#0096ff;text-shadow:0 0 4px #000;padding:2px;">区域2</div>',
     ].join('');
     this.root.appendChild(debugRegions);
 
@@ -237,20 +292,27 @@ export class GachaOverlay {
     }
   }
 
-  // ============================================================
-  // 渲染普瑞赛斯（Layer 3 - 标注: x:0.627~0.867, y:0.103~0.791）
-  //   保持纹理比例，不裁剪变形
-  // ============================================================
-
   private renderCharacter(charAsset: Asset | FtxAsset): void {
     let pair: { base: THREE.DataTexture; residual: THREE.DataTexture } | null = null;
     let fw = 512, fh = 512;
+    let distortEnabled = false;
+    let distortAmplitude = 0.06;
+    let distortFrequency = 5.0;
+    let distortSpeed = 1.2;
+    let distortRotation = 0;
 
     if (charAsset instanceof Asset) {
       pair = charAsset.getFramePair(0);
       const ftxFrame = charAsset.getFtxFrame(0);
-      // 纹理实际尺寸 = bbox 尺寸
       if (ftxFrame) { fw = ftxFrame.bbox.w; fh = ftxFrame.bbox.h; }
+      const f0 = charAsset.frames[0];
+      if (f0) {
+        distortEnabled = f0.distortEnabled ?? false;
+        distortAmplitude = f0.distortAmplitude ?? 0.06;
+        distortFrequency = f0.distortFrequency ?? 5.0;
+        distortSpeed = f0.distortSpeed ?? 1.2;
+        distortRotation = f0.distortRotation ?? 0;
+      }
     } else {
       pair = charAsset.getFramePair(0);
       const f = charAsset.frames[0];
@@ -258,12 +320,12 @@ export class GachaOverlay {
     }
     if (!pair) return;
 
-    // ★ 标注区域
+    // ★ 标注区域（1.3倍）
     const aspect = window.innerWidth / window.innerHeight;
-    const areaX = 0.627 * aspect;
-    const areaY = 0.103;
-    const areaW = (0.867 - 0.627) * aspect;
-    const areaH = 0.791 - 0.103;
+    const areaX = 0.591 * aspect;
+    const areaY = -0.0002;
+    const areaW = 0.312 * aspect;
+    const areaH = 0.8944;
 
     const texAspect = fw / fh;
 
@@ -277,7 +339,25 @@ export class GachaOverlay {
 
     const cx = areaX + areaW / 2;
     const cy = areaY + areaH / 2;
-    const mat = this.makeHSLMat(pair.base, pair.residual);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uBase: { value: pair.base },
+        uResidual: { value: pair.residual },
+        uAlpha: { value: 1.0 },
+        uTime: { value: 0 },
+        uDistortEnabled: { value: distortEnabled ? 1 : 0 },
+        uDistortAmplitude: { value: distortAmplitude },
+        uDistortFrequency: { value: distortFrequency },
+        uDistortSpeed: { value: distortSpeed },
+        uDistortRotation: { value: distortRotation },
+      },
+      vertexShader: HSL_VERT,
+      fragmentShader: HSL_FRAG_CHAR,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    });
+    this._charMats.push(mat);
     this.addQuad(mat, quadW, quadH, cx, cy, 0.1);
   }
 
@@ -305,12 +385,12 @@ export class GachaOverlay {
     const fw = f?.bbox.w || 512;
     const fh = f?.bbox.h || 512;
 
-    // 纹理绘制在右上区域（区域2：0.8倍，紧贴右上角）
+    // 纹理绘制在右上区域（区域2：1.02倍，紧贴右上角）
     const aspect = window.innerWidth / window.innerHeight;
-    const resX = 0.5584 * aspect;
-    const resY = 0.88;
-    const resW = 0.4416 * aspect;
-    const resH = 0.12;
+    const resX = 0.5956922368 * aspect;
+    const resY = 0.89013376;
+    const resW = 0.4043077632 * aspect;
+    const resH = 0.10986624;
 
     const texAspect = fw / fh;
     let scaleW = resW;
@@ -495,6 +575,11 @@ export class GachaOverlay {
 
   private tick(): void {
     if (this.root.style.display === 'none') return;
+    // 更新时间
+    const now = performance.now() / 1000;
+    for (const mat of this._charMats) {
+      if (mat.uniforms.uTime) mat.uniforms.uTime.value = now;
+    }
     this.renderer.render(this.scene, this.camera);
     requestAnimationFrame(() => this.tick());
   }
@@ -502,6 +587,7 @@ export class GachaOverlay {
   dispose(): void {
     this.hide();
     window.removeEventListener('resize', this.onResize);
+    this._charMats.length = 0;
     this.renderer.dispose();
     document.body.removeChild(this.root);
   }
