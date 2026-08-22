@@ -628,7 +628,8 @@ export class GachaOverlay {
     const overlay = document.createElement('div');
     overlay.style.cssText = [
       'position:fixed', 'inset:0', 'z-index:300',
-      'display:flex', 'align-items:center', 'justify-content:center',
+      'display:flex', 'align-items:flex-start', 'justify-content:center',
+      'padding-top:100px',
       'background:rgba(0,0,0,0.5)',
     ].join(';');
 
