@@ -74,6 +74,7 @@ export class GachaOverlay {
   
   private resultOverlay: HTMLDivElement;
   private resultList: HTMLDivElement;
+  private debugAxis: HTMLDivElement;
   private tickets: number;
 
   constructor(
@@ -100,6 +101,21 @@ export class GachaOverlay {
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+
+    // 调试坐标轴
+    this.debugAxis = document.createElement('div');
+    this.debugAxis.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
+      'z-index:999', 'pointer-events:none', 'font-size:11px', 'font-family:monospace',
+      'color:#0ff', 'text-shadow:0 0 4px #000',
+    ].join(';');
+    this.debugAxis.innerHTML = [
+      '<span style="position:absolute;top:0;left:0;">(0,0) 左上</span>',
+      '<span style="position:absolute;top:0;right:0;">(1,0) 右上</span>',
+      '<span style="position:absolute;bottom:0;left:0;">(0,1) 左下</span>',
+      '<span style="position:absolute;bottom:0;right:0;">(1,1) 右下</span>',
+    ].join('');
+    this.root.appendChild(this.debugAxis);
 
     // 结果弹窗
     this.resultOverlay = document.createElement('div');
@@ -152,27 +168,50 @@ export class GachaOverlay {
 
     this.renderBackground(bg);
     if (charAsset) this.renderCharacter(charAsset);
-    // ★ 最终正确方案（以实际屏幕显示为准）：
-    //   右下角 → frame 0「抽卡按钮」纹理，点击区域在此
-    //   右上角 → frame 1「资源显示ui」纹理 + 资源数字叠加
-    this.renderButtonUI(ui);
+
+    // 抽卡按钮（frame 0）→ 右下（JSON y:0.103~0.236，需翻转Y）
+    const aspect = window.innerWidth / window.innerHeight;
+    const btnArea = {
+      x: 0.605 * aspect,
+      y: 1 - 0.236,           // JSON y_start=0.103, y_end=0.236 → 翻转后 top=1-0.236=0.764
+      w: (0.867 - 0.605) * aspect,
+      h: 0.236 - 0.103,       // 高度不变
+    };
+    const f0 = ui.frames[0];
+    const fw0 = f0?.bbox.w || 512;
+    const fh0 = f0?.bbox.h || 512;
+    const texAspect0 = fw0 / fh0;
+    let sW0 = btnArea.w;
+    let sH0 = sW0 / texAspect0;
+    if (sH0 > btnArea.h) { sH0 = btnArea.h; sW0 = sH0 * texAspect0; }
+    const texOffX = btnArea.x + (btnArea.w - sW0) / 2;
+    const texOffY = btnArea.y + (btnArea.h - sH0) / 2;
+
+    // 用精确位置渲染纹理
+    this.renderButtonUI(ui, texOffX, texOffY, sW0, sH0);
     this.renderResourceUI(ui);
 
-    // 抽卡点击区域保持在右下（与纹理位置无关）
-    const aspect = window.innerWidth / window.innerHeight;
-    const hitX = 0.725 * aspect;
-    const hitY = 0.836;
-    const hitW = (1.001 - 0.725) * aspect;
-    const hitH = 0.911 - 0.836;
-    const f = ui.frames[0];
-    const fw = f?.bbox.w || 512;
-    const fh = f?.bbox.h || 512;
-    const texAspect = fw / fh;
-    let sW = hitW;
-    let sH = sW / texAspect;
-    if (sH > hitH) { sH = hitH; sW = sH * texAspect; }
-    this.buttonHit.left = { x: hitX, y: hitY, w: sW / 2, h: sH };
-    this.buttonHit.right = { x: hitX + sW / 2, y: hitY, w: sW / 2, h: sH };
+    // 设置hit area（与纹理位置完全一致）
+    this.buttonHit.left = { x: texOffX, y: texOffY, w: sW0 / 2, h: sH0 };
+    this.buttonHit.right = { x: texOffX + sW0 / 2, y: texOffY, w: sW0 / 2, h: sH0 };
+
+    // 调试：绘制点击区域
+    this.debugDrawHitAreas();
+
+    // 更新调试标注
+    if (this.debugAxis) {
+      const normX = texOffX / aspect;
+      const normY = texOffY;
+      const normHalfW = (sW0 / 2) / aspect;
+      this.debugAxis.innerHTML = [
+        '<span style="position:absolute;top:0;left:0;">(0,0) 左上</span>',
+        '<span style="position:absolute;top:0;right:0;">(1,0) 右上</span>',
+        '<span style="position:absolute;bottom:0;left:0;">(0,1) 左下</span>',
+        '<span style="position:absolute;bottom:0;right:0;">(1,1) 右下</span>',
+        '<span style="position:absolute;top:' + (normY * 100) + '%;left:' + (normX * 100) + '%;background:rgba(255,0,0,0.3);padding:1px 4px;border:1px solid #f00;font-size:10px;color:#f00;">抽卡按钮 左半</span>',
+        '<span style="position:absolute;top:' + (normY * 100) + '%;left:' + ((normX + normHalfW) * 100) + '%;background:rgba(0,255,0,0.3);padding:1px 4px;border:1px solid #0f0;font-size:10px;color:#0f0;">抽卡按钮 右半</span>',
+      ].join('');
+    }
 
     this.ready = true;
   }
@@ -202,6 +241,30 @@ export class GachaOverlay {
     mesh.scale.set(scaleX, scaleY, 1);
     mesh.position.set(posX, posY, z);
     this.scene.add(mesh);
+  }
+
+  // ============================================================
+  // 调试：绘制点击区域
+  // ============================================================
+
+  private debugDrawHitAreas(): void {
+    const leftMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
+    const rightMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
+
+    const l = this.buttonHit.left;
+    const r = this.buttonHit.right;
+
+    // 左半（单抽） - 红色半透明
+    const leftMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), leftMat);
+    leftMesh.scale.set(l.w, l.h, 1);
+    leftMesh.position.set(l.x + l.w / 2, l.y + l.h / 2, 0.5);
+    this.scene.add(leftMesh);
+
+    // 右半（10抽） - 绿色半透明
+    const rightMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), rightMat);
+    rightMesh.scale.set(r.w, r.h, 1);
+    rightMesh.position.set(r.x + r.w / 2, r.y + r.h / 2, 0.5);
+    this.scene.add(rightMesh);
   }
 
   // ============================================================
@@ -241,13 +304,12 @@ export class GachaOverlay {
     }
     if (!pair) return;
 
-    // ★ 标注区域 (0..1 纹理空间): x:0.627~0.867, y:0.103~0.791
-    //   相机空间 x 需乘以 aspect
+    // ★ 标注区域 (JSON 坐标系 y=0 底部, y=1 顶部，需翻转)
     const aspect = window.innerWidth / window.innerHeight;
     const areaX = 0.627 * aspect;
-    const areaY = 0.103;
-    const areaW = (0.867 - 0.627) * aspect; // 0.240 * aspect
-    const areaH = 0.791 - 0.103; // 0.688
+    const areaY = 1 - 0.791;  // 翻转：JSON y_end=0.791 → camera top=0.209
+    const areaW = (0.867 - 0.627) * aspect;
+    const areaH = 0.791 - 0.103; // 高度不变
 
     const texAspect = fw / fh;
 
@@ -259,39 +321,23 @@ export class GachaOverlay {
       quadW = quadH * texAspect;
     }
 
+    const cx = areaX + areaW / 2;
+    const cy = areaY + areaH / 2;
     const mat = this.makeHSLMat(pair.base, pair.residual);
-    this.addQuad(mat, quadW, quadH, areaX + quadW / 2, areaY + quadH / 2, 0.1);
+    this.addQuad(mat, quadW, quadH, cx, cy, 0.1);
   }
 
   // ============================================================
   // 渲染抽卡按钮纹理（frame 0 - 右上）
   // ============================================================
 
-  private renderButtonUI(uiAsset: FtxAsset): void {
+  private renderButtonUI(uiAsset: FtxAsset, offX: number, offY: number, texW: number, texH: number): void {
     const pair = uiAsset.getFramePair(0);
     if (!pair) return;
-    const f = uiAsset.frames[0];
-    const fw = f?.bbox.w || 512;
-    const fh = f?.bbox.h || 512;
-
-    // 纹理绘制在右上区域
-    const aspect = window.innerWidth / window.innerHeight;
-    const btnX = 0.605 * aspect;
-    const btnY = 0.103;
-    const btnW = (0.867 - 0.605) * aspect;
-    const btnH = 0.236 - 0.103;
-
-    const texAspect = fw / fh;
-    let scaleW = btnW;
-    let scaleH = scaleW / texAspect;
-    if (scaleH > btnH) {
-      scaleH = btnH;
-      scaleW = scaleH * texAspect;
-    }
-
+    const cx = offX + texW / 2;
+    const cy = offY + texH / 2;
     const mat = this.makeHSLMat(pair.base, pair.residual);
-    this.addQuad(mat, scaleW, scaleH, btnX + scaleW / 2, btnY + scaleH / 2, 0.2);
-    // 注意：点击区域不在这里设置，保持在右下
+    this.addQuad(mat, texW, texH, cx, cy, 0.2);
   }
 
   // ============================================================
@@ -305,12 +351,12 @@ export class GachaOverlay {
     const fw = f?.bbox.w || 512;
     const fh = f?.bbox.h || 512;
 
-    // 纹理绘制在右下区域
+    // 纹理绘制在右上区域（JSON y:0.836~0.911，需翻转Y）
     const aspect = window.innerWidth / window.innerHeight;
     const resX = 0.725 * aspect;
-    const resY = 0.836;
+    const resY = 1 - 0.911;   // 翻转：JSON y_end=0.911 → camera top=0.089
     const resW = (1.001 - 0.725) * aspect;
-    const resH = 0.911 - 0.836;
+    const resH = 0.911 - 0.836; // 高度不变
 
     const texAspect = fw / fh;
     let scaleW = resW;
@@ -319,8 +365,11 @@ export class GachaOverlay {
       scaleH = resH;
       scaleW = scaleH * texAspect;
     }
+    // 在区域内居中对齐
+    const cx = resX + resW / 2;
+    const cy = resY + resH / 2;
     const mat = this.makeHSLMat(pair.base, pair.residual);
-    this.addQuad(mat, scaleW, scaleH, resX + scaleW / 2, resY + scaleH / 2, 0.2);
+    this.addQuad(mat, scaleW, scaleH, cx, cy, 0.2);
   }
 
   // ============================================================
@@ -474,7 +523,7 @@ export class GachaOverlay {
     this.renderer.setSize(w, h, false);
     this.renderer.setScissorTest(false);
 
-    // 相机匹配窗口宽高比
+    // 相机匹配窗口宽高比，保证 0-1 归一化坐标映射到正确屏幕位置
     const aspect = w / h;
     if (aspect > 1) {
       this.camera.left = 0;
