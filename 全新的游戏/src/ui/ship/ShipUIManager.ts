@@ -13,6 +13,7 @@ import { InteractionManager } from '../../systems/interaction/InteractionManager
 import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
+import type { GachaOverlay } from './GachaOverlay';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
 
@@ -22,6 +23,12 @@ export class ShipUIManager extends BaseInteractionUI {
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
   private gridRenderer: InventoryGridRenderer;
+  private _gachaOverlay: GachaOverlay | null = null;
+
+  /** 设置抽卡覆盖层（行动后触发） */
+  setGachaOverlay(overlay: GachaOverlay): void {
+    this._gachaOverlay = overlay;
+  }
 
   constructor(
     private session: GameSession,
@@ -110,7 +117,18 @@ export class ShipUIManager extends BaseInteractionUI {
       btn.innerHTML = `${def.icon} ${def.label}`;
       btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(68,102,170,0.85)'; btn.style.color = '#fff'; });
       btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(34,34,68,0.85)'; btn.style.color = '#aac'; });
-      btn.addEventListener('click', () => this.togglePanel(def.id));
+      btn.addEventListener('click', () => {
+        if (def.id === 'action') {
+          this.closeCurrentPanel();
+          // ★ 点击行动 → 显示抽卡覆盖层
+          const gacha = this._gachaOverlay;
+          if (gacha) {
+            gacha.show(() => this.onDepart?.());
+          }
+        } else {
+          this.togglePanel(def.id);
+        }
+      });
       bar.appendChild(btn);
     }
     this.root.appendChild(bar);

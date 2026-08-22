@@ -93,10 +93,11 @@ export class ShipMode implements IGameMode {
     this.buildShipScene();
     this.setupCamera();
 
-    // ④ 创建抽卡覆盖层（行动后默认显示）
+    // ④ 创建抽卡覆盖层（行动后触发）
     this.gachaOverlay = new GachaOverlay(ctx.session);
     this.gachaOverlay.load().then(() => {
-      this.gachaOverlay.show(() => this.doDepart());
+      // 将抽卡覆盖层传递给 UI 管理器，点在"行动"时显示
+      this.uiManager.setGachaOverlay(this.gachaOverlay);
     });
 
     // 触发存档事件

@@ -71,11 +71,9 @@ export class GachaOverlay {
   };
 
   // DOM 元素
-  private ticketsEl: HTMLSpanElement;
-  private pityEl: HTMLSpanElement;
+  
   private resultOverlay: HTMLDivElement;
   private resultList: HTMLDivElement;
-  private departBtn: HTMLButtonElement;
   private tickets: number;
 
   constructor(
@@ -103,67 +101,6 @@ export class GachaOverlay {
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-    // ---- 资源显示（FTX 纹理覆盖层，位于标注区域 (0.59,0.69)~(0.99,0.71)） ----
-    // 使用 DOM 元素覆盖在 FTX 纹理上方显示文字
-    const resourceBar = document.createElement('div');
-    resourceBar.id = 'gacha-resource-bar';
-    resourceBar.style.cssText = [
-      'position:fixed', 'pointer-events:none', 'z-index:156',
-      'display:flex', 'align-items:center', 'justify-content:center',
-      'gap:20px', 'color:#ffd700', 'font-size:13px', 'font-weight:bold',
-      'text-shadow:0 0 6px rgba(0,0,0,0.9)',
-    ].join(';');
-    resourceBar.innerHTML = [
-      '<div style="display:flex;align-items:center;gap:4px;">',
-      '<span style="font-size:16px;">&#x1F48E;</span>',
-      '<span id="gacha-tickets">招募凭证: 999</span>',
-      '</div>',
-      '<div style="display:flex;align-items:center;gap:4px;">',
-      '<span style="font-size:16px;">&#x2B50;</span>',
-      '<span id="gacha-pity">保底计数: 0</span>',
-      '</div>',
-    ].join('');
-    this.root.appendChild(resourceBar);
-    this.ticketsEl = resourceBar.querySelector('#gacha-tickets')!;
-    this.pityEl = resourceBar.querySelector('#gacha-pity')!;
-
-    // 保底提示
-    const pityInfo = document.createElement('div');
-    pityInfo.id = 'gacha-pity-info';
-    pityInfo.style.cssText = [
-      'position:fixed', 'bottom:80px', 'left:50%', 'transform:translateX(-50%)',
-      'color:rgba(255,255,255,0.4)', 'font-size:12px', 'z-index:155',
-      'pointer-events:none', 'text-shadow:0 0 4px rgba(0,0,0,0.8)',
-    ].join(';');
-    pityInfo.textContent = '每 90 抽必出 \u26056 干员';
-    this.root.appendChild(pityInfo);
-
-    // 出击按钮
-    this.departBtn = document.createElement('button');
-    this.departBtn.id = 'gacha-depart-btn';
-    this.departBtn.style.cssText = [
-      'position:fixed', 'bottom:30px', 'right:30px', 'z-index:155',
-      'padding:14px 36px', 'font-size:18px', 'font-weight:bold',
-      'background:linear-gradient(135deg,#4488ff,#2266dd)', 'color:#fff',
-      'border:2px solid #66aaff', 'border-radius:12px',
-      'cursor:pointer', 'box-shadow:0 0 20px rgba(68,136,255,0.4)',
-      'transition:all 0.2s', 'display:none',
-    ].join(';');
-    this.departBtn.textContent = '\uD83D\uDE80 出击';
-    this.departBtn.addEventListener('mouseenter', () => {
-      this.departBtn.style.transform = 'scale(1.05)';
-      this.departBtn.style.boxShadow = '0 0 30px rgba(68,136,255,0.6)';
-    });
-    this.departBtn.addEventListener('mouseleave', () => {
-      this.departBtn.style.transform = 'scale(1)';
-      this.departBtn.style.boxShadow = '0 0 20px rgba(68,136,255,0.4)';
-    });
-    this.departBtn.addEventListener('click', () => {
-      this.hide();
-      this.onDepart?.();
-    });
-    this.root.appendChild(this.departBtn);
-
     // 结果弹窗
     this.resultOverlay = document.createElement('div');
     this.resultOverlay.style.cssText = [
@@ -182,6 +119,9 @@ export class GachaOverlay {
     this.resultList = this.resultOverlay.querySelector('#gacha-result-list')!;
     this.resultOverlay.querySelector('#gacha-close-result')!.addEventListener('click', () => {
       this.resultOverlay.style.display = 'none';
+      // ★ 抽完自动出击
+      this.hide();
+      this.onDepart?.();
     });
 
     // 画布点击
@@ -202,7 +142,7 @@ export class GachaOverlay {
 
   async load(): Promise<void> {
     const bg = await FtxAsset.load('/ui/抽卡背景页面.ftx3.gz');
-    const btn = await FtxAsset.load('/ui/抽卡按钮.ftx3.gz');
+    const ui = await FtxAsset.load('/ui/抽卡页面第三层ui.ftx3.gz');
     let charAsset: Asset | FtxAsset | null = null;
     try {
       charAsset = await Asset.load('/characters/enemies/普瑞赛斯.scene.zip');
@@ -212,8 +152,27 @@ export class GachaOverlay {
 
     this.renderBackground(bg);
     if (charAsset) this.renderCharacter(charAsset);
-    this.renderButtonUI(btn);
-    this.renderResourceUI(btn);
+    // ★ 最终正确方案（以实际屏幕显示为准）：
+    //   右下角 → frame 0「抽卡按钮」纹理，点击区域在此
+    //   右上角 → frame 1「资源显示ui」纹理 + 资源数字叠加
+    this.renderButtonUI(ui);
+    this.renderResourceUI(ui);
+
+    // 抽卡点击区域保持在右下（与纹理位置无关）
+    const aspect = window.innerWidth / window.innerHeight;
+    const hitX = 0.725 * aspect;
+    const hitY = 0.836;
+    const hitW = (1.001 - 0.725) * aspect;
+    const hitH = 0.911 - 0.836;
+    const f = ui.frames[0];
+    const fw = f?.bbox.w || 512;
+    const fh = f?.bbox.h || 512;
+    const texAspect = fw / fh;
+    let sW = hitW;
+    let sH = sW / texAspect;
+    if (sH > hitH) { sH = hitH; sW = sH * texAspect; }
+    this.buttonHit.left = { x: hitX, y: hitY, w: sW / 2, h: sH };
+    this.buttonHit.right = { x: hitX + sW / 2, y: hitY, w: sW / 2, h: sH };
 
     this.ready = true;
   }
@@ -273,11 +232,12 @@ export class GachaOverlay {
     if (charAsset instanceof Asset) {
       pair = charAsset.getFramePair(0);
       const ftxFrame = charAsset.getFtxFrame(0);
-      if (ftxFrame) { fw = ftxFrame.width; fh = ftxFrame.height; }
+      // 纹理实际尺寸 = bbox 尺寸
+      if (ftxFrame) { fw = ftxFrame.bbox.w; fh = ftxFrame.bbox.h; }
     } else {
       pair = charAsset.getFramePair(0);
       const f = charAsset.frames[0];
-      if (f) { fw = f.width; fh = f.height; }
+      if (f) { fw = f.bbox.w; fh = f.bbox.h; }
     }
     if (!pair) return;
 
@@ -304,25 +264,23 @@ export class GachaOverlay {
   }
 
   // ============================================================
-  // 渲染抽卡按钮（Layer 4 - 标注: x:0.605~0.867, y:0.103~0.236）
-  //   左半=单抽，右半=10抽
+  // 渲染抽卡按钮纹理（frame 0 - 右上）
   // ============================================================
 
-  private renderButtonUI(btnAsset: FtxAsset): void {
-    const pair = btnAsset.getFramePair(0);
+  private renderButtonUI(uiAsset: FtxAsset): void {
+    const pair = uiAsset.getFramePair(0);
     if (!pair) return;
-    const f = btnAsset.frames[0];
-    const fw = f?.width || 512;
-    const fh = f?.height || 512;
+    const f = uiAsset.frames[0];
+    const fw = f?.bbox.w || 512;
+    const fh = f?.bbox.h || 512;
 
-    // ★ 标注区域 (0..1 纹理空间): x:0.605~0.867, y:0.103~0.236
+    // 纹理绘制在右上区域
     const aspect = window.innerWidth / window.innerHeight;
     const btnX = 0.605 * aspect;
     const btnY = 0.103;
-    const btnW = (0.867 - 0.605) * aspect; // 0.262 * aspect
-    const btnH = 0.236 - 0.103; // 0.133
+    const btnW = (0.867 - 0.605) * aspect;
+    const btnH = 0.236 - 0.103;
 
-    // 保持纹理比例，适配标注区域
     const texAspect = fw / fh;
     let scaleW = btnW;
     let scaleH = scaleW / texAspect;
@@ -333,74 +291,36 @@ export class GachaOverlay {
 
     const mat = this.makeHSLMat(pair.base, pair.residual);
     this.addQuad(mat, scaleW, scaleH, btnX + scaleW / 2, btnY + scaleH / 2, 0.2);
-
-    // 点击区域（左右平分，在相机空间）
-    this.buttonHit.left = { x: btnX, y: btnY, w: scaleW / 2, h: scaleH };
-    this.buttonHit.right = { x: btnX + scaleW / 2, y: btnY, w: scaleW / 2, h: scaleH };
-
-    // 文字标签
-    this.addButtonLabel(btnX, btnY, scaleW, scaleH);
+    // 注意：点击区域不在这里设置，保持在右下
   }
-    // ============================================================
-  // 渲染资源显示（Layer 4 - 标注: x:0.725~1.001, y:0.836~0.911）
+
+  // ============================================================
+  // 渲染资源显示纹理（frame 1 - 右下）
   // ============================================================
 
-  private renderResourceUI(btnAsset: FtxAsset): void {
-    const pair = btnAsset.getFramePair(0);
+  private renderResourceUI(uiAsset: FtxAsset): void {
+    const pair = uiAsset.getFramePair(1);
     if (!pair) return;
-    const f = btnAsset.frames[0];
-    const fw = f?.width || 512;
-    const fh = f?.height || 512;
+    const f = uiAsset.frames[1];
+    const fw = f?.bbox.w || 512;
+    const fh = f?.bbox.h || 512;
 
-    // ★ 标注区域 (0..1 纹理空间): x:0.725~1.001, y:0.836~0.911
+    // 纹理绘制在右下区域
     const aspect = window.innerWidth / window.innerHeight;
     const resX = 0.725 * aspect;
     const resY = 0.836;
-    const resW = (1.001 - 0.725) * aspect; // 0.276 * aspect
-    const resH = 0.911 - 0.836; // 0.075
+    const resW = (1.001 - 0.725) * aspect;
+    const resH = 0.911 - 0.836;
 
-    // 保持纹理比例，适配标注区域
     const texAspect = fw / fh;
     let scaleW = resW;
     let scaleH = scaleW / texAspect;
-    if (scaleH > resH * 3) {
-      scaleH = resH * 3;
+    if (scaleH > resH) {
+      scaleH = resH;
       scaleW = scaleH * texAspect;
-      const mat = this.makeHSLMat(pair.base, pair.residual, { x: 0, y: 0.7, w: 1, h: 0.3 });
-      this.addQuad(mat, scaleW, scaleH, resX + scaleW / 2, resY + scaleH / 2, 0.2);
-    } else {
-      if (scaleH > resH) {
-        scaleH = resH;
-        scaleW = scaleH * texAspect;
-      }
-      const mat = this.makeHSLMat(pair.base, pair.residual);
-      this.addQuad(mat, scaleW, scaleH, resX + scaleW / 2, resY + scaleH / 2, 0.2);
     }
-  }
-
-  private addButtonLabel(btnX: number, btnY: number, btnW: number, btnH: number): void {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d')!;
-    ctx.clearRect(0, 0, 256, 64);
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.font = 'bold 24px "PingFang SC", "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('单抽', 64, 32);
-    ctx.fillText('10抽', 192, 32);
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(128, 8);
-    ctx.lineTo(128, 56);
-    ctx.stroke();
-
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.needsUpdate = true;
-    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false });
-    this.addQuad(mat, btnW, btnH, btnX + btnW / 2, btnY + btnH / 2, 0.21);
+    const mat = this.makeHSLMat(pair.base, pair.residual);
+    this.addQuad(mat, scaleW, scaleH, resX + scaleW / 2, resY + scaleH / 2, 0.2);
   }
 
   // ============================================================
@@ -492,15 +412,7 @@ export class GachaOverlay {
     }
 
     SaveSystem.save(s);
-    this.updateResources();
     this.showResult(results);
-  }
-
-  private updateResources(): void {
-    const s = this.session;
-    const pity = s.gacha?.pityCounter ?? 0;
-    this.ticketsEl.textContent = '招募凭证: ' + this.tickets;
-    this.pityEl.textContent = '保底计数: ' + pity;
   }
 
   private showResult(results: Array<{ name: string; rarity: number; description: string; isNew: boolean }>): void {
@@ -547,16 +459,13 @@ export class GachaOverlay {
   show(onDepart: () => void): void {
     this.onDepart = onDepart;
     this.root.style.display = 'block';
-    this.departBtn.style.display = 'block';
     this.syncSize();
-    this.updateResources();
     this.tick();
   }
 
   hide(): void {
     this.root.style.display = 'none';
     this.resultOverlay.style.display = 'none';
-    this.departBtn.style.display = 'none';
   }
 
   private syncSize(): void {
@@ -579,18 +488,6 @@ export class GachaOverlay {
       this.camera.bottom = 0;
     }
     this.camera.updateProjectionMatrix();
-
-    // 资源栏定位（基于标注区域 0.725,0.836 ~ 1.001,0.911）
-    const bar = this.root.querySelector('#gacha-resource-bar') as HTMLElement;
-    if (bar) {
-      bar.style.left = (w * 0.725) + 'px';
-      bar.style.top = (h * 0.836) + 'px';
-      bar.style.width = (w * 0.276) + 'px';
-    }
-
-    // 出击按钮（右下角）
-    this.departBtn.style.right = '30px';
-    this.departBtn.style.bottom = '30px';
   }
 
   private tick(): void {
