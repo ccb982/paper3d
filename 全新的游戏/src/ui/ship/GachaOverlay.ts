@@ -137,6 +137,12 @@ export class GachaOverlay {
   private lastTickTime = 0;
   private _fluidStarted = false; // 首次交互后才步进流体模拟
 
+  // 第三层元素
+  private _pullCountSprite: THREE.Sprite | null = null;
+  private _pullCountCanvas: HTMLCanvasElement | null = null;
+  private _pullCountTexture: THREE.CanvasTexture | null = null;
+  private _starsMesh: THREE.Mesh | null = null;
+
   constructor(
     private session: GameSession,
   ) {
@@ -243,6 +249,10 @@ export class GachaOverlay {
     const hitOffY = (1 - (btnArea.y + btnArea.h)) + (btnArea.h - sH0) / 2;
     this.buttonHit.left = { x: texOffX, y: hitOffY, w: sW0 / 2, h: sH0 };
     this.buttonHit.right = { x: texOffX + sW0 / 2, y: hitOffY, w: sW0 / 2, h: sH0 };
+
+    // 第三层：累积抽卡数字 + 六颗星星
+    const stars = await FtxAsset.load('/ui/六颗星星.ftx3.gz');
+    this.renderThirdLayer(stars);
 
     this.ready = true;
   }
@@ -469,6 +479,91 @@ export class GachaOverlay {
   }
 
   // ============================================================
+  // 第三层渲染（累积抽卡数字 + 六颗星星）
+  // ============================================================
+
+  private renderThirdLayer(starsAsset: FtxAsset): void {
+    const aspect = window.innerWidth / window.innerHeight;
+
+    // 1. 累积抽卡数字（JSON 区域：x:0.464~0.475, y:0.138~0.157）
+    const numCx = 0.4693 * aspect + 0.002;
+    const numCy = 0.078;
+    const numW = 0.08 * aspect;
+    const numH = 0.05;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    this._pullCountCanvas = canvas;
+    const ctx = canvas.getContext('2d')!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const totalPulls = this.session.gacha?.totalPulls ?? 0;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 70px "Arial", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(totalPulls), canvas.width / 2, canvas.height / 2);
+
+    this._pullCountTexture = new THREE.CanvasTexture(canvas);
+    this._pullCountTexture.needsUpdate = true;
+
+    const numMat = new THREE.SpriteMaterial({
+      map: this._pullCountTexture,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const numSprite = new THREE.Sprite(numMat);
+    numSprite.scale.set(numW, numH, 1);
+    numSprite.position.set(numCx, numCy, 0.15);
+    this.scene.add(numSprite);
+    this._pullCountSprite = numSprite;
+
+    // 2. 六颗星星（JSON 区域：x:0.173~0.386, y:0.419~0.496）
+    // 使用 FTX 纹理渲染，Y 使用原始 JSON 坐标（Y=0 顶部）
+    const starPair = starsAsset.getFramePair(0);
+    if (!starPair) return;
+    const starF = starsAsset.frames[0];
+    const starFw = starF?.bbox.w || 512;
+    const starFh = starF?.bbox.h || 512;
+    const starTexAspect = starFw / starFh;
+
+    const starAreaX = 0.125 * aspect; // 左移
+    const starAreaY = 0.37; // 略微下移
+    const starAreaW = 0.3195 * aspect; // 1.5 倍
+    const starAreaH = 0.1155; // 1.5 倍
+
+    let sStarW = starAreaW;
+    let sStarH = sStarW / starTexAspect;
+    if (sStarH > starAreaH) {
+      sStarH = starAreaH;
+      sStarW = sStarH * starTexAspect;
+    }
+    const starCx = starAreaX + starAreaW / 2;
+    const starCy = starAreaY + starAreaH / 2;
+    const starMat = this.makeHSLMat(starPair.base, starPair.residual);
+    this._starsMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), starMat);
+    this._starsMesh.scale.set(sStarW, sStarH, 1);
+    this._starsMesh.position.set(starCx, starCy, 0.15);
+    this.scene.add(this._starsMesh);
+  }
+
+  /** 更新累积抽卡数字纹理 */
+  private updatePullCount(): void {
+    if (!this._pullCountCanvas || !this._pullCountTexture) return;
+    const ctx = this._pullCountCanvas.getContext('2d')!;
+    ctx.clearRect(0, 0, this._pullCountCanvas.width, this._pullCountCanvas.height);
+    const totalPulls = this.session.gacha?.totalPulls ?? 0;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 78px "Arial", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(totalPulls), this._pullCountCanvas.width / 2, this._pullCountCanvas.height / 2);
+    this._pullCountTexture.needsUpdate = true;
+  }
+
+  // ============================================================
   // 点击处理
   // ============================================================
 
@@ -587,6 +682,7 @@ export class GachaOverlay {
       if (picked.rarity === 6) s.gacha.pityCounter = 0;
     }
 
+    this.updatePullCount();
     SaveSystem.save(s);
     this.showResult(results);
   }
@@ -689,6 +785,24 @@ export class GachaOverlay {
     this.hide();
     window.removeEventListener('resize', this.onResize);
     this._charMats.length = 0;
+
+    // 清理第三层元素
+    if (this._pullCountSprite) {
+      this._pullCountSprite.material.dispose();
+      this.scene.remove(this._pullCountSprite);
+      this._pullCountSprite = null;
+    }
+    if (this._pullCountTexture) {
+      this._pullCountTexture.dispose();
+      this._pullCountTexture = null;
+    }
+    this._pullCountCanvas = null;
+    if (this._starsMesh) {
+      this._starsMesh.material.dispose();
+      this.scene.remove(this._starsMesh);
+      this._starsMesh = null;
+    }
+
     if (this.bgFluidEffect) {
       this.bgFluidEffect.dispose();
       this.bgFluidEffect = null;
