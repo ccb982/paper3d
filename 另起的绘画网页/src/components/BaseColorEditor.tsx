@@ -674,7 +674,20 @@ export const BaseColorEditor: React.FC = () => {
     // 3. 重新提取：用缩放后的背景 + 区域多边形（世界坐标 0~1，自动适配新尺寸）
     const polygons = frame.dashedPolygons || [];
     if (polygons.length > 0) {
-      const result = extractBaseByClick(newBg, polygons, undefined, { w: newW, h: newH }, bboxMode === 'unified' ? globalBbox : null);
+      // ★ 统一模式：将 globalBbox 按新旧分辨率比例缩放，避免 bbox 像素坐标不匹配
+      let scaledBbox: { x: number; y: number; w: number; h: number } | null = null;
+      if (bboxMode === 'unified' && globalBbox) {
+        // 帧背景前的旧尺寸（texSize/texSizeY 是当前帧的旧分辨率）
+        const frameOldSize = frame.bgImageData ? frame.bgImageData.width : texSize;
+        const frameOldSizeY = frame.bgImageData ? frame.bgImageData.height : texSizeY;
+        scaledBbox = {
+          x: Math.round(globalBbox.x * newW / frameOldSize),
+          y: Math.round(globalBbox.y * newH / frameOldSizeY),
+          w: Math.round(globalBbox.w * newW / frameOldSize),
+          h: Math.round(globalBbox.h * newH / frameOldSizeY),
+        };
+      }
+      const result = extractBaseByClick(newBg, polygons, undefined, { w: newW, h: newH }, scaledBbox);
       if (result) {
         const { baseColors: localBaseColors, regionIdTex: localRegionIdTex, deltaPacked, bbox, blockFlags } = result;
 
@@ -3408,11 +3421,13 @@ export const BaseColorEditor: React.FC = () => {
               // ★ 每帧独立分辨率：使用帧存储的 texSize/texSizeY，或 bgImageData 尺寸，最后回退到当前帧 texSize
               const frameW = frame.texSize || (frame.bgImageData ? frame.bgImageData.width : texSize);
               const frameH = frame.texSizeY || (frame.bgImageData ? frame.bgImageData.height : texSizeY);
+              // ★ 统一模式：导出时所有帧使用 globalBbox（避免各帧 bbox 不一致）
+              const exportBbox = (bboxMode === 'unified' && globalBbox) ? globalBbox : frame.bbox!;
               return {
                 name: frame.name || '未命名',
                 width: frameW,
                 height: frameH,
-                bbox: frame.bbox!,
+                bbox: exportBbox,
                 regionIdTex: newRegionIdTex,
                 deltaPacked: frame.deltaPacked,
                 blockFlags: BigInt(frame.blockFlags ?? 0),

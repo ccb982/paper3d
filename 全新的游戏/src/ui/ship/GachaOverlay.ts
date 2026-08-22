@@ -144,11 +144,9 @@ export class GachaOverlay {
   private _starsMesh: THREE.Mesh | null = null;
 
   // 概率显示页面
-  private _showProbPage = false;
   private _probAsset: FtxAsset | null = null;
-  private _probPageMesh: THREE.Mesh | null = null;
+  private _probOverlay: HTMLDivElement | null = null;
   private _probButtonHit: { x: number; y: number; w: number; h: number } | null = null;
-  private _debugProbBtnMesh: THREE.Mesh | null = null;
 
   constructor(
     private session: GameSession,
@@ -261,30 +259,15 @@ export class GachaOverlay {
     const stars = await FtxAsset.load('/ui/六颗星星.ftx3.gz');
     this.renderThirdLayer(stars);
 
-    // 概率显示按钮（透明，JSON 区域：x:0.140~0.201, y:0.131~0.162）
-    // 使用 camera 坐标（Y=0 顶部），已在 JSON 基础上做 Y 翻转
-    // 根据用户点击日志 (wx=0.32, wy=0.917) 调整位置
+    // 概率显示透明按钮（JSON 区域：x:0.140~0.201, y:0.131~0.162）
     const probBtnW = 0.0611 * aspect;
     const probBtnH = 0.0314;
-    const probHitOffX = 0.2835; // 以用户点击 wx=0.32044 为中心（camera 坐标）
-    const probHitOffY = 0.90; // 下移，靠近用户点击位置
-    this._probButtonHit = { x: probHitOffX, y: probHitOffY, w: probBtnW, h: probBtnH };
-
-    // 调试：透明按钮位置（红色半透明）
-    const debugMat = new THREE.MeshBasicMaterial({
-      color: 0xff0000,
-      transparent: true,
-      opacity: 0.3,
-      depthTest: false,
-    });
-    this._debugProbBtnMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), debugMat);
-    this._debugProbBtnMesh.scale.set(probBtnW, probBtnH, 1);
-    this._debugProbBtnMesh.position.set(
-      this._probButtonHit.x + probBtnW / 2,
-      this._probButtonHit.y + probBtnH / 2,
-      0.6,
-    );
-    this.scene.add(this._debugProbBtnMesh);
+    this._probButtonHit = {
+      x: 0.2835, // camera 坐标
+      y: 0.90,
+      w: probBtnW,
+      h: probBtnH,
+    };
 
     // 预加载概率显示纹理
     this._probAsset = await FtxAsset.load('/ui/概率显示.ftx3.gz');
@@ -599,56 +582,68 @@ export class GachaOverlay {
   }
 
   // ============================================================
-  // 概率显示页面
+  // 概率显示页面（独立渲染器，简单直接）
   // ============================================================
 
   private showProbabilityPage(): void {
-    if (!this._probAsset) { console.warn('GachaOverlay: _probAsset is null'); return; }
-    if (this._showProbPage) { console.warn('GachaOverlay: _showProbPage already true'); return; }
-    console.log('GachaOverlay: showProbabilityPage called');
-    this._showProbPage = true;
+    if (!this._probAsset) return;
 
     const pair = this._probAsset.getFramePair(0);
-    if (!pair) { console.warn('GachaOverlay: getFramePair(0) returned null'); return; }
-    console.log('GachaOverlay: getFramePair OK');
-    const aspect = window.innerWidth / window.innerHeight;
-
-    // 居中显示概率纹理
-    const camW = aspect > 1 ? aspect : 1;
-    const camH = aspect > 1 ? 1 : 1 / aspect;
-    const cx = camW / 2;
-    const cy = camH / 2;
+    if (!pair) return;
 
     const f = this._probAsset.frames[0];
     const fw = f?.bbox.w || 512;
     const fh = f?.bbox.h || 512;
-    const texAspect = fw / fh;
 
-    // 等比缩放，确保纹理完整显示
-    let scaleW = camW * 0.9;
-    let scaleH = scaleW / texAspect;
-    if (scaleH > camH * 0.9) {
-      scaleH = camH * 0.9;
-      scaleW = scaleH * texAspect;
-    }
+    const canvas = document.createElement('canvas');
+    canvas.width = fw;
+    canvas.height = fh;
 
-    const mat = this.makeHSLMat(pair.base, pair.residual);
-    this._probPageMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
-    this._probPageMesh.scale.set(scaleW, scaleH, 1);
-    this._probPageMesh.position.set(cx, cy, 0.5);
-    this._probPageMesh.renderOrder = 1;
-    this.scene.add(this._probPageMesh);
-    console.log('GachaOverlay: prob page mesh added to scene');
-  }
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true });
+    renderer.setSize(fw, fh, false);
+    renderer.setClearColor(0x000000, 0);
 
-  private hideProbabilityPage(): void {
-    if (!this._showProbPage) return;
-    this._showProbPage = false;
-    if (this._probPageMesh) {
-      this._probPageMesh.material.dispose();
-      this.scene.remove(this._probPageMesh);
-      this._probPageMesh = null;
-    }
+    const mat = FtxAsset.createCompositeMaterial();
+    mat.uniforms.uBase.value = pair.base;
+    mat.uniforms.uResidual.value = pair.residual;
+    mat.uniforms.uResidualRangeH.value = 0.5;
+    mat.uniforms.uResidualRangeSL.value = 0.5;
+    mat.transparent = true;
+    mat.depthWrite = false;
+    mat.depthTest = false;
+    mat.side = THREE.DoubleSide;
+
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    mesh.position.set(0.5, 0.5, 0);
+
+    const scene = new THREE.Scene();
+    scene.add(mesh);
+
+    const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+    renderer.render(scene, camera);
+    renderer.dispose();
+    mat.dispose();
+
+    // DOM 遮罩层
+    const overlay = document.createElement('div');
+    overlay.style.cssText = [
+      'position:fixed', 'inset:0', 'z-index:300',
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'background:rgba(0,0,0,0.5)',
+    ].join(';');
+
+    canvas.style.width = fw + 'px';
+    canvas.style.height = fh + 'px';
+    canvas.style.display = 'block';
+    overlay.appendChild(canvas);
+    this.root.appendChild(overlay);
+
+    overlay.addEventListener('click', () => {
+      overlay.remove();
+      this._probOverlay = null;
+    });
+
+    this._probOverlay = overlay;
   }
 
   // ============================================================
@@ -657,13 +652,6 @@ export class GachaOverlay {
 
   private handleCanvasClick(e: PointerEvent): void {
     if (!this.ready) return;
-    console.log('GachaOverlay: click', { cx: e.clientX, cy: e.clientY });
-
-    // 概率页面：任意点击返回抽卡
-    if (this._showProbPage) {
-      this.hideProbabilityPage();
-      return;
-    }
 
     const rect = this.canvas.getBoundingClientRect();
     const aspect = window.innerWidth / window.innerHeight;
@@ -678,12 +666,9 @@ export class GachaOverlay {
       wy = ((e.clientY - rect.top) / rect.height) * (1 / aspect);
     }
 
-    console.log('GachaOverlay: world coords', { wx, wy, aspect, pb: this._probButtonHit });
-
     // 概率显示按钮（透明按钮）
     const pb = this._probButtonHit;
     if (pb && wx >= pb.x && wx <= pb.x + pb.w && wy >= pb.y && wy <= pb.y + pb.h) {
-      console.log('GachaOverlay: prob button hit!');
       this.showProbabilityPage();
       return;
     }
@@ -914,6 +899,7 @@ export class GachaOverlay {
       this.bgFluidEffect.dispose();
       this.bgFluidEffect = null;
     }
+
     this.renderer.dispose();
     document.body.removeChild(this.root);
   }
