@@ -154,10 +154,16 @@ export class ShipMode implements IGameMode {
   private _btnScene: THREE.Scene | null = null;
   private _btnCamera: THREE.OrthographicCamera | null = null;
   private _btnMeshes: THREE.Mesh[] = [];
-  private _btnDebugLines: THREE.LineLoop[] = [];
+  
   private _btnLabels: THREE.Sprite[] = [];
   private _btnHitAreas: { id: string; x: number; y: number; w: number; h: number }[] = [];
+  private _btnMaterials: Map<string, THREE.MeshBasicMaterial> = new Map();
+  private _hoveredButton: string | null = null;
+  private _btnOpacityAnims: Map<string, { start: number; from: number; to: number; startTime: number }> = new Map();
+  private _btnAnimFrame: number | null = null;
   private _btnBoundClick: ((e: PointerEvent) => void) | null = null;
+  private _btnBoundMove: ((e: PointerEvent) => void) | null = null;
+  private _btnBoundUp: ((e: PointerEvent) => void) | null = null;
   private _debugReadbackDone = false;
 
   // ============================================================
@@ -490,21 +496,7 @@ export class ShipMode implements IGameMode {
       mesh.position.z = 0.1;
       this._btnScene.add(mesh);
       this._btnMeshes.push(mesh);
-
-      // ★ 调试：绘制梯形轮廓线
-      const debugColor = anno.id === 'operator' ? 0xff4444 : anno.id === 'formation' ? 0x44ff44 : 0x4444ff;
-      const linePoints = [
-        new THREE.Vector3(tl.x, tl.y, 0.15),
-        new THREE.Vector3(tr.x, tr.y, 0.15),
-        new THREE.Vector3(br.x, br.y, 0.15),
-        new THREE.Vector3(bl.x, bl.y, 0.15),
-        new THREE.Vector3(tl.x, tl.y, 0.15),
-      ];
-      const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
-      const lineMat = new THREE.LineBasicMaterial({ color: debugColor, linewidth: 2 });
-      const lineLoop = new THREE.LineLoop(lineGeo, lineMat);
-      this._btnScene.add(lineLoop);
-      this._btnDebugLines.push(lineLoop);
+      this._btnMaterials.set(anno.id, mat);
 
       // 点击区域（用梯形包围盒）
       const minX = Math.min(tl.x, tr.x, bl.x, br.x);
@@ -512,20 +504,6 @@ export class ShipMode implements IGameMode {
       const minY = Math.min(tl.y, tr.y, bl.y, br.y);
       const maxY = Math.max(tl.y, tr.y, bl.y, br.y);
       this._btnHitAreas.push({ id: anno.id, x: minX, y: minY, w: maxX - minX, h: maxY - minY });
-
-      // ★ 调试：点击区域包围盒（虚线效果用半透明线）
-      const hitPoints = [
-        new THREE.Vector3(minX, minY, 0.16),
-        new THREE.Vector3(maxX, minY, 0.16),
-        new THREE.Vector3(maxX, maxY, 0.16),
-        new THREE.Vector3(minX, maxY, 0.16),
-        new THREE.Vector3(minX, minY, 0.16),
-      ];
-      const hitGeo = new THREE.BufferGeometry().setFromPoints(hitPoints);
-      const hitMat = new THREE.LineBasicMaterial({ color: debugColor, transparent: true, opacity: 0.4 });
-      const hitLine = new THREE.LineLoop(hitGeo, hitMat);
-      this._btnScene.add(hitLine);
-      this._btnDebugLines.push(hitLine);
 
       // ★ 区域编号标签（已移除）
     }
@@ -560,10 +538,16 @@ export class ShipMode implements IGameMode {
     this._btnScene!.add(decoMesh);
     this._btnMeshes.push(decoMesh);
 
-    // 点击事件
+    // 点击事件 + 悬停/抬起效果
     const onClick = (e: PointerEvent) => this.handleButtonClick(e);
     this._btnBoundClick = onClick;
     this.renderer.domElement.addEventListener('pointerdown', onClick);
+    const onMove = (e: PointerEvent) => this.handleButtonHover(e);
+    this._btnBoundMove = onMove;
+    this.renderer.domElement.addEventListener('pointermove', onMove);
+    const onUp = () => this.handleButtonUp();
+    this._btnBoundUp = onUp;
+    this.renderer.domElement.addEventListener('pointerup', onUp);
   }
 
   /** 将屏幕标注坐标（0-1，Y=0 底部）转为 Three.js 正交相机坐标（Y=0 底部） */
@@ -579,19 +563,87 @@ export class ShipMode implements IGameMode {
     };
   }
 
+  private animateOpacity(id: string, to: number): void {
+    const mat = this._btnMaterials.get(id);
+    if (!mat) return;
+    const from = mat.opacity;
+    if (from === to) return;
+    this._btnOpacityAnims.set(id, { start: from, from, to, startTime: performance.now() });
+    if (this._btnAnimFrame === null) {
+      this._btnAnimFrame = requestAnimationFrame(() => this.tickOpacityAnims());
+    }
+  }
+
+  private tickOpacityAnims(): void {
+    this._btnAnimFrame = null;
+    const now = performance.now();
+    const DURATION = 150; // ms
+    let hasPending = false;
+    for (const [id, anim] of this._btnOpacityAnims) {
+      const t = Math.min(1, (now - anim.startTime) / DURATION);
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // easeInOut
+      const mat = this._btnMaterials.get(id);
+      if (mat) mat.opacity = anim.from + (anim.to - anim.from) * ease;
+      if (t < 1) {
+        hasPending = true;
+      } else {
+        this._btnOpacityAnims.delete(id);
+      }
+    }
+    if (hasPending) {
+      this._btnAnimFrame = requestAnimationFrame(() => this.tickOpacityAnims());
+    }
+  }
+
   private handleButtonClick(e: PointerEvent): void {
     if (!this.renderer || !this._btnCamera) return;
     const rect = this.renderer.domElement.getBoundingClientRect();
     const aspect = window.innerWidth / window.innerHeight;
-    // 转为 Three.js 正交相机坐标（Y=0 底部）
     const px = (e.clientX / rect.width) * aspect;
-    const py = 1 - (e.clientY / rect.height); // Y=0 底部，与相机一致
+    const py = 1 - (e.clientY / rect.height);
 
     for (const hit of this._btnHitAreas) {
       if (px >= hit.x && px <= hit.x + hit.w && py >= hit.y && py <= hit.y + hit.h) {
         this.onButtonClick(hit.id);
+        // 点击时变透明（带过渡）
+        this.animateOpacity(hit.id, 0.4);
+        setTimeout(() => {
+          this.animateOpacity(hit.id, this._hoveredButton === hit.id ? 0.7 : 1);
+        }, 150);
         break;
       }
+    }
+  }
+
+  private handleButtonHover(e: PointerEvent): void {
+    if (!this.renderer || !this._btnCamera) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const aspect = window.innerWidth / window.innerHeight;
+    const px = (e.clientX / rect.width) * aspect;
+    const py = 1 - (e.clientY / rect.height);
+
+    let found: string | null = null;
+    for (const hit of this._btnHitAreas) {
+      if (px >= hit.x && px <= hit.x + hit.w && py >= hit.y && py <= hit.y + hit.h) {
+        found = hit.id;
+        break;
+      }
+    }
+
+    // 恢复上一个悬停按钮
+    if (this._hoveredButton !== null && this._hoveredButton !== found) {
+      this.animateOpacity(this._hoveredButton, 1);
+    }
+    // 设置新悬停
+    if (found !== null && found !== this._hoveredButton) {
+      this.animateOpacity(found, 0.7);
+    }
+    this._hoveredButton = found;
+  }
+
+  private handleButtonUp(): void {
+    if (this._hoveredButton !== null) {
+      this.animateOpacity(this._hoveredButton, 0.7);
     }
   }
 
@@ -691,6 +743,19 @@ export class ShipMode implements IGameMode {
       this.renderer.domElement.removeEventListener('pointerdown', this._btnBoundClick);
       this._btnBoundClick = null;
     }
+    if (this._btnBoundMove && this.renderer) {
+      this.renderer.domElement.removeEventListener('pointermove', this._btnBoundMove);
+      this._btnBoundMove = null;
+    }
+    if (this._btnBoundUp && this.renderer) {
+      this.renderer.domElement.removeEventListener('pointerup', this._btnBoundUp);
+      this._btnBoundUp = null;
+    }
+    if (this._btnAnimFrame !== null) {
+      cancelAnimationFrame(this._btnAnimFrame);
+      this._btnAnimFrame = null;
+    }
+    this._btnOpacityAnims.clear();
     for (const mesh of this._btnMeshes) {
       mesh.geometry.dispose();
       if (Array.isArray(mesh.material)) {
@@ -701,18 +766,6 @@ export class ShipMode implements IGameMode {
       this._btnScene?.remove(mesh);
     }
     this._btnMeshes = [];
-    // 清理调试线
-    for (const line of this._btnDebugLines) {
-      line.geometry.dispose();
-      const mat = line.material;
-      if (Array.isArray(mat)) {
-        mat.forEach(m => m.dispose());
-      } else {
-        mat.dispose();
-      }
-      this._btnScene?.remove(line);
-    }
-    this._btnDebugLines = [];
     // 清理标签
     for (const sprite of this._btnLabels) {
       sprite.material.map?.dispose();
