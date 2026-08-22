@@ -153,41 +153,65 @@ export class GachaOverlay {
   private _isHoverLeft = false;
   private _isHoverRight = false;
 
+  // 按钮动画
+  private _btnAnimId: number | null = null;
+  private _btnAnimData: { mesh: THREE.Mesh; defScale: { x: number; y: number }; sStart: number; sEnd: number; gStart: number; gEnd: number; t0: number }[] = [];
+
   // 概率显示页面
   private _probAsset: FtxAsset | null = null;
   private _probOverlay: HTMLDivElement | null = null;
   private _probButtonHit: { x: number; y: number; w: number; h: number } | null = null;
 
+  // 按钮动画
+  private animateBtn(mesh: THREE.Mesh | null, defScale: { x: number; y: number } | null, sEnd: number, gEnd: number): void {
+    if (!mesh || !defScale) return;
+    const mat = mesh.material as THREE.ShaderMaterial;
+    const sStart = mesh.scale.x / defScale.x;
+    const gStart = mat.uniforms.uGray.value as number;
+    if (sStart === sEnd && gStart === gEnd) return;
+    this._btnAnimData.push({ mesh, defScale, sStart, sEnd, gStart, gEnd, t0: performance.now() });
+    if (this._btnAnimId === null) {
+      this._btnAnimId = requestAnimationFrame(() => this.tickBtnAnim());
+    }
+  }
+  private tickBtnAnim(): void {
+    this._btnAnimId = null;
+    const DURATION = 150;
+    const now = performance.now();
+    const pending: typeof this._btnAnimData = [];
+    for (const d of this._btnAnimData) {
+      const t = Math.min(1, (now - d.t0) / DURATION);
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const s = d.sStart + (d.sEnd - d.sStart) * ease;
+      const g = d.gStart + (d.gEnd - d.gStart) * ease;
+      d.mesh.scale.set(d.defScale.x * s, d.defScale.y * s, 1);
+      (d.mesh.material as THREE.ShaderMaterial).uniforms.uGray.value = g;
+      if (t < 1) pending.push(d);
+    }
+    this._btnAnimData = pending;
+    if (pending.length > 0) {
+      this._btnAnimId = requestAnimationFrame(() => this.tickBtnAnim());
+    }
+  }
+
   // 按钮按压效果
   private pressLeftBtn(): void {
-    if (!this._btnLeftMesh || !this._btnLeftDefaultScale) return;
-    const s = 1.15;
-    this._btnLeftMesh.scale.set(this._btnLeftDefaultScale.x * s, this._btnLeftDefaultScale.y * s, 1);
-    (this._btnLeftMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = 1;
+    this.animateBtn(this._btnLeftMesh, this._btnLeftDefaultScale, 1.15, 1);
   }
   private releaseLeftBtn(): void {
-    if (!this._btnLeftMesh || !this._btnLeftDefaultScale) return;
     const s = this._isHoverLeft ? 1.05 : 1;
-    this._btnLeftMesh.scale.set(this._btnLeftDefaultScale.x * s, this._btnLeftDefaultScale.y * s, 1);
-    (this._btnLeftMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = this._isHoverLeft ? 0.2 : 0;
+    this.animateBtn(this._btnLeftMesh, this._btnLeftDefaultScale, s, this._isHoverLeft ? 0.2 : 0);
   }
   private pressRightBtn(): void {
-    if (!this._btnRightMesh || !this._btnRightDefaultScale) return;
-    const s = 1.15;
-    this._btnRightMesh.scale.set(this._btnRightDefaultScale.x * s, this._btnRightDefaultScale.y * s, 1);
-    (this._btnRightMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = 1;
+    this.animateBtn(this._btnRightMesh, this._btnRightDefaultScale, 1.15, 1);
   }
   private releaseRightBtn(): void {
-    if (!this._btnRightMesh || !this._btnRightDefaultScale) return;
     const s = this._isHoverRight ? 1.05 : 1;
-    this._btnRightMesh.scale.set(this._btnRightDefaultScale.x * s, this._btnRightDefaultScale.y * s, 1);
-    (this._btnRightMesh.material as THREE.ShaderMaterial).uniforms.uGray.value = this._isHoverRight ? 0.2 : 0;
+    this.animateBtn(this._btnRightMesh, this._btnRightDefaultScale, s, this._isHoverRight ? 0.2 : 0);
   }
   private setBtnHover(mesh: THREE.Mesh | null, defScale: { x: number; y: number } | null, isHover: boolean): void {
-    if (!mesh || !defScale) return;
     const s = isHover ? 1.05 : 1;
-    mesh.scale.set(defScale.x * s, defScale.y * s, 1);
-    (mesh.material as THREE.ShaderMaterial).uniforms.uGray.value = isHover ? 0.2 : 0;
+    this.animateBtn(mesh, defScale, s, isHover ? 0.2 : 0);
   }
   private updateButtonHover(wx: number, wy: number): void {
     const { left, right } = this.buttonHit;
@@ -1160,6 +1184,11 @@ export class GachaOverlay {
       this.scene.remove(this._btnRightMesh);
       this._btnRightMesh = null;
     }
+    if (this._btnAnimId !== null) {
+      cancelAnimationFrame(this._btnAnimId);
+      this._btnAnimId = null;
+    }
+    this._btnAnimData = [];
     if (this._particles) {
       this._particles.geometry.dispose();
       (this._particles.material as THREE.Material).dispose();

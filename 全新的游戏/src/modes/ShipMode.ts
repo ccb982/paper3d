@@ -158,8 +158,9 @@ export class ShipMode implements IGameMode {
   private _btnLabels: THREE.Sprite[] = [];
   private _btnHitAreas: { id: string; x: number; y: number; w: number; h: number }[] = [];
   private _btnMaterials: Map<string, THREE.MeshBasicMaterial> = new Map();
+  private _btnGlowMats: Map<string, THREE.MeshBasicMaterial> = new Map();
   private _hoveredButton: string | null = null;
-  private _btnOpacityAnims: Map<string, { start: number; from: number; to: number; startTime: number }> = new Map();
+  private _btnOpacityAnims: Map<string, { start: number; from: number; to: number; startTime: number; glowFrom: number; glowTo: number }> = new Map();
   private _btnAnimFrame: number | null = null;
   private _btnBoundClick: ((e: PointerEvent) => void) | null = null;
   private _btnBoundMove: ((e: PointerEvent) => void) | null = null;
@@ -498,6 +499,49 @@ export class ShipMode implements IGameMode {
       this._btnMeshes.push(mesh);
       this._btnMaterials.set(anno.id, mat);
 
+      // 底部发光阴影（黑色 glow，始终显示，自然过渡）
+      const glowCanvas = document.createElement('canvas');
+      glowCanvas.width = 64;
+      glowCanvas.height = 64;
+      const gctx = glowCanvas.getContext('2d')!;
+      // 从按钮边缘（y=0）向下渐变，边缘最黑，向下渐隐
+      const grad = gctx.createLinearGradient(0, 0, 0, 64);
+      grad.addColorStop(0, 'rgba(0,0,0,0.9)');
+      grad.addColorStop(0.3, 'rgba(0,0,0,0.5)');
+      grad.addColorStop(0.7, 'rgba(0,0,0,0.15)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      gctx.fillStyle = grad;
+      gctx.fillRect(0, 0, 64, 64);
+      const glowTex = new THREE.CanvasTexture(glowCanvas);
+      glowTex.flipY = false;
+      glowTex.colorSpace = THREE.LinearSRGBColorSpace;
+      const glowMat = new THREE.MeshBasicMaterial({
+        map: glowTex,
+        transparent: true,
+        opacity: 0.6, // 始终显示
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: false,
+      });
+      this._btnGlowMats.set(anno.id, glowMat);
+      const glowGeo = new THREE.BufferGeometry();
+      const gw = 0.06; // 阴影向下延伸宽度
+      const glowVerts = new Float32Array([
+        bl.x, bl.y, 0,        br.x, br.y, 0,        br.x, br.y - gw, 0,
+        bl.x, bl.y, 0,        br.x, br.y - gw, 0,   bl.x, bl.y - gw, 0,
+      ]);
+      glowGeo.setAttribute('position', new THREE.BufferAttribute(glowVerts, 3));
+      // UV: 按钮边缘(y=bl.y)=opaque(0,0)，向下渐隐(0,1)
+      const glowUVs = new Float32Array([
+        0, 0,   1, 0,   1, 1,
+        0, 0,   1, 1,   0, 1,
+      ]);
+      glowGeo.setAttribute('uv', new THREE.BufferAttribute(glowUVs, 2));
+      const glowMesh = new THREE.Mesh(glowGeo, glowMat);
+      glowMesh.position.z = 0.09;
+      this._btnScene.add(glowMesh);
+      this._btnMeshes.push(glowMesh);
+
       // 点击区域（用梯形包围盒）
       const minX = Math.min(tl.x, tr.x, bl.x, br.x);
       const maxX = Math.max(tl.x, tr.x, bl.x, br.x);
@@ -568,7 +612,7 @@ export class ShipMode implements IGameMode {
     if (!mat) return;
     const from = mat.opacity;
     if (from === to) return;
-    this._btnOpacityAnims.set(id, { start: from, from, to, startTime: performance.now() });
+    this._btnOpacityAnims.set(id, { start: from, from, to, startTime: performance.now(), glowFrom: 0, glowTo: 0 });
     if (this._btnAnimFrame === null) {
       this._btnAnimFrame = requestAnimationFrame(() => this.tickOpacityAnims());
     }
@@ -756,6 +800,7 @@ export class ShipMode implements IGameMode {
       this._btnAnimFrame = null;
     }
     this._btnOpacityAnims.clear();
+    this._btnGlowMats.clear();
     for (const mesh of this._btnMeshes) {
       mesh.geometry.dispose();
       if (Array.isArray(mesh.material)) {
