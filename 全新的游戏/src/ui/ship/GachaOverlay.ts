@@ -309,7 +309,7 @@ export class GachaOverlay {
 
   async load(): Promise<void> {
     const bg = await FtxAsset.load('/ui/抽卡背景页面.ftx3.gz');
-    const ui = await FtxAsset.load('/ui/抽卡页面第三层ui.ftx3.gz');
+    const ui = await FtxAsset.load('/ui/抽卡和资源显示ui.ftx3.gz');
     let charAsset: Asset | FtxAsset | null = null;
     try {
       charAsset = await Asset.load('/characters/enemies/普瑞赛斯.scene.zip');
