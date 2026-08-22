@@ -504,11 +504,11 @@ export class ShipMode implements IGameMode {
       glowCanvas.width = 64;
       glowCanvas.height = 64;
       const gctx = glowCanvas.getContext('2d')!;
-      // 从按钮边缘（y=0）向下渐变，边缘最黑，向下渐隐
+      // 从按钮边缘（y=0）向下渐变，边缘最黑，快速渐隐
       const grad = gctx.createLinearGradient(0, 0, 0, 64);
       grad.addColorStop(0, 'rgba(0,0,0,0.9)');
-      grad.addColorStop(0.3, 'rgba(0,0,0,0.5)');
-      grad.addColorStop(0.7, 'rgba(0,0,0,0.15)');
+      grad.addColorStop(0.08, 'rgba(0,0,0,0.4)');
+      grad.addColorStop(0.2, 'rgba(0,0,0,0.1)');
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       gctx.fillStyle = grad;
       gctx.fillRect(0, 0, 64, 64);
@@ -525,10 +525,16 @@ export class ShipMode implements IGameMode {
       });
       this._btnGlowMats.set(anno.id, glowMat);
       const glowGeo = new THREE.BufferGeometry();
-      const gw = 0.06; // 阴影向下延伸宽度
+      const gw = 0.03; // 阴影向下延伸宽度
+      // 确定实际底部边缘（Y值较小的那对，靠近屏幕底部Y=0）
+      const topAvgY = (tl.y + tr.y) / 2;
+      const botAvgY = (bl.y + br.y) / 2;
+      const bottomIsTL = topAvgY < botAvgY;
+      const bL = bottomIsTL ? tl : bl;
+      const bR = bottomIsTL ? tr : br;
       const glowVerts = new Float32Array([
-        bl.x, bl.y, 0,        br.x, br.y, 0,        br.x, br.y - gw, 0,
-        bl.x, bl.y, 0,        br.x, br.y - gw, 0,   bl.x, bl.y - gw, 0,
+        bL.x, bL.y, 0,        bR.x, bR.y, 0,        bR.x, bR.y - gw, 0,
+        bL.x, bL.y, 0,        bR.x, bR.y - gw, 0,   bL.x, bL.y - gw, 0,
       ]);
       glowGeo.setAttribute('position', new THREE.BufferAttribute(glowVerts, 3));
       // UV: 按钮边缘(y=bl.y)=opaque(0,0)，向下渐隐(0,1)
@@ -581,6 +587,49 @@ export class ShipMode implements IGameMode {
     decoMesh.position.z = 0.05;
     this._btnScene!.add(decoMesh);
     this._btnMeshes.push(decoMesh);
+
+    // 装饰梯形的底部黑光 glow
+    const decoBottomY = (dtl.y + dtr.y) / 2 < (dbl.y + dbr.y) / 2 ? dtl.y : dbl.y;
+    const decoBLeft = (dtl.y + dtr.y) / 2 < (dbl.y + dbr.y) / 2 ? dtl : dbl;
+    const decoBRight = (dtl.y + dtr.y) / 2 < (dbl.y + dbr.y) / 2 ? dtr : dbr;
+    const decoGlowCanvas = document.createElement('canvas');
+    decoGlowCanvas.width = 64;
+    decoGlowCanvas.height = 64;
+    const dgctx = decoGlowCanvas.getContext('2d')!;
+    const dgrad = dgctx.createLinearGradient(0, 0, 0, 64);
+    dgrad.addColorStop(0, 'rgba(0,0,0,0.9)');
+    dgrad.addColorStop(0.08, 'rgba(0,0,0,0.4)');
+    dgrad.addColorStop(0.2, 'rgba(0,0,0,0.1)');
+    dgrad.addColorStop(1, 'rgba(0,0,0,0)');
+    dgctx.fillStyle = dgrad;
+    dgctx.fillRect(0, 0, 64, 64);
+    const decoGlowTex = new THREE.CanvasTexture(decoGlowCanvas);
+    decoGlowTex.flipY = false;
+    decoGlowTex.colorSpace = THREE.LinearSRGBColorSpace;
+    const decoGlowMat = new THREE.MeshBasicMaterial({
+      map: decoGlowTex,
+      transparent: true,
+      opacity: 0.6,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const decoGlowGeo = new THREE.BufferGeometry();
+    const dgw = 0.03;
+    const dglowVerts = new Float32Array([
+      decoBLeft.x, decoBLeft.y, 0,        decoBRight.x, decoBRight.y, 0,        decoBRight.x, decoBRight.y - dgw, 0,
+      decoBLeft.x, decoBLeft.y, 0,        decoBRight.x, decoBRight.y - dgw, 0,   decoBLeft.x, decoBLeft.y - dgw, 0,
+    ]);
+    decoGlowGeo.setAttribute('position', new THREE.BufferAttribute(dglowVerts, 3));
+    const decoGlowUVs = new Float32Array([
+      0, 0,   1, 0,   1, 1,
+      0, 0,   1, 1,   0, 1,
+    ]);
+    decoGlowGeo.setAttribute('uv', new THREE.BufferAttribute(decoGlowUVs, 2));
+    const decoGlowMesh = new THREE.Mesh(decoGlowGeo, decoGlowMat);
+    decoGlowMesh.position.z = 0.04;
+    this._btnScene!.add(decoGlowMesh);
+    this._btnMeshes.push(decoGlowMesh);
 
     // 点击事件 + 悬停/抬起效果
     const onClick = (e: PointerEvent) => this.handleButtonClick(e);
