@@ -40,6 +40,9 @@ async function boot() {
   // ---- 1. 平台初始化 ----
   const adapter = new WebAdapter();
   const canvas = adapter.createCanvas();
+  canvas.style.position = 'fixed';
+  canvas.style.inset = '0';
+  canvas.style.zIndex = '0';
   document.body.appendChild(canvas);
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });

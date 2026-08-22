@@ -57,9 +57,6 @@ export class ShipUIManager extends BaseInteractionUI {
     this.titleEl.textContent = `罗德岛本舰 · 第 ${this.session.meta.day} 天`;
     this.root.appendChild(this.titleEl);
 
-    // 三面板按钮
-    this.buildNavButtons();
-
     // 面板容器
     this.panelContainer = document.createElement('div');
     this.panelContainer.id = 'ship-panel-container';
@@ -89,56 +86,11 @@ export class ShipUIManager extends BaseInteractionUI {
   }
 
   // ============================================================
-  // 导航按钮
-  // ============================================================
-
-  private buildNavButtons(): void {
-    const defs: { id: ShipPanel; label: string; icon: string }[] = [
-      { id: 'action', label: '行动', icon: '⚔' },
-      { id: 'formation', label: '编队', icon: '⚙' },
-      { id: 'operator', label: '干员', icon: '👤' },
-    ];
-
-    const bar = document.createElement('div');
-    bar.style.cssText = [
-      'position:absolute', 'bottom:30px', 'left:50%', 'transform:translateX(-50%)',
-      'display:flex', 'gap:16px', 'pointer-events:auto',
-    ].join(';');
-
-    for (const def of defs) {
-      const btn = document.createElement('button');
-      btn.dataset.panel = def.id;
-      btn.style.cssText = [
-        'padding:10px 24px', 'font-size:16px', 'font-weight:bold',
-        'background:rgba(34,34,68,0.85)', 'color:#aac',
-        'border:1px solid #4466aa', 'border-radius:6px',
-        'cursor:pointer', 'transition:all 0.2s',
-      ].join(';');
-      btn.innerHTML = `${def.icon} ${def.label}`;
-      btn.addEventListener('mouseenter', () => { btn.style.background = 'rgba(68,102,170,0.85)'; btn.style.color = '#fff'; });
-      btn.addEventListener('mouseleave', () => { btn.style.background = 'rgba(34,34,68,0.85)'; btn.style.color = '#aac'; });
-      btn.addEventListener('click', () => {
-        if (def.id === 'action') {
-          this.closeCurrentPanel();
-          // ★ 点击行动 → 显示抽卡覆盖层
-          const gacha = this._gachaOverlay;
-          if (gacha) {
-            gacha.show(() => this.onDepart?.());
-          }
-        } else {
-          this.togglePanel(def.id);
-        }
-      });
-      bar.appendChild(btn);
-    }
-    this.root.appendChild(bar);
-  }
-
-  // ============================================================
   // 面板切换
   // ============================================================
 
-  private togglePanel(panel: ShipPanel): void {
+  /** 切换面板（公开供按钮点击调用） */
+  togglePanel(panel: ShipPanel): void {
     if (this.currentPanel === panel) {
       this.closeCurrentPanel();
       return;

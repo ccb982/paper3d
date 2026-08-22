@@ -17,6 +17,78 @@ import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { ShipUIManager } from '../ui/ship/ShipUIManager';
 import { GachaOverlay } from '../ui/ship/GachaOverlay';
+import { FtxAsset } from '../vendor/player/FtxAsset';
+
+// ============================================================
+// 主页面按钮标注（屏幕坐标 0-1，Y=0 底部，Y=1 顶部）
+// ============================================================
+interface ButtonAnno {
+  id: 'operator' | 'formation' | 'action';
+  label: string;
+  /** 梯形四顶点：TL, TR, BL, BR */
+  corners: { tl: { x: number; y: number }; tr: { x: number; y: number }; bl: { x: number; y: number }; br: { x: number; y: number } };
+  /** 在 FTX 中的帧索引（假设 3 帧，每帧一个按钮） */
+  frameIndex: number;
+}
+
+const BUTTON_ANNOTATIONS: ButtonAnno[] = [
+  {
+    id: 'operator', label: '干员', frameIndex: 0,
+    corners: {
+      tl: { x: 0.750, y: 0.570 }, tr: { x: 0.931, y: 0.578 },
+      bl: { x: 0.750, y: 0.436 }, br: { x: 0.931, y: 0.426 },
+    },
+  },
+  {
+    id: 'formation', label: '编队', frameIndex: 1,
+    corners: {
+      tl: { x: 0.581, y: 0.573 }, tr: { x: 0.740, y: 0.566 },
+      bl: { x: 0.581, y: 0.447 }, br: { x: 0.740, y: 0.451 },
+    },
+  },
+  {
+    id: 'action', label: '行动', frameIndex: 2,
+    corners: {
+      tl: { x: 0.600, y: 0.591 }, tr: { x: 1.000, y: 0.600 },
+      bl: { x: 0.600, y: 0.785 }, br: { x: 1.000, y: 0.835 },
+    },
+  },
+];
+
+// ============================================================
+// HSL 合成着色器（与 GachaOverlay 一致）
+// ============================================================
+const HSL_VERT = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const HSL_FRAG = `
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D uBase;
+  uniform sampler2D uResidual;
+  uniform float uAlpha;
+  vec3 hsl2rgb(vec3 c) {
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+  }
+  void main() {
+    vec4 base = texture2D(uBase, vUv);
+    if (base.a < 0.5) discard;
+    vec4 res = texture2D(uResidual, vUv);
+    float dH = (res.r * 2.0 - 1.0) * 0.5;
+    float dS = (res.g * 2.0 - 1.0) * 0.5;
+    float dL = (res.b * 2.0 - 1.0) * 0.5;
+    float h = fract(base.r + dH);
+    float s = clamp(base.g + dS, 0.0, 1.0);
+    float l = clamp(base.b + dL, 0.0, 1.0);
+    gl_FragColor = vec4(hsl2rgb(vec3(h, s, l)), base.a * uAlpha);
+  }
+`;
 
 // ============================================================
 // 舰船场景布局（简单占位地图）
@@ -61,6 +133,14 @@ export class ShipMode implements IGameMode {
   // ★ 抽卡覆盖层（行动后默认显示）
   private gachaOverlay!: GachaOverlay;
 
+  // ★ 主页面按钮系统
+  private _btnScene: THREE.Scene | null = null;
+  private _btnCamera: THREE.OrthographicCamera | null = null;
+  private _btnMeshes: THREE.Mesh[] = [];
+  private _btnDebugLines: THREE.LineLoop[] = [];
+  private _btnHitAreas: { id: string; x: number; y: number; w: number; h: number }[] = [];
+  private _btnBoundClick: ((e: PointerEvent) => void) | null = null;
+
   // ============================================================
   // IGameMode 接口实现
   // ============================================================
@@ -93,7 +173,10 @@ export class ShipMode implements IGameMode {
     this.buildShipScene();
     this.setupCamera();
 
-    // ④ 创建抽卡覆盖层（行动后触发）
+    // ④ 加载主页面按钮（FTX 纹理，梯形透视）
+    this.loadMainButtons();
+
+    // ⑤ 创建抽卡覆盖层（行动后触发）
     this.gachaOverlay = new GachaOverlay(ctx.session);
     this.gachaOverlay.load().then(() => {
       // 将抽卡覆盖层传递给 UI 管理器，点在"行动"时显示
@@ -106,16 +189,19 @@ export class ShipMode implements IGameMode {
   }
 
   exit(): void {
-    // ① 销毁抽卡覆盖层
+    // ① 销毁主页面按钮
+    this.disposeMainButtons();
+
+    // ② 销毁抽卡覆盖层
     this.gachaOverlay?.dispose();
 
-    // ② 销毁 UI 层
+    // ③ 销毁 UI 层
     this.uiManager?.dispose();
 
-    // ③ 销毁 3D 场景
+    // ④ 销毁 3D 场景
     this.disposeShipScene();
 
-    // ④ 清空引用
+    // ⑤ 清空引用
     this.session = null;
     this.onDepart = undefined;
     console.log('[ShipMode] 舰船场景已卸载');
@@ -137,6 +223,10 @@ export class ShipMode implements IGameMode {
   render(): void {
     if (this.scene && this.camera && this.renderer) {
       this.renderer.render(this.scene, this.camera);
+      // 渲染按钮覆盖层
+      if (this._btnScene && this._btnCamera) {
+        this.renderer.render(this._btnScene, this._btnCamera);
+      }
     }
   }
 
@@ -240,6 +330,179 @@ export class ShipMode implements IGameMode {
     this.camera.position.set(0, 18, 14);
     this.camera.lookAt(ROOM_LAYOUT.center.x, 0, ROOM_LAYOUT.center.z);
     this.camera.updateProjectionMatrix();
+  }
+
+  // ============================================================
+  // 主页面按钮（FTX 纹理，梯形透视）
+  // ============================================================
+
+  private async loadMainButtons(): Promise<void> {
+    if (!this.renderer) return;
+    this.disposeMainButtons();
+
+    const btnAsset = await FtxAsset.load('/ui/主界面三个按钮.ftx3.gz');
+    if (!btnAsset || btnAsset.frameCount === 0) return;
+
+    const aspect = window.innerWidth / window.innerHeight;
+
+    // 创建覆盖层场景和相机
+    this._btnScene = new THREE.Scene();
+    this._btnCamera = new THREE.OrthographicCamera(0, aspect, 1, 0, -1, 1);
+
+    this._btnHitAreas = [];
+
+    for (const anno of BUTTON_ANNOTATIONS) {
+      const pair = btnAsset.getFramePair(anno.frameIndex);
+      if (!pair) continue;
+
+      // 创建梯形几何体
+      const { tl, tr, bl, br } = this.screenToThree(anno.corners, aspect);
+      const geo = new THREE.BufferGeometry();
+      const verts = new Float32Array([
+        // 两个三角形组成梯形
+        bl.x, bl.y, 0,   br.x, br.y, 0,   tr.x, tr.y, 0,
+        bl.x, bl.y, 0,   tr.x, tr.y, 0,   tl.x, tl.y, 0,
+      ]);
+      const uvs = new Float32Array([
+        0, 1,   1, 1,   1, 0,
+        0, 1,   1, 0,   0, 0,
+      ]);
+      geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uBase: { value: pair.base },
+          uResidual: { value: pair.residual },
+          uAlpha: { value: 1.0 },
+        },
+        vertexShader: HSL_VERT,
+        fragmentShader: HSL_FRAG,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+      });
+
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.z = 0.1;
+      this._btnScene.add(mesh);
+      this._btnMeshes.push(mesh);
+
+      // ★ 调试：绘制梯形轮廓线
+      const debugColor = anno.id === 'operator' ? 0xff4444 : anno.id === 'formation' ? 0x44ff44 : 0x4444ff;
+      const linePoints = [
+        new THREE.Vector3(tl.x, tl.y, 0.15),
+        new THREE.Vector3(tr.x, tr.y, 0.15),
+        new THREE.Vector3(br.x, br.y, 0.15),
+        new THREE.Vector3(bl.x, bl.y, 0.15),
+        new THREE.Vector3(tl.x, tl.y, 0.15),
+      ];
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(linePoints);
+      const lineMat = new THREE.LineBasicMaterial({ color: debugColor, linewidth: 2 });
+      const lineLoop = new THREE.LineLoop(lineGeo, lineMat);
+      this._btnScene.add(lineLoop);
+      this._btnDebugLines.push(lineLoop);
+
+      // 点击区域（用梯形包围盒）
+      const minX = Math.min(tl.x, tr.x, bl.x, br.x);
+      const maxX = Math.max(tl.x, tr.x, bl.x, br.x);
+      const minY = Math.min(tl.y, tr.y, bl.y, br.y);
+      const maxY = Math.max(tl.y, tr.y, bl.y, br.y);
+      this._btnHitAreas.push({ id: anno.id, x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+
+      // ★ 调试：点击区域包围盒（虚线效果用半透明线）
+      const hitPoints = [
+        new THREE.Vector3(minX, minY, 0.16),
+        new THREE.Vector3(maxX, minY, 0.16),
+        new THREE.Vector3(maxX, maxY, 0.16),
+        new THREE.Vector3(minX, maxY, 0.16),
+        new THREE.Vector3(minX, minY, 0.16),
+      ];
+      const hitGeo = new THREE.BufferGeometry().setFromPoints(hitPoints);
+      const hitMat = new THREE.LineBasicMaterial({ color: debugColor, transparent: true, opacity: 0.4 });
+      const hitLine = new THREE.LineLoop(hitGeo, hitMat);
+      this._btnScene.add(hitLine);
+      this._btnDebugLines.push(hitLine);
+    }
+
+    // 点击事件
+    const onClick = (e: PointerEvent) => this.handleButtonClick(e);
+    this._btnBoundClick = onClick;
+    this.renderer.domElement.addEventListener('pointerdown', onClick);
+  }
+
+  /** 将屏幕标注坐标（0-1，Y=0 底部）转为 Three.js 正交相机坐标（Y=0 底部） */
+  private screenToThree(
+    c: { tl: { x: number; y: number }; tr: { x: number; y: number }; bl: { x: number; y: number }; br: { x: number; y: number } },
+    aspect: number,
+  ): { tl: { x: number; y: number }; tr: { x: number; y: number }; bl: { x: number; y: number }; br: { x: number; y: number } } {
+    return {
+      tl: { x: c.tl.x * aspect, y: c.tl.y },
+      tr: { x: c.tr.x * aspect, y: c.tr.y },
+      bl: { x: c.bl.x * aspect, y: c.bl.y },
+      br: { x: c.br.x * aspect, y: c.br.y },
+    };
+  }
+
+  private handleButtonClick(e: PointerEvent): void {
+    if (!this.renderer || !this._btnCamera) return;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const aspect = window.innerWidth / window.innerHeight;
+    // 转为 Three.js 正交相机坐标（Y=0 底部）
+    const px = (e.clientX / rect.width) * aspect;
+    const py = 1 - (e.clientY / rect.height); // Y=0 底部，与相机一致
+
+    for (const hit of this._btnHitAreas) {
+      if (px >= hit.x && px <= hit.x + hit.w && py >= hit.y && py <= hit.y + hit.h) {
+        this.onButtonClick(hit.id);
+        break;
+      }
+    }
+  }
+
+  private onButtonClick(id: string): void {
+    if (id === 'action') {
+      // 行动 → 显示抽卡覆盖层
+      const gacha = this.gachaOverlay;
+      if (gacha) {
+        gacha.show(() => this.doDepart());
+      }
+    } else {
+      // 干员/编队 → 打开对应面板
+      this.uiManager.togglePanel(id as 'operator' | 'formation');
+    }
+  }
+
+  private disposeMainButtons(): void {
+    if (this._btnBoundClick && this.renderer) {
+      this.renderer.domElement.removeEventListener('pointerdown', this._btnBoundClick);
+      this._btnBoundClick = null;
+    }
+    for (const mesh of this._btnMeshes) {
+      mesh.geometry.dispose();
+      if (Array.isArray(mesh.material)) {
+        mesh.material.forEach(m => m.dispose());
+      } else {
+        mesh.material.dispose();
+      }
+      this._btnScene?.remove(mesh);
+    }
+    this._btnMeshes = [];
+    // 清理调试线
+    for (const line of this._btnDebugLines) {
+      line.geometry.dispose();
+      const mat = line.material;
+      if (Array.isArray(mat)) {
+        mat.forEach(m => m.dispose());
+      } else {
+        mat.dispose();
+      }
+      this._btnScene?.remove(line);
+    }
+    this._btnDebugLines = [];
+    this._btnHitAreas = [];
+    this._btnScene = null;
+    this._btnCamera = null;
   }
 
   private disposeShipScene(): void {
