@@ -49,8 +49,8 @@ const BUTTON_ANNOTATIONS: ButtonAnno[] = [
   {
     id: 'formation', label: '编队', frameIndex: 2,
     corners: {
-      tl: { x: 0.581, y: 0.573 }, tr: { x: 0.740, y: 0.566 },
-      bl: { x: 0.581, y: 0.447 }, br: { x: 0.740, y: 0.451 },
+      tl: { x: 0.581, y: 0.561 }, tr: { x: 0.740, y: 0.568 },
+      bl: { x: 0.581, y: 0.446 }, br: { x: 0.740, y: 0.442 },
     },
   },
 ];
@@ -242,9 +242,11 @@ export class ShipMode implements IGameMode {
   render(): void {
     if (this.scene && this.camera && this.renderer) {
       this.renderer.render(this.scene, this.camera);
-      // 渲染按钮覆盖层
+      // 渲染按钮覆盖层（不自动清除，保留 Three.js 场景背景）
       if (this._btnScene && this._btnCamera) {
+        this.renderer.autoClear = false;
         this.renderer.render(this._btnScene, this._btnCamera);
+        this.renderer.autoClear = true;
         // 首次渲染后回读行动按钮像素
         if (!this._debugReadbackDone) {
           this._debugReadbackDone = true;
@@ -525,7 +527,7 @@ export class ShipMode implements IGameMode {
       this._btnScene.add(hitLine);
       this._btnDebugLines.push(hitLine);
 
-      // ★ 调试：区域编号标签（已移除）
+      // ★ 区域编号标签（已移除）
     }
 
     // 点击事件
