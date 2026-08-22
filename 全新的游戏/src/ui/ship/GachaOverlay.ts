@@ -142,6 +142,7 @@ export class GachaOverlay {
   private _pullCountCanvas: HTMLCanvasElement | null = null;
   private _pullCountTexture: THREE.CanvasTexture | null = null;
   private _starsMesh: THREE.Mesh | null = null;
+  private _questionMesh: THREE.Mesh | null = null;
 
   // 概率显示页面
   private _probAsset: FtxAsset | null = null;
@@ -151,7 +152,7 @@ export class GachaOverlay {
   constructor(
     private session: GameSession,
   ) {
-    this.tickets = session.resources?.gachaTickets ?? 999;
+    this.tickets = (session as any).resources?.gachaTickets ?? 999;
     // 根容器
     this.root = document.createElement('div');
     this.root.id = 'gacha-overlay';
@@ -255,9 +256,10 @@ export class GachaOverlay {
     this.buttonHit.left = { x: texOffX, y: hitOffY, w: sW0 / 2, h: sH0 };
     this.buttonHit.right = { x: texOffX + sW0 / 2, y: hitOffY, w: sW0 / 2, h: sH0 };
 
-    // 第三层：累积抽卡数字 + 六颗星星
+    // 第三层：累积抽卡数字 + 六颗星星 + 问号
     const stars = await FtxAsset.load('/ui/六颗星星.ftx3.gz');
-    this.renderThirdLayer(stars);
+    const questionMark = await FtxAsset.load('/ui/问号.ftx3.gz');
+    this.renderThirdLayer(stars, questionMark);
 
     // 概率显示透明按钮（JSON 区域：x:0.140~0.201, y:0.131~0.162）
     const probBtnW = 0.0611 * aspect;
@@ -500,7 +502,7 @@ export class GachaOverlay {
   // 第三层渲染（累积抽卡数字 + 六颗星星）
   // ============================================================
 
-  private renderThirdLayer(starsAsset: FtxAsset): void {
+  private renderThirdLayer(starsAsset: FtxAsset, questionMark: FtxAsset): void {
     const aspect = window.innerWidth / window.innerHeight;
 
     // 1. 累积抽卡数字（JSON 区域：x:0.464~0.475, y:0.138~0.157）
@@ -538,8 +540,32 @@ export class GachaOverlay {
     this.scene.add(numSprite);
     this._pullCountSprite = numSprite;
 
-    // 2. 六颗星星（JSON 区域：x:0.173~0.386, y:0.419~0.496）
-    // 使用 FTX 纹理渲染，Y 使用原始 JSON 坐标（Y=0 顶部）
+    // 2. 问号（左侧，缩小）
+    const qPair = questionMark.getFramePair(0);
+    if (!qPair) return;
+    const qF = questionMark.frames[0];
+    const qFw = qF?.bbox.w || 512;
+    const qFh = qF?.bbox.h || 512;
+    const qTexAspect = qFw / qFh;
+
+    const starAreaX = 0.17 * aspect;
+    const starAreaY = 0.37;
+    const starAreaW = 0.3195 * aspect;
+    const starAreaH = 0.1155;
+
+    const qScale = 0.75;
+    const qAreaH = starAreaH * qScale;
+    const qAreaW = qAreaH * qTexAspect;
+    const qAreaX = starAreaX;
+    const qAreaY = starAreaY + (starAreaH - qAreaH) / 2; // 垂直居中
+
+    const qMat = this.makeHSLMat(qPair.base, qPair.residual);
+    this._questionMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), qMat);
+    this._questionMesh.scale.set(qAreaW, qAreaH, 1);
+    this._questionMesh.position.set(qAreaX + qAreaW / 2, qAreaY + qAreaH / 2, 0.15);
+    this.scene.add(this._questionMesh);
+
+    // 3. 六颗星星（问号右侧，占据剩余空间）
     const starPair = starsAsset.getFramePair(0);
     if (!starPair) return;
     const starF = starsAsset.frames[0];
@@ -547,18 +573,17 @@ export class GachaOverlay {
     const starFh = starF?.bbox.h || 512;
     const starTexAspect = starFw / starFh;
 
-    const starAreaX = 0.125 * aspect; // 左移
-    const starAreaY = 0.37; // 略微下移
-    const starAreaW = 0.3195 * aspect; // 1.5 倍
-    const starAreaH = 0.1155; // 1.5 倍
+    const qRight = qAreaX + qAreaW + 0.002 * aspect;
+    const newStarAreaX = qRight;
+    const newStarAreaW = (starAreaX + starAreaW) - qRight;
 
-    let sStarW = starAreaW;
+    let sStarW = newStarAreaW;
     let sStarH = sStarW / starTexAspect;
     if (sStarH > starAreaH) {
       sStarH = starAreaH;
       sStarW = sStarH * starTexAspect;
     }
-    const starCx = starAreaX + starAreaW / 2;
+    const starCx = newStarAreaX + sStarW / 2;
     const starCy = starAreaY + starAreaH / 2;
     const starMat = this.makeHSLMat(starPair.base, starPair.residual);
     this._starsMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), starMat);
@@ -891,9 +916,18 @@ export class GachaOverlay {
     }
     this._pullCountCanvas = null;
     if (this._starsMesh) {
-      this._starsMesh.material.dispose();
+      const mat = this._starsMesh.material;
+      if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+      else mat.dispose();
       this.scene.remove(this._starsMesh);
       this._starsMesh = null;
+    }
+    if (this._questionMesh) {
+      const mat = this._questionMesh.material;
+      if (Array.isArray(mat)) mat.forEach(m => m.dispose());
+      else mat.dispose();
+      this.scene.remove(this._questionMesh);
+      this._questionMesh = null;
     }
 
     if (this.bgFluidEffect) {
