@@ -149,6 +149,12 @@ export class GachaOverlay {
   private _probOverlay: HTMLDivElement | null = null;
   private _probButtonHit: { x: number; y: number; w: number; h: number } | null = null;
 
+  // 粒子效果
+  private _particles: THREE.Points | null = null;
+  private _particleCount = 40;
+  private _particlePositions: Float32Array | null = null;
+  private _particleData: Float32Array | null = null; // [velX, velY, phase, age, lifespan] 每粒子
+
   constructor(
     private session: GameSession,
   ) {
@@ -273,6 +279,9 @@ export class GachaOverlay {
 
     // 预加载概率显示纹理
     this._probAsset = await FtxAsset.load('/ui/概率显示.ftx3.gz');
+
+    // 创建粒子效果
+    this.createParticles();
 
     this.ready = true;
   }
@@ -880,6 +889,65 @@ export class GachaOverlay {
     this.camera.updateProjectionMatrix();
   }
 
+  /** 创建纯白粒子（从右下到左上缓慢飘飞） */
+  private createParticles(): void {
+    const count = this._particleCount;
+    const positions = new Float32Array(count * 3);
+    const data = new Float32Array(count * 5); // [velX, velY, phase, age, lifespan]
+    const sizes = new Float32Array(count);
+    const colors = new Float32Array(count); // 0=黑, 1=白
+    for (let i = 0; i < count; i++) {
+      positions[i * 3] = Math.random();           // X 随机
+      positions[i * 3 + 1] = Math.random();       // Y 随机
+      positions[i * 3 + 2] = 0;
+      data[i * 5] = -(0.02 + Math.random() * 0.04);     // velX 向左
+      data[i * 5 + 1] = 0.02 + Math.random() * 0.04;    // velY 向上
+      data[i * 5 + 2] = Math.random() * Math.PI * 2;    // phase
+      data[i * 5 + 3] = Math.random() * 1.5;             // age 随机初始进度
+      data[i * 5 + 4] = 1 + Math.random() * 2;           // lifespan 1~3 秒
+      sizes[i] = 0;
+      colors[i] = Math.random(); // 初始随机黑白
+    }
+    this._particlePositions = positions;
+    this._particleData = data;
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+    geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 1));
+
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {},
+      vertexShader: `
+        attribute float aSize;
+        attribute float aColor;
+        varying float vAlpha;
+        varying float vColor;
+        void main() {
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = aSize;
+          gl_Position = projectionMatrix * mvPosition;
+          vAlpha = step(0.5, aSize);
+          vColor = aColor;
+        }
+      `,
+      fragmentShader: `
+        varying float vAlpha;
+        varying float vColor;
+        void main() {
+          float c = vColor;
+          gl_FragColor = vec4(c, c, c, vAlpha);
+        }
+      `,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this._particles = new THREE.Points(geo, mat);
+    this._particles.position.set(0, 0, 0.2);
+    this.scene.add(this._particles);
+  }
+
   private tick(): void {
     if (this.root.style.display === 'none') return;
     const now = performance.now() / 1000;
@@ -889,6 +957,52 @@ export class GachaOverlay {
     // 步进流体模拟（首次交互后才启动）
     if (this.bgFluidEffect && this._fluidStarted) {
       this.bgFluidEffect.step(dt);
+    }
+
+    // 更新粒子
+    if (this._particlePositions && this._particleData && this._particles) {
+      const pos = this._particlePositions;
+      const data = this._particleData; // [velX, velY, phase, age, lifespan]
+      const sizeAttr = this._particles.geometry.attributes.aSize as THREE.BufferAttribute;
+      const sizes = sizeAttr.array;
+      const colorAttr = this._particles.geometry.attributes.aColor as THREE.BufferAttribute;
+      const colors = colorAttr.array;
+      const camW = this.camera.right - this.camera.left;
+      const camH = this.camera.top - this.camera.bottom;
+      for (let i = 0; i < this._particleCount; i++) {
+        const idx = i * 5;
+        // 推进 age
+        data[idx + 3] += dt;
+        // 生命周期结束，重置到随机位置
+        if (data[idx + 3] >= data[idx + 4]) {
+          data[idx + 3] = 0;
+          data[idx + 4] = 1 + Math.random() * 2;
+          pos[i * 3] = Math.random();
+          pos[i * 3 + 1] = Math.random();
+          data[idx] = -(0.02 + Math.random() * 0.04);
+          data[idx + 1] = 0.02 + Math.random() * 0.04;
+          data[idx + 2] = Math.random() * Math.PI * 2;
+        }
+        // 向右上移动
+        pos[i * 3] += data[idx] * dt;       // X 向左
+        pos[i * 3 + 1] += data[idx + 1] * dt; // Y 向上
+        // 超出范围则重置
+        if (pos[i * 3] < 0 || pos[i * 3 + 1] > 1) {
+          data[idx + 3] = data[idx + 4]; // 强制结束生命周期
+        }
+        // 颜色黑白渐变（基于生命周期，缓慢变化）
+        const colorPhase = (data[idx + 3] / data[idx + 4] + data[idx + 2] / (Math.PI * 2)) % 1;
+        colors[i] = 0.5 + 0.5 * Math.sin(colorPhase * Math.PI * 2);
+        // 淡入淡出
+        const life = data[idx + 3] / data[idx + 4];
+        const fadeIn = Math.min(life / 0.15, 1);
+        const fadeOut = Math.min((1 - life) / 0.2, 1);
+        sizes[i] = 4 * Math.min(fadeIn, fadeOut);
+      }
+      sizeAttr.needsUpdate = true;
+      colorAttr.needsUpdate = true;
+      this._particles.scale.set(camW, camH, 1);
+      this._particles.geometry.attributes.position.needsUpdate = true;
     }
 
     // 更新时间
@@ -928,6 +1042,12 @@ export class GachaOverlay {
       else mat.dispose();
       this.scene.remove(this._questionMesh);
       this._questionMesh = null;
+    }
+    if (this._particles) {
+      this._particles.geometry.dispose();
+      (this._particles.material as THREE.Material).dispose();
+      this.scene.remove(this._particles);
+      this._particles = null;
     }
 
     if (this.bgFluidEffect) {
