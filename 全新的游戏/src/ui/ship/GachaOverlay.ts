@@ -153,6 +153,11 @@ export class GachaOverlay {
   private _isHoverLeft = false;
   private _isHoverRight = false;
 
+  // 按钮底部 glow 网格
+  private _btnLeftGlowMesh: THREE.Mesh | null = null;
+  private _btnRightGlowMesh: THREE.Mesh | null = null;
+  private _btnGlowDefData: { cy: number; texH: number; lgW: number; lgH: number; rgW: number; rgH: number; leftGlowCx: number; rightGlowCx: number } | null = null;
+
   // 按钮动画
   private _btnAnimId: number | null = null;
   private _btnAnimData: { mesh: THREE.Mesh; defScale: { x: number; y: number }; sStart: number; sEnd: number; gStart: number; gEnd: number; t0: number }[] = [];
@@ -189,6 +194,20 @@ export class GachaOverlay {
       if (t < 1) pending.push(d);
     }
     this._btnAnimData = pending;
+
+    // 更新 glow 位置和大小跟随按钮缩放
+    if (this._btnLeftGlowMesh && this._btnRightGlowMesh && this._btnGlowDefData && this._btnLeftDefaultScale && this._btnRightDefaultScale) {
+      const { cy, texH, lgW, lgH, rgW, rgH, leftGlowCx, rightGlowCx } = this._btnGlowDefData;
+      // 左 glow
+      const leftS = this._btnLeftMesh!.scale.x / this._btnLeftDefaultScale.x;
+      this._btnLeftGlowMesh.scale.set(lgW * leftS, lgH * leftS, 1);
+      this._btnLeftGlowMesh.position.y = cy - (texH * leftS) / 2 + (lgH * leftS) * 0.3 + 0.007;
+      // 右 glow
+      const rightS = this._btnRightMesh!.scale.x / this._btnRightDefaultScale.x;
+      this._btnRightGlowMesh.scale.set(rgW * rightS, rgH * rightS, 1);
+      this._btnRightGlowMesh.position.y = cy - (texH * rightS) / 2 + (rgH * rightS) * 0.3 + 0.007;
+    }
+
     if (pending.length > 0) {
       this._btnAnimId = requestAnimationFrame(() => this.tickBtnAnim());
     }
@@ -599,8 +618,8 @@ export class GachaOverlay {
     const lgctx = leftGlowCvs.getContext('2d')!;
     const lgGrad = lgctx.createLinearGradient(0, 64, 0, 0);
     lgGrad.addColorStop(0, 'rgba(255,255,255,0.9)');
-    lgGrad.addColorStop(0.3, 'rgba(255,255,255,0.5)');
-    lgGrad.addColorStop(0.6, 'rgba(255,255,255,0.15)');
+    lgGrad.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+    lgGrad.addColorStop(0.85, 'rgba(255,255,255,0.15)');
     lgGrad.addColorStop(1, 'rgba(255,255,255,0)');
     lgctx.fillStyle = lgGrad;
     lgctx.fillRect(0, 0, 64, 64);
@@ -616,6 +635,7 @@ export class GachaOverlay {
     const leftGlowCx = cx - lgW / 2;
     leftGlowMesh.position.set(leftGlowCx, cy - texH / 2 + lgH * 0.3 + 0.007, 0.19);
     this.scene.add(leftGlowMesh);
+    this._btnLeftGlowMesh = leftGlowMesh;
 
     // 右半（十连）
     const rightMat = this.makeHSLMat(pair.base, pair.residual, { x: 0.5, y: 0, w: 0.5, h: 1 });
@@ -633,8 +653,8 @@ export class GachaOverlay {
     const rgctx = rightGlowCvs.getContext('2d')!;
     const rgGrad = rgctx.createLinearGradient(0, 64, 0, 0);
     rgGrad.addColorStop(0, 'rgba(255,200,0,0.9)');
-    rgGrad.addColorStop(0.3, 'rgba(255,200,0,0.5)');
-    rgGrad.addColorStop(0.6, 'rgba(255,200,0,0.15)');
+    rgGrad.addColorStop(0.4, 'rgba(255,200,0,0.5)');
+    rgGrad.addColorStop(0.75, 'rgba(255,200,0,0.15)');
     rgGrad.addColorStop(1, 'rgba(255,200,0,0)');
     rgctx.fillStyle = rgGrad;
     rgctx.fillRect(0, 0, 64, 64);
@@ -650,6 +670,10 @@ export class GachaOverlay {
     const rightGlowCx = cx + rgW / 2;
     rightGlowMesh.position.set(rightGlowCx, cy - texH / 2 + rgH * 0.3 + 0.007, 0.19);
     this.scene.add(rightGlowMesh);
+    this._btnRightGlowMesh = rightGlowMesh;
+
+    // 存储 glow 默认数据（供动画跟随使用）
+    this._btnGlowDefData = { cy, texH, lgW, lgH, rgW, rgH, leftGlowCx, rightGlowCx };
   }
 
   // ============================================================
