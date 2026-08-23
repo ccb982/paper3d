@@ -11,9 +11,7 @@ export default defineConfig({
   build: {
     target: 'es2020',
     chunkSizeWarningLimit: 1000,
-    // ★ three / rapier 不进主包（index.html importmap 运行时从 CDN 下载）
-    rollupOptions: {
-      external: ['three', '@dimforge/rapier3d'],
-    },
+    // three / rapier 常规打包进产物（2026-08-23 曾试过 CDN 运行时加载，
+    // 本机 preview 存在未定位的 404，暂回退打包方案；微信端本就必须打包）
   },
 });

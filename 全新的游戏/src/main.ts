@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { WebAdapter } from './platform/WebAdapter';
+import { ensureRapierReady } from './services/physics/PhysicsWorld';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset } from './vendor/player';
 import type { IGameMode } from './core/IGameMode';
@@ -70,7 +71,11 @@ async function boot() {
     camera.updateProjectionMatrix();
   });
 
-  // ---- 2. 加载资产 ----
+  // ---- 2. 物理引擎初始化（一次性；必须在进入战斗前完成，
+  //      否则 rapier 的 wasm 绑定未就绪 → rawintegrationparameters_new undefined）----
+  await ensureRapierReady();
+
+  // ---- 3. 加载资产 ----
   protagonistAsset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
   console.log('[boot] 主角已加载:', protagonistAsset.frameNames().join(', '));
 

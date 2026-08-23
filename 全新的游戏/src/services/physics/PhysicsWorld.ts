@@ -5,7 +5,16 @@
 // 提供：刚体创建（按形状）、位置驱动（玩家/运动学）、固定步进、
 // 碰撞事件转发（contact / sensor）、球体查询（爆炸/范围）。
 
-import RAPIER, { ActiveEvents } from '@dimforge/rapier3d';
+import RAPIER, { ActiveEvents } from '@dimforge/rapier3d-compat';
+
+/**
+ * ★ rapier wasm 初始化（进程内一次性；进入战斗前必须调用）。
+ * 使用 compat 版：wasm 以 base64 内联，await RAPIER.init() 即完成实例化，
+ * 不依赖打包器的 wasm-ESM 支持（dev 插件链在生产构建会静默失效）。
+ */
+export async function ensureRapierReady(): Promise<void> {
+  await RAPIER.init();
+}
 
 /** ⚠ 关键经验（踩坑记录）：
  *   rapier 0.14.0 的 createRigidBody 返回值是坏的（wasm 绑定错读）——
