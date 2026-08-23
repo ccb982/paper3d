@@ -88,7 +88,6 @@ export class WorldMode implements IGameMode {
   private bullets!: BulletManager;
   private bulletCooldown = 0;
   private chunkMeshes = new Map<number, THREE.Mesh>();
-  private chunkEdgeLines = new Map<number, THREE.LineSegments>();
   private chunkBodies = new Map<number, number>();
   // （chunk 材质已改为每 chunk 独立的 Canvas 外观材质，见 buildChunkMesh）
   private aiCtx: BehaviorContext = {
@@ -404,13 +403,6 @@ export class WorldMode implements IGameMode {
       mm.dispose();
     }
     this.chunkMeshes.clear();
-    // ★ 清理棱边
-    for (const el of this.chunkEdgeLines.values()) {
-      this.scene?.remove(el);
-      el.geometry.dispose();
-      (el.material as THREE.Material).dispose();
-    }
-    this.chunkEdgeLines.clear();
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -585,54 +577,6 @@ export class WorldMode implements IGameMode {
       });
       this.chunkBodies.set(key, body.id);
     }
-
-    // ---- ★ 发光棱边（高度突变处加亮线） ----
-    this.buildChunkEdgeLines(cx, cz, key);
-  }
-
-  /** 生成发光棱边：在高度突变的网格棱边处绘制亮线 */
-  private buildChunkEdgeLines(cx: number, cz: number, key: number): void {
-    const lines: THREE.Vector3[] = [];
-    const threshold = 0.08; // 高度差阈值
-    for (let z = 0; z < CHUNK_SIZE; z++) {
-      for (let x = 0; x < CHUNK_SIZE; x++) {
-        const wx = cx * CHUNK_SIZE + x;
-        const wz = cz * CHUNK_SIZE + z;
-        const h = this.raster.heightAt(wx, wz);
-        // 检查右侧（X+1）和下方（Z+1）的邻居
-        if (x < CHUNK_SIZE - 1) {
-          const hr = this.raster.heightAt(wx + 1, wz);
-          if (Math.abs(h - hr) > threshold) {
-            lines.push(new THREE.Vector3(wx + 0.5, Math.max(h, hr), wz + 0.5));
-            lines.push(new THREE.Vector3(wx + 0.5, Math.min(h, hr), wz + 0.5));
-          }
-        }
-        if (z < CHUNK_SIZE - 1) {
-          const hd = this.raster.heightAt(wx, wz + 1);
-          if (Math.abs(h - hd) > threshold) {
-            lines.push(new THREE.Vector3(wx + 0.5, Math.max(h, hd), wz + 0.5));
-            lines.push(new THREE.Vector3(wx + 0.5, Math.min(h, hd), wz + 0.5));
-          }
-        }
-      }
-    }
-    if (lines.length === 0) return;
-    const geo = new THREE.BufferGeometry();
-    const positions = new Float32Array(lines.length * 3);
-    for (let i = 0; i < lines.length; i++) {
-      positions[i * 3] = lines[i].x;
-      positions[i * 3 + 1] = lines[i].y;
-      positions[i * 3 + 2] = lines[i].z;
-    }
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const mat = new THREE.LineBasicMaterial({
-      color: 0x66aaff,
-      transparent: true,
-      opacity: 0.25,
-    });
-    const edgeMesh = new THREE.LineSegments(geo, mat);
-    this.scene!.add(edgeMesh);
-    this.chunkEdgeLines.set(key, edgeMesh);
   }
 
   private rebuildChunkMesh(cx: number, cz: number): void {
@@ -646,14 +590,6 @@ export class WorldMode implements IGameMode {
       om.map?.dispose();
       om.dispose();
       this.chunkMeshes.delete(key);
-    }
-    // ★ 清理旧棱边
-    const oldEdge = this.chunkEdgeLines.get(key);
-    if (oldEdge) {
-      this.scene!.remove(oldEdge);
-      oldEdge.geometry.dispose();
-      (oldEdge.material as THREE.Material).dispose();
-      this.chunkEdgeLines.delete(key);
     }
     const oldBody = this.chunkBodies.get(key);
     if (oldBody !== undefined) {
