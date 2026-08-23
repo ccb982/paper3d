@@ -4,7 +4,9 @@
 // ★ 无限地图适配：
 //   - 不预构建全图——每帧按"玩家 ±windowHalf 窗口"实时采样地形色
 //   - 黑雾 = 稀疏 visited（无限持久），窗口内未探索像素盖黑
-//   - 实体点：世界坐标 → 窗口像素（敌人只显示已探索的；物品只显示静止的）
+//   - ★ 记忆灰雾（2026-08-23）：常驻掩码盖住所有已探明区域，
+//     仅 LOD_MAX_DIST 圈内"挖孔"露全彩；偏暗=记忆观感。
+//     敌人只在【已探索 且 LOD 圈内】显示；我方道具始终显示
 //   - 玩家恒居中，箭头 = 摄像机朝向（准星方向）
 // 窗口 ±80 米（160px → 1m/px，与 RasterMap 1 地块 = 1 像素对应）
 // 开雾范围 = LOD_MAX_DIST（< 窗口 → 可见雾边界）
@@ -22,6 +24,13 @@ export class Minimap {
   private viewRadius: number;
   /** ★ 稀疏探索状态（无限持久） */
   private visited = new Map<number, boolean>();
+
+  /** ★ 记忆灰雾：常驻掩码，盖住【所有】已探明区域；仅 LOD 圈内不绘制（挖孔露全彩）。
+   *  偏暗 = "记忆中"的观感；未探明区仍是纯黑，三种状态一眼可分 */
+  private static readonly MIST_R = 64;
+  private static readonly MIST_G = 66;
+  private static readonly MIST_B = 72;
+  private static readonly MIST_STRENGTH = 0.85;
 
   constructor(raster: RasterMap, displaySize = 160, windowHalf = 80, viewRadius = LOD_MAX_DIST) {
     this.raster = raster;
@@ -47,9 +56,12 @@ export class Minimap {
     const x0 = Math.floor(px - this.windowHalf);
     const z0 = Math.floor(pz - this.windowHalf);
 
-    // 地形 + 黑雾（窗口内逐像素：已探索 = 地形色，未探索 = 雾黑）
+    // 地形 + 双层雾（窗口内逐像素）：
+    //   未探索 = 雾黑 | 已探明 = 记忆灰雾（常驻掩码）| LOD 圈内 = 挖孔露全彩
     // ★ 屏幕对齐映射：canvas 上 = 3D 屏幕上方（-z，玩家初始朝向）、
     //   canvas 右 = 3D 屏幕右（+x）→ 右方物体在箭头右手边（符合直觉）
+    const rSq = this.viewRadius * this.viewRadius;
+    const M = Minimap;
     const img = ctx.createImageData(ds, ds);
     for (let iy = 0; iy < ds; iy++) {
       const wz = z0 + iy;
@@ -57,7 +69,15 @@ export class Minimap {
         const wx = x0 + ix;
         const i = (iy * ds + ix) * 4;
         if (this.visited.has(cellKeyOf(wx, wz))) {
-          const [r, g, b] = this.raster.terrainColorAt(wx, wz);
+          let [r, g, b] = this.raster.terrainColorAt(wx, wz);
+          // ★ 灰雾是常驻掩码：圈外一律覆盖（无渐变带，像素风格硬边）
+          const ddx = wx + 0.5 - px;
+          const ddz = wz + 0.5 - pz;
+          if (ddx * ddx + ddz * ddz > rSq) {
+            r += (M.MIST_R - r) * M.MIST_STRENGTH;
+            g += (M.MIST_G - g) * M.MIST_STRENGTH;
+            b += (M.MIST_B - b) * M.MIST_STRENGTH;
+          }
           img.data[i] = r;
           img.data[i + 1] = g;
           img.data[i + 2] = b;
@@ -71,12 +91,20 @@ export class Minimap {
     }
     ctx.putImageData(img, 0, 0);
 
-    // 实体点（世界 → 窗口像素；过滤：敌人只显示已探索的，物品只显示静止的）
+    // 实体点（世界 → 窗口像素）：
+    //   敌人：仅【已探索 且 LOD 圈内】绘制（圈外探明区有灰雾=记忆区，敌人不显示）
+    //   物品：静止的始终绘制（我方道具不受灰雾影响）
     for (const e of entities) {
       const ex = Math.floor(e.position.x);
       const ez = Math.floor(e.position.z);
       const info = e.minimapInfo;
-      if (info.kind === 'enemy' && !this.visited.has(cellKeyOf(ex, ez))) continue;
+      if (info.kind === 'enemy') {
+        const edx = ex - px;
+        const edz = ez - pz;
+        const explored = this.visited.has(cellKeyOf(ex, ez));
+        const inLod = edx * edx + edz * edz <= rSq;
+        if (!explored || !inLod) continue;
+      }
       if (info.kind === 'item' && info.moving) continue;
       const pxw = ex - x0;
       const pzw = ez - z0;
