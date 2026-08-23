@@ -127,6 +127,15 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 初始 3×3 chunk 的地面刚体 + 视觉网格 ----
     this.syncChunks(spawn.x, spawn.z);
+    // ★ 出生区 3×3 同步强制构建：物理地面必须先于玩家存在（队列化会延迟到数帧后，
+    //   玩家会坠入虚空）。更远的区域由队列按预算流式构建。
+    const scx = Math.floor(spawn.x / CHUNK_SIZE);
+    const scz = Math.floor(spawn.z / CHUNK_SIZE);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        this.buildChunkMesh(scx + dx, scz + dz);
+      }
+    }
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -384,6 +393,8 @@ export class WorldMode implements IGameMode {
     this.pickupGlows = [];
 
     // ---- chunk 视觉网格 ----
+    this.chunkQueue.length = 0;   // ★ 清空构建队列
+    this.queuedKeys.clear();
     for (const m of this.chunkMeshes.values()) {
       this.scene?.remove(m);
       m.geometry.dispose();
@@ -466,19 +477,58 @@ export class WorldMode implements IGameMode {
     });
   }
 
+  /** ★ chunk 构建预算队列：跨区爆发不再同帧全部构建（每帧限时，消卡顿）
+   *  Worker 迁移备注：generateChunk 数据与外观像素计算均为纯数据函数，
+   *  后续可移入 wx.createWorker/Worker；THREE 网格与 rapier 碰撞体必须留在主线程 */
+  private chunkQueue: { cx: number; cz: number; rebuild: boolean }[] = [];
+  private queuedKeys = new Set<number>();
+  /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
+  private static readonly CHUNK_BUILD_BUDGET_MS = 8;
+
   private syncChunks(px: number, pz: number): void {
     const added = this.raster.updateChunks(px, pz);
     for (const { cx, cz } of added) {
-      this.buildChunkMesh(cx, cz);
+      this.enqueueChunk(cx, cz, false);
     }
+    // 相邻接缝重建也入队（排在新建之后），避免同帧叠加烘焙开销
     for (const { cx, cz } of added) {
       for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
         const nkey = chunkKeyOf(cx + nx, cz + nz);
         if (this.chunkMeshes.has(nkey)) {
-          this.rebuildChunkMesh(cx + nx, cz + nz);
+          this.enqueueChunk(cx + nx, cz + nz, true);
         }
       }
     }
+    this.processChunkQueue();
+  }
+
+  private enqueueChunk(cx: number, cz: number, rebuild: boolean): void {
+    const key = chunkKeyOf(cx, cz);
+    if (this.queuedKeys.has(key)) return;
+    if (!rebuild && this.chunkMeshes.has(key)) return; // 已建（如出生区强制构建）
+    this.queuedKeys.add(key);
+    this.chunkQueue.push({ cx, cz, rebuild });
+  }
+
+  /** 每帧按时间预算消化构建队列（首项必建，防饿死） */
+  private processChunkQueue(): void {
+    if (this.chunkQueue.length === 0) return;
+    const t0 = performance.now();
+    do {
+      const item = this.chunkQueue.shift()!;
+      this.queuedKeys.delete(chunkKeyOf(item.cx, item.cz));
+      if (item.rebuild) {
+        // 可能已不在视野/已被销毁：rebuild 内部有兜底
+        if (this.chunkMeshes.has(chunkKeyOf(item.cx, item.cz))) {
+          this.rebuildChunkMesh(item.cx, item.cz);
+        }
+      } else {
+        this.buildChunkMesh(item.cx, item.cz);
+      }
+    } while (
+      this.chunkQueue.length > 0 &&
+      performance.now() - t0 < WorldMode.CHUNK_BUILD_BUDGET_MS
+    );
   }
 
   private buildChunkMesh(cx: number, cz: number): void {
