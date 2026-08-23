@@ -120,6 +120,43 @@ export function bakeChunkAppearance(
       const jit = tileJitter(wx, wz, seed, type, base);
       let [r, g, b] = hsl2rgb(jit.h, jit.s, jit.l);
 
+      // ---- 结构化细节层（替代白噪点——白噪=脏，结构=设计）----
+      //   ① 色阶化斑块：中频噪声量化成 3 档离散亮度 → 手绘色块拼接感
+      //   ② 地块内描边：贴边 ~0.3m 压暗一圈 → "精制面板"质感（方舟地图签名）
+      //   ③ 平台方向性拉丝：各向异性噪声沿 X 拉伸 → 拉丝金属
+      //   已删除：像素白噪点 / R,B 冷暖偏移（各向同性无结构 = 脏）
+      const isWater = type === 4;
+      const isPit = type === 2;
+
+      // ① 色阶化斑块（~4m 特征；3 档：0.95 / 1.00 / 1.05）
+      if (!isWater) {
+        const pn = vnoise(wx * 0.22, wz * 0.22, seed + 88);
+        const band = Math.min(2, Math.floor(pn * 3)) / 2; // 0 / 0.5 / 1
+        const patch = 0.95 + band * 0.10;
+        const pAmp = isPit ? 0.5 : 1;
+        r *= 1 + (patch - 1) * pAmp;
+        g *= 1 + (patch - 1) * pAmp;
+        b *= 1 + (patch - 1) * pAmp;
+      }
+
+      // ② 地块内描边（非水域）：距块边 <0.3m 的像素压暗一圈
+      if (!isWater) {
+        const bxm = ((lx % 4) + 4) % 4;
+        const bzm = ((lz % 4) + 4) % 4;
+        const dEdge = Math.min(bxm, 4 - bxm, bzm, 4 - bzm);
+        if (dEdge < 0.3) {
+          const t = 1 - dEdge / 0.3; // 越贴边越暗
+          const k = 1 - 0.13 * t;
+          r *= k; g *= k; b *= k;
+        }
+      }
+
+      // ③ 平台方向性拉丝（X 向拉伸噪声，±4%）
+      if (type === 1) {
+        const st = (vnoise(wx * 0.7, wz * 0.12, seed + 66) - 0.5) * 0.08;
+        r *= 1 + st; g *= 1 + st; b *= 1 + st;
+      }
+
       // ---- 大尺度斑驳（幅度刻意克制 ±6%，不抢方块感）----
       const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
       const shade = 0.94 + 0.12 * n;
