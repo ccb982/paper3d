@@ -128,11 +128,11 @@ export function bakeChunkAppearance(
       const isWater = type === 4;
       const isPit = type === 2;
 
-      // ① 色阶化斑块（~4m 特征；3 档：0.95 / 1.00 / 1.05）
+      // ① 色阶化斑块（~4m 特征；3 档：0.975 / 1.000 / 1.025）
       if (!isWater) {
         const pn = vnoise(wx * 0.22, wz * 0.22, seed + 88);
         const band = Math.min(2, Math.floor(pn * 3)) / 2; // 0 / 0.5 / 1
-        const patch = 0.95 + band * 0.10;
+        const patch = 0.975 + band * 0.05;
         const pAmp = isPit ? 0.5 : 1;
         r *= 1 + (patch - 1) * pAmp;
         g *= 1 + (patch - 1) * pAmp;
