@@ -35,6 +35,9 @@ export class PickupGlowEffect {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, 32, 32);
     const texture = new THREE.CanvasTexture(canvas);
+    // ★ 径向渐变是显示空间 sRGB 色：打标签走 解码→线性→ACES→编码 正确管线，
+    //   否则被当线性直通 → ACES 后过亮（与 HitEffectView 同款修复，2026-08-23）
+    texture.colorSpace = THREE.SRGBColorSpace;
 
     // 生成 8 个粒子，沿圆周均匀分布 + 随机上浮速度
     for (let i = 0; i < 8; i++) {

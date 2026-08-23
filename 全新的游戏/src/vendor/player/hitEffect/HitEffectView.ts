@@ -131,6 +131,10 @@ export class HitEffectView {
     this.texture = new THREE.CanvasTexture(this.bakeCanvas);
     this.texture.minFilter = THREE.LinearFilter;
     this.texture.magFilter = THREE.LinearFilter;
+    // ★ 烘焙画布内容是 hsl2rgb 产出的【显示空间 sRGB 色】，必须打上 sRGB 标签：
+    //   采样时解码→线性，ACES/光照在线性域运算，输出再编码回 sRGB。
+    //   不标记会被当作线性值直通 → ACES 后双重提亮（过曝发白）。
+    this.texture.colorSpace = THREE.SRGBColorSpace;
 
     // 世界空间 billboard quad（深度测试开：被地形遮挡时正确隐藏）
     const mat = new THREE.MeshBasicMaterial({
