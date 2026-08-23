@@ -20,7 +20,8 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
-import { TERRAIN_BASE_HSL, hsl2rgb, type Hsl } from './TerrainPalette';
+import { hsl2rgb } from './TerrainPalette';
+import { tileById } from './Tiles';
 import type { RasterMap } from './RasterMap';
 
 /** 外观分辨率（默认 256²；低端机降 128²） */
@@ -41,30 +42,6 @@ function vnoise(x: number, y: number, seed: number): number {
   const top = h(xi, yi) * (1 - sx) + h(xi + 1, yi) * sx;
   const bot = h(xi, yi + 1) * (1 - sx) + h(xi + 1, yi + 1) * sx;
   return top * (1 - sy) + bot * sy;
-}
-
-/**
- * ★ 逐地块基础色抖动 —— 方块感的来源。
- * 以世界 tile 坐标 (4m 格) 做 hash2，在 H/S/L 三通道独立微抖：
- *   色相 ±0.8% / 饱和 ±3% / 亮度 ±5%
- * 相邻地块颜色略不同、同块内部完全一致 → 干净的"棋盘感"。
- * 水域不抖（液体应均质）；坑洞减半幅度（警示色要保持醒目）。
- */
-function tileJitter(
-  wx: number, wz: number, seed: number, type: number, base: Hsl,
-): Hsl {
-  const tx = Math.floor(wx / 4);
-  const tz = Math.floor(wz / 4);
-  if (type === 4) return base; // BLOCK_WATER：不抖
-  const ampMul = type === 2 ? 0.5 : 1; // BLOCK_PIT：半幅
-  const dh = ((hash2(tx, tz, seed + 101) - 0.5) * 0.016) * ampMul;
-  const ds = ((hash2(tx, tz, seed + 202) - 0.5) * 0.06) * ampMul;
-  const dl = ((hash2(tx, tz, seed + 303) - 0.5) * 0.10) * ampMul;
-  return {
-    h: base.h + dh,
-    s: Math.min(1, Math.max(0, base.s * (1 + ds))),
-    l: Math.min(1, Math.max(0, base.l * (1 + dl))),
-  };
 }
 
 /**
@@ -105,42 +82,43 @@ export function bakeChunkAppearance(
       //      高邻块，同样判不出。surfaceHeightAt 与网格渲染完全一致才可靠。
       //   插值高度 >0 且水平归属坑/水 tile = 位于 0 线以上的侧壁暴露面，
       //   改按平地材质处理（不得涂水色/警示色）。
-      let type = raster.terrainTypeAt(wx, wz);
-      const hSurface = raster.surfaceHeightAt(wx, wz);
-      if ((type === 2 || type === 4) && hSurface > 0) {
-        type = 0; // 0 线以上的侧壁 → 平地材质
+      let td = raster.tileDefAt(wx, wz);
+      if (td.isDepression && raster.surfaceHeightAt(wx, wz) > 0) {
+        td = tileById(0); // 0 线以上的侧壁暴露面 → 平地材质
       }
 
-      // ---- 类型 → 基准 HSL → 逐地块抖动 → RGB ----
-      const base =
-        type === 1 ? TERRAIN_BASE_HSL.platform :
-        type === 2 ? TERRAIN_BASE_HSL.pit :
-        type === 4 ? TERRAIN_BASE_HSL.water :
-                     TERRAIN_BASE_HSL.flat;
-      const jit = tileJitter(wx, wz, seed, type, base);
-      let [r, g, b] = hsl2rgb(jit.h, jit.s, jit.l);
+      // ---- 基准色 → 逐地块 HSL 抖动 → RGB（幅度来自 Tiles 注册表）----
+      const tx = Math.floor(wx / 4);
+      const tz = Math.floor(wz / 4);
+      let [r, g, b] = hsl2rgb(
+        td.visual.baseHsl.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
+        td.visual.baseHsl.s * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
+        td.visual.baseHsl.l * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
+      );
 
       // ---- 结构化细节层（替代白噪点——白噪=脏，结构=设计）----
-      //   ① 色阶化斑块：中频噪声量化成 3 档离散亮度 → 手绘色块拼接感
+      //   ① 色阶化斑块：中频噪声量化成 3 档离散亮度（对称 ±2.5%）→ 手绘色块拼接感
       //   ② 地块内描边：贴边 ~0.3m 压暗一圈 → "精制面板"质感（方舟地图签名）
       //   ③ 平台方向性拉丝：各向异性噪声沿 X 拉伸 → 拉丝金属
-      //   已删除：像素白噪点 / R,B 冷暖偏移（各向同性无结构 = 脏）
-      const isWater = type === 4;
-      const isPit = type === 2;
+      //   ⚠️ 已删除：像素白噪点 / R,B 冷暖偏移 / 中频连续斑块
+      //     （各向同性无结构 = 脏；2026-08-23 TileDef 迁移时曾误带回，勿再恢复）
 
-      // ① 色阶化斑块（~4m 特征；3 档：0.975 / 1.000 / 1.025）
-      if (!isWater) {
-        const pn = vnoise(wx * 0.22, wz * 0.22, seed + 88);
-        const band = Math.min(2, Math.floor(pn * 3)) / 2; // 0 / 0.5 / 1
-        const patch = 0.975 + band * 0.05;
-        const pAmp = isPit ? 0.5 : 1;
-        r *= 1 + (patch - 1) * pAmp;
-        g *= 1 + (patch - 1) * pAmp;
-        b *= 1 + (patch - 1) * pAmp;
+      // ① 色阶化斑块（3 档；带内平台 + 带缘 smoothstep 软过渡 → 自然不生硬）
+      if (td.visual.patches !== false) {
+        const pn = vnoise(wx * 0.22, wz * 0.22, seed + 88);   // 0~1
+        const t = pn * 3;
+        const k = Math.min(2, Math.floor(t));
+        let f = t - k;
+        f = f < 0.6 ? 0 : (f - 0.6) / 0.4;                    // 每带：60% 平台 + 40% 过渡
+        f = f * f * (3 - 2 * f);                              // smoothstep 缓坡
+        const level = (k + f) / 2;                            // 0 ~ 1（跨带连续）
+        const amp = 0.04 * (td.visual.patchHalf ? 0.5 : 1);
+        const p = 1 - amp + 2 * amp * level;                  // 对称 ±4%（pit 减半）
+        r *= p; g *= p; b *= p;
       }
 
-      // ② 地块内描边（非水域）：距块边 <0.3m 的像素压暗一圈
-      if (!isWater) {
+      // ---- 地块内描边（贴边 0.3m 压暗圈）----
+      if (td.visual.borderLine) {
         const bxm = ((lx % 4) + 4) % 4;
         const bzm = ((lz % 4) + 4) % 4;
         const dEdge = Math.min(bxm, 4 - bxm, bzm, 4 - bzm);
@@ -151,8 +129,8 @@ export function bakeChunkAppearance(
         }
       }
 
-      // ③ 平台方向性拉丝（X 向拉伸噪声，±4%）
-      if (type === 1) {
+      // ---- 平台方向性拉丝（X 向拉伸噪声）----
+      if (td.visual.streaks) {
         const st = (vnoise(wx * 0.7, wz * 0.12, seed + 66) - 0.5) * 0.08;
         r *= 1 + st; g *= 1 + st; b *= 1 + st;
       }
@@ -165,9 +143,9 @@ export function bakeChunkAppearance(
       // ★ 凹陷地块（修正后仍是水/坑的部分 = 0 线以下的底面）：
       //   表面按 ≤0 的平面均匀着色，不参与邻域 AO —— 否则邻接高台/坡的
       //   高度差会烘进纹理，让水面/坑底出现明暗不均。深度感由几何侧壁承担。
-      const isDepression = type === 2 || type === 4;
+      // ---- 逐像素 AO（凹陷地块均匀着色跳过——深度感由几何侧壁承担）----
       let ao = 1;
-      if (!isDepression) {
+      if (!td.isDepression) {
         const h = raster.heightAt(wx, wz);
         let occ = 0;
         for (let k = 0; k < 8; k++) {

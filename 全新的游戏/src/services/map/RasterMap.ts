@@ -11,10 +11,10 @@
 
 import type { EntityBase } from '../../entity/EntityBase';
 import * as THREE from 'three';
-import { TERRAIN_BASE_HSL, hsl2rgb } from './TerrainPalette';
+import { tileById, type TileDef } from './Tiles';
 import {
   generateChunk, type ChunkData,
-  CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT, BLOCK_WATER,
+  CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE,
 } from './ChunkGenerator';
 
 /** chunkKey（负数安全偏移编码） */
@@ -155,27 +155,25 @@ export class RasterMap {
   }
 
   /** 地形颜色（按模板 + 块类型分区着色：高台暖黄/平地冷灰/坑洞深红/斜坡过渡） */
-  /** ★ 地表类型查询（外观 Canvas 烘焙用；未加载返回 BLOCK_FLAT） */
-  terrainTypeAt(x: number, z: number): number {
+  /** ★ 地块定义查询（外观 Canvas 烘焙/装饰散布用；未加载回退平地） */
+  tileDefAt(x: number, z: number): TileDef {
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
     const chunk = this.chunks.get(chunkKeyOf(cx, cz));
-    if (!chunk) return 0;
+    if (!chunk) return tileById(0);
     const bx = Math.floor((x - cx * CHUNK_SIZE) / 4);
     const bz = Math.floor((z - cz * CHUNK_SIZE) / 4);
-    return chunk.blockTypes[bz * 15 + bx];
+    return tileById(chunk.blockTypes[bz * 15 + bx]);
   }
 
+  /** 地表类型 id（未加载返回 BLOCK_FLAT） */
+  terrainTypeAt(x: number, z: number): number {
+    return this.tileDefAt(x, z).id;
+  }
+
+  /** 基准色 RGB（纯净无抖动；小地图消费） */
   terrainColorAt(x: number, z: number): [number, number, number] {
-    const t = this.terrainTypeAt(x, z);
-    // 纯净基准色（无逐块抖动）：小地图等消费方保持可读性；
-    // 地表渲染的逐地块抖动在 ChunkAppearance.bake 内做
-    const base =
-      t === BLOCK_PLATFORM ? TERRAIN_BASE_HSL.platform :
-      t === BLOCK_PIT      ? TERRAIN_BASE_HSL.pit :
-      t === BLOCK_WATER    ? TERRAIN_BASE_HSL.water :
-                             TERRAIN_BASE_HSL.flat;
-    return hsl2rgb(base.h, base.s, base.l);
+    return this.tileDefAt(x, z).baseRgb;
   }
 
   // ============ 实体索引（全局 cell，无限） ============

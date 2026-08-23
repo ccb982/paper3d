@@ -10,8 +10,10 @@
 //   2. 走廊加宽（可选，增加战斗空间）
 //   3. 墙区分类（水域/坑洞/高台/死路）
 //   4. 连通性修复（保证所有树节点可达）
-//   5. 高度分配（绝对平整，无斜坡）
+//   5. 高度分配（绝对平整，无斜坡；地块属性查 Tiles 注册表）
 // ============================================================
+
+import { TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_WATER, type TileDef } from './Tiles';
 
 /** chunk 尺寸（米） */
 export const CHUNK_SIZE = 60;
@@ -29,6 +31,15 @@ export const BLOCK_WATER = 4;     // 水域（不可通行，阻挡）
 
 // ============ 地形类型（内部） ============
 enum TileType { UNKNOWN = 0, ROAD = 1, WATER = 2, PIT = 3, PLATFORM = 4 }
+
+/** 内部生成类型 → 地块定义（唯一映射点；新增地块类型改 Tiles 注册表即可） */
+const LEGACY_DEF: Record<number, TileDef> = {
+  [TileType.UNKNOWN]: TILE_FLAT,
+  [TileType.ROAD]: TILE_FLAT,
+  [TileType.WATER]: TILE_WATER,
+  [TileType.PIT]: TILE_PIT,
+  [TileType.PLATFORM]: TILE_PLATFORM,
+};
 
 // ============ 端口数据结构 ============
 interface Ports {
@@ -310,33 +321,21 @@ function assignHeights(tileType: Uint8Array, ports: Ports): Float32Array {
   const heights = new Float32Array(225);
   const allPorts = new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right]);
 
-  // 高度扰动（确定性）
-  // ROAD: -0.1 ~ +0.3；PLATFORM: 0.0 ~ +0.4；WATER/PIT: 无扰动
-  function perturb(h: number, i: number, base: number, range: number): number {
-    return h + (hash2(i, 0, 1212) * range + base);
-  }
-
+  // 高度分配（确定性；规则来自 Tiles 注册表的 physics 属性）
+  //   ROAD: height + (-0.1 ~ +0.3)，端口平整
+  //   PLATFORM: 1.8 ~ +2.2 | WATER: -0.5 | PIT: -3.0
   for (let i = 0; i < 225; i++) {
-    switch (tileType[i]) {
-      case TileType.ROAD:
-        if (allPorts.has(i)) {
-          heights[i] = 0; // 端口无扰动（保证跨块顺滑）
-        } else {
-          heights[i] = perturb(0, i, -0.1, 0.4);
-        }
-        break;
-      case TileType.PLATFORM:
-        heights[i] = perturb(1.8, i, 0, 0.4);
-        break;
-      case TileType.WATER:
-        heights[i] = -0.5;
-        break;
-      case TileType.PIT:
-        heights[i] = -3.0;
-        break;
-      default:
-        heights[i] = 0;
+    const tt = tileType[i];
+    const def = LEGACY_DEF[tt] ?? TILE_FLAT;
+    const p = def.physics;
+    if (tt === TileType.UNKNOWN || (p.flattenAtPorts && allPorts.has(i))) {
+      heights[i] = p.height; // 端口/未知：基础高度（跨块顺滑）
+      continue;
     }
+    heights[i] =
+      p.height +
+      (p.heightJitterBase ?? 0) +
+      (p.heightJitterRange ? hash2(i, 0, 1212) * p.heightJitterRange : 0);
   }
   return heights;
 }
@@ -359,22 +358,9 @@ function toChunkData(
       const type = tileType[ti];
       const h = tileHeights[ti];
 
-      // 块类型
-      switch (type) {
-        case TileType.PLATFORM:
-          blockTypes[ti] = BLOCK_PLATFORM;
-          break;
-        case TileType.PIT:
-          blockTypes[ti] = BLOCK_PIT;
-          break;
-        case TileType.WATER:
-          blockTypes[ti] = BLOCK_WATER;
-          break;
-        case TileType.ROAD:
-        default:
-          blockTypes[ti] = BLOCK_FLAT;
-          break;
-      }
+      // 块类型 + 可通行（属性来自 Tiles 注册表）
+      const defT = LEGACY_DEF[type] ?? TILE_FLAT;
+      blockTypes[ti] = defT.id;
 
       // 填充 4×4 每米数据
       for (let dz = 0; dz < BLOCK_SIZE; dz++) {
@@ -385,7 +371,7 @@ function toChunkData(
 
           heights[gi] = h;
           blockHeight[gi] = 0;
-          walkable[gi] = (type === TileType.ROAD || type === TileType.PLATFORM) ? 1 : 0;
+          walkable[gi] = defT.physics.walkable ? 1 : 0;
         }
       }
     }
