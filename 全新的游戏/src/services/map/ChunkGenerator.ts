@@ -54,7 +54,7 @@ export interface ChunkData {
 
 // ============ 确定性 hash 噪声 ============
 
-function hash2(x: number, y: number, seed: number): number {
+export function hash2(x: number, y: number, seed: number): number {
   let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 1442695041)) | 0;
   h = (h ^ (h >>> 13)) | 0;
   h = Math.imul(h, 1274126177);

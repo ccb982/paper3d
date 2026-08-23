@@ -20,6 +20,7 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { gameLights } from '../services/render/GameLights';
+import { bakeChunkAppearance } from '../services/map/ChunkAppearance';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
@@ -89,7 +90,7 @@ export class WorldMode implements IGameMode {
   private chunkMeshes = new Map<number, THREE.Mesh>();
   private chunkEdgeLines = new Map<number, THREE.LineSegments>();
   private chunkBodies = new Map<number, number>();
-  private static chunkMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
+  // （chunk 材质已改为每 chunk 独立的 Canvas 外观材质，见 buildChunkMesh）
   private aiCtx: BehaviorContext = {
     dt: 0, time: 0, target: null,
     findTarget: () => null,
@@ -386,6 +387,10 @@ export class WorldMode implements IGameMode {
     for (const m of this.chunkMeshes.values()) {
       this.scene?.remove(m);
       m.geometry.dispose();
+      // ★ 外观材质与纹理随 chunk 释放（每 chunk 独立 Canvas 材质）
+      const mm = m.material as THREE.MeshStandardMaterial;
+      mm.map?.dispose();
+      mm.dispose();
     }
     this.chunkMeshes.clear();
     // ★ 清理棱边
@@ -482,8 +487,9 @@ export class WorldMode implements IGameMode {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
-    const colors = new Float32Array(pos.count * 3);
     const normals = new Float32Array(pos.count * 3);
+    // ★ 外观 UV：与 ChunkAppearance 像素映射约定配套（文件头有推导），flipY=false
+    const uvs = new Float32Array(pos.count * 2);
     const tmpN = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
       const lx = pos.getX(i) + CHUNK_SIZE / 2;
@@ -492,20 +498,8 @@ export class WorldMode implements IGameMode {
       const wz = cz * CHUNK_SIZE + lz;
       const h = this.raster.vertexHeightAt(wx, wz);
       pos.setY(i, h);
-      const [r, g, b] = this.raster.terrainColorAt(wx, wz);
-      // ★ 顶点假 AO（烘焙式）：采样环形高度，凹处压暗。
-      //   风格化地形真实感第一来源——墙角/坑沿/台阶根部的接触暗部全靠它。
-      //   零运行时成本：烘焙进顶点色，随 chunk 重建自动更新。
-      let occ = 0;
-      for (let k = 0; k < 8; k++) {
-        const ang = (k / 8) * Math.PI * 2;
-        const dh = this.raster.heightAt(wx + Math.cos(ang) * 2.5, wz + Math.sin(ang) * 2.5) - h;
-        if (dh > 0) occ += Math.min(dh, 2.5);
-      }
-      const ao = Math.max(0.55, 1 - (occ / 8) * 0.09);
-      colors[i * 3] = (r / 255) * ao;
-      colors[i * 3 + 1] = (g / 255) * ao;
-      colors[i * 3 + 2] = (b / 255) * ao;
+      uvs[i * 2] = lx / CHUNK_SIZE;
+      uvs[i * 2 + 1] = lz / CHUNK_SIZE;
       const hL = this.raster.heightAt(wx - 1, wz);
       const hR = this.raster.heightAt(wx + 1, wz);
       const hD = this.raster.heightAt(wx, wz - 1);
@@ -515,9 +509,18 @@ export class WorldMode implements IGameMode {
       normals[i * 3 + 1] = tmpN.y;
       normals[i * 3 + 2] = tmpN.z;
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
     geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    const mesh = new THREE.Mesh(geo, WorldMode.chunkMat);
+    // ★ 外观来自静态预渲染 Canvas（颜色/噪声/AO 全在里面）；
+    //   实时光照只承担半球环境 + N·L 形状明暗 + 实体阴影接收。
+    //   ⚠️ 不再使用顶点色/AO —— 与 canvas 双重压暗（架构文档 8.0 v2 红线）
+    const mapTex = bakeChunkAppearance(this.raster, cx, cz);
+    const mat = new THREE.MeshStandardMaterial({
+      map: mapTex,
+      roughness: 0.95,
+      metalness: 0,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
     mesh.receiveShadow = true;
     this.scene!.add(mesh);
@@ -588,6 +591,10 @@ export class WorldMode implements IGameMode {
     if (old) {
       this.scene!.remove(old);
       old.geometry.dispose();
+      // ★ 外观材质与纹理一并释放
+      const om = old.material as THREE.MeshStandardMaterial;
+      om.map?.dispose();
+      om.dispose();
       this.chunkMeshes.delete(key);
     }
     // ★ 清理旧棱边

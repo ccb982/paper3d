@@ -44,6 +44,11 @@ export class RasterMap {
     // 初始不预生成：首次 updateChunks（syncChunks）统一生成 3×3（加载半径 2）
   }
 
+  /** 世界种子（外观 canvas 烘焙的噪声用；同 seed 同地形 → 装饰/噪声也一致） */
+  get worldSeed(): number {
+    return this.seed;
+  }
+
   // ============ chunk 加载（玩家驱动扩张） ============
 
   /** 确保单个 chunk 存在（块状地形生成，确定性） */
