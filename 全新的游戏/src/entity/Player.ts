@@ -34,9 +34,12 @@ export class Player extends CharacterBase {
   protected createRenderer(scene: THREE.Scene): FTXQuad {
     // anim.source = 传入的 FrameAssetSource（FrameAnimatorBase 公共字段）
     const source = this.anim!.source;
-    const quad = new FTXQuad(scene, source);
-    quad.setCastShadow(true); // ★ 实体投影（cutout 剪影随帧同步）
-    return quad;
+    return new FTXQuad(scene, source);
+  }
+
+  /** 贴地圆影（角色标准配置） */
+  override get shadowSpec(): { radius: number; alpha: number } | null {
+    return { radius: 0.45, alpha: 0.4 };
   }
 
   /** 攻击（消费式按键由模式层转发） */

@@ -78,9 +78,12 @@ export class EnemyBase extends CharacterBase {
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {
     const source = this.anim!.source;
-    const quad = new FTXQuad(scene, source);
-    quad.setCastShadow(true); // ★ 实体投影（cutout 剪影随帧同步）
-    return quad;
+    return new FTXQuad(scene, source);
+  }
+
+  /** 贴地圆影（敌人：略淡） */
+  override get shadowSpec(): { radius: number; alpha: number } | null {
+    return { radius: 0.45, alpha: 0.35 };
   }
 
   /** ★ AI 驱动入口（AISystem 每帧调用） */

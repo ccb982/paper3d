@@ -88,6 +88,11 @@ export class ItemBase extends EntityBase {
     return this.collisionVolume?.offsetY ?? 0.22;
   }
 
+  /** 贴地圆影（物品：小而淡） */
+  override get shadowSpec(): { radius: number; alpha: number } | null {
+    return { radius: 0.3, alpha: 0.3 };
+  }
+
   /** ★ 小地图：物品只显示静止的 */
   override get minimapInfo(): { kind: string; moving: boolean } {
     let moving = false;
