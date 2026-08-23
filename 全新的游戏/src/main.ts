@@ -18,6 +18,7 @@ import { WorldMode } from './modes/WorldMode';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
+import { setupGameLights, LIGHT_TUNING } from './services/render/GameLights';
 
 // ============================================================
 // 全局状态（最小化：只保留 shared 资源和当前模式引用）
@@ -49,12 +50,18 @@ async function boot() {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(adapter.info.dpr);
   renderer.setClearColor(0xcccccc, 1);
+  // ★ 实时光照包：电影级色调滚降（所有颜色统一进 ACES 管线）
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = LIGHT_TUNING.exposure;
+  // ★ 阴影总开关：没有它 castShadow/receiveShadow 全部无效（2026-08-23 漏过一次）
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 软边；低端机可换回 PCFShadowMap
 
   const scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-  const sun = new THREE.DirectionalLight(0xffffff, 1);
-  sun.position.set(20, 40, 10);
-  scene.add(sun);
+  // ★ 雾：远处融进背景色，遮 chunk 加载边缘 + 大气氛围（舰船内部距离小，不受影响）
+  scene.fog = new THREE.Fog(0xcccccc, 80, 200);
+  // ★ 光照词汇表：半球光(天/地双色) + 投影太阳（替代原 AmbientLight+无影平行光）
+  setupGameLights(scene);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
   window.addEventListener('resize', () => {

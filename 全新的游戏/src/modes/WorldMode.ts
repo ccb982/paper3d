@@ -19,6 +19,7 @@ import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
+import { gameLights } from '../services/render/GameLights';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
@@ -344,6 +345,8 @@ export class WorldMode implements IGameMode {
   /** 渲染：实体管线 + 场景 */
   render(): void {
     if (!this.scene || !this.camera || !this.renderer) return;
+    // ★ 阴影相机锚定玩家（update 后、渲染前，位置已是本帧最终值）
+    if (this.player) gameLights.follow(this.player.position);
     this.entities.renderAll(this.camera);
     this.bullets.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
@@ -490,9 +493,19 @@ export class WorldMode implements IGameMode {
       const h = this.raster.vertexHeightAt(wx, wz);
       pos.setY(i, h);
       const [r, g, b] = this.raster.terrainColorAt(wx, wz);
-      colors[i * 3] = r / 255;
-      colors[i * 3 + 1] = g / 255;
-      colors[i * 3 + 2] = b / 255;
+      // ★ 顶点假 AO（烘焙式）：采样环形高度，凹处压暗。
+      //   风格化地形真实感第一来源——墙角/坑沿/台阶根部的接触暗部全靠它。
+      //   零运行时成本：烘焙进顶点色，随 chunk 重建自动更新。
+      let occ = 0;
+      for (let k = 0; k < 8; k++) {
+        const ang = (k / 8) * Math.PI * 2;
+        const dh = this.raster.heightAt(wx + Math.cos(ang) * 2.5, wz + Math.sin(ang) * 2.5) - h;
+        if (dh > 0) occ += Math.min(dh, 2.5);
+      }
+      const ao = Math.max(0.55, 1 - (occ / 8) * 0.09);
+      colors[i * 3] = (r / 255) * ao;
+      colors[i * 3 + 1] = (g / 255) * ao;
+      colors[i * 3 + 2] = (b / 255) * ao;
       const hL = this.raster.heightAt(wx - 1, wz);
       const hR = this.raster.heightAt(wx + 1, wz);
       const hD = this.raster.heightAt(wx, wz - 1);

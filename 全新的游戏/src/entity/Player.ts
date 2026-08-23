@@ -34,7 +34,9 @@ export class Player extends CharacterBase {
   protected createRenderer(scene: THREE.Scene): FTXQuad {
     // anim.source = 传入的 FrameAssetSource（FrameAnimatorBase 公共字段）
     const source = this.anim!.source;
-    return new FTXQuad(scene, source);
+    const quad = new FTXQuad(scene, source);
+    quad.setCastShadow(true); // ★ 实体投影（cutout 剪影随帧同步）
+    return quad;
   }
 
   /** 攻击（消费式按键由模式层转发） */

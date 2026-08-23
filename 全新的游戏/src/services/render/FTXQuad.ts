@@ -100,6 +100,13 @@ export class FTXQuad extends FxRendererBase {
   private _texAspect = 1;
   /** ★ 贴片底部锚点（脚踩地面）：setPosition 时 y 自动 + 贴片半高 */
   private anchorBottom = true;
+  /** ★ 投影剪影材质（setCastShadow 创建；随帧更新 map） */
+  private customDepth: THREE.MeshDepthMaterial | null = null;
+  /** 投影意愿（调用方设定）；实际是否投射 = 意愿 && LOD 达标 */
+  private castShadowWanted = false;
+  /** 允许投射的最大 LOD 等级（0最近）：远处实体不进阴影 pass。
+   *  ★ 必须手动门控——本 quad frustumCulled=false，three 的阴影相机剔除已失效 */
+  private static readonly CAST_MAX_LOD = 1;
 
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
@@ -172,6 +179,35 @@ export class FTXQuad extends FxRendererBase {
     } else {
       u.uUseFluid.value = 0;
     }
+    // ★ 投影剪影随动画帧同步（customDepthMaterial 采样当前帧 alpha 裁形）
+    if (this.mesh?.castShadow && this.customDepth) {
+      this.customDepth.map = pair.base;
+    }
+  }
+
+  /**
+   * ★ 实体投影开关：billboard 参与阴影投射。
+   * ShaderMaterial 默认深度材质不认自定义 shader 的 alpha → 会投出实心方块影，
+   * 这里挂 customDepthMaterial 用当前帧 base 纹理 + alphaTest 裁出角色剪影。
+   * 实际是否投射还会受 LOD 门控（远处实体不进阴影 pass）。
+   */
+  setCastShadow(on: boolean): void {
+    this.castShadowWanted = on;
+    this.applyCastShadow();
+    if (on && !this.customDepth) {
+      this.customDepth = new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        alphaTest: 0.5,
+      });
+      if (this.mesh) this.mesh.customDepthMaterial = this.customDepth;
+    }
+  }
+
+  /** 意愿 ∧ LOD → 最终 castShadow（阴影范围 = 玩家周围 LOD 达标圈） */
+  private applyCastShadow(): void {
+    if (this.mesh) {
+      this.mesh.castShadow = this.castShadowWanted && this.lodLevel <= FTXQuad.CAST_MAX_LOD;
+    }
   }
 
   /**
@@ -206,10 +242,11 @@ export class FTXQuad extends FxRendererBase {
     this.material.uniforms.uFadeAlpha.value = Math.max(0, Math.min(1, a));
   }
 
-  /** ★ LOD 响应（基类节流 + 渐隐映射：lod2 → 半透明，lod3 → 全透明） */
+  /** ★ LOD 响应（基类节流 + 渐隐映射：lod2 → 半透明，lod3 → 全透明；投影随 LOD 门控） */
   override setLodLevel(level: number): void {
     super.setLodLevel(level);
     this.setFadeAlpha(level >= 3 ? 0 : level === 2 ? 0.45 : 1);
+    this.applyCastShadow();
   }
 
   /** ★ 非 billboard 固定朝向：绕 Y 轴旋转（0=朝 +z，π=朝 -z） */
@@ -225,5 +262,11 @@ export class FTXQuad extends FxRendererBase {
     this._bbox.set(bbox.x, bbox.y, bbox.w, bbox.h);
     this._texAspect = frameSize.height / frameSize.width;
     this.material.uniforms.uFrameSize.value.needsUpdate = true;
+  }
+
+  override dispose(): void {
+    this.customDepth?.dispose();
+    this.customDepth = null;
+    super.dispose();
   }
 }
