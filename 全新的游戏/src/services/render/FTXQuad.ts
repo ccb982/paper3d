@@ -100,13 +100,47 @@ export class FTXQuad extends FxRendererBase {
   private _texAspect = 1;
   /** ★ 贴片底部锚点（脚踩地面）：setPosition 时 y 自动 + 贴片半高 */
   private anchorBottom = true;
-  /** ★ 投影剪影材质（setCastShadow 创建；随帧更新 map） */
-  private customDepth: THREE.MeshDepthMaterial | null = null;
-  /** 投影意愿（调用方设定）；实际是否投射 = 意愿 && LOD 达标 */
-  private castShadowWanted = false;
-  /** 允许投射的最大 LOD 等级（0最近）：远处实体不进阴影 pass。
-   *  ★ 必须手动门控——本 quad frustumCulled=false，three 的阴影相机剔除已失效 */
-  private static readonly CAST_MAX_LOD = 1;
+  // ============================================================
+  // 实体投影子系统（语义契约，重构后的唯一权威定义）
+  // ============================================================
+  //   存在性 = 投影意愿 ∧ LOD ≤ MAX      ← 与相机角度完全无关
+  //   形状   = 当前帧剪影（alphaTest 裁形，随动画帧同步）
+  //   方向   = 固定太阳方向（GameLights.follow 只随玩家平移）
+  //
+  // 所有状态迁移必须经过 syncShadow()（单一更新点）：
+  //   setCastShadow / setLodLevel / render(换帧) 都只改输入，
+  //   由 syncShadow 统一落到 mesh.castShadow 与深度材质。
+  // ============================================================
+  private shadowWanted = false;
+  private shadowDepth: THREE.MeshDepthMaterial | null = null;
+  private static readonly SHADOW_MAX_LOD = 1;
+
+  /** 实体投影开关（Player/Enemy 创建时调用一次） */
+  setCastShadow(on: boolean): void {
+    this.shadowWanted = on;
+    if (on && !this.shadowDepth) {
+      this.shadowDepth = new THREE.MeshDepthMaterial({
+        depthPacking: THREE.RGBADepthPacking,
+        alphaTest: 0.5,
+        side: THREE.DoubleSide, // 太阳视角可能看到贴片背面（billboard 面朝相机）
+      });
+      if (this.mesh) this.mesh.customDepthMaterial = this.shadowDepth;
+    }
+    this.syncShadow();
+  }
+
+  /** 唯一状态落地点：castShadow 标志 + 深度材质帧同步 */
+  private syncShadow(currentBase?: THREE.Texture): void {
+    if (this.shadowDepth && currentBase) this.shadowDepth.map = currentBase;
+    if (this.mesh) {
+      this.mesh.castShadow =
+        this.shadowWanted && this.lodLevel <= FTXQuad.SHADOW_MAX_LOD;
+    }
+  }
+
+  get castShadowEnabled(): boolean {
+    return !!this.shadowDepth;
+  }
 
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
@@ -179,37 +213,8 @@ export class FTXQuad extends FxRendererBase {
     } else {
       u.uUseFluid.value = 0;
     }
-    // ★ 投影剪影随动画帧同步（customDepthMaterial 采样当前帧 alpha 裁形）
-    if (this.mesh?.castShadow && this.customDepth) {
-      this.customDepth.map = pair.base;
-    }
-  }
-
-  /**
-   * ★ 实体投影开关：billboard 参与阴影投射。
-   * ShaderMaterial 默认深度材质不认自定义 shader 的 alpha → 会投出实心方块影，
-   * 这里挂 customDepthMaterial 用当前帧 base 纹理 + alphaTest 裁出角色剪影。
-   * 实际是否投射还会受 LOD 门控（远处实体不进阴影 pass）。
-   */
-  setCastShadow(on: boolean): void {
-    this.castShadowWanted = on;
-    this.applyCastShadow();
-    if (on && !this.customDepth) {
-      this.customDepth = new THREE.MeshDepthMaterial({
-        depthPacking: THREE.RGBADepthPacking,
-        alphaTest: 0.5,
-        side: THREE.DoubleSide, // ★ 太阳视角可能看到贴片背面（billboard 面朝相机），
-                                //   FrontSide 会被剔除 → 背光侧实体无阴影
-      });
-      if (this.mesh) this.mesh.customDepthMaterial = this.customDepth;
-    }
-  }
-
-  /** 意愿 ∧ LOD → 最终 castShadow（阴影范围 = 玩家周围 LOD 达标圈） */
-  private applyCastShadow(): void {
-    if (this.mesh) {
-      this.mesh.castShadow = this.castShadowWanted && this.lodLevel <= FTXQuad.CAST_MAX_LOD;
-    }
+    // 换帧 → 投影剪影同步（走子系统唯一更新点）
+    this.syncShadow(pair.base);
   }
 
   /**
@@ -248,7 +253,7 @@ export class FTXQuad extends FxRendererBase {
   override setLodLevel(level: number): void {
     super.setLodLevel(level);
     this.setFadeAlpha(level >= 3 ? 0 : level === 2 ? 0.45 : 1);
-    this.applyCastShadow();
+    this.syncShadow();
   }
 
   /** ★ 非 billboard 固定朝向：绕 Y 轴旋转（0=朝 +z，π=朝 -z） */
@@ -267,8 +272,8 @@ export class FTXQuad extends FxRendererBase {
   }
 
   override dispose(): void {
-    this.customDepth?.dispose();
-    this.customDepth = null;
+    this.shadowDepth?.dispose();
+    this.shadowDepth = null;
     super.dispose();
   }
 }
