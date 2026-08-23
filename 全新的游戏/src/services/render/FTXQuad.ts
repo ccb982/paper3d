@@ -198,6 +198,8 @@ export class FTXQuad extends FxRendererBase {
       this.customDepth = new THREE.MeshDepthMaterial({
         depthPacking: THREE.RGBADepthPacking,
         alphaTest: 0.5,
+        side: THREE.DoubleSide, // ★ 太阳视角可能看到贴片背面（billboard 面朝相机），
+                                //   FrontSide 会被剔除 → 背光侧实体无阴影
       });
       if (this.mesh) this.mesh.customDepthMaterial = this.customDepth;
     }
