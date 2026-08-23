@@ -110,15 +110,22 @@ export function bakeChunkAppearance(
       const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
       const shade = 0.94 + 0.12 * n;
 
-      // ---- 逐像素 AO（8 向环形高度采样，凹处压暗）----
-      const h = raster.heightAt(wx, wz);
-      let occ = 0;
-      for (let k = 0; k < 8; k++) {
-        const ang = (k / 8) * Math.PI * 2;
-        const dh = raster.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
-        if (dh > 0) occ += Math.min(dh, 2.5);
+      // ---- 逐像素 AO ----
+      // ★ 凹陷地块（水/坑）例外：表面按 ≤0 的平面均匀着色，
+      //   不参与邻域 AO —— 否则邻接高台/坡的高度差会烘进纹理，
+      //   让水面/坑底出现"假高度"式的明暗不均。深度感由几何侧壁承担。
+      const isDepression = type === 2 || type === 4;
+      let ao = 1;
+      if (!isDepression) {
+        const h = raster.heightAt(wx, wz);
+        let occ = 0;
+        for (let k = 0; k < 8; k++) {
+          const ang = (k / 8) * Math.PI * 2;
+          const dh = raster.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
+          if (dh > 0) occ += Math.min(dh, 2.5);
+        }
+        ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
       }
-      const ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
 
       const f = shade * ao;
       const i = (py * S + px) * 4;
