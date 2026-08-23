@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "exportType": "mainCanvasPackage",
+  "generatedAt": "2026-08-17T06:02:51.419Z",
+  "totalFrames": 1,
+  "textureFrameCount": 1,
+  "textureFile": "textures/frames.ftx3.gz",
+  "ftxByteLength": 16863,
+  "ftxUncompressedByteLength": 61592,
+  "predictionEnabled": true,
+  "frameOrder": [
+    "frame_0"
+  ],
+  "paletteCount": 9,
+  "annotationCount": 0,
+  "annotationFile": null,
+  "hitEffectFile": null,
+  "hashes": {
+    "textures/frames.ftx3.gz": "df5e4c29",
+    "per_frame_data/frame_0.json": "070a55dd"
+  }
+}

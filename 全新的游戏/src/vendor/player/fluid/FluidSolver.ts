@@ -874,6 +874,126 @@ export class FluidSolver {
     this.velocityGrid.swap();
   }
 
+  /** ★ 调试：首帧回读速度场，检查是否有大片高速度 */
+  private debugReadVelocity(): void {
+    const { w, h } = this.config.resolution;
+    const dt = this.velocityGrid.dataType;
+    console.log(`[FluidSolver] 首帧速度回读: res=${w}x${h}, type=${dt}`);
+    try {
+      // 根据数据类型选择 buffer：half-float → Uint16Array，float → Float32Array
+      const isHalf = dt === 'half-float';
+      const raw = isHalf ? new Uint16Array(w * h * 4) : new Float32Array(w * h * 4);
+      this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, 0, 0, w, h, raw);
+
+      // half-float 解码函数
+      const decodeHalf = (v: number): number => {
+        const sign = (v >> 15) & 1;
+        const exp = (v >> 10) & 0x1f;
+        const mant = v & 0x3ff;
+        if (exp === 0) return (sign ? -1 : 1) * Math.pow(2, -14) * (mant / 1024);
+        if (exp === 31) return mant ? NaN : (sign ? -Infinity : Infinity);
+        return (sign ? -1 : 1) * Math.pow(2, exp - 15) * (1 + mant / 1024);
+      };
+
+      const getVel = (i: number): { vx: number; vy: number; mag: number } => {
+        const vx = isHalf ? decodeHalf(raw[i * 4]) : (raw as Float32Array)[i * 4];
+        const vy = isHalf ? decodeHalf(raw[i * 4 + 1]) : (raw as Float32Array)[i * 4 + 1];
+        const mag = Math.sqrt(vx * vx + vy * vy);
+        return { vx, vy, mag };
+      };
+
+      let maxMag = 0;
+      let highCount = 0;
+      let sumMag = 0;
+      for (let i = 0; i < w * h; i++) {
+        const { vx, vy, mag } = getVel(i);
+        if (!isFinite(vx) || !isFinite(vy)) continue;
+        sumMag += mag;
+        if (mag > maxMag) maxMag = mag;
+        if (mag > 100) highCount++;
+      }
+      const avgMag = sumMag / (w * h);
+      console.log(`[FluidSolver] 速度回读: max=${maxMag.toFixed(2)}px/s, avg=${avgMag.toFixed(2)}, >100=${highCount}/${w*h}`);
+
+      // ★ readRenderTargetPixels 原点在左下角：row[0]=底部(Y=0), row[h-1]=顶部(Y=1)
+      //   底部=尾部，顶部=头部
+      const scanRows = 5;
+      console.log(`[FluidSolver] 头部(顶部${scanRows}行)速度明细 (Y≈1):`);
+      for (let r = 0; r < scanRows; r++) {
+        const row = h - 1 - r;
+        let rowMax = 0, rowSum = 0, rowCount = 0;
+        for (let col = 0; col < w; col++) {
+          const idx = row * w + col;
+          const { vx, vy, mag } = getVel(idx);
+          if (!isFinite(vx) || !isFinite(vy)) continue;
+          rowSum += mag;
+          if (mag > rowMax) rowMax = mag;
+          rowCount++;
+        }
+        const rowAvg = rowCount > 0 ? rowSum / rowCount : 0;
+        console.log(`  row[${row}] (Y=${(row/h).toFixed(4)}): max=${rowMax.toFixed(2)}, avg=${rowAvg.toFixed(2)}, samples=${rowCount}/${w}`);
+      }
+      console.log(`[FluidSolver] 尾部(底部${scanRows}行)速度明细 (Y≈0):`);
+      for (let row = 0; row < scanRows; row++) {
+        let rowMax = 0, rowSum = 0, rowCount = 0;
+        for (let col = 0; col < w; col++) {
+          const idx = row * w + col;
+          const { vx, vy, mag } = getVel(idx);
+          if (!isFinite(vx) || !isFinite(vy)) continue;
+          rowSum += mag;
+          if (mag > rowMax) rowMax = mag;
+          rowCount++;
+        }
+        const rowAvg = rowCount > 0 ? rowSum / rowCount : 0;
+        console.log(`  row[${row}] (Y=${(row/h).toFixed(4)}): max=${rowMax.toFixed(2)}, avg=${rowAvg.toFixed(2)}, samples=${rowCount}/${w}`);
+      }
+      // ★ 首帧 colorGrid（残差纹理）HSL 回读
+      try {
+        const cw = this.colorGrid.resolution.w, ch = this.colorGrid.resolution.h;
+        const cRaw = new Uint8Array(cw * ch * 4);
+        this.renderer.readRenderTargetPixels(this.colorGrid.readTarget, 0, 0, cw, ch, cRaw);
+        const toHsl = (v: number) => (v / 255);
+        console.log(`[FluidSolver] 首帧colorGrid HSL回读: res=${cw}x${ch}`);
+        // 头尾各 5 行
+        const cScan = 5;
+        console.log(`  [colorGrid] 头部(顶部${cScan}行) Y≈1:`);
+        for (let r = 0; r < cScan; r++) {
+          const row = ch - 1 - r;
+          let hSum = 0, sSum = 0, lSum = 0, aSum = 0, cnt = 0;
+          for (let col = 0; col < cw; col++) {
+            const idx = (row * cw + col) * 4;
+            hSum += toHsl(cRaw[idx]);
+            sSum += toHsl(cRaw[idx + 1]);
+            lSum += toHsl(cRaw[idx + 2]);
+            aSum += toHsl(cRaw[idx + 3]);
+            cnt++;
+          }
+          console.log(`    row[${row}] H=${(hSum/cnt).toFixed(3)} S=${(sSum/cnt).toFixed(3)} L=${(lSum/cnt).toFixed(3)} A=${(aSum/cnt).toFixed(3)}`);
+        }
+        console.log(`  [colorGrid] 尾部(底部${cScan}行) Y≈0:`);
+        for (let row = 0; row < cScan; row++) {
+          let hSum = 0, sSum = 0, lSum = 0, aSum = 0, cnt = 0;
+          for (let col = 0; col < cw; col++) {
+            const idx = (row * cw + col) * 4;
+            hSum += toHsl(cRaw[idx]);
+            sSum += toHsl(cRaw[idx + 1]);
+            lSum += toHsl(cRaw[idx + 2]);
+            aSum += toHsl(cRaw[idx + 3]);
+            cnt++;
+          }
+          console.log(`    row[${row}] H=${(hSum/cnt).toFixed(3)} S=${(sSum/cnt).toFixed(3)} L=${(lSum/cnt).toFixed(3)} A=${(aSum/cnt).toFixed(3)}`);
+        }
+      } catch (e) {
+        console.warn('[FluidSolver] colorGrid 回读失败:', e);
+      }
+
+      // ★ 回读后解绑纹理单元，防止后续 composite() 产生 feedback loop
+      this.unbindTextureUnits();
+    } catch (e) {
+      console.warn('[FluidSolver] 速度回读失败:', e);
+    }
+  }
+
   // ==================== density 衰减 ====================
 
   private decayDensity(): void {
@@ -992,6 +1112,11 @@ export class FluidSolver {
     // 6. 速度限幅（缩放之后，防爆炸）
     const maxVel = cfg.maxVelocity ?? 5000;
     if (maxVel > 0 && isFinite(maxVel)) this.clampVelocity(maxVel);
+
+    // ★ 调试：第二帧回读速度场 + colorGrid，检查速度分布
+    if (this.frameCount === 2) {
+      this.debugReadVelocity();
+    }
 
     this.time += dt;
   }

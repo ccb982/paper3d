@@ -126,6 +126,11 @@ export class BulletVisual extends OffscreenBake {
     if (this.fullQuad) this.scene.add(this.fullQuad);
   }
 
+  /** ★ 强制首帧烘焙（解决构造时纹理全黑的问题） */
+  init(): void {
+    this.bakeFrame();
+  }
+
   /** ★ 每帧驱动：流体 step + 烘焙（管理器仅在"有子弹在飞"时调用） */
   step(dt: number): void {
     if (this.fluid) this.fluid.step(Math.max(0, Math.min(dt, 0.1)));

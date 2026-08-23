@@ -57,6 +57,7 @@ export class BulletManager {
     this.hitEffectShapes = hitEffectShapes;
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
     this.visual = glRenderer ? new BulletVisual(glRenderer, asset) : null;
+    this.visual?.init(); // 强制首帧烘焙，避免 RT 纹理全黑
 
     // ---- ③ 3D 渲染器（InstancedMesh；世界尺寸 = 基类函数计算）----
     const quadSize = BulletEntity.computeWorldSize(asset);
