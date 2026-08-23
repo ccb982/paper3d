@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { FluidGrid, AdvectionMask } from '../core/FluidGrid';
 
+/** ★ 模块级 scratch（热路径零分配）：clear 前保存/恢复全局清屏色 */
+const _prevClearColor = new THREE.Color();
+
 /**
  * 平流求解器选项。
  */
@@ -282,8 +285,13 @@ export class AdvectionSolver {
     this.quad.material = material;
 
     const prevTarget = this.renderer.getRenderTarget();
+    // ★ 数据纹理禁止让全局清屏色泄漏：强制黑/透明清屏后立即恢复（事故记录 #001）
+    this.renderer.getClearColor(_prevClearColor);
+    const prevAlpha = this.renderer.getClearAlpha();
     this.renderer.setRenderTarget(outputTarget);
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear();
+    this.renderer.setClearColor(_prevClearColor, prevAlpha);
     this.renderer.render(this.scene, this.camera);
     this.renderer.setRenderTarget(prevTarget);
 

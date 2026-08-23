@@ -271,3 +271,23 @@ fx.dispose();                      // 释放共享资源（引用计数）
 - **注释与基础色叠加层级**：注释填充在基础色之上/之下、透明度，需定。
 - **VAT 分辨率参数化**：编辑器 canvas 尺寸在游戏里语义为"特效渲染分辨率"，作为 Asset 加载级参数传入。
 - **流体体积**：唯一重依赖，靠 LOD + 惰性创建缓解；必要时允许调用方整体关闭。
+
+---
+
+## 13. 事故记录 #001 与渲染红线（2026-08-23）
+
+游戏端集成后爆发"子弹特效周期性大片黑块"：本库 `FluidSolver.clearGrid` 用裸
+`renderer.clear()` 清场，写入的是**宿主页面的全局 clearColor 而非零**；宿主把清屏色
+改成浅灰后密度场被初始化成 ~0.8 的假浓度 → MCSDA 合成整块近黑。完整因果链见
+《全新的游戏/架构设计.md》事故记录 #001。
+
+本库已修复位置：`clearGrid` / `GPUOps.render` / `AdvectionSolver.renderFullscreen`
+（强制黑透明+保存恢复）、`composite()`（裸 GL 清绑 → `renderer.resetState()`）。
+
+**嵌入方红线（库的隐式契约）**：
+
+1. 数据纹理（场/RT）的 clear 必须强制 `setClearColor(0x000000, 0)` 并恢复；
+   全局 clearColor 属显示层，数据管线不得隐式消费
+2. 禁止裸 GL 操作 three 托管状态；断 feedback loop 一律用 `renderer.resetState()`
+3. 新增离屏 GPU Pass 走 `GPUOps.render()`（已内置保护）
+4. 宿主修改全局渲染状态后，必须回归所有离屏数据管线

@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 
+/** ★ 模块级 scratch（热路径零分配）：clear 前保存/恢复全局清屏色 */
+const _prevClearColor = new THREE.Color();
+
 /**
  * 统一的全屏 GPU 渲染辅助类。
  *
@@ -70,8 +73,14 @@ export class GPUOps {
     this.quad.material = material;
 
     const prevTarget = renderer.getRenderTarget();
+    // ★ 数据纹理禁止让全局清屏色泄漏：强制黑/透明清屏后立即恢复
+    //   （事故记录 #001：浅色清屏色把场初始化成假数据）
+    renderer.getClearColor(_prevClearColor);
+    const prevAlpha = renderer.getClearAlpha();
     renderer.setRenderTarget(target);
+    renderer.setClearColor(0x000000, 0);
     renderer.clear();
+    renderer.setClearColor(_prevClearColor, prevAlpha);
     renderer.render(this.scene, this.camera);
     renderer.setRenderTarget(prevTarget);
 

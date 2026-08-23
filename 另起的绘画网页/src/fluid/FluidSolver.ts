@@ -482,11 +482,21 @@ export class FluidSolver {
 
   // ==================== 场清零 ====================
 
-  /** 用 renderer.clear() 清空渲染目标（比 shader 输出 vec4(0) 可靠，单通道也安全） */
+  /**
+   * 清空渲染目标为全零。
+   * ★ 必须临时把 clearColor 强制为黑/透明：renderer.clear() 写入的是"当前清屏色"，
+   *   若宿主页面全局清屏色非黑，密度/颜色场会被初始化成假浓度（2026-08-23 事故根因，
+   *   见《全新的游戏/架构设计.md》事故记录 #001）。
+   */
   private clearGrid(grid: FluidGrid): void {
     const prev = this.renderer.getRenderTarget();
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
     this.renderer.setRenderTarget(grid.write);
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
+    this.renderer.setClearColor(prevColor, prevAlpha);
     this.renderer.setRenderTarget(prev);
     grid.swap();
   }
@@ -527,11 +537,8 @@ export class FluidSolver {
         varying vec2 vUv;
         void main(){ gl_FragColor = texture2D(uTex, vUv); }
       `);
-      const prev = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(grid.write);
-      this.renderer.clear(true, true, true);
+      // ★ GPUOps.render 自带"保护性清屏+全屏覆盖"，无需外部 clear（事故记录 #001）
       this.gpu.render(this.renderer, grid.write, mat);
-      this.renderer.setRenderTarget(prev);
       grid.swap();
       tex.dispose();
     } else {
@@ -559,11 +566,8 @@ export class FluidSolver {
         varying vec2 vUv;
         void main(){ gl_FragColor = texture2D(uTex, vUv); }
       `);
-      const prev = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(grid.write);
-      this.renderer.clear(true, true, true);
+      // ★ GPUOps.render 自带"保护性清屏+全屏覆盖"，无需外部 clear（事故记录 #001）
       this.gpu.render(this.renderer, grid.write, mat);
-      this.renderer.setRenderTarget(prev);
       grid.swap();
       tex.dispose();
     }
@@ -1228,24 +1232,20 @@ export class FluidSolver {
     }
 
     const prev = this.renderer.getRenderTarget();
-    // ★ 解绑所有纹理单元：上一次绘制可能把 compositeTarget.texture 留在采样单元上
-    //   （three 不自动解绑）→ 同一纹理既是渲染目标又是采样输入 = Feedback loop
-    //   → GL 丢弃该次绘制 → 合成结果黑/旧（"区域色块图层丢失"的根因）
-    this.unbindTextureUnits();
+    const prevClearColor = new THREE.Color();
+    this.renderer.getClearColor(prevClearColor);
+    const prevClearAlpha = this.renderer.getClearAlpha();
+    // ★ 防Feedback loop：用官方 resetState() 让纹理单元绑定缓存与真实 GL 状态重新同步。
+    //   （裸 gl.bindTexture(unit,null) 会让 WebGLState 缓存失同步 → 后续材质跳过重绑 → 黑帧；
+    //     历史上这里曾是"区域色块图层丢失/合成结果黑旧"的根因之一）
+    this.renderer.resetState();
     this.renderer.setRenderTarget(this.compositeTarget);
+    // ★ compositeTarget 是数据纹理：必须透明底，禁止让全局清屏色泄漏进来
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.compositeScene, this.compositeCamera);
+    this.renderer.setClearColor(prevClearColor, prevClearAlpha);
     this.renderer.setRenderTarget(prev);
-  }
-
-  /** 解绑所有 2D 纹理单元（离屏渲染前调用，防 Feedback loop） */
-  private unbindTextureUnits(): void {
-    const gl = this.renderer.getContext();
-    for (let u = 0; u < 16; u++) {
-      gl.activeTexture(gl.TEXTURE0 + u);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-    }
-    gl.activeTexture(gl.TEXTURE0);
   }
 
   private buildCompositeMat(hasBase: boolean): THREE.ShaderMaterial {

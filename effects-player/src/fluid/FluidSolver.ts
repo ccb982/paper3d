@@ -399,11 +399,21 @@ export class FluidSolver {
 
   // ==================== 场清零 ====================
 
-  /** 用 renderer.clear() 清空渲染目标（比 shader 输出 vec4(0) 可靠，单通道也安全） */
+  /**
+   * 清空渲染目标为全零。
+   * ★ 必须临时把 clearColor 强制为黑/透明：renderer.clear() 写入的是"当前清屏色"，
+   *   若宿主页面全局清屏色非黑，密度/颜色场会被初始化成假浓度（2026-08-23 事故根因，
+   *   见《全新的游戏/架构设计.md》事故记录 #001）。
+   */
   private clearGrid(grid: FluidGrid): void {
     const prev = this.renderer.getRenderTarget();
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
     this.renderer.setRenderTarget(grid.write);
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
+    this.renderer.setClearColor(prevColor, prevAlpha);
     this.renderer.setRenderTarget(prev);
     grid.swap();
   }
@@ -928,25 +938,16 @@ export class FluidSolver {
     const prevClearColor = new THREE.Color();
     this.renderer.getClearColor(prevClearColor);
     const prevClearAlpha = this.renderer.getClearAlpha();
-    // ★ 解绑所有纹理单元：上次绘制可能把 compositeTarget.texture 留在采样单元上
-    //   （three 不自动解绑）→ 同一纹理既是目标又是输入 = Feedback loop → 绘制被丢弃
-    this.unbindTextureUnits();
+    // ★ 防Feedback loop：用官方 resetState() 让纹理单元绑定缓存与真实 GL 状态重新同步。
+    //   禁止裸 gl.bindTexture(unit, null) 清绑——会让 WebGLState 缓存失同步，
+    //   后续材质误判"已绑定"而跳过重绑 → 采样空纹理（黑帧/闪帧）。
+    this.renderer.resetState();
     this.renderer.setRenderTarget(this.compositeTarget);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.compositeScene, this.compositeCamera);
     this.renderer.setClearColor(prevClearColor, prevClearAlpha);
     this.renderer.setRenderTarget(prev);
-  }
-
-  /** 解绑所有 2D 纹理单元（离屏渲染前调用，防 Feedback loop） */
-  private unbindTextureUnits(): void {
-    const gl = this.renderer.getContext();
-    for (let u = 0; u < 16; u++) {
-      gl.activeTexture(gl.TEXTURE0 + u);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-    }
-    gl.activeTexture(gl.TEXTURE0);
   }
 
   private buildCompositeMat(hasBase: boolean): THREE.ShaderMaterial {

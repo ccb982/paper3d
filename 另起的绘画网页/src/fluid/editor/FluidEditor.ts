@@ -951,12 +951,19 @@ export class FluidEditor {
     this.velocityGrid.swap();
   }
 
-  /** 将 FluidGrid 零化（直接用 clear 代替全屏 Pass，零开销） */
+  /** 将 FluidGrid 零化（直接用 clear 代替全屏 Pass，零开销）。
+   *  ★ 必须强制黑/透明清屏色：renderer.clear() 写入的是当前全局 clearColor，
+   *    浅色主题下会把场初始化成假数据（事故记录 #001 同款）。 */
   private clearGrid(grid: FluidGrid): void {
     const target = grid.write;
     const prevTarget = this.renderer.getRenderTarget();
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
     this.renderer.setRenderTarget(target);
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear();
+    this.renderer.setClearColor(prevColor, prevAlpha);
     this.renderer.setRenderTarget(prevTarget);
     grid.swap();
   }
@@ -1448,6 +1455,11 @@ export class FluidEditor {
     this.ensureObstacleTarget();
 
     const prevTarget = this.renderer.getRenderTarget();
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
+    // ★ 掩码纹理 R>0.5 视为墙：清屏色若偏浅会把全场变成障碍物，必须强制黑
+    this.renderer.setClearColor(0x000000, 0);
     if (this.obstacleTarget) {
       this.renderer.setRenderTarget(this.obstacleTarget);
       this.renderer.clear();
@@ -1456,6 +1468,7 @@ export class FluidEditor {
       this.renderer.setRenderTarget(this.obstacleTempTarget);
       this.renderer.clear();
     }
+    this.renderer.setClearColor(prevColor, prevAlpha);
     this.renderer.setRenderTarget(prevTarget);
     console.log('[obstacle] 清空所有障碍物');
   }
@@ -1574,12 +1587,17 @@ export class FluidEditor {
     };
     this.obstacleTarget = new THREE.WebGLRenderTarget(w, h, rtOpts);
     this.obstacleTempTarget = new THREE.WebGLRenderTarget(w, h, rtOpts);
-    // 初始化为全 0（无障碍物）
+    // 初始化为全 0（无障碍物）★ 强制黑清屏色，防浅色主题把全场写成墙
     const prevRT = this.renderer.getRenderTarget();
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.setRenderTarget(this.obstacleTarget);
     this.renderer.clear();
     this.renderer.setRenderTarget(this.obstacleTempTarget);
     this.renderer.clear();
+    this.renderer.setClearColor(prevColor, prevAlpha);
     this.renderer.setRenderTarget(prevRT);
     console.log('[obstacle] 创建 obstacleTarget', { w, h });
   }
