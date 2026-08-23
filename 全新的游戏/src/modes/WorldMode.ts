@@ -138,7 +138,7 @@ export class WorldMode implements IGameMode {
     }
 
     // ★ 动态圆影层挂载（实时渲染模块）：为视锥内实体提供贴地圆影
-    this.groundBlobs = new GroundBlobLayer(ctx.scene!, this.raster, this.entities);
+    this.groundBlobs = new GroundBlobLayer(ctx.scene!, this.raster);
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {

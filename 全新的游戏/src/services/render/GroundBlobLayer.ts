@@ -27,10 +27,12 @@ export class GroundBlobLayer {
   private blobTex: THREE.CanvasTexture | null = null;
   private scene: THREE.Scene;
 
+  /** ★ 所有圆斑共享同一份几何体（形状恒定；永不 dispose，进程级复用） */
+  private static readonly SHARED_GEO = new THREE.PlaneGeometry(1, 1);
+
   constructor(
     scene: THREE.Scene,
     private raster: RasterMap,
-    private em: EntityManager,
   ) {
     this.scene = scene;
   }
@@ -38,6 +40,7 @@ export class GroundBlobLayer {
   /** 每帧同步（WorldMode.render 调用；在实体 applyViewDistance 之后执行） */
   update(camera: THREE.Camera): void {
     const seen = new Set<number>();
+    const rSqMax = LOD_MAX_DIST * LOD_MAX_DIST;
     for (const base of this.raster.queryFrustum(camera as never, LOD_MAX_DIST)) {
       const spec = base.shadowSpec;
       if (!spec) continue;
@@ -50,9 +53,9 @@ export class GroundBlobLayer {
           transparent: true,
           depthWrite: false,
         });
-        const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+        const mesh = new THREE.Mesh(GroundBlobLayer.SHARED_GEO, mat);
         mesh.rotation.x = -Math.PI / 2; // 贴地
-        mesh.renderOrder = 1;           // 地形之后、透明角色之前
+        mesh.renderOrder = -1;          // ★ 先于透明角色绘制：角色踩在自己的影子上
         this.scene.add(mesh);
         b = { mesh, mat };
         this.blobs.set(base.entity.id, b);
@@ -65,15 +68,18 @@ export class GroundBlobLayer {
       const s = spec.radius * 2;
       b.mesh.scale.set(s, s, 1);
       // 存在性：实体可见 ∧ 距离 LOD <3（与相机角度无关；只和距离/视锥有关）
-      b.mesh.visible = base.visible && levelForDistance(Math.hypot(p.x - camera.position.x, p.z - camera.position.z)) < 3;
-      b.mat.opacity = spec.alpha * (levelForDistance(Math.hypot(p.x - camera.position.x, p.z - camera.position.z)) === 2 ? 0.45 : 1);
+      const dx = p.x - camera.position.x;
+      const dz = p.z - camera.position.z;
+      const lod = levelForDistance(Math.hypot(dx, dz));
+      b.mesh.visible = base.visible && lod < 3;
+      b.mat.opacity = spec.alpha * (lod === 2 ? 0.45 : 1);
     }
 
     // 差分回收：离开视锥/销毁的实体 → 圆影一并移除
+    // （共享几何体不 dispose —— 进程级复用）
     for (const [id, b] of this.blobs) {
       if (!seen.has(id)) {
         this.scene.remove(b.mesh);
-        b.mesh.geometry.dispose();
         b.mat.dispose();
         this.blobs.delete(id);
       }
