@@ -96,8 +96,22 @@ export function bakeChunkAppearance(
       const wx = originX + lx;
       const wz = originZ + lz;
 
+      // ---- 类型判定 + 高度修正 ----
+      // ★ 坑/水的"侧壁上段"修正：
+      //   必须用 surfaceHeightAt（顶点值双线性插值 = 网格真实渲染高度）判定。
+      //   ⚠️ 两个坑：
+      //   ① heightAt 是原始格子数据（坑块内恒为负），判 h>0 永不成立；
+      //   ② vertexHeightAt 是 max 且只向负方向采样 —— 在悬崖【低侧】看不到
+      //      高邻块，同样判不出。surfaceHeightAt 与网格渲染完全一致才可靠。
+      //   插值高度 >0 且水平归属坑/水 tile = 位于 0 线以上的侧壁暴露面，
+      //   改按平地材质处理（不得涂水色/警示色）。
+      let type = raster.terrainTypeAt(wx, wz);
+      const hSurface = raster.surfaceHeightAt(wx, wz);
+      if ((type === 2 || type === 4) && hSurface > 0) {
+        type = 0; // 0 线以上的侧壁 → 平地材质
+      }
+
       // ---- 类型 → 基准 HSL → 逐地块抖动 → RGB ----
-      const type = raster.terrainTypeAt(wx, wz);
       const base =
         type === 1 ? TERRAIN_BASE_HSL.platform :
         type === 2 ? TERRAIN_BASE_HSL.pit :
@@ -111,9 +125,9 @@ export function bakeChunkAppearance(
       const shade = 0.94 + 0.12 * n;
 
       // ---- 逐像素 AO ----
-      // ★ 凹陷地块（水/坑）例外：表面按 ≤0 的平面均匀着色，
-      //   不参与邻域 AO —— 否则邻接高台/坡的高度差会烘进纹理，
-      //   让水面/坑底出现"假高度"式的明暗不均。深度感由几何侧壁承担。
+      // ★ 凹陷地块（修正后仍是水/坑的部分 = 0 线以下的底面）：
+      //   表面按 ≤0 的平面均匀着色，不参与邻域 AO —— 否则邻接高台/坡的
+      //   高度差会烘进纹理，让水面/坑底出现明暗不均。深度感由几何侧壁承担。
       const isDepression = type === 2 || type === 4;
       let ao = 1;
       if (!isDepression) {
