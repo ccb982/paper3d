@@ -433,11 +433,21 @@ export class FluidSolver {
 
   // ==================== 场清零 ====================
 
-  /** 用 renderer.clear() 清空渲染目标（比 shader 输出 vec4(0) 可靠，单通道也安全） */
+  /**
+   * 清空渲染目标为全零（比 shader 输出 vec4(0) 可靠，单通道也安全）。
+   * ★ 必须临时把 clearColor 强制为黑/透明：renderer.clear() 写入的是"当前清屏色"，
+   *   若全局清屏色非黑（如主场景的 0xcccccc），密度场会被初始化成 0.8 的假浓度——
+   *   MCSDA sub 模式下整块纹理直接变近黑，随后被 decayRate 缓慢消化（=周期性黑团消散）。
+   */
   private clearGrid(grid: FluidGrid): void {
     const prev = this.renderer.getRenderTarget();
+    const prevColor = new THREE.Color();
+    this.renderer.getClearColor(prevColor);
+    const prevAlpha = this.renderer.getClearAlpha();
     this.renderer.setRenderTarget(grid.write);
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
+    this.renderer.setClearColor(prevColor, prevAlpha);
     this.renderer.setRenderTarget(prev);
     grid.swap();
   }
@@ -874,126 +884,6 @@ export class FluidSolver {
     this.velocityGrid.swap();
   }
 
-  /** ★ 调试：首帧回读速度场，检查是否有大片高速度 */
-  private debugReadVelocity(): void {
-    const { w, h } = this.config.resolution;
-    const dt = this.velocityGrid.dataType;
-    console.log(`[FluidSolver] 首帧速度回读: res=${w}x${h}, type=${dt}`);
-    try {
-      // 根据数据类型选择 buffer：half-float → Uint16Array，float → Float32Array
-      const isHalf = dt === 'half-float';
-      const raw = isHalf ? new Uint16Array(w * h * 4) : new Float32Array(w * h * 4);
-      this.renderer.readRenderTargetPixels(this.velocityGrid.readTarget, 0, 0, w, h, raw);
-
-      // half-float 解码函数
-      const decodeHalf = (v: number): number => {
-        const sign = (v >> 15) & 1;
-        const exp = (v >> 10) & 0x1f;
-        const mant = v & 0x3ff;
-        if (exp === 0) return (sign ? -1 : 1) * Math.pow(2, -14) * (mant / 1024);
-        if (exp === 31) return mant ? NaN : (sign ? -Infinity : Infinity);
-        return (sign ? -1 : 1) * Math.pow(2, exp - 15) * (1 + mant / 1024);
-      };
-
-      const getVel = (i: number): { vx: number; vy: number; mag: number } => {
-        const vx = isHalf ? decodeHalf(raw[i * 4]) : (raw as Float32Array)[i * 4];
-        const vy = isHalf ? decodeHalf(raw[i * 4 + 1]) : (raw as Float32Array)[i * 4 + 1];
-        const mag = Math.sqrt(vx * vx + vy * vy);
-        return { vx, vy, mag };
-      };
-
-      let maxMag = 0;
-      let highCount = 0;
-      let sumMag = 0;
-      for (let i = 0; i < w * h; i++) {
-        const { vx, vy, mag } = getVel(i);
-        if (!isFinite(vx) || !isFinite(vy)) continue;
-        sumMag += mag;
-        if (mag > maxMag) maxMag = mag;
-        if (mag > 100) highCount++;
-      }
-      const avgMag = sumMag / (w * h);
-      console.log(`[FluidSolver] 速度回读: max=${maxMag.toFixed(2)}px/s, avg=${avgMag.toFixed(2)}, >100=${highCount}/${w*h}`);
-
-      // ★ readRenderTargetPixels 原点在左下角：row[0]=底部(Y=0), row[h-1]=顶部(Y=1)
-      //   底部=尾部，顶部=头部
-      const scanRows = 5;
-      console.log(`[FluidSolver] 头部(顶部${scanRows}行)速度明细 (Y≈1):`);
-      for (let r = 0; r < scanRows; r++) {
-        const row = h - 1 - r;
-        let rowMax = 0, rowSum = 0, rowCount = 0;
-        for (let col = 0; col < w; col++) {
-          const idx = row * w + col;
-          const { vx, vy, mag } = getVel(idx);
-          if (!isFinite(vx) || !isFinite(vy)) continue;
-          rowSum += mag;
-          if (mag > rowMax) rowMax = mag;
-          rowCount++;
-        }
-        const rowAvg = rowCount > 0 ? rowSum / rowCount : 0;
-        console.log(`  row[${row}] (Y=${(row/h).toFixed(4)}): max=${rowMax.toFixed(2)}, avg=${rowAvg.toFixed(2)}, samples=${rowCount}/${w}`);
-      }
-      console.log(`[FluidSolver] 尾部(底部${scanRows}行)速度明细 (Y≈0):`);
-      for (let row = 0; row < scanRows; row++) {
-        let rowMax = 0, rowSum = 0, rowCount = 0;
-        for (let col = 0; col < w; col++) {
-          const idx = row * w + col;
-          const { vx, vy, mag } = getVel(idx);
-          if (!isFinite(vx) || !isFinite(vy)) continue;
-          rowSum += mag;
-          if (mag > rowMax) rowMax = mag;
-          rowCount++;
-        }
-        const rowAvg = rowCount > 0 ? rowSum / rowCount : 0;
-        console.log(`  row[${row}] (Y=${(row/h).toFixed(4)}): max=${rowMax.toFixed(2)}, avg=${rowAvg.toFixed(2)}, samples=${rowCount}/${w}`);
-      }
-      // ★ 首帧 colorGrid（残差纹理）HSL 回读
-      try {
-        const cw = this.colorGrid.resolution.w, ch = this.colorGrid.resolution.h;
-        const cRaw = new Uint8Array(cw * ch * 4);
-        this.renderer.readRenderTargetPixels(this.colorGrid.readTarget, 0, 0, cw, ch, cRaw);
-        const toHsl = (v: number) => (v / 255);
-        console.log(`[FluidSolver] 首帧colorGrid HSL回读: res=${cw}x${ch}`);
-        // 头尾各 5 行
-        const cScan = 5;
-        console.log(`  [colorGrid] 头部(顶部${cScan}行) Y≈1:`);
-        for (let r = 0; r < cScan; r++) {
-          const row = ch - 1 - r;
-          let hSum = 0, sSum = 0, lSum = 0, aSum = 0, cnt = 0;
-          for (let col = 0; col < cw; col++) {
-            const idx = (row * cw + col) * 4;
-            hSum += toHsl(cRaw[idx]);
-            sSum += toHsl(cRaw[idx + 1]);
-            lSum += toHsl(cRaw[idx + 2]);
-            aSum += toHsl(cRaw[idx + 3]);
-            cnt++;
-          }
-          console.log(`    row[${row}] H=${(hSum/cnt).toFixed(3)} S=${(sSum/cnt).toFixed(3)} L=${(lSum/cnt).toFixed(3)} A=${(aSum/cnt).toFixed(3)}`);
-        }
-        console.log(`  [colorGrid] 尾部(底部${cScan}行) Y≈0:`);
-        for (let row = 0; row < cScan; row++) {
-          let hSum = 0, sSum = 0, lSum = 0, aSum = 0, cnt = 0;
-          for (let col = 0; col < cw; col++) {
-            const idx = (row * cw + col) * 4;
-            hSum += toHsl(cRaw[idx]);
-            sSum += toHsl(cRaw[idx + 1]);
-            lSum += toHsl(cRaw[idx + 2]);
-            aSum += toHsl(cRaw[idx + 3]);
-            cnt++;
-          }
-          console.log(`    row[${row}] H=${(hSum/cnt).toFixed(3)} S=${(sSum/cnt).toFixed(3)} L=${(lSum/cnt).toFixed(3)} A=${(aSum/cnt).toFixed(3)}`);
-        }
-      } catch (e) {
-        console.warn('[FluidSolver] colorGrid 回读失败:', e);
-      }
-
-      // ★ 回读后解绑纹理单元，防止后续 composite() 产生 feedback loop
-      this.unbindTextureUnits();
-    } catch (e) {
-      console.warn('[FluidSolver] 速度回读失败:', e);
-    }
-  }
-
   // ==================== density 衰减 ====================
 
   private decayDensity(): void {
@@ -1113,11 +1003,6 @@ export class FluidSolver {
     const maxVel = cfg.maxVelocity ?? 5000;
     if (maxVel > 0 && isFinite(maxVel)) this.clampVelocity(maxVel);
 
-    // ★ 调试：第二帧回读速度场 + colorGrid，检查速度分布
-    if (this.frameCount === 2) {
-      this.debugReadVelocity();
-    }
-
     this.time += dt;
   }
 
@@ -1175,25 +1060,18 @@ export class FluidSolver {
     const prevClearColor = new THREE.Color();
     this.renderer.getClearColor(prevClearColor);
     const prevClearAlpha = this.renderer.getClearAlpha();
-    // ★ 解绑所有纹理单元：上次绘制可能把 compositeTarget.texture 留在采样单元上
-    //   （three 不自动解绑）→ 同一纹理既是目标又是输入 = Feedback loop → 绘制被丢弃
-    this.unbindTextureUnits();
+    // ★ 防Feedback loop：上次外部绘制可能把 compositeTarget.texture 留在采样单元上
+    //   （同一纹理既是目标又是输入 = 绘制被丢弃）。
+    //   用 three 官方的 resetState() 让内部绑定缓存与真实 GL 状态重新同步，
+    //   后续绘制会真正重绑采样纹理。禁止用裸 gl.bindTexture 清绑——
+    //   那会让 WebGLState 缓存失同步，导致后续材质跳过 bindTexture 采样到空纹理（黑帧/闪帧）。
+    this.renderer.resetState();
     this.renderer.setRenderTarget(this.compositeTarget);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, true);
     this.renderer.render(this.compositeScene, this.compositeCamera);
     this.renderer.setClearColor(prevClearColor, prevClearAlpha);
     this.renderer.setRenderTarget(prev);
-  }
-
-  /** 解绑所有 2D 纹理单元（离屏渲染前调用，防 Feedback loop） */
-  private unbindTextureUnits(): void {
-    const gl = this.renderer.getContext();
-    for (let u = 0; u < 16; u++) {
-      gl.activeTexture(gl.TEXTURE0 + u);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-    }
-    gl.activeTexture(gl.TEXTURE0);
   }
 
   private buildCompositeMat(hasBase: boolean): THREE.ShaderMaterial {
@@ -1348,6 +1226,9 @@ export class FluidSolver {
     this.waypointStates.clear();
     this.injectionQueue.length = 0;
     this.initFields();
+    // ★ 立即重新合成：compositeTarget 里还留着上一发/预热结束时的旧画面，
+    //   若不刷新，reset 后的首帧烘焙会采样到"上一发的完整尾焰残影"（一大片黑的元凶）
+    this.composite();
   }
 
   // ==================== 配置更新 ====================
@@ -1375,6 +1256,97 @@ export class FluidSolver {
     if (resChanged) {
       this.rebuildGrids();
       this.initFields();
+    }
+  }
+
+  // ==================== 调试：每帧场回读 ====================
+
+  private _dbgFailD = false;
+  private _dbgFailV = false;
+
+  /** 按 RT 实际 format/type 回读像素（自动匹配缓冲类型与分量数） */
+  private dbgReadTarget(target: THREE.WebGLRenderTarget): { arr: Float32Array | Uint16Array | Uint8Array; comps: number } {
+    const t = target.texture;
+    const w = target.width, h = target.height;
+    const comps = t.format === THREE.RedFormat ? 1 : t.format === THREE.RGFormat ? 2 : 4;
+    const arr = t.type === THREE.HalfFloatType ? new Uint16Array(w * h * comps)
+      : t.type === THREE.FloatType ? new Float32Array(w * h * comps)
+        : new Uint8Array(w * h * comps);
+    this.renderer.readRenderTargetPixels(target, 0, 0, w, h, arr);
+    return { arr, comps };
+  }
+
+  private dbgDecode(v: number | undefined, isHalf: boolean, isByte: boolean): number {
+    if (v === undefined) return NaN;
+    if (isByte) return v / 255;
+    if (!isHalf) return v;
+    const sign = (v >> 15) & 1, exp = (v >> 10) & 0x1f, mant = v & 0x3ff;
+    if (exp === 0) return (sign ? -1 : 1) * Math.pow(2, -14) * (mant / 1024);
+    if (exp === 31) return mant ? NaN : (sign ? -Infinity : Infinity);
+    return (sign ? -1 : 1) * Math.pow(2, exp - 15) * (1 + mant / 1024);
+  }
+
+  /**
+   * 每帧回读 density + velocity，输出紧凑统计行（两段独立容错，一段失败不影响另一段）。
+   * 坐标约定：(x, yTop) 为归一化坐标、Y 向下为正；readPixels 行 0 = 底部。
+   * 分带 [尾|中下|中上|头] 按行四等分（尾 = 底部 = readPixels 低行）。
+   */
+  debugReadFields(tag = ''): void {
+    const { w, h } = this.config.resolution;
+    const px = (col: number, row: number) =>
+      `(${((col + 0.5) / w).toFixed(2)},${(1 - (row + 0.5) / h).toFixed(2)})`;
+    const head = `${tag} f=${this.frameCount} t=${this.time.toFixed(2)}`;
+
+    // ---- density（scalar 模式黑色的直接来源；单通道 uint8）----
+    if (!this._dbgFailD) {
+      try {
+        const d = this.dbgReadTarget(this.densityGrid.readTarget);
+        let dMax = -1, dMaxX = 0, dMaxY = 0, dSum = 0, dHot = 0;
+        const bands = [0, 0, 0, 0]; // [尾|中下|中上|头]
+        for (let row = 0; row < h; row++) {
+          const bi = Math.min(3, Math.floor((row / h) * 4)); // row0=底=尾 → band0
+          for (let col = 0; col < w; col++) {
+            const val = this.dbgDecode(d.arr[row * w + col], false, true);
+            dSum += val;
+            if (val > 0.5) dHot++;
+            if (val > dMax) { dMax = val; dMaxX = col; dMaxY = row; }
+            bands[bi] += val;
+          }
+        }
+        const bTotal = Math.max(1e-6, dSum);
+        console.log(`[FluidDBG-dens] ${head}`
+          + ` max=${dMax.toFixed(2)}@${px(dMaxX, dMaxY)} avg=${(dSum / (w * h)).toFixed(3)}`
+          + ` Σ=${dSum.toFixed(0)} hot>0.5:${dHot}`
+          + ` 带[尾|中下|中上|头]=${bands.map(b => (100 * b / bTotal).toFixed(0)).join('/')}`);
+      } catch (e) {
+        this._dbgFailD = true;
+        console.warn('[FluidDBG] density 回读失败，已停用该段:', e);
+      }
+    }
+
+    // ---- velocity ----
+    if (!this._dbgFailV) {
+      try {
+        const isHalfV = this.velocityGrid.dataType === 'half-float';
+        const isByteV = this.velocityGrid.dataType === 'uint8';
+        const v = this.dbgReadTarget(this.velocityGrid.readTarget);
+        const src = v.arr as ArrayLike<number>;
+        let vMax = -1, vMaxX = 0, vMaxY = 0, vSum = 0, vCnt = 0;
+        for (let i = 0; i < w * h; i++) {
+          const vx = this.dbgDecode(src[i * v.comps], isHalfV, isByteV);
+          const vy = this.dbgDecode(src[i * v.comps + 1], isHalfV, isByteV);
+          if (!isFinite(vx) || !isFinite(vy)) continue;
+          const m = Math.hypot(vx, vy);
+          vSum += m; vCnt++;
+          if (m > vMax) { vMax = m; vMaxX = i % w; vMaxY = Math.floor(i / w); }
+        }
+        console.log(`[FluidDBG-vel] ${head}`
+          + ` max=${vMax.toFixed(0)}@${px(vMaxX, vMaxY)}`
+          + ` avg=${vCnt ? (vSum / vCnt).toFixed(0) : 'NaN'}`);
+      } catch (e) {
+        this._dbgFailV = true;
+        console.warn('[FluidDBG] velocity 回读失败，已停用该段:', e);
+      }
     }
   }
 

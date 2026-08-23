@@ -74,6 +74,17 @@ export class BulletVisual extends OffscreenBake {
   private residualTex: THREE.Texture;
   private fullQuad: THREE.Mesh | null;
   private fullMat: THREE.ShaderMaterial;
+  /** ★ 固定步长累加器：模拟与帧卡顿解耦
+   *   （防卡顿帧 dt=0.1 时平流一步位移≈50px 的"周期性黑团闪现后消散"） */
+  private simAccum = 0;
+  /** 固定模拟步长 */
+  private static readonly SIM_DT = 1 / 60;
+  /** 单帧最大补步数（超出部分丢弃：极端卡顿时模拟时间膨胀而非跳变） */
+  private static readonly MAX_STEPS_PER_FRAME = 4;
+  /** ★ 调试：每帧场回读开关（?dbg=1 启用，?dbgn=N 抽样每 N 帧输出一次） */
+  private dbg = false;
+  private dbgN = 1;
+  private dbgFrame = 0;
 
   constructor(renderer: THREE.WebGLRenderer, asset: FrameAssetSource) {
     const pair = asset.getFramePair(0);
@@ -126,19 +137,71 @@ export class BulletVisual extends OffscreenBake {
     if (this.fullQuad) this.scene.add(this.fullQuad);
   }
 
-  /** ★ 强制首帧烘焙（解决构造时纹理全黑的问题） */
+  /** ★ 强制首帧烘焙 + 预热（解决构造时纹理全黑 + 首次开火 shader 编译卡顿） */
   init(): void {
+    // ★ 版本横幅：无条件打印，用于确认运行中的是最新代码
+    console.log(`[BulletVisual] init ✓ v230823-4 fluid=${!!this.fluid} dbgParam=${location.search || '(无参数)'}`);
+    // ★ 诊断开关（临时）：URL 参数剥离源配置，定位周期性黑团来源
+    //   ?nowp=1 去路点（源每1s瞬移）| ?nogate=1 去间歇门控 | ?nowave=1 去波形摆动
+    if (this.fluid) {
+      const q = new URLSearchParams(location.search);
+      if (q.has('nowp') || q.has('nogate') || q.has('nowave')) {
+        for (const s of this.fluid.solver.config.continuousSources) {
+          if (q.has('nowp')) delete s.waypoints;
+          if (q.has('nogate')) delete s.intermittent;
+          if (q.has('nowave')) delete s.wave;
+        }
+        console.log('[BulletVisual] 诊断开关生效:', location.search);
+      }
+      // ★ 每帧场回读：?dbg=1 启用，?dbgn=5 表示每 5 帧输出一次（默认每帧）
+      this.dbg = q.has('dbg');
+      const dbgn = Number(q.get('dbgn'));
+      if (Number.isFinite(dbgn) && dbgn >= 1) this.dbgN = Math.floor(dbgn);
+      if (this.dbg) {
+        console.log(`[BulletVisual] ★每帧场回读已启用 (dbgn=${this.dbgN}) —— 若看不到本行说明 URL 未带 ?dbg=1 或运行的是旧构建`);
+      } else if (q.has('dbg') === false && this.fluid === null) {
+        console.warn('[BulletVisual] 无流体实例且未启用 dbg：资产可能缺少 physics 配置');
+      }
+    }
     this.bakeFrame();
+    if (this.fluid) {
+      // ★ 预热：提前跑几步，让平流/压力/注入/合成等全部材质在此处编译完成
+      for (let i = 0; i < 5; i++) this.fluid.step(BulletVisual.SIM_DT);
+      // ★ 预热后恢复初始态并重新合成：待机画面保持纯净残差，
+      //   不残留预热演化出的暗色密度
+      this.fluid.solver.reset();
+      this.bakeFrame();
+    }
   }
 
-  /** ★ 每帧驱动：流体 step + 烘焙（管理器仅在"有子弹在飞"时调用） */
+  /** ★ 每帧驱动：固定步长流体 step + 烘焙（管理器仅在"有子弹在飞"时调用） */
   step(dt: number): void {
-    if (this.fluid) this.fluid.step(Math.max(0, Math.min(dt, 0.1)));
+    if (this.fluid) {
+      // ★ 固定步长累加器：无论真实帧率如何抖动，模拟每步恒定 1/60s。
+      //   卡顿帧（GC/编译尖峰）不再产生大 dt → 不再有大位移跳变；
+      //   高帧率屏也不会过快推进模拟。积压超预算直接丢弃。
+      this.simAccum += Math.min(Math.max(dt, 0), 0.1);
+      let n = 0;
+      while (this.simAccum >= BulletVisual.SIM_DT && n < BulletVisual.MAX_STEPS_PER_FRAME) {
+        this.fluid.step(BulletVisual.SIM_DT);
+        this.simAccum -= BulletVisual.SIM_DT;
+        n++;
+      }
+      if (this.simAccum > BulletVisual.SIM_DT) this.simAccum = 0;
+    }
+    // ★ 每帧场回读（?dbg=1）：观察密度/速度场的周期性异常
+    if (this.dbg && this.fluid) {
+      this.dbgFrame = (this.dbgFrame + 1) % this.dbgN;
+      if (this.dbgFrame === 0) this.fluid.solver.debugReadFields();
+    }
     this.bakeFrame();
   }
 
   /** ★ 开火重置：恢复初始残差（纹理每次开火重新流动） */
   reset(): void {
+    // ★ 预存一步的预算：保证 reset 后的第一帧 update 必定至少跑 1 步模拟
+    //   （否则首帧可能 0 步 → 烘焙到 reset 前的陈旧合成画面）
+    this.simAccum = BulletVisual.SIM_DT;
     if (this.fluid) {
       try {
         this.fluid.solver.reset();

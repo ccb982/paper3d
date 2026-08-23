@@ -34,34 +34,35 @@ export class OffscreenBake {
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
   }
 
-  /** ★ 开始离屏绘制：切 RT + 透明清屏（颜色/深度/模板）+ 解绑纹理单元。
+  /** ★ 开始离屏绘制：重同步状态缓存 + 切 RT + 透明清屏（颜色/深度/模板）。
    *   渲染完成后必须调用 end() 还原。 */
   protected begin(): void {
     const r = this.renderer;
+    // ★ 防Feedback loop：外部绘制（如主场景采样本 RT）可能把 rt.texture 留在
+    //   采样单元上，本方法渲染 INTO 同一纹理 → 同纹既当输入又当目标 = 绘制被丢弃。
+    //   resetState() 强制后续绘制真正重绑采样纹理，替代旧的裸 gl.bindTexture 清绑。
+    r.resetState();
     this.prevTarget = r.getRenderTarget();
     r.getClearColor(this.prevClearColor);
     this.prevClearAlpha = r.getClearAlpha();
     this.prevAutoClear = r.autoClear;
-    // ★ 解绑所有纹理单元：上次绘制可能把本 RT 的纹理留在采样单元上
-    //   （three 不自动解绑）→ 同一纹理既是目标又是输入 = Feedback loop → 绘制被丢弃
-    const gl = r.getContext();
-    for (let u = 0; u < 16; u++) {
-      gl.activeTexture(gl.TEXTURE0 + u);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-    }
-    gl.activeTexture(gl.TEXTURE0);
     r.setRenderTarget(this.rt);
     r.setClearColor(0x000000, 0);
     r.autoClear = false;
     r.clear(true, true, true);
   }
 
-  /** ★ 结束离屏绘制：还原 clear color / autoClear / RT */
+  /** ★ 结束离屏绘制：还原 clear color / autoClear / RT + 重同步 three 状态缓存 */
   protected end(): void {
     const r = this.renderer;
     r.autoClear = this.prevAutoClear;
     r.setClearColor(this.prevClearColor, this.prevClearAlpha);
     r.setRenderTarget(this.prevTarget);
+    // ★ 让 three 的纹理单元绑定缓存与真实 GL 状态重新同步：
+    //   离屏渲染期间采样过的纹理可能仍留在各单元上，若用裸 gl.bindTexture 手动
+    //   清绑会让 WebGLState 缓存失同步 → 后续材质误判"已绑定"而跳过重绑 → 采样空纹理（黑帧/闪帧）。
+    //   resetState() 是官方 API，效果 = 强制后续绘制真正重绑所有资源。
+    r.resetState();
   }
 
   /** ★ 输出烘焙纹理（渲染器唯一采样源） */
