@@ -11,6 +11,7 @@
 
 import type { EntityBase } from '../../entity/EntityBase';
 import * as THREE from 'three';
+import { TERRAIN_BASE_HSL, hsl2rgb } from './TerrainPalette';
 import {
   generateChunk, type ChunkData,
   CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, BLOCK_FLAT, BLOCK_PLATFORM, BLOCK_PIT, BLOCK_WATER,
@@ -154,36 +155,27 @@ export class RasterMap {
   }
 
   /** 地形颜色（按模板 + 块类型分区着色：高台暖黄/平地冷灰/坑洞深红/斜坡过渡） */
-  terrainColorAt(x: number, z: number): [number, number, number] {
+  /** ★ 地表类型查询（外观 Canvas 烘焙用；未加载返回 BLOCK_FLAT） */
+  terrainTypeAt(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK_SIZE);
     const cz = Math.floor(z / CHUNK_SIZE);
     const chunk = this.chunks.get(chunkKeyOf(cx, cz));
-    if (!chunk) return [25, 25, 30]; // 未加载
-    const lx = Math.floor(x - cx * CHUNK_SIZE);
-    const lz = Math.floor(z - cz * CHUNK_SIZE);
-    const bx = Math.floor(lx / 4);
-    const bz = Math.floor(lz / 4);
-    const t = chunk.blockTypes[bz * 15 + bx];
-    let r: number, g: number, b: number;
-    switch (t) {
-      case BLOCK_PLATFORM:
-        // 高台：暖色系（沙黄）
-        r = 180; g = 155; b = 90;
-        break;
-      case BLOCK_PIT:
-        // 坑洞：深红警示
-        r = 30; g = 12; b = 15;
-        break;
-      case BLOCK_WATER:
-        // 水域：深蓝
-        r = 20; g = 40; b = 70;
-        break;
-      default:
-        // 平地：冷灰合金
-        r = 55; g = 60; b = 65;
-        break;
-    }
-    return [r, g, b];
+    if (!chunk) return 0;
+    const bx = Math.floor((x - cx * CHUNK_SIZE) / 4);
+    const bz = Math.floor((z - cz * CHUNK_SIZE) / 4);
+    return chunk.blockTypes[bz * 15 + bx];
+  }
+
+  terrainColorAt(x: number, z: number): [number, number, number] {
+    const t = this.terrainTypeAt(x, z);
+    // 纯净基准色（无逐块抖动）：小地图等消费方保持可读性；
+    // 地表渲染的逐地块抖动在 ChunkAppearance.bake 内做
+    const base =
+      t === BLOCK_PLATFORM ? TERRAIN_BASE_HSL.platform :
+      t === BLOCK_PIT      ? TERRAIN_BASE_HSL.pit :
+      t === BLOCK_WATER    ? TERRAIN_BASE_HSL.water :
+                             TERRAIN_BASE_HSL.flat;
+    return hsl2rgb(base.h, base.s, base.l);
   }
 
   // ============ 实体索引（全局 cell，无限） ============

@@ -20,6 +20,7 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
+import { TERRAIN_BASE_HSL, hsl2rgb, type Hsl } from './TerrainPalette';
 import type { RasterMap } from './RasterMap';
 
 /** 外观分辨率（默认 256²；低端机降 128²） */
@@ -30,7 +31,7 @@ const AO_RADIUS = 2.5;
 const AO_STRENGTH = 0.09;
 const AO_MIN = 0.55;
 
-/** 平滑值噪声（双线性 + smoothstep），用于大尺度明暗斑驳 */
+/** 平滑值噪声（双线性 + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
 function vnoise(x: number, y: number, seed: number): number {
   const xi = Math.floor(x), yi = Math.floor(y);
   const fx = x - xi, fy = y - yi;
@@ -43,8 +44,32 @@ function vnoise(x: number, y: number, seed: number): number {
 }
 
 /**
+ * ★ 逐地块基础色抖动 —— 方块感的来源。
+ * 以世界 tile 坐标 (4m 格) 做 hash2，在 H/S/L 三通道独立微抖：
+ *   色相 ±0.8% / 饱和 ±3% / 亮度 ±5%
+ * 相邻地块颜色略不同、同块内部完全一致 → 干净的"棋盘感"。
+ * 水域不抖（液体应均质）；坑洞减半幅度（警示色要保持醒目）。
+ */
+function tileJitter(
+  wx: number, wz: number, seed: number, type: number, base: Hsl,
+): Hsl {
+  const tx = Math.floor(wx / 4);
+  const tz = Math.floor(wz / 4);
+  if (type === 4) return base; // BLOCK_WATER：不抖
+  const ampMul = type === 2 ? 0.5 : 1; // BLOCK_PIT：半幅
+  const dh = ((hash2(tx, tz, seed + 101) - 0.5) * 0.016) * ampMul;
+  const ds = ((hash2(tx, tz, seed + 202) - 0.5) * 0.06) * ampMul;
+  const dl = ((hash2(tx, tz, seed + 303) - 0.5) * 0.10) * ampMul;
+  return {
+    h: base.h + dh,
+    s: Math.min(1, Math.max(0, base.s * (1 + ds))),
+    l: Math.min(1, Math.max(0, base.l * (1 + dl))),
+  };
+}
+
+/**
  * 烘焙一张 chunk 外观纹理。
- * @param raster 地图查询层（typeColor / heightAt / worldSeed）
+ * @param raster 地图查询层（terrainTypeAt / heightAt / worldSeed）
  * @param cx,cz  chunk 坐标
  * @returns 已配置好 colorSpace/filter 的 CanvasTexture（随 chunk 销毁时 dispose）
  */
@@ -71,12 +96,19 @@ export function bakeChunkAppearance(
       const wx = originX + lx;
       const wz = originZ + lz;
 
-      // ---- 类型底色（路/高台/坑/水）----
-      let [r, g, b] = raster.terrainColorAt(wx, wz);
+      // ---- 类型 → 基准 HSL → 逐地块抖动 → RGB ----
+      const type = raster.terrainTypeAt(wx, wz);
+      const base =
+        type === 1 ? TERRAIN_BASE_HSL.platform :
+        type === 2 ? TERRAIN_BASE_HSL.pit :
+        type === 4 ? TERRAIN_BASE_HSL.water :
+                     TERRAIN_BASE_HSL.flat;
+      const jit = tileJitter(wx, wz, seed, type, base);
+      let [r, g, b] = hsl2rgb(jit.h, jit.s, jit.l);
 
-      // ---- 大尺度噪声明暗（去平铺重复感；0.86~1.12）----
-      const n = vnoise(wx * 0.045, wz * 0.045, seed);
-      const shade = 0.86 + 0.26 * n;
+      // ---- 大尺度斑驳（幅度刻意克制 ±6%，不抢方块感）----
+      const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
+      const shade = 0.94 + 0.12 * n;
 
       // ---- 逐像素 AO（8 向环形高度采样，凹处压暗）----
       const h = raster.heightAt(wx, wz);
