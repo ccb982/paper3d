@@ -19,6 +19,10 @@ import type { RasterMap } from '../map/RasterMap';
 import type { EntityManager } from '../../entity/EntityManager';
 import { LOD_MAX_DIST, levelForDistance } from '../lod';
 
+const _UP = new THREE.Vector3(0, 1, 0);
+const _tmpQyaw = new THREE.Quaternion();
+const _tmpQflat = new THREE.Quaternion();
+
 export class GroundBlobLayer {
   private blobs = new Map<number, {
     mesh: THREE.Mesh;
@@ -74,6 +78,22 @@ export class GroundBlobLayer {
       const lod = levelForDistance(Math.hypot(dx, dz));
       b.mesh.visible = base.visible && lod < 3;
       b.mat.opacity = spec.alpha * (lod === 2 ? 0.45 : 1);
+
+      // ★ 影子朝向：优先读实体的 groundShadowYaw，否则从渲染器四元数提取。
+      //   子弹等无 FTXQuad 渲染器的实体通过 groundShadowYaw 字段传递方向。
+      const gsY = (base as unknown as { groundShadowYaw?: number }).groundShadowYaw;
+      if (gsY !== undefined) {
+        _tmpQyaw.setFromAxisAngle(_UP, gsY);
+      } else {
+        const rm = (base as unknown as { renderer?: { mesh?: THREE.Mesh } }).renderer?.mesh;
+        if (rm) {
+          const eq = rm.quaternion;
+          const yaw = Math.atan2(2 * (eq.w * eq.y + eq.x * eq.z), 1 - 2 * (eq.y * eq.y + eq.z * eq.z));
+          _tmpQyaw.setFromAxisAngle(_UP, yaw);
+        }
+      }
+      _tmpQflat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+      b.mesh.quaternion.copy(_tmpQyaw).multiply(_tmpQflat);
     }
 
     // 差分回收：离开视锥/销毁的实体 → 圆影一并移除

@@ -15,6 +15,8 @@ import type { CameraFrame } from '../services/camera/CameraController';
 import { shapeExtents, separateXZ } from '../services/physics/Collision';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
+import { SilhouetteShadow } from '../services/render/SilhouetteShadow';
+import { RasterMap } from '../services/map/RasterMap';
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -135,7 +137,31 @@ export abstract class CharacterBase extends EntityBase {
   override attachToScene(scene: THREE.Scene): void {
     super.attachToScene(scene);
     this.extractSilhouette();
+    this.initGroundShadowMesh(scene);
   }
+
+  /** ★ 创建贴地剪影影子面片（独立于主渲染器的暗色剪影层） */
+  private initGroundShadowMesh(scene: THREE.Scene): void {
+    if (this.gsShadow) return;
+    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
+    if (!r?.mesh) return;
+
+    const w = Math.abs(r.mesh.scale.x || 1.2);
+    const d = Math.abs(r.mesh.scale.y || 1) * 0.7; // 影长≈身高×0.7
+    this.gsShadow = new SilhouetteShadow(scene, w, d, 0.38);
+  }
+
+  /** 每帧同步：更新剪影遮罩 + 跟随位置 + LOD 渐隐（render 尾部调用） */
+  syncGroundShadow(camera: THREE.Camera): void {
+    if (!this.gsShadow || !this.anim?.source || !this.state) return;
+    const pair = this.anim.source.getFramePair(this.state.frameIndex);
+    if (pair) this.gsShadow.updateSilhouette(pair.base as never);
+    const p = this.entity.position;
+    this.gsShadow.followEntity(p.x, p.z, (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
+    this.gsShadow.setOpacityByLod(this.viewLod);
+  }
+
+  private gsShadow: import('../services/render/SilhouetteShadow').SilhouetteShadow | null = null;
 
   /** 从第一帧 FTX 数据提取 alpha 剪影 → 缓存为小画布纹理（一次性）。
    *  遍历基础色纹理，alpha > 阈值的像素写入黑色不透明 → 影子呈角色轮廓形状。 */
@@ -175,6 +201,9 @@ export abstract class CharacterBase extends EntityBase {
       }
     }
     ctx.putImageData(img, 0, 0);
+
+    let opq = 0;
+    for (let i = 3; i < img.data.length; i += 4) { if (img.data[i] > 128) opq++; }
 
     const tex = new THREE.CanvasTexture(c);
     tex.flipY = false;

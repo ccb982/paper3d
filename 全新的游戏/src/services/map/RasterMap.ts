@@ -41,7 +41,9 @@ export class RasterMap {
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
 
+  static current: RasterMap | null = null;
   constructor(private seed = 12345) {
+    RasterMap.current = this;
     // 初始不预生成：首次 updateChunks（syncChunks）统一生成 3×3（加载半径 2）
   }
 
