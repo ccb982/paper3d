@@ -87,9 +87,10 @@ export abstract class EntityBase {
 
   // ============================================================
   // 贴地剪影影子（架构 8.x 统一机制：所有实体 = 角色同款）
-  // 子类只需声明三件事：
+  // 子类只需声明：
   //   ① 覆写 shadowShape：尺寸/透明度（null = 无影子）
-  //   ② 覆写 getShadowFrameData：剪影源（帧纹理或共享画布，内部去重）
+  //   ② 剪影源默认自动取当前动画帧；非 FTX 资产才需覆写
+  //      getShadowFrameData（如子弹的共享画布）
   //   ③ 运动实体覆写 shadowYaw 让影子跟随移动方向（默认不旋转）
   // ============================================================
 
@@ -248,11 +249,17 @@ export abstract class EntityBase {
   }
 
   /**
-   * ★ 虚方法：子类覆写，返回剪影源（帧纹理数据或共享画布）。
-   * 默认 null = 该实体类型无影子。每帧调用，内部按源对象去重。
+   * ★ 剪影源（虚方法）：默认从动画资产自动取当前帧纹理——
+   * 有 FTX 动画的实体零成本获得"影子随动画帧变化"。
+   * 非 FTX 资产（共享画布等）才需覆写。每帧调用，内部按源对象去重。
    */
   protected getShadowFrameData(): ShadowFrameSource | null {
-    return null;
+    if (!this.anim?.source || !this.state) return null;
+    const pair = this.anim.source.getFramePair(this.state.frameIndex);
+    if (!pair?.base?.image) return null;
+    const data = (pair.base.image as unknown as { data?: Float32Array }).data;
+    if (!data) return null;
+    return { base: { width: pair.base.image.width, height: pair.base.image.height, data } };
   }
 
   // ============ 更新骨架 ============

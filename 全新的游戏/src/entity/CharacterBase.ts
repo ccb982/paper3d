@@ -125,17 +125,7 @@ export abstract class CharacterBase extends EntityBase {
     }
   }
 
-  /** 提供当前帧纹理数据给基类统一剪影提取（动画帧变化 → 影子形状跟着变，内部去重） */
-  protected override getShadowFrameData() {
-    if (!this.anim?.source || !this.state) return null;
-    const pair = this.anim.source.getFramePair(this.state.frameIndex);
-    if (!pair?.base?.image) return null;
-    const data = (pair.base.image as unknown as { data?: Float32Array }).data;
-    if (!data) return null;
-    return { base: { width: pair.base.image.width, height: pair.base.image.height, data } };
-  }
-
-  /** ★ 影子声明（角色：宽=贴片宽，深=身高×0.7；基类统一驱动，无需自管组件） */
+  /** ★ 影子声明（角色：宽=贴片宽，深=身高×0.7；基类统一驱动 + 自动取当前帧剪影） */
   protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
     const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
     if (!r?.mesh) return null;
