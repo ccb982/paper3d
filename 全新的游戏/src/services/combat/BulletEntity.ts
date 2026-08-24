@@ -54,9 +54,9 @@ export class BulletEntity extends EntityBase {
     return this.active;
   }
 
-  /** 贴地圆影（子弹：小点，快速掠过） */
+  /** 贴地影（子弹：拉长椭圆，等比于弹道方向） */
   override get shadowSpec(): { radius: number; alpha: number } | null {
-    return { radius: 0.15, alpha: 0.22 };
+    return { radius: 0.65, alpha: 0.38, stretchZ: 1.6 } as { radius: number; alpha: number };
   }
 
   constructor(

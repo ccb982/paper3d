@@ -66,8 +66,8 @@ export class GroundBlobLayer {
       const p = base.position;
       const gy = this.raster.surfaceHeightAt(p.x, p.z) + 0.02;
       b.mesh.position.set(p.x, gy, p.z);
-      const s = spec.radius * 2;
-      b.mesh.scale.set(s, s, 1);
+      const sz = spec.stretchZ ?? 1;
+      b.mesh.scale.set(spec.radius * 2, spec.radius * 2 * sz, 1);
       // 存在性：实体可见 ∧ 距离 LOD <3（与相机角度无关；只和距离/视锥有关）
       const dx = p.x - camera.position.x;
       const dz = p.z - camera.position.z;

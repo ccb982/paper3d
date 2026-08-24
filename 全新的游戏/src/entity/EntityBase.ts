@@ -81,7 +81,7 @@ export abstract class EntityBase {
   }
 
   /** ★ 贴地影意图（GroundBlobLayer 消费；null = 无影子。子类按类型覆写） */
-  get shadowSpec(): { radius: number; alpha: number } | null {
+  get shadowSpec(): { radius: number; alpha: number; stretchZ?: number } | null {
     return null;
   }
 
