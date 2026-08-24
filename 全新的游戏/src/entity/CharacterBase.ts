@@ -152,7 +152,8 @@ export abstract class CharacterBase extends EntityBase {
   }
 
   /** 每帧同步：更新剪影遮罩 + 跟随位置 + LOD 渐隐（render 尾部调用） */
-  syncGroundShadow(camera: THREE.Camera): void {
+  /** ★ 影子每帧同步（EntityBase.update ⑦ 自动调用） */
+  protected override onShadowSync(): void {
     if (!this.gsShadow || !this.anim?.source || !this.state) return;
     const pair = this.anim.source.getFramePair(this.state.frameIndex);
     if (pair) this.gsShadow.updateSilhouette(pair.base as never);

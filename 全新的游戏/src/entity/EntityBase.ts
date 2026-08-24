@@ -266,7 +266,9 @@ export abstract class EntityBase {
     this.syncRender();                      // ④ 渲染同步
     this.updateEffects(dt);                 // ⑤ 附属特效驱动（跟随/时间轴/回收）
     this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
-    // ★ 影子朝向跟踪（⑦）：从位移差实时更新，与相机角度无关
+    this.onShadowSync();                    // ⑦ 贴地影子同步（子类覆写）
+
+    // ★ 影子朝向跟踪：从位移差实时更新，与相机角度无关
     if (!isNaN(this._gsLastX)) {
       const dx = this.entity.position.x - this._gsLastX;
       const dz = this.entity.position.z - this._gsLastZ;
@@ -276,6 +278,13 @@ export abstract class EntityBase {
     }
     this._gsLastX = this.entity.position.x;
     this._gsLastZ = this.entity.position.z;
+  }
+
+  /**
+   * ★ 影子每帧同步钩子（⑦）：子类覆写以驱动自己的影子组件。
+   * 默认空实现 = 该实体类型无动态影子。
+   */
+  protected onShadowSync(): void {
   }
 
   /** 子类行为逻辑（覆写） */
