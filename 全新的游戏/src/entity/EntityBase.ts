@@ -198,6 +198,57 @@ export abstract class EntityBase {
   /** 挂到场景（模式层在构造后调用） */
   attachToScene(scene: THREE.Scene): void {
     this.renderer = this.createRenderer(scene);
+    // ① 自动启用贴地剪影影子渲染（有 setGroundShadow 的渲染器如 FTXQuad）
+    const r = this.renderer as unknown as { setGroundShadow?: (on: boolean) => void };
+    if (r && typeof r.setGroundShadow === 'function') {
+      r.setGroundShadow(true);
+    }
+    // ② 自动提取剪影遮罩（子类通过 getShadowFrameData 提供帧数据）
+    if (!this.shadowAlphaTex) {
+      const fd = this.getShadowFrameData();
+      if (fd) {
+        this.shadowAlphaTex = this.extractShadowMask(fd);
+      }
+    }
+  }
+
+  /**
+   * ★ 虚方法：子类覆写，返回当前实体的帧纹理数据用于剪影提取。
+   * 默认 null = 该实体类型不参与贴地剪影影子系统。
+   */
+  protected getShadowFrameData(): { base: { width: number; height: number; data: Float32Array } } | null {
+    return null;
+  }
+
+  /** 从帧纹理数据逐像素提取 alpha → 黑色 + 剪影形状的小画布纹理 */
+  private extractShadowMask(fd: NonNullable<ReturnType<EntityBase['getShadowFrameData']>>): THREE.CanvasTexture {
+    const bw = fd.base.width;
+    const bh = fd.base.height;
+    const SW = 16;
+    const SH = Math.max(2, Math.round(SW * bh / bw)) || 1;
+    const c = document.createElement('canvas');
+    c.width = SW; c.height = SH;
+    const ctx = c.getContext('2d');
+    if (!ctx) return new THREE.CanvasTexture(c);
+    const img = ctx.createImageData(SW, SH);
+
+    for (let sy = 0; sy < SH; sy++) {
+      const ay = Math.min(bh - 1, Math.floor((sy / SH) * bh));
+      for (let sx = 0; sx < SW; sx++) {
+        const ax = Math.min(bw - 1, Math.floor((sx / SW) * bw));
+        const o = (ay * bw + ax) * 4;
+        const a = Math.max(0, Math.min(1, fd.base.data[o + 3]));
+        const di = (sy * SW + sx) * 4;
+        img.data[di]     = 0;                          // R=黑（影子色）
+        img.data[di + 1] = 0;                          // G=黑
+        img.data[di + 2] = 0;                          // B=黑
+        img.data[di + 3] = a > 0.5 ? 255 : 0;          // A=剪影裁形
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    tex.flipY = false;
+    return tex;
   }
 
   // ============ 更新骨架 ============
