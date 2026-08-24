@@ -66,6 +66,8 @@ export class CameraController {
   private shakeAmpY = 0;
   private shakeTargetAmp = 0;
   private breathTime = 0;
+  /** ★ 战斗冲击（CombatDirector 注入）：指数衰减的视线偏移冲量 */
+  private kickAmp = 0;
   /** 相机到目标距离（滚轮缩放，clamp；最小 = 贴脸第一人称） */
   distance = 4.2;
   distanceMin = 0.2;
@@ -166,7 +168,24 @@ export class CameraController {
       this.breathTime += dt * this.breathing.frequency;
       lookY += Math.sin(this.breathTime) * this.breathing.amplitude;
     }
+
+    // ---- ★ 战斗冲击（命中/受击/击杀）：偏上顶一下 + 随机水平抖，指数衰减。
+    //      dt 为缩放时间 → hitstop 冻结期冲击蓄着，解冻瞬间释放 = 更"炸" ----
+    if (this.kickAmp > 0.001) {
+      const kx = (Math.random() - 0.5) * 2 * this.kickAmp;
+      lookX += kx * f.right.x;
+      lookZ += kx * f.right.z;
+      lookY += (Math.random() * 0.7 + 0.3) * this.kickAmp;
+      this.kickAmp *= Math.exp(-dt * 10);
+    } else {
+      this.kickAmp = 0;
+    }
     this.camera.lookAt(lookX, lookY, lookZ);
+  }
+
+  /** ★ 注入战斗冲击（CombatDirector 调用；强度≈视线偏移世界单位，叠加有上限） */
+  addKick(strength: number): void {
+    this.kickAmp = Math.min(0.5, this.kickAmp + strength);
   }
 
   /** ★ 当前是否第一人称（角色贴片应隐藏） */

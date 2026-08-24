@@ -34,6 +34,7 @@ import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager } from '../services/combat/BulletManager';
+import { CombatDirector } from '../services/combat/CombatDirector';
 import { executeAttack } from '../services/combat/Attack';
 import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
@@ -75,6 +76,8 @@ export class WorldMode implements IGameMode {
   private onReturn: (() => void) | null = null;
 
   private cameraCtrl!: CameraController;
+  /** ★ 战斗导演（战斗手感编排：hitstop/镜头冲击；事件驱动，纯表现层） */
+  private director!: CombatDirector;
   private raster!: RasterMap;
 
   // ★ 业务逻辑层（共享模块）
@@ -194,6 +197,9 @@ export class WorldMode implements IGameMode {
     // ---- 相机 ----
     this.cameraCtrl = new CameraController(this.camera);
 
+    // ---- ★ 战斗导演（监听 damage/killed 事件编排打击反馈） ----
+    this.director = new CombatDirector(this.cameraCtrl);
+
     // ---- ★ UI 层（世界专属） ----
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
@@ -269,9 +275,6 @@ export class WorldMode implements IGameMode {
   /** 每帧驱动（自包含：输入 → 物理 → 相机 → 实体 → AI） */
   update(dt: number): void {
     if (!this.binding || !this.physics || !this.scene || !this.camera || !this.renderer) return;
-
-    // ★ 实时渲染域推进（昼夜时间；先于实体更新 → 影子/光照用本帧太阳状态）
-    renderManager.update(dt);
 
     this.binding.update();
     const input = this.binding.input;
@@ -372,6 +375,8 @@ export class WorldMode implements IGameMode {
     // ---- 取消伤害事件订阅 ----
     this.damageUnsub?.();
     this.damageUnsub = undefined;
+    // ---- 战斗导演退场（取消事件订阅） ----
+    this.director?.dispose();
 
     // ---- 回写玩家血量到 Session ----
     if (this.session && this.player) {

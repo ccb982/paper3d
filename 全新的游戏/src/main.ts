@@ -118,8 +118,11 @@ async function boot() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.1);
 
+    // ★ 实时渲染域先推进（昼夜时间 + hitstop 时间缩放）→ 世界用缩放时间驱动
+    renderManager.update(dt);
+
     if (currentMode) {
-      currentMode.update(dt);
+      currentMode.update(renderManager.scaledDt);
       currentMode.render();
     } else {
       renderer.render(scene, camera);

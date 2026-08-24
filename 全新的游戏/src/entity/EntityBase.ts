@@ -22,6 +22,7 @@ import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorl
 import { levelForDistance } from '../services/lod';
 import { SilhouetteShadow, type ShadowFrameSource } from '../services/render/SilhouetteShadow';
 import { renderManager } from '../services/render/RenderManager';
+import { eventBus } from '../core/EventBus';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { FrameState } from '../services/fx/FrameState';
@@ -265,6 +266,8 @@ export abstract class EntityBase {
     this.hp -= dmg;
     if (this.hp <= 0) {
       this.hp = 0;
+      // ★ 击杀事件（CombatDirector 编排击杀定格；玩家死亡也发，导演自行分级）
+      eventBus.emit('killed', { target: this, source });
       this.onDeath(source);
     }
   }

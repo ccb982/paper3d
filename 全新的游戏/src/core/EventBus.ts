@@ -29,13 +29,18 @@ export interface EventMap {
   'save_complete': {};
   // 每日进度
   'day_advance': { day: number };
-  // ★ 伤害事件（用于显示伤害数字）
+  // ★ 伤害事件（用于显示伤害数字 / 战斗导演编排打击反馈）
   'damage': {
     target: import('../entity/EntityBase').EntityBase;
     damage: number;
     crit: boolean;
     dodged: boolean;
     blocked: boolean;
+  };
+  // ★ 击杀事件（CombatDirector 编排击杀定格等）
+  'killed': {
+    target: import('../entity/EntityBase').EntityBase;
+    source: import('../entity/EntityBase').EntityBase | null;
   };
 }
 
