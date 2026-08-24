@@ -80,12 +80,13 @@ export abstract class EntityBase {
     return { kind: this.entity.kind, moving: false };
   }
 
-  /** ★ 贴地圆影意图（GroundBlobLayer 消费；null = 无影子。子类按类型覆写）
-   *  语义定案（架构 8.0 v4）：影子存在性只由 LOD/可见性决定，与相机角度无关——
-   *  billboard 竖片的实时投影会随视角坍缩/摆动，故一律使用贴地圆斑表示 */
+  /** ★ 贴地影意图（GroundBlobLayer 消费；null = 无影子。子类按类型覆写） */
   get shadowSpec(): { radius: number; alpha: number } | null {
     return null;
   }
+
+  /** ★ 剪影遮罩纹理（子类提取后赋值；GroundBlobLayer 读它作为面片贴图） */
+  shadowAlphaTex: THREE.CanvasTexture | null = null;
 
   /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
    *   子类据此降级表现（受击染料/扭曲等只在高档启用） */

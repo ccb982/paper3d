@@ -125,6 +125,62 @@ export abstract class CharacterBase extends EntityBase {
     }
   }
 
+  // ============================================================
+  // 贴地剪影影子（架构 8.0 v4：所有角色自动获得剪影形状的贴地影）
+  // ============================================================
+
+  private _silhouetteTex: THREE.CanvasTexture | null = null;
+  private _silhouetteExtracted = false;
+
+  override attachToScene(scene: THREE.Scene): void {
+    super.attachToScene(scene);
+    this.extractSilhouette();
+  }
+
+  /** 从第一帧 FTX 数据提取 alpha 剪影 → 缓存为小画布纹理（一次性）。
+   *  遍历基础色纹理，alpha > 阈值的像素写入黑色不透明 → 影子呈角色轮廓形状。 */
+  private extractSilhouette(): void {
+    if (this._silhouetteExtracted) return;
+    this._silhouetteExtracted = true;
+    if (!this.anim?.source) return;
+    const pair = this.anim.source.getFramePair(0);
+    if (!pair) return;
+
+    const base = pair.base as THREE.DataTexture;
+    const raw = (base.image as unknown as { width: number; height: number; data: Float32Array });
+    const bw = raw.width ?? 0;
+    const bh = raw.height ?? 0;
+    const data = raw.data;
+    if (!bw || !bh || !data) return;
+
+    const SW = 16;
+    const SH = Math.max(2, Math.round(SW * bh / bw));
+    const c = document.createElement('canvas');
+    c.width = SW; c.height = SH;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const img = ctx.createImageData(SW, SH);
+
+    for (let sy = 0; sy < SH; sy++) {
+      const ay = Math.min(bh - 1, Math.floor((sy / SH) * bh));
+      for (let sx = 0; sx < SW; sx++) {
+        const ax = Math.min(bw - 1, Math.floor((sx / SW) * bw));
+        const o = (ay * bw + ax) * 4;
+        const a = Math.max(0, Math.min(1, data[o + 3]));
+        const di = (sy * SW + sx) * 4;
+        img.data[di]     = 0;              // R=黑（影子色）
+        img.data[di + 1] = 0;              // G=黑
+        img.data[di + 2] = 0;              // B=黑
+        img.data[di + 3] = a > 0.5 ? 255 : 0; // A=剪影裁形
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.flipY = false;
+    this.shadowAlphaTex = tex;
+  }
+
   /** ★ 死亡动画自动管线：任何角色死亡 → 纹理所有权转移给死亡动画
    *   （独立流体撕碎消散，纯表现，不阻塞掉落/结算）。
    *   死亡动画开关（玩家死亡 = 传送复活，不销毁 → 走 onDeath 覆写跳过） */

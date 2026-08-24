@@ -48,8 +48,9 @@ export class GroundBlobLayer {
 
       let b = this.blobs.get(base.entity.id);
       if (!b) {
+        const customTex = (base as unknown as { shadowAlphaTex: THREE.CanvasTexture | null }).shadowAlphaTex;
         const mat = new THREE.MeshBasicMaterial({
-          map: this.ensureTexture(),
+          map: customTex ?? this.ensureTexture(),
           transparent: true,
           depthWrite: false,
         });
