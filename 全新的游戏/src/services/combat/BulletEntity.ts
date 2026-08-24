@@ -54,11 +54,6 @@ export class BulletEntity extends EntityBase {
     return this.active;
   }
 
-  /** ★ 影子朝向（yaw 弧度）——从位移差实时更新 */
-  groundShadowYaw = 0;
-  private _lastX = NaN;
-  private _lastZ = NaN;
-
   /** 贴地影（子弹：拉长椭圆，等比于弹道方向） */
   override get shadowSpec(): { radius: number; alpha: number } | null {
     return { radius: 0.65, alpha: 0.38, stretchZ: 1.6 } as { radius: number; alpha: number };
@@ -153,21 +148,9 @@ export class BulletEntity extends EntityBase {
 
   protected override onUpdate(dt: number): void {
     if (!this.active) return;
-
-    // ★ 从位移差实时更新影子朝向（子弹高速移动 → 方向变化快）
-    const p = this.entity.position;
-    if (!isNaN(this._lastX)) {
-      const dx = p.x - this._lastX;
-      const dz = p.z - this._lastZ;
-      if (Math.hypot(dx, dz) > 0.05) {
-        this.groundShadowYaw = Math.atan2(dx, dz) + Math.PI;
-      }
-    }
-    this._lastX = p.x; this._lastZ = p.z;
-
     this.lifetime -= dt;
     if (this.lifetime <= 0) {
-      this.deactivate(); // 超时回池（复用，不销毁）
+      this.deactivate();
       this.recycle?.();
     }
   }

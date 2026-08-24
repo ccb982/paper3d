@@ -88,6 +88,11 @@ export abstract class EntityBase {
   /** ★ 剪影遮罩纹理（子类提取后赋值；GroundBlobLayer 读它作为面片贴图） */
   shadowAlphaTex: THREE.CanvasTexture | null = null;
 
+  /** ★ 影子朝向（yaw 弧度）——基类从位移差自动跟踪，所有实体共享 */
+  groundShadowYaw = 0;
+  private _gsLastX = NaN;
+  private _gsLastZ = NaN;
+
   /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
    *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
   viewLod = 0;
@@ -261,6 +266,16 @@ export abstract class EntityBase {
     this.syncRender();                      // ④ 渲染同步
     this.updateEffects(dt);                 // ⑤ 附属特效驱动（跟随/时间轴/回收）
     this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
+    // ★ 影子朝向跟踪（⑦）：从位移差实时更新，与相机角度无关
+    if (!isNaN(this._gsLastX)) {
+      const dx = this.entity.position.x - this._gsLastX;
+      const dz = this.entity.position.z - this._gsLastZ;
+      if (Math.hypot(dx, dz) > 0.05) {
+        this.groundShadowYaw = Math.atan2(dx, dz) + Math.PI;
+      }
+    }
+    this._gsLastX = this.entity.position.x;
+    this._gsLastZ = this.entity.position.z;
   }
 
   /** 子类行为逻辑（覆写） */
