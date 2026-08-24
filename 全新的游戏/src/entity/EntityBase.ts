@@ -90,12 +90,14 @@ export abstract class EntityBase {
 
   // ============================================================
   // 贴地剪影影子（架构 8.x 统一机制：所有实体 = 角色同款）
-  // 影子 = 竖立精灵在太阳平行光下的解析仿射投影（方向/长度随昼夜变化）：
-  //   影长 = (视觉高 + 离地高) / tan(仰角)，方向与太阳水平分量反向
+  // 影子 = 竖立精灵在太阳平行光下的解析仿射投影（脚跟锚定）：
+  //   锚点 = 脚点投影（离地越高整条影子向阳反方向外移）
+  //   影长 = 视觉高 × 投影比（1/tan 仰角），方向与太阳水平分量反向
   // 子类只需声明：
   //   ① 覆写 shadowShape：宽 w / 视觉高 h / alpha（null = 无影子）
   //      - 默认太阳投影模式（h 缺省 = w）
-  //      - len 显式给固定影长 → 走 shadowYaw 定向模式（子弹等自拉伸体）
+  //      - len 显式给固定影长 → 走 shadowYaw 定向模式（子弹等自拉伸体，
+  //        椭圆居中于地面投影点，离高仍随太阳位移）
   //   ② 剪影源默认自动取当前动画帧；非 FTX 资产才需覆写
   //      getShadowFrameData（如子弹的共享画布）
   //   ③ 固定长轴模式下覆写 shadowYaw 定向；太阳投影模式不需要
@@ -131,33 +133,41 @@ export abstract class EntityBase {
     }
     this.gsShadow.setSource(fd);
 
-    // ---- 地面仿射基：宽向量 R × 长向量 S ----
+    // ---- 地面仿射基：宽向量 R × 长向量 S（脚跟锚定，向阳反方向延伸） ----
     const p = this.entity.position;
     const sun = sunCycle.current;
+    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const airH = Math.max(0, p.y - gy);
+    // 太阳水平单位向量(脚跟→影子方向) 与 投影比 1/tan(仰角)
+    const ux = -sun.dir.x, uz = -sun.dir.z;
+    const ul = Math.hypot(ux, uz) || 1e-6;
+    const sunUx = ux / ul, sunUz = uz / ul;
+    const ratio = ul / Math.max(0.15, sun.dir.y);
+    let ax = p.x, az = p.z;
     let rx: number, rz: number, sx: number, sz: number, len: number;
+
     if (shape.len != null) {
-      // 固定长轴模式（子弹等自拉伸体）：方向 = shadowYaw，长度 = 声明值
+      // 固定长轴模式（子弹等自拉伸体）：椭圆居中于地面投影点，
+      // 方向 = shadowYaw；离地高度使整条影子沿太阳反向位移
       const yaw = this.shadowYaw;
       sx = Math.sin(yaw); sz = Math.cos(yaw);
       len = shape.len;
       rx = sz; rz = -sx;
+      ax += sunUx * airH * ratio - sx * len / 2;
+      az += sunUz * airH * ratio - sz * len / 2;
     } else {
-      // 太阳投影模式：影长 = (视觉高 + 离地高) × |xz|/y（= h/tan 仰角），
-      // 方向与太阳水平分量反向；离地越高影子外移越远（跳跃/飞行自然正确）
-      const invY = 1 / Math.max(0.15, sun.dir.y);
-      const dx = -sun.dir.x * invY, dz = -sun.dir.z * invY;
-      const dl = Math.hypot(dx, dz) || 1e-6;
-      sx = dx / dl; sz = dz / dl;
-      const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
-      const airH = Math.max(0, p.y - gy);
-      len = ((shape.h ?? shape.w) + airH) * dl;
-      // 宽轴 = 贴片右向量的地面投影（billboard 朝相机）；近共线时退化垂直长轴
-      const rb = this.rendererGroundBasisX();
+      // 太阳投影模式：影长 = 视觉高 × 投影比；锚点 = 脚点投影
+      // （脚跟在 P_xz + S×离地投影，末端再向外延 h×投影比）
+      sx = sunUx; sz = sunUz;
+      len = (shape.h ?? shape.w) * ratio;
+      rx = -sz; rz = sx;                       // 宽轴默认垂直长轴
+      const rb = this.rendererGroundBasisX();  // 贴片右向量投影（近共线时退化）
       if (rb && Math.abs(rb.x * sx + rb.z * sz) < 0.98) { rx = rb.x; rz = rb.z; }
-      else { rx = -sz; rz = sx; }
+      ax += sx * airH * ratio;
+      az += sz * airH * ratio;
     }
 
-    this.gsShadow.followAffine(p.x, p.z, rx, rz, sx, sz, len,
+    this.gsShadow.followAffine(ax, az, rx, rz, sx, sz, len,
       (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
     this.gsShadow.mesh.visible = this.visible && this.viewLod < 3;
     // 浓度随白昼因子调制：正午浓、晨昏淡、夜晚自然消失
