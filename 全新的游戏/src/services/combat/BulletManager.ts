@@ -57,6 +57,38 @@ export class BulletManager {
     this.hitEffectShapes = hitEffectShapes;
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
     this.visual = glRenderer ? new BulletVisual(glRenderer, asset) : null;
+    // ★ 提取子弹剪影遮罩（一次性，所有子弹实例共享）
+    if (asset) {
+      try {
+        const pair0 = asset.getFramePair(0);
+        if (pair0?.base?.image?.data) {
+          const d = pair0.base.image.data as unknown as Float32Array;
+          const bw = pair0.base.image.width;
+          const bh = pair0.base.image.height;
+          const SW = 16;
+          const SH = Math.max(2, Math.round(SW * bh / bw));
+          const c = document.createElement('canvas');
+          c.width = SW; c.height = SH;
+          const ctx = c.getContext('2d')!;
+          const img = ctx.createImageData(SW, SH);
+          for (let sy = 0; sy < SH; sy++) {
+            const ay = Math.min(bh - 1, Math.floor((sy / SH) * bh));
+            for (let sx = 0; sx < SW; sx++) {
+              const ax = Math.min(bw - 1, Math.floor((sx / SW) * bw));
+              const o = (ay * bw + ax) * 4;
+              const a = Math.max(0, Math.min(1, d[o + 3]));
+              const di = (sy * SW + sx) * 4;
+              img.data[di]     = 0;
+              img.data[di + 1] = 0;
+              img.data[di + 2] = 0;
+              img.data[di + 3] = a > 0.5 ? 255 : 0;
+            }
+          }
+          ctx.putImageData(img, 0, 0);
+          BulletEntity.sharedSilhouetteTex = new THREE.CanvasTexture(c);
+        }
+      } catch { /* 提取失败不阻塞 */ }
+    }
     this.visual?.init(); // 强制首帧烘焙，避免 RT 纹理全黑
 
     // ---- ③ 3D 渲染器（InstancedMesh；世界尺寸 = 基类函数计算）----

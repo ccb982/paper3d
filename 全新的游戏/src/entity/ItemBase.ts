@@ -75,6 +75,8 @@ export class ItemBase extends EntityBase {
     this.maxHp = this.hp;
     this.camp = 'neutral';
     this.attachToScene(scene);
+    // ★ 提取物品剪影遮罩（与角色同款逻辑：从帧纹理读 alpha → 小画布）
+    this.extractShadowMask();
     // 贴片尺寸对齐碰撞体
     if (this.renderer) {
       this.renderer.setScale(archetype.worldScale, archetype.worldScale);
@@ -86,6 +88,44 @@ export class ItemBase extends EntityBase {
   /** ★ 刚体偏移 */
   protected override physicsBodyOffsetY(): number {
     return this.collisionVolume?.offsetY ?? 0.22;
+  }
+
+  /** ★ 提取物品剪影遮罩到 shadowAlphaTex（attachToScene 后调用一次） */
+  private extractShadowMask(): void {
+    if (!this.anim?.source || this.shadowAlphaTex) return;
+    const pair = this.anim.source.getFramePair(0);
+    if (!pair?.base) return;
+    const base = pair.base;
+    const raw = (base.image as unknown as { data?: Float32Array }).data;
+    if (!raw) return;
+    const bw = base.image.width;
+    const bh = base.image.height;
+
+    const SW = 16;
+    const SH = Math.max(2, Math.round(SW * bh / bw)) || 1;
+    const c = document.createElement('canvas');
+    c.width = SW; c.height = SH;
+    const ctx = c.getContext('2d');
+    if (!ctx) return;
+    const img = ctx.createImageData(SW, SH);
+
+    for (let sy = 0; sy < SH; sy++) {
+      const ay = Math.min(bh - 1, Math.floor((sy / SH) * bh));
+      for (let sx = 0; sx < SW; sx++) {
+        const ax = Math.min(bw - 1, Math.floor((sx / SW) * bw));
+        const o = (ay * bw + ax) * 4;
+        const a = Math.max(0, Math.min(1, raw[o + 3]));
+        const di = (sy * SW + sx) * 4;
+        img.data[di]     = 0;                  // R=黑（影子色）
+        img.data[di + 1] = 0;                  // G=黑
+        img.data[di + 2] = 0;                  // B=黑
+        img.data[di + 3] = a > 0.5 ? 255 : 0; // A=剪影裁形
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(c);
+    tex.flipY = false;
+    this.shadowAlphaTex = tex;
   }
 
   /** 贴地圆影（物品：小而淡） */

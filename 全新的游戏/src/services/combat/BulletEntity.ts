@@ -5,6 +5,7 @@
 // 不持有纹理、不持有渲染器、不参与 3D 场景绘制——
 // 绘制由 BulletRenderer 从"位置+速度"快照完成（架构解耦）。
 
+import * as THREE from 'three';
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import type { FrameAssetSource } from '../fx/AssetSource';
@@ -32,6 +33,9 @@ export interface BulletEntityOptions {
 }
 
 export class BulletEntity extends EntityBase {
+  /** 共享剪影遮罩（所有同类子弹共用；BulletManager 初始化时设置一次） */
+  static sharedSilhouetteTex: THREE.CanvasTexture | null = null;
+
   /** ★ 子弹碰撞体积（球体；弹头锚点由渲染器折叠进实例变换） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
     shape: { type: 'ball', radius: 0.08 },
@@ -83,6 +87,10 @@ export class BulletEntity extends EntityBase {
   /** ★ 激活发射（池化复用：重入管线 + 设位置/速度/寿命） */
   activate(opts: BulletEntityOptions): void {
     this.camp = opts.camp;
+    // ★ 从共享剪影纹理赋值（所有子弹共用同一张）
+    if (BulletEntity.sharedSilhouetteTex) {
+      this.shadowAlphaTex = BulletEntity.sharedSilhouetteTex;
+    }
     this.lifetime = opts.lifetime ?? 2;
     this.damage = opts.damage ?? 10;
     this.entity.position.x = opts.x;
