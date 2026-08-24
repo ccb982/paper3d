@@ -5,10 +5,10 @@
 // 不持有纹理、不持有渲染器、不参与 3D 场景绘制——
 // 绘制由 BulletRenderer 从"位置+速度"快照完成（架构解耦）。
 
-import * as THREE from 'three';
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import type { FrameAssetSource } from '../fx/AssetSource';
+import type { ShadowFrameSource } from '../render/SilhouetteShadow';
 import { applyDamage } from './DamagePipeline';
 
 export interface BulletEntityOptions {
@@ -33,8 +33,8 @@ export interface BulletEntityOptions {
 }
 
 export class BulletEntity extends EntityBase {
-  /** 共享剪影遮罩（所有同类子弹共用；BulletManager 初始化时设置一次） */
-  static sharedSilhouetteTex: THREE.CanvasTexture | null = null;
+  /** 共享剪影画布（所有同类子弹共用一张；BulletManager 初始化时提取一次） */
+  static sharedSilhouetteCanvas: HTMLCanvasElement | null = null;
 
   /** ★ 子弹碰撞体积（球体；弹头锚点由渲染器折叠进实例变换） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
@@ -54,9 +54,24 @@ export class BulletEntity extends EntityBase {
     return this.active;
   }
 
-  /** 贴地影（子弹：拉长椭圆，等比于弹道方向） */
-  override get shadowSpec(): { radius: number; alpha: number } | null {
-    return { radius: 0.65, alpha: 0.38, stretchZ: 1.6 } as { radius: number; alpha: number };
+  /** ★ 影子声明（子弹：沿弹道方向拉长的剪影椭圆，尺寸≈旧 radius0.65×stretch1.6） */
+  protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
+    return { w: 1.3, d: 2.08, alpha: 0.38 };
+  }
+
+  /** ★ 影子朝向 = 弹道方向（弹头指向前方）。
+   *  剪影贴图 row0=顶部=弹头（FTX 约定），映射到影子网格后弹头位于局部 +Z；
+   *  局部 +Z 转到世界速度方向需要 θ=atan2(dx,dz)，而基类 groundShadowYaw
+   *  内含 +π 偏移 → 此处再 +π 抵消。 */
+  protected override get shadowYaw(): number {
+    return this.groundShadowYaw + Math.PI;
+  }
+
+  /** 剪影源：共享画布（一次性提取，全部子弹实例复用，内部去重零开销） */
+  protected override getShadowFrameData(): ShadowFrameSource | null {
+    return BulletEntity.sharedSilhouetteCanvas
+      ? { canvas: BulletEntity.sharedSilhouetteCanvas }
+      : null;
   }
 
   constructor(
@@ -87,10 +102,6 @@ export class BulletEntity extends EntityBase {
   /** ★ 激活发射（池化复用：重入管线 + 设位置/速度/寿命） */
   activate(opts: BulletEntityOptions): void {
     this.camp = opts.camp;
-    // ★ 从共享剪影纹理赋值（所有子弹共用同一张）
-    if (BulletEntity.sharedSilhouetteTex) {
-      this.shadowAlphaTex = BulletEntity.sharedSilhouetteTex;
-    }
     this.lifetime = opts.lifetime ?? 2;
     this.damage = opts.damage ?? 10;
     this.entity.position.x = opts.x;

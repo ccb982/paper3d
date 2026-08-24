@@ -136,8 +136,6 @@ export class WorldMode implements IGameMode {
       }
     }
 
-    // ★ 动态圆影层挂载（实时渲染模块）：为视锥内实体提供贴地圆影
-
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
       x: spawn.x, y: 0, z: spawn.z,
@@ -475,7 +473,7 @@ export class WorldMode implements IGameMode {
    *  后续可移入 wx.createWorker/Worker；THREE 网格与 rapier 碰撞体必须留在主线程 */
   private chunkQueue: { cx: number; cz: number; rebuild: boolean }[] = [];
   private queuedKeys = new Set<number>();
-  /** ★ 动态圆影层（实时渲染模块·特性#1）：所有实体的贴地影子 */  /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
+  /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
   private static readonly CHUNK_BUILD_BUDGET_MS = 8;
 
   private syncChunks(px: number, pz: number): void {

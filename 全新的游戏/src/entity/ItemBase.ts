@@ -75,7 +75,7 @@ export class ItemBase extends EntityBase {
     this.maxHp = this.hp;
     this.camp = 'neutral';
     this.attachToScene(scene);
-    // ★ 提取物品剪影遮罩（与角色同款逻辑：从帧纹理读 alpha → 小画布）
+
     // 贴片尺寸对齐碰撞体
     if (this.renderer) {
       this.renderer.setScale(archetype.worldScale, archetype.worldScale);
@@ -89,9 +89,25 @@ export class ItemBase extends EntityBase {
     return this.collisionVolume?.offsetY ?? 0.22;
   }
 
-  /** 贴地圆影（物品：小而淡） */
-  override get shadowSpec(): { radius: number; alpha: number } | null {
-    return { radius: 0.3, alpha: 0.3 };
+  /** ★ 影子声明（物品：贴片同宽的剪影影，基类统一驱动） */
+  protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
+    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
+    if (!r?.mesh) return null;
+    return {
+      w: Math.abs(r.mesh.scale.x),
+      d: Math.abs(r.mesh.scale.y) * 0.8,
+      alpha: 0.3,
+    };
+  }
+
+  /** 提供帧纹理数据给基类统一剪影提取 */
+  protected override getShadowFrameData() {
+    if (!this.anim?.source) return null;
+    const pair = this.anim.source.getFramePair(0);
+    if (!pair?.base?.image) return null;
+    const data = (pair.base.image as unknown as { data?: Float32Array }).data;
+    if (!data) return null;
+    return { base: { width: pair.base.image.width, height: pair.base.image.height, data } };
   }
 
   /** ★ 小地图：物品只显示静止的 */

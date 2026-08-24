@@ -15,8 +15,6 @@ import type { CameraFrame } from '../services/camera/CameraController';
 import { shapeExtents, separateXZ } from '../services/physics/Collision';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
-import { SilhouetteShadow } from '../services/render/SilhouetteShadow';
-import { RasterMap } from '../services/map/RasterMap';
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -127,89 +125,27 @@ export abstract class CharacterBase extends EntityBase {
     }
   }
 
-  // ============================================================
-  // 贴地剪影影子（架构 8.0 v4：所有角色自动获得剪影形状的贴地影）
-  // ============================================================
-
-  private _silhouetteTex: THREE.CanvasTexture | null = null;
-  private _silhouetteExtracted = false;
-
-  override attachToScene(scene: THREE.Scene): void {
-    super.attachToScene(scene);
-    this.extractSilhouette();
-    this.initGroundShadowMesh(scene);
-  }
-
-  /** ★ 创建贴地剪影影子面片（独立于主渲染器的暗色剪影层） */
-  private initGroundShadowMesh(scene: THREE.Scene): void {
-    if (this.gsShadow) return;
-    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
-    if (!r?.mesh) return;
-
-    const w = Math.abs(r.mesh.scale.x || 1.2);
-    const d = Math.abs(r.mesh.scale.y || 1) * 0.7; // 影长≈身高×0.7
-    this.gsShadow = new SilhouetteShadow(scene, w, d, 0.38);
-  }
-
-  /** 每帧同步：更新剪影遮罩 + 跟随位置 + LOD 渐隐（render 尾部调用） */
-  /** ★ 影子每帧同步（EntityBase.update ⑦ 自动调用） */
-  protected override onShadowSync(): void {
-    if (!this.gsShadow || !this.anim?.source || !this.state) return;
+  /** 提供当前帧纹理数据给基类统一剪影提取（动画帧变化 → 影子形状跟着变，内部去重） */
+  protected override getShadowFrameData() {
+    if (!this.anim?.source || !this.state) return null;
     const pair = this.anim.source.getFramePair(this.state.frameIndex);
-    if (pair) this.gsShadow.updateSilhouette(pair.base as never);
-    const p = this.entity.position;
-    this.gsShadow.followEntity(p.x, p.z, (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
-    this.gsShadow.setOpacityByLod(this.viewLod);
+    if (!pair?.base?.image) return null;
+    const data = (pair.base.image as unknown as { data?: Float32Array }).data;
+    if (!data) return null;
+    return { base: { width: pair.base.image.width, height: pair.base.image.height, data } };
   }
 
-  private gsShadow: import('../services/render/SilhouetteShadow').SilhouetteShadow | null = null;
-
-  /** 从第一帧 FTX 数据提取 alpha 剪影 → 缓存为小画布纹理（一次性）。
-   *  遍历基础色纹理，alpha > 阈值的像素写入黑色不透明 → 影子呈角色轮廓形状。 */
-  private extractSilhouette(): void {
-    if (this._silhouetteExtracted) return;
-    this._silhouetteExtracted = true;
-    if (!this.anim?.source) return;
-    const pair = this.anim.source.getFramePair(0);
-    if (!pair) return;
-
-    const base = pair.base as THREE.DataTexture;
-    const raw = (base.image as unknown as { width: number; height: number; data: Float32Array });
-    const bw = raw.width ?? 0;
-    const bh = raw.height ?? 0;
-    const data = raw.data;
-    if (!bw || !bh || !data) return;
-
-    const SW = 16;
-    const SH = Math.max(2, Math.round(SW * bh / bw));
-    const c = document.createElement('canvas');
-    c.width = SW; c.height = SH;
-    const ctx = c.getContext('2d');
-    if (!ctx) return;
-    const img = ctx.createImageData(SW, SH);
-
-    for (let sy = 0; sy < SH; sy++) {
-      const ay = Math.min(bh - 1, Math.floor((sy / SH) * bh));
-      for (let sx = 0; sx < SW; sx++) {
-        const ax = Math.min(bw - 1, Math.floor((sx / SW) * bw));
-        const o = (ay * bw + ax) * 4;
-        const a = Math.max(0, Math.min(1, data[o + 3]));
-        const di = (sy * SW + sx) * 4;
-        img.data[di]     = 0;              // R=黑（影子色）
-        img.data[di + 1] = 0;              // G=黑
-        img.data[di + 2] = 0;              // B=黑
-        img.data[di + 3] = a > 0.5 ? 255 : 0; // A=剪影裁形
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-
-    let opq = 0;
-    for (let i = 3; i < img.data.length; i += 4) { if (img.data[i] > 128) opq++; }
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.flipY = false;
-    this.shadowAlphaTex = tex;
+  /** ★ 影子声明（角色：宽=贴片宽，深=身高×0.7；基类统一驱动，无需自管组件） */
+  protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
+    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
+    if (!r?.mesh) return null;
+    return {
+      w: Math.abs(r.mesh.scale.x || 1.2),
+      d: Math.abs(r.mesh.scale.y || 1) * 0.7, // 影长≈身高×0.7
+      alpha: 0.38,
+    };
   }
+
 
   /** ★ 死亡动画自动管线：任何角色死亡 → 纹理所有权转移给死亡动画
    *   （独立流体撕碎消散，纯表现，不阻塞掉落/结算）。

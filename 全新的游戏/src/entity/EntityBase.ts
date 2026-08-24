@@ -20,6 +20,7 @@ import type { Entity, EntityKind } from './Entity';
 import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
 import { levelForDistance } from '../services/lod';
+import { SilhouetteShadow, type ShadowFrameSource } from '../services/render/SilhouetteShadow';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { FrameState } from '../services/fx/FrameState';
@@ -44,10 +45,6 @@ export interface EntityBaseOptions {
   animInitial?: Partial<FrameState>;
 }
 
-const _gsUp = new THREE.Vector3(0, 1, 0);
-const _gsTmpNormal = new THREE.Vector3();
-const _gsTmpQuat = new THREE.Quaternion();
-
 export abstract class EntityBase {
   readonly entity: Entity;
   /** ★ 阵营标签（player/ally/enemy/neutral；碰撞过滤/伤害判定用，架构 4.3） */
@@ -70,6 +67,9 @@ export abstract class EntityBase {
   set visible(v: boolean) {
     this._visible = v;
     if (this.renderer) this.renderer.setVisible(v);
+    // ★ 影子联动隐藏（池化回收后 update 已停止 / 第一人称藏自身 →
+    //   必须立即隐藏，否则留下"幽灵影子"）
+    if (this.gsShadow) this.gsShadow.mesh.visible = v && this.viewLod < 3;
   }
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
@@ -85,64 +85,49 @@ export abstract class EntityBase {
     return { kind: this.entity.kind, moving: false };
   }
 
-  /** ★ 贴地影意图（GroundBlobLayer 消费；null = 无影子。子类按类型覆写） */
-  get shadowSpec(): { radius: number; alpha: number; stretchZ?: number } | null {
+  // ============================================================
+  // 贴地剪影影子（架构 8.x 统一机制：所有实体 = 角色同款）
+  // 子类只需声明三件事：
+  //   ① 覆写 shadowShape：尺寸/透明度（null = 无影子）
+  //   ② 覆写 getShadowFrameData：剪影源（帧纹理或共享画布，内部去重）
+  //   ③ 运动实体覆写 shadowYaw 让影子跟随移动方向（默认不旋转）
+  // ============================================================
+
+  protected _scene: THREE.Scene | null = null;
+
+  /** ★ 影子形状声明（宽 w / 深 d 世界单位；alpha 缺省 0.38；null = 无影子） */
+  protected get shadowShape(): { w: number; d: number; alpha?: number } | null {
     return null;
   }
 
-  /** ★ 剪影遮罩纹理（子类提取后赋值）*/
-  shadowAlphaTex: THREE.CanvasTexture | null = null;
-
-  // ---- 贴地影子（基类统一管理，attachToScene 自动创建）----
-  protected _scene: THREE.Scene | null = null;
-  private _groundShadow: THREE.Mesh | null = null;
-  private _groundShadowMat: THREE.MeshBasicMaterial | null = null;
-
-  /** 每帧同步贴地影子（惰性创建 + 跟随实体 + 贴地爬坡） */
-  private syncGroundShadow(): void {
-    const spec = this.shadowSpec;
-    if (!spec || !this._scene) return;
-
-    // ---- 惰性创建 ----
-    if (!this._groundShadow) {
-      const geo = new THREE.CircleGeometry(spec.radius, 16);
-      geo.rotateX(-Math.PI / 2);
-      this._groundShadowMat = new THREE.MeshBasicMaterial({
-        color: 0x000000,
-        transparent: true,
-        opacity: spec.alpha,
-        depthWrite: false,
-      });
-      this._groundShadow = new THREE.Mesh(geo, this._groundShadowMat);
-      this._groundShadow.renderOrder = -1;
-      this._groundShadow.frustumCulled = false;
-      this._scene.add(this._groundShadow);
-    }
-
-    // ---- 同步位置 + 贴地爬坡 ----
-    const p = this.entity.position;
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z);
-    this._groundShadow.position.set(p.x, (gy ?? 0) + 0.03, p.z);
-
-    // ★ 斜坡贴合：采样四角高度差计算地形法线 → 倾斜圆影匹配坡度。
-    //   平地时法线≈(0,1,0)，影子保持水平；坡地上影子沿坡面倾斜不悬空不穿地。
-    const hs = 0.25;
-    const hL = RasterMap.current?.surfaceHeightAt(p.x - hs, p.z) ?? gy ?? 0;
-    const hR = RasterMap.current?.surfaceHeightAt(p.x + hs, p.z) ?? gy ?? 0;
-    const hD = RasterMap.current?.surfaceHeightAt(p.x, p.z - hs) ?? gy ?? 0;
-    const hU = RasterMap.current?.surfaceHeightAt(p.x, p.z + hs) ?? gy ?? 0;
-    _gsTmpNormal.set(hL - hR, 2 * hs, hD - hU).normalize();
-    _gsTmpQuat.setFromUnitVectors(_gsUp, _gsTmpNormal);
-    this._groundShadow.quaternion.slerp(_gsTmpQuat, 0.3);
-
-    // ---- LOD 可见性 ----
-    this._groundShadow.visible = this.visible;
+  /** ★ 影子朝向（弧度，绕世界 Y；默认 0 不旋转） */
+  protected get shadowYaw(): number {
+    return 0;
   }
 
-  /** ★ 影子朝向（yaw 弧度）——基类从位移差自动跟踪，所有实体共享 */
+  /** ★ 影子朝向跟踪值（基类从位移差自动更新；运动实体的 shadowYaw 直接返回它） */
   groundShadowYaw = 0;
   private _gsLastX = NaN;
   private _gsLastZ = NaN;
+
+  private gsShadow: SilhouetteShadow | null = null;
+
+  /** ★ 每帧影子同步（update 骨架⑦：惰性创建 + 剪影更新 + 跟随贴地 + LOD 渐隐） */
+  private syncShadow(): void {
+    const shape = this.shadowShape;
+    if (!shape || !this._scene) return;
+    const fd = this.getShadowFrameData();
+    if (!fd) return; // 无剪影源 = 无影子（不做纯色矩形兜底）
+    if (!this.gsShadow) {
+      this.gsShadow = new SilhouetteShadow(this._scene, shape.w, shape.d, shape.alpha ?? 0.38);
+    }
+    this.gsShadow.setSource(fd);
+    const p = this.entity.position;
+    this.gsShadow.followEntity(p.x, p.z, this.shadowYaw,
+      (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
+    this.gsShadow.mesh.visible = this.visible && this.viewLod < 3;
+    this.gsShadow.setLodOpacity(this.viewLod);
+  }
 
   /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
    *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
@@ -260,74 +245,14 @@ export abstract class EntityBase {
   attachToScene(scene: THREE.Scene): void {
     this._scene = scene;
     this.renderer = this.createRenderer(scene);
-    // ① 自动启用贴地剪影影子渲染（有 setGroundShadow 的渲染器如 FTXQuad）
-    const r = this.renderer as unknown as { setGroundShadow?: (on: boolean) => void };
-    if (r && typeof r.setGroundShadow === 'function') {
-      r.setGroundShadow(true);
-    }
-    // ② 自动提取剪影遮罩（子类通过 getShadowFrameData 提供帧数据）
-    if (!this.shadowAlphaTex) {
-      const fd = this.getShadowFrameData();
-      if (fd) {
-        this.shadowAlphaTex = this.extractShadowMask(fd);
-      }
-    }
-
-    // ★ 自动创建贴地影子面片（有 shadowSpec 的实体才有）
-    const spec = this.shadowSpec;
-    if (spec && !this._groundShadow && this._scene) {
-      const geo = new THREE.CircleGeometry(spec.radius, 20);
-      geo.rotateX(-Math.PI / 2);
-      this._groundShadowMat = new THREE.MeshBasicMaterial({
-        color: 0x000000,
-        transparent: true,
-        opacity: spec.alpha,
-        depthWrite: false,
-      });
-      this._groundShadow = new THREE.Mesh(geo, this._groundShadowMat);
-      this._groundShadow.renderOrder = -1;
-      this._groundShadow.frustumCulled = false;
-      this._scene.add(this._groundShadow);
-    }
   }
 
   /**
-   * ★ 虚方法：子类覆写，返回当前实体的帧纹理数据用于剪影提取。
-   * 默认 null = 该实体类型不参与贴地剪影影子系统。
+   * ★ 虚方法：子类覆写，返回剪影源（帧纹理数据或共享画布）。
+   * 默认 null = 该实体类型无影子。每帧调用，内部按源对象去重。
    */
-  protected getShadowFrameData(): { base: { width: number; height: number; data: Float32Array } } | null {
+  protected getShadowFrameData(): ShadowFrameSource | null {
     return null;
-  }
-
-  /** 从帧纹理数据逐像素提取 alpha → 黑色 + 剪影形状的小画布纹理 */
-  private extractShadowMask(fd: NonNullable<ReturnType<EntityBase['getShadowFrameData']>>): THREE.CanvasTexture {
-    const bw = fd.base.width;
-    const bh = fd.base.height;
-    const SW = 16;
-    const SH = Math.max(2, Math.round(SW * bh / bw)) || 1;
-    const c = document.createElement('canvas');
-    c.width = SW; c.height = SH;
-    const ctx = c.getContext('2d');
-    if (!ctx) return new THREE.CanvasTexture(c);
-    const img = ctx.createImageData(SW, SH);
-
-    for (let sy = 0; sy < SH; sy++) {
-      const ay = Math.min(bh - 1, Math.floor((sy / SH) * bh));
-      for (let sx = 0; sx < SW; sx++) {
-        const ax = Math.min(bw - 1, Math.floor((sx / SW) * bw));
-        const o = (ay * bw + ax) * 4;
-        const a = Math.max(0, Math.min(1, fd.base.data[o + 3]));
-        const di = (sy * SW + sx) * 4;
-        img.data[di]     = 0;                          // R=黑（影子色）
-        img.data[di + 1] = 0;                          // G=黑
-        img.data[di + 2] = 0;                          // B=黑
-        img.data[di + 3] = a > 0.5 ? 255 : 0;          // A=剪影裁形
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    const tex = new THREE.CanvasTexture(c);
-    tex.flipY = false;
-    return tex;
   }
 
   // ============ 更新骨架 ============
@@ -340,10 +265,9 @@ export abstract class EntityBase {
     this.syncRender();                      // ④ 渲染同步
     this.updateEffects(dt);                 // ⑤ 附属特效驱动（跟随/时间轴/回收）
     this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
-    this.syncGroundShadow();                // ⑦ 贴地影子同步
-    this.onShadowSync();                    // ⑧ 影子朝向同步（子类覆写）                    // ⑦ 贴地影子同步（子类覆写）
+    this.syncShadow();                      // ⑦ 贴地剪影影子同步（统一机制）
 
-    // ★ 影子朝向跟踪：从位移差实时更新，与相机角度无关
+    // ★ 影子朝向跟踪：从位移差实时更新（shadowYaw 消费；与相机角度无关）
     if (!isNaN(this._gsLastX)) {
       const dx = this.entity.position.x - this._gsLastX;
       const dz = this.entity.position.z - this._gsLastZ;
@@ -353,13 +277,6 @@ export abstract class EntityBase {
     }
     this._gsLastX = this.entity.position.x;
     this._gsLastZ = this.entity.position.z;
-  }
-
-  /**
-   * ★ 影子每帧同步钩子（⑦）：子类覆写以驱动自己的影子组件。
-   * 默认空实现 = 该实体类型无动态影子。
-   */
-  protected onShadowSync(): void {
   }
 
   /** 子类行为逻辑（覆写） */
@@ -441,6 +358,8 @@ export abstract class EntityBase {
   dispose(): void {
     this.anim?.dispose();
     this.renderer?.dispose();
+    this.gsShadow?.dispose();
+    this.gsShadow = null;
     for (const fx of this.effectSlots.values()) fx.dispose();
     this.effectSlots.clear();
     this.em.unregister(this);
