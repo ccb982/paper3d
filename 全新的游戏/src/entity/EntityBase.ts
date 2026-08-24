@@ -306,15 +306,21 @@ export abstract class EntityBase {
   /**
    * ★ 剪影源（虚方法）：默认从动画资产自动取当前帧纹理——
    * 有 FTX 动画的实体零成本获得"影子随动画帧变化"。
-   * 非 FTX 资产（共享画布等）才需覆写。每帧调用，内部按源对象去重。
+   * 非 FTX 资产（共享画布等）才需覆写。每帧调用，内部按 data 引用去重。
+   * 包装对象跨帧复用（零分配）；真正的去重键是 base.data 引用。
    */
+  private _gsFd: { base: { width: number; height: number; data: Float32Array } } | null = null;
   protected getShadowFrameData(): ShadowFrameSource | null {
     if (!this.anim?.source || !this.state) return null;
     const pair = this.anim.source.getFramePair(this.state.frameIndex);
     if (!pair?.base?.image) return null;
     const data = (pair.base.image as unknown as { data?: Float32Array }).data;
     if (!data) return null;
-    return { base: { width: pair.base.image.width, height: pair.base.image.height, data } };
+    if (!this._gsFd) this._gsFd = { base: { width: 0, height: 0, data } };
+    this._gsFd.base.width = pair.base.image.width;
+    this._gsFd.base.height = pair.base.image.height;
+    this._gsFd.base.data = data;
+    return this._gsFd;
   }
 
   // ============ 更新骨架 ============

@@ -115,6 +115,9 @@ export class SilhouetteShadow {
   private alphaTex: THREE.CanvasTexture | null = null;
   /** ★ 去重标记：同一源对象不重复提取 */
   private lastSource: unknown = null;
+  /** ★ 去重标记：同一份原始像素数据不重复提取（外层包装对象每帧新建，
+   *  身份去重必须落在 data 引用上） */
+  private lastRawData: Float32Array | null = null;
   private baseOpacity: number;
 
   constructor(
@@ -165,6 +168,7 @@ export class SilhouetteShadow {
     if (!src || src === this.lastSource) return;
     this.lastSource = src;
     if ('canvas' in src) {
+      this.lastRawData = null; // 切换到画布源：清空帧数据去重标记
       if (this.alphaTex && this.alphaTex.image === src.canvas) return;
       this.alphaTex?.dispose();
       this.alphaTex = new THREE.CanvasTexture(src.canvas);
@@ -174,7 +178,8 @@ export class SilhouetteShadow {
       return;
     }
     const b = src.base;
-    if (!b?.data) return;
+    if (!b?.data || b.data === this.lastRawData) return;
+    this.lastRawData = b.data;
     this.applyPixels(extractSilhouette(b.data, b.width, b.height));
   }
 
@@ -241,5 +246,6 @@ export class SilhouetteShadow {
     this.silCtx = null;
     this.alphaTex = null;
     this.lastSource = null;
+    this.lastRawData = null;
   }
 }
