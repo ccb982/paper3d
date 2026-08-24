@@ -1,7 +1,8 @@
 // ============================================================
-// SunCycle —— 昼夜日照循环（单一数据源：太阳方向/色温/强度）
+// SunCycle —— 昼夜时间模型（纯计算，无副作用）
 // ============================================================
 // 时间模型：局内连续推进（update(dt) 每帧驱动；DAY_SECONDS 现实秒 = 游戏 24h）。
+// ★ 归 RenderManager 持有协调，实体不直接访问本类——查询走 renderManager.querySun()。
 // 消费者：
 //   - GameLights.follow      → 太阳位置/颜色/强度（真实光照词汇表）
 //   - EntityBase.syncShadow  → 剪影影子仿射投影（方向+长度随太阳变化）
@@ -54,7 +55,7 @@ const NOON_COLOR = 0xfff3e0;    // 正午暖白
 const DUSK_COLOR = 0xffc48a;    // 晨昏暖橙
 const NIGHT_COLOR = 0x8fa3cc;   // 夜晚冷蓝
 
-class SunCycle {
+export class SunCycle {
   private hour = START_HOUR;
   private sample: SunSample = { dir: { x: 0, y: 1, z: 0 }, daylight: 1, color: NOON_COLOR, intensityScale: 1, hour: START_HOUR };
 
@@ -109,7 +110,3 @@ class SunCycle {
     this.sample.hour = t;
   }
 }
-
-/** 全局唯一实例（与 gameLights 同款单例风格） */
-export const sunCycle = new SunCycle();
-sunCycle.reset();

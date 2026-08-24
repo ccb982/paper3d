@@ -19,8 +19,7 @@ import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
-import { gameLights } from '../services/render/GameLights';
-import { sunCycle } from '../services/render/SunCycle';
+import { renderManager } from '../services/render/RenderManager';
 import { bakeChunkAppearance } from '../services/map/ChunkAppearance';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
@@ -123,7 +122,7 @@ export class WorldMode implements IGameMode {
     this.entities = new EntityManager(this.physics, this.raster);
 
     // ★ 昼夜循环重置：每次出击从清晨出发（后续可按 Session.day 变化出发时刻）
-    sunCycle.reset();
+    renderManager.resetDay();
 
     // 玩家出生 = 中心 chunk 中心
     const spawn = this.spawnPoint;
@@ -271,8 +270,8 @@ export class WorldMode implements IGameMode {
   update(dt: number): void {
     if (!this.binding || !this.physics || !this.scene || !this.camera || !this.renderer) return;
 
-    // ★ 昼夜循环推进（局内连续；先于实体更新 → 影子/光照用本帧太阳状态）
-    sunCycle.update(dt);
+    // ★ 实时渲染域推进（昼夜时间；先于实体更新 → 影子/光照用本帧太阳状态）
+    renderManager.update(dt);
 
     this.binding.update();
     const input = this.binding.input;
@@ -361,8 +360,8 @@ export class WorldMode implements IGameMode {
   /** 渲染：实体管线 + 场景 */
   render(): void {
     if (!this.scene || !this.camera || !this.renderer) return;
-    // ★ 阴影相机锚定玩家（update 后、渲染前，位置已是本帧最终值）
-    if (this.player) gameLights.follow(this.player.position);
+    // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
+    if (this.player) renderManager.follow(this.player.position);
     this.entities.renderAll(this.camera);
     this.bullets.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);

@@ -21,7 +21,7 @@ import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
 import { levelForDistance } from '../services/lod';
 import { SilhouetteShadow, type ShadowFrameSource } from '../services/render/SilhouetteShadow';
-import { sunCycle } from '../services/render/SunCycle';
+import { renderManager } from '../services/render/RenderManager';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { FrameState } from '../services/fx/FrameState';
@@ -135,7 +135,7 @@ export abstract class EntityBase {
 
     // ---- 地面仿射基：宽向量 R × 长向量 S（脚跟锚定，向阳反方向延伸） ----
     const p = this.entity.position;
-    const sun = sunCycle.current;
+    const sun = renderManager.querySun();
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
     const airH = Math.max(0, p.y - gy);
     // 太阳水平单位向量(脚跟→影子方向) 与 投影比 1/tan(仰角)

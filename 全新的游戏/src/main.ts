@@ -19,7 +19,7 @@ import { WorldMode } from './modes/WorldMode';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
-import { setupGameLights, LIGHT_TUNING } from './services/render/GameLights';
+import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 
 // ============================================================
 // 全局状态（最小化：只保留 shared 资源和当前模式引用）
@@ -62,7 +62,7 @@ async function boot() {
   // ★ 雾：远处融进背景色，遮 chunk 加载边缘 + 大气氛围（舰船内部距离小，不受影响）
   scene.fog = new THREE.Fog(0xcccccc, 80, 200);
   // ★ 光照词汇表：半球光(天/地双色) + 投影太阳（替代原 AmbientLight+无影平行光）
-  setupGameLights(scene);
+  renderManager.setup(scene);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
   window.addEventListener('resize', () => {
