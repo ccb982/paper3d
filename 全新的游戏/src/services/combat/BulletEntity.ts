@@ -54,9 +54,10 @@ export class BulletEntity extends EntityBase {
     return this.active;
   }
 
-  /** ★ 影子声明（子弹：沿弹道方向拉长的剪影椭圆，尺寸≈旧 radius0.65×stretch1.6） */
-  protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
-    return { w: 1.3, d: 2.08, alpha: 0.38 };
+  /** ★ 影子声明（子弹：沿弹道方向的拉长剪影椭圆，固定长轴模式——
+   *  高速运动体不参与太阳投影，但浓度仍随白昼因子衰减） */
+  protected override get shadowShape(): { w: number; len?: number; alpha?: number } | null {
+    return { w: 1.3, len: 2.08, alpha: 0.38 };
   }
 
   /** ★ 影子朝向 = 弹道方向（弹头指向前方）。

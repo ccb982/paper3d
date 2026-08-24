@@ -89,13 +89,13 @@ export class ItemBase extends EntityBase {
     return this.collisionVolume?.offsetY ?? 0.22;
   }
 
-  /** ★ 影子声明（物品：贴片同宽的剪影影；剪影源由基类自动取帧，无需覆写） */
-  protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
+  /** ★ 影子声明（物品：贴片同宽；太阳投影模式，剪影源由基类自动取帧） */
+  protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
     const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
     if (!r?.mesh) return null;
     return {
       w: Math.abs(r.mesh.scale.x),
-      d: Math.abs(r.mesh.scale.y) * 0.8,
+      h: Math.abs(r.mesh.scale.y),
       alpha: 0.3,
     };
   }

@@ -20,6 +20,7 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { gameLights } from '../services/render/GameLights';
+import { sunCycle } from '../services/render/SunCycle';
 import { bakeChunkAppearance } from '../services/map/ChunkAppearance';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
@@ -120,6 +121,9 @@ export class WorldMode implements IGameMode {
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张） ----
     this.raster = new RasterMap();
     this.entities = new EntityManager(this.physics, this.raster);
+
+    // ★ 昼夜循环重置：每次出击从清晨出发（后续可按 Session.day 变化出发时刻）
+    sunCycle.reset();
 
     // 玩家出生 = 中心 chunk 中心
     const spawn = this.spawnPoint;
@@ -266,6 +270,9 @@ export class WorldMode implements IGameMode {
   /** 每帧驱动（自包含：输入 → 物理 → 相机 → 实体 → AI） */
   update(dt: number): void {
     if (!this.binding || !this.physics || !this.scene || !this.camera || !this.renderer) return;
+
+    // ★ 昼夜循环推进（局内连续；先于实体更新 → 影子/光照用本帧太阳状态）
+    sunCycle.update(dt);
 
     this.binding.update();
     const input = this.binding.input;

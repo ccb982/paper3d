@@ -125,13 +125,13 @@ export abstract class CharacterBase extends EntityBase {
     }
   }
 
-  /** ★ 影子声明（角色：宽=贴片宽，深=身高×0.7；基类统一驱动 + 自动取当前帧剪影） */
-  protected override get shadowShape(): { w: number; d: number; alpha?: number } | null {
+  /** ★ 影子声明（角色：宽/视觉高=贴片尺寸；太阳投影模式，早晚影子方向长度随日照变化） */
+  protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
     const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
     if (!r?.mesh) return null;
     return {
       w: Math.abs(r.mesh.scale.x || 1.2),
-      d: Math.abs(r.mesh.scale.y || 1) * 0.7, // 影长≈身高×0.7
+      h: Math.abs(r.mesh.scale.y || 1),
       alpha: 0.38,
     };
   }

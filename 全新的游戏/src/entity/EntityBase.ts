@@ -21,6 +21,7 @@ import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
 import { levelForDistance } from '../services/lod';
 import { SilhouetteShadow, type ShadowFrameSource } from '../services/render/SilhouetteShadow';
+import { sunCycle } from '../services/render/SunCycle';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { FrameState } from '../services/fx/FrameState';
@@ -44,6 +45,8 @@ export interface EntityBaseOptions {
   /** 初始动画状态（朝向等） */
   animInitial?: Partial<FrameState>;
 }
+
+const _gsRight = new THREE.Vector3();
 
 export abstract class EntityBase {
   readonly entity: Entity;
@@ -87,17 +90,21 @@ export abstract class EntityBase {
 
   // ============================================================
   // 贴地剪影影子（架构 8.x 统一机制：所有实体 = 角色同款）
+  // 影子 = 竖立精灵在太阳平行光下的解析仿射投影（方向/长度随昼夜变化）：
+  //   影长 = (视觉高 + 离地高) / tan(仰角)，方向与太阳水平分量反向
   // 子类只需声明：
-  //   ① 覆写 shadowShape：尺寸/透明度（null = 无影子）
+  //   ① 覆写 shadowShape：宽 w / 视觉高 h / alpha（null = 无影子）
+  //      - 默认太阳投影模式（h 缺省 = w）
+  //      - len 显式给固定影长 → 走 shadowYaw 定向模式（子弹等自拉伸体）
   //   ② 剪影源默认自动取当前动画帧；非 FTX 资产才需覆写
   //      getShadowFrameData（如子弹的共享画布）
-  //   ③ 运动实体覆写 shadowYaw 让影子跟随移动方向（默认不旋转）
+  //   ③ 固定长轴模式下覆写 shadowYaw 定向；太阳投影模式不需要
   // ============================================================
 
   protected _scene: THREE.Scene | null = null;
 
-  /** ★ 影子形状声明（宽 w / 深 d 世界单位；alpha 缺省 0.38；null = 无影子） */
-  protected get shadowShape(): { w: number; d: number; alpha?: number } | null {
+  /** ★ 影子形状声明（w=宽；h=视觉高度参与投影；len=固定影长(免投影)；alpha 缺省 0.38） */
+  protected get shadowShape(): { w: number; h?: number; len?: number; alpha?: number } | null {
     return null;
   }
 
@@ -113,21 +120,59 @@ export abstract class EntityBase {
 
   private gsShadow: SilhouetteShadow | null = null;
 
-  /** ★ 每帧影子同步（update 骨架⑦：惰性创建 + 剪影更新 + 跟随贴地 + LOD 渐隐） */
+  /** ★ 每帧影子同步（update 骨架⑦：惰性创建 + 剪影更新 + 太阳投影仿射 + LOD/日照渐隐） */
   private syncShadow(): void {
     const shape = this.shadowShape;
     if (!shape || !this._scene) return;
     const fd = this.getShadowFrameData();
     if (!fd) return; // 无剪影源 = 无影子（不做纯色矩形兜底）
     if (!this.gsShadow) {
-      this.gsShadow = new SilhouetteShadow(this._scene, shape.w, shape.d, shape.alpha ?? 0.38);
+      this.gsShadow = new SilhouetteShadow(this._scene, shape.w, shape.alpha ?? 0.38);
     }
     this.gsShadow.setSource(fd);
+
+    // ---- 地面仿射基：宽向量 R × 长向量 S ----
     const p = this.entity.position;
-    this.gsShadow.followEntity(p.x, p.z, this.shadowYaw,
+    const sun = sunCycle.current;
+    let rx: number, rz: number, sx: number, sz: number, len: number;
+    if (shape.len != null) {
+      // 固定长轴模式（子弹等自拉伸体）：方向 = shadowYaw，长度 = 声明值
+      const yaw = this.shadowYaw;
+      sx = Math.sin(yaw); sz = Math.cos(yaw);
+      len = shape.len;
+      rx = sz; rz = -sx;
+    } else {
+      // 太阳投影模式：影长 = (视觉高 + 离地高) × |xz|/y（= h/tan 仰角），
+      // 方向与太阳水平分量反向；离地越高影子外移越远（跳跃/飞行自然正确）
+      const invY = 1 / Math.max(0.15, sun.dir.y);
+      const dx = -sun.dir.x * invY, dz = -sun.dir.z * invY;
+      const dl = Math.hypot(dx, dz) || 1e-6;
+      sx = dx / dl; sz = dz / dl;
+      const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+      const airH = Math.max(0, p.y - gy);
+      len = ((shape.h ?? shape.w) + airH) * dl;
+      // 宽轴 = 贴片右向量的地面投影（billboard 朝相机）；近共线时退化垂直长轴
+      const rb = this.rendererGroundBasisX();
+      if (rb && Math.abs(rb.x * sx + rb.z * sz) < 0.98) { rx = rb.x; rz = rb.z; }
+      else { rx = -sz; rz = sx; }
+    }
+
+    this.gsShadow.followAffine(p.x, p.z, rx, rz, sx, sz, len,
       (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
     this.gsShadow.mesh.visible = this.visible && this.viewLod < 3;
-    this.gsShadow.setLodOpacity(this.viewLod);
+    // 浓度随白昼因子调制：正午浓、晨昏淡、夜晚自然消失
+    this.gsShadow.setLodOpacity(this.viewLod, 0.2 + 0.8 * sun.daylight);
+  }
+
+  /** 贴片右向量（mesh 矩阵 X 基）的地面投影——剪影影子的宽轴 */
+  private rendererGroundBasisX(): { x: number; z: number } | null {
+    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
+    const m = r?.mesh?.matrixWorld;
+    if (!m) return null;
+    _gsRight.set(m.elements[0], 0, m.elements[2]);
+    if (_gsRight.lengthSq() < 1e-6) return null;
+    _gsRight.normalize();
+    return { x: _gsRight.x, z: _gsRight.z };
   }
 
   /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
