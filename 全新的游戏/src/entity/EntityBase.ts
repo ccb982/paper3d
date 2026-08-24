@@ -15,6 +15,7 @@
 //   - onDeath() / onTakeDamage()：生命周期钩子
 
 import * as THREE from 'three';
+import { RasterMap } from '../services/map/RasterMap';
 import type { Entity, EntityKind } from './Entity';
 import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
@@ -42,6 +43,10 @@ export interface EntityBaseOptions {
   /** 初始动画状态（朝向等） */
   animInitial?: Partial<FrameState>;
 }
+
+const _gsUp = new THREE.Vector3(0, 1, 0);
+const _gsTmpNormal = new THREE.Vector3();
+const _gsTmpQuat = new THREE.Quaternion();
 
 export abstract class EntityBase {
   readonly entity: Entity;
@@ -85,8 +90,54 @@ export abstract class EntityBase {
     return null;
   }
 
-  /** ★ 剪影遮罩纹理（子类提取后赋值；GroundBlobLayer 读它作为面片贴图） */
+  /** ★ 剪影遮罩纹理（子类提取后赋值）*/
   shadowAlphaTex: THREE.CanvasTexture | null = null;
+
+  // ---- 贴地影子（基类统一管理，attachToScene 自动创建）----
+  protected _scene: THREE.Scene | null = null;
+  private _groundShadow: THREE.Mesh | null = null;
+  private _groundShadowMat: THREE.MeshBasicMaterial | null = null;
+
+  /** 每帧同步贴地影子（惰性创建 + 跟随实体 + 贴地爬坡） */
+  private syncGroundShadow(): void {
+    const spec = this.shadowSpec;
+    if (!spec || !this._scene) return;
+
+    // ---- 惰性创建 ----
+    if (!this._groundShadow) {
+      const geo = new THREE.CircleGeometry(spec.radius, 16);
+      geo.rotateX(-Math.PI / 2);
+      this._groundShadowMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: spec.alpha,
+        depthWrite: false,
+      });
+      this._groundShadow = new THREE.Mesh(geo, this._groundShadowMat);
+      this._groundShadow.renderOrder = -1;
+      this._groundShadow.frustumCulled = false;
+      this._scene.add(this._groundShadow);
+    }
+
+    // ---- 同步位置 + 贴地爬坡 ----
+    const p = this.entity.position;
+    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z);
+    this._groundShadow.position.set(p.x, (gy ?? 0) + 0.03, p.z);
+
+    // ★ 斜坡贴合：采样四角高度差计算地形法线 → 倾斜圆影匹配坡度。
+    //   平地时法线≈(0,1,0)，影子保持水平；坡地上影子沿坡面倾斜不悬空不穿地。
+    const hs = 0.25;
+    const hL = RasterMap.current?.surfaceHeightAt(p.x - hs, p.z) ?? gy ?? 0;
+    const hR = RasterMap.current?.surfaceHeightAt(p.x + hs, p.z) ?? gy ?? 0;
+    const hD = RasterMap.current?.surfaceHeightAt(p.x, p.z - hs) ?? gy ?? 0;
+    const hU = RasterMap.current?.surfaceHeightAt(p.x, p.z + hs) ?? gy ?? 0;
+    _gsTmpNormal.set(hL - hR, 2 * hs, hD - hU).normalize();
+    _gsTmpQuat.setFromUnitVectors(_gsUp, _gsTmpNormal);
+    this._groundShadow.quaternion.slerp(_gsTmpQuat, 0.3);
+
+    // ---- LOD 可见性 ----
+    this._groundShadow.visible = this.visible;
+  }
 
   /** ★ 影子朝向（yaw 弧度）——基类从位移差自动跟踪，所有实体共享 */
   groundShadowYaw = 0;
@@ -200,8 +251,14 @@ export abstract class EntityBase {
   /** 子类实现：创建渲染器（FTXQuad / 特效网格） */
   protected abstract createRenderer(scene: THREE.Scene): FxRendererBase | null;
 
+  /** 设置场景引用（供不走 attachToScene 流程的实体使用，如子弹池化复用） */
+  setSceneReference(scene: THREE.Scene): void {
+    this._scene = scene;
+  }
+
   /** 挂到场景（模式层在构造后调用） */
   attachToScene(scene: THREE.Scene): void {
+    this._scene = scene;
     this.renderer = this.createRenderer(scene);
     // ① 自动启用贴地剪影影子渲染（有 setGroundShadow 的渲染器如 FTXQuad）
     const r = this.renderer as unknown as { setGroundShadow?: (on: boolean) => void };
@@ -214,6 +271,23 @@ export abstract class EntityBase {
       if (fd) {
         this.shadowAlphaTex = this.extractShadowMask(fd);
       }
+    }
+
+    // ★ 自动创建贴地影子面片（有 shadowSpec 的实体才有）
+    const spec = this.shadowSpec;
+    if (spec && !this._groundShadow && this._scene) {
+      const geo = new THREE.CircleGeometry(spec.radius, 20);
+      geo.rotateX(-Math.PI / 2);
+      this._groundShadowMat = new THREE.MeshBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: spec.alpha,
+        depthWrite: false,
+      });
+      this._groundShadow = new THREE.Mesh(geo, this._groundShadowMat);
+      this._groundShadow.renderOrder = -1;
+      this._groundShadow.frustumCulled = false;
+      this._scene.add(this._groundShadow);
     }
   }
 
@@ -266,7 +340,8 @@ export abstract class EntityBase {
     this.syncRender();                      // ④ 渲染同步
     this.updateEffects(dt);                 // ⑤ 附属特效驱动（跟随/时间轴/回收）
     this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
-    this.onShadowSync();                    // ⑦ 贴地影子同步（子类覆写）
+    this.syncGroundShadow();                // ⑦ 贴地影子同步
+    this.onShadowSync();                    // ⑧ 影子朝向同步（子类覆写）                    // ⑦ 贴地影子同步（子类覆写）
 
     // ★ 影子朝向跟踪：从位移差实时更新，与相机角度无关
     if (!isNaN(this._gsLastX)) {

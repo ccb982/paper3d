@@ -21,7 +21,6 @@ import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { gameLights } from '../services/render/GameLights';
 import { bakeChunkAppearance } from '../services/map/ChunkAppearance';
-import { GroundBlobLayer } from '../services/render/GroundBlobLayer';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
@@ -138,7 +137,6 @@ export class WorldMode implements IGameMode {
     }
 
     // ★ 动态圆影层挂载（实时渲染模块）：为视锥内实体提供贴地圆影
-    this.groundBlobs = new GroundBlobLayer(ctx.scene!, this.raster);
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -360,7 +358,6 @@ export class WorldMode implements IGameMode {
     if (!this.scene || !this.camera || !this.renderer) return;
     // ★ 阴影相机锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) gameLights.follow(this.player.position);
-    if (this.groundBlobs) this.groundBlobs.update(this.camera!);
     this.entities.renderAll(this.camera);
     this.bullets.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
@@ -397,10 +394,7 @@ export class WorldMode implements IGameMode {
     this.pickupGlows = [];
 
     // ---- chunk 视觉网格 ----
-    this.chunkQueue.length = 0;   // ★ 清空构建队列
-    this.groundBlobs?.dispose();
-    this.groundBlobs = null;
-    this.queuedKeys.clear();
+    this.chunkQueue.length = 0;   // ★ 清空构建队列    this.queuedKeys.clear();
     for (const m of this.chunkMeshes.values()) {
       this.scene?.remove(m);
       m.geometry.dispose();
@@ -481,9 +475,7 @@ export class WorldMode implements IGameMode {
    *  后续可移入 wx.createWorker/Worker；THREE 网格与 rapier 碰撞体必须留在主线程 */
   private chunkQueue: { cx: number; cz: number; rebuild: boolean }[] = [];
   private queuedKeys = new Set<number>();
-  /** ★ 动态圆影层（实时渲染模块·特性#1）：所有实体的贴地影子 */
-  private groundBlobs: GroundBlobLayer | null = null;
-  /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
+  /** ★ 动态圆影层（实时渲染模块·特性#1）：所有实体的贴地影子 */  /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
   private static readonly CHUNK_BUILD_BUDGET_MS = 8;
 
   private syncChunks(px: number, pz: number): void {

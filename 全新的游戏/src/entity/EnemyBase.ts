@@ -81,10 +81,6 @@ export class EnemyBase extends CharacterBase {
     return new FTXQuad(scene, source);
   }
 
-  /** 贴地圆影（敌人：略淡） */
-  override get shadowSpec(): { radius: number; alpha: number } | null {
-    return { radius: 0.45, alpha: 0.35 };
-  }
 
   /** ★ AI 驱动入口（AISystem 每帧调用） */
   updateAI(dt: number, ctx: BehaviorContext): void {

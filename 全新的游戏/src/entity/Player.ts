@@ -37,10 +37,6 @@ export class Player extends CharacterBase {
     return new FTXQuad(scene, source);
   }
 
-  /** 贴地圆影（角色标准配置） */
-  override get shadowSpec(): { radius: number; alpha: number } | null {
-    return { radius: 0.45, alpha: 0.4 };
-  }
 
   /** 攻击（消费式按键由模式层转发） */
   attack(): void {
