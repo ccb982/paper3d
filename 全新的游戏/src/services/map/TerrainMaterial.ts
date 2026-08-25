@@ -18,16 +18,20 @@
 
 import * as THREE from 'three';
 
-/** 地形光照调参入口（集中一处；数值锚点：正午平地合成亮度 ≈1.3 进 ACES） */
+/** 地形光照调参入口。
+ *  ★ 光照哲学（定稿）：默认整个地面是暗的，光是把亮度"加上去"的——
+ *    环境项只是保底可见度（暗基准），太阳直射项承担主要照明。
+ *    这样影子读作「光的缺席」而非「涂上去的黑块」。
+ *    锚点：正午平地合成亮度 ≈1.3 进 ACES。 */
 export const TERRAIN_LIGHT_TUNING = {
-  /** 直射强度基准（乘 SunCycle.intensityScale） */
-  sunIntensity: 0.95,
-  /** 白昼环境色（冷灰蓝，天空主导）与强度 */
+  /** 直射强度基准（乘 SunCycle.intensityScale）——主要照明来源 */
+  sunIntensity: 1.15,
+  /** 白昼环境色（冷灰蓝）与强度：暗基准，不是照明主力 */
   ambientDay: 0x9aa8c4,
-  ambientDayIntensity: 0.62,
+  ambientDayIntensity: 0.32,
   /** 夜晚环境色（深蓝）与强度 */
   ambientNight: 0x2a3552,
-  ambientNightIntensity: 0.22,
+  ambientNightIntensity: 0.10,
 };
 
 const registry = new Set<TerrainMaterial>();

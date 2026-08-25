@@ -34,9 +34,10 @@ const WALL_SKY_DIM = 0.22;
 /** 逐墙确定性抖动幅度（±半幅；打破整面墙单一色的呆板感） */
 const WALL_JITTER = 0.10;
 
-/** 烘焙太阳水平方向（与 ChunkAppearance.BAKE_SUN 同源同步；勿单方修改） */
-const SUN_HX = -0.7071;
-const SUN_HZ = -0.7071;
+/** 烘焙太阳水平方向（与 ChunkAppearance.BAKE_SUN 同源同步；勿单方修改）。
+ *  相机后上方过肩光：面向默认相机（+z 外法线）的墙 = 朝阳亮墙 */
+const SUN_HX = -0.342;
+const SUN_HZ = 0.940;
 
 /**
  * 单面墙的显示空间亮度乘数。

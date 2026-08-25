@@ -10,10 +10,11 @@
 //     final = albedo × (环境色 × G + 太阳色 × R)
 //   昼夜循环只动两个 uniform——阴影浓度/色调随时可调，无需重烘。
 //
-// 阴影算法（行业标准：高度场射线步进，GameDev.net 2002 正典）：
-//   沿固定烘焙太阳方向逐米步进，「遮挡物高出接收平面 ≥ 落差门槛」
-//   才投影；软边 = 遮挡越厚影越实（smoothstep 半影）。参数按标准
-//   地图的块状结构重推（4m 等高柱体），不继承 Boss4D 废案数值。
+// 阴影算法（标准实现：iq SDF 软阴影公式的地形变体 res=min(res,k·h/t)）：
+//   沿固定烘焙太阳方向自适应步进，逐点累计「净空角宽度」取最暗值——
+//   接触遮挡物处锐利、随距离半影自然展宽（固定宽度过渡带做不到）。
+//   台阶豁免：落差 <0.5m 的地形不产生遮挡。参数按标准地图的块状
+//   结构重推（4m 等高柱体），不继承 Boss4D 废案数值。
 //   ⚠️ terrain.heightAt 在 4m 块内恒定 → 步进采样自动按柱体取值，
 //      无需专门 DDA。
 //
@@ -352,19 +353,27 @@ export function bakeChunkAppearance(
 const LIGHT_RES = 128;
 
 /** 烘焙太阳（美术定光源；hx/hz=指向太阳的水平单位向量，tan=射线爬升率）。
- *  仰角 45°、光来自西南——集中此处调参。 */
-const BAKE_SUN = { hx: -0.7071, hz: -0.7071, tan: 1.0 };
+ *  ★ 主光必须在【相机后上方】（默认 yaw=0 → 相机在 +z 侧看 -z）：
+ *    影子拖向 -z = 拖进玩家视野内的地面；面向相机的墙 = 朝阳亮墙。
+ *    放反了会得到：地面无影（影子全被高台挡在背面）+ 迎面墙全黑。 */
+const BAKE_SUN = { hx: -0.342, hz: 0.940, tan: 1.0 };
 
 /** 投影门槛：遮挡物须高出接收面 ≥ 此值才投影
  *  （道路自身抖动 ±0.3m 不投影；高台落差 ≥1.5m 必投影） */
 const CAST_MIN_DEPTH = 0.5;
 /** 射线射程（米）：高台柱体最厚 ~4m + 斜向余量 */
 const CAST_RANGE = 16;
-const CAST_STEP = 1.25;
-/** 半影：遮挡超出射线的厚度在此范围内从 0 渐变到全影（米） */
-const CAST_PENUMBRA = 1.1;
+// ---- 软阴影（标准实现：iq SDF 软阴影公式的地形变体）----
+//   res = min(res, k·h / t)   h=射线净空, t=行进距离
+//   几何含义：净空角宽度 → 接触遮挡物处锐利，随距离半影自然展宽。
+const SHADOW_K = 10;          // 半影硬度（越大越锐；太阳真实角直径≈1000+）
+const CAST_MIN_STEP = 0.75;   // 自适应步长下限（近遮挡处精细采样）
+const CAST_MAX_STEP = 2.5;    // 步长上限（<4m 块对角，防整列跳过）
+const CAST_MAX_ITERS = 24;    // 迭代上限
 /** 全影时直射项的保留比例（模拟天空散射；越小影子越深。0=物理纯黑，观感死板） */
 const SHADOW_FLOOR = 0.12;
+/** 全影区 AO 松绑比例：1=影内完全取消 AO（最亮），0=AO 全额叠加（贴墙死黑） */
+const SHADOW_ZONE_AO_RELIEF = 0.65;
 /** N·L wrap（0=朗伯硬边；轻微软化明暗交界——现只用于顶面常数推导） */
 const NL_WRAP = 0.15;
 /** 光照图双边模糊（不过高度断崖——影子不得爬上台顶，踩过的坑） */
@@ -513,17 +522,26 @@ function bakeLightCanvas(terrain: TerrainBakeSource, cx: number, cz: number): TH
       // （hL/hR/hD/hU 供模糊权重参考；直射项按平顶常数处理——
       //   侧壁形体感由 ChunkWalls 独立几何承担，不再污染地面贴图）
 
-      // 顶面：常数直射 × 投影可见度（留底防死黑）
-      let sh = 0;
-      for (let d = CAST_STEP; d <= CAST_RANGE && sh < 1; d += CAST_STEP) {
-        const th = terrain.heightAt(wx + BAKE_SUN.hx * d, wz + BAKE_SUN.hz * d);
-        if (th - h < CAST_MIN_DEPTH) continue;          // 台阶不投影
-        const over = th - (h + BAKE_SUN.tan * d);       // 遮挡超出射线的厚度
-        if (over <= 0) continue;
-        const s = over / CAST_PENUMBRA;                 // 半影渐变
-        if (s > sh) sh = s > 1 ? 1 : s;
+      // 顶面：常数直射 × 投影可见度（留底防死黑）。
+      // ★ 软阴影 = iq 标准公式的地形变体：res = min(res, k·h/t)，
+      //   h 为射线对地形的净空——接触遮挡物处锐利、随距离半影展宽。
+      //   台阶豁免：落差 <CAST_MIN_DEPTH 的地形不产生遮挡（只影响步长）。
+      let vis = 1;
+      let t = (CAST_MIN_DEPTH / BAKE_SUN.tan) + 0.05;  // 起步越过自身台阶豁免区
+      for (let it = 0; it < CAST_MAX_ITERS && t <= CAST_RANGE; it++) {
+        const th = terrain.heightAt(wx + BAKE_SUN.hx * t, wz + BAKE_SUN.hz * t);
+        const diff = h + BAKE_SUN.tan * t - th;        // 净空（>0 未命中）
+        const drop = th - h;
+        if (diff <= 0 && drop >= CAST_MIN_DEPTH) { vis = 0; break; }
+        if (drop >= CAST_MIN_DEPTH) {
+          const s = SHADOW_K * diff / t;
+          if (s < vis) vis = s;
+          if (vis < 0.01) break;                       // 已足够黑，提前收敛
+        }
+        // 自适应步长：净空越大步子越大（clamp 防停滞/跳块）
+        t += Math.min(CAST_MAX_STEP, Math.max(CAST_MIN_STEP, diff));
       }
-      const direct = TOP_DIRECT * (SHADOW_FLOOR + (1 - SHADOW_FLOOR) * (1 - sh));
+      const direct = TOP_DIRECT * (SHADOW_FLOOR + (1 - SHADOW_FLOOR) * vis);
 
       // AO（凹陷地块均匀跳过——深度感由几何侧壁承担）
       let ao = 1;
@@ -538,8 +556,13 @@ function bakeLightCanvas(terrain: TerrainBakeSource, cx: number, cz: number): TH
         ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
       }
 
+      // ★ 防重复计费：直射遮挡（vis 低）多发生在同一批遮挡物脚下，
+      //   AO 若全额叠加会三重压暗（直射umbra+天光遮挡+半影），贴墙
+      //   一圈黑到失真。全影区按比例松绑 AO——AO 主要作用于受光区。
+      const aoEff = ao + (1 - ao) * (1 - vis) * SHADOW_ZONE_AO_RELIEF;
+
       directF[py * S + px] = direct;
-      aoF[py * S + px] = ao;
+      aoF[py * S + px] = aoEff;
     }
   }
 
