@@ -92,6 +92,13 @@ export interface FluidEditorConfig {
   maxVelocity?: number;
 
   /**
+   * ★ 运动粘度 ν（cells²/s），0=无粘性（旧默认）。
+   * 速度场显式扩散：∂v/∂t = ν∇²v —— 平滑剪切层/射流（小尺度结构衰减最快），
+   * 保留大尺度运动 → 水团获得"内聚"手感。废弃模拟器同款机制（其 ν=1000 为动态粘度/密度）。
+   */
+  viscosity?: number;
+
+  /**
    * 全局速度缩放因子（无方向标量）。
    *
    * 每帧 step 末尾对整个速度场乘以此系数：
@@ -534,13 +541,18 @@ export class FluidEditor {
     //   直接被平流消费 → 只会把颜色抹开，σ 拉到多大都看不见。
     if (this.config.enableLevelSet && this._phiGrid) {
       const st = this.config.levelSetConfig?.surfaceTension ?? 0;
-      if (st > 0) {
+      // ★ σ 允许取负：shader 里 F=-σκδn̂，σ>0=向内收缩（水团），σ<0=向外扩散（爆裂/雾化）
+      if (st !== 0) {
         const band = this.config.levelSetConfig?.narrowBandWidth ?? 5;
         this.levelSetSolver.applySurfaceTension(
           this.velocityGrid, this._phiGrid.read, this.getObstacleTexture(), st, dt, band,
         );
       }
     }
+
+    // 2.46 ★ 粘度（速度场扩散 ν∇²v）——力相，压力投影之前：
+    //   抹平剪切层/射流（小尺度结构衰减最快），保留大尺度运动 → 水团内聚不散花
+    this.applyViscosity(dt);
 
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
     this.applyBoundary();
@@ -792,6 +804,62 @@ export class FluidEditor {
 
     this.gpu.render(this.renderer, this.velocityGrid.write, mat);
     this.velocityGrid.swap();
+  }
+
+  /**
+   * ★ 粘度：速度场显式扩散 ∂v/∂t = ν∇²v（h=1 cell，离散 Laplacian = 四邻和−4·自身）。
+   *
+   * 稳定性（von Neumann）：显式扩散要求 ν·dt/h² ≤ 0.25 → 超出时子步分摊，
+   * 子步数上限 MAX_STEPS=8（性能护栏），超出后单步扩散量被截断在稳定上限内
+   * （等效粘度饱和，而非失稳）。
+   *
+   * 效果：剪切层/射流等小尺度结构按 e^{−νk²t} 最快衰减，大尺度运动保留 → 内聚感。
+   */
+  private applyViscosity(dt: number): void {
+    const nu = this.config.viscosity ?? 0;
+    if (nu <= 0 || dt <= 0) return;
+
+    const w = this.velocityGrid.resolution.w;
+    const h = this.velocityGrid.resolution.h;
+    const total = nu * dt;
+    const MAX_DIFF = 0.2;   // 单步扩散稳定上限（<0.25）
+    const MAX_STEPS = 8;    // 子步上限（性能护栏）
+    const steps = Math.min(MAX_STEPS, Math.max(1, Math.ceil(total / MAX_DIFF)));
+    const perStep = Math.min(MAX_DIFF, total / steps);
+
+    const mat = this.gpu.getMaterial('editor_viscosity_v1', {
+      uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTexture() },
+      uInvRes: { value: new THREE.Vector2(1 / w, 1 / h) },
+      uDtNu: { value: perStep },
+    }, /* glsl */ `
+      uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
+      uniform vec2 uInvRes;
+      uniform float uDtNu;
+      varying vec2 vUv;
+      void main() {
+        // 墙内速度保持（与表面张力 pass 一致）
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+        vec2 ts = uInvRes;
+        vec2 vC = texture2D(uVelocity, vUv).rg;
+        vec2 vL = texture2D(uVelocity, vUv - vec2(ts.x, 0.0)).rg;
+        vec2 vR = texture2D(uVelocity, vUv + vec2(ts.x, 0.0)).rg;
+        vec2 vB = texture2D(uVelocity, vUv - vec2(0.0, ts.y)).rg;
+        vec2 vT = texture2D(uVelocity, vUv + vec2(0.0, ts.y)).rg;
+        vec2 vel = vC + uDtNu * (vL + vR + vT + vB - 4.0 * vC);
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+
+    for (let i = 0; i < steps; i++) {
+      mat.uniforms.uVelocity.value = this.velocityGrid.read;  // swap 后刷新读取缓冲
+      this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+      this.velocityGrid.swap();
+    }
   }
 
   // ==================== 压力投影（红-黑 SOR） ====================

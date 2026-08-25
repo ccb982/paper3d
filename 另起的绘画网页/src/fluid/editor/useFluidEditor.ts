@@ -30,9 +30,9 @@ export function useFluidEditor(
     levelSetConfig: {
       reinitInterval: 1,       // 重初始化间隔（帧数）：1=每帧重建 φ，新注入的液体立刻有表面（σ 即刻生效）
       reinitIterations: 6,     // 每次重初始化迭代次数（红-黑 SOR 轮数）：≥4 才能让 SDF 充分收敛
-      // 表面张力系数 σ（0=禁用）。force=σ·κ·δ(φ)，像素单位制下 κ≈1/R(px)、δ峰值≈1/(2ε)
-      // → Δv/帧 ≈ σ/300R。要有"真实水团"的收缩感需 Δv≈几十px/s每帧
-      // → 有效范围 10⁵~10⁶ 级（废弃模拟器 UV 单位制 σ=728000 的等效强度）
+      // 表面张力系数 σ。shader: F=-σκδ(φ)n̂（φ<0 为水，n̂ 指向空气）
+      //   σ>0 → 力指向曲率中心 = 向内收缩成水团；σ<0 → 反转 = 向外扩散（爆裂/雾化）
+      // 像素单位制下 Δv/帧 ≈ σ/300R：水团感需 10⁵~10⁶ 级
       surfaceTension: 1000000,
       narrowBandWidth: 5,      // 窄带宽度/作用半径（像素）
       // ★ 约束液体默认开启：把平流抹开的颜色晕圈裁剪到 φ<0 边界内——
@@ -53,6 +53,9 @@ export function useFluidEditor(
     colorBoundaryMode: 'clamp',
     maxVelocity: 5000, // 全局速度限幅上限（px/s），防止速度爆炸
     velocityScale: 1,  // 全局速度缩放因子：1=无影响，<1阻尼减速，>1加速
+    // ★ 运动粘度 ν（cells²/s），0=无粘性。速度扩散抹平射流/剪切 → 水团内聚；
+    //   水感建议 10~60，>100 等效强度饱和（子步上限护栏）
+    viscosity: 20,
     // ★ MCSDA 标量浓度平流模式（默认 vector 旧模式，保持兼容）
     advectionMode: 'vector',
     combineMode: 'add',      // 合成模式：'add'(基础色+增量) | 'sub'(基础色-增量)，仅scalar生效

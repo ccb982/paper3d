@@ -166,6 +166,7 @@ export function parseImportedFluidConfig(
     gravity: gf.gravity || { x: 0, y: 0 },
     velocityScale: gf.velocityScale ?? 1,
     maxVelocity: gf.maxVelocity ?? 5000,
+    viscosity: gf.viscosity ?? 0,
     colorBoundaryMode: gf.colorBoundaryMode || 'clamp',
     resolution,
     continuousSources: (json.continuousSources || []).map(normalizeInjectionSource),
@@ -514,6 +515,7 @@ export function parseInternalFluidConfig(
     gravity: { x: num(raw.gravity?.x, 0), y: num(raw.gravity?.y, 0) },
     velocityScale: num(raw.velocityScale, 1),
     maxVelocity: num(raw.maxVelocity, 5000),
+    viscosity: num(raw.viscosity, 0),
     colorBoundaryMode: raw.colorBoundaryMode === 'repeat' || raw.colorBoundaryMode === 'zero'
       ? raw.colorBoundaryMode : 'clamp',
     advectionMode: raw.advectionMode === 'scalar' ? 'scalar' : 'vector',
@@ -580,6 +582,7 @@ export function serializeFluidConfigToJSON(config: FluidSolverConfig): any {
       gravity: { ...config.gravity },
       velocityScale: config.velocityScale,
       maxVelocity: config.maxVelocity,
+      viscosity: config.viscosity ?? 0,
       colorBoundaryMode: config.colorBoundaryMode,
     },
     resolution: { w: config.resolution.w, h: config.resolution.h },

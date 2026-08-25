@@ -80,6 +80,8 @@ export interface FluidSolverConfig {
   gravity: { x: number; y: number };           // 像素/秒²
   velocityScale: number;
   maxVelocity: number;
+  /** ★ 运动粘度 ν（cells²/s），0=无粘性。速度扩散抹平射流/剪切 → 水团内聚 */
+  viscosity?: number;
   colorBoundaryMode: 'clamp' | 'repeat' | 'zero';
   advectionMode: 'vector' | 'scalar';
   combineMode: 'add' | 'sub';
@@ -125,6 +127,7 @@ export const defaultFluidConfig: FluidSolverConfig = {
   gravity: { x: 0, y: 0 },
   velocityScale: 1,
   maxVelocity: 5000,
+  viscosity: 0,
   colorBoundaryMode: 'clamp',
   advectionMode: 'vector',
   combineMode: 'add',
@@ -886,6 +889,53 @@ export class FluidSolver {
     this.velocityGrid.swap();
   }
 
+  /**
+   * ★ 粘度：速度场显式扩散 ∂v/∂t = ν∇²v（与 FluidEditor.applyViscosity 同款）。
+   * 稳定性：ν·dt ≤ 0.2/步，超出子步分摊（上限 8 步，等效强度饱和不失稳）。
+   */
+  private applyViscosity(dt: number): void {
+    const nu = this.config.viscosity ?? 0;
+    if (nu <= 0 || dt <= 0) return;
+
+    const w = this.velocityGrid.resolution.w;
+    const h = this.velocityGrid.resolution.h;
+    const total = nu * dt;
+    const steps = Math.min(8, Math.max(1, Math.ceil(total / 0.2)));
+    const perStep = Math.min(0.2, total / steps);
+
+    const mat = this.gpu.getMaterial('fluid_viscosity_v1', {
+      uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTex() },
+      uInvRes: { value: new THREE.Vector2(1 / w, 1 / h) },
+      uDtNu: { value: perStep },
+    }, `
+      uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
+      uniform vec2 uInvRes;
+      uniform float uDtNu;
+      varying vec2 vUv;
+      void main(){
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+        vec2 ts = uInvRes;
+        vec2 vC = texture2D(uVelocity, vUv).rg;
+        vec2 vL = texture2D(uVelocity, vUv - vec2(ts.x, 0.0)).rg;
+        vec2 vR = texture2D(uVelocity, vUv + vec2(ts.x, 0.0)).rg;
+        vec2 vB = texture2D(uVelocity, vUv - vec2(0.0, ts.y)).rg;
+        vec2 vT = texture2D(uVelocity, vUv + vec2(0.0, ts.y)).rg;
+        gl_FragColor = vec4(vC + uDtNu * (vL + vR + vT + vB - 4.0 * vC), 0.0, 1.0);
+      }
+    `);
+
+    for (let i = 0; i < steps; i++) {
+      mat.uniforms.uVelocity.value = this.velocityGrid.read;
+      this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+      this.velocityGrid.swap();
+    }
+  }
+
   // ==================== 压力投影（红-黑 SOR）====================
 
   private solvePressure(iterations: number, omega: number): void {
@@ -1136,14 +1186,17 @@ export class FluidSolver {
           this.applyPhiCorrection();
         }
       }
-      // (3) 表面张力注入（CSF 模型，σ>0 时启用，δ(φ) 归一化窄带施力）
-      if (ls.surfaceTension > 0) {
+      // (3) 表面张力注入（CSF 模型，σ≠0 时启用；σ>0 收缩成团 / σ<0 向外扩散）
+      if (ls.surfaceTension !== 0) {
         this.levelSetSolver.applySurfaceTension(
           this.velocityGrid, this._phiGrid.read, this.getObstacleTex(),
           ls.surfaceTension, dt, band,
         );
       }
     }
+
+    // 3.45 ★ 粘度（速度扩散，力相：压力投影之前）
+    this.applyViscosity(dt);
 
     // 3.5 边界处理（压力投影之前，避免与梯度修正拮抗）
     this.applyBoundary();

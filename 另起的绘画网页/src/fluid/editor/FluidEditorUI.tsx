@@ -1230,6 +1230,29 @@ const GeneralPanel: React.FC<{
           </span>
         </div>
 
+        {/* 粘度（速度场扩散，内聚感） */}
+        <div className="control-group">
+          <label>🛞 粘度 ν</label>
+          <div className="row" style={{ gap: '6px', alignItems: 'center' }}>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={config.viscosity ?? 0}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onConfigChange({ viscosity: isNaN(v) ? 0 : Math.max(0, v) });
+              }}
+              style={{ flex: 1 }}
+              title="速度场扩散 ν∇²v：抹平射流/剪切层，大尺度运动保留。水团内聚感来源之一"
+            />
+            <span className="hint">{(config.viscosity ?? 0).toFixed(0)}</span>
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            0=无粘性；水感建议 10~60；&gt;100 等效强度饱和
+          </div>
+        </div>
         {/* 全局速度缩放（无方向阻尼/加速） */}
         <div className="control-group">
           <label>⚖️ 全局速度缩放（无方向）</label>
@@ -1917,7 +1940,7 @@ const LevelSetPanel: React.FC<{
           <div className="row">
             <input
               type="range"
-              min={0}
+              min={-5000000}
               max={5000000}
               step={1000}
               value={surfaceTension}
@@ -1926,7 +1949,7 @@ const LevelSetPanel: React.FC<{
             <span className="hint">{surfaceTension.toFixed(0)}</span>
           </div>
           <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-            σ 需极大才可见（force≈σ×κ×δ，像素单位制 Δv/帧≈σ/300R）：建议 100000~3000000 起调；张力在压力投影前施加才能收拢成水团
+            正值=向内收缩成水团（建议 100000~3000000）；负值=向外扩散（爆裂/雾化）；张力在压力投影前施加
           </div>
         </div>
         <div className="control-group">
