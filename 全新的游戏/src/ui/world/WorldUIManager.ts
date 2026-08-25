@@ -38,6 +38,7 @@ export class WorldUIManager extends BaseInteractionUI {
   private inventoryOpen = false;
   private eventUnsub?: () => void;
   private flashItemId: string | null = null;
+  private mapStyleBtn: HTMLButtonElement | null = null;
 
   constructor(
     private session: GameSession,
@@ -323,6 +324,22 @@ export class WorldUIManager extends BaseInteractionUI {
     });
   }
 
+  /** ★ 地图风格切换按钮（右上角悬浮；标签由外部状态刷新） */
+  addMapStyleButton(getLabel: () => string, onToggle: () => void): void {
+    const btn = document.createElement('button');
+    btn.style.cssText = [
+      'position:fixed', 'top:12px', 'right:12px', 'z-index:50',
+      'padding:6px 14px', 'font-size:12px', 'font-weight:bold',
+      'background:#1a2238cc', 'color:#9cf',
+      'border:1px solid #4466aa', 'border-radius:6px', 'cursor:pointer',
+    ].join(';');
+    const refresh = () => { btn.textContent = getLabel(); };
+    refresh();
+    btn.addEventListener('click', () => { onToggle(); refresh(); });
+    document.body.appendChild(btn);
+    this.mapStyleBtn = btn;
+  }
+
   /** 刷新背包面板（如果已打开） */
   refreshIfOpen(): void {
     if (this.inventoryOpen) {
@@ -337,6 +354,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.hud.dispose();
     this.crosshair.dispose();
     this.interactPrompt.remove();
+    this.mapStyleBtn?.remove();
+    this.mapStyleBtn = null;
     for (const ft of this.floatingTexts) ft.el.remove();
     this.floatingTexts = [];
   }

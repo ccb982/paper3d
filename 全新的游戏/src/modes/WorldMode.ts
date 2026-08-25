@@ -21,6 +21,7 @@ import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
 import { bakeChunkAppearance } from '../services/map/ChunkAppearance';
+import { buildBoss4DChunk } from '../services/map/Boss4DArena';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
@@ -90,7 +91,9 @@ export class WorldMode implements IGameMode {
 
   private bullets!: BulletManager;
   private bulletCooldown = 0;
-  private chunkMeshes = new Map<number, THREE.Mesh>();
+  private chunkMeshes = new Map<number, THREE.Object3D>();
+  /** ★ 地图风格：false=标准外观 / true=Boss 四维废案（Boss4DArena+Boss4DAppearance） */
+  private boss4D = false;
   private chunkBodies = new Map<number, number>();
   // （chunk 材质已改为每 chunk 独立的 Canvas 外观材质，见 buildChunkMesh）
   private aiCtx: BehaviorContext = {
@@ -203,6 +206,11 @@ export class WorldMode implements IGameMode {
     // ---- ★ UI 层（世界专属） ----
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
+    );
+    // ★ 地图风格切换按钮（标准外观 ↔ Boss 四维废案预览）
+    this.worldUIManager.addMapStyleButton(
+      () => (this.boss4D ? '地图：四维空间 [废案]' : '地图：标准'),
+      () => this.setMapStyle(!this.boss4D),
     );
 
     // ---- ★ 测试物品（UI 初始化后创建，避免碰撞回调时 worldUIManager 未就绪） ----
@@ -404,13 +412,9 @@ export class WorldMode implements IGameMode {
 
     // ---- chunk 视觉网格 ----
     this.chunkQueue.length = 0;   // ★ 清空构建队列    this.queuedKeys.clear();
-    for (const m of this.chunkMeshes.values()) {
-      this.scene?.remove(m);
-      m.geometry.dispose();
-      // ★ 外观材质与纹理随 chunk 释放（每 chunk 独立 Canvas 材质）
-      const mm = m.material as THREE.MeshStandardMaterial;
-      mm.map?.dispose();
-      mm.dispose();
+    for (const v of this.chunkMeshes.values()) {
+      this.scene?.remove(v);
+      this.disposeChunkVisual(v);
     }
     this.chunkMeshes.clear();
 
@@ -535,7 +539,63 @@ export class WorldMode implements IGameMode {
 
   private buildChunkMesh(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
-    if (this.chunkMeshes.has(key)) return;
+    // ---- 物理体（与视觉风格无关：同一高度场的标准 trimesh，只建一次；
+    //      切换地图风格时不重建——两套视觉同源高度场，碰撞近似一致）----
+    if (!this.chunkBodies.has(key)) {
+      const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+      geo.rotateX(-Math.PI / 2);
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        pos.setY(i, this.raster.vertexHeightAt(
+          cx * CHUNK_SIZE + pos.getX(i) + CHUNK_SIZE / 2,
+          cz * CHUNK_SIZE + pos.getZ(i) + CHUNK_SIZE / 2,
+        ));
+      }
+      const body = this.entities.create({
+        kind: 'ground',
+        x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+        physics: {
+          type: 'fixed',
+          options: { shape: { type: 'trimesh', vertices: pos.array as Float32Array, indices: new Uint32Array(geo.index!.array) } },
+        },
+      });
+      this.chunkBodies.set(key, body.id);
+      geo.dispose();
+    }
+    this.buildChunkVisuals(cx, cz);
+  }
+
+  /** ★ 地图风格切换（右上角按钮调用）：重建全部已加载 chunk 的视觉部分 */
+  setMapStyle(boss4D: boolean): void {
+    if (this.boss4D === boss4D) return;
+    this.boss4D = boss4D;
+    for (const key of [...this.chunkMeshes.keys()]) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      this.buildChunkVisuals(cx, cz);
+    }
+  }
+
+  get isBoss4D(): boolean {
+    return this.boss4D;
+  }
+
+  /** 按当前风格构建/重建 chunk 视觉（物理体不动） */
+  private buildChunkVisuals(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    const old = this.chunkMeshes.get(key);
+    if (old) {
+      this.scene?.remove(old);
+      this.disposeChunkVisual(old);
+    }
+    if (this.boss4D) {
+      // ---- Boss 四维废案：米格顶面 + 垂直侧壁 + 失败烘焙全套 ----
+      const { group } = buildBoss4DChunk(this.raster, cx, cz);
+      this.scene!.add(group);
+      this.chunkMeshes.set(key, group);
+      return;
+    }
+    // ---- 标准外观：拉伸平面 + canvas 外观材质 ----
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -577,16 +637,19 @@ export class WorldMode implements IGameMode {
     mesh.receiveShadow = true;
     this.scene!.add(mesh);
     this.chunkMeshes.set(key, mesh);
+  }
 
-    if (!this.chunkBodies.has(key)) {
-      const verts = pos.array as Float32Array;
-      const idx = new Uint32Array(geo.index!.array);
-      const body = this.entities.create({
-        kind: 'ground', x: mesh.position.x, y: 0, z: mesh.position.z,
-        physics: { type: 'fixed', options: { shape: { type: 'trimesh', vertices: verts, indices: idx } } },
-      });
-      this.chunkBodies.set(key, body.id);
-    }
+  /** 释放 chunk 视觉资源（兼容 Mesh 与 Group 两种形态） */
+  private disposeChunkVisual(obj: THREE.Object3D): void {
+    obj.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.geometry) return;
+      m.geometry.dispose();
+      const mm = m.material as THREE.MeshStandardMaterial | undefined;
+      if (!mm) return;
+      mm.map?.dispose();
+      mm.dispose();
+    });
   }
 
   private rebuildChunkMesh(cx: number, cz: number): void {
@@ -594,11 +657,7 @@ export class WorldMode implements IGameMode {
     const old = this.chunkMeshes.get(key);
     if (old) {
       this.scene!.remove(old);
-      old.geometry.dispose();
-      // ★ 外观材质与纹理一并释放
-      const om = old.material as THREE.MeshStandardMaterial;
-      om.map?.dispose();
-      om.dispose();
+      this.disposeChunkVisual(old);
       this.chunkMeshes.delete(key);
     }
     const oldBody = this.chunkBodies.get(key);

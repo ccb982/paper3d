@@ -5,16 +5,12 @@
 // 一张 Canvas 纹理，不随相机/时间变化。运行时只剩便宜的光照。
 //
 // 烘焙内容（逐像素）：
-//   类型底色 × hash2 噪声明暗 × 双尺度 AO（接触 + 环境）
-//   × 静态日照投影（地形自遮挡，高度场光线步进；★ 固定太阳不随昼夜）
+//   类型底色 × hash2 噪声明暗 × 逐像素 AO（高度场环形采样）
 //
 // 分界铁律（防重复计费）：
 //   - 颜色类 → 全部在这里烘焙
 //   - 几何明暗(N·L) → 实时（预计算法线，标准材质自动算）
-//     ⚠️ 本文件不做坡向明暗——那会与实时 N·L 双重计费
-//   - 地形自投影 → 在这里烘焙（实时阴影图里地形故意不 castShadow，
-//     性能决策；静态遮挡属于颜色类，一次烘完）
-//   - 实体投影阴影 → 实时（剪影影子系统，唯一动态分量）
+//   - 实体投影阴影 → 实时阴影图（唯一动态分量）
 //   ⚠️ 启用本 canvas 后，顶点色/AO 必须停用——AO 只能存在一处
 //
 // 像素 ↔ 世界映射约定：
@@ -31,27 +27,10 @@ import type { RasterMap } from './RasterMap';
 /** 外观分辨率（默认 256²；低端机降 128²） */
 export const APPEARANCE_RES = 256;
 
-/** AO 参数：双尺度——接触暗部（缝隙/贴边）+ 环境凹陷（旧单尺度）；下限防死黑 */
+/** AO 参数（与架构文档一致；压暗下限 0.55 防死黑） */
 const AO_RADIUS = 2.5;
 const AO_STRENGTH = 0.09;
 const AO_MIN = 0.55;
-const CONTACT_RADIUS = 0.85;    // ★ 新增：紧贴接触 AO（第二尺度）
-const CONTACT_STRENGTH = 0.17;
-
-/** ★ 静态日照投影参数（用户决策：地图光影不随昼夜变化 → 固定太阳观感）
- *  方向承旧 LIGHT_TUNING.sunOffset 的水平方位；仰角刻意低于正午——拖得出影子。
- *  ★ 阴影场在半分辨率预计算 + 盒式模糊柔化（防硬边阴影成片糊死），主循环双线性采样 */
-const SHADOW_SUN_HX = 0.851;    // 太阳水平单位向量（指向太阳）
-const SHADOW_SUN_HZ = 0.524;
-const SHADOW_SUN_TAN = Math.tan((40 * Math.PI) / 180); // 射线爬升率（仰角 40°）
-const SHADOW_MAX_DIST = 9;      // 米；更远的高墙不再投影（伪半影外限）
-const SHADOW_STEPS = 12;        // 光线步进次数（几何步长覆盖 MAX_DIST）
-const SHADOW_STRENGTH = 0.28;   // 最大压暗幅度（★ 与 AO 连乘，勿调回 0.4+——会黑成一团）
-const SHADOW_DIV = 2;           // 阴影场分辨率降档（256→128 格）
-const SHADOW_BLUR_R = 1;        // 盒式模糊半径（格）
-const SHADOW_BLUR_PASSES = 2;   // 模糊遍数
-const SHADOW_EDGE_TOL = 0.6;    // ★ 双边模糊：高度差≤此值 = 同一平面，模糊自由跨过
-const SHADOW_EDGE_FALL = 1.4;   // ★ 超出容差后权重线性衰减到 0（影子不得翻越断崖）
 
 /** 平滑值噪声（双线性 + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
 function vnoise(x: number, y: number, seed: number): number {
@@ -86,76 +65,6 @@ export function bakeChunkAppearance(
   const step = CHUNK_SIZE / S;               // 米/像素
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
-
-  // ==================== Pass A：静态日照投影场（半分辨率 + 柔化） ====================
-  // 纯高度场计算（与 tile 类型无关）；凹陷是否接收在主循环判定
-  const SR = Math.max(1, Math.round(S / SHADOW_DIV));
-  const sStep = CHUNK_SIZE / SR;
-  const field = new Float32Array(SR * SR);
-  const hfield = new Float32Array(SR * SR); // 格点高度（双边模糊的权重依据）
-  {
-    const d0 = (SHADOW_MAX_DIST / SHADOW_STEPS) * 0.5;
-    const grow = Math.pow(SHADOW_MAX_DIST / d0, 1 / SHADOW_STEPS); // 几何扩步系数
-    for (let sy = 0; sy < SR; sy++) {
-      for (let sx = 0; sx < SR; sx++) {
-        const wx = originX + (sx + 0.5) * sStep;
-        const wz = originZ + (sy + 0.5) * sStep;
-        const h = raster.heightAt(wx, wz);
-        hfield[sy * SR + sx] = h;
-        // 双探针快速预检：沿射线中/远段都无遮挡 → 平坦开阔区跳过步进
-        // （迷宫墙厚 ≥4m，两探针间隔 ~3.5m 挡不住穿隙漏检）
-        const p1 = SHADOW_MAX_DIST * 0.35, p2 = SHADOW_MAX_DIST * 0.75;
-        const blocked =
-          raster.heightAt(wx + SHADOW_SUN_HX * p1, wz + SHADOW_SUN_HZ * p1) > h + SHADOW_SUN_TAN * p1 ||
-          raster.heightAt(wx + SHADOW_SUN_HX * p2, wz + SHADOW_SUN_HZ * p2) > h + SHADOW_SUN_TAN * p2;
-        if (!blocked) continue;
-        let sh = 0, d = d0;
-        for (let k = 0; k < SHADOW_STEPS && sh < 0.92; k++) {
-          const th = raster.heightAt(wx + SHADOW_SUN_HX * d, wz + SHADOW_SUN_HZ * d);
-          const rayY = h + SHADOW_SUN_TAN * d;
-          if (th > rayY) {
-            const over = Math.min(1, (th - rayY) / 1.1);       // 遮挡越厚影越实
-            const fall = 1 - d / SHADOW_MAX_DIST;              // 越远越淡
-            sh = Math.max(sh, over * (0.35 + 0.65 * fall));
-          }
-          d *= grow;
-        }
-        field[sy * SR + sx] = sh;
-      }
-    }
-    // ---- ★ 双边盒式模糊 ×N（可分离）：亮度柔化但【不过高度断崖】----
-    //     普通模糊会让低地的浓影渗过高台边缘、爬上台顶（已踩坑）；
-    //     高度差 >TOL 的邻居权重线性衰减到 0 → 半影只在同一平面上展开
-    const tmp = new Float32Array(field.length);
-    for (let pass = 0; pass < SHADOW_BLUR_PASSES; pass++) {
-      for (let y = 0; y < SR; y++) {
-        for (let x = 0; x < SR; x++) {
-          const hc = hfield[y * SR + x];
-          let sum = 0, wsum = 0;
-          for (let k = -SHADOW_BLUR_R; k <= SHADOW_BLUR_R; k++) {
-            const xx = Math.min(SR - 1, Math.max(0, x + k));
-            const dh = Math.abs(hfield[y * SR + xx] - hc);
-            const w = dh <= SHADOW_EDGE_TOL ? 1 : Math.max(0, 1 - (dh - SHADOW_EDGE_TOL) / SHADOW_EDGE_FALL);
-            sum += field[y * SR + xx] * w; wsum += w;
-          }
-          tmp[y * SR + x] = wsum > 0 ? sum / wsum : field[y * SR + x];
-        }
-      }
-      for (let y = 0; y < SR; y++) {
-        for (let x = 0; x < SR; x++) {
-          const hc = hfield[y * SR + x];
-          let sum = 0, wsum = 0;
-          for (let k = -SHADOW_BLUR_R; k <= SHADOW_BLUR_R; k++) {
-            const yy = Math.min(SR - 1, Math.max(0, y + k));
-            const dh = Math.abs(hfield[yy * SR + x] - hc);
-            const w = dh <= SHADOW_EDGE_TOL ? 1 : Math.max(0, 1 - (dh - SHADOW_EDGE_TOL) / SHADOW_EDGE_FALL);
-            sum += tmp[yy * SR + x] * w; wsum += w;
-          }
-          field[y * SR + x] = wsum > 0 ? sum / wsum : field[y * SR + x];
-        }
-      }
-    }
-  }
 
   for (let py = 0; py < S; py++) {
     for (let px = 0; px < S; px++) {
@@ -230,46 +139,21 @@ export function bakeChunkAppearance(
       const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
       const shade = 0.94 + 0.12 * n;
 
-      // ---- 双尺度 AO + 静态日照投影 ----
+      // ---- 逐像素 AO ----
       // ★ 凹陷地块（修正后仍是水/坑的部分 = 0 线以下的底面）：
-      //   表面按 ≤0 的平面均匀着色，不参与邻域 AO 与投影接收——否则邻接
-      //   高台的高度差会烘进纹理，让水面/坑底出现明暗不均。深度感由几何侧壁承担。
+      //   表面按 ≤0 的平面均匀着色，不参与邻域 AO —— 否则邻接高台/坡的
+      //   高度差会烘进纹理，让水面/坑底出现明暗不均。深度感由几何侧壁承担。
+      // ---- 逐像素 AO（凹陷地块均匀着色跳过——深度感由几何侧壁承担）----
       let ao = 1;
       if (!td.isDepression) {
         const h = raster.heightAt(wx, wz);
-
-        // ① 接触 AO（紧贴尺度：缝隙/贴边暗部）
-        let cOcc = 0;
-        for (let k = 0; k < 8; k++) {
-          const ang = (k / 8) * Math.PI * 2;
-          const dh = raster.heightAt(wx + Math.cos(ang) * CONTACT_RADIUS, wz + Math.sin(ang) * CONTACT_RADIUS) - h;
-          if (dh > 0) cOcc += Math.min(dh, 1.2);
-        }
-        const contactAO = 1 - (cOcc / 8) * CONTACT_STRENGTH;
-
-        // ② 环境 AO（旧单尺度：凹陷/谷地压暗）
         let occ = 0;
         for (let k = 0; k < 8; k++) {
           const ang = (k / 8) * Math.PI * 2;
           const dh = raster.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
           if (dh > 0) occ += Math.min(dh, 2.5);
         }
-        // ★ 显式下限在"接触×环境"合并后生效——防止多层连乘击穿亮度
-        ao = Math.max(AO_MIN, contactAO * (1 - (occ / 8) * AO_STRENGTH));
-
-        // ③ 静态日照投影：采样 Pass A 柔化后的半分辨率阴影场（双线性；
-        //    固定太阳见文件头铁律）。★ 只与 AO 相乘一次，强度已调低防黑团
-        const fx = Math.max(0, Math.min(SR - 1e-3, (px + 0.5) / SHADOW_DIV - 0.5));
-        const fy = Math.max(0, Math.min(SR - 1e-3, (py + 0.5) / SHADOW_DIV - 0.5));
-        const x0 = fx | 0, y0 = fy | 0;
-        const x1 = Math.min(x0 + 1, SR - 1), y1 = Math.min(y0 + 1, SR - 1);
-        const tx = fx - x0, ty = fy - y0;
-        const sh =
-          field[y0 * SR + x0] * (1 - tx) * (1 - ty) +
-          field[y0 * SR + x1] * tx * (1 - ty) +
-          field[y1 * SR + x0] * (1 - tx) * ty +
-          field[y1 * SR + x1] * tx * ty;
-        ao *= 1 - SHADOW_STRENGTH * sh;
+        ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
       }
 
       const f = shade * ao;
