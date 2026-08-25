@@ -288,7 +288,7 @@ export function FluidPanel() {
             onChange={v => updateFluidConfig(activeLayerId!, { pressureOmega: v })} />
           <Slider label="速度缩放" value={cfg!.velocityScale} min={0.1} max={3} step={0.05}
             onChange={v => updateFluidConfig(activeLayerId!, { velocityScale: v })} />
-          <Slider label="粘度 ν" value={cfg!.viscosity ?? 0} min={0} max={100} step={1}
+          <Slider label="粘度 ν" value={cfg!.viscosity ?? 0} min={0} max={1000} step={1}
             onChange={v => updateFluidConfig(activeLayerId!, { viscosity: v })} fmt={v => v.toFixed(0)} />
           <Slider label="最大速度" value={cfg!.maxVelocity} min={100} max={10000} step={100}
             onChange={v => updateFluidConfig(activeLayerId!, { maxVelocity: v })} fmt={v => v.toFixed(0)} />

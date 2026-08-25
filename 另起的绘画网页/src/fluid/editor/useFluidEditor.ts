@@ -54,7 +54,7 @@ export function useFluidEditor(
     maxVelocity: 5000, // 全局速度限幅上限（px/s），防止速度爆炸
     velocityScale: 1,  // 全局速度缩放因子：1=无影响，<1阻尼减速，>1加速
     // ★ 运动粘度 ν（cells²/s），0=无粘性。速度扩散抹平射流/剪切 → 水团内聚；
-    //   水感建议 10~60，>100 等效强度饱和（子步上限护栏）
+    //   水感建议 10~60；任意值可调（≈770 以上每帧多子步）
     viscosity: 20,
     // ★ MCSDA 标量浓度平流模式（默认 vector 旧模式，保持兼容）
     advectionMode: 'vector',

@@ -1237,9 +1237,9 @@ const GeneralPanel: React.FC<{
             <input
               type="range"
               min={0}
-              max={100}
+              max={1000}
               step={1}
-              value={config.viscosity ?? 0}
+              value={Math.min(1000, config.viscosity ?? 0)}
               onChange={(e) => {
                 const v = parseFloat(e.target.value);
                 onConfigChange({ viscosity: isNaN(v) ? 0 : Math.max(0, v) });
@@ -1247,10 +1247,20 @@ const GeneralPanel: React.FC<{
               style={{ flex: 1 }}
               title="速度场扩散 ν∇²v：抹平射流/剪切层，大尺度运动保留。水团内聚感来源之一"
             />
-            <span className="hint">{(config.viscosity ?? 0).toFixed(0)}</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={Number((config.viscosity ?? 0).toFixed(1))}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                onConfigChange({ viscosity: isNaN(v) ? 0 : Math.max(0, v) });
+              }}
+              style={{ width: '60px', fontSize: '10px', padding: '2px 4px' }}
+            />
           </div>
           <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-            0=无粘性；水感建议 10~60；&gt;100 等效强度饱和
+            0=无粘性；水感 10~60；数值框可输入任意值（≈770 以上每帧多子步，性能略降）
           </div>
         </div>
         {/* 全局速度缩放（无方向阻尼/加速） */}

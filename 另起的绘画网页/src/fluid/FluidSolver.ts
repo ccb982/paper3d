@@ -891,7 +891,7 @@ export class FluidSolver {
 
   /**
    * ★ 粘度：速度场显式扩散 ∂v/∂t = ν∇²v（与 FluidEditor.applyViscosity 同款）。
-   * 稳定性：ν·dt ≤ 0.2/步，超出子步分摊（上限 8 步，等效强度饱和不失稳）。
+   * 稳定性：ν·dt ≤ 0.2/步，超出子步分摊（上限 64 步支持大粘度自由调控，饱和不失稳）。
    */
   private applyViscosity(dt: number): void {
     const nu = this.config.viscosity ?? 0;
@@ -900,7 +900,7 @@ export class FluidSolver {
     const w = this.velocityGrid.resolution.w;
     const h = this.velocityGrid.resolution.h;
     const total = nu * dt;
-    const steps = Math.min(8, Math.max(1, Math.ceil(total / 0.2)));
+    const steps = Math.min(64, Math.max(1, Math.ceil(total / 0.2)));
     const perStep = Math.min(0.2, total / steps);
 
     const mat = this.gpu.getMaterial('fluid_viscosity_v1', {

@@ -810,8 +810,7 @@ export class FluidEditor {
    * ★ 粘度：速度场显式扩散 ∂v/∂t = ν∇²v（h=1 cell，离散 Laplacian = 四邻和−4·自身）。
    *
    * 稳定性（von Neumann）：显式扩散要求 ν·dt/h² ≤ 0.25 → 超出时子步分摊，
-   * 子步数上限 MAX_STEPS=8（性能护栏），超出后单步扩散量被截断在稳定上限内
-   * （等效粘度饱和，而非失稳）。
+   * 子步数上限 MAX_STEPS=64（ν≈770@60fps 内精确，超过后等效粘度饱和不失稳）。
    *
    * 效果：剪切层/射流等小尺度结构按 e^{−νk²t} 最快衰减，大尺度运动保留 → 内聚感。
    */
@@ -823,7 +822,7 @@ export class FluidEditor {
     const h = this.velocityGrid.resolution.h;
     const total = nu * dt;
     const MAX_DIFF = 0.2;   // 单步扩散稳定上限（<0.25）
-    const MAX_STEPS = 8;    // 子步上限（性能护栏）
+    const MAX_STEPS = 64;   // 子步上限（性能护栏；放开到 64 支持大粘度自由调控）
     const steps = Math.min(MAX_STEPS, Math.max(1, Math.ceil(total / MAX_DIFF)));
     const perStep = Math.min(MAX_DIFF, total / steps);
 
