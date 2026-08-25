@@ -12,7 +12,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { CHUNK_SIZE } from './ChunkGenerator';
+import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
 import type { RasterMap } from './RasterMap';
 
@@ -22,13 +22,54 @@ const MIN_WALL_DROP = 0.5;
 /** 墙底延伸（防与地面共面闪烁） */
 const WALL_EPS = 0.05;
 
-/** 侧壁明暗范围（显示空间乘数；朝阳亮 / 背阳暗，与烘焙太阳方向配套） */
-const WALL_K_BACK = 0.34;
-const WALL_K_LIT = 0.78;
+// ---- 侧壁明暗调参（集中此处；全部确定性，同种子必复现）----
+/** 背阳壁基准亮度（深影端） */
+const WALL_K_BACK = 0.22;
+/** 朝阳壁基准亮度（亮端） */
+const WALL_K_LIT = 0.82;
+/** 落差加深：满落差（4m，如坑壁）时额外压暗的比例 */
+const WALL_DEPTH_DARKEN = 0.16;
+/** 天空遮蔽加深：完全被高地围住（吃不到天光）的墙压暗比例 */
+const WALL_SKY_DIM = 0.22;
+/** 逐墙确定性抖动幅度（±半幅；打破整面墙单一色的呆板感） */
+const WALL_JITTER = 0.10;
 
 /** 烘焙太阳水平方向（与 ChunkAppearance.BAKE_SUN 同源同步；勿单方修改） */
 const SUN_HX = -0.7071;
 const SUN_HZ = -0.7071;
+
+/**
+ * 单面墙的显示空间亮度乘数。
+ * 变化来源（由强到弱）：朝向 × 太阳 > 落差深度 > 天空可见度 > 位置抖动。
+ */
+function wallShade(
+  raster: RasterMap, seed: number,
+  wi: number, wj: number,      // 墙所属格（世界格坐标，抖动种子用）
+  drop: number,                // 落差（米）
+  facing: number,              // 朝阳度 0..1（外法线·太阳水平方向）
+): number {
+  let k = WALL_K_BACK + (WALL_K_LIT - WALL_K_BACK) * facing;
+
+  // 落差深度：坑壁比普通高台更深沉
+  k -= Math.min(1, drop / 4) * WALL_DEPTH_DARKEN;
+
+  // 天空可见度：墙顶周围 8 向采样，被更高地形挡住的比例越高越暗
+  // （坑内/谷地墙吃不到天光；开阔高台墙不受影响）
+  const wx = wi + 0.5, wz = wj + 0.5;
+  const hTop = raster.heightAt(wx, wz) + 0.6;
+  let open = 0;
+  for (let n = 0; n < 8; n++) {
+    const ang = (n / 8) * Math.PI * 2;
+    if (raster.heightAt(wx + Math.cos(ang) * 2.5, wz + Math.sin(ang) * 2.5) <= hTop) open++;
+  }
+  const openF = open / 8;
+  k *= 1 - WALL_SKY_DIM * (1 - openF);
+
+  // 确定性微抖动（±WALL_JITTER/2，对称不偏移平均亮度）
+  k *= 1 + (hash2(wi, wj, seed + 7717) - 0.5) * 2 * WALL_JITTER;
+
+  return Math.max(0.14, k);
+}
 
 /** 四向断崖绕序表（法线朝低处外侧；自 Boss4DArena 迁移的已推导版本） */
 const DIRS = [
@@ -46,6 +87,7 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
   const N = CHUNK_SIZE;
   const ox = cx * N;
   const oz = cz * N;
+  const seed = raster.worldSeed;
 
   const pos: number[] = [];
   const nor: number[] = [];
@@ -69,8 +111,7 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
         let [r, g, b] = hsl2rgb(td.visual.baseHsl.h, td.visual.baseHsl.s, td.visual.baseHsl.l);
         // 朝向 × 太阳：外法线与太阳水平方向同向 = 朝阳 → 亮
         const facing = Math.max(0, d.dx * SUN_HX + d.dz * SUN_HZ);
-        const k = (WALL_K_BACK + (WALL_K_LIT - WALL_K_BACK) * facing +
-          Math.min(1, drop / 4) * 0.06) / 255;
+        const k = wallShade(raster, seed, ox + i, oz + j, drop, facing) / 255;
 
         const xA = i + d.ax - N / 2, zA = j + d.az - N / 2; // 局部坐标（中心原点）
         const xB = i + d.bx - N / 2, zB = j + d.bz - N / 2;
