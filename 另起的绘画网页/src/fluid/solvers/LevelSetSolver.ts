@@ -337,10 +337,13 @@ export class LevelSetSolver {
         // 曲率 κ ≈ ∇²φ / |∇φ|
         float kappa = lapPhi / gradMag;
 
-        // ★ CSF 归一化体积力：F = σ·κ·δ(φ)·n̂（n̂ = ∇φ/|∇φ|）
+        // ★ CSF 体积力：F = -σ·κ·δ(φ)·n̂
+        //   符号修正（Brackbill 正确方向）：本求解器约定 φ<0 为水、n̂ 指向空气侧，
+        //   凸液面 κ=∇²φ/|∇φ|≈+1/R>0 → 不取负号时力朝外，会把水滴推散成烟雾；
+        //   取负后力指向曲率中心，水团才向内收缩（旧版丢负号导致 σ 越大越喷）。
         vec2 normal = gradPhi / gradMag;
         float delta = smoothDelta(phi, uSmoothingRadius);
-        vec2 force = uSigma * kappa * delta * normal;
+        vec2 force = -uSigma * kappa * delta * normal;
         vec2 vel = texture2D(uVelocity, vUv).rg;
         vel += force * uDt;
 

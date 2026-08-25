@@ -18,18 +18,27 @@ export function useFluidEditor(
     resolution: { w: 256, h: 256 },
     channels: { r: true, g: true, b: true, a: true },
     enableAdvection: true,
-    enablePressure: false,
-    pressureIterations: 20,
+    // ★ 压力投影必须开启：不可压缩性是水团收缩的前提——
+    //   表面张力的向心力要靠压力求解转化为整体流动（废弃模拟器 200 次 Jacobi 验证过）
+    enablePressure: true,
+    pressureIterations: 100,
     pressureOmega: 1.7,
     pressureBoundaryMode: 'neumann',
     enableWarmStart: true,
     enableLevelSet: false,
     // ★ Level Set 模块参数（enableLevelSet=true 时生效）
     levelSetConfig: {
-      reinitInterval: 10,      // 重初始化间隔（帧数）
-      reinitIterations: 2,     // 每次重初始化迭代次数（红-黑 SOR 轮数）
-      surfaceTension: 0.1,     // 表面张力系数 σ（0=禁用）
+      reinitInterval: 1,       // 重初始化间隔（帧数）：1=每帧重建 φ，新注入的液体立刻有表面（σ 即刻生效）
+      reinitIterations: 6,     // 每次重初始化迭代次数（红-黑 SOR 轮数）：≥4 才能让 SDF 充分收敛
+      // 表面张力系数 σ（0=禁用）。force=σ·κ·δ(φ)，像素单位制下 κ≈1/R(px)、δ峰值≈1/(2ε)
+      // → Δv/帧 ≈ σ/300R。要有"真实水团"的收缩感需 Δv≈几十px/s每帧
+      // → 有效范围 10⁵~10⁶ 级（废弃模拟器 UV 单位制 σ=728000 的等效强度）
+      surfaceTension: 1000000,
       narrowBandWidth: 5,      // 窄带宽度/作用半径（像素）
+      // ★ 约束液体默认开启：把平流抹开的颜色晕圈裁剪到 φ<0 边界内——
+      //   这是"烟雾感"的直接克星（可见液体 = SDF 定义的锐利区域，而非模糊色场）。
+      //   代价：细碎液雾会被裁掉——做水团正是要这个效果；做雾化特效时再关掉。
+      constrainLiquid: true,
     },
     gravity: { x: 0, y: 5 }, // 二维矢量，默认向下 5 px/s²（屏幕坐标系）
     velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)

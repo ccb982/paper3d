@@ -528,6 +528,20 @@ export class FluidEditor {
       }
     }
 
+    // 2.45 ★ Level Set 表面张力（CSF）——必须在压力投影【之前】施加（废弃模拟器的验证顺序）：
+    //   张力在界面窄带产生散度速度 → 随后的压力投影把它转化为整体不可压缩向心流动，
+    //   水团才能向内收缩成团。放在投影之后（旧实现）则张力速度不参与投影，
+    //   直接被平流消费 → 只会把颜色抹开，σ 拉到多大都看不见。
+    if (this.config.enableLevelSet && this._phiGrid) {
+      const st = this.config.levelSetConfig?.surfaceTension ?? 0;
+      if (st > 0) {
+        const band = this.config.levelSetConfig?.narrowBandWidth ?? 5;
+        this.levelSetSolver.applySurfaceTension(
+          this.velocityGrid, this._phiGrid.read, this.getObstacleTexture(), st, dt, band,
+        );
+      }
+    }
+
     // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
     this.applyBoundary();
 
@@ -566,7 +580,6 @@ export class FluidEditor {
     //      B. 追踪模式（默认）→ φ 平流 + 周期性重建 + 表面张力
     if (this.config.enableLevelSet && this._phiGrid) {
       const lsCfg = this.config.levelSetConfig;
-      const sigma = lsCfg?.surfaceTension ?? 0;
       const band = lsCfg?.narrowBandWidth ?? 5;
       const constrain = lsCfg?.constrainLiquid ?? false;
       const iterations = lsCfg?.reinitIterations ?? 2;
@@ -601,13 +614,8 @@ export class FluidEditor {
         }
       }
 
-      // (3) 表面张力注入（CSF 模型，σ>0 时启用，δ(φ) 归一化窄带施力）
-      if (sigma > 0) {
-        this.levelSetSolver.applySurfaceTension(
-          this.velocityGrid, this._phiGrid.read, this.getObstacleTexture(),
-          sigma, dt, band,
-        );
-      }
+      // ★ 表面张力已移至 step() 的压力投影之前（见 2.45）：
+      //   先施力后投影，张力的散度才会被压力求解转化为整体向心流动。
     }
 
     this.time += dt;

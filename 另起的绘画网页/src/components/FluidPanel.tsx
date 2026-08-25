@@ -308,17 +308,17 @@ export function FluidPanel() {
               <p style={{ fontSize: '11px', color: '#777', marginTop: '4px' }}>
                 Level Set：基于 φ 距离场跟踪流体表面，支持表面张力与边缘羽化。
               </p>
-              <Slider label="重初始化迭代" value={cfg!.levelSetConfig.reinitIterations} min={1} max={8} step={1}
+              <Slider label="重初始化迭代" value={cfg!.levelSetConfig.reinitIterations} min={1} max={12} step={1}
                 onChange={v => updateFluidConfig(activeLayerId!, {
                   levelSetConfig: { ...cfg!.levelSetConfig, reinitIterations: Math.round(v) },
                 })} fmt={v => v.toFixed(0)} />
-              <Slider label="表面张力 σ" value={cfg!.levelSetConfig.surfaceTension} min={0} max={200} step={1}
+              <Slider label="表面张力 σ" value={cfg!.levelSetConfig.surfaceTension} min={0} max={5000000} step={1000}
                 onChange={v => updateFluidConfig(activeLayerId!, {
                   levelSetConfig: { ...cfg!.levelSetConfig, surfaceTension: v },
                 })} fmt={v => v.toFixed(0)} />
-              <Slider label="作用半径 (px)" value={cfg!.levelSetConfig.smoothingRadius} min={1} max={10} step={0.5}
+              <Slider label="窄带宽度 (px)" value={cfg!.levelSetConfig.narrowBandWidth ?? 5} min={1} max={20} step={0.5}
                 onChange={v => updateFluidConfig(activeLayerId!, {
-                  levelSetConfig: { ...cfg!.levelSetConfig, smoothingRadius: v },
+                  levelSetConfig: { ...cfg!.levelSetConfig, narrowBandWidth: v },
                 })} fmt={v => v.toFixed(1)} />
             </>
           )}

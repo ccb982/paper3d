@@ -1918,15 +1918,15 @@ const LevelSetPanel: React.FC<{
             <input
               type="range"
               min={0}
-              max={100000}
-              step={100}
+              max={5000000}
+              step={1000}
               value={surfaceTension}
               onChange={(e) => onTensionChange(+e.target.value)}
             />
             <span className="hint">{surfaceTension.toFixed(0)}</span>
           </div>
           <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-            σ 需极大才可见（force≈σ×κ×δ，κ/δ≈0.1×0.1）：建议 1000~50000 起调
+            σ 需极大才可见（force≈σ×κ×δ，像素单位制 Δv/帧≈σ/300R）：建议 100000~3000000 起调；张力在压力投影前施加才能收拢成水团
           </div>
         </div>
         <div className="control-group">
