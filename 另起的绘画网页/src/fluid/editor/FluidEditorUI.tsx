@@ -1890,6 +1890,7 @@ const LevelSetPanel: React.FC<{
   narrowBandWidth: number;
   surfaceTension: number;
   constrainLiquid: boolean;
+  outwardDamping: number;
   clampAirPhi: boolean;
   compensateWaterPhi: boolean;
   waterRender: boolean;
@@ -1901,11 +1902,12 @@ const LevelSetPanel: React.FC<{
   onBandWidthChange: (val: number) => void;
   onTensionChange: (val: number) => void;
   onConstrainChange: (val: boolean) => void;
+  onOutwardDampingChange: (val: number) => void;
   onClampAirChange: (val: boolean) => void;
   onCompensateWaterChange: (val: boolean) => void;
-}> = ({ enabled, reinitInterval, narrowBandWidth, surfaceTension, constrainLiquid,
+}> = ({ enabled, reinitInterval, narrowBandWidth, surfaceTension, constrainLiquid, outwardDamping,
        clampAirPhi, compensateWaterPhi, waterRender, waterCompRate, onWaterRenderChange, onCompRateChange,
-       onToggle, onReinitChange, onBandWidthChange, onTensionChange, onConstrainChange,
+       onToggle, onReinitChange, onBandWidthChange, onTensionChange, onConstrainChange, onOutwardDampingChange,
        onClampAirChange, onCompensateWaterChange }) => {
   return (
     <div className="fluid-panel">
@@ -1974,6 +1976,23 @@ const LevelSetPanel: React.FC<{
           </div>
           <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
             φ 外部渐隐 → 液体被收拢成紧凑圆润的团块
+          </div>
+        </div>
+        <div className="control-group">
+          <label>🧲 外向速度抑制</label>
+          <div className="row">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={outwardDamping}
+              onChange={(e) => onOutwardDampingChange(+e.target.value)}
+            />
+            <span className="hint">{outwardDamping.toFixed(2)}</span>
+          </div>
+          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
+            界面窄带内削减指向空气侧的速度：1=完全不可外扩（确定性收拢，与张力无关）
           </div>
         </div>
         <div className="control-group">
@@ -2241,6 +2260,7 @@ export const FluidEditorUI: React.FC = () => {
     narrowBandWidth: 5,
     surfaceTension: 10000,
     constrainLiquid: false,
+    outwardDamping: 1,
     clampAirPhi: true,
     compensateWaterPhi: true,
     waterCompRate: 0.1,
@@ -4261,6 +4281,7 @@ export const FluidEditorUI: React.FC = () => {
                 reinitIterations: cfg.levelSetConfig?.reinitIterations ?? 2,
                 surfaceTension: cfg.levelSetConfig?.surfaceTension ?? 0,
                 smoothingRadius: (cfg.levelSetConfig as any)?.smoothingRadius ?? cfg.levelSetConfig?.narrowBandWidth ?? 2,
+                outwardDamping: cfg.levelSetConfig?.outwardDamping ?? 0,
               },
               // E. 持续注入源列表
               continuousSources: sources.map(s => ({
@@ -4352,6 +4373,11 @@ export const FluidEditorUI: React.FC = () => {
           onConstrainChange={(val) => {
             setLevelsetParams(p => ({ ...p, constrainLiquid: val }));
             updateConfig({ levelSetConfig: { ...config.levelSetConfig, constrainLiquid: val } as NonNullable<typeof config.levelSetConfig> });
+          }}
+          outwardDamping={levelsetParams.outwardDamping}
+          onOutwardDampingChange={(val) => {
+            setLevelsetParams(p => ({ ...p, outwardDamping: val }));
+            updateConfig({ levelSetConfig: { ...config.levelSetConfig, outwardDamping: val } as NonNullable<typeof config.levelSetConfig> });
           }}
           clampAirPhi={levelsetParams.clampAirPhi}
           onClampAirChange={(val) => {

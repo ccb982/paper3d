@@ -322,6 +322,10 @@ export function FluidPanel() {
                 onChange={v => updateFluidConfig(activeLayerId!, {
                   levelSetConfig: { ...cfg!.levelSetConfig, narrowBandWidth: v },
                 })} fmt={v => v.toFixed(1)} />
+              <Slider label="外速抑制" value={cfg!.levelSetConfig.outwardDamping ?? 0} min={0} max={1} step={0.05}
+                onChange={v => updateFluidConfig(activeLayerId!, {
+                  levelSetConfig: { ...cfg!.levelSetConfig, outwardDamping: v },
+                })} fmt={v => v.toFixed(2)} />
             </>
           )}
 

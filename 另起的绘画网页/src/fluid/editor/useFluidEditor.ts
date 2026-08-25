@@ -39,6 +39,9 @@ export function useFluidEditor(
       //   这是"烟雾感"的直接克星（可见液体 = SDF 定义的锐利区域，而非模糊色场）。
       //   代价：细碎液雾会被裁掉——做水团正是要这个效果；做雾化特效时再关掉。
       constrainLiquid: true,
+      // ★ 外向速度抑制：界面窄带内削掉指向空气侧的速度（1=完全不可外扩）。
+      //   确定性收拢保证，与张力符号/φ噪声无关——治"注入后乱流发散"的主力手段
+      outwardDamping: 1,
     },
     gravity: { x: 0, y: 5 }, // 二维矢量，默认向下 5 px/s²（屏幕坐标系）
     velocityDataType: 'float', // 速度场数据类型：'float'(32位) 或 'half-float'(16位)

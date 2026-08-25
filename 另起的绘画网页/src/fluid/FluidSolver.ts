@@ -106,6 +106,8 @@ export interface FluidSolverConfig {
     maxAirPhi?: number;          // 空气区 φ 上限（默认 0）
     compensateWaterPhi?: boolean;// 水体区负向补偿（防水体流失）
     waterCompensationRate?: number; // 水体补偿速率（默认 0.1）
+    /** ★ 外向速度抑制（0~1）：界面窄带内削减指向空气侧的法向速度，确定性收拢保证 */
+    outwardDamping?: number;
   };
   continuousSources: InjectionConfig[];
   /**
@@ -1221,6 +1223,17 @@ export class FluidSolver {
     // 6. 速度限幅（缩放之后，防爆炸）
     const maxVel = cfg.maxVelocity ?? 5000;
     if (maxVel > 0 && isFinite(maxVel)) this.clampVelocity(maxVel);
+
+    // 6.5 ★ 外向速度抑制（确定性收拢；与张力符号/φ噪声无关）
+    if (ls?.enabled && this._phiGrid) {
+      const od = ls.outwardDamping ?? 0;
+      if (od > 0) {
+        const band = ls.narrowBandWidth ?? ls.smoothingRadius ?? 5;
+        this.levelSetSolver.applyOutwardVelDamping(
+          this.velocityGrid, this._phiGrid.read, this.getObstacleTex(), band, od,
+        );
+      }
+    }
 
     this.time += dt;
   }

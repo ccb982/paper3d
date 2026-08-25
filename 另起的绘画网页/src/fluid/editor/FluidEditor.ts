@@ -184,6 +184,11 @@ export interface FluidEditorConfig {
     compensateWaterPhi?: boolean;
     /** 水体补偿速率（像素/帧，默认 0.1） */
     waterCompensationRate?: number;
+    /**
+     * ★ 外向速度抑制（0~1，默认 0=关闭）：界面窄带内削减指向空气侧的法向速度。
+     * 确定性收拢保证——不依赖张力符号与 φ 噪声质量。1=界面完全不可外扩。
+     */
+    outwardDamping?: number;
   };
 
   /**
@@ -563,7 +568,12 @@ export class FluidEditor {
 
     // 3. 压力投影（红-黑 SOR；消费散度源）
     if (this.config.enablePressure) {
-      this.solvePressure(this.config.pressureIterations, this.config.pressureOmega);
+      // ★ 自由表面边界：Level Set 启用时，压力只在液体内部（φ<0）求解，
+      //   空气区压力恒为 0 —— 液体成为有表面的不可压缩整体（废弃模拟器的真实感核心）：
+      //   注入动量推动的是整块水而非染色剂，表面像一层膜约束着体积。
+      const fsPhi = (this.config.enableLevelSet && this._phiGrid)
+        ? this._phiGrid.read : null;
+      this.solvePressure(this.config.pressureIterations, this.config.pressureOmega, fsPhi);
       this.applyPressureGradient();
     }
 
@@ -583,6 +593,19 @@ export class FluidEditor {
     const maxVel = this.config.maxVelocity ?? 5000;
     if (maxVel > 0 && isFinite(maxVel)) {
       this.operations.clampVelocity(this.velocityGrid, maxVel);
+    }
+
+    // 3.7 ★ 外向速度抑制（确定性收拢，与张力符号/φ噪声无关）：
+    //   界面窄带内削掉指向空气侧的法向速度 → 水团只可能收、不可能散。
+    //   放在限幅后：本帧用于平流的最终速度场已无外扩分量。
+    if (this.config.enableLevelSet && this._phiGrid) {
+      const od = this.config.levelSetConfig?.outwardDamping ?? 0;
+      if (od > 0) {
+        this.levelSetSolver.applyOutwardVelDamping(
+          this.velocityGrid, this._phiGrid.read, this.getObstacleTexture(),
+          this.config.levelSetConfig?.narrowBandWidth ?? 5, od,
+        );
+      }
     }
 
     // 4. ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
@@ -870,8 +893,10 @@ export class FluidEditor {
    *
    * @param iterations 迭代轮数（每轮含红+黑两个 Pass）
    * @param omega 过松弛因子（推荐 1.5~1.8）
+   * @param phiTex 自由表面 φ 场（null=全域求解）：提供时压力只在 φ<0（液体）内求解，
+   *               空气区压力恒 0 —— 自由表面边界条件（真实水感核心）
    */
-  private solvePressure(iterations: number, omega: number): void {
+  private solvePressure(iterations: number, omega: number, phiTex: THREE.Texture | null = null): void {
     const { w, h } = this.config.resolution;
     if (w === 0 || h === 0) return;
 
@@ -883,9 +908,9 @@ export class FluidEditor {
 
     for (let iter = 0; iter < iterations; iter++) {
       // Pass 1: 更新红色像素 ((x+y) 为奇数 = 红色)
-      this.runSORPass('red', omega);
+      this.runSORPass('red', omega, phiTex);
       // Pass 2: 更新黑色像素 ((x+y) 为偶数 = 黑色)
-      this.runSORPass('black', omega);
+      this.runSORPass('black', omega, phiTex);
     }
   }
 
@@ -897,13 +922,16 @@ export class FluidEditor {
    *   当 uColor=1 时，只更新 isRed==0（黑色）的像素
    * 不更新的像素直接直传旧值。
    */
-  private runSORPass(color: 'red' | 'black', omega: number): void {
-    const key = `sor_${color}_obstacle`;
+  private runSORPass(color: 'red' | 'black', omega: number, phiTex: THREE.Texture | null): void {
+    // ★ 自由表面模式用独立材质 key（shader 不同，避免缓存串扰）
+    const key = phiTex ? `sor_${color}_fs` : `sor_${color}_obstacle`;
     const mat = this.gpu.getMaterial(key, {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
       uDivSource: { value: this.divergenceGrid.read },
       uObstacle: { value: this.getObstacleTexture() },
+      uPhi: { value: phiTex ?? this.getObstacleTexture() },
+      uPhiOn: { value: phiTex ? 1 : 0 },
       uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
       uOmega: { value: omega },
       uColor: { value: color === 'red' ? 0 : 1 },
@@ -913,6 +941,8 @@ export class FluidEditor {
       uniform sampler2D uVelocity;
       uniform sampler2D uDivSource;
       uniform sampler2D uObstacle;
+      uniform sampler2D uPhi;
+      uniform int uPhiOn;         // 1=自由表面边界（φ>0 的空气区压力恒 0）
       uniform vec2 uInvResolution;
       uniform float uOmega;
       uniform int uColor;
@@ -922,6 +952,12 @@ export class FluidEditor {
       void main() {
         // ★ 墙体像素：压力强制为 0（墙体是不可压缩的硬边界）
         if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = vec4(0.0);
+          return;
+        }
+
+        // ★ 自由表面：空气区（φ>0）压力强制为 0 —— 液体是有表面的不可压缩整体
+        if (uPhiOn == 1 && texture2D(uPhi, vUv).r > 0.0) {
           gl_FragColor = vec4(0.0);
           return;
         }
@@ -952,11 +988,17 @@ export class FluidEditor {
         float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
         float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
 
-        // ★ 邻居是墙体时，该方向压力视为 0（硬边界）
+        // ★ 邻居是墙体/空气（自由表面模式）时，该方向压力视为 0（硬边界）
         if (texture2D(uObstacle, vUv + vec2(-ts.x, 0.0)).r > 0.5) pL = 0.0;
         if (texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5) pR = 0.0;
         if (texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5) pT = 0.0;
         if (texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5) pB = 0.0;
+        if (uPhiOn == 1) {
+          if (texture2D(uPhi, vUv + vec2(-ts.x, 0.0)).r > 0.0) pL = 0.0;
+          if (texture2D(uPhi, vUv + vec2( ts.x, 0.0)).r > 0.0) pR = 0.0;
+          if (texture2D(uPhi, vUv + vec2(0.0,  ts.y)).r > 0.0) pT = 0.0;
+          if (texture2D(uPhi, vUv + vec2(0.0, -ts.y)).r > 0.0) pB = 0.0;
+        }
 
         // 计算散度（中心差分）
         vec2 vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).rg;

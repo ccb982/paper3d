@@ -321,31 +321,115 @@ export class LevelSetSolver {
         }
 
         vec2 ts = uInvRes;
-        float pL = texture2D(uPhi, vUv + vec2(-ts.x, 0.0)).r;
-        float pR = texture2D(uPhi, vUv + vec2( ts.x, 0.0)).r;
-        float pT = texture2D(uPhi, vUv + vec2(0.0,  ts.y)).r;
-        float pB = texture2D(uPhi, vUv + vec2(0.0, -ts.y)).r;
+        // ★ 差分间距取 1.5px（而非 1px）：宽距差分低通掉单像素级 φ 噪声，
+        //   否则 κ 在噪声下正负乱跳，张力变成界面乱流发生器。
+        //   公式做归一化：grad=Δφ/(2d)、lap=Σ/d² → κ 为真实曲率 1/R（与间距无关）
+        vec2 d2 = ts * 1.5;
+        float pL = texture2D(uPhi, vUv - vec2(d2.x, 0.0)).r;
+        float pR = texture2D(uPhi, vUv + vec2(d2.x, 0.0)).r;
+        float pT = texture2D(uPhi, vUv + vec2(0.0, d2.y)).r;
+        float pB = texture2D(uPhi, vUv - vec2(0.0, d2.y)).r;
         float pC = phi;
 
-        // 一阶梯度（中心差分）
-        vec2 gradPhi = vec2(pR - pL, pT - pB) * 0.5;
+        // 一阶梯度（中心差分，间距 d）
+        vec2 gradPhi = vec2(pR - pL, pT - pB) / (2.0 * d2.x);
         float gradMag = length(gradPhi) + 1e-6;  // 防 0
 
-        // 二阶导数（5 点 Laplacian，dx=1 故不除 dx²）
-        float lapPhi = (pL + pR + pT + pB - 4.0 * pC);
+        // 二阶导数（5 点 Laplacian，除以 d² 归一化）
+        float lapPhi = (pL + pR + pT + pB - 4.0 * pC) / (d2.x * d2.y);
 
-        // 曲率 κ ≈ ∇²φ / |∇φ|
+        // 曲率 κ = ∇²φ / |∇φ|（凸液面为正）
         float kappa = lapPhi / gradMag;
 
         // ★ CSF 体积力：F = -σ·κ·δ(φ)·n̂
         //   符号修正（Brackbill 正确方向）：本求解器约定 φ<0 为水、n̂ 指向空气侧，
-        //   凸液面 κ=∇²φ/|∇φ|≈+1/R>0 → 不取负号时力朝外，会把水滴推散成烟雾；
+        //   凸液面 κ≈+1/R>0 → 不取负号时力朝外，会把水滴推散成烟雾；
         //   取负后力指向曲率中心，水团才向内收缩（旧版丢负号导致 σ 越大越喷）。
         vec2 normal = gradPhi / gradMag;
         float delta = smoothDelta(phi, uSmoothingRadius);
         vec2 force = -uSigma * kappa * delta * normal;
         vec2 vel = texture2D(uVelocity, vUv).rg;
         vel += force * uDt;
+
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, velocityGrid.write, mat);
+    velocityGrid.swap();
+  }
+
+  // ==================== 3.5 外向速度抑制（确定性收拢） ====================
+
+  /**
+   * ★ 界面窄带内削减指向外侧（空气）的法向速度。
+   *
+   *   v ← v − strength · max(v·n̂, 0) · n̂ ，n̂ = ∇φ/|∇φ|（指向空气）
+   *
+   * 与表面张力不同，这是**确定性**的收拢保证：
+   *   - 不依赖 κ 的符号/精度 → φ 噪声、σ 正负都影响不到它
+   *   - strength=1 → 界面完全不可外扩；0.5 → 外速削半；0 = 关闭
+   *   - 只作用于 |φ|<band 窄带 → 内部环流保留
+   */
+  applyOutwardVelDamping(
+    velocityGrid: FluidGrid,
+    phiTex: THREE.Texture,
+    obstacleTex: THREE.Texture,
+    band: number,
+    strength: number,
+  ): void {
+    if (strength <= 0) return;
+    const w = velocityGrid.resolution.w;
+    const h = velocityGrid.resolution.h;
+
+    const mat = this.gpu.getMaterial('levelset_outward_damping_v1', {
+      uVelocity: { value: velocityGrid.read },
+      uPhi: { value: phiTex },
+      uObstacle: { value: obstacleTex },
+      uInvRes: { value: new THREE.Vector2(1 / w, 1 / h) },
+      uBand: { value: band },
+      uStrength: { value: Math.min(1, strength) },
+    }, /* glsl */ `
+      uniform sampler2D uVelocity;
+      uniform sampler2D uPhi;
+      uniform sampler2D uObstacle;
+      uniform vec2 uInvRes;
+      uniform float uBand;
+      uniform float uStrength;
+      varying vec2 vUv;
+
+      void main() {
+        // 墙内速度保持
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+
+        float phi = texture2D(uPhi, vUv).r;
+        // 只在界面窄带内起作用
+        if (abs(phi) > uBand) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+
+        vec2 ts = uInvRes;
+        float pL = texture2D(uPhi, vUv - vec2(ts.x, 0.0)).r;
+        float pR = texture2D(uPhi, vUv + vec2(ts.x, 0.0)).r;
+        float pT = texture2D(uPhi, vUv + vec2(0.0, ts.y)).r;
+        float pB = texture2D(uPhi, vUv - vec2(0.0, ts.y)).r;
+
+        // 法线（指向空气侧），退化时跳过
+        vec2 n = vec2(pR - pL, pT - pB);
+        float len = length(n);
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        if (len < 1e-6) {
+          gl_FragColor = vec4(vel, 0.0, 1.0);
+          return;
+        }
+        n /= len;
+
+        float vn = dot(vel, n);          // 外法向速度分量
+        if (vn > 0.0) vel -= n * vn * uStrength;   // 只削外向部分
 
         gl_FragColor = vec4(vel, 0.0, 1.0);
       }
