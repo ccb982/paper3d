@@ -20,7 +20,9 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
-import { bakeChunkAppearance } from '../services/map/ChunkAppearance';
+import { bakeChunkMaps } from '../services/map/ChunkAppearance';
+import { TerrainMaterial } from '../services/map/TerrainMaterial';
+import { buildChunkSideWalls } from '../services/map/ChunkWalls';
 import { buildBoss4DChunk } from '../services/map/Boss4DArena';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
@@ -564,53 +566,46 @@ export class WorldMode implements IGameMode {
     return this.boss4D;
   }
 
-  /** 标准风格 chunk：拉伸平面 + canvas 外观（视觉与物理数据成对返回） */
+  /** 标准风格 chunk：拉伸平面 + 双纹理烘焙外观（视觉与物理数据成对返回）
+   *  ★ 双纹理方案：albedo（材质色）× lightmap（直射+AO）在 shader 合成；
+   *    地形退出实时光照（不吃 GameLights），昼夜只经 updateTerrainLighting
+   *    调制两个 uniform；实体动态影子体系不受影响。 */
   private buildStandardChunk(cx: number, cz: number): {
-    visual: THREE.Mesh;
+    visual: THREE.Object3D;
     trimeshVertices: Float32Array;
     trimeshIndices: Uint32Array;
   } {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
-    const normals = new Float32Array(pos.count * 3);
     // ★ 外观 UV：与 ChunkAppearance 像素映射约定配套（文件头有推导），flipY=false
     const uvs = new Float32Array(pos.count * 2);
-    const tmpN = new THREE.Vector3();
     for (let i = 0; i < pos.count; i++) {
       const lx = pos.getX(i) + CHUNK_SIZE / 2;
       const lz = pos.getZ(i) + CHUNK_SIZE / 2;
       const wx = cx * CHUNK_SIZE + lx;
       const wz = cz * CHUNK_SIZE + lz;
-      const h = this.raster.vertexHeightAt(wx, wz);
-      pos.setY(i, h);
+      pos.setY(i, this.raster.vertexHeightAt(wx, wz));
       uvs[i * 2] = lx / CHUNK_SIZE;
       uvs[i * 2 + 1] = lz / CHUNK_SIZE;
-      const hL = this.raster.heightAt(wx - 1, wz);
-      const hR = this.raster.heightAt(wx + 1, wz);
-      const hD = this.raster.heightAt(wx, wz - 1);
-      const hU = this.raster.heightAt(wx, wz + 1);
-      tmpN.set(hL - hR, 2, hD - hU).normalize();
-      normals[i * 3] = tmpN.x;
-      normals[i * 3 + 1] = tmpN.y;
-      normals[i * 3 + 2] = tmpN.z;
     }
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-    geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-    // ★ 外观来自静态预渲染 Canvas（颜色/噪声/AO 全在里面）；
-    //   实时光照只承担半球环境 + N·L 形状明暗 + 实体阴影接收。
-    //   ⚠️ 不再使用顶点色/AO —— 与 canvas 双重压暗（架构文档 8.0 v2 红线）
-    const mapTex = bakeChunkAppearance(this.raster, cx, cz);
-    const mat = new THREE.MeshStandardMaterial({
-      map: mapTex,
-      roughness: 0.95,
-      metalness: 0,
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-    mesh.receiveShadow = true;
+
+    const { albedo, lightmap } = bakeChunkMaps(this.raster, cx, cz);
+    const mat = new TerrainMaterial(albedo, lightmap);
+    // lightmap 挂 userData 供 disposeChunkVisual 一并释放（.map 只登记 albedo）
+    (mat as unknown as { userData: { lightMap?: THREE.Texture } }).userData = { lightMap: lightmap };
+
+    const top = new THREE.Mesh(geo, mat);
+    const group = new THREE.Group();
+    group.add(top);
+    // ★ 断崖侧壁：独立几何 + 顶点色（避免地面贴图被拉伸成墙面的纵向渐变）
+    const walls = buildChunkSideWalls(this.raster, cx, cz);
+    if (walls) group.add(walls);
+    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+
     return {
-      visual: mesh,
+      visual: group,
       trimeshVertices: pos.array as Float32Array,
       trimeshIndices: new Uint32Array(geo.index!.array),
     };
@@ -657,6 +652,9 @@ export class WorldMode implements IGameMode {
       const mm = m.material as THREE.MeshStandardMaterial | undefined;
       if (!mm) return;
       mm.map?.dispose();
+      // ★ 双纹理方案：lightmap 挂在材质 userData 上，随 .map 一并释放
+      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture } }).userData;
+      extra?.lightMap?.dispose();
       mm.dispose();
     });
   }

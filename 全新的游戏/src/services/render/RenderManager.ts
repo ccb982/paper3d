@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { SunCycle, type SunSample } from './SunCycle';
 import { gameLights, LIGHT_TUNING } from './GameLights';
+import { updateTerrainLighting } from '../map/TerrainMaterial';
 
 /** 调参统一入口（透传 GameLights.LIGHT_TUNING；曝光/太阳距离等都在这） */
 export { LIGHT_TUNING };
@@ -75,6 +76,8 @@ class RenderManager {
   /** 渲染前锚定光照到跟随目标（WorldMode.render 调用；位置已是本帧最终值） */
   follow(target: { x: number; y: number; z: number }): void {
     gameLights.follow(target, this.sunCycle.current);
+    // ★ 地形烘焙光照的昼夜调制（双纹理方案：地形不吃实时灯，只吃这两个 uniform）
+    updateTerrainLighting(this.sunCycle.current);
   }
 
   /** ★ 渲染查询接口：太阳状态（方向/色温/白昼因子）——影子投影等消费者用 */
