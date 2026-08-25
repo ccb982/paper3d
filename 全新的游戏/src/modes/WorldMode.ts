@@ -539,40 +539,24 @@ export class WorldMode implements IGameMode {
 
   private buildChunkMesh(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
-    // ---- 物理体（与视觉风格无关：同一高度场的标准 trimesh，只建一次；
-    //      切换地图风格时不重建——两套视觉同源高度场，碰撞近似一致）----
-    if (!this.chunkBodies.has(key)) {
-      const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
-      geo.rotateX(-Math.PI / 2);
-      const pos = geo.attributes.position as THREE.BufferAttribute;
-      for (let i = 0; i < pos.count; i++) {
-        pos.setY(i, this.raster.vertexHeightAt(
-          cx * CHUNK_SIZE + pos.getX(i) + CHUNK_SIZE / 2,
-          cz * CHUNK_SIZE + pos.getZ(i) + CHUNK_SIZE / 2,
-        ));
-      }
-      const body = this.entities.create({
-        kind: 'ground',
-        x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
-        physics: {
-          type: 'fixed',
-          options: { shape: { type: 'trimesh', vertices: pos.array as Float32Array, indices: new Uint32Array(geo.index!.array) } },
-        },
-      });
-      this.chunkBodies.set(key, body.id);
-      geo.dispose();
+    // ★ 物理 & 视觉按当前风格成对构建/替换（切换地图风格时两者同步走）
+    if (this.boss4D) {
+      const b = buildBoss4DChunk(this.raster, cx, cz);
+      this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
+    } else {
+      const s = this.buildStandardChunk(cx, cz);
+      this.replaceChunk(key, s.visual, cx, cz, s.trimeshVertices, s.trimeshIndices);
     }
-    this.buildChunkVisuals(cx, cz);
   }
 
-  /** ★ 地图风格切换（右上角按钮调用）：重建全部已加载 chunk 的视觉部分 */
+  /** ★ 地图风格切换（右上角按钮调用）：重建全部已加载 chunk 的物理+视觉 */
   setMapStyle(boss4D: boolean): void {
     if (this.boss4D === boss4D) return;
     this.boss4D = boss4D;
     for (const key of [...this.chunkMeshes.keys()]) {
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
-      this.buildChunkVisuals(cx, cz);
+      this.buildChunkMesh(cx, cz);
     }
   }
 
@@ -580,22 +564,12 @@ export class WorldMode implements IGameMode {
     return this.boss4D;
   }
 
-  /** 按当前风格构建/重建 chunk 视觉（物理体不动） */
-  private buildChunkVisuals(cx: number, cz: number): void {
-    const key = chunkKeyOf(cx, cz);
-    const old = this.chunkMeshes.get(key);
-    if (old) {
-      this.scene?.remove(old);
-      this.disposeChunkVisual(old);
-    }
-    if (this.boss4D) {
-      // ---- Boss 四维废案：米格顶面 + 垂直侧壁 + 失败烘焙全套 ----
-      const { group } = buildBoss4DChunk(this.raster, cx, cz);
-      this.scene!.add(group);
-      this.chunkMeshes.set(key, group);
-      return;
-    }
-    // ---- 标准外观：拉伸平面 + canvas 外观材质 ----
+  /** 标准风格 chunk：拉伸平面 + canvas 外观（视觉与物理数据成对返回） */
+  private buildStandardChunk(cx: number, cz: number): {
+    visual: THREE.Mesh;
+    trimeshVertices: Float32Array;
+    trimeshIndices: Uint32Array;
+  } {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -635,8 +609,43 @@ export class WorldMode implements IGameMode {
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
     mesh.receiveShadow = true;
-    this.scene!.add(mesh);
-    this.chunkMeshes.set(key, mesh);
+    return {
+      visual: mesh,
+      trimeshVertices: pos.array as Float32Array,
+      trimeshIndices: new Uint32Array(geo.index!.array),
+    };
+  }
+
+  /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
+  private replaceChunk(
+    key: number,
+    visual: THREE.Object3D,
+    cx: number,
+    cz: number,
+    trimeshVertices: Float32Array,
+    trimeshIndices: Uint32Array,
+  ): void {
+    const old = this.chunkMeshes.get(key);
+    if (old) {
+      this.scene?.remove(old);
+      this.disposeChunkVisual(old);
+    }
+    const oldBody = this.chunkBodies.get(key);
+    if (oldBody !== undefined) {
+      this.entities.destroy(oldBody);
+      this.chunkBodies.delete(key);
+    }
+    this.scene!.add(visual);
+    this.chunkMeshes.set(key, visual);
+    const body = this.entities.create({
+      kind: 'ground',
+      x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+      physics: {
+        type: 'fixed',
+        options: { shape: { type: 'trimesh', vertices: trimeshVertices, indices: trimeshIndices } },
+      },
+    });
+    this.chunkBodies.set(key, body.id);
   }
 
   /** 释放 chunk 视觉资源（兼容 Mesh 与 Group 两种形态） */
@@ -652,19 +661,8 @@ export class WorldMode implements IGameMode {
     });
   }
 
+  /** 接缝重建：整体替换（视觉+物理随当前风格） */
   private rebuildChunkMesh(cx: number, cz: number): void {
-    const key = chunkKeyOf(cx, cz);
-    const old = this.chunkMeshes.get(key);
-    if (old) {
-      this.scene!.remove(old);
-      this.disposeChunkVisual(old);
-      this.chunkMeshes.delete(key);
-    }
-    const oldBody = this.chunkBodies.get(key);
-    if (oldBody !== undefined) {
-      this.entities.destroy(oldBody);
-      this.chunkBodies.delete(key);
-    }
     this.buildChunkMesh(cx, cz);
   }
 

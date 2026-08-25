@@ -1,11 +1,14 @@
 // ============================================================
-// ChunkAppearance —— chunk 外观纹理烘焙器（静态预渲染）
+// ChunkAppearance —— chunk 外观纹理烘焙器（静态预渲染，统一入口）
 // ============================================================
 // 架构文档 8.0 v2 的核心：chunk 创建时把"颜色类信息"一次性烘进
 // 一张 Canvas 纹理，不随相机/时间变化。运行时只剩便宜的光照。
 //
 // 烘焙内容（逐像素）：
 //   类型底色 × hash2 噪声明暗 × 逐像素 AO（高度场环形采样）
+//   可选档位（opts 开启；★ 主地图默认全关 = 原始观感）：
+//     - contactAO  第二尺度接触暗部（缝隙/贴边）
+//     - sunShadow  静态日照投影（地形自遮挡，固定太阳）
 //
 // 分界铁律（防重复计费）：
 //   - 颜色类 → 全部在这里烘焙
@@ -27,10 +30,40 @@ import type { RasterMap } from './RasterMap';
 /** 外观分辨率（默认 256²；低端机降 128²） */
 export const APPEARANCE_RES = 256;
 
-/** AO 参数（与架构文档一致；压暗下限 0.55 防死黑） */
+/** 烘焙可选档位（★ 主地图默认全关；组合见 BOSS4D_BAKE） */
+export interface ChunkBakeOptions {
+  /** ★ 第二尺度接触 AO（半径0.85m 缝隙/贴边暗部）——Boss4D 废案开启 */
+  contactAO?: boolean;
+  /** ★ 静态日照投影（地形自遮挡：半分辨率光线步进+双边模糊柔化；
+   *  固定太阳不随昼夜；最小落差门槛 2.2m——普通台阶不投影）——Boss4D 废案开启 */
+  sunShadow?: boolean;
+}
+
+/** ★ Boss 四维废案的烘焙配置（与 Boss4DArena 网格配套使用） */
+export const BOSS4D_BAKE: Required<ChunkBakeOptions> = { contactAO: true, sunShadow: true };
+
+/** AO 参数（环境尺度；压暗下限 0.55 防死黑） */
 const AO_RADIUS = 2.5;
 const AO_STRENGTH = 0.09;
 const AO_MIN = 0.55;
+
+/** 接触 AO 参数（contactAO 档；紧贴尺度） */
+const CONTACT_RADIUS = 0.85;
+const CONTACT_STRENGTH = 0.17;
+
+/** 静态日照投影参数（sunShadow 档；固定太阳观感，方向承旧 sunOffset） */
+const SHADOW_SUN_HX = 0.851;
+const SHADOW_SUN_HZ = 0.524;
+const SHADOW_SUN_TAN = Math.tan((40 * Math.PI) / 180); // 仰角 40° 射线爬升率
+const SHADOW_MAX_DIST = 9;
+const SHADOW_STEPS = 12;
+const SHADOW_STRENGTH = 0.30;   // ★ 与 AO 连乘，勿调回 0.4+——背光处会黑成一团
+const SHADOW_DIV = 2;           // 阴影场半分辨率
+const SHADOW_BLUR_R = 1;        // 双边盒式模糊半径
+const SHADOW_BLUR_PASSES = 2;
+const SHADOW_EDGE_TOL = 0.6;    // 高度差≤此值模糊自由跨过
+const SHADOW_EDGE_FALL = 1.4;   // 超出后权重线性归零（影子不得翻越断崖）
+const SHADOW_MIN_DEPTH = 2.2;   // 最小落差门槛（普通台阶不投影）
 
 /** 平滑值噪声（双线性 + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
 function vnoise(x: number, y: number, seed: number): number {
@@ -48,12 +81,14 @@ function vnoise(x: number, y: number, seed: number): number {
  * 烘焙一张 chunk 外观纹理。
  * @param raster 地图查询层（terrainTypeAt / heightAt / worldSeed）
  * @param cx,cz  chunk 坐标
+ * @param opts   可选档位（缺省 = 主地图原始观感）
  * @returns 已配置好 colorSpace/filter 的 CanvasTexture（随 chunk 销毁时 dispose）
  */
 export function bakeChunkAppearance(
   raster: RasterMap,
   cx: number,
   cz: number,
+  opts: ChunkBakeOptions = {},
 ): THREE.CanvasTexture {
   const S = APPEARANCE_RES;
   const cvs = document.createElement('canvas');
@@ -65,6 +100,81 @@ export function bakeChunkAppearance(
   const step = CHUNK_SIZE / S;               // 米/像素
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
+
+  const useContact = opts.contactAO === true;
+  const useShadow = opts.sunShadow === true;
+
+  // ==================== Pass A：静态日照投影场（sunShadow 档）====================
+  // 半分辨率预计算 + 高度加权双边模糊柔化；纯高度场计算（与 tile 类型无关）
+  let SR = 0;
+  let field: Float32Array | null = null;
+  if (useShadow) {
+    SR = Math.max(1, Math.round(S / SHADOW_DIV));
+    const sStep = CHUNK_SIZE / SR;
+    field = new Float32Array(SR * SR);
+    const hfield = new Float32Array(SR * SR);
+    const d0 = (SHADOW_MAX_DIST / SHADOW_STEPS) * 0.5;
+    const grow = Math.pow(SHADOW_MAX_DIST / d0, 1 / SHADOW_STEPS);
+    for (let sy = 0; sy < SR; sy++) {
+      for (let sx = 0; sx < SR; sx++) {
+        const wx = originX + (sx + 0.5) * sStep;
+        const wz = originZ + (sy + 0.5) * sStep;
+        const h = raster.heightAt(wx, wz);
+        hfield[sy * SR + sx] = h;
+        // 双探针快速预检（须同时满足落差门槛）：平坦开阔区跳过步进
+        const p1 = SHADOW_MAX_DIST * 0.35, p2 = SHADOW_MAX_DIST * 0.75;
+        const gate1 = Math.max(SHADOW_SUN_TAN * p1, SHADOW_MIN_DEPTH);
+        const gate2 = Math.max(SHADOW_SUN_TAN * p2, SHADOW_MIN_DEPTH);
+        const blocked =
+          raster.heightAt(wx + SHADOW_SUN_HX * p1, wz + SHADOW_SUN_HZ * p1) - h >= gate1 ||
+          raster.heightAt(wx + SHADOW_SUN_HX * p2, wz + SHADOW_SUN_HZ * p2) - h >= gate2;
+        if (!blocked) continue;
+        let sh = 0, d = d0;
+        for (let k = 0; k < SHADOW_STEPS && sh < 0.92; k++) {
+          const th = raster.heightAt(wx + SHADOW_SUN_HX * d, wz + SHADOW_SUN_HZ * d);
+          const rayY = h + SHADOW_SUN_TAN * d;
+          // ★ 落差门槛：遮挡物须高出接收平面 ≥SHADOW_MIN_DEPTH（普通台阶无视）
+          if (th > rayY && th - h >= SHADOW_MIN_DEPTH) {
+            const over = Math.min(1, (th - rayY) / 1.1);       // 遮挡越厚影越实
+            const fall = 1 - d / SHADOW_MAX_DIST;              // 越远越淡
+            sh = Math.max(sh, over * (0.35 + 0.65 * fall));
+          }
+          d *= grow;
+        }
+        field[sy * SR + sx] = sh;
+      }
+    }
+    // ---- 双边盒式模糊 ×N：亮度柔化但【不过高度断崖】（影子不得爬上台顶——踩过坑）----
+    const tmp = new Float32Array(field.length);
+    for (let pass = 0; pass < SHADOW_BLUR_PASSES; pass++) {
+      for (let y = 0; y < SR; y++) {
+        for (let x = 0; x < SR; x++) {
+          const hc = hfield[y * SR + x];
+          let sum = 0, wsum = 0;
+          for (let k = -SHADOW_BLUR_R; k <= SHADOW_BLUR_R; k++) {
+            const xx = Math.min(SR - 1, Math.max(0, x + k));
+            const dh = Math.abs(hfield[y * SR + xx] - hc);
+            const w = dh <= SHADOW_EDGE_TOL ? 1 : Math.max(0, 1 - (dh - SHADOW_EDGE_TOL) / SHADOW_EDGE_FALL);
+            sum += field[y * SR + xx] * w; wsum += w;
+          }
+          tmp[y * SR + x] = wsum > 0 ? sum / wsum : field[y * SR + x];
+        }
+      }
+      for (let y = 0; y < SR; y++) {
+        for (let x = 0; x < SR; x++) {
+          const hc = hfield[y * SR + x];
+          let sum = 0, wsum = 0;
+          for (let k = -SHADOW_BLUR_R; k <= SHADOW_BLUR_R; k++) {
+            const yy = Math.min(SR - 1, Math.max(0, y + k));
+            const dh = Math.abs(hfield[yy * SR + x] - hc);
+            const w = dh <= SHADOW_EDGE_TOL ? 1 : Math.max(0, 1 - (dh - SHADOW_EDGE_TOL) / SHADOW_EDGE_FALL);
+            sum += tmp[yy * SR + x] * w; wsum += w;
+          }
+          field[y * SR + x] = wsum > 0 ? sum / wsum : field[y * SR + x];
+        }
+      }
+    }
+  }
 
   for (let py = 0; py < S; py++) {
     for (let px = 0; px < S; px++) {
@@ -139,21 +249,47 @@ export function bakeChunkAppearance(
       const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
       const shade = 0.94 + 0.12 * n;
 
-      // ---- 逐像素 AO ----
-      // ★ 凹陷地块（修正后仍是水/坑的部分 = 0 线以下的底面）：
-      //   表面按 ≤0 的平面均匀着色，不参与邻域 AO —— 否则邻接高台/坡的
-      //   高度差会烘进纹理，让水面/坑底出现明暗不均。深度感由几何侧壁承担。
       // ---- 逐像素 AO（凹陷地块均匀着色跳过——深度感由几何侧壁承担）----
       let ao = 1;
       if (!td.isDepression) {
         const h = raster.heightAt(wx, wz);
+
+        // ① 接触 AO（contactAO 档：紧贴尺度缝隙/贴边暗部）
+        let contactAO = 1;
+        if (useContact) {
+          let cOcc = 0;
+          for (let k = 0; k < 8; k++) {
+            const ang = (k / 8) * Math.PI * 2;
+            const dh = raster.heightAt(wx + Math.cos(ang) * CONTACT_RADIUS, wz + Math.sin(ang) * CONTACT_RADIUS) - h;
+            if (dh > 0) cOcc += Math.min(dh, 1.2);
+          }
+          contactAO = 1 - (cOcc / 8) * CONTACT_STRENGTH;
+        }
+
+        // ② 环境 AO（基础尺度：凹陷/谷地压暗）
         let occ = 0;
         for (let k = 0; k < 8; k++) {
           const ang = (k / 8) * Math.PI * 2;
           const dh = raster.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
           if (dh > 0) occ += Math.min(dh, 2.5);
         }
-        ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
+        // ★ 显式下限在合并后生效——防止多层连乘击穿亮度
+        ao = Math.max(AO_MIN, contactAO * (1 - (occ / 8) * AO_STRENGTH));
+
+        // ③ 静态日照投影（sunShadow 档）：采样 Pass A 柔化后的阴影场（双线性）
+        if (field && SR > 0) {
+          const fx = Math.max(0, Math.min(SR - 1e-3, (px + 0.5) / SHADOW_DIV - 0.5));
+          const fy = Math.max(0, Math.min(SR - 1e-3, (py + 0.5) / SHADOW_DIV - 0.5));
+          const x0 = fx | 0, y0 = fy | 0;
+          const x1 = Math.min(x0 + 1, SR - 1), y1 = Math.min(y0 + 1, SR - 1);
+          const tx = fx - x0, ty = fy - y0;
+          const sh =
+            field[y0 * SR + x0] * (1 - tx) * (1 - ty) +
+            field[y0 * SR + x1] * tx * (1 - ty) +
+            field[y1 * SR + x0] * (1 - tx) * ty +
+            field[y1 * SR + x1] * tx * ty;
+          ao *= 1 - SHADOW_STRENGTH * sh;
+        }
       }
 
       const f = shade * ao;

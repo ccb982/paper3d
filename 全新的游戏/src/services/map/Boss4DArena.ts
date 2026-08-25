@@ -1,9 +1,11 @@
 // ============================================================
 // Boss4DArena —— 【已封存废案】四维空间 Boss 战专用地形网格构建器
 // ============================================================
-// ★ 来源：2026-08-25 主地图"高台侧壁"重构的完整存档。该方案在主地图上
-//   视觉失败（纯几何台阶 + 透视拉伸 + 贴面穿插），但失败特征恰好契合
-//   最终 Boss 战的"四维空间"主题，原样封存待用。
+// ★ 来源：2026-08-25 主地图"高台侧壁"重构。该方案在主地图上视觉失败
+//   （纯几何台阶 + 透视拉伸 + 贴面穿插），但失败特征恰好契合最终 Boss 战
+//   的"四维空间"主题，转正为 Boss 专用构建器。
+// ★ 外观纹理 = bakeChunkAppearance 的 BOSS4D_BAKE 参数档（双尺度AO+日照投影），
+//   与主地图共用同一烘焙器实现，无拷贝漂移。
 //
 // 视觉特征（刻意保留）：
 //   - 每米格独立平面 → 纯粹几何拼接感
@@ -17,7 +19,7 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
-import { bakeBoss4DAppearance } from './Boss4DAppearance';
+import { bakeChunkAppearance, BOSS4D_BAKE } from './ChunkAppearance';
 import type { RasterMap } from './RasterMap';
 
 export interface Boss4DChunkBuild {
@@ -109,7 +111,7 @@ export function buildBoss4DChunk(raster: RasterMap, cx: number, cz: number): Bos
   const group = new THREE.Group();
   group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
 
-  const mapTex = bakeBoss4DAppearance(raster, cx, cz);
+  const mapTex = bakeChunkAppearance(raster, cx, cz, BOSS4D_BAKE);
   const topMat = new THREE.MeshStandardMaterial({ map: mapTex, roughness: 0.95, metalness: 0 });
   const topMesh = new THREE.Mesh(topGeo, topMat);
   topMesh.receiveShadow = true;
