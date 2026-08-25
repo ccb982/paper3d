@@ -14,7 +14,7 @@
 //   沿固定烘焙太阳方向逐米步进，「遮挡物高出接收平面 ≥ 落差门槛」
 //   才投影；软边 = 遮挡越厚影越实（smoothstep 半影）。参数按标准
 //   地图的块状结构重推（4m 等高柱体），不继承 Boss4D 废案数值。
-//   ⚠️ raster.heightAt 在 4m 块内恒定 → 步进采样自动按柱体取值，
+//   ⚠️ terrain.heightAt 在 4m 块内恒定 → 步进采样自动按柱体取值，
 //      无需专门 DDA。
 //
 // ─────────────────────────────────────────────────────────────
@@ -34,8 +34,32 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
-import { tileById } from './Tiles';
-import type { RasterMap } from './RasterMap';
+import { tileById, type TileDef } from './Tiles';
+
+// ============================================================
+// 烘焙数据流契约（架构定稿）：
+//
+//   RasterMap（地图侧）          ChunkAppearance（烘焙侧）
+//   持有高度场，暴露查询 ──────►  只认 TerrainBakeSource 接口，
+//   TerrainBakeSource 能力        自主计算阴影/光照，
+//                                 返回 albedo + lightmap 双纹理
+//
+// 烘焙器不 import RasterMap——依赖倒置：地图侧满足接口即被消费
+// （TS 结构化类型，RasterMap 天然满足，无需显式 implements）。
+// 未来接入手绘地图/Boss4D 变体/Worker 内快照，只需实现同一接口。
+// ============================================================
+
+/** ★ 烘焙域消费的地形查询契约（最小能力集；RasterMap 天然满足） */
+export interface TerrainBakeSource {
+  /** 世界种子（烘焙噪声用；同 seed 同地形 → 输出逐字节一致） */
+  readonly worldSeed: number;
+  /** 世界高度（格值） */
+  heightAt(x: number, z: number): number;
+  /** 视觉面一致采样（顶点值双线性插值，与网格渲染完全一致） */
+  surfaceHeightAt(x: number, z: number): number;
+  /** 地块定义（颜色/凹陷标志等外观属性） */
+  tileDefAt(x: number, z: number): TileDef;
+}
 
 /** 外观分辨率（默认 256²；低端机降 128²） */
 export const APPEARANCE_RES = 256;
@@ -95,7 +119,7 @@ function vnoise(x: number, y: number, seed: number): number {
  * @returns 已配置好 colorSpace/filter 的 CanvasTexture（随 chunk 销毁时 dispose）
  */
 export function bakeChunkAppearance(
-  raster: RasterMap,
+  terrain: TerrainBakeSource,
   cx: number,
   cz: number,
   opts: ChunkBakeOptions = {},
@@ -106,7 +130,7 @@ export function bakeChunkAppearance(
   const ctx = cvs.getContext('2d')!;
   const img = ctx.createImageData(S, S);
 
-  const seed = raster.worldSeed;
+  const seed = terrain.worldSeed;
   const step = CHUNK_SIZE / S;               // 米/像素
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
@@ -129,19 +153,19 @@ export function bakeChunkAppearance(
       for (let sx = 0; sx < SR; sx++) {
         const wx = originX + (sx + 0.5) * sStep;
         const wz = originZ + (sy + 0.5) * sStep;
-        const h = raster.heightAt(wx, wz);
+        const h = terrain.heightAt(wx, wz);
         hfield[sy * SR + sx] = h;
         // 双探针快速预检（须同时满足落差门槛）：平坦开阔区跳过步进
         const p1 = SHADOW_MAX_DIST * 0.35, p2 = SHADOW_MAX_DIST * 0.75;
         const gate1 = Math.max(SHADOW_SUN_TAN * p1, SHADOW_MIN_DEPTH);
         const gate2 = Math.max(SHADOW_SUN_TAN * p2, SHADOW_MIN_DEPTH);
         const blocked =
-          raster.heightAt(wx + SHADOW_SUN_HX * p1, wz + SHADOW_SUN_HZ * p1) - h >= gate1 ||
-          raster.heightAt(wx + SHADOW_SUN_HX * p2, wz + SHADOW_SUN_HZ * p2) - h >= gate2;
+          terrain.heightAt(wx + SHADOW_SUN_HX * p1, wz + SHADOW_SUN_HZ * p1) - h >= gate1 ||
+          terrain.heightAt(wx + SHADOW_SUN_HX * p2, wz + SHADOW_SUN_HZ * p2) - h >= gate2;
         if (!blocked) continue;
         let sh = 0, d = d0;
         for (let k = 0; k < SHADOW_STEPS && sh < 0.92; k++) {
-          const th = raster.heightAt(wx + SHADOW_SUN_HX * d, wz + SHADOW_SUN_HZ * d);
+          const th = terrain.heightAt(wx + SHADOW_SUN_HX * d, wz + SHADOW_SUN_HZ * d);
           const rayY = h + SHADOW_SUN_TAN * d;
           // ★ 落差门槛：遮挡物须高出接收平面 ≥SHADOW_MIN_DEPTH（普通台阶无视）
           if (th > rayY && th - h >= SHADOW_MIN_DEPTH) {
@@ -202,8 +226,8 @@ export function bakeChunkAppearance(
       //      高邻块，同样判不出。surfaceHeightAt 与网格渲染完全一致才可靠。
       //   插值高度 >0 且水平归属坑/水 tile = 位于 0 线以上的侧壁暴露面，
       //   改按平地材质处理（不得涂水色/警示色）。
-      let td = raster.tileDefAt(wx, wz);
-      if (td.isDepression && raster.surfaceHeightAt(wx, wz) > 0) {
+      let td = terrain.tileDefAt(wx, wz);
+      if (td.isDepression && terrain.surfaceHeightAt(wx, wz) > 0) {
         td = tileById(0); // 0 线以上的侧壁暴露面 → 平地材质
       }
 
@@ -262,7 +286,7 @@ export function bakeChunkAppearance(
       // ---- 逐像素 AO（凹陷地块均匀着色跳过——深度感由几何侧壁承担）----
       let ao = 1;
       if (!td.isDepression) {
-        const h = raster.heightAt(wx, wz);
+        const h = terrain.heightAt(wx, wz);
 
         // ① 接触 AO（contactAO 档：紧贴尺度缝隙/贴边暗部）
         let contactAO = 1;
@@ -270,7 +294,7 @@ export function bakeChunkAppearance(
           let cOcc = 0;
           for (let k = 0; k < 8; k++) {
             const ang = (k / 8) * Math.PI * 2;
-            const dh = raster.heightAt(wx + Math.cos(ang) * CONTACT_RADIUS, wz + Math.sin(ang) * CONTACT_RADIUS) - h;
+            const dh = terrain.heightAt(wx + Math.cos(ang) * CONTACT_RADIUS, wz + Math.sin(ang) * CONTACT_RADIUS) - h;
             if (dh > 0) cOcc += Math.min(dh, 1.2);
           }
           contactAO = 1 - (cOcc / 8) * CONTACT_STRENGTH;
@@ -280,7 +304,7 @@ export function bakeChunkAppearance(
         let occ = 0;
         for (let k = 0; k < 8; k++) {
           const ang = (k / 8) * Math.PI * 2;
-          const dh = raster.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
+          const dh = terrain.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
           if (dh > 0) occ += Math.min(dh, 2.5);
         }
         // ★ 显式下限在合并后生效——防止多层连乘击穿亮度
@@ -359,22 +383,22 @@ export interface ChunkMaps {
  * 烘焙一个 chunk 的双纹理外观（主地图入口）。
  * 同 (seed, cx, cz) 输出确定一致；两张纹理随 chunk 销毁时 dispose。
  */
-export function bakeChunkMaps(raster: RasterMap, cx: number, cz: number): ChunkMaps {
+export function bakeChunkMaps(terrain: TerrainBakeSource, cx: number, cz: number): ChunkMaps {
   return {
-    albedo: bakeAlbedoCanvas(raster, cx, cz),
-    lightmap: bakeLightCanvas(raster, cx, cz),
+    albedo: bakeAlbedoCanvas(terrain, cx, cz),
+    lightmap: bakeLightCanvas(terrain, cx, cz),
   };
 }
 
 /** Pass A —— 材质色图（256²）：底色/抖动/斑块/描边/拉丝/大尺度斑驳 */
-function bakeAlbedoCanvas(raster: RasterMap, cx: number, cz: number): THREE.CanvasTexture {
+function bakeAlbedoCanvas(terrain: TerrainBakeSource, cx: number, cz: number): THREE.CanvasTexture {
   const S = APPEARANCE_RES;
   const cvs = document.createElement('canvas');
   cvs.width = cvs.height = S;
   const ctx = cvs.getContext('2d')!;
   const img = ctx.createImageData(S, S);
 
-  const seed = raster.worldSeed;
+  const seed = terrain.worldSeed;
   const step = CHUNK_SIZE / S;
   const originX = cx * CHUNK_SIZE;
   const originZ = cz * CHUNK_SIZE;
@@ -387,8 +411,8 @@ function bakeAlbedoCanvas(raster: RasterMap, cx: number, cz: number): THREE.Canv
       const wz = originZ + lz;
 
       // 类型判定 + 坑/水侧壁上段修正（语义与旧路径一致，见旧循环注释）
-      let td = raster.tileDefAt(wx, wz);
-      if (td.isDepression && raster.surfaceHeightAt(wx, wz) > 0) {
+      let td = terrain.tileDefAt(wx, wz);
+      if (td.isDepression && terrain.surfaceHeightAt(wx, wz) > 0) {
         td = tileById(0);
       }
 
@@ -455,7 +479,7 @@ function bakeAlbedoCanvas(raster: RasterMap, cx: number, cz: number): THREE.Canv
 }
 
 /** Pass B —— 光照图（128²）：R=N·L wrap × 阴影可见度，G=AO */
-function bakeLightCanvas(raster: RasterMap, cx: number, cz: number): THREE.CanvasTexture {
+function bakeLightCanvas(terrain: TerrainBakeSource, cx: number, cz: number): THREE.CanvasTexture {
   const S = LIGHT_RES;
   const cvs = document.createElement('canvas');
   cvs.width = cvs.height = S;
@@ -479,20 +503,20 @@ function bakeLightCanvas(raster: RasterMap, cx: number, cz: number): THREE.Canva
     for (let px = 0; px < S; px++) {
       const wx = originX + (px + 0.5) * step;
       const wz = originZ + (py + 0.5) * step;
-      const h = raster.heightAt(wx, wz);
+      const h = terrain.heightAt(wx, wz);
       heights[py * S + px] = h;
 
-      const hL = raster.heightAt(wx - 1, wz);
-      const hR = raster.heightAt(wx + 1, wz);
-      const hD = raster.heightAt(wx, wz - 1);
-      const hU = raster.heightAt(wx, wz + 1);
+      const hL = terrain.heightAt(wx - 1, wz);
+      const hR = terrain.heightAt(wx + 1, wz);
+      const hD = terrain.heightAt(wx, wz - 1);
+      const hU = terrain.heightAt(wx, wz + 1);
       // （hL/hR/hD/hU 供模糊权重参考；直射项按平顶常数处理——
       //   侧壁形体感由 ChunkWalls 独立几何承担，不再污染地面贴图）
 
       // 顶面：常数直射 × 投影可见度（留底防死黑）
       let sh = 0;
       for (let d = CAST_STEP; d <= CAST_RANGE && sh < 1; d += CAST_STEP) {
-        const th = raster.heightAt(wx + BAKE_SUN.hx * d, wz + BAKE_SUN.hz * d);
+        const th = terrain.heightAt(wx + BAKE_SUN.hx * d, wz + BAKE_SUN.hz * d);
         if (th - h < CAST_MIN_DEPTH) continue;          // 台阶不投影
         const over = th - (h + BAKE_SUN.tan * d);       // 遮挡超出射线的厚度
         if (over <= 0) continue;
@@ -503,12 +527,12 @@ function bakeLightCanvas(raster: RasterMap, cx: number, cz: number): THREE.Canva
 
       // AO（凹陷地块均匀跳过——深度感由几何侧壁承担）
       let ao = 1;
-      const td = raster.tileDefAt(wx, wz);
-      if (!(td.isDepression && raster.surfaceHeightAt(wx, wz) <= 0)) {
+      const td = terrain.tileDefAt(wx, wz);
+      if (!(td.isDepression && terrain.surfaceHeightAt(wx, wz) <= 0)) {
         let occ = 0;
         for (let k = 0; k < 8; k++) {
           const ang = (k / 8) * Math.PI * 2;
-          const dh = raster.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
+          const dh = terrain.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
           if (dh > 0) occ += Math.min(dh, 2.5);
         }
         ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);

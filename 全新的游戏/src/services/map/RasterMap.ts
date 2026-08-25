@@ -8,6 +8,9 @@
 //   - 回收：天内只增不删；clearAll() 天结束统一回收
 // 消费方：Minimap（地形/黑雾数据）、EntityManager（实体索引/梯形剔除）、
 //         WorldMode（玩家驱动加载 + 地面刚体/视觉网格）
+// ★ 结构上满足 ChunkAppearance.TerrainBakeSource 烘焙契约
+//   （heightAt/surfaceHeightAt/tileDefAt/worldSeed）——外观烘焙经
+//   该窄接口消费本类，依赖倒置，勿在烘焙器内反向耦合本类。
 
 import type { EntityBase } from '../../entity/EntityBase';
 import * as THREE from 'three';
