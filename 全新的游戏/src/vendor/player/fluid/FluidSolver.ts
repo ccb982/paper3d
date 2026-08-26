@@ -52,6 +52,16 @@ export interface ExplosionConfig {
   waterMultiplier?: number;
   /** 随机扰动强度（碎片感/不规则冲击波，默认 0） */
   perturbation?: number;
+  /**
+   * ★ 爆炸期间临时抬升全局速度上限（px/s）：触发时覆盖 maxVelocity，
+   * velCapDuration 秒后开始 smoothstep 回落——水团能被炸飞，之后张力/外速抑制再收拢。
+   * 不设 = 不改变限幅。
+   */
+  velCap?: number;
+  /** velCap 保持时长（秒，默认 = duration + 0.5） */
+  velCapDuration?: number;
+  /** velCap 回落时长（秒，默认 1.5） */
+  velCapRecovery?: number;
 }
 
 export interface FluidSolverConfig {
@@ -66,6 +76,8 @@ export interface FluidSolverConfig {
   gravity: { x: number; y: number };           // 像素/秒²
   velocityScale: number;
   maxVelocity: number;
+  /** ★ 运动粘度 ν（cells²/s），0=无粘性。速度扩散抹平射流/剪切 → 水团内聚 */
+  viscosity?: number;
   colorBoundaryMode: 'clamp' | 'repeat' | 'zero';
   advectionMode: 'vector' | 'scalar';
   combineMode: 'add' | 'sub';
@@ -90,6 +102,8 @@ export interface FluidSolverConfig {
     maxAirPhi?: number;
     compensateWaterPhi?: boolean;
     waterCompensationRate?: number;
+    /** ★ 外向速度抑制（0~1）：界面窄带内削减指向空气侧的法向速度，确定性收拢保证 */
+    outwardDamping?: number;
   };
   continuousSources: InjectionConfig[];
   obstacle?: { width: number; height: number; data: string };
@@ -107,6 +121,7 @@ export const defaultFluidConfig: FluidSolverConfig = {
   gravity: { x: 0, y: 0 },
   velocityScale: 1,
   maxVelocity: 5000,
+  viscosity: 0,
   colorBoundaryMode: 'clamp',
   advectionMode: 'vector',
   combineMode: 'add',
@@ -180,6 +195,8 @@ export class FluidSolver {
   private _phiGrid: FluidGrid | null = null;
   /** ★ Level Set 重建间隔帧计数（每 reinitInterval 帧执行一次「φ 重建 + reinit」） */
   private levelSetFrameCount = 0;
+  /** ★ 爆炸限幅覆盖（velCap）：抬升值 / 保持截止 / 回落完成（this.time 秒） */
+  private velCapOverride: { value: number; until: number; recoverUntil: number } | null = null;
 
   // 基础色纹理（FloatType RGBA HSLA，0~1）——合成用
   private baseHslTex: THREE.DataTexture | null = null;
@@ -631,6 +648,16 @@ export class FluidSolver {
   /** ★ 触发一次爆炸（参照旧库 explode）：散度源（压力源→推开流体）+ 直接速度冲击 */
   explode(config: ExplosionConfig): void {
     this.activeExplosions.push({ ...config, elapsed: 0, envelope: 1 });
+    // ★ 限幅联动：抬升 → 保持 → smoothstep 缓落（否则日常限幅会钳死冲击）
+    if (config.velCap && config.velCap > 0) {
+      const dur = config.velCapDuration ?? (config.duration ?? 0.1) + 0.5;
+      const recovery = config.velCapRecovery ?? 1.5;
+      this.velCapOverride = {
+        value: config.velCap,
+        until: this.time + dur,
+        recoverUntil: this.time + dur + recovery,
+      };
+    }
   }
 
   /** 活跃爆炸逐帧推进（step 内、压力投影前调用） */
@@ -665,8 +692,15 @@ export class FluidSolver {
         obstacle,
       });
 
-      // ② 直接速度冲击（撕裂感；主推力走压力传导，冲量给撕裂边缘）
-      const velImpulse = ex.strength * envelope * 0.08;
+      // ② ★ 速度冲击 = 径向主推力（逐像素远离中心，方向随 strength 符号翻转）
+      //    + 随机抖动降为撕裂细节
+      const radialSpeed = -ex.strength * envelope * 0.12;
+      this.injector.injectRadialVelocity(this.velocityGrid, radialSpeed * dt, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius,
+        obstacle,
+      });
+      const velImpulse = ex.strength * envelope * 0.03;
       const jitterAngle = Math.random() * Math.PI * 2;
       this.injector.injectVelocity(this.velocityGrid, {
         x: Math.cos(jitterAngle) * velImpulse * dt,
@@ -728,26 +762,30 @@ export class FluidSolver {
 
   // ==================== 压力投影（红-黑 SOR）====================
 
-  private solvePressure(iterations: number, omega: number): void {
+  private solvePressure(iterations: number, omega: number, phiTex: THREE.Texture | null = null): void {
     const { w, h } = this.config.resolution;
     if (w === 0 || h === 0) return;
     if (!this.config.enableWarmStart) this.clearGrid(this.pressureGrid);
     for (let iter = 0; iter < iterations; iter++) {
-      this.runSORPass('red', omega);
-      this.runSORPass('black', omega);
+      this.runSORPass('red', omega, phiTex);
+      this.runSORPass('black', omega, phiTex);
     }
   }
 
-  private runSORPass(color: 'red' | 'black', omega: number): void {
+  private runSORPass(color: 'red' | 'black', omega: number, phiTex: THREE.Texture | null = null): void {
     const { w, h } = this.config.resolution;
     const isRedPass = color === 'red';
     const boundaryMode = this.config.pressureBoundaryMode || 'dirichlet';
 
-    const mat = this.gpu.getMaterial(`fluid_sor_${isRedPass ? 'red' : 'black'}_${boundaryMode}`, {
+    // ★ 自由表面模式用独立材质 key（shader 不同，避免缓存串扰）
+    const key = `fluid_sor_${isRedPass ? 'red' : 'black'}_${boundaryMode}${phiTex ? '_fs' : ''}`;
+    const mat = this.gpu.getMaterial(key, {
       uPressure: { value: this.pressureGrid.read },
       uVelocity: { value: this.velocityGrid.read },
       uDivSource: { value: this.divergenceGrid.read },
       uObstacle: { value: this.getObstacleTex() },
+      uPhi: { value: phiTex ?? this.getObstacleTex() },
+      uPhiOn: { value: phiTex ? 1 : 0 },
       uOmega: { value: omega },
       uInvRes: { value: new THREE.Vector2(1.0 / w, 1.0 / h) },
       uIsRed: { value: isRedPass ? 1 : 0 },
@@ -761,11 +799,18 @@ export class FluidSolver {
       uniform vec2 uInvRes;
       uniform int uIsRed;
       uniform int uBoundaryMode;
+      uniform sampler2D uPhi;
+      uniform int uPhiOn;   // 1=自由表面边界（φ>0 空气区压力恒 0）
       varying vec2 vUv;
       void main(){
         // 墙内压力强制为 0
         if (texture2D(uObstacle, vUv).r > 0.5) {
           gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+          return;
+        }
+        // ★ 自由表面：空气区（φ>0）压力强制为 0 —— 液体是有表面的不可压缩整体
+        if (uPhiOn == 1 && texture2D(uPhi, vUv).r > 0.0) {
+          gl_FragColor = vec4(0.0);
           return;
         }
         vec2 ts = uInvRes;
@@ -794,6 +839,12 @@ export class FluidSolver {
         if (texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5) pR = 0.0;
         if (texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5) pT = 0.0;
         if (texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5) pB = 0.0;
+        if (uPhiOn == 1) {
+          if (texture2D(uPhi, vUv + vec2(-ts.x, 0.0)).r > 0.0) pL = 0.0;
+          if (texture2D(uPhi, vUv + vec2( ts.x, 0.0)).r > 0.0) pR = 0.0;
+          if (texture2D(uPhi, vUv + vec2(0.0,  ts.y)).r > 0.0) pT = 0.0;
+          if (texture2D(uPhi, vUv + vec2(0.0, -ts.y)).r > 0.0) pB = 0.0;
+        }
         // ★ 散度（中心差分）：div = (vR.x - vL.x)*0.5*ts.x + (vT.y - vB.y)*0.5*ts.y
         //   注意是 * ts（= * 1/res），不是 / ts。/ ts 会差 res² 倍，压力解完全错误。
         vec2 vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).rg;
@@ -844,6 +895,53 @@ export class FluidSolver {
     `);
     this.gpu.render(this.renderer, this.velocityGrid.write, mat);
     this.velocityGrid.swap();
+  }
+
+  /**
+   * ★ 粘度：速度场显式扩散 ∂v/∂t = ν∇²v（与编辑器 VelocitySolver.applyViscosity 同款）。
+   * 稳定性：ν·dt ≤ 0.2/步，超出子步分摊（上限 64 步，等效强度饱和不失稳）。
+   */
+  private applyViscosity(dt: number): void {
+    const nu = this.config.viscosity ?? 0;
+    if (nu <= 0 || dt <= 0) return;
+
+    const w = this.velocityGrid.resolution.w;
+    const h = this.velocityGrid.resolution.h;
+    const total = nu * dt;
+    const steps = Math.min(64, Math.max(1, Math.ceil(total / 0.2)));
+    const perStep = Math.min(0.2, total / steps);
+
+    const mat = this.gpu.getMaterial('fluid_viscosity_v1', {
+      uVelocity: { value: this.velocityGrid.read },
+      uObstacle: { value: this.getObstacleTex() },
+      uInvRes: { value: new THREE.Vector2(1 / w, 1 / h) },
+      uDtNu: { value: perStep },
+    }, `
+      uniform sampler2D uVelocity;
+      uniform sampler2D uObstacle;
+      uniform vec2 uInvRes;
+      uniform float uDtNu;
+      varying vec2 vUv;
+      void main(){
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+        vec2 ts = uInvRes;
+        vec2 vC = texture2D(uVelocity, vUv).rg;
+        vec2 vL = texture2D(uVelocity, vUv - vec2(ts.x, 0.0)).rg;
+        vec2 vR = texture2D(uVelocity, vUv + vec2(ts.x, 0.0)).rg;
+        vec2 vB = texture2D(uVelocity, vUv - vec2(0.0, ts.y)).rg;
+        vec2 vT = texture2D(uVelocity, vUv + vec2(0.0, ts.y)).rg;
+        gl_FragColor = vec4(vC + uDtNu * (vL + vR + vT + vB - 4.0 * vC), 0.0, 1.0);
+      }
+    `);
+
+    for (let i = 0; i < steps; i++) {
+      mat.uniforms.uVelocity.value = this.velocityGrid.read;
+      this.gpu.render(this.renderer, this.velocityGrid.write, mat);
+      this.velocityGrid.swap();
+    }
   }
 
   // ==================== 速度限幅/缩放 ====================
@@ -953,6 +1051,8 @@ export class FluidSolver {
         this.initPhiField();
         this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTex(), iterations, 0.5);
         this.applyPhiCorrection();
+        // ★ 去斑：补洞+拔刺（alpha 噪声像素→孤立翻转点→渲染黑/白点）
+        this.levelSetSolver.applyDespeckle(this._phiGrid, this.getObstacleTex());
         const mode = this.config.advectionMode === 'scalar' ? 0 : 1;
         const targetGrid = this.config.advectionMode === 'scalar' ? this.densityGrid : this.colorGrid;
         this.levelSetSolver.applyLiquidConstraint(
@@ -970,6 +1070,7 @@ export class FluidSolver {
           this.initPhiField();
           this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTex(), iterations, 0.5);
           this.applyPhiCorrection();
+          this.levelSetSolver.applyDespeckle(this._phiGrid, this.getObstacleTex());
         }
       }
       if (ls.surfaceTension > 0) {
@@ -980,6 +1081,9 @@ export class FluidSolver {
       }
     }
 
+    // 3.45 ★ 粘度（速度场扩散 ν∇²v）——力相，投影之前：抹平射流/剪切 → 内聚
+    this.applyViscosity(dt);
+
     // 3.5 边界处理（压力投影之前，避免与梯度修正拮抗）
     this.applyBoundary();
 
@@ -988,7 +1092,9 @@ export class FluidSolver {
 
     // 4. 压力投影（消费散度源）
     if (cfg.enablePressure) {
-      this.solvePressure(cfg.pressureIterations, cfg.pressureOmega);
+      // ★ 自由表面边界：LS 开启时压力只在液体内部求解（真实感核心，§3.5）
+      const fsPhi = (ls?.enabled && this._phiGrid) ? this._phiGrid.read : null;
+      this.solvePressure(cfg.pressureIterations, cfg.pressureOmega, fsPhi);
       this.applyPressureGradient();
     }
 
@@ -999,9 +1105,32 @@ export class FluidSolver {
     const velScale = cfg.velocityScale ?? 1;
     if (velScale !== 1) this.scaleVelocity(velScale);
 
-    // 6. 速度限幅（缩放之后，防爆炸）
-    const maxVel = cfg.maxVelocity ?? 5000;
+    // 6. 速度限幅（缩放之后，防爆炸）⊕ 爆炸 velCap 三段态（抬升→缓落→失效）
+    let maxVel = cfg.maxVelocity ?? 5000;
+    const capOv = this.velCapOverride;
+    if (capOv) {
+      if (this.time < capOv.until) {
+        maxVel = Math.max(maxVel, capOv.value);
+      } else if (this.time < capOv.recoverUntil) {
+        const t = (this.time - capOv.until) / Math.max(1e-6, capOv.recoverUntil - capOv.until);
+        const ease = t * t * (3.0 - 2.0 * t);
+        maxVel = Math.max(maxVel, capOv.value + (maxVel - capOv.value) * ease);
+      } else {
+        this.velCapOverride = null;
+      }
+    }
     if (maxVel > 0 && isFinite(maxVel)) this.clampVelocity(maxVel);
+
+    // 6.5 ★ 外向速度抑制（确定性收拢；与张力符号/φ噪声无关）
+    if (ls?.enabled && this._phiGrid) {
+      const od = ls.outwardDamping ?? 0;
+      if (od > 0) {
+        const band = ls.narrowBandWidth ?? ls.smoothingRadius ?? 5;
+        this.levelSetSolver.applyOutwardVelDamping(
+          this.velocityGrid, this._phiGrid.read, this.getObstacleTex(), band, od,
+        );
+      }
+    }
 
     this.time += dt;
   }

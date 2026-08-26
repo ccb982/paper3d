@@ -143,6 +143,12 @@ export function parseImportedFluidConfig(
     waterCompensationRate: ls.waterCompensationRate ?? 0.1,
   };
 
+  // ★ 色块交界自动加墙透传（游戏端按此标志自主生成墙；默认 false）
+  const regionWallsPassthrough = {
+    regionWalls: !!(json as Record<string, unknown>).regionWalls,
+    regionWallsMinAreaRatio: Number((json as Record<string, unknown>).regionWallsMinAreaRatio) || 0.004,
+  };
+
   // ★ 墙体掩码（多帧物理配置导出携带；主绘画页面优先于区域边界）
   const obstacle = (json.obstacle && typeof json.obstacle.data === 'string')
     ? {
@@ -171,6 +177,7 @@ export function parseImportedFluidConfig(
     colorBoundaryMode: gf.colorBoundaryMode || 'clamp',
     resolution,
     continuousSources: (json.continuousSources || []).map(normalizeInjectionSource),
+    ...regionWallsPassthrough,
     ...(obstacle ? { obstacle } : {}),
   };
 }
@@ -543,6 +550,8 @@ export function parseInternalFluidConfig(
       compensateWaterPhi: bool(raw.levelSetConfig?.compensateWaterPhi, true),
       waterCompensationRate: num(raw.levelSetConfig?.waterCompensationRate, 0.1),
     },
+    regionWalls: !!raw.regionWalls,
+    regionWallsMinAreaRatio: num(raw.regionWallsMinAreaRatio, 0.004),
     continuousSources: (Array.isArray(raw.continuousSources) ? raw.continuousSources : [])
       .map(normalizeInjectionSource),
   };
@@ -585,6 +594,8 @@ export function serializeFluidConfigToJSON(config: FluidSolverConfig): any {
       velocityScale: config.velocityScale,
       maxVelocity: config.maxVelocity,
       viscosity: config.viscosity ?? 0,
+      regionWalls: (config as unknown as { regionWalls?: boolean }).regionWalls ?? false,
+      regionWallsMinAreaRatio: (config as unknown as { regionWallsMinAreaRatio?: number }).regionWallsMinAreaRatio ?? 0.004,
       colorBoundaryMode: config.colorBoundaryMode,
     },
     resolution: { w: config.resolution.w, h: config.resolution.h },

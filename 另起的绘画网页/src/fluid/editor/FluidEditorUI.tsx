@@ -4338,16 +4338,25 @@ export const FluidEditorUI: React.FC = () => {
                 gravity: cfg.gravity,
                 velocityScale: cfg.velocityScale ?? 1,
                 maxVelocity: cfg.maxVelocity ?? 5000,
+                viscosity: cfg.viscosity ?? 0,
                 colorBoundaryMode: cfg.colorBoundaryMode ?? 'clamp',
               },
-              // D. Level Set
+              // D. Level Set —— ★ 全字段导出：缺任何一个导入端都会回落默认，
+              //    例如漏掉 constrainLiquid → 导入后水团配方变回烟雾配方
               levelSet: {
                 enableLevelSet: cfg.enableLevelSet,
                 enabled: cfg.enableLevelSet,
-                reinitIterations: cfg.levelSetConfig?.reinitIterations ?? 2,
+                reinitInterval: cfg.levelSetConfig?.reinitInterval ?? 1,
+                reinitIterations: cfg.levelSetConfig?.reinitIterations ?? 6,
                 surfaceTension: cfg.levelSetConfig?.surfaceTension ?? 0,
-                smoothingRadius: (cfg.levelSetConfig as any)?.smoothingRadius ?? cfg.levelSetConfig?.narrowBandWidth ?? 2,
+                smoothingRadius: (cfg.levelSetConfig as any)?.smoothingRadius ?? cfg.levelSetConfig?.narrowBandWidth ?? 5,
+                narrowBandWidth: cfg.levelSetConfig?.narrowBandWidth ?? 5,
+                constrainLiquid: cfg.levelSetConfig?.constrainLiquid ?? false,
                 outwardDamping: cfg.levelSetConfig?.outwardDamping ?? 0,
+                clampAirPhi: cfg.levelSetConfig?.clampAirPhi ?? true,
+                maxAirPhi: cfg.levelSetConfig?.maxAirPhi ?? 0,
+                compensateWaterPhi: cfg.levelSetConfig?.compensateWaterPhi ?? true,
+                waterCompensationRate: cfg.levelSetConfig?.waterCompensationRate ?? 0.1,
               },
               // E. 持续注入源列表
               continuousSources: sources.map(s => ({

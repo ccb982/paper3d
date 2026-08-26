@@ -84,6 +84,7 @@ export function parsePhysicsConfig(raw: any, fallbackRes: { w: number; h: number
     gravity: { x: num(raw?.gravity?.x, 0), y: num(raw?.gravity?.y, 0) },
     velocityScale: num(raw?.velocityScale, 1),
     maxVelocity: num(raw?.maxVelocity, 5000),
+    viscosity: num(raw?.viscosity, 0),
     colorBoundaryMode: raw?.colorBoundaryMode === 'repeat' || raw?.colorBoundaryMode === 'zero'
       ? raw.colorBoundaryMode : 'clamp',
     advectionMode: raw?.advectionMode === 'scalar' ? 'scalar' : 'vector',
@@ -104,6 +105,7 @@ export function parsePhysicsConfig(raw: any, fallbackRes: { w: number; h: number
       reinitInterval: Math.round(num(ls.reinitInterval, 10)),
       narrowBandWidth: num(ls.narrowBandWidth, 5),
       constrainLiquid: bool(ls.constrainLiquid, false),
+      outwardDamping: num(ls.outwardDamping, 0),
       clampAirPhi: bool(ls.clampAirPhi, true),
       maxAirPhi: num(ls.maxAirPhi, 0),
       compensateWaterPhi: bool(ls.compensateWaterPhi, true),

@@ -275,6 +275,28 @@ export class Asset implements CharacterFxAssetSource {
     this._fluidEffects.delete(frameIndex);
   }
 
+  /**
+   * ★ 从 URL 加载编辑器导出的 .phys.json 并注入（配方闭环）：
+   *   - frameIndex 省略 → 注入到全部帧
+   *   - 原始 JSON 直传（保留 regionWalls / obstacle 等扩展键，不经 parsePhysicsConfig 剥离）
+   *   返回是否成功。
+   */
+  async loadPhysicsFromUrl(url: string, frameIndex?: number): Promise<boolean> {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return false;
+      const rawJson = (await res.json()) as any;
+      // ★ 格式归一化：编辑器"导出配置"是五块结构（coreSwitches/globalForce/levelSet…），
+      //   解析器只吃扁平结构 —— 此处转换，同时保留 regionWalls/obstacle 等扩展键
+      const raw = normalizePhysJson(rawJson);
+      const idxs = frameIndex !== undefined ? [frameIndex] : this.frames.map((_, i) => i);
+      for (const i of idxs) this.injectPhysics(i, raw);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** 获取或惰性创建该帧的流体效果（需要渲染器）。返回 null 表示该帧无流体配置。 */
   getFluidEffect(index: number, renderer: THREE.WebGLRenderer): FluidEffect | null {
     if (index < 0 || index >= this.frames.length) return null;
@@ -383,4 +405,42 @@ export class Asset implements CharacterFxAssetSource {
     this.baseTextures.length = 0;
     this.residualTextures.length = 0;
   }
+}
+
+
+// ============================================================
+// .phys.json 格式归一化：五块结构（编辑器导出）→ 扁平结构（解析器输入）
+// ============================================================
+function normalizePhysJson(json: Record<string, unknown> & { coreSwitches?: unknown }): Record<string, unknown> {
+  const cs = json.coreSwitches as Record<string, unknown> | undefined;
+  if (!cs) return json; // 已是扁平格式，原样返回
+
+  const ac = (json.advectionAndComposite ?? {}) as Record<string, unknown>;
+  const gf = (json.globalForce ?? {}) as Record<string, unknown>;
+  const ls = (json.levelSet ?? {}) as Record<string, unknown>;
+
+  return {
+    ...json, // 透传扩展键：regionWalls / obstacle / name / category …
+    enableAdvection: cs.enableAdvection,
+    enablePressure: cs.enablePressure,
+    pressureIterations: cs.pressureIterations,
+    pressureOmega: cs.pressureOmega,
+    pressureBoundaryMode: cs.pressureBoundaryMode,
+    enableWarmStart: cs.enableWarmStart,
+    advectionMode: ac.advectionMode,
+    combineMode: ac.combineMode,
+    channels: ac.channels,
+    scalarConfig: ac.scalarConfig,
+    gravity: gf.gravity,
+    velocityScale: gf.velocityScale,
+    maxVelocity: gf.maxVelocity,
+    viscosity: gf.viscosity,
+    colorBoundaryMode: gf.colorBoundaryMode,
+    levelSetConfig: {
+      enabled: ls.enabled ?? ls.enableLevelSet,
+      ...(ls as Record<string, unknown>),
+    },
+    resolution: json.resolution,
+    continuousSources: json.continuousSources ?? [],
+  };
 }

@@ -3,6 +3,7 @@ import { FluidSolver } from './FluidSolver';
 import { buildFullConfig } from './config';
 import { buildBaseHslData, buildResidualData } from '../core/ftx';
 import { rasterizeBoundaryToObstacle, buildObstacleTextureFromBitmask } from './rasterize';
+import { buildRegionWallMask, packToBits } from './regionWallMask';
 import type { FrameTextureData, PaletteColor, SerializedRegionEntity, PhysicsConfig } from '../core/types';
 
 // ============================================================
@@ -52,12 +53,28 @@ export class FluidEffect {
       this.solver.clearBaseHsl();
     }
 
-    // 3. 障碍物：优先 physics.obstacle 掩码，否则区域实体边界光栅化
+    // 3. 障碍物：优先 physics.obstacle 掩码 → regionWalls 自主生成 → 区域实体边界光栅化
     let obstacle: THREE.DataTexture | null = null;
     const mask = physics.obstacle;
     if (mask && mask.width > 0 && mask.height > 0 && mask.data) {
       obstacle = buildObstacleTextureFromBitmask(
         mask.width, mask.height, mask.data, bbox.w, bbox.h,
+      );
+    }
+    // ★ 色块交界自动加墙：无导出位图时，按帧调色板 ID 在大色块边界生成墙
+    //   （算法 = 编辑器 editor/regionWallMask.ts 的游戏端移植；流体被物理隔离
+    //    在各色块内，数值扩散无法跨墙搬运颜色）
+    if (!obstacle && physics.regionWalls && frame.regionIdTex) {
+      const r = buildRegionWallMask(
+        frame.regionIdTex, bbox.w, bbox.h,
+        { minAreaRatio: physics.regionWallsMinAreaRatio ?? 0.004 },
+      );
+      // 位打包 → Base64（与 physics.obstacle 导出格式一致；平台已用 atob 同族 API）
+      const bits = packToBits(r.mask);
+      let bin = '';
+      for (let i = 0; i < bits.length; i++) bin += String.fromCharCode(bits[i]);
+      obstacle = buildObstacleTextureFromBitmask(
+        r.width, r.height, btoa(bin), bbox.w, bbox.h,
       );
     }
     if (!obstacle) {

@@ -85,6 +85,11 @@ export interface PhysicsConfig {
     waypoints?: Array<{ x: number; y: number }>;
   }>;
   obstacle?: { width: number; height: number; data: string };
+  /** ★ 色块交界自动加墙（默认 false）：无 obstacle 位图时按帧 regionIdTex
+   *  自主生成大色块边界墙（游戏端移植 editor/regionWallMask.ts 算法） */
+  regionWalls?: boolean;
+  /** 大色块面积阈值（占全帧比例，默认 0.004） */
+  regionWallsMinAreaRatio?: number;
 }
 
 export interface PerFrameData {

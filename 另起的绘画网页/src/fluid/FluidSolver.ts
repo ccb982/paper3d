@@ -94,6 +94,9 @@ export interface FluidSolverConfig {
   /** ★ 运动粘度 ν（cells²/s），0=无粘性。速度扩散抹平射流/剪切 → 水团内聚 */
   viscosity?: number;
   colorBoundaryMode: 'clamp' | 'repeat' | 'zero';
+  /** ★ 色块交界自动加墙（游戏端 FluidEffect 消费；编辑器/主页面仅透传存储） */
+  regionWalls?: boolean;
+  regionWallsMinAreaRatio?: number;
   advectionMode: 'vector' | 'scalar';
   combineMode: 'add' | 'sub';
   scalarConfig: {

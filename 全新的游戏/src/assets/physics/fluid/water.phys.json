@@ -1,16 +1,17 @@
 {
   "name": "water",
   "category": "fluid",
-  "description": "水流/液体：高压力迭代 + 表面张力 + 向下重力，顶部连续源",
+  "description": "水流/液体：自由表面压力边界 + 表面张力收拢 + 粘度内聚（2026-08 水团攻坚基准）",
   "enableAdvection": true,
   "enablePressure": true,
-  "pressureIterations": 20,
+  "pressureIterations": 100,
   "pressureOmega": 1.7,
   "pressureBoundaryMode": "neumann",
   "enableWarmStart": true,
   "advectionMode": "vector",
   "combineMode": "sub",
   "channels": { "h": true, "s": true, "l": true },
+  "viscosity": 20,
   "scalarConfig": {
     "hMultiplier": 0.15,
     "sMultiplier": 0.1,
@@ -23,7 +24,20 @@
   "velocityScale": 0.9,
   "maxVelocity": 400,
   "colorBoundaryMode": "clamp",
-  "levelSetConfig": { "enabled": true, "reinitIterations": 8, "surfaceTension": 0.1, "smoothingRadius": 1.5 },
+  "regionWalls": true,
+  "levelSetConfig": {
+    "enabled": true,
+    "reinitInterval": 1,
+    "reinitIterations": 6,
+    "surfaceTension": 1000000,
+    "narrowBandWidth": 5,
+    "constrainLiquid": true,
+    "outwardDamping": 1,
+    "clampAirPhi": true,
+    "maxAirPhi": 0,
+    "compensateWaterPhi": true,
+    "waterCompensationRate": 0.1
+  },
   "continuousSources": [
     {
       "enabled": true,
