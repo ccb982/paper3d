@@ -66,6 +66,17 @@ export interface ExplosionConfig {
   anisotropyStrength?: number;
   /** 随机扰动强度（碎片感/不规则冲击波，默认 0） */
   perturbation?: number;
+  /**
+   * ★ 爆炸期间临时抬升全局速度上限（px/s）：触发时把 maxVelocity 覆盖为该值，
+   * velCapDuration 秒后自动回落到配置值——水团能被炸飞，之后张力/外速抑制再收拢成团。
+   * 不设 = 不改变限幅（爆炸冲量会被日常限幅钳住，只见膨胀不见飞散）。
+   */
+  velCap?: number;
+  /** velCap 保持时长（秒，默认 = duration + 0.5 缓冲） */
+  velCapDuration?: number;
+  /** ★ velCap 回落时长（秒，默认 1.5）：保持期结束后限幅从抬升值平滑缓动回
+   *  配置值（smoothstep），避免瞬时回正把飞散的水团"撞墙式"钳停 */
+  velCapRecovery?: number;
 }
 
 export interface FluidSolverConfig {

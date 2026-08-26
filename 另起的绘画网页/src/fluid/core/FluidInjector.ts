@@ -208,6 +208,59 @@ export class FluidInjector {
     grid.swap();
   }
 
+  /**
+   * ★ 径向速度注入：圆形区域内沿"远离中心"方向注入速度（爆炸外推/内爆吸引）。
+   *
+   * 与 injectVelocity（均匀矢量戳）不同，本 pass 的方向是**逐像素径向**的：
+   * dir = normalize(uv - center)，真正的向外推力而非单点平移。
+   *
+   * @param speed 带符号速度幅值（px/s）：正 = 向外推，负 = 向内吸。
+   *              调用方负责完成 dt / 包络缩放。
+   */
+  injectRadialVelocity(
+    grid: FluidGrid,
+    speed: number,
+    options: InjectionOptions = {},
+  ): void {
+    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, obstacle } = options;
+
+    const mat = this.gpu.getMaterial('inj_radial_vel_v1', {
+      uVelocity: { value: grid.read },
+      uSpeed: { value: speed },
+      uPos: { value: new THREE.Vector2(position.x, position.y) },
+      uRadius: { value: radius },
+      uObstacle: { value: obstacle || this.getZeroObstacleTex() },
+    }, /* glsl */ `
+      uniform sampler2D uVelocity;
+      uniform float uSpeed;
+      uniform vec2 uPos;
+      uniform float uRadius;
+      uniform sampler2D uObstacle;
+      varying vec2 vUv;
+
+      void main() {
+        // 墙内不注入
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = texture2D(uVelocity, vUv);
+          return;
+        }
+
+        vec2 d = vUv - uPos;
+        float dist = length(d);
+        // 径向方向（中心点退化 → 不加成）
+        vec2 dir = (dist > 1e-5) ? d / dist : vec2(0.0);
+        float maskVal = smoothstep(uRadius, 0.0, dist);
+
+        vec2 vel = texture2D(uVelocity, vUv).rg;
+        vel += dir * (uSpeed * maskVal);
+        gl_FragColor = vec4(vel, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, grid.write, mat);
+    grid.swap();
+  }
+
   // ---- 2. 颜色注入（HSLA） ----
 
   /**
@@ -444,8 +497,7 @@ export class FluidInjector {
     grid: FluidGrid,
     velocity: { x: number; y: number },
     options: InjectionOptions = {},
-  ): void {
-    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
+  ): void {    const { position = { x: 0.5, y: 0.5 }, radius = 0.1, mask, global = false, obstacle } = options;
     const key = `inj_vel_${global ? 'global' : 'local'}_obst`;
 
     const mat = this.gpu.getMaterial(key, {

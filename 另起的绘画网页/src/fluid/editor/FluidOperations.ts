@@ -285,9 +285,18 @@ export class FluidOperations {
         });
       }
 
-      // ② 直接速度冲击（撕裂感：先给速度场冲量，与压力梯度叠加成碎片感）
-      //   强度 = 散度的 ~8%（主推力走压力传导，冲量给撕裂边缘）
-      const velImpulse = ex.strength * envelope * 0.08;
+      // ② ★ 速度冲击 = 径向主推力 + 随机撕裂抖动
+      //    径向：injectRadialVelocity 沿"远离中心"逐像素注入（真正的外推），
+      //    方向随 strength 符号自动翻转：负强度=外炸（向外），正强度=内爆（向内）
+      //    系数 0.12/秒：Δv≈|strength|·0.12·dt 每帧，包络期内累计数百 px/s 的 kick
+      const radialSpeed = -ex.strength * envelope * 0.12;
+      this.injector.injectRadialVelocity(gridVelocity, radialSpeed * dt, {
+        position: { x: ex.cx + jitterX, y: ex.cy + jitterY },
+        radius: ex.radius,
+        obstacle,
+      });
+      //    随机抖动降为 3%：只负责撕裂边缘的碎裂细节，不再承担主推力
+      const velImpulse = ex.strength * envelope * 0.03;
       const jitterAngle = Math.random() * Math.PI * 2;
       this.injector.injectVelocity(gridVelocity, {
         x: Math.cos(jitterAngle) * velImpulse * dt,

@@ -104,6 +104,8 @@ const OperationsPanel: React.FC<{
   onExplodeDecayChange: (v: number) => void;
   explodeColor: string;
   onExplodeColorChange: (hex: string) => void;
+  explodeVelCap: number;
+  onExplodeVelCapChange: (v: number) => void;
 }> = ({
   config,
   onConfigChange,
@@ -150,6 +152,8 @@ const OperationsPanel: React.FC<{
   onExplodeDecayChange,
   explodeColor,
   onExplodeColorChange,
+  explodeVelCap,
+  onExplodeVelCapChange,
 }) => {
   const modes: { key: InjectMode; label: string; desc: string }[] = [
     { key: 'water', label: '💧 水', desc: '蓝色颜料 + 方向速度' },
@@ -414,6 +418,22 @@ const OperationsPanel: React.FC<{
                 style={{ flex: 1 }}
               />
               <span style={{ fontSize: '10px', minWidth: '52px', textAlign: 'right', fontFamily: 'monospace' }}>{explodeRadius.toFixed(2)}</span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={{ margin: 0, fontSize: '10px', color: '#666', minWidth: '28px' }}>限幅</label>
+              <input
+                type="range"
+                min="0"
+                max="5000"
+                step="50"
+                value={explodeVelCap}
+                onChange={(e) => onExplodeVelCapChange(+e.target.value)}
+                style={{ flex: 1 }}
+                title="爆炸期间临时抬升速度上限（0=不抬升）：让水团能被炸飞，结束后自动回落到全局最大速度，张力再收拢成团"
+              />
+              <span style={{ fontSize: '10px', minWidth: '52px', textAlign: 'right', fontFamily: 'monospace' }}>
+                {explodeVelCap === 0 ? '关' : explodeVelCap}
+              </span>
             </div>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '4px' }}>
               <label style={{ margin: 0, fontSize: '10px', color: '#666', minWidth: '28px' }}>衰减</label>
@@ -2179,6 +2199,8 @@ export const FluidEditorUI: React.FC = () => {
   const [explodeRadius, setExplodeRadius] = useState(0.15);
   const [explodeWater, setExplodeWater] = useState(true);
   const [explodeDecay, setExplodeDecay] = useState(0.9);
+  // ★ 爆炸限幅抬升（0=不抬升）：爆炸期间临时放宽 maxVelocity，结束后自动回落
+  const [explodeVelCap, setExplodeVelCap] = useState(2000);
   // ★ 爆炸水团颜色（hex，→ HSL 注入）
   const [explodeColor, setExplodeColor] = useState('#d9f0ff');
   const explodeStrengthRef = useRef(explodeStrength);
@@ -2189,6 +2211,8 @@ export const FluidEditorUI: React.FC = () => {
   explodeWaterRef.current = explodeWater;
   const explodeDecayRef = useRef(explodeDecay);
   explodeDecayRef.current = explodeDecay;
+  const explodeVelCapRef = useRef(explodeVelCap);
+  explodeVelCapRef.current = explodeVelCap;
   const explodeColorRef = useRef(explodeColor);
   explodeColorRef.current = explodeColor;
   // ★ 注入颜色（hex；水=蓝，颜料=红默认）+ 取色模式
@@ -2488,6 +2512,7 @@ export const FluidEditorUI: React.FC = () => {
         duration: 0.1,
         decay: explodeDecayRef.current,
         perturbation: 0.4,
+        ...(explodeVelCapRef.current > 0 ? { velCap: explodeVelCapRef.current } : {}),
       });
       return;
     }
@@ -4152,6 +4177,8 @@ export const FluidEditorUI: React.FC = () => {
           onExplodeWaterChange={setExplodeWater}
           explodeDecay={explodeDecay}
           onExplodeDecayChange={setExplodeDecay}
+          explodeVelCap={explodeVelCap}
+          onExplodeVelCapChange={setExplodeVelCap}
           explodeColor={explodeColor}
           onExplodeColorChange={setExplodeColor}
         />

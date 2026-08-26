@@ -253,6 +253,8 @@ export class FluidEditor {
   private advectionSolver: AdvectionSolver;
   /** Level Set 求解器（φ 平流/重初始化/表面张力，热插拔） */
   private levelSetSolver: LevelSetSolver;
+  /** ★ 爆炸限幅覆盖（velCap）：抬升值 / 保持截止时刻 / 回落完成时刻（this.time 秒） */
+  private velCapOverride: { value: number; until: number; recoverUntil: number } | null = null;
   /** Level Set φ 场（1 通道 half-float，懒加载，enableLevelSet=true 时创建） */
   private _phiGrid: FluidGrid | null = null;
   /** ★ 残差模板缓存（initializeColorFromImageData 时深拷贝）——
@@ -411,9 +413,21 @@ export class FluidEditor {
   /**
    * ★ 爆炸注入（参照旧库 explode）：散度脉冲 + 水量 + 时间包络 + 各向异性/扰动。
    * 参数均为纹理坐标（归一化 0~1，Y向下为正），与 queueInjection 一致。
+   * config.velCap：爆炸期间临时抬升全局速度上限（见 ExplosionConfig 注释）。
    */
   public explode(config: import('../FluidSolver').ExplosionConfig): void {
     this.operations.explode(config);
+    // ★ 限幅联动：爆炸瞬间抬升速度上限，包络结束后自动回落——
+    //   否则日常限幅（如 50px/s）会把冲击冲量当场钳死，只见膨胀不见飞散
+    if (config.velCap && config.velCap > 0) {
+      const dur = config.velCapDuration ?? (config.duration ?? 0.1) + 0.5;
+      const recovery = config.velCapRecovery ?? 1.5;
+      this.velCapOverride = {
+        value: config.velCap,
+        until: this.time + dur,
+        recoverUntil: this.time + dur + recovery,
+      };
+    }
   }
 
   /**
@@ -590,7 +604,23 @@ export class FluidEditor {
     // ★ 3.6 全局速度限幅（缩放之后，防止加速导致爆炸）
     // 防止持续注入、误差累积导致的速度爆炸
     // maxVelocity = 0 或 Infinity 表示禁用限幅
-    const maxVel = this.config.maxVelocity ?? 5000;
+    // ★ 爆炸限幅覆盖：velCap 抬升 → 保持 → smoothstep 平滑回落（避免瞬时回正
+    //   把飞散中的水团"撞墙式"钳停，速度骤降在视觉上等于一次急刹）
+    let maxVel = this.config.maxVelocity ?? 5000;
+    const capOv = this.velCapOverride;
+    if (capOv) {
+      if (this.time < capOv.until) {
+        // 保持期：全速抬升
+        maxVel = Math.max(maxVel, capOv.value);
+      } else if (this.time < capOv.recoverUntil) {
+        // 回落期：smoothstep 缓动 value → 配置值
+        const t = (this.time - capOv.until) / Math.max(1e-6, capOv.recoverUntil - capOv.until);
+        const s = t * t * (3.0 - 2.0 * t);
+        maxVel = Math.max(maxVel, capOv.value + (maxVel - capOv.value) * s);
+      } else {
+        this.velCapOverride = null;
+      }
+    }
     if (maxVel > 0 && isFinite(maxVel)) {
       this.operations.clampVelocity(this.velocityGrid, maxVel);
     }
@@ -1483,6 +1513,7 @@ export class FluidEditor {
 
     // ★ 爆炸队列清空（重置时正在播放的爆炸立即停止）
     this.operations.clearExplosions();
+    this.velCapOverride = null;  // 重置时同步清掉爆炸限幅覆盖
 
     // ★ Level Set φ 场重建（启用时水体形状随重置归零）
     if (this._phiGrid) {
