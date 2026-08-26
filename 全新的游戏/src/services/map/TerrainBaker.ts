@@ -19,6 +19,7 @@
 // ============================================================
 
 import { buildSnapshotFromChunks, type ChunkDataLite } from './bakeCompute';
+import type { PlannedDecal } from './TileDecals';
 
 /** 烘焙结果（RGBA 像素；来自 Worker 的视图，零拷贝） */
 export interface BakeResult {
@@ -70,6 +71,7 @@ class TerrainBakerService {
    * 请求异步烘焙一个 chunk。
    * @param getChunk 取 chunk 原始数据（RasterMap.getChunkData 天然满足；
    *                 快照只读不写，跨天 clearAll 后由调用方重新请求即可）
+   * @param extras 装饰数据（贴图计划 + 装饰物阴影体积；预渲染前由调用方放置完成）
    * @returns resolve(null) = Worker 不可用/失败，调用方走主线程同步回退
    */
   request(
@@ -77,8 +79,9 @@ class TerrainBakerService {
     seed: number,
     cx: number,
     cz: number,
+    extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
   ): Promise<BakeResult | null> {
-    const snap = buildSnapshotFromChunks(seed, cx, cz, getChunk);
+    const snap = buildSnapshotFromChunks(seed, cx, cz, getChunk, extras);
     const w = this.ensure();
     if (!w) return Promise.resolve(null);
     const id = this.nextId++;

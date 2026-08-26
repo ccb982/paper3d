@@ -29,6 +29,7 @@ import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
 import { regionParamsAt, SEMANTIC_THEME_MIX } from './RegionTheme';
+import { applyDecalStamps, type PlannedDecal } from './TileDecals';
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
@@ -98,15 +99,21 @@ export interface ChunkPixels {
   light: Uint8ClampedArray;
 }
 
-export function computeChunkMapsRGBA(q: BakeQuery, cx: number, cz: number): ChunkPixels {
+export function computeChunkMapsRGBA(
+  q: BakeQuery, cx: number, cz: number,
+  extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
+): ChunkPixels {
   return {
-    albedo: computeAlbedoRGBA(q, cx, cz),
-    light: computeLightRGBA(q, cx, cz),
+    albedo: computeAlbedoRGBA(q, cx, cz, extras?.decals),
+    light: computeLightRGBA(q, cx, cz, extras?.propVolumes),
   };
 }
 
 /** Pass A —— 材质色图（256²）：底色/抖动/斑块/描边/拉丝/大尺度斑驳 */
-function computeAlbedoRGBA(q: BakeQuery, cx: number, cz: number): Uint8ClampedArray {
+function computeAlbedoRGBA(
+  q: BakeQuery, cx: number, cz: number,
+  decals?: PlannedDecal[],
+): Uint8ClampedArray {
   const S = APPEARANCE_RES;
   const out = new Uint8ClampedArray(S * S * 4);
 
@@ -188,12 +195,22 @@ function computeAlbedoRGBA(q: BakeQuery, cx: number, cz: number): Uint8ClampedAr
       out[i + 3] = 255;
     }
   }
+
+  // ---- ★ 贴图印章：预渲染前贴图已全部放置 → 印进 albedo（纯 CPU 直写） ----
+  if (decals && decals.length > 0) {
+    applyDecalStamps(out, S, cx * CHUNK_SIZE, cz * CHUNK_SIZE, decals, q.worldSeed);
+  }
   return out;
 }
 
 /** Pass B —— 光照图（128²）：R=N·L wrap × 阴影可见度，G=AO。
- *  ★ 全部查询走视觉面 surfaceHeightAt（采样统一，见文件头） */
-function computeLightRGBA(q: BakeQuery, cx: number, cz: number): Uint8ClampedArray {
+ *  ★ 全部查询走视觉面 surfaceHeightAt（采样统一，见文件头）
+ *  ★ 装饰物阴影：propVolumes 在双边模糊前印入——装饰物高度参与
+ *    预渲染结构（放置顺序：装饰物全部放置完 → 触发预渲染 → 本函数消费） */
+function computeLightRGBA(
+  q: BakeQuery, cx: number, cz: number,
+  propVolumes?: Float32Array,
+): Uint8ClampedArray {
   const S = LIGHT_RES;
   const out = new Uint8ClampedArray(S * S * 4);
 
@@ -261,6 +278,11 @@ function computeLightRGBA(q: BakeQuery, cx: number, cz: number): Uint8ClampedArr
     }
   }
 
+  // ---- Pass B1.5：装饰物阴影（预渲染结构含装饰物高度；模糊前印入）----
+  if (propVolumes && propVolumes.length > 0) {
+    stampPropShadows(directF, aoF, S, step, originX, originZ, propVolumes);
+  }
+
   // ---- Pass B2：高度加权双边模糊 ×N（柔化但不过断崖；乒乓缓冲）----
   {
     const tmpD = new Float32Array(S * S), tmpA = new Float32Array(S * S);
@@ -306,6 +328,56 @@ function blurAxis(
 }
 
 // ============================================================
+// 装饰物阴影印章（Pass B1.5）
+// ============================================================
+// 每个装饰物 = 一个简单遮挡体积（r 底半径 × h 高），沿 BAKE_SUN 方向
+// 投影一段软影到地面：影子长度 ≈ h/tan（太阳仰角），随距离收窄变虚。
+// 不是光线步进（不参与地形相互遮挡）——静态小物件的合理近似。
+// 印入时机在双边模糊之前：模糊天然把印章柔化成半影。
+
+function stampPropShadows(
+  directF: Float32Array, aoF: Float32Array,
+  S: number, step: number, originX: number, originZ: number,
+  propVolumes: Float32Array,
+): void {
+  const P = propVolumes.length / 5;
+  for (let i = 0; i < P; i++) {
+    const x = propVolumes[i * 5];
+    const z = propVolumes[i * 5 + 1];
+    const y = propVolumes[i * 5 + 2];
+    const r = propVolumes[i * 5 + 3];
+    const h = propVolumes[i * 5 + 4];
+    if (h <= 0.01) continue;
+
+    // 影子沿太阳水平方向延伸：长度 = 高度/仰角 + 底半径余量
+    const len = h / BAKE_SUN.tan + r;
+    // 投影到像素坐标
+    const pcx = (x - originX) / step;
+    const pcz = (z - originZ) / step;
+    const pr = Math.ceil((len + r) / step);
+
+    for (let j = Math.max(0, Math.floor(pcz) - pr); j <= Math.min(S - 1, Math.ceil(pcz) + pr); j++) {
+      for (let i2 = Math.max(0, Math.floor(pcx) - pr); i2 <= Math.min(S - 1, Math.ceil(pcx) + pr); i2++) {
+        const wx = originX + (i2 + 0.5) * step;
+        const wz = originZ + (j + 0.5) * step;
+        const dx = wx - x, dz = wz - z;
+        const along = dx * BAKE_SUN.hx + dz * BAKE_SUN.hz;   // 影子轴向投影
+        if (along <= 0 || along >= len) continue;
+        const perp2 = dx * dx + dz * dz - along * along;
+        // 影子宽度：随距离收窄（透视）→ 头实尾尖
+        const perpR = r * (1 - 0.55 * (along / len));
+        if (perp2 > perpR * perpR) continue;
+        const idx = j * S + i2;
+        const falloff = (1 - along / len) * (1 - Math.sqrt(perp2) / perpR);
+        // 压暗直射项（影子读作光的缺席）；基底微 AO
+        directF[idx] = Math.min(directF[idx], 1 - falloff * 0.55);
+        aoF[idx] = Math.max(0.35, aoF[idx] * (1 - falloff * 0.12));
+      }
+    }
+  }
+}
+
+// ============================================================
 // 快照协议：主线程拷 chunk 原始数组 ↔ Worker 重构查询源
 // ============================================================
 
@@ -322,6 +394,10 @@ export interface BakeSnapshot {
   /** 块类型：块对齐栅格 bw×bh，块 (bx0+bx, bz0+bz) */
   bx0: number; bz0: number; bw: number; bh: number;
   blockIds: Uint8Array;
+  /** 装饰物遮挡体积（世界坐标；每 5 个 [x,z,y,r,h]；shadow='disc' 才有） */
+  propVolumes: Float32Array;
+  /** 贴图放置计划（预渲染时印进 albedo） */
+  decals: PlannedDecal[];
 }
 
 /** 快照消费的最小 chunk 数据面（RasterMap.getChunkData 天然满足） */
@@ -338,6 +414,7 @@ export interface ChunkDataLite {
 export function buildSnapshotFromChunks(
   seed: number, cx: number, cz: number,
   getChunk: (cx: number, cz: number) => ChunkDataLite | undefined,
+  extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
 ): BakeSnapshot {
   const originX = cx * CHUNK_SIZE, originZ = cz * CHUNK_SIZE;
   const vx0 = originX - SNAP_MARGIN, vz0 = originZ - SNAP_MARGIN;
@@ -400,7 +477,11 @@ export function buildSnapshotFromChunks(
     }
   }
 
-  return { seed, cx, cz, vx0, vz0, vw, vHeights, bx0, bz0, bw, bh, blockIds };
+  return {
+    seed, cx, cz, vx0, vz0, vw, vHeights, bx0, bz0, bw, bh, blockIds,
+    propVolumes: extras?.propVolumes ?? new Float32Array(0),
+    decals: extras?.decals ?? [],
+  };
 }
 
 /** Worker 端：快照 → BakeQuery（与 RasterMap 同公式的本地重构，零跨线程查询） */

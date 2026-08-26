@@ -127,11 +127,18 @@ export function drawTileForRole(
   group: GroupDef, role: TileGenRole,
   seed: number, cx: number, cz: number, blockIndex: number,
 ): TileDef {
-  // 主打成员：本 chunk 该角色的加权偏向（确定性，逐角色独立盐）
+  // ★ 主打成员：本 chunk 该角色只掷一次（盐不含 blockIndex）——
+  //   主打块同 chunk 内成片出现，换块不换主打（设计定稿）
+  const roleSalt = ['ground', 'platform', 'liquid', 'pit'].indexOf(role);
+  const featuredCache = new Map<string, string | null>();
   const pickFeatured = (g: GroupDef): string | null => {
-    const pool = rolePool(g, role);
-    if (pool.length === 0) return null;
-    return weightedPickKey(pool, null, seed + 8282, cx * 4 + pool.length, cz * 4 + blockIndex % 4);
+    let f = featuredCache.get(g.key);
+    if (f === undefined) {
+      const pool = rolePool(g, role);
+      f = pool.length === 0 ? null : weightedPickKey(pool, null, seed + 8282, cx * 5 + roleSalt, cz * 5 + roleSalt);
+      featuredCache.set(g.key, f);
+    }
+    return f;
   };
 
   const tryDraw = (g: GroupDef): TileDef | null => {

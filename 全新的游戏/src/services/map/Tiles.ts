@@ -44,6 +44,13 @@ export interface TileVisual {
   borderLine?: boolean;
   /** 方向性拉丝（平台拉丝金属） */
   streaks?: boolean;
+  /**
+   * ★ 阶段二：shader 程序化图案契约（"地块基类尽量 shader 生成，少用纹理"）。
+   * fnId 在 GLSL 图案库注册；params 打包进 uniform 数组。
+   * 阶段二前无人消费（纯契约占位）；迁移后 jitter/patches/borderLine/streaks
+   * 由图案函数替代。
+   */
+  pattern?: { fnId: string; params: Record<string, number> };
 }
 
 /** 物理与生成层属性（生成器/碰撞消费） */

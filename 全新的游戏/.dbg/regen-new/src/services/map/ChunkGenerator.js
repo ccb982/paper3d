@@ -301,10 +301,10 @@ function buildPortNearSet(ports) {
 }
 /**
  * L3 填充：角色槽位 → 组内抽块。
+ * @param panel 本 chunk 生效组（L2 已选）
  * @param blockIds 输出（最终 TileDef.id）
  */
-function fillSlots(seed, cx, cz, roles, ports, blockIds) {
-    const panel = (0, TileGroups_1.pickChunkGroup)(seed, cx, cz); // L2 选组（每 chunk 一次）
+function fillSlots(seed, cx, cz, roles, ports, panel, blockIds) {
     const portNear = buildPortNearSet(ports);
     for (let i = 0; i < 225; i++) {
         switch (roles[i]) {
@@ -373,7 +373,7 @@ function assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ) {
 /** 高台高度档位（米）。改这里 = 改世界天际线；档差需 > CAST_MIN_DEPTH */
 const PLATFORM_TIERS = [1.2, 2.2, 3.4];
 // ============ 转换为 ChunkData 格式 ============
-function toChunkData(blockIds, tileHeights, chunkX, chunkZ) {
+function toChunkData(blockIds, tileHeights, chunkX, chunkZ, groupKey) {
     const heights = new Float32Array(exports.CHUNK_SIZE * exports.CHUNK_SIZE);
     const blockTypes = new Uint8Array(exports.BLOCKS_PER_SIDE * exports.BLOCKS_PER_SIDE);
     const blockHeight = new Float32Array(exports.CHUNK_SIZE * exports.CHUNK_SIZE);
@@ -398,7 +398,7 @@ function toChunkData(blockIds, tileHeights, chunkX, chunkZ) {
             }
         }
     }
-    return { chunkX, chunkZ, heights, blockTypes, blockHeight, walkable };
+    return { chunkX, chunkZ, heights, blockTypes, blockHeight, walkable, groupKey };
 }
 // ============ 主入口（六层管线编排） ============
 /** ★ 生成 60×60 区域地形（确定性） */
@@ -426,11 +426,13 @@ function generateChunk(seed, chunkX, chunkZ) {
     }
     // ---- L4a 连通性修复（对所有布局来源兜底） ----
     repairConnectivityRoles(roles, ports);
+    // ---- L2 选组（本 chunk 生效组；贴图/装饰物规划层同源消费 groupKey） ----
+    const panel = (0, TileGroups_1.pickChunkGroup)(seed, chunkX, chunkZ);
     // ---- L2+L3 选组与抽取 ----
     const blockIds = new Uint8Array(exports.BLOCKS_PER_SIDE * exports.BLOCKS_PER_SIDE);
-    fillSlots(seed, chunkX, chunkZ, roles, ports, blockIds);
+    fillSlots(seed, chunkX, chunkZ, roles, ports, panel, blockIds);
     // ---- L4 高度分配 ----
     const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ);
     // ---- L5 输出 ----
-    return toChunkData(blockIds, tileHeights, chunkX, chunkZ);
+    return toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key);
 }

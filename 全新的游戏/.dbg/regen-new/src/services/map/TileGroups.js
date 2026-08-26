@@ -105,12 +105,18 @@ function weightedPickKey(pool, featured, seed, saltX, saltY) {
  * @param blockIndex 块索引（逐块微扰盐——同组同角色也能出变化）
  */
 function drawTileForRole(group, role, seed, cx, cz, blockIndex) {
-    // 主打成员：本 chunk 该角色的加权偏向（确定性，逐角色独立盐）
+    // ★ 主打成员：本 chunk 该角色只掷一次（盐不含 blockIndex）——
+    //   主打块同 chunk 内成片出现，换块不换主打（设计定稿）
+    const roleSalt = ['ground', 'platform', 'liquid', 'pit'].indexOf(role);
+    const featuredCache = new Map();
     const pickFeatured = (g) => {
-        const pool = rolePool(g, role);
-        if (pool.length === 0)
-            return null;
-        return weightedPickKey(pool, null, seed + 8282, cx * 4 + pool.length, cz * 4 + blockIndex % 4);
+        let f = featuredCache.get(g.key);
+        if (f === undefined) {
+            const pool = rolePool(g, role);
+            f = pool.length === 0 ? null : weightedPickKey(pool, null, seed + 8282, cx * 5 + roleSalt, cz * 5 + roleSalt);
+            featuredCache.set(g.key, f);
+        }
+        return f;
     };
     const tryDraw = (g) => {
         const pool = rolePool(g, role);

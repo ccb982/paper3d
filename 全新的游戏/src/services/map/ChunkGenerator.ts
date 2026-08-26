@@ -23,7 +23,7 @@
 
 import { TILE_FLAT } from './Tiles';
 import { tileById } from './Tiles';
-import { pickChunkGroup, drawTileForRole, drawGroundDecorTile } from './TileGroups';
+import { pickChunkGroup, drawTileForRole, drawGroundDecorTile, type GroupDef } from './TileGroups';
 import { regionParamsAt } from './RegionTheme';
 import { hash2, vnoise } from './TerrainNoise';
 
@@ -88,7 +88,7 @@ function resolveSpecialLayout(seed: number, cx: number, cz: number): ChunkLayout
   return null;
 }
 
-// ============ ChunkData（保持接口兼容） ============
+// ============ ChunkData（保持接口兼容 + groupKey 扩展） ============
 export interface ChunkData {
   chunkX: number;
   chunkZ: number;
@@ -100,6 +100,8 @@ export interface ChunkData {
   blockHeight: Float32Array;
   /** 每米可通行 */
   walkable: Uint8Array;
+  /** 本 chunk 生效的风格组（TileGroups；贴图/装饰物规划层消费） */
+  groupKey: string;
 }
 
 // ============ 阶段 0：端口派生 ============
@@ -362,14 +364,14 @@ function buildPortNearSet(ports: Ports): Set<number> {
 
 /**
  * L3 填充：角色槽位 → 组内抽块。
+ * @param panel 本 chunk 生效组（L2 已选）
  * @param blockIds 输出（最终 TileDef.id）
  */
 function fillSlots(
   seed: number, cx: number, cz: number,
-  roles: Uint8Array, ports: Ports,
+  roles: Uint8Array, ports: Ports, panel: GroupDef,
   blockIds: Uint8Array,
 ): void {
-  const panel = pickChunkGroup(seed, cx, cz);          // L2 选组（每 chunk 一次）
   const portNear = buildPortNearSet(ports);
 
   for (let i = 0; i < 225; i++) {
@@ -460,6 +462,7 @@ function toChunkData(
   blockIds: Uint8Array,
   tileHeights: Float32Array,
   chunkX: number, chunkZ: number,
+  groupKey: string,
 ): ChunkData {
   const heights = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);
   const blockTypes = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);
@@ -490,7 +493,7 @@ function toChunkData(
     }
   }
 
-  return { chunkX, chunkZ, heights, blockTypes, blockHeight, walkable };
+  return { chunkX, chunkZ, heights, blockTypes, blockHeight, walkable, groupKey };
 }
 
 // ============ 主入口（六层管线编排） ============
@@ -523,13 +526,16 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   // ---- L4a 连通性修复（对所有布局来源兜底） ----
   repairConnectivityRoles(roles, ports);
 
+  // ---- L2 选组（本 chunk 生效组；贴图/装饰物规划层同源消费 groupKey） ----
+  const panel = pickChunkGroup(seed, chunkX, chunkZ);
+
   // ---- L2+L3 选组与抽取 ----
   const blockIds = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);
-  fillSlots(seed, chunkX, chunkZ, roles, ports, blockIds);
+  fillSlots(seed, chunkX, chunkZ, roles, ports, panel, blockIds);
 
   // ---- L4 高度分配 ----
   const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ);
 
   // ---- L5 输出 ----
-  return toChunkData(blockIds, tileHeights, chunkX, chunkZ);
+  return toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key);
 }

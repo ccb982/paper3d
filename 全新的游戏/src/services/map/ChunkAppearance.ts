@@ -47,6 +47,7 @@ import {
   computeChunkMapsRGBA,
   type BakeQuery,
 } from './bakeCompute';
+import type { PlannedDecal } from './TileDecals';
 
 // ============================================================
 // 烘焙数据流契约（架构定稿）：
@@ -372,13 +373,16 @@ export function assembleChunkMaps(albedoBuf: Uint8ClampedArray, lightBuf: Uint8C
  * 正常路径走 TerrainBaker（Worker）；本函数用于 Worker 不可用时的回退，
  * 与 Worker 输出逐位一致（同一计算核心）。
  */
-export function bakeChunkMaps(terrain: TerrainBakeSource, cx: number, cz: number): ChunkMaps {
+export function bakeChunkMaps(
+  terrain: TerrainBakeSource, cx: number, cz: number,
+  extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
+): ChunkMaps {
   const q: BakeQuery = {
     worldSeed: terrain.worldSeed,
     surfaceHeightAt: (x, z) => terrain.surfaceHeightAt(x, z),
     tileDefAt: (x, z) => terrain.tileDefAt(x, z),
   };
-  const out = computeChunkMapsRGBA(q, cx, cz);
+  const out = computeChunkMapsRGBA(q, cx, cz, extras);
   return assembleChunkMaps(out.albedo, out.light);
 }
 

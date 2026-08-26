@@ -18,7 +18,11 @@ const ctx = self as unknown as {
 ctx.onmessage = (ev: MessageEvent) => {
   const msg = ev.data as { type: string; id: number; snap: BakeSnapshot };
   if (msg.type !== 'bake') return;
-  const out = computeChunkMapsRGBA(makeSnapshotSource(msg.snap), msg.snap.cx, msg.snap.cz);
+  // ★ 装饰数据必须透传：快照携带 propVolumes/decals，缺了贴图印章与装饰物阴影全丢
+  const out = computeChunkMapsRGBA(
+    makeSnapshotSource(msg.snap), msg.snap.cx, msg.snap.cz,
+    { propVolumes: msg.snap.propVolumes, decals: msg.snap.decals },
+  );
   ctx.postMessage(
     { type: 'result', id: msg.id, albedo: out.albedo.buffer, light: out.light.buffer },
     [out.albedo.buffer, out.light.buffer],

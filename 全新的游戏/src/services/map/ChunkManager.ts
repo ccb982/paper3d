@@ -28,6 +28,29 @@ import { buildChunkSideWalls } from './ChunkWalls';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
+import { planChunkDecals, type PlannedDecal } from './TileDecals';
+import { planChunkProps, buildPropLayer, computePropVolumes, type PlannedProp } from './TileProps';
+
+/** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
+export interface DecorPlan {
+  decals: PlannedDecal[];
+  props: PlannedProp[];
+  /** 装饰物阴影体积（世界坐标，5×N Float32Array，随快照进 Worker） */
+  propVolumes: Float32Array;
+}
+
+/** 体积列表 → 平面 Float32Array（每 5 个 [x,z,y,r,h]） */
+function packVolumes(v: { x: number; z: number; y: number; r: number; h: number }[]): Float32Array {
+  const out = new Float32Array(v.length * 5);
+  for (let i = 0; i < v.length; i++) {
+    out[i * 5] = v[i].x;
+    out[i * 5 + 1] = v[i].z;
+    out[i * 5 + 2] = v[i].y;
+    out[i * 5 + 3] = v[i].r;
+    out[i * 5 + 4] = v[i].h;
+  }
+  return out;
+}
 
 /**
  * 地面刚体宿主接口。
@@ -62,7 +85,7 @@ export class ChunkManager {
 
   // ---- ★ 异步烘焙管线：重计算在 Worker，主线程零尖峰 ----
   /** 在途烘焙（key→请求；t=发起时刻供看门狗超时判定） */
-  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number; t: number }>();
+  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number; t: number; decor: DecorPlan }>();
   /** 烘焙换代计数：dispose / 切地图风格时自增，使在途结果全部作废 */
   private bakeGen = 0;
   /** 看门狗节拍累加器 */
@@ -252,18 +275,52 @@ export class ChunkManager {
   }
 
   /**
-   * ★ 标准风格构建①：缓存查询 → 快照投给 Worker（无 Worker 时同步回退直建）。
-   * 同 key 已在途则跳过；缓存命中则跳过烘焙直接装配。
+   * ★ 装饰计划（预渲染前完成放置）：
+   * 贴图 + 装饰物都在烘焙【之前】放置——装饰物高度参与预渲染结构
+   * （其阴影体积随快照进 Worker 印进光照图；贴图印进 albedo）。
+   * 确定性：同 seed 同 chunk 结果恒定，烘焙与装配两侧消费同一份计划。
+   */
+  private planDecor(cx: number, cz: number): DecorPlan {
+    const chunkData = this.raster.getChunkData(cx, cz);
+    if (!chunkData) {
+      console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 无 ChunkData，装饰跳过`);
+      return { decals: [], props: [], propVolumes: new Float32Array(0) };
+    }
+    const base = {
+      seed: this.raster.worldSeed, cx, cz,
+      groupKey: chunkData.groupKey, blockTypes: chunkData.blockTypes,
+    };
+    const decals = planChunkDecals(base);
+    const props = planChunkProps({
+      ...base,
+      surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
+    });
+    const vols = computePropVolumes(props, cx, cz);
+    console.info(
+      `[ChunkManager][装饰] chunk(${cx},${cz}) 组=${chunkData.groupKey} ` +
+      `贴图=${decals.length} 装饰物=${props.length} 阴影体积=${vols.length} ` +
+      `种子=${this.raster.worldSeed}`,
+    );
+    return { decals, props, propVolumes: packVolumes(vols) };
+  }
+
+  /**
+   * ★ 标准风格构建①：装饰放置 → 缓存查询 → 快照投给 Worker
+   * （无 Worker 时同步回退直建）。同 key 已在途则跳过；
+   * 缓存命中则跳过烘焙直接装配（装饰计划确定性重算，结果一致）。
    */
   private requestStandardBake(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
     if (this.pendingBakes.has(key)) return;
     const seed = this.raster.worldSeed;
 
+    // ★ 装饰先行：预渲染（烘焙）前完成贴图与装饰物的放置
+    const decor = this.planDecor(cx, cz);
+
     // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
     const cached = getCachedChunkMaps(seed, cx, cz);
     if (cached) {
-      this.finishStandardChunk(cx, cz, cached);
+      this.finishStandardChunk(cx, cz, cached, decor);
       return;
     }
 
@@ -277,21 +334,24 @@ export class ChunkManager {
         return this.raster.getChunkData(gcx, gcz);
       },
       seed, cx, cz,
+      { propVolumes: decor.propVolumes, decals: decor.decals },
     );
     if (!p) {
       // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存 + 立即建
       for (let dz = -1; dz <= 1; dz++)
         for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
-      const maps = bakeChunkMaps(this.raster, cx, cz);
+      const maps = bakeChunkMaps(this.raster, cx, cz, {
+        propVolumes: decor.propVolumes, decals: decor.decals,
+      });
       cacheChunkMaps(seed, cx, cz, maps);
-      this.finishStandardChunk(cx, cz, maps);
+      this.finishStandardChunk(cx, cz, maps, decor);
       return;
     }
-    this.pendingBakes.set(key, { cx, cz, gen, t: performance.now() });
+    this.pendingBakes.set(key, { cx, cz, gen, t: performance.now(), decor });
     p.then((bufs) => {
       if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
       this.pendingBakes.delete(key);
-      this.completeStandardBake(cx, cz, seed, bufs);
+      this.completeStandardBake(cx, cz, seed, bufs, decor);
     });
   }
 
@@ -300,12 +360,15 @@ export class ChunkManager {
    * 任何一步异常都回退主线程同步烘焙——绝不让 chunk 因单次失败而
    * 永久消失（"整片区域踩虚空"bug 的根因即此处的无兜底 rejection）。
    */
-  private completeStandardBake(cx: number, cz: number, seed: number, bufs: BakeResult | null): void {
+  private completeStandardBake(
+    cx: number, cz: number, seed: number,
+    bufs: BakeResult | null, decor: DecorPlan,
+  ): void {
     try {
       const maps = bufs ? assembleChunkMaps(bufs.albedo, bufs.light) : null;
       if (maps) {
         cacheChunkMaps(seed, cx, cz, maps);
-        this.finishStandardChunk(cx, cz, maps);
+        this.finishStandardChunk(cx, cz, maps, decor);
         return;
       }
       throw new Error('空结果');
@@ -314,9 +377,11 @@ export class ChunkManager {
       try {
         for (let dz = -1; dz <= 1; dz++)
           for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
-        const maps = bakeChunkMaps(this.raster, cx, cz);
+        const maps = bakeChunkMaps(this.raster, cx, cz, {
+          propVolumes: decor.propVolumes, decals: decor.decals,
+        });
         cacheChunkMaps(seed, cx, cz, maps);
-        this.finishStandardChunk(cx, cz, maps);
+        this.finishStandardChunk(cx, cz, maps, decor);
       } catch (e2) {
         // 不入缓存：看门狗 sweep 会在下个周期重新走完整请求
         console.error(`[ChunkManager] chunk(${cx},${cz}) 同步回退也失败，交由看门狗重试`, e2);
@@ -325,7 +390,7 @@ export class ChunkManager {
   }
 
   /** ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半） */
-  private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps): void {
+  private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -355,6 +420,23 @@ export class ChunkManager {
     const walls = buildChunkSideWalls(this.raster, cx, cz);
     if (walls) group.add(walls);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+
+    // ---- ★ 装饰层装配（计划在预渲染前已放置，此处直接消费同一份） ----
+    // 贴图已在烘焙时印进 albedo 纹理（无需运行时步骤）；
+    // 装饰物 → buildPropLayer → 挂进 chunk group
+    let propMeshes = 0;
+    if (decor.props.length > 0) {
+      const propLayer = buildPropLayer(decor.props);
+      if (propLayer) {
+        group.add(propLayer);
+        propMeshes = propLayer.children.length;
+      } else {
+        console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
+      }
+    }
+    if (propMeshes > 0 || decor.decals.length > 0) {
+      console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) 装配完成：贴图 ${decor.decals.length}（已印入albedo）/ 装饰物网格 ${propMeshes} 组`);
+    }
 
     this.replaceChunk(
       chunkKeyOf(cx, cz), group, cx, cz,
