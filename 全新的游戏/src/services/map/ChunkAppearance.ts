@@ -1,5 +1,5 @@
 // ============================================================
-// ChunkAppearance —— chunk 外观纹理烘焙器（静态预渲染，统一入口）
+// ChunkAppearance —— chunk 外观烘焙（契约 / 组装 / Boss4D 旧路径）
 // ============================================================
 // 双纹理方案（2026-08-25 定稿，主地图现行路径 = bakeChunkMaps）：
 //   Pass A  albedo 图  ：纯材质色（底色/抖动/斑块/描边/拉丝/斑驳），
@@ -10,22 +10,27 @@
 //     final = albedo × (环境色 × G + 太阳色 × R)
 //   昼夜循环只动两个 uniform——阴影浓度/色调随时可调，无需重烘。
 //
-// 阴影算法（标准实现：iq SDF 软阴影公式的地形变体 res=min(res,k·h/t)）：
-//   沿固定烘焙太阳方向自适应步进，逐点累计「净空角宽度」取最暗值——
-//   接触遮挡物处锐利、随距离半影自然展宽（固定宽度过渡带做不到）。
-//   台阶豁免：落差 <0.5m 的地形不产生遮挡。参数按标准地图的块状
-//   结构重推（4m 等高柱体），不继承 Boss4D 废案数值。
-//   ⚠️ terrain.heightAt 在 4m 块内恒定 → 步进采样自动按柱体取值，
-//      无需专门 DDA。
+// ★ 2026-08-26 Worker 化重构：
+//   - 像素计算核心全部迁往 bakeCompute.ts（纯函数、零 three 依赖、
+//     可在 Worker 内运行）；本文件保留：烘焙契约、像素→纹理组装、
+//     同步回退入口、Boss4D 废案旧路径。
+//   - 异步管线见 TerrainBaker.ts（WorldMode 消费）。
+//
+// ★★ 采样统一（同日定稿）：双纹理管线只消费「视觉面」
+//   surfaceHeightAt——与网格位移/角色贴地同源，修复斜坡台缘处
+//   烘焙影与可见地表的错位。块状 heightAt 仅剩旧路径使用。
+//
+// 阴影算法（新路径，在 bakeCompute）：iq SDF 软阴影公式的地形变体
+//   res=min(res,k·h/t)——接触遮挡物处锐利、随距离半影自然展宽。
 //
 // ─────────────────────────────────────────────────────────────
 // 旧单纹理路径 bakeChunkAppearance（保留）：Boss4DArena 废案专用，
-//   主地图勿用。其内嵌的 AO 计算与双纹理路径共享同一套参数常量。
+//   主地图勿用。内嵌 AO 计算与双纹理路径共享 bakeCompute 的参数常量。
 //
 // 分界铁律（防重复计费）：
-//   - 材质色 + 静态光（N·L/自遮挡影/AO）→ 全部在这里烘焙
+//   - 材质色 + 静态光（N·L/自遮挡影/AO）→ 全部在烘焙域完成
 //   - 实时域只剩：昼夜色调/强度调制（uniform）+ 实体动态影子
-//   ⚠️ 启用本 canvas 后，顶点色/AO 必须停用——AO 只能存在一处
+//   ⚠️ 启用 canvas 烘焙后，顶点色/AO 必须停用——AO 只能存在一处
 //
 // 像素 ↔ 世界映射约定（两图同约定，lightmap 半分辨率）：
 //   pixel(px,py) ↔ world( cx*60+(px+0.5)*step , cz*60+(py+0.5)*step )
@@ -36,25 +41,28 @@ import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
+import {
+  AO_RADIUS, AO_STRENGTH, AO_MIN, APPEARANCE_RES,
+  computeChunkMapsRGBA, vnoise,
+  type BakeQuery,
+} from './bakeCompute';
 
 // ============================================================
 // 烘焙数据流契约（架构定稿）：
 //
-//   RasterMap（地图侧）          ChunkAppearance（烘焙侧）
-//   持有高度场，暴露查询 ──────►  只认 TerrainBakeSource 接口，
-//   TerrainBakeSource 能力        自主计算阴影/光照，
-//                                 返回 albedo + lightmap 双纹理
+//   RasterMap（地图侧）          烘焙侧（bakeCompute/TerrainBaker）
+//   持有高度场，暴露查询 ──────►  只认接口，自主计算阴影/光照，
+//   TerrainBakeSource 能力        返回 albedo + lightmap 双纹理
 //
 // 烘焙器不 import RasterMap——依赖倒置：地图侧满足接口即被消费
 // （TS 结构化类型，RasterMap 天然满足，无需显式 implements）。
-// 未来接入手绘地图/Boss4D 变体/Worker 内快照，只需实现同一接口。
 // ============================================================
 
 /** ★ 烘焙域消费的地形查询契约（最小能力集；RasterMap 天然满足） */
 export interface TerrainBakeSource {
   /** 世界种子（烘焙噪声用；同 seed 同地形 → 输出逐字节一致） */
   readonly worldSeed: number;
-  /** 世界高度（格值） */
+  /** 世界高度（格值；仅旧路径消费） */
   heightAt(x: number, z: number): number;
   /** 视觉面一致采样（顶点值双线性插值，与网格渲染完全一致） */
   surfaceHeightAt(x: number, z: number): number;
@@ -62,31 +70,11 @@ export interface TerrainBakeSource {
   tileDefAt(x: number, z: number): TileDef;
 }
 
-/** 外观分辨率（默认 256²；低端机降 128²） */
-export const APPEARANCE_RES = 256;
-
-/** 烘焙可选档位（★ 主地图默认全关；组合见 BOSS4D_BAKE） */
-export interface ChunkBakeOptions {
-  /** ★ 第二尺度接触 AO（半径0.85m 缝隙/贴边暗部）——Boss4D 废案开启 */
-  contactAO?: boolean;
-  /** ★ 静态日照投影（地形自遮挡：半分辨率光线步进+双边模糊柔化；
-   *  固定太阳不随昼夜；最小落差门槛 2.2m——普通台阶不投影）——Boss4D 废案开启 */
-  sunShadow?: boolean;
-}
-
-/** ★ Boss 四维废案的烘焙配置（与 Boss4DArena 网格配套使用） */
-export const BOSS4D_BAKE: Required<ChunkBakeOptions> = { contactAO: true, sunShadow: true };
-
-/** AO 参数（环境尺度；压暗下限 0.55 防死黑） */
-const AO_RADIUS = 2.5;
-const AO_STRENGTH = 0.09;
-const AO_MIN = 0.55;
-
-/** 接触 AO 参数（contactAO 档；紧贴尺度） */
+// ---- 接触 AO 参数（contactAO 档；紧贴尺度。仅旧路径）----
 const CONTACT_RADIUS = 0.85;
 const CONTACT_STRENGTH = 0.17;
 
-/** 静态日照投影参数（sunShadow 档；固定太阳观感，方向承旧 sunOffset） */
+/** 静态日照投影参数（sunShadow 档；固定太阳观感，方向承旧 sunOffset。仅旧路径） */
 const SHADOW_SUN_HX = 0.851;
 const SHADOW_SUN_HZ = 0.524;
 const SHADOW_SUN_TAN = Math.tan((40 * Math.PI) / 180); // 仰角 40° 射线爬升率
@@ -100,23 +88,20 @@ const SHADOW_EDGE_TOL = 0.6;    // 高度差≤此值模糊自由跨过
 const SHADOW_EDGE_FALL = 1.4;   // 超出后权重线性归零（影子不得翻越断崖）
 const SHADOW_MIN_DEPTH = 2.2;   // 最小落差门槛（普通台阶不投影）
 
-/** 平滑值噪声（双线性 + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
-function vnoise(x: number, y: number, seed: number): number {
-  const xi = Math.floor(x), yi = Math.floor(y);
-  const fx = x - xi, fy = y - yi;
-  const sx = fx * fx * (3 - 2 * fx);
-  const sy = fy * fy * (3 - 2 * fy);
-  const h = (a: number, b: number) => hash2(a, b, seed);
-  const top = h(xi, yi) * (1 - sx) + h(xi + 1, yi) * sx;
-  const bot = h(xi, yi + 1) * (1 - sx) + h(xi + 1, yi + 1) * sx;
-  return top * (1 - sy) + bot * sy;
+/** 烘焙可选档位（★ 主地图默认全关；组合见 BOSS4D_BAKE） */
+export interface ChunkBakeOptions {
+  /** ★ 第二尺度接触 AO（半径0.85m 缝隙/贴边暗部）——Boss4D 废案开启 */
+  contactAO?: boolean;
+  /** ★ 静态日照投影（地形自遮挡：半分辨率光线步进+双边模糊柔化；
+   *  固定太阳不随昼夜；最小落差门槛 2.2m——普通台阶不投影）——Boss4D 废案开启 */
+  sunShadow?: boolean;
 }
 
+/** ★ Boss 四维废案的烘焙配置（与 Boss4DArena 网格配套使用） */
+export const BOSS4D_BAKE: Required<ChunkBakeOptions> = { contactAO: true, sunShadow: true };
+
 /**
- * 烘焙一张 chunk 外观纹理。
- * @param raster 地图查询层（terrainTypeAt / heightAt / worldSeed）
- * @param cx,cz  chunk 坐标
- * @param opts   可选档位（缺省 = 主地图原始观感）
+ * 【旧路径】烘焙一张 chunk 单纹理外观（Boss4DArena 专用，主地图勿用）。
  * @returns 已配置好 colorSpace/filter 的 CanvasTexture（随 chunk 销毁时 dispose）
  */
 export function bakeChunkAppearance(
@@ -242,9 +227,6 @@ export function bakeChunkAppearance(
       );
 
       // ---- 结构化细节层（替代白噪点——白噪=脏，结构=设计）----
-      //   ① 色阶化斑块：中频噪声量化成 3 档离散亮度（对称 ±2.5%）→ 手绘色块拼接感
-      //   ② 地块内描边：贴边 ~0.3m 压暗一圈 → "精制面板"质感（方舟地图签名）
-      //   ③ 平台方向性拉丝：各向异性噪声沿 X 拉伸 → 拉丝金属
       //   ⚠️ 已删除：像素白噪点 / R,B 冷暖偏移 / 中频连续斑块
       //     （各向同性无结构 = 脏；2026-08-23 TileDef 迁移时曾误带回，勿再恢复）
 
@@ -346,39 +328,8 @@ export function bakeChunkAppearance(
 }
 
 // ============================================================
-// 双纹理烘焙（主地图现行路径，见文件头方案说明）
+// 双纹理组装（主地图现行路径的主线程侧；像素计算在 bakeCompute）
 // ============================================================
-
-/** 光照图分辨率（阴影/AO 是低频信息，半分辨率足够） */
-const LIGHT_RES = 128;
-
-/** 烘焙太阳（美术定光源；hx/hz=指向太阳的水平单位向量，tan=射线爬升率）。
- *  ★ 主光必须在【相机后上方】（默认 yaw=0 → 相机在 +z 侧看 -z）：
- *    影子拖向 -z = 拖进玩家视野内的地面；面向相机的墙 = 朝阳亮墙。
- *    放反了会得到：地面无影（影子全被高台挡在背面）+ 迎面墙全黑。 */
-const BAKE_SUN = { hx: -0.342, hz: 0.940, tan: 1.0 };
-
-/** 投影门槛：遮挡物须高出接收面 ≥ 此值才投影
- *  （道路自身抖动 ±0.3m 不投影；高台落差 ≥1.5m 必投影） */
-const CAST_MIN_DEPTH = 0.5;
-/** 射线射程（米）：高台柱体最厚 ~4m + 斜向余量 */
-const CAST_RANGE = 16;
-// ---- 软阴影（标准实现：iq SDF 软阴影公式的地形变体）----
-//   res = min(res, k·h / t)   h=射线净空, t=行进距离
-//   几何含义：净空角宽度 → 接触遮挡物处锐利，随距离半影自然展宽。
-const SHADOW_K = 10;          // 半影硬度（越大越锐；太阳真实角直径≈1000+）
-const CAST_MIN_STEP = 0.75;   // 自适应步长下限（近遮挡处精细采样）
-const CAST_MAX_STEP = 2.5;    // 步长上限（<4m 块对角，防整列跳过）
-const CAST_MAX_ITERS = 24;    // 迭代上限
-/** 全影时直射项的保留比例（模拟天空散射；越小影子越深。0=物理纯黑，观感死板） */
-const SHADOW_FLOOR = 0.12;
-/** 全影区 AO 松绑比例：1=影内完全取消 AO（最亮），0=AO 全额叠加（贴墙死黑） */
-const SHADOW_ZONE_AO_RELIEF = 0.65;
-/** N·L wrap（0=朗伯硬边；轻微软化明暗交界——现只用于顶面常数推导） */
-const NL_WRAP = 0.15;
-/** 光照图双边模糊（不过高度断崖——影子不得爬上台顶，踩过的坑） */
-const LIGHT_BLUR_R = 1;
-const LIGHT_BLUR_PASSES = 1;
 
 /** 双纹理烘焙产物 */
 export interface ChunkMaps {
@@ -388,235 +339,44 @@ export interface ChunkMaps {
   lightmap: THREE.CanvasTexture;
 }
 
+/** 由像素缓冲组装纹理（Worker 结果与同步回退共用此尾部；主线程执行） */
+export function assembleChunkMaps(albedoBuf: Uint8ClampedArray, lightBuf: Uint8ClampedArray): ChunkMaps {
+  // ---- albedo：sRGB + mipmap + 各向异性（地面掠射角画质）----
+  const aCvs = document.createElement('canvas');
+  aCvs.width = aCvs.height = APPEARANCE_RES;
+  aCvs.getContext('2d')!.putImageData(new ImageData(albedoBuf, APPEARANCE_RES, APPEARANCE_RES), 0, 0);
+  const albedo = new THREE.CanvasTexture(aCvs);
+  albedo.flipY = false;                        // ★ 与显式 UV 约定配套（见文件头）
+  albedo.colorSpace = THREE.SRGBColorSpace;    // 真实显示色（区别于线性数据）
+  albedo.anisotropy = 4;
+  albedo.wrapS = albedo.wrapT = THREE.ClampToEdgeWrapping;
+
+  // ---- lightmap：线性数据乘数，不做 sRGB 解码；低频光照不需要 mip ----
+  const lRes = Math.sqrt(lightBuf.length / 4) | 0;
+  const lCvs = document.createElement('canvas');
+  lCvs.width = lCvs.height = lRes;
+  lCvs.getContext('2d')!.putImageData(new ImageData(lightBuf, lRes, lRes), 0, 0);
+  const lightmap = new THREE.CanvasTexture(lCvs);
+  lightmap.flipY = false;                    // 与 albedo 同 UV 约定
+  lightmap.generateMipmaps = false;
+  lightmap.minFilter = THREE.LinearFilter;
+  lightmap.magFilter = THREE.LinearFilter;
+  lightmap.wrapS = lightmap.wrapT = THREE.ClampToEdgeWrapping;
+
+  return { albedo, lightmap };
+}
+
 /**
- * 烘焙一个 chunk 的双纹理外观（主地图入口）。
- * 同 (seed, cx, cz) 输出确定一致；两张纹理随 chunk 销毁时 dispose。
+ * 【同步回退】主线程直接烘一个 chunk 的双纹理外观。
+ * 正常路径走 TerrainBaker（Worker）；本函数用于 Worker 不可用时的回退，
+ * 与 Worker 输出逐位一致（同一计算核心）。
  */
 export function bakeChunkMaps(terrain: TerrainBakeSource, cx: number, cz: number): ChunkMaps {
-  return {
-    albedo: bakeAlbedoCanvas(terrain, cx, cz),
-    lightmap: bakeLightCanvas(terrain, cx, cz),
+  const q: BakeQuery = {
+    worldSeed: terrain.worldSeed,
+    surfaceHeightAt: (x, z) => terrain.surfaceHeightAt(x, z),
+    tileDefAt: (x, z) => terrain.tileDefAt(x, z),
   };
-}
-
-/** Pass A —— 材质色图（256²）：底色/抖动/斑块/描边/拉丝/大尺度斑驳 */
-function bakeAlbedoCanvas(terrain: TerrainBakeSource, cx: number, cz: number): THREE.CanvasTexture {
-  const S = APPEARANCE_RES;
-  const cvs = document.createElement('canvas');
-  cvs.width = cvs.height = S;
-  const ctx = cvs.getContext('2d')!;
-  const img = ctx.createImageData(S, S);
-
-  const seed = terrain.worldSeed;
-  const step = CHUNK_SIZE / S;
-  const originX = cx * CHUNK_SIZE;
-  const originZ = cz * CHUNK_SIZE;
-
-  for (let py = 0; py < S; py++) {
-    for (let px = 0; px < S; px++) {
-      const lx = (px + 0.5) * step;
-      const lz = (py + 0.5) * step;
-      const wx = originX + lx;
-      const wz = originZ + lz;
-
-      // 类型判定 + 坑/水侧壁上段修正（语义与旧路径一致，见旧循环注释）
-      let td = terrain.tileDefAt(wx, wz);
-      if (td.isDepression && terrain.surfaceHeightAt(wx, wz) > 0) {
-        td = tileById(0);
-      }
-
-      // 基准色 → 逐地块 HSL 抖动 → RGB
-      const tx = Math.floor(wx / 4);
-      const tz = Math.floor(wz / 4);
-      let [r, g, b] = hsl2rgb(
-        td.visual.baseHsl.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
-        td.visual.baseHsl.s * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
-        td.visual.baseHsl.l * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
-      );
-
-      // 色阶化斑块（3 档离散亮度 → 手绘色块拼接感）
-      if (td.visual.patches !== false) {
-        const pn = vnoise(wx * 0.22, wz * 0.22, seed + 88);
-        const t = pn * 3;
-        const k = Math.min(2, Math.floor(t));
-        let f = t - k;
-        f = f < 0.6 ? 0 : (f - 0.6) / 0.4;
-        f = f * f * (3 - 2 * f);
-        const level = (k + f) / 2;
-        const amp = 0.04 * (td.visual.patchHalf ? 0.5 : 1);
-        const p = 1 - amp + 2 * amp * level;
-        r *= p; g *= p; b *= p;
-      }
-
-      // 地块内描边（贴边 0.3m 压暗圈）
-      if (td.visual.borderLine) {
-        const bxm = ((lx % 4) + 4) % 4;
-        const bzm = ((lz % 4) + 4) % 4;
-        const dEdge = Math.min(bxm, 4 - bxm, bzm, 4 - bzm);
-        if (dEdge < 0.3) {
-          const t = 1 - dEdge / 0.3;
-          const k = 1 - 0.13 * t;
-          r *= k; g *= k; b *= k;
-        }
-      }
-
-      // 平台方向性拉丝
-      if (td.visual.streaks) {
-        const st = (vnoise(wx * 0.7, wz * 0.12, seed + 66) - 0.5) * 0.08;
-        r *= 1 + st; g *= 1 + st; b *= 1 + st;
-      }
-
-      // 大尺度斑驳（±6%，材质色的一部分，随 albedo 进合成）
-      const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
-      const shade = 0.94 + 0.12 * n;
-
-      const i = (py * S + px) * 4;
-      img.data[i]     = Math.min(255, r * shade);
-      img.data[i + 1] = Math.min(255, g * shade);
-      img.data[i + 2] = Math.min(255, b * shade);
-      img.data[i + 3] = 255;
-    }
-  }
-
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(cvs);
-  tex.flipY = false;
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  return tex;
-}
-
-/** Pass B —— 光照图（128²）：R=N·L wrap × 阴影可见度，G=AO */
-function bakeLightCanvas(terrain: TerrainBakeSource, cx: number, cz: number): THREE.CanvasTexture {
-  const S = LIGHT_RES;
-  const cvs = document.createElement('canvas');
-  cvs.width = cvs.height = S;
-  const ctx = cvs.getContext('2d')!;
-  const img = ctx.createImageData(S, S);
-
-  const step = CHUNK_SIZE / S;
-  const originX = cx * CHUNK_SIZE;
-  const originZ = cz * CHUNK_SIZE;
-
-  // 顶面直射常数：顶面全平（块状地图），N·L 恒定——不用逐像素法线，
-  // 消除断崖边缘 ±1m 的法线光晕伪影
-  const ly = BAKE_SUN.tan / Math.hypot(1, BAKE_SUN.tan);
-  const TOP_DIRECT = (ly + NL_WRAP) / (1 + NL_WRAP);
-
-  // ---- Pass B1：原始场（高度/直射/AO；侧壁带单独着色）----
-  const heights = new Float32Array(S * S);
-  const directF = new Float32Array(S * S);
-  const aoF = new Float32Array(S * S);
-  for (let py = 0; py < S; py++) {
-    for (let px = 0; px < S; px++) {
-      const wx = originX + (px + 0.5) * step;
-      const wz = originZ + (py + 0.5) * step;
-      const h = terrain.heightAt(wx, wz);
-      heights[py * S + px] = h;
-
-      const hL = terrain.heightAt(wx - 1, wz);
-      const hR = terrain.heightAt(wx + 1, wz);
-      const hD = terrain.heightAt(wx, wz - 1);
-      const hU = terrain.heightAt(wx, wz + 1);
-      // （hL/hR/hD/hU 供模糊权重参考；直射项按平顶常数处理——
-      //   侧壁形体感由 ChunkWalls 独立几何承担，不再污染地面贴图）
-
-      // 顶面：常数直射 × 投影可见度（留底防死黑）。
-      // ★ 软阴影 = iq 标准公式的地形变体：res = min(res, k·h/t)，
-      //   h 为射线对地形的净空——接触遮挡物处锐利、随距离半影展宽。
-      //   台阶豁免：落差 <CAST_MIN_DEPTH 的地形不产生遮挡（只影响步长）。
-      let vis = 1;
-      let t = (CAST_MIN_DEPTH / BAKE_SUN.tan) + 0.05;  // 起步越过自身台阶豁免区
-      for (let it = 0; it < CAST_MAX_ITERS && t <= CAST_RANGE; it++) {
-        const th = terrain.heightAt(wx + BAKE_SUN.hx * t, wz + BAKE_SUN.hz * t);
-        const diff = h + BAKE_SUN.tan * t - th;        // 净空（>0 未命中）
-        const drop = th - h;
-        if (diff <= 0 && drop >= CAST_MIN_DEPTH) { vis = 0; break; }
-        if (drop >= CAST_MIN_DEPTH) {
-          const s = SHADOW_K * diff / t;
-          if (s < vis) vis = s;
-          if (vis < 0.01) break;                       // 已足够黑，提前收敛
-        }
-        // 自适应步长：净空越大步子越大（clamp 防停滞/跳块）
-        t += Math.min(CAST_MAX_STEP, Math.max(CAST_MIN_STEP, diff));
-      }
-      const direct = TOP_DIRECT * (SHADOW_FLOOR + (1 - SHADOW_FLOOR) * vis);
-
-      // AO（凹陷地块均匀跳过——深度感由几何侧壁承担）
-      let ao = 1;
-      const td = terrain.tileDefAt(wx, wz);
-      if (!(td.isDepression && terrain.surfaceHeightAt(wx, wz) <= 0)) {
-        let occ = 0;
-        for (let k = 0; k < 8; k++) {
-          const ang = (k / 8) * Math.PI * 2;
-          const dh = terrain.heightAt(wx + Math.cos(ang) * AO_RADIUS, wz + Math.sin(ang) * AO_RADIUS) - h;
-          if (dh > 0) occ += Math.min(dh, 2.5);
-        }
-        ao = Math.max(AO_MIN, 1 - (occ / 8) * AO_STRENGTH);
-      }
-
-      // ★ 防重复计费：直射遮挡（vis 低）多发生在同一批遮挡物脚下，
-      //   AO 若全额叠加会三重压暗（直射umbra+天光遮挡+半影），贴墙
-      //   一圈黑到失真。全影区按比例松绑 AO——AO 主要作用于受光区。
-      const aoEff = ao + (1 - ao) * (1 - vis) * SHADOW_ZONE_AO_RELIEF;
-
-      directF[py * S + px] = direct;
-      aoF[py * S + px] = aoEff;
-    }
-  }
-
-  // ---- Pass B2：高度加权双边模糊 ×N（柔化但不过断崖；乒乓缓冲）----
-  {
-    const tmpD = new Float32Array(S * S), tmpA = new Float32Array(S * S);
-    for (let pass = 0; pass < LIGHT_BLUR_PASSES; pass++) {
-      blurAxis(directF, aoF, heights, tmpD, tmpA, S, true);   // 水平轴
-      blurAxis(tmpD, tmpA, heights, directF, aoF, S, false);  // 垂直轴（读tmp写回原场，安全）
-    }
-  }
-
-  // ---- Pass B3：写 canvas ----
-  for (let i = 0; i < S * S; i++) {
-    img.data[i * 4]     = Math.round(Math.min(1, directF[i]) * 255);
-    img.data[i * 4 + 1] = Math.round(Math.min(1, aoF[i]) * 255);
-    img.data[i * 4 + 2] = 255;
-    img.data[i * 4 + 3] = 255;
-  }
-  ctx.putImageData(img, 0, 0);
-
-  const tex = new THREE.CanvasTexture(cvs);
-  tex.flipY = false;                       // 与 albedo 同 UV 约定
-  // colorSpace 保持默认（线性数据乘数，不做 sRGB 解码）
-  tex.generateMipmaps = false;             // 低频光照不需要 mip
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-  return tex;
-}
-
-// ---- 光照图内部工具 ----
-
-/** 单轴双边盒式模糊（权重按高度差衰减——影子不跨断崖；读src写out，禁止别名） */
-function blurAxis(
-  srcD: Float32Array, srcA: Float32Array, h: Float32Array,
-  outD: Float32Array, outA: Float32Array, S: number, horizontal: boolean,
-): void {
-  const TOL = 0.6, FALL = 1.4;
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const hc = h[y * S + x];
-      let sd = 0, sa = 0, wsum = 0;
-      for (let k = -LIGHT_BLUR_R; k <= LIGHT_BLUR_R; k++) {
-        const xx = horizontal ? Math.min(S - 1, Math.max(0, x + k)) : x;
-        const yy = horizontal ? y : Math.min(S - 1, Math.max(0, y + k));
-        const j = yy * S + xx;
-        const dh = Math.abs(h[j] - hc);
-        const w = dh <= TOL ? 1 : Math.max(0, 1 - (dh - TOL) / FALL);
-        sd += srcD[j] * w; sa += srcA[j] * w; wsum += w;
-      }
-      const o = y * S + x;
-      if (wsum > 0) { outD[o] = sd / wsum; outA[o] = sa / wsum; }
-      else { outD[o] = srcD[o]; outA[o] = srcA[o]; }
-    }
-  }
+  const out = computeChunkMapsRGBA(q, cx, cz);
+  return assembleChunkMaps(out.albedo, out.light);
 }

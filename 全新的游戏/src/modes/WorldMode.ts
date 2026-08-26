@@ -20,7 +20,8 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
-import { bakeChunkMaps } from '../services/map/ChunkAppearance';
+import { bakeChunkMaps, assembleChunkMaps, type ChunkMaps } from '../services/map/ChunkAppearance';
+import { terrainBaker } from '../services/map/TerrainBaker';
 import { TerrainMaterial } from '../services/map/TerrainMaterial';
 import { buildChunkSideWalls } from '../services/map/ChunkWalls';
 import { buildBoss4DChunk } from '../services/map/Boss4DArena';
@@ -137,13 +138,16 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 初始 3×3 chunk 的地面刚体 + 视觉网格 ----
     this.syncChunks(spawn.x, spawn.z);
-    // ★ 出生区 3×3 同步强制构建：物理地面必须先于玩家存在（队列化会延迟到数帧后，
-    //   玩家会坠入虚空）。更远的区域由队列按预算流式构建。
+    // ★ 出生区 3×3 强制构建（不等队列调度）。
+    //   2026-08-26 异步烘焙管线后标准风格不再阻塞主线程——角色 Y 由
+    //   clampCharacter 按 raster 高度场驱动，不依赖地面刚体先存在；
+    //   地面视觉/刚体在头几帧内由烘焙结果补齐。
     const scx = Math.floor(spawn.x / CHUNK_SIZE);
     const scz = Math.floor(spawn.z / CHUNK_SIZE);
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
-        this.buildChunkMesh(scx + dx, scz + dz);
+        if (this.boss4D) this.buildChunkMesh(scx + dx, scz + dz);
+        else this.requestStandardBake(scx + dx, scz + dz);
       }
     }
 
@@ -414,6 +418,9 @@ export class WorldMode implements IGameMode {
 
     // ---- chunk 视觉网格 ----
     this.chunkQueue.length = 0;   // ★ 清空构建队列    this.queuedKeys.clear();
+    // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
+    this.bakeGen++;
+    this.pendingBakes.clear();
     for (const v of this.chunkMeshes.values()) {
       this.scene?.remove(v);
       this.disposeChunkVisual(v);
@@ -493,6 +500,12 @@ export class WorldMode implements IGameMode {
   /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
   private static readonly CHUNK_BUILD_BUDGET_MS = 8;
 
+  // ---- ★ 异步烘焙管线（2026-08-26）：重计算在 Worker，主线程零尖峰 ----
+  /** 在途烘焙（key→请求；结果到达后异步完成网格构建） */
+  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number }>();
+  /** 烘焙换代计数：dispose / 切地图风格时自增，使在途结果全部作废 */
+  private bakeGen = 0;
+
   private syncChunks(px: number, pz: number): void {
     const added = this.raster.updateChunks(px, pz);
     for (const { cx, cz } of added) {
@@ -518,20 +531,30 @@ export class WorldMode implements IGameMode {
     this.chunkQueue.push({ cx, cz, rebuild });
   }
 
-  /** 每帧按时间预算消化构建队列（首项必建，防饿死） */
+  /**
+   * 每帧按时间预算消化构建队列。
+   * ★ Boss4D 同步构建；标准风格走异步烘焙（本循环只做快照提取+投递，
+   *   重计算在 Worker——单帧不再有"首项必建"的烘焙尖峰）。
+   */
   private processChunkQueue(): void {
     if (this.chunkQueue.length === 0) return;
     const t0 = performance.now();
     do {
       const item = this.chunkQueue.shift()!;
-      this.queuedKeys.delete(chunkKeyOf(item.cx, item.cz));
-      if (item.rebuild) {
-        // 可能已不在视野/已被销毁：rebuild 内部有兜底
-        if (this.chunkMeshes.has(chunkKeyOf(item.cx, item.cz))) {
-          this.rebuildChunkMesh(item.cx, item.cz);
+      const key = chunkKeyOf(item.cx, item.cz);
+      this.queuedKeys.delete(key);
+      if (this.boss4D) {
+        if (item.rebuild) {
+          // 可能已不在视野/已被销毁：有 mesh 才重建
+          if (this.chunkMeshes.has(key)) this.buildChunkMesh(item.cx, item.cz);
+        } else {
+          this.buildChunkMesh(item.cx, item.cz);
         }
       } else {
-        this.buildChunkMesh(item.cx, item.cz);
+        // 标准风格：重建与新建同走异步烘焙（结果到达后 replaceChunk 换装）
+        if (!item.rebuild || this.chunkMeshes.has(key)) {
+          this.requestStandardBake(item.cx, item.cz);
+        }
       }
     } while (
       this.chunkQueue.length > 0 &&
@@ -539,42 +562,38 @@ export class WorldMode implements IGameMode {
     );
   }
 
-  private buildChunkMesh(cx: number, cz: number): void {
+  /**
+   * ★ 标准风格构建①：提取快照投给 Worker（无 Worker 时同步回退直建）。
+   * 同 key 已在途则跳过（输出确定性一致，重复请求无意义）。
+   */
+  private requestStandardBake(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
-    // ★ 物理 & 视觉按当前风格成对构建/替换（切换地图风格时两者同步走）
-    if (this.boss4D) {
-      const b = buildBoss4DChunk(this.raster, cx, cz);
-      this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
-    } else {
-      const s = this.buildStandardChunk(cx, cz);
-      this.replaceChunk(key, s.visual, cx, cz, s.trimeshVertices, s.trimeshIndices);
+    if (this.pendingBakes.has(key)) return;
+    const gen = this.bakeGen;
+    const p = terrainBaker.request(
+      (gcx, gcz) => this.raster.getChunkData(gcx, gcz),
+      this.raster.worldSeed,
+      cx, cz,
+    );
+    if (!p) {
+      // Worker 不可用（如微信端未适配）：主线程同步烘 + 立即建
+      this.finishStandardChunk(cx, cz, bakeChunkMaps(this.raster, cx, cz));
+      return;
     }
+    this.pendingBakes.set(key, { cx, cz, gen });
+    p.then((bufs) => {
+      if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
+      this.pendingBakes.delete(key);
+      if (!this.scene) return;
+      const maps = bufs
+        ? assembleChunkMaps(bufs.albedo, bufs.light)
+        : bakeChunkMaps(this.raster, cx, cz); // Worker 中途失败：主线程补烘
+      this.finishStandardChunk(cx, cz, maps);
+    });
   }
 
-  /** ★ 地图风格切换（右上角按钮调用）：重建全部已加载 chunk 的物理+视觉 */
-  setMapStyle(boss4D: boolean): void {
-    if (this.boss4D === boss4D) return;
-    this.boss4D = boss4D;
-    for (const key of [...this.chunkMeshes.keys()]) {
-      const cz = (key % 8192) - 4096;
-      const cx = Math.floor(key / 8192) - 4096;
-      this.buildChunkMesh(cx, cz);
-    }
-  }
-
-  get isBoss4D(): boolean {
-    return this.boss4D;
-  }
-
-  /** 标准风格 chunk：拉伸平面 + 双纹理烘焙外观（视觉与物理数据成对返回）
-   *  ★ 双纹理方案：albedo（材质色）× lightmap（直射+AO）在 shader 合成；
-   *    地形退出实时光照（不吃 GameLights），昼夜只经 updateTerrainLighting
-   *    调制两个 uniform；实体动态影子体系不受影响。 */
-  private buildStandardChunk(cx: number, cz: number): {
-    visual: THREE.Object3D;
-    trimeshVertices: Float32Array;
-    trimeshIndices: Uint32Array;
-  } {
+  /** ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半） */
+  private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps): void {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -591,10 +610,9 @@ export class WorldMode implements IGameMode {
     }
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-    const { albedo, lightmap } = bakeChunkMaps(this.raster, cx, cz);
-    const mat = new TerrainMaterial(albedo, lightmap);
+    const mat = new TerrainMaterial(maps.albedo, maps.lightmap);
     // lightmap 挂 userData 供 disposeChunkVisual 一并释放（.map 只登记 albedo）
-    (mat as unknown as { userData: { lightMap?: THREE.Texture } }).userData = { lightMap: lightmap };
+    (mat as unknown as { userData: { lightMap?: THREE.Texture } }).userData = { lightMap: maps.lightmap };
 
     const top = new THREE.Mesh(geo, mat);
     const group = new THREE.Group();
@@ -604,11 +622,37 @@ export class WorldMode implements IGameMode {
     if (walls) group.add(walls);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
-    return {
-      visual: group,
-      trimeshVertices: pos.array as Float32Array,
-      trimeshIndices: new Uint32Array(geo.index!.array),
-    };
+    this.replaceChunk(
+      chunkKeyOf(cx, cz), group, cx, cz,
+      pos.array as Float32Array,
+      new Uint32Array(geo.index!.array),
+    );
+  }
+
+  /** Boss4D 风格 chunk 同步构建（标准风格走 requestStandardBake 异步管线） */
+  private buildChunkMesh(cx: number, cz: number): void {
+    const b = buildBoss4DChunk(this.raster, cx, cz);
+    this.replaceChunk(chunkKeyOf(cx, cz), b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
+  }
+
+  /** ★ 地图风格切换（右上角按钮调用）：重建全部已加载 chunk 的物理+视觉 */
+  setMapStyle(boss4D: boolean): void {
+    if (this.boss4D === boss4D) return;
+    this.boss4D = boss4D;
+    // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
+    this.bakeGen++;
+    for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
+    this.pendingBakes.clear();
+    for (const key of [...this.chunkMeshes.keys()]) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      if (boss4D) this.buildChunkMesh(cx, cz);          // boss4D 同步重建
+      else this.requestStandardBake(cx, cz);            // 标准异步重建
+    }
+  }
+
+  get isBoss4D(): boolean {
+    return this.boss4D;
   }
 
   /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
@@ -657,11 +701,6 @@ export class WorldMode implements IGameMode {
       extra?.lightMap?.dispose();
       mm.dispose();
     });
-  }
-
-  /** 接缝重建：整体替换（视觉+物理随当前风格） */
-  private rebuildChunkMesh(cx: number, cz: number): void {
-    this.buildChunkMesh(cx, cz);
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {
