@@ -1,33 +1,34 @@
 // ============================================================
-// TileProps —— 实体地形装饰库（有实体但属于地图一部分）
+// MapEntityDecorBase —— 地图装饰实体基类（库：声明/规划/物理/阴影/渲染）
 // ============================================================
-// 定位：静态几何装饰（碎石/晶簇/枯木…），随 chunk 生灭，
-//       **不注册实体基类**（不进 EntityManager/空间索引/AI）——
-//       它们是"地图的一部分"，不是玩法实体。
-//
-// 架构（2026-08-26 定稿）：
-//   ┌─ 库：PropDef 注册表（内容由你逐渐填充）
-//   │    每个装饰物明确声明：所属组（多对多）/ 可用的地块key与角色 /
-//   │    密度 / 尺度 / 下沉 / 阴影方式 / 渲染方式
-//   ├─ 规划：planChunkProps —— 地形生成后按块数据+组面板+坡度确定性散布
-//   │    （纯函数，零 three；同 seed 同坐标必复现）
-//   ├─ 渲染：buildPropLayer —— 阶段三 InstancedMesh（程序化几何优先）
-//   └─ 阴影：贴地阴影盘（见下文契约）
-//
-// 阴影契约（阶段三实现）：
-//   PropDef.shadow:
-//   - 'disc'（默认）：每实例一个贴地暗色圆盘（径向衰减材质），
-//     高度贴面 + 按太阳方向轻微偏移——静态小物件不需要影子贴图，
-//     圆盘成本 = 一次 InstancedMesh draw call，全 chunk 统一
-//   - 'none'：无阴影（草屑/落叶等极薄装饰）
-//   大型物体（要真阴影的）→ 挂 StaticShadows（待做项）时一并纳入。
+// 架构（2026-08-27 基类化整理）：
+//   ┌─ 基类 MapEntityDecorBase：一张装饰实体的全部声明——
+//   │    组归属 / 放置规则 / 渲染方式 / 阴影方式 / 物理碰撞体 / 程序化几何
+//   │    ★ 物理：createColliders 基类统一生成 fixed cuboid
+//   │      （碰撞与阴影共用同一体积：radius/height 单一数据源）
+//   │    ★ 阴影：toShadowVolumes 基类统一算烘焙体积
+//   │      （装饰物高度参与预渲染结构——先放置后烘焙，见 4.5 节）
+//   ├─ 库（注册表）：registerMapDecor(实例) —— 加新装饰 = 注册一个实例
+//   ├─ 规划：planChunkProps（确定性散布，纯函数，零 three）
+//   ├─ 渲染：PropRenderer 注册表 + 内置 instanced（程序化几何）
+//   └─ 宿主：ChunkGroundHost 接口（模式层用 EntityManager 适配，本层不碰 entity）
 // ============================================================
 
-import { hash2 } from './TerrainNoise';
-import { tileById, type TileDef } from './Tiles';
+import * as THREE from 'three';
+import { hash2 } from '../TerrainNoise';
+import { tileById, type TileDef } from '../Tiles';
 
 /** 装饰物可生长的地块角色 */
 export type PropHostRole = 'ground' | 'platform';
+
+/** 物理碰撞体配置（fixed cuboid；存在 = 可碰撞，可挡人/挡弹） */
+export interface DecorCollider {
+  type: 'cuboid';
+  /** 底面半径（米，基础值；×scale 得实际） */
+  radius: number;
+  /** 高度（米，基础值；×scale 得实际） */
+  height: number;
+}
 
 export interface PropPlacement {
   /** 可生长的地块 key（空 = 不限，但受 hostRole 约束） */
@@ -44,7 +45,7 @@ export interface PropPlacement {
   keepClear?: { x: number; z: number; r: number }[];
 }
 
-export interface PropDef {
+export interface MapEntityDecorConfig {
   key: string;
   label: string;
   /** 所属风格组（多对多；空 = 任意组均可用） */
@@ -52,61 +53,128 @@ export interface PropDef {
   placement: PropPlacement;
   /** 渲染方式：v1 只实现 instanced（程序化几何）；billboard 预留 */
   render: 'instanced' | 'billboard';
-  /** 阴影方式（契约见文件头） */
+  /** 阴影方式：'disc'=烘焙软影印入光照图 / 'none'=无（阴影体积数据源 = physics） */
   shadow: 'disc' | 'none';
-  /**
-   * 物理碰撞体（写进表里的物理信息；存在 = 可碰撞）：
-   * fixed cuboid，可挡人/挡弹。半径/高度为基础值（×scale 得实际尺寸），
-   * 同时是预渲染阴影体积的数据源（装饰物高度参与烘焙结构）。
-   */
-  physics?: {
-    type: 'cuboid';
-    /** 底面半径（米，基础值） */
-    radius: number;
-    /** 高度（米，基础值） */
-    height: number;
-  };
-  /**
-   * 阶段三：程序化几何工厂返回共享 geometry/material 的构建参数。
-   * three 依赖只允许出现在渲染适配层（buildPropLayer），规划层纯函数。
-   */
+  /** 物理碰撞体（存在 = 可碰撞；碰撞与阴影共用同一体积） */
+  physics?: DecorCollider;
+  /** 程序化几何参数（three 依赖只允许出现在渲染适配层，规划层纯函数） */
   geometry?: { type: string; params: Record<string, number> };
+}
+
+/**
+ * ★ 地图装饰实体基类。
+ * 实例 = 声明（配置数据），基类 = 行为（物理/阴影/渲染的统一实现）。
+ */
+export class MapEntityDecorBase {
+  readonly key: string;
+  readonly label: string;
+  readonly groups: string[];
+  readonly placement: PropPlacement;
+  readonly render: 'instanced' | 'billboard';
+  readonly shadow: 'disc' | 'none';
+  readonly physics?: DecorCollider;
+  readonly geometry?: { type: string; params: Record<string, number> };
+
+  constructor(cfg: MapEntityDecorConfig) {
+    this.key = cfg.key;
+    this.label = cfg.label;
+    this.groups = cfg.groups;
+    this.placement = cfg.placement;
+    this.render = cfg.render;
+    this.shadow = cfg.shadow;
+    this.physics = cfg.physics;
+    this.geometry = cfg.geometry;
+  }
+
+  // ============================================================
+  // ★ 物理（基类统一实现）
+  // ============================================================
+
+  get isCollidable(): boolean {
+    return this.physics !== undefined;
+  }
+
+  /**
+   * ★ 生成碰撞体：fixed cuboid（半径/高度 × scale；y 为体积中心）。
+   * 宿主由模式层注入（ChunkGroundHost → EntityManager → rapier）。
+   */
+  createColliders(
+    host: ChunkGroundHost, plans: PlannedProp[], cx: number, cz: number,
+  ): number[] {
+    if (!this.physics) return [];
+    const ids: number[] = [];
+    for (const p of plans) {
+      const r = this.physics.radius * p.scale;
+      const h = this.physics.height * p.scale;
+      const id = host.createPropBody?.(cx * 60 + p.x, p.y + h / 2, cz * 60 + p.z, r, h);
+      if (id !== null && id !== undefined) ids.push(id);
+    }
+    return ids;
+  }
+
+  // ============================================================
+  // ★ 阴影（基类统一实现；烘焙域消费）
+  // ============================================================
+
+  /**
+   * 烘焙阴影体积（世界坐标；供 bakeCompute.stampPropShadows 投影软影）。
+   * 数据源 = physics（碰撞与阴影同一体积——声明一处，两处行为一致）。
+   */
+  toShadowVolumes(plans: PlannedProp[], cx: number, cz: number): PropShadowVolume[] {
+    const ph = this.physics;
+    if (!ph) return [];
+    return plans.map((p) => ({
+      x: p.x + cx * 60,
+      z: p.z + cz * 60,
+      y: p.y,
+      r: ph.radius * p.scale,
+      h: ph.height * p.scale,
+    }));
+  }
+}
+
+/** 烘焙阴影体积（球/柱近似；r 底半径 × h 高度） */
+export interface PropShadowVolume {
+  x: number; z: number; y: number;
+  r: number;
+  h: number;
 }
 
 // ============================================================
 // 库（注册表）
 // ============================================================
 
-const REGISTRY = new Map<string, PropDef>();
+const REGISTRY = new Map<string, MapEntityDecorBase>();
 
-export function registerProp(def: PropDef): void {
-  if (REGISTRY.has(def.key)) throw new Error(`[TileProps] 装饰物 key 已存在: ${def.key}`);
-  REGISTRY.set(def.key, def);
+/** ★ 扩展点：注册装饰实体（加内容 = 注册一个基类实例） */
+export function registerMapDecor(decor: MapEntityDecorBase): void {
+  if (REGISTRY.has(decor.key)) throw new Error(`[MapEntityDecor] 装饰实体 key 已存在: ${decor.key}`);
+  REGISTRY.set(decor.key, decor);
 }
 
-export function propByKey(key: string): PropDef | undefined {
+export function mapDecorByKey(key: string): MapEntityDecorBase | undefined {
   return REGISTRY.get(key);
 }
 
-export function allProps(): PropDef[] {
+export function allMapDecors(): MapEntityDecorBase[] {
   return [...REGISTRY.values()];
 }
 
-/** 按组取可用装饰物（组面板消费；空组声明 = 通用；foundation = 兜底通用） */
-export function propsForGroup(groupKey: string): PropDef[] {
+/** 按组取可用装饰实体（组面板消费；空组声明 = 通用；foundation = 兜底通用） */
+export function propsForGroup(groupKey: string): MapEntityDecorBase[] {
   return [...REGISTRY.values()].filter(
     (p) => p.groups.length === 0 || p.groups.includes(groupKey) || p.groups.includes(FOUNDATION_PROP_GROUP),
   );
 }
 
-/** 基石兜底组 key（基石组的装饰物 = 任何 chunk 都可出现） */
+/** 基石兜底组 key（基石组的装饰实体 = 任何 chunk 都可出现） */
 export const FOUNDATION_PROP_GROUP = 'foundation';
 
 // ============================================================
-// 占位内容（基石组；后续替换/扩充）
+// 占位内容（基石组；后续替换/扩充——注册实例即可）
 // ============================================================
 
-registerProp({
+registerMapDecor(new MapEntityDecorBase({
   key: 'foundation_pebble', label: '占位·碎石', groups: [FOUNDATION_PROP_GROUP],
   placement: {
     hostRole: ['ground', 'platform'], perCellProb: 0.09,
@@ -115,17 +183,17 @@ registerProp({
   render: 'instanced', shadow: 'disc',
   physics: { type: 'cuboid', radius: 0.7, height: 1.2 },
   geometry: { type: 'rock', params: { radius: 0.7, height: 1.2, noise: 0.35, color: 0x8a7f74 } },
-});
+}));
 
 // ============================================================
-// 规划（地形生成完成后、渲染前调用）
+// 规划（地形生成完成后、渲染前调用；纯函数零 three）
 // ============================================================
 
 /** 散布网格：20×20 cell × 3m */
 export const PROP_GRID = 20;
 export const PROP_CELL = 3;
 
-/** 单 chunk 装饰物上限（预算闸门） */
+/** 单 chunk 装饰实体上限（预算闸门） */
 export const PROP_BUDGET = 150;
 
 /** 坡度过滤：cell 四点高度极差超过此值不放（装饰物必须能站稳） */
@@ -179,10 +247,8 @@ function slopeOf(ctx: PropPlanContext, x: number, z: number): number {
 }
 
 /**
- * ★ 地形生成后散布装饰物：逐 cell 判定 → 组/地块/角色/坡度过滤 →
- * 加权抽装饰物 → 贴地 + 下沉。
- * 确定性：所有随机来自 hash2(cell, salt)，同 seed 同 chunk 必复现。
- * 阶段一已实现规划；渲染层（buildPropLayer）阶段三接入。
+ * ★ 地形生成后散布装饰实体：逐 cell 判定 → 组/地块/角色/坡度过滤 →
+ * 加权抽装饰物 → 贴地 + 下沉。确定性：同 seed 同 chunk 必复现。
  */
 export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   const out: PlannedProp[] = [];
@@ -190,7 +256,7 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   ctx.debug?.('候选装饰物表', defs.length, defs.length);
   if (defs.length === 0) return out;
 
-  // 加权池（主打加成同贴图系统；出现率只看 perCellProb 总和，主打只影响"抽谁"）
+  // 加权池（主打加成：出现率只看 perCellProb 总和，主打只影响"抽谁"）
   const FEATURED_BOOST = 3;
   const featuredKey = defs[Math.floor(hash2(ctx.cx, ctx.cz, ctx.seed + 9601) * defs.length)].key;
   let presenceProb = 0;
@@ -204,25 +270,21 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   for (const w of weights.values()) total += w;
   ctx.debug?.('presence概率', presenceProb, 1);
 
-  let nPresence = 0, nSlope = 0, nTile = 0, nKeepClear = 0, nPick = 0;
+  let nPresence = 0, nSlope = 0, nTile = 0, nKeepClear = 0;
   for (let cy = 0; cy < PROP_GRID && out.length < PROP_BUDGET; cy++) {
     for (let cx = 0; cx < PROP_GRID && out.length < PROP_BUDGET; cx++) {
-      // presence：按当前 cell 概率累计阈值判定（与贴图同手法）
       const r = hash2(cx * 7 + 1, cy * 7 + 2, ctx.seed + 9602);
       if (r >= presenceProb) continue;
       nPresence++;
 
-      // cell 中心世界坐标（带抖动，先算一次供坡度/贴地复用）
       const wx = ctx.cx * 60 + (cx + 0.5) * PROP_CELL;
       const wz = ctx.cz * 60 + (cy + 0.5) * PROP_CELL;
       const jx = wx + (hash2(cx, cy, ctx.seed + 9603) - 0.5) * PROP_CELL * 0.6;
       const jz = wz + (hash2(cx, cy, ctx.seed + 9604) - 0.5) * PROP_CELL * 0.6;
 
-      // 坡度过滤（过陡不放——装饰物必须站得稳）
       if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
       nSlope++;
 
-      // 地块/角色过滤（liquid/pit 地块不在 hostRole 中 → 天然跳过）
       const tile = tileAtCell(ctx, cx, cy);
       const host = defs.find((p) => {
         if (p.placement.tiles && p.placement.tiles.length > 0 && !p.placement.tiles.includes(tile.key)) return false;
@@ -232,7 +294,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
       if (!host) continue;
       nTile++;
 
-      // 出生保护区排除
       const safe = host.placement.keepClear ?? [];
       let blocked = false;
       for (const z of safe) {
@@ -242,7 +303,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
       if (blocked) continue;
       nKeepClear++;
 
-      // 加权抽装饰物
       let rr = hash2(cx, cy, ctx.seed + 9605) * total;
       let pick = defs[0];
       for (const p of defs) {
@@ -260,7 +320,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
         rotY: hash2(cx, cy, ctx.seed + 9607) * Math.PI * 2,
         variant: Math.floor(hash2(cx, cy, ctx.seed + 9608) * 4),
       });
-      nPick++;
     }
   }
   ctx.debug?.('presence通过', nPresence, PROP_GRID * PROP_GRID);
@@ -271,58 +330,45 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   return out;
 }
 
-// ============================================================
-// 烘焙侧阴影体积（装饰物高度影响预渲染结构）
-// ============================================================
-// 装饰物放置完成 → 触发预渲染 → 本函数把装饰物转成简单遮挡体积
-// （球/柱近似，按 geometry.params 半径/高度 × scale）交给烘焙：
-// Worker 在光照图里投影出它们的影子。规划输出是 chunk 本地坐标，
-// 此处补上 chunk 原点换算回世界坐标。
-
-export interface PropShadowVolume {
-  x: number; z: number; y: number;
-  /** 底半径（米） */
-  r: number;
-  /** 高度（米） */
-  h: number;
-}
-
-/** 把装饰物计划转成烘焙用的遮挡体积（无 physics 的跳过；r/h 来自表内 physics） */
+/**
+ * ★ 烘焙阴影体积汇总（预渲染前调用）：按装饰物分组 → 各实例基类统一换算。
+ */
 export function computePropVolumes(props: PlannedProp[], cx: number, cz: number): PropShadowVolume[] {
   const out: PropShadowVolume[] = [];
-  for (const p of props) {
-    const def = propByKey(p.propKey);
-    if (!def || !def.physics) continue;
-    out.push({
-      x: p.x + cx * 60,
-      z: p.z + cz * 60,
-      y: p.y,
-      r: def.physics.radius * p.scale,
-      h: def.physics.height * p.scale,
-    });
+  const byDef = groupPropsByKey(props);
+  for (const [key, list] of byDef) {
+    const def = mapDecorByKey(key);
+    if (!def) continue;
+    out.push(...def.toShadowVolumes(list, cx, cz));
   }
   return out;
 }
 
-// ============================================================
-// 渲染适配层（阶段三实现渲染器；本文件只立契约与入口）
-// ============================================================
-// 分层边界：规划（planChunkProps）零 three；本层可引 three。
-// ChunkManager 只消费 buildPropLayer；worker/生成器链不经过本层。
+/** 按装饰物 key 分组（规划/渲染/物理共用） */
+export function groupPropsByKey(props: PlannedProp[]): Map<string, PlannedProp[]> {
+  const byDef = new Map<string, PlannedProp[]>();
+  for (const p of props) {
+    const arr = byDef.get(p.propKey);
+    if (arr) arr.push(p);
+    else byDef.set(p.propKey, [p]);
+  }
+  return byDef;
+}
 
-import * as THREE from 'three';
+// ============================================================
+// 渲染适配层（基类实例经渲染器注册表出网格；three 只允许出现在本层）
+// ============================================================
 
-/** 渲染器接口：把一批实例变成可挂进 chunk group 的对象（InstancedMesh/billboard） */
 export interface PropRenderer {
   /** 构建实例组；无内容时返回 null（调用方跳过） */
-  build(def: PropDef, instances: PlannedProp[]): THREE.Object3D | null;
+  build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null;
   /** 共享资源回收（geometry/material 的 module 级缓存） */
   dispose?(): void;
 }
 
 const RENDERERS = new Map<string, PropRenderer>();
 
-/** ★ 扩展点：注册某渲染方式（'instanced' 等）的实现（阶段三） */
+/** ★ 扩展点：注册某渲染方式（'instanced' 等）的实现 */
 export function registerPropRenderer(type: string, renderer: PropRenderer): void {
   RENDERERS.set(type, renderer);
 }
@@ -330,19 +376,12 @@ export function registerPropRenderer(type: string, renderer: PropRenderer): void
 /**
  * ★ 渲染入口（ChunkManager.finishStandardChunk 调用）：
  * 按实例分组 → 交给对应渲染器 → 挂进 chunk group。
- * 阶段一：无渲染器注册 → 恒 null（内容与渲染层尚未接入）。
  */
 export function buildPropLayer(instances: PlannedProp[]): THREE.Object3D | null {
   if (instances.length === 0) return null;
-  const byDef = new Map<string, PlannedProp[]>();
-  for (const p of instances) {
-    const arr = byDef.get(p.propKey);
-    if (arr) arr.push(p);
-    else byDef.set(p.propKey, [p]);
-  }
   const group = new THREE.Group();
-  for (const [key, list] of byDef) {
-    const def = propByKey(key);
+  for (const [key, list] of groupPropsByKey(instances)) {
+    const def = mapDecorByKey(key);
     if (!def) continue;
     const renderer = RENDERERS.get(def.render);
     if (renderer) {
@@ -372,7 +411,6 @@ function rockVertexNoise(i: number): number {
 function getSharedRock(key: string, params: Record<string, number>): { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial } {
   let entry = SHARED.get(key);
   if (entry) return entry;
-  // 岩石：细分 icosahedron + 顶点噪声位移 + 顶部压扁
   const geo = new THREE.IcosahedronGeometry(1, 1);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
@@ -394,7 +432,7 @@ function getSharedRock(key: string, params: Record<string, number>): { geo: THRE
 
 /** 注册内置 instanced 渲染器（岩石几何；后续几何类型在此扩展） */
 registerPropRenderer('instanced', {
-  build(def: PropDef, instances: PlannedProp[]): THREE.Object3D | null {
+  build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
     const params = def.geometry?.params ?? {};
     const { geo, mat } = getSharedRock(`${def.key}|${def.geometry?.type ?? ''}`, params);
     const mesh = new THREE.InstancedMesh(geo, mat, instances.length);
@@ -417,3 +455,20 @@ registerPropRenderer('instanced', {
     return mesh;
   },
 });
+
+// ============================================================
+// 宿主接口（模式层适配：EntityManager → rapier；本层不碰 entity）
+// ============================================================
+
+/**
+ * 地面/装饰物刚体宿主接口。
+ * chunk 的碰撞体必须进实体/物理体系（碰撞分发按 userData=id 找实体），
+ * 由模式层注入两个回调即可。
+ */
+export interface ChunkGroundHost {
+  /** 为 chunk 创建 fixed trimesh 地面刚体，返回可销毁的 id */
+  createGround(cx: number, cz: number, vertices: Float32Array, indices: Uint32Array): number;
+  destroyGround(id: number): void;
+  /** 为装饰实体创建 fixed cuboid 碰撞体（世界坐标；返回可销毁的 id，null=不支持） */
+  createPropBody?(x: number, y: number, z: number, r: number, h: number): number | null;
+}

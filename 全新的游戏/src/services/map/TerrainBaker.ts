@@ -19,7 +19,7 @@
 // ============================================================
 
 import { buildSnapshotFromChunks, type ChunkDataLite } from './bakeCompute';
-import type { PlannedDecal } from './TileDecals';
+import type { PlannedDecal } from './decor/TileDecalBase';
 
 /** 烘焙结果（RGBA 像素；来自 Worker 的视图，零拷贝） */
 export interface BakeResult {

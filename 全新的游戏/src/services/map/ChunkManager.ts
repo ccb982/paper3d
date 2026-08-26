@@ -28,11 +28,11 @@ import { buildChunkSideWalls } from './ChunkWalls';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
-import { planChunkDecals, type PlannedDecal } from './TileDecals';
+import { planChunkDecals, type PlannedDecal } from './decor/TileDecalBase';
 import {
-  planChunkProps, buildPropLayer, computePropVolumes, propByKey,
-  type PlannedProp,
-} from './TileProps';
+  planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey, groupPropsByKey,
+  type ChunkGroundHost, type PlannedProp,
+} from './decor/MapEntityDecorBase';
 
 /** ?dbgdecor=1 时开启装饰管线详细调试（分阶段计数 + 位置可视标记） */
 const DBG_DECOR = typeof location !== 'undefined' && /[?&]dbgdecor=1/.test(location.search);
@@ -56,19 +56,6 @@ function packVolumes(v: { x: number; z: number; y: number; r: number; h: number 
     out[i * 5 + 4] = v[i].h;
   }
   return out;
-}
-
-/**
- * 地面刚体宿主接口。
- * chunk 的物理碰撞体必须进实体/物理体系（碰撞分发按 userData=id 找实体），
- * 本服务不直接持有 EntityManager，由模式层注入两个回调即可。
- */
-export interface ChunkGroundHost {
-  /** 为 chunk 创建 fixed trimesh 地面刚体，返回可销毁的 id */
-  createGround(cx: number, cz: number, vertices: Float32Array, indices: Uint32Array): number;
-  destroyGround(id: number): void;
-  /** 为装饰物创建 fixed cuboid 碰撞体（世界坐标；返回可销毁的 id，null=不支持） */
-  createPropBody?(x: number, y: number, z: number, r: number, h: number): number | null;
 }
 
 export class ChunkManager {
@@ -483,22 +470,18 @@ export class ChunkManager {
     // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----
     // （replaceChunk 会销毁 propBodies[key] 的"旧"碰撞体——若先创建，
     //   刚建的会被当旧体立刻销毁，物理实体永不存在。踩过的坑）
+    // 创建走基类统一实现：createColliders（半径/高度来自表内 physics）
     if (propLayer && this.host.createPropBody) {
       const ids: number[] = [];
-      for (const p of decor.props) {
-        const def = propByKey(p.propKey);
-        if (!def?.physics) continue;
-        const r = def.physics.radius * p.scale;
-        const h = def.physics.height * p.scale;
-        const bodyId = this.host.createPropBody(
-          cx * CHUNK_SIZE + p.x, p.y + h / 2, cz * CHUNK_SIZE + p.z, r, h,
-        );
-        if (bodyId !== null && bodyId !== undefined) ids.push(bodyId);
+      for (const [key, list] of groupPropsByKey(decor.props)) {
+        const def = mapDecorByKey(key);
+        if (!def?.isCollidable) continue;
+        ids.push(...def.createColliders(this.host, list, cx, cz));
       }
       if (ids.length > 0) {
         this.propBodies.set(chunkKeyOf(cx, cz), ids);
         if (DBG_DECOR) console.info(`[装饰][物理] chunk(${cx},${cz}) 创建碰撞体 ${ids.length} 个（fixed cuboid）`);
-      } else if (decor.props.some((p) => propByKey(p.propKey)?.physics)) {
+      } else if (decor.props.some((p) => mapDecorByKey(p.propKey)?.isCollidable)) {
         console.warn(`[装饰][物理] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
       }
     }

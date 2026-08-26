@@ -1,7 +1,7 @@
 // 烘焙侧装饰链路验证（贴图印章/阴影体积/快照携带）
 import { generateChunk } from '../src/services/map/ChunkGenerator';
-import { planChunkDecals, applyDecalStamps } from '../src/services/map/TileDecals';
-import { planChunkProps, computePropVolumes } from '../src/services/map/TileProps';
+import { planChunkDecals, applyDecalStamps } from '../src/services/map/decor/TileDecalBase';
+import { planChunkProps, computePropVolumes } from '../src/services/map/decor/MapEntityDecorBase';
 import { buildSnapshotFromChunks } from '../src/services/map/bakeCompute';
 
 const c = generateChunk(1, 0, 0);

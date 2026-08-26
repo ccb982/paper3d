@@ -2,8 +2,8 @@
 // 放置(planChunk*) → 快照(buildSnapshotFromChunks+extras) → worker 计算
 // (makeSnapshotSource+computeChunkMapsRGBA) → 检查贴图/阴影/装饰物数据
 import { RasterMap } from '../src/services/map/RasterMap';
-import { planChunkDecals } from '../src/services/map/TileDecals';
-import { planChunkProps, computePropVolumes } from '../src/services/map/TileProps';
+import { planChunkDecals } from '../src/services/map/decor/TileDecalBase';
+import { planChunkProps, computePropVolumes } from '../src/services/map/decor/MapEntityDecorBase';
 import { buildSnapshotFromChunks, makeSnapshotSource, computeChunkMapsRGBA } from '../src/services/map/bakeCompute';
 import { CHUNK_SIZE } from '../src/services/map/ChunkGenerator';
 

@@ -47,7 +47,7 @@ import {
   computeChunkMapsRGBA,
   type BakeQuery,
 } from './bakeCompute';
-import type { PlannedDecal } from './TileDecals';
+import type { PlannedDecal } from './decor/TileDecalBase';
 
 // ============================================================
 // 烘焙数据流契约（架构定稿）：

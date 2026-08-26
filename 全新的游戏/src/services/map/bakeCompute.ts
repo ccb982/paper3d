@@ -29,7 +29,7 @@ import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
 import { regionParamsAt, SEMANTIC_THEME_MIX } from './RegionTheme';
-import { applyDecalStamps, type PlannedDecal } from './TileDecals';
+import { applyDecalStamps, type PlannedDecal } from './decor/TileDecalBase';
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
