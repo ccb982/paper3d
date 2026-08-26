@@ -3,6 +3,8 @@ import { FluidGrid } from '../core/FluidGrid';
 import type { AdvectionMask } from '../core/FluidGrid';
 import { AdvectionSolver } from '../solvers/AdvectionSolver';
 import { LevelSetSolver } from '../solvers/LevelSetSolver';
+import { PressureSolver } from '../solvers/PressureSolver';
+import { VelocitySolver } from '../solvers/VelocitySolver';
 import { GPUOps } from '../core/GPUOps';
 import { FluidInjector } from '../core/FluidInjector';
 import { FluidOperations, type InjectionConfig } from './FluidOperations';
@@ -253,6 +255,10 @@ export class FluidEditor {
   private advectionSolver: AdvectionSolver;
   /** Level Set 求解器（φ 平流/重初始化/表面张力，热插拔） */
   private levelSetSolver: LevelSetSolver;
+  /** ★ 压力求解（红黑 SOR + 梯度修正；自由表面边界） */
+  private pressureSolver: PressureSolver;
+  /** ★ 速度场效果 pass（粘度扩散 / 边界处理） */
+  private velocitySolver: VelocitySolver;
   /** ★ 爆炸限幅覆盖（velCap）：抬升值 / 保持截止时刻 / 回落完成时刻（this.time 秒） */
   private velCapOverride: { value: number; until: number; recoverUntil: number } | null = null;
   /** Level Set φ 场（1 通道 half-float，懒加载，enableLevelSet=true 时创建） */
@@ -285,6 +291,9 @@ export class FluidEditor {
 
     this.advectionSolver = new AdvectionSolver(renderer);
     this.levelSetSolver = new LevelSetSolver(renderer, this.gpu);
+    // ★ 2026-08 架构整理：物理 pass 迁出到 solvers/（行为零变更，shader/key 逐字保留）
+    this.pressureSolver = new PressureSolver(renderer, this.gpu);
+    this.velocitySolver = new VelocitySolver(renderer, this.gpu);
 
     this.rebuildGrids();
 
@@ -522,22 +531,23 @@ export class FluidEditor {
     // ★ 同步障碍物纹理到 operations（注入屏蔽）
     this.operations.setObstacleTexture(this.getObstacleTexture());
 
-    // ★ 0. 处理 UI 注入队列（优先执行，确保本帧生效）
+    // ── PHASE 1：注入相 ──────────────────────────────
+    // 1a. UI 注入队列（优先执行，本帧生效）
     // 委托给 operations 处理一次性注入
     // ★ MCSDA：scalar 模式下传入 densityGrid，使带 density 字段的注入能写入浓度场
     const _gridDensity = this.config.advectionMode === 'scalar' ? this.densityGrid : null;
     this.operations.processQueue(this.colorGrid, this.velocityGrid, dt, _gridDensity);
 
-    // 0. 重力（通过操作模块 → 底层注入器，二维矢量全局力）
+    // 1b. 重力
     const g = this.config.gravity;
     if (g.x !== 0 || g.y !== 0) {
       this.operations.applyGravity(this.velocityGrid, dt, g);
     }
 
-    // 1. 持续注入源（通过 operations 的持久化源列表，不依赖 React state）
+    // 1c. 持续注入源
     this.operations.processContinuousSources(this.colorGrid, this.velocityGrid, dt, _gridDensity, this.time);
 
-    // 2. 平流（非注入 Pass，直接使用 this.gpu）
+    // ── PHASE 2：平流相 ──────────────────────────────
     if (this.config.enableAdvection) {
       this.advectVelocity(dt);
       // ★ MCSDA 模式分支：
@@ -554,7 +564,9 @@ export class FluidEditor {
       }
     }
 
-    // 2.45 ★ Level Set 表面张力（CSF）——必须在压力投影【之前】施加（废弃模拟器的验证顺序）：
+    // ── PHASE 3：力相（★ 必须在压力投影之前）──────────
+    // 3a. Level Set 表面张力（CSF）：张力散度要靠随后的投影转化为
+    //     整体向心流动；放在投影之后则 σ 再大也只见颜色抹开。
     //   张力在界面窄带产生散度速度 → 随后的压力投影把它转化为整体不可压缩向心流动，
     //   水团才能向内收缩成团。放在投影之后（旧实现）则张力速度不参与投影，
     //   直接被平流消费 → 只会把颜色抹开，σ 拉到多大都看不见。
@@ -569,41 +581,56 @@ export class FluidEditor {
       }
     }
 
-    // 2.46 ★ 粘度（速度场扩散 ν∇²v）——力相，压力投影之前：
+    // 3b. 粘度（速度场扩散）：
     //   抹平剪切层/射流（小尺度结构衰减最快），保留大尺度运动 → 水团内聚不散花
-    this.applyViscosity(dt);
+    this.velocitySolver.applyViscosity(
+      this.velocityGrid, this.getObstacleTexture(), dt, this.config.viscosity ?? 0,
+    );
 
-    // 2.5 边界处理 —— 移到压力投影之前，避免与压力梯度修正拮抗
-    this.applyBoundary();
+    // 3c. 边界处理（投影前，避免与压力梯度修正拮抗）
+    this.velocitySolver.applyBoundary(this.velocityGrid);
 
-    // 2.6 ★ 爆炸散度源注入（压力投影之前：∇²p = ∇·u + f，散度源成为压力源 →
-    //   压力梯度推动流体向外 → 真正的爆炸推力/水体撕裂）
+    // ── PHASE 4：爆炸散度源 ──────────────────────────
     this.operations.processExplosions(this.colorGrid, this.velocityGrid, dt, _gridDensity, this.divergenceGrid);
 
-    // 3. 压力投影（红-黑 SOR；消费散度源）
+    // ── PHASE 5：压力投影（自由表面边界）──────────────
     if (this.config.enablePressure) {
       // ★ 自由表面边界：Level Set 启用时，压力只在液体内部（φ<0）求解，
       //   空气区压力恒为 0 —— 液体成为有表面的不可压缩整体（废弃模拟器的真实感核心）：
       //   注入动量推动的是整块水而非染色剂，表面像一层膜约束着体积。
       const fsPhi = (this.config.enableLevelSet && this._phiGrid)
         ? this._phiGrid.read : null;
-      this.solvePressure(this.config.pressureIterations, this.config.pressureOmega, fsPhi);
-      this.applyPressureGradient();
+      if (!this.config.enableWarmStart) {
+        this.clearGrid(this.pressureGrid);
+      }
+      this.pressureSolver.solve(
+        this.pressureGrid, this.velocityGrid, this.divergenceGrid,
+        this.getObstacleTexture(), this.config.resolution,
+        {
+          iterations: this.config.pressureIterations,
+          omega: this.config.pressureOmega,
+          phiTex: fsPhi,
+          boundaryMode: this.config.pressureBoundaryMode,
+        },
+      );
+      this.pressureSolver.applyGradient(
+        this.pressureGrid, this.velocityGrid,
+        this.getObstacleTexture(), this.config.resolution,
+      );
     }
 
-    // 3.1 ★ 清空散度源场（一次性消费；不参与平流/衰减）
+    // 5b. 清空散度源场（一次性消费）
     this.clearGrid(this.divergenceGrid);
 
-    // ★ 3.5 全局速度缩放（无方向阻尼/加速，压力投影之后）
+    // ── PHASE 6：速度后处理 ─────────────────────────
+    // 6a. 全局速度缩放（无方向阻尼/加速）
     // velocityScale = 1 表示无影响（默认）；< 1 阻尼减速，> 1 加速
     const velScale = this.config.velocityScale ?? 1;
     if (velScale !== 1) {
       this.operations.scaleVelocity(this.velocityGrid, velScale);
     }
 
-    // ★ 3.6 全局速度限幅（缩放之后，防止加速导致爆炸）
-    // 防止持续注入、误差累积导致的速度爆炸
-    // maxVelocity = 0 或 Infinity 表示禁用限幅
+    // 6b. 全局速度限幅（0/Infinity=禁用）
     // ★ 爆炸限幅覆盖：velCap 抬升 → 保持 → smoothstep 平滑回落（避免瞬时回正
     //   把飞散中的水团"撞墙式"钳停，速度骤降在视觉上等于一次急刹）
     let maxVel = this.config.maxVelocity ?? 5000;
@@ -625,7 +652,7 @@ export class FluidEditor {
       this.operations.clampVelocity(this.velocityGrid, maxVel);
     }
 
-    // 3.7 ★ 外向速度抑制（确定性收拢，与张力符号/φ噪声无关）：
+    // 6c. ★ 外向速度抑制（确定性收拢，与张力符号/φ噪声无关）：
     //   界面窄带内削掉指向空气侧的法向速度 → 水团只可能收、不可能散。
     //   放在限幅后：本帧用于平流的最终速度场已无外扩分量。
     if (this.config.enableLevelSet && this._phiGrid) {
@@ -638,7 +665,7 @@ export class FluidEditor {
       }
     }
 
-    // 4. ★ Level Set 模块（热插拔，仅启用且 phiGrid 已初始化时执行）
+    // ── PHASE 7：Level Set 形状管理 ──────────────────
     //    两种模式：
     //      A. 约束模式（constrainLiquid=true）→ 每帧「φ 重建 + reinit + 约束」：
     //         φ 始终与当前液体同步，液体被持续收拢成紧凑圆润团块（稳定水感）
@@ -829,278 +856,9 @@ export class FluidEditor {
     this.densityGrid.swap();
   }
 
-  /** 边界处理：零梯度边界，让速度场能自由流出（配合颜色边界 zero 模式实现水流消失） */
-  private applyBoundary(): void {
-    const { w, h } = this.config.resolution;
-
-    const mat = this.gpu.getMaterial('boundary', {
-      velTex: { value: this.velocityGrid.read },
-      resolution: { value: new THREE.Vector2(w, h) },
-    }, /* glsl */ `
-      uniform sampler2D velTex;
-      uniform vec2 resolution;
-      varying vec2 vUv;
-      void main() {
-        vec2 vel = texture2D(velTex, vUv).rg;
-        // ★ 分轴 eps：X/Y 分辨率不同时各用各的像素尺寸，避免非正方形网格边界判断偏移
-        float epsX = 1.0 / resolution.x;
-        float epsY = 1.0 / resolution.y;
-        if (vUv.x < epsX) {
-          vel = texture2D(velTex, vec2(vUv.x + epsX, vUv.y)).rg;
-        } else if (vUv.x > 1.0 - epsX) {
-          vel = texture2D(velTex, vec2(vUv.x - epsX, vUv.y)).rg;
-        }
-        if (vUv.y < epsY) {
-          vel = texture2D(velTex, vec2(vUv.x, vUv.y + epsY)).rg;
-        } else if (vUv.y > 1.0 - epsY) {
-          vel = texture2D(velTex, vec2(vUv.x, vUv.y - epsY)).rg;
-        }
-        gl_FragColor = vec4(vel, 0.0, 1.0);
-      }
-    `);
-
-    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
-    this.velocityGrid.swap();
-  }
-
-  /**
-   * ★ 粘度：速度场显式扩散 ∂v/∂t = ν∇²v（h=1 cell，离散 Laplacian = 四邻和−4·自身）。
-   *
-   * 稳定性（von Neumann）：显式扩散要求 ν·dt/h² ≤ 0.25 → 超出时子步分摊，
-   * 子步数上限 MAX_STEPS=64（ν≈770@60fps 内精确，超过后等效粘度饱和不失稳）。
-   *
-   * 效果：剪切层/射流等小尺度结构按 e^{−νk²t} 最快衰减，大尺度运动保留 → 内聚感。
-   */
-  private applyViscosity(dt: number): void {
-    const nu = this.config.viscosity ?? 0;
-    if (nu <= 0 || dt <= 0) return;
-
-    const w = this.velocityGrid.resolution.w;
-    const h = this.velocityGrid.resolution.h;
-    const total = nu * dt;
-    const MAX_DIFF = 0.2;   // 单步扩散稳定上限（<0.25）
-    const MAX_STEPS = 64;   // 子步上限（性能护栏；放开到 64 支持大粘度自由调控）
-    const steps = Math.min(MAX_STEPS, Math.max(1, Math.ceil(total / MAX_DIFF)));
-    const perStep = Math.min(MAX_DIFF, total / steps);
-
-    const mat = this.gpu.getMaterial('editor_viscosity_v1', {
-      uVelocity: { value: this.velocityGrid.read },
-      uObstacle: { value: this.getObstacleTexture() },
-      uInvRes: { value: new THREE.Vector2(1 / w, 1 / h) },
-      uDtNu: { value: perStep },
-    }, /* glsl */ `
-      uniform sampler2D uVelocity;
-      uniform sampler2D uObstacle;
-      uniform vec2 uInvRes;
-      uniform float uDtNu;
-      varying vec2 vUv;
-      void main() {
-        // 墙内速度保持（与表面张力 pass 一致）
-        if (texture2D(uObstacle, vUv).r > 0.5) {
-          gl_FragColor = texture2D(uVelocity, vUv);
-          return;
-        }
-        vec2 ts = uInvRes;
-        vec2 vC = texture2D(uVelocity, vUv).rg;
-        vec2 vL = texture2D(uVelocity, vUv - vec2(ts.x, 0.0)).rg;
-        vec2 vR = texture2D(uVelocity, vUv + vec2(ts.x, 0.0)).rg;
-        vec2 vB = texture2D(uVelocity, vUv - vec2(0.0, ts.y)).rg;
-        vec2 vT = texture2D(uVelocity, vUv + vec2(0.0, ts.y)).rg;
-        vec2 vel = vC + uDtNu * (vL + vR + vT + vB - 4.0 * vC);
-        gl_FragColor = vec4(vel, 0.0, 1.0);
-      }
-    `);
-
-    for (let i = 0; i < steps; i++) {
-      mat.uniforms.uVelocity.value = this.velocityGrid.read;  // swap 后刷新读取缓冲
-      this.gpu.render(this.renderer, this.velocityGrid.write, mat);
-      this.velocityGrid.swap();
-    }
-  }
-
-  // ==================== 压力投影（红-黑 SOR） ====================
-
-  /**
-   * 红-黑 SOR 压力迭代。
-   * 使用 checkerboard 模式交替更新红色和黑色像素，
-   * 每次迭代包含红+黑两个 Pass，压力场为单通道半精度浮点纹理。
-   *
-   * @param iterations 迭代轮数（每轮含红+黑两个 Pass）
-   * @param omega 过松弛因子（推荐 1.5~1.8）
-   * @param phiTex 自由表面 φ 场（null=全域求解）：提供时压力只在 φ<0（液体）内求解，
-   *               空气区压力恒 0 —— 自由表面边界条件（真实水感核心）
-   */
-  private solvePressure(iterations: number, omega: number, phiTex: THREE.Texture | null = null): void {
-    const { w, h } = this.config.resolution;
-    if (w === 0 || h === 0) return;
-
-    // 热启动：仅在第一次（无历史值）或禁用热启动时清零
-    // 启用热启动时，用上一帧的压力值作为初始猜测，收敛速度大幅提升
-    if (!this.config.enableWarmStart) {
-      this.clearGrid(this.pressureGrid);
-    }
-
-    for (let iter = 0; iter < iterations; iter++) {
-      // Pass 1: 更新红色像素 ((x+y) 为奇数 = 红色)
-      this.runSORPass('red', omega, phiTex);
-      // Pass 2: 更新黑色像素 ((x+y) 为偶数 = 黑色)
-      this.runSORPass('black', omega, phiTex);
-    }
-  }
-
-  /**
-   * 执行单次红或黑 Pass。
-   * 着色器根据 uColor uniform 控制本轮更新红色还是黑色像素：
-   *   isRed = (pos.x + pos.y) & 1  → 1=红色，0=黑色
-   *   当 uColor=0 时，只更新 isRed==1（红色）的像素
-   *   当 uColor=1 时，只更新 isRed==0（黑色）的像素
-   * 不更新的像素直接直传旧值。
-   */
-  private runSORPass(color: 'red' | 'black', omega: number, phiTex: THREE.Texture | null): void {
-    // ★ 自由表面模式用独立材质 key（shader 不同，避免缓存串扰）
-    const key = phiTex ? `sor_${color}_fs` : `sor_${color}_obstacle`;
-    const mat = this.gpu.getMaterial(key, {
-      uPressure: { value: this.pressureGrid.read },
-      uVelocity: { value: this.velocityGrid.read },
-      uDivSource: { value: this.divergenceGrid.read },
-      uObstacle: { value: this.getObstacleTexture() },
-      uPhi: { value: phiTex ?? this.getObstacleTexture() },
-      uPhiOn: { value: phiTex ? 1 : 0 },
-      uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
-      uOmega: { value: omega },
-      uColor: { value: color === 'red' ? 0 : 1 },
-      uBoundaryMode: { value: this.config.pressureBoundaryMode === 'dirichlet' ? 1 : 0 },
-    }, /* glsl */ `
-      uniform sampler2D uPressure;
-      uniform sampler2D uVelocity;
-      uniform sampler2D uDivSource;
-      uniform sampler2D uObstacle;
-      uniform sampler2D uPhi;
-      uniform int uPhiOn;         // 1=自由表面边界（φ>0 的空气区压力恒 0）
-      uniform vec2 uInvResolution;
-      uniform float uOmega;
-      uniform int uColor;
-      uniform int uBoundaryMode;  // 0=Neumann(零梯度), 1=Dirichlet(固定p=0)
-      varying vec2 vUv;
-
-      void main() {
-        // ★ 墙体像素：压力强制为 0（墙体是不可压缩的硬边界）
-        if (texture2D(uObstacle, vUv).r > 0.5) {
-          gl_FragColor = vec4(0.0);
-          return;
-        }
-
-        // ★ 自由表面：空气区（φ>0）压力强制为 0 —— 液体是有表面的不可压缩整体
-        if (uPhiOn == 1 && texture2D(uPhi, vUv).r > 0.0) {
-          gl_FragColor = vec4(0.0);
-          return;
-        }
-
-        // Dirichlet 边界：边界像素压力固定为 0
-        if (uBoundaryMode == 1) {
-          if (vUv.x <= uInvResolution.x || vUv.x >= 1.0 - uInvResolution.x
-           || vUv.y <= uInvResolution.y || vUv.y >= 1.0 - uInvResolution.y) {
-            gl_FragColor = vec4(0.0);
-            return;
-          }
-        }
-
-        ivec2 pos = ivec2(vUv / uInvResolution);
-        int isRed = (pos.x + pos.y) & 1;   // 1=红色, 0=黑色
-        int target = 1 - uColor;            // uColor=0→target=1(红色), uColor=1→target=0(黑色)
-        if (isRed != target) {
-          // 不是本轮目标像素，直传旧值
-          gl_FragColor = texture2D(uPressure, vUv);
-          return;
-        }
-
-        vec2 ts = uInvResolution;
-
-        // 采样四邻域压力（墙体邻居的压力视为 0）
-        float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
-        float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
-        float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
-        float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
-
-        // ★ 邻居是墙体/空气（自由表面模式）时，该方向压力视为 0（硬边界）
-        if (texture2D(uObstacle, vUv + vec2(-ts.x, 0.0)).r > 0.5) pL = 0.0;
-        if (texture2D(uObstacle, vUv + vec2( ts.x, 0.0)).r > 0.5) pR = 0.0;
-        if (texture2D(uObstacle, vUv + vec2(0.0,  ts.y)).r > 0.5) pT = 0.0;
-        if (texture2D(uObstacle, vUv + vec2(0.0, -ts.y)).r > 0.5) pB = 0.0;
-        if (uPhiOn == 1) {
-          if (texture2D(uPhi, vUv + vec2(-ts.x, 0.0)).r > 0.0) pL = 0.0;
-          if (texture2D(uPhi, vUv + vec2( ts.x, 0.0)).r > 0.0) pR = 0.0;
-          if (texture2D(uPhi, vUv + vec2(0.0,  ts.y)).r > 0.0) pT = 0.0;
-          if (texture2D(uPhi, vUv + vec2(0.0, -ts.y)).r > 0.0) pB = 0.0;
-        }
-
-        // 计算散度（中心差分）
-        vec2 vR = texture2D(uVelocity, vUv + vec2( ts.x, 0.0)).rg;
-        vec2 vL = texture2D(uVelocity, vUv + vec2(-ts.x, 0.0)).rg;
-        vec2 vT = texture2D(uVelocity, vUv + vec2(0.0,  ts.y)).rg;
-        vec2 vB = texture2D(uVelocity, vUv + vec2(0.0, -ts.y)).rg;
-
-        float div = (vR.x - vL.x) * 0.5 * uInvResolution.x
-                  + (vT.y - vB.y) * 0.5 * uInvResolution.y;
-        // ★ 散度源项：∇²p = ∇·u + f（爆炸/源汇；负散度源 → 高压 → 向外推）
-        div += texture2D(uDivSource, vUv).r;
-
-        float pOld = texture2D(uPressure, vUv).r;
-        float pNew = (pL + pR + pT + pB - div) / 4.0;
-        pNew = (1.0 - uOmega) * pOld + uOmega * pNew;
-
-        gl_FragColor = vec4(pNew, 0.0, 0.0, 1.0);
-      }
-    `);
-
-    this.gpu.render(this.renderer, this.pressureGrid.write, mat);
-    this.pressureGrid.swap();
-  }
-
-  /**
-   * 压力梯度修正：从速度场中减去压力梯度，使速度场散度为零。
-   *   新速度 = 旧速度 - grad(p)
-   *     grad(p) = [ (pR-pL)/2·dx,  (pT-pB)/2·dy ] · resolution
-   */
-  private applyPressureGradient(): void {
-    const mat = this.gpu.getMaterial('pressureGradient_obstacle', {
-      uPressure: { value: this.pressureGrid.read },
-      uVelocity: { value: this.velocityGrid.read },
-      uObstacle: { value: this.getObstacleTexture() },
-      uInvResolution: { value: new THREE.Vector2(1.0 / this.config.resolution.w, 1.0 / this.config.resolution.h) },
-    }, /* glsl */ `
-      uniform sampler2D uPressure;
-      uniform sampler2D uVelocity;
-      uniform sampler2D uObstacle;
-      uniform vec2 uInvResolution;
-      varying vec2 vUv;
-
-      void main() {
-        // ★ 墙体像素：速度强制归零
-        if (texture2D(uObstacle, vUv).r > 0.5) {
-          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-          return;
-        }
-
-        vec2 ts = uInvResolution;
-
-        float pL = texture2D(uPressure, vUv + vec2(-ts.x, 0.0)).r;
-        float pR = texture2D(uPressure, vUv + vec2( ts.x, 0.0)).r;
-        float pT = texture2D(uPressure, vUv + vec2(0.0,  ts.y)).r;
-        float pB = texture2D(uPressure, vUv + vec2(0.0, -ts.y)).r;
-
-        // gradP = [ (pR-pL)/2, (pT-pB)/2 ] * resolution（标量压力梯度 → 像素/秒）
-        vec2 gradP = vec2(pR - pL, pT - pB) * 0.5 / uInvResolution;
-        vec2 vel = texture2D(uVelocity, vUv).rg;
-        vel -= gradP;
-
-        gl_FragColor = vec4(vel, 0.0, 1.0);
-      }
-    `);
-
-    this.gpu.render(this.renderer, this.velocityGrid.write, mat);
-    this.velocityGrid.swap();
-  }
+  // ★ 边界 / 粘度 / 压力求解（SOR+梯度）已迁出 →
+  //   solvers/VelocitySolver.ts、solvers/PressureSolver.ts
+  //   （2026-08 架构整理：shader 与材质 key 逐字保留，行为零变更）
 
   /** 将 FluidGrid 零化（直接用 clear 代替全屏 Pass，零开销）。
    *  ★ 必须强制黑/透明清屏色：renderer.clear() 写入的是当前全局 clearColor，
