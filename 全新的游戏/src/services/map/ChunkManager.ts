@@ -29,7 +29,13 @@ import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
 import { planChunkDecals, type PlannedDecal } from './TileDecals';
-import { planChunkProps, buildPropLayer, computePropVolumes, type PlannedProp } from './TileProps';
+import {
+  planChunkProps, buildPropLayer, computePropVolumes, propByKey,
+  type PlannedProp,
+} from './TileProps';
+
+/** ?dbgdecor=1 时开启装饰管线详细调试（分阶段计数 + 位置可视标记） */
+const DBG_DECOR = typeof location !== 'undefined' && /[?&]dbgdecor=1/.test(location.search);
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -61,6 +67,8 @@ export interface ChunkGroundHost {
   /** 为 chunk 创建 fixed trimesh 地面刚体，返回可销毁的 id */
   createGround(cx: number, cz: number, vertices: Float32Array, indices: Uint32Array): number;
   destroyGround(id: number): void;
+  /** 为装饰物创建 fixed cuboid 碰撞体（世界坐标；返回可销毁的 id，null=不支持） */
+  createPropBody?(x: number, y: number, z: number, r: number, h: number): number | null;
 }
 
 export class ChunkManager {
@@ -74,6 +82,8 @@ export class ChunkManager {
   private voidKeys = new Set<number>();
   /** 地面刚体 id（key → entity.id） */
   private bodies = new Map<number, number>();
+  /** 装饰物碰撞体 id（key → entity.id[]；随 chunk 生灭） */
+  private propBodies = new Map<number, number[]>();
   /** ★ 地图风格：false=标准外观 / true=四维空间（最终 Boss 战地图，Boss4DArena） */
   private boss4D = false;
 
@@ -168,6 +178,10 @@ export class ChunkManager {
       this.host.destroyGround(id);
     }
     this.bodies.clear();
+    for (const ids of this.propBodies.values()) {
+      for (const id of ids) this.host.destroyGround(id);
+    }
+    this.propBodies.clear();
     for (const v of this.meshes.values()) {
       this.scene.remove(v);
       this.disposeVisual(v);
@@ -294,12 +308,15 @@ export class ChunkManager {
     const props = planChunkProps({
       ...base,
       surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
+      debug: DBG_DECOR
+        ? (stage, pass, total) => console.info(`[装饰][漏斗] chunk(${cx},${cz}) ${stage}: ${pass}/${total}`)
+        : undefined,
     });
     const vols = computePropVolumes(props, cx, cz);
     console.info(
       `[ChunkManager][装饰] chunk(${cx},${cz}) 组=${chunkData.groupKey} ` +
       `贴图=${decals.length} 装饰物=${props.length} 阴影体积=${vols.length} ` +
-      `种子=${this.raster.worldSeed}`,
+      `种子=${this.raster.worldSeed}${DBG_DECOR ? ' [调试模式]' : ''}`,
     );
     return { decals, props, propVolumes: packVolumes(vols) };
   }
@@ -320,6 +337,7 @@ export class ChunkManager {
     // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
     const cached = getCachedChunkMaps(seed, cx, cz);
     if (cached) {
+      if (DBG_DECOR) console.info(`[装饰][路径] chunk(${cx},${cz}) 缓存命中（装饰随纹理复用）`);
       this.finishStandardChunk(cx, cz, cached, decor);
       return;
     }
@@ -338,6 +356,7 @@ export class ChunkManager {
     );
     if (!p) {
       // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存 + 立即建
+      if (DBG_DECOR) console.warn(`[装饰][路径] chunk(${cx},${cz}) Worker 不可用 → 同步回退`);
       for (let dz = -1; dz <= 1; dz++)
         for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
       const maps = bakeChunkMaps(this.raster, cx, cz, {
@@ -347,6 +366,7 @@ export class ChunkManager {
       this.finishStandardChunk(cx, cz, maps, decor);
       return;
     }
+    if (DBG_DECOR) console.info(`[装饰][路径] chunk(${cx},${cz}) Worker 在途（propVolumes=${decor.propVolumes.length / 5}）`);
     this.pendingBakes.set(key, { cx, cz, gen, t: performance.now(), decor });
     p.then((bufs) => {
       if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
@@ -424,18 +444,34 @@ export class ChunkManager {
     // ---- ★ 装饰层装配（计划在预渲染前已放置，此处直接消费同一份） ----
     // 贴图已在烘焙时印进 albedo 纹理（无需运行时步骤）；
     // 装饰物 → buildPropLayer → 挂进 chunk group
-    let propMeshes = 0;
+    let propLayer: THREE.Object3D | null = null;
     if (decor.props.length > 0) {
-      const propLayer = buildPropLayer(decor.props);
+      propLayer = buildPropLayer(decor.props);
       if (propLayer) {
+        // ★ 对齐 chunk 角：PlannedProp.x/z 是 chunk 角落坐标(0~60)，而 chunk
+        //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
+        //   影子/碰撞体与可见网格三者错位（踩过的坑）
+        propLayer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
         group.add(propLayer);
-        propMeshes = propLayer.children.length;
       } else {
         console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
       }
-    }
-    if (propMeshes > 0 || decor.decals.length > 0) {
-      console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) 装配完成：贴图 ${decor.decals.length}（已印入albedo）/ 装饰物网格 ${propMeshes} 组`);
+      // ★ 调试可视标记：?dbgdecor=1 时把装饰物位置用高亮线框标出来
+      if (DBG_DECOR && propLayer) {
+        const markerGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+        const markerMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
+        const markers = new THREE.InstancedMesh(markerGeo, markerMat, decor.props.length);
+        const mm = new THREE.Matrix4();
+        const mv = new THREE.Vector3();
+        for (let i = 0; i < decor.props.length; i++) {
+          mv.set(decor.props[i].x, decor.props[i].y + 0.5, decor.props[i].z);
+          mm.setPosition(mv);
+          markers.setMatrixAt(i, mm);
+        }
+        markers.instanceMatrix.needsUpdate = true;
+        propLayer.add(markers);
+        console.info(`[装饰][标记] chunk(${cx},${cz}) 位置标记 ${decor.props.length} 个（品红线框）`);
+      }
     }
 
     this.replaceChunk(
@@ -443,6 +479,32 @@ export class ChunkManager {
       pos.array as Float32Array,
       new Uint32Array(geo.index!.array),
     );
+
+    // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----
+    // （replaceChunk 会销毁 propBodies[key] 的"旧"碰撞体——若先创建，
+    //   刚建的会被当旧体立刻销毁，物理实体永不存在。踩过的坑）
+    if (propLayer && this.host.createPropBody) {
+      const ids: number[] = [];
+      for (const p of decor.props) {
+        const def = propByKey(p.propKey);
+        if (!def?.physics) continue;
+        const r = def.physics.radius * p.scale;
+        const h = def.physics.height * p.scale;
+        const bodyId = this.host.createPropBody(
+          cx * CHUNK_SIZE + p.x, p.y + h / 2, cz * CHUNK_SIZE + p.z, r, h,
+        );
+        if (bodyId !== null && bodyId !== undefined) ids.push(bodyId);
+      }
+      if (ids.length > 0) {
+        this.propBodies.set(chunkKeyOf(cx, cz), ids);
+        if (DBG_DECOR) console.info(`[装饰][物理] chunk(${cx},${cz}) 创建碰撞体 ${ids.length} 个（fixed cuboid）`);
+      } else if (decor.props.some((p) => propByKey(p.propKey)?.physics)) {
+        console.warn(`[装饰][物理] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
+      }
+    }
+    if (propLayer || decor.decals.length > 0) {
+      console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) 装配完成：贴图 ${decor.decals.length}（已印入albedo）/ 装饰物网格 ${propLayer ? propLayer.children.length : 0} 组`);
+    }
   }
 
   /**
@@ -481,6 +543,12 @@ export class ChunkManager {
     if (oldBody !== undefined) {
       this.host.destroyGround(oldBody);
       this.bodies.delete(key);
+    }
+    // 装饰物碰撞体随 chunk 视觉替换一并销毁
+    const oldProps = this.propBodies.get(key);
+    if (oldProps) {
+      for (const id of oldProps) this.host.destroyGround(id);
+      this.propBodies.delete(key);
     }
     if (visual) {
       this.scene.add(visual);

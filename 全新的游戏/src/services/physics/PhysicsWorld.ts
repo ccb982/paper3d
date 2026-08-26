@@ -261,6 +261,37 @@ export class PhysicsWorld {
     return hits;
   }
 
+  /**
+   * ★ 静态障碍查询（运动学角色手动推挤用，架构 4.9）：
+   * 只返回 cuboid 障碍（装饰物等 fixed 碰撞体）的 id/位置/半径/半高——
+   *   trimesh（halfExtents=0）与 capsule/ball（角色/物品，走角色间推挤）自动排除。
+   * 半径/高度直接读 rapier 实际碰撞体（含 scale），不依赖任何外部注册表。
+   */
+  queryStaticObstacles(
+    center: { x: number; y: number; z: number }, radius: number,
+  ): { id: number; x: number; z: number; y: number; r: number; hy: number }[] {
+    const hits: { id: number; x: number; z: number; y: number; r: number; hy: number }[] = [];
+    const shape = new RAPIER.Ball(radius);
+    const rot = new RAPIER.Quaternion(0, 0, 0, 1);
+    let exclude: RAPIER.Collider | undefined = undefined;
+    for (let i = 0; i < 64; i++) {
+      const c = this.world.intersectionWithShape(center, rot, shape, undefined, undefined, exclude, undefined);
+      if (!c) break;
+      const parent = c.parent();
+      if (parent) {
+        const ext = c.halfExtents();
+        // ★ 防御：halfExtents 仅 cuboid 有效（capsule/ball/trimesh 返回 null 或 0）
+        if (ext && ext.x > 0 && ext.y > 0) {
+          const t = parent.translation();
+          if (!t) { exclude = c; continue; } // 刚体已被移除的残留碰撞体
+          hits.push({ id: parent.userData as number, x: t.x, z: t.z, y: t.y, r: Math.max(ext.x, ext.z), hy: ext.y });
+        }
+      }
+      exclude = c;
+    }
+    return hits;
+  }
+
   /** 碰撞事件监听（阵营过滤在游戏层做） */
   onCollision(handler: (e: CollisionEvent) => void): void {
     this.contactHandlers.push(handler);

@@ -85,7 +85,7 @@ export const FOUNDATION_DECAL_GROUP = 'foundation';
 
 registerDecal({
   key: 'foundation_speckle', label: '占位·碎屑斑点', groups: [FOUNDATION_DECAL_GROUP],
-  placement: { hostRole: ['ground', 'platform'], density: 0.22, scaleRange: [1.2, 2.6] },
+  placement: { hostRole: ['ground', 'platform'], density: 0.12, scaleRange: [1.2, 2.6] },
   pattern: { fnId: 'speckle', params: { depth: 0.14 } },
 });
 
@@ -237,9 +237,9 @@ function stampSpeckle(
   pcx: number, pcz: number, pr: number,
   d: PlannedDecal, seed: number,
 ): void {
-  const count = 6 + d.variant * 2;
-  const dotR = Math.max(1, Math.floor(d.scale / 60 * S * 0.15));
-  const darken = 0.68 + d.variant * 0.02;
+  const count = 5 + d.variant * 2;
+  const dotR = Math.max(1, Math.floor(d.scale / 60 * S * 0.10));
+  const darken = 0.86 + d.variant * 0.02;
   for (let k = 0; k < count; k++) {
     const dx = (hash2(k, d.variant, seed + 9701) - 0.5) * 2 * pr;
     const dy = (hash2(k, d.variant, seed + 9702) - 0.5) * 2 * pr;

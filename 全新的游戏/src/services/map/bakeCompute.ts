@@ -354,7 +354,7 @@ function stampPropShadows(
     // 投影到像素坐标
     const pcx = (x - originX) / step;
     const pcz = (z - originZ) / step;
-    const pr = Math.ceil((len + r) / step);
+    const pr = Math.ceil((len + r) / step) + 1;
 
     for (let j = Math.max(0, Math.floor(pcz) - pr); j <= Math.min(S - 1, Math.ceil(pcz) + pr); j++) {
       for (let i2 = Math.max(0, Math.floor(pcx) - pr); i2 <= Math.min(S - 1, Math.ceil(pcx) + pr); i2++) {
@@ -364,14 +364,18 @@ function stampPropShadows(
         const along = dx * BAKE_SUN.hx + dz * BAKE_SUN.hz;   // 影子轴向投影
         if (along <= 0 || along >= len) continue;
         const perp2 = dx * dx + dz * dz - along * along;
-        // 影子宽度：随距离收窄（透视）→ 头实尾尖
-        const perpR = r * (1 - 0.55 * (along / len));
-        if (perp2 > perpR * perpR) continue;
+        // ★ 浮点防御：沿轴投影反解出的垂距平方可微负（-1e-3 级），
+        //   sqrt(负数)=NaN → NaN 写进 Uint8ClampedArray 变 0 → 影尾出现黑块
+        const perp = Math.sqrt(Math.max(0, perp2));
+        // 影子宽度：底宽 1.7×r（128² 光照图 0.47m/px，物理宽度会被模糊抹平到
+        //   不可见——美术向放宽），随距离收窄（透视）→ 头实尾尖
+        const perpR = r * (1.7 - 0.9 * (along / len));
+        if (perp > perpR) continue;
         const idx = j * S + i2;
-        const falloff = (1 - along / len) * (1 - Math.sqrt(perp2) / perpR);
-        // 压暗直射项（影子读作光的缺席）；基底微 AO
-        directF[idx] = Math.min(directF[idx], 1 - falloff * 0.55);
-        aoF[idx] = Math.max(0.35, aoF[idx] * (1 - falloff * 0.12));
+        const falloff = (1 - along / len) * (1 - perp / perpR);
+        // 压暗直射项（影子读作光的缺席；0.7 强于 0.55——保证小体积也可见）；基底微 AO
+        directF[idx] = Math.min(directF[idx], 1 - falloff * 0.7);
+        aoF[idx] = Math.max(0.35, aoF[idx] * (1 - falloff * 0.15));
       }
     }
   }

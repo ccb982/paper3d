@@ -55,6 +55,18 @@ export interface PropDef {
   /** 阴影方式（契约见文件头） */
   shadow: 'disc' | 'none';
   /**
+   * 物理碰撞体（写进表里的物理信息；存在 = 可碰撞）：
+   * fixed cuboid，可挡人/挡弹。半径/高度为基础值（×scale 得实际尺寸），
+   * 同时是预渲染阴影体积的数据源（装饰物高度参与烘焙结构）。
+   */
+  physics?: {
+    type: 'cuboid';
+    /** 底面半径（米，基础值） */
+    radius: number;
+    /** 高度（米，基础值） */
+    height: number;
+  };
+  /**
    * 阶段三：程序化几何工厂返回共享 geometry/material 的构建参数。
    * three 依赖只允许出现在渲染适配层（buildPropLayer），规划层纯函数。
    */
@@ -98,10 +110,11 @@ registerProp({
   key: 'foundation_pebble', label: '占位·碎石', groups: [FOUNDATION_PROP_GROUP],
   placement: {
     hostRole: ['ground', 'platform'], perCellProb: 0.09,
-    scaleRange: [0.4, 1.1], sinkIntoGround: 0.08,
+    scaleRange: [0.6, 1.5], sinkIntoGround: 0.08,
   },
   render: 'instanced', shadow: 'disc',
-  geometry: { type: 'rock', params: { radius: 0.5, height: 0.7 } },
+  physics: { type: 'cuboid', radius: 0.7, height: 1.2 },
+  geometry: { type: 'rock', params: { radius: 0.7, height: 1.2, noise: 0.35, color: 0x8a7f74 } },
 });
 
 // ============================================================
@@ -143,6 +156,8 @@ export interface PropPlanContext {
   blockTypes: Uint8Array;
   /** 贴地高度采样（RasterMap.surfaceHeightAt；规划层只认接口） */
   surfaceHeightAt(x: number, z: number): number;
+  /** 调试钩子：每阶段过滤计数（?dbgdecor=1 时由 ChunkManager 传入打日志） */
+  debug?: (stage: string, pass: number, total: number) => void;
 }
 
 /** cell 中心落在哪个地块 */
@@ -172,6 +187,7 @@ function slopeOf(ctx: PropPlanContext, x: number, z: number): number {
 export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   const out: PlannedProp[] = [];
   const defs = propsForGroup(ctx.groupKey);
+  ctx.debug?.('候选装饰物表', defs.length, defs.length);
   if (defs.length === 0) return out;
 
   // 加权池（主打加成同贴图系统；出现率只看 perCellProb 总和，主打只影响"抽谁"）
@@ -186,12 +202,15 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   presenceProb = Math.min(1, presenceProb);
   let total = 0;
   for (const w of weights.values()) total += w;
+  ctx.debug?.('presence概率', presenceProb, 1);
 
+  let nPresence = 0, nSlope = 0, nTile = 0, nKeepClear = 0, nPick = 0;
   for (let cy = 0; cy < PROP_GRID && out.length < PROP_BUDGET; cy++) {
     for (let cx = 0; cx < PROP_GRID && out.length < PROP_BUDGET; cx++) {
       // presence：按当前 cell 概率累计阈值判定（与贴图同手法）
       const r = hash2(cx * 7 + 1, cy * 7 + 2, ctx.seed + 9602);
       if (r >= presenceProb) continue;
+      nPresence++;
 
       // cell 中心世界坐标（带抖动，先算一次供坡度/贴地复用）
       const wx = ctx.cx * 60 + (cx + 0.5) * PROP_CELL;
@@ -201,6 +220,7 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
 
       // 坡度过滤（过陡不放——装饰物必须站得稳）
       if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
+      nSlope++;
 
       // 地块/角色过滤（liquid/pit 地块不在 hostRole 中 → 天然跳过）
       const tile = tileAtCell(ctx, cx, cy);
@@ -210,6 +230,7 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
         return true;
       });
       if (!host) continue;
+      nTile++;
 
       // 出生保护区排除
       const safe = host.placement.keepClear ?? [];
@@ -219,6 +240,7 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
         if (dx * dx + dz * dz <= z.r * z.r) { blocked = true; break; }
       }
       if (blocked) continue;
+      nKeepClear++;
 
       // 加权抽装饰物
       let rr = hash2(cx, cy, ctx.seed + 9605) * total;
@@ -238,8 +260,14 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
         rotY: hash2(cx, cy, ctx.seed + 9607) * Math.PI * 2,
         variant: Math.floor(hash2(cx, cy, ctx.seed + 9608) * 4),
       });
+      nPick++;
     }
   }
+  ctx.debug?.('presence通过', nPresence, PROP_GRID * PROP_GRID);
+  ctx.debug?.('坡度通过', nSlope, nPresence);
+  ctx.debug?.('地块通过', nTile, nSlope);
+  ctx.debug?.('keepClear通过', nKeepClear, nTile);
+  ctx.debug?.('最终抽取', out.length, nKeepClear);
   return out;
 }
 
@@ -259,19 +287,18 @@ export interface PropShadowVolume {
   h: number;
 }
 
-/** 把装饰物计划转成烘焙用的遮挡体积（shadow==='none' 的跳过） */
+/** 把装饰物计划转成烘焙用的遮挡体积（无 physics 的跳过；r/h 来自表内 physics） */
 export function computePropVolumes(props: PlannedProp[], cx: number, cz: number): PropShadowVolume[] {
   const out: PropShadowVolume[] = [];
   for (const p of props) {
     const def = propByKey(p.propKey);
-    if (!def || def.shadow === 'none') continue;
-    const g = def.geometry?.params ?? {};
+    if (!def || !def.physics) continue;
     out.push({
       x: p.x + cx * 60,
       z: p.z + cz * 60,
       y: p.y,
-      r: (g.radius ?? 0.5) * p.scale,
-      h: (g.height ?? 0.6) * p.scale,
+      r: def.physics.radius * p.scale,
+      h: def.physics.height * p.scale,
     });
   }
   return out;

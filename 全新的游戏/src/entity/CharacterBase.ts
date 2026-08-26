@@ -72,6 +72,8 @@ export abstract class CharacterBase extends EntityBase {
     this.entity.position.z += dir.y * speed * dt;
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
     this.separateFromOthers();
+    // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍；同上原理）
+    this.separateFromStatics();
     // ★ 受击染料推进（矢量平流 + 计时释放）
     this.updateHitDye(dt);
   }
@@ -105,6 +107,35 @@ export abstract class CharacterBase extends EntityBase {
       p.z += sep.az;
       op.x += sep.bx;
       op.z += sep.bz;
+    }
+  }
+
+  /** ★ 地图装饰物推挤（碎石等 fixed cuboid；kinematic 无物理响应 → 手动弹出）。
+   *   与角色间推挤同套路：圆形重叠 → 沿连线把角色推出障碍半径外。
+   *   只处理 kind='decoration' 的 cuboid（trimesh/角色/物品由各自机制负责）。 */
+  private separateFromStatics(): void {
+    const vol = this.collisionVolume;
+    const pw = this.em.physics;
+    if (!vol || !pw) return;
+    const me = shapeExtents(vol.shape);
+    if (me.hx <= 0 || me.hz <= 0) return;
+    const p = this.entity.position;
+    const obstacles = pw.queryStaticObstacles({ x: p.x, y: p.y, z: p.z }, me.hx + 0.4);
+    for (const o of obstacles) {
+      const ent = this.em.get(o.id);
+      if (!ent || ent.kind !== 'decoration') continue; // 只推挤地图装饰物
+      // 层差过滤：角色脚底不在障碍高度带内不推挤（允许上下平台重叠）
+      const baseY = o.y - o.hy, topY = o.y + o.hy;
+      if (p.y < baseY - me.hy - 0.3 || p.y > topY + me.hy + 0.3) continue;
+      const dx = p.x - o.x, dz = p.z - o.z;
+      const minDist = me.hx + o.r;
+      const d2 = dx * dx + dz * dz;
+      if (d2 >= minDist * minDist) continue;
+      const d = Math.sqrt(d2);
+      if (d < 1e-4) { p.x = o.x + minDist; continue; } // 正中心：任选一侧推出
+      const push = (minDist - d) / d;
+      p.x += dx * push;
+      p.z += dz * push;
     }
   }
 

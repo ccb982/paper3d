@@ -135,6 +135,15 @@ export class WorldMode implements IGameMode {
         },
       }).id,
       destroyGround: (id) => this.entities.destroy(id),
+      // ★ 装饰物碰撞体：fixed cuboid（挡住玩家/子弹；y 为体积中心）
+      createPropBody: (x, y, z, r, h) => this.entities.create({
+        kind: 'decoration',
+        x, y, z,
+        physics: {
+          type: 'fixed',
+          options: { shape: { type: 'cuboid', hx: r, hy: h / 2, hz: r } },
+        },
+      }).id,
     };
     this.chunks = new ChunkManager(this.scene, this.raster, groundHost);
 
