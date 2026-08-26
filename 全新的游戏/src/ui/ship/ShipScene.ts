@@ -69,7 +69,6 @@ export class ShipScene {
     const deck = new THREE.Mesh(deckGeo, deckMat);
     deck.rotation.x = -Math.PI / 2;
     deck.position.y = -0.05;
-    deck.receiveShadow = true;
     this.group.add(deck);
 
     // 网格线

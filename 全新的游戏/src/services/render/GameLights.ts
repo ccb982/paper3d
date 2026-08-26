@@ -20,11 +20,8 @@ export const LIGHT_TUNING = {
   hemiIntensity: 0.85,
   sunColor: 0xfff2dd,       // 基准阳光色（实际每帧被 SunCycle 色温调制）
   sunIntensity: 1.6,
-  /** 太阳距离（follow 时 = 目标 + SunCycle.dir × 此值）→ 决定影子方向与长度 */
+  /** 太阳距离（follow 时 = 目标 + SunCycle.dir × 此值）→ 决定剪影影子方向与长度 */
   sunDistance: 90,
-  shadowMapSize: 1024,
-  /** 阴影相机覆盖半径（世界单位）：玩家周围区域 */
-  shadowExtent: 42,
   exposure: 1.08,
 };
 
@@ -34,10 +31,8 @@ class GameLights {
 
   /**
    * 装备全局光照（main.ts boot 调一次；幂等）。
-   * 阴影策略（事故红线配套的性能决策）：
-   *   - 只有实体 castShadow（billboard 数量有限）
-   *   - 地形 receiveShadow 但不 castShadow —— 地形自阴影太贵，
-   *     凹凸暗部交给顶点假 AO（buildChunkMesh 烘焙）
+   * ★ 不开 castShadow：全项目无投影 mesh，shadow map 是纯空转开销（2026-08-26 移除）。
+   *   实体影子统一走 SilhouetteShadow 解析剪影贴地；光照只提供方向/色温/强度。
    */
   setup(scene: THREE.Scene): void {
     if (this.sun) return; // 幂等
@@ -48,26 +43,13 @@ class GameLights {
     scene.add(this.hemisphere);
 
     this.sun = new THREE.DirectionalLight(LIGHT_TUNING.sunColor, LIGHT_TUNING.sunIntensity);
-    this.sun.castShadow = true;
-    const s = this.sun.shadow;
-    s.mapSize.set(LIGHT_TUNING.shadowMapSize, LIGHT_TUNING.shadowMapSize);
-    const ext = LIGHT_TUNING.shadowExtent;
-    s.camera.left = -ext;
-    s.camera.right = ext;
-    s.camera.top = ext;
-    s.camera.bottom = -ext;
-    s.camera.near = 5;
-    s.camera.far = 160;
-    // 高度场接收实体阴影：小偏置防 acne（地形自身不投，无自阴影问题）
-    s.bias = -0.0004;
-    s.normalBias = 0.6;
     // 初始占位方向（follow 每帧由 RenderManager 用 SunCycle 状态覆盖）
     this.sun.position.set(0, 1, 0).multiplyScalar(LIGHT_TUNING.sunDistance);
     scene.add(this.sun);
     scene.add(this.sun.target); // ★ target 必须在场景图中，follow 才生效
   }
 
-  /** 每帧：阴影相机锚定到目标（玩家）+ 按传入太阳状态调制颜色/强度。
+  /** 每帧：太阳位置锚定到目标（玩家）+ 按传入太阳状态调制颜色/强度。
    *  ★ 被动消费：不依赖 SunCycle——由 RenderManager 协调注入。
    *  参数用纯数据坐标（实体系统 position 风格），不要求 THREE.Vector3。 */
   follow(

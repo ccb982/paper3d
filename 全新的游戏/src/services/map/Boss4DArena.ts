@@ -114,7 +114,6 @@ export function buildBoss4DChunk(raster: RasterMap, cx: number, cz: number): Bos
   const mapTex = bakeChunkAppearance(raster, cx, cz, BOSS4D_BAKE);
   const topMat = new THREE.MeshStandardMaterial({ map: mapTex, roughness: 0.95, metalness: 0 });
   const topMesh = new THREE.Mesh(topGeo, topMat);
-  topMesh.receiveShadow = true;
   group.add(topMesh);
 
   if (wIdx.length > 0) {
@@ -125,7 +124,6 @@ export function buildBoss4DChunk(raster: RasterMap, cx: number, cz: number): Bos
     wallGeo.setIndex(wIdx);
     const wallMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
     const wallMesh = new THREE.Mesh(wallGeo, wallMat);
-    wallMesh.receiveShadow = true;
     group.add(wallMesh);
   }
 

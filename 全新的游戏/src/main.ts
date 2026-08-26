@@ -54,14 +54,12 @@ async function boot() {
   // ★ 实时光照包：电影级色调滚降（所有颜色统一进 ACES 管线）
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = LIGHT_TUNING.exposure;
-  // ★ 阴影总开关：没有它 castShadow/receiveShadow 全部无效（2026-08-23 漏过一次）
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 软边；低端机可换回 PCFShadowMap
 
   const scene = new THREE.Scene();
   // ★ 雾：远处融进背景色，遮 chunk 加载边缘 + 大气氛围（舰船内部距离小，不受影响）
   scene.fog = new THREE.Fog(0xcccccc, 80, 200);
-  // ★ 光照词汇表：半球光(天/地双色) + 投影太阳（替代原 AmbientLight+无影平行光）
+  // ★ 光照词汇表：半球光(天/地双色) + 太阳平行光（实体影子走 SilhouetteShadow 解析剪影，不用 shadow map）
+  // （实时阴影管线已移除：全项目无 castShadow 者，shadow map 是纯空转开销——2026-08-26 清理）
   renderManager.setup(scene);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
