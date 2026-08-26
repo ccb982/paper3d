@@ -227,6 +227,8 @@ function computeLightRGBA(
   const surf = new Float32Array(S * S);       // 视觉面高度（模糊权重按它断崖衰减）
   const directF = new Float32Array(S * S);
   const aoF = new Float32Array(S * S);
+  /** 装饰物阴影掩膜（0~1；写进光照图 B 预留通道——调试红影/发光预留用） */
+  const propShadowF = new Float32Array(S * S);
   for (let py = 0; py < S; py++) {
     for (let px = 0; px < S; px++) {
       const wx = originX + (px + 0.5) * step;
@@ -280,15 +282,18 @@ function computeLightRGBA(
 
   // ---- Pass B1.5：装饰物阴影（预渲染结构含装饰物高度；模糊前印入）----
   if (propVolumes && propVolumes.length > 0) {
-    stampPropShadows(directF, aoF, S, step, originX, originZ, propVolumes);
+    stampPropShadows(directF, aoF, propShadowF, S, step, originX, originZ, propVolumes);
   }
 
   // ---- Pass B2：高度加权双边模糊 ×N（柔化但不过断崖；乒乓缓冲）----
   {
-    const tmpD = new Float32Array(S * S), tmpA = new Float32Array(S * S);
+    const tmpD = new Float32Array(S * S), tmpA = new Float32Array(S * S), tmpS = new Float32Array(S * S);
     for (let pass = 0; pass < LIGHT_BLUR_PASSES; pass++) {
       blurAxis(directF, aoF, surf, tmpD, tmpA, S, true);   // 水平轴
       blurAxis(tmpD, tmpA, surf, directF, aoF, S, false);  // 垂直轴（读tmp写回原场，安全）
+      // 掩膜同模糊（复用 blurAxis：D/A 通道传同一数组，out 也同数组即可）
+      blurAxis(propShadowF, propShadowF, surf, tmpS, tmpS, S, true);
+      blurAxis(tmpS, tmpS, surf, propShadowF, propShadowF, S, false);
     }
   }
 
@@ -296,7 +301,8 @@ function computeLightRGBA(
   for (let i = 0; i < S * S; i++) {
     out[i * 4]     = Math.round(Math.min(1, directF[i]) * 255);
     out[i * 4 + 1] = Math.round(Math.min(1, aoF[i]) * 255);
-    out[i * 4 + 2] = 255;
+    // B 预留通道：1 - 装饰物阴影掩膜（调试红影可视化 / 未来发光预留）
+    out[i * 4 + 2] = Math.round((1 - propShadowF[i]) * 255);
     out[i * 4 + 3] = 255;
   }
   return out;
@@ -336,7 +342,7 @@ function blurAxis(
 // 印入时机在双边模糊之前：模糊天然把印章柔化成半影。
 
 function stampPropShadows(
-  directF: Float32Array, aoF: Float32Array,
+  directF: Float32Array, aoF: Float32Array, propShadowF: Float32Array,
   S: number, step: number, originX: number, originZ: number,
   propVolumes: Float32Array,
 ): void {
@@ -349,8 +355,8 @@ function stampPropShadows(
     const h = propVolumes[i * 5 + 4];
     if (h <= 0.01) continue;
 
-    // 影子沿太阳水平方向延伸：长度 = 高度/仰角 + 底半径余量
-    const len = h / BAKE_SUN.tan + r;
+    // 影子沿太阳水平方向延伸：长度 = 高度/仰角 + 底半径余量×1.5（更明显的拖影）
+    const len = h / BAKE_SUN.tan + r * 1.5;
     // 投影到像素坐标
     const pcx = (x - originX) / step;
     const pcz = (z - originZ) / step;
@@ -367,15 +373,19 @@ function stampPropShadows(
         // ★ 浮点防御：沿轴投影反解出的垂距平方可微负（-1e-3 级），
         //   sqrt(负数)=NaN → NaN 写进 Uint8ClampedArray 变 0 → 影尾出现黑块
         const perp = Math.sqrt(Math.max(0, perp2));
-        // 影子宽度：底宽 1.7×r（128² 光照图 0.47m/px，物理宽度会被模糊抹平到
-        //   不可见——美术向放宽），随距离收窄（透视）→ 头实尾尖
-        const perpR = r * (1.7 - 0.9 * (along / len));
+        // 影子宽度：底宽 2.6×r（128² 光照图 0.47m/px，物理宽度会被模糊抹平到
+        //   不可见——美术向放宽；2026-08-27 实测调浓），随距离收窄（透视）
+        const perpR = r * (2.6 - 1.5 * (along / len));
         if (perp > perpR) continue;
         const idx = j * S + i2;
         const falloff = (1 - along / len) * (1 - perp / perpR);
-        // 压暗直射项（影子读作光的缺席；0.7 强于 0.55——保证小体积也可见）；基底微 AO
-        directF[idx] = Math.min(directF[idx], 1 - falloff * 0.7);
-        aoF[idx] = Math.max(0.35, aoF[idx] * (1 - falloff * 0.15));
+        // ★ 压暗直射项：pow 0.30 重塑 + 0.995 深核——整片影子几乎全黑
+        //   （2026-08-27 应要求二次加深≈10倍，边缘也不放过）
+        const dark = 1 - Math.pow(falloff, 0.30) * 0.995;
+        if (dark < directF[idx]) directF[idx] = dark;
+        aoF[idx] = Math.max(0.25, aoF[idx] * (1 - falloff * 0.20));
+        // ★ B 通道掩膜：记录装饰物阴影精确范围（预留位）
+        if (falloff > propShadowF[idx]) propShadowF[idx] = falloff;
       }
     }
   }

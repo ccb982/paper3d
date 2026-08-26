@@ -69,7 +69,7 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         #include <fog_pars_fragment>
         void main() {
           vec3 alb = texture2D(uAlbedo, vUv).rgb;
-          vec3 lm = texture2D(uLightmap, vUv).rgb;   // r=直射 / g=AO
+          vec3 lm = texture2D(uLightmap, vUv).rgb;   // r=直射 / g=AO / b=装饰物阴影掩膜(预留)
           vec3 lit = alb * (uAmbientColor * lm.g + uSunColor * lm.r);
           gl_FragColor = vec4(lit, 1.0);
           #include <tonemapping_fragment>   // ★ 与全局 ACES 管线对齐（缺了会偏色）
