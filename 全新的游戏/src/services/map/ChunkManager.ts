@@ -67,11 +67,19 @@ export class ChunkManager {
   private bakeGen = 0;
   /** 看门狗节拍累加器 */
   private watchdogAccum = 0;
+  /** 已激活 chunk 集合（激活回调只触发一次） */
+  private activated = new Set<number>();
+  /** 激活回调（玩家进入半径/首个网格落地时；特殊事件预留） */
+  private onChunkActivated?: (cx: number, cz: number, key: number) => void;
 
-  constructor(scene: THREE.Scene, raster: RasterMap, host: ChunkGroundHost) {
+  constructor(
+    scene: THREE.Scene, raster: RasterMap, host: ChunkGroundHost,
+    opts?: { onChunkActivated?: (cx: number, cz: number, key: number) => void },
+  ) {
     this.scene = scene;
     this.raster = raster;
     this.host = host;
+    this.onChunkActivated = opts?.onChunkActivated;
   }
 
   get isBoss4D(): boolean {
@@ -143,6 +151,7 @@ export class ChunkManager {
     }
     this.meshes.clear();
     this.voidKeys.clear();
+    this.activated.clear();
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
   }
 
@@ -399,6 +408,12 @@ export class ChunkManager {
     }
     const bodyId = this.host.createGround(cx, cz, trimeshVertices, trimeshIndices);
     this.bodies.set(key, bodyId);
+
+    // ★ 激活回调（每个 chunk 只触发一次；特殊事件/监听预留接口位）
+    if (!this.activated.has(key)) {
+      this.activated.add(key);
+      this.onChunkActivated?.(cx, cz, key);
+    }
   }
 
   /** 释放 chunk 视觉资源（兼容 Mesh 与 Group 两种形态） */

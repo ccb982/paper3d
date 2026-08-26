@@ -1,33 +1,24 @@
 // ============================================================
-// ChunkGenerator —— 分块迷宫地形生成（六层管线）
+// ChunkGenerator —— 分块迷宫地形生成（Wilson 生成树）
 // ============================================================
-// ★ 六层分离（2026-08-26 定稿，详见《地块与装饰架构.md》）：
-//   L0   端口派生            确定性哈希出口，跨块连通
-//   L0.5 特殊布局解析        registerSpecialLayout 命中 → 接管结构层
-//                            （为特殊事件服务的地形自主设计接口；注册表空 = 行为同旧版逐位一致）
-//   L1   结构层              迷宫 → 角色槽位 PATH/WALL/LIQUID/PIT
-//                            ★ 只认槽位不认地块；输出 = 固定 seed 回归基准
-//   L2   选组层              每 chunk 加权抽一个风格组（TileGroups）
-//   L3   抽取层              槽位角色 → 组内筛同 genRole 成员加权抽块；
-//                            PATH 装饰斑块 pass（低频噪声成片替换装饰平面地块）
-//   L4   行为落地            高度读地块 physics；梯田带按 platform 角色判定；
-//                            连通性修复：端口格不得是不可走角色
-//   L5   输出                blockTypes 存最终 TileDef.id（下游零改动）
+// ★ 新架构：每个 Chunk 内部是独立迷宫，通过边界端口协议
+//   保证跨块连通，形成无限延展的全局迷宫。
 //
-// 装饰纹理/实体装饰不在本文件：它们是独立列表（TileDecals/TileProps），
-// 同样带组归属，在地形生成完成后、渲染前按块数据自主散布。
-//
-// ⚠️ 随机盐铁律：所有 hash2/vnoise 盐与历史版本逐位一致——
-//   改任何一个数 = 全世界地形重洗，回归基线全部失效。
+// 生成流水线（5 阶段）：
+//   0. 端口派生（确定性哈希，边界对称）
+//   1. Wilson 随机游走（均匀随机生成树）
+//   2. 走廊加宽（可选，增加战斗空间）
+//   3. 墙区分类（水域/坑洞/高台/死路）
+//   4. 连通性修复（保证所有树节点可达）
+//   5. 高度分配（绝对平整，无斜坡；地块属性查 Tiles 注册表）
 // ============================================================
 
-import { TILE_FLAT } from './Tiles';
-import { tileById } from './Tiles';
-import { pickChunkGroup, drawTileForRole, drawGroundDecorTile } from './TileGroups';
+import { TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_WATER, type TileDef } from './Tiles';
 import { regionParamsAt } from './RegionTheme';
 import { hash2, vnoise } from './TerrainNoise';
 
-// 确定性 hash 噪声：权威实现已迁 TerrainNoise。保持原导出兼容既有消费方。
+// 确定性 hash 噪声：权威实现已迁 TerrainNoise（RegionTheme/bakeCompute 共用，
+// 避免与 RegionTheme 形成 import 环）。保持原导出兼容既有消费方。
 export { hash2 } from './TerrainNoise';
 
 /** chunk 尺寸（米） */
@@ -37,55 +28,31 @@ export const BLOCK_SIZE = 4;
 /** 每 chunk 块数 */
 export const BLOCKS_PER_SIDE = CHUNK_SIZE / BLOCK_SIZE; // 15
 
-// ============ 结构槽位角色（L1 输出；只描述"位置该长什么"，不指具体地块） ============
+// ============ 块类型 ============
+export const BLOCK_FLAT = 0;      // 平地/路（可通行）
+export const BLOCK_PLATFORM = 1;  // 高台（可通行，比路高）
+export const BLOCK_PIT = 2;       // 坑洞（不可通行，秒杀）
+export const BLOCK_SLOPE = 3;     // 保留（未使用）
+export const BLOCK_WATER = 4;     // 水域（不可通行，阻挡）
 
-export const ROLE_PATH = 0;    // 地面位（迷宫走廊/端口/死路平地）
-export const ROLE_WALL = 1;    // 高台位（迷宫墙）
-export const ROLE_LIQUID = 2;  // 液体位
-export const ROLE_PIT = 3;     // 坑洞位
+// ============ 地形类型（内部） ============
+enum TileType { UNKNOWN = 0, ROAD = 1, WATER = 2, PIT = 3, PLATFORM = 4 }
+
+/** 内部生成类型 → 地块定义（唯一映射点；新增地块类型改 Tiles 注册表即可） */
+const LEGACY_DEF: Record<number, TileDef> = {
+  [TileType.UNKNOWN]: TILE_FLAT,
+  [TileType.ROAD]: TILE_FLAT,
+  [TileType.WATER]: TILE_WATER,
+  [TileType.PIT]: TILE_PIT,
+  [TileType.PLATFORM]: TILE_PLATFORM,
+};
 
 // ============ 端口数据结构 ============
-
-export interface Ports {
+interface Ports {
   top: number[];    // 上边界出口的列索引
   bottom: number[];
   left: number[];
   right: number[];
-}
-
-// ============ L0.5 特殊 chunk 布局接口（预留；注册表为空时行为不变） ============
-//
-// 特殊事件的 chunk 地形需要自主设计（竞技场清空/对称房间/环形结构…），
-// 通过本接口在结构层插队接管。事件系统本体不做，只保证：
-//   - 布局判定确定性（同 seed 同坐标恒同结果）→ 天内复现一致
-//   - 无论哪种布局来源，L4 连通性修复无条件兜底
-
-export interface ChunkLayoutPlan {
-  /** replace = 整块接管结构层（overlay 局部混合留待扩展） */
-  mode: 'replace';
-  /** 自主设计的角色布局（225 格，值用 ROLE_*） */
-  roles: Uint8Array;
-  /** 可选自定义端口（缺省走 L0 派生；自定义必须与邻块协商，慎用） */
-  ports?: Ports;
-}
-
-interface SpecialLayoutEntry {
-  match(seed: number, cx: number, cz: number): boolean;
-  build(seed: number, cx: number, cz: number): ChunkLayoutPlan;
-}
-
-const SPECIAL_LAYOUTS: SpecialLayoutEntry[] = [];
-
-/** ★ 扩展点：注册特殊 chunk 布局（稀有度由 match 内部盐控制） */
-export function registerSpecialLayout(entry: SpecialLayoutEntry): void {
-  SPECIAL_LAYOUTS.push(entry);
-}
-
-function resolveSpecialLayout(seed: number, cx: number, cz: number): ChunkLayoutPlan | null {
-  for (const e of SPECIAL_LAYOUTS) {
-    if (e.match(seed, cx, cz)) return e.build(seed, cx, cz);
-  }
-  return null;
 }
 
 // ============ ChunkData（保持接口兼容） ============
@@ -94,7 +61,7 @@ export interface ChunkData {
   chunkZ: number;
   /** 每米高度（60×60；每个 4×4 tile 内绝对平整） */
   heights: Float32Array;
-  /** 块类型（15×15；存最终 TileDef.id） */
+  /** 块类型（15×15） */
   blockTypes: Uint8Array;
   /** 每米阻挡高度 */
   blockHeight: Float32Array;
@@ -208,34 +175,36 @@ function generateMaze(seed: number, cx: number, cz: number, ports: Ports, target
   return passage;
 }
 
-// ============ L1 结构层：角色槽位划分 ============
-// （原 classifyTerrain；输出从 TileType 枚举改为角色槽位，逻辑与随机流逐位保留）
+// ============ 阶段 2：走廊加宽（已合并到迷宫生成中） ============
 
-function structureSlots(
+// ============ 阶段 3：地形分类 ============
+
+function classifyTerrain(
   seed: number, cx: number, cz: number,
   passage: Uint8Array, ports: Ports,
 ): Uint8Array {
   const N = 225;
-  const roles = new Uint8Array(N); // 默认 ROLE_PATH(0) —— 与旧 UNKNOWN→ROAD 收敛一致
-  const portSet = new Set<number>([...ports.top, ...ports.bottom, ...ports.left, ...ports.right]);
+  const tileType = new Uint8Array(N); // 默认 UNKNOWN = 0
 
-  // 1. 标记所有 passage 为 PATH（迷宫走廊）
+  // 1. 标记所有 passage 为 ROAD（迷宫走廊）
   for (let i = 0; i < N; i++) {
-    if (passage[i]) roles[i] = ROLE_PATH;
+    if (passage[i]) tileType[i] = TileType.ROAD;
   }
 
-  // 2. 端口强制 PATH
-  for (const p of portSet) {
-    roles[p] = ROLE_PATH;
+  // 2. 端口强制 ROAD
+  for (const portList of [ports.top, ports.bottom, ports.left, ports.right]) {
+    for (const p of portList) {
+      tileType[p] = TileType.ROAD;
+    }
   }
 
-  // 3. 收集墙区（既非走廊也非端口）→ 这些将成为高台位，少量被液体/坑洞位替换
+  // 3. 收集墙区（UNKNOWN）→ 这些将成为迷宫墙（高台），少量被水/坑替换
   const wallSet = new Set<number>();
   for (let i = 0; i < N; i++) {
-    if (!passage[i] && !portSet.has(i)) wallSet.add(i);
+    if (tileType[i] === 0) wallSet.add(i);
   }
 
-  if (wallSet.size === 0) return roles;
+  if (wallSet.size === 0) return tileType;
 
   // 4. 洗牌墙区池（确定性）
   let wallPool = [...wallSet];
@@ -287,18 +256,18 @@ function structureSlots(
     return cluster;
   }
 
-  // 5. 墙区分配：大部分 → 高台位，少量 → 液体/坑洞位
+  // 5. 墙区分配：大部分 → 高台（迷宫墙），少量 → 水/坑
   // ★ 区域主题偏置：水体/坑洞比例随区域变化（荒漠少水多坑、霜蓝多冰湖…）
   const rp = regionParamsAt(seed, (cx + 0.5) * CHUNK_SIZE, (cz + 0.5) * CHUNK_SIZE);
   const targetWater = Math.floor(total * 0.15 * rp.waterMul);
   const targetPit = Math.floor(total * 0.15 * rp.pitMul);
 
-  // 液体：3~6 格连续集群（湖泊）
+  // 水体：3~6 格连续集群（湖泊）
   let waterCount = 0;
   while (waterCount < targetWater) {
     const rem = targetWater - waterCount;
     const cluster = growCluster(Math.min(3, rem), Math.min(6, rem));
-    for (const c of cluster) { roles[c] = ROLE_LIQUID; waterCount++; }
+    for (const c of cluster) { tileType[c] = TileType.WATER; waterCount++; }
     if (cluster.length === 0) break;
   }
 
@@ -307,105 +276,47 @@ function structureSlots(
   while (pitCount < targetPit) {
     const rem = targetPit - pitCount;
     const cluster = growCluster(Math.min(2, rem), Math.min(4, rem));
-    for (const c of cluster) { roles[c] = ROLE_PIT; pitCount++; }
+    for (const c of cluster) { tileType[c] = TileType.PIT; pitCount++; }
     if (cluster.length === 0) break;
   }
 
-  // 6. 剩余墙区 → 高台位（迷宫墙）+ 少数死路平地
+  // 6. 剩余墙区 → 高台（迷宫墙）+ 少数死路平地
   let platformCount = 0;
   const targetPlatform = Math.floor(total * 0.60);
   for (const c of wallPool) {
     if (used[c]) continue;
     if (platformCount < targetPlatform) {
-      roles[c] = ROLE_WALL;
+      tileType[c] = TileType.PLATFORM;
       used[c] = 1;
       platformCount++;
     }
   }
-  // 再剩余的 → 死路平地（保持默认 ROLE_PATH）
+  // 再剩余的 → 死路平地（ROAD）
+  for (const c of wallPool) {
+    if (!used[c]) tileType[c] = TileType.ROAD;
+  }
 
-  return roles;
+  return tileType;
 }
 
-// ============ L4a 连通性修复（角色级；对特殊布局同样兜底） ============
+// ============ 阶段 4：端口连通性兜底 ============
 //
-// 只保证端口不被不可走角色堵死，不强制全局连通。
-// 契约原则：L3 抽取按角色过滤，walkable 属性跟随角色语义
-// （PATH 全可走 / LIQUID·PIT 全不可走），故修复在角色层一次完成。
+// 只保证端口不被水/坑堵死，不强制全局连通。
+// 每个连通分量可以独立生长，但端口必须可以通行。
 
-function repairConnectivityRoles(roles: Uint8Array, ports: Ports): void {
+function repairConnectivity(tileType: Uint8Array, ports: Ports): void {
   const allPorts = [...new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right])];
   for (const p of allPorts) {
-    if (roles[p] === ROLE_LIQUID || roles[p] === ROLE_PIT) {
-      roles[p] = ROLE_PATH;
+    if (tileType[p] === TileType.WATER || tileType[p] === TileType.PIT) {
+      tileType[p] = TileType.ROAD;
     }
   }
 }
 
-// ============ L2+L3 选组与填充 ============
-
-/** PATH 装饰斑块覆盖率阈值（vnoise > τ 成片替换装饰平面地块；越大越稀） */
-const PATCH_TAU = 0.60;
-/** 斑块噪声频率（~45m 尺度的坨状分布） */
-const PATCH_FREQ = 0.09;
-
-/** 端口块及其 1 圈邻域（斑块豁免——主干道衔接处保持基础平地） */
-function buildPortNearSet(ports: Ports): Set<number> {
-  const s = new Set<number>();
-  const allPorts = [...new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right])];
-  for (const p of allPorts) {
-    s.add(p);
-    for (const nb of neighbors(p)) s.add(nb);
-  }
-  return s;
-}
-
-/**
- * L3 填充：角色槽位 → 组内抽块。
- * @param blockIds 输出（最终 TileDef.id）
- */
-function fillSlots(
-  seed: number, cx: number, cz: number,
-  roles: Uint8Array, ports: Ports,
-  blockIds: Uint8Array,
-): void {
-  const panel = pickChunkGroup(seed, cx, cz);          // L2 选组（每 chunk 一次）
-  const portNear = buildPortNearSet(ports);
-
-  for (let i = 0; i < 225; i++) {
-    switch (roles[i]) {
-      case ROLE_WALL:
-        blockIds[i] = drawTileForRole(panel, 'platform', seed, cx, cz, i).id;
-        break;
-      case ROLE_LIQUID:
-        blockIds[i] = drawTileForRole(panel, 'liquid', seed, cx, cz, i).id;
-        break;
-      case ROLE_PIT:
-        blockIds[i] = drawTileForRole(panel, 'pit', seed, cx, cz, i).id;
-        break;
-      default: {
-        // PATH：低频噪声成片替换为装饰平面地块（冰原/灰烬地/泥沼…）
-        const bx = i % BLOCKS_PER_SIDE;
-        const bz = Math.floor(i / BLOCKS_PER_SIDE);
-        const wx = (cx * BLOCKS_PER_SIDE + bx) * BLOCK_SIZE;
-        const wz = (cz * BLOCKS_PER_SIDE + bz) * BLOCK_SIZE;
-        if (!portNear.has(i) && vnoise(wx * PATCH_FREQ, wz * PATCH_FREQ, seed + 7349) > PATCH_TAU) {
-          const decor = drawGroundDecorTile(panel, seed, cx, cz, i);
-          blockIds[i] = decor ? decor.id : TILE_FLAT.id;
-        } else {
-          blockIds[i] = TILE_FLAT.id;
-        }
-        break;
-      }
-    }
-  }
-}
-
-// ============ L4 高度分配 ============
+// ============ 阶段 5：高度分配 ============
 
 function assignHeights(
-  blockIds: Uint8Array,
-  roles: Uint8Array,
+  tileType: Uint8Array,
   ports: Ports,
   seed: number,
   chunkX: number,
@@ -414,19 +325,19 @@ function assignHeights(
   const heights = new Float32Array(225);
   const allPorts = new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right]);
 
-  // 高度分配（确定性；规则来自被抽地块自身的 physics）
-  //   ground: height + jitter，端口平整
-  //   platform 角色: 三档梯田 1.2/2.2/3.4（低频噪声分带，同档成片）
-  //   liquid/pit: 各自 physics.height
+  // 高度分配（确定性；规则来自 Tiles 注册表的 physics 属性）
+  //   ROAD: height + (-0.1 ~ +0.3)，端口平整
+  //   PLATFORM: 三档梯田 1.2/2.2/3.4（低频噪声分带，同档成片）
+  //   WATER: -0.5 | PIT: -3.0
   for (let i = 0; i < 225; i++) {
-    const def = tileById(blockIds[i]);
+    const tt = tileType[i];
+    const def = LEGACY_DEF[tt] ?? TILE_FLAT;
     const p = def.physics;
 
-    // ★ 高度档位：高台不再固定一档——低频噪声把世界分成梯田 district，
+    // ★ B 高度档位：高台不再固定一档——低频噪声把世界分成梯田 district，
     //   同档平台连片、异档之间自然出现更多层断崖（天际线起伏的来源）。
     //   档间落差 ≥0.9m > MIN_WALL_DROP → ChunkWalls 自动补侧壁。
-    //   判定用【角色】而非具体地块 id → 一切高台变体自动继承同一梯田带。
-    if (roles[i] === ROLE_WALL && !allPorts.has(i)) {
+    if (tt === TileType.PLATFORM && !allPorts.has(i)) {
       const bx = i % BLOCKS_PER_SIDE;
       const bz = Math.floor(i / BLOCKS_PER_SIDE);
       const wx = (chunkX * BLOCKS_PER_SIDE + bx) * BLOCK_SIZE;
@@ -439,8 +350,8 @@ function assignHeights(
       continue;
     }
 
-    if (p.flattenAtPorts && allPorts.has(i)) {
-      heights[i] = p.height; // 端口：基础高度（跨块顺滑）
+    if (tt === TileType.UNKNOWN || (p.flattenAtPorts && allPorts.has(i))) {
+      heights[i] = p.height; // 端口/未知：基础高度（跨块顺滑）
       continue;
     }
     heights[i] =
@@ -457,7 +368,7 @@ const PLATFORM_TIERS = [1.2, 2.2, 3.4];
 // ============ 转换为 ChunkData 格式 ============
 
 function toChunkData(
-  blockIds: Uint8Array,
+  tileType: Uint8Array,
   tileHeights: Float32Array,
   chunkX: number, chunkZ: number,
 ): ChunkData {
@@ -469,10 +380,11 @@ function toChunkData(
   for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
     for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
       const ti = bz * BLOCKS_PER_SIDE + bx;
+      const type = tileType[ti];
       const h = tileHeights[ti];
 
-      // 块类型 + 可通行（属性来自 Tiles 注册表；id 即最终地块）
-      const defT = tileById(blockIds[ti]);
+      // 块类型 + 可通行（属性来自 Tiles 注册表）
+      const defT = LEGACY_DEF[type] ?? TILE_FLAT;
       blockTypes[ti] = defT.id;
 
       // 填充 4×4 每米数据
@@ -493,43 +405,32 @@ function toChunkData(
   return { chunkX, chunkZ, heights, blockTypes, blockHeight, walkable };
 }
 
-// ============ 主入口（六层管线编排） ============
+// ============ 主入口 ============
 
 /** ★ 生成 60×60 区域地形（确定性） */
 export function generateChunk(seed: number, chunkX: number, chunkZ: number): ChunkData {
-  // ---- L0 端口派生 ----
-  let ports = generatePorts(seed, chunkX, chunkZ);
+  // 阶段 0：端口派生
+  const ports = generatePorts(seed, chunkX, chunkZ);
 
-  // ---- L0.5 特殊布局解析（注册表空 = 恒 null，行为与旧版逐位一致） ----
-  const special = resolveSpecialLayout(seed, chunkX, chunkZ);
-  if (special?.ports) ports = special.ports;
+  // ★ 墙密度：0.3（墙密集）~ 0.7（墙稀疏），每 chunk 不同；
+  //   再叠加区域主题偏置（荒漠开阔 / 废土墙密——世界级空间节奏）
+  const density = hash2(chunkX, chunkZ, seed + 1818);
+  let targetPassageRatio = 0.3 + density * 0.4;
+  targetPassageRatio = Math.min(0.75, Math.max(0.25, targetPassageRatio +
+    regionParamsAt(seed, (chunkX + 0.5) * CHUNK_SIZE, (chunkZ + 0.5) * CHUNK_SIZE).densityBias));
 
-  // ---- L1 结构层 ----
-  let roles: Uint8Array;
-  if (special?.mode === 'replace' && special.roles) {
-    roles = special.roles.slice();
-  } else {
-    // ★ 墙密度：0.3（墙密集）~ 0.7（墙稀疏），每 chunk 不同；
-    //   再叠加区域主题偏置（荒漠开阔 / 废土墙密——世界级空间节奏）
-    const density = hash2(chunkX, chunkZ, seed + 1818);
-    let targetPassageRatio = 0.3 + density * 0.4;
-    targetPassageRatio = Math.min(0.75, Math.max(0.25, targetPassageRatio +
-      regionParamsAt(seed, (chunkX + 0.5) * CHUNK_SIZE, (chunkZ + 0.5) * CHUNK_SIZE).densityBias));
+  // 阶段 1：生成迷宫（Growing Tree，可变密度）
+  const passage = generateMaze(seed, chunkX, chunkZ, ports, targetPassageRatio);
 
-    const passage = generateMaze(seed, chunkX, chunkZ, ports, targetPassageRatio);
-    roles = structureSlots(seed, chunkX, chunkZ, passage, ports);
-  }
+  // 阶段 2：地形分类（墙区 → 高台迷宫墙 + 少量水坑）
+  const tileType = classifyTerrain(seed, chunkX, chunkZ, passage, ports);
 
-  // ---- L4a 连通性修复（对所有布局来源兜底） ----
-  repairConnectivityRoles(roles, ports);
+  // 阶段 3：连通性修复
+  repairConnectivity(tileType, ports);
 
-  // ---- L2+L3 选组与抽取 ----
-  const blockIds = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);
-  fillSlots(seed, chunkX, chunkZ, roles, ports, blockIds);
+  // 阶段 4：高度分配
+  const tileHeights = assignHeights(tileType, ports, seed, chunkX, chunkZ);
 
-  // ---- L4 高度分配 ----
-  const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ);
-
-  // ---- L5 输出 ----
-  return toChunkData(blockIds, tileHeights, chunkX, chunkZ);
+  // 转换为 ChunkData 格式
+  return toChunkData(tileType, tileHeights, chunkX, chunkZ);
 }

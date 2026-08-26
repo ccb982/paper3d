@@ -1,27 +1,37 @@
 // ============================================================
-// Tiles —— 地块类型定义与注册表（数据驱动封装）
+// Tiles —— 地块基类与注册表（数据驱动封装）
 // ============================================================
-// 设计目标：加一种新地块 = 在 REGISTRY 注册一个对象，不再改散落
-// 各处的 switch。地块的全部静态属性内聚在此：
+// 设计目标：加一种新地块 = 在注册处登记一个对象。
+// 地块属性自足：角色 / 物理 / 外观参数 / 组归属 全部内聚在此。
 //
-//   visual  —— 外观Canvas烘焙消费：基准色 / 逐块抖动幅度 / 颗粒 /
-//              斑块 / 描边 / 拉丝 / 凹陷标志
-//   physics —— ChunkGenerator 消费：基础高度 / 高度扰动 / 可通行 /
-//              端口平整 / 致死
+//   genRole  —— 生成器消费：结构槽位匹配（ground/platform/liquid/pit）
+//   physics  —— 高度分配/连通性/碰撞消费
+//   visual   —— 表现层消费（阶段二起由 shader 图案库按此参数程序化生成）
+//   groups   —— 所属风格组（多对多；见 TileGroups.ts）
 //
-// ⚠️ 行为兼容承诺：内置 5 类的数值与重构前逐项一致。
+// ⚠️ 行为兼容承诺：
+//   - 内置基础 5 类的物理数值与历史版本逐项一致（回归基线依赖）
+//   - 装饰性地块(10~15)的物理数值与其对应基础类严格一致
+//     （ice/ash/mud ≙ flat；*_platform 走同一梯田带公式）——
+//     保证"换皮不改结构"，固定 seed 下 walkable/heights 逐位不变
 // ============================================================
 
 import type { Hsl } from './TerrainPalette';
 import { hsl2rgb } from './TerrainPalette';
 
 // ============================================================
+// 角色（生成器结构槽位 ↔ 地块匹配的唯一维度）
+// ============================================================
+
+export type TileGenRole = 'ground' | 'platform' | 'liquid' | 'pit';
+
+// ============================================================
 // 属性描述接口
 // ============================================================
 
-/** 外观层属性（ChunkAppearance.bake 消费） */
+/** 外观层属性（表现层消费；阶段二起为 shader 图案库的输入参数） */
 export interface TileVisual {
-  /** 基准色（显示空间 HSL） */
+  /** 基准色（显示空间 HSL）——JS/GLSL 两端共用的唯一颜色真源 */
   baseHsl: Hsl;
   /** 逐地块抖动幅度（世界tile坐标 hash2 派生；0 = 均质不抖，如水面） */
   jitter: { h: number; s: number; l: number };
@@ -36,7 +46,7 @@ export interface TileVisual {
   streaks?: boolean;
 }
 
-/** 物理与生成层属性（ChunkGenerator 消费） */
+/** 物理与生成层属性（生成器/碰撞消费） */
 export interface TilePhysics {
   /** 基础高度（米） */
   height: number;
@@ -51,7 +61,7 @@ export interface TilePhysics {
 }
 
 // ============================================================
-// TileDef
+// TileDef 基类
 // ============================================================
 
 export class TileDef {
@@ -59,8 +69,11 @@ export class TileDef {
     public readonly id: number,
     public readonly key: string,
     public readonly label: string,
+    public readonly genRole: TileGenRole,
     public readonly visual: TileVisual,
     public readonly physics: TilePhysics,
+    /** 所属风格组（多对多；空 = 不参与任何组抽取，如保留位） */
+    public readonly groups: string[] = [],
   ) {}
 
   get isDepression(): boolean {
@@ -74,11 +87,11 @@ export class TileDef {
 }
 
 // ============================================================
-// 内置地块（数值 = 重构前各文件中的原值，逐一核对过）
+// 内置基础地块（物理数值 = 历史版本原值，逐项核对过）
 // ============================================================
 
 export const TILE_FLAT = new TileDef(
-  0, 'flat', '平地/路',
+  0, 'flat', '平地/路', 'ground',
   {
     baseHsl: { h: 0.0854, s: 0.3628, l: 0.4431 },          // RGB(154,114,72)
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
@@ -90,10 +103,11 @@ export const TILE_FLAT = new TileDef(
     flattenAtPorts: true,
     walkable: true,
   },
+  ['foundation'],
 );
 
 export const TILE_PLATFORM = new TileDef(
-  1, 'platform', '高台',
+  1, 'platform', '高台', 'platform',
   {
     baseHsl: { h: 0.0741, s: 0.4206, l: 0.5804 },          // RGB(193,143,103)
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
@@ -105,10 +119,11 @@ export const TILE_PLATFORM = new TileDef(
     height: 1.8, heightJitterRange: 0.4,
     walkable: true,
   },
+  ['foundation'],
 );
 
 export const TILE_PIT = new TileDef(
-  2, 'pit', '坑洞',
+  2, 'pit', '坑洞', 'pit',
   {
     baseHsl: { h: 0.98, s: 0.60, l: 0.22 },                // 暗血红警示（ACES 补偿后）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
@@ -122,10 +137,11 @@ export const TILE_PIT = new TileDef(
     walkable: false,
     lethal: true,
   },
+  ['foundation'],
 );
 
 export const TILE_WATER = new TileDef(
-  4, 'water', '水域',
+  4, 'water', '水域', 'liquid',
   {
     baseHsl: { h: 0.58, s: 0.52, l: 0.30 },                // 可辨识深蓝
     jitter: { h: 0, s: 0, l: 0 },                          // 液体均质不抖
@@ -137,13 +153,99 @@ export const TILE_WATER = new TileDef(
     height: -0.5,
     walkable: false,
   },
+  ['foundation'],
 );
 
-/** 预留位（旧 SLOPE 编号，暂未启用） */
+/** 预留位（旧 SLOPE 编号，暂未启用；不入任何组 → 永不被抽中） */
 export const TILE_SLOPE = new TileDef(
-  3, 'slope', '坡道（预留）',
+  3, 'slope', '坡道（预留）', 'ground',
   { baseHsl: TILE_FLAT.visual.baseHsl, jitter: TILE_FLAT.visual.jitter, depression: false },
   { height: 0, walkable: true },
+);
+
+// ============================================================
+// 装饰性地块（id 从 10 起；物理数值严格 ≙ 对应基础类 —— 换皮不改结构）
+// ============================================================
+
+/** 冰面（装饰平面）：霜蓝结晶风格主打 */
+export const TILE_ICE = new TileDef(
+  10, 'ice', '冰面', 'ground',
+  {
+    baseHsl: { h: 0.55, s: 0.30, l: 0.72 },
+    jitter: { h: 0.006, s: 0.02, l: 0.04 },
+    depression: false,
+    borderLine: true,
+  },
+  { height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4, flattenAtPorts: true, walkable: true },
+  ['crystal'],
+);
+
+/** 灰烬地（装饰平面）：废土主打 */
+export const TILE_ASH_FIELD = new TileDef(
+  11, 'ash_field', '灰烬地', 'ground',
+  {
+    baseHsl: { h: 0.05, s: 0.06, l: 0.32 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+  },
+  { height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4, flattenAtPorts: true, walkable: true },
+  ['ashen'],
+);
+
+/** 泥沼地（装饰平面）：湿润过渡 */
+export const TILE_MUD = new TileDef(
+  12, 'mud', '泥沼地', 'ground',
+  {
+    baseHsl: { h: 0.08, s: 0.38, l: 0.26 },
+    jitter: { h: 0.006, s: 0.03, l: 0.04 },
+    depression: false,
+    borderLine: true,
+  },
+  { height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4, flattenAtPorts: true, walkable: true },
+  ['ashen', 'overgrown'],
+);
+
+/** 岩台（装饰高台）：废土高台变体 */
+export const TILE_ROCK_PLATFORM = new TileDef(
+  13, 'rock_platform', '岩台', 'platform',
+  {
+    baseHsl: { h: 0.08, s: 0.12, l: 0.42 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+  },
+  { height: 1.8, heightJitterRange: 0.4, walkable: true },
+  ['ashen', 'foundation'],
+);
+
+/** 冰台（装饰高台）：结晶高台变体 */
+export const TILE_ICE_PLATFORM = new TileDef(
+  14, 'ice_platform', '冰台', 'platform',
+  {
+    baseHsl: { h: 0.55, s: 0.22, l: 0.66 },
+    jitter: { h: 0.006, s: 0.02, l: 0.04 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+  },
+  { height: 1.8, heightJitterRange: 0.4, walkable: true },
+  ['crystal'],
+);
+
+/** 苔台（装饰高台）：蔓生高台变体 */
+export const TILE_MOSSY_PLATFORM = new TileDef(
+  15, 'mossy_platform', '苔台', 'platform',
+  {
+    baseHsl: { h: 0.30, s: 0.35, l: 0.40 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+  },
+  { height: 1.8, heightJitterRange: 0.4, walkable: true },
+  ['overgrown'],
 );
 
 // ============================================================
@@ -151,9 +253,15 @@ export const TILE_SLOPE = new TileDef(
 // ============================================================
 
 const REGISTRY = new Map<number, TileDef>();
-for (const t of [TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_SLOPE, TILE_WATER]) {
+const KEY_INDEX = new Map<string, TileDef>();
+for (const t of [
+  TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_SLOPE, TILE_WATER,
+  TILE_ICE, TILE_ASH_FIELD, TILE_MUD,
+  TILE_ROCK_PLATFORM, TILE_ICE_PLATFORM, TILE_MOSSY_PLATFORM,
+]) {
   if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
   REGISTRY.set(t.id, t);
+  KEY_INDEX.set(t.key, t);
 }
 
 /** 按 id 取地块定义（未知 id 回退平地，防未加载/越界崩溃） */
@@ -161,13 +269,20 @@ export function tileById(id: number): TileDef {
   return REGISTRY.get(id) ?? TILE_FLAT;
 }
 
+/** 按 key 取地块定义（组权重表以 key 引用成员） */
+export function tileByKey(key: string): TileDef | undefined {
+  return KEY_INDEX.get(key);
+}
+
 /**
  * ★ 扩展点：注册自定义地块（更丰富的地块走这里）。
- * id 必须未占用；建议从 10 起步给玩法自定义类型留空间。
+ * id 必须未占用；key 必须未占用。
  */
 export function registerTile(def: TileDef): void {
   if (REGISTRY.has(def.id)) throw new Error(`[Tiles] 地块 id 已存在: ${def.id} (${def.key})`);
+  if (KEY_INDEX.has(def.key)) throw new Error(`[Tiles] 地块 key 已存在: ${def.key}`);
   REGISTRY.set(def.id, def);
+  KEY_INDEX.set(def.key, def);
 }
 
 /** 全部已注册地块（遍历用） */
