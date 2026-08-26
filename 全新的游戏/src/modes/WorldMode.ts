@@ -20,19 +20,11 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
-import {
-  bakeChunkMaps, assembleChunkMaps,
-  getCachedChunkMaps, cacheChunkMaps, releaseBakeCache,
-  type ChunkMaps,
-} from '../services/map/ChunkAppearance';
-import { terrainBaker, type BakeResult } from '../services/map/TerrainBaker';
-import { TerrainMaterial } from '../services/map/TerrainMaterial';
-import { buildChunkSideWalls } from '../services/map/ChunkWalls';
-import { buildBoss4DChunk } from '../services/map/Boss4DArena';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
-import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
+import { RasterMap } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
+import { ChunkManager, type ChunkGroundHost } from '../services/map/ChunkManager';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { PRESERVER_AI } from '../systems/ai/aiconfig';
@@ -87,6 +79,8 @@ export class WorldMode implements IGameMode {
   /** ★ 战斗导演（战斗手感编排：hitstop/镜头冲击；事件驱动，纯表现层） */
   private director!: CombatDirector;
   private raster!: RasterMap;
+  /** ★ 地图流式管理器（chunk 扩张队列/异步烘焙/看门狗/风格切换，services/map） */
+  private chunks!: ChunkManager;
 
   // ★ 业务逻辑层（共享模块）
   private itemManager!: ItemManager;
@@ -98,11 +92,7 @@ export class WorldMode implements IGameMode {
 
   private bullets!: BulletManager;
   private bulletCooldown = 0;
-  private chunkMeshes = new Map<number, THREE.Object3D>();
-  /** ★ 地图风格：false=标准外观 / true=四维空间（最终 Boss 战地图，Boss4DArena） */
-  private boss4D = false;
-  private chunkBodies = new Map<number, number>();
-  // （chunk 材质已改为每 chunk 独立的 Canvas 外观材质，见 buildChunkMesh）
+  // （chunk 流式构建已下沉 services/map/ChunkManager；材质为每 chunk 独立 Canvas 外观）
   private aiCtx: BehaviorContext = {
     dt: 0, time: 0, target: null,
     findTarget: () => null,
@@ -134,26 +124,28 @@ export class WorldMode implements IGameMode {
     this.raster = new RasterMap();
     this.entities = new EntityManager(this.physics, this.raster);
 
+    // ---- ★ 地图流式管理器（地面刚体经 ChunkGroundHost 适配进实体系统） ----
+    const groundHost: ChunkGroundHost = {
+      createGround: (cx, cz, vertices, indices) => this.entities.create({
+        kind: 'ground',
+        x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+        physics: {
+          type: 'fixed',
+          options: { shape: { type: 'trimesh', vertices, indices } },
+        },
+      }).id,
+      destroyGround: (id) => this.entities.destroy(id),
+    };
+    this.chunks = new ChunkManager(this.scene, this.raster, groundHost);
+
     // ★ 昼夜循环重置：每次出击从清晨出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
 
     // 玩家出生 = 中心 chunk 中心
     const spawn = this.spawnPoint;
 
-    // ---- ★ 初始 3×3 chunk 的地面刚体 + 视觉网格 ----
-    this.syncChunks(spawn.x, spawn.z);
-    // ★ 出生区 3×3 强制构建（不等队列调度）。
-    //   2026-08-26 异步烘焙管线后标准风格不再阻塞主线程——角色 Y 由
-    //   clampCharacter 按 raster 高度场驱动，不依赖地面刚体先存在；
-    //   地面视觉/刚体在头几帧内由烘焙结果补齐。
-    const scx = Math.floor(spawn.x / CHUNK_SIZE);
-    const scz = Math.floor(spawn.z / CHUNK_SIZE);
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dz = -1; dz <= 1; dz++) {
-        if (this.boss4D) this.buildChunkMesh(scx + dx, scz + dz);
-        else this.requestStandardBake(scx + dx, scz + dz);
-      }
-    }
+    // ---- ★ 初始 chunk 数据环 + 出生区 3×3 强制构建（不等队列调度） ----
+    this.chunks.bootstrap(spawn.x, spawn.z);
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -219,8 +211,8 @@ export class WorldMode implements IGameMode {
     );
     // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
     this.worldUIManager.addMapStyleButton(
-      () => (this.boss4D ? '地图：四维空间' : '地图：标准'),
-      () => this.setMapStyle(!this.boss4D),
+      () => (this.chunks.isBoss4D ? '地图：四维空间' : '地图：标准'),
+      () => this.chunks.setStyle(!this.chunks.isBoss4D),
     );
 
     // ---- ★ 测试物品（UI 初始化后创建，避免碰撞回调时 worldUIManager 未就绪） ----
@@ -313,11 +305,8 @@ export class WorldMode implements IGameMode {
 
     const pp = this.player.controllerPosition;
 
-    // ★ 无限地图扩张
-    this.syncChunks(pp.x, pp.y);
-    // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
-    //   装配异常等任何原因造成的空洞，0.5s 内补请求）
-    this.sweepChunks(pp.x, pp.y, dt);
+    // ★ 无限地图扩张 + 看门狗自愈（chunk 流式管线在 ChunkManager 内）
+    this.chunks.update(pp.x, pp.y, dt);
 
     // ★ 小地图更新
     this.worldUIManager.update(dt, {
@@ -405,11 +394,8 @@ export class WorldMode implements IGameMode {
       this.session.player.maxHp = this.player.maxHp;
     }
 
-    // ---- 地形碰撞体移出物理世界 ----
-    for (const id of this.chunkBodies.values()) {
-      this.entities.destroy(id);
-    }
-    this.chunkBodies.clear();
+    // ---- 地图流式管理器（chunk 刚体移出物理世界 + 视觉销毁 + 烘焙缓存释放） ----
+    this.chunks?.dispose();
 
     // ---- 实体清理 ----
     this.entities.clear();
@@ -422,18 +408,6 @@ export class WorldMode implements IGameMode {
     // ---- 拾取发光粒子 ----
     for (const g of this.pickupGlows) g.dispose();
     this.pickupGlows = [];
-
-    // ---- chunk 视觉网格 ----
-    this.chunkQueue.length = 0;   // ★ 清空构建队列    this.queuedKeys.clear();
-    // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
-    this.bakeGen++;
-    this.pendingBakes.clear();
-    for (const v of this.chunkMeshes.values()) {
-      this.scene?.remove(v);
-      this.disposeChunkVisual(v);
-    }
-    this.chunkMeshes.clear();
-    releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -497,302 +471,6 @@ export class WorldMode implements IGameMode {
       x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
       dirX: dx, dirY: dy, dirZ: dz,
       speed: 20, camp: 'player', lifetime: 2, damage: 10,
-    });
-  }
-
-  /** ★ chunk 构建预算队列：跨区爆发不再同帧全部构建（每帧限时，消卡顿）
-   *  Worker 迁移备注：generateChunk 数据与外观像素计算均为纯数据函数，
-   *  后续可移入 wx.createWorker/Worker；THREE 网格与 rapier 碰撞体必须留在主线程 */
-  private chunkQueue: { cx: number; cz: number; rebuild: boolean }[] = [];
-  private queuedKeys = new Set<number>();
-  /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
-  private static readonly CHUNK_BUILD_BUDGET_MS = 8;
-
-  // ---- ★ 异步烘焙管线（2026-08-26）：重计算在 Worker，主线程零尖峰 ----
-  /** 在途烘焙（key→请求；t=发起时刻供看门狗超时判定） */
-  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number; t: number }>();
-  /** 烘焙换代计数：dispose / 切地图风格时自增，使在途结果全部作废 */
-  private bakeGen = 0;
-  /** 看门狗节拍累加器 */
-  private watchdogAccum = 0;
-
-  /**
-   * ★ 看门狗（每 0.5s 一拍）：
-   *   ① 在途烘焙超时（>8s = Worker 被杀/消息丢失）→ 释放占位；
-   *   ② 加载环内"有数据、无网格、不在途、不在队"的 chunk → 补请求。
-   * 二者合流：任何原因造成的空洞都会在下一拍自动重建成完整 chunk。
-   */
-  private sweepChunks(px: number, pz: number, dt: number): void {
-    this.watchdogAccum += dt;
-    if (this.watchdogAccum < 0.5) return;
-    this.watchdogAccum = 0;
-
-    const now = performance.now();
-    for (const [key, p] of [...this.pendingBakes]) {
-      if (now - p.t > 8000) {
-        console.warn(`[WorldMode] chunk(${p.cx},${p.cz}) 烘焙超时，释放占位待重试`);
-        this.pendingBakes.delete(key);
-      }
-    }
-
-    if (this.boss4D) return; // boss4D 同步构建，不存在异步空洞
-    const pcx = Math.floor(px / CHUNK_SIZE);
-    const pcz = Math.floor(pz / CHUNK_SIZE);
-    for (let dz = -2; dz <= 2; dz++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const cx = pcx + dx, cz = pcz + dz;
-        const key = chunkKeyOf(cx, cz);
-        if (this.chunkMeshes.has(key)) continue;
-        if (this.pendingBakes.has(key)) continue;
-        if (this.queuedKeys.has(key)) continue;
-        if (!this.raster.getChunkData(cx, cz)) continue; // 数据未生成=本来就没排
-        this.requestStandardBake(cx, cz);
-      }
-    }
-  }
-
-  private syncChunks(px: number, pz: number): void {    const added = this.raster.updateChunks(px, pz);
-    for (const { cx, cz } of added) {
-      this.enqueueChunk(cx, cz, false);
-    }
-    // 相邻接缝重建也入队（排在新建之后），避免同帧叠加烘焙开销
-    for (const { cx, cz } of added) {
-      for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
-        const nkey = chunkKeyOf(cx + nx, cz + nz);
-        if (this.chunkMeshes.has(nkey)) {
-          this.enqueueChunk(cx + nx, cz + nz, true);
-        }
-      }
-    }
-    this.processChunkQueue();
-  }
-
-  private enqueueChunk(cx: number, cz: number, rebuild: boolean): void {
-    const key = chunkKeyOf(cx, cz);
-    if (this.queuedKeys.has(key)) return;
-    if (!rebuild && this.chunkMeshes.has(key)) return; // 已建（如出生区强制构建）
-    this.queuedKeys.add(key);
-    this.chunkQueue.push({ cx, cz, rebuild });
-  }
-
-  /**
-   * 每帧按时间预算消化构建队列。
-   * ★ Boss4D 同步构建；标准风格走异步烘焙（本循环只做快照提取+投递，
-   *   重计算在 Worker——单帧不再有"首项必建"的烘焙尖峰）。
-   */
-  private processChunkQueue(): void {
-    if (this.chunkQueue.length === 0) return;
-    const t0 = performance.now();
-    do {
-      const item = this.chunkQueue.shift()!;
-      const key = chunkKeyOf(item.cx, item.cz);
-      this.queuedKeys.delete(key);
-      if (this.boss4D) {
-        if (item.rebuild) {
-          // 可能已不在视野/已被销毁：有 mesh 才重建
-          if (this.chunkMeshes.has(key)) this.buildChunkMesh(item.cx, item.cz);
-        } else {
-          this.buildChunkMesh(item.cx, item.cz);
-        }
-      } else {
-        // 标准风格：重建与新建同走异步烘焙（结果到达后 replaceChunk 换装）
-        if (!item.rebuild || this.chunkMeshes.has(key)) {
-          this.requestStandardBake(item.cx, item.cz);
-        }
-      }
-    } while (
-      this.chunkQueue.length > 0 &&
-      performance.now() - t0 < WorldMode.CHUNK_BUILD_BUDGET_MS
-    );
-  }
-
-  /**
-   * ★ 标准风格构建①：缓存查询 → 快照投给 Worker（无 Worker 时同步回退直建）。
-   * 同 key 已在途则跳过；缓存命中则跳过烘焙直接装配。
-   */
-  private requestStandardBake(cx: number, cz: number): void {
-    const key = chunkKeyOf(cx, cz);
-    if (this.pendingBakes.has(key)) return;
-    const seed = this.raster.worldSeed;
-
-    // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
-    const cached = getCachedChunkMaps(seed, cx, cz);
-    if (cached) {
-      if (this.scene) this.finishStandardChunk(cx, cz, cached);
-      return;
-    }
-
-    const gen = this.bakeGen;
-    // ★ 快照前补齐覆盖区数据环（确定性纯生成，亚毫秒）：
-    //   烘焙输出与加载顺序无关，射线永不见"未加载=0"的假邻域
-    //   ——接缝重建从此只需重建几何，不再需要重烘焙
-    const p = terrainBaker.request(
-      (gcx, gcz) => {
-        this.raster.ensureData(gcx, gcz);
-        return this.raster.getChunkData(gcx, gcz);
-      },
-      seed, cx, cz,
-    );
-    if (!p) {
-      // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存 + 立即建
-      for (let dz = -1; dz <= 1; dz++)
-        for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
-      const maps = bakeChunkMaps(this.raster, cx, cz);
-      cacheChunkMaps(seed, cx, cz, maps);
-      this.finishStandardChunk(cx, cz, maps);
-      return;
-    }
-    this.pendingBakes.set(key, { cx, cz, gen, t: performance.now() });
-    p.then((bufs) => {
-      if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
-      this.pendingBakes.delete(key);
-      if (!this.scene) return;
-      this.completeStandardBake(cx, cz, seed, bufs);
-    });
-  }
-
-  /**
-   * ★ 烘焙完成落地（组装+入缓存+建网格）。
-   * 任何一步异常都回退主线程同步烘焙——绝不让 chunk 因单次失败而
-   * 永久消失（"整片区域踩虚空"bug 的根因即此处的无兜底 rejection）。
-   */
-  private completeStandardBake(cx: number, cz: number, seed: number, bufs: BakeResult | null): void {
-    try {
-      const maps = bufs ? assembleChunkMaps(bufs.albedo, bufs.light) : null;
-      if (maps) {
-        cacheChunkMaps(seed, cx, cz, maps);
-        this.finishStandardChunk(cx, cz, maps);
-        return;
-      }
-      throw new Error('空结果');
-    } catch (e) {
-      console.error(`[WorldMode] chunk(${cx},${cz}) 异步装配失败，回退主线程同步烘焙`, e);
-      try {
-        for (let dz = -1; dz <= 1; dz++)
-          for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
-        const maps = bakeChunkMaps(this.raster, cx, cz);
-        cacheChunkMaps(seed, cx, cz, maps);
-        this.finishStandardChunk(cx, cz, maps);
-      } catch (e2) {
-        // 不入缓存：看门狗 sweep 会在下个周期重新走完整请求
-        console.error(`[WorldMode] chunk(${cx},${cz}) 同步回退也失败，交由看门狗重试`, e2);
-      }
-    }
-  }
-
-  /** ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半） */
-  private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps): void {
-    const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position as THREE.BufferAttribute;
-    // ★ 外观 UV：与 ChunkAppearance 像素映射约定配套（文件头有推导），flipY=false
-    const uvs = new Float32Array(pos.count * 2);
-    for (let i = 0; i < pos.count; i++) {
-      const lx = pos.getX(i) + CHUNK_SIZE / 2;
-      const lz = pos.getZ(i) + CHUNK_SIZE / 2;
-      const wx = cx * CHUNK_SIZE + lx;
-      const wz = cz * CHUNK_SIZE + lz;
-      pos.setY(i, this.raster.vertexHeightAt(wx, wz));
-      uvs[i * 2] = lx / CHUNK_SIZE;
-      uvs[i * 2 + 1] = lz / CHUNK_SIZE;
-    }
-    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-
-    const mat = new TerrainMaterial(maps.albedo, maps.lightmap);
-    // lightmap 挂 userData 供 disposeChunkVisual 一并释放（.map 只登记 albedo）；
-    // cached = 纹理归烘焙缓存所有，chunk 销毁时跳过纹理释放（releaseBakeCache 统一管）
-    (mat as unknown as { userData: { lightMap?: THREE.Texture; cached?: boolean } }).userData =
-      { lightMap: maps.lightmap, cached: true };
-
-    const top = new THREE.Mesh(geo, mat);
-    const group = new THREE.Group();
-    group.add(top);
-    // ★ 断崖侧壁：独立几何 + 顶点色（避免地面贴图被拉伸成墙面的纵向渐变）
-    const walls = buildChunkSideWalls(this.raster, cx, cz);
-    if (walls) group.add(walls);
-    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-
-    this.replaceChunk(
-      chunkKeyOf(cx, cz), group, cx, cz,
-      pos.array as Float32Array,
-      new Uint32Array(geo.index!.array),
-    );
-  }
-
-  /** Boss4D 风格 chunk 同步构建（标准风格走 requestStandardBake 异步管线） */
-  private buildChunkMesh(cx: number, cz: number): void {
-    const b = buildBoss4DChunk(this.raster, cx, cz);
-    this.replaceChunk(chunkKeyOf(cx, cz), b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
-  }
-
-  /** ★ 地图风格切换（右上角按钮调用）：重建全部已加载 chunk 的物理+视觉 */
-  setMapStyle(boss4D: boolean): void {
-    if (this.boss4D === boss4D) return;
-    this.boss4D = boss4D;
-    // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
-    this.bakeGen++;
-    for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
-    this.pendingBakes.clear();
-    for (const key of [...this.chunkMeshes.keys()]) {
-      const cz = (key % 8192) - 4096;
-      const cx = Math.floor(key / 8192) - 4096;
-      if (boss4D) this.buildChunkMesh(cx, cz);          // boss4D 同步重建
-      else this.requestStandardBake(cx, cz);            // 标准异步重建
-    }
-  }
-
-  get isBoss4D(): boolean {
-    return this.boss4D;
-  }
-
-  /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
-  private replaceChunk(
-    key: number,
-    visual: THREE.Object3D,
-    cx: number,
-    cz: number,
-    trimeshVertices: Float32Array,
-    trimeshIndices: Uint32Array,
-  ): void {
-    const old = this.chunkMeshes.get(key);
-    if (old) {
-      this.scene?.remove(old);
-      this.disposeChunkVisual(old);
-    }
-    const oldBody = this.chunkBodies.get(key);
-    if (oldBody !== undefined) {
-      this.entities.destroy(oldBody);
-      this.chunkBodies.delete(key);
-    }
-    this.scene!.add(visual);
-    this.chunkMeshes.set(key, visual);
-    const body = this.entities.create({
-      kind: 'ground',
-      x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
-      physics: {
-        type: 'fixed',
-        options: { shape: { type: 'trimesh', vertices: trimeshVertices, indices: trimeshIndices } },
-      },
-    });
-    this.chunkBodies.set(key, body.id);
-  }
-
-  /** 释放 chunk 视觉资源（兼容 Mesh 与 Group 两种形态） */
-  private disposeChunkVisual(obj: THREE.Object3D): void {
-    obj.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.geometry) return;
-      m.geometry.dispose();
-      const mm = m.material as THREE.MeshStandardMaterial | undefined;
-      if (!mm) return;
-      // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
-      //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
-      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; cached?: boolean } }).userData;
-      if (!extra?.cached) {
-        mm.map?.dispose();
-        extra?.lightMap?.dispose();
-      }
-      mm.dispose();
     });
   }
 
