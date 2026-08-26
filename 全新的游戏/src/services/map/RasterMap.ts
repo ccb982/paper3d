@@ -123,18 +123,27 @@ export class RasterMap {
     );
   }
 
-  /** ★ 视觉面一致采样（角色脚底 y 用）：顶点值双线性插值——
-   *   与网格渲染完全一致（同一顶点值 + 同插值）→ 角色永贴视觉面（不陷地） */
+  /** ★ 视觉面一致采样（角色脚底/影子贴地）：顶点值【三角形】插值——
+   *   与网格渲染逐位一致（2026-08-26 实测修正）。
+   *   ⚠️ 不能用双线性：PlaneGeometry 每格是两个三角形（对角线连接
+   *   (lx,lz+1)-(lx+1,lz)，分割条件 fx+fz≤1），双线性在非平面格
+   *   （斜坡过渡带）上偏差可达 ~1m → 角色悬浮/影子切入地形。
+   *   推导用 Raycaster 对真实 PlaneGeometry 实测确认。 */
   surfaceHeightAt(x: number, z: number): number {
     const gx = Math.floor(x);
     const gz = Math.floor(z);
     const fx = x - gx;
     const fz = z - gz;
-    const h00 = this.vertexHeightAt(gx, gz);
-    const h10 = this.vertexHeightAt(gx + 1, gz);
-    const h01 = this.vertexHeightAt(gx, gz + 1);
-    const h11 = this.vertexHeightAt(gx + 1, gz + 1);
-    return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
+    const h00 = this.vertexHeightAt(gx, gz);        // (0,0)
+    const h10 = this.vertexHeightAt(gx + 1, gz);    // (1,0)
+    const h01 = this.vertexHeightAt(gx, gz + 1);    // (0,1)
+    const h11 = this.vertexHeightAt(gx + 1, gz + 1);// (1,1)
+    if (fx + fz <= 1) {
+      // T1 = △(h00,h01,h10)：对角线左下侧
+      return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+    }
+    // T2 = △(h01,h11,h10)：对角线右上侧（apex h11）
+    return h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
   }
 
   /** 世界阻挡高度（高台立面；射击 rayMarch 用） */

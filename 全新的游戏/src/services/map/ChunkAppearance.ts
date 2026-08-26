@@ -64,7 +64,7 @@ export interface TerrainBakeSource {
   readonly worldSeed: number;
   /** 世界高度（格值；仅旧路径消费） */
   heightAt(x: number, z: number): number;
-  /** 视觉面一致采样（顶点值双线性插值，与网格渲染完全一致） */
+  /** 视觉面一致采样（顶点值三角形插值 = PlaneGeometry 真实剖分，逐位一致） */
   surfaceHeightAt(x: number, z: number): number;
   /** 地块定义（颜色/凹陷标志等外观属性） */
   tileDefAt(x: number, z: number): TileDef;
@@ -205,7 +205,7 @@ export function bakeChunkAppearance(
 
       // ---- 类型判定 + 高度修正 ----
       // ★ 坑/水的"侧壁上段"修正：
-      //   必须用 surfaceHeightAt（顶点值双线性插值 = 网格真实渲染高度）判定。
+      //   必须用 surfaceHeightAt（顶点值三角形插值 = 网格真实渲染高度）判定。
       //   ⚠️ 两个坑：
       //   ① heightAt 是原始格子数据（坑块内恒为负），判 h>0 永不成立；
       //   ② vertexHeightAt 是 max 且只向负方向采样 —— 在悬崖【低侧】看不到

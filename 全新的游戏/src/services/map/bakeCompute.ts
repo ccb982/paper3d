@@ -9,7 +9,8 @@
 //
 // ★★ 采样统一（2026-08-26 定稿）：
 //   烘焙只消费「视觉面」surfaceHeightAt（顶点值 = 整数格点周围
-//   2×2 格取 max；面内 = 双线性插值）——与网格位移、角色贴地完全同源。
+//   2×2 格取 max；面内 = 三角形插值，与网格剖分逐位一致）——与网格
+//   位移、角色贴地完全同源。
 //   旧的块状 heightAt（4m 恒定）不再进入双纹理管线，仅剩 Boss4D 废案。
 //   由此修复：斜坡/台缘处烘焙阴影与可见地表的轻微错位。
 //
@@ -79,7 +80,7 @@ const NL_WRAP = 0.15;
 const LIGHT_BLUR_R = 1;
 const LIGHT_BLUR_PASSES = 1;
 
-/** 平滑值噪声（双线性 + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
+/** 平滑值噪声（格点 hash + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
 export function vnoise(x: number, y: number, seed: number): number {
   const xi = Math.floor(x), yi = Math.floor(y);
   const fx = x - xi, fy = y - yi;
@@ -405,7 +406,9 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
   return {
     worldSeed: s.seed,
     surfaceHeightAt(x: number, z: number): number {
-      // 双线性插值顶点晶格 = RasterMap.surfaceHeightAt（顶点值同源+同插值）
+      // ★ 三角形插值 = PlaneGeometry 真实剖分（对角线 (lx,lz+1)-(lx+1,lz)，
+      //   分割条件 fx+fz≤1；Raycaster 实测逐位一致）。不能用双线性——
+      //   非平面格（斜坡过渡带）偏差可达米级，烘焙影会脱离可见地表。
       let fx = x - s.vx0;
       let fz = z - s.vz0;
       if (fx < 0) fx = 0; else if (fx > s.vw - 1.001) fx = s.vw - 1.001;
@@ -417,7 +420,8 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
       const h10 = s.vHeights[gz * s.vw + g1];
       const h01 = s.vHeights[g1z * s.vw + gx];
       const h11 = s.vHeights[g1z * s.vw + g1];
-      return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
+      if (tx + tz <= 1) return h00 * (1 - tx - tz) + h01 * tz + h10 * tx;
+      return h11 * (tx + tz - 1) + h01 * (1 - tx) + h10 * (1 - tz);
     },
     tileDefAt(x: number, z: number): TileDef {
       let bx = Math.floor(x / BLOCK_SIZE) - s.bx0;
