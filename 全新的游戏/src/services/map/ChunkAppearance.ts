@@ -39,11 +39,12 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
+import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
 import {
   AO_RADIUS, AO_STRENGTH, AO_MIN, APPEARANCE_RES,
-  computeChunkMapsRGBA, vnoise,
+  computeChunkMapsRGBA,
   type BakeQuery,
 } from './bakeCompute';
 

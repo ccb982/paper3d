@@ -51,6 +51,7 @@ class TerrainBakerService {
       };
       w.onerror = () => {
         // 脚本加载失败等致命错误：全部挂起请求转同步回退
+        console.warn('[TerrainBaker] Worker 异常终止，后续烘焙回退主线程同步');
         this.broken = true;
         this.worker = null;
         const cbs = [...this.pending.values()];

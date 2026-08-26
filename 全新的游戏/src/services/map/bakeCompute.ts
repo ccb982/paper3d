@@ -25,8 +25,10 @@
 import {
   CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE, hash2,
 } from './ChunkGenerator';
+import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
+import { regionParamsAt, SEMANTIC_THEME_MIX } from './RegionTheme';
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
@@ -47,7 +49,6 @@ export const APPEARANCE_RES = 256;
 export const AO_RADIUS = 2.5;
 export const AO_STRENGTH = 0.09;
 export const AO_MIN = 0.55;
-
 // ---- 光照图参数 ----
 /** 光照图分辨率（阴影/AO 是低频信息，半分辨率足够） */
 const LIGHT_RES = 128;
@@ -83,17 +84,7 @@ const NL_WRAP = 0.15;
 const LIGHT_BLUR_R = 1;
 const LIGHT_BLUR_PASSES = 1;
 
-/** 平滑值噪声（格点 hash + smoothstep），用于大尺度明暗斑驳（幅度刻意克制，保方块感） */
-export function vnoise(x: number, y: number, seed: number): number {
-  const xi = Math.floor(x), yi = Math.floor(y);
-  const fx = x - xi, fy = y - yi;
-  const sx = fx * fx * (3 - 2 * fx);
-  const sy = fy * fy * (3 - 2 * fy);
-  const h = (a: number, b: number) => hash2(a, b, seed);
-  const top = h(xi, yi) * (1 - sx) + h(xi + 1, yi) * sx;
-  const bot = h(xi, yi + 1) * (1 - sx) + h(xi + 1, yi + 1) * sx;
-  return top * (1 - sy) + bot * sy;
-}
+// （vnoise 已迁 TerrainNoise 共享——RegionTheme/ChunkGenerator 同源消费）
 
 // ============================================================
 // albedo 像素计算（原 bakeAlbedoCanvas 循环原样迁移）
@@ -137,13 +128,21 @@ function computeAlbedoRGBA(q: BakeQuery, cx: number, cz: number): Uint8ClampedAr
         td = tileById(0); // 0 线以上的侧壁暴露面 → 平地材质
       }
 
-      // 基准色 → 逐地块 HSL 抖动 → RGB
+      // 基准色 → ★ 区域主题调制 → 逐地块 HSL 抖动 → RGB
+      //   色相平移 + 饱和/明度系数随世界位置缓变（治地图单调的 A 药）；
+      //   水/坑等语义色只吃部分强度——警示红与深蓝是玩法可读性
+      const rp = regionParamsAt(seed, wx, wz);
+      const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
+      const baseH = (((td.visual.baseHsl.h + rp.hueShift * thM) % 1) + 1) % 1;
+      const baseS = Math.min(1, td.visual.baseHsl.s * (1 + (rp.satMul - 1) * thM));
+      const baseL = Math.min(1, td.visual.baseHsl.l * (1 + (rp.lightMul - 1) * thM));
+
       const tx = Math.floor(wx / 4);
       const tz = Math.floor(wz / 4);
       let [r, g, b] = hsl2rgb(
-        td.visual.baseHsl.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
-        td.visual.baseHsl.s * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
-        td.visual.baseHsl.l * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
+        baseH + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
+        baseS * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
+        baseL * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
       );
 
       // 色阶化斑块（3 档离散亮度 → 手绘色块拼接感）

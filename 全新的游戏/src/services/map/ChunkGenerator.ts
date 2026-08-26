@@ -14,6 +14,12 @@
 // ============================================================
 
 import { TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_WATER, type TileDef } from './Tiles';
+import { regionParamsAt } from './RegionTheme';
+import { hash2, vnoise } from './TerrainNoise';
+
+// 确定性 hash 噪声：权威实现已迁 TerrainNoise（RegionTheme/bakeCompute 共用，
+// 避免与 RegionTheme 形成 import 环）。保持原导出兼容既有消费方。
+export { hash2 } from './TerrainNoise';
 
 /** chunk 尺寸（米） */
 export const CHUNK_SIZE = 60;
@@ -61,16 +67,6 @@ export interface ChunkData {
   blockHeight: Float32Array;
   /** 每米可通行 */
   walkable: Uint8Array;
-}
-
-// ============ 确定性 hash 噪声 ============
-
-export function hash2(x: number, y: number, seed: number): number {
-  let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 1442695041)) | 0;
-  h = (h ^ (h >>> 13)) | 0;
-  h = Math.imul(h, 1274126177);
-  h = (h ^ (h >>> 16)) >>> 0;
-  return h / 4294967296;
 }
 
 // ============ 阶段 0：端口派生 ============
@@ -261,8 +257,10 @@ function classifyTerrain(
   }
 
   // 5. 墙区分配：大部分 → 高台（迷宫墙），少量 → 水/坑
-  const targetWater = Math.floor(total * 0.15);
-  const targetPit = Math.floor(total * 0.15);
+  // ★ 区域主题偏置：水体/坑洞比例随区域变化（荒漠少水多坑、霜蓝多冰湖…）
+  const rp = regionParamsAt(seed, (cx + 0.5) * CHUNK_SIZE, (cz + 0.5) * CHUNK_SIZE);
+  const targetWater = Math.floor(total * 0.15 * rp.waterMul);
+  const targetPit = Math.floor(total * 0.15 * rp.pitMul);
 
   // 水体：3~6 格连续集群（湖泊）
   let waterCount = 0;
@@ -317,17 +315,41 @@ function repairConnectivity(tileType: Uint8Array, ports: Ports): void {
 
 // ============ 阶段 5：高度分配 ============
 
-function assignHeights(tileType: Uint8Array, ports: Ports): Float32Array {
+function assignHeights(
+  tileType: Uint8Array,
+  ports: Ports,
+  seed: number,
+  chunkX: number,
+  chunkZ: number,
+): Float32Array {
   const heights = new Float32Array(225);
   const allPorts = new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right]);
 
   // 高度分配（确定性；规则来自 Tiles 注册表的 physics 属性）
   //   ROAD: height + (-0.1 ~ +0.3)，端口平整
-  //   PLATFORM: 1.8 ~ +2.2 | WATER: -0.5 | PIT: -3.0
+  //   PLATFORM: 三档梯田 1.2/2.2/3.4（低频噪声分带，同档成片）
+  //   WATER: -0.5 | PIT: -3.0
   for (let i = 0; i < 225; i++) {
     const tt = tileType[i];
     const def = LEGACY_DEF[tt] ?? TILE_FLAT;
     const p = def.physics;
+
+    // ★ B 高度档位：高台不再固定一档——低频噪声把世界分成梯田 district，
+    //   同档平台连片、异档之间自然出现更多层断崖（天际线起伏的来源）。
+    //   档间落差 ≥0.9m > MIN_WALL_DROP → ChunkWalls 自动补侧壁。
+    if (tt === TileType.PLATFORM && !allPorts.has(i)) {
+      const bx = i % BLOCKS_PER_SIDE;
+      const bz = Math.floor(i / BLOCKS_PER_SIDE);
+      const wx = (chunkX * BLOCKS_PER_SIDE + bx) * BLOCK_SIZE;
+      const wz = (chunkZ * BLOCKS_PER_SIDE + bz) * BLOCK_SIZE;
+      const band = Math.min(
+        PLATFORM_TIERS.length - 1,
+        Math.floor(vnoise(wx * 0.05, wz * 0.05, seed + 4242) * PLATFORM_TIERS.length),
+      );
+      heights[i] = PLATFORM_TIERS[band] + (hash2(i, 9, seed + 5555) - 0.5) * 0.3;
+      continue;
+    }
+
     if (tt === TileType.UNKNOWN || (p.flattenAtPorts && allPorts.has(i))) {
       heights[i] = p.height; // 端口/未知：基础高度（跨块顺滑）
       continue;
@@ -339,6 +361,9 @@ function assignHeights(tileType: Uint8Array, ports: Ports): Float32Array {
   }
   return heights;
 }
+
+/** 高台高度档位（米）。改这里 = 改世界天际线；档差需 > CAST_MIN_DEPTH */
+const PLATFORM_TIERS = [1.2, 2.2, 3.4];
 
 // ============ 转换为 ChunkData 格式 ============
 
@@ -387,9 +412,12 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   // 阶段 0：端口派生
   const ports = generatePorts(seed, chunkX, chunkZ);
 
-  // ★ 墙密度：0.3（墙密集）~ 0.7（墙稀疏），每 chunk 不同
+  // ★ 墙密度：0.3（墙密集）~ 0.7（墙稀疏），每 chunk 不同；
+  //   再叠加区域主题偏置（荒漠开阔 / 废土墙密——世界级空间节奏）
   const density = hash2(chunkX, chunkZ, seed + 1818);
-  const targetPassageRatio = 0.3 + density * 0.4;
+  let targetPassageRatio = 0.3 + density * 0.4;
+  targetPassageRatio = Math.min(0.75, Math.max(0.25, targetPassageRatio +
+    regionParamsAt(seed, (chunkX + 0.5) * CHUNK_SIZE, (chunkZ + 0.5) * CHUNK_SIZE).densityBias));
 
   // 阶段 1：生成迷宫（Growing Tree，可变密度）
   const passage = generateMaze(seed, chunkX, chunkZ, ports, targetPassageRatio);
@@ -401,7 +429,7 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   repairConnectivity(tileType, ports);
 
   // 阶段 4：高度分配
-  const tileHeights = assignHeights(tileType, ports);
+  const tileHeights = assignHeights(tileType, ports, seed, chunkX, chunkZ);
 
   // 转换为 ChunkData 格式
   return toChunkData(tileType, tileHeights, chunkX, chunkZ);

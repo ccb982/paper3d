@@ -25,7 +25,7 @@ import {
   getCachedChunkMaps, cacheChunkMaps, releaseBakeCache,
   type ChunkMaps,
 } from '../services/map/ChunkAppearance';
-import { terrainBaker } from '../services/map/TerrainBaker';
+import { terrainBaker, type BakeResult } from '../services/map/TerrainBaker';
 import { TerrainMaterial } from '../services/map/TerrainMaterial';
 import { buildChunkSideWalls } from '../services/map/ChunkWalls';
 import { buildBoss4DChunk } from '../services/map/Boss4DArena';
@@ -315,6 +315,9 @@ export class WorldMode implements IGameMode {
 
     // ★ 无限地图扩张
     this.syncChunks(pp.x, pp.y);
+    // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
+    //   装配异常等任何原因造成的空洞，0.5s 内补请求）
+    this.sweepChunks(pp.x, pp.y, dt);
 
     // ★ 小地图更新
     this.worldUIManager.update(dt, {
@@ -506,13 +509,49 @@ export class WorldMode implements IGameMode {
   private static readonly CHUNK_BUILD_BUDGET_MS = 8;
 
   // ---- ★ 异步烘焙管线（2026-08-26）：重计算在 Worker，主线程零尖峰 ----
-  /** 在途烘焙（key→请求；结果到达后异步完成网格构建） */
-  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number }>();
+  /** 在途烘焙（key→请求；t=发起时刻供看门狗超时判定） */
+  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number; t: number }>();
   /** 烘焙换代计数：dispose / 切地图风格时自增，使在途结果全部作废 */
   private bakeGen = 0;
+  /** 看门狗节拍累加器 */
+  private watchdogAccum = 0;
 
-  private syncChunks(px: number, pz: number): void {
-    const added = this.raster.updateChunks(px, pz);
+  /**
+   * ★ 看门狗（每 0.5s 一拍）：
+   *   ① 在途烘焙超时（>8s = Worker 被杀/消息丢失）→ 释放占位；
+   *   ② 加载环内"有数据、无网格、不在途、不在队"的 chunk → 补请求。
+   * 二者合流：任何原因造成的空洞都会在下一拍自动重建成完整 chunk。
+   */
+  private sweepChunks(px: number, pz: number, dt: number): void {
+    this.watchdogAccum += dt;
+    if (this.watchdogAccum < 0.5) return;
+    this.watchdogAccum = 0;
+
+    const now = performance.now();
+    for (const [key, p] of [...this.pendingBakes]) {
+      if (now - p.t > 8000) {
+        console.warn(`[WorldMode] chunk(${p.cx},${p.cz}) 烘焙超时，释放占位待重试`);
+        this.pendingBakes.delete(key);
+      }
+    }
+
+    if (this.boss4D) return; // boss4D 同步构建，不存在异步空洞
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const cx = pcx + dx, cz = pcz + dz;
+        const key = chunkKeyOf(cx, cz);
+        if (this.chunkMeshes.has(key)) continue;
+        if (this.pendingBakes.has(key)) continue;
+        if (this.queuedKeys.has(key)) continue;
+        if (!this.raster.getChunkData(cx, cz)) continue; // 数据未生成=本来就没排
+        this.requestStandardBake(cx, cz);
+      }
+    }
+  }
+
+  private syncChunks(px: number, pz: number): void {    const added = this.raster.updateChunks(px, pz);
     for (const { cx, cz } of added) {
       this.enqueueChunk(cx, cz, false);
     }
@@ -603,17 +642,42 @@ export class WorldMode implements IGameMode {
       this.finishStandardChunk(cx, cz, maps);
       return;
     }
-    this.pendingBakes.set(key, { cx, cz, gen });
+    this.pendingBakes.set(key, { cx, cz, gen, t: performance.now() });
     p.then((bufs) => {
       if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
       this.pendingBakes.delete(key);
       if (!this.scene) return;
-      const maps = bufs
-        ? assembleChunkMaps(bufs.albedo, bufs.light)
-        : bakeChunkMaps(this.raster, cx, cz); // Worker 中途失败：主线程补烘
-      cacheChunkMaps(seed, cx, cz, maps);     // 接管纹理所有权，供后续重建复用
-      this.finishStandardChunk(cx, cz, maps);
+      this.completeStandardBake(cx, cz, seed, bufs);
     });
+  }
+
+  /**
+   * ★ 烘焙完成落地（组装+入缓存+建网格）。
+   * 任何一步异常都回退主线程同步烘焙——绝不让 chunk 因单次失败而
+   * 永久消失（"整片区域踩虚空"bug 的根因即此处的无兜底 rejection）。
+   */
+  private completeStandardBake(cx: number, cz: number, seed: number, bufs: BakeResult | null): void {
+    try {
+      const maps = bufs ? assembleChunkMaps(bufs.albedo, bufs.light) : null;
+      if (maps) {
+        cacheChunkMaps(seed, cx, cz, maps);
+        this.finishStandardChunk(cx, cz, maps);
+        return;
+      }
+      throw new Error('空结果');
+    } catch (e) {
+      console.error(`[WorldMode] chunk(${cx},${cz}) 异步装配失败，回退主线程同步烘焙`, e);
+      try {
+        for (let dz = -1; dz <= 1; dz++)
+          for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
+        const maps = bakeChunkMaps(this.raster, cx, cz);
+        cacheChunkMaps(seed, cx, cz, maps);
+        this.finishStandardChunk(cx, cz, maps);
+      } catch (e2) {
+        // 不入缓存：看门狗 sweep 会在下个周期重新走完整请求
+        console.error(`[WorldMode] chunk(${cx},${cz}) 同步回退也失败，交由看门狗重试`, e2);
+      }
+    }
   }
 
   /** ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半） */
