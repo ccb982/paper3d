@@ -1168,6 +1168,7 @@ export class FluidSolver {
         this.initPhiField();
         this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTex(), iterations, 0.5);
         this.applyPhiCorrection();
+        this.levelSetSolver.applyDespeckle(this._phiGrid, this.getObstacleTex());
         const mode = this.config.advectionMode === 'scalar' ? 0 : 1;
         const targetGrid = this.config.advectionMode === 'scalar' ? this.densityGrid : this.colorGrid;
         this.levelSetSolver.applyLiquidConstraint(
@@ -1186,6 +1187,7 @@ export class FluidSolver {
           this.initPhiField();
           this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTex(), iterations, 0.5);
           this.applyPhiCorrection();
+          this.levelSetSolver.applyDespeckle(this._phiGrid, this.getObstacleTex());
         }
       }
       // (3) 表面张力注入（CSF 模型，σ≠0 时启用；σ>0 收缩成团 / σ<0 向外扩散）

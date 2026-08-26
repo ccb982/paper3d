@@ -600,19 +600,93 @@ export class LevelSetSolver {
       uSource: { value: sourceTex },
       uMode: { value: mode },
       uScale: { value: scale },
+      uInvRes: { value: new THREE.Vector2(1 / phiGrid.resolution.w, 1 / phiGrid.resolution.h) },
     }, /* glsl */ `
       uniform sampler2D uSource;
       uniform int uMode;
       uniform float uScale;
+      uniform vec2 uInvRes;
       varying vec2 vUv;
 
       void main() {
-        float v = (uMode == 0)
-          ? texture2D(uSource, vUv).r
-          : texture2D(uSource, vUv).a;
+        // ★ 3×3 盒式均值后再阈值：alpha 的单像素噪声（注入高斯边缘/平流双线性抖动）
+        //   会在阈值化后变成孤立的正 φ 噪点 —— 经 clamp 后成精确 0 的"洞"
+        //   （渲染 discard 黑点）与法线畸变（镜面白点）。均值预处理掐掉源头。
+        vec2 ts = uInvRes;
+        float v = 0.0;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2(-ts.x, -ts.y)).r : texture2D(uSource, vUv + vec2(-ts.x, -ts.y)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2( 0.0,  -ts.y)).r : texture2D(uSource, vUv + vec2( 0.0,  -ts.y)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2( ts.x, -ts.y)).r : texture2D(uSource, vUv + vec2( ts.x, -ts.y)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2(-ts.x,  0.0)).r : texture2D(uSource, vUv + vec2(-ts.x,  0.0)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv).r                     : texture2D(uSource, vUv).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2( ts.x,  0.0)).r : texture2D(uSource, vUv + vec2( ts.x,  0.0)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2(-ts.x,  ts.y)).r : texture2D(uSource, vUv + vec2(-ts.x,  ts.y)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2( 0.0,   ts.y)).r : texture2D(uSource, vUv + vec2( 0.0,   ts.y)).a;
+        v += (uMode == 0) ? texture2D(uSource, vUv + vec2( ts.x,  ts.y)).r : texture2D(uSource, vUv + vec2( ts.x,  ts.y)).a;
+        v /= 9.0;
+
         // 内部 φ<0，外部 φ>0
         float phi = (0.5 - v) * uScale * 2.0;
         gl_FragColor = vec4(phi, 0.0, 0.0, 1.0);
+      }
+    `);
+
+    this.gpu.render(this.renderer, phiGrid.write, mat);
+    phiGrid.swap();
+  }
+
+  // ==================== 7. 去斑（补洞 + 拔刺，确定性清理） ====================
+
+  /**
+   * ★ φ 场邻域多数派去斑：
+   *   - 补洞：φ≥0 但 ≥3 个 4 邻居深于 -1px（液体内部的孤立空气分类像素）
+   *     → 置为 -1px。这类像素被渲染器 discard（黑点）、被钳制成精确 0。
+   *   - 拔刺：φ≤0 但 ≥3 个邻居高于 +1px → 置为 +1px（反向噪声）。
+   *
+   * 在 reinit + φ 后处理之后调用一次，保证渲染/tension 拿到的 φ 无孤立翻转点。
+   */
+  applyDespeckle(
+    phiGrid: FluidGrid,
+    obstacleTex: THREE.Texture,
+  ): void {
+    const w = phiGrid.resolution.w;
+    const h = phiGrid.resolution.h;
+
+    const mat = this.gpu.getMaterial('levelset_despeckle_v1', {
+      uPhi: { value: phiGrid.read },
+      uObstacle: { value: obstacleTex },
+      uInvRes: { value: new THREE.Vector2(1 / w, 1 / h) },
+    }, /* glsl */ `
+      uniform sampler2D uPhi;
+      uniform sampler2D uObstacle;
+      uniform vec2 uInvRes;
+      varying vec2 vUv;
+
+      void main() {
+        // 墙内保持 0
+        if (texture2D(uObstacle, vUv).r > 0.5) {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+          return;
+        }
+
+        float v = texture2D(uPhi, vUv).r;
+        vec2 ts = uInvRes;
+        float l = texture2D(uPhi, vUv - vec2(ts.x, 0.0)).r;
+        float r = texture2D(uPhi, vUv + vec2(ts.x, 0.0)).r;
+        float t = texture2D(uPhi, vUv + vec2(0.0, ts.y)).r;
+        float b = texture2D(uPhi, vUv - vec2(0.0, ts.y)).r;
+
+        float negNb = (l < -1.0 ? 1.0 : 0.0) + (r < -1.0 ? 1.0 : 0.0)
+                    + (t < -1.0 ? 1.0 : 0.0) + (b < -1.0 ? 1.0 : 0.0);
+        float posNb = (l > 1.0 ? 1.0 : 0.0) + (r > 1.0 ? 1.0 : 0.0)
+                    + (t > 1.0 ? 1.0 : 0.0) + (b > 1.0 ? 1.0 : 0.0);
+
+        // 补洞：液体内部被误分类为空气的孤立像素
+        if (v >= 0.0 && negNb >= 3.0) v = -1.0;
+        // 拔刺：空气中孤立的负噪声像素
+        else if (v <= 0.0 && posNb >= 3.0) v = 1.0;
+
+        gl_FragColor = vec4(v, 0.0, 0.0, 1.0);
       }
     `);
 

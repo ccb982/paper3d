@@ -625,6 +625,9 @@ export class FluidEditor {
         this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTexture(), iterations, 0.5);
         // φ 后处理（空气钳制 + 水体补偿）：修正符号平衡，防水泄漏/流失
         this.applyPhiCorrection();
+        // ★ 去斑：补洞+拔刺 —— alpha 噪声像素经阈值/clamp 变成孤立翻转点，
+        //   渲染 discard 出黑点、法线畸变出白点（见 debugReadPhi 指标①②）
+        this.levelSetSolver.applyDespeckle(this._phiGrid, this.getObstacleTexture());
         const mode = this.config.advectionMode === 'scalar' ? 0 : 1;
         const targetGrid = this.config.advectionMode === 'scalar' ? this.densityGrid : this.colorGrid;
         this.levelSetSolver.applyLiquidConstraint(
@@ -645,6 +648,7 @@ export class FluidEditor {
           this.initPhiField();
           this.levelSetSolver.reinit(this._phiGrid, this.getObstacleTexture(), iterations, 0.5);
           this.applyPhiCorrection();
+          this.levelSetSolver.applyDespeckle(this._phiGrid, this.getObstacleTexture());
           console.log(`[LevelSet] 注入同步 + reinit @ frame ${this.frameCount}：interval=${interval}，iterations=${iterations}`);
         }
       }
@@ -1161,6 +1165,96 @@ export class FluidEditor {
     const cx = Math.floor(w/2), cy = Math.floor(h/2);
     const idx = (cy * w + cx) * 4;
     console.log(`[调试] 中心像素 (${cx},${cy}): RGBA=(${pixels[idx]},${pixels[idx+1]},${pixels[idx+2]},${pixels[idx+3]})`);
+  }
+
+  /**
+   * ★ 调试：φ 场全图回读 + 斑点诊断（Level Set 视图白黑噪点排查）。
+   *
+   * 统计五项指标：
+   *   ① 液体内部"洞"：φ≥0 且 ≥3 个邻居 φ<-3 —— 渲染 discard 抠出透明洞（黑点）
+   *   ② 孤立极值：|φ−四邻均值|>1px —— 法线畸变 → 镜面高光炸点（白点）
+   *   ③ 红黑棋盘残差：偶/奇奇像素质心差 —— reinit 红黑迭代未收敛指标
+   *   ④ 空气区精确零值数量 —— clampAirPhi 压平痕迹
+   *   ⑤ NaN / ±Inf 计数
+   */
+  debugReadPhi(): void {
+    if (!this._phiGrid) {
+      console.log('[φ诊断] Level Set 未启用（无 phiGrid）');
+      return;
+    }
+    const { w, h } = this._phiGrid.resolution;
+    const count = w * h;
+    const raw = new Uint16Array(count);
+    const readTarget = this._phiGrid.readTarget;
+    const prevTarget = this.renderer.getRenderTarget();
+    this.renderer.setRenderTarget(readTarget);
+    this.renderer.readRenderTargetPixels(readTarget, 0, 0, w, h, raw);
+    this.renderer.setRenderTarget(prevTarget);
+
+    const phi = new Float32Array(count);
+    let nan = 0, posInf = 0, negInf = 0;
+    let min = Infinity, max = -Infinity, sum = 0;
+    for (let i = 0; i < count; i++) {
+      const v = halfToFloat(raw[i]);
+      phi[i] = v;
+      if (Number.isNaN(v)) { nan++; continue; }
+      if (v === Infinity) { posInf++; continue; }
+      if (v === -Infinity) { negInf++; continue; }
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+    }
+
+    // 邻居索引（边界跳过）
+    const nb = (x: number, y: number) => {
+      const i = y * w + x;
+      return [phi[i - 1], phi[i + 1], phi[i - w], phi[i + w]];
+    };
+
+    // ① 液体内部"洞"（discard 黑点候选）+ ② 孤立极值（法线噪声）
+    let holes = 0, extrema = 0;
+    const holeSamples: string[] = [];
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const v = phi[i];
+        if (!isFinite(v)) continue;
+        const [l, r, t, b] = nb(x, y);
+        const deepNb = ([l, r, t, b].filter(p => p < -3)).length;
+        if (v >= 0 && deepNb >= 3) {
+          holes++;
+          if (holeSamples.length < 5) holeSamples.push(`(${x},${y})φ=${v.toFixed(2)}`);
+        }
+        const avg = (l + r + t + b) / 4;
+        if (Math.abs(v - avg) > 1.0 && isFinite(avg)) extrema++;
+      }
+    }
+
+    // ③ 红黑棋盘残差（只统计液体内部 |φ|>band 的深层像素）
+    const band = this.config.levelSetConfig?.narrowBandWidth ?? 5;
+    let evenSum = 0, evenN = 0, oddSum = 0, oddN = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        const v = phi[i];
+        if (!isFinite(v) || v > -band) continue;
+        if ((x + y) & 1) { oddSum += v; oddN++; }
+        else { evenSum += v; evenN++; }
+      }
+    }
+    const checker = (evenN && oddN) ? (evenSum / evenN) - (oddSum / oddN) : 0;
+
+    // ④ 空气区被钳平成精确 0 的像素数
+    let zeros = 0;
+    for (let i = 0; i < count; i++) if (phi[i] === 0) zeros++;
+
+    console.log(
+      `[φ诊断] ${w}×${h} min=${min.toFixed(2)} max=${max.toFixed(2)} mean=${(sum / count).toFixed(3)} | ` +
+      `NaN=${nan} +Inf=${posInf} -Inf=${negInf}\n` +
+      `[φ诊断] ①内部洞(discard黑点)=${holes}  ②孤立极值(白点候选)=${extrema} (${(extrema * 100 / count).toFixed(2)}%)\n` +
+      `[φ诊断] ③红黑棋盘质心差=${checker.toFixed(4)}px (>0.05 即未收敛)  ④空气区精确零值=${zeros}` +
+      (holeSamples.length ? `\n[φ诊断] 洞样本: ${holeSamples.join(' ')}` : '')
+    );
   }
 
   /**

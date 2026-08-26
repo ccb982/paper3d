@@ -326,6 +326,34 @@ export function FluidPanel() {
                 onChange={v => updateFluidConfig(activeLayerId!, {
                   levelSetConfig: { ...cfg!.levelSetConfig, outwardDamping: v },
                 })} fmt={v => v.toFixed(2)} />
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginTop: '4px', fontSize: '11px' }}>
+                <label style={{ margin: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <input
+                    type="checkbox"
+                    checked={cfg!.levelSetConfig.clampAirPhi ?? true}
+                    onChange={e => updateFluidConfig(activeLayerId!, {
+                      levelSetConfig: { ...cfg!.levelSetConfig, clampAirPhi: e.target.checked },
+                    })}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  🛡 空气钳制
+                </label>
+                <label style={{ margin: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <input
+                    type="checkbox"
+                    checked={cfg!.levelSetConfig.compensateWaterPhi ?? true}
+                    onChange={e => updateFluidConfig(activeLayerId!, {
+                      levelSetConfig: { ...cfg!.levelSetConfig, compensateWaterPhi: e.target.checked },
+                    })}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  💦 水体补偿
+                </label>
+              </div>
+              <Slider label="水体补偿速率 (px/帧)" value={cfg!.levelSetConfig.waterCompensationRate ?? 0.1} min={0} max={5} step={0.05}
+                onChange={v => updateFluidConfig(activeLayerId!, {
+                  levelSetConfig: { ...cfg!.levelSetConfig, waterCompensationRate: v },
+                })} fmt={v => v.toFixed(2)} />
             </>
           )}
 

@@ -1893,9 +1893,7 @@ const LevelSetPanel: React.FC<{
   outwardDamping: number;
   clampAirPhi: boolean;
   compensateWaterPhi: boolean;
-  waterRender: boolean;
   waterCompRate: number;
-  onWaterRenderChange: (val: boolean) => void;
   onCompRateChange: (val: number) => void;
   onToggle: () => void;
   onReinitChange: (val: number) => void;
@@ -1906,7 +1904,7 @@ const LevelSetPanel: React.FC<{
   onClampAirChange: (val: boolean) => void;
   onCompensateWaterChange: (val: boolean) => void;
 }> = ({ enabled, reinitInterval, narrowBandWidth, surfaceTension, constrainLiquid, outwardDamping,
-       clampAirPhi, compensateWaterPhi, waterRender, waterCompRate, onWaterRenderChange, onCompRateChange,
+       clampAirPhi, compensateWaterPhi, waterCompRate, onCompRateChange,
        onToggle, onReinitChange, onBandWidthChange, onTensionChange, onConstrainChange, onOutwardDampingChange,
        onClampAirChange, onCompensateWaterChange }) => {
   return (
@@ -2031,20 +2029,6 @@ const LevelSetPanel: React.FC<{
           </div>
           <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
             补偿快 → 水体不易流失但表面偏硬；0 = 关闭补偿
-          </div>
-        </div>
-        <div className="control-group">
-          <div className="row" style={{ alignItems: 'center' }}>
-            <label style={{ margin: 0, fontSize: '11px' }}>🌊 分层水渲染</label>
-            <input
-              type="checkbox"
-              checked={waterRender}
-              onChange={(e) => onWaterRenderChange(e.target.checked)}
-              style={{ cursor: 'pointer' }}
-            />
-          </div>
-          <div style={{ fontSize: '10px', color: '#888', marginTop: '2px' }}>
-            合成视口水色渐变 + 边缘/镜面高光 + 流动感（纯显示后处理）
           </div>
         </div>
       </div>
@@ -2265,10 +2249,7 @@ export const FluidEditorUI: React.FC = () => {
     compensateWaterPhi: true,
     waterCompRate: 0.1,
   });
-  // ★ 分层水渲染开关（合成视口可选后处理，默认关闭）
-  const [waterRender, setWaterRender] = useState(false);
-  const waterRenderRef = useRef(false);
-  waterRenderRef.current = waterRender;
+  // ★ 分层水渲染已移除（alpha 近似版）：Level Set 视图改用旧库 φ 驱动分层渲染
 
   // ==================== 初始化渲染器（计算 + 显示共用） ====================
   useEffect(() => {
@@ -2983,15 +2964,20 @@ export const FluidEditorUI: React.FC = () => {
     obstacleQuad.material = obstacleMat;
     obstacleScene.add(obstacleQuad);
 
-    // ★ Level Set φ 场场景：signed distance 可视化
-    //   φ < 0 → 内部（红），φ > 0 → 外部（蓝），|φ|≈0 → 零等值线（白）
-    //   窄带（|φ| < narrowBandWidth）渐变高亮，用于调试 SDF 是否正确跟踪流体边界
+    // ★ Level Set 场景：旧库（废弃 FluidSimulator）分层水渲染移植版
+    //   纯 φ 驱动：深度混色(waterColor→deepColor) + ∇φ 法线漫反射 + 镜面高光 +
+    //   边缘发光 + 流动扰动；φ≥0 discard（背景透明）。
+    //   单位适配：旧库 φ 为 UV 归一化，编辑器 φ 为像素 —— 深度/边缘/透明度
+    //   按 px 标定（uDepthScale 等），法线差分取 1.5px 与张力 pass 一致。
     const levelsetScene = new THREE.Scene();
     const levelsetQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
     const levelsetMat = new THREE.ShaderMaterial({
       uniforms: {
         uPhi: { value: editor.getLevelSetTexture() },
-        uBandWidth: { value: config.levelSetConfig?.narrowBandWidth ?? 5 },
+        uVelocity: { value: editor.getVelocityTexture() },
+        uResolution: { value: new THREE.Vector2(config.resolution.w, config.resolution.h) },
+        uDepthScale: { value: 12 },     // 深度标定：对齐 initPhiField 实际深度范围（±10px 量级）
+        uEdgePx: { value: 3 },          // 边缘发光半宽（px）
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -3002,24 +2988,56 @@ export const FluidEditorUI: React.FC = () => {
       `,
       fragmentShader: /* glsl */ `
         uniform sampler2D uPhi;
-        uniform float uBandWidth;
+        uniform sampler2D uVelocity;
+        uniform vec2 uResolution;
+        uniform float uDepthScale;
+        uniform float uEdgePx;
         varying vec2 vUv;
 
         void main() {
           float phi = texture2D(uPhi, vUv).r;
-          // φ < 0 内部（红），φ > 0 外部（蓝）
-          vec3 insideColor = vec3(0.85, 0.25, 0.25);
-          vec3 outsideColor = vec3(0.15, 0.35, 0.85);
-          vec3 color = phi < 0.0 ? insideColor : outsideColor;
-          // 窄带高亮（|φ| < bandWidth）：渐变到亮色，观察 SDF 窄带范围
-          float band = 1.0 - smoothstep(0.0, max(uBandWidth, 0.001), abs(phi));
-          color = mix(color, vec3(0.9, 0.95, 1.0), band * 0.4);
-          // 零等值线（|φ| < 1px）：白色高亮，即流体边界
-          float contour = 1.0 - smoothstep(0.0, 1.0, abs(phi));
-          color = mix(color, vec3(1.0), contour * 0.85);
-          gl_FragColor = vec4(color, 1.0);
+
+          // ★ φ>=0 是空气：完全不渲染（旧库同款 discard）
+          if (phi >= 0.0) discard;
+
+          // 法线 = ∇φ 抬升到 z 轴（1.5px 差分，与表面张力 pass 同款去噪间距）
+          vec2 px = 1.5 / uResolution;
+          float phi_r = texture2D(uPhi, vUv + vec2(px.x, 0.0)).r;
+          float phi_l = texture2D(uPhi, vUv - vec2(px.x, 0.0)).r;
+          float phi_t = texture2D(uPhi, vUv + vec2(0.0, px.y)).r;
+          float phi_b = texture2D(uPhi, vUv - vec2(0.0, px.y)).r;
+          vec3 normal = normalize(vec3(phi_r - phi_l, phi_t - phi_b, 0.35));
+          vec3 viewDir = vec3(0.0, 0.0, 1.0);
+          vec3 lightDirNorm = normalize(vec3(0.5, 1.0, 0.3));
+
+          // 1. 基础颜色层：深度混色（浅水→深水）
+          float depth = clamp(-phi / max(uDepthScale, 1.0), 0.0, 1.0);
+          vec3 baseColor = mix(vec3(0.2, 0.6, 0.9), vec3(0.05, 0.2, 0.4), depth);
+
+          // 2. 漫反射
+          float diff = max(0.1, dot(normal, lightDirNorm));
+          vec3 color = baseColor * diff;
+
+          // 3. 高光层（Blinn-Phong，64 次幂锐利高光）
+          vec3 halfDir = normalize(lightDirNorm + viewDir);
+          float spec = pow(max(dot(normal, halfDir), 0.0), 64.0);
+          color += vec3(1.0) * spec * 0.5;
+
+          // 4. 边缘发光层（|φ| < uEdgePx 的界面环，淡蓝色）
+          float edge = 1.0 - smoothstep(0.0, max(uEdgePx, 0.5), abs(phi));
+          color += vec3(0.2, 0.6, 1.0) * edge * 0.6;
+
+          // 5. 流动扰动层：速度大小调制暗色细节（避免高速变白，压低系数）
+          vec2 vel = texture2D(uVelocity, vUv).rg;
+          color += vec3(0.15, 0.25, 0.35) * length(vel) * 0.05 * 0.3;
+
+          // 透明度：边缘稍透，中心不透明（像素单位标定）
+          float alpha = clamp(0.75 - phi / 15.0, 0.25, 0.95);
+          gl_FragColor = vec4(color, alpha);
         }
       `,
+      transparent: true,
+      depthWrite: false,
     });
     levelsetQuad.material = levelsetMat;
     levelsetScene.add(levelsetQuad);
@@ -3079,27 +3097,12 @@ export const FluidEditorUI: React.FC = () => {
         ` : ''}
         uniform vec4 uChannels;          // H/S/L/A 通道开关：1=正常公式, 0=直接输出残差值
         uniform float uDebugResidual;    // ★ 调试：1=直接输出残差纹理
-        // ★ 分层水渲染（可选后处理，默认关闭）：水色渐变 + 边缘高光 + 镜面高光 + 流动感
-        uniform float uWaterRender;      // 1=水渲染，0=普通合成
-        uniform vec3 uWaterColor;
-        uniform vec3 uDeepColor;
-        uniform float uEdgeWidth;
-        uniform float uEdgeIntensity;
-        uniform float uSpecularIntensity;
-        uniform float uFlowIntensity;
-        uniform float uTime;
-        uniform vec2 uResolution;
         varying vec2 vUv;
 
         vec3 hsl_to_rgb(vec3 hsl) {
           float h = hsl.x, s = hsl.y, l = hsl.z;
           vec3 rgb = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
           return l + s * (rgb - 0.5) * (1.0 - abs(2.0 * l - 1.0));
-        }
-
-        // 简单伪随机噪声（镜面高光/流动感用）
-        float hash21(vec2 p) {
-          return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
         }
 
         void main() {
@@ -3129,39 +3132,6 @@ export const FluidEditorUI: React.FC = () => {
             return;
           }
 
-          // ★ 分层水渲染（可选）：水色渐变 + 边缘高光 + 镜面高光 + 流动感
-          //   输入 = 合成 HSL（finalH/finalS/finalL）与 alpha（液体量）
-          if (uWaterRender > 0.5) {
-            float waterA = finalA;
-            // 1. 水体掩码：alpha 低 → 不是水，直接原样输出
-            if (waterA < 0.02) {
-              gl_FragColor = vec4(finalRGB, finalA);
-              return;
-            }
-            // 2. 水色渐变：浅水=waterColor，深水=deepColor（按 alpha 深度）
-            vec3 baseWater = mix(uWaterColor, uDeepColor, smoothstep(0.0, 0.9, waterA));
-            // 3. 深度调制：残留 HSL 亮度微调水体明暗（保留液体流动的明暗变化）
-            vec3 waterShaded = baseWater * (0.85 + 0.35 * finalL);
-            // 4. 边缘高光：alpha 梯度大 = 液面边界 → 亮边
-            vec2 px = vec2(1.0) / uResolution;   // 需要 uResolution
-            float aL = texture2D(uResidual, vUv - vec2(px.x, 0.0)).a;
-            float aR = texture2D(uResidual, vUv + vec2(px.x, 0.0)).a;
-            float aB = texture2D(uResidual, vUv - vec2(0.0, px.y)).a;
-            float aT = texture2D(uResidual, vUv + vec2(0.0, px.y)).a;
-            float gradA = length(vec2(aR - aL, aT - aB));
-            float edge = smoothstep(uEdgeWidth, 0.0, gradA);
-            vec3 color = waterShaded + uEdgeIntensity * edge * vec3(1.0, 1.0, 1.0);
-            // 5. 镜面高光：噪声闪烁（液面反光），只在水体内部
-            float specNoise = hash21(vUv * 120.0 + vec2(uTime * 1.5, uTime * 0.8));
-            float spec = pow(specNoise, 6.0) * uSpecularIntensity * waterA;
-            color += spec * vec3(1.0, 1.0, 1.0);
-            // 6. 流动感：轻微流动噪声调制亮度（水面波动）
-            float flowNoise = hash21(vUv * 40.0 + vec2(uTime * 0.6, -uTime * 0.4));
-            color *= 1.0 + uFlowIntensity * (flowNoise - 0.5) * 0.3;
-            gl_FragColor = vec4(color, waterA);
-            return;
-          }
-
           gl_FragColor = vec4(finalRGB, finalA);
         }
       `;
@@ -3183,16 +3153,6 @@ export const FluidEditorUI: React.FC = () => {
           } : {}),
           uChannels: { value: new THREE.Vector4(1, 1, 1, 1) },
           uDebugResidual: { value: 0 },
-          // ★ 分层水渲染 uniforms（可选后处理，默认关闭）
-          uWaterRender: { value: 0 },
-          uWaterColor: { value: new THREE.Color(0.2, 0.6, 0.9) },
-          uDeepColor: { value: new THREE.Color(0.05, 0.2, 0.4) },
-          uEdgeWidth: { value: 0.05 },
-          uEdgeIntensity: { value: 0.3 },
-          uSpecularIntensity: { value: 0.5 },
-          uFlowIntensity: { value: 0.3 },
-          uTime: { value: 0 },
-          uResolution: { value: new THREE.Vector2(config.resolution.w, config.resolution.h) },
         },
         vertexShader: /* glsl */ `
           varying vec2 vUv;
@@ -3670,10 +3630,6 @@ export const FluidEditorUI: React.FC = () => {
         compositeMat.uniforms.uResidualRangeH.value = residualRangeHRef.current;
         compositeMat.uniforms.uResidualRangeSL.value = residualRangeSLRef.current;
         compositeMat.uniforms.uDebugResidual.value = (window as any).__DBG_RESIDUAL ? 1 : 0;
-        // ★ 分层水渲染：每帧同步开关 + 时间（流动感动画）
-        compositeMat.uniforms.uWaterRender.value = waterRenderRef.current ? 1 : 0;
-        compositeMat.uniforms.uTime.value = editor.getTime?.() ?? 0;
-        compositeMat.uniforms.uResolution.value.set(config.resolution.w, config.resolution.h);
         if ((window as any).__dbgFTX === undefined) {
           (window as any).__dbgFTX = 1;
           console.log('[FTX复合] baseTex:', baseTexRef.current, '残差纹理尺寸:', (editor.getColorTexture() as any)?.image?.width ?? '?');
@@ -3685,10 +3641,18 @@ export const FluidEditorUI: React.FC = () => {
         obstacleMat.uniforms.uObstacle.value = editor.getObstacleTexture();
       }
 
-      // ★ Level Set 模式：每帧同步 φ 场纹理（phiGrid.read 会 swap）和窄带宽度
+      // ★ Level Set 模式：每帧同步 φ 场纹理（phiGrid.read 会 swap）+ 速度场（流动扰动层）
       if (viewMode === 'levelset') {
         levelsetMat.uniforms.uPhi.value = editor.getLevelSetTexture();
-        levelsetMat.uniforms.uBandWidth.value = config.levelSetConfig?.narrowBandWidth ?? 5;
+        levelsetMat.uniforms.uVelocity.value = editor.getVelocityTexture();
+        // ★ φ 场诊断回读：每 2 秒自动打印统计（白黑斑点排查）；控制台可手动 __phiDebug()
+        const g = window as any;
+        g.__phiDebug = () => (editor as any).debugReadPhi?.();
+        const now = performance.now();
+        if (!g.__phiDbgLast || now - g.__phiDbgLast > 2000) {
+          g.__phiDbgLast = now;
+          (editor as any).debugReadPhi?.();
+        }
       }
 
       // 根据视图模式选择渲染场景
@@ -4389,8 +4353,6 @@ export const FluidEditorUI: React.FC = () => {
             setLevelsetParams(p => ({ ...p, compensateWaterPhi: val }));
             updateConfig({ levelSetConfig: { ...config.levelSetConfig, compensateWaterPhi: val } as NonNullable<typeof config.levelSetConfig> });
           }}
-          waterRender={waterRender}
-          onWaterRenderChange={setWaterRender}
           waterCompRate={levelsetParams.waterCompRate}
           onCompRateChange={(val) => {
             setLevelsetParams(p => ({ ...p, waterCompRate: val }));
