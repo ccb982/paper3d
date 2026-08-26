@@ -5,6 +5,7 @@ import type { ViewMode, FluidEditorConfig } from './FluidEditor';
 import { useAppStore } from '../../stores/useAppStore';
 import { getAdaptiveBlockIndex, getRangeForBlock, unpackRGB565, uint8ToBase64 } from '../../core/ftxCore';
 import { hslToRgb } from '../../utils/colorCompressor';
+import { buildRegionWallMask, packToBits } from './regionWallMask';
 
 // ============================================================
 // 子组件：操作面板（鼠标点击注入模式）
@@ -1103,6 +1104,10 @@ const GeneralPanel: React.FC<{
   // ★ 持续注入源 UI 可见性开关
   showInjectionUI: boolean;
   setShowInjectionUI: (v: boolean) => void;
+  // ★ 色块交界加墙（主组件持有 FTX 帧 state，经回调下发）
+  onApplyRegionWalls: () => void;
+  regionWallMinArea: number;
+  onRegionWallMinAreaChange: (v: number) => void;
 }> = (props) => {
   const {
     config,
@@ -1120,6 +1125,9 @@ const GeneralPanel: React.FC<{
     onClearObstacles,
     showInjectionUI,
     setShowInjectionUI,
+    onApplyRegionWalls,
+    regionWallMinArea,
+    onRegionWallMinAreaChange,
   } = props;
   return (
     <div className="fluid-panel">
@@ -1621,6 +1629,28 @@ const GeneralPanel: React.FC<{
             >
               🌀 φ场
             </button>
+          </div>
+          {/* ★ 色块交界加墙（需先导入 FTX 帧）：大色块边界生成障碍物，
+              流体被物理隔离在各色块内 —— 数值扩散无法跨墙搬运颜色 */}
+          <div className="row" style={{ gap: '6px', alignItems: 'center', marginTop: '6px' }}>
+            <button
+              onClick={onApplyRegionWalls}
+              style={{ flex: 1, padding: '5px 8px', borderRadius: '4px', border: '1px solid #7a5c1e', background: '#3a2d10', color: '#ffd88a', cursor: 'pointer', fontSize: '11px' }}
+              title="按当前 FTX 帧的调色板色块边界自动加墙：流体只在各色块内部流动，消除跨色块色彩污染。小色块不产生墙（视为可通行区）"
+            >
+              🧱 色块交界加墙
+            </button>
+            <input
+              type="number"
+              min={0.05}
+              max={10}
+              step={0.05}
+              value={regionWallMinArea}
+              onChange={(e) => onRegionWallMinAreaChange(Math.max(0.01, parseFloat(e.target.value) || 0.4))}
+              style={{ width: '58px', fontSize: '10px', padding: '2px 4px' }}
+              title="大色块面积阈值（占全帧 %）：低于此面积的色块不产生墙"
+            />
+            <span style={{ fontSize: '10px', color: '#888' }}>%</span>
           </div>
         </div>
 
@@ -3964,6 +3994,26 @@ export const FluidEditorUI: React.FC = () => {
   const ftxFileInputRef = useRef<HTMLInputElement | null>(null);
   const [ftxFrames, setFtxFrames] = useState<any[]>([]);
   const [selectedFtxIndex, setSelectedFtxIndex] = useState(-1);
+  // ★ 色块交界加墙：大色块面积阈值（占全帧 %）；小色块视为可通行区（并入邻域）
+  const [regionWallMinArea, setRegionWallMinArea] = useState(0.4);
+
+  /** ★ 按当前 FTX 帧的调色板色块边界生成障碍物墙（精确分割，零启发式） */
+  const applyRegionWalls = () => {
+    const frame: any = ftxFrames[selectedFtxIndex];
+    if (!editor || !frame?.regionIdTex) {
+      alert('请先导入并选择一个 FTX 帧');
+      return;
+    }
+    const bbox = frame.bbox as { w: number; h: number };
+    const r = buildRegionWallMask(
+      frame.regionIdTex as Uint8Array, bbox.w, bbox.h,
+      { minAreaRatio: regionWallMinArea / 100 },
+    );
+    editor.setObstacleBitmap({ data: packToBits(r.mask), width: r.width, height: r.height });
+    updateConfig({ enableObstacles: true });
+    setView('obstacle');
+    console.log(`[色块加墙] 大色块=${r.largeRegions}，墙像素=${r.wallPixels}（阈值 ${regionWallMinArea.toFixed(2)}%），已切到墙体视图`);
+  };
 
   const handleFtxFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -4235,6 +4285,9 @@ export const FluidEditorUI: React.FC = () => {
           onClearObstacles={clearObstaclesHandler}
           showInjectionUI={showInjectionUI}
           setShowInjectionUI={setShowInjectionUI}
+          onApplyRegionWalls={applyRegionWalls}
+          regionWallMinArea={regionWallMinArea}
+          onRegionWallMinAreaChange={setRegionWallMinArea}
           onExportConfig={() => {
             // ★ 导出流体库物理配方 JSON（五大块），供轻量化无头流体库加载
             //   仅含物理参数 + 持续注入源列表，不含速度场/颜色场数据
