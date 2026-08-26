@@ -1092,6 +1092,9 @@ const GeneralPanel: React.FC<{
   onReset: () => void;
   // ★ 导出流体库配置 JSON（物理配方，供轻量化无头流体库加载）
   onExportConfig: () => void;
+  /** ★ 是否附带墙纹理（默认 false：墙由游戏端算法按调色板色块自主生成） */
+  exportWallMask: boolean;
+  setExportWallMask: (v: boolean) => void;
   // ★ 速度场亮度基准值（uMaxVel）：值越小，低速区域越亮
   velViewMax: number;
   setVelViewMax: (v: number) => void;
@@ -1116,6 +1119,8 @@ const GeneralPanel: React.FC<{
     onViewChange,
     onReset,
     onExportConfig,
+    exportWallMask,
+    setExportWallMask,
     velViewMax,
     setVelViewMax,
     wallBrushMode,
@@ -1782,6 +1787,19 @@ const GeneralPanel: React.FC<{
 
         {/* ★ 导出流体库配置 JSON（物理配方，供轻量化无头流体库加载） */}
         <div className="control-group">
+          <div className="row" style={{ alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+            <label style={{ margin: 0, fontSize: '11px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="默认关闭：墙由游戏端算法按帧的调色板色块自主生成（同 regionWallMask 算法）。
+勾选后把当前障碍物位图打包进 JSON（Base64 位图）">
+              <input
+                type="checkbox"
+                checked={exportWallMask}
+                onChange={(e) => setExportWallMask(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              🧱 附带墙纹理
+            </label>
+          </div>
           <button
             onClick={onExportConfig}
             style={{
@@ -1804,7 +1822,7 @@ const GeneralPanel: React.FC<{
             📤 导出流体配置 JSON
           </button>
           <span className="hint" style={{ fontSize: '9px', color: '#888' }}>
-            仅导出物理配方（不含场数据），供轻量化库加载
+            仅导出物理配方（不含场数据），供轻量化库加载；墙默认由游戏端自主生成
           </span>
         </div>
       </div>
@@ -3996,6 +4014,8 @@ export const FluidEditorUI: React.FC = () => {
   const [selectedFtxIndex, setSelectedFtxIndex] = useState(-1);
   // ★ 色块交界加墙：大色块面积阈值（占全帧 %）；小色块视为可通行区（并入邻域）
   const [regionWallMinArea, setRegionWallMinArea] = useState(0.4);
+  // ★ 导出附带墙纹理开关（默认 false）：墙由游戏端按调色板色块自主生成
+  const [exportWallMask, setExportWallMask] = useState(false);
 
   /** ★ 按当前 FTX 帧的调色板色块边界生成障碍物墙（精确分割，零启发式） */
   const applyRegionWalls = () => {
@@ -4288,6 +4308,8 @@ export const FluidEditorUI: React.FC = () => {
           onApplyRegionWalls={applyRegionWalls}
           regionWallMinArea={regionWallMinArea}
           onRegionWallMinAreaChange={setRegionWallMinArea}
+          exportWallMask={exportWallMask}
+          setExportWallMask={setExportWallMask}
           onExportConfig={() => {
             // ★ 导出流体库物理配方 JSON（五大块），供轻量化无头流体库加载
             //   仅含物理参数 + 持续注入源列表，不含速度场/颜色场数据
@@ -4347,8 +4369,10 @@ export const FluidEditorUI: React.FC = () => {
               resolution: cfg.resolution,
             } as any;
 
-            // ★ 新增：墙纹理导出（位图压缩，1 bit / 像素）
-            if (editor) {
+            // ★ 墙纹理导出：默认关闭——墙由游戏端算法按帧的调色板色块自主生成
+            //   （同 editor/regionWallMask.ts 算法的游戏端移植）。
+            //   勾选"🧱 附带墙纹理"后才把当前障碍物位图打包进 JSON
+            if (exportWallMask && editor) {
               const obstacleBitmap = editor.getObstacleBitmap();
               if (obstacleBitmap) {
                 recipe.obstacle = {
