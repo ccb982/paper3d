@@ -14,10 +14,11 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
+import { BAKE_SUN, CAST_MIN_DEPTH } from './bakeCompute';
 import type { RasterMap } from './RasterMap';
 
-/** 生成门槛：与 ChunkAppearance.CAST_MIN_DEPTH 同源同步 */
-const MIN_WALL_DROP = 0.5;
+/** 生成门槛：与烘焙投影门槛同一来源（bakeCompute.CAST_MIN_DEPTH import） */
+const MIN_WALL_DROP = CAST_MIN_DEPTH;
 
 /** 墙底延伸（防与地面共面闪烁） */
 const WALL_EPS = 0.05;
@@ -34,10 +35,9 @@ const WALL_SKY_DIM = 0.22;
 /** 逐墙确定性抖动幅度（±半幅；打破整面墙单一色的呆板感） */
 const WALL_JITTER = 0.10;
 
-/** 烘焙太阳水平方向（与 ChunkAppearance.BAKE_SUN 同源同步；勿单方修改）。
- *  相机后上方过肩光：面向默认相机（+z 外法线）的墙 = 朝阳亮墙 */
-const SUN_HX = -0.342;
-const SUN_HZ = 0.940;
+// 烘焙太阳水平方向：唯一权威来源 = bakeCompute.BAKE_SUN（import，勿手抄）
+const SUN_HX = BAKE_SUN.hx;
+const SUN_HZ = BAKE_SUN.hz;
 
 /**
  * 单面墙的显示空间亮度乘数。

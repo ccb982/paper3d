@@ -103,6 +103,14 @@ export class RasterMap {
     return this.chunks.get(chunkKeyOf(cx, cz));
   }
 
+  /** ★ 确保地形数据存在（纯生成，不建视觉/物理；烘焙快照用）。
+   *  生成是确定性纯函数（~亚毫秒）——烘焙前把快照覆盖区数据补齐，
+   *  保证射线永不见"未加载=0"的假邻域 → 烘焙输出与加载顺序无关，
+   *  接缝重建不再需要重烘焙（只重建几何）。 */
+  ensureData(cx: number, cz: number): void {
+    this.ensureChunk(cx, cz);
+  }
+
   /** 世界高度（格值，无 chunk = 0 占位） */
   heightAt(x: number, z: number): number {
     const cx = Math.floor(x / CHUNK_SIZE);

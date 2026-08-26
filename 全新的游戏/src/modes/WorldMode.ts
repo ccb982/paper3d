@@ -20,7 +20,11 @@ import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
-import { bakeChunkMaps, assembleChunkMaps, type ChunkMaps } from '../services/map/ChunkAppearance';
+import {
+  bakeChunkMaps, assembleChunkMaps,
+  getCachedChunkMaps, cacheChunkMaps, releaseBakeCache,
+  type ChunkMaps,
+} from '../services/map/ChunkAppearance';
 import { terrainBaker } from '../services/map/TerrainBaker';
 import { TerrainMaterial } from '../services/map/TerrainMaterial';
 import { buildChunkSideWalls } from '../services/map/ChunkWalls';
@@ -95,7 +99,7 @@ export class WorldMode implements IGameMode {
   private bullets!: BulletManager;
   private bulletCooldown = 0;
   private chunkMeshes = new Map<number, THREE.Object3D>();
-  /** ★ 地图风格：false=标准外观 / true=Boss 四维废案（Boss4DArena+Boss4DAppearance） */
+  /** ★ 地图风格：false=标准外观 / true=四维空间（最终 Boss 战地图，Boss4DArena） */
   private boss4D = false;
   private chunkBodies = new Map<number, number>();
   // （chunk 材质已改为每 chunk 独立的 Canvas 外观材质，见 buildChunkMesh）
@@ -213,9 +217,9 @@ export class WorldMode implements IGameMode {
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
     );
-    // ★ 地图风格切换按钮（标准外观 ↔ Boss 四维废案预览）
+    // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
     this.worldUIManager.addMapStyleButton(
-      () => (this.boss4D ? '地图：四维空间 [废案]' : '地图：标准'),
+      () => (this.boss4D ? '地图：四维空间' : '地图：标准'),
       () => this.setMapStyle(!this.boss4D),
     );
 
@@ -426,6 +430,7 @@ export class WorldMode implements IGameMode {
       this.disposeChunkVisual(v);
     }
     this.chunkMeshes.clear();
+    releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -563,21 +568,39 @@ export class WorldMode implements IGameMode {
   }
 
   /**
-   * ★ 标准风格构建①：提取快照投给 Worker（无 Worker 时同步回退直建）。
-   * 同 key 已在途则跳过（输出确定性一致，重复请求无意义）。
+   * ★ 标准风格构建①：缓存查询 → 快照投给 Worker（无 Worker 时同步回退直建）。
+   * 同 key 已在途则跳过；缓存命中则跳过烘焙直接装配。
    */
   private requestStandardBake(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
     if (this.pendingBakes.has(key)) return;
+    const seed = this.raster.worldSeed;
+
+    // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
+    const cached = getCachedChunkMaps(seed, cx, cz);
+    if (cached) {
+      if (this.scene) this.finishStandardChunk(cx, cz, cached);
+      return;
+    }
+
     const gen = this.bakeGen;
+    // ★ 快照前补齐覆盖区数据环（确定性纯生成，亚毫秒）：
+    //   烘焙输出与加载顺序无关，射线永不见"未加载=0"的假邻域
+    //   ——接缝重建从此只需重建几何，不再需要重烘焙
     const p = terrainBaker.request(
-      (gcx, gcz) => this.raster.getChunkData(gcx, gcz),
-      this.raster.worldSeed,
-      cx, cz,
+      (gcx, gcz) => {
+        this.raster.ensureData(gcx, gcz);
+        return this.raster.getChunkData(gcx, gcz);
+      },
+      seed, cx, cz,
     );
     if (!p) {
-      // Worker 不可用（如微信端未适配）：主线程同步烘 + 立即建
-      this.finishStandardChunk(cx, cz, bakeChunkMaps(this.raster, cx, cz));
+      // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存 + 立即建
+      for (let dz = -1; dz <= 1; dz++)
+        for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
+      const maps = bakeChunkMaps(this.raster, cx, cz);
+      cacheChunkMaps(seed, cx, cz, maps);
+      this.finishStandardChunk(cx, cz, maps);
       return;
     }
     this.pendingBakes.set(key, { cx, cz, gen });
@@ -588,6 +611,7 @@ export class WorldMode implements IGameMode {
       const maps = bufs
         ? assembleChunkMaps(bufs.albedo, bufs.light)
         : bakeChunkMaps(this.raster, cx, cz); // Worker 中途失败：主线程补烘
+      cacheChunkMaps(seed, cx, cz, maps);     // 接管纹理所有权，供后续重建复用
       this.finishStandardChunk(cx, cz, maps);
     });
   }
@@ -611,8 +635,10 @@ export class WorldMode implements IGameMode {
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
     const mat = new TerrainMaterial(maps.albedo, maps.lightmap);
-    // lightmap 挂 userData 供 disposeChunkVisual 一并释放（.map 只登记 albedo）
-    (mat as unknown as { userData: { lightMap?: THREE.Texture } }).userData = { lightMap: maps.lightmap };
+    // lightmap 挂 userData 供 disposeChunkVisual 一并释放（.map 只登记 albedo）；
+    // cached = 纹理归烘焙缓存所有，chunk 销毁时跳过纹理释放（releaseBakeCache 统一管）
+    (mat as unknown as { userData: { lightMap?: THREE.Texture; cached?: boolean } }).userData =
+      { lightMap: maps.lightmap, cached: true };
 
     const top = new THREE.Mesh(geo, mat);
     const group = new THREE.Group();
@@ -695,10 +721,13 @@ export class WorldMode implements IGameMode {
       m.geometry.dispose();
       const mm = m.material as THREE.MeshStandardMaterial | undefined;
       if (!mm) return;
-      mm.map?.dispose();
-      // ★ 双纹理方案：lightmap 挂在材质 userData 上，随 .map 一并释放
-      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture } }).userData;
-      extra?.lightMap?.dispose();
+      // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
+      //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
+      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; cached?: boolean } }).userData;
+      if (!extra?.cached) {
+        mm.map?.dispose();
+        extra?.lightMap?.dispose();
+      }
       mm.dispose();
     });
   }

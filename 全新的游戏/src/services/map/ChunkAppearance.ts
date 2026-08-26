@@ -13,7 +13,7 @@
 // ★ 2026-08-26 Worker 化重构：
 //   - 像素计算核心全部迁往 bakeCompute.ts（纯函数、零 three 依赖、
 //     可在 Worker 内运行）；本文件保留：烘焙契约、像素→纹理组装、
-//     同步回退入口、Boss4D 废案旧路径。
+//     同步回退入口、Boss4D 单纹理旧路径（最终 Boss 战地图专用）。
 //   - 异步管线见 TerrainBaker.ts（WorldMode 消费）。
 //
 // ★★ 采样统一（同日定稿）：双纹理管线只消费「视觉面」
@@ -24,8 +24,8 @@
 //   res=min(res,k·h/t)——接触遮挡物处锐利、随距离半影自然展宽。
 //
 // ─────────────────────────────────────────────────────────────
-// 旧单纹理路径 bakeChunkAppearance（保留）：Boss4DArena 废案专用，
-//   主地图勿用。内嵌 AO 计算与双纹理路径共享 bakeCompute 的参数常量。
+// 旧单纹理路径 bakeChunkAppearance（保留）：Boss4DArena（最终 Boss 战地图）
+//   专用，主地图勿用。内嵌 AO 计算与双纹理路径共享 bakeCompute 的参数常量。
 //
 // 分界铁律（防重复计费）：
 //   - 材质色 + 静态光（N·L/自遮挡影/AO）→ 全部在烘焙域完成
@@ -90,14 +90,14 @@ const SHADOW_MIN_DEPTH = 2.2;   // 最小落差门槛（普通台阶不投影）
 
 /** 烘焙可选档位（★ 主地图默认全关；组合见 BOSS4D_BAKE） */
 export interface ChunkBakeOptions {
-  /** ★ 第二尺度接触 AO（半径0.85m 缝隙/贴边暗部）——Boss4D 废案开启 */
+  /** ★ 第二尺度接触 AO（半径0.85m 缝隙/贴边暗部）——Boss4D 开启 */
   contactAO?: boolean;
   /** ★ 静态日照投影（地形自遮挡：半分辨率光线步进+双边模糊柔化；
-   *  固定太阳不随昼夜；最小落差门槛 2.2m——普通台阶不投影）——Boss4D 废案开启 */
+   *  固定太阳不随昼夜；最小落差门槛 2.2m——普通台阶不投影）——Boss4D 开启 */
   sunShadow?: boolean;
 }
 
-/** ★ Boss 四维废案的烘焙配置（与 Boss4DArena 网格配套使用） */
+/** ★ Boss 四维空间（最终 Boss 战地图）的烘焙配置（与 Boss4DArena 网格配套使用） */
 export const BOSS4D_BAKE: Required<ChunkBakeOptions> = { contactAO: true, sunShadow: true };
 
 /**
@@ -379,4 +379,40 @@ export function bakeChunkMaps(terrain: TerrainBakeSource, cx: number, cz: number
   };
   const out = computeChunkMapsRGBA(q, cx, cz);
   return assembleChunkMaps(out.albedo, out.light);
+}
+
+// ============================================================
+// 烘焙缓存（2026-08-26）：纹理级复用，消除两类重烘浪费
+// ============================================================
+// 解决：① 风格切换往返全量重烘（架构已知债务）；② 玩家每跨一次
+// chunk 边界最多 4 个邻居接缝重建的重烘（烘焙输出已与加载顺序无关
+// ——快照前 ensureData 补齐数据环——故纹理可安全复用，接缝只需
+// 重建几何）。
+//
+// 所有权约定：
+//   - 入缓存后纹理归缓存所有；disposeChunkVisual 见材质 userData.cached
+//     标记即跳过纹理释放（材质本身仍随 chunk 销毁）
+//   - 模式退出 releaseBakeCache() 取出全部并销毁（不跨模式占显存）
+//   - key 含 seed：换 seed 自然失配，无陈旧命中风险
+const bakeCache = new Map<string, ChunkMaps>();
+const mapsCacheKey = (seed: number, cx: number, cz: number) => `${seed}|${cx}|${cz}`;
+
+/** 缓存命中则返回纹理组（调用方直接装配，跳过烘焙） */
+export function getCachedChunkMaps(seed: number, cx: number, cz: number): ChunkMaps | undefined {
+  return bakeCache.get(mapsCacheKey(seed, cx, cz));
+}
+
+/** 存入缓存（接管纹理所有权；此后 chunk 销毁不得 dispose 这两张纹理） */
+export function cacheChunkMaps(seed: number, cx: number, cz: number, maps: ChunkMaps): void {
+  const key = mapsCacheKey(seed, cx, cz);
+  if (!bakeCache.has(key)) bakeCache.set(key, maps);
+}
+
+/** 模式退出：取出全部缓存并销毁纹理（唯一合法的缓存侧 dispose 点） */
+export function releaseBakeCache(): void {
+  for (const m of bakeCache.values()) {
+    m.albedo.dispose();
+    m.lightmap.dispose();
+  }
+  bakeCache.clear();
 }
