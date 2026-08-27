@@ -258,22 +258,24 @@ export function planChunkDecals(ctx: DecalPlanContext): PlannedDecal[] {
       const r = hash2(cx * 3 + 1, cy * 3 + 2, ctx.seed + 9502);
       if (r >= presenceProb) continue;
 
-      // 地块/角色过滤（cell 中心地块；liquid/pit 不在 hostRole 中 → 天然跳过）
-      const tile = tileAtCell(ctx, cx, cy);
-      const host = defs.find((d) => {
-        if (d.placement.tiles && d.placement.tiles.length > 0 && !d.placement.tiles.includes(tile.key)) return false;
-        if (!d.placement.hostRole.includes(tile.genRole as DecalHostRole)) return false;
-        return true;
-      });
-      if (!host) continue;
+       // 地块/角色过滤（cell 中心地块；liquid/pit 不在 hostRole 中 → 天然跳过）
+       const tile = tileAtCell(ctx, cx, cy);
+       const eligible = defs.filter((d) => {
+         if (d.placement.tiles && d.placement.tiles.length > 0 && !d.placement.tiles.includes(tile.key)) return false;
+         if (!d.placement.hostRole.includes(tile.genRole as DecalHostRole)) return false;
+         return true;
+       });
+       if (eligible.length === 0) continue;
 
-      // 加权抽贴图
-      let rr = hash2(cx, cy, ctx.seed + 9503) * total;
-      let pick = defs[0];
-      for (const d of defs) {
-        rr -= weights.get(d.key)!;
-        if (rr <= 0) { pick = d; break; }
-      }
+       // ★ 加权抽贴图（只在角色/地块命中的候选中抽，避免抽到本格不支持的贴图）
+       let etotal = 0;
+       for (const d of eligible) etotal += weights.get(d.key)!;
+       let rr = hash2(cx, cy, ctx.seed + 9503) * etotal;
+       let pick = eligible[0];
+       for (const d of eligible) {
+         rr -= weights.get(d.key)!;
+         if (rr <= 0) { pick = d; break; }
+       }
       const [sMin, sMax] = pick.placement.scaleRange;
       out.push({
         decalKey: pick.key,

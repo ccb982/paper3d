@@ -278,35 +278,38 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
 
       if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
 
-      const tile = tileAtCell(ctx, cx, cy);
-      const host = defs.find((p) => {
-        if (p.placement.tiles && p.placement.tiles.length > 0 && !p.placement.tiles.includes(tile.key)) return false;
-        if (!p.placement.hostRole.includes(tile.genRole as PropHostRole)) return false;
-        return true;
-      });
-      if (!host) continue;
+       const tile = tileAtCell(ctx, cx, cy);
+       const eligible = defs.filter((p) => {
+         if (p.placement.tiles && p.placement.tiles.length > 0 && !p.placement.tiles.includes(tile.key)) return false;
+         if (!p.placement.hostRole.includes(tile.genRole as PropHostRole)) return false;
+         return true;
+       });
+       if (eligible.length === 0) continue;
 
-      const safe = host.placement.keepClear ?? [];
-      let blocked = false;
-      for (const z of safe) {
-        const dx = jx - z.x, dz = jz - z.z;
-        if (dx * dx + dz * dz <= z.r * z.r) { blocked = true; break; }
-      }
-      if (blocked) continue;
+       let etotal = 0;
+       for (const d of eligible) etotal += weights.get(d.key)!;
+       let rr = hash2(cx, cy, ctx.seed + 9605) * etotal;
+       let pick = eligible[0];
+       for (const d of eligible) {
+         rr -= weights.get(d.key)!;
+         if (rr <= 0) { pick = d; break; }
+       }
 
-      let rr = hash2(cx, cy, ctx.seed + 9605) * total;
-      let pick = defs[0];
-      for (const p of defs) {
-        rr -= weights.get(p.key)!;
-        if (rr <= 0) { pick = p; break; }
-      }
-      const [sMin, sMax] = pick.placement.scaleRange;
-      out.push({
-        propKey: pick.key,
-        // ★ 输出转 chunk 本地坐标（渲染层直接挂 chunk group；过滤/坡度/贴地均用世界坐标）
-        x: jx - ctx.cx * 60,
-        z: jz - ctx.cz * 60,
-        y: ctx.surfaceHeightAt(jx, jz) - (pick.placement.sinkIntoGround ?? 0),
+       const safe = pick.placement.keepClear ?? [];
+       let blocked = false;
+       for (const z of safe) {
+         const dx = jx - z.x, dz = jz - z.z;
+         if (dx * dx + dz * dz <= z.r * z.r) { blocked = true; break; }
+       }
+       if (blocked) continue;
+
+       const [sMin, sMax] = pick.placement.scaleRange;
+       out.push({
+         propKey: pick.key,
+         // ★ 输出转 chunk 本地坐标（渲染层直接挂 chunk group；过滤/坡度/贴地均用世界坐标）
+         x: jx - ctx.cx * 60,
+         z: jz - ctx.cz * 60,
+         y: ctx.surfaceHeightAt(jx, jz) - (pick.placement.sinkIntoGround ?? 0),
         scale: sMin + hash2(cx, cy, ctx.seed + 9606) * (sMax - sMin),
         rotY: hash2(cx, cy, ctx.seed + 9607) * Math.PI * 2,
         variant: Math.floor(hash2(cx, cy, ctx.seed + 9608) * 4),
@@ -435,6 +438,10 @@ function getSharedRock(key: string, type: string | undefined, params: Record<str
     color: new THREE.Color(params.color ?? 0x8a7f74),
     roughness: 0.95, metalness: 0, flatShading: true,
   });
+  // ★ 标记共享：ChunkManager.disposeVisual 不得释放（否则每次重建 chunk 都把
+  //   全地图共用的几何/材质 dispose 掉再重传，造成持续抖动与 churn）
+  geo.userData.decorShared = true;
+  mat.userData.decorShared = true;
   entry = { geo, mat };
   SHARED.set(key, entry);
   return entry;
@@ -464,7 +471,20 @@ registerPropRenderer('instanced', {
     mesh.instanceMatrix.needsUpdate = true;
     return mesh;
   },
+  dispose(): void {
+    // ★ 仅此处（模式退出）释放共享几何/材质；chunk 重建不得释放
+    for (const e of SHARED.values()) {
+      e.geo.dispose();
+      e.mat.dispose();
+    }
+    SHARED.clear();
+  },
 });
+
+/** 模式退出时释放所有装饰渲染器的共享资源（仅调用一次） */
+export function disposePropRenderers(): void {
+  for (const r of RENDERERS.values()) r.dispose?.();
+}
 
 // ============================================================
 // 宿主接口（模式层适配：EntityManager → rapier；本层不碰 entity）

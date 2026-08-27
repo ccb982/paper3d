@@ -28,6 +28,7 @@ import { tileById } from './Tiles';
 import { tileMaterialByKey } from './TileMaterials';
 import { hsl2rgb } from './TerrainPalette';
 import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
+import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
@@ -177,6 +178,7 @@ export class ChunkManager {
     this.voidKeys.clear();
     this.activated.clear();
     clearWallMaterials();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
+    disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
   }
 
@@ -549,25 +551,29 @@ export class ChunkManager {
   }
 
   /** 释放 chunk 视觉资源（兼容 Mesh 与 Group 两种形态） */
-  private disposeVisual(obj: THREE.Object3D): void {
-    obj.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.geometry) return;
-      m.geometry.dispose();
-      const mm = m.material as THREE.MeshStandardMaterial | undefined;
-      if (!mm) return;
-      // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
-      //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
-      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData;
-      // ★ 块 id 微纹理是本 chunk 私有（每次构建新建），无条件释放
-      extra?.tileIds?.dispose();
-      if (!extra?.cached) {
-        mm.map?.dispose();
-        extra?.lightMap?.dispose();
-      }
-      mm.dispose();
-    });
-  }
+   private disposeVisual(obj: THREE.Object3D): void {
+     obj.traverse((o) => {
+       const m = o as THREE.Mesh;
+       if (!m.geometry) return;
+       const mm = m.material as THREE.MeshStandardMaterial | undefined;
+       // ★ 装饰物共享几何/材质（decorShared 标记）：chunk 重建不得释放，
+       //   仅由 disposePropRenderers 在模式退出时统一释放
+       const shared = (m.geometry.userData as { decorShared?: boolean } | undefined)?.decorShared
+         || (mm?.userData as { decorShared?: boolean } | undefined)?.decorShared;
+       if (!shared) m.geometry.dispose();
+       if (!mm) return;
+       // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
+       //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
+       const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData;
+       // ★ 块 id 微纹理是本 chunk 私有（每次构建新建），无条件释放
+       extra?.tileIds?.dispose();
+       if (!extra?.cached) {
+         mm.map?.dispose();
+         extra?.lightMap?.dispose();
+       }
+       if (!shared) mm.dispose();
+     });
+   }
 }
 
 // ============================================================
