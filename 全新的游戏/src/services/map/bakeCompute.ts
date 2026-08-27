@@ -109,7 +109,13 @@ export function computeChunkMapsRGBA(
   };
 }
 
-/** Pass A —— 材质色图（256²）：底色/抖动/斑块/描边/拉丝/大尺度斑驳 */
+/** Pass A —— 装饰叠加层（256²）：
+ *  ★ 2026-08-27 阶段二语义变更：基色不再烘焙——由地块材质 shader 计算。
+ *  本纹理只剩两个职责：
+ *    ① 有材质的地块 → 白底（材质输出 × 白 = 原样）
+ *    ② 无材质的地块 → 保留旧基色路径（过渡期；全部材质化后此路径自然退役）
+ *    ③ 贴图印章（装饰纹理）→ 叠加在两者之上
+ */
 function computeAlbedoRGBA(
   q: BakeQuery, cx: number, cz: number,
   decals?: PlannedDecal[],
@@ -135,6 +141,16 @@ function computeAlbedoRGBA(
         td = tileById(0); // 0 线以上的侧壁暴露面 → 平地材质
       }
 
+      const i = (py * S + px) * 4;
+
+      // ★ 有材质的地块 → 白底（基色由材质 shader 计算，叠加层只留贴图印章）
+      if (td.visual.material) {
+        out[i] = out[i + 1] = out[i + 2] = 255;
+        out[i + 3] = 255;
+        continue;
+      }
+
+      // ---- 过渡期：无材质地块保留旧基色路径 ----
       // 基准色 → ★ 区域主题调制 → 逐地块 HSL 抖动 → RGB
       //   色相平移 + 饱和/明度系数随世界位置缓变（治地图单调的 A 药）；
       //   水/坑等语义色只吃部分强度——警示红与深蓝是玩法可读性
@@ -188,7 +204,6 @@ function computeAlbedoRGBA(
       const n = vnoise(wx * 0.045, wz * 0.045, seed + 7);
       const shade = 0.94 + 0.12 * n;
 
-      const i = (py * S + px) * 4;
       out[i]     = Math.min(255, r * shade);
       out[i + 1] = Math.min(255, g * shade);
       out[i + 2] = Math.min(255, b * shade);

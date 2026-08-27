@@ -224,8 +224,6 @@ export interface PropPlanContext {
   blockTypes: Uint8Array;
   /** 贴地高度采样（RasterMap.surfaceHeightAt；规划层只认接口） */
   surfaceHeightAt(x: number, z: number): number;
-  /** 调试钩子：每阶段过滤计数（?dbgdecor=1 时由 ChunkManager 传入打日志） */
-  debug?: (stage: string, pass: number, total: number) => void;
 }
 
 /** cell 中心落在哪个地块 */
@@ -253,7 +251,6 @@ function slopeOf(ctx: PropPlanContext, x: number, z: number): number {
 export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   const out: PlannedProp[] = [];
   const defs = propsForGroup(ctx.groupKey);
-  ctx.debug?.('候选装饰物表', defs.length, defs.length);
   if (defs.length === 0) return out;
 
   // 加权池（主打加成：出现率只看 perCellProb 总和，主打只影响"抽谁"）
@@ -268,14 +265,11 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   presenceProb = Math.min(1, presenceProb);
   let total = 0;
   for (const w of weights.values()) total += w;
-  ctx.debug?.('presence概率', presenceProb, 1);
 
-  let nPresence = 0, nSlope = 0, nTile = 0, nKeepClear = 0;
   for (let cy = 0; cy < PROP_GRID && out.length < PROP_BUDGET; cy++) {
     for (let cx = 0; cx < PROP_GRID && out.length < PROP_BUDGET; cx++) {
       const r = hash2(cx * 7 + 1, cy * 7 + 2, ctx.seed + 9602);
       if (r >= presenceProb) continue;
-      nPresence++;
 
       const wx = ctx.cx * 60 + (cx + 0.5) * PROP_CELL;
       const wz = ctx.cz * 60 + (cy + 0.5) * PROP_CELL;
@@ -283,7 +277,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
       const jz = wz + (hash2(cx, cy, ctx.seed + 9604) - 0.5) * PROP_CELL * 0.6;
 
       if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
-      nSlope++;
 
       const tile = tileAtCell(ctx, cx, cy);
       const host = defs.find((p) => {
@@ -292,7 +285,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
         return true;
       });
       if (!host) continue;
-      nTile++;
 
       const safe = host.placement.keepClear ?? [];
       let blocked = false;
@@ -301,7 +293,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
         if (dx * dx + dz * dz <= z.r * z.r) { blocked = true; break; }
       }
       if (blocked) continue;
-      nKeepClear++;
 
       let rr = hash2(cx, cy, ctx.seed + 9605) * total;
       let pick = defs[0];
@@ -322,11 +313,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
       });
     }
   }
-  ctx.debug?.('presence通过', nPresence, PROP_GRID * PROP_GRID);
-  ctx.debug?.('坡度通过', nSlope, nPresence);
-  ctx.debug?.('地块通过', nTile, nSlope);
-  ctx.debug?.('keepClear通过', nKeepClear, nTile);
-  ctx.debug?.('最终抽取', out.length, nKeepClear);
   return out;
 }
 

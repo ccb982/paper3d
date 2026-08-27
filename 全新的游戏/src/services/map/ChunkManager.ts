@@ -23,7 +23,10 @@ import {
   type ChunkMaps,
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
-import { TerrainMaterial } from './TerrainMaterial';
+import { TerrainMaterial, MATERIAL_SLOTS, type TileRenderConfig } from './TerrainMaterial';
+import { tileById } from './Tiles';
+import { tileMaterialByKey } from './TileMaterials';
+import { hsl2rgb } from './TerrainPalette';
 import { buildChunkSideWalls } from './ChunkWalls';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -33,9 +36,6 @@ import {
   planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey, groupPropsByKey,
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
-
-/** ?dbgdecor=1 时开启装饰管线详细调试（分阶段计数 + 位置可视标记） */
-const DBG_DECOR = typeof location !== 'undefined' && /[?&]dbgdecor=1/.test(location.search);
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -295,16 +295,8 @@ export class ChunkManager {
     const props = planChunkProps({
       ...base,
       surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
-      debug: DBG_DECOR
-        ? (stage, pass, total) => console.info(`[装饰][漏斗] chunk(${cx},${cz}) ${stage}: ${pass}/${total}`)
-        : undefined,
     });
     const vols = computePropVolumes(props, cx, cz);
-    console.info(
-      `[ChunkManager][装饰] chunk(${cx},${cz}) 组=${chunkData.groupKey} ` +
-      `贴图=${decals.length} 装饰物=${props.length} 阴影体积=${vols.length} ` +
-      `种子=${this.raster.worldSeed}${DBG_DECOR ? ' [调试模式]' : ''}`,
-    );
     return { decals, props, propVolumes: packVolumes(vols) };
   }
 
@@ -324,7 +316,6 @@ export class ChunkManager {
     // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
     const cached = getCachedChunkMaps(seed, cx, cz);
     if (cached) {
-      if (DBG_DECOR) console.info(`[装饰][路径] chunk(${cx},${cz}) 缓存命中（装饰随纹理复用）`);
       this.finishStandardChunk(cx, cz, cached, decor);
       return;
     }
@@ -343,7 +334,6 @@ export class ChunkManager {
     );
     if (!p) {
       // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存 + 立即建
-      if (DBG_DECOR) console.warn(`[装饰][路径] chunk(${cx},${cz}) Worker 不可用 → 同步回退`);
       for (let dz = -1; dz <= 1; dz++)
         for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
       const maps = bakeChunkMaps(this.raster, cx, cz, {
@@ -353,7 +343,6 @@ export class ChunkManager {
       this.finishStandardChunk(cx, cz, maps, decor);
       return;
     }
-    if (DBG_DECOR) console.info(`[装饰][路径] chunk(${cx},${cz}) Worker 在途（propVolumes=${decor.propVolumes.length / 5}）`);
     this.pendingBakes.set(key, { cx, cz, gen, t: performance.now(), decor });
     p.then((bufs) => {
       if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
@@ -396,7 +385,10 @@ export class ChunkManager {
     }
   }
 
-  /** ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半） */
+  /**
+   * ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半）。
+   * 贴图已在烘焙时印进 albedo（装饰叠加层）；材质由地块自挂 shader 分发。
+   */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
     const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
     geo.rotateX(-Math.PI / 2);
@@ -414,11 +406,14 @@ export class ChunkManager {
     }
     geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
-    const mat = new TerrainMaterial(maps.albedo, maps.lightmap);
+    // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
+    const chunkDataForMat = this.raster.getChunkData(cx, cz);
+    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat) : undefined;
+    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg);
     // lightmap 挂 userData 供 disposeVisual 一并释放（.map 只登记 albedo）；
     // cached = 纹理归烘焙缓存所有，chunk 销毁时跳过纹理释放（releaseBakeCache 统一管）
-    (mat as unknown as { userData: { lightMap?: THREE.Texture; cached?: boolean } }).userData =
-      { lightMap: maps.lightmap, cached: true };
+    (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
+      { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
 
     const top = new THREE.Mesh(geo, mat);
     const group = new THREE.Group();
@@ -442,10 +437,8 @@ export class ChunkManager {
 
     // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----
     if (propLayer) this.createDecorColliders(cx, cz, decor);
-    if (propLayer || decor.decals.length > 0) {
-      console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) 装配完成：贴图 ${decor.decals.length}（已印入albedo）/ 装饰物网格 ${propLayer ? propLayer.children.length : 0} 组`);
-    }
   }
+
 
   // ============================================================
   // ★ 装饰装配辅助（标准 / Boss4D 两风格共用）
@@ -466,22 +459,6 @@ export class ChunkManager {
     //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
     //   影子/碰撞体与可见网格三者错位（踩过的坑）
     propLayer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
-    // ★ 调试可视标记：?dbgdecor=1 时把装饰物位置用高亮线框标出来
-    if (DBG_DECOR) {
-      const markerGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
-      const markerMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
-      const markers = new THREE.InstancedMesh(markerGeo, markerMat, decor.props.length);
-      const mm = new THREE.Matrix4();
-      const mv = new THREE.Vector3();
-      for (let i = 0; i < decor.props.length; i++) {
-        mv.set(decor.props[i].x, decor.props[i].y + 0.5, decor.props[i].z);
-        mm.setPosition(mv);
-        markers.setMatrixAt(i, mm);
-      }
-      markers.instanceMatrix.needsUpdate = true;
-      propLayer.add(markers);
-      console.info(`[装饰][标记] chunk(${cx},${cz}) 位置标记 ${decor.props.length} 个（品红线框）`);
-    }
     return propLayer;
   }
 
@@ -500,9 +477,8 @@ export class ChunkManager {
     }
     if (ids.length > 0) {
       this.propBodies.set(chunkKeyOf(cx, cz), ids);
-      if (DBG_DECOR) console.info(`[装饰][物理] chunk(${cx},${cz}) 创建碰撞体 ${ids.length} 个（fixed cuboid）`);
     } else if (decor.props.some((p) => mapDecorByKey(p.propKey)?.isCollidable)) {
-      console.warn(`[装饰][物理] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
+      console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
     }
   }
 
@@ -526,9 +502,6 @@ export class ChunkManager {
     if (propLayer) b.group.add(propLayer);
     this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
     if (propLayer) this.createDecorColliders(cx, cz, decor);
-    if (propLayer || decor.decals.length > 0) {
-      console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) Boss4D 装配完成：贴图 ${decor.decals.length} / 装饰物网格 ${propLayer ? propLayer.children.length : 0} 组`);
-    }
   }
 
   /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
@@ -584,7 +557,9 @@ export class ChunkManager {
       if (!mm) return;
       // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
       //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
-      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; cached?: boolean } }).userData;
+      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData;
+      // ★ 块 id 微纹理是本 chunk 私有（每次构建新建），无条件释放
+      extra?.tileIds?.dispose();
       if (!extra?.cached) {
         mm.map?.dispose();
         extra?.lightMap?.dispose();
@@ -592,4 +567,58 @@ export class ChunkManager {
       mm.dispose();
     });
   }
+}
+
+// ============================================================
+// 材质渲染配置（模块级；阶段二：块 id 微纹理 + 参数数组打包）
+// ============================================================
+
+/**
+ * 构建每 chunk 的材质渲染配置：
+ * 块 id 微纹理（15×15 R8，Nearest）+ 材质参数数组（按 tileId 索引打包）。
+ * 有材质的地块 → 基色/表面/图案参数；无材质 → 默认值（叠加层提供颜色）。
+ */
+function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }): TileRenderConfig {
+  const base = new Float32Array(MATERIAL_SLOTS * 4);
+  const surface = new Float32Array(MATERIAL_SLOTS * 4);
+  const emissive = new Float32Array(MATERIAL_SLOTS * 4);
+  const params = new Float32Array(MATERIAL_SLOTS * 16);
+
+  for (let id = 0; id < MATERIAL_SLOTS; id++) {
+    const td = tileById(id);
+    const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
+    const [r, g, b] = hsl2rgb(td.visual.baseHsl.h, td.visual.baseHsl.s, td.visual.baseHsl.l);
+    base[id * 4] = r / 255;
+    base[id * 4 + 1] = g / 255;
+    base[id * 4 + 2] = b / 255;
+    base[id * 4 + 3] = mat?.surface.roughness ?? 0.9;
+    const s = mat?.surface;
+    surface[id * 4] = s?.specular ?? 0;
+    surface[id * 4 + 1] = s?.fresnel ?? 0;
+    surface[id * 4 + 2] = s?.emissive ? s.emissive.strength : 0;
+    // ★ 棋盘描边强度：borderLine=false 的（水面）无描边
+    surface[id * 4 + 3] = td.visual.borderLine === false ? 0 : 0.16;
+    emissive[id * 4] = s?.emissive?.r ?? 0;
+    emissive[id * 4 + 1] = s?.emissive?.g ?? 0;
+    emissive[id * 4 + 2] = s?.emissive?.b ?? 0;
+    // 材质图案参数：模板声明顺序打包（GLSL 端按同序索引读取）
+    if (mat) {
+      const merged = { ...mat.params, ...(td.visual.material?.params ?? {}) };
+      let i = 0;
+      for (const k of Object.keys(mat.params)) {
+        params[id * 16 + i++] = merged[k] ?? mat.params[k];
+      }
+    }
+  }
+
+  const tileIds = new THREE.DataTexture(
+    Uint8Array.from(chunkData.blockTypes), 15, 15,
+    THREE.RedFormat, THREE.UnsignedByteType,
+  );
+  tileIds.magFilter = THREE.NearestFilter;
+  tileIds.minFilter = THREE.NearestFilter;
+  tileIds.flipY = false;
+  tileIds.needsUpdate = true;
+
+  return { tileIds, base, surface, emissive, params };
 }

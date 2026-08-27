@@ -45,12 +45,13 @@ export interface TileVisual {
   /** 方向性拉丝（平台拉丝金属） */
   streaks?: boolean;
   /**
-   * ★ 阶段二：shader 程序化图案契约（"地块基类尽量 shader 生成，少用纹理"）。
-   * fnId 在 GLSL 图案库注册；params 打包进 uniform 数组。
-   * 阶段二前无人消费（纯契约占位）；迁移后 jitter/patches/borderLine/streaks
-   * 由图案函数替代。
+   * ★ 地块自挂材质（2026-08-27 定稿）：材质是地块的属性——
+   * fnId 在 TileMaterials 注册表登记（GLSL 材质函数阶段二实现），
+   * params 覆盖材质默认参数（同 fnId 不同 params = 变体）。
+   * 材质决定"这块地是什么"；装饰纹理（TileDecalBase）独立叠加，
+   * 决定"这块地上长了什么"。
    */
-  pattern?: { fnId: string; params: Record<string, number> };
+  material?: { fnId: string; params?: Record<string, number> };
 }
 
 /** 物理与生成层属性（生成器/碰撞消费） */
@@ -104,6 +105,7 @@ export const TILE_FLAT = new TileDef(
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
+    material: { fnId: 'dirt' },                            // ★ 纯泥土地面
   },
   {
     height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
@@ -121,6 +123,7 @@ export const TILE_PLATFORM = new TileDef(
     depression: false,
     borderLine: true,
     streaks: true,                                          // 拉丝金属
+    material: { fnId: 'rock' },                             // ★ 岩石材质
   },
   {
     height: 1.8, heightJitterRange: 0.4,
@@ -222,6 +225,7 @@ export const TILE_ROCK_PLATFORM = new TileDef(
     depression: false,
     borderLine: true,
     streaks: true,
+    material: { fnId: 'rock', params: { strata: 0.24, cracks: 0.14 } }, // ★ 岩台（更粗粝）
   },
   { height: 1.8, heightJitterRange: 0.4, walkable: true },
   ['ashen', 'foundation'],
@@ -250,6 +254,7 @@ export const TILE_MOSSY_PLATFORM = new TileDef(
     depression: false,
     borderLine: true,
     streaks: true,
+    material: { fnId: 'moss' },                             // ★ 苔藓材质
   },
   { height: 1.8, heightJitterRange: 0.4, walkable: true },
   ['overgrown'],
