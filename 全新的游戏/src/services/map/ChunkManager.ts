@@ -430,36 +430,9 @@ export class ChunkManager {
 
     // ---- ★ 装饰层装配（计划在预渲染前已放置，此处直接消费同一份） ----
     // 贴图已在烘焙时印进 albedo 纹理（无需运行时步骤）；
-    // 装饰物 → buildPropLayer → 挂进 chunk group
-    let propLayer: THREE.Object3D | null = null;
-    if (decor.props.length > 0) {
-      propLayer = buildPropLayer(decor.props);
-      if (propLayer) {
-        // ★ 对齐 chunk 角：PlannedProp.x/z 是 chunk 角落坐标(0~60)，而 chunk
-        //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
-        //   影子/碰撞体与可见网格三者错位（踩过的坑）
-        propLayer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
-        group.add(propLayer);
-      } else {
-        console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
-      }
-      // ★ 调试可视标记：?dbgdecor=1 时把装饰物位置用高亮线框标出来
-      if (DBG_DECOR && propLayer) {
-        const markerGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
-        const markerMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
-        const markers = new THREE.InstancedMesh(markerGeo, markerMat, decor.props.length);
-        const mm = new THREE.Matrix4();
-        const mv = new THREE.Vector3();
-        for (let i = 0; i < decor.props.length; i++) {
-          mv.set(decor.props[i].x, decor.props[i].y + 0.5, decor.props[i].z);
-          mm.setPosition(mv);
-          markers.setMatrixAt(i, mm);
-        }
-        markers.instanceMatrix.needsUpdate = true;
-        propLayer.add(markers);
-        console.info(`[装饰][标记] chunk(${cx},${cz}) 位置标记 ${decor.props.length} 个（品红线框）`);
-      }
-    }
+    // 装饰物 → buildDecorLayer → 挂进 chunk group
+    const propLayer = this.buildDecorLayer(cx, cz, decor);
+    if (propLayer) group.add(propLayer);
 
     this.replaceChunk(
       chunkKeyOf(cx, cz), group, cx, cz,
@@ -468,25 +441,68 @@ export class ChunkManager {
     );
 
     // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----
-    // （replaceChunk 会销毁 propBodies[key] 的"旧"碰撞体——若先创建，
-    //   刚建的会被当旧体立刻销毁，物理实体永不存在。踩过的坑）
-    // 创建走基类统一实现：createColliders（半径/高度来自表内 physics）
-    if (propLayer && this.host.createPropBody) {
-      const ids: number[] = [];
-      for (const [key, list] of groupPropsByKey(decor.props)) {
-        const def = mapDecorByKey(key);
-        if (!def?.isCollidable) continue;
-        ids.push(...def.createColliders(this.host, list, cx, cz));
-      }
-      if (ids.length > 0) {
-        this.propBodies.set(chunkKeyOf(cx, cz), ids);
-        if (DBG_DECOR) console.info(`[装饰][物理] chunk(${cx},${cz}) 创建碰撞体 ${ids.length} 个（fixed cuboid）`);
-      } else if (decor.props.some((p) => mapDecorByKey(p.propKey)?.isCollidable)) {
-        console.warn(`[装饰][物理] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
-      }
-    }
+    if (propLayer) this.createDecorColliders(cx, cz, decor);
     if (propLayer || decor.decals.length > 0) {
       console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) 装配完成：贴图 ${decor.decals.length}（已印入albedo）/ 装饰物网格 ${propLayer ? propLayer.children.length : 0} 组`);
+    }
+  }
+
+  // ============================================================
+  // ★ 装饰装配辅助（标准 / Boss4D 两风格共用）
+  // ============================================================
+
+  /**
+   * 装饰物网格层（含调试标记）。返回 null = 无装饰物或渲染器未注册。
+   * 调用方挂进 chunk group 后必须调用 createDecorColliders（在 replaceChunk 之后）。
+   */
+  private buildDecorLayer(cx: number, cz: number, decor: DecorPlan): THREE.Object3D | null {
+    if (decor.props.length === 0) return null;
+    const propLayer = buildPropLayer(decor.props);
+    if (!propLayer) {
+      console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
+      return null;
+    }
+    // ★ 对齐 chunk 角：PlannedProp.x/z 是 chunk 角落坐标(0~60)，而 chunk
+    //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
+    //   影子/碰撞体与可见网格三者错位（踩过的坑）
+    propLayer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
+    // ★ 调试可视标记：?dbgdecor=1 时把装饰物位置用高亮线框标出来
+    if (DBG_DECOR) {
+      const markerGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+      const markerMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true });
+      const markers = new THREE.InstancedMesh(markerGeo, markerMat, decor.props.length);
+      const mm = new THREE.Matrix4();
+      const mv = new THREE.Vector3();
+      for (let i = 0; i < decor.props.length; i++) {
+        mv.set(decor.props[i].x, decor.props[i].y + 0.5, decor.props[i].z);
+        mm.setPosition(mv);
+        markers.setMatrixAt(i, mm);
+      }
+      markers.instanceMatrix.needsUpdate = true;
+      propLayer.add(markers);
+      console.info(`[装饰][标记] chunk(${cx},${cz}) 位置标记 ${decor.props.length} 个（品红线框）`);
+    }
+    return propLayer;
+  }
+
+  /**
+   * 装饰物碰撞体：必须在 replaceChunk 之后创建（replaceChunk 会销毁
+   * propBodies[key] 的"旧"碰撞体——若先创建，刚建的会被当旧体立刻销毁，
+   * 物理实体永不存在。踩过的坑）。创建走基类统一实现。
+   */
+  private createDecorColliders(cx: number, cz: number, decor: DecorPlan): void {
+    if (!this.host.createPropBody) return;
+    const ids: number[] = [];
+    for (const [key, list] of groupPropsByKey(decor.props)) {
+      const def = mapDecorByKey(key);
+      if (!def?.isCollidable) continue;
+      ids.push(...def.createColliders(this.host, list, cx, cz));
+    }
+    if (ids.length > 0) {
+      this.propBodies.set(chunkKeyOf(cx, cz), ids);
+      if (DBG_DECOR) console.info(`[装饰][物理] chunk(${cx},${cz}) 创建碰撞体 ${ids.length} 个（fixed cuboid）`);
+    } else if (decor.props.some((p) => mapDecorByKey(p.propKey)?.isCollidable)) {
+      console.warn(`[装饰][物理] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
     }
   }
 
@@ -494,6 +510,7 @@ export class ChunkManager {
    * Boss4D 风格 chunk 同步构建（标准风格走 requestStandardBake 异步管线）。
    * ★ 虚空地块（isBoss4DVoidChunk 命中）：只建物理不建视觉——
    *   复刻"chunk 有碰撞无纹理"的历史 bug，主题化为四维空间的一部分。
+   *   （虚空地块不放置装饰——不可见障碍对玩家不公平）
    */
   private buildChunkMesh(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
@@ -502,8 +519,16 @@ export class ChunkManager {
       this.replaceChunk(key, null, cx, cz, b.trimeshVertices, b.trimeshIndices);
       return;
     }
-    const b = buildBoss4DChunk(this.raster, cx, cz);
+    // ★ 装饰先行（与标准风格同管线）：贴图印进外观纹理、装饰物挂网格+碰撞
+    const decor = this.planDecor(cx, cz);
+    const b = buildBoss4DChunk(this.raster, cx, cz, decor.decals);
+    const propLayer = this.buildDecorLayer(cx, cz, decor);
+    if (propLayer) b.group.add(propLayer);
     this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
+    if (propLayer) this.createDecorColliders(cx, cz, decor);
+    if (propLayer || decor.decals.length > 0) {
+      console.info(`[ChunkManager][装饰] chunk(${cx},${cz}) Boss4D 装配完成：贴图 ${decor.decals.length} / 装饰物网格 ${propLayer ? propLayer.children.length : 0} 组`);
+    }
   }
 
   /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */

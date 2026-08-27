@@ -26,6 +26,7 @@ import * as THREE from 'three';
 import { CHUNK_SIZE } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
 import { bakeChunkAppearance, BOSS4D_BAKE } from './ChunkAppearance';
+import type { PlannedDecal } from './decor/TileDecalBase';
 import { hash2 } from './TerrainNoise';
 import type { RasterMap } from './RasterMap';
 
@@ -151,9 +152,13 @@ function mergePhysicsTrimesh(
 
 /**
  * 构建一个 Boss 四维空间 chunk：米格独立顶面 + 高差垂直侧壁。
+ * @param decals 装饰贴图计划（预渲染前放置完成 → 印进外观纹理）
  * @param group.position 已设为 chunk 角 (cx*CHUNK_SIZE, 0, cz*CHUNK_SIZE)
  */
-export function buildBoss4DChunk(raster: RasterMap, cx: number, cz: number): Boss4DChunkBuild {
+export function buildBoss4DChunk(
+  raster: RasterMap, cx: number, cz: number,
+  decals?: PlannedDecal[],
+): Boss4DChunkBuild {
   const H = sampleHeightField(raster, cx, cz);
   const { tPos, tUv, tNor, tIdx } = topSurfaceData(H);
 
@@ -171,7 +176,7 @@ export function buildBoss4DChunk(raster: RasterMap, cx: number, cz: number): Bos
   const group = new THREE.Group();
   group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
 
-  const mapTex = bakeChunkAppearance(raster, cx, cz, BOSS4D_BAKE);
+  const mapTex = bakeChunkAppearance(raster, cx, cz, BOSS4D_BAKE, decals);
   const topMat = new THREE.MeshStandardMaterial({ map: mapTex, roughness: 0.95, metalness: 0 });
   const topMesh = new THREE.Mesh(topGeo, topMat);
   group.add(topMesh);

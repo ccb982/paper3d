@@ -48,6 +48,7 @@ import {
   type BakeQuery,
 } from './bakeCompute';
 import type { PlannedDecal } from './decor/TileDecalBase';
+import { applyDecalStamps } from './decor/TileDecalBase';
 
 // ============================================================
 // 烘焙数据流契约（架构定稿）：
@@ -104,6 +105,7 @@ export const BOSS4D_BAKE: Required<ChunkBakeOptions> = { contactAO: true, sunSha
 
 /**
  * 【旧路径】烘焙一张 chunk 单纹理外观（Boss4DArena 专用，主地图勿用）。
+ * @param decals 装饰贴图计划（预渲染前放置完成 → 印进外观纹理；boss4D 同管线）
  * @returns 已配置好 colorSpace/filter 的 CanvasTexture（随 chunk 销毁时 dispose）
  */
 export function bakeChunkAppearance(
@@ -111,6 +113,7 @@ export function bakeChunkAppearance(
   cx: number,
   cz: number,
   opts: ChunkBakeOptions = {},
+  decals?: PlannedDecal[],
 ): THREE.CanvasTexture {
   const S = APPEARANCE_RES;
   const cvs = document.createElement('canvas');
@@ -318,6 +321,11 @@ export function bakeChunkAppearance(
       img.data[i + 2] = Math.min(255, b * f);
       img.data[i + 3] = 255;
     }
+  }
+
+  // ★ 装饰贴图印章：预渲染前贴图已全部放置 → 印进外观纹理（与双纹理路径同款）
+  if (decals && decals.length > 0) {
+    applyDecalStamps(img.data, S, originX, originZ, decals, seed);
   }
 
   ctx.putImageData(img, 0, 0);

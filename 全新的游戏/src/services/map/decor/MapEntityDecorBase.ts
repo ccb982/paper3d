@@ -408,19 +408,43 @@ function rockVertexNoise(i: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-function getSharedRock(key: string, params: Record<string, number>): { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial } {
-  let entry = SHARED.get(key);
-  if (entry) return entry;
+/**
+ * 共享几何工厂：按 geometry.type 分发——
+ * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
+ * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
+ */
+function buildSharedGeometry(type: string | undefined, params: Record<string, number>): THREE.BufferGeometry {
+  const noise = params.noise ?? 0.35;
+  if (type === 'block') {
+    const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const n = rockVertexNoise(i * 7 + 3);
+      const s = 1 + (n - 0.5) * noise * 0.6;
+      pos.setXYZ(i, x * s, y * s * (0.7 + 0.3 * n), z * s);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+  // rock（默认）
   const geo = new THREE.IcosahedronGeometry(1, 1);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
     const n = rockVertexNoise(i * 7 + 3);
     const squash = 0.72 + 0.15 * n;                  // 底部压扁（半球感）
-    const s = 1 + (n - 0.5) * (params.noise ?? 0.35);
+    const s = 1 + (n - 0.5) * noise;
     pos.setXYZ(i, x * s, y * s * squash, z * s);
   }
   geo.computeVertexNormals();
+  return geo;
+}
+
+function getSharedRock(key: string, type: string | undefined, params: Record<string, number>): { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial } {
+  let entry = SHARED.get(key);
+  if (entry) return entry;
+  const geo = buildSharedGeometry(type, params);
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(params.color ?? 0x8a7f74),
     roughness: 0.95, metalness: 0, flatShading: true,
@@ -430,11 +454,11 @@ function getSharedRock(key: string, params: Record<string, number>): { geo: THRE
   return entry;
 }
 
-/** 注册内置 instanced 渲染器（岩石几何；后续几何类型在此扩展） */
+/** 注册内置 instanced 渲染器（几何按 geometry.type 分发；后续几何类型在此扩展） */
 registerPropRenderer('instanced', {
   build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
     const params = def.geometry?.params ?? {};
-    const { geo, mat } = getSharedRock(`${def.key}|${def.geometry?.type ?? ''}`, params);
+    const { geo, mat } = getSharedRock(`${def.key}|${def.geometry?.type ?? ''}`, def.geometry?.type, params);
     const mesh = new THREE.InstancedMesh(geo, mat, instances.length);
     const m = new THREE.Matrix4();
     const e = new THREE.Euler();
