@@ -17,6 +17,33 @@ import { hsl2rgb } from './TerrainPalette';
 import { BAKE_SUN, CAST_MIN_DEPTH } from './bakeCompute';
 import { regionParamsAt, SEMANTIC_THEME_MIX } from './RegionTheme';
 import type { RasterMap } from './RasterMap';
+import { TERRAIN_LIGHT_TUNING } from './TerrainMaterial';
+
+/** 侧壁材质注册表（每帧由 updateWallLighting 统一喂昼夜标量；dispose 时 clear） */
+const wallMaterials = new Set<THREE.MeshBasicMaterial>();
+
+/**
+ * 每帧昼夜调制（与地形顶面同源：仅改整体亮度，不改烘焙阴影方向）。
+ * 地形顶面经 updateTerrainLighting 变暗/变冷，侧壁若不跟随则夜晚"发光断崖"。
+ * @param sun 太阳状态（与 updateTerrainLighting 同源）
+ */
+export function updateWallLighting(sun: {
+  color: number;
+  intensityScale: number;
+  daylight: number;
+}): void {
+  const T = TERRAIN_LIGHT_TUNING;
+  const ambI = T.ambientNightIntensity +
+    (T.ambientDayIntensity - T.ambientNightIntensity) * sun.daylight;
+  // 近似地形综合亮度包络（ambient + sun×平均直射），与顶面同趋势
+  const scalar = ambI + T.sunIntensity * sun.intensityScale * 0.8;
+  for (const m of wallMaterials) m.color.setScalar(scalar);
+}
+
+/** 模式退出时清空注册表（材质已由 ChunkManager.disposeVisual 释放） */
+export function clearWallMaterials(): void {
+  wallMaterials.clear();
+}
 
 /** 生成门槛：与烘焙投影门槛同一来源（bakeCompute.CAST_MIN_DEPTH import） */
 const MIN_WALL_DROP = CAST_MIN_DEPTH;
@@ -143,5 +170,7 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
   geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   geo.setIndex(idx);
 
-  return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true }));
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  wallMaterials.add(mat);
+  return new THREE.Mesh(geo, mat);
 }

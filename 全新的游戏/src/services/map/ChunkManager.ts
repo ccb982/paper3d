@@ -27,7 +27,7 @@ import { TerrainMaterial, MATERIAL_SLOTS, type TileRenderConfig } from './Terrai
 import { tileById } from './Tiles';
 import { tileMaterialByKey } from './TileMaterials';
 import { hsl2rgb } from './TerrainPalette';
-import { buildChunkSideWalls } from './ChunkWalls';
+import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
@@ -176,6 +176,7 @@ export class ChunkManager {
     this.meshes.clear();
     this.voidKeys.clear();
     this.activated.clear();
+    clearWallMaterials();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
   }
 
@@ -584,13 +585,17 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }): TileRende
   const emissive = new Float32Array(MATERIAL_SLOTS * 4);
   const params = new Float32Array(MATERIAL_SLOTS * 16);
 
-  for (let id = 0; id < MATERIAL_SLOTS; id++) {
-    const td = tileById(id);
-    const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
-    const [r, g, b] = hsl2rgb(td.visual.baseHsl.h, td.visual.baseHsl.s, td.visual.baseHsl.l);
-    base[id * 4] = r / 255;
-    base[id * 4 + 1] = g / 255;
-    base[id * 4 + 2] = b / 255;
+   for (let id = 0; id < MATERIAL_SLOTS; id++) {
+     const td = tileById(id);
+     const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
+     // ★ 无材质地块：基色由 albedo 纹理承载，uMatBase 必须置白，
+     //   否则 base(=uMatBase) × alb(已含完整基色) 会把颜色平方 → 坑/水/冰发黑
+     const [r, g, b] = td.visual.material
+       ? hsl2rgb(td.visual.baseHsl.h, td.visual.baseHsl.s, td.visual.baseHsl.l)
+       : [255, 255, 255];
+     base[id * 4] = r / 255;
+     base[id * 4 + 1] = g / 255;
+     base[id * 4 + 2] = b / 255;
     base[id * 4 + 3] = mat?.surface.roughness ?? 0.9;
     const s = mat?.surface;
     surface[id * 4] = s?.specular ?? 0;
