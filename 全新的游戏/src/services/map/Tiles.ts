@@ -261,6 +261,63 @@ export const TILE_MOSSY_PLATFORM = new TileDef(
 );
 
 // ============================================================
+// 路面材质专用地块（让 brick/grass/wood 三个材质投入使用）
+// genRole=ground → 作为 PATH 装饰斑块成片出现；基色由材质 shader 调制
+//   （albedo 走白底，颜色来自 uMatBase = 本表 baseHsl × mat_xxx 图案）
+// ============================================================
+
+/** 砖石路面（brick 材质；废墟/城镇基调） */
+export const TILE_BRICK = new TileDef(
+  16, 'brick', '砖石路', 'ground',
+  {
+    baseHsl: { h: 0.08, s: 0.18, l: 0.42 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: 'brick' },
+  },
+  {
+    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    flattenAtPorts: true, walkable: true,
+  },
+  ['foundation', 'ashen'],
+);
+
+/** 草地路面（grass 材质；沃绿蔓生基调） */
+export const TILE_GRASS = new TileDef(
+  17, 'grass', '草地', 'ground',
+  {
+    baseHsl: { h: 0.30, s: 0.32, l: 0.38 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: 'grass' },
+  },
+  {
+    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    flattenAtPorts: true, walkable: true,
+  },
+  ['foundation', 'overgrown'],
+);
+
+/** 木板路面（wood 材质；栈道/木桥基调） */
+export const TILE_WOOD = new TileDef(
+  18, 'wood', '木板路', 'ground',
+  {
+    baseHsl: { h: 0.07, s: 0.35, l: 0.30 },
+    jitter: { h: 0.008, s: 0.03, l: 0.05 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: 'wood' },
+  },
+  {
+    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    flattenAtPorts: true, walkable: true,
+  },
+  ['foundation', 'overgrown'],
+);
+
+// ============================================================
 // 注册表
 // ============================================================
 
@@ -270,6 +327,7 @@ for (const t of [
   TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_SLOPE, TILE_WATER,
   TILE_ICE, TILE_ASH_FIELD, TILE_MUD,
   TILE_ROCK_PLATFORM, TILE_ICE_PLATFORM, TILE_MOSSY_PLATFORM,
+  TILE_BRICK, TILE_GRASS, TILE_WOOD,
 ]) {
   if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
   REGISTRY.set(t.id, t);

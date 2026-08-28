@@ -44,8 +44,29 @@ export const TERRAIN_LIGHT_TUNING = {
 
 const registry = new Set<TerrainMaterial>();
 
-/** 材质地块 id 上限（uMatBase 等 uniform 数组尺寸；当前地块 id ≤15） */
-export const MATERIAL_SLOTS = 16;
+/** 材质 uniform 数组尺寸（每 tile id 一槽；上限 = 可注册地块 id 上限）。
+ *  ★ 加地块时只要 id < MATERIAL_SLOTS 即"注册即生效"，无需改数组尺寸。
+ *    当前留 32 余量；如需更多，同步放大本常数与下方 GLSL 数组尺寸。 */
+export const MATERIAL_SLOTS = 32;
+
+/**
+ * ★ 材质 fnId → GLSL 函数索引（数据驱动分发，替代原 tile id 硬编码分支）。
+ * 加材质 = TileMaterials 注册 + 在此登记一行（GLSL 函数本体另写于 MATERIAL_GLSL）。
+ * 索引数值无业务含义，稳定即可。
+ */
+const MAT_FN_INDEX: Record<string, number> = {
+  dirt: 0, brick: 1, grass: 2, wood: 3, rock: 4, moss: 5,
+};
+
+/** TileDef.visual.material.fnId → 材质函数索引（-1 = 无材质） */
+export function materialFnIndex(fnId: string | undefined): number {
+  return fnId ? (MAT_FN_INDEX[fnId] ?? -1) : -1;
+}
+
+/** 由注册表自动生成 GLSL 分发链（fn 索引 → mat_<fnId> 调用） */
+const MATERIAL_DISPATCH = Object.entries(MAT_FN_INDEX)
+  .map(([fnId, idx]) => `    if (fn == ${idx}) return mat_${fnId}(w, id);`)
+  .join('\n');
 
 /**
  * 每 chunk 材质渲染配置（ChunkManager 从块数据构建；基色/参数全部打包成数组）
@@ -53,23 +74,26 @@ export const MATERIAL_SLOTS = 16;
 export interface TileRenderConfig {
   /** 15×15 块 id 微纹理（R8，Nearest，flipY=false） */
   tileIds: THREE.DataTexture;
-  /** vec4×16：rgb 基色 + roughness */
+  /** vec4×N：rgb 基色 + roughness */
   base: Float32Array;
-  /** vec4×16：specular, fresnel, emissiveStrength, edgeStrength */
+  /** vec4×N：specular, fresnel, emissiveStrength, edgeStrength */
   surface: Float32Array;
-  /** vec4×16：emissive rgb */
+  /** vec4×N：emissive rgb */
   emissive: Float32Array;
-  /** float×256：材质图案参数（id*16 + i） */
+  /** float×N×16：材质图案参数（id*16 + i） */
   params: Float32Array;
+  /** int×N：每 tile id 的材质函数索引（uMatFn；-1 = 无材质） */
+  fn: Int32Array;
 }
 
 const MATERIAL_GLSL = /* glsl */ `
   // ==================== 材质输入（★ 必须先声明后使用；放函数库最前） ====================
   uniform sampler2D uTileIds;
-  uniform vec4 uMatBase[16];
-  uniform vec4 uMatSurface[16];
-  uniform vec4 uMatEmissive[16];
-  uniform float uMatParams[256];
+  uniform vec4 uMatBase[${MATERIAL_SLOTS}];
+  uniform vec4 uMatSurface[${MATERIAL_SLOTS}];
+  uniform vec4 uMatEmissive[${MATERIAL_SLOTS}];
+  uniform int uMatFn[${MATERIAL_SLOTS}];
+  uniform float uMatParams[${MATERIAL_SLOTS * 16}];
 
   // ==================== 噪声基座（纯视觉，无需与 JS hash2 对齐） ====================
   float h21(vec2 p) {
@@ -159,14 +183,12 @@ const MATERIAL_GLSL = /* glsl */ `
     return col + fuzz;
   }
 
-  // ==================== 分发 ====================
-  // 加材质 = TileMaterials 注册 + 此处加一个分支（id 对应地块）
+  // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================
+  // 不再按 tile id 硬编码分支；uMatFn[id] = 材质注册表函数索引，
+  // 分发链由 MAT_FN_INDEX 自动生成。加材质只在两处登记，不再碰本函数体。
   vec3 materialBase(vec2 w, int id) {
-    if (id == 0)  return mat_dirt(w, id);
-    if (id == 1)  return mat_rock(w, id);
-    if (id == 13) return mat_rock(w, id);
-    if (id == 15) return mat_moss(w, id);
-    // brick(16)/grass(17)/wood(18) 绑定地块后在此加入分发
+    int fn = uMatFn[id];
+${MATERIAL_DISPATCH}
     return vec3(1.0);   // 无材质地块 → 基色 1.0（叠加层提供颜色）
   }
 `;
@@ -233,6 +255,7 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         uMatBase: { value: cfg?.base ?? new Float32Array(MATERIAL_SLOTS * 4) },
         uMatSurface: { value: cfg?.surface ?? new Float32Array(MATERIAL_SLOTS * 4) },
         uMatEmissive: { value: cfg?.emissive ?? new Float32Array(MATERIAL_SLOTS * 4) },
+        uMatFn: { value: cfg?.fn ?? new Int32Array(MATERIAL_SLOTS).fill(-1) },
         uMatParams: { value: cfg?.params ?? new Float32Array(MATERIAL_SLOTS * 16) },
         uSunDir: { value: new THREE.Vector3(-0.342, 1.0, 0.940).normalize() },
         uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(TERRAIN_LIGHT_TUNING.ambientDayIntensity) },

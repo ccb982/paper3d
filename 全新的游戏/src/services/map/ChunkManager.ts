@@ -23,7 +23,7 @@ import {
   type ChunkMaps,
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
-import { TerrainMaterial, MATERIAL_SLOTS, type TileRenderConfig } from './TerrainMaterial';
+import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { tileMaterialByKey } from './TileMaterials';
 import { hsl2rgb } from './TerrainPalette';
@@ -631,5 +631,12 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }): TileRende
   tileIds.flipY = false;
   tileIds.needsUpdate = true;
 
-  return { tileIds, base, surface, emissive, params };
+  // ★ 每 tile id 的材质函数索引（数据驱动分发，见 TerrainMaterial.MAT_FN_INDEX）
+  const fn = new Int32Array(MATERIAL_SLOTS);
+  for (let id = 0; id < MATERIAL_SLOTS; id++) {
+    const td = tileById(id);
+    fn[id] = td.visual.material ? materialFnIndex(td.visual.material.fnId) : -1;
+  }
+
+  return { tileIds, base, surface, emissive, params, fn };
 }

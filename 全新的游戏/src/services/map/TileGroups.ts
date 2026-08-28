@@ -57,7 +57,7 @@ const ROLE_DEFAULT: Record<TileGenRole, TileDef> = {
 
 registerGroup({
   key: 'foundation', label: '基石', weight: 0,
-  members: { flat: 1, platform: 1, water: 1, pit: 1 },
+  members: { flat: 1, platform: 1, water: 1, pit: 1, brick: 1, grass: 1, wood: 1 },
 });
 
 registerGroup({
@@ -67,12 +67,12 @@ registerGroup({
 
 registerGroup({
   key: 'ashen', label: '灰烬废土', weight: 1,
-  members: { ash_field: 3, mud: 1, rock_platform: 3, pit: 2, water: 0.5 },
+  members: { ash_field: 3, mud: 1, rock_platform: 3, pit: 2, water: 0.5, brick: 2 },
 });
 
 registerGroup({
   key: 'overgrown', label: '沃绿蔓生', weight: 1,
-  members: { mud: 2, mossy_platform: 3, water: 2, pit: 0.5 },
+  members: { mud: 2, mossy_platform: 3, water: 2, pit: 0.5, grass: 2, wood: 2 },
 });
 
 // ============================================================
