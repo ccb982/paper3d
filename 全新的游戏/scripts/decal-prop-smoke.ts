@@ -18,7 +18,7 @@ for (let seed = 1; seed <= 3; seed++) {
     }
   }
 }
-console.log(`空库规划输出：贴图 ${dTotal} 装饰物 ${pTotal}（应为 0）`);
+console.log(`规划输出：贴图 ${dTotal} 装饰物 ${pTotal}（foundation 占位素材自注册，非 0 为预期；真正空库前提已不存在）`);
 console.log(`groupKey 采样：${[...groups].join(',')}`);
 
 // 组过滤可用性（空库下注册一个贴图+一个装饰物，验证过滤/散布路径可跑）

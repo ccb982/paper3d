@@ -11,9 +11,9 @@
 //   其余任何 id 变化（包括液体/坑洞位）均为回归失败
 // ============================================================
 import { generateChunk } from '../src/services/map/ChunkGenerator';
+import { readFileSync } from 'fs';
 
 declare const process: { argv: string[]; exit(code: number): void };
-declare const require: (id: string) => any;
 
 function fnv1a32(bytes: Uint8Array): number {
   let h = 0x811c9dc5;
@@ -51,9 +51,8 @@ if (!baselinePath) {
   console.error(`[gen-regression] 已采集 ${rows.length} 个 chunk 基线`);
 } else {
   // 对比模式：逐块白名单校验
-  const fs = require('fs');
   const old = new Map<string, Row>();
-  for (const line of fs.readFileSync(baselinePath, 'utf8').split('\n')) {
+    for (const line of readFileSync(baselinePath, 'utf8').split('\n')) {
     const s = line.trim();
     if (!s || !s.startsWith('{')) continue;
     const r = JSON.parse(s) as Row;
@@ -61,8 +60,8 @@ if (!baselinePath) {
   }
   let fail = 0;
   const ALLOWED: Record<number, number[]> = {
-    0: [0, 10, 11, 12],   // 平地 → 平地/装饰平面
-    1: [1, 13, 14, 15],   // 高台 → 高台/装饰高台
+    0: [0, 10, 11, 12, 16, 17, 18],   // 平地 → 平地/装饰平面（含 brick/grass/wood 路面材质地块）
+    1: [1, 13, 14, 15],               // 高台 → 高台/装饰高台
   };
   for (const r of rows) {
     const o = old.get(`${r.seed}:${r.cx}:${r.cz}`);
