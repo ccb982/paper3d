@@ -14,7 +14,7 @@
 // ============================================================
 
 import { hash2 } from './TerrainNoise';
-import { tileByKey, tileById, TILE_FLAT, TILE_PLATFORM, TILE_WATER, TILE_PIT, type TileDef, type TileGenRole } from './Tiles';
+import { tileByKey, tileById, allTiles, TILE_FLAT, TILE_PLATFORM, TILE_WATER, TILE_PIT, type TileDef, type TileGenRole } from './Tiles';
 
 // ============================================================
 // 组定义与注册表
@@ -100,7 +100,7 @@ const NEUTRAL_GEN: GroupGen = { densityBias: 0, waterMul: 1, pitMul: 1 };
 
 registerGroup({
   key: 'foundation', label: '基石', weight: 0,
-  members: { flat: 1, platform: 1, water: 1, pit: 1, brick: 1, grass: 1, wood: 1 },
+  members: { flat: 1, platform: 1, water: 1, pit: 1, brick: 1, grass: 1, wood: 1, rock_platform: 1 },
   palette: NEUTRAL_PALETTE, gen: NEUTRAL_GEN,
 });
 
@@ -132,8 +132,40 @@ registerGroup({
 /** 主打成员加成倍率：本 chunk 该角色的主打块更容易成片出现 */
 const FEATURED_BOOST = 5;
 
+/**
+ * ★ 注册表一致性校验（防双记账漂移；首次选组时自动跑一次，幂等）：
+ *   ① 组成员 key → 地块必须已注册（rolePool 对缺失 key 是静默跳过）
+ *   ② 地块声明的 groups → 组必须存在且 members 已收录
+ *     （Tile.groups 是声明性数据，运行时不消费；漂移 = 声明不生效）
+ * 以后加内容模块后可手动再调（幂等由 syncValidated 守卫，跨内容批次
+ * 需要重校验时置回 false 即可）。
+ */
+let syncValidated = false;
+export function validateTileGroupSync(): void {
+  if (syncValidated) return;
+  syncValidated = true;
+  for (const g of REGISTRY.values()) {
+    for (const key of Object.keys(g.members)) {
+      if (!tileByKey(key)) {
+        console.warn(`[TileGroups] 组"${g.key}"的成员"${key}"未注册（抽取时会被静默跳过）`);
+      }
+    }
+  }
+  for (const t of allTiles()) {
+    for (const gk of t.groups) {
+      const def = REGISTRY.get(gk);
+      if (!def) {
+        console.warn(`[Tiles] 地块"${t.key}"声明的组"${gk}"不存在`);
+      } else if (!(t.key in def.members)) {
+        console.warn(`[TileGroups] 地块"${t.key}"声明属于组"${gk}"，但该组 members 未收录（声明不会生效）`);
+      }
+    }
+  }
+}
+
 /** 每 chunk 加权抽一个生效组（排除 foundation；确定性） */
 export function pickChunkGroup(seed: number, cx: number, cz: number): GroupDef {
+  validateTileGroupSync();
   const pool = [...REGISTRY.values()].filter((g) => g.weight > 0);
   let total = 0;
   for (const g of pool) total += g.weight;
