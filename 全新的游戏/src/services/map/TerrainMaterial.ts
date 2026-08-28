@@ -15,8 +15,9 @@
 //   uMatEmissive[id]  = vec4(emissive rgb)
 //   uMatParams[id*16] = 材质图案参数（16 个 float，顺序 = 注册模板声明顺序）
 //
-// 分发：if 链按 tileId 调 GLSL 材质函数（≤16 分支，同地块像素分支一致，
-//   GPU 相干；加材质 = 注册 + 在 materialBase 加一个分支）。
+// 分发：数据驱动——uMatFn[id] 存材质 fnId 的注册索引（见 MAT_FN_INDEX），
+//   materialBase 据索引自动路由到对应 mat_<fnId>；加材质 = 注册 GLSL 函数
+//   + 在 MAT_FN_INDEX 登记一行，无需手写 id 分支（同地块像素分支一致，GPU 相干）。
 //
 // 职责边界：
 //   - 材质不知道 SunCycle/RenderManager——被动接收 updateTerrainLighting
