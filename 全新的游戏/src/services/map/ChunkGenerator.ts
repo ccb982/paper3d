@@ -24,7 +24,6 @@
 import { TILE_FLAT } from './Tiles';
 import { tileById } from './Tiles';
 import { pickChunkGroup, drawTileForRole, drawGroundDecorTile, type GroupDef } from './TileGroups';
-import { regionParamsAt } from './RegionTheme';
 import { hash2, vnoise } from './TerrainNoise';
 
 // 确定性 hash 噪声：权威实现已迁 TerrainNoise。保持原导出兼容既有消费方。
@@ -216,6 +215,7 @@ function generateMaze(seed: number, cx: number, cz: number, ports: Ports, target
 function structureSlots(
   seed: number, cx: number, cz: number,
   passage: Uint8Array, ports: Ports,
+  gen?: GroupDef['gen'],
 ): Uint8Array {
   const N = 225;
   const roles = new Uint8Array(N); // 默认 ROLE_PATH(0) —— 与旧 UNKNOWN→ROAD 收敛一致
@@ -290,8 +290,8 @@ function structureSlots(
   }
 
   // 5. 墙区分配：大部分 → 高台位，少量 → 液体/坑洞位
-  // ★ 区域主题偏置：水体/坑洞比例随区域变化（荒漠少水多坑、霜蓝多冰湖…）
-  const rp = regionParamsAt(seed, (cx + 0.5) * CHUNK_SIZE, (cz + 0.5) * CHUNK_SIZE);
+  // ★ 组生成偏置（融合原 RegionTheme）：水体/坑洞比例随组变化（荒漠少水多坑、霜蓝多冰湖…）
+  const rp = gen ?? { waterMul: 1, pitMul: 1 };
   const targetWater = Math.floor(total * 0.15 * rp.waterMul);
   const targetPit = Math.floor(total * 0.15 * rp.pitMul);
 
@@ -507,27 +507,26 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   const special = resolveSpecialLayout(seed, chunkX, chunkZ);
   if (special?.ports) ports = special.ports;
 
+  // ---- L2 选组（本 chunk 生效组；生成偏置与贴图/装饰规划同源消费 groupKey） ----
+  const panel = pickChunkGroup(seed, chunkX, chunkZ);
+
   // ---- L1 结构层 ----
   let roles: Uint8Array;
   if (special?.mode === 'replace' && special.roles) {
     roles = special.roles.slice();
   } else {
     // ★ 墙密度：0.3（墙密集）~ 0.7（墙稀疏），每 chunk 不同；
-    //   再叠加区域主题偏置（荒漠开阔 / 废土墙密——世界级空间节奏）
+    //   再叠加本组生成偏置（荒漠开阔 / 废土墙密——世界级空间节奏；融合原 RegionTheme）
     const density = hash2(chunkX, chunkZ, seed + 1818);
     let targetPassageRatio = 0.3 + density * 0.4;
-    targetPassageRatio = Math.min(0.75, Math.max(0.25, targetPassageRatio +
-      regionParamsAt(seed, (chunkX + 0.5) * CHUNK_SIZE, (chunkZ + 0.5) * CHUNK_SIZE).densityBias));
+    targetPassageRatio = Math.min(0.75, Math.max(0.25, targetPassageRatio + (panel.gen?.densityBias ?? 0)));
 
     const passage = generateMaze(seed, chunkX, chunkZ, ports, targetPassageRatio);
-    roles = structureSlots(seed, chunkX, chunkZ, passage, ports);
+    roles = structureSlots(seed, chunkX, chunkZ, passage, ports, panel.gen);
   }
 
   // ---- L4a 连通性修复（对所有布局来源兜底） ----
   repairConnectivityRoles(roles, ports);
-
-  // ---- L2 选组（本 chunk 生效组；贴图/装饰物规划层同源消费 groupKey） ----
-  const panel = pickChunkGroup(seed, chunkX, chunkZ);
 
   // ---- L2+L3 选组与抽取 ----
   const blockIds = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);

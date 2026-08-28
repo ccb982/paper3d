@@ -1,8 +1,8 @@
 // ============================================================
 // TerrainNoise —— 地形域共享噪声底座（hash2 / vnoise）
 // ============================================================
-// 从 ChunkGenerator 抽出：RegionTheme / ChunkGenerator / bakeCompute
-// 都要消费，且互相之间不能形成 import 环（ChunkGenerator ↔ RegionTheme
+// 从 ChunkGenerator 抽出：TileGroups / ChunkGenerator / bakeCompute
+// 都要消费，且互相之间不能形成 import 环（ChunkGenerator ↔ TileGroups
 // 双向需要对方）。本文件是地图侧最底层模块，不依赖任何邻居。
 
 /** 确定性 hash 噪声（输出 0~1）。⚠️ 常量与历史版本逐位一致——

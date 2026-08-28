@@ -47,6 +47,7 @@ import {
   computeChunkMapsRGBA,
   type BakeQuery,
 } from './bakeCompute';
+import type { GroupPalette } from './TileGroups';
 import type { PlannedDecal } from './decor/TileDecalBase';
 import { applyDecalStamps } from './decor/TileDecalBase';
 
@@ -384,11 +385,13 @@ export function assembleChunkMaps(albedoBuf: Uint8ClampedArray, lightBuf: Uint8C
 export function bakeChunkMaps(
   terrain: TerrainBakeSource, cx: number, cz: number,
   extras?: { propVolumes?: Float32Array; decals?: PlannedDecal[] },
+  palette?: GroupPalette,
 ): ChunkMaps {
   const q: BakeQuery = {
     worldSeed: terrain.worldSeed,
     surfaceHeightAt: (x, z) => terrain.surfaceHeightAt(x, z),
     tileDefAt: (x, z) => terrain.tileDefAt(x, z),
+    palette,
   };
   const out = computeChunkMapsRGBA(q, cx, cz, extras);
   return assembleChunkMaps(out.albedo, out.light);

@@ -28,7 +28,7 @@ import {
 import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
-import { regionParamsAt, SEMANTIC_THEME_MIX } from './RegionTheme';
+import { SEMANTIC_THEME_MIX, applyGroupTintHsl, groupByKey, type GroupPalette } from './TileGroups';
 import { applyDecalStamps, type PlannedDecal } from './decor/TileDecalBase';
 
 // ============================================================
@@ -41,6 +41,8 @@ export interface BakeQuery {
   surfaceHeightAt(x: number, z: number): number;
   /** 地块定义（颜色/凹陷标志等外观属性） */
   tileDefAt(x: number, z: number): TileDef;
+  /** 本 chunk 所属组的调色板（融合原 RegionTheme；缺省=中性） */
+  palette?: GroupPalette;
 }
 
 /** 外观分辨率（默认 256²；低端机降 128²） */
@@ -151,21 +153,18 @@ function computeAlbedoRGBA(
       }
 
       // ---- 过渡期：无材质地块保留旧基色路径 ----
-      // 基准色 → ★ 区域主题调制 → 逐地块 HSL 抖动 → RGB
-      //   色相平移 + 饱和/明度系数随世界位置缓变（治地图单调的 A 药）；
-      //   水/坑等语义色只吃部分强度——警示红与深蓝是玩法可读性
-      const rp = regionParamsAt(seed, wx, wz);
+      // 基准色 → ★ 组调色板调制 → 逐地块 HSL 抖动 → RGB
+      //   （融合原 RegionTheme；色相平移 + 饱和/明度系数，按组恒定——硬边界、肉鸽友好）
+      //   水/坑等语义色只吃部分强度(SEMANTIC_THEME_MIX)——警示红与深蓝是玩法可读性
       const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
-      const baseH = (((td.visual.baseHsl.h + rp.hueShift * thM) % 1) + 1) % 1;
-      const baseS = Math.min(1, td.visual.baseHsl.s * (1 + (rp.satMul - 1) * thM));
-      const baseL = Math.min(1, td.visual.baseHsl.l * (1 + (rp.lightMul - 1) * thM));
+      const th = applyGroupTintHsl(td.visual.baseHsl, q.palette, thM);
 
       const tx = Math.floor(wx / 4);
       const tz = Math.floor(wz / 4);
       let [r, g, b] = hsl2rgb(
-        baseH + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
-        baseS * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
-        baseL * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
+        th.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
+        Math.min(1, th.s * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s)),
+        Math.min(1, th.l * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l)),
       );
 
       // 色阶化斑块（3 档离散亮度 → 手绘色块拼接感）
@@ -427,12 +426,16 @@ export interface BakeSnapshot {
   propVolumes: Float32Array;
   /** 贴图放置计划（预渲染时印进 albedo） */
   decals: PlannedDecal[];
+  /** 本 chunk 所属组的调色板（融合原 RegionTheme；缺省=中性） */
+  palette?: GroupPalette;
 }
 
 /** 快照消费的最小 chunk 数据面（RasterMap.getChunkData 天然满足） */
 export interface ChunkDataLite {
   heights: Float32Array;
   blockTypes: Uint8Array;
+  /** 本 chunk 生效组 key（调色板查询用；RasterMap.getChunkData 天然携带） */
+  groupKey?: string;
 }
 
 /**
@@ -506,10 +509,15 @@ export function buildSnapshotFromChunks(
     }
   }
 
+  // ---- 本 chunk 所属组的调色板（融合原 RegionTheme；Worker 端据 groupKey 查得）----
+  const center = getChunk(cx, cz);
+  const palette = center?.groupKey ? groupByKey(center.groupKey)?.palette : undefined;
+
   return {
     seed, cx, cz, vx0, vz0, vw, vHeights, bx0, bz0, bw, bh, blockIds,
     propVolumes: extras?.propVolumes ?? new Float32Array(0),
     decals: extras?.decals ?? [],
+    palette,
   };
 }
 
@@ -542,5 +550,6 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
       if (bz < 0) bz = 0; else if (bz > s.bh - 1) bz = s.bh - 1;
       return tileById(s.blockIds[bz * s.bw + bx]);
     },
+    palette: s.palette,
   };
 }

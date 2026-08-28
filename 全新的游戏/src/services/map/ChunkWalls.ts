@@ -15,7 +15,7 @@ import * as THREE from 'three';
 import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
 import { BAKE_SUN, CAST_MIN_DEPTH } from './bakeCompute';
-import { regionParamsAt, SEMANTIC_THEME_MIX } from './RegionTheme';
+import { SEMANTIC_THEME_MIX, groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import type { RasterMap } from './RasterMap';
 import { TERRAIN_LIGHT_TUNING } from './TerrainMaterial';
 
@@ -117,6 +117,9 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
   const ox = cx * N;
   const oz = cz * N;
   const seed = raster.worldSeed;
+  // ★ 融合原 RegionTheme：本 chunk 所属组的调色板（硬边界、肉鸽友好）
+  const gkey = raster.getChunkData(cx, cz)?.groupKey;
+  const palette: GroupPalette | undefined = gkey ? groupByKey(gkey)?.palette : undefined;
 
   const pos: number[] = [];
   const nor: number[] = [];
@@ -138,12 +141,9 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
         // 地块底色（取墙对应地块；颜色归一化后乘明暗——直接塞 0~255 会被钳白）
         // ★ 区域主题调制：与地面烘焙同源同强度语义（墙色不与地面脱节）
         const td = raster.tileDefAt(ox + i + 0.5 + d.dx * 0.5, oz + j + 0.5 + d.dz * 0.5);
-        const rpT = regionParamsAt(seed, ox + i + 0.5, oz + j + 0.5);
         const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
-        const wH = (((td.visual.baseHsl.h + rpT.hueShift * thM) % 1) + 1) % 1;
-        const wS = Math.min(1, td.visual.baseHsl.s * (1 + (rpT.satMul - 1) * thM));
-        const wL = Math.min(1, td.visual.baseHsl.l * (1 + (rpT.lightMul - 1) * thM));
-        let [r, g, b] = hsl2rgb(wH, wS, wL);
+        const th = applyGroupTintHsl(td.visual.baseHsl, palette, thM);
+        let [r, g, b] = hsl2rgb(th.h, th.s, th.l);
         // 朝向 × 太阳：外法线与太阳水平方向同向 = 朝阳 → 亮
         const facing = Math.max(0, d.dx * SUN_HX + d.dz * SUN_HZ);
         const k = wallShade(raster, seed, ox + i, oz + j, drop, facing) / 255;

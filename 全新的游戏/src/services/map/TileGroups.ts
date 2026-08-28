@@ -20,6 +20,29 @@ import { tileByKey, tileById, TILE_FLAT, TILE_PLATFORM, TILE_WATER, TILE_PIT, ty
 // 组定义与注册表
 // ============================================================
 
+/** 组级调色板（融合原 RegionTheme：hue/sat/light 偏移；作用于本组所有地块） */
+export interface GroupPalette {
+  /** 色相偏移（叠加到 tile baseHsl.h 后取 fract） */
+  hueShift: number;
+  /** 饱和度系数 */
+  satMul: number;
+  /** 明度系数 */
+  lightMul: number;
+}
+
+/** 组级生成偏置（融合原 RegionTheme：影响迷宫密度/水体/坑洞比例） */
+export interface GroupGen {
+  /** 迷宫路占比偏置（负=墙密，正=开阔） */
+  densityBias: number;
+  /** 水体目标比例系数 */
+  waterMul: number;
+  /** 坑洞目标比例系数 */
+  pitMul: number;
+}
+
+/** 语义色（水/坑）吃组调色的强度（保玩法可读性，不被主题洗掉） */
+export const SEMANTIC_THEME_MIX = 0.45;
+
 export interface GroupDef {
   key: string;
   label: string;
@@ -27,6 +50,23 @@ export interface GroupDef {
   weight: number;
   /** 成员权重表：tileKey → 相对权重 */
   members: Record<string, number>;
+  /** 组级调色板（融合原 RegionTheme；缺省=中性不变色） */
+  palette?: GroupPalette;
+  /** 组级生成偏置（融合原 RegionTheme；缺省=无偏置） */
+  gen?: GroupGen;
+}
+
+/**
+ * ★ 应用组调色板到地块 HSL（融合原 RegionTheme 的 HSL 调制）。
+ * mix=1 全量；水/坑等语义色传 SEMANTIC_THEME_MIX 保可读性。
+ */
+export function applyGroupTintHsl(hsl: { h: number; s: number; l: number }, p: GroupPalette | undefined, mix = 1): { h: number; s: number; l: number } {
+  if (!p) return hsl;
+  return {
+    h: (((hsl.h + p.hueShift * mix) % 1) + 1) % 1,
+    s: Math.min(1, hsl.s * (1 + (p.satMul - 1) * mix)),
+    l: Math.min(1, hsl.l * (1 + (p.lightMul - 1) * mix)),
+  };
 }
 
 const REGISTRY = new Map<string, GroupDef>();
@@ -55,24 +95,34 @@ const ROLE_DEFAULT: Record<TileGenRole, TileDef> = {
 // 内置组（加风格 = 加一个组对象；成员引用 Tiles 的 key）
 // ============================================================
 
+const NEUTRAL_PALETTE: GroupPalette = { hueShift: 0, satMul: 1, lightMul: 1 };
+const NEUTRAL_GEN: GroupGen = { densityBias: 0, waterMul: 1, pitMul: 1 };
+
 registerGroup({
   key: 'foundation', label: '基石', weight: 0,
   members: { flat: 1, platform: 1, water: 1, pit: 1, brick: 1, grass: 1, wood: 1 },
+  palette: NEUTRAL_PALETTE, gen: NEUTRAL_GEN,
 });
 
 registerGroup({
   key: 'crystal', label: '霜蓝结晶', weight: 1,
   members: { ice: 3, ice_platform: 3, water: 1, pit: 1 },
+  palette: { hueShift: 0.47, satMul: 0.85, lightMul: 1.02 },
+  gen: { densityBias: 0.10, waterMul: 1.7, pitMul: 0.6 },
 });
 
 registerGroup({
   key: 'ashen', label: '灰烬废土', weight: 1,
   members: { ash_field: 3, mud: 1, rock_platform: 3, pit: 2, water: 0.5, brick: 2 },
+  palette: { hueShift: 0.00, satMul: 0.45, lightMul: 0.82 },
+  gen: { densityBias: -0.06, waterMul: 0.6, pitMul: 1.2 },
 });
 
 registerGroup({
   key: 'overgrown', label: '沃绿蔓生', weight: 1,
   members: { mud: 2, mossy_platform: 3, water: 2, pit: 0.5, grass: 2, wood: 2 },
+  palette: { hueShift: 0.33, satMul: 1.05, lightMul: 0.98 },
+  gen: { densityBias: 0.00, waterMul: 1.4, pitMul: 0.7 },
 });
 
 // ============================================================

@@ -25,6 +25,7 @@ import {
 import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
+import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { hsl2rgb } from './TerrainPalette';
 import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
@@ -284,6 +285,12 @@ export class ChunkManager {
    * （其阴影体积随快照进 Worker 印进光照图；贴图印进 albedo）。
    * 确定性：同 seed 同 chunk 结果恒定，烘焙与装配两侧消费同一份计划。
    */
+  /** 取本 chunk 所属组的调色板（融合原 RegionTheme；缺省中性） */
+  private chunkPalette(cx: number, cz: number): GroupPalette | undefined {
+    const key = this.raster.getChunkData(cx, cz)?.groupKey;
+    return key ? groupByKey(key)?.palette : undefined;
+  }
+
   private planDecor(cx: number, cz: number): DecorPlan {
     const chunkData = this.raster.getChunkData(cx, cz);
     if (!chunkData) {
@@ -341,7 +348,7 @@ export class ChunkManager {
         for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
       const maps = bakeChunkMaps(this.raster, cx, cz, {
         propVolumes: decor.propVolumes, decals: decor.decals,
-      });
+      }, this.chunkPalette(cx, cz));
       cacheChunkMaps(seed, cx, cz, maps);
       this.finishStandardChunk(cx, cz, maps, decor);
       return;
@@ -378,7 +385,7 @@ export class ChunkManager {
           for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
         const maps = bakeChunkMaps(this.raster, cx, cz, {
           propVolumes: decor.propVolumes, decals: decor.decals,
-        });
+        }, this.chunkPalette(cx, cz));
         cacheChunkMaps(seed, cx, cz, maps);
         this.finishStandardChunk(cx, cz, maps, decor);
       } catch (e2) {
@@ -411,7 +418,8 @@ export class ChunkManager {
 
     // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
-    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat) : undefined;
+    const palette = this.chunkPalette(cx, cz);
+    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
     const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg);
     // lightmap 挂 userData 供 disposeVisual 一并释放（.map 只登记 albedo）；
     // cached = 纹理归烘焙缓存所有，chunk 销毁时跳过纹理释放（releaseBakeCache 统一管）
@@ -585,7 +593,7 @@ export class ChunkManager {
  * 块 id 微纹理（15×15 R8，Nearest）+ 材质参数数组（按 tileId 索引打包）。
  * 有材质的地块 → 基色/表面/图案参数；无材质 → 默认值（叠加层提供颜色）。
  */
-function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }): TileRenderConfig {
+function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: GroupPalette): TileRenderConfig {
   const base = new Float32Array(MATERIAL_SLOTS * 4);
   const surface = new Float32Array(MATERIAL_SLOTS * 4);
   const emissive = new Float32Array(MATERIAL_SLOTS * 4);
@@ -594,11 +602,16 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }): TileRende
    for (let id = 0; id < MATERIAL_SLOTS; id++) {
      const td = tileById(id);
      const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
-     // ★ 无材质地块：基色由 albedo 纹理承载，uMatBase 必须置白，
-     //   否则 base(=uMatBase) × alb(已含完整基色) 会把颜色平方 → 坑/水/冰发黑
-     const [r, g, b] = td.visual.material
-       ? hsl2rgb(td.visual.baseHsl.h, td.visual.baseHsl.s, td.visual.baseHsl.l)
-       : [255, 255, 255];
+      // ★ 无材质地块：基色由 albedo 纹理承载，uMatBase 必须置白，
+      //   否则 base(=uMatBase) × alb(已含完整基色) 会把颜色平方 → 坑/水/冰发黑
+      // ★ 有材质地块：uMatBase = 组调色板(融合原 RegionTheme)调制后的基色，
+      //   着色器 base × mat_<fnId> 即得"随组变色"的材质地面
+      const [r, g, b] = td.visual.material
+        ? (() => {
+            const t = applyGroupTintHsl(td.visual.baseHsl, palette);
+            return hsl2rgb(t.h, t.s, t.l);
+          })()
+        : [255, 255, 255];
      base[id * 4] = r / 255;
      base[id * 4 + 1] = g / 255;
      base[id * 4 + 2] = b / 255;
