@@ -138,14 +138,17 @@ const MATERIAL_GLSL = /* glsl */ `
     return vec3(1.0 + jit + variant + broken + grout);
   }
 
-  // 草地路面：大尺度斑块 + 草簇 + 底颗粒
+  // 草地路面：大尺度明暗斑块 + 草簇暗孔/受光草尖 + 草叶方向拉丝
   vec3 mat_grass(vec2 w, int id) {
-    float patchv = (vnoise2(w * 0.03) - 0.5) * matP(id, 0) * 2.0;
-    float grain = (h21(floor(w * 60.0)) - 0.5) * matP(id, 3);
-    vec2 c = floor(w * 0.5);
-    float tuft = h21(c + vec2(51.1, 0.0)) < matP(id, 1) ? -0.08 : 0.0;
-    float tuft2 = h21(c * 8.0 + vec2(9.9, 1.1)) < matP(id, 2) * 0.6 ? 0.03 : 0.0;
-    return vec3(1.0 + patchv + grain + tuft + tuft2);
+    float patchv = (vnoise2(w * 0.035) - 0.5) * matP(id, 0) * 2.0;
+    float grain = (h21(floor(w * 55.0)) - 0.5) * matP(id, 3);
+    // 草簇网格（~0.45m）：暗簇底（土色空隙）+ 受光草尖高光
+    vec2 c = floor(w * 2.2);
+    float tuftDark = h21(c + vec2(51.1, 0.0)) < matP(id, 1) ? -0.14 : 0.0;
+    float tuftHi = h21(c * 1.7 + vec2(9.9, 1.1)) < matP(id, 2) ? 0.12 : 0.0;
+    // 草叶方向拉丝（沿 x 的细密明度条，制造草叶方向感）
+    float blade = (vnoise2(vec2(w.x * 7.0, w.y * 0.35)) - 0.5) * 0.10;
+    return vec3(1.0 + patchv + grain + tuftDark + tuftHi + blade);
   }
 
   // 木板路面：横板条 + 板缝 + 板抖动 + 木纹 + 钉点
