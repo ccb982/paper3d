@@ -1,6 +1,6 @@
 import { useAppStore } from '../stores/useAppStore';
 import { useShallow } from 'zustand/react/shallow';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { ToolType } from '../types';
 
 // 预设颜色
@@ -27,6 +27,7 @@ export function Toolbar() {
     loadFromStorage,
     exportToJson,
     exportRegionAnnotationsJson,
+    importRegionAnnotationsJson,
     currentColor,
     setCurrentColor,
     paintBrushSize,
@@ -64,6 +65,7 @@ export function Toolbar() {
     loadFromStorage: s.loadFromStorage,
     exportToJson: s.exportToJson,
     exportRegionAnnotationsJson: s.exportRegionAnnotationsJson,
+    importRegionAnnotationsJson: s.importRegionAnnotationsJson,
     currentColor: s.currentColor,
     setCurrentColor: s.setCurrentColor,
     paintBrushSize: s.paintBrushSize,
@@ -146,7 +148,37 @@ export function Toolbar() {
 
   const handleExportRegionAnnotations = () => {
     exitColorExtractMode();
-    exportRegionAnnotationsJson();
+    // ★ 自定义文件名：取消(prompt 返回 null)则不导出；留空 = store 内时间戳自动命名
+    const input = window.prompt(
+      '导出文件名（留空 = 自动时间戳命名）',
+      `region-annotations-${new Date().toISOString().slice(0, 10)}`,
+    );
+    if (input === null) return;
+    exportRegionAnnotationsJson(input);
+  };
+
+  // ★ 导入区域注释 JSON（exportRegionAnnotationsJson 的对称操作）
+  const importAnnoInputRef = useRef<HTMLInputElement | null>(null);
+  const handleImportRegionAnnotationsFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const r = importRegionAnnotationsJson(String(reader.result));
+        const miss = r.missingLayers.length > 0
+          ? `\n⚠️ ${r.missingLayers.length} 个图层当前不存在（注释已保留，重建同名图层后自动显示）：\n${r.missingLayers.join(', ')}`
+          : '';
+        alert(`区域注释导入完成：新增 ${r.imported} 条`
+          + (r.skipped > 0 ? `，跳过 ${r.skipped} 条（重复或格式无效）` : '')
+          + miss);
+      } catch (err) {
+        alert('导入失败: ' + (err as Error).message);
+      }
+    };
+    reader.readAsText(file);
+    // 清空 value 允许重复导入同一文件
+    e.target.value = '';
   };
 
   return (
@@ -802,6 +834,33 @@ export function Toolbar() {
       >
         🗺️
       </button>
+
+      <button
+        onClick={() => importAnnoInputRef.current?.click()}
+        title="导入区域注释JSON"
+        style={{
+          width: '36px',
+          height: '36px',
+          border: 'none',
+          borderRadius: '6px',
+          backgroundColor: 'transparent',
+          color: '#333',
+          fontSize: '16px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        📤
+      </button>
+      <input
+        ref={importAnnoInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: 'none' }}
+        onChange={handleImportRegionAnnotationsFile}
+      />
 
       <div style={{ height: '8px' }} />
 

@@ -326,7 +326,15 @@ interface AppState {
   // 保存/加载
   saveToStorage: () => void;
   exportToJson: () => void;
-  exportRegionAnnotationsJson: () => void;
+  /** 导出区域注释 JSON；filename 缺省 = 时间戳自动命名（非法字符自动清洗） */
+  exportRegionAnnotationsJson: (filename?: string) => void;
+  /** 导入区域注释 JSON（exportRegionAnnotationsJson 的对称操作；按 id 去重合并，
+   *  图层不存在时数据照常导入并报告缺失图层，重建同名图层后自动显示） */
+  importRegionAnnotationsJson: (jsonText: string) => {
+    imported: number;
+    skipped: number;
+    missingLayers: string[];
+  };
   loadFromStorage: () => void;
   /** 触发画布重绘（用于蒙版特效参数修改后立即更新实时预览） */
   redrawTrigger: number;
@@ -1975,7 +1983,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   /** 纯导出区域注释数据的 JSON（按图层分组，不含图形/点注释等） */
-  exportRegionAnnotationsJson: () => {
+  exportRegionAnnotationsJson: (filename?: string) => {
     const state = get();
     const imageLayerId = state.imageState.imageLayerId;
     const drawLayers = state.layers.filter(l => l.id !== imageLayerId);
@@ -2029,11 +2037,71 @@ export const useAppStore = create<AppState>((set, get) => ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `region-annotations-export-${Date.now()}.json`;
+    // ★ 文件名：自定义（清洗非法字符 + 补 .json 后缀）；缺省 = 时间戳自动命名
+    const clean = (filename ?? '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '').trim();
+    a.download = clean.length > 0
+      ? (clean.toLowerCase().endsWith('.json') ? clean : `${clean}.json`)
+      : `region-annotations-export-${Date.now()}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  },
+
+  importRegionAnnotationsJson: (jsonText) => {
+    let data: unknown;
+    try {
+      data = JSON.parse(jsonText);
+    } catch (e) {
+      throw new Error('JSON 解析失败: ' + (e as Error).message);
+    }
+    const d = data as {
+      version?: string;
+      layers?: Array<{ annotations?: RegionAnnotation[] }>;
+      orphanAnnotations?: RegionAnnotation[];
+    };
+    // 只认本工具导出格式（layers 分组 [+ orphan]）；防止误导其它 JSON
+    if (!d || !Array.isArray(d.layers)) {
+      throw new Error('格式不符：缺少 layers 数组（请使用"导出区域注释JSON"生成的文件）');
+    }
+
+    const incoming: RegionAnnotation[] = [];
+    for (const group of d.layers) {
+      if (group && Array.isArray(group.annotations)) incoming.push(...group.annotations);
+    }
+    if (Array.isArray(d.orphanAnnotations)) incoming.push(...d.orphanAnnotations);
+
+    const state = get();
+    const existingIds = new Set(state.regionAnnotations.map(a => a.id));
+    const existingLayerIds = new Set(state.layers.map(l => l.id));
+    const seen = new Set<string>();
+    const missingLayers = new Set<string>();
+    const valid: RegionAnnotation[] = [];
+    let skipped = 0;
+
+    for (const a of incoming) {
+      // 结构校验：id/layerId 文本 + polygon 多环多边形（环 → {x,y} 点）
+      const shapeOk = !!a
+        && typeof a.id === 'string'
+        && typeof a.layerId === 'string'
+        && Array.isArray(a.polygon)
+        && a.polygon.every(ring =>
+          Array.isArray(ring)
+          && ring.every(p => !!p && typeof p.x === 'number' && typeof p.y === 'number'),
+        );
+      if (!shapeOk || existingIds.has(a.id) || seen.has(a.id)) {
+        skipped++;
+        continue;
+      }
+      seen.add(a.id);
+      if (!existingLayerIds.has(a.layerId)) missingLayers.add(a.layerId);
+      valid.push(a);
+    }
+
+    if (valid.length > 0) {
+      set((s) => ({ regionAnnotations: [...s.regionAnnotations, ...valid] }));
+    }
+    return { imported: valid.length, skipped, missingLayers: [...missingLayers] };
   },
 
   loadFromStorage: () => {
