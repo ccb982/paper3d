@@ -1,5 +1,6 @@
 export const MAGIC = 0x46545832;
-export const VERSION = 3;
+/** ★ v4：分辨率存 w/h 两 uint32（不再假设正方形）；blockFlags 升 64 位 BigUint64 */
+export const VERSION = 4;
 export const ADAPTIVE_BLOCK_COLS = 8;
 export const ADAPTIVE_BLOCK_ROWS = 8;
 export const ADAPTIVE_TOTAL_BLOCKS = ADAPTIVE_BLOCK_COLS * ADAPTIVE_BLOCK_ROWS;
@@ -234,7 +235,8 @@ export interface FtxCompressedRegion {
   id: number;
   bbox: { x: number; y: number; w: number; h: number };
   baseColors: Array<{ h: number; s: number; l: number }>;
-  blockFlags: number;
+  /** 64 位分块量化标志（每 bit 对应一个 8×8 块；历史 number 值会自动 BigInt 化） */
+  blockFlags: bigint;
   regionIdTexture?: string;
   deltaTexture: string;
 }
@@ -254,11 +256,13 @@ export function compressToBinary(result: {
 }): Uint8Array {
   const { resolution, regions, hueThreshold } = result;
 
-  let totalSize = 17;
+  // v4 头部：Magic(4) + Version(1) + RegionCount(2) + Width(4) + Height(4) + HueThreshold(4) = 19
+  let totalSize = 19;
 
   for (const region of regions) {
     const colorCount = region.baseColors.length;
-    const regionHeaderSize = 2 + 8 + 2 + 2 + colorCount * 12;
+    // ★ v4：blockFlags 2 字节 → 8 字节（64 位）
+    const regionHeaderSize = 2 + 8 + 2 + 8 + colorCount * 12;
     totalSize += regionHeaderSize;
 
     if (region.regionIdTexture) {
@@ -282,13 +286,16 @@ export function compressToBinary(result: {
   offset += 2;
   view.setUint32(offset, resolution[0], true);
   offset += 4;
+  view.setUint32(offset, resolution[1] ?? resolution[0], true);
+  offset += 4;
   view.setFloat32(offset, hueThreshold, true);
   offset += 4;
 
   for (const region of regions) {
-    const { id, bbox, baseColors, regionIdTexture, deltaTexture, blockFlags } = region;
+    const { id, bbox, baseColors, regionIdTexture, deltaTexture } = region;
     const { x, y, w, h } = bbox;
     const colorCount = baseColors.length;
+    const blockFlags = BigInt(region.blockFlags ?? 0n);
 
     view.setUint16(offset, id, true);
     offset += 2;
@@ -302,8 +309,8 @@ export function compressToBinary(result: {
     offset += 2;
     view.setUint16(offset, colorCount, true);
     offset += 2;
-    view.setUint16(offset, blockFlags ?? 0, true);
-    offset += 2;
+    view.setBigUint64(offset, blockFlags, true);
+    offset += 8;
 
     for (const base of baseColors) {
       const baked = bakeBaseColor(base);
@@ -372,12 +379,23 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
 
   const version = dataView.getUint8(offset);
   offset += 1;
-  if (version !== 2 && version !== 3) throw new Error(`Unsupported version: ${version}`);
+  if (version !== 2 && version !== 3 && version !== 4) throw new Error(`Unsupported version: ${version}`);
 
   const regionCount = dataView.getUint16(offset, true);
   offset += 2;
-  const resolution = dataView.getUint32(offset, true);
-  offset += 4;
+  // ★ v4 存 w/h 两个 uint32；v2/v3 为单 uint32（正方形假设，历史格式）
+  let resW: number;
+  let resH: number;
+  if (version === 4) {
+    resW = dataView.getUint32(offset, true);
+    offset += 4;
+    resH = dataView.getUint32(offset, true);
+    offset += 4;
+  } else {
+    resW = dataView.getUint32(offset, true);
+    offset += 4;
+    resH = resW;
+  }
   const hueThreshold = dataView.getFloat32(offset, true);
   offset += 4;
 
@@ -400,8 +418,15 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
     const colorCount = dataView.getUint16(offset, true);
     offset += 2;
 
-    const blockFlags = version === 3 ? dataView.getUint16(offset, true) : 0;
-    offset += version === 3 ? 2 : 0;
+    // ★ v4：64 位 BigUint64 全量；v3：历史 uint16（高 48 位本就丢失）；v2：无
+    let blockFlags = 0n;
+    if (version === 4) {
+      blockFlags = dataView.getBigUint64(offset, true);
+      offset += 8;
+    } else if (version === 3) {
+      blockFlags = BigInt(dataView.getUint16(offset, true));
+      offset += 2;
+    }
 
     const baseColors: Array<{ h: number; s: number; l: number }> = [];
     for (let j = 0; j < colorCount; j++) {
@@ -467,7 +492,7 @@ export function decompressFromBinary(buffer: ArrayBuffer): FtxCompressedData {
 
   return {
     version,
-    resolution: [resolution, resolution],
+    resolution: [resW, resH],
     regionCount,
     regions,
     hueThreshold

@@ -573,7 +573,7 @@ export interface CompressedRegionV2 {
 }
 
 export interface CompressionResultV2 {
-  version: 3;
+  version: 2 | 3 | 4;
   resolution: [number, number];
   regionCount: number;
   regions: CompressedRegionV2[];

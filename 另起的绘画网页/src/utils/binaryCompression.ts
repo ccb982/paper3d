@@ -33,7 +33,10 @@ function bakeBaseColor(base: { h: number; s: number; l: number }): { h: number; 
 export function compressToBinary(result: CompressionResultV2): Uint8Array {
   const { resolution, regions, hueThreshold } = result;
 
-  const headerSize = 15;
+  // v4 头部：Magic(4) + Version(1) + RegionCount(2) + Width(4) + Height(4) + HueThreshold(4)
+  //   ★ v4 变更：分辨率存 w/h 两个 uint32（不再假设正方形）；
+  //     blockFlags 升为 64 位（与多帧容器对齐，8×8=64 分块自适应细档全量保存）
+  const headerSize = 19;
   const buffers: Uint8Array[] = [];
 
   const headerBuf = new ArrayBuffer(headerSize);
@@ -41,11 +44,13 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
   let offset = 0;
   headerView.setUint32(offset, 0x46545832, false);
   offset += 4;
-  headerView.setUint8(offset, 3);
+  headerView.setUint8(offset, 4);
   offset += 1;
   headerView.setUint16(offset, regions.length, true);
   offset += 2;
   headerView.setUint32(offset, resolution[0], true);
+  offset += 4;
+  headerView.setUint32(offset, resolution[1] ?? resolution[0], true);
   offset += 4;
   headerView.setFloat32(offset, hueThreshold, true);
   offset += 4;
@@ -58,7 +63,7 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     const deltaTex = base64ToUint8(region.deltaTexture);
 
     const colorCount = baseColors.length;
-    const regionHeaderSize = 2 + 8 + 2 + 2 + colorCount * 12;
+    const regionHeaderSize = 2 + 8 + 2 + 8 + colorCount * 12;
     const regionHeader = new ArrayBuffer(regionHeaderSize);
     const rView = new DataView(regionHeader);
     let rOffset = 0;
@@ -76,8 +81,9 @@ export function compressToBinary(result: CompressionResultV2): Uint8Array {
     rView.setUint16(rOffset, colorCount, true);
     rOffset += 2;
 
-    rView.setUint16(rOffset, Number(region.blockFlags ?? 0n) & 0xFFFF, true);
-    rOffset += 2;
+    // ★ 64 位 blockFlags 全量写入（原 & 0xFFFF 截断 = 后 48 块自适应细档丢失）
+    rView.setBigUint64(rOffset, BigInt(region.blockFlags ?? 0n), true);
+    rOffset += 8;
 
     for (const c of baseColors) {
       rView.setFloat32(rOffset, c.h, true);
@@ -148,12 +154,23 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
 
   const version = dataView.getUint8(offset);
   offset += 1;
-  if (version !== 2 && version !== 3) throw new Error(`不支持的版本: ${version}`);
+  if (version !== 2 && version !== 3 && version !== 4) throw new Error(`不支持的版本: ${version}`);
 
   const regionCount = dataView.getUint16(offset, true);
   offset += 2;
-  const resolution = dataView.getUint32(offset, true);
-  offset += 4;
+  // ★ v4 存 w/h 两个 uint32；v2/v3 为单 uint32（正方形假设，历史格式）
+  let resW: number;
+  let resH: number;
+  if (version === 4) {
+    resW = dataView.getUint32(offset, true);
+    offset += 4;
+    resH = dataView.getUint32(offset, true);
+    offset += 4;
+  } else {
+    resW = dataView.getUint32(offset, true);
+    offset += 4;
+    resH = resW;
+  }
   const hueThreshold = dataView.getFloat32(offset, true);
   offset += 4;
 
@@ -162,18 +179,26 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
   for (let i = 0; i < regionCount; i++) {
     const id = dataView.getUint16(offset, true);
     offset += 2;
+    // ★ 修复：四个字段逐个推进 offset（原实现全部读同一个 offset → y/w/h 恒等于 x）
     const bbox = {
       x: dataView.getUint16(offset, true),
-      y: dataView.getUint16(offset, true),
-      w: dataView.getUint16(offset, true),
-      h: dataView.getUint16(offset, true),
+      y: dataView.getUint16(offset + 2, true),
+      w: dataView.getUint16(offset + 4, true),
+      h: dataView.getUint16(offset + 6, true),
     };
     offset += 8;
     const colorCount = dataView.getUint16(offset, true);
     offset += 2;
 
-    const blockFlags = version === 3 ? BigInt(dataView.getUint16(offset, true)) : 0n;
-    offset += version === 3 ? 2 : 0;
+    // ★ v4：64 位 BigUint64 全量；v3：历史 uint16（高 48 位本就丢失）；v2：无
+    let blockFlags = 0n;
+    if (version === 4) {
+      blockFlags = dataView.getBigUint64(offset, true);
+      offset += 8;
+    } else if (version === 3) {
+      blockFlags = BigInt(dataView.getUint16(offset, true));
+      offset += 2;
+    }
 
     const baseColors: Array<{ h: number; s: number; l: number }> = [];
     for (let j = 0; j < colorCount; j++) {
@@ -234,8 +259,8 @@ export function decompressFromBinary(buffer: ArrayBuffer): CompressionResultV2 {
   }
 
   return {
-    version: version as 3,
-    resolution: [resolution, resolution],
+    version: version as 4,
+    resolution: [resW, resH],
     regionCount,
     regions,
     quantization: 'rgb565',
