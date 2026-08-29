@@ -32,6 +32,7 @@ import { tileById, type TileDef } from './Tiles';
 import { SEMANTIC_THEME_MIX, applyGroupTintHsl, groupByKey, type GroupPalette } from './TileGroups';
 import { applyDecalStamps, type PlannedDecal } from './decor/TileDecalBase';
 import { sampleSurface, type BlockSource } from './SurfaceRules';
+import { refine, planRefinements } from './Refinements';
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
@@ -516,21 +517,26 @@ export function buildSnapshotFromChunks(
  * 块数据源 = 米格高度场（块角格值）+ blockIds（块类型）本地重构。
  */
 export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
-  const src: BlockSource = {
-    blockAt(bx: number, bz: number) {
-      const gx = bx * BLOCK_SIZE - s.vx0;
-      const gz = bz * BLOCK_SIZE - s.vz0;
-      const ibx = bx - s.bx0;
-      const ibz = bz - s.bz0;
-      // 快照覆盖外 → undefined（SurfaceRules 按 0 号平地/0 高兜底，同旧回退）
-      if (gx < 0 || gz < 0 || gx >= s.vw || gz >= s.vw) return undefined;
-      if (ibx < 0 || ibz < 0 || ibx >= s.bw || ibz >= s.bh) return undefined;
-      return {
-        id: s.blockIds[ibz * s.bw + ibx] ?? 0,
-        h: s.mHeights[gz * s.vw + gx] ?? 0,
-      };
+  // ★ L6 精修层：与主线程同一份 refine 包装（同 seed → 同精修，Worker
+  //   逐位可重放；当前空精修恒透传 = 旧世界一致）。
+  const src: BlockSource = refine(
+    {
+      blockAt(bx: number, bz: number) {
+        const gx = bx * BLOCK_SIZE - s.vx0;
+        const gz = bz * BLOCK_SIZE - s.vz0;
+        const ibx = bx - s.bx0;
+        const ibz = bz - s.bz0;
+        // 快照覆盖外 → undefined（SurfaceRules 按 0 号平地/0 高兜底，同旧回退）
+        if (gx < 0 || gz < 0 || gx >= s.vw || gz >= s.vw) return undefined;
+        if (ibx < 0 || ibz < 0 || ibx >= s.bw || ibz >= s.bh) return undefined;
+        return {
+          id: s.blockIds[ibz * s.bw + ibx] ?? 0,
+          h: s.mHeights[gz * s.vw + gx] ?? 0,
+        };
+      },
     },
-  };
+    planRefinements(s.seed),
+  );
   return {
     worldSeed: s.seed,
     surfaceHeightAt(x: number, z: number): number {

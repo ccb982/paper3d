@@ -20,6 +20,7 @@ import {
   CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE,
 } from './ChunkGenerator';
 import { sampleSurface, type BlockSource } from './SurfaceRules';
+import { refine, planRefinements } from './Refinements';
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -155,12 +156,8 @@ export class RasterMap {
     return (chunk.walkable[lz * CHUNK_SIZE + lx] ?? 1) === 1;
   }
 
-  /**
-   * ★ SurfaceRules 块数据源适配：世界块坐标 → 块信息（公开——ChunkWalls
-   *   等几何消费者复用同一查找）。缺块先 ensureChunk（确定性纯生成，
-   *   亚毫秒）——贴地/烘焙射线永不見"未加载=0"的假邻域（与 ensureData
-   *   同一哲学；生成的 chunk 本来就在加载环扩张路径上，只是提前生成）。 */
-  readonly surfaceBlocks: BlockSource = {
+  /** 原始（未精修）块源——精修层包装的基底，消费者勿直接复刻裁决 */
+  private readonly rawSurfaceBlocks: BlockSource = {
     blockAt: (bx: number, bz: number) => {
       const mx = bx * BLOCK_SIZE;
       const mz = bz * BLOCK_SIZE;
@@ -175,6 +172,15 @@ export class RasterMap {
       return { id: chunk.blockTypes[bi] ?? 0, h: chunk.heights[lz * CHUNK_SIZE + lx] ?? 0 };
     },
   };
+
+  /**
+   * ★ SurfaceRules 块数据源适配：世界块坐标 → 块信息（公开——ChunkWalls
+   *   等几何消费者复用同一查找）。缺块先 ensureChunk（确定性纯生成，
+   *   亚毫秒）——贴地/烘焙射线永不見"未加载=0"的假邻域（与 ensureData
+   *   同一哲学；生成的 chunk 本来就在加载环扩张路径上，只是提前生成）。
+   * ★ L6 精修层：原始块源经 refine() 包装（当前空精修恒透传 = 旧世界
+   *   逐位一致）；edgeFinal 口由精修层唯一执掌（见 Refinements）。 */
+  readonly surfaceBlocks: BlockSource = refine(this.rawSurfaceBlocks, planRefinements(this.seed));
 
   /** 地形颜色（按模板 + 块类型分区着色：高台暖黄/平地冷灰/坑洞深红/斜坡过渡） */
   /** ★ 地块定义查询（外观 Canvas 烘焙/装饰散布用；未加载回退平地） */

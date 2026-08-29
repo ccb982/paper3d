@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE, BLOCKS_PER_SIDE } from './ChunkGenerator';
 import { cornerHeight, type BlockInfo, type BlockSource } from './SurfaceRules';
+import { refine, planRefinements } from './Refinements';
 import type { RasterMap } from './RasterMap';
 
 export interface ChunkSurfaceBuild {
@@ -61,14 +62,14 @@ export function buildChunkTopSurface(raster: RasterMap, cx: number, cz: number):
       table[ibz * W + ibx] = { id: data.blockTypes[ibz0(bz, ccz, BPS) * BPS + ibx0(bx, ccx, BPS)] ?? 0, h: data.heights[gi] ?? 0 };
     }
   }
-  const src: BlockSource = {
+  const src: BlockSource = refine({
     blockAt(bx: number, bz: number): BlockInfo | undefined {
       const ibx = bx - B0;
       const ibz = bz - BZ0;
       if (ibx < 0 || ibz < 0 || ibx >= W || ibz >= W) return undefined;
       return table[ibz * W + ibx];
     },
-  };
+  }, planRefinements(raster.worldSeed));
 
   // ---- 逐 cell 装配（局部坐标，chunk 中心为原点）----
   // ⚠️ cornerHeight/块表按【世界坐标】索引（src.blockAt 收世界块坐标），

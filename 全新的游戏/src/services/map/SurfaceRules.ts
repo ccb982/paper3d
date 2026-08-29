@@ -67,6 +67,13 @@ export interface BlockInfo {
  */
 export interface BlockSource {
   blockAt(bx: number, bz: number): BlockInfo | undefined;
+  /**
+   * ★ 精修层执行口（可选）：显式裁决覆写。返回 undefined = 用默认引擎
+   *   edgeRuling。默认 4 个构造点不提供 → 空精修 ≡ 旧世界逐位不变；
+   *   精修层包装（Refinements.refine）提供时才生效。
+   *   dir：0=+x 1=−x 2=+z 3=−z（与 edgeOf 一致）。
+   */
+  edgeFinal?(bx: number, bz: number, dir: 0 | 1 | 2 | 3): EdgeRuling | undefined;
 }
 
 /** 缺块兜底（0 号平地 / 0 高——与旧 heightAt 未加载回退逐位一致） */
@@ -97,6 +104,21 @@ export function edgeRuling(a: BlockInfo, b: BlockInfo): EdgeRuling {
   if (pa === 'smooth' || pb === 'smooth') return 'weld';
   if (ta.genRole !== 'ground' || tb.genRole !== 'ground') return 'weld';
   return Math.abs(a.h - b.h) <= edgeCliffBand() ? 'cliff' : 'weld';
+}
+
+/**
+ * ★ 精修层对外唯一执行口（《架构设计.md》§8.0 edgeFinal）：
+ * 块 (bx,bz) 与 dir 方向邻边的最终裁决。优先取 src.edgeFinal 显式覆写
+ * （命中即定，不落规则链）；否则回落默认引擎 edgeRuling。
+ * 所有消费者（cornerHeight/sampleSurface/edgeOf/墙）一律改问本函数，
+ * 禁止直接调 edgeRuling——见第五铁律「唯一判点不变式」。
+ */
+export function finalRuling(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 | 3): EdgeRuling {
+  const ov = src.edgeFinal?.(bx, bz, dir);
+  if (ov !== undefined) return ov;
+  const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
+  const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
+  return edgeRuling(src.blockAt(bx, bz) ?? MISSING_BLOCK, src.blockAt(bx + dx, bz + dz) ?? MISSING_BLOCK);
 }
 
 // ============================================================
@@ -131,14 +153,20 @@ export function cornerHeight(src: BlockSource, bcx: number, bcz: number, vx: num
   // B 占据的每格向 V 贡献两条面向邻格的边段；异块段才计入（同块段是内段）
   const own = (p: { bx: number; bz: number }) => p.bx === bcx && p.bz === bcz;
   const o00 = own(p00), o10 = own(p10), o01 = own(p01), o11 = own(p11);
-  let cliff = false;
-  const seg = (o: boolean, n: boolean, nb: BlockInfo) => {
-    if (o && !n && edgeRuling(B, nb) === 'cliff') cliff = true;
+  // dir：从 B 所在块 (bcx,bcz) 指向邻块 pn 的方向（0=+x 1=−x 2=+z 3=−z）
+  const dirOf = (pn: { bx: number; bz: number }): 0 | 1 | 2 | 3 => {
+    const dbx = pn.bx - bcx, dbz = pn.bz - bcz;
+    if (dbx === 1) return 0; if (dbx === -1) return 1;
+    if (dbz === 1) return 2; return 3;
   };
-  seg(o00, o10, b10); seg(o10, o00, b00);   // 横向共享边段
-  seg(o01, o11, b11); seg(o11, o01, b01);
-  seg(o00, o01, b01); seg(o01, o00, b00);   // 纵向共享边段
-  seg(o10, o11, b11); seg(o11, o10, b10);
+  let cliff = false;
+  const seg = (o: boolean, n: boolean, pn: { bx: number; bz: number }) => {
+    if (o && !n && finalRuling(src, bcx, bcz, dirOf(pn)) === 'cliff') cliff = true;
+  };
+  seg(o00, o10, p10); seg(o10, o00, p00);   // 横向共享边段
+  seg(o01, o11, p11); seg(o11, o01, p01);
+  seg(o00, o01, p01); seg(o01, o00, p00);   // 纵向共享边段
+  seg(o10, o11, p11); seg(o11, o10, p10);
   if (cliff) return B.h;
   return Math.max(b00.h, b10.h, b01.h, b11.h);
 }
@@ -193,5 +221,5 @@ export function edgeOf(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 
   const drop = a.h - b.h;
   const high = drop >= 0 ? a : b;
   const low = drop >= 0 ? b : a;
-  return { ruling: edgeRuling(a, b), drop: Math.abs(drop), high, low };
+  return { ruling: finalRuling(src, bx, bz, dir), drop: Math.abs(drop), high, low };
 }

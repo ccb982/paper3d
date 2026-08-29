@@ -19,6 +19,8 @@
 //      （Worker 烘焙与主线程贴地同源证明）。
 //   F（角点许可）：cornerHeight 插值许可语义——两边皆 weld 才插值，
 //      任一 cliff 边段 → 自持（硬边直达角点零插值）。
+//   G（精修执行器）：edgeFinal 唯一判点——默认引擎 ↔ 显式覆写 ↔ inherit
+//      回落三者语义；refine 空精修恒透传（与默认引擎逐位一致）。
 // ============================================================
 import {
   generateChunk, CHUNK_SIZE,
@@ -26,9 +28,10 @@ import {
 } from '../src/services/map/ChunkGenerator';
 import {
   sampleSurface, edgeRuling, edgeOf, setEdgeCliffBand,
-  cornerHeight,
+  cornerHeight, finalRuling,
   type BlockSource, type BlockInfo,
 } from '../src/services/map/SurfaceRules';
+import { refine, overrideEdge, EMPTY_REFINEMENTS } from '../src/services/map/Refinements';
 import { tileById, registerTile, TileDef } from '../src/services/map/Tiles';
 import { buildChunkTopSurface } from '../src/services/map/ChunkSurface';
 import { buildSnapshotFromChunks, makeSnapshotSource } from '../src/services/map/bakeCompute';
@@ -388,6 +391,47 @@ console.log('[B] β 统计 + 对称性/确定性校验通过');
   }
   if (fFails > 0) { console.error('[F] 回归失败：角点许可语义'); process.exit(1); }
   console.log('[F] 角点插值许可校验通过（两边皆 weld 才插值）');
+}
+
+// ============================================================
+// Phase G：精修执行器（edgeFinal 唯一判点 + 空精修恒透传）
+//   ① 默认引擎 ↔ 显式覆写 ↔ inherit 回落语义；
+//   ② refine() 空精修恒透传 ≡ 默认引擎（第五铁律：对外纯净）。
+// ============================================================
+{
+  let gFails = 0;
+  const expectR = (name: string, got: unknown, want: unknown) => {
+    if (got !== want) { console.error(`[G] ${name}: ${got} ≠ ${want}`); gFails++; }
+  };
+  // 手工 2×2 场景：块(0,0) 邻 +x(1,0) 高0.1（默认 cliff）；邻 +z(0,1) 高5（默认 weld）
+  const gsrc: BlockSource = {
+    blockAt(bx: number, bz: number): BlockInfo | undefined {
+      if (bx === 0 && bz === 0) return { id: 0, h: 0 };
+      if (bx === 1 && bz === 0) return { id: 0, h: 0.1 };
+      if (bx === 0 && bz === 1) return { id: 0, h: 5 };
+      return undefined;
+    },
+  };
+  // ① 默认引擎
+  expectR('[G] 默认 +x', finalRuling(gsrc, 0, 0, 0), 'cliff');
+  expectR('[G] 默认 +z', finalRuling(gsrc, 0, 0, 2), 'weld');
+  // ② 显式覆写
+  let gref = overrideEdge(EMPTY_REFINEMENTS, 0, 0, 0, 'weld');
+  gref = overrideEdge(gref, 0, 0, 2, 'cliff');
+  const gsrcR = refine(gsrc, gref);
+  expectR('[G] 覆写 +x→weld', finalRuling(gsrcR, 0, 0, 0), 'weld');
+  expectR('[G] 覆写 +z→cliff', finalRuling(gsrcR, 0, 0, 2), 'cliff');
+  // ③ inherit 回落
+  const gref2 = overrideEdge(gref, 0, 0, 0, 'inherit');
+  const gsrcR2 = refine(gsrc, gref2);
+  expectR('[G] inherit +x 回落', finalRuling(gsrcR2, 0, 0, 0), 'cliff');
+  expectR('[G] +z 仍覆写', finalRuling(gsrcR2, 0, 0, 2), 'cliff');
+  // ④ 空精修恒透传
+  const gsrcE = refine(gsrc, EMPTY_REFINEMENTS);
+  expectR('[G] 空精修 +x', finalRuling(gsrcE, 0, 0, 0), finalRuling(gsrc, 0, 0, 0));
+  expectR('[G] 空精修 +z', finalRuling(gsrcE, 0, 0, 2), finalRuling(gsrc, 0, 0, 2));
+  if (gFails > 0) { console.error('[G] 回归失败：edgeFinal 唯一判点语义'); process.exit(1); }
+  console.log('[G] edgeFinal 唯一判点校验通过（默认/覆写/inherit/空透传）');
 }
 
 console.log('[surface-regression] 全部通过');
