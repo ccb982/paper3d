@@ -18,6 +18,8 @@ import { ShipMode } from './modes/ShipMode';
 import { WorldMode } from './modes/WorldMode';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
+import { setTestGroup } from './services/map/TileGroups';
+import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 
@@ -33,6 +35,8 @@ let protagonistAsset: FtxAsset;
 let bulletAsset: Asset | FtxAsset;
 let enemyAsset: Asset;
 let hitEffectAsset: Asset | null;
+/** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
+let testChunk = false;
 
 // ============================================================
 // 启动引导
@@ -72,6 +76,22 @@ async function boot() {
   // ---- 2. 物理引擎初始化（一次性；必须在进入战斗前完成，
   //      否则 rapier 的 wasm 绑定未就绪 → rawintegrationparameters_new undefined）----
   await ensureRapierReady();
+
+  // ---- 2.5 测试地图（可选；素材填充调试用）----
+  //   URL 参数：?group=crystal        → 单组世界 + 单 chunk 陈列馆 + 地块名标注
+  //             ?single=1             → 仅单 chunk 陈列馆（组正常随机）
+  //   控制台：  setTestGroup('ashen') / setTestGroup(null) 运行时换组
+  //   （运行中换组只影响之后新生成的 chunk；刷新页面完整生效）
+  const urlParams = new URLSearchParams(location.search);
+  const testGroup = urlParams.get('group');
+  if (testGroup) setTestGroup(testGroup); // 未知 key 在 setTestGroup 内抛错（fail-fast）
+  testChunk = testGroup !== null || urlParams.get('single') === '1';
+  if (testChunk) showTestGroupPanel(testGroup ?? undefined); // 组内容面板（缺省=实际 chunk 生效组）
+  // 控制台换组时联动刷新面板
+  (window as unknown as { setTestGroup: (k: string | null) => void }).setTestGroup = (k) => {
+    setTestGroup(k);
+    if (testChunk) showTestGroupPanel(k ?? undefined);
+  };
 
   // ---- 3. 加载资产 ----
   protagonistAsset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
@@ -189,6 +209,7 @@ function enterWorldMode(
     bulletAsset,
     enemyAsset,
     hitEffectAsset: hitEffectAsset ?? undefined,
+    debug: { testChunk },
     onReturn: () => {
       // 返回时：推进天数 + 进入 ShipMode
       if (currentSession) {

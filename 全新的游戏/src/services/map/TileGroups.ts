@@ -163,9 +163,36 @@ export function validateTileGroupSync(): void {
   }
 }
 
+// ============================================================
+// 测试地图覆盖（素材填充/视觉调试专用）
+// ============================================================
+
+let testGroupOverride: string | null = null;
+
+/**
+ * ★ 测试地图：强制所有 chunk 使用指定组（null = 恢复正常加权抽取）。
+ * 传入组 key（如 'crystal' / 'ashen' / 'overgrown' / 'foundation'）；
+ * 未知 key 直接抛错。组成员抽取、贴图/装饰散布、组调色板全部随
+ * chunkData.groupKey 同源生效——整个世界就是这一组的"素材陈列馆"。
+ * 确定性：覆盖开启期间同 seed 生成恒定；关闭即恢复原抽取。
+ */
+export function setTestGroup(key: string | null): void {
+  if (key !== null && !REGISTRY.has(key)) {
+    throw new Error(`[TileGroups] 测试组不存在: "${key}"（可用: ${[...REGISTRY.keys()].join(', ')}）`);
+  }
+  testGroupOverride = key;
+  console.info(`[TileGroups] 测试地图 = ${key ?? '关闭（正常加权抽取）'}`);
+}
+
+export function getTestGroup(): string | null {
+  return testGroupOverride;
+}
+
 /** 每 chunk 加权抽一个生效组（排除 foundation；确定性） */
 export function pickChunkGroup(seed: number, cx: number, cz: number): GroupDef {
   validateTileGroupSync();
+  // ★ 测试地图覆盖：最高优先级（chunk 级确定性——覆盖期间同 seed 恒同组）
+  if (testGroupOverride) return REGISTRY.get(testGroupOverride)!;
   const pool = [...REGISTRY.values()].filter((g) => g.weight > 0);
   let total = 0;
   for (const g of pool) total += g.weight;

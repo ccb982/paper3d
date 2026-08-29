@@ -100,6 +100,22 @@ export class TileDef {
   }
 }
 
+/**
+ * ★ 地块类型名（类型封闭原则的显示侧；id≥10 = 装饰变体是本表既有约定）。
+ * 六类型：平地 / 高台 / 水 / 坑洞 / 装饰性平地 / 装饰性高台。
+ */
+export function tileTypeName(td: TileDef): string {
+  switch (td.genRole) {
+    case 'liquid': return '水';
+    case 'pit': return '坑洞';
+    case 'ground': return td.id >= 10 ? '装饰性平地' : '平地';
+    case 'platform': return td.id >= 10 ? '装饰性高台' : '高台';
+  }
+}
+
+/** 类型显示顺序（面板/图例统一用） */
+export const TILE_TYPE_ORDER = ['平地', '装饰性平地', '高台', '装饰性高台', '水', '坑洞'] as const;
+
 // ============================================================
 // 内置基础地块（物理数值 = 历史版本原值，逐项核对过）
 // ============================================================

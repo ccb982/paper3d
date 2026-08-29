@@ -54,6 +54,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   bulletAsset?: Asset | FtxAsset;
   enemyAsset?: Asset;
   hitEffectAsset?: Asset;
+  /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
+  debug?: { testChunk?: boolean };
 }
 
 // ============================================================
@@ -103,6 +105,8 @@ export class WorldMode implements IGameMode {
   private acc = 0;
   private damageUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
+  /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
+  private testChunk = false;
 
   // ============================================================
   // IGameMode 接口实现
@@ -146,7 +150,10 @@ export class WorldMode implements IGameMode {
         },
       }).id,
     };
-    this.chunks = new ChunkManager(this.scene, this.raster, groundHost);
+    this.chunks = new ChunkManager(this.scene, this.raster, groundHost, {
+      testChunk: ctx.debug?.testChunk ?? false,
+    });
+    this.testChunk = ctx.debug?.testChunk ?? false;
 
     // ★ 昼夜循环重置：每次出击从清晨出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
@@ -341,6 +348,13 @@ export class WorldMode implements IGameMode {
     // ---- 角色地形跟随 ----
     this.clampCharacter(this.player, dt);
     if (this.enemy) this.clampCharacter(this.enemy, dt);
+
+    // ---- ★ 测试地图：玩家钳在出生 chunk 内（世界只有这一块，无邻可走） ----
+    if (this.testChunk) {
+      const wp = this.player.position;
+      wp.x = Math.min(CHUNK_SIZE - 1, Math.max(1, wp.x));
+      wp.z = Math.min(CHUNK_SIZE - 1, Math.max(1, wp.z));
+    }
 
     // ---- 相机 ----
     this.cameraCtrl.update(dt, look, zoom, {

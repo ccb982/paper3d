@@ -38,6 +38,7 @@ import {
   planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey, groupPropsByKey,
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
+import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -93,15 +94,20 @@ export class ChunkManager {
   private activated = new Set<number>();
   /** 激活回调（玩家进入半径/首个网格落地时；特殊事件预留） */
   private onChunkActivated?: (cx: number, cz: number, key: number) => void;
+  /** ★ 测试地图（单 chunk 陈列馆 + 地块名标注；构造 opts.testChunk） */
+  private readonly testChunk: boolean;
 
   constructor(
     scene: THREE.Scene, raster: RasterMap, host: ChunkGroundHost,
-    opts?: { onChunkActivated?: (cx: number, cz: number, key: number) => void },
+    opts?: { onChunkActivated?: (cx: number, cz: number, key: number) => void; testChunk?: boolean },
   ) {
     this.scene = scene;
     this.raster = raster;
     this.host = host;
     this.onChunkActivated = opts?.onChunkActivated;
+    // ★ 测试地图：整个世界只有出生 chunk(0,0)，每块地块挂名字标牌
+    //   （素材填充陈列馆；配合 TileGroups.setTestGroup 单组覆盖使用）
+    this.testChunk = opts?.testChunk ?? false;
   }
 
   get isBoss4D(): boolean {
@@ -122,6 +128,12 @@ export class ChunkManager {
     this.syncChunks(px, pz);
     const scx = Math.floor(px / CHUNK_SIZE);
     const scz = Math.floor(pz / CHUNK_SIZE);
+    if (this.testChunk) {
+      // ★ 测试地图：仅建出生 chunk 一个（spawnPoint 恒在 (30,30) → chunk(0,0)）
+      if (this.boss4D) this.buildChunkMesh(scx, scz);
+      else this.requestStandardBake(scx, scz);
+      return;
+    }
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         if (this.boss4D) this.buildChunkMesh(scx + dx, scz + dz);
@@ -180,6 +192,7 @@ export class ChunkManager {
     this.activated.clear();
     clearWallMaterials();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
+    disposeTileLabelCache(); // ★ 测试地图标牌纹理/材质统一释放（共享缓存唯一 dispose 点）
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
   }
 
@@ -207,6 +220,17 @@ export class ChunkManager {
     }
 
     if (this.boss4D) return; // boss4D 同步构建，不存在异步空洞
+    if (this.testChunk) {
+      // ★ 测试地图：只自愈 chunk(0,0)。注意邻居的"数据"是烘焙快照的
+      //   ensureData 邻域采样（不可见、无物理），不等于加载——若不加此守卫，
+      //   sweep 会见"有数据无网格"而把 8 个邻居全部重建出来。
+      const key = chunkKeyOf(0, 0);
+      if (!this.meshes.has(key) && !this.voidKeys.has(key)
+        && !this.pendingBakes.has(key) && !this.queuedKeys.has(key)) {
+        this.requestStandardBake(0, 0);
+      }
+      return;
+    }
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     for (let dz = -2; dz <= 2; dz++) {
@@ -223,6 +247,15 @@ export class ChunkManager {
   }
 
   private syncChunks(px: number, pz: number): void {
+    if (this.testChunk) {
+      // ★ 测试地图：坐标钳在出生 chunk 内 + loadRadius 0 → 永远只有 chunk(0,0)
+      const cx0 = Math.min(CHUNK_SIZE - 1, Math.max(1, px));
+      const cz0 = Math.min(CHUNK_SIZE - 1, Math.max(1, pz));
+      const added0 = this.raster.updateChunks(cx0, cz0, 0);
+      for (const { cx, cz } of added0) this.enqueueChunk(cx, cz, false);
+      this.processQueue();
+      return;
+    }
     const added = this.raster.updateChunks(px, pz);
     for (const { cx, cz } of added) {
       this.enqueueChunk(cx, cz, false);
@@ -439,6 +472,11 @@ export class ChunkManager {
     // 装饰物 → buildDecorLayer → 挂进 chunk group
     const propLayer = this.buildDecorLayer(cx, cz, decor);
     if (propLayer) group.add(propLayer);
+
+    // ---- ★ 测试地图：地块名标注层（调试陈列馆；无碰撞） ----
+    if (this.testChunk && chunkDataForMat) {
+      group.add(buildTileLabelLayer(chunkDataForMat, (x, z) => this.raster.surfaceHeightAt(x, z)));
+    }
 
     this.replaceChunk(
       chunkKeyOf(cx, cz), group, cx, cz,
