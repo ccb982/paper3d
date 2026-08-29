@@ -16,7 +16,7 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, BLOCKS_PER_SIDE } from './ChunkGenerator';
-import { cornerHeight, MISSING_BLOCK, type BlockInfo, type BlockSource } from './SurfaceRules';
+import { cornerHeight, type BlockInfo, type BlockSource } from './SurfaceRules';
 import type { RasterMap } from './RasterMap';
 
 export interface ChunkSurfaceBuild {
@@ -71,12 +71,17 @@ export function buildChunkTopSurface(raster: RasterMap, cx: number, cz: number):
   };
 
   // ---- 逐 cell 装配（局部坐标，chunk 中心为原点）----
+  // ⚠️ cornerHeight/块表按【世界坐标】索引（src.blockAt 收世界块坐标），
+  //    几何位置才是局部坐标——两套坐标在此显式区分（回归 D 阶段曾抓出
+  //    局部/世界混用的 bug：chunk(0,0) 碰巧正确、其余 chunk 角点全错）。
   const cells = N * N;               // 3600
   const positions = new Float32Array(cells * 4 * 3);
   const normals = new Float32Array(cells * 4 * 3);
   const uvs = new Float32Array(cells * 4 * 2);
   const indices = new Uint32Array(cells * 6);
   const HALF = N / 2;
+  const wx0 = cx * N;
+  const wz0 = cz * N;
   let vp = 0;   // 顶点游标（float）
   let up = 0;   // uv 游标
   let ip = 0;   // 索引游标
@@ -87,12 +92,13 @@ export function buildChunkTopSurface(raster: RasterMap, cx: number, cz: number):
       // cell 所属块（表内偏移 = 块内偏移 + 1）
       const cbx = Math.floor(lx / 4) + 1;
       const cbz = Math.floor(lz / 4) + 1;
-      const B = table[cbz * W + cbx] ?? MISSING_BLOCK;
-      // 四角（块归属取高）：c00=(lx,lz) c10=(lx+1,lz) c01=(lx,lz+1) c11=(lx+1,lz+1)
-      const h00 = cornerHeight(src, B, lx, lz);
-      const h10 = cornerHeight(src, B, lx + 1, lz);
-      const h01 = cornerHeight(src, B, lx, lz + 1);
-      const h11 = cornerHeight(src, B, lx + 1, lz + 1);
+      // 四角（世界坐标 → 块归属取高）：c00 c10 c11 c01
+      const wx = wx0 + lx;
+      const wz = wz0 + lz;
+      const h00 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx, wz);
+      const h10 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx + 1, wz);
+      const h11 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx + 1, wz + 1);
+      const h01 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx, wz + 1);
       const x00 = lx - HALF, z00 = lz - HALF;
 
       // 4 顶点（顺序 c00 c10 c11 c01）

@@ -78,18 +78,24 @@ export const MISSING_BLOCK: BlockInfo = { id: 0, h: 0 };
 
 /**
  * ★ 边裁决（对称：edgeRuling(a,b) ≡ edgeRuling(b,a)）。
- * 规则链（首条命中即结论；扩展位见文档 §2.1——α 角色对表/风格组规则
- * 按越具体越靠前插在 TileDef 覆盖与 β 之间）：
- *   1. 任一侧 edgePolicy 'hard' → cliff（两侧 hard 优先于 smooth）
+ * 规则链（首条命中即结论；扩展位见文档 §2.1——风格组规则按越具体越靠前
+ * 插在角色对规则与 β 之间）：
+ *   1.  任一侧 edgePolicy 'hard' → cliff（两侧 hard 优先于 smooth）
  *   1'. 任一侧 edgePolicy 'smooth'（且无 hard）→ weld
- *   2. β 微高差：|Δh| ≤ EDGE_CLIFF_BAND → cliff
- *   3. 兜底 → weld
+ *   1.5 角色对规则（α 对表首实例，2026-08-29）：仅 ground↔ground 允许
+ *       落入 β 判硬；其余角色对（高台/水/坑参与）一律 weld——
+ *       设计意图"只有地面用硬边界，其余用插值"。
+ *   2.  β 微高差：|Δh| ≤ EDGE_CLIFF_BAND → cliff
+ *   3.  兜底 → weld
  */
 export function edgeRuling(a: BlockInfo, b: BlockInfo): EdgeRuling {
-  const pa = tileById(a.id).physics.edgePolicy;
-  const pb = tileById(b.id).physics.edgePolicy;
+  const ta = tileById(a.id);
+  const tb = tileById(b.id);
+  const pa = ta.physics.edgePolicy;
+  const pb = tb.physics.edgePolicy;
   if (pa === 'hard' || pb === 'hard') return 'cliff';
   if (pa === 'smooth' || pb === 'smooth') return 'weld';
+  if (ta.genRole !== 'ground' || tb.genRole !== 'ground') return 'weld';
   return Math.abs(a.h - b.h) <= edgeCliffBand() ? 'cliff' : 'weld';
 }
 
@@ -102,38 +108,39 @@ function blockCoordOfCell(cx: number, cz: number): { bx: number; bz: number } {
   return { bx: Math.floor(cx / 4), bz: Math.floor(cz / 4) };
 }
 
-function blockOfCell(src: BlockSource, cx: number, cz: number): BlockInfo {
-  const { bx, bz } = blockCoordOfCell(cx, cz);
-  return src.blockAt(bx, bz) ?? MISSING_BLOCK;
-}
-
 /**
- * ★ 硬顶点判定：角点 (vx,vz) 环绕 4 个米格归属至多 4 块，其中
- * 【共享边】的块对（不含对角对）任一裁决为 cliff → 硬顶点。
- * 硬顶点处每块自持高度（网格顶点按块复制，竖直落差由 cliff 墙补）。
+ * ★ 角点插值许可（文档 §3.2，2026-08-29 定稿，取代旧"全局硬顶点"规则）：
+ * 块 (bcx,bz) 在角点 (vx,vz) 处的高度——
+ *   B 在 V 处的边界边段（与异块共享的边段，0~2 条；同块内段不计）任一
+ *   裁决为 cliff → 返回 hB（自持：硬边直达角点，零插值——"左右两边都是
+ *   硬切换（含一边硬一边坡）就不许插值"）；
+ *   全部为 weld（两边皆有插值边；含 0 条边界段的内角）→ 返回 max(环绕
+ *   2×2 格)（与旧公式逐位一致）。
+ * 纯函数、对称、确定性；主线程与 Worker 同一份代码。
  */
-export function isHardVertex(src: BlockSource, vx: number, vz: number): boolean {
-  const b00 = blockOfCell(src, vx - 1, vz - 1);
-  const b10 = blockOfCell(src, vx, vz - 1);
-  const b01 = blockOfCell(src, vx - 1, vz);
-  const b11 = blockOfCell(src, vx, vz);
-  // 邻接对：(00,10)(01,11) 横向、(00,01)(10,11) 纵向；对角对不算共享边
-  const cliffPair = (a: BlockInfo, b: BlockInfo) => edgeRuling(a, b) === 'cliff';
-  return cliffPair(b00, b10) || cliffPair(b01, b11)
-    || cliffPair(b00, b01) || cliffPair(b10, b11);
-}
-
-/**
- * ★ 单元四角归属规则（文档 §3.1）：
- * 角点属于块 B——硬顶点 → hB（自持）；否则 → 环绕 2×2 格 max
- * （与旧 RasterMap.vertexHeightAt 逐位一致：同输入同 Math.max）。
- */
-export function cornerHeight(src: BlockSource, B: BlockInfo, vx: number, vz: number): number {
-  if (isHardVertex(src, vx, vz)) return B.h;
-  return Math.max(
-    blockOfCell(src, vx - 1, vz - 1).h, blockOfCell(src, vx, vz - 1).h,
-    blockOfCell(src, vx - 1, vz).h, blockOfCell(src, vx, vz).h,
-  );
+export function cornerHeight(src: BlockSource, bcx: number, bcz: number, vx: number, vz: number): number {
+  const B = src.blockAt(bcx, bcz) ?? MISSING_BLOCK;
+  const p00 = blockCoordOfCell(vx - 1, vz - 1);
+  const p10 = blockCoordOfCell(vx, vz - 1);
+  const p01 = blockCoordOfCell(vx - 1, vz);
+  const p11 = blockCoordOfCell(vx, vz);
+  const b00 = src.blockAt(p00.bx, p00.bz) ?? MISSING_BLOCK;
+  const b10 = src.blockAt(p10.bx, p10.bz) ?? MISSING_BLOCK;
+  const b01 = src.blockAt(p01.bx, p01.bz) ?? MISSING_BLOCK;
+  const b11 = src.blockAt(p11.bx, p11.bz) ?? MISSING_BLOCK;
+  // B 占据的每格向 V 贡献两条面向邻格的边段；异块段才计入（同块段是内段）
+  const own = (p: { bx: number; bz: number }) => p.bx === bcx && p.bz === bcz;
+  const o00 = own(p00), o10 = own(p10), o01 = own(p01), o11 = own(p11);
+  let cliff = false;
+  const seg = (o: boolean, n: boolean, nb: BlockInfo) => {
+    if (o && !n && edgeRuling(B, nb) === 'cliff') cliff = true;
+  };
+  seg(o00, o10, b10); seg(o10, o00, b00);   // 横向共享边段
+  seg(o01, o11, b11); seg(o11, o01, b01);
+  seg(o00, o01, b01); seg(o01, o00, b00);   // 纵向共享边段
+  seg(o10, o11, b11); seg(o11, o10, b10);
+  if (cliff) return B.h;
+  return Math.max(b00.h, b10.h, b01.h, b11.h);
 }
 
 /**
@@ -147,11 +154,11 @@ export function sampleSurface(src: BlockSource, x: number, z: number): number {
   const gz = Math.floor(z);
   const fx = x - gx;
   const fz = z - gz;
-  const B = blockOfCell(src, gx, gz);
-  const h00 = cornerHeight(src, B, gx, gz);
-  const h10 = cornerHeight(src, B, gx + 1, gz);
-  const h01 = cornerHeight(src, B, gx, gz + 1);
-  const h11 = cornerHeight(src, B, gx + 1, gz + 1);
+  const { bx, bz } = blockCoordOfCell(gx, gz);
+  const h00 = cornerHeight(src, bx, bz, gx, gz);
+  const h10 = cornerHeight(src, bx, bz, gx + 1, gz);
+  const h01 = cornerHeight(src, bx, bz, gx, gz + 1);
+  const h11 = cornerHeight(src, bx, bz, gx + 1, gz + 1);
   if (fx + fz <= 1) {
     return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
   }
