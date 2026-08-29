@@ -59,6 +59,19 @@ export function edgeCliffBand(): number {
 export interface BlockInfo {
   id: number;
   h: number;
+  /**
+   * ★ 立面板底高度（可选，默认 = h）——精修层 hBase 双语义地基：
+   *   h      = 顶面视觉面高度（渲染/碰撞/贴地/烘焙读它）
+   *   hBase  = 该块“实体到哪儿为止”的面板底高（补墙/悬空/侵蚀安全读它）
+   * weld 拉顶只改 h、hBase 不动 → 侧壁从 hBase 竖直升到 h，悬空消失；
+   * 侵蚀切块溅 h 与 hBase 同厚度降 → 不悬空。undefined = 视为 h。
+   */
+  hBase?: number;
+}
+
+/** 面板底高的统一取值（未显式指定 = h，保证空精修 ≡ 旧世界） */
+export function baseHeightOf(b: BlockInfo): number {
+  return b.hBase ?? b.h;
 }
 
 /**
@@ -119,6 +132,25 @@ export function finalRuling(src: BlockSource, bx: number, bz: number, dir: 0 | 1
   const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
   const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
   return edgeRuling(src.blockAt(bx, bz) ?? MISSING_BLOCK, src.blockAt(bx + dx, bz + dz) ?? MISSING_BLOCK);
+}
+
+/**
+ * ★ 悬空补墙判定（hBase 双语义的防御机制——文档 §8.0 补窟窿）：
+ * weld 坡面低侧块顶被拉到高侧后，若它的【立面板底 hBase】仍远低于高侧顶，
+ * 则坡面侧会漏空（看不到实体）。此函数判定"该 weld 边需补一段竖直墙"。
+ *   —— 纯函数、确定性、可单测；默认 hBase = h 时退化为旧 weld 门槛
+ *      （high.h − low.h ≥ 纵深）→ 空精修 ≡ 旧世界逐位不变。
+ * @param depthBottom 兜底墙需要竖到的底部高度；= baseHeightOf(低侧)
+ * @param depthTop    墙顶 = 高侧顶 h
+ * @param minDepth    与 ChunkWalls MIN_WALL_DROP 同源的触发阈值
+ */
+export function weldGap(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 | 3, minDepth: number): { needed: boolean; bottom: number; top: number } {
+  const e = edgeOf(src, bx, bz, dir);
+  if (e.ruling !== 'weld') return { needed: false, bottom: 0, top: 0 };
+  const bottom = baseHeightOf(e.low);
+  const top = e.high.h;
+  if (top - bottom >= minDepth) return { needed: true, bottom, top };
+  return { needed: false, bottom, top };
 }
 
 // ============================================================

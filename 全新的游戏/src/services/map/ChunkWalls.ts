@@ -22,7 +22,7 @@ import { CHUNK_SIZE, BLOCKS_PER_SIDE, hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
 import { BAKE_SUN, CAST_MIN_DEPTH } from './bakeCompute';
 import { SEMANTIC_THEME_MIX, groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
-import { edgeOf } from './SurfaceRules';
+import { edgeOf, baseHeightOf } from './SurfaceRules';
 import type { RasterMap } from './RasterMap';
 import { TERRAIN_LIGHT_TUNING } from './TerrainMaterial';
 
@@ -155,11 +155,19 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
 
         // ★ 边裁决（SurfaceRules 唯一真源）：cliff 边任何落差都出墙；
         //   weld 边维持旧门槛（道路 ±0.3m 抖动不出碎片墙）
-        const info = edgeOf(raster.surfaceBlocks, cx * BLOCKS_PER_SIDE + Math.floor(i / 4), cz * BLOCKS_PER_SIDE + Math.floor(j / 4), d as 0 | 1 | 2 | 3);
-        if (info.ruling === 'cliff') {
-          if (info.drop <= 0) continue; // 同高等高的 cliff（如端口）无几何
-        } else if (drop < MIN_WALL_DROP) {
-          continue;
+        const e = edgeOf(raster.surfaceBlocks, cx * BLOCKS_PER_SIDE + Math.floor(i / 4), cz * BLOCKS_PER_SIDE + Math.floor(j / 4), d as 0 | 1 | 2 | 3);
+        // 墙底：cliff = 邻块视觉高；weld = 邻块【立面板底 hBase】（hBase 双语义
+        // 补墙——低侧块顶被拉高但其面板底更深时，坡面侧不再悬空、补住窟窿）。
+        let yB: number;
+        if (e.ruling === 'cliff') {
+          if (e.drop <= 0) continue; // 同高等高的 cliff（如端口）无几何
+          yB = hNb - WALL_EPS;
+        } else {
+          // weld 边：触发阈值与墙底都取 e.low 的面板底。hCur>hNb 时 low=邻块。
+          // 默认 hBase = h → lowBase = hNb，逐位 ≡ 旧门槛 drop ≥ MIN_WALL_DROP。
+          const lowBase = baseHeightOf(e.low);
+          if (hCur - lowBase < MIN_WALL_DROP) continue;
+          yB = lowBase - WALL_EPS;
         }
 
         // 地块底色（取墙对应地块；颜色归一化后乘明暗——直接塞 0~255 会被钳白）
@@ -174,7 +182,7 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
 
         const xA = i + dir.ax - N / 2, zA = j + dir.az - N / 2; // 局部坐标（中心原点）
         const xB = i + dir.bx - N / 2, zB = j + dir.bz - N / 2;
-        const yT = hCur, yB = hNb - WALL_EPS;
+        const yT = hCur;
         pos.push(xA, yT, zA, xB, yT, zB, xB, yB, zB, xA, yB, zA);
         for (let c = 0; c < 4; c++) {
           nor.push(dir.dx, 0, dir.dz);

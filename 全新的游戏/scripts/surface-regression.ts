@@ -28,10 +28,10 @@ import {
 } from '../src/services/map/ChunkGenerator';
 import {
   sampleSurface, edgeRuling, edgeOf, setEdgeCliffBand,
-  cornerHeight, finalRuling,
+  cornerHeight, finalRuling, weldGap, baseHeightOf,
   type BlockSource, type BlockInfo,
 } from '../src/services/map/SurfaceRules';
-import { refine, overrideEdge, EMPTY_REFINEMENTS } from '../src/services/map/Refinements';
+import { refine, overrideEdge, EMPTY_REFINEMENTS, setHeight, carveGradientErosion } from '../src/services/map/Refinements';
 import { tileById, registerTile, TileDef } from '../src/services/map/Tiles';
 import { buildChunkTopSurface } from '../src/services/map/ChunkSurface';
 import { buildSnapshotFromChunks, makeSnapshotSource } from '../src/services/map/bakeCompute';
@@ -432,6 +432,117 @@ console.log('[B] β 统计 + 对称性/确定性校验通过');
   expectR('[G] 空精修 +z', finalRuling(gsrcE, 0, 0, 2), finalRuling(gsrc, 0, 0, 2));
   if (gFails > 0) { console.error('[G] 回归失败：edgeFinal 唯一判点语义'); process.exit(1); }
   console.log('[G] edgeFinal 唯一判点校验通过（默认/覆写/inherit/空透传）');
+}
+
+// ============================================================
+// Phase H：hBase 双语义 + 悬空补墙（weld 低侧面板底更深 → 补墙，防坡面悬空）
+//   ① baseHeightOf 缺省 = h（空精修 ≡ 旧世界）；
+//   ② weldGap 判定：默认 → 与旧 weld 门槛逐位一致；低侧 hBase 更深 → 需补墙；
+//   ③ 补墙底部 = baseHeightOf(低侧)（不漏空，非仅视觉高）。
+// ============================================================
+{
+  let hFails = 0;
+  const expectH = (name: string, got: number | boolean, want: number | boolean) => {
+    if (got !== want) { console.error(`[H] ${name}: ${got} ≠ ${want}`); hFails++; }
+  };
+  const MIN_DROP = 0.5;
+  // 高侧块 (0,0) h=4（ground,id0）；低侧块 (1,0)。Δh 大 → 默认边裁决 weld。
+  const mk = (h: number, hBase?: number): BlockInfo => ({ id: 0, h, ...(hBase !== undefined ? { hBase } : {}) });
+  const hsrc = (low: BlockInfo): BlockSource => ({
+    blockAt(bx: number, bz: number): BlockInfo | undefined {
+      if (bx === 0 && bz === 0) return mk(4);
+      if (bx === 1 && bz === 0) return low;
+      return undefined;
+    },
+  });
+
+  // ① baseHeightOf 缺省 = h
+  expectH('[H] baseHeightOf 缺省=h', baseHeightOf(mk(3)), 3);
+  expectH('[H] baseHeightOf 显式', baseHeightOf(mk(3, 1.2)), 1.2);
+
+  // ② weld 大落差边（低侧 raw h=0.1，缺省 hBase=0.1）→ 需墙、墙底=hBase(=h)、顶=高侧
+  {
+    const g = weldGap(hsrc(mk(0.1)), 0, 0, 0, MIN_DROP);
+    expectH('[H] weld 需墙', g.needed, true);
+    expectH('[H] 墙底=hBase(=h)', Number(g.bottom.toFixed(3)), 0.1);
+    expectH('[H] 墙顶=高侧h', g.top, 4);
+  }
+  // ③ 低侧面板底更深（hBase=-3）→ 墙底延伸到 hBase（补住坡面下方的窟窿，非仅视觉低）
+  {
+    const g = weldGap(hsrc(mk(0.1, -3)), 0, 0, 0, MIN_DROP);
+    expectH('[H] 深面板底 需墙', g.needed, true);
+    expectH('[H] 墙底=深hBase', Number(g.bottom.toFixed(3)), -3);
+    expectH('[H] 墙顶仍=高侧h', g.top, 4);
+  }
+  // ④ 墙底恒取 baseHeightOf(低侧)：不设置 hBase 时 == low.h（空精修≡旧世界逐位）
+  {
+    const g = weldGap(hsrc(mk(0.1)), 0, 0, 0, MIN_DROP);
+    expectH('[H] 缺省底=低侧h', g.bottom, 0.1);
+  }
+  if (hFails > 0) { console.error('[H] 回归失败：hBase/悬空补墙'); process.exit(1); }
+  console.log('[H] hBase 双语义 + 悬空补墙判定通过（缺省=h，面板底深→补到深底）');
+}
+
+// ============================================================
+// Phase I：精修高度补丁 + 确定性侵蚀（setHeight/refine/carveGradientErosion）
+//   ① refine 应用高度/底高补丁；空精修恒透传原对象（不变式）；
+//   ② 侵蚀确定性：同 seed → 同磁盘；克制：块数 ≤ maxBlocks、深度 ≤ maxDepth；
+//   ③ 补丁 h 与 hBase 同降 → baseHeightOf 跟随（不悬空）。
+// ============================================================
+{
+  let iFails = 0;
+  const expectI = (name: string, got: unknown, want: unknown) => {
+    if (got !== want) { console.error(`[I] ${name}: ${got} ≠ ${want}`); iFails++; }
+  };
+  const isrc = (h: number): BlockSource => ({
+    blockAt(bx: number, bz: number): BlockInfo | undefined {
+      if (bx >= -2 && bx <= 2 && bz >= -2 && bz <= 2) return { id: 0, h };
+      return undefined;
+    },
+  });
+
+  // ① 空精修恒透传（返回同一源对象）
+  const emptySrc = isrc(1);
+  expectI('[I] 空精修透传', refine(emptySrc, EMPTY_REFINEMENTS) === emptySrc, true);
+
+  // ① 高度补丁：h 改写 + 底高缺省 = h
+  const ref1 = setHeight(EMPTY_REFINEMENTS, 1, 1, 5);
+  const src1 = refine(isrc(0.5), ref1);
+  expectI('[I] setHeight 改 h', src1.blockAt(1, 1)!.h, 5);
+  expectI('[I] setHeight 底高缺省=h', baseHeightOf(src1.blockAt(1, 1)!), 5);
+  expectI('[I] 未补丁块不变', src1.blockAt(2, 2)!.h, 0.5);
+
+  // ① 显式底高
+  const ref2 = setHeight(EMPTY_REFINEMENTS, 1, 1, 5, -2);
+  expectI('[I] setHeight 显式底高', refine(isrc(0.5), ref2).blockAt(1, 1)!.hBase, -2);
+
+  // ② 侵蚀确定性 + 克制（用有低洼梯度的读出，确保真的切出连续沟壑）
+  const grad: BlockSource = {
+    blockAt(bx: number, bz: number): BlockInfo | undefined {
+      if (Math.abs(bx) > 24 || Math.abs(bz) > 24) return undefined;
+      const d = Math.abs(bx) + Math.abs(bz); // 菱形低洼：越靠近心越低
+      return { id: 0, h: 3 - d * 0.1 };
+    },
+  };
+  const reader = grad.blockAt.bind(grad);
+  const resA = carveGradientErosion(777, reader, { maxBlocks: 20, maxDepth: 0.5, maxSteps: 6 });
+  const resB = carveGradientErosion(777, reader, { maxBlocks: 20, maxDepth: 0.5, maxSteps: 6 });
+  expectI('[I] 侵蚀确定性', resA.heights.size, resB.heights.size);
+  expectI('[I] 侵蚀确实切出(patch>0)', resA.heights.size > 0, true);
+  expectI('[I] 侵蚀块数克制≤上限', resA.heights.size <= 20, true);
+  for (const [, p] of resA.heights) {
+    if (p.hBase === undefined || p.h - p.hBase > 1e-9) { console.error('[I] 侵蚀 h/hBase 未同降'); iFails++; break; }
+  }
+  // ③ 侵蚀结果经 refine 生效（h 与 hBase 同降，baseHeightOf 跟随）
+  const srcE = refine(grad, resA);
+  let applied = 0;
+  for (const [key, p] of resA.heights) {
+    const b = srcE.blockAt(p.bx, p.bz)!;
+    if (b.h === p.h && b.hBase === p.hBase) applied++;
+  }
+  expectI('[I] 侵蚀补丁全部生效', applied, resA.heights.size);
+  if (iFails > 0) { console.error('[I] 回归失败：高度补丁/侵蚀'); process.exit(1); }
+  console.log(`[I] 高度补丁 + 确定性侵蚀通过（补丁${resA.heights.size}块·克制）`);
 }
 
 console.log('[surface-regression] 全部通过');
