@@ -130,7 +130,7 @@ export const TILE_FLAT = new TileDef(
     material: { fnId: 'dirt' },                            // ★ 纯泥土地面
   },
   {
-    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
     flattenAtPorts: true,
     walkable: true,
   },
@@ -208,7 +208,7 @@ export const TILE_ICE = new TileDef(
     depression: false,
     borderLine: true,
   },
-  { height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4, flattenAtPorts: true, walkable: true },
+  { height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16, flattenAtPorts: true, walkable: true },
   ['crystal'],
 );
 
@@ -221,7 +221,7 @@ export const TILE_ASH_FIELD = new TileDef(
     depression: false,
     borderLine: true,
   },
-  { height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4, flattenAtPorts: true, walkable: true },
+  { height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16, flattenAtPorts: true, walkable: true },
   ['ashen'],
 );
 
@@ -234,7 +234,7 @@ export const TILE_MUD = new TileDef(
     depression: false,
     borderLine: true,
   },
-  { height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4, flattenAtPorts: true, walkable: true },
+  { height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16, flattenAtPorts: true, walkable: true },
   ['ashen', 'overgrown'],
 );
 
@@ -250,7 +250,7 @@ export const TILE_ROCK_PLATFORM = new TileDef(
     material: { fnId: 'rock', params: { strata: 0.24, cracks: 0.14 } }, // ★ 岩台（更粗粝）
   },
   { height: 1.8, heightJitterRange: 0.4, walkable: true },
-  ['ashen', 'foundation'],
+  ['ashen'],
 );
 
 /** 冰台（装饰高台）：结晶高台变体 */
@@ -299,10 +299,10 @@ export const TILE_BRICK = new TileDef(
     material: { fnId: 'brick' },
   },
   {
-    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
     flattenAtPorts: true, walkable: true,
   },
-  ['foundation', 'ashen'],
+  ['ashen'],
 );
 
 /** 草地路面（grass 材质；沃绿蔓生基调） */
@@ -316,10 +316,10 @@ export const TILE_GRASS = new TileDef(
     material: { fnId: 'grass' },
   },
   {
-    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
     flattenAtPorts: true, walkable: true,
   },
-  ['foundation', 'overgrown'],
+  ['overgrown'],
 );
 
 /** 木板路面（wood 材质；栈道/木桥基调） */
@@ -333,10 +333,10 @@ export const TILE_WOOD = new TileDef(
     material: { fnId: 'wood' },
   },
   {
-    height: 0, heightJitterBase: -0.1, heightJitterRange: 0.4,
+    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
     flattenAtPorts: true, walkable: true,
   },
-  ['foundation', 'overgrown'],
+  ['overgrown'],
 );
 
 // ============================================================

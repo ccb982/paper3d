@@ -216,11 +216,13 @@ const FRAGMENT_MAIN = /* glsl */ `
           // 材质函数输出相对调制系数 → × 该地块基色（调色板）
           vec3 base = materialBase(vWorld, id) * uMatBase[id].rgb;
 
-          // ★ 4×4 地块边界描边（棋盘感）：块内 UV 距边 → 压暗
+          // ★ 4×4 地块边界描边（黑色分界线）：块内 UV 距边 → 向近黑混合
+          //   （2026-08-29 二调：band 0.035 = 每块边缘 14cm（相邻合拢 ~28cm 细缝），
+          //     强度 0.85 ≈ 全黑；用户要求"更细更黑"）
           vec2 buv = fract(vUv * 15.0);
           float dEdge = min(min(buv.x, 1.0 - buv.x), min(buv.y, 1.0 - buv.y));
-          float edge = 1.0 - smoothstep(0.0, 0.05, dEdge);
-          base *= 1.0 - edge * uMatSurface[id].w;
+          float edge = 1.0 - smoothstep(0.0, 0.010, dEdge);
+          base = mix(base, vec3(0.02), edge * uMatSurface[id].w);
 
           vec3 lit = base * alb * (uAmbientColor * lm.g + uSunColor * lm.r);
 

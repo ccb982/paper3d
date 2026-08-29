@@ -100,7 +100,8 @@ const NEUTRAL_GEN: GroupGen = { densityBias: 0, waterMul: 1, pitMul: 1 };
 
 registerGroup({
   key: 'foundation', label: '基石', weight: 0,
-  members: { flat: 1, platform: 1, water: 1, pit: 1, brick: 1, grass: 1, wood: 1, rock_platform: 1 },
+  // ★ 2026-08-29 解绑装饰变体：基础组回归四类型基线（明日方舟 1-7 主题素材后续重做）
+  members: { flat: 1, platform: 1, water: 1, pit: 1 },
   palette: NEUTRAL_PALETTE, gen: NEUTRAL_GEN,
 });
 

@@ -658,8 +658,9 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
     surface[id * 4] = s?.specular ?? 0;
     surface[id * 4 + 1] = s?.fresnel ?? 0;
     surface[id * 4 + 2] = s?.emissive ? s.emissive.strength : 0;
-    // ★ 棋盘描边强度：borderLine=false 的（水面）无描边
-    surface[id * 4 + 3] = td.visual.borderLine === false ? 0 : 0.16;
+    // ★ 地块边界黑色描边强度（borderLine=false 的水面无描边）；
+    //   0.85 ≈ 全黑细线（2026-08-29 二调：0.16→0.6→0.85，配 band 0.035）
+    surface[id * 4 + 3] = td.visual.borderLine === false ? 0 : 0.85;
     emissive[id * 4] = s?.emissive?.r ?? 0;
     emissive[id * 4 + 1] = s?.emissive?.g ?? 0;
     emissive[id * 4 + 2] = s?.emissive?.b ?? 0;
