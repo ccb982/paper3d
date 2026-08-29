@@ -87,10 +87,10 @@ class TerrainBakerService {
     const id = this.nextId++;
     return new Promise((resolve) => {
       this.pending.set(id, resolve);
-      // vHeights/blockIds 缓冲转移所有权（零拷贝；snap 对象此后不可复用）
+      // mHeights/blockIds 缓冲转移所有权（零拷贝；snap 对象此后不可复用）
       w.postMessage(
         { type: 'bake', id, snap },
-        [snap.vHeights.buffer, snap.blockIds.buffer],
+        [snap.mHeights.buffer, snap.blockIds.buffer],
       );
     });
   }

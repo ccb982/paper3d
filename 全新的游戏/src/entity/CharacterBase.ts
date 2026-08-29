@@ -15,6 +15,8 @@ import type { CameraFrame } from '../services/camera/CameraController';
 import { shapeExtents, separateXZ } from '../services/physics/Collision';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
+import { RasterMap } from '../services/map/RasterMap';
+import { EDGE_CLIFF_BAND } from '../services/map/SurfaceRules';
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -68,8 +70,23 @@ export abstract class CharacterBase extends EntityBase {
     //   y = 地形高度由模式层每帧设置）
     const dir = this.controller.moveDir;
     const speed = this.controller.moveSpeed;
+    const prevX = this.entity.position.x;
+    const prevZ = this.entity.position.z;
     this.entity.position.x += dir.x * speed * dt;
     this.entity.position.z += dir.y * speed * dt;
+    // ★ 大落差水平阻挡（cliff 不可攀；《地形边缘裁决与视觉面架构.md》§5）：
+    //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND 以上 → 回退本次水平
+    //   位移。β 默认下 cliff 全部 ≤ 带宽 → 永不触发（可达性不变）；未来
+    //   "大落差断崖"规则生成高墙后自动生效。小台阶由 clampCharacter
+    //   上行限速自动踏过，与此互补（stepHeight ≡ EDGE_CLIFF_BAND）。
+    {
+      const p = this.entity.position;
+      const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+      if (gy - p.y > EDGE_CLIFF_BAND) {
+        p.x = prevX;
+        p.z = prevZ;
+      }
+    }
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
     this.separateFromOthers();
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍；同上原理）

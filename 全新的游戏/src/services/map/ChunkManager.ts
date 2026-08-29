@@ -29,6 +29,7 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { hsl2rgb } from './TerrainPalette';
 import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
+import { buildChunkTopSurface } from './ChunkSurface';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -431,23 +432,11 @@ export class ChunkManager {
   /**
    * ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半）。
    * 贴图已在烘焙时印进 albedo（装饰叠加层）；材质由地块自挂 shader 分发。
+   * 顶面几何走 ChunkSurface（SurfaceRules 派生，2026-08-29）；
+   * 物理 trimesh = 顶面 + 断崖墙同一份缓冲合并（碰撞=所见不变式）。
    */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
-    const geo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position as THREE.BufferAttribute;
-    // ★ 外观 UV：与 ChunkAppearance 像素映射约定配套（文件头有推导），flipY=false
-    const uvs = new Float32Array(pos.count * 2);
-    for (let i = 0; i < pos.count; i++) {
-      const lx = pos.getX(i) + CHUNK_SIZE / 2;
-      const lz = pos.getZ(i) + CHUNK_SIZE / 2;
-      const wx = cx * CHUNK_SIZE + lx;
-      const wz = cz * CHUNK_SIZE + lz;
-      pos.setY(i, this.raster.vertexHeightAt(wx, wz));
-      uvs[i * 2] = lx / CHUNK_SIZE;
-      uvs[i * 2 + 1] = lz / CHUNK_SIZE;
-    }
-    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    const surf = buildChunkTopSurface(this.raster, cx, cz);
 
     // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
@@ -459,12 +448,13 @@ export class ChunkManager {
     (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
       { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
 
-    const top = new THREE.Mesh(geo, mat);
+    const top = new THREE.Mesh(surf.geometry, mat);
     const group = new THREE.Group();
     group.add(top);
-    // ★ 断崖侧壁：独立几何 + 顶点色（避免地面贴图被拉伸成墙面的纵向渐变）
+    // ★ 断崖侧壁：独立几何 + 顶点色（避免地面贴图被拉伸成墙面的纵向渐变）；
+    //   cliff 裁决边的低落差墙也在此生成（SurfaceRules 边裁决）
     const walls = buildChunkSideWalls(this.raster, cx, cz);
-    if (walls) group.add(walls);
+    if (walls.mesh) group.add(walls.mesh);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
     // ---- ★ 装饰层装配（计划在预渲染前已放置，此处直接消费同一份） ----
@@ -478,10 +468,28 @@ export class ChunkManager {
       group.add(buildTileLabelLayer(chunkDataForMat, (x, z) => this.raster.surfaceHeightAt(x, z)));
     }
 
+    // ---- ★ 物理 trimesh：顶面 + 断崖墙合并（墙三角形必须有碰撞体：
+    //      trimesh 无体积，cliff 边无墙则低侧物体穿入高板下方坠落） ----
+    let physVerts = surf.vertices;
+    let physIdx = surf.indices;
+    if (walls.vertices.length > 0) {
+      const merged = new Float32Array(surf.vertices.length + walls.vertices.length);
+      merged.set(surf.vertices, 0);
+      merged.set(walls.vertices, surf.vertices.length);
+      const mergedIdx = new Uint32Array(surf.indices.length + walls.indices.length);
+      mergedIdx.set(surf.indices, 0);
+      const vOff = surf.vertices.length / 3;
+      for (let k = 0; k < walls.indices.length; k++) {
+        mergedIdx[surf.indices.length + k] = walls.indices[k] + vOff;
+      }
+      physVerts = merged;
+      physIdx = mergedIdx;
+    }
+
     this.replaceChunk(
       chunkKeyOf(cx, cz), group, cx, cz,
-      pos.array as Float32Array,
-      new Uint32Array(geo.index!.array),
+      physVerts,
+      physIdx,
     );
 
     // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----

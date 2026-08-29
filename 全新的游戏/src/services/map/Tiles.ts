@@ -72,6 +72,12 @@ export interface TilePhysics {
   walkable: boolean;
   /** 接触即死（坑洞） */
   lethal?: boolean;
+  /**
+   * ★ 边缘裁决覆盖（《地形边缘裁决与视觉面架构.md》§2.1 规则链位次 1）：
+   * 'hard' = 本地块一切边强制硬边界（cliff）；'smooth' = 强制插值过渡（weld，
+   * 如未来 TILE_SLOPE 坡道）；缺省 = 走 β 微高差规则。类型层决策，材质不参与。
+   */
+  edgePolicy?: 'smooth' | 'hard';
 }
 
 // ============================================================

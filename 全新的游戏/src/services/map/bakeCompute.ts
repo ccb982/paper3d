@@ -7,13 +7,14 @@
 //   - buildSnapshotFromChunks / makeSnapshotSource：主线程拷贝
 //     chunk 原始数组 → Worker 内重构查询源（与 RasterMap 同公式，逐位一致）
 //
-// ★★ 采样统一（2026-08-26 定稿）：
-//   烘焙只消费「视觉面」surfaceHeightAt（顶点值 = 整数格点周围
-//   2×2 格取 max；面内 = 三角形插值 = PlaneGeometry 真实剖分，
-//   Raycaster 实测逐位一致）——与网格位移、角色贴地、影子贴地完全同源。
-//   双线性在斜坡过渡带（非平面格）偏差可达米级，禁止回退。
+// ★★ 采样统一（2026-08-26 定稿；2026-08-29 升级为 SurfaceRules 真源）：
+//   烘焙只消费「视觉面」surfaceHeightAt——顶点高度语义统一在 SurfaceRules
+//   （weld 角点 = 2×2 格 max，cliff 硬角点 = 本块自持；面内 = 三角形插值
+//   = PlaneGeometry 真实剖分）。主线程与 Worker import 同一份纯函数，
+//   逐位一致由构造保证。双线性在斜坡过渡带偏差可达米级，禁止回退。
+//   快照携带【米格高度场】（逐块恒定平面的原始格值），Worker 端用
+//   SurfaceRules 本地重构同一语义（裁决输入 = 米格高 + blockIds）。
 //   旧的块状 heightAt（4m 恒定）仅剩 Boss4D 单纹理旧路径使用。
-//   由此修复：斜坡/台缘处烘焙阴影与可见地表的轻微错位。
 //
 // 快照协议（为什么拷原始数组而不是逐点查询）：
 //   RasterMap.surfaceHeightAt 单次 ≈ 16 次 heightAt；一张快照若逐点
@@ -30,6 +31,7 @@ import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
 import { SEMANTIC_THEME_MIX, applyGroupTintHsl, groupByKey, type GroupPalette } from './TileGroups';
 import { applyDecalStamps, type PlannedDecal } from './decor/TileDecalBase';
+import { sampleSurface, type BlockSource } from './SurfaceRules';
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
@@ -412,13 +414,13 @@ function stampPropShadows(
 /** 快照覆盖半径：raymarch 16m + AO 2.5m + 插值角点余量 */
 const SNAP_MARGIN = 22;
 
-/** 烘焙快照（可 transfer；vHeights 为整数格点顶点值晶格） */
+/** 烘焙快照（可 transfer；mHeights 为米格高度场：世界 (vx0+gx, vz0+gz) 处格值） */
 export interface BakeSnapshot {
   seed: number;
   cx: number; cz: number;
-  /** 顶点晶格：世界 (vx0+gx, vz0+gz) 处 vertexHeightAt 值，vw×vw */
+  /** 米格高度场原点与尺寸（mw = vw；逐块恒定平面的原始格值） */
   vx0: number; vz0: number; vw: number;
-  vHeights: Float32Array;
+  mHeights: Float32Array;
   /** 块类型：块对齐栅格 bw×bh，块 (bx0+bx, bz0+bz) */
   bx0: number; bz0: number; bw: number; bh: number;
   blockIds: Uint8Array;
@@ -441,7 +443,8 @@ export interface ChunkDataLite {
 /**
  * 主线程提取快照：直接拷贝覆盖区内全部 chunk 的原始数组再本地重排
  * （亚毫秒级；未加载 chunk 高度记 0，与 RasterMap.heightAt 回退一致）。
- * 顶点值 = 整数格点周围 2×2 格 max——与 RasterMap.vertexHeightAt 同公式。
+ * 米格高度场 = 逐块恒定平面原始格值（视觉面语义由 Worker 端
+ * SurfaceRules 从本场 + blockIds 确定性重构，见 makeSnapshotSource）。
  */
 export function buildSnapshotFromChunks(
   seed: number, cx: number, cz: number,
@@ -455,7 +458,7 @@ export function buildSnapshotFromChunks(
   // ---- 米格高度场（覆盖 [vx0, vx0+vw) 整数格；每米 1 格）----
   const mw = vw;
   const mx0 = vx0, mz0 = vz0;
-  const meterH = new Float32Array(mw * mw);
+  const mHeights = new Float32Array(mw * mw);
   const cFirstX = Math.floor(mx0 / CHUNK_SIZE), cLastX = Math.floor((mx0 + mw - 1) / CHUNK_SIZE);
   const cFirstZ = Math.floor(mz0 / CHUNK_SIZE), cLastZ = Math.floor((mz0 + mw - 1) / CHUNK_SIZE);
   for (let ccz = cFirstZ; ccz <= cLastZ; ccz++) {
@@ -468,24 +471,10 @@ export function buildSnapshotFromChunks(
       for (let lz = lz0; lz <= lz1; lz++) {
         for (let lx = lx0; lx <= lx1; lx++) {
           // 目标行列 = 世界格坐标 − 快照原点（世界格 = chunk 原点 + 局部索引）
-          meterH[(baseZ + lz - mz0) * mw + (baseX + lx - mx0)] =
+          mHeights[(baseZ + lz - mz0) * mw + (baseX + lx - mx0)] =
             data.heights[lz * CHUNK_SIZE + lx] ?? 0;
         }
       }
-    }
-  }
-
-  // ---- 顶点晶格：max(2×2 米格)，与 RasterMap.vertexHeightAt 同公式 ----
-  const vHeights = new Float32Array(vw * vw);
-  for (let gz = 0; gz < vw; gz++) {
-    for (let gx = 0; gx < vw; gx++) {
-      const cxl = gx, czl = gz; // 米格索引（米格与顶点晶格同起点同分辨率）
-      vHeights[gz * vw + gx] = Math.max(
-        meterH[(czl - 1 < 0 ? 0 : czl - 1) * mw + (cxl - 1 < 0 ? 0 : cxl - 1)],
-        meterH[(czl - 1 < 0 ? 0 : czl - 1) * mw + cxl],
-        meterH[czl * mw + (cxl - 1 < 0 ? 0 : cxl - 1)],
-        meterH[czl * mw + cxl],
-      );
     }
   }
 
@@ -514,34 +503,38 @@ export function buildSnapshotFromChunks(
   const palette = center?.groupKey ? groupByKey(center.groupKey)?.palette : undefined;
 
   return {
-    seed, cx, cz, vx0, vz0, vw, vHeights, bx0, bz0, bw, bh, blockIds,
+    seed, cx, cz, vx0, vz0, vw, mHeights, bx0, bz0, bw, bh, blockIds,
     propVolumes: extras?.propVolumes ?? new Float32Array(0),
     decals: extras?.decals ?? [],
     palette,
   };
 }
 
-/** Worker 端：快照 → BakeQuery（与 RasterMap 同公式的本地重构，零跨线程查询） */
+/**
+ * Worker 端：快照 → BakeQuery。
+ * ★ 视觉面采样与主线程同一份 SurfaceRules 纯函数（逐位一致由构造保证）：
+ * 块数据源 = 米格高度场（块角格值）+ blockIds（块类型）本地重构。
+ */
 export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
+  const src: BlockSource = {
+    blockAt(bx: number, bz: number) {
+      const gx = bx * BLOCK_SIZE - s.vx0;
+      const gz = bz * BLOCK_SIZE - s.vz0;
+      const ibx = bx - s.bx0;
+      const ibz = bz - s.bz0;
+      // 快照覆盖外 → undefined（SurfaceRules 按 0 号平地/0 高兜底，同旧回退）
+      if (gx < 0 || gz < 0 || gx >= s.vw || gz >= s.vw) return undefined;
+      if (ibx < 0 || ibz < 0 || ibx >= s.bw || ibz >= s.bh) return undefined;
+      return {
+        id: s.blockIds[ibz * s.bw + ibx] ?? 0,
+        h: s.mHeights[gz * s.vw + gx] ?? 0,
+      };
+    },
+  };
   return {
     worldSeed: s.seed,
     surfaceHeightAt(x: number, z: number): number {
-      // ★ 三角形插值 = PlaneGeometry 真实剖分（对角线 (lx,lz+1)-(lx+1,lz)，
-      //   分割条件 fx+fz≤1；Raycaster 实测逐位一致）。不能用双线性——
-      //   非平面格（斜坡过渡带）偏差可达米级，烘焙影会脱离可见地表。
-      let fx = x - s.vx0;
-      let fz = z - s.vz0;
-      if (fx < 0) fx = 0; else if (fx > s.vw - 1.001) fx = s.vw - 1.001;
-      if (fz < 0) fz = 0; else if (fz > s.vw - 1.001) fz = s.vw - 1.001;
-      const gx = Math.floor(fx), gz = Math.floor(fz);
-      const tx = fx - gx, tz = fz - gz;
-      const g1 = gx + 1, g1z = gz + 1;
-      const h00 = s.vHeights[gz * s.vw + gx];
-      const h10 = s.vHeights[gz * s.vw + g1];
-      const h01 = s.vHeights[g1z * s.vw + gx];
-      const h11 = s.vHeights[g1z * s.vw + g1];
-      if (tx + tz <= 1) return h00 * (1 - tx - tz) + h01 * tz + h10 * tx;
-      return h11 * (tx + tz - 1) + h01 * (1 - tx) + h10 * (1 - tz);
+      return sampleSurface(src, x, z);
     },
     tileDefAt(x: number, z: number): TileDef {
       let bx = Math.floor(x / BLOCK_SIZE) - s.bx0;

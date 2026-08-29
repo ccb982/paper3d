@@ -19,6 +19,7 @@ import {
   generateChunk, type ChunkData,
   CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE,
 } from './ChunkGenerator';
+import { sampleSurface, type BlockSource } from './SurfaceRules';
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -122,36 +123,14 @@ export class RasterMap {
     return chunk.heights[lz * CHUNK_SIZE + lx] ?? 0;
   }
 
-  /** ★ 视觉面顶点值（格线交点）= 周围 2×2 格高度取 max——
-   *   直角立面：块边界顶点取台面高（否则视觉斜坡 → 角色站在斜坡上方悬空） */
-  vertexHeightAt(x: number, z: number): number {
-    return Math.max(
-      this.heightAt(x - 1, z - 1), this.heightAt(x, z - 1),
-      this.heightAt(x - 1, z), this.heightAt(x, z),
-    );
-  }
-
-  /** ★ 视觉面一致采样（角色脚底/影子贴地）：顶点值【三角形】插值——
-   *   与网格渲染逐位一致（2026-08-26 实测修正）。
-   *   ⚠️ 不能用双线性：PlaneGeometry 每格是两个三角形（对角线连接
-   *   (lx,lz+1)-(lx+1,lz)，分割条件 fx+fz≤1），双线性在非平面格
-   *   （斜坡过渡带）上偏差可达 ~1m → 角色悬浮/影子切入地形。
-   *   推导用 Raycaster 对真实 PlaneGeometry 实测确认。 */
+  /** ★ 视觉面一致采样（角色脚底/影子贴地）—— SurfaceRules 唯一真源薄封装。
+   *   语义（2026-08-29 定稿，《地形边缘裁决与视觉面架构.md》§3）：
+   *   查询点所在米格的四角按【块归属】取高（weld 角点 = 2×2 max 与旧公式
+   *   逐位一致；cliff 硬角点 = 本块自持高度）后三角形插值——与网格渲染
+   *   逐位一致。对角线 (lx,lz+1)-(lx+1,lz)，fx+fz≤1 取 T1；不能用双线性
+   *   （非平面格偏差可达米级 → 角色悬浮/影子切入地形，2026-08-26 实测）。 */
   surfaceHeightAt(x: number, z: number): number {
-    const gx = Math.floor(x);
-    const gz = Math.floor(z);
-    const fx = x - gx;
-    const fz = z - gz;
-    const h00 = this.vertexHeightAt(gx, gz);        // (0,0)
-    const h10 = this.vertexHeightAt(gx + 1, gz);    // (1,0)
-    const h01 = this.vertexHeightAt(gx, gz + 1);    // (0,1)
-    const h11 = this.vertexHeightAt(gx + 1, gz + 1);// (1,1)
-    if (fx + fz <= 1) {
-      // T1 = △(h00,h01,h10)：对角线左下侧
-      return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
-    }
-    // T2 = △(h01,h11,h10)：对角线右上侧（apex h11）
-    return h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
+    return sampleSurface(this.surfaceBlocks, x, z);
   }
 
   /** 世界阻挡高度（高台立面；射击 rayMarch 用） */
@@ -175,6 +154,27 @@ export class RasterMap {
     const lz = Math.floor(z - cz * CHUNK_SIZE);
     return (chunk.walkable[lz * CHUNK_SIZE + lx] ?? 1) === 1;
   }
+
+  /**
+   * ★ SurfaceRules 块数据源适配：世界块坐标 → 块信息（公开——ChunkWalls
+   *   等几何消费者复用同一查找）。缺块先 ensureChunk（确定性纯生成，
+   *   亚毫秒）——贴地/烘焙射线永不見"未加载=0"的假邻域（与 ensureData
+   *   同一哲学；生成的 chunk 本来就在加载环扩张路径上，只是提前生成）。 */
+  readonly surfaceBlocks: BlockSource = {
+    blockAt: (bx: number, bz: number) => {
+      const mx = bx * BLOCK_SIZE;
+      const mz = bz * BLOCK_SIZE;
+      const cx = Math.floor(mx / CHUNK_SIZE);
+      const cz = Math.floor(mz / CHUNK_SIZE);
+      this.ensureChunk(cx, cz);
+      const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+      if (!chunk) return undefined;
+      const lx = mx - cx * CHUNK_SIZE;
+      const lz = mz - cz * CHUNK_SIZE;
+      const bi = (lz / BLOCK_SIZE) * BLOCKS_PER_SIDE + lx / BLOCK_SIZE;
+      return { id: chunk.blockTypes[bi] ?? 0, h: chunk.heights[lz * CHUNK_SIZE + lx] ?? 0 };
+    },
+  };
 
   /** 地形颜色（按模板 + 块类型分区着色：高台暖黄/平地冷灰/坑洞深红/斜坡过渡） */
   /** ★ 地块定义查询（外观 Canvas 烘焙/装饰散布用；未加载回退平地） */

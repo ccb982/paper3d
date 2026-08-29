@@ -1,0 +1,190 @@
+// ============================================================
+// SurfaceRules —— 地形边缘裁决与视觉面语义（纯函数唯一真源）
+// ============================================================
+// 架构详见《地形边缘裁决与视觉面架构.md》（2026-08-29 定稿）。
+//
+// 核心命题：地块之间的"过渡"不是隐式规则副作用，而是一次【边级裁决】——
+//   weld  ：裁决通过 → 两侧连续过渡（低侧边界顶点拉到高侧 = 旧 max-2×2 几何）
+//   cliff ：裁决不通过 → 硬突起边界（两侧各持各高，竖直落差由墙补）
+//
+// ★ 四条铁律：
+//   1. 裁决对象是"边"（两块共享边界），角点是边的派生（硬顶点规则）
+//   2. 裁决是纯函数、确定性、对称的——同 seed 同边恒同结果
+//   3. 视觉面语义只有本文件一个真源，禁止消费方复刻 max-2×2 或自行插值
+//   4. 消费者全部派生（网格/物理/烘焙/贴地/移动阻挡），零自行决策
+//
+// ★ 零 three 依赖：主线程（RasterMap/ChunkSurface/ChunkWalls）与
+//   Worker（bakeCompute 快照重构）import 同一份代码 → 逐位一致由构造保证。
+// ============================================================
+
+import { tileById } from './Tiles';
+
+// ============================================================
+// 裁决结论与常量
+// ============================================================
+
+export type EdgeRuling = 'weld' | 'cliff';
+
+/**
+ * ★ β 微高差裁决带（|Δh| ≤ 带宽 → cliff）。
+ * 推导见文档 §2.2：各类型对 |Δh| 分布中 (0.30, 0.38) 是空隙带——
+ *   - 地面↔地面 < 0.16、同档高台 ≤ 0.30 → cliff（平面类内部露出方块感）
+ *   - 异档高台 ≥ 0.70、地面↔高台 ≥ 0.93、水/坑参与 → weld（今日插值天际线）
+ *   - ⚠ 水↔地面分布 (0.38, 0.62) 跨骑 0.5：带宽取 0.5 会让水岸随抖动
+ *     随机台阶/斜坡——必须落在空隙带内。0.35 = 水岸维持今日插值观感。
+ * ★ 与移动层 stepHeight 是同一常量（CharacterBase 大落差阻挡）：
+ *   β 产生的 cliff 全部 ≤ 带宽 → 全部可自动踏过 → 默认世界可达性不变。
+ */
+export const EDGE_CLIFF_BAND = 0.35;
+
+/**
+ * ★ β 总开关（回归 A-B 对照 / 应急回退，文档 §6）：null = 用 EDGE_CLIFF_BAND。
+ * 设为负数（-1）= 恒 weld = 旧世界（max-2×2 逐位）——
+ * scripts/surface-regression.ts 的 weld 对照依赖此开关。
+ */
+let bandOverride: number | null = null;
+export function setEdgeCliffBand(band: number | null): void {
+  bandOverride = band;
+}
+/** 当前生效裁决带（规则链唯一取值点，勿在别处直读常量） */
+export function edgeCliffBand(): number {
+  return bandOverride ?? EDGE_CLIFF_BAND;
+}
+
+// ============================================================
+// 块数据源（唯一抽象面：世界块坐标 → 块信息）
+// ============================================================
+
+/** 块信息：tileId（裁决用）+ 逻辑高度（L4 逐块恒定平面） */
+export interface BlockInfo {
+  id: number;
+  h: number;
+}
+
+/**
+ * 世界块坐标 → 块信息；undefined = 数据不存在（按 0 号平地/0 高兜底，
+ * 与旧 heightAt 未加载回退一致。RasterMap 实现会先 ensureData 补邻域）。
+ */
+export interface BlockSource {
+  blockAt(bx: number, bz: number): BlockInfo | undefined;
+}
+
+/** 缺块兜底（0 号平地 / 0 高——与旧 heightAt 未加载回退逐位一致） */
+export const MISSING_BLOCK: BlockInfo = { id: 0, h: 0 };
+
+// ============================================================
+// 边级裁决（规则链：TileDef 覆盖 → β 微高差 → 兜底 weld）
+// ============================================================
+
+/**
+ * ★ 边裁决（对称：edgeRuling(a,b) ≡ edgeRuling(b,a)）。
+ * 规则链（首条命中即结论；扩展位见文档 §2.1——α 角色对表/风格组规则
+ * 按越具体越靠前插在 TileDef 覆盖与 β 之间）：
+ *   1. 任一侧 edgePolicy 'hard' → cliff（两侧 hard 优先于 smooth）
+ *   1'. 任一侧 edgePolicy 'smooth'（且无 hard）→ weld
+ *   2. β 微高差：|Δh| ≤ EDGE_CLIFF_BAND → cliff
+ *   3. 兜底 → weld
+ */
+export function edgeRuling(a: BlockInfo, b: BlockInfo): EdgeRuling {
+  const pa = tileById(a.id).physics.edgePolicy;
+  const pb = tileById(b.id).physics.edgePolicy;
+  if (pa === 'hard' || pb === 'hard') return 'cliff';
+  if (pa === 'smooth' || pb === 'smooth') return 'weld';
+  return Math.abs(a.h - b.h) <= edgeCliffBand() ? 'cliff' : 'weld';
+}
+
+// ============================================================
+// 视觉面语义：硬顶点 → 单元四角归属 → 贴地采样
+// ============================================================
+
+/** 米格 cell → 块坐标（4m 块；cell 恒属于唯一块） */
+function blockCoordOfCell(cx: number, cz: number): { bx: number; bz: number } {
+  return { bx: Math.floor(cx / 4), bz: Math.floor(cz / 4) };
+}
+
+function blockOfCell(src: BlockSource, cx: number, cz: number): BlockInfo {
+  const { bx, bz } = blockCoordOfCell(cx, cz);
+  return src.blockAt(bx, bz) ?? MISSING_BLOCK;
+}
+
+/**
+ * ★ 硬顶点判定：角点 (vx,vz) 环绕 4 个米格归属至多 4 块，其中
+ * 【共享边】的块对（不含对角对）任一裁决为 cliff → 硬顶点。
+ * 硬顶点处每块自持高度（网格顶点按块复制，竖直落差由 cliff 墙补）。
+ */
+export function isHardVertex(src: BlockSource, vx: number, vz: number): boolean {
+  const b00 = blockOfCell(src, vx - 1, vz - 1);
+  const b10 = blockOfCell(src, vx, vz - 1);
+  const b01 = blockOfCell(src, vx - 1, vz);
+  const b11 = blockOfCell(src, vx, vz);
+  // 邻接对：(00,10)(01,11) 横向、(00,01)(10,11) 纵向；对角对不算共享边
+  const cliffPair = (a: BlockInfo, b: BlockInfo) => edgeRuling(a, b) === 'cliff';
+  return cliffPair(b00, b10) || cliffPair(b01, b11)
+    || cliffPair(b00, b01) || cliffPair(b10, b11);
+}
+
+/**
+ * ★ 单元四角归属规则（文档 §3.1）：
+ * 角点属于块 B——硬顶点 → hB（自持）；否则 → 环绕 2×2 格 max
+ * （与旧 RasterMap.vertexHeightAt 逐位一致：同输入同 Math.max）。
+ */
+export function cornerHeight(src: BlockSource, B: BlockInfo, vx: number, vz: number): number {
+  if (isHardVertex(src, vx, vz)) return B.h;
+  return Math.max(
+    blockOfCell(src, vx - 1, vz - 1).h, blockOfCell(src, vx, vz - 1).h,
+    blockOfCell(src, vx - 1, vz).h, blockOfCell(src, vx, vz).h,
+  );
+}
+
+/**
+ * ★ 视觉面一致采样（文档 §3.1）：查询点所在 cell 的四角按
+ * 【块归属】取高后三角形插值——与网格渲染逐位一致。
+ * 对角线 (lx,lz+1)-(lx+1,lz)，fx+fz≤1 取 T1=△(h00,h01,h10)
+ * （PlaneGeometry 真实剖分，2026-08-26 Raycaster 实测约定，勿改）。
+ */
+export function sampleSurface(src: BlockSource, x: number, z: number): number {
+  const gx = Math.floor(x);
+  const gz = Math.floor(z);
+  const fx = x - gx;
+  const fz = z - gz;
+  const B = blockOfCell(src, gx, gz);
+  const h00 = cornerHeight(src, B, gx, gz);
+  const h10 = cornerHeight(src, B, gx + 1, gz);
+  const h01 = cornerHeight(src, B, gx, gz + 1);
+  const h11 = cornerHeight(src, B, gx + 1, gz + 1);
+  if (fx + fz <= 1) {
+    return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+  }
+  return h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
+}
+
+// ============================================================
+// 边信息（墙生成 / 可遍历性消费）
+// ============================================================
+
+export interface EdgeInfo {
+  /** 裁决结论 */
+  ruling: EdgeRuling;
+  /** 落差 = 高侧 − 低侧（≥ 0） */
+  drop: number;
+  /** 高侧块（drop=0 时 = low） */
+  high: BlockInfo;
+  /** 低侧块 */
+  low: BlockInfo;
+}
+
+/**
+ * 块 (bx,bz) 与 (dir 方向邻块) 的边信息。
+ * dir：0=+x 1=−x 2=+z 3=−z（与 ChunkWalls 扫描方向表对应）。
+ * 缺邻块按 MISSING_BLOCK 兜底（与旧 heightAt 越界回退一致）。
+ */
+export function edgeOf(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 | 3): EdgeInfo {
+  const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
+  const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
+  const a = src.blockAt(bx, bz) ?? MISSING_BLOCK;
+  const b = src.blockAt(bx + dx, bz + dz) ?? MISSING_BLOCK;
+  const drop = a.h - b.h;
+  const high = drop >= 0 ? a : b;
+  const low = drop >= 0 ? b : a;
+  return { ruling: edgeRuling(a, b), drop: Math.abs(drop), high, low };
+}
