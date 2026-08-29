@@ -5,15 +5,18 @@
 // 提供：刚体创建（按形状）、位置驱动（玩家/运动学）、固定步进、
 // 碰撞事件转发（contact / sensor）、球体查询（爆炸/范围）。
 
-import RAPIER, { ActiveEvents } from '@dimforge/rapier3d-compat';
+import RAPIER, { ActiveEvents } from '@dimforge/rapier3d';
+import { initRapierWasm } from './rapierWasm';
 
 /**
  * ★ rapier wasm 初始化（进程内一次性；进入战斗前必须调用）。
- * 使用 compat 版：wasm 以 base64 内联，await RAPIER.init() 即完成实例化，
- * 不依赖打包器的 wasm-ESM 支持（dev 插件链在生产构建会静默失效）。
+ * 非 compat 版 + 手动实例化（rapierWasm.ts）：
+ *   fetch ?url 资产 → 按导入表映射 bg.js 导出 → instantiate → set_wasm 注入。
+ * （2026-08-28 弃用 compat：base64 内联占主包 1.37MB 且 gzip 压不动；
+ *   vite-plugin-wasm 插件链在生产构建静默失效 → 手动实例化根治，见 rapierWasm.ts）
  */
 export async function ensureRapierReady(): Promise<void> {
-  await RAPIER.init();
+  await initRapierWasm();
 }
 
 /** ⚠ 关键经验（踩坑记录）：
