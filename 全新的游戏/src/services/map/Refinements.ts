@@ -10,10 +10,11 @@
 //        凡未显式 smooth 的边一律立墙；weld 只发生在 BlockSource.edgeFinal
 //        显式钉死或 TileDef.edgePolicy:'smooth' 启用的边上。
 //      - 消费者一律走 finalRuling/edgeOf，只读本层输出（第五铁律）。
-//   2) 视觉面几何：角点高度 cornerCell、顶点缝合 vertexHeight、斜坡剖面
-//      rampProfile、贴地采样 sampleSurface、面板底 baseHeightOf 的语义公式
-//      全部并入本文件（2026-08-31：撕裂面+传导场两级合成模型，见
-//      《精修层过渡模型重构设计.md》§3；2026-08-30 SurfaceRules 物理并入）。
+//   2) 视觉面几何：角点高度 cornerCell、边插值 interpEdge、角插值
+//      interpCorner、斜坡剖面 rampProfile、贴地采样 sampleSurface、面板底
+//      baseHeightOf 的语义公式全部并入本文件（2026-08-31：撕裂面+传导场
+//      两级合成模型，见《精修层过渡模型重构设计.md》§3；2026-08-30
+//      SurfaceRules 物理并入）。
 //
 // ★ 确定性/可重放：纯函数、逐位可复现（同种子同源同输出）。
 //   零 three 依赖，主线程与 Worker 同一份代码。
@@ -178,21 +179,37 @@ export function refineChunkSource(
 // ============================================================
 
 /**
- * ★ 边裁决（对称：edgeRuling(a,b) ≡ edgeRuling(b,a)）。
+ * ★ 边裁决（对称：edgeRuling(a,b,dir) ≡ edgeRuling(b,a,dir^1)——dir 与 dir^1
+ *   是同一条共享边，两侧查询必须同值，否则撕裂）。
  * 2026-08-31 定版【插值 = 显式 opt-in；默认恒硬边界立墙】：
  *   - 任一侧 edgePolicy 'hard' → cliff
  *   - 任一侧 edgePolicy 'smooth'（且无 hard）→ weld
- *   - 其余一律 cliff。斜坡（weld）只出现在显式启用处：
- *       TileDef.edgePolicy:'smooth'，或 BlockSource.edgeFinal 显式钉死
- *       （planRefinements per-chunk 唯一入口）。
+ *   - 任一侧 smoothDirs 声明该共享边（本侧 dir 或对侧 dir^1）→ weld
+ *   - 其余一律 cliff。斜坡（weld）只出现在显式启用处。
+ *
+ * @param dir 方向 0=+x 1=-x 2=+z 3=-z（与 finalRuling 对齐；缺省跳过方向判定）
  */
-export function edgeRuling(a: BlockInfo, b: BlockInfo): EdgeRuling {
+export function edgeRuling(
+  a: BlockInfo,
+  b: BlockInfo,
+  dir?: number,
+): EdgeRuling {
   const ta = tileById(a.id);
   const tb = tileById(b.id);
   const pa = ta.physics.edgePolicy;
   const pb = tb.physics.edgePolicy;
   if (pa === "hard" || pb === "hard") return "cliff";
   if (pa === "smooth" || pb === "smooth") return "weld";
+  if (dir !== undefined) {
+    const opp = dir ^ 1; // 0↔1、2↔3：同一条共享边的对侧方向
+    const sa = ta.physics.smoothDirs;
+    const sb = tb.physics.smoothDirs;
+    if (
+      (sa && (sa.includes(dir) || sa.includes(opp))) ||
+      (sb && (sb.includes(dir) || sb.includes(opp)))
+    )
+      return "weld";
+  }
   return "cliff";
 }
 
@@ -214,20 +231,22 @@ export function finalRuling(
   return edgeRuling(
     src.blockAt(bx, bz) ?? MISSING_BLOCK,
     src.blockAt(bx + dx, bz + dz) ?? MISSING_BLOCK,
+    dir,
   );
 }
 
 /**
- * ★ 悬空补墙判定已废弃（2026-08-31 重写）：weld 斜坡带在低侧块内部成形，
- *   坡带深度精确落回 hL，无边墙；墙只在 cliff 撕裂面发（见 buildChunkWallBuffers）。
+ * ★ 墙生成（2026-08-31 定版：墙与裁决解耦）：任何两侧块高有落差的边都发墙
+ *   —— cliff 墙 = 撕裂面本身；weld 墙 = 坡面背后的贴坡背墙（封闭坡带下方
+ *   空腔）。斜坡蒙皮只是附加在墙前低侧块上的额外面（见 buildChunkWallBuffers）。
  */
 
 // ============================================================
 // 视觉面语义：撕裂面 + 传导场（同级采样）——《重构设计》§3
 //   cornerCell(cell ∈ 块 B, 顶点 V) 唯一消费入口，三层判定：
 //   1. V 处 B 有 cliff 边段 → B.h（硬边自持，撕裂优先）
-//   2. V 落在 B 的 weld 斜坡带内（0<t<w，B 为低侧）→ 剖面采样 max
-//   3. 其余 → vertexHeight(V)（顶点场缝合，base 无关）
+//   2. V 落在 B 的 weld 斜坡带内（0<t<w，B 为低侧）→ interpEdge 采样 max
+//   3. 其余 → interpCorner(V)（角向周围地块，base 无关）
 // ============================================================
 
 /** 米格 cell → 块坐标（4m 块；cell 恒属于唯一块） */
@@ -236,12 +255,13 @@ function blockCoordOfCell(cx: number, cz: number): { bx: number; bz: number } {
 }
 
 /**
- * ★ 顶点场缝合值 vertexHeight(V)：base 无关——环绕 V 的至多 4 块里，
- *   所有"corner-open（在 V 处无 cliff 边段）"的块的高度，与所有 weld 边
- *   crest 高度，取 max。这是水密（watertight）的构造基础：谁查 V 都同值。
+ * ★ 角插值 interpCorner(V)：base 无关——环绕 V 的至多 4 块里，所有
+ *   "corner-open（在 V 处无 cliff 边段）"的块的高度，与所有 weld 边 crest
+ *   高度，取 max（触及 V 的插值边 1 条/2 条都覆盖：1 条取该边 crest，
+ *   2 条取两 crest 的 max）。水密（watertight）：谁查 V 都同值。
  *   对角块只有真斜坡传导（自身 open 或经 weld 边 crest）才抬角。
  */
-export function vertexHeight(src: BlockSource, vx: number, vz: number): number {
+export function interpCorner(src: BlockSource, vx: number, vz: number): number {
   let best = -Infinity;
   const bs: { bx: number; bz: number }[] = [];
   const seen = new Set<number>();
@@ -314,6 +334,49 @@ export function rampProfile(
 }
 
 /**
+ * ★ 边插值 interpEdge(B, dir, V)：块 B 在 dir 方向若为 weld 插值边的低侧，
+ *   V 落在斜坡带内（0 < t < w）→ 返回剖面采样 s(t)（任意地块类型对通用；
+ *   Role 无关——ground/platform/liquid/pit 无差别参与，不设类型豁免）。
+ *   非低侧 / V 在带外 → undefined（调用方回落角插值）。
+ */
+export function interpEdge(
+  src: BlockSource,
+  bcx: number,
+  bcz: number,
+  dir: 0 | 1 | 2 | 3,
+  vx: number,
+  vz: number,
+): number | undefined {
+  if (finalRuling(src, bcx, bcz, dir) !== "weld") return undefined;
+  const B = src.blockAt(bcx, bcz) ?? MISSING_BLOCK;
+  const H =
+    src.blockAt(
+      bcx + (dir === 0 ? 1 : dir === 1 ? -1 : 0),
+      bcz + (dir === 2 ? 1 : dir === 3 ? -1 : 0),
+    ) ?? MISSING_BLOCK;
+  const hH = H.h;
+  const hL = B.h;
+  if (hH <= hL) return undefined; // 需 B 为低侧
+  const dxs = bcx * 4;
+  const dzs = bcz * 4;
+  const bx0 = dxs,
+    bx1 = dxs + 4,
+    bz0 = dzs,
+    bz1 = dzs + 4;
+  const w = rampWidthOf(src, bcx, bcz, dir);
+  let t: number;
+  if (dir === 0) t = bx1 - vx;
+  else if (dir === 1) t = vx - bx0;
+  else if (dir === 2) t = bz1 - vz;
+  else t = vz - bz0;
+  const i = dir === 0 || dir === 1 ? vz - bz0 : vx - bx0;
+  if (t > 0 && t < w && i >= 0 && i <= 4) {
+    return rampProfile(w, hH, hL, t);
+  }
+  return undefined;
+}
+
+/**
  * ★ cornerCell(source, (bcx,bcz)=cell 归属块, 顶点 (vx,vz))——cell 角点取值。
  * 唯一消费入口；三层判定见文件头。返回 cell 该角的高度。
  */
@@ -352,38 +415,18 @@ export function cornerCell(
       finalRuling(src, bcx, bcz, 3) === "cliff");
   if (selfHold) return B.h;
 
-  // 规则 2：V 落在 B 的 weld 斜坡带内（B 为其低侧，0 < t < w）
-  // 沿 +x/-x/+z/-z 四向检查
+  // 规则 2：边插值——V 落在 B 的某条 weld 斜坡带内（B 为其低侧，0<t<w）
+  // 沿 +x/-x/+z/-z 四向；重叠带取更高者。
   let bandBest = -Infinity;
-  const dirs: [0 | 1 | 2 | 3, number, number][] = [
-    [0, 1, 0],
-    [1, -1, 0],
-    [2, 0, 1],
-    [3, 0, -1],
-  ];
-  for (const [dir, ndx, ndz] of dirs) {
-    if (finalRuling(src, bcx, bcz, dir) !== "weld") continue;
-    const H = src.blockAt(bcx + ndx, bcz + ndz) ?? MISSING_BLOCK;
-    const hH = H.h,
-      hL = B.h;
-    if (hH <= hL) continue; // 需 B 为低侧
-    const w = rampWidthOf(src, bcx, bcz, dir);
-    // 深入方向 t：0 在共享边，w 到坡脚
-    let t: number;
-    if (dir === 0) t = bx1 - vx;
-    else if (dir === 1) t = vx - bx0;
-    else if (dir === 2) t = bz1 - vz;
-    else t = vz - bz0;
-    // 沿边坐标 i：只对"本块垂直于该边的范围内"（i∈[0,4]）采样
-    const i = dir === 0 || dir === 1 ? vz - bz0 : vx - bx0;
-    if (t > 0 && t < w && i >= 0 && i <= 4) {
-      bandBest = Math.max(bandBest, rampProfile(w, hH, hL, t));
-    }
+  const dirs: (0 | 1 | 2 | 3)[] = [0, 1, 2, 3];
+  for (const dir of dirs) {
+    const s = interpEdge(src, bcx, bcz, dir, vx, vz);
+    if (s !== undefined) bandBest = Math.max(bandBest, s);
   }
   if (bandBest > -Infinity) return bandBest;
 
-  // 规则 3：顶点场缝合
-  return vertexHeight(src, vx, vz);
+  // 规则 3：角插值（角向周围地块；触及角 1/2 条插值边 → max(crest)）
+  return interpCorner(src, vx, vz);
 }
 
 /**
@@ -840,12 +883,12 @@ export function buildChunkWallBuffers(
           bzN = Math.floor((oz + nj + 0.5) / 4);
         const bNb = src.blockAt(bxN, bzN) ?? MISSING_BLOCK;
 
-        // ★ 唯一判据：裁决 cliff 且两侧块逻辑高确有落差（§4.1「真断崖」）。
-        //   weld 永不发墙（weld 边触发发墙 = 回归失败）。
-        //   退化保护：等高块（|hCur−hNb|=0）→ drop=0 → 不发（§3.3「块逻辑高差」、
-        //   设计 §4.1 127 行）。墙顶只随 cornerCell 走顶面，落差判定用块高。
-        const dR = d as 0 | 1 | 2 | 3;
-        if (finalRuling(src, bxC, bzC, dR) !== "cliff") continue;
+        // ★ 唯一判据：两侧块逻辑高确有落差 → 发墙（硬边界基础几何，
+        //   2026-08-31 定版：墙与裁决解耦）。cliff 墙 = 撕裂面本身；
+        //   weld 墙 = 坡面背后的贴坡背墙（封闭坡带下方空腔，杜绝看穿）。
+        //   斜坡（weld）只是额外附加在墙前低侧块上的蒙皮，墙永远在。
+        //   退化保护：等高块（|hCur−hNb|=0）→ 不发。
+        //   墙顶只随 cornerCell 走顶面，落差判定用块高。
         // 去重：仅从中心块更高的那侧发墙（每条边界只发一次，法线朝低处）
         if (bCur.h <= bNb.h) continue;
         const topHigh = Math.max(

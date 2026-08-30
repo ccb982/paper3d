@@ -22,14 +22,14 @@
 //     保证"换皮不改结构"，固定 seed 下 walkable/heights 逐位不变
 // ============================================================
 
-import type { Hsl } from './TerrainPalette';
-import { hsl2rgb } from './TerrainPalette';
+import type { Hsl } from "./TerrainPalette";
+import { hsl2rgb } from "./TerrainPalette";
 
 // ============================================================
 // 角色（生成器结构槽位 ↔ 地块匹配的唯一维度）
 // ============================================================
 
-export type TileGenRole = 'ground' | 'platform' | 'liquid' | 'pit';
+export type TileGenRole = "ground" | "platform" | "liquid" | "pit";
 
 // ============================================================
 // 属性描述接口
@@ -74,10 +74,17 @@ export interface TilePhysics {
   lethal?: boolean;
   /**
    * ★ 边缘裁决覆盖（《地形边缘裁决与视觉面架构.md》§2.1 规则链位次 1）：
-   * 'hard' = 本地块一切边强制硬边界（cliff）；'smooth' = 强制插值过渡（weld，
-   * 如未来 TILE_SLOPE 坡道）；缺省 = 走 β 微高差规则。类型层决策，材质不参与。
+   * 'hard' = 本地块一切边强制硬边界（cliff）；'smooth' = 强制插值过渡（weld）；
+   * 缺省 = 走默认引擎（一律 cliff）。类型层决策，材质不参与。
    */
-  edgePolicy?: 'smooth' | 'hard';
+  edgePolicy?: "smooth" | "hard";
+  /**
+   * ★ 方向性插值覆盖（2026-08-31）：
+   * 指定该地块哪些方向的边参与 weld（插值）过渡，替代 edgePolicy 的全向语义。
+   * 优先级：edgePolicy 'hard' > smoothDirs > 默认 cliff。
+   * 例：高台取 [0,2] = +x 和 +z 方向插值；水取 [0,1,2,3] = 全向插值。
+   */
+  smoothDirs?: number[];
 }
 
 // ============================================================
@@ -102,7 +109,11 @@ export class TileDef {
 
   /** 基准色 RGB（显示空间；小地图等直接消费） */
   get baseRgb(): [number, number, number] {
-    return hsl2rgb(this.visual.baseHsl.h, this.visual.baseHsl.s, this.visual.baseHsl.l);
+    return hsl2rgb(
+      this.visual.baseHsl.h,
+      this.visual.baseHsl.s,
+      this.visual.baseHsl.l,
+    );
   }
 }
 
@@ -112,62 +123,86 @@ export class TileDef {
  */
 export function tileTypeName(td: TileDef): string {
   switch (td.genRole) {
-    case 'liquid': return '水';
-    case 'pit': return '坑洞';
-    case 'ground': return td.id >= 10 ? '装饰性平地' : '平地';
-    case 'platform': return td.id >= 10 ? '装饰性高台' : '高台';
+    case "liquid":
+      return "水";
+    case "pit":
+      return "坑洞";
+    case "ground":
+      return td.id >= 10 ? "装饰性平地" : "平地";
+    case "platform":
+      return td.id >= 10 ? "装饰性高台" : "高台";
   }
 }
 
 /** 类型显示顺序（面板/图例统一用） */
-export const TILE_TYPE_ORDER = ['平地', '装饰性平地', '高台', '装饰性高台', '水', '坑洞'] as const;
+export const TILE_TYPE_ORDER = [
+  "平地",
+  "装饰性平地",
+  "高台",
+  "装饰性高台",
+  "水",
+  "坑洞",
+] as const;
 
 // ============================================================
 // 内置基础地块（物理数值 = 历史版本原值，逐项核对过）
 // ============================================================
 
 export const TILE_FLAT = new TileDef(
-  0, 'flat', '平地/路', 'ground',
+  0,
+  "flat",
+  "平地/路",
+  "ground",
   {
-    baseHsl: { h: 0.0854, s: 0.3628, l: 0.4431 },          // RGB(154,114,72)
+    baseHsl: { h: 0.0854, s: 0.3628, l: 0.4431 }, // RGB(154,114,72)
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
-    material: { fnId: 'dirt' },                            // ★ 纯泥土地面
+    material: { fnId: "dirt" }, // ★ 纯泥土地面
   },
   {
-    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
     flattenAtPorts: true,
     walkable: true,
   },
-  ['foundation'],
+  ["foundation"],
 );
 
 export const TILE_PLATFORM = new TileDef(
-  1, 'platform', '高台', 'platform',
+  1,
+  "platform",
+  "高台",
+  "platform",
   {
-    baseHsl: { h: 0.0741, s: 0.4206, l: 0.5804 },          // RGB(193,143,103)
+    baseHsl: { h: 0.0741, s: 0.4206, l: 0.5804 }, // RGB(193,143,103)
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
-    streaks: true,                                          // 拉丝金属
-    material: { fnId: 'rock' },                             // ★ 岩石材质
+    streaks: true, // 拉丝金属
+    material: { fnId: "rock" }, // ★ 岩石材质
   },
   {
-    height: 1.8, heightJitterRange: 0.4,
+    height: 1.8,
+    heightJitterRange: 0.4,
     walkable: true,
+    smoothDirs: [0, 2], // +x、+z 插值
   },
-  ['foundation'],
+  ["foundation"],
 );
 
 export const TILE_PIT = new TileDef(
-  2, 'pit', '坑洞', 'pit',
+  2,
+  "pit",
+  "坑洞",
+  "pit",
   {
-    baseHsl: { h: 0.98, s: 0.60, l: 0.22 },                // 暗血红警示（ACES 补偿后）
+    baseHsl: { h: 0.98, s: 0.6, l: 0.22 }, // 暗血红警示（ACES 补偿后）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: true,
     patches: true,
-    patchHalf: true,                                        // 警示色保持醒目
+    patchHalf: true, // 警示色保持醒目
     borderLine: true,
   },
   {
@@ -175,29 +210,40 @@ export const TILE_PIT = new TileDef(
     walkable: false,
     lethal: true,
   },
-  ['foundation'],
+  ["foundation"],
 );
 
 export const TILE_WATER = new TileDef(
-  4, 'water', '水域', 'liquid',
+  4,
+  "water",
+  "水域",
+  "liquid",
   {
-    baseHsl: { h: 0.58, s: 0.52, l: 0.30 },                // 可辨识深蓝
-    jitter: { h: 0, s: 0, l: 0 },                          // 液体均质不抖
+    baseHsl: { h: 0.58, s: 0.52, l: 0.3 }, // 可辨识深蓝
+    jitter: { h: 0, s: 0, l: 0 }, // 液体均质不抖
     depression: true,
-    patches: false,                                         // 水面无色阶斑块
-    borderLine: false,                                      // 水面无内描边
+    patches: false, // 水面无色阶斑块
+    borderLine: false, // 水面无内描边
   },
   {
     height: -0.5,
     walkable: false,
+    smoothDirs: [0, 1, 2, 3], // 水全向插值
   },
-  ['foundation'],
+  ["foundation"],
 );
 
 /** 预留位（旧 SLOPE 编号，暂未启用；不入任何组 → 永不被抽中） */
 export const TILE_SLOPE = new TileDef(
-  3, 'slope', '坡道（预留）', 'ground',
-  { baseHsl: TILE_FLAT.visual.baseHsl, jitter: TILE_FLAT.visual.jitter, depression: false },
+  3,
+  "slope",
+  "坡道（预留）",
+  "ground",
+  {
+    baseHsl: TILE_FLAT.visual.baseHsl,
+    jitter: TILE_FLAT.visual.jitter,
+    depression: false,
+  },
   { height: 0, walkable: true },
 );
 
@@ -207,61 +253,99 @@ export const TILE_SLOPE = new TileDef(
 
 /** 冰面（装饰平面）：霜蓝结晶风格主打 */
 export const TILE_ICE = new TileDef(
-  10, 'ice', '冰面', 'ground',
+  10,
+  "ice",
+  "冰面",
+  "ground",
   {
-    baseHsl: { h: 0.55, s: 0.30, l: 0.72 },
+    baseHsl: { h: 0.55, s: 0.3, l: 0.72 },
     jitter: { h: 0.006, s: 0.02, l: 0.04 },
     depression: false,
     borderLine: true,
   },
-  { height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16, flattenAtPorts: true, walkable: true },
-  ['crystal'],
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["crystal"],
 );
 
 /** 灰烬地（装饰平面）：废土主打 */
 export const TILE_ASH_FIELD = new TileDef(
-  11, 'ash_field', '灰烬地', 'ground',
+  11,
+  "ash_field",
+  "灰烬地",
+  "ground",
   {
     baseHsl: { h: 0.05, s: 0.06, l: 0.32 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
   },
-  { height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16, flattenAtPorts: true, walkable: true },
-  ['ashen'],
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["ashen"],
 );
 
 /** 泥沼地（装饰平面）：湿润过渡 */
 export const TILE_MUD = new TileDef(
-  12, 'mud', '泥沼地', 'ground',
+  12,
+  "mud",
+  "泥沼地",
+  "ground",
   {
     baseHsl: { h: 0.08, s: 0.38, l: 0.26 },
     jitter: { h: 0.006, s: 0.03, l: 0.04 },
     depression: false,
     borderLine: true,
   },
-  { height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16, flattenAtPorts: true, walkable: true },
-  ['ashen', 'overgrown'],
+  {
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
+  },
+  ["ashen", "overgrown"],
 );
 
 /** 岩台（装饰高台）：废土高台变体 */
 export const TILE_ROCK_PLATFORM = new TileDef(
-  13, 'rock_platform', '岩台', 'platform',
+  13,
+  "rock_platform",
+  "岩台",
+  "platform",
   {
     baseHsl: { h: 0.08, s: 0.12, l: 0.42 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
     streaks: true,
-    material: { fnId: 'rock', params: { strata: 0.24, cracks: 0.14 } }, // ★ 岩台（更粗粝）
+    material: { fnId: "rock", params: { strata: 0.24, cracks: 0.14 } }, // ★ 岩台（更粗粝）
   },
-  { height: 1.8, heightJitterRange: 0.4, walkable: true },
-  ['ashen'],
+  {
+    height: 1.8,
+    heightJitterRange: 0.4,
+    walkable: true,
+    smoothDirs: [0, 1, 2],
+  }, // +x、-x、+z
+  ["ashen"],
 );
 
 /** 冰台（装饰高台）：结晶高台变体 */
 export const TILE_ICE_PLATFORM = new TileDef(
-  14, 'ice_platform', '冰台', 'platform',
+  14,
+  "ice_platform",
+  "冰台",
+  "platform",
   {
     baseHsl: { h: 0.55, s: 0.22, l: 0.66 },
     jitter: { h: 0.006, s: 0.02, l: 0.04 },
@@ -269,23 +353,31 @@ export const TILE_ICE_PLATFORM = new TileDef(
     borderLine: true,
     streaks: true,
   },
-  { height: 1.8, heightJitterRange: 0.4, walkable: true },
-  ['crystal'],
+  { height: 1.8, heightJitterRange: 0.4, walkable: true, smoothDirs: [0, 3] }, // +x、-z
+  ["crystal"],
 );
 
 /** 苔台（装饰高台）：蔓生高台变体 */
 export const TILE_MOSSY_PLATFORM = new TileDef(
-  15, 'mossy_platform', '苔台', 'platform',
+  15,
+  "mossy_platform",
+  "苔台",
+  "platform",
   {
-    baseHsl: { h: 0.30, s: 0.35, l: 0.40 },
+    baseHsl: { h: 0.3, s: 0.35, l: 0.4 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
     streaks: true,
-    material: { fnId: 'moss' },                             // ★ 苔藓材质
+    material: { fnId: "moss" }, // ★ 苔藓材质
   },
-  { height: 1.8, heightJitterRange: 0.4, walkable: true },
-  ['overgrown'],
+  {
+    height: 1.8,
+    heightJitterRange: 0.4,
+    walkable: true,
+    smoothDirs: [0, 2, 3],
+  }, // +x、+z、-z
+  ["overgrown"],
 );
 
 // ============================================================
@@ -296,53 +388,71 @@ export const TILE_MOSSY_PLATFORM = new TileDef(
 
 /** 砖石路面（brick 材质；废墟/城镇基调） */
 export const TILE_BRICK = new TileDef(
-  16, 'brick', '砖石路', 'ground',
+  16,
+  "brick",
+  "砖石路",
+  "ground",
   {
     baseHsl: { h: 0.08, s: 0.18, l: 0.42 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
-    material: { fnId: 'brick' },
+    material: { fnId: "brick" },
   },
   {
-    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
-    flattenAtPorts: true, walkable: true,
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
   },
-  ['ashen'],
+  ["ashen"],
 );
 
 /** 草地路面（grass 材质；沃绿蔓生基调） */
 export const TILE_GRASS = new TileDef(
-  17, 'grass', '草地', 'ground',
+  17,
+  "grass",
+  "草地",
+  "ground",
   {
-    baseHsl: { h: 0.30, s: 0.32, l: 0.38 },
+    baseHsl: { h: 0.3, s: 0.32, l: 0.38 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
-    material: { fnId: 'grass' },
+    material: { fnId: "grass" },
   },
   {
-    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
-    flattenAtPorts: true, walkable: true,
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
   },
-  ['overgrown'],
+  ["overgrown"],
 );
 
 /** 木板路面（wood 材质；栈道/木桥基调） */
 export const TILE_WOOD = new TileDef(
-  18, 'wood', '木板路', 'ground',
+  18,
+  "wood",
+  "木板路",
+  "ground",
   {
-    baseHsl: { h: 0.07, s: 0.35, l: 0.30 },
+    baseHsl: { h: 0.07, s: 0.35, l: 0.3 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
-    material: { fnId: 'wood' },
+    material: { fnId: "wood" },
   },
   {
-    height: 0, heightJitterBase: -0.04, heightJitterRange: 0.16,
-    flattenAtPorts: true, walkable: true,
+    height: 0,
+    heightJitterBase: -0.04,
+    heightJitterRange: 0.16,
+    flattenAtPorts: true,
+    walkable: true,
   },
-  ['overgrown'],
+  ["overgrown"],
 );
 
 // ============================================================
@@ -352,10 +462,20 @@ export const TILE_WOOD = new TileDef(
 const REGISTRY = new Map<number, TileDef>();
 const KEY_INDEX = new Map<string, TileDef>();
 for (const t of [
-  TILE_FLAT, TILE_PLATFORM, TILE_PIT, TILE_SLOPE, TILE_WATER,
-  TILE_ICE, TILE_ASH_FIELD, TILE_MUD,
-  TILE_ROCK_PLATFORM, TILE_ICE_PLATFORM, TILE_MOSSY_PLATFORM,
-  TILE_BRICK, TILE_GRASS, TILE_WOOD,
+  TILE_FLAT,
+  TILE_PLATFORM,
+  TILE_PIT,
+  TILE_SLOPE,
+  TILE_WATER,
+  TILE_ICE,
+  TILE_ASH_FIELD,
+  TILE_MUD,
+  TILE_ROCK_PLATFORM,
+  TILE_ICE_PLATFORM,
+  TILE_MOSSY_PLATFORM,
+  TILE_BRICK,
+  TILE_GRASS,
+  TILE_WOOD,
 ]) {
   if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
   REGISTRY.set(t.id, t);
@@ -377,8 +497,10 @@ export function tileByKey(key: string): TileDef | undefined {
  * id 必须未占用；key 必须未占用。
  */
 export function registerTile(def: TileDef): void {
-  if (REGISTRY.has(def.id)) throw new Error(`[Tiles] 地块 id 已存在: ${def.id} (${def.key})`);
-  if (KEY_INDEX.has(def.key)) throw new Error(`[Tiles] 地块 key 已存在: ${def.key}`);
+  if (REGISTRY.has(def.id))
+    throw new Error(`[Tiles] 地块 id 已存在: ${def.id} (${def.key})`);
+  if (KEY_INDEX.has(def.key))
+    throw new Error(`[Tiles] 地块 key 已存在: ${def.key}`);
   REGISTRY.set(def.id, def);
   KEY_INDEX.set(def.key, def);
 }

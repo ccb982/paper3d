@@ -8,8 +8,8 @@
 // 契约基线（《精修层过渡模型重构设计.md》§1.1 不变式表）：
 //   ① 顶点一致性：同一世界顶点，任一相邻 cell 读到的值浮点位相等
 //   ② 无幽灵拉高：对角高块不经真 weld 边缓冲不得抬此角
-//   ③ 墙 = 断崖真墙：发墙仅由「裁决 cliff 且两侧表面确有落差」触发；
-//      weld 边触发发墙 = fail
+//   ③ 墙 = 硬边界基础几何（2026-08-31 与裁决解耦）：两侧块高有落差即发墙；
+//      cliff 墙 = 撕裂面本身，weld 墙 = 贴坡背墙（斜坡蒙皮附加在墙前）
 //   ④ 空斜坡 ≡ 旧平面：恒定高块顶面与旧 PlaneGeometry 逐位一致（保留）
 //
 // 阶段：
@@ -26,8 +26,8 @@
 //      对角高块不抬角、cliff 边自持。
 //   G（精修执行器）：edgeFinal 唯一判点——默认引擎 ↔ 显式覆写 ↔ inherit
 //      回落三者语义；refine 空精修恒透传。
-//   H（墙 = 断崖真墙）：仅 cliff 且有落差才发墙；weld 边触发发墙 = fail；
-//      hBase 缺省 = h（baseHeightOf）。
+//   H（墙 = 硬边界基础几何）：有落差即发墙；weld 边发贴坡背墙（墙顶=crest）；
+//      等高零墙；hBase 缺省 = h（baseHeightOf）。
 // ============================================================
 import {
   generateChunk,
@@ -41,7 +41,7 @@ import {
   finalRuling,
   baseHeightOf,
   cornerCell,
-  vertexHeight,
+  interpCorner,
   rampProfile,
   buildChunkWallBuffers,
   type BlockSource,
@@ -177,9 +177,10 @@ for (const seed of SEEDS) {
               wbx + (dir === 0 ? 1 : 0),
               wbz + (dir === 2 ? 1 : 0),
             )!;
-            if (edgeRuling(a, b) !== edgeRuling(b, a)) ruleFails++;
+            if (edgeRuling(a, b, dir) !== edgeRuling(b, a, dir ^ 1))
+              ruleFails++;
             // 确定性：重算必须一致
-            if (edgeRuling(a, b) !== info.ruling) ruleFails++;
+            if (edgeRuling(a, b, dir) !== info.ruling) ruleFails++;
             if (info.ruling === "cliff") {
               cliffEdges++;
               const ra = tileById(info.high.id).genRole;
@@ -493,7 +494,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
   {
     // 边 (0,0)~(1,0) 显式钉死 weld（两侧成对，weld 对称裁决）；
     // 低侧 (0,0) 顶沿边拉向高侧；铺满周围块（含 z±1 边缘），保证
-    // cornerCell/vertexHeight 无缺块干扰
+    // cornerCell/interpCorner 无缺块干扰
     const src = weldFixture(
       {
         "0,0": flat(0),
@@ -534,7 +535,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
   }
 
   // ⑤ 全 weld 角（开阔水面，显式全钉 weld）→ 顶点一致性：
-  //    四块在共享角上读到同值（= vertexHeight，水密）
+  //    四块在共享角上读到同值（= interpCorner，水密）
   {
     const src = weldFixture(
       {
@@ -545,7 +546,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
       },
       () => "weld",
     );
-    const vH = vertexHeight(src, 4, 4);
+    const vH = interpCorner(src, 4, 4);
     expectNum("[F] 全weld角 00", cornerCell(src, 0, 0, 4, 4), vH);
     expectNum("[F] 全weld角 10", cornerCell(src, 1, 0, 4, 4), vH);
     expectNum("[F] 全weld角 01", cornerCell(src, 0, 1, 4, 4), vH);
@@ -553,7 +554,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
   }
 
   // ⑥ 斜坡带（weld）剖面：低侧块内部一点在坡带内时取 rampProfile
-  //    注意：0<t<w 才进剖面；块内深处/t 落在坡带外 → vertexHeight → 回落到块高
+  //    注意：0<t<w 才进剖面；块内深处/t 落在坡带外 → interpCorner → 回落到块高
   {
     // 单条 weld 边 (0,0)~(1,0)，低侧 (0,0) 深 4m 前剖面 (w=2)
     const src = fixture({ "0,0": flat(0), "1,0": flat(4) });
@@ -627,10 +628,10 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
 }
 
 // ============================================================
-// Phase H：墙 = 断崖真墙（§1.1 不变式③ / §4.1）
+// Phase H：墙 = 硬边界基础几何（§4.1，2026-08-31 墙与裁决解耦）
 //   ① baseHeightOf 缺省 = h（不悬空承诺）；
-//   ② 发墙仅由「裁决 cliff 且两侧表面确有落差」触发；
-//   ③ weld 边触发发墙 = fail（共享边零落差是 weld 契约，坡内沿/顶点已连续）。
+//   ② 两侧块高有落差就发墙——cliff 墙 = 撕裂面本身，weld 墙 = 贴坡背墙；
+//   ③ 等高块零墙（退化保护）。
 // ============================================================
 {
   let hFails = 0;
@@ -711,14 +712,12 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
     expectH("[H] cliff 发墙 > 0", buf.indices.length > 0, true);
   }
 
-  // ③ weld 边永不发墙：斜坡带内逐格构建，任何 weld 触发 = fail。
-  //   测试源按真实语义延拓（块外取最近列，= 无界平面）：若直接返回
-  //   undefined → MISSING 兜底(h=0) 与高侧块形成假 cliff 墙。真实链路
-  //   raster.chunkSource 是无界源（跨 chunk 读），永不触 MISSING。
+  // ③ weld 边发贴坡背墙（2026-08-31：墙与裁决解耦）：斜坡蒙皮背后必有
+  //   封腔墙，杜绝坡带下方空腔看穿。测试源按真实语义延拓（块外取最近列，
+  //   = 无界平面）：若直接返回 undefined → MISSING 兜底(h=0) 会产生假墙。
+  //   真实链路 raster.chunkSource 是无界源（跨 chunk 读），永不触 MISSING。
   {
     // 背景平坦，中央一条 x 分离的高差（x 块 <8 → 0，≥8 → 4），显式钉死 weld。
-    // 块坐标延拓到 -4..24 覆盖 chunk 全部块坐标（0..14）± 越界缓冲，杜绝
-    // MISSING 兜底（h=0）与高侧块成假 cliff 墙（真实源是无界平面）。
     const hOf = (bx: number): number => (bx < 8 ? 0 : 4);
     const src: BlockSource = {
       blockAt: (bx: number, bz: number): BlockInfo | undefined => ({
@@ -729,14 +728,21 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
         (bx === 7 && dir === 0) || (bx === 8 && dir === 1) ? "weld" : undefined,
     };
     const buf = buildChunkWallBuffers(src, 0, 0, N60, wallCtx({}));
-    // weld 不产墙（不变式③：任何 weld 边触发发墙 = fail）
-    expectH("[H] weld 边零墙", buf.indices.length, 0);
+    // 共享边 x=32（块 7|8，高差 4m）→ 高侧（块 8）逐 cell 发背墙：
+    // 60 cell 边 × 2 三角 × 3 索引 = 360。低侧不重发（去重）。
+    expectH("[H] weld 贴坡背墙三角数", buf.indices.length, 60 * 2 * 3);
+    // 墙顶 = crest = 4：扫描顶点 y，最大值应为高侧块高（沿共享边表面同值）
+    let maxTop = -Infinity;
+    for (let v = 0; v < buf.vertices.length; v += 3) {
+      if (buf.vertices[v + 1] > maxTop) maxTop = buf.vertices[v + 1];
+    }
+    expectH("[H] weld 背墙墙顶=crest", maxTop, 4);
   }
   if (hFails > 0) {
-    console.error("[H] 回归失败：墙=断崖真墙");
+    console.error("[H] 回归失败：墙=硬边界基础几何");
     process.exit(1);
   }
-  console.log("[H] 墙 = 断崖真墙校验通过（cliff 有落差发墙、weld 永不发墙）");
+  console.log("[H] 墙 = 硬边界基础几何校验通过（有落差即发墙，weld=贴坡背墙）");
 }
 
 // ============================================================
