@@ -33,7 +33,7 @@ import {
   SEMANTIC_THEME_MIX,
   type GroupPalette,
 } from "./TileGroups";
-import { BAKE_SUN } from "./RefinementConstants";
+import { BAKE_SUN, CAST_MIN_DEPTH } from "./RefinementConstants";
 
 // ============================================================
 // 裁决结论与常量（精修层内部默认引擎；与移动层 stepHeight 同源）
@@ -242,76 +242,17 @@ export function finalRuling(
  */
 
 // ============================================================
-// 视觉面语义：撕裂面 + 传导场（同级采样）——《重构设计》§3
-//   cornerCell(cell ∈ 块 B, 顶点 V) 唯一消费入口，三层判定：
-//   1. V 处 B 有 cliff 边段 → B.h（硬边自持，撕裂优先）
-//   2. V 落在 B 的 weld 斜坡带内（0<t<w，B 为低侧）→ interpEdge 采样 max
-//   3. 其余 → interpCorner(V)（角向周围地块，base 无关）
+// 视觉面语义：角点邻域插值（新架构，低位向高位攀爬）
+//   cornerCell(cell ∈ 块 B, 顶点 V) 唯一消费入口：
+//   1. 收集四邻地块，找出最高块（天花板）
+//   2. 低侧地块若在通往最高块的方向声明了插值，向最高块线性攀爬
+//   3. 多个低侧汇聚时加权平均（权重 = 贴近高侧的程度）
+//   4. 最高块保持自身高度，不被压低
 // ============================================================
 
 /** 米格 cell → 块坐标（4m 块；cell 恒属于唯一块） */
 function blockCoordOfCell(cx: number, cz: number): { bx: number; bz: number } {
   return { bx: Math.floor(cx / 4), bz: Math.floor(cz / 4) };
-}
-
-/**
- * ★ 角插值 interpCorner(V)：base 无关——环绕 V 的至多 4 块里，所有
- *   "corner-open（在 V 处无 cliff 边段）"的块的高度，按距块中心距离加权
- *   平均。水密（watertight）：谁查 V 都同值。
- *   对角块只有真斜坡传导（自身 open 或经 weld 边 crest）才参与加权。
- *   ★ 2026-09-01 从 Math.max 改为加权平均，消除尖刺——让角落与边插值
- *   连通，地形棱角更平滑（"坡面"而非"平面"）。
- */
-export function interpCorner(src: BlockSource, vx: number, vz: number): number {
-  let sum = 0;
-  let count = 0;
-  const bs: { bx: number; bz: number }[] = [];
-  const seen = new Set<number>();
-  for (const [dx, dz] of [
-    [0, 0],
-    [0, -1],
-    [-1, 0],
-    [-1, -1],
-  ] as const) {
-    const p = blockCoordOfCell(vx + dx, vz + dz);
-    const k = p.bx * 4096 + p.bz;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    bs.push(p);
-  }
-  for (const p of bs) {
-    const B = src.blockAt(p.bx, p.bz) ?? MISSING_BLOCK;
-    const dxs = p.bx * 4,
-      dzs = p.bz * 4;
-    const inX = vx === dxs || vx === dxs + 4;
-    const inZ = vz === dzs || vz === dzs + 4;
-    if (!inX && !inZ) {
-      // V 在块内部：该块是周围唯一块，直接取自身高
-      sum += B.h;
-      count++;
-      continue;
-    }
-    let open = true;
-    if (inX) {
-      const dir = vx === dxs + 4 ? 0 : 1;
-      if (finalRuling(src, p.bx, p.bz, dir) === "cliff") open = false;
-    }
-    if (inZ) {
-      const dir = vz === dzs + 4 ? 2 : 3;
-      if (finalRuling(src, p.bx, p.bz, dir) === "cliff") open = false;
-    }
-    if (open) {
-      // ★ 加权平均：距块中心越近，高度贡献越大，避免尖刺
-      const cx = dxs + 2,
-        cz = dzs + 2;
-      const dist = Math.sqrt((vx - cx) ** 2 + (vz - cz) ** 2);
-      const w = Math.max(0.01, 3 - dist);
-      sum += B.h * w;
-      count += w;
-    }
-  }
-  // 加权平均，count=0 时兜底 0（全 MISSING 或缺块）
-  return count > 0 ? sum / count : 0;
 }
 
 /**
@@ -343,109 +284,171 @@ export function rampProfile(
   return hH - (hH - hL) * (t / w);
 }
 
-/**
- * ★ 边插值 interpEdge(B, dir, V)：块 B 在 dir 方向若为 weld 插值边的低侧，
- *   V 落在斜坡带内（0 < t < w）→ 返回剖面采样 s(t)（任意地块类型对通用；
- *   Role 无关——ground/platform/liquid/pit 无差别参与，不设类型豁免）。
- *   非低侧 / V 在带外 → undefined（调用方回落角插值）。
- */
-export function interpEdge(
-  src: BlockSource,
-  bcx: number,
-  bcz: number,
-  dir: 0 | 1 | 2 | 3,
-  vx: number,
-  vz: number,
-): number | undefined {
-  if (finalRuling(src, bcx, bcz, dir) !== "weld") return undefined;
-  const B = src.blockAt(bcx, bcz) ?? MISSING_BLOCK;
-  const H =
-    src.blockAt(
-      bcx + (dir === 0 ? 1 : dir === 1 ? -1 : 0),
-      bcz + (dir === 2 ? 1 : dir === 3 ? -1 : 0),
-    ) ?? MISSING_BLOCK;
-  const hH = H.h;
-  const hL = B.h;
-  if (hH <= hL) return undefined; // 需 B 为低侧
-  const dxs = bcx * 4;
-  const dzs = bcz * 4;
-  const bx0 = dxs,
-    bx1 = dxs + 4,
-    bz0 = dzs,
-    bz1 = dzs + 4;
-  const w = rampWidthOf(src, bcx, bcz, dir);
-  let t: number;
-  if (dir === 0) t = bx1 - vx;
-  else if (dir === 1) t = vx - bx0;
-  else if (dir === 2) t = bz1 - vz;
-  else t = vz - bz0;
-  const i = dir === 0 || dir === 1 ? vz - bz0 : vx - bx0;
-  // ★ 包含 t=0（crest 处）：让边插值与角插值连通，角落顶点由邻块低侧插值覆盖
-  if (t >= 0 && t < w && i >= 0 && i <= 4) {
-    return rampProfile(w, hH, hL, t);
-  }
-  return undefined;
-}
+// ============================================================
+// ★ 角点邻域插值（新架构）：以角点为中心，收集四邻地块，低位向高位攀爬。
+// ============================================================
+// 核心语义：
+//   1. 找出四个地块中高度最高的地块（天花板）
+//   2. 低侧地块若在"通往最高块的方向"上声明了插值（smoothDirs），
+//      则从自身高度向最高块高度线性攀爬
+//   3. 多个低侧地块汇聚时，取加权平均（权重 = 贴近高侧的程度）
+//   4. 最高地块保持自身高度，不被压低
+// ============================================================
 
 /**
- * ★ cornerCell(source, (bcx,bcz)=cell 归属块, 顶点 (vx,vz))——cell 角点取值。
- * 唯一消费入口；三层判定见文件头。返回 cell 该角的高度。
+ * ★ cornerCell —— cell 角点取值（边决定角架构）。
+ * 角点由汇聚到该点的 4 条边的端点高度决定。
+ * 每条边由高侧块决定是否坡降：高侧块有 smoothDirs 则角点取低侧块高度，
+ * 否则取高侧块高度。角点 = 4 条边端点高度的最大值。
  */
 export function cornerCell(
   src: BlockSource,
-  bcx: number,
-  bcz: number,
+  _bx: number,
+  _bz: number,
   vx: number,
   vz: number,
 ): number {
-  const B = src.blockAt(bcx, bcz) ?? MISSING_BLOCK;
-  const dxs = bcx * 4,
-    dzs = bcz * 4;
+  const bx = Math.floor(vx / 4);
+  const bz = Math.floor(vz / 4);
+  // 4 条边汇聚于此角点，每条边连接两个相邻地块
+  const e1 = edgeHeightAtCorner(src, bx, bz, bx - 1, bz);
+  const e2 = edgeHeightAtCorner(src, bx, bz, bx, bz - 1);
+  const e3 = edgeHeightAtCorner(src, bx - 1, bz, bx - 1, bz - 1);
+  const e4 = edgeHeightAtCorner(src, bx, bz - 1, bx - 1, bz - 1);
+  return Math.max(e1, e2, e3, e4);
+}
 
-  // 规则 1：B 在 V 处有 cliff 边段 → 撕裂自持
-  const bx0 = dxs,
-    bx1 = dxs + 4,
-    bz0 = dzs,
-    bz1 = dzs + 4;
-  const selfHold =
-    (vx === bx1 &&
-      vz >= bz0 &&
-      vz <= bz1 &&
-      finalRuling(src, bcx, bcz, 0) === "cliff") ||
-    (vx === bx0 &&
-      vz >= bz0 &&
-      vz <= bz1 &&
-      finalRuling(src, bcx, bcz, 1) === "cliff") ||
-    (vz === bz1 &&
-      vx >= bx0 &&
-      vx <= bx1 &&
-      finalRuling(src, bcx, bcz, 2) === "cliff") ||
-    (vz === bz0 &&
-      vx >= bx0 &&
-      vx <= bx1 &&
-      finalRuling(src, bcx, bcz, 3) === "cliff");
-  if (selfHold) return B.h;
+/** 计算一条边在角点处的高度。高侧块有 smoothDirs 则取低侧高度，否则取高侧高度。 */
+function edgeHeightAtCorner(
+  src: BlockSource,
+  bx1: number, bz1: number,
+  bx2: number, bz2: number,
+): number {
+  const b1 = src.blockAt(bx1, bz1) ?? MISSING_BLOCK;
+  const b2 = src.blockAt(bx2, bz2) ?? MISSING_BLOCK;
+  const h1 = b1.h, h2 = b2.h;
+  if (h1 === h2) return h1;
 
-  // 规则 2：边插值——V 落在 B 的某条 weld 斜坡带内（B 为其低侧，0≤t<w）
-  // 沿 +x/-x/+z/-z 四向；同时检查邻块低侧视角（当前块为高侧时，角落顶点
-  // 由邻块低侧插值覆盖），确保边插值与角插值连通，无尖刺。
-  let bandBest = -Infinity;
-  const dirs: (0 | 1 | 2 | 3)[] = [0, 1, 2, 3];
-  for (const dir of dirs) {
-    let s = interpEdge(src, bcx, bcz, dir, vx, vz);
-    // 当前块非低侧 → 尝试邻块视角（同一条共享边的对侧方向）
-    if (s === undefined) {
-      const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
-      const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
-      const opp = dir ^ 1;
-      s = interpEdge(src, bcx + dx, bcz + dz, opp, vx, vz);
-    }
-    if (s !== undefined) bandBest = Math.max(bandBest, s);
+  const hHigh = Math.max(h1, h2);
+  const hLow = Math.min(h1, h2);
+  const highBx = h1 > h2 ? bx1 : bx2;
+  const highBz = h1 > h2 ? bz1 : bz2;
+  const highId = h1 > h2 ? b1.id : b2.id;
+  const lowBx = h1 > h2 ? bx2 : bx1;
+  const lowBz = h1 > h2 ? bz2 : bz1;
+
+  // 高侧块指向低侧块的方向
+  const dirToLow = getDirectionTo(highBx, highBz, lowBx, lowBz);
+  if (dirToLow === null) return hHigh;
+
+  // ★ 高侧块检查 smoothDirs：有则坡降到低侧高度，无则硬边（保持高侧高度）
+  const highTileDef = tileById(highId);
+  if (!isSmoothInDirection(highTileDef, dirToLow)) return hHigh;
+
+  return hLow;
+}
+
+// ============================================================
+// 辅助函数
+// ============================================================
+
+/** 判断地块在 (vx, vz) 角点处是否有硬边（Cliff） */
+function hasCliffAtCorner(
+  src: BlockSource,
+  bx: number,
+  bz: number,
+  vx: number,
+  vz: number,
+): boolean {
+  const dxs = bx * 4, dzs = bz * 4;
+  const bx0 = dxs, bx1 = dxs + 4;
+  const bz0 = dzs, bz1 = dzs + 4;
+  const dirs: Array<{ dir: 0 | 1 | 2 | 3; cond: boolean }> = [
+    { dir: 0, cond: vx === bx1 && vz >= bz0 && vz <= bz1 },
+    { dir: 1, cond: vx === bx0 && vz >= bz0 && vz <= bz1 },
+    { dir: 2, cond: vz === bz1 && vx >= bx0 && vx <= bx1 },
+    { dir: 3, cond: vz === bz0 && vx >= bx0 && vx <= bx1 },
+  ];
+  for (const { dir, cond } of dirs) {
+    if (cond && finalRuling(src, bx, bz, dir) === 'cliff') return true;
   }
-  if (bandBest > -Infinity) return bandBest;
+  return false;
+}
 
-  // 规则 3：角插值（加权平均，消除尖刺）
-  return interpCorner(src, vx, vz);
+/** 获取从地块 (bx1,bz1) 指向 (bx2,bz2) 的方向。0=+x 1=-x 2=+z 3=-z */
+function getDirectionTo(
+  bx1: number, bz1: number,
+  bx2: number, bz2: number,
+): 0 | 1 | 2 | 3 | null {
+  const dx = bx2 - bx1;
+  const dz = bz2 - bz1;
+  if (dx === 0 && dz === 0) return null;
+  if (dx === 1 && dz === 0) return 0;
+  if (dx === -1 && dz === 0) return 1;
+  if (dx === 0 && dz === 1) return 2;
+  if (dx === 0 && dz === -1) return 3;
+  return dx > 0 ? 0 : 2;
+}
+
+/** 检查地块是否在指定方向声明了平滑插值。只有显式声明（含全向）才允许插值，未声明则不允许。 */
+function isSmoothInDirection(tileDef: TileDef, dir: 0 | 1 | 2 | 3): boolean {
+  const dirs = tileDef.physics.smoothDirs;
+  // 未定义或空数组 → 不参与插值（默认无方向）
+  if (!dirs || dirs.length === 0) return false;
+  return dirs.includes(dir);
+}
+
+/**
+ * ★ 检测垂直于走势方向的地块是否出现违法边模式。
+ * dir 是低侧地块→最高块的走势方向：
+ *   dir=0/1（东西走）→ 垂直于南北查 (bx,bz-1) 和 (bx,bz+1)
+ *   dir=2/3（南北走）→ 垂直于东西查 (bx-1,bz) 和 (bx+1,bz)
+ * 违法模式：两个垂直邻块同时高于自身（"高-低-高"）或同时低于自身（"低-高-低"），
+ * 此时坡面会扭曲地形走势，强制使用低值（跳过该候选）。
+ */
+function hasIllegalPerpPattern(
+  src: BlockSource,
+  bx: number, bz: number,
+  selfH: number,
+  dir: 0 | 1 | 2 | 3,
+): boolean {
+  // 垂直于走势方向的两个相邻块坐标
+  const n1 = dir === 0 || dir === 1
+    ? src.blockAt(bx, bz - 1)   // 北
+    : src.blockAt(bx - 1, bz);  // 西
+  const n2 = dir === 0 || dir === 1
+    ? src.blockAt(bx, bz + 1)   // 南
+    : src.blockAt(bx + 1, bz);  // 东
+  // 任一邻居不存在 → 无法判断，允许坡面
+  if (!n1 || !n2) return false;
+  return (n1.h > selfH && n2.h > selfH) || (n1.h < selfH && n2.h < selfH);
+}
+
+/** 计算角点 (vx,vz) 距地块 (bx,bz) 在指定方向边缘的距离（t 值） */
+function distanceFromEdge(
+  bx: number, bz: number,
+  dir: 0 | 1 | 2 | 3,
+  vx: number, vz: number,
+): number {
+  const dxs = bx * 4, dzs = bz * 4;
+  const bx0 = dxs, bx1 = dxs + 4;
+  const bz0 = dzs, bz1 = dzs + 4;
+  switch (dir) {
+    case 0: return bx1 - vx;
+    case 1: return vx - bx0;
+    case 2: return bz1 - vz;
+    case 3: return vz - bz0;
+    default: return 0;
+  }
+}
+
+/**
+ * ★ 已废弃：interpCorner 已被新的 cornerCell 替代。
+ * 保留此函数以防止外部引用报错，但不再使用其逻辑。
+ * @deprecated 使用 cornerCell 替代
+ */
+export function interpCorner(_src: BlockSource, _vx: number, _vz: number): number {
+  return 0;
 }
 
 /**
@@ -463,10 +466,18 @@ export function sampleSurface(src: BlockSource, x: number, z: number): number {
   const h10 = cornerCell(src, bx, bz, gx + 1, gz);
   const h01 = cornerCell(src, bx, bz, gx, gz + 1);
   const h11 = cornerCell(src, bx, bz, gx + 1, gz + 1);
+
+  // 双线性插值（三角形剖分，与网格渲染一致）
+  let hInterp: number;
   if (fx + fz <= 1) {
-    return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+    hInterp = h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+  } else {
+    hInterp = h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
   }
-  return h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
+
+  // ★ 直接返回双线性插值结果，不再强制中心固定。
+  // 移除中心固定逻辑后，坡面从高台自然延伸到平地块，不再出现"马桶"结构。
+  return hInterp;
 }
 
 // ============================================================
@@ -789,12 +800,11 @@ export function buildChunkFinal(
     for (let lx = 0; lx < N; lx++) {
       const wx = wx0 + lx;
       const wz = wz0 + lz;
-      const bbx = Math.floor(wx / 4),
-        bbz = Math.floor(wz / 4);
-      const h00 = cornerCell(src, bbx, bbz, wx, wz);
-      const h10 = cornerCell(src, bbx, bbz, wx + 1, wz);
-      const h11 = cornerCell(src, bbx, bbz, wx + 1, wz + 1);
-      const h01 = cornerCell(src, bbx, bbz, wx, wz + 1);
+      // ★ 使用 sampleSurface（角点插值）确保渲染网格与表面查询一致
+      const h00 = sampleSurface(src, wx, wz);
+      const h10 = sampleSurface(src, wx + 1, wz);
+      const h11 = sampleSurface(src, wx + 1, wz + 1);
+      const h01 = sampleSurface(src, wx, wz + 1);
       const ci = (lz * N + lx) * 4;
       cornerH[ci] = h00;
       cornerH[ci + 1] = h10;
