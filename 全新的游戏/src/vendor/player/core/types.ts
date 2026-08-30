@@ -67,10 +67,19 @@ export interface PhysicsConfig {
     reinitIterations?: number;
     surfaceTension?: number;
     smoothingRadius?: number;
+    reinitInterval?: number;
+    narrowBandWidth?: number;
+    constrainLiquid?: boolean;
+    clampAirPhi?: boolean;
+    maxAirPhi?: number;
+    compensateWaterPhi?: boolean;
+    waterCompensationRate?: number;
+    outwardDamping?: number;
   };
   gravity?: { x: number; y: number };
   velocityScale?: number;
   maxVelocity?: number;
+  viscosity?: number;
   colorBoundaryMode?: 'clamp' | 'repeat' | 'zero';
   resolution?: { w: number; h: number };
   continuousSources?: Array<{

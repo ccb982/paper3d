@@ -359,8 +359,8 @@ export class Asset implements CharacterFxAssetSource {
   }
 
   /**
-   * ★ 创建独立受击染料流体（角色受伤时注入红色；矢量平流 + 速度阻尼，
-   * 红色晕开后停下，dispose 即恢复原纹理）
+   * ★ 创建独立受击染料流体（角色受伤时注入红色；scalar 模式 + 高粘度 + LevelSet 表面张力，
+   * 红色以浓度场扩散晕开，持续时间结束后 dispose 即恢复原纹理）
    */
   createHitDyeEffect(
     renderer: THREE.WebGLRenderer,
@@ -376,13 +376,49 @@ export class Asset implements CharacterFxAssetSource {
     }
 
     const physics: PhysicsConfig = {
+      // coreSwitches
       enableAdvection: true,
       enablePressure: true,
-      pressureIterations: 20,
-      advectionMode: 'vector',
+      pressureIterations: 100,
+      pressureOmega: 1.7,
+      pressureBoundaryMode: 'neumann',
+      enableWarmStart: true,
+
+      // advectionAndComposite
+      advectionMode: 'scalar',
+      combineMode: 'sub',
+      channels: { h: true, s: true, l: true, a: true },
+      scalarConfig: {
+        hMultiplier: 0.8,
+        sMultiplier: 0.8,
+        lMultiplier: 0.8,
+        aMultiplier: 0.8,
+        baselineDensity: 1,
+        decayRate: 0.0588,
+      },
+
+      // globalForce
       gravity: { x: 0, y: 0 },
-      velocityScale: 0.85,        // ★ 速度阻尼：红色晕开但不会乱飞，缓慢停下
-      maxVelocity: 3000,
+      velocityScale: 2,
+      maxVelocity: 50,
+      viscosity: 1000,
+      colorBoundaryMode: 'clamp',
+
+      // levelSet
+      levelSetConfig: {
+        enabled: true,
+        reinitInterval: 1,
+        reinitIterations: 6,
+        surfaceTension: -5000000,
+        smoothingRadius: 5,
+        narrowBandWidth: 5,
+        constrainLiquid: false,
+        outwardDamping: 1,
+        clampAirPhi: true,
+        maxAirPhi: 0,
+        compensateWaterPhi: false,
+        waterCompensationRate: 0.1,
+      },
     };
 
     return new FluidEffect(renderer, physics, ftxFrame, palette, entities);

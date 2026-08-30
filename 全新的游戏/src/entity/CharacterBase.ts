@@ -262,13 +262,14 @@ export abstract class CharacterBase extends EntityBase {
     if (!this.hitDye) return;
 
     this.hitDyeTimer = this.hitDyeDuration;
-    // ★ 注入红色染料（矢量平流；速度很小 → 靠阻尼缓停）
+    // ★ 注入红色染料（scalar 模式注入密度，vector 模式注入颜色）
     this.hitDye.solver.queueInjection({
       enabled: true,
       position: { x: at.x, y: at.y },
       radius: this.hitDyeRadius,
       velocity: { x: 0, y: 0 },
       color: this.hitDyeColor,
+      density: 1.0,  // scalar 模式注入浓度，vector 模式忽略
       rate: 0.6,
     });
   }
