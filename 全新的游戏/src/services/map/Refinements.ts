@@ -21,7 +21,7 @@ import { tileById } from './Tiles';
 import { hash2 } from './ChunkGenerator';
 import { hsl2rgb } from './TerrainPalette';
 import { applyGroupTintHsl, SEMANTIC_THEME_MIX, type GroupPalette } from './TileGroups';
-import { BAKE_SUN, CAST_MIN_DEPTH } from './RefinementConstants';
+import { BAKE_SUN } from './RefinementConstants';
 
 // ============================================================
 // 裁决结论与常量（精修层内部默认引擎；与移动层 stepHeight 同源）
@@ -477,11 +477,17 @@ export function buildChunkFinal(src: BlockSource, cx: number, cz: number, size: 
 // 由 ChunkWalls 薄壳完成）。纯函数、确定性、主线程与 Worker 可共用。
 // ============================================================
 
-/** 生成门槛：与烘焙投影门槛同一来源（bakeCompute.CAST_MIN_DEPTH） */
-const MIN_WALL_DROP = CAST_MIN_DEPTH;
-
 /** 墙底延伸（防与地面共面闪烁） */
 const WALL_EPS = 0.05;
+
+/**
+ * ★ 通用侧壁防御判据阈值（2026-08-30 定稿）：只要有错位就是缝。
+ * 统一判据：某地块交界处「高侧顶 − 低侧面板底 ≥ SEAM_EPS」即视为悬空，
+ * 该处空立即补竖直墙（底 = 低侧面板底 − WALL_EPS，深到底堵死）。
+ * 0.01 量级 —— 任何布尔级落差都算缝；cliff 与 weld 两路统一用同一阈值。
+ * （cliff 因 hBase 缺省 = h → baseHeightOf(低)=低.h，自然回落到 旧 drop>0 语义）
+ */
+const SEAM_EPS = 0.01;
 
 // ---- 侧壁明暗调参（集中此处；全部确定性，同种子必复现）----
 const WALL_K_BACK = 0.22;
@@ -547,8 +553,11 @@ export interface WallBuildCtx {
 
 /**
  * 扫描 chunk 高度场，生成全部断崖侧壁（raw 缓冲；装配成 THREE 由 ChunkWalls
- * 完成）。cliff 裁决边：drop > 0 即墙；weld 边：维持历史门槛 drop ≥ MIN_WALL_DROP。
- * 与历史 ChunkWalls.buildChunkSideWalls 几何/颜色【逐位一致】（原位搬运）。
+ * 完成）。★ 2026-08-30 通用防御机制：cliff 与 weld 两路统一用一条判据
+ * 「高侧顶 − 低侧面板底 ≥ SEAM_EPS」→ 凡地块交界任何错位即补竖直墙（底深
+ * 到低侧面板底）。取代旧「weld 边还需 drop ≥ MIN_WALL_DROP」的不对称门槛，
+ * 杜绝混合角/孤立角/对角高块的坡面侧壁漏竖直孔。
+ * （此前该斜率语义与历史 ChunkWalls 逐位一致；现为增强防御的有意偏差。）
  */
 export function buildChunkWallBuffers(
   src: BlockSource, cx: number, cz: number, size: number, ctx: WallBuildCtx,
@@ -573,18 +582,17 @@ export function buildChunkWallBuffers(
         const ni = i + dir.dx, nj = j + dir.dz;
         const hNb = ctx.heightAt(ox + ni + 0.5, oz + nj + 0.5);
         const drop = hCur - hNb;
-        if (drop <= 0) continue;
+        if (drop <= 0) continue; // 去重：仅从高侧 cell 发墙（每条边界只发一次）
 
+        // ★ 统一侧壁判据（2026-08-30 通用防御机制）：地块交界处
+        //   「高侧顶 − 低侧面板底 ≥ SEAM_EPS」即悬空 → 补竖直墙，底深到
+        //   低侧面板底。cliff（hBase 缺省=h → baseHeightOf=低.h）自然回落
+        //   旧 drop>0 语义；weld 低侧 hBase 更深 → 补到深底。
         const e = edgeOf(src, Math.floor((ox + i + 0.5) / 4), Math.floor((oz + j + 0.5) / 4), d as 0 | 1 | 2 | 3);
-        let yB: number;
-        if (e.ruling === 'cliff') {
-          if (e.drop <= 0) continue;
-          yB = hNb - WALL_EPS;
-        } else {
-          const lowBase = baseHeightOf(e.low);
-          if (hCur - lowBase < MIN_WALL_DROP) continue;
-          yB = lowBase - WALL_EPS;
-        }
+        const lowBase = baseHeightOf(e.low);
+        const highH = e.high.h;
+        if (highH - lowBase < SEAM_EPS) continue;
+        const yB = lowBase - WALL_EPS;
 
         const td = ctx.tileDefAt(ox + i + 0.5 + dir.dx * 0.5, oz + j + 0.5 + dir.dz * 0.5);
         const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
@@ -595,8 +603,23 @@ export function buildChunkWallBuffers(
 
         const xA = i + dir.ax - N / 2, zA = j + dir.az - N / 2;
         const xB = i + dir.bx - N / 2, zB = j + dir.bz - N / 2;
-        const yT = hCur;
-        pos.push(xA, yT, zA, xB, yT, zB, xB, yB, zB, xA, yB, zA);
+
+        // ★ 顶随视觉面（2026-08-30 通用防御）：墙顶不再取平直高块顶，而是沿
+        //   边界 meter 跟随 cornerHeight（取两侧块的 max）。clean 边界上下
+        //   = 高块顶（逐位不变）；混合角/对角高块把顶点拉高时，墙顶随之抬升，
+        //   自动封住 ≤1m 的坡面侧壁漏孔（含孤立角）。底仍深到底低侧面板底。
+        const hbx = Math.floor((ox + i + 0.5) / 4), hbz = Math.floor((oz + j + 0.5) / 4);
+        const nbx = hbx + (dir.dx === 1 ? 1 : dir.dx === -1 ? -1 : 0);
+        const nbz = hbz + (dir.dz === 2 ? 1 : dir.dz === -1 ? -1 : 0);
+        const topA = Math.max(
+          cornerHeight(src, hbx, hbz, ox + i + dir.ax, oz + j + dir.az),
+          cornerHeight(src, nbx, nbz, ox + i + dir.ax, oz + j + dir.az),
+        );
+        const topB = Math.max(
+          cornerHeight(src, hbx, hbz, ox + i + dir.bx, oz + j + dir.bz),
+          cornerHeight(src, nbx, nbz, ox + i + dir.bx, oz + j + dir.bz),
+        );
+        pos.push(xA, topA, zA, xB, topB, zB, xB, yB, zB, xA, yB, zA);
         for (let c = 0; c < 4; c++) {
           nor.push(dir.dx, 0, dir.dz);
           col.push(r * k, g * k, b * k);
