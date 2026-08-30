@@ -406,7 +406,7 @@ export class Asset implements CharacterFxAssetSource {
 
       // levelSet
       levelSetConfig: {
-        enabled: true,
+        enabled: false,
         reinitInterval: 1,
         reinitIterations: 6,
         surfaceTension: -5000000,
