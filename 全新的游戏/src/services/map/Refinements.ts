@@ -20,7 +20,7 @@
 //   零 three 依赖，主线程与 Worker 同一份代码。
 // ============================================================
 
-import { tileById } from "./Tiles";
+import { tileById, type TileGenRole } from "./Tiles";
 import {
   hash2,
   CHUNK_SIZE,
@@ -318,7 +318,34 @@ export function cornerCell(
   return Math.max(e1, e2, e3, e4);
 }
 
-/** 计算一条边在角点处的高度。高侧块有 smoothDirs 则取低侧高度，否则取高侧高度。 */
+/**
+ * ★ 检查两个地块的 genRole 是否允许插值（地块属性校验）。
+ * 只有以下交叉类型对允许插值，同类型对（平地↔平地、高台↔高台等）不插值：
+ *   高台 ↔ 平地、高台 ↔ 水、高台 ↔ 坑
+ *   水 ↔ 平地、坑 ↔ 平地
+ */
+function canInterpolateByType(role1: TileGenRole, role2: TileGenRole): boolean {
+  if (role1 === role2) return false; // 同类型不插值
+  // 对 genRole 排序，确保 key 唯一
+  const [a, b] = role1 < role2 ? [role1, role2] : [role2, role1];
+  // 允许的交叉对
+  const ALLOWED: Record<string, boolean> = {
+    'ground↔platform': true,
+    'ground↔liquid': true,
+    'ground↔pit': true,
+    'liquid↔platform': true,
+    'pit↔platform': true,
+  };
+  return ALLOWED[a + '↔' + b] ?? false;
+}
+
+/**
+ * ★ 计算一条边在角点处的高度。
+ * 使用 finalRuling 判断边裁决（weld/cliff）：
+ *   - cliff：当前块保持自身高度（硬边，绝不向邻居攀爬）
+ *   - weld：低侧块向高侧块攀爬（取 max），形成缓坡
+ * 额外校验地块类型对：只有允许的交叉类型对才允许插值。
+ */
 function edgeHeightAtCorner(
   src: BlockSource,
   bx1: number, bz1: number,
@@ -329,23 +356,28 @@ function edgeHeightAtCorner(
   const h1 = b1.h, h2 = b2.h;
   if (h1 === h2) return h1;
 
-  const hHigh = Math.max(h1, h2);
-  const hLow = Math.min(h1, h2);
-  const highBx = h1 > h2 ? bx1 : bx2;
-  const highBz = h1 > h2 ? bz1 : bz2;
-  const highId = h1 > h2 ? b1.id : b2.id;
-  const lowBx = h1 > h2 ? bx2 : bx1;
-  const lowBz = h1 > h2 ? bz2 : bz1;
+  // 当前块 → 邻居块的方向
+  const dir = getDirectionTo(bx1, bz1, bx2, bz2);
+  if (dir === null) return h1;
 
-  // 高侧块指向低侧块的方向
-  const dirToLow = getDirectionTo(highBx, highBz, lowBx, lowBz);
-  if (dirToLow === null) return hHigh;
+  // ★ 检查地块类型对是否允许插值
+  const t1 = tileById(b1.id);
+  const t2 = tileById(b2.id);
+  if (!canInterpolateByType(t1.genRole, t2.genRole)) {
+    // 类型对不允许插值 → 硬边：当前块保持自身高度
+    return h1;
+  }
 
-  // ★ 高侧块检查 smoothDirs：有则坡降到低侧高度，无则硬边（保持高侧高度）
-  const highTileDef = tileById(highId);
-  if (!isSmoothInDirection(highTileDef, dirToLow)) return hHigh;
+  // ★ 通过 finalRuling 查询边裁决（唯一入口，整合 smoothDirs/edgePolicy）
+  const ruling = finalRuling(src, bx1, bz1, dir);
 
-  return hLow;
+  if (ruling === 'cliff') {
+    // 硬边：当前块保持自身高度，绝不向邻居攀爬
+    return h1;
+  } else {
+    // 插值（weld）：低侧块角点向高侧块攀爬，形成缓坡
+    return Math.max(h1, h2);
+  }
 }
 
 // ============================================================
@@ -388,14 +420,6 @@ function getDirectionTo(
   if (dx === 0 && dz === 1) return 2;
   if (dx === 0 && dz === -1) return 3;
   return dx > 0 ? 0 : 2;
-}
-
-/** 检查地块是否在指定方向声明了平滑插值。只有显式声明（含全向）才允许插值，未声明则不允许。 */
-function isSmoothInDirection(tileDef: TileDef, dir: 0 | 1 | 2 | 3): boolean {
-  const dirs = tileDef.physics.smoothDirs;
-  // 未定义或空数组 → 不参与插值（默认无方向）
-  if (!dirs || dirs.length === 0) return false;
-  return dirs.includes(dir);
 }
 
 /**
