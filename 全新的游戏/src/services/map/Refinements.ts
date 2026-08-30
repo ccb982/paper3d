@@ -1,25 +1,240 @@
 // ============================================================
-// Refinements —— 地形精修层（L6 定型段核心执行器）
+// Refinements —— 地形精修层（L6 定型段核心执行器，唯一地形几何真源）
 // ============================================================
-// 架构详见《架构设计.md》§8.0「三阶段地形产出」+「edgeFinal 唯一执行器」。
+// 架构详见《精修层与定型快照架构.md》、《地形边缘裁决与视觉面架构.md》
+// 《架构设计.md》§8.0「三阶段地形产出」+「edgeFinal 唯一执行器」。
 //
-// ★ 意志：块边界「硬过渡(cliff) vs 插值(weld)」判定的执行权由本层全权执掌。
-//   - 规则链（band / edgePolicy / 角色对）是精修层的【内部默认引擎】，
-//     不直接暴露给消费者（见 SurfaceRules.edgeRuling）。
-//   - 本层通过 BlockSource.edgeFinal 显式钉死某条边 weld/cliff/inherit。
-//   - 消费者（cornerHeight/sampleSurface/edgeOf/墙）一律走 finalRuling，
-//     只读本层输出——见五条铁律之五「对外纯净、下行全消费」。
+// ★ 意志：本文件是【地形本体的唯一真源】——
+//   1) 边裁决：块边界「硬过渡(cliff) vs 插值(weld)」判定执行权由本层全权执掌：
+//      - 规则链（band / edgePolicy / 角色对）是精修层的【内部默认引擎】。
+//      - 本层通过 BlockSource.edgeFinal 显式钉死某条边 weld/cliff/inherit。
+//      - 消费者一律走 finalRuling/edgeOf，只读本层输出（第五铁律）。
+//   2) 视觉面几何：角点高度 cornerHeight、贴地采样 sampleSurface、
+//      边信息 edgeOf、面板底 baseHeightOf 的语义公式全部并入本文件
+//      （2026-08-30：SurfaceRules 物理并入精修层，本文件 = 唯一几何真源）。
 //
-// ★ 确定性/可重放：空精修 = 恒透传（不设 edgeFinal）→ 与旧世界逐位一致；
-//   有精修意图时，edgeFinal(bx,bz,dir) 只对显式条目返回，其余落回默认引擎。
+// ★ 确定性/可重放：空精修 = 恒透传（不设 edgeFinal）→ 与旧世界逐位一致。
 //   零 three 依赖，主线程与 Worker 同一份代码。
 // ============================================================
 
-import type { BlockSource, EdgeRuling, BlockInfo } from './SurfaceRules';
+import { tileById } from './Tiles';
+import { hash2 } from './ChunkGenerator';
+import { hsl2rgb } from './TerrainPalette';
+import { applyGroupTintHsl, SEMANTIC_THEME_MIX, type GroupPalette } from './TileGroups';
+import { BAKE_SUN, CAST_MIN_DEPTH } from './RefinementConstants';
 
 // ============================================================
-// 精修意图类型（未来扩展：setHeight / overrideTile / materialOnly / carve…
-// 均以「确定性命中 → 展开成 edge 显式覆写或块属性改写」的方式并入）
+// 裁决结论与常量（精修层内部默认引擎；与移动层 stepHeight 同源）
+// ============================================================
+
+export type EdgeRuling = 'weld' | 'cliff';
+
+/**
+ * ★ β 微高差裁决带（|Δh| ≤ 带宽 → cliff）。推导见《地形边缘裁决与视觉面
+ * 架构.md》§2.2：各类型对 |Δh| 分布中 (0.30, 0.38) 是空隙带。
+ * ★ 与移动层 stepHeight 是同一常量（CharacterBase 大落差阻挡）。
+ */
+export const EDGE_CLIFF_BAND = 0.35;
+
+/** ★ β 总开关（回归 A-B 对照 / 应急回退）：null = 用 EDGE_CLIFF_BAND；
+ *  负数(-1) = 恒 weld = 旧世界。 */
+let bandOverride: number | null = null;
+export function setEdgeCliffBand(band: number | null): void {
+  bandOverride = band;
+}
+/** 当前生效裁决带（规则链唯一取值点，勿在别处直读常量） */
+export function edgeCliffBand(): number {
+  return bandOverride ?? EDGE_CLIFF_BAND;
+}
+
+// ============================================================
+// 块数据源（唯一抽象面：世界块坐标 → 块信息）
+// ============================================================
+
+/** 块信息：tileId（裁决用）+ 逻辑高度（L4 逐块恒定平面） */
+export interface BlockInfo {
+  id: number;
+  h: number;
+  /**
+   * ★ 立面板底高度（可选，默认 = h）——精修层 hBase 双语义地基：
+   *   h      = 顶面视觉面高度（渲染/碰撞/贴地/烘焙读它）
+   *   hBase  = 该块“实体到哪儿为止”的面板底高（补墙/悬空/侵蚀安全读它）
+   * weld 拉顶只改 h、hBase 不动 → 侧壁从 hBase 竖直升到 h，悬空消失；
+   * 侵蚀切块溅 h 与 hBase 同厚度降 → 不悬空。undefined = 视为 h。
+   */
+  hBase?: number;
+}
+
+/** 面板底高的统一取值（未显式指定 = h，保证空精修 ≡ 旧世界） */
+export function baseHeightOf(b: BlockInfo): number {
+  return b.hBase ?? b.h;
+}
+
+/**
+ * 世界块坐标 → 块信息；undefined = 数据不存在（按 0 号平地/0 高兜底）。
+ */
+export interface BlockSource {
+  blockAt(bx: number, bz: number): BlockInfo | undefined;
+  /**
+   * ★ 精修层执行口（可选）：显式裁决覆写。返回 undefined = 用默认引擎
+   *   edgeRuling。默认 4 个构造点不提供 → 空精修 ≡ 旧世界逐位不变。
+   *   dir：0=+x 1=−x 2=+z 3=−z（与 edgeOf 一致）。
+   */
+  edgeFinal?(bx: number, bz: number, dir: 0 | 1 | 2 | 3): EdgeRuling | undefined;
+}
+
+/** 缺块兜底（0 号平地 / 0 高——与旧 heightAt 未加载回退逐位一致） */
+export const MISSING_BLOCK: BlockInfo = { id: 0, h: 0 };
+
+// ============================================================
+// 边级裁决（规则链：TileDef 覆盖 → β 微高差 → 兜底 weld）
+// ============================================================
+
+/**
+ * ★ 边裁决（对称：edgeRuling(a,b) ≡ edgeRuling(b,a)）。
+ * 规则链（首条命中即结论）：
+ *   1.  任一侧 edgePolicy 'hard' → cliff
+ *   1'. 任一侧 edgePolicy 'smooth'（且无 hard）→ weld
+ *   1.5 角色对规则（2026-08-29）：仅 ground↔ground 允许落入 β 判硬；其余一律 weld
+ *   2.  β 微高差：|Δh| ≤ EDGE_CLIFF_BAND → cliff
+ *   3.  兜底 → weld
+ */
+export function edgeRuling(a: BlockInfo, b: BlockInfo): EdgeRuling {
+  const ta = tileById(a.id);
+  const tb = tileById(b.id);
+  const pa = ta.physics.edgePolicy;
+  const pb = tb.physics.edgePolicy;
+  if (pa === 'hard' || pb === 'hard') return 'cliff';
+  if (pa === 'smooth' || pb === 'smooth') return 'weld';
+  if (ta.genRole !== 'ground' || tb.genRole !== 'ground') return 'weld';
+  return Math.abs(a.h - b.h) <= edgeCliffBand() ? 'cliff' : 'weld';
+}
+
+/**
+ * ★ 精修层对外唯一执行口：块 (bx,bz) 与 dir 方向邻边的最终裁决。
+ * 优先取 src.edgeFinal 显式覆写；否则回落默认引擎 edgeRuling。
+ * 所有消费者一律改问本函数，禁止直接调 edgeRuling（唯一判点不变式）。
+ */
+export function finalRuling(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 | 3): EdgeRuling {
+  const ov = src.edgeFinal?.(bx, bz, dir);
+  if (ov !== undefined) return ov;
+  const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
+  const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
+  return edgeRuling(src.blockAt(bx, bz) ?? MISSING_BLOCK, src.blockAt(bx + dx, bz + dz) ?? MISSING_BLOCK);
+}
+
+/**
+ * ★ 悬空补墙判定（hBase 双语义的防御机制）：
+ * weld 坡面低侧块顶被拉到高侧后，若其【立面板底 hBase】仍远低于高侧顶，
+ * 则坡面侧会漏空。此函数判定"该 weld 边需补一段竖直墙"。
+ * 默认 hBase = h 时退化为旧 weld 门槛 → 空精修 ≡ 旧世界逐位不变。
+ */
+export function weldGap(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 | 3, minDepth: number): { needed: boolean; bottom: number; top: number } {
+  const e = edgeOf(src, bx, bz, dir);
+  if (e.ruling !== 'weld') return { needed: false, bottom: 0, top: 0 };
+  const bottom = baseHeightOf(e.low);
+  const top = e.high.h;
+  if (top - bottom >= minDepth) return { needed: true, bottom, top };
+  return { needed: false, bottom, top };
+}
+
+// ============================================================
+// 视觉面语义：硬顶点 → 单元四角归属 → 贴地采样
+// ============================================================
+
+/** 米格 cell → 块坐标（4m 块；cell 恒属于唯一块） */
+function blockCoordOfCell(cx: number, cz: number): { bx: number; bz: number } {
+  return { bx: Math.floor(cx / 4), bz: Math.floor(cz / 4) };
+}
+
+/**
+ * ★ 角点插值许可（文档 §3.2，2026-08-29 定稿，取代旧"全局硬顶点"规则）：
+ * 块 (bcx,bz) 在角点 (vx,vz) 处的高度——B 在 V 处的边界边段任何一段裁
+ * 决为 cliff → 返回 hB（自持，零插值）；全部为 weld（含 0 段内角）→
+ * 返回 max(环绕 2×2 格)（与旧公式逐位一致）。
+ */
+export function cornerHeight(src: BlockSource, bcx: number, bcz: number, vx: number, vz: number): number {
+  const B = src.blockAt(bcx, bcz) ?? MISSING_BLOCK;
+  const p00 = blockCoordOfCell(vx - 1, vz - 1);
+  const p10 = blockCoordOfCell(vx, vz - 1);
+  const p01 = blockCoordOfCell(vx - 1, vz);
+  const p11 = blockCoordOfCell(vx, vz);
+  const b00 = src.blockAt(p00.bx, p00.bz) ?? MISSING_BLOCK;
+  const b10 = src.blockAt(p10.bx, p10.bz) ?? MISSING_BLOCK;
+  const b01 = src.blockAt(p01.bx, p01.bz) ?? MISSING_BLOCK;
+  const b11 = src.blockAt(p11.bx, p11.bz) ?? MISSING_BLOCK;
+  const own = (p: { bx: number; bz: number }) => p.bx === bcx && p.bz === bcz;
+  const o00 = own(p00), o10 = own(p10), o01 = own(p01), o11 = own(p11);
+  const dirOf = (pn: { bx: number; bz: number }): 0 | 1 | 2 | 3 => {
+    const dbx = pn.bx - bcx, dbz = pn.bz - bcz;
+    if (dbx === 1) return 0; if (dbx === -1) return 1;
+    if (dbz === 1) return 2; return 3;
+  };
+  let cliff = false;
+  const seg = (o: boolean, n: boolean, pn: { bx: number; bz: number }) => {
+    if (o && !n && finalRuling(src, bcx, bcz, dirOf(pn)) === 'cliff') cliff = true;
+  };
+  seg(o00, o10, p10); seg(o10, o00, p00);
+  seg(o01, o11, p11); seg(o11, o01, p01);
+  seg(o00, o01, p01); seg(o01, o00, p00);
+  seg(o10, o11, p11); seg(o11, o10, p10);
+  if (cliff) return B.h;
+  return Math.max(b00.h, b10.h, b01.h, b11.h);
+}
+
+/**
+ * ★ 视觉面一致采样（文档 §3.1）：查询点所在 cell 的四角按【块归属】取高后
+ * 三角形插值——与网格渲染逐位一致。对角线 (lx,lz+1)-(lx+1,lz)，
+ * fx+fz≤1 取 T1=△(h00,h01,h10)（PlaneGeometry 真实剖分，勿改）。
+ */
+export function sampleSurface(src: BlockSource, x: number, z: number): number {
+  const gx = Math.floor(x);
+  const gz = Math.floor(z);
+  const fx = x - gx;
+  const fz = z - gz;
+  const { bx, bz } = blockCoordOfCell(gx, gz);
+  const h00 = cornerHeight(src, bx, bz, gx, gz);
+  const h10 = cornerHeight(src, bx, bz, gx + 1, gz);
+  const h01 = cornerHeight(src, bx, bz, gx, gz + 1);
+  const h11 = cornerHeight(src, bx, bz, gx + 1, gz + 1);
+  if (fx + fz <= 1) {
+    return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+  }
+  return h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
+}
+
+// ============================================================
+// 边信息（墙生成 / 可遍历性消费）
+// ============================================================
+
+export interface EdgeInfo {
+  /** 裁决结论 */
+  ruling: EdgeRuling;
+  /** 落差 = 高侧 − 低侧（≥ 0） */
+  drop: number;
+  /** 高侧块（drop=0 时 = low） */
+  high: BlockInfo;
+  /** 低侧块 */
+  low: BlockInfo;
+}
+
+/**
+ * 块 (bx,bz) 与 (dir 方向邻块) 的边信息。
+ * dir：0=+x 1=−x 2=+z 3=−z（与 ChunkWalls 扫描方向表对应）。
+ */
+export function edgeOf(src: BlockSource, bx: number, bz: number, dir: 0 | 1 | 2 | 3): EdgeInfo {
+  const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
+  const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
+  const a = src.blockAt(bx, bz) ?? MISSING_BLOCK;
+  const b = src.blockAt(bx + dx, bz + dz) ?? MISSING_BLOCK;
+  const drop = a.h - b.h;
+  const high = drop >= 0 ? a : b;
+  const low = drop >= 0 ? b : a;
+  return { ruling: finalRuling(src, bx, bz, dir), drop: Math.abs(drop), high, low };
+}
+
+// ============================================================
+// 精修意图类型（setHeight / overrideEdge …）
 // ============================================================
 
 /** 显式钉死某条边（dir：0=+x 1=−x 2=+z 3=−z） */
@@ -68,8 +283,6 @@ export function planRefinements(_seed: number): Refinements {
  *    → 与旧地形逐位一致。
  *  - 有精修：edgeFinal 对显式条目返回钉死裁决；blockAt 对显式高度/底高
  *    补丁返回改写后的块信息，其余回落默认。
- * 主线程（RasterMap.surfaceBlocks 等）与 Worker（makeSnapshotSource）
- * 用同一函数包装 → 逐位同源自构造保证。
  */
 export function refine(src: BlockSource, ref: Refinements): BlockSource {
   const hasEdges = ref.edgeOverrides.size > 0;
@@ -92,10 +305,7 @@ export function refine(src: BlockSource, ref: Refinements): BlockSource {
   return out;
 }
 
-/**
- * 便捷：给某条边显式钉死裁决（返回新 Refinements，纯数据、可重建）。
- * inherit 语义 = 从表里删除该条目，回落默认引擎。
- */
+/** 便捷：给某条边显式钉死裁决（inherit = 从表里删除，回落默认引擎）。 */
 export function overrideEdge(ref: Refinements, bx: number, bz: number, dir: 0 | 1 | 2 | 3, ruling: EdgeRuling | 'inherit'): Refinements {
   const next = new Map(ref.edgeOverrides);
   const key = edgeKey(bx, bz, dir);
@@ -104,11 +314,7 @@ export function overrideEdge(ref: Refinements, bx: number, bz: number, dir: 0 | 
   return { edgeOverrides: next, heights: new Map(ref.heights) };
 }
 
-/**
- * 便捷：给某块改写高度（h 顶面 / 可选 hBase 底高）。断言 hBase 缺省 = h
- * （保持厚度、不悬空）。返回新 Refinements。这就是「侵蚀/平台/坡面成形」的
- * 确定性原语——下游所有（渲染/物理/贴地/烘焙/补墙）经 blockAt 被动跟随。
- */
+/** 便捷：给某块改写高度。断言 hBase 缺省 = h（保持厚度、不悬空）。 */
 export function setHeight(ref: Refinements, bx: number, bz: number, h: number, hBase?: number): Refinements {
   const next = new Map(ref.heights);
   next.set(blockKey(bx, bz), { bx, bz, h, ...(hBase !== undefined ? { hBase } : {}) });
@@ -116,36 +322,19 @@ export function setHeight(ref: Refinements, bx: number, bz: number, h: number, h
 }
 
 // ============================================================
-// 确定性侵蚀（连续、克制——不可控的"满地图坑"是被第二铁律禁止的形态）
+// 确定性侵蚀（连续、克制；默认关闭——构建器不被 planRefinements 自动引用）
 // ============================================================
-// 共同设计（对应用户意志）：
-//   · 连续：侵蚀必须有【主体/走向】——沿台缘边界、沿低处高差梯度传播（BFS），
-//     而非每块独立随机 hash（那正是"密密麻麻的坑"的根源，禁止）。
-//   · 克制：单次侵蚀结果高度收紧、单批侵蚀块数设上限，宁可少而精。
-//   · 确定性：同 (seed, 地形读出) → 同输出；经 setHeight 展开成显式补丁，
-//     下游（渲染/物理/贴地/烘焙/补墙）全部被动跟随。
-//   · 默认关闭：这些构建器不被 planRefinements 自动引用 → 空精修 ≡ 旧世界
-//     的基准不受影响；接入主流程时才显式调用并把结果合并进精修意图。
-// ============================================================
-
-/** 侵蚀所需的只读地形读出（调用方注入 BlockSource 或 RasterMap 适配器） */
 export type BlockReader = (bx: number, bz: number) => BlockInfo | undefined;
 
 export interface CarveOpts {
-  /** 一次性最多切蚀的块数（克制上限） */
   maxBlocks?: number;
-  /** 单块切深上限（米，克制） */
   maxDepth?: number;
-  /** 沿低处梯度传播的最大步数 */
   maxSteps?: number;
 }
 
 /**
- * ① 低处沟壑（梯度切蚀）：用 seed 在窗口内确定性撒少量种子块（数目克制），
- *    每个种子自其局部向「更低邻块」做至多 steps 步的 BFS 下行，把沿途
- *    已到洼处的块再压深一档（h 与 hBase 同降 → 不悬空、有厚度）。因沿高度
- *    梯度向低处蔓延 → 成连续条带沟壑，而非孤立坑。
- *    纯几何（只用 h），不依赖角色/类型 → 主/Worker 同源、确定性、可重放。
+ * ① 低处沟壑（梯度切蚀）：确定性撒少量种子块，BFS 沿更低邻块下行压深。
+ *    因沿高度梯度向低处蔓延 → 成连续条带沟壑，而非孤立坑。
  */
 export function carveGradientErosion(
   seed: number,
@@ -155,15 +344,11 @@ export function carveGradientErosion(
   const maxBlocks = opts.maxBlocks ?? 24;
   const maxDepth = opts.maxDepth ?? 0.5;
   const maxSteps = opts.maxSteps ?? 8;
-  const half = 32; // 扫 [-half, half)² 窗口（204800 块里撒克制数量种子）
-
-  // 确定性撒种子：hash 命中且该块位于局部低洼（比四邻低）→ 成为起点
+  const half = 32;
   let ref: Refinements = EMPTY_REFINEMENTS;
   const seedCount = 2 + (Math.abs(seed) % 3);
   let carved = 0;
-
   const nbr = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
-
   for (let s = 0; s < seedCount && carved < maxBlocks; s++) {
     const u = pseudo(s, seed);
     const v = pseudo(s * 7 + 13, seed);
@@ -171,11 +356,7 @@ export function carveGradientErosion(
     const sz = Math.floor(v * (half * 2) - half);
     const start = read(sx, sz);
     if (!start) continue;
-
-    // 小概率触发（克制：大部分种子块不动，只有少数形成沟壑）
     if (pseudo(s + 99, seed) > 0.35) continue;
-
-    // BFS：从种子沿更低邻块下行，压深沿途洼块
     const queue: [number, number, number][] = [[sx, sz, 0]];
     const seen = new Set<number>([sx * 4096 + sz]);
     while (queue.length > 0 && carved < maxBlocks) {
@@ -183,10 +364,8 @@ export function carveGradientErosion(
       if (step > maxSteps) break;
       const b = read(cx, cz);
       if (!b) continue;
-      // 压深：h 与 hBase 同降 maxDepth（gang 下降，保持厚度 => 不悬空）
       ref = setHeight(ref, cx, cz, b.h - maxDepth, b.h - maxDepth);
       carved++;
-      // 取更低（或接近）的邻块继续下行
       const lower = nbr
         .map(([dx, dz]) => read(cx + dx, cz + dz))
         .map((bb, k) => ({ bb, dx: nbr[k][0], dz: nbr[k][1] }))
@@ -206,4 +385,255 @@ function pseudo(i: number, seed: number): number {
   x = (x ^ (x >>> 16)) * 0x45d9f3b;
   x = (x ^ (x >>> 16)) >>> 0;
   return x / 4294967296;
+}
+
+// ============================================================
+// ★ 定型快照（per-chunk 单产物，精修层统一输出）
+// 语义见《精修层与定型快照架构.md》§3/§4：精修层对每个 chunk 产出一份
+// 唯一定型产物，下游（顶面网格/墙/地形物理/贴地）一律只读它，零自算。
+// 全部 raw 数组、零 three 依赖——主线程与 Worker 同一份代码。
+// ============================================================
+
+export interface ChunkFinal {
+  /** chunk 边长（米） */
+  size: number;
+  cx: number;
+  cz: number;
+  /**
+   * ★ 定型角点高度场：每米格四角（c00 c10 c11 c01），布局 (lz*N+lx)*4+k。
+   * 已按精修裁决（weld = 2×2 max / cliff = 自持）定型——顶面网格与贴地
+   * 采样的唯一权威，一次算好、处处读同一份。
+   */
+  cornerH: Float32Array;
+  /** 顶面几何（局部坐标，中心原点，与旧 ChunkSurface 逐位同约定） */
+  top: {
+    vertices: Float32Array;   // 4 顶点/格 × 3
+    normals: Float32Array;
+    uvs: Float32Array;
+    indices: Uint32Array;     // 2 三角/格 × 3
+  };
+}
+
+/**
+ * ★ 构建一个 chunk 的定型快照（精修层统一产出）。
+ * 输入 = 精修后的 BlockSource src（精修层包装原始块数据后的查询源；
+ * 消费方用它统一建源，取代各自调 cornerHeight 逐角拼）。
+ * 顶面几何产物与历史 ChunkSurface 网格【逐位一致】——回归 D 阶段依赖。
+ * 纯函数；cornerH 一次算好，顶面/贴地/烘焙都读它。
+ */
+export function buildChunkFinal(src: BlockSource, cx: number, cz: number, size: number): ChunkFinal {
+  const N = size;
+  const cells = N * N;
+  const cornerH = new Float32Array(cells * 4);
+  const positions = new Float32Array(cells * 4 * 3);
+  const normals = new Float32Array(cells * 4 * 3);
+  const uvs = new Float32Array(cells * 4 * 2);
+  const indices = new Uint32Array(cells * 6);
+  const HALF = N / 2;
+  const wx0 = cx * N;
+  const wz0 = cz * N;
+  let vp = 0, up = 0, ip = 0, vi = 0;
+
+  for (let lz = 0; lz < N; lz++) {
+    for (let lx = 0; lx < N; lx++) {
+      const wx = wx0 + lx;
+      const wz = wz0 + lz;
+      const bbx = Math.floor(wx / 4), bbz = Math.floor(wz / 4);
+      const h00 = cornerHeight(src, bbx, bbz, wx, wz);
+      const h10 = cornerHeight(src, bbx, bbz, wx + 1, wz);
+      const h11 = cornerHeight(src, bbx, bbz, wx + 1, wz + 1);
+      const h01 = cornerHeight(src, bbx, bbz, wx, wz + 1);
+      const ci = (lz * N + lx) * 4;
+      cornerH[ci] = h00; cornerH[ci + 1] = h10; cornerH[ci + 2] = h11; cornerH[ci + 3] = h01;
+
+      const x00 = lx - HALF, z00 = lz - HALF;
+      positions[vp] = x00;     positions[vp + 1] = h00; positions[vp + 2] = z00;
+      positions[vp + 3] = x00 + 1; positions[vp + 4] = h10; positions[vp + 5] = z00;
+      positions[vp + 6] = x00 + 1; positions[vp + 7] = h11; positions[vp + 8] = z00 + 1;
+      positions[vp + 9] = x00;     positions[vp + 10] = h01; positions[vp + 11] = z00 + 1;
+      for (let k = 0; k < 4; k++) normals[vp + k * 3 + 1] = 1;
+      uvs[up] = lx / N;         uvs[up + 1] = lz / N;
+      uvs[up + 2] = (lx + 1) / N; uvs[up + 3] = lz / N;
+      uvs[up + 4] = (lx + 1) / N; uvs[up + 5] = (lz + 1) / N;
+      uvs[up + 6] = lx / N;       uvs[up + 7] = (lz + 1) / N;
+      indices[ip] = vi; indices[ip + 1] = vi + 3; indices[ip + 2] = vi + 1;
+      indices[ip + 3] = vi + 3; indices[ip + 4] = vi + 2; indices[ip + 5] = vi + 1;
+      vp += 12; up += 8; ip += 6; vi += 4;
+    }
+  }
+
+  return {
+    size: N, cx, cz,
+    cornerH,
+    top: { vertices: positions, normals, uvs, indices },
+  };
+}
+
+// ============================================================
+// ★ 断崖墙几何 + 地形物理合并（精修层统一产出，raw 缓冲、零 three 依赖）
+// 语义见《精修层与定型快照架构.md》§3/§4：断崖墙与「地形物理数据」都由
+// 精修层产出一份；实体/装饰碰撞是下游管理器的第二层产出（不进本快照）。
+// 与历史 ChunkWalls 网格【逐位一致】——只搬位不搬逻辑（装配成 THREE 仍
+// 由 ChunkWalls 薄壳完成）。纯函数、确定性、主线程与 Worker 可共用。
+// ============================================================
+
+/** 生成门槛：与烘焙投影门槛同一来源（bakeCompute.CAST_MIN_DEPTH） */
+const MIN_WALL_DROP = CAST_MIN_DEPTH;
+
+/** 墙底延伸（防与地面共面闪烁） */
+const WALL_EPS = 0.05;
+
+// ---- 侧壁明暗调参（集中此处；全部确定性，同种子必复现）----
+const WALL_K_BACK = 0.22;
+const WALL_K_LIT = 0.82;
+const WALL_DEPTH_DARKEN = 0.16;
+const WALL_SKY_DIM = 0.22;
+const WALL_JITTER = 0.10;
+
+// 烘焙太阳水平方向：唯一权威来源 = bakeCompute.BAKE_SUN（import，勿手抄）
+const SUN_HX = BAKE_SUN.hx;
+const SUN_HZ = BAKE_SUN.hz;
+
+/**
+ * 单面墙的显示空间亮度乘数（与 ChunkWalls.wallShade 逐位一致，原位搬运）。
+ * 变化来源（由强到弱）：朝向 × 太阳 > 落差深度 > 天空可见度 > 位置抖动。
+ */
+function wallShade(
+  heightAt: (x: number, z: number) => number, seed: number,
+  wi: number, wj: number,      // 墙所属格（世界格坐标，抖动种子用）
+  drop: number,                // 落差（米）
+  facing: number,              // 朝阳度 0..1（外法线·太阳水平方向）
+): number {
+  let k = WALL_K_BACK + (WALL_K_LIT - WALL_K_BACK) * facing;
+  k -= Math.min(1, drop / 4) * WALL_DEPTH_DARKEN;
+  const wx = wi + 0.5, wz = wj + 0.5;
+  const hTop = heightAt(wx, wz) + 0.6;
+  let open = 0;
+  for (let n = 0; n < 8; n++) {
+    const ang = (n / 8) * Math.PI * 2;
+    if (heightAt(wx + Math.cos(ang) * 2.5, wz + Math.sin(ang) * 2.5) <= hTop) open++;
+  }
+  const openF = open / 8;
+  k *= 1 - WALL_SKY_DIM * (1 - openF);
+  k *= 1 + (hash2(wi, wj, seed + 7717) - 0.5) * 2 * WALL_JITTER;
+  return Math.max(0.14, k);
+}
+
+/** 四向断崖绕序表（法线朝低处外侧）。edgeOf 方向参数映射：DIRS 索引即 dir。 */
+const DIRS = [
+  { dx: 1, dz: 0, ax: 1, az: 0, bx: 1, bz: 1 },
+  { dx: -1, dz: 0, ax: 0, az: 1, bx: 0, bz: 0 },
+  { dx: 0, dz: 1, ax: 1, az: 1, bx: 0, bz: 1 },
+  { dx: 0, dz: -1, ax: 0, az: 0, bx: 1, bz: 0 },
+];
+
+/** 墙构建产物（raw 缓冲；局部坐标，与顶面同约定可合并建 trimesh） */
+export interface ChunkWallBuffers {
+  vertices: Float32Array;   // 位置 ×3
+  normals: Float32Array;    // 法线 ×3
+  colors: Float32Array;     // 顶点色 ×3（已乘明暗）
+  indices: Uint32Array;
+}
+
+export interface WallBuildCtx {
+  seed: number;
+  /** 本 chunk 所属组的调色板（缺省 = 中性，组外观调制用） */
+  palette?: GroupPalette;
+  /** 逻辑高度（与 RasterMap.heightAt 同语义：矮区未加载返回 0） */
+  heightAt(x: number, z: number): number;
+  /** 块定义查询（与 RasterMap.tileDefAt 同语义；墙/坑侧壁取地块底色） */
+  tileDefAt(x: number, z: number): { visual: { baseHsl: { h: number; s: number; l: number } }; isDepression: boolean };
+}
+
+/**
+ * 扫描 chunk 高度场，生成全部断崖侧壁（raw 缓冲；装配成 THREE 由 ChunkWalls
+ * 完成）。cliff 裁决边：drop > 0 即墙；weld 边：维持历史门槛 drop ≥ MIN_WALL_DROP。
+ * 与历史 ChunkWalls.buildChunkSideWalls 几何/颜色【逐位一致】（原位搬运）。
+ */
+export function buildChunkWallBuffers(
+  src: BlockSource, cx: number, cz: number, size: number, ctx: WallBuildCtx,
+): ChunkWallBuffers {
+  const N = size;
+  const ox = cx * N;
+  const oz = cz * N;
+  const { seed } = ctx;
+  const palette = ctx.palette;
+
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const col: number[] = [];
+  const idx: number[] = [];
+  let vi = 0;
+
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const hCur = ctx.heightAt(ox + i + 0.5, oz + j + 0.5);
+      for (let d = 0; d < 4; d++) {
+        const dir = DIRS[d];
+        const ni = i + dir.dx, nj = j + dir.dz;
+        const hNb = ctx.heightAt(ox + ni + 0.5, oz + nj + 0.5);
+        const drop = hCur - hNb;
+        if (drop <= 0) continue;
+
+        const e = edgeOf(src, Math.floor((ox + i + 0.5) / 4), Math.floor((oz + j + 0.5) / 4), d as 0 | 1 | 2 | 3);
+        let yB: number;
+        if (e.ruling === 'cliff') {
+          if (e.drop <= 0) continue;
+          yB = hNb - WALL_EPS;
+        } else {
+          const lowBase = baseHeightOf(e.low);
+          if (hCur - lowBase < MIN_WALL_DROP) continue;
+          yB = lowBase - WALL_EPS;
+        }
+
+        const td = ctx.tileDefAt(ox + i + 0.5 + dir.dx * 0.5, oz + j + 0.5 + dir.dz * 0.5);
+        const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
+        const th = applyGroupTintHsl(td.visual.baseHsl, palette, thM);
+        let [r, g, b] = hsl2rgb(th.h, th.s, th.l);
+        const facing = Math.max(0, dir.dx * SUN_HX + dir.dz * SUN_HZ);
+        const k = wallShade(ctx.heightAt, seed, ox + i, oz + j, drop, facing) / 255;
+
+        const xA = i + dir.ax - N / 2, zA = j + dir.az - N / 2;
+        const xB = i + dir.bx - N / 2, zB = j + dir.bz - N / 2;
+        const yT = hCur;
+        pos.push(xA, yT, zA, xB, yT, zB, xB, yB, zB, xA, yB, zA);
+        for (let c = 0; c < 4; c++) {
+          nor.push(dir.dx, 0, dir.dz);
+          col.push(r * k, g * k, b * k);
+        }
+        idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
+        vi += 4;
+      }
+    }
+  }
+
+  return {
+    vertices: new Float32Array(pos),
+    normals: new Float32Array(nor),
+    colors: new Float32Array(col),
+    indices: new Uint32Array(idx),
+  };
+}
+
+/**
+ * ★ 地形物理合并（精修层统一产出）：顶面 + 墙合并成一份可直接建 trimesh
+ * 的数据体（局部坐标）。物理 trimesh 无体积，cliff 边无墙面低侧物体会水平
+ * 穿入高板体内侧坠落——故墙三角形必须并入（碰撞=所见不变式）。
+ * 这是架构文档 §3 的「地形物理数据（第一次产出）」，不含实体/装饰碰撞。
+ */
+export function mergeTerrainPhysics(
+  top: { vertices: Float32Array; indices: Uint32Array },
+  walls: ChunkWallBuffers,
+): { vertices: Float32Array; indices: Uint32Array } {
+  if (walls.indices.length === 0) return { vertices: top.vertices, indices: top.indices };
+  const vertices = new Float32Array(top.vertices.length + walls.vertices.length);
+  vertices.set(top.vertices, 0);
+  vertices.set(walls.vertices, top.vertices.length);
+  const indices = new Uint32Array(top.indices.length + walls.indices.length);
+  indices.set(top.indices, 0);
+  const vOff = top.vertices.length / 3;
+  for (let k = 0; k < walls.indices.length; k++) {
+    indices[top.indices.length + k] = walls.indices[k] + vOff;
+  }
+  return { vertices, indices };
 }

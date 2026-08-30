@@ -1,22 +1,20 @@
 // ============================================================
-// ChunkSurface —— chunk 顶面网格构建器（SurfaceRules 派生）
+// ChunkSurface —— chunk 顶面网格构建器（只读精修层定型快照）
 // ============================================================
-// 取代旧 PlaneGeometry + vertexHeightAt 位移路径（2026-08-29，
-// 《地形边缘裁决与视觉面架构.md》§3/§4）：
-//   - 基本单元 = 米格 cell（恒属于唯一 4m 块），四角按【块归属】取高：
-//     weld 角点 = 环绕 2×2 格 max（与旧几何逐位等价）；
-//     cliff 硬角点 = 本块自持高度（两侧各持各高，落差由 ChunkWalls 墙补）。
-//   - 三角剖分与旧 PlaneGeometry 完全一致：对角线 (lx,lz+1)-(lx+1,lz)，
-//     T1=△(c00,c01,c10)（fx+fz≤1 侧）、T2=△(c01,c11,c10)——
-//     全 weld 配置下与旧网格三角形逐位重合（顶点复制不影响渲染）。
-//   - 输出一份缓冲三处消费：渲染 geometry / 物理 trimesh / UV 对齐烘焙。
+// 2026-08-30 重构（《精修层与定型快照架构.md》）：几何定型统一移到
+// Refinements.buildChunkFinal（唯一定型角点高度场 + 顶面 raw 缓冲）；
+// 本文件只做三件事：
+//   ① 建立精修后的 BlockSource（17×17 邻域表，供 buildChunkFinal 统一建源）
+//   ② 调 buildChunkFinal 拿到定型快照（角点高度场 + 顶面缓冲）
+//   ③ 把 raw 缓冲包装成 THREE BufferGeometry，返回给渲染与物理消费。
+// 不再逐角调 cornerHeight 拼网格——角点已由精修层一次性定型。
 //
 // 局部坐标约定与旧路径一致：chunk 中心为原点（±30），y = 视觉面高度。
 // ============================================================
 
 import * as THREE from 'three';
 import { CHUNK_SIZE, BLOCKS_PER_SIDE } from './ChunkGenerator';
-import { cornerHeight, type BlockInfo, type BlockSource } from './SurfaceRules';
+import { buildChunkFinal, type BlockInfo, type BlockSource, type ChunkFinal } from './Refinements';
 import { refine, planRefinements } from './Refinements';
 import type { RasterMap } from './RasterMap';
 
@@ -27,11 +25,13 @@ export interface ChunkSurfaceBuild {
   vertices: Float32Array;
   /** 物理索引（= geometry 索引） */
   indices: Uint32Array;
+  /** ★ 精修层定型快照（per-chunk 单产物；角点高度场 + 顶面 raw 缓冲） */
+  finalTerrain: ChunkFinal;
 }
 
 /**
- * 构建一个 chunk 的顶面网格。
- * ★ 3×3 chunk 数据先 ensureData 补齐并预取成本地块表——角点查询零 Map 开销，
+ * 构建一个 chunk 的顶面网格（只读精修层定型快照）。
+ * 3×3 chunk 数据先 ensureData 补齐并预取成本地块表——角点查询零 Map 开销，
  * 且保证邻块数据存在（裁决永不见"未加载=0"的假邻域，与烘焙同哲学）。
  */
 export function buildChunkTopSurface(raster: RasterMap, cx: number, cz: number): ChunkSurfaceBuild {
@@ -71,63 +71,17 @@ export function buildChunkTopSurface(raster: RasterMap, cx: number, cz: number):
     },
   }, planRefinements(raster.worldSeed));
 
-  // ---- 逐 cell 装配（局部坐标，chunk 中心为原点）----
-  // ⚠️ cornerHeight/块表按【世界坐标】索引（src.blockAt 收世界块坐标），
-  //    几何位置才是局部坐标——两套坐标在此显式区分（回归 D 阶段曾抓出
-  //    局部/世界混用的 bug：chunk(0,0) 碰巧正确、其余 chunk 角点全错）。
-  const cells = N * N;               // 3600
-  const positions = new Float32Array(cells * 4 * 3);
-  const normals = new Float32Array(cells * 4 * 3);
-  const uvs = new Float32Array(cells * 4 * 2);
-  const indices = new Uint32Array(cells * 6);
-  const HALF = N / 2;
-  const wx0 = cx * N;
-  const wz0 = cz * N;
-  let vp = 0;   // 顶点游标（float）
-  let up = 0;   // uv 游标
-  let ip = 0;   // 索引游标
-  let vi = 0;   // 顶点编号
-
-  for (let lz = 0; lz < N; lz++) {
-    for (let lx = 0; lx < N; lx++) {
-      // cell 所属块（表内偏移 = 块内偏移 + 1）
-      const cbx = Math.floor(lx / 4) + 1;
-      const cbz = Math.floor(lz / 4) + 1;
-      // 四角（世界坐标 → 块归属取高）：c00 c10 c11 c01
-      const wx = wx0 + lx;
-      const wz = wz0 + lz;
-      const h00 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx, wz);
-      const h10 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx + 1, wz);
-      const h11 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx + 1, wz + 1);
-      const h01 = cornerHeight(src, B0 + cbx, BZ0 + cbz, wx, wz + 1);
-      const x00 = lx - HALF, z00 = lz - HALF;
-
-      // 4 顶点（顺序 c00 c10 c11 c01）
-      positions[vp] = x00;     positions[vp + 1] = h00; positions[vp + 2] = z00;
-      positions[vp + 3] = x00 + 1; positions[vp + 4] = h10; positions[vp + 5] = z00;
-      positions[vp + 6] = x00 + 1; positions[vp + 7] = h11; positions[vp + 8] = z00 + 1;
-      positions[vp + 9] = x00;     positions[vp + 10] = h01; positions[vp + 11] = z00 + 1;
-      for (let k = 0; k < 4; k++) normals[vp + k * 3 + 1] = 1; // 法线 +Y（与旧路径一致）
-      // UV（与旧路径逐位同映射：u=lx/60, v=lz/60）
-      uvs[up] = lx / N;         uvs[up + 1] = lz / N;
-      uvs[up + 2] = (lx + 1) / N; uvs[up + 3] = lz / N;
-      uvs[up + 4] = (lx + 1) / N; uvs[up + 5] = (lz + 1) / N;
-      uvs[up + 6] = lx / N;       uvs[up + 7] = (lz + 1) / N;
-      // 顶点编号：0=c00 1=c10 2=c11 3=c01
-      // T1 = △(c00,c01,c10)（fx+fz≤1 侧）；T2 = △(c01,c11,c10)——绕序朝 +Y
-      indices[ip] = vi;         indices[ip + 1] = vi + 3; indices[ip + 2] = vi + 1;
-      indices[ip + 3] = vi + 3; indices[ip + 4] = vi + 2; indices[ip + 5] = vi + 1;
-      vp += 12; up += 8; ip += 6; vi += 4;
-    }
-  }
+  // ---- ★ 精修层统一产出定型快照（角点场 + 顶面缓冲一次算好）----
+  const finalTerrain = buildChunkFinal(src, cx, cz, N);
+  const { vertices, normals, uvs, indices } = finalTerrain.top;
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
   geometry.setIndex(new THREE.BufferAttribute(indices, 1));
 
-  return { geometry, vertices: positions, indices };
+  return { geometry, vertices, indices, finalTerrain };
 }
 
 /** 块内 x 偏移（支持负块坐标：worldBx − chunk 原点块） */

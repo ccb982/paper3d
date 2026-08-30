@@ -30,6 +30,7 @@ import { tileMaterialByKey } from './TileMaterials';
 import { hsl2rgb } from './TerrainPalette';
 import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
 import { buildChunkTopSurface } from './ChunkSurface';
+import { mergeTerrainPhysics } from './Refinements';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -468,28 +469,16 @@ export class ChunkManager {
       group.add(buildTileLabelLayer(chunkDataForMat, (x, z) => this.raster.surfaceHeightAt(x, z)));
     }
 
-    // ---- ★ 物理 trimesh：顶面 + 断崖墙合并（墙三角形必须有碰撞体：
-    //      trimesh 无体积，cliff 边无墙则低侧物体穿入高板下方坠落） ----
-    let physVerts = surf.vertices;
-    let physIdx = surf.indices;
-    if (walls.vertices.length > 0) {
-      const merged = new Float32Array(surf.vertices.length + walls.vertices.length);
-      merged.set(surf.vertices, 0);
-      merged.set(walls.vertices, surf.vertices.length);
-      const mergedIdx = new Uint32Array(surf.indices.length + walls.indices.length);
-      mergedIdx.set(surf.indices, 0);
-      const vOff = surf.vertices.length / 3;
-      for (let k = 0; k < walls.indices.length; k++) {
-        mergedIdx[surf.indices.length + k] = walls.indices[k] + vOff;
-      }
-      physVerts = merged;
-      physIdx = mergedIdx;
-    }
+    // ---- ★ 物理 trimesh：顶面 + 断崖墙合并（精修层统一产出地形物理；
+    //      trimesh 无体积，cliff 边无墙则低侧物体穿入高板下方坠落）----
+    // 顶面 = 精修层定型快照的 top；墙 = 精修层墙缓冲；合并 = Refinements
+    // 统一地形物理（《精修层与定型快照架构.md》§3）。此处不含实体/装饰碰撞。
+    const phys = mergeTerrainPhysics(surf.finalTerrain.top, walls.buffers);
 
     this.replaceChunk(
       chunkKeyOf(cx, cz), group, cx, cz,
-      physVerts,
-      physIdx,
+      phys.vertices,
+      phys.indices,
     );
 
     // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----

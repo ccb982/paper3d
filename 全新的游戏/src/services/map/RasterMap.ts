@@ -19,7 +19,7 @@ import {
   generateChunk, type ChunkData,
   CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE,
 } from './ChunkGenerator';
-import { sampleSurface, type BlockSource } from './SurfaceRules';
+import { sampleSurface, type BlockSource } from './Refinements';
 import { refine, planRefinements } from './Refinements';
 
 /** chunkKey（负数安全偏移编码） */

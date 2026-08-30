@@ -31,7 +31,7 @@ import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
 import { SEMANTIC_THEME_MIX, applyGroupTintHsl, groupByKey, type GroupPalette } from './TileGroups';
 import { applyDecalStamps, type PlannedDecal } from './decor/TileDecalBase';
-import { sampleSurface, type BlockSource } from './SurfaceRules';
+import { sampleSurface, type BlockSource } from './Refinements';
 import { refine, planRefinements } from './Refinements';
 
 // ============================================================
@@ -59,18 +59,12 @@ export const AO_MIN = 0.55;
 /** 光照图分辨率（阴影/AO 是低频信息，半分辨率足够） */
 const LIGHT_RES = 128;
 
-/** 烘焙太阳（美术定光源；hx/hz=指向太阳的水平单位向量，tan=射线爬升率）。
- *  ★ 主光必须在【相机后上方】（默认 yaw=0 → 相机在 +z 侧看 -z）：
- *    影子拖向 -z = 拖进玩家视野内的地面；面向相机的墙 = 朝阳亮墙。
- *    放反了会得到：地面无影（影子全被高台挡在背面）+ 迎面墙全黑。
- *  光位是构图决策不是物理决策。
- *  ★ 唯一权威来源：ChunkWalls 的墙明暗方向从此处 import（勿再手抄副本）。 */
-export const BAKE_SUN = { hx: -0.342, hz: 0.940, tan: 1.0 };
-
-/** 投影门槛：遮挡物须高出接收面 ≥ 此值才投影
- *  （道路自身抖动 ±0.3m 不投影；高台落差 ≥1.5m 必投影）。
- *  ★ ChunkWalls.MIN_WALL_DROP 与此同源 import。 */
-export const CAST_MIN_DEPTH = 0.5;
+// ★ 太阳方向唯一权威来源 = RefinementConstants.BAKE_SUN
+//   （在 RefinementConstants 定义，本文件 import 并使用 + re-export 保持旧 import 路径兼容；
+//    与精修层墙明暗同源 → 墙沿同一方向才和烘焙阴影对得上）。
+// ★ CAST_MIN_DEPTH 同为烘焙/精修层共享门槛。
+import { BAKE_SUN, CAST_MIN_DEPTH } from './RefinementConstants';
+export { BAKE_SUN, CAST_MIN_DEPTH };
 /** 射线射程（米）：高台柱体最厚 ~4m + 斜向余量 */
 const CAST_RANGE = 16;
 // ---- 软阴影（标准实现：iq SDF 软阴影公式的地形变体）----
