@@ -5,18 +5,21 @@
 // 物理：velocity 模式（速度驱动 + 位置读回，碰撞交给 rapier）
 // 子类：Player（输入驱动）/ Ally / Enemy（AI 驱动）
 
-import * as THREE from 'three';
-import { EntityBase, type EntityBaseOptions } from './EntityBase';
-import type { EntityManager } from './EntityManager';
-import { CharacterController, type CharacterAnimMap } from '../systems/player/CharacterController';
-import type { FrameAssetSource } from '../services/fx/AssetSource';
-import type { InputActions } from '../platform/input/InputActions';
-import type { CameraFrame } from '../services/camera/CameraController';
-import { shapeExtents, separateXZ } from '../services/physics/Collision';
-import { CharacterFxManager } from '../services/fx/CharacterFxManager';
-import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
-import { RasterMap } from '../services/map/RasterMap';
-import { EDGE_CLIFF_BAND } from '../services/map/SurfaceRules';
+import * as THREE from "three";
+import { EntityBase, type EntityBaseOptions } from "./EntityBase";
+import type { EntityManager } from "./EntityManager";
+import {
+  CharacterController,
+  type CharacterAnimMap,
+} from "../systems/player/CharacterController";
+import type { FrameAssetSource } from "../services/fx/AssetSource";
+import type { InputActions } from "../platform/input/InputActions";
+import type { CameraFrame } from "../services/camera/CameraController";
+import { shapeExtents, separateXZ } from "../services/physics/Collision";
+import { CharacterFxManager } from "../services/fx/CharacterFxManager";
+import type { FluidEffect } from "../vendor/player/fluid/FluidEffect";
+import { RasterMap } from "../services/map/RasterMap";
+import { EDGE_CLIFF_BAND } from "../services/map/SurfaceRules";
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -32,37 +35,47 @@ export interface CharacterBaseOptions extends EntityBaseOptions {
  *   高 2.0（贴片 2.5 的 80%，脚底到肩部）
  *   模块级常量：super() 时字段尚未初始化，构造参数只能引用常量 */
 const DEFAULT_COLLISION_VOLUME = {
-  shape: { type: 'cuboid', hx: 0.28, hy: 1.0, hz: 0.15 } as const,
+  shape: { type: "cuboid", hx: 0.28, hy: 1.0, hz: 0.15 } as const,
   offsetY: 1.0,
 };
 
 export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
-  readonly collisionVolume: { shape: import('../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = DEFAULT_COLLISION_VOLUME;
+  readonly collisionVolume: {
+    shape: import("../services/physics/PhysicsWorld").ColliderShape;
+    offsetY: number;
+  } = DEFAULT_COLLISION_VOLUME;
 
-  constructor(
-    em: EntityManager,
-    opts: CharacterBaseOptions,
-  ) {
+  constructor(em: EntityManager, opts: CharacterBaseOptions) {
     super(em, {
       kind: opts.kind,
-      x: opts.x, y: opts.y, z: opts.z,
+      x: opts.x,
+      y: opts.y,
+      z: opts.z,
       // ★ 角色 = 运动学刚体：位置 100% 代码驱动（x/z 输入/AI、y 模式层钉地形），
       //   物理只做推挤（踢开物品/子弹碰撞事件），不受重力/力 → 无抖动/无爆炸
       physics: opts.physics ?? {
-        type: 'kinematic',
+        type: "kinematic",
         options: { shape: DEFAULT_COLLISION_VOLUME.shape },
       },
       asset: opts.asset,
       animInitial: opts.facing ? { facing: opts.facing } : undefined,
     });
-    this.physicsMode = 'kinematic';
-    if (!this.anim) throw new Error('CharacterBase 需要动画资产');
-    this.controller = new CharacterController(this.anim, opts.animMap, opts.moveSpeed ?? 2.5);
+    this.physicsMode = "kinematic";
+    if (!this.anim) throw new Error("CharacterBase 需要动画资产");
+    this.controller = new CharacterController(
+      this.anim,
+      opts.animMap,
+      opts.moveSpeed ?? 2.5,
+    );
   }
 
-  protected override onUpdate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+  protected override onUpdate(
+    dt: number,
+    input?: InputActions,
+    cameraFrame?: CameraFrame,
+  ): void {
     if (input && cameraFrame) {
       this.controller.update(dt, input, cameraFrame);
     }
@@ -76,9 +89,9 @@ export abstract class CharacterBase extends EntityBase {
     this.entity.position.z += dir.y * speed * dt;
     // ★ 大落差水平阻挡（cliff 不可攀；《地形边缘裁决与视觉面架构.md》§5）：
     //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND 以上 → 回退本次水平
-    //   位移。β 默认下 cliff 全部 ≤ 带宽 → 永不触发（可达性不变）；未来
-    //   "大落差断崖"规则生成高墙后自动生效。小台阶由 clampCharacter
-    //   上行限速自动踏过，与此互补（stepHeight ≡ EDGE_CLIFF_BAND）。
+    //   位移。2026-08-31 起默认引擎恒 cliff（方块世界观）→ 高墙多、此判定
+    //   实质性生效；小台阶由 clampCharacter 上行限速自动踏过，与此互补
+    //   （stepHeight ≡ EDGE_CLIFF_BAND）。
     {
       const p = this.entity.position;
       const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
@@ -118,7 +131,16 @@ export abstract class CharacterBase extends EntityBase {
       // 高度差过大（不同层）不分离
       if (Math.abs(p.y - op.y) > 1.5) continue;
       const other = shapeExtents(ov.shape);
-      const sep = separateXZ(p.x, p.z, me.hx, me.hz, op.x, op.z, other.hx, other.hz);
+      const sep = separateXZ(
+        p.x,
+        p.z,
+        me.hx,
+        me.hz,
+        op.x,
+        op.z,
+        other.hx,
+        other.hz,
+      );
       if (!sep) continue;
       p.x += sep.ax;
       p.z += sep.az;
@@ -137,19 +159,27 @@ export abstract class CharacterBase extends EntityBase {
     const me = shapeExtents(vol.shape);
     if (me.hx <= 0 || me.hz <= 0) return;
     const p = this.entity.position;
-    const obstacles = pw.queryStaticObstacles({ x: p.x, y: p.y, z: p.z }, me.hx + 0.4);
+    const obstacles = pw.queryStaticObstacles(
+      { x: p.x, y: p.y, z: p.z },
+      me.hx + 0.4,
+    );
     for (const o of obstacles) {
       const ent = this.em.get(o.id);
-      if (!ent || ent.kind !== 'decoration') continue; // 只推挤地图装饰物
+      if (!ent || ent.kind !== "decoration") continue; // 只推挤地图装饰物
       // 层差过滤：角色脚底不在障碍高度带内不推挤（允许上下平台重叠）
-      const baseY = o.y - o.hy, topY = o.y + o.hy;
+      const baseY = o.y - o.hy,
+        topY = o.y + o.hy;
       if (p.y < baseY - me.hy - 0.3 || p.y > topY + me.hy + 0.3) continue;
-      const dx = p.x - o.x, dz = p.z - o.z;
+      const dx = p.x - o.x,
+        dz = p.z - o.z;
       const minDist = me.hx + o.r;
       const d2 = dx * dx + dz * dz;
       if (d2 >= minDist * minDist) continue;
       const d = Math.sqrt(d2);
-      if (d < 1e-4) { p.x = o.x + minDist; continue; } // 正中心：任选一侧推出
+      if (d < 1e-4) {
+        p.x = o.x + minDist;
+        continue;
+      } // 正中心：任选一侧推出
       const push = (minDist - d) / d;
       p.x += dx * push;
       p.z += dz * push;
@@ -168,13 +198,19 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 按纹理宽高比设置角色缩放（避免竖长/横长纹理被压扁）——子类 attach 后调用 */
   protected applyRenderScale(baseSize = 1.5): void {
-    if (this.renderer && 'setScaleKeepAspect' in this.renderer) {
-      (this.renderer as { setScaleKeepAspect(s: number): void }).setScaleKeepAspect(baseSize);
+    if (this.renderer && "setScaleKeepAspect" in this.renderer) {
+      (
+        this.renderer as { setScaleKeepAspect(s: number): void }
+      ).setScaleKeepAspect(baseSize);
     }
   }
 
   /** ★ 影子声明（角色：宽/视觉高=贴片尺寸；太阳投影模式，早晚影子方向长度随日照变化） */
-  protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
+  protected override get shadowShape(): {
+    w: number;
+    h?: number;
+    alpha?: number;
+  } | null {
     const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
     if (!r?.mesh) return null;
     return {
@@ -183,7 +219,6 @@ export abstract class CharacterBase extends EntityBase {
       alpha: 0.38,
     };
   }
-
 
   /** ★ 死亡动画自动管线：任何角色死亡 → 纹理所有权转移给死亡动画
    *   （独立流体撕碎消散，纯表现，不阻塞掉落/结算）。
@@ -199,7 +234,9 @@ export abstract class CharacterBase extends EntityBase {
   /** 受击染料开关（不需要的角色可关，默认开；★ 仅最高档 LOD(0) 启用，远距离省算） */
   protected hitDyeEnabled = true;
   /** ★ 受击染料注入参数（H/S/L/A + 速率；红色系，高饱和/高亮更明显） */
-  protected hitDyeColor: [number, number, number, number] = [0.0, 0.95, 0.6, 0.9];
+  protected hitDyeColor: [number, number, number, number] = [
+    0.0, 0.95, 0.6, 0.9,
+  ];
   /** 受击染料注入半径（归一化，默认 0.45） */
   protected hitDyeRadius = 0.45;
 
@@ -209,7 +246,10 @@ export abstract class CharacterBase extends EntityBase {
     if (!this.hitDyeEnabled || this.viewLod !== 0) return;
     const renderer = CharacterFxManager.renderer;
     const source = this.anim?.source as unknown as {
-      createHitDyeEffect?: (renderer: THREE.WebGLRenderer, frameIndex: number) => FluidEffect | null;
+      createHitDyeEffect?: (
+        renderer: THREE.WebGLRenderer,
+        frameIndex: number,
+      ) => FluidEffect | null;
     };
     if (!renderer || !source?.createHitDyeEffect) return;
 
@@ -264,7 +304,13 @@ export abstract class CharacterBase extends EntityBase {
     if (!this.deathAnimEnabled) return;
     const frameIndex = this.anim?.state.frameIndex ?? 0;
     const p = this.entity.position;
-    CharacterFxManager.spawnDeathAnim(this.anim!.source, frameIndex, p.x, p.y, p.z);
+    CharacterFxManager.spawnDeathAnim(
+      this.anim!.source,
+      frameIndex,
+      p.x,
+      p.y,
+      p.z,
+    );
   }
 
   /** ★ 销毁：释放受击染料流体（恢复原纹理资源） */
@@ -279,7 +325,13 @@ export abstract class CharacterBase extends EntityBase {
     if (this.deathAnimEnabled) {
       const frameIndex = this.anim?.state.frameIndex ?? 0;
       const p = this.entity.position;
-      CharacterFxManager.spawnDeathAnim(this.anim!.source, frameIndex, p.x, p.y, p.z);
+      CharacterFxManager.spawnDeathAnim(
+        this.anim!.source,
+        frameIndex,
+        p.x,
+        p.y,
+        p.z,
+      );
     }
     super.onDeath(source);
   }

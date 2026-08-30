@@ -12,15 +12,16 @@
 //   （heightAt/surfaceHeightAt/tileDefAt/worldSeed）——外观烘焙经
 //   该窄接口消费本类，依赖倒置，勿在烘焙器内反向耦合本类。
 
-import type { EntityBase } from '../../entity/EntityBase';
-import * as THREE from 'three';
-import { tileById, type TileDef } from './Tiles';
+import type { EntityBase } from "../../entity/EntityBase";
+import * as THREE from "three";
+import { tileById, type TileDef } from "./Tiles";
+import { generateChunk, type ChunkData, CHUNK_SIZE } from "./ChunkGenerator";
 import {
-  generateChunk, type ChunkData,
-  CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE,
-} from './ChunkGenerator';
-import { sampleSurface, type BlockSource } from './Refinements';
-import { refine, planRefinements } from './Refinements';
+  sampleSurface,
+  makeChunkSource,
+  refineChunkSource,
+  type BlockSource,
+} from "./Refinements";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -68,7 +69,11 @@ export class RasterMap {
 
   /** ★ 玩家驱动加载：跨 chunk 时按加载半径扩张，返回本次新增 chunk 列表
    *   （调用方据此建地面刚体/视觉网格）。加载半径 = 可视(1) + 预加载(1) */
-  updateChunks(px: number, pz: number, loadRadius = 2): { cx: number; cz: number }[] {
+  updateChunks(
+    px: number,
+    pz: number,
+    loadRadius = 2,
+  ): { cx: number; cz: number }[] {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     if (this.initialized) {
@@ -131,7 +136,18 @@ export class RasterMap {
    *   逐位一致。对角线 (lx,lz+1)-(lx+1,lz)，fx+fz≤1 取 T1；不能用双线性
    *   （非平面格偏差可达米级 → 角色悬浮/影子切入地形，2026-08-26 实测）。 */
   surfaceHeightAt(x: number, z: number): number {
-    return sampleSurface(this.surfaceBlocks, x, z);
+    // ★ per-chunk 意图（§8 第四步）：渲染与查询同源 —— 采样按所在 chunk
+    //   应用同意图（chunkSource）；当前 planRefinements 恒空 → 透传。
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    return sampleSurface(this.chunkSource(ccx, ccz), x, z);
+  }
+
+  /** ★ per-chunk 构建源（§8 第四步意图分置）：surfaceBlocks 原始源经本 chunk
+   *   的意图 refine。顶面装配（ChunkSurface）、贴地采样（上）共用同一实例
+   *   （渲染=查询同源）。空精修恒透传。 */
+  chunkSource(cx: number, cz: number): BlockSource {
+    return refineChunkSource(this.surfaceBlocks, this.seed, cx, cz);
   }
 
   /** 世界阻挡高度（高台立面；射击 rayMarch 用） */
@@ -156,31 +172,20 @@ export class RasterMap {
     return (chunk.walkable[lz * CHUNK_SIZE + lx] ?? 1) === 1;
   }
 
-  /** 原始（未精修）块源——精修层包装的基底，消费者勿直接复刻裁决 */
-  private readonly rawSurfaceBlocks: BlockSource = {
-    blockAt: (bx: number, bz: number) => {
-      const mx = bx * BLOCK_SIZE;
-      const mz = bz * BLOCK_SIZE;
-      const cx = Math.floor(mx / CHUNK_SIZE);
-      const cz = Math.floor(mz / CHUNK_SIZE);
-      this.ensureChunk(cx, cz);
-      const chunk = this.chunks.get(chunkKeyOf(cx, cz));
-      if (!chunk) return undefined;
-      const lx = mx - cx * CHUNK_SIZE;
-      const lz = mz - cz * CHUNK_SIZE;
-      const bi = (lz / BLOCK_SIZE) * BLOCKS_PER_SIDE + lx / BLOCK_SIZE;
-      return { id: chunk.blockTypes[bi] ?? 0, h: chunk.heights[lz * CHUNK_SIZE + lx] ?? 0 };
-    },
-  };
-
   /**
-   * ★ SurfaceRules 块数据源适配：世界块坐标 → 块信息（公开——ChunkWalls
-   *   等几何消费者复用同一查找）。缺块先 ensureChunk（确定性纯生成，
-   *   亚毫秒）——贴地/烘焙射线永不見"未加载=0"的假邻域（与 ensureData
-   *   同一哲学；生成的 chunk 本来就在加载环扩张路径上，只是提前生成）。
-   * ★ L6 精修层：原始块源经 refine() 包装（当前空精修恒透传 = 旧世界
-   *   逐位一致）；edgeFinal 口由精修层唯一执掌（见 Refinements）。 */
-  readonly surfaceBlocks: BlockSource = refine(this.rawSurfaceBlocks, planRefinements(this.seed));
+   * ★ L6 精修层统一建源（《重构设计》§6：三份 BlockSource 收敛成一份）。
+   * 本类是 chunk 数据的主机持有者 → 建源闭包唯一真源；ChunkSurface / ChunkWalls
+   * 复用同一实例（勿另建源、勿复刻换算）。缺块先 ensureChunk（确定性纯生成，
+   * 亚毫秒）——贴地/烘焙射线永不見"未加载=0"的假邻域（与 ensureData 同一哲学；
+   * 生成的 chunk 本来就在加载环扩张路径上，只是提前生成）。
+   * ★ 意图分置（2026-08-31 §8 第四步）：本源为【原始源】（不做 refine）——
+   * 无界共享源不绑定单一 chunk；per-chunk 意图由 surfaceHeightAt / ChunkSurface /
+   * ChunkWalls 在各自知道 (cx,cz) 的地方经 refineChunkSource 应用。当前
+   * planRefinements 恒空 → 应用即透传，无感知差异。 */
+  readonly surfaceBlocks: BlockSource = makeChunkSource((ccx, ccz) => {
+    this.ensureChunk(ccx, ccz);
+    return this.chunks.get(chunkKeyOf(ccx, ccz));
+  });
 
   /** 地形颜色（按模板 + 块类型分区着色：高台暖黄/平地冷灰/坑洞深红/斜坡过渡） */
   /** ★ 地块定义查询（外观 Canvas 烘焙/装饰散布用；未加载回退平地） */
@@ -228,7 +233,10 @@ export class RasterMap {
 
   /** ★ 集中刷新（EntityBase.update 末尾）：哈希比较，变化才移块 */
   move(e: EntityBase): void {
-    const newKey = cellKeyOf(Math.floor(e.position.x), Math.floor(e.position.z));
+    const newKey = cellKeyOf(
+      Math.floor(e.position.x),
+      Math.floor(e.position.z),
+    );
     const oldKey = this.cellOf.get(e);
     if (newKey === oldKey) return;
     if (oldKey !== undefined) this.cells.get(oldKey)?.delete(e);
@@ -271,11 +279,17 @@ export class RasterMap {
   }
 
   /** 射线路径查询（DDA 网格采样，瞄准候选集） */
-  queryRay(origin: { x: number; z: number }, dir: { x: number; z: number }, maxDist: number): EntityBase[] {
+  queryRay(
+    origin: { x: number; z: number },
+    dir: { x: number; z: number },
+    maxDist: number,
+  ): EntityBase[] {
     const out: EntityBase[] = [];
     const seen = new Set<EntityBase>();
-    const x0 = origin.x, z0 = origin.z;
-    const dx = dir.x, dz = dir.z;
+    const x0 = origin.x,
+      z0 = origin.z;
+    const dx = dir.x,
+      dz = dir.z;
     let tMaxX: number;
     let tMaxZ: number;
     if (dx > 0) tMaxX = (Math.floor(x0) + 1 - x0) / dx;
@@ -286,7 +300,9 @@ export class RasterMap {
     else tMaxZ = Infinity;
     const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
     const tDeltaZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
-    let x = x0, z = z0, t = 0;
+    let x = x0,
+      z = z0,
+      t = 0;
     const maxSteps = Math.ceil(maxDist) + 2;
     for (let i = 0; i < maxSteps; i++) {
       if (t > maxDist) break;
@@ -315,10 +331,18 @@ export class RasterMap {
   /** ★ 视锥梯形 4 顶点（世界 xz；调试绘制/查询共用）：
    *   下边 = 下边界视线与 y=0 交点（近处）；上边 = 上视线水平延伸 maxDist（远处）
    *   ⚠ 上视线指向天空时（俯视）不能钳到相机位置（退化三角），见 queryFrustum */
-  frustumCorners(camera: THREE.Camera, maxDist = 100): { x: number; z: number }[] {
+  frustumCorners(
+    camera: THREE.Camera,
+    maxDist = 100,
+  ): { x: number; z: number }[] {
     camera.updateMatrixWorld();
     const pts: { x: number; z: number }[] = [];
-    const ndc = [[-1, -1], [1, -1], [1, 1], [-1, 1]]; // 左下、右下、右上、左上
+    const ndc = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ]; // 左下、右下、右上、左上
     const tmp = new THREE.Vector3();
     for (const [nx, ny] of ndc) {
       tmp.set(nx, ny, 1).unproject(camera);
@@ -359,7 +383,8 @@ export class RasterMap {
    *   ③ 扫描范围钳到相机 ±2×maxDist（防投影异常迭代爆炸） */
   queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
     const pts = this.frustumCorners(camera, maxDist);
-    let zMin = Infinity, zMax = -Infinity;
+    let zMin = Infinity,
+      zMax = -Infinity;
     for (const p of pts) {
       zMin = Math.min(zMin, p.z);
       zMax = Math.max(zMax, p.z);

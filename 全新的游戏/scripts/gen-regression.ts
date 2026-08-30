@@ -10,8 +10,8 @@
 //   blockTypes[] 仅允许 平地→装饰平面(0→10/11/12) 与 高台→高台变体(1→13/14/15)
 //   其余任何 id 变化（包括液体/坑洞位）均为回归失败
 // ============================================================
-import { generateChunk } from '../src/services/map/ChunkGenerator';
-import { readFileSync } from 'fs';
+import { generateChunk } from "../src/services/map/ChunkGenerator";
+import { readFileSync } from "fs";
 
 declare const process: { argv: string[]; exit(code: number): void };
 
@@ -25,8 +25,11 @@ function fnv1a32(bytes: Uint8Array): number {
 }
 
 interface Row {
-  seed: number; cx: number; cz: number;
-  hw: number; hh: number;
+  seed: number;
+  cx: number;
+  cz: number;
+  hw: number;
+  hh: number;
   blockTypes: number[];
 }
 
@@ -36,7 +39,9 @@ for (let seed = 1; seed <= 6; seed++) {
     for (let cz = -4; cz <= 4; cz++) {
       const c = generateChunk(seed, cx, cz);
       rows.push({
-        seed, cx, cz,
+        seed,
+        cx,
+        cz,
         hw: fnv1a32(new Uint8Array(c.walkable.buffer.slice(0))),
         hh: fnv1a32(new Uint8Array(c.heights.buffer.slice(0))),
         blockTypes: [...c.blockTypes],
@@ -52,34 +57,49 @@ if (!baselinePath) {
 } else {
   // 对比模式：逐块白名单校验
   const old = new Map<string, Row>();
-    for (const line of readFileSync(baselinePath, 'utf8').split('\n')) {
+  for (const line of readFileSync(baselinePath, "utf8").split("\n")) {
     const s = line.trim();
-    if (!s || !s.startsWith('{')) continue;
+    if (!s || !s.startsWith("{")) continue;
     const r = JSON.parse(s) as Row;
     old.set(`${r.seed}:${r.cx}:${r.cz}`, r);
   }
   let fail = 0;
   const ALLOWED: Record<number, number[]> = {
-    0: [0, 10, 11, 12, 16, 17, 18],   // 平地 → 平地/装饰平面（含 brick/grass/wood 路面材质地块）
-    1: [1, 13, 14, 15],               // 高台 → 高台/装饰高台
+    0: [0, 10, 11, 12, 16, 17, 18], // 平地 → 平地/装饰平面（含 brick/grass/wood 路面材质地块）
+    1: [1, 13, 14, 15], // 高台 → 高台/装饰高台
   };
   for (const r of rows) {
     const o = old.get(`${r.seed}:${r.cx}:${r.cz}`);
-    if (!o) { console.error(`缺失基线 ${r.seed}:${r.cx}:${r.cz}`); fail++; continue; }
-    if (o.hw !== r.hw) { console.error(`walkable 漂移 ${r.seed}:${r.cx}:${r.cz} ${o.hw}→${r.hw}`); fail++; }
-    if (o.hh !== r.hh) { console.error(`heights 漂移 ${r.seed}:${r.cx}:${r.cz} ${o.hh}→${r.hh}`); fail++; }
+    if (!o) {
+      console.error(`缺失基线 ${r.seed}:${r.cx}:${r.cz}`);
+      fail++;
+      continue;
+    }
+    if (o.hw !== r.hw) {
+      console.error(`walkable 漂移 ${r.seed}:${r.cx}:${r.cz} ${o.hw}→${r.hw}`);
+      fail++;
+    }
+    if (o.hh !== r.hh) {
+      console.error(`heights 漂移 ${r.seed}:${r.cx}:${r.cz} ${o.hh}→${r.hh}`);
+      fail++;
+    }
     for (let i = 0; i < 225; i++) {
-      const a = o.blockTypes[i], b = r.blockTypes[i];
+      const a = o.blockTypes[i],
+        b = r.blockTypes[i];
       if (a === b) continue;
       const allowed = ALLOWED[a]?.includes(b);
       if (!allowed) {
-        console.error(`blockTypes 越权变化 ${r.seed}:${r.cx}:${r.cz} 块#${i} ${a}→${b}`);
+        console.error(
+          `blockTypes 越权变化 ${r.seed}:${r.cx}:${r.cz} 块#${i} ${a}→${b}`,
+        );
         fail++;
       }
     }
   }
   if (fail === 0) {
-    console.error(`[gen-regression] ✅ ${rows.length} chunk 全部通过：walkable/heights 逐位一致，blockTypes 变化全部在白名单内`);
+    console.error(
+      `[gen-regression] ✅ ${rows.length} chunk 全部通过：walkable/heights 逐位一致，blockTypes 变化全部在白名单内`,
+    );
   } else {
     console.error(`[gen-regression] ❌ ${fail} 处回归失败`);
     process.exit(1);

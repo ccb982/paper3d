@@ -13,12 +13,12 @@
 //   合并后建刚体——碰撞=所见不变式）。
 // ============================================================
 
-import * as THREE from 'three';
-import { CHUNK_SIZE } from './ChunkGenerator';
-import { buildChunkWallBuffers, type ChunkWallBuffers } from './Refinements';
-import { groupByKey, type GroupPalette } from './TileGroups';
-import type { RasterMap } from './RasterMap';
-import { TERRAIN_LIGHT_TUNING } from './TerrainMaterial';
+import * as THREE from "three";
+import { CHUNK_SIZE } from "./ChunkGenerator";
+import { buildChunkWallBuffers, type ChunkWallBuffers } from "./Refinements";
+import { groupByKey, type GroupPalette } from "./TileGroups";
+import type { RasterMap } from "./RasterMap";
+import { TERRAIN_LIGHT_TUNING } from "./TerrainMaterial";
 
 /** 侧壁材质注册表（每帧由 updateWallLighting 统一喂昼夜标量；dispose 时 clear） */
 const wallMaterials = new Set<THREE.MeshBasicMaterial>();
@@ -32,7 +32,8 @@ export function updateWallLighting(sun: {
   daylight: number;
 }): void {
   const T = TERRAIN_LIGHT_TUNING;
-  const ambI = T.ambientNightIntensity +
+  const ambI =
+    T.ambientNightIntensity +
     (T.ambientDayIntensity - T.ambientNightIntensity) * sun.daylight;
   const scalar = ambI + T.sunIntensity * sun.intensityScale * 0.8;
   for (const m of wallMaterials) m.color.setScalar(scalar);
@@ -58,13 +59,19 @@ export interface ChunkWallsBuild {
  * 扫描/几何/明暗由精修层 buildChunkWallBuffers 统一产出；本函数只供
  * 光栅上下文并把缓冲装成 THREE 网格。
  */
-export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): ChunkWallsBuild {
+export function buildChunkSideWalls(
+  raster: RasterMap,
+  cx: number,
+  cz: number,
+): ChunkWallsBuild {
   const N = CHUNK_SIZE;
   const seed = raster.worldSeed;
   const gkey = raster.getChunkData(cx, cz)?.groupKey;
-  const palette: GroupPalette | undefined = gkey ? groupByKey(gkey)?.palette : undefined;
+  const palette: GroupPalette | undefined = gkey
+    ? groupByKey(gkey)?.palette
+    : undefined;
 
-  const buffers = buildChunkWallBuffers(raster.surfaceBlocks, cx, cz, N, {
+  const buffers = buildChunkWallBuffers(raster.chunkSource(cx, cz), cx, cz, N, {
     seed,
     palette,
     heightAt: (x, z) => raster.heightAt(x, z),
@@ -72,13 +79,27 @@ export function buildChunkSideWalls(raster: RasterMap, cx: number, cz: number): 
   });
 
   if (buffers.indices.length === 0) {
-    return { mesh: null, buffers, vertices: buffers.vertices, indices: buffers.indices };
+    return {
+      mesh: null,
+      buffers,
+      vertices: buffers.vertices,
+      indices: buffers.indices,
+    };
   }
 
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(buffers.vertices, 3));
-  geo.setAttribute('normal', new THREE.Float32BufferAttribute(buffers.normals, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(buffers.colors, 3));
+  geo.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(buffers.vertices, 3),
+  );
+  geo.setAttribute(
+    "normal",
+    new THREE.Float32BufferAttribute(buffers.normals, 3),
+  );
+  geo.setAttribute(
+    "color",
+    new THREE.Float32BufferAttribute(buffers.colors, 3),
+  );
   geo.setIndex(new THREE.BufferAttribute(buffers.indices, 1));
 
   const mat = new THREE.MeshBasicMaterial({ vertexColors: true });

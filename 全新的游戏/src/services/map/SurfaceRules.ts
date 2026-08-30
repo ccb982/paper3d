@@ -1,8 +1,8 @@
 // ============================================================
 // SurfaceRules —— 【已物理并入精修层】（2026-08-30）
 // ============================================================
-// 本文件历史上的边裁决规则链 + 视觉面几何（cornerHeight/sampleSurface/
-// edgeOf/baseHeightOf）已全部搬进《Refinements.ts》（唯一地形几何真源）。
+// 本文件历史上的边裁决规则链 + 视觉面几何（cornerCell/vertexHeight/rampProfile/
+// sampleSurface/edgeOf/baseHeightOf）已全部搬进《Refinements.ts》（唯一地形几何真源）。
 // 这里仅保留一个转发 shim，让既有消费者 import 路径不炸。
 // ★ 新代码请一律从 ./Refinements 导入；本 shim 不承载任何行为。
 // ============================================================
