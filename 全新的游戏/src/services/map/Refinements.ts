@@ -481,13 +481,15 @@ export function buildChunkFinal(src: BlockSource, cx: number, cz: number, size: 
 const WALL_EPS = 0.05;
 
 /**
- * ★ 通用侧壁防御判据阈值（2026-08-30 定稿）：只要有错位就是缝。
- * 统一判据：某地块交界处「高侧顶 − 低侧面板底 ≥ SEAM_EPS」即视为悬空，
+ * ★ 通用侧壁防御判据阈值（2026-08-30 定稿，2026-08-30 改为 0）：只要有错位
+ * 就是缝，【任何非零落差都补墙】——不再留 0.01 的最小容忍，连 0.0001 的微
+ * 阶梯也封住侧壁（坡面与周围地块永无悬空缝）。
+ * 统一判据：某地块交界处「高侧顶 − 低侧面板底 > SEAM_EPS(=0)」即视为悬空，
  * 该处空立即补竖直墙（底 = 低侧面板底 − WALL_EPS，深到底堵死）。
- * 0.01 量级 —— 任何布尔级落差都算缝；cliff 与 weld 两路统一用同一阈值。
+ * cliff 与 weld 两路统一用同一阈值。
  * （cliff 因 hBase 缺省 = h → baseHeightOf(低)=低.h，自然回落到 旧 drop>0 语义）
  */
-const SEAM_EPS = 0.01;
+const SEAM_EPS = 0;
 
 // ---- 侧壁明暗调参（集中此处；全部确定性，同种子必复现）----
 const WALL_K_BACK = 0.22;
@@ -576,22 +578,40 @@ export function buildChunkWallBuffers(
 
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
-      const hCur = ctx.heightAt(ox + i + 0.5, oz + j + 0.5);
+      const bxC = Math.floor((ox + i + 0.5) / 4), bzC = Math.floor((oz + j + 0.5) / 4);
+      const bCur = src.blockAt(bxC, bzC) ?? MISSING_BLOCK;
       for (let d = 0; d < 4; d++) {
         const dir = DIRS[d];
         const ni = i + dir.dx, nj = j + dir.dz;
-        const hNb = ctx.heightAt(ox + ni + 0.5, oz + nj + 0.5);
-        const drop = hCur - hNb;
-        if (drop <= 0) continue; // 去重：仅从高侧 cell 发墙（每条边界只发一次）
+        const bxN = Math.floor((ox + ni + 0.5) / 4), bzN = Math.floor((oz + nj + 0.5) / 4);
+        const bNb = src.blockAt(bxN, bzN) ?? MISSING_BLOCK;
 
-        // ★ 统一侧壁判据（2026-08-30 通用防御机制）：地块交界处
-        //   「高侧顶 − 低侧面板底 ≥ SEAM_EPS」即悬空 → 补竖直墙，底深到
-        //   低侧面板底。cliff（hBase 缺省=h → baseHeightOf=低.h）自然回落
-        //   旧 drop>0 语义；weld 低侧 hBase 更深 → 补到深底。
-        const e = edgeOf(src, Math.floor((ox + i + 0.5) / 4), Math.floor((oz + j + 0.5) / 4), d as 0 | 1 | 2 | 3);
-        const lowBase = baseHeightOf(e.low);
-        const highH = e.high.h;
-        if (highH - lowBase < SEAM_EPS) continue;
+        // ★ 统一侧壁判据（2026-08-30 通用防御，2026-08-30 改判据为【视觉面】）：
+        //   「边界视觉面顶(surface top) − 两侧块面板底之更浅者 ≥ SEAM_EPS」即
+        //   该处悬空 → 补竖直墙，把坡面【连接到周围地块】。不再只看块逻辑高
+        //   （块内由 weld 拉起来的表面台阶，块高恒定 → 旧判据漏发侧壁 → 坡面
+        //   侧悬空）。底深到两侧块 base 的更浅者（低侧），顶随视觉面 surface。
+        const wxA = ox + i + dir.ax, wzA = oz + j + dir.az;
+        const wxB = ox + i + dir.bx, wzB = oz + j + dir.bz;
+        const topA = Math.max(
+          cornerHeight(src, bxC, bzC, wxA, wzA),
+          cornerHeight(src, bxN, bzN, wxA, wzA),
+        );
+        const topB = Math.max(
+          cornerHeight(src, bxC, bzC, wxB, wzB),
+          cornerHeight(src, bxN, bzN, wxB, wzB),
+        );
+        const topHigh = Math.max(topA, topB);
+        const lowBase = Math.min(baseHeightOf(bCur), baseHeightOf(bNb));
+        const step = topHigh - lowBase;
+        if (step <= SEAM_EPS) continue;
+
+        // 去重：仅从中心表面更高的一侧发墙（每条边界只发一次，法线朝低侧）
+        const sC = sampleSurface(src, ox + i + 0.5, oz + j + 0.5);
+        const sN = sampleSurface(src, ox + ni + 0.5, oz + nj + 0.5);
+        if (sN > sC + 1e-9) continue;
+
+        const drop = step;
         const yB = lowBase - WALL_EPS;
 
         const td = ctx.tileDefAt(ox + i + 0.5 + dir.dx * 0.5, oz + j + 0.5 + dir.dz * 0.5);
@@ -604,21 +624,6 @@ export function buildChunkWallBuffers(
         const xA = i + dir.ax - N / 2, zA = j + dir.az - N / 2;
         const xB = i + dir.bx - N / 2, zB = j + dir.bz - N / 2;
 
-        // ★ 顶随视觉面（2026-08-30 通用防御）：墙顶不再取平直高块顶，而是沿
-        //   边界 meter 跟随 cornerHeight（取两侧块的 max）。clean 边界上下
-        //   = 高块顶（逐位不变）；混合角/对角高块把顶点拉高时，墙顶随之抬升，
-        //   自动封住 ≤1m 的坡面侧壁漏孔（含孤立角）。底仍深到底低侧面板底。
-        const hbx = Math.floor((ox + i + 0.5) / 4), hbz = Math.floor((oz + j + 0.5) / 4);
-        const nbx = hbx + (dir.dx === 1 ? 1 : dir.dx === -1 ? -1 : 0);
-        const nbz = hbz + (dir.dz === 2 ? 1 : dir.dz === -1 ? -1 : 0);
-        const topA = Math.max(
-          cornerHeight(src, hbx, hbz, ox + i + dir.ax, oz + j + dir.az),
-          cornerHeight(src, nbx, nbz, ox + i + dir.ax, oz + j + dir.az),
-        );
-        const topB = Math.max(
-          cornerHeight(src, hbx, hbz, ox + i + dir.bx, oz + j + dir.bz),
-          cornerHeight(src, nbx, nbz, ox + i + dir.bx, oz + j + dir.bz),
-        );
         pos.push(xA, topA, zA, xB, topB, zB, xB, yB, zB, xA, yB, zA);
         for (let c = 0; c < 4; c++) {
           nor.push(dir.dx, 0, dir.dz);
