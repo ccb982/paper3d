@@ -256,13 +256,15 @@ function blockCoordOfCell(cx: number, cz: number): { bx: number; bz: number } {
 
 /**
  * ★ 角插值 interpCorner(V)：base 无关——环绕 V 的至多 4 块里，所有
- *   "corner-open（在 V 处无 cliff 边段）"的块的高度，与所有 weld 边 crest
- *   高度，取 max（触及 V 的插值边 1 条/2 条都覆盖：1 条取该边 crest，
- *   2 条取两 crest 的 max）。水密（watertight）：谁查 V 都同值。
- *   对角块只有真斜坡传导（自身 open 或经 weld 边 crest）才抬角。
+ *   "corner-open（在 V 处无 cliff 边段）"的块的高度，按距块中心距离加权
+ *   平均。水密（watertight）：谁查 V 都同值。
+ *   对角块只有真斜坡传导（自身 open 或经 weld 边 crest）才参与加权。
+ *   ★ 2026-09-01 从 Math.max 改为加权平均，消除尖刺——让角落与边插值
+ *   连通，地形棱角更平滑（"坡面"而非"平面"）。
  */
 export function interpCorner(src: BlockSource, vx: number, vz: number): number {
-  let best = -Infinity;
+  let sum = 0;
+  let count = 0;
   const bs: { bx: number; bz: number }[] = [];
   const seen = new Set<number>();
   for (const [dx, dz] of [
@@ -285,7 +287,8 @@ export function interpCorner(src: BlockSource, vx: number, vz: number): number {
     const inZ = vz === dzs || vz === dzs + 4;
     if (!inX && !inZ) {
       // V 在块内部：该块是周围唯一块，直接取自身高
-      best = Math.max(best, B.h);
+      sum += B.h;
+      count++;
       continue;
     }
     let open = true;
@@ -297,11 +300,18 @@ export function interpCorner(src: BlockSource, vx: number, vz: number): number {
       const dir = vz === dzs + 4 ? 2 : 3;
       if (finalRuling(src, p.bx, p.bz, dir) === "cliff") open = false;
     }
-    if (open) best = Math.max(best, B.h);
+    if (open) {
+      // ★ 加权平均：距块中心越近，高度贡献越大，避免尖刺
+      const cx = dxs + 2,
+        cz = dzs + 2;
+      const dist = Math.sqrt((vx - cx) ** 2 + (vz - cz) ** 2);
+      const w = Math.max(0.01, 3 - dist);
+      sum += B.h * w;
+      count += w;
+    }
   }
-  // §3.4：max(候选集 ∪ {0})。{0} 只在候选为空（全 MISSING 或缺块）时兜底
-  // ——水面（负高）顶点在四块都 present + corner-open 时应取自身 max（可为负）。
-  return best === -Infinity ? 0 : best;
+  // 加权平均，count=0 时兜底 0（全 MISSING 或缺块）
+  return count > 0 ? sum / count : 0;
 }
 
 /**
@@ -370,7 +380,8 @@ export function interpEdge(
   else if (dir === 2) t = bz1 - vz;
   else t = vz - bz0;
   const i = dir === 0 || dir === 1 ? vz - bz0 : vx - bx0;
-  if (t > 0 && t < w && i >= 0 && i <= 4) {
+  // ★ 包含 t=0（crest 处）：让边插值与角插值连通，角落顶点由邻块低侧插值覆盖
+  if (t >= 0 && t < w && i >= 0 && i <= 4) {
     return rampProfile(w, hH, hL, t);
   }
   return undefined;
@@ -415,17 +426,25 @@ export function cornerCell(
       finalRuling(src, bcx, bcz, 3) === "cliff");
   if (selfHold) return B.h;
 
-  // 规则 2：边插值——V 落在 B 的某条 weld 斜坡带内（B 为其低侧，0<t<w）
-  // 沿 +x/-x/+z/-z 四向；重叠带取更高者。
+  // 规则 2：边插值——V 落在 B 的某条 weld 斜坡带内（B 为其低侧，0≤t<w）
+  // 沿 +x/-x/+z/-z 四向；同时检查邻块低侧视角（当前块为高侧时，角落顶点
+  // 由邻块低侧插值覆盖），确保边插值与角插值连通，无尖刺。
   let bandBest = -Infinity;
   const dirs: (0 | 1 | 2 | 3)[] = [0, 1, 2, 3];
   for (const dir of dirs) {
-    const s = interpEdge(src, bcx, bcz, dir, vx, vz);
+    let s = interpEdge(src, bcx, bcz, dir, vx, vz);
+    // 当前块非低侧 → 尝试邻块视角（同一条共享边的对侧方向）
+    if (s === undefined) {
+      const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
+      const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
+      const opp = dir ^ 1;
+      s = interpEdge(src, bcx + dx, bcz + dz, opp, vx, vz);
+    }
     if (s !== undefined) bandBest = Math.max(bandBest, s);
   }
   if (bandBest > -Infinity) return bandBest;
 
-  // 规则 3：角插值（角向周围地块；触及角 1/2 条插值边 → max(crest)）
+  // 规则 3：角插值（加权平均，消除尖刺）
   return interpCorner(src, vx, vz);
 }
 
