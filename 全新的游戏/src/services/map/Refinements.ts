@@ -296,26 +296,20 @@ export function rampProfile(
 // ============================================================
 
 /**
- * ★ cornerCell —— cell 角点取值（边决定角架构）。
- * 角点由汇聚到该点的 4 条边的端点高度决定。
- * 每条边由高侧块决定是否坡降：高侧块有 smoothDirs 则角点取低侧块高度，
- * 否则取高侧块高度。角点 = 4 条边端点高度的最大值。
+ * ★ cornerCell —— cell 角点取值（纯硬边界阶段一）。
+ * 返回【调用方视角块 (bx,bz)】的 L4 恒平面高度 B.h：一整块在任何内部/边角
+ * 视角读到的都是自己那块的高度 → 每块是水平平板、交界垂直硬台阶、撕裂角
+ * 自持（对角/邻块不抬高本块角点）。零插值（连 weld 也不做）；这是两阶段
+ * 设计的「阶段一：先完整硬边界」，为后续 surfaceHeight 后处理插值打基线。
  */
 export function cornerCell(
   src: BlockSource,
-  _bx: number,
-  _bz: number,
-  vx: number,
-  vz: number,
+  bx: number,
+  bz: number,
+  _vx: number,
+  _vz: number,
 ): number {
-  const bx = Math.floor(vx / 4);
-  const bz = Math.floor(vz / 4);
-  // 4 条边汇聚于此角点，每条边连接两个相邻地块
-  const e1 = edgeHeightAtCorner(src, bx, bz, bx - 1, bz);
-  const e2 = edgeHeightAtCorner(src, bx, bz, bx, bz - 1);
-  const e3 = edgeHeightAtCorner(src, bx - 1, bz, bx - 1, bz - 1);
-  const e4 = edgeHeightAtCorner(src, bx, bz - 1, bx - 1, bz - 1);
-  return Math.max(e1, e2, e3, e4);
+  return (src.blockAt(bx, bz) ?? MISSING_BLOCK).h;
 }
 
 /**
@@ -476,32 +470,14 @@ export function interpCorner(_src: BlockSource, _vx: number, _vz: number): numbe
 }
 
 /**
- * ★ 视觉面一致采样（文档 §3.1）：查询点所在 cell 的四角按【块归属】取高后
- * 三角形插值——与网格渲染逐位一致。对角线 (lx,lz+1)-(lx+1,lz)，
- * fx+fz≤1 取 T1=△(h00,h01,h10)（PlaneGeometry 真实剖分，勿改）。
+ * ★ 贴地采样（纯硬边界阶段一）：查询点所属块的 L4 恒平面高度 B.h。
+ * 彻底移除 cell 内三角形双线性——ground↔ground（及其他任何块对）交界都是
+ * 垂直硬台阶，每块中心高度恒等于 L4 分配值。与 cornerCell 一致（都 = B.h）。
  */
 export function sampleSurface(src: BlockSource, x: number, z: number): number {
-  const gx = Math.floor(x);
-  const gz = Math.floor(z);
-  const fx = x - gx;
-  const fz = z - gz;
-  const { bx, bz } = blockCoordOfCell(gx, gz);
-  const h00 = cornerCell(src, bx, bz, gx, gz);
-  const h10 = cornerCell(src, bx, bz, gx + 1, gz);
-  const h01 = cornerCell(src, bx, bz, gx, gz + 1);
-  const h11 = cornerCell(src, bx, bz, gx + 1, gz + 1);
-
-  // 双线性插值（三角形剖分，与网格渲染一致）
-  let hInterp: number;
-  if (fx + fz <= 1) {
-    hInterp = h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
-  } else {
-    hInterp = h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
-  }
-
-  // ★ 直接返回双线性插值结果，不再强制中心固定。
-  // 移除中心固定逻辑后，坡面从高台自然延伸到平地块，不再出现"马桶"结构。
-  return hInterp;
+  const bx = Math.floor(x / 4);
+  const bz = Math.floor(z / 4);
+  return (src.blockAt(bx, bz) ?? MISSING_BLOCK).h;
 }
 
 // ============================================================
@@ -824,11 +800,16 @@ export function buildChunkFinal(
     for (let lx = 0; lx < N; lx++) {
       const wx = wx0 + lx;
       const wz = wz0 + lz;
-      // ★ 使用 sampleSurface（角点插值）确保渲染网格与表面查询一致
-      const h00 = sampleSurface(src, wx, wz);
-      const h10 = sampleSurface(src, wx + 1, wz);
-      const h11 = sampleSurface(src, wx + 1, wz + 1);
-      const h01 = sampleSurface(src, wx, wz + 1);
+      // ★ 纯硬边界阶段一：整块水平平板 —— cell 的 4 顶点全取【cell 所属块】的
+      //   cornerCell（块视角 L4 高度），交界是垂直硬台阶，撕裂角自持。
+      //   与查询 side 一致由 cornerCell 块视角语义锁住（Phase D/F）。
+      const bxcb = cx * BLOCKS_PER_SIDE + Math.floor(lx / BLOCK_SIZE);
+      const bzcb = cz * BLOCKS_PER_SIDE + Math.floor(lz / BLOCK_SIZE);
+      const hBlock = cornerCell(src, bxcb, bzcb, wx, wz);
+      const h00 = hBlock;
+      const h10 = hBlock;
+      const h11 = hBlock;
+      const h01 = hBlock;
       const ci = (lz * N + lx) * 4;
       cornerH[ci] = h00;
       cornerH[ci + 1] = h10;
