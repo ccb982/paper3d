@@ -43,6 +43,10 @@ export class RasterMap {
   /** 玩家所在 chunk（扩张判定缓存） */
   private lastPcx = 0;
   private lastPcz = 0;
+  /** ★ per-chunk 精修源缓存（chunkKey → BlockSource）：planRefinements 现
+   *   非空（30% 大落差产坡）→ 每 chunk 只算一次意图，surfaceHeightAt 高频
+   *   采样（角色脚底/影子/烘焙逐顶点）不再逐点重跑 O(225×4) 计划。 */
+  private chunkSourceCache = new Map<number, BlockSource>();
   /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
@@ -100,6 +104,7 @@ export class RasterMap {
     this.chunks.clear();
     this.cells.clear();
     this.cellOf.clear();
+    this.chunkSourceCache.clear();
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
 
@@ -147,7 +152,13 @@ export class RasterMap {
    *   的意图 refine。顶面装配（ChunkSurface）、贴地采样（上）共用同一实例
    *   （渲染=查询同源）。空精修恒透传。 */
   chunkSource(cx: number, cz: number): BlockSource {
-    return refineChunkSource(this.surfaceBlocks, this.seed, cx, cz);
+    const key = chunkKeyOf(cx, cz);
+    let cached = this.chunkSourceCache.get(key);
+    if (!cached) {
+      cached = refineChunkSource(this.surfaceBlocks, this.seed, cx, cz);
+      this.chunkSourceCache.set(key, cached);
+    }
+    return cached;
   }
 
   /** 世界阻挡高度（高台立面；射击 rayMarch 用） */

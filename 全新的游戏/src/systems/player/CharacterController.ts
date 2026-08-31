@@ -40,18 +40,25 @@ export class CharacterController {
   /** ★ 期望移动方向（世界系 x/z，已归一化；0 = 静止）——速度驱动/朝向判定用 */
   moveDir = { x: 0, y: 0 };
 
-  // ---- 跳跃状态（简单抛物线，与移动/物理解耦：只输出高度偏移） ----
+  // ---- 跳跃状态（简单抛物线，与移动/物理解耦） ----
   private jumpVel = 0;
   private jumpOffset = 0;
   private onGround = true;
-  /** 跳跃初速 / 重力 */
-  jumpSpeed = 4.2;
+  /** 跳跃初速 / 重力。★ 空格跳跃真实高度 = jumpSpeed²/(2·gravity) = 0.6
+   *   （2026-08-31 用户定：爬阶梯 0.35 / 空格跳跃 0.6 → 可跳上 0.5 高差） */
+  jumpSpeed = 0;
   gravity = 12;
 
   constructor(anim: FrameAnimatorBase, animMap: CharacterAnimMap, moveSpeed = 60) {
     this.anim = anim;
     this.animMap = animMap;
     this.moveSpeed = moveSpeed;
+    this.jumpSpeed = Math.sqrt(2 * this.gravity * 0.6); // 峰值 = 0.6
+  }
+
+  /** ★ 空中？（跳跃点起跳 → 落地复位）。运动层据此给真实 y 升降 */
+  isAirborne(): boolean {
+    return !this.onGround;
   }
 
   /**

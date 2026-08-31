@@ -171,7 +171,7 @@ export function refineChunkSource(
   cx: number,
   cz: number,
 ): BlockSource {
-  return refine(src, planRefinements(seed, cx, cz));
+  return refine(src, planRefinements(seed, cx, cz, src));
 }
 
 // ============================================================
@@ -198,6 +198,12 @@ export function edgeRuling(
   const tb = tileById(b.id);
   const pa = ta.physics.edgePolicy;
   const pb = tb.physics.edgePolicy;
+  // ★ 水/坑洞一律焊（2026-08-31 用户确认：水/坑无条件向周围插值，覆盖 hard）。
+  //   水已全向 smoothDirs；坑默认 cliff → 此行使坑也向平地/高台缓坡入坑。
+  const ra = ta.genRole;
+  const rb = tb.genRole;
+  if (ra === "liquid" || ra === "pit" || rb === "liquid" || rb === "pit")
+    return "weld";
   if (pa === "hard" || pb === "hard") return "cliff";
   if (pa === "smooth" || pb === "smooth") return "weld";
   if (dir !== undefined) {
@@ -276,9 +282,13 @@ export function rampProfile(
   return hH - (hH - hL) * (t / w);
 }
 
-/** ★ 检查两个 genRole 是否允许插值（地块属性校验）。同类型对永不插值。 */
+/**
+ * ★ 检查两个 genRole 是否允许插值（地块属性校验）。同类型对默认不插值，
+ *   例外：高台↔高台（platform↔platform）允许——2026-08-31 用户确认
+ *   「高台间高差大时 30% 概率产坡」，需同角色插值才能成坡。
+ */
 function canInterpolateByType(role1: TileGenRole, role2: TileGenRole): boolean {
-  if (role1 === role2) return false; // 同类型不插值
+  if (role1 === role2) return role1 === "platform"; // 仅高台↔高台同角色可插
   // 对 genRole 排序，确保 key 唯一
   const [a, b] = role1 < role2 ? [role1, role2] : [role2, role1];
   // 允许的交叉对
@@ -518,12 +528,93 @@ function blockKey(bx: number, bz: number): string {
  * 需求的臆想内容，故定为恒空；未来若出现真实 per-chunk 规则（如逐边坡宽、
  * 显式边裁决），在此按 hash2(seed, cx, cz) 确定性铺，签名已就位。
  */
+/**
+ * ★ 依据 seed 与 chunk 坐标生成精修意图（per-chunk：《重构设计》§8 第四步）。
+ * 2026-08-31 重构：只做【边裁决】优化（30% 大落差产坡），不碰地块几何高度
+ * ——高度仍由 L4 assignHeights 定死；此处仅把合格边的裁决从默认 cliff 提升为
+ * weld（产生坡，方便角色跳/踏上高台）。
+ *
+ * 规则（用户 2026-08-31 定版）：
+ *   - 作用边：两端 genRole 均 ∈ {ground, platform}，且默认 edgeRuling 为
+ *     cliff 的非 hard 边（「只在默认 cliff 边掷骰」）；hard/已 smooth 边跳过。
+ *   - 高差门槛：|hH − hL| > 0.5（配合角色空格跳跃高度 0.6 → 可跳上）。
+ *   - 概率：对【无向】共享边做确定性 hash(seed, A, B) → 30% 掷点，命中 → weld。
+ *   - 对称：对同一条共享边，本块与邻块各自补各自方向的 override（同一 hash
+ *     保证两侧同判）+ 一个 weld 方向只在本 chunk 的构建 src 里生效 →
+ *     finalRuling 天然对称（唯一判点不变式不破坏）。
+ *   - 确定性：hash 只依赖 seed 与两块的(世界块坐标)，主线程/Worker 快照同源。
+ */
 export function planRefinements(
-  _seed: number,
-  _cx: number,
-  _cz: number,
+  seed: number,
+  cx: number,
+  cz: number,
+  src: BlockSource,
 ): Refinements {
-  return EMPTY_REFINEMENTS;
+  let ref: Refinements = EMPTY_REFINEMENTS;
+  const bx0 = cx * BLOCKS_PER_SIDE;
+  const bz0 = cz * BLOCKS_PER_SIDE;
+  const dirs: (0 | 1 | 2 | 3)[] = [0, 1, 2, 3];
+  for (let ibx = 0; ibx < BLOCKS_PER_SIDE; ibx++) {
+    for (let ibz = 0; ibz < BLOCKS_PER_SIDE; ibz++) {
+      const bx = bx0 + ibx;
+      const bz = bz0 + ibz;
+      for (const dir of dirs) {
+        const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
+        const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
+        const nb = src.blockAt(bx + dx, bz + dz);
+        const a = src.blockAt(bx, bz);
+        if (!a || !nb) continue; // 邻块缺数据 → 由邻块场景处理
+        const ta = tileById(a.id);
+        const tnb = tileById(nb.id);
+        // 端角色须均为 ground/platform
+        const ra = ta.genRole;
+        const rb = tnb.genRole;
+        const inSet = (r: TileGenRole) => r === "ground" || r === "platform";
+        if (!inSet(ra) || !inSet(rb)) continue;
+        // 默认裁决非 cliff，或任一侧 hard → 不掷骰（只在默认 cliff 边）
+        if (edgeRuling(a, nb, dir) !== "cliff") continue;
+        if (
+          ta.physics.edgePolicy === "hard" ||
+          tnb.physics.edgePolicy === "hard"
+        )
+          continue;
+        // 高差门槛
+        const gap = Math.abs(a.h - nb.h);
+        if (gap <= 0.5) continue;
+        // 确定性 30% 掷点（无向共享边 hash → 两侧同判）
+        if (edgeHash(seed, bx, bz, bx + dx, bz + dz) >= 0.3) continue;
+        ref = overrideEdge(ref, bx, bz, dir, "weld");
+      }
+    }
+  }
+  return ref;
+}
+
+/** 无向共享边的确定性 hash（对两块坐标排序 → 主/worker、两侧块同值） */
+function edgeHash(
+  seed: number,
+  b1x: number,
+  b1z: number,
+  b2x: number,
+  b2z: number,
+): number {
+  let ax = b1x,
+    az = b1z,
+    bx = b2x,
+    bz = b2z;
+  if (ax > bx || (ax === bx && az > bz)) {
+    const tx = ax,
+      tz = az;
+    ax = bx;
+    az = bz;
+    bx = tx;
+    bz = tz;
+  }
+  let x = seed ^ (ax * 73856093) ^ (az * 19349663) ^ (bx * 83492791) ^ (bz * 22468219);
+  x = Math.imul(x ^ (x >>> 15), 0x2c1b3c6d);
+  x = Math.imul(x ^ (x >>> 12), 0x297a2d39);
+  x ^= x >>> 15;
+  return (x >>> 0) / 4294967296;
 }
 
 /**

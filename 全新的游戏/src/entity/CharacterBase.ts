@@ -41,6 +41,8 @@ const DEFAULT_COLLISION_VOLUME = {
 
 export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
+  /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
+  private airborneStandY = 0;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   readonly collisionVolume: {
     shape: import("../services/physics/PhysicsWorld").ColliderShape;
@@ -80,21 +82,24 @@ export abstract class CharacterBase extends EntityBase {
       this.controller.update(dt, input, cameraFrame);
     }
     // ★ 位置推进（kinematic：直接移动实体位置 → syncPhysics 驱动刚体；
-    //   y = 地形高度由模式层每帧设置）
+    //   y 由角色二态（落地/空中）在下方统一结算）
     const dir = this.controller.moveDir;
     const speed = this.controller.moveSpeed;
     const prevX = this.entity.position.x;
     const prevZ = this.entity.position.z;
     this.entity.position.x += dir.x * speed * dt;
     this.entity.position.z += dir.y * speed * dt;
-    // ★ 大落差水平阻挡（cliff 不可攀；《地形边缘裁决与视觉面架构.md》§5）：
-    //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND 以上 → 回退本次水平
-    //   位移。2026-08-31 起默认引擎恒 cliff（方块世界观）→ 高墙多、此判定
-    //   实质性生效；小台阶由 clampCharacter 上行限速自动踏过，与此互补
-    //   （stepHeight ≡ EDGE_CLIFF_BAND）。
-    {
-      const p = this.entity.position;
-      const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const p = this.entity.position;
+    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    if (this.controller.isAirborne()) {
+      // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.6 → 可越 0.5 高差）。
+      //   空中不受 cliff 阻挡（跳跃用来跨墙）；落地交给 WorldMode 落回贴地。
+      p.y = this.airborneStandY + this.controller.getHeightOffset();
+    } else {
+      // ★ 落地态：刷新站立基准；cliff（大落差）水平阻挡仅落地态适用——
+      //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.35) 以上 → 回退，
+      //   小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
+      this.airborneStandY = gy;
       if (gy - p.y > EDGE_CLIFF_BAND) {
         p.x = prevX;
         p.z = prevZ;

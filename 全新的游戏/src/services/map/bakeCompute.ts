@@ -654,12 +654,21 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
       };
     },
   };
+  // ★ per-chunk 精修源缓存（planRefinements 非空 → 每 chunk 只算一次），
+  //   bake 逐顶点采样不再逐点重跑 O(225×4) 意图。
+  const refinedCache = new Map<string, BlockSource>();
   return {
     worldSeed: s.seed,
     surfaceHeightAt(x: number, z: number): number {
       const ccx = Math.floor(x / CHUNK_SIZE);
       const ccz = Math.floor(z / CHUNK_SIZE);
-      return sampleSurface(refineChunkSource(src, s.seed, ccx, ccz), x, z);
+      const key = `${ccx},${ccz}`;
+      let ref = refinedCache.get(key);
+      if (!ref) {
+        ref = refineChunkSource(src, s.seed, ccx, ccz);
+        refinedCache.set(key, ref);
+      }
+      return sampleSurface(ref, x, z);
     },
     tileDefAt(x: number, z: number): TileDef {
       let bx = Math.floor(x / BLOCK_SIZE) - s.bx0;

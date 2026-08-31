@@ -270,8 +270,8 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
   expect("地面同类默认硬", edgeRuling(flat(0), flat(0.1)), "cliff");
   expect("地面同类大差也硬", edgeRuling(flat(0), flat(2)), "cliff");
   expect("高台同类默认硬", edgeRuling(plat(5), plat(5.2)), "cliff");
-  expect("水同类默认硬", edgeRuling(liq(-0.4), liq(-0.1)), "cliff");
-  expect("坑同类默认硬", edgeRuling(pit(-3), pit(-3.2)), "cliff");
+  expect("水同类一律焊", edgeRuling(liq(-0.4), liq(-0.1)), "weld");
+  expect("坑同类一律焊", edgeRuling(pit(-3), pit(-3.2)), "weld");
   expect("跨类默认硬", edgeRuling(flat(0), plat(5)), "cliff");
   // policy 仍显式 opt-in / opt-out（位次 1/1' 恒在默认之前生效）
   expect("hard压角色对", edgeRuling(hard(0), plat(5)), "cliff");
@@ -304,6 +304,9 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
     for (let cz = -1; cz <= 1; cz++) {
       for (let cx = -1; cx <= 1; cx++) {
         const build = buildChunkTopSurface(fakeRaster, cx, cz);
+        // ★ 参照源 = 与构建同一份精修源（planRefinements 现产出 weld 覆写 →
+        //   必须用 refineChunkSource 的解析面，不能再用裸 src）
+        const refSrc = refineChunkSource(src, seed, cx, cz);
         const pos = build.geometry.getAttribute("position");
         const uv = build.geometry.getAttribute("uv");
         const nor = build.geometry.getAttribute("normal");
@@ -326,10 +329,10 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
               wz = cz * N + lz;
             // 顶点顺序 c00 c10 c11 c01（构建器约定）
             const want = [
-              cornerCell(src, bx, bz, wx, wz),
-              cornerCell(src, bx, bz, wx + 1, wz),
-              cornerCell(src, bx, bz, wx + 1, wz + 1),
-              cornerCell(src, bx, bz, wx, wz + 1),
+              cornerCell(refSrc, bx, bz, wx, wz),
+              cornerCell(refSrc, bx, bz, wx + 1, wz),
+              cornerCell(refSrc, bx, bz, wx + 1, wz + 1),
+              cornerCell(refSrc, bx, bz, wx, wz + 1),
             ];
             for (let k = 0; k < 4; k++) {
               const got = pos.getY(vi + k); // 顶点已按 (x,y,z) 布局，y = 高度
@@ -387,7 +390,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
                 fx + fz <= 1
                   ? want[0] * (1 - fx - fz) + want[3] * fz + want[1] * fx
                   : want[2] * (fx + fz - 1) + want[3] * (1 - fx) + want[1] * (1 - fz);
-              const gotS = sampleSurface(src, wx + fx, wz + fz);
+              const gotS = sampleSurface(refSrc, wx + fx, wz + fz);
               if (Math.abs(gotS - tri) > 1e-6) {
                 if (dFails < 8)
                   console.error(
@@ -423,13 +426,27 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
       for (let cz = -1; cz <= 1; cz++) {
         const snap = buildSnapshotFromChunks(seed, cx, cz, fetchChunk);
         const q = makeSnapshotSource(snap);
+        // ★ 主线程参照缓存（per-chunk）：planRefinements 非空 → 只算一次
+        const refCache = new Map<string, BlockSource>();
+        const mainRef = (ccx: number, ccz: number): BlockSource => {
+          const k = `${ccx},${ccz}`;
+          let r = refCache.get(k);
+          if (!r) {
+            r = refineChunkSource(rasterSrc, seed, ccx, ccz);
+            refCache.set(k, r);
+          }
+          return r;
+        };
         // 覆盖 chunk ±8m（烘焙射线最远 16m 也在 22m 余量内；±8m 已含裁决带边界）
         for (let gz = -8; gz < CHUNK_SIZE + 8; gz += 0.5) {
           for (let gx = -8; gx < CHUNK_SIZE + 8; gx += 0.5) {
             const x = cx * CHUNK_SIZE + gx + 0.25;
             const z = cz * CHUNK_SIZE + gz + 0.25;
             const a = q.surfaceHeightAt(x, z);
-            const b = sampleSurface(rasterSrc, x, z);
+            // ★ 主线程参照 = 与 Worker 同源的 refineChunkSource（同 per-chunk 意图）
+            const ccx = Math.floor(x / CHUNK_SIZE);
+            const ccz = Math.floor(z / CHUNK_SIZE);
+            const b = sampleSurface(mainRef(ccx, ccz), x, z);
             eSamples++;
             if (a !== b) {
               if (eFails < 5)

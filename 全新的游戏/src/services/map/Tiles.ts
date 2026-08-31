@@ -187,7 +187,6 @@ export const TILE_PLATFORM = new TileDef(
     height: 1.8,
     heightJitterRange: 0.4,
     walkable: true,
-    smoothDirs: [0, 2], // +x、+z 插值
   },
   ["foundation"],
 );
@@ -335,8 +334,7 @@ export const TILE_ROCK_PLATFORM = new TileDef(
     height: 1.8,
     heightJitterRange: 0.4,
     walkable: true,
-    smoothDirs: [0, 1, 2],
-  }, // +x、-x、+z
+  },
   ["ashen"],
 );
 
@@ -353,7 +351,7 @@ export const TILE_ICE_PLATFORM = new TileDef(
     borderLine: true,
     streaks: true,
   },
-  { height: 1.8, heightJitterRange: 0.4, walkable: true, smoothDirs: [0, 3] }, // +x、-z
+  { height: 1.8, heightJitterRange: 0.4, walkable: true },
   ["crystal"],
 );
 
@@ -375,8 +373,7 @@ export const TILE_MOSSY_PLATFORM = new TileDef(
     height: 1.8,
     heightJitterRange: 0.4,
     walkable: true,
-    smoothDirs: [0, 2, 3],
-  }, // +x、+z、-z
+  },
   ["overgrown"],
 );
 

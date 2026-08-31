@@ -357,10 +357,13 @@ export class WorldMode implements IGameMode {
     }
 
     // ---- 相机 ----
+    // ★ position.y 现在空中含真实跳高 → height = 贴地/起跳站立面（减回跳高），
+    //   jump = 跳高偏移，二者语义与 CameraController 契约一致（不重复记账）。
+    const jumpOff = this.player.jumpHeight;
     this.cameraCtrl.update(dt, look, zoom, {
       x: this.player.position.x, y: 0, z: this.player.position.z,
-      height: this.player.position.y,
-      jump: this.player.jumpHeight,
+      height: this.player.position.y - jumpOff,
+      jump: jumpOff,
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
@@ -499,6 +502,9 @@ export class WorldMode implements IGameMode {
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {
+    // ★ 空中态不钉地形：真实跳跃（空格）让 y 由 CharacterBase 的抛物线结算，
+    //   落地瞬间再回落贴地；否则会把跳起来的角色钉回地面、无法跃过 0.5 高差。
+    if (e.controller.isAirborne()) return;
     const p = e.position;
     const targetY = this.raster.surfaceHeightAt(p.x, p.z);
     if (targetY >= -1.5) {
