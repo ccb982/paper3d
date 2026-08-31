@@ -154,7 +154,7 @@ export const TILE_FLAT = new TileDef(
   "平地/路",
   "ground",
   {
-    baseHsl: { h: 0.0854, s: 0.3628, l: 0.4431 }, // RGB(154,114,72)
+    baseHsl: { h: 0.0854, s: 0.15, l: 0.4431 }, // 灰棕（2026-08-31 去橙红）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -176,7 +176,7 @@ export const TILE_PLATFORM = new TileDef(
   "高台",
   "platform",
   {
-    baseHsl: { h: 0.0741, s: 0.4206, l: 0.5804 }, // RGB(193,143,103)
+    baseHsl: { h: 0.0741, s: 0.18, l: 0.5804 }, // 灰岩（2026-08-31 去橙红）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -197,7 +197,7 @@ export const TILE_PIT = new TileDef(
   "坑洞",
   "pit",
   {
-    baseHsl: { h: 0.98, s: 0.6, l: 0.22 }, // 暗血红警示（ACES 补偿后）
+    baseHsl: { h: 0.98, s: 0.30, l: 0.22 }, // 暗灰红警示（2026-08-31 去鲜艳）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: true,
     patches: true,
@@ -301,7 +301,7 @@ export const TILE_MUD = new TileDef(
   "泥沼地",
   "ground",
   {
-    baseHsl: { h: 0.08, s: 0.38, l: 0.26 },
+    baseHsl: { h: 0.08, s: 0.15, l: 0.26 }, // 暗灰棕（2026-08-31 去橙红）
     jitter: { h: 0.006, s: 0.03, l: 0.04 },
     depression: false,
     borderLine: true,

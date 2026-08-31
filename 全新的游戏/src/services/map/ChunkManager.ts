@@ -27,7 +27,7 @@ import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, type TileRenderConfig
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
-import { hsl2rgb } from './TerrainPalette';
+import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
 import { buildChunkTopSurface } from './ChunkSurface';
 import { mergeTerrainPhysics } from './Refinements';
@@ -634,6 +634,7 @@ export class ChunkManager {
  */
 function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: GroupPalette): TileRenderConfig {
   const base = new Float32Array(MATERIAL_SLOTS * 4);
+  const jitter = new Float32Array(MATERIAL_SLOTS * 4);
   const surface = new Float32Array(MATERIAL_SLOTS * 4);
   const emissive = new Float32Array(MATERIAL_SLOTS * 4);
   const params = new Float32Array(MATERIAL_SLOTS * 16);
@@ -641,20 +642,29 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
    for (let id = 0; id < MATERIAL_SLOTS; id++) {
      const td = tileById(id);
      const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
-      // ★ 无材质地块：基色由 albedo 纹理承载，uMatBase 必须置白，
-      //   否则 base(=uMatBase) × alb(已含完整基色) 会把颜色平方 → 坑/水/冰发黑
-      // ★ 有材质地块：uMatBase = 组调色板(融合原 RegionTheme)调制后的基色，
-      //   着色器 base × mat_<fnId> 即得"随组变色"的材质地面
-      const [r, g, b] = td.visual.material
-        ? (() => {
-            const t = applyGroupTintHsl(td.visual.baseHsl, palette);
-            return hsl2rgb(t.h, t.s, t.l);
-          })()
-        : [255, 255, 255];
-     base[id * 4] = r / 255;
-     base[id * 4 + 1] = g / 255;
-     base[id * 4 + 2] = b / 255;
+      // ★ 无材质地块：基色由 albedo 纹理承载，uMatBaseLCH 必须置白（OKLab 白 = L1,C0,H0），
+      //   否则 base=LCH 解码 × alb(已含完整基色) 会把颜色平方 → 坑/水/冰发黑
+      // ★ 有材质地块：uMatBaseLCH = 组调色板(融合原 RegionTheme)调制后的基色，
+      //   着色器 oklchShade = LCH + 逐像素偏移 + 每地块抖动 → 得"随组变色"的材质地面
+      //   （2026-08-31：旧实现直接喂 sRGB 值到 linear 管线 = srgb/linear bug；现整链路 OKLab）
+      const tintHsl = td.visual.material
+        ? applyGroupTintHsl(td.visual.baseHsl, palette)
+        : td.visual.baseHsl;
+      const lch = td.visual.material
+        ? srgbHslToOklch(tintHsl.h, tintHsl.s, tintHsl.l)
+        : { L: 1, C: 0, H: 0 };   // OKLab 白
+     base[id * 4] = lch.L;
+     base[id * 4 + 1] = lch.C;
+     base[id * 4 + 2] = lch.H;
     base[id * 4 + 3] = mat?.surface.roughness ?? 0.9;
+    // ★ 逐地块抖动幅度：GPU 化（原 albedo 侧 CPU 抖动移除）→ uMatJitter[id].xyz
+    const j = td.visual.jitter ?? { h: 0, s: 0, l: 0 };
+    const jlch = td.visual.material
+      ? srgbHslJitterAmp(tintHsl.h, tintHsl.s, tintHsl.l, j.h, j.s, j.l)
+      : { L: 0, C: 0, H: 0 };
+    jitter[id * 4] = jlch.L;
+    jitter[id * 4 + 1] = jlch.C;
+    jitter[id * 4 + 2] = jlch.H;
     const s = mat?.surface;
     surface[id * 4] = s?.specular ?? 0;
     surface[id * 4 + 1] = s?.fresnel ?? 0;
@@ -691,5 +701,5 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
     fn[id] = td.visual.material ? materialFnIndex(td.visual.material.fnId) : -1;
   }
 
-  return { tileIds, base, surface, emissive, params, fn };
+  return { tileIds, base, jitter, surface, emissive, params, fn };
 }

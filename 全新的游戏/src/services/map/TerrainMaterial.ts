@@ -10,10 +10,18 @@
 //
 // 输入：
 //   uTileIds：15×15 块 id 微纹理（Nearest；每像素 = 站在哪个 4×4 地块上）
-//   uMatBase[id]      = vec4(rgb基色, roughness)
+//   uMatBaseLCH[id]   = vec4(OKLab色 L,C,H, roughness)   ★ 感知均匀空间（见 colorLab）
+//   uMatJitter[id]    = vec4(逐地块抖动幅度 dL,dC,dH, 0)  ★ GPU 化（原 albedo 侧 CPU 抖动移除）
 //   uMatSurface[id]   = vec4(specular, fresnel, emissiveStrength, edgeStrength)
 //   uMatEmissive[id]  = vec4(emissive rgb)
 //   uMatParams[id*16] = 材质图案参数（16 个 float，顺序 = 注册模板声明顺序）
+//
+// 伪造渲染（2026-08-31 素材填充，OKLab 定稿）：
+//   每个地块只声明一个 sRGB-HSL 基色（作者侧），丰富渐变全由 GPU 逐像素产生：
+//   base = oklchShade(...) —— 在感知均匀的 OKLab(L,C,H) 里做空间非均匀偏移
+//     （shadeField 三尺度 patch/mid/grain + 每地块独立 jitter），收口 OKLab→线性 RGB，
+//     喂给 linear 光照管线（ACES 全程 linear，three 末尾 linearToOutputTexel 转 sRGB）。
+//   相较旧 HSL 抖动：OKLab 的 L 感知均匀——明暗渐变不再有黄/蓝亮度不均。
 //
 // 分发：数据驱动——uMatFn[id] 存材质 fnId 的注册索引（见 MAT_FN_INDEX），
 //   materialBase 据索引自动路由到对应 mat_<fnId>；加材质 = 注册 GLSL 函数
@@ -66,7 +74,7 @@ export function materialFnIndex(fnId: string | undefined): number {
 
 /** 由注册表自动生成 GLSL 分发链（fn 索引 → mat_<fnId> 调用） */
 const MATERIAL_DISPATCH = Object.entries(MAT_FN_INDEX)
-  .map(([fnId, idx]) => `    if (fn == ${idx}) return mat_${fnId}(w, id);`)
+  .map(([fnId, idx]) => `    if (fn == ${idx}) return mat_${fnId}(f, w, id);`)
   .join('\n');
 
 /**
@@ -75,8 +83,10 @@ const MATERIAL_DISPATCH = Object.entries(MAT_FN_INDEX)
 export interface TileRenderConfig {
   /** 15×15 块 id 微纹理（R8，Nearest，flipY=false） */
   tileIds: THREE.DataTexture;
-  /** vec4×N：rgb 基色 + roughness */
+  /** vec4×N：OKLab 基色 (L,C,H) + roughness（★ 感知均匀空间，见 colorLab） */
   base: Float32Array;
+  /** vec4×N：逐地块抖动幅度 (dL,dC,dH,0)——GPU 化（原 albedo 侧 CPU 抖动移除） */
+  jitter: Float32Array;
   /** vec4×N：specular, fresnel, emissiveStrength, edgeStrength */
   surface: Float32Array;
   /** vec4×N：emissive rgb */
@@ -90,7 +100,8 @@ export interface TileRenderConfig {
 const MATERIAL_GLSL = /* glsl */ `
   // ==================== 材质输入（★ 必须先声明后使用；放函数库最前） ====================
   uniform sampler2D uTileIds;
-  uniform vec4 uMatBase[${MATERIAL_SLOTS}];
+  uniform vec4 uMatBaseLCH[${MATERIAL_SLOTS}];
+  uniform vec4 uMatJitter[${MATERIAL_SLOTS}];
   uniform vec4 uMatSurface[${MATERIAL_SLOTS}];
   uniform vec4 uMatEmissive[${MATERIAL_SLOTS}];
   uniform int uMatFn[${MATERIAL_SLOTS}];
@@ -115,85 +126,130 @@ const MATERIAL_GLSL = /* glsl */ `
   // ★ ES 1.00 不允许结构体数组成员——直接用函数读参数
   float matP(int id, int i) { return uMatParams[id * 16 + i]; }
 
-  // ==================== 材质函数（返回相对基色的调制系数，最终 ×uMatBase） ====================
-
-  // 纯泥土地面：颗粒 / 小石子 / 路辙扫痕 / 大尺度斑驳
-  vec3 mat_dirt(vec2 w, int id) {
-    float grain = (h21(floor(w * 80.0)) - 0.5) * matP(id, 0) * 2.0;
-    float patchv = (vnoise2(w * 0.04) - 0.5) * matP(id, 3) * 2.0;
-    vec2 c = floor(w * 0.5);
-    float peb = h21(c + vec2(17.7, 3.3)) < matP(id, 1) ? -0.12 : 0.0;
-    float ruts = (vnoise2(vec2(w.x * 0.2, w.y * 1.5)) - 0.5) * matP(id, 2);
-    return vec3(1.0 + grain + patchv + peb + ruts);
+  // ==================== OKLab 伪造渲染库（感知均匀空间，见 colorLab.ts） ====================
+  // OKLab(L,a,b) → 线性 RGB。★ 输出 linear——ACES/colorspace_fragment 全在 linear 域。
+  vec3 oklab2linear(vec3 lab) {
+    float l_ = lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z;
+    float m_ = lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z;
+    float s_ = lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z;
+    float l = l_ * l_ * l_, m = m_ * m_ * m_, s = s_ * s_ * s_;
+    return vec3(
+       4.0767416613 * l - 3.3077115904 * m + 0.2309699287 * s,
+      -1.2684380041 * l + 2.6097574007 * m - 0.3413193963 * s,
+      -0.0041960865 * l - 0.7034186145 * m + 1.7076147009 * s);
   }
 
-  // 砖石路面：砖块网格 + 灰缝 + 每砖抖动 + 色变体 + 破损（棋盘感来源之一）
-  vec3 mat_brick(vec2 w, int id) {
+  // 多尺度空间场：大尺度斑块(patch) / 中频渐变(mid) / 高频颗粒(grain)。
+  // ★ 大世界坐标先折回原点防 mediump/highp 精度损失。
+  const float SHADE_FIELD = 2048.0;
+  vec3 shadeField(vec2 w) {
+    w = w - floor(w / SHADE_FIELD) * SHADE_FIELD;
+    return vec3(
+      (fbm2(w * 0.04) - 0.5) * 2.0,
+      (fbm2(w * 0.18) - 0.5) * 2.0,
+       h21(floor(w * 30.0)) - 0.5);
+  }
+
+  // ==================== 材质函数（返回 OKLab 偏移 vec3(dC, dL, dH)） ====================
+  // f = (patch, mid, grain)；w = 世界坐标；id = tile id。
+  // 各材质对 (C=饱和度, L=明暗, H=色相) 三通道、各尺度的取用/权重完全不同
+  // —— 同一地块内各部分的调整各自不同（空间非均匀多尺度），非整体统一调色。
+
+  // 纯泥土地面：全尺度明暗颗粒，饱和度只走中频（成片浓淡），色相克制
+  vec3 mat_dirt(vec3 f, vec2 w, int id) {
+    float grain = (h21(floor(w * 80.0)) - 0.5) * matP(id, 0);
+    float patchv = f.x * matP(id, 3) * 0.5;
+    float midv = f.y * matP(id, 2) * 0.35;
+    vec2 c = floor(w * 0.5);
+    float peb = h21(c + vec2(17.7, 3.3)) < matP(id, 1) ? -0.05 : 0.0;
+    float dL = patchv + midv + grain + peb;
+    float dC = f.y * 0.004;
+    return vec3(dC, dL, 0.0);
+  }
+
+  // 砖石路面：每砖独立明暗 + 灰缝 + 变体，色相随旧砖微偏黄
+  vec3 mat_brick(vec3 f, vec2 w, int id) {
     vec2 cell = floor(w / 1.0);
     vec2 l = fract(w / 1.0);
     l.x = fract(l.x + h21(cell + vec2(3.1, 0.0)) * 0.5);   // 交错错位
-    float jit = (h21(cell + vec2(13.1, 0.0)) - 0.5) * matP(id, 1) * 2.0;
-    float variant = h21(cell + vec2(29.3, 0.0)) < matP(id, 2) ? 0.06 : 0.0;
-    float broken = h21(cell + vec2(41.7, 0.0)) < matP(id, 3) ? -0.10 : 0.0;
-    float grout = (l.x > 1.0 - matP(id, 0) || l.y > 1.0 - matP(id, 0)) ? -0.38 : 0.0;
-    return vec3(1.0 + jit + variant + broken + grout);
+    float jit = (h21(cell + vec2(13.1, 0.0)) - 0.5) * matP(id, 1);
+    float variant = h21(cell + vec2(29.3, 0.0)) < matP(id, 2) ? 0.05 : 0.0;
+    float broken = h21(cell + vec2(41.7, 0.0)) < matP(id, 3) ? -0.08 : 0.0;
+    float grout = (l.x > 1.0 - matP(id, 0) || l.y > 1.0 - matP(id, 0)) ? -0.30 : 0.0;
+    float dL = jit + variant + broken + grout + f.y * 0.05;
+    float dH = h21(cell + vec2(29.3, 0.0)) < matP(id, 2) ? 0.02 : 0.0;
+    return vec3(f.y * 0.003, dL, dH);
   }
 
-  // 草地路面：大尺度明暗斑块 + 草簇暗孔/受光草尖 + 草叶方向拉丝
-  vec3 mat_grass(vec2 w, int id) {
-    float patchv = (vnoise2(w * 0.035) - 0.5) * matP(id, 0) * 2.0;
-    float grain = (h21(floor(w * 55.0)) - 0.5) * matP(id, 3);
-    // 草簇网格（~0.45m）：暗簇底（土色空隙）+ 受光草尖高光
+  // 草地路面：大尺度明暗斑块为主，饱和度随 patch 浓淡，草簇/草尖局部
+  vec3 mat_grass(vec3 f, vec2 w, int id) {
+    float patchv = f.x * matP(id, 0) * 0.6;
+    float grain = f.z * matP(id, 3) * 1.5;
     vec2 c = floor(w * 2.2);
-    float tuftDark = h21(c + vec2(51.1, 0.0)) < matP(id, 1) ? -0.14 : 0.0;
-    float tuftHi = h21(c * 1.7 + vec2(9.9, 1.1)) < matP(id, 2) ? 0.12 : 0.0;
-    // 草叶方向拉丝（沿 x 的细密明度条，制造草叶方向感）
-    float blade = (vnoise2(vec2(w.x * 7.0, w.y * 0.35)) - 0.5) * 0.10;
-    return vec3(1.0 + patchv + grain + tuftDark + tuftHi + blade);
+    float tuftDark = h21(c + vec2(51.1, 0.0)) < matP(id, 1) ? -0.06 : 0.0;
+    float tuftHi = h21(c * 1.7 + vec2(9.9, 1.1)) < matP(id, 2) ? 0.05 : 0.0;
+    float blade = f.y * 0.06;
+    float dL = patchv + grain + tuftDark + tuftHi + blade;
+    float dC = patchv * 0.2 + f.y * 0.006;
+    return vec3(dC, dL, f.y * 0.004);
   }
 
-  // 木板路面：横板条 + 板缝 + 板抖动 + 木纹 + 钉点
-  vec3 mat_wood(vec2 w, int id) {
+  // 木板路面：板缝 + 每板抖动 + 木纹（中频），色相随新旧板微偏
+  vec3 mat_wood(vec3 f, vec2 w, int id) {
     float plk = floor(w.y / 0.6);
-    float seam = fract(w.y / 0.6) < 0.02 ? -0.40 : 0.0;
-    float jit = (h21(vec2(plk, 7.7)) - 0.5) * matP(id, 2) * 2.0;
-    float grain = (vnoise2(vec2(w.x * 0.15, w.y * 2.5)) - 0.5) * matP(id, 3) * 2.0;
+    float seam = fract(w.y / 0.6) < 0.02 ? -0.30 : 0.0;
+    float jit = (h21(vec2(plk, 7.7)) - 0.5) * matP(id, 2);
+    float grain = f.y * matP(id, 3) * 0.6;
     vec2 c = floor(w / 1.2);
     float nail = 0.0;
     if (h21(c + vec2(88.3, 4.4)) < matP(id, 4)) {
       vec2 l = fract(w / 1.2) - 0.5;
-      if (dot(l, l) < 0.004) nail = -0.35;
+      if (dot(l, l) < 0.004) nail = -0.30;
     }
-    return vec3(1.0 + seam + jit + grain + nail);
+    float dL = seam + jit + grain + nail;
+    float dH = (h21(vec2(plk, 7.7)) - 0.5) * 0.03;
+    return vec3(f.y * 0.004, dL, dH);
   }
 
-  // 岩石：分层岩理 + 方向拉丝 + 粗裂纹 + 颗粒
-  vec3 mat_rock(vec2 w, int id) {
-    float strata = (vnoise2(w * 0.05) - 0.5) * matP(id, 0) * 2.0;
-    float streak = (vnoise2(vec2(w.x * 0.3, w.y * 0.05)) - 0.5) * matP(id, 1) * 2.0;
+  // 岩石：中频分层岩理 + 方向拉丝 + 粗裂纹，色相克制
+  vec3 mat_rock(vec3 f, vec2 w, int id) {
+    float strata = f.y * matP(id, 0) * 0.8;
+    float streak = (vnoise2(vec2(w.x * 0.3, w.y * 0.05)) - 0.5) * matP(id, 1) * 0.6;
     vec2 c = floor(w * 0.8);
-    float crack = h21(c + vec2(19.3, 8.8)) < matP(id, 2) ? -0.20 : 0.0;
-    float grain = (h21(floor(w * 30.0)) - 0.5) * 0.05;
-    return vec3(1.0 + strata + streak + crack + grain);
+    float crack = h21(c + vec2(19.3, 8.8)) < matP(id, 2) ? -0.15 : 0.0;
+    float grain = f.z * 0.08;
+    float dL = strata + streak + crack + grain;
+    return vec3(f.y * 0.002, dL, 0.0);
   }
 
-  // 苔藓：石底 × 苔斑混合 + 绒毛
-  vec3 mat_moss(vec2 w, int id) {
-    float cover = smoothstep(matP(id, 0), matP(id, 0) + 0.25, vnoise2(w * 0.1));
-    vec3 stone = vec3(1.0);
-    vec3 moss = vec3(0.55, 0.78, 0.5);
-    vec3 col = mix(stone, moss, cover * matP(id, 3));
-    float fuzz = (h21(floor(w * 40.0)) - 0.5) * 0.05 * cover;
-    return col + fuzz;
+  // 苔藓：石底 + 苔斑——苔区更暗更饱和，色相微偏绿
+  vec3 mat_moss(vec3 f, vec2 w, int id) {
+    float cover = smoothstep(matP(id, 0), matP(id, 0) + 0.25, f.x * 0.5 + 0.5);
+    float fuzz = f.z * 0.05 * cover;
+    return vec3(cover * 0.05, -cover * 0.12 + fuzz, cover * 0.03);
   }
 
   // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================
-  // 不再按 tile id 硬编码分支；uMatFn[id] = 材质注册表函数索引，
-  // 分发链由 MAT_FN_INDEX 自动生成。加材质只在两处登记，不再碰本函数体。
-  vec3 materialBase(vec2 w, int id) {
+  // materialShade 返回 OKLab 偏移 (dC, dL, dH)；无材质 → 零偏移。
+  vec3 materialShade(vec3 f, vec2 w, int id) {
     int fn = uMatFn[id];
 ${MATERIAL_DISPATCH}
-    return vec3(1.0);   // 无材质地块 → 基色 1.0（叠加层提供颜色）
+    return vec3(0.0);
+  }
+
+  // ==================== 收口：基色 + 逐像素偏移 → 线性 RGB ====================
+  // 每个像素拿到自己独立的 OKLab 偏移（非整体统一调色）：
+  //   materialShade 的尺度渐变 + 每地块 hash 抖动族，叠加在作者侧基色上。
+  vec3 oklchShade(vec2 w, int id, vec3 field) {
+    vec3 sh = materialShade(field, w, id);                 // (dC, dL, dH)
+    vec3 LCH = uMatBaseLCH[id].xyz + sh
+             + uMatJitter[id].xyz * ((h21(floor(w)) - 0.5) * 2.0);  // 每地块独立抖动
+    LCH.x = clamp(LCH.x, 0.0, 1.0);                        // L clamp（勿 mod）
+    LCH.y = clamp(LCH.y, 0.0, 0.4);                        // C clamp（感知上限）
+    LCH.z = fract(LCH.z);                                  // H 唯一可环绕
+    vec3 lab = vec3(LCH.x, LCH.y * cos(LCH.z * 6.28318530718),
+                           LCH.y * sin(LCH.z * 6.28318530718));
+    return oklab2linear(lab);                              // → linear 光照管线
   }
 `;
 
@@ -213,8 +269,10 @@ const FRAGMENT_MAIN = /* glsl */ `
           vec3 lm = texture2D(uLightmap, vUv).rgb;      // r=直射 / g=AO
           int id = int(texture2D(uTileIds, vUv).r * 255.0 + 0.5);
 
-          // 材质函数输出相对调制系数 → × 该地块基色（调色板）
-          vec3 base = materialBase(vWorld, id) * uMatBase[id].rgb;
+          // 多尺度空间场 + OKLab 逐像素偏移收口 → 线性 RGB 基色
+          // （无材质地块 uMatBaseLCH=白（L1,C0,H0）→ linear(1,1,1) → ×alb 即 alb）
+          vec3 field = shadeField(vWorld);
+          vec3 base = oklchShade(vWorld, id, field);
 
           // ★ 4×4 地块边界描边（黑色分界线）：块内 UV 距边 → 向近黑混合
           //   （2026-08-29 二调：band 0.035 = 每块边缘 14cm（相邻合拢 ~28cm 细缝），
@@ -258,7 +316,8 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         uAlbedo: { value: albedo },
         uLightmap: { value: lightmap },
         uTileIds: { value: cfg?.tileIds ?? new THREE.DataTexture(new Uint8Array(225), 15, 15) },
-        uMatBase: { value: cfg?.base ?? new Float32Array(MATERIAL_SLOTS * 4) },
+        uMatBaseLCH: { value: cfg?.base ?? new Float32Array(MATERIAL_SLOTS * 4) },
+        uMatJitter: { value: cfg?.jitter ?? new Float32Array(MATERIAL_SLOTS * 4) },
         uMatSurface: { value: cfg?.surface ?? new Float32Array(MATERIAL_SLOTS * 4) },
         uMatEmissive: { value: cfg?.emissive ?? new Float32Array(MATERIAL_SLOTS * 4) },
         uMatFn: { value: cfg?.fn ?? new Int32Array(MATERIAL_SLOTS).fill(-1) },
