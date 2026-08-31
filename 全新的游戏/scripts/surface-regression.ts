@@ -759,12 +759,12 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
     }
     expectH("[H] weld 背墙墙顶=crest", maxTop, 4);
   }
-  // ④ 坡侧裙墙（防御机制，2026-08-31）：低块(7,0)(ground) 有 +x 坡（向高块
-  //    8,0 平台 weld，可插值类型对）→ 其 +z 侧相邻是平地块(7,1)(ground，无坡、
+  // ④ 坡侧裙墙（防御机制，2026-08-31）：低块(1,0)(ground) 有 +x 坡（向高块
+  //    2,0 平台 weld，可插值类型对）→ 其 +z 侧相邻是平地块(1,1)(ground，无坡、
   //    不抬高) → 视觉面有落差 → 发坡侧裙墙（此前缺失：坡侧露斜草皮/看穿）。
-  //    背墙仍发（高侧 crest）。
+  //    背墙仍发（高侧 crest）。块取原点附近以确保坡带落进 chunk(0,0) 视野。
   {
-    const isHigh = (bx: number, bz: number) => bx >= 8 && bz === 0;
+    const isHigh = (bx: number, bz: number) => bx >= 2 && bz === 0;
     const src: BlockSource = {
       blockAt: (bx, bz): BlockInfo | undefined => ({
         id: isHigh(bx, bz) ? 92 : 0, // 平台 vs 平地（可插值）
@@ -772,7 +772,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
       }),
       edgeFinal: (bx, bz, dir) =>
         bz === 0 &&
-        ((bx === 7 && dir === 0) || (bx === 8 && dir === 1))
+        ((bx === 1 && dir === 0) || (bx === 2 && dir === 1))
           ? "weld"
           : undefined,
     };
@@ -781,7 +781,8 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
     const verts = buf.vertices;
     let skirt = 0;
     let backing = 0;
-    // 每条墙 quad = 4 顶点（tri 对）：v0,v1 顶部、v2,v3 底部
+    // 墙是竖直平面：背墙 = x 面（常量 x，x0≈x1，跨 z，顶 = crest ≈ 4）；
+    // 裙墙 = z 面（常量 z，z0≈z1，跨 x，顶随坡 0<top≤4）。
     for (let t = 0; t < idx.length; t += 6) {
       const i0 = idx[t];
       const i1 = idx[t + 1];
@@ -792,10 +793,8 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
       const z1 = verts[i1 * 3 + 2];
       const top0 = verts[i0 * 3 + 1];
       void i2;
-      // 背墙：x 方向（z 恒定），顶 = crest 4
-      if (Math.abs(z0 - z1) < 0.01 && top0 > 3.9) backing++;
-      // 裙墙：z 方向（x 恒定），顶高于平地 0（但 ≤ 4）
-      if (Math.abs(x0 - x1) < 0.01 && top0 > 0.01 && top0 <= 3.9) skirt++;
+      if (Math.abs(x0 - x1) < 0.01 && top0 > 3.9) backing++;
+      if (Math.abs(z0 - z1) < 0.01 && top0 > 0.01 && top0 <= 3.9) skirt++;
     }
     expectH("[H] weld 背墙仍在", backing > 0, true);
     expectH("[H] 坡侧裙墙已发（此前缺失）", skirt > 0, true);
