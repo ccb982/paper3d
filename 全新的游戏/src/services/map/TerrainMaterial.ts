@@ -167,7 +167,7 @@ const MATERIAL_GLSL = /* glsl */ `
     float peb = h21(c + vec2(17.7, 3.3)) < matP(id, 1) ? -0.05 : 0.0;
     float dL = patchv + midv + grain + peb;
     float dC = f.y * 0.004;
-    float reflect = 1.0 + patchv * 0.10 + grain * 0.05;
+    float reflect = 1.0 + patchv * 0.40 + midv * 0.25 + grain * 0.12;
     return vec4(dL, dC, 0.0, reflect);
   }
 
@@ -182,7 +182,7 @@ const MATERIAL_GLSL = /* glsl */ `
     float grout = (l.x > 1.0 - matP(id, 0) || l.y > 1.0 - matP(id, 0)) ? -0.30 : 0.0;
     float dL = jit + variant + broken + grout + f.y * 0.05;
     float dH = h21(cell + vec2(29.3, 0.0)) < matP(id, 2) ? 0.02 : 0.0;
-    float reflect = 1.0 + jit * 0.08 + grout * 0.06;
+    float reflect = 1.0 + jit * 0.30 + grout * 0.20 + f.y * 0.25;
     return vec4(dL, f.y * 0.003, dH, reflect);
   }
 
@@ -196,7 +196,7 @@ const MATERIAL_GLSL = /* glsl */ `
     float blade = f.y * 0.06;
     float dL = patchv + grain + tuftDark + tuftHi + blade;
     float dC = patchv * 0.2 + f.y * 0.006;
-    float reflect = 1.0 + patchv * 0.12 + (tuftHi - tuftDark) * 0.06 + blade * 0.03;
+    float reflect = 1.0 + patchv * 0.40 + (tuftHi - tuftDark) * 0.20 + blade * 0.10;
     return vec4(dL, dC, f.y * 0.004, reflect);
   }
 
@@ -214,7 +214,7 @@ const MATERIAL_GLSL = /* glsl */ `
     }
     float dL = seam + jit + grain + nail;
     float dH = (h21(vec2(plk, 7.7)) - 0.5) * 0.03;
-    float reflect = 1.0 + jit * 0.08 + grain * 0.04;
+    float reflect = 1.0 + jit * 0.30 + grain * 0.16 + seam * 0.08;
     return vec4(dL, f.y * 0.004, dH, reflect);
   }
 
@@ -227,7 +227,7 @@ const MATERIAL_GLSL = /* glsl */ `
     // ★ 浅色噪点：grain 只加亮（不产生黑板颗粒），幅度减半
     float grain = max(f.z, 0.0) * matP(id, 3) * 0.6;
     float dL = strata + streak + crack + grain;
-    float reflect = 1.0 + strata * 0.08 + streak * 0.05 + grain * 0.04;
+    float reflect = 1.0 + strata * 0.30 + streak * 0.20 + grain * 0.10 + crack * 0.08;
     return vec4(dL, f.y * 0.002, 0.0, reflect);
   }
 
@@ -235,7 +235,7 @@ const MATERIAL_GLSL = /* glsl */ `
   vec4 mat_moss(vec3 f, vec2 w, int id) {
     float cover = smoothstep(matP(id, 0), matP(id, 0) + 0.25, f.x * 0.5 + 0.5);
     float fuzz = f.z * 0.05 * cover;
-    float reflect = 1.0 + cover * 0.10 + fuzz * 0.04;
+    float reflect = 1.0 + cover * 0.35 + fuzz * 0.12;
     return vec4(-cover * 0.12 + fuzz, cover * 0.05, cover * 0.03, reflect);
   }
 
@@ -281,6 +281,8 @@ const FRAGMENT_MAIN = /* glsl */ `
         uniform sampler2D uAlbedo;
         uniform sampler2D uLightmap;
         uniform vec3 uSunDir;
+        uniform vec2 uSunSide;
+        uniform float uSunDay;
         uniform vec3 uAmbientColor;
         uniform vec3 uSunColor;
         varying vec2 vUv;
@@ -329,11 +331,18 @@ const FRAGMENT_MAIN = /* glsl */ `
           if (emis > 0.001) {
             lit += uMatEmissive[id].rgb * emis * (0.92 + 0.08 * h21(vUv * 512.0));
           }
-          // ---- LOD 高台发光（动态）：近距离微光，远距离消失（subsurface/湿面感） ----
+          // ---- LOD 高台发光（实时渲染层）：距离 + 镜头掠射角 + 太阳方位分层 ----
+          //   纯几何，无 per-pixel 法线/sun 计算（uSunSide 每帧 JS 算一次；避免重复光照）
           float lodE = uMatLODEmissive[id];
           if (lodE > 0.001) {
-            float dist = distance(cameraPosition, vec3(vWorld.x, 0.0, vWorld.y));
-            float lodFactor = smoothstep(30.0, 6.0, dist);   // 30m外=0，6m内=1
+            float dist  = length(cameraPosition - vec3(vWorld.x, 0.0, vWorld.y));
+            float zoneX = length(cameraPosition.xz - vWorld);         // 水平分量（省法线）
+            float glance = 0.3 + 0.7 * clamp(zoneX / max(dist, 0.001), 0.0, 1.0); // 掠射增强
+            // 太阳方位分层：地面→相机水平方向 · 水平太阳方向（uSunSide 每帧一次）
+            vec2 toCam = cameraPosition.xz - vWorld;
+            float toCamL = max(length(toCam), 1e-4);
+            float sunLayer = 0.6 + 0.4 * dot(toCam / toCamL, uSunSide) * uSunDay; // 朝向太阳侧亮
+            float lodFactor = smoothstep(30.0, 6.0, dist) * glance * sunLayer;
             lit += base * lodE * lodFactor;
           }
 
@@ -359,6 +368,8 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         uMatParams: { value: cfg?.params ?? new Float32Array(MATERIAL_SLOTS * 16) },
         uMatLODEmissive: { value: cfg?.lodEmissive ?? new Float32Array(MATERIAL_SLOTS) },
         uSunDir: { value: new THREE.Vector3(-0.342, 1.0, 0.940).normalize() },
+        uSunSide: { value: new THREE.Vector2(-0.342, 0.940).normalize() },
+        uSunDay: { value: 1 },
         uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(TERRAIN_LIGHT_TUNING.ambientDayIntensity) },
         uSunColor: { value: new THREE.Color(0xfff3e0).multiplyScalar(TERRAIN_LIGHT_TUNING.sunIntensity) },
       }),
@@ -393,6 +404,7 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
  * @param sun 太阳状态（renderManager.querySun 同源）
  */
 export function updateTerrainLighting(sun: {
+  dir: { x: number; y: number; z: number };
   color: number;
   intensityScale: number;
   daylight: number;
@@ -401,9 +413,15 @@ export function updateTerrainLighting(sun: {
   const ambHex = nightLerpHex(T.ambientNight, T.ambientDay, sun.daylight);
   const ambI = T.ambientNightIntensity +
     (T.ambientDayIntensity - T.ambientNightIntensity) * sun.daylight;
+  // ★ 水平太阳方向（实时层：每帧算一次，喂给 LOD 方位分层；避免 per-pixel 重复计算）
+  const hxz = Math.hypot(sun.dir.x, sun.dir.z) || 1;
+  const sunSide = new THREE.Vector2(sun.dir.x / hxz, sun.dir.z / hxz);
   for (const m of registry) {
     m.uniforms.uAmbientColor.value.setHex(ambHex).multiplyScalar(ambI);
     m.uniforms.uSunColor.value.setHex(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
+    m.uniforms.uSunDir.value.set(sun.dir.x, sun.dir.y, sun.dir.z);
+    m.uniforms.uSunSide.value.copy(sunSide);
+    m.uniforms.uSunDay.value = sun.daylight;
   }
 }
 
