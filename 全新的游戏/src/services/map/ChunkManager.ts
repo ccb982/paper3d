@@ -481,8 +481,11 @@ export class ChunkManager {
       phys.indices,
     );
 
-    // ---- ★ 装饰物碰撞体：必须在 replaceChunk 之后创建 ----
-    if (propLayer) this.createDecorColliders(cx, cz, decor);
+    // ---- ★ 装饰物碰撞体（独立阶段：地形快照后补装饰物理，不依赖视觉层）----
+    // 必须在 replaceChunk 之后创建（replaceChunk 会销毁旧 propBodies）。
+    // 不再被 if(propLayer) 门控——物理的存在性不与"网格是否生成"绑定，
+    // 避免渲染层偶发失败时装饰碰撞连同静默丢失（角色能穿、子弹不能）。
+    this.createDecorColliders(cx, cz, decor);
   }
 
 
@@ -547,7 +550,8 @@ export class ChunkManager {
     const propLayer = this.buildDecorLayer(cx, cz, decor);
     if (propLayer) b.group.add(propLayer);
     this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
-    if (propLayer) this.createDecorColliders(cx, cz, decor);
+    // ★ 装饰物碰撞体独立阶段（地形后补，不依赖视觉层）——同上解耦逻辑
+    this.createDecorColliders(cx, cz, decor);
   }
 
   /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
