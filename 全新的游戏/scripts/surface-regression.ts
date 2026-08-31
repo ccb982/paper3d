@@ -374,6 +374,28 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
                 dFails++;
               }
             }
+            // ★ 贴地/物理采样 = 视觉网格形状（2026-08-31 修正）：
+            //   sampleSurface @ 面内分点 == 本米格四角 cornerCell 三角形插值。
+            //   want = [h00,h10,h11,h01]；剖分对角线 c01—c10（idx 3—1）。
+            for (const [fx, fz] of [
+              [0.25, 0.25],
+              [0.5, 0.5],
+              [0.75, 0.6],
+              [0.3, 0.8],
+            ]) {
+              const tri =
+                fx + fz <= 1
+                  ? want[0] * (1 - fx - fz) + want[3] * fz + want[1] * fx
+                  : want[2] * (fx + fz - 1) + want[3] * (1 - fx) + want[1] * (1 - fz);
+              const gotS = sampleSurface(src, wx + fx, wz + fz);
+              if (Math.abs(gotS - tri) > 1e-6) {
+                if (dFails < 8)
+                  console.error(
+                    `[D] 物理≠视觉 seed=${seed} (${(wx + fx).toFixed(2)},${(wz + fz).toFixed(2)}) sample=${gotS} mesh=${tri}`,
+                  );
+                dFails++;
+              }
+            }
             vi += 4;
           }
         }

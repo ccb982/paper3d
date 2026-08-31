@@ -399,14 +399,29 @@ export function cornerCell(
 }
 
 /**
- * ★ 贴地采样（V 自身所属块视角）。
- * = surfaceHeightCore(src, floor(x/4), floor(z/4), x, z)。
- * 贴地/碰撞需单值（无撕裂）→ 取 V 所在块视角的高度。
+ * ★ 贴地/物理采样 —— 以【视觉网格形状】为准（2026-08-31 修正）。
+ * 查询点所在米格的 4 角按【块归属】(cell 所属块) 经 cornerCell 取高，
+ * 再做三角形插值 —— 与 buildChunkFinal 顶面网格逐位一致（渲染 = 查询同源）。
+ * 对角剖分与网格相同：对角线 (gx,gz+1)-(gx+1,gz)，fx+fz≤1 取 T1。
+ *  ★ 不用双线性（非平面米格偏差可达米级 → 角色悬浮/影子切入地形）。
+ *  ★ 不用 surfaceHeightCore 解析面（max-over-edges 与网格剖面分叉，
+ *    在坡底部 / 角上部造成物理与视觉不统一；旧公式逐位对齐网格）。
  */
 export function sampleSurface(src: BlockSource, x: number, z: number): number {
-  const bx = Math.floor(x / 4);
-  const bz = Math.floor(z / 4);
-  return surfaceHeightCore(src, bx, bz, x, z);
+  const gx = Math.floor(x);
+  const gz = Math.floor(z);
+  const fx = x - gx;
+  const fz = z - gz;
+  const bcx = Math.floor(gx / 4);
+  const bcz = Math.floor(gz / 4);
+  const h00 = cornerCell(src, bcx, bcz, gx, gz);
+  const h10 = cornerCell(src, bcx, bcz, gx + 1, gz);
+  const h01 = cornerCell(src, bcx, bcz, gx, gz + 1);
+  const h11 = cornerCell(src, bcx, bcz, gx + 1, gz + 1);
+  if (fx + fz <= 1) {
+    return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
+  }
+  return h11 * (fx + fz - 1) + h01 * (1 - fx) + h10 * (1 - fz);
 }
 
 // ============================================================
