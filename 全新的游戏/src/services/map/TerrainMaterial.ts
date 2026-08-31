@@ -93,6 +93,8 @@ export interface TileRenderConfig {
   emissive: Float32Array;
   /** float×N×16：材质图案参数（id*16 + i） */
   params: Float32Array;
+  /** float×N：LOD 高台发光强度（0=无；>0=近距离发光） */
+  lodEmissive: Float32Array;
   /** int×N：每 tile id 的材质函数索引（uMatFn；-1 = 无材质） */
   fn: Int32Array;
 }
@@ -106,6 +108,7 @@ const MATERIAL_GLSL = /* glsl */ `
   uniform vec4 uMatEmissive[${MATERIAL_SLOTS}];
   uniform int uMatFn[${MATERIAL_SLOTS}];
   uniform float uMatParams[${MATERIAL_SLOTS * 16}];
+  uniform float uMatLODEmissive[${MATERIAL_SLOTS}];
 
   // ==================== 噪声基座（纯视觉，无需与 JS hash2 对齐） ====================
   float h21(vec2 p) {
@@ -150,12 +153,13 @@ const MATERIAL_GLSL = /* glsl */ `
        h21(floor(w * 30.0)) - 0.5);
   }
 
-  // ==================== 材质函数（返回 OKLab 偏移 vec3(dL, dC, dH)） ====================
+  // ==================== 材质函数（返回 vec4(dL, dC, dH, reflect)） ====================
   // f = (patch, mid, grain)；w = 世界坐标；id = tile id。
-  // 返回顺序匹配 LCH 的 xyz：(L=明暗, C=饱和度, H=色相)——各尺度各自独立。
+  // xyz 匹配 LCH：(L=明暗, C=饱和度, H=色相)。
+  // w = 反光层乘数（1.0=无变化；0.85~1.15 范围，多尺度亮度层次）。
 
   // 纯泥土地面：全尺度明暗颗粒，饱和度只走中频（成片浓淡），色相克制
-  vec3 mat_dirt(vec3 f, vec2 w, int id) {
+  vec4 mat_dirt(vec3 f, vec2 w, int id) {
     float grain = (h21(floor(w * 80.0)) - 0.5) * matP(id, 0);
     float patchv = f.x * matP(id, 3) * 0.5;
     float midv = f.y * matP(id, 2) * 0.35;
@@ -163,11 +167,12 @@ const MATERIAL_GLSL = /* glsl */ `
     float peb = h21(c + vec2(17.7, 3.3)) < matP(id, 1) ? -0.05 : 0.0;
     float dL = patchv + midv + grain + peb;
     float dC = f.y * 0.004;
-    return vec3(dL, dC, 0.0);
+    float reflect = 1.0 + patchv * 0.10 + grain * 0.05;
+    return vec4(dL, dC, 0.0, reflect);
   }
 
   // 砖石路面：每砖独立明暗 + 灰缝 + 变体，色相随旧砖微偏黄
-  vec3 mat_brick(vec3 f, vec2 w, int id) {
+  vec4 mat_brick(vec3 f, vec2 w, int id) {
     vec2 cell = floor(w / 1.0);
     vec2 l = fract(w / 1.0);
     l.x = fract(l.x + h21(cell + vec2(3.1, 0.0)) * 0.5);   // 交错错位
@@ -177,11 +182,12 @@ const MATERIAL_GLSL = /* glsl */ `
     float grout = (l.x > 1.0 - matP(id, 0) || l.y > 1.0 - matP(id, 0)) ? -0.30 : 0.0;
     float dL = jit + variant + broken + grout + f.y * 0.05;
     float dH = h21(cell + vec2(29.3, 0.0)) < matP(id, 2) ? 0.02 : 0.0;
-    return vec3(dL, f.y * 0.003, dH);
+    float reflect = 1.0 + jit * 0.08 + grout * 0.06;
+    return vec4(dL, f.y * 0.003, dH, reflect);
   }
 
   // 草地路面：大尺度明暗斑块为主，饱和度随 patch 浓淡，草簇/草尖局部
-  vec3 mat_grass(vec3 f, vec2 w, int id) {
+  vec4 mat_grass(vec3 f, vec2 w, int id) {
     float patchv = f.x * matP(id, 0) * 0.6;
     float grain = f.z * matP(id, 3) * 1.5;
     vec2 c = floor(w * 2.2);
@@ -190,11 +196,12 @@ const MATERIAL_GLSL = /* glsl */ `
     float blade = f.y * 0.06;
     float dL = patchv + grain + tuftDark + tuftHi + blade;
     float dC = patchv * 0.2 + f.y * 0.006;
-    return vec3(dL, dC, f.y * 0.004);
+    float reflect = 1.0 + patchv * 0.12 + (tuftHi - tuftDark) * 0.06 + blade * 0.03;
+    return vec4(dL, dC, f.y * 0.004, reflect);
   }
 
   // 木板路面：板缝 + 每板抖动 + 木纹（中频），色相随新旧板微偏
-  vec3 mat_wood(vec3 f, vec2 w, int id) {
+  vec4 mat_wood(vec3 f, vec2 w, int id) {
     float plk = floor(w.y / 0.6);
     float seam = fract(w.y / 0.6) < 0.02 ? -0.30 : 0.0;
     float jit = (h21(vec2(plk, 7.7)) - 0.5) * matP(id, 2);
@@ -207,48 +214,65 @@ const MATERIAL_GLSL = /* glsl */ `
     }
     float dL = seam + jit + grain + nail;
     float dH = (h21(vec2(plk, 7.7)) - 0.5) * 0.03;
-    return vec3(dL, f.y * 0.004, dH);
+    float reflect = 1.0 + jit * 0.08 + grain * 0.04;
+    return vec4(dL, f.y * 0.004, dH, reflect);
   }
 
   // 岩石：中频分层岩理 + 方向拉丝 + 粗裂纹，色相克制
-  vec3 mat_rock(vec3 f, vec2 w, int id) {
-    float strata = f.y * matP(id, 0) * 0.8;
-    float streak = (vnoise2(vec2(w.x * 0.3, w.y * 0.05)) - 0.5) * matP(id, 1) * 0.6;
+  vec4 mat_rock(vec3 f, vec2 w, int id) {
+    float strata = f.y * matP(id, 0) * 0.6;
+    float streak = (vnoise2(vec2(w.x * 0.3, w.y * 0.05)) - 0.5) * matP(id, 1) * 0.5;
     vec2 c = floor(w * 0.8);
-    float crack = h21(c + vec2(19.3, 8.8)) < matP(id, 2) ? -0.15 : 0.0;
-    float grain = f.z * 0.08;
+    float crack = h21(c + vec2(19.3, 8.8)) < matP(id, 2) ? -0.10 : 0.0;
+    // ★ 浅色噪点：grain 只加亮（不产生黑板颗粒），幅度减半
+    float grain = max(f.z, 0.0) * matP(id, 3) * 0.6;
     float dL = strata + streak + crack + grain;
-    return vec3(dL, f.y * 0.002, 0.0);
+    float reflect = 1.0 + strata * 0.08 + streak * 0.05 + grain * 0.04;
+    return vec4(dL, f.y * 0.002, 0.0, reflect);
   }
 
   // 苔藓：石底 + 苔斑——苔区更暗更饱和，色相微偏绿
-  vec3 mat_moss(vec3 f, vec2 w, int id) {
+  vec4 mat_moss(vec3 f, vec2 w, int id) {
     float cover = smoothstep(matP(id, 0), matP(id, 0) + 0.25, f.x * 0.5 + 0.5);
     float fuzz = f.z * 0.05 * cover;
-    return vec3(-cover * 0.12 + fuzz, cover * 0.05, cover * 0.03);
+    float reflect = 1.0 + cover * 0.10 + fuzz * 0.04;
+    return vec4(-cover * 0.12 + fuzz, cover * 0.05, cover * 0.03, reflect);
   }
 
   // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================
-  // materialShade 返回 OKLab 偏移 (dL, dC, dH)；无材质 → 零偏移。
-  vec3 materialShade(vec3 f, vec2 w, int id) {
+  // materialShade 返回 vec4(dL, dC, dH, reflect)；无材质 → 零偏移 + reflect=1.0。
+  vec4 materialShade(vec3 f, vec2 w, int id) {
     int fn = uMatFn[id];
 ${MATERIAL_DISPATCH}
-    return vec3(0.0);
+    return vec4(0.0, 0.0, 0.0, 1.0);
   }
 
-  // ==================== 收口：基色 + 逐像素偏移 → 线性 RGB ====================
-  // 每个像素拿到自己独立的 OKLab 偏移（非整体统一调色）：
-  //   materialShade 的尺度渐变 + 每地块 hash 抖动族，叠加在作者侧基色上。
+  // ==================== 收口：基色 + 逐像素偏移 + 反光层 → 线性 RGB ====================
+  // 每个像素拿到自己独立的 OKLab 偏移（非整体统一调色）+ 反光层乘数：
+  //   materialShade 的尺度渐变 + 每地块 hash 抖动族 + 反光层，叠加在作者侧基色上。
   vec3 oklchShade(vec2 w, int id, vec3 field) {
-    vec3 sh = materialShade(field, w, id);                 // (dL, dC, dH)
-    vec3 LCH = uMatBaseLCH[id].xyz + sh
+    vec4 sh = materialShade(field, w, id);                // (dL, dC, dH, reflect)
+    vec3 LCH = uMatBaseLCH[id].xyz + sh.xyz
              + uMatJitter[id].xyz * ((h21(floor(w)) - 0.5) * 2.0);  // 每地块独立抖动
     LCH.x = clamp(LCH.x, 0.0, 1.0);                        // L clamp（勿 mod）
     LCH.y = clamp(LCH.y, 0.0, 0.4);                        // C clamp（感知上限）
     LCH.z = fract(LCH.z);                                  // H 唯一可环绕
     vec3 lab = vec3(LCH.x, LCH.y * cos(LCH.z * 6.28318530718),
                            LCH.y * sin(LCH.z * 6.28318530718));
-    return oklab2linear(lab);                              // → linear 光照管线
+    vec3 base = oklab2linear(lab);                         // → linear 光照管线
+    return base * sh.w;                                   // × 反光层乘数（多尺度亮度层次）
+  }
+
+  // ==================== 伪 PBR：零额外噪声采样（从 shadeField 衍生） ====================
+  // 伪法线：grain 有限差分 → 微阴影/微高光（2次 h21，极轻量）
+  vec3 pseudoNormal(vec2 w) {
+    float eps = 0.066;  // ~2格（grain 频率30，格宽 0.033m）
+    float gC = h21(floor(w * 30.0));
+    float gR = h21(floor((w + vec2(eps, 0.0)) * 30.0));
+    float gU = h21(floor((w + vec2(0.0, eps)) * 30.0));
+    float dhdx = (gR - gC) / eps;
+    float dhdz = (gU - gC) / eps;
+    return normalize(vec3(-dhdx * 0.4, 1.0, -dhdz * 0.4));
   }
 `;
 
@@ -281,16 +305,21 @@ const FRAGMENT_MAIN = /* glsl */ `
           float edge = 1.0 - smoothstep(0.0, 0.010, dEdge);
           base = mix(base, vec3(0.02), edge * uMatSurface[id].w);
 
-          vec3 lit = base * alb * (uAmbientColor * lm.g + uSunColor * lm.r);
+          // 伪 AO：大尺度斑块暗谷（patch 负值 = 谷地 = 变暗；0.4~1.0）
+          float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
 
-          // ---- 表面属性（材质）：镜面 / 菲涅尔 / 自发光 ----
-          vec3 N = vec3(0.0, 1.0, 0.0);
+          vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * lm.r);
+
+          // ---- 表面属性（伪 PBR：法线扰动 + 粗糙度调制） ----
+          vec3 N = pseudoNormal(vWorld);                   // 微阴影/微高光
+          float rough = uMatBaseLCH[id].w + field.z * 0.15;  // 材质基础 + grain 调制
           vec3 V = normalize(cameraPosition - vec3(vWorld.x, 0.0, vWorld.y));
           vec3 L = normalize(uSunDir);
           float spec = uMatSurface[id].x;
           if (spec > 0.001) {
             vec3 H = normalize(L + V);
-            lit += uSunColor * spec * pow(max(dot(N, H), 0.0), 24.0);
+            float power = mix(48.0, 8.0, rough);          // 粗糙→模糊高光，光滑→锐利
+            lit += uSunColor * spec * pow(max(dot(N, H), 0.0), power);
           }
           float fres = uMatSurface[id].y;
           if (fres > 0.001) {
@@ -299,6 +328,13 @@ const FRAGMENT_MAIN = /* glsl */ `
           float emis = uMatSurface[id].z;
           if (emis > 0.001) {
             lit += uMatEmissive[id].rgb * emis * (0.92 + 0.08 * h21(vUv * 512.0));
+          }
+          // ---- LOD 高台发光（动态）：近距离微光，远距离消失（subsurface/湿面感） ----
+          float lodE = uMatLODEmissive[id];
+          if (lodE > 0.001) {
+            float dist = distance(cameraPosition, vec3(vWorld.x, 0.0, vWorld.y));
+            float lodFactor = smoothstep(30.0, 6.0, dist);   // 30m外=0，6m内=1
+            lit += base * lodE * lodFactor;
           }
 
           gl_FragColor = vec4(lit, 1.0);
@@ -321,6 +357,7 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         uMatEmissive: { value: cfg?.emissive ?? new Float32Array(MATERIAL_SLOTS * 4) },
         uMatFn: { value: cfg?.fn ?? new Int32Array(MATERIAL_SLOTS).fill(-1) },
         uMatParams: { value: cfg?.params ?? new Float32Array(MATERIAL_SLOTS * 16) },
+        uMatLODEmissive: { value: cfg?.lodEmissive ?? new Float32Array(MATERIAL_SLOTS) },
         uSunDir: { value: new THREE.Vector3(-0.342, 1.0, 0.940).normalize() },
         uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(TERRAIN_LIGHT_TUNING.ambientDayIntensity) },
         uSunColor: { value: new THREE.Color(0xfff3e0).multiplyScalar(TERRAIN_LIGHT_TUNING.sunIntensity) },

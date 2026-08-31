@@ -638,6 +638,7 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
   const surface = new Float32Array(MATERIAL_SLOTS * 4);
   const emissive = new Float32Array(MATERIAL_SLOTS * 4);
   const params = new Float32Array(MATERIAL_SLOTS * 16);
+  const lodEmissive = new Float32Array(MATERIAL_SLOTS);
 
    for (let id = 0; id < MATERIAL_SLOTS; id++) {
      const td = tileById(id);
@@ -699,7 +700,10 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
   for (let id = 0; id < MATERIAL_SLOTS; id++) {
     const td = tileById(id);
     fn[id] = td.visual.material ? materialFnIndex(td.visual.material.fnId) : -1;
+    // ★ LOD 高台发光强度（材质模板声明；无材质机构地块 = 0）
+    const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
+    lodEmissive[id] = mat?.lodEmissive ?? 0;
   }
 
-  return { tileIds, base, jitter, surface, emissive, params, fn };
+  return { tileIds, base, jitter, surface, emissive, params, lodEmissive, fn };
 }
