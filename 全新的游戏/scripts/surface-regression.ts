@@ -42,6 +42,7 @@ import {
   baseHeightOf,
   cornerCell,
   interpCorner,
+  collectCornerCandidates,
   rampProfile,
   buildChunkWallBuffers,
   type BlockSource,
@@ -490,19 +491,21 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
   }
 
   // ③ weld 边连续（不变式 §2.3：共享 weld 边两侧沿整边【中段】零落差）；
-  //    端点（块角）允许撕裂（§3.5：端面墙收口，不承诺零落差）
+  //    端点（块角）允许撕裂（§3.5：端面墙收口，不承诺零落差）。
+  //    ★ 2026-08-31 后修正：插值 = 硬边界后修正，同类型对永不插值（V2）。
+  //      要产生实际坡带，焊缝必须落在【可插值类型对】上 → 用 plat(high)↔flat(low)。
   {
     // 边 (0,0)~(1,0) 显式钉死 weld（两侧成对，weld 对称裁决）；
-    // 低侧 (0,0) 顶沿边拉向高侧；铺满周围块（含 z±1 边缘），保证
+    // 低侧 (0,0) 顶沿边向高侧攀爬；铺满周围块（含 z±1 边缘），保证
     // cornerCell/interpCorner 无缺块干扰
     const src = weldFixture(
       {
         "0,0": flat(0),
-        "1,0": flat(0.6),
+        "1,0": plat(0.6),
         "0,1": flat(0),
-        "1,1": flat(0.6),
+        "1,1": plat(0.6),
         "0,-1": flat(0),
-        "1,-1": flat(0.6),
+        "1,-1": plat(0.6),
       },
       (bx, bz, dir) =>
         (bx === 0 && bz === 0 && dir === 0) ||
@@ -546,7 +549,13 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
       },
       () => "weld",
     );
-    const vH = interpCorner(src, 4, 4);
+    // 候选由控制函数 surfaceHeightCore 收集（collectCornerCandidates）传入
+    const vH = interpCorner(
+      src,
+      4,
+      4,
+      collectCornerCandidates(src, 4, 4),
+    )!;
     expectNum("[F] 全weld角 00", cornerCell(src, 0, 0, 4, 4), vH);
     expectNum("[F] 全weld角 10", cornerCell(src, 1, 0, 4, 4), vH);
     expectNum("[F] 全weld角 01", cornerCell(src, 0, 1, 4, 4), vH);
