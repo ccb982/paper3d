@@ -52,13 +52,13 @@ export type EdgeRuling = "weld" | "cliff";
 export const EDGE_CLIFF_BAND = 0.35;
 
 /**
- * ★ weld 斜坡带宽（整 cell 列数，默认 2m）。可配层级（由粗到细）：
+ * ★ weld 斜坡带宽（米，默认 = 块宽 1/3）。可配层级（由粗到细）：
  *   WELD_RAMP_CELLS（本常量） → TileDef.physics.edgePolicy（语义不变） →
  *   planRefinements 逐边 EdgeOverride.rampWidth（优先）。
- * 约束：w 必须能整除块宽（4 / w ∈ 整数）→ 只允许 1/2/4。
- * 坡面在此按 w 排 cell 线性摊平（有意简化，见《重构设计》§2.2/§3.3）。
+ * 取块宽 1/3：对向两条 weld 坡各自占 1/3，中间留 1/3 平地（坡+平地+坡），
+ * 两坡不重叠 → 无 V/U 凹谷；且边与角用同一梯度（角=两坡平面汇合引致 crest）。
  */
-export const WELD_RAMP_CELLS = 2;
+export const WELD_RAMP_CELLS = BLOCK_SIZE / 3;
 
 // ============================================================
 // 块数据源（唯一抽象面：世界块坐标 → 块信息）
@@ -242,12 +242,12 @@ export function finalRuling(
  */
 
 // ============================================================
-// ★ 视觉面几何：硬边界基础 + 边/角插值后修正（§4）
-//   架构：《地图架构.md》§4（2026-08-31 后修正细化）
+// ★ 视觉面几何：硬边界基础 + 边插值后修正（§4）
+//   架构：《地图架构.md》§4（2026-08-31 后修正+角边融合）
 //   插值 = 硬边界流水线完成后的后修正；一次只处理一个边/一个点。
-//   唯一控制函数 surfaceHeightCore 编排一切（决定哪些边/角进入插值、
-//   收集跨地块的 weld 边 crest 与 open 块、传给角插值），
-//   interpEdge/interpCorner 是最小化纯函数（只算本边/本角、只对候选取 max）。
+//   唯一控制函数 surfaceHeightCore 编排一切（决定哪些边进入插值、max 合成）。
+//   interpEdge 是最小化纯函数（只算本边、只对本点取剖面）。
+//   角点 = 两条触及 weld 边在 t=0 的 crest 自然汇合（边角同坡，无独立平顶）。
 // ============================================================
 
 /**
@@ -347,100 +347,21 @@ export function interpEdge(
 }
 
 /**
- * ★ 角点 V 是否是一个「网格格点角」（x 与 z 都是 4m 块边界）。
- * 只有格点角才有「触及的多块」含义（open 块 / weld 边汇合）；非格点角
- * （边内点 / 块内点）interpCorner 不产生候选 → 落回硬边界。
- */
-function isGridCorner(x: number, z: number): boolean {
-  return x % 4 === 0 && z % 4 === 0;
-}
-
-/** 角插值候选集（open 块高度 ∪ weld 边 crest） */
-export interface CornerCandidates {
-  /** 触及 V、在 V 处「两条边都非 cliff」的块高度（其顶面连续到 V） */
-  openBlockHeights: number[];
-  /** 触及 V、裁决 weld 且类型对可插值的边 crest = max(h(a), h(b)) */
-  weldEdgeCrests: number[];
-}
-
-/**
- * ★ 角插值候选收集（跨地块的边，由控制函数 surfaceHeightCore 调用——控制
- * 函数在这里「帮助」角插值：决定哪些块/边进入候选，收集后传给 interpCorner）。
- * 在格点角 V 处，收集触及 V 的【open 块高度】与【weld 边 crest】。
- * 非格点角 → 空候选。
- */
-export function collectCornerCandidates(
-  src: BlockSource,
-  x: number,
-  z: number,
-): CornerCandidates {
-  const out: CornerCandidates = {
-    openBlockHeights: [],
-    weldEdgeCrests: [],
-  };
-  if (!isGridCorner(x, z)) return out;
-  const gx = x / 4,
-    gz = z / 4;
-  // 触及 V 的四块：V 是其 (gx,gz) 格点角；四块坐标为周边四象限
-  const corners: Array<[number, number]> = [
-    [gx - 1, gz - 1], // 西南块：V 是其东北角
-    [gx, gz - 1], // 东南块：V 是其西北角
-    [gx - 1, gz], // 西北块：V 是其东南角
-    [gx, gz], // 东北块：V 是其西南角
-  ];
-  for (const [cbx, cbz] of corners) {
-    const b = src.blockAt(cbx, cbz) ?? MISSING_BLOCK;
-    // V 在该块 (cbx,cbz) 是哪个角？由 gx,gz 与 cbx,cbz 的关系决定：
-    //   - 若 cbx===gx-1 => V 是该块右边界（x 朝大）；cbx===gx => 左边界
-    //   - 若 cbz===gz-1 => V 是该块上边界（z 朝大）；cbz===gz => 下边界
-    const dirX: 0 | 1 = cbx === gx - 1 ? 0 : 1;
-    const dirZ: 2 | 3 = cbz === gz - 1 ? 2 : 3;
-    // open 块：两条触及边都不是 cliff
-    const cliffX = finalRuling(src, cbx, cbz, dirX) === "cliff";
-    const cliffZ = finalRuling(src, cbx, cbz, dirZ) === "cliff";
-    if (!cliffX && !cliffZ) out.openBlockHeights.push(b.h);
-    // weld 边 crest（跨地块边，类型对可插值才计）
-    for (const d of [dirX, dirZ] as const) {
-      const ndx = d === 0 ? 1 : d === 1 ? -1 : 0;
-      const ndz = d === 2 ? 1 : d === 3 ? -1 : 0;
-      const nbh = src.blockAt(cbx + ndx, cbz + ndz) ?? MISSING_BLOCK;
-      if (
-        finalRuling(src, cbx, cbz, d) === "weld" &&
-        canInterpolateByType(tileById(b.id).genRole, tileById(nbh.id).genRole)
-      )
-        out.weldEdgeCrests.push(Math.max(b.h, nbh.h));
-    }
-  }
-  return out;
-}
-
-/**
- * ★ 角插值（§4.3，最小化：一次只处理【一个角点】）。
- * 对传入的候选集（open 块 ∪ weld crest）取 max；候选为空 → undefined。
- * 跨地块的边由控制函数 surfaceHeightCore 先收集（collectCornerCandidates）
- * 传入——本函数不查裁决/类型，只合成这一个角。
- */
-export function interpCorner(
-  src: BlockSource,
-  x: number,
-  z: number,
-  candidates: CornerCandidates,
-): number | undefined {
-  const cands = [...candidates.openBlockHeights, ...candidates.weldEdgeCrests];
-  if (cands.length === 0) return undefined;
-  return Math.max(...cands);
-}
-
-/**
- * ★ 唯一控制/编排函数（§4.4）：任意查询点 V(x,z) 的视觉面高度。
+ * ★ 唯一控制/编排函数（§4.2）：任意查询点 V(x,z) 的视觉面高度。
  * 以块视角 (bx,bz) 为「所属块 B」——同一 V 从不同块视角查可得不同值，
  * 这正是表达撕裂角（cliff 四块各持各高）的唯一途径。
  *
- * 流程（硬边界先行，插值作为后修正，一次一个边/一个点）：
+ * 流程（硬边界先行，边插值作为后修正；一次一个边/一个点）：
  *   ① 硬边界基面 h = hB
- *   ② 边插值：逐条边 interpEdge（一条边一个点）→ max 合成
- *   ③ 角插值：收集跨地块候选（collectCornerCandidates）传给 interpCorner
- *   ④ 校验后返回（hB ≤ h ≤ 触及最高候选）
+ *   ② 逐条 weld 边 interpEdge → max 合成（undefined 忽略回落 hB）
+ *   ③ 返回 h（hB ≤ h ≤ 触及最高 crest）
+ *
+ * ★ 角与边融合（2026-08-31 新设计）：
+ *   角点不再独立抬成平顶——低侧块在格点角处，其两条触及 weld 边的
+ *   interpEdge 都在 t=0 取 crest（块边界），max 后即得共享 crest；
+ *   角到两边的区域由两坡平面自然汇合（同一梯度，边角坡度一致）。
+ *   对向两 weld：各自占块宽 1/3 坡 + 中部 1/3 平地（坡+平地+坡，无 V/U）。
+ *   故不再需要独立 interpCorner / collectCornerCandidates。
  */
 export function surfaceHeightCore(
   src: BlockSource,
@@ -451,17 +372,13 @@ export function surfaceHeightCore(
 ): number {
   const B = src.blockAt(bx, bz) ?? MISSING_BLOCK;
   let h = B.h; // ① 硬边界基面 h = hB（先导完整硬边界）
-  // ② 边插值：遍历 4 条边，一条边一个点
+  // ② 边插值：遍历 4 条边，一条边一个点（含格点角处 t=0 → crest，融合）
   for (let dir = 0; dir < 4; dir++) {
     const d = dir as 0 | 1 | 2 | 3;
     const e = interpEdge(src, bx, bz, d, x, z);
     if (e !== undefined) h = Math.max(h, e);
   }
-  // ③ 角插值：收集跨地块候选传给 interpCorner（只在格点角贡献）
-  const cands = collectCornerCandidates(src, x, z);
-  const c = interpCorner(src, x, z, cands);
-  if (c !== undefined) h = Math.max(h, c);
-  // ④ 返回 h（hB ≤ h ≤ 触及最高候选；hB 即 B.h 已为初值）
+  // ③ 返回 h（hB ≤ h ≤ 触及最高 crest；hB 即 B.h 已为初值）
   return h;
 }
 
@@ -928,21 +845,52 @@ export function buildChunkWallBuffers(
           bzN = Math.floor((oz + nj + 0.5) / 4);
         const bNb = src.blockAt(bxN, bzN) ?? MISSING_BLOCK;
 
-        // ★ 唯一判据：两侧块逻辑高确有落差 → 发墙（硬边界基础几何，
-        //   2026-08-31 定版：墙与裁决解耦）。cliff 墙 = 撕裂面本身；
-        //   weld 墙 = 坡面背后的贴坡背墙（封闭坡带下方空腔，杜绝看穿）。
-        //   斜坡（weld）只是额外附加在墙前低侧块上的蒙皮，墙永远在。
-        //   退化保护：等高块（|hCur−hNb|=0）→ 不发。
-        //   墙顶只随 cornerCell 走顶面，落差判定用块高。
-        // 去重：仅从中心块更高的那侧发墙（每条边界只发一次，法线朝低处）
-        if (bCur.h <= bNb.h) continue;
-        const topHigh = Math.max(
-          blockVisualTop(src, bxC, bzC, ox + i + dir.ax, oz + j + dir.az),
-          blockVisualTop(src, bxC, bzC, ox + i + dir.bx, oz + j + dir.bz),
+        // ★ 防御裙墙：发墙判据 = 视觉面高落差（非块逻辑高）。cliff 墙 = 撕裂面
+        //   本身；weld 墙 = 坡面背后贴坡背墙 + 坡侧裙墙（低块插值面高于邻块
+        //   面 → 也发墙堵漏，杜绝坡侧看穿/露斜草皮）。斜坡只是附加蒙皮，墙永在。
+        // 去重：每条边界只从【视觉面更高】那侧发一次（法线朝低处）。
+        const topA = blockVisualTop(
+          src,
+          bxC,
+          bzC,
+          ox + i + dir.ax,
+          oz + j + dir.az,
         );
-        const lowBase = Math.min(baseHeightOf(bCur), baseHeightOf(bNb));
+        const topB = blockVisualTop(
+          src,
+          bxC,
+          bzC,
+          ox + i + dir.bx,
+          oz + j + dir.bz,
+        );
+        const nbTopA = blockVisualTop(
+          src,
+          bxN,
+          bzN,
+          ox + i + dir.ax,
+          oz + j + dir.az,
+        );
+        const nbTopB = blockVisualTop(
+          src,
+          bxN,
+          bzN,
+          ox + i + dir.bx,
+          oz + j + dir.bz,
+        );
+        const curSide = Math.max(topA, topB);
+        const nbSide = Math.max(nbTopA, nbTopB);
+        // ★ 发墙：块逻辑高有落差（背墙/撕裂面）【或】视觉面高有落差（坡侧裙墙）
+        //   本侧必须更高才发（去重；法线朝低处）。
+        const logicalDrop = bCur.h > bNb.h;
+        const visualDrop = curSide > nbSide + WALL_EPS;
+        if (!logicalDrop && !visualDrop) continue;
 
-        const drop = topHigh - lowBase;
+        const lowBase = Math.min(
+          nbSide,
+          baseHeightOf(bCur),
+          baseHeightOf(bNb),
+        );
+        const drop = curSide - lowBase;
         const yB = lowBase - WALL_EPS;
 
         const td = ctx.tileDefAt(
@@ -960,21 +908,6 @@ export function buildChunkWallBuffers(
           zA = j + dir.az - N / 2;
         const xB = i + dir.bx - N / 2,
           zB = j + dir.bz - N / 2;
-
-        const topA = blockVisualTop(
-          src,
-          bxC,
-          bzC,
-          ox + i + dir.ax,
-          oz + j + dir.az,
-        );
-        const topB = blockVisualTop(
-          src,
-          bxC,
-          bzC,
-          ox + i + dir.bx,
-          oz + j + dir.bz,
-        );
 
         pos.push(xA, topA, zA, xB, topB, zB, xB, yB, zB, xA, yB, zA);
         for (let c = 0; c < 4; c++) {

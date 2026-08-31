@@ -41,8 +41,6 @@ import {
   finalRuling,
   baseHeightOf,
   cornerCell,
-  interpCorner,
-  collectCornerCandidates,
   rampProfile,
   buildChunkWallBuffers,
   type BlockSource,
@@ -497,7 +495,7 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
   {
     // 边 (0,0)~(1,0) 显式钉死 weld（两侧成对，weld 对称裁决）；
     // 低侧 (0,0) 顶沿边向高侧攀爬；铺满周围块（含 z±1 边缘），保证
-    // cornerCell/interpCorner 无缺块干扰
+    // cornerCell 无缺块干扰
     const src = weldFixture(
       {
         "0,0": flat(0),
@@ -537,33 +535,47 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
     expectNum("[F] cliff 低侧自持", cornerCell(src, 1, 0, 4, 2), 0.05);
   }
 
-  // ⑤ 全 weld 角（开阔水面，显式全钉 weld）→ 顶点一致性：
-  //    四块在共享角上读到同值（= interpCorner，水密）
+  // ⑤ 角与边融合（2026-08-31 新设计）：低侧块角点不再是独立抬成平顶，
+  //    而是由两条触及 weld 边的 interpEdge 在 t=0（块边界）取 crest 融合。
+  //    高台在 NE 角（(1,0) 与 (0,1) 都高、weld）→ 四块在共享角读到同 crest（水密）。
+  //    ★ 对向双坡各占块宽 1/3（WELD_RAMP_CELLS=4/3），中部留 1/3 平地 → 坡+平地+坡
   {
     const src = weldFixture(
       {
-        "0,0": liq(-2),
-        "1,0": liq(-4),
-        "0,1": liq(-3),
-        "1,1": liq(-5),
+        "0,0": flat(0.0),
+        "1,0": plat(0.6),
+        "0,1": plat(0.6),
+        "1,1": plat(0.6),
+        // 扩展高台外圈，保证块视角邻居齐备无缺块干扰
+        "2,0": plat(0.6),
+        "0,2": plat(0.6),
+        "2,1": plat(0.6),
+        "1,2": plat(0.6),
+        "2,2": plat(0.6),
       },
-      () => "weld",
+      (bx, bz, dir) => {
+        // 平台↔平地、平台↔平台都显式 weld（类型对可插值）
+        return "weld";
+      },
     );
-    // 候选由控制函数 surfaceHeightCore 收集（collectCornerCandidates）传入
-    const vH = interpCorner(
-      src,
-      4,
-      4,
-      collectCornerCandidates(src, 4, 4),
-    )!;
-    expectNum("[F] 全weld角 00", cornerCell(src, 0, 0, 4, 4), vH);
-    expectNum("[F] 全weld角 10", cornerCell(src, 1, 0, 4, 4), vH);
-    expectNum("[F] 全weld角 01", cornerCell(src, 0, 1, 4, 4), vH);
-    expectNum("[F] 全weld角 11", cornerCell(src, 1, 1, 4, 4), vH);
+    // 共享角 V=(4,4)：四块都经边融合读到平台 crest 0.6（水密）
+    for (const [bx, bz] of [
+      [0, 0],
+      [1, 0],
+      [0, 1],
+      [1, 1],
+    ]) {
+      expectNum(
+        `[F] 角边融合 ${bx},${bz} 读平台crest`,
+        Number(cornerCell(src, bx, bz, 4, 4).toFixed(3)),
+        0.6,
+      );
+    }
+    // 低侧块 (0,0) 角边融合的中间过渡也对准 1/3 宽坡带（对向双坡不重叠无 V）
   }
 
   // ⑥ 斜坡带（weld）剖面：低侧块内部一点在坡带内时取 rampProfile
-  //    注意：0<t<w 才进剖面；块内深处/t 落在坡带外 → interpCorner → 回落到块高
+  //    注意：0<t<w 才进剖面；块内深处/t 落在坡带外 → 落回低侧块高 (hL)
   {
     // 单条 weld 边 (0,0)~(1,0)，低侧 (0,0) 深 4m 前剖面 (w=2)
     const src = fixture({ "0,0": flat(0), "1,0": flat(4) });
@@ -746,6 +758,47 @@ console.log("[B] 默认硬边界统计 + 对称性/确定性校验通过");
       if (buf.vertices[v + 1] > maxTop) maxTop = buf.vertices[v + 1];
     }
     expectH("[H] weld 背墙墙顶=crest", maxTop, 4);
+  }
+  // ④ 坡侧裙墙（防御机制，2026-08-31）：低块(7,0)(ground) 有 +x 坡（向高块
+  //    8,0 平台 weld，可插值类型对）→ 其 +z 侧相邻是平地块(7,1)(ground，无坡、
+  //    不抬高) → 视觉面有落差 → 发坡侧裙墙（此前缺失：坡侧露斜草皮/看穿）。
+  //    背墙仍发（高侧 crest）。
+  {
+    const isHigh = (bx: number, bz: number) => bx >= 8 && bz === 0;
+    const src: BlockSource = {
+      blockAt: (bx, bz): BlockInfo | undefined => ({
+        id: isHigh(bx, bz) ? 92 : 0, // 平台 vs 平地（可插值）
+        h: isHigh(bx, bz) ? 4 : 0,
+      }),
+      edgeFinal: (bx, bz, dir) =>
+        bz === 0 &&
+        ((bx === 7 && dir === 0) || (bx === 8 && dir === 1))
+          ? "weld"
+          : undefined,
+    };
+    const buf = buildChunkWallBuffers(src, 0, 0, N60, wallCtx({}));
+    const idx = buf.indices;
+    const verts = buf.vertices;
+    let skirt = 0;
+    let backing = 0;
+    // 每条墙 quad = 4 顶点（tri 对）：v0,v1 顶部、v2,v3 底部
+    for (let t = 0; t < idx.length; t += 6) {
+      const i0 = idx[t];
+      const i1 = idx[t + 1];
+      const i2 = idx[t + 2];
+      const x0 = verts[i0 * 3];
+      const x1 = verts[i1 * 3];
+      const z0 = verts[i0 * 3 + 2];
+      const z1 = verts[i1 * 3 + 2];
+      const top0 = verts[i0 * 3 + 1];
+      void i2;
+      // 背墙：x 方向（z 恒定），顶 = crest 4
+      if (Math.abs(z0 - z1) < 0.01 && top0 > 3.9) backing++;
+      // 裙墙：z 方向（x 恒定），顶高于平地 0（但 ≤ 4）
+      if (Math.abs(x0 - x1) < 0.01 && top0 > 0.01 && top0 <= 3.9) skirt++;
+    }
+    expectH("[H] weld 背墙仍在", backing > 0, true);
+    expectH("[H] 坡侧裙墙已发（此前缺失）", skirt > 0, true);
   }
   if (hFails > 0) {
     console.error("[H] 回归失败：墙=硬边界基础几何");
