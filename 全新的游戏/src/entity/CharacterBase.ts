@@ -87,13 +87,52 @@ export abstract class CharacterBase extends EntityBase {
     const speed = this.controller.moveSpeed;
     const prevX = this.entity.position.x;
     const prevZ = this.entity.position.z;
-    this.entity.position.x += dir.x * speed * dt;
-    this.entity.position.z += dir.y * speed * dt;
+    // ★ boss4D 玩家专属：垂直壁贴附保护——位移逐分量受阻检查。
+    //   朝壁方向（前方地表比脚底地表高出 EDGE_CLIFF_BAND 的立面）位移分量为 0，
+    //   角色始终与壁保留 clearance 距离（碰撞盒边缘外 m）。
+    //   检查只看地形高差、与跳跃离地高度无关 → 跳跃中朝壁的速度分量同样被消，
+    //   实现"跳跃无向墙壁速度"。
+    let dx = dir.x * speed * dt;
+    let dz = dir.y * speed * dt;
+    if (this.controller.requireRealLanding) {
+      const raster = RasterMap.current;
+      const p0 = this.entity.position;
+      const gyHere = raster?.surfaceHeightAt(p0.x, p0.z) ?? 0;
+      if (raster) {
+        const ext = shapeExtents(this.collisionVolume.shape);
+        const m = 0.1; // 贴壁保留距离
+        if (
+          dx > 0 &&
+          raster.surfaceHeightAt(p0.x + ext.hx + m, p0.z) - gyHere > EDGE_CLIFF_BAND
+        ) {
+          dx = 0;
+        } else if (
+          dx < 0 &&
+          raster.surfaceHeightAt(p0.x - ext.hx - m, p0.z) - gyHere > EDGE_CLIFF_BAND
+        ) {
+          dx = 0;
+        }
+        if (
+          dz > 0 &&
+          raster.surfaceHeightAt(p0.x, p0.z + ext.hz + m) - gyHere > EDGE_CLIFF_BAND
+        ) {
+          dz = 0;
+        } else if (
+          dz < 0 &&
+          raster.surfaceHeightAt(p0.x, p0.z - ext.hz - m) - gyHere > EDGE_CLIFF_BAND
+        ) {
+          dz = 0;
+        }
+      }
+    }
+    this.entity.position.x += dx;
+    this.entity.position.z += dz;
     const p = this.entity.position;
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
     if (this.controller.isAirborne()) {
       // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.6 → 可越 0.5 高差）。
-      //   空中不受 cliff 阻挡（跳跃用来跨墙）；落地交给 WorldMode 落回贴地。
+      //   落地交给 WorldMode 落回贴地。横向位移已在上面按分量做了垂直壁受阻检查，
+      //   因此跳跃无法朝壁方向推进（不穿模、不会横向切入壁腹被 clamp 抬升）。
       p.y = this.airborneStandY + this.controller.getHeightOffset();
     } else {
       // ★ 落地态：刷新站立基准；cliff（大落差）水平阻挡仅落地态适用——
@@ -104,6 +143,14 @@ export abstract class CharacterBase extends EntityBase {
         p.x = prevX;
         p.z = prevZ;
       }
+    }
+    // ★ 真实贴地信号（boss4D 玩家跳跃资格用）：落地态 ∧ 脚底已贴合实际站位
+    //   地表高（±0.05）才算"在地面上"。悬崖回退后重新采样，避免用位移前采样。
+    //   悬空/虚空（地表低于脚底）→ 不贴地 → 长按跳跃不生效。
+    if (this.controller.requireRealLanding) {
+      const floorY = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+      this.controller.onFloor =
+        !this.controller.isAirborne() && Math.abs(p.y - floorY) <= 0.05;
     }
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
     this.separateFromOthers();

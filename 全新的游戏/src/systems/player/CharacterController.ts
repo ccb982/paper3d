@@ -44,10 +44,18 @@ export class CharacterController {
   private jumpVel = 0;
   private jumpOffset = 0;
   private onGround = true;
-  /** 跳跃初速 / 重力。★ 空格跳跃真实高度 = jumpSpeed²/(2·gravity) = 0.6
+  /** ★ 跳跃初速 / 重力。★ 空格跳跃真实高度 = jumpSpeed²/(2·gravity) = 0.6
    *   （2026-08-31 用户定：爬阶梯 0.35 / 空格跳跃 0.6 → 可跳上 0.5 高差） */
   jumpSpeed = 0;
   gravity = 12;
+  /** ★ 真实贴地（世界每帧回填：角色脚底已贴合地表）。false = 悬空/未落地。
+   *   真实落地模式（boss4D 玩家）用它作为跳跃资格判定——只有在地面上才允许起跳，
+   *   长按跳跃每帧检查、踩实瞬间立即自动再跳（连跳手感保留）。
+   *   标准世界/敌人不使用（保持旧 onGround 抛物线连跳行为）。 */
+  onFloor = true;
+  /** ★ 真实落地模式（boss4D 玩家专属，标准世界/敌人 false）：只有真实贴地
+   *   （onFloor）才允许起跳 ⇒ 空中/虚空长按不会跳，杜绝穿墙/悬浮连跳。 */
+  requireRealLanding = false;
 
   constructor(anim: FrameAnimatorBase, animMap: CharacterAnimMap, moveSpeed = 60) {
     this.anim = anim;
@@ -112,8 +120,14 @@ export class CharacterController {
         this.onGround = true;
       }
     }
-    // 长按跳跃（held，非边沿）：落地瞬间 onGround=true → 立即再跳
-    if (input.held.jump && this.onGround) {
+    // 长按跳跃（held，非边沿）：每帧检查跳跃资格，命中即起跳（落地瞬间自动再跳）。
+    // ★ 真实落地模式（boss4D 玩家）：跳跃资格 = 真实贴地 onFloor（世界每帧回填）——
+    //   只有在地面上才允许起跳，空中/虚空长按无效；踩实地面帧恢复 onFloor → 立即再跳。
+    //   默认（标准世界/敌人）：requireRealLanding=false → 用旧 onGround（抛物线复位即跳）。
+    if (
+      input.held.jump &&
+      (this.requireRealLanding ? this.onFloor : this.onGround)
+    ) {
       this.jumpVel = this.jumpSpeed;
       this.onGround = false;
     }

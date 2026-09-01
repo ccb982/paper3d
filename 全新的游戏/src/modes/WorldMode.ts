@@ -227,9 +227,15 @@ export class WorldMode implements IGameMode {
       ctx.session, this.itemManager, this.interactionManager, this.raster,
     );
     // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
+    // ★ boss4D 玩家专属：真实落地模式（每次跳跃必须踩实地面，禁止悬空穿/悬浮连跳）
+    this.player.controller.requireRealLanding = this.chunks.isBoss4D;
     this.worldUIManager.addMapStyleButton(
       () => (this.chunks.isBoss4D ? '地图：四维空间' : '地图：标准'),
-      () => this.chunks.setStyle(!this.chunks.isBoss4D),
+      () => {
+        this.chunks.setStyle(!this.chunks.isBoss4D);
+        // 仅玩家生效（敌人维持旧连跳行为）
+        this.player.controller.requireRealLanding = this.chunks.isBoss4D;
+      },
     );
 
     // ---- ★ 测试物品（UI 初始化后创建，避免碰撞回调时 worldUIManager 未就绪） ----
