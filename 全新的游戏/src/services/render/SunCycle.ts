@@ -197,10 +197,14 @@ export class SunCycle {
     const elevGeoDeg = Math.sin(moonT * Math.PI) * MAX_MOON_ELEV_DEG;
     this.moonSample.elevationDeg = elevGeoDeg;
 
-    // 可见度：晨昏平滑过渡（±1.0h）
-    const moonVisibility =
-      smoothstep(MOONRISE - 1.0, MOONRISE + 1.0, t) *
-      (1 - smoothstep(MOONSET - 1.0, MOONSET + 1.0, t));
+    // 可见度：晨昏平滑过渡（±1.0h）。
+    // ★ 必须用与 moonT 相同的跨午夜窗口 effectiveT——直接对原始 t 做
+    //   smoothstep(MOONSET±1,t) 会在天黑后（t>MOONSET）把整夜月亮压成 0，
+    //   导致"晚上月亮不升起"。MOONSET=5 的小时位置要+24 映射到窗口 [19,29)。
+    const eff = (MOONRISE > MOONSET && t < MOONSET) ? t + 24 : t;
+    const riseFade = smoothstep(MOONRISE - 1.0, MOONRISE + 1.0, eff);
+    const setFade = 1.0 - smoothstep((MOONSET + 24) - 1.0, (MOONSET + 24) + 1.0, eff);
+    const moonVisibility = riseFade * setFade;
     this.moonSample.visibility = moonVisibility;
 
     // 方位：与太阳相反方向（+x → -x 变为 -x → +x），z 偏取反
