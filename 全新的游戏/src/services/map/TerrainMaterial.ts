@@ -331,19 +331,38 @@ const FRAGMENT_MAIN = /* glsl */ `
           if (emis > 0.001) {
             lit += uMatEmissive[id].rgb * emis * (0.92 + 0.08 * h21(vUv * 512.0));
           }
-          // ---- LOD 高台发光（实时渲染层）：距离 + 镜头掠射角 + 太阳方位分层 ----
-          //   纯几何，无 per-pixel 法线/sun 计算（uSunSide 每帧 JS 算一次；避免重复光照）
+          // ---- LOD 高台发光（实时渲染层，增强版）----
+          //   目标：相机调整（俯瞰/平移/转身）时能明显看到各地块的发光层次变化。
+          //   三层调制叠加：
+          //     distBand 距离带状呼吸（多个距离环带 → 俯瞰时区块明显分层）
+          //     glance   镜头掠射角（侧面掠射更亮）
+          //     sunLayer 太阳方位分层（转向太阳侧明显亮起 → 相机转动可见差异）
           float lodE = uMatLODEmissive[id];
           if (lodE > 0.001) {
             float dist  = length(cameraPosition - vec3(vWorld.x, 0.0, vWorld.y));
-            float zoneX = length(cameraPosition.xz - vWorld);         // 水平分量（省法线）
-            float glance = 0.3 + 0.7 * clamp(zoneX / max(dist, 0.001), 0.0, 1.0); // 掠射增强
-            // 太阳方位分层：地面→相机水平方向 · 水平太阳方向（uSunSide 每帧一次）
-            vec2 toCam = cameraPosition.xz - vWorld;
+            vec2 toCam  = cameraPosition.xz - vWorld;
             float toCamL = max(length(toCam), 1e-4);
-            float sunLayer = 0.6 + 0.4 * dot(toCam / toCamL, uSunSide) * uSunDay; // 朝向太阳侧亮
-            float lodFactor = smoothstep(30.0, 6.0, dist) * glance * sunLayer;
-            lit += base * lodE * lodFactor;
+
+            // ① 距离带状呼吸：多环带锯齿 → 俯瞰时邻近区域出现明暗环带，移动明显
+            //   （chunk=60m/LOD_RANGES=20,40,60 对齐：主带 0/20/40/60 退缩环）
+            float ring1 = smoothstep(60.0, 12.0, dist);       // 主发光带（远→近亮起）
+            float ring2 = smoothstep(40.0, 28.0, dist) * 0.6; // 次带叠加
+            float ring3 = smoothstep(22.0, 14.0, dist) * 0.4; // 近距微带
+            float distBand = clamp(ring1 + ring2 + ring3, 0.0, 1.6);
+
+            // ② 掠射增强：降得越多（越俯视）掠射角越大越亮，侧看/俯瞰平台明显
+            float zoneX = length(toCam);
+            float glance = 0.45 + 0.55 * clamp(zoneX / max(dist, 0.001), 0.0, 1.0);
+
+            // ③ 太阳方位分层（增强）：朝向太阳侧 + 随昼夜加强；转动相机亮面扫过
+            float sunLayer = 0.5 + 0.9 * dot(toCam / toCamL, uSunSide) * uSunDay;
+            sunLayer = clamp(sunLayer, 0.0, 1.0);
+
+            // ④ 静态空间抖动（地块 id 级）：让相邻平台发光强度不一致，差异可见
+            float idJit = 0.75 + 0.5 * h21(floor(vWorld * 0.25));
+
+            // 亮度增强主要反射层：基色 × 强乘数（原 max≈0.025 → 现可达 ~1.0+）
+            lit += base * lodE * 18.0 * distBand * glance * sunLayer * idJit;
           }
 
           gl_FragColor = vec4(lit, 1.0);

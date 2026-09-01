@@ -72,7 +72,7 @@ registerTileMaterial({
     patch: 0.15,          // 大尺度斑驳
   },
   surface: { roughness: 0.95 },
-  lodEmissive: 0,
+  lodEmissive: 0.02,
 });
 
 /** 砖石路面：交错砖块网格 + 灰缝 + 每砖明度抖动 + 破损变体 */
@@ -85,7 +85,7 @@ registerTileMaterial({
     broken: 0.08,         // 破损块比例
   },
   surface: { roughness: 0.72 },
-  lodEmissive: 0,
+  lodEmissive: 0.03,
 });
 
 /** 草地路面：低饱和绿底 + 成片斑驳 + 草簇 */
@@ -98,7 +98,7 @@ registerTileMaterial({
     grain: 0.02,          // 底颗粒
   },
   surface: { roughness: 0.85 },
-  lodEmissive: 0.005,
+  lodEmissive: 0.015,
 });
 
 /** 木板路面：横板条 + 板缝错位 + 木纹 + 钉点 */
@@ -112,7 +112,7 @@ registerTileMaterial({
     nails: 0.15,          // 钉点密度
   },
   surface: { roughness: 0.55, specular: 0.05 },
-  lodEmissive: 0.01,
+  lodEmissive: 0.035,
 });
 
 /** 岩石平台底座：分层岩理 + 拉丝 + 粗裂纹 */
@@ -125,7 +125,7 @@ registerTileMaterial({
     bump: 0.08,           // 微凹凸
   },
   surface: { roughness: 0.8 },
-  lodEmissive: 0,
+  lodEmissive: 0.04,
 });
 
 /** 苔藓平台：石底 + 苔藓斑块 + 绒毛边缘 */
@@ -138,5 +138,5 @@ registerTileMaterial({
     stone: 0.6,           // 石底露出比例
   },
   surface: { roughness: 0.75 },
-  lodEmissive: 0.025,
+  lodEmissive: 0.05,
 });
