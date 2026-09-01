@@ -57,14 +57,20 @@ const SKY_FRAG = /* glsl */ `
     float hz = smoothstep(0.05, 0.85, v);   // 底部→顶部
     vec3 col = mix(uHorizonColor, uZenithColor, hz);
 
-    // ---- 云层：绕 Y 轴水平角映射 U（循环），竖直条带映射 V ----
-    //   云只存在于地平线以上一个高度带内（v ∈ [0.04, 0.9]）
-    float angle = atan(dir.x, dir.z);                 // [-PI, PI]
-    float u = fract(angle / 6.28318530718 + 0.5 + uCloudScroll.x);
-    float cloudV = smoothstep(0.12, 0.28, v) * (1.0 - smoothstep(0.55, 0.85, v));
-    // 近地平线云占满水平带，越高越收敛到中心（透视感弱化，简化处理）
-    float vv = 0.5 + (v - 0.2) * 0.6;
-    vec2 cuv = vec2(u, vv + uCloudScroll.y);
+    // ---- 云层：极坐标圆盘映射，纹理中心 (0.5,0.5) 正对天顶 ----
+    //   方位角 phi → 环向，距天顶角 theta → 径向 r（0=天顶，1=地平线）。
+    //   云从中心向四周铺开，纹理四条边落在天空边界（地平线处），
+    //   天空内部不再出现接缝/断层；断层只在地平线由 smoothstep 淡出。
+    float phi = atan(dir.x, dir.z);                       // 方位角 [-PI, PI]
+    float theta = acos(clamp(dir.y, 0.0, 1.0));           // 距天顶 [0, π/2]
+    float r = min(theta / 1.5707963, 1.0);                // 0 天顶 → 1 地平线
+    // 环绕整体旋转（缓慢带动云漂移）
+    float ang = phi + uCloudScroll.x;
+    float cu = 0.5 + 0.5 * cos(ang) * r;
+    float cv = 0.5 - 0.5 * sin(ang) * r;
+    vec2 cuv = vec2(cu, cv);
+    // 云门控：天顶附近最多，越近地平线（r→1）越淡出 → 无硬边断层
+    float cloudV = 1.0 - smoothstep(0.55, 0.85, r);
     // ★ 双缓冲 crossfade：prev(旧帧) → cur(新帧) 按 uCloudBlend 插值，
     //   平滑掉 2 帧/秒结算带来的跳变
     vec4 prevSample = texture2D(uCloudPrevTex, cuv);
