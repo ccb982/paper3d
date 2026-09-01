@@ -30,6 +30,38 @@ import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 let currentMode: IGameMode | null = null;
 let currentSession: GameSession | null = null;
 
+/** 当前模式环境：ship=舰船内部（固定深空背景），world=露天战场（背景随天空变化） */
+let currentEnv: 'ship' | 'world' = 'ship';
+
+// 渲染资源（全局持有，供逐帧刷新背景/雾色）
+let renderer: THREE.WebGLRenderer;
+let scene: THREE.Scene;
+
+/** 舰船内部固定背景色（深空舱内；不随昼夜变化） */
+const SHIP_BG = 0x14142a;
+
+/**
+ * ★ 每帧刷新背景清屏色 + 雾色（按当前模式区分）：
+ *   - world：露天战场，背景用天空边界（地平线）色随昼夜渐变，雾色与之同色，
+ *            远处地形融进地平线 → 与穹顶底部无缝衔接
+ *   - ship：舰船内部，用固定深空背景，不受天空影响
+ */
+function updateSky(): void {
+  if (currentEnv === 'world') {
+    // 天空边界 = horizon（穹顶底部就是这个颜色，背景+雾同色保证无缝）
+    const horizon = renderManager.querySky().horizon;
+    renderer.setClearColor(horizon, 1);
+    if (scene.fog && (scene.fog as THREE.Fog).color) {
+      (scene.fog as THREE.Fog).color.setHex(horizon);
+    }
+  } else {
+    renderer.setClearColor(SHIP_BG, 1);
+    if (scene.fog && (scene.fog as THREE.Fog).color) {
+      (scene.fog as THREE.Fog).color.setHex(SHIP_BG);
+    }
+  }
+}
+
 // 资产（全局持有，避免重复加载）
 let protagonistAsset: FtxAsset;
 let bulletAsset: Asset | FtxAsset;
@@ -51,24 +83,26 @@ async function boot() {
   canvas.style.zIndex = '0';
   document.body.appendChild(canvas);
 
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setPixelRatio(adapter.info.dpr);
-  renderer.setClearColor(0xcccccc, 1);
+  const rendererLocal = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer = rendererLocal;
+  rendererLocal.setSize(window.innerWidth, window.innerHeight);
+  rendererLocal.setPixelRatio(adapter.info.dpr);
+  rendererLocal.setClearColor(0xcccccc, 1);
   // ★ 实时光照包：电影级色调滚降（所有颜色统一进 ACES 管线）
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = LIGHT_TUNING.exposure;
+  rendererLocal.toneMapping = THREE.ACESFilmicToneMapping;
+  rendererLocal.toneMappingExposure = LIGHT_TUNING.exposure;
 
-  const scene = new THREE.Scene();
+  const sceneLocal = new THREE.Scene();
+  scene = sceneLocal;
   // ★ 雾：远处融进背景色，遮 chunk 加载边缘 + 大气氛围（舰船内部距离小，不受影响）
-  scene.fog = new THREE.Fog(0xcccccc, 80, 200);
+  sceneLocal.fog = new THREE.Fog(0xcccccc, 80, 200);
   // ★ 光照词汇表：半球光(天/地双色) + 太阳平行光（实体影子走 SilhouetteShadow 解析剪影，不用 shadow map）
   // （实时阴影管线已移除：全项目无 castShadow 者，shadow map 是纯空转开销——2026-08-26 清理）
-  renderManager.setup(scene);
+  renderManager.setup(sceneLocal);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
   window.addEventListener('resize', () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    rendererLocal.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
   });
@@ -139,6 +173,9 @@ async function boot() {
     // ★ 实时渲染域先推进（昼夜时间 + hitstop 时间缩放）→ 世界用缩放时间驱动
     renderManager.update(dt);
 
+    // ★ 天空/雾色跟随昼夜（放在 update 之后、render 之前，保证用的是本帧时间）
+    updateSky();
+
     if (currentMode) {
       currentMode.update(renderManager.scaledDt);
       currentMode.render();
@@ -183,6 +220,8 @@ function enterShipMode(
     },
   });
   currentMode = ship;
+  currentEnv = 'ship';
+  renderManager.setEnvironment('ship');
   console.log(`[main] 进入 ShipMode，当前第 ${currentSession?.meta.day} 天`);
 }
 
@@ -222,6 +261,8 @@ function enterWorldMode(
   };
   world.enter(ctx);
   currentMode = world;
+  currentEnv = 'world';
+  renderManager.setEnvironment('world');
 
   console.log(`[main] 进入 WorldMode，第 ${day} 天，战斗属性: HP ${combatStats.maxHp}`);
 }

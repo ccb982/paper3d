@@ -15,8 +15,9 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { SunCycle, type SunSample } from './SunCycle';
+import { SunCycle, type SunSample, type MoonSample, type SkyGradient } from './SunCycle';
 import { gameLights, LIGHT_TUNING } from './GameLights';
+import { SkyDome } from './SkyDome';
 import { updateTerrainLighting } from '../map/TerrainMaterial';
 import { updateWallLighting } from '../map/ChunkWalls';
 
@@ -25,6 +26,7 @@ export { LIGHT_TUNING };
 
 class RenderManager {
   private sunCycle = new SunCycle();
+  private skyDome = new SkyDome();
 
   // ---- 全局时间缩放（hitstop 顿帧的基础设施；时间归渲染管理器管） ----
   private _rawDt = 0;
@@ -36,6 +38,7 @@ class RenderManager {
   /** boot 装配光照（main.ts 调一次；幂等） */
   setup(scene: THREE.Scene): void {
     gameLights.setup(scene);
+    this.skyDome.attach(scene);
   }
 
   /**
@@ -76,7 +79,9 @@ class RenderManager {
 
   /** 渲染前锚定光照到跟随目标（WorldMode.render 调用；位置已是本帧最终值） */
   follow(target: { x: number; y: number; z: number }): void {
-    gameLights.follow(target, this.sunCycle.current);
+    gameLights.follow(target, this.sunCycle.current, this.sunCycle.moon);
+    // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
+    this.skyDome.update(target, this.sunCycle.current, this.sunCycle.moon, this.sunCycle.sky);
     // ★ 地形烘焙光照的昼夜调制（双纹理方案：地形不吃实时灯，只吃这两个 uniform）
     updateTerrainLighting(this.sunCycle.current);
     // ★ 断崖侧壁同步昼夜色调（仅亮度，不改烘焙阴影方向，与地面顶面一致）
@@ -86,6 +91,21 @@ class RenderManager {
   /** ★ 渲染查询接口：太阳状态（方向/色温/白昼因子）——影子投影等消费者用 */
   querySun(): SunSample {
     return this.sunCycle.current;
+  }
+
+  /** ★ 渲染查询接口：月亮状态（方向/可见度/月相/月光强度） */
+  queryMoon(): MoonSample {
+    return this.sunCycle.moon;
+  }
+
+  /** ★ 渲染查询接口：天空三色渐变 + 雾色（main.ts 刷新背景/雾） */
+  querySky(): SkyGradient {
+    return this.sunCycle.sky;
+  }
+
+  /** 环境背景开关：world=露天（天空穹顶+太阳/月亮可见）；ship=舰船内部（无天空） */
+  setEnvironment(kind: 'ship' | 'world'): void {
+    this.skyDome.setVisible(kind === 'world');
   }
 }
 

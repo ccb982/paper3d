@@ -22,12 +22,16 @@ export const LIGHT_TUNING = {
   sunIntensity: 1.6,
   /** 太阳距离（follow 时 = 目标 + SunCycle.dir × 此值）→ 决定剪影影子方向与长度 */
   sunDistance: 90,
+  /** 月光距离（月亮平行光位置；独立于太阳） */
+  moonDistance: 90,
+  moonColor: 0xc8d8f0,      // 冷银蓝月光
   exposure: 1.08,
 };
 
 class GameLights {
   private hemisphere: THREE.HemisphereLight | null = null;
   private sun: THREE.DirectionalLight | null = null;
+  private moon: THREE.DirectionalLight | null = null;
 
   /**
    * 装备全局光照（main.ts boot 调一次；幂等）。
@@ -47,14 +51,21 @@ class GameLights {
     this.sun.position.set(0, 1, 0).multiplyScalar(LIGHT_TUNING.sunDistance);
     scene.add(this.sun);
     scene.add(this.sun.target); // ★ target 必须在场景图中，follow 才生效
+
+    // ★ 月光平行光：独立于太阳，白天禁用，夜晚按可见度/月相点亮
+    this.moon = new THREE.DirectionalLight(LIGHT_TUNING.moonColor, 0);
+    this.moon.position.set(0, 1, 0).multiplyScalar(LIGHT_TUNING.moonDistance);
+    scene.add(this.moon);
+    scene.add(this.moon.target);
   }
 
-  /** 每帧：太阳位置锚定到目标（玩家）+ 按传入太阳状态调制颜色/强度。
+  /** 每帧：太阳/月亮位置锚定到目标（玩家）+ 按传入状态调制颜色/强度。
    *  ★ 被动消费：不依赖 SunCycle——由 RenderManager 协调注入。
    *  参数用纯数据坐标（实体系统 position 风格），不要求 THREE.Vector3。 */
   follow(
     target: { x: number; y: number; z: number },
     sun: { dir: { x: number; y: number; z: number }; color: number; intensityScale: number; daylight: number },
+    moon?: { dir: { x: number; y: number; z: number }; intensityScale: number },
   ): void {
     if (!this.sun) return;
     this.sun.target.position.set(target.x, target.y, target.z);
@@ -68,6 +79,18 @@ class GameLights {
     this.sun.intensity = LIGHT_TUNING.sunIntensity * sun.intensityScale;
     if (this.hemisphere) {
       this.hemisphere.intensity = LIGHT_TUNING.hemiIntensity * (0.55 + 0.45 * sun.daylight);
+    }
+
+    // ---- 月光（独立于太阳；有月亮数据才更新） ----
+    if (this.moon && moon) {
+      this.moon.target.position.set(target.x, target.y, target.z);
+      this.moon.position.set(
+        target.x + moon.dir.x * LIGHT_TUNING.moonDistance,
+        target.y + moon.dir.y * LIGHT_TUNING.moonDistance,
+        target.z + moon.dir.z * LIGHT_TUNING.moonDistance,
+      );
+      this.moon.intensity = moon.intensityScale * 1.0; // moon.intensityScale 已含满月系数
+      this.moon.color.setHex(LIGHT_TUNING.moonColor);
     }
   }
 }
