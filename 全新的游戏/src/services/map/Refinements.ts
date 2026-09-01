@@ -935,6 +935,8 @@ export function buildChunkWallBuffers(
   const pos: number[] = [];
   const nor: number[] = [];
   const col: number[] = [];
+  const shd: number[] = [];
+  const uvx: number[] = [];
   const idx: number[] = [];
   let vi = 0;
 
@@ -1007,8 +1009,19 @@ export function buildChunkWallBuffers(
         const th = applyGroupTintHsl(td.visual.baseHsl, palette, thM);
         let [r, g, b] = hsl2rgb(th.h, th.s, th.l);
         const facing = Math.max(0, dir.dx * SUN_HX + dir.dz * SUN_HZ);
-        const k =
-          wallShade(ctx.heightAt, seed, ox + i, oz + j, drop, facing) / 255;
+        // wallShade 本身是 0..1 明暗系数（0.14~0.82）；colors 走 0..255 通道
+        // 需 /255,shade 直接用原值（⊥ 全黑回归：2026-09-01 WallMaterial 复用）。
+        const k0 =
+          wallShade(ctx.heightAt, seed, ox + i, oz + j, drop, facing);
+        const k = k0 / 255;
+
+        // ★ 墙所属地块 uv：外墙贴"本侧地块"纹理，定位到 uTileIds 该 tile
+        //   的 texel 中心（(tileIdx + 0.5)/15，Nearest 采样必命中，不会落在块边界）。
+        //   chunk 局部 tile 索引 = 世界块索引 - chunk 块原点（cx*15）。
+        const tblX = Math.max(0, Math.min(14, bxC - cx * 15));
+        const tblZ = Math.max(0, Math.min(14, bzC - cz * 15));
+        const uvU = (tblX + 0.5) / 15;
+        const uvV = (tblZ + 0.5) / 15;
 
         const xA = i + dir.ax - N / 2,
           zA = j + dir.az - N / 2;
@@ -1019,6 +1032,8 @@ export function buildChunkWallBuffers(
         for (let c = 0; c < 4; c++) {
           nor.push(dir.dx, 0, dir.dz);
           col.push(r * k, g * k, b * k);
+          shd.push(k0);
+          uvx.push(uvU, uvV);
         }
         idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
         vi += 4;
@@ -1030,6 +1045,8 @@ export function buildChunkWallBuffers(
     vertices: new Float32Array(pos),
     normals: new Float32Array(nor),
     colors: new Float32Array(col),
+    shade: new Float32Array(shd),
+    uvs: new Float32Array(uvx),
     indices: new Uint32Array(idx),
   };
 }
@@ -1101,7 +1118,9 @@ const DIRS = [
 export interface ChunkWallBuffers {
   vertices: Float32Array; // 位置 ×3
   normals: Float32Array; // 法线 ×3
-  colors: Float32Array; // 顶点色 ×3（已乘明暗）
+  colors: Float32Array; // 顶点色 ×3（已乘明暗 + 地块底色；兼容旧 MeshBasicMaterial）
+  shade: Float32Array; // 纯烘焙明暗 ×1（0..1；≈上一帧 MeshBasic.color.scalar 的前身，供 WallMaterial 复用 OKLab 纹理）
+  uvs: Float32Array; // 地块中心 uv ×2（采样 uTileIds 得所属 tile id，与顶面同约定）
   indices: Uint32Array;
 }
 

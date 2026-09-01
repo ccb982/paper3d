@@ -452,9 +452,9 @@ export class ChunkManager {
     const top = new THREE.Mesh(surf.geometry, mat);
     const group = new THREE.Group();
     group.add(top);
-    // ★ 断崖侧壁：独立几何 + 顶点色（避免地面贴图被拉伸成墙面的纵向渐变）；
-    //   cliff 裁决边的低落差墙也在此生成（SurfaceRules 边裁决）
-    const walls = buildChunkSideWalls(this.raster, cx, cz);
+    // ★ 断崖侧壁：独立几何 + 顶面同款材质纹理与光照（WallMaterial 复用
+    //   uAlbedo/uLightmap/uTileIds/Okada 库，2026-09-01：不再是纯色 MeshBasicMaterial）
+    const walls = buildChunkSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg);
     if (walls.mesh) group.add(walls.mesh);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 

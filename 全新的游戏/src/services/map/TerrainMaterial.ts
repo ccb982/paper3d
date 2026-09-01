@@ -99,7 +99,7 @@ export interface TileRenderConfig {
   fn: Int32Array;
 }
 
-const MATERIAL_GLSL = /* glsl */ `
+export const MATERIAL_GLSL = /* glsl */ `
   // ==================== 材质输入（★ 必须先声明后使用；放函数库最前） ====================
   uniform sampler2D uTileIds;
   uniform vec4 uMatBaseLCH[${MATERIAL_SLOTS}];
@@ -418,6 +418,135 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
   }
 }
 
+// ============================================================
+// WallMaterial —— 断崖侧壁（与顶面同款 OKLab 材质纹理 + 同套光照公式）
+// ============================================================
+// 与 TerrainMaterial 共享 MATERIAL_GLSL（shadeField/材料函数/oklchShade/伪法线），
+// 差异：
+//   - ★ 光照与顶面完全统一：uAlbedo/uLightmap/uAmbientColor/uSunColor 同一套
+//     （侧壁也采样烘焙光图，朝阳/背阳由烘焙的 lm.r 决定，而不是每面方向系数）
+//   - 无 LOD 发光/水面描边（墙不需要地表那些）
+//   - 地块 id 由墙顶点的"所属地块采样 uv"读 uTileIds（与顶面完全一致的微纹理）
+// 效果：侧壁呈现与地面同款 dirt/brick/grass/rock… 逐像素材质纹理，且从任何
+// 角度观察光照/明暗与顶面一致（墙 = 顶面的延展，碰撞=所见不变式）。
+// ============================================================
+
+/** 每帧昼夜调制注册表（WallMaterial 及 Boss4D 墙材质；updateWallMaterialsLighting 统一喂） */
+type WallLightTarget = THREE.ShaderMaterial;
+const wallRegistry = new Set<WallLightTarget>();
+
+/** Boss4D 墙材质注册（同享昼夜喂值；材质 dispose 时由 disposeVisual 释放再退注册） */
+export function registerWallLightTarget(m: WallLightTarget): void {
+  wallRegistry.add(m);
+}
+export function unregisterWallLightTarget(m: WallLightTarget): void {
+  wallRegistry.delete(m);
+}
+
+const WALL_VERT = /* glsl */ `
+  varying vec2 vUv;      // 地块中心 uv（采样 uTileIds 得所属 tile id）
+  varying vec2 vUvC;     // chunk 连续 uv（采样 uAlbedo/uLightmap，与顶面同约定）
+  varying vec2 vTex;     // ★ 墙面 2D 纹理坐标（沿墙水平距离 × 绝对高度）
+  #include <common>
+  #include <fog_pars_vertex>
+  void main() {
+    vUv = uv;
+    vUvC = position.xz / 60.0 + 0.5;   // 局部坐标（中心原点）→ chunk 0..1
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    // ★ 不能直接用 wp.xz 当纹理坐标：墙面是竖直面，法线水平分量几乎恒定 →
+    //   沿墙体内方向 w 不随墙高变化，纹理压成竖条纹（2026-09-01 用户反馈）。
+    //   改成墙面自己的切平面坐标：(沿墙水平距离, 墙高)，两方向都随像素变 →
+    //   与顶面同款 dirt/brick/grass 等 2D 材质纹理，且沿墙排布规则。
+    // ★ 法线必须用世界方向（mat3(modelMatrix)），绝不能乘 normalMatrix——
+    //   normalMatrix = 模型视图法线矩阵，随相机转向变化，会把纹理方向带偏
+    //   （相机转动 → 侧壁纹理水平漂移，2026-09-01 用户反馈）。地块群仅平移
+    //   无旋转，mat3(modelMatrix) 恒等 → 本地法线即世界方向，结果与视角无关。
+    vec3 N = normalize(mat3(modelMatrix) * normal);
+    vec2 hor = normalize(vec2(N.x, N.z) + 1e-4);
+    vec2 along = vec2(-hor.y, hor.x);   // 沿墙水平方向（与法线水平投影正交）
+    vTex = vec2(dot(wp.xz, along), wp.y);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
+  }
+`;
+
+const WALL_FRAG = /* glsl */ `
+  uniform sampler2D uAlbedo;
+  uniform sampler2D uLightmap;
+  uniform vec3 uAmbientColor;
+  uniform vec3 uSunColor;
+  varying vec2 vUv;
+  varying vec2 vUvC;
+  varying vec2 vTex;
+  #include <common>
+  #include <fog_pars_fragment>
+  void main() {
+    vec3 alb = texture2D(uAlbedo, vUvC).rgb;
+    vec3 lm = texture2D(uLightmap, vUvC).rgb;      // r=直射 / g=AO（与顶面同约定）
+    int id = int(texture2D(uTileIds, vUv).r * 255.0 + 0.5);
+    vec3 field = shadeField(vTex);
+    vec3 base = oklchShade(vTex, id, field);       // 与顶面逐像素一致的材质纹理
+
+    // ★ 4×4 地块边界描边（与顶面同款：分界线在墙面上延展）
+    vec2 buv = fract(vUvC * 15.0);
+    float dEdge = min(min(buv.x, 1.0 - buv.x), min(buv.y, 1.0 - buv.y));
+    float edge = 1.0 - smoothstep(0.0, 0.010, dEdge);
+    base = mix(base, vec3(0.02), edge * uMatSurface[id].w);
+
+    // 伪 AO：大尺度斑块暗谷（patch 负值 = 谷地 = 变暗；0.4~1.0）
+    float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
+
+    // ★ 与顶面完全相同的光照公式（无任何方向性/深度系数——任何角度看一致）
+    vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * lm.r);
+    gl_FragColor = vec4(lit, 1.0);
+    #include <tonemapping_fragment>   // ★ 与全局 ACES 管线对齐（顶面同款）
+    #include <colorspace_fragment>
+    #include <fog_fragment>
+  }
+`;
+
+export class WallMaterial extends THREE.ShaderMaterial {
+  constructor(
+    albedo: THREE.Texture,
+    lightmap: THREE.Texture,
+    cfg?: TileRenderConfig,
+  ) {
+    const u = Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
+      uAlbedo: { value: albedo },
+      uLightmap: { value: lightmap },
+      // 以下全部来自 / 与 TerrainMaterial 同源（cfg 与顶面每 chunk 同一份）
+      uTileIds: { value: cfg?.tileIds ?? new THREE.DataTexture(new Uint8Array(225), 15, 15) },
+      uMatBaseLCH: { value: cfg?.base ?? new Float32Array(MATERIAL_SLOTS * 4) },
+      uMatJitter: { value: cfg?.jitter ?? new Float32Array(MATERIAL_SLOTS * 4) },
+      uMatSurface: { value: cfg?.surface ?? new Float32Array(MATERIAL_SLOTS * 4) },
+      uMatEmissive: { value: cfg?.emissive ?? new Float32Array(MATERIAL_SLOTS * 4) },
+      uMatFn: { value: cfg?.fn ?? new Int32Array(MATERIAL_SLOTS).fill(-1) },
+      uMatParams: { value: cfg?.params ?? new Float32Array(MATERIAL_SLOTS * 16) },
+      uMatLODEmissive: { value: cfg?.lodEmissive ?? new Float32Array(MATERIAL_SLOTS) },
+      uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(TERRAIN_LIGHT_TUNING.ambientDayIntensity) },
+      uSunColor: { value: new THREE.Color(0xfff3e0).multiplyScalar(TERRAIN_LIGHT_TUNING.sunIntensity) },
+    });
+    super({
+      uniforms: u,
+      vertexShader: WALL_VERT,
+      fragmentShader: MATERIAL_GLSL + WALL_FRAG,
+      fog: true,
+    });
+    wallRegistry.add(this);
+  }
+
+  override dispose(): void {
+    wallRegistry.delete(this);
+    super.dispose();
+  }
+}
+
+/** 模式退出清空注册表（材质由 disposeVisual 释放；世界 Hot 段统一 reset 重来） */
+export function clearWallMaterialRegistry(): void {
+  wallRegistry.clear();
+}
+
 /**
  * 每帧昼夜调制（RenderManager.follow 调用；所有活跃地形材质统一喂值）。
  * @param sun 太阳状态（renderManager.querySun 同源）
@@ -441,6 +570,28 @@ export function updateTerrainLighting(sun: {
     m.uniforms.uSunDir.value.set(sun.dir.x, sun.dir.y, sun.dir.z);
     m.uniforms.uSunSide.value.copy(sunSide);
     m.uniforms.uSunDay.value = sun.daylight;
+  }
+}
+
+/**
+ * 每帧昼夜调制（RenderManager.follow 调用；侧壁 WallMaterial 统一喂值）。
+ * ★ 与顶面完全相同的光照（2026-09-01）：侧壁重新采样烘焙光图 uLightmap，
+ *   朝阳/背阳由烘焙的 lm.r 决定——不再有每面方向系数，任何角度看一致。
+ *   这里只喂与顶面同源的 uAmbientColor/uSunColor（昼夜色温/强度）。
+ */
+export function updateWallMaterialsLighting(sun: {
+  color: number;
+  intensityScale: number;
+  daylight: number;
+  dir: { x: number; y: number; z: number };
+}): void {
+  const T = TERRAIN_LIGHT_TUNING;
+  const ambHex = nightLerpHex(T.ambientNight, T.ambientDay, sun.daylight);
+  const ambI = T.ambientNightIntensity +
+    (T.ambientDayIntensity - T.ambientNightIntensity) * sun.daylight;
+  for (const m of wallRegistry) {
+    m.uniforms.uAmbientColor.value.setHex(ambHex).multiplyScalar(ambI);
+    m.uniforms.uSunColor.value.setHex(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
   }
 }
 

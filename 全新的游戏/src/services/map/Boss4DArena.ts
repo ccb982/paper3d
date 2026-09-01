@@ -24,11 +24,15 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE } from './ChunkGenerator';
-import { hsl2rgb } from './TerrainPalette';
 import { bakeChunkAppearance, BOSS4D_BAKE } from './ChunkAppearance';
 import type { PlannedDecal } from './decor/TileDecalBase';
 import { hash2 } from './TerrainNoise';
 import type { RasterMap } from './RasterMap';
+import {
+  TERRAIN_LIGHT_TUNING,
+  registerWallLightTarget,
+  unregisterWallLightTarget,
+} from './TerrainMaterial';
 
 export interface Boss4DChunkBuild {
   /** 已装配好的视觉网格（含外观顶面 + 侧壁；调用方 add 到场景并定位） */
@@ -86,14 +90,13 @@ function topSurfaceData(H: Float32Array): {
 }
 
 /** 侧壁几何数据（相对 chunk 角；相邻格高差 → 1m 宽垂直墙，绕序已推导法线朝低处外；
- *  颜色仅视觉路径消费，纯物理路径忽略之） */
+ *  ★ 2026-09-01 起侧壁改采顶面 mapTex（Boss4DWallMaterial），不再需要顶点色） */
 function wallSurfaceData(raster: RasterMap, cx: number, cz: number, H: Float32Array): {
-  wPos: number[]; wNor: number[]; wCol: number[]; wIdx: number[];
+  wPos: number[]; wNor: number[]; wIdx: number[];
 } {
   const N = CHUNK_SIZE;
   const wPos: number[] = [];
   const wNor: number[] = [];
-  const wCol: number[] = [];
   const wIdx: number[] = [];
   let wVi = 0;
   const EPS = 0.05;
@@ -115,21 +118,14 @@ function wallSurfaceData(raster: RasterMap, cx: number, cz: number, H: Float32Ar
         const xA = i + dir.ax, zA = j + dir.az;
         const xB = i + dir.bx, zB = j + dir.bz;
         const yT = hCur, yB = hNb - EPS;
-        // 颜色：tile 底色(0~255) → 归一化 × 落差加深（直接塞 0~255 会被钳成纯白——踩过坑）
-        const td = raster.tileDefAt(
-          cx * N + i + 0.5 + dir.dx * 0.5,
-          cz * N + j + 0.5 + dir.dz * 0.5,
-        );
-        let [r, g, b] = hsl2rgb(td.visual.baseHsl.h, td.visual.baseHsl.s, td.visual.baseHsl.l);
-        const k = (0.42 + Math.min(1, (hCur - hNb) / 4) * 0.22) / 255;
         wPos.push(xA, yT, zA, xB, yT, zB, xB, yB, zB, xA, yB, zA);
-        for (let c = 0; c < 4; c++) { wNor.push(dir.dx, 0, dir.dz); wCol.push(r * k, g * k, b * k); }
+        for (let c = 0; c < 4; c++) wNor.push(dir.dx, 0, dir.dz);
         wIdx.push(wVi, wVi + 2, wVi + 3, wVi, wVi + 1, wVi + 2);
         wVi += 4;
       }
     }
   }
-  return { wPos, wNor, wCol, wIdx };
+  return { wPos, wNor, wIdx };
 }
 
 /** 顶面+侧壁合并为物理 trimesh（索引按顶面顶点数偏移） */
@@ -170,7 +166,7 @@ export function buildBoss4DChunk(
   topGeo.setIndex(new THREE.BufferAttribute(tIdx, 1));
 
   // ---- ② 侧壁网格 ----
-  const { wPos, wNor, wCol, wIdx } = wallSurfaceData(raster, cx, cz, H);
+  const { wPos, wNor, wIdx } = wallSurfaceData(raster, cx, cz, H);
 
   // ---- Group 组装 ----
   const group = new THREE.Group();
@@ -185,10 +181,9 @@ export function buildBoss4DChunk(
     const wallGeo = new THREE.BufferGeometry();
     wallGeo.setAttribute('position', new THREE.Float32BufferAttribute(wPos, 3));
     wallGeo.setAttribute('normal', new THREE.Float32BufferAttribute(wNor, 3));
-    wallGeo.setAttribute('color', new THREE.Float32BufferAttribute(wCol, 3));
     wallGeo.setIndex(wIdx);
-    const wallMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0 });
-    const wallMesh = new THREE.Mesh(wallGeo, wallMat);
+    // ★ 侧壁纹理随相机平移（采顶面同款 mapTex；uMap 引用共享纹理，不设 .map 防双重释放）
+    const wallMesh = new THREE.Mesh(wallGeo, new Boss4DWallMaterial(mapTex));
     group.add(wallMesh);
   }
 
@@ -206,6 +201,79 @@ export function buildBoss4DChunkPhysics(raster: RasterMap, cx: number, cz: numbe
   const { tPos, tIdx } = topSurfaceData(H);
   const { wPos, wIdx } = wallSurfaceData(raster, cx, cz, H);
   return mergePhysicsTrimesh(tPos, tIdx, wPos, wIdx);
+}
+
+// ============================================================
+// Boss4D 侧壁专用材质（★ 纹理随相机平移，2026-09-01 定稿）
+// ============================================================
+// 效果：复用顶面同款 mapTex（烘焙外观），但采样坐标轴随"视角相关法线"
+// 旋转 —— 相机转动时纹理在墙面上水平漂移，保留旧 bug 的"四维空间"手感。
+// ★ 这是正常世界已修掉的变体（normalMatrix * normal），只在 Boss4D 刻意保留。
+// 光照：与 WallMaterial 同协议，registerWallLightTarget 接入昼夜喂值。
+
+const BOSS4D_WALL_VERT = /* glsl */ `
+  uniform float uDrift;
+  varying vec2 vUv;
+  #include <common>
+  #include <fog_pars_vertex>
+  void main() {
+    vec2 q = position.xz / 60.0;   // chunk 连续 uv（与顶面同约定：局部 0..60 → 0..1）
+    // ★ 视角相关法线（normalMatrix = 模型视图法线矩阵，随相机转向）→ 采样轴旋转
+    vec3 N = normalize(normalMatrix * normal);
+    vec2 hor = normalize(vec2(N.x, N.z) + 1e-4);
+    vec2 along = vec2(-hor.y, hor.x);
+    // 纹理坐标 = 顶面对齐基 ± 视角旋转偏移（fract 无缝卷绕 → 相机转 = 墙面纹理平移）
+    vUv = fract(q - vec2(dot(q, along), dot(q, hor)) * uDrift);
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
+  }
+`;
+
+const BOSS4D_WALL_FRAG = /* glsl */ `
+  uniform sampler2D uMap;
+  uniform vec3 uAmbientColor;
+  uniform vec3 uSunColor;
+  varying vec2 vUv;
+  #include <common>
+  #include <fog_pars_fragment>
+  void main() {
+    vec3 base = texture2D(uMap, vUv).rgb;
+    // 近似顶面实时光照（hemisphere+sun）：暗基准 + 直射项，昼夜随 registry 喂值
+    vec3 lit = base * (uAmbientColor + uSunColor * 0.6);
+    gl_FragColor = vec4(lit, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+    #include <fog_fragment>
+  }
+`;
+
+class Boss4DWallMaterial extends THREE.ShaderMaterial {
+  constructor(mapTex: THREE.Texture) {
+    const u = Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
+      uMap: { value: mapTex },
+      uDrift: { value: 0.5 },
+      uAmbientColor: {
+        value: new THREE.Color(TERRAIN_LIGHT_TUNING.ambientDay)
+          .multiplyScalar(TERRAIN_LIGHT_TUNING.ambientDayIntensity),
+      },
+      uSunColor: {
+        value: new THREE.Color(0xfff3e0).multiplyScalar(TERRAIN_LIGHT_TUNING.sunIntensity),
+      },
+    });
+    super({
+      uniforms: u,
+      vertexShader: BOSS4D_WALL_VERT,
+      fragmentShader: BOSS4D_WALL_FRAG,
+      fog: true,
+    });
+    registerWallLightTarget(this);
+  }
+
+  override dispose(): void {
+    unregisterWallLightTarget(this);
+    super.dispose();
+  }
 }
 
 // ============================================================
