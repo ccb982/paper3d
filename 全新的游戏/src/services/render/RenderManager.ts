@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { SunCycle, type SunSample, type MoonSample, type SkyGradient } from './SunCycle';
 import { gameLights, LIGHT_TUNING } from './GameLights';
 import { SkyDome } from './SkyDome';
+import { CloudSolver } from './CloudSolver';
 import { updateTerrainLighting } from '../map/TerrainMaterial';
 import { updateWallLighting } from '../map/ChunkWalls';
 
@@ -27,6 +28,7 @@ export { LIGHT_TUNING };
 class RenderManager {
   private sunCycle = new SunCycle();
   private skyDome = new SkyDome();
+  private cloudSolver: CloudSolver | null = null;
 
   // ---- 全局时间缩放（hitstop 顿帧的基础设施；时间归渲染管理器管） ----
   private _rawDt = 0;
@@ -35,10 +37,14 @@ class RenderManager {
   private _tsScale = 1;
   private _lastCost = 0;
 
-  /** boot 装配光照（main.ts 调一次；幂等） */
-  setup(scene: THREE.Scene): void {
+  /** boot 装配光照（main.ts 调一次；幂等）
+   *  renderer 用于构造 GPU 云朵求解器；scene 挂天空穹顶 */
+  setup(scene: THREE.Scene, renderer: THREE.WebGLRenderer): void {
     gameLights.setup(scene);
     this.skyDome.attach(scene);
+    if (!this.cloudSolver) {
+      this.cloudSolver = new CloudSolver(renderer);
+    }
   }
 
   /**
@@ -54,6 +60,9 @@ class RenderManager {
     }
     this._timeScale = ts;
     this.sunCycle.update(dt * ts); // 顿帧时全世界冻结（含太阳），经典 hitstop
+    // 云朵求解推进（跟随真实时间，顿帧时也冻结保持一致性）
+    this.cloudSolver?.setHour(this.sunCycle.current.hour);
+    this.cloudSolver?.update(dt * ts);
   }
 
   /** 缩放后的帧时间（模式层用这个驱动一切更新） */
@@ -82,6 +91,14 @@ class RenderManager {
     gameLights.follow(target, this.sunCycle.current, this.sunCycle.moon);
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
     this.skyDome.update(target, this.sunCycle.current, this.sunCycle.moon, this.sunCycle.sky);
+    // ★ 云朵双缓冲纹理 + 过渡进度（每帧喂，平滑 2fps 结算）
+    if (this.cloudSolver) {
+      this.skyDome.setCloudTextures(
+        this.cloudSolver.getPrevTexture(),
+        this.cloudSolver.getCurrentTexture(),
+        this.cloudSolver.getBlend(),
+      );
+    }
     // ★ 地形烘焙光照的昼夜调制（双纹理方案：地形不吃实时灯，只吃这两个 uniform）
     updateTerrainLighting(this.sunCycle.current);
     // ★ 断崖侧壁同步昼夜色调（仅亮度，不改烘焙阴影方向，与地面顶面一致）
@@ -103,9 +120,11 @@ class RenderManager {
     return this.sunCycle.sky;
   }
 
-  /** 环境背景开关：world=露天（天空穹顶+太阳/月亮可见）；ship=舰船内部（无天空） */
+  /** 环境背景开关：world=露天（天空穹顶+太阳/月亮可见）；ship=舰船内部（无天空）
+   *  进入 world 时重建云场，ship 时暂停推进（穹顶隐藏即不采样） */
   setEnvironment(kind: 'ship' | 'world'): void {
     this.skyDome.setVisible(kind === 'world');
+    if (kind === 'world' && this.cloudSolver) this.cloudSolver.reset();
   }
 }
 

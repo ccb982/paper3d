@@ -98,7 +98,7 @@ async function boot() {
   sceneLocal.fog = new THREE.Fog(0xcccccc, 80, 200);
   // ★ 光照词汇表：半球光(天/地双色) + 太阳平行光（实体影子走 SilhouetteShadow 解析剪影，不用 shadow map）
   // （实时阴影管线已移除：全项目无 castShadow 者，shadow map 是纯空转开销——2026-08-26 清理）
-  renderManager.setup(sceneLocal);
+  renderManager.setup(sceneLocal, rendererLocal);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
   window.addEventListener('resize', () => {
