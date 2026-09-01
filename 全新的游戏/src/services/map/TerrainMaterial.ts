@@ -51,6 +51,10 @@ export const TERRAIN_LIGHT_TUNING = {
   ambientNightIntensity: 0.10,
 };
 
+/** 侧壁统一亮度增益（乘在 WallMaterial 光照合成后，>1 增亮）。
+ *  墙脚 AO/直射遮挡较顶面更暗，全局抬高一档观感（2026-09-01 用户反馈）。 */
+export const WALL_BRIGHTNESS = 2.9;
+
 const registry = new Set<TerrainMaterial>();
 
 /** 材质 uniform 数组尺寸（每 tile id 一槽；上限 = 可注册地块 id 上限）。
@@ -498,7 +502,9 @@ const WALL_FRAG = /* glsl */ `
     float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
 
     // ★ 与顶面完全相同的光照公式（无任何方向性/深度系数——任何角度看一致）
-    vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * lm.r);
+    // ★ 侧壁统一增亮：墙脚 AO/直射遮挡常压暗，全局抬高一档亮度但保留
+    //   与顶面同源的明暗分布（用户反馈：断崖侧壁观感太暗，2026-09-01）
+    vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * lm.r) * ${WALL_BRIGHTNESS.toFixed(2)};
     gl_FragColor = vec4(lit, 1.0);
     #include <tonemapping_fragment>   // ★ 与全局 ACES 管线对齐（顶面同款）
     #include <colorspace_fragment>
