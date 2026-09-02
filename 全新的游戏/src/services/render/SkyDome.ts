@@ -435,16 +435,22 @@ export class SkyDome {
     if (this.moonTexReady) {
       // 可见度 = 夜对应（1 - daylight）× 月亮可见度
       const moonVisible = (1 - sun.daylight) * moon.visibility;
+      // ★ 地平线淡出：月亮落到地平线下方彻底隐藏。
+      //   否则 depthTest=false 的 quad 落山时仍画在最上层，会盖住同一位置
+      //   升起的太阳（日出与月落同时发生在地平线附近）。
+      //   dir.y = sin(仰角)，0..1/6（约 0~9.6°）线性淡出。
+      const horizFade = THREE.MathUtils.clamp(moon.dir.y * 6.0, 0, 1);
+      const vis = moonVisible * horizFade;
       this.moonTexMesh.position.set(mx, my, mz);
       this.moonTexMesh.lookAt(anchor.x, anchor.y, anchor.z);
-      this.moonTexMat.uniforms.uVisible.value = moonVisible;
+      this.moonTexMat.uniforms.uVisible.value = vis;
       // ★ 表面浅月色叠加：夜晚微亮（最多 0.28 强度）
-      this.moonTexMat.uniforms.uTint.value = moonVisible * 0.28;
+      this.moonTexMat.uniforms.uTint.value = vis * 0.28;
 
-      // ★ 外发光：位置/朝向与月亮同步，强度随夜晚可见度（满月最亮）
+      // ★ 外发光：位置/朝向与月亮同步，强度随可见度（满月最亮）
       this.moonGlowMesh.position.set(mx, my, mz);
       this.moonGlowMesh.lookAt(anchor.x, anchor.y, anchor.z);
-      this.moonGlowMat.uniforms.uIntensity.value = moonVisible * 0.55;
+      this.moonGlowMat.uniforms.uIntensity.value = vis * 0.55;
     }
   }
 }

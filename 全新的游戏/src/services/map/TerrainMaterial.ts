@@ -55,6 +55,12 @@ export const TERRAIN_LIGHT_TUNING = {
  *  墙脚 AO/直射遮挡较顶面更暗，全局抬高一档观感（2026-09-01 用户反馈）。 */
 export const WALL_BRIGHTNESS = 2.9;
 
+/** 侧壁自发光保底强度（夜晚值；× 材质本色直接发光）。
+ *  墙面法线水平，上方来光几乎不受直射（N·L≈0）→ 光照公式的直射项对竖直
+ *  面天然失效。夜晚用材质本色直接发光保底可见，白天 0（光照充足不需要）。
+ *  ★ 0.16 实测仍极黑，拉夸张档（2026-09-01 用户反馈；水体侧壁另有 id 削弱）。 */
+export const WALL_EMISSIVE = 0.55;
+
 const registry = new Set<TerrainMaterial>();
 
 /** 材质 uniform 数组尺寸（每 tile id 一槽；上限 = 可注册地块 id 上限）。
@@ -480,6 +486,8 @@ const WALL_FRAG = /* glsl */ `
   uniform sampler2D uLightmap;
   uniform vec3 uAmbientColor;
   uniform vec3 uSunColor;
+  uniform float uSunDay;       // 0..1 白昼度（夜晚直射保底开关）
+  uniform float uWallEmissive; // 侧壁自发光保底（夜晚 >0；× 材质本色）
   varying vec2 vUv;
   varying vec2 vUvC;
   varying vec2 vTex;
@@ -501,10 +509,28 @@ const WALL_FRAG = /* glsl */ `
     // 伪 AO：大尺度斑块暗谷（patch 负值 = 谷地 = 变暗；0.4~1.0）
     float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
 
+    // ★ 水体侧壁（id 4 = water）独立路径：不享受任何夜晚保底/自发光/增亮
+    //   ——水坑内壁走纯烘焙光照 × 低增益（深暗水面），防止亮蓝发白刺眼
+    bool isWaterWall = (id == 4);
+
+    // ★ 夜晚直射保底：墙面是竖直面，vUvC 塌缩成光图上一个点——若该点在
+    //   烘焙阴影/背光区（lm.r≈0），夜晚整面墙只剩 ambient×ao ≈ 纯黑。
+    //   夜晚直射钳到 ≥0.85（月光全开级别，配合 NIGHT_SUN 冷蓝色温 → 月光打墙），
+    //   白天按 daylight 平滑回烘焙原值。（0.30 实测仍非常暗，2026-09-01 用户反馈）
+    float d = isWaterWall ? lm.r : mix(max(lm.r, 0.85), lm.r, uSunDay);
+
     // ★ 与顶面完全相同的光照公式（无任何方向性/深度系数——任何角度看一致）
     // ★ 侧壁统一增亮：墙脚 AO/直射遮挡常压暗，全局抬高一档亮度但保留
     //   与顶面同源的明暗分布（用户反馈：断崖侧壁观感太暗，2026-09-01）
-    vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * lm.r) * ${WALL_BRIGHTNESS.toFixed(2)};
+    //   水体侧壁增益压到 32%（无增亮，纯烘焙明暗；0.4 实测仍偏亮，再弱一档）
+    float wallGain = isWaterWall ? ${WALL_BRIGHTNESS.toFixed(2)} * 0.32 : ${WALL_BRIGHTNESS.toFixed(2)};
+    vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * d) * wallGain;
+
+    // ★ 侧壁自发光保底（LOD 发光思路）：竖直面法线不受上方光照（N·L≈0），
+    //   光照公式对墙天然偏暗 → 材质本色直接发光，不受 AO/直射遮挡影响
+    //   （水体侧壁不参与——见 isWaterWall 独立路径）
+    if (!isWaterWall) lit += base * alb * uWallEmissive;
+
     gl_FragColor = vec4(lit, 1.0);
     #include <tonemapping_fragment>   // ★ 与全局 ACES 管线对齐（顶面同款）
     #include <colorspace_fragment>
@@ -532,6 +558,8 @@ export class WallMaterial extends THREE.ShaderMaterial {
       uMatLODEmissive: { value: cfg?.lodEmissive ?? new Float32Array(MATERIAL_SLOTS) },
       uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(TERRAIN_LIGHT_TUNING.ambientDayIntensity) },
       uSunColor: { value: new THREE.Color(0xfff3e0).multiplyScalar(TERRAIN_LIGHT_TUNING.sunIntensity) },
+      uSunDay: { value: 1 },
+      uWallEmissive: { value: 0 },
     });
     super({
       uniforms: u,
@@ -598,6 +626,13 @@ export function updateWallMaterialsLighting(sun: {
   for (const m of wallRegistry) {
     m.uniforms.uAmbientColor.value.setHex(ambHex).multiplyScalar(ambI);
     m.uniforms.uSunColor.value.setHex(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
+    // ★ 夜晚直射保底开关（WALL_FRAG 用；Boss4D 墙材质无此 uniform，跳过）
+    if (m.uniforms.uSunDay) m.uniforms.uSunDay.value = sun.daylight;
+    // ★ 侧壁自发光保底：墙面法线水平，上方来光几乎不受直射 → 夜晚用
+    //   材质本色直接发光（白天 0，随 daylight 平滑淡入）
+    if (m.uniforms.uWallEmissive) {
+      m.uniforms.uWallEmissive.value = (1 - sun.daylight) * WALL_EMISSIVE;
+    }
   }
 }
 
