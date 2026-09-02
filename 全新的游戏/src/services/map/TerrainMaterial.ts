@@ -376,14 +376,23 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(dL, dC, dH, reflect);
   }
 
-  // 沙土（1-7 写实风主打）：纯色底 + 高频细沙粒 + 极弱低频起伏。
-  // ★ 无斑块/无石子/无扫痕/无裂纹——"粗糙感"只来自细沙粒与微起伏。
+  // 沙土（1-7 写实风主打）：纯色基调，颜色变化全部由连续噪声场提供——
+  // ★ 无斑块/无石子/无扫痕/无裂纹/无格块。三尺度明暗（大波/中波/细粒）
+  //   + 色彩呼吸（暗处微提饱和偏冷=湿沙感，亮处微褪色偏暖=干沙感），
+  //   全部 vnoise 平滑连续，无任何边界感。
   vec4 mat_sand(vec3 f, vec2 w, int id) {
-    float grain = (h21(floor(w * 110.0)) - 0.5) * matP(id, 0) * 1.6;
-    float und = (vnoise2(w * 0.55) - 0.5) * matP(id, 1) * 0.35;
-    float dL = grain + und;
-    float reflect = 1.0 + grain * 0.08 + und * 0.15;
-    return vec4(dL, 0.0, 0.0, reflect);
+    float macro = (vnoise2(w * 0.18) - 0.5) * 2.0 * matP(id, 2) * 0.50;  // 大波（大范围明暗）
+    float meso  = (vnoise2(w * 0.75) - 0.5) * 2.0 * matP(id, 1) * 0.46;  // 中波（团块起伏）
+    float grain = (h21(floor(w * 110.0)) - 0.5) * matP(id, 0) * 1.6;     // 细粒（像素磨砂）
+    float dL = macro + meso + grain;
+    // 色彩呼吸：shade = 明暗场（不含细粒，保持大团块色彩整体感）
+    float shade = macro * 0.6 + meso * 0.4;
+    float dC = -shade * 0.028 * matP(id, 3);           // 暗→饱和+（湿）亮→褪色（干）
+    // ★ 独立色相漂移场（与明暗解耦）：土壤冷暖斑驳（偏黄橙 ↔ 偏红棕）
+    float hueDrift = (vnoise2(w * 0.22 + 31.0) - 0.5) * 2.0 * matP(id, 3) * 0.015;
+    float dH = shade * 0.016 * matP(id, 3) + hueDrift; // 暗→偏冷灰 亮→偏黄暖 + 斑驳漂移
+    float reflect = 1.0 + dL * 0.18;
+    return vec4(dL, dC, dH, reflect);
   }
 
   // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================

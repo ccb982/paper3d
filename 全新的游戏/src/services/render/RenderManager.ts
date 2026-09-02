@@ -84,7 +84,7 @@ class RenderManager {
     }
   }
 
-  /** 进入战场：重置到初始时刻（晚上，默认 START_HOUR=21） */
+  /** 进入战场：重置到初始时刻（白天，默认 START_HOUR=10） */
   resetDay(hour?: number): void {
     this.sunCycle.reset(hour);
   }

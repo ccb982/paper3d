@@ -55,7 +55,7 @@ export interface SkyGradient {
 
 // ---- 时间常量 ----
 const DAY_SECONDS = 900;   // 现实 15 分钟 = 游戏 24 小时（可调）
-const START_HOUR = 21;      // 初始时间 = 晚上（月已升起、天黑、月亮可见度 1）
+const START_HOUR = 6;      // 初始时间 = 白天（上午，太阳仰角充足、光照明亮）
 const SUNRISE = 6;
 const SUNSET = 18;
 const MIN_ELEV_DEG = 20;   // ★ 用户决策：仰角不用太低
