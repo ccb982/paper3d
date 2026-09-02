@@ -175,14 +175,9 @@ registerDecalPattern('blotch', (out, S, _ox, _oz, d, seed, _params) => {
 });
 
 // ============================================================
-// 占位内容（基石组；后续替换/扩充——注册实例即可）
+// 占位内容（基石组；2026-09-02 移除占位·碎屑斑点——1-7 写实风要求
+// 默认地块表面干净无花纹。后续装饰 = 在此注册实例即可）
 // ============================================================
-
-registerDecal(new TileDecalBase({
-  key: 'foundation_speckle', label: '占位·碎屑斑点', groups: [FOUNDATION_DECAL_GROUP],
-  placement: { hostRole: ['ground', 'platform'], density: 0.12, scaleRange: [1.2, 2.6] },
-  pattern: { fnId: 'speckle', params: { depth: 0.14 } },
-}));
 
 // ============================================================
 // 规划（地形生成完成后、预渲染前调用；纯函数零 three）

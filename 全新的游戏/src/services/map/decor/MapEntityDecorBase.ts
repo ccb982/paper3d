@@ -171,19 +171,9 @@ export function propsForGroup(groupKey: string): MapEntityDecorBase[] {
 export const FOUNDATION_PROP_GROUP = 'foundation';
 
 // ============================================================
-// 占位内容（基石组；后续替换/扩充——注册实例即可）
+// 占位内容（基石组；2026-09-02 移除占位·碎石——1-7 写实风要求
+// 默认地块表面干净无杂物。后续装饰 = 在此注册实例即可）
 // ============================================================
-
-registerMapDecor(new MapEntityDecorBase({
-  key: 'foundation_pebble', label: '占位·碎石', groups: [FOUNDATION_PROP_GROUP],
-  placement: {
-    hostRole: ['ground', 'platform'], perCellProb: 0.09,
-    scaleRange: [0.6, 1.5], sinkIntoGround: 0.08,
-  },
-  render: 'instanced', shadow: 'disc',
-  physics: { type: 'cuboid', radius: 0.7, height: 1.2 },
-  geometry: { type: 'rock', params: { radius: 0.7, height: 1.2, noise: 0.35, color: 0x8a7f74 } },
-}));
 
 // ============================================================
 // 规划（地形生成完成后、渲染前调用；纯函数零 three）

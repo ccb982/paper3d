@@ -117,20 +117,25 @@ export class TileDef {
   }
 }
 
+/** 基础地块 id（含 1-7 沙土默认皮 19/20；类型显示按"平地/高台"归类） */
+const BASE_TILE_IDS = new Set([0, 1, 2, 4, 19, 20]);
+
 /**
- * ★ 地块类型名（类型封闭原则的显示侧；id≥10 = 装饰变体是本表既有约定）。
+ * ★ 地块类型名（类型封闭原则的显示侧；id≥10 = 装饰变体是本表既有约定，
+ *   例外：19/20 沙土变体 = 默认基础皮，显示"平地/高台"）。
  * 六类型：平地 / 高台 / 水 / 坑洞 / 装饰性平地 / 装饰性高台。
  */
 export function tileTypeName(td: TileDef): string {
+  const isBase = BASE_TILE_IDS.has(td.id);
   switch (td.genRole) {
     case "liquid":
       return "水";
     case "pit":
       return "坑洞";
     case "ground":
-      return td.id >= 10 ? "装饰性平地" : "平地";
+      return isBase ? "平地" : "装饰性平地";
     case "platform":
-      return td.id >= 10 ? "装饰性高台" : "高台";
+      return isBase ? "高台" : "装饰性高台";
   }
 }
 
@@ -154,11 +159,15 @@ export const TILE_FLAT = new TileDef(
   "平地/路",
   "ground",
   {
-    baseHsl: { h: 0.0854, s: 0.15, l: 0.4431 }, // 灰棕（2026-08-31 去橙红）
+    baseHsl: { h: 0.0881, s: 0.343, l: 0.400 }, // ★ 明日方舟 1-7 地面 rgb(137,104,67)
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
-    borderLine: true,
-    material: { fnId: "dirt" }, // ★ 纯泥土地面
+    borderLine: false, // ★ 1-7 写实风：无 4×4 黑框（去方块拼贴感）
+    material: {
+      fnId: "dirt",
+      // ★ 1-7 写实风：纯色为主——斑块/石子/扫痕弱化，保留高频颗粒的粗糙感
+      params: { grain: 0.045, pebbles: 0.05, ruts: 0.04, patch: 0.07 },
+    },
   },
   {
     height: 0,
@@ -176,12 +185,16 @@ export const TILE_PLATFORM = new TileDef(
   "高台",
   "platform",
   {
-    baseHsl: { h: 0.0741, s: 0.18, l: 0.5804 }, // 灰岩（2026-08-31 去橙红）
+    baseHsl: { h: 0.0774, s: 0.356, l: 0.537 }, // ★ 明日方舟 1-7 高台 rgb(179,134,95)
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
-    borderLine: true,
+    borderLine: false, // ★ 1-7 写实风：无 4×4 黑框（去方块拼贴感）
     streaks: true, // 拉丝金属
-    material: { fnId: "rock" }, // ★ 岩石材质
+    material: {
+      fnId: "rock",
+      // ★ 1-7 写实风：纯色为主——岩理/拉丝/裂纹弱化，保留微凹凸颗粒的粗糙感
+      params: { strata: 0.06, streak: 0.05, cracks: 0.05, bump: 0.12 },
+    },
   },
   {
     height: 1.8,
@@ -459,6 +472,45 @@ export const TILE_WOOD = new TileDef(
 );
 
 // ============================================================
+// 1-7 主题地块（明日方舟写实风：沙土质感——纯色 + 细沙粒，无斑点纹理）
+// physics 严格复用基础类引用（变体 ≙ 基础，逐位一致）
+// ============================================================
+
+/** 沙土地面（1-7 写实风；physics ≙ flat） */
+export const TILE_FLAT_SAND = new TileDef(
+  19,
+  "flat_sand",
+  "沙土地面",
+  "ground",
+  {
+    baseHsl: { h: 0.0881, s: 0.343, l: 0.400 }, // rgb(137,104,67)
+    jitter: { h: 0, s: 0, l: 0 }, // ★ 纯色无方块：0 = 关闭 1m 格点抖动（方块感来源）
+    depression: false,
+    borderLine: false, // 无 4×4 黑框
+    material: { fnId: "sand" }, // 沙土材质（细沙粒 + 微起伏）
+  },
+  TILE_FLAT.physics,
+  ["foundation"],
+);
+
+/** 沙土高台（1-7 写实风；physics ≙ platform，同一梯田带公式） */
+export const TILE_PLATFORM_SAND = new TileDef(
+  20,
+  "platform_sand",
+  "沙土高台",
+  "platform",
+  {
+    baseHsl: { h: 0.0774, s: 0.356, l: 0.537 }, // rgb(179,134,95)
+    jitter: { h: 0, s: 0, l: 0 }, // ★ 纯色无方块：0 = 关闭 1m 格点抖动（方块感来源）
+    depression: false,
+    borderLine: false, // 无 4×4 黑框
+    material: { fnId: "sand" }, // 沙土材质（与地面同质感）
+  },
+  TILE_PLATFORM.physics,
+  ["foundation"],
+);
+
+// ============================================================
 // 注册表
 // ============================================================
 
@@ -479,6 +531,8 @@ for (const t of [
   TILE_BRICK,
   TILE_GRASS,
   TILE_WOOD,
+  TILE_FLAT_SAND,
+  TILE_PLATFORM_SAND,
 ]) {
   if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
   REGISTRY.set(t.id, t);

@@ -51,8 +51,8 @@ export const TERRAIN_LIGHT_TUNING = {
   ambientNightIntensity: 0.10,
 };
 
-/** 侧壁统一亮度增益（乘在 WallMaterial 光照合成后，>1 增亮）。
- *  墙脚 AO/直射遮挡较顶面更暗，全局抬高一档观感（2026-09-01 用户反馈）。 */
+/** 水体侧壁亮度基准（仅水墙路径用：× 0.32 = 深暗水面增益；非水墙增益恒 1.0，
+ *  光照采样已与顶面同源——见 WALL_FRAG 2026-09-02 修正）。 */
 export const WALL_BRIGHTNESS = 2.9;
 
 /** 侧壁自发光保底强度（夜晚值；× 材质本色直接发光）。
@@ -75,7 +75,7 @@ export const MATERIAL_SLOTS = 32;
  */
 const MAT_FN_INDEX: Record<string, number> = {
   dirt: 0, brick: 1, grass: 2, wood: 3, rock: 4, moss: 5,
-  water: 6, ice: 7, ash: 8, mud: 9, pit: 10,
+  water: 6, ice: 7, ash: 8, mud: 9, pit: 10, sand: 11,
 };
 
 /** TileDef.visual.material.fnId → 材质函数索引（-1 = 无材质） */
@@ -376,6 +376,16 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(dL, dC, dH, reflect);
   }
 
+  // 沙土（1-7 写实风主打）：纯色底 + 高频细沙粒 + 极弱低频起伏。
+  // ★ 无斑块/无石子/无扫痕/无裂纹——"粗糙感"只来自细沙粒与微起伏。
+  vec4 mat_sand(vec3 f, vec2 w, int id) {
+    float grain = (h21(floor(w * 110.0)) - 0.5) * matP(id, 0) * 1.6;
+    float und = (vnoise2(w * 0.55) - 0.5) * matP(id, 1) * 0.35;
+    float dL = grain + und;
+    float reflect = 1.0 + grain * 0.08 + und * 0.15;
+    return vec4(dL, 0.0, 0.0, reflect);
+  }
+
   // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================
   // materialShade 返回 vec4(dL, dC, dH, reflect)；无材质 → 零偏移 + reflect=1.0。
   vec4 materialShade(vec3 f, vec2 w, int id) {
@@ -622,14 +632,22 @@ const WALL_FRAG = /* glsl */ `
   #include <common>
   #include <fog_pars_fragment>
   void main() {
-    vec3 alb = texture2D(uAlbedo, vUvC).rgb;
-    vec3 lm = texture2D(uLightmap, vUvC).rgb;      // r=直射 / g=AO（与顶面同约定）
     int id = int(texture2D(uTileIds, vUv).r * 255.0 + 0.5);
+    bool isWaterWall = (id == 4);   // ★ 水体侧壁（id 4 = water）独立路径
+
+    // ★ 光照/装饰采样点（2026-09-02 修正"侧壁与顶部颜色不一致"）：
+    //   墙面是竖直面，vUvC（xz 投影）塌缩到墙脚线一个点——烘焙光图里墙脚是
+    //   AO/阴影深区，整面墙取到"坑底光照"，再靠 2.9 增益拉亮 → 与顶面系统性
+    //   色偏。改为非水墙采样 vUv（墙顶所属地块中心，与 uTileIds 同源）——
+    //   光照与顶面同源同值，wallGain 回归 1.0，颜色自然一致（墙 = 顶面延展）。
+    //   水墙保持墙脚投影 + 低增益（深暗水面观感是专调效果）。
+    vec3 alb = texture2D(uAlbedo, isWaterWall ? vUvC : vUv).rgb;
+    vec3 lm = texture2D(uLightmap, isWaterWall ? vUvC : vUv).rgb;
     vec3 field = shadeField(vTex);
     vec3 base = oklchShade(vTex, id, field);       // 与顶面逐像素一致的材质纹理
 
     // ★ 4×4 地块边界描边（与顶面同款：分界线在墙面上延展）
-    vec2 buv = fract(vUvC * 15.0);
+    vec2 buv = fract((isWaterWall ? vUvC : vUv) * 15.0);
     float dEdge = min(min(buv.x, 1.0 - buv.x), min(buv.y, 1.0 - buv.y));
     float edge = 1.0 - smoothstep(0.0, 0.010, dEdge);
     base = mix(base, vec3(0.02), edge * uMatSurface[id].w);
@@ -637,21 +655,15 @@ const WALL_FRAG = /* glsl */ `
     // 伪 AO：大尺度斑块暗谷（patch 负值 = 谷地 = 变暗；0.4~1.0）
     float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
 
-    // ★ 水体侧壁（id 4 = water）独立路径：不享受任何夜晚保底/自发光/增亮
-    //   ——水坑内壁走纯烘焙光照 × 低增益（深暗水面），防止亮蓝发白刺眼
-    bool isWaterWall = (id == 4);
-
-    // ★ 夜晚直射保底：墙面是竖直面，vUvC 塌缩成光图上一个点——若该点在
-    //   烘焙阴影/背光区（lm.r≈0），夜晚整面墙只剩 ambient×ao ≈ 纯黑。
+    // ★ 夜晚直射保底：墙面是竖直面，法线水平不受直射（N·L≈0）——若所属地块
+    //   在烘焙阴影区（lm.r≈0），夜晚整面墙只剩 ambient×ao ≈ 纯黑。
     //   夜晚直射钳到 ≥0.85（月光全开级别，配合 NIGHT_SUN 冷蓝色温 → 月光打墙），
-    //   白天按 daylight 平滑回烘焙原值。（0.30 实测仍非常暗，2026-09-01 用户反馈）
+    //   白天按 daylight 平滑回烘焙原值。
     float d = isWaterWall ? lm.r : mix(max(lm.r, 0.85), lm.r, uSunDay);
 
-    // ★ 与顶面完全相同的光照公式（无任何方向性/深度系数——任何角度看一致）
-    // ★ 侧壁统一增亮：墙脚 AO/直射遮挡常压暗，全局抬高一档亮度但保留
-    //   与顶面同源的明暗分布（用户反馈：断崖侧壁观感太暗，2026-09-01）
-    //   水体侧壁增益压到 32%（无增亮，纯烘焙明暗；0.4 实测仍偏亮，再弱一档）
-    float wallGain = isWaterWall ? ${WALL_BRIGHTNESS.toFixed(2)} * 0.32 : ${WALL_BRIGHTNESS.toFixed(2)};
+    // ★ 增益：非水墙 1.0（光照已与顶面同源，不再需要补偿墙脚塌缩）；
+    //   水体侧壁压到 32%（无增亮，纯烘焙明暗；专调深暗水面）
+    float wallGain = isWaterWall ? ${WALL_BRIGHTNESS.toFixed(2)} * 0.32 : 1.0;
     vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * d) * wallGain;
 
     // ★ 侧壁自发光保底（LOD 发光思路）：竖直面法线不受上方光照（N·L≈0），

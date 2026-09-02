@@ -14,7 +14,7 @@
 // ============================================================
 
 import { hash2 } from './TerrainNoise';
-import { tileByKey, tileById, allTiles, TILE_FLAT, TILE_PLATFORM, TILE_WATER, TILE_PIT, type TileDef, type TileGenRole } from './Tiles';
+import { tileByKey, tileById, allTiles, TILE_FLAT_SAND, TILE_PLATFORM_SAND, TILE_WATER, TILE_PIT, type TileDef, type TileGenRole } from './Tiles';
 
 // ============================================================
 // 组定义与注册表
@@ -83,10 +83,10 @@ export function groupByKey(key: string): GroupDef | undefined {
 /** 基石组（四角色齐装的兜底包；回退链终点） */
 export const FOUNDATION_KEY = 'foundation';
 
-/** 角色无成员时的最终默认块（理论上基石组齐全时不会走到这里） */
+/** 角色无成员时的最终默认块（★ 2026-09-02 起默认皮 = 1-7 沙土变体；物理 ≙ 基础类） */
 const ROLE_DEFAULT: Record<TileGenRole, TileDef> = {
-  ground: TILE_FLAT,
-  platform: TILE_PLATFORM,
+  ground: TILE_FLAT_SAND,
+  platform: TILE_PLATFORM_SAND,
   liquid: TILE_WATER,
   pit: TILE_PIT,
 };
@@ -100,8 +100,9 @@ const NEUTRAL_GEN: GroupGen = { densityBias: 0, waterMul: 1, pitMul: 1 };
 
 registerGroup({
   key: 'foundation', label: '基石', weight: 0,
-  // ★ 2026-08-29 解绑装饰变体：基础组回归四类型基线（明日方舟 1-7 主题素材后续重做）
-  members: { flat: 1, platform: 1, water: 1, pit: 1 },
+  // ★ 2026-09-02 1-7 写实风落地：默认组改用沙土变体（纯色+细沙粒，无斑点纹理）；
+  //   基础 5 类保留注册作回归基线，不再被默认组抽中。
+  members: { flat_sand: 1, platform_sand: 1, water: 1, pit: 1 },
   palette: NEUTRAL_PALETTE, gen: NEUTRAL_GEN,
 });
 
@@ -271,7 +272,7 @@ export function drawGroundDecorTile(
   group: GroupDef, seed: number, cx: number, cz: number, blockIndex: number,
 ): TileDef | null {
   const decorPool = (g: GroupDef) =>
-    rolePool(g, 'ground').filter((p) => p.key !== 'flat');
+    rolePool(g, 'ground').filter((p) => p.key !== 'flat' && p.key !== 'flat_sand');
   const tryDraw = (g: GroupDef): TileDef | null => {
     const pool = decorPool(g);
     if (pool.length === 0) return null;

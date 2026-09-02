@@ -21,7 +21,7 @@
 //   改任何一个数 = 全世界地形重洗，回归基线全部失效。
 // ============================================================
 
-import { TILE_FLAT } from './Tiles';
+import { TILE_FLAT_SAND } from './Tiles';
 import { tileById } from './Tiles';
 import { pickChunkGroup, drawTileForRole, drawGroundDecorTile, type GroupDef } from './TileGroups';
 import { hash2, vnoise } from './TerrainNoise';
@@ -393,9 +393,9 @@ function fillSlots(
         const wz = (cz * BLOCKS_PER_SIDE + bz) * BLOCK_SIZE;
         if (!portNear.has(i) && vnoise(wx * PATCH_FREQ, wz * PATCH_FREQ, seed + 7349) > PATCH_TAU) {
           const decor = drawGroundDecorTile(panel, seed, cx, cz, i);
-          blockIds[i] = decor ? decor.id : TILE_FLAT.id;
+          blockIds[i] = decor ? decor.id : TILE_FLAT_SAND.id;
         } else {
-          blockIds[i] = TILE_FLAT.id;
+          blockIds[i] = TILE_FLAT_SAND.id;
         }
         break;
       }

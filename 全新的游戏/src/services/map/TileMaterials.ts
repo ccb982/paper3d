@@ -210,3 +210,14 @@ registerTileMaterial({
   },
   lodEmissive: 0.02,
 });
+
+/** 沙土（1-7 写实风主打）：纯色底 + 高频细沙粒 + 极弱低频起伏；无斑点无纹理图案 */
+registerTileMaterial({
+  fnId: 'sand', label: '沙土',
+  params: {
+    grain: 0.04,          // 细沙粒幅度（粗糙感来源）
+    undulate: 0.08,       // 极弱低频起伏（避免死平）
+  },
+  surface: { roughness: 0.95 },
+  lodEmissive: 0.02,
+});
