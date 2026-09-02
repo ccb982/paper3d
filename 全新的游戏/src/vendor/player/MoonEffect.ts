@@ -81,7 +81,7 @@ export class MoonEffect {
     });
 
     // 控制器：循环播放全部帧
-    this.controller = asset.createController({ mode: 'loop', speed: 1 });
+    this.controller = asset.createController({ order: 'loop', speed: 1 });
   }
 
   /** 月亮本体宽高比（最长边 = 1；SkyDome quad 按此缩放防变形） */

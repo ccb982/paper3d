@@ -203,6 +203,7 @@ export const TILE_PIT = new TileDef(
     patches: true,
     patchHalf: true, // 警示色保持醒目
     borderLine: true,
+    material: { fnId: "pit" }, // ★ 坑洞材质（径向渐深 + 裂纹红光）
   },
   {
     height: -3.0,
@@ -223,6 +224,7 @@ export const TILE_WATER = new TileDef(
     depression: true,
     patches: false, // 水面无色阶斑块
     borderLine: false, // 水面无内描边
+    material: { fnId: "water" }, // ★ 水面材质（流动波纹 + 闪粼，动画）
   },
   {
     height: -0.5,
@@ -261,6 +263,7 @@ export const TILE_ICE = new TileDef(
     jitter: { h: 0.006, s: 0.02, l: 0.04 },
     depression: false,
     borderLine: true,
+    material: { fnId: "ice" }, // ★ 冰面材质（结晶裂纹 + 闪晶 + 高镜面）
   },
   {
     height: 0,
@@ -283,6 +286,7 @@ export const TILE_ASH_FIELD = new TileDef(
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
+    material: { fnId: "ash" }, // ★ 灰烬材质（风积纹 + 余烬呼吸闪烁）
   },
   {
     height: 0,
@@ -305,6 +309,7 @@ export const TILE_MUD = new TileDef(
     jitter: { h: 0.006, s: 0.03, l: 0.04 },
     depression: false,
     borderLine: true,
+    material: { fnId: "mud" }, // ★ 泥沼材质（水洼 + 干裂纹 + 湿面高光）
   },
   {
     height: 0,
@@ -350,6 +355,7 @@ export const TILE_ICE_PLATFORM = new TileDef(
     depression: false,
     borderLine: true,
     streaks: true,
+    material: { fnId: "ice", params: { crack: 0.60, frost: 0.20 } }, // ★ 冰台（裂纹更密、霜更少）
   },
   { height: 1.8, heightJitterRange: 0.4, walkable: true },
   ["crystal"],
