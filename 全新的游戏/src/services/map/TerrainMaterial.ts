@@ -399,8 +399,11 @@ ${MATERIAL_DISPATCH}
   //   materialShade 的尺度渐变 + 每地块 hash 抖动族 + 反光层，叠加在作者侧基色上。
   vec3 oklchShade(vec2 w, int id, vec3 field) {
     vec4 sh = materialShade(field, w, id);                // (dL, dC, dH, reflect)
+    // ★ 逐地块轻微 HSL 色偏：粒度 = 4×4m 地块（每地块整体一个 hash 色偏，
+    //   地块内部连续纯色）。原 1m 粒度（floor(w)）会碎成小方块——2026-09-02
+    //   用户反馈"纹理上有方块"后归零；现按地块粒度恢复"每地块轻微变化"。
     vec3 LCH = uMatBaseLCH[id].xyz + sh.xyz
-             + uMatJitter[id].xyz * ((h21(floor(w)) - 0.5) * 2.0);  // 每地块独立抖动
+             + uMatJitter[id].xyz * ((h21(floor(w / 4.0)) - 0.5) * 2.0);
     LCH.x = clamp(LCH.x, 0.0, 1.0);                        // L clamp（勿 mod）
     LCH.y = clamp(LCH.y, 0.0, 0.4);                        // C clamp（感知上限）
     LCH.z = fract(LCH.z);                                  // H 唯一可环绕

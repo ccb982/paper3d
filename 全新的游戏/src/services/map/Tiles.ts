@@ -484,7 +484,7 @@ export const TILE_FLAT_SAND = new TileDef(
   "ground",
   {
     baseHsl: { h: 0.0881, s: 0.343, l: 0.400 }, // rgb(137,104,67)
-    jitter: { h: 0, s: 0, l: 0 }, // ★ 纯色无方块：0 = 关闭 1m 格点抖动（方块感来源）
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
     depression: false,
     borderLine: false, // 无 4×4 黑框
     material: { fnId: "sand" }, // 沙土材质（细沙粒 + 微起伏）
@@ -501,7 +501,7 @@ export const TILE_PLATFORM_SAND = new TileDef(
   "platform",
   {
     baseHsl: { h: 0.0774, s: 0.356, l: 0.537 }, // rgb(179,134,95)
-    jitter: { h: 0, s: 0, l: 0 }, // ★ 纯色无方块：0 = 关闭 1m 格点抖动（方块感来源）
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
     depression: false,
     borderLine: false, // 无 4×4 黑框
     material: { fnId: "sand" }, // 沙土材质（与地面同质感）
