@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
-import { worldToCanvas, canvasToWorld, worldToAxis, projectWorldToBbox } from '../utils/transform';
+import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
 import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact, BFS_WORLD_BOUNDS, type DebugRegionData } from '../utils/regionDetectionExact';
 import { findRegionByPoint, findRegionIndexByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
@@ -673,22 +673,6 @@ useEffect(() => {
     const bbox = entity.worldBbox;
     if (!bbox) { continue; }
 
-    const frameDataForGeo0 = frameDataMap[activeLayerId];
-    const boundFd0 = frameDataForGeo0 && frameDataForGeo0.boundRegionId === entity.id
-      ? frameDataForGeo0 : null;
-    if (boundFd0 && boundFd0.rawBbox) {
-      const ectx = entity.frameContext;
-      if (!ectx || ectx.rawBbox.x !== boundFd0.rawBbox.x || ectx.rawBbox.y !== boundFd0.rawBbox.y ||
-          ectx.rawBbox.w !== boundFd0.rawBbox.w || ectx.rawBbox.h !== boundFd0.rawBbox.h) {
-        entity.frameContext = {
-          rawBbox: { ...boundFd0.rawBbox },
-        };
-        entity.forceDisplacementRebuild();
-      }
-    } else {
-      entity.frameContext = null;
-    }
-
     const displacementTex = entity.getDisplacementTexture(canvasWidth, canvasHeight);
     if (!displacementTex) {
       continue;
@@ -696,21 +680,12 @@ useEffect(() => {
     const vertexCount = entity.getTotalVertices();
     const numFrames = entity.getNumFrames();
 
-    // --- 1. 将所有环转换为 Vector2（bbox 局部像素坐标） ---
-    // ★ 与 store 的 polyPx 同源（世界坐标 → 源像素等比 → 减 bbox 原点）：
-    //   帧内容区域的顶点在 bbox 局部坐标下保持正圆（不依赖非等比画布尺寸）。
-    //   若该实体未绑定帧内容（预览/未绑定），回退到画布尺寸映射。
-    const frameDataForGeom = frameDataMap[activeLayerId];
-    const boundFd = frameDataForGeom && frameDataForGeom.boundRegionId === entity.id
-      ? frameDataForGeom : null;
-    const geomBbox = boundFd?.rawBbox || null;
-
+    // --- 1. 将所有环转换为 Vector2（画布像素坐标，worldToCanvas 同映射） ---
+    // ★ 帧内容全帧铺满画布、绑定不做等比变换，故无论是否绑定，
+    //   顶点一律使用 worldToCanvas(p, canvasWidth, canvasHeight)，
+    //   与 2D 覆盖层 worldToCanvas 逐点重合。区域裁剪由模板缓冲负责。
     const allRingsVec = entity.boundary.map(ring =>
       ring.map(p => {
-        if (geomBbox) {
-          const q = projectWorldToBbox(p, geomBbox);
-          return new THREE.Vector2(q.x, q.y);
-        }
         return new THREE.Vector2(
           p.x * canvasWidth,
           (1 - p.y) * canvasHeight
@@ -826,23 +801,16 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // --- 4. UV 生成：★ 几何顶点 = worldToCanvas × bbox（与覆盖层逐点一致），
-    //   UV = 顶点/bbox 尺寸 → 使圆内采样到的帧内容与 canvas 该处帧内容完全重合，
-    //   无等比缩放。未绑定帧内容时回退 p/canvas。
+    // --- 4. UV 生成：★ 几何顶点 = worldToCanvas(画布)，纹理 = 全帧（帧内容
+    //   全帧铺满画布），故 UV = 顶点/画布尺寸。区域形状由模板缓冲裁剪，
+    //   圆内采样到的帧内容与 canvas 该处帧内容完全重合，无等比缩放。
     const uv = new Float32Array(allPoints.length * 2);
-    if (geomBbox) {
-      allPoints.forEach((p, i) => {
-        uv[i * 2] = p.x / geomBbox.w;
-        uv[i * 2 + 1] = p.y / geomBbox.h;
-      });
-    } else {
-      allPoints.forEach((p, i) => {
-        uv[i * 2] = p.x / canvasWidth;
-        uv[i * 2 + 1] = p.y / canvasHeight;
-      });
-    }
+    allPoints.forEach((p, i) => {
+      uv[i * 2] = p.x / canvasWidth;
+      uv[i * 2 + 1] = p.y / canvasHeight;
+    });
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    console.log(`[UV诊断] 区域#${entity.id} 顶点/bbox(${geomBbox ? `${geomBbox.w}×${geomBbox.h}` : `画布 ${canvasWidth}×${canvasHeight}`}) 画布=${canvasWidth}×${canvasHeight}`);
+    console.log(`[UV诊断] 区域#${entity.id} 顶点/画布(${canvasWidth}×${canvasHeight})`);
     
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---
@@ -2497,44 +2465,27 @@ useEffect(() => {
           ctx.save();
           ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
 
-          // ★ 关键修复：已绑定时，使用 drawImage 替代 putImageData，使纹理跟随视图变换
-          if (frameData.boundRegionId !== null) {
+          // ★ 帧内容全帧铺满画布（画布 = 帧源分辨率）：绑定与未绑定一致，
+          //   drawImage 整张纹理铺到整个画布。区域裁剪由 WebGL 模板缓冲负责，
+          //   此 2D 预览只是"未绑定/调试"时的帧内容参考画面。
+          {
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = textureToDraw.width;
             tempCanvas.height = textureToDraw.height;
             tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
             ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
-          } else {
-            // 未绑定或预览，使用 drawImage 拉伸
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = textureToDraw.width;
-            tempCanvas.height = textureToDraw.height;
-            tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
-
-            // 如果未绑定且存在 rawBbox，则只绘制 bbox 区域（画布尺寸已等于 bbox 尺寸）
-            if (frameData.rawBbox) {
-              const bbox = frameData.rawBbox;
-              ctx.drawImage(
-                tempCanvas,
-                bbox.x, bbox.y, bbox.w, bbox.h,  // source
-                0, 0, currentWidth, currentHeight  // dest（画布 = bbox 尺寸，1:1 映射）
-              );
-            } else {
-              ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
-            }
           }
 
           ctx.restore();
 
-          // 绘制 bbox 边框作为视觉提示
+          // 绘制 bbox 边框作为视觉提示（画布 = 帧源分辨率，bbox 在画布中的真实位置）
           if (frameData.rawBbox) {
             const b = frameData.rawBbox;
             ctx.save();
             ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
-            // 画布尺寸已等于 bbox 尺寸，直接全画布绘制边框
-            ctx.strokeRect(0, 0, currentWidth, currentHeight);
+            ctx.strokeRect(b.x, b.y, b.w, b.h);
             ctx.restore();
           }
 

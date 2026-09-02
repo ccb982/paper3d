@@ -1,7 +1,6 @@
 import type { Point } from '../types';
 import * as THREE from 'three';
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
-import { projectWorldToBbox } from '../utils/transform';
 
 export class RegionEntity {
   public readonly id: number;
@@ -98,16 +97,10 @@ export class RegionEntity {
     const vertexCount = allVertices.length;
     this._totalVertices = vertexCount;
 
-    const basePixels = allVertices.map(p => {
-      if (this.frameContext) {
-        const q = projectWorldToBbox(p, this.frameContext.rawBbox);
-        return { x: q.x, y: q.y };
-      }
-      return {
-        x: p.x * canvasWidth,
-        y: (1 - p.y) * canvasHeight,
-      };
-    });
+    const basePixels = allVertices.map(p => ({
+      x: p.x * canvasWidth,
+      y: (1 - p.y) * canvasHeight,
+    }));
 
     const totalFrames = 2 * loopFrames;
     this._numFrames = totalFrames;
@@ -152,12 +145,10 @@ export class RegionEntity {
       const rawDeltas = new Float32Array(vertexCount * 2);
       for (let globalIdx = 0; globalIdx < vertexCount; globalIdx++) {
         const base = basePixels[globalIdx];
-        const distortedPx = this.frameContext
-          ? projectWorldToBbox(distortedWorldAll[globalIdx], this.frameContext.rawBbox)
-          : {
-              x: distortedWorldAll[globalIdx].x * canvasWidth,
-              y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
-            };
+        const distortedPx = {
+          x: distortedWorldAll[globalIdx].x * canvasWidth,
+          y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
+        };
         rawDeltas[globalIdx * 2] = distortedPx.x - base.x;
         rawDeltas[globalIdx * 2 + 1] = distortedPx.y - base.y;
       }

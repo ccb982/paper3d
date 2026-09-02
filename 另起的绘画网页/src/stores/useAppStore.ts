@@ -6,7 +6,6 @@ import { computeRegionsExact, BFS_WORLD_BOUNDS, type ScanlineCache } from '../ut
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
-import { projectWorldToBbox } from '../utils/transform';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, rgbToHsl, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
 import { adjustResidualForUniformRange } from '../utils/colorCompressor';
@@ -3272,11 +3271,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       // ★ 全帧量化残差（流体编码：R=qH/63*255、G=qS/31*255、B=qL/31*255，
       //   中性 128 = delta≈0；bbox 外中性）——导入后流体立即平流真实残差
       //   （此前 boundResidualTexture=null → 中性残差，"只显示第一帧基础色"）
-      // ★ 每帧独立分辨率：优先使用帧存储的 texSize/texSizeY，否则回退 bgImageData 尺寸
-      const frameW = frame.texSize ?? frame.bgImageData?.width ?? 512;
-      const frameH = frame.texSizeY ?? frame.bgImageData?.height ?? frameW;
-      // ★ 残差纹理实际像素步长使用 bgImageData 宽度（非导出分辨率）
-      const stride = frame.bgImageData?.width ?? frameW;
+      // ★ 每帧独立分辨率 = 帧存储的源分辨率（width/height）
+      const frameW = frame.width;
+      const frameH = frame.height;
+      // ★ 残差纹理实际像素步长 = 帧源分辨率宽度
+      const stride = frameW;
       const residTex = new ImageData(frameW, frameH);
       for (let i = 0; i < residTex.data.length; i += 4) {
         residTex.data[i] = 128;
@@ -3406,11 +3405,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
       },
-      // ★ 画布尺寸 = bbox 尺寸（帧内容紧凑框）：预览/绘制以帧内容 1:1 显示，
-      //   与 MainCanvas 未绑定预览（只绘制 bbox 区域）一致。WebGL 区域色块 UV
-      //   已改为 bbox 局部归一（MainCanvas UV 生成），不再依赖画布=源分辨率
-      canvasWidth: firstBbox ? firstBbox.w : (firstFrame ? firstFrame.width : state.canvasWidth),
-      canvasHeight: firstBbox ? firstBbox.h : (firstFrame ? firstFrame.height : state.canvasHeight),
+      // ★ 画布尺寸 = 帧源分辨率（width/height）：帧数据固定分辨率，
+      //   绑定/解绑绝不改变。区域绑定只是裁剪蒙版（WebGL 模板缓冲），
+      //   帧内容全帧 1:1 铺满画布，WebGL 顶点用 worldToCanvas 与覆盖层逐点重合。
+      canvasWidth: firstFrame ? firstFrame.width : state.canvasWidth,
+      canvasHeight: firstFrame ? firstFrame.height : state.canvasHeight,
       // 🔽 重置视图变换，避免导入后内容偏移和重复绘制
       zoom: 1.0,
       panOffset: { x: 0, y: 0 },
@@ -3508,58 +3507,39 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log(`[绑定诊断] bbox 占全帧比例: ${(frameData.rawBbox!.w / texSize * 100).toFixed(1)}% × ${(frameData.rawBbox!.h / texSizeH * 100).toFixed(1)}%`);
     console.log('[绑定诊断] ========================================');
 
-    // ★ 顶点转换进 bbox 局部坐标（bbox 空间）：
-    //   世界坐标(0~1,y向上) × 源分辨率 → 源像素坐标 → 减 bbox 原点 → bbox 局部。
-    //   与 canvas 上的注释同源（世界坐标相等）：正圆保持正圆、位置正确，
-    //   不依赖非等比的画布尺寸（此前多用 state.canvasWidth/Height 导致比例错乱）。
+    // ★ 帧内容全帧铺满画布：boundBaseTexture 直接使用解码出的全帧 fullBase，
+    //   不再裁剪 bbox。区域绑定注释仅作为裁剪蒙版（WebGL 模板缓冲裁剪形状），
+    //   区域内显示帧在该处的数据、区域外透明——与 canvas 覆盖层位置完全重合。
     const bboxLocal = frameData.rawBbox!;
-    const polyPx = entity.boundary.map(ring =>
-      ring.map(p => {
-        const pp = projectWorldToBbox(p, bboxLocal);
-        return { x: pp.x, y: pp.y };
-      })
-    );
-    // ★ 不用掩码：boundBaseTexture 直接拷贝 bbox 矩形内容（各顶点已转换进
-    //   bbox 局部坐标，形状由 WebGL 网格 + 模板缓冲裁剪）
-    const maskBase = new ImageData(bboxLocal.w, bboxLocal.h);
-    const srcData = fullBase.data;
-    const maskData = maskBase.data;
-    for (let by = 0; by < bboxLocal.h; by++) {
-      for (let bx = 0; bx < bboxLocal.w; bx++) {
-        const si = ((bboxLocal.y + by) * fullBase.width + (bboxLocal.x + bx)) * 4;
-        const di = (by * bboxLocal.w + bx) * 4;
-        maskData[di] = srcData[si];
-        maskData[di + 1] = srcData[si + 1];
-        maskData[di + 2] = srcData[si + 2];
-        maskData[di + 3] = srcData[si + 3];
-      }
-    }
-    const croppedBase = maskBase;
-    console.log(`[绑定诊断] boundBaseTexture（bbox 矩形）: ${bboxLocal.w}×${bboxLocal.h}，区域顶点数=${polyPx[0]?.length ?? 0}`);
+    console.log(`[绑定诊断] boundBaseTexture（全帧）: ${fullBase.width}×${fullBase.height}`);
 
-    // ★ 残差纹理（bbox 局部，与 boundBaseTexture 同尺寸）——绑定即生成，
+    // ★ 残差纹理（全帧尺寸，与 boundBaseTexture 同尺寸）——绑定即生成，
     //   流体平流直接作用于残差（此前 boundResidualTexture 恒 null →
     //   流体拿到中性残差："导入帧后必须点帧才显示残差、重置即消失"）
     //   编码约定（与 decodeResidualFromFrame 一致）：R=qH/63*255、G=qS/31*255、
-    //   B=qL/31*255；中性 = 128（delta≈0）。框外 = 中性（流体作用区外无残差）。
-    const residBase = new ImageData(bboxLocal.w, bboxLocal.h);
+    //   B=qL/31*255；中性 = 128（delta≈0）。bbox 外 = 中性（流体作用区外无残差）。
+    //   多边形判定用「全帧世界坐标」：gx/texSize vs 1-gy/texSizeH（与覆盖层一致）。
+    const residBase = new ImageData(texSize, texSizeH);
     for (let i = 0; i < residBase.data.length; i += 4) {
       residBase.data[i] = 128;
       residBase.data[i + 1] = 128;
       residBase.data[i + 2] = 128;
-      // ★ 与编辑器约定统一：框外 alpha=0（无残差内容，合成显示透明）
+      // ★ 与编辑器约定统一：bbox 外 alpha=0（无残差内容，合成显示透明）
       residBase.data[i + 3] = 0;
     }
+    const srcData = fullBase.data;
     for (let by = 0; by < bboxLocal.h; by++) {
       for (let bx = 0; bx < bboxLocal.w; bx++) {
-        // ★ 用世界坐标多边形判定（等比坐标系基准）：与 WebGL 等比网格一致
-        if (!isPointInPolygonWithHoles({ x: bx / bboxLocal.w, y: 1 - by / bboxLocal.h }, entity.boundary)) continue;
+        const gx = bboxLocal.x + bx;
+        const gy = bboxLocal.y + by;
+        // ★ 用全帧世界坐标多边形判定（x 正向右、y 向上）：
+        if (!isPointInPolygonWithHoles({ x: gx / texSize, y: 1 - gy / texSizeH }, entity.boundary)) continue;
         const li = by * bboxLocal.w + bx;
-        const si = ((bboxLocal.y + by) * fullBase.width + (bboxLocal.x + bx)) * 4;
+        const si = (gy * fullBase.width + gx) * 4;
         const packed = frameData.rawDeltaPacked[li];
         if (packed === undefined) continue;
         const { s: qS, h: qH, l: qL } = unpackRGB565(packed);
-        const di = li * 4;
+        const di = (gy * texSize + gx) * 4;
         residBase.data[di] = Math.round((qH / 63) * 255);
         residBase.data[di + 1] = Math.round((qS / 31) * 255);
         residBase.data[di + 2] = Math.round((qL / 31) * 255);
@@ -3595,7 +3575,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           [layerId]: {
             ...frameData,
             boundRegionId: regionId,
-            boundBaseTexture: croppedBase,
+            boundBaseTexture: fullBase,
             boundResidualTexture: residBase,
             textureOffset: frameData.textureOffset || { x: 0, y: 0 },
             textureScale: frameData.textureScale || { x: 1, y: 1 },
@@ -3607,13 +3587,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             distortRotation: frameData.distortRotation ?? 0,
           },
         },
-        // 绑定后更新画布尺寸为 bbox 尺寸，并重置视图
-        ...(bbox && (s.canvasWidth !== bbox.w || s.canvasHeight !== bbox.h) ? {
-          canvasWidth: bbox.w,
-          canvasHeight: bbox.h,
-          zoom: 1,
-          panOffset: { x: 0, y: 0 },
-        } : {}),
+        // ★ 画布尺寸固定为帧源分辨率，绑定/解绑绝不改变（帧数据固定分辨率）。
+        //   区域绑定注释只是裁剪蒙版，不触发画布缩放或视图重置。
       };
     });
 
