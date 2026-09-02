@@ -4,7 +4,7 @@
 // 设计哲学：与实体/地形渲染分离的"环境层"，永远在战斗场景最底层（renderOrder 最前）。
 //   - 天空穹顶：大半径半球，片元着色器按世界方向在【地平线色 ↔ 天顶色】间做竖直渐变
 //   - 太阳圆盘：位于太阳方向的带光晕亮圆，只在白昼可见
-//   - 月亮圆盘：位于月亮方向的圆盘（月相用遮罩裁成月牙），只在夜晚可见
+//   - 月亮贴图：位于月亮方向的方形 quad（特效播放器渲染的大猫哥月亮），只在夜晚可见
 //
 // 归属：RenderManager.setup() 创建并挂到 scene；RenderManager.follow() 每帧刷新
 //   位置（锚定跟随目标/相机的水平位置）+ 颜色（读 SunCycle.skyGradient / 方向）。
@@ -14,6 +14,7 @@
 
 import * as THREE from 'three';
 import type { MoonSample, SkyGradient, SunSample } from './SunCycle';
+import type { MoonEffect } from '../../vendor/player/MoonEffect';
 
 /** 穹顶半径（应大于相机 far 的近半，确保永远不被裁剪前景遮挡） */
 const DOME_RADIUS = 320;
@@ -22,8 +23,6 @@ const DISC_DISTANCE = 300;
 /** 太阳视直径（度 → 世界单位，配合透视相机近似） */
 const SUN_RADIUS = 26;
 const MOON_RADIUS = 18;
-/** 月亮光晕（满月发光，新月不发光）最大强度系数 */
-const MOON_GLOW_MAX = 0.85;
 
 const SKY_VERT = /* glsl */ `
   varying vec3 vWorldDir;
@@ -119,36 +118,6 @@ const SUN_FRAG = /* glsl */ `
   }
 `;
 
-const MOON_FRAG = /* glsl */ `
-  varying vec2 vUv;
-  uniform vec3 uColor;
-  uniform float uVisible;   // 0..1 夜晚可见度
-  uniform float uPhase;     // 0=新月,0.5=满月（兼容保留，未用贴图时仍可插值）
-  uniform float uGlow;      // 光晕强度
-  void main() {
-    vec2 p = vUv * 2.0 - 1.0;
-    float r = length(p);
-    float disc = smoothstep(1.0, 0.94, r);
-    if (disc <= 0.0) discard;
-
-    // 月相：用一个偏移阴影圆盘裁切出月牙。phase 驱动"被遮阴影圆"的偏移量
-    //   full moon (phase→0.5) 阴影圆偏移到圆盘之外 → 无阴影，满月全亮
-    //   new moon (phase→0)    阴影圆与圆盘重合  → 全被遮，几乎消失
-    float shadowOff = mix(0.0, 3.0, uPhase * 2.0);
-    vec2 sp = p + vec2(shadowOff, 0.0);        // 阴影圆中心（向右偏移）
-    float shadow = smoothstep(1.0, 0.94, length(sp));
-    float lit = clamp(disc - shadow, 0.0, 1.0);
-
-    // 光晕：满月强、新月弱
-    float halo = exp(-max(r - 0.9, 0.0) * 6.0) * uGlow * uPhase * 2.0;
-
-    vec3 col = uColor * (lit + halo * 0.5);
-    float alpha = lit;
-    if (alpha <= 0.004 && halo <= 0.004) discard;
-    gl_FragColor = vec4(col, alpha * uVisible);
-  }
-`;
-
 const MOON_TEX_VERT = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -158,17 +127,18 @@ const MOON_TEX_VERT = /* glsl */ `
   }
 `;
 
-// ★ 月亮贴图着色器：用「特效播放器」的 HSL 解码管线渲染大猫哥月亮完整贴图
-//   （不再是程序化月相圆盘）。base 存 HSL Float、residual 存编码 delta，
-//   与 GachaOverlay/角色渲染同款解码，保证与素材包预览完全一致。
+// ★ 月亮贴图着色器：支持两种模式——
+//   1. 旧模式：用 base+residual HSL 解码（通过 setMoonTexture 设置）
+//   2. MoonEffect 模式：直接采样特效播放器离屏渲染的 RGB 纹理
+//   ★ 纯贴图显示：无光晕/无圆盘遮罩，alpha 全由贴图自身决定
 const MOON_TEX_FRAG = /* glsl */ `
   precision highp float;
   varying vec2 vUv;
   uniform sampler2D uBase;
   uniform sampler2D uResidual;
-  uniform vec3 uColor;         // 光晕叠加色（月本色）
+  uniform sampler2D uMoonEffectTex;
+  uniform float uUseMoonEffect;
   uniform float uVisible;      // 0..1 夜晚可见度
-  uniform float uGlow;         // 光晕强度
 
   vec3 hsl2rgb(vec3 c) {
     vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
@@ -176,26 +146,25 @@ const MOON_TEX_FRAG = /* glsl */ `
   }
 
   void main() {
-    vec4 base = texture2D(uBase, vUv);
-    if (base.a < 0.5) discard;
-    vec4 res = texture2D(uResidual, vUv);
-    float dH = (res.r * 2.0 - 1.0) * 0.5;
-    float dS = (res.g * 2.0 - 1.0) * 0.5;
-    float dL = (res.b * 2.0 - 1.0) * 0.5;
-    float h = fract(base.r + dH);
-    float s = clamp(base.g + dS, 0.0, 1.0);
-    float l = clamp(base.b + dL, 0.0, 1.0);
-    vec3 color = hsl2rgb(vec3(h, s, l));
+    vec4 color;
+    if (uUseMoonEffect > 0.5) {
+      // ★ MoonEffect 模式：直接采样特效播放器渲染结果
+      color = texture2D(uMoonEffectTex, vUv);
+    } else {
+      // ★ 旧模式：HSL 解码
+      vec4 base = texture2D(uBase, vUv);
+      if (base.a < 0.5) discard;
+      vec4 res = texture2D(uResidual, vUv);
+      float dH = (res.r * 2.0 - 1.0) * 0.5;
+      float dS = (res.g * 2.0 - 1.0) * 0.5;
+      float dL = (res.b * 2.0 - 1.0) * 0.5;
+      float h = fract(base.r + dH);
+      float s = clamp(base.g + dS, 0.0, 1.0);
+      float l = clamp(base.b + dL, 0.0, 1.0);
+      color = vec4(hsl2rgb(vec3(h, s, l)), base.a);
+    }
 
-    // 沿 bbox 边界柔和淡出，避免硬边
-    vec2 p = vUv * 2.0 - 1.0;
-    float r = length(p);
-    float disc = smoothstep(1.0, 0.94, r);
-    float halo = exp(-max(r - 0.9, 0.0) * 6.0) * uGlow * 0.5;
-
-    // 叠加微光晕（贴图自身颜色为主，光晕作为氛围衬托）
-    vec3 col = color + halo * uColor;
-    gl_FragColor = vec4(col, base.a * disc * uVisible);
+    gl_FragColor = vec4(color.rgb, color.a * uVisible);
   }
 `;
 
@@ -206,13 +175,16 @@ export class SkyDome {
 
   private sunMat: THREE.ShaderMaterial;
   private sunMesh: THREE.Mesh;
-  private moonMat: THREE.ShaderMaterial;
-  private moonMesh: THREE.Mesh;
 
   /** ★ 月亮贴图（大猫哥月亮 → 特效播放器 HSL 解码管线） */
   private moonTexMat: THREE.ShaderMaterial;
   private moonTexMesh: THREE.Mesh;
   private moonTexReady = false;
+
+  /** ★ 特效播放器桥接（VAT/扭曲/区域实体渲染） */
+  private moonEffect: MoonEffect | null = null;
+  /** 主渲染器引用（setup 先于 setMoonEffect 调用，保存此处用于延迟注入） */
+  private _renderer: THREE.WebGLRenderer | null = null;
 
   /** 云纹理滚动偏移（累积；U 水平漂移） */
   private cloudScroll = { x: 0, y: 0 };
@@ -260,35 +232,18 @@ export class SkyDome {
     this.sunMesh.renderOrder = -90;
     this.sunMesh.frustumCulled = false;
 
-    // ---- 月亮圆盘 ----
-    this.moonMat = new THREE.ShaderMaterial({
-      vertexShader: SUN_VERT,
-      fragmentShader: MOON_FRAG,
-      uniforms: {
-        uColor: { value: new THREE.Color(0xc8d8f0) },
-        uVisible: { value: 0 },
-        uPhase: { value: 0.5 },
-        uGlow: { value: 0.5 },
-      },
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      fog: false,
-    });
-    this.moonMesh = new THREE.Mesh(new THREE.CircleGeometry(MOON_RADIUS, 32), this.moonMat);
-    this.moonMesh.renderOrder = -90;
-    this.moonMesh.frustumCulled = false;
-
     // ---- ★ 月亮贴图圆盘（大猫哥月亮素材包 HSL 解码；命中前不可见，用空 1×1 纹理兜底）----
+    const emptyTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+    emptyTex.needsUpdate = true;
     this.moonTexMat = new THREE.ShaderMaterial({
       vertexShader: MOON_TEX_VERT,
       fragmentShader: MOON_TEX_FRAG,
       uniforms: {
-        uColor: { value: new THREE.Color(0xc8d8f0) },
         uVisible: { value: 0 },
-        uGlow: { value: MOON_GLOW_MAX },
         uBase: { value: this.emptyCloudTex },
         uResidual: { value: this.emptyCloudTex },
+        uMoonEffectTex: { value: emptyTex },
+        uUseMoonEffect: { value: 0 },
       },
       transparent: true,
       depthWrite: false,
@@ -303,28 +258,54 @@ export class SkyDome {
     this.moonTexMesh.visible = false;
 
     this.group = new THREE.Group();
-    this.group.add(this.skyMesh, this.sunMesh, this.moonMesh, this.moonTexMesh);
+    this.group.add(this.skyMesh, this.sunMesh, this.moonTexMesh);
   }
 
   /** ★ 注入大猫哥月亮素材包（特效播放器解码出的 base/residual 纹理）。
    *  纹理已是 bbox 裁剪后的月亮本体（bbox 尺寸），方形 quad 完整采样。
-   *  传 null 表示没有素材包 → 回退到程序化月相圆盘。 */
+   *  传 null 表示没有素材包 → 不显示月亮。
+   *  ★ 与 setMoonEffect 互斥：调用后会清空 MoonEffect。 */
   setMoonTexture(
     base: THREE.Texture | null,
     residual: THREE.Texture | null,
   ): void {
     this.moonTexReady = !!(base && residual);
-    if (!this.moonTexReady) {
-      // 回退：月相圆盘可见
-      this.moonTexMesh.visible = false;
-      this.moonMesh.visible = true;
-      return;
-    }
+    this.moonEffect = null;
+    this.moonTexMesh.visible = this.moonTexReady;
+    if (!this.moonTexReady) return;
     // 纹理 = 月亮本体（bbox 裁剪后），完整采样
     this.moonTexMat.uniforms.uBase.value = base!;
     this.moonTexMat.uniforms.uResidual.value = residual!;
-    this.moonTexMesh.visible = true;
-    this.moonMesh.visible = false;
+    this.moonTexMat.uniforms.uUseMoonEffect.value = 0;
+  }
+
+  /** ★ 设置 MoonEffect 桥接（VAT/扭曲/区域实体动画）。
+   *  ★ 与 setMoonTexture 互斥：调用后会清空旧纹理。
+   *  ★ 自动注入已保存的主渲染器引用（如果 setup 已先调用）。 */
+  setMoonEffect(effect: MoonEffect | null): void {
+    this.moonEffect = effect;
+    this.moonTexReady = !!effect;
+    this.moonTexMesh.visible = this.moonTexReady;
+    if (!effect) {
+      this.moonTexMat.uniforms.uUseMoonEffect.value = 0;
+      return;
+    }
+    // ★ 延迟注入渲染器（如果 setup 已经先于 setMoonEffect 调用）
+    if (this._renderer) {
+      effect.setRenderer(this._renderer);
+    }
+    this.moonTexMat.uniforms.uMoonEffectTex.value = effect.getMoonTexture();
+    this.moonTexMat.uniforms.uUseMoonEffect.value = 1;
+    // ★ 按月亮本体宽高比缩放 quad（RT 已裁剪到月亮本体，最长边撑满 MOON_RADIUS*2）
+    const cs = effect.getContentScale();
+    this.moonTexMesh.scale.set(cs.x, cs.y, 1);
+  }
+
+  /** 注入主渲染器（MoonEffect 需要共享主渲染器的 WebGL 上下文）
+   *  ★ 在 setup 阶段调用（此时 MoonEffect 可能尚未创建），保存引用用于延迟注入。 */
+  setMoonEffectRenderer(renderer: THREE.WebGLRenderer): void {
+    this._renderer = renderer;
+    this.moonEffect?.setRenderer(renderer);
   }
 
   /** 挂到场景（RenderManager.setup 调用） */
@@ -355,9 +336,18 @@ export class SkyDome {
   /** 空云纹理缓存（未启用云时兜底为全透明） */
   private emptyCloudTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
 
+  /** 更新 MoonEffect VAT 时间（每帧调用） */
+  updateMoonEffect(dt: number): void {
+    this.moonEffect?.update(dt);
+    if (this.moonEffect) {
+      this.moonTexMat.uniforms.uMoonEffectTex.value = this.moonEffect.getMoonTexture();
+    }
+  }
+
   /**
    * 每帧刷新：锚定到跟随点（水平位置跟随，垂直固定），并按 SunCycle 状态更新
    *   穹顶颜色 + 太阳/月亮位置与可见度。
+   * 如果有 MoonEffect（VAT动画），需要在 `update` 前调用 `updateMoonEffect(dt)`。
    */
   update(
     anchor: { x: number; y: number; z: number },
@@ -388,29 +378,16 @@ export class SkyDome {
     this.sunMat.uniforms.uColor.value.setHex(sun.color);
     this.sunMat.uniforms.uGlow.value = 0.4 + 0.6 * sunVisible;
 
-    // ---- 月亮圆盘：沿 moon.dir 放置 + 夜晚可见（含月相光晕）----
+    // ---- ★ 月亮贴图：沿 moon.dir 放置 + 夜晚可见 ----
     const mx = anchor.x + moon.dir.x * DISC_DISTANCE;
     const my = anchor.y + moon.dir.y * DISC_DISTANCE;
     const mz = anchor.z + moon.dir.z * DISC_DISTANCE;
-    // 可见度 = 夜对应（1 - daylight）× 月亮可见度/月相
-    const nightFactor = 1 - sun.daylight;
-    const moonVisible = nightFactor * moon.visibility;
-    this.moonMat.uniforms.uVisible.value = moonVisible;
-    this.moonMat.uniforms.uPhase.value = moon.phase;
-    this.moonMat.uniforms.uColor.value.setHex(moon.color);
-    this.moonMat.uniforms.uGlow.value = MOON_GLOW_MAX * moon.phase;
-
-    // ---- ★ 月亮贴图分支：命中素材包时渲染完整大猫哥月亮贴图 ----
     if (this.moonTexReady) {
+      // 可见度 = 夜对应（1 - daylight）× 月亮可见度
+      const moonVisible = (1 - sun.daylight) * moon.visibility;
       this.moonTexMesh.position.set(mx, my, mz);
       this.moonTexMesh.lookAt(anchor.x, anchor.y, anchor.z);
-      const glowScale = Math.max(0.15, moonVisible);
       this.moonTexMat.uniforms.uVisible.value = moonVisible;
-      this.moonTexMat.uniforms.uGlow.value = MOON_GLOW_MAX * glowScale;
-      this.moonTexMat.uniforms.uColor.value.setHex(moon.color);
-    } else {
-      this.moonMesh.position.set(mx, my, mz);
-      this.moonMesh.lookAt(anchor.x, anchor.y, anchor.z);
     }
   }
 }

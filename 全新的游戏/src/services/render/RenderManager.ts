@@ -21,6 +21,7 @@ import { SkyDome } from './SkyDome';
 import { CloudSolver } from './CloudSolver';
 import { updateTerrainLighting } from '../map/TerrainMaterial';
 import { updateWallLighting } from '../map/ChunkWalls';
+import type { MoonEffect } from '../../vendor/player/MoonEffect';
 
 /** 调参统一入口（透传 GameLights.LIGHT_TUNING；曝光/太阳距离等都在这） */
 export { LIGHT_TUNING };
@@ -38,10 +39,12 @@ class RenderManager {
   private _lastCost = 0;
 
   /** boot 装配光照（main.ts 调一次；幂等）
-   *  renderer 用于构造 GPU 云朵求解器；scene 挂天空穹顶 */
+   *  renderer 用于构造 GPU 云朵求解器；scene 挂天空穹顶
+   */
   setup(scene: THREE.Scene, renderer: THREE.WebGLRenderer): void {
     gameLights.setup(scene);
     this.skyDome.attach(scene);
+    this.skyDome.setMoonEffectRenderer(renderer);
     if (!this.cloudSolver) {
       this.cloudSolver = new CloudSolver(renderer);
     }
@@ -89,6 +92,8 @@ class RenderManager {
   /** 渲染前锚定光照到跟随目标（WorldMode.render 调用；位置已是本帧最终值） */
   follow(target: { x: number; y: number; z: number }): void {
     gameLights.follow(target, this.sunCycle.current, this.sunCycle.moon);
+    // ★ 月亮 VAT 动画（在天空穹顶更新前推进）
+    this.skyDome.updateMoonEffect(this.scaledDt);
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
     this.skyDome.update(target, this.sunCycle.current, this.sunCycle.moon, this.sunCycle.sky);
     // ★ 云朵双缓冲纹理 + 过渡进度（每帧喂，平滑 2fps 结算）
@@ -134,6 +139,12 @@ class RenderManager {
     residual: THREE.Texture | null,
   ): void {
     this.skyDome.setMoonTexture(base, residual);
+  }
+
+  /** ★ 设置 MoonEffect 桥接（VAT/扭曲/区域实体动画）。
+   *  与 setMoonTexture 互斥。 */
+  setMoonEffect(effect: MoonEffect | null): void {
+    this.skyDome.setMoonEffect(effect);
   }
 }
 

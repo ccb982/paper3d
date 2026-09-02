@@ -393,7 +393,10 @@ export function createThreeContext(sizeOrCanvas?: number | HTMLCanvasElement): {
   renderer.setClearColor(0x000000, 0);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
+  // ★ 顶点坐标 Y 向下（Y=0 顶部，Y=1 底部），相机投影匹配：
+  //   left=0, right=1, top=0 (顶部在 y=0), bottom=1 (底部在 y=1)
+  //   这样顶点 (x,y) → camera 可见范围就是 [0,1] × [0,1]
+  const camera = new THREE.OrthographicCamera(0, 1, 0, 1, -1, 1);
 
   return { renderer, scene, camera };
 }

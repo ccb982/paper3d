@@ -21,6 +21,7 @@ export type { FrameNameEntry } from './core/frameResolver';
 export { renderFrameData } from './gl/renderer';
 export { FramePlaybackController };
 export { FluidEffect } from './fluid/FluidEffect';
+export { MoonEffect } from './MoonEffect';
 export type { FrameTextureData };
 export { FtxAsset } from './FtxAsset';
 export { HitEffectView } from './hitEffect/HitEffectView';

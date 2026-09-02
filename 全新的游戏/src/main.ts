@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { WebAdapter } from './platform/WebAdapter';
 import { ensureRapierReady } from './services/physics/PhysicsWorld';
 import { FtxAsset } from './vendor/player/FtxAsset';
-import { Asset } from './vendor/player';
+import { Asset, MoonEffect } from './vendor/player';
 import type { IGameMode } from './core/IGameMode';
 import { ShipMode } from './modes/ShipMode';
 import { WorldMode } from './modes/WorldMode';
@@ -152,15 +152,25 @@ async function boot() {
     const moonAsset = await Asset.load(encodeURI('/characters/大猫哥的月亮.scene.zip'));
     const pair = moonAsset.getFramePair(0);
     const ftx = moonAsset.getFtxFrame(0);
-    if (pair && ftx) {
-      renderManager.setMoonTexture(pair.base, pair.residual);
-      console.log(`[boot] 月亮贴图已加载: ${ftx.width}×${ftx.height}, bbox=(${ftx.bbox.x},${ftx.bbox.y},${ftx.bbox.w}x${ftx.bbox.h})`);
+    if (pair && ftx && moonAsset.frameCount > 0) {
+      // 检查素材包是否有 regionEntities（VAT 数据），有就用 MoonEffect 走完整播放器管线
+      const f0 = moonAsset.frames[0];
+      if (f0 && f0.regionEntities && f0.regionEntities.length > 0) {
+        // ★ 用特效播放器完整管线 → 支持 VAT 顶点动画/扭曲等特效
+        const moonEffect = new MoonEffect(moonAsset);
+        renderManager.setMoonEffect(moonEffect);
+        console.log(`[boot] 月亮已启用特效播放器: ${ftx.width}×${ftx.height}, ${f0.regionEntities.length} region(s), VAT enabled`);
+      } else {
+        // 只有静态纹理 → 用旧模式直接采样
+        renderManager.setMoonTexture(pair.base, pair.residual);
+        console.log(`[boot] 月亮已加载静态纹理: ${ftx.width}×${ftx.height}, bbox=(${ftx.bbox.x},${ftx.bbox.y},${ftx.bbox.w}x${ftx.bbox.h})`);
+      }
     } else {
-      renderManager.setMoonTexture(null, null);
+      renderManager.setMoonEffect(null);
       console.warn('[boot] 大猫哥月亮素材包缺帧数据，回退程序化月相');
     }
   } catch (e) {
-    renderManager.setMoonTexture(null, null);
+    renderManager.setMoonEffect(null);
     console.warn('[boot] 大猫哥月亮素材包加载失败，回退程序化月相:', e);
   }
 
