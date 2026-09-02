@@ -1,6 +1,7 @@
 import type { Point } from '../types';
 import * as THREE from 'three';
 import { processMaskRingCPU } from '../utils/gpuMaskProcessor';
+import { projectWorldToBbox } from '../utils/transform';
 
 export class RegionEntity {
   public readonly id: number;
@@ -8,6 +9,13 @@ export class RegionEntity {
   public readonly boundary: Point[][];
 
   public worldBbox: { x: number; y: number; w: number; h: number } | null = null;
+
+  // ★ 帧坐标环境：设置后顶点/位移使用「世界坐标 → bbox 局部像素坐标」
+  //   （缩放基准 = bbox 尺寸，绑定后画布尺寸即 bbox 尺寸）的映射，
+  //   与 2D 注释覆盖层 worldToCanvas 一致（正圆大小/位置/形状完全重合）。
+  public frameContext: {
+    rawBbox: { x: number; y: number; w: number; h: number };
+  } | null = null;
 
   public transform = {
     position: { x: 0, y: 0 },
@@ -25,6 +33,7 @@ export class RegionEntity {
   private _lastMaskEffectHash: string = '';
   private _lastCanvasWidth: number = 0;
   private _lastCanvasHeight: number = 0;
+  private _lastFrameCtxHash: string = '';
 
   constructor(id: number, layerId: string, boundary: Point[][]) {
     this.id = id;
@@ -51,6 +60,15 @@ export class RegionEntity {
         h: maxY - minY,
       };
     }
+  }
+
+  public forceDisplacementRebuild() {
+    this._lastMaskEffectHash = '';
+    this._lastFrameCtxHash = '';
+    this._lastCanvasWidth = -1;
+    this._lastCanvasHeight = -1;
+    if (this._displacementTexture) this._displacementTexture.dispose();
+    this._displacementTexture = null;
   }
 
   // ========== 位移纹理 ==========
@@ -80,10 +98,16 @@ export class RegionEntity {
     const vertexCount = allVertices.length;
     this._totalVertices = vertexCount;
 
-    const basePixels = allVertices.map(p => ({
-      x: p.x * canvasWidth,
-      y: (1 - p.y) * canvasHeight,
-    }));
+    const basePixels = allVertices.map(p => {
+      if (this.frameContext) {
+        const q = projectWorldToBbox(p, this.frameContext.rawBbox);
+        return { x: q.x, y: q.y };
+      }
+      return {
+        x: p.x * canvasWidth,
+        y: (1 - p.y) * canvasHeight,
+      };
+    });
 
     const totalFrames = 2 * loopFrames;
     this._numFrames = totalFrames;
@@ -128,10 +152,12 @@ export class RegionEntity {
       const rawDeltas = new Float32Array(vertexCount * 2);
       for (let globalIdx = 0; globalIdx < vertexCount; globalIdx++) {
         const base = basePixels[globalIdx];
-        const distortedPx = {
-          x: distortedWorldAll[globalIdx].x * canvasWidth,
-          y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
-        };
+        const distortedPx = this.frameContext
+          ? projectWorldToBbox(distortedWorldAll[globalIdx], this.frameContext.rawBbox)
+          : {
+              x: distortedWorldAll[globalIdx].x * canvasWidth,
+              y: (1 - distortedWorldAll[globalIdx].y) * canvasHeight,
+            };
         rawDeltas[globalIdx * 2] = distortedPx.x - base.x;
         rawDeltas[globalIdx * 2 + 1] = distortedPx.y - base.y;
       }
@@ -194,6 +220,7 @@ export class RegionEntity {
     this._lastMaskEffectHash = JSON.stringify(effect);
     this._lastCanvasWidth = canvasWidth;
     this._lastCanvasHeight = canvasHeight;
+    this._lastFrameCtxHash = this.frameContext ? JSON.stringify(this.frameContext) : '';
     if (this._displacementTexture) this._displacementTexture.dispose();
     this._displacementTexture = texture;
     
@@ -240,16 +267,19 @@ export class RegionEntity {
       this._lastMaskEffectHash = '__default_zero__';
       this._lastCanvasWidth = canvasWidth;
       this._lastCanvasHeight = canvasHeight;
+      this._lastFrameCtxHash = this.frameContext ? JSON.stringify(this.frameContext) : '';
 
       return this._displacementTexture;
     }
 
     const currentHash = JSON.stringify(this.maskEffect);
+    const ctxHash = this.frameContext ? JSON.stringify(this.frameContext) : '';
     const paramsChanged =
       forceRebuild ||
       this._lastCanvasWidth !== canvasWidth ||
       this._lastCanvasHeight !== canvasHeight ||
-      this._lastMaskEffectHash !== currentHash;
+      this._lastMaskEffectHash !== currentHash ||
+      this._lastFrameCtxHash !== ctxHash;
 
     if (paramsChanged || !this._displacementTexture) {
       this.buildDisplacementTexture(canvasWidth, canvasHeight, this.maskEffect, 30);

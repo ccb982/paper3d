@@ -81,6 +81,21 @@ export function canvasToWorld(
  * 将世界坐标（0~1）映射到坐标轴显示范围（如 -32~32）
  * 用于绘制轴标签时显示正确的数字
  */
+/**
+ * 将世界坐标（0~1，y 向上）映射为 bbox 局部像素坐标（各向异性）。
+ * 与 2D 覆盖层 worldToCanvas(p, canvasWidth, canvasHeight) 同一映射：
+ * 当画布=bbox 尺寸时，WebGL 顶点与 canvas 绘制的注释形状完全重合。
+ */
+export function projectWorldToBbox(
+  p: Point,
+  bbox: { x: number; y: number; w: number; h: number }
+): Point {
+  return {
+    x: p.x * bbox.w,
+    y: (1 - p.y) * bbox.h,
+  };
+}
+
 export function worldToAxis(
   worldX: number,
   worldY: number,

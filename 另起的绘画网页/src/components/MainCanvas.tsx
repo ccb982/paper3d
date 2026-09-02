@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { useAppStore } from '../stores/useAppStore';
 import type { Point, Shape } from '../types';
 import { AnnotationEditor } from './AnnotationEditor';
-import { worldToCanvas, canvasToWorld, worldToAxis } from '../utils/transform';
+import { worldToCanvas, canvasToWorld, worldToAxis, projectWorldToBbox } from '../utils/transform';
 import { computeRegionIdAtPoint, getDebugRegions, computeGridRegions, computeScanlineIntervals, computeRegionsExact, BFS_WORLD_BOUNDS, type DebugRegionData } from '../utils/regionDetectionExact';
 import { findRegionByPoint, findRegionIndexByPoint, isPointInPolygonWithHoles } from '../utils/regionDetection';
 import { drawCircleOnBuffer } from '../utils/paintBufferUtils';
@@ -673,6 +673,22 @@ useEffect(() => {
     const bbox = entity.worldBbox;
     if (!bbox) { continue; }
 
+    const frameDataForGeo0 = frameDataMap[activeLayerId];
+    const boundFd0 = frameDataForGeo0 && frameDataForGeo0.boundRegionId === entity.id
+      ? frameDataForGeo0 : null;
+    if (boundFd0 && boundFd0.rawBbox) {
+      const ectx = entity.frameContext;
+      if (!ectx || ectx.rawBbox.x !== boundFd0.rawBbox.x || ectx.rawBbox.y !== boundFd0.rawBbox.y ||
+          ectx.rawBbox.w !== boundFd0.rawBbox.w || ectx.rawBbox.h !== boundFd0.rawBbox.h) {
+        entity.frameContext = {
+          rawBbox: { ...boundFd0.rawBbox },
+        };
+        entity.forceDisplacementRebuild();
+      }
+    } else {
+      entity.frameContext = null;
+    }
+
     const displacementTex = entity.getDisplacementTexture(canvasWidth, canvasHeight);
     if (!displacementTex) {
       continue;
@@ -680,12 +696,26 @@ useEffect(() => {
     const vertexCount = entity.getTotalVertices();
     const numFrames = entity.getNumFrames();
 
-    // --- 1. 将所有环转换为 Vector2（像素坐标） ---
+    // --- 1. 将所有环转换为 Vector2（bbox 局部像素坐标） ---
+    // ★ 与 store 的 polyPx 同源（世界坐标 → 源像素等比 → 减 bbox 原点）：
+    //   帧内容区域的顶点在 bbox 局部坐标下保持正圆（不依赖非等比画布尺寸）。
+    //   若该实体未绑定帧内容（预览/未绑定），回退到画布尺寸映射。
+    const frameDataForGeom = frameDataMap[activeLayerId];
+    const boundFd = frameDataForGeom && frameDataForGeom.boundRegionId === entity.id
+      ? frameDataForGeom : null;
+    const geomBbox = boundFd?.rawBbox || null;
+
     const allRingsVec = entity.boundary.map(ring =>
-      ring.map(p => new THREE.Vector2(
-        p.x * canvasWidth,
-        (1 - p.y) * canvasHeight
-      ))
+      ring.map(p => {
+        if (geomBbox) {
+          const q = projectWorldToBbox(p, geomBbox);
+          return new THREE.Vector2(q.x, q.y);
+        }
+        return new THREE.Vector2(
+          p.x * canvasWidth,
+          (1 - p.y) * canvasHeight
+        );
+      })
     );
 
     if (allRingsVec.length === 0 || allRingsVec[0].length < 3) {
@@ -796,33 +826,23 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // --- 4. UV 生成：★ 映射到帧内容 bbox 局部归一（与 store 的 boundBaseTexture
-    //   bbox 局部输出一致）。
-    //   p = 画布像素坐标（= world × canvas 尺寸）。正确映射取决于画布尺寸：
-    //   · 画布 = bbox 尺寸（导入帧后默认）：帧内容铺满画布 → uv = p/bbox = world ∈[0,1]
-    //   · 画布 = 源分辨率（旧状态/未同步）：帧内容位于画布 (bbox.x,bbox.y) 起 → uv = (p-bbox)/bbox
-    //   此前固定用 p/bbox → 画布≠bbox 时 UV 放大 canvas/bbox 倍 → 超出 [0,1]
-    //   → 区域色块图层采样到纹理外（clamp 到边缘色）→ 与帧图层显示不一致
-    const fdForUv = frameDataMap[activeLayerId];
-    const uvBbox = fdForUv?.rawBbox;
+    // --- 4. UV 生成：★ 几何顶点 = worldToCanvas × bbox（与覆盖层逐点一致），
+    //   UV = 顶点/bbox 尺寸 → 使圆内采样到的帧内容与 canvas 该处帧内容完全重合，
+    //   无等比缩放。未绑定帧内容时回退 p/canvas。
     const uv = new Float32Array(allPoints.length * 2);
-    const isCanvasBbox = !!uvBbox && canvasWidth === uvBbox.w && canvasHeight === uvBbox.h;
-    allPoints.forEach((p, i) => {
-      if (uvBbox) {
-        if (isCanvasBbox) {
-          uv[i * 2] = p.x / uvBbox.w;
-          uv[i * 2 + 1] = p.y / uvBbox.h;
-        } else {
-          uv[i * 2] = (p.x - uvBbox.x) / uvBbox.w;
-          uv[i * 2 + 1] = (p.y - uvBbox.y) / uvBbox.h;
-        }
-      } else {
+    if (geomBbox) {
+      allPoints.forEach((p, i) => {
+        uv[i * 2] = p.x / geomBbox.w;
+        uv[i * 2 + 1] = p.y / geomBbox.h;
+      });
+    } else {
+      allPoints.forEach((p, i) => {
         uv[i * 2] = p.x / canvasWidth;
         uv[i * 2 + 1] = p.y / canvasHeight;
-      }
-    });
+      });
+    }
     fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    console.log(`[UV诊断] 区域#${entity.id} UV=画布像素/bbox(${uvBbox ? `${uvBbox.w}×${uvBbox.h}` : `画布 ${canvasWidth}×${canvasHeight}`}) 画布=${canvasWidth}×${canvasHeight} isCanvasBbox=${isCanvasBbox}`);
+    console.log(`[UV诊断] 区域#${entity.id} 顶点/bbox(${geomBbox ? `${geomBbox.w}×${geomBbox.h}` : `画布 ${canvasWidth}×${canvasHeight}`}) 画布=${canvasWidth}×${canvasHeight}`);
     
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---

@@ -6,6 +6,7 @@ import { computeRegionsExact, BFS_WORLD_BOUNDS, type ScanlineCache } from '../ut
 import { detectColorBlocks } from '../utils/colorBlockDetection';
 import { extractPolygonsFromImageData, hexToRgb } from '../utils/paintBufferUtils';
 import { isPointInPolygonWithHoles } from '../utils/regionDetection';
+import { projectWorldToBbox } from '../utils/transform';
 import { computeAllDashedClosedRegions } from '../utils/colorExtractionUtils';
 import { hslToRgb, rgbToHsl, clusterAndGenerateTexturesV2, compressLayerColors } from '../utils/colorCompressor';
 import { adjustResidualForUniformRange } from '../utils/colorCompressor';
@@ -3507,33 +3508,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log(`[绑定诊断] bbox 占全帧比例: ${(frameData.rawBbox!.w / texSize * 100).toFixed(1)}% × ${(frameData.rawBbox!.h / texSizeH * 100).toFixed(1)}%`);
     console.log('[绑定诊断] ========================================');
 
-    // ★ 区域形状裁剪（不是矩形 bbox）：★ 输出 bbox 局部纹理——
-    //   内容按 bbox 空间对齐：框（世界坐标）× 画布 → 画布像素多边形
-    //   （bbox 空间），fullBase 像素 - bbox 偏移 → bbox 局部坐标，
-    //   框内保留。渲染侧 UV 同按 bbox 归一 → 框覆盖哪显示哪，
-    //   不依赖"画布 = 源分辨率"（此前两空间错配 → 内容变窄/错位）
+    // ★ 顶点转换进 bbox 局部坐标（bbox 空间）：
+    //   世界坐标(0~1,y向上) × 源分辨率 → 源像素坐标 → 减 bbox 原点 → bbox 局部。
+    //   与 canvas 上的注释同源（世界坐标相等）：正圆保持正圆、位置正确，
+    //   不依赖非等比的画布尺寸（此前多用 state.canvasWidth/Height 导致比例错乱）。
     const bboxLocal = frameData.rawBbox!;
+    const polyPx = entity.boundary.map(ring =>
+      ring.map(p => {
+        const pp = projectWorldToBbox(p, bboxLocal);
+        return { x: pp.x, y: pp.y };
+      })
+    );
+    // ★ 不用掩码：boundBaseTexture 直接拷贝 bbox 矩形内容（各顶点已转换进
+    //   bbox 局部坐标，形状由 WebGL 网格 + 模板缓冲裁剪）
     const maskBase = new ImageData(bboxLocal.w, bboxLocal.h);
     const srcData = fullBase.data;
     const maskData = maskBase.data;
-    // 框多边形 → 画布像素坐标（= bbox 空间；boundary 世界坐标 × 画布）
-    const polyPx = entity.boundary.map(ring =>
-      ring.map(p => ({ x: p.x * state.canvasWidth, y: (1 - p.y) * state.canvasHeight }))
-    );
     for (let by = 0; by < bboxLocal.h; by++) {
       for (let bx = 0; bx < bboxLocal.w; bx++) {
-        if (!isPointInPolygonWithHoles({ x: bx, y: by }, polyPx)) continue;
         const si = ((bboxLocal.y + by) * fullBase.width + (bboxLocal.x + bx)) * 4;
         const di = (by * bboxLocal.w + bx) * 4;
         maskData[di] = srcData[si];
         maskData[di + 1] = srcData[si + 1];
         maskData[di + 2] = srcData[si + 2];
-        maskData[di + 3] = srcData[si + 3] > 0 ? 255 : 0;
-        // 形状外保持透明（alpha=0）
+        maskData[di + 3] = srcData[si + 3];
       }
     }
     const croppedBase = maskBase;
-    console.log(`[绑定诊断] boundBaseTexture（bbox 局部）: ${bboxLocal.w}×${bboxLocal.h}，框像素多边形顶点数=${polyPx[0]?.length ?? 0}`);
+    console.log(`[绑定诊断] boundBaseTexture（bbox 矩形）: ${bboxLocal.w}×${bboxLocal.h}，区域顶点数=${polyPx[0]?.length ?? 0}`);
 
     // ★ 残差纹理（bbox 局部，与 boundBaseTexture 同尺寸）——绑定即生成，
     //   流体平流直接作用于残差（此前 boundResidualTexture 恒 null →
@@ -3550,7 +3552,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     for (let by = 0; by < bboxLocal.h; by++) {
       for (let bx = 0; bx < bboxLocal.w; bx++) {
-        if (!isPointInPolygonWithHoles({ x: bx, y: by }, polyPx)) continue;
+        // ★ 用世界坐标多边形判定（等比坐标系基准）：与 WebGL 等比网格一致
+        if (!isPointInPolygonWithHoles({ x: bx / bboxLocal.w, y: 1 - by / bboxLocal.h }, entity.boundary)) continue;
         const li = by * bboxLocal.w + bx;
         const si = ((bboxLocal.y + by) * fullBase.width + (bboxLocal.x + bx)) * 4;
         const packed = frameData.rawDeltaPacked[li];
