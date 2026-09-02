@@ -147,6 +147,23 @@ async function boot() {
     hitEffectAsset = null;
   }
 
+  // ---- ★ 月亮贴图：加载大猫哥月亮素材包（特效播放器解码），替换天空程序化月相 ----
+  try {
+    const moonAsset = await Asset.load(encodeURI('/characters/大猫哥的月亮.scene.zip'));
+    const pair = moonAsset.getFramePair(0);
+    const ftx = moonAsset.getFtxFrame(0);
+    if (pair && ftx) {
+      renderManager.setMoonTexture(pair.base, pair.residual);
+      console.log(`[boot] 月亮贴图已加载: ${ftx.width}×${ftx.height}, bbox=(${ftx.bbox.x},${ftx.bbox.y},${ftx.bbox.w}x${ftx.bbox.h})`);
+    } else {
+      renderManager.setMoonTexture(null, null);
+      console.warn('[boot] 大猫哥月亮素材包缺帧数据，回退程序化月相');
+    }
+  } catch (e) {
+    renderManager.setMoonTexture(null, null);
+    console.warn('[boot] 大猫哥月亮素材包加载失败，回退程序化月相:', e);
+  }
+
   // ---- 3. 读取或创建存档 ----
   currentSession = SaveSystem.load();
   if (!currentSession) {

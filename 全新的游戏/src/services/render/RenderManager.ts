@@ -81,7 +81,7 @@ class RenderManager {
     }
   }
 
-  /** 进入战场：重置到清晨出发时刻（后续可按 Session.day 变化） */
+  /** 进入战场：重置到初始时刻（晚上，默认 START_HOUR=21） */
   resetDay(hour?: number): void {
     this.sunCycle.reset(hour);
   }
@@ -125,6 +125,15 @@ class RenderManager {
   setEnvironment(kind: 'ship' | 'world'): void {
     this.skyDome.setVisible(kind === 'world');
     if (kind === 'world' && this.cloudSolver) this.cloudSolver.reset();
+  }
+
+  /** ★ 注入月亮贴图（大猫哥月亮素材包解码出的 base/residual 纹理）。
+   *  无素材包时传 null 即可回退到程序化月相。 */
+  setMoonTexture(
+    base: THREE.Texture | null,
+    residual: THREE.Texture | null,
+  ): void {
+    this.skyDome.setMoonTexture(base, residual);
   }
 }
 

@@ -50,7 +50,7 @@ export class CloudSolver {
   /** step 累计计时器（驱动 2 帧/秒） */
   private stepAccum = 0;
   /** 当前游戏时刻（小时 0..24；由 RenderManager 每帧喂） */
-  private hour = 7.5;
+  private hour = 21;
 
   private resolution: { w: number; h: number } = { w: CLOUD_W, h: CLOUD_H };
 

@@ -155,7 +155,7 @@ export class WorldMode implements IGameMode {
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
 
-    // ★ 昼夜循环重置：每次出击从清晨出发（后续可按 Session.day 变化出发时刻）
+    // ★ 昼夜循环重置：每次出击从晚上出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
 
     // 玩家出生 = 中心 chunk 中心

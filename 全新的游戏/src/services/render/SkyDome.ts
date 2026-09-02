@@ -123,7 +123,7 @@ const MOON_FRAG = /* glsl */ `
   varying vec2 vUv;
   uniform vec3 uColor;
   uniform float uVisible;   // 0..1 夜晚可见度
-  uniform float uPhase;     // 0=新月,0.5=满月
+  uniform float uPhase;     // 0=新月,0.5=满月（兼容保留，未用贴图时仍可插值）
   uniform float uGlow;      // 光晕强度
   void main() {
     vec2 p = vUv * 2.0 - 1.0;
@@ -149,6 +149,56 @@ const MOON_FRAG = /* glsl */ `
   }
 `;
 
+const MOON_TEX_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    // 与素材预览同约定：纹理数据 y 向下，这里 v 翻转成向上 → 显示与绘画网页预览一致
+    vUv = vec2(uv.x, 1.0 - uv.y);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+// ★ 月亮贴图着色器：用「特效播放器」的 HSL 解码管线渲染大猫哥月亮完整贴图
+//   （不再是程序化月相圆盘）。base 存 HSL Float、residual 存编码 delta，
+//   与 GachaOverlay/角色渲染同款解码，保证与素材包预览完全一致。
+const MOON_TEX_FRAG = /* glsl */ `
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D uBase;
+  uniform sampler2D uResidual;
+  uniform vec3 uColor;         // 光晕叠加色（月本色）
+  uniform float uVisible;      // 0..1 夜晚可见度
+  uniform float uGlow;         // 光晕强度
+
+  vec3 hsl2rgb(vec3 c) {
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+  }
+
+  void main() {
+    vec4 base = texture2D(uBase, vUv);
+    if (base.a < 0.5) discard;
+    vec4 res = texture2D(uResidual, vUv);
+    float dH = (res.r * 2.0 - 1.0) * 0.5;
+    float dS = (res.g * 2.0 - 1.0) * 0.5;
+    float dL = (res.b * 2.0 - 1.0) * 0.5;
+    float h = fract(base.r + dH);
+    float s = clamp(base.g + dS, 0.0, 1.0);
+    float l = clamp(base.b + dL, 0.0, 1.0);
+    vec3 color = hsl2rgb(vec3(h, s, l));
+
+    // 沿 bbox 边界柔和淡出，避免硬边
+    vec2 p = vUv * 2.0 - 1.0;
+    float r = length(p);
+    float disc = smoothstep(1.0, 0.94, r);
+    float halo = exp(-max(r - 0.9, 0.0) * 6.0) * uGlow * 0.5;
+
+    // 叠加微光晕（贴图自身颜色为主，光晕作为氛围衬托）
+    vec3 col = color + halo * uColor;
+    gl_FragColor = vec4(col, base.a * disc * uVisible);
+  }
+`;
+
 export class SkyDome {
   private group: THREE.Group;
   private skyMat: THREE.ShaderMaterial;
@@ -158,6 +208,11 @@ export class SkyDome {
   private sunMesh: THREE.Mesh;
   private moonMat: THREE.ShaderMaterial;
   private moonMesh: THREE.Mesh;
+
+  /** ★ 月亮贴图（大猫哥月亮 → 特效播放器 HSL 解码管线） */
+  private moonTexMat: THREE.ShaderMaterial;
+  private moonTexMesh: THREE.Mesh;
+  private moonTexReady = false;
 
   /** 云纹理滚动偏移（累积；U 水平漂移） */
   private cloudScroll = { x: 0, y: 0 };
@@ -224,8 +279,52 @@ export class SkyDome {
     this.moonMesh.renderOrder = -90;
     this.moonMesh.frustumCulled = false;
 
+    // ---- ★ 月亮贴图圆盘（大猫哥月亮素材包 HSL 解码；命中前不可见，用空 1×1 纹理兜底）----
+    this.moonTexMat = new THREE.ShaderMaterial({
+      vertexShader: MOON_TEX_VERT,
+      fragmentShader: MOON_TEX_FRAG,
+      uniforms: {
+        uColor: { value: new THREE.Color(0xc8d8f0) },
+        uVisible: { value: 0 },
+        uGlow: { value: MOON_GLOW_MAX },
+        uBase: { value: this.emptyCloudTex },
+        uResidual: { value: this.emptyCloudTex },
+      },
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      fog: false,
+    });
+    // ★ 方形网格：正方形 UV 采样 bbox 区域，把画布非等比特例下被拉成椭圆的
+    //   月亮内容重新压回正圆（与绘画网页"画布等比化"等价）。
+    this.moonTexMesh = new THREE.Mesh(new THREE.PlaneGeometry(MOON_RADIUS * 2, MOON_RADIUS * 2), this.moonTexMat);
+    this.moonTexMesh.renderOrder = -90;
+    this.moonTexMesh.frustumCulled = false;
+    this.moonTexMesh.visible = false;
+
     this.group = new THREE.Group();
-    this.group.add(this.skyMesh, this.sunMesh, this.moonMesh);
+    this.group.add(this.skyMesh, this.sunMesh, this.moonMesh, this.moonTexMesh);
+  }
+
+  /** ★ 注入大猫哥月亮素材包（特效播放器解码出的 base/residual 纹理）。
+   *  纹理已是 bbox 裁剪后的月亮本体（bbox 尺寸），方形 quad 完整采样。
+   *  传 null 表示没有素材包 → 回退到程序化月相圆盘。 */
+  setMoonTexture(
+    base: THREE.Texture | null,
+    residual: THREE.Texture | null,
+  ): void {
+    this.moonTexReady = !!(base && residual);
+    if (!this.moonTexReady) {
+      // 回退：月相圆盘可见
+      this.moonTexMesh.visible = false;
+      this.moonMesh.visible = true;
+      return;
+    }
+    // 纹理 = 月亮本体（bbox 裁剪后），完整采样
+    this.moonTexMat.uniforms.uBase.value = base!;
+    this.moonTexMat.uniforms.uResidual.value = residual!;
+    this.moonTexMesh.visible = true;
+    this.moonMesh.visible = false;
   }
 
   /** 挂到场景（RenderManager.setup 调用） */
@@ -293,8 +392,6 @@ export class SkyDome {
     const mx = anchor.x + moon.dir.x * DISC_DISTANCE;
     const my = anchor.y + moon.dir.y * DISC_DISTANCE;
     const mz = anchor.z + moon.dir.z * DISC_DISTANCE;
-    this.moonMesh.position.set(mx, my, mz);
-    this.moonMesh.lookAt(anchor.x, anchor.y, anchor.z);
     // 可见度 = 夜对应（1 - daylight）× 月亮可见度/月相
     const nightFactor = 1 - sun.daylight;
     const moonVisible = nightFactor * moon.visibility;
@@ -302,5 +399,18 @@ export class SkyDome {
     this.moonMat.uniforms.uPhase.value = moon.phase;
     this.moonMat.uniforms.uColor.value.setHex(moon.color);
     this.moonMat.uniforms.uGlow.value = MOON_GLOW_MAX * moon.phase;
+
+    // ---- ★ 月亮贴图分支：命中素材包时渲染完整大猫哥月亮贴图 ----
+    if (this.moonTexReady) {
+      this.moonTexMesh.position.set(mx, my, mz);
+      this.moonTexMesh.lookAt(anchor.x, anchor.y, anchor.z);
+      const glowScale = Math.max(0.15, moonVisible);
+      this.moonTexMat.uniforms.uVisible.value = moonVisible;
+      this.moonTexMat.uniforms.uGlow.value = MOON_GLOW_MAX * glowScale;
+      this.moonTexMat.uniforms.uColor.value.setHex(moon.color);
+    } else {
+      this.moonMesh.position.set(mx, my, mz);
+      this.moonMesh.lookAt(anchor.x, anchor.y, anchor.z);
+    }
   }
 }
