@@ -771,6 +771,96 @@ useEffect(() => {
     }
     
     console.log(`[三角剖分诊断] 区域#${entity.id} 顶点数=${flatCoords.length/2} 环数=${ringLengths.length} holeIndices=${holeIndices?.length??0} 索引数=${indices.length} 三角形数=${indices.length/3}`);
+
+    // 【调试】逐点独立转换：2D 覆盖层源点 vs WebGL 网格顶点，各自映射到画布像素坐标。
+    //   2D 侧：regionPolygonsCache/anno 世界点 → worldToCanvas（覆盖层实际绘制所用）
+    //   WebGL 侧：entity.boundary 世界点 → x*canvasWidth, (1-y)*canvasHeight（网格实际所用）
+    //   逐点比较，任何一环不一致都会暴露。
+    {
+      const cachePolygons = activeLayerId ? (regionPolygonsCache[activeLayerId] || []) : [];
+      const cachePoly = cachePolygons[entity.id];
+      const src2d = anno ? anno.polygon : cachePoly;
+
+      const wglWorldPoints = entity.boundary;           // WebGL 侧原始世界坐标
+      const toCanvasGL = (p: Point) => ({ x: p.x * canvasWidth, y: (1 - p.y) * canvasHeight });
+
+      if (!src2d || src2d.length === 0) {
+        console.warn(`[逐点比较] 区域#${entity.id} 2D 侧无多边形（anno/cachePoly 缺失）`);
+      } else {
+        const src2dWorld = src2d;                        // 2D 侧原始世界坐标
+        console.log(`[逐点比较] 区域#${entity.id} 2D侧=${anno ? 'anno' : 'cachePoly'} 环数=${src2dWorld.length} WebGL环数=${wglWorldPoints.length} 画布=${canvasWidth}×${canvasHeight}`);
+        let maxErr = 0, sumErr = 0, pairs = 0;
+        const ringCount = Math.max(src2dWorld.length, wglWorldPoints.length);
+        for (let ri = 0; ri < ringCount; ri++) {
+          const ring2d = src2dWorld[ri] || [];
+          const ringGl = wglWorldPoints[ri] || [];
+          const n = Math.max(ring2d.length, ringGl.length);
+          for (let vi = 0; vi < n; vi++) {
+            const p2dW = ring2d[vi];
+            const pGlW = ringGl[vi];
+            if (!p2dW || !pGlW) continue;
+            const p2dC = worldToCanvasFn(p2dW.x, p2dW.y);   // 2D 覆盖层实际画布坐标
+            const pGlC = toCanvasGL(pGlW);                  // WebGL 实际画布坐标
+            const err = Math.hypot(p2dC.x - pGlC.x, p2dC.y - pGlC.y);
+            maxErr = Math.max(maxErr, err);
+            sumErr += err;
+            pairs++;
+            // 每环打印前 4 个顶点样本 + 首尾查看完整趋势
+            if (vi < 4 || vi >= n - 1) {
+              const dW = `Δ世界[${(p2dW.x - pGlW.x).toExponential(2)},${(p2dW.y - pGlW.y).toExponential(2)}]`;
+              const dC = `Δ画布[${(p2dC.x - pGlC.x).toExponential(2)},${(p2dC.y - pGlC.y).toExponential(2)}]`;
+              console.log(
+                `  环${ri}点${vi} 2D画布(${p2dC.x.toFixed(3)},${p2dC.y.toFixed(3)}) WebGL画布(${pGlC.x.toFixed(3)},${pGlC.y.toFixed(3)}) err=${err.toFixed(3)}px ${dW} ${dC}`
+              );
+            }
+          }
+        }
+        const avgErr = pairs ? sumErr / pairs : 0;
+        console.log(`[逐点比较] 区域#${entity.id} 顶点对=${pairs} maxErr=${maxErr.toFixed(3)}px avgErr=${avgErr.toFixed(3)}px ${maxErr < 0.001 ? '完全重合✓' : `偏移(Δ=${maxErr.toFixed(3)}px)✗`}`);
+      }
+    }
+
+    // 【帧回读】从最终帧纹理（boundBaseTexture/fullBase 全帧）读像素足迹，
+    //   与绘制圆（entity.worldBbox→画布）对比——验证"导出的圆在帧数据里的
+    //   真实像素形状/位置 vs 你画的圆"是否一致（正圆/椭圆、中心是否对齐）
+    if (activeLayerId && frameDataMap[activeLayerId]?.boundBaseTexture) {
+      try {
+        const img = frameDataMap[activeLayerId].boundBaseTexture!;
+        const fw = img.width, fh = img.height, pd = img.data;
+        let minX = Infinity, minY = Infinity, maxX = -1, maxY = -1, alphaPx = 0;
+        for (let y = 0; y < fh; y++) {
+          for (let x = 0; x < fw; x++) {
+            if (pd[(y * fw + x) * 4 + 3] > 0) {
+              alphaPx++;
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        const wb = entity.worldBbox!;
+        const drawnW = wb.w * canvasWidth;
+        const drawnH = wb.h * canvasHeight;
+        const drawnCX = (wb.x + wb.w / 2) * canvasWidth;
+        const drawnCY = (1 - (wb.y + wb.h / 2)) * canvasHeight;
+        console.log('[帧回读] ========================================');
+        if (alphaPx > 0) {
+          const w = maxX - minX + 1, h = maxY - minY + 1;
+          console.log(`[帧回读] 帧纹理 ${fw}×${fh} 非透明像素=${alphaPx} 足迹bbox=(${minX},${minY}) ${w}×${h}` +
+            ` 中心(${((minX + maxX) / 2).toFixed(1)},${((minY + maxY) / 2).toFixed(1)}) 宽高比=${(w / h).toFixed(3)}（1.000=正圆）`);
+          console.log(`[帧回读] 绘制圆→画布: ${drawnW.toFixed(1)}×${drawnH.toFixed(1)}` +
+            ` 中心(${drawnCX.toFixed(1)},${drawnCY.toFixed(1)}) 宽高比=${(drawnW / drawnH).toFixed(3)}（1.000=正圆）`);
+          console.log(`[帧回读] 中心偏移: dx=${((minX + maxX) / 2 - drawnCX).toFixed(1)} dy=${((minY + maxY) / 2 - drawnCY).toFixed(1)}` +
+            `（0,0=对齐） 尺寸差: 帧${w}×${h} vs 绘制${drawnW.toFixed(1)}×${drawnH.toFixed(1)}`);
+        } else {
+          console.warn(`[帧回读] 帧纹理 ${fw}×${fh} 全透明`);
+        }
+        console.log('[帧回读] ========================================');
+      } catch (err) {
+        console.warn('[帧回读] 异常:', err);
+      }
+    }
     
     // 验证索引有效性
     if (indices.length === 0 || indices.length % 3 !== 0) {
@@ -801,16 +891,25 @@ useEffect(() => {
     fillGeom.setIndex(indices);
     fillGeom.computeVertexNormals();
     
-    // --- 4. UV 生成：★ 几何顶点 = worldToCanvas(画布)，纹理 = 全帧（帧内容
-    //   全帧铺满画布），故 UV = 顶点/画布尺寸。区域形状由模板缓冲裁剪，
-    //   圆内采样到的帧内容与 canvas 该处帧内容完全重合，无等比缩放。
-    const uv = new Float32Array(allPoints.length * 2);
-    allPoints.forEach((p, i) => {
-      uv[i * 2] = p.x / canvasWidth;
-      uv[i * 2 + 1] = p.y / canvasHeight;
-    });
-    fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    console.log(`[UV诊断] 区域#${entity.id} 顶点/画布(${canvasWidth}×${canvasHeight})`);
+    // --- 4. UV 生成：★ 画布为等比正方形(512×512)，帧纹理(380×512)等比 fit 居中，
+    //   故顶点画布像素 → 帧纹理 UV 需平移+缩放：uv.x=(pcx-offsetX)/(scale*texW)、
+    //   uv.y=pcy/(scale*texH)。这样 WebGL 采样与 2D 预览逐像素重合（等比留白一致）。
+    //   帧内容本身(月亮足迹)在纹理里就是 182×238 椭圆(导出端如此)，我们保持其原样。
+    {
+      const tex = frameDataMap[activeLayerId]?.boundBaseTexture;
+      const texW = tex?.width ?? canvasWidth;
+      const texH = tex?.height ?? canvasHeight;
+      const scale = Math.min(canvasWidth / texW, canvasHeight / texH);
+      const offX = (canvasWidth - texW * scale) / 2;
+      const offY = (canvasHeight - texH * scale) / 2;
+      const uv = new Float32Array(allPoints.length * 2);
+      allPoints.forEach((p, i) => {
+        uv[i * 2] = ((p.x - offX) / scale) / texW;
+        uv[i * 2 + 1] = ((p.y - offY) / scale) / texH;
+      });
+      fillGeom.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      console.log(`[UV诊断] 区域#${entity.id} 顶点/画布(${canvasWidth}×${canvasHeight}) 帧纹理=${texW}×${texH} fitScale=${scale} offX=${offX} offY=${offY}`);
+    }
     
 
     // --- 5. 填充网格材质（模板缓冲奇偶填充） ---
@@ -1006,7 +1105,7 @@ useEffect(() => {
       group.userData['dispTexInfo'] = '⚠️ 位移纹理为空';
     }
   }
-}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL, frameDataMap]);
+}, [regionEntities, activeLayerId, canvasWidth, canvasHeight, regionAnnotations, showRegionBorderWebGL, frameDataMap, regionPolygonsCache]);
 
   const [isPanning, setIsPanning] = useState(false);
   const [isPinning, setIsPinning] = useState(false);
@@ -2465,29 +2564,40 @@ useEffect(() => {
           ctx.save();
           ctx.globalAlpha = (layers.find(l => l.id === layerId)?.opacity ?? 1);
 
-          // ★ 帧内容全帧铺满画布（画布 = 帧源分辨率）：绑定与未绑定一致，
-          //   drawImage 整张纹理铺到整个画布。区域裁剪由 WebGL 模板缓冲负责，
-          //   此 2D 预览只是"未绑定/调试"时的帧内容参考画面。
+          // ★ 帧内容等比 fit 到正方形画布（居中，不拉伸变形）：
+          //   帧纹理 380×512 → 画布 512×512，scale = min(512/380, 512/512) = 1，
+          //   左右留白 (512-380)/2 = 66px。
+          const texW = textureToDraw.width;
+          const texH = textureToDraw.height;
+          const scale = Math.min(currentWidth / texW, currentHeight / texH);
+          const drawW = texW * scale;
+          const drawH = texH * scale;
+          const frameOffsetX = (currentWidth - drawW) / 2;
+          const frameOffsetY = (currentHeight - drawH) / 2;
           {
             const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = textureToDraw.width;
-            tempCanvas.height = textureToDraw.height;
+            tempCanvas.width = texW;
+            tempCanvas.height = texH;
             tempCanvas.getContext('2d')!.putImageData(textureToDraw, 0, 0);
-            ctx.drawImage(tempCanvas, 0, 0, currentWidth, currentHeight);
+            ctx.drawImage(tempCanvas, frameOffsetX, frameOffsetY, drawW, drawH);
           }
 
-          ctx.restore();
-
-          // 绘制 bbox 边框作为视觉提示（画布 = 帧源分辨率，bbox 在画布中的真实位置）
+          // 绘制 bbox 边框（纹理像素坐标 → 画布坐标，需加帧偏移+缩放）
           if (frameData.rawBbox) {
             const b = frameData.rawBbox;
-            ctx.save();
             ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
             ctx.lineWidth = 2;
             ctx.setLineDash([5, 5]);
-            ctx.strokeRect(b.x, b.y, b.w, b.h);
-            ctx.restore();
+            ctx.strokeRect(
+              b.x * scale + frameOffsetX,
+              b.y * scale + frameOffsetY,
+              b.w * scale,
+              b.h * scale
+            );
+            ctx.setLineDash([]);
           }
+
+          ctx.restore();
 
           // 绑定状态标签
           if (frameData.boundRegionId !== null) {

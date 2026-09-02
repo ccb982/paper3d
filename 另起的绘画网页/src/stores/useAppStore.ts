@@ -3405,11 +3405,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.skillGroupEditor,
         sharedBaseColors: currentPalette,
       },
-      // ★ 画布尺寸 = 帧源分辨率（width/height）：帧数据固定分辨率，
-      //   绑定/解绑绝不改变。区域绑定只是裁剪蒙版（WebGL 模板缓冲），
-      //   帧内容全帧 1:1 铺满画布，WebGL 顶点用 worldToCanvas 与覆盖层逐点重合。
-      canvasWidth: firstFrame ? firstFrame.width : state.canvasWidth,
-      canvasHeight: firstFrame ? firstFrame.height : state.canvasHeight,
+      // ★ 画布尺寸 = max(帧源分辨率)，正方形（等比）：世界坐标 0~1
+      //   正圆映射到画布仍为正圆；帧内容 380×512 等比 fit 到 512×512，
+      //   居中两侧留透明（不拉伸变形）。
+      canvasWidth: firstFrame ? Math.max(firstFrame.width, firstFrame.height) : state.canvasWidth,
+      canvasHeight: firstFrame ? Math.max(firstFrame.width, firstFrame.height) : state.canvasHeight,
       // 🔽 重置视图变换，避免导入后内容偏移和重复绘制
       zoom: 1.0,
       panOffset: { x: 0, y: 0 },
@@ -3506,6 +3506,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     console.log(`[绑定诊断] 画布: ${state.canvasWidth}×${state.canvasHeight}，fullBase: ${fullBase.width}×${fullBase.height}`);
     console.log(`[绑定诊断] bbox 占全帧比例: ${(frameData.rawBbox!.w / texSize * 100).toFixed(1)}% × ${(frameData.rawBbox!.h / texSizeH * 100).toFixed(1)}%`);
     console.log('[绑定诊断] ========================================');
+
+    // ★ 回读最终帧数据：从 fullBase 像素非透明区域（即用户编辑器实际画的内容）
+    //   提取圆的真实像素足迹，与绘制圆（entity.worldBbox）在画布中对比——
+    //   直接验证"画的正圆在帧数据里是否真的正圆、位置是否对齐"
+    {
+      try {
+        const fw = fullBase.width, fh = fullBase.height;
+        const pxData = fullBase.data;
+        let minX = Infinity, minY = Infinity, maxX = -1, maxY = -1, alphaPx = 0;
+        for (let y = 0; y < fh; y++) {
+          for (let x = 0; x < fw; x++) {
+            const a = pxData[(y * fw + x) * 4 + 3];
+            if (a > 0) {
+              alphaPx++;
+              if (x < minX) minX = x;
+              if (y < minY) minY = y;
+              if (x > maxX) maxX = x;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (alphaPx > 0) {
+          const w = maxX - minX + 1, h = maxY - minY + 1;
+          console.log('[帧回读] ========================================');
+          console.log(`[帧回读] fullBase ${fw}×${fh} 非透明像素=${alphaPx} 足迹bbox=(${minX},${minY}) ${w}×${h} 中心(${((minX + maxX) / 2).toFixed(1)},${((minY + maxY) / 2).toFixed(1)})`);
+          console.log(`[帧回读] 该圆宽高比: ${(w / h).toFixed(3)}（1.000=正圆）`);
+          const dw = entity.worldBbox!.w * state.canvasWidth;
+          const dh = entity.worldBbox!.h * state.canvasHeight;
+          console.log(`[帧回读] 绘制圆（entity.worldBbox→画布）: ${dw.toFixed(1)}×${dh.toFixed(1)} 中心(${(entity.worldBbox!.x + entity.worldBbox!.w / 2) * state.canvasWidth},${(1 - (entity.worldBbox!.y + entity.worldBbox!.h / 2)) * state.canvasHeight})`);
+          console.log(`[帧回读] 绘制圆宽高比: ${(dw / dh).toFixed(3)}（1.000=正圆）`);
+          console.log(`[帧回读] 中心偏移: dx=${((minX + maxX) / 2 - (entity.worldBbox!.x + entity.worldBbox!.w / 2) * state.canvasWidth).toFixed(1)} dy=${((minY + maxY) / 2 - (1 - (entity.worldBbox!.y + entity.worldBbox!.h / 2)) * state.canvasHeight).toFixed(1)}`);
+          console.log('[帧回读] ========================================');
+        } else {
+          console.warn('[帧回读] fullBase 全透明（帧数据无任何绘制内容）');
+        }
+      } catch (err) {
+        console.warn('[帧回读] 回读异常:', err);
+      }
+    }
 
     // ★ 帧内容全帧铺满画布：boundBaseTexture 直接使用解码出的全帧 fullBase，
     //   不再裁剪 bbox。区域绑定注释仅作为裁剪蒙版（WebGL 模板缓冲裁剪形状），
