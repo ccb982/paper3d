@@ -236,6 +236,51 @@ export function buildBevelWallDebug(
         // 左右侧边 = 与弧边垂直的两条边（dir^2 / (dir^2)^1，恒成立）
         drawSideWall((dir ^ 2) as 0 | 1 | 2 | 3);
         drawSideWall(((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
+        // ---- ★ 侧面高台边调试标记（橙色）：弧边 dir 邻居高台朝本块的边 ----
+        // 邻居高台朝向本块（弧面高台）的边，无条件生成延长墙
+        {
+          const owd = WALL_DIRS[dir];
+          const onb = src.blockAt(bx + owd.dx, bz + owd.dz);
+          if (onb && tileById(onb.id).genRole === "platform") {
+            // 邻居块的 dir 边（朝向本块），坐标以邻居块为基准
+            const nbx = bx + owd.dx, nbz = bz + owd.dz;
+            const eAx = nbx * 4 + owd.ax * 4, eAz = nbz * 4 + owd.az * 4;
+            const eBx = nbx * 4 + owd.bx * 4, eBz = nbz * 4 + owd.bz * 4;
+            const yT = onb.h;
+            const yB = Math.min(onb.h, cur.h) - 0.5;
+            const orange = new THREE.Color(0xff8800);
+            const pushO = (p: number[], q: number[]) => {
+              all.push(p[0] - HALF, p[1], p[2] - HALF, q[0] - HALF, q[1], q[2] - HALF);
+              for (let k = 0; k < 2; k++) col.push(orange.r, orange.g, orange.b);
+            };
+            const qA = [eAx, yB, eAz], qB = [eBx, yB, eBz], qC = [eBx, yT, eBz], qD = [eAx, yT, eAz];
+            pushO(qA, qB); pushO(qB, qC); pushO(qC, qD); pushO(qD, qA);
+            pushO(qA, qC);
+          }
+        }
+        // ---- ★ 弧边侧壁的邻居边调试标记（紫色）：侧壁 sd 方向邻居高台上、
+        //      朝向本块的边（邻居坐标 sd^1）延长生成的位置 ----
+        for (const sd of [dir ^ 2, (dir ^ 2) ^ 1]) {
+          const s = sd as 0 | 1 | 2 | 3;
+          if (isBevelEdge(src, bx, bz, s)) continue; // 与生成一致：自身弧边跳过
+          const pwd = WALL_DIRS[s];
+          const pnb = src.blockAt(bx + pwd.dx, bz + pwd.dz);
+          if (!pnb || tileById(pnb.id).genRole !== "platform") continue;
+          // 邻居朝向本块的边 = 邻居坐标的 sd^1 方向（用 sd^1 的角点偏移！）
+          const nbx = bx + pwd.dx, nbz = bz + pwd.dz;
+          const nwd = WALL_DIRS[(s ^ 1) as 0 | 1 | 2 | 3];
+          const pAx = nbx * 4 + nwd.ax * 4, pAz = nbz * 4 + nwd.az * 4;
+          const pBx = nbx * 4 + nwd.bx * 4, pBz = nbz * 4 + nwd.bz * 4;
+          const purple = new THREE.Color(0xff00ff);
+          const pushP = (p: number[], q: number[]) => {
+            all.push(p[0] - HALF, p[1], p[2] - HALF, q[0] - HALF, q[1], q[2] - HALF);
+            for (let k = 0; k < 2; k++) col.push(purple.r, purple.g, purple.b);
+          };
+          const yT2 = pnb.h;
+          const yB2 = Math.min(pnb.h, cur.h) - 0.5;
+          const qA = [pAx, yB2, pAz], qB = [pBx, yB2, pBz], qC = [pBx, yT2, pBz], qD = [pAx, yT2, pAz];
+          pushP(qA, qB); pushP(qB, qC); pushP(qC, qD); pushP(qD, qA);
+        }
       }
     }
   }
@@ -718,6 +763,42 @@ export function buildPostSideWalls(
           if (!nb2) continue;
           const drop = nb2.h < cur.h; // 有落差 → 全高墙；无落差 → 只封弧带端面
           rebuild.set(`${bx},${bz},${s}`, { bx, bz, sd: s, drop });
+        }
+      }
+    }
+  }
+
+  // ---- ★ 侧面高台的边也生成墙：rebuild 中每条边（无论落差/封片）的邻居
+  //      若是高台（platform），则「邻居高台朝向本块的边」（邻居坐标 sd^1）
+  //      也延长生成——两高台背靠背同面，堵住弧带缺口看穿的悬空 ----
+  const initial2 = [...rebuild.entries()];
+  for (const [, e] of initial2) {
+    const wd = WALL_DIRS[e.sd];
+    const nbx = e.bx + wd.dx, nbz = e.bz + wd.dz;
+    const nb = src.blockAt(nbx, nbz);
+    if (!nb) continue;
+    if (tileById(nb.id).genRole !== "platform") continue; // 只扩散到侧面高台
+    const od = (e.sd ^ 1) as 0 | 1 | 2 | 3; // 邻居朝向本块的边
+    const okey = `${nbx},${nbz},${od}`;
+    if (!rebuild.has(okey)) {
+      rebuild.set(okey, { bx: nbx, bz: nbz, sd: od, drop: true });
+    }
+  }
+  // 弧边的对边（邻居坐标）：弧边 dir 的邻居高台，其朝本块边同样处理
+  for (let lbz = 0; lbz < BPS; lbz++) {
+    for (let lbx = 0; lbx < BPS; lbx++) {
+      const bx = cx * BPS + lbx;
+      const bz = cz * BPS + lbz;
+      for (let dir = 0; dir < 4; dir++) {
+        if (!isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3)) continue;
+        const od = (dir ^ 1) as 0 | 1 | 2 | 3;
+        const owd = WALL_DIRS[od];
+        const onb = src.blockAt(bx + owd.dx, bz + owd.dz);
+        if (!onb) continue;
+        if (tileById(onb.id).genRole !== "platform") continue;
+        const okey = `${bx + owd.dx},${bz + owd.dz},${dir}`; // 邻居的 dir 边（朝向本块）
+        if (!rebuild.has(okey)) {
+          rebuild.set(okey, { bx: bx + owd.dx, bz: bz + owd.dz, sd: dir as 0 | 1 | 2 | 3, drop: true });
         }
       }
     }
