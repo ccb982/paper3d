@@ -33,6 +33,7 @@ import { mergeTerrainPhysics } from './Refinements';
 import {
   buildPostChunkTopSurface,
   buildPostSideWalls,
+  buildBevelWallDebug,
   postSurfaceHeightAt,
 } from './PostProcess';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
@@ -464,6 +465,9 @@ export class ChunkManager {
     // ★ 后处理层路由：侧壁 = 精修层墙缓冲 + 墙顶跟随后处理面（关闭时透传）
     const walls = buildPostSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg);
     if (walls.mesh) group.add(walls.mesh);
+    // ★ 调试（绿色线框）：弧边侧壁目标形状预览——确认后删除
+    const dbgBevel = buildBevelWallDebug(this.raster, cx, cz);
+    if (dbgBevel) group.add(dbgBevel);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
     // ---- ★ 装饰层装配（计划在预渲染前已放置，此处直接消费同一份） ----

@@ -62,6 +62,191 @@ const DIR4 = [
   { dx: 0, dz: -1 },
 ] as const;
 
+/** DIRS 副本（与精修层一致）：块边两端角点偏移 + 法线（0=+x 1=−x 2=+z 3=−z） */
+const WALL_DIRS = [
+  { dx: 1, dz: 0, ax: 1, az: 0, bx: 1, bz: 1 },
+  { dx: -1, dz: 0, ax: 0, az: 1, bx: 0, bz: 0 },
+  { dx: 0, dz: 1, ax: 1, az: 1, bx: 0, bz: 1 },
+  { dx: 0, dz: -1, ax: 0, az: 0, bx: 1, bz: 0 },
+] as const;
+
+/**
+ * 块 (bx,bz) 的 dir 边是否为圆角外露边：platform → ground + cliff + 邻块更低。
+ */
+function isBevelEdge(
+  src: BlockSource,
+  bx: number,
+  bz: number,
+  dir: 0 | 1 | 2 | 3,
+): boolean {
+  const cur = src.blockAt(bx, bz);
+  if (!cur || tileById(cur.id).genRole !== "platform") return false;
+  const wd = WALL_DIRS[dir];
+  const nb = src.blockAt(bx + wd.dx, bz + wd.dz);
+  if (!nb) return false;
+  if (tileById(nb.id).genRole !== "ground") return false;
+  if (finalRuling(src, bx, bz, dir) !== "cliff") return false;
+  // ★ 侧向邻边（左右）有插值坡（weld）→ 撤销该弧边（坡方角突出、背面镂空）
+  const lr = finalRuling(src, bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
+  const rr = finalRuling(src, bx, bz, (dir ^ 3) as 0 | 1 | 2 | 3);
+  if (lr === "weld" || rr === "weld") return false;
+  return nb.h < cur.h - BEVEL_EPS;
+}
+
+/**
+ * 弧边 (bx,bz,dir) 的指定端点是否与另一条弧边转角相接：
+ * A 端(end=0)/B 端(end=1) 沿边方向的邻居块，其同向边也是弧边 → 转角交界。
+ * 转角处两面墙天然闭合（用户确认无洞），无需绘制/生成弧形补面。
+ */
+function isCornerWithBevel(
+  src: BlockSource,
+  bx: number,
+  bz: number,
+  dir: 0 | 1 | 2 | 3,
+  end: 0 | 1,
+): boolean {
+  // 沿边邻居块方向（由 WALL_DIRS 端点角偏移推出）
+  let tx = 0, tz = 0;
+  if (dir === 0) { tx = 0; tz = end === 0 ? -1 : 1; }
+  else if (dir === 1) { tx = 0; tz = end === 0 ? 1 : -1; }
+  else if (dir === 2) { tx = end === 0 ? 1 : -1; tz = 0; }
+  else { tx = end === 0 ? -1 : 1; tz = 0; }
+  return isBevelEdge(src, bx + tx, bz + tz, dir);
+}
+
+/**
+ * ★ 调试绘制（绿色线框）：弧边侧壁的目标形状。
+ * 每条弧边画：外墙矩形轮廓（底线/两根竖线/墙顶弧底线）
+ *           + 顶部弧形补面轮廓（两端剖面弧线 + 内缘竖线 + 内缘底线）。
+ * 竖直面、法线朝外——从外面看的形状，类似用户手绘 json（竖直侧壁+顶部弧过渡）。
+ * 仅调试用，不进渲染/物理正式管线。
+ */
+export function buildBevelWallDebug(
+  raster: RasterMap,
+  cx: number,
+  cz: number,
+): THREE.LineSegments | null {
+  const N = CHUNK_SIZE;
+  const HALF = N / 2;
+  const src = raster.chunkSource(cx, cz);
+  const BPS = N / 4;
+  const all: number[] = [];
+  const col: number[] = [];
+  // 方向着色：dir0(+x)=红 dir1(−x)=绿 dir2(+z)=蓝 dir3(−z)=黄
+  const colorOf = [new THREE.Color(0xff3333), new THREE.Color(0x33ff33), new THREE.Color(0x3366ff), new THREE.Color(0xffff33)];
+  let count = 0;
+  for (let lbz = 0; lbz < BPS; lbz++) {
+    for (let lbx = 0; lbx < BPS; lbx++) {
+      const bx = cx * BPS + lbx;
+      const bz = cz * BPS + lbz;
+      for (let dir = 0; dir < 4; dir++) {
+        const d = dir as 0 | 1 | 2 | 3;
+        if (!isBevelEdge(src, bx, bz, d)) continue;
+        count++;
+        const cur = src.blockAt(bx, bz)!;
+        const nb = src.blockAt(bx + WALL_DIRS[dir].dx, bz + WALL_DIRS[dir].dz)!;
+        // 边线两端（世界米格）
+        const Ax = bx * 4 + WALL_DIRS[dir].ax * 4;
+        const Az = bz * 4 + WALL_DIRS[dir].az * 4;
+        const Bx = bx * 4 + WALL_DIRS[dir].bx * 4;
+        const Bz = bz * 4 + WALL_DIRS[dir].bz * 4;
+        const yTop = cur.h;
+        const yBot = Math.min(cur.h, nb.h) - 0.5;
+        // 记号：沿边竖直矩形 + 一条对角线（按方向着色）
+        const quad = [
+          [Ax, yBot, Az], [Bx, yBot, Bz],
+          [Bx, yTop, Bz], [Ax, yTop, Az],
+        ];
+        const c = colorOf[dir];
+        const push = (p: number[], q: number[]) => {
+          all.push(p[0] - HALF, p[1], p[2] - HALF, q[0] - HALF, q[1], q[2] - HALF);
+          for (let k = 0; k < 2; k++) col.push(c.r, c.g, c.b);
+        };
+        for (let i = 0; i < 4; i++) push(quad[i], quad[(i + 1) % 4]);
+        push(quad[0], quad[2]);
+
+        // ---- 弧边左右侧壁线框（白色，自身非弧边才画）----
+        // 墙顶轮廓逐端读数据：接弧边的端压到弧底并沿弧回升，另一端同样检查
+        const drawSideWall = (sd: 0 | 1 | 2 | 3) => {
+          if (isBevelEdge(src, bx, bz, sd)) return; // 自身是弧边（转角）→ 不画
+          const wsd = WALL_DIRS[sd];
+          const sb = src.blockAt(bx + wsd.dx, bz + wsd.dz);
+          if (!sb) return;
+          const eAx = bx * 4 + wsd.ax * 4, eAz = bz * 4 + wsd.az * 4;
+          const eBx = bx * 4 + wsd.bx * 4, eBz = bz * 4 + wsd.bz * 4;
+          // 靠弧边的端点：与 dir 边共线的坐标偏移
+          const nearIsA = dir === 0 ? wsd.ax === 1
+            : dir === 1 ? wsd.ax === 0
+            : dir === 2 ? wsd.az === 1 : wsd.az === 0;
+          const nearX = nearIsA ? eAx : eBx;
+          const nearZ = nearIsA ? eAz : eBz;
+          const farX = nearIsA ? eBx : eAx;
+          const farZ = nearIsA ? eBz : eAz;
+          const len = Math.hypot(farX - nearX, farZ - nearZ);
+          const ux = (farX - nearX) / len, uz = (farZ - nearZ) / len;
+          const yH = cur.h;
+          const yTop = cur.h - BEVEL_R;
+          const sBot = Math.min(cur.h, sb.h) - 0.5;
+          // ★ far 端真实读数据：沿边方向邻居块的同向边是否弧边
+          const tx = Math.round(ux), tz = Math.round(uz);
+          const farBevel = isBevelEdge(src, bx + tx, bz + tz, sd);
+          const white = new THREE.Color(0xffffff);
+          const pushW = (p: number[], q: number[]) => {
+            all.push(p[0] - HALF, p[1], p[2] - HALF, q[0] - HALF, q[1], q[2] - HALF);
+            for (let k = 0; k < 2; k++) col.push(white.r, white.g, white.b);
+          };
+          const arcY = (d: number) =>
+            yH - BEVEL_R + Math.sqrt(Math.max(0, 2 * BEVEL_R * d - d * d));
+          const at = (d: number, y: number): number[] =>
+            [nearX + ux * d, y, nearZ + uz * d];
+          // 底边
+          pushW([nearX, sBot, nearZ], [farX, sBot, farZ]);
+          // near 端竖直边：底 → 弧底（near 端接弧边 dir，必压弧）
+          pushW([nearX, sBot, nearZ], at(0, yTop));
+          // near 弧线：弧底 → 台面
+          let prev = at(0, yTop);
+          const K2 = 6;
+          for (let k = 1; k <= K2; k++) {
+            const dM = (k / K2) * BEVEL_R;
+            const q = at(dM, arcY(dM));
+            pushW(prev, q);
+            prev = q;
+          }
+          // 中段水平顶线：near 弧结束 → far 弧开始（或直接到远端）
+          const farStart = farBevel ? len - BEVEL_R : len;
+          if (farStart > BEVEL_R) {
+            pushW(at(BEVEL_R, yH), at(farStart, yH));
+          }
+          // far 弧线：台面 → 弧底（far 端接弧边时）
+          if (farBevel) {
+            let prev2 = at(farStart, yH);
+            for (let k = 1; k <= K2; k++) {
+              const d = farStart + (k / K2) * BEVEL_R;
+              const q = at(d, arcY(len - d));
+              pushW(prev2, q);
+              prev2 = q;
+            }
+            // far 端竖直边顶 = 弧底
+            pushW(at(len, yTop), [farX, sBot, farZ]);
+          } else {
+            // far 端竖直边：台面 → 底
+            pushW(at(len, yH), [farX, sBot, farZ]);
+          }
+        };
+        // 左右侧边 = 与弧边垂直的两条边（dir^2 / dir^3，四个方向均成立）
+        drawSideWall((dir ^ 2) as 0 | 1 | 2 | 3);
+        drawSideWall((dir ^ 3) as 0 | 1 | 2 | 3);
+      }
+    }
+  }
+  console.log(`[弧边记号] chunk(${cx},${cz}) 检测到 ${count} 条弧边`);
+  if (all.length === 0) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(all, 3));
+  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  return new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true }));
+}
+
 // ------------------------------------------------------------
 // 小工具
 // ------------------------------------------------------------
@@ -115,6 +300,11 @@ function bevelOffset(
     if (tileById(nb.id).genRole !== "ground") continue;
     if (finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3) !== "cliff") continue;
     if (nb.h >= cur.h - BEVEL_EPS) continue;
+    // ★ 侧向邻边（左右）有插值坡（weld）→ 撤销该弧边：
+    //   侧壁补弧后，weld 坡的方形顶角会从弧形缺口突出且背面镂空
+    const lr = finalRuling(src, bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
+    const rr = finalRuling(src, bx, bz, (dir ^ 3) as 0 | 1 | 2 | 3);
+    if (lr === "weld" || rr === "weld") continue;
     // 该边向块内推进的距离（棱 d=0 → 带外 R 处 0）
     let d: number;
     if (dir === 0) d = (bx + 1) * 4 - x;
