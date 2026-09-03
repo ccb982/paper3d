@@ -1,8 +1,7 @@
 // ============================================================
 // Refinements —— 地形精修层（L6 定型段核心执行器，唯一地形几何真源）
 // ============================================================
-// 架构详见《精修层与定型快照架构.md》、《地形边缘裁决与视觉面架构.md》
-// 《架构设计.md》§8.0「三阶段地形产出」+「edgeFinal 唯一执行器」。
+// 权威架构文档：《地图架构.md》（硬边界基础 + 两插值/边角融合 + 墙与裁决解耦）。
 //
 // ★ 意志：本文件是【地形本体的唯一真源】——
 //   1) 边裁决：块边界「硬过渡(cliff) vs 插值(weld)」判定执行权由本层全权执掌：
@@ -10,11 +9,10 @@
 //        凡未显式 smooth 的边一律立墙；weld 只发生在 BlockSource.edgeFinal
 //        显式钉死或 TileDef.edgePolicy:'smooth' 启用的边上。
 //      - 消费者一律走 finalRuling/edgeOf，只读本层输出（第五铁律）。
-//   2) 视觉面几何：角点高度 cornerCell、边插值 interpEdge、角插值
-//      interpCorner、斜坡剖面 rampProfile、贴地采样 sampleSurface、面板底
-//      baseHeightOf 的语义公式全部并入本文件（2026-08-31：撕裂面+传导场
-//      两级合成模型，见《精修层过渡模型重构设计.md》§3；2026-08-30
-//      SurfaceRules 物理并入）。
+//   2) 视觉面几何：角点高度 cornerCell、边插值 interpEdge、斜坡剖面
+//      rampProfile、贴地采样 sampleSurface、面板底 baseHeightOf 的语义公式
+//      全部并入本文件（2026-08-30 SurfaceRules 物理并入）。角无独立插值，
+//      由两条触及 weld 边在 t=0 的 crest 汇合（《地图架构.md》§4.3）。
 //
 // ★ 确定性/可重放：纯函数、逐位可复现（同种子同源同输出）。
 //   零 three 依赖，主线程与 Worker 同一份代码。
@@ -505,8 +503,7 @@ export interface Refinements {
   heights: Map<string, HeightPatch>;
 }
 
-/** 空精修（回归对照：空精修 ≡ C-D 基线；连同「恒透传=旧世界逐位一致」基线
- *  已在《重构设计》§1.1 作废，原因：与根除对角拉起互斥） */
+/** 空精修（回归对照：无任何显式边/高度覆写） */
 export const EMPTY_REFINEMENTS: Refinements = {
   edgeOverrides: new Map(),
   heights: new Map(),
@@ -520,13 +517,8 @@ function blockKey(bx: number, bz: number): string {
 }
 
 /**
- * ★ 依据 seed 与 chunk 坐标生成精修意图（per-chunk：《重构设计》§8 第四步）。
- * 当前恒空——理由（2026-08-31 定版，用户确认）：地形 = 全方块模型，地块高度
- * （ground/platform/pit/water 及各 physics）已在 L4 assignHeights 全部定死，
- * 精修层只做块间过渡（weld 斜坡 / cliff 断崖 / 墙），不碰地块几何高度。
- * 《重构设计》§5 早期设想的 setHeight 削顶/垫底（厚板/薄壳/下沉台）是无对应
- * 需求的臆想内容，故定为恒空；未来若出现真实 per-chunk 规则（如逐边坡宽、
- * 显式边裁决），在此按 hash2(seed, cx, cz) 确定性铺，签名已就位。
+ * ★ 依据 seed 与 chunk 坐标生成精修意图（per-chunk：《地图架构.md》§3.3）。
+ * 只做【边裁决】优化（30% 大落差产坡），不碰地块几何高度。
  */
 /**
  * ★ 依据 seed 与 chunk 坐标生成精修意图（per-chunk：《重构设计》§8 第四步）。
@@ -619,8 +611,8 @@ function edgeHash(
 
 /**
  * ★ 精修层核心：把一块 BlockSource 包装为「精修后的 BlockSource」。
- *  - 空精修：不设 edgeFinal、不提高度 → finalRuling/blockAt 落回默认引擎
- *    （回归 C-D 对照；「恒透传 ≡ 旧世界」基线见《重构设计》§1.1，已作废）。
+ *  - 空精修：不设 edgeFinal、不提高度 → 透传原对象，finalRuling/blockAt 落回
+ *    默认引擎。
  *  - 有精修：edgeFinal 对显式条目返回钉死裁决；blockAt 对显式高度/底高
  *    补丁返回改写后的块信息，其余回落默认。
  */
@@ -777,8 +769,8 @@ function pseudo(i: number, seed: number): number {
 
 // ============================================================
 // ★ 定型快照（per-chunk 单产物，精修层统一输出）
-// 语义见《精修层与定型快照架构.md》§3/§4：精修层对每个 chunk 产出一份
-// 唯一定型产物，下游（顶面网格/墙/地形物理/贴地）一律只读它，零自算。
+// 语义见《地图架构.md》§6：精修层对每个 chunk 产出一份唯一定型产物，
+// 下游（顶面网格/墙/地形物理/贴地）一律只读它，零自算。
 // 全部 raw 数组、零 three 依赖——主线程与 Worker 同一份代码。
 // ============================================================
 
@@ -789,8 +781,8 @@ export interface ChunkFinal {
   cz: number;
   /**
    * ★ 定型角点高度场：每米格四角（c00 c10 c11 c01），布局 (lz*N+lx)*4+k。
-   * 已按精修裁决（weld = 2×2 max / cliff = 自持）定型——顶面网格与贴地
-   * 采样的唯一权威，一次算好、处处读同一份。
+   * 已按精修后的视觉面（cornerCell = surfaceHeightCore 硬边界基面 + max-over-edges
+   * 边插值）定型——顶面网格与贴地采样的唯一权威，一次算好、处处读同一份。
    */
   cornerH: Float32Array;
   /** 顶面几何（局部坐标，中心原点，与旧 ChunkSurface 逐位同约定） */
@@ -806,7 +798,7 @@ export interface ChunkFinal {
  * ★ 构建一个 chunk 的定型快照（精修层统一产出）。
  * 输入 = 精修后的 BlockSource src（精修层包装原始块数据后的查询源；
  * 消费方用它统一建源，取代各自逐角拼）。
- * 顶面几何产物与【撕裂面+传导场】模型【逐位一致】（《重构设计》§1.1 不变式
+ * 顶面几何产物与视觉面模型【逐位一致】（《地图架构.md》§4.5 不变式
  * ① 顶点一致：任意顶点视觉高只由 cornerCell 一元决定）。
  * 纯函数；cornerH 一次算好，顶面/贴地/烘焙都读它。
  */
@@ -897,8 +889,8 @@ export function buildChunkFinal(
 
 // ============================================================
 // ★ 断崖墙几何 + 地形物理合并（精修层统一产出，raw 缓冲、零 three 依赖）
-// 语义见《精修层与定型快照架构.md》§3/§4：断崖墙与「地形物理数据」都由
-// 精修层产出一份；实体/装饰碰撞是下游管理器的第二层产出（不进本快照）。
+// 语义见《地图架构.md》§5/§6：断崖墙与「地形物理数据」都由精修层产出一份；
+// 实体/装饰碰撞是下游管理器的第二层产出（不进本快照）。
 // 与历史 ChunkWalls 网格【逐位一致】——只搬位不搬逻辑（装配成 THREE 仍
 // 由 ChunkWalls 薄壳完成）。纯函数、确定性、主线程与 Worker 可共用。
 // ============================================================
@@ -907,17 +899,17 @@ export function buildChunkFinal(
 const WALL_EPS = 0.05;
 
 /**
- * ★ 断崖墙生成（2026-08-31 重写：《重构设计》§4）。
- * 发墙判据只有一条：相邻两块交界裁决 == 'cliff'，且两侧块【逻辑高】确有落差
- * （bCur.h − bNb.h > CLIFF_EPS；等高块的 cliff 裁决 → drop=0 → 不发墙，§3.3
- * 「块逻辑高判发墙」/设计 §4.1 退化保护）。weld 斜坡带永不发墙（坡带在低侧
- * 块内部成形、坡脚精确落回 hL——共享 weld 边零落差是契约，任何 weld 边触发
- * 发墙 = 回归失败，见回归脚本）。
- * 墙顶随该边的视觉面（cliff 侧各自自持 → 高侧顶 = 高侧块视觉面值，未随
- * 斜坡抬高；等高块即使遇垂直 weld 坡也不发幽灵墙）。
+ * ★ 断崖墙生成（2026-08-31 定版：墙与裁决解耦，见《地图架构.md》§5）。
+ * 发墙判据 = 相邻两块【块逻辑高】有落差（bCur.h > bNb.h，背墙/撕裂面）
+ * 【或】【视觉面高】有落差（curSide > nbSide + WALL_EPS，坡侧裙墙）。
+ * 墙与裁决无关：cliff 墙 = 撕裂面本身；weld 墙 = 坡面背后的贴坡背墙 +
+ * 坡侧裙墙（低块插值面高于邻块面 → 也发墙，堵住坡侧看穿/露斜草皮）。
+ * 斜坡只是附加在墙前低侧块上的额外面，墙永远在，任何视角看不到地形内部。
+ * 去重：每条边界只从【视觉面更高】那侧发一次（法线朝低处）。
+ * 等高块（drop=0 且无视觉面落差）→ 不发（退化保护）。
+ * 墙顶随该边视觉面 = cornerCell（高侧 crest；weld 共享边两侧同值不撕裂）。
  * 墙底 = 两侧面板底之更浅者 − WALL_EPS（堵死不悬空）。
  */
-const CLIFF_EPS = 0;
 
 export function buildChunkWallBuffers(
   src: BlockSource,
@@ -1052,9 +1044,7 @@ export function buildChunkWallBuffers(
 }
 
 /**
- * 判断在块 (bx,bz) 一条边沿某方向（dir 映射见 DIRS）的那条边界，其顶点处于
- * 撕裂（cliff）时只是 h(B)；否则走视觉面采样。这里用于墙顶的落点：
- * 只处理 cliff 边，墙顶应取两侧块中视觉面较高者的表面值。
+ * 块 (bx,bz) 在 (wx,wz) 的视觉面顶（= cornerCell 块视角）。墙顶随该视觉面取值。
  */
 function blockVisualTop(
   src: BlockSource,
