@@ -17,11 +17,11 @@ import * as THREE from "three";
 import { tileById, type TileDef } from "./Tiles";
 import { generateChunk, type ChunkData, CHUNK_SIZE } from "./ChunkGenerator";
 import {
-  sampleSurface,
   makeChunkSource,
   refineChunkSource,
   type BlockSource,
 } from "./Refinements";
+import { ppSurfaceHeight } from "./RefinementPostProcess";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -145,7 +145,8 @@ export class RasterMap {
     //   应用同意图（chunkSource）；当前 planRefinements 恒空 → 透传。
     const ccx = Math.floor(x / CHUNK_SIZE);
     const ccz = Math.floor(z / CHUNK_SIZE);
-    return sampleSurface(this.chunkSource(ccx, ccz), x, z);
+    // ★ 后处理同源：贴地采样同步渲染版最终面（ppSurfaceHeight ≡ sampleSurface 当总开关关）
+    return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz));
   }
 
   /** ★ per-chunk 构建源（§8 第四步意图分置）：surfaceBlocks 原始源经本 chunk

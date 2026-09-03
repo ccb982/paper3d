@@ -15,6 +15,8 @@
 import * as THREE from "three";
 import { CHUNK_SIZE } from "./ChunkGenerator";
 import { buildChunkFinal, type ChunkFinal } from "./Refinements";
+import { buildPostRenderTop } from "./RefinementPostProcess";
+import { POST_PROCESS_ENABLED } from "./RefinementPostProcessConfig";
 import type { RasterMap } from "./RasterMap";
 
 export interface ChunkSurfaceBuild {
@@ -43,7 +45,25 @@ export function buildChunkTopSurface(
   // ---- ★ 精修层统一产出定型快照（角点场 + 顶面缓冲一次算好）。
   //   per-chunk 意图经 raster.chunkSource 应用（渲染=查询同源；当前恒空透传）----
   const finalTerrain = buildChunkFinal(raster.chunkSource(cx, cz), cx, cz, N);
-  const { vertices, normals, uvs, indices } = finalTerrain.top;
+
+  // ---- ★ 渲染版局部细分顶面（设计稿 §5）：坑/裂/倒角带内细分多顶点，
+  //   ppSurfaceHeight 逐顶点取高（含圆滑/坑/裂）。无 fine 区 → 退回原顶面。
+  //   顶点/索引同时喂 渲染网格 + mergeTerrainPhysics → 物理=所见自洽。----
+  let top = finalTerrain.top;
+  if (POST_PROCESS_ENABLED) {
+    const post = buildPostRenderTop(
+      raster.chunkSource(cx, cz),
+      cx,
+      cz,
+      raster.worldSeed,
+      N,
+    );
+    if (post.indices.length > 0) {
+      finalTerrain.top = post;
+      top = post;
+    }
+  }
+  const { vertices, normals, uvs, indices } = top;
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));

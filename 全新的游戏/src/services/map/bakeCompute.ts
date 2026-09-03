@@ -40,11 +40,11 @@ import {
 } from "./TileGroups";
 import { applyDecalStamps, type PlannedDecal } from "./decor/TileDecalBase";
 import {
-  sampleSurface,
   type BlockSource,
   type ChunkDataLite,
   refineChunkSource,
 } from "./Refinements";
+import { ppSurfaceHeight } from "./RefinementPostProcess";
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
@@ -668,7 +668,8 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
         ref = refineChunkSource(src, s.seed, ccx, ccz);
         refinedCache.set(key, ref);
       }
-      return sampleSurface(ref, x, z);
+      // ★ 后处理同源：烘焙跟渲染版最终面（ppSurfaceHeight ≡ sampleSurface 当总开关关）
+      return ppSurfaceHeight(x, z, s.seed, ref);
     },
     tileDefAt(x: number, z: number): TileDef {
       let bx = Math.floor(x / BLOCK_SIZE) - s.bx0;

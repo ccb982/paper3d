@@ -84,6 +84,9 @@ export function buildChunkSideWalls(
     palette,
     heightAt: (x, z) => raster.heightAt(x, z),
     tileDefAt: (x, z) => raster.tileDefAt(x, z),
+    // ★ 墙顶跟随后处理圆滑后的最终面：侧面视图中墙顶应与顶面圆弧底端相接
+    //   （yHigh−R），否则墙顶从圆角底部探出、棱处不水密。
+    topAt: (x, z) => raster.surfaceHeightAt(x, z),
   });
 
   if (buffers.indices.length === 0) {

@@ -949,28 +949,32 @@ export function buildChunkWallBuffers(
         //   本身；weld 墙 = 坡面背后贴坡背墙 + 坡侧裙墙（低块插值面高于邻块
         //   面 → 也发墙堵漏，杜绝坡侧看穿/露斜草皮）。斜坡只是附加蒙皮，墙永在。
         // 去重：每条边界只从【视觉面更高】那侧发一次（法线朝低处）。
-        const topA = blockVisualTop(
+        const topA = wallTop(
+          ctx,
           src,
           bxC,
           bzC,
           ox + i + dir.ax,
           oz + j + dir.az,
         );
-        const topB = blockVisualTop(
+        const topB = wallTop(
+          ctx,
           src,
           bxC,
           bzC,
           ox + i + dir.bx,
           oz + j + dir.bz,
         );
-        const nbTopA = blockVisualTop(
+        const nbTopA = wallTop(
+          ctx,
           src,
           bxN,
           bzN,
           ox + i + dir.ax,
           oz + j + dir.az,
         );
-        const nbTopB = blockVisualTop(
+        const nbTopB = wallTop(
+          ctx,
           src,
           bxN,
           bzN,
@@ -1056,6 +1060,21 @@ function blockVisualTop(
   return cornerCell(src, bcx, bcz, wx, wz);
 }
 
+/**
+ * 墙顶高度读取：缺省取视觉面 crest（blockVisualTop）；当装配方注入 topAt
+ * （后处理圆滑后的最终面）时改取其值，使墙顶沿圆角底部下弯（水密闭合）。
+ */
+function wallTop(
+  ctx: WallBuildCtx,
+  src: BlockSource,
+  bcx: number,
+  bcz: number,
+  wx: number,
+  wz: number,
+): number {
+  return ctx.topAt ? ctx.topAt(wx, wz) : blockVisualTop(src, bcx, bcz, wx, wz);
+}
+
 // ---- 侧壁明暗调参（集中此处；全部确定性，同种子必复现）----
 const WALL_K_BACK = 0.22;
 const WALL_K_LIT = 0.82;
@@ -1128,6 +1147,10 @@ export interface WallBuildCtx {
     visual: { baseHsl: { h: number; s: number; l: number } };
     isDepression: boolean;
   };
+  /** 墙顶高度源（世界坐标）。缺省 = 视觉面 crest（blockVisualTop/cornerCell）；
+   *  后处理开启时由装配方注入圆滑后的最终面（ppSurfaceHeight），使墙顶贴合
+   *  圆角底部、棱处水密（顶面与墙同源下弯，杜绝墙顶从圆角顶部探出）。 */
+  topAt?: (x: number, z: number) => number;
 }
 
 /**
