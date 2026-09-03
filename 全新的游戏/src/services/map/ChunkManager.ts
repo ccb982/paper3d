@@ -28,9 +28,13 @@ import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
-import { buildChunkSideWalls, clearWallMaterials } from './ChunkWalls';
-import { buildChunkTopSurface } from './ChunkSurface';
+import { clearWallMaterials } from './ChunkWalls';
 import { mergeTerrainPhysics } from './Refinements';
+import {
+  buildPostChunkTopSurface,
+  buildPostSideWalls,
+  postSurfaceHeightAt,
+} from './PostProcess';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -339,7 +343,8 @@ export class ChunkManager {
     const decals = planChunkDecals(base);
     const props = planChunkProps({
       ...base,
-      surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
+      // ★ 后处理层路由：贴地查询带后处理偏移（关闭时透传 raster 原值）
+      surfaceHeightAt: (x, z) => postSurfaceHeightAt(this.raster, x, z),
     });
     const vols = computePropVolumes(props, cx, cz);
     return { decals, props, propVolumes: packVolumes(vols) };
@@ -437,7 +442,9 @@ export class ChunkManager {
    * 物理 trimesh = 顶面 + 断崖墙同一份缓冲合并（碰撞=所见不变式）。
    */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
-    const surf = buildChunkTopSurface(this.raster, cx, cz);
+    // ★ 后处理层路由：顶面 = 后处理重建网格（关闭时透传精修层原输出）；
+    //   surf.vertices/indices 即渲染网格 = 物理顶点（视觉=物理同源）
+    const surf = buildPostChunkTopSurface(this.raster, cx, cz);
 
     // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
@@ -454,7 +461,8 @@ export class ChunkManager {
     group.add(top);
     // ★ 断崖侧壁：独立几何 + 顶面同款材质纹理与光照（WallMaterial 复用
     //   uAlbedo/uLightmap/uTileIds/Okada 库，2026-09-01：不再是纯色 MeshBasicMaterial）
-    const walls = buildChunkSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg);
+    // ★ 后处理层路由：侧壁 = 精修层墙缓冲 + 墙顶跟随后处理面（关闭时透传）
+    const walls = buildPostSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg);
     if (walls.mesh) group.add(walls.mesh);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
@@ -466,14 +474,19 @@ export class ChunkManager {
 
     // ---- ★ 测试地图：地块名标注层（调试陈列馆；无碰撞） ----
     if (this.testChunk && chunkDataForMat) {
-      group.add(buildTileLabelLayer(chunkDataForMat, (x, z) => this.raster.surfaceHeightAt(x, z)));
+      group.add(buildTileLabelLayer(chunkDataForMat, (x, z) => postSurfaceHeightAt(this.raster, x, z)));
     }
 
     // ---- ★ 物理 trimesh：顶面 + 断崖墙合并（精修层统一产出地形物理；
     //      trimesh 无体积，cliff 边无墙则低侧物体穿入高板下方坠落）----
     // 顶面 = 精修层定型快照的 top；墙 = 精修层墙缓冲；合并 = Refinements
     // 统一地形物理（《精修层与定型快照架构.md》§3）。此处不含实体/装饰碰撞。
-    const phys = mergeTerrainPhysics(surf.finalTerrain.top, walls.buffers);
+    // ★ 后处理层路由：物理 trimesh = 渲染顶面(后处理顶点) + 墙缓冲合并
+    //   （关闭时 surf.vertices ≡ finalTerrain.top.vertices，逐位一致）
+    const phys = mergeTerrainPhysics(
+      { vertices: surf.vertices, indices: surf.indices },
+      walls.buffers,
+    );
 
     this.replaceChunk(
       chunkKeyOf(cx, cz), group, cx, cz,
