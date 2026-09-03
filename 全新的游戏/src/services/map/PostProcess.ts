@@ -88,7 +88,7 @@ function isBevelEdge(
   if (finalRuling(src, bx, bz, dir) !== "cliff") return false;
   // ★ 侧向邻边（左右）有插值坡（weld）→ 撤销该弧边（坡方角突出、背面镂空）
   const lr = finalRuling(src, bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
-  const rr = finalRuling(src, bx, bz, (dir ^ 3) as 0 | 1 | 2 | 3);
+  const rr = finalRuling(src, bx, bz, ((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
   if (lr === "weld" || rr === "weld") return false;
   return nb.h < cur.h - BEVEL_EPS;
 }
@@ -233,9 +233,9 @@ export function buildBevelWallDebug(
             pushW(at(len, yH), [farX, sBot, farZ]);
           }
         };
-        // 左右侧边 = 与弧边垂直的两条边（dir^2 / dir^3，四个方向均成立）
+        // 左右侧边 = 与弧边垂直的两条边（dir^2 / (dir^2)^1，恒成立）
         drawSideWall((dir ^ 2) as 0 | 1 | 2 | 3);
-        drawSideWall((dir ^ 3) as 0 | 1 | 2 | 3);
+        drawSideWall(((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
       }
     }
   }
@@ -303,7 +303,7 @@ function bevelOffset(
     // ★ 侧向邻边（左右）有插值坡（weld）→ 撤销该弧边：
     //   侧壁补弧后，weld 坡的方形顶角会从弧形缺口突出且背面镂空
     const lr = finalRuling(src, bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
-    const rr = finalRuling(src, bx, bz, (dir ^ 3) as 0 | 1 | 2 | 3);
+    const rr = finalRuling(src, bx, bz, ((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
     if (lr === "weld" || rr === "weld") continue;
     // 该边向块内推进的距离（棱 d=0 → 带外 R 处 0）
     let d: number;
@@ -643,6 +643,30 @@ function cellViewBlock(cx: number, cz: number, lx: number, lz: number) {
  * 墙顶点布局（Refinements）：每 quad 4 顶点 = 顶A/顶B/底B/底A，
  * uv 首列可反推发射块（bxC = round(u·15−0.5) + cx·15）。
  */
+/**
+ * 由精修层墙 quad 反推其发射边方向（0..3）：
+ * 顶 A/B 两顶点同一 block 边界线上 → x 边（dir 0/1）或 z 边（dir 2/3）。
+ */
+function quadEdgeDir(
+  V: Float32Array,
+  q: number,
+  cx: number,
+  cz: number,
+  N: number,
+  bxC: number,
+  bzC: number,
+): 0 | 1 | 2 | 3 {
+  const HALF = N / 2;
+  const tAx = V[q * 12] + cx * N + HALF;
+  const tAz = V[q * 12 + 2] + cz * N + HALF;
+  const tBx = V[q * 12 + 3] + cx * N + HALF;
+  const tBz = V[q * 12 + 5] + cz * N + HALF;
+  if (tAx === tBx && (tAx === (bxC + 1) * 4 || tAx === bxC * 4)) {
+    return tAx === (bxC + 1) * 4 ? 0 : 1;
+  }
+  return tAz === (bzC + 1) * 4 ? 2 : 3;
+}
+
 export function buildPostSideWalls(
   raster: RasterMap,
   cx: number,
@@ -671,15 +695,68 @@ export function buildPostSideWalls(
     tileDefAt: (x, z) => raster.tileDefAt(x, z),
   });
 
+  const cache = new Map<number, CrackLine | null>();
+
+  // ---- ★ 收集待处理的弧边侧壁（白色调试位置）----
+  // 弧边的左右邻边，自身非弧边（转角由弧边自身遍历覆盖）：
+  //   有落差 → 重建全高细分侧壁（墙顶弧线）；无落差 → 只补弧带端面封片
+  const rebuild = new Map<string, { bx: number; bz: number; sd: 0 | 1 | 2 | 3; drop: boolean }>();
+  // 被剔除 quad 的材质（沿边参数 t → 属性），供新细分墙继承
+  const matByEdge = new Map<string, { t: number; cr: number; cg: number; cb: number; shade: number; uvU: number; uvV: number }[]>();
+  for (let lbz = 0; lbz < BPS; lbz++) {
+    for (let lbx = 0; lbx < BPS; lbx++) {
+      const bx = cx * BPS + lbx;
+      const bz = cz * BPS + lbz;
+      for (let dir = 0; dir < 4; dir++) {
+        if (!isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3)) continue;
+        const cur = src.blockAt(bx, bz)!;
+        for (const sd of [dir ^ 2, (dir ^ 2) ^ 1]) {
+          const s = sd as 0 | 1 | 2 | 3;
+          if (isBevelEdge(src, bx, bz, s)) continue; // 转角：不修（弧边遍历覆盖）
+          const wsd = WALL_DIRS[s];
+          const nb2 = src.blockAt(bx + wsd.dx, bz + wsd.dz);
+          if (!nb2) continue;
+          const drop = nb2.h < cur.h; // 有落差 → 全高墙；无落差 → 只封弧带端面
+          rebuild.set(`${bx},${bz},${s}`, { bx, bz, sd: s, drop });
+        }
+      }
+    }
+  }
+
   if (buffers.indices.length > 0) {
     const V = buffers.vertices;
+    const I = buffers.indices;
     const quads = V.length / 12;
-    const cache = new Map<number, CrackLine | null>();
+    const skip = new Set<number>();
+    // 被剔除 quad 的材质（沿边参数 t → 属性），供新细分墙继承
     for (let q = 0; q < quads; q++) {
       const tblX = Math.round(buffers.uvs[q * 8] * 15 - 0.5);
       const tblZ = Math.round(buffers.uvs[q * 8 + 1] * 15 - 0.5);
       const bxC = tblX + cx * BPS;
       const bzC = tblZ + cz * BPS;
+      const dirQ = quadEdgeDir(V, q, cx, cz, N, bxC, bzC);
+      const key = `${bxC},${bzC},${dirQ}`;
+      const rb = rebuild.get(key);
+      if (rb) {
+        // 该 quad 属于重建边 → 剔除并记录材质（按沿边中点参数 t）
+        skip.add(q);
+        const wsd = WALL_DIRS[dirQ];
+        // 顶 A 世界沿边坐标 → 参数 t（0..4m）
+        const aAlong = dirQ < 2
+          ? (V[q * 12 + 2] + cz * N + HALF) - (rb.bz * 4)
+          : (V[q * 12] + cx * N + HALF) - (rb.bx * 4);
+        const tMid = Math.max(0, Math.min(3.999, aAlong));
+        const list = matByEdge.get(key) ?? [];
+        list.push({
+          t: tMid,
+          cr: buffers.colors[q * 12], cg: buffers.colors[q * 12 + 1], cb: buffers.colors[q * 12 + 2],
+          shade: buffers.shade[q * 4],
+          uvU: buffers.uvs[q * 8], uvV: buffers.uvs[q * 8 + 1],
+        });
+        matByEdge.set(key, list);
+        continue;
+      }
+      // 其余墙：墙顶加 ppOffset（原行为）
       for (let t = 0; t < 2; t++) {
         const vi = q * 4 + t;
         const lx = V[vi * 3];
@@ -688,6 +765,190 @@ export function buildPostSideWalls(
         const wz = lz + cz * N + HALF;
         V[vi * 3 + 1] += ppOffset(src, seed, bxC, bzC, wx, wz, cache);
       }
+    }
+    // 重排索引剔除被替换 quad
+    if (skip.size > 0) {
+      const newIdx: number[] = [];
+      for (let t = 0; t < I.length; t += 6) {
+        const q = (I[t] / 4) | 0;
+        if (!skip.has(q)) {
+          newIdx.push(I[t], I[t + 1], I[t + 2], I[t + 3], I[t + 4], I[t + 5]);
+        }
+      }
+      buffers.indices = new Uint32Array(newIdx);
+    }
+  }
+
+  // ---- ★ 重建细分弧形顶侧壁（顶 y 逐点 yAt 与顶面同源，含两端弧线）----
+  if (rebuild.size > 0) {
+    const pos: number[] = [];
+    const nor: number[] = [];
+    const col: number[] = [];
+    const shd: number[] = [];
+    const uva: number[] = [];
+    const idx: number[] = [];
+    let vi = 0;
+
+    for (const { bx, bz, sd, drop } of rebuild.values()) {
+      const cur = src.blockAt(bx, bz)!;
+      const wsd = WALL_DIRS[sd];
+      const nb2 = src.blockAt(bx + wsd.dx, bz + wsd.dz)!;
+      // 边线两端（世界米格，A→B 与精修层同序 → 绕序一致）
+      const Ax = bx * 4 + wsd.ax * 4, Az = bz * 4 + wsd.az * 4;
+      const Bx = bx * 4 + wsd.bx * 4, Bz = bz * 4 + wsd.bz * 4;
+      const yH = cur.h;
+      const ux = (Bx - Ax) / 4, uz = (Bz - Az) / 4; // 沿边单位向量
+      const key = `${bx},${bz},${sd}`;
+      const mats = matByEdge.get(key) ?? [];
+      const matAt = (d: number) => {
+        let best = mats[0];
+        for (const m of mats) if (Math.abs(m.t - d) < Math.abs(best.t - d)) best = m;
+        return best;
+      };
+      // 判定两端是否接弧边（A 端 t=0，B 端 t=4）
+      const isArcAtPoint = (px: number, pz: number) => {
+        for (const cd of [(sd ^ 2) as 0 | 1 | 2 | 3, ((sd ^ 2) ^ 1) as 0 | 1 | 2 | 3]) {
+          if (!isBevelEdge(src, bx, bz, cd)) continue;
+          const cwd = WALL_DIRS[cd];
+          const cAx = bx * 4 + cwd.ax * 4, cAz = bz * 4 + cwd.az * 4;
+          const cBx = bx * 4 + cwd.bx * 4, cBz = bz * 4 + cwd.bz * 4;
+          if ((Math.abs(cAx - px) < 1e-6 && Math.abs(cAz - pz) < 1e-6)
+            || (Math.abs(cBx - px) < 1e-6 && Math.abs(cBz - pz) < 1e-6)) return true;
+        }
+        return false;
+      };
+      const aArc = isArcAtPoint(Ax, Az);
+      const bArc = isArcAtPoint(Bx, Bz);
+      // 无落差：只补弧带端面封片（曲边三角，位于弧带端头的竖直平面）
+      if (!drop) {
+        // 找到本边与哪条弧边相邻（near 端）：左右两条垂直边各可能接一条弧边
+        // 本封片位于 sd 边线，剖面沿「相邻弧边的内缩方向」
+        // 相邻弧边 = 与 sd 垂直且共享 near/far 端的方向，逐端检测
+        const ends: { px: number; pz: number; cornerBevelDir: 0 | 1 | 2 | 3 }[] = [];
+        // near 端（A 或 B）与 far 端分别判定：端点 t=0 和 t=4
+        for (const isNear of [true, false]) {
+          const tx = isNear ? Math.round(-ux) : Math.round(ux); // 端点沿边外的块方向
+          const tz = isNear ? Math.round(-uz) : Math.round(uz);
+          // 端点处的垂直边 = 本块 dir 候选：与 sd 垂直且指向该端的两条
+          const cds: (0 | 1 | 2 | 3)[] = [(sd ^ 2) as 0 | 1 | 2 | 3, ((sd ^ 2) ^ 1) as 0 | 1 | 2 | 3];
+          for (const cd of cds) {
+            const cwd = WALL_DIRS[cd];
+            // cd 边必须贴着该端点：cd 边线两端角点之一 = 本边端点
+            const cAx = bx * 4 + cwd.ax * 4, cAz = bz * 4 + cwd.az * 4;
+            const cBx = bx * 4 + cwd.bx * 4, cBz = bz * 4 + cwd.bz * 4;
+            const pX = isNear ? Ax : Bx, pZ = isNear ? Az : Bz;
+            const touches = (Math.abs(cAx - pX) < 1e-6 && Math.abs(cAz - pZ) < 1e-6)
+              || (Math.abs(cBx - pX) < 1e-6 && Math.abs(cBz - pZ) < 1e-6);
+            if (!touches) continue;
+            if (isBevelEdge(src, bx, bz, cd)) {
+              ends.push({ px: pX, pz: pZ, cornerBevelDir: cd as 0 | 1 | 2 | 3 });
+            }
+          }
+        }
+        // 对每个接弧边的端点画曲边三角封片
+        for (const end of ends) {
+          const cwd = WALL_DIRS[end.cornerBevelDir];
+          const inX = -cwd.dx, inZ = -cwd.dz; // 弧边内缩方向（进本块）
+          // 法线沿 sd 边朝外
+          const color = 0.5;
+          // 顶点高度全部采样 yAt（顶面同源，角点混合/弧线完全贴合）
+          const p0y = yAt(src, seed, bx, bz, end.px, end.pz, cache);
+          const P0: number[] = [end.px, p0y, end.pz];
+          let prev: number[] = [...P0];
+          const K3 = 6;
+          for (let k = 1; k <= K3; k++) {
+            const dM = (k / K3) * BEVEL_R;
+            const qx = end.px + inX * dM, qz = end.pz + inZ * dM;
+            const qy = yAt(src, seed, bx, bz, qx, qz, cache);
+            const q: number[] = [qx, qy, qz];
+            // 绕序校验：三角形法线须与 sd 外法线一致，反了则交换后两点
+            const e1x = prev[0] - P0[0], e1y = prev[1] - P0[1], e1z = prev[2] - P0[2];
+            const e2x = q[0] - P0[0], e2y = q[1] - P0[1], e2z = q[2] - P0[2];
+            const cnx = e1y * e2z - e1z * e2y;
+            const cnz = e1x * e2y - e1y * e2x;
+            const flip = cnx * wsd.dx + cnz * wsd.dz < 0;
+            const A3 = P0, B3 = flip ? q : prev, C3 = flip ? prev : q;
+            pos.push(
+              A3[0] - cx * N - HALF, A3[1], A3[2] - cz * N - HALF,
+              B3[0] - cx * N - HALF, B3[1], B3[2] - cz * N - HALF,
+              C3[0] - cx * N - HALF, C3[1], C3[2] - cz * N - HALF,
+            );
+            for (let c = 0; c < 3; c++) {
+              nor.push(wsd.dx, 0, wsd.dz);
+              col.push(color, color, color);
+              shd.push(0.5);
+              uva.push(0.5, 0.5);
+            }
+            idx.push(vi, vi + 1, vi + 2);
+            vi += 3;
+            prev = q;
+          }
+        }
+        continue;
+      }
+      const yBot = Math.min(cur.h, nb2.h) - 0.5;
+      // 采样点按 A→B 距离 d（顶点顺序恒定 A→B → 绕序/材质不变）；
+      // 弧区加密点放在接弧端一侧（aArc → A 端 0 侧；bArc → B 端 4 侧）
+      const dsSet = new Set<number>([0]);
+      for (let d = 0.5; d < 4; d += 0.5) dsSet.add(d); // 基础 0.5m 采样
+      const arcPt = [0.125, 0.25, 0.375];
+      if (aArc) for (const x of arcPt) dsSet.add(x);          // A 端弧区加密
+      if (bArc) for (const x of arcPt) dsSet.add(4 - x);      // B 端弧区加密
+      dsSet.add(4);
+      const ds = [...dsSet].sort((a, b) => a - b);
+      // 逐段生成竖直 quad：顶 y = yAt（顶面同源），底 y = yBot
+      for (let i = 0; i < ds.length - 1; i++) {
+        const d0 = ds[i], d1 = ds[i + 1];
+        const ax = Ax + ux * d0, az = Az + uz * d0;
+        const bx2 = Ax + ux * d1, bz2 = Az + uz * d1;
+        const yA = yAt(src, seed, bx, bz, ax, az, cache);
+        const yB = yAt(src, seed, bx, bz, bx2, bz2, cache);
+        const m = matAt((d0 + d1) / 2) ?? { cr: 0.5, cg: 0.5, cb: 0.5, shade: 0.5, uvU: 0.5, uvV: 0.5 };
+        pos.push(
+          ax - cx * N - HALF, yA, az - cz * N - HALF,
+          bx2 - cx * N - HALF, yB, bz2 - cz * N - HALF,
+          bx2 - cx * N - HALF, yBot, bz2 - cz * N - HALF,
+          ax - cx * N - HALF, yBot, az - cz * N - HALF,
+        );
+        for (let c = 0; c < 4; c++) {
+          nor.push(wsd.dx, 0, wsd.dz);
+          col.push(m.cr, m.cg, m.cb);
+          shd.push(m.shade);
+          uva.push(m.uvU, m.uvV);
+        }
+        idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
+        vi += 4;
+      }
+    }
+
+    // 合并新墙进 buffers
+    if (vi > 0) {
+      const nV = buffers.vertices.length / 3;
+      const nI = buffers.indices.length;
+      const mergedV = new Float32Array(buffers.vertices.length + pos.length);
+      mergedV.set(buffers.vertices, 0);
+      mergedV.set(pos, buffers.vertices.length);
+      const mergedN = new Float32Array(buffers.normals.length + nor.length);
+      mergedN.set(buffers.normals, 0);
+      mergedN.set(nor, buffers.normals.length);
+      const mergedU = new Float32Array(buffers.uvs.length + uva.length);
+      mergedU.set(buffers.uvs, 0);
+      mergedU.set(uva, buffers.uvs.length);
+      const mergedC = new Float32Array(buffers.colors.length + col.length);
+      mergedC.set(buffers.colors, 0);
+      mergedC.set(col, buffers.colors.length);
+      const mergedS = new Float32Array(buffers.shade.length + shd.length);
+      mergedS.set(buffers.shade, 0);
+      mergedS.set(shd, buffers.shade.length);
+      const mergedI = new Uint32Array(nI + idx.length);
+      mergedI.set(buffers.indices, 0);
+      for (let i = 0; i < idx.length; i++) mergedI[nI + i] = idx[i] + nV;
+      buffers.vertices = mergedV;
+      buffers.normals = mergedN;
+      buffers.uvs = mergedU;
+      buffers.colors = mergedC;
+      buffers.shade = mergedS;
+      buffers.indices = mergedI;
     }
   }
 
