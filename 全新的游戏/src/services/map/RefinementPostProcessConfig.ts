@@ -16,13 +16,15 @@ export const POST_PROCESS_ENABLED = true;
  *  用户画图《我要的倒角》（侧面）：高台顶面保持水平(高度不变)、墙壁保持竖直，
  *  只在棱处用一个小圆弧连接（侧看呈弧线；用细分多棱拼成）。
  *  半径需大到可见、但又只在棱带内生效（台面主体不变）。 */
-export const BEVEL_R = 0.6;
+export const BEVEL_R = 0.3;
 
 /** 圆角判棱阈值：相邻两快高差超过此值才算「棱」（米） */
 export const BEVEL_EPS = 0.05;
 
-/** 哪些 genRole 的顶面外缘参与圆滑（水/坑等非实体不圆滑，保持液面） */
-export const BEVEL_TILES: ReadonlySet<string> = new Set(["ground", "platform"]);
+/** 哪些 genRole 的顶面外缘参与圆滑（风化）。仅高台(platform)块圆滑，
+ *  且只圆滑「对面是不插值地面(ground,非weld)」的外露硬边；
+ *  高台↔高台/水/坑、插值(weld)边一律棱角分明不圆滑。 */
+export const BEVEL_TILES: ReadonlySet<string> = new Set(["platform"]);
 
 /** 坑洞：每块撒坑锚的确定性概率（0~1） */
 export const PIT_PROB = 0.03;

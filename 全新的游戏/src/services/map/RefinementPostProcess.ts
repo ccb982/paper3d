@@ -16,7 +16,7 @@
 
 import { tileById } from "./Tiles";
 import type { BlockSource } from "./Refinements";
-import { cornerCell } from "./Refinements";
+import { cornerCell, finalRuling } from "./Refinements";
 import {
   POST_PROCESS_ENABLED,
   BEVEL_R,
@@ -81,11 +81,10 @@ export function ppHeight(
   return acc;
 }
 
-// ---- 圆角（真 fillet：磨掉顶面与崖壁之间的 90° 外角）----
-// 只在高侧块顶面、且该处确实邻低侧(高差>BEVEL_EPS)时生效。
-// 距棱水平距离 d∈[0,BEVEL_R]：顶面顶点从平台高沿 1/4 圆弧下弯，
-//   y = yHigh - BEVEL_R*sqrt(1-(d/BEVEL_R)^2)
-//   d=0(棱) → y=yHigh-BEVEL_R（与墙顶圆弧相接）；d=BEVEL_R → y=yHigh（切点与平台平）。
+// ---- 圆角（风化：只圆滑高台↔不插值地面的外露硬边）----
+// 只在高台(platform)块顶面、且该边对面是「不插值地面（genRole=ground 且
+// 该边 finalRuling=cliff）」时生效；高台↔高台/水/坑、插值(weld)边一律棱角分明。
+// 距棱水平距离 d∈[0,BEVEL_R]：顶面顶点从平台高沿 1/4 圆弧下弯。
 // 台面主体(d≥R)高度不变、棱线水平位置不变；只磨掉棱的直角。
 function bevelOffset(
   x: number,
@@ -97,25 +96,34 @@ function bevelOffset(
   role: string | undefined,
 ): number {
   if (!role || !BEVEL_TILES.has(role)) return 0;
-  const b = src.blockAt(bx, bz);
-  if (!b) return 0;
+  if (!src.blockAt(bx, bz)) return 0;
   const hi = src.blockAt(bx, bz)?.h ?? 0;
 
   // 块内相对坐标
   const fx = x - bx * 4;
   const fz = z - bz * 4;
-  // 四条边的方向块 + 沿边法向距离
-  // dirs: +x, -x, +z, -z
-  const edges: { d: number; hb: number }[] = [
-    { d: 4 - fx, hb: src.blockAt(bx + 1, bz)?.h ?? hi }, // +x 边，距棱=4-fx
-    { d: fx, hb: src.blockAt(bx - 1, bz)?.h ?? hi }, // -x 边
-    { d: 4 - fz, hb: src.blockAt(bx, bz + 1)?.h ?? hi }, // +z 边
-    { d: fz, hb: src.blockAt(bx, bz - 1)?.h ?? hi }, // -z 边
+  // 四方向：dir(0..3) + 方向块 + 沿边法向距离
+  // dirs: 0=+x,1=-x,2=+z,3=-z（与 finalRuling 一致）
+  const edges: { d: number; dir: number; hb: number }[] = [
+    { d: 4 - fx, dir: 0, hb: 0 },
+    { d: fx, dir: 1, hb: 0 },
+    { d: 4 - fz, dir: 2, hb: 0 },
+    { d: fz, dir: 3, hb: 0 },
   ];
-  // 找出「本块高于邻块」且最近的那条棱
+  const dxs = [1, -1, 0, 0];
+  const dzs = [0, 0, 1, -1];
+  // 只圆滑「对面=不插值地面(ground,cliff)」的边
   let best = Infinity;
   for (const e of edges) {
-    if (e.hb < hi - BEVEL_EPS && e.d < best) best = e.d; // 邻块明显更低 → 真棱
+    const nb = src.blockAt(bx + dxs[e.dir], bz + dzs[e.dir]);
+    if (!nb) continue;
+    const nbRole = tileById(nb.id).genRole;
+    const nbH = nb.h;
+    // 对面必须是 ground、且是硬边界（cliff 非 weld 插值）、且本台高于它
+    if (nbRole !== "ground") continue;
+    if (finalRuling(src, bx, bz, e.dir as 0 | 1 | 2 | 3) !== "cliff") continue;
+    if (nbH >= hi - BEVEL_EPS) continue;
+    if (e.d < best) best = e.d;
   }
   if (!isFinite(best) || best > BEVEL_R) return 0;
   const d = best;
