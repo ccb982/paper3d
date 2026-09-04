@@ -258,6 +258,9 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
         else if (dir === 2) { ax = x0; az = z0 + 4; bx2 = x0 + 4; bz2 = z0 + 4; }
         else { ax = x0; az = z0; bx2 = x0 + 4; bz2 = z0; }
         const nrm = DIRS[dir];
+        // 低侧基底（旧裙墙语义 lowBase = min(邻视觉顶, 两侧 hBase)）
+        const nbH0 = src.blockAt(nbx, nbz)?.h ?? 0;
+        const nbBase0 = src.blockAt(nbx, nbz)?.hBase ?? nbH0;
         let prevTop: number | null = null;
         let prevNb = 0;
         let prevLx = 0, prevLz = 0;
@@ -265,19 +268,21 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
           const t = s / SEG;
           const gx = ax + (bx2 - ax) * t;
           const gz = az + (bz2 - az) * t;
-          // 墙顶沿采样：视角 = 本墙所属块（bx,bz），勿按格点 floor 推
+          // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest
           const top = topYView(table, src, bx, bz, gx, gz);
-          // 低侧视觉顶（本段邻视角 max，用于贴低侧基准 + 埋保底）
+          // 邻视角（本段两端 max）
           const nbTop = Math.max(
             surfaceHeightCore(src, nbx, nbz, gx, gz),
             surfaceHeightCore(src, nbx, nbz, gx + (bx2 - ax) / SEG, gz + (bz2 - az) / SEG),
           );
+          const lowBase = Math.min(nbTop, cell.hBase, nbBase0);
           const lx = gx - ox - HALF;
           const lz = gz - oz - HALF;
           if (prevTop !== null) {
-            // 底 = 低侧基准 − EPS − 保底（埋地下）；clip 不高于本段顶
+            // ★ 底 = 低侧基底 − EPS − 保底（埋入地下防破面）；
+            //   weld 边全高：顶在坡顶棱 crest，底到低侧基底 → 坡面侧壁完整贴坡
             const botA = Math.min(prevTop, prevNb - WALL_EPS - WALL_MIN_DEPTH);
-            const botB = Math.min(top, nbTop - WALL_EPS - WALL_MIN_DEPTH);
+            const botB = Math.min(top, lowBase - WALL_EPS - WALL_MIN_DEPTH);
             pos.push(prevLx, prevTop, prevLz, lx, top, lz, lx, botB, lz, prevLx, botA, prevLz);
             for (let c = 0; c < 4; c++) {
               nor.push(nrm.dx, 0, nrm.dz);
@@ -295,7 +300,7 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
             vi += 4;
           }
           prevTop = top;
-          prevNb = nbTop;
+          prevNb = lowBase;
           prevLx = lx;
           prevLz = lz;
         }
