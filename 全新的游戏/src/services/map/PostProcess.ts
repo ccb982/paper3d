@@ -54,6 +54,16 @@ const BEVEL_TILES = new Set(["platform"]);
 const PP_FINE_SUBDIV_DEPTH = 3;
 /** 坑洞命中率（含内圈连续） */
 const PIT_HIT = 0.06;
+/**
+ * 坑/裂细化采样率（0..1）：只随机细化部分区块，其余显示为 coarse 大格
+ * （bevel 圆角不受影响，仍全细化）。确定性：按块坐标哈希，同块内 16 格一致。
+ */
+const PP_REFINE_RATE = 0.55;
+
+/** 坑/裂细化判定（确定性，按块坐标）；bevel 不参与、必细化 */
+function refineChance(seed: number, bx: number, bz: number): boolean {
+  return hash2(bx * 101 + 7, bz * 103 + 13, seed) < PP_REFINE_RATE;
+}
 
 const DIR4 = [
   { dx: 1, dz: 0 },
@@ -424,7 +434,12 @@ function crackLineOf(
   };
 }
 
-/** 裂缝偏移：扫 5×5 邻域锚块（跨块裂缝连续） */
+/**
+ * 裂缝偏移：只查「本块 + 4 个直邻地块」的预计算裂缝（跨块连续）。
+ * 裂缝锚点在本块中心，长度均值 ~5.5m（half~2.75 < 块距 4m），绝大多数只
+ * 影响本块与其直邻；超长裂缝的末端二层影响被截断（极少数，视觉可忽略）。
+ * 相比旧 5×5=25 锚块扫描，采样点热点评测 ~5 倍提速。
+ */
 function crackOffset(
   src: BlockSource,
   seed: number,
@@ -435,26 +450,24 @@ function crackOffset(
   cache: Map<number, CrackLine | null>,
 ): number {
   let out = 0;
-  for (let dz = -2; dz <= 2; dz++) {
-    for (let dx = -2; dx <= 2; dx++) {
-      const abx = bx + dx,
-        abz = bz + dz;
-      const key = abx * 8192 + abz;
-      let ln = cache.get(key);
-      if (ln === undefined) {
-        ln = crackLineOf(src, seed, abx, abz);
-        cache.set(key, ln);
-      }
-      if (!ln) continue;
-      const rx = x - ln.ox,
-        rz = z - ln.oz;
-      const along = rx * ln.ca + rz * ln.sa;
-      if (along < -ln.half - ln.w || along > ln.half + ln.w) continue;
-      const perp = Math.abs(-rx * ln.sa + rz * ln.ca);
-      if (perp > ln.w) continue;
-      const o = -ln.d * smoothProfile(perp / ln.w);
-      if (o < out) out = o;
+  for (let k = 0; k < 5; k++) {
+    const dx = k === 1 ? 1 : k === 2 ? -1 : 0;
+    const dz = k === 3 ? 1 : k === 4 ? -1 : 0;
+    const key = (bx + dx) * 8192 + (bz + dz);
+    let ln = cache.get(key);
+    if (ln === undefined) {
+      ln = crackLineOf(src, seed, bx + dx, bz + dz);
+      cache.set(key, ln);
     }
+    if (!ln) continue;
+    const rx = x - ln.ox,
+      rz = z - ln.oz;
+    const along = rx * ln.ca + rz * ln.sa;
+    if (along < -ln.half - ln.w || along > ln.half + ln.w) continue;
+    const perp = Math.abs(-rx * ln.sa + rz * ln.ca);
+    if (perp > ln.w) continue;
+    const o = -ln.d * smoothProfile(perp / ln.w);
+    if (o < out) out = o;
   }
   return out;
 }
@@ -561,21 +574,42 @@ export function buildPostChunkTopSurface(
   const step = 1 / S;
   const cache = new Map<number, CrackLine | null>();
 
-  // ---- ① fine 标记：效果带内 1m 格（9 点采样判定） ----
+  // ---- ① fine 标记：bevel 必细（弧边 0.125m 多段拼弧）；坑/裂随机细 ----
+  // 同一 1m 格内逐点区分偏移来源：
+  //   bevelHit = 任一点有圆角偏移（必须细分，否则弧边成锯齿）
+  //   fxHit    = 任一点有坑/裂偏移（确定性随机决定是否细分，跳过的显示为
+  //              coarse 大格；由 refineChance 用「块坐标」随机 → 同块 4×4 格一致）
   const fine = new Uint8Array(N * N);
+  let statB = 0, statF = 0;
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
       const wx0 = ox + lx;
       const wz0 = oz + lz;
       const vb = cellViewBlock(cx, cz, lx, lz);
-      let hit = false;
-      for (let k = 0; k < 9 && !hit; k++) {
+      let bevelHit = false;
+      let fxHit = false;
+      for (let k = 0; k < 9 && !(bevelHit && fxHit); k++) {
         const dx = (k % 3) * 0.5;
         const dz = Math.floor(k / 3) * 0.5;
-        if (ppOffset(src, seed, vb.bx, vb.bz, wx0 + dx, wz0 + dz, cache) < -1e-9)
-          hit = true;
+        const x = wx0 + dx;
+        const z = wz0 + dz;
+        if (bevelOffset(src, vb.bx, vb.bz, x, z) < -1e-9) {
+          bevelHit = true;
+        } else if (
+          pitOffset(src, seed, vb.bx, vb.bz, x, z) +
+            crackOffset(src, seed, vb.bx, vb.bz, x, z, cache) <
+          -1e-9
+        ) {
+          fxHit = true;
+        }
       }
-      if (hit) fine[lz * N + lx] = 1;
+      if (bevelHit) {
+        fine[lz * N + lx] = 1;
+        statB++;
+      } else if (fxHit && refineChance(seed, vb.bx, vb.bz)) {
+        fine[lz * N + lx] = 1;
+        statF++;
+      }
     }
   }
   // ---- ② fine 外扩 1 格（8 邻域）：边界两侧偏移=0 → 水密 ----
@@ -598,6 +632,11 @@ export function buildPostChunkTopSurface(
       }
       fineE[lz * N + lx] = f;
     }
+  }
+  if ((globalThis as { __PP_STAT?: boolean }).__PP_STAT) {
+    let sf = 0;
+    for (let l = 0; l < N * N; l++) if (fineE[l]) sf++;
+    console.log(`[stat] bevelFine=${statB} fxFine=${statF} fineE=${sf}/${N * N}`);
   }
 
   // ---- ③ 发射网格 ----
@@ -625,22 +664,31 @@ export function buildPostChunkTopSurface(
         vi += 4;
       } else {
         // ---- fine：2^D 细分，中差分法线（偏移光滑带内才有倾斜） ----
+        // 法线用离散格点差分（含 ±1 外圈 padding），每个采样点只算 1 次 yAt
+        // （原逐点 5× 采 yAt → 提速；热点 crackOffset 由此成倍下降）
         const base = vi;
-        const yOf = (x: number, z: number) =>
-          yAt(src, seed, vb.bx, vb.bz, x, z, cache);
+        const G = S + 3; // 含外圈 padding 1（11×11）
+        const yt = new Float64Array(G * G);
+        for (let gy = -1; gy <= S + 1; gy++) {
+          for (let gx = -1; gx <= S + 1; gx++) {
+            yt[(gy + 1) * G + (gx + 1)] = yAt(
+              src, seed, vb.bx, vb.bz, wx0 + gx * step, wz0 + gy * step, cache,
+            );
+          }
+        }
         for (let jz = 0; jz <= S; jz++) {
           for (let jx = 0; jx <= S; jx++) {
-            const x = wx0 + jx * step;
-            const z = wz0 + jz * step;
-            const y = yOf(x, z);
-            const yL = yOf(x - step, z);
-            const yR = yOf(x + step, z);
-            const yD = yOf(x, z - step);
-            const yU = yOf(x, z + step);
+            const y = yt[(jz + 1) * G + (jx + 1)];
+            const yL = yt[(jz + 1) * G + jx];
+            const yR = yt[(jz + 1) * G + (jx + 2)];
+            const yD = yt[jz * G + (jx + 1)];
+            const yU = yt[(jz + 2) * G + (jx + 1)];
             const nx = -(yR - yL);
             const nz = -(yU - yD);
             const ny = 2 * step;
             const il = 1 / Math.hypot(nx, ny, nz);
+            const x = wx0 + jx * step;
+            const z = wz0 + jz * step;
             pos.push(x - ox - HALF, y, z - oz - HALF);
             nor.push(nx * il, ny * il, nz * il);
             uv.push((x - ox) / N, (z - oz) / N);
