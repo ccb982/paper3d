@@ -296,7 +296,6 @@ export function buildBevelWallDebug(
       }
     }
   }
-  console.log(`[弧边记号] chunk(${cx},${cz}) 检测到 ${count} 条弧边`);
   if (all.length === 0) return null;
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(all, 3));
@@ -810,20 +809,30 @@ export function buildPostSideWalls(
   const rebuild = new Map<string, { bx: number; bz: number; sd: 0 | 1 | 2 | 3; drop: boolean }>();
   // 被剔除 quad 的材质（沿边参数 t → 属性），供新细分墙继承
   const matByEdge = new Map<string, { t: number; cr: number; cg: number; cb: number; shade: number; uvU: number; uvV: number }[]>();
+  // ★ rebuild 构建：有 index 走预计算，无 index 回落 isBevelEdge
+  const hasIdx = idx !== undefined;
   for (let lbz = 0; lbz < BPS; lbz++) {
     for (let lbx = 0; lbx < BPS; lbx++) {
       const bx = cx * BPS + lbx;
       const bz = cz * BPS + lbz;
+      const entry = hasIdx ? idx!.index.at(lbx, lbz) : null;
       for (let dir = 0; dir < 4; dir++) {
-        if (!isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3)) continue;
-        const cur = src.blockAt(bx, bz)!;
+        const isBevel = entry
+          ? entry.sides[dir].isBevel
+          : isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3);
+        if (!isBevel) continue;
+        const curH = entry ? entry.h : src.blockAt(bx, bz)!.h;
         for (const sd of [dir ^ 2, (dir ^ 2) ^ 1]) {
           const s = sd as 0 | 1 | 2 | 3;
-          if (isBevelEdge(src, bx, bz, s)) continue; // 转角：不修（弧边遍历覆盖）
+          if (entry) {
+            if (entry.sides[s].isBevel) continue;
+          } else {
+            if (isBevelEdge(src, bx, bz, s)) continue;
+          }
           const wsd = WALL_DIRS[s];
-          const nb2 = src.blockAt(bx + wsd.dx, bz + wsd.dz);
-          if (!nb2) continue;
-          const drop = nb2.h < cur.h; // 有落差 → 全高墙；无落差 → 只封弧带端面
+          const nbEntry = bq.entry(bx + wsd.dx, bz + wsd.dz);
+          if (!nbEntry) continue;
+          const drop = nbEntry.h < curH;
           rebuild.set(`${bx},${bz},${s}`, { bx, bz, sd: s, drop });
         }
       }
@@ -837,10 +846,10 @@ export function buildPostSideWalls(
   for (const [, e] of initial2) {
     const wd = WALL_DIRS[e.sd];
     const nbx = e.bx + wd.dx, nbz = e.bz + wd.dz;
-    const nb = src.blockAt(nbx, nbz);
-    if (!nb) continue;
-    if (tileById(nb.id).genRole !== "platform") continue; // 只扩散到侧面高台
-    const od = (e.sd ^ 1) as 0 | 1 | 2 | 3; // 邻居朝向本块的边
+    const nbEntry = bq.entry(nbx, nbz);
+    if (!nbEntry) continue;
+    if (nbEntry.role !== "platform") continue;
+    const od = (e.sd ^ 1) as 0 | 1 | 2 | 3;
     const okey = `${nbx},${nbz},${od}`;
     if (!rebuild.has(okey)) {
       rebuild.set(okey, { bx: nbx, bz: nbz, sd: od, drop: true });
@@ -851,14 +860,18 @@ export function buildPostSideWalls(
     for (let lbx = 0; lbx < BPS; lbx++) {
       const bx = cx * BPS + lbx;
       const bz = cz * BPS + lbz;
+      const entry = hasIdx ? idx!.index.at(lbx, lbz) : null;
       for (let dir = 0; dir < 4; dir++) {
-        if (!isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3)) continue;
+        const isBevel = entry
+          ? entry.sides[dir].isBevel
+          : isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3);
+        if (!isBevel) continue;
         const od = (dir ^ 1) as 0 | 1 | 2 | 3;
         const owd = WALL_DIRS[od];
-        const onb = src.blockAt(bx + owd.dx, bz + owd.dz);
-        if (!onb) continue;
-        if (tileById(onb.id).genRole !== "platform") continue;
-        const okey = `${bx + owd.dx},${bz + owd.dz},${dir}`; // 邻居的 dir 边（朝向本块）
+        const onbEntry = bq.entry(bx + owd.dx, bz + owd.dz);
+        if (!onbEntry) continue;
+        if (onbEntry.role !== "platform") continue;
+        const okey = `${bx + owd.dx},${bz + owd.dz},${dir}`;
         if (!rebuild.has(okey)) {
           rebuild.set(okey, { bx: bx + owd.dx, bz: bz + owd.dz, sd: dir as 0 | 1 | 2 | 3, drop: true });
         }
@@ -872,41 +885,105 @@ export function buildPostSideWalls(
     const quads = V.length / 12;
     const skip = new Set<number>();
     // 被剔除 quad 的材质（沿边参数 t → 属性），供新细分墙继承
-    for (let q = 0; q < quads; q++) {
-      const tblX = Math.round(buffers.uvs[q * 8] * 15 - 0.5);
-      const tblZ = Math.round(buffers.uvs[q * 8 + 1] * 15 - 0.5);
-      const bxC = tblX + cx * BPS;
-      const bzC = tblZ + cz * BPS;
-      const dirQ = quadEdgeDir(V, q, cx, cz, N, bxC, bzC);
-      const key = `${bxC},${bzC},${dirQ}`;
-      const rb = rebuild.get(key);
-      if (rb) {
-        // 该 quad 属于重建边 → 剔除并记录材质（按沿边中点参数 t）
-        skip.add(q);
-        const wsd = WALL_DIRS[dirQ];
-        // 顶 A 世界沿边坐标 → 参数 t（0..4m）
-        const aAlong = dirQ < 2
-          ? (V[q * 12 + 2] + cz * N + HALF) - (rb.bz * 4)
-          : (V[q * 12] + cx * N + HALF) - (rb.bx * 4);
-        const tMid = Math.max(0, Math.min(3.999, aAlong));
-        const list = matByEdge.get(key) ?? [];
-        list.push({
-          t: tMid,
-          cr: buffers.colors[q * 12], cg: buffers.colors[q * 12 + 1], cb: buffers.colors[q * 12 + 2],
-          shade: buffers.shade[q * 4],
-          uvU: buffers.uvs[q * 8], uvV: buffers.uvs[q * 8 + 1],
-        });
-        matByEdge.set(key, list);
-        continue;
+    // ★ 索引快路径：用 wallRef 直接定位 rebuild 边的 quad 区间；
+    //   无索引（POST_PROCESS_ENABLED=false / 无 bundle）回落 uv 反推
+    const hasIndex = idx !== undefined;
+    if (hasIndex) {
+      // ---- 索引快路径：wallRef.quads 精确定位 rebuild 边的 quad；
+      //   wallRef 为 null（跨 chunk 邻居条目，本 chunk 索引无该块）→ 逐 quad uv 回落 ----
+      const missedKeys = new Set<string>();
+      for (const [key, rb] of rebuild) {
+        const [bxs, bzs, sds] = key.split(',');
+        const bxC = +bxs, bzC = +bzs, dirQ = +sds as 0 | 1 | 2 | 3;
+        const entry = bq.entry(bxC, bzC);
+        const wr = entry?.sides[dirQ]?.wallRef;
+        if (!wr) { missedKeys.add(key); continue; }
+        for (let i = 0; i < wr.quads.length; i++) {
+          const qi = wr.quads[i];
+          if (qi < 0 || qi >= quads) continue;
+          skip.add(qi);
+          const aAlong = dirQ < 2
+            ? (V[qi * 12 + 2] + cz * N + HALF) - (rb.bz * 4)
+            : (V[qi * 12] + cx * N + HALF) - (rb.bx * 4);
+          const tMid = Math.max(0, Math.min(3.999, aAlong));
+          const list = matByEdge.get(key) ?? [];
+          list.push({
+            t: tMid,
+            cr: buffers.colors[qi * 12], cg: buffers.colors[qi * 12 + 1], cb: buffers.colors[qi * 12 + 2],
+            shade: buffers.shade[qi * 4],
+            uvU: buffers.uvs[qi * 8], uvV: buffers.uvs[qi * 8 + 1],
+          });
+          matByEdge.set(key, list);
+        }
       }
-      // 其余墙：墙顶加 ppOffset（原行为）
+      // wallRef 未覆盖的 rebuild 条目（跨 chunk 邻居）：逐 quad uv 反推补扫
+      if (missedKeys.size > 0) {
+        for (let q = 0; q < quads; q++) {
+          if (skip.has(q)) continue;
+          const tblX = Math.round(buffers.uvs[q * 8] * 15 - 0.5);
+          const tblZ = Math.round(buffers.uvs[q * 8 + 1] * 15 - 0.5);
+          const bxC = tblX + cx * BPS;
+          const bzC = tblZ + cz * BPS;
+          const dirQ = quadEdgeDir(V, q, cx, cz, N, bxC, bzC);
+          const key = `${bxC},${bzC},${dirQ}`;
+          if (!missedKeys.has(key)) continue;
+          const rb = rebuild.get(key)!;
+          skip.add(q);
+          const aAlong = dirQ < 2
+            ? (V[q * 12 + 2] + cz * N + HALF) - (rb.bz * 4)
+            : (V[q * 12] + cx * N + HALF) - (rb.bx * 4);
+          const tMid = Math.max(0, Math.min(3.999, aAlong));
+          const list = matByEdge.get(key) ?? [];
+          list.push({
+            t: tMid,
+            cr: buffers.colors[q * 12], cg: buffers.colors[q * 12 + 1], cb: buffers.colors[q * 12 + 2],
+            shade: buffers.shade[q * 4],
+            uvU: buffers.uvs[q * 8], uvV: buffers.uvs[q * 8 + 1],
+          });
+          matByEdge.set(key, list);
+        }
+      }
+    } else {
+      // ---- 原始路径：逐 quad uv 反推发射块（无 bundle 回落） ----
+      for (let q = 0; q < quads; q++) {
+        const tblX = Math.round(buffers.uvs[q * 8] * 15 - 0.5);
+        const tblZ = Math.round(buffers.uvs[q * 8 + 1] * 15 - 0.5);
+        const bxC = tblX + cx * BPS;
+        const bzC = tblZ + cz * BPS;
+        const dirQ = quadEdgeDir(V, q, cx, cz, N, bxC, bzC);
+        const key = `${bxC},${bzC},${dirQ}`;
+        const rb = rebuild.get(key);
+        if (rb) {
+          skip.add(q);
+          const wsd = WALL_DIRS[dirQ];
+          const aAlong = dirQ < 2
+            ? (V[q * 12 + 2] + cz * N + HALF) - (rb.bz * 4)
+            : (V[q * 12] + cx * N + HALF) - (rb.bx * 4);
+          const tMid = Math.max(0, Math.min(3.999, aAlong));
+          const list = matByEdge.get(key) ?? [];
+          list.push({
+            t: tMid,
+            cr: buffers.colors[q * 12], cg: buffers.colors[q * 12 + 1], cb: buffers.colors[q * 12 + 2],
+            shade: buffers.shade[q * 4],
+            uvU: buffers.uvs[q * 8], uvV: buffers.uvs[q * 8 + 1],
+          });
+          matByEdge.set(key, list);
+        }
+      }
+    }
+    // 非重建墙：墙顶加 ppOffset（与精修层同源，偏移为 0 处逐位不变）
+    for (let q = 0; q < quads; q++) {
+      if (skip.has(q)) continue;
       for (let t = 0; t < 2; t++) {
         const vi = q * 4 + t;
         const lx = V[vi * 3];
         const lz = V[vi * 3 + 2];
         const wx = lx + cx * N + HALF;
         const wz = lz + cz * N + HALF;
-        V[vi * 3 + 1] += ppOffset(bq, seed, bxC, bzC, wx, wz, cache);
+        const tblX = Math.round(buffers.uvs[q * 8] * 15 - 0.5);
+        const tblZ = Math.round(buffers.uvs[q * 8 + 1] * 15 - 0.5);
+        const bxq = tblX + cx * BPS, bzq = tblZ + cz * BPS;
+        V[vi * 3 + 1] += ppOffset(bq, seed, bxq, bzq, wx, wz, cache);
       }
     }
     // 重排索引剔除被替换 quad

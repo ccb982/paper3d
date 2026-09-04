@@ -45,8 +45,8 @@ export interface FaceSide {
   neighborIdx: number | null;
   /** 材质 ID（默认 0；运行时替换为流体残差等） */
   materialId: number;
-  /** 原墙 quad 索引区间（后处理侧壁剔除/重建用；null = 该边无墙） */
-  wallRef: { idxStart: number; quadCount: number } | null;
+  /** 原墙 quad 精确索引（后处理侧壁剔除/重建用；null = 该边无墙） */
+  wallRef: { quads: Uint16Array } | null;
   /** 是否弧边 bevel（后处理预判缓存） */
   isBevel: boolean;
 }
@@ -247,12 +247,12 @@ function buildWallRef(
   const UV = buffers.uvs;
   const HALF = N / 2;
   const quads = V.length / 12;
-  const agg = new Map<number, { start: number; count: number }>();
+  const agg = new Map<number, number[]>();
 
   for (let q = 0; q < quads; q++) {
     const tbX = Math.round(UV[q * 8] * 15 - 0.5);
     const tbZ = Math.round(UV[q * 8 + 1] * 15 - 0.5);
-    if (tbX < 0 || tbX >= BPS || tbZ < 0 || tbZ >= BPS) continue; // 越界发射块（邻 chunk）
+    if (tbX < 0 || tbX >= BPS || tbZ < 0 || tbZ >= BPS) continue;
     const bxC = tbX + cx * BPS;
     const bzC = tbZ + cz * BPS;
 
@@ -268,26 +268,17 @@ function buildWallRef(
     }
 
     const key = (tbZ * BPS + tbX) * 4 + dir;
-    const prev = agg.get(key);
-    if (prev) {
-      prev.count++;
-    } else {
-      agg.set(key, { start: q, count: 1 });
-    }
+    let list = agg.get(key);
+    if (!list) { list = []; agg.set(key, list); }
+    list.push(q);
   }
 
-  for (const [key, val] of agg) {
+  for (const [key, quads] of agg) {
     const idx = (key >> 2) | 0;
     const dir = key & 3;
     const cell = cells[idx];
     if (!cell) continue;
-    if (cell.sides[dir].wallRef) {
-      cell.sides[dir].wallRef.quadCount += val.count;
-      if (val.start < cell.sides[dir].wallRef.idxStart)
-        cell.sides[dir].wallRef.idxStart = val.start;
-    } else {
-      cell.sides[dir].wallRef = { idxStart: val.start, quadCount: val.count };
-    }
+    cell.sides[dir].wallRef = { quads: new Uint16Array(quads) };
   }
 }
 
