@@ -31,6 +31,9 @@ import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { clearWallMaterials } from './ChunkWalls';
 import { mergeTerrainPhysics, buildChunkFinal, buildChunkWallBuffers } from './Refinements';
+import { buildFaceTable } from './FaceTable';
+import { buildTopGeometry, buildWallGeometry, type FaceGeometry } from './FaceBuild';
+import { WallMaterial } from './TerrainMaterial';
 import {
   buildPostChunkTopSurface,
   buildPostSideWalls,
@@ -444,6 +447,11 @@ export class ChunkManager {
    * 物理 trimesh = 顶面 + 断崖墙同一份缓冲合并（碰撞=所见不变式）。
    */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
+    // ★ 表驱动直建（默认启用；设 __PP_TABLE_BUILD=false 可回退旧后处理管线）
+    if ((globalThis as { __PP_TABLE_BUILD?: boolean }).__PP_TABLE_BUILD !== false) {
+      this.finishStandardChunkTable(cx, cz, maps, decor);
+      return;
+    }
     // ★ 后处理层路由：顶面 = 后处理重建网格（关闭时透传精修层原输出）；
     // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
@@ -524,6 +532,59 @@ export class ChunkManager {
     // 不再被 if(propLayer) 门控——物理的存在性不与"网格是否生成"绑定，
     // 避免渲染层偶发失败时装饰碰撞连同静默丢失（角色能穿、子弹不能）。
     this.createDecorColliders(cx, cz, decor);
+  }
+
+  /**
+   * ★ 试验装配（__PP_TABLE_BUILD 分支）：FaceTable + FaceBuild 直接产出顶面/侧壁，
+   *   材质沿用 TerrainMaterial/WallMaterial（同 maps/matCfg）；物理 = 合并几何同源。
+   *   仅用于新管线视觉对照；非正式路径。
+   */
+  private finishStandardChunkTable(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
+    const src = this.raster.chunkSource(cx, cz);
+    const palette = this.chunkPalette(cx, cz);
+    const chunkDataForMat = this.raster.getChunkData(cx, cz);
+    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
+    const table = buildFaceTable(src, cx, cz);
+    const topG = buildTopGeometry(table, src);
+    const wallG = buildWallGeometry(table, src);
+
+    const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
+      geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
+      if (g.uvs) geo.setAttribute("uv", new THREE.BufferAttribute(g.uvs, 2));
+      if (withColor) {
+        if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
+        if (g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
+      }
+      geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
+      return geo;
+    };
+
+    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg);
+    (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
+      { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
+    const group = new THREE.Group();
+    group.add(new THREE.Mesh(toGeo(topG, false), mat));
+    const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg));
+    if (wallG.indices.length > 0) group.add(wallMesh);
+    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+
+    const propLayer = this.buildDecorLayer(cx, cz, decor);
+    if (propLayer) group.add(propLayer);
+
+    // 物理：顶面 + 侧壁合并（同一数据同源）
+    const nVT = topG.vertices.length / 3;
+    const pv = new Float32Array(topG.vertices.length + wallG.vertices.length);
+    pv.set(topG.vertices, 0);
+    pv.set(wallG.vertices, topG.vertices.length);
+    const pi = new Uint32Array(topG.indices.length + wallG.indices.length);
+    pi.set(topG.indices, 0);
+    for (let i = 0; i < wallG.indices.length; i++) pi[topG.indices.length + i] = wallG.indices[i] + nVT;
+
+    this.replaceChunk(chunkKeyOf(cx, cz), group, cx, cz, pv, pi);
+    this.createDecorColliders(cx, cz, decor);
+    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} bevel=${table.cells.reduce((a, c) => a + c.sides.filter((s) => s.kind === "bevel").length, 0)}`);
   }
 
 

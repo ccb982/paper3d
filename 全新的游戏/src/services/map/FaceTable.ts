@@ -2,9 +2,9 @@
 // FaceTable —— 地形地块标注表（表驱动管线阶段 B，v3）
 // ============================================================
 // 两遍创建：
-//   Pass 1（单块可定，无需邻居查询）：role/h/hBase/材质 + 4 向 kind
-//   Pass 2（全区 Pass1 后，用邻居边查询）：topEdgeY/depth/hasWall/
-//          arcNeighbor/topWeldDirs
+//   Pass 1（单块可定，无需邻居查询）：role/h/hBase/材质 + 4 向 kind + 左右端邻边 kind
+//   Pass 2（全区 Pass1 后）：topEdgeY / calcDepth / depth(=calc+保底) /
+//          oppKind / arcNeighbor / topWeldDirs
 // 分层归位：bevel = 精修层形态；pit/crack = 后处理精细层（不入表）。
 // kind：hard(默认) / weld(坡，影响顶部插值) / bevel(弧边，左右邻边非坡)。
 // 表只标注属性；精确几何交创建函数（见《地形表驱动管线重构设计.md》）。
@@ -30,8 +30,14 @@ export const DIR4 = [
 
 /** dir 同轴反向（共享边对侧）：0↔1、2↔3 */
 export const oppositeDir = (dir: number) => dir ^ 1;
-/** dir 的左右邻边方向（XOR2 = 90° 旋转 + 对侧取垂直两向） */
-export const leftRightDirs = (dir: number): [number, number] => [dir ^ 2, (dir ^ 2) ^ 1];
+
+/**
+ * 本块 dir 边的【两端点邻接的垂直边方向】：
+ * 端点约定与 edgeEndpoints 一致——p0 = 沿边小端（x 向边 = z 小端/北，z 向边 = x 小端/西），
+ * p1 = 沿边大端。返回 [p0 端邻接边方向, p1 端邻接边方向]。
+ */
+export const edgeEndAdjacentDirs = (dir: number): [number, number] =>
+  dir < 2 ? [3, 2] : [1, 0];
 
 /** 墙底相对墙顶的保底深度（有墙至少这么深，防 0 高墙/破面） */
 export const WALL_MIN_DEPTH = 0.3;
@@ -48,11 +54,11 @@ export type SideKind = "hard" | "weld" | "bevel"; // hard 默认
 
 export interface FaceSide {
   kind: SideKind;
-  /** ★ 对侧（共享边另一边地块）的属性——两次标注成对：硬边,硬边 / 硬边,弧面 … */
+  /** ★ 对侧（共享边另一边地块）属性——成对标注：硬边,硬边 / 硬边,弧面 … */
   oppKind: SideKind;
-  /** ★ 左端相接的垂直侧壁属性（本块 dir^2 向边；沿本边行进的左端） */
+  /** ★ p0 端（沿边小端）邻接的垂直侧壁属性（= edgeEndAdjacentDirs(dir)[0] 向边） */
   leftKind: SideKind;
-  /** ★ 右端相接的垂直侧壁属性（本块 (dir^2)^1 向边） */
+  /** ★ p1 端（沿边大端）邻接的垂直侧壁属性（= edgeEndAdjacentDirs(dir)[1] 向边） */
   rightKind: SideKind;
   ruling: EdgeRuling;      // 裁决溯源
   // ---- Pass 2（邻居敏感） ----
@@ -139,8 +145,8 @@ export function kindOfSide(
     tileById(nb.id).genRole === "ground" &&
     nb.h < h - BEVEL_EPS &&
     ruling === "cliff" &&
-    finalRuling(src, bx, bz, leftRightDirs(dir)[0] as 0 | 1 | 2 | 3) !== "weld" &&
-    finalRuling(src, bx, bz, leftRightDirs(dir)[1] as 0 | 1 | 2 | 3) !== "weld"
+    finalRuling(src, bx, bz, edgeEndAdjacentDirs(dir)[0] as 0 | 1 | 2 | 3) !== "weld" &&
+    finalRuling(src, bx, bz, edgeEndAdjacentDirs(dir)[1] as 0 | 1 | 2 | 3) !== "weld"
   ) {
     return "bevel";
   }
@@ -178,11 +184,12 @@ export function pass1Build(
         });
       }
 
-      // ★ 左右端相接的垂直侧壁（同块垂直两向，全部 kind 已知后回填）
+      // ★ 两端点邻接的垂直侧壁（同块，全部 kind 已知后回填）
       for (let dir = 0; dir < 4; dir++) {
         const s = sides[dir as 0 | 1 | 2 | 3];
-        s.leftKind = sides[leftRightDirs(dir)[0] as 0 | 1 | 2 | 3].kind;
-        s.rightKind = sides[leftRightDirs(dir)[1] as 0 | 1 | 2 | 3].kind;
+        const [da, db] = edgeEndAdjacentDirs(dir);
+        s.leftKind = sides[da as 0 | 1 | 2 | 3].kind;
+        s.rightKind = sides[db as 0 | 1 | 2 | 3].kind;
       }
 
       cells.push({
@@ -280,11 +287,8 @@ export function pass2Build(table: FaceTable, src: BlockSource): void {
           side.oppKind = kindOfSide(src, nbx, nbz, oppositeDir(dir));
         }
 
-        // 弧邻接：本边左右邻边任一为 bevel（弧带伸入该边端点）
-        const lr = leftRightDirs(dir);
-        side.arcNeighbor =
-          cell.sides[lr[0] as 0 | 1 | 2 | 3].kind === "bevel" ||
-          cell.sides[lr[1] as 0 | 1 | 2 | 3].kind === "bevel";
+        // 弧邻接：本边两端点邻接的垂直边任一为 bevel（弧带伸入该边端点）
+        side.arcNeighbor = side.leftKind === "bevel" || side.rightKind === "bevel";
 
         // 顶部插值方向：本块低侧 weld（邻居更高 → 坡爬入本块顶）
         if (side.kind === "weld" && nbH > cell.h) topWeld.push(dir);
@@ -396,18 +400,21 @@ export function checkTable(table: FaceTable): TableCheckReport {
         push(`深度非 calc+保底 块idx=${cell.idx} d${dir} calc=${side.calcDepth.toFixed(2)} depth=${side.depth.toFixed(2)}`);
       }
       if (side.calcDepth > 0) stats.calcSides++;
-      // 两侧组合（本侧,对侧）——两向都标（对侧视图查 oppKind）
+      // 两侧组合（本侧,对侧）成对统计
       const pair = `${side.kind},${side.oppKind}`;
       stats.pairStats[pair] = (stats.pairStats[pair] ?? 0) + 1;
-      const rpair = `${side.oppKind},${side.kind}`;
-      if (!stats.pairStats[rpair]) stats.pairStats[rpair] = stats.pairStats[rpair] ?? 0;
       if (side.kind === "bevel") {
         stats.bevelCount++;
-        const lr = leftRightDirs(dir);
-        for (const d of lr) {
+        const [da, db] = edgeEndAdjacentDirs(dir);
+        for (const d of [da, db]) {
           if (cell.sides[d as 0 | 1 | 2 | 3].kind === "weld") {
             push(`弧边左右邻边为坡 (${table.cx * 15 + Math.floor(cell.idx % 15)},${table.cz * 15 + Math.floor(cell.idx / 15)}) d${dir} 邻d${d}`);
           }
+        }
+        // 左右端点邻边标注一致性复核
+        if (cell.sides[da as 0 | 1 | 2 | 3].kind !== side.leftKind ||
+            cell.sides[db as 0 | 1 | 2 | 3].kind !== side.rightKind) {
+          push(`左右端标注不一致 块idx=${cell.idx} d${dir}`);
         }
       }
       if (side.sideTileId !== cell.topTileId) {
