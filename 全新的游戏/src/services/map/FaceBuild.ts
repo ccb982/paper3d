@@ -11,7 +11,7 @@
 
 import { BLOCKS_PER_SIDE, CHUNK_SIZE } from "./ChunkGenerator";
 import { type FaceTable, WALL_EPS, WALL_MIN_DEPTH } from "./FaceTable";
-import { type BlockSource, surfaceHeightCore } from "./Refinements";
+import { type BlockSource, surfaceHeightCore, rampWidthOf } from "./Refinements";
 
 const N = CHUNK_SIZE; // 60
 const BPS = BLOCKS_PER_SIDE; // 15
@@ -93,6 +93,9 @@ export function topYAt(
 const FINE_D = 3; // 2^3 = 0.125m
 const FINE_S = 1 << FINE_D;
 
+/** weld 坡顶面非线性判据：cell 内网格边(1m 直线)与真实坡面的允许偏差（m） */
+const WELD_FINE_EPS = 0.03;
+
 /** cell(lx,lz)（视角=所属块）是否落在 bevel 弧带影响区（需 fine） */
 function cellBevelFine(table: FaceTable, src: BlockSource, lx: number, lz: number): boolean {
   const ox = table.cx * N, oz = table.cz * N;
@@ -119,6 +122,119 @@ function cellBevelFine(table: FaceTable, src: BlockSource, lx: number, lz: numbe
   return false;
 }
 
+/**
+ * ★ weld 坡面非线性检测（坡脚棱/双坡角脊跨过 cell 内部时，1m 直线网格边会
+ *   悬离真实坡面可达 ~1m → 该 cell 必须进 fine 细分）。
+ * 判据：cell 内 4 边中点 + 中心的真实顶面高度，与按网格三角形（对角剖分
+ * 01-10）线性预测值之差 > WELD_FINE_EPS → 非线性。
+ * 只需测「本块视角」；而视角面只被本块自己的 weld 边 ± 坡带宽影响 → 候选
+ * = cell 与本块 weld 棱距离 < 坡带宽的格（跨棱 0 起算）。
+ */
+function cellWeldCurvFine(
+  table: FaceTable,
+  src: BlockSource,
+  lbx: number, // 块局部列 0..14
+  lbz: number,
+  lx: number,  // chunk 局部米格 0..N
+  lz: number,
+): boolean {
+  const wx0 = table.cx * N + lx, wz0 = table.cz * N + lz;
+  const bx = table.cx * BPS + lbx, bz = table.cz * BPS + lbz;
+  // cell 近端距棱（东 x=(bx+1)*4、西 x=bx*4、南 z=(bz+1)*4、北 z=bz*4；
+  // cell 覆盖 [0,1)，距棱 = 近端与棱的差，< 0 表示跨棱/在棱带内 → 0）
+  const nearD = [
+    Math.max(0, (bx + 1) * 4 - wx0 - 1),
+    Math.max(0, wx0 - bx * 4),
+    Math.max(0, (bz + 1) * 4 - wz0 - 1),
+    Math.max(0, wz0 - bz * 4),
+  ];
+  let hit = false;
+  for (let dir = 0; dir < 4; dir++) {
+    const s = table.cells[lbz * BPS + lbx].sides[dir as 0 | 1 | 2 | 3];
+    if (s.kind !== "weld") continue;
+    // weld 棱伸入 cell：cell 任一部分落在坡带（近端 < 坡带宽）
+    if (nearD[dir] < rampWidthOf(src, bx, bz, dir as 0 | 1 | 2 | 3)) hit = true;
+  }
+  if (!hit) return false;
+  // 顶面 4 角 + 4 边中点 + 中心（网格剖分线性预测对照；视角 = 本块）
+  const y00 = topYView(table, src, bx, bz, wx0, wz0);
+  const y10 = topYView(table, src, bx, bz, wx0 + 1, wz0);
+  const y11 = topYView(table, src, bx, bz, wx0 + 1, wz0 + 1);
+  const y01 = topYView(table, src, bx, bz, wx0, wz0 + 1);
+  const dev = (p: number, e: number) => Math.abs(p - e) > WELD_FINE_EPS;
+  // 中心与 4 边中点各对照所属网格边（对角剖分 01-10，同 buildTopGeometry 绕序）
+  if (dev(topYView(table, src, bx, bz, wx0 + 0.5, wz0 + 0.5), (y01 + y10) / 2)) return true;
+  if (dev(topYView(table, src, bx, bz, wx0 + 0.5, wz0), (y00 + y10) / 2)) return true;
+  if (dev(topYView(table, src, bx, bz, wx0 + 0.5, wz0 + 1), (y01 + y11) / 2)) return true;
+  if (dev(topYView(table, src, bx, bz, wx0, wz0 + 0.5), (y00 + y01) / 2)) return true;
+  if (dev(topYView(table, src, bx, bz, wx0 + 1, wz0 + 0.5), (y10 + y11) / 2)) return true;
+  return false;
+}
+
+/**
+ * ★ 顶面 fine 细分图（N×N，1 = 该 1m cell 用 0.125m 子网格）：
+ *   bevel 弧带 cell ∪ weld 非线性 cell（坡脚/角脊），外扩 1 格保水密
+ *   （coarse/fine 之间不出现共享边 = 无 T 结）。
+ *   顶面与侧壁共用同一张图 → 壁顶沿按同一节点列采样，闭合一致。
+ */
+const fineCache = new WeakMap<FaceTable, Uint8Array>();
+
+export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
+  const cached = fineCache.get(table);
+  if (cached) return cached;
+  const fineE = new Uint8Array(N * N);
+  for (let lbz = 0; lbz < BPS; lbz++) {
+    for (let lbx = 0; lbx < BPS; lbx++) {
+      // 该块是否有 weld 边（无则其视角面恒平面，跳过曲率检测）
+      let weld = false;
+      for (let dir = 0; dir < 4; dir++) {
+        if (table.cells[lbz * BPS + lbx].sides[dir as 0 | 1 | 2 | 3].kind === "weld") { weld = true; break; }
+      }
+      const b0x = lbx * 4, b0z = lbz * 4;
+      for (let jz = 0; jz < 4; jz++) {
+        for (let jx = 0; jx < 4; jx++) {
+          const lx = b0x + jx, lz = b0z + jz;
+          if (cellBevelFine(table, src, lx, lz)) { fineE[lz * N + lx] = 1; continue; }
+          if (weld && cellWeldCurvFine(table, src, lbx, lbz, lx, lz)) fineE[lz * N + lx] = 1;
+        }
+      }
+    }
+  }
+  // 外扩 1 格：coarse/fine 边界隔一格，无 T 结
+  const out = new Uint8Array(N * N);
+  for (let lz = 0; lz < N; lz++) {
+    for (let lx = 0; lx < N; lx++) {
+      if (!fineE[lz * N + lx]) continue;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx2 = lx + dx, nz2 = lz + dz;
+          if (nx2 >= 0 && nz2 >= 0 && nx2 < N && nz2 < N) out[nz2 * N + nx2] = 1;
+        }
+      }
+    }
+  }
+  fineCache.set(table, out);
+  return out;
+}
+
+/**
+ * ★ 侧壁沿边节点列取用的本块侧 fine 标记：dir 边沿 4 个 1m span，
+ * 每个 span 对应一块本块侧 1m cell（该 cell 的边界段 = 顶网格边界折线段）。
+ * dir0(+x)/dir1(-x) 沿 z → 本块侧 cell 列固定（lbx*4+3 / lbx*4），行随 span；
+ * dir2(+z)/dir3(-z) 沿 x → 行固定（lbz*4+3 / lbz*4），列随 span。
+ */
+function dirEdgeCells(dir: number, lbx: number, lbz: number, fineE: Uint8Array): Uint8Array {
+  const out = new Uint8Array(4);
+  if (dir === 0 || dir === 1) {
+    const lx = lbx * 4 + (dir === 0 ? 3 : 0);
+    for (let j = 0; j < 4; j++) out[j] = fineE[(lbz * 4 + j) * N + lx];
+  } else {
+    const lz = lbz * 4 + (dir === 2 ? 3 : 0);
+    for (let j = 0; j < 4; j++) out[j] = fineE[lz * N + lbx * 4 + j];
+  }
+  return out;
+}
+
 export function buildTopGeometry(table: FaceTable, src: BlockSource): FaceGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
@@ -127,24 +243,8 @@ export function buildTopGeometry(table: FaceTable, src: BlockSource): FaceGeomet
   const ox = table.cx * N, oz = table.cz * N;
   let vi = 0;
 
-  // ① fine 标记（bevel 带 cell）+ 外扩 1 格保水密（coarse/fine 无 T 结）
-  const fineE = new Uint8Array(N * N);
-  for (let lz = 0; lz < N; lz++) {
-    for (let lx = 0; lx < N; lx++) {
-      if (cellBevelFine(table, src, lx, lz)) fineE[lz * N + lx] = 1;
-    }
-  }
-  for (let lz = 0; lz < N; lz++) {
-    for (let lx = 0; lx < N; lx++) {
-      if (!fineE[lz * N + lx]) continue;
-      for (let dz = -1; dz <= 1; dz++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const nx2 = lx + dx, nz2 = lz + dz;
-          if (nx2 >= 0 && nz2 >= 0 && nx2 < N && nz2 < N) fineE[nz2 * N + nx2] = 1;
-        }
-      }
-    }
-  }
+  // ① fine 标记（bevel 带 + weld 坡脚/角脊 cell；已外扩 1 格保水密）
+  const fineE = topFineCells(table, src);
 
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
@@ -233,6 +333,7 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
   const shd: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
+  const fineE = topFineCells(table, src);
   let vi = 0;
 
   for (let lbz = 0; lbz < BPS; lbz++) {
@@ -247,10 +348,17 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
         const side = cell.sides[dir as 0 | 1 | 2 | 3];
         const nbx = bx + DIRS[dir].dx;
         const nbz = bz + DIRS[dir].dz;
-        // ★ 弧相关边（本边/邻接含 bevel）0.125m 密采样拼弧，其余 0.5m
-        const SEG = (side.kind === "bevel" || side.arcNeighbor || side.oppKind === "bevel")
-          ? 32
-          : 8;
+        // ★ 沿边节点列：按本块侧 4 个 1m cell 的 fine 标记定 0.125m/1m 步长。
+        //   顶网格边界折线在 fine cell 上是 0.125m 折线、coarse cell 上是
+        //   1m 直线 —— 壁顶沿取同一节点列 → 每段与顶网格边界段同端点，
+        //   weld 坡脚/弧带处不再各自近似（否则壁顶低于网格边 = 开口）。
+        const rowCells = dirEdgeCells(dir, lbx, lbz, fineE);
+        const nodes: number[] = [];
+        for (let span = 0; span < 4; span++) {
+          const sub = rowCells[span] ? FINE_S : 1;
+          for (let k = 0; k < sub; k++) nodes.push(span + k / sub);
+        }
+        nodes.push(4);
         const x0 = bx * 4, z0 = bz * 4;
         let ax: number, az: number, bx2: number, bz2: number;
         if (dir === 0) { ax = x0 + 4; az = z0; bx2 = x0 + 4; bz2 = z0 + 4; }
@@ -261,48 +369,50 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
         // 低侧基底（旧裙墙语义 lowBase = min(邻视觉顶, 两侧 hBase)）
         const nbH0 = src.blockAt(nbx, nbz)?.h ?? 0;
         const nbBase0 = src.blockAt(nbx, nbz)?.hBase ?? nbH0;
-        let prevTop: number | null = null;
-        let prevNb = 0;
-        let prevLx = 0, prevLz = 0;
-        for (let s = 0; s <= SEG; s++) {
-          const t = s / SEG;
-          const gx = ax + (bx2 - ax) * t;
-          const gz = az + (bz2 - az) * t;
+        const m = nodes.length;
+        const topV = new Array<number>(m);
+        const lowV = new Array<number>(m);
+        const lxV = new Array<number>(m);
+        const lzV = new Array<number>(m);
+        for (let i = 0; i < m; i++) {
+          const s = nodes[i];
+          const gx = ax + (bx2 - ax) * (s / 4);
+          const gz = az + (bz2 - az) * (s / 4);
           // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest
           const top = topYView(table, src, bx, bz, gx, gz);
-          // 邻视角（本段两端 max）
+          // 邻视角（节点 + 下一节点 max，供本段底沿用）
+          const nx2 = i < m - 1 ? nodes[i + 1] : s;
           const nbTop = Math.max(
             surfaceHeightCore(src, nbx, nbz, gx, gz),
-            surfaceHeightCore(src, nbx, nbz, gx + (bx2 - ax) / SEG, gz + (bz2 - az) / SEG),
+            surfaceHeightCore(src, nbx, nbz,
+              ax + (bx2 - ax) * (nx2 / 4), az + (bz2 - az) * (nx2 / 4)),
           );
-          const lowBase = Math.min(nbTop, cell.hBase, nbBase0);
-          const lx = gx - ox - HALF;
-          const lz = gz - oz - HALF;
-          if (prevTop !== null) {
-            // ★ 底 = 低侧基底 − EPS − 保底（埋入地下防破面）；
-            //   weld 边全高：顶在坡顶棱 crest，底到低侧基底 → 坡面侧壁完整贴坡
-            const botA = Math.min(prevTop, prevNb - WALL_EPS - WALL_MIN_DEPTH);
-            const botB = Math.min(top, lowBase - WALL_EPS - WALL_MIN_DEPTH);
-            pos.push(prevLx, prevTop, prevLz, lx, top, lz, lx, botB, lz, prevLx, botA, prevLz);
-            for (let c = 0; c < 4; c++) {
-              nor.push(nrm.dx, 0, nrm.dz);
-              uv.push(uU, uV);
-              col.push(0.6, 0.6, 0.6); // 顶点色占位（shader 调）
-              shd.push(1);
-            }
-            // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向
-            //   朝内，翻转索引；dir0/dir3 保持（2026-09-04 修正）
-            if (dir === 1 || dir === 2) {
-              idx.push(vi, vi + 3, vi + 2, vi, vi + 2, vi + 1);
-            } else {
-              idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
-            }
-            vi += 4;
+          topV[i] = top;
+          lowV[i] = Math.min(nbTop, cell.hBase, nbBase0);
+          lxV[i] = gx - ox - HALF;
+          lzV[i] = gz - oz - HALF;
+        }
+        for (let i = 0; i < m - 1; i++) {
+          // ★ 底 = 低侧基底 − EPS − 保底（埋入地下防破面）；
+          //   weld 边全高：顶在坡顶棱 crest，底到低侧基底 → 坡面侧壁完整贴坡
+          const botA = Math.min(topV[i], lowV[i] - WALL_EPS - WALL_MIN_DEPTH);
+          const botB = Math.min(topV[i + 1], lowV[i + 1] - WALL_EPS - WALL_MIN_DEPTH);
+          pos.push(lxV[i], topV[i], lzV[i], lxV[i + 1], topV[i + 1], lzV[i + 1],
+            lxV[i + 1], botB, lzV[i + 1], lxV[i], botA, lzV[i]);
+          for (let c = 0; c < 4; c++) {
+            nor.push(nrm.dx, 0, nrm.dz);
+            uv.push(uU, uV);
+            col.push(0.6, 0.6, 0.6); // 顶点色占位（shader 调）
+            shd.push(1);
           }
-          prevTop = top;
-          prevNb = lowBase;
-          prevLx = lx;
-          prevLz = lz;
+          // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向
+          //   朝内，翻转索引；dir0/dir3 保持（2026-09-04 修正）
+          if (dir === 1 || dir === 2) {
+            idx.push(vi, vi + 3, vi + 2, vi, vi + 2, vi + 1);
+          } else {
+            idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
+          }
+          vi += 4;
         }
       }
     }
