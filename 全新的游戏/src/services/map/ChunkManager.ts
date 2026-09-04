@@ -16,6 +16,7 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE } from './ChunkGenerator';
+import { buildBlockFaceIndex, type BlockFaceIndexBundle } from './BlockFaceIndex';
 import { RasterMap, chunkKeyOf } from './RasterMap';
 import {
   bakeChunkMaps, assembleChunkMaps,
@@ -29,7 +30,7 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { clearWallMaterials } from './ChunkWalls';
-import { mergeTerrainPhysics } from './Refinements';
+import { mergeTerrainPhysics, buildChunkFinal, buildChunkWallBuffers } from './Refinements';
 import {
   buildPostChunkTopSurface,
   buildPostSideWalls,
@@ -444,13 +445,31 @@ export class ChunkManager {
    */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
     // ★ 后处理层路由：顶面 = 后处理重建网格（关闭时透传精修层原输出）；
-    //   surf.vertices/indices 即渲染网格 = 物理顶点（视觉=物理同源）
-    const surf = buildPostChunkTopSurface(this.raster, cx, cz);
-
     // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
     const palette = this.chunkPalette(cx, cz);
     const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
+
+    // ★ per-chunk 地块面索引 bundle：一次构建（精修定型 cornerH + 墙缓冲 +
+    //   面索引），顶面/侧壁/调试/贴地单点全复用，避免各后处理函数重复构建精修层产物。
+    const src = this.raster.chunkSource(cx, cz);
+    const cornerH = buildChunkFinal(src, cx, cz, CHUNK_SIZE).cornerH;
+    const wallBuffers = buildChunkWallBuffers(src, cx, cz, CHUNK_SIZE, {
+      seed: this.raster.worldSeed,
+      palette,
+      heightAt: (x, z) => this.raster.heightAt(x, z),
+      tileDefAt: (x, z) => this.raster.tileDefAt(x, z),
+    });
+    const bundle: BlockFaceIndexBundle = {
+      index: buildBlockFaceIndex(src, cx, cz, cornerH, wallBuffers),
+      src,
+      cornerH,
+      wallBuffers,
+    };
+    this.raster.setBlockIndex(cx, cz, bundle);
+
+    //   surf.vertices/indices 即渲染网格 = 物理顶点（视觉=物理同源）
+    const surf = buildPostChunkTopSurface(this.raster, cx, cz, bundle);
     const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg);
     // lightmap 挂 userData 供 disposeVisual 一并释放（.map 只登记 albedo）；
     // cached = 纹理归烘焙缓存所有，chunk 销毁时跳过纹理释放（releaseBakeCache 统一管）
@@ -463,7 +482,7 @@ export class ChunkManager {
     // ★ 断崖侧壁：独立几何 + 顶面同款材质纹理与光照（WallMaterial 复用
     //   uAlbedo/uLightmap/uTileIds/Okada 库，2026-09-01：不再是纯色 MeshBasicMaterial）
     // ★ 后处理层路由：侧壁 = 精修层墙缓冲 + 墙顶跟随后处理面（关闭时透传）
-    const walls = buildPostSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg);
+    const walls = buildPostSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg, bundle);
     if (walls.mesh) group.add(walls.mesh);
     // ★ 调试线框（弧边记号/侧壁/邻居边）：默认关闭；设全局 __PP_DEBUG_LINES=true 开启
     if ((globalThis as { __PP_DEBUG_LINES?: boolean }).__PP_DEBUG_LINES) {

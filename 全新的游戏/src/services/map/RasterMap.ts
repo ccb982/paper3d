@@ -22,6 +22,7 @@ import {
   type BlockSource,
 } from "./Refinements";
 import { ppSurfaceHeight } from "./RefinementPostProcess";
+import type { BlockFaceIndexBundle } from "./BlockFaceIndex";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -47,6 +48,10 @@ export class RasterMap {
    *   非空（30% 大落差产坡）→ 每 chunk 只算一次意图，surfaceHeightAt 高频
    *   采样（角色脚底/影子/烘焙逐顶点）不再逐点重跑 O(225×4) 计划。 */
   private chunkSourceCache = new Map<number, BlockSource>();
+  /** ★ per-chunk 地块面索引缓存（chunkKey → Bundle）：由 ChunkManager 构建后
+   *   登记，后处理顶面/侧壁/调试/贴地单点统一取用；
+   *   clearAll 天结束统一回收。 */
+  private blockIndexCache = new Map<number, BlockFaceIndexBundle>();
   /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
@@ -105,6 +110,7 @@ export class RasterMap {
     this.cells.clear();
     this.cellOf.clear();
     this.chunkSourceCache.clear();
+    this.blockIndexCache.clear();
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
 
@@ -160,6 +166,16 @@ export class RasterMap {
       this.chunkSourceCache.set(key, cached);
     }
     return cached;
+  }
+
+  /** ★ 取 per-chunk 地块面索引 bundle（ChunkManager 构建后登记；未建 → undefined） */
+  blockIndex(cx: number, cz: number): BlockFaceIndexBundle | undefined {
+    return this.blockIndexCache.get(chunkKeyOf(cx, cz));
+  }
+
+  /** ★ 登记 per-chunk 地块面索引 bundle（ChunkManager.finishStandardChunk 调） */
+  setBlockIndex(cx: number, cz: number, bundle: BlockFaceIndexBundle): void {
+    this.blockIndexCache.set(chunkKeyOf(cx, cz), bundle);
   }
 
   /** 世界阻挡高度（高台立面；射击 rayMarch 用） */

@@ -32,6 +32,8 @@ import { buildChunkSideWalls, type ChunkWallsBuild } from "./ChunkWalls";
 import type { RasterMap } from "./RasterMap";
 import { tileById } from "./Tiles";
 import { groupByKey, type GroupPalette } from "./TileGroups";
+import type { BlockFaceIndex, BlockFaceIndexBundle } from "./BlockFaceIndex";
+import { BlockFaceQuery } from "./BlockFaceIndex";
 import {
   WallMaterial,
   type TileRenderConfig,
@@ -312,22 +314,19 @@ function smoothProfile(t: number): number {
   return 0.5 + 0.5 * Math.cos(Math.PI * s);
 }
 
-function roleAt(src: BlockSource, bx: number, bz: number): string | undefined {
-  const b = src.blockAt(bx, bz);
-  return b ? tileById(b.id).genRole : undefined;
+function roleAt(q: BlockFaceQuery, bx: number, bz: number): string | undefined {
+  return q.role(bx, bz);
 }
 
 /** 坑/裂禁挖带：任一方向邻高台(platform)或该边是插值(weld)交界 → 整块禁挖 */
 function nearInterpOrPlatform(
-  src: BlockSource,
+  q: BlockFaceQuery,
   bx: number,
   bz: number,
 ): boolean {
   for (let dir = 0; dir < 4; dir++) {
-    const nb = src.blockAt(bx + DIR4[dir].dx, bz + DIR4[dir].dz);
-    if (!nb) continue;
-    if (tileById(nb.id).genRole === "platform") return true;
-    if (finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3) === "weld") return true;
+    if (q.role(bx + DIR4[dir].dx, bz + DIR4[dir].dz) === "platform") return true;
+    if (q.ruling(bx, bz, dir as 0 | 1 | 2 | 3) === "weld") return true;
   }
   return false;
 }
@@ -338,27 +337,26 @@ function nearInterpOrPlatform(
 
 /** 圆角偏移（块视角）：view 块是高台且某边外露下落 → 带内外凸圆弧压低 */
 function bevelOffset(
-  src: BlockSource,
+  q: BlockFaceQuery,
   bx: number,
   bz: number,
   x: number,
   z: number,
 ): number {
-  const cur = src.blockAt(bx, bz);
-  if (!cur || !BEVEL_TILES.has(tileById(cur.id).genRole ?? "")) return 0;
+  const curRole = q.role(bx, bz);
+  const curH = q.h(bx, bz);
+  if (!curRole || !BEVEL_TILES.has(curRole)) return 0;
   // 收集外露硬边（邻块=地面 + 裁决=cliff + 邻块更低）及其带内距离
   let dMin = Infinity;
   for (let dir = 0; dir < 4; dir++) {
     const d4 = DIR4[dir];
-    const nb = src.blockAt(bx + d4.dx, bz + d4.dz);
-    if (!nb) continue;
-    if (tileById(nb.id).genRole !== "ground") continue;
-    if (finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3) !== "cliff") continue;
-    if (nb.h >= cur.h - BEVEL_EPS) continue;
+    if (q.role(bx + d4.dx, bz + d4.dz) !== "ground") continue;
+    if (q.ruling(bx, bz, dir as 0 | 1 | 2 | 3) !== "cliff") continue;
+    if (q.h(bx + d4.dx, bz + d4.dz) >= curH - BEVEL_EPS) continue;
     // ★ 侧向邻边（左右）有插值坡（weld）→ 撤销该弧边：
     //   侧壁补弧后，weld 坡的方形顶角会从弧形缺口突出且背面镂空
-    const lr = finalRuling(src, bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
-    const rr = finalRuling(src, bx, bz, ((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
+    const lr = q.ruling(bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
+    const rr = q.ruling(bx, bz, ((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
     if (lr === "weld" || rr === "weld") continue;
     // 该边向块内推进的距离（棱 d=0 → 带外 R 处 0）
     let d: number;
@@ -376,17 +374,16 @@ function bevelOffset(
 
 /** 坑洞偏移：块中心圆坑（坑半径 ≤1.5 < 半块 2m，恒在Own块内） */
 function pitOffset(
-  src: BlockSource,
+  q: BlockFaceQuery,
   seed: number,
   bx: number,
   bz: number,
   x: number,
   z: number,
 ): number {
-  const b = src.blockAt(bx, bz);
-  const role = b ? tileById(b.id).genRole : undefined;
+  const role = q.role(bx, bz);
   if (!role || role === "liquid" || role === "pit") return 0;
-  if (nearInterpOrPlatform(src, bx, bz)) return 0;
+  if (nearInterpOrPlatform(q, bx, bz)) return 0;
   if (hash2(bx, bz, seed) > PIT_HIT) return 0;
   const R = 0.75 + hash2(bx * 3 + 7, bz * 3 + 11, seed) * 0.75;
   const D = 0.25 + hash2(bx * 5 + 1, bz * 5 + 3, seed) * 0.25;
@@ -407,15 +404,14 @@ interface CrackLine {
 }
 
 function crackLineOf(
-  src: BlockSource,
+  q: BlockFaceQuery,
   seed: number,
   bx: number,
   bz: number,
 ): CrackLine | null {
-  const b = src.blockAt(bx, bz);
-  const role = b ? tileById(b.id).genRole : undefined;
+  const role = q.role(bx, bz);
   if (!role || role === "liquid" || role === "pit") return null;
-  if (nearInterpOrPlatform(src, bx, bz)) return null;
+  if (nearInterpOrPlatform(q, bx, bz)) return null;
   const ang = hash2(bx * 11 + 3, bz * 7 + 5, seed) * Math.PI * 2;
   const len = 3 + hash2(bx * 13 + 9, bz * 17 + 1, seed) * 5;
   const w = 0.15 + hash2(bx * 19 + 2, bz * 23 + 8, seed) * 0.25;
@@ -441,7 +437,7 @@ function crackLineOf(
  * 相比旧 5×5=25 锚块扫描，采样点热点评测 ~5 倍提速。
  */
 function crackOffset(
-  src: BlockSource,
+  q: BlockFaceQuery,
   seed: number,
   bx: number,
   bz: number,
@@ -456,7 +452,7 @@ function crackOffset(
     const key = (bx + dx) * 8192 + (bz + dz);
     let ln = cache.get(key);
     if (ln === undefined) {
-      ln = crackLineOf(src, seed, bx + dx, bz + dz);
+      ln = crackLineOf(q, seed, bx + dx, bz + dz);
       cache.set(key, ln);
     }
     if (!ln) continue;
@@ -478,7 +474,7 @@ function crackOffset(
  * 圆角只作用于高台视角的点（低侧地面视角不受影响 → 棱底不挖沟）。
  */
 function ppOffset(
-  src: BlockSource,
+  q: BlockFaceQuery,
   seed: number,
   viewBx: number,
   viewBz: number,
@@ -486,17 +482,18 @@ function ppOffset(
   z: number,
   cache: Map<number, CrackLine | null>,
 ): number {
-  let off = bevelOffset(src, viewBx, viewBz, x, z);
+  let off = bevelOffset(q, viewBx, viewBz, x, z);
   const bx = Math.floor(x / 4);
   const bz = Math.floor(z / 4);
-  off += pitOffset(src, seed, bx, bz, x, z);
-  off += crackOffset(src, seed, bx, bz, x, z, cache);
+  off += pitOffset(q, seed, bx, bz, x, z);
+  off += crackOffset(q, seed, bx, bz, x, z, cache);
   return off;
 }
 
-/** 后处理面高度（网格同式）：cornerCell(view) + ppOffset */
+/** 后处理面高度（网格同式）：cornerCell(view) + ppOffset（src=角点基值 f64，q=块级判定） */
 function yAt(
   src: BlockSource,
+  q: BlockFaceQuery,
   seed: number,
   viewBx: number,
   viewBz: number,
@@ -504,7 +501,7 @@ function yAt(
   z: number,
   cache: Map<number, CrackLine | null>,
 ): number {
-  return cornerCell(src, viewBx, viewBz, x, z) + ppOffset(src, seed, viewBx, viewBz, x, z, cache);
+  return cornerCell(src, viewBx, viewBz, x, z) + ppOffset(q, seed, viewBx, viewBz, x, z, cache);
 }
 
 // ------------------------------------------------------------
@@ -531,10 +528,14 @@ export function postSurfaceHeightAt(raster: RasterMap, x: number, z: number): nu
   const bcx = Math.floor(gx / 4);
   const bcz = Math.floor(gz / 4);
   const cache = new Map<number, CrackLine | null>();
-  const h00 = yAt(src, seed, bcx, bcz, gx, gz, cache);
-  const h10 = yAt(src, seed, bcx, bcz, gx + 1, gz, cache);
-  const h01 = yAt(src, seed, bcx, bcz, gx, gz + 1, cache);
-  const h11 = yAt(src, seed, bcx, bcz, gx + 1, gz + 1, cache);
+  // ★ 块级判定走索引（bevel/pit/crack 的 role/ruling 判据，逐位一致）；
+  //   高度基值仍走 cornerCell(f64)——cornerH 是 f32，用它会对低精度位产生
+  //   差异，破坏「渲染=查询」逐位不变式，故精确高度不走索引。
+  const q = new BlockFaceQuery(src, (ccx2, ccz2) => raster.blockIndex(ccx2, ccz2));
+  const h00 = yAt(src, q, seed, bcx, bcz, gx, gz, cache);
+  const h10 = yAt(src, q, seed, bcx, bcz, gx + 1, gz, cache);
+  const h01 = yAt(src, q, seed, bcx, bcz, gx, gz + 1, cache);
+  const h11 = yAt(src, q, seed, bcx, bcz, gx + 1, gz + 1, cache);
   if (fx + fz <= 1) {
     return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
   }
@@ -557,6 +558,7 @@ export function buildPostChunkTopSurface(
   raster: RasterMap,
   cx: number,
   cz: number,
+  bundle?: BlockFaceIndexBundle,
 ): ChunkSurfaceBuild {
   if (!POST_PROCESS_ENABLED) return buildChunkTopSurface(raster, cx, cz);
 
@@ -566,13 +568,18 @@ export function buildPostChunkTopSurface(
   const seed = raster.worldSeed;
   const ox = cx * N;
   const oz = cz * N;
-  // 只读复用精修层定型快照（finalTerrain 透传；物理路由改用本层顶点）
-  const finalTerrain = buildChunkFinal(src, cx, cz, N);
+  // 只读复用精修层定型快照（cornerH 走索引已算好的同一份；顶面 raw 缓冲后处理
+  //   不用——finalTerrain 仅返回兼容，无人读 .top）
+  const finalTerrain = bundle
+    ? { size: N, cx, cz, cornerH: bundle.cornerH, top: {} as never }
+    : buildChunkFinal(src, cx, cz, N);
 
   const D = PP_FINE_SUBDIV_DEPTH;
   const S = 1 << D;
   const step = 1 / S;
   const cache = new Map<number, CrackLine | null>();
+  // ★ 块级判定外观（走索引；未建 chunk 回落 src —— 逐位一致）
+  const q = new BlockFaceQuery(src, (ccx2, ccz2) => raster.blockIndex(ccx2, ccz2));
 
   // ---- ① fine 标记：bevel 必细（弧边 0.125m 多段拼弧）；坑/裂随机细 ----
   // 同一 1m 格内逐点区分偏移来源：
@@ -593,11 +600,11 @@ export function buildPostChunkTopSurface(
         const dz = Math.floor(k / 3) * 0.5;
         const x = wx0 + dx;
         const z = wz0 + dz;
-        if (bevelOffset(src, vb.bx, vb.bz, x, z) < -1e-9) {
+        if (bevelOffset(q, vb.bx, vb.bz, x, z) < -1e-9) {
           bevelHit = true;
         } else if (
-          pitOffset(src, seed, vb.bx, vb.bz, x, z) +
-            crackOffset(src, seed, vb.bx, vb.bz, x, z, cache) <
+          pitOffset(q, seed, vb.bx, vb.bz, x, z) +
+            crackOffset(q, seed, vb.bx, vb.bz, x, z, cache) <
           -1e-9
         ) {
           fxHit = true;
@@ -656,7 +663,7 @@ export function buildPostChunkTopSurface(
         const xs = [wx0, wx0 + 1, wx0 + 1, wx0];
         const zs = [wz0, wz0, wz0 + 1, wz0 + 1];
         for (let k = 0; k < 4; k++) {
-          pos.push(xs[k] - ox - HALF, yAt(src, seed, vb.bx, vb.bz, xs[k], zs[k], cache), zs[k] - oz - HALF);
+          pos.push(xs[k] - ox - HALF, yAt(src, q, seed, vb.bx, vb.bz, xs[k], zs[k], cache), zs[k] - oz - HALF);
           nor.push(0, 1, 0);
           uv.push((xs[k] - ox) / N, (zs[k] - oz) / N);
         }
@@ -672,7 +679,7 @@ export function buildPostChunkTopSurface(
         for (let gy = -1; gy <= S + 1; gy++) {
           for (let gx = -1; gx <= S + 1; gx++) {
             yt[(gy + 1) * G + (gx + 1)] = yAt(
-              src, seed, vb.bx, vb.bz, wx0 + gx * step, wz0 + gy * step, cache,
+              src, q, seed, vb.bx, vb.bz, wx0 + gx * step, wz0 + gy * step, cache,
             );
           }
         }
@@ -767,6 +774,7 @@ export function buildPostSideWalls(
   albedo: THREE.Texture,
   lightmap: THREE.Texture,
   matCfg?: TileRenderConfig,
+  idx?: BlockFaceIndexBundle,
 ): ChunkWallsBuild {
   if (!POST_PROCESS_ENABLED)
     return buildChunkSideWalls(raster, cx, cz, albedo, lightmap, matCfg);
@@ -781,14 +789,20 @@ export function buildPostSideWalls(
     : undefined;
   const BPS = N / 4;
 
-  const buffers: ChunkWallBuffers = buildChunkWallBuffers(src, cx, cz, N, {
-    seed,
-    palette,
-    heightAt: (x, z) => raster.heightAt(x, z),
-    tileDefAt: (x, z) => raster.tileDefAt(x, z),
-  });
+  // ★ 索引快路径：墙缓冲走索引已建好的同一份（避免重复构建）；
+  //   重建时写回同一对象，物理/渲染同源。
+  const buffers: ChunkWallBuffers =
+    idx?.wallBuffers ??
+    buildChunkWallBuffers(src, cx, cz, N, {
+      seed,
+      palette,
+      heightAt: (x, z) => raster.heightAt(x, z),
+      tileDefAt: (x, z) => raster.tileDefAt(x, z),
+    });
 
   const cache = new Map<number, CrackLine | null>();
+  // ★ 块级判定外观（走索引；未建 chunk 回落 src —— 逐位一致）
+  const bq = new BlockFaceQuery(src, (ccx2, ccz2) => raster.blockIndex(ccx2, ccz2));
 
   // ---- ★ 收集待处理的弧边侧壁（白色调试位置）----
   // 弧边的左右邻边，自身非弧边（转角由弧边自身遍历覆盖）：
@@ -892,7 +906,7 @@ export function buildPostSideWalls(
         const lz = V[vi * 3 + 2];
         const wx = lx + cx * N + HALF;
         const wz = lz + cz * N + HALF;
-        V[vi * 3 + 1] += ppOffset(src, seed, bxC, bzC, wx, wz, cache);
+        V[vi * 3 + 1] += ppOffset(bq, seed, bxC, bzC, wx, wz, cache);
       }
     }
     // 重排索引剔除被替换 quad
@@ -981,22 +995,22 @@ export function buildPostSideWalls(
           // 法线沿 sd 边朝外
           const color = 0.5;
           // 顶点高度全部采样 yAt（顶面同源，角点混合/弧线完全贴合）
-          const p0y = yAt(src, seed, bx, bz, end.px, end.pz, cache);
+          const p0y = yAt(src, bq, seed, bx, bz, end.px, end.pz, cache);
           const P0: number[] = [end.px, p0y, end.pz];
           let prev: number[] = [...P0];
           const K3 = 6;
           for (let k = 1; k <= K3; k++) {
             const dM = (k / K3) * BEVEL_R;
             const qx = end.px + inX * dM, qz = end.pz + inZ * dM;
-            const qy = yAt(src, seed, bx, bz, qx, qz, cache);
-            const q: number[] = [qx, qy, qz];
+            const qy = yAt(src, bq, seed, bx, bz, qx, qz, cache);
+            const qp: number[] = [qx, qy, qz];
             // 绕序校验：三角形法线须与 sd 外法线一致，反了则交换后两点
             const e1x = prev[0] - P0[0], e1y = prev[1] - P0[1], e1z = prev[2] - P0[2];
-            const e2x = q[0] - P0[0], e2y = q[1] - P0[1], e2z = q[2] - P0[2];
+            const e2x = qp[0] - P0[0], e2y = qp[1] - P0[1], e2z = qp[2] - P0[2];
             const cnx = e1y * e2z - e1z * e2y;
             const cnz = e1x * e2y - e1y * e2x;
             const flip = cnx * wsd.dx + cnz * wsd.dz < 0;
-            const A3 = P0, B3 = flip ? q : prev, C3 = flip ? prev : q;
+            const A3 = P0, B3 = flip ? qp : prev, C3 = flip ? prev : qp;
             pos.push(
               A3[0] - cx * N - HALF, A3[1], A3[2] - cz * N - HALF,
               B3[0] - cx * N - HALF, B3[1], B3[2] - cz * N - HALF,
@@ -1010,7 +1024,7 @@ export function buildPostSideWalls(
             }
             idx.push(vi, vi + 1, vi + 2);
             vi += 3;
-            prev = q;
+            prev = qp;
           }
         }
         continue;
@@ -1030,8 +1044,8 @@ export function buildPostSideWalls(
         const d0 = ds[i], d1 = ds[i + 1];
         const ax = Ax + ux * d0, az = Az + uz * d0;
         const bx2 = Ax + ux * d1, bz2 = Az + uz * d1;
-        const yA = yAt(src, seed, bx, bz, ax, az, cache);
-        const yB = yAt(src, seed, bx, bz, bx2, bz2, cache);
+        const yA = yAt(src, bq, seed, bx, bz, ax, az, cache);
+        const yB = yAt(src, bq, seed, bx, bz, bx2, bz2, cache);
         const m = matAt((d0 + d1) / 2) ?? { cr: 0.5, cg: 0.5, cb: 0.5, shade: 0.5, uvU: 0.5, uvV: 0.5 };
         pos.push(
           ax - cx * N - HALF, yA, az - cz * N - HALF,

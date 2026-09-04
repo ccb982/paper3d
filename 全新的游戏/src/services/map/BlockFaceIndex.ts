@@ -109,6 +109,19 @@ export class BlockFaceIndex {
   }
 }
 
+/** per-chunk 地块面索引 bundle：一次构建，顶面/侧壁/调试/贴地全复用。
+ *  持有精修层产物引用（cornerH、wallBuffers），避免各后处理函数重复构建。 */
+export interface BlockFaceIndexBundle {
+  /** 块面索引（role/h/ruling/drop/isBevel/wallRef…） */
+  index: BlockFaceIndex;
+  /** 精修源（跨 chunk 邻居下钻用） */
+  src: BlockSource;
+  /** 顶面米格级 4 角高（引用 buildChunkFinal 产物） */
+  cornerH: Float32Array;
+  /** 原墙缓冲（侧壁重建后写回同一引用供物理/渲染同源） */
+  wallBuffers: ChunkWallBuffers;
+}
+
 // ------------------------------------------------------------
 // 构建函数
 // ------------------------------------------------------------
@@ -276,4 +289,103 @@ function buildWallRef(
       cell.sides[dir].wallRef = { idxStart: val.start, quadCount: val.count };
     }
   }
+}
+
+// ------------------------------------------------------------
+// 块级查询外观（走索引；未建 chunk 回落 src —— 两种路径逐位一致）
+// ------------------------------------------------------------
+
+/**
+ * 后处理/运行时统一的「世界块 → 面信息」查询。索引命中（含跨 chunk 邻居→其他
+ * chunk 已建索引）走 index.cells；缺失（单点早于 chunk 网格 / 邻居未建）回落
+ * src.blockAt + finalRuling 现算。两条路径数据同源、逐位一致。
+ */
+export class BlockFaceQuery {
+  private readonly src: BlockSource;
+  private readonly getBundle: (ccx: number, ccz: number) => BlockFaceIndexBundle | undefined;
+
+  constructor(
+    src: BlockSource,
+    getBundle: (ccx: number, ccz: number) => BlockFaceIndexBundle | undefined,
+  ) {
+    this.src = src;
+    this.getBundle = getBundle;
+  }
+
+  /** 任意世界块 → 索引项（未建 chunk 回落 src 合成的只读项） */
+  entry(wx: number, wz: number): BlockFaceEntry | undefined {
+    const ccx = Math.floor(wx / BPS);
+    const ccz = Math.floor(wz / BPS);
+    const b = this.getBundle(ccx, ccz);
+    if (b) {
+      const lbx = wx - ccx * BPS;
+      const lbz = wz - ccz * BPS;
+      return b.index.at(lbx, lbz);
+    }
+    const info = this.src.blockAt(wx, wz);
+    if (!info) return undefined;
+    return {
+      id: info.id,
+      h: info.h,
+      hBase: info.hBase ?? info.h,
+      role: tileById(info.id).genRole,
+      top: { materialId: 0 },
+      sides: [dummySide(), dummySide(), dummySide(), dummySide()],
+      bottom: { materialId: 0 },
+    };
+  }
+
+  /** 块角色（= PostProcess.roleAt：undefined 语义用 "" 表达） */
+  role(wx: number, wz: number): string | undefined {
+    const e = this.entry(wx, wz);
+    return e ? e.role || undefined : undefined;
+  }
+
+  /** 块逻辑高 */
+  h(wx: number, wz: number): number {
+    return this.entry(wx, wz)?.h ?? 0;
+  }
+
+  /** 边裁决（= finalRuling） */
+  ruling(wx: number, wz: number, dir: 0 | 1 | 2 | 3): EdgeRuling | undefined {
+    const ccx = Math.floor(wx / BPS);
+    const ccz = Math.floor(wz / BPS);
+    const b = this.getBundle(ccx, ccz);
+    if (b) {
+      const lbx = wx - ccx * BPS;
+      const lbz = wz - ccz * BPS;
+      return b.index.at(lbx, lbz)?.sides[dir].ruling;
+    }
+    return finalRuling(this.src, wx, wz, dir);
+  }
+
+  /** 边落差（高侧-低侧，≥0） */
+  drop(wx: number, wz: number, dir: 0 | 1 | 2 | 3): number {
+    return this.entry(wx, wz)?.sides[dir].drop ?? 0;
+  }
+
+  /** 是否弧边 bevel（= PostProcess.isBevelEdge 同语义，索引预判） */
+  isBevel(wx: number, wz: number, dir: 0 | 1 | 2 | 3): boolean {
+    const ccx = Math.floor(wx / BPS);
+    const ccz = Math.floor(wz / BPS);
+    const b = this.getBundle(ccx, ccz);
+    if (b) {
+      const lbx = wx - ccx * BPS;
+      const lbz = wz - ccz * BPS;
+      return b.index.at(lbx, lbz)?.sides[dir].isBevel ?? false;
+    }
+    return false;
+  }
+}
+
+/** 回落路径的 dummy 侧面（数据仅在有索引时可信） */
+function dummySide(): FaceSide {
+  return {
+    ruling: "cliff" as EdgeRuling,
+    drop: 0,
+    neighborIdx: null,
+    materialId: 0,
+    wallRef: null,
+    isBevel: false,
+  };
 }
