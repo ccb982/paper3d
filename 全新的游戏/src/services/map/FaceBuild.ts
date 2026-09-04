@@ -354,7 +354,6 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
       const uU = (lbx + 0.5) / 15;
       const uV = (lbz + 0.5) / 15;
       for (let dir = 0; dir < 4; dir++) {
-        const side = cell.sides[dir as 0 | 1 | 2 | 3];
         const nbx = bx + DIRS[dir].dx;
         const nbz = bz + DIRS[dir].dz;
         // ★ 沿边节点列：按本块侧 4 个 1m cell 的 fine 标记定 0.125m/1m 步长。
