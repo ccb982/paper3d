@@ -101,7 +101,8 @@ export class WorldMode implements IGameMode {
     findTarget: () => null,
     attack: () => undefined,
   };
-  private readonly spawnPoint = { x: CHUNK_SIZE / 2, z: CHUNK_SIZE / 2 };
+  // ★ 调试：出生点临时改到侧壁缺口报告位（seed 12345, chunk(0,1)）
+  private readonly spawnPoint = { x: 50.6, z: 101.6 };
   private acc = 0;
   private damageUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];

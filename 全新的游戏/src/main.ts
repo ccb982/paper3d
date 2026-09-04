@@ -18,10 +18,22 @@ import { ShipMode } from './modes/ShipMode';
 import { WorldMode } from './modes/WorldMode';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
+import { RasterMap } from './services/map/RasterMap';
 import { setTestGroup } from './services/map/TileGroups';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
+
+/** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
+function fallbackCopy(text: string): void {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:-1000px;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch { /* ignore */ }
+  document.body.removeChild(ta);
+}
 
 // ============================================================
 // 全局状态（最小化：只保留 shared 资源和当前模式引用）
@@ -193,9 +205,53 @@ async function boot() {
   // ---- 4. 启动主循环 ----
   const clock = new THREE.Clock();
 
+  // ★ 调试坐标 HUD（始终显示）：右上角显示 seed + 角色世界坐标
+  //   （控制台设 __PP_COORD_HUD=false 可关闭）；「复制」按钮一键复制定位数据
+  const hudWrap = document.createElement('div');
+  hudWrap.style.cssText =
+    'position:fixed;top:8px;right:8px;z-index:999;display:flex;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none';
+  const hudEl: HTMLDivElement = document.createElement('div');
+  let hudAcc = 0;
+  hudEl.style.cssText =
+    'color:#fff;background:rgba(0,0,0,0.55);'
+    + 'padding:6px 10px;font:14px Consolas,monospace;white-space:pre;border-radius:6px';
+  hudEl.textContent = '...';
+  const hudBtn = document.createElement('button');
+  hudBtn.textContent = '复制位置';
+  hudBtn.style.cssText =
+    'pointer-events:auto;color:#fff;background:rgba(20,80,200,0.75);border:none;border-radius:6px;'
+    + 'padding:4px 10px;font:13px "Microsoft YaHei",sans-serif;cursor:pointer';
+  hudBtn.addEventListener('click', () => {
+    const txt = hudEl.textContent ?? '';
+    const done = () => {
+      hudBtn.textContent = '已复制 ✓';
+      setTimeout(() => { hudBtn.textContent = '复制位置'; }, 1200);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(txt).then(done).catch(() => { fallbackCopy(txt); done(); });
+    } else { fallbackCopy(txt); done(); }
+  });
+  hudWrap.appendChild(hudEl);
+  hudWrap.appendChild(hudBtn);
+  document.body.appendChild(hudWrap);
+  const cameraPos = camera.position;
+
   function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.1);
+
+    // 角色世界坐标 HUD（世界米，与 chunk 原点 0,0 同系）
+    if ((globalThis as { __PP_COORD_HUD?: boolean }).__PP_COORD_HUD !== false) {
+      hudAcc += dt;
+      if (hudAcc > 0.15) {
+        hudAcc = 0;
+        const p = cameraPos;
+        hudEl.textContent =
+          `seed ${RasterMap.current?.worldSeed ?? '?'}\n`
+          + `x ${p.x.toFixed(1)}  z ${p.z.toFixed(1)}\n`
+          + `chunk (${Math.floor(p.x / 60)},${Math.floor(p.z / 60)})`;
+      }
+    }
 
     // ★ 实时渲染域先推进（昼夜时间 + hitstop 时间缩放）→ 世界用缩放时间驱动
     renderManager.update(dt);
