@@ -1,9 +1,15 @@
 // ============================================================
-// Refinements —— 地形精修层（L6 定型段核心执行器，唯一地形几何真源）
+// Refinements —— 地形高度场与裁决基源（表驱动管线消费它；定稿 2026-09-05）
+//   权威架构文档：《地形表驱动管线重构设计.md》（定稿 2026-09-05）
 // ============================================================
-// 权威架构文档：《地图架构.md》（硬边界基础 + 两插值/边角融合 + 墙与裁决解耦）。
+// ★ 本文件在表驱动管线中的角色 = 唯一高度场/裁决基源：
+//   FaceTable（kind 判定/Pass2 顶高）与 FaceBuild（顶面/壁顶沿采样）都经
+//   surfaceHeightCore/cornerCell/finalRuling/interpEdge 读本层输出；
+//   旧《地图架构.md》描述的「定型快照 + 墙缓冲」几何链（buildChunkFinal /
+//   buildChunkWallBuffers / mergeTerrainPhysics）已被表驱动取代，仅残留在
+//   __PP_TABLE_BUILD=false 回退路径（退役拆分见架构文档 §7.3/§12）。
 //
-// ★ 意志：本文件是【地形本体的唯一真源】——
+// ★ 保留的核心语义（原《地图架构.md》收敛而来，规则不变）：
 //   1) 边裁决：块边界「硬过渡(cliff) vs 插值(weld)」判定执行权由本层全权执掌：
 //      - 【插值 = 显式 opt-in】（2026-08-31 定版）：默认引擎恒 hard（cliff），
 //        凡未显式 smooth 的边一律立墙；weld 只发生在 BlockSource.edgeFinal
@@ -12,7 +18,7 @@
 //   2) 视觉面几何：角点高度 cornerCell、边插值 interpEdge、斜坡剖面
 //      rampProfile、贴地采样 sampleSurface、面板底 baseHeightOf 的语义公式
 //      全部并入本文件（2026-08-30 SurfaceRules 物理并入）。角无独立插值，
-//      由两条触及 weld 边在 t=0 的 crest 汇合（《地图架构.md》§4.3）。
+//      由两条触及 weld 边在 t=0 的 crest 汇合（表驱动文档 §6.1）。
 //
 // ★ 确定性/可重放：纯函数、逐位可复现（同种子同源同输出）。
 //   零 three 依赖，主线程与 Worker 同一份代码。
