@@ -535,9 +535,9 @@ export class ChunkManager {
   }
 
   /**
-   * ★ 试验装配（__PP_TABLE_BUILD 分支）：FaceTable + FaceBuild 直接产出顶面/侧壁，
-   *   材质沿用 TerrainMaterial/WallMaterial（同 maps/matCfg）；物理 = 合并几何同源。
-   *   仅用于新管线视觉对照；非正式路径。
+   * ★ 试验装配（__PP_TABLE_BUILD 分支）：顶面 = 表驱动 fine（弧带/无坑裂）；
+   *   侧壁 = 自写表驱动（弧相关边 0.125m 密采样拼弧，绕序已正）。
+   *   物理 = 顶面 + 侧壁合并同源。非正式路径。
    */
   private finishStandardChunkTable(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
     const src = this.raster.chunkSource(cx, cz);
@@ -584,7 +584,7 @@ export class ChunkManager {
 
     this.replaceChunk(chunkKeyOf(cx, cz), group, cx, cz, pv, pi);
     this.createDecorColliders(cx, cz, decor);
-    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} bevel=${table.cells.reduce((a, c) => a + c.sides.filter((s) => s.kind === "bevel").length, 0)}`);
+    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6}`);
   }
 
 

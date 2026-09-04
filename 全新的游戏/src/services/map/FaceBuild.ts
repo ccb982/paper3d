@@ -233,7 +233,6 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
   const shd: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
-  const SEG = 8; // 每 4m 边 8 段（0.5m）
   let vi = 0;
 
   for (let lbz = 0; lbz < BPS; lbz++) {
@@ -248,8 +247,10 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
         const side = cell.sides[dir as 0 | 1 | 2 | 3];
         const nbx = bx + DIRS[dir].dx;
         const nbz = bz + DIRS[dir].dz;
-        // ★ 每块每边无条件强制绘制侧壁（含保底埋深）——不过滤高侧/等高；
-        //   顶面视角 bug 已修，埋底壁不再制造坑洼（2026-09-04）
+        // ★ 弧相关边（本边/邻接含 bevel）0.125m 密采样拼弧，其余 0.5m
+        const SEG = (side.kind === "bevel" || side.arcNeighbor || side.oppKind === "bevel")
+          ? 32
+          : 8;
         const x0 = bx * 4, z0 = bz * 4;
         let ax: number, az: number, bx2: number, bz2: number;
         if (dir === 0) { ax = x0 + 4; az = z0; bx2 = x0 + 4; bz2 = z0 + 4; }
