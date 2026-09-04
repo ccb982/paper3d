@@ -199,8 +199,7 @@ export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
           const lx = b0x + jx, lz = b0z + jz;
           // ★ bevel：弧带圆角边界可能在 cell 边 → 外扩 1 格保水密（历史方案）
           if (cellBevelFine(table, src, lx, lz)) { bevelFine[lz * N + lx] = 1; continue; }
-          // ★ weld：坡脚/角脊棱线恒在 cell 内部（1.33m 不落格线），跨棱的
-          //   网格边只在本 cell 内；与邻 cell 的共享边恒为直线段 → 不需外扩
+          // ★ weld：坡脚/角脊（含双坡交汇）跨过 cell 内部/边界 → 非线性 cell
           if (weld && cellWeldCurvFine(table, src, lbx, lbz, lx, lz)) { weldFine[lz * N + lx] = 1; }
         }
       }
@@ -220,10 +219,77 @@ export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
       }
     }
   }
+  // ★ 逐边扩张（代替整格外扩）：fine/coarse 共享边若在 fine 节点处偏离
+  //   直线 > SLIT_EPS → 该 coarse cell 并入 fine（角脊弯曲贴近共享边端点的
+  //   漏判区正是细缝源）。迭代至稳定；块边界/chunk 边界的边由墙封，跳过。
+  //   并入 cell 的新边可能又弯曲 → 下一轮再查；弯曲集群有限，轮数小。
+  const wFine = weldOut(table, src, weldFine);
   const out = new Uint8Array(N * N);
-  for (let i = 0; i < out.length; i++) out[i] = weldFine[i] | bevelOut[i];
+  for (let i = 0; i < out.length; i++) out[i] = wFine[i] | bevelOut[i];
   fineCache.set(table, out);
   return out;
+}
+
+/** 混合边偏离直线阈值（m）：低于此的折线/弦差不可见 */
+const SLIT_EPS = 0.004;
+
+/** weld fine 集 → 逐边扩张至无弯曲混合边 */
+function weldOut(
+  table: FaceTable,
+  src: BlockSource,
+  seed: Uint8Array,
+): Uint8Array {
+  const f = seed.slice();
+  const N2 = N;
+  const at = (lx: number, lz: number) =>
+    lx >= 0 && lz >= 0 && lx < N2 && lz < N2 && f[lz * N2 + lx] === 1;
+  // 视角块 = 共享边两侧 cell 的公共块（仅块内边才有公共块）
+  const sameViewEdgeFine = (lx: number, lz: number, dir: number): boolean => {
+    // dir 0/1 = 东/西邻（竖边），2/3 = 南/北邻（横边）
+    if (dir === 0) return (lx + 1) % 4 !== 0 && at(lx + 1, lz);
+    if (dir === 1) return lx % 4 !== 0 && at(lx - 1, lz);
+    if (dir === 2) return (lz + 1) % 4 !== 0 && at(lx, lz + 1);
+    return lz % 4 !== 0 && at(lx, lz - 1);
+  };
+  const edgeDeviation = (lx: number, lz: number, dir: number): number => {
+    // 本 cell(coarse) 视角；共享边两 cell 同块 → 同视角
+    const vbx = table.cx * BPS + Math.floor(lx / 4);
+    const vbz = table.cz * BPS + Math.floor(lz / 4);
+    const wx0 = table.cx * N2 + lx, wz0 = table.cz * N2 + lz;
+    let ax: number, az: number, bx2: number, bz2: number;
+    if (dir === 0) { ax = wx0 + 1; az = wz0; bx2 = wx0 + 1; bz2 = wz0 + 1; }
+    else if (dir === 1) { ax = wx0; az = wz0; bx2 = wx0; bz2 = wz0 + 1; }
+    else if (dir === 2) { ax = wx0; az = wz0 + 1; bx2 = wx0 + 1; bz2 = wz0 + 1; }
+    else { ax = wx0; az = wz0; bx2 = wx0 + 1; bz2 = wz0; }
+    const yA = topYView(table, src, vbx, vbz, ax, az);
+    const yB = topYView(table, src, vbx, vbz, bx2, bz2);
+    let worst = 0;
+    for (let k = 1; k < FINE_S; k++) {
+      const t = k / FINE_S;
+      const yE = topYView(table, src, vbx, vbz,
+        ax + (bx2 - ax) * t, az + (bz2 - az) * t);
+      worst = Math.max(worst, Math.abs(yE - (yA + (yB - yA) * t)));
+    }
+    return worst;
+  };
+  for (let iter = 0; iter < 16; iter++) {
+    let changed = false;
+    for (let lz = 0; lz < N2; lz++) {
+      for (let lx = 0; lx < N2; lx++) {
+        if (at(lx, lz)) continue;
+        for (let dir = 0; dir < 4; dir++) {
+          if (!sameViewEdgeFine(lx, lz, dir)) continue;
+          if (edgeDeviation(lx, lz, dir) > SLIT_EPS) {
+            f[lz * N2 + lx] = 1;
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return f;
 }
 
 /**
