@@ -48,14 +48,20 @@ export type SideKind = "hard" | "weld" | "bevel"; // hard 默认
 
 export interface FaceSide {
   kind: SideKind;
+  /** ★ 对侧（共享边另一边地块）的属性——两次标注成对：硬边,硬边 / 硬边,弧面 … */
+  oppKind: SideKind;
+  /** ★ 左端相接的垂直侧壁属性（本块 dir^2 向边；沿本边行进的左端） */
+  leftKind: SideKind;
+  /** ★ 右端相接的垂直侧壁属性（本块 (dir^2)^1 向边） */
+  rightKind: SideKind;
   ruling: EdgeRuling;      // 裁决溯源
   // ---- Pass 2（邻居敏感） ----
-  /** 该边顶面视觉高主值（本块视角，边界线两端最大） */
+  /** 该边顶面视觉高主值（本块视角，沿边最高） */
   topEdgeY: number;
-  /** 侧壁深度 = max(与邻差, WALL_MIN_DEPTH)；无壁 = 0 */
+  /** 计算侧壁量（视觉/逻辑落差所需，≥0；平地 = 0） */
+  calcDepth: number;
+  /** 最终侧壁深度 = calcDepth + 保底 WALL_MIN_DEPTH（每个侧壁恒有保底） */
   depth: number;
-  /** 该边是否有侧壁 */
-  hasWall: boolean;
   /** 是否 bevel 弧边的邻边（弧带伸入该边 → 需弧顶墙） */
   arcNeighbor: boolean;
   /** 侧壁材质（默认 = topTileId，可单独改） */
@@ -111,6 +117,36 @@ export function edgeEndpoints(
  * ★ Pass 1：单块可定——role/h/hBase/材质 + 4 向 kind。
  * 全区所有 chunk 跑完 Pass1 后，才进入 Pass2。
  */
+/** 单块某向 kind 判定（默认 hard；weld→bevel→hard 链）——Pass1 与跨界对侧共用 */
+export function kindOfSide(
+  src: BlockSource,
+  bx: number,
+  bz: number,
+  dir: number,
+  forceHard?: (bxx: number, bzz: number, d: number) => boolean,
+): SideKind {
+  if (forceHard?.(bx, bz, dir) ?? false) return "hard";
+  const info = src.blockAt(bx, bz);
+  if (!info) return "hard";
+  const role = tileById(info.id).genRole;
+  const h = info.h;
+  const ruling = finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3);
+  if (ruling === "weld") return "weld";
+  const nb = src.blockAt(bx + DIR4[dir].dx, bz + DIR4[dir].dz);
+  if (!nb) return "hard";
+  if (
+    role === "platform" &&
+    tileById(nb.id).genRole === "ground" &&
+    nb.h < h - BEVEL_EPS &&
+    ruling === "cliff" &&
+    finalRuling(src, bx, bz, leftRightDirs(dir)[0] as 0 | 1 | 2 | 3) !== "weld" &&
+    finalRuling(src, bx, bz, leftRightDirs(dir)[1] as 0 | 1 | 2 | 3) !== "weld"
+  ) {
+    return "bevel";
+  }
+  return "hard";
+}
+
 export function pass1Build(
   src: BlockSource,
   cx: number,
@@ -130,39 +166,23 @@ export function pass1Build(
       const role: TileGenRole | "" = info ? tileById(info.id).genRole : "";
       const topTileId = id >= 0 ? tileById(id).id : 0;
 
-      const nbId: number[] = [];
-      const nbH: number[] = [];
-      const rulings: EdgeRuling[] = [];
-      for (let dir = 0; dir < 4; dir++) {
-        const nbi = src.blockAt(bx + DIR4[dir].dx, bz + DIR4[dir].dz);
-        nbId[dir] = nbi?.id ?? 0;
-        nbH[dir] = nbi?.h ?? 0;
-        rulings[dir] = finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3);
-      }
-
       const sides = [] as FaceSide[];
       for (let dir = 0; dir < 4; dir++) {
-        let kind: SideKind = "hard"; // 默认
-        if (!(forceHard?.(bx, bz, dir) ?? false)) {
-          if (rulings[dir] === "weld") {
-            kind = "weld";
-          } else if (
-            role === "platform" &&
-            tileById(nbId[dir]).genRole === "ground" &&
-            nbH[dir] < h - BEVEL_EPS &&
-            rulings[dir] === "cliff" &&
-            rulings[leftRightDirs(dir)[0]] !== "weld" &&
-            rulings[leftRightDirs(dir)[1]] !== "weld"
-          ) {
-            kind = "bevel";
-          }
-        }
+        const kind = kindOfSide(src, bx, bz, dir, forceHard);
         sides.push({
           kind,
-          ruling: rulings[dir],
-          topEdgeY: 0, depth: 0, hasWall: false, arcNeighbor: false,
+          ruling: finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3),
+          topEdgeY: 0, depth: 0, calcDepth: 0, arcNeighbor: false,
+          oppKind: "hard", leftKind: "hard", rightKind: "hard",
           sideTileId: topTileId,
         });
+      }
+
+      // ★ 左右端相接的垂直侧壁（同块垂直两向，全部 kind 已知后回填）
+      for (let dir = 0; dir < 4; dir++) {
+        const s = sides[dir as 0 | 1 | 2 | 3];
+        s.leftKind = sides[leftRightDirs(dir)[0] as 0 | 1 | 2 | 3].kind;
+        s.rightKind = sides[leftRightDirs(dir)[1] as 0 | 1 | 2 | 3].kind;
       }
 
       cells.push({
@@ -231,10 +251,9 @@ export function pass2Build(table: FaceTable, src: BlockSource): void {
         const nbH = nbCell ? nbCell.h : (src.blockAt(nbx, nbz)?.h ?? 0);
         const nbBase = nbCell ? nbCell.hBase : (src.blockAt(nbx, nbz)?.hBase ?? nbH);
 
-        // 逐 1m 段判墙
-        let hasWall = cell.h > nbH;
+        // 逐 1m 段算侧壁（每边恒有侧壁：计算量 + 保底）
+        let calcMax = 0; // 计算量 = 各段所需落差深度的最大
         let topMax = -1e9;
-        let depthMax = 0;
         for (let s = 0; s < 4; s++) {
           const [[ax, az], [bx2, bz2]] = segEnds(bx, bz, dir, s);
           const sideA = Math.max(viewTopAt(src, bx, bz, ax, az), viewTopAt(src, bx, bz, bx2, bz2));
@@ -242,17 +261,24 @@ export function pass2Build(table: FaceTable, src: BlockSource): void {
             viewTopAt(src, nbx, nbz, ax, az),
             viewTopAt(src, nbx, nbz, bx2, bz2),
           );
-          const hasS = cell.h > nbH || sideA > sideB + WALL_EPS;
           topMax = Math.max(topMax, sideA);
+          const hasS = cell.h > nbH || sideA > sideB + WALL_EPS;
           if (hasS) {
-            hasWall = true;
             const lowBase = Math.min(sideB, cell.hBase, nbBase);
-            depthMax = Math.max(depthMax, sideA - (lowBase - WALL_EPS));
+            calcMax = Math.max(calcMax, Math.max(0, sideA - (lowBase - WALL_EPS)));
           }
         }
         side.topEdgeY = topMax > -1e8 ? topMax : side.topEdgeY;
-        side.hasWall = hasWall;
-        side.depth = hasWall ? Math.max(depthMax, WALL_MIN_DEPTH) : 0;
+        // ★ 恒有侧壁：depth = 计算量 + 保底（平地 = 0 + 保底）
+        side.calcDepth = calcMax;
+        side.depth = calcMax + WALL_MIN_DEPTH;
+
+        // 对侧属性（两次标注成对）：同表直取；跨界按 src 判 kind
+        if (nbCell) {
+          side.oppKind = nbCell.sides[oppositeDir(dir) as 0 | 1 | 2 | 3].kind;
+        } else {
+          side.oppKind = kindOfSide(src, nbx, nbz, oppositeDir(dir));
+        }
 
         // 弧邻接：本边左右邻边任一为 bevel（弧带伸入该边端点）
         const lr = leftRightDirs(dir);
@@ -343,23 +369,38 @@ export interface TableCheckReport {
   errors: string[];
   stats: {
     kind: Record<string, number>;
-    hasWall: number;
-    weldWithWall: number;
+    /** 有计算量（非纯保底）的侧壁边数 */
+    calcSides: number;
+    /** 两侧组合统计（成对标注），如 "hard,hard" */
+    pairStats: Record<string, number>;
     bevelCount: number;
   };
 }
 
-/** 表合理性检验：① 弧边左右邻边非坡 ② 材质默认一致 ③ 不变量统计 */
+/** 表合理性检验：① 弧边左右邻边非坡 ② 材质默认一致 ③ 恒保底 + 两侧组合统计 */
 export function checkTable(table: FaceTable): TableCheckReport {
   const errors: string[] = [];
-  const stats = { kind: { hard: 0, weld: 0, bevel: 0 }, hasWall: 0, weldWithWall: 0, bevelCount: 0 };
+  const stats = {
+    kind: { hard: 0, weld: 0, bevel: 0 },
+    calcSides: 0,
+    pairStats: {} as Record<string, number>,
+    bevelCount: 0,
+  };
   const push = (m: string) => { if (errors.length < 24) errors.push(m); };
   for (const cell of table.cells) {
     for (let dir = 0; dir < 4; dir++) {
       const side = cell.sides[dir as 0 | 1 | 2 | 3];
       stats.kind[side.kind]++;
-      if (side.hasWall) stats.hasWall++;
-      if (side.kind === "weld" && side.hasWall) stats.weldWithWall++;
+      // 恒有侧壁：depth == calc + WALL_MIN_DEPTH（平地 calc=0 → 0+保底）
+      if (Math.abs(side.depth - (side.calcDepth + WALL_MIN_DEPTH)) > 1e-6) {
+        push(`深度非 calc+保底 块idx=${cell.idx} d${dir} calc=${side.calcDepth.toFixed(2)} depth=${side.depth.toFixed(2)}`);
+      }
+      if (side.calcDepth > 0) stats.calcSides++;
+      // 两侧组合（本侧,对侧）——两向都标（对侧视图查 oppKind）
+      const pair = `${side.kind},${side.oppKind}`;
+      stats.pairStats[pair] = (stats.pairStats[pair] ?? 0) + 1;
+      const rpair = `${side.oppKind},${side.kind}`;
+      if (!stats.pairStats[rpair]) stats.pairStats[rpair] = stats.pairStats[rpair] ?? 0;
       if (side.kind === "bevel") {
         stats.bevelCount++;
         const lr = leftRightDirs(dir);

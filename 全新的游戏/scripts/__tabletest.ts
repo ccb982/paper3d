@@ -19,7 +19,9 @@ function run(seed: number, cx: number, cz: number) {
   const table = buildFaceTable(src, cx, cz);
   const rep = checkTable(table);
   console.log(`== seed=${seed} chunk(${cx},${cz}) ==`);
-  console.log(`kind=${JSON.stringify(rep.stats.kind)} hasWall=${rep.stats.hasWall} bevel=${rep.stats.bevelCount} weldWithWall=${rep.stats.weldWithWall} 检验错误=${rep.errors.length}`);
+  const pairs = Object.entries(rep.stats.pairStats).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  console.log(`kind=${JSON.stringify(rep.stats.kind)} calcSides=${rep.stats.calcSides} bevel=${rep.stats.bevelCount} 检验错误=${rep.errors.length}`);
+  console.log(`两侧组合: ${pairs.map(([k, v]) => `${k}:${v}`).join("  ")}`);
   for (const e of rep.errors.slice(0, 6)) console.log(`  ERR ${e}`);
 
   // ---- 对拍：旧墙几何 vs 表 ----
@@ -94,20 +96,22 @@ function run(seed: number, cx: number, cz: number) {
         const side = cell.sides[dir as 0 | 1 | 2 | 3];
         const g = wallGeomOf(bx, bz, dir);
         const has = g.segs.size > 0;
-        if (has !== side.hasWall) {
-          if (has && !side.hasWall) geomMiss++;
-          else geomExtra++;
-          if (samples.length < 8) samples.push(`HAS 块(${bx},${bz}) d${dir} geom=${has} 表=${side.hasWall} kind=${side.kind}`);
-        }
         if (has) {
           topDiff += Math.abs(g.topMax - side.topEdgeY); topDiffN++;
           const geomDepth = g.topMax - g.botMin;
-          depthDiff += Math.abs(geomDepth - side.depth); depthDiffN++;
+          // 表 calcDepth 应对拍几何墙深（表 depth = calc + 保底）
+          depthDiff += Math.abs(geomDepth - side.calcDepth); depthDiffN++;
+          if (Math.abs(geomDepth - side.calcDepth) > 0.1 && samples.length < 8) {
+            samples.push(`DEPTH 块(${bx},${bz}) d${dir} geom=${geomDepth.toFixed(2)} calc=${side.calcDepth.toFixed(2)} kind=${side.kind}`);
+          }
+        } else if (side.calcDepth > 0) {
+          // 表认为有计算量而旧几何该边无墙 —— 语义差异记录
+          if (samples.length < 8) samples.push(`EXTRA 块(${bx},${bz}) d${dir} calc=${side.calcDepth.toFixed(2)} kind=${side.kind}`);
         }
       }
     }
   }
-  console.log(`对拍: geomMiss(表漏)=${geomMiss} geomExtra(表多)=${geomExtra} | topEdgeY 平均差=${(topDiff / Math.max(1, topDiffN)).toFixed(4)} (n=${topDiffN}) | depth 平均差=${(depthDiff / Math.max(1, depthDiffN)).toFixed(4)} (n=${depthDiffN})`);
+  console.log(`对拍: geomMiss(表漏)=${geomMiss} geomExtra(表多)=${geomExtra} | topEdgeY 平均差=${(topDiff / Math.max(1, topDiffN)).toFixed(4)} (n=${topDiffN}) | calcDepth 平均差=${(depthDiff / Math.max(1, depthDiffN)).toFixed(4)} (n=${depthDiffN})`);
   for (const s of samples) console.log(`  ${s}`);
 }
 
