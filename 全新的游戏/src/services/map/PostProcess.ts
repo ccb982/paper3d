@@ -806,9 +806,12 @@ export function buildPostSideWalls(
   // ---- ★ 收集待处理的弧边侧壁（白色调试位置）----
   // 弧边的左右邻边，自身非弧边（转角由弧边自身遍历覆盖）：
   //   有落差 → 重建全高细分侧壁（墙顶弧线）；无落差 → 只补弧带端面封片
-  const rebuild = new Map<string, { bx: number; bz: number; sd: 0 | 1 | 2 | 3; drop: boolean }>();
+  // ★ 数字 key（世界块坐标可负，乘 2^17 槽编码防碰撞；免字符串分配/解析）
+  const rebuildKeyOf = (bx: number, bz: number, sd: number) =>
+    (bx * 0x20000 + bz) * 4 + sd;
+  const rebuild = new Map<number, { bx: number; bz: number; sd: 0 | 1 | 2 | 3; drop: boolean }>();
   // 被剔除 quad 的材质（沿边参数 t → 属性），供新细分墙继承
-  const matByEdge = new Map<string, { t: number; cr: number; cg: number; cb: number; shade: number; uvU: number; uvV: number }[]>();
+  const matByEdge = new Map<number, { t: number; cr: number; cg: number; cb: number; shade: number; uvU: number; uvV: number }[]>();
   // ★ rebuild 构建：有 index 走预计算，无 index 回落 isBevelEdge
   const hasIdx = idx !== undefined;
   for (let lbz = 0; lbz < BPS; lbz++) {
@@ -833,7 +836,7 @@ export function buildPostSideWalls(
           const nbEntry = bq.entry(bx + wsd.dx, bz + wsd.dz);
           if (!nbEntry) continue;
           const drop = nbEntry.h < curH;
-          rebuild.set(`${bx},${bz},${s}`, { bx, bz, sd: s, drop });
+          rebuild.set(rebuildKeyOf(bx, bz, s), { bx, bz, sd: s, drop });
         }
       }
     }
@@ -850,7 +853,7 @@ export function buildPostSideWalls(
     if (!nbEntry) continue;
     if (nbEntry.role !== "platform") continue;
     const od = (e.sd ^ 1) as 0 | 1 | 2 | 3;
-    const okey = `${nbx},${nbz},${od}`;
+    const okey = rebuildKeyOf(nbx, nbz, od);
     if (!rebuild.has(okey)) {
       rebuild.set(okey, { bx: nbx, bz: nbz, sd: od, drop: true });
     }
@@ -871,7 +874,7 @@ export function buildPostSideWalls(
         const onbEntry = bq.entry(bx + owd.dx, bz + owd.dz);
         if (!onbEntry) continue;
         if (onbEntry.role !== "platform") continue;
-        const okey = `${bx + owd.dx},${bz + owd.dz},${dir}`;
+        const okey = rebuildKeyOf(bx + owd.dx, bz + owd.dz, dir);
         if (!rebuild.has(okey)) {
           rebuild.set(okey, { bx: bx + owd.dx, bz: bz + owd.dz, sd: dir as 0 | 1 | 2 | 3, drop: true });
         }
@@ -891,10 +894,9 @@ export function buildPostSideWalls(
     if (hasIndex) {
       // ---- 索引快路径：wallRef.quads 精确定位 rebuild 边的 quad；
       //   wallRef 为 null（跨 chunk 邻居条目，本 chunk 索引无该块）→ 逐 quad uv 回落 ----
-      const missedKeys = new Set<string>();
+      const missedKeys = new Set<number>();
       for (const [key, rb] of rebuild) {
-        const [bxs, bzs, sds] = key.split(',');
-        const bxC = +bxs, bzC = +bzs, dirQ = +sds as 0 | 1 | 2 | 3;
+        const { bx: bxC, bz: bzC, sd: dirQ } = rb;
         const entry = bq.entry(bxC, bzC);
         const wr = entry?.sides[dirQ]?.wallRef;
         if (!wr) { missedKeys.add(key); continue; }
@@ -925,7 +927,7 @@ export function buildPostSideWalls(
           const bxC = tblX + cx * BPS;
           const bzC = tblZ + cz * BPS;
           const dirQ = quadEdgeDir(V, q, cx, cz, N, bxC, bzC);
-          const key = `${bxC},${bzC},${dirQ}`;
+          const key = rebuildKeyOf(bxC, bzC, dirQ);
           if (!missedKeys.has(key)) continue;
           const rb = rebuild.get(key)!;
           skip.add(q);
@@ -951,7 +953,7 @@ export function buildPostSideWalls(
         const bxC = tblX + cx * BPS;
         const bzC = tblZ + cz * BPS;
         const dirQ = quadEdgeDir(V, q, cx, cz, N, bxC, bzC);
-        const key = `${bxC},${bzC},${dirQ}`;
+        const key = rebuildKeyOf(bxC, bzC, dirQ);
         const rb = rebuild.get(key);
         if (rb) {
           skip.add(q);
@@ -1018,7 +1020,7 @@ export function buildPostSideWalls(
       const Bx = bx * 4 + wsd.bx * 4, Bz = bz * 4 + wsd.bz * 4;
       const yH = cur.h;
       const ux = (Bx - Ax) / 4, uz = (Bz - Az) / 4; // 沿边单位向量
-      const key = `${bx},${bz},${sd}`;
+      const key = rebuildKeyOf(bx, bz, sd);
       const mats = matByEdge.get(key) ?? [];
       const matAt = (d: number) => {
         let best = mats[0];

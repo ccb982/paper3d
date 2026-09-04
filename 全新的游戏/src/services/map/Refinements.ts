@@ -932,6 +932,28 @@ export function buildChunkWallBuffers(
   const idx: number[] = [];
   let vi = 0;
 
+  // ★ 顶高记忆化：wallTop（无 topAt 时 = cornerCell 纯函数）对同 (视角块,格点)
+  //   的查询被 4 邻 cell / 相邻共享边反复触发（发墙判据前全量 4×N² 次查询），
+  //   逐位去重后 cornerCell 调用从 57,600 → ~6,000。topAt 路径不缓存（装配方闭包）。
+  const hasTopAt = !!ctx.topAt;
+  const topAtFn = ctx.topAt;
+  const cornerMemo = new Map<number, number>();
+  const BPS2 = BLOCKS_PER_SIDE + 2; // 视角块 ±1 邻
+  const GSPAN = N + 4; // 格点 ±2 保险跨度
+  const cornerTop = (bx: number, bz: number, x: number, z: number): number => {
+    const bxR = bx - cx * BLOCKS_PER_SIDE + 1;
+    const bzR = bz - cz * BLOCKS_PER_SIDE + 1;
+    const k = (((bzR * BPS2 + bxR) * GSPAN + (x - ox + 2)) * GSPAN) + (z - oz + 2);
+    let v = cornerMemo.get(k);
+    if (v === undefined) {
+      v = cornerCell(src, bx, bz, x, z);
+      cornerMemo.set(k, v);
+    }
+    return v;
+  };
+  const wallTopOf = (bx: number, bz: number, x: number, z: number): number =>
+    hasTopAt ? topAtFn!(x, z) : cornerTop(bx, bz, x, z);
+
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
       const bxC = Math.floor((ox + i + 0.5) / 4),
@@ -949,38 +971,10 @@ export function buildChunkWallBuffers(
         //   本身；weld 墙 = 坡面背后贴坡背墙 + 坡侧裙墙（低块插值面高于邻块
         //   面 → 也发墙堵漏，杜绝坡侧看穿/露斜草皮）。斜坡只是附加蒙皮，墙永在。
         // 去重：每条边界只从【视觉面更高】那侧发一次（法线朝低处）。
-        const topA = wallTop(
-          ctx,
-          src,
-          bxC,
-          bzC,
-          ox + i + dir.ax,
-          oz + j + dir.az,
-        );
-        const topB = wallTop(
-          ctx,
-          src,
-          bxC,
-          bzC,
-          ox + i + dir.bx,
-          oz + j + dir.bz,
-        );
-        const nbTopA = wallTop(
-          ctx,
-          src,
-          bxN,
-          bzN,
-          ox + i + dir.ax,
-          oz + j + dir.az,
-        );
-        const nbTopB = wallTop(
-          ctx,
-          src,
-          bxN,
-          bzN,
-          ox + i + dir.bx,
-          oz + j + dir.bz,
-        );
+        const topA = wallTopOf(bxC, bzC, ox + i + dir.ax, oz + j + dir.az);
+        const topB = wallTopOf(bxC, bzC, ox + i + dir.bx, oz + j + dir.bz);
+        const nbTopA = wallTopOf(bxN, bzN, ox + i + dir.ax, oz + j + dir.az);
+        const nbTopB = wallTopOf(bxN, bzN, ox + i + dir.bx, oz + j + dir.bz);
         const curSide = Math.max(topA, topB);
         const nbSide = Math.max(nbTopA, nbTopB);
         // ★ 发墙：块逻辑高有落差（背墙/撕裂面）【或】视觉面高有落差（坡侧裙墙）
@@ -1048,32 +1042,10 @@ export function buildChunkWallBuffers(
 }
 
 /**
- * 块 (bx,bz) 在 (wx,wz) 的视觉面顶（= cornerCell 块视角）。墙顶随该视觉面取值。
- */
-function blockVisualTop(
-  src: BlockSource,
-  bcx: number,
-  bcz: number,
-  wx: number,
-  wz: number,
-): number {
-  return cornerCell(src, bcx, bcz, wx, wz);
-}
-
-/**
- * 墙顶高度读取：缺省取视觉面 crest（blockVisualTop）；当装配方注入 topAt
+ * 墙顶语义（buildChunkWallBuffers 内记忆化版 wallTopOf 采用）：
+ * 缺省取视觉面 crest（cornerCell 块视角）；当装配方注入 topAt
  * （后处理圆滑后的最终面）时改取其值，使墙顶沿圆角底部下弯（水密闭合）。
  */
-function wallTop(
-  ctx: WallBuildCtx,
-  src: BlockSource,
-  bcx: number,
-  bcz: number,
-  wx: number,
-  wz: number,
-): number {
-  return ctx.topAt ? ctx.topAt(wx, wz) : blockVisualTop(src, bcx, bcz, wx, wz);
-}
 
 // ---- 侧壁明暗调参（集中此处；全部确定性，同种子必复现）----
 const WALL_K_BACK = 0.22;

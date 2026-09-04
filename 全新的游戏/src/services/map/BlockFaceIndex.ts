@@ -154,10 +154,15 @@ export function buildBlockFaceIndex(
       const role: TileGenRole | "" = info ? tileById(info.id).genRole : "";
 
       const sides = [] as FaceSide[];
+      // ★ 4 方向 ruling 只算一次（isBevelEdge 侧向 weld 判定复用同一数组）
+      const rulings: EdgeRuling[] = [];
+      for (let dir = 0; dir < 4; dir++) {
+        rulings[dir] = finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3);
+      }
       for (let dir = 0; dir < 4; dir++) {
         const d4 = DIR4[dir];
         const nbInfo = src.blockAt(bx + d4.dx, bz + d4.dz);
-        const ruling = finalRuling(src, bx, bz, dir as 0 | 1 | 2 | 3);
+        const ruling = rulings[dir];
         const nbH = nbInfo?.h ?? 0;
         const drop = Math.max(0, h - nbH);
 
@@ -167,7 +172,7 @@ export function buildBlockFaceIndex(
           neighborIdx: null,
           materialId: 0,
           wallRef: null,
-          isBevel: isBevelEdge(src, bx, bz, dir as 0 | 1 | 2 | 3, role, info, nbInfo),
+          isBevel: isBevelEdge(rulings, dir as 0 | 1 | 2 | 3, role, info, nbInfo),
         });
       }
 
@@ -207,11 +212,10 @@ export function buildBlockFaceIndex(
 // 内部工具
 // ------------------------------------------------------------
 
-/** 判定某边是否弧边 bevel（与 PostProcess.isBevelEdge 同语义） */
+/** 判定某边是否弧边 bevel（与 PostProcess.isBevelEdge 同语义）。
+ * rulings = 本块 4 方向 finalRuling 预计算数组（调用方已算好，杜绝重算）。 */
 function isBevelEdge(
-  src: BlockSource,
-  bx: number,
-  bz: number,
+  rulings: EdgeRuling[],
   dir: 0 | 1 | 2 | 3,
   curRole: TileGenRole | "",
   curInfo: { id: number; h: number } | undefined,
@@ -222,9 +226,9 @@ function isBevelEdge(
   if (tileById(nbInfo.id).genRole !== "ground") return false;
   if (!curInfo) return false;
   if (nbInfo.h >= curInfo.h - BEVEL_EPS) return false;
-  if (finalRuling(src, bx, bz, dir) !== "cliff") return false;
-  const lr = finalRuling(src, bx, bz, (dir ^ 2) as 0 | 1 | 2 | 3);
-  const rr = finalRuling(src, bx, bz, ((dir ^ 2) ^ 1) as 0 | 1 | 2 | 3);
+  if (rulings[dir] !== "cliff") return false;
+  const lr = rulings[dir ^ 2];
+  const rr = rulings[(dir ^ 2) ^ 1];
   if (lr === "weld" || rr === "weld") return false;
   return true;
 }
