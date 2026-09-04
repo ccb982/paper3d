@@ -900,6 +900,9 @@ export function buildPostSideWalls(
         const entry = bq.entry(bxC, bzC);
         const wr = entry?.sides[dirQ]?.wallRef;
         if (!wr) { missedKeys.add(key); continue; }
+        // ★ 原墙存在（wallRef 命中）→ 视觉面有落差（发墙判据同源），
+        //   必须全高重建替代封片（否则裙墙被删后只剩封片 → 侧壁消失）
+        rb.drop = true;
         for (let i = 0; i < wr.quads.length; i++) {
           const qi = wr.quads[i];
           if (qi < 0 || qi >= quads) continue;
@@ -930,6 +933,7 @@ export function buildPostSideWalls(
           const key = rebuildKeyOf(bxC, bzC, dirQ);
           if (!missedKeys.has(key)) continue;
           const rb = rebuild.get(key)!;
+          rb.drop = true; // 有原墙 → 全高重建（同快路径）
           skip.add(q);
           const aAlong = dirQ < 2
             ? (V[q * 12 + 2] + cz * N + HALF) - (rb.bz * 4)
@@ -956,6 +960,7 @@ export function buildPostSideWalls(
         const key = rebuildKeyOf(bxC, bzC, dirQ);
         const rb = rebuild.get(key);
         if (rb) {
+          rb.drop = true; // 有原墙 → 全高重建（同快路径）
           skip.add(q);
           const wsd = WALL_DIRS[dirQ];
           const aAlong = dirQ < 2
