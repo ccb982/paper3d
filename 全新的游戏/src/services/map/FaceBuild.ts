@@ -2,11 +2,13 @@
 // FaceBuild —— 表驱动的精修层几何构建（管线阶段 D 骨架 v1）
 // ============================================================
 // 输入 FaceTable + src，直接产出顶面与侧壁几何：
-//   · 顶面：coarse 1m（平面 + weld 坡进顶 + bevel 弧带下弯）
-//   · 侧壁：每边恒壁（表 depth = calc+保底）；顶沿采样贴顶面，
-//           两端受左右邻壁属性影响由表 leftKind/rightKind 提供
+//   · 顶面：coarse 1m（平面 + weld 坡进顶 + bevel 弧带下弯），
+//     fine 0.125m 只落在 bevel 弧带与 weld 坡脚/角脊非线性 cell
+//     （topFineCells 统一判定：顶面与侧壁共用同一张细分图）
+//   · 侧壁：每边恒壁（表 depth = calc+保底）；壁顶沿节点列 = 顶网格
+//     边界折线同列（fine cell 段 0.125m / 其余 1m）→ 壁顶与顶面逐段
+//     同端点闭合，weld 坡脚/弧带处不再各自近似开口（2026-09-05 修）
 // pit/crack 属后处理精细 pass（另行施加，不入本函数）。
-// 待调项：① 侧壁底沿语义 ② 弧带法线/细分 ③ fine 细分
 // ============================================================
 
 import { BLOCKS_PER_SIDE, CHUNK_SIZE } from "./ChunkGenerator";
@@ -88,7 +90,7 @@ export function topYAt(
 }
 
 // ------------------------------------------------------------
-// 顶面网格（coarse 1m + bevel 带 fine 0.125m 拼弧；坑/裂已废弃）
+// 顶面网格（coarse 1m + fine 0.125m 拼 bevel 弧 / weld 坡脚角脊；坑/裂已废弃）
 // ------------------------------------------------------------
 const FINE_D = 3; // 2^3 = 0.125m
 const FINE_S = 1 << FINE_D;
@@ -182,7 +184,8 @@ const fineCache = new WeakMap<FaceTable, Uint8Array>();
 export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
   const cached = fineCache.get(table);
   if (cached) return cached;
-  const fineE = new Uint8Array(N * N);
+  const weldFine = new Uint8Array(N * N);
+  const bevelFine = new Uint8Array(N * N);
   for (let lbz = 0; lbz < BPS; lbz++) {
     for (let lbx = 0; lbx < BPS; lbx++) {
       // 该块是否有 weld 边（无则其视角面恒平面，跳过曲率检测）
@@ -194,25 +197,31 @@ export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
       for (let jz = 0; jz < 4; jz++) {
         for (let jx = 0; jx < 4; jx++) {
           const lx = b0x + jx, lz = b0z + jz;
-          if (cellBevelFine(table, src, lx, lz)) { fineE[lz * N + lx] = 1; continue; }
-          if (weld && cellWeldCurvFine(table, src, lbx, lbz, lx, lz)) fineE[lz * N + lx] = 1;
+          // ★ bevel：弧带圆角边界可能在 cell 边 → 外扩 1 格保水密（历史方案）
+          if (cellBevelFine(table, src, lx, lz)) { bevelFine[lz * N + lx] = 1; continue; }
+          // ★ weld：坡脚/角脊棱线恒在 cell 内部（1.33m 不落格线），跨棱的
+          //   网格边只在本 cell 内；与邻 cell 的共享边恒为直线段 → 不需外扩
+          if (weld && cellWeldCurvFine(table, src, lbx, lbz, lx, lz)) { weldFine[lz * N + lx] = 1; }
         }
       }
     }
   }
-  // 外扩 1 格：coarse/fine 边界隔一格，无 T 结
-  const out = new Uint8Array(N * N);
+  // bevel 外扩 1 格（coarse/fine 边界隔一格，无 T 结）——必须写独立数组，
+  // 否则原地扩散会级联传染整片区域
+  const bevelOut = new Uint8Array(N * N);
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
-      if (!fineE[lz * N + lx]) continue;
+      if (!bevelFine[lz * N + lx]) continue;
       for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
           const nx2 = lx + dx, nz2 = lz + dz;
-          if (nx2 >= 0 && nz2 >= 0 && nx2 < N && nz2 < N) out[nz2 * N + nx2] = 1;
+          if (nx2 >= 0 && nz2 >= 0 && nx2 < N && nz2 < N) bevelOut[nz2 * N + nx2] = 1;
         }
       }
     }
   }
+  const out = new Uint8Array(N * N);
+  for (let i = 0; i < out.length; i++) out[i] = weldFine[i] | bevelOut[i];
   fineCache.set(table, out);
   return out;
 }
