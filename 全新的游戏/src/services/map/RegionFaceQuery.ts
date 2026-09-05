@@ -262,6 +262,7 @@ export type FaceRef =
 export interface BuiltChunk {
   key: number;
   topVertices: Float32Array;
+  topNormals: Float32Array;
   topIndices: Uint32Array;
   wallVertices: Float32Array;
   wallIndices: Uint32Array;
@@ -792,7 +793,9 @@ export interface VertexUpdate {
 /**
  * 写回：对涉及面的每个顶点槽位，按世界 (x,z) 匹配增量 dy，写入渲染顶/壁缓冲
  * 与物理合并缓冲（同序同值 → 渲染=物理强一致）。返回写入槽位数。
- * ★ 顶沿↔壁顶沿同世界点：按 (x,z) 统一 key → 两侧同值（侧壁同步天然达成）。
+ * ★ 增量写：value += dy —— 以缓冲当前值为基（bevel 弧脚等处缓冲值 ≠ 重算表面值，
+ *   用槽位重算 y 会错位）；同一 worldKey 的 dy 相同 → 顶沿↔壁顶沿、跨 cell 重复顶点
+ *   整体平移同量，既有的弧/缝/台阶保持，不引入新裂隙。
  */
 export function applyFaceVertices(
   q: RegionQuery,
@@ -812,10 +815,10 @@ export function applyFaceVertices(
       if (dy === undefined) continue;
       for (const vi of s.renderVertex) {
         const arr = s.renderMesh === "top" ? built.topVertices : built.wallVertices;
-        arr[vi * 3 + 1] = s.y + dy;
+        arr[vi * 3 + 1] += dy;
         written++;
       }
-      for (const vi of s.physVertex) built.physVertices[vi * 3 + 1] = s.y + dy;
+      for (const vi of s.physVertex) built.physVertices[vi * 3 + 1] += dy;
     }
   }
   return written;

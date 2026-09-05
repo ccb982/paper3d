@@ -65,6 +65,7 @@ function builtChunkOf(
   return {
     key: (cx + 4096) * 8192 + (cz + 4096),
     topVertices: topG.vertices as Float32Array,
+    topNormals: new Float32Array(topG.vertices.length),
     topIndices: topG.indices as Uint32Array,
     wallVertices: wallG.vertices as Float32Array,
     wallIndices: wallG.indices as Uint32Array,
