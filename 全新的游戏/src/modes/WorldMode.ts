@@ -278,6 +278,8 @@ export class WorldMode implements IGameMode {
       ctx.bulletAsset ?? createSolidBulletAsset(), 100,
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
+      // ★ 子弹撞地 → 一次性地形扣除（ChunkManager.playBulletImpact）
+      (x, y, z) => this.chunks.playBulletImpact(x, y, z),
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
 

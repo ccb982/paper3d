@@ -311,12 +311,17 @@ function dirEdgeCells(dir: number, lbx: number, lbz: number, fineE: Uint8Array):
   return out;
 }
 
-export function buildTopGeometry(table: FaceTable, src: BlockSource): FaceGeometry {
+export function buildTopGeometry(
+  table: FaceTable,
+  src: BlockSource,
+  deformAt?: (x: number, z: number) => number,
+): FaceGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
+  const def = (wx: number, wz: number): number => (deformAt ? deformAt(wx, wz) : 0);
   let vi = 0;
 
   // ① fine 标记（bevel 带 + weld 坡脚/角脊 cell；已外扩 1 格保水密）
@@ -331,10 +336,10 @@ export function buildTopGeometry(table: FaceTable, src: BlockSource): FaceGeomet
       const base = vi;
       if (!fineE[lz * N + lx]) {
         // coarse：4 角
-        const h00 = topYView(table, src, vbx, vbz, wx0, wz0);
-        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0);
-        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1);
-        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1);
+        const h00 = topYView(table, src, vbx, vbz, wx0, wz0) + def(wx0, wz0);
+        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) + def(wx0 + 1, wz0);
+        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) + def(wx0 + 1, wz0 + 1);
+        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) + def(wx0, wz0 + 1);
         pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
         for (let c = 0; c < 4; c++) nor.push(0, 1, 0);
         uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
@@ -348,7 +353,7 @@ export function buildTopGeometry(table: FaceTable, src: BlockSource): FaceGeomet
           for (let gx = 0; gx < G; gx++) {
             const wx = wx0 + gx / FINE_S;
             const wz = wz0 + gy / FINE_S;
-            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz);
+            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) + def(wx, wz);
             const lxx = wx - ox - HALF;
             const lzz = wz - oz - HALF;
             pos.push(lxx, yt[gy * G + gx], lzz);
@@ -401,7 +406,11 @@ export function buildTopGeometry(table: FaceTable, src: BlockSource): FaceGeomet
 // 侧壁（每边恒壁：顶沿采样贴顶面，深度 = 表 calc+保底）
 // ------------------------------------------------------------
 
-export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeometry {
+export function buildWallGeometry(
+  table: FaceTable,
+  src: BlockSource,
+  deformAt?: (x: number, z: number) => number,
+): FaceGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
   const uv: number[] = [];
@@ -409,6 +418,7 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
   const shd: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
+  const def = (wx: number, wz: number): number => (deformAt ? deformAt(wx, wz) : 0);
   const fineE = topFineCells(table, src);
   let vi = 0;
 
@@ -454,7 +464,7 @@ export function buildWallGeometry(table: FaceTable, src: BlockSource): FaceGeome
           const gx = ax + (bx2 - ax) * (s / 4);
           const gz = az + (bz2 - az) * (s / 4);
           // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest
-          const top = topYView(table, src, bx, bz, gx, gz);
+          const top = topYView(table, src, bx, bz, gx, gz) + def(gx, gz);
           // 邻视角（节点 + 下一节点 max，供本段底沿用）
           const nx2 = i < m - 1 ? nodes[i + 1] : s;
           const nbTop = Math.max(

@@ -49,6 +49,8 @@ export class BulletEntity extends EntityBase {
   /** ★ 命中特效回调（BulletManager 注册：每次碰撞开始只调用一次；
    *   other=null 表示地形；由组合层决定挂实体槽/固定点播放） */
   hitFx: ((other: EntityBase | null) => void) | null = null;
+  /** ★ 地形命中回调（BulletManager 注册：命中地面 → 一次性地形扣除，坐标=命中点） */
+  onGroundHit: ((x: number, y: number, z: number) => void) | null = null;
 
   get isActive(): boolean {
     return this.active;
@@ -156,6 +158,9 @@ export class BulletEntity extends EntityBase {
       return;
     }
     console.log('[bullet] 命中 地面，反弹');
+    this.onGroundHit?.(
+      this.entity.position.x, this.entity.position.y, this.entity.position.z,
+    );
   }
 
   protected override onUpdate(dt: number): void {

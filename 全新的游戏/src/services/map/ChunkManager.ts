@@ -31,7 +31,7 @@ import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { clearWallMaterials } from './ChunkWalls';
 import { mergeTerrainPhysics, buildChunkFinal, buildChunkWallBuffers } from './Refinements';
-import { buildFaceTable } from './FaceTable';
+import { buildFaceTable, type FaceTable } from './FaceTable';
 import { buildTopGeometry, buildWallGeometry, type FaceGeometry } from './FaceBuild';
 import { WallMaterial } from './TerrainMaterial';
 import {
@@ -50,6 +50,8 @@ import {
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
 import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
+import { query3D, classifyParts, type Shape3D, type RegionTerrain, type BuiltChunk } from './RegionFaceQuery';
+import { planDeform, executeDeformInPlace, pitDepthUnder, pitProfileOffset } from './RegionDeform';
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -105,6 +107,12 @@ export class ChunkManager {
   private activated = new Set<number>();
   /** 激活回调（玩家进入半径/首个网格落地时；特殊事件预留） */
   private onChunkActivated?: (cx: number, cz: number, key: number) => void;
+
+  // ---- ★ 地形变形（§13 子弹撞地凹坑；内存态，不持久化） ----
+  /** 生效中的凹坑（横截面：pitProfileOffset）；可跨 chunk：重建时由 deform 一并对齐 */
+  private dents: { x: number; z: number; r: number; d: number }[] = [];
+  /** 查询用的表缓存（key→FaceTable；确定性重建，主线程轻量） */
+  private tables = new Map<number, FaceTable>();
   /** ★ 测试地图（单 chunk 陈列馆 + 地块名标注；构造 opts.testChunk） */
   private readonly testChunk: boolean;
 
@@ -546,8 +554,11 @@ export class ChunkManager {
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
     const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
     const table = buildFaceTable(src, cx, cz);
-    const topG = buildTopGeometry(table, src);
-    const wallG = buildWallGeometry(table, src);
+    // 地形变形（§13）：有生效凹坑时，顶/壁高度采样统一走 deform 轮廓
+    const deformAt = this.dents.length > 0
+      ? (x: number, z: number) => this.deformOffsetAt(x, z) : undefined;
+    const topG = buildTopGeometry(table, src, deformAt);
+    const wallG = buildWallGeometry(table, src, deformAt);
 
     const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
@@ -586,6 +597,157 @@ export class ChunkManager {
     this.replaceChunk(chunkKeyOf(cx, cz), group, cx, cz, pv, pi);
     this.createDecorColliders(cx, cz, decor);
     console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6}`);
+  }
+
+
+  // ============================================================
+  // ★ 地形变形（§13：子弹撞地 → 一次性地形扣除）
+  // ============================================================
+
+  /**
+   * 某世界坐标 (x,z) 的变形偏移（下沉量 ≥0；正=坑）；∑ 全部生效凹坑的坑剖面。
+   * 与 planDeform/executeDeformInPlace 的 depthAt 同源 —— 就地写回与 deform 重建
+   * 对同一顶点必然给出同一最终高度。
+   */
+  private deformOffsetAt(x: number, z: number): number {
+    let total = 0;
+    for (let i = 0; i < this.dents.length; i++) {
+      const t = this.dents[i];
+      total += pitProfileOffset(Math.hypot(x - t.x, z - t.z), t.r, t.d);
+    }
+    return total;
+  }
+
+  /** 查询用表缓存：确定性重建，命中才 buildFaceTable（查询与装配复用同表） */
+  private tableOf(cx: number, cz: number): FaceTable {
+    const key = chunkKeyOf(cx, cz);
+    let t = this.tables.get(key);
+    if (!t) {
+      t = buildFaceTable(this.raster.chunkSource(cx, cz), cx, cz);
+      this.tables.set(key, t);
+    }
+    return t;
+  }
+
+  /** 顶/壁网格对（group 直接子级 Mesh：壁带 shade 属性、顶不带；装饰层是 Group） */
+  private meshPairOf(group: THREE.Object3D): { top: THREE.Mesh; wall: THREE.Mesh | null } {
+    let top: THREE.Mesh | null = null;
+    let wall: THREE.Mesh | null = null;
+    group.children.forEach((c) => {
+      if ((c as THREE.Mesh).isMesh) {
+        const m = c as THREE.Mesh;
+        if (m.geometry.getAttribute('shade')) wall = m;
+        else top = top ?? m;
+      }
+    });
+    return { top: top!, wall };
+  }
+
+  /** 真实缓冲包装：直接引用当前网格 position/normal/index（就地写回目标；物理=同源合并） */
+  private wrapBuilt(cx: number, cz: number): BuiltChunk | null {
+    const group = this.meshes.get(chunkKeyOf(cx, cz));
+    if (!group) return null;
+    const { top, wall } = this.meshPairOf(group);
+    const gTop = top.geometry;
+    const pTop = gTop.getAttribute('position').array as Float32Array;
+    const nTop = gTop.getAttribute('normal').array as Float32Array;
+    const iTop = (gTop.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
+    let pW = new Float32Array(0);
+    let iW = new Uint32Array(0);
+    if (wall) {
+      pW = wall.geometry.getAttribute('position').array as Float32Array;
+      iW = (wall.geometry.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
+    }
+    const nVT = pTop.length / 3;
+    const pv = new Float32Array(nVT * 3 + pW.length);
+    pv.set(pTop, 0);
+    pv.set(pW, nVT * 3);
+    const pi = new Uint32Array(iTop.length + iW.length);
+    pi.set(iTop, 0);
+    for (let i = 0; i < iW.length; i++) pi[iTop.length + i] = iW[i] + nVT;
+    return {
+      key: chunkKeyOf(cx, cz),
+      topVertices: pTop, topNormals: nTop, topIndices: iTop,
+      wallVertices: pW, wallIndices: iW,
+      physVertices: pv, physIndices: pi,
+    };
+  }
+
+  /**
+   * ★ 子弹撞地 → 一次性地形扣除（§13.2 T2 球形坑）：
+   *   1) 登记 dent（内存态；后续任意重建以 deform 对齐）
+   *   2) query3D + classifyParts + planDeform（表/真实缓冲双源）
+   *   3) 就地写回 fine 顶格与整格在坑内的 coarse 格（含内侧角，保跨格水密）
+   *   4) coarse 部分覆盖格 → 整 chunk deform 重装配（replaceChunk 连物理一起换）
+   *   5) 就地 chunk：顶/壁缓冲标记脏 + 重建地面刚体（物理=视觉同源合并）
+   */
+  playBulletImpact(px: number, py: number, pz: number): void {
+    if (this.boss4D) return; // 四维空间不扣地形
+    const R = 0.6, D = 0.2; // §13.2 T2 轻量档（破坏小）
+    this.dents.push({ x: px, z: pz, r: R, d: D });
+    const shape: Shape3D = { kind: 'sphere', x: px, y: py, z: pz, r: R };
+    const depthAt = pitDepthUnder(px, pz, R, D);
+    const terrain: RegionTerrain = {
+      chunkSource: (cx, cz) => this.raster.chunkSource(cx, cz),
+      getTable: (cx, cz) => this.tableOf(cx, cz),
+      builtOf: (cx, cz) => this.wrapBuilt(cx, cz),
+    };
+    const q = query3D(shape, terrain);
+    const parts = classifyParts(q, { depthAt });
+    const plan = planDeform(q, parts);
+    if (plan.updates.length > 0) executeDeformInPlace(q, plan, terrain, { depthAt });
+    // coarse 部分覆盖 → 整 chunk deform 重装配（已建成则同步替换）
+    const rebuildKeys = new Set(plan.rebuild.map((r) => r.key));
+    for (const rec of plan.rebuild) {
+      if (this.meshes.has(rec.key) || this.voidKeys.has(rec.key)) {
+        this.requestStandardBake(rec.cx, rec.cz);
+      }
+    }
+    // 就地写回 chunk：标记缓冲脏 + 重建地面刚体
+    for (const [, c] of q.chunks) {
+      if (rebuildKeys.has(c.key)) continue;
+      const group = this.meshes.get(c.key);
+      if (!group) continue;
+      const { top, wall } = this.meshPairOf(group);
+      top.geometry.getAttribute('position').needsUpdate = true;
+      top.geometry.getAttribute('normal').needsUpdate = true;
+      const wp = wall?.geometry.getAttribute('position');
+      const wn = wall?.geometry.getAttribute('normal');
+      if (wp) wp.needsUpdate = true;
+      if (wn) wn.needsUpdate = true;
+      this.refreshGroundPhysics(c.key, c.cx, c.cz);
+    }
+    console.log(
+      `[TERRAIN] 命中(${px.toFixed(1)},${py.toFixed(1)},${pz.toFixed(1)}) ` +
+      `坑r=${R} depth=${D} | 面${parts.length} 点${plan.updates.length} ` +
+      `就地chunk${q.chunks.size} 部分覆盖重建${plan.rebuild.length}`,
+    );
+  }
+
+  /** 从已变形的真实缓冲重建地面刚体（就地写回后调用；物理与视觉数据同源） */
+  private refreshGroundPhysics(key: number, cx: number, cz: number): void {
+    const group = this.meshes.get(key);
+    if (!group) return;
+    const { top, wall } = this.meshPairOf(group);
+    const gTop = top.geometry;
+    const pTop = gTop.getAttribute('position').array as Float32Array;
+    const iTop = (gTop.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
+    let pW = new Float32Array(0);
+    let iW = new Uint32Array(0);
+    if (wall) {
+      pW = wall.geometry.getAttribute('position').array as Float32Array;
+      iW = (wall.geometry.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
+    }
+    const nVT = pTop.length / 3;
+    const pv = new Float32Array(nVT * 3 + pW.length);
+    pv.set(pTop, 0);
+    pv.set(pW, nVT * 3);
+    const pi = new Uint32Array(iTop.length + iW.length);
+    pi.set(iTop, 0);
+    for (let i = 0; i < iW.length; i++) pi[iTop.length + i] = iW[i] + nVT;
+    const old = this.bodies.get(key);
+    if (old !== undefined) this.host.destroyGround(old);
+    this.bodies.set(key, this.host.createGround(cx, cz, pv, pi));
   }
 
 
