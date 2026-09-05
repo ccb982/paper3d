@@ -25,6 +25,12 @@ import {
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { terrainPatch } from './TerrainPatch';
+import {
+  markCell as patchStateMark,
+  maskOf as patchStateMask,
+  isPatchedAt as patchStateIsPatched,
+  clearAll as patchStateClear,
+} from './PatchState';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
@@ -107,9 +113,9 @@ export class ChunkManager {
   /** 激活回调（玩家进入半径/首个网格落地时；特殊事件预留） */
   private onChunkActivated?: (cx: number, cz: number, key: number) => void;
 
-  // ---- ★ 地形补丁（§14.10 剔除+打补丁：子弹撞地 → 区域内统一补丁材质） ----
-  /** chunkKey → N×N 补丁标记（1 = 该 1m coarse cell 已补丁；内存态，不持久化） */
-  private patches = new Map<number, Uint8Array>();
+  // ---- ★ 地形补丁（§14.10 剔除+打补丁：子弹撞地 → 区域统一补丁材质） ----
+  // ★ 掩码单一真源 = PatchState 全局表（渲染几何/Worker/玩法高度采样同源）；
+  //   ChunkManager 只是读/写者，不做副本（避免双份漂移）。
   /** ★ 测试地图（单 chunk 陈列馆 + 地块名标注；构造 opts.testChunk） */
   private readonly testChunk: boolean;
 
@@ -124,6 +130,8 @@ export class ChunkManager {
     // ★ 测试地图：整个世界只有出生 chunk(0,0)，每块地块挂名字标牌
     //   （素材填充陈列馆；配合 TileGroups.setTestGroup 单组覆盖使用）
     this.testChunk = opts?.testChunk ?? false;
+    // ★ 补丁状态随世界生命周期重置（世界独占；防上次世界残留）
+    patchStateClear();
   }
 
   get isBoss4D(): boolean {
@@ -547,7 +555,7 @@ export class ChunkManager {
    */
   private finishStandardChunkTable(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
     const src = this.raster.chunkSource(cx, cz);
-    const patchArr = this.patches.get(chunkKeyOf(cx, cz));
+    const patchArr = patchStateMask(cx, cz);
     const patch = patchArr ? buildPatchOverlay(patchArr, cx, cz) : undefined;
     const table = buildFaceTable(src, cx, cz);
     const topG = buildTopGeometry(table, src, patch);
@@ -619,16 +627,8 @@ export class ChunkManager {
    * 某世界坐标 (x,z) 是否已是补丁 cell（只读查询；供判定/验收用）
    */
   isPatchedAt(px: number, pz: number): boolean {
-    if (this.boss4D) return false;
-    const ccx = Math.floor(px / CHUNK_SIZE);
-    const cra = Math.floor(pz / CHUNK_SIZE);
-    const arr = this.patches.get(chunkKeyOf(ccx, cra));
-    if (!arr) return false;
-    let lx = px - ccx * CHUNK_SIZE;
-    let lz = pz - cra * CHUNK_SIZE;
-    lx = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(lx)));
-    lz = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(lz)));
-    return arr[lz * CHUNK_SIZE + lx] === 1;
+    if (this.boss4D) return false; // 四维空间不扣地形
+    return patchStateIsPatched(px, pz);
   }
 
   /**
@@ -645,11 +645,8 @@ export class ChunkManager {
     const touched = new Set<number>();
     let added = 0;
     for (const c of circleCells(px, pz, R, CHUNK_SIZE)) {
-      const key = chunkKeyOf(c.cx, c.cz);
-      let arr = this.patches.get(key);
-      if (!arr) { arr = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE); this.patches.set(key, arr); }
-      if (arr[c.lz * CHUNK_SIZE + c.lx] !== 1) { arr[c.lz * CHUNK_SIZE + c.lx] = 1; added++; }
-      touched.add(key);
+      if (patchStateMark(c.cx, c.cz, c.lx, c.lz)) added++;
+      touched.add(chunkKeyOf(c.cx, c.cz));
     }
     if (added === 0) return; // 幂等：无新 cell → 不重建
     for (const key of touched) {
@@ -684,9 +681,9 @@ export class ChunkManager {
         this.requestStandardBake(cx, cz);
         return;
       }
-      const arr = this.patches.get(key);
+      const arr = patchStateMask(cx, cz);
       if (!arr) return;
-      // ★ 掩码必须传拷贝：postMessage(transfer) 会转移所有权，本体仍在 patches 表
+      // ★ 掩码必须传拷贝：postMessage(transfer) 会转移所有权，本体仍在 PatchState
       const mask = new Uint8Array(arr);
       try {
         const geom = await terrainPatch.compute(

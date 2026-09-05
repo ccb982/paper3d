@@ -23,6 +23,7 @@ import {
 } from "./Refinements";
 import { ppSurfaceHeight } from "./RefinementPostProcess";
 import type { BlockFaceIndexBundle } from "./BlockFaceIndex";
+import { depthAtWorld as patchStateDepth } from "./PatchState";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -154,7 +155,10 @@ export class RasterMap {
     // ★ 坑裂后处理已弃用（2026-09-05，POST_PROCESS_ENABLED=false）：
     //   ppSurfaceHeight ≡ 纯精修层视觉面（cornerCell 三角插值，无坑/裂/旧倒角）。
     //   表驱动 weld/fine 微差为 §8 P1 收敛项。
-    return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz));
+    // ★ 补丁同步（2026-09-05）：渲染/trimesh/玩法高度三端同源 —— 角色脚底/
+    //   clamp/贴地查询一律减补丁深度场（坑内 = PATCH_DEPTH，坑缘坡降 → 0）
+    return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz))
+      - patchStateDepth(x, z);
   }
 
   /** ★ per-chunk 构建源（§8 第四步意图分置）：surfaceBlocks 原始源经本 chunk

@@ -22,6 +22,12 @@ import {
 } from "../src/services/map/FaceBuild";import { buildFaceTable } from "../src/services/map/FaceTable";
 import { RasterMap } from "../src/services/map/RasterMap";
 import { computeTableGeometry } from "../src/services/map/PatchCompute";
+import {
+  markCell as psMark,
+  isPatchedAt as psIsPatched,
+  depthAtWorld as psDepth,
+  clearAll as psClear,
+} from "../src/services/map/PatchState";
 
 const N = 60;
 const CH = 60;
@@ -441,6 +447,22 @@ function run(seed: number) {
       cmp(live.wall.indices, snap.wall.indices, "i");
     ok(live.top.vertices.length > 0 && topEq && wallEq,
       `${tag} ⑧ Worker 拷贝路径几何字节与活源逐位一致（top=${live.top.vertices.length / 3}v wall=${live.wall.vertices.length / 3}v）`);
+  }
+
+  // ---- ⑨ 玩法高度采样同步：surfaceHeightAt 减补丁深度场（角色脚底/贴地/clamp） ----
+  {
+    psClear();
+    const h0 = raster.surfaceHeightAt(20.5, 20.5);
+    const outside0 = raster.surfaceHeightAt(33.5, 33.5);
+    const foot = circleCells(20.5, 20.5, 0.6, CH);
+    for (const c of foot) if (c.cx === 0 && c.cz === 0) psMark(c.cx, c.cz, c.lx, c.lz);
+    const h1 = raster.surfaceHeightAt(20.5, 20.5);
+    const outside1 = raster.surfaceHeightAt(33.5, 33.5);
+    ok(near(h1 - h0, -PATCH_DEPTH, 1e-3) && near(psDepth(20.5, 20.5), PATCH_DEPTH, 1e-3),
+      `${tag} ⑨ 坑心 surfaceHeightAt 同步下降（${(h1 - h0).toFixed(3)} ≈ −D）`);
+    ok(near(outside1 - outside0, 0, 1e-6), `${tag} ⑨ 坑外高度不受影响（Δ=${(outside1 - outside0).toFixed(5)}）`);
+    ok(psIsPatched(20.5, 20.5) && !psIsPatched(33.5, 33.5), `${tag} ⑨ isPatchedAt 世界查询正确`);
+    psClear();
   }
 }
 
