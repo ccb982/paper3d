@@ -32,7 +32,7 @@ import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { clearWallMaterials } from './ChunkWalls';
 import { mergeTerrainPhysics, buildChunkFinal, buildChunkWallBuffers } from './Refinements';
 import { buildFaceTable } from './FaceTable';
-import { buildTopGeometry, buildWallGeometry, circleCells, PATCH_DEPTH, PATCH_COLOR, type FaceGeometry, type PatchOverlay } from './FaceBuild';
+import { buildTopGeometry, buildWallGeometry, circleCells, buildPatchOverlay, type FaceGeometry } from './FaceBuild';
 import { WallMaterial } from './TerrainMaterial';
 import {
   buildPostChunkTopSurface,
@@ -550,15 +550,9 @@ export class ChunkManager {
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
     const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
     const table = buildFaceTable(src, cx, cz);
-    // ★ 地形补丁（§14.10）：有补丁标记时，顶/壁在那个区域整体下挖 + 换补丁色
+    // ★ 地形补丁（§14.10）：补丁覆盖 → 深度场堆积（坑缘坡降）+ 坑壁剔除 + 补丁色
     const patchArr = this.patches.get(chunkKeyOf(cx, cz));
-    const patch: PatchOverlay | undefined = patchArr ? {
-      isPatched: (lx, lz) =>
-        lx >= 0 && lz >= 0 && lx < CHUNK_SIZE && lz < CHUNK_SIZE
-        && patchArr[lz * CHUNK_SIZE + lx] === 1,
-      depth: PATCH_DEPTH,
-      color: PATCH_COLOR,
-    } : undefined;
+    const patch = patchArr ? buildPatchOverlay(patchArr, cx, cz) : undefined;
     const topG = buildTopGeometry(table, src, undefined, patch);
     const wallG = buildWallGeometry(table, src, undefined, patch);
 

@@ -1,22 +1,22 @@
 /**
- * 剔除+打补丁（§14.10 R+P）验收：
- *   ① circleCells：圆覆盖 coarse cell 判定（AABB 中心最近点；角点并入；跨 chunk；负坐标；幂等）
- *   ② 顶面：补丁 fine cell 内部子顶点 = 原面 − PATCH_DEPTH 且颜色 = PATCH_COLOR；
- *      未补丁 fine cell 内部子顶点原样 0/[1,1,1]
- *   ③ 法线不变：平移下挖不改法线（逐顶点全等）
- *   ④ 侧壁：own 补丁 → 顶沿 −depth 且补丁色；补丁区外沿壁（邻补丁）= 补丁色（坑边界壁=补丁）；
- *      远离补丁区原样 [0.6]
- *   ⑤ 确定性/幂等：同一 overlay 两次构建逐位一致；circleCells 幂等
- *   ⑥ 跨 chunk 一致性：patch 横跨 z=60 缝隙 → 双侧壁顶沿同世界 x 列均有坑口下挖 → 边界棱闭合
+ * 剔除+打补丁（§14.10 R+P，坑缘坡面版）验收：
+ *   ① circleCells：圆覆盖 coarse cell 判定（AABB 判交；角点并入；跨 chunk；负坐标；幂等）
+ *   ② 深度场：坑内满深 −D、边界线 0；坑内顶点色全补丁色、区外白/原样（只取 cell 内部顶点判定）
+ *   ③ 坡面插值：坑缘存在中间深度、深度场数值连续（smoothstep）、坡面法线倾斜
+ *   ④ 补丁全权负责内部：坑内块边界壁整段剔除（位置对齐）；坑缘壁存在、顶沿不悬空、补丁色；
+ *      远离区壁（位置多集）逐位一致
+ *   ⑤ 确定性：同 overlay 两次构建逐位一致
+ *   ⑥ 跨 chunk：补丁触 seam → 深度在 seam 两侧各自收口 0（封死不悬空）、seam 壁保留且补丁色
  */
 import {
+  buildPatchOverlay,
   buildTopGeometry,
   buildWallGeometry,
   circleCells,
   topFineCells,
+  topYView,
   PATCH_DEPTH,
   PATCH_COLOR,
-  type PatchOverlay,
 } from "../src/services/map/FaceBuild";
 import { buildFaceTable } from "../src/services/map/FaceTable";
 import { RasterMap } from "../src/services/map/RasterMap";
@@ -34,36 +34,6 @@ const isPatchCol = (c: Float32Array, i: number) =>
   near(c[i], PATCH_COLOR[0]) && near(c[i + 1], PATCH_COLOR[1]) && near(c[i + 2], PATCH_COLOR[2]);
 const isWhite = (c: Float32Array, i: number) =>
   near(c[i], 1) && near(c[i + 1], 1) && near(c[i + 2], 1);
-
-/** 从局部 cell 下标集合构造 PatchOverlay（isPatched 走全局 cell 语义） */
-function overlayOf(cells: Set<number>): PatchOverlay {
-  return {
-    isPatched: (lx: number, lz: number) =>
-      lx >= 0 && lz >= 0 && lx < N && lz < N && cells.has(lz * N + lx),
-    depth: PATCH_DEPTH,
-    color: PATCH_COLOR,
-  };
-}
-
-/** 世界坐标在 cell (lx,lz) 内、且位于 1m 网格边界之内（fine 内部子节点；排除共享边界） */
-function fineCoreVerts(
-  g: { vertices: Float32Array },
-  lx: number,
-  lz: number,
-  ox: number,
-  oz: number,
-): number[] {
-  const out: number[] = [];
-  const v = g.vertices;
-  for (let i = 0; i < v.length / 3; i++) {
-    const wx = v[i * 3] + ox + HALF;
-    const wz = v[i * 3 + 2] + oz + HALF;
-    const fx = wx - Math.floor(wx);
-    const fz = wz - Math.floor(wz);
-    if (Math.floor(wx) === lx && Math.floor(wz) === lz && fx > 0.01 && fz > 0.01) out.push(i);
-  }
-  return out;
-}
 
 function run(seed: number) {
   const tag = `seed=${seed}`;
@@ -95,106 +65,274 @@ function run(seed: number) {
       `${tag} ①circleCells 幂等（n=${again.length}）`);
   }
 
-  // ---- ②③ 顶面：找一个 fine cell (沉浸区) 补丁，与一个远处 fine cell 对拍 ----
+  // ---- ② 顶面：3×3 补丁区，中心 = 第一个 fine cell（fx 落在 4m 块界，覆盖块边隔断） ----
   const fine = topFineCells(table0, src0);
   let fx = -1, fy = -1, dx = -1, dy = -1;
   for (let i = 0; i < N * N; i++) if (fine[i]) { fx = i % N; fy = (i / N) | 0; break; }
   for (let j = (fy + 3) * N; j < N * N; j++) if (fine[j]) { dx = j % N; dy = (j / N) | 0; break; }
-  const singlePatch = new Set<number>([fy * N + fx]);
+  fx = fx - (fx % 4); // 对齐到 4m 块界，使坑中心列跨块界（可观测隔断剔除）
+  const patchCells = new Set<number>();
+  for (let lz = fy - 1; lz <= fy + 1; lz++) for (let lx = fx - 1; lx <= fx + 1; lx++) patchCells.add(lz * N + lx);
+  const arr = new Uint8Array(N * N);
+  for (const c of patchCells) arr[c] = 1;
+  const overlay = buildPatchOverlay(arr, 0, 0);
   const topNo = buildTopGeometry(table0, src0);
-  const topYes = buildTopGeometry(table0, src0, undefined, overlayOf(singlePatch));
-
-  {
-    const pv = fineCoreVerts(topYes, fx, fy, 0, 0);   // 补丁 fine cell 内部
-    const uv2 = fineCoreVerts(topYes, dx, dy, 0, 0);  // 远处 fine cell 内部
-    ok(fx >= 0 && dx >= 0 && pv.length > 0 && uv2.length > 0,
-      `${tag} ②找到补丁 fine cell(${fx},${fy}) 与远处 cell(${dx},${dy})（内点 ${pv.length}/${uv2.length}）`);
-    let badH = 0, badC = 0;
-    for (const i of pv) {
-      if (!near(topYes.vertices[i * 3 + 1] - topNo.vertices[i * 3 + 1], -PATCH_DEPTH)) badH++;
-      if (!isPatchCol(topYes.colors, i * 3)) badC++;
-    }
-    for (const i of uv2) {
-      if (!near(topYes.vertices[i * 3 + 1] - topNo.vertices[i * 3 + 1], 0)) badH++;
-      if (!isWhite(topYes.colors, i * 3)) badC++;
-    }
-    ok(badH === 0, `${tag} ②补丁 = 原面 − depth、原样补丁外 = 原面（坏 ${badH}）`);
-    ok(badC === 0, `${tag} ②补丁区 = PATCH_COLOR、原样区 = [1,1,1]（坏 ${badC}）`);
-    let badN = 0;
-    for (let i = 0; i < topYes.normals.length; i++) {
-      if (!near(topYes.normals[i] - topNo.normals[i], 0, 1e-6)) badN++;
-    }
-    ok(badN === 0, `${tag} ③法线平移不变（零差 ${badN}）`);
-  }
-
-  // ---- ④ 侧壁：4×4 补丁区 [12..16)² 数据驱动 ----
-  const patch4 = new Set<number>();
-  for (let lz = 12; lz < 16; lz++) for (let lx = 12; lx < 16; lx++) patch4.add(lz * N + lx);
+  const topYes = buildTopGeometry(table0, src0, undefined, overlay);
   const wallNo = buildWallGeometry(table0, src0);
-  const wallYes = buildWallGeometry(table0, src0, undefined, overlayOf(patch4));
+  const wallYes = buildWallGeometry(table0, src0, undefined, overlay);
+
+  const wOf = (wx: number, wz: number) => ({ lx: Math.floor(wx), lz: Math.floor(wz) });
+  const isP = (wx: number, wz: number) => { const { lx, lz } = wOf(wx, wz); return patchCells.has(lz * N + lx); };
+  // 仅取 cell 内部顶点（小数坐标，无共享边界歧义）
+  const interiorOf = (wx: number, wz: number) => {
+    const fx2 = wx - Math.floor(wx), fz2 = wz - Math.floor(wz);
+    return fx2 > 0.02 && fz2 > 0.02 && fx2 < 0.98 && fz2 < 0.98;
+  };
+
   {
-    let loweredN = 0, loweredColBad = 0, intactN = 0, intactBad = 0, nbCol = 0;
-    const vWn = wallNo.vertices, vWy = wallYes.vertices, cWy = wallYes.colors;
-    const zone = (wx: number, wz: number) => Math.hypot(wx - 14, wz - 14);
-    for (let i = 0; i < vWy.length / 3; i++) {
-      const wx = vWy[i * 3] + HALF, wz = vWy[i * 3 + 2] + HALF;
-      const dy = vWy[i * 3 + 1] - vWn[i * 3 + 1];
-      if (near(dy, -PATCH_DEPTH)) {
-        loweredN++;
-        if (!isPatchCol(cWy, i * 3)) loweredColBad++;
-      } else if (zone(wx, wz) > 15) {
-        intactN++;
-        if (!near(dy, 0)) intactBad++;
-      } else if (zone(wx, wz) < 6 && isPatchCol(cWy, i * 3)) {
-        nbCol++; // 未下挖但贴补丁 → 外沿壁补丁色
+    let pBad = 0, wBad = 0, hBad = 0, pCore = 0, wCore = 0;
+    let minDy = Infinity, maxDy = -Infinity;
+    for (let i = 0; i < topYes.vertices.length / 3; i++) {
+      const wx = topYes.vertices[i * 3] + HALF, wz = topYes.vertices[i * 3 + 2] + HALF;
+      const dy = topYes.vertices[i * 3 + 1] - topNo.vertices[i * 3 + 1];
+      const core = interiorOf(wx, wz);
+      if (isP(wx, wz)) {
+        minDy = Math.min(minDy, dy); maxDy = Math.max(maxDy, dy);
+        if (dy < -PATCH_DEPTH - 1e-5 || dy > 1e-5) hBad++;
+        if (core) { pCore++; if (!isPatchCol(topYes.colors, i * 3)) pBad++; }
+      } else {
+        if (!near(dy, 0, 1e-5)) hBad++;
+        if (core) { wCore++; if (!isWhite(topYes.colors, i * 3)) wBad++; }
       }
     }
-    ok(loweredN > 0 && loweredColBad === 0, `${tag} ④own 补丁侧壁顶沿 −depth 且补丁色（n=${loweredN} 坏色 ${loweredColBad}）`);
-    // 注意：intactBad 的 [0.6] 断言需用 [1,1,1]≠、真实占位色为 0.6 → 单独检查
-    let farGrayBad = 0;
-    for (let i = 0; i < vWy.length / 3; i++) {
-      const wx = vWy[i * 3] + HALF, wz = vWy[i * 3 + 2] + HALF;
-      if (zone(wx, wz) > 15) {
-        const yc = near(cWy[i * 3], 0.6) && near(cWy[i * 3 + 1], 0.6) && near(cWy[i * 3 + 2], 0.6);
-        if (!yc) farGrayBad++;
-      }
-    }
-    ok(intactN > 0 && intactBad === 0, `${tag} ④远离补丁区侧壁原样（n=${intactN} 坏 ${intactBad}）`);
-    ok(farGrayBad === 0, `${tag} ④远离区颜色占位 [0.6] 未扰动（坏 ${farGrayBad}）`);
-    ok(nbCol > 0, `${tag} ④补丁外沿壁（邻补丁侧）补丁色 n=${nbCol}（坑边界壁=补丁）`);
+    ok(fx > 0 && fx < N - 4 && fy > 0 && fy < N - 2, `${tag} ②3×3 补丁区中心块界 x=${fx}，z 行 ${fy - 1}..${fy + 1}`);
+    ok(hBad === 0 && near(minDy, -PATCH_DEPTH, 1e-5) && near(maxDy, 0, 1e-5),
+      `${tag} ②深度场：坑内满深 ${minDy.toFixed(4)} / 边界线 ${maxDy.toFixed(4)}（坏 ${hBad}）`);
+    ok(pCore > 0 && pBad === 0 && wCore > 0 && wBad === 0,
+      `${tag} ②补丁区内部顶点全 PATCH_COLOR（${pCore}）；区外白（${wCore}）（坏 ${pBad}/${wBad}）`);
   }
 
-  // ---- ⑤ 确定性/幂等 ----
+  // ---- ③ 坡面插值 ----
   {
-    const A = buildTopGeometry(table0, src0, undefined, overlayOf(patch4));
-    const B = buildTopGeometry(table0, src0, undefined, overlayOf(patch4));
-    let dV = 0, dC = 0;
-    for (let i = 0; i < A.vertices.length; i++) {
-      if (A.vertices[i] !== B.vertices[i]) dV++;
-      if (A.colors[i] !== B.colors[i]) dC++;
+    let slopeV = 0, tilt = 0;
+    for (let i = 0; i < topYes.vertices.length / 3; i++) {
+      const wx = topYes.vertices[i * 3] + HALF, wz = topYes.vertices[i * 3 + 2] + HALF;
+      const dy = topYes.vertices[i * 3 + 1] - topNo.vertices[i * 3 + 1];
+      if (isP(wx, wz) && dy > -PATCH_DEPTH + 1e-6 && dy < -1e-6) slopeV++;
+      if (isP(wx, wz) && Math.abs(topYes.normals[i * 3]) > 1e-3) tilt++;
     }
-    ok(dV === 0 && dC === 0, `${tag} ⑤同 overlay 两次构建逐位一致（v=${dV} c=${dC}）`);
+    ok(slopeV > 0, `${tag} ③坡面插值顶点存在（n=${slopeV}，0>depth>−D）`);
+    const xL = fx - 1, xR = fx + 1;
+    const d0 = overlay.depthOf(xL, fy + 0.5);
+    const d1 = overlay.depthOf(xL + 0.5, fy + 0.5);
+    const d2 = overlay.depthOf(xL + 1, fy + 0.5);
+    const d3 = overlay.depthOf(xR + 1, fy + 0.5);
+    ok(d0 === 0 && d1 > 0.08 && d1 < 0.12 && d2 >= PATCH_DEPTH - 1e-6 && d3 === 0,
+      `${tag} ③深度场：坑口线 0 / 半格 0.5D / 坑内满深（${d0.toFixed(3)}/${d1.toFixed(3)}/${d2.toFixed(3)}/${d3.toFixed(3)}）`);
+    let maxStep = 0;
+    for (let s = 0; s <= 20; s++) {
+      const a = overlay.depthOf(xL + s / 20, fy + 0.3);
+      const b = overlay.depthOf(xL + (s + 1) / 20, fy + 0.3);
+      maxStep = Math.max(maxStep, Math.abs(b - a));
+    }
+    ok(maxStep < 0.03, `${tag} ③坡面连续（相邻采样最大差 ${maxStep.toFixed(4)}）`);
+    ok(tilt > 0, `${tag} ③坑缘坡面法线倾斜（n=${tilt}）`);
   }
 
-  // ---- ⑥ 跨 chunk（z=60 缝隙）：两侧同宽 patch → 双侧同一世界 x 列坑口下挖 ----
+  // ---- ③b 真实子弹 footprint（circleCells R=0.6 十字坑）中心必须满深（可见性） ----
   {
-    const AX = new Set<number>(), BX = new Set<number>();
-    for (let lx = 18; lx < 22; lx++) { AX.add(59 * N + lx); BX.add(0 * N + lx); }
-    const AYes = buildWallGeometry(table0, src0, undefined, overlayOf(AX));
-    const BYes = buildWallGeometry(table1, src1, undefined, overlayOf(BX));
-    const lowerAtSeam = (g: { vertices: Float32Array }, planeLocal: number): number[] => {
-      const out: number[] = [];
-      const v = g.vertices;
-      for (let i = 0; i < v.length; i += 3) {
-        if (near(v[i + 2], planeLocal, 1e-3)) out.push(v[i] + HALF); // 世界 x
+    const hit = { x: 20.5, z: 20.5 }; // cell 中心命中 → 十字 5 格
+    const foot = circleCells(hit.x, hit.z, 0.6, CH);
+    const arrC = new Uint8Array(N * N);
+    let inChunk = 0;
+    for (const c of foot) if (c.cx === 0 && c.cz === 0) { arrC[c.lz * N + c.lx] = 1; inChunk++; }
+    ok(inChunk >= 5, `${tag} ③b R=0.6 命中 cell 中心 → ${inChunk} 格十字坑`);
+    const ovC = buildPatchOverlay(arrC, 0, 0);
+    const dC = ovC.depthOf(hit.x, hit.z);
+    ok(dC >= PATCH_DEPTH * 0.99, `${tag} ③b 坑心满深 ${dC.toFixed(3)} ≥ 0.99D（可见坑）`);
+    const topC = buildTopGeometry(table0, src0, undefined, ovC);
+    const topCNo = buildTopGeometry(table0, src0);
+    let floorV = 0, slopeV2 = 0;
+    for (let i = 0; i < topC.vertices.length / 3; i++) {
+      const wx = topC.vertices[i * 3] + HALF, wz = topC.vertices[i * 3 + 2] + HALF;
+      const dy = topC.vertices[i * 3 + 1] - topCNo.vertices[i * 3 + 1];
+      if (wx > 19.4 && wx < 21.6 && wz > 19.4 && wz < 21.6) {
+        if (dy <= -PATCH_DEPTH * 0.95) floorV++;
+        else if (dy < -1e-6) slopeV2++;
       }
-      return out;
+    }
+    ok(floorV > 0 && slopeV2 > 0, `${tag} ③b 坑底顶点 n=${floorV} + 坡面顶点 n=${slopeV2}`);
+  }
+
+  // ---- ④ 补丁全权负责内部（主 3×3 坑）：坑缘壁补丁色；残余壁顶沿 ∈ 原面−[0,D]（随深度场） ----
+  {
+    const insideBox = (wx: number, wz: number) =>
+      wx > fx - 1.5 && wx < fx + 1.5 && wz > fy - 1.5 && wz < fy + 1.5;
+    // xz → 无补丁壁顶沿最高 y（判定残余壁是否随深度场下降且不越界）
+    const topAtXz = new Map<string, number>();
+    for (let i = 0; i < wallNo.vertices.length; i += 3) {
+      const k = wallNo.vertices[i].toFixed(3) + "," + wallNo.vertices[i + 2].toFixed(3);
+      const y = wallNo.vertices[i + 1];
+      const prev = topAtXz.get(k);
+      if (prev === undefined || y > prev) topAtXz.set(k, y);
+    }
+    let rimOK = 0, dyBad = 0, dyBadN = 0;
+    // 先取 yes 侧每 xz 的壁顶沿（max y）——dy 判定只针对顶沿顶点，底部顶点不参与
+    const yesTopXz = new Map<string, number>();
+    for (let i = 0; i < wallYes.vertices.length; i += 3) {
+      const wx = wallYes.vertices[i] + HALF, wz = wallYes.vertices[i + 2] + HALF;
+      if (!insideBox(wx, wz)) continue;
+      const k = wallYes.vertices[i].toFixed(3) + "," + wallYes.vertices[i + 2].toFixed(3);
+      const y = wallYes.vertices[i + 1];
+      const prev = yesTopXz.get(k);
+      if (prev === undefined || y > prev) yesTopXz.set(k, y);
+    }
+    for (let i = 0; i < wallYes.vertices.length; i += 3) {
+      const wx = wallYes.vertices[i] + HALF, wz = wallYes.vertices[i + 2] + HALF;
+      if (!insideBox(wx, wz)) continue;
+      const k = wallYes.vertices[i].toFixed(3) + "," + wallYes.vertices[i + 2].toFixed(3);
+      if (!near(wallYes.vertices[i + 1], yesTopXz.get(k) ?? -1e9, 1e-3)) continue; // 非顶沿
+      const noTop = topAtXz.get(k);
+      if (noTop === undefined) continue;
+      const dy = wallYes.vertices[i + 1] - noTop;
+      // 顶沿允许随深度场下降 [−D, 0]；超出 = 错位/悬空
+      if (dy < -PATCH_DEPTH - 1e-4 || dy > 1e-4) { dyBad++; dyBadN++; }
+      if (dy > -PATCH_DEPTH + 1e-4 && isPatchCol(wallYes.colors, i)) rimOK++;
+    }
+    ok(rimOK > 0, `${tag} ④坑缘/坑内壁补丁色（n=${rimOK}）`);
+    ok(dyBad === 0, `${tag} ④坑内壁高度 ∈ 原面−[0,D] 无错位（坏 ${dyBadN}）`);
+  }
+
+  // ---- ④a 远离区：壁顶点多集（x,y,z）逐位一致 + 颜色灰 ----
+  {
+    const farCheck = (g: { vertices: Float32Array; colors: Float32Array }, farFn: (wx: number, wz: number) => boolean) => {
+      const m = new Map<string, number>();
+      let grayBad = 0;
+      for (let i = 0; i < g.vertices.length / 3; i++) {
+        const wx = g.vertices[i * 3] + HALF, wz = g.vertices[i * 3 + 2] + HALF;
+        if (!farFn(wx, wz)) continue;
+        const k = g.vertices[i * 3].toFixed(3) + "," + g.vertices[i * 3 + 1].toFixed(3) + "," + g.vertices[i * 3 + 2].toFixed(3);
+        m.set(k, (m.get(k) ?? 0) + 1);
+        if (!near(g.colors[i * 3], 0.6)) grayBad++;
+      }
+      return { m, grayBad };
     };
-    const ax = lowerAtSeam(AYes, 30);   // chunk(0,0) 南壁 local z=30 (world 60)
-    const bx = lowerAtSeam(BYes, -30);  // chunk(0,1) 北壁 local z=−30 (world 60)
-    ok(ax.length > 0 && bx.length > 0, `${tag} ⑥缝隙双侧坑壁存在（A ${ax.length} B ${bx.length} 顶点）`);
-    const shared = ax.some((x) => bx.some((y) => near(x, y, 0.05)));
-    ok(shared, `${tag} ⑥同一世界 x 列双侧都有坑口 → 边界棱闭合`);
+    const farFn = (wx: number, wz: number) => {
+      const { lx, lz } = wOf(wx, wz);
+      return !(lx >= fx - 3 && lx <= fx + 3 && lz >= fy - 3 && lz <= fy + 3);
+    };
+    const FNo = farCheck(wallNo, farFn);
+    const FYes = farCheck(wallYes, farFn);
+    let farSame = FNo.m.size === FYes.m.size;
+    if (farSame) for (const [k, v] of FNo.m) if (FYes.m.get(k) !== v) { farSame = false; break; }
+    ok(farSame, `${tag} ④远离区壁逐位一致（no=${FNo.m.size} yes=${FYes.m.size}）`);
+    ok(FYes.grayBad === 0, `${tag} ④远离区颜色占位 [0.6] 未扰动（坏 ${FYes.grayBad}）`);
+  }
+
+  // ---- ④b 壁覆写语义：flush 平隔断 → 剔除；台阶（可见崖壁）→ 保留+补丁化+顶沿随深度场 ----
+  {
+    // 搜索地形里真实存在的块界平面（x 为 4 的倍数）：<0.02m = flush，>0.25m = 台阶
+    const planeDiff = (p: number, zS: number) => {
+      const bz0 = Math.floor(zS / 4);
+      const hE = topYView(table0, src0, p / 4, bz0, p, zS);
+      const hW = topYView(table0, src0, p / 4 - 1, bz0, p, zS);
+      return Math.abs(hE - hW);
+    };
+    let fPlane = -1, fR0 = -1, sPlane = -1, sR0 = -1;
+    for (let p = 12; p <= 44; p += 4) {
+      for (let b = 5; b <= 9; b++) {
+        const r0 = b * 4 + 1; // 该 4m 带内第 2 行起的两行（区域行 r0,r0+1）
+        const df = planeDiff(p, r0) + planeDiff(p, r0 + 1) + planeDiff(p, r0 + 2);
+        if (fPlane < 0 && df < 0.03) { fPlane = p; fR0 = r0; }
+        if (sPlane < 0 && planeDiff(p, r0 + 1.5) > 0.25) { sPlane = p; sR0 = r0; }
+        if (fPlane > 0 && sPlane > 0) break;
+      }
+      if (fPlane > 0 && sPlane > 0) break;
+    }
+    const regionOf = (p: number, r0: number) => {
+      const a = new Uint8Array(N * N);
+      for (let lz = r0; lz <= r0 + 1; lz++) for (let lx = p - 2; lx <= p + 1; lx++) a[lz * N + lx] = 1;
+      return a;
+    };
+    const planeStats = (gYes: { vertices: Float32Array; colors: Float32Array }, gNo: { vertices: Float32Array }, p: number, r0: number) => {
+      const noTop = new Map<string, number>();
+      for (let i = 0; i < gNo.vertices.length; i += 3) {
+        const wx = gNo.vertices[i] + HALF;
+        if (wx > p - 0.5 && wx < p + 0.5) {
+          const k = gNo.vertices[i].toFixed(3) + "," + gNo.vertices[i + 2].toFixed(3);
+          const y = gNo.vertices[i + 1];
+          const prev = noTop.get(k);
+          if (prev === undefined || y > prev) noTop.set(k, y);
+        }
+      }
+      let n = 0, colored = 0, deep = 0;
+      for (let i = 0; i < gYes.vertices.length; i += 3) {
+        const wx = gYes.vertices[i] + HALF, wz = gYes.vertices[i + 2] + HALF;
+        if (!near(wx, p, 1e-3)) continue;
+        if (wz < r0 + 0.1 || wz > r0 + 1.9) continue;
+        n++;
+        if (isPatchCol(gYes.colors, i)) colored++;
+        const noTopY = noTop.get(gYes.vertices[i].toFixed(3) + "," + gYes.vertices[i + 2].toFixed(3));
+        if (noTopY !== undefined && gYes.vertices[i + 1] <= noTopY - PATCH_DEPTH + 0.01) deep++;
+      }
+      return { n, colored, deep };
+    };
+    ok(fPlane > 0 && sPlane > 0, `${tag} ④b 地形内找到 flush 平面 x=${fPlane} 与台阶平面 x=${sPlane}（行 ${fR0}/${sR0}）`);
+    if (fPlane > 0) {
+      const ovF = buildPatchOverlay(regionOf(fPlane, fR0), 0, 0);
+      const wFNo = buildWallGeometry(table0, src0);
+      const wFYes = buildWallGeometry(table0, src0, undefined, ovF);
+      const b4 = planeStats(wFNo, wFNo, fPlane, fR0).n;
+      const a4 = planeStats(wFYes, wFNo, fPlane, fR0);
+      ok(b4 > 0 && a4.n === 0, `${tag} ④b flush 平隔断整段剔除（补丁前 ${b4} → 补丁后 ${a4.n}）`);
+    }
+    if (sPlane > 0) {
+      const ovS2 = buildPatchOverlay(regionOf(sPlane, sR0), 0, 0);
+      const wSNo = buildWallGeometry(table0, src0);
+      const wSYes = buildWallGeometry(table0, src0, undefined, ovS2);
+      const aS = planeStats(wSYes, wSNo, sPlane, sR0);
+      ok(aS.n > 0 && aS.colored === aS.n,
+        `${tag} ④b 台阶壁保留且全补丁色（n=${aS.n} 补丁 ${aS.colored}）——无空洞`);
+      ok(aS.deep > 0, `${tag} ④b 台阶壁顶沿随深度场下降（满深顶点 n=${aS.deep}）——坑底落地`);
+    }
+  }
+
+
+  {
+    const A = buildTopGeometry(table0, src0, undefined, overlay);
+    const B = buildTopGeometry(table0, src0, undefined, overlay);
+    let dV = 0;
+    for (let i = 0; i < A.vertices.length; i++) if (A.vertices[i] !== B.vertices[i]) dV++;
+    ok(dV === 0, `${tag} ⑤同 overlay 两次构建逐位一致（v=${dV}）`);
+  }
+
+  // ---- ⑥ 跨 chunk：补丁触 seam ----
+  {
+    const mk = (rows: number[]) => {
+      const a = new Uint8Array(N * N);
+      for (let lx = 18; lx < 22; lx++) for (const lz of rows) a[lz * N + lx] = 1;
+      return a;
+    };
+    const ovS0 = buildPatchOverlay(mk([59]), 0, 0);
+    const ovS1 = buildPatchOverlay(mk([0]), 0, 1);
+    ok(near(ovS0.depthOf(20, 59.999), 0, 1e-6) && near(ovS1.depthOf(20, 60.001), 0, 1e-6),
+      `${tag} ⑥seam 两侧深度各自收口为 0（封死不悬空）`);
+    const dMid = ovS0.depthOf(20, 59.5);
+    ok(dMid > 0 && dMid < PATCH_DEPTH, `${tag} ⑥seam 行坡降存在（${dMid.toFixed(3)}）`);
+    const wS0 = buildWallGeometry(table0, src0, undefined, ovS0);
+    const wS1 = buildWallGeometry(table1, src1, undefined, ovS1);
+    let seam0 = 0, seam1 = 0, seamBad = 0;
+    for (let i = 0; i < wS0.vertices.length; i += 3) {
+      const wz = wS0.vertices[i + 2] + HALF;
+      if (near(wz, CH, 1e-3) && isPatchCol(wS0.colors, i)) seam0++;
+      else if (isPatchCol(wS0.colors, i)) seamBad++;
+    }
+    for (let i = 0; i < wS1.vertices.length; i += 3) {
+      const wz = wS1.vertices[i + 2] + 60 + HALF;
+      if (near(wz, CH, 1e-3) && isPatchCol(wS1.colors, i)) seam1++;
+    }
+    ok(seam0 > 0 && seam1 > 0, `${tag} ⑥seam 壁双侧保留且补丁色（A ${seam0} / B ${seam1}）`);
+    ok(seamBad === 0, `${tag} ⑥无其他补丁色壁（越界着色 = ${seamBad}）`);
   }
 }
 
