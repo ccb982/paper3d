@@ -214,7 +214,7 @@ function run(seed: number) {
         if (!farFn(wx, wz)) continue;
         const k = g.vertices[i * 3].toFixed(3) + "," + g.vertices[i * 3 + 1].toFixed(3) + "," + g.vertices[i * 3 + 2].toFixed(3);
         m.set(k, (m.get(k) ?? 0) + 1);
-        if (!near(g.colors[i * 3], 0.6)) grayBad++;
+        if (!near(g.colors[i * 3], 1.0)) grayBad++;
       }
       return { m, grayBad };
     };
@@ -227,7 +227,7 @@ function run(seed: number) {
     let farSame = FNo.m.size === FYes.m.size;
     if (farSame) for (const [k, v] of FNo.m) if (FYes.m.get(k) !== v) { farSame = false; break; }
     ok(farSame, `${tag} ④远离区壁逐位一致（no=${FNo.m.size} yes=${FYes.m.size}）`);
-    ok(FYes.grayBad === 0, `${tag} ④远离区颜色占位 [0.6] 未扰动（坏 ${FYes.grayBad}）`);
+    ok(FYes.grayBad === 0, `${tag} ④远离区颜色 = 中性白 [1,1,1] 未扰动（坏 ${FYes.grayBad}）`);
   }
 
   // ---- ④b 壁覆写语义：flush 平隔断 → 剔除；台阶（可见崖壁）→ 保留+补丁化+顶沿随深度场 ----
@@ -239,16 +239,19 @@ function run(seed: number) {
       const hW = topYView(table0, src0, p / 4 - 1, bz0, p, zS);
       return Math.abs(hE - hW);
     };
-    let fPlane = -1, fR0 = -1, sPlane = -1, sR0 = -1;
+    let fPlane = -1, fR0 = -1, sPlane = -1, sR0 = -1, tPlane = -1, tR0 = -1;
     for (let p = 12; p <= 44; p += 4) {
       for (let b = 5; b <= 9; b++) {
         const r0 = b * 4 + 1; // 该 4m 带内第 2 行起的两行（区域行 r0,r0+1）
-        const df = planeDiff(p, r0) + planeDiff(p, r0 + 1) + planeDiff(p, r0 + 2);
-        if (fPlane < 0 && df < 0.03) { fPlane = p; fR0 = r0; }
-        if (sPlane < 0 && planeDiff(p, r0 + 1.5) > 0.25) { sPlane = p; sR0 = r0; }
-        if (fPlane > 0 && sPlane > 0) break;
+        const dA = planeDiff(p, r0), dB = planeDiff(p, r0 + 1), dC = planeDiff(p, r0 + 2);
+        const dMax = Math.max(dA, dB, dC);
+        const dMid = planeDiff(p, r0 + 1.5);
+        if (fPlane < 0 && dMax < 0.002) { fPlane = p; fR0 = r0; }          // 真 flush（浮点噪声级）
+        if (tPlane < 0 && dMid > 0.0025 && dMax < 0.03) { tPlane = p; tR0 = r0; } // 微小高台棱
+        if (sPlane < 0 && dMid > 0.25) { sPlane = p; sR0 = r0; }           // 大台阶
+        if (fPlane > 0 && sPlane > 0 && tPlane > 0) break;
       }
-      if (fPlane > 0 && sPlane > 0) break;
+      if (fPlane > 0 && sPlane > 0 && tPlane > 0) break;
     }
     const regionOf = (p: number, r0: number) => {
       const a = new Uint8Array(N * N);
@@ -278,7 +281,8 @@ function run(seed: number) {
       }
       return { n, colored, deep };
     };
-    ok(fPlane > 0 && sPlane > 0, `${tag} ④b 地形内找到 flush 平面 x=${fPlane} 与台阶平面 x=${sPlane}（行 ${fR0}/${sR0}）`);
+    ok(fPlane > 0 && sPlane > 0 && tPlane > 0,
+      `${tag} ④b 找到 flush x=${fPlane} / 微小棱 x=${tPlane} / 台阶 x=${sPlane}（行 ${fR0}/${tR0}/${sR0}）`);
     if (fPlane > 0) {
       const ovF = buildPatchOverlay(regionOf(fPlane, fR0), 0, 0);
       const wFNo = buildWallGeometry(table0, src0);
@@ -286,6 +290,14 @@ function run(seed: number) {
       const b4 = planeStats(wFNo, wFNo, fPlane, fR0).n;
       const a4 = planeStats(wFYes, wFNo, fPlane, fR0);
       ok(b4 > 0 && a4.n === 0, `${tag} ④b flush 平隔断整段剔除（补丁前 ${b4} → 补丁后 ${a4.n}）`);
+    }
+    if (tPlane > 0) {
+      const ovT = buildPatchOverlay(regionOf(tPlane, tR0), 0, 0);
+      const wTNo = buildWallGeometry(table0, src0);
+      const wTYes = buildWallGeometry(table0, src0, undefined, ovT);
+      const aT = planeStats(wTYes, wTNo, tPlane, tR0);
+      ok(aT.n > 0 && aT.colored === aT.n,
+        `${tag} ④b 微小高台棱侧壁保留（毫米级高差也有壁；n=${aT.n} 全补丁色 ${aT.colored}）`);
     }
     if (sPlane > 0) {
       const ovS2 = buildPatchOverlay(regionOf(sPlane, sR0), 0, 0);

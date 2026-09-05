@@ -50,17 +50,27 @@ export interface FaceGeometry {
 //   3) 坑缘壁保留且顶沿=原地面（边界线深度 0 → 与坡面起点同高），坑底才落地不悬空；
 //      坑缘壁仍用补丁色（坑的侧壁材质依旧属于补丁）。
 //   4) 物理=视觉同源（布局不变，外壳保持水密）。
+// ★ 顶点色语义 = 乘性染色开关：中性白(1,1,1) → 不变（原 tile 材质）；非中性色
+//   （补丁焦土乘数，通道不相等以便 shader 区分）→ albedo/base 乘上该色 → 保留
+//   原纹理细节的"烧焦"观感（非替换——替换会丢纹理成贴纸；非 0.16 级深乘——会全黑）。
 export const PATCH_DEPTH = 0.2;      // 补丁下挖深度（§13.2 T2 轻量档）
-export const PATCH_COLOR: [number, number, number] = [0.16, 0.135, 0.12]; // 焦土色（线性）
+// ★ 补丁染色 = 乘性焦土调（线性空间乘到 albedo 上；白(1,1,1)=原样）。
+//   2026-09-05 两轮修正：①原值 [0.16,0.135,0.12] 作为乘数在线性空间把纹理压到近黑
+//   （用户：全黑看不到颜色）；②改为"整块替换纯色"又丢了纹理细节（用户：像贴纸）。
+//   定案：保留原纹理明暗/颗粒（乘性不破坏相对亮度），乘数取可见的烧焦褐调
+//   （≈ 原亮度 55~65% + R>G>B 暖褐偏色），草地/沙地烧完深浅自然不同。
+export const PATCH_COLOR: [number, number, number] = [0.62, 0.52, 0.42]; // 乘性焦土调（线性）
 const PATCH_SLOPE_CELLS = 1;   // 坡面宽度（m，一个 coarse cell；坑缘平滑坡降距离）
-const WALL_FLUSH_EPS = 0.02;   // 壁两侧表面视为等高的容差（m；高于此 = 可见台阶壁须保留）
+const WALL_FLUSH_EPS = 0.002;  // 壁两侧表面视为等高的容差（m）。★ 只收浮点噪声级：
+                               // 真实地形哪怕 3~5mm 的高台棱也是可见侧壁，剔除会使其消失
+                               // （2026-09-05 用户：微小高差地面补丁后侧壁不应消失）。
 
 export interface PatchOverlay {
   /** 1m coarse cell(lx,lz)（chunk 局部）是否处于补丁区 */
   isPatched(lx: number, lz: number): boolean;
   /** 世界坐标补丁深度（逐顶点采样；坑内 = PATCH_DEPTH，坑缘坡降 → 0） */
   depthOf(wx: number, wz: number): number;
-  /** 补丁顶点色（线性 rgb；× albedo 收口为焦土色） */
+  /** 补丁顶点色（线性 rgb；材质替换基准色 = 焦土色） */
   color: [number, number, number];
 }
 
@@ -654,7 +664,7 @@ export function buildWallGeometry(
               nor.push(nrm.dx, 0, nrm.dz);
               uv.push(uU, uV);
               if (pc) col.push(pc[0], pc[1], pc[2]); // 补丁色（坑内壁面=统一补丁材质）
-              else col.push(0.6, 0.6, 0.6); // 顶点色占位（shader 调）
+              else col.push(1, 1, 1); // 中性白：顶点色=材质替换开关（非中性=补丁）
               shd.push(1);
             }
             // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向

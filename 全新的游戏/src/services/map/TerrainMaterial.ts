@@ -463,6 +463,9 @@ const FRAGMENT_MAIN = /* glsl */ `
         #include <common>
         #include <fog_pars_fragment>
         void main() {
+          // ★ 补丁 = 乘性焦土染色（2026-09-05 定案）：顶点色 = 乘数（白=原样、非中性色=
+          //   烧焦调）。albedo × vColor 保留纹理明暗/颗粒 → "地面被烧过"而非换纸；
+          //   乘数亮度由 PATCH_COLOR 保证（0.16 级深乘会全黑；整块替换会丢纹理）。
           vec3 alb = texture2D(uAlbedo, vUv).rgb * vColor;
           vec3 lm = texture2D(uLightmap, vUv).rgb;      // r=直射 / g=AO
           int id = int(texture2D(uTileIds, vUv).r * 255.0 + 0.5);
@@ -552,7 +555,7 @@ const FRAGMENT_MAIN = /* glsl */ `
 
 export class TerrainMaterial extends THREE.ShaderMaterial {
   constructor(albedo: THREE.Texture, lightmap: THREE.Texture, cfg?: TileRenderConfig, useVertexColor = false) {
-    // ★ 补丁顶点色通道（§14.10）：补丁区 cell 逐顶点 × 焦土色 → albedo 收口；
+    // ★ 补丁顶点色通道（§14.10）：中性白(1,1,1)=原样；非中性色=乘性焦土染色（albedo × vColor）
     //   useVertexColor=true 时必须由 geometry 提供 'color' 属性（或缺省置信白）
     const vcVar = useVertexColor ? 'vColor = color;' : 'vColor = vec3(1.0);';
     super({
@@ -668,7 +671,7 @@ const WALL_FRAG = /* glsl */ `
   varying vec2 vUv;
   varying vec2 vUvC;
   varying vec2 vTex;
-  varying vec3 vColor;   // ★ 补丁色通道（× albedo）
+  varying vec3 vColor;   // ★ 补丁色通道（乘性染色；白=原样）
   #include <common>
   #include <fog_pars_fragment>
   void main() {
@@ -681,6 +684,7 @@ const WALL_FRAG = /* glsl */ `
     //   色偏。改为非水墙采样 vUv（墙顶所属地块中心，与 uTileIds 同源）——
     //   光照与顶面同源同值，wallGain 回归 1.0，颜色自然一致（墙 = 顶面延展）。
     //   水墙保持墙脚投影 + 低增益（深暗水面观感是专调效果）。
+    // ★ 补丁 = 乘性焦土染色（与顶面同款：albedo × vColor，保留墙面纹理细节）
     vec3 alb = texture2D(uAlbedo, isWaterWall ? vUvC : vUv).rgb * vColor;
     vec3 lm = texture2D(uLightmap, isWaterWall ? vUvC : vUv).rgb;
     vec3 field = shadeField(vTex);
@@ -727,7 +731,7 @@ export class WallMaterial extends THREE.ShaderMaterial {
     albedo: THREE.Texture,
     lightmap: THREE.Texture,
     cfg?: TileRenderConfig,
-    useVertexColor = false, // ★ 补丁色通道（§14.10）：坑内壁面逐顶点 × 焦土色
+    useVertexColor = false, // ★ 补丁色通道（§14.10）：乘性焦土染色
   ) {
     const u = Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
       uAlbedo: { value: albedo },
