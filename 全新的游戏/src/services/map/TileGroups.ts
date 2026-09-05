@@ -46,7 +46,7 @@ export const SEMANTIC_THEME_MIX = 0.45;
 export interface GroupDef {
   key: string;
   label: string;
-  /** 选组权重（foundation 固定 0 = 不参与选组，只作回退） */
+  /** 选组权重（0 = 不参与选组，只作回退） */
   weight: number;
   /** 成员权重表：tileKey → 相对权重 */
   members: Record<string, number>;
@@ -99,9 +99,11 @@ const NEUTRAL_PALETTE: GroupPalette = { hueShift: 0, satMul: 1, lightMul: 1 };
 const NEUTRAL_GEN: GroupGen = { densityBias: 0, waterMul: 1, pitMul: 1 };
 
 registerGroup({
-  key: 'foundation', label: '基石', weight: 0,
-  // ★ 2026-09-02 1-7 写实风落地：默认组改用沙土变体（纯色+细沙粒，无斑点纹理）；
-  //   基础 5 类保留注册作回归基线，不再被默认组抽中。
+  key: 'foundation', label: '基石',
+  // ★ 2026-09-05 转正：用户定调"1-7 沙土风才是精心制作的主力内容"——
+  //   基石组参与正式选组（权重 1，与主题组均等，中性调色保持原味）；
+  //   兼职不变：生效组缺角色时仍走本组回退。
+  weight: 1,
   members: { flat_sand: 1, platform_sand: 1, water: 1, pit: 1 },
   palette: NEUTRAL_PALETTE, gen: NEUTRAL_GEN,
 });
@@ -190,7 +192,7 @@ export function getTestGroup(): string | null {
   return testGroupOverride;
 }
 
-/** 每 chunk 加权抽一个生效组（排除 foundation；确定性） */
+/** 每 chunk 加权抽一个生效组（weight>0 全部参与，含转正的基石组；确定性） */
 export function pickChunkGroup(seed: number, cx: number, cz: number): GroupDef {
   validateTileGroupSync();
   // ★ 测试地图覆盖：最高优先级（chunk 级确定性——覆盖期间同 seed 恒同组）
