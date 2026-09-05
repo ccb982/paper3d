@@ -15,7 +15,7 @@ interface PatchChunkMsg {
   seed: number;
   cx: number;
   cz: number;
-  mask: Uint8Array;
+  levels: Uint8Array;
   chunks: {
     ccx: number;
     ccz: number;
@@ -48,13 +48,13 @@ ctx.onmessage = (ev: MessageEvent) => {
   if (msg.type !== "patchBuild") return;
   const chunks = new Map<string, { heights: Float32Array; blockTypes: Uint8Array }>();
   for (const c of msg.chunks) chunks.set(`${c.ccx},${c.ccz}`, c);
-  const mask = msg.mask && msg.mask.length > 0 ? msg.mask : undefined;
+  const levels = msg.levels && msg.levels.length > 0 ? msg.levels : undefined;
   const out = computeTableGeometry(
     (ccx, ccz) => chunks.get(`${ccx},${ccz}`),
     msg.seed,
     msg.cx,
     msg.cz,
-    mask,
+    levels,
   );
   ctx.postMessage(
     { type: "result", id: msg.id, ...out },

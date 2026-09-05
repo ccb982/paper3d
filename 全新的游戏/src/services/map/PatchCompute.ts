@@ -12,7 +12,7 @@ import { buildFaceTable } from "./FaceTable";
 import {
   buildTopGeometry,
   buildWallGeometry,
-  buildPatchOverlay,
+  buildLevelOverlay,
   type FaceGeometry,
 } from "./FaceBuild";
 import {
@@ -45,9 +45,10 @@ export interface PatchGeomRaw {
 export type PatchGeomResult = PatchGeomRaw;
 
 /**
- * ★ 唯一几何生成函数（表驱动 + 补丁掩码）：
+ * ★ 唯一几何生成函数（表驱动 + 补丁层数覆盖）：
  * readChunk 闭包 = 共享源数据（主线程 = RasterMap.getChunkData；Worker =
- * 传输拷贝）。内部与 RasterMap.chunkSource 同一路径：makeChunkSource →
+ * 传输拷贝）；levels = 中心 chunk 的层数表（§14.11；缺省 undefined = 无补丁）。
+ * 内部与 RasterMap.chunkSource 同一路径：makeChunkSource →
  * refineChunkSource(seed, cx, cz) → buildFaceTable → 双 builder。
  */
 export function computeTableGeometry(
@@ -55,10 +56,10 @@ export function computeTableGeometry(
   seed: number,
   cx: number,
   cz: number,
-  mask: Uint8Array | undefined,
+  levels?: Uint8Array,
 ): PatchGeomResult {
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
-  const patch = mask && mask.length > 0 ? buildPatchOverlay(mask, cx, cz) : undefined;
+  const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz) : undefined;
   const table = buildFaceTable(src, cx, cz);
   const top = buildTopGeometry(table, src, patch);
   const wall = buildWallGeometry(table, src, patch);

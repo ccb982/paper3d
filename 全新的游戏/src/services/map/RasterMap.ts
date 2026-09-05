@@ -23,7 +23,7 @@ import {
 } from "./Refinements";
 import { ppSurfaceHeight } from "./RefinementPostProcess";
 import type { BlockFaceIndexBundle } from "./BlockFaceIndex";
-import { depthAtWorld as patchStateDepth } from "./PatchState";
+import { envelopeLevelAt, PATCH_DEPTH } from "./FaceBuild";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -155,10 +155,62 @@ export class RasterMap {
     // ★ 坑裂后处理已弃用（2026-09-05，POST_PROCESS_ENABLED=false）：
     //   ppSurfaceHeight ≡ 纯精修层视觉面（cornerCell 三角插值，无坑/裂/旧倒角）。
     //   表驱动 weld/fine 微差为 §8 P1 收敛项。
-    // ★ 补丁同步（2026-09-05）：渲染/trimesh/玩法高度三端同源 —— 角色脚底/
-    //   clamp/贴地查询一律减补丁深度场（坑内 = PATCH_DEPTH，坑缘坡降 → 0）
+    // ★ §14.11 三端同源：渲染几何 / rapier trimesh / 玩法高度采样共读同一张
+    //   levels 覆盖层（包络场 u×D；角色脚底/贴地/clamp 落入坑内）
     return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz))
-      - patchStateDepth(x, z);
+      - this.levelDepthAt(x, z);
+  }
+
+  // ============ ★ §14.11 补丁层数覆盖层（运行时唯一写者 = 子弹命中） ============
+
+  /** chunk 层数表（惰性确保存在；生成器恒 0） */
+  levelsOf(cx: number, cz: number): Uint8Array {
+    this.ensureChunk(cx, cz);
+    return this.chunks.get(chunkKeyOf(cx, cz))!.levels;
+  }
+
+  /** 世界点补丁深度（m）：包络场 u × PATCH_DEPTH（坑内=N×D，坑缘 0.5m/层过渡） */
+  levelDepthAt(x: number, z: number): number {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
+    if (!chunk) return 0;
+    return envelopeLevelAt(chunk.levels, CHUNK_SIZE, ccx, ccz, x, z) * PATCH_DEPTH;
+  }
+
+  /** 世界坐标所在 1m cell 是否已有补丁层（>0） */
+  isLevelPatched(x: number, z: number): boolean {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
+    if (!chunk) return false;
+    const lx = Math.floor(x - ccx * CHUNK_SIZE);
+    const lz = Math.floor(z - ccz * CHUNK_SIZE);
+    if (lx < 0 || lz < 0 || lx >= CHUNK_SIZE || lz >= CHUNK_SIZE) return false;
+    return chunk.levels[lz * CHUNK_SIZE + lx] > 0;
+  }
+
+  /**
+   * ★ 命中一枪：footprint 内每个 cell 层数 +1（§14.11 逐格计数，不封顶）。
+   * 返回"是否有可见变化"（决定是否重建）：用包络场在 footprint cell 中心
+   * 的前后差分判定 —— 层数再涨但被几何饱和吸收（无内墙窄坑的硬上限）→ 跳过。
+   */
+  digCells(cx: number, cz: number, cells: { lx: number; lz: number }[]): boolean {
+    const levels = this.levelsOf(cx, cz);
+    if (cells.length === 0) return false;
+    const before = new Uint8Array(levels); // 3.6KB 拷贝，用于差分
+    let changed = false;
+    for (const c of cells) {
+      if (levels[c.lz * CHUNK_SIZE + c.lx] < 255) levels[c.lz * CHUNK_SIZE + c.lx]++;
+    }
+    for (const c of cells) {
+      const wx = cx * CHUNK_SIZE + c.lx + 0.5;
+      const wz = cz * CHUNK_SIZE + c.lz + 0.5;
+      const u0 = envelopeLevelAt(before, CHUNK_SIZE, cx, cz, wx, wz);
+      const u1 = envelopeLevelAt(levels, CHUNK_SIZE, cx, cz, wx, wz);
+      if (u1 - u0 > 1e-9) { changed = true; break; }
+    }
+    return changed;
   }
 
   /** ★ per-chunk 构建源（§8 第四步意图分置）：surfaceBlocks 原始源经本 chunk

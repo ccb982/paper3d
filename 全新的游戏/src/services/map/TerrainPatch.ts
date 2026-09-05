@@ -66,11 +66,11 @@ class TerrainPatchService {
   }
 
   /**
-   * 计算带补丁掩码的 chunk 几何。
+   * 计算带补丁层数表的 chunk 几何。
    * @returns 几何字节；Worker 失败 → resolve(null)，调用方走标准烘焙兜底。
    */
   compute(
-    req: { seed: number; cx: number; cz: number; mask: Uint8Array | undefined },
+    req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined },
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<PatchGeomResult | null> {
     const { seed, cx, cz } = req;
@@ -91,7 +91,7 @@ class TerrainPatchService {
     const w = this.ensure();
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
-      return Promise.resolve(computeTableGeometry(readChunk, seed, cx, cz, req.mask));
+      return Promise.resolve(computeTableGeometry(readChunk, seed, cx, cz, req.levels));
     }
     const id = this.nextId++;
     return new Promise((resolve) => {
@@ -100,9 +100,8 @@ class TerrainPatchService {
       for (const c of chunks) {
         transfer.push(c.heights.buffer, c.blockTypes.buffer);
       }
-      if (req.mask) transfer.push(req.mask.buffer);
-      // 掩码所有权转移：调用方不得复用（ChunkManager 持有的是 patches 表本体，
-      // 须传入拷贝——见 ChunkManager.patchRebuildChunk 的 mask 拷贝语义）
+      if (req.levels) transfer.push(req.levels.buffer);
+      // 层数表所有权转移：调用方必须传拷贝（ChunkManager 已拷贝，本体在 chunk 数据）
       w.postMessage(
         {
           type: "patchBuild",
@@ -110,7 +109,7 @@ class TerrainPatchService {
           seed,
           cx,
           cz,
-          mask: req.mask ?? new Uint8Array(0),
+          levels: req.levels ?? new Uint8Array(0),
           chunks,
         },
         transfer,

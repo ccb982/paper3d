@@ -125,6 +125,85 @@ export function buildPatchOverlay(
 }
 
 // ------------------------------------------------------------
+// ★ 层数覆盖（§14.11 无限修补）：逐 1m cell 深度计数 + 连续包络场
+// ------------------------------------------------------------
+
+/** 每层过渡宽度（m/层；§14.11.2 原型锁定默认 0.5） */
+export const PATCH_LEVEL_WIDTH = 0.5;
+
+/**
+ * 包络场（原型定稿，chunk 局部）：
+ * u(p) = min over 4 卡氏射线 r of min_{k≥0}[ N[j+k] + d_k(p) / W ]
+ *   - j = p 所在 cell；k=0 项 = N_p（自身 cell 常数地板，diag 不上射线 → 不泄压）
+ *   - d_k = p 到第 k 个 cell 最近边的轴距（+x = k−frac；−x = frac+(k−1)；z 同理）
+ *   - 出 chunk 界视作层 0（seam 收口，几何与采样同规则）
+ * 返回 u（层数，可为小数）；几何深度 = u × PATCH_DEPTH。
+ */
+export function envelopeLevelAt(
+  levels: Uint8Array,
+  chunkSize: number,
+  cx: number,
+  cz: number,
+  x: number,
+  z: number,
+  W: number = PATCH_LEVEL_WIDTH,
+): number {
+  const px = x - cx * chunkSize, pz = z - cz * chunkSize;
+  const lx = Math.floor(px), lz = Math.floor(pz);
+  if (lx < 0 || lz < 0 || lx >= chunkSize || lz >= chunkSize) return 0;
+  const fx = px - lx, fz = pz - lz;
+  const own = levels[lz * chunkSize + lx];
+  if (own === 0) return 0;
+  let best = own;
+  const edge = { px: chunkSize - px, nx: px, pz: chunkSize - pz, nz: pz };
+  const ray = (
+    cellIdx: (k: number) => number,   // 返回该方向第 k 个 cell 的线性下标；<0 = 已出界
+    dOf: (k: number) => number,       // 到该 cell 最近边轴距（k≥1）
+    edgeKey: 'px' | 'nx' | 'pz' | 'nz',
+  ): void => {
+    let v = best;
+    for (let k = 1; ; k++) {
+      const c = cellIdx(k);
+      if (c < 0) {
+        // ★ 出 chunk 界 = 虚拟层 0：到 chunk 边界平面距离收口（seam 语义）
+        const cand = edge[edgeKey] / W;
+        if (cand < v) v = cand;
+        break;
+      }
+      const d = dOf(k);
+      const cand = levels[c] + d / W;
+      if (cand < v) { v = cand; if (v <= 0) break; }
+      if (d / W >= v) break; // 后续轴距单调增 → 剪枝
+    }
+    if (v < best) best = v;
+  };
+  ray((k) => (lx + k < chunkSize ? lz * chunkSize + (lx + k) : -1), (k) => k - fx, 'px');
+  ray((k) => (lx - k >= 0 ? lz * chunkSize + (lx - k) : -1), (k) => fx + (k - 1), 'nx');
+  ray((k) => (lz + k < chunkSize ? (lz + k) * chunkSize + lx : -1), (k) => k - fz, 'pz');
+  ray((k) => (lz - k >= 0 ? (lz - k) * chunkSize + lx : -1), (k) => fz + (k - 1), 'nz');
+  return Math.max(0, best);
+}
+
+/**
+ * 层数掩码 → PatchOverlay（isPatched = 层>0；depthOf = 包络场 u × depth）。
+ * 渲染几何/高度采样共用同一函数（§14.11 单一真源）。
+ */
+export function buildLevelOverlay(
+  levels: Uint8Array,
+  cx: number,
+  cz: number,
+  depth: number = PATCH_DEPTH,
+  color: readonly [number, number, number] = PATCH_COLOR,
+): PatchOverlay {
+  const chunkSize = Math.round(Math.sqrt(levels.length));
+  const isPatched = (lx: number, lz: number): boolean =>
+    lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize && levels[lz * chunkSize + lx] > 0;
+  const depthOf = (wx: number, wz: number): number =>
+    envelopeLevelAt(levels, chunkSize, cx, cz, wx, wz) * depth;
+  return { isPatched, depthOf, color: color.slice() as [number, number, number] };
+}
+
+// ------------------------------------------------------------
 // 顶面高度（视觉面 + bevel 弧带下弯）
 // ------------------------------------------------------------
 

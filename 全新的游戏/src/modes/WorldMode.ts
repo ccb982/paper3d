@@ -516,7 +516,12 @@ export class WorldMode implements IGameMode {
     if (e.controller.isAirborne()) return;
     const p = e.position;
     const targetY = this.raster.surfaceHeightAt(p.x, p.z);
-    if (targetY >= -1.5) {
+    // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
+    //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须
+    //   所在 4m 地块是坑洞（tileDefAt.isDepression）。普通地块被挖深的补丁坑：
+    //   正常贴地站立（不沉落、不判死）；天然坑洞：维持沉落死亡。
+    const onPitTile = this.raster.tileDefAt(p.x, p.z).isDepression;
+    if (targetY >= -1.5 || !onPitTile) {
       const dy = targetY - p.y;
       if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
       else p.y += Math.max(dy, -25 * dt);

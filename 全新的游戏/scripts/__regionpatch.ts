@@ -11,7 +11,7 @@
  *   ⑧ Worker 字节级一致性：活闭包 vs 传输拷贝闭包（= terrainPatch 路径）逐位一致
  */
 import {
-  buildPatchOverlay,
+  buildLevelOverlay,
   buildTopGeometry,
   buildWallGeometry,
   circleCells,
@@ -83,7 +83,7 @@ function run(seed: number) {
   for (let lz = fy - 1; lz <= fy + 1; lz++) for (let lx = fx - 1; lx <= fx + 1; lx++) patchCells.add(lz * N + lx);
   const arr = new Uint8Array(N * N);
   for (const c of patchCells) arr[c] = 1;
-  const overlay = buildPatchOverlay(arr, 0, 0);
+  const overlay = buildLevelOverlay(arr, 0, 0);
 
   const wOf = (wx: number, wz: number) => ({ lx: Math.floor(wx), lz: Math.floor(wz) });
   const isP = (wx: number, wz: number) => { const { lx, lz } = wOf(wx, wz); return patchCells.has(lz * N + lx); };
@@ -93,7 +93,7 @@ function run(seed: number) {
     return fx2 > 0.02 && fz2 > 0.02 && fx2 < 0.98 && fz2 < 0.98;
   };
   // ★ 对照基准 = 同 fine 掩码、深度 0 的构建（拓扑与补丁构建逐位对齐，索引可直接相减）
-  const overlay0 = buildPatchOverlay(arr, 0, 0, 0);
+  const overlay0 = buildLevelOverlay(arr, 0, 0, 0);
   const topYes = buildTopGeometry(table0, src0, overlay);
   const topNo = buildTopGeometry(table0, src0, overlay0);
   const wallYes = buildWallGeometry(table0, src0, overlay);
@@ -133,12 +133,12 @@ function run(seed: number) {
     }
     ok(slopeV > 0, `${tag} ③坡面插值顶点存在（n=${slopeV}，0>depth>−D）`);
     const xL = fx - 1, xR = fx + 1;
-    const d0 = overlay.depthOf(xL, fy + 0.5);
-    const d1 = overlay.depthOf(xL + 0.5, fy + 0.5);
-    const d2 = overlay.depthOf(xL + 1, fy + 0.5);
+    const d0 = overlay.depthOf(xL, fy + 0.5);       // 坑口线 = 0
+    const d1 = overlay.depthOf(xL + 0.25, fy + 0.5); // 坡面中点（W=0.5m/层 → 0.5D）
+    const d2 = overlay.depthOf(xL + 1, fy + 0.5);    // 坑内满深
     const d3 = overlay.depthOf(xR + 1, fy + 0.5);
     ok(d0 === 0 && d1 > 0.08 && d1 < 0.12 && d2 >= PATCH_DEPTH - 1e-6 && d3 === 0,
-      `${tag} ③深度场：坑口线 0 / 半格 0.5D / 坑内满深（${d0.toFixed(3)}/${d1.toFixed(3)}/${d2.toFixed(3)}/${d3.toFixed(3)}）`);
+      `${tag} ③深度场：坑口线 0 / 坡面中点 0.5D / 坑内满深（${d0.toFixed(3)}/${d1.toFixed(3)}/${d2.toFixed(3)}/${d3.toFixed(3)}）`);
     let maxStep = 0;
     for (let s = 0; s <= 20; s++) {
       const a = overlay.depthOf(xL + s / 20, fy + 0.3);
@@ -157,7 +157,7 @@ function run(seed: number) {
     let inChunk = 0;
     for (const c of foot) if (c.cx === 0 && c.cz === 0) { arrC[c.lz * N + c.lx] = 1; inChunk++; }
     ok(inChunk >= 5, `${tag} ③b R=0.6 命中 cell 中心 → ${inChunk} 格十字坑`);
-    const ovC = buildPatchOverlay(arrC, 0, 0);
+    const ovC = buildLevelOverlay(arrC, 0, 0);
     const dC = ovC.depthOf(hit.x, hit.z);
     ok(dC >= PATCH_DEPTH * 0.99, `${tag} ③b 坑心满深 ${dC.toFixed(3)} ≥ 0.99D（可见坑）`);
     const topC = buildTopGeometry(table0, src0, ovC);
@@ -293,7 +293,7 @@ function run(seed: number) {
     ok(fPlane > 0 && sPlane > 0 && tPlane > 0,
       `${tag} ④b 找到 flush x=${fPlane} / 微小棱 x=${tPlane} / 台阶 x=${sPlane}（行 ${fR0}/${tR0}/${sR0}）`);
     if (fPlane > 0) {
-      const ovF = buildPatchOverlay(regionOf(fPlane, fR0), 0, 0);
+      const ovF = buildLevelOverlay(regionOf(fPlane, fR0), 0, 0);
       const wFNo = buildWallGeometry(table0, src0);
       const wFYes = buildWallGeometry(table0, src0, ovF);
       const b4 = planeStats(wFNo, wFNo, fPlane, fR0).n;
@@ -301,7 +301,7 @@ function run(seed: number) {
       ok(b4 > 0 && a4.n === 0, `${tag} ④b flush 平隔断整段剔除（补丁前 ${b4} → 补丁后 ${a4.n}）`);
     }
     if (tPlane > 0) {
-      const ovT = buildPatchOverlay(regionOf(tPlane, tR0), 0, 0);
+      const ovT = buildLevelOverlay(regionOf(tPlane, tR0), 0, 0);
       const wTNo = buildWallGeometry(table0, src0);
       const wTYes = buildWallGeometry(table0, src0, ovT);
       const aT = planeStats(wTYes, wTNo, tPlane, tR0);
@@ -309,7 +309,7 @@ function run(seed: number) {
         `${tag} ④b 微小高台棱侧壁保留（毫米级高差也有壁；n=${aT.n} 全补丁色 ${aT.colored}）`);
     }
     if (sPlane > 0) {
-      const ovS2 = buildPatchOverlay(regionOf(sPlane, sR0), 0, 0);
+      const ovS2 = buildLevelOverlay(regionOf(sPlane, sR0), 0, 0);
       const wSNo = buildWallGeometry(table0, src0);
       const wSYes = buildWallGeometry(table0, src0, ovS2);
       const aS = planeStats(wSYes, wSNo, sPlane, sR0);
@@ -345,7 +345,7 @@ function run(seed: number) {
     if (bx7 > 0) {
       const arr7 = new Uint8Array(N * N);
       for (let lz = by7; lz < by7 + 3; lz++) for (let lx = bx7; lx < bx7 + 3; lx++) arr7[lz * N + lx] = 1;
-      const ov7 = buildPatchOverlay(arr7, 0, 0);
+      const ov7 = buildLevelOverlay(arr7, 0, 0);
       const top7 = buildTopGeometry(table0, src0, ov7);
       const corePerCell = new Map<number, number>();
       const yAt = new Map<string, number[]>();
@@ -389,12 +389,14 @@ function run(seed: number) {
       for (let lx = 18; lx < 22; lx++) for (const lz of rows) a[lz * N + lx] = 1;
       return a;
     };
-    const ovS0 = buildPatchOverlay(mk([59]), 0, 0);
-    const ovS1 = buildPatchOverlay(mk([0]), 0, 1);
-    ok(near(ovS0.depthOf(20, 59.999), 0, 1e-6) && near(ovS1.depthOf(20, 60.001), 0, 1e-6),
+    const ovS0 = buildLevelOverlay(mk([59]), 0, 0);
+    const ovS1 = buildLevelOverlay(mk([0]), 0, 1);
+    ok(near(ovS0.depthOf(20, 59.999), 0, 0.01) && near(ovS1.depthOf(20, 60.001), 0, 0.01),
       `${tag} ⑥seam 两侧深度各自收口为 0（封死不悬空）`);
-    const dMid = ovS0.depthOf(20, 59.5);
-    ok(dMid > 0 && dMid < PATCH_DEPTH, `${tag} ⑥seam 行坡降存在（${dMid.toFixed(3)}）`);
+    const dNear = ovS0.depthOf(20, 59.75); // 距 seam 0.25m → 坡面中点（W=0.5）
+    const dFar = ovS0.depthOf(20, 59.5);   // seam 行中段（1m 宽 → 恰满 1 层）
+    ok(dNear > 0.05 && dNear < 0.15 && dFar >= PATCH_DEPTH - 1e-6,
+      `${tag} ⑥seam 行坡降存在（0.25m=${dNear.toFixed(3)} 中段=${dFar.toFixed(3)}）`);
     const wS0 = buildWallGeometry(table0, src0, ovS0);
     const wS1 = buildWallGeometry(table1, src1, ovS1);
     let seam0 = 0, seam1 = 0, seamBad = 0;
@@ -449,20 +451,48 @@ function run(seed: number) {
       `${tag} ⑧ Worker 拷贝路径几何字节与活源逐位一致（top=${live.top.vertices.length / 3}v wall=${live.wall.vertices.length / 3}v）`);
   }
 
-  // ---- ⑨ 玩法高度采样同步：surfaceHeightAt 减补丁深度场（角色脚底/贴地/clamp） ----
+  // ---- ⑨ 玩法高度采样同步：surfaceHeightAt 减补丁包络场（角色脚底/贴地/clamp） ----
   {
-    psClear();
     const h0 = raster.surfaceHeightAt(20.5, 20.5);
     const outside0 = raster.surfaceHeightAt(33.5, 33.5);
-    const foot = circleCells(20.5, 20.5, 0.6, CH);
-    for (const c of foot) if (c.cx === 0 && c.cz === 0) psMark(c.cx, c.cz, c.lx, c.lz);
+    const foot = circleCells(20.5, 20.5, 0.6, CH).filter((c) => c.cx === 0 && c.cz === 0)
+      .map((c) => ({ lx: c.lx, lz: c.lz }));
+    const changed1 = raster.digCells(0, 0, foot);
     const h1 = raster.surfaceHeightAt(20.5, 20.5);
     const outside1 = raster.surfaceHeightAt(33.5, 33.5);
-    ok(near(h1 - h0, -PATCH_DEPTH, 1e-3) && near(psDepth(20.5, 20.5), PATCH_DEPTH, 1e-3),
-      `${tag} ⑨ 坑心 surfaceHeightAt 同步下降（${(h1 - h0).toFixed(3)} ≈ −D）`);
+    ok(changed1 && near(h1 - h0, -PATCH_DEPTH, 1e-3) && near(raster.levelDepthAt(20.5, 20.5), PATCH_DEPTH, 1e-3),
+      `${tag} ⑨ 单枪坑心 surfaceHeightAt −D（${(h1 - h0).toFixed(3)}，变化=${changed1}）`);
     ok(near(outside1 - outside0, 0, 1e-6), `${tag} ⑨ 坑外高度不受影响（Δ=${(outside1 - outside0).toFixed(5)}）`);
-    ok(psIsPatched(20.5, 20.5) && !psIsPatched(33.5, 33.5), `${tag} ⑨ isPatchedAt 世界查询正确`);
-    psClear();
+    ok(raster.isLevelPatched(20.5, 20.5) && !raster.isLevelPatched(33.5, 33.5),
+      `${tag} ⑨ isLevelPatched 世界查询正确`);
+  }
+
+  // ---- ⑨b 补丁上再打补丁：同点两枪深 2D（无限修补的层数叠加） ----
+  {
+    const h1 = raster.surfaceHeightAt(20.5, 20.5);
+    const foot = circleCells(20.5, 20.5, 0.6, CH).filter((c) => c.cx === 0 && c.cz === 0)
+      .map((c) => ({ lx: c.lx, lz: c.lz }));
+    // 几何基准 g1 = 第一枪后的层 1（与第二枪同布局 → 索引可比）
+    const g1 = computeTableGeometry((ccx, ccz) => raster.getChunkData(ccx, ccz), seed, 0, 0,
+      new Uint8Array(raster.levelsOf(0, 0)));
+    const changed2 = raster.digCells(0, 0, foot);
+    const h2 = raster.surfaceHeightAt(20.5, 20.5);
+    ok(changed2 && near(h2 - h1, -PATCH_DEPTH, 1e-3) && near(raster.levelDepthAt(20.5, 20.5), 2 * PATCH_DEPTH, 1e-3),
+      `${tag} ⑨b 两枪叠加中心 −2D（${(h2 - h1).toFixed(3)}，变化=${changed2}）`);
+    const g2 = computeTableGeometry((ccx, ccz) => raster.getChunkData(ccx, ccz), seed, 0, 0,
+      new Uint8Array(raster.levelsOf(0, 0)));
+    ok(g1.top.vertices.length === g2.top.vertices.length, `${tag} ⑨b 层1/层2 布局一致（v=${g1.top.vertices.length}）`);
+    let minDy = Infinity, splitBad = 0, fullHit = 0;
+    for (let i = 0; i < g2.top.vertices.length / 3; i++) {
+      const wx = g2.top.vertices[i * 3] + HALF, wz = g2.top.vertices[i * 3 + 2] + HALF;
+      if (wx < 19.4 || wx > 21.6 || wz < 19.4 || wz > 21.6) continue;
+      const dy = g2.top.vertices[i * 3 + 1] - g1.top.vertices[i * 3 + 1];
+      if (dy < minDy) minDy = dy;
+      if (dy < -PATCH_DEPTH - 1e-3 || dy > 1e-3) splitBad++; // 第二枪增量只能 ≤ −D
+      if (near(dy, -PATCH_DEPTH, 1e-3)) fullHit++;
+    }
+    ok(near(minDy, -PATCH_DEPTH, 1e-3), `${tag} ⑨b 第二枪几何增量 minDy=${minDy.toFixed(3)} ≈ −D`);
+    ok(splitBad === 0 && fullHit > 0, `${tag} ⑨b 包络连续（越界 ${splitBad}，满深点 ${fullHit}）`);
   }
 }
 

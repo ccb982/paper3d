@@ -101,6 +101,9 @@ export interface ChunkData {
   walkable: Uint8Array;
   /** 本 chunk 生效的风格组（TileGroups；贴图/装饰物规划层消费） */
   groupKey: string;
+  /** ★ §14.11 补丁层数覆盖（1m cell，0=无；N = 累深 N×PATCH_DEPTH）。
+   *   生成器恒产出全 0 —— 仅运行时 playBulletImpact 写；clearAll 随 chunk 回收。 */
+  levels: Uint8Array;
 }
 
 // ============ 阶段 0：端口派生 ============
@@ -493,7 +496,10 @@ function toChunkData(
     }
   }
 
-  return { chunkX, chunkZ, heights, blockTypes, blockHeight, walkable, groupKey };
+  return {
+    chunkX, chunkZ, heights, blockTypes, blockHeight, walkable, groupKey,
+    levels: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), // ★ §14.11 运行态覆盖层（生成不写）
+  };
 }
 
 // ============ 主入口（六层管线编排） ============
