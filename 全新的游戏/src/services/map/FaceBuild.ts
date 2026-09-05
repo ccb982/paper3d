@@ -15,6 +15,7 @@
 import { BLOCKS_PER_SIDE, CHUNK_SIZE } from "./ChunkGenerator";
 import { type FaceTable, WALL_EPS, WALL_MIN_DEPTH } from "./FaceTable";
 import { type BlockSource, surfaceHeightCore, rampWidthOf } from "./Refinements";
+import { DEFAULT_PATCH_DECOR, type PatchDecorSpec } from "./PatchDecor";
 
 const N = CHUNK_SIZE; // 60
 const BPS = BLOCKS_PER_SIDE; // 15
@@ -35,6 +36,8 @@ export interface FaceGeometry {
   uvs?: Float32Array;
   colors?: Float32Array;
   shade?: Float32Array;
+  /** ★ 补丁权重（逐顶点 0..1，= depthOf/PATCH_DEPTH；补丁装饰纹理的驱动通道） */
+  patchW?: Float32Array;
   indices: Uint32Array;
   topTriCount: number;
 }
@@ -75,6 +78,8 @@ export interface PatchOverlay {
   depthOf(wx: number, wz: number): number;
   /** 补丁顶点色（线性 rgb；材质替换基准色 = 焦土色） */
   color: [number, number, number];
+  /** ★ 装饰性纹理声明（坑洞/裂痕内部"坑坑洼洼"观感；见 PatchDecor.ts） */
+  decor: PatchDecorSpec;
 }
 
 /**
@@ -124,7 +129,7 @@ export function buildPatchOverlay(
     const s = t * t * (3 - 2 * t);                   // smoothstep 坡面插值
     return depth * s;
   };
-  return { isPatched, depthOf, color: color.slice() as [number, number, number] };
+  return { isPatched, depthOf, color: color.slice() as [number, number, number], decor: { ...DEFAULT_PATCH_DECOR } };
 }
 
 // ------------------------------------------------------------
@@ -203,7 +208,7 @@ export function buildLevelOverlay(
     lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize && levels[lz * chunkSize + lx] > 0;
   const depthOf = (wx: number, wz: number): number =>
     envelopeLevelAt(levels, chunkSize, cx, cz, wx, wz) * depth;
-  return { isPatched, depthOf, color: color.slice() as [number, number, number] };
+  return { isPatched, depthOf, color: color.slice() as [number, number, number], decor: { ...DEFAULT_PATCH_DECOR } };
 }
 
 // ------------------------------------------------------------
@@ -515,6 +520,7 @@ export function buildTopGeometry(
   const nor: number[] = [];
   const uv: number[] = [];
   const col: number[] = [];
+  const pw: number[] = [];   // ★ 补丁权重（装饰纹理驱动通道）
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
   const W = [1, 1, 1];
@@ -537,7 +543,7 @@ export function buildTopGeometry(
         //   硬色边消失（2026-09-05 用户：补丁与地面材质交界渲染不好看）。
         const pcell = patch && patch.isPatched(lx, lz);
         const cc = pcell ? patch!.color : W;
-        const pw = (d: number): [number, number, number] => {
+        const tint = (d: number): [number, number, number] => {
           const u = Math.min(d / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
           return [Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u)];
         };
@@ -550,9 +556,11 @@ export function buildTopGeometry(
         const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) - d11;
         const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) - d01;
         pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
-        const c00 = pw(d00), c10 = pw(d10), c11 = pw(d11), c01 = pw(d01);
+        const c00 = tint(d00), c10 = tint(d10), c11 = tint(d11), c01 = tint(d01);
         nor.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
         col.push(c00[0], c00[1], c00[2], c10[0], c10[1], c10[2], c11[0], c11[1], c11[2], c01[0], c01[1], c01[2]);
+        pw.push(Math.min(1, d00 / PATCH_DEPTH), Math.min(1, d10 / PATCH_DEPTH),
+          Math.min(1, d11 / PATCH_DEPTH), Math.min(1, d01 / PATCH_DEPTH));
         uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
         idx.push(vi, vi + 3, vi + 1, vi + 3, vi + 2, vi + 1);
         vi += 4;
@@ -577,6 +585,7 @@ export function buildTopGeometry(
             uv.push((wx - ox) / N, (wz - oz) / N);
             const u = Math.min(dV / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
             col.push(Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u));
+            pw.push(Math.min(1, dV / PATCH_DEPTH));
           }
         }
         // 顶点先占位法线，后差分
@@ -617,6 +626,7 @@ export function buildTopGeometry(
     normals: new Float32Array(nor),
     uvs: new Float32Array(uv),
     colors: new Float32Array(col),
+    patchW: new Float32Array(pw),
     indices: new Uint32Array(idx),
     topTriCount: idx.length / 3,
   };
@@ -636,6 +646,7 @@ export function buildWallGeometry(
   const uv: number[] = [];
   const col: number[] = [];
   const shd: number[] = [];
+  const pw: number[] = [];   // ★ 补丁权重（坑壁满强度碎屑装饰）
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
   const fineE = topFineCellsFor(table, src, patch);
@@ -702,6 +713,11 @@ export function buildWallGeometry(
         const lowV = new Array<number>(m);
         const lxV = new Array<number>(m);
         const lzV = new Array<number>(m);
+        // ★ 壁线深度比（depthOf/PATCH_DEPTH，封顶 MAX_LAYERS）：补丁墙顶沿的
+        //   材质染色指数与装饰权重取值（2026-09-05 用户：侧壁材质渲染要过渡）——
+        //   坑缘线=0（与坑外原地面同白无缝）、坑内台阶线=邻顶面同值（交界无缝）；
+        //   底沿恒满染。GPU 逐像素插值 → 墙面焦土染色/碎屑噪点沿高度渐入。
+        const wallU = new Array<number>(m);
         for (let i = 0; i < m; i++) {
           const s = nodes[i];
           const gx = ax + (bx2 - ax) * (s / 4);
@@ -726,6 +742,7 @@ export function buildWallGeometry(
           lowV[i] = Math.min(nbTop, cell.hBase, nbBase0);
           lxV[i] = gx - ox - HALF;
           lzV[i] = gz - oz - HALF;
+          wallU[i] = P ? Math.min(P.depthOf(gx, gz) / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS) : 0;
         }
         // ★ 坑内隔断壁剔除：两侧都补丁 **且两侧表面在壁线处几乎等高（flush，埋在土里
         //   看不见的平隔断）** 才剔除 → 连贯凹陷；若两侧存在台阶（可见崖壁/墙），壁段
@@ -757,9 +774,22 @@ export function buildWallGeometry(
             for (let c = 0; c < 4; c++) {
               nor.push(nrm.dx, 0, nrm.dz);
               uv.push(uU, uV);
-              if (pc) col.push(pc[0], pc[1], pc[2]); // 补丁色（坑内壁面=统一补丁材质）
-              else col.push(1, 1, 1); // 中性白：顶点色=材质替换开关（非中性=补丁）
               shd.push(1);
+            }
+            if (pc) {
+              // ★ 补丁墙材质/装饰权重沿高度渐变（2026-09-05 用户：坑底已有过渡，
+              //   侧壁没有——墙面原为恒定满染，与坑外原地面交界处硬跳）。顶沿取
+              //   壁线深度比（wallU：坑缘线=0 同白、台阶线=邻面同值 → 无缝），
+              //   底沿满染（埋地不可见）。顶点序 = 0顶A / 1顶B / 2底B / 3底A。
+              const uA = wallU[i], uB = wallU[i + 1];
+              col.push(Math.pow(pc[0], uA), Math.pow(pc[1], uA), Math.pow(pc[2], uA));
+              col.push(Math.pow(pc[0], uB), Math.pow(pc[1], uB), Math.pow(pc[2], uB));
+              col.push(pc[0], pc[1], pc[2], pc[0], pc[1], pc[2]);
+              pw.push(Math.min(1, uA), Math.min(1, uB), 1, 1);
+            } else {
+              // 中性白：顶点色=材质替换开关（不染色不装饰）
+              col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+              pw.push(0, 0, 0, 0);
             }
             // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向
             //   朝内，翻转索引；dir0/dir3 保持（2026-09-04 修正）
@@ -779,6 +809,7 @@ export function buildWallGeometry(
     uvs: new Float32Array(uv),
     colors: new Float32Array(col),
     shade: new Float32Array(shd),
+    patchW: new Float32Array(pw),
     indices: new Uint32Array(idx),
     topTriCount: 0,
   };

@@ -37,9 +37,9 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
     } else if (a) out.push(a as ArrayBuffer);
   };
   push(r.top.vertices); push(r.top.normals); push(r.top.uvs);
-  push(r.top.colors); push(r.top.indices);
+  push(r.top.colors); push(r.top.patchW); push(r.top.indices);
   push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
-  push(r.wall.colors); push(r.wall.shade); push(r.wall.indices);
+  push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
   return out;
 }
 

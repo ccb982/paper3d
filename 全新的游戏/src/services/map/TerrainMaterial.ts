@@ -34,6 +34,7 @@
 // ============================================================
 
 import * as THREE from 'three';
+import { PATCH_DECOR_GLSL } from './PatchDecor';
 
 /** 地形光照调参入口。
  *  ★ 光照哲学（定稿）：默认整个地面是暗的，光是把亮度"加上去"的——
@@ -84,6 +85,11 @@ export const WALL_DIRECT_DAY_FLOOR = 0.45;
  *  ≥0.28——影区仍读"深阴影"（≈开阔 38%）但不再死黑；夜晚不加保底（夜景靠
  *  环境光分层，见 updateTerrainLighting）。保留阴影可读性哲学（光=缺席而非黑块）。 */
 export const TERRAIN_DIRECT_DAY_FLOOR = 0.28;
+
+/** 侧壁装饰纹理增益（2026-09-05 用户：侧壁强度削弱即可，坑底保持满强度）。
+ *  墙顶点权重恒 1 → patchDecor 全强度；乘此系数把墙面的碎粒/塌陷斑收敛到
+ *  ~一半观感，坑底（k=1）仍最"坑坑洼洼"。 */
+export const WALL_DECOR_GAIN = 0.5;
 
 const registry = new Set<TerrainMaterial>();
 
@@ -472,6 +478,7 @@ const FRAGMENT_MAIN = /* glsl */ `
         varying vec2 vWorld;
         varying vec3 vColor;
         varying vec3 vNw;    // ★ 世界法线（顶面 vertex 同名 varying）
+        varying float vPw;   // ★ 补丁权重（补丁装饰纹理驱动）
         #include <common>
         #include <fog_pars_fragment>
         void main() {
@@ -515,10 +522,22 @@ const FRAGMENT_MAIN = /* glsl */ `
           float lodW = smoothstep(${SUN_DIR_LOD_FAR.toFixed(1)}, ${SUN_DIR_LOD_NEAR.toFixed(1)}, distCam);
           d *= mix(1.0, dirMod, lodW);
 
+          // ★ 补丁装饰性纹理（PatchDecor §补丁属性）：坑洞/裂痕内部"坑坑洼洼"
+          //   —— 碎粒/塌陷斑随补丁权重渐变。★ 必须在 lit 乘积之前乘 alb
+          //   （2026-09-05 修：原先放在 lit 之后，亮度乘数被吞 → 顶面坑底噪点
+          //   不可见，只有乘序正确的侧壁路径生效）；法线扰动存 tilt 待 N 初始化。
+          vec3 decorTilt = vec3(0.0);
+          if (vPw > 0.001) {
+            vec3 dec = patchDecor(vWorld, vPw);
+            alb *= dec.x;
+            decorTilt = vec3(dec.y, 0.0, dec.z);
+          }
+
           vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * d);
 
           // ---- 表面属性（伪 PBR：法线扰动 + 粗糙度调制） ----
           vec3 N = pseudoNormal(vWorld);                   // 微阴影/微高光
+          if (vPw > 0.001) N = normalize(N + decorTilt);   // 补丁伪法线扰动
           float rough = uMatBaseLCH[id].w + field.z * 0.15;  // 材质基础 + grain 调制
           vec3 V = normalize(cameraPosition - vec3(vWorld.x, 0.0, vWorld.y));
           float spec = uMatSurface[id].x;
@@ -605,11 +624,14 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         varying vec2 vWorld;
         varying vec3 vColor;
         varying vec3 vNw;    // ★ 世界法线（LOD 内实时太阳方向重映射用）
+        attribute float apw; // ★ 补丁权重（补丁装饰纹理驱动；无补丁 geometry 恒 0）
+        varying float vPw;
         #include <common>
         #include <fog_pars_vertex>
         void main() {
           vUv = uv;
           ${vcVar}
+          vPw = apw;
           vNw = normalize(mat3(modelMatrix) * normal);  // 地块群仅平移 → 本地=世界
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);   // ★ fog_vertex 依赖它
           vec4 wp = modelMatrix * vec4(position, 1.0);
@@ -618,7 +640,7 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
           #include <fog_vertex>
         }
       `,
-      fragmentShader: MATERIAL_GLSL + FRAGMENT_MAIN,
+      fragmentShader: MATERIAL_GLSL + PATCH_DECOR_GLSL + FRAGMENT_MAIN,
       fog: true, // ★ 场景有 THREE.Fog——必须参与雾，否则远端地形浮在背景外
     });
     this.vertexColors = useVertexColor; // 供 three 注入 attribute color（配 geometry color 属性）
@@ -663,11 +685,14 @@ const WALL_VERT = (vcVar: string) => /* glsl */ `
   varying vec3 vColor;   // ★ 补丁色通道（§14.10；无补丁 = vec3(1.0)）
   varying vec3 vNw;      // ★ 世界法线（LOD 内实时太阳方向重映射用）
   varying vec3 vWpos;    // ★ 世界坐标（LOD 距离衰减用）
+  attribute float apw;   // ★ 补丁权重（补丁装饰纹理驱动；无补丁 geometry 恒 0）
+  varying float vPw;
   #include <common>
   #include <fog_pars_vertex>
   void main() {
     vUv = uv;
     vColor = ${vcVar};
+    vPw = apw;
     vUvC = position.xz / 60.0 + 0.5;   // 局部坐标（中心原点）→ chunk 0..1
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vWpos = wp.xyz;
@@ -704,6 +729,7 @@ const WALL_FRAG = /* glsl */ `
   varying vec3 vColor;   // ★ 补丁色通道（乘性染色；白=原样）
   varying vec3 vNw;      // ★ 世界法线（WALL_VERT 同名 varying）
   varying vec3 vWpos;    // ★ 世界坐标（LOD 距离衰减用）
+  varying float vPw;     // ★ 补丁权重（补丁装饰纹理驱动）
   #include <common>
   #include <fog_pars_fragment>
   void main() {
@@ -721,6 +747,14 @@ const WALL_FRAG = /* glsl */ `
     vec3 lm = texture2D(uLightmap, isWaterWall ? vUvC : vUv).rgb;
     vec3 field = shadeField(vTex);
     vec3 base = oklchShade(vTex, id, field);       // 与顶面逐像素一致的材质纹理
+
+    // ★ 补丁装饰性纹理（PatchDecor）：坑壁碎屑坑洼（亮度乘数；墙面无镜面/
+    //   菲涅尔项，伪法线扰动无落点——且 dirMod 用宏观法线保持朝阳/背阳方向
+    //   感，不做微扰）。w = vTex（墙面 (沿墙距, 高)，见 PatchDecor 注释）。
+    //   墙增益 WALL_DECOR_GAIN=0.5（2026-09-05 用户：侧壁削弱，坑底满强度）。
+    if (vPw > 0.001) {
+      alb *= mix(1.0, patchDecor(vTex, vPw).x, ${WALL_DECOR_GAIN});
+    }
 
     // ★ 4×4 地块边界描边（与顶面同款：分界线在墙面上延展）
     vec2 buv = fract((isWaterWall ? vUvC : vUv) * 15.0);
@@ -799,7 +833,7 @@ export class WallMaterial extends THREE.ShaderMaterial {
     super({
       uniforms: u,
       vertexShader: WALL_VERT(useVertexColor ? 'color' : 'vec3(1.0)'),
-      fragmentShader: MATERIAL_GLSL + WALL_FRAG,
+      fragmentShader: MATERIAL_GLSL + PATCH_DECOR_GLSL + WALL_FRAG,
       fog: true,
     });
     wallRegistry.add(this);

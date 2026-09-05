@@ -28,6 +28,8 @@ export interface PatchGeomRaw {
     normals: Float32Array;
     uvs: Float32Array;
     colors: Float32Array;
+    /** ★ 补丁权重（补丁装饰纹理驱动通道；→ attribute "apw"） */
+    patchW: Float32Array;
     indices: Uint32Array;
     topTriCount: number;
   };
@@ -37,6 +39,8 @@ export interface PatchGeomRaw {
     uvs: Float32Array;
     colors: Float32Array;
     shade: Float32Array;
+    /** ★ 补丁权重（坑壁碎屑装饰；补丁墙恒 1） */
+    patchW: Float32Array;
     indices: Uint32Array;
     topTriCount: number;
   };
@@ -69,6 +73,7 @@ export function computeTableGeometry(
       normals: top.normals,
       uvs: top.uvs as Float32Array,
       colors: top.colors as Float32Array,
+      patchW: top.patchW as Float32Array,
       indices: top.indices,
       topTriCount: top.topTriCount,
     },
@@ -78,6 +83,7 @@ export function computeTableGeometry(
       uvs: wall.uvs as Float32Array,
       colors: wall.colors as Float32Array,
       shade: wall.shade as Float32Array,
+      patchW: wall.patchW as Float32Array,
       indices: wall.indices,
       topTriCount: wall.topTriCount,
     },

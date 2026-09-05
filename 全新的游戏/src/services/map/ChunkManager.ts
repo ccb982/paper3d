@@ -518,6 +518,7 @@ export class ChunkManager {
       geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
       if (g.uvs) geo.setAttribute("uv", new THREE.BufferAttribute(g.uvs, 2));
       if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
+      if (g.patchW) geo.setAttribute("apw", new THREE.BufferAttribute(g.patchW, 1)); // ★ 补丁权重（装饰纹理）
       if (withColor) {
         if (g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
       }
