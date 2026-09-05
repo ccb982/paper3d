@@ -616,7 +616,6 @@ export class FluidSolver {
 
   /** 一次性注入入队（画布点击触发） */
   queueInjection(config: InjectionConfig): void {
-    console.log(`[FluidSolver] queueInjection: mode=${this.config.advectionMode} pos=(${config.position.x.toFixed(3)},${config.position.y.toFixed(3)}) radius=${config.radius} rate=${config.rate} color=${config.color ? `[${config.color.map(v=>v.toFixed(2)).join(',')}]` : 'none'} density=${config.density ?? 'none'} vel=(${config.velocity.x},${config.velocity.y})`);
     this.injectionQueue.push(config);
   }
 
@@ -630,26 +629,20 @@ export class FluidSolver {
         radius: inj.radius,
         obstacle: this.obstacleTex || undefined,
       };
-      let didInject = false;
       if (!isScalar && inj.color) {
         this.injector.injectColor(
           this.colorGrid,
           { h: inj.color[0], s: inj.color[1], l: inj.color[2], a: inj.color[3] },
           inj.rate ?? 1.0, opts, ch,
         );
-        didInject = true;
       } else if (isScalar) {
         if (inj.density !== undefined) {
           this.injector.injectDensity(this.densityGrid, inj.density, 1.0, opts);
-          didInject = true;
         } else {
           console.warn(`[FluidSolver] processInjectionQueue: scalar mode but no density provided — injection SKIPPED! pos=(${inj.position.x.toFixed(3)},${inj.position.y.toFixed(3)})`);
         }
       }
       this.injector.injectVelocity(this.velocityGrid, inj.velocity, opts);
-      if (didInject) {
-        console.log(`[FluidSolver] processInjectionQueue: mode=${this.config.advectionMode} pos=(${inj.position.x.toFixed(3)},${inj.position.y.toFixed(3)}) ${isScalar ? `density=${inj.density}` : `color=[${inj.color!.map(v=>v.toFixed(2)).join(',')}]`} vel=(${inj.velocity.x},${inj.velocity.y}) → OK`);
-      }
     }
     this.injectionQueue.length = 0;
   }
