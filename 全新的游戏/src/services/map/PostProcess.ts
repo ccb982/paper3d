@@ -11,14 +11,13 @@
 // 效果（确定性、种子可重放、纯函数零 three 装配耦合）：
 //   · 圆角 bevel：仅「高台(platform) → 不插值地面(ground+cliff)」外露硬边，
 //     外凸 1/4 圆弧（风化圆滑），不改台面名义高度，棱处细分多段拼弧；
-//     高台↔高台/水/坑、插值(weld)边一律棱角分明不圆滑；
-//   · 坑洞 pit：块中心圆坑；邻高台/插值块整块禁挖（不破坏敏感接缝）；
-//   · 裂缝 crack：块锚定折线浅沟；邻高台/插值块整块禁挖；按 5×5 邻域
-//     扫锚块 → 跨块裂缝连续。
+//     高台↔高台/水、插值(weld)边一律棱角分明不圆滑。
+//   · （坑洞 pit / 裂缝 crack 已 2026-09-05 移除：渲染无坑裂、架构已表驱动，
+//     待用户基于表驱动重写。）
 // ============================================================
 
 import * as THREE from "three";
-import { CHUNK_SIZE, hash2 } from "./ChunkGenerator";
+import { CHUNK_SIZE } from "./ChunkGenerator";
 import {
   buildChunkFinal,
   buildChunkWallBuffers,
@@ -52,20 +51,8 @@ const BEVEL_R = 0.3;
 const BEVEL_EPS = 0.05;
 /** 只圆滑这些生成角色的块（高台侧；地面/水/坑底不圆滑） */
 const BEVEL_TILES = new Set(["platform"]);
-/** 坑/裂细分数：fine 格每边 2^D 段（D=3 → 0.125m，多段拼弧） */
+/** 圆角细分数：fine 格每边 2^D 段（D=3 → 0.125m，多段拼弧） */
 const PP_FINE_SUBDIV_DEPTH = 3;
-/** 坑洞命中率（含内圈连续） */
-const PIT_HIT = 0.06;
-/**
- * 坑/裂细化采样率（0..1）：只随机细化部分区块，其余显示为 coarse 大格
- * （bevel 圆角不受影响，仍全细化）。确定性：按块坐标哈希，同块内 16 格一致。
- */
-const PP_REFINE_RATE = 0.55;
-
-/** 坑/裂细化判定（确定性，按块坐标）；bevel 不参与、必细化 */
-function refineChance(seed: number, bx: number, bz: number): boolean {
-  return hash2(bx * 101 + 7, bz * 103 + 13, seed) < PP_REFINE_RATE;
-}
 
 const DIR4 = [
   { dx: 1, dz: 0 },
@@ -307,31 +294,8 @@ export function buildBevelWallDebug(
 // 小工具
 // ------------------------------------------------------------
 
-/** 平滑轮廓：t∈[0,1]，1→0，两端导数平（坑/裂剖面用） */
-function smoothProfile(t: number): number {
-  const s = Math.min(1, Math.max(0, t));
-  return 0.5 + 0.5 * Math.cos(Math.PI * s);
-}
-
-function roleAt(q: BlockFaceQuery, bx: number, bz: number): string | undefined {
-  return q.role(bx, bz);
-}
-
-/** 坑/裂禁挖带：任一方向邻高台(platform)或该边是插值(weld)交界 → 整块禁挖 */
-function nearInterpOrPlatform(
-  q: BlockFaceQuery,
-  bx: number,
-  bz: number,
-): boolean {
-  for (let dir = 0; dir < 4; dir++) {
-    if (q.role(bx + DIR4[dir].dx, bz + DIR4[dir].dz) === "platform") return true;
-    if (q.ruling(bx, bz, dir as 0 | 1 | 2 | 3) === "weld") return true;
-  }
-  return false;
-}
-
 // ------------------------------------------------------------
-// 效果偏移（三类效果的唯一入口；负 = 压低，未命中 = 0）
+// 效果偏移（bevel 唯一入口；负 = 压低，未命中 = 0）
 // ------------------------------------------------------------
 
 /** 圆角偏移（块视角）：view 块是高台且某边外露下落 → 带内外凸圆弧压低 */
@@ -371,136 +335,32 @@ function bevelOffset(
   return -(BEVEL_R - Math.sqrt(Math.max(0, 2 * BEVEL_R * dMin - dMin * dMin)));
 }
 
-/** 坑洞偏移：块中心圆坑（坑半径 ≤1.5 < 半块 2m，恒在Own块内） */
-function pitOffset(
-  q: BlockFaceQuery,
-  seed: number,
-  bx: number,
-  bz: number,
-  x: number,
-  z: number,
-): number {
-  const role = q.role(bx, bz);
-  if (!role || role === "liquid" || role === "pit") return 0;
-  if (nearInterpOrPlatform(q, bx, bz)) return 0;
-  if (hash2(bx, bz, seed) > PIT_HIT) return 0;
-  const R = 0.75 + hash2(bx * 3 + 7, bz * 3 + 11, seed) * 0.75;
-  const D = 0.25 + hash2(bx * 5 + 1, bz * 5 + 3, seed) * 0.25;
-  const r = Math.hypot(x - (bx * 4 + 2), z - (bz * 4 + 2));
-  if (r > R) return 0;
-  return -D * smoothProfile(r / R);
-}
-
-/** 裂缝锚参数（每块一条确定性折线；与旧版同哈希族） */
-interface CrackLine {
-  ox: number;
-  oz: number;
-  ca: number;
-  sa: number;
-  half: number;
-  w: number;
-  d: number;
-}
-
-function crackLineOf(
-  q: BlockFaceQuery,
-  seed: number,
-  bx: number,
-  bz: number,
-): CrackLine | null {
-  const role = q.role(bx, bz);
-  if (!role || role === "liquid" || role === "pit") return null;
-  if (nearInterpOrPlatform(q, bx, bz)) return null;
-  const ang = hash2(bx * 11 + 3, bz * 7 + 5, seed) * Math.PI * 2;
-  const len = 3 + hash2(bx * 13 + 9, bz * 17 + 1, seed) * 5;
-  const w = 0.15 + hash2(bx * 19 + 2, bz * 23 + 8, seed) * 0.25;
-  const d = 0.15 + hash2(bx * 29 + 4, bz * 31 + 6, seed) * 0.15;
-  const perp = ang + Math.PI / 2;
-  const off = (hash2(bx * 37 + 5, bz * 41 + 2, seed) - 0.5) * len * 0.4;
-  // 锚点可达 6.6m → 5×5 邻域（±2 块）覆盖全部影响
-  return {
-    ox: bx * 4 + 2 + Math.cos(ang) * 1.5 + Math.cos(perp) * off,
-    oz: bz * 4 + 2 + Math.sin(ang) * 1.5 + Math.sin(perp) * off,
-    ca: Math.cos(ang),
-    sa: Math.sin(ang),
-    half: len / 2,
-    w,
-    d,
-  };
-}
-
 /**
- * 裂缝偏移：只查「本块 + 4 个直邻地块」的预计算裂缝（跨块连续）。
- * 裂缝锚点在本块中心，长度均值 ~5.5m（half~2.75 < 块距 4m），绝大多数只
- * 影响本块与其直邻；超长裂缝的末端二层影响被截断（极少数，视觉可忽略）。
- * 相比旧 5×5=25 锚块扫描，采样点热点评测 ~5 倍提速。
- */
-function crackOffset(
-  q: BlockFaceQuery,
-  seed: number,
-  bx: number,
-  bz: number,
-  x: number,
-  z: number,
-  cache: Map<number, CrackLine | null>,
-): number {
-  let out = 0;
-  for (let k = 0; k < 5; k++) {
-    const dx = k === 1 ? 1 : k === 2 ? -1 : 0;
-    const dz = k === 3 ? 1 : k === 4 ? -1 : 0;
-    const key = (bx + dx) * 8192 + (bz + dz);
-    let ln = cache.get(key);
-    if (ln === undefined) {
-      ln = crackLineOf(q, seed, bx + dx, bz + dz);
-      cache.set(key, ln);
-    }
-    if (!ln) continue;
-    const rx = x - ln.ox,
-      rz = z - ln.oz;
-    const along = rx * ln.ca + rz * ln.sa;
-    if (along < -ln.half - ln.w || along > ln.half + ln.w) continue;
-    const perp = Math.abs(-rx * ln.sa + rz * ln.ca);
-    if (perp > ln.w) continue;
-    const o = -ln.d * smoothProfile(perp / ln.w);
-    if (o < out) out = o;
-  }
-  return out;
-}
-
-/**
- * ★ 后处理总偏移（块视角）：bevel(view) + pit + crack。
+ * ★ 后处理总偏移（块视角）：bevel。
  * view = 承载该点视觉面的块（cell 视角，与精修层 cornerCell 同语义）——
  * 圆角只作用于高台视角的点（低侧地面视角不受影响 → 棱底不挖沟）。
+ * （坑洞/裂缝已移除 2026-09-05，见文件头。）
  */
 function ppOffset(
   q: BlockFaceQuery,
-  seed: number,
   viewBx: number,
   viewBz: number,
   x: number,
   z: number,
-  cache: Map<number, CrackLine | null>,
 ): number {
-  let off = bevelOffset(q, viewBx, viewBz, x, z);
-  const bx = Math.floor(x / 4);
-  const bz = Math.floor(z / 4);
-  off += pitOffset(q, seed, bx, bz, x, z);
-  off += crackOffset(q, seed, bx, bz, x, z, cache);
-  return off;
+  return bevelOffset(q, viewBx, viewBz, x, z);
 }
 
 /** 后处理面高度（网格同式）：cornerCell(view) + ppOffset（src=角点基值 f64，q=块级判定） */
 function yAt(
   src: BlockSource,
   q: BlockFaceQuery,
-  seed: number,
   viewBx: number,
   viewBz: number,
   x: number,
   z: number,
-  cache: Map<number, CrackLine | null>,
 ): number {
-  return cornerCell(src, viewBx, viewBz, x, z) + ppOffset(q, seed, viewBx, viewBz, x, z, cache);
+  return cornerCell(src, viewBx, viewBz, x, z) + ppOffset(q, viewBx, viewBz, x, z);
 }
 
 // ------------------------------------------------------------
@@ -519,22 +379,20 @@ export function postSurfaceHeightAt(raster: RasterMap, x: number, z: number): nu
   const ccx = Math.floor(x / CHUNK_SIZE);
   const ccz = Math.floor(z / CHUNK_SIZE);
   const src = raster.chunkSource(ccx, ccz);
-  const seed = raster.worldSeed;
   const gx = Math.floor(x);
   const gz = Math.floor(z);
   const fx = x - gx;
   const fz = z - gz;
   const bcx = Math.floor(gx / 4);
   const bcz = Math.floor(gz / 4);
-  const cache = new Map<number, CrackLine | null>();
-  // ★ 块级判定走索引（bevel/pit/crack 的 role/ruling 判据，逐位一致）；
+  // ★ 块级判定走索引（bevel 的 role/ruling 判据，逐位一致）；
   //   高度基值仍走 cornerCell(f64)——cornerH 是 f32，用它会对低精度位产生
   //   差异，破坏「渲染=查询」逐位不变式，故精确高度不走索引。
   const q = new BlockFaceQuery(src, (ccx2, ccz2) => raster.blockIndex(ccx2, ccz2));
-  const h00 = yAt(src, q, seed, bcx, bcz, gx, gz, cache);
-  const h10 = yAt(src, q, seed, bcx, bcz, gx + 1, gz, cache);
-  const h01 = yAt(src, q, seed, bcx, bcz, gx, gz + 1, cache);
-  const h11 = yAt(src, q, seed, bcx, bcz, gx + 1, gz + 1, cache);
+  const h00 = yAt(src, q, bcx, bcz, gx, gz);
+  const h10 = yAt(src, q, bcx, bcz, gx + 1, gz);
+  const h01 = yAt(src, q, bcx, bcz, gx, gz + 1);
+  const h11 = yAt(src, q, bcx, bcz, gx + 1, gz + 1);
   if (fx + fz <= 1) {
     return h00 * (1 - fx - fz) + h01 * fz + h10 * fx;
   }
@@ -564,7 +422,6 @@ export function buildPostChunkTopSurface(
   const N = CHUNK_SIZE;
   const HALF = N / 2;
   const src = raster.chunkSource(cx, cz);
-  const seed = raster.worldSeed;
   const ox = cx * N;
   const oz = cz * N;
   // 只读复用精修层定型快照（cornerH 走索引已算好的同一份；顶面 raw 缓冲后处理
@@ -576,45 +433,29 @@ export function buildPostChunkTopSurface(
   const D = PP_FINE_SUBDIV_DEPTH;
   const S = 1 << D;
   const step = 1 / S;
-  const cache = new Map<number, CrackLine | null>();
   // ★ 块级判定外观（走索引；未建 chunk 回落 src —— 逐位一致）
   const q = new BlockFaceQuery(src, (ccx2, ccz2) => raster.blockIndex(ccx2, ccz2));
 
-  // ---- ① fine 标记：bevel 必细（弧边 0.125m 多段拼弧）；坑/裂随机细 ----
-  // 同一 1m 格内逐点区分偏移来源：
-  //   bevelHit = 任一点有圆角偏移（必须细分，否则弧边成锯齿）
-  //   fxHit    = 任一点有坑/裂偏移（确定性随机决定是否细分，跳过的显示为
-  //              coarse 大格；由 refineChance 用「块坐标」随机 → 同块 4×4 格一致）
+  // ---- ① fine 标记：bevel 必细（弧边 0.125m 多段拼弧；坑/裂已移除）----
+  // 同一 1m 格内逐点检查：任一点有圆角偏移（必须细分，否则弧边成锯齿）
   const fine = new Uint8Array(N * N);
-  let statB = 0, statF = 0;
+  let statB = 0;
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
       const wx0 = ox + lx;
       const wz0 = oz + lz;
       const vb = cellViewBlock(cx, cz, lx, lz);
       let bevelHit = false;
-      let fxHit = false;
-      for (let k = 0; k < 9 && !(bevelHit && fxHit); k++) {
+      for (let k = 0; k < 9 && !bevelHit; k++) {
         const dx = (k % 3) * 0.5;
         const dz = Math.floor(k / 3) * 0.5;
         const x = wx0 + dx;
         const z = wz0 + dz;
-        if (bevelOffset(q, vb.bx, vb.bz, x, z) < -1e-9) {
-          bevelHit = true;
-        } else if (
-          pitOffset(q, seed, vb.bx, vb.bz, x, z) +
-            crackOffset(q, seed, vb.bx, vb.bz, x, z, cache) <
-          -1e-9
-        ) {
-          fxHit = true;
-        }
+        if (bevelOffset(q, vb.bx, vb.bz, x, z) < -1e-9) bevelHit = true;
       }
       if (bevelHit) {
         fine[lz * N + lx] = 1;
         statB++;
-      } else if (fxHit && refineChance(seed, vb.bx, vb.bz)) {
-        fine[lz * N + lx] = 1;
-        statF++;
       }
     }
   }
@@ -642,7 +483,7 @@ export function buildPostChunkTopSurface(
   if ((globalThis as { __PP_STAT?: boolean }).__PP_STAT) {
     let sf = 0;
     for (let l = 0; l < N * N; l++) if (fineE[l]) sf++;
-    console.log(`[stat] bevelFine=${statB} fxFine=${statF} fineE=${sf}/${N * N}`);
+    console.log(`[stat] bevelFine=${statB} fineE=${sf}/${N * N}`);
   }
 
   // ---- ③ 发射网格 ----
@@ -662,7 +503,7 @@ export function buildPostChunkTopSurface(
         const xs = [wx0, wx0 + 1, wx0 + 1, wx0];
         const zs = [wz0, wz0, wz0 + 1, wz0 + 1];
         for (let k = 0; k < 4; k++) {
-          pos.push(xs[k] - ox - HALF, yAt(src, q, seed, vb.bx, vb.bz, xs[k], zs[k], cache), zs[k] - oz - HALF);
+          pos.push(xs[k] - ox - HALF, yAt(src, q, vb.bx, vb.bz, xs[k], zs[k]), zs[k] - oz - HALF);
           nor.push(0, 1, 0);
           uv.push((xs[k] - ox) / N, (zs[k] - oz) / N);
         }
@@ -671,14 +512,13 @@ export function buildPostChunkTopSurface(
       } else {
         // ---- fine：2^D 细分，中差分法线（偏移光滑带内才有倾斜） ----
         // 法线用离散格点差分（含 ±1 外圈 padding），每个采样点只算 1 次 yAt
-        // （原逐点 5× 采 yAt → 提速；热点 crackOffset 由此成倍下降）
         const base = vi;
         const G = S + 3; // 含外圈 padding 1（11×11）
         const yt = new Float64Array(G * G);
         for (let gy = -1; gy <= S + 1; gy++) {
           for (let gx = -1; gx <= S + 1; gx++) {
             yt[(gy + 1) * G + (gx + 1)] = yAt(
-              src, q, seed, vb.bx, vb.bz, wx0 + gx * step, wz0 + gy * step, cache,
+              src, q, vb.bx, vb.bz, wx0 + gx * step, wz0 + gy * step,
             );
           }
         }
@@ -799,7 +639,6 @@ export function buildPostSideWalls(
       tileDefAt: (x, z) => raster.tileDefAt(x, z),
     });
 
-  const cache = new Map<number, CrackLine | null>();
   // ★ 块级判定外观（走索引；未建 chunk 回落 src —— 逐位一致）
   const bq = new BlockFaceQuery(src, (ccx2, ccz2) => raster.blockIndex(ccx2, ccz2));
 
@@ -990,7 +829,7 @@ export function buildPostSideWalls(
         const tblX = Math.round(buffers.uvs[q * 8] * 15 - 0.5);
         const tblZ = Math.round(buffers.uvs[q * 8 + 1] * 15 - 0.5);
         const bxq = tblX + cx * BPS, bzq = tblZ + cz * BPS;
-        V[vi * 3 + 1] += ppOffset(bq, seed, bxq, bzq, wx, wz, cache);
+        V[vi * 3 + 1] += ppOffset(bq, bxq, bzq, wx, wz);
       }
     }
     // 重排索引剔除被替换 quad
@@ -1079,14 +918,14 @@ export function buildPostSideWalls(
           // 法线沿 sd 边朝外
           const color = 0.5;
           // 顶点高度全部采样 yAt（顶面同源，角点混合/弧线完全贴合）
-          const p0y = yAt(src, bq, seed, bx, bz, end.px, end.pz, cache);
+          const p0y = yAt(src, bq, bx, bz, end.px, end.pz);
           const P0: number[] = [end.px, p0y, end.pz];
           let prev: number[] = [...P0];
           const K3 = 6;
           for (let k = 1; k <= K3; k++) {
             const dM = (k / K3) * BEVEL_R;
             const qx = end.px + inX * dM, qz = end.pz + inZ * dM;
-            const qy = yAt(src, bq, seed, bx, bz, qx, qz, cache);
+            const qy = yAt(src, bq, bx, bz, qx, qz);
             const qp: number[] = [qx, qy, qz];
             // 绕序校验：三角形法线须与 sd 外法线一致，反了则交换后两点
             const e1x = prev[0] - P0[0], e1y = prev[1] - P0[1], e1z = prev[2] - P0[2];
@@ -1128,8 +967,8 @@ export function buildPostSideWalls(
         const d0 = ds[i], d1 = ds[i + 1];
         const ax = Ax + ux * d0, az = Az + uz * d0;
         const bx2 = Ax + ux * d1, bz2 = Az + uz * d1;
-        const yA = yAt(src, bq, seed, bx, bz, ax, az, cache);
-        const yB = yAt(src, bq, seed, bx, bz, bx2, bz2, cache);
+        const yA = yAt(src, bq, bx, bz, ax, az);
+        const yB = yAt(src, bq, bx, bz, bx2, bz2);
         const m = matAt((d0 + d1) / 2) ?? { cr: 0.5, cg: 0.5, cb: 0.5, shade: 0.5, uvU: 0.5, uvV: 0.5 };
         pos.push(
           ax - cx * N - HALF, yA, az - cz * N - HALF,

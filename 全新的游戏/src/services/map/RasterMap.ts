@@ -151,7 +151,9 @@ export class RasterMap {
     //   应用同意图（chunkSource）；当前 planRefinements 恒空 → 透传。
     const ccx = Math.floor(x / CHUNK_SIZE);
     const ccz = Math.floor(z / CHUNK_SIZE);
-    // ★ 后处理同源：贴地采样同步渲染版最终面（ppSurfaceHeight ≡ sampleSurface 当总开关关）
+    // ★ 坑裂后处理已弃用（2026-09-05，POST_PROCESS_ENABLED=false）：
+    //   ppSurfaceHeight ≡ 纯精修层视觉面（cornerCell 三角插值，无坑/裂/旧倒角）。
+    //   表驱动 weld/fine 微差为 §8 P1 收敛项。
     return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz));
   }
 

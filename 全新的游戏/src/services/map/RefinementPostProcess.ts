@@ -1,17 +1,12 @@
 // ============================================================
-// RefinementPostProcess —— 精修层后处理（独立双产物替换）
+// RefinementPostProcess —— 精修层后处理（★ 已弃用 2026-09-05）
 // ============================================================
-// 架构文档：《精修层后处理设计.md》（v5）
-// 定位：精修层定型快照之后运行，不依附精修层内部语义（只读精修层产物当数据）。
-//   - 任意整形：边缘圆弧过渡 / 坑洞 / 裂缝（都经 ppHeight 连续移位）
-//   - 独立生成两套替换件：
-//       渲染版（细）：局部细分，多顶点、平滑（坑壁/裂壁/圆滑棱）
-//       物理版（粗）：低精度坑/裂粗网格，可踩不穿不悬空
-//   - 替换进原快照：渲染用渲染版、物理用物理版、烘焙用渲染版最终面（重放同源）
-//
-// ★ 确定性：纯函数、逐位可复现；主线程与 Worker 同源（ppSurfaceHeight 唯一采样）。
-// ★ 零 three 依赖。
-// ★ 总开关 POST_PROCESS_ENABLED = false → ppHeight ≡ 0 → 一切退化为精修层原世界。
+// 原先：坑洞/裂缝/旧 bevel 圆角的高度移位（ppHeight）+ 局部细分顶面
+// 现状：渲染层已表驱动（无坑裂、FaceBuild 自带 bevel 弧带）→ 本层关停，
+//       POST_PROCESS_ENABLED=false → ppHeight≡0 → 查询/烘焙均退化为纯
+//       精修层视觉面（cornerCell 三角插值）。保留给 __PP_TABLE_BUILD=false
+//       回退路径与旧管线 A/B 对照（退役拆分见重构设计 §12）。
+// ★ 坑洞/裂隙已于 2026-09-05 彻底移除（渲染无坑裂；用户将基于表驱动重写）。
 // ============================================================
 
 import { tileById } from "./Tiles";
@@ -27,23 +22,7 @@ import {
 } from "./RefinementPostProcessConfig";
 
 // ------------------------------------------------------------
-// 确定性哈希（与精修层 planRefinements 同风格；坑/裂锚点用）
-// ------------------------------------------------------------
-function hash2(a: number, b: number, seed: number): number {
-  let x = seed ^ Math.imul(a, 0x85ebca6b) ^ Math.imul(b, 0xc2b2ae35);
-  x ^= x >>> 16;
-  x = Math.imul(x, 0x45d9f3b);
-  x ^= x >>> 16;
-  return (x >>> 0) / 4294967296;
-}
-
-/** 平滑对称剖面（cos 弧）：t∈[0,1]，0 处 1（最深/正中），1 处 0（归零），两端平滑 */
-function smoothProfile(t: number): number {
-  return 0.5 * (1 - Math.cos(Math.PI * Math.min(1, Math.max(0, t))));
-}
-
-// ------------------------------------------------------------
-// 判定：某点所属块的 genRole（供圆滑/坑/裂筛选）
+// 判定：某点所属块的 genRole（供圆滑筛选）
 // ------------------------------------------------------------
 function roleAt(src: BlockSource, bx: number, bz: number): string | undefined {
   const b = src.blockAt(bx, bz);
@@ -51,7 +30,7 @@ function roleAt(src: BlockSource, bx: number, bz: number): string | undefined {
 }
 
 // ------------------------------------------------------------
-// ppHeight —— 连续高分率移位函数（三类效果的唯一入口）
+// ppHeight —— 连续高分率移位函数（bevel 圆角的唯一入口）
 // 返回该点应叠加的高度增量（负 = 压低）。未命中 → 0。
 // 总开关关闭 → 恒 0（空后处理 ≡ 原世界）。
 // ------------------------------------------------------------
@@ -67,18 +46,8 @@ export function ppHeight(
   const role = roleAt(src, bx, bz);
   if (role === undefined) return 0;
 
-  let acc = 0;
-
-  // (1) 边缘圆弧过渡：块顶面外缘内，按到棱线距离压低 → 圆滑楼缘
-  acc += bevelOffset(x, z, seed, src, bx, bz, role);
-
-  // (2) 坑洞：落在坑心影响带内的确定性偏移
-  acc += pitOffset(x, z, seed, src, bx, bz, role);
-
-  // (3) 裂缝：落在裂缝折线带内的确定性偏移
-  acc += crackOffset(x, z, seed, src, bx, bz, role);
-
-  return acc;
+  // 边缘圆弧过渡：块顶面外缘内，按到棱线距离压低 → 圆滑楼缘
+  return bevelOffset(x, z, seed, src, bx, bz, role);
 }
 
 // ---- 圆角（风化：只圆滑高台↔不插值地面的外露硬边）----
@@ -136,65 +105,9 @@ function bevelOffset(
   return -drop;
 }
 
-// ---- 坑洞 ----
-function pitOffset(
-  x: number,
-  z: number,
-  seed: number,
-  src: BlockSource,
-  bx: number,
-  bz: number,
-  role: string | undefined,
-): number {
-  if (!role || role === "liquid" || role === "pit") return 0; // 水/坑底不挖
-  // 以块中心为坑心，确定性判定该块是否命中坑锚
-  const cx = bx * 4 + 2;
-  const cz = bz * 4 + 2;
-  const h = hash2(bx, bz, seed);
-  if (h > 0.06) return 0; // 命中率（含内圈连续）
-  const R = 0.75 + hash2(bx * 3 + 7, bz * 3 + 11, seed) * 0.75; // 0.75~1.5
-  const D = 0.25 + hash2(bx * 5 + 1, bz * 5 + 3, seed) * 0.25; // 0.25~0.5
-  const r = Math.hypot(x - cx, z - cz);
-  if (r > R) return 0;
-  return -D * smoothProfile(r / R);
-}
-
-// ---- 裂缝 ----
-function crackOffset(
-  x: number,
-  z: number,
-  seed: number,
-  src: BlockSource,
-  bx: number,
-  bz: number,
-  role: string | undefined,
-): number {
-  if (!role || role === "liquid" || role === "pit") return 0;
-  // 确定性折线：由 (cx,cz) 块起点 + 方向/长度哈希生成段
-  const x0 = bx * 4;
-  const z0 = bz * 4;
-  const ang = hash2(bx * 11 + 3, bz * 7 + 5, seed) * Math.PI * 2;
-  const len = 3 + hash2(bx * 13 + 9, bz * 17 + 1, seed) * 5; // 3~8m
-  const w = 0.15 + hash2(bx * 19 + 2, bz * 23 + 8, seed) * 0.25; // 半宽 0.15~0.4
-  const d = 0.15 + hash2(bx * 29 + 4, bz * 31 + 6, seed) * 0.15; // 深 0.15~0.3
-  // 折线中段起点偏移（沿垂直方向）
-  const perp = ang + Math.PI / 2;
-  const off = (hash2(bx * 37 + 5, bz * 41 + 2, seed) - 0.5) * len * 0.4;
-  const ox = x0 + 2 + Math.cos(ang) * 1.5 + Math.cos(perp) * off;
-  const oz = z0 + 2 + Math.sin(ang) * 1.5 + Math.sin(perp) * off;
-  // 到折线（方向 ang 过点 (ox,oz)）的垂直距离
-  const dxv = x - ox;
-  const dzv = z - oz;
-  const along = dxv * Math.cos(ang) + dzv * Math.sin(ang);
-  if (along < -len / 2 - w || along > len / 2 + w) return 0;
-  const perpDist = Math.abs(-dxv * Math.sin(ang) + dzv * Math.cos(ang));
-  if (perpDist > w) return 0;
-  return -d * smoothProfile(perpDist / w);
-}
-
 // ------------------------------------------------------------
 // ppDetailLevel —— 该点是否需要局部细分（fine=需要、多顶点）
-// 坑/裂/棱影响带内 = fine，否则 coarse。
+// 棱带内 = fine，否则 coarse。（坑/裂已移除 2026-09-05，仅剩 bevel）
 // ------------------------------------------------------------
 export function ppDetailLevel(
   x: number,
@@ -206,12 +119,8 @@ export function ppDetailLevel(
   const bx = Math.floor(x / 4);
   const bz = Math.floor(z / 4);
   const role = roleAt(src, bx, bz);
-  // 落在坑/裂带内 -> fine
-  if (crackOffset(x, z, seed, src, bx, bz, role) < -1e-9) return true;
-  if (pitOffset(x, z, seed, src, bx, bz, role) < -1e-9) return true;
   // 落在圆滑棱带内（bevelOffset 非零）-> fine（倒角圆弧需细分才可见）
-  if (bevelOffset(x, z, seed, src, bx, bz, role) < -1e-9) return true;
-  return false;
+  return bevelOffset(x, z, seed, src, bx, bz, role) < -1e-9;
 }
 
 // ------------------------------------------------------------
