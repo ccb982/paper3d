@@ -65,10 +65,11 @@ export const WALL_EMISSIVE = 0.55;
  *  阴影烘焙一次（静态 BAKE_SUN 方向），近距离实时叠加"方向重映射"——
  *  dirMod = N·L / L.y：平地恒 1（亮度守恒），坡面/侧壁方向感随实时太阳旋转；
  *  距离 NEAR 内全强度、FAR 外平滑淡回纯烘焙（远场保持静态阴影形状）。
- *  clamp 幅度防止背光死黑/顺光过曝（顺背观感差异收窄到 ±40%）。 */
+ *  clamp 幅度防止背光死黑/顺光过曝（背光轻压 -15%、顺光增强 +40%——
+ *  2026-09-05 用户反馈背光太暗后，下限 0.6 → 0.85，方向感靠顺光增强承载）。 */
 export const SUN_DIR_LOD_NEAR = 30;
 export const SUN_DIR_LOD_FAR = 90;
-export const SUN_DIR_MOD_MIN = 0.6;
+export const SUN_DIR_MOD_MIN = 0.85;
 export const SUN_DIR_MOD_MAX = 1.4;
 
 /** 侧壁白天直射保底（2026-09-05）：墙光 = 所属列烘焙顶光，坡脚/坑谷列在
