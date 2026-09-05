@@ -29,8 +29,8 @@ import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
-import { buildFaceTable } from './FaceTable';
-import { buildTopGeometry, buildWallGeometry, circleCells, buildLevelOverlay, type FaceGeometry } from './FaceBuild';
+import { circleCells, type FaceGeometry } from './FaceBuild';
+import { computeTableGeometry } from './PatchCompute';
 import { WallMaterial } from './TerrainMaterial';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
@@ -98,6 +98,21 @@ export class ChunkManager {
   /** 激活回调（玩家进入半径/首个网格落地时；特殊事件预留） */
   private onChunkActivated?: (cx: number, cz: number, key: number) => void;
 
+  // ---- ★ 双 Worker 几何管线（2026-09-05：bake/geometry 两个 worker 并行） ----
+  // 普通新建/重建 chunk 的几何生成全部走 terrainPatch worker（第二线程，与烘焙 worker
+  // 流水并行），主线程只做"预算化装配"（BufferGeometry 上传 + rapier collider 重建），
+  // 每帧最多 ASSEMBLE_PER_FRAME 个 → 流式创建不再出现几何计算的单帧尖峰。
+  /** 几何在途（key → 占位；避免看门狗/重复请求在装配前二次派发） */
+  private geoInflight = new Map<number, { cx: number; cz: number }>();
+  /** 几何就绪、待帧预算装配的 chunk（maps/decor/几何字节就绪） */
+  private assembleQueue: {
+    key: number; cx: number; cz: number;
+    maps: ChunkMaps; decor: DecorPlan;
+    top: FaceGeometry; wall: FaceGeometry;
+  }[] = [];
+  /** 每帧装配预算（个；几何已在 Worker 算好，装配 ≈ 上传+物理，个位 ms/块） */
+  private static readonly ASSEMBLE_PER_FRAME = 2;
+
   // ---- ★ 地形补丁（§14.11 层数覆盖层） ----
   // ★ 单一真源 = RasterMap chunk 数据的 levels 表（生成不写、clearAll 随 chunk 回收）；
   //   ChunkManager 只是读/写者，不做副本（渲染几何/Worker/玩法高度采样同源）。
@@ -149,9 +164,16 @@ export class ChunkManager {
     }
   }
 
-  /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 */
+  /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number): void {
     this.syncChunks(px, pz);
+    // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
+    let n = ChunkManager.ASSEMBLE_PER_FRAME;
+    while (n-- > 0 && this.assembleQueue.length > 0) {
+      const a = this.assembleQueue.shift()!;
+      this.geoInflight.delete(a.key);
+      this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall);
+    }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
     this.sweepChunks(px, pz, dt);
@@ -163,6 +185,8 @@ export class ChunkManager {
     this.boss4D = boss4D;
     // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
     this.bakeGen++;
+    this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
+    this.assembleQueue.length = 0;
     for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
     this.pendingBakes.clear();
     // ★ 可见 + 虚空一并重建（虚空块不在 meshes 里，漏掉会永远悬空）
@@ -179,6 +203,8 @@ export class ChunkManager {
   dispose(): void {
     this.queue.length = 0;        // ★ 清空构建队列
     this.queuedKeys.clear();
+    this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
+    this.assembleQueue.length = 0;
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
     this.bakeGen++;
     this.pendingBakes.clear();
@@ -246,6 +272,7 @@ export class ChunkManager {
         const key = chunkKeyOf(cx, cz);
         if (this.meshes.has(key)) continue;
         if (this.pendingBakes.has(key)) continue;
+        if (this.geoInflight.has(key)) continue;
         if (this.queuedKeys.has(key)) continue;
         if (!this.raster.getChunkData(cx, cz)) continue; // 数据未生成=本来就没排
         this.requestStandardBake(cx, cz);
@@ -437,34 +464,45 @@ export class ChunkManager {
   }
 
   /**
-   * ★ 标准风格构建②：像素就绪 → 几何/材质/物理。
+   * ★ 标准风格构建②：像素就绪 → 几何（Worker）→ 预算化装配。
    * 顶面几何走表驱动（coarse/fine 0.125m；§14.10/14.11 补丁、Levels 覆盖同源）；
    * 物理 trimesh = 顶面 + 侧壁同一份缓冲合并（碰撞=所见不变式）。
-   * ★ 旧后处理渲染管线已于 2026-09-05 整段移除（无 __PP_TABLE_BUILD 回退）。
+   * ★ 几何生成在 terrainPatch worker（与烘焙 worker 并行）；主线程只排队装配
+   *   （每帧预算 ASSEMBLE_PER_FRAME）。Worker 不可用/故障 → 主线程同步同函数。
    */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
-    this.finishStandardChunkTable(cx, cz, maps, decor);
-  }
-
-  /**
-   * ★ 表驱动装配（默认路径；架构权威：《地形表驱动管线重构设计.md》定稿）：
-   *   顶面 = 表驱动 coarse/fine（bevel 弧带 + weld 坡脚/角脊 0.125m，无坑裂）；
-   *   侧壁 = 表驱动（顶沿 = 顶网格边界折线同位节点列，闭合）。
-   *   物理 = 顶面 + 侧壁同一份缓冲合并同源（无墙缓冲中间物）。
-   */
-  private finishStandardChunkTable(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
-    const src = this.raster.chunkSource(cx, cz);
-    const levelsArr = this.raster.levelsOf(cx, cz);
-    const patch = buildLevelOverlay(levelsArr, cx, cz);
-    const table = buildFaceTable(src, cx, cz);
-    const topG = buildTopGeometry(table, src, patch);
-    const wallG = buildWallGeometry(table, src, patch);
-    this.assembleTableChunk(cx, cz, maps, decor, topG, wallG);
+    const key = chunkKeyOf(cx, cz);
+    if (this.geoInflight.has(key)) return; // 已在途：装配时自然带最新数据
+    const gen = this.bakeGen;
+    this.geoInflight.set(key, { cx, cz });
+    const levels = this.raster.levelsOf(cx, cz);
+    const readChunk = (ccx: number, ccz: number) => this.raster.getChunkData(ccx, ccz);
+    terrainPatch
+      .compute({ seed: this.raster.worldSeed, cx, cz, levels: new Uint8Array(levels) }, readChunk)
+      .then((geom) => {
+        if (this.bakeGen !== gen) return; // 换代（切风格/dispose）已作废
+        if (geom) {
+          this.assembleQueue.push({ key, cx, cz, maps, decor, top: geom.top, wall: geom.wall });
+          return;
+        }
+        // Worker 故障批 → 主线程同步同函数（字节一致；见 PatchCompute）
+        this.geoInflight.delete(key);
+        try {
+          const g = computeTableGeometry(readChunk, this.raster.worldSeed, cx, cz, new Uint8Array(levels));
+          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall);
+        } catch (e) {
+          console.error(`[ChunkManager] chunk(${cx},${cz}) 同步几何失败，交看门狗重试`, e);
+        }
+      })
+      .catch((e) => {
+        console.error(`[ChunkManager] chunk(${cx},${cz}) Worker 几何异常，交看门狗重试`, e);
+        this.geoInflight.delete(key);
+      });
   }
 
   /**
    * ★ 表几何装配（几何字节 → 材质/Group/装饰/物理/换装）：
-   * 破坏重建的 Worker 结果与同步路径共用同一装配（几何来源不同，装配唯一）。
+   * 新建/重建/破坏 Worker 结果与同步兜底共用同一装配（几何来源不同，装配唯一）。
    */
   private assembleTableChunk(
     cx: number,
