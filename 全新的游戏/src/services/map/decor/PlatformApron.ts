@@ -30,11 +30,28 @@
 //     OVERHANG——两向边在角上共享同一条斜切线（顶面）与同一个外角
 //     竖直线（下裙/内 Step），三层几何全闭合；直线延续端（二块单元
 //     拼接侧）不缩不延 → 两段精确对接；闭环无自由端 → 无端帽；
-//   · 纯视觉无碰撞（0.1m 压边不改变通行性）；不做烘焙影（体积趋零）。
+//   · 物理碰撞（用户 2026-09-06 定版：墙裙属于高台的一部分，用与地形
+//     同样的逻辑）：围裙几何输出 trimesh（块中心相对坐标系），由调用方
+//     经宿主 createGround 建独立地面刚体——与地形顶面/侧壁同一 entity
+//     kind、同一套碰撞管线（角色/子弹行为与高台 cliff 完全一致）。
+//     ★ 勿改回独立 cuboid 盒：0.35m 垂直薄盒与地面 trimesh 挤压去穿透
+//     会抖动穿模甚至物理爆炸（角色接近即卡退，已踩坑）；角部双盒重叠
+//     还会双重解算。
+//   · 高度解析（用户 2026-09-06：墙裙的参数也交给高度解析）：角色贴地走
+//     RasterMap.surfaceHeightAt 解析采样（不查物理 trimesh）→ 周界边计划
+//     （planPlatformAprons）被高度解析叠加消费（apronBandHeightAt），
+//     带顶 = 基面 + CURB_H，与视觉几何同源同高 → 看得见的墙裙=站得上的
+//     墙裙。buildPlatformAprons 采样改用基面高度（baseSurfaceHeightAt）
+//     防自反馈（采样到自己的带顶会循环抬升）。
+//     ★ CURB_H=0.35 ≡ CharacterBase.EDGE_CLIFF_BAND：落地态 `gy-p.y > 0.35`
+//     才回退 → 恰好压线可被 clamp 自动踏过；调 CURB_H 必须 ≤ EDGE_CLIFF_BAND
+//     否则角色上不去（只能跳）。
+//   · 不做烘焙影（体积趋零）。
 // ============================================================
 
 import * as THREE from 'three';
 import { tileById } from '../Tiles';
+import { CHUNK_SIZE } from '../ChunkGenerator';
 import { SUN_DIR_MOD_MIN, SUN_DIR_MOD_MAX } from '../TerrainMaterial';
 import { APRON_ANCHOR_P, apronAnchorRoll } from './ApronAnchor';
 
@@ -168,25 +185,38 @@ interface EdgePt {
 /** 世界块坐标 → 地块 key（null = 邻 chunk 未加载） */
 type BlockKeyAt = (wx: number, wz: number) => string | null;
 
+/** 围裙物理 trimesh（顶点为 chunk 中心相对坐标系，与地形地面刚体同帧；y 为世界绝对高度） */
+export interface ApronPhysics {
+  vertices: Float32Array;
+  indices: Uint32Array;
+}
+
+/** 围裙周界边（chunk 局部坐标 0~60；视觉几何与解析高度共用同一份计划） */
+export interface ApronEdge {
+  ox: number; oz: number;             // 边原点（块角）
+  dx: number; dz: number;             // 沿边方向（单位轴）
+  nx: number; nz: number;             // 外法向（单位轴）
+  ti0: number; ti1: number;           // 内缘沿边跨度（角端缩进 BAND_W）
+  to0: number; to1: number;           // 外缘沿边跨度（角端外延 OVERHANG）
+}
+
+/** 围裙采样基面（chunk 局部坐标 (lx,lz) → 世界高度；不含围裙自身贡献） */
+export type LocalHeightAt = (lx: number, lz: number) => number;
+
 /**
- * ★ 构建本 chunk 全部石围裙（15% 锚点单元的完整闭环 + 侧壁下裙）。
- * 纯视觉（无碰撞/无烘焙影）；确定性：同数据恒同几何。
- * @param blockTypes 本 chunk 15×15 地块 id
- * @param surfaceHeightAt 世界贴地高度（含补丁层数覆盖）
+ * ★ 规划本 chunk 全部围裙周界边（放置决策 + 坡面拒绝；纯函数零 three）。
+ * 视觉几何（buildPlatformAprons）与解析高度（RasterMap.surfaceHeightAt 叠加层）
+ * 共用本计划 → "看得见的墙裙"与"站得上的墙裙"逐位一致。
+ * @param H 基面高度（局部坐标；由调用方绑定 baseSurfaceHeightAt，防自反馈）
  * @param blockKeyAt 世界块坐标 → 地块 key（跨 chunk 防叠环判定用）
  */
-export function buildPlatformAprons(
+export function planPlatformAprons(
   cx: number, cz: number, seed: number,
   blockTypes: Uint8Array | undefined,
-  surfaceHeightAt: (x: number, z: number) => number,
   blockKeyAt: BlockKeyAt,
-): THREE.Mesh | null {
+  H: LocalHeightAt,
+): ApronEdge[] | null {
   if (!blockTypes) return null;
-  const sink = new QuadSink();
-  const H = (lx: number, lz: number) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz);
-  // UV：顶面世界平面 (x,z)/4（4m 一 repeat）；侧面 (x+z) 对角映射 + y/2
-  const uvTop = (x: number, z: number): number[] => [x / 4, z / 4];
-  const uvSide = (x: number, y: number, z: number): number[] => [(x + z) * 0.177, y / 2];
 
   // ---- 放置决策（本 chunk 块坐标 bx,bz ∈ [-1,15] 可探邻 chunk） ----
   const key15 = (bx: number, bz: number) => bz * 15 + bx;
@@ -217,6 +247,7 @@ export function buildPlatformAprons(
   };
   // 读序贪心：锚点成环（四邻域无环才成），可并东/南邻块为二块单元
   const units: Array<{ bx: number; bz: number; px: number; pz: number }[]> = [];
+  const allEdges: ApronEdge[] = [];
   for (let bz = 0; bz < 15; bz++) {
     for (let bx = 0; bx < 15; bx++) {
       const idx = key15(bx, bz);
@@ -261,10 +292,7 @@ export function buildPlatformAprons(
     // 真角端（垂直边属于周界）：内缘缩进 BAND_W、外缘外延 OVERHANG
     // —— 两向边共享同一条斜切线与同一个外角竖直线；
     // 直线延续端（二块单元拼接侧）：不缩不延，两段精确对接。
-    const edges: {
-      ox: number; oz: number; dx: number; dz: number; nx: number; nz: number;
-      ti0: number; ti1: number; to0: number; to1: number;
-    }[] = [];
+    const edges: ApronEdge[] = [];
     for (const raw of perim) {
       const [bxs, bzs, eKey] = raw.split(',') as [string, string, string];
       const bx = Number(bxs), bz = Number(bzs);
@@ -302,74 +330,134 @@ export function buildPlatformAprons(
     }
     if (sloped) continue;
 
-    // ---- 逐边建几何（顶面 + 内 Step + 外裙） ----
-    // 内缘/外缘各有自己的跨度（角端斜切）：同一采样位 f 下 ti≠to，
-    // 端部肋线即斜切线，中部肋线近似平行四边形（顶面仍为同一平面）。
-    for (const e of edges) {
-      const n = Math.max(2, Math.ceil((e.ti1 - e.ti0) / STEP) + 1);
-      const pts: EdgePt[] = [];
-      for (let i = 0; i < n; i++) {
-        const f = i / (n - 1);
-        const ti = e.ti0 + (e.ti1 - e.ti0) * f;
-        const to = e.to0 + (e.to1 - e.to0) * f;
-        const ix = e.ox + e.dx * ti - e.nx * BAND_W;              // 内缘点
-        const iz = e.oz + e.dz * ti - e.nz * BAND_W;              //（沿法向内缩）
-        const oxx = e.ox + e.dx * to + e.nx * OVERHANG;           // 外缘点
-        const ozz = e.oz + e.dz * to + e.nz * OVERHANG;           //（含外悬挑）
-        const ty = H(ix, iz) + CURB_H;     // 压边顶（用户 2026-09-06：只采样
-                                           //  自己高台的高度——外缘/对角点在
-                                           //  块界之外，邻块高台更高时会把
-                                           //  角部抬起跟着邻居走；内缘点在
-                                           //  自己块内，恒为自己高台高度）
-        const ib = H(ix, iz) - 0.02;                              // 内 Step 底（略埋台面）
-        pts.push({ ix, iz, ty, ox: oxx, oz: ozz, ib });
-      }
-      for (let i = 0; i < n - 1; i++) {
-        const a = pts[i], b = pts[i + 1];
-        // 顶面（+Y）
-        sink.quad(
-          [a.ix, a.ty, a.iz], [b.ix, b.ty, b.iz], [b.ox, b.ty, b.oz], [a.ox, a.ty, a.oz],
-          [0, 1, 0], uvTop(a.ix, a.iz), uvTop(b.ix, b.iz), uvTop(b.ox, b.oz), uvTop(a.ox, a.oz),
-        );
-        // 内 Step（顶→底，法线朝环内）
-        sink.quad(
-          [a.ix, a.ty, a.iz], [b.ix, b.ty, b.iz], [b.ix, b.ib, b.iz], [a.ix, a.ib, a.iz],
-          [-e.nx, 0, -e.nz], uvSide(a.ix, a.ty, a.iz), uvSide(b.ix, b.ty, b.iz), uvSide(b.ix, b.ib, b.iz), uvSide(a.ix, a.ib, a.iz),
-        );
-      }
+    allEdges.push(...edges);
+  }
+  return allEdges.length > 0 ? allEdges : null;
+}
 
-      // ---- 外裙（细采样接地版；用户 2026-09-06：围墙下部要接地） ----
-      // 旧版裙底每 0.5m 单点采样、直边连线——采样点之间地形鼓包（弹坑唇/
-      // 坡面/噪点）时直边悬空漏缝。改为 0.15m 细采样条带，每个底点取裙面
-      // 附近两个法向深度的地形高度最大值再下埋：低处裙底深入地下不可见、
-      // 高处精确贴合地面 → 下沿在数学上永不高于贴地处地形，保证接地。
-      // 顶沿用粗采样 ty 的线性插值，与压边外缘折线精确共线（无缝）。
-      const mFine = Math.max(1, Math.ceil((e.to1 - e.to0) / 0.15));
-      let ptx: number[] | null = null;   // 上一细点 [x, yTop, z]
-      let pbt = 0;                       // 上一细点裙底 y
-      for (let j = 0; j <= mFine; j++) {
-        const f = j / mFine;
-        const to = e.to0 + (e.to1 - e.to0) * f;
-        const gx = e.ox + e.dx * to, gz = e.oz + e.dz * to;      // 界上点
-        const pxo = gx + e.nx * OVERHANG, pzo = gz + e.nz * OVERHANG;
-        // 顶沿：粗采样 ty 线性插值（pts 的 to 均匀 → 段号线性映射）
-        const seg = Math.min(n - 2, Math.floor(f * (n - 1)));
-        const lf = f * (n - 1) - seg;
-        const ty = pts[seg].ty + (pts[seg + 1].ty - pts[seg].ty) * lf;
-        // 裙底：贴地邻域取最大（贴壁侧优先——坡面越靠近壁越高）
-        const hWall = H(pxo + e.nx * 0.02, pzo + e.nz * 0.02);
-        const hOut = H(pxo + e.nx * 0.08, pzo + e.nz * 0.08);
-        const rawSy = Math.max(hWall, hOut) - SKIRT_BURY;
-        const sy = Math.min(rawSy, ty - MIN_SKIRT);   // 无上限钳制：高台全高包壁才接地
-        if (ptx) {
-          sink.quad(
-            [ptx[0], ptx[1], ptx[2]], [pxo, ty, pzo], [pxo, sy, pzo], [ptx[0], pbt, ptx[2]],
-            [e.nx, 0, e.nz], uvSide(ptx[0], ptx[1], ptx[2]), uvSide(pxo, ty, pzo), uvSide(pxo, sy, pzo), uvSide(ptx[0], pbt, ptx[2]),
-          );
-        }
-        ptx = [pxo, ty, pzo];
-        pbt = sy;
+/**
+ * ★ 围裙解析高度（用户 2026-09-06：墙裙的参数也交给高度解析）：
+ * (lx,lz) 落在某条周界边的石框带内 → 带顶高度（基面+CURB_H），否则 null。
+ * 点测与几何同一参数化：v 求带内横向 s、u 反解纵向 f（角端斜切 = span 线性
+ * 内插），带顶 = H(内缘点@f) + CURB_H —— 与 buildPlatformAprons 逐位同源，
+ * 角色贴地/clamp（EDGE_CLIFF_BAND 台阶阈值）与视觉完全一致。
+ * 已知 4cm 级差异：带外悬挑落在邻 chunk 侧的 4cm 条由邻 chunk 布局覆盖
+ * 不到 → 角色在该缝按基面贴地（化妆品级，可忽略）。
+ */
+export function apronBandHeightAt(
+  edges: ApronEdge[], lx: number, lz: number, H: LocalHeightAt,
+): number | null {
+  for (const e of edges) {
+    const rx = lx - e.ox, rz = lz - e.oz;
+    const u = rx * e.dx + rz * e.dz;                       // 沿边坐标
+    const v = rx * e.nx + rz * e.nz;                       // 法向坐标（外正）
+    const s = (v + BAND_W) / (BAND_W + OVERHANG);          // 0=内缘线 1=外缘线
+    if (s < 0 || s > 1) continue;
+    const tiLen = e.ti1 - e.ti0;
+    const a = e.to0 - e.ti0;                               // 内端角部偏移（0/−OVERHANG）
+    const b = (e.to1 - e.to0) - tiLen;                     // 外端角部偏移（0/+OVERHANG）
+    const den = tiLen + s * b;
+    if (den <= 1e-9) continue;
+    const f = (u - e.ti0 - s * a) / den;                   // 0=内端 1=外端
+    if (f < 0 || f > 1) continue;
+    const ti = e.ti0 + tiLen * f;
+    const ix = e.ox + e.dx * ti - e.nx * BAND_W;           // 内缘采样点（与几何同式）
+    const iz = e.oz + e.dz * ti - e.nz * BAND_W;
+    return H(ix, iz) + CURB_H;
+  }
+  return null;
+}
+
+/**
+ * ★ 构建本 chunk 全部石围裙（15% 锚点单元的完整闭环 + 侧壁下裙）。
+ * 视觉网格 + 物理 trimesh（调用方经宿主 createGround 建地面刚体，与地形同
+ * 管线）；周界计划与解析高度共用 planPlatformAprons → 几何与"站得上"一致。
+ * @param surfaceHeightAt 基面高度（世界坐标；★必须传 baseSurfaceHeightAt——
+ *   传叠加层会采样到自己的带顶造成自反馈循环抬升）
+ * @param blockKeyAt 世界块坐标 → 地块 key（跨 chunk 防叠环判定用）
+ */
+export function buildPlatformAprons(
+  cx: number, cz: number, seed: number,
+  blockTypes: Uint8Array | undefined,
+  surfaceHeightAt: (x: number, z: number) => number,
+  blockKeyAt: BlockKeyAt,
+): { mesh: THREE.Mesh; physics: ApronPhysics } | null {
+  const edges = planPlatformAprons(cx, cz, seed, blockTypes, blockKeyAt,
+    (lx, lz) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz));
+  if (!edges) return null;
+  const sink = new QuadSink();
+  const H = (lx: number, lz: number) => surfaceHeightAt(cx * 60 + lx, cz * 60 + lz);
+  // UV：顶面世界平面 (x,z)/4（4m 一 repeat）；侧面 (x+z) 对角映射 + y/2
+  const uvTop = (x: number, z: number): number[] => [x / 4, z / 4];
+  const uvSide = (x: number, y: number, z: number): number[] => [(x + z) * 0.177, y / 2];
+
+  // ---- 逐边建几何（顶面 + 内 Step + 外裙） ----
+  // 内缘/外缘各有自己的跨度（角端斜切）：同一采样位 f 下 ti≠to，
+  // 端部肋线即斜切线，中部肋线近似平行四边形（顶面仍为同一平面）。
+  for (const e of edges) {
+    const n = Math.max(2, Math.ceil((e.ti1 - e.ti0) / STEP) + 1);
+    const pts: EdgePt[] = [];
+    for (let i = 0; i < n; i++) {
+      const f = i / (n - 1);
+      const ti = e.ti0 + (e.ti1 - e.ti0) * f;
+      const to = e.to0 + (e.to1 - e.to0) * f;
+      const ix = e.ox + e.dx * ti - e.nx * BAND_W;              // 内缘点
+      const iz = e.oz + e.dz * ti - e.nz * BAND_W;              //（沿法向内缩）
+      const oxx = e.ox + e.dx * to + e.nx * OVERHANG;           // 外缘点
+      const ozz = e.oz + e.dz * to + e.nz * OVERHANG;           //（含外悬挑）
+      const ty = H(ix, iz) + CURB_H;     // 压边顶（用户 2026-09-06：只采样
+                                         //  自己高台的高度——外缘/对角点在
+                                         //  块界之外，邻块高台更高时会把
+                                         //  角部抬起跟着邻居走；内缘点在
+                                         //  自己块内，恒为自己高台高度）
+      const ib = H(ix, iz) - 0.02;                              // 内 Step 底（略埋台面）
+      pts.push({ ix, iz, ty, ox: oxx, oz: ozz, ib });
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      // 顶面（+Y）
+      sink.quad(
+        [a.ix, a.ty, a.iz], [b.ix, b.ty, b.iz], [b.ox, b.ty, b.oz], [a.ox, a.ty, a.oz],
+        [0, 1, 0], uvTop(a.ix, a.iz), uvTop(b.ix, b.iz), uvTop(b.ox, b.oz), uvTop(a.ox, a.oz),
+      );
+      // 内 Step（顶→底，法线朝环内）
+      sink.quad(
+        [a.ix, a.ty, a.iz], [b.ix, b.ty, b.iz], [b.ix, b.ib, b.iz], [a.ix, a.ib, a.iz],
+        [-e.nx, 0, -e.nz], uvSide(a.ix, a.ty, a.iz), uvSide(b.ix, b.ty, b.iz), uvSide(b.ix, b.ib, b.iz), uvSide(a.ix, a.ib, a.iz),
+      );
+    }
+
+    // ---- 外裙（细采样接地版；用户 2026-09-06：围墙下部要接地） ----
+    // 旧版裙底每 0.5m 单点采样、直边连线——采样点之间地形鼓包（弹坑唇/
+    // 坡面/噪点）时直边悬空漏缝。改为 0.15m 细采样条带，每个底点取裙面
+    // 附近两个法向深度的地形高度最大值再下埋：低处裙底深入地下不可见、
+    // 高处精确贴合地面 → 下沿在数学上永不高于贴地处地形，保证接地。
+    // 顶沿用粗采样 ty 的线性插值，与压边外缘折线精确共线（无缝）。
+    const mFine = Math.max(1, Math.ceil((e.to1 - e.to0) / 0.15));
+    let ptx: number[] | null = null;   // 上一细点 [x, yTop, z]
+    let pbt = 0;                       // 上一细点裙底 y
+    for (let j = 0; j <= mFine; j++) {
+      const f = j / mFine;
+      const to = e.to0 + (e.to1 - e.to0) * f;
+      const gx = e.ox + e.dx * to, gz = e.oz + e.dz * to;      // 界上点
+      const pxo = gx + e.nx * OVERHANG, pzo = gz + e.nz * OVERHANG;
+      // 顶沿：粗采样 ty 线性插值（pts 的 to 均匀 → 段号线性映射）
+      const seg = Math.min(n - 2, Math.floor(f * (n - 1)));
+      const lf = f * (n - 1) - seg;
+      const ty = pts[seg].ty + (pts[seg + 1].ty - pts[seg].ty) * lf;
+      // 裙底：贴地邻域取最大（贴壁侧优先——坡面越靠近壁越高）
+      const hWall = H(pxo + e.nx * 0.02, pzo + e.nz * 0.02);
+      const hOut = H(pxo + e.nx * 0.08, pzo + e.nz * 0.08);
+      const rawSy = Math.max(hWall, hOut) - SKIRT_BURY;
+      const sy = Math.min(rawSy, ty - MIN_SKIRT);   // 无上限钳制：高台全高包壁才接地
+      if (ptx) {
+        sink.quad(
+          [ptx[0], ptx[1], ptx[2]], [pxo, ty, pzo], [pxo, sy, pzo], [ptx[0], pbt, ptx[2]],
+          [e.nx, 0, e.nz], uvSide(ptx[0], ptx[1], ptx[2]), uvSide(pxo, ty, pzo), uvSide(pxo, sy, pzo), uvSide(ptx[0], pbt, ptx[2]),
+        );
       }
+      ptx = [pxo, ty, pzo];
+      pbt = sy;
     }
   }
   if (sink.pos.length === 0) return null;
@@ -380,5 +468,18 @@ export function buildPlatformAprons(
   geo.computeBoundingSphere();
   const mesh = new THREE.Mesh(geo, apronMaterial());
   mesh.name = 'platform_apron';
-  return mesh;
+  // ---- 物理 trimesh（块中心相对坐标系：x/z − CHUNK_SIZE/2，与地形地面刚体同帧；
+  //      非索引 quad 展开 → 顺序索引；子弹命中等同地形命中，可正常打补丁重建） ----
+  const half = CHUNK_SIZE / 2;
+  const n3 = sink.pos.length;
+  const vertices = new Float32Array(n3);
+  for (let i = 0; i < n3; i += 3) {
+    vertices[i] = sink.pos[i] - half;
+    vertices[i + 1] = sink.pos[i + 1];
+    vertices[i + 2] = sink.pos[i + 2] - half;
+  }
+  const triCount = n3 / 9;
+  const indices = new Uint32Array(triCount * 3);
+  for (let t = 0; t < triCount * 3; t++) indices[t] = t;
+  return { mesh, physics: { vertices, indices } };
 }

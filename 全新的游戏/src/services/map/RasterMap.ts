@@ -23,6 +23,7 @@ import {
 } from "./Refinements";
 import { ppSurfaceHeight } from "./RefinementPostProcess";
 import { envelopeLevelAt, PATCH_DEPTH } from "./FaceBuild";
+import { planPlatformAprons, apronBandHeightAt, type ApronEdge } from "./decor/PlatformApron";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -48,6 +49,9 @@ export class RasterMap {
    *   非空（30% 大落差产坡）→ 每 chunk 只算一次意图，surfaceHeightAt 高频
    *   采样（角色脚底/影子/烘焙逐顶点）不再逐点重跑 O(225×4) 计划。 */
   private chunkSourceCache = new Map<number, BlockSource>();
+  /** ★ 围裙周界边计划缓存（chunkKey → ApronEdge[]/null；弹坑挖掘会改基面
+   *   高度影响坡面拒绝判定 → digCells 时对本 chunk+4 邻失效重算） */
+  private apronEdgeCache = new Map<number, ApronEdge[] | null>();
   /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
@@ -106,6 +110,7 @@ export class RasterMap {
     this.cells.clear();
     this.cellOf.clear();
     this.chunkSourceCache.clear();
+    this.apronEdgeCache.clear();
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
 
@@ -135,13 +140,17 @@ export class RasterMap {
     return chunk.heights[lz * CHUNK_SIZE + lx] ?? 0;
   }
 
-  /** ★ 视觉面一致采样（角色脚底/影子贴地）—— SurfaceRules 唯一真源薄封装。
+  /**
+   * ★ 视觉面一致采样（角色脚底/影子贴地）—— SurfaceRules 唯一真源薄封装。
    *   语义（2026-08-29 定稿，《地形边缘裁决与视觉面架构.md》§3）：
    *   查询点所在米格的四角按【块归属】取高（weld 角点 = 2×2 max 与旧公式
    *   逐位一致；cliff 硬角点 = 本块自持高度）后三角形插值——与网格渲染
    *   逐位一致。对角线 (lx,lz+1)-(lx+1,lz)，fx+fz≤1 取 T1；不能用双线性
-   *   （非平面格偏差可达米级 → 角色悬浮/影子切入地形，2026-08-26 实测）。 */
-  surfaceHeightAt(x: number, z: number): number {
+   *   （非平面格偏差可达米级 → 角色悬浮/影子切入地形，2026-08-26 实测）。
+   *   ★ 不含石围裙贡献（围裙叠加层见 surfaceHeightAt；围裙几何构建/
+   *   规划必须用本函数防自反馈）。
+   */
+  baseSurfaceHeightAt(x: number, z: number): number {
     // ★ per-chunk 意图（§8 第四步）：渲染与查询同源 —— 采样按所在 chunk
     //   应用同意图（chunkSource）；当前 planRefinements 恒空 → 透传。
     const ccx = Math.floor(x / CHUNK_SIZE);
@@ -154,6 +163,53 @@ export class RasterMap {
     return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz))
       - this.levelDepthAt(x, z);
   }
+
+  /**
+   * ★ 游戏贴地总入口 = 基面 + 石围裙叠加层（用户 2026-09-06：墙裙的参数
+   *   也交给高度解析——墙裙属于高台的一部分）。角色贴地/台阶/clamp、影子、
+   *   弹坑挖掘差分等全部经本函数；围裙带顶 = 基面 + 0.35（CURB_H ≡
+   *   CharacterBase.EDGE_CLIFF_BAND 压线可自动踏过）→ 角色可走上墙裙。
+   */
+  surfaceHeightAt(x: number, z: number): number {
+    const base = this.baseSurfaceHeightAt(x, z);
+    const apron = this.apronHeightAt(x, z);
+    return apron ?? base;
+  }
+
+  /** 石围裙叠加层：查询点落在围裙石框带内 → 带顶高度；否则 null */
+  private apronHeightAt(x: number, z: number): number | null {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const edges = this.apronEdgesOf(ccx, ccz);
+    if (!edges) return null;
+    return apronBandHeightAt(
+      edges, x - ccx * CHUNK_SIZE, z - ccz * CHUNK_SIZE,
+      (lx, lz) => this.baseSurfaceHeightAt(ccx * CHUNK_SIZE + lx, ccz * CHUNK_SIZE + lz),
+    );
+  }
+
+  /** 本 chunk 围裙周界边计划（惰性规划 + 缓存；无围裙缓存 null 负缓存） */
+  private apronEdgesOf(cx: number, cz: number): ApronEdge[] | null {
+    const key = chunkKeyOf(cx, cz);
+    const hit = this.apronEdgeCache.get(key);
+    if (hit !== undefined) return hit;
+    const data = this.chunks.get(key);
+    const edges = data
+      ? planPlatformAprons(cx, cz, this.seed, data.blockTypes, this.blockKeyAtWorld,
+          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+      : null;
+    this.apronEdgeCache.set(key, edges);
+    return edges;
+  }
+
+  /** 世界块坐标 → 地块 key（null = 邻 chunk 未加载；围裙跨 chunk 判定用） */
+  private blockKeyAtWorld = (wx: number, wz: number): string | null => {
+    const cx = Math.floor(wx / 15);
+    const cz = Math.floor(wz / 15);
+    const data = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!data) return null;
+    return tileById(data.blockTypes[(wz - cz * 15) * 15 + (wx - cx * 15)]).key;
+  };
 
   // ============ ★ §14.11 补丁层数覆盖层（运行时唯一写者 = 子弹命中） ============
 
@@ -204,6 +260,13 @@ export class RasterMap {
       const u1 = envelopeLevelAt(levels, CHUNK_SIZE, cx, cz, wx, wz);
       if (u1 - u0 > 1e-9) { changed = true; break; }
     }
+    // ★ 层数变化 → 基面高度变化 → 围裙坡面拒绝/带顶采样随变 → 失效本 chunk
+    //   与 4 侧邻（围裙坡面采样跨边界 ±0.45m）
+    this.apronEdgeCache.delete(chunkKeyOf(cx, cz));
+    this.apronEdgeCache.delete(chunkKeyOf(cx + 1, cz));
+    this.apronEdgeCache.delete(chunkKeyOf(cx - 1, cz));
+    this.apronEdgeCache.delete(chunkKeyOf(cx, cz + 1));
+    this.apronEdgeCache.delete(chunkKeyOf(cx, cz - 1));
     return changed;
   }
 
