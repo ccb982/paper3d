@@ -17,8 +17,7 @@ import {
   topYView,
   PATCH_DEPTH,
   PATCH_COLOR,
-} from "../src/services/map/FaceBuild";
-import { buildFaceTable } from "../src/services/map/FaceTable";
+} from "../src/services/map/FaceBuild";import { buildFaceTable } from "../src/services/map/FaceTable";
 import { RasterMap } from "../src/services/map/RasterMap";
 
 const N = 60;
@@ -76,10 +75,6 @@ function run(seed: number) {
   const arr = new Uint8Array(N * N);
   for (const c of patchCells) arr[c] = 1;
   const overlay = buildPatchOverlay(arr, 0, 0);
-  const topNo = buildTopGeometry(table0, src0);
-  const topYes = buildTopGeometry(table0, src0, undefined, overlay);
-  const wallNo = buildWallGeometry(table0, src0);
-  const wallYes = buildWallGeometry(table0, src0, undefined, overlay);
 
   const wOf = (wx: number, wz: number) => ({ lx: Math.floor(wx), lz: Math.floor(wz) });
   const isP = (wx: number, wz: number) => { const { lx, lz } = wOf(wx, wz); return patchCells.has(lz * N + lx); };
@@ -88,6 +83,12 @@ function run(seed: number) {
     const fx2 = wx - Math.floor(wx), fz2 = wz - Math.floor(wz);
     return fx2 > 0.02 && fz2 > 0.02 && fx2 < 0.98 && fz2 < 0.98;
   };
+  // ★ 对照基准 = 同 fine 掩码、深度 0 的构建（拓扑与补丁构建逐位对齐，索引可直接相减）
+  const overlay0 = buildPatchOverlay(arr, 0, 0, 0);
+  const topYes = buildTopGeometry(table0, src0, undefined, overlay);
+  const topNo = buildTopGeometry(table0, src0, undefined, overlay0);
+  const wallYes = buildWallGeometry(table0, src0, undefined, overlay);
+  const wallNo = buildWallGeometry(table0, src0, undefined, overlay0);
 
   {
     let pBad = 0, wBad = 0, hBad = 0, pCore = 0, wCore = 0;
@@ -304,6 +305,60 @@ function run(seed: number) {
     let dV = 0;
     for (let i = 0; i < A.vertices.length; i++) if (A.vertices[i] !== B.vertices[i]) dV++;
     ok(dV === 0, `${tag} ⑤同 overlay 两次构建逐位一致（v=${dV}）`);
+  }
+
+  // ---- ⑦ 防 T 结细缝：补丁 cell 全 fine（内部核 49 顶点/0.125m 细分）+ 同块内同点无高度分裂 ----
+  {
+    // 找一块完全落在单个 4m 块内部的 3×3 区域（避免设计内台阶线干扰判定）
+    const fineBase = topFineCells(table0, src0);
+    let bx7 = -1, by7 = -1;
+    for (let b = 2; b <= 11 && bx7 < 0; b++) {
+      for (let bb = 2; bb <= 11; bb++) {
+        const ok2 = (lx: number, lz: number) => fineBase[lz * N + lx] === 0;
+        if (ok2(b * 4 + 1, bb * 4 + 1) && ok2(b * 4 + 2, bb * 4 + 2) && ok2(b * 4 + 3, bb * 4 + 3)) {
+          bx7 = b * 4 + 1; by7 = bb * 4 + 1; break;
+        }
+      }
+    }
+    ok(bx7 > 0, `${tag} ⑦找到平坦 3×3 区（块 ${bx7 >> 2},${by7 >> 2}）`);
+    if (bx7 > 0) {
+      const arr7 = new Uint8Array(N * N);
+      for (let lz = by7; lz < by7 + 3; lz++) for (let lx = bx7; lx < bx7 + 3; lx++) arr7[lz * N + lx] = 1;
+      const ov7 = buildPatchOverlay(arr7, 0, 0);
+      const top7 = buildTopGeometry(table0, src0, undefined, ov7);
+      const corePerCell = new Map<number, number>();
+      const yAt = new Map<string, number[]>();
+      for (let i = 0; i < top7.vertices.length / 3; i++) {
+        const wx = top7.vertices[i * 3] + HALF, wz = top7.vertices[i * 3 + 2] + HALF;
+        const lx = Math.floor(wx), lz = Math.floor(wz);
+        const fx2 = wx - lx, fz2 = wz - lz;
+        if (fx2 > 0.05 && fz2 > 0.05 && fx2 < 0.95 && fz2 < 0.95) {
+          corePerCell.set(lz * N + lx, (corePerCell.get(lz * N + lx) ?? 0) + 1);
+        }
+        const k = wx.toFixed(3) + "," + wz.toFixed(3);
+        const ys = yAt.get(k) ?? [];
+        ys.push(top7.vertices[i * 3 + 1]);
+        yAt.set(k, ys);
+      }
+      let badCore = 0;
+      for (let lz = by7; lz < by7 + 3; lz++) {
+        for (let lx = bx7; lx < bx7 + 3; lx++) {
+          const n = corePerCell.get(lz * N + lx) ?? 0;
+          if (n !== 49) badCore++;
+        }
+      }
+      ok(badCore === 0, `${tag} ⑦补丁 cell 全部 0.125m 细分（内部核 49 顶点；坏 ${badCore}）`);
+      let splitBad = 0, splitSeen = 0;
+      for (const [k, ys] of yAt) {
+        if (ys.length < 2) continue;
+        const [wxS, wzS] = k.split(",").map(Number);
+        if (wxS < bx7 + 0.05 || wxS > bx7 + 2.95 || wzS < by7 + 0.05 || wzS > by7 + 2.95) continue;
+        splitSeen++;
+        const maxY = Math.max(...ys), minY = Math.min(...ys);
+        if (maxY - minY > 1e-3) splitBad++;
+      }
+      ok(splitSeen > 0 && splitBad === 0, `${tag} ⑦区域内同点无高度分裂（复查 ${splitSeen} 坏 ${splitBad}）`);
+    }
   }
 
   // ---- ⑥ 跨 chunk：补丁触 seam ----

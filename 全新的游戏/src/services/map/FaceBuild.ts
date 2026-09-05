@@ -260,6 +260,7 @@ const fineCache = new WeakMap<FaceTable, Uint8Array>();
 export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
   const cached = fineCache.get(table);
   if (cached) return cached;
+  if (cached) return cached;
   const weldFine = new Uint8Array(N * N);
   const bevelFine = new Uint8Array(N * N);
   for (let lbz = 0; lbz < BPS; lbz++) {
@@ -303,6 +304,33 @@ export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
   const out = new Uint8Array(N * N);
   for (let i = 0; i < out.length; i++) out[i] = wFine[i] | bevelOut[i];
   fineCache.set(table, out);
+  return out;
+}
+
+/**
+ * 补丁感知的 fine 掩码：基座 fine（bevel+weld 集群）∪ 补丁 cell ∪ 补丁外扩 1 圈。
+ * ★ 防 T 结细缝（2026-09-05 用户实测：补丁坡面内部 & 与原面交界出现缝隙）：
+ * 补丁深度场给原本平坦的 coarse 区引入 smoothstep 曲率——若补丁 cell 保持 coarse
+ * （1m 单 quad 拉直线弦），与相邻 fine 格共享的边在曲率区会弦≠曲线 → 楔形开口；
+ * 同理坑口外第一圈未补丁 cell 若为 coarse，其弦线与补丁 fine 沿（可能微弯的）边界线
+ * 不符 → 交界开口。把「补丁 cell + 外扩 1 圈」全部并入 fine 后，坑内坡面与坑口交界
+ * 全细分、粗细分界只落在深度/表面恒直的边上 → 弦与曲线重合，无缝隙。
+ */
+function topFineCellsFor(table: FaceTable, src: BlockSource, patch?: PatchOverlay): Uint8Array {
+  const base = topFineCells(table, src);
+  if (!patch) return base;
+  const out = new Uint8Array(base);
+  for (let lz = 0; lz < N; lz++) {
+    for (let lx = 0; lx < N; lx++) {
+      if (!patch.isPatched(lx, lz)) continue;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx2 = lx + dx, nz2 = lz + dz;
+          if (nx2 >= 0 && nz2 >= 0 && nx2 < N && nz2 < N) out[nz2 * N + nx2] = 1;
+        }
+      }
+    }
+  }
   return out;
 }
 
@@ -402,8 +430,8 @@ export function buildTopGeometry(
   const W = [1, 1, 1];
   let vi = 0;
 
-  // ① fine 标记（bevel 带 + weld 坡脚/角脊 cell；已外扩 1 格保水密）
-  const fineE = topFineCells(table, src);
+  // ① fine 标记（bevel 带 + weld 坡脚/角脊 cell + 补丁 cell；已外扩/并入防 T 结细缝）
+  const fineE = topFineCellsFor(table, src, patch);
 
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
@@ -510,7 +538,7 @@ export function buildWallGeometry(
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
   const def = (wx: number, wz: number): number => (deformAt ? deformAt(wx, wz) : 0);
-  const fineE = topFineCells(table, src);
+  const fineE = topFineCellsFor(table, src, patch);
   let vi = 0;
 
   for (let lbz = 0; lbz < BPS; lbz++) {
