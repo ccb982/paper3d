@@ -487,7 +487,11 @@ export const TILE_FLAT_SAND = new TileDef(
     jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
     depression: false,
     borderLine: true, // ★ 地块交界黑线（0.85 强度；强化逐地块色差层次）
-    material: { fnId: "sand" }, // 沙土材质（细沙粒 + 微起伏）
+    material: {
+      fnId: "sand",
+      // ★ 条带装饰 = 沙土地块专属（斑马线式琥珀虚线段，20% 地块出现；shader slot15 门控）
+      params: { stripes: 0.55 },
+    }, // 沙土材质（细沙粒 + 微起伏）+ 条带装饰
   },
   TILE_FLAT.physics,
   ["foundation"],

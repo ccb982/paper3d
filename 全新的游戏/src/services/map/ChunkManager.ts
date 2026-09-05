@@ -845,6 +845,9 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
       for (const k of Object.keys(mat.params)) {
         params[id * 16 + i++] = merged[k] ?? mat.params[k];
       }
+      // ★ 通用装饰槽（slot 15）：条带装饰强度——全材质统一索引（模板无需声明），
+      //   地块 material.params 加 { stripes: 0.6 } 即启用，0/缺省 = 关
+      params[id * 16 + 15] = merged.stripes ?? 0;
     }
   }
 

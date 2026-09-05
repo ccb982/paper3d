@@ -425,6 +425,55 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(dL, dC, dH, reflect);
   }
 
+  // ==================== 条带装饰（《我画的第一个装饰性纹理》2026-09-05 定稿） ====================
+  // 语义（用户定调）：规规矩矩的斑马线式标线——横平竖直 + 轻磨损。
+  //   · 模板 = 用户手绘 JSON：右缘竖向车道（中心 x≈3.70m，半宽 0.10m）上三段
+  //     虚线（沿轴 0.17~0.50 / 0.73~3.00 / 3.30~3.86m，按手绘坐标换算）；
+  //   · 位置四选一 = 模板旋转 0°/90°/180°/270° → 车道偏右/偏上/偏左/偏下；
+  //   · 出现条带的地块中，55% 单条 / 45% 两条不同旋转叠加；
+  //   · ★ 20% 地块出现概率（tileH 门控）；沙土地块专属（TILE_FLAT_SAND 声明 stripes）；
+  //   · 颜色 = 琥珀 sRGB(255,190,111) → OKLCH(0.846,0.122,0.196)；
+  //     磨损 = 边缘噪声啃边（0~3cm，只蚀不胀）+ 内部轻斑驳（0.88~1.0）。
+  // 门控：uMatParams slot15（stripes）=0 关（早退零成本）；仅顶面调用。
+  vec4 stripeDeco(vec3 f, vec2 w, int id) {
+    float amt = matP(id, 15);
+    if (amt <= 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
+    vec2 wt = w - floor(w / 4096.0) * 4096.0;
+    vec2 tc = floor(wt / 4.0);
+    vec2 lp = wt - tc * 4.0;                            // 地块内坐标 0..4m
+    float tileH = h21(tc);                              // 地块主哈希
+    if (tileH > 0.20) return vec4(0.0, 0.0, 0.0, 1.0);  // ★ 20% 出现概率
+    float two = step(h21(tc + 3.9), 0.45);              // 45% 双条叠加（独立哈希）
+    float k1 = floor(h21(tc + 7.3) * 4.0);              // 旋转 0~3 四选一
+    float k2 = mod(k1 + 1.0 + floor(h21(tc + 13.7) * 3.0), 4.0); // 第二条旋转必不同
+    float mask = 0.0;
+    for (int i = 0; i < 2; i++) {
+      if (i == 1 && two < 0.5) break;
+      float ki = i == 0 ? k1 : k2;
+      vec2 d = lp - vec2(2.0);                          // 以地块中心为原点
+      vec2 t = d;                                       // 逆旋转回模板空间
+      if (ki > 2.5)      t = vec2(-d.y, d.x);           // 270° → 车道偏下
+      else if (ki > 1.5) t = vec2(-d.x, -d.y);          // 180° → 车道偏左
+      else if (ki > 0.5) t = vec2(d.y, -d.x);           //  90° → 车道偏上
+      t += vec2(2.0);
+      float aw = abs(vnoise2(t * 5.0 + ki * 23.7) - 0.5) * 0.06; // 磨损量 0~3cm
+      // 车道：模板右缘竖向 |t.x - 3.70| ≤ 0.10；边缘被噪声啃蚀（只蚀不胀）
+      float mLane = 1.0 - smoothstep(0.09 + aw, 0.11 + aw, abs(t.x - 3.70));
+      // 三段虚线（沿模板轴；段端同啃蚀）
+      float mDash = 0.0;
+      mDash = max(mDash, smoothstep(0.14 + aw, 0.20 + aw, t.y) * (1.0 - smoothstep(0.47 - aw, 0.53 - aw, t.y)));
+      mDash = max(mDash, smoothstep(0.70 + aw, 0.76 + aw, t.y) * (1.0 - smoothstep(2.97 - aw, 3.03 - aw, t.y)));
+      mDash = max(mDash, smoothstep(3.27 + aw, 3.33 + aw, t.y) * (1.0 - smoothstep(3.83 - aw, 3.89 - aw, t.y)));
+      mask = max(mask, mLane * mDash);
+    }
+    if (mask <= 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
+    vec3 base = uMatBaseLCH[id].xyz;
+    vec3 amber = vec3(0.846, 0.122, 0.196);
+    float weather = 0.88 + vnoise2(lp * 9.0) * 0.12;    // 内部轻斑驳（0.88~1.0）
+    vec3 dd = (amber - base) * mask * amt * weather;
+    return vec4(dd, 1.0 + mask * 0.06);
+  }
+
   // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================
   // materialShade 返回 vec4(dL, dC, dH, reflect)；无材质 → 零偏移 + reflect=1.0。
   vec4 materialShade(vec3 f, vec2 w, int id) {
@@ -436,8 +485,10 @@ ${MATERIAL_DISPATCH}
   // ==================== 收口：基色 + 逐像素偏移 + 反光层 → 线性 RGB ====================
   // 每个像素拿到自己独立的 OKLab 偏移（非整体统一调色）+ 反光层乘数：
   //   materialShade 的尺度渐变 + 每地块 hash 抖动族 + 反光层，叠加在作者侧基色上。
-  vec3 oklchShade(vec2 w, int id, vec3 field) {
+  // topSurf：1=顶面（条带装饰启用）/ 0=侧壁（墙面坐标空间不同，条带不投影）。
+  vec3 oklchShade(vec2 w, int id, vec3 field, float topSurf) {
     vec4 sh = materialShade(field, w, id);                // (dL, dC, dH, reflect)
+    if (topSurf > 0.5) sh += stripeDeco(field, w, id);    // ★ 条带装饰（slot15 门控）
     // ★ 逐地块轻微 HSL 色偏：粒度 = 4×4m 地块（每地块整体一个 hash 色偏，
     //   地块内部连续纯色）。原 1m 粒度（floor(w)）会碎成小方块——2026-09-02
     //   用户反馈"纹理上有方块"后归零；现按地块粒度恢复"每地块轻微变化"。
@@ -492,7 +543,7 @@ const FRAGMENT_MAIN = /* glsl */ `
           // 多尺度空间场 + OKLab 逐像素偏移收口 → 线性 RGB 基色
           // （无材质地块 uMatBaseLCH=白（L1,C0,H0）→ linear(1,1,1) → ×alb 即 alb）
           vec3 field = shadeField(vWorld);
-          vec3 base = oklchShade(vWorld, id, field);
+    vec3 base = oklchShade(vWorld, id, field, 1.0);      // ★ 顶面：条带装饰启用
 
           // ★ 4×4 地块边界描边（黑色分界线）：块内 UV 距边 → 向近黑混合
           //   （2026-08-29 二调：band 0.035 = 每块边缘 14cm（相邻合拢 ~28cm 细缝），
@@ -746,7 +797,7 @@ const WALL_FRAG = /* glsl */ `
     vec3 alb = texture2D(uAlbedo, isWaterWall ? vUvC : vUv).rgb * vColor;
     vec3 lm = texture2D(uLightmap, isWaterWall ? vUvC : vUv).rgb;
     vec3 field = shadeField(vTex);
-    vec3 base = oklchShade(vTex, id, field);       // 与顶面逐像素一致的材质纹理
+    vec3 base = oklchShade(vTex, id, field, 0.0);       // ★ 侧壁：条带装饰不投影
 
     // ★ 补丁装饰性纹理（PatchDecor）：坑壁碎屑坑洼（亮度乘数；墙面无镜面/
     //   菲涅尔项，伪法线扰动无落点——且 dirMod 用宏观法线保持朝阳/背阳方向
