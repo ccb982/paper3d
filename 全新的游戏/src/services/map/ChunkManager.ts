@@ -24,6 +24,7 @@ import {
   type ChunkMaps,
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
+import { terrainPatch } from './TerrainPatch';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
@@ -546,16 +547,26 @@ export class ChunkManager {
    */
   private finishStandardChunkTable(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
     const src = this.raster.chunkSource(cx, cz);
-    const palette = this.chunkPalette(cx, cz);
-    const chunkDataForMat = this.raster.getChunkData(cx, cz);
-    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
-    const table = buildFaceTable(src, cx, cz);
-    // ★ 地形补丁（§14.10）：补丁覆盖 → 深度场堆积（坑缘坡降）+ 坑壁剔除 + 补丁色
     const patchArr = this.patches.get(chunkKeyOf(cx, cz));
     const patch = patchArr ? buildPatchOverlay(patchArr, cx, cz) : undefined;
+    const table = buildFaceTable(src, cx, cz);
     const topG = buildTopGeometry(table, src, patch);
     const wallG = buildWallGeometry(table, src, patch);
+    this.assembleTableChunk(cx, cz, maps, decor, topG, wallG);
+  }
 
+  /**
+   * ★ 表几何装配（几何字节 → 材质/Group/装饰/物理/换装）：
+   * 破坏重建的 Worker 结果与同步路径共用同一装配（几何来源不同，装配唯一）。
+   */
+  private assembleTableChunk(
+    cx: number,
+    cz: number,
+    maps: ChunkMaps,
+    decor: DecorPlan,
+    topG: FaceGeometry,
+    wallG: FaceGeometry,
+  ): void {
     const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
@@ -568,6 +579,10 @@ export class ChunkManager {
       geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
       return geo;
     };
+
+    const palette = this.chunkPalette(cx, cz);
+    const chunkDataForMat = this.raster.getChunkData(cx, cz);
+    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
 
     const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
     (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
@@ -619,8 +634,9 @@ export class ChunkManager {
   /**
    * ★ 子弹撞地 → 一次性地形扣补丁（§14.10 轻量档 R=0.6/D=0.2）：
    *   1) 水平圆与 coarse cell AABB 判交 → 标记补丁（幂等：重复命中不重建）
-   *   2) 有新标记才重建受影响 chunk（表烘焙缓存命中 → 同步 finishStandardChunkTable；
-   *      patch-aware 构建：区域内顶/壁统一下挖 depth + 换补丁色，边界外原样）
+   *   2) 有新标记才重建受影响 chunk —— 几何生成走 terrainPatch Worker
+   *      （patch-aware 构建：区域内顶/壁统一下挖 depth + 换补丁色，边界外原样）；
+   *      Worker 不可用 → 主线程同步同函数；纹理缓存缺失 → 既有标准烘焙管线兜底
    *   3) chunk 未建成（未达构建半径）只登记 → 将来烘焙自然带补丁
    */
   playBulletImpact(px: number, _py: number, pz: number): void {
@@ -639,11 +655,59 @@ export class ChunkManager {
     for (const key of touched) {
       const ccx = Math.floor(key / 8192) - 4096;
       const cra = (key % 8192) - 4096;
-      if (this.meshes.has(key) || this.voidKeys.has(key)) this.requestStandardBake(ccx, cra);
+      if (this.meshes.has(key) || this.voidKeys.has(key)) this.patchRebuildChunk(ccx, cra);
     }
     console.log(
       `[PATCH] 命中(${px.toFixed(1)},${pz.toFixed(1)}) r=${R} 新增cell=${added} 影响chunk=${touched.size}`,
     );
+  }
+
+  /** 同 chunk 破坏重建在途串行化（终态收敛；key → Promise） */
+  private patchRebuilds = new Map<number, Promise<void>>();
+
+  /**
+   * ★ 破坏重建（异步）：几何字节来自 terrainPatch（Worker 优先 / 主线程同函数回退），
+   * 装配与同步路径共用 assembleTableChunk。纹理缓存缺失 → requestStandardBake 兜底
+   * （其完成装配的几何在主线程内联生成，与无 Worker 回退同一函数，字节一致）。
+   */
+  private patchRebuildChunk(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    // ★ 并发合并：同 chunk 在途 → 等其完成后再重算一次（掩码只增，第二次即终态）
+    const prev = this.patchRebuilds.get(key);
+    const run = async (): Promise<void> => {
+      if (prev) await prev.catch(() => {});
+      if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
+      const maps = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
+      const decor = this.planDecor(cx, cz);
+      if (!maps) {
+        // 纹理缓存缺失（罕见：清缓存/换风格后）：整 chunk 走既有标准烘焙（几何主线程同源）
+        this.requestStandardBake(cx, cz);
+        return;
+      }
+      const arr = this.patches.get(key);
+      if (!arr) return;
+      // ★ 掩码必须传拷贝：postMessage(transfer) 会转移所有权，本体仍在 patches 表
+      const mask = new Uint8Array(arr);
+      try {
+        const geom = await terrainPatch.compute(
+          { seed: this.raster.worldSeed, cx, cz, mask },
+          (ccx, ccz) => this.raster.getChunkData(ccx, ccz),
+        );
+        if (!geom) { this.requestStandardBake(cx, cz); return; } // Worker 失败 → 兜底
+        if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
+        const maps2 = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
+        if (!maps2) return; // 期间缓存被清：后续 bake/重建自然覆盖
+        const decor2 = this.planDecor(cx, cz);
+        this.assembleTableChunk(cx, cz, maps2, decor2, geom.top, geom.wall);
+      } catch (e) {
+        console.error(`[ChunkManager] chunk(${cx},${cz}) 破坏重建失败，回退标准烘焙`, e);
+        this.requestStandardBake(cx, cz);
+      }
+    };
+    const p = run().finally(() => {
+      if (this.patchRebuilds.get(key) === p) this.patchRebuilds.delete(key);
+    });
+    this.patchRebuilds.set(key, p);
   }
 
 

@@ -619,10 +619,14 @@ export function buildWallGeometry(
             - (P ? P.depthOf(gx, gz) : 0);
           // 邻视角（节点 + 下一节点 max，供本段底沿用）
           const nx2 = i < m - 1 ? nodes[i + 1] : s;
+          const ngx2 = ax + (bx2 - ax) * (nx2 / 4), ngz2 = az + (bz2 - az) * (nx2 / 4);
+          // ★ 底沿参照 = 深度场修正后的最终面：邻侧若是补丁坑内，原面已被压低 depth，
+          //   若仍用原面定底，"埋入地下防破面"的预防性保底长度（WALL_EPS+WALL_MIN_DEPTH）
+          //   会相对新坑底被吃掉 → 坑底接缝可能露线/渗光（2026-09-05 用户：补丁侧壁
+          //   也要留预防性侧壁长度）。两节点同减 depthOf（世界函数；坑外=0 不变）。
           const nbTop = Math.max(
-            surfaceHeightCore(src, nbx, nbz, gx, gz),
-            surfaceHeightCore(src, nbx, nbz,
-              ax + (bx2 - ax) * (nx2 / 4), az + (bz2 - az) * (nx2 / 4)),
+            surfaceHeightCore(src, nbx, nbz, gx, gz) - (P ? P.depthOf(gx, gz) : 0),
+            surfaceHeightCore(src, nbx, nbz, ngx2, ngz2) - (P ? P.depthOf(ngx2, ngz2) : 0),
           );
           topV[i] = top;
           lowV[i] = Math.min(nbTop, cell.hBase, nbBase0);

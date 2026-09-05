@@ -7,6 +7,8 @@
  *      远离区壁（位置多集）逐位一致
  *   ⑤ 确定性：同 overlay 两次构建逐位一致
  *   ⑥ 跨 chunk：补丁触 seam → 深度在 seam 两侧各自收口 0（封死不悬空）、seam 壁保留且补丁色
+ *   ⑦ 防 T 结细缝：补丁 cell 全 0.125m 细分 + 同点无高度分裂
+ *   ⑧ Worker 字节级一致性：活闭包 vs 传输拷贝闭包（= terrainPatch 路径）逐位一致
  */
 import {
   buildPatchOverlay,
@@ -19,6 +21,7 @@ import {
   PATCH_COLOR,
 } from "../src/services/map/FaceBuild";import { buildFaceTable } from "../src/services/map/FaceTable";
 import { RasterMap } from "../src/services/map/RasterMap";
+import { computeTableGeometry } from "../src/services/map/PatchCompute";
 
 const N = 60;
 const CH = 60;
@@ -400,6 +403,44 @@ function run(seed: number) {
     }
     ok(seam0 > 0 && seam1 > 0, `${tag} ⑥seam 壁双侧保留且补丁色（A ${seam0} / B ${seam1}）`);
     ok(seamBad === 0, `${tag} ⑥无其他补丁色壁（越界着色 = ${seamBad}）`);
+  }
+
+  // ---- ⑧ Worker 字节级一致性：活闭包 vs 传输拷贝闭包（= terrainPatch Worker 路径） ----
+  {
+    const arr8 = new Uint8Array(N * N);
+    for (let lz = 14; lz <= 16; lz++) for (let lx = 20; lx <= 23; lx++) arr8[lz * N + lx] = 1;
+    const cmp = (a: ArrayLike<number> | undefined, b: ArrayLike<number> | undefined, name: string) => {
+      if (!a || !b) return a === b;
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    };
+    const live = computeTableGeometry((ccx, ccz) => raster.getChunkData(ccx, ccz), seed, 0, 0, arr8);
+    // 传输拷贝语义：3×3 邻域 arrays 全量 new 拷贝 → Worker 端闭包（同 PatchChunkData）
+    const copied = new Map<string, { heights: Float32Array; blockTypes: Uint8Array }>();
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const d = raster.getChunkData(dx, dz);
+        if (d) copied.set(`${dx},${dz}`, { heights: new Float32Array(d.heights), blockTypes: new Uint8Array(d.blockTypes) });
+      }
+    }
+    const snap = computeTableGeometry(
+      (ccx, ccz) => copied.get(`${ccx},${ccz}`),
+      seed, 0, 0, arr8,
+    );
+    const topEq =
+      cmp(live.top.vertices, snap.top.vertices, "v") &&
+      cmp(live.top.normals, snap.top.normals, "n") &&
+      cmp(live.top.colors, snap.top.colors, "c") &&
+      cmp(live.top.indices, snap.top.indices, "i");
+    const wallEq =
+      cmp(live.wall.vertices, snap.wall.vertices, "v") &&
+      cmp(live.wall.normals, snap.wall.normals, "n") &&
+      cmp(live.wall.colors, snap.wall.colors, "c") &&
+      cmp(live.wall.shade, snap.wall.shade, "s") &&
+      cmp(live.wall.indices, snap.wall.indices, "i");
+    ok(live.top.vertices.length > 0 && topEq && wallEq,
+      `${tag} ⑧ Worker 拷贝路径几何字节与活源逐位一致（top=${live.top.vertices.length / 3}v wall=${live.wall.vertices.length / 3}v）`);
   }
 }
 
