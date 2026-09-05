@@ -61,6 +61,19 @@ export const WALL_BRIGHTNESS = 2.9;
  *  ★ 0.16 实测仍极黑，拉夸张档（2026-09-01 用户反馈；水体侧壁另有 id 削弱）。 */
 export const WALL_EMISSIVE = 0.55;
 
+/** 侧壁白天直射保底（2026-09-05）：墙光 = 所属列烘焙顶光，坡脚/坑谷列在
+ *  台影+AO 带内 lm.r≈0.12~0.3，坡面侧壁系统性比断崖墙黑一块（断崖归高处
+ *  列 0.745）。竖直墙物理上本就不靠上方直射（N·L≈0），烘焙 lm.r 只当"区域
+ *  亮度代理"——白天钳到 ≥0.45，让坡底/影区墙回到可见档，与开墙差距收敛到
+ *  ~1.6× 而不失真黑；坑谷真影仍比开阔明些。夜晚保底用 0.85（月光档）不变。 */
+export const WALL_DIRECT_DAY_FLOOR = 0.45;
+
+/** 顶面白天直射保底（2026-09-05）：深影列 lm.r≈0.09 时顶面/坡面(WELD/BEVEL
+ *  facet 属顶网格)直接塌成纯黑（实测 rock 基色也只剩 0.066 sRGB）。白天钳到
+ *  ≥0.28——影区仍读"深阴影"（≈开阔 38%）但不再死黑；夜晚不加保底（夜景靠
+ *  环境光分层，见 updateTerrainLighting）。保留阴影可读性哲学（光=缺席而非黑块）。 */
+export const TERRAIN_DIRECT_DAY_FLOOR = 0.28;
+
 const registry = new Set<TerrainMaterial>();
 
 /** 材质 uniform 数组尺寸（每 tile id 一槽；上限 = 可注册地块 id 上限）。
@@ -469,7 +482,12 @@ const FRAGMENT_MAIN = /* glsl */ `
           // 伪 AO：大尺度斑块暗谷（patch 负值 = 谷地 = 变暗；0.4~1.0）
           float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
 
-          vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * lm.r);
+          // ★ 顶面直射保底（2026-09-05）：深影列 lm.r≈0.09 一整片塌黑（坡面尤其）。
+          //   白天钳到 ≥${TERRAIN_DIRECT_DAY_FLOOR.toFixed(2)}（见常量注释，影仍暗不死黑）；
+          //   夜晚不保底（夜景 = 环境光分层）。uLightmap.B 通道预留未用。
+          float d = mix(lm.r, max(lm.r, ${TERRAIN_DIRECT_DAY_FLOOR.toFixed(2)}), uSunDay);
+
+          vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * d);
 
           // ---- 表面属性（伪 PBR：法线扰动 + 粗糙度调制） ----
           vec3 N = pseudoNormal(vWorld);                   // 微阴影/微高光
@@ -667,11 +685,15 @@ const WALL_FRAG = /* glsl */ `
     // 伪 AO：大尺度斑块暗谷（patch 负值 = 谷地 = 变暗；0.4~1.0）
     float ao = smoothstep(-0.3, 0.3, field.x) * 0.6 + 0.4;
 
-    // ★ 夜晚直射保底：墙面是竖直面，法线水平不受直射（N·L≈0）——若所属地块
-    //   在烘焙阴影区（lm.r≈0），夜晚整面墙只剩 ambient×ao ≈ 纯黑。
-    //   夜晚直射钳到 ≥0.85（月光全开级别，配合 NIGHT_SUN 冷蓝色温 → 月光打墙），
-    //   白天按 daylight 平滑回烘焙原值。
-    float d = isWaterWall ? lm.r : mix(max(lm.r, 0.85), lm.r, uSunDay);
+    // ★ 直射保底：墙面是竖直面，法线水平不受直射（N·L≈0）——若所属地块
+    //   在烘焙阴影区（lm.r≈0），整面墙只剩 ambient×ao ≈ 纯黑。直射项按
+    //   昼夜各钳下限：夜晚 ≥0.85（月光全开级别，配合 NIGHT_SUN 冷蓝色温），
+    //   白天 ≥${WALL_DIRECT_DAY_FLOOR.toFixed(2)}（坡脚/影区墙保亮，
+    //   见 WALL_DIRECT_DAY_FLOOR 追注释；2026-09-05 修坡面侧壁偏暗）。
+    //   ★ 水体墙同样受保底（2026-09-05 补）：台缘坡壁低侧若为 water 块，裸
+    //   lm.r≈0.09 乘 0.32 增益 → 近似纯黑（用户实测 seed12345 chunk(-1,1)）；
+    //   保底后经 ×0.32 仍读作深暗水面，不再死黑。
+    float d = mix(max(lm.r, 0.85), max(lm.r, ${WALL_DIRECT_DAY_FLOOR.toFixed(2)}), uSunDay);
 
     // ★ 增益：非水墙 1.0（光照已与顶面同源，不再需要补偿墙脚塌缩）；
     //   水体侧壁压到 32%（无增亮，纯烘焙明暗；专调深暗水面）

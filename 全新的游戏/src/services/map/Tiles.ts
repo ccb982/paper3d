@@ -210,7 +210,7 @@ export const TILE_PIT = new TileDef(
   "坑洞",
   "pit",
   {
-    baseHsl: { h: 0.98, s: 0.30, l: 0.22 }, // 暗灰红警示（2026-08-31 去鲜艳）
+    baseHsl: { h: 0.98, s: 0.30, l: 0.34 }, // 暗红警示（2026-09-05 抬 l：0.22 基色深度影下乘光仍黑到无法辨认，坡面侧壁全黑）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: true,
     patches: true,
@@ -295,7 +295,7 @@ export const TILE_ASH_FIELD = new TileDef(
   "灰烬地",
   "ground",
   {
-    baseHsl: { h: 0.05, s: 0.06, l: 0.32 },
+    baseHsl: { h: 0.05, s: 0.06, l: 0.40 }, // 灰烬地（2026-09-05 抬 l：0.32 深影下坡面读作黑）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -318,7 +318,7 @@ export const TILE_MUD = new TileDef(
   "泥沼地",
   "ground",
   {
-    baseHsl: { h: 0.08, s: 0.15, l: 0.26 }, // 暗灰棕（2026-08-31 去橙红）
+    baseHsl: { h: 0.08, s: 0.15, l: 0.36 }, // 暗灰棕（2026-09-05 抬 l：0.26 深影坡面黑）
     jitter: { h: 0.006, s: 0.03, l: 0.04 },
     depression: false,
     borderLine: true,
@@ -455,7 +455,7 @@ export const TILE_WOOD = new TileDef(
   "木板路",
   "ground",
   {
-    baseHsl: { h: 0.07, s: 0.35, l: 0.3 },
+    baseHsl: { h: 0.07, s: 0.35, l: 0.38 },
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
