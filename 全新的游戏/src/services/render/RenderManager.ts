@@ -19,8 +19,8 @@ import { SunCycle, type SunSample, type MoonSample, type SkyGradient } from './S
 import { gameLights, LIGHT_TUNING } from './GameLights';
 import { SkyDome } from './SkyDome';
 import { CloudSolver } from './CloudSolver';
-import { updateTerrainLighting } from '../map/TerrainMaterial';
-import { updateWallLighting } from '../map/ChunkWalls';
+import { updateTerrainLighting, updateWallMaterialsLighting as updateWallLighting } from '../map/TerrainMaterial';
+
 import type { MoonEffect } from '../../vendor/player/MoonEffect';
 
 /** 调参统一入口（透传 GameLights.LIGHT_TUNING；曝光/太阳距离等都在这） */

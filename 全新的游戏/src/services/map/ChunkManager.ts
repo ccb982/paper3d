@@ -16,7 +16,6 @@
 
 import * as THREE from 'three';
 import { CHUNK_SIZE } from './ChunkGenerator';
-import { buildBlockFaceIndex, type BlockFaceIndexBundle } from './BlockFaceIndex';
 import { RasterMap, chunkKeyOf } from './RasterMap';
 import {
   bakeChunkMaps, assembleChunkMaps,
@@ -25,22 +24,14 @@ import {
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { terrainPatch } from './TerrainPatch';
-import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, type TileRenderConfig } from './TerrainMaterial';
+import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, clearWallMaterialRegistry, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
-import { clearWallMaterials } from './ChunkWalls';
-import { mergeTerrainPhysics, buildChunkFinal, buildChunkWallBuffers } from './Refinements';
 import { buildFaceTable } from './FaceTable';
 import { buildTopGeometry, buildWallGeometry, circleCells, buildLevelOverlay, type FaceGeometry } from './FaceBuild';
 import { WallMaterial } from './TerrainMaterial';
-import {
-  buildPostChunkTopSurface,
-  buildPostSideWalls,
-  buildBevelWallDebug,
-  postSurfaceHeightAt,
-} from './PostProcess';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -206,7 +197,7 @@ export class ChunkManager {
     this.meshes.clear();
     this.voidKeys.clear();
     this.activated.clear();
-    clearWallMaterials();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
+    clearWallMaterialRegistry();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
     disposeTileLabelCache(); // ★ 测试地图标牌纹理/材质统一释放（共享缓存唯一 dispose 点）
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
@@ -353,8 +344,8 @@ export class ChunkManager {
     const decals = planChunkDecals(base);
     const props = planChunkProps({
       ...base,
-      // ★ 后处理层路由：贴地查询带后处理偏移（关闭时透传 raster 原值）
-      surfaceHeightAt: (x, z) => postSurfaceHeightAt(this.raster, x, z),
+      // ★ 贴地采样 = 表驱动视觉面（含 Levels 覆盖；与角色脚底同函数）
+      surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
     });
     const vols = computePropVolumes(props, cx, cz);
     return { decals, props, propVolumes: packVolumes(vols) };
@@ -446,97 +437,13 @@ export class ChunkManager {
   }
 
   /**
-   * ★ 标准风格构建②：像素就绪 → 几何/材质/物理（原 buildStandardChunk 后半）。
-   * 贴图已在烘焙时印进 albedo（装饰叠加层）；材质由地块自挂 shader 分发。
-   * 顶面几何走 ChunkSurface（SurfaceRules 派生，2026-08-29）；
-   * 物理 trimesh = 顶面 + 断崖墙同一份缓冲合并（碰撞=所见不变式）。
+   * ★ 标准风格构建②：像素就绪 → 几何/材质/物理。
+   * 顶面几何走表驱动（coarse/fine 0.125m；§14.10/14.11 补丁、Levels 覆盖同源）；
+   * 物理 trimesh = 顶面 + 侧壁同一份缓冲合并（碰撞=所见不变式）。
+   * ★ 旧后处理渲染管线已于 2026-09-05 整段移除（无 __PP_TABLE_BUILD 回退）。
    */
   private finishStandardChunk(cx: number, cz: number, maps: ChunkMaps, decor: DecorPlan): void {
-    // ★ 表驱动直建（默认启用；设 __PP_TABLE_BUILD=false 可回退旧后处理管线）
-    if ((globalThis as { __PP_TABLE_BUILD?: boolean }).__PP_TABLE_BUILD !== false) {
-      this.finishStandardChunkTable(cx, cz, maps, decor);
-      return;
-    }
-    // ★ 后处理层路由：顶面 = 后处理重建网格（关闭时透传精修层原输出）；
-    // ★ 材质渲染配置：块 id 微纹理 + 参数数组（材质分发）
-    const chunkDataForMat = this.raster.getChunkData(cx, cz);
-    const palette = this.chunkPalette(cx, cz);
-    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
-
-    // ★ per-chunk 地块面索引 bundle：一次构建（精修定型 cornerH + 墙缓冲 +
-    //   面索引），顶面/侧壁/调试/贴地单点全复用，避免各后处理函数重复构建精修层产物。
-    const src = this.raster.chunkSource(cx, cz);
-    const cornerH = buildChunkFinal(src, cx, cz, CHUNK_SIZE).cornerH;
-    const wallBuffers = buildChunkWallBuffers(src, cx, cz, CHUNK_SIZE, {
-      seed: this.raster.worldSeed,
-      palette,
-      heightAt: (x, z) => this.raster.heightAt(x, z),
-      tileDefAt: (x, z) => this.raster.tileDefAt(x, z),
-    });
-    const bundle: BlockFaceIndexBundle = {
-      index: buildBlockFaceIndex(src, cx, cz, cornerH, wallBuffers),
-      src,
-      cornerH,
-      wallBuffers,
-    };
-    this.raster.setBlockIndex(cx, cz, bundle);
-
-    //   surf.vertices/indices 即渲染网格 = 物理顶点（视觉=物理同源）
-    const surf = buildPostChunkTopSurface(this.raster, cx, cz, bundle);
-    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg);
-    // lightmap 挂 userData 供 disposeVisual 一并释放（.map 只登记 albedo）；
-    // cached = 纹理归烘焙缓存所有，chunk 销毁时跳过纹理释放（releaseBakeCache 统一管）
-    (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
-      { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
-
-    const top = new THREE.Mesh(surf.geometry, mat);
-    const group = new THREE.Group();
-    group.add(top);
-    // ★ 断崖侧壁：独立几何 + 顶面同款材质纹理与光照（WallMaterial 复用
-    //   uAlbedo/uLightmap/uTileIds/Okada 库，2026-09-01：不再是纯色 MeshBasicMaterial）
-    // ★ 后处理层路由：侧壁 = 精修层墙缓冲 + 墙顶跟随后处理面（关闭时透传）
-    const walls = buildPostSideWalls(this.raster, cx, cz, maps.albedo, maps.lightmap, matCfg, bundle);
-    if (walls.mesh) group.add(walls.mesh);
-    // ★ 调试线框（弧边记号/侧壁/邻居边）：默认关闭；设全局 __PP_DEBUG_LINES=true 开启
-    if ((globalThis as { __PP_DEBUG_LINES?: boolean }).__PP_DEBUG_LINES) {
-      const dbgBevel = buildBevelWallDebug(this.raster, cx, cz);
-      if (dbgBevel) group.add(dbgBevel);
-    }
-    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-
-    // ---- ★ 装饰层装配（计划在预渲染前已放置，此处直接消费同一份） ----
-    // 贴图已在烘焙时印进 albedo 纹理（无需运行时步骤）；
-    // 装饰物 → buildDecorLayer → 挂进 chunk group
-    const propLayer = this.buildDecorLayer(cx, cz, decor);
-    if (propLayer) group.add(propLayer);
-
-    // ---- ★ 测试地图：地块名标注层（调试陈列馆；无碰撞） ----
-    if (this.testChunk && chunkDataForMat) {
-      group.add(buildTileLabelLayer(chunkDataForMat, (x, z) => postSurfaceHeightAt(this.raster, x, z)));
-    }
-
-    // ---- ★ 物理 trimesh：顶面 + 断崖墙合并（精修层统一产出地形物理；
-    //      trimesh 无体积，cliff 边无墙则低侧物体穿入高板下方坠落）----
-    // 顶面 = 精修层定型快照的 top；墙 = 精修层墙缓冲；合并 = Refinements
-    // 统一地形物理（《精修层与定型快照架构.md》§3）。此处不含实体/装饰碰撞。
-    // ★ 后处理层路由：物理 trimesh = 渲染顶面(后处理顶点) + 墙缓冲合并
-    //   （关闭时 surf.vertices ≡ finalTerrain.top.vertices，逐位一致）
-    const phys = mergeTerrainPhysics(
-      { vertices: surf.vertices, indices: surf.indices },
-      walls.buffers,
-    );
-
-    this.replaceChunk(
-      chunkKeyOf(cx, cz), group, cx, cz,
-      phys.vertices,
-      phys.indices,
-    );
-
-    // ---- ★ 装饰物碰撞体（独立阶段：地形快照后补装饰物理，不依赖视觉层）----
-    // 必须在 replaceChunk 之后创建（replaceChunk 会销毁旧 propBodies）。
-    // 不再被 if(propLayer) 门控——物理的存在性不与"网格是否生成"绑定，
-    // 避免渲染层偶发失败时装饰碰撞连同静默丢失（角色能穿、子弹不能）。
-    this.createDecorColliders(cx, cz, decor);
+    this.finishStandardChunkTable(cx, cz, maps, decor);
   }
 
   /**
