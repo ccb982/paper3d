@@ -85,10 +85,10 @@ function run(seed: number) {
   };
   // ★ 对照基准 = 同 fine 掩码、深度 0 的构建（拓扑与补丁构建逐位对齐，索引可直接相减）
   const overlay0 = buildPatchOverlay(arr, 0, 0, 0);
-  const topYes = buildTopGeometry(table0, src0, undefined, overlay);
-  const topNo = buildTopGeometry(table0, src0, undefined, overlay0);
-  const wallYes = buildWallGeometry(table0, src0, undefined, overlay);
-  const wallNo = buildWallGeometry(table0, src0, undefined, overlay0);
+  const topYes = buildTopGeometry(table0, src0, overlay);
+  const topNo = buildTopGeometry(table0, src0, overlay0);
+  const wallYes = buildWallGeometry(table0, src0, overlay);
+  const wallNo = buildWallGeometry(table0, src0, overlay0);
 
   {
     let pBad = 0, wBad = 0, hBad = 0, pCore = 0, wCore = 0;
@@ -151,7 +151,7 @@ function run(seed: number) {
     const ovC = buildPatchOverlay(arrC, 0, 0);
     const dC = ovC.depthOf(hit.x, hit.z);
     ok(dC >= PATCH_DEPTH * 0.99, `${tag} ③b 坑心满深 ${dC.toFixed(3)} ≥ 0.99D（可见坑）`);
-    const topC = buildTopGeometry(table0, src0, undefined, ovC);
+    const topC = buildTopGeometry(table0, src0, ovC);
     const topCNo = buildTopGeometry(table0, src0);
     let floorV = 0, slopeV2 = 0;
     for (let i = 0; i < topC.vertices.length / 3; i++) {
@@ -286,7 +286,7 @@ function run(seed: number) {
     if (fPlane > 0) {
       const ovF = buildPatchOverlay(regionOf(fPlane, fR0), 0, 0);
       const wFNo = buildWallGeometry(table0, src0);
-      const wFYes = buildWallGeometry(table0, src0, undefined, ovF);
+      const wFYes = buildWallGeometry(table0, src0, ovF);
       const b4 = planeStats(wFNo, wFNo, fPlane, fR0).n;
       const a4 = planeStats(wFYes, wFNo, fPlane, fR0);
       ok(b4 > 0 && a4.n === 0, `${tag} ④b flush 平隔断整段剔除（补丁前 ${b4} → 补丁后 ${a4.n}）`);
@@ -294,7 +294,7 @@ function run(seed: number) {
     if (tPlane > 0) {
       const ovT = buildPatchOverlay(regionOf(tPlane, tR0), 0, 0);
       const wTNo = buildWallGeometry(table0, src0);
-      const wTYes = buildWallGeometry(table0, src0, undefined, ovT);
+      const wTYes = buildWallGeometry(table0, src0, ovT);
       const aT = planeStats(wTYes, wTNo, tPlane, tR0);
       ok(aT.n > 0 && aT.colored === aT.n,
         `${tag} ④b 微小高台棱侧壁保留（毫米级高差也有壁；n=${aT.n} 全补丁色 ${aT.colored}）`);
@@ -302,7 +302,7 @@ function run(seed: number) {
     if (sPlane > 0) {
       const ovS2 = buildPatchOverlay(regionOf(sPlane, sR0), 0, 0);
       const wSNo = buildWallGeometry(table0, src0);
-      const wSYes = buildWallGeometry(table0, src0, undefined, ovS2);
+      const wSYes = buildWallGeometry(table0, src0, ovS2);
       const aS = planeStats(wSYes, wSNo, sPlane, sR0);
       ok(aS.n > 0 && aS.colored === aS.n,
         `${tag} ④b 台阶壁保留且全补丁色（n=${aS.n} 补丁 ${aS.colored}）——无空洞`);
@@ -312,8 +312,8 @@ function run(seed: number) {
 
 
   {
-    const A = buildTopGeometry(table0, src0, undefined, overlay);
-    const B = buildTopGeometry(table0, src0, undefined, overlay);
+    const A = buildTopGeometry(table0, src0, overlay);
+    const B = buildTopGeometry(table0, src0, overlay);
     let dV = 0;
     for (let i = 0; i < A.vertices.length; i++) if (A.vertices[i] !== B.vertices[i]) dV++;
     ok(dV === 0, `${tag} ⑤同 overlay 两次构建逐位一致（v=${dV}）`);
@@ -337,7 +337,7 @@ function run(seed: number) {
       const arr7 = new Uint8Array(N * N);
       for (let lz = by7; lz < by7 + 3; lz++) for (let lx = bx7; lx < bx7 + 3; lx++) arr7[lz * N + lx] = 1;
       const ov7 = buildPatchOverlay(arr7, 0, 0);
-      const top7 = buildTopGeometry(table0, src0, undefined, ov7);
+      const top7 = buildTopGeometry(table0, src0, ov7);
       const corePerCell = new Map<number, number>();
       const yAt = new Map<string, number[]>();
       for (let i = 0; i < top7.vertices.length / 3; i++) {
@@ -386,8 +386,8 @@ function run(seed: number) {
       `${tag} ⑥seam 两侧深度各自收口为 0（封死不悬空）`);
     const dMid = ovS0.depthOf(20, 59.5);
     ok(dMid > 0 && dMid < PATCH_DEPTH, `${tag} ⑥seam 行坡降存在（${dMid.toFixed(3)}）`);
-    const wS0 = buildWallGeometry(table0, src0, undefined, ovS0);
-    const wS1 = buildWallGeometry(table1, src1, undefined, ovS1);
+    const wS0 = buildWallGeometry(table0, src0, ovS0);
+    const wS1 = buildWallGeometry(table1, src1, ovS1);
     let seam0 = 0, seam1 = 0, seamBad = 0;
     for (let i = 0; i < wS0.vertices.length; i += 3) {
       const wz = wS0.vertices[i + 2] + HALF;

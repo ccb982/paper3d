@@ -427,7 +427,6 @@ function dirEdgeCells(dir: number, lbx: number, lbz: number, fineE: Uint8Array):
 export function buildTopGeometry(
   table: FaceTable,
   src: BlockSource,
-  deformAt?: (x: number, z: number) => number,
   patch?: PatchOverlay,
 ): FaceGeometry {
   const pos: number[] = [];
@@ -436,7 +435,6 @@ export function buildTopGeometry(
   const col: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
-  const def = (wx: number, wz: number): number => (deformAt ? deformAt(wx, wz) : 0);
   const W = [1, 1, 1];
   let vi = 0;
 
@@ -458,10 +456,10 @@ export function buildTopGeometry(
         const d10 = patch ? patch.depthOf(wx0 + 1, wz0) : 0;
         const d11 = patch ? patch.depthOf(wx0 + 1, wz0 + 1) : 0;
         const d01 = patch ? patch.depthOf(wx0, wz0 + 1) : 0;
-        const h00 = topYView(table, src, vbx, vbz, wx0, wz0) + def(wx0, wz0) - d00;
-        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) + def(wx0 + 1, wz0) - d10;
-        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) + def(wx0 + 1, wz0 + 1) - d11;
-        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) + def(wx0, wz0 + 1) - d01;
+        const h00 = topYView(table, src, vbx, vbz, wx0, wz0) - d00;
+        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) - d10;
+        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) - d11;
+        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) - d01;
         pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
         for (let c = 0; c < 4; c++) { nor.push(0, 1, 0); col.push(cc[0], cc[1], cc[2]); }
         uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
@@ -478,7 +476,7 @@ export function buildTopGeometry(
           for (let gx = 0; gx < G; gx++) {
             const wx = wx0 + gx / FINE_S;
             const wz = wz0 + gy / FINE_S;
-            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) + def(wx, wz)
+            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz)
               - (patch ? patch.depthOf(wx, wz) : 0);
             const lxx = wx - ox - HALF;
             const lzz = wz - oz - HALF;
@@ -537,7 +535,6 @@ export function buildTopGeometry(
 export function buildWallGeometry(
   table: FaceTable,
   src: BlockSource,
-  deformAt?: (x: number, z: number) => number,
   patch?: PatchOverlay,
 ): FaceGeometry {
   const pos: number[] = [];
@@ -547,7 +544,6 @@ export function buildWallGeometry(
   const shd: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
-  const def = (wx: number, wz: number): number => (deformAt ? deformAt(wx, wz) : 0);
   const fineE = topFineCellsFor(table, src, patch);
   let vi = 0;
 
@@ -619,7 +615,7 @@ export function buildWallGeometry(
           // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest；
           //   ★ 顶 = 原顶面 − 深度场（世界函数：坑缘壁线处=0 → 顶沿=原地面不悬空；
           //   坑内保留的台阶壁两侧同减 → 台阶差保持，轮廓完整不空洞）
-          const top = topYView(table, src, bx, bz, gx, gz) + def(gx, gz)
+          const top = topYView(table, src, bx, bz, gx, gz)
             - (P ? P.depthOf(gx, gz) : 0);
           // 邻视角（节点 + 下一节点 max，供本段底沿用）
           const nx2 = i < m - 1 ? nodes[i + 1] : s;

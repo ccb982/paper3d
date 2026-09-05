@@ -553,8 +553,8 @@ export class ChunkManager {
     // ★ 地形补丁（§14.10）：补丁覆盖 → 深度场堆积（坑缘坡降）+ 坑壁剔除 + 补丁色
     const patchArr = this.patches.get(chunkKeyOf(cx, cz));
     const patch = patchArr ? buildPatchOverlay(patchArr, cx, cz) : undefined;
-    const topG = buildTopGeometry(table, src, undefined, patch);
-    const wallG = buildWallGeometry(table, src, undefined, patch);
+    const topG = buildTopGeometry(table, src, patch);
+    const wallG = buildWallGeometry(table, src, patch);
 
     const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
