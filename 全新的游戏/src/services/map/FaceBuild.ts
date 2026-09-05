@@ -60,6 +60,9 @@ export const PATCH_DEPTH = 0.2;      // 补丁下挖深度（§13.2 T2 轻量档
 //   定案：保留原纹理明暗/颗粒（乘性不破坏相对亮度），乘数取可见的烧焦褐调
 //   （≈ 原亮度 55~65% + R>G>B 暖褐偏色），草地/沙地烧完深浅自然不同。
 export const PATCH_COLOR: [number, number, number] = [0.62, 0.52, 0.42]; // 乘性焦土调（线性）
+/** 补丁颜色层数封顶：颜色 = 焦土色^层数（幂）——每满 1 层深度染色再叠一次，
+ *  小数层平滑过渡（坑越深越焦，坑口→坑心渐变）；封顶防无限修补全黑。 */
+export const PATCH_COLOR_MAX_LAYERS = 5;
 const PATCH_SLOPE_CELLS = 1;   // 坡面宽度（m，一个 coarse cell；坑缘平滑坡降距离）
 const WALL_FLUSH_EPS = 0.002;  // 壁两侧表面视为等高的容差（m）。★ 只收浮点噪声级：
                                // 真实地形哪怕 3~5mm 的高台棱也是可见侧壁，剔除会使其消失
@@ -534,11 +537,10 @@ export function buildTopGeometry(
         //   硬色边消失（2026-09-05 用户：补丁与地面材质交界渲染不好看）。
         const pcell = patch && patch.isPatched(lx, lz);
         const cc = pcell ? patch!.color : W;
-        const pw = (d: number): [number, number, number] => [
-          1 + (cc[0] - 1) * Math.min(1, d / PATCH_DEPTH),
-          1 + (cc[1] - 1) * Math.min(1, d / PATCH_DEPTH),
-          1 + (cc[2] - 1) * Math.min(1, d / PATCH_DEPTH),
-        ];
+        const pw = (d: number): [number, number, number] => {
+          const u = Math.min(d / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
+          return [Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u)];
+        };
         const d00 = patch ? patch.depthOf(wx0, wz0) : 0;
         const d10 = patch ? patch.depthOf(wx0 + 1, wz0) : 0;
         const d11 = patch ? patch.depthOf(wx0 + 1, wz0 + 1) : 0;
@@ -573,8 +575,8 @@ export function buildTopGeometry(
             const lzz = wz - oz - HALF;
             pos.push(lxx, yt[gy * G + gx], lzz);
             uv.push((wx - ox) / N, (wz - oz) / N);
-            const wgt = Math.min(1, dV / PATCH_DEPTH);
-            col.push(1 + (cc[0] - 1) * wgt, 1 + (cc[1] - 1) * wgt, 1 + (cc[2] - 1) * wgt);
+            const u = Math.min(dV / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
+            col.push(Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u));
           }
         }
         // 顶点先占位法线，后差分

@@ -61,6 +61,16 @@ export const WALL_BRIGHTNESS = 2.9;
  *  ★ 0.16 实测仍极黑，拉夸张档（2026-09-01 用户反馈；水体侧壁另有 id 削弱）。 */
 export const WALL_EMISSIVE = 0.55;
 
+/** ★ LOD 内实时太阳方向调制（2026-09-05 用户架构决策）：
+ *  阴影烘焙一次（静态 BAKE_SUN 方向），近距离实时叠加"方向重映射"——
+ *  dirMod = N·L / L.y：平地恒 1（亮度守恒），坡面/侧壁方向感随实时太阳旋转；
+ *  距离 NEAR 内全强度、FAR 外平滑淡回纯烘焙（远场保持静态阴影形状）。
+ *  clamp 幅度防止背光死黑/顺光过曝（顺背观感差异收窄到 ±40%）。 */
+export const SUN_DIR_LOD_NEAR = 30;
+export const SUN_DIR_LOD_FAR = 90;
+export const SUN_DIR_MOD_MIN = 0.6;
+export const SUN_DIR_MOD_MAX = 1.4;
+
 /** 侧壁白天直射保底（2026-09-05）：墙光 = 所属列烘焙顶光，坡脚/坑谷列在
  *  台影+AO 带内 lm.r≈0.12~0.3，坡面侧壁系统性比断崖墙黑一块（断崖归高处
  *  列 0.745）。竖直墙物理上本就不靠上方直射（N·L≈0），烘焙 lm.r 只当"区域
@@ -460,6 +470,7 @@ const FRAGMENT_MAIN = /* glsl */ `
         varying vec2 vUv;
         varying vec2 vWorld;
         varying vec3 vColor;
+        varying vec3 vNw;    // ★ 世界法线（顶面 vertex 同名 varying）
         #include <common>
         #include <fog_pars_fragment>
         void main() {
@@ -491,13 +502,24 @@ const FRAGMENT_MAIN = /* glsl */ `
           //   夜晚不保底（夜景 = 环境光分层）。uLightmap.B 通道预留未用。
           float d = mix(lm.r, max(lm.r, ${TERRAIN_DIRECT_DAY_FLOOR.toFixed(2)}), uSunDay);
 
+          // ★ LOD 内实时太阳方向重映射（2026-09-05 用户架构决策：阴影烘焙一次，
+          //   LOD 内实时维护方向）——dirMod = N·L / L.y：平地恒 1（亮度守恒），
+          //   坡面方向感随实时太阳旋转（朝阳坡>1 背坡<1，全天东升西落可见）；
+          //   距离 30m 内全强度、90m 外平滑淡回纯烘焙（远场保持静态阴影形状）。
+          //   clamp 幅度防背光死黑/顺光过曝。L 提前声明（下方镜面高光共用）。
+          vec3 L = normalize(uSunDir);
+          float dirMod = clamp(max(dot(vNw, L), 0.12) / max(L.y, 0.12),
+            ${SUN_DIR_MOD_MIN.toFixed(2)}, ${SUN_DIR_MOD_MAX.toFixed(2)});
+          float distCam = length(cameraPosition - vec3(vWorld.x, 0.0, vWorld.y));
+          float lodW = smoothstep(${SUN_DIR_LOD_FAR.toFixed(1)}, ${SUN_DIR_LOD_NEAR.toFixed(1)}, distCam);
+          d *= mix(1.0, dirMod, lodW);
+
           vec3 lit = base * alb * (uAmbientColor * lm.g * ao + uSunColor * d);
 
           // ---- 表面属性（伪 PBR：法线扰动 + 粗糙度调制） ----
           vec3 N = pseudoNormal(vWorld);                   // 微阴影/微高光
           float rough = uMatBaseLCH[id].w + field.z * 0.15;  // 材质基础 + grain 调制
           vec3 V = normalize(cameraPosition - vec3(vWorld.x, 0.0, vWorld.y));
-          vec3 L = normalize(uSunDir);
           float spec = uMatSurface[id].x;
           if (spec > 0.001) {
             vec3 H = normalize(L + V);
@@ -581,11 +603,13 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
         varying vec2 vUv;
         varying vec2 vWorld;
         varying vec3 vColor;
+        varying vec3 vNw;    // ★ 世界法线（LOD 内实时太阳方向重映射用）
         #include <common>
         #include <fog_pars_vertex>
         void main() {
           vUv = uv;
           ${vcVar}
+          vNw = normalize(mat3(modelMatrix) * normal);  // 地块群仅平移 → 本地=世界
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);   // ★ fog_vertex 依赖它
           vec4 wp = modelMatrix * vec4(position, 1.0);
           vWorld = wp.xz;
@@ -636,6 +660,8 @@ const WALL_VERT = (vcVar: string) => /* glsl */ `
   varying vec2 vUvC;     // chunk 连续 uv（采样 uAlbedo/uLightmap，与顶面同约定）
   varying vec2 vTex;     // ★ 墙面 2D 纹理坐标（沿墙水平距离 × 绝对高度）
   varying vec3 vColor;   // ★ 补丁色通道（§14.10；无补丁 = vec3(1.0)）
+  varying vec3 vNw;      // ★ 世界法线（LOD 内实时太阳方向重映射用）
+  varying vec3 vWpos;    // ★ 世界坐标（LOD 距离衰减用）
   #include <common>
   #include <fog_pars_vertex>
   void main() {
@@ -643,6 +669,7 @@ const WALL_VERT = (vcVar: string) => /* glsl */ `
     vColor = ${vcVar};
     vUvC = position.xz / 60.0 + 0.5;   // 局部坐标（中心原点）→ chunk 0..1
     vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWpos = wp.xyz;
     // ★ 不能直接用 wp.xz 当纹理坐标：墙面是竖直面，法线水平分量几乎恒定 →
     //   沿墙体内方向 w 不随墙高变化，纹理压成竖条纹（2026-09-01 用户反馈）。
     //   改成墙面自己的切平面坐标：(沿墙水平距离, 墙高)，两方向都随像素变 →
@@ -652,6 +679,7 @@ const WALL_VERT = (vcVar: string) => /* glsl */ `
     //   （相机转动 → 侧壁纹理水平漂移，2026-09-01 用户反馈）。地块群仅平移
     //   无旋转，mat3(modelMatrix) 恒等 → 本地法线即世界方向，结果与视角无关。
     vec3 N = normalize(mat3(modelMatrix) * normal);
+    vNw = N;
     vec2 hor = normalize(vec2(N.x, N.z) + 1e-4);
     vec2 along = vec2(-hor.y, hor.x);   // 沿墙水平方向（与法线水平投影正交）
     vTex = vec2(dot(wp.xz, along), wp.y);
@@ -668,10 +696,13 @@ const WALL_FRAG = /* glsl */ `
   uniform vec3 uSunColor;
   uniform float uSunDay;       // 0..1 白昼度（夜晚直射保底开关）
   uniform float uWallEmissive; // 侧壁自发光保底（夜晚 >0；× 材质本色）
+  uniform vec3 uSunDir;        // ★ 实时太阳方向（LOD 内方向重映射用）
   varying vec2 vUv;
   varying vec2 vUvC;
   varying vec2 vTex;
   varying vec3 vColor;   // ★ 补丁色通道（乘性染色；白=原样）
+  varying vec3 vNw;      // ★ 世界法线（WALL_VERT 同名 varying）
+  varying vec3 vWpos;    // ★ 世界坐标（LOD 距离衰减用）
   #include <common>
   #include <fog_pars_fragment>
   void main() {
@@ -708,6 +739,18 @@ const WALL_FRAG = /* glsl */ `
     //   lm.r≈0.09 乘 0.32 增益 → 近似纯黑（用户实测 seed12345 chunk(-1,1)）；
     //   保底后经 ×0.32 仍读作深暗水面，不再死黑。
     float d = mix(max(lm.r, 0.85), max(lm.r, ${WALL_DIRECT_DAY_FLOOR.toFixed(2)}), uSunDay);
+
+    // ★ LOD 内实时太阳方向重映射（与顶面同款，2026-09-05）：墙面法线水平 →
+    //   方向感最明显（朝阳墙/背阳墙随实时太阳全天旋转）；水墙豁免（深暗水面
+    //   是专调观感，不随方向变亮）
+    {
+      vec3 Lw = normalize(uSunDir);
+      float dirMod = clamp(max(dot(vNw, Lw), 0.12) / max(Lw.y, 0.12),
+        ${SUN_DIR_MOD_MIN.toFixed(2)}, ${SUN_DIR_MOD_MAX.toFixed(2)});
+      float lodW = smoothstep(${SUN_DIR_LOD_FAR.toFixed(1)}, ${SUN_DIR_LOD_NEAR.toFixed(1)},
+        length(cameraPosition - vWpos));
+      d *= mix(1.0, dirMod, isWaterWall ? 0.0 : lodW);
+    }
 
     // ★ 增益：非水墙 1.0（光照已与顶面同源，不再需要补偿墙脚塌缩）；
     //   水体侧壁压到 32%（无增亮，纯烘焙明暗；专调深暗水面）
@@ -749,6 +792,7 @@ export class WallMaterial extends THREE.ShaderMaterial {
       uSunColor: { value: new THREE.Color(0xfff3e0).multiplyScalar(TERRAIN_LIGHT_TUNING.sunIntensity) },
       uSunDay: { value: 1 },
       uWallEmissive: { value: 0 },
+      uSunDir: { value: new THREE.Vector3(-0.342, 1.0, 0.940).normalize() },
       uTime: { value: 0 },
     });
     super({
@@ -821,6 +865,8 @@ export function updateWallMaterialsLighting(sun: {
     m.uniforms.uSunColor.value.setHex(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
     // ★ 夜晚直射保底开关（WALL_FRAG 用；Boss4D 墙材质无此 uniform，跳过）
     if (m.uniforms.uSunDay) m.uniforms.uSunDay.value = sun.daylight;
+    // ★ 实时太阳方向（LOD 内方向重映射用；守卫式，Boss4D 墙材质跳过）
+    if (m.uniforms.uSunDir) m.uniforms.uSunDir.value.set(sun.dir.x, sun.dir.y, sun.dir.z);
     // ★ 侧壁自发光保底：墙面法线水平，上方来光几乎不受直射 → 夜晚用
     //   材质本色直接发光（白天 0，随 daylight 平滑淡入）
     if (m.uniforms.uWallEmissive) {
