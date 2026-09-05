@@ -40,6 +40,25 @@ export interface FaceGeometry {
 }
 
 // ------------------------------------------------------------
+// 补丁覆盖层（§14.10 剔除+打补丁：子弹撞地 → 区域内统一补丁材质）
+// ------------------------------------------------------------
+// 语义：区域内每个 1m coarse cell 的高度每一项 = 原顶面 − depth（整体下挖一层），
+// 顶面/侧壁所属该 cell 的顶点一律换补丁色；区域边界（补丁↔原样）由两侧各自
+// 恒壁自然合拢（补丁侧壁顶=坑底，原样侧壁顶=原地面 → 边界棱完全闭合），
+// 物理=视觉同源（布局不变，外壳保持水密）。整个补丁 = 「挖掉一层换成补丁材质」。
+export const PATCH_DEPTH = 0.2;      // 补丁下挖深度（§13.2 T2 轻量档）
+export const PATCH_COLOR: [number, number, number] = [0.16, 0.135, 0.12]; // 焦土色（线性）
+
+export interface PatchOverlay {
+  /** 1m coarse cell(lx,lz)（chunk 局部）是否处于补丁区 */
+  isPatched(lx: number, lz: number): boolean;
+  /** 每点下挖深度 = 原顶面 − depth */
+  depth: number;
+  /** 补丁顶点色（线性 rgb；× albedo 收口为焦土色） */
+  color: [number, number, number];
+}
+
+// ------------------------------------------------------------
 // 顶面高度（视觉面 + bevel 弧带下弯）
 // ------------------------------------------------------------
 
@@ -315,13 +334,16 @@ export function buildTopGeometry(
   table: FaceTable,
   src: BlockSource,
   deformAt?: (x: number, z: number) => number,
+  patch?: PatchOverlay,
 ): FaceGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
   const uv: number[] = [];
+  const col: number[] = [];
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
   const def = (wx: number, wz: number): number => (deformAt ? deformAt(wx, wz) : 0);
+  const W = [1, 1, 1];
   let vi = 0;
 
   // ① fine 标记（bevel 带 + weld 坡脚/角脊 cell；已外扩 1 格保水密）
@@ -335,17 +357,23 @@ export function buildTopGeometry(
       const x0 = lx - HALF, z0 = lz - HALF;
       const base = vi;
       if (!fineE[lz * N + lx]) {
+        // ★ 补丁 cell：整体下挖 depth + 换补丁顶点色（coarse 恒壁顶=自底贴坑底）
+        const ptd = patch && patch.isPatched(lx, lz) ? patch.depth : 0;
+        const cc = ptd > 0 ? patch!.color : W;
         // coarse：4 角
-        const h00 = topYView(table, src, vbx, vbz, wx0, wz0) + def(wx0, wz0);
-        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) + def(wx0 + 1, wz0);
-        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) + def(wx0 + 1, wz0 + 1);
-        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) + def(wx0, wz0 + 1);
+        const h00 = topYView(table, src, vbx, vbz, wx0, wz0) + def(wx0, wz0) - ptd;
+        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) + def(wx0 + 1, wz0) - ptd;
+        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) + def(wx0 + 1, wz0 + 1) - ptd;
+        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) + def(wx0, wz0 + 1) - ptd;
         pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
-        for (let c = 0; c < 4; c++) nor.push(0, 1, 0);
+        for (let c = 0; c < 4; c++) { nor.push(0, 1, 0); col.push(cc[0], cc[1], cc[2]); }
         uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
         idx.push(vi, vi + 3, vi + 1, vi + 3, vi + 2, vi + 1);
         vi += 4;
       } else {
+        // ★ 补丁 fine cell：同法下挖 + 补丁色（细分不变 → 无 T 结；法线平移不变）
+        const ptd = patch && patch.isPatched(lx, lz) ? patch.depth : 0;
+        const cc = ptd > 0 ? patch!.color : W;
         // fine：0.125m 网格，顶点 y = topYView，法线用中差
         const G = FINE_S + 1; // 9
         const yt = new Float64Array(G * G);
@@ -353,11 +381,12 @@ export function buildTopGeometry(
           for (let gx = 0; gx < G; gx++) {
             const wx = wx0 + gx / FINE_S;
             const wz = wz0 + gy / FINE_S;
-            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) + def(wx, wz);
+            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) + def(wx, wz) - ptd;
             const lxx = wx - ox - HALF;
             const lzz = wz - oz - HALF;
             pos.push(lxx, yt[gy * G + gx], lzz);
             uv.push((wx - ox) / N, (wz - oz) / N);
+            col.push(cc[0], cc[1], cc[2]);
           }
         }
         // 顶点先占位法线，后差分
@@ -397,6 +426,7 @@ export function buildTopGeometry(
     vertices: new Float32Array(pos),
     normals: new Float32Array(nor),
     uvs: new Float32Array(uv),
+    colors: new Float32Array(col),
     indices: new Uint32Array(idx),
     topTriCount: idx.length / 3,
   };
@@ -410,6 +440,7 @@ export function buildWallGeometry(
   table: FaceTable,
   src: BlockSource,
   deformAt?: (x: number, z: number) => number,
+  patch?: PatchOverlay,
 ): FaceGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
@@ -451,6 +482,31 @@ export function buildWallGeometry(
         else if (dir === 2) { ax = x0; az = z0 + 4; bx2 = x0 + 4; bz2 = z0 + 4; }
         else { ax = x0; az = z0; bx2 = x0 + 4; bz2 = z0; }
         const nrm = DIRS[dir];
+        // ★ 补丁感知：本边每段(span)两侧 coarse cell 是否处于补丁区（§14.10）。
+        //   补丁侧壁顶 = 坑底（原面 −depth）；原样侧壁顶 = 原地面 → 边界棱闭合；
+        //   某一侧补丁 → 该壁整体换补丁色（坑里的壁 = 补丁，与原样地面交界处自然成立）
+        const P = patch;
+        const patchedOwn = (s: number): boolean => {
+          if (!P) return false;
+          const j = Math.min(3, Math.floor(s));
+          let lx: number, lz: number;
+          if (dir === 0) { lx = lbx * 4 + 3; lz = lbz * 4 + j; }
+          else if (dir === 1) { lx = lbx * 4; lz = lbz * 4 + j; }
+          else if (dir === 2) { lx = lbx * 4 + j; lz = lbz * 4 + 3; }
+          else { lx = lbx * 4 + j; lz = lbz * 4; }
+          return lx >= 0 && lz >= 0 && lx < N && lz < N && P.isPatched(lx, lz);
+        };
+        const patchedNb = (s: number): boolean => {
+          if (!P) return false;
+          const j = Math.min(3, Math.floor(s));
+          let lx: number, lz: number;
+          if (dir === 0) { lx = lbx * 4 + 4; lz = lbz * 4 + j; }
+          else if (dir === 1) { lx = lbx * 4 - 1; lz = lbz * 4 + j; }
+          else if (dir === 2) { lx = lbx * 4 + j; lz = lbz * 4 + 4; }
+          else { lx = lbx * 4 + j; lz = lbz * 4 - 1; }
+          // 跨 chunk 的邻 cell 状态未知 → 视为未补丁（另一 chunk 自带状态）
+          return lx < 0 || lz < 0 || lx >= N || lz >= N ? false : P.isPatched(lx, lz);
+        };
         // 低侧基底（旧裙墙语义 lowBase = min(邻视觉顶, 两侧 hBase)）
         const nbH0 = src.blockAt(nbx, nbz)?.h ?? 0;
         const nbBase0 = src.blockAt(nbx, nbz)?.hBase ?? nbH0;
@@ -463,8 +519,10 @@ export function buildWallGeometry(
           const s = nodes[i];
           const gx = ax + (bx2 - ax) * (s / 4);
           const gz = az + (bz2 - az) * (s / 4);
-          // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest
-          const top = topYView(table, src, bx, bz, gx, gz) + def(gx, gz);
+          // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest；
+          //   本块 cell 补丁 → 顶沿整体下挖 depth（坑里侧壁顶贴坑底）
+          const top = topYView(table, src, bx, bz, gx, gz) + def(gx, gz)
+            - (patchedOwn(s) ? P!.depth : 0);
           // 邻视角（节点 + 下一节点 max，供本段底沿用）
           const nx2 = i < m - 1 ? nodes[i + 1] : s;
           const nbTop = Math.max(
@@ -484,10 +542,14 @@ export function buildWallGeometry(
           const botB = Math.min(topV[i + 1], lowV[i + 1] - WALL_EPS - WALL_MIN_DEPTH);
           pos.push(lxV[i], topV[i], lzV[i], lxV[i + 1], topV[i + 1], lzV[i + 1],
             lxV[i + 1], botB, lzV[i + 1], lxV[i], botA, lzV[i]);
+          const ownP2 = patchedOwn(nodes[i]);
+          const nbP2 = patchedNb(nodes[i]);
+          const pc = P && (ownP2 || nbP2) ? P.color : null;
           for (let c = 0; c < 4; c++) {
             nor.push(nrm.dx, 0, nrm.dz);
             uv.push(uU, uV);
-            col.push(0.6, 0.6, 0.6); // 顶点色占位（shader 调）
+            if (pc) col.push(pc[0], pc[1], pc[2]); // 补丁色（坑内壁面=统一补丁材质）
+            else col.push(0.6, 0.6, 0.6); // 顶点色占位（shader 调）
             shd.push(1);
           }
           // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向
@@ -511,4 +573,39 @@ export function buildWallGeometry(
     indices: new Uint32Array(idx),
     topTriCount: 0,
   };
+}
+
+// ------------------------------------------------------------
+// ★ 补丁圆覆盖判定（§14.10 剔除+打补丁；纯函数，可测）
+// ------------------------------------------------------------
+
+/**
+ * 水平圆覆盖的 coarse cell 标记（AABB 中心最近点法判交）。
+ * 返回每个 1m cell 的 chunk 坐标 (cx,cz) 与块内下标 (lx,lz)；
+ * 越界 cell（块的整数除法边界之外）自动丢弃。
+ */
+export function circleCells(
+  px: number,
+  pz: number,
+  r: number,
+  chunkSize: number,
+): { cx: number; cz: number; lx: number; lz: number }[] {
+  const out: { cx: number; cz: number; lx: number; lz: number }[] = [];
+  const l0x = Math.floor(px - r), l1x = Math.floor(px + r);
+  const l0z = Math.floor(pz - r), l1z = Math.floor(pz + r);
+  for (let wx = l0x; wx <= l1x; wx++) {
+    for (let wz = l0z; wz <= l1z; wz++) {
+      // cell AABB [wx,wx+1]×[wz,wz+1] 与水平圆（中心最近点法）
+      const cox = Math.max(wx, Math.min(px, wx + 1));
+      const coz = Math.max(wz, Math.min(pz, wz + 1));
+      if ((cox - px) * (cox - px) + (coz - pz) * (coz - pz) > r * r) continue;
+      const ccx = Math.floor(wx / chunkSize);
+      const cra = Math.floor(wz / chunkSize);
+      const lx = wx - ccx * chunkSize;
+      const lz = wz - cra * chunkSize;
+      if (lx < 0 || lx >= chunkSize || lz < 0 || lz >= chunkSize) continue;
+      out.push({ cx: ccx, cz: cra, lx, lz });
+    }
+  }
+  return out;
 }

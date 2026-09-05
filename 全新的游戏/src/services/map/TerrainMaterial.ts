@@ -459,10 +459,11 @@ const FRAGMENT_MAIN = /* glsl */ `
         uniform vec3 uSunColor;
         varying vec2 vUv;
         varying vec2 vWorld;
+        varying vec3 vColor;
         #include <common>
         #include <fog_pars_fragment>
         void main() {
-          vec3 alb = texture2D(uAlbedo, vUv).rgb;
+          vec3 alb = texture2D(uAlbedo, vUv).rgb * vColor;
           vec3 lm = texture2D(uLightmap, vUv).rgb;      // r=直射 / g=AO
           int id = int(texture2D(uTileIds, vUv).r * 255.0 + 0.5);
 
@@ -550,7 +551,10 @@ const FRAGMENT_MAIN = /* glsl */ `
       `;
 
 export class TerrainMaterial extends THREE.ShaderMaterial {
-  constructor(albedo: THREE.Texture, lightmap: THREE.Texture, cfg?: TileRenderConfig) {
+  constructor(albedo: THREE.Texture, lightmap: THREE.Texture, cfg?: TileRenderConfig, useVertexColor = false) {
+    // ★ 补丁顶点色通道（§14.10）：补丁区 cell 逐顶点 × 焦土色 → albedo 收口；
+    //   useVertexColor=true 时必须由 geometry 提供 'color' 属性（或缺省置信白）
+    const vcVar = useVertexColor ? 'vColor = color;' : 'vColor = vec3(1.0);';
     super({
       uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
         uAlbedo: { value: albedo },
@@ -573,10 +577,12 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
       vertexShader: /* glsl */ `
         varying vec2 vUv;
         varying vec2 vWorld;
+        varying vec3 vColor;
         #include <common>
         #include <fog_pars_vertex>
         void main() {
           vUv = uv;
+          ${vcVar}
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);   // ★ fog_vertex 依赖它
           vec4 wp = modelMatrix * vec4(position, 1.0);
           vWorld = wp.xz;
@@ -587,6 +593,7 @@ export class TerrainMaterial extends THREE.ShaderMaterial {
       fragmentShader: MATERIAL_GLSL + FRAGMENT_MAIN,
       fog: true, // ★ 场景有 THREE.Fog——必须参与雾，否则远端地形浮在背景外
     });
+    this.vertexColors = useVertexColor; // 供 three 注入 attribute color（配 geometry color 属性）
     registry.add(this);
   }
 
@@ -621,14 +628,16 @@ export function unregisterWallLightTarget(m: WallLightTarget): void {
   wallRegistry.delete(m);
 }
 
-const WALL_VERT = /* glsl */ `
+const WALL_VERT = (vcVar: string) => /* glsl */ `
   varying vec2 vUv;      // 地块中心 uv（采样 uTileIds 得所属 tile id）
   varying vec2 vUvC;     // chunk 连续 uv（采样 uAlbedo/uLightmap，与顶面同约定）
   varying vec2 vTex;     // ★ 墙面 2D 纹理坐标（沿墙水平距离 × 绝对高度）
+  varying vec3 vColor;   // ★ 补丁色通道（§14.10；无补丁 = vec3(1.0)）
   #include <common>
   #include <fog_pars_vertex>
   void main() {
     vUv = uv;
+    vColor = ${vcVar};
     vUvC = position.xz / 60.0 + 0.5;   // 局部坐标（中心原点）→ chunk 0..1
     vec4 wp = modelMatrix * vec4(position, 1.0);
     // ★ 不能直接用 wp.xz 当纹理坐标：墙面是竖直面，法线水平分量几乎恒定 →
@@ -659,6 +668,7 @@ const WALL_FRAG = /* glsl */ `
   varying vec2 vUv;
   varying vec2 vUvC;
   varying vec2 vTex;
+  varying vec3 vColor;   // ★ 补丁色通道（× albedo）
   #include <common>
   #include <fog_pars_fragment>
   void main() {
@@ -671,7 +681,7 @@ const WALL_FRAG = /* glsl */ `
     //   色偏。改为非水墙采样 vUv（墙顶所属地块中心，与 uTileIds 同源）——
     //   光照与顶面同源同值，wallGain 回归 1.0，颜色自然一致（墙 = 顶面延展）。
     //   水墙保持墙脚投影 + 低增益（深暗水面观感是专调效果）。
-    vec3 alb = texture2D(uAlbedo, isWaterWall ? vUvC : vUv).rgb;
+    vec3 alb = texture2D(uAlbedo, isWaterWall ? vUvC : vUv).rgb * vColor;
     vec3 lm = texture2D(uLightmap, isWaterWall ? vUvC : vUv).rgb;
     vec3 field = shadeField(vTex);
     vec3 base = oklchShade(vTex, id, field);       // 与顶面逐像素一致的材质纹理
@@ -717,6 +727,7 @@ export class WallMaterial extends THREE.ShaderMaterial {
     albedo: THREE.Texture,
     lightmap: THREE.Texture,
     cfg?: TileRenderConfig,
+    useVertexColor = false, // ★ 补丁色通道（§14.10）：坑内壁面逐顶点 × 焦土色
   ) {
     const u = Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
       uAlbedo: { value: albedo },
@@ -738,11 +749,12 @@ export class WallMaterial extends THREE.ShaderMaterial {
     });
     super({
       uniforms: u,
-      vertexShader: WALL_VERT,
+      vertexShader: WALL_VERT(useVertexColor ? 'color' : 'vec3(1.0)'),
       fragmentShader: MATERIAL_GLSL + WALL_FRAG,
       fog: true,
     });
     wallRegistry.add(this);
+    this.vertexColors = useVertexColor; // 供 three 注入 attribute color
   }
 
   override dispose(): void {

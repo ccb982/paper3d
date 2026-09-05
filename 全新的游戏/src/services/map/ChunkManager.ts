@@ -31,8 +31,8 @@ import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { clearWallMaterials } from './ChunkWalls';
 import { mergeTerrainPhysics, buildChunkFinal, buildChunkWallBuffers } from './Refinements';
-import { buildFaceTable, type FaceTable } from './FaceTable';
-import { buildTopGeometry, buildWallGeometry, type FaceGeometry } from './FaceBuild';
+import { buildFaceTable } from './FaceTable';
+import { buildTopGeometry, buildWallGeometry, circleCells, PATCH_DEPTH, PATCH_COLOR, type FaceGeometry, type PatchOverlay } from './FaceBuild';
 import { WallMaterial } from './TerrainMaterial';
 import {
   buildPostChunkTopSurface,
@@ -50,8 +50,6 @@ import {
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
 import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
-import { query3D, classifyParts, type Shape3D, type RegionTerrain, type BuiltChunk } from './RegionFaceQuery';
-import { planDeform, executeDeformInPlace, pitDepthUnder, pitProfileOffset } from './RegionDeform';
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -108,11 +106,9 @@ export class ChunkManager {
   /** 激活回调（玩家进入半径/首个网格落地时；特殊事件预留） */
   private onChunkActivated?: (cx: number, cz: number, key: number) => void;
 
-  // ---- ★ 地形变形（§13 子弹撞地凹坑；内存态，不持久化） ----
-  /** 生效中的凹坑（横截面：pitProfileOffset）；可跨 chunk：重建时由 deform 一并对齐 */
-  private dents: { x: number; z: number; r: number; d: number }[] = [];
-  /** 查询用的表缓存（key→FaceTable；确定性重建，主线程轻量） */
-  private tables = new Map<number, FaceTable>();
+  // ---- ★ 地形补丁（§14.10 剔除+打补丁：子弹撞地 → 区域内统一补丁材质） ----
+  /** chunkKey → N×N 补丁标记（1 = 该 1m coarse cell 已补丁；内存态，不持久化） */
+  private patches = new Map<number, Uint8Array>();
   /** ★ 测试地图（单 chunk 陈列馆 + 地块名标注；构造 opts.testChunk） */
   private readonly testChunk: boolean;
 
@@ -554,31 +550,37 @@ export class ChunkManager {
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
     const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
     const table = buildFaceTable(src, cx, cz);
-    // 地形变形（§13）：有生效凹坑时，顶/壁高度采样统一走 deform 轮廓
-    const deformAt = this.dents.length > 0
-      ? (x: number, z: number) => this.deformOffsetAt(x, z) : undefined;
-    const topG = buildTopGeometry(table, src, deformAt);
-    const wallG = buildWallGeometry(table, src, deformAt);
+    // ★ 地形补丁（§14.10）：有补丁标记时，顶/壁在那个区域整体下挖 + 换补丁色
+    const patchArr = this.patches.get(chunkKeyOf(cx, cz));
+    const patch: PatchOverlay | undefined = patchArr ? {
+      isPatched: (lx, lz) =>
+        lx >= 0 && lz >= 0 && lx < CHUNK_SIZE && lz < CHUNK_SIZE
+        && patchArr[lz * CHUNK_SIZE + lx] === 1,
+      depth: PATCH_DEPTH,
+      color: PATCH_COLOR,
+    } : undefined;
+    const topG = buildTopGeometry(table, src, undefined, patch);
+    const wallG = buildWallGeometry(table, src, undefined, patch);
 
     const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
       geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
       if (g.uvs) geo.setAttribute("uv", new THREE.BufferAttribute(g.uvs, 2));
+      if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
       if (withColor) {
-        if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
         if (g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
       }
       geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
       return geo;
     };
 
-    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg);
+    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
     (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
       { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
     const group = new THREE.Group();
     group.add(new THREE.Mesh(toGeo(topG, false), mat));
-    const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg));
+    const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
     if (wallG.indices.length > 0) group.add(wallMesh);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
@@ -601,153 +603,53 @@ export class ChunkManager {
 
 
   // ============================================================
-  // ★ 地形变形（§13：子弹撞地 → 一次性地形扣除）
+  // ★ 地形补丁（§14.10 剔除+打补丁：子弹撞地 → 区域统一补丁材质）
   // ============================================================
 
   /**
-   * 某世界坐标 (x,z) 的变形偏移（下沉量 ≥0；正=坑）；∑ 全部生效凹坑的坑剖面。
-   * 与 planDeform/executeDeformInPlace 的 depthAt 同源 —— 就地写回与 deform 重建
-   * 对同一顶点必然给出同一最终高度。
+   * 某世界坐标 (x,z) 是否已是补丁 cell（只读查询；供判定/验收用）
    */
-  private deformOffsetAt(x: number, z: number): number {
-    let total = 0;
-    for (let i = 0; i < this.dents.length; i++) {
-      const t = this.dents[i];
-      total += pitProfileOffset(Math.hypot(x - t.x, z - t.z), t.r, t.d);
-    }
-    return total;
-  }
-
-  /** 查询用表缓存：确定性重建，命中才 buildFaceTable（查询与装配复用同表） */
-  private tableOf(cx: number, cz: number): FaceTable {
-    const key = chunkKeyOf(cx, cz);
-    let t = this.tables.get(key);
-    if (!t) {
-      t = buildFaceTable(this.raster.chunkSource(cx, cz), cx, cz);
-      this.tables.set(key, t);
-    }
-    return t;
-  }
-
-  /** 顶/壁网格对（group 直接子级 Mesh：壁带 shade 属性、顶不带；装饰层是 Group） */
-  private meshPairOf(group: THREE.Object3D): { top: THREE.Mesh; wall: THREE.Mesh | null } {
-    let top: THREE.Mesh | null = null;
-    let wall: THREE.Mesh | null = null;
-    group.children.forEach((c) => {
-      if ((c as THREE.Mesh).isMesh) {
-        const m = c as THREE.Mesh;
-        if (m.geometry.getAttribute('shade')) wall = m;
-        else top = top ?? m;
-      }
-    });
-    return { top: top!, wall };
-  }
-
-  /** 真实缓冲包装：直接引用当前网格 position/normal/index（就地写回目标；物理=同源合并） */
-  private wrapBuilt(cx: number, cz: number): BuiltChunk | null {
-    const group = this.meshes.get(chunkKeyOf(cx, cz));
-    if (!group) return null;
-    const { top, wall } = this.meshPairOf(group);
-    const gTop = top.geometry;
-    const pTop = gTop.getAttribute('position').array as Float32Array;
-    const nTop = gTop.getAttribute('normal').array as Float32Array;
-    const iTop = (gTop.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
-    let pW = new Float32Array(0);
-    let iW = new Uint32Array(0);
-    if (wall) {
-      pW = wall.geometry.getAttribute('position').array as Float32Array;
-      iW = (wall.geometry.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
-    }
-    const nVT = pTop.length / 3;
-    const pv = new Float32Array(nVT * 3 + pW.length);
-    pv.set(pTop, 0);
-    pv.set(pW, nVT * 3);
-    const pi = new Uint32Array(iTop.length + iW.length);
-    pi.set(iTop, 0);
-    for (let i = 0; i < iW.length; i++) pi[iTop.length + i] = iW[i] + nVT;
-    return {
-      key: chunkKeyOf(cx, cz),
-      topVertices: pTop, topNormals: nTop, topIndices: iTop,
-      wallVertices: pW, wallIndices: iW,
-      physVertices: pv, physIndices: pi,
-    };
+  isPatchedAt(px: number, pz: number): boolean {
+    if (this.boss4D) return false;
+    const ccx = Math.floor(px / CHUNK_SIZE);
+    const cra = Math.floor(pz / CHUNK_SIZE);
+    const arr = this.patches.get(chunkKeyOf(ccx, cra));
+    if (!arr) return false;
+    let lx = px - ccx * CHUNK_SIZE;
+    let lz = pz - cra * CHUNK_SIZE;
+    lx = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(lx)));
+    lz = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(lz)));
+    return arr[lz * CHUNK_SIZE + lx] === 1;
   }
 
   /**
-   * ★ 子弹撞地 → 一次性地形扣除（§13.2 T2 球形坑）：
-   *   1) 登记 dent（内存态；后续任意重建以 deform 对齐）
-   *   2) query3D + classifyParts + planDeform（表/真实缓冲双源）
-   *   3) 就地写回 fine 顶格与整格在坑内的 coarse 格（含内侧角，保跨格水密）
-   *   4) coarse 部分覆盖格 → 整 chunk deform 重装配（replaceChunk 连物理一起换）
-   *   5) 就地 chunk：顶/壁缓冲标记脏 + 重建地面刚体（物理=视觉同源合并）
+   * ★ 子弹撞地 → 一次性地形扣补丁（§14.10 轻量档 R=0.6/D=0.2）：
+   *   1) 水平圆与 coarse cell AABB 判交 → 标记补丁（幂等：重复命中不重建）
+   *   2) 有新标记才重建受影响 chunk（表烘焙缓存命中 → 同步 finishStandardChunkTable；
+   *      patch-aware 构建：区域内顶/壁统一下挖 depth + 换补丁色，边界外原样）
+   *   3) chunk 未建成（未达构建半径）只登记 → 将来烘焙自然带补丁
    */
-  playBulletImpact(px: number, py: number, pz: number): void {
+  playBulletImpact(px: number, _py: number, pz: number): void {
     if (this.boss4D) return; // 四维空间不扣地形
-    const R = 0.6, D = 0.2; // §13.2 T2 轻量档（破坏小）
-    this.dents.push({ x: px, z: pz, r: R, d: D });
-    const shape: Shape3D = { kind: 'sphere', x: px, y: py, z: pz, r: R };
-    const depthAt = pitDepthUnder(px, pz, R, D);
-    const terrain: RegionTerrain = {
-      chunkSource: (cx, cz) => this.raster.chunkSource(cx, cz),
-      getTable: (cx, cz) => this.tableOf(cx, cz),
-      builtOf: (cx, cz) => this.wrapBuilt(cx, cz),
-    };
-    const q = query3D(shape, terrain);
-    const parts = classifyParts(q, { depthAt });
-    const plan = planDeform(q, parts);
-    if (plan.updates.length > 0) executeDeformInPlace(q, plan, terrain, { depthAt });
-    // coarse 部分覆盖 → 整 chunk deform 重装配（已建成则同步替换）
-    const rebuildKeys = new Set(plan.rebuild.map((r) => r.key));
-    for (const rec of plan.rebuild) {
-      if (this.meshes.has(rec.key) || this.voidKeys.has(rec.key)) {
-        this.requestStandardBake(rec.cx, rec.cz);
-      }
+    const R = 0.6; // §14.10 T2 轻量档（破坏小）
+    const touched = new Set<number>();
+    let added = 0;
+    for (const c of circleCells(px, pz, R, CHUNK_SIZE)) {
+      const key = chunkKeyOf(c.cx, c.cz);
+      let arr = this.patches.get(key);
+      if (!arr) { arr = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE); this.patches.set(key, arr); }
+      if (arr[c.lz * CHUNK_SIZE + c.lx] !== 1) { arr[c.lz * CHUNK_SIZE + c.lx] = 1; added++; }
+      touched.add(key);
     }
-    // 就地写回 chunk：标记缓冲脏 + 重建地面刚体
-    for (const [, c] of q.chunks) {
-      if (rebuildKeys.has(c.key)) continue;
-      const group = this.meshes.get(c.key);
-      if (!group) continue;
-      const { top, wall } = this.meshPairOf(group);
-      top.geometry.getAttribute('position').needsUpdate = true;
-      top.geometry.getAttribute('normal').needsUpdate = true;
-      const wp = wall?.geometry.getAttribute('position');
-      const wn = wall?.geometry.getAttribute('normal');
-      if (wp) wp.needsUpdate = true;
-      if (wn) wn.needsUpdate = true;
-      this.refreshGroundPhysics(c.key, c.cx, c.cz);
+    if (added === 0) return; // 幂等：无新 cell → 不重建
+    for (const key of touched) {
+      const ccx = Math.floor(key / 8192) - 4096;
+      const cra = (key % 8192) - 4096;
+      if (this.meshes.has(key) || this.voidKeys.has(key)) this.requestStandardBake(ccx, cra);
     }
     console.log(
-      `[TERRAIN] 命中(${px.toFixed(1)},${py.toFixed(1)},${pz.toFixed(1)}) ` +
-      `坑r=${R} depth=${D} | 面${parts.length} 点${plan.updates.length} ` +
-      `就地chunk${q.chunks.size} 部分覆盖重建${plan.rebuild.length}`,
+      `[PATCH] 命中(${px.toFixed(1)},${pz.toFixed(1)}) r=${R} 新增cell=${added} 影响chunk=${touched.size}`,
     );
-  }
-
-  /** 从已变形的真实缓冲重建地面刚体（就地写回后调用；物理与视觉数据同源） */
-  private refreshGroundPhysics(key: number, cx: number, cz: number): void {
-    const group = this.meshes.get(key);
-    if (!group) return;
-    const { top, wall } = this.meshPairOf(group);
-    const gTop = top.geometry;
-    const pTop = gTop.getAttribute('position').array as Float32Array;
-    const iTop = (gTop.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
-    let pW = new Float32Array(0);
-    let iW = new Uint32Array(0);
-    if (wall) {
-      pW = wall.geometry.getAttribute('position').array as Float32Array;
-      iW = (wall.geometry.getIndex()?.array as Uint32Array) ?? new Uint32Array(0);
-    }
-    const nVT = pTop.length / 3;
-    const pv = new Float32Array(nVT * 3 + pW.length);
-    pv.set(pTop, 0);
-    pv.set(pW, nVT * 3);
-    const pi = new Uint32Array(iTop.length + iW.length);
-    pi.set(iTop, 0);
-    for (let i = 0; i < iW.length; i++) pi[iTop.length + i] = iW[i] + nVT;
-    const old = this.bodies.get(key);
-    if (old !== undefined) this.host.destroyGround(old);
-    this.bodies.set(key, this.host.createGround(cx, cz, pv, pi));
   }
 
 
