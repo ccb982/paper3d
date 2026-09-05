@@ -498,8 +498,87 @@ function toChunkData(
 
   return {
     chunkX, chunkZ, heights, blockTypes, blockHeight, walkable, groupKey,
-    levels: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), // ★ §14.11 运行态覆盖层（生成不写）
+    levels: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), // ★ §14.11 覆盖层：初始 0，L6 预置伤痕 + 运行时挖坑共写
   };
+}
+
+// ============ L6 ★ 预置伤痕（§14.11 地图创建期预写：装饰弹坑 / 裂隙） ============
+// 语义（用户 2026-09-05 定调）：复用 levels 预写 —— 生成期确定性撒若干
+// 圆形弹坑（1~3 层焦土）+ 细长裂隙（1 cell 宽 / 3~8 cell 长）；纯装饰可通行，
+// 不触发坑洞死亡；渲染/trimesh/玩法高度经 levels 链路自动同步；玩家可再叠加。
+// ★ 确定性：独立 PRNG（hash2 派生），不触碰 L1~L5 既有随机流 → 回归基线不变。
+const SCAR_MARGIN = 4;   // 距 chunk 边留白（包络 seam 收口 0.5m + 形状余量）
+
+function mulberry32(seed0: number): () => number {
+  let a = seed0 >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function presetLevelScars(seed: number, chunkX: number, chunkZ: number, data: ChunkData): void {
+  const draw = mulberry32(Math.floor(hash2(chunkX, chunkZ, seed + 8801) * 4294967296) >>> 0);
+  // ★ 密度 ×4（2026-09-05 用户调整）：出生 chunk(0,0) 必撒且中心附近优先；
+  //   其余 ~97% chunk 撒痕（空 chunk 从 12% → 3%）；每 chunk 形状数 ×4。
+  const isSpawn = chunkX === 0 && chunkZ === 0;
+  if (!isSpawn && draw() < 0.03) return;
+  const levels = data.levels;
+  const occ = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE); // 避免形状互叠
+  const inBand = (lx: number, lz: number) =>
+    lx >= SCAR_MARGIN && lx < CHUNK_SIZE - SCAR_MARGIN && lz >= SCAR_MARGIN && lz < CHUNK_SIZE - SCAR_MARGIN;
+  const canPlace = (lx: number, lz: number) =>
+    inBand(lx, lz) && data.walkable[lz * CHUNK_SIZE + lx] === 1 && occ[lz * CHUNK_SIZE + lx] === 0;
+  const commit = (cells: { lx: number; lz: number; level: number }[]): boolean => {
+    for (const c of cells) if (!canPlace(c.lx, c.lz)) return false;
+    for (const c of cells) {
+      occ[c.lz * CHUNK_SIZE + c.lx] = 1;
+      if (levels[c.lz * CHUNK_SIZE + c.lx] < c.level) levels[c.lz * CHUNK_SIZE + c.lx] = c.level;
+    }
+    return true;
+  };
+  // 中心撒点（出生 chunk 强制落在 30,30 ±10 cell，其余全幅随机）
+  const centerP = (v: number, spanCells: number) =>
+    isSpawn
+      ? Math.round(30 + (v - 0.5) * 2 * spanCells)
+      : SCAR_MARGIN + Math.floor(v * (CHUNK_SIZE - SCAR_MARGIN * 2));
+  const bound = (v: number) => Math.max(SCAR_MARGIN, Math.min(CHUNK_SIZE - 1 - SCAR_MARGIN, v));
+  const minPlace = isSpawn ? 16 : 8; // ★ ×4（原 4/2）
+  let placed = 0;
+  for (let t = 0; t < 40 && placed < minPlace; t++) {
+    const isCrack = draw() < 0.38;
+    if (isCrack) {
+      // ---- 裂隙：单格宽 4~10 cell 直线，level 1（W=0.5 → 可见 0.2m 浅槽）----
+      const horizontal = draw() < 0.5;
+      const sx0 = bound(centerP(draw(), isSpawn ? 10 : 1));
+      const sz0 = bound(centerP(draw(), isSpawn ? 10 : 1));
+      const len = 4 + Math.floor(draw() * 7); // 4..10
+      const cells: { lx: number; lz: number; level: number }[] = [];
+      for (let i = 0; i < len; i++) {
+        cells.push({ lx: horizontal ? sx0 + i : sx0, lz: horizontal ? sz0 : sz0 + i, level: 1 });
+      }
+      if (commit(cells)) placed++;
+    } else {
+      // ---- 弹坑：圆盘 r=1~3，中心 1~3 层，外环降一层（包络平滑 → 自然坑形）----
+      const cx0 = bound(centerP(draw(), isSpawn ? 10 : 1));
+      const cz0 = bound(centerP(draw(), isSpawn ? 10 : 1));
+      const rr = draw();
+      const r = rr < 0.4 ? 2 : rr < 0.75 ? 1 : 3;
+      const L = 1 + Math.floor(draw() * 3); // 1..3
+      const cells: { lx: number; lz: number; level: number }[] = [];
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (dx * dx + dz * dz > r * r) continue;
+          const dist2 = dx * dx + dz * dz;
+          const level = dist2 <= 1 ? L : Math.max(1, L - 1);
+          cells.push({ lx: cx0 + dx, lz: cz0 + dz, level });
+        }
+      }
+      if (commit(cells)) placed++;
+    }
+  }
 }
 
 // ============ 主入口（六层管线编排） ============
@@ -542,5 +621,8 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ);
 
   // ---- L5 输出 ----
-  return toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key);
+  const data = toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key);
+  // ---- L6 预置伤痕（装饰弹坑/裂隙；levels 预写，确定性） ----
+  presetLevelScars(seed, chunkX, chunkZ, data);
+  return data;
 }

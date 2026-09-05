@@ -453,18 +453,27 @@ function run(seed: number) {
 
   // ---- ⑨ 玩法高度采样同步：surfaceHeightAt 减补丁包络场（角色脚底/贴地/clamp） ----
   {
+    // 坑外探针：动态找一片未预置痕的干净格（生成期 L6 预置可能落在固定点）
+    const lv0 = raster.levelsOf(0, 0);
+    let ox = 55.5, oz = 55.5, found = false;
+    for (let lz = 0; lz < N && !found; lz++) {
+      for (let lx = 0; lx < N && !found; lx++) {
+        if (lx >= 18 && lx <= 24 && lz >= 18 && lz <= 24) continue; // 避开挖坑区
+        if (lv0[lz * N + lx] === 0) { ox = lx + 0.5; oz = lz + 0.5; found = true; }
+      }
+    }
     const h0 = raster.surfaceHeightAt(20.5, 20.5);
-    const outside0 = raster.surfaceHeightAt(33.5, 33.5);
+    const outside0 = raster.surfaceHeightAt(ox, oz);
     const foot = circleCells(20.5, 20.5, 0.6, CH).filter((c) => c.cx === 0 && c.cz === 0)
       .map((c) => ({ lx: c.lx, lz: c.lz }));
     const changed1 = raster.digCells(0, 0, foot);
     const h1 = raster.surfaceHeightAt(20.5, 20.5);
-    const outside1 = raster.surfaceHeightAt(33.5, 33.5);
+    const outside1 = raster.surfaceHeightAt(ox, oz);
     ok(changed1 && near(h1 - h0, -PATCH_DEPTH, 1e-3) && near(raster.levelDepthAt(20.5, 20.5), PATCH_DEPTH, 1e-3),
       `${tag} ⑨ 单枪坑心 surfaceHeightAt −D（${(h1 - h0).toFixed(3)}，变化=${changed1}）`);
     ok(near(outside1 - outside0, 0, 1e-6), `${tag} ⑨ 坑外高度不受影响（Δ=${(outside1 - outside0).toFixed(5)}）`);
-    ok(raster.isLevelPatched(20.5, 20.5) && !raster.isLevelPatched(33.5, 33.5),
-      `${tag} ⑨ isLevelPatched 世界查询正确`);
+    ok(raster.isLevelPatched(20.5, 20.5) && !raster.isLevelPatched(ox, oz),
+      `${tag} ⑨ isLevelPatched 世界查询正确（探针 ${ox},${oz}）`);
   }
 
   // ---- ⑨b 补丁上再打补丁：同点两枪深 2D（无限修补的层数叠加） ----
