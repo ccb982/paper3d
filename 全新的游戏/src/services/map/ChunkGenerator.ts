@@ -504,8 +504,20 @@ function toChunkData(
 
 // ============ L6 ★ 预置伤痕（§14.11 地图创建期预写：装饰弹坑 / 裂隙） ============
 // 语义（用户 2026-09-05 定调）：复用 levels 预写 —— 生成期确定性撒若干
-// 圆形弹坑（1~3 层焦土）+ 细长裂隙（1 cell 宽 / 3~8 cell 长）；纯装饰可通行，
+// 圆形弹坑（1~3 层焦土）+ 有机裂隙（随机游走路径）；纯装饰可通行，
 // 不触发坑洞死亡；渲染/trimesh/玩法高度经 levels 链路自动同步；玩家可再叠加。
+// ★ 细化（2026-09-05 用户四点要求 + 二轮修正）：
+//   ① 坑洞有大有小 —— r=1~4 四档（小多 大少），径向渐层剖面（中心深→边缘浅，
+//     包络平滑后为自然碗形；原两级剖面台阶感重）；
+//   ② 裂隙不再直来直去 —— 4 向随机游走（45% 直行 / 55% ±90° 转向、禁回头），
+//     撞墙/出带/自交即止 → 连续锯齿折线。★ 不用斜向步：深度包络只沿 ±x/±z
+//     传播，斜向相邻的满深格在共享角点处深度收口 0 → 斜向段视觉断成珠串
+//     （实测用户"还是都是直的"的根因：斜向段不可见，只剩正交长直段）；
+//   ③ 数量与配比 —— 裂缝/弹坑分别设配额（各 8，出生 chunk 各 12）+ 裂隙加长
+//     5~14 步：裂缝不再被弹坑挤压（原共用 16 配额、裂缝失败率高 → 实际很少）；
+//   ④ 分布合理 —— 形状间 ≥1 cell 空隙（8 邻域检查）不粘连；★ 高台偏置：
+//     chunk 内有高台 cell 时 60% 尝试优先落在高台上（用户：高台上再多点）；
+//     空 chunk 概率维持 3%（留呼吸节奏）。
 // ★ 确定性：独立 PRNG（hash2 派生），不触碰 L1~L5 既有随机流 → 回归基线不变。
 const SCAR_MARGIN = 4;   // 距 chunk 边留白（包络 seam 收口 0.5m + 形状余量）
 
@@ -521,23 +533,29 @@ function mulberry32(seed0: number): () => number {
 
 function presetLevelScars(seed: number, chunkX: number, chunkZ: number, data: ChunkData): void {
   const draw = mulberry32(Math.floor(hash2(chunkX, chunkZ, seed + 8801) * 4294967296) >>> 0);
-  // ★ 密度 ×4（2026-09-05 用户调整）：出生 chunk(0,0) 必撒且中心附近优先；
-  //   其余 ~97% chunk 撒痕（空 chunk 从 12% → 3%）；每 chunk 形状数 ×4。
   const isSpawn = chunkX === 0 && chunkZ === 0;
-  if (!isSpawn && draw() < 0.03) return;
+  if (!isSpawn && draw() < 0.03) return; // 少量留白 chunk（节奏呼吸）
   const levels = data.levels;
-  const occ = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE); // 避免形状互叠
+  const occ = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE); // 已提交形状占用图
   const inBand = (lx: number, lz: number) =>
     lx >= SCAR_MARGIN && lx < CHUNK_SIZE - SCAR_MARGIN && lz >= SCAR_MARGIN && lz < CHUNK_SIZE - SCAR_MARGIN;
-  const canPlace = (lx: number, lz: number) =>
-    inBand(lx, lz) && data.walkable[lz * CHUNK_SIZE + lx] === 1 && occ[lz * CHUNK_SIZE + lx] === 0;
-  const commit = (cells: { lx: number; lz: number; level: number }[]): boolean => {
-    for (const c of cells) if (!canPlace(c.lx, c.lz)) return false;
-    for (const c of cells) {
-      occ[c.lz * CHUNK_SIZE + c.lx] = 1;
-      if (levels[c.lz * CHUNK_SIZE + c.lx] < c.level) levels[c.lz * CHUNK_SIZE + c.lx] = c.level;
+  // ★ 间隔检查：cell 自身可放置（带内+可走）且 8 邻域无已提交形状 → 形状间
+  //   恒有 ≥1 cell 原地面过渡带，散布自然不粘连
+  const canPlace = (lx: number, lz: number): boolean => {
+    if (!inBand(lx, lz)) return false;
+    if (data.walkable[lz * CHUNK_SIZE + lx] !== 1) return false;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = lx + dx, z = lz + dz;
+        if (x < 0 || x >= CHUNK_SIZE || z < 0 || z >= CHUNK_SIZE) continue;
+        if (occ[z * CHUNK_SIZE + x] !== 0) return false;
+      }
     }
     return true;
+  };
+  const mark = (lx: number, lz: number, level: number): void => {
+    occ[lz * CHUNK_SIZE + lx] = 1;
+    if (levels[lz * CHUNK_SIZE + lx] < level) levels[lz * CHUNK_SIZE + lx] = level;
   };
   // 中心撒点（出生 chunk 强制落在 30,30 ±10 cell，其余全幅随机）
   const centerP = (v: number, spanCells: number) =>
@@ -545,38 +563,86 @@ function presetLevelScars(seed: number, chunkX: number, chunkZ: number, data: Ch
       ? Math.round(30 + (v - 0.5) * 2 * spanCells)
       : SCAR_MARGIN + Math.floor(v * (CHUNK_SIZE - SCAR_MARGIN * 2));
   const bound = (v: number) => Math.max(SCAR_MARGIN, Math.min(CHUNK_SIZE - 1 - SCAR_MARGIN, v));
-  const minPlace = isSpawn ? 16 : 8; // ★ ×4（原 4/2）
-  let placed = 0;
-  for (let t = 0; t < 40 && placed < minPlace; t++) {
-    const isCrack = draw() < 0.38;
-    if (isCrack) {
-      // ---- 裂隙：单格宽 4~10 cell 直线，level 1（W=0.5 → 可见 0.2m 浅槽）----
-      const horizontal = draw() < 0.5;
-      const sx0 = bound(centerP(draw(), isSpawn ? 10 : 1));
-      const sz0 = bound(centerP(draw(), isSpawn ? 10 : 1));
-      const len = 4 + Math.floor(draw() * 7); // 4..10
-      const cells: { lx: number; lz: number; level: number }[] = [];
-      for (let i = 0; i < len; i++) {
-        cells.push({ lx: horizontal ? sx0 + i : sx0, lz: horizontal ? sz0 : sz0 + i, level: 1 });
+  // ★ 高台偏置采样：收集本 chunk 全部高台 cell（genRole=platform 的 4×4 全格）；
+  //   60% 尝试直接在高台上取形心（用户：高台上再多点），其余全幅随机
+  const platCells: number[] = [];
+  for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
+    for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
+      if (tileById(data.blockTypes[bz * BLOCKS_PER_SIDE + bx]).genRole !== 'platform') continue;
+      for (let dz = 0; dz < BLOCK_SIZE; dz++) {
+        for (let dx = 0; dx < BLOCK_SIZE; dx++) {
+          platCells.push((bz * BLOCK_SIZE + dz) * CHUNK_SIZE + (bx * BLOCK_SIZE + dx));
+        }
       }
-      if (commit(cells)) placed++;
+    }
+  }
+  const pickCenter = (): { lx: number; lz: number } => {
+    if (platCells.length > 0 && draw() < 0.6) {
+      const gi = platCells[Math.floor(draw() * platCells.length)];
+      return { lx: bound(gi % CHUNK_SIZE), lz: bound(Math.floor(gi / CHUNK_SIZE)) };
+    }
+    return { lx: bound(centerP(draw(), isSpawn ? 10 : 1)), lz: bound(centerP(draw(), isSpawn ? 10 : 1)) };
+  };
+  // 4 向步进表（裂隙随机游走；只走正交步 → 折线连续不断）
+  const DX4 = [1, 0, -1, 0];
+  const DZ4 = [0, 1, 0, -1];
+  // ★ 分类型配额：裂缝/弹坑各自保底（原共用配额 → 裂缝被挤压饥饿）
+  const minCraters = isSpawn ? 12 : 8;
+  const minCracks = isSpawn ? 12 : 8;
+  let placedCraters = 0;
+  let placedCracks = 0;
+  for (let t = 0; t < 150 && (placedCraters < minCraters || placedCracks < minCracks); t++) {
+    // 未满配额的类型优先；双方都未满时按 0.55 概率抽弹坑
+    const wantCrater = placedCraters < minCraters;
+    const wantCrack = placedCracks < minCracks;
+    const doCrater = wantCrater && (!wantCrack || draw() < 0.55);
+    if (!doCrater) {
+      // ---- 裂隙：正交随机游走（45% 直行 / 55% ±90° 转向、禁回头）----
+      const start = pickCenter(); // ★ 单次采样：x/z 必须来自同一形心
+      let lx = start.lx, lz = start.lz;
+      // 起点须直接可放（偏置落在高台上时 walkable 必真，仍兜底）
+      if (!canPlace(lx, lz)) continue;
+      let dir = Math.floor(draw() * 4);
+      const len = 5 + Math.floor(draw() * 10); // 5..14 步
+      const level = draw() < 0.72 ? 1 : 2;
+      const path: { lx: number; lz: number }[] = [];
+      const seen = new Set<number>();
+      for (let i = 0; i < len; i++) {
+        path.push({ lx, lz });
+        seen.add(lz * CHUNK_SIZE + lx);
+        const turn = draw() < 0.45 ? 0 : (draw() < 0.5 ? 1 : 3); // 0 直行 / 1 左转 / 3 右转
+        dir = (dir + turn) & 3;
+        const nx = lx + DX4[dir], nz = lz + DZ4[dir];
+        if (!canPlace(nx, nz) || seen.has(nz * CHUNK_SIZE + nx)) break;
+        lx = nx; lz = nz;
+      }
+      if (path.length >= 4) {
+        for (const p of path) mark(p.lx, p.lz, level);
+        placedCracks++;
+      }
     } else {
-      // ---- 弹坑：圆盘 r=1~3，中心 1~3 层，外环降一层（包络平滑 → 自然坑形）----
-      const cx0 = bound(centerP(draw(), isSpawn ? 10 : 1));
-      const cz0 = bound(centerP(draw(), isSpawn ? 10 : 1));
+      // ---- 弹坑：r=1~4 四档（小多 大少），径向渐层（中心 L → 边缘 1）----
+      // 层深沿半径线性下降，经包络（W=0.5）平滑后为自然碗形，无两级台阶感
+      const c0 = pickCenter();
+      const cx0 = c0.lx, cz0 = c0.lz;
       const rr = draw();
-      const r = rr < 0.4 ? 2 : rr < 0.75 ? 1 : 3;
-      const L = 1 + Math.floor(draw() * 3); // 1..3
+      const r = rr < 0.38 ? 1 : rr < 0.68 ? 2 : rr < 0.9 ? 3 : 4;
+      const L = 1 + Math.floor(draw() * 3); // 中心层数 1..3
       const cells: { lx: number; lz: number; level: number }[] = [];
-      for (let dz = -r; dz <= r; dz++) {
+      let ok = true;
+      for (let dz = -r; dz <= r && ok; dz++) {
         for (let dx = -r; dx <= r; dx++) {
-          if (dx * dx + dz * dz > r * r) continue;
           const dist2 = dx * dx + dz * dz;
-          const level = dist2 <= 1 ? L : Math.max(1, L - 1);
+          if (dist2 > r * r) continue;
+          if (!canPlace(cx0 + dx, cz0 + dz)) { ok = false; break; }
+          const level = Math.max(1, Math.round(L - (Math.sqrt(dist2) * (L - 1)) / Math.max(1, r)));
           cells.push({ lx: cx0 + dx, lz: cz0 + dz, level });
         }
       }
-      if (commit(cells)) placed++;
+      if (ok) {
+        for (const c of cells) mark(c.lx, c.lz, c.level);
+        placedCraters++;
+      }
     }
   }
 }
