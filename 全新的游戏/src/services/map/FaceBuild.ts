@@ -529,8 +529,16 @@ export function buildTopGeometry(
       const base = vi;
       if (!fineE[lz * N + lx]) {
         // ★ 补丁 coarse cell：四角按深度场逐顶点下挖（坑缘坡降 0→depth）+ 补丁顶点色
+        //   补丁色权重 = 深度场归一（0=坑口/坑外正常材质 → 1=坑内满深焦土）：
+        //   颜色渐变与几何坡降同源同位（都是 depthOf），交界处"先变色后下凹"的
+        //   硬色边消失（2026-09-05 用户：补丁与地面材质交界渲染不好看）。
         const pcell = patch && patch.isPatched(lx, lz);
         const cc = pcell ? patch!.color : W;
+        const pw = (d: number): [number, number, number] => [
+          1 + (cc[0] - 1) * Math.min(1, d / PATCH_DEPTH),
+          1 + (cc[1] - 1) * Math.min(1, d / PATCH_DEPTH),
+          1 + (cc[2] - 1) * Math.min(1, d / PATCH_DEPTH),
+        ];
         const d00 = patch ? patch.depthOf(wx0, wz0) : 0;
         const d10 = patch ? patch.depthOf(wx0 + 1, wz0) : 0;
         const d11 = patch ? patch.depthOf(wx0 + 1, wz0 + 1) : 0;
@@ -540,7 +548,9 @@ export function buildTopGeometry(
         const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) - d11;
         const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) - d01;
         pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
-        for (let c = 0; c < 4; c++) { nor.push(0, 1, 0); col.push(cc[0], cc[1], cc[2]); }
+        const c00 = pw(d00), c10 = pw(d10), c11 = pw(d11), c01 = pw(d01);
+        nor.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+        col.push(c00[0], c00[1], c00[2], c10[0], c10[1], c10[2], c11[0], c11[1], c11[2], c01[0], c01[1], c01[2]);
         uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
         idx.push(vi, vi + 3, vi + 1, vi + 3, vi + 2, vi + 1);
         vi += 4;
@@ -551,17 +561,20 @@ export function buildTopGeometry(
         // fine：0.125m 网格，顶点 y = topYView − depthOf，法线用中差
         const G = FINE_S + 1; // 9
         const yt = new Float64Array(G * G);
+        const dv = new Float64Array(G * G); // 深度场（补丁色权重同源）
         for (let gy = 0; gy < G; gy++) {
           for (let gx = 0; gx < G; gx++) {
             const wx = wx0 + gx / FINE_S;
             const wz = wz0 + gy / FINE_S;
-            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz)
-              - (patch ? patch.depthOf(wx, wz) : 0);
+            const dV = patch ? patch.depthOf(wx, wz) : 0;
+            dv[gy * G + gx] = dV;
+            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) - dV;
             const lxx = wx - ox - HALF;
             const lzz = wz - oz - HALF;
             pos.push(lxx, yt[gy * G + gx], lzz);
             uv.push((wx - ox) / N, (wz - oz) / N);
-            col.push(cc[0], cc[1], cc[2]);
+            const wgt = Math.min(1, dV / PATCH_DEPTH);
+            col.push(1 + (cc[0] - 1) * wgt, 1 + (cc[1] - 1) * wgt, 1 + (cc[2] - 1) * wgt);
           }
         }
         // 顶点先占位法线，后差分

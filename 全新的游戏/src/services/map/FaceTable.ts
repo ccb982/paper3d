@@ -41,7 +41,7 @@ export const edgeEndAdjacentDirs = (dir: number): [number, number] =>
   dir < 2 ? [3, 2] : [1, 0];
 
 /** 墙底相对墙顶的保底深度（有墙至少这么深，防 0 高墙/破面） */
-export const WALL_MIN_DEPTH = 0.3;
+export const WALL_MIN_DEPTH = 0.6;
 /** 墙存在判据容差（与精修层 buildChunkWallBuffers 的 WALL_EPS 同值） */
 export const WALL_EPS = 0.05;
 /** 弧边判据容差 */
