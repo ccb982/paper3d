@@ -15,7 +15,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { CHUNK_SIZE } from './ChunkGenerator';
+import { CHUNK_SIZE, BLOCKS_PER_SIDE } from './ChunkGenerator';
 import { RasterMap, chunkKeyOf } from './RasterMap';
 import {
   bakeChunkMaps, assembleChunkMaps,
@@ -42,6 +42,7 @@ import {
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
 import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
+import { buildPlatformAprons } from './decor/PlatformApron';
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -660,17 +661,34 @@ export class ChunkManager {
    * 调用方挂进 chunk group 后必须调用 createDecorColliders（在 replaceChunk 之后）。
    */
   private buildDecorLayer(cx: number, cz: number, decor: DecorPlan): THREE.Object3D | null {
-    if (decor.props.length === 0) return null;
-    const propLayer = buildPropLayer(decor.props);
-    if (!propLayer) {
-      console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
-      return null;
+    const parts: THREE.Object3D[] = [];
+    if (decor.props.length > 0) {
+      const propLayer = buildPropLayer(decor.props);
+      if (propLayer) parts.push(propLayer);
+      else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
     }
-    // ★ 对齐 chunk 角：PlannedProp.x/z 是 chunk 角落坐标(0~60)，而 chunk
+    // ★ 石围裙（沙土高台专属）：周界压边 + 侧壁下裙（platform_sand 暴露边）；
+    //   blockKeyAt 用世界块坐标跨 chunk 查地块 key（防叠环判定需要邻 chunk 数据）
+    const apron = buildPlatformAprons(
+      cx, cz, this.raster.worldSeed,
+      this.raster.getChunkData(cx, cz)?.blockTypes,
+      (x, z) => this.raster.surfaceHeightAt(x, z),
+      (wx, wz) => {
+        const ccx = Math.floor(wx / BLOCKS_PER_SIDE), ccz = Math.floor(wz / BLOCKS_PER_SIDE);
+        const d = this.raster.getChunkData(ccx, ccz);
+        if (!d) return null;
+        return tileById(d.blockTypes[(wz - ccz * BLOCKS_PER_SIDE) * BLOCKS_PER_SIDE + (wx - ccx * BLOCKS_PER_SIDE)]).key;
+      },
+    );
+    if (apron) parts.push(apron);
+    if (parts.length === 0) return null;
+    const layer = new THREE.Group();
+    for (const p of parts) layer.add(p);
+    // ★ 对齐 chunk 角：装饰 x/z 是 chunk 角落坐标(0~60)，而 chunk
     //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
     //   影子/碰撞体与可见网格三者错位（踩过的坑）
-    propLayer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
-    return propLayer;
+    layer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
+    return layer;
   }
 
   /**
