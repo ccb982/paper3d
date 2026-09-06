@@ -425,8 +425,10 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(dL, dC, dH, reflect);
   }
 
-  // 水泥（装饰性高台）：平滑灰面——三尺度连续明暗幅度远小于沙土（噪点有但不要多）。
+  // 水泥（装饰性高台）：平滑哑光灰面——三尺度连续明暗幅度远小于沙土（噪点有但不要多）。
   // 参数：grain(细颗粒)/meso(中波)/macro(大波)/chroma(色彩呼吸)。
+  // 2026-09-06 与水泥台座实体同款哑光观感：reflect 恒 1.0（不做乘性提光，
+  // 不泛光泽）；表面无 specular/fresnel → 离线 PBR 般暗沉低反光。
   vec4 mat_cement(vec3 f, vec2 w, int id) {
     float macro = (vnoise2(w * 0.18) - 0.5) * 2.0 * matP(id, 2) * 0.25;  // 大波极弱
     float meso  = (vnoise2(w * 0.75) - 0.5) * 2.0 * matP(id, 1) * 0.35;  // 中波微起伏
@@ -436,8 +438,7 @@ export const MATERIAL_GLSL = /* glsl */ `
     float dC = -shade * 0.020 * matP(id, 3);
     float hueDrift = (vnoise2(w * 0.22 + 31.0) - 0.5) * 2.0 * matP(id, 3) * 0.008;
     float dH = shade * 0.010 * matP(id, 3) + hueDrift;
-    float reflect = 1.0 + dL * 0.14;
-    return vec4(dL, dC, dH, reflect);
+    return vec4(dL, dC, dH, 1.0);       // ★ reflect 恒 1.0：哑光不泛光
   }
 
   // ==================== 条带装饰（《我画的第一个装饰性纹理》2026-09-05 定稿） ====================

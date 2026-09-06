@@ -224,7 +224,9 @@ registerTileMaterial({
   lodEmissive: 0.02,
 });
 
-/** 水泥（装饰性高台）：平滑灰面 + 少噪点（细颗粒残留，无图案无斑驳） */
+/** 水泥（装饰性高台）：平滑哑光灰面 + 少噪点（细颗粒残留，无图案无斑驳）。
+ * 2026-09-06 与水泥台座实体同款观感：去掉 LOD 发光层（反光感来源），
+ * surface roughness 0.92 + 无 specular → 离线 PBR 般哑光暗沉。 */
 registerTileMaterial({
   fnId: 'cement', label: '水泥',
   params: {
@@ -234,5 +236,5 @@ registerTileMaterial({
     chroma: 0.35,   // 色彩呼吸幅度（水泥灰，走色极少）
   },
   surface: { roughness: 0.92 },
-  lodEmissive: 0.02,
+  lodEmissive: 0,   // ★ 0：去掉距离呼吸发光，像梯台实体（哑光暗沉）
 });

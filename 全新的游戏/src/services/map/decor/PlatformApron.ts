@@ -21,7 +21,8 @@
 //     0.85~1.2)：背光侧不再只剩环境光近黑，顺背光幅度与 TerrainMaterial
 //     一致；
 //   · 表面小裂痕 + 石纹 = 程序化 CanvasTexture（模块级单例共享；
-//     基色 = 手绘 #dbccc1，裂痕深褐细折线 + 风化色斑 + 颗粒）；
+//     基色 = 水泥灰 #6f6f6a（2026-09-06 与台座实体同色），
+//     裂痕深灰细折线 + 风化色斑 + 颗粒）；
 //   · 防叠环（两环共边会 z-fighting）：锚点四邻域不得含任何锚点/已环块；
 //     并块的其余邻域同理；跨 chunk 边界用世界块坐标确定性哈希求值
 //     邻块锚点资格（同函数同结果）→ 两 chunk 独立构建也不会共边叠环；
@@ -85,27 +86,27 @@ function apronMaterial(): THREE.MeshStandardMaterial {
   const cv = document.createElement('canvas');
   cv.width = S; cv.height = S;
   const g = cv.getContext('2d')!;
-  // 基色 = 手绘围裙色 #dbccc1（浅暖石）
-  g.fillStyle = '#dbccc1';
+  // 基色 = 水泥灰 #6f6f6a（用户 2026-09-06：与水泥台座实体同色）
+  g.fillStyle = '#6f6f6a';
   g.fillRect(0, 0, S, S);
   const rnd = texRng(0x5a1d09);
   // 细颗粒（±8 灰度扰动，石头哑光质感）
   for (let i = 0; i < 5200; i++) {
     const v = Math.floor((rnd() - 0.5) * 16);
-    g.fillStyle = `rgb(${219 + v},${204 + v},${193 + v})`;
+    g.fillStyle = `rgb(${111 + v},${111 + v},${106 + v})`;
     g.fillRect(Math.floor(rnd() * S), Math.floor(rnd() * S), 1, 1);
   }
-  // 淡色斑（风化痕迹）
+  // 淡色斑（风化痕迹，灰阶）
   for (let i = 0; i < 9; i++) {
-    g.fillStyle = `rgba(122,102,86,${0.05 + rnd() * 0.05})`;
+    g.fillStyle = `rgba(89,89,86,${0.05 + rnd() * 0.05})`;
     g.beginPath();
     g.ellipse(rnd() * S, rnd() * S, 14 + rnd() * 30, 10 + rnd() * 22, rnd() * Math.PI, 0, Math.PI * 2);
     g.fill();
   }
-  // 小裂痕：随机游走细折线（深褐；偶发短分支）
+  // 小裂痕：随机游走细折线（深灰；偶发短分支）
   for (let c = 0; c < 15; c++) {
     let x = rnd() * S, y = rnd() * S, ang = rnd() * Math.PI * 2;
-    g.strokeStyle = `rgba(86,70,57,${0.32 + rnd() * 0.26})`;
+    g.strokeStyle = `rgba(61,61,58,${0.32 + rnd() * 0.26})`;
     g.lineWidth = rnd() < 0.3 ? 1.6 : 1;
     g.beginPath();
     g.moveTo(x, y);
