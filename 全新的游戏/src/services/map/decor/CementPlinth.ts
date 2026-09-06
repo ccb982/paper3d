@@ -24,9 +24,9 @@ import { buildTrapezoidPlinth } from './MapEntityDecorBase';
 /** 台座形态常量（与 buildTrapezoidPlinth 参数一致） */
 const BASE_HALF = 2.0;    // 底座半宽 → 4×4m 整格
 const TOP_HALF = 1.5;     // 顶面半宽（梯形上层）
-const PLINTH_H = 0.6;     // 台座高
+const PLINTH_H = 0.9;     // 台座高
 const SLOT_DEPTH = 0.2;   // 顶面下沉槽深
-const SLOT_HALF = 0.8;    // 下沉槽半宽
+const SLOT_HALF = 1.2;    // 下沉槽半宽（槽全宽 2.4m）
 const PLINTH_P = 0.35;    // 水泥高台块出现台座的概率（用户定版）
 
 /** 台座带顶相对基面高度（槽内 = 台面 + 槽深） */
