@@ -130,14 +130,14 @@ export abstract class CharacterBase extends EntityBase {
     const p = this.entity.position;
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
     if (this.controller.isAirborne()) {
-      // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.6 → 可越 0.5 高差）。
+      // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.8 → 可越 0.5 高差）。
       //   落地交给 WorldMode 落回贴地。横向位移已在上面按分量做了垂直壁受阻检查，
       //   因此跳跃无法朝壁方向推进（不穿模、不会横向切入壁腹被 clamp 抬升）。
       p.y = this.airborneStandY + this.controller.getHeightOffset();
     } else {
       // ★ 落地态：刷新站立基准；cliff（大落差）水平阻挡仅落地态适用——
-      //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.35) 以上 → 回退，
-      //   小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
+      //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.5) 以上 → 回退，
+      //   0.5 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
       if (gy - p.y > EDGE_CLIFF_BAND) {
         p.x = prevX;

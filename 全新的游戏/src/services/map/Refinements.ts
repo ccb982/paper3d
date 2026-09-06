@@ -54,7 +54,7 @@ export type EdgeRuling = "weld" | "cliff";
  *   本常量不参与裁决（默认世界全硬边界）；仅供移动层阻挡阈值与未来
  *   smooth opt-in 高度差判断储备。
  */
-export const EDGE_CLIFF_BAND = 0.35;
+export const EDGE_CLIFF_BAND = 0.5;
 
 /**
  * ★ weld 斜坡带宽（米，默认 = 块宽 1/3）。可配层级（由粗到细）：

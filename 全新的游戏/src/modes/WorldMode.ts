@@ -180,7 +180,7 @@ export class WorldMode implements IGameMode {
         },
         fps: { idle: 2, walk: 6, attack: 8 },
       },
-      moveSpeed: 2.5,
+      moveSpeed: 5.0,
       facing: '后',
     });
 

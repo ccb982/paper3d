@@ -28,7 +28,9 @@ export class Player extends CharacterBase {
       frame0.bbox,
     );
     // ★ 按纹理宽高比缩放（角色站立比例）
-    this.applyRenderScale(1.0); // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）
+    // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）→ 2.0（2026-09-06 用户：纹理大小增大一倍；
+    //   仅视觉放大，碰撞体仍为 1.0 胶囊）
+    this.applyRenderScale(2.0);
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {

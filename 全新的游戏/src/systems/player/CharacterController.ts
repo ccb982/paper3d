@@ -44,8 +44,9 @@ export class CharacterController {
   private jumpVel = 0;
   private jumpOffset = 0;
   private onGround = true;
-  /** ★ 跳跃初速 / 重力。★ 空格跳跃真实高度 = jumpSpeed²/(2·gravity) = 0.6
-   *   （2026-08-31 用户定：爬阶梯 0.35 / 空格跳跃 0.6 → 可跳上 0.5 高差） */
+  /** ★ 跳跃初速 / 重力。★ 空格跳跃真实高度 = jumpSpeed²/(2·gravity) = 0.8
+   *   （2026-09-06 用户定：跳跃高度改 0.8；配合 EDGE_CLIFF_BAND=0.5，
+   *   0.5 以上的地形差距直接跨越） */
   jumpSpeed = 0;
   gravity = 12;
   /** ★ 真实贴地（世界每帧回填：角色脚底已贴合地表）。false = 悬空/未落地。
@@ -61,7 +62,7 @@ export class CharacterController {
     this.anim = anim;
     this.animMap = animMap;
     this.moveSpeed = moveSpeed;
-    this.jumpSpeed = Math.sqrt(2 * this.gravity * 0.6); // 峰值 = 0.6
+    this.jumpSpeed = Math.sqrt(2 * this.gravity * 0.8); // 峰值 = 0.8
   }
 
   /** ★ 空中？（跳跃点起跳 → 落地复位）。运动层据此给真实 y 升降 */
