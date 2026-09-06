@@ -108,6 +108,10 @@ export class WorldMode implements IGameMode {
   private pickupGlows: PickupGlowEffect[] = [];
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
+  /** ★ 调试：F9 颜色回读监听器（exit 时移除） */
+  private _f9Handler: ((e: KeyboardEvent) => void) | null = null;
+  /** ★ 调试：置位后本帧 render() 末尾立即回读（默认帧缓冲 swap 后读返回 0） */
+  private _pendingReadback = false;
 
   // ============================================================
   // IGameMode 接口实现
@@ -285,6 +289,16 @@ export class WorldMode implements IGameMode {
 
     console.log(`[WorldMode] 进入战场，第 ${ctx.day} 天，HP ${ctx.combatStats.maxHp}`);
 
+    // ---- ★ 调试：F9 回读最终绘制颜色（游标指向像素 + 中心网格；诊断警示贴画偏色用） ----
+    const onF9 = (e: KeyboardEvent) => {
+      if (e.key !== 'F9' || !this.renderer || !this.renderer.domElement) return;
+      // ★ 不在 keydown 里直接 readPixels——three 默认缓冲已 swap，会读到全 0；
+      //   置位后由本帧 render() 末尾在 render 紧后同步读。
+      this._pendingReadback = true;
+    };
+    window.addEventListener('keydown', onF9);
+    this._f9Handler = onF9;
+
     // ---- ★ 订阅伤害事件，显示浮动数字 ----
     import('../core/EventBus').then(({ eventBus }) => {
       this.damageUnsub = eventBus.on('damage', (payload) => {
@@ -414,6 +428,12 @@ export class WorldMode implements IGameMode {
     this.entities.renderAll(this.camera);
     this.bullets.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
+
+    // ★ 调试：F9 置位后本帧末同步回读（渲染刚完成、缓冲未 swap，读数有效）
+    if (this._pendingReadback) {
+      this._pendingReadback = false;
+      this.finalColorReadback();
+    }
   }
 
   /** 退出模式：完整清理所有私有资源 */
@@ -449,6 +469,12 @@ export class WorldMode implements IGameMode {
     this.binding?.dispose();
     this.binding = null;
 
+    // ---- ★ 移除 F9 调试回读监听 ----
+    if (this._f9Handler) {
+      window.removeEventListener('keydown', this._f9Handler);
+      this._f9Handler = null;
+    }
+
     // ---- ★ 销毁私有物理世界 ----
     this.physics = null;
 
@@ -466,6 +492,62 @@ export class WorldMode implements IGameMode {
   // ============================================================
   // 以下为内部方法，与重构前保持一致
   // ============================================================
+
+  /**
+   * ★ 调试：F9 回读最终绘制颜色（诊断沙土警示贴画偏色）。
+   * 采样屏幕中心 5×5 网格 + 游标世界坐标射到屏幕的像素，
+   * 打印 RGBA 与对应游标世界坐标（可配合 tileDefAt 对照)。
+   */
+  private finalColorReadback(): void {
+    const r = this.renderer!;
+    const gl = r.getContext();
+    const canvas = r.domElement;
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const lines: string[] = ['[WorldMode] 最终颜色回读:'];
+
+    // ★ 光照状态（判读亮度/是否夜间——夜间读数近黑无法判色相）
+    const sun = renderManager.querySun();
+    lines.push(`  光照 hour=${sun.hour.toFixed(1)} daylight=${sun.daylight.toFixed(3)} intensityScale=${sun.intensityScale.toFixed(3)} color=#${sun.color.toString(16).padStart(6,'0')}`);
+
+    // 游标位置（射线方向投影到屏幕中心附近）
+    const ray = this.cameraRay();
+    let sx = Math.round(cw / 2), sy = Math.round(ch / 2);
+    const aim = this.aimRaycast();
+    if (aim && this.camera) {
+      const v = new THREE.Vector3(aim.x, aim.y, aim.z).project(this.camera);
+      sx = Math.round((v.x * 0.5 + 0.5) * cw);
+      sy = Math.round((-v.y * 0.5 + 0.5) * ch);
+    }
+
+    // 游标指向的地块信息（判定位块/材质，对照 RGBA 定位偏色源）
+    let tileInfo = '?';
+    if (aim && this.raster) {
+      const td = this.raster.tileDefAt(aim.x, aim.z);
+      tileInfo = `id=${td.id} key=${td.key} mat=${td.visual.material?.fnId ?? 'none'} baseHsl=${td.visual.baseHsl.h.toFixed(3)},${td.visual.baseHsl.s.toFixed(3)},${td.visual.baseHsl.l.toFixed(3)}`;
+    }
+
+    // 游标 1×1 精确像素
+    const one = new Uint8Array(4);
+    gl.readPixels(sx, sy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, one);
+    lines.push(`  aim@(${aim ? aim.x.toFixed(1) + ',' + aim.z.toFixed(1) : '?'}) ${tileInfo}`);
+    lines.push(`  aim 像素(${sx},${sy}): rgba(${one[0]},${one[1]},${one[2]},${one[3]})`);
+
+    // 中心 5×5 网格
+    const N = 2;
+    const grid = new Uint8Array((2 * N + 1) * (2 * N + 1) * 4);
+    gl.readPixels(cw / 2 - N, ch / 2 - N, 2 * N + 1, 2 * N + 1, gl.RGBA, gl.UNSIGNED_BYTE, grid);
+    lines.push('  中心 5×5 (行从底部起):');
+    for (let row = 2 * N; row >= 0; row--) {
+      const cols: string[] = [];
+      for (let c = 0; c <= 2 * N; c++) {
+        const i = (row * (2 * N + 1) + c) * 4;
+        cols.push(`${grid[i]},${grid[i + 1]},${grid[i + 2]}`);
+      }
+      lines.push(`    [${cols.join(' | ')}]`);
+    }
+    console.log(lines.join('\n'));
+  }
 
   private cameraRay(): { origin: { x: number; y: number; z: number }; dir: { x: number; y: number; z: number } } {
     this.camera!.updateMatrixWorld();

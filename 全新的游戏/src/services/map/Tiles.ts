@@ -490,8 +490,9 @@ export const TILE_FLAT_SAND = new TileDef(
     material: {
       fnId: "sand",
       // ★ 条带装饰 = 沙土地块专属（斑马线式琥珀虚线段，20% 地块出现；shader slot15 门控）
-      params: { stripes: 0.55 },
-    }, // 沙土材质（细沙粒 + 微起伏）+ 条带装饰
+      params: { stripes: 0.55, hazard: 0.85 },
+      // ★ 警示贴画 = 沙土地块专属（黑黄 45° 警示方框贴画，~20% 地块出现；shader slot14 门控）
+    }, // 沙土材质（细沙粒 + 微起伏）+ 条带装饰 + 警示贴画
   },
   TILE_FLAT.physics,
   ["foundation"],

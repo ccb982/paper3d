@@ -435,14 +435,16 @@ export const MATERIAL_GLSL = /* glsl */ `
   //   · 颜色 = 琥珀 sRGB(255,190,111) → OKLCH(0.846,0.122,0.196)；
   //     磨损 = 边缘噪声啃边（0~3cm，只蚀不胀）+ 内部轻斑驳（0.88~1.0）。
   // 门控：uMatParams slot15（stripes）=0 关（早退零成本）；仅顶面调用。
+  // ★ reflect 贡献恒 0：oklchShade 的 sh = materialShade + stripeDeco + hazardDeco 的
+  //   sh.w 是加性累积，材料已约 1.0；若叠加会让装饰区亮度×2+ 过曝，被 ACES 拉偏品红。
   vec4 stripeDeco(vec3 f, vec2 w, int id) {
     float amt = matP(id, 15);
-    if (amt <= 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
+    if (amt <= 0.001) return vec4(0.0, 0.0, 0.0, 0.0);
     vec2 wt = w - floor(w / 4096.0) * 4096.0;
     vec2 tc = floor(wt / 4.0);
     vec2 lp = wt - tc * 4.0;                            // 地块内坐标 0..4m
     float tileH = h21(tc);                              // 地块主哈希
-    if (tileH > 0.20) return vec4(0.0, 0.0, 0.0, 1.0);  // ★ 20% 出现概率
+    if (tileH > 0.20) return vec4(0.0, 0.0, 0.0, 0.0);  // ★ 20% 出现概率
     float two = step(h21(tc + 3.9), 0.45);              // 45% 双条叠加（独立哈希）
     float k1 = floor(h21(tc + 7.3) * 4.0);              // 旋转 0~3 四选一
     float k2 = mod(k1 + 1.0 + floor(h21(tc + 13.7) * 3.0), 4.0); // 第二条旋转必不同
@@ -466,12 +468,81 @@ export const MATERIAL_GLSL = /* glsl */ `
       mDash = max(mDash, smoothstep(3.27 + aw, 3.33 + aw, t.y) * (1.0 - smoothstep(3.83 - aw, 3.89 - aw, t.y)));
       mask = max(mask, mLane * mDash);
     }
-    if (mask <= 0.001) return vec4(0.0, 0.0, 0.0, 1.0);
+    if (mask <= 0.001) return vec4(0.0, 0.0, 0.0, 0.0);
     vec3 base = uMatBaseLCH[id].xyz;
     vec3 amber = vec3(0.846, 0.122, 0.196);
     float weather = 0.88 + vnoise2(lp * 9.0) * 0.12;    // 内部轻斑驳（0.88~1.0）
     vec3 dd = (amber - base) * mask * amt * weather;
-    return vec4(dd, 1.0 + mask * 0.06);
+    return vec4(dd, 0.0);                                // 颜色只走 sh.xyz，不碰亮度
+  }
+
+  // ==================== 警示贴画（《装饰性纹理，警示贴画》2026-09-06 定稿） ====================
+  // 语义（用户定调）：内部一个方形（背景色面板），外部一圈黑黄交替的最经典 45°
+  // 警示线框。铺在沙土地块顶面；与条带装饰同款随机散布（~20% 地块出现）。
+  //   · 模板 = 用户手绘 JSON：居中方形 + 外圈警示环（环厚 ~0.5m）。手绘线只是示意、
+  //     密度不足——完整条纹在此程序化生成：每条边 ~13 条黑黄对（周期 P=0.32m，
+  //     单条垂直宽 ~0.11m），无需逐根手画。
+  //   · 中间色 = 背景色(原始) RGB(255,164,92) 调暗成「不敢再碰的做旧灰橙」
+  //     OKLCH(≈0.62,0.085,0.16)——既有层次又不会被 ACES 推成品红，与亮黄警示条拉开。
+  //   · 做旧（用户定：磨损做旧）：外圈细黑描边 ~2.5cm；警示环边缘噪声啃蚀（0~2cm，
+  //     只蚀不胀）；黄条内部轻斑驳（0.92~1.0）；黑条微明暗（±0.02 不呆板）；
+  //     极淡斜向刮痕（约一半地块有）。
+  //   · 颜色 = 警示黄 OKLCH(0.85, 0.175, 0.24) ≈ sRGB(约 255,197,0)；黑 OKLCH(0.015,0,0)。
+  // ★ reflect 贡献恒 0：oklchShade 的 sh = materialShade + stripeDeco + hazardDeco 的
+  //   sh.w 是加性累积，材料已约 1.0；若叠加会让贴画区亮度×2+ 过曝，被 ACES 拉偏品红。
+  // 门控：uMatParams slot14（hazard）=0 关（早退零成本）；仅顶面调用（topSurf>0.5）。
+  vec4 hazardDeco(vec3 f, vec2 w, int id) {
+    float amt = matP(id, 14);
+    if (amt <= 0.001) return vec4(0.0, 0.0, 0.0, 0.0);
+    vec2 wt = w - floor(w / 4096.0) * 4096.0;
+    vec2 tc = floor(wt / 4.0);                            // 地块坐标（哈希盐）
+    vec2 lp = wt - tc * 4.0;                              // 地块内坐标 0..4m
+    float tileH = h21(tc + 7.31);                         // ★ 独立盐：~20% 出现
+    if (tileH > 0.20) return vec4(0.0, 0.0, 0.0, 0.0);
+    float k = floor(h21(tc + 3.17) * 2.0);                // 条纹方向变体（0=↘ / 1=↗）
+    vec2 d = lp - vec2(2.0);                              // 以地块中心为原点
+    float q = max(abs(d.x), abs(d.y));                    // 旋转方距（正方形）
+    const float OS = 1.55;                                // 外框半宽（贴画 3.1m）
+    const float IS = 1.05;                                // 内部方形半宽（背景面板 2.1m）
+    // 做旧① 边缘啃蚀：0~2cm（只蚀不胀，外缘向内缩）
+    float wear = abs(vnoise2(lp * 5.0 + k * 17.0) - 0.5) * 0.04;
+    float mOut = 1.0 - smoothstep(OS - 0.005 - wear, OS + 0.005 - wear, q);
+    if (mOut <= 0.001) return vec4(0.0, 0.0, 0.0, 0.0);
+    // 外圈细黑描边：贴画最外 ~2.5cm 压近黑（q 靠近 OS 处为 1，画内部为 0）
+    float mOutline = mOut * smoothstep(OS - 0.032, OS - 0.008, q);
+    // 警示环本体（内缘 2cm 软过渡，外缘让出描边带，避免黑黄条纹叠在描边上发黄）
+    float mStripe = mOut * smoothstep(IS - 0.02, IS + 0.02, q)
+                  * (1.0 - smoothstep(OS - 0.034, OS - 0.010, q));
+    // 内部背景面板
+    float mIn = mOut * (1.0 - smoothstep(IS - 0.02, IS + 0.02, q));
+    // 45° 条纹：对角坐标 u，周期 P = 一对黑黄；每条边 ~2·IS/P ≈ 13 对
+    float u = k < 0.5 ? d.x + d.y : d.x - d.y;
+    const float P = 0.32;
+    float fr = fract(u / P);
+    float yellowF = 1.0 - smoothstep(0.44, 0.56, fr);     // 半周期黄 → 黑
+    // 做旧② 黄条轻斑驳 / 黑条微明暗 / 内部面板斑驳
+    float mottle = 0.92 + vnoise2(lp * 9.0 + k * 29.0) * 0.08;
+    float blackJit = (vnoise2(lp * 7.0 + k * 41.0) - 0.5) * 0.04;   // 黑条微明暗 ±0.02
+    float inWear = 0.94 + vnoise2(lp * 9.0 + k * 31.0) * 0.06;      // 内部面板轻做旧
+    // 做旧③ 斜向刮痕：细线，约一半地块有，极淡压暗
+    float scPresence = step(h21(tc + 19.7), 0.5);
+    float scU = d.x * 1.4 + d.y * 1.4 + (vnoise2(lp * 2.0 + k * 7.0) - 0.5) * 0.8;
+    float scWeight = smoothstep(0.980, 0.988, fract(scU)) * scPresence * 0.30;
+    // 目标色组装（OKLab delta）：环条纹 + 内部背景面板 + 描边 + 刮痕
+    vec3 base = uMatBaseLCH[id].xyz;
+    vec3 yellow = vec3(0.85, 0.175, 0.24);                 // 警示黄
+    vec3 black = vec3(0.015, 0.0, 0.0);                   // 黑
+    // 内部黄色面板（手绘模板"纹理内部颜色"= rgb(179,142,3) → OKLCH(0.6626,0.1348,0.2500)）
+    vec3 interior = vec3(0.6626, 0.1348, 0.2500) * inWear;
+    float worn = 1.0 + (mottle - 1.0) * yellowF + blackJit;
+    vec3 target = mix(black, yellow, yellowF) * worn;
+    vec3 dd = (target - base) * mStripe * amt;            // 警示环：黑黄交替（不含描边带）
+    dd += (interior - base) * mIn * amt;                  // 中间方形：黄色面板
+    dd += (black * 0.85 - base) * mOutline * amt;         // 外圈描边压近黑
+    dd += (base * 0.9 - base) * scWeight * amt;           // 刮痕把 base 压暗 10%
+    // ★ reflect 贡献恒 0：oklchShade 里 sh = materialShade + stripeDeco + hazardDeco 的
+    //   sh.w 是加性的，materialsShade 已约 1.0；这里若再加会导致贴画区 base×~2 过曝偏品。
+    return vec4(dd, 0.0);                                  // 颜色只走 sh.xyz，不碰亮度
   }
 
   // ==================== 分发（数据驱动：tile→材质.fnId→GLSL 函数） ====================
@@ -485,10 +556,13 @@ ${MATERIAL_DISPATCH}
   // ==================== 收口：基色 + 逐像素偏移 + 反光层 → 线性 RGB ====================
   // 每个像素拿到自己独立的 OKLab 偏移（非整体统一调色）+ 反光层乘数：
   //   materialShade 的尺度渐变 + 每地块 hash 抖动族 + 反光层，叠加在作者侧基色上。
-  // topSurf：1=顶面（条带装饰启用）/ 0=侧壁（墙面坐标空间不同，条带不投影）。
+  // topSurf：1=顶面（条带装饰/警示贴画启用）/ 0=侧壁（墙面坐标空间不同，装饰不投影）。
   vec3 oklchShade(vec2 w, int id, vec3 field, float topSurf) {
     vec4 sh = materialShade(field, w, id);                // (dL, dC, dH, reflect)
-    if (topSurf > 0.5) sh += stripeDeco(field, w, id);    // ★ 条带装饰（slot15 门控）
+    if (topSurf > 0.5) {
+      sh += stripeDeco(field, w, id);    // ★ 条带装饰（slot15 门控）
+      sh += hazardDeco(field, w, id);    // ★ 警示贴画（slot14 门控）
+    }
     // ★ 逐地块轻微 HSL 色偏：粒度 = 4×4m 地块（每地块整体一个 hash 色偏，
     //   地块内部连续纯色）。原 1m 粒度（floor(w)）会碎成小方块——2026-09-02
     //   用户反馈"纹理上有方块"后归零；现按地块粒度恢复"每地块轻微变化"。

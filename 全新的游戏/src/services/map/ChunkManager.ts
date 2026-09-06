@@ -904,6 +904,9 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
       // ★ 通用装饰槽（slot 15）：条带装饰强度——全材质统一索引（模板无需声明），
       //   地块 material.params 加 { stripes: 0.6 } 即启用，0/缺省 = 关
       params[id * 16 + 15] = merged.stripes ?? 0;
+      // ★ 通用装饰槽（slot 14）：警示贴画强度——沙土地块专属（黑黄警示方框），
+      //   地块 material.params 加 { hazard: 0.85 } 即启用，0/缺省 = 关
+      params[id * 16 + 14] = merged.hazard ?? 0;
     }
   }
 
