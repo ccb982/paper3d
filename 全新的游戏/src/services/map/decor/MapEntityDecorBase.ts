@@ -41,6 +41,8 @@ export interface PropPlacement {
   scaleRange: [number, number];
   /** 下沉量（米，防悬浮；0=贴面） */
   sinkIntoGround?: number;
+  /** 下沉量随机范围（米；存在则覆盖 sinkIntoGround，每实例独立抽取） */
+  sinkRange?: [number, number];
   /** 出生保护区（世界坐标 + 半径；规划期排除） */
   keepClear?: { x: number; z: number; r: number }[];
 }
@@ -178,15 +180,24 @@ export const FOUNDATION_PROP_GROUP = 'foundation';
 // 后续装饰 = 在此注册实例即可）
 // ============================================================
 
+// ★ 占位·碎石（foundation_pebble）已停用（2026-09-06 用户要求）：
+//   与晶簇同为"石头感"装饰，默认地图里反而稀释了耗尽原石晶体的观感。
+//   geometry 'rock' 保留，需要时可重新注册。
+
+// ★ 能量耗尽原石晶体（2026-09-06 用户新增）：水泥材质、向上的水晶柱群——
+//   簇内高矮混排（中央高塔 + 环状高矮柱 + 地面碎晶，见 buildCrystalCluster）；
+//   instanced 共享几何 × 实例 scale/rotY/variant（yScale 拉伸）→ 全地图体型错落；
+//   ★ 地面为主、总体 ~5%（用户 2026-09-06 定稿）：ground+platform 双角色都长，
+//     但地面方格多于高台 → 晶簇多数落在地面平地；perCellProb 0.05 ≈ 全图 5%。
 registerMapDecor(new MapEntityDecorBase({
-  key: 'foundation_pebble', label: '占位·碎石', groups: [FOUNDATION_PROP_GROUP],
+  key: 'depleted_crystal', label: '耗尽原石晶体', groups: [FOUNDATION_PROP_GROUP],
   placement: {
-    hostRole: ['ground', 'platform'], perCellProb: 0.09,
-    scaleRange: [0.6, 1.5], sinkIntoGround: 0.08,
+    hostRole: ['ground', 'platform'], perCellProb: 0.005,
+    scaleRange: [0.7, 1.5], sinkRange: [0.10, 0.26],
   },
   render: 'instanced', shadow: 'disc',
-  physics: { type: 'cuboid', radius: 0.7, height: 1.2 },
-  geometry: { type: 'rock', params: { radius: 0.7, height: 1.2, noise: 0.35, color: 0x8a7f74 } },
+  physics: { type: 'cuboid', radius: 1.15, height: 2.8 },
+  geometry: { type: 'crystal', params: { color: 0x6f6f6a, noise: 0.12 } },
 }));
 
 // ★ 水泥台座不在本库（独立结构模块 decor/CementPlinth.ts）：
@@ -312,12 +323,17 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
        if (blocked) continue;
 
        const [sMin, sMax] = pick.placement.scaleRange;
+       // ★ 下沉深度（米）：sinkRange 随机抽取（以中值为基准波动）；否则固定 sinkIntoGround
+       const sink = pick.placement.sinkRange
+         ? pick.placement.sinkRange[0] +
+           hash2(cx, cy, ctx.seed + 9609) * (pick.placement.sinkRange[1] - pick.placement.sinkRange[0])
+         : pick.placement.sinkIntoGround ?? 0;
        out.push({
          propKey: pick.key,
          // ★ 输出转 chunk 本地坐标（渲染层直接挂 chunk group；过滤/坡度/贴地均用世界坐标）
          x: jx - ctx.cx * 60,
          z: jz - ctx.cz * 60,
-         y: ctx.surfaceHeightAt(jx, jz) - (pick.placement.sinkIntoGround ?? 0),
+         y: ctx.surfaceHeightAt(jx, jz) - sink,
         scale: sMin + hash2(cx, cy, ctx.seed + 9606) * (sMax - sMin),
         rotY: hash2(cx, cy, ctx.seed + 9607) * Math.PI * 2,
         variant: Math.floor(hash2(cx, cy, ctx.seed + 9608) * 4),
@@ -466,16 +482,107 @@ export function buildTrapezoidPlinth(params: Record<string, number>): THREE.Buff
 }
 
 /**
+ * 能量耗尽原石晶体簇几何（向上水晶柱群 + 低矮底座盘）。
+ * 簇内高矮混排：中央高塔（~3.6m）+ 环状中柱（2~3m）+ 矮柱（0.5~1.5m）
+ * + 地面碎晶（~0.2m）——"很多向上的柱体，有的很高，有的很矮"。
+ * 每柱 = 六棱锥（六槽底环 → 单尖顶，晶面色/棱半径带指针噪声 → 天然晶体歪尖）；
+ * 底座 = 六边低矮扁盘（顶面扇 + 侧壁）接地，柱从盘顶生长。
+ * 非索引三角形（每面独立顶点 → computeVertexNormals 逐面平整 + flatShading 硬棱）。
+ */
+function buildCrystalCluster(params: Record<string, number>): THREE.BufferGeometry {
+  const noise = params.noise ?? 0.12;
+  const RING = 6;              // 晶柱槽数
+  const BR = 1.15;             // 底座半径
+  const BRH = 0.12;            // 底座高
+  const COLUMNS: Array<[number, number, number, number]> = [
+    [0.00, 0.00, 0.24, 3.60],   // 中央高塔
+    [0.85, 0.28, 0.17, 2.70],
+    [-0.62, 0.55, 0.15, 0.75],  // 矮
+    [0.32, 0.95, 0.16, 2.15],
+    [-0.35, -0.82, 0.18, 1.50],
+    [0.95, -0.62, 0.14, 0.60],  // 矮
+    [-0.88, -0.05, 0.16, 3.00],
+    [0.22, -0.42, 0.13, 1.05],
+    [-0.15, 0.72, 0.14, 0.50],  // 矮
+    [1.05, 0.62, 0.11, 0.45],   // 矮
+    [-0.58, -0.18, 0.12, 0.85],
+    [0.45, 0.50, 0.08, 0.25],   // 地面碎晶
+    [-0.60, 0.95, 0.07, 0.20],
+    [0.78, -0.90, 0.09, 0.30],
+    [-0.95, 0.85, 0.06, 0.18],
+  ];
+  const V: number[] = [];
+  const emit = (a: number, b: number, c: number) => V.push(a, b, c);
+  /** 晶面/棱半径噪声（同柱同槽同值 → 面仍平整） */
+  const nface = (j: number, k: number) => 1 + (rockVertexNoise(j * 13 + k * 7 + 5) - 0.5) * noise;
+
+  // ---- 底座（低矮六边扁盘：顶面扇 + 侧壁） ----
+  const topR: number[] = [];
+  const botR: number[] = [];
+  for (let k = 0; k < RING; k++) {
+    const a = (k / RING) * Math.PI * 2;
+    const rr = BR * nface(0, k);
+    topR.push(Math.cos(a) * rr, BRH, Math.sin(a) * rr);
+    botR.push(Math.cos(a) * rr * 0.98, -0.03, Math.sin(a) * rr * 0.98);
+  }
+  for (let k = 0; k < RING; k++) {
+    const k1 = (k + 1) % RING;
+    // 顶面扇（每三角独立三顶点；反绕 → 朝上 +Y）
+    emit(0, BRH, 0);
+    emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
+    emit(topR[k * 3], topR[k * 3 + 1], topR[k * 3 + 2]);
+    // 侧壁（bottom 两角 + top 两角 → 两三角，法线朝外）
+    emit(botR[k * 3], botR[k * 3 + 1], botR[k * 3 + 2]);
+    emit(topR[k * 3], topR[k * 3 + 1], topR[k * 3 + 2]);
+    emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
+    emit(botR[k * 3], botR[k * 3 + 1], botR[k * 3 + 2]);
+    emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
+    emit(botR[k1 * 3], botR[k1 * 3 + 1], botR[k1 * 3 + 2]);
+  }
+
+  // ---- 晶体柱（六棱锥，从盘顶生长到尖顶） ----
+  for (let j = 0; j < COLUMNS.length; j++) {
+    const [cx, cz, r, h] = COLUMNS[j];
+    const ring: number[] = [];
+    for (let k = 0; k < RING; k++) {
+      const a = (k / RING) * Math.PI * 2;
+      const rad = r * nface(7 + j, k);
+      ring.push(cx + Math.cos(a) * rad, BRH, cz + Math.sin(a) * rad);
+    }
+    // 尖顶轻微偏斜（天然晶体歪尖感）
+    const tipX = cx + (rockVertexNoise(j * 31 + 11) - 0.5) * r * 0.4;
+    const tipZ = cz + (rockVertexNoise(j * 31 + 17) - 0.5) * r * 0.4;
+    for (let k = 0; k < RING; k++) {
+      const k1 = (k + 1) % RING;
+      // 侧面三角：环序反绕 → 法线朝外（外视顺时针才符 CCW 前面约定）
+      emit(ring[k1 * 3], ring[k1 * 3 + 1], ring[k1 * 3 + 2]);
+      emit(ring[k * 3], ring[k * 3 + 1], ring[k * 3 + 2]);
+      emit(tipX, BRH + h, tipZ);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/**
  * 共享几何工厂：按 geometry.type 分发——
  * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
  * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
  * 'trapezoid'：平截四棱台（底大方、顶小方 ÷ 梯台）+ 顶面下沉槽
+ * 'crystal'：能量耗尽原石晶体簇（向上六棱晶柱群，高矮混排）
  *（《水泥高台上的装饰性实体.json》：侧面梯形 + 顶面一块向下凹且保持平面）
  */
 function buildSharedGeometry(type: string | undefined, params: Record<string, number>): THREE.BufferGeometry {
   const noise = params.noise ?? 0.35;
   if (type === 'trapezoid') {
     return buildTrapezoidPlinth(params);
+  }
+  if (type === 'crystal') {
+    return buildCrystalCluster(params);
   }
   if (type === 'block') {
     const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
