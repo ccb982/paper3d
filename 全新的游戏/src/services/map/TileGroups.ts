@@ -104,7 +104,7 @@ registerGroup({
   //   基石组参与正式选组（权重 1，与主题组均等，中性调色保持原味）；
   //   兼职不变：生效组缺角色时仍走本组回退。
   weight: 1,
-  members: { flat_sand: 1, platform_sand: 1, water: 1, pit: 1 },
+  members: { flat_sand: 1, platform_sand: 1, cement_platform: 1, water: 1, pit: 1 },
   palette: NEUTRAL_PALETTE, gen: NEUTRAL_GEN,
 });
 

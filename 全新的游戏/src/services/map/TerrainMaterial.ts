@@ -105,7 +105,7 @@ export const MATERIAL_SLOTS = 32;
  */
 const MAT_FN_INDEX: Record<string, number> = {
   dirt: 0, brick: 1, grass: 2, wood: 3, rock: 4, moss: 5,
-  water: 6, ice: 7, ash: 8, mud: 9, pit: 10, sand: 11,
+  water: 6, ice: 7, ash: 8, mud: 9, pit: 10, sand: 11, cement: 12,
 };
 
 /** TileDef.visual.material.fnId → 材质函数索引（-1 = 无材质） */
@@ -422,6 +422,21 @@ export const MATERIAL_GLSL = /* glsl */ `
     float hueDrift = (vnoise2(w * 0.22 + 31.0) - 0.5) * 2.0 * matP(id, 3) * 0.015;
     float dH = shade * 0.016 * matP(id, 3) + hueDrift; // 暗→偏冷灰 亮→偏黄暖 + 斑驳漂移
     float reflect = 1.0 + dL * 0.18;
+    return vec4(dL, dC, dH, reflect);
+  }
+
+  // 水泥（装饰性高台）：平滑灰面——三尺度连续明暗幅度远小于沙土（噪点有但不要多）。
+  // 参数：grain(细颗粒)/meso(中波)/macro(大波)/chroma(色彩呼吸)。
+  vec4 mat_cement(vec3 f, vec2 w, int id) {
+    float macro = (vnoise2(w * 0.18) - 0.5) * 2.0 * matP(id, 2) * 0.25;  // 大波极弱
+    float meso  = (vnoise2(w * 0.75) - 0.5) * 2.0 * matP(id, 1) * 0.35;  // 中波微起伏
+    float grain = (h21(floor(w * 110.0)) - 0.5) * matP(id, 0) * 1.2;     // 细颗粒（少）
+    float dL = macro + meso + grain;
+    float shade = macro * 0.6 + meso * 0.4;
+    float dC = -shade * 0.020 * matP(id, 3);
+    float hueDrift = (vnoise2(w * 0.22 + 31.0) - 0.5) * 2.0 * matP(id, 3) * 0.008;
+    float dH = shade * 0.010 * matP(id, 3) + hueDrift;
+    float reflect = 1.0 + dL * 0.14;
     return vec4(dL, dC, dH, reflect);
   }
 

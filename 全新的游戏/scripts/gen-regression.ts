@@ -66,7 +66,7 @@ if (!baselinePath) {
   let fail = 0;
   const ALLOWED: Record<number, number[]> = {
     0: [0, 10, 11, 12, 16, 17, 18], // 平地 → 平地/装饰平面（含 brick/grass/wood 路面材质地块）
-    1: [1, 13, 14, 15], // 高台 → 高台/装饰高台
+    1: [1, 13, 14, 15, 21], // 高台 → 高台/装饰高台（含水泥高台）
   };
   for (const r of rows) {
     const o = old.get(`${r.seed}:${r.cx}:${r.cz}`);

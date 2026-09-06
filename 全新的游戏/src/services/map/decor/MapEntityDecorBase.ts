@@ -189,6 +189,10 @@ registerMapDecor(new MapEntityDecorBase({
   geometry: { type: 'rock', params: { radius: 0.7, height: 1.2, noise: 0.35, color: 0x8a7f74 } },
 }));
 
+// ★ 水泥台座不在本库（独立结构模块 decor/CementPlinth.ts）：
+//   4×4 整格正置铺满高台、顶面进 RasterMap.surfaceHeightAt 叠加层
+//   （角色可站），几何复用下方 buildTrapezoidPlinth。
+
 // ============================================================
 // 规划（地形生成完成后、渲染前调用；纯函数零 three）
 // ============================================================
@@ -402,12 +406,77 @@ function rockVertexNoise(i: number): number {
 }
 
 /**
+ * 梯形台座几何（平截四棱台 + 顶面下沉槽）。
+ * 底 = baseHalf 正方形，顶 = topHalf 正方形（侧视梯形）；顶面中间挖一块
+ * 矩形下沉槽（slotDepth 深度，槽沿保留梯形顶面外沿 → 下沉后仍保持平面）。
+ * 顶点/索引手工构造（无噪声，轮廓硬朗）。
+ */
+export function buildTrapezoidPlinth(params: Record<string, number>): THREE.BufferGeometry {
+  const baseHalf = params.baseHalf ?? 1.0;
+  const topHalf = params.topHalf ?? 0.62;
+  const height = params.height ?? 0.55;
+  const slotDepth = params.slotDepth ?? 0.16;
+  const slotHalf = params.slotHalf ?? 0.28; // 下沉槽半宽（占顶面中线）
+
+  const b0 = [-baseHalf, 0, -baseHalf];
+  const b1 = [baseHalf, 0, -baseHalf];
+  const b2 = [baseHalf, 0, baseHalf];
+  const b3 = [-baseHalf, 0, baseHalf];
+  const t0 = [-topHalf, height, -topHalf];
+  const t1 = [topHalf, height, -topHalf];
+  const t2 = [topHalf, height, topHalf];
+  const t3 = [-topHalf, height, topHalf];
+  const s0 = [-slotHalf, height, -slotHalf];
+  const s1 = [slotHalf, height, -slotHalf];
+  const s2 = [slotHalf, height, slotHalf];
+  const s3 = [-slotHalf, height, slotHalf];
+  const d0 = [-slotHalf, height - slotDepth, -slotHalf];
+  const d1 = [slotHalf, height - slotDepth, -slotHalf];
+  const d2 = [slotHalf, height - slotDepth, slotHalf];
+  const d3 = [-slotHalf, height - slotDepth, slotHalf];
+
+  const V: number[] = [];
+  const push = (p: number[]) => V.push(p[0], p[1], p[2]);
+  const I: number[] = [];
+  const quad = (a: number, b: number, c: number, d: number) => I.push(a, b, c, a, c, d);
+
+  const vi = [b0, b1, b2, b3, t0, t1, t2, t3, s0, s1, s2, s3, d0, d1, d2, d3];
+  for (const p of vi) push(p);
+
+  quad(0, 1, 2, 3);       // 底面（法线 -Y：b0→b2→b3 从下看逆时针）
+  quad(4, 5, 1, 0);       // 前斜面（法线 -Z）
+  quad(6, 7, 3, 2);       // 后斜面（法线 +Z）
+  quad(5, 6, 2, 1);       // 右斜面（法线 +X）
+  quad(7, 4, 0, 3);       // 左斜面（法线 -X）
+  quad(8, 9, 5, 4);       // 顶前沿（法线 +Y，俯视可见封顶）
+  quad(9, 10, 6, 5);      // 顶右沿（法线 +Y）
+  quad(10, 11, 7, 6);     // 顶后沿（法线 +Y）
+  quad(11, 8, 4, 7);      // 顶左沿（法线 +Y）
+  quad(13, 12, 15, 14);   // 槽底（法线 +Y）
+  quad(12, 13, 9, 8);      // 槽前壁（法线 +Z 朝槽内：d0,d1,s1,s0）
+  quad(13, 14, 10, 9);     // 槽右壁（法线 -X 朝槽内：d1,d2,s2,s1）
+  quad(14, 15, 11, 10);    // 槽后壁（法线 -Z 朝槽内：d2,d3,s3,s2）
+  quad(15, 12, 8, 11);     // 槽左壁（法线 +X 朝槽内：d3,d0,s0,s3）
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+  geo.setIndex(I);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
  * 共享几何工厂：按 geometry.type 分发——
  * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
  * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
+ * 'trapezoid'：平截四棱台（底大方、顶小方 ÷ 梯台）+ 顶面下沉槽
+ *（《水泥高台上的装饰性实体.json》：侧面梯形 + 顶面一块向下凹且保持平面）
  */
 function buildSharedGeometry(type: string | undefined, params: Record<string, number>): THREE.BufferGeometry {
   const noise = params.noise ?? 0.35;
+  if (type === 'trapezoid') {
+    return buildTrapezoidPlinth(params);
+  }
   if (type === 'block') {
     const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
     const pos = geo.attributes.position as THREE.BufferAttribute;

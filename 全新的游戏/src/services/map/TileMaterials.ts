@@ -223,3 +223,16 @@ registerTileMaterial({
   surface: { roughness: 0.95 },
   lodEmissive: 0.02,
 });
+
+/** 水泥（装饰性高台）：平滑灰面 + 少噪点（细颗粒残留，无图案无斑驳） */
+registerTileMaterial({
+  fnId: 'cement', label: '水泥',
+  params: {
+    grain: 0.018,   // 细颗粒（噪点有但不要多）
+    meso: 0.03,     // 中波微起伏（远看水泥浇筑面）
+    macro: 0.04,    // 大波大范围明暗（很弱）
+    chroma: 0.35,   // 色彩呼吸幅度（水泥灰，走色极少）
+  },
+  surface: { roughness: 0.92 },
+  lodEmissive: 0.02,
+});

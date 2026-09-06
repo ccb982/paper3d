@@ -515,6 +515,25 @@ export const TILE_PLATFORM_SAND = new TileDef(
   ["foundation"],
 );
 
+/** 水泥高台（装饰性高台；挂在兜底 foundation 组；physics ≙ platform，同一梯田带公式） */
+export const TILE_CEMENT_PLATFORM = new TileDef(
+  21,
+  "cement_platform",
+  "水泥高台",
+  "platform",
+  {
+    // 背景色（用户定稿）：水泥灰 RGB(65,54,33) → HSL(0.1094,0.3265,0.1922)；
+    // 再灰一点更像水泥：降饱和 → s 0.05，微抬明度 → l 0.25
+    baseHsl: { h: 0.1094, s: 0.05, l: 0.25 },
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
+    depression: false,
+    borderLine: true, // ★ 地块交界黑线（0.85 强度；强化逐地块色差层次）
+    material: { fnId: "cement" }, // ★ 水泥材质（平滑灰面 + 少噪点）
+  },
+  TILE_PLATFORM.physics,
+  ["foundation"],
+);
+
 // ============================================================
 // 注册表
 // ============================================================
@@ -538,6 +557,7 @@ for (const t of [
   TILE_WOOD,
   TILE_FLAT_SAND,
   TILE_PLATFORM_SAND,
+  TILE_CEMENT_PLATFORM,
 ]) {
   if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
   REGISTRY.set(t.id, t);

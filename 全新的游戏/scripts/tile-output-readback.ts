@@ -1,11 +1,11 @@
 // ============================================================================
-// tile-output-readback —— 回读地形最终输出（oklchShade），不叠加光照/ACES/渲染层
+// tile-output-readback —— 回读任意位置地块的最终绘制颜色（材质收口 + 装饰实体）
 // ============================================================================
-// 用途：给定 seed + 世界坐标，输出该位置所在 4m 地块的 oklchShade 收口结果
-//   （基色 + 材质偏移 + 贴画/条带装饰 + 地块抖动），用于诊断贴画/条带偏色。
-//
-// 精确复现 TerrainMaterial 的 GLSL：h21 / vnoise2 / mat_sand / hazardDeco /
-//   oklchShade 收口。不跑光照与 ACES（那些属渲染层，此工具只回地形本身输出）。
+// 用途：给定 seed + 世界坐标，输出：
+//   A. 该位置所在 4m 地块的 oklchShade 材质收口（基色+材质偏移+贴画/条带+抖动）
+//   B. 烘焙 albedo 该位置像素色（含贴图印章的乘性变暗）
+//   C. 最终绘制色 = 材质收口 × albedo 印章（不含光照/ACES）
+//   D. 覆盖该位置的装饰实体（贴图印章声明 / 装饰实体 props 及其声明颜色）
 //
 // 用法：
 //   npx tsx scripts/tile-output-readback.ts [seed] [x] [z]
@@ -16,6 +16,10 @@ import { tileById, TILE_FLAT_SAND } from '../src/services/map/Tiles';
 import { tileMaterialByKey } from '../src/services/map/TileMaterials';
 import { groupByKey, applyGroupTintHsl } from '../src/services/map/TileGroups';
 import { srgbHslToOklch, srgbHslJitterAmp, linearToSrgb } from '../src/services/map/colorLab';
+import { planChunkDecals, type PlannedDecal } from '../src/services/map/decor/TileDecalBase';
+import { planChunkProps, mapDecorByKey } from '../src/services/map/decor/MapEntityDecorBase';
+import { buildSnapshotFromChunks, makeSnapshotSource, computeChunkMapsRGBA } from '../src/services/map/bakeCompute';
+import { CHUNK_SIZE } from '../src/services/map/ChunkGenerator';
 
 // ---------- 命令行参数 ----------
 const [aSeed, aX, aZ] = process.argv.slice(2).map(Number);
@@ -92,15 +96,17 @@ function oklab2linear(L: number, C: number, Hn: number): [number, number, number
 // ---------- 复算 mat_sand + 贴画 + 抖动 → oklchShade 收口 ----------
 function shadeAt(pl: { x: number; y: number }): { L: number; C: number; Hn: number; linear: [number, number, number] } {
   const sx = tc.x * 4 + pl.x, sz = tc.y * 4 + pl.y;
-  // mat_sand（参数：grain/meso/macro/chroma = 0.045/0.05/0.09/1.0，TileMaterials sand）
-  const macro = (vnoise2(sx * 0.18, sz * 0.18) - 0.5) * 2 * 0.09 * 0.5;
-  const meso = (vnoise2(sx * 0.75, sz * 0.75) - 0.5) * 2 * 0.05 * 0.46;
-  const grain = (h21(Math.floor(sx * 110), Math.floor(sz * 110)) - 0.5) * 0.045 * 1.6;
+  // 材质图案（sand/cement 共用三尺度连续明暗结构，仅幅度不同——对应 mat_sand/mat_cement）
+  const isCement = td.visual.material?.fnId === 'cement';
+  const ag = merged.grain ?? 0.045, am = merged.meso ?? 0.05, aM = merged.macro ?? 0.09, ac = merged.chroma ?? 1.0;
+  const macro = (vnoise2(sx * 0.18, sz * 0.18) - 0.5) * 2 * aM * (isCement ? 0.25 : 0.50);
+  const meso = (vnoise2(sx * 0.75, sz * 0.75) - 0.5) * 2 * am * (isCement ? 0.35 : 0.46);
+  const grain = (h21(Math.floor(sx * 110), Math.floor(sz * 110)) - 0.5) * ag * (isCement ? 1.2 : 1.6);
   const dL = macro + meso + grain;
   const shade = macro * 0.6 + meso * 0.4;
-  const dC = -shade * 0.028 * 1.0;
-  const hueDrift = (vnoise2(sx * 0.22 + 31.0, sz * 0.22 + 31.0) - 0.5) * 2 * 1.0 * 0.015;
-  const dH = shade * 0.016 * 1.0 + hueDrift;
+  const dC = -shade * (isCement ? 0.020 : 0.028) * ac;
+  const hueDrift = (vnoise2(sx * 0.22 + 31.0, sz * 0.22 + 31.0) - 0.5) * 2 * ac * (isCement ? 0.008 : 0.015);
+  const dH = shade * (isCement ? 0.010 : 0.016) * ac + hueDrift;
 
   // hazardDeco（仅贴画；模板色见 TerrainMaterial）
   let dd: [number, number, number] = [0, 0, 0];
@@ -157,6 +163,62 @@ const fmt = (r: { L: number; C: number; Hn: number; linear: [number, number, num
   return `OKLCH(${r.L.toFixed(3)},${r.C.toFixed(3)},${r.Hn.toFixed(3)}) lin[${r.linear[0].toFixed(2)},${r.linear[1].toFixed(2)},${r.linear[2].toFixed(2)}] sRGB(${srgb.join(',')})`;
 };
 
+// ---------- 烘焙 albedo（含贴图印章；一次烘焙，按世界坐标读像素） ----------
+const decalCtx = {
+  seed: raster.worldSeed, cx, cz,
+  groupKey: chunk.groupKey, blockTypes: chunk.blockTypes,
+};
+const decals = planChunkDecals(decalCtx);
+const props = planChunkProps({ ...decalCtx, surfaceHeightAt: (x, z) => raster.surfaceHeightAt(x, z) });
+
+const snap = buildSnapshotFromChunks(
+  raster.worldSeed, cx, cz,
+  (a, b) => { raster.ensureData(a, b); return raster.getChunkData(a, b); },
+  { decals },
+);
+const baked = computeChunkMapsRGBA(makeSnapshotSource(snap), cx, cz, { decals });
+
+const ALBEDO_S = 256;
+const step = CHUNK_SIZE / ALBEDO_S;
+function albedoPixelAt(wx: number, wz: number): [number, number, number] {
+  const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
+  const px = Math.max(0, Math.min(ALBEDO_S - 1, Math.floor(lx / step)));
+  const py = Math.max(0, Math.min(ALBEDO_S - 1, Math.floor(lz / step)));
+  const o = (py * ALBEDO_S + px) * 4;
+  return [baked.albedo[o], baked.albedo[o + 1], baked.albedo[o + 2]];
+}
+
+// ---------- 装饰实体：该位置覆盖了什么（印章 cell 判定 + props） ----------
+function decalAt(wx: number, wz: number): PlannedDecal | undefined {
+  // 印章中心 = cell*3 + ox*3（世界 = chunk 原点 +）；影响半径 ≈ scale/2
+  for (const d of decals) {
+    const dcx = cx * CHUNK_SIZE + (d.cellX + d.ox) * 3;
+    const dcz = cz * CHUNK_SIZE + (d.cellY + d.oy) * 3;
+    const dx = wx - dcx, dz = wz - dcz;
+    if (dx * dx + dz * dz <= Math.pow(d.scale / 2 + 0.5, 2)) return d;
+  }
+  return undefined;
+}
+function propsNear(wx: number, wz: number, radius: number): string[] {
+  const hits: string[] = [];
+  for (const p of props) {
+    const dx = (p.x + cx * CHUNK_SIZE) - wx, dz = (p.z + cz * CHUNK_SIZE) - wz;
+    if (dx * dx + dz * dz <= radius * radius) {
+      const def = mapDecorByKey(p.propKey);
+      const color = def?.geometry?.params?.color;
+      const hex = color !== undefined ? `0x${(color >>> 0).toString(16).padStart(6, '0')}` : 'none';
+      hits.push(`${p.propKey}(scale=${p.scale.toFixed(2)},color=${hex}${p.propKey === 'foundation_pebble' ? ' 浅灰石' : ''})`);
+    }
+  }
+  return hits;
+}
+
+console.log(`\n[装饰实体] 本 chunk 贴图印章=${decals.length} 装饰物=${props.length}`);
+const stDecal = decalAt(WX, WZ);
+if (stDecal) console.log(`  站点印章命中: ${stDecal.decalKey} scale=${stDecal.scale.toFixed(2)} cell=(${stDecal.cellX},${stDecal.cellY})`);
+const stProps = propsNear(WX, WZ, 1.2);
+if (stProps.length) console.log(`  站点 1.2m 内装饰物: ${stProps.join(' | ')}`);
+
 const samples: Array<[string, number, number]> = [
   ['内部中心', 2.0, 2.0],
   ['内部偏移', 1.55, 1.55],
@@ -167,7 +229,14 @@ const samples: Array<[string, number, number]> = [
   ['外缘外', 1.95, 2.0],
   ['站点', lp0.x, lp0.y],
 ];
-console.log(`\n[tile 内抽样]`);
+console.log(`\n[tile 内抽样] （材质收口 × 印章后 = 最终绘制色，仍不含光照/ACES）`);
 for (const [name, px, py] of samples) {
-  console.log(`  ${name.padEnd(5)} lp=(${px.toFixed(2)},${py.toFixed(2)}) ${fmt(shadeAt({ x: px, y: py }))}`);
+  const wx = tc.x * 4 + px, wz = tc.y * 4 + py;
+  const matOut = shadeAt({ x: px, y: py });
+  const [ar, ag, ab] = albedoPixelAt(wx, wz);
+  const m = ar / 255;
+  const finalLin = matOut.linear.map((v) => v * m) as [number, number, number];
+  const finalSrgb = finalLin.map((v) => Math.round(Math.max(0, Math.min(1, linearToSrgb(v))) * 255));
+  console.log(`  ${name.padEnd(5)} lp=(${px.toFixed(2)},${py.toFixed(2)}) 材质 ${fmt(matOut)}`);
+  console.log(`${' '.repeat(20)} 印章=${ar===255&&ag===255&&ab===255?'无':`(${ar},${ag},${ab})`} 最终 sRGB(${finalSrgb.join(',')})`);
 }

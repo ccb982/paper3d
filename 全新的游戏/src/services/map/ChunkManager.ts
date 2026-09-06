@@ -43,6 +43,7 @@ import {
 } from './decor/MapEntityDecorBase';
 import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
 import { buildPlatformAprons, type ApronPhysics } from './decor/PlatformApron';
+import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics } from './decor/CementPlinth';
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -80,6 +81,8 @@ export class ChunkManager {
   private propBodies = new Map<number, number[]>();
   /** ★ 石围裙地面刚体 id（key → entity.id；trimesh，与地形同管线，随 chunk 生灭） */
   private apronBodies = new Map<number, number>();
+  /** 水泥台座地面刚体 id（chunkKey → id；同墙裙 trimesh 管线） */
+  private plinthBodies = new Map<number, number>();
   /** ★ 地图风格：false=标准外观 / true=四维空间（最终 Boss 战地图，Boss4DArena） */
   private boss4D = false;
 
@@ -223,6 +226,10 @@ export class ChunkManager {
       this.host.destroyGround(id);
     }
     this.apronBodies.clear();
+    for (const id of this.plinthBodies.values()) {
+      this.host.destroyGround(id);
+    }
+    this.plinthBodies.clear();
     for (const v of this.meshes.values()) {
       this.scene.remove(v);
       this.disposeVisual(v);
@@ -232,6 +239,7 @@ export class ChunkManager {
     this.activated.clear();
     clearWallMaterialRegistry();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
+    disposeCementPlinthShared(); // ★ 台座共享几何/材质统一释放（模块级单例）
     disposeTileLabelCache(); // ★ 测试地图标牌纹理/材质统一释放（共享缓存唯一 dispose 点）
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
   }
@@ -560,7 +568,7 @@ export class ChunkManager {
 
     this.replaceChunk(chunkKeyOf(cx, cz), group, cx, cz, pv, pi);
     this.createDecorColliders(cx, cz, decor);
-    this.createApronGround(cx, cz, decorLayer?.apronPhysics ?? null);
+    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
     console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6}`);
   }
 
@@ -664,20 +672,32 @@ export class ChunkManager {
   // ============================================================
 
   /**
-   * 装饰物网格层（含调试标记）+ 石围裙物理 trimesh。
+   * 装饰物网格层（含调试标记）+ 石围裙/水泥台座物理 trimesh。
    * 返回 null = 无装饰物或渲染器未注册。
    * 调用方挂进 chunk group 后必须调用 createDecorColliders 与
-   * createApronGround（都在 replaceChunk 之后）。
+   * createStructuralGround（都在 replaceChunk 之后）。
    */
   private buildDecorLayer(
     cx: number, cz: number, decor: DecorPlan,
-  ): { layer: THREE.Object3D; apronPhysics: ApronPhysics | null } | null {
+  ): { layer: THREE.Object3D; apronPhysics: ApronPhysics | null; plinthPhysics: CementPlinthPhysics | null } | null {
     const parts: THREE.Object3D[] = [];
     let apronPhysics: ApronPhysics | null = null;
+    let plinthPhysics: CementPlinthPhysics | null = null;
     if (decor.props.length > 0) {
       const propLayer = buildPropLayer(decor.props);
       if (propLayer) parts.push(propLayer);
       else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
+    }
+    // ★ 水泥台座（cement_platform 专属结构件，35% 高台块）：4×4 整格正置、
+    //   顶面进 surfaceHeightAt 叠加层（站得上去）；采样用 base 防自反馈。
+    const plinth = buildCementPlinths(
+      cx, cz, this.raster.worldSeed,
+      this.raster.getChunkData(cx, cz)?.blockTypes,
+      (x, z) => this.raster.baseSurfaceHeightAt(x, z),
+    );
+    if (plinth) {
+      parts.push(plinth.mesh);
+      plinthPhysics = plinth.physics;    // 调用方在 replaceChunk 后经 createPlinthGround 建体
     }
     // ★ 石围裙（沙土高台专属）：周界压边 + 侧壁下裙（platform_sand 暴露边）；
     //   blockKeyAt 用世界块坐标跨 chunk 查地块 key（防叠环判定需要邻 chunk 数据）；
@@ -698,14 +718,14 @@ export class ChunkManager {
       parts.push(apron.mesh);
       apronPhysics = apron.physics;   // 调用方在 replaceChunk 后经 createApronGround 建体
     }
-    if (parts.length === 0 && !apronPhysics) return null;
+    if (parts.length === 0 && !apronPhysics && !plinthPhysics) return null;
     const layer = new THREE.Group();
     for (const p of parts) layer.add(p);
     // ★ 对齐 chunk 角：装饰 x/z 是 chunk 角落坐标(0~60)，而 chunk
     //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
     //   影子/碰撞体与可见网格三者错位（踩过的坑）
     layer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
-    return { layer, apronPhysics };
+    return { layer, apronPhysics, plinthPhysics };
   }
 
   /**
@@ -729,17 +749,23 @@ export class ChunkManager {
   }
 
   /**
-   * ★ 石围裙地面刚体：围裙属于高台的一部分，与地形同一逻辑——
+   * ★ 石围裙 + 水泥台座地面刚体：结构件属于高台的一部分，与地形同一逻辑——
    *   trimesh 经宿主 createGround 建独立地面刚体（kind 同地形），角色/子弹
    *   行为与 cliff 完全一致，无 cuboid 挤压去穿透问题。必须在 replaceChunk
    *   之后调用（旧体销毁 → 新体创建，同装饰物碰撞时序）。
-   *   apronPhysics 由 buildDecorLayer 随视觉层产出。
+   *   apronPhysics/plinthPhysics 由 buildDecorLayer 随视觉层产出。
    */
-  private createApronGround(cx: number, cz: number, apronPhysics: ApronPhysics | null): void {
-    if (!apronPhysics) return;
-    const key = chunkKeyOf(cx, cz);
-    const id = this.host.createGround(cx, cz, apronPhysics.vertices, apronPhysics.indices);
-    this.apronBodies.set(key, id);
+  private createStructuralGround(cx: number, cz: number, apronPhysics: ApronPhysics | null, plinthPhysics: CementPlinthPhysics | null): void {
+    if (apronPhysics) {
+      const key = chunkKeyOf(cx, cz);
+      const id = this.host.createGround(cx, cz, apronPhysics.vertices, apronPhysics.indices);
+      this.apronBodies.set(key, id);
+    }
+    if (plinthPhysics) {
+      const key = chunkKeyOf(cx, cz);
+      const id = this.host.createGround(cx, cz, plinthPhysics.vertices, plinthPhysics.indices);
+      this.plinthBodies.set(key, id);
+    }
   }
 
   /**
@@ -763,7 +789,7 @@ export class ChunkManager {
     this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
     // ★ 装饰物碰撞体独立阶段（地形后补，不依赖视觉层）——同上解耦逻辑
     this.createDecorColliders(cx, cz, decor);
-    this.createApronGround(cx, cz, decorLayer?.apronPhysics ?? null);
+    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
   }
 
   /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
@@ -798,6 +824,12 @@ export class ChunkManager {
     if (oldApron !== undefined) {
       this.host.destroyGround(oldApron);
       this.apronBodies.delete(key);
+    }
+    // 水泥台座地面刚体同生命周期销毁（同墙裙管线）
+    const oldPlinth = this.plinthBodies.get(key);
+    if (oldPlinth !== undefined) {
+      this.host.destroyGround(oldPlinth);
+      this.plinthBodies.delete(key);
     }
     if (visual) {
       this.scene.add(visual);

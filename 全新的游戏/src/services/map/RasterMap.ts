@@ -24,6 +24,7 @@ import {
 import { ppSurfaceHeight } from "./RefinementPostProcess";
 import { envelopeLevelAt, PATCH_DEPTH } from "./FaceBuild";
 import { planPlatformAprons, apronBandHeightAt, type ApronEdge } from "./decor/PlatformApron";
+import { planCementPlinths, cementPlinthHeightAt, type CementPlinthTile } from "./decor/CementPlinth";
 
 /** chunkKey（负数安全偏移编码） */
 export function chunkKeyOf(cx: number, cz: number): number {
@@ -52,6 +53,9 @@ export class RasterMap {
   /** ★ 围裙周界边计划缓存（chunkKey → ApronEdge[]/null；弹坑挖掘会改基面
    *   高度影响坡面拒绝判定 → digCells 时对本 chunk+4 邻失效重算） */
   private apronEdgeCache = new Map<number, ApronEdge[] | null>();
+  /** ★ 水泥台座块计划缓存（chunkKey → CementPlinthTile[]/null；纯块类型+哈希
+   *   决定，不依赖基面高度 → 挖掘无需失效，仅 clearAll 清空） */
+  private plinthTileCache = new Map<number, CementPlinthTile[] | null>();
   /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
@@ -111,6 +115,7 @@ export class RasterMap {
     this.cellOf.clear();
     this.chunkSourceCache.clear();
     this.apronEdgeCache.clear();
+    this.plinthTileCache.clear();
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
 
@@ -165,15 +170,41 @@ export class RasterMap {
   }
 
   /**
-   * ★ 游戏贴地总入口 = 基面 + 石围裙叠加层（用户 2026-09-06：墙裙的参数
-   *   也交给高度解析——墙裙属于高台的一部分）。角色贴地/台阶/clamp、影子、
-   *   弹坑挖掘差分等全部经本函数；围裙带顶 = 基面 + 0.35（CURB_H ≡
-   *   CharacterBase.EDGE_CLIFF_BAND 压线可自动踏过）→ 角色可走上墙裙。
+   * ★ 游戏贴地总入口 = 基面 + 结构件叠加层（石围裙带顶 + 水泥台座带顶，
+   *   用户 2026-09-06：结构件的参数也交给高度解析——墙裙/台座属于高台本身）。
+   * 角色贴地/台阶/clamp、影子、弹坑挖掘差分等全部经本函数；
+   * 围裙带顶 = 基面 + 0.35，台座带顶 = 基面 + 0.6（槽内 +0.4）
+   * → 角色可走上墙裙、站上台座（EDGE_CLIFF_BAND 压线判定由 CharacterBase 处理）。
    */
   surfaceHeightAt(x: number, z: number): number {
     const base = this.baseSurfaceHeightAt(x, z);
     const apron = this.apronHeightAt(x, z);
-    return apron ?? base;
+    if (apron !== null) return apron;
+    const plinth = this.plinthHeightAt(x, z);
+    return plinth ?? base;
+  }
+
+  /** 水泥台座叠加层：查询点落在某棵台座的 4×4 块带内 → 带顶高度；否则 null */
+  private plinthHeightAt(x: number, z: number): number | null {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const tiles = this.plinthTilesOf(ccx, ccz);
+    if (!tiles) return null;
+    return cementPlinthHeightAt(tiles, x - ccx * CHUNK_SIZE, z - ccz * CHUNK_SIZE);
+  }
+
+  /** 本 chunk 台座块计划（惰性规划 + 缓存；无台座缓存 null 负缓存） */
+  private plinthTilesOf(cx: number, cz: number): CementPlinthTile[] | null {
+    const key = chunkKeyOf(cx, cz);
+    const hit = this.plinthTileCache.get(key);
+    if (hit !== undefined) return hit;
+    const data = this.chunks.get(key);
+    const tiles = data
+      ? planCementPlinths(cx, cz, this.seed, data.blockTypes,
+          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+      : null;
+    this.plinthTileCache.set(key, tiles);
+    return tiles;
   }
 
   /** 石围裙叠加层：查询点落在围裙石框带内 → 带顶高度；否则 null */
