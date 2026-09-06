@@ -51,9 +51,9 @@
 // ============================================================
 
 import * as THREE from 'three';
+import { TERRAIN_LIGHT_TUNING } from '../TerrainMaterial';
 import { tileById } from '../Tiles';
 import { CHUNK_SIZE } from '../ChunkGenerator';
-import { SUN_DIR_MOD_MIN, SUN_DIR_MOD_MAX } from '../TerrainMaterial';
 import { APRON_ANCHOR_P, apronAnchorRoll } from './ApronAnchor';
 
 // ---- 形态常量（手绘 JSON 换算） ----
@@ -65,8 +65,11 @@ const SKIRT_BURY = 0.06;  // 下裙底埋入邻面深度（防浮缝）
 const MIN_SKIRT = 0.15;   // 下裙最小深度（安全网）；无上限——高台全高包壁
                           // 才能接地（用户 2026-09-06：很高高台的裙不接地，
                           // 原 MAX_SKIRT=1.5 钳制已废；cliff 处裙深天然≤台高）
+// ---- dirMod（地形同款公式；窄 clamp 使墙裙四边亮度一致） ----
+const APRON_DIR_MOD_MIN = 0.97;
+const APRON_DIR_MOD_MAX = 1.0;
 
-/** 小 deterministic PRNG（裂痕纹理专用；固定种子 → 全地图共享同一张图） */
+// ---- 共享纹理生成（PRNG + Canvas） ----
 function texRng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -77,33 +80,25 @@ function texRng(seed: number): () => number {
   };
 }
 
-// ---- 共享裂痕石纹材质（模块级单例；chunk 重建复用） ----
-let sharedMat: THREE.MeshStandardMaterial | null = null;
-
-function apronMaterial(): THREE.MeshStandardMaterial {
-  if (sharedMat) return sharedMat;
+function makeApronTexture(): THREE.CanvasTexture {
   const S = 256;
   const cv = document.createElement('canvas');
   cv.width = S; cv.height = S;
   const g = cv.getContext('2d')!;
-  // 基色 = 水泥灰 #6f6f6a（用户 2026-09-06：与水泥台座实体同色）
   g.fillStyle = '#6f6f6a';
   g.fillRect(0, 0, S, S);
   const rnd = texRng(0x5a1d09);
-  // 细颗粒（±8 灰度扰动，石头哑光质感）
   for (let i = 0; i < 5200; i++) {
     const v = Math.floor((rnd() - 0.5) * 16);
     g.fillStyle = `rgb(${111 + v},${111 + v},${106 + v})`;
     g.fillRect(Math.floor(rnd() * S), Math.floor(rnd() * S), 1, 1);
   }
-  // 淡色斑（风化痕迹，灰阶）
   for (let i = 0; i < 9; i++) {
     g.fillStyle = `rgba(89,89,86,${0.05 + rnd() * 0.05})`;
     g.beginPath();
     g.ellipse(rnd() * S, rnd() * S, 14 + rnd() * 30, 10 + rnd() * 22, rnd() * Math.PI, 0, Math.PI * 2);
     g.fill();
   }
-  // 小裂痕：随机游走细折线（深灰；偶发短分支）
   for (let c = 0; c < 15; c++) {
     let x = rnd() * S, y = rnd() * S, ang = rnd() * Math.PI * 2;
     g.strokeStyle = `rgba(61,61,58,${0.32 + rnd() * 0.26})`;
@@ -116,7 +111,7 @@ function apronMaterial(): THREE.MeshStandardMaterial {
       x += Math.cos(ang) * (8 + rnd() * 22);
       y += Math.sin(ang) * (8 + rnd() * 22);
       g.lineTo(x, y);
-      if (rnd() < 0.18) { // 短分支
+      if (rnd() < 0.18) {
         const bang = ang + (rnd() < 0.5 ? 0.9 : -0.9);
         g.moveTo(x, y);
         g.lineTo(x + Math.cos(bang) * (6 + rnd() * 14), y + Math.sin(bang) * (6 + rnd() * 14));
@@ -126,34 +121,83 @@ function apronMaterial(): THREE.MeshStandardMaterial {
     g.stroke();
   }
   const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
-  sharedMat = new THREE.MeshStandardMaterial({
-    map: tex, roughness: 0.92, metalness: 0, side: THREE.DoubleSide,
-  });
-  // ★ 光照重映射（用户 2026-09-06：两个边很暗）：MeshStandardMaterial 的
-  //   背光侧只剩环境光 → 近黑，与已钳制顺背光的地形并排时反差刺眼。
-  //   把 RE_Direct_Physical 的 dotNL 换成地形同款 dirMod——
-  //   clamp(max(N·L,0.12)/max(L.y,0.12), 0.85~1.2)：背光面保底 0.85、
-  //   顺光面最多 1.2，方向感保留、暗面不再近黑（与 TerrainMaterial 一致）。
-  sharedMat.onBeforeCompile = (shader) => {
-    const src = 'float dotNL = saturate( dot( geometryNormal, directLight.direction ) );';
-    if (!shader.fragmentShader.includes(src)) {
-      console.warn('[PlatformApron] RE_Direct dotNL 注入点未命中（three 版本变更？）——背光面将偏暗');
-      return;
-    }
-    shader.fragmentShader = shader.fragmentShader.replace(
-      src,
-      `float dotNLraw = dot( geometryNormal, directLight.direction );
-\tfloat dotNL = clamp( max( dotNLraw, 0.12 ) / max( directLight.direction.y, 0.12 ), ${SUN_DIR_MOD_MIN.toFixed(2)}, ${SUN_DIR_MOD_MAX.toFixed(2)} );`,
+  return tex;
+}
+
+// ---- 共享 ShaderMaterial（自定义 GLSL；dirMod 写死在模板里，零注入） ----
+const APRON_FRAG = /* glsl */ `
+  uniform sampler2D uTex;
+  uniform vec3 uSunDir;
+  uniform vec3 uSunColor;
+  uniform vec3 uAmbient;
+  varying vec2 vUv;
+  varying vec3 vNw;
+  void main() {
+    vec3 alb = texture2D(uTex, vUv).rgb;
+    vec3 N = normalize(vNw);
+    vec3 L = normalize(uSunDir);
+    // 地形同款 dirMod：N·L / L.y；墙裙窄 clamp 使四边一致
+    float dirMod = clamp(
+      max(dot(N, L), 0.12) / max(L.y, 0.12),
+      ${APRON_DIR_MOD_MIN.toFixed(2)}, ${APRON_DIR_MOD_MAX.toFixed(2)}
     );
-  };
-  // ★ 共享标记：geometry 每 chunk 私有照常释放；材质/贴图模块级复用——
-  //   decorShared 跳过材质释放，cached 跳过 map.dispose（同烘焙缓存语义）
+    vec3 lit = alb * (uAmbient + uSunColor * dirMod);
+    gl_FragColor = vec4(lit, 1.0);
+  }
+`;
+
+const apronRegistry = new Set<THREE.ShaderMaterial>();
+let sharedMat: THREE.ShaderMaterial | null = null;
+
+function apronMaterial(): THREE.ShaderMaterial {
+  if (sharedMat) return sharedMat;
+  sharedMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTex: { value: makeApronTexture() },
+      uSunDir:   { value: new THREE.Vector3(0, 1, 0) },
+      uSunColor: { value: new THREE.Color() },
+      uAmbient:  { value: new THREE.Color() },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying vec3 vNw;
+      void main() {
+        vUv = uv;
+        vNw = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: APRON_FRAG,
+    side: THREE.DoubleSide,
+  });
   sharedMat.userData.decorShared = true;
   sharedMat.userData.cached = true;
+  apronRegistry.add(sharedMat);
   return sharedMat;
+}
+
+/** 每帧昼夜调制（由 RenderManager.follow 调用） */
+export function updateApronLighting(sun: {
+  dir: { x: number; y: number; z: number };
+  color: number;
+  intensityScale: number;
+  daylight: number;
+}): void {
+  const T = TERRAIN_LIGHT_TUNING;
+  const ambDay  = new THREE.Color(T.ambientDay);
+  const ambNight = new THREE.Color(T.ambientNight);
+  const t = sun.daylight;
+  const amb = ambNight.clone().lerp(ambDay, t);
+  const ambI = T.ambientNightIntensity + (T.ambientDayIntensity - T.ambientNightIntensity) * t;
+  amb.multiplyScalar(ambI);
+  const sunC = new THREE.Color(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
+  for (const m of apronRegistry) {
+    m.uniforms.uSunDir.value.set(sun.dir.x, sun.dir.y, sun.dir.z);
+    m.uniforms.uSunColor.value.copy(sunC);
+    m.uniforms.uAmbient.value.copy(amb);
+  }
 }
 
 /** 顶点累积器（非索引三角形 + 面法线 + 逐顶点 UV） */

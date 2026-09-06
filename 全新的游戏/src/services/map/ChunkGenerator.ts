@@ -317,8 +317,9 @@ function structureSlots(
   }
 
   // 6. 剩余墙区 → 高台位（迷宫墙）+ 少数死路平地
+  // ★ 梯台密度 = 0.45（2026-09-06 调低：原来 0.60 高台偏多，台多路少）
   let platformCount = 0;
-  const targetPlatform = Math.floor(total * 0.60);
+  const targetPlatform = Math.floor(total * 0.45);
   for (const c of wallPool) {
     if (used[c]) continue;
     if (platformCount < targetPlatform) {

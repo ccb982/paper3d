@@ -1,0 +1,246 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>apron render readback</title></head>
+<body style="margin:0;background:#000;">
+<script type="module">
+import * as THREE from '/three/three.module.js';
+
+// ================= 真实光照参数（SunCycle 6:00 + GameLights） =================
+const SUN_DIR = new THREE.Vector3(0.857, 0.342, -0.386).normalize();
+const SUN_INTENSITY = 1.6;
+const SUN_COLOR = 0xfff2dd;
+const HEMI = { sky: 0x9db8e8, ground: 0x8a7455, intensity: 0.85 };
+const EXPOSURE = 1.08;
+
+// ================= 墙裙几何（真实公式：顶面+内Step+外裙） =================
+const CURB_H = 0.35, BAND_W = 0.36, OVERHANG = 0.04;
+const BASE_Y = 1.5;
+const HB = BASE_Y + CURB_H;
+const QB = BASE_Y - 0.02;
+
+const verts = [];
+function addQuad(a, b, c, d, n) {
+  for (const v of [a, b, c, a, c, d]) verts.push([v[0], v[1], v[2], n[0], n[1], n[2], v[0] / 4, v[2] / 4]);
+}
+
+const L = 40, HL = L / 2, N = 24;
+function buildEdge(baseX, baseZ, delta, norm) {
+  const [dx, dz] = delta, [nx, nz] = norm;
+  for (let i = 0; i < N; i++) {
+    const t0 = -HL + (i * L) / N, t1 = -HL + ((i + 1) * L) / N;
+    const px = (tt) => baseX + dx * tt, pz = (tt) => baseZ + dz * tt;
+    const ia = [px(t0) - nx * BAND_W, HB, pz(t0) - nz * BAND_W];
+    const ib = [px(t1) - nx * BAND_W, HB, pz(t1) - nz * BAND_W];
+    const oa = [px(t0) + nx * OVERHANG, HB, pz(t0) + nz * OVERHANG];
+    const ob = [px(t1) + nx * OVERHANG, HB, pz(t1) + nz * OVERHANG];
+    addQuad(ia, ib, ob, oa, [0, 1, 0]);
+    addQuad(ia, ib, [ib[0], QB, ib[2]], [ia[0], QB, ia[2]], [-nx, 0, -nz]);
+    addQuad(oa, ob, [ob[0], BASE_Y - 3, ob[2]], [oa[0], BASE_Y - 3, oa[2]], norm);
+  }
+}
+// 南/北/东/西：法线朝外的方向，base 为边起点，delta 沿边
+buildEdge(-HL, HL, [1, 0], [0, 0, 1]);   // 南边 z=+HL → 外法线 +z
+buildEdge(-HL, -HL, [1, 0], [0, 0, -1]); // 北边 z=−HL → 外法线 −z
+buildEdge(HL, -HL, [0, 1], [1, 0, 0]);   // 东边 x=+HL → 外法线 +x
+buildEdge(-HL, -HL, [0, 1], [-1, 0, 0]); // 西边 x=−HL → 外法线 −x
+
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.Float32BufferAttribute(verts.flatMap((p) => p.slice(0, 3)), 3));
+geo.setAttribute('normal', new THREE.Float32BufferAttribute(verts.flatMap((p) => p.slice(3, 6)), 3));
+geo.setAttribute('uv', new THREE.Float32BufferAttribute(verts.flatMap((p) => p.slice(6, 8)), 2));
+
+// ================= 真实墙裙材质（复刻 apronMaterial） =================
+function apronMaterial() {
+  const S = 256;
+  const cv = document.createElement('canvas');
+  cv.width = S; cv.height = S;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#6f6f6a';
+  g.fillRect(0, 0, S, S);
+  let a = (0x5a1d09) >>> 0;
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < 5200; i++) {
+    const v = Math.floor((rnd() - 0.5) * 16);
+    g.fillStyle = `rgb(${111 + v},${111 + v},${106 + v})`;
+    g.fillRect(Math.floor(rnd() * S), Math.floor(rnd() * S), 1, 1);
+  }
+  for (let i = 0; i < 9; i++) {
+    g.fillStyle = `rgba(89,89,86,${0.05 + rnd() * 0.05})`;
+    g.beginPath();
+    g.ellipse(rnd() * S, rnd() * S, 14 + rnd() * 30, 10 + rnd() * 22, rnd() * Math.PI, 0, Math.PI * 2);
+    g.fill();
+  }
+  for (let c = 0; c < 15; c++) {
+    let x = rnd() * S, y = rnd() * S, ag = rnd() * Math.PI * 2;
+    g.strokeStyle = `rgba(61,61,58,${0.32 + rnd() * 0.26})`;
+    g.lineWidth = rnd() < 0.3 ? 1.6 : 1;
+    g.beginPath();
+    g.moveTo(x, y);
+    const segs = 5 + Math.floor(rnd() * 8);
+    for (let i = 0; i < segs; i++) {
+      ag += (rnd() - 0.5) * 1.3;
+      x += Math.cos(ag) * (8 + rnd() * 22);
+      y += Math.sin(ag) * (8 + rnd() * 22);
+      g.lineTo(x, y);
+      if (rnd() < 0.18) {
+        const bang = ag + (rnd() < 0.5 ? 0.9 : -0.9);
+        g.moveTo(x, y);
+        g.lineTo(x + Math.cos(bang) * (6 + rnd() * 14), y + Math.sin(bang) * (6 + rnd() * 14));
+        g.moveTo(x, y);
+      }
+    }
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
+  // ★ 正确注入：onBeforeCompile 收到的是未展开 #include 的模板，
+  //   故不能 includes 找 dotNL（在 chunk 文件里），要直接替换
+  //   `#include <lights_physical_pars_fragment>` 为该 chunk 全文（已改过 dotNL）。
+  mat.onBeforeCompile = (shader) => {
+    const inc = '#include <lights_physical_pars_fragment>';
+    const hit = shader.fragmentShader.includes(inc);
+    window.__injectHit = hit;
+    if (!hit) {
+      console.warn('[APRON] include 占位未命中!');
+      return;
+    }
+    const src = 'float dotNL = saturate( dot( geometryNormal, directLight.direction ) );';
+    const chunk = THREE.ShaderChunk.lights_physical_pars_fragment;
+    if (!chunk.includes(src)) {
+      console.warn('[APRON] chunk 内 dotNL 未命中!');
+      return;
+    }
+    const patched = chunk.replace(
+      src,
+      `float dotNLraw = dot( geometryNormal, directLight.direction );\n` +
+      `\tfloat dotNL = clamp( max( dotNLraw, 0.12 ) / max( directLight.direction.y, 0.12 ), 0.97, 1.00 );`,
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(inc, patched);
+  };
+  return mat;
+}
+
+// ================= 场景 =================
+const SIZE = 480;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(SIZE, SIZE);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = EXPOSURE;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+// ★ 捕获 GLSL 编译错误（渲染回源验证注入不破坏着色器）
+const glctx = renderer.getContext();
+if (!window.__glErrors) window.__glErrors = [];
+const origShaderSource = glctx.shaderSource;
+glctx.shaderSource = function (shader, source) {
+  if (source && typeof source === 'string' && source.indexOf('dotNLraw') >= 0) {
+    window.__hasInjected = true;
+  }
+  return origShaderSource.apply(this, arguments);
+};
+
+const scene = new THREE.Scene();
+scene.add(new THREE.HemisphereLight(HEMI.sky, HEMI.ground, HEMI.intensity));
+const sun = new THREE.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
+sun.position.copy(SUN_DIR).multiplyScalar(90);
+scene.add(sun);
+
+const mesh = new THREE.Mesh(geo, apronMaterial());
+scene.add(mesh);
+
+// ================= 渲染 + 回读 =================
+const W = 480, H = 480;
+const rt = new THREE.WebGLRenderTarget(W, H, { samples: 4 });
+// 透视斜视：从 (+X,+Z) 斜上方看，能看到所有四条边（顶面+立面）
+const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
+cam.position.set(26, 26, 26);
+cam.up.set(0, 1, 0);
+cam.lookAt(0, 0, 0);
+
+renderer.setRenderTarget(rt);
+renderer.render(scene, cam);
+renderer.setRenderTarget(null);
+
+// 再渲一次到屏幕保证可截图
+renderer.render(scene, cam);
+
+function ndcAt(p) {
+  const v = new THREE.Vector3(p.x, p.y, p.z).project(cam);
+  return [Math.round(((v.x + 1) / 2) * W), Math.round(((1 - v.y) / 2) * H)];
+}
+function sampleNxN(p, n) {
+  const buf = new Uint8Array(n * n * 4);
+  const [u, v] = ndcAt(p);
+  if (u < 0 || u >= W || v < 0 || v >= H) return { r: -1, g: -1, b: -1 };
+  // readRenderTargetPixels 原点在左下 → 屏幕 y 翻转
+  const x0 = Math.max(0, Math.min(W - n, u - n / 2));
+  const y0 = Math.max(0, Math.min(H - n, (H - v) - n / 2));
+  renderer.readRenderTargetPixels(rt, x0 | 0, y0 | 0, n, n, buf);
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < n * n; i++) { r += buf[i * 4]; g += buf[i * 4 + 1]; b += buf[i * 4 + 2]; }
+  const k = n * n;
+  return { r: r / k, g: g / k, b: b / k };
+}
+function lum(c) { return (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255; }
+
+// 采样点：每条边取顶面中段（+Y）与外裙立面中段
+// 世界坐标（墙裙在 xy 平面内 L=40）：顶面 y=HB，立面 y=HB−0.3
+// 采样点：每条边取顶面中段（+Y）与外裙立面中段
+// 世界坐标（墙裙在 xz 平面内 L=40，y 为高）：顶面 y=HB，立面 y=HB−0.3
+const reads = {
+  north: { top: new THREE.Vector3(0, HB + 0.01, -HL + 2), face: new THREE.Vector3(0, HB - 0.3, -HL + 0.05) },
+  south: { top: new THREE.Vector3(0, HB + 0.01, HL - 2), face: new THREE.Vector3(0, HB - 0.3, HL - 0.05) },
+  east:  { top: new THREE.Vector3(HL - 2, HB + 0.01, 0), face: new THREE.Vector3(HL - 0.05, HB - 0.3, 0) },
+  west:  { top: new THREE.Vector3(-HL + 2, HB + 0.01, 0), face: new THREE.Vector3(-HL + 0.05, HB - 0.3, 0) },
+};
+// 每方位相机位置（斜上方，保证可见该边顶面+立面）
+const CAM_POS = {
+  north: [0, 30, 34], south: [0, 30, -34], east: [34, 30, 0], west: [-34, 30, 0],
+};
+
+function renderFor(camPos) {
+  cam.position.set(...camPos);
+  cam.lookAt(0, 0, 0);
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, cam);
+  renderer.setRenderTarget(null);
+}
+
+const out = {};
+out.injectHit = window.__injectHit;
+out.hasInjectedInShader = window.__hasInjected === true;
+out.mode = '0.97~1.00 窄 clamp（修复注入后）';
+// 4 方位各渲一次：相机在+z 看到南立面、在-z 看到北立面、+x 东、–x 西
+const faceOf = {
+  north: ['south'], south: ['north'], east: ['east'], west: ['west'],
+};
+for (const [camName, camPos] of Object.entries(CAM_POS)) {
+  renderFor(camPos);
+  for (const edgeName of faceOf[camName]) {
+    const r = reads[edgeName];
+    for (const [part, p] of Object.entries(r)) {
+      const [u, v] = ndcAt(p);
+      const c = sampleNxN(p, 7);
+      const key = `${edgeName}_${part}`;
+      out[key] = { u, v, r: c.r.toFixed(0), g: c.g.toFixed(0), b: c.b.toFixed(0), lum: lum(c).toFixed(3) };
+    }
+  }
+}
+out.summary = {
+  top:  { N: out.north_top?.lum, S: out.south_top?.lum, E: out.east_top?.lum, W: out.west_top?.lum },
+  face: { N: out.north_face?.lum, S: out.south_face?.lum, E: out.east_face?.lum, W: out.west_face?.lum },
+};
+out.shot = renderer.domElement.toDataURL('image/png');
+
+document.body.dataset.ready = '1';
+window.__out = out;
+</script>
+</body>
+</html>

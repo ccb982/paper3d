@@ -11,8 +11,8 @@
 
 import { hash2 } from '../TerrainNoise';
 
-/** 锚点概率（用户 2026-09-05 定版：围裙用在 30% 的高台上） */
-export const APRON_ANCHOR_P = 0.30;
+/** 锚点概率（2026-09-06 调高：围裙用在 50% 的沙土高台上） */
+export const APRON_ANCHOR_P = 0.50;
 
 /** 锚点哈希盐（跨模块一致性关键，勿改） */
 export const APRON_ANCHOR_SALT = 7717;

@@ -20,6 +20,7 @@ import { gameLights, LIGHT_TUNING } from './GameLights';
 import { SkyDome } from './SkyDome';
 import { CloudSolver } from './CloudSolver';
 import { updateTerrainLighting, updateWallMaterialsLighting as updateWallLighting } from '../map/TerrainMaterial';
+import { updateApronLighting } from '../map/decor/PlatformApron';
 
 import type { MoonEffect } from '../../vendor/player/MoonEffect';
 
@@ -106,8 +107,10 @@ class RenderManager {
     }
     // ★ 地形烘焙光照的昼夜调制（双纹理方案：地形不吃实时灯，只吃这两个 uniform）
     updateTerrainLighting(this.sunCycle.current);
-    // ★ 断崖侧壁同步昼夜色调（仅亮度，不改烘焙阴影方向，与地面顶面一致）
+    // ★ 断崖侧壁同步昼夜色调
     updateWallLighting(this.sunCycle.current);
+    // ★ 墙裙同步昼夜色调（自定义 ShaderMaterial，与地形同源）
+    updateApronLighting(this.sunCycle.current);
   }
 
   /** ★ 渲染查询接口：太阳状态（方向/色温/白昼因子）——影子投影等消费者用 */
