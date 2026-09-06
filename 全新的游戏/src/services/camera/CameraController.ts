@@ -25,6 +25,9 @@ export interface CameraFrame {
   right: { x: number; z: number };   // 画面右侧方向（D 方向）
 }
 
+// ★ 2026-09-06 用户定：相机整体抬升量（米）——加在最终相机高度上
+const CAM_RAISE = 1.0;
+
 export class CameraController {
   /** 目标角度（鼠标控制） */
   private targetYaw = 0;
@@ -128,7 +131,8 @@ export class CameraController {
     const t = this.smoothedTarget;
     // 第一人称：相机在眼睛高度（0.9×身高）；第三人称：聚焦点上抬（越过角色头顶，准星不被头挡）
     const camY = t.y - this.characterHeight * 0.8 + this.characterHeight * (isFirstPerson ? 0.9 : 1.2)
-      + (isFirstPerson ? 0 : Math.max(0, this.distance * Math.sin(this.pitch)));
+      + (isFirstPerson ? 0 : Math.max(0, this.distance * Math.sin(this.pitch)))
+      + CAM_RAISE;
     this.camera.position.set(
       t.x + sx * cp,
       camY,
