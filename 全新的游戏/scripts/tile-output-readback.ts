@@ -70,7 +70,7 @@ const wt = { x: WX - Math.floor(WX / 4096) * 4096, y: WZ - Math.floor(WZ / 4096)
 const tc = { x: Math.floor(wt.x / 4), y: Math.floor(wt.y / 4) };
 const lp0 = { x: wt.x - tc.x * 4, y: wt.y - tc.y * 4 };
 const tileH = h21(tc.x + 7.31, tc.y + 7.31);
-const hasHazard = tileH <= 0.2;
+const hasHazard = tileH <= 0.1;
 const k = Math.floor(h21(tc.x + 3.17, tc.y + 3.17) * 2);
 console.log(`\n[tile 判定] tc=(${tc.x},${tc.y}) 站点lp=(${lp0.x.toFixed(2)},${lp0.y.toFixed(2)}) tileH=${tileH.toFixed(4)} ${hasHazard ? '★ 命中贴画' : '无贴画'} k=${k}`);
 
@@ -108,7 +108,7 @@ function shadeAt(pl: { x: number; y: number }): { L: number; C: number; Hn: numb
   if (hasHazard && amt > 0.001) {
     const d = { x: pl.x - 2, y: pl.y - 2 };
     const q = Math.max(Math.abs(d.x), Math.abs(d.y));
-    const OS = 1.55, IS = 1.05, P = 0.32;
+    const OS = 1.55, IS = 1.25, P = 0.32;
     const wear = Math.abs(vnoise2(pl.x * 5.0 + k * 17.0, pl.y * 5.0 + k * 17.0) - 0.5) * 0.04;
     const mOut = 1 - smoothstep(OS - 0.005 - wear, OS + 0.005 - wear, q);
     const mOutline = mOut * smoothstep(OS - 0.032, OS - 0.008, q);
@@ -159,9 +159,10 @@ const fmt = (r: { L: number; C: number; Hn: number; linear: [number, number, num
 
 const samples: Array<[string, number, number]> = [
   ['内部中心', 2.0, 2.0],
-  ['内部偏移', 1.5, 1.5],
-  ['环上外', 1.28, 2.0],
-  ['环黑位', 1.28, 1.5],
+  ['内部偏移', 1.55, 1.55],
+  ['新内边', 1.28, 2.0],
+  ['环上外', 1.48, 2.0],
+  ['环上内', 1.26, 2.0],
   ['描边带', 1.53, 1.53],
   ['外缘外', 1.95, 2.0],
   ['站点', lp0.x, lp0.y],

@@ -497,13 +497,13 @@ export const MATERIAL_GLSL = /* glsl */ `
     vec2 wt = w - floor(w / 4096.0) * 4096.0;
     vec2 tc = floor(wt / 4.0);                            // 地块坐标（哈希盐）
     vec2 lp = wt - tc * 4.0;                              // 地块内坐标 0..4m
-    float tileH = h21(tc + 7.31);                         // ★ 独立盐：~20% 出现
-    if (tileH > 0.20) return vec4(0.0, 0.0, 0.0, 0.0);
+float tileH = h21(tc + 7.31);                            // ★ 独立盐：~10% 出现
+    if (tileH > 0.10) return vec4(0.0, 0.0, 0.0, 0.0);
     float k = floor(h21(tc + 3.17) * 2.0);                // 条纹方向变体（0=↘ / 1=↗）
     vec2 d = lp - vec2(2.0);                              // 以地块中心为原点
     float q = max(abs(d.x), abs(d.y));                    // 旋转方距（正方形）
     const float OS = 1.55;                                // 外框半宽（贴画 3.1m）
-    const float IS = 1.05;                                // 内部方形半宽（背景面板 2.1m）
+    const float IS = 1.25;                                // 内部方形半宽（背景面板 2.5m）
     // 做旧① 边缘啃蚀：0~2cm（只蚀不胀，外缘向内缩）
     float wear = abs(vnoise2(lp * 5.0 + k * 17.0) - 0.5) * 0.04;
     float mOut = 1.0 - smoothstep(OS - 0.005 - wear, OS + 0.005 - wear, q);
