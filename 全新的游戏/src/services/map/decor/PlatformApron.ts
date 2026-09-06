@@ -16,10 +16,13 @@
 //     再下埋 0.06m（用户：围墙下部要接地——低处埋地、高处贴合、永不悬空）；
 //     裙深无上限钳制（用户：很高高台也不接地——原 1.5m 上限已废，
 //     cliff 处裙深天然≤台高，保底 0.15m 仍在）；
-//   · ★ 光照重映射（用户 2026-09-06：两个边很暗）——onBeforeCompile 把
-//     RE_Direct 的 dotNL 换成地形同款 dirMod = clamp(max(N·L,0.12)/L.y,
-//     0.85~1.2)：背光侧不再只剩环境光近黑，顺背光幅度与 TerrainMaterial
-//     一致；
+//   · ★ 光照（用户 2026-09-06：高台两个边很暗）——2026 重写为自定义
+//     ShaderMaterial：顶/侧/裙统一 dirMod = clamp(max(N·L,0.12)/L.y,
+//     0.97~1.0) 模板直写（零注入），uSunDir/uSunColor/uAmbient 由
+//     RenderManager 每帧喂（与地形同源 TERRAIN_LIGHT_TUNING）——
+//     顺背光幅度与 TerrainMaterial 一致；
+//   · ★ 雾/色调（用户 2026-09-06：墙裙不吃雾）——补 fog uniforms + 三段
+//     fog chunk + tonemapping/colorspace 结尾（与地形顶面同序），fog:true；
 //   · 表面小裂痕 + 石纹 = 程序化 CanvasTexture（模块级单例共享；
 //     基色 = 水泥灰 #6f6f6a（2026-09-06 与台座实体同色），
 //     裂痕深灰细折线 + 风化色斑 + 颗粒）；
@@ -127,6 +130,9 @@ function makeApronTexture(): THREE.CanvasTexture {
 }
 
 // ---- 共享 ShaderMaterial（自定义 GLSL；dirMod 写死在模板里，零注入） ----
+// ★ 雾 + 色调管理：2026-09-06 用户发现"围裙不吃雾"——与地形 (fog:true) 不同步，
+//   远距离不随背景雾淡出。补上 fog uniforms/pars/fragment + tonemap/colorspace/
+//   fog 结尾（与 TerrainMaterial 顶面完全同序），参与场景雾与全局 ACES 管线。
 const APRON_FRAG = /* glsl */ `
   uniform sampler2D uTex;
   uniform vec3 uSunDir;
@@ -134,6 +140,7 @@ const APRON_FRAG = /* glsl */ `
   uniform vec3 uAmbient;
   varying vec2 vUv;
   varying vec3 vNw;
+  #include <fog_pars_fragment>
   void main() {
     vec3 alb = texture2D(uTex, vUv).rgb;
     vec3 N = normalize(vNw);
@@ -145,6 +152,9 @@ const APRON_FRAG = /* glsl */ `
     );
     vec3 lit = alb * (uAmbient + uSunColor * dirMod);
     gl_FragColor = vec4(lit, 1.0);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+    #include <fog_fragment>
   }
 `;
 
@@ -154,23 +164,28 @@ let sharedMat: THREE.ShaderMaterial | null = null;
 function apronMaterial(): THREE.ShaderMaterial {
   if (sharedMat) return sharedMat;
   sharedMat = new THREE.ShaderMaterial({
-    uniforms: {
+    uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
       uTex: { value: makeApronTexture() },
       uSunDir:   { value: new THREE.Vector3(0, 1, 0) },
       uSunColor: { value: new THREE.Color() },
       uAmbient:  { value: new THREE.Color() },
-    },
+    }),
     vertexShader: /* glsl */ `
+      #include <common>
+      #include <fog_pars_vertex>
       varying vec2 vUv;
       varying vec3 vNw;
       void main() {
         vUv = uv;
         vNw = normalize(mat3(modelMatrix) * normal);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
       }
     `,
     fragmentShader: APRON_FRAG,
     side: THREE.DoubleSide,
+    fog: true, // ★ 场景有 THREE.Fog——必须参与雾，否则远距离墙裙浮在背景外（地形同）
   });
   sharedMat.userData.decorShared = true;
   sharedMat.userData.cached = true;
