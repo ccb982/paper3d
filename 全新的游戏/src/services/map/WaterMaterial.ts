@@ -109,7 +109,7 @@ function ensureOceanTextures(): ReturnType<typeof bakeOceanTextures> {
 const IMPACT_SLOTS = 6;
 const IMPACT_UNI = /* glsl */ `
   #define IMPACT_SLOTS 6
-  uniform vec4 uImpact[IMPACT_SLOTS]; // x,z=世界落点; y=强度; w=起始时刻(w<0=空槽)
+  uniform vec4 uImpact[IMPACT_SLOTS]; // xy=世界落点(xz); z=强度; w=起始时刻(w<0=空槽)
 
   // 落点剧烈起伏：中心回弹涌浪 + 以 ~2.2m/s 外扩的环形波阵，约 2s 内衰减
   float impactAgitation(vec2 wp, float t) {
