@@ -33,7 +33,7 @@ import { circleCells, type FaceGeometry } from './FaceBuild';
 import { computeTableGeometry, type PatchGeomResult } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
-import { createWaterMesh } from './WaterMaterial';
+import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
 import { WallMaterial } from './TerrainMaterial';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
@@ -194,6 +194,9 @@ export class ChunkManager {
   setStyle(boss4D: boolean): void {
     if (this.boss4D === boss4D) return;
     this.boss4D = boss4D;
+    // boss4D 小水体 FFT 幅度过大 → 降到 0.15（坑水帘走 waterWaveY 不受影响）
+    sharedWaterMaterial.uniforms.uAmpScale.value = boss4D ? 0.6 : 1.0;
+    sharedWaterMaterial.uniforms.uChopScale.value = boss4D ? 0.6 : 1.0;
     // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
     this.bakeGen++;
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
