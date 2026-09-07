@@ -16,15 +16,18 @@
 //     再下埋 0.06m（用户：围墙下部要接地——低处埋地、高处贴合、永不悬空）；
 //     裙深无上限钳制（用户：很高高台也不接地——原 1.5m 上限已废，
 //     cliff 处裙深天然≤台高，保底 0.15m 仍在）；
-//   · ★ 光照（用户 2026-09-06：高台两个边很暗）——2026 重写为自定义
+//   · ★ 光照（用户 2026-09-06：高台两个边很暗 → 统一光亮）+ 2026-09-07：
+//     墙裙光影没了（00 版被窄 clamp 0.97~1.0 压平）→ 与地形同幅 dirMod
+//     clamp(0.85~1.2)（顺光墙亮/背光墙暗一档，顶面恒 1）；2026 重写为自定义
 //     ShaderMaterial：顶/侧/裙统一 dirMod = clamp(max(N·L,0.12)/L.y,
-//     0.97~1.0) 模板直写（零注入），uSunDir/uSunColor/uAmbient 由
+//     0.85~1.2) 模板直写（零注入），uSunDir/uSunColor/uAmbient 由
 //     RenderManager 每帧喂（与地形同源 TERRAIN_LIGHT_TUNING）——
-//     顺背光幅度与 TerrainMaterial 一致；
+//     顺背光幅度与 TerrainMaterial 完全一致；
 //   · ★ 雾/色调（用户 2026-09-06：墙裙不吃雾）——补 fog uniforms + 三段
 //     fog chunk + tonemapping/colorspace 结尾（与地形顶面同序），fog:true；
 //   · 表面小裂痕 + 石纹 = 程序化 CanvasTexture（模块级单例共享；
-//     基色 = 水泥灰 #6f6f6a（2026-09-06 与台座实体同色），
+//     基色 = 水泥高台同款 #6f6f6a **加深版 #50504c**（2026-09-07 用户：
+//     转成加深后的水泥高台同款颜色；颗粒/色斑/裂痕同比例加深），
 //     裂痕深灰细折线 + 风化色斑 + 颗粒）；
 //   · 防叠环（两环共边会 z-fighting）：锚点四邻域不得含任何锚点/已环块；
 //     并块的其余邻域同理；跨 chunk 边界用世界块坐标确定性哈希求值
@@ -54,7 +57,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { TERRAIN_LIGHT_TUNING } from '../TerrainMaterial';
+import { TERRAIN_LIGHT_TUNING, SUN_DIR_MOD_MIN, SUN_DIR_MOD_MAX } from '../TerrainMaterial';
 import { tileById } from '../Tiles';
 import { CHUNK_SIZE } from '../ChunkGenerator';
 import { APRON_ANCHOR_P, apronAnchorRoll } from './ApronAnchor';
@@ -68,9 +71,12 @@ const SKIRT_BURY = 0.06;  // 下裙底埋入邻面深度（防浮缝）
 const MIN_SKIRT = 0.15;   // 下裙最小深度（安全网）；无上限——高台全高包壁
                           // 才能接地（用户 2026-09-06：很高高台的裙不接地，
                           // 原 MAX_SKIRT=1.5 钳制已废；cliff 处裙深天然≤台高）
-// ---- dirMod（地形同款公式；窄 clamp 使墙裙四边亮度一致） ----
-const APRON_DIR_MOD_MIN = 0.97;
-const APRON_DIR_MOD_MAX = 1.0;
+// ---- dirMod（地形同款公式；★ clamp 与 TerrainMaterial SUN_DIR_MOD 完全同幅——
+//    2026-09-07 用户：墙裙光影没了。此前窄 clamp(0.97~1.0) 把朝阳/背阳梯度全
+//    压平。改用地形同幅 0.85~1.2 → 顺光侧比背光侧亮一档、顶面恒 1，环境光托底
+//    不会像最初那样'两个边死黑'（用户选：与地形一致）） ----
+const APRON_DIR_MOD_MIN = SUN_DIR_MOD_MIN;
+const APRON_DIR_MOD_MAX = SUN_DIR_MOD_MAX;
 
 // ---- 共享纹理生成（PRNG + Canvas） ----
 function texRng(seed: number): () => number {
@@ -88,23 +94,26 @@ function makeApronTexture(): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = S; cv.height = S;
   const g = cv.getContext('2d')!;
-  g.fillStyle = '#6f6f6a';
+  // ★ 加深后的水泥高台同款色（2026-09-07 用户）：台座基色 #6f6f6a → ×0.72
+  //   #50504c (80,80,76)；颗粒/色斑/裂痕同比例加深保持质感一致
+  const baseR = 80, baseG = 80, baseB = 76;
+  g.fillStyle = '#50504c';
   g.fillRect(0, 0, S, S);
   const rnd = texRng(0x5a1d09);
   for (let i = 0; i < 5200; i++) {
     const v = Math.floor((rnd() - 0.5) * 16);
-    g.fillStyle = `rgb(${111 + v},${111 + v},${106 + v})`;
+    g.fillStyle = `rgb(${baseR + v},${baseG + v},${baseB + v})`;
     g.fillRect(Math.floor(rnd() * S), Math.floor(rnd() * S), 1, 1);
   }
   for (let i = 0; i < 9; i++) {
-    g.fillStyle = `rgba(89,89,86,${0.05 + rnd() * 0.05})`;
+    g.fillStyle = `rgba(65,65,62,${0.05 + rnd() * 0.05})`;
     g.beginPath();
     g.ellipse(rnd() * S, rnd() * S, 14 + rnd() * 30, 10 + rnd() * 22, rnd() * Math.PI, 0, Math.PI * 2);
     g.fill();
   }
   for (let c = 0; c < 15; c++) {
     let x = rnd() * S, y = rnd() * S, ang = rnd() * Math.PI * 2;
-    g.strokeStyle = `rgba(61,61,58,${0.32 + rnd() * 0.26})`;
+    g.strokeStyle = `rgba(46,46,44,${0.32 + rnd() * 0.26})`;
     g.lineWidth = rnd() < 0.3 ? 1.6 : 1;
     g.beginPath();
     g.moveTo(x, y);
@@ -145,7 +154,8 @@ const APRON_FRAG = /* glsl */ `
     vec3 alb = texture2D(uTex, vUv).rgb;
     vec3 N = normalize(vNw);
     vec3 L = normalize(uSunDir);
-    // 地形同款 dirMod：N·L / L.y；墙裙窄 clamp 使四边一致
+    // 地形同款 dirMod：N·L / L.y（平地恒 1）；clamp 取 SUN_DIR_MOD 同幅
+    // (0.85~1.2)——顺光墙 >1、背光墙 0.85 一档，与地形朝阳/背阳梯度一致
     float dirMod = clamp(
       max(dot(N, L), 0.12) / max(L.y, 0.12),
       ${APRON_DIR_MOD_MIN.toFixed(2)}, ${APRON_DIR_MOD_MAX.toFixed(2)}
