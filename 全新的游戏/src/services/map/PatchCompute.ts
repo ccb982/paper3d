@@ -15,6 +15,7 @@ import {
   buildLevelOverlay,
   type FaceGeometry,
 } from "./FaceBuild";
+import { buildWaterSurface, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
   refineChunkSource,
@@ -44,6 +45,8 @@ export interface PatchGeomRaw {
     indices: Uint32Array;
     topTriCount: number;
   };
+  /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《水体管线架构.md》） */
+  water: WaterSurfaceRaw;
 }
 
 export type PatchGeomResult = PatchGeomRaw;
@@ -67,6 +70,7 @@ export function computeTableGeometry(
   const table = buildFaceTable(src, cx, cz);
   const top = buildTopGeometry(table, src, patch);
   const wall = buildWallGeometry(table, src, patch);
+  const water = buildWaterSurface(table, src);
   return {
     top: {
       vertices: top.vertices,
@@ -87,6 +91,7 @@ export function computeTableGeometry(
       indices: wall.indices,
       topTriCount: wall.topTriCount,
     },
+    water,
   };
 }
 

@@ -40,6 +40,8 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.top.colors); push(r.top.patchW); push(r.top.indices);
   push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
+  push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
+  push(r.water.deep); push(r.water.spin); push(r.water.indices);
   return out;
 }
 

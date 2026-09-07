@@ -140,7 +140,10 @@ export class FTXQuad extends FxRendererBase {
         uDistortRotation: { value: 0 },
       },
       transparent: true,
-      depthWrite: false,
+      // ★ 角色贴片写深度（2026-09-07）：水面（透明 pass renderOrder=10）要正确
+      //   遮挡——水线上角色盖水、水线下水盖角色——必须以角色像素为深度依据。
+      //   原 depthWrite=false 会让水面按"地形深度"测试 → 水整片盖住角色。
+      depthWrite: true,
       // ★ depthTest 开启：贴片读深度缓冲 → 被地形（高台/墙）挡住的实体
       //   自动被深度裁剪（地形先渲染写深度，透明贴片后渲染读深度）
       depthTest: true,

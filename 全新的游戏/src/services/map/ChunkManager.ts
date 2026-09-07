@@ -30,7 +30,9 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, type FaceGeometry } from './FaceBuild';
-import { computeTableGeometry } from './PatchCompute';
+import { computeTableGeometry, type PatchGeomResult } from './PatchCompute';
+import type { WaterSurfaceRaw } from './WaterSurface';
+import { createWaterMesh } from './WaterMaterial';
 import { WallMaterial } from './TerrainMaterial';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
 import {
@@ -52,6 +54,8 @@ export interface DecorPlan {
   /** 装饰物阴影体积（世界坐标，5×N Float32Array，随快照进 Worker） */
   propVolumes: Float32Array;
 }
+
+/** 水体几何共享装配（createWaterMesh，WaterMaterial 统一管理闪烁/波/LOD） */
 
 /** 体积列表 → 平面 Float32Array（每 5 个 [x,z,y,r,h]） */
 function packVolumes(v: { x: number; z: number; y: number; r: number; h: number }[]): Float32Array {
@@ -114,7 +118,7 @@ export class ChunkManager {
   private assembleQueue: {
     key: number; cx: number; cz: number;
     maps: ChunkMaps; decor: DecorPlan;
-    top: FaceGeometry; wall: FaceGeometry;
+    top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw;
   }[] = [];
   /** 每帧装配预算（个；几何已在 Worker 算好，装配 ≈ 上传+物理，个位 ms/块） */
   private static readonly ASSEMBLE_PER_FRAME = 2;
@@ -178,7 +182,7 @@ export class ChunkManager {
     while (n-- > 0 && this.assembleQueue.length > 0) {
       const a = this.assembleQueue.shift()!;
       this.geoInflight.delete(a.key);
-      this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall);
+      this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water);
     }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
@@ -497,14 +501,16 @@ export class ChunkManager {
       .then((geom) => {
         if (this.bakeGen !== gen) return; // 换代（切风格/dispose）已作废
         if (geom) {
-          this.assembleQueue.push({ key, cx, cz, maps, decor, top: geom.top, wall: geom.wall });
+          this.assembleQueue.push({
+            key, cx, cz, maps, decor, top: geom.top, wall: geom.wall, water: geom.water,
+          });
           return;
         }
         // Worker 故障批 → 主线程同步同函数（字节一致；见 PatchCompute）
         this.geoInflight.delete(key);
         try {
           const g = computeTableGeometry(readChunk, this.raster.worldSeed, cx, cz, new Uint8Array(levels));
-          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall);
+          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall, g.water);
         } catch (e) {
           console.error(`[ChunkManager] chunk(${cx},${cz}) 同步几何失败，交看门狗重试`, e);
         }
@@ -526,6 +532,7 @@ export class ChunkManager {
     decor: DecorPlan,
     topG: FaceGeometry,
     wallG: FaceGeometry,
+    waterG?: WaterSurfaceRaw,
   ): void {
     const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
@@ -552,6 +559,10 @@ export class ChunkManager {
     group.add(new THREE.Mesh(toGeo(topG, false), mat));
     const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
     if (wallG.indices.length > 0) group.add(wallMesh);
+    // ★ 水体静止基面（水位 0 + 坑水帘；共享 WaterMaterial，地形后透明 pass 渲染）
+    if (waterG && waterG.indices.length > 0) {
+      group.add(createWaterMesh(waterG));
+    }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
     const decorLayer = this.buildDecorLayer(cx, cz, decor);
@@ -569,7 +580,8 @@ export class ChunkManager {
     this.replaceChunk(chunkKeyOf(cx, cz), group, cx, cz, pv, pi);
     this.createDecorColliders(cx, cz, decor);
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
-    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6}`);
+    const wq = waterG ? waterG.quads : 0;
+    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} 水quads=${wq}`);
   }
 
 
@@ -654,7 +666,7 @@ export class ChunkManager {
         const maps2 = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
         if (!maps2) return; // 期间缓存被清：后续 bake/重建自然覆盖
         const decor2 = this.planDecor(cx, cz);
-        this.assembleTableChunk(cx, cz, maps2, decor2, geom.top, geom.wall);
+        this.assembleTableChunk(cx, cz, maps2, decor2, geom.top, geom.wall, geom.water);
       } catch (e) {
         console.error(`[ChunkManager] chunk(${cx},${cz}) 破坏重建失败，回退标准烘焙`, e);
         this.requestStandardBake(cx, cz);

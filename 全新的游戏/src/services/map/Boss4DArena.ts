@@ -25,6 +25,8 @@
 import * as THREE from 'three';
 import { CHUNK_SIZE } from './ChunkGenerator';
 import { bakeChunkAppearance, BOSS4D_BAKE } from './ChunkAppearance';
+import { createWaterMesh } from './WaterMaterial';
+import type { WaterSurfaceRaw } from './WaterSurface';
 import type { PlannedDecal } from './decor/TileDecalBase';
 import { hash2 } from './TerrainNoise';
 import type { RasterMap } from './RasterMap';
@@ -168,6 +170,9 @@ export function buildBoss4DChunk(
   // ---- ② 侧壁网格 ----
   const { wPos, wNor, wIdx } = wallSurfaceData(raster, cx, cz, H);
 
+  // ---- ②′ 四维水幕（★ 2026-09-07 复刻坑水帘：漂浮自转流水幕，四维主题物）----
+  const curtainRaw = build4DCurtains(H, cx, cz);
+
   // ---- Group 组装 ----
   const group = new THREE.Group();
   group.position.set(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE);
@@ -185,6 +190,10 @@ export function buildBoss4DChunk(
     // ★ 侧壁纹理随相机平移（采顶面同款 mapTex；uMap 引用共享纹理，不设 .map 防双重释放）
     const wallMesh = new THREE.Mesh(wallGeo, new Boss4DWallMaterial(mapTex));
     group.add(wallMesh);
+  }
+
+  if (curtainRaw.indices.length > 0) {
+    group.add(createWaterMesh(curtainRaw)); // 共享变色/波动材质 + 透明 pass
   }
 
   // ---- 物理 trimesh 合并 ----
@@ -292,4 +301,78 @@ export function isBoss4DVoidChunk(seed: number, cx: number, cz: number): boolean
   // 出生区 3×3 永不虚空（出生点/初始敌人/测试物品都落在这里）
   if (cx >= -1 && cx <= 1 && cz >= -1 && cz <= 1) return false;
   return hash2(cx * 2 + 7, cz * 2 - 3, (seed ^ 0x5f4d) | 0) < BOSS4D_VOID_RATIO;
+}
+
+// ============================================================
+// 四维水幕（★ 2026-09-07 复刻坑水帘）
+// ============================================================
+// 语义：每 chunk 确定性 1~3 面流水幕，悬浮在本地最高地形上方，
+//   由 WaterMaterial 顶点 shader（deep=-2 哨兵）绕自身竖直中心线
+//   自转 + 上下漂浮——四维空间的"旋转幕"主题物（呼应侧壁漂移）。
+//   几何以自身中心为原点 → shader 直接绕局部原点转，无需每帧 JS。
+// uv.v = 0(唇)·1(底) → 复用浅水帘分支（唇沿泡沫/下流条纹）。
+
+function hash01(s: number): number {
+  const x = Math.sin(s * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+export function build4DCurtains(H: Float32Array, cx: number, cz: number): WaterSurfaceRaw {
+  const N = CHUNK_SIZE;
+  let maxH = -1e9;
+  for (let i = 0; i < H.length; i++) if (H[i] > maxH) maxH = H[i];
+  const seed = hash2(cx * 13 + 5, cz * 7 + 3, 0xB0_55);
+  const count = 1 + Math.floor(hash01(seed) * 3); // 1~3 面/chunk，确定性
+
+  const verts: number[] = [], nors: number[] = [], uvs: number[] = [];
+  const deps: number[] = [], spins: number[] = [], idx: number[] = [];
+  let quads = 0;
+
+  for (let k = 0; k < count; k++) {
+    const r1 = hash01(seed * 3.1 + k * 7.13);
+    const r2 = hash01(seed * 5.7 + k * 11.7 + 0.37);
+    const r3 = hash01(seed * 8.3 + k * 3.5 + 1.9);
+    const r4 = hash01(seed * 2.2 + k * 9.1 + 4.2);
+    const width = 3 + r1 * 6;                 // 3~9m
+    const height = 4 + r2 * 8;                // 4~12m
+    const baseY = maxH + 3 + r3 * 8;          // 本地最高地形上方 3~11m 悬浮
+    const cx0 = -20 + r4 * 40 + (k % 2) * 6;  // 错位散步，留出 chunk 边距
+    const cz0 = -18 + hash01(seed * 1.3 + k) * 36;
+    // 自转参数：角速度 0.03~0.7 rad/s、相位任意
+    const speed = 0.03 + r1 * 0.67;
+    const phase = r2 * Math.PI * 2;
+
+    const top = baseY + height / 2;
+    const cols = 6, rows = 8, vpr = cols + 1;
+    const vi0 = verts.length / 3;
+    for (let r = 0; r <= rows; r++) {
+      const yy = top - (r / rows) * height;
+      for (let c = 0; c <= cols; c++) {
+        const xx = cx0 - width / 2 + (c / cols) * width;
+        verts.push(xx, yy, cz0);
+        nors.push(0, 0, 1);
+        uvs.push(c / cols, r / rows);
+        deps.push(-2);                // boss4D 水幕哨兵
+        spins.push(speed, phase);
+      }
+    }
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = vi0 + r * vpr + c;
+        const b = a + 1, d = a + vpr, e = d + 1;
+        idx.push(a, d, b, b, d, e);   // +Z 外法线（已按 0,0,1 推导绕序）
+        quads++;
+      }
+    }
+  }
+
+  return {
+    vertices: Float32Array.from(verts),
+    normals: Float32Array.from(nors),
+    uvs: Float32Array.from(uvs),
+    deep: Float32Array.from(deps),
+    spin: Float32Array.from(spins),
+    indices: Uint32Array.from(idx),
+    quads,
+  };
 }
