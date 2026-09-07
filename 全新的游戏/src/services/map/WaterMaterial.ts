@@ -36,6 +36,7 @@ const WATER_VERT = /* glsl */ `
     vDeep = deep;
     float isFall = step(0.5, -deep);    // 竖面（水帘）：deep -1（坑帘）/ -2（boss4D 水幕）
     float isBoss = step(0.5, -deep - 1.5);  // boss4D 水幕：deep -2 → 自转 + 漂浮
+    float isRoof = step(0.5, abs(deep + 3.0)); // 保护性斜边 deep=-3：不波动（稳定补抖动缝）
     vec3 pos = position;
     if (isBoss > 0.5) {
       // ★ 4D 自转：绕本幕竖直中心线旋转（几何以自身中心为原点）
@@ -47,7 +48,7 @@ const WATER_VERT = /* glsl */ `
     }
     vec4 wp = modelMatrix * vec4(pos, 1.0);
     vWorld = wp.xyz;
-    float wv = waterWaveY(wp.xz, uTime);
+    float wv = isRoof > 0.5 ? 0.0 : waterWaveY(wp.xz, uTime); // 斜边不波动
     if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y; // 帘唇全量 → 坑底归零（vUv.y=0 唇/1 底）
     wp.y += wv;
     if (isBoss > 0.5) wp.y += 0.5 * sin(uTime * 0.9 + spin.y * 3.0); // 4D 漂浮微动
@@ -75,7 +76,6 @@ const WATER_FRAG = /* glsl */ `
 
   void main() {
     vec3 N = normalize(vNormal);
-    // 竖面（|N.y|≈0）= 坑水帘；平面 = 水面
     float isFall = 1.0 - step(0.5, abs(N.y));
     vec3 V = normalize(cameraPosition - vWorld);
     float fres = pow(1.0 - clamp(abs(dot(N, V)), 0.0, 1.0), 2.0);
@@ -83,35 +83,46 @@ const WATER_FRAG = /* glsl */ `
     vec3 col;
     float alpha;
     if (isFall > 0.5) {
-      // ★ 坑水帘（vUv.y = 0 唇 → 1 坑底）：唇沿亮白泡沫 → 中段流动 → 坑底融入暗部
+      // ★ 水帘（vUv.y = 0 唇 → 1 坑底）：顶段保持水色 → 平缓下沉到坑底暗青（不再骤黑）
       float t = vUv.y;
-      vec3 lip = vec3(0.78, 0.90, 0.88);
-      vec3 bottom = vec3(0.03, 0.09, 0.12);
-      vec3 grad = mix(lip, bottom, smoothstep(0.0, 0.85, t));
-      // 下滚亮纹（整体定向运动：uv+uTime，零额外纹理）
-      float streak = 0.62 + 0.38 * sin(vUv.x * 11.0 - uTime * 3.2 + t * 5.0);
-      // 唇沿白沫
-      float foamEdge = 1.0 - smoothstep(0.0, 0.12, t);
-      col = grad * (0.65 + 0.35 * streak) + vec3(foamEdge * 0.5);
-      col *= uAmbientColor * 1.1 + uSunColor * 0.18 * uSunDay;
-      alpha = 0.92;
+      float isRoof = 1.0 - step(0.5, abs(vDeep + 3.0)); // 仅 deep==-3 斜边
+      vec3 waterAlbedo = vec3(0.40, 0.72, 0.68);      // 与水面顶同色（交合规）
+      vec3 bottom = vec3(0.10, 0.22, 0.25);           // 坑底：明亮些，避免幕布整体过深
+      vec3 grad = mix(waterAlbedo, bottom, smoothstep(0.0, 0.85, t)); // 下沉更缓更久
+      // 斜边恒定不脉动（uv 全同 → 原 streak 会让整片斜边整体闪动）；幕布保留流动
+      float streak = isRoof > 0.5 ? 0.80 : 0.60 + 0.40 * sin(vUv.x * 11.0 - uTime * 3.0 + t * 5.0);
+      col = grad * (0.80 + 0.20 * streak);
+      float foamEdge = 1.0 - smoothstep(0.0, 0.08, t); // 唇沿薄泡沫
+      col += vec3(foamEdge * 0.20);
+      float glint = pow(max(dot(N, normalize(vec3(0.0, 0.6, 1.0) - V)), 0.0), 6.0); // 幕布竖向通透反光
+      col += glint * vec3(0.18, 0.28, 0.30);
+      col *= uAmbientColor * 1.1 + uSunColor * 0.32 * uSunDay;  // 提亮幕布光照档
+      // 保护性斜边（deep=-3）：极浅，仅微遮交界缝，不显形
+      col = mix(col, vec3(0.40, 0.72, 0.68) * (uAmbientColor * 0.95 + uSunColor * 0.10 * uSunDay), isRoof);
+      alpha = mix(0.55, 0.15, isRoof); // 斜边透明度很浅
+      // ★ 仅真实水面↔幕帘交界（坑帘 deep=-1；boss4D 水幕 deep=-2 无水面）：
+      //   唇沿 20% 落差内向水面色过渡（加宽遮缝，交界一段全为水色），其余幕帘不做接缝处理
+      float jb = (1.0 - step(0.5, -vDeep - 1.5)) * (1.0 - smoothstep(0.0, 0.20, t));
+      col = mix(vec3(0.40, 0.72, 0.68) * (uAmbientColor * 0.95 + uSunColor * 0.10 * uSunDay), col, jb);
     } else {
       // ★ 水面：浅水透出 pebble（低深半透明）、深水不透明偏深
       float depthT = clamp(vDeep / uMaxDeep, 0.0, 1.0);
-      vec3 shallow = vec3(0.40, 0.72, 0.68);   // 岸浅水：透底泛青
-      vec3 deepc = vec3(0.05, 0.16, 0.20);     // 深水：偏暗青绿
+      vec3 shallow = vec3(0.36, 0.66, 0.62);   // 岸浅水：透底泛青（2026-09-07 略压，不再过亮）
+      vec3 deepc = vec3(0.04, 0.13, 0.17);     // 深水：偏暗青绿
       vec3 base = mix(shallow, deepc, depthT);
-      // 波纹亮纹（uTime 滚动；微扰横向细纹，无贴图）
-      float sh = 0.5 + 0.5 * sin(vWorld.x * 2.1 + vWorld.z * 3.7 + uTime * 1.3);
-      sh = 0.5 + 0.5 * sin(vWorld.z * 5.3 - vWorld.x * 2.7 + uTime * 0.9);
-      float shimmer = (sh * 0.5 + 0.5) * 0.12;
+      // ★ 波纹亮纹：原单一相干正弦 → 全水面 ~1m 规则斜纹（周期 2π/√(5.3²+2.7²)≈1.06m）
+      //   已改多层非谐振正弦叠加：波长互不相干 → 无单一条带，只留碎闪微扰
+      float a = sin(vWorld.x * 3.91 + vWorld.z * 3.11 + uTime * 1.35);
+      float b = sin(vWorld.x * 5.27 - vWorld.z * 4.73 - uTime * 0.97);
+      float c = sin(vWorld.x * 7.83 + vWorld.z * 5.19 + uTime * 0.44);
+      float sh2 = a * 0.5 + b * 0.32 + c * 0.18;
+      float shimmer = (sh2 * 0.5 + 0.5) * 0.10;
       vec3 L = normalize(uSunDir);
-      float spec = pow(max(dot(reflect(-L, N), V), 0.0), 96.0) * 0.45 * uSunDay;
-      // 岸泡沫（浅水处白沿：深 0→0.35m 内）
+      float spec = pow(max(dot(reflect(-L, N), V), 0.0), 96.0) * 0.18 * uSunDay; // 0.30→0.18 远水面不 clip
       float foam = 1.0 - smoothstep(0.0, 0.35, vDeep);
-      col = base * (uAmbientColor * 0.95 + uSunColor * (0.10 + fres * 0.30 * uSunDay))
-        + uSunColor * spec + base * shimmer + vec3(foam * 0.35);
-      alpha = clamp(mix(0.5, 0.85, depthT) + foam * 0.18, 0.0, 0.96);
+      col = base * (uAmbientColor * 0.95 + uSunColor * (0.09 + fres * 0.10 * uSunDay)) // fres 0.24→0.10
+        + uSunColor * spec + base * shimmer + vec3(foam * 0.32);
+      alpha = clamp(mix(0.5, 0.85, depthT) + foam * 0.16, 0.0, 0.96);
     }
 
     gl_FragColor = vec4(col, alpha);
@@ -157,7 +168,7 @@ export const sharedWaterMaterial = new WaterMaterial();
  * 标准地形水与 boss4D 漂浮水幕共用这一装配路径。
  */
 export function createWaterMesh(raw: WaterSurfaceRaw): THREE.Mesh {
-  const geo = new THREE.BufferGeometry();
+const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(raw.vertices, 3));
   geo.setAttribute("normal", new THREE.BufferAttribute(raw.normals, 3));
   geo.setAttribute("uv", new THREE.BufferAttribute(raw.uvs, 2));

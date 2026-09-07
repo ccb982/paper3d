@@ -70,7 +70,7 @@ export function computeTableGeometry(
   const table = buildFaceTable(src, cx, cz);
   const top = buildTopGeometry(table, src, patch);
   const wall = buildWallGeometry(table, src, patch);
-  const water = buildWaterSurface(table, src);
+  const water = buildWaterSurface(table, src, patch);
   return {
     top: {
       vertices: top.vertices,
