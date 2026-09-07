@@ -190,11 +190,11 @@ const WATER_VERT = /* glsl */ `
       vec4 a = hdLayer0(uv0, uTime);
       vec4 b = hdLayer1(uv1, uTime);
       vec4 c = hdLayer2(uv2, uTime);
-      float h = a.r * uAmp.x * 0.5 + b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.05;
-      vec2 disp = a.gb * uChop.x + b.gb * uChop.y + c.gb * uChop.z * 0.5;
+      float h = a.r * uAmp.x * 0.5 + b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.08;
+      vec2 disp = a.gb * uChop.x + b.gb * uChop.y + c.gb * uChop.z * 0.7;
       wp.x += disp.x * uChopScale;
       wp.z += disp.y * uChopScale;
-      wp.y += h * uAmpScale * 4.0;
+      wp.y += h * uAmpScale * 5.0;
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
@@ -226,6 +226,8 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uTriPeriod;
   uniform vec3 uTexelCount; // 各层纹素数（LOD/粗糙度用）
   uniform float uWindSpeed; // 风速 m/s（Cox-Munk 粗糙度、白帽 onset 用）
+  uniform vec3 uWaterScatter; // 水体散射色（蓝绿，驱动水体自身颜色）
+  uniform vec3 uWaterAbsorb;  // 水体吸收色（深水吸收，暗蓝/暗绿）
 
   uniform sampler2D uHD0A; uniform sampler2D uHD0B;
   uniform sampler2D uHD1A; uniform sampler2D uHD1B;
@@ -331,10 +333,10 @@ const WATER_FRAG = /* glsl */ `
       vec3 n2 = norm(uN2A, uN2B, uv2, w2);   // L2 细节
       // 微面放大：位移幅度小 → 烘焙法线退接近 (0,1,0)，放大水平分量让波面明暗随波浪变化
       vec3 N3raw = n0 + n1 + n2;
-      vec3 N3 = normalize(vec3(N3raw.x * 3.0, N3raw.y, N3raw.z * 3.0));
+      vec3 N3 = normalize(vec3(N3raw.x * 4.5, N3raw.y, N3raw.z * 4.5));
       // footprint 越大 → 保留几何法线越多（远处不抖、不花）
       float geoW = clamp(fpShade * 0.5, 0.0, 1.0);
-      N = normalize(mix(N3, vNormal, geoW * 0.30));
+      N = normalize(mix(N3, vNormal, geoW * 0.18));
 
       // --- 粗糙度（Cox-Munk）：每个 cascade 丢失的细节 → mss ---
       vec3 texel = uLayerScale / uTexelCount;
@@ -358,21 +360,31 @@ const WATER_FRAG = /* glsl */ `
       float NoV = max(dot(N, V), 1e-4);
       float F = 0.03 + 0.97 * pow(1.0 - NoV, 5.0); // Schlick 菲涅尔
 
-      // 深度水色（增强渲染：浅水亮青湛、深水蓝，层次分明）
+// ---- 复刻参考项目：体积散射 + 吸收（HDR 值，系数已按本管线光强折算）----
       float depthT = clamp(vDeep / uMaxDeep, 0.0, 1.0);
-      vec3 shallow = vec3(0.28, 0.62, 0.60);
-      vec3 deepc = vec3(0.05, 0.20, 0.30);
-      vec3 body = mix(shallow, deepc, depthT);
 
-      // 焦散（折射光汇聚）+ 基光：波峰受光更亮、波谷更暗 → 波浪明暗层次明显
-      float cau = pow(max(dot(n2, L), 0.0), 3.0) * 0.5 + pow(max(dot(n1, L), 0.0), 3.0) * 0.5;
-      vec3 refracted = body * (uAmbientColor * 1.25 + uSunColor * (0.28 + cau * 0.30) * uSunDay);
+      // 水体散射色（参考项目精确值）
+      vec3 bodyR = uWaterScatter;
 
-      // --- 背光透射（参考项目）：波峰薄水逆光发光；增强 → 让水体边缘发亮、有体积感 ---
-      float waveH = clamp(h1n * 0.25 + h2n * 0.55, 0.0, 1.6);
-      float backlit = pow(clamp(dot(L, -V), 0.0, 1.0), 3.0)
-                    * pow(0.5 - 0.5 * dot(N, L), 2.5);
-      refracted += vec3(0.14, 0.62, 0.52) * uSunColor * backlit * waveH * 1.4 * uSunDay;
+      // 背光透射：波峰薄水逆光发光，参考项目 ×3.4（系数按光强折算）
+      float heightNorm = clamp(depthT * 0.5 + 0.5, 0.0, 1.0);
+      float thinness = 1.0 / (1.0 + max(vDeep, 0.0) * 0.05);
+      float backlit = heightNorm * thinness
+                    * pow(clamp(dot(L, -V), 0.0, 1.0), 4.0)
+                    * pow(0.5 - 0.5 * dot(L, N), 3.0);
+      vec3 scatter = bodyR * uSunColor * backlit * 3.4 * 6.0 * uSunDay;
+
+      // 下行辐照度：太阳直射 + 天空漫射驱动体积颜色
+      float sunUp = max(L.y, 0.0);
+      float sunFresnel = 0.03 + 0.97 * pow(1.0 - sunUp, 5.0);
+      vec3 beam = uSunColor * sunUp * (1.0 - sunFresnel) * uSunDay;
+      scatter += bodyR * (beam * 6.0 + uAmbientColor * 0.94);
+
+      // 深水吸收（参考项目精确值，随天光）
+      vec3 deep = uWaterAbsorb * uAmbientColor * 0.8 * 6.0;
+
+      // 水体体积颜色（参考项目结构：scatter + deep）
+      vec3 refracted = (scatter + deep);
 
       // --- 泡沫（克制：只在真正浪足处给一点白沫，漂浮白点来自波光而非泡沫）---
       float shore = 1.0 - smoothstep(0.0, 0.5, vDeep);          // 岸浅
@@ -398,12 +410,12 @@ const WATER_FRAG = /* glsl */ `
       vec3 sunDisk = uSunColor * max(pow(max(dot(Rf, L), 0.0), 400.0) * 1.2, 0.0) * uSunDay;
       sky = sky * (uAmbientColor * 1.15 + uSunColor * 0.55 * uSunDay) + sunDisk * 0.40;
 
-      // 菲涅尔反射占比：正视低、掠射高，配合微面法线 → 波光随着波浪闪烁
-      float reflMix = clamp(F * (0.50 - 0.25 * depthT), 0.0, 1.0);
+      // 菲涅尔反射（参考项目：color = mix(refracted, env, F) + spec）
+      // 反射携波法线纹理；roughness 越模糊越糊。+0.18 保证正视也露波纹
+      float reflMix = clamp(F + 0.18, 0.0, 1.0);
       vec3 color = mix(refracted, sky, reflMix);
 
-      // --- 太阳高光：GGX 微面（Cox-Munk α）；只在波面朝向太阳处闪现 →
-      //    波浪轮廓清晰（泡沫削去后，这层波光是波浪可见度的主力）---
+      // --- 太阳高光：GGX 微面（Cox-Munk α，参考项目同款），波浪朝向变化 → 波光 ---
       vec3 H = normalize(L + V);
       float NoH = max(dot(N, H), 0.0);
       float VoH = max(dot(V, H), 1e-4);
@@ -412,9 +424,14 @@ const WATER_FRAG = /* glsl */ `
       float Vis = smithGGXCorrelated(NoV, NoL, mssA);
       float Fs = 0.02 + 0.98 * pow(1.0 - VoH, 5.0);
       float spec = D * Vis * Fs * NoL;
-      color += uSunColor * spec * 8.0 * uSunDay;
-      // 波浪朝向变化 → 波光斑块随动 → 波浪可见（对比泡沫的"漂浮白点"）
-      color += uSunColor * spec * spec * 3.0 * uSunDay * pow(max(dot(n1, L), 0.0), 2.0);
+      color += uSunColor * spec * 16.0 * uSunDay;
+      // 波浪朝向变化的高频波光（L1/L2 法线），波纹形状明显
+      color += uSunColor * spec * 6.0 * uSunDay * pow(max(dot(n1, L), 0.5), 2.0);
+      color += uSunColor * spec * 4.0 * uSunDay * pow(max(dot(n2, L), 0.5), 3.0);
+
+      // 体色微面调制：波面斜率调制亮度 → 波峰亮、波谷暗，波形清楚
+      float slopeLen = length(vec2(N.x, N.z));
+      color *= (0.75 + 0.6 * slopeLen);
 
       // 岸线淡色透底
       color = mix(color, color * 1.12 + vec3(0.04, 0.10, 0.08), shore * 0.5);
@@ -462,6 +479,8 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uN2A: { value: tex.nA[2] }, uN2B: { value: tex.nB[2] },
         uAmpScale: { value: 1.0 },
         uChopScale: { value: 1.0 },
+        uWaterScatter: { value: new THREE.Vector3(0.018, 0.075, 0.088) },
+        uWaterAbsorb: { value: new THREE.Vector3(0.004, 0.021, 0.036) },
       }),
       vertexShader: WATER_VERT,
       fragmentShader: WATER_FRAG,
