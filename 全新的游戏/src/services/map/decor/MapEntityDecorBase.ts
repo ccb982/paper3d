@@ -289,13 +289,19 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
 
   for (let cy = 0; cy < PROP_GRID && out.length < PROP_BUDGET; cy++) {
     for (let cx = 0; cx < PROP_GRID && out.length < PROP_BUDGET; cx++) {
-      const r = hash2(cx * 7 + 1, cy * 7 + 2, ctx.seed + 9602);
+      // ★ 世界格坐标（2026-09-07 用户：晶体分布一点也不随机）——此前全用
+      //   chunk 局部格坐标 (cx,cy) 做 hash2 参数，每个 chunk 内部同格序的
+      //   判定处处相同 → 全图同一 20 格×3m 排列无限重复。掺入 chunk 世界
+      //   坐标后每 chunk 布局独立（同 seed 同 chunk 仍确定性复现）。
+      const gxc = ctx.cx * PROP_GRID + cx;
+      const gyc = ctx.cz * PROP_GRID + cy;
+      const r = hash2(gxc * 7 + 1, gyc * 7 + 2, ctx.seed + 9602);
       if (r >= presenceProb) continue;
 
       const wx = ctx.cx * 60 + (cx + 0.5) * PROP_CELL;
       const wz = ctx.cz * 60 + (cy + 0.5) * PROP_CELL;
-      const jx = wx + (hash2(cx, cy, ctx.seed + 9603) - 0.5) * PROP_CELL * 0.6;
-      const jz = wz + (hash2(cx, cy, ctx.seed + 9604) - 0.5) * PROP_CELL * 0.6;
+      const jx = wx + (hash2(gxc, gyc, ctx.seed + 9603) - 0.5) * PROP_CELL * 0.6;
+      const jz = wz + (hash2(gxc, gyc, ctx.seed + 9604) - 0.5) * PROP_CELL * 0.6;
 
       if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
 
@@ -309,7 +315,7 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
 
        let etotal = 0;
        for (const d of eligible) etotal += weights.get(d.key)!;
-       let rr = hash2(cx, cy, ctx.seed + 9605) * etotal;
+       let rr = hash2(gxc, gyc, ctx.seed + 9605) * etotal;
        let pick = eligible[0];
        for (const d of eligible) {
          rr -= weights.get(d.key)!;
@@ -326,20 +332,20 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
 
        const [sMin, sMax] = pick.placement.scaleRange;
        // ★ 下沉深度（米）：sinkRange 随机抽取（以中值为基准波动）；否则固定 sinkIntoGround
-       const sink = pick.placement.sinkRange
-         ? pick.placement.sinkRange[0] +
-           hash2(cx, cy, ctx.seed + 9609) * (pick.placement.sinkRange[1] - pick.placement.sinkRange[0])
-         : pick.placement.sinkIntoGround ?? 0;
-       out.push({
-         propKey: pick.key,
-         // ★ 输出转 chunk 本地坐标（渲染层直接挂 chunk group；过滤/坡度/贴地均用世界坐标）
-         x: jx - ctx.cx * 60,
-         z: jz - ctx.cz * 60,
-         y: ctx.surfaceHeightAt(jx, jz) - sink,
-        scale: sMin + hash2(cx, cy, ctx.seed + 9606) * (sMax - sMin),
-        rotY: hash2(cx, cy, ctx.seed + 9607) * Math.PI * 2,
-        variant: Math.floor(hash2(cx, cy, ctx.seed + 9608) * 4),
-      });
+const sink = pick.placement.sinkRange
+          ? pick.placement.sinkRange[0] +
+            hash2(gxc, gyc, ctx.seed + 9609) * (pick.placement.sinkRange[1] - pick.placement.sinkRange[0])
+          : pick.placement.sinkIntoGround ?? 0;
+        out.push({
+          propKey: pick.key,
+          // ★ 输出转 chunk 本地坐标（渲染层直接挂 chunk group；过滤/坡度/贴地均用世界坐标）
+          x: jx - ctx.cx * 60,
+          z: jz - ctx.cz * 60,
+          y: ctx.surfaceHeightAt(jx, jz) - sink,
+         scale: sMin + hash2(gxc, gyc, ctx.seed + 9606) * (sMax - sMin),
+         rotY: hash2(gxc, gyc, ctx.seed + 9607) * Math.PI * 2,
+         variant: Math.floor(hash2(gxc, gyc, ctx.seed + 9608) * 4),
+       });
     }
   }
   return out;
