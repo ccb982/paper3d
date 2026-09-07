@@ -5,13 +5,21 @@
 //   · 水位默认世界 y=0（用户定调）。地形成形后读一次 FaceTable：
 //       水 mask = cell.topTileId === TILE_WATER.id
 //       水深   = 0 − 地形顶高（cell.h，负）
-//       坑水交界 = 水 cell 邻 pit → 沿共享边下落水帘（唇沿=本池水位，帘底=坑床 dug 后）
+//       坑水交界 = 水 cell 邻 pit → 沿共享边下落水帘（唇沿=本池水位，帘底=挖后坑床）
 //   · ★ 挖掘联动（patch 传入时）：子弹命中后顶面被 patch 下挖，块 h 不变 → 本层
-//     在【含 patch】时做「连通池水位求解」，保证水面处处不悬空：
-//       1) 每池水位 = min(0, 四周非水非坑邻的挖后地面唇高) —— 水面歇在最低唇，不悬空；
-//       2) 某水块床面（挖后）高于本池水位 → 变干暴露 → 不铺平面/幕帘 → 大坑拆成小坑；
-//       3) 幕帘底延伸到挖后的新坑/新床底，lip 跟本池水位下降。
-//     no-patch 路径逐字节不变（回归基线锁定）。
+//     【连通池水位求解】保证水面处处不悬空：
+//       ◆ 池粒度 = 4m 块（已验证稳定；浅滩 1m 干/湿存在"水位回落↔复淹"的
+//         不一致，块级中心床判定避开该坑）。
+//       ◆ ★ 边界接触采样 = 高密度（用户要求「向外采样 + 向下采样」，点距 <10cm）：
+//         - 唇沿（平面→坡面交界）：对邻块整面做 5cm 步长 80×80 点阵（逐块缓存）
+//           的「挖后地面最低点」→ 水面闭嘴到交界最低处，<10cm 尺度凹点不悬空；
+//         - 幕帘底（平面→坑床）：复用该坑块 5cm 点阵，取「段 1m 切线 × 贴边
+//           1m 进深带」最低点 → 帘脚真接地，深挖不浮；
+//         - 平面深（向下的柱深）：逐 1m cell 3×3 采样挖后床面 → 水越挖越厚。
+//       语义核心（用户拍板）：「如果水和坡面交界处降低了，那么水面就降低」
+//       —— 整池水面整体下降到各邻交界唇的最低值；干出的块不铺平面/幕帘，
+//         大坑可按 4m 连通性拆成多个小池。
+//     no-patch 路径 = 全块默认水位 0 基线（回归锁定同公式）。
 //   · 几何随地形 chunk 一体装配，渲染期由 WaterMaterial 做 LOD/动画。
 //   · 顶点为 chunk 局部坐标（与顶面同约定 lx − HALF，原点=chunk 中心）。
 // 本文件不 import three —— Worker 依赖最小（与 PatchCompute 同哲学）。
@@ -38,8 +46,14 @@ const FALL_INSET = 0.1;
 const FALL_MIN = 0.2;
 /** 平面剔除容差：水块地形顶高于 0+ε 视为干地，不铺水面 */
 const PLANE_Y_EPS = 0.05;
-/** 挖后水位求解：唇高采样距共享边的探入量（m，落在邻块地面在边界后 0.5/1m 的挖深带） */
-const LIP_INSET = [0.5, 1.0] as const;
+/** 边界向下采样间距（m；硬要求 <10cm → 取 5cm；4m 块 = 80×80 点阵，逐块缓存一次） */
+const LIP_STRIDE = 0.05;
+/** 平面向下柱深采样：1m cell 内 3×3 点阵（{0.25,0.5,0.75} 偏移） */
+const CELL_BED_OFFSETS = [0.25, 0.5, 0.75];
+/** 幕帘脚向坑内进深的贴边带（m，0.05 步长采样到该深度；水沿挖坡下行即止于此） */
+const CURTAIN_REACH = 1.0;
+/** 幕帘 / 唇沿 向下采样网格尺寸（= 4m / 0.05m） */
+const BED_GRID = Math.round(4 / LIP_STRIDE);
 
 /** 水顶点方向常量 */
 const DIR4 = [
@@ -69,33 +83,23 @@ export interface WaterSurfaceRaw {
   quads: number;
 }
 
-/** 世界块坐标 key（整数合成，非负） */
+/** 世界 4m 块坐标 key（整数合成，非负；池解粒度 = 4m 块） */
 function blockKey(bx: number, bz: number): number {
-  // bx/bz 可负 → 平移保正：世界块坐标上限 *64（取 64 格 → 足够大且不溢出 int 数组 key）
-  return (bx + 512) * 1024 + (bz + 512);
+  return (bx + 4096) * 8192 + (bz + 4096);
 }
-function keyBx(k: number): number {
-  return Math.floor(k / 1024) - 512;
+function blockX(k: number): number {
+  return Math.floor(k / 8192) - 4096;
 }
-function keyBz(k: number): number {
-  return (k % 1024) - 512;
-}
-
-/** 共享边两端点（世界米格坐标；block(bx,bz) 视角 dir 方向的边） */
-function edgeEndpoints(bx: number, bz: number, dir: number): [number, number][] {
-  const x0 = bx * 4, z0 = bz * 4;
-  if (dir === 0) return [[x0 + 4, z0], [x0 + 4, z0 + 4]];
-  if (dir === 1) return [[x0, z0], [x0, z0 + 4]];
-  if (dir === 2) return [[x0, z0 + 4], [x0 + 4, z0 + 4]];
-  return [[x0, z0], [x0 + 4, z0]];
+function blockZ(k: number): number {
+  return (k % 8192) - 4096;
 }
 
 /**
  * 给定 chunk 表 → 静止基面几何字节（局部坐标；无水位/起伏，起伏由 shader 做）。
  * @param table  该 chunk 的 FaceTable（Pass1 已定型：topTileId/h）
  * @param src    邻域源（跨 chunk 边判 pit 邻接用）
- * @param patch  可选：子弹命中补丁覆盖层。传入时对含 water 的命中区做「连通池水位
- *               求解」（水面下沉不悬空 / 高床拆池 / 幕帘接地）；缺省 = 静态基线。
+ * @param patch  可选：子弹命中补丁覆盖层。传入时做「连通池水位求解」+ 高密度
+ *               边界接触采样（唇对外+向下、幕帘底对坑内+向下）；缺省 = 基线。
  */
 export function buildWaterSurface(
   table: FaceTable,
@@ -109,57 +113,90 @@ export function buildWaterSurface(
   const deps: number[] = [];
   const idx: number[] = [];
   let quads = 0;
+  const CH = CHUNK_SIZE;
 
-  // ============ 0) 水位求解（仅含 patch 时；no-patch → 每块 level=0/deep=0−h 基线） ============
-  // occ: world block → { level(平面高), deep(水深，clamp 0..MAX) }
+  // ============ 0) 池水位求解（块级；无 patch = 全块基线 0 = 0−h） ============
+  // occ: 世界 4m 水块 → { level(平面高), deep(水深，clamp 0..MAX) }
   const occ = new Map<number, { level: number; deep: number }>();
   const digTop = (bx: number, bz: number, x: number, z: number): number =>
     surfaceHeightCore(src, bx, bz, x, z) - (patch ? patch.depthOf(x, z) : 0);
-  const center = (bx: number, bz: number) => [bx * 4 + 2, bz * 4 + 2] as const;
+  /** 块中心床面（挖后；干湿判定 + 池 deep 基准） */
+  const bedOf = (bx: number, bz: number): number =>
+    digTop(bx, bz, bx * 4 + 2, bz * 4 + 2);
+  /** 1m cell 的向下床底面最低点（挖后；{0.25,0.5,0.75} 3×3 采样 → 柱深/干湿用） */
+  const cellBedMin = (wx: number, wz: number): number => {
+    let m = Infinity;
+    for (const a of CELL_BED_OFFSETS) {
+      for (const b of CELL_BED_OFFSETS) {
+        const h = digTop(Math.floor(wx / 4), Math.floor(wz / 4), wx + a, wz + b);
+        if (h < m) m = h;
+      }
+    }
+    return m;
+  };
+  /** 按块缓存的 5cm 挖后床面点阵（80×80；patch 期"边界向下采样"的唯一数据源，
+   *  每块只算一次，多次 settle 迭代 / 多条幕帘段共用） */
+  const bedGrids = new Map<number, Float32Array>();
+  const bedGridAt = (bx: number, bz: number): Float32Array => {
+    const key = blockKey(bx, bz);
+    let g = bedGrids.get(key);
+    if (!g) {
+      g = new Float32Array(BED_GRID * BED_GRID);
+      for (let i = 0; i < BED_GRID; i++) {
+        for (let j = 0; j < BED_GRID; j++) {
+          g[i * BED_GRID + j] = digTop(bx, bz, bx * 4 + (i + 0.5) * LIP_STRIDE, bz * 4 + (j + 0.5) * LIP_STRIDE);
+        }
+      }
+      bedGrids.set(key, g);
+    }
+    return g;
+  };
+  const bedMins = new Map<number, number>();
+  const blockBedMin = (bx: number, bz: number): number => {
+    const key = blockKey(bx, bz);
+    let m = bedMins.get(key);
+    if (m === undefined) {
+      const g = bedGridAt(bx, bz);
+      let mm = Infinity;
+      for (let k = 0; k < BED_GRID * BED_GRID; k++) {
+        const h = g[k];
+        if (h < mm) mm = h;
+      }
+      bedMins.set(key, mm);
+      m = mm;
+    }
+    return m;
+  };
 
-  // 收口：本 chunk 内所有合法水块（基线帧塞默认 occ）
   for (let lbz = 0; lbz < BPS; lbz++) {
     for (let lbx = 0; lbx < BPS; lbx++) {
       const cell = table.cells[lbz * BPS + lbx];
       if (cell.topTileId !== TILE_WATER.id) continue;
       const depth = 0 - cell.h;
       if (depth < -PLANE_Y_EPS) continue; // 干地防穿面
-      const bx = cx * BPS + lbx, bz = cz * BPS + lbz;
-      const bk = blockKey(bx, bz);
-      if (!occ.has(bk))
-        occ.set(bk, {
-          level: 0,
-          deep: Math.min(Math.max(depth, 0), WATER_MAX_DEEP),
-        });
+      const key = blockKey(cx * BPS + lbx, cz * BPS + lbz);
+      if (!occ.has(key))
+        occ.set(key, { level: 0, deep: Math.min(Math.max(depth, 0), WATER_MAX_DEEP) });
     }
   }
 
   if (occ.size > 0 && patch) {
-    // ---- 唇高：水块朝 dir 邻块(非pit)的挖后地面，取共享边后 0.5/1m 带 + 邻块中心的 min ----
+    // ---- ★ 唇高 = 邻(非水/非pit)块整面「挖后地面最低点」（对外+向下，5cm 点阵逐块缓存） ----
     const lipOf = (bx: number, bz: number, dir: number): number => {
-      const tx = bx + DIR4[dir].dx, tz = bz + DIR4[dir].dz;
-      const nb = src.blockAt(tx, tz);
-      if (!nb) return Infinity;      // 邻缺数据 → 不约束（防整池误泄）
+      const NX = bx + DIR4[dir].dx, NZ = bz + DIR4[dir].dz;
+      const nb = src.blockAt(NX, NZ);
+      if (!nb) return Infinity;                 // 邻缺数据 → 不约束（防整池误泄）
       if (nb.id === TILE_PIT.id) return Infinity; // 坑 = 幕帘承接，不约束平面
-      if (nb.id === TILE_WATER.id) return Infinity; // 水-水连通由池 BFS 承接，不把邻池床面当唇（防整池误泄）
-      let m = Infinity;
-      const check = (x: number, z: number) => {
-        const v = digTop(tx, tz, x, z);
-        if (v < m) m = v;
-      };
-      const [cex, cez] = center(tx, tz);
-      check(cex, cez);
-      for (const [ex, ez] of edgeEndpoints(bx, bz, dir)) {
-        for (const s of LIP_INSET) check(ex + DIR4[dir].dx * s, ez + DIR4[dir].dz * s);
-      }
-      return m;
+      if (nb.id === TILE_WATER.id) return Infinity; // 水-水连通由池 BFS 承接（防把邻池床当唇）
+      // 整面 5cm 点阵最低点 = 交界闭唇点：任何 <10cm 尺度的凹点水面都不悬空
+      return blockBedMin(NX, NZ);
     };
     // 递归安定：把块集拆成连通子池，逐池求 L=min(0,各块唇min)，干块(床≥L)摘除再拆
     const settle = (keys: Set<number>): void => {
       for (;;) {
         let L = 0;
         for (const k of keys) {
-          const bx = keyBx(k), bz = keyBz(k);
+          const bx = blockX(k), bz = blockZ(k);
           for (let dir = 0; dir < 4; dir++) {
             const lip = lipOf(bx, bz, dir);
             if (lip < L) L = lip;
@@ -167,25 +204,20 @@ export function buildWaterSurface(
         }
         const dried: number[] = [];
         for (const k of keys) {
-          const bx = keyBx(k), bz = keyBz(k);
-          const bed = digTop(bx, bz, bx * 4 + 2, bz * 4 + 2);
-          if (bed >= L - 1e-3) dried.push(k); // 床高于水位 → 干暴露
+          if (bedOf(blockX(k), blockZ(k)) >= L - 1e-3) dried.push(k);
         }
         if (dried.length === 0) {
           for (const k of keys) {
-            const bx = keyBx(k), bz = keyBz(k);
-            const bed = digTop(bx, bz, bx * 4 + 2, bz * 4 + 2);
             const o = occ.get(k)!;
             o.level = L;
-            o.deep = Math.min(Math.max(L - bed, 0), WATER_MAX_DEEP);
+            o.deep = Math.min(Math.max(L - bedOf(blockX(k), blockZ(k)), 0), WATER_MAX_DEEP);
           }
           return;
         }
-        // 摘除干块后按 4 邻连通性重新分池 → 各自安定（大坑拆小坑）
         const live = new Set<number>(keys);
         for (const k of dried) {
           live.delete(k);
-          occ.delete(k); // 干块彻底摘除：不铺平面/幕帘 → 暴露为干地
+          occ.delete(k); // 干块摘除：不铺平面/幕帘 → 暴露为干地
         }
         if (live.size === 0) return;
         const visited = new Set<number>();
@@ -197,7 +229,7 @@ export function buildWaterSurface(
           while (stack.length > 0) {
             const k = stack.pop()!;
             sub.add(k);
-            const bx = keyBx(k), bz = keyBz(k);
+            const bx = blockX(k), bz = blockZ(k);
             for (let dir = 0; dir < 4; dir++) {
               const nk = blockKey(bx + DIR4[dir].dx, bz + DIR4[dir].dz);
               if (live.has(nk) && !visited.has(nk)) {
@@ -206,7 +238,7 @@ export function buildWaterSurface(
               }
             }
           }
-          settle(sub);
+          settle(sub); // 大池按 4m 连通性拆小池 → 各自安定
         }
         return;
       }
@@ -214,19 +246,18 @@ export function buildWaterSurface(
     settle(new Set(occ.keys()));
   }
 
-  // 常量（避每次循环重建）
-  // ---- ① 水面平面：单一索引网格（四角顶点跨格共用；杜绝逐 quad 独立顶点 → 透明 AA 缝） ----
-  //    no-patch：顶点 y=waterLevel(0)，deep=cD(max)。patch：y=池水位，key 含水位（池间不混点）。
+  // ============ ① 水面平面：单一索引网格（四角顶点跨格共用；透明 AA 无缝） ============
+  //    no-patch：顶点 y=0，deep=max(邻块)。patch：y=池水位，key 含水位（跨池不混点）。
   const filled = new Uint8Array((N + 1) * (N + 1));
   const cX = new Map<number, number>();
   const cZ = new Map<number, number>();
   const PIT_INC = FALL_INSET;
   for (let lz = 0; lz < N; lz++) {
+    const lbz = lz >> 2;
     for (let lx = 0; lx < N; lx++) {
-      const lbx = lx >> 2;      // 4m 块内局部列
-      const lbz = lz >> 2;
-      const cell = table.cells[lbz * BPS + lbx];
+      const cell = table.cells[lbz * BPS + (lx >> 2)];
       if (cell.topTileId !== TILE_WATER.id) continue;
+      const lbx = lx >> 2;
       const bx = cx * BPS + lbx, bz = cz * BPS + lbz;
       const o = occ.get(blockKey(bx, bz));
       if (!o) continue; // 干块（patch 拆池）→ 不铺平面
@@ -261,13 +292,18 @@ export function buildWaterSurface(
       verts.push(x - HALF + (cX.get(x * 128 + z) ?? 0), level, z - HALF + (cZ.get(x * 128 + z) ?? 0));
       nors.push(0, 1, 0);
       uvs.push(x / N, z / N);
-      // 角深：取触及该角、同池水位的水块 deep 的 max
+      // 角深（向下的柱深，1m cell 级 3×3 采样聚合；无 patch = 块级 occ deep 基线）
       let dmax = 0;
       for (const [dx, dz] of [[-1, -1], [0, -1], [-1, 0], [0, 0]] as const) {
-        const ccx = Math.floor((x + dx) / 4), ccz = Math.floor((z + dz) / 4);
-        if (x + dx < 0 || z + dz < 0 || x + dx > N || z + dz > N) continue;
-        const o = occ.get(blockKey(cx * BPS + ccx, cz * BPS + ccz));
-        if (o && Math.abs(o.level - level) < 1e-4 && o.deep > dmax) dmax = o.deep;
+        const ccx = x + dx, ccz = z + dz;
+        if (ccx < 0 || ccz < 0 || ccx >= N || ccz >= N) continue;
+        const wx = cx * CH + ccx, wz = cz * CH + ccz;
+        const o = occ.get(blockKey(cx * BPS + (ccx >> 2), cz * BPS + (ccz >> 2)));
+        if (!o || Math.abs(o.level - level) >= 1e-4) continue;
+        const d = patch
+          ? Math.min(Math.max(level - cellBedMin(wx, wz), 0), WATER_MAX_DEEP)
+          : o.deep;
+        if (d > dmax) dmax = d;
       }
       deps.push(dmax);
     }
@@ -276,8 +312,7 @@ export function buildWaterSurface(
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
       if (!filled[lz * (N + 1) + lx]) continue;
-      const lbx = lx >> 2, lbz = lz >> 2;
-      const o = occ.get(blockKey(cx * BPS + lbx, cz * BPS + lbz))!;
+      const o = occ.get(blockKey(cx * BPS + (lx >> 2), cz * BPS + (lz >> 2)))!;
       const level = o.level;
       const a = vertexAt(lx, lz, level), b = vertexAt(lx + 1, lz, level),
         c = vertexAt(lx + 1, lz + 1, level), d = vertexAt(lx, lz + 1, level);
@@ -286,92 +321,105 @@ export function buildWaterSurface(
     }
   }
 
-  // ---- ② 坑水交界 —— 下落水帘（水块沿 pit 邻边，池水位 → 挖后坑床） ----
+  // ============ ② 坑水交界 —— 下落水帘（4m 整边一条；patch 时帘脚 5cm 采样接挖后坑床） ============
   for (let lbz = 0; lbz < BPS; lbz++) {
+    const z0 = lbz * 4 - HALF;              // 块局部 z 起点
     for (let lbx = 0; lbx < BPS; lbx++) {
       const cell = table.cells[lbz * BPS + lbx];
       if (cell.topTileId !== TILE_WATER.id) continue;
-      const bx = cx * BPS + lbx;
-      const bz = cz * BPS + lbz;
+      const bx = cx * BPS + lbx, bz = cz * BPS + lbz;
       const o = occ.get(blockKey(bx, bz));
       if (!o) continue; // 干块 → 无幕帘
-      const x0 = lbx * 4 - HALF, x1 = lbx * 4 + 4 - HALF;
-      const z0 = lbz * 4 - HALF, z1 = lbz * 4 + 4 - HALF;
+      const x0 = lbx * 4 - HALF;            // 块局部 x 起点
       for (let dir = 0; dir < 4; dir++) {
         const dx = DIR4[dir].dx, dz = DIR4[dir].dz;
         const n = src.blockAt(bx + dx, bz + dz);
         if (!n || n.id !== TILE_PIT.id) continue;
-        const lipY = o.level;     // 唇沿 = 本池水位（patch 可能已下沉）
-        let botY = baseHeightOf(n); // 帘底基线 = 坑块面板底
+        const want = DIR_NORMALS[dir];
+        const lipY = o.level; // 唇沿 = 本池水位（patch 已下沉）
+        // ★ 挖后坑床（向外+向下，5cm 点阵缓存复用）：整条 4m 边切线 × 贴边 1m 进深带 → 最低点接地
+        let botY = baseHeightOf(n);
         if (patch) {
-          for (const [ex, ez] of edgeEndpoints(bx, bz, dir)) {
-            botY = Math.min(botY, digTop(bx + dx, bz + dz, ex, ez)); // 挖后坑床
+          const g = bedGridAt(bx + dx, bz + dz);
+          const reachRows = Math.round(CURTAIN_REACH / LIP_STRIDE); // 20
+          // 进深行：+x/+z 从坑口向坑内 0→reach；-x/-z 从坑口(块内 4m 边)向坑内 4→(4-reach)
+          const rFrom = dx === -1 || dz === -1 ? BED_GRID - reachRows : 0;
+          for (let r = rFrom; r < rFrom + reachRows; r++) {
+            for (let c = 0; c < BED_GRID; c++) { // 整条 4m 边全部切线列
+              const k = dir === 0 || dir === 1 ? r * BED_GRID + c : c * BED_GRID + r;
+              const h = g[k];
+              if (h < botY) botY = h;
+            }
           }
         }
         const fallLen = lipY - botY;
-        if (fallLen < FALL_MIN) continue; // 落差过浅不生成
-        // 四角（顶点序 [a bottom-start, b top-start, c top-end, d bottom-end]；统一 [x, 高度, z]）
-        let pts: [number, number, number][];
-        if (dir === 0)   pts = [[x1 + FALL_INSET, botY, z0], [x1 + FALL_INSET, lipY, z0], [x1 + FALL_INSET, lipY, z1], [x1 + FALL_INSET, botY, z1]];
-        else if (dir === 1) pts = [[x0 - FALL_INSET, botY, z1], [x0 - FALL_INSET, lipY, z1], [x0 - FALL_INSET, lipY, z0], [x0 - FALL_INSET, botY, z0]];
-        else if (dir === 2) pts = [[x1, botY, z1 + FALL_INSET], [x1, lipY, z1 + FALL_INSET], [x0, lipY, z1 + FALL_INSET], [x0, botY, z1 + FALL_INSET]];
-        else                pts = [[x0, botY, z0 - FALL_INSET], [x0, lipY, z0 - FALL_INSET], [x1, lipY, z0 - FALL_INSET], [x1, botY, z0 - FALL_INSET]];
-        const want = DIR_NORMALS[dir];
+        if (fallLen < FALL_MIN) continue; // 落差过浅不生成（连斜边也不出）
+
+        // 壁轴与切线（整条 4m 边）
+        const axisX = dir === 0 || dir === 1;
+        const fixed = axisX
+          ? (dir === 0 ? x0 + 4 + FALL_INSET : x0 - FALL_INSET)
+          : (dir === 2 ? z0 + 4 + FALL_INSET : z0 - FALL_INSET);
+        const rev = dir === 1 || dir === 3;
+        const pt = (t: number, y: number): [number, number, number] => {
+          const u = rev ? 1 - t : t;
+          return axisX ? [fixed, y, z0 + u * 4] : [x0 + u * 4, y, fixed];
+        };
+        const a = pt(0, botY), b = pt(0, lipY), c = pt(1, lipY), d = pt(1, botY);
         // 校验/修正绕序：外法线 = cross(b−a, c−a)；不符则翻面
-        const ax = pts[0][0], az = pts[0][2];
-        const dx1 = pts[1][0] - ax, dy1 = pts[1][1] - pts[0][1], dz1 = pts[1][2] - az;
-        const dx2 = pts[2][0] - ax, dy2 = pts[2][1] - pts[0][1], dz2 = pts[2][2] - az;
+        const ax0 = a[0], az0 = a[2];
+        const dx1 = b[0] - ax0, dy1 = b[1] - a[1], dz1 = b[2] - az0;
+        const dx2 = c[0] - ax0, dy2 = c[1] - a[1], dz2 = c[2] - az0;
         const nx = dy1 * dz2 - dz1 * dy2;
         const ny = dz1 * dx2 - dx1 * dz2;
         const nz = dx1 * dy2 - dy1 * dx2;
-        const flip =
-          (nx * want[0] + ny * want[1] + nz * want[2]) < 0;
-        if (flip) pts = [pts[0], pts[3], pts[2], pts[1]]; // 翻转绕序（a,d,c,b）
+        const flip = nx * want[0] + ny * want[1] + nz * want[2] < 0;
+        const pts = flip ? [a, d, c, b] : [a, b, c, d];
         const vi = verts.length / 3;
         for (let k = 0; k < 4; k++) {
           const [px, py, pz] = pts[k];
           verts.push(px, py, pz);
           nors.push(want[0], want[1], want[2]);
-          // uv：x = 沿帘切线 0..1；y = 落差 0(唇)..1(坑底)
-          const u = dir === 0 || dir === 1 ? (pz - z0) / 4 : (px - x0) / 4;
-          uvs.push(u, (lipY - py) / fallLen);
+          // uv：x = 沿帘切线 0..1（整条边归一）；y = 落差 0(唇)..1(坑底)
+          const tU = axisX ? (pz - z0) / 4 : (px - x0) / 4;
+          uvs.push(tU, (lipY - py) / fallLen);
           deps.push(-1);
         }
         idx.push(vi, vi + 1, vi + 2, vi, vi + 2, vi + 3);
         quads++;
-        // ★ 保护性斜边：幕布唇沿顶向水面侧倒 45° 斜坡，覆盖 90° 交界深缝
-        //   唇沿两角(b,c 在 y=lipY) 向外(水侧)下压 edgeH，构成坡面
-        const ROOF = 0.14;
-        const ROOF_DROP = 0.2; // 斜边下探：稳定覆盖水面波动全程（波幅约 ±0.09）
-        const wx = -DIR4[dir].dx, wz = -DIR4[dir].dz; // 水侧法向 = 坑反方向
-        const lipA: [number, number, number][] = [pts[1], pts[2]]; // 唇沿两角（y=lipY）
-        const r0: [number, number, number] = [lipA[0][0] + wx * ROOF, lipA[0][1] - ROOF_DROP, lipA[0][2] + wz * ROOF];
-        const r1: [number, number, number] = [lipA[1][0] + wx * ROOF, lipA[1][1] - ROOF_DROP, lipA[1][2] + wz * ROOF];
-        // 法向：低 N.y（<0.5 → fragment 走幕布分支，唇沿水色）；略偏水侧
-        const rn: [number, number, number] = [wx * 0.7, 0.3, wz * 0.7];
-        const rp0: [number, number, number] = [lipA[0][0], lipA[0][1], lipA[0][2]];
-        const rp1: [number, number, number] = r0;
-        const rp2: [number, number, number] = r1;
-        const rp3: [number, number, number] = [lipA[1][0], lipA[1][1], lipA[1][2]];
-        // 绕序校验：cross(b−a, c−a) · 期望法向 > 0
-        const rax = rp0[0], raz = rp0[2];
-        const rv1 = [rp1[0] - rax, rp1[1] - rp0[1], rp1[2] - raz];
-        const rv2 = [rp2[0] - rax, rp2[1] - rp0[1], rp2[2] - raz];
-        const rnx = rv1[1] * rv2[2] - rv1[2] * rv2[1];
-        const rny = rv1[2] * rv2[0] - rv1[0] * rv2[2];
-        const rnz = rv1[0] * rv2[1] - rv1[1] * rv2[0];
-        const roofPts = [rp0, rp1, rp2, rp3];
-        if (rnx * rn[0] + rny * rn[1] + rnz * rn[2] < 0) roofPts.reverse();
-        const rvi = verts.length / 3;
-        for (let k = 0; k < 4; k++) {
-          const [px, py, pz] = roofPts[k];
-          verts.push(px, py, pz);
-          nors.push(rn[0], rn[1], rn[2]);
-          uvs.push(0.5, 0.0); // uv.y=0 → 唇沿水色
-          deps.push(-3);      // 斜边哨兵：fragment 用极浅 alpha 遮缝
+        // ★ 保护性斜边（仅 patch 时；罩住 90° 交界深缝，唇沿向水侧倒 45°；整条边一条）
+        if (patch) {
+          const ROOF = 0.14;
+          const ROOF_DROP = 0.2; // 斜边下探：稳定覆盖水面波动全程（波幅约 ±0.09）
+          const wnx = -dx, wnz = -dz; // 水侧法向 = 坑反方向
+          const tA = pt(0, lipY), tB = pt(1, lipY); // 唇沿两角（y=lipY）
+          const r0: [number, number, number] = [tA[0] + wnx * ROOF, lipY - ROOF_DROP, tA[2] + wnz * ROOF];
+          const r1: [number, number, number] = [tB[0] + wnx * ROOF, lipY - ROOF_DROP, tB[2] + wnz * ROOF];
+          // 法向：低 N.y（<0.5 → fragment 走幕布分支，唇沿水色）；略偏水侧
+          const rn: [number, number, number] = [wnx * 0.7, 0.3, wnz * 0.7];
+          const rp0: [number, number, number] = tA;
+          const rp1: [number, number, number] = r0;
+          const rp2: [number, number, number] = r1;
+          const rp3: [number, number, number] = tB;
+          const rax = rp0[0], raz = rp0[2];
+          const rv1 = [rp1[0] - rax, rp1[1] - rp0[1], rp1[2] - raz];
+          const rv2 = [rp2[0] - rax, rp2[1] - rp0[1], rp2[2] - raz];
+          const rnx = rv1[1] * rv2[2] - rv1[2] * rv2[1];
+          const rny = rv1[2] * rv2[0] - rv1[0] * rv2[2];
+          const rnz = rv1[0] * rv2[1] - rv1[1] * rv2[0];
+          const roofPts = [rp0, rp1, rp2, rp3];
+          if (rnx * rn[0] + rny * rn[1] + rnz * rn[2] < 0) roofPts.reverse();
+          const rvi = verts.length / 3;
+          for (let k = 0; k < 4; k++) {
+            const [px, py, pz] = roofPts[k];
+            verts.push(px, py, pz);
+            nors.push(rn[0], rn[1], rn[2]);
+            uvs.push(0.5, 0.0); // uv.y=0 → 唇沿水色
+            deps.push(-3);      // 斜边哨兵：fragment 用极浅 alpha 遮缝
+          }
+          idx.push(rvi, rvi + 1, rvi + 2, rvi, rvi + 2, rvi + 3);
+          quads++;
         }
-        idx.push(rvi, rvi + 1, rvi + 2, rvi, rvi + 2, rvi + 3);
-        quads++;
       }
     }
   }
