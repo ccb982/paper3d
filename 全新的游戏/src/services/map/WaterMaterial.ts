@@ -102,6 +102,36 @@ function ensureOceanTextures(): ReturnType<typeof bakeOceanTextures> {
 // ------------------------------------------------------------
 // 顶点着色器
 // ------------------------------------------------------------
+// 局部水面剧烈波动（角色入水 / 炮弹近水 → sharedWaterMaterial.addImpact 注入；
+// 顶点抬升 + 片元斜率，纯水面表现，不改角色/碰撞）
+// ------------------------------------------------------------
+/** uImpact 槽位数（GLSL #define IMPACT_SLOTS 同步） */
+const IMPACT_SLOTS = 6;
+const IMPACT_UNI = /* glsl */ `
+  #define IMPACT_SLOTS 6
+  uniform vec4 uImpact[IMPACT_SLOTS]; // x,z=世界落点; y=强度; w=起始时刻(w<0=空槽)
+
+  // 落点剧烈起伏：中心回弹涌浪 + 以 ~2.2m/s 外扩的环形波阵，约 2s 内衰减
+  float impactAgitation(vec2 wp, float t) {
+    float h = 0.0;
+    for (int i = 0; i < IMPACT_SLOTS; i++) {
+      vec4 im = uImpact[i];
+      if (im.w < 0.0) continue;
+      float age = t - im.w;
+      if (age < 0.0 || age > 2.0) continue;
+      float d = max(length(wp - im.xy), 0.03);
+      float fade = exp(-age * 1.7);
+      float core = exp(-d * d * 3.0);                       // 中心回弹涌浪
+      h += im.z * core * (0.35 + 0.65 * sin(age * 11.0)) * fade;
+      float dd = (d - age * 2.2) * 2.2;
+      float ringA = exp(-dd * dd);                          // 外扩环带
+      h += im.z * ringA * sin(d * 9.0 - age * 30.0) * fade * 0.8;
+    }
+    return h;
+  }
+`;
+
+// ------------------------------------------------------------
 const WATER_VERT = /* glsl */ `
   attribute float deep;
   attribute float border;
@@ -161,6 +191,8 @@ const WATER_VERT = /* glsl */ `
     return mix(a, b, w);
   }
 
+  ${IMPACT_UNI}
+
   void main() {
     vUv = uv;
     vNormal = normalize(normal);
@@ -195,6 +227,8 @@ const WATER_VERT = /* glsl */ `
       wp.x += disp.x * uChopScale;
       wp.z += disp.y * uChopScale;
       wp.y += h * uAmpScale * 5.0;
+      // ★ 局部落水剧烈波动（角色入水/炮弹近水；叠加在 FFT 涌浪上）
+      wp.y += impactAgitation(wp.xz, uTime);
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
@@ -285,6 +319,8 @@ const WATER_FRAG = /* glsl */ `
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
 
+  ${IMPACT_UNI}
+
   void main() {
     vec3 N;
     float isFall = step(0.5, -vDeep); // deep<0：水帘(坑 -1)/幕布(-2)/斜边(-3)
@@ -337,6 +373,18 @@ const WATER_FRAG = /* glsl */ `
       // footprint 越大 → 保留几何法线越多（远处不抖、不花）
       float geoW = clamp(fpShade * 0.5, 0.0, 1.0);
       N = normalize(mix(N3, vNormal, geoW * 0.18));
+
+      // ★ 局部落水波动斜率并入法线（波动区的反光/波光随之剧烈晃动）
+      {
+        float impE = 0.08;
+        vec2 impWp = vWorld.xz;
+        float hl = impactAgitation(impWp - vec2(impE, 0.0), uTime);
+        float hr = impactAgitation(impWp + vec2(impE, 0.0), uTime);
+        float hb = impactAgitation(impWp - vec2(0.0, impE), uTime);
+        float hf = impactAgitation(impWp + vec2(0.0, impE), uTime);
+        vec2 impSlope = vec2((hl - hr) / impE, (hb - hf) / impE);
+        N = normalize(vec3(N.x + impSlope.x * 0.5, N.y, N.z + impSlope.y * 0.5));
+      }
 
       // --- 粗糙度（Cox-Munk）：每个 cascade 丢失的细节 → mss ---
       vec3 texel = uLayerScale / uTexelCount;
@@ -479,6 +527,13 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uN2A: { value: tex.nA[2] }, uN2B: { value: tex.nB[2] },
         uAmpScale: { value: 1.0 },
         uChopScale: { value: 1.0 },
+        // ---- 局部落水剧烈波动（空槽 w=-99）----
+        uImpact: {
+          value: Array.from(
+            { length: IMPACT_SLOTS },
+            () => new THREE.Vector4(0, 0, 0, -99),
+          ),
+        },
         uWaterScatter: { value: new THREE.Vector3(0.018, 0.075, 0.088) },
         uWaterAbsorb: { value: new THREE.Vector3(0.004, 0.021, 0.036) },
       }),
@@ -495,6 +550,23 @@ export class WaterMaterial extends THREE.ShaderMaterial {
   override dispose(): void {
     unregisterWallLightTarget(this);
     super.dispose();
+  }
+
+  /**
+   * ★ 在世界点 (x,z) 注入一处水面剧烈波动（角色入水 / 炮弹近水）。
+   * 顶点抬升 + 片元法线晃动，约 2s 自然衰减。槽满时覆盖最旧的一次。
+   * @param strength 波幅（米；步行入水 ~0.8，跳跃/炮弹 ~1.4）
+   */
+  addImpact(x: number, z: number, strength: number): void {
+    const arr = this.uniforms.uImpact.value as THREE.Vector4[];
+    let slot = -1;
+    let oldest = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i].w < 0) { slot = i; break; }        // 空槽优先
+      if (arr[i].w < oldest) { oldest = arr[i].w; slot = i; }
+    }
+    if (slot < 0) return;
+    arr[slot].set(x, z, strength, performance.now() * 0.001);
   }
 }
 

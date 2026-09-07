@@ -35,6 +35,7 @@ import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager } from '../services/combat/BulletManager';
+import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
 import { executeAttack } from '../services/combat/Attack';
 import { ItemManager } from '../systems/inventory/ItemManager';
@@ -106,6 +107,11 @@ export class WorldMode implements IGameMode {
   private acc = 0;
   private damageUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
+  /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
+  private waterPrev = new Map<
+    CharacterBase,
+    { liquid: boolean; y: number; rippleMs: number }
+  >();
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 调试：F9 颜色回读监听器（exit 时移除） */
@@ -282,8 +288,12 @@ export class WorldMode implements IGameMode {
       ctx.bulletAsset ?? createSolidBulletAsset(), 100,
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
-      // ★ 子弹撞地 → 一次性地形扣除（ChunkManager.playBulletImpact）
-      (x, y, z) => this.chunks.playBulletImpact(x, y, z),
+      // ★ 子弹撞地 → 一次性地形扣除（ChunkManager.playBulletImpact）；
+      //   落点 0.6m 内有水面 → 水面剧烈波动
+      (x, y, z) => {
+        this.chunks.playBulletImpact(x, y, z);
+        this.agitateWaterNear(x, z);
+      },
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
 
@@ -367,6 +377,10 @@ export class WorldMode implements IGameMode {
     // ---- 实体管线驱动 ----
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
+
+    // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感） ----
+    this.updateWaterEntry(this.player, dt);
+    if (this.enemy) this.updateWaterEntry(this.enemy, dt);
 
     // ---- 角色地形跟随 ----
     this.clampCharacter(this.player, dt);
@@ -464,6 +478,9 @@ export class WorldMode implements IGameMode {
     // ---- 拾取发光粒子 ----
     for (const g of this.pickupGlows) g.dispose();
     this.pickupGlows = [];
+
+    // ---- ★ 角色入水检测状态 ----
+    this.waterPrev.clear();
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -590,6 +607,68 @@ export class WorldMode implements IGameMode {
       dirX: dx, dirY: dy, dirZ: dz,
       speed: 20, camp: 'player', lifetime: 2, damage: 10,
     });
+  }
+
+  /**
+   * ★ 角色入水检测：走进水面 / 从高处落入水面 → 该处水面剧烈波动；
+   *   在水中持续移动 → 脚下周期性泛波。只触发波动表现，不改角色位置。
+   */
+  private updateWaterEntry(e: CharacterBase, dt: number): void {
+    const p = e.position;
+    const liquid = this.raster.tileDefAt(p.x, p.z).genRole === 'liquid';
+    const prev = this.waterPrev.get(e);
+    this.waterPrev.set(e, {
+      liquid, y: p.y, rippleMs: prev ? prev.rippleMs : 0,
+    });
+    if (!prev) return;
+    // 走进水面（方块由非水 → 水，且脚底在水面以下 0.5m 内才算真正入水）
+    if (liquid && !prev.liquid && p.y < 0.5) {
+      this.waterPrev.get(e)!.rippleMs = performance.now();
+      sharedWaterMaterial.addImpact(p.x, p.z, 0.8);
+      return;
+    }
+    // 高处坠落 / 跳入：本帧穿过 y=0 水面 → 波幅随坠落速度增大
+    if (liquid && prev.y > 0.08 && p.y <= 0.08) {
+      this.waterPrev.get(e)!.rippleMs = performance.now();
+      const vy = Math.max(0, (prev.y - p.y) / Math.max(dt, 1e-3));
+      sharedWaterMaterial.addImpact(p.x, p.z, Math.min(1.6, 0.7 + vy * 0.15));
+      return;
+    }
+    // ★ 在水中移动 → 脚下周期性泛波（速度越快越密/越强）
+    if (liquid && e.controller.moveSpeed > 0.3) {
+      const st = this.waterPrev.get(e)!;
+      const now = performance.now();
+      const gap = 340 - e.controller.moveSpeed * 28; // 慢走 0.3s 一泛，快跑 ~0.2s
+      if (now - st.rippleMs >= gap) {
+        st.rippleMs = now;
+        sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + e.controller.moveSpeed * 0.06));
+      }
+    }
+  }
+
+  /**
+   * ★ 炮弹/子弹落点 0.6m 半径内若存在水面 → 注入水面剧烈波动。
+   */
+  private agitateWaterNear(x: number, z: number): void {
+    const hit = this.waterPointWithin(x, z, 0.6);
+    if (!hit) return;
+    sharedWaterMaterial.addImpact(hit.x, hit.z, 1.4);
+  }
+
+  /** 命中点及半径 r 的十字采样内找水面；返回最近水面点，无则 null */
+  private waterPointWithin(
+    x: number, z: number, r: number,
+  ): { x: number; z: number } | null {
+    if (this.raster.tileDefAt(x, z).genRole === 'liquid') return { x, z };
+    for (let i = 0; i < 4; i++) {
+      const a = (Math.PI / 2) * i;
+      const sx = x + Math.cos(a) * r;
+      const sz = z + Math.sin(a) * r;
+      if (this.raster.tileDefAt(sx, sz).genRole === 'liquid') {
+        return { x: sx, z: sz };
+      }
+    }
+    return null;
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {
