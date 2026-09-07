@@ -371,6 +371,7 @@ export function build4DCurtains(H: Float32Array, cx: number, cz: number): WaterS
     normals: Float32Array.from(nors),
     uvs: Float32Array.from(uvs),
     deep: Float32Array.from(deps),
+    border: new Float32Array(deps.length).fill(1), // 4D 水幕非 FFT，全边界
     spin: Float32Array.from(spins),
     indices: Uint32Array.from(idx),
     quads,

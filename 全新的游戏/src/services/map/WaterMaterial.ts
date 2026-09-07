@@ -96,6 +96,7 @@ function ensureOceanTextures(): ReturnType<typeof bakeOceanTextures> {
 // ------------------------------------------------------------
 const WATER_VERT = /* glsl */ `
   attribute float deep;
+  attribute float border;
   attribute vec2 spin;
   uniform float uTime;
   uniform float uHasOcean;
@@ -165,8 +166,9 @@ const WATER_VERT = /* glsl */ `
     vec4 wp = modelMatrix * vec4(pos, 1.0);
     vWorld = wp.xyz;
     float wv = 0.0;
-    if (isNotRoof > 0.5 && isFall <= 0.5 && uHasOcean > 0.5) {
-      // ★ 水面（deep=0）：预计算 FFT 位移（世界 uv，跨 chunk 无缝）
+    if (isNotRoof > 0.5 && isFall <= 0.5 && uHasOcean > 0.5 && border < 0.5) {
+      // ★ 水面（deep=0）内部顶点：预计算 FFT 位移（世界 uv，跨 chunk 无缝）
+      //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
       vec2 uv0 = wp.xz / uLayerScale.x + uScrollDir * (uTime * uSpeed.x);
       vec2 uv1 = wp.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
       vec4 a = hdLayer0(uv0, uTime);
@@ -398,6 +400,7 @@ const geo = new THREE.BufferGeometry();
   geo.setAttribute("normal", new THREE.BufferAttribute(raw.normals, 3));
   geo.setAttribute("uv", new THREE.BufferAttribute(raw.uvs, 2));
   geo.setAttribute("deep", new THREE.BufferAttribute(raw.deep, 1));
+  if (raw.border) geo.setAttribute("border", new THREE.BufferAttribute(raw.border, 1));
   if (raw.spin) geo.setAttribute("spin", new THREE.BufferAttribute(raw.spin, 2));
   geo.setIndex(new THREE.BufferAttribute(raw.indices, 1));
   const mesh = new THREE.Mesh(geo, sharedWaterMaterial);

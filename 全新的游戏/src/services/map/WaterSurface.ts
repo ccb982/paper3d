@@ -79,6 +79,8 @@ export interface WaterSurfaceRaw {
   uvs: Float32Array;
   /** 逐顶点：平面 = 水深（0..WATER_MAX_DEEP）；水帘 = -1 / 斜边 = -3 哨兵 */
   deep: Float32Array;
+  /** 逐顶点：1 = 边界顶点（与岸/坑/水帘交界，FFT 位移必须钉死）；0 = 内部（可起伏） */
+  border: Float32Array;
   /** 逐顶点旋转参数(angularSpeed, phase)：标准水全 0；boss4D 水幕 = 4D 自转/漂浮 */
   spin: Float32Array;
   indices: Uint32Array;
@@ -488,6 +490,7 @@ function emitWater(
   const nors: number[] = [];
   const uvs: number[] = [];
   const deps: number[] = [];
+  const borders: number[] = [];
   const idx: number[] = [];
   let quads = 0;
   const CH = CHUNK_SIZE;
@@ -541,6 +544,14 @@ function emitWater(
   const cornerOf = new Map<number, number>();
   const cornerKey = (x: number, z: number, level: number): number =>
     patch ? x * 262144 + z * 64 + Math.round((level + 4) * 512) : x * 128 + z;
+  // ★ 顶点是否为"边界"：相邻 cell（自身右下 + 左/上/左上 3 个邻）全部是水 → 内部（可起伏）；
+  //   任一缺失/非水/异水位 → 边界（FFT 位移钉死，防纹理性翘边）。
+  const isWaterCellAt = (gx: number, gz: number, level: number): boolean => {
+    if (gx < 0 || gz < 0 || gx >= N || gz >= N) return false;
+    if (!filled[gz * (N + 1) + gx]) return false;
+    const o = occ.get(worldBlockKey(cx * BPS + (gx >> 2), cz * BPS + (gz >> 2)));
+    return !!o && Math.abs(o.level - level) >= 1e-4 === false;
+  };
   const vertexAt = (x: number, z: number, level: number): number => {
     const k = cornerKey(x, z, level);
     let vi = cornerOf.get(k);
@@ -550,7 +561,7 @@ function emitWater(
       verts.push(x - HALF + (cX.get(x * 128 + z) ?? 0), level, z - HALF + (cZ.get(x * 128 + z) ?? 0));
       nors.push(0, 1, 0);
       uvs.push(x / N, z / N);
-      // 角深（向下的柱深，1m cell 级 3×3 采样聚合；无 patch = 块级 occ deep 基线）
+      // 深度（同前）
       let dmax = 0;
       for (const [dx, dz] of [[-1, -1], [0, -1], [-1, 0], [0, 0]] as const) {
         const ccx = x + dx, ccz = z + dz;
@@ -564,6 +575,11 @@ function emitWater(
         if (d > dmax) dmax = d;
       }
       deps.push(dmax);
+      // 边界标记：顶点相邻 4 cell 全水 → 0（内部），否则 1（边界钉死）
+      const edge =
+        !isWaterCellAt(x, z, level) || !isWaterCellAt(x - 1, z, level) ||
+        !isWaterCellAt(x, z - 1, level) || !isWaterCellAt(x - 1, z - 1, level);
+      borders.push(edge ? 1 : 0);
     }
     return vi;
   };
@@ -633,6 +649,7 @@ function emitWater(
           uvs.push(tU, (lipY - py) / fallLen);
           deps.push(-1);
         }
+        borders.push(1, 1, 1, 1); // 水帘属边界：不参与 FFT
         idx.push(vi, vi + 1, vi + 2, vi, vi + 2, vi + 3);
         quads++;
         // ★ 保护性斜边（仅 patch 时；罩住 90° 交界深缝，唇沿向水侧倒 45°；整条边一条）
@@ -665,6 +682,7 @@ function emitWater(
             uvs.push(0.5, 0.0); // uv.y=0 → 唇沿水色
             deps.push(-3);      // 斜边哨兵：fragment 用极浅 alpha 遮缝
           }
+          borders.push(1, 1, 1, 1); // 斜边属边界：不参与 FFT
           idx.push(rvi, rvi + 1, rvi + 2, rvi, rvi + 2, rvi + 3);
           quads++;
         }
@@ -677,6 +695,7 @@ function emitWater(
     normals: Float32Array.from(nors),
     uvs: Float32Array.from(uvs),
     deep: Float32Array.from(deps),
+    border: Float32Array.from(borders), // 1 = 与岸/坑/水帘交界（钉死）；0 = 内部（FFT 可起伏）
     spin: new Float32Array((verts.length / 3) * 2), // 标准水静止 → 旋速/相位全 0
     indices: Uint32Array.from(idx),
     quads,
