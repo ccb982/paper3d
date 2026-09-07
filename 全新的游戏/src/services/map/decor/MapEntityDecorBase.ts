@@ -184,11 +184,13 @@ export const FOUNDATION_PROP_GROUP = 'foundation';
 //   与晶簇同为"石头感"装饰，默认地图里反而稀释了耗尽原石晶体的观感。
 //   geometry 'rock' 保留，需要时可重新注册。
 
-// ★ 能量耗尽原石晶体（2026-09-06 用户新增）：水泥材质、向上的水晶柱群——
-//   簇内高矮混排（中央高塔 + 环状高矮柱 + 地面碎晶，见 buildCrystalCluster）；
-//   instanced 共享几何 × 实例 scale/rotY/variant（yScale 拉伸）→ 全地图体型错落；
-//   ★ 地面为主、总体 ~5%（用户 2026-09-06 定稿）：ground+platform 双角色都长，
-//     但地面方格多于高台 → 晶簇多数落在地面平地；perCellProb 0.05 ≈ 全图 5%。
+// ★ 能量耗尽原石晶体（2026-09-06 用户新增；09-07 重做几何）：
+//   4 变体 × 每簇 = 主峰 + 环状外张中晶 + 大倾角细针 + 地面碎屑；
+//   晶柱截面 5/6/8 边混排、腰肩两段收尖、尖端偏斜（off-axis）、
+//   逐柱 random spin + 朝外倾斜（splay）→ 每簇形状/朝向都不同
+//   （详见 buildCrystalCluster；变体由规划 variant 选取 → 共享几何缓存分桶）；
+//   ★ 地面为主、总体 ~0.5%（用户定稿）：ground+platform 双角色都长，
+//     地面方格多于高台 → 晶簇多数落在地面平地；perCellProb 0.005。
 registerMapDecor(new MapEntityDecorBase({
   key: 'depleted_crystal', label: '耗尽原石晶体', groups: [FOUNDATION_PROP_GROUP],
   placement: {
@@ -411,7 +413,8 @@ export function buildPropLayer(instances: PlannedProp[]): THREE.Object3D | null 
 // 共享几何/材质（module 级缓存，chunk 销毁只丢实例矩阵）；
 // 阴影不在此画——装饰物影子已在烘焙时印进光照图（勿重复压暗）。
 
-const SHARED = new Map<string, { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial }>();
+const SHARED_GEO = new Map<string, THREE.BufferGeometry>();
+const SHARED_MAT = new Map<string, THREE.MeshStandardMaterial>();
 
 /** 确定性顶点噪声位移（同参数恒同几何——跨 chunk 共享才安全） */
 function rockVertexNoise(i: number): number {
@@ -419,6 +422,28 @@ function rockVertexNoise(i: number): number {
   h = (h ^ (h >>> 13)) | 0;
   h = Math.imul(h, 1103515245);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** ★ 晶簇每变体确定性 RNG 流（mulberry32；变体种子不同 → 簇形/朝向各异，
+ *   同变体同种子 → chunk 重建几何完全一致，可缓存共享） */
+function crystalRng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 多边形棱环（cornerR[k] = 逐角半径；spin 绕 +Y 旋）→ [x,y,z]×sides */
+function ringPoints(sides: number, y: number, cornerR: number[], spin: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < sides; k++) {
+    const a = (k / sides) * Math.PI * 2 + spin;
+    out.push(Math.cos(a) * cornerR[k], y, Math.sin(a) * cornerR[k]);
+  }
+  return out;
 }
 
 /**
@@ -489,49 +514,114 @@ export function buildTrapezoidPlinth(params: Record<string, number>): THREE.Buff
  * 底座 = 六边低矮扁盘（顶面扇 + 侧壁）接地，柱从盘顶生长。
  * 非索引三角形（每面独立顶点 → computeVertexNormals 逐面平整 + flatShading 硬棱）。
  */
-function buildCrystalCluster(params: Record<string, number>): THREE.BufferGeometry {
+/**
+ * ★ 能量耗尽原石晶体簇（多变体程序化生成，2026-09-06 用户要求重做：
+ *   "都是竖直向上、形状相同"→ 要更复杂的几何 + 朝向变化）。
+ * 方案（综合业内程序化晶簇做法——hexagonal prism + tapered shaft +
+ * off-axis 尖端、imaginu 式"中心主晶 + 环状外张倾斜晶"）：
+ *   · 4 个变体（variant 0~3）各自确定性地生成不同簇形；
+ *   · 每簇 = 主峰 + 环状中晶 + 细针 + 地面碎屑；截面 5/6/8 边混排；
+ *   · 每根晶柱：底座环 → (可选)腰肩环 → 顶肩环 → 尖端，两段收尖；
+ *     尖端沿晶柱朝向方向偏斜（off-axis termination）+ 抬升（歪尖手感）；
+ *   · 朝向变化：每根晶柱绕 Y 随机 spin + 沿自身方位朝外倾斜（splay）——
+ *     中晶/细针明显外张、主峰轻微；底座环埋进底盘 + 底端封盖（密封倾斜
+ *     柱的底口，且环先旋 spin 再倾斜再平移，棱边全程直线）。
+ * 非索引三角形（每面独立顶点 → computeVertexNormals 逐面平整 + flatShading 硬棱）。
+ */
+export function buildCrystalCluster(params: Record<string, number>, variant: number): THREE.BufferGeometry {
   const noise = params.noise ?? 0.12;
-  const RING = 6;              // 晶柱槽数
-  const BR = 1.15;             // 底座半径
-  const BRH = 0.12;            // 底座高
-  const COLUMNS: Array<[number, number, number, number]> = [
-    [0.00, 0.00, 0.24, 3.60],   // 中央高塔
-    [0.85, 0.28, 0.17, 2.70],
-    [-0.62, 0.55, 0.15, 0.75],  // 矮
-    [0.32, 0.95, 0.16, 2.15],
-    [-0.35, -0.82, 0.18, 1.50],
-    [0.95, -0.62, 0.14, 0.60],  // 矮
-    [-0.88, -0.05, 0.16, 3.00],
-    [0.22, -0.42, 0.13, 1.05],
-    [-0.15, 0.72, 0.14, 0.50],  // 矮
-    [1.05, 0.62, 0.11, 0.45],   // 矮
-    [-0.58, -0.18, 0.12, 0.85],
-    [0.45, 0.50, 0.08, 0.25],   // 地面碎晶
-    [-0.60, 0.95, 0.07, 0.20],
-    [0.78, -0.90, 0.09, 0.30],
-    [-0.95, 0.85, 0.06, 0.18],
-  ];
+  const rng = crystalRng(variant * 97 + 0x9e3779b9);
+  const BR = 1.15;              // 底座半径
+  const BRH = 0.12;             // 底座高（晶柱底基准面，坐盘顶）
+  const BRING = 6;              // 底座边数
   const V: number[] = [];
   const emit = (a: number, b: number, c: number) => V.push(a, b, c);
-  /** 晶面/棱半径噪声（同柱同槽同值 → 面仍平整） */
-  const nface = (j: number, k: number) => 1 + (rockVertexNoise(j * 13 + k * 7 + 5) - 0.5) * noise;
 
-  // ---- 底座（低矮六边扁盘：顶面扇 + 侧壁） ----
+  // ---- 变换工具：spin(y) → lean(朝 out 方向倾斜) → 平移 (px, BRH, pz) ----
+  const _v = new THREE.Vector3();
+  const _up = new THREE.Vector3(0, 1, 0);
+  const _out = new THREE.Vector3();
+  const _axis = new THREE.Vector3();
+  const _off = new THREE.Vector3();
+  const _rot = new THREE.Quaternion();
+  const _qy = new THREE.Quaternion();
+  const _ql = new THREE.Quaternion();
+  const tr = (x: number, y: number, z: number): void => {
+    _v.set(x, y, z).applyQuaternion(_rot).add(_off);
+    emit(_v.x, _v.y, _v.z);
+  };
+
+  /**
+   * 建一根晶柱（局部坐标构建后整体旋/倾/移）。
+   * @param crad 逐角半径（棱边噪声；同 k 各环同值 → 棱直）
+   * @param h 肩高；topFrac 肩环半径比例；waist 腰高份数（null=无腰）
+   * @param apexOff 尖端偏斜量（×r，向 tiltDir 方向）；apexFrac 尖端高出肩的比例
+   */
+  const column = (
+    sides: number, px: number, pz: number,
+    tiltDir: number, lean: number, spin: number,
+    crad: number[], h: number, topFrac: number,
+    waist: number | null, apexOff: number, apexFrac: number,
+  ): void => {
+    _qy.setFromAxisAngle(_up, spin);
+    _out.set(Math.cos(tiltDir), 0, Math.sin(tiltDir));
+    _axis.crossVectors(_up, _out).normalize();
+    _ql.setFromAxisAngle(_axis, lean);          // 向 +out 倾斜
+    _rot.multiplyQuaternions(_ql, _qy);
+    _off.set(px, BRH, pz);
+
+    const rnf = (f: number) => crad.map((r) => r * f);
+    const R0 = ringPoints(sides, 0, crad, 0);                       // 底座环
+    const R2 = ringPoints(sides, h, rnf(topFrac), 0);               // 顶肩环
+    // 腰肩环（topFrac 与 1 之间偏收腰 → 两段收尖）
+    const R1 = waist ? ringPoints(sides, h * waist, rnf(topFrac + (1 - topFrac) * 0.45), 0) : null;
+    const yA = h * (1 + apexFrac);
+    const ax = Math.cos(tiltDir) * apexOff, az = Math.sin(tiltDir) * apexOff;
+
+    // 底端封盖（中心尖略微下沉；密封倾斜柱底口）
+    const yF = -0.03;
+    for (let k = 0; k < sides; k++) {
+      const k1 = (k + 1) % sides;
+      tr(0, yF, 0);
+      tr(R0[k1 * 3], R0[k1 * 3 + 1], R0[k1 * 3 + 2]);
+      tr(R0[k * 3], R0[k * 3 + 1], R0[k * 3 + 2]);
+    }
+    // 侧壁（下环→上环 的四边形；绕向沿用台座已验证朝外序）
+    const lateral = (A: number[], B: number[]): void => {
+      for (let k = 0; k < sides; k++) {
+        const k1 = (k + 1) % sides;
+        tr(A[k * 3], A[k * 3 + 1], A[k * 3 + 2]);
+        tr(B[k * 3], B[k * 3 + 1], B[k * 3 + 2]);
+        tr(B[k1 * 3], B[k1 * 3 + 1], B[k1 * 3 + 2]);
+        tr(A[k * 3], A[k * 3 + 1], A[k * 3 + 2]);
+        tr(B[k1 * 3], B[k1 * 3 + 1], B[k1 * 3 + 2]);
+        tr(A[k1 * 3], A[k1 * 3 + 1], A[k1 * 3 + 2]);
+      }
+    };
+    if (R1) { lateral(R0, R1); lateral(R1, R2); } else { lateral(R0, R2); }
+    // 尖端（R2[k1] R2[k] A → 朝外；沿用原晶柱已验证序）
+    for (let k = 0; k < sides; k++) {
+      const k1 = (k + 1) % sides;
+      tr(R2[k1 * 3], R2[k1 * 3 + 1], R2[k1 * 3 + 2]);
+      tr(R2[k * 3], R2[k * 3 + 1], R2[k * 3 + 2]);
+      tr(ax, yA, az);
+    }
+  };
+
+  // ---- 底座（6 边扁盘：顶面扇 + 侧壁；角半径微抖保持变体差异） ----
   const topR: number[] = [];
   const botR: number[] = [];
-  for (let k = 0; k < RING; k++) {
-    const a = (k / RING) * Math.PI * 2;
-    const rr = BR * nface(0, k);
+  for (let k = 0; k < BRING; k++) {
+    const a = (k / BRING) * Math.PI * 2;
+    const rr = BR * (1 + (rng() - 0.5) * noise);
     topR.push(Math.cos(a) * rr, BRH, Math.sin(a) * rr);
     botR.push(Math.cos(a) * rr * 0.98, -0.03, Math.sin(a) * rr * 0.98);
   }
-  for (let k = 0; k < RING; k++) {
-    const k1 = (k + 1) % RING;
-    // 顶面扇（每三角独立三顶点；反绕 → 朝上 +Y）
+  for (let k = 0; k < BRING; k++) {
+    const k1 = (k + 1) % BRING;
     emit(0, BRH, 0);
     emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
     emit(topR[k * 3], topR[k * 3 + 1], topR[k * 3 + 2]);
-    // 侧壁（bottom 两角 + top 两角 → 两三角，法线朝外）
     emit(botR[k * 3], botR[k * 3 + 1], botR[k * 3 + 2]);
     emit(topR[k * 3], topR[k * 3 + 1], topR[k * 3 + 2]);
     emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
@@ -540,25 +630,89 @@ function buildCrystalCluster(params: Record<string, number>): THREE.BufferGeomet
     emit(botR[k1 * 3], botR[k1 * 3 + 1], botR[k1 * 3 + 2]);
   }
 
-  // ---- 晶体柱（六棱锥，从盘顶生长到尖顶） ----
-  for (let j = 0; j < COLUMNS.length; j++) {
-    const [cx, cz, r, h] = COLUMNS[j];
-    const ring: number[] = [];
-    for (let k = 0; k < RING; k++) {
-      const a = (k / RING) * Math.PI * 2;
-      const rad = r * nface(7 + j, k);
-      ring.push(cx + Math.cos(a) * rad, BRH, cz + Math.sin(a) * rad);
-    }
-    // 尖顶轻微偏斜（天然晶体歪尖感）
-    const tipX = cx + (rockVertexNoise(j * 31 + 11) - 0.5) * r * 0.4;
-    const tipZ = cz + (rockVertexNoise(j * 31 + 17) - 0.5) * r * 0.4;
-    for (let k = 0; k < RING; k++) {
-      const k1 = (k + 1) % RING;
-      // 侧面三角：环序反绕 → 法线朝外（外视顺时针才符 CCW 前面约定）
-      emit(ring[k1 * 3], ring[k1 * 3 + 1], ring[k1 * 3 + 2]);
-      emit(ring[k * 3], ring[k * 3 + 1], ring[k * 3 + 2]);
-      emit(tipX, BRH + h, tipZ);
-    }
+  // ---- 晶簇体（主峰 + 环晶 + 细针 + 碎屑；全部确定性随机） ----
+  const jit = (r: number, k: number) => r * (1 + (rng() - 0.5) * noise * 1.6);
+
+  // 主峰（1~2 根：中央高塔 + 偶发第二峰）
+  const nBig = 1 + (rng() < 0.45 ? 1 : 0);
+  for (let i = 0; i < nBig; i++) {
+    const big = i === 0;
+    const sides = big ? 6 : (rng() < 0.5 ? 6 : 8);
+    const r = BR * (0.16 + rng() * 0.035) * (big ? 1 : 0.8);
+    const h = (big ? 3.1 : 2.2) + rng() * 0.7;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides,
+      big ? (rng() - 0.5) * 0.16 : (rng() - 0.5) * 0.6,
+      big ? (rng() - 0.5) * 0.16 : (rng() - 0.5) * 0.6,
+      rng() * Math.PI * 2,           // 微倾方位
+      big ? 0.05 + rng() * 0.09 : 0.10 + rng() * 0.14,   // 主峰近直立、第二峰微倾
+      rng() * Math.PI * 2,
+      crad, h, 0.18 + rng() * 0.12,
+      0.5 + rng() * 0.3, r * (0.15 + rng() * 0.5), 0.12 + rng() * 0.12,
+    );
+  }
+
+  // 环状中晶（4~7 根；沿方位外张倾斜——"朝向有变化"主来源）
+  const nRing = 4 + Math.floor(rng() * 4);
+  for (let i = 0; i < nRing; i++) {
+    const a = (i / nRing) * Math.PI * 2 + rng() * 0.5;
+    const rad = 0.45 + rng() * 0.5;                       // 离中心距离
+    const r = 0.09 + rng() * 0.06;
+    const sides = rng() < 0.5 ? 6 : (rng() < 0.5 ? 5 : 8);
+    const h = 0.9 + rng() * 1.5;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides, Math.cos(a) * rad, Math.sin(a) * rad,
+      a + (rng() - 0.5) * 0.5,       // 朝外倾斜方位（≈自身方位）
+      0.12 + rng() * 0.28,           // 外张 7°~23°
+      rng() * Math.PI * 2,
+      crad, h, 0.2 + rng() * 0.2,
+      rng() < 0.25 ? null : 0.5 + rng() * 0.35,
+      r * (0.1 + rng() * 0.5), 0.1 + rng() * 0.14,
+    );
+  }
+
+  // 细长针晶（3~6 根；大倾角斜插）
+  const nNeedle = 3 + Math.floor(rng() * 4);
+  for (let i = 0; i < nNeedle; i++) {
+    const a = rng() * Math.PI * 2;
+    const rad = 0.5 + rng() * 0.45;
+    const r = 0.04 + rng() * 0.035;
+    const sides = rng() < 0.5 ? 5 : 6;
+    const h = 1.2 + rng() * 1.1;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides, Math.cos(a) * rad, Math.sin(a) * rad,
+      a + (rng() - 0.5) * 0.4,
+      0.35 + rng() * 0.4,            // 20°~43° 大倾角
+      rng() * Math.PI * 2,
+      crad, h, 0.15 + rng() * 0.15,
+      null, r * (0.05 + rng() * 0.35), 0.08 + rng() * 0.1,
+    );
+  }
+
+  // 地面碎屑（4~6 片矮小歪晶）
+  const nChip = 4 + Math.floor(rng() * 3);
+  for (let i = 0; i < nChip; i++) {
+    const a = rng() * Math.PI * 2;
+    const rad = rng() * 0.95;
+    const r = 0.05 + rng() * 0.05;
+    const sides = 5 + (rng() < 0.5 ? 0 : 1);
+    const h = 0.15 + rng() * 0.25;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides, Math.cos(a) * rad, Math.sin(a) * rad,
+      a + (rng() - 0.5) * 0.6,
+      0.05 + rng() * 0.18,
+      rng() * Math.PI * 2,
+      crad, h, 0.45 + rng() * 0.3,
+      null, r * (0.05 + rng() * 0.3), 0.08 + rng() * 0.1,
+    );
   }
 
   const geo = new THREE.BufferGeometry();
@@ -573,16 +727,16 @@ function buildCrystalCluster(params: Record<string, number>): THREE.BufferGeomet
  * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
  * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
  * 'trapezoid'：平截四棱台（底大方、顶小方 ÷ 梯台）+ 顶面下沉槽
- * 'crystal'：能量耗尽原石晶体簇（向上六棱晶柱群，高矮混排）
+ * 'crystal'：能量耗尽原石晶体簇（多变体：主峰+环晶+细针+碎屑，倾斜+歪尖）
  *（《水泥高台上的装饰性实体.json》：侧面梯形 + 顶面一块向下凹且保持平面）
  */
-function buildSharedGeometry(type: string | undefined, params: Record<string, number>): THREE.BufferGeometry {
+function buildSharedGeometry(type: string | undefined, params: Record<string, number>, variant: number): THREE.BufferGeometry {
   const noise = params.noise ?? 0.35;
   if (type === 'trapezoid') {
     return buildTrapezoidPlinth(params);
   }
   if (type === 'crystal') {
-    return buildCrystalCluster(params);
+    return buildCrystalCluster(params, variant);
   }
   if (type === 'block') {
     const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
@@ -610,54 +764,77 @@ function buildSharedGeometry(type: string | undefined, params: Record<string, nu
   return geo;
 }
 
-function getSharedRock(key: string, type: string | undefined, params: Record<string, number>): { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial } {
-  let entry = SHARED.get(key);
-  if (entry) return entry;
-  const geo = buildSharedGeometry(type, params);
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(params.color ?? 0x8a7f74),
-    roughness: 0.95, metalness: 0, flatShading: true,
-  });
-  // ★ 标记共享：ChunkManager.disposeVisual 不得释放（否则每次重建 chunk 都把
-  //   全地图共用的几何/材质 dispose 掉再重传，造成持续抖动与 churn）
-  geo.userData.decorShared = true;
-  mat.userData.decorShared = true;
-  entry = { geo, mat };
-  SHARED.set(key, entry);
-  return entry;
+/** instanced 装饰变体数（每变体一套确定性簇形） */
+const INST_VARIANT_COUNT = 4;
+
+function getSharedRock(key: string, type: string | undefined, params: Record<string, number>, variant: number): { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial } {
+  // ★ 变体分桶：几何按 `${type}|v${variant}`（每变体一套簇形），材质按 prop key 共享
+  const geoKey = `${type ?? ''}|v${variant}`;
+  let geo = SHARED_GEO.get(geoKey);
+  if (!geo) {
+    geo = buildSharedGeometry(type, params, variant);
+    // ★ 标记共享：ChunkManager.disposeVisual 不得释放（否则每次重建 chunk 都把
+    //   全地图共用的几何/材质 dispose 掉再重传，造成持续抖动与 churn）
+    geo.userData.decorShared = true;
+    SHARED_GEO.set(geoKey, geo);
+  }
+  let mat = SHARED_MAT.get(key);
+  if (!mat) {
+    mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(params.color ?? 0x8a7f74),
+      roughness: 0.95, metalness: 0, flatShading: true,
+    });
+    mat.userData.decorShared = true;
+    SHARED_MAT.set(key, mat);
+  }
+  return { geo, mat };
 }
 
-/** 注册内置 instanced 渲染器（几何按 geometry.type 分发；后续几何类型在此扩展） */
+/** 注册内置 instanced 渲染器（几何按 geometry.type × variant 分发；后续几何类型在此扩展） */
 registerPropRenderer('instanced', {
   build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
     const params = def.geometry?.params ?? {};
-    const { geo, mat } = getSharedRock(`${def.key}|${def.geometry?.type ?? ''}`, def.geometry?.type, params);
-    const mesh = new THREE.InstancedMesh(geo, mat, instances.length);
+    const type = def.geometry?.type ?? '';
+    const matKey = `${def.key}|${type}`;
+    // ★ 按 variant 分桶成多个 InstancedMesh（每组占用自己的一套簇形几何）
+    const counts = new Map<number, number>();
+    for (const p of instances) {
+      const v = p.variant % INST_VARIANT_COUNT;
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
     const m = new THREE.Matrix4();
     const e = new THREE.Euler();
     const q = new THREE.Quaternion();
-    const v = new THREE.Vector3();
+    const vp = new THREE.Vector3();
     const s = new THREE.Vector3();
-    for (let i = 0; i < instances.length; i++) {
-      const p = instances[i];
-      e.set(0, p.rotY, 0);
-      q.setFromEuler(e);
-      v.set(p.x, p.y, p.z);
-      const yScale = 0.85 + 0.15 * (p.variant / 4);
-      s.set(p.scale, p.scale * yScale, p.scale);
-      m.compose(v, q, s);
-      mesh.setMatrixAt(i, m);
+    const group = new THREE.Group();
+    group.name = `props:${def.key}`;
+    for (const [variant, n] of counts) {
+      const { geo, mat } = getSharedRock(matKey, type, params, variant);
+      const mesh = new THREE.InstancedMesh(geo, mat, n);
+      mesh.name = `${def.key}|v${variant}`;
+      let idx = 0;
+      for (const p of instances) {
+        if (p.variant % INST_VARIANT_COUNT !== variant) continue;
+        e.set(0, p.rotY, 0);
+        q.setFromEuler(e);
+        vp.set(p.x, p.y, p.z);
+        const yScale = 0.85 + 0.15 * (p.variant / 4);
+        s.set(p.scale, p.scale * yScale, p.scale);
+        m.compose(vp, q, s);
+        mesh.setMatrixAt(idx++, m);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      group.add(mesh);
     }
-    mesh.instanceMatrix.needsUpdate = true;
-    return mesh;
+    return group;
   },
   dispose(): void {
     // ★ 仅此处（模式退出）释放共享几何/材质；chunk 重建不得释放
-    for (const e of SHARED.values()) {
-      e.geo.dispose();
-      e.mat.dispose();
-    }
-    SHARED.clear();
+    for (const geo of SHARED_GEO.values()) geo.dispose();
+    for (const mat of SHARED_MAT.values()) mat.dispose();
+    SHARED_GEO.clear();
+    SHARED_MAT.clear();
   },
 });
 
