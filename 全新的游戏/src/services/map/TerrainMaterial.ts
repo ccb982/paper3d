@@ -109,7 +109,7 @@ export const MATERIAL_SLOTS = 32;
  */
 const MAT_FN_INDEX: Record<string, number> = {
   dirt: 0, brick: 1, grass: 2, wood: 3, rock: 4, moss: 5,
-  water: 6, ice: 7, ash: 8, mud: 9, pit: 10, sand: 11, cement: 12,
+  water: 6, ice: 7, ash: 8, mud: 9, pit: 10, sand: 11, cement: 12, pebble: 13,
 };
 
 /** TileDef.visual.material.fnId → 材质函数索引（-1 = 无材质） */
@@ -225,104 +225,106 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(dL, dC, 0.0, reflect);
   }
 
-  // 砖石路面：真实错缝砌法（行高固定 + 每行半砖偏移 + 随机微错位）+ 灰缝 + 变体
+  // 砖石路面（2026-09-07 重写）：保留错缝砌法结构，但灰缝/抖动/变体/破损全收敛——
+  // 原变体 dH 0.4 + 灰缝 -0.30 是"条纹颜色过于突出"的元凶。缝浅、色偏弱、反差小。
   vec4 mat_brick(vec3 f, vec2 w, int id) {
-    float bw = 0.72, bh = 0.30;                                   // 砖宽/高（米）
+    float bw = 0.72, bh = 0.30;
     float row = floor(w.y / bh);
-    float roff = h21(vec2(row, 1.7)) * 0.9 + mod(row, 2.0) * 0.5; // 每行错位（半砖 + 随机）
+    float roff = h21(vec2(row, 1.7)) * 0.5 + mod(row, 2.0) * 0.5;
     float bx = w.x / bw + roff;
     float col = floor(bx);
     float lx = fract(bx), ly = fract(w.y / bh);
     vec2 bc = vec2(col, row);
-    float jit = (h21(bc + vec2(13.1, 0.0)) - 0.5) * matP(id, 1);
-    float variant = h21(bc + vec2(29.3, 0.0)) < matP(id, 2) ? 0.05 : 0.0;
-    float broken = h21(bc + vec2(41.7, 0.0)) < matP(id, 3) ? -0.09 : 0.0;
-    // 灰缝：砖右缘 + 上缘，缝缘柔化（不生硬）
+    float jit = (h21(bc + vec2(13.1, 0.0)) - 0.5) * matP(id, 1) * 0.40;    // ±0.02
+    float variant = (h21(bc + vec2(29.3, 0.0)) - 0.5) * matP(id, 2) * 0.10; // ±0.05 连续（非硬切）
+    float broken = h21(bc + vec2(41.7, 0.0)) < matP(id, 3) ? -0.05 : 0.0;
     float gw = matP(id, 0);
-    float groutX = smoothstep(1.0 - gw, 1.0 - gw * 0.4, lx);
-    float groutY = smoothstep(1.0 - gw, 1.0 - gw * 0.4, ly);
-    float grout = max(groutX, groutY) * -0.30;
-    float dL = jit + variant + broken + grout + f.y * 0.04;
-    float dH = variant * 0.4;                                     // 变体砖色相微偏黄
-    float reflect = 1.0 + jit * 0.30 + grout * 0.25 + f.y * 0.25 + broken * 0.4;
-    return vec4(dL, f.y * 0.003, dH, reflect);
+    float groutX = smoothstep(1.0 - gw, 1.0 - gw * 0.6, lx);
+    float groutY = smoothstep(1.0 - gw, 1.0 - gw * 0.6, ly);
+    float grout = max(groutX, groutY) * -0.12;
+    float dL = jit + variant + broken + grout + f.y * 0.015;
+    float dH = variant * 0.20;                 // 原 0.4 → 温和色相偏
+    float reflect = 1.0 + jit * 0.15 + grout * 0.12 + f.y * 0.08;
+    return vec4(dL, f.y * 0.002, dH, reflect);
   }
 
-  // 草地路面：大尺度明暗斑块 + 草簇明暗对 + 枯草斑（色相偏黄）+ 草叶中频
+  // 草地（2026-09-07 重写：低噪低对比，对齐沙土方法论）：纯色低饱和绿底 +
+  // 大尺度软明暗 + 中频草丛起伏 + 极弱颗粒；全部 vnoise 连续，无硬块无细粒爆炸。
   vec4 mat_grass(vec3 f, vec2 w, int id) {
-    float patchv = f.x * matP(id, 0) * 0.6;
-    float grain = f.z * matP(id, 3) * 1.5;
-    // 草簇密度网格（tuftScale 驱动网格频率）
-    float ts = 1.0 / max(matP(id, 2) * 7.0, 0.25);
-    vec2 c = floor(w * ts);
-    float tuftDark = h21(c + vec2(51.1, 0.0)) < matP(id, 1) ? -0.07 : 0.0;
-    float tuftHi = h21(c * 1.7 + vec2(9.9, 1.1)) < matP(id, 1) * 0.7 ? 0.05 : 0.0;
-    float blade = f.y * 0.06;
-    // 枯草斑：大尺度低频阈值 → 色相偏黄 + 降饱和
-    float dry = smoothstep(0.60, 0.85, fbm2(w * 0.13 + 77.0)) * 0.5;
-    float dL = patchv + grain + tuftDark + tuftHi + blade;
-    float dC = patchv * 0.2 + f.y * 0.006 - dry * 0.03;
-    float dH = dry * 0.03;
-    float reflect = 1.0 + patchv * 0.40 + (tuftHi - tuftDark) * 0.20 + blade * 0.10 - dry * 0.10;
+    float patchv = (vnoise2(w * 0.20) - 0.5) * 2.0 * matP(id, 0) * 0.28;      // 大斑软明暗
+    float tuft  = (vnoise2(w * 0.55 + 13.0) - 0.5) * 2.0 * matP(id, 1) * 0.12; // 草丛起伏
+    float grain = (vnoise2(w * 2.2 + 29.0) - 0.5) * 2.0 * matP(id, 3) * 0.045;// 草叶细颗（极少）
+    float dry   = vnoise2(w * 0.10 + 71.0);
+    float dL = patchv + tuft + grain;
+    float dC = f.y * 0.003 - patchv * 0.012;   // 弱色呼吸
+    float dH = patchv * 0.006 + dry * 0.008;   // 大斑/枯草微偏黄（温和）
+    float reflect = 1.0 + patchv * 0.12 + grain * 0.05;
     return vec4(dL, dC, dH, reflect);
   }
 
-  // 木板路面：横板条（板宽参数化）+ 板缝 + 端缝错位 + 方向性木纹（沿板拉伸）+ 钉点
+  // 木板路面（2026-09-07 重写）：保留横板条主题，去"硬"去"亮"——板缝 -0.30→-0.12、
+  // 端缝 -0.22→-0.10、木纹幅度减半、钉点压淡；木纹方向性保留但不再刺眼。
   vec4 mat_wood(vec3 f, vec2 w, int id) {
-    float pw = max(matP(id, 0), 0.15);                // 板宽（米）
+    float pw = max(matP(id, 0), 0.15);
     float row = floor(w.y / pw);
-    float ry = fract(w.y / pw);
-    // 端缝错位：每行端缝位置随机偏移（seamJitter 控制幅度）
+    float jit = (h21(vec2(row, 7.7)) - 0.5) * matP(id, 2) * 0.5;           // ±0.03
     float seamOff = h21(vec2(row, 3.3)) * matP(id, 1) * 8.0;
+    float ry = fract(w.y / pw);
+    float band = max(ry, 1.0 - ry);                        // 板两端 = 缝区
+    float seam = (1.0 - smoothstep(0.020, 0.040, band)) * -0.12;
     float seamX = abs(fract(w.x * 0.5 + seamOff) - 0.5);
-    float endSeam = smoothstep(0.020, 0.008, seamX) * -0.22;
-    float seam = (ry < 0.035 || ry > 0.965) ? -0.30 : 0.0;
-    float jit = (h21(vec2(row, 7.7)) - 0.5) * matP(id, 2);
-    // 木纹：沿板方向（x）拉伸的双频噪声（粗纹 + 细纹）
-    float grain = (vnoise2(vec2(w.x * 2.5, w.y * 60.0)) - 0.5) * matP(id, 3) * 0.8
-                + (vnoise2(vec2(w.x * 0.7, w.y * 22.0)) - 0.5) * matP(id, 3) * 0.5;
-    // 钉点：格内稀疏圆点
-    vec2 c = floor(w / 1.2);
+    float endSeam = (1.0 - smoothstep(0.006, 0.020, seamX)) * -0.10;
+    float grain = (vnoise2(vec2(w.x * 1.8, w.y * 50.0)) - 0.5) * matP(id, 3) * 0.32;
     float nail = 0.0;
+    vec2 c = floor(w / 1.2);
     if (h21(c + vec2(88.3, 4.4)) < matP(id, 4)) {
       vec2 l = fract(w / 1.2) - 0.5;
-      if (dot(l, l) < 0.004) nail = -0.30;
+      if (dot(l, l) < 0.004) nail = -0.12;
     }
     float dL = seam + endSeam + jit + grain + nail;
-    float dH = (h21(vec2(row, 7.7)) - 0.5) * 0.03;
-    float reflect = 1.0 + jit * 0.30 + grain * 0.16 + (seam + endSeam) * 0.08;
-    return vec4(dL, f.y * 0.004, dH, reflect);
+    float dH = (h21(vec2(row, 7.7)) - 0.5) * 0.012;
+    float reflect = 1.0 + grain * 0.10 + seam * 0.06 + endSeam * 0.06;
+    return vec4(dL, f.y * 0.002, dH, reflect);
   }
 
-  // 岩石：水平分层岩理（带状 + 扰动）+ 方向拉丝 + ridged 线状裂纹（不再是方格暗块）
+  // 岩石：大理石纹（2026-09-07：早前周期 sin 带与不规则噪声都"不够大理石"，
+  // 改经典脊线算法——多层异频 FBM 弯曲的等高脊线 = 白色大理石曲纹，
+  // 再由 streak 控制弯度、strata 控制密度；纯视觉无规则重复）。
   vec4 mat_rock(vec3 f, vec2 w, int id) {
-    float band = sin(w.y * 4.2 + fbm2(w * 0.5) * 3.0);
-    float strata = band * matP(id, 0) * 0.35;
-    float streak = (vnoise2(vec2(w.x * 0.3, w.y * 0.05)) - 0.5) * matP(id, 1) * 0.5;
+    // 大理石实底：低频暖色斑（石头基色起伏）
+    float base = (fbm2(w * 0.35 + 3.0) - 0.5) * 0.16;
+    // 曲纹场：两层异频 FBM 叠加出弯曲线路
+    float v = fbm2(w * 1.4 + 7.0) + fbm2(w * 2.8 + 13.0) * 0.6 + fbm2(w * 5.6 + 21.0) * 0.35;
+    // 脊线（1 - |2v-1| → 越接近整数0/1 越亮），再 smoothstep 收成细白纹
+    float ridge = 1.0 - abs(v * 2.0 - 1.0);
+    // strata 控密度（脊线阈值），streak 控弯度（噪声扰动幅度）
+    float bend = (vnoise2(w * 1.1 + 41.0) - 0.5) * matP(id, 1) * 0.5;
+    float vein = smoothstep(1.0 - matP(id, 0) * 0.5, 1.0, ridge + bend) * 0.16;
+    // 轻裂纹（rid acclaimed 线状暗纹）
     float rn = fbm2(w * 1.3 + 27.0);
     float crackLine = 1.0 - abs(rn * 2.0 - 1.0);
-    float crack = smoothstep(1.0 - matP(id, 2) * 0.4, 1.0, crackLine) * -0.12;
-    // ★ 微凹凸：grain 只加亮（不产生黑板颗粒）
-    float bump = max(f.z, 0.0) * matP(id, 3) * 0.6;
-    float dL = strata + streak + crack + bump;
-    float reflect = 1.0 + strata * 0.25 + streak * 0.20 + bump * 0.10 + crack * 0.5;
-    return vec4(dL, f.y * 0.002, 0.0, reflect);
+    float crack = smoothstep(1.0 - matP(id, 2) * 0.4, 1.0, crackLine) * -0.06;
+    // 微凹凸
+    float bump = max(f.z, 0.0) * matP(id, 3) * 0.5;
+    float dL = base + vein + crack + bump;
+    // 大理纹微偏冷（亮度纹路给一点冷白，底偏暖形成层次）
+    float dC = vein * 0.015;
+    float reflect = 1.0 + vein * 0.10 + bump * 0.08;
+    return vec4(dL, dC, 0.0, reflect);
   }
 
-  // 苔藓：多尺度苔斑覆盖（大斑块 + 中频破碎边缘）+ 绒毛边 + 滴水痕 + 石底颗粒
+  // 苔藓（2026-09-07 重写）：保留苔斑覆盖大块软边主题，幅度全收敛——覆盖压暗
+  // -0.13→-0.06、dC 0.06→0.025、dH 0.02→0.010、滴水痕 -0.35→-0.16、reflect 归一。
   vec4 mat_moss(vec3 f, vec2 w, int id) {
-    float covIn = f.x * 0.5 + 0.5 + f.y * 0.22;
-    float cover = smoothstep(matP(id, 0), matP(id, 0) + max(matP(id, 1), 0.02) + 0.10, covIn);
-    float edgeBand = smoothstep(0.0, 0.35, cover) * (1.0 - smoothstep(0.65, 1.0, cover));
-    float fuzz = f.z * 0.06 * edgeBand;
-    // 滴水痕：沿 y 拉伸的暗条纹
-    float drip = (vnoise2(vec2(w.x * 2.0, w.y * 0.25)) - 0.5) * matP(id, 2) * 0.35;
-    // 石底颗粒（非苔区）
-    float stoneG = (1.0 - cover) * max(f.z, 0.0) * matP(id, 3) * 0.10;
-    float dL = -cover * 0.13 + fuzz + drip + stoneG;
-    float dC = cover * 0.06;
-    float dH = cover * 0.02;                          // 苔区偏绿
-    float reflect = 1.0 + cover * 0.35 + fuzz * 0.12 + drip * 0.15;
+    float covIn = f.x * 0.5 + 0.5 + f.y * 0.10;
+    float cover = smoothstep(matP(id, 0), matP(id, 0) + max(matP(id, 1), 0.02) + 0.15, covIn);
+    float fuzz = f.z * 0.03 * cover;
+    float drip = (vnoise2(vec2(w.x * 1.5, w.y * 0.20)) - 0.5) * matP(id, 2) * 0.16;
+    float stone = (1.0 - cover) * f.z * matP(id, 3) * 0.05;
+    float dL = -cover * 0.06 + fuzz + drip + stone;
+    float dC = cover * 0.025;
+    float dH = cover * 0.010;                       // 苔区微偏绿（温和）
+    float reflect = 1.0 + cover * 0.12 + fuzz * 0.06 + drip * 0.08;
     return vec4(dL, dC, dH, reflect);
   }
 
@@ -345,52 +347,101 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(dL + shallow * 0.05 + glint * 0.06, dC, 0.0, reflect);
   }
 
-  // 冰面：ridged 结晶裂纹 + 冰层厚薄渐变 + 霜白斑 + 高频闪晶
-  vec4 mat_ice(vec3 f, vec2 w, int id) {
-    float rn = fbm2(w * 1.8);
-    float crackLine = 1.0 - abs(rn * 2.0 - 1.0);
-    float crack = smoothstep(1.0 - matP(id, 0) * 0.35, 1.0, crackLine) * -0.10;
-    float depthv = (fbm2(w * 0.35) - 0.5) * matP(id, 3) * 0.5;
-    float frost = smoothstep(0.62, 0.85, fbm2(w * 0.5 + 37.0)) * matP(id, 2) * 0.10;
-    float shimmer = step(0.992, h21(floor(w * 55.0))) * matP(id, 1) * 0.35;
-    float dL = crack + depthv + frost + shimmer;
-    float dC = -frost * 0.4;                          // 霜区降饱和
-    float reflect = 1.0 + crack * 0.8 + frost * 0.6 + shimmer * 1.2 + depthv * 0.2;
-    return vec4(dL, dC, 0.0, reflect);
-  }
-
-  // 灰烬地：风积条纹 + 聚堆斑块 + 高频灰粒 + 余烬点（uTime 呼吸闪烁）
-  vec4 mat_ash(vec3 f, vec2 w, int id) {
-    float drift = (vnoise2(vec2(w.x * 0.25, w.y * 1.1)) - 0.5) * matP(id, 3) * 0.8;
-    float clump = f.x * matP(id, 1) * 0.6;
-    float grain = (h21(floor(w * 90.0)) - 0.5) * matP(id, 0) * 1.6;
-    // 余烬点：稀疏格 + 独立频率/相位的呼吸脉动
-    float t = uTime * 0.8;
-    vec2 ec = floor(w * 1.6);
-    float emberP = h21(ec + vec2(71.3, 13.7));
-    float ember = 0.0;
-    if (emberP < matP(id, 2)) {
-      float pulse = 0.55 + 0.45 * sin(t * (2.0 + h21(ec) * 3.0) + h21(ec + 7.7) * 6.28);
-      ember = pulse * 0.22;
+  // 水底鹅卵石河床（2026-09-07 v4）：贴合真实河床——
+  // 小而密、磨圆的扁椭圆卵石相互紧贴（叠瓦状），随机朝向打破格感；
+  // 石色 = 暖灰棕多矿复合（黑/白/土黄/黄褐/红棕，无蓝无青）；
+  // 石缝细砂、被水浸润的湿润光泽。无动画、静态、reflect 归一 → 舒适。
+  vec4 mat_pebble(vec3 f, vec2 w, int id) {
+    float cs = 1.0 / max(matP(id, 0) * 140.0, 2.0);        // 卵石格尺度（米）（默认 ~8cm）
+    vec2 g = w / cs;
+    vec2 gid = floor(g);
+    vec2 lf = fract(g);
+    // 逐像素搜 3×3 邻格：找覆盖本像素的椭圆（旋转+缩放 → 单位圆判定）
+    float best = 1e9;
+    float seedh = 0.0;
+    for (int i = -1; i <= 1; i++) {
+      for (int j = -1; j <= 1; j++) {
+        vec2 gi = gid + vec2(float(i), float(j));
+        vec2 c = gi + (vec2(h21(gi + vec2(13.1, 7.7)), h21(gi + vec2(29.3, 17.1))) - 0.5) * matP(id, 1);
+        float r1 = h21(gi + vec2(7.1, 3.3));
+        float a = 0.50 + r1 * 0.16;                              // 长半轴（格单位）
+        float b = a * (0.55 + h21(gi + vec2(41.7, 7.7)) * 0.20); // 短半轴（扁圆 1.5~1.8:1）
+        float th = h21(gi + vec2(91.3, 5.5)) * 6.28318530718;    // 随机朝向
+        vec2 d = lf - (c - gid);
+        float cth = cos(th), sth = sin(th);
+        vec2 q = vec2(d.x * cth - d.y * sth, d.x * sth + d.y * cth);
+        float rr = (q.x / a) * (q.x / a) + (q.y / b) * (q.y / b);
+        if (rr < best) { best = rr; seedh = h21(gi + vec2(63.1, 13.7)); }
+      }
     }
-    float dL = drift + clump + grain + ember;
-    float dC = ember * 0.6;                           // 余烬提饱和
-    float dH = ember * 0.04;                          // 色相偏暖
-    float reflect = 1.0 + clump * 0.30 + grain * 0.10 + ember * 1.5 + drift * 0.15;
+    float stone = 1.0 - smoothstep(0.82, 1.04, best);   // 椭圆面掩码（软边）
+    float dome = max(0.0, 1.0 - sqrt(best) * 0.95);     // 石面微凸（湿润圆润感）
+    float sh = seedh;
+    float hueOff;
+    float toneMul;
+    if      (sh < 0.14) { hueOff = 0.00; toneMul = -0.9; }  // 深灰黑
+    else if (sh < 0.36) { hueOff = 0.02; toneMul =  0.2; }  // 土黄
+    else if (sh < 0.58) { hueOff = 0.05; toneMul =  0.5; }  // 黄褐
+    else if (sh < 0.76) { hueOff = 0.00; toneMul =  0.0; }  // 灰
+    else if (sh < 0.90) { hueOff = 0.03; toneMul =  0.9; }  // 红棕
+    else                { hueOff = 0.00; toneMul =  1.5; }  // 浅白石
+    float perTone = (seedh - 0.5) * matP(id, 2) * 2.0 + toneMul * matP(id, 2) * 0.5;
+    float chroma = (sh < 0.14 || sh >= 0.90) ? 0.006 : 0.020 + seedh * 0.032;
+    float grain = (h21(floor(w * 120.0)) - 0.5) * matP(id, 3) * 0.9;
+    float dL = stone * (dome * 0.09 + perTone) - (1.0 - stone) * 0.07 + grain;
+    float dC = stone * chroma;
+    float dH = hueOff;
+    float reflect = 1.0 + stone * (dome * 0.22 + perTone * 0.06);  // 湿润中心光泽
     return vec4(dL, dC, dH, reflect);
   }
 
-  // 泥沼地：低频水洼（暗+强反光）+ ridged 干裂纹 + 湿度渐变 + 泥粒
+  // 冰面（2026-09-07 重写）：保留"冰"的高反光辨识，但反差收敛——裂纹 -0.10→-0.05、
+  // 霜斑 dC -0.4→-0.12、硬闪点 step → 低频柔和微闪、reflect 归一给 ACES 留余量。
+  vec4 mat_ice(vec3 f, vec2 w, int id) {
+    float rn = fbm2(w * 1.6);
+    float crackL = 1.0 - abs(rn * 2.0 - 1.0);
+    float crack = smoothstep(1.0 - matP(id, 0) * 0.25, 1.0, crackL) * -0.05;
+    float depthv = (vnoise2(w * 0.30) - 0.5) * matP(id, 3) * 0.20;
+    float frost = smoothstep(0.65, 0.88, vnoise2(w * 0.35 + 37.0)) * matP(id, 2) * 0.06;
+    float shimmer = smoothstep(0.72, 0.95, vnoise2(w * 0.9)) * matP(id, 1) * 0.05;
+    float dL = crack + depthv + frost + shimmer;
+    float dC = -frost * 0.12;
+    float reflect = 1.0 + crack * 0.30 + frost * 0.22 + depthv * 0.10 + shimmer * 0.14;
+    return vec4(dL, dC, 0.0, reflect);
+  }
+
+  // 灰烬地（2026-09-07 重写）：风积条纹/聚堆/灰粒/余烬全收敛——原 grain ±0.08+、
+  // 余烬 reflect 1.5 是噪点与"过曝"来源；余烬仅保留低频呼吸暖点，reflect 归一。
+  vec4 mat_ash(vec3 f, vec2 w, int id) {
+    float drift = (vnoise2(vec2(w.x * 0.22, w.y * 0.9)) - 0.5) * matP(id, 3) * 0.35;
+    float clump = (vnoise2(w * 0.50 + 17.0) - 0.5) * matP(id, 1) * 0.30;
+    float grain = (h21(floor(w * 60.0)) - 0.5) * matP(id, 0) * 0.60;
+    float t = uTime * 0.6;
+    vec2 ec = floor(w * 2.0);
+    float ember = 0.0;
+    if (h21(ec + vec2(71.3, 13.7)) < matP(id, 2)) {
+      float pulse = 0.55 + 0.45 * sin(t * (2.0 + h21(ec) * 3.0) + h21(ec + 7.7) * 6.28318530718);
+      ember = pulse * 0.10;
+    }
+    float dL = drift + clump + grain + ember;
+    float dC = ember * 0.20;
+    float dH = ember * 0.012;                         // 余烬微暖（温和）
+    float reflect = 1.0 + clump * 0.12 + ember * 0.30 + drift * 0.06 + grain * 0.04;
+    return vec4(dL, dC, dH, reflect);
+  }
+
+  // 泥沼地（2026-09-07 重写）：水洼/裂纹/湿润全收敛——水洼暗 -0.10→-0.05、反光
+  // 0.55→0.25、裂纹幅度减半、颗粒减淡；湿面观感保留但"舒服"。
   vec4 mat_mud(vec3 f, vec2 w, int id) {
-    float pn = fbm2(w * 0.45 + 11.0);
+    float pn = vnoise2(w * 0.45 + 11.0);
     float puddle = smoothstep(1.0 - matP(id, 0), 1.05 - matP(id, 0) * 0.5, pn + 0.5);
     float rn = fbm2(w * 1.1 + 53.0);
-    float crackL = smoothstep(0.88, 0.98, 1.0 - abs(rn * 2.0 - 1.0)) * matP(id, 1) * -0.12;
-    float wet = f.x * matP(id, 2) * 0.15;
-    float grain = (h21(floor(w * 85.0)) - 0.5) * matP(id, 3) * 1.4;
-    float dL = -puddle * 0.10 + crackL + wet + grain;
-    float dC = puddle * 0.02;
-    float reflect = 1.0 + puddle * 0.55 - crackL * 0.4 + wet * 0.3 + grain * 0.08;
+    float crackL = smoothstep(0.88, 0.98, 1.0 - abs(rn * 2.0 - 1.0)) * matP(id, 1) * -0.06;
+    float wet = (vnoise2(w * 0.28) - 0.5) * matP(id, 2) * 0.10;
+    float grain = (h21(floor(w * 60.0)) - 0.5) * matP(id, 3) * 0.60;
+    float dL = -puddle * 0.05 + crackL + wet + grain;
+    float dC = puddle * 0.010;
+    float reflect = 1.0 + puddle * 0.25 + wet * 0.10 + grain * 0.04;
     return vec4(dL, dC, 0.0, reflect);
   }
 

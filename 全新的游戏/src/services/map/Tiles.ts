@@ -232,12 +232,12 @@ export const TILE_WATER = new TileDef(
   "水域",
   "liquid",
   {
-    baseHsl: { h: 0.58, s: 0.52, l: 0.3 }, // 可辨识深蓝
-    jitter: { h: 0, s: 0, l: 0 }, // 液体均质不抖
+    baseHsl: { h: 0.12, s: 0.06, l: 0.42 }, // 河床基调（2026-09-07：中性灰褐沙砾，多彩卵石色由 pebble 材质逐石调制）
+    jitter: { h: 0.003, s: 0.012, l: 0.022 }, // 河床逐地块轻微色偏（鹅卵石底，非液态均质）
     depression: true,
-    patches: false, // 水面无色阶斑块
-    borderLine: false, // 水面无内描边
-    material: { fnId: "water" }, // ★ 水面材质（流动波纹 + 闪粼，动画）
+    patches: false, // 河床无色阶斑块（自有鹅卵石纹理）
+    borderLine: false, // 水底无内描边
+    material: { fnId: "pebble" }, // ★ 水底鹅卵石河床（2026-09-07：水体模块未开工，临时静态占位；开工后换回真实水面）
   },
   {
     height: -0.5,
@@ -346,7 +346,7 @@ export const TILE_ROCK_PLATFORM = new TileDef(
     depression: false,
     borderLine: true,
     streaks: true,
-    material: { fnId: "rock", params: { strata: 0.24, cracks: 0.14 } }, // ★ 岩台（更粗粝）
+    material: { fnId: "rock", params: { strata: 0.06, streak: 0.06, cracks: 0.08 } }, // ★ 岩台（2026-09-07 收敛：原 strata 0.24/streak 0.12/cracks 0.14 的水平阴影条纹带过重，对齐被保留的基础岩台舒适度）
   },
   {
     height: 1.8,

@@ -153,6 +153,21 @@ registerTileMaterial({
   surface: { roughness: 0.12, specular: 0.40, fresnel: 0.45, animated: true },
 });
 
+/** 水底鹅卵石（2026-09-07 v4：水体模块未开工前的静态占位。水地块临时用，
+ *  等真实水面实施后再换回 water。小而密、磨圆的扁椭圆卵石紧贴叠瓦，
+ *  随机朝向；暖灰棕多矿石色（无蓝无青）；湿润光泽。无动画静态。 */
+registerTileMaterial({
+  fnId: 'pebble', label: '鹅卵石河床',
+  params: {
+    radius: 0.09,         // 卵石尺度（*140 → 格米数；越大石头越大；默认 ~8cm）
+    scatter: 0.5,         // 石头中心散布（越小越整齐紧密）
+    tone: 0.10,           // 每块石头明暗区分幅度（低）
+    grain: 0.03,          // 石面细磨砂
+  },
+  surface: { roughness: 0.75, specular: 0.25 }, // 湿润反光感（鹅卵石浸水微亮）
+  lodEmissive: 0.02,
+});
+
 /** 冰面：ridged 结晶裂纹 + 冰层厚薄 + 霜白斑 + 高频闪晶；低粗糙高镜面菲涅尔 */
 registerTileMaterial({
   fnId: 'ice', label: '冰面',
