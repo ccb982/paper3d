@@ -134,6 +134,9 @@ export class BulletRenderer {
     );
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.frustumCulled = false;
+    // ★ 画在水面之上（水面 renderOrder=10）：子弹不写深度，若不排到水后，
+    //   与水交叠的像素会被水整片盖掉 → "子弹被远处的水挡住"（深度测试伪影）
+    this.mesh.renderOrder = 20;
     scene.add(this.mesh);
 
     // 初始全部隐藏（scale 0）
