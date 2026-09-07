@@ -32,6 +32,7 @@ import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, type FaceGeometry } from './FaceBuild';
 import { computeTableGeometry, type PatchGeomResult } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
+import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh } from './WaterMaterial';
 import { WallMaterial } from './TerrainMaterial';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
@@ -608,12 +609,20 @@ export class ChunkManager {
   playBulletImpact(px: number, _py: number, pz: number): void {
     if (this.boss4D) return; // 四维空间不扣地形
     const R = 0.6; // §14.10 T2 轻量档（破坏小）
-    const byChunk = new Map<number, { cx: number; cz: number; cells: { lx: number; lz: number }[] }>();
+    const byChunk = new Map<number, {
+      cx: number; cz: number;
+      cells: { lx: number; lz: number }[];
+      dirty: Set<number>; // 世界 4m 块 key（水体增量边界探针失效用）
+    }>();
     for (const c of circleCells(px, pz, R, CHUNK_SIZE)) {
       const key = chunkKeyOf(c.cx, c.cz);
       let rec = byChunk.get(key);
-      if (!rec) { rec = { cx: c.cx, cz: c.cz, cells: [] }; byChunk.set(key, rec); }
+      if (!rec) {
+        rec = { cx: c.cx, cz: c.cz, cells: [], dirty: new Set() };
+        byChunk.set(key, rec);
+      }
       rec.cells.push({ lx: c.lx, lz: c.lz });
+      rec.dirty.add(worldBlockKey(c.cx * BLOCKS_PER_SIDE + (c.lx >> 2), c.cz * BLOCKS_PER_SIDE + (c.lz >> 2)));
     }
     let changedChunks = 0, cells = 0;
     for (const [, rec] of byChunk) {
@@ -621,7 +630,9 @@ export class ChunkManager {
       if (this.raster.digCells(rec.cx, rec.cz, rec.cells)) {
         changedChunks++;
         const key = chunkKeyOf(rec.cx, rec.cz);
-        if (this.meshes.has(key) || this.voidKeys.has(key)) this.patchRebuildChunk(rec.cx, rec.cz);
+        if (this.meshes.has(key) || this.voidKeys.has(key)) {
+          this.patchRebuildChunk(rec.cx, rec.cz, [...rec.dirty]);
+        }
       }
     }
     if (changedChunks > 0) {
@@ -639,7 +650,7 @@ export class ChunkManager {
    * 装配与同步路径共用 assembleTableChunk。纹理缓存缺失 → requestStandardBake 兜底
    * （其完成装配的几何在主线程内联生成，与无 Worker 回退同一函数，字节一致）。
    */
-  private patchRebuildChunk(cx: number, cz: number): void {
+  private patchRebuildChunk(cx: number, cz: number, dirty?: number[]): void {
     const key = chunkKeyOf(cx, cz);
     // ★ 并发合并：同 chunk 在途 → 等其完成后再重算一次（掩码只增，第二次即终态）
     const prev = this.patchRebuilds.get(key);
@@ -658,7 +669,7 @@ export class ChunkManager {
       const levels = new Uint8Array(levelsArr);
       try {
         const geom = await terrainPatch.compute(
-          { seed: this.raster.worldSeed, cx, cz, levels },
+          { seed: this.raster.worldSeed, cx, cz, levels, dirty },
           (ccx, ccz) => this.raster.getChunkData(ccx, ccz),
         );
         if (!geom) { this.requestStandardBake(cx, cz); return; } // Worker 失败 → 兜底

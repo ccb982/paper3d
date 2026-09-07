@@ -67,10 +67,11 @@ class TerrainPatchService {
 
   /**
    * 计算带补丁层数表的 chunk 几何。
+   * @param req.dirty 本次 dig 直接挖到的世界 4m 块 key 列表（水体重建增量）；缺省 = 全量
    * @returns 几何字节；Worker 失败 → resolve(null)，调用方走标准烘焙兜底。
    */
   compute(
-    req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined },
+    req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined; dirty?: number[] | null },
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<PatchGeomResult | null> {
     const { seed, cx, cz } = req;
@@ -91,7 +92,7 @@ class TerrainPatchService {
     const w = this.ensure();
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
-      return Promise.resolve(computeTableGeometry(readChunk, seed, cx, cz, req.levels));
+      return Promise.resolve(computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty));
     }
     const id = this.nextId++;
     return new Promise((resolve) => {
@@ -110,6 +111,7 @@ class TerrainPatchService {
           cx,
           cz,
           levels: req.levels ?? new Uint8Array(0),
+          dirty: req.dirty ?? null,
           chunks,
         },
         transfer,

@@ -15,7 +15,7 @@ import {
   buildLevelOverlay,
   type FaceGeometry,
 } from "./FaceBuild";
-import { buildWaterSurface, type WaterSurfaceRaw } from "./WaterSurface";
+import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
   refineChunkSource,
@@ -55,6 +55,8 @@ export type PatchGeomResult = PatchGeomRaw;
  * ★ 唯一几何生成函数（表驱动 + 补丁层数覆盖）：
  * readChunk 闭包 = 共享源数据（主线程 = RasterMap.getChunkData；Worker =
  * 传输拷贝）；levels = 中心 chunk 的层数表（§14.11；缺省 undefined = 无补丁）。
+ * dirty = 本次 dig 直接挖到的世界 4m 块 key 列表（缺省 = 全量求解水体重建；
+ * 供其中【连通分量 + 边界探针】做增量）。
  * 内部与 RasterMap.chunkSource 同一路径：makeChunkSource →
  * refineChunkSource(seed, cx, cz) → buildFaceTable → 双 builder。
  */
@@ -64,13 +66,17 @@ export function computeTableGeometry(
   cx: number,
   cz: number,
   levels?: Uint8Array,
+  dirty?: number[] | null,
 ): PatchGeomResult {
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz) : undefined;
   const table = buildFaceTable(src, cx, cz);
   const top = buildTopGeometry(table, src, patch);
   const wall = buildWallGeometry(table, src, patch);
-  const water = buildWaterSurface(table, src, patch);
+  const water = buildWaterSurface(
+    table, src, patch,
+    patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
+  );
   return {
     top: {
       vertices: top.vertices,

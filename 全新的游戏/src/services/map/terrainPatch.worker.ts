@@ -16,6 +16,8 @@ interface PatchChunkMsg {
   cx: number;
   cz: number;
   levels: Uint8Array;
+  /** 本次 dig 直接挖到的世界 4m 块 key（水体重建增量）；null = 全量 */
+  dirty: number[] | null;
   chunks: {
     ccx: number;
     ccz: number;
@@ -57,6 +59,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     msg.cx,
     msg.cz,
     levels,
+    msg.dirty ?? null,
   );
   ctx.postMessage(
     { type: "result", id: msg.id, ...out },
