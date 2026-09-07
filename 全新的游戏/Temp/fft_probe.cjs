@@ -80,12 +80,12 @@ function complexFFT(re, im, N, sign) {
 }
 var OCEAN_WIND = { x: 0.35, z: 0.94 };
 var DEFAULT_OCEAN_LAYERS = [
-  { tileSize: 96, N: 64, amp: 0.07, chop: 0.05 },
-  // L0 涌浪：长波 96m，面的大起伏
-  { tileSize: 40, N: 128, amp: 0.045, chop: 0.09 },
-  // L1 主波：中波，起伏+波峰
-  { tileSize: 14, N: 128, amp: 8e-3, chop: 0.04 }
-  // L2 细节：弱化（防抖动，仅片元微扰）
+  { tileSize: 16, N: 64, amp: 0.1, chop: 0.09 },
+  // L0 涌浪：水池内半个波长
+  { tileSize: 6, N: 128, amp: 0.05, chop: 0.12 },
+  // L1 主波
+  { tileSize: 1.5, N: 128, amp: 0.015, chop: 0.1 }
+  // L2 细节（片元为主）
 ];
 function defaultOceanParams(seed) {
   return {

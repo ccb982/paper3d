@@ -85,13 +85,19 @@ export interface OceanBakeParams {
 }
 
 export const OCEAN_WIND = { x: 0.35, z: 0.94 }; // 默认风向（世界）
-// ★ 幅度标定：游戏内水体（池/坑/小湖）需要"面的起伏"而非高频抖动。
-//   起伏 = 长波长（一个水池内仅 1~2 波峰）∧ 低滚动速度（缓慢翻涌）∧ 可见幅度。
-//   抖动 = 短波长高频搅动（L2 过量）∧ 快滚动。速度/周期在材质 uniform 里再压。
+// ★ 幅度/波长标定：游戏水体是"小池/坑/湖"（数米~数十米），不是大海。
+//   参考 natural-disasters：位移幅度自洽物理标定（这里的 RMS→米），但波长必须与
+//   水体尺度可比——否则 L0(96m)/L1(40m) 在小水池内连一个完整波长都没有，
+//   水面读作"平面+抖动"而非"起伏"。故层尺度压缩到水池尺度：
+//     L0 涌浪 16m：一个 8m 池正好半个波长 → 缓坡可见的"面起伏"
+//     L1 主波  6m：波峰波谷骨架
+//     L2 细节 1.5m：法线/焦散/泡沫微结构（几何贡献极小）
+//   顶点起伏 = L0+L1（hRms≈0.112m 可见）；tile 平移慢速滚动 → 涌浪感；
+//   高频细节主要活在片元，防抖动（几何权重 uAmpScale/uChopScale 可再压）。
 export const DEFAULT_OCEAN_LAYERS: OceanLayerCfg[] = [
-  { tileSize: 96, N: 64, amp: 0.07, chop: 0.05 },   // L0 涌浪：长波 96m，面的大起伏
-  { tileSize: 40, N: 128, amp: 0.045, chop: 0.09 }, // L1 主波：中波，起伏+波峰
-  { tileSize: 14, N: 128, amp: 0.008, chop: 0.04 }, // L2 细节：弱化（防抖动，仅片元微扰）
+  { tileSize: 16, N: 64, amp: 0.10, chop: 0.09 },  // L0 涌浪：水池内半个波长
+  { tileSize: 6, N: 128, amp: 0.05, chop: 0.12 },  // L1 主波
+  { tileSize: 1.5, N: 128, amp: 0.015, chop: 0.10 }, // L2 细节（片元为主）
 ];
 
 export function defaultOceanParams(seed: number): OceanBakeParams {

@@ -38,7 +38,8 @@ function halfFloatTexture(
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true; // 供片元 footprint→粗糙度；Repeat 包装兼容 WebGL2
   tex.colorSpace = THREE.NoColorSpace;
   tex.needsUpdate = true;
   return tex;
@@ -77,9 +78,16 @@ function bakeOceanTextures(
     return halfFloatTexture(f, N, N, THREE.RGBAFormat);
   }
   function packN(t: OceanTile, N: number): THREE.DataTexture {
-    const f = new Float32Array(N * N * 3);
-    f.set(t.n, 0);
-    return halfFloatTexture(f, N, N, THREE.RGBFormat);
+    // ★ RGBA（勿用 RGB）：WebGL2 下 RGB16F 作为生成 mipmap 的浮点源不保证可渲染，
+    //   会导致整张法线纹理 mipmap 生成失败 → 片元全灭。a 通道填 1 占位。
+    const f = new Float32Array(N * N * 4);
+    for (let i = 0; i < N * N; i++) {
+      f[i * 4] = t.n[i * 3];
+      f[i * 4 + 1] = t.n[i * 3 + 1];
+      f[i * 4 + 2] = t.n[i * 3 + 2];
+      f[i * 4 + 3] = 1.0;
+    }
+    return halfFloatTexture(f, N, N, THREE.RGBAFormat);
   }
 }
 
@@ -145,6 +153,13 @@ const WATER_VERT = /* glsl */ `
     vec4 b = texture2D(uHD1B, uv);
     return mix(a, b, w);
   }
+  // L2：细节波（顶点级小涟漪，让波浪层次更可见）
+  vec4 hdLayer2(vec2 uv, float t) {
+    float w = triW(t, uTriPeriod.z);
+    vec4 a = texture2D(uHD2A, uv);
+    vec4 b = texture2D(uHD2B, uv);
+    return mix(a, b, w);
+  }
 
   void main() {
     vUv = uv;
@@ -171,13 +186,15 @@ const WATER_VERT = /* glsl */ `
       //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
       vec2 uv0 = wp.xz / uLayerScale.x + uScrollDir * (uTime * uSpeed.x);
       vec2 uv1 = wp.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
+      vec2 uv2 = wp.xz / uLayerScale.z + uScrollDir * (uTime * uSpeed.z);
       vec4 a = hdLayer0(uv0, uTime);
       vec4 b = hdLayer1(uv1, uTime);
-      float h = a.r * uAmp.x + b.r * uAmp.y;
-      vec2 disp = a.gb * uChop.x + b.gb * uChop.y;
+      vec4 c = hdLayer2(uv2, uTime);
+      float h = a.r * uAmp.x * 0.5 + b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.05;
+      vec2 disp = a.gb * uChop.x + b.gb * uChop.y + c.gb * uChop.z * 0.5;
       wp.x += disp.x * uChopScale;
       wp.z += disp.y * uChopScale;
-      wp.y += h * uAmpScale;
+      wp.y += h * uAmpScale * 4.0;
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
@@ -207,6 +224,8 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uAmp;
   uniform vec3 uLayerAmp; // 各层已烘焙 RMS 幅度（片元相对归一用）
   uniform vec3 uTriPeriod;
+  uniform vec3 uTexelCount; // 各层纹素数（LOD/粗糙度用）
+  uniform float uWindSpeed; // 风速 m/s（Cox-Munk 粗糙度、白帽 onset 用）
 
   uniform sampler2D uHD0A; uniform sampler2D uHD0B;
   uniform sampler2D uHD1A; uniform sampler2D uHD1B;
@@ -238,6 +257,32 @@ const WATER_FRAG = /* glsl */ `
     return normalize(mix(na, nb, w));
   }
 
+  // ---- Cox-Munk 微面（项目同款）----
+  float ggxD(float NoH, float a) {
+    float a2 = a * a;
+    return a2 / (3.14159265 * pow(NoH * NoH * (a2 - 1.0) + 1.0, 2.0));
+  }
+  float smithGGXCorrelated(float NoV, float NoL, float a) {
+    float a2 = a * a;
+    float gv = NoL * sqrt(NoV * NoV * (1.0 - a2) + a2);
+    float gl = NoV * sqrt(NoL * NoL * (1.0 - a2) + a2);
+    return 0.5 / max(gv + gl, 1e-5);
+  }
+
+  // 泡沫风条纹噪声（hash → 双八度值噪声，风方向拉长）
+  float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash12(i), b = hash12(i + vec2(1.0, 0.0));
+    float c = hash12(i + vec2(0.0, 1.0)), d = hash12(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+
   void main() {
     vec3 N;
     float isFall = step(0.5, -vDeep); // deep<0：水帘(坑 -1)/幕布(-2)/斜边(-3)
@@ -265,7 +310,7 @@ const WATER_FRAG = /* glsl */ `
       float jb = (1.0 - step(0.5, -vDeep - 1.5)) * (1.0 - smoothstep(0.0, 0.20, t));
       col = mix(vec3(0.40, 0.72, 0.68) * (uAmbientColor * 0.95 + uSunColor * 0.10 * uSunDay), col, jb);
     } else {
-      // ---- ★ 水面：FFT 场 + 复杂光照 ----
+      // ---- ★ 水面：FFT 场 + 参考 natural-disasters 渲染思想 ----
       vec2 uv0 = vWorld.xz / uLayerScale.x + uScrollDir * (uTime * uSpeed.x);
       vec2 uv1 = vWorld.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
       vec2 uv2 = vWorld.xz / uLayerScale.z + uScrollDir * (uTime * uSpeed.z);
@@ -274,63 +319,108 @@ const WATER_FRAG = /* glsl */ `
       float w1 = triW(uTime, uTriPeriod.y);
       float w2 = triW(uTime, uTriPeriod.z);
 
-      vec3 n0 = norm(uN0A, uN0B, uv0, w0);
-      vec3 n1 = norm(uN1A, uN1B, uv1, w1);
-      vec3 n2 = norm(uN2A, uN2B, uv2, w2);
-      N = normalize(n0 * 1.0 + n1 * 1.25 + n2 * 1.6);
+      // 像素足印（米）：决定哪些细节进 mss 粗糙度、哪些还能解析
+      vec2 dq = dFdx(vWorld.xz);
+      vec2 dqv = dFdy(vWorld.xz);
+      float fpA = length(dq), fpB = length(dqv);
+      float fpShade = sqrt(max(fpA * fpB, 1e-5));   // 各向同性等效足印
 
-      // 高度（泡沫/透亮用）
-      float h1 = mix(texture2D(uHD1A, uv1).r, texture2D(uHD1B, uv1).r, w1);
-      float h2 = mix(texture2D(uHD2A, uv2).r, texture2D(uHD2B, uv2).r, w2);
-      float d2 = mix(texture2D(uHD2A, uv2).g, texture2D(uHD2B, uv2).g, w2); // 细节位移（微调法线抖动）
+      // --- 法线：多尺度斜率叠加（几何法线包底，保持"面"的连续性）---
+      vec3 n0 = norm(uN0A, uN0B, uv0, w0);   // L0 涌浪：大尺度斜率
+      vec3 n1 = norm(uN1A, uN1B, uv1, w1);   // L1 主波
+      vec3 n2 = norm(uN2A, uN2B, uv2, w2);   // L2 细节
+      // 微面放大：位移幅度小 → 烘焙法线退接近 (0,1,0)，放大水平分量让波面明暗随波浪变化
+      vec3 N3raw = n0 + n1 + n2;
+      vec3 N3 = normalize(vec3(N3raw.x * 3.0, N3raw.y, N3raw.z * 3.0));
+      // footprint 越大 → 保留几何法线越多（远处不抖、不花）
+      float geoW = clamp(fpShade * 0.5, 0.0, 1.0);
+      N = normalize(mix(N3, vNormal, geoW * 0.30));
 
-      N = normalize(N + vec3(d2 * 0.06, 0.0, 0.0));
+      // --- 粗糙度（Cox-Munk）：每个 cascade 丢失的细节 → mss ---
+      vec3 texel = uLayerScale / uTexelCount;
+      vec3 lod = log2(max(vec3(fpShade) / texel, vec3(1.0)));
+      float mssTotal = 0.003 + 0.00512 * max(uWindSpeed, 0.5);
+      vec3 share = vec3(0.06, 0.30, 0.64);
+      float lost = share.x * clamp(lod.x / 6.0, 0.0, 1.0)
+                 + share.y * clamp(lod.y / 6.0, 0.0, 1.0)
+                 + share.z * clamp(lod.z / 6.0, 0.0, 1.0);
+      float mssUnres = mssTotal * lost + 0.0009;
+      float mssA = clamp(sqrt(2.0 * mssUnres), 0.012, 0.62);
+      float roughness = clamp(sqrt(mssA), 0.02, 0.86);
+
+      // 高度（泡沫/透亮用）“相对自身 RMS 归一”
+      float h1x = mix(texture2D(uHD1A, uv1).r, texture2D(uHD1B, uv1).r, w1);
+      float h2x = mix(texture2D(uHD2A, uv2).r, texture2D(uHD2B, uv2).r, w2);
+      float h1n = h1x / max(uLayerAmp.y, 1e-4);
+      float h2n = h2x / max(uLayerAmp.z, 1e-4);
 
       vec3 L = normalize(uSunDir);
-      float NdotV = clamp(dot(N, V), 0.0, 1.0);
-      float F = 0.03 + 0.97 * pow(1.0 - NdotV, 5.0); // 菲涅尔（Schlick）
+      float NoV = max(dot(N, V), 1e-4);
+      float F = 0.03 + 0.97 * pow(1.0 - NoV, 5.0); // Schlick 菲涅尔
 
-      // 深度（水色主体）
+      // 深度水色（增强渲染：浅水亮青湛、深水蓝，层次分明）
       float depthT = clamp(vDeep / uMaxDeep, 0.0, 1.0);
-      vec3 shallow = vec3(0.36, 0.66, 0.62);
-      vec3 deepc = vec3(0.04, 0.13, 0.17);
-      vec3 base = mix(shallow, deepc, depthT);
+      vec3 shallow = vec3(0.28, 0.62, 0.60);
+      vec3 deepc = vec3(0.05, 0.20, 0.30);
+      vec3 body = mix(shallow, deepc, depthT);
 
-      // 焦散（折射光汇聚高亮，太阳视角度相关）
-      float cau = pow(max(dot(n2, L), 0.0), 4.0);
-      vec3 refractBase = base * (uAmbientColor * 0.95 + uSunColor * (0.08 + cau * 0.10) * uSunDay);
+      // 焦散（折射光汇聚）+ 基光：波峰受光更亮、波谷更暗 → 波浪明暗层次明显
+      float cau = pow(max(dot(n2, L), 0.0), 3.0) * 0.5 + pow(max(dot(n1, L), 0.0), 3.0) * 0.5;
+      vec3 refracted = body * (uAmbientColor * 1.25 + uSunColor * (0.28 + cau * 0.30) * uSunDay);
 
-      // 泡沫：岸浅泡沫 + 波峰白沫（相对自身 RMS：~2.5× 峰值触发，与幅度无关）
-      float shore = 1.0 - smoothstep(0.0, 0.35, vDeep);
-      float h1n = h1 / max(uLayerAmp.y, 1e-4);
-      float h2n = h2 / max(uLayerAmp.z, 1e-4);
-      float crest = smoothstep(1.0, 2.2, h2n) * smoothstep(1.2, 2.6, h1n);
-      float foam = max(shore, crest);
-      refractBase = mix(refractBase, refractBase * 1.35 + vec3(0.32), foam * 0.35);
+      // --- 背光透射（参考项目）：波峰薄水逆光发光；增强 → 让水体边缘发亮、有体积感 ---
+      float waveH = clamp(h1n * 0.25 + h2n * 0.55, 0.0, 1.6);
+      float backlit = pow(clamp(dot(L, -V), 0.0, 1.0), 3.0)
+                    * pow(0.5 - 0.5 * dot(N, L), 2.5);
+      refracted += vec3(0.14, 0.62, 0.52) * uSunColor * backlit * waveH * 1.4 * uSunDay;
 
-      // 程序化天空反演（垂直分层 + 太阳方位增暖）
-      vec3 R = reflect(-V, N);
-      float ry = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-      vec3 zenith = vec3(0.05, 0.10, 0.18);
-      vec3 horiz = vec3(0.52, 0.66, 0.72);
-      vec3 sky = mix(horiz, zenith, pow(ry, 0.55));
-      vec3 sunDisk = uSunColor * max(pow(max(dot(R, L), 0.0), 400.0) * 1.2, 0.0) * uSunDay;
-      sky = sky * (uAmbientColor * 1.05 + uSunColor * 0.28 * uSunDay) + sunDisk * 0.30;
+      // --- 泡沫（克制：只在真正浪足处给一点白沫，漂浮白点来自波光而非泡沫）---
+      float shore = 1.0 - smoothstep(0.0, 0.5, vDeep);          // 岸浅
+      float waveFoam = smoothstep(1.0, 1.9, h1n) * smoothstep(0.9, 1.7, h2n);
+      float foamMask = waveFoam * (0.30 + 0.40 * uSunDay);
+      vec2 wind = uScrollDir;
+      vec2 qs = mat2(wind.x, -wind.y, wind.y, wind.x) * vWorld.xz * 0.12;
+      float windy = vnoise(qs + vec2(0.0, -uTime * 0.9)) * 0.55
+                  + vnoise(qs * vec2(4.0, 4.0) * 3.0 + vec2(uTime * 1.3, 0.0)) * 0.40;
+      float onset = mix(0.55, 0.40, clamp(uWindSpeed / 8.0, 0.0, 1.0));
+      float carved = foamMask * (0.10 + windy * 1.0);
+      float foam = smoothstep(onset, onset + 0.15, carved);
+      foam *= 0.4 + 0.6 * smoothstep(0.35, 2.2, fpShade);       // 近处少量可见
+      refracted = mix(refracted, vec3(0.93, 0.96, 0.985) * (uAmbientColor * 1.1 + uSunColor * 0.45 * uSunDay), foam * 0.35);
 
-      // 反射强度：菲涅尔为主 + 深度修正（岸浅水反射弱，透底为主）
-      float reflMix = F * (0.35 + 0.65 * depthT);
-      col = mix(refractBase, sky, reflMix);
+      // --- 程序化天空反演（含太阳盘；粗粗糙度越大反射越糊）---
+      vec3 Rf = reflect(-V, N);
+      float ry = clamp(Rf.y * 0.5 + 0.5, 0.0, 1.0);
+      vec3 zenith = vec3(0.04, 0.09, 0.16);
+      vec3 horiz = vec3(0.60, 0.72, 0.78);
+      float blurR = mix(pow(ry, 0.55), smoothstep(0.0, 1.0, ry), clamp(roughness, 0.0, 1.0));
+      vec3 sky = mix(horiz, zenith, blurR);
+      vec3 sunDisk = uSunColor * max(pow(max(dot(Rf, L), 0.0), 400.0) * 1.2, 0.0) * uSunDay;
+      sky = sky * (uAmbientColor * 1.15 + uSunColor * 0.55 * uSunDay) + sunDisk * 0.40;
 
-      // 太阳高光（Blinn）+ 波光粼粼（高频法线）
+      // 菲涅尔反射占比：正视低、掠射高，配合微面法线 → 波光随着波浪闪烁
+      float reflMix = clamp(F * (0.50 - 0.25 * depthT), 0.0, 1.0);
+      vec3 color = mix(refracted, sky, reflMix);
+
+      // --- 太阳高光：GGX 微面（Cox-Munk α）；只在波面朝向太阳处闪现 →
+      //    波浪轮廓清晰（泡沫削去后，这层波光是波浪可见度的主力）---
       vec3 H = normalize(L + V);
-      float specPow = pow(max(dot(N, H), 0.0), 140.0);
-      float glit = pow(max(dot(N, H), 0.0), 512.0);
-      col += uSunColor * (specPow * (0.22 + 0.4 * F) + glit * 0.05) * uSunDay;
+      float NoH = max(dot(N, H), 0.0);
+      float VoH = max(dot(V, H), 1e-4);
+      float NoL = max(dot(N, L), 1e-4);
+      float D = ggxD(NoH, mssA);
+      float Vis = smithGGXCorrelated(NoV, NoL, mssA);
+      float Fs = 0.02 + 0.98 * pow(1.0 - VoH, 5.0);
+      float spec = D * Vis * Fs * NoL;
+      color += uSunColor * spec * 8.0 * uSunDay;
+      // 波浪朝向变化 → 波光斑块随动 → 波浪可见（对比泡沫的"漂浮白点"）
+      color += uSunColor * spec * spec * 3.0 * uSunDay * pow(max(dot(n1, L), 0.0), 2.0);
 
-      // 岸线淡色透底（浅处提亮）
-      col = mix(col, col * 1.12 + vec3(0.04, 0.10, 0.08), shore * 0.5);
+      // 岸线淡色透底
+      color = mix(color, color * 1.12 + vec3(0.04, 0.10, 0.08), shore * 0.5);
 
-      alpha = clamp(mix(0.5, 0.85, depthT) + foam * 0.16, 0.0, 0.96);
+      col = color;
+      alpha = clamp(mix(0.72, 0.92, depthT) + foam * 0.18, 0.0, 0.96);
       N = normalize(vNormal);
     }
 
@@ -356,12 +446,14 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         // ---- FFT 海况场 ----
         uHasOcean: { value: 1 },
         uScrollDir: { value: new THREE.Vector2(0.35, 0.94).normalize() },
-        uLayerScale: { value: new THREE.Vector3(96, 40, 14) },
+        uLayerScale: { value: new THREE.Vector3(16, 6, 1.5) },
         uSpeed: { value: new THREE.Vector3(0.14, 0.28, 0.5) },
         uAmp: { value: new THREE.Vector3(1.0, 1.0, 1.0) },
         uLayerAmp: { value: new THREE.Vector3(DEFAULT_OCEAN_LAYERS[0].amp, DEFAULT_OCEAN_LAYERS[1].amp, DEFAULT_OCEAN_LAYERS[2].amp) },
         uChop: { value: new THREE.Vector3(1.0, 1.0, 1.0) },
-        uTriPeriod: { value: new THREE.Vector3(14.0, 10.0, 7.0) },
+        uTriPeriod: { value: new THREE.Vector3(11.0, 8.0, 5.0) },
+        uTexelCount: { value: new THREE.Vector3(64, 128, 128) },
+        uWindSpeed: { value: 5.0 },
         uHD0A: { value: tex.hdA[0] }, uHD0B: { value: tex.hdB[0] },
         uHD1A: { value: tex.hdA[1] }, uHD1B: { value: tex.hdB[1] },
         uHD2A: { value: tex.hdA[2] }, uHD2B: { value: tex.hdB[2] },

@@ -194,7 +194,8 @@ export class ChunkManager {
   setStyle(boss4D: boolean): void {
     if (this.boss4D === boss4D) return;
     this.boss4D = boss4D;
-    // boss4D 小水体 FFT 幅度过大 → 降到 0.15（坑水帘走 waterWaveY 不受影响）
+    // ★ boss4D 小水体 FFT 幅度略降（坑水帘走 waterWaveY 不受影响）；
+    //   标准世界保持 1.0（L0 涌浪 hRms 0.10m，水池内半个波长——"面的起伏"可见）
     sharedWaterMaterial.uniforms.uAmpScale.value = boss4D ? 0.6 : 1.0;
     sharedWaterMaterial.uniforms.uChopScale.value = boss4D ? 0.6 : 1.0;
     // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
