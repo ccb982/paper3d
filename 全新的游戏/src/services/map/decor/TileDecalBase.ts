@@ -134,9 +134,13 @@ registerDecalPattern('speckle', (out, S, _ox, _oz, d, seed, _params) => {
   const count = 5 + d.variant * 2;
   const dotR = Math.max(1, Math.floor(d.scale / 60 * S * 0.10));
   const darken = 0.86 + d.variant * 0.02;
+  // ★ 点排列哈希掺入每实例随机偏移 ox/oy（2026-09-07）：ox/oy 已按世界格
+  //   随机 → 同 variant 的印章在不同位置不再逐点一致（配合 planChunkDecals
+  //   世界坐标修复，地面斑点整体去"重复感"）
+  const hx = Math.floor(d.ox * 65536), hy = Math.floor(d.oy * 65536);
   for (let k = 0; k < count; k++) {
-    const dx = (hash2(k, d.variant, seed + 9701) - 0.5) * 2 * pr;
-    const dy = (hash2(k, d.variant, seed + 9702) - 0.5) * 2 * pr;
+    const dx = (hash2(k * 31 + hx, d.variant + hy, seed + 9701) - 0.5) * 2 * pr;
+    const dy = (hash2(k * 17 + hy, d.variant + hx, seed + 9702) - 0.5) * 2 * pr;
     // ★ 点中心必须取整到像素坐标（小数索引写入 Uint8ClampedArray 会静默落空）
     const ix = Math.floor(pcx + dx), iy = Math.floor(pcz + dy);
     for (let j = Math.max(0, iy - dotR); j <= Math.min(S - 1, iy + dotR); j++) {
@@ -257,8 +261,14 @@ export function planChunkDecals(ctx: DecalPlanContext): PlannedDecal[] {
 
   for (let cy = 0; cy < DECAL_GRID && out.length < DECAL_BUDGET; cy++) {
     for (let cx = 0; cx < DECAL_GRID && out.length < DECAL_BUDGET; cx++) {
+      // ★ 世界格坐标（2026-09-07 与装饰实体同步修复）：此前全用 chunk 局部格
+      //   坐标 (cx,cy) 做 hash2 参数 → 每个 chunk 内同格序判定处处相同 → 地面
+      //   贴图全图同一排列无限重复。掺入 chunk 世界坐标后每 chunk 布局独立
+      //   （同 seed 同 chunk 仍确定性复现）。
+      const gxc = ctx.cx * DECAL_GRID + cx;
+      const gyc = ctx.cz * DECAL_GRID + cy;
       // 每 cell 一票：presence 判定（出现率只由 density 总和决定）
-      const r = hash2(cx * 3 + 1, cy * 3 + 2, ctx.seed + 9502);
+      const r = hash2(gxc * 3 + 1, gyc * 3 + 2, ctx.seed + 9502);
       if (r >= presenceProb) continue;
 
        // 地块/角色过滤（cell 中心地块；liquid/pit 不在 hostRole 中 → 天然跳过）
@@ -273,7 +283,7 @@ export function planChunkDecals(ctx: DecalPlanContext): PlannedDecal[] {
        // ★ 加权抽贴图（只在角色/地块命中的候选中抽，避免抽到本格不支持的贴图）
        let etotal = 0;
        for (const d of eligible) etotal += weights.get(d.key)!;
-       let rr = hash2(cx, cy, ctx.seed + 9503) * etotal;
+       let rr = hash2(gxc, gyc, ctx.seed + 9503) * etotal;
        let pick = eligible[0];
        for (const d of eligible) {
          rr -= weights.get(d.key)!;
@@ -283,10 +293,10 @@ export function planChunkDecals(ctx: DecalPlanContext): PlannedDecal[] {
       out.push({
         decalKey: pick.key,
         cellX: cx, cellY: cy,
-        ox: hash2(cx * 5 + 3, cy * 5 + 4, ctx.seed + 9504),
-        oy: hash2(cx * 5 + 4, cy * 5 + 3, ctx.seed + 9505),
-        scale: sMin + hash2(cx, cy, ctx.seed + 9506) * (sMax - sMin),
-        variant: Math.floor(hash2(cx, cy, ctx.seed + 9507) * 8),
+        ox: hash2(gxc * 5 + 3, gyc * 5 + 4, ctx.seed + 9504),
+        oy: hash2(gxc * 5 + 4, gyc * 5 + 3, ctx.seed + 9505),
+        scale: sMin + hash2(gxc, gyc, ctx.seed + 9506) * (sMax - sMin),
+        variant: Math.floor(hash2(gxc, gyc, ctx.seed + 9507) * 8),
       });
     }
   }

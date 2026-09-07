@@ -60,7 +60,11 @@ export const WALL_BRIGHTNESS = 2.9;
  *  墙面法线水平，上方来光几乎不受直射（N·L≈0）→ 光照公式的直射项对竖直
  *  面天然失效。夜晚用材质本色直接发光保底可见，白天 0（光照充足不需要）。
  *  ★ 0.16 实测仍极黑，拉夸张档（2026-09-01 用户反馈；水体侧壁另有 id 削弱）。 */
-export const WALL_EMISSIVE = 0.55;
+export const WALL_EMISSIVE = 0.15;
+// ★ 侧壁夜晚直射保底（2026-09-07 用户：夜间地块侧壁非常亮）——原 0.85
+//   月光全开级 + 自发光 0.55 双保险把壁面顶到"接近白天"。降为月光级 0.30，
+//   壁面夜晚呈月下暗灰（防纯黑初衷保留，配合自发光 0.15 兜底）。
+export const WALL_NIGHT_DIRECT_FLOOR = 0.30;
 
 /** ★ LOD 内实时太阳方向调制（2026-09-05 用户架构决策）：
  *  阴影烘焙一次（静态 BAKE_SUN 方向），近距离实时叠加"方向重映射"——
@@ -908,13 +912,15 @@ const WALL_FRAG = /* glsl */ `
 
     // ★ 直射保底：墙面是竖直面，法线水平不受直射（N·L≈0）——若所属地块
     //   在烘焙阴影区（lm.r≈0），整面墙只剩 ambient×ao ≈ 纯黑。直射项按
-    //   昼夜各钳下限：夜晚 ≥0.85（月光全开级别，配合 NIGHT_SUN 冷蓝色温），
-    //   白天 ≥${WALL_DIRECT_DAY_FLOOR.toFixed(2)}（坡脚/影区墙保亮，
-    //   见 WALL_DIRECT_DAY_FLOOR 追注释；2026-09-05 修坡面侧壁偏暗）。
+    //   昼夜各钳下限：夜晚 ≥${WALL_NIGHT_DIRECT_FLOOR.toFixed(2)}（月光级；
+    //   原 0.85 月光全开级别把夜晚壁面顶得比顶面亮太多——2026-09-07 用户：
+    //   夜间侧壁非常亮 → 降档），白天 ≥${WALL_DIRECT_DAY_FLOOR.toFixed(2)}
+    //   （坡脚/影区墙保亮，见 WALL_DIRECT_DAY_FLOOR 追注释；2026-09-05 修坡面
+    //   侧壁偏暗）。
     //   ★ 水体墙同样受保底（2026-09-05 补）：台缘坡壁低侧若为 water 块，裸
     //   lm.r≈0.09 乘 0.32 增益 → 近似纯黑（用户实测 seed12345 chunk(-1,1)）；
     //   保底后经 ×0.32 仍读作深暗水面，不再死黑。
-    float d = mix(max(lm.r, 0.85), max(lm.r, ${WALL_DIRECT_DAY_FLOOR.toFixed(2)}), uSunDay);
+    float d = mix(max(lm.r, ${WALL_NIGHT_DIRECT_FLOOR.toFixed(2)}), max(lm.r, ${WALL_DIRECT_DAY_FLOOR.toFixed(2)}), uSunDay);
 
     // ★ LOD 内实时太阳方向重映射（与顶面同款，2026-09-05）：墙面法线水平 →
     //   方向感最明显（朝阳墙/背阳墙随实时太阳全天旋转）；水墙豁免（深暗水面
