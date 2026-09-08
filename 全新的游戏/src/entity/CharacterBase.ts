@@ -363,7 +363,16 @@ export abstract class CharacterBase extends EntityBase {
       p.x,
       p.y,
       p.z,
+      { worldSize: this.deathAnimWorldSize() },
     );
+  }
+
+  /** ★ 死亡动画贴片高度：取角色贴片当前世界高度（跟随体型放大/缩放，
+   *   死亡瞬间尺寸与活着一致；兜底 2.0 = 玩家贴片高） */
+  private deathAnimWorldSize(): number {
+    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
+    const h = r?.mesh?.scale.y;
+    return h ? Math.abs(h) : 2.0;
   }
 
   /** ★ 销毁：释放受击染料流体（恢复原纹理资源） */
@@ -384,6 +393,7 @@ export abstract class CharacterBase extends EntityBase {
         p.x,
         p.y,
         p.z,
+        { worldSize: this.deathAnimWorldSize() },
       );
     }
     super.onDeath(source);
