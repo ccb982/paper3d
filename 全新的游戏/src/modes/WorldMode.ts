@@ -79,6 +79,8 @@ interface MobDef {
   pack: number;
   /** 随机抽取权重（原石虫权重大 → 成队出现） */
   weight: number;
+  /** ★ 击杀掉落规则（每项独立掷概率） */
+  drops: { itemId: string; chance: number; min: number; max: number }[];
 }
 
 // ============================================================
@@ -95,6 +97,8 @@ export class WorldMode implements IGameMode {
   private mobDefs: MobDef[] = [];
   /** ★ 已生成过的 chunk key（每 chunk 一波，不重复生成） */
   private spawnedChunks = new Set<number>();
+  /** ★ 敌人实例 → 其 MobDef（击杀掉落结算用；WeakMap 不阻回收） */
+  private enemyDefs = new WeakMap<EnemyBase, MobDef>();
   /** ★ 出生 chunk key（玩家安全区：自己不刷怪；敌人从他处生成） */
   private spawnChunkKey = -1;
   /** ★ 波次节奏（秒）：距下次"LOD 外环"刷怪的倒计时 */
@@ -253,14 +257,20 @@ export class WorldMode implements IGameMode {
       {
         ai: ROCK_BUG_AI, hp: 22, defense: 0, attackPower: 0,
         scale: 1.6, collisionScale: 1.1, pack: 4, weight: 3, // ★ 成群（慢速炮灰）
+        drops: [{ itemId: 'polyester', chance: 0.35, min: 1, max: 1 }],
       },
       {
         ai: REUNION_AI, hp: 130, defense: 6, attackPower: 2,
         scale: 2, collisionScale: 1.25, pack: 1, weight: 2, // ★ 高防高血
+        drops: [
+          { itemId: 'polyester', chance: 0.3, min: 1, max: 1 },
+          { itemId: 'device', chance: 0.5, min: 1, max: 1 },
+        ],
       },
       {
         ai: LAOJIE_AI, hp: 45, defense: 0, attackPower: 12,
         scale: 2, collisionScale: 1.25, pack: 1, weight: 1, // ★ 高速高攻脆皮
+        drops: [{ itemId: 'device', chance: 0.7, min: 1, max: 2 }],
       },
     ];
     this.mobDefs = (ctx.enemyAssets ?? []).map((asset, i) => ({
@@ -376,9 +386,11 @@ export class WorldMode implements IGameMode {
           this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
         }
       });
-      // ★ 杂兵死亡 → 从 enemies 列表移除（含坠坑外的伤害致死）
+      // ★ 杂兵死亡 → 结算击杀掉落 + 从 enemies 列表移除（含坠坑外的伤害致死）
       this.killedUnsub = eventBus.on('killed', (payload) => {
-        const idx = this.enemies.indexOf(payload.target as EnemyBase);
+        const enemy = payload.target as EnemyBase;
+        this.rollEnemyDrops(enemy);
+        const idx = this.enemies.indexOf(enemy);
         if (idx !== -1) this.enemies.splice(idx, 1);
       });
     });
@@ -851,6 +863,7 @@ export class WorldMode implements IGameMode {
         collisionScale: def.collisionScale,
       }, this.camera);
       enemy.billboard = false;
+      this.enemyDefs.set(enemy, def);
       this.enemies.push(enemy);
       any = true;
     }
@@ -943,6 +956,20 @@ export class WorldMode implements IGameMode {
    *   地面(固原岩) / 水面或贴水地块(酮凝集) / 耗尽原石晶体~2.2m(异铁)；
    *   有空间直接入袋&提示，背包满则提示失败。
    */
+  /** ★ 击杀掉落：按敌人 MobDef.drops 逐项掷概率 → 直接入袋 + UI 提示 */
+  private rollEnemyDrops(enemy: EnemyBase): void {
+    const def = this.enemyDefs.get(enemy);
+    if (!def || !this.itemManager || !this.worldUIManager) return;
+    for (const d of def.drops) {
+      if (Math.random() >= d.chance) continue;
+      const count = d.min + Math.floor(Math.random() * (d.max - d.min + 1));
+      const ok = this.itemManager.hasSpace('player', d.itemId, count)
+        && this.itemManager.addItem('player', d.itemId, count);
+      this.worldUIManager.showPickupResult(d.itemId, ok, count);
+      if (ok) this.worldUIManager.flashItemAndRefresh(d.itemId);
+    }
+  }
+
   private spawnItemDrops(r: ImpactReport): void {
     const drops = rollDrops({
       hasGround: r.tile.role === 'ground' || r.tile.role === 'platform',

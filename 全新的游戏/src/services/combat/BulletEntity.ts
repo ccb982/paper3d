@@ -49,7 +49,7 @@ export class BulletEntity extends EntityBase {
 
   /** ★ 子弹碰撞体积（球体；弹头锚点由渲染器折叠进实例变换） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
-    shape: { type: 'ball', radius: 0.1 },
+    shape: { type: 'ball', radius: 0.4 },
     offsetY: 0,
   };
   private lifetime = 0;
@@ -99,7 +99,7 @@ export class BulletEntity extends EntityBase {
       physics: {
         type: 'dynamic',
         options: {
-          shape: { type: 'ball', radius: opts.radius ?? 0.1 },
+          shape: { type: 'ball', radius: opts.radius ?? 0.4 },
           canSleep: false,
           gravityScale: 0,    // ★ 无重力：直线弹道
           ccd: true,          // ★ 连续碰撞检测：防隧穿
