@@ -169,11 +169,18 @@ export class ChunkManager {
   /** 几何就绪、待帧预算装配的 chunk（maps/decor/几何字节就绪） */
   private assembleQueue: {
     key: number; cx: number; cz: number;
-    maps: ChunkMaps; decor: DecorPlan;
+    maps: ChunkMaps; decor: DecorPlan | null; // null = 破坏重建(只换地形，见 rebuildTerrainOnly)
+    deferDecor?: boolean; // 首建：先上地形，装饰层延后见 pendingDecorJobs
     top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw;
   }[] = [];
-  /** 每帧装配预算（个；几何已在 Worker 算好，装配 ≈ 上传+物理，个位 ms/块） */
+  /** 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销） */
   private static readonly ASSEMBLE_PER_FRAME = 2;
+
+  // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
+  // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
+  private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps }>();
+  /** 每帧补挂装饰预算（个）—— 延后补挂同一 chunk 的 planDecor+buildDecorLayer+colliders */
+  private static readonly DECOR_PER_FRAME = 1;
 
   // ---- ★ 地形补丁（§14.11 层数覆盖层） ----
   // ★ 单一真源 = RasterMap chunk 数据的 levels 表（生成不写、clearAll 随 chunk 回收）；
@@ -236,7 +243,33 @@ export class ChunkManager {
     while (n-- > 0 && this.assembleQueue.length > 0) {
       const a = this.assembleQueue.shift()!;
       this.geoInflight.delete(a.key);
-      this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water);
+      if (a.decor === null || a.deferDecor) {
+        // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
+        //   装饰（props 贴地重造）随后经 pendingDecorJobs 在更后续帧补挂。
+        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water);
+        this.pendingDecorJobs.set(chunkKeyOf(a.cx, a.cz), { cx: a.cx, cz: a.cz, maps: a.maps });
+      } else {
+        this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water);
+      }
+    }
+    // ★ 延迟装饰补挂：地形重建结束后重 planDecor（此刻 levels 已落库、
+    //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
+    //   每帧预算个 chunk；同 chunk 多坑以最新一次补挂为准（key 去重）。
+    let d = ChunkManager.DECOR_PER_FRAME;
+    while (d-- > 0 && this.pendingDecorJobs.size > 0) {
+      const first = this.pendingDecorJobs.keys().next().value;
+      if (first === undefined) break;
+      const j = this.pendingDecorJobs.get(first)!;
+      this.pendingDecorJobs.delete(first);
+      const group = this.meshes.get(first);
+      if (!group) continue; // chunk 已被销毁或为虚空
+      // ★ 重贴地：以当前 levels 重计划整个 chunk 的装饰（props Y 含下探）
+      const decor = this.planDecor(j.cx, j.cz);
+      const decorLayer = this.buildDecorLayer(j.cx, j.cz, decor);
+      if (decorLayer) group.add(decorLayer.layer);
+      // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
+      this.createDecorColliders(j.cx, j.cz, decor);
+      this.createStructuralGround(j.cx, j.cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
     }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
@@ -255,6 +288,7 @@ export class ChunkManager {
     this.bakeGen++;
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
+    this.pendingDecorJobs.clear(); // 延迟装饰随风格换代作废
     for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
     this.pendingBakes.clear();
     // ★ 可见 + 虚空一并重建（虚空块不在 meshes 里，漏掉会永远悬空）
@@ -273,6 +307,7 @@ export class ChunkManager {
     this.queuedKeys.clear();
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
+    this.pendingDecorJobs.clear(); // 延迟装饰随 dispose 作废
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
     this.bakeGen++;
     this.pendingBakes.clear();
@@ -566,8 +601,14 @@ export class ChunkManager {
       .then((geom) => {
         if (this.bakeGen !== gen) return; // 换代（切风格/dispose）已作废
         if (geom) {
+const key2 = chunkKeyOf(cx, cz);
+          // ★ 首建延迟装饰：chunk 无现存网格时先只上地形，装饰延后（无关紧要）
+          const isFirstBuild = !this.meshes.has(key2) && !this.voidKeys.has(key2);
           this.assembleQueue.push({
-            key, cx, cz, maps, decor, top: geom.top, wall: geom.wall, water: geom.water,
+            key: key2, cx, cz, maps,
+            decor, // 仅 isFirstBuild=false（重建已有）时用于完整装配
+            deferDecor: isFirstBuild,
+            top: geom.top, wall: geom.wall, water: geom.water,
           });
           return;
         }
@@ -630,8 +671,12 @@ export class ChunkManager {
     }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
+    // 记录地形网格数量（top/wall/water，装饰层加入之前）——破坏重建增量
+    // 时只替换这部分、留住其后装饰层（见 rebuildTerrainOnly）
+    const terrainCount = group.children.length;
     const decorLayer = this.buildDecorLayer(cx, cz, decor);
     if (decorLayer) group.add(decorLayer.layer);
+    (group.userData as { terrainCount?: number }).terrainCount = terrainCount;
 
     // 物理：顶面 + 侧壁合并（同一数据同源）
     const nVT = topG.vertices.length / 3;
@@ -647,6 +692,76 @@ export class ChunkManager {
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
     const wq = waterG ? waterG.quads : 0;
     console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} 水quads=${wq}`);
+  }
+  /**
+   * ★ 破坏重建/首建（只改地形相关区块，2026-09-08）：只替换该 chunk 的
+   * top/wall/water 网格与地形 trimesh。旧装饰层整体销毁（它的 props 定位
+   * 于挖坑前高度——坑挖开后浮空；视觉随 disposeVisual 释放，decorShared
+   * 共享几何/材质跳过），装饰碰撞体/围裙/台座刚体/注册表一并清掉，然后
+   * 由 pendingDecorJobs 在新地形上重贴地重造（见 update 补挂循环）。
+   * 语义：无现存网格=首建（只挂地形）；有网格=replaceChunk 统一拆旧换新
+   * （销毁旧地形 body + 旧装饰刚体）；void 保持虚空。
+   */
+  private rebuildTerrainOnly(
+    cx: number, cz: number, maps: ChunkMaps,
+    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+  ): void {
+    const key = chunkKeyOf(cx, cz);
+    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
+    const group = new THREE.Group();
+    for (const m of cfg.meshes) group.add(m);
+    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    // 地形网格数（top/wall/water；装饰由补挂循环挂在其后）
+    (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
+    if (this.meshes.has(key)) {
+      // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
+      // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
+      this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi);
+    } else if (!this.voidKeys.has(key)) {
+      // 首建：无现存网格 → 只挂地形 mesh + trimesh（装饰后补）
+      this.scene.add(group);
+      this.meshes.set(key, group);
+      const bodyId = this.host.createGround(cx, cz, cfg.pv, cfg.pi);
+      this.bodies.set(key, bodyId);
+    }
+    // void 情形：保持虚空，不建网格（levels 已落库，数据正确）
+  }
+
+  /** 用几何字节构建地形 top/wall/water 网格 + 合并 trimesh（供非破坏装配与增量重建共用） */
+  private buildTerrainMeshes(
+    cx: number, cz: number, maps: ChunkMaps,
+    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+  ): { meshes: THREE.Object3D[]; pv: Float32Array; pi: Uint32Array } {
+    const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
+      geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
+      if (g.uvs) geo.setAttribute("uv", new THREE.BufferAttribute(g.uvs, 2));
+      if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
+      if (g.patchW) geo.setAttribute("apw", new THREE.BufferAttribute(g.patchW, 1));
+      if (withColor && g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
+      geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
+      return geo;
+    };
+    const palette = this.chunkPalette(cx, cz);
+    const chunkDataForMat = this.raster.getChunkData(cx, cz);
+    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
+    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
+    (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
+      { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
+    const meshes: THREE.Object3D[] = [new THREE.Mesh(toGeo(topG, false), mat)];
+    const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
+    if (wallG.indices.length > 0) meshes.push(wallMesh);
+    if (waterG && waterG.indices.length > 0) meshes.push(createWaterMesh(waterG));
+
+    const nVT = topG.vertices.length / 3;
+    const pv = new Float32Array(topG.vertices.length + wallG.vertices.length);
+    pv.set(topG.vertices, 0);
+    pv.set(wallG.vertices, topG.vertices.length);
+    const pi = new Uint32Array(topG.indices.length + wallG.indices.length);
+    pi.set(topG.indices, 0);
+    for (let i = 0; i < wallG.indices.length; i++) pi[topG.indices.length + i] = wallG.indices[i] + nVT;
+    return { meshes, pv, pi };
   }
 
 
@@ -861,7 +976,6 @@ export class ChunkManager {
       if (prev) await prev.catch(() => {});
       if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
       const maps = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
-      const decor = this.planDecor(cx, cz);
       if (!maps) {
         // 纹理缓存缺失（罕见：清缓存/换风格后）：整 chunk 走既有标准烘焙（几何主线程同源）
         this.requestStandardBake(cx, cz);
@@ -879,11 +993,11 @@ export class ChunkManager {
         if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
         const maps2 = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
         if (!maps2) return; // 期间缓存被清：后续 bake/重建自然覆盖
-        const decor2 = this.planDecor(cx, cz);
-        // ★ 预算化装配：与烘焙结果走同一 assembleQueue（每帧 ≤ ASSEMBLE_PER_FRAME），
-        //  不再同步 assembleTableChunk —— 破坏重建完成不造成主线程瞬时全量装配尖峰
+        // ★ 增量重建（2026-09-08）：只替换地形 top/wall/water 与 trimesh；
+        //  装饰（props 贴地）由 pendingDecorJobs 在地形重建后重贴地补挂。
+        //  仍走 assembleQueue 预算化装配（每帧 ≤ ASSEMBLE_PER_FRAME）
         this.assembleQueue.push({
-          key, cx, cz, maps: maps2, decor: decor2, top: geom.top, wall: geom.wall, water: geom.water,
+          key, cx, cz, maps: maps2, decor: null, top: geom.top, wall: geom.wall, water: geom.water,
         });
       } catch (e) {
         console.error(`[ChunkManager] chunk(${cx},${cz}) 破坏重建失败，回退标准烘焙`, e);

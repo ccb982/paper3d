@@ -425,3 +425,95 @@ export function checkTable(table: FaceTable): TableCheckReport {
   }
   return { errors, stats };
 }
+
+// ============================================================
+// ★ 补丁分区（表驱动；2026-09-08 —— 破坏重建只重生成受影响区块）
+// ============================================================
+// 语义（与用户原设计对齐：按表只改相关顶部/侧壁，不整 chunk 全量重生成）：
+//   给定补丁脚印（levels 层数表，1m cell 精度）+ 本 chunk 表 → 推导出「必须
+//   重新发射几何的最小区块」，其余区块几何保持不变、可整体复用。
+// 分区结果：
+//   · topCells   ：coarse 顶面需重发的 1m cell（补丁 cell ∪ 外扩 1 圈，
+//                  保 smoothstep 坡降与 coarse/fine 交界无 T 结）
+//   · blockSides ：需重发的侧壁段（4m 块某向边），判定见表注释
+// 装配方拿到这个分区后可只对表内区块发几何，其余沿用已建网格。
+// ============================================================
+
+export interface PatchPartition {
+  /** 需重发的 coarse 顶面 1m cell（chunk 局部 lx,lz；补丁区 ∪ 外扩 1 圈） */
+  topCells: { lx: number; lz: number }[];
+  /** 需重发的侧壁段（4m 块局部 lbx,lbz + 方向 dir；指示该块该向 4m 边整条重发） */
+  blockSides: { lbx: number; lbz: number; dir: number }[];
+}
+
+/** coarse cell(lx,lz) 是否在补丁脚印内（levels>0；含越界=false） */
+function patchCellAt(levels: Uint8Array, chunkSize: number, lx: number, lz: number): boolean {
+  return lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize && levels[lz * chunkSize + lx] > 0;
+}
+
+/**
+ * 由补丁脚印 + chunk 尺寸推导最小重发分区。
+ * chunkSize = levels 边长（= CHUNK_SIZE=60，coarse cell 1m）。
+ * 判据：
+ *   1) topCells = 补丁 cell ∪ 8 邻域（外扩 1 圈）——
+ *      保证 smoothstep 坡面（PATCH_SLOPE_CELLS=1m）顶点全部涵盖 + coarse/fine
+ *      交界处补丁外圈并入，与 buildTopGeometry 的 fine 掩码语义一致。
+ *   2) blockSides = 该 4m 边两侧共 8 个 coarse cell 中「任一侧存在补丁」的边：
+ *      · 坑缘壁（一侧补丁一侧未）需重发（顶沿随深度下移、换补丁色）；
+ *      · 坑内隔断壁（两侧都补丁但等高 flush）会被剔除 → 需重发产生几何差；
+ *      · 完全在坑外的边两侧都无补丁 → 几何不变，重发。
+ *   越界（跨 chunk 边）视作未补丁——坑沿跨 chunk 的壁由邻 chunk 自己分区处理。
+ */
+export function partitionPatch(levels: Uint8Array, chunkSize: number): PatchPartition {
+  const topCells: { lx: number; lz: number }[] = [];
+  const blockSides: { lbx: number; lbz: number; dir: number }[] = [];
+  const topSet = new Set<number>();
+  const sideSet = new Set<number>();
+
+  // ① 顶面补丁足迹（含外扩 1 圈）：由补丁 cell 展开
+  for (let lz = 0; lz < chunkSize; lz++) {
+    for (let lx = 0; lx < chunkSize; lx++) {
+      if (!patchCellAt(levels, chunkSize, lx, lz)) continue;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = lx + dx, nz = lz + dz;
+          if (nx < 0 || nz < 0 || nx >= chunkSize || nz >= chunkSize) continue;
+          if (topSet.has(nz * chunkSize + nx)) continue;
+          topSet.add(nz * chunkSize + nx);
+          topCells.push({ lx: nx, lz: nz });
+        }
+      }
+    }
+  }
+
+  // ② 侧壁：凡「该 4m 边旁 8 个 coarse cell（本侧 4 + 对侧 4）任一带补丁」的块边
+  //    即需重发——坑缘壁/坑内 flush 壁都由此产生几何差。
+  //    逐块边扫描，比"仅边界带"更稳（覆盖完全在坑内的块其内部隔断壁）。
+  const includeSide = (bxx: number, bzz: number, d: number) => {
+    const k = bxx * 4 + bzz * 10000 + d;
+    if (sideSet.has(k)) return;
+    sideSet.add(k);
+    blockSides.push({ lbx: bxx, lbz: bzz, dir: d });
+  };
+  const bps = chunkSize >> 2; // 每侧块数（15）
+  // 侧壁分区判据闭包：给定块局部 (bx4,bz4) 与方向，检查该 4m 边两侧 cell
+  const edgeHasPatch = (bx4: number, bz4: number, dir: number): boolean => {
+    for (let j = 0; j < 4; j++) {
+      let ox: number, oz: number, nx: number, nz: number;
+      if (dir === 0) { ox = bx4 * 4 + 3; oz = bz4 * 4 + j; nx = ox + 1; nz = oz; }
+      else if (dir === 1) { ox = bx4 * 4; oz = bz4 * 4 + j; nx = ox - 1; nz = oz; }
+      else if (dir === 2) { ox = bx4 * 4 + j; oz = bz4 * 4 + 3; nx = ox; nz = oz + 1; }
+      else { ox = bx4 * 4 + j; oz = bz4 * 4; nx = ox; nz = oz - 1; }
+      if (patchCellAt(levels, chunkSize, ox, oz) || patchCellAt(levels, chunkSize, nx, nz)) return true;
+    }
+    return false;
+  };
+  for (let bz4 = 0; bz4 < bps; bz4++) {
+    for (let bx4 = 0; bx4 < bps; bx4++) {
+      for (let dir = 0; dir < 4; dir++) {
+        if (edgeHasPatch(bx4, bz4, dir)) includeSide(bx4, bz4, dir);
+      }
+    }
+  }
+  return { topCells, blockSides };
+}
