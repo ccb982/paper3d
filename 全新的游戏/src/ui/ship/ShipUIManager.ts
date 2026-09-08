@@ -5,12 +5,12 @@
 // ============================================================
 
 import { BaseInteractionUI, type PanelDef } from '../BaseInteractionUI';
-import type { GameSession, InventoryGrid } from '../../core/Session';
+import type { GameSession } from '../../core/Session';
 import { createEmptyGrid, countItemsInGrid, addItemToGrid } from '../../core/Session';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { CraftingManager } from '../../systems/inventory/CraftingManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
-import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
+import { InventoryPanel } from '../shared/InventoryPanel';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
 import type { GachaOverlay } from './GachaOverlay';
@@ -19,10 +19,12 @@ type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
 
 export class ShipUIManager extends BaseInteractionUI {
   private currentPanel: ShipPanel = 'none';
+  /** ★ 当前编队面板内容区块是否展示背包（刷新时保持停留） */
+  private showingInventory = false;
   private root: HTMLDivElement;
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
-  private gridRenderer: InventoryGridRenderer;
+  private inventoryPanel: InventoryPanel;
   private _gachaOverlay: GachaOverlay | null = null;
 
   /** 设置抽卡覆盖层（行动后触发） */
@@ -38,7 +40,28 @@ export class ShipUIManager extends BaseInteractionUI {
     private onDepart: (() => void) | null,
   ) {
     super();
-    this.gridRenderer = new InventoryGridRenderer(this.itemManager);
+    // ★ 独立背包模块：舰船模式显示全部三层 + 支持"转移到基地"
+    this.inventoryPanel = new InventoryPanel({
+      session,
+      itemManager,
+      layers: [
+        { key: 'base', label: '🏠 基地仓库' },
+        { key: 'ship', label: '🚀 飞船仓库' },
+        { key: 'player', label: '🎒 玩家背包' },
+      ],
+      // 互相全通：基地↔飞船↔玩家 各自可转去另外两个
+      transferTargets: {
+        base: ['ship', 'player'],
+        ship: ['base', 'player'],
+        player: ['base', 'ship'],
+      },
+      defaultLayer: 'player',
+      openPanel: (def) => this.openPanel(def),
+      closePanel: (id) => this.closePanel(id),
+      onDataChanged: () => {
+        if (this.currentPanel !== 'none') this.refreshPanelContent();
+      },
+    });
     this.root = document.createElement('div');
     this.root.id = 'ship-ui-root';
     this.root.style.cssText = [
@@ -169,13 +192,22 @@ export class ShipUIManager extends BaseInteractionUI {
   private renderFormationPanel(): void {
     const div = document.createElement('div');
     div.innerHTML = `
-      <h3 style="color:#8af;margin:0 0 12px 0;">编队管理</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="color:#8af;margin:0;">编队管理</h3>
+      </div>
       <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
       </div>
       <div id="ship-formation-content"></div>
     `;
 
-    const btnBar = div.querySelector('div')!;
+    // 右上角关闭按钮
+    const head = div.querySelector('div')!;
+    head.appendChild(createButton({
+      label: '✕ 关闭', size: 'sm', style: 'ghost',
+      onClick: () => this.togglePanel('formation'),
+    }));
+
+    const btnBar = div.querySelectorAll('div')[1]!;
     btnBar.appendChild(createButton({ label: '🎒 打开背包', size: 'sm', style: 'secondary', onClick: () => this.renderInventoryView() }));
     btnBar.appendChild(createButton({ label: '🏆 藏品查看', size: 'sm', style: 'secondary', onClick: () => this.renderRelicsView() }));
     btnBar.appendChild(createButton({ label: '🔧 合成台', size: 'sm', style: 'secondary', onClick: () => this.openCrafting('ship') }));
@@ -183,59 +215,37 @@ export class ShipUIManager extends BaseInteractionUI {
     this.panelContainer.appendChild(div);
   }
 
+  /** ★ 数据变更后刷新编队面板内容区，保持当前子视图（背包/藏品），不重置到面板根部 */
+  private refreshPanelContent(): void {
+    if (this.currentPanel !== 'formation') {
+      this.renderPanel(this.currentPanel);
+      return;
+    }
+    const content = this.panelContainer.querySelector('#ship-formation-content');
+    if (!content) return;
+    if (this.showingInventory) {
+      this.renderInventoryView();
+    } else {
+      this.renderRelicsView();
+    }
+  }
+
   // ============================================================
   // 背包视图
   // ============================================================
 
   private renderInventoryView(): void {
+    this.showingInventory = true;
     const content = this.panelContainer.querySelector('#ship-formation-content')!;
-    const inv = this.session.inventories;
-
-    const layers: { key: keyof typeof inv; label: string }[] = [
-      { key: 'base', label: '🏠 基地仓库' },
-      { key: 'ship', label: '🚀 飞船仓库' },
-      { key: 'player', label: '🎒 玩家背包' },
-    ];
 
     let html = '<div style="padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;margin-bottom:8px;">';
-    html += '<div style="display:flex;gap:8px;margin-bottom:8px;">';
-    for (const l of layers) {
-      html += `<button class="inv-tab" data-layer="${l.key}" style="flex:1;padding:6px;background:#4466aa;color:#fff;border:none;border-radius:4px;cursor:pointer;">${l.label}</button>`;
-    }
-    html += '</div><div id="inv-grid-view"></div></div>';
+    html += '<div id="inv-grid-view"></div></div>';
 
     content.innerHTML = html;
 
-    const showGrid = (layer: keyof typeof inv) => {
-      const gridView = content.querySelector('#inv-grid-view') as HTMLElement;
-      const grid = inv[layer];
-      if (Array.isArray(grid)) {
-        this.renderGrid(gridView, grid, layer);
-      }
-    };
-
-    content.querySelectorAll('.inv-tab').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const layer = (btn as HTMLElement).dataset.layer as keyof typeof inv;
-        showGrid(layer);
-      });
-    });
-
-    showGrid('player');
-  }
-
-  private renderGrid(container: HTMLElement, grid: InventoryGrid, layer: string): void {
-    if (!grid || grid.length === 0) {
-      container.innerHTML = '<div style="color:#666;">空网格</div>';
-      return;
-    }
-    const cols = grid[0]?.length ?? 0;
-    const cellSize = Math.min(48, Math.floor(540 / cols));
-    this.gridRenderer.render(
-      container, grid, layer,
-      (e) => this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col),
-      cellSize,
-    );
+    const gridView = content.querySelector('#inv-grid-view') as HTMLElement;
+    // ★ 独立背包模块渲染（标签页 + 网格）
+    this.inventoryPanel.render(gridView);
   }
 
   // ============================================================
@@ -243,6 +253,7 @@ export class ShipUIManager extends BaseInteractionUI {
   // ============================================================
 
   private renderRelicsView(): void {
+    this.showingInventory = false;
     const content = this.panelContainer.querySelector('#ship-formation-content')!;
     const relics = this.session.relics;
 
@@ -267,7 +278,9 @@ export class ShipUIManager extends BaseInteractionUI {
     const div = document.createElement('div');
 
     div.innerHTML = `
-      <h3 style="color:#8af;margin:0 0 12px 0;">干员管理</h3>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <h3 style="color:#8af;margin:0;">干员管理</h3>
+      </div>
       <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
         <div>已招募干员: ${s.allies.roster.length} 人</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
@@ -278,6 +291,12 @@ export class ShipUIManager extends BaseInteractionUI {
         </div>
       </div>
     `;
+
+    // 右上角关闭按钮
+    div.querySelector('div')!.appendChild(createButton({
+      label: '✕ 关闭', size: 'sm', style: 'ghost',
+      onClick: () => this.togglePanel('operator'),
+    }));
 
     this.panelContainer.appendChild(div);
   }
@@ -326,81 +345,6 @@ export class ShipUIManager extends BaseInteractionUI {
         const closeBtn = createButton({ label: '关闭', size: 'sm', style: 'ghost', onClick: () => this.closePanel('crafting-panel') });
         closeBtn.style.marginTop = '8px';
         div.appendChild(closeBtn);
-        return div;
-      },
-    });
-  }
-
-  // ============================================================
-  // 物品详情
-  // ============================================================
-
-  private openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
-    if (layer === 'allies') return;
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    const slot = grid?.[row]?.[col];
-    if (!slot) return;
-    const config = this.itemManager.getItemConfig(slot.itemId);
-
-    this.openPanel({
-      id: 'item-detail',
-      onOpen: () => {},
-      onClose: () => {},
-      render: () => {
-        const div = document.createElement('div');
-        div.style.cssText = 'background:rgba(20,20,40,0.95);border:1px solid #4466aa;border-radius:8px;padding:16px;min-width:250px;';
-        div.innerHTML = `
-          <h3 style="color:#8af;margin:0 0 8px 0;">${slot.itemId}</h3>
-          <p style="margin:4px 0;color:#aaa;">数量: ${slot.stackSize}</p>
-          <p style="margin:4px 0;color:#aaa;">类型: ${config?.type ?? '未知'}</p>
-          <p style="margin:4px 0 12px 0;color:#888;font-size:12px;">${config?.description ?? ''}</p>
-        `;
-
-        if (config?.type === 'consumable') {
-          div.appendChild(createButton({
-            label: '使用', size: 'sm', style: 'primary',
-            onClick: () => {
-              const result = this.itemManager.useItem(layer, row, col);
-              if (result.success) {
-                super.closePanel('item-detail');
-                this.renderPanel(this.currentPanel);
-              }
-            },
-          }));
-        }
-
-        // 转移到基地（非 base 层）
-        if (layer !== 'base') {
-          const btn = createButton({
-            label: '转移到基地', size: 'sm', style: 'ghost',
-            onClick: () => {
-              const moved = this.itemManager.moveItem(layer, 'base', slot.itemId, 1);
-              if (moved) {
-                this.closePanel('item-detail');
-                this.renderPanel(this.currentPanel);
-              }
-            },
-          });
-          btn.style.marginLeft = '8px';
-          div.appendChild(btn);
-        }
-
-        // 丢弃按钮
-        const dropBtn = createButton({
-          label: '丢弃', size: 'sm', style: 'danger',
-          onClick: () => {
-            this.itemManager.removeItem(layer, slot.itemId, 1);
-            this.closePanel('item-detail');
-            this.renderPanel(this.currentPanel);
-          },
-        });
-        dropBtn.style.marginLeft = '8px';
-        div.appendChild(dropBtn);
-
-        div.appendChild(createButton({
-          label: '关闭', size: 'sm', style: 'ghost',
-          onClick: () => this.closePanel('item-detail'),
-        }));
         return div;
       },
     });

@@ -6,11 +6,11 @@
 // ============================================================
 
 import { BaseInteractionUI } from '../BaseInteractionUI';
-import type { GameSession, InventoryGrid } from '../../core/Session';
+import type { GameSession } from '../../core/Session';
 import type { WorldUIState } from '../../core/WorldUIState';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
-import { InventoryGridRenderer } from '../shared/InventoryGridRenderer';
+import { InventoryPanel } from '../shared/InventoryPanel';
 import { Minimap } from '../../services/ui/Minimap';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
@@ -34,8 +34,7 @@ export class WorldUIManager extends BaseInteractionUI {
     startY: number;   // 初始 Y 坐标（屏幕像素）
     speed: number;    // 上浮速度
   }[] = [];
-  private gridRenderer: InventoryGridRenderer;
-  private inventoryOpen = false;
+  private inventoryPanel: InventoryPanel;
   private eventUnsub?: () => void;
   private flashItemId: string | null = null;
   private flashTimer: number | undefined = undefined;
@@ -48,7 +47,25 @@ export class WorldUIManager extends BaseInteractionUI {
     raster: RasterMap,
   ) {
     super();
-    this.gridRenderer = new InventoryGridRenderer(this.itemManager);
+    // ★ 独立背包模块：地图模式只暴露玩家背包 + 飞船仓库（隐藏基地层）
+    this.inventoryPanel = new InventoryPanel({
+      session,
+      itemManager,
+      layers: [
+        { key: 'player', label: '🎒 玩家背包' },
+        { key: 'ship', label: '🚀 飞船仓库' },
+      ],
+      // 地图模式：玩家↔飞船 互通
+      transferTargets: {
+        player: ['ship'],
+        ship: ['player'],
+      },
+      openPanel: (def) => this.openPanel(def),
+      closePanel: (id) => this.closePanel(id),
+      onDataChanged: () => {
+        if (this.isInventoryOpen) this.renderInventoryPanel();
+      },
+    });
 
     // overlay 弹窗根
     this.overlayRoot = document.createElement('div');
@@ -185,146 +202,58 @@ export class WorldUIManager extends BaseInteractionUI {
     this.crosshair.setVisible(v);
   }
 
-  /** 打开/关闭背包面板 */
+  /** 打开/关闭背包面板（以弹窗栈内是否含 inventory-panel 为准） */
   toggleInventory(): void {
-    this.inventoryOpen = !this.inventoryOpen;
-    if (this.inventoryOpen) {
-      this.renderInventoryPanel();
+    if (this.isInventoryOpen) {
+      this.closePanel('inventory-panel');
     } else {
-      this.closePanel();
+      this.renderInventoryPanel();
     }
   }
 
+  /** 背包面板是否打开（由弹窗栈实际状态推导，与手动关闭按钮保持同步） */
+  get isInventoryOpen(): boolean {
+    return this.panelStack.some(p => p.id === 'inventory-panel');
+  }
+
+  /**
+   * 是否处于“非战斗 UI”状态（弹出层栈内有任意面板）。
+   * 作为指针锁定联动唯一事实来源：任一面板打开 → 解锁；
+   * 全部关闭 → 回到战场 → 重新锁定。
+   */
+  get hasModalOpen(): boolean {
+    return this.panelStack.length > 0;
+  }
+
   private renderInventoryPanel(): void {
-    const inv = this.session.inventories;
-    const layers = Object.keys(inv) as (keyof typeof inv)[];
-
-    // 用标签页切换显示各层
-    let currentLayer = layers[0];
-
     const content = document.createElement('div');
     content.className = 'ui-panel-inner';
 
-    // 标题
+    // 标题 + 手动关闭按钮
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
     const title = document.createElement('div');
     title.className = CSS.panelTitle;
+    title.style.marginBottom = '0';
     title.textContent = '背包';
-    content.appendChild(title);
+    head.appendChild(title);
+    const closeBtn = createButton({
+      label: '✕ 关闭', size: 'sm', style: 'ghost',
+      onClick: () => this.closePanel('inventory-panel'),
+    });
+    head.appendChild(closeBtn);
+    content.appendChild(head);
 
-    // 标签栏
-    const tabBar = document.createElement('div');
-    tabBar.className = CSS.tabBar;
-    for (const layer of layers) {
-      const tab = document.createElement('button');
-      tab.textContent = layer;
-      tab.className = CSS.tabButton;
-      tab.addEventListener('click', () => {
-        currentLayer = layer;
-        showGrid(currentLayer);
-      });
-      tabBar.appendChild(tab);
-    }
-    content.appendChild(tabBar);
-
-    // 网格容器
-    const gridView = document.createElement('div');
-    gridView.id = 'world-inv-grid-view';
-    content.appendChild(gridView);
-
-    const showGrid = (layer: keyof typeof inv) => {
-      const grid = inv[layer];
-      if (Array.isArray(grid)) {
-        const cols = grid[0]?.length ?? 0;
-        const cellSize = Math.min(48, Math.floor(540 / cols));
-        this.gridRenderer.render(gridView, grid, layer, (e) => {
-          this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
-        }, cellSize, this.flashItemId ?? undefined);
-      }
-    };
-
-    showGrid(currentLayer);
+    // ★ 独立背包模块渲染（标签页 + 网格）—— 渲染进独立子容器，避免清空标题栏
+    const gridRoot = document.createElement('div');
+    content.appendChild(gridRoot);
+    this.inventoryPanel.render(gridRoot, this.flashItemId ?? undefined);
 
     this.openPanel({
       id: 'inventory-panel',
       onOpen: () => {},
-      onClose: () => { this.inventoryOpen = false; },
-      render: () => content,
-    });
-  }
-
-  /** 物品详情（带使用/丢弃/转移） */
-  private openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
-    if (layer === 'allies') return;
-    const grid = this.session.inventories[layer] as InventoryGrid;
-    const slot = grid?.[row]?.[col];
-    if (!slot) return;
-    const config = this.itemManager.getItemConfig(slot.itemId);
-
-    this.openPanel({
-      id: 'item-detail',
-      onOpen: () => {},
       onClose: () => {},
-      render: () => {
-        const div = document.createElement('div');
-        div.className = CSS.panel;
-        div.innerHTML = `
-          <h3 class="ui-detail-title">${slot.itemId}</h3>
-          <p class="ui-panel-text">数量: ${slot.stackSize}</p>
-          <p class="ui-panel-text">类型: ${config?.type ?? '未知'}</p>
-          <p class="ui-panel-desc">${config?.description ?? ''}</p>
-        `;
-
-        // 使用按钮（消耗品）
-        if (config?.type === 'consumable') {
-          div.appendChild(createButton({
-            label: '使用', size: 'sm', style: 'primary',
-            onClick: () => {
-              const result = this.itemManager.useItem(layer, row, col);
-              if (result.success) {
-                this.closePanel('item-detail');
-                this.renderInventoryPanel();
-              }
-            },
-          }));
-        }
-
-        // 转移到基地（非 base 层）
-        if (layer !== 'base') {
-          const btn = createButton({
-            label: '转移到基地', size: 'sm', style: 'ghost',
-            onClick: () => {
-              const moved = this.itemManager.moveItem(layer, 'base', slot.itemId, 1);
-              if (moved) {
-                this.closePanel('item-detail');
-                this.renderInventoryPanel();
-              }
-            },
-          });
-          btn.style.marginLeft = '8px';
-          div.appendChild(btn);
-        }
-
-        // 丢弃按钮
-        const dropBtn = createButton({
-          label: '丢弃', size: 'sm', style: 'danger',
-          onClick: () => {
-            this.itemManager.removeItem(layer, slot.itemId, 1);
-            this.closePanel('item-detail');
-            this.renderInventoryPanel();
-          },
-        });
-        dropBtn.style.marginLeft = '8px';
-        div.appendChild(dropBtn);
-
-        // 关闭按钮
-        const closeBtn = createButton({
-          label: '关闭', size: 'sm', style: 'ghost',
-          onClick: () => this.closePanel('item-detail'),
-        });
-        closeBtn.style.marginTop = '8px';
-        div.appendChild(closeBtn);
-        return div;
-      },
+      render: () => content,
     });
   }
 
@@ -346,7 +275,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
   /** 刷新背包面板（如果已打开） */
   refreshIfOpen(): void {
-    if (this.inventoryOpen) {
+    if (this.isInventoryOpen) {
       this.renderInventoryPanel();
     }
   }

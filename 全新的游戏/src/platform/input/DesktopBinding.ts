@@ -27,22 +27,20 @@ export class DesktopBinding {
   private lastMouse = { x: 0, y: 0 };
   private hasMouse = false;
   private isLocked = false;
+  private lockEl: HTMLElement | null = null;
 
   constructor(target?: HTMLElement | Window, lockEl?: HTMLElement) {
     this.state = createInputActions();
     const el = target ?? window;
+    this.lockEl = lockEl ?? null;
 
     // ★ 指针锁定（FPS/TPS 标准）：点击画布 → 隐藏光标 + 锁定，
     //   锁定后鼠标无限移动（movementX/Y），视角可 360° 旋转
-    if (lockEl) {
-      lockEl.addEventListener('click', () => {
-        // ★ 刚退出锁定时浏览器禁止立即重新请求（SecurityError）→ 吞掉并忽略
-        const p = (lockEl.requestPointerLock as unknown as (() => Promise<void>) | undefined)?.();
-        p?.catch?.(() => {});
-      });
+    if (this.lockEl) {
+      this.lockEl.addEventListener('click', () => this.requestLock());
     }
     document.addEventListener('pointerlockchange', () => {
-      this.isLocked = document.pointerLockElement === (lockEl ?? null);
+      this.isLocked = document.pointerLockElement === (this.lockEl ?? null);
     });
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -160,6 +158,30 @@ export class DesktopBinding {
     );
   }
 
+  /** 请求指针锁定（锁定后鼠标无限移动，视角可 360° 旋转） */
+  private requestLock(): void {
+    const el = this.lockEl;
+    if (!el || document.pointerLockElement === el) return;
+    // ★ 刚退出锁定时浏览器禁止立即重新请求（SecurityError）→ 吞掉并忽略
+    const p = (el.requestPointerLock as unknown as (() => Promise<void>) | undefined)?.();
+    p?.catch?.(() => {});
+  }
+
+  /**
+   * 解除/恢复指针锁定（UI 面板开关联动）。
+   * locked=true 回到战场，恢复锁定；false 进入非战斗 UI，解除并释放光标。
+   * ★ 刚 exitPointerLock 后浏览器有 ~1.25s 锁定冷却（SecurityError），
+   *   由调用方（每帧 update 循环）反复调用自然重试直至成功。
+   */
+  setPointerLock(locked: boolean): void {
+    if (!this.lockEl) return;
+    if (locked) {
+      this.requestLock();
+    } else if (document.pointerLockElement === (this.lockEl ?? null)) {
+      document.exitPointerLock();
+    }
+  }
+
   /** 每帧读取前调用：从按键状态聚合移动轴向 + 重置消费式按键 + 读取 lookAxis 增量 */
   update(): void {
     let x = 0, y = 0;
@@ -221,12 +243,17 @@ export class DesktopBinding {
     return this.state;
   }
 
+  /** 强制解锁（模式退出/销毁时调用，确保回到舰船鼠标可见） */
+  forceUnlock(): void {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }
+
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers.length = 0;
     // ★ 释放指针锁定（回到 ShipMode 时鼠标可见）
-    if (document.pointerLockElement) {
-      document.exitPointerLock();
-    }
+    this.forceUnlock();
   }
 }

@@ -1,0 +1,271 @@
+// ============================================================
+// InventoryPanel.ts —— 独立背包模块（纯 UI + 操作装配）
+// ============================================================
+// 封装"标签页 + 网格 + 物品详情"完整交互，不依赖宿主生命周期：
+//   · 容器（overlay 弹窗 或 嵌入式面板）由宿主提供
+//   · 详情弹窗通过注入的 openPanel/closePanel 挂到宿主弹窗栈
+//   · 物品变更后通过 onDataChanged 通知宿主刷新
+// ShipUIManager / WorldUIManager 均可复用；转移目标由配置的层
+// 动态生成（源层取自其它层，地图模式仅暴露 ship/player）。
+// ============================================================
+
+import type { GameSession, InventoryGrid } from '../../core/Session';
+import type { ItemManager } from '../../systems/inventory/ItemManager';
+import type { PanelDef } from '../BaseInteractionUI';
+import { InventoryGridRenderer } from './InventoryGridRenderer';
+import { createButton } from '../components/Button';
+import { CSS } from './UIConstants';
+
+export interface InventoryLayerOption {
+  key: keyof GameSession['inventories'];
+  label: string;
+}
+
+export interface InventoryPanelOptions {
+  session: GameSession;
+  itemManager: ItemManager;
+  /** 展示的层（顺序即标签顺序） */
+  layers: InventoryLayerOption[];
+  /** 默认选中的层；缺省 = layers[0] */
+  defaultLayer?: keyof GameSession['inventories'];
+  /**
+   * 各源层可转移到的目标层（key → 目标列表）。
+   * 缺省 = 除自己外的所有 layers；只列出此处配置的层。
+   */
+  transferTargets?: Partial<Record<keyof GameSession['inventories'], Array<keyof GameSession['inventories']>>>;
+  /** 是否显示"使用"按钮（消耗品） */
+  allowUse?: boolean;
+  /** 网格区最小宽度（格子自适应：min(48, minWidth/cols)） */
+  minWidth?: number;
+  /** 宿主弹窗栈操作（BaseInteractionUI.open/closePanel） */
+  openPanel: (def: PanelDef) => void;
+  closePanel: (id?: string) => void;
+  /** 物品变更（使用/转移/丢弃）后宿主如何刷新 */
+  onDataChanged: () => void;
+}
+
+export class InventoryPanel {
+  private gridRenderer: InventoryGridRenderer;
+  /** 当前选中的层（跨渲染保持，转移/丢弃后仍停留在当前标签） */
+  private currentLayer: keyof GameSession['inventories'] | null = null;
+
+  constructor(private opts: InventoryPanelOptions) {
+    this.gridRenderer = new InventoryGridRenderer(opts.itemManager);
+  }
+
+  /** 当前选中的层（宿主可读取用于刷新指示） */
+  get activeLayer(): keyof GameSession['inventories'] | null {
+    return this.currentLayer;
+  }
+
+  /**
+   * 渲染完整背包视图（标签栏 + 网格）到指定容器。
+   * @param container 宿主提供的挂载点（overlay 内容 或 嵌入式面板）
+   * @param flashItemId 拾取后高亮该 itemId（可选）
+   */
+  render(container: HTMLElement, flashItemId?: string): void {
+    const inv = this.opts.session.inventories;
+    const layers = this.opts.layers;
+    if (layers.length === 0) return;
+
+    const defaultLayer = this.opts.defaultLayer ?? layers[0].key;
+    const currentLayer = this.currentLayer ?? defaultLayer;
+    const resolveLayer = () => {
+      const active = this.currentLayer ?? defaultLayer;
+      return layers.some(l => l.key === active) ? active : defaultLayer;
+    };
+
+    // 标签栏
+    const tabBar = document.createElement('div');
+    tabBar.className = CSS.tabBar;
+    for (const layer of layers) {
+      const tab = document.createElement('button');
+      tab.textContent = layer.label;
+      tab.className = CSS.tabButton;
+      if (layer.key === currentLayer) tab.classList.add('ui-tab-btn-active');
+      tab.addEventListener('click', () => {
+        this.currentLayer = layer.key;
+        showGrid(layer.key);
+      });
+      tabBar.appendChild(tab);
+    }
+
+    // 网格容器
+    const gridView = document.createElement('div');
+    const showGrid = (layer: keyof GameSession['inventories']) => {
+      const grid = inv[layer];
+      if (!Array.isArray(grid)) return;
+      const cols = grid[0]?.length ?? 0;
+      const minWidth = this.opts.minWidth ?? 540;
+      const cellSize = Math.min(48, Math.floor(minWidth / cols));
+      this.gridRenderer.render(gridView, grid, layer, (e) => {
+        this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
+      }, cellSize, flashItemId);
+    };
+
+    showGrid(resolveLayer());
+
+    container.innerHTML = '';
+    container.appendChild(tabBar);
+    container.appendChild(gridView);
+  }
+
+  /** 转移目标：优先用 transferTargets 定制，否则 = 除自己外的所有层 */
+  private targetsFor(layer: keyof GameSession['inventories']): InventoryLayerOption[] {
+    const custom = this.opts.transferTargets?.[layer];
+    if (custom && custom.length > 0) {
+      return custom
+        .map(key => this.opts.layers.find(l => l.key === key))
+        .filter((l): l is InventoryLayerOption => !!l);
+    }
+    return this.opts.layers.filter(t => t.key !== layer && t.key !== 'allies');
+  }
+
+  /** 物品详情（使用/转移/丢弃/关闭） */
+  private openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
+    if (layer === 'allies') return;
+    const grid = this.opts.session.inventories[layer] as InventoryGrid;
+    const slot = grid?.[row]?.[col];
+    if (!slot) return;
+    const config = this.opts.itemManager.getItemConfig(slot.itemId);
+
+    this.opts.openPanel({
+      id: 'item-detail',
+      onOpen: () => {},
+      onClose: () => {},
+      render: () => {
+        const div = document.createElement('div');
+        div.className = CSS.panel;
+        div.innerHTML = `
+          <h3 class="ui-detail-title">${slot.itemId}</h3>
+          <p class="ui-panel-text">数量: ${slot.stackSize}</p>
+          <p class="ui-panel-text">类型: ${config?.type ?? '未知'}</p>
+          <p class="ui-panel-desc">${config?.description ?? ''}</p>
+        `;
+
+        // 使用按钮（消耗品）
+        if ((this.opts.allowUse ?? true) && config?.type === 'consumable') {
+          div.appendChild(createButton({
+            label: '使用', size: 'sm', style: 'primary',
+            onClick: () => {
+              const result = this.opts.itemManager.useItem(layer, row, col);
+              if (result.success) {
+                this.opts.closePanel('item-detail');
+                this.opts.onDataChanged();
+              }
+            },
+          }));
+        }
+
+        // ★ 共用一个数量滑块，转移与丢弃都按该数量操作
+        {
+          const max = slot.stackSize;
+          const countInput = document.createElement('input');
+          countInput.type = 'range';
+          countInput.min = '1';
+          countInput.max = String(max);
+          countInput.value = String(max);
+          countInput.style.cssText = 'flex:1;min-width:120px;';
+          const countLabel = document.createElement('span');
+          countLabel.style.cssText = 'color:#aaa;font-size:12px;min-width:34px;text-align:right;';
+          countLabel.textContent = String(max);
+          countInput.addEventListener('input', () => {
+            countLabel.textContent = countInput.value;
+          });
+          const count = () => Math.max(1, Math.min(max, Number(countInput.value) || 1));
+
+          const countRow = document.createElement('div');
+          countRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:8px;';
+          countRow.appendChild(document.createTextNode('数量'));
+          countRow.appendChild(countInput);
+          countRow.appendChild(countLabel);
+          div.appendChild(countRow);
+
+          // 转移到其它背包（目标 = 该源层的配置目标；用上方滑块数量）
+          const targets = this.targetsFor(layer);
+          if (targets.length > 0) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:8px;';
+            const select = document.createElement('select');
+            select.style.cssText = 'background:#1a2238;color:#8af;border:1px solid #4466aa;border-radius:4px;padding:4px 8px;font-size:12px;';
+            for (const t of targets) {
+              const opt = document.createElement('option');
+              opt.value = t.key;
+              opt.textContent = t.label;
+              select.appendChild(opt);
+            }
+            row.appendChild(select);
+            row.appendChild(createButton({
+              label: '转移', size: 'sm', style: 'ghost',
+              onClick: () => {
+                const dst = select.value as keyof GameSession['inventories'];
+                if (dst === layer) return;
+                const moved = this.opts.itemManager.moveItem(layer, dst, slot.itemId, count());
+                if (moved) {
+                  this.opts.closePanel('item-detail');
+                  this.opts.onDataChanged();
+                }
+              },
+            }));
+            div.appendChild(row);
+          }
+
+          // 丢弃按钮（用上方滑块数量；带确认）
+          const dropBtn = createButton({
+            label: '丢弃', size: 'sm', style: 'danger',
+            onClick: () => {
+              this.confirmDiscard(() => {
+                this.opts.itemManager.removeItem(layer, slot.itemId, count());
+                this.opts.closePanel('item-detail');
+                this.opts.onDataChanged();
+              });
+            },
+          });
+          dropBtn.style.marginTop = '8px';
+          div.appendChild(dropBtn);
+        }
+
+        // 关闭按钮
+        const closeBtn = createButton({
+          label: '关闭', size: 'sm', style: 'ghost',
+          onClick: () => this.opts.closePanel('item-detail'),
+        });
+        closeBtn.style.marginTop = '8px';
+        div.appendChild(closeBtn);
+        return div;
+      },
+    });
+  }
+
+  /** 丢弃确认弹窗 */
+  private confirmDiscard(onConfirm: () => void): void {
+    this.opts.openPanel({
+      id: 'discard-confirm',
+      onOpen: () => {},
+      onClose: () => {},
+      render: () => {
+        const div = document.createElement('div');
+        div.className = CSS.panel;
+        div.innerHTML = `
+          <h3 class="ui-detail-title">确认丢弃</h3>
+          <p class="ui-panel-text">确定要丢弃这些物品吗？丢弃后无法找回。</p>
+        `;
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;margin-top:12px;';
+        row.appendChild(createButton({
+          label: '确认丢弃', size: 'sm', style: 'danger',
+          onClick: () => {
+            this.opts.closePanel('discard-confirm');
+            onConfirm();
+          },
+        }));
+        row.appendChild(createButton({
+          label: '取消', size: 'sm', style: 'ghost',
+          onClick: () => this.opts.closePanel('discard-confirm'),
+        }));
+        div.appendChild(row);
+        return div;
+      },
+    });
+  }
+}

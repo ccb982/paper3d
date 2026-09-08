@@ -345,6 +345,10 @@ export class WorldMode implements IGameMode {
     if (this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
+    // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
+    //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
+    //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
+    this.binding.setPointerLock(!this.worldUIManager.hasModalOpen);
 
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
     if (input.held.interact) {

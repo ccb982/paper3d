@@ -105,6 +105,13 @@
   font-size: 12px;
 }
 
+/* ---- 标签按钮（激活态） ---- */
+.ui-tab-btn-active {
+  background: #4466aa;
+  color: #fff;
+  border-color: #6688cc;
+}
+
 /* ---- 物品格子 ---- */
 .ui-slot {
   width: 48px;
