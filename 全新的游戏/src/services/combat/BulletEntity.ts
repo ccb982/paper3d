@@ -9,7 +9,18 @@ import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import type { ShadowFrameSource } from '../render/SilhouetteShadow';
-import { applyDamage } from './DamagePipeline';
+
+/** ★ 撞向命中解析层的载荷：一次物理碰撞（敌人 / 装饰物 / 地块全部归口） */
+export interface BulletHitPayload {
+  /** 子弹自身（作为伤害来源 EntityBase；组合层据此走 applyDamage） */
+  self: BulletEntity;
+  /** 敌人实体；null = 静态世界（地块 / 装饰物，由解析层细分） */
+  other: EntityBase | null;
+  /** 命中点（子弹中心，碰撞接触处） */
+  point: { x: number; y: number; z: number };
+  /** 子弹伤害值（穿透命中实体时结算） */
+  damage: number;
+}
 
 export interface BulletEntityOptions {
   /** 出生点（世界坐标） */
@@ -47,10 +58,11 @@ export class BulletEntity extends EntityBase {
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
   recycle: (() => void) | null = null;
   /** ★ 命中特效回调（BulletManager 注册：每次碰撞开始只调用一次；
-   *   other=null 表示地形；由组合层决定挂实体槽/固定点播放） */
+   *   other=null 表示静态世界；由组合层决定挂实体槽/固定点播放） */
   hitFx: ((other: EntityBase | null) => void) | null = null;
-  /** ★ 地形命中回调（BulletManager 注册：命中地面 → 一次性地形扣除，坐标=命中点） */
-  onGroundHit: ((x: number, y: number, z: number) => void) | null = null;
+  /** ★ 命中解析层回调（BulletManager 注册）：每次碰撞开始把所有命中——
+   *   敌人实体 / 装饰物 / 地块 —— 一律交给解析层（WorldMode.resolveBulletHit）分类结算 */
+  onHit: ((payload: BulletHitPayload) => void) | null = null;
 
   get isActive(): boolean {
     return this.active;
@@ -141,26 +153,24 @@ export class BulletEntity extends EntityBase {
     }
   }
 
-  /** ★ 命中处理：同阵营忽略 / 命中实体穿透+伤害管线 / 地面反弹。
-   *   每次碰撞开始（started）只触发一次命中特效（不再一直播放） */
+  /** ★ 命中处理：同阵营忽略 / 一律交给命中解析层（敌人=伤害结算，静态世界=细分）。
+   *   每次碰撞开始（started）只触发一次命中特效（不再一直播放）。
+   *   子弹实体零世界认知：不判地形不判装饰物不扣伤害——全是解析层（组合层）的事。 */
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!this.active) return;
     if (!started) return;
     if (other && other.camp === this.camp) return;
     this.hitFx?.(other);
-    if (other) {
-      const r = applyDamage(this.damage, this, other);
-      // ★ 发送伤害事件（供 UI 显示数字）
-      import('../../core/EventBus').then(({ eventBus }) => {
-        eventBus.emit('damage', { target: other, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
-      });
-      console.log(`[bullet] 命中 ${other.constructor.name}，穿透${r.crit ? '【暴击】' : ''}（-${r.final}）`);
-      return;
-    }
-    console.log('[bullet] 命中 地面，反弹');
-    this.onGroundHit?.(
-      this.entity.position.x, this.entity.position.y, this.entity.position.z,
-    );
+    this.onHit?.({
+      self: this,
+      other,
+      point: {
+        x: this.entity.position.x,
+        y: this.entity.position.y,
+        z: this.entity.position.z,
+      },
+      damage: this.damage,
+    });
   }
 
   protected override onUpdate(dt: number): void {

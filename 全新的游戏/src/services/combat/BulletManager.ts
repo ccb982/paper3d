@@ -8,7 +8,9 @@
 // 本类只做：池化生命周期 + 每帧串联（step → bake → sync）。
 
 import * as THREE from 'three';
-import { BulletEntity, type BulletEntityOptions } from './BulletEntity';
+import { BulletEntity, type BulletEntityOptions, type BulletHitPayload } from './BulletEntity';
+
+export type { BulletHitPayload };
 import { BulletVisual } from './BulletVisual';
 import { BulletRenderer } from '../render/BulletRenderer';
 import { makeSilhouetteCanvas } from '../render/SilhouetteShadow';
@@ -54,7 +56,7 @@ export class BulletManager {
     capacity = 100,
     glRenderer?: THREE.WebGLRenderer,
     hitEffectShapes: HitEffectShapeExport[] = [],
-    onGroundHit?: (x: number, y: number, z: number) => void,
+    onHit?: (payload: BulletHitPayload) => void,
   ) {
     this.hitEffectShapes = hitEffectShapes;
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
@@ -114,8 +116,8 @@ export class BulletManager {
       //   命中实体 → attachEffect 挂实体槽（实体骨架驱动坐标 → 自动跟随 + 播完自动回收）
       //   命中地形 → 固定点播放列表（每帧重传同一命中坐标）
       b.hitFx = (other: EntityBase | null) => this.spawnHitEffect(b, other);
-      // ★ 地形扣除：命中地面 → 由世界层挂到 ChunkManager.playBulletImpact
-      b.onGroundHit = onGroundHit ?? null;
+      // ★ 命中解析层回调：每次碰撞开始把命中（敌人/装饰物/地块）交给解析层分类结算
+      b.onHit = onHit ?? null;
       b.setSceneReference(scene); // ★ 让子弹的贴地圆影能创建（需要场景引用）
       this.allBullets.push(b);
       this.pool.push(b);

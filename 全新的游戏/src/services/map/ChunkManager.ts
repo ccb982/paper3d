@@ -15,7 +15,7 @@
 // ============================================================
 
 import * as THREE from 'three';
-import { CHUNK_SIZE, BLOCKS_PER_SIDE } from './ChunkGenerator';
+import { CHUNK_SIZE, BLOCKS_PER_SIDE, BLOCK_SIZE } from './ChunkGenerator';
 import { RasterMap, chunkKeyOf } from './RasterMap';
 import {
   bakeChunkMaps, assembleChunkMaps,
@@ -48,6 +48,9 @@ import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
 import { buildPlatformAprons, type ApronPhysics } from './decor/PlatformApron';
 import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics } from './decor/CementPlinth';
 
+/** 命中解析：装饰实体探测半径（m）——耗尽原石晶体碰撞半径 ~1.15×scale */
+const PROP_PROBE_R = 2.2;
+
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
   decals: PlannedDecal[];
@@ -57,6 +60,52 @@ export interface DecorPlan {
 }
 
 /** 水体几何共享装配（createWaterMesh，WaterMaterial 统一管理闪烁/波/LOD） */
+
+/** ★ 运行时装饰实体索引条目（权威=实际存在于场景的碰撞体；与 propBodies 同步登记/销毁） */
+export interface DecorPropInstance {
+  key: string;
+  cx: number;
+  cz: number;
+  /** 世界坐标（x/z 为底面中心；y 为底面高度） */
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  h: number;
+}
+
+/** ★ 命中解析结果：地形修改 / 掉落 / 表现三端共用一份权威判定 */
+export interface ImpactTile {
+  cx: number;
+  cz: number;
+  /** 世界 4m 地块坐标 */
+  bx: number;
+  bz: number;
+  /** 地块属性表 id（最终 TileDef.id） */
+  id: number;
+  /** 来自表的生成长相 role */
+  role: string;
+  /** 地块面高（米） */
+  h: number;
+}
+export interface ImpactProp {
+  key: string;
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  h: number;
+}
+export interface ImpactReport {
+  x: number;
+  y: number;
+  z: number;
+  tile: ImpactTile;
+  /** 命中地块本身是水 / 紧邻水（4 邻块） / 无水 */
+  water: 'hit' | 'edge' | 'none';
+  /** 命中点附近（PROP_PROBE_R 内）的装饰性实体；无 = null */
+  prop: ImpactProp | null;
+}
 
 /** 体积列表 → 平面 Float32Array（每 5 个 [x,z,y,r,h]） */
 function packVolumes(v: { x: number; z: number; y: number; r: number; h: number }[]): Float32Array {
@@ -84,6 +133,8 @@ export class ChunkManager {
   private bodies = new Map<number, number>();
   /** 装饰物碰撞体 id（key → entity.id[]；随 chunk 生灭） */
   private propBodies = new Map<number, number[]>();
+  /** ★ 装饰实体运行时索引（key → 实例[]；与 propBodies 同生命周期，命中解析只在真实存在物上判定） */
+  private propRegistry = new Map<number, DecorPropInstance[]>();
   /** ★ 石围裙地面刚体 id（key → entity.id；trimesh，与地形同管线，随 chunk 生灭） */
   private apronBodies = new Map<number, number>();
   /** 水泥台座地面刚体 id（chunkKey → id；同墙裙 trimesh 管线） */
@@ -231,6 +282,7 @@ export class ChunkManager {
       for (const id of ids) this.host.destroyGround(id);
     }
     this.propBodies.clear();
+    this.propRegistry.clear();
     for (const id of this.apronBodies.values()) {
       this.host.destroyGround(id);
     }
@@ -608,33 +660,89 @@ export class ChunkManager {
    * 及其邻环逐一重算 → 世界坐标 = cx*60 + 本地（chunk 群中心+30 / 装饰层 −30 抵消）。
    * 物品掉落管线用：耗尽原石晶体（depleted_crystal，半径 ~2.2m）→ 异铁。
    */
-  hasPropTypeNear(x: number, z: number, propKey: string, r: number): boolean {
-    if (this.boss4D) return false;
+  /**
+   * ★ 装饰实体查询：命中点附近（水平距离 ≤ r）的可碰撞装饰物，取最近的那个。
+   * 权威索引 = propRegistry（实际存在物；随 createDecorColliders / chunk 销毁同步）。
+   * 含本 chunk + 8 邻环（跨片边界处的实体仍会被探到）。
+   */
+  queryPropsNear(x: number, z: number, r: number): ImpactProp | null {
+    if (this.boss4D || this.propRegistry.size === 0) return null;
     const baseCx = Math.floor(x / CHUNK_SIZE);
     const baseCz = Math.floor(z / CHUNK_SIZE);
     const r2 = r * r;
+    let best: ImpactProp | null = null;
+    let bestD2 = Infinity;
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
-        const cx = baseCx + dx;
-        const cz = baseCz + dz;
-        const cd = this.raster.getChunkData(cx, cz);
-        if (!cd) continue;
-        const props = planChunkProps({
-          seed: this.raster.worldSeed, cx, cz,
-          groupKey: cd.groupKey, blockTypes: cd.blockTypes,
-          surfaceHeightAt: (px, pz) => this.raster.surfaceHeightAt(px, pz),
-        });
-        for (const p of props) {
-          if (p.propKey !== propKey) continue;
-          const wx = cx * CHUNK_SIZE + p.x;
-          const wz = cz * CHUNK_SIZE + p.z;
-          const ddx = wx - x;
-          const ddz = wz - z;
-          if (ddx * ddx + ddz * ddz <= r2) return true;
+        const list = this.propRegistry.get(chunkKeyOf(baseCx + dx, baseCz + dz));
+        if (!list) continue;
+        for (const p of list) {
+          const ddx = p.x - x;
+          const ddz = p.z - z;
+          const d2 = ddx * ddx + ddz * ddz;
+          if (d2 <= r2 && d2 < bestD2) {
+            bestD2 = d2;
+            best = { key: p.key, x: p.x, y: p.y, z: p.z, r: p.r, h: p.h };
+          }
         }
       }
     }
-    return false;
+    return best;
+  }
+
+  /** 附近（r 内）是否存在某类装饰性实体（授权实现 = propRegistry，无重放代价） */
+  hasPropTypeNear(x: number, z: number, propKey: string, r: number): boolean {
+    return this.queryPropsNear(x, z, r)?.key === propKey;
+  }
+
+  /** ★ 命中解析层：一次调用产出权威 ImpactReport（地形修改 / 掉落 / 表现三端共用） */
+  resolveImpact(x: number, y: number, z: number): ImpactReport {
+    const bx = Math.floor(x / BLOCK_SIZE);
+    const bz = Math.floor(z / BLOCK_SIZE);
+    const cx = Math.floor(bx / BLOCKS_PER_SIDE);
+    const cz = Math.floor(bz / BLOCKS_PER_SIDE);
+    let id = 0;
+    let role = '';
+    let h = 0;
+    const cd = this.raster.getChunkData(cx, cz);
+    if (cd) {
+      const lbx = bx - cx * BLOCKS_PER_SIDE;
+      const lbz = bz - cz * BLOCKS_PER_SIDE;
+      id = cd.blockTypes[lbz * BLOCKS_PER_SIDE + lbx];
+      role = tileById(id).genRole;
+      const gx = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(x - cx * CHUNK_SIZE)));
+      const gz = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(z - cz * CHUNK_SIZE)));
+      h = cd.heights[gz * CHUNK_SIZE + gx];
+    }
+    let water: ImpactReport['water'] = role === 'liquid' ? 'hit' : 'none';
+    if (water === 'none') {
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        if (this.isLiquidBlock(bx + dx, bz + dz)) {
+          water = 'edge';
+          break;
+        }
+      }
+    }
+    return {
+      x, y, z,
+      tile: { cx, cz, bx, bz, id, role, h },
+      water,
+      prop: this.queryPropsNear(x, z, PROP_PROBE_R),
+    };
+  }
+
+  /** 世界 4m 块 → 生成长相 role（无数据 = ''，视为不可挖） */
+  private blockRole(bx: number, bz: number): string {
+    const cd = this.raster.getChunkData(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE));
+    if (!cd) return '';
+    const lbx = bx - Math.floor(bx / BLOCKS_PER_SIDE) * BLOCKS_PER_SIDE;
+    const lbz = bz - Math.floor(bz / BLOCKS_PER_SIDE) * BLOCKS_PER_SIDE;
+    if (lbx < 0 || lbx >= BLOCKS_PER_SIDE || lbz < 0 || lbz >= BLOCKS_PER_SIDE) return '';
+    return tileById(cd.blockTypes[lbz * BLOCKS_PER_SIDE + lbx]).genRole;
+  }
+
+  private isLiquidBlock(bx: number, bz: number): boolean {
+    return this.blockRole(bx, bz) === 'liquid';
   }
 
   /**
@@ -645,7 +753,7 @@ export class ChunkManager {
    *      Worker 不可用 → 主线程同步同函数；纹理缓存缺失 → 既有标准烘焙管线兜底
    *   3) chunk 未建成（未达构建半径）只登记（levels 随数据落库）→ 将来烘焙自然带补丁
    */
-  playBulletImpact(px: number, _py: number, pz: number): void {
+  playBulletImpact(r: ImpactReport): void {
     if (this.boss4D) return; // 四维空间不扣地形
     const R = 0.6; // §14.10 T2 轻量档（破坏小）
     const byChunk = new Map<number, {
@@ -653,7 +761,7 @@ export class ChunkManager {
       cells: { lx: number; lz: number }[];
       dirty: Set<number>; // 世界 4m 块 key（水体增量边界探针失效用）
     }>();
-    for (const c of circleCells(px, pz, R, CHUNK_SIZE)) {
+    for (const c of circleCells(r.x, r.z, R, CHUNK_SIZE)) {
       const key = chunkKeyOf(c.cx, c.cz);
       let rec = byChunk.get(key);
       if (!rec) {
@@ -676,7 +784,7 @@ export class ChunkManager {
     }
     if (changedChunks > 0) {
       console.log(
-        `[PATCH] 命中(${px.toFixed(1)},${pz.toFixed(1)}) r=${R} 格${cells} 变化chunk=${changedChunks}`,
+        `[PATCH] 命中(${r.x.toFixed(1)},${r.z.toFixed(1)}) r=${R} 格${cells} 变化chunk=${changedChunks}`,
       );
     }
   }
@@ -798,13 +906,27 @@ export class ChunkManager {
   private createDecorColliders(cx: number, cz: number, decor: DecorPlan): void {
     if (!this.host.createPropBody) return;
     const ids: number[] = [];
+    const instances: DecorPropInstance[] = [];
     for (const [key, list] of groupPropsByKey(decor.props)) {
       const def = mapDecorByKey(key);
       if (!def?.isCollidable) continue;
       ids.push(...def.createColliders(this.host, list, cx, cz));
+      const ph = def.physics!;
+      for (const p of list) {
+        const r = ph.radius * p.scale;
+        instances.push({
+          key, cx, cz,
+          x: cx * CHUNK_SIZE + p.x,
+          y: p.y,
+          z: cz * CHUNK_SIZE + p.z,
+          r,
+          h: ph.height * p.scale,
+        });
+      }
     }
     if (ids.length > 0) {
       this.propBodies.set(chunkKeyOf(cx, cz), ids);
+      this.propRegistry.set(chunkKeyOf(cx, cz), instances);
     } else if (decor.props.some((p) => mapDecorByKey(p.propKey)?.isCollidable)) {
       console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
     }
@@ -881,6 +1003,7 @@ export class ChunkManager {
       for (const id of oldProps) this.host.destroyGround(id);
       this.propBodies.delete(key);
     }
+    this.propRegistry.delete(key);
     // 石围裙地面刚体同生命周期销毁（trimesh，与地形同管线）
     const oldApron = this.apronBodies.get(key);
     if (oldApron !== undefined) {

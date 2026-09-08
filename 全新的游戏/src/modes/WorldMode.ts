@@ -24,7 +24,7 @@ import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
-import { ChunkManager } from '../services/map/ChunkManager';
+import { ChunkManager, type ImpactReport } from '../services/map/ChunkManager';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
@@ -34,7 +34,9 @@ import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
-import { BulletManager } from '../services/combat/BulletManager';
+import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
+import { applyDamage } from '../services/combat/DamagePipeline';
+import { eventBus } from '../core/EventBus';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
 import { executeAttack } from '../services/combat/Attack';
@@ -289,13 +291,8 @@ export class WorldMode implements IGameMode {
       ctx.bulletAsset ?? createSolidBulletAsset(), 100,
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
-      // ★ 子弹撞地 → 一次性地形扣除（ChunkManager.playBulletImpact）；
-      //   落点 0.6m 内有水面 → 水面剧烈波动；物品掉落管线（§掉落）同一位置触发
-      (x, y, z) => {
-        this.chunks.playBulletImpact(x, y, z);
-        this.agitateWaterNear(x, z);
-        this.spawnItemDrops(x, z);
-      },
+      // ★ 命中解析层入口：每次碰撞开始，所有命中（敌人 / 装饰物 / 地块）都进这里分类结算
+      (payload) => this.resolveBulletHit(payload),
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
 
@@ -651,6 +648,25 @@ export class WorldMode implements IGameMode {
   /**
    * ★ 炮弹/子弹落点 0.6m 半径内若存在水面 → 注入水面剧烈波动。
    */
+  /**
+   * ★★ 命中解析层（唯一入口）：一次子弹碰撞 → 全分类结算。
+   *   敌人实体 → 伤害管线 + 'damage' 事件（combat 归口）；
+   *   静态世界（地块 / 装饰物）→ resolveImpact 一次权威判定 →
+   *     地形扣除（消费地块属性）/ 水面波动 / 物品掉落（消费报告三键）。
+   */
+  private resolveBulletHit({ self, other, point, damage }: BulletHitPayload): void {
+    if (other) {
+      const r = applyDamage(damage, self, other);
+      eventBus.emit('damage', { target: other, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+      console.log(`[bullet] 命中 ${other.constructor.name}，穿透${r.crit ? '【暴击】' : ''}（-${r.final}）`);
+      return;
+    }
+    const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
+    this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门）
+    this.agitateWaterNear(point.x, point.z); // 水面波动
+    this.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告
+  }
+
   private agitateWaterNear(x: number, z: number): void {
     const hit = this.waterPointWithin(x, z, 0.6);
     if (!hit) return;
@@ -674,15 +690,15 @@ export class WorldMode implements IGameMode {
   }
 
   /**
-   * ★ 物品掉落管线：子弹爆炸 → 环境探测 → 掷掉落 → 背包落账 + UI 提示。
-   *   地面(固原岩) / 水面0.6m(酮凝集) / 耗尽原石晶体~2.2m(异铁)；
+   * ★ 物品掉落管线：命中报告（ImpactReport）→ 掷掉落 → 背包落账 + UI 提示。
+   *   地面(固原岩) / 水面或贴水地块(酮凝集) / 耗尽原石晶体~2.2m(异铁)；
    *   有空间直接入袋&提示，背包满则提示失败。
    */
-  private spawnItemDrops(x: number, z: number): void {
+  private spawnItemDrops(r: ImpactReport): void {
     const drops = rollDrops({
-      hasGround: true, // 回调即撞地触发
-      hasWater: this.waterPointWithin(x, z, 0.6) !== null,
-      hasCrystal: this.chunks.hasPropTypeNear(x, z, 'depleted_crystal', 2.2),
+      hasGround: r.tile.role === 'ground' || r.tile.role === 'platform',
+      hasWater: r.water !== 'none',
+      hasCrystal: r.prop?.key === 'depleted_crystal',
     });
     for (const drop of drops) {
       const ok = this.itemManager.hasSpace('player', drop.itemId, drop.count)
