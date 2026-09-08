@@ -228,6 +228,8 @@ export class ChunkManager {
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number): void {
+    // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
+    this.flushPatchRebuilds();
     this.syncChunks(px, pz);
     // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
@@ -283,6 +285,8 @@ export class ChunkManager {
     }
     this.propBodies.clear();
     this.propRegistry.clear();
+    this.pendingPatches.clear();
+    this.patchRebuilds.clear();
     for (const id of this.apronBodies.values()) {
       this.host.destroyGround(id);
     }
@@ -399,6 +403,10 @@ export class ChunkManager {
   private processQueue(): void {
     if (this.queue.length === 0) return;
     const t0 = performance.now();
+    // ★ 优先级：坑洞重建在途/待投时压缩地形创建预算（地形创建优先级不高——
+    //   2026-09-08 用户定调），把主线程+烘焙 worker 让给地形修改链路
+    const patching = this.patchRebuilds.size > 0 || this.pendingPatches.size > 0;
+    const budget = ChunkManager.BUILD_BUDGET_MS * (patching ? 0.5 : 1);
     do {
       const item = this.queue.shift()!;
       const key = chunkKeyOf(item.cx, item.cz);
@@ -418,7 +426,7 @@ export class ChunkManager {
       }
     } while (
       this.queue.length > 0 &&
-      performance.now() - t0 < ChunkManager.BUILD_BUDGET_MS
+      performance.now() - t0 < budget
     );
   }
 
@@ -776,21 +784,69 @@ export class ChunkManager {
       cells += rec.cells.length;
       if (this.raster.digCells(rec.cx, rec.cz, rec.cells)) {
         changedChunks++;
+        // ★ 帧间合并：不立即重建——digCells 已同步落库（数据即时正确），
+        //   视觉重建攒进 pendingPatches，flushPatchRebuilds 每帧开头合并为一次
         const key = chunkKeyOf(rec.cx, rec.cz);
         if (this.meshes.has(key) || this.voidKeys.has(key)) {
-          this.patchRebuildChunk(rec.cx, rec.cz, [...rec.dirty]);
+          let p = this.pendingPatches.get(key);
+          if (!p) {
+            p = { cx: rec.cx, cz: rec.cz, dirty: new Set() };
+            this.pendingPatches.set(key, p);
+          }
+          for (const d of rec.dirty) p.dirty.add(d);
         }
       }
     }
     if (changedChunks > 0) {
-      console.log(
-        `[PATCH] 命中(${r.x.toFixed(1)},${r.z.toFixed(1)}) r=${R} 格${cells} 变化chunk=${changedChunks}`,
-      );
+      const now = performance.now();
+      if (now - this.lastPatchLog > 500) {
+        this.lastPatchLog = now;
+        console.log(
+          `[PATCH] 命中(${r.x.toFixed(1)},${r.z.toFixed(1)}) r=${R} 格${cells} 变化chunk=${changedChunks}`,
+        );
+      }
+    }
+  }
+
+/** [PATCH] 日志节流（连射时 console 不刷屏；console.log 本身也是开销） */
+  private lastPatchLog = 0;
+
+  /** 同一 chunk 破坏重建的最短间隔（ms）：连射/多跳弹 → 视觉分批下陷，
+   *  不再每帧一次全量重建+装配（worker 与主线程都不再被持续射击打满）。 */
+  private static readonly PATCH_REBUILD_MIN_MS = 120;
+
+  /** 各 chunk 上次破坏重建发起时刻（performance.now） */
+  private lastPatchStart = new Map<number, number>();
+
+  /** ★ 破坏重建帧间合并 + 节流（每帧开头调用）：把本帧攒下的挖坑请求按 chunk 合并后
+   *   一次性投递。digCells 已同步落库（数据即时正确），此处只补视觉重建——
+   *   同 chunk 同帧 N 挖 → 1 次重建（dirty 取并集，worker 收敛终态）；
+   *   跨帧连续挖 → 按 PATCH_REBUILD_MIN_MS 间隔分批，未到期/在途的继续攒缓冲。 */
+  private flushPatchRebuilds(): void {
+    if (this.pendingPatches.size === 0) return;
+    const now = performance.now();
+    const items = [...this.pendingPatches.values()];
+    this.pendingPatches.clear();
+    for (const p of items) {
+      const key = chunkKeyOf(p.cx, p.cz);
+      const last = this.lastPatchStart.get(key) ?? -Infinity;
+      if (now - last < ChunkManager.PATCH_REBUILD_MIN_MS || this.patchRebuilds.has(key)) {
+        let q = this.pendingPatches.get(key);
+        if (!q) { q = { cx: p.cx, cz: p.cz, dirty: new Set() }; this.pendingPatches.set(key, q); }
+        for (const d of p.dirty) q.dirty.add(d);
+        continue;
+      }
+      this.lastPatchStart.set(key, now);
+      this.patchRebuildChunk(p.cx, p.cz, [...p.dirty]);
     }
   }
 
   /** 同 chunk 破坏重建在途串行化（终态收敛；key → Promise） */
   private patchRebuilds = new Map<number, Promise<void>>();
+
+  /** ★ 破坏重建帧间合并缓冲：本帧内多发射击/多跳弹对同一 chunk 的挖坑
+   *   先攒在这，flushPatchRebuilds 每帧开头合并为一次重建（≈同帧 N 挖 → 1 重建）。 */
+  private pendingPatches = new Map<number, { cx: number; cz: number; dirty: Set<number> }>();
 
   /**
    * ★ 破坏重建（异步）：几何字节来自 terrainPatch（Worker 优先 / 主线程同函数回退），
@@ -824,7 +880,11 @@ export class ChunkManager {
         const maps2 = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
         if (!maps2) return; // 期间缓存被清：后续 bake/重建自然覆盖
         const decor2 = this.planDecor(cx, cz);
-        this.assembleTableChunk(cx, cz, maps2, decor2, geom.top, geom.wall, geom.water);
+        // ★ 预算化装配：与烘焙结果走同一 assembleQueue（每帧 ≤ ASSEMBLE_PER_FRAME），
+        //  不再同步 assembleTableChunk —— 破坏重建完成不造成主线程瞬时全量装配尖峰
+        this.assembleQueue.push({
+          key, cx, cz, maps: maps2, decor: decor2, top: geom.top, wall: geom.wall, water: geom.water,
+        });
       } catch (e) {
         console.error(`[ChunkManager] chunk(${cx},${cz}) 破坏重建失败，回退标准烘焙`, e);
         this.requestStandardBake(cx, cz);
