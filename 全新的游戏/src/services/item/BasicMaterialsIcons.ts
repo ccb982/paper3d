@@ -12,7 +12,8 @@
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { buildBaseHslData, buildResidualData } from '../../vendor/player/core/ftx';
 import { SIX_BROTHERS } from '../../config/sixBrothers';
-import ftxUrl from '../../assets/textures/六区兄弟.ftx3.gz?url';
+// ★ 素材统一放 public/（运行时 URL）：public/textures/六区兄弟.ftx3.gz
+const FIX_BROTHERS_URL = '/textures/六区兄弟.ftx3.gz';
 
 function fract(x: number): number {
   return x - Math.floor(x);
@@ -79,7 +80,7 @@ let sharedPromise: Promise<Map<string, HTMLCanvasElement>> | null = null;
 export function loadSixBrotherIcons(): Promise<Map<string, HTMLCanvasElement>> {
   if (sharedPromise) return sharedPromise;
   sharedPromise = (async () => {
-    const asset = await FtxAsset.load(ftxUrl);
+    const asset = await FtxAsset.load(FIX_BROTHERS_URL);
     const map = new Map<string, HTMLCanvasElement>();
     for (const mat of SIX_BROTHERS) {
       map.set(mat.id, compositeFrameToCanvas(asset, mat.frame));
