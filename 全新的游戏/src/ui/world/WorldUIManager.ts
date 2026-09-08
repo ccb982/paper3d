@@ -157,11 +157,14 @@ export class WorldUIManager extends BaseInteractionUI {
     });
   }
 
-  /** 显示拾取结果（简化调用） */
-  showPickupResult(itemId: string, success: boolean): void {
-    const msg = success ? `拾取了 ${itemId}` : `背包已满，无法拾取 ${itemId}`;
+  /** 显示拾取结果（简化调用）：显示物品显示名 + 数量；背包满提示失败 */
+  showPickupResult(itemId: string, success: boolean, count = 1): void {
+    const name = this.itemManager.getArchetype(itemId)?.name ?? itemId;
+    const label = success
+      ? count > 1 ? `拾取了 ${name} ×${count}` : `拾取了 ${name}`
+      : `背包已满，无法拾取 ${name}`;
     // 屏幕中央偏下显示
-    this.showFloatingText(window.innerWidth / 2, window.innerHeight / 2 - 50, msg, 'pickup');
+    this.showFloatingText(window.innerWidth / 2, window.innerHeight / 2 - 50, label, 'pickup');
     // ★ 记录闪烁物品 ID，下次渲染背包时格子闪黄光
     if (success) {
       this.flashItemId = itemId;

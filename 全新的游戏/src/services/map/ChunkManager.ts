@@ -603,6 +603,41 @@ export class ChunkManager {
   }
 
   /**
+   * ★ 世界点 (x,z) 半径 r 内是否存在指定 key 的装饰实体（不含四维空间）。
+   * 装饰计划按 seed/chunk 确定性复算（纯查询，不建网格），对命中点所在 chunk
+   * 及其邻环逐一重算 → 世界坐标 = cx*60 + 本地（chunk 群中心+30 / 装饰层 −30 抵消）。
+   * 物品掉落管线用：耗尽原石晶体（depleted_crystal，半径 ~2.2m）→ 异铁。
+   */
+  hasPropTypeNear(x: number, z: number, propKey: string, r: number): boolean {
+    if (this.boss4D) return false;
+    const baseCx = Math.floor(x / CHUNK_SIZE);
+    const baseCz = Math.floor(z / CHUNK_SIZE);
+    const r2 = r * r;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = baseCx + dx;
+        const cz = baseCz + dz;
+        const cd = this.raster.getChunkData(cx, cz);
+        if (!cd) continue;
+        const props = planChunkProps({
+          seed: this.raster.worldSeed, cx, cz,
+          groupKey: cd.groupKey, blockTypes: cd.blockTypes,
+          surfaceHeightAt: (px, pz) => this.raster.surfaceHeightAt(px, pz),
+        });
+        for (const p of props) {
+          if (p.propKey !== propKey) continue;
+          const wx = cx * CHUNK_SIZE + p.x;
+          const wz = cz * CHUNK_SIZE + p.z;
+          const ddx = wx - x;
+          const ddz = wz - z;
+          if (ddx * ddx + ddz * ddz <= r2) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
    * ★ 子弹撞地 → 补丁层数 +1（§14.11 R=0.6/D=0.2/层）：
    *   1) 水平圆与 coarse cell AABB 判交 → digCells 逐格 +1（不封顶；同点连打持续加深，
    *      视觉饱和由包络场几何吸收 → digCells 返回 false 跳过重建）

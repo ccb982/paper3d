@@ -43,6 +43,7 @@ import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { WorldUIManager } from '../ui/world/WorldUIManager';
 import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
+import { rollDrops } from '../services/item/ItemDropPipeline';
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -289,10 +290,11 @@ export class WorldMode implements IGameMode {
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
       // ★ 子弹撞地 → 一次性地形扣除（ChunkManager.playBulletImpact）；
-      //   落点 0.6m 内有水面 → 水面剧烈波动
+      //   落点 0.6m 内有水面 → 水面剧烈波动；物品掉落管线（§掉落）同一位置触发
       (x, y, z) => {
         this.chunks.playBulletImpact(x, y, z);
         this.agitateWaterNear(x, z);
+        this.spawnItemDrops(x, z);
       },
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
@@ -669,6 +671,24 @@ export class WorldMode implements IGameMode {
       }
     }
     return null;
+  }
+
+  /**
+   * ★ 物品掉落管线：子弹爆炸 → 环境探测 → 掷掉落 → 背包落账 + UI 提示。
+   *   地面(固原岩) / 水面0.6m(酮凝集) / 耗尽原石晶体~2.2m(异铁)；
+   *   有空间直接入袋&提示，背包满则提示失败。
+   */
+  private spawnItemDrops(x: number, z: number): void {
+    const drops = rollDrops({
+      hasGround: true, // 回调即撞地触发
+      hasWater: this.waterPointWithin(x, z, 0.6) !== null,
+      hasCrystal: this.chunks.hasPropTypeNear(x, z, 'depleted_crystal', 2.2),
+    });
+    for (const drop of drops) {
+      const ok = this.itemManager.hasSpace('player', drop.itemId, drop.count)
+        && this.itemManager.addItem('player', drop.itemId, drop.count);
+      this.worldUIManager.showPickupResult(drop.itemId, ok, drop.count);
+    }
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {
