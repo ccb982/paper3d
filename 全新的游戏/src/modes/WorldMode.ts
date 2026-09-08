@@ -22,13 +22,14 @@ import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
-import { RasterMap } from '../services/map/RasterMap';
+import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport } from '../services/map/ChunkManager';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
+import type { AIConfig } from '../systems/ai/aiconfig';
 import { ItemBase } from '../entity/ItemBase';
 import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
@@ -63,6 +64,11 @@ export interface WorldModeEnterContext extends IGameModeContext {
   debug?: { testChunk?: boolean };
 }
 
+/** ★ 杂兵配置条目（由 enemyAssets 派生：素材+AI+HP+体型；生成时随机取一条） */
+interface MobDef {
+  asset: FtxAsset; ai: AIConfig; hp: number; scale: number; collisionScale: number;
+}
+
 // ============================================================
 // WorldMode 类
 // ============================================================
@@ -70,8 +76,23 @@ export interface WorldModeEnterContext extends IGameModeContext {
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
   player!: Player;
-  /** ★ 地图上所有杂兵（大量随机生成，逐个独立 AI） */
+  /** ★ 地图上所有杂兵（按 chunk 波次生成，逐个独立 AI） */
   enemies: EnemyBase[] = [];
+
+  /** ★ 杂兵配置条目（由 enemyAssets 派生：素材+AI+HP+体型；生成时随机取一条） */
+  private mobDefs: MobDef[] = [];
+  /** ★ 已生成过的 chunk key（每 chunk 一波，不重复生成） */
+  private spawnedChunks = new Set<number>();
+  /** ★ 出生圈（玩家自己的 chunk + 邻居）里不刷怪 → 记录出生 chunk key */
+  private spawnChunkKey = -1;
+  /** ★ 波次节奏（秒）：距下次"LOD 外环"刷怪的倒计时 */
+  private respawnTimer = 0;
+  /** ★ 全图杂兵上限（无限世界累积保护：死亡/坠坑回收后腾出名额） */
+  private static readonly MAX_ENEMIES = 60;
+  /** ★ 敌人远距回收半径（米）：玩家离开后该区敌人销毁，名额让给新 frontier */
+  private static readonly ENEMY_CULL_RADIUS = 170;
+  /** 远距回收节拍（每 1s 扫一次，避免每帧 O(n)） */
+  private cullAccum = 0;
 
   // ★ 私有物理世界和输入绑定（外界不可见，exit 时完整清理）
   private physics: PhysicsWorld | null = null;
@@ -170,6 +191,8 @@ export class WorldMode implements IGameMode {
     };
     this.chunks = new ChunkManager(this.scene, this.raster, groundHost, {
       testChunk: ctx.debug?.testChunk ?? false,
+      // ★ 每次新加载（激活）一个地块 → 在该 chunk 内随机生成一波敌人
+      onChunkActivated: (cx, cz, key) => this.onChunkActivated(cx, cz, key),
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
 
@@ -214,46 +237,23 @@ export class WorldMode implements IGameMode {
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
 
-    // ---- ★ 三个杂兵大量随机生成（去掉普瑞赛斯——它是最终 Boss，不在地图随机刷） ----
-    const mobSources = (ctx.enemyAssets ?? []).map((asset, i) => ({
+    // ---- ★ 杂兵配置条目（素材 + AI + HP + 体型；生成时随机取一条） ----
+    this.mobDefs = (ctx.enemyAssets ?? []).map((asset, i) => ({
       asset,
       ai: [ROCK_BUG_AI, REUNION_AI, LAOJIE_AI][i % 3] ?? REUNION_AI,
       hp: [25, 40, 70][i % 3] ?? 40,
       scale: [2, 2, 2][i % 3] ?? 2, // ★ 贴片放大 2×
       collisionScale: 1.25, // ★ 碰撞体积再 ×1.25（命中更容易）
     }));
-    if (mobSources.length > 0) {
-      // ★ 出生圈随机散布一定数量杂兵（3 类 × 每类若干，位置围绕出生点）
-      const perType = 4; // 每类数量
-      for (let i = 0; i < mobSources.length; i++) {
-        const src = mobSources[i];
-        for (let k = 0; k < perType; k++) {
-          const ang = Math.random() * Math.PI * 2;
-          const dist = 8 + Math.random() * 16;
-          const mx = spawn.x + Math.cos(ang) * dist;
-          const mz = spawn.z + Math.sin(ang) * dist;
-          const enemy = new EnemyBase(this.entities, this.scene, src.asset, {
-            x: mx, y: 0, z: mz,
-            animMap: {
-              states: {
-                idle: { 前: ['前'], 后: ['后'] },
-                walk: { 前: ['前'], 后: ['后'] },
-                attack: { 前: ['前'], 后: ['后'] },
-              },
-              fps: { idle: 1, walk: 1, attack: 1 },
-            },
-            facing: '前',
-            aggressive: true,
-            aiConfig: src.ai,
-            hp: src.hp,
-            scale: src.scale,
-            collisionScale: src.collisionScale,
-          }, this.camera);
-          enemy.billboard = false;
-          this.enemies.push(enemy);
-        }
-      }
-      console.log(`[WorldMode] 生成了 ${this.enemies.length} 个杂兵（${mobSources.length} 类×${perType}）`);
+    // ★ 出生 chunk 不刷怪（自己的 chunk 留给玩家出生/回城安全区）
+    this.spawnChunkKey = chunkKeyOf(
+      Math.floor(spawn.x / CHUNK_SIZE),
+      Math.floor(spawn.z / CHUNK_SIZE),
+    );
+    // ★ 首波节奏：1.5s 后先来第一波（出生圈附近的安全巡逻）
+    this.respawnTimer = 1.5;
+    if (this.mobDefs.length > 0) {
+      console.log(`[WorldMode] 杂兵配置 ${this.mobDefs.length} 类，chunk 激活式波次生成`);
     }
 
     // ---- 相机 ----
@@ -404,9 +404,25 @@ export class WorldMode implements IGameMode {
     this.aiCtx.dt = dt;
     this.aiCtx.time += dt;
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
+    this.aiCtx.focusX = pp.x;
+    this.aiCtx.focusZ = pp.y;
 
     // ---- AI 驱动 ----
     aiSystem.updateAll(dt, this.aiCtx);
+
+    // ---- ★ 敌人波次节奏：定时在玩家 LOD 外环周围补一波 ----
+    this.respawnTimer -= dt;
+    if (this.respawnTimer <= 0) {
+      // 下一波随机 8~20s（"随机过一段时间"）
+      this.respawnTimer = 8 + Math.random() * 12;
+      this.spawnAmbientWave(pp.x, pp.y);
+    }
+    // ---- ★ 远距敌人回收（1s 一拍；玩家走过的旧区清场） ----
+    this.cullAccum += dt;
+    if (this.cullAccum >= 1) {
+      this.cullAccum = 0;
+      this.cullFarEnemies(pp.x, pp.y);
+    }
 
     // ---- 实体管线驱动 ----
     if (attackPressed) this.player.attack();
@@ -644,6 +660,126 @@ export class WorldMode implements IGameMode {
       dirX: dx, dirY: dy, dirZ: dz,
       speed: 25, camp: 'player', lifetime: 2, damage: 10,
     });
+  }
+
+  /**
+   * ★ chunk 激活回调（ChunkManager 每个新建/激活 chunk 调一次）：
+   *   新地块加载 → 在该 chunk 内随机生成一波敌人。
+   *   ★ 自己的 chunk（出生 chunk）不刷怪。
+   */
+  private onChunkActivated(cx: number, cz: number, key: number): void {
+    if (this.testChunk) return;               // 测试地图不刷怪
+    if (this.chunks.isBoss4D) return;         // 四维空间（最终 Boss 战地图）不刷杂兵
+    if (key === this.spawnChunkKey) return;   // 出生 chunk = 自己的 chunk
+    if (this.spawnedChunks.has(key)) return;  // 每 chunk 只一波
+    this.spawnedChunks.add(key);
+    // ★ 生成 2~4 个（"一些"）；失败重试点，最多尝试若干次
+    const want = 2 + Math.floor(Math.random() * 3);
+    let placed = 0;
+    for (let i = 0; i < want * 8 && placed < want; i++) {
+      if (this.spawnAtRandomPointInChunk(cx, cz)) placed++;
+    }
+    if (placed > 0) {
+      console.log(`[WorldMode] chunk(${cx},${cz}) 激活 → 生成 ${placed} 个杂兵`);
+    }
+  }
+
+  /** ★ 随机在 chunk 内找一个可站立点并生成一个杂兵（不可站立点返回 false） */
+  private spawnAtRandomPointInChunk(cx: number, cz: number): boolean {
+    if (this.mobDefs.length === 0 || !this.scene || !this.camera) return false;
+    // ★ 敌人上限（防无限世界累积过多实体）
+    if (this.enemies.length >= WorldMode.MAX_ENEMIES) return false;
+    const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
+    const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
+    // ★ 玩家附近不刷（防贴脸 pop-in；LOD 内敌人由 AI 靠近时自然接手）
+    const p = this.player?.position;
+    if (p) {
+      const ddx = x - p.x, ddz = z - p.z;
+      if (ddx * ddx + ddz * ddz < 30 * 30) return false;
+    }
+    // ★ 坑/水/虚空/未生成：不站（isDepression 包含坑洞与水）
+    const role = this.raster.tileDefAt(x, z).genRole;
+    if (role === 'pit' || role === 'liquid') return false;
+    const y = this.raster.surfaceHeightAt(x, z);
+    // ★ 落点过低（挖坑后的深坑区）不生成
+    if (y < -1.2) return false;
+    return this.spawnOne(this.pickMob(), x, y, z);
+  }
+
+  /** ★ 定时波次：在玩家 LOD 外环（60m+，chunk 数据环内）周围随机生成一波 */
+  private spawnAmbientWave(px: number, pz: number): void {
+    if (this.testChunk || this.mobDefs.length === 0) return;
+    if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
+    const want = 2 + Math.floor(Math.random() * 2);
+    let placed = 0;
+    // 环带：内圈 > LOD3（60m），外圈 < 数据预载环（~2 chunk）
+    for (let i = 0; i < want * 10 && placed < want; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 64 + Math.random() * 40; // 64~104m
+      const x = px + Math.cos(ang) * dist;
+      const z = pz + Math.sin(ang) * dist;
+      // 目标 chunk 必须已有地形数据（未生成的世界区域不刷）
+      const cx = Math.floor(x / CHUNK_SIZE);
+      const cz = Math.floor(z / CHUNK_SIZE);
+      if (chunkKeyOf(cx, cz) === this.spawnChunkKey) continue;
+      if (!this.raster.getChunkData(cx, cz)) continue;
+      const role = this.raster.tileDefAt(x, z).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const y = this.raster.surfaceHeightAt(x, z);
+      if (y < -1.2) continue;
+      if (this.spawnOne(this.pickMob(), x, y, z)) placed++;
+    }
+    if (placed > 0) {
+      console.log(`[WorldMode] LOD 外环波次 → ${placed} 个杂兵（共 ${this.enemies.length}）`);
+    }
+  }
+
+  /** ★ 随机取一条杂兵配置 */
+  private pickMob(): MobDef {
+    return this.mobDefs[Math.floor(Math.random() * this.mobDefs.length)];
+  }
+
+  /** ★ 远距回收：距玩家超 ENEMY_CULL_RADIUS 的敌人销毁并移除
+   *   （无限世界防累积；靠近后再由 chunk 激活/周期波次补上） */
+  private cullFarEnemies(px: number, pz: number): void {
+    const r2 = WorldMode.ENEMY_CULL_RADIUS ** 2;
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      const dx = e.position.x - px;
+      const dz = e.position.z - pz;
+      if (dx * dx + dz * dz > r2) {
+        e.dispose();
+        this.enemies.splice(i, 1);
+      }
+    }
+  }
+
+  /** ★ 生成一个杂兵（配置/贴片/碰撞统一走 mobDefs） */
+  private spawnOne(
+    def: MobDef,
+    x: number, y: number, z: number,
+  ): boolean {
+    if (!this.scene || !this.camera) return false;
+    const enemy = new EnemyBase(this.entities, this.scene, def.asset, {
+      x, y, z,
+      animMap: {
+        states: {
+          idle: { 前: ['前'], 后: ['后'] },
+          walk: { 前: ['前'], 后: ['后'] },
+          attack: { 前: ['前'], 后: ['后'] },
+        },
+        fps: { idle: 1, walk: 1, attack: 1 },
+      },
+      facing: Math.random() < 0.5 ? '前' : '后',
+      aggressive: true,
+      aiConfig: def.ai,
+      hp: def.hp,
+      scale: def.scale,
+      collisionScale: def.collisionScale,
+    }, this.camera);
+    enemy.billboard = false;
+    this.enemies.push(enemy);
+    return true;
   }
 
   /**

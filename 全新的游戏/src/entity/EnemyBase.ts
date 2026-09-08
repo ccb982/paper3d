@@ -20,6 +20,7 @@ import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { HealthBar } from '../services/fx/HealthBar';
+import { RasterMap } from '../services/map/RasterMap';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
@@ -47,6 +48,12 @@ export class EnemyBase extends CharacterBase {
   aiMoveDir = { x: 1, z: 0 };
   /** 巡逻目标点（wander 用；null = 选新目标） */
   aiWaypoint: { x: number; z: number } | null = null;
+  /** ★ 危险地形转向节流计时（前方坑洞/悬崖 → 禁止直行，转向避让） */
+  private hazardTurnTimer = 0;
+  /** ★ 上次采纳的安全绕行航向（贴边连续走，不来回抖动；null=无） */
+  private hazardSafeDir: { x: number; z: number } | null = null;
+  /** ★ 前方探测距离（米；> 碰撞半宽，提前一个身位避开坑沿） */
+  private static readonly HAZARD_PROBE = 2.0;
 
   constructor(
     em: EntityManager,
@@ -112,23 +119,109 @@ export class EnemyBase extends CharacterBase {
   }
 
 
+  /** ★ AI 激活半径（与玩家超过此距离 → AI 休眠：不索敌/不追击/不游走，省算力） */
+  aiActiveRadius = 75;
+
   /** ★ AI 驱动入口（AISystem 每帧调用） */
   updateAI(dt: number, ctx: BehaviorContext): void {
     // ★ 本帧默认不移动；行为调 moveBy 才设方向（否则攻击等无移动行为会残留速度漂移）
     this.controller.moveDir.x = 0;
     this.controller.moveDir.y = 0;
+    // ★ 距离分级：超出 AI 激活半径 → 休眠（chunk 波次可能在 100m+ 外生成，
+    //   全图 AI 全速跑没意义——进入半径自动唤醒，状态机保留）
+    if (ctx.focusX !== undefined && ctx.focusZ !== undefined) {
+      const dx = this.entity.position.x - ctx.focusX;
+      const dz = this.entity.position.z - ctx.focusZ;
+      const r = this.aiActiveRadius;
+      if (dx * dx + dz * dz > r * r) return;
+    }
     this.aiStateMachine?.update(this, ctx);
   }
 
   /** ★ 移动（统一走 CharacterController 基类函数，与玩家一致）：
    *   moveToward 设期望方向 → CharacterBase 速度驱动 → rapier 结算位置
-   *   ★ 角色朝向 = 移动方向：贴片绕 Y 旋转到移动方向角（任意角度） */
+   *   ★ 角色朝向 = 移动方向：贴片绕 Y 旋转到移动方向角（任意角度）
+   *   ★ 防掉坑：移动前探测前方地形，坑洞/悬崖/水面前提前停下转向 */
   moveBy(dx: number, dz: number, dt: number, speed: number): void {
+    // ★ 危险地形回避：若目标方向前方 HAZARD_PROBE 米内有坑/悬崖，
+    //   不朝该方向直行，改沿安全方向绕行
+    if (this.isDangerAhead(dx, dz)) {
+      // ★ 若上次安全航向仍安全（且与目标方向不相反）→ 延续，贴边连续走
+      if (this.hazardSafeDir) {
+        const k = this.hazardSafeDir;
+        if (k.x * dx + k.z * dz > -0.1 && !this.isDangerAhead(k.x, k.z)) {
+          this.controller.moveToward(k.x, k.z, dt, speed);
+          this.yawBase = Math.atan2(k.x, k.z);
+          return;
+        }
+        this.hazardSafeDir = null;
+      }
+      // ★ 节流：只隔一段时间重新扫向（避免原地高频抖动/每帧重算）
+      this.hazardTurnTimer -= dt;
+      if (this.hazardTurnTimer > 0) {
+        this.controller.moveDir.x = 0;
+        this.controller.moveDir.y = 0;
+        return;
+      }
+      this.hazardTurnTimer = 0.45;
+      // ★ 扫描候选航向：从小到大偏转 ±22.5°、±45°… 直到找到安全方向
+      const base = Math.atan2(dz, dx);
+      let found: { x: number; z: number } | null = null;
+      for (let k = 1; k <= 8; k++) {
+        const dev = (Math.PI / 8) * k;
+        for (const s of [1, -1] as const) {
+          const a = base + dev * s;
+          const cdx = Math.cos(a), cdz = Math.sin(a);
+          if (!this.isDangerAhead(cdx, cdz)) { found = { x: cdx, z: cdz }; break; }
+        }
+        if (found) break;
+      }
+      if (found) {
+        this.hazardSafeDir = found;
+        dx = found.x;
+        dz = found.z;
+      } else {
+        // 全部方向都危险（深坑孤岛）：本帧不动，等下一轮节流再试
+        this.controller.moveDir.x = 0;
+        this.controller.moveDir.y = 0;
+        return;
+      }
+    } else {
+      this.hazardTurnTimer = 0;
+      this.hazardSafeDir = null;
+    }
     this.controller.moveToward(dx, dz, dt, speed);
     // 贴片朝向 = 移动方向（绕 Y 旋转：+z 指向移动方向）
     if (Math.abs(dx) > 0.001 || Math.abs(dz) > 0.001) {
       this.yawBase = Math.atan2(dx, dz);
     }
+  }
+
+  /** ★ 前方是否有危险地形（坑洞 / 悬崖陡降 / 深坑）：
+   *   从脚下向 (dx,dz) 方向探测 HAZARD_PROBE 米，
+   *   若落点比脚底低超过阈值（悬崖/深坑）或落在坑洞地块 → 危险。
+   *   水不在此列（可涉水，不致命）；只防"掉坑"。
+   *   用 RasterMap 高度场（静态），不依赖物理体，成本极低。 */
+  private isDangerAhead(dx: number, dz: number): boolean {
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-4) return false;
+    const ux = dx / len, uz = dz / len;
+    const raster = RasterMap.current;
+    if (!raster) return false;
+    const p = this.entity.position;
+    const p1 = EnemyBase.HAZARD_PROBE;
+    const p2 = p1 * 0.55; // 中间采样点（更早发现坑沿，转角更平滑）
+    for (const d of [p2, p1]) {
+      const hx = p.x + ux * d;
+      const hz = p.z + uz * d;
+      // 坑洞地块（lethal 深坑）：不可站立 → 危险
+      if (raster.tileDefAt(hx, hz).genRole === 'pit') return true;
+      // 悬崖陡降 / 被挖穿的深坑：前方高度比脚下低超过 1.2 米（跳不过/会摔入）
+      const myY = this.controller.isAirborne() ? p.y : raster.surfaceHeightAt(p.x, p.z);
+      const hY = raster.surfaceHeightAt(hx, hz);
+      if (myY - hY > 1.2) return true;
+    }
+    return false;
   }
 
   /** 切帧（显示帧：由相机判定，见 onUpdate） */

@@ -18,6 +18,9 @@ export interface BehaviorContext {
   findTarget: (camp: string) => { x: number; z: number } | null;
   /** ★ 攻击意图入口（模式层注入 = executeAttack——近战/远程/范围统一分派） */
   attack: (opts: AttackOptions) => void;
+  /** ★ 玩家世界坐标（AI 距离分级/波次生成用） */
+  focusX?: number;
+  focusZ?: number;
 }
 
 export type BehaviorFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, string | number>) => void;
