@@ -4,6 +4,9 @@
 // 不存：地图/坐标/战斗临时状态/预计算的加成数值
 // ============================================================
 
+// 六区兄弟 = 六种基础合成材料（开荒种子用）
+import { SIX_BROTHER_MATERIAL_IDS } from '../config/sixBrothers';
+
 // ============================================================
 // 1. 基础类型
 // ============================================================
@@ -329,6 +332,11 @@ export function computeCombatStats(
 // ============================================================
 
 export function createNewSession(): GameSession {
+  const player = createEmptyGrid(GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols);
+  // 开荒种子：六区兄弟（六种基础材料）各一份，背包首行展示
+  SIX_BROTHER_MATERIAL_IDS.forEach((id, i) => {
+    player[0][i] = { itemId: id, stackSize: 1 };
+  });
   return {
     meta: {
       version: '0.1.0',
@@ -341,7 +349,7 @@ export function createNewSession(): GameSession {
     inventories: {
       base: createEmptyGrid(30, 30),
       ship: createEmptyGrid(8, 10),
-      player: createEmptyGrid(4, 6),
+      player,
       allies: {},
     },
     relics: {

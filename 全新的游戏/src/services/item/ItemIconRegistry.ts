@@ -6,9 +6,8 @@
 // 与 ItemManager 配合，是配置层 → 表现层的桥梁。
 // ============================================================
 
-import * as THREE from 'three';
-import type { ItemManager } from '../../systems/inventory/ItemManager';
-import { createSolidBulletAsset } from '../fx/SolidBulletAsset';
+import { ItemManager } from '../../systems/inventory/ItemManager';
+import { loadSixBrotherIcons } from './BasicMaterialsIcons';
 
 export interface ItemIconConfig {
   /** 色调 0-1 */
@@ -20,21 +19,37 @@ export interface ItemIconConfig {
 }
 
 export class ItemIconRegistry {
-  private cache = new Map<string, THREE.Texture>();
+  private cache = new Map<string, HTMLCanvasElement>();
+  private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
 
-  constructor(private itemManager: ItemManager) {}
+  constructor(private itemManager: ItemManager) {
+    // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
+    loadSixBrotherIcons()
+      .then((map) => { this.sixBrothers = map; })
+      .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
+  }
 
-  /** 获取物品图标纹理（优先从缓存取，无则生成） */
-  getIcon(itemId: string): THREE.Texture {
+  /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底） */
+  getIcon(itemId: string): HTMLCanvasElement {
+    if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
     if (this.cache.has(itemId)) return this.cache.get(itemId)!;
 
     const arch = this.itemManager.getArchetype(itemId);
     const color = arch?.color || { h: 0.55, s: 0.8, l: 0.6 };
-    // 用 SolidBulletAsset 生成色块（后续可替换为真正的 ftx 加载）
-    const asset = createSolidBulletAsset(64, color.h, color.s, color.l);
-    const pair = asset.getFramePair(0);
-    if (!pair) throw new Error(`无法生成物品图标: ${itemId}`);
-    this.cache.set(itemId, pair.base);
-    return pair.base;
+    // 色块兜底（装弹器/药水等无专用纹理物品）
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    const fill = `hsl(${color.h * 360}, ${color.s * 100}%, ${color.l * 100}%)`;
+    ctx.fillStyle = fill;
+    ctx.fillRect(0, 0, 64, 64);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(32, 32, 27, 0, Math.PI * 2);
+    ctx.stroke();
+    this.cache.set(itemId, canvas);
+    return canvas;
   }
 }

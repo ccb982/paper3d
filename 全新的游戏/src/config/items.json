@@ -122,6 +122,90 @@
       "effects": [
         { "type": "heal", "value": 999 }
       ]
+    },
+    {
+      "id": "raw_rock",
+      "name": "固原岩",
+      "type": "material",
+      "description": "最基础的岩石材料，经提炼可制成多种器材",
+      "maxStack": 99,
+      "color": { "h": 0.08, "s": 0.3, "l": 0.45 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.18 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "polyester",
+      "name": "聚酸酯",
+      "type": "material",
+      "description": "常见的合成材料，质地细密，用途广泛",
+      "maxStack": 99,
+      "color": { "h": 0.58, "s": 0.55, "l": 0.5 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.14, "hz": 0.16 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "sugar",
+      "name": "糖",
+      "type": "material",
+      "description": "甜甜的日常物资，也是不少配方的基础原料",
+      "maxStack": 99,
+      "color": { "h": 0.09, "s": 0.7, "l": 0.55 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.18, "hy": 0.14, "hz": 0.18 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "iron_grain",
+      "name": "异铁",
+      "type": "material",
+      "description": "高强度的金属矿石，制造装备的常用原料",
+      "maxStack": 99,
+      "color": { "h": 0.57, "s": 0.35, "l": 0.4 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.16, "hz": 0.18 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "ketone",
+      "name": "酮凝集",
+      "type": "material",
+      "description": "性质稳定的有机材料，可用于多种加工工序",
+      "maxStack": 99,
+      "color": { "h": 0.9, "s": 0.45, "l": 0.5 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.18, "hy": 0.14, "hz": 0.18 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "device",
+      "name": "装置",
+      "type": "material",
+      "description": "精密的基础零件，组装更高阶装备的核心材料",
+      "maxStack": 99,
+      "color": { "h": 0.62, "s": 0.65, "l": 0.45 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.18, "hy": 0.16, "hz": 0.16 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
     }
   ]
 }

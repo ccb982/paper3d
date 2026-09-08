@@ -85,16 +85,11 @@ export class InventoryGridRenderer {
         el.classList.add('ui-slot-flash');
       }
 
-      // ★ 显示物品图标（纹理色块）
+      // ★ 显示物品图标（六区兄弟 = FTX 帧画布，其余 = 色块兜底）
       try {
-        const tex = this.iconRegistry.getIcon(slot.itemId);
-        const canvas = document.createElement('canvas');
-        canvas.width = tex.image.width;
-        canvas.height = tex.image.height;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(tex.image, 0, 0);
+        const iconCanvas = this.iconRegistry.getIcon(slot.itemId);
         const img = document.createElement('img');
-        img.src = canvas.toDataURL();
+        img.src = iconCanvas.toDataURL();
         img.style.cssText = 'width:80%;height:80%;object-fit:contain;';
         el.appendChild(img);
       } catch {
