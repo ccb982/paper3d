@@ -18,6 +18,8 @@ interface PatchChunkMsg {
   levels: Uint8Array;
   /** 本次 dig 直接挖到的世界 4m 块 key（水体重建增量）；null = 全量 */
   dirty: number[] | null;
+  /** ★ 主线程（CPU 侧）预算的受影响掩码（top+side）；缺省 = Worker 就地算 */
+  masks: { top: Uint8Array; side: Uint8Array } | null;
   chunks: {
     ccx: number;
     ccz: number;
@@ -64,6 +66,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     msg.cz,
     levels,
     msg.dirty ?? null,
+    msg.masks,
   );
   ctx.postMessage(
     { type: "result", id: msg.id, ...out },

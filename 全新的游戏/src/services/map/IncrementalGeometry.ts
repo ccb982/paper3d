@@ -31,6 +31,7 @@ import {
   topFineCellsFor,
   buildTopGeometry,
   buildWallGeometry,
+  buildLevelOverlay,
   FINE_S,
   TOP_COARSE_TRI,
   TOP_FINE_TRI,
@@ -160,6 +161,7 @@ export interface IncrementalResult {
 // ★ 受影响掩码：补丁 cell ∪ 外扩 1 圈（预防性扩张）
 // ------------------------------------------------------------
 
+/** 顶面受影响 cell：补丁 cell ∪ 外扩 1 圈（Chebyshev 1 邻域） */
 function affectedTopMask(patch: PatchOverlay): Uint8Array {
   const mask = new Uint8Array(NC);
   for (let lz = 0; lz < N; lz++) {
@@ -176,6 +178,7 @@ function affectedTopMask(patch: PatchOverlay): Uint8Array {
   return mask;
 }
 
+/** 侧壁受影响 4m 边：该边两侧 8 个 1m cell 任一带受影响标记 */
 function affectedSideMask(mask: Uint8Array): Uint8Array {
   const sideMask = new Uint8Array(NBS);
   let s = 0;
@@ -196,6 +199,19 @@ function affectedSideMask(mask: Uint8Array): Uint8Array {
     }
   }
   return sideMask;
+}
+
+/**
+ * ★ 主线程（CPU 侧）预计算受影响掩码：纯 (levels, cx, cz) 函数，不依赖 src/table。
+ * 主线程一次算好 top+side 掩码 → 随消息传给 Worker，Worker 不再重复扫掩码
+ * （几何装配直接用）。Worker 与主线程回退都可复用同一函数 → 字节一致。
+ */
+export function computeIncrementalMasks(
+  levels: Uint8Array, cx: number, cz: number,
+): { top: Uint8Array; side: Uint8Array } {
+  const patch = buildLevelOverlay(levels, cx, cz);
+  const top = affectedTopMask(patch);
+  return { top, side: affectedSideMask(top) };
 }
 
 // ------------------------------------------------------------
@@ -353,6 +369,7 @@ function buildWallIncremental(
 export function incrementalGeometry(
   seed: number, cx: number, cz: number,
   table: FaceTable, src: BlockSource, patch: PatchOverlay,
+  masks?: { top: Uint8Array; side: Uint8Array },
 ): IncrementalResult {
   let base = baseCache.get(cacheKey(seed, cx, cz));
   if (!base) {
@@ -362,8 +379,9 @@ export function incrementalGeometry(
     base = seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall);
   }
   const fineE = topFineCellsFor(table, src, patch);
-  const mask = affectedTopMask(patch);
-  const sideMask = affectedSideMask(mask);
+  // 掩码可主线程预算后传入（跳过 Worker 侧重复扫描）；缺省就地算
+  const mask = masks ? masks.top : affectedTopMask(patch);
+  const sideMask = masks ? masks.side : affectedSideMask(mask);
   return {
     top: buildTopIncremental(base, table, src, patch, fineE, mask),
     wall: buildWallIncremental(base, table, src, patch, fineE, sideMask),

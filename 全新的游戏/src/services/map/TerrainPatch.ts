@@ -28,6 +28,7 @@
 // ============================================================
 
 import { computeTableGeometry, incrementalDropCache, type PatchGeomResult } from "./PatchCompute";
+import { computeIncrementalMasks } from "./IncrementalGeometry";
 import type { ChunkDataLite } from "./Refinements";
 
 interface PatchChunkData {
@@ -133,11 +134,18 @@ class TerrainPatchService {
       }
     }
     this.ensureAll(); // 3 worker 惰性就绪（首次 compute 齐备；之后热用）
+    // ★ CPU 侧（主线程）预计算受影响掩码：纯 (levels,cx,cz)，随消息传给 Worker，
+    //   Worker 不再重复扫掩码 → 几何装配直接消费（字节一致由同函数保证）。
+    const masks = req.levels && req.levels.length > 0
+      ? computeIncrementalMasks(req.levels, cx, cz)
+      : null;
     const i = this.pickLeastBusy();
     const w = i >= 0 ? this.workers[i] : null;
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
-      return Promise.resolve(computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty));
+      return Promise.resolve(
+        computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty, masks),
+      );
     }
     const id = this.nextIds[i] = (this.nextIds[i] ?? 0) + 1;
     return new Promise((resolve) => {
@@ -159,6 +167,7 @@ class TerrainPatchService {
           cz,
           levels: req.levels ?? new Uint8Array(0),
           dirty: req.dirty ?? null,
+          masks,
           chunks,
         },
         transfer,
