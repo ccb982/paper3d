@@ -28,8 +28,10 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   aiConfig?: AIConfig;
   /** 生命值（默认 30） */
   hp?: number;
-  /** ★ 体型放大（贴片 + 碰撞体积统一 ×；默认 1） */
+  /** ★ 贴片放大（默认 1） */
   scale?: number;
+  /** ★ 碰撞体积放大（在 scale 基础上再乘；默认 1，命中体积与贴片可不等） */
+  collisionScale?: number;
 }
 
 export class EnemyBase extends CharacterBase {
@@ -53,13 +55,14 @@ export class EnemyBase extends CharacterBase {
     opts: EnemyOptions,
     private camera?: THREE.Camera,
   ) {
-    // ★ 体型放大：贴片 + 碰撞体积统一 × scale（默认 1）
+    // ★ 体型：贴片 × scale；碰撞体积在 scale 基础上再 × collisionScale（默认 1）
     const scale = opts.scale ?? 1;
+    const colScale = (opts.scale ?? 1) * (opts.collisionScale ?? 1);
     const baseVol = DEFAULT_COLLISION_VOLUME;
     const shape = baseVol.shape.type === 'cuboid'
-      ? { type: 'cuboid' as const, hx: baseVol.shape.hx * scale, hy: baseVol.shape.hy * scale, hz: baseVol.shape.hz * scale }
+      ? { type: 'cuboid' as const, hx: baseVol.shape.hx * colScale, hy: baseVol.shape.hy * colScale, hz: baseVol.shape.hz * colScale }
       : baseVol.shape;
-    const offsetY = baseVol.offsetY * scale;
+    const offsetY = baseVol.offsetY * colScale;
     super(em, {
       ...opts,
       kind: 'enemy',

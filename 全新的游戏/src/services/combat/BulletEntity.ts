@@ -49,7 +49,7 @@ export class BulletEntity extends EntityBase {
 
   /** ★ 子弹碰撞体积（球体；弹头锚点由渲染器折叠进实例变换） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
-    shape: { type: 'ball', radius: 0.08 },
+    shape: { type: 'ball', radius: 0.1 },
     offsetY: 0,
   };
   private lifetime = 0;
@@ -99,7 +99,7 @@ export class BulletEntity extends EntityBase {
       physics: {
         type: 'dynamic',
         options: {
-          shape: { type: 'ball', radius: opts.radius ?? 0.08 },
+          shape: { type: 'ball', radius: opts.radius ?? 0.1 },
           canSleep: false,
           gravityScale: 0,    // ★ 无重力：直线弹道
           ccd: true,          // ★ 连续碰撞检测：防隧穿
@@ -262,7 +262,7 @@ export class BulletEntity extends EntityBase {
   /**
    * ★ 实例矩阵（基类公共函数）：computeRenderTransform + 弹头锚点 + 缩放
    *   → 列主序 16 元素写入 target[offset..offset+16]（零分配，渲染器直接消费）。
-   *   弹头锚点：quad 中心 = 实体位置 - long × 半高（弹头端压在碰撞点）。
+   *   弹头锚点：quad 中心 = 实体位置 + long × 半高（弹头端压在碰撞点/判定点）。
    */
   static writeRenderMatrix(
     target: Float32Array | number[],
@@ -286,9 +286,9 @@ export class BulletEntity extends EntityBase {
     target[offset + 9] = t.normal.y;
     target[offset + 10] = t.normal.z;
     target[offset + 11] = 0;
-    target[offset + 12] = position.x - t.long.x * halfH;
-    target[offset + 13] = position.y - t.long.y * halfH;
-    target[offset + 14] = position.z - t.long.z * halfH;
+    target[offset + 12] = position.x + t.long.x * halfH;
+    target[offset + 13] = position.y + t.long.y * halfH;
+    target[offset + 14] = position.z + t.long.z * halfH;
     target[offset + 15] = 1;
   }
 

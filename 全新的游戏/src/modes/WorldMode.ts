@@ -219,7 +219,8 @@ export class WorldMode implements IGameMode {
       asset,
       ai: [ROCK_BUG_AI, REUNION_AI, LAOJIE_AI][i % 3] ?? REUNION_AI,
       hp: [25, 40, 70][i % 3] ?? 40,
-      scale: [2, 2, 2][i % 3] ?? 2, // ★ 体型放大 2×（贴片 + 碰撞体积统一）
+      scale: [2, 2, 2][i % 3] ?? 2, // ★ 贴片放大 2×
+      collisionScale: 1.25, // ★ 碰撞体积再 ×1.25（命中更容易）
     }));
     if (mobSources.length > 0) {
       // ★ 出生圈随机散布一定数量杂兵（3 类 × 每类若干，位置围绕出生点）
@@ -246,6 +247,7 @@ export class WorldMode implements IGameMode {
             aiConfig: src.ai,
             hp: src.hp,
             scale: src.scale,
+            collisionScale: src.collisionScale,
           }, this.camera);
           enemy.billboard = false;
           this.enemies.push(enemy);
@@ -640,7 +642,7 @@ export class WorldMode implements IGameMode {
       type: 'projectile', source: this.player,
       x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
       dirX: dx, dirY: dy, dirZ: dz,
-      speed: 20, camp: 'player', lifetime: 2, damage: 10,
+      speed: 25, camp: 'player', lifetime: 2, damage: 10,
     });
   }
 
