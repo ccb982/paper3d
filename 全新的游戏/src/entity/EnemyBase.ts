@@ -203,10 +203,12 @@ export class EnemyBase extends CharacterBase {
     }
   }
 
-  /** ★ 前方是否有危险地形（坑洞 / 悬崖陡降 / 深坑）：
+  /** ★ 前方是否有危险地形（只挡"坑"：坑洞地块 / 过深的坑底）：
    *   从脚下向 (dx,dz) 方向探测 HAZARD_PROBE 米，
-   *   若落点比脚底低超过阈值（悬崖/深坑）或落在坑洞地块 → 危险。
-   *   水不在此列（可涉水，不致命）；只防"掉坑"。
+   *   落点是坑洞地块（lethal）或表面过低（深坑底）→ 危险。
+   *   ★ 不挡普通高低差/悬崖：高台 1.8m 上下是允许的（clampCharacter
+   *   会把角色贴回地表），只要不近坑即可。
+   *   水也不在此列（可涉水，不致命）。
    *   用 RasterMap 高度场（静态），不依赖物理体，成本极低。 */
   private isDangerAhead(dx: number, dz: number): boolean {
     const len = Math.hypot(dx, dz);
@@ -222,10 +224,8 @@ export class EnemyBase extends CharacterBase {
       const hz = p.z + uz * d;
       // 坑洞地块（lethal 深坑）：不可站立 → 危险
       if (raster.tileDefAt(hx, hz).genRole === 'pit') return true;
-      // 悬崖陡降 / 被挖穿的深坑：前方高度比脚下低超过 1.2 米（跳不过/会摔入）
-      const myY = this.controller.isAirborne() ? p.y : raster.surfaceHeightAt(p.x, p.z);
-      const hY = raster.surfaceHeightAt(hx, hz);
-      if (myY - hY > 1.2) return true;
+      // 坑底过低（挖深/坑洞的深底，判定死亡线以下）→ 危险
+      if (raster.surfaceHeightAt(hx, hz) < -1.2) return true;
     }
     return false;
   }
