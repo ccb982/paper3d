@@ -28,7 +28,7 @@ import { ChunkManager, type ImpactReport } from '../services/map/ChunkManager';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
-import { PRESERVER_AI } from '../systems/ai/aiconfig';
+import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
 import { ItemBase } from '../entity/ItemBase';
 import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
@@ -56,7 +56,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   combatStats: import('../core/Session').PlayerCombatStats;
   protagonistAsset: FtxAsset;
   bulletAsset?: Asset | FtxAsset;
-  enemyAsset?: Asset;
+  /** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
+  enemyAssets?: FtxAsset[];
   hitEffectAsset?: Asset;
   /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
   debug?: { testChunk?: boolean };
@@ -69,7 +70,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
   player!: Player;
-  enemy: EnemyBase | null = null;
+  /** ★ 地图上所有杂兵（大量随机生成，逐个独立 AI） */
+  enemies: EnemyBase[] = [];
 
   // ★ 私有物理世界和输入绑定（外界不可见，exit 时完整清理）
   private physics: PhysicsWorld | null = null;
@@ -109,6 +111,8 @@ export class WorldMode implements IGameMode {
   private readonly spawnPoint = { x: 50.6, z: 101.6 };
   private acc = 0;
   private damageUnsub?: () => void;
+  /** ★ killed 事件订阅：杂兵死亡 → 从 enemies 列表移除 */
+  private killedUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
   private waterPrev = new Map<
@@ -210,24 +214,44 @@ export class WorldMode implements IGameMode {
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
 
-    // ---- ★ 测试敌人 ----
-    const enemyAsset = ctx.enemyAsset;
-    if (enemyAsset) {
-      this.enemy = new EnemyBase(this.entities, this.scene, enemyAsset, {
-        x: spawn.x + 12, y: 0, z: spawn.z + 8,
-        animMap: {
-          states: {
-            idle: { 前: ['前'], 后: ['后'] },
-            walk: { 前: ['前'], 后: ['后'] },
-            attack: { 前: ['前'], 后: ['后'] },
-          },
-          fps: { idle: 1, walk: 1, attack: 1 },
-        },
-        facing: '前',
-        aggressive: true,
-        aiConfig: PRESERVER_AI,
-      }, this.camera);
-      this.enemy.billboard = false;
+    // ---- ★ 三个杂兵大量随机生成（去掉普瑞赛斯——它是最终 Boss，不在地图随机刷） ----
+    const mobSources = (ctx.enemyAssets ?? []).map((asset, i) => ({
+      asset,
+      ai: [ROCK_BUG_AI, REUNION_AI, LAOJIE_AI][i % 3] ?? REUNION_AI,
+      hp: [25, 40, 70][i % 3] ?? 40,
+      scale: [2, 2, 2][i % 3] ?? 2, // ★ 体型放大 2×（贴片 + 碰撞体积统一）
+    }));
+    if (mobSources.length > 0) {
+      // ★ 出生圈随机散布一定数量杂兵（3 类 × 每类若干，位置围绕出生点）
+      const perType = 4; // 每类数量
+      for (let i = 0; i < mobSources.length; i++) {
+        const src = mobSources[i];
+        for (let k = 0; k < perType; k++) {
+          const ang = Math.random() * Math.PI * 2;
+          const dist = 8 + Math.random() * 16;
+          const mx = spawn.x + Math.cos(ang) * dist;
+          const mz = spawn.z + Math.sin(ang) * dist;
+          const enemy = new EnemyBase(this.entities, this.scene, src.asset, {
+            x: mx, y: 0, z: mz,
+            animMap: {
+              states: {
+                idle: { 前: ['前'], 后: ['后'] },
+                walk: { 前: ['前'], 后: ['后'] },
+                attack: { 前: ['前'], 后: ['后'] },
+              },
+              fps: { idle: 1, walk: 1, attack: 1 },
+            },
+            facing: '前',
+            aggressive: true,
+            aiConfig: src.ai,
+            hp: src.hp,
+            scale: src.scale,
+          }, this.camera);
+          enemy.billboard = false;
+          this.enemies.push(enemy);
+        }
+      }
+      console.log(`[WorldMode] 生成了 ${this.enemies.length} 个杂兵（${mobSources.length} 类×${perType}）`);
     }
 
     // ---- 相机 ----
@@ -328,6 +352,11 @@ export class WorldMode implements IGameMode {
           this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
         }
       });
+      // ★ 杂兵死亡 → 从 enemies 列表移除（含坠坑外的伤害致死）
+      this.killedUnsub = eventBus.on('killed', (payload) => {
+        const idx = this.enemies.indexOf(payload.target as EnemyBase);
+        if (idx !== -1) this.enemies.splice(idx, 1);
+      });
     });
   }
 
@@ -383,11 +412,11 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感） ----
     this.updateWaterEntry(this.player, dt);
-    if (this.enemy) this.updateWaterEntry(this.enemy, dt);
+    for (const e of this.enemies) this.updateWaterEntry(e, dt);
 
     // ---- 角色地形跟随 ----
     this.clampCharacter(this.player, dt);
-    if (this.enemy) this.clampCharacter(this.enemy, dt);
+    for (const e of this.enemies) this.clampCharacter(e, dt);
 
     // ---- ★ 测试地图：玩家钳在出生 chunk 内（世界只有这一块，无邻可走） ----
     if (this.testChunk) {
@@ -458,6 +487,9 @@ export class WorldMode implements IGameMode {
     // ---- 取消伤害事件订阅 ----
     this.damageUnsub?.();
     this.damageUnsub = undefined;
+    // ---- 取消 killed 事件订阅 ----
+    this.killedUnsub?.();
+    this.killedUnsub = undefined;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
 
@@ -499,7 +531,7 @@ export class WorldMode implements IGameMode {
     this.physics = null;
 
     // ---- 清空引用 ----
-    this.enemy = null;
+    this.enemies = [];
     this.session = null;
     this.onReturn = null;
     this.scene = null;
@@ -738,7 +770,9 @@ export class WorldMode implements IGameMode {
         p.y = this.raster.surfaceHeightAt(p.x, p.z);
         this.cameraCtrl.snapTo(p.x, p.y, p.z);
       } else {
-        this.enemy = null;
+        // 杂兵坠坑死亡：从列表移除
+        const idx = this.enemies.indexOf(e as EnemyBase);
+        if (idx !== -1) this.enemies.splice(idx, 1);
       }
     }
   }

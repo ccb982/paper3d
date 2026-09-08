@@ -20,12 +20,13 @@ export class Player extends CharacterBase {
     super(em, { ...opts, kind: 'player', asset });
     this.camp = 'player';
     this.attachToScene(scene);
-    // bbox 映射（帧数据 → quad；★ 纹理实际尺寸 = bbox 尺寸，与 EnemyBase 一致）
+    // bbox 映射（帧数据 → quad；★ 纹理已按 bbox 裁剪，尺寸 = bbox 尺寸，偏移归零，与 EnemyBase 一致）
     const source = asset as unknown as { frames: Array<{ bbox: { x: number; y: number; w: number; h: number } }> };
     const frame0 = source.frames[0];
+    const b = frame0.bbox;
     (this.renderer as FTXQuad).setFrameMapping(
-      { width: frame0.bbox.w, height: frame0.bbox.h },
-      frame0.bbox,
+      { width: b.w, height: b.h },
+      { x: 0, y: 0, w: b.w, h: b.h },
     );
     // ★ 按纹理宽高比缩放（角色站立比例）
     // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）→ 2.0（2026-09-06 用户：纹理大小增大一倍；

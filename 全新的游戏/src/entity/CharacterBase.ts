@@ -34,7 +34,7 @@ export interface CharacterBaseOptions extends EntityBaseOptions {
  *   正面（x）宽 0.56 对齐贴片宽度；厚度（z）0.3 薄片；
  *   高 2.0（贴片 2.5 的 80%，脚底到肩部）
  *   模块级常量：super() 时字段尚未初始化，构造参数只能引用常量 */
-const DEFAULT_COLLISION_VOLUME = {
+export const DEFAULT_COLLISION_VOLUME = {
   shape: { type: "cuboid", hx: 0.28, hy: 1.0, hz: 0.15 } as const,
   offsetY: 1.0,
 };
@@ -44,7 +44,7 @@ export abstract class CharacterBase extends EntityBase {
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
-  readonly collisionVolume: {
+  collisionVolume: {
     shape: import("../services/physics/PhysicsWorld").ColliderShape;
     offsetY: number;
   } = DEFAULT_COLLISION_VOLUME;

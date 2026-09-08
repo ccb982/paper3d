@@ -62,3 +62,73 @@ export const PRESERVER_AI: AIConfig = {
   },
   initial: 'patrol',
 };
+
+// ============================================================
+// ★ 三杂兵 AI（数据驱动，按主流敌人模板派生不同参数）
+//   加新敌人 = 加配置条目，不改代码。
+// ============================================================
+
+/**
+ * 主流杂兵 AI 模板：巡逻 → 索敌 → 追击 → 近战 → 回巡逻。
+ * 仅在 mobAI 一次、之后按需派生变体。
+ */
+export interface MobAIParams {
+  /** 游走速度 */
+  wanderSpeed?: number;
+  /** 追击速度 */
+  chaseSpeed?: number;
+  /** 索敌半径 */
+  aggroRadius?: number;
+  /** 攻击距离 */
+  attackRadius?: number;
+  /** 脱离索敌半径 */
+  loseRadius?: number;
+  /** 攻击时长（秒） */
+  meleeDuration?: number;
+  /** 单次挥击伤害预留给伤害管线，此处仅注记 */
+  meleeDamage?: number;
+}
+
+export function mobAI(p: MobAIParams = {}): AIConfig {
+  const wander = p.wanderSpeed ?? 2;
+  const chase = p.chaseSpeed ?? 2.5;
+  const aggro = p.aggroRadius ?? 8;
+  const attack = p.attackRadius ?? 1.5;
+  const lose = p.loseRadius ?? 12;
+  const melee = p.meleeDuration ?? 0.6;
+  return {
+    states: {
+      patrol: {
+        behaviors: [{ name: 'wander', params: { speed: wander, turnRate: 0.5, turnInterval: 0.4, targetBias: 0.04, biasCamp: 'player' } }],
+        transitions: [
+          { cond: 'seePlayer', params: { radius: aggro, camp: 'player' }, to: 'chase' },
+        ],
+        minStay: 3,
+      },
+      chase: {
+        behaviors: [{ name: 'moveToTarget', params: { speed: chase } }],
+        transitions: [
+          { cond: 'inRange', params: { radius: attack }, to: 'attack' },
+          { cond: 'loseTarget', params: { radius: lose }, to: 'patrol' },
+        ],
+      },
+      attack: {
+        behaviors: [{ name: 'meleeSwing', params: { duration: melee } }],
+        transitions: [
+          { cond: 'attackFinished', to: 'patrol' },
+          { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: 'patrol' },
+        ],
+      },
+    },
+    initial: 'patrol',
+  };
+}
+
+/** 原石虫：最基础杂兵，慢速、贴脸短索敌、低血 */
+export const ROCK_BUG_AI: AIConfig = mobAI({ wanderSpeed: 1.4, chaseSpeed: 1.8, aggroRadius: 5, attackRadius: 1.2, loseRadius: 9, meleeDuration: 0.5 });
+
+/** 整合运动人员：标准杂兵，中速、中索敌、中血 */
+export const REUNION_AI: AIConfig = mobAI({ wanderSpeed: 2, chaseSpeed: 2.5, aggroRadius: 8, attackRadius: 1.5, loseRadius: 12, meleeDuration: 0.6 });
+
+/** 牢杰：强力杂兵，高速、大索敌、高血 */
+export const LAOJIE_AI: AIConfig = mobAI({ wanderSpeed: 2.6, chaseSpeed: 3.2, aggroRadius: 11, attackRadius: 1.8, loseRadius: 16, meleeDuration: 0.7 });

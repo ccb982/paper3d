@@ -7,9 +7,13 @@
 //   - ★ 朝向由移动方向决定（非相机）——敌人自主转身，玩家可绕背看后帧
 
 import * as THREE from 'three';
-import { CharacterBase, type CharacterBaseOptions } from './CharacterBase';
+import {
+  CharacterBase,
+  DEFAULT_COLLISION_VOLUME,
+  type CharacterBaseOptions,
+} from './CharacterBase';
 import type { EntityManager } from './EntityManager';
-import type { Asset } from '../vendor/player';
+import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
 import type { BehaviorContext } from '../systems/ai/behaviors';
@@ -24,10 +28,12 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   aiConfig?: AIConfig;
   /** 生命值（默认 30） */
   hp?: number;
+  /** ★ 体型放大（贴片 + 碰撞体积统一 ×；默认 1） */
+  scale?: number;
 }
 
 export class EnemyBase extends CharacterBase {
-  private assetRef: Asset;
+  private assetRef: CharacterFxAssetSource;
   readonly aggressive: boolean;
 
   // ---- AI 状态（behaviors/conditions 访问） ----
@@ -43,31 +49,52 @@ export class EnemyBase extends CharacterBase {
   constructor(
     em: EntityManager,
     scene: THREE.Scene,
-    asset: Asset,
+    asset: CharacterFxAssetSource,
     opts: EnemyOptions,
     private camera?: THREE.Camera,
   ) {
-    super(em, { ...opts, kind: 'enemy', asset });
+    // ★ 体型放大：贴片 + 碰撞体积统一 × scale（默认 1）
+    const scale = opts.scale ?? 1;
+    const baseVol = DEFAULT_COLLISION_VOLUME;
+    const shape = baseVol.shape.type === 'cuboid'
+      ? { type: 'cuboid' as const, hx: baseVol.shape.hx * scale, hy: baseVol.shape.hy * scale, hz: baseVol.shape.hz * scale }
+      : baseVol.shape;
+    const offsetY = baseVol.offsetY * scale;
+    super(em, {
+      ...opts,
+      kind: 'enemy',
+      asset,
+      // 物理碰撞体（子弹命中/推挤）形状与碰撞体积声明同步放大
+      physics: opts.physics ?? { type: 'kinematic', options: { shape } },
+    });
+    // ★ 推挤/偏移逻辑读取的碰撞体积 = 实际物理形状（super 后字段可写）
+    this.collisionVolume = { shape, offsetY };
     this.camp = 'enemy';
     this.hp = opts.hp ?? 30; // ★ 敌人生命（普瑞赛斯 30；子弹 10 伤害 × 3 发）
     this.maxHp = this.hp;
     this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);
 
-    // ★ 头顶血条（附属特效管线：EntityBase.attachEffect；offsetY 高于贴片 2.5 → 不挡头）
-    this.attachEffect('health', new HealthBar(scene, this, { width: 0.8, offsetY: 2.8 }));
-    // bbox 映射（纹理实际尺寸 = bbox.w×bbox.h，不能直接用 frame.width/height）
+    // bbox 映射（base/residual 纹理已按 bbox 裁剪 → 尺寸 = bbox.w×bbox.h，
+    // 但 bbox 偏移量已裁掉，shader 映射必须用原点 0，否则内容被二次平移裁剪）
     const ftxFrame = asset.getFtxFrame(0);
     if (ftxFrame && this.renderer) {
+      const b = ftxFrame.bbox;
       (this.renderer as FTXQuad).setFrameMapping(
-        { width: ftxFrame.bbox.w, height: ftxFrame.bbox.h },
-        ftxFrame.bbox,
+        { width: b.w, height: b.h },
+        { x: 0, y: 0, w: b.w, h: b.h },
       );
     }
     // 初始朝向（贴片朝 +z；显示帧由相机判定）
     this.setFrameAnimated((opts.facing ?? '前') as '前' | '后');
-    // 纹理宽高比缩放（不压扁）
-    this.applyRenderScale(1.0); // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）
+    // 纹理宽高比缩放（不压扁；宽 = scale，高 = scale×bbox高宽比）
+    this.applyRenderScale(scale);
+    // ★ 头顶血条：按放大后的实际贴片高度定位（顶端 + 0.4 余量），宽度随体型
+    const aspect = ftxFrame ? ftxFrame.bbox.h / ftxFrame.bbox.w : 1;
+    this.attachEffect('health', new HealthBar(scene, this, {
+      width: 0.8 * scale,
+      offsetY: scale * aspect + 0.4,
+    }));
 
     // ---- AI：配置驱动状态机 + 注册到系统 ----
     if (opts.aiConfig) {
@@ -105,7 +132,9 @@ export class EnemyBase extends CharacterBase {
   private setFrameAnimated(facing: '前' | '后'): void {
     if (this.showFacing === facing) return;
     this.showFacing = facing;
-    this.anim!.playFrames([facing], { loop: true, fps: 1 });
+    const source = this.anim!.source;
+    const name = source.hasFrame(facing) ? facing : '帧 1';
+    this.anim!.playFrames([name], { loop: true, fps: 1 });
   }
   /** 贴片朝向角（移动方向决定） */
   private yawBase = 0;
@@ -147,10 +176,40 @@ export class EnemyBase extends CharacterBase {
     this.applyDistort();
   }
 
-  /** 应用当前帧扭曲参数（按 viewLod 开关） */
+  /** 应用当前帧扭曲参数（按 viewLod 开关）。
+   *  ★ 兼容两种资产：特效包(Asset)走 getFrameRenderData；纯纹理包(FtxAsset)
+   *    无该方法，改从 getFtxFrame 读同一组 distort 字段。 */
   private applyDistort(): void {
     const idx = this.anim!.state.frameIndex;
-    const d = this.assetRef.getFrameRenderData(idx);
+    let d: {
+      distortEnabled: boolean; distortAmplitude: number; distortFrequency: number;
+      distortSpeed: number; distortRotation: number;
+    } | null | undefined;
+    const a = this.assetRef as unknown as {
+      getFrameRenderData?: (i: number) => {
+        distortEnabled: boolean; distortAmplitude: number; distortFrequency: number;
+        distortSpeed: number; distortRotation: number;
+      } | null;
+    };
+    if (typeof a.getFrameRenderData === 'function') {
+      d = a.getFrameRenderData(idx);
+      if (d && 'distortEnabled' in d) {
+        // 特效包：直接使用
+      } else {
+        d = null;
+      }
+    } else {
+      // 纯纹理包(FtxAsset)：无特效包 distort 参数 → 默认关闭
+      const f = this.assetRef.getFtxFrame(idx) as unknown as {
+        distortEnabled?: boolean; distortAmplitude?: number; distortFrequency?: number;
+        distortSpeed?: number; distortRotation?: number;
+      } | null;
+      d = f ? {
+        distortEnabled: !!f.distortEnabled, distortAmplitude: f.distortAmplitude ?? 0.06,
+        distortFrequency: f.distortFrequency ?? 5.0, distortSpeed: f.distortSpeed ?? 1.2,
+        distortRotation: f.distortRotation ?? 0,
+      } : null;
+    }
     if (d && this.renderer) {
       (this.renderer as FTXQuad).setDistort({
         enabled: this.viewLod === 0 && d.distortEnabled,

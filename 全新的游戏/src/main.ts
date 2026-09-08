@@ -78,6 +78,8 @@ function updateSky(): void {
 let protagonistAsset: FtxAsset;
 let bulletAsset: Asset | FtxAsset;
 let enemyAsset: Asset;
+/** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
+let mobAssets: FtxAsset[] = [];
 let hitEffectAsset: Asset | null;
 /** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
 let testChunk = false;
@@ -152,6 +154,14 @@ async function boot() {
 
   enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
   console.log('[boot] 敌人已加载:', enemyAsset.frameNames().join(', '), '帧');
+
+  // ---- ★ 三个杂兵（纯纹理包）：地图大量随机生成用 ----
+  mobAssets = await Promise.all([
+    FtxAsset.load(encodeURI('/characters/enemies/原石虫，杂兵.ftx3.gz')),
+    FtxAsset.load(encodeURI('/characters/enemies/整合运动人员，杂兵.ftx3.gz')),
+    FtxAsset.load(encodeURI('/characters/enemies/牢杰，杂兵.ftx3.gz')),
+  ]);
+  console.log('[boot] 三杂兵已加载', mobAssets.length, '个');
 
   try {
     hitEffectAsset = await Asset.load(encodeURI('/fx/bullets/主角子弹击中特效.scene.zip'));
@@ -329,7 +339,7 @@ function enterWorldMode(
     combatStats,
     protagonistAsset,
     bulletAsset,
-    enemyAsset,
+    enemyAssets: mobAssets,
     hitEffectAsset: hitEffectAsset ?? undefined,
     debug: { testChunk },
     onReturn: () => {
