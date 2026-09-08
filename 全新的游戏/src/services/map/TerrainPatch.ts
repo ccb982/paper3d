@@ -1,21 +1,30 @@
 // ============================================================
-// TerrainPatch —— 地块破坏（R+P）几何异步服务（Worker 后台 + 主线程同步回退）
+// TerrainPatch —— 地块破坏（R+P）几何异步服务（多 Worker 后台 + 主线程同步回退）
 // ============================================================
 // 职责：把「表 + 双 builder」的整 chunk 几何生成移出主线程（命中地面时的最大
 // 单帧成本）。数据面 = 3×3 邻域 chunk 的 heights/blockTypes 拷贝（每份 ~135KB，
 // memcpy 微秒级）→ postMessage(transfer) → Worker 纯计算 → 零拷贝回传。
 //
+// ★ 多 Worker（2026-09-08）：WORKER_COUNT=3，**选排队最短的 worker 投递** →
+//   · 不同 chunk 的破坏重建并行（3 核分摊）；同 chunk 已被 flushPatchRebuilds
+//     节流串行化，不会并发双算同一 chunk。
+//   · 按 pending 队列长度贪心分发（新任务永远进最闲的 worker）——为「多个地形
+//     破坏按序进入各自 worker」的最小等待策略；worker 各自内串行处理。
+//   · 无 hash 亲缘：同一 chunk 可能换 worker；其水体增量状态（WaterSurface
+//     探针/分量）在异 worker 上会退化为全量重解（确定性不变，仅略慢），可接受。
+//
 // 流程：
 //   compute({seed, cx, cz, mask}, readChunk)
 //     ├─ 主线程：拷 3×3 邻域数组（不转移活数组所有权）
-//     ├─ 有 Worker → postMessage(transfer) → resolve(几何字节)
-//     ├─ Worker onerror/broken → 主线程同步 computeTableGeometry（同函数同字节）
+//     ├─ 归属 worker 可用 → postMessage(transfer) → resolve(几何字节)
+//     ├─ 归属 worker 断裂/不存在 → 主线程同步 computeTableGeometry（同函数同字节）
 //     └─ 计算失败 → resolve(null)（调用方走既有 requestStandardBake 兜底）
 //
 // ★ 字节一致由构造保证：Worker 用 makeChunkSource(拷贝闭包) + refineChunkSource
 //   （seed,cx,cz），与主线程 RasterMap.chunkSource 同一函数同一输入 → 逐位一致
 //   （验收 ⑧ 用"拷贝闭包 vs 活闭包"锁字节）。
-// ★ 微信小游戏适配点：ensure() 换 wx.createWorker（与 TerrainBaker 相同）。
+// ★ 微信小游戏适配点：ensure 里换 wx.createWorker —— 微信限制部分平台 worker 数，
+//   可降为 1（WORKER_COUNT 常量调整即可）。
 // ============================================================
 
 import { computeTableGeometry, type PatchGeomResult } from "./PatchCompute";
@@ -31,44 +40,65 @@ interface PatchChunkData {
 const NEI = [-1, 0, 1];
 
 class TerrainPatchService {
-  private worker: Worker | null = null;
-  private broken = false;
-  private nextId = 1;
-  private pending = new Map<number, (r: PatchGeomResult | null) => void>();
+  /** 破坏几何 Worker 数（平行 chunk 重建）；微信端可降为 1 */
+  private static readonly WORKER_COUNT = 3;
 
-  private ensure(): Worker | null {
-    if (this.worker) return this.worker;
-    if (this.broken) return null;
+  private workers: (Worker | null)[] = [];
+  private brokenStates: boolean[] = [];
+  private nextIds: number[] = [];
+  private pendings: Map<number, (r: PatchGeomResult | null) => void>[] = [];
+
+  /** 全量保障：3 个 worker 惰性就绪（首次 compute 齐备，之后热用） */
+  private ensureAll(): void {
+    for (let i = 0; i < TerrainPatchService.WORKER_COUNT; i++) this.ensure(i);
+  }
+
+  /** 选排队最短（pending 最少）的可用 worker；全不可用 → -1 */
+  private pickLeastBusy(): number {
+    let best = -1, bestCost = Infinity;
+    for (let i = 0; i < TerrainPatchService.WORKER_COUNT; i++) {
+      if (!this.workers[i]) continue;
+      const cost = this.pendings[i]?.size ?? 0;
+      if (cost < bestCost) { bestCost = cost; best = i; }
+    }
+    return best;
+  }
+
+  private ensure(i: number): Worker | null {
+    if (this.workers[i]) return this.workers[i];
+    if (this.brokenStates[i]) return null;
     try {
       const w = new Worker(new URL("./terrainPatch.worker.ts", import.meta.url), { type: "module" });
+      const pending = this.pendings[i] ?? new Map<number, (r: PatchGeomResult | null) => void>();
+      this.pendings[i] = pending;
       w.onmessage = (ev: MessageEvent) => {
         const msg = ev.data as { type: string; id: number } & PatchGeomResult;
         if (msg.type !== "result") return;
-        const cb = this.pending.get(msg.id);
-        this.pending.delete(msg.id);
+        const cb = pending.get(msg.id);
+        pending.delete(msg.id);
         if (!cb) return;
         cb(msg);
       };
       w.onerror = () => {
-        console.warn("[TerrainPatch] Worker 异常终止，地块破坏几何回退主线程同步");
-        this.broken = true;
-        this.worker = null;
-        const cbs = [...this.pending.values()];
-        this.pending.clear();
+        console.warn(`[TerrainPatch] Worker#${i} 异常终止，该归属 chunk 回退主线程同步`);
+        this.brokenStates[i] = true;
+        this.workers[i] = null;
+        const cbs = [...pending.values()];
+        pending.clear();
         for (const cb of cbs) cb(null);
       };
-      this.worker = w;
+      this.workers[i] = w;
       return w;
     } catch {
-      this.broken = true;
+      this.brokenStates[i] = true;
       return null;
     }
   }
 
   /**
-   * 计算带补丁层数表的 chunk 几何。
+   * 计算带补丁层数表的 chunk 几何（并行：不同 chunk 由不同 worker 处理）。
    * @param req.dirty 本次 dig 直接挖到的世界 4m 块 key 列表（水体重建增量）；缺省 = 全量
-   * @returns 几何字节；Worker 失败 → resolve(null)，调用方走标准烘焙兜底。
+   * @returns 几何字节；归属 Worker 失败 → resolve(null)，调用方走标准烘焙兜底。
    */
   compute(
     req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined; dirty?: number[] | null },
@@ -89,14 +119,18 @@ class TerrainPatchService {
         });
       }
     }
-    const w = this.ensure();
+    this.ensureAll(); // 3 worker 惰性就绪（首次 compute 齐备；之后热用）
+    const i = this.pickLeastBusy();
+    const w = i >= 0 ? this.workers[i] : null;
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
       return Promise.resolve(computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty));
     }
-    const id = this.nextId++;
+    const id = this.nextIds[i] = (this.nextIds[i] ?? 0) + 1;
     return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+      const pending = this.pendings[i] ?? new Map<number, (r: PatchGeomResult | null) => void>();
+      this.pendings[i] = pending;
+      pending.set(id, resolve);
       const transfer: ArrayBuffer[] = [];
       for (const c of chunks) {
         transfer.push(c.heights.buffer, c.blockTypes.buffer);
@@ -120,5 +154,5 @@ class TerrainPatchService {
   }
 }
 
-/** 全局唯一实例（与 terrainBaker 同款单例风格） */
+/** 全局唯一实例（多 Worker 并行；与 terrainBaker 同款单例风格） */
 export const terrainPatch = new TerrainPatchService();
