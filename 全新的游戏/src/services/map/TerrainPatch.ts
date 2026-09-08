@@ -27,7 +27,7 @@
 //   可降为 1（WORKER_COUNT 常量调整即可）。
 // ============================================================
 
-import { computeTableGeometry, type PatchGeomResult } from "./PatchCompute";
+import { computeTableGeometry, incrementalDropCache, type PatchGeomResult } from "./PatchCompute";
 import type { ChunkDataLite } from "./Refinements";
 
 interface PatchChunkData {
@@ -92,6 +92,19 @@ class TerrainPatchService {
     } catch {
       this.brokenStates[i] = true;
       return null;
+    }
+  }
+
+  /**
+   * ★ 清空增量基座缓存（切风格/dispose 元数据换代时调用）：主线程回退缓存直接
+   * 清；存量 Worker 广播 clearCache（新 Worker 首次 compute 时模块缓存本就为空）。
+   */
+  clearCaches(): void {
+    incrementalDropCache();
+    for (let i = 0; i < TerrainPatchService.WORKER_COUNT; i++) {
+      if (this.workers[i]) {
+        this.workers[i]!.postMessage({ type: "clearCache" });
+      }
     }
   }
 

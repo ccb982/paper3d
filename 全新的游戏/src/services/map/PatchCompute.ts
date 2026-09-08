@@ -13,8 +13,10 @@ import {
   buildTopGeometry,
   buildWallGeometry,
   buildLevelOverlay,
+  topFineCells,
   type FaceGeometry,
 } from "./FaceBuild";
+import { incrementalGeometry, incrementalDropCache, seedBaseGeometry } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
@@ -51,14 +53,20 @@ export interface PatchGeomRaw {
 
 export type PatchGeomResult = PatchGeomRaw;
 
+// ★ 自检开关：true 时增量/全量字节对比，失配则回退全量（验证期开，生产关）
+const INCREMENTAL_SELF_CHECK = false;
+
 /**
- * ★ 唯一几何生成函数（表驱动 + 补丁层数覆盖）：
+ * ★ 唯一几何生成函数（表驱动 + 补丁层数覆盖；增量/全量同源）：
  * readChunk 闭包 = 共享源数据（主线程 = RasterMap.getChunkData；Worker =
  * 传输拷贝）；levels = 中心 chunk 的层数表（§14.11；缺省 undefined = 无补丁）。
  * dirty = 本次 dig 直接挖到的世界 4m 块 key 列表（缺省 = 全量求解水体重建；
  * 供其中【连通分量 + 边界探针】做增量）。
  * 内部与 RasterMap.chunkSource 同一路径：makeChunkSource →
  * refineChunkSource(seed, cx, cz) → buildFaceTable → 双 builder。
+ * ★ 增量（2026-09-08）：有补丁时走 IncrementalGeometry 的"基座缓存 + 受影响
+ *   地块重发"（其余字节级复用）；无补丁时全量构建并播种基座缓存（供首次挖坑
+ *   即时命中）。Worker 与主线程回退共用本函数 → 字节一致由构造保证。
  */
 export function computeTableGeometry(
   readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
@@ -71,8 +79,26 @@ export function computeTableGeometry(
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz) : undefined;
   const table = buildFaceTable(src, cx, cz);
-  const top = buildTopGeometry(table, src, patch);
-  const wall = buildWallGeometry(table, src, patch);
+  let top: FaceGeometry, wall: FaceGeometry;
+  if (patch) {
+    const inc = incrementalGeometry(seed, cx, cz, table, src, patch);
+    top = inc.top; wall = inc.wall;
+    if (INCREMENTAL_SELF_CHECK) {
+      const fTop = buildTopGeometry(table, src, patch);
+      const fWall = buildWallGeometry(table, src, patch);
+      if (bytesDiff(top, fTop) || bytesDiff(wall, fWall)) {
+        console.error(
+          `[PatchCompute] chunk(${cx},${cz}) 增量几何与全量失配！回退全量`,
+        );
+        top = fTop; wall = fWall;
+      }
+    }
+  } else {
+    const baseFine = topFineCells(table, src);
+    top = buildTopGeometry(table, src);
+    wall = buildWallGeometry(table, src);
+    seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall); // 播种基座缓存
+  }
   const water = buildWaterSurface(
     table, src, patch,
     patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
@@ -100,6 +126,30 @@ export function computeTableGeometry(
     water,
   };
 }
+
+/** 增量/全量逐字节对比（仅自检用） */
+function bytesDiff(a: FaceGeometry, b: FaceGeometry): boolean {
+  const bytes = (v: Float32Array | Uint32Array | undefined): Uint8Array | null =>
+    v ? new Uint8Array(v.buffer, v.byteOffset, v.byteLength) : null;
+  const same = (x: Uint8Array | null, y: Uint8Array | null): boolean => {
+    if (!x || !y) return x !== y;
+    if (x.byteLength !== y.byteLength) return false;
+    for (let i = 0; i < x.byteLength; i++) if (x[i] !== y[i]) return false;
+    return true;
+  };
+  return !(
+    same(bytes(a.vertices), bytes(b.vertices)) &&
+    same(bytes(a.normals), bytes(b.normals)) &&
+    same(bytes(a.uvs as Float32Array), bytes(b.uvs as Float32Array)) &&
+    same(bytes(a.colors as Float32Array), bytes(b.colors as Float32Array)) &&
+    same(bytes(a.shade as Float32Array), bytes(b.shade as Float32Array)) &&
+    same(bytes(a.patchW as Float32Array), bytes(b.patchW as Float32Array)) &&
+    same(bytes(a.indices), bytes(b.indices))
+  );
+}
+
+/** 切风格/dispose 等 chunk 数据换代时清空基座缓存（Worker/主线程同源） */
+export { incrementalDropCache };
 
 /** FaceGeometry 窄化（FaceBuild 类型不可直接三线传输；这里只做类型别名收口） */
 export type { FaceGeometry };

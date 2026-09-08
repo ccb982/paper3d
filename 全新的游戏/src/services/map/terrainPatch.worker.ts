@@ -7,7 +7,7 @@
 // 微信小游戏：与 terrainBake.worker 同适配点。
 // ============================================================
 
-import { computeTableGeometry, type PatchGeomResult } from "./PatchCompute";
+import { computeTableGeometry, incrementalDropCache, type PatchGeomResult } from "./PatchCompute";
 
 interface PatchChunkMsg {
   type: "patchBuild";
@@ -48,6 +48,10 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
 }
 
 ctx.onmessage = (ev: MessageEvent) => {
+  if ((ev.data as { type?: string }).type === "clearCache") {
+    incrementalDropCache();
+    return;
+  }
   const msg = ev.data as PatchChunkMsg;
   if (msg.type !== "patchBuild") return;
   const chunks = new Map<string, { heights: Float32Array; blockTypes: Uint8Array }>();

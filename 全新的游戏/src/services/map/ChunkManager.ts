@@ -286,6 +286,7 @@ export class ChunkManager {
     sharedWaterMaterial.uniforms.uChopScale.value = boss4D ? 0.6 : 1.0;
     // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
     this.bakeGen++;
+    terrainPatch.clearCaches(); // ★ 增量基座缓存随 chunk 数据换代作废
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随风格换代作废
@@ -305,11 +306,12 @@ export class ChunkManager {
   dispose(): void {
     this.queue.length = 0;        // ★ 清空构建队列
     this.queuedKeys.clear();
+    this.bakeGen++;
+    terrainPatch.clearCaches();   // ★ 增量基座缓存随 dispose 作废
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随 dispose 作废
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
-    this.bakeGen++;
     this.pendingBakes.clear();
     for (const id of this.bodies.values()) {
       this.host.destroyGround(id);

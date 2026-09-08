@@ -266,7 +266,7 @@ export function topYAt(
 // 顶面网格（coarse 1m + fine 0.125m 拼 bevel 弧 / weld 坡脚角脊；坑/裂已废弃）
 // ------------------------------------------------------------
 const FINE_D = 3; // 2^3 = 0.125m
-const FINE_S = 1 << FINE_D;
+export const FINE_S = 1 << FINE_D;
 
 /** weld 坡顶面非线性判据：cell 内网格边(1m 直线)与真实坡面的允许偏差（m） */
 const WELD_FINE_EPS = 0.03;
@@ -413,7 +413,7 @@ export function topFineCells(table: FaceTable, src: BlockSource): Uint8Array {
  * 不符 → 交界开口。把「补丁 cell + 外扩 1 圈」全部并入 fine 后，坑内坡面与坑口交界
  * 全细分、粗细分界只落在深度/表面恒直的边上 → 弦与曲线重合，无缝隙。
  */
-function topFineCellsFor(table: FaceTable, src: BlockSource, patch?: PatchOverlay): Uint8Array {
+export function topFineCellsFor(table: FaceTable, src: BlockSource, patch?: PatchOverlay): Uint8Array {
   const base = topFineCells(table, src);
   if (!patch) return base;
   const out = new Uint8Array(base);
@@ -499,7 +499,7 @@ function weldOut(
  * dir0(+x)/dir1(-x) 沿 z → 本块侧 cell 列固定（lbx*4+3 / lbx*4），行随 span；
  * dir2(+z)/dir3(-z) 沿 x → 行固定（lbz*4+3 / lbz*4），列随 span。
  */
-function dirEdgeCells(dir: number, lbx: number, lbz: number, fineE: Uint8Array): Uint8Array {
+export function dirEdgeCells(dir: number, lbx: number, lbz: number, fineE: Uint8Array): Uint8Array {
   const out = new Uint8Array(4);
   if (dir === 0 || dir === 1) {
     const lx = lbx * 4 + (dir === 0 ? 3 : 0);
@@ -511,19 +511,156 @@ function dirEdgeCells(dir: number, lbx: number, lbz: number, fineE: Uint8Array):
   return out;
 }
 
+/** 顶面构建缓冲（number[] 累加；full 与 incremental 共用） */
+export interface TopAccum {
+  pos: number[]; nor: number[]; uv: number[]; col: number[]; pw: number[];
+}
+
+// ------------------------------------------------------------
+// ★ 顶面 cell 级发射函数（full 与 incremental 共用：逐 cell 幂等，
+//   输出只取决于 (table, src, patch, fineE) → 两路字节一致由构造保证）
+// ------------------------------------------------------------
+
+/** coarse 顶面 cell（4 顶点平面 + 补丁逐角下挖）；固定 4 顶点 */
+export function emitTopCellCoarse(
+  a: TopAccum,
+  table: FaceTable, src: BlockSource, patch: PatchOverlay | undefined,
+  lx: number, lz: number, vbx: number, vbz: number, ox: number, oz: number,
+): void {
+  const wx0 = ox + lx, wz0 = oz + lz;
+  const x0 = lx - HALF, z0 = lz - HALF;
+  const W = [1, 1, 1];
+  // ★ 补丁 coarse cell：四角按深度场逐顶点下挖（坑缘坡降 0→depth）+ 补丁顶点色
+  //   补丁色权重 = 深度场归一（0=坑口/坑外正常材质 → 1=坑内满深焦土）：
+  //   颜色渐变与几何坡降同源同位（都是 depthOf），交界处"先变色后下凹"的
+  //   硬色边消失（2026-09-05 用户：补丁与地面材质交界渲染不好看）。
+  const pcell = patch && patch.isPatched(lx, lz);
+  const cc = pcell ? patch!.color : W;
+  const tint = (d: number): [number, number, number] => {
+    const u = Math.min(d / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
+    return [Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u)];
+  };
+  const d00 = patch ? patch.depthOf(wx0, wz0) : 0;
+  const d10 = patch ? patch.depthOf(wx0 + 1, wz0) : 0;
+  const d11 = patch ? patch.depthOf(wx0 + 1, wz0 + 1) : 0;
+  const d01 = patch ? patch.depthOf(wx0, wz0 + 1) : 0;
+  const h00 = topYView(table, src, vbx, vbz, wx0, wz0) - d00;
+  const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) - d10;
+  const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) - d11;
+  const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) - d01;
+  a.pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
+  const c00 = tint(d00), c10 = tint(d10), c11 = tint(d11), c01 = tint(d01);
+  a.nor.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
+  a.col.push(c00[0], c00[1], c00[2], c10[0], c10[1], c10[2], c11[0], c11[1], c11[2], c01[0], c01[1], c01[2]);
+  a.pw.push(Math.min(1, d00 / PATCH_DEPTH), Math.min(1, d10 / PATCH_DEPTH),
+    Math.min(1, d11 / PATCH_DEPTH), Math.min(1, d01 / PATCH_DEPTH));
+  a.uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
+}
+
+/** fine 顶面 cell（81 顶点：顶点 y = topYView − depthOf，法线用中差） */
+export function emitTopCellFine(
+  a: TopAccum,
+  table: FaceTable, src: BlockSource, patch: PatchOverlay | undefined,
+  lx: number, lz: number, vbx: number, vbz: number, ox: number, oz: number,
+  base: number,
+): void {
+  const wx0 = ox + lx, wz0 = oz + lz;
+  const W = [1, 1, 1];
+  // ★ 补丁 fine cell：逐顶点深度场下挖 + 补丁色（细分不变 → 无 T 结）
+  const pcell = patch && patch.isPatched(lx, lz);
+  const cc = pcell ? patch!.color : W;
+  // fine：0.125m 网格，顶点 y = topYView − depthOf，法线用中差
+  const G = FINE_S + 1; // 9
+  const yt = new Float64Array(G * G);
+  const dv = new Float64Array(G * G); // 深度场（补丁色权重同源）
+  for (let gy = 0; gy < G; gy++) {
+    for (let gx = 0; gx < G; gx++) {
+      const wx = wx0 + gx / FINE_S;
+      const wz = wz0 + gy / FINE_S;
+      const dV = patch ? patch.depthOf(wx, wz) : 0;
+      dv[gy * G + gx] = dV;
+      yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) - dV;
+      const lxx = wx - ox - HALF;
+      const lzz = wz - oz - HALF;
+      a.pos.push(lxx, yt[gy * G + gx], lzz);
+      a.uv.push((wx - ox) / N, (wz - oz) / N);
+      const u = Math.min(dV / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
+      a.col.push(Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u));
+      a.pw.push(Math.min(1, dV / PATCH_DEPTH));
+    }
+  }
+  // 顶点先占位法线，后差分
+  for (let c = 0; c < G * G; c++) a.nor.push(0, 0, 0);
+  const step = 1 / FINE_S;
+  for (let gy = 0; gy < G; gy++) {
+    for (let gx = 0; gx < G; gx++) {
+      const yC = yt[gy * G + gx];
+      const yL = gx > 0 ? yt[gy * G + gx - 1] : yC;
+      const yR = gx < G - 1 ? yt[gy * G + gx + 1] : yC;
+      const yD = gy > 0 ? yt[(gy - 1) * G + gx] : yC;
+      const yU = gy < G - 1 ? yt[(gy + 1) * G + gx] : yC;
+      const nx2 = -(yR - yL);
+      const nz2 = -(yU - yD);
+      const ny = 2 * step;
+      const il = 1 / Math.hypot(nx2, ny, nz2);
+      const io = (base + gy * G + gx) * 3;
+      a.nor[io] = nx2 * il;
+      a.nor[io + 1] = ny * il;
+      a.nor[io + 2] = nz2 * il;
+    }
+  }
+}
+
+export const TOP_COARSE_TRI = 2;       // coarse cell 三角形数
+export const TOP_FINE_TRI = FINE_S * FINE_S * 2; // fine cell 三角形数
+
+/** 顶面 cell 索引（coarse 6 / fine 384；相对 base；供 full 构建累加） */
+export function pushTopIndices(idx: number[], base: number, fine: boolean): void {
+  if (!fine) {
+    idx.push(base, base + 3, base + 1, base + 3, base + 2, base + 1);
+    return;
+  }
+  const G = FINE_S + 1;
+  for (let jz = 0; jz < FINE_S; jz++) {
+    for (let jx = 0; jx < FINE_S; jx++) {
+      const v00 = base + jz * G + jx;
+      const v10 = v00 + 1;
+      const v01 = v00 + G;
+      const v11 = v01 + 1;
+      idx.push(v00, v01, v10, v01, v11, v10);
+    }
+  }
+}
+
+/** 顶面 cell 索引写入目标 Uint32Array（incremental 装配用） */
+export function writeTopIndices(
+  dst: Uint32Array, off: number, base: number, fine: boolean,
+): void {
+  if (!fine) {
+    dst[off] = base; dst[off + 1] = base + 3; dst[off + 2] = base + 1;
+    dst[off + 3] = base + 3; dst[off + 4] = base + 2; dst[off + 5] = base + 1;
+    return;
+  }
+  const G = FINE_S + 1;
+  let p = off;
+  for (let jz = 0; jz < FINE_S; jz++) {
+    for (let jx = 0; jx < FINE_S; jx++) {
+      const v00 = base + jz * G + jx;
+      dst[p] = v00; dst[p + 1] = v00 + G; dst[p + 2] = v00 + 1;
+      dst[p + 3] = v00 + G; dst[p + 4] = v00 + G + 1; dst[p + 5] = v00 + 1;
+      p += 6;
+    }
+  }
+}
+
 export function buildTopGeometry(
   table: FaceTable,
   src: BlockSource,
   patch?: PatchOverlay,
 ): FaceGeometry {
-  const pos: number[] = [];
-  const nor: number[] = [];
-  const uv: number[] = [];
-  const col: number[] = [];
-  const pw: number[] = [];   // ★ 补丁权重（装饰纹理驱动通道）
+  const a: TopAccum = { pos: [], nor: [], uv: [], col: [], pw: [] };
   const idx: number[] = [];
   const ox = table.cx * N, oz = table.cz * N;
-  const W = [1, 1, 1];
   let vi = 0;
 
   // ① fine 标记（bevel 带 + weld 坡脚/角脊 cell + 补丁 cell；已外扩/并入防 T 结细缝）
@@ -531,102 +668,25 @@ export function buildTopGeometry(
 
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
-      const wx0 = ox + lx, wz0 = oz + lz;
       const vbx = table.cx * BPS + Math.floor(lx / 4);
       const vbz = table.cz * BPS + Math.floor(lz / 4);
-      const x0 = lx - HALF, z0 = lz - HALF;
-      const base = vi;
       if (!fineE[lz * N + lx]) {
-        // ★ 补丁 coarse cell：四角按深度场逐顶点下挖（坑缘坡降 0→depth）+ 补丁顶点色
-        //   补丁色权重 = 深度场归一（0=坑口/坑外正常材质 → 1=坑内满深焦土）：
-        //   颜色渐变与几何坡降同源同位（都是 depthOf），交界处"先变色后下凹"的
-        //   硬色边消失（2026-09-05 用户：补丁与地面材质交界渲染不好看）。
-        const pcell = patch && patch.isPatched(lx, lz);
-        const cc = pcell ? patch!.color : W;
-        const tint = (d: number): [number, number, number] => {
-          const u = Math.min(d / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
-          return [Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u)];
-        };
-        const d00 = patch ? patch.depthOf(wx0, wz0) : 0;
-        const d10 = patch ? patch.depthOf(wx0 + 1, wz0) : 0;
-        const d11 = patch ? patch.depthOf(wx0 + 1, wz0 + 1) : 0;
-        const d01 = patch ? patch.depthOf(wx0, wz0 + 1) : 0;
-        const h00 = topYView(table, src, vbx, vbz, wx0, wz0) - d00;
-        const h10 = topYView(table, src, vbx, vbz, wx0 + 1, wz0) - d10;
-        const h11 = topYView(table, src, vbx, vbz, wx0 + 1, wz0 + 1) - d11;
-        const h01 = topYView(table, src, vbx, vbz, wx0, wz0 + 1) - d01;
-        pos.push(x0, h00, z0, x0 + 1, h10, z0, x0 + 1, h11, z0 + 1, x0, h01, z0 + 1);
-        const c00 = tint(d00), c10 = tint(d10), c11 = tint(d11), c01 = tint(d01);
-        nor.push(0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0);
-        col.push(c00[0], c00[1], c00[2], c10[0], c10[1], c10[2], c11[0], c11[1], c11[2], c01[0], c01[1], c01[2]);
-        pw.push(Math.min(1, d00 / PATCH_DEPTH), Math.min(1, d10 / PATCH_DEPTH),
-          Math.min(1, d11 / PATCH_DEPTH), Math.min(1, d01 / PATCH_DEPTH));
-        uv.push(lx / N, lz / N, (lx + 1) / N, lz / N, (lx + 1) / N, (lz + 1) / N, lx / N, (lz + 1) / N);
-        idx.push(vi, vi + 3, vi + 1, vi + 3, vi + 2, vi + 1);
+        emitTopCellCoarse(a, table, src, patch, lx, lz, vbx, vbz, ox, oz);
+        pushTopIndices(idx, vi, false);
         vi += 4;
       } else {
-        // ★ 补丁 fine cell：逐顶点深度场下挖 + 补丁色（细分不变 → 无 T 结）
-        const pcell = patch && patch.isPatched(lx, lz);
-        const cc = pcell ? patch!.color : W;
-        // fine：0.125m 网格，顶点 y = topYView − depthOf，法线用中差
-        const G = FINE_S + 1; // 9
-        const yt = new Float64Array(G * G);
-        const dv = new Float64Array(G * G); // 深度场（补丁色权重同源）
-        for (let gy = 0; gy < G; gy++) {
-          for (let gx = 0; gx < G; gx++) {
-            const wx = wx0 + gx / FINE_S;
-            const wz = wz0 + gy / FINE_S;
-            const dV = patch ? patch.depthOf(wx, wz) : 0;
-            dv[gy * G + gx] = dV;
-            yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) - dV;
-            const lxx = wx - ox - HALF;
-            const lzz = wz - oz - HALF;
-            pos.push(lxx, yt[gy * G + gx], lzz);
-            uv.push((wx - ox) / N, (wz - oz) / N);
-            const u = Math.min(dV / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS);
-            col.push(Math.pow(cc[0], u), Math.pow(cc[1], u), Math.pow(cc[2], u));
-            pw.push(Math.min(1, dV / PATCH_DEPTH));
-          }
-        }
-        // 顶点先占位法线，后差分
-        for (let c = 0; c < G * G; c++) nor.push(0, 0, 0);
-        const step = 1 / FINE_S;
-        for (let gy = 0; gy < G; gy++) {
-          for (let gx = 0; gx < G; gx++) {
-            const yC = yt[gy * G + gx];
-            const yL = gx > 0 ? yt[gy * G + gx - 1] : yC;
-            const yR = gx < G - 1 ? yt[gy * G + gx + 1] : yC;
-            const yD = gy > 0 ? yt[(gy - 1) * G + gx] : yC;
-            const yU = gy < G - 1 ? yt[(gy + 1) * G + gx] : yC;
-            const nx2 = -(yR - yL);
-            const nz2 = -(yU - yD);
-            const ny = 2 * step;
-            const il = 1 / Math.hypot(nx2, ny, nz2);
-            const io = (base + gy * G + gx) * 3;
-            nor[io] = nx2 * il;
-            nor[io + 1] = ny * il;
-            nor[io + 2] = nz2 * il;
-          }
-        }
-        for (let jz = 0; jz < FINE_S; jz++) {
-          for (let jx = 0; jx < FINE_S; jx++) {
-            const v00 = base + jz * G + jx;
-            const v10 = v00 + 1;
-            const v01 = v00 + G;
-            const v11 = v01 + 1;
-            idx.push(v00, v01, v10, v01, v11, v10);
-          }
-        }
-        vi += G * G;
+        emitTopCellFine(a, table, src, patch, lx, lz, vbx, vbz, ox, oz, vi);
+        pushTopIndices(idx, vi, true);
+        vi += (FINE_S + 1) * (FINE_S + 1);
       }
     }
   }
   return {
-    vertices: new Float32Array(pos),
-    normals: new Float32Array(nor),
-    uvs: new Float32Array(uv),
-    colors: new Float32Array(col),
-    patchW: new Float32Array(pw),
+    vertices: new Float32Array(a.pos),
+    normals: new Float32Array(a.nor),
+    uvs: new Float32Array(a.uv),
+    colors: new Float32Array(a.col),
+    patchW: new Float32Array(a.pw),
     indices: new Uint32Array(idx),
     topTriCount: idx.length / 3,
   };
@@ -636,180 +696,195 @@ export function buildTopGeometry(
 // 侧壁（每边恒壁：顶沿采样贴顶面，深度 = 表 calc+保底）
 // ------------------------------------------------------------
 
+/** 侧壁构建缓冲（number[] 累加；full 与 incremental 共用） */
+export interface WallAccum {
+  pos: number[]; nor: number[]; uv: number[]; col: number[]; shd: number[]; pw: number[];
+}
+
+// ------------------------------------------------------------
+// ★ 侧壁 4m 边发射函数（full 与 incremental 共用：给定块/向整条边发射
+//   顶沿贴顶网格节点列 + 低侧基底；输出只取决于输入 → 两路字节一致）
+// ------------------------------------------------------------
+
+export function emitWallSide(
+  a: WallAccum,
+  table: FaceTable, src: BlockSource, patch: PatchOverlay | undefined, fineE: Uint8Array,
+  lbx: number, lbz: number, dir: number, base: number, idx: number[],
+): number {
+  const ox = table.cx * N, oz = table.cz * N;
+  const cell = table.cells[lbz * BPS + lbx];
+  const bx = table.cx * BPS + lbx;
+  const bz = table.cz * BPS + lbz;
+  // 该块局部 tile 中心 uv（默认侧壁材质 = 本块 tile）
+  const uU = (lbx + 0.5) / 15;
+  const uV = (lbz + 0.5) / 15;
+  const nbx = bx + DIRS[dir].dx;
+  const nbz = bz + DIRS[dir].dz;
+  // ★ 沿边节点列：按本块侧 4 个 1m cell 的 fine 标记定 0.125m/1m 步长。
+  //   顶网格边界折线在 fine cell 上是 0.125m 折线、coarse cell 上是
+  //   1m 直线 —— 壁顶沿取同一节点列 → 每段与顶网格边界段同端点，
+  //   weld 坡脚/弧带处不再各自近似（否则壁顶低于网格边 = 开口）。
+  const rowCells = dirEdgeCells(dir, lbx, lbz, fineE);
+  const nodes: number[] = [];
+  for (let span = 0; span < 4; span++) {
+    const sub = rowCells[span] ? FINE_S : 1;
+    for (let k = 0; k < sub; k++) nodes.push(span + k / sub);
+  }
+  nodes.push(4);
+  const x0 = bx * 4, z0 = bz * 4;
+  let ax: number, az: number, bx2: number, bz2: number;
+  if (dir === 0) { ax = x0 + 4; az = z0; bx2 = x0 + 4; bz2 = z0 + 4; }
+  else if (dir === 1) { ax = x0; az = z0; bx2 = x0; bz2 = z0 + 4; }
+  else if (dir === 2) { ax = x0; az = z0 + 4; bx2 = x0 + 4; bz2 = z0 + 4; }
+  else { ax = x0; az = z0; bx2 = x0 + 4; bz2 = z0; }
+  const nrm = DIRS[dir];
+  // ★ 补丁感知：本边每段(span)两侧 coarse cell 的状态（§14.10）。
+  //   坑缘壁顶沿 = 原地面（边界线 depth 0，与坡面起点同高 → 坑底落地不悬空）；
+  //   两侧都补丁 → 坑内隔断壁整段剔除（坑是一个连贯凹陷，无内部隔墙）；
+  //   某一侧补丁 → 该壁换补丁色（坑的侧壁材质 = 补丁）。
+  const P = patch;
+  const spanCellsOf = (j: number): { own: { lx: number; lz: number }; nb: { lx: number; lz: number } } => {
+    let own: { lx: number; lz: number }, nb: { lx: number; lz: number };
+    if (dir === 0) { own = { lx: lbx * 4 + 3, lz: lbz * 4 + j }; nb = { lx: lbx * 4 + 4, lz: lbz * 4 + j }; }
+    else if (dir === 1) { own = { lx: lbx * 4, lz: lbz * 4 + j }; nb = { lx: lbx * 4 - 1, lz: lbz * 4 + j }; }
+    else if (dir === 2) { own = { lx: lbx * 4 + j, lz: lbz * 4 + 3 }; nb = { lx: lbx * 4 + j, lz: lbz * 4 + 4 }; }
+    else { own = { lx: lbx * 4 + j, lz: lbz * 4 }; nb = { lx: lbx * 4 + j, lz: lbz * 4 - 1 }; }
+    return { own, nb };
+  };
+  const patchedOwn = (s: number): boolean => {
+    if (!P) return false;
+    const { own } = spanCellsOf(Math.min(3, Math.floor(s)));
+    return own.lx >= 0 && own.lz >= 0 && own.lx < N && own.lz < N && P.isPatched(own.lx, own.lz);
+  };
+  const patchedNb = (s: number): boolean => {
+    if (!P) return false;
+    const { nb } = spanCellsOf(Math.min(3, Math.floor(s)));
+    // 跨 chunk 的邻 cell 状态未知 → 视为未补丁（另一 chunk 自带状态）
+    return nb.lx < 0 || nb.lz < 0 || nb.lx >= N || nb.lz >= N ? false : P.isPatched(nb.lx, nb.lz);
+  };
+  // 低侧基底（旧裙墙语义 lowBase = min(邻视觉顶, 两侧 hBase)）
+  const nbH0 = src.blockAt(nbx, nbz)?.h ?? 0;
+  const nbBase0 = src.blockAt(nbx, nbz)?.hBase ?? nbH0;
+  const m = nodes.length;
+  const topV = new Array<number>(m);
+  const lowV = new Array<number>(m);
+  const lxV = new Array<number>(m);
+  const lzV = new Array<number>(m);
+  // ★ 壁线深度比（depthOf/PATCH_DEPTH，封顶 MAX_LAYERS）：补丁墙顶沿的
+  //   材质染色指数与装饰权重取值（2026-09-05 用户：侧壁材质渲染要过渡）——
+  //   坑缘线=0（与坑外原地面同白无缝）、坑内台阶线=邻顶面同值（交界无缝）；
+  //   底沿恒满染。GPU 逐像素插值 → 墙面焦土染色/碎屑噪点沿高度渐入。
+  const wallU = new Array<number>(m);
+  for (let i = 0; i < m; i++) {
+    const s = nodes[i];
+    const gx = ax + (bx2 - ax) * (s / 4);
+    const gz = az + (bz2 - az) * (s / 4);
+    // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest；
+    //   ★ 顶 = 原顶面 − 深度场（世界函数：坑缘壁线处=0 → 顶沿=原地面不悬空；
+    //   坑内保留的台阶壁两侧同减 → 台阶差保持，轮廓完整不空洞）
+    const top = topYView(table, src, bx, bz, gx, gz)
+      - (P ? P.depthOf(gx, gz) : 0);
+    // 邻视角（节点 + 下一节点 max，供本段底沿用）
+    const nx2 = i < m - 1 ? nodes[i + 1] : s;
+    const ngx2 = ax + (bx2 - ax) * (nx2 / 4), ngz2 = az + (bz2 - az) * (nx2 / 4);
+    // ★ 底沿参照 = 深度场修正后的最终面：邻侧若是补丁坑内，原面已被压低 depth，
+    //   若仍用原面定底，"埋入地下防破面"的预防性保底长度（WALL_EPS+WALL_MIN_DEPTH）
+    //   会相对新坑底被吃掉 → 坑底接缝可能露线/渗光（2026-09-05 用户：补丁侧壁
+    //   也要留预防性侧壁长度）。两节点同减 depthOf（世界函数；坑外=0 不变）。
+    const nbTop = Math.max(
+      surfaceHeightCore(src, nbx, nbz, gx, gz) - (P ? P.depthOf(gx, gz) : 0),
+      surfaceHeightCore(src, nbx, nbz, ngx2, ngz2) - (P ? P.depthOf(ngx2, ngz2) : 0),
+    );
+    topV[i] = top;
+    lowV[i] = Math.min(nbTop, cell.hBase, nbBase0);
+    lxV[i] = gx - ox - HALF;
+    lzV[i] = gz - oz - HALF;
+    wallU[i] = P ? Math.min(P.depthOf(gx, gz) / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS) : 0;
+  }
+  // ★ 坑内隔断壁剔除：两侧都补丁 **且两侧表面在壁线处几乎等高（flush，埋在土里
+  //   看不见的平隔断）** 才剔除 → 连贯凹陷；若两侧存在台阶（可见崖壁/墙），壁段
+  //   必须保留并补丁化（顶沿随深度场下移），否则抽掉崖壁 = 打出空洞（void）。
+  let vi = base;
+  for (let i = 0; i < m - 1; i++) {
+    // 段起点/终点的世界坐标（flush 判定用）
+    const sa = nodes[i], sb = nodes[i + 1];
+    const gxa = ax + (bx2 - ax) * (sa / 4), gza = az + (bz2 - az) * (sa / 4);
+    const gxb = ax + (bx2 - ax) * (sb / 4), gzb = az + (bz2 - az) * (sb / 4);
+    if (P && patchedOwn(sa) && patchedNb(sa)) {
+      const fa = Math.abs(
+        topYView(table, src, bx, bz, gxa, gza) - topYView(table, src, nbx, nbz, gxa, gza),
+      );
+      const fb = Math.abs(
+        topYView(table, src, bx, bz, gxb, gzb) - topYView(table, src, nbx, nbz, gxb, gzb),
+      );
+      if (fa < WALL_FLUSH_EPS && fb < WALL_FLUSH_EPS) continue; // flush 平隔断 → 剔除
+      // 否则保留（台阶壁；顶沿已随深度场下移，轮廓完整）
+    }
+    // ★ 底 = 低侧基底 − EPS − 保底（埋入地下防破面）；
+    //   weld 边全高：顶在坡顶棱 crest，底到低侧基底 → 坡面侧壁完整贴坡
+    const botA = Math.min(topV[i], lowV[i] - WALL_EPS - WALL_MIN_DEPTH);
+    const botB = Math.min(topV[i + 1], lowV[i + 1] - WALL_EPS - WALL_MIN_DEPTH);
+    a.pos.push(lxV[i], topV[i], lzV[i], lxV[i + 1], topV[i + 1], lzV[i + 1],
+      lxV[i + 1], botB, lzV[i + 1], lxV[i], botA, lzV[i]);
+    const ownP2 = patchedOwn(sa);
+    const nbP2 = patchedNb(sa);
+    const pc = P && (ownP2 || nbP2) ? P.color : null;
+    for (let c = 0; c < 4; c++) {
+      a.nor.push(nrm.dx, 0, nrm.dz);
+      a.uv.push(uU, uV);
+      a.shd.push(1);
+    }
+    if (pc) {
+      // ★ 补丁墙材质/装饰权重沿高度渐变（2026-09-05 用户：坑底已有过渡，
+      //   侧壁没有——墙面原为恒定满染，与坑外原地面交界处硬跳）。顶沿取
+      //   壁线深度比（wallU：坑缘线=0 同白、台阶线=邻面同值 → 无缝），
+      //   底沿满染（埋地不可见）。顶点序 = 0顶A / 1顶B / 2底B / 3底A。
+      const uA = wallU[i], uB = wallU[i + 1];
+      a.col.push(Math.pow(pc[0], uA), Math.pow(pc[1], uA), Math.pow(pc[2], uA));
+      a.col.push(Math.pow(pc[0], uB), Math.pow(pc[1], uB), Math.pow(pc[2], uB));
+      a.col.push(pc[0], pc[1], pc[2], pc[0], pc[1], pc[2]);
+      a.pw.push(Math.min(1, uA), Math.min(1, uB), 1, 1);
+    } else {
+      // 中性白：顶点色=材质替换开关（不染色不装饰）
+      a.col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
+      a.pw.push(0, 0, 0, 0);
+    }
+    // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向
+    //   朝内，翻转索引；dir0/dir3 保持（2026-09-04 修正）
+    if (dir === 1 || dir === 2) {
+      idx.push(vi, vi + 3, vi + 2, vi, vi + 2, vi + 1);
+    } else {
+      idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
+    }
+    vi += 4;
+  }
+  return vi - base;
+}
+
 export function buildWallGeometry(
   table: FaceTable,
   src: BlockSource,
   patch?: PatchOverlay,
 ): FaceGeometry {
-  const pos: number[] = [];
-  const nor: number[] = [];
-  const uv: number[] = [];
-  const col: number[] = [];
-  const shd: number[] = [];
-  const pw: number[] = [];   // ★ 补丁权重（坑壁满强度碎屑装饰）
+  const a: WallAccum = { pos: [], nor: [], uv: [], col: [], shd: [], pw: [] };
   const idx: number[] = [];
-  const ox = table.cx * N, oz = table.cz * N;
   const fineE = topFineCellsFor(table, src, patch);
   let vi = 0;
 
   for (let lbz = 0; lbz < BPS; lbz++) {
     for (let lbx = 0; lbx < BPS; lbx++) {
-      const cell = table.cells[lbz * BPS + lbx];
-      const bx = table.cx * BPS + lbx;
-      const bz = table.cz * BPS + lbz;
-      // 该块局部 tile 中心 uv（默认侧壁材质 = 本块 tile）
-      const uU = (lbx + 0.5) / 15;
-      const uV = (lbz + 0.5) / 15;
       for (let dir = 0; dir < 4; dir++) {
-        const nbx = bx + DIRS[dir].dx;
-        const nbz = bz + DIRS[dir].dz;
-        // ★ 沿边节点列：按本块侧 4 个 1m cell 的 fine 标记定 0.125m/1m 步长。
-        //   顶网格边界折线在 fine cell 上是 0.125m 折线、coarse cell 上是
-        //   1m 直线 —— 壁顶沿取同一节点列 → 每段与顶网格边界段同端点，
-        //   weld 坡脚/弧带处不再各自近似（否则壁顶低于网格边 = 开口）。
-        const rowCells = dirEdgeCells(dir, lbx, lbz, fineE);
-        const nodes: number[] = [];
-        for (let span = 0; span < 4; span++) {
-          const sub = rowCells[span] ? FINE_S : 1;
-          for (let k = 0; k < sub; k++) nodes.push(span + k / sub);
-        }
-        nodes.push(4);
-        const x0 = bx * 4, z0 = bz * 4;
-        let ax: number, az: number, bx2: number, bz2: number;
-        if (dir === 0) { ax = x0 + 4; az = z0; bx2 = x0 + 4; bz2 = z0 + 4; }
-        else if (dir === 1) { ax = x0; az = z0; bx2 = x0; bz2 = z0 + 4; }
-        else if (dir === 2) { ax = x0; az = z0 + 4; bx2 = x0 + 4; bz2 = z0 + 4; }
-        else { ax = x0; az = z0; bx2 = x0 + 4; bz2 = z0; }
-        const nrm = DIRS[dir];
-        // ★ 补丁感知：本边每段(span)两侧 coarse cell 的状态（§14.10）。
-        //   坑缘壁顶沿 = 原地面（边界线 depth 0，与坡面起点同高 → 坑底落地不悬空）；
-        //   两侧都补丁 → 坑内隔断壁整段剔除（坑是一个连贯凹陷，无内部隔墙）；
-        //   某一侧补丁 → 该壁换补丁色（坑的侧壁材质 = 补丁）。
-        const P = patch;
-        const spanCellsOf = (j: number): { own: { lx: number; lz: number }; nb: { lx: number; lz: number } } => {
-          let own: { lx: number; lz: number }, nb: { lx: number; lz: number };
-          if (dir === 0) { own = { lx: lbx * 4 + 3, lz: lbz * 4 + j }; nb = { lx: lbx * 4 + 4, lz: lbz * 4 + j }; }
-          else if (dir === 1) { own = { lx: lbx * 4, lz: lbz * 4 + j }; nb = { lx: lbx * 4 - 1, lz: lbz * 4 + j }; }
-          else if (dir === 2) { own = { lx: lbx * 4 + j, lz: lbz * 4 + 3 }; nb = { lx: lbx * 4 + j, lz: lbz * 4 + 4 }; }
-          else { own = { lx: lbx * 4 + j, lz: lbz * 4 }; nb = { lx: lbx * 4 + j, lz: lbz * 4 - 1 }; }
-          return { own, nb };
-        };
-        const patchedOwn = (s: number): boolean => {
-          if (!P) return false;
-          const { own } = spanCellsOf(Math.min(3, Math.floor(s)));
-          return own.lx >= 0 && own.lz >= 0 && own.lx < N && own.lz < N && P.isPatched(own.lx, own.lz);
-        };
-        const patchedNb = (s: number): boolean => {
-          if (!P) return false;
-          const { nb } = spanCellsOf(Math.min(3, Math.floor(s)));
-          // 跨 chunk 的邻 cell 状态未知 → 视为未补丁（另一 chunk 自带状态）
-          return nb.lx < 0 || nb.lz < 0 || nb.lx >= N || nb.lz >= N ? false : P.isPatched(nb.lx, nb.lz);
-        };
-        // 低侧基底（旧裙墙语义 lowBase = min(邻视觉顶, 两侧 hBase)）
-        const nbH0 = src.blockAt(nbx, nbz)?.h ?? 0;
-        const nbBase0 = src.blockAt(nbx, nbz)?.hBase ?? nbH0;
-        const m = nodes.length;
-        const topV = new Array<number>(m);
-        const lowV = new Array<number>(m);
-        const lxV = new Array<number>(m);
-        const lzV = new Array<number>(m);
-        // ★ 壁线深度比（depthOf/PATCH_DEPTH，封顶 MAX_LAYERS）：补丁墙顶沿的
-        //   材质染色指数与装饰权重取值（2026-09-05 用户：侧壁材质渲染要过渡）——
-        //   坑缘线=0（与坑外原地面同白无缝）、坑内台阶线=邻顶面同值（交界无缝）；
-        //   底沿恒满染。GPU 逐像素插值 → 墙面焦土染色/碎屑噪点沿高度渐入。
-        const wallU = new Array<number>(m);
-        for (let i = 0; i < m; i++) {
-          const s = nodes[i];
-          const gx = ax + (bx2 - ax) * (s / 4);
-          const gz = az + (bz2 - az) * (s / 4);
-          // 墙顶沿采样：视角 = 本墙所属块（bx,bz）——weld 边在坡顶棱 crest；
-          //   ★ 顶 = 原顶面 − 深度场（世界函数：坑缘壁线处=0 → 顶沿=原地面不悬空；
-          //   坑内保留的台阶壁两侧同减 → 台阶差保持，轮廓完整不空洞）
-          const top = topYView(table, src, bx, bz, gx, gz)
-            - (P ? P.depthOf(gx, gz) : 0);
-          // 邻视角（节点 + 下一节点 max，供本段底沿用）
-          const nx2 = i < m - 1 ? nodes[i + 1] : s;
-          const ngx2 = ax + (bx2 - ax) * (nx2 / 4), ngz2 = az + (bz2 - az) * (nx2 / 4);
-          // ★ 底沿参照 = 深度场修正后的最终面：邻侧若是补丁坑内，原面已被压低 depth，
-          //   若仍用原面定底，"埋入地下防破面"的预防性保底长度（WALL_EPS+WALL_MIN_DEPTH）
-          //   会相对新坑底被吃掉 → 坑底接缝可能露线/渗光（2026-09-05 用户：补丁侧壁
-          //   也要留预防性侧壁长度）。两节点同减 depthOf（世界函数；坑外=0 不变）。
-          const nbTop = Math.max(
-            surfaceHeightCore(src, nbx, nbz, gx, gz) - (P ? P.depthOf(gx, gz) : 0),
-            surfaceHeightCore(src, nbx, nbz, ngx2, ngz2) - (P ? P.depthOf(ngx2, ngz2) : 0),
-          );
-          topV[i] = top;
-          lowV[i] = Math.min(nbTop, cell.hBase, nbBase0);
-          lxV[i] = gx - ox - HALF;
-          lzV[i] = gz - oz - HALF;
-          wallU[i] = P ? Math.min(P.depthOf(gx, gz) / PATCH_DEPTH, PATCH_COLOR_MAX_LAYERS) : 0;
-        }
-        // ★ 坑内隔断壁剔除：两侧都补丁 **且两侧表面在壁线处几乎等高（flush，埋在土里
-        //   看不见的平隔断）** 才剔除 → 连贯凹陷；若两侧存在台阶（可见崖壁/墙），壁段
-        //   必须保留并补丁化（顶沿随深度场下移），否则抽掉崖壁 = 打出空洞（void）。
-        for (let i = 0; i < m - 1; i++) {
-          // 段起点/终点的世界坐标（flush 判定用）
-            const sa = nodes[i], sb = nodes[i + 1];
-            const gxa = ax + (bx2 - ax) * (sa / 4), gza = az + (bz2 - az) * (sa / 4);
-            const gxb = ax + (bx2 - ax) * (sb / 4), gzb = az + (bz2 - az) * (sb / 4);
-            if (P && patchedOwn(sa) && patchedNb(sa)) {
-              const fa = Math.abs(
-                topYView(table, src, bx, bz, gxa, gza) - topYView(table, src, nbx, nbz, gxa, gza),
-              );
-              const fb = Math.abs(
-                topYView(table, src, bx, bz, gxb, gzb) - topYView(table, src, nbx, nbz, gxb, gzb),
-              );
-              if (fa < WALL_FLUSH_EPS && fb < WALL_FLUSH_EPS) continue; // flush 平隔断 → 剔除
-              // 否则保留（台阶壁；顶沿已随深度场下移，轮廓完整）
-            }
-            // ★ 底 = 低侧基底 − EPS − 保底（埋入地下防破面）；
-            //   weld 边全高：顶在坡顶棱 crest，底到低侧基底 → 坡面侧壁完整贴坡
-            const botA = Math.min(topV[i], lowV[i] - WALL_EPS - WALL_MIN_DEPTH);
-            const botB = Math.min(topV[i + 1], lowV[i + 1] - WALL_EPS - WALL_MIN_DEPTH);
-            pos.push(lxV[i], topV[i], lzV[i], lxV[i + 1], topV[i + 1], lzV[i + 1],
-              lxV[i + 1], botB, lzV[i + 1], lxV[i], botA, lzV[i]);
-            const ownP2 = patchedOwn(sa);
-            const nbP2 = patchedNb(sa);
-            const pc = P && (ownP2 || nbP2) ? P.color : null;
-            for (let c = 0; c < 4; c++) {
-              nor.push(nrm.dx, 0, nrm.dz);
-              uv.push(uU, uV);
-              shd.push(1);
-            }
-            if (pc) {
-              // ★ 补丁墙材质/装饰权重沿高度渐变（2026-09-05 用户：坑底已有过渡，
-              //   侧壁没有——墙面原为恒定满染，与坑外原地面交界处硬跳）。顶沿取
-              //   壁线深度比（wallU：坑缘线=0 同白、台阶线=邻面同值 → 无缝），
-              //   底沿满染（埋地不可见）。顶点序 = 0顶A / 1顶B / 2底B / 3底A。
-              const uA = wallU[i], uB = wallU[i + 1];
-              col.push(Math.pow(pc[0], uA), Math.pow(pc[1], uA), Math.pow(pc[2], uA));
-              col.push(Math.pow(pc[0], uB), Math.pow(pc[1], uB), Math.pow(pc[2], uB));
-              col.push(pc[0], pc[1], pc[2], pc[0], pc[1], pc[2]);
-              pw.push(Math.min(1, uA), Math.min(1, uB), 1, 1);
-            } else {
-              // 中性白：顶点色=材质替换开关（不染色不装饰）
-              col.push(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1);
-              pw.push(0, 0, 0, 0);
-            }
-            // ★ 绕序朝外（正面可见）：dir1/-x 与 dir2/+z 的墙法线因采样方向
-            //   朝内，翻转索引；dir0/dir3 保持（2026-09-04 修正）
-            if (dir === 1 || dir === 2) {
-              idx.push(vi, vi + 3, vi + 2, vi, vi + 2, vi + 1);
-            } else {
-              idx.push(vi, vi + 2, vi + 3, vi, vi + 1, vi + 2);
-            }
-            vi += 4;
-          }
+        vi += emitWallSide(a, table, src, patch, fineE, lbx, lbz, dir, vi, idx);
       }
     }
   }
   return {
-    vertices: new Float32Array(pos),
-    normals: new Float32Array(nor),
-    uvs: new Float32Array(uv),
-    colors: new Float32Array(col),
-    shade: new Float32Array(shd),
-    patchW: new Float32Array(pw),
+    vertices: new Float32Array(a.pos),
+    normals: new Float32Array(a.nor),
+    uvs: new Float32Array(a.uv),
+    colors: new Float32Array(a.col),
+    shade: new Float32Array(a.shd),
+    patchW: new Float32Array(a.pw),
     indices: new Uint32Array(idx),
     topTriCount: 0,
   };
