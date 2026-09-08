@@ -83,14 +83,14 @@ export class WorldMode implements IGameMode {
   private mobDefs: MobDef[] = [];
   /** ★ 已生成过的 chunk key（每 chunk 一波，不重复生成） */
   private spawnedChunks = new Set<number>();
-  /** ★ 出生圈（玩家自己的 chunk + 邻居）里不刷怪 → 记录出生 chunk key */
+  /** ★ 出生 chunk key（玩家安全区：自己不刷怪；敌人从他处生成） */
   private spawnChunkKey = -1;
   /** ★ 波次节奏（秒）：距下次"LOD 外环"刷怪的倒计时 */
   private respawnTimer = 0;
-  /** ★ 全图杂兵上限（无限世界累积保护：死亡/坠坑回收后腾出名额） */
+  /** ★ 全图杂兵上限（弱化档：总量克制，死亡后周期波次慢慢补） */
   private static readonly MAX_ENEMIES = 60;
   /** ★ 敌人远距回收半径（米）：玩家离开后该区敌人销毁，名额让给新 frontier */
-  private static readonly ENEMY_CULL_RADIUS = 170;
+  private static readonly ENEMY_CULL_RADIUS = 200;
   /** 远距回收节拍（每 1s 扫一次，避免每帧 O(n)） */
   private cullAccum = 0;
 
@@ -191,8 +191,6 @@ export class WorldMode implements IGameMode {
     };
     this.chunks = new ChunkManager(this.scene, this.raster, groundHost, {
       testChunk: ctx.debug?.testChunk ?? false,
-      // ★ 每次新加载（激活）一个地块 → 在该 chunk 内随机生成一波敌人
-      onChunkActivated: (cx, cz, key) => this.onChunkActivated(cx, cz, key),
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
 
@@ -413,10 +411,12 @@ export class WorldMode implements IGameMode {
     // ---- ★ 敌人波次节奏：定时在玩家 LOD 外环周围补一波 ----
     this.respawnTimer -= dt;
     if (this.respawnTimer <= 0) {
-      // 下一波随机 8~20s（"随机过一段时间"）
-      this.respawnTimer = 8 + Math.random() * 12;
+      // 下一波随机 15~30s（弱化档：补怪更稀疏）
+      this.respawnTimer = 15 + Math.random() * 15;
       this.spawnAmbientWave(pp.x, pp.y);
     }
+    // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（预算减半） ----
+    this.scanAndSpawnWaves(pp.x, pp.y, 4);
     // ---- ★ 远距敌人回收（1s 一拍；玩家走过的旧区清场） ----
     this.cullAccum += dt;
     if (this.cullAccum >= 1) {
@@ -663,24 +663,45 @@ export class WorldMode implements IGameMode {
   }
 
   /**
-   * ★ chunk 激活回调（ChunkManager 每个新建/激活 chunk 调一次）：
-   *   新地块加载 → 在该 chunk 内随机生成一波敌人。
-   *   ★ 自己的 chunk（出生 chunk）不刷怪。
+   * ★ 扫描式波次生成：沿玩家所在 chunk 周围 ±2 已加载地块扫描，
+   *   每个尚未生成过的 chunk 生成一波敌人（新加载的地块也会自然被扫到）。
+   *   ★ 出生 chunk（玩家所在 chunk 锚点）不刷怪 → spawnChunkKey 排除。
+   *   ★ 每帧只放 budget 个（防单帧卡顿），未放满的 chunk 不标记完成 → 后续帧续铺。
    */
-  private onChunkActivated(cx: number, cz: number, key: number): void {
-    if (this.testChunk) return;               // 测试地图不刷怪
-    if (this.chunks.isBoss4D) return;         // 四维空间（最终 Boss 战地图）不刷杂兵
-    if (key === this.spawnChunkKey) return;   // 出生 chunk = 自己的 chunk
-    if (this.spawnedChunks.has(key)) return;  // 每 chunk 只一波
-    this.spawnedChunks.add(key);
-    // ★ 生成 2~4 个（"一些"）；失败重试点，最多尝试若干次
-    const want = 2 + Math.floor(Math.random() * 3);
-    let placed = 0;
-    for (let i = 0; i < want * 8 && placed < want; i++) {
-      if (this.spawnAtRandomPointInChunk(cx, cz)) placed++;
-    }
-    if (placed > 0) {
-      console.log(`[WorldMode] chunk(${cx},${cz}) 激活 → 生成 ${placed} 个杂兵`);
+  private scanAndSpawnWaves(px: number, pz: number, budget: number): void {
+    if (this.testChunk || this.mobDefs.length === 0) return;
+    if (this.chunks.isBoss4D) return; // 四维空间（最终 Boss 战地图）不刷杂兵
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    let placedTotal = 0;
+    // ★ 从内环到外环扫（保证离玩家近的 chunk 优先铺满）
+    for (let ring = 1; ring <= 2 && placedTotal < budget; ring++) {
+      for (let dz = -ring; dz <= ring && placedTotal < budget; dz++) {
+        for (let dx = -ring; dx <= ring && placedTotal < budget; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue; // 只在环上
+          const cx = pcx + dx, cz = pcz + dz;
+          const key = chunkKeyOf(cx, cz);
+          if (key === this.spawnChunkKey) continue;  // 出生 chunk 不刷
+          if (this.spawnedChunks.has(key)) continue; // 已完成波次的 chunk 跳过
+          // ★ chunk 地形已就绪（有数据环）才可落点
+          if (!this.raster.getChunkData(cx, cz)) continue;
+          // ★ 每 chunk 一波 2~4 个（比全铺档减半：有怪但不会过密）
+          const want = 2 + Math.floor(Math.random() * 3);
+          let placed = 0;
+          let attempts = 0;
+          for (; attempts < want * 10 && placed < want && placedTotal < budget; attempts++) {
+            if (this.spawnAtRandomPointInChunk(cx, cz)) placed++;
+          }
+          placedTotal += placed;
+          // ★ 放满 / 尝试耗尽（地形基本没位置）才算完成；预算截断 → 下帧继续
+          if (placed >= want || attempts >= want * 10) {
+            this.spawnedChunks.add(key);
+          }
+          if (placed > 0) {
+            console.log(`[WorldMode] chunk(${cx},${cz}) 补波 → ${placed} 个`);
+          }
+        }
+      }
     }
   }
 
@@ -691,11 +712,12 @@ export class WorldMode implements IGameMode {
     if (this.enemies.length >= WorldMode.MAX_ENEMIES) return false;
     const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
-    // ★ 玩家附近不刷（防贴脸 pop-in；LOD 内敌人由 AI 靠近时自然接手）
+    // ★ 玩家近旁不刷（防贴脸 pop-in；出生 chunk 自身已整体排除，
+    //   邻 chunk 允许到 12m——初始密度够又不出现在脚边）
     const p = this.player?.position;
     if (p) {
       const ddx = x - p.x, ddz = z - p.z;
-      if (ddx * ddx + ddz * ddz < 30 * 30) return false;
+      if (ddx * ddx + ddz * ddz < 12 * 12) return false;
     }
     // ★ 坑/水/虚空/未生成：不站（isDepression 包含坑洞与水）
     const role = this.raster.tileDefAt(x, z).genRole;
@@ -710,7 +732,7 @@ export class WorldMode implements IGameMode {
   private spawnAmbientWave(px: number, pz: number): void {
     if (this.testChunk || this.mobDefs.length === 0) return;
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
-    const want = 2 + Math.floor(Math.random() * 2);
+    const want = 1 + (Math.random() < 0.5 ? 1 : 0); // 每波 1~2 个（弱化档）
     let placed = 0;
     // 环带：内圈 > LOD3（60m），外圈 < 数据预载环（~2 chunk）
     for (let i = 0; i < want * 10 && placed < want; i++) {
