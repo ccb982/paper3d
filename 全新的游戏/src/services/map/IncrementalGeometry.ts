@@ -4,9 +4,9 @@
 // 语义（§14.11 + 用户定调"以地块为单位进行重建，其余不变"）：
 //   每个 chunk 缓存一份「无补丁基座」几何（不随 levels 变化的顶面/侧壁字节——
 //   topYView 只取决于 src/table，补丁只叠 depthOf 下挖）。每次破坏：
-//     · partition（本文件 §"受影响掩码"，比 partitionPatch 更精）：
-//         topCell：isPatched（值变） ∪ fineE≠baseFine（粗↔细布局变；
-//                   补丁 cell ∪ 外扩 1 圈必然全 fine，等价"补丁∪1 圈"）
+//   · partition（本文件 §"受影响掩码"，比 partitionPatch 更精）：
+//         topCell：补丁 cell ∪ 外扩 1 圈（预防性扩张——覆盖深度场/粗↔细
+//                   布局变化及坑口交界；安全超集，多发的 fine cell 字节不变）
 //         wallSide：该 4m 边两侧 8 个 coarse cell 任一带受影响标记
 //                   —— 同时覆盖 ①补丁色/剔除差 ②本侧 cell 转 fine 的节点密度差
 //                   （partitionPatch.blockSides 只查"带补丁"，漏密度差，此处补全）
@@ -157,17 +157,20 @@ export interface IncrementalResult {
 }
 
 // ------------------------------------------------------------
-// ★ 受影响掩码：单元格字节会变的精确定义（非 partitionPatch 近似）
+// ★ 受影响掩码：补丁 cell ∪ 外扩 1 圈（预防性扩张）
 // ------------------------------------------------------------
 
-function affectedTopMask(
-  patch: PatchOverlay, fineE: Uint8Array, base: ChunkBase,
-): Uint8Array {
+function affectedTopMask(patch: PatchOverlay): Uint8Array {
   const mask = new Uint8Array(NC);
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
-      const c = lz * N + lx;
-      if (patch.isPatched(lx, lz) || fineE[c] !== base.baseFine[c]) mask[c] = 1;
+      if (!patch.isPatched(lx, lz)) continue;
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = lx + dx, nz = lz + dz;
+          if (nx >= 0 && nz >= 0 && nx < N && nz < N) mask[nz * N + nx] = 1;
+        }
+      }
     }
   }
   return mask;
@@ -359,7 +362,7 @@ export function incrementalGeometry(
     base = seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall);
   }
   const fineE = topFineCellsFor(table, src, patch);
-  const mask = affectedTopMask(patch, fineE, base);
+  const mask = affectedTopMask(patch);
   const sideMask = affectedSideMask(mask);
   return {
     top: buildTopIncremental(base, table, src, patch, fineE, mask),

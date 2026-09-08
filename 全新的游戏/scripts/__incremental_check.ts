@@ -15,7 +15,7 @@ import {
 import {
   incrementalGeometry, incrementalDropCache,
 } from "../src/services/map/IncrementalGeometry";
-import { computeTableGeometry, type PatchGeomResult } from "../src/services/map/PatchCompute";
+import { computeTableGeometry } from "../src/services/map/PatchCompute";
 import { makeChunkSource, refineChunkSource } from "../src/services/map/Refinements";
 
 let failures = 0;
