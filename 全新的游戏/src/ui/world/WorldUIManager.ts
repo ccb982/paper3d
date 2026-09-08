@@ -67,10 +67,8 @@ export class WorldUIManager extends BaseInteractionUI {
       },
     });
 
-    // overlay 弹窗根
-    this.overlayRoot = document.createElement('div');
-    this.overlayRoot.className = CSS.overlay;
-    document.body.appendChild(this.overlayRoot);
+    // ★ 模态面板栈挂载到 body（新 PanelManager 拥有遮罩层）
+    this.panels.mount(document.body);
 
     this.minimap = new Minimap(raster);
     this.hud = new PlayerHud();
@@ -191,10 +189,10 @@ export class WorldUIManager extends BaseInteractionUI {
     }
   }
 
-  /** 打开对话（世界轻量版） */
+  /** 打开对话（世界轻量版，非模态 HUD 小部件） */
   openDialogue(npcId: string, text: string): void {
     const bubble = renderDialogBubble({ speaker: npcId, text, autoCloseMs: 3000 });
-    document.body.appendChild(bubble);
+    this.widgets.add(bubble);
   }
 
   /** 准星显隐 */
@@ -213,16 +211,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
   /** 背包面板是否打开（由弹窗栈实际状态推导，与手动关闭按钮保持同步） */
   get isInventoryOpen(): boolean {
-    return this.panelStack.some(p => p.id === 'inventory-panel');
-  }
-
-  /**
-   * 是否处于“非战斗 UI”状态（弹出层栈内有任意面板）。
-   * 作为指针锁定联动唯一事实来源：任一面板打开 → 解锁；
-   * 全部关闭 → 回到战场 → 重新锁定。
-   */
-  get hasModalOpen(): boolean {
-    return this.panelStack.length > 0;
+    return this.panels.isOpen('inventory-panel');
   }
 
   private renderInventoryPanel(): void {

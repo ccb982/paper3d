@@ -131,13 +131,13 @@ export class InventoryPanel {
 
     this.opts.openPanel({
       id: 'item-detail',
+      title: slot.itemId,
       onOpen: () => {},
       onClose: () => {},
       render: () => {
         const div = document.createElement('div');
         div.className = CSS.panel;
         div.innerHTML = `
-          <h3 class="ui-detail-title">${slot.itemId}</h3>
           <p class="ui-panel-text">数量: ${slot.stackSize}</p>
           <p class="ui-panel-text">类型: ${config?.type ?? '未知'}</p>
           <p class="ui-panel-desc">${config?.description ?? ''}</p>
@@ -225,13 +225,6 @@ export class InventoryPanel {
           div.appendChild(dropBtn);
         }
 
-        // 关闭按钮
-        const closeBtn = createButton({
-          label: '关闭', size: 'sm', style: 'ghost',
-          onClick: () => this.opts.closePanel('item-detail'),
-        });
-        closeBtn.style.marginTop = '8px';
-        div.appendChild(closeBtn);
         return div;
       },
     });
@@ -241,13 +234,13 @@ export class InventoryPanel {
   private confirmDiscard(onConfirm: () => void): void {
     this.opts.openPanel({
       id: 'discard-confirm',
+      title: '确认丢弃',
       onOpen: () => {},
       onClose: () => {},
       render: () => {
         const div = document.createElement('div');
         div.className = CSS.panel;
         div.innerHTML = `
-          <h3 class="ui-detail-title">确认丢弃</h3>
           <p class="ui-panel-text">确定要丢弃这些物品吗？丢弃后无法找回。</p>
         `;
         const row = document.createElement('div');

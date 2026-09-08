@@ -4,9 +4,8 @@
 // 继承 BaseInteractionUI 统一管理弹窗栈。
 // ============================================================
 
-import { BaseInteractionUI, type PanelDef } from '../BaseInteractionUI';
+import { BaseInteractionUI, type PanelDef, Panel } from '../BaseInteractionUI';
 import type { GameSession } from '../../core/Session';
-import { createEmptyGrid, countItemsInGrid, addItemToGrid } from '../../core/Session';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { CraftingManager } from '../../systems/inventory/CraftingManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
@@ -14,13 +13,14 @@ import { InventoryPanel } from '../shared/InventoryPanel';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
 import type { GachaOverlay } from './GachaOverlay';
+import { ActionPanel, FormationPanel, OperatorPanel } from './ShipPanels';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
 
 export class ShipUIManager extends BaseInteractionUI {
   private currentPanel: ShipPanel = 'none';
-  /** ★ 当前编队面板内容区块是否展示背包（刷新时保持停留） */
-  private showingInventory = false;
+  /** ★ 挂载中的编队面板实例（子视图刷新委托） */
+  private formationPanel: FormationPanel | null = null;
   private root: HTMLDivElement;
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
@@ -92,15 +92,8 @@ export class ShipUIManager extends BaseInteractionUI {
     ].join(';');
     this.root.appendChild(this.panelContainer);
 
-    // overlay 弹窗根
-    this.overlayRoot = document.createElement('div');
-    this.overlayRoot.id = 'ship-overlay-root';
-    this.overlayRoot.style.cssText = [
-      'position:fixed', 'top:0', 'left:0', 'width:100%', 'height:100%',
-      'background:rgba(0,0,0,0.5)', 'display:none', 'z-index:200',
-      'pointer-events:auto', 'align-items:center', 'justify-content:center',
-    ].join(';');
-    document.body.appendChild(this.overlayRoot);
+    // ★ 模态面板栈挂载到 body（新 PanelManager 拥有遮罩层）
+    this.panels.mount(document.body);
   }
 
   /** 更新标题（换天时调用） */
@@ -131,174 +124,53 @@ export class ShipUIManager extends BaseInteractionUI {
   private renderPanel(panel: ShipPanel): void {
     this.panelContainer.style.display = 'block';
     this.panelContainer.innerHTML = '';
+    let content: HTMLElement | null = null;
     switch (panel) {
-      case 'action': this.renderActionPanel(); break;
-      case 'formation': this.renderFormationPanel(); break;
-      case 'operator': this.renderOperatorPanel(); break;
+      case 'action': {
+        const p = new ActionPanel({
+          session: this.session,
+          onDepart: this.onDepart,
+        });
+        content = this.buildSidePanel(p);
+        break;
+      }
+      case 'formation': {
+        const p = new FormationPanel({
+          session: this.session,
+          itemManager: this.itemManager,
+          craftingManager: this.craftingManager,
+          inventoryPanel: this.inventoryPanel,
+          openCrafting: (station) => this.openCrafting(station),
+        });
+        this.formationPanel = p;
+        content = this.buildSidePanel(p);
+        break;
+      }
+      case 'operator': {
+        const p = new OperatorPanel({
+          session: this.session,
+        });
+        content = this.buildSidePanel(p);
+        break;
+      }
+      case 'none':
+        break;
     }
+    if (content) this.panelContainer.appendChild(content);
   }
 
-  // ============================================================
-  // 行动面板
-  // ============================================================
-
-  private renderActionPanel(): void {
-    const s = this.session;
-    const ship = s.ship;
-    const inv = s.inventories;
-
-    const div = document.createElement('div');
-    div.innerHTML = `
-      <h3 style="color:#8af;margin:0 0 12px 0;">行动准备</h3>
-      <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
-        <div>📅 第 ${s.meta.day} 天</div>
-        <div>🚢 舰船: HP ${ship.hp}/${ship.maxHp} | 护盾 ${ship.shield} | 装甲 ${ship.armor}</div>
-        <div>🛡 炮塔: ${ship.turrets.length} 座</div>
-      </div>
-      <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
-        <div>🎒 背包状态:</div>
-        <div>  基地仓库: ${countItemsInGrid(inv.base)} 件</div>
-        <div>  飞船仓库: ${countItemsInGrid(inv.ship)} 件</div>
-        <div>  玩家背包: ${countItemsInGrid(inv.player)} 件</div>
-        <div>  队友背包: ${Object.keys(inv.allies).length} 人</div>
-      </div>
-      <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
-        <div>🏆 藏品: ${s.relics.owned.length} 件 | 干员: ${s.allies.roster.length} 人</div>
-        <div>🎰 抽卡保底: ${s.gacha.pityCounter} 抽</div>
-      </div>
-    `;
-
-    if (s.dayProgress.hasDepartedToday) {
-      const msg = document.createElement('div');
-      msg.style.cssText = 'color:#fa4;padding:8px;background:rgba(255,170,68,0.15);border-radius:4px;margin-bottom:12px;';
-      msg.textContent = '今日已出击，休息等明天吧';
-      div.appendChild(msg);
-    } else {
-      const departBtn = createButton({
-        label: '🚀 出击', size: 'lg', fullWidth: true,
-        onClick: () => this.onDepart?.(),
-      });
-      departBtn.style.background = '#4488ff';
-      div.appendChild(departBtn);
-    }
-
-    this.panelContainer.appendChild(div);
+  /** 用统一 Panel 基类渲染侧边面板，返回其根元素 */
+  private buildSidePanel<P>(panel: Panel<P>): HTMLElement {
+    return panel.render({ root: this.panelContainer, close: () => this.closeCurrentPanel() });
   }
 
-  // ============================================================
-  // 编队面板
-  // ============================================================
-
-  private renderFormationPanel(): void {
-    const div = document.createElement('div');
-    div.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <h3 style="color:#8af;margin:0;">编队管理</h3>
-      </div>
-      <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">
-      </div>
-      <div id="ship-formation-content"></div>
-    `;
-
-    // 右上角关闭按钮
-    const head = div.querySelector('div')!;
-    head.appendChild(createButton({
-      label: '✕ 关闭', size: 'sm', style: 'ghost',
-      onClick: () => this.togglePanel('formation'),
-    }));
-
-    const btnBar = div.querySelectorAll('div')[1]!;
-    btnBar.appendChild(createButton({ label: '🎒 打开背包', size: 'sm', style: 'secondary', onClick: () => this.renderInventoryView() }));
-    btnBar.appendChild(createButton({ label: '🏆 藏品查看', size: 'sm', style: 'secondary', onClick: () => this.renderRelicsView() }));
-    btnBar.appendChild(createButton({ label: '🔧 合成台', size: 'sm', style: 'secondary', onClick: () => this.openCrafting('ship') }));
-
-    this.panelContainer.appendChild(div);
-  }
-
-  /** ★ 数据变更后刷新编队面板内容区，保持当前子视图（背包/藏品），不重置到面板根部 */
+  /** ★ 数据变更后刷新当前面板内容，保持子视图停留 */
   private refreshPanelContent(): void {
     if (this.currentPanel !== 'formation') {
       this.renderPanel(this.currentPanel);
       return;
     }
-    const content = this.panelContainer.querySelector('#ship-formation-content');
-    if (!content) return;
-    if (this.showingInventory) {
-      this.renderInventoryView();
-    } else {
-      this.renderRelicsView();
-    }
-  }
-
-  // ============================================================
-  // 背包视图
-  // ============================================================
-
-  private renderInventoryView(): void {
-    this.showingInventory = true;
-    const content = this.panelContainer.querySelector('#ship-formation-content')!;
-
-    let html = '<div style="padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;margin-bottom:8px;">';
-    html += '<div id="inv-grid-view"></div></div>';
-
-    content.innerHTML = html;
-
-    const gridView = content.querySelector('#inv-grid-view') as HTMLElement;
-    // ★ 独立背包模块渲染（标签页 + 网格）
-    this.inventoryPanel.render(gridView);
-  }
-
-  // ============================================================
-  // 藏品视图
-  // ============================================================
-
-  private renderRelicsView(): void {
-    this.showingInventory = false;
-    const content = this.panelContainer.querySelector('#ship-formation-content')!;
-    const relics = this.session.relics;
-
-    let html = `
-      <div style="padding:8px;background:rgba(102,68,170,0.15);border-radius:4px;">
-        <h4 style="color:#a8f;margin:0 0 8px 0;">藏品 (${relics.owned.length} 件)</h4>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">
-    `;
-    for (const id of relics.owned) {
-      html += `<span style="padding:4px 10px;background:rgba(102,68,170,0.3);border:1px solid #8866cc;border-radius:4px;font-size:12px;color:#caf;">${id}</span>`;
-    }
-    html += '</div></div>';
-    content.innerHTML = html;
-  }
-
-  // ============================================================
-  // 干员面板
-  // ============================================================
-
-  private renderOperatorPanel(): void {
-    const s = this.session;
-    const div = document.createElement('div');
-
-    div.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <h3 style="color:#8af;margin:0;">干员管理</h3>
-      </div>
-      <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
-        <div>已招募干员: ${s.allies.roster.length} 人</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
-          ${s.allies.roster.length === 0
-            ? '<span style="color:#666;">还没有干员，去招募吧</span>'
-            : s.allies.roster.map(id => `<span style="padding:4px 10px;background:rgba(68,136,255,0.2);border:1px solid #4488ff;border-radius:4px;font-size:12px;color:#8af;">${id}</span>`).join('')
-          }
-        </div>
-      </div>
-    `;
-
-    // 右上角关闭按钮
-    div.querySelector('div')!.appendChild(createButton({
-      label: '✕ 关闭', size: 'sm', style: 'ghost',
-      onClick: () => this.togglePanel('operator'),
-    }));
-
-    this.panelContainer.appendChild(div);
+    this.formationPanel?.refresh();
   }
 
   // ============================================================
@@ -359,7 +231,8 @@ export class ShipUIManager extends BaseInteractionUI {
       speaker: npcId, text,
       onClose: () => {},
     });
-    document.body.appendChild(bubble);
+    // ★ 非模态 HUD 小部件：由 WidgetManager 统一管理与清理
+    this.widgets.add(bubble);
   }
 
   // ============================================================
@@ -368,6 +241,7 @@ export class ShipUIManager extends BaseInteractionUI {
 
   override dispose(): void {
     super.dispose();
+    this.formationPanel = null;
     if (this.root?.parentNode) this.root.parentNode.removeChild(this.root);
     this.panelContainer.innerHTML = '';
   }
