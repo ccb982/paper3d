@@ -38,6 +38,7 @@ export class WorldUIManager extends BaseInteractionUI {
   private inventoryOpen = false;
   private eventUnsub?: () => void;
   private flashItemId: string | null = null;
+  private flashTimer: number | undefined = undefined;
   private mapStyleBtn: HTMLButtonElement | null = null;
 
   constructor(
@@ -348,6 +349,14 @@ export class WorldUIManager extends BaseInteractionUI {
     if (this.inventoryOpen) {
       this.renderInventoryPanel();
     }
+  }
+
+  /** 拾取反馈：标记新增格子闪烁 + 刷新背包（若已打开）——子弹掉落直塞背包时保证实时可见 */
+  flashItemAndRefresh(itemId: string): void {
+    this.flashItemId = itemId;
+    this.refreshIfOpen();
+    clearTimeout(this.flashTimer);
+    this.flashTimer = window.setTimeout(() => { this.flashItemId = null; }, 600);
   }
 
   override dispose(): void {

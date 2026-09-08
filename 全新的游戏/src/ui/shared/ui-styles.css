@@ -34,7 +34,8 @@
   pointer-events: none;
 }
 
-/* ---- 浮动文字（拾取/伤害数值） ---- */
+/* ---- 浮动文字（拾取/伤害数值） ----
+   拾取提示需盖过背包面板（ui-overlay z=300）→ 400 */
 .ui-floating-text {
   position: fixed;
   left: 50%;
@@ -42,7 +43,7 @@
   font-size: 18px;
   font-weight: bold;
   pointer-events: none;
-  z-index: 250;
+  z-index: 400;
   text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
   transform: translate(-50%, 0);
   transition: opacity 0.1s;

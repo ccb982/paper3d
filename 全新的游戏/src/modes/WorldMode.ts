@@ -688,6 +688,7 @@ export class WorldMode implements IGameMode {
       const ok = this.itemManager.hasSpace('player', drop.itemId, drop.count)
         && this.itemManager.addItem('player', drop.itemId, drop.count);
       this.worldUIManager.showPickupResult(drop.itemId, ok, drop.count);
+      if (ok) this.worldUIManager.flashItemAndRefresh(drop.itemId);
     }
   }
 
