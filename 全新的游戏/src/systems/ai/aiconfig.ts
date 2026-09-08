@@ -96,6 +96,7 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
   const attack = p.attackRadius ?? 1.5;
   const lose = p.loseRadius ?? 12;
   const melee = p.meleeDuration ?? 0.6;
+  const dmg = p.meleeDamage ?? 8;
   return {
     states: {
       patrol: {
@@ -113,7 +114,7 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
         ],
       },
       attack: {
-        behaviors: [{ name: 'meleeSwing', params: { duration: melee } }],
+        behaviors: [{ name: 'meleeSwing', params: { duration: melee, damage: dmg } }],
         transitions: [
           { cond: 'attackFinished', to: 'patrol' },
           { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: 'patrol' },
@@ -124,11 +125,20 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
   };
 }
 
-/** 原石虫：最基础杂兵，慢速、贴脸短索敌、低血 */
-export const ROCK_BUG_AI: AIConfig = mobAI({ wanderSpeed: 1.4, chaseSpeed: 1.8, aggroRadius: 5, attackRadius: 1.2, loseRadius: 9, meleeDuration: 0.5 });
+/** ★ 原石虫：集群虫（成群刷出）。慢速、低攻、极低血——靠数量取胜 */
+export const ROCK_BUG_AI: AIConfig = mobAI({
+  wanderSpeed: 1.4, chaseSpeed: 1.8, aggroRadius: 5,
+  attackRadius: 1.2, loseRadius: 9, meleeDuration: 0.5, meleeDamage: 4,
+});
 
-/** 整合运动人员：标准杂兵，中速、中索敌、中血 */
-export const REUNION_AI: AIConfig = mobAI({ wanderSpeed: 2, chaseSpeed: 2.5, aggroRadius: 8, attackRadius: 1.5, loseRadius: 12, meleeDuration: 0.6 });
+/** ★ 整合运动人员：重装杂兵（单独配置里给高防高血）。中速、中索敌、中攻 */
+export const REUNION_AI: AIConfig = mobAI({
+  wanderSpeed: 2, chaseSpeed: 2.5, aggroRadius: 8,
+  attackRadius: 1.5, loseRadius: 12, meleeDuration: 0.6, meleeDamage: 9,
+});
 
-/** 牢杰：强力杂兵，高速、大索敌、高血 */
-export const LAOJIE_AI: AIConfig = mobAI({ wanderSpeed: 2.6, chaseSpeed: 3.2, aggroRadius: 11, attackRadius: 1.8, loseRadius: 16, meleeDuration: 0.7 });
+/** ★ 牢杰/杰斯顿：突击精英。高速、大索敌、高攻、低血 */
+export const LAOJIE_AI: AIConfig = mobAI({
+  wanderSpeed: 3, chaseSpeed: 3.8, aggroRadius: 12,
+  attackRadius: 1.8, loseRadius: 18, meleeDuration: 0.65, meleeDamage: 14,
+});

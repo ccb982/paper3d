@@ -33,6 +33,10 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   scale?: number;
   /** ★ 碰撞体积放大（在 scale 基础上再乘；默认 1，命中体积与贴片可不等） */
   collisionScale?: number;
+  /** ★ 防御（伤害结算：damage + 攻方 attackPower - 防方 defense） */
+  defense?: number;
+  /** ★ 攻击力加成（默认 0） */
+  attackPower?: number;
 }
 
 export class EnemyBase extends CharacterBase {
@@ -82,6 +86,8 @@ export class EnemyBase extends CharacterBase {
     this.camp = 'enemy';
     this.hp = opts.hp ?? 30; // ★ 敌人生命（普瑞赛斯 30；子弹 10 伤害 × 3 发）
     this.maxHp = this.hp;
+    this.defense = opts.defense ?? 0;       // ★ 防御（高防 = 子弹/近战都更难打动）
+    this.attackPower = opts.attackPower ?? 0; // ★ 攻击力加成（叠加在 AI 近战伤害上）
     this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);
 

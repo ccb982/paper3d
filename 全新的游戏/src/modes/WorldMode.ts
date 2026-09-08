@@ -64,9 +64,21 @@ export interface WorldModeEnterContext extends IGameModeContext {
   debug?: { testChunk?: boolean };
 }
 
-/** ★ 杂兵配置条目（由 enemyAssets 派生：素材+AI+HP+体型；生成时随机取一条） */
+/** ★ 杂兵配置条目（素材 + AI + 属性 + 体型 + 集群；生成时随机取一条） */
 interface MobDef {
-  asset: FtxAsset; ai: AIConfig; hp: number; scale: number; collisionScale: number;
+  asset: FtxAsset;
+  ai: AIConfig;
+  hp: number;
+  /** 防御（减法减伤） */
+  defense: number;
+  /** 攻击力加成（叠加在 AI 近战伤害上） */
+  attackPower: number;
+  scale: number;
+  collisionScale: number;
+  /** 集群规模（一次落点生成几只；原石虫成群用） */
+  pack: number;
+  /** 随机抽取权重（原石虫权重大 → 成队出现） */
+  weight: number;
 }
 
 // ============================================================
@@ -235,13 +247,25 @@ export class WorldMode implements IGameMode {
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
 
-    // ---- ★ 杂兵配置条目（素材 + AI + HP + 体型；生成时随机取一条） ----
+    // ---- ★ 杂兵配置条目（三种特色：原石虫=慢/脆/成群；整合=高防高血；
+    //       牢杰/杰斯顿=高速高攻脆皮）----
+    const MOB_BLUEPRINTS: Omit<MobDef, 'asset'>[] = [
+      {
+        ai: ROCK_BUG_AI, hp: 22, defense: 0, attackPower: 0,
+        scale: 1.6, collisionScale: 1.1, pack: 4, weight: 3, // ★ 成群（慢速炮灰）
+      },
+      {
+        ai: REUNION_AI, hp: 130, defense: 6, attackPower: 2,
+        scale: 2, collisionScale: 1.25, pack: 1, weight: 2, // ★ 高防高血
+      },
+      {
+        ai: LAOJIE_AI, hp: 45, defense: 0, attackPower: 12,
+        scale: 2, collisionScale: 1.25, pack: 1, weight: 1, // ★ 高速高攻脆皮
+      },
+    ];
     this.mobDefs = (ctx.enemyAssets ?? []).map((asset, i) => ({
       asset,
-      ai: [ROCK_BUG_AI, REUNION_AI, LAOJIE_AI][i % 3] ?? REUNION_AI,
-      hp: [25, 40, 70][i % 3] ?? 40,
-      scale: [2, 2, 2][i % 3] ?? 2, // ★ 贴片放大 2×
-      collisionScale: 1.25, // ★ 碰撞体积再 ×1.25（命中更容易）
+      ...(MOB_BLUEPRINTS[i % MOB_BLUEPRINTS.length] ?? MOB_BLUEPRINTS[1]),
     }));
     // ★ 出生 chunk 不刷怪（自己的 chunk 留给玩家出生/回城安全区）
     this.spawnChunkKey = chunkKeyOf(
@@ -756,9 +780,16 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 随机取一条杂兵配置 */
+  /** ★ 随机取一条杂兵配置（按 weight 加权：原石虫权重大 → 成群出现） */
   private pickMob(): MobDef {
-    return this.mobDefs[Math.floor(Math.random() * this.mobDefs.length)];
+    let total = 0;
+    for (const d of this.mobDefs) total += d.weight;
+    let r = Math.random() * total;
+    for (const d of this.mobDefs) {
+      r -= d.weight;
+      if (r <= 0) return d;
+    }
+    return this.mobDefs[this.mobDefs.length - 1];
   }
 
   /** ★ 远距回收：距玩家超 ENEMY_CULL_RADIUS 的敌人销毁并移除
@@ -776,32 +807,54 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 生成一个杂兵（配置/贴片/碰撞统一走 mobDefs） */
+  /** ★ 生成一"窝"杂兵：以落点为中心放 def.pack 只（原石虫 = 一整窝），
+   *   同伴围绕中心 ±1.6m 散布（同一 asset/属性）。返回是否至少放了 1 只。 */
   private spawnOne(
     def: MobDef,
     x: number, y: number, z: number,
   ): boolean {
     if (!this.scene || !this.camera) return false;
-    const enemy = new EnemyBase(this.entities, this.scene, def.asset, {
-      x, y, z,
-      animMap: {
-        states: {
-          idle: { 前: ['前'], 后: ['后'] },
-          walk: { 前: ['前'], 后: ['后'] },
-          attack: { 前: ['前'], 后: ['后'] },
+    let any = false;
+    for (let k = 0; k < def.pack; k++) {
+      // ★ 同伴散布（k=0 中心；其余绕圈小偏移）
+      let sx = x, sz = z;
+      if (k > 0) {
+        const ang = (k / def.pack) * Math.PI * 2 + Math.random() * 0.8;
+        const dist = 1.2 + Math.random() * 1.6;
+        sx = x + Math.cos(ang) * dist;
+        sz = z + Math.sin(ang) * dist;
+      }
+      // ★ 上限检查（每只都查）
+      if (this.enemies.length >= WorldMode.MAX_ENEMIES) break;
+      // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
+      const role = this.raster.tileDefAt(sx, sz).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const sy = this.raster.surfaceHeightAt(sx, sz);
+      if (sy < -1.2) continue;
+      const enemy = new EnemyBase(this.entities, this.scene, def.asset, {
+        x: sx, y: sy, z: sz,
+        animMap: {
+          states: {
+            idle: { 前: ['前'], 后: ['后'] },
+            walk: { 前: ['前'], 后: ['后'] },
+            attack: { 前: ['前'], 后: ['后'] },
+          },
+          fps: { idle: 1, walk: 1, attack: 1 },
         },
-        fps: { idle: 1, walk: 1, attack: 1 },
-      },
-      facing: Math.random() < 0.5 ? '前' : '后',
-      aggressive: true,
-      aiConfig: def.ai,
-      hp: def.hp,
-      scale: def.scale,
-      collisionScale: def.collisionScale,
-    }, this.camera);
-    enemy.billboard = false;
-    this.enemies.push(enemy);
-    return true;
+        facing: Math.random() < 0.5 ? '前' : '后',
+        aggressive: true,
+        aiConfig: def.ai,
+        hp: def.hp,
+        defense: def.defense,
+        attackPower: def.attackPower,
+        scale: def.scale,
+        collisionScale: def.collisionScale,
+      }, this.camera);
+      enemy.billboard = false;
+      this.enemies.push(enemy);
+      any = true;
+    }
+    return any;
   }
 
   /**
