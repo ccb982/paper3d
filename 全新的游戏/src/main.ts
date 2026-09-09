@@ -81,6 +81,8 @@ let enemyAsset: Asset;
 /** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
 let mobAssets: FtxAsset[] = [];
 let hitEffectAsset: Asset | null;
+/** ★ 可露希尔的无人机（特效包优先，回退纯纹理包） */
+let droneAsset: Asset | FtxAsset | null = null;
 /** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
 let testChunk = false;
 
@@ -168,6 +170,14 @@ async function boot() {
   } catch {
     hitEffectAsset = null;
   }
+
+  // ---- ★ 可露希尔的无人机（特效包优先；回退纯纹理包） ----
+  try {
+    droneAsset = await Asset.load(encodeURI('/fx/可露希尔的无人机.scene.zip'));
+  } catch {
+    droneAsset = await FtxAsset.load(encodeURI('/fx/可露希尔的无人机.ftx3.gz'));
+  }
+  console.log('[boot] 可露希尔的无人机已加载:', (droneAsset as Asset).frameNames?.()?.join(', ') ?? 'texture');
 
   // ---- ★ 月亮贴图：加载大猫哥月亮素材包（特效播放器解码），替换天空程序化月相 ----
   try {
@@ -341,6 +351,7 @@ function enterWorldMode(
     bulletAsset,
     enemyAssets: mobAssets,
     hitEffectAsset: hitEffectAsset ?? undefined,
+    droneAsset: droneAsset ?? undefined,
     debug: { testChunk },
     onReturn: () => {
       // 返回时：推进天数 + 进入 ShipMode

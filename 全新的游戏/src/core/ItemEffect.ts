@@ -8,6 +8,7 @@
 
 import type { GameSession } from './Session';
 import type { EntityBase } from '../entity/EntityBase';
+import { eventBus } from './EventBus';
 
 /** 物品效果执行上下文 */
 export interface ItemEffectContext {
@@ -57,4 +58,10 @@ effectRegistry.set('ammo', (params, ctx) => {
   // 弹药补给逻辑（预留）
   const value = params.value ?? 50;
   return { success: true, ammoAmount: value, message: `补充 ${value} 发弹药` };
+});
+
+effectRegistry.set('summon_drone', (_params, _ctx) => {
+  // ★ 召唤「可露希尔的无人机」：广播事件，由 WorldMode 近玩家位置生成无人机
+  eventBus.emit('drone_summon', {});
+  return { success: true, message: '已放出可露希尔的无人机' };
 });

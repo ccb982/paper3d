@@ -8,6 +8,7 @@
 
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadSixBrotherIcons } from './BasicMaterialsIcons';
+import { loadDroneIcon } from './DroneIcon';
 
 export interface ItemIconConfig {
   /** 色调 0-1 */
@@ -21,16 +22,22 @@ export interface ItemIconConfig {
 export class ItemIconRegistry {
   private cache = new Map<string, HTMLCanvasElement>();
   private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
+  private droneIcon: HTMLCanvasElement | null = null;
 
   constructor(private itemManager: ItemManager) {
     // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
     loadSixBrotherIcons()
       .then((map) => { this.sixBrothers = map; })
       .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
+    // 异步预载「可露希尔的无人机」图标（三图层合成：主体+左/右翅膀）
+    loadDroneIcon()
+      .then((canvas) => { this.droneIcon = canvas; })
+      .catch(() => { this.droneIcon = null; });
   }
 
   /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底） */
   getIcon(itemId: string): HTMLCanvasElement {
+    if (this.droneIcon && itemId === 'kaltsit_drone') return this.droneIcon;
     if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
     if (this.cache.has(itemId)) return this.cache.get(itemId)!;
 

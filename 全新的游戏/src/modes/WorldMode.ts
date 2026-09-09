@@ -18,6 +18,7 @@ import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
+import { DroneEntity } from '../entity/DroneEntity';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
@@ -60,6 +61,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   /** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
   enemyAssets?: FtxAsset[];
   hitEffectAsset?: Asset;
+  /** ★ 可露希尔的无人机素材（特效包优先，回退纯纹理包） */
+  droneAsset?: Asset | FtxAsset;
   /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
   debug?: { testChunk?: boolean };
 }
@@ -151,6 +154,12 @@ export class WorldMode implements IGameMode {
   /** ★ killed 事件订阅：杂兵死亡 → 从 enemies 列表移除 */
   private killedUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
+  /** ★ 可露希尔的无人机召唤物（无刚体悬浮体；使用道具触发，退出时销毁） */
+  private drone: DroneEntity | null = null;
+  /** ★ 无人机素材（特效包/纯纹理包；enter 存入上下文引用） */
+  private droneAsset: Asset | FtxAsset | null = null;
+  /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
+  private droneSummonUnsub?: () => void;
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
   private waterPrev = new Map<
     CharacterBase,
@@ -354,6 +363,11 @@ export class WorldMode implements IGameMode {
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
 
+    // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
+    this.droneAsset = ctx.droneAsset ?? null;
+    // ★ 玩家出生位置自动放一个无人机跟随（道具召唤保留，可再放）
+    if (this.droneAsset) this.spawnDroneNearPlayer();
+
     console.log(`[WorldMode] 进入战场，第 ${ctx.day} 天，HP ${ctx.combatStats.maxHp}`);
 
     // ---- ★ 调试：F9 回读最终绘制颜色（游标指向像素 + 中心网格；诊断警示贴画偏色用） ----
@@ -392,6 +406,10 @@ export class WorldMode implements IGameMode {
         this.rollEnemyDrops(enemy);
         const idx = this.enemies.indexOf(enemy);
         if (idx !== -1) this.enemies.splice(idx, 1);
+      });
+      // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出
+      this.droneSummonUnsub = eventBus.on('drone_summon', () => {
+        this.spawnDroneNearPlayer();
       });
     });
   }
@@ -458,6 +476,21 @@ export class WorldMode implements IGameMode {
     if (this.cullAccum >= 1) {
       this.cullAccum = 0;
       this.cullFarEnemies(pp.x, pp.y);
+    }
+
+    // --------------------------------------------------
+    // ★ 无人机跟随：悬浮在玩家侧上方（hoverTarget 由模式层驱动；先于实体管线，
+    //   保证本帧 syncRender 使用新位置）
+    //   摄像机坐标系：right = 画面右方向。为不挡视野，把无人机固定在角色左右侧
+    //   （沿相机 right 水平偏移），随相机旋转保持在侧旁，禁止贴到画面正中。
+    if (this.drone) {
+      const dp = this.player.position;
+      const frame = this.cameraCtrl.getFrame();
+      const sideOff = 1.1;
+      this.drone.hoverTarget.x = dp.x + frame.right.x * sideOff;
+      this.drone.hoverTarget.z = dp.z + frame.right.z * sideOff;
+      this.drone.hoverTarget.y = dp.y + 2.2;
+      this.drone.flyTo(dt);
     }
 
     // ---- 实体管线驱动 ----
@@ -544,6 +577,12 @@ export class WorldMode implements IGameMode {
     // ---- 取消 killed 事件订阅 ----
     this.killedUnsub?.();
     this.killedUnsub = undefined;
+    // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
+    this.droneSummonUnsub?.();
+    this.droneSummonUnsub = undefined;
+    this.drone?.dispose();
+    this.drone = null;
+    this.droneAsset = null;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
 
@@ -982,6 +1021,18 @@ export class WorldMode implements IGameMode {
       this.worldUIManager.showPickupResult(drop.itemId, ok, drop.count);
       if (ok) this.worldUIManager.flashItemAndRefresh(drop.itemId);
     }
+  }
+
+  private spawnDroneNearPlayer(): void {
+    if (!this.scene || !this.player || !this.droneAsset) return;
+    this.drone?.dispose();
+    const p = this.player.position;
+    const asset = this.droneAsset;
+    const drone = new DroneEntity(this.entities, this.scene, asset, {
+      x: p.x, y: p.y + 2.0, z: p.z,
+      scale: 1.2,
+    });
+    this.drone = drone;
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {

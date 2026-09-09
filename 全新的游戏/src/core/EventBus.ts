@@ -42,6 +42,8 @@ export interface EventMap {
     target: import('../entity/EntityBase').EntityBase;
     source: import('../entity/EntityBase').EntityBase | null;
   };
+  // ★ 无人机召唤事件（WorldMode 订阅；使用「可露希尔的无人机」道具触发）
+  'drone_summon': { x?: number; z?: number };
 }
 
 export type EventKey = keyof EventMap;
