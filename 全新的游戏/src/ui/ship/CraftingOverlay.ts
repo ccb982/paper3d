@@ -491,10 +491,11 @@ export class CraftingOverlay {
       iconEl.style.cssText = [
         'position:absolute', pageToCss(slot, t.icon),
         'display:flex', 'align-items:center', 'justify-content:center',
+        'transform:translateY(-15%)',
         'pointer-events:none',
       ].join(';');
       const cv = this.iconRegistry.getIcon(input.itemId);
-      cv.style.cssText = 'width:92%;height:92%;object-fit:contain;';
+      cv.style.cssText = 'width:120%;height:120%;object-fit:contain;';
       iconEl.appendChild(cv);
       btn.appendChild(iconEl);
 
