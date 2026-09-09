@@ -30,7 +30,7 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, type FaceGeometry } from './FaceBuild';
-import { computeTableGeometry, type PatchGeomResult } from './PatchCompute';
+import { computeTableGeometry, type PatchGeomResult, type PatchGroundTile } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
@@ -172,6 +172,7 @@ export class ChunkManager {
     maps: ChunkMaps; decor: DecorPlan | null; // null = 破坏重建(只换地形，见 rebuildTerrainOnly)
     deferDecor?: boolean; // 首建：先上地形，装饰层延后见 pendingDecorJobs
     top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw;
+    tiles?: PatchGroundTile[]; // ★ 物理 4m 分块（增量重建只含受影响块；缺省 = 走合并 trimesh）
   }[] = [];
   /** 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销） */
   private static readonly ASSEMBLE_PER_FRAME = 2;
@@ -181,6 +182,17 @@ export class ChunkManager {
   private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps }>();
   /** 每帧补挂装饰预算（个）—— 延后补挂同一 chunk 的 planDecor+buildDecorLayer+colliders */
   private static readonly DECOR_PER_FRAME = 1;
+
+  // ---- ★ 地形修改性能重构（原地更新 + 物理分块） ----
+  // 计算侧（Worker 内 IncrementalGeometry 逐 cell 重发）本就增量；主线程开销大头
+  // 是「新建 BufferGeometry×3 + 材质×2 + 整块 trimesh 销毁重建 + 装饰销毁重挂」。
+  // 重构后：视觉 = Mesh/材质常驻、attr.array 原地写（长度变了换 attribute）；
+  // 物理 = 每 chunk 一个地面刚体 + 225 个 4m 块 trimesh collider，挖坑只换受影响
+  // slot（O(块)）；装饰保持既有语义（销毁 → pendingDecorJobs 预算化重贴地）。
+  /** 原地更新地形视觉登记（key → top/wall/water mesh 引用） */
+  private terrainVisuals = new Map<number, { top: THREE.Mesh; wall: THREE.Mesh | null; water: THREE.Mesh | null }>();
+  /** 走分块地面（createGroundTiled/updateGroundTile）的 chunk 集合 */
+  private tiledChunks = new Set<number>();
 
   // ---- ★ 地形补丁（§14.11 层数覆盖层） ----
   // ★ 单一真源 = RasterMap chunk 数据的 levels 表（生成不写、clearAll 随 chunk 回收）；
@@ -246,7 +258,8 @@ export class ChunkManager {
       if (a.decor === null || a.deferDecor) {
         // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
         //   装饰（props 贴地重造）随后经 pendingDecorJobs 在更后续帧补挂。
-        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water);
+        //   2026-09-09：挖坑重建优先原地更新（attr 写入 + 分块 collider 原位换）
+        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.tiles);
         this.pendingDecorJobs.set(chunkKeyOf(a.cx, a.cz), { cx: a.cx, cz: a.cz, maps: a.maps });
       } else {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water);
@@ -339,6 +352,8 @@ export class ChunkManager {
     this.meshes.clear();
     this.voidKeys.clear();
     this.activated.clear();
+    this.terrainVisuals.clear(); // ★ 原地更新登记随 dispose 作废
+    this.tiledChunks.clear();    // ★ 分块地面集合随 dispose 作废（body 已销毁）
     clearWallMaterialRegistry();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
     disposeCementPlinthShared(); // ★ 台座共享几何/材质统一释放（模块级单例）
@@ -611,6 +626,7 @@ const key2 = chunkKeyOf(cx, cz);
             decor, // 仅 isFirstBuild=false（重建已有）时用于完整装配
             deferDecor: isFirstBuild,
             top: geom.top, wall: geom.wall, water: geom.water,
+            tiles: geom.tiles,
           });
           return;
         }
@@ -618,7 +634,7 @@ const key2 = chunkKeyOf(cx, cz);
         this.geoInflight.delete(key);
         try {
           const g = computeTableGeometry(readChunk, this.raster.worldSeed, cx, cz, new Uint8Array(levels));
-          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall, g.water);
+          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall, g.water, g.tiles);
         } catch (e) {
           console.error(`[ChunkManager] chunk(${cx},${cz}) 同步几何失败，交看门狗重试`, e);
         }
@@ -632,6 +648,8 @@ const key2 = chunkKeyOf(cx, cz);
   /**
    * ★ 表几何装配（几何字节 → 材质/Group/装饰/物理/换装）：
    * 新建/重建/破坏 Worker 结果与同步兜底共用同一装配（几何来源不同，装配唯一）。
+   * 2026-09-09：网格/材质构建收敛到 buildTerrainMeshes（登记 terrainVisuals +
+   * 包围球余量）；地面刚体经 replaceChunk 走分块优先（tiles 就绪 → createGroundTiled）。
    */
   private assembleTableChunk(
     cx: number,
@@ -641,100 +659,193 @@ const key2 = chunkKeyOf(cx, cz);
     topG: FaceGeometry,
     wallG: FaceGeometry,
     waterG?: WaterSurfaceRaw,
-  ): void {
-    const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
-      geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
-      if (g.uvs) geo.setAttribute("uv", new THREE.BufferAttribute(g.uvs, 2));
-      if (g.colors) geo.setAttribute("color", new THREE.BufferAttribute(g.colors, 3));
-      if (g.patchW) geo.setAttribute("apw", new THREE.BufferAttribute(g.patchW, 1)); // ★ 补丁权重（装饰纹理）
-      if (withColor) {
-        if (g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
-      }
-      geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
-      return geo;
-    };
-
-    const palette = this.chunkPalette(cx, cz);
-    const chunkDataForMat = this.raster.getChunkData(cx, cz);
-    const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
-
-    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
-    (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
-      { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
-    const group = new THREE.Group();
-    group.add(new THREE.Mesh(toGeo(topG, false), mat));
-    const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
-    if (wallG.indices.length > 0) group.add(wallMesh);
-    // ★ 水体静止基面（水位 0 + 坑水帘；共享 WaterMaterial，地形后透明 pass 渲染）
-    if (waterG && waterG.indices.length > 0) {
-      group.add(createWaterMesh(waterG));
-    }
-    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-
-    // 记录地形网格数量（top/wall/water，装饰层加入之前）——破坏重建增量
-    // 时只替换这部分、留住其后装饰层（见 rebuildTerrainOnly）
-    const terrainCount = group.children.length;
-    const decorLayer = this.buildDecorLayer(cx, cz, decor);
-    if (decorLayer) group.add(decorLayer.layer);
-    (group.userData as { terrainCount?: number }).terrainCount = terrainCount;
-
-    // 物理：顶面 + 侧壁合并（同一数据同源）
-    const nVT = topG.vertices.length / 3;
-    const pv = new Float32Array(topG.vertices.length + wallG.vertices.length);
-    pv.set(topG.vertices, 0);
-    pv.set(wallG.vertices, topG.vertices.length);
-    const pi = new Uint32Array(topG.indices.length + wallG.indices.length);
-    pi.set(topG.indices, 0);
-    for (let i = 0; i < wallG.indices.length; i++) pi[topG.indices.length + i] = wallG.indices[i] + nVT;
-
-    this.replaceChunk(chunkKeyOf(cx, cz), group, cx, cz, pv, pi);
-    this.createDecorColliders(cx, cz, decor);
-    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
-    const wq = waterG ? waterG.quads : 0;
-    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} 水quads=${wq}`);
-  }
-  /**
-   * ★ 破坏重建/首建（只改地形相关区块，2026-09-08）：只替换该 chunk 的
-   * top/wall/water 网格与地形 trimesh。旧装饰层整体销毁（它的 props 定位
-   * 于挖坑前高度——坑挖开后浮空；视觉随 disposeVisual 释放，decorShared
-   * 共享几何/材质跳过），装饰碰撞体/围裙/台座刚体/注册表一并清掉，然后
-   * 由 pendingDecorJobs 在新地形上重贴地重造（见 update 补挂循环）。
-   * 语义：无现存网格=首建（只挂地形）；有网格=replaceChunk 统一拆旧换新
-   * （销毁旧地形 body + 旧装饰刚体）；void 保持虚空。
-   */
-  private rebuildTerrainOnly(
-    cx: number, cz: number, maps: ChunkMaps,
-    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+    tiles?: PatchGroundTile[],
   ): void {
     const key = chunkKeyOf(cx, cz);
     const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
     const group = new THREE.Group();
     for (const m of cfg.meshes) group.add(m);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
-    // 地形网格数（top/wall/water；装饰由补挂循环挂在其后）
+
+    const decorLayer = this.buildDecorLayer(cx, cz, decor);
+    if (decorLayer) group.add(decorLayer.layer);
     (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
+
+    // 物理：分块优先（tiles 就绪 → 225 块 collider；否则 top+壁合并 trimesh）
+    this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, tiles);
+    this.createDecorColliders(cx, cz, decor);
+    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
+    const wq = waterG ? waterG.quads : 0;
+    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} 水quads=${wq}`);
+  }
+/**
+   * ★ 破坏重建/首建（2026-09-09 原地更新重构）：
+   *   - 已有网格（挖坑重建）→ applyTerrainPatchInPlace：视觉 attr 原地写 +
+   *     物理只换受影响 4m 块 collider + 装饰既有销毁重挂语义；任一步失败 →
+   *     回退全量换装（replaceChunk，与旧路径一致）。
+   *   - 首建 → 地形 mesh + 分块地面（tiles 就绪 → createGroundTiled）。
+   *   - void 保持虚空（levels 已落库，数据正确）。
+   *   旧装饰层销毁语义不变（props 定位于挖坑前高度——重贴地由 pendingDecorJobs
+   *   预算化重造）；围裙/台座刚体同样销毁重建（装饰补挂时 createStructuralGround）。
+   */
+  private rebuildTerrainOnly(
+    cx: number, cz: number, maps: ChunkMaps,
+    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+    tiles?: PatchGroundTile[],
+  ): void {
+    const key = chunkKeyOf(cx, cz);
     if (this.meshes.has(key)) {
+      // ★ 挖坑增量：视觉原地写 + 物理 O(受影响块) 换 collider；失败回退全量换装
+      if (tiles && tiles.length > 0 && this.applyTerrainPatchInPlace(key, topG, wallG, waterG, tiles)) return;
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
+      const group = new THREE.Group();
+      for (const m of cfg.meshes) group.add(m);
+      group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+      // 地形网格数（top/wall/water；装饰由补挂循环挂在其后）
+      (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
       // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
       // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
       this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi);
-    } else if (!this.voidKeys.has(key)) {
-      // 首建：无现存网格 → 只挂地形 mesh + trimesh（装饰后补）
+      this.tiledChunks.delete(key); // 回退路径 = 合并 trimesh（原分块实体已被 replaceChunk 销毁）
+      return;
+    }
+    if (!this.voidKeys.has(key)) {
+      // 首建：无现存网格 → 只挂地形 mesh + 分块地面（装饰后补）
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
+      const group = new THREE.Group();
+      for (const m of cfg.meshes) group.add(m);
+      group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+      (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
       this.scene.add(group);
       this.meshes.set(key, group);
-      const bodyId = this.host.createGround(cx, cz, cfg.pv, cfg.pi);
-      this.bodies.set(key, bodyId);
+      this.createChunkGround(key, cx, cz, cfg.pv, cfg.pi, tiles);
     }
-    // void 情形：保持虚空，不建网格（levels 已落库，数据正确）
   }
 
-  /** 用几何字节构建地形 top/wall/water 网格 + 合并 trimesh（供非破坏装配与增量重建共用） */
+  /**
+   * ★ 原地更新（挖坑增量核心，2026-09-09）：不再新建 BufferGeometry/材质/
+   * 整块 trimesh——
+   *   ① 物理：受影响 4m 块 collider 原位换（host.updateGroundTile，O(受影响块)）；
+   *   ② 视觉：top/wall 各属性 array 原地写 + needsUpdate（长度一致，零分配）；
+   *      布局漂移（fine 区扩张致顶点数变化）→ 换 attribute（Mesh/材质仍保留）；
+   *      任一失败 → 返回 false，调用方回退全量换装；
+   *   ③ 水：小网格拓扑可变（干块摘除/拆池）→ 整体换 mesh（廉价）；
+   *   ④ 装饰：保持既有语义——销毁旧装饰层+其刚体，pendingDecorJobs 重贴地重造。
+   * 前置：chunk 已分块（tiledChunks）且宿主支持 updateGroundTile，否则 false。
+   */
+  private applyTerrainPatchInPlace(
+    key: number,
+    topG: FaceGeometry, wallG: FaceGeometry,
+    waterG: WaterSurfaceRaw | undefined,
+    tiles: PatchGroundTile[],
+  ): boolean {
+    const entry = this.terrainVisuals.get(key);
+    const group = this.meshes.get(key) as THREE.Group | undefined;
+    const bodyId = this.bodies.get(key);
+    if (!entry || !group || bodyId === undefined) return false;
+    if (!this.tiledChunks.has(key) || !this.host.updateGroundTile) return false;
+
+    // ② 视觉（先视觉后物理：失败即回退，物理不动）
+    if (!this.applyGeoInPlace(entry.top, topG, false)) return false;
+    if (wallG.indices.length > 0) {
+      if (!entry.wall || !this.applyGeoInPlace(entry.wall, wallG, true)) return false;
+    } else if (entry.wall) {
+      return false; // 防御：墙消失（现管线不发生）→ 回退全量
+    }
+    // ④ 装饰先拆（replaceWaterMesh 会把新水网格 append 到末尾，先拆才能保住
+    //    terrainCount 索引语义：装饰销毁按 tc..end 裁剪，不能误伤新水网格）
+    this.teardownDecorOnly(key, group);
+    // ③ 水：小网格整体换（拓扑可变）
+    this.replaceWaterMesh(group, entry, waterG);
+    // ① 物理：只换受影响 slot（tiles = dirty±1 块环，Worker 已切好块局部 trimesh）
+    for (const t of tiles) {
+      this.host.updateGroundTile(bodyId, t.slot, t.vertices, t.indices);
+    }
+    return true;
+  }
+
+  /** ② 视觉原地写：逐属性长度一致 → array.set（零分配）；不一致 → 换 attribute；
+   *  位置/索引长度是布局漂移的主判据（uv/color/patchW 随顶点数，shade 随壁顶点数） */
+  private applyGeoInPlace(mesh: THREE.Mesh, g: FaceGeometry, withShade: boolean): boolean {
+    const geo = mesh.geometry as THREE.BufferGeometry;
+    const setArr = (name: string, arr: Float32Array | undefined): boolean => {
+      if (!arr) return true; // 属性可缺省（未产出不消费）
+      const a = geo.getAttribute(name) as THREE.BufferAttribute | undefined;
+      if (!a || a.array.length !== arr.length) return false;
+      (a.array as Float32Array).set(arr);
+      a.needsUpdate = true;
+      return true;
+    };
+    if (!setArr("position", g.vertices)) return false;
+    if (!setArr("normal", g.normals)) return false;
+    if (!setArr("uv", g.uvs)) return false;
+    if (!setArr("color", g.colors)) return false;
+    if (!setArr("apw", g.patchW)) return false;
+    if (withShade && !setArr("shade", g.shade)) return false;
+    const idx = geo.getIndex();
+    if (!idx || idx.array.length !== g.indices.length) return false;
+    (idx.array as Uint32Array).set(g.indices);
+    idx.needsUpdate = true;
+    return true;
+  }
+
+  /** ③ 水网格整体换（拓扑可变；共享 WaterMaterial，旧几何就地释放） */
+  private replaceWaterMesh(
+    group: THREE.Group, entry: { water: THREE.Mesh | null },
+    waterG: WaterSurfaceRaw | undefined,
+  ): void {
+    const old = entry.water;
+    if (waterG && waterG.indices.length > 0) {
+      const m = createWaterMesh(waterG);
+      if (old) {
+        group.remove(old);
+        old.geometry.dispose();
+      }
+      group.add(m);
+      entry.water = m;
+    } else if (old) {
+      group.remove(old);
+      old.geometry.dispose();
+      entry.water = null;
+    }
+  }
+
+  /** ④ 装饰销毁（replaceChunk 的装饰半边；地形视觉/地面刚体不动）：
+   *  terrainCount 之后的 children（装饰层）逐个 dispose；装饰碰撞体/围裙/台座
+   *  刚体与注册表清除——重贴地重造由 pendingDecorJobs 预算化补挂 */
+  private teardownDecorOnly(key: number, group: THREE.Group): void {
+    const tc = (group.userData as { terrainCount?: number }).terrainCount ?? 0;
+    for (let i = group.children.length - 1; i >= tc; i--) {
+      const c = group.children[i];
+      group.remove(c);
+      this.disposeVisual(c);
+    }
+    const oldProps = this.propBodies.get(key);
+    if (oldProps) {
+      for (const id of oldProps) this.host.destroyGround(id);
+      this.propBodies.delete(key);
+    }
+    this.propRegistry.delete(key);
+    const oldApron = this.apronBodies.get(key);
+    if (oldApron !== undefined) {
+      this.host.destroyGround(oldApron);
+      this.apronBodies.delete(key);
+    }
+    const oldPlinth = this.plinthBodies.get(key);
+    if (oldPlinth !== undefined) {
+      this.host.destroyGround(oldPlinth);
+      this.plinthBodies.delete(key);
+    }
+  }
+
+  /** 用几何字节构建地形 top/wall/water 网格 + 合并 trimesh（供非破坏装配与增量重建共用）
+ *  ★ 同时登记 terrainVisuals（原地更新用）+ 顶/壁包围球预留 6m 下沉余量
+ *  （挖坑只降不高 → 原地更新后无需重算包围球，视锥剔除不误裁坑底） */
   private buildTerrainMeshes(
     cx: number, cz: number, maps: ChunkMaps,
     topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
   ): { meshes: THREE.Object3D[]; pv: Float32Array; pi: Uint32Array } {
-    const toGeo = (g: FaceGeometry, withColor: boolean): THREE.BufferGeometry => {
+    const toGeo = (g: FaceGeometry, withColor: boolean, padSphere = false): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
       geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
@@ -743,6 +854,10 @@ const key2 = chunkKeyOf(cx, cz);
       if (g.patchW) geo.setAttribute("apw", new THREE.BufferAttribute(g.patchW, 1));
       if (withColor && g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
       geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
+      if (padSphere) {
+        geo.computeBoundingSphere();
+        if (geo.boundingSphere) geo.boundingSphere.radius += 6;
+      }
       return geo;
     };
     const palette = this.chunkPalette(cx, cz);
@@ -751,10 +866,20 @@ const key2 = chunkKeyOf(cx, cz);
     const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
     (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
       { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
-    const meshes: THREE.Object3D[] = [new THREE.Mesh(toGeo(topG, false), mat)];
-    const wallMesh = new THREE.Mesh(toGeo(wallG, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
-    if (wallG.indices.length > 0) meshes.push(wallMesh);
-    if (waterG && waterG.indices.length > 0) meshes.push(createWaterMesh(waterG));
+    const topMesh = new THREE.Mesh(toGeo(topG, false, true), mat);
+    const meshes: THREE.Object3D[] = [topMesh];
+    let wallMesh: THREE.Mesh | null = null;
+    if (wallG.indices.length > 0) {
+      wallMesh = new THREE.Mesh(toGeo(wallG, true, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
+      meshes.push(wallMesh);
+    }
+    let waterMesh: THREE.Mesh | null = null;
+    if (waterG && waterG.indices.length > 0) {
+      waterMesh = createWaterMesh(waterG);
+      meshes.push(waterMesh);
+    }
+    // ★ 原地更新登记（key → mesh 引用；破坏重建走 attr 原地写，不重建 Mesh/材质）
+    this.terrainVisuals.set(chunkKeyOf(cx, cz), { top: topMesh, wall: wallMesh, water: waterMesh });
 
     const nVT = topG.vertices.length / 3;
     const pv = new Float32Array(topG.vertices.length + wallG.vertices.length);
@@ -764,6 +889,23 @@ const key2 = chunkKeyOf(cx, cz);
     pi.set(topG.indices, 0);
     for (let i = 0; i < wallG.indices.length; i++) pi[topG.indices.length + i] = wallG.indices[i] + nVT;
     return { meshes, pv, pi };
+  }
+
+  /** ★ chunk 地面刚体创建（分块优先：tiles 就绪且宿主支持 → createGroundTiled；否则合并 trimesh） */
+  private createChunkGround(
+    key: number, cx: number, cz: number,
+    pv: Float32Array, pi: Uint32Array, tiles?: PatchGroundTile[],
+  ): void {
+    if (tiles && tiles.length > 0 && this.host.createGroundTiled) {
+      const id = this.host.createGroundTiled(cx, cz, tiles);
+      if (id !== null && id !== undefined) {
+        this.bodies.set(key, id);
+        this.tiledChunks.add(key);
+        return;
+      }
+    }
+    this.bodies.set(key, this.host.createGround(cx, cz, pv, pi));
+    this.tiledChunks.delete(key);
   }
 
 
@@ -998,8 +1140,11 @@ const key2 = chunkKeyOf(cx, cz);
         // ★ 增量重建（2026-09-08）：只替换地形 top/wall/water 与 trimesh；
         //  装饰（props 贴地）由 pendingDecorJobs 在地形重建后重贴地补挂。
         //  仍走 assembleQueue 预算化装配（每帧 ≤ ASSEMBLE_PER_FRAME）
+        //  2026-09-09 原地更新：tiles（受影响 4m 块）随行 → rebuildTerrainOnly
+        //  优先走 attr 原地写 + collider 原位换，失败才回退全量换装
         this.assembleQueue.push({
           key, cx, cz, maps: maps2, decor: null, top: geom.top, wall: geom.wall, water: geom.water,
+          tiles: geom.tiles,
         });
       } catch (e) {
         console.error(`[ChunkManager] chunk(${cx},${cz}) 破坏重建失败，回退标准烘焙`, e);
@@ -1152,7 +1297,8 @@ const key2 = chunkKeyOf(cx, cz);
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
   }
 
-  /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
+  /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用）
+ *  ★ tiles 就绪且宿主支持 → 新地面也走分块（createGroundTiled）；否则合并 trimesh */
   private replaceChunk(
     key: number,
     visual: THREE.Object3D | null,
@@ -1160,6 +1306,7 @@ const key2 = chunkKeyOf(cx, cz);
     cz: number,
     trimeshVertices: Float32Array,
     trimeshIndices: Uint32Array,
+    tiles?: PatchGroundTile[],
   ): void {
     const old = this.meshes.get(key);
     if (old) {
@@ -1198,8 +1345,8 @@ const key2 = chunkKeyOf(cx, cz);
     } else {
       this.voidKeys.add(key);
     }
-    const bodyId = this.host.createGround(cx, cz, trimeshVertices, trimeshIndices);
-    this.bodies.set(key, bodyId);
+    // ★ 地面刚体：分块优先（tiles 就绪且宿主支持）；分块失败 → 合并兜底
+    this.createChunkGround(key, cx, cz, trimeshVertices, trimeshIndices, tiles);
 
     // ★ 激活回调（每个 chunk 只触发一次；特殊事件/监听预留接口位）
     if (!this.activated.has(key)) {

@@ -46,6 +46,7 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
   push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
   push(r.water.deep); push(r.water.spin); push(r.water.indices);
+  for (const t of r.tiles) { push(t.vertices); push(t.indices); } // ★ 物理 4m 分块
   return out;
 }
 

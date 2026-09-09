@@ -204,6 +204,34 @@ export class WorldMode implements IGameMode {
         },
       }).id,
       destroyGround: (id) => this.entities.destroy(id),
+      // ★ 分块地面（物理分块重构）：首块随实体创建（tileSlot 登记），其余挂同刚体；
+      //   挖坑只对受影响 slot setTileCollider 原位换（O(受影响块)，不重建整块）
+      createGroundTiled: (cx, cz, tiles) => {
+        if (tiles.length === 0) return null;
+        const first = tiles[0];
+        const e = this.entities.create({
+          kind: 'ground',
+          x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+          physics: {
+            type: 'fixed',
+            options: {
+              shape: { type: 'trimesh', vertices: first.vertices, indices: first.indices },
+              tileSlot: first.slot,
+            },
+          },
+        });
+        const rb = e.rigidBody;
+        if (rb) {
+          for (let i = 1; i < tiles.length; i++) {
+            this.physics?.setTileCollider(rb.handle, tiles[i].slot, tiles[i].vertices, tiles[i].indices);
+          }
+        }
+        return e.id;
+      },
+      updateGroundTile: (id, slot, vertices, indices) => {
+        const rb = this.entities.get(id)?.rigidBody;
+        if (rb) this.physics?.setTileCollider(rb.handle, slot, vertices, indices);
+      },
       // ★ 装饰物碰撞体：fixed cuboid（挡住玩家/子弹；y 为体积中心）
       createPropBody: (x, y, z, r, h) => this.entities.create({
         kind: 'decoration',
