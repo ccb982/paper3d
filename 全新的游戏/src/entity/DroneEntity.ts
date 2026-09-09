@@ -3,8 +3,9 @@
 // ============================================================
 // 复用 EntityBase 动画/渲染/影子管线：
 //   - 特效包三帧实为三图层（主体/左翅膀/右翅膀，共享同一画布）
-//     → DroneCompositeSource CPU 合成进一张纹理，FTXQuad 立牌同时显示全部图层
-//   - 无物理刚体：悬浮体，位置由 WorldMode 每帧钉在玩家上方（hover 目标）
+//     → DroneCompositeRender 拆成三块贴片按画布 bbox 摆位：
+//       主体静止、左右翅膀开启播放器 UV 扭曲（波形+湍流）抖动
+//   - 无物理刚体：悬浮体，位置由 WorldMode 每帧钉在玩家侧上方（hover 目标）
 // ============================================================
 
 import * as THREE from 'three';
@@ -12,8 +13,7 @@ import { EntityBase, type EntityBaseOptions } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { Asset } from '../vendor/player';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
-import { DroneCompositeSource } from '../services/fx/DroneCompositeSource';
-import { FTXQuad } from '../services/render/FTXQuad';
+import { DroneCompositeRender } from '../services/render/DroneCompositeRender';
 import { RasterMap } from '../services/map/RasterMap';
 
 export interface DroneOptions extends Omit<EntityBaseOptions, 'kind'> {
@@ -22,12 +22,10 @@ export interface DroneOptions extends Omit<EntityBaseOptions, 'kind'> {
 }
 
 export class DroneEntity extends EntityBase {
-  /** 悬浮目标（世界坐标；WorldMode 每帧设为玩家上方偏移） */
+  /** 悬浮目标（世界坐标；WorldMode 每帧设为玩家侧上方偏移） */
   readonly hoverTarget = { x: 0, y: 0, z: 0 };
   /** 悬浮相位（正弦摆动用） */
   private phase = 0;
-  /** 三图层合成源（本实体专有，dispose 时释放纹理） */
-  private composite: DroneCompositeSource;
 
   constructor(
     em: EntityManager,
@@ -35,43 +33,29 @@ export class DroneEntity extends EntityBase {
     asset: Asset | FtxAsset,
     opts: DroneOptions,
   ) {
-    // ★ 三图层合成源作为动画资产源：合成后整机一张帧，无帧序/动画
-    const composite = new DroneCompositeSource(asset);
     super(em, {
       kind: 'decoration',
       x: opts.x, y: opts.y, z: opts.z,
-      asset: composite,
+      asset,
       animInitial: opts.animInitial,
     });
-    this.composite = composite;
     this.camp = 'neutral';
     this.billboard = true;
     this.attachToScene(scene);
 
-    // 全画布 bbox 映射（合成纹理 = 整张共享画布 → 原点 0）
-    const r = this.renderer as FTXQuad | null;
-    if (r && this.composite) {
-      const { width, height } = this.composite;
-      r.setFrameMapping(
-        { width, height },
-        { x: 0, y: 0, w: width, h: height },
-      );
-    }
     // 按画布宽高比设贴片尺寸（宽 = baseSize；不压扁）
-    this.applyRenderScale(opts.scale ?? 1.2);
+    const r = this.renderer as DroneCompositeRender | null;
+    if (r) r.setScaleKeepAspect(opts.scale ?? 1.2);
   }
 
-  protected createRenderer(scene: THREE.Scene): FTXQuad {
-    // 渲染源 = 合成后的完整无人机（anim.source 已是 DroneCompositeSource）
-    return new FTXQuad(scene, this.anim!.source);
+  protected createRenderer(scene: THREE.Scene): DroneCompositeRender {
+    return new DroneCompositeRender(scene, this.anim!.source as Asset | FtxAsset, this.anim);
   }
 
-  /** ★ 按纹理宽高比设贴片尺寸（不压扁；宽 = baseSize） */
-  private applyRenderScale(baseSize: number): void {
-    const r = this.renderer as FTXQuad | null;
-    if (r && 'setScaleKeepAspect' in r) {
-      (r as { setScaleKeepAspect(s: number): void }).setScaleKeepAspect(baseSize);
-    }
+  /** ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享上下文 */
+  setRenderer(renderer: THREE.WebGLRenderer): void {
+    const r = this.renderer as DroneCompositeRender | null;
+    if (r) r.setRenderer(renderer);
   }
 
   /** ★ 贴片数学上不带碰撞/影子：只保留基类漂浮逻辑 */
@@ -100,6 +84,5 @@ export class DroneEntity extends EntityBase {
 
   override dispose(): void {
     super.dispose();
-    this.composite.dispose();
   }
 }

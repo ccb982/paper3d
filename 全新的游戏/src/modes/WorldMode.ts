@@ -1033,6 +1033,8 @@ export class WorldMode implements IGameMode {
       scale: 1.2,
     });
     this.drone = drone;
+    // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
+    if (this.renderer) drone.setRenderer(this.renderer);
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {

@@ -151,6 +151,11 @@ export class FrameAnimatorBase {
     return this.controller.frameIndex;
   }
 
+  /** ★ 连续时间（秒）：VAT/扭曲时间源，与帧播放共用同一时钟 */
+  get localTime(): number {
+    return this.controller.localTime;
+  }
+
   get isPlaying(): boolean {
     return this.controller.state === 'playing';
   }

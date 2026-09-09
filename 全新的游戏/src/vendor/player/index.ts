@@ -265,11 +265,6 @@ export class Asset implements CharacterFxAssetSource {
     return this._ftx.frames[ftxIdx];
   }
 
-  /** FTX 调色板（CPU 合成/图标重建用）；无 FTX 数据返回空 */
-  getFtxPalette(): PaletteColor[] {
-    return this._ftx?.palette ?? [];
-  }
-
   /**
    * ★ 物理参数注入（解耦）：用公共物理参数（.phys.json）覆盖某帧的内嵌参数。
    * 同一份参数可注入任意特效/纹理；注入后已创建的流体效果自动失效重建。

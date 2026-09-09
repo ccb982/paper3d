@@ -39,6 +39,22 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uDistortFrequency;
   uniform float uDistortSpeed;
   uniform float uDistortRotation;
+  uniform float uDistortTurbulance;
+  float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+  }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+      mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x),
+      f.y
+    );
+  }
   void main() {
     // 纹理数据 row0=顶部（flipY=false）→ vUv 左下原点，翻转 v
     vec2 texUV = (vec2(vUv.x, 1.0 - vUv.y) * uFrameSize - uBbox.xy) / uBbox.zw;
@@ -62,6 +78,13 @@ const FRAGMENT_SHADER = /* glsl */ `
       float secondaryFreq = frequency * 1.8;
       float secondaryPhase = time * 2.5;
       rotUv.x += secondaryAmp * sin(secondaryFreq * rotUv.y + secondaryPhase);
+      // ★ 湍流（值噪声流动）：波形之上的乱向扭曲，uDistortTurbulance 控制强度
+      if (uDistortTurbulance > 0.001) {
+        float turbAmp = amplitude * 0.7 * uDistortTurbulance;
+        float tf = frequency * 1.3;
+        rotUv.x += (vnoise(rotUv * tf + vec2(0.0, time * 0.7)) - 0.5) * 2.0 * turbAmp;
+        rotUv.y += (vnoise(rotUv * tf + vec2(7.3, time * 0.5)) - 0.5) * 2.0 * turbAmp * 0.8;
+      }
       vec2 backUv = rotUv - 0.5;
       texUV = vec2(
         backUv.x * cosDR + backUv.y * sinDR,
@@ -138,6 +161,7 @@ export class FTXQuad extends FxRendererBase {
         uDistortFrequency: { value: 5.0 },
         uDistortSpeed: { value: 1.2 },
         uDistortRotation: { value: 0 },
+        uDistortTurbulance: { value: 0 },
       },
       transparent: true,
       // ★ 角色贴片写深度（2026-09-07）：水面（透明 pass renderOrder=10）要正确
@@ -193,7 +217,8 @@ export class FTXQuad extends FxRendererBase {
     this.applyFlip();
   }
 
-  /** ★ 设置呼吸式扭曲参数（特效包每帧参数；关 = 停用） */
+  /** ★ 设置呼吸式扭曲参数（特效包每帧参数；关 = 停用）。
+   *   波形分量默认开启；湍流分量 0~1 由 setTurbulance 单独控制（默认 0=关） */
   setDistort(opts: { enabled: boolean; amplitude: number; frequency: number; speed: number; rotation: number }): void {
     const u = this.material.uniforms;
     u.uDistortEnabled.value = opts.enabled ? 1 : 0;
@@ -201,6 +226,11 @@ export class FTXQuad extends FxRendererBase {
     u.uDistortFrequency.value = opts.frequency;
     u.uDistortSpeed.value = opts.speed;
     u.uDistortRotation.value = opts.rotation;
+  }
+
+  /** ★ 单独开关湍流分量（默认 1 = 波形+湍流都开；0 = 仅波形） */
+  setTurbulance(mix: number): void {
+    this.material.uniforms.uDistortTurbulance.value = Math.max(0, Math.min(1, mix));
   }
 
   /** ★ 渐隐透明度（0~1；LOD 远距离 → 半透明"看不清"） */
