@@ -66,9 +66,8 @@ const MODULE_SLOTS = [
   { x: 0.6651, y: 0.1989, w: 0.3050, h: 0.1962 }, // 右-下
 ];
 /** ★ 加工模块内部模板（drawing-export-2026-09-09：真实标注，页面坐标、y 底部起）：
- *   frame = 模块框（素材底图铺这里，cover 不拉伸）；其余元素相对页面锚定 */
+ *   frame 底图铺满整个槽位（加工页面.json：加工模块大小=整个模块区）；元素相对槽位锚定 */
 const MODULE_TEMPLATE = {
-  frame: { b: 0.731, t: 0.821 },
   outIcon: { x: 0.358, b: 0.660, w: 0.116, h: 0.124 }, // 被合成物品（输出图标）
   outName: { x: 0.383, b: 0.629, w: 0.065, h: 0.025 }, // 被合成物品名字
   mats: [
@@ -360,7 +359,17 @@ export class CraftingOverlay {
     // 加工模块按钮底图（frame 0 合成 → dataURL）
     try {
       const moduleAsset = await FtxAsset.load('/ui/加工模块.ftx3.gz');
-      this.moduleBgDataURL = compositeFrameToCanvas(moduleAsset, 0).toDataURL();
+      // ★ FTX 素材行序 = 页面底部在上（像素回读确认：名字条在本应处于底部的页面 y0.63，
+      //   却落在画布第 14 行）→ 垂直翻转后才是绘制页的正确朝向（下半部分不再跑顶部）。
+      const raw = compositeFrameToCanvas(moduleAsset, 0);
+      const flipped = document.createElement('canvas');
+      flipped.width = raw.width;
+      flipped.height = raw.height;
+      const fctx = flipped.getContext('2d')!;
+      fctx.translate(0, flipped.height);
+      fctx.scale(1, -1);
+      fctx.drawImage(raw, 0, 0);
+      this.moduleBgDataURL = flipped.toDataURL();
     } catch (err) {
       this.moduleBgDataURL = '';
       console.warn('[CraftingOverlay] 加工模块素材载入失败:', err);
@@ -443,19 +452,12 @@ export class CraftingOverlay {
   private fillModuleSlot(btn: HTMLButtonElement, r: Recipe): void {
     // 槽位自身即容器（页面坐标 = 槽位坐标），元素按模板相对槽位定位
     const slot = MODULE_SLOTS[this.moduleSlots.indexOf(btn)] ?? MODULE_SLOTS[0];
-    btn.style.backgroundImage = '';
-    btn.style.pointerEvents = 'auto';
 
-    // ---- 模块框：素材底图 cover 铺满框带（不拉伸 → 圆图标保持圆） ----
-    const frame = document.createElement('div');
-    frame.style.cssText = [
-      'position:absolute',
-      pageToCss(slot, { x: slot.x, b: MODULE_TEMPLATE.frame.b, w: slot.w, h: MODULE_TEMPLATE.frame.t - MODULE_TEMPLATE.frame.b }),
-      this.moduleBgDataURL ? `background-image:url(${this.moduleBgDataURL});` : '',
-      'background-size:cover', 'background-position:center',
-      'pointer-events:none',
-    ].join(';');
-    btn.appendChild(frame);
+    // ---- 模块框：素材底图 cover 铺满整个槽位（不拉伸 → 圆图标保持圆） ----
+    btn.style.backgroundImage = this.moduleBgDataURL ? `url(${this.moduleBgDataURL})` : '';
+    btn.style.backgroundSize = 'cover';
+    btn.style.backgroundPosition = 'center';
+    btn.style.pointerEvents = 'auto';
 
     // ---- 输出（被合成物品图标 + 名字） ----
     const out = document.createElement('div');
