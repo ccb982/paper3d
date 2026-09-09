@@ -68,6 +68,10 @@ class RtSamplerQuad extends FxRendererBase {
         uniform sampler2D uMap;
         void main() {
           vec4 c = texture2D(uMap, vUv);
+          // ★ 丢弃透明背景（与 RT 内颜色着色器同阈值 base.a<0.5）：
+          //   discard 的像素不写深度 → 水能透过翅膀背景显示；
+          //   实心翅膀像素仍写深度 → 水被翅膀正确遮挡（保留 2026-09-07 语义）
+          if (c.a < 0.5) discard;
           gl_FragColor = vec4(c.rgb, c.a);
         }
       `,
@@ -101,11 +105,56 @@ class RtSamplerQuad extends FxRendererBase {
   }
 }
 
+/**
+ * ★ 数据驱动的翅膀根边顶点固定（自动检测导出数据标注的 fixedVertices）：
+ * 作者在小多边形上钉住"身体侧根边"（如左翼右边缘）。原索引不直接映射到
+ * 重建矩形 → 用固定点质心判定离矩形哪条边最近，返回该边整排顶点索引
+ * （ring 分段约定：seg0 顶 0..K-1 / seg1 右 K..2K-1 / seg2 底 2K..3K-1 /
+ * seg3 左 3K..4K-1 / 闭合 4K）。无 fixedVertices → []（全翼扇动）。
+ */
+function computeWingFixedIndices(
+  ent: { boundary?: { x: number; y: number }[][] | undefined; fixedVertices?: number[] },
+  ring: { x: number; y: number }[],
+  K: number,
+): number[] {
+  const fixed = ent.fixedVertices;
+  const b0 = ent.boundary?.[0];
+  if (!fixed || fixed.length === 0 || !b0 || b0.length === 0) return [];
+  // 固定点质心（原多边形顶点）
+  let mx = 0, my = 0, n = 0;
+  for (const idx of fixed) {
+    const p = b0[idx];
+    if (!p) continue;
+    mx += p.x; my += p.y; n++;
+  }
+  if (n === 0) return [];
+  mx /= n; my /= n;
+  // 质心到矩形四边的距离（标注空间 y 向下）
+  const x0 = ring[0].x, y0 = ring[0].y;
+  const x1 = ring[K].x, y1 = ring[2 * K].y;
+  const dRight = Math.abs(x1 - mx);
+  const dLeft = Math.abs(mx - x0);
+  const dTop = Math.abs(my - y0);
+  const dBottom = Math.abs(y1 - my);
+  const min = Math.min(dRight, dLeft, dTop, dBottom);
+  let out: number[] = [];
+  if (min === dRight) { for (let i = K; i < 2 * K; i++) out.push(i); }
+  else if (min === dLeft) { for (let i = 3 * K; i < 4 * K; i++) out.push(i); }
+  else if (min === dTop) { for (let i = 0; i < K; i++) out.push(i); }
+  else { for (let i = 2 * K; i < 3 * K; i++) out.push(i); }
+  // 闭合顶点 == idx0：若首边被钉住，闭合点一并钉住（同一位置）
+  if (min === dTop) out.push(4 * K);
+  return out;
+}
+
 const IDENTITY_TRANSFORM = {
   position: { x: 0, y: 0, z: 0 },
   scale: { x: 1, y: 1 },
   rotation: 0,
 };
+
+/** 立牌初始朝向（yaw-only billboard 的 from 轴，与 FTXQuad/RtSamplerQuad 同约定） */
+const _Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 export class DroneCompositeRender extends FxRendererBase {
   /** 画布世界宽（米；scale 传入） */
@@ -119,6 +168,11 @@ export class DroneCompositeRender extends FxRendererBase {
   private vatWings: WingVatLayer[] = [];
   /** 主渲染器（WorldMode 注入；离屏 RT 共享 WebGL 上下文） */
   private renderer: THREE.WebGLRenderer | null = null;
+  /** 合成 billboard 基准点（setPosition 传入的实体锚点） */
+  private _basePos = new THREE.Vector3();
+  private _tmpDir = new THREE.Vector3();
+  private _tmpV = new THREE.Vector3();
+  private _tmpQ = new THREE.Quaternion();
   private _prevClearColor = new THREE.Color();
   private readonly vatFps = 30;
 
@@ -191,13 +245,18 @@ export class DroneCompositeRender extends FxRendererBase {
   }
 
   /** ★ 区域实体 VAT 翅膀：离屏 RT + 覆盖该翼美术 bbox 的正交相机。
-   *  ① 网格重建：作者画的小区域多边形只罩住翅膀下小半 → 按整块美术 bbox 矩形
-   *     ring（标注空间、首尾闭合）重建；顶点走播放器位移管线（buildDisplacementTextureData
-   *     + buildEntityMesh），maskEffect 原样驱动顶点呼吸，矩形随位移自然扑扇。
-   *  ② uv 恒等：base/residual 纹理按 bbox 裁剪 → texBbox/scale 组合 offset=(art.x/canvasW,
-   *     1-(art.y+art.h)/canvasH)、scale=(art.w/canvasW, art.h/canvasH)，vUv=(x,1-y) 归一化
-   *     到 0..1，与直接绘制 FTX 像素级一致。
-   *  ③ 相机窗口 = 美术 bbox（外扩 5%，VAT 呼吸不裁边）；RT 尺寸按窗口像素×1.5。 */
+   *   ① 网格重建：作者画的小区域多边形只罩住翅膀下小半 → 按整块美术 bbox 矩形
+   *      ring（标注空间、首尾闭合）重建，每边细分 K 段（位移分辨率 + 固定点锚定用）；
+   *      顶点走播放器位移管线（buildDisplacementTextureData + buildEntityMesh），
+   *      maskEffect 原样驱动顶点呼吸，矩形随位移自然扑扇。
+   *   ② ★ 顶点固定（数据驱动）：导出数据标注了 fixedVertices（作者把"身体侧根边"
+   *      钉住实现铰接扇动）。原索引指向作者小多边形、不直接映射到本矩形——改为
+   *      检测 fixedVertices 非空 → 取其质心 → 判定离矩形哪条边最近（身体侧）
+   *      → 该条边整排顶点钉住（位移清零），其余顶点相对锚点呼吸 → 铰接效果。
+   *   ③ uv 恒等：base/residual 纹理按 bbox 裁剪 → texBbox/scale 组合
+   *      offset=(art.x/canvasW, 1-(art.y+art.h)/canvasH)、scale=(art.w/canvasW, art.h/canvasH)，
+   *      vUv=(x,1-y) 归一化 0..1，与直接绘制 FTX 像素级一致。
+   *   ④ 相机窗口 = 美术 bbox（外扩 5%，VAT 呼吸不裁边）；RT 尺寸按窗口像素×1.5。 */
   private buildWingVat(
     scene: THREE.Scene,
     data: NonNullable<ReturnType<Asset['getFrameRenderData']>>,
@@ -208,23 +267,34 @@ export class DroneCompositeRender extends FxRendererBase {
     const ent = data.entities[0].entity;
     if (!ent?.boundary?.length) return null;
 
-    // ---- 整块美术 bbox 矩形（标注空间，含闭合顶点，与播放器 ring 约定一致） ----
+    // ---- 整块美术 bbox 矩形：每边细分 K 段（标注空间，首尾闭合，ring 约定一致） ----
     const x0 = art.x / this.canvasW;
     const y0 = art.y / this.canvasH;
     const x1 = (art.x + art.w) / this.canvasW;
     const y1 = (art.y + art.h) / this.canvasH;
-    const ring = [
-      { x: x0, y: y0 }, { x: x1, y: y0 },
-      { x: x1, y: y1 }, { x: x0, y: y1 },
-      { x: x0, y: y0 },
-    ];
+    const K = 8;
+    const ring: { x: number; y: number }[] = [];
+    const seg = (ax: number, ay: number, bx: number, by: number): void => {
+      for (let i = 0; i < K; i++) {
+        const t = i / K;
+        ring.push({ x: ax + (bx - ax) * t, y: ay + (by - ay) * t });
+      }
+    };
+    seg(x0, y0, x1, y0); // 0..K-1   顶边
+    seg(x1, y0, x1, y1); // K..2K-1  右边（右翼身体侧）
+    seg(x1, y1, x0, y1); // 2K..3K-1 底边
+    seg(x0, y1, x0, y0); // 3K..4K-1 左边（左翼身体侧）
+    ring.push(ring[0]);  // 闭合顶点（== idx0）
+
+    // ★ 顶点固定（数据驱动）：fixedVertices 非空 → 质心判最近边 → 该边整排钉住
+    const fixedIndices = computeWingFixedIndices(ent, ring, K);
 
     const dispResult = buildDisplacementTextureData(
       [ring],
       ent.maskEffect || null,
       this.canvasW,
       this.canvasH,
-      [],
+      fixedIndices,
       30,
     );
     if (!dispResult) return null;
@@ -316,6 +386,7 @@ export class DroneCompositeRender extends FxRendererBase {
   }
 
   override setPosition(x: number, y: number, z = 0): void {
+    this._basePos.set(x, y, z);
     const kx = this.worldWidth / this.canvasW;
     for (let i = 0; i < this.quads.length; i++) {
       const l = this.layout[i];
@@ -327,9 +398,35 @@ export class DroneCompositeRender extends FxRendererBase {
     }
   }
 
+  /** ★ 合成 billboard：三图层当同一立牌 —— 画布水平轴偏移随整机 yaw 旋转，
+   *  画布竖直偏移（世界高）不变。这样相机绕飞时翅膀始终贴在身体两侧，
+   *  不会因固定世界偏移而脱开。 */
   setBillboard(camera: THREE.Camera): void {
-    for (const q of this.quads) q.setBillboard(camera);
-    for (const w of this.vatWings) w.quad.setBillboard(camera);
+    const kx = this.worldWidth / this.canvasW;
+    const dir = this._tmpDir.copy(camera.position).sub(this._basePos);
+    dir.y = 0;
+    if (dir.lengthSq() > 1e-8) {
+      dir.normalize();
+      this._tmpQ.setFromUnitVectors(_Z_AXIS, dir);
+    } else {
+      this._tmpQ.identity();
+    }
+    for (let i = 0; i < this.quads.length; i++) {
+      const l = this.layout[i];
+      if (!l) continue;
+      const dx = l.offX * kx * this.canvasW;
+      const dy = l.offY * kx * this.canvasH;
+      const ox = this._tmpV.set(dx, 0, 0).applyQuaternion(this._tmpQ);
+      this.quads[i].setPosition(this._basePos.x + ox.x, this._basePos.y + dy, this._basePos.z + ox.z);
+      this.quads[i].setBillboard(camera);
+    }
+    for (const w of this.vatWings) {
+      const dx = w.offX * kx * this.canvasW;
+      const dy = w.offY * kx * this.canvasH;
+      const ox = this._tmpV.set(dx, 0, 0).applyQuaternion(this._tmpQ);
+      w.quad.setPosition(this._basePos.x + ox.x, this._basePos.y + dy, this._basePos.z + ox.z);
+      w.quad.setBillboard(camera);
+    }
   }
 
   override setFlip(flipX: boolean, flipY: boolean): void {
