@@ -11,8 +11,8 @@ import { CraftingManager } from '../../systems/inventory/CraftingManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
 import { InventoryPanel } from '../shared/InventoryPanel';
 import { renderDialogBubble } from '../components/DialogBubble';
-import { createButton } from '../components/Button';
 import type { GachaOverlay } from './GachaOverlay';
+import type { CraftingOverlay } from './CraftingOverlay';
 import { ActionPanel, FormationPanel, OperatorPanel } from './ShipPanels';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
@@ -26,10 +26,16 @@ export class ShipUIManager extends BaseInteractionUI {
   private titleEl: HTMLDivElement;
   private inventoryPanel: InventoryPanel;
   private _gachaOverlay: GachaOverlay | null = null;
+  private _craftingOverlay: CraftingOverlay | null = null;
 
   /** 设置抽卡覆盖层（行动后触发） */
   setGachaOverlay(overlay: GachaOverlay): void {
     this._gachaOverlay = overlay;
+  }
+
+  /** 设置加工台覆盖层（替代原简单合成台弹窗） */
+  setCraftingOverlay(overlay: CraftingOverlay): void {
+    this._craftingOverlay = overlay;
   }
 
   constructor(
@@ -174,52 +180,12 @@ export class ShipUIManager extends BaseInteractionUI {
   }
 
   // ============================================================
-  // 合成台
+  // 加工台
   // ============================================================
 
   openCrafting(station: 'ship' | 'portable'): void {
-    const recipes = this.craftingManager.getAvailableRecipes(station);
-    this.openPanel({
-      id: 'crafting-panel',
-      onOpen: () => {},
-      onClose: () => {},
-      render: () => {
-        const div = document.createElement('div');
-        div.style.cssText = 'background:rgba(20,20,40,0.95);border:1px solid #4466aa;border-radius:8px;padding:16px;min-width:350px;';
-        div.innerHTML = `<h3 style="color:#8af;margin:0 0 12px 0;">${station === 'ship' ? '舰船' : '便携'}合成台</h3>`;
-
-        for (const r of recipes) {
-          const canCraft = this.craftingManager.canCraft(r.id, 'player');
-          const row = document.createElement('div');
-          row.style.cssText = `display:flex;align-items:center;gap:8px;padding:6px;margin-bottom:4px;background:rgba(68,102,170,0.1);border-radius:4px;${canCraft ? '' : 'opacity:0.5;'}`;
-          row.innerHTML = `<span style="flex:1;">${r.name}</span><span style="color:#888;font-size:12px;">${r.inputs.map(i => `${i.itemId}x${i.count}`).join(' + ')}</span><span style="color:#8f8;font-size:12px;">→ ${r.output.itemId}x${r.output.count}</span>`;
-
-          if (canCraft) {
-            const craftBtn = createButton({
-              label: '合成', size: 'sm', style: 'primary',
-              onClick: () => {
-                if (this.craftingManager.craft(r.id, 'player', 'player')) {
-                  super.closePanel('crafting-panel');
-                  this.renderPanel('formation');
-                }
-              },
-            });
-            row.appendChild(craftBtn);
-          } else {
-            const need = document.createElement('span');
-            need.style.cssText = 'color:#f44;font-size:11px;';
-            need.textContent = '材料不足';
-            row.appendChild(need);
-          }
-          div.appendChild(row);
-        }
-
-        const closeBtn = createButton({ label: '关闭', size: 'sm', style: 'ghost', onClick: () => this.closePanel('crafting-panel') });
-        closeBtn.style.marginTop = '8px';
-        div.appendChild(closeBtn);
-        return div;
-      },
-    });
+    // ★ 复杂加工页面覆盖层（仿抽卡页面）；station 决定可用配方列表
+    this._craftingOverlay?.show(station);
   }
 
   // ============================================================

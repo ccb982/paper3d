@@ -21,9 +21,11 @@ import { eventBus } from '../core/EventBus';
 import { RELIC_CONFIG } from '../config/relics';
 import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
+import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { ShipUIManager } from '../ui/ship/ShipUIManager';
 import { GachaOverlay } from '../ui/ship/GachaOverlay';
+import { CraftingOverlay } from '../ui/ship/CraftingOverlay';
 import { ShipScene } from '../ui/ship/ShipScene';
 import { MainButtons, type ButtonId } from '../ui/ship/MainButtons';
 
@@ -40,6 +42,7 @@ export class ShipMode implements IGameMode {
   // ★ 业务逻辑层（共享模块）
   private itemManager!: ItemManager;
   private craftingManager!: CraftingManager;
+  private iconRegistry!: ItemIconRegistry;
   private interactionManager!: InteractionManager;
 
   // ★ UI 层（舰船专属）
@@ -47,6 +50,9 @@ export class ShipMode implements IGameMode {
 
   // ★ 抽卡覆盖层（行动后默认显示）
   private gachaOverlay!: GachaOverlay;
+
+  // ★ 加工台覆盖层（基地入口：编队面板 → 合成台）
+  private craftingOverlay: CraftingOverlay | null = null;
 
   // ★ 场景与按钮（拆分后的自治组件）
   private shipScene: ShipScene | null = null;
@@ -66,6 +72,7 @@ export class ShipMode implements IGameMode {
     // ① 初始化业务逻辑层（共享模块）
     this.itemManager = new ItemManager(ctx.session);
     this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
+    this.iconRegistry = new ItemIconRegistry(this.itemManager);
     this.interactionManager = new InteractionManager({
       session: ctx.session,
       itemManager: this.itemManager,
@@ -98,6 +105,17 @@ export class ShipMode implements IGameMode {
       this.uiManager.setGachaOverlay(this.gachaOverlay);
     });
 
+    // ⑥ 创建加工台覆盖层（基地入口：编队面板 → 合成台）
+    this.craftingOverlay = new CraftingOverlay(
+      ctx.session,
+      this.craftingManager,
+      this.itemManager,
+      this.iconRegistry,
+    );
+    this.craftingOverlay.load().then(() => {
+      this.uiManager.setCraftingOverlay(this.craftingOverlay!);
+    });
+
     // 触发存档事件
     eventBus.emit('save_complete', {});
     console.log('[ShipMode] 舰船场景已加载');
@@ -110,6 +128,10 @@ export class ShipMode implements IGameMode {
 
     // ② 销毁抽卡覆盖层
     this.gachaOverlay?.dispose();
+
+    // ③ 销毁加工台覆盖层
+    this.craftingOverlay?.dispose();
+    this.craftingOverlay = null;
 
     // ③ 销毁 UI 层
     this.uiManager?.dispose();
