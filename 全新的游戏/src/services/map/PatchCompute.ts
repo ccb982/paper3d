@@ -33,6 +33,12 @@ export interface PatchGroundTile {
   indices: Uint32Array;
 }
 
+/** 几何 y 范围（Worker 单遍扫出；主线程解析构造包围球，免 O(n) 重扫） */
+export interface GeomBounds {
+  minY: number;
+  maxY: number;
+}
+
 /** Worker ↔ 主线程传输的几何结果（typed arrays；buffer 可 transfer） */
 export interface PatchGeomRaw {
   top: {
@@ -60,6 +66,9 @@ export interface PatchGeomRaw {
   water: WaterSurfaceRaw;
   /** ★ 物理 4m 分块（全量构建 = 全部 225 块；增量构建 = dirty±1 块环 → 主线程只换这些 slot） */
   tiles: PatchGroundTile[];
+  /** ★ y 范围（Worker 单遍扫出 → 主线程解析构造包围球；创建/原地更新共用） */
+  topBounds: GeomBounds;
+  wallBounds: GeomBounds;
 }
 
 export type PatchGeomResult = PatchGeomRaw;
@@ -143,7 +152,21 @@ export function computeTableGeometry(
     },
     water,
     tiles,
+    topBounds: yBoundsOf(top.vertices),
+    wallBounds: yBoundsOf(wall.vertices),
   };
+}
+
+/** 顶点数组 y 范围（单遍扫；空数组 = {0,0}） */
+function yBoundsOf(vertices: Float32Array): GeomBounds {
+  let minY = Infinity, maxY = -Infinity;
+  for (let i = 1; i < vertices.length; i += 3) {
+    const y = vertices[i];
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  if (minY === Infinity) { minY = 0; maxY = 0; }
+  return { minY, maxY };
 }
 
 /** dirty 世界 4m 块 key → 本 chunk 内 slot 列表（±1 块环；null = 全部块） */

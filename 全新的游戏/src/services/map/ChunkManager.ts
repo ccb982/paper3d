@@ -30,7 +30,7 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, type FaceGeometry } from './FaceBuild';
-import { computeTableGeometry, type PatchGeomResult, type PatchGroundTile } from './PatchCompute';
+import { computeTableGeometry, type PatchGeomResult, type PatchGroundTile, type GeomBounds } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
@@ -173,6 +173,7 @@ export class ChunkManager {
     deferDecor?: boolean; // 首建：先上地形，装饰层延后见 pendingDecorJobs
     top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw;
     tiles?: PatchGroundTile[]; // ★ 物理 4m 分块（增量重建只含受影响块；缺省 = 走合并 trimesh）
+    bounds?: { top: GeomBounds; wall: GeomBounds }; // ★ y 范围（Worker 扫出 → 解析构造包围球）
   }[] = [];
   /** 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销） */
   private static readonly ASSEMBLE_PER_FRAME = 2;
@@ -193,6 +194,14 @@ export class ChunkManager {
   private terrainVisuals = new Map<number, { top: THREE.Mesh; wall: THREE.Mesh | null; water: THREE.Mesh | null }>();
   /** 走分块地面（createGroundTiled/updateGroundTile）的 chunk 集合 */
   private tiledChunks = new Set<number>();
+  /** ★ 分块 collider 创建预算队列（首建 225 块一次建 = rapier trimesh 主线程尖峰，
+   *  挪不进 worker（WASM 同世界）→ 按时间预算分帧建；挖坑增量更新不走此队列） */
+  private pendingTileJobs: {
+    key: number; bodyId: number; slot: number;
+    vertices: Float32Array; indices: Uint32Array;
+  }[] = [];
+  /** 每帧 collider 创建时间预算（ms；rapier trimesh 单 4m 块 ~0.1-0.3ms） */
+  private static readonly TILE_JOB_BUDGET_MS = 1.5;
 
   // ---- ★ 地形补丁（§14.11 层数覆盖层） ----
   // ★ 单一真源 = RasterMap chunk 数据的 levels 表（生成不写、clearAll 随 chunk 回收）；
@@ -249,6 +258,7 @@ export class ChunkManager {
   update(px: number, pz: number, dt: number): void {
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     this.flushPatchRebuilds();
+    this.drainTileJobs(); // ★ 分块 collider 创建预算（每帧 ≤1.5ms；创建不卡帧）
     this.syncChunks(px, pz);
     // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
@@ -324,6 +334,7 @@ export class ChunkManager {
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随 dispose 作废
+    this.pendingTileJobs.length = 0; // ★ 分块 collider 创建队列随 dispose 作废
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
     this.pendingBakes.clear();
     for (const id of this.bodies.values()) {
@@ -627,6 +638,7 @@ const key2 = chunkKeyOf(cx, cz);
             deferDecor: isFirstBuild,
             top: geom.top, wall: geom.wall, water: geom.water,
             tiles: geom.tiles,
+            bounds: { top: geom.topBounds, wall: geom.wallBounds },
           });
           return;
         }
@@ -634,7 +646,7 @@ const key2 = chunkKeyOf(cx, cz);
         this.geoInflight.delete(key);
         try {
           const g = computeTableGeometry(readChunk, this.raster.worldSeed, cx, cz, new Uint8Array(levels));
-          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall, g.water, g.tiles);
+          this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall, g.water, g.tiles, { top: g.topBounds, wall: g.wallBounds });
         } catch (e) {
           console.error(`[ChunkManager] chunk(${cx},${cz}) 同步几何失败，交看门狗重试`, e);
         }
@@ -660,9 +672,10 @@ const key2 = chunkKeyOf(cx, cz);
     wallG: FaceGeometry,
     waterG?: WaterSurfaceRaw,
     tiles?: PatchGroundTile[],
+    bounds?: { top: GeomBounds; wall: GeomBounds },
   ): void {
     const key = chunkKeyOf(cx, cz);
-    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
+    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
     const group = new THREE.Group();
     for (const m of cfg.meshes) group.add(m);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -692,12 +705,13 @@ const key2 = chunkKeyOf(cx, cz);
     cx: number, cz: number, maps: ChunkMaps,
     topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
     tiles?: PatchGroundTile[],
+    bounds?: { top: GeomBounds; wall: GeomBounds },
   ): void {
     const key = chunkKeyOf(cx, cz);
     if (this.meshes.has(key)) {
       // ★ 挖坑增量：视觉原地写 + 物理 O(受影响块) 换 collider；失败回退全量换装
-      if (tiles && tiles.length > 0 && this.applyTerrainPatchInPlace(key, topG, wallG, waterG, tiles)) return;
-      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
+      if (tiles && tiles.length > 0 && this.applyTerrainPatchInPlace(key, topG, wallG, waterG, tiles, bounds)) return;
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
       group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -705,13 +719,13 @@ const key2 = chunkKeyOf(cx, cz);
       (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
       // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
       // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
-      this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi);
+      this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, tiles);
       this.tiledChunks.delete(key); // 回退路径 = 合并 trimesh（原分块实体已被 replaceChunk 销毁）
       return;
     }
     if (!this.voidKeys.has(key)) {
       // 首建：无现存网格 → 只挂地形 mesh + 分块地面（装饰后补）
-      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG);
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
       group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -738,6 +752,7 @@ const key2 = chunkKeyOf(cx, cz);
     topG: FaceGeometry, wallG: FaceGeometry,
     waterG: WaterSurfaceRaw | undefined,
     tiles: PatchGroundTile[],
+    bounds?: { top: GeomBounds; wall: GeomBounds },
   ): boolean {
     const entry = this.terrainVisuals.get(key);
     const group = this.meshes.get(key) as THREE.Group | undefined;
@@ -746,9 +761,9 @@ const key2 = chunkKeyOf(cx, cz);
     if (!this.tiledChunks.has(key) || !this.host.updateGroundTile) return false;
 
     // ② 视觉（先视觉后物理：失败即回退，物理不动）
-    if (!this.applyGeoInPlace(entry.top, topG, false)) return false;
+    if (!this.applyGeoInPlace(entry.top, topG, false, bounds?.top)) return false;
     if (wallG.indices.length > 0) {
-      if (!entry.wall || !this.applyGeoInPlace(entry.wall, wallG, true)) return false;
+      if (!entry.wall || !this.applyGeoInPlace(entry.wall, wallG, true, bounds?.wall)) return false;
     } else if (entry.wall) {
       return false; // 防御：墙消失（现管线不发生）→ 回退全量
     }
@@ -765,8 +780,11 @@ const key2 = chunkKeyOf(cx, cz);
   }
 
   /** ② 视觉原地写：逐属性长度一致 → array.set（零分配）；不一致 → 换 attribute；
-   *  位置/索引长度是布局漂移的主判据（uv/color/patchW 随顶点数，shade 随壁顶点数） */
-  private applyGeoInPlace(mesh: THREE.Mesh, g: FaceGeometry, withShade: boolean): boolean {
+   *  位置/索引长度是布局漂移的主判据（uv/color/patchW 随顶点数，shade 随壁顶点数）；
+   *  成功后用 Worker 的 y 范围解析更新包围球（免 O(n) 重扫） */
+  private applyGeoInPlace(
+    mesh: THREE.Mesh, g: FaceGeometry, withShade: boolean, bounds?: GeomBounds,
+  ): boolean {
     const geo = mesh.geometry as THREE.BufferGeometry;
     const setArr = (name: string, arr: Float32Array | undefined): boolean => {
       if (!arr) return true; // 属性可缺省（未产出不消费）
@@ -786,6 +804,7 @@ const key2 = chunkKeyOf(cx, cz);
     if (!idx || idx.array.length !== g.indices.length) return false;
     (idx.array as Uint32Array).set(g.indices);
     idx.needsUpdate = true;
+    if (bounds) this.setPaddedSphere(geo, bounds);
     return true;
   }
 
@@ -839,13 +858,14 @@ const key2 = chunkKeyOf(cx, cz);
   }
 
   /** 用几何字节构建地形 top/wall/water 网格 + 合并 trimesh（供非破坏装配与增量重建共用）
- *  ★ 同时登记 terrainVisuals（原地更新用）+ 顶/壁包围球预留 6m 下沉余量
- *  （挖坑只降不高 → 原地更新后无需重算包围球，视锥剔除不误裁坑底） */
+ *  ★ 同时登记 terrainVisuals（原地更新用）+ 包围球：Worker 传 y 范围 → 解析构造
+ *  （免主线程 O(n) 扫描）+6m 下沉余量（挖坑只降不高，原地更新免重算、视锥不误裁） */
   private buildTerrainMeshes(
     cx: number, cz: number, maps: ChunkMaps,
     topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+    bounds?: { top: GeomBounds; wall: GeomBounds },
   ): { meshes: THREE.Object3D[]; pv: Float32Array; pi: Uint32Array } {
-    const toGeo = (g: FaceGeometry, withColor: boolean, padSphere = false): THREE.BufferGeometry => {
+    const toGeo = (g: FaceGeometry, withColor: boolean, b?: GeomBounds): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
       geo.setAttribute("normal", new THREE.BufferAttribute(g.normals, 3));
@@ -854,10 +874,7 @@ const key2 = chunkKeyOf(cx, cz);
       if (g.patchW) geo.setAttribute("apw", new THREE.BufferAttribute(g.patchW, 1));
       if (withColor && g.shade) geo.setAttribute("shade", new THREE.BufferAttribute(g.shade, 1));
       geo.setIndex(new THREE.BufferAttribute(g.indices, 1));
-      if (padSphere) {
-        geo.computeBoundingSphere();
-        if (geo.boundingSphere) geo.boundingSphere.radius += 6;
-      }
+      this.setPaddedSphere(geo, b);
       return geo;
     };
     const palette = this.chunkPalette(cx, cz);
@@ -866,11 +883,11 @@ const key2 = chunkKeyOf(cx, cz);
     const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
     (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
       { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
-    const topMesh = new THREE.Mesh(toGeo(topG, false, true), mat);
+    const topMesh = new THREE.Mesh(toGeo(topG, false, bounds?.top), mat);
     const meshes: THREE.Object3D[] = [topMesh];
     let wallMesh: THREE.Mesh | null = null;
     if (wallG.indices.length > 0) {
-      wallMesh = new THREE.Mesh(toGeo(wallG, true, true), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
+      wallMesh = new THREE.Mesh(toGeo(wallG, true, bounds?.wall), new WallMaterial(maps.albedo, maps.lightmap, matCfg, true));
       meshes.push(wallMesh);
     }
     let waterMesh: THREE.Mesh | null = null;
@@ -891,21 +908,66 @@ const key2 = chunkKeyOf(cx, cz);
     return { meshes, pv, pi };
   }
 
-  /** ★ chunk 地面刚体创建（分块优先：tiles 就绪且宿主支持 → createGroundTiled；否则合并 trimesh） */
+  /** ★ 包围球解析构造：center=(0, yMid, 0)、r=√((S/2)²×2+dy²)+6m 挖深余量
+   *  （mesh 原点=chunk 中心，全部顶点 |x|,|z| ≤ S/2、y∈[minY,maxY] → 精确覆盖）；
+   *  bounds 缺失（旧数据兜底）→ 主线程 computeBoundingSphere +6m */
+  private setPaddedSphere(geo: THREE.BufferGeometry, b?: GeomBounds): void {
+    if (b) {
+      const half = CHUNK_SIZE / 2;
+      const mid = (b.minY + b.maxY) * 0.5;
+      const dy = (b.maxY - b.minY) * 0.5;
+      geo.boundingSphere = new THREE.Sphere(
+        new THREE.Vector3(0, mid, 0),
+        Math.sqrt(half * half * 2 + dy * dy) + 6,
+      );
+    } else {
+      geo.computeBoundingSphere();
+      if (geo.boundingSphere) geo.boundingSphere.radius += 6;
+    }
+  }
+
+  /** ★ chunk 地面刚体创建（分块优先：tiles 就绪且宿主支持 → createGroundTiled；否则合并 trimesh）
+   *  首块随实体同步建（tileSlot 记账），其余块进预算队列分帧建（创建不卡帧） */
   private createChunkGround(
     key: number, cx: number, cz: number,
     pv: Float32Array, pi: Uint32Array, tiles?: PatchGroundTile[],
   ): void {
     if (tiles && tiles.length > 0 && this.host.createGroundTiled) {
-      const id = this.host.createGroundTiled(cx, cz, tiles);
+      const id = this.host.createGroundTiled(cx, cz, [tiles[0]]);
       if (id !== null && id !== undefined) {
         this.bodies.set(key, id);
         this.tiledChunks.add(key);
+        // ★ 其余块 → 时间预算队列（update 每帧 ≤1.5ms；chunk 销毁/重建自动丢弃）
+        for (let i = 1; i < tiles.length; i++) {
+          this.pendingTileJobs.push({
+            key, bodyId: id, slot: tiles[i].slot,
+            vertices: tiles[i].vertices, indices: tiles[i].indices,
+          });
+        }
         return;
       }
     }
     this.bodies.set(key, this.host.createGround(cx, cz, pv, pi));
     this.tiledChunks.delete(key);
+  }
+
+  /** ★ 预算化 collider 创建（update 每帧调用）：按时间预算消费队列；
+   *  bodyId 不匹配（chunk 已销毁/重建）→ 条目直接丢弃 */
+  private drainTileJobs(): void {
+    if (this.pendingTileJobs.length === 0) return;
+    const start = performance.now();
+    let n = 0;
+    while (
+      n < this.pendingTileJobs.length &&
+      (n === 0 || performance.now() - start < ChunkManager.TILE_JOB_BUDGET_MS)
+    ) {
+      const j = this.pendingTileJobs[n];
+      if (this.bodies.get(j.key) === j.bodyId) {
+        this.host.updateGroundTile?.(j.bodyId, j.slot, j.vertices, j.indices);
+      }
+      n++;
+    }
+    if (n > 0) this.pendingTileJobs.splice(0, n);
   }
 
 
@@ -1145,6 +1207,7 @@ const key2 = chunkKeyOf(cx, cz);
         this.assembleQueue.push({
           key, cx, cz, maps: maps2, decor: null, top: geom.top, wall: geom.wall, water: geom.water,
           tiles: geom.tiles,
+          bounds: { top: geom.topBounds, wall: geom.wallBounds },
         });
       } catch (e) {
         console.error(`[ChunkManager] chunk(${cx},${cz}) 破坏重建失败，回退标准烘焙`, e);
