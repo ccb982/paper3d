@@ -38,6 +38,16 @@
       ],
       "output": { "itemId": "ammo_pack", "count": 1 },
       "station": "portable"
+    },
+    {
+      "id": "kaltsit_drone",
+      "name": "可露希尔的无人机",
+      "inputs": [
+        { "itemId": "iron_grain", "count": 20 },
+        { "itemId": "device", "count": 10 }
+      ],
+      "output": { "itemId": "kaltsit_drone", "count": 1 },
+      "station": "ship"
     }
   ]
 }
