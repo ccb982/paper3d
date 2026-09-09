@@ -8,7 +8,7 @@
 
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadSixBrotherIcons } from './BasicMaterialsIcons';
-import { loadDroneIcon } from './DroneIcon';
+import { getDroneIconAnimator, DroneIconAnimator } from './DroneIcon';
 
 export interface ItemIconConfig {
   /** 色调 0-1 */
@@ -22,28 +22,34 @@ export interface ItemIconConfig {
 export class ItemIconRegistry {
   private cache = new Map<string, HTMLCanvasElement>();
   private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
-  private droneIcon: HTMLCanvasElement | null = null;
+  /** 无人机动态图标动画器（播放器路径：离屏 VAT 渲染） */
+  private droneAnimator: DroneIconAnimator | null = null;
 
   constructor(private itemManager: ItemManager) {
     // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
     loadSixBrotherIcons()
       .then((map) => { this.sixBrothers = map; })
       .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
-    // 异步预载「可露希尔的无人机」图标（三图层合成：主体+左/右翅膀）
-    loadDroneIcon()
-      .then((canvas) => { this.droneIcon = canvas; })
-      .catch(() => { this.droneIcon = null; });
   }
 
   /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底） */
   getIcon(itemId: string): HTMLCanvasElement {
-    if (this.droneIcon && itemId === 'kaltsit_drone') return this.droneIcon;
+    if (itemId === 'kaltsit_drone') {
+      // ★ 动态图标：播放器路径驱动翅膀抖动；每次调用注册独立画布
+      this.droneAnimator ??= getDroneIconAnimator();
+      return this.droneAnimator.register(this.itemManager);
+    }
     if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
     if (this.cache.has(itemId)) return this.cache.get(itemId)!;
+    const canvas = this.makeFallbackCanvas(itemId);
+    this.cache.set(itemId, canvas);
+    return canvas;
+  }
 
+  /** 色块兜底图标（装弹器/药水等无专用纹理物品） */
+  private makeFallbackCanvas(itemId: string): HTMLCanvasElement {
     const arch = this.itemManager.getArchetype(itemId);
     const color = arch?.color || { h: 0.55, s: 0.8, l: 0.6 };
-    // 色块兜底（装弹器/药水等无专用纹理物品）
     const canvas = document.createElement('canvas');
     canvas.width = 64;
     canvas.height = 64;
@@ -56,7 +62,6 @@ export class ItemIconRegistry {
     ctx.beginPath();
     ctx.arc(32, 32, 27, 0, Math.PI * 2);
     ctx.stroke();
-    this.cache.set(itemId, canvas);
     return canvas;
   }
 }

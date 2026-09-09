@@ -23,6 +23,8 @@ import { setTestGroup } from './services/map/TileGroups';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
+import { setGameRenderer } from './services/render/GameRenderer';
+import { getDroneIconAnimator } from './services/item/DroneIcon';
 
 /** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
 function fallbackCopy(text: string): void {
@@ -101,6 +103,8 @@ async function boot() {
 
   const rendererLocal = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer = rendererLocal;
+  // ★ UI 离屏烘焙（背包/加工台无人机图标）复用主渲染器，与战斗共用纹理绘制路径
+  setGameRenderer(rendererLocal);
   rendererLocal.setSize(window.innerWidth, window.innerHeight);
   rendererLocal.setPixelRatio(adapter.info.dpr);
   rendererLocal.setClearColor(0xcccccc, 1);
@@ -178,6 +182,8 @@ async function boot() {
     droneAsset = await FtxAsset.load(encodeURI('/fx/可露希尔的无人机.ftx3.gz'));
   }
   console.log('[boot] 可露希尔的无人机已加载:', (droneAsset as Asset).frameNames?.()?.join(', ') ?? 'texture');
+  // ★ 预热无人机动态图标（主渲染器离屏烘焙；背包/加工台从 this 取动画帧）
+  getDroneIconAnimator().warm(droneAsset);
 
   // ---- ★ 月亮贴图：加载大猫哥月亮素材包（特效播放器解码），替换天空程序化月相 ----
   try {

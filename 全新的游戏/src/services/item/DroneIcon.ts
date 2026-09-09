@@ -1,131 +1,238 @@
 // ============================================================
-// DroneIcon.ts —— 可露希尔的无人机图标（FTX → 背包 UI 画布）
+// DroneIcon.ts —— 可露希尔的无人机动态图标
+// ★ 复用战斗纹理绘制路径：与战斗实体同款 Asset(scene.zip) +
+//   FrameAnimatorBase + DroneCompositeRender（主体 FTXQuad + 双翼
+//   VAT），用主渲染器（GameRenderer，main.ts 注入的战斗渲染器）+
+//   OffscreenBake（战斗的离屏烘焙 RT 管线）画进 RT → readRenderTargetPixels
+//   回读到图标画布。绝不另开 WebGLRenderer（多上下文 = 状态孤岛）。
+//  - 背包格子用 toDataURL 快照 → 每次 register 都拷贝最新 staticCanvas
+//  - 加工台模块槽是活动 canvas → 30fps 逐帧刷新（翅膀持续抖动）
+//  - 无活动画布时停 RAF（保留最后一帧 staticCanvas，重开即续）
+//  - 素材/渲染失败 → 色块兜底（不再依赖 fetch 成败，boot 已预热）
 // ============================================================
-// 与 BasicMaterialsIcons 同套路：无人机三帧实为三图层（主体/左翅膀/右翅膀，
-// 共享同一画布）——用 FtxAsset + buildBaseHslData CPU 合成出完整无人机，
-// 按各层 bbox 位置拼进一张全画布，生成背包图标的 HTMLCanvasElement。
-// ============================================================
 
-import { FtxAsset } from '../../vendor/player/FtxAsset';
-import { buildBaseHslData, buildResidualData } from '../../vendor/player/core/ftx';
-import type { FrameTextureData, PaletteColor } from '../../vendor/player/core/types';
+import * as THREE from 'three';
+import { FtxAsset, Asset } from '../../vendor/player';
+import type { CharacterFxAssetSource } from '../fx/AssetSource';
+import { FrameAnimatorBase } from '../fx/FrameAnimatorBase';
+import { DroneCompositeRender } from '../render/DroneCompositeRender';
+import { OffscreenBake } from '../render/OffscreenBake';
+import { getGameRenderer } from '../render/GameRenderer';
+import type { ItemManager } from '../../systems/inventory/ItemManager';
 
-const DRONE_ICON_URL = '/fx/可露希尔的无人机.ftx3.gz';
+/** 图标烘焙分辨率（像素，方形） */
+const ICON_SIZE = 256;
+/** 世界单位画布宽（DroneCompositeRender.setScaleKeepAspect 入参；铺满相机窗口） */
+const WORLD = 128;
+const FPS = 30;
+const FRAME_MS = 1000 / FPS;
 
-function fract(x: number): number {
-  return x - Math.floor(x);
+/** 素材 / 渲染失败时兜底色（深蓝块，不闪） */
+const FALLBACK = { h: 0.6, s: 0.55, l: 0.3 };
+
+/** 公开 begin/end/RT 的离屏烘焙（OffscreenBake 设计为子类使用） */
+class IconBake extends OffscreenBake {
+  beginBake(): void { this.begin(); }
+  endBake(): void { this.end(); }
+  get target(): THREE.WebGLRenderTarget { return this.rt; }
 }
 
-function clamp01(x: number): number {
-  return x < 0 ? 0 : x > 1 ? 1 : x;
-}
+export class DroneIconAnimator {
+  private static instance: DroneIconAnimator | null = null;
 
-/** 与 FtxAsset.createCompositeMaterial fragment 相同的 HSL→RGB */
-function hsl2rgb(h: number, s: number, l: number): [number, number, number] {
-  const h6 = h * 6.0;
-  const r = clamp01(Math.abs(((h6 + 0.0) % 6.0) - 3.0) - 1.0);
-  const g = clamp01(Math.abs(((h6 + 4.0) % 6.0) - 3.0) - 1.0);
-  const b = clamp01(Math.abs(((h6 + 2.0) % 6.0) - 3.0) - 1.0);
-  const k = s * (1.0 - Math.abs(2.0 * l - 1.0));
-  return [l + k * (r - 0.5), l + k * (g - 0.5), l + k * (b - 0.5)];
-}
+  /** 战斗同款素材（main.ts 预热注入，避免重复加载） */
+  private asset: Asset | FtxAsset | null = null;
+  /** 活动图标画布（断连的由 tick 自动回收） */
+  private readonly living: HTMLCanvasElement[] = [];
+  /** 最近一帧烘焙结果（静态兜底拷贝源） */
+  private staticCanvas: HTMLCanvasElement | null = null;
+  /** 最后一次 success 标记（控制错误文本只在从未成功时显示） */
+  private everPainted = false;
+  private errText = '';
 
-/** 单层合成 → RGBA 像素数组（像素尺寸 = 该层 bbox） */
-function compositeLayerPixels(
-  asset: FtxAsset,
-  frame: FrameTextureData,
-  palette: PaletteColor[],
-): { data: Uint8ClampedArray; w: number; h: number } | null {
-  const base = buildBaseHslData(frame, palette);
-  const res = buildResidualData(frame);
-  if (!base || !res) return null;
+  private anim: FrameAnimatorBase | null = null;
+  private drone: DroneCompositeRender | null = null;
+  private bake: IconBake | null = null;
+  private scene: THREE.Scene | null = null;
+  private camera: THREE.OrthographicCamera | null = null;
 
-  const w = base.width;
-  const h = base.height;
-  const out = new Uint8ClampedArray(w * h * 4);
-  const n = w * h;
-  const R = 0.5; // 残差统一范围（等同 shader uResidualRange）
+  private rafId = 0;
+  private lastT = 0;
+  private lastPaint = 0;
+  private buf: Uint8Array | null = null;
 
-  for (let i = 0; i < n; i++) {
-    const o = i * 4;
-    const a = base.data[o + 3];
-    out[o + 3] = a > 0 ? 255 : 0;
-    if (a <= 0) continue;
+  private constructor() { /* 单例 */ }
 
-    const dH = (res.data[o] / 255) * 2 - 1;
-    const dS = (res.data[o + 1] / 255) * 2 - 1;
-    const dL = (res.data[o + 2] / 255) * 2 - 1;
-
-    const H = fract(base.data[o] + dH * R);
-    const S = clamp01(base.data[o + 1] + dS * R);
-    const L = clamp01(base.data[o + 2] + dL * R);
-
-    const [r, g, b] = hsl2rgb(H, S, L);
-    out[o] = Math.round(r * 255);
-    out[o + 1] = Math.round(g * 255);
-    out[o + 2] = Math.round(b * 255);
+  static getInstance(): DroneIconAnimator {
+    if (!DroneIconAnimator.instance) DroneIconAnimator.instance = new DroneIconAnimator();
+    return DroneIconAnimator.instance;
   }
 
-  return { data: out, w, h };
-}
-
-/** 全画布合成：按各层 bbox 位置把三图层拼进共享画布 → 完整无人机画布 */
-function compositeFullCanvas(asset: FtxAsset): HTMLCanvasElement {
-  const frames: FrameTextureData[] = [];
-  for (let i = 0; i < asset.frameCount; i++) {
-    const f = asset.getFtxFrame(i);
-    if (f) frames.push(f);
-  }
-  // 画布尺寸 = 第一帧原始宽高（三帧共享同一画布）
-  const cw = frames[0]?.width ?? 512;
-  const ch = frames[0]?.height ?? 512;
-
-  const layers: ({ data: Uint8ClampedArray; w: number; h: number; bbox: { x: number; y: number; w: number; h: number } })[] = [];
-  for (const f of frames) {
-    const px = compositeLayerPixels(asset, f, asset.palette);
-    if (px && f.bbox) layers.push({ ...px, bbox: f.bbox });
-  }
-
-  const img = new ImageData(cw, ch);
-  for (const l of layers) {
-    const { data, w, h, bbox } = l;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const s = (y * w + x) * 4;
-        if (data[s + 3] <= 0) continue; // 该层此处透明 → 保留下层
-        const dx = bbox.x + x;
-        const dy = bbox.y + y;
-        if (dx < 0 || dx >= cw || dy < 0 || dy >= ch) continue;
-        const d = (dy * cw + dx) * 4;
-        img.data[d] = data[s];
-        img.data[d + 1] = data[s + 1];
-        img.data[d + 2] = data[s + 2];
-        img.data[d + 3] = 255;
-      }
-    }
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width = cw;
-  canvas.height = ch;
-  canvas.getContext('2d')!.putImageData(img, 0, 0);
-  return canvas;
-}
-
-let sharedPromise: Promise<HTMLCanvasElement | null> | null = null;
-
-/** 无人机图标（三图层合成）；全模块共享，只解包一次，失败返回 null（色块兜底） */
-export function loadDroneIcon(): Promise<HTMLCanvasElement | null> {
-  if (sharedPromise) return sharedPromise;
-  sharedPromise = (async () => {
+  /** ★ boot 预热：传入战斗的无人机素材（Asset|FtxAsset），构造渲染并首次烘焙 */
+  warm(asset: Asset | FtxAsset): void {
+    if (this.asset) return;
+    this.asset = asset;
     try {
-      const asset = await FtxAsset.load(DRONE_ICON_URL);
-      return compositeFullCanvas(asset);
+      this.init();
     } catch (err) {
-      console.warn('[DroneIcon] 无人机图标载入失败，回退色块:', err);
-      return null;
+      this.errText = String(err);
+      console.warn('[DroneIcon] 无人机动态图标初始化失败，回退色块:', err);
     }
-  })();
-  sharedPromise.catch(() => { sharedPromise = null; });
-  return sharedPromise;
+  }
+
+  /** 注册一个图标画布（立即填最近烘焙帧；未就绪 → 色块兜底） */
+  register(itemManager: ItemManager): HTMLCanvasElement {
+    const canvas = document.createElement('canvas');
+    canvas.width = ICON_SIZE;
+    canvas.height = ICON_SIZE;
+    const ctx = canvas.getContext('2d')!;
+    if (this.staticCanvas) {
+      ctx.drawImage(this.staticCanvas, 0, 0, ICON_SIZE, ICON_SIZE);
+    } else {
+      // 色块兜底（未就绪或失败时可见）
+      const arch = itemManager.getArchetype('kaltsit_drone');
+      const c = arch?.color ?? FALLBACK;
+      ctx.fillStyle = `hsl(${c.h * 360}, ${c.s * 100}%, ${c.l * 100}%)`;
+      ctx.fillRect(0, 0, ICON_SIZE, ICON_SIZE);
+      if (this.errText) {
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px monospace';
+        ctx.fillText(this.errText.slice(0, 40), 4, 14);
+      }
+      if (!this.asset) this.warmIfAvailable();
+    }
+
+    this.living.push(canvas);
+    this.startLoop();
+    return canvas;
+  }
+
+  /** renderer/素材已就绪但由于某原因未 init 时，尝试补 init */
+  private warmIfAvailable(): void {
+    if (!this.asset && getGameRenderer()) {
+      // 素材还没由 boot 预热（异常路径）：自行加载
+      Asset.load(encodeURI('/fx/可露希尔的无人机.scene.zip'))
+        .then((a) => { this.asset = a; this.warm(a); })
+        .catch((e) => { this.errText = String(e); });
+    }
+  }
+
+  private init(): void {
+    if (!this.asset) return;
+    const renderer = getGameRenderer();
+    if (!renderer) return; // 主渲染器未注入（不应发生；register 会再试）
+
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.OrthographicCamera(-WORLD / 2, WORLD / 2, WORLD / 2, -WORLD / 2, -1, 1);
+
+    const anim = new FrameAnimatorBase(this.asset);
+    anim.play();
+    this.anim = anim;
+
+    this.drone = new DroneCompositeRender(this.scene, this.asset, anim);
+    this.drone.setScaleKeepAspect(WORLD);
+    this.drone.setPosition(0, 0, 0);
+    this.drone.setRenderer(renderer);
+
+    this.bake = new IconBake(renderer, ICON_SIZE, ICON_SIZE);
+    this.buf = new Uint8Array(ICON_SIZE * ICON_SIZE * 4);
+
+    this.lastT = performance.now();
+    this.lastPaint = 0;
+    if (this.living.length > 0) this.startLoop();
+    else this.paintFrame(); // 预热：立刻烘焙一帧供 register 快照
+  }
+
+  private startLoop(): void {
+    if (this.rafId) return;
+    if (!this.anim || !this.drone || !this.bake) return;
+    this.rafId = requestAnimationFrame(this.tick);
+  }
+
+  private tick = (): void => {
+    this.rafId = 0;
+    // 回收断连画布（DOM replaceChildren 后自动移除）
+    for (let i = this.living.length - 1; i >= 0; i--) {
+      if (!this.living[i].isConnected) this.living.splice(i, 1);
+    }
+    if (this.living.length === 0) return; // 无活动画布 → 停转（RAF 不再续约）
+
+    const now = performance.now();
+    const dt = Math.max(0, Math.min(0.1, (now - this.lastT) / 1000));
+    this.lastT = now;
+    if (this.anim) this.anim.update(dt);
+
+    // 30fps 烘焙节流
+    if (now - this.lastPaint >= FRAME_MS) {
+      this.paintFrame();
+    }
+    this.rafId = requestAnimationFrame(this.tick);
+  };
+
+  /** 烘焙一帧：advance → VAT 双翼 → 主渲染器渲进 OffscreenBake RT → 回读像素 */
+  private paintFrame(): void {
+    if (!this.anim || !this.drone || !this.bake || !this.buf) return;
+    const renderer = getGameRenderer();
+    if (!renderer) return;
+
+    try {
+      const t = performance.now();
+      this.bake.beginBake();
+      this.drone.render({ frameIndex: this.anim.frameIndex }, null);
+      renderer.render(this.scene!, this.camera!);
+      this.bake.endBake();
+      this.lastPaint = t;
+
+      renderer.readRenderTargetPixels(
+        this.bake.target, 0, 0,
+        ICON_SIZE, ICON_SIZE, this.buf,
+      );
+
+      // ★ GL 行 0=底部 → canvas 行 0=顶部（与 ftxFrameToCanvas 图标朝向一致）
+      const flipped = new Uint8Array(ICON_SIZE * ICON_SIZE * 4);
+      const rowBytes = ICON_SIZE * 4;
+      for (let y = 0; y < ICON_SIZE; y++) {
+        const srcRow = y * rowBytes;
+        const dstRow = (ICON_SIZE - 1 - y) * rowBytes;
+        flipped.set(this.buf.subarray(srcRow, srcRow + rowBytes), dstRow);
+      }
+      const img = new ImageData(new Uint8ClampedArray(flipped), ICON_SIZE, ICON_SIZE);
+
+      if (!this.staticCanvas) {
+        this.staticCanvas = document.createElement('canvas');
+        this.staticCanvas.width = ICON_SIZE;
+        this.staticCanvas.height = ICON_SIZE;
+      }
+      this.staticCanvas.getContext('2d')!.putImageData(img, 0, 0);
+
+      for (const c of this.living) {
+        const ctx = c.getContext('2d');
+        if (!ctx) continue;
+        ctx.putImageData(img, 0, 0);
+      }
+      this.everPainted = true;
+    } catch (err) {
+      if (!this.everPainted) this.errText = String(err);
+      console.warn('[DroneIcon] 无人机图标烘焙失败，保留色块兜底:', err);
+    }
+  }
+
+  dispose(): void {
+    this.rafId = 0;
+    this.drone?.dispose();
+    this.drone = null;
+    this.bake?.dispose();
+    this.bake = null;
+    this.scene = null;
+    this.camera = null;
+    this.anim?.dispose();
+    this.anim = null;
+    this.asset = null;
+    this.living.length = 0;
+  }
+}
+
+/** 单例访问（main.ts 预热 / 图标注册处用） */
+export function getDroneIconAnimator(): DroneIconAnimator {
+  return DroneIconAnimator.getInstance();
 }
