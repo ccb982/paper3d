@@ -20,6 +20,7 @@ import type { EntityManager } from './EntityManager';
 import type { Asset } from '../vendor/player';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
 import { DroneCompositeRender } from '../services/render/DroneCompositeRender';
+import { DroneBeamEffect } from '../services/render/DroneBeam';
 import { executeAttack } from '../services/combat/Attack';
 import { RasterMap } from '../services/map/RasterMap';
 
@@ -54,6 +55,14 @@ export class DroneEntity extends EntityBase {
   private attackCd = 0;
   /** 跟随态锁定扫描节流 */
   private relockTimer = 0;
+  /** 攻击射线特效（外红内白；挥击时发射，播完销毁） */
+  private beam: DroneBeamEffect | null = null;
+  /** 最近一帧相机（射线 billboard 用；updateAI 喂入） */
+  private lastCamera: THREE.Camera | null = null;
+  private _beamStart = new THREE.Vector3();
+  private _beamEnd = new THREE.Vector3();
+  /** 场景引用（攻击射线挂载） */
+  private _sceneRef: THREE.Scene;
 
   constructor(
     em: EntityManager,
@@ -67,6 +76,7 @@ export class DroneEntity extends EntityBase {
       asset,
       animInitial: opts.animInitial,
     });
+    this._sceneRef = scene;
     this.camp = 'neutral';
     this.billboard = true;
     // ★ 无人机豁免视锥裁剪 + 距离 LOD：LOD≥2 会冻结动画时间轴（FrameAnimatorBase.update），
@@ -124,7 +134,7 @@ export class DroneEntity extends EntityBase {
     p.y += (baseY + Math.sin(this.phase) * 0.18 - p.y) * Math.min(1, dt * speed);
   }
 
-  /** ★ 近战挥击（贴脸小范围；执行器内自动排除同阵营） */
+  /** ★ 近战挥击（贴脸小范围；执行器内自动排除同阵营）+ 发射外红内白射线 */
   private swing(t: EntityBase): void {
     executeAttack(this.em, null, {
       type: 'melee',
@@ -135,14 +145,19 @@ export class DroneEntity extends EntityBase {
       camp: 'player',
       dmgType: 'physical',
     });
+    // ★ 攻击特效：射线从无人机射向目标（0.55s 高亮保持；上一束未播完则先销毁）
+    this.beam?.dispose();
+    this.beam = new DroneBeamEffect(this._sceneRef);
   }
 
   /**
    * ★ 每帧由 WorldMode 调用（喂完 followTarget/playerPos 后）：
    *   follow → 锁定最近敌人 → approach（飞到身边）→ attack（贴脸挥击）
    *   → 目标死/离玩家太远 → return → 归队重新锁定。
+   * @param camera 相机（攻击射线 billboard 朝向用）
    */
-  updateAI(dt: number): void {
+  updateAI(dt: number, camera?: THREE.Camera | null): void {
+    this.lastCamera = camera ?? this.lastCamera;
     this.phase += dt * 2.2;
     const p = this.entity.position;
     const distPlayer = Math.hypot(p.x - this.playerPos.x, p.z - this.playerPos.z);
@@ -205,6 +220,24 @@ export class DroneEntity extends EntityBase {
         break;
       }
     }
+
+    // ★ 攻击射线推进：起点 = 无人机，终点 = 目标（目标已死则停在最后落点）
+    if (this.beam) {
+      const end = this._beamEnd;
+      if (this.target && this.targetAlive(this.target)) {
+        end.set(this.target.position.x, this.target.position.y, this.target.position.z);
+      }
+      const done = this.beam.update(
+        dt,
+        this._beamStart.set(p.x, p.y, p.z),
+        end,
+        this.lastCamera ?? new THREE.Camera(),
+      );
+      if (done) {
+        this.beam.dispose();
+        this.beam = null;
+      }
+    }
   }
 
   /** 影子：无人机悬浮高，关闭贴地剪影 */
@@ -213,6 +246,8 @@ export class DroneEntity extends EntityBase {
   }
 
   override dispose(): void {
+    this.beam?.dispose();
+    this.beam = null;
     super.dispose();
   }
 }

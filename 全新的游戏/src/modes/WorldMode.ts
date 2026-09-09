@@ -519,7 +519,7 @@ export class WorldMode implements IGameMode {
       this.drone.playerPos.x = dp.x;
       this.drone.playerPos.y = dp.y;
       this.drone.playerPos.z = dp.z;
-      this.drone.updateAI(dt);
+      this.drone.updateAI(dt, this.camera);
     }
 
     // ---- 实体管线驱动 ----
