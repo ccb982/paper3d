@@ -22,8 +22,6 @@ import type { ItemManager } from '../../systems/inventory/ItemManager';
 
 /** 图标烘焙分辨率（像素，方形） */
 const ICON_SIZE = 256;
-/** 世界单位画布宽（DroneCompositeRender.setScaleKeepAspect 入参；铺满相机窗口） */
-const WORLD = 128;
 const FPS = 30;
 const FRAME_MS = 1000 / FPS;
 
@@ -123,14 +121,21 @@ export class DroneIconAnimator {
     if (!renderer) return; // 主渲染器未注入（不应发生；register 会再试）
 
     this.scene = new THREE.Scene();
-    this.camera = new THREE.OrthographicCamera(-WORLD / 2, WORLD / 2, WORLD / 2, -WORLD / 2, -1, 1);
+    // ★ 世界单位 ↔ 素材画布像素 1:1：worldWidth = canvasW，相机窗口 = 整幅画布
+    //   （双翼按作者摆放位置落在图标两侧，与战斗/原始画布一致）
+    const f0 = this.asset.getFtxFrame(0);
+    const canvasW = f0?.width || 512;
+    this.camera = new THREE.OrthographicCamera(
+      -canvasW / 2, canvasW / 2,
+      canvasW / 2, -canvasW / 2, -1, 1,
+    );
 
     const anim = new FrameAnimatorBase(this.asset);
     anim.play();
     this.anim = anim;
 
     this.drone = new DroneCompositeRender(this.scene, this.asset, anim);
-    this.drone.setScaleKeepAspect(WORLD);
+    this.drone.setScaleKeepAspect(canvasW);
     this.drone.setPosition(0, 0, 0);
     this.drone.setRenderer(renderer);
 
