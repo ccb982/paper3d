@@ -11,6 +11,7 @@
 
 import type { GameSession, InventoryGrid } from '../../core/Session';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
+import { ALLY_SLOT_COUNT } from '../../systems/inventory/ItemManager';
 import type { PanelDef } from '../BaseInteractionUI';
 import { InventoryGridRenderer } from './InventoryGridRenderer';
 import { createButton } from '../components/Button';
@@ -92,6 +93,7 @@ export class InventoryPanel {
 
     // 网格容器
     const gridView = document.createElement('div');
+    const refresh = () => this.render(container, flashItemId);
     const showGrid = (layer: keyof GameSession['inventories']) => {
       const grid = inv[layer];
       if (!Array.isArray(grid)) return;
@@ -100,13 +102,93 @@ export class InventoryPanel {
       const cellSize = Math.min(48, Math.floor(minWidth / cols));
       this.gridRenderer.render(gridView, grid, layer, (e) => {
         this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
-      }, cellSize, flashItemId);
+      }, cellSize, flashItemId, {
+        // ★ 可部署友军物品 → 格子可拖入友军槽位
+        dragItemIds: new Set(
+          this.opts.itemManager
+            .getItems('player')
+            .map((i) => i.itemId)
+            .filter((id) => this.opts.itemManager.isDeployable(id)),
+        ),
+      });
     };
+
+    // ★ 友军槽位行（部署区）：可部署友军拖入 = 部署；槽位内物品可拖回网格 = 卸载
+    const allyRow = document.createElement('div');
+    allyRow.style.cssText = [
+      'display:flex', 'gap:6px', 'justify-content:center',
+      'padding:8px 0', 'border-bottom:1px solid rgba(255,255,255,0.08)',
+      'margin-bottom:8px',
+    ].join(';');
+    const deployed = this.opts.itemManager.getDeployedAllies();
+    for (let s = 0; s < ALLY_SLOT_COUNT; s++) {
+      const itemId = deployed[s];
+      const slotEl = document.createElement('div');
+      slotEl.style.cssText = [
+        `width:64px`, `height:64px`,
+        'border-radius:4px', 'display:flex', 'flex-direction:column',
+        'align-items:center', 'justify-content:center',
+        'font-size:9px', 'color:#9bf', 'position:relative',
+        itemId
+          ? 'background:rgba(90,120,220,0.18);border:1px solid #5599ff;'
+          : 'background:rgba(255,255,255,0.04);border:1px dashed #3a4a7a;',
+        'cursor:pointer',
+      ].join(';');
+      if (itemId) {
+        // 已部署：显示图标 + 可拖回背包
+        try {
+          const iconCanvas = this.gridRenderer.getIcon(itemId);
+          const img = document.createElement('img');
+          img.src = iconCanvas.toDataURL();
+          img.style.cssText = 'width:70%;height:70%;object-fit:contain;';
+          slotEl.appendChild(img);
+        } catch {
+          slotEl.textContent = itemId.slice(0, 4);
+        }
+        const label = document.createElement('span');
+        label.textContent = this.opts.itemManager.getItemConfig(itemId)?.name ?? itemId;
+        label.style.cssText = 'position:absolute;bottom:2px;font-size:8px;color:#9bf;';
+        slotEl.appendChild(label);
+        slotEl.draggable = true;
+        slotEl.addEventListener('dragstart', (ev) => {
+          ev.dataTransfer?.setData('text/x-ally', String(s));
+          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+        });
+      } else {
+        slotEl.textContent = `友军\n槽位`;
+      }
+      // 接收拖入：背包里的可部署物品 → 部署
+      slotEl.addEventListener('dragover', (ev) => ev.preventDefault());
+      slotEl.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        const itemId2 = ev.dataTransfer?.getData('text/x-item');
+        if (itemId2 && !itemId) {
+          if (this.opts.itemManager.deployAlly(itemId2)) {
+            this.opts.onDataChanged();
+            refresh();
+          }
+        }
+      });
+      allyRow.appendChild(slotEl);
+    }
+    // 网格兜底接收：友军槽位拖出 → 卸载放回背包
+    gridView.addEventListener('dragover', (ev) => ev.preventDefault());
+    gridView.addEventListener('drop', (ev) => {
+      const ally = ev.dataTransfer?.getData('text/x-ally');
+      if (ally !== undefined && ally !== '') {
+        ev.preventDefault();
+        if (this.opts.itemManager.undeployAlly(Number(ally))) {
+          this.opts.onDataChanged();
+          refresh();
+        }
+      }
+    });
 
     showGrid(resolveLayer());
 
     container.innerHTML = '';
     container.appendChild(tabBar);
+    container.appendChild(allyRow);
     container.appendChild(gridView);
   }
 
@@ -118,12 +200,11 @@ export class InventoryPanel {
         .map(key => this.opts.layers.find(l => l.key === key))
         .filter((l): l is InventoryLayerOption => !!l);
     }
-    return this.opts.layers.filter(t => t.key !== layer && t.key !== 'allies');
+    return this.opts.layers.filter((t) => t.key !== layer);
   }
 
   /** 物品详情（使用/转移/丢弃/关闭） */
   private openItemDetail(layer: keyof GameSession['inventories'], row: number, col: number): void {
-    if (layer === 'allies') return;
     const grid = this.opts.session.inventories[layer] as InventoryGrid;
     const slot = grid?.[row]?.[col];
     if (!slot) return;

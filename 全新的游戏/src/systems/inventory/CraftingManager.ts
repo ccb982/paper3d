@@ -36,7 +36,6 @@ export class CraftingManager {
   canCraft(recipeId: string, srcLayer: keyof GameSession['inventories']): boolean {
     const recipe = this.recipes.find(r => r.id === recipeId);
     if (!recipe) return false;
-    if (srcLayer === 'allies') return false;
     const grid = this.session.inventories[srcLayer];
     if (!Array.isArray(grid)) return false;
 

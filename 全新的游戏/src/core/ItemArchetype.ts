@@ -47,6 +47,8 @@ export class ItemArchetype {
   readonly worldScale: number;
   readonly pickupRadius: number;
   readonly worldConfig: ItemWorldConfig | null;
+  /** ★ 可部署为友军（背包友军槽位拖入条件） */
+  readonly deployable: boolean;
   private readonly _effects: ItemEffectDef[];
 
   constructor(data: any) {
@@ -57,6 +59,7 @@ export class ItemArchetype {
     this.maxStack = data.maxStack ?? 99;
     this.color = data.color ?? { h: 0.5, s: 0.5, l: 0.5 };
     this.worldConfig = data.world ?? null;
+    this.deployable = data.deployable ?? false;
 
     // 解析世界掉落参数
     const w = data.world;

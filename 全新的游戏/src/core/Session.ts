@@ -49,12 +49,11 @@ export interface GameSession {
     defense: number;
   };
 
-  // ----- ③ ★ 四层背包 -----
+  // ----- ③ ★ 三层背包（L4 队友背包已移除 2026-09-09） -----
   inventories: {
     base: InventoryGrid;        // L1: 舰船基地仓库（30×30）
     ship: InventoryGrid;        // L2: 探索飞船仓库（8×10）
     player: InventoryGrid;      // L3: 玩家自身背包（4×6）
-    allies: Record<string, InventoryGrid>; // L4: 队友背包
   };
 
   // ----- ④ ★ 藏品/遗物 -----
@@ -62,6 +61,9 @@ export interface GameSession {
     owned: string[];            // 所有藏品 ID
     slots: (string | null)[];   // 槽位（快捷展示）
   };
+
+  // ----- ⑤ ★ 已部署友军（友军槽位：无人机等；背包页面拖入/拖出） -----
+  deployedAllies: string[];
 
   // ----- ⑤ 友军/干员 -----
   allies: {
@@ -350,12 +352,12 @@ export function createNewSession(): GameSession {
       base: createEmptyGrid(30, 30),
       ship: createEmptyGrid(8, 10),
       player,
-      allies: {},
     },
     relics: {
       owned: ['black_crown'],
       slots: Array(5).fill(null),
     },
+    deployedAllies: [],
     allies: { roster: [] },
     ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
     gacha: { pityCounter: 0, totalPulls: 0 },

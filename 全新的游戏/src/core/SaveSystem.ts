@@ -51,9 +51,10 @@ export const SaveSystem = {
       inv.base = migrateGrid(inv.base, GRID_DIMENSIONS.base.rows, GRID_DIMENSIONS.base.cols, 'base');
       inv.ship = migrateGrid(inv.ship, GRID_DIMENSIONS.ship.rows, GRID_DIMENSIONS.ship.cols, 'ship');
       inv.player = migrateGrid(inv.player, GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols, 'player');
-      // allies 是 Record<string, InventoryGrid>，每个队友网格不定尺寸，不做迁移（仅兜底为空）
-      if (!inv.allies || typeof inv.allies !== 'object') {
-        inv.allies = {};
+
+      // ★ 旧存档迁移：友军槽位字段（无则空数组）
+      if (!Array.isArray(data.deployedAllies)) {
+        data.deployedAllies = [];
       }
 
       console.log(`[存档] 读取成功，第 ${data.meta.day} 天`);

@@ -13,7 +13,7 @@ import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { Asset } from '../../vendor/player/index';
 import gachaPool from '../../config/gachaPool.json';
 import type { GameSession } from '../../core/Session';
-import { createEmptyGrid } from '../../core/Session';
+
 import { SaveSystem } from '../../core/SaveSystem';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import type { PhysicsConfig } from '../../vendor/player/core/types';
@@ -1006,10 +1006,6 @@ export class GachaOverlay {
 
       if (isNew) {
         s.allies.roster.push(picked.id);
-        if (!s.inventories.allies) s.inventories.allies = {};
-        if (!s.inventories.allies[picked.id]) {
-          s.inventories.allies[picked.id] = createEmptyGrid(3, 2);
-        }
       }
       if (picked.rarity === 6) s.gacha.pityCounter = 0;
     }

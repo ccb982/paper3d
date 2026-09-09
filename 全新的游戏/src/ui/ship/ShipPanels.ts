@@ -44,7 +44,6 @@ export class ActionPanel extends SidePanel<ActionPanelProps> {
         <div>  基地仓库: ${countItemsInGrid(inv.base)} 件</div>
         <div>  飞船仓库: ${countItemsInGrid(inv.ship)} 件</div>
         <div>  玩家背包: ${countItemsInGrid(inv.player)} 件</div>
-        <div>  队友背包: ${Object.keys(inv.allies).length} 人</div>
       </div>
       <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
         <div>🏆 藏品: ${s.relics.owned.length} 件 | 干员: ${s.allies.roster.length} 人</div>

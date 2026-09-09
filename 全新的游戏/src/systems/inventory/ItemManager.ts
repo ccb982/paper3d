@@ -12,6 +12,7 @@ import type { GameSession, InventoryGrid } from '../../core/Session';
 import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids } from '../../core/Session';
 import { ItemArchetype } from '../../core/ItemArchetype';
 import { type ItemEffectContext } from '../../core/ItemEffect';
+import { eventBus } from '../../core/EventBus';
 import itemsConfig from '../../config/items.json';
 
 export interface UseItemResult {
@@ -43,7 +44,6 @@ export class ItemManager {
 
   /** 添加物品到指定网格（自动堆叠） */
   addItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    if (layer === 'allies') return false;
     const arch = this.archetypes.get(itemId);
     if (!arch) return false;
     const grid = this.session.inventories[layer] as InventoryGrid;
@@ -53,7 +53,6 @@ export class ItemManager {
 
   /** 从指定网格移除物品 */
   removeItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    if (layer === 'allies') return false;
     const grid = this.session.inventories[layer] as InventoryGrid;
     if (!Array.isArray(grid)) return false;
     return removeItemFromGrid(grid, itemId, count);
@@ -66,7 +65,6 @@ export class ItemManager {
     itemId: string,
     count: number,
   ): boolean {
-    if (srcLayer === 'allies' || dstLayer === 'allies') return false;
     const arch = this.archetypes.get(itemId);
     if (!arch) return false;
     const src = this.session.inventories[srcLayer] as InventoryGrid;
@@ -77,7 +75,6 @@ export class ItemManager {
 
   /** 使用物品（核心逻辑：查原形 → 执行效果 → 扣减） */
   useItem(layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
-    if (layer === 'allies') return { success: false, message: '无法使用队友背包的物品' };
     const grid = this.session.inventories[layer] as InventoryGrid;
     if (!Array.isArray(grid) || !grid[row]?.[col]) {
       return { success: false, message: '物品不存在' };
@@ -105,7 +102,6 @@ export class ItemManager {
 
   /** 获取网格中所有物品列表（供 UI 渲染） */
   getItems(layer: keyof GameSession['inventories']): { itemId: string; stackSize: number; row: number; col: number }[] {
-    if (layer === 'allies') return [];
     const grid = this.session.inventories[layer] as InventoryGrid;
     const result: { itemId: string; stackSize: number; row: number; col: number }[] = [];
     if (!Array.isArray(grid)) return result;
@@ -120,7 +116,6 @@ export class ItemManager {
 
   /** 检查是否有足够空间 */
   hasSpace(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    if (layer === 'allies') return false;
     const arch = this.archetypes.get(itemId);
     if (!arch) return false;
     const grid = this.session.inventories[layer] as InventoryGrid;
@@ -149,6 +144,60 @@ export class ItemManager {
       description: arch.description,
       maxStack: arch.maxStack,
       color: arch.color,
+      deployable: arch.deployable,
     };
   }
+
+  /** 玩家背包中某物品的数量 */
+  hasItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return false;
+    let total = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell && cell.itemId === itemId) total += cell.stackSize;
+        if (total >= count) return true;
+      }
+    }
+    return false;
+  }
+
+  // ==================== ★ 友军部署（背包页面友军槽位） ====================
+
+  /** 物品是否可部署为友军（items.json deployable 标记） */
+  isDeployable(itemId: string): boolean {
+    return this.archetypes.get(itemId)?.deployable === true;
+  }
+
+  /** 部署：玩家背包移除 1 个可部署友军物品 → 占友军槽位（发事件，世界侧生成） */
+  deployAlly(itemId: string): boolean {
+    if (!this.isDeployable(itemId)) return false;
+    if (!Array.isArray(this.session.deployedAllies)) this.session.deployedAllies = [];
+    if (this.session.deployedAllies.length >= ALLY_SLOT_COUNT) return false;
+    if (!this.hasItem('player', itemId, 1)) return false;
+    if (!this.removeItem('player', itemId, 1)) return false;
+    this.session.deployedAllies.push(itemId);
+    eventBus.emit('ally_deploy', { itemId });
+    return true;
+  }
+
+  /** 卸载：友军槽位 → 放回玩家背包（发事件，世界侧回收） */
+  undeployAlly(slotIndex: number): boolean {
+    const list = this.session.deployedAllies;
+    if (!Array.isArray(list)) return false;
+    const id = list[slotIndex];
+    if (!id) return false;
+    list.splice(slotIndex, 1);
+    this.addItem('player', id, 1);
+    eventBus.emit('ally_undeploy', { itemId: id });
+    return true;
+  }
+
+  /** 已部署友军列表（按槽位序） */
+  getDeployedAllies(): string[] {
+    return Array.isArray(this.session.deployedAllies) ? this.session.deployedAllies : [];
+  }
 }
+
+/** ★ 友军槽位数（背包页面额外绘制；用户定调） */
+export const ALLY_SLOT_COUNT = 4;

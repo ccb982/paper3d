@@ -161,6 +161,8 @@ export class WorldMode implements IGameMode {
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
+  private allyDeployUnsub?: () => void;
+  private allyUndeployUnsub?: () => void;
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
   private waterPrev = new Map<
     CharacterBase,
@@ -394,7 +396,11 @@ export class WorldMode implements IGameMode {
     // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
     this.droneAsset = ctx.droneAsset ?? null;
     // ★ 玩家出生位置自动放一个无人机跟随（道具召唤保留，可再放）
-    if (this.droneAsset) this.spawnDroneNearPlayer();
+    if (this.droneAsset) {
+      // ★ 进入战场：按已部署友军数生成（背包友军槽位）
+      const deployed = this.itemManager?.getDeployedAllies?.().length ?? 0;
+      for (let i = 0; i < deployed; i++) this.spawnDroneNearPlayer();
+    }
 
     console.log(`[WorldMode] 进入战场，第 ${ctx.day} 天，HP ${ctx.combatStats.maxHp}`);
 
@@ -442,6 +448,13 @@ export class WorldMode implements IGameMode {
       // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出
       this.droneSummonUnsub = eventBus.on('drone_summon', () => {
         this.spawnDroneNearPlayer();
+      });
+      // ★ 友军槽位部署/卸载：背包拖入 → 生成，拖出 → 回收
+      this.allyDeployUnsub = eventBus.on('ally_deploy', () => {
+        if (this.droneAsset) this.spawnDroneNearPlayer();
+      });
+      this.allyUndeployUnsub = eventBus.on('ally_undeploy', () => {
+        this.despawnLastDrone();
       });
     });
   }
@@ -617,6 +630,10 @@ export class WorldMode implements IGameMode {
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
+    this.allyDeployUnsub?.();
+    this.allyDeployUnsub = undefined;
+    this.allyUndeployUnsub?.();
+    this.allyUndeployUnsub = undefined;
     for (const d of this.drones) d.dispose();
     this.drones = [];
     this.droneAsset = null;
@@ -1071,6 +1088,12 @@ export class WorldMode implements IGameMode {
     this.drones.push(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
+  }
+
+  /** ★ 回收最后一架无人机（背包友军槽位卸载时） */
+  private despawnLastDrone(): void {
+    const d = this.drones.pop();
+    d?.dispose();
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {

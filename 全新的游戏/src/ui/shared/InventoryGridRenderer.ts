@@ -32,6 +32,7 @@ export class InventoryGridRenderer {
    * @param onSlotClick 点击回调
    * @param cellSize 格子大小（px）
    * @param flashItemId 闪烁的物品 ID（拾取后高亮）
+   * @param opts.dragItemIds 这些物品的格子可拖拽（拖入友军槽位）
    */
   render(
     container: HTMLElement,
@@ -40,6 +41,7 @@ export class InventoryGridRenderer {
     onSlotClick?: (e: InventorySlotClickEvent) => void,
     cellSize = 48,
     flashItemId?: string,
+    opts?: { dragItemIds?: Set<string> },
   ): void {
     container.innerHTML = '';
     const rows = grid.length;
@@ -51,11 +53,16 @@ export class InventoryGridRenderer {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const slot = grid[r][c];
-        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick, flashItemId);
+        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick, flashItemId, opts?.dragItemIds);
         gridDiv.appendChild(cell);
       }
     }
     container.appendChild(gridDiv);
+  }
+
+  /** ★ 公开图标获取（友军槽位渲染用） */
+  getIcon(itemId: string): HTMLCanvasElement {
+    return this.iconRegistry.getIcon(itemId);
   }
 
   private createCell(
@@ -66,6 +73,7 @@ export class InventoryGridRenderer {
     col: number,
     onSlotClick?: (e: InventorySlotClickEvent) => void,
     flashItemId?: string,
+    dragItemIds?: Set<string>,
   ): HTMLElement {
     const el = document.createElement('div');
     el.style.cssText = [
@@ -111,6 +119,15 @@ export class InventoryGridRenderer {
       el.addEventListener('click', () => {
         onSlotClick?.({ layer, row, col, item: slot });
       });
+
+      // ★ 可部署友军：格子可拖拽 → 拖入友军槽位部署
+      if (dragItemIds?.has(slot.itemId)) {
+        el.draggable = true;
+        el.addEventListener('dragstart', (ev) => {
+          ev.dataTransfer?.setData('text/x-item', slot.itemId);
+          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+        });
+      }
     }
 
     return el;
