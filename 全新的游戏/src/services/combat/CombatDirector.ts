@@ -40,7 +40,7 @@ export class CombatDirector {
 
   constructor(private camera: CameraController | null) {
     this.unsubs.push(eventBus.on('damage', (p) => this.onDamage(p)));
-    this.unsubs.push(eventBus.on('killed', (p) => this.onKilled(p.target)));
+    this.unsubs.push(eventBus.on('killed', (p) => this.onKilled(p.target, p.source)));
   }
 
   private onDamage(p: DamagePayload): void {
@@ -52,11 +52,12 @@ export class CombatDirector {
     this.playSfx(isPlayer ? 'hurt' : p.crit ? 'crit' : 'hit');
   }
 
-  private onKilled(target: EntityBase): void {
+  private onKilled(target: EntityBase, source: EntityBase | null): void {
     if (target.entity.kind === 'player') return; // 玩家死亡走自己的结算演出
     const r = FEEL.killEnemy;
     renderManager.hitstop(r.hitstop, r.scale);
-    this.camera?.addKick(r.camKick);
+    // ★ 无人机击杀不抖镜头（用户定调：角色/子弹击杀照常冲击）——无人机 camp=neutral
+    if (source?.camp !== 'neutral') this.camera?.addKick(r.camKick);
     this.playSfx('kill');
   }
 

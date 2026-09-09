@@ -156,6 +156,11 @@ const IDENTITY_TRANSFORM = {
 /** 立牌初始朝向（yaw-only billboard 的 from 轴，与 FTXQuad/RtSamplerQuad 同约定） */
 const _Z_AXIS = new THREE.Vector3(0, 0, 1);
 
+/** ★ 反转时视觉右侧翅膀的内收量（画布比例；用户定调 2026-09-09）：
+ *  翅膀按 bbox 中心镜像换边后，落在 sprite 右侧的翅膀会稍显外飘，
+ *  再往身体方向内收该量。0.07 ≈ 画布宽 7%。 */
+const FLIP_TUCK = 0.079; // 0.07 + 2px + 2px（441 画布）/441
+
 export class DroneCompositeRender extends FxRendererBase {
   /** 画布世界宽（米；scale 传入） */
   private worldWidth = 1.2;
@@ -173,6 +178,8 @@ export class DroneCompositeRender extends FxRendererBase {
   private _tmpDir = new THREE.Vector3();
   private _tmpV = new THREE.Vector3();
   private _tmpQ = new THREE.Quaternion();
+  /** ★ 左右朝向：翻转向 → 翅膀交换左右侧（根部仍朝身体），身体各自镜像 */
+  private flipX = false;
   private _prevClearColor = new THREE.Color();
   private readonly vatFps = 30;
 
@@ -388,21 +395,29 @@ export class DroneCompositeRender extends FxRendererBase {
   override setPosition(x: number, y: number, z = 0): void {
     this._basePos.set(x, y, z);
     const kx = this.worldWidth / this.canvasW;
+    const fx = this.flipX ? -1 : 1;
     for (let i = 0; i < this.quads.length; i++) {
       const l = this.layout[i];
       if (!l) continue;
-      this.quads[i].setPosition(x + l.offX * kx * this.canvasW, y + l.offY * kx * this.canvasH, z);
+      // ★ 翅膀（i>0）朝另一面时交换左右侧：offX 取反（根部仍朝身体）
+      let off = i > 0 ? l.offX * fx : l.offX;
+      // ★ 反转时视觉右侧的翅膀内收（换边后外飘修正）
+      if (this.flipX && off > 0) off -= FLIP_TUCK;
+      this.quads[i].setPosition(x + off * kx * this.canvasW, y + l.offY * kx * this.canvasH, z);
     }
     for (const w of this.vatWings) {
-      w.quad.setPosition(x + w.offX * kx * this.canvasW, y + w.offY * kx * this.canvasH, z);
+      let off = w.offX * fx;
+      if (this.flipX && off > 0) off -= FLIP_TUCK;
+      w.quad.setPosition(x + off * kx * this.canvasW, y + w.offY * kx * this.canvasH, z);
     }
   }
 
   /** ★ 合成 billboard：三图层当同一立牌 —— 画布水平轴偏移随整机 yaw 旋转，
    *  画布竖直偏移（世界高）不变。这样相机绕飞时翅膀始终贴在身体两侧，
-   *  不会因固定世界偏移而脱开。 */
+   *  不会因固定世界偏移而脱开。翻转向时翅膀交换左右侧（offX 取反）。 */
   setBillboard(camera: THREE.Camera): void {
     const kx = this.worldWidth / this.canvasW;
+    const fx = this.flipX ? -1 : 1;
     const dir = this._tmpDir.copy(camera.position).sub(this._basePos);
     dir.y = 0;
     if (dir.lengthSq() > 1e-8) {
@@ -414,14 +429,18 @@ export class DroneCompositeRender extends FxRendererBase {
     for (let i = 0; i < this.quads.length; i++) {
       const l = this.layout[i];
       if (!l) continue;
-      const dx = l.offX * kx * this.canvasW;
+      let off = i > 0 ? l.offX * fx : l.offX;
+      if (this.flipX && off > 0) off -= FLIP_TUCK; // ★ 反转内收（同 setPosition）
+      const dx = off * kx * this.canvasW;
       const dy = l.offY * kx * this.canvasH;
       const ox = this._tmpV.set(dx, 0, 0).applyQuaternion(this._tmpQ);
       this.quads[i].setPosition(this._basePos.x + ox.x, this._basePos.y + dy, this._basePos.z + ox.z);
       this.quads[i].setBillboard(camera);
     }
     for (const w of this.vatWings) {
-      const dx = w.offX * kx * this.canvasW;
+      let off = w.offX * fx;
+      if (this.flipX && off > 0) off -= FLIP_TUCK; // ★ 反转内收（同 setPosition）
+      const dx = off * kx * this.canvasW;
       const dy = w.offY * kx * this.canvasH;
       const ox = this._tmpV.set(dx, 0, 0).applyQuaternion(this._tmpQ);
       w.quad.setPosition(this._basePos.x + ox.x, this._basePos.y + dy, this._basePos.z + ox.z);
@@ -430,6 +449,7 @@ export class DroneCompositeRender extends FxRendererBase {
   }
 
   override setFlip(flipX: boolean, flipY: boolean): void {
+    this.flipX = flipX;
     for (const q of this.quads) q.setFlip(flipX, flipY);
     for (const w of this.vatWings) w.quad.setFlip(flipX, flipY);
   }

@@ -10,6 +10,7 @@
 import type { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { applyDamage } from './DamagePipeline';
+import { eventBus } from '../../core/EventBus';
 import { BulletManager, type SpawnBulletOptions } from './BulletManager';
 
 /** 阵营类型 */
@@ -64,6 +65,8 @@ export function executeAttack(
         if (t === opts.source || t.camp === opts.camp) continue;
         if (Math.abs(t.position.y - opts.y) > 2) continue; // 高度过滤（不同层）
         const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
+        // ★ 近战伤害同样上事件（浮动数字/导演反馈与子弹一致——无人机/敌人近战可见）
+        eventBus.emit('damage', { target: t, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
         console.log(`[近战] ${t.constructor.name}${r.dodged ? '【闪避】' : r.crit ? '【暴击】' : ''} -${r.final}`);
       }
       break;
@@ -74,7 +77,8 @@ export function executeAttack(
       for (const t of targets) {
         if (t === opts.source || t.camp === opts.camp) continue;
         if (Math.abs(t.position.y - opts.y) > 3) continue;
-        applyDamage(opts.damage, opts.source, t, opts.dmgType);
+        const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
+        eventBus.emit('damage', { target: t, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
       }
       break;
     }

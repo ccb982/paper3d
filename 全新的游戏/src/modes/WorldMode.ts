@@ -412,6 +412,10 @@ export class WorldMode implements IGameMode {
       this.damageUnsub = eventBus.on('damage', (payload) => {
         const target = payload.target;
         const pos = target.position;
+        // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
+        const camP = this.camera!.position;
+        const dx = pos.x - camP.x, dz = pos.z - camP.z;
+        if (dx * dx + dz * dz > 20 * 20) return;
         // 将世界坐标投影到屏幕
         const vec = new THREE.Vector3(pos.x, pos.y + 1.0, pos.z);
         vec.project(this.camera!);

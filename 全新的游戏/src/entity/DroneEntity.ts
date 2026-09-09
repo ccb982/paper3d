@@ -34,6 +34,8 @@ const RETURN_DIST = 30;     // 与玩家距离非常远 → 强制返回（米�
 const RETURN_OK_DIST = 2.5; // 返回至多近算归队（米）
 const ATTACK_CD = 1.2;      // 挥击冷却（秒）
 const DRONE_DAMAGE = 12;    // 单次挥击伤害
+/** ★ 攻击瞄准高度：敌人身体（脚部 + 0.9m 躯干），不追脚、不擦角 */
+const ATTACK_AIM_Y = 0.9;
 
 export interface DroneOptions extends Omit<EntityBaseOptions, 'kind'> {
   /** 贴片放大（默认 1.2） */
@@ -63,6 +65,10 @@ export class DroneEntity extends EntityBase {
   private _beamEnd = new THREE.Vector3();
   /** 场景引用（攻击射线挂载） */
   private _sceneRef: THREE.Scene;
+  /** 左右朝向：上一帧位置（水平位移判向） */
+  private _lastX = 0;
+  private _lastZ = 0;
+  private _camRight = new THREE.Vector3();
 
   constructor(
     em: EntityManager,
@@ -123,23 +129,25 @@ export class DroneEntity extends EntityBase {
     return best;
   }
 
-  /** 平滑追踪（速度越大越跟手）；y 带地面高度钳制 + 正弦漂浮 */
-  private moveTo(dt: number, tx: number, ty: number, tz: number, speed: number): void {
+  /** 平滑追踪（速度越大越跟手）；y 带地面高度钳制 + 正弦漂浮。
+ *  minAir = 离地最小高度（跟随态 1.2m 高位悬浮；攻击态 0.5m 俯冲贴脚打） */
+  private moveTo(dt: number, tx: number, ty: number, tz: number, speed: number, minAir = 1.2): void {
     const p = this.entity.position;
     const k = Math.min(1, dt * speed);
     p.x += (tx - p.x) * k;
     p.z += (tz - p.z) * k;
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
-    const baseY = Math.max(ty, gy + 1.2);
+    const baseY = Math.max(ty, gy + minAir);
     p.y += (baseY + Math.sin(this.phase) * 0.18 - p.y) * Math.min(1, dt * speed);
   }
 
-  /** ★ 近战挥击（贴脸小范围；执行器内自动排除同阵营）+ 发射外红内白射线 */
+  /** ★ 近战挥击（贴脸小范围；执行器内自动排除同阵营）+ 发射外红内白射线。
+ *  瞄准点 = 敌人身体（脚部 + ATTACK_AIM_Y），不打脚不擦角 */
   private swing(t: EntityBase): void {
     executeAttack(this.em, null, {
       type: 'melee',
       source: this,
-      x: t.position.x, y: t.position.y, z: t.position.z,
+      x: t.position.x, y: t.position.y + ATTACK_AIM_Y, z: t.position.z,
       range: ATTACK_RANGE + 0.8,
       damage: DRONE_DAMAGE,
       camp: 'player',
@@ -186,7 +194,8 @@ export class DroneEntity extends EntityBase {
         if (!this.targetAlive(t)) { this.target = null; this.aiState = 'follow'; break; }
         const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
         if (Math.hypot(dx, dz) <= ATTACK_RANGE) { this.aiState = 'attack'; break; }
-        this.moveTo(dt, t!.position.x, t!.position.y, t!.position.z, 7);
+        // ★ 悬停高度 = 敌人身体（脚部 + 0.9），水平飞近，不俯冲追脚
+        this.moveTo(dt, t!.position.x, t!.position.y + ATTACK_AIM_Y, t!.position.z, 7);
         break;
       }
       case 'attack': {
@@ -194,15 +203,15 @@ export class DroneEntity extends EntityBase {
         if (!this.targetAlive(t)) { this.target = null; this.aiState = 'return'; break; }
         const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
         const d = Math.hypot(dx, dz);
-        // 拉近到攻击圈内（攻击范围小 → 必须贴脸）
+        // 拉近到攻击圈内（攻击范围小 → 必须贴脸；身体高度）
         if (d > ATTACK_RANGE) {
-          this.moveTo(dt, t!.position.x, t!.position.y, t!.position.z, 8);
+          this.moveTo(dt, t!.position.x, t!.position.y + ATTACK_AIM_Y, t!.position.z, 8);
         } else {
-          // 圈内：绕目标缓慢环绕（不重叠、不静止）
+          // 圈内：绕目标缓慢环绕（不重叠、不静止；身体高度）
           const a = this.phase * 0.6;
           const ox = t!.position.x + Math.cos(a) * 1.0;
           const oz = t!.position.z + Math.sin(a) * 1.0;
-          this.moveTo(dt, ox, t!.position.y, oz, 2);
+          this.moveTo(dt, ox, t!.position.y + ATTACK_AIM_Y, oz, 2);
         }
         // 挥击冷却
         this.attackCd -= dt;
@@ -221,11 +230,11 @@ export class DroneEntity extends EntityBase {
       }
     }
 
-    // ★ 攻击射线推进：起点 = 无人机，终点 = 目标（目标已死则停在最后落点）
+    // ★ 攻击射线推进：起点 = 无人机，终点 = 目标身体（脚部 + ATTACK_AIM_Y；目标已死则停在最后落点）
     if (this.beam) {
       const end = this._beamEnd;
       if (this.target && this.targetAlive(this.target)) {
-        end.set(this.target.position.x, this.target.position.y, this.target.position.z);
+        end.set(this.target.position.x, this.target.position.y + ATTACK_AIM_Y, this.target.position.z);
       }
       const done = this.beam.update(
         dt,
@@ -238,11 +247,25 @@ export class DroneEntity extends EntityBase {
         this.beam = null;
       }
     }
+
+    // ★ 左右两个方向的朝向：水平位移投影到相机 right → 向左翻转 / 向右正立
+    //   （镜像两态；静止保持上次朝向，不来回抖）
+    if (this.lastCamera) {
+      const vx = p.x - this._lastX, vz = p.z - this._lastZ;
+      this._lastX = p.x; this._lastZ = p.z;
+      if (Math.hypot(vx, vz) > 0.02) {
+        this._camRight.set(1, 0, 0).applyQuaternion(this.lastCamera.quaternion);
+        const along = vx * this._camRight.x + vz * this._camRight.z;
+        this.anim?.setFlipX(along < 0);
+      }
+    } else {
+      this._lastX = p.x; this._lastZ = p.z;
+    }
   }
 
-  /** 影子：无人机悬浮高，关闭贴地剪影 */
+  /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓） */
   protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
-    return null;
+    return { w: 0.8, h: 0.6, alpha: 0.32 };
   }
 
   override dispose(): void {
