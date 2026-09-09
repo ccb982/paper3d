@@ -97,8 +97,10 @@ const FRAGMENT_SHADER = /* glsl */ `
     }
     if (uUseFluid > 0.5) {
       vec4 fluid = texture2D(uFluidTex, texUV);
-      // ★ 不用 discard：残差平流到基础色=0 区域时 alpha 渐变衰减（<0.5），
-      //   discard 会丢掉流动痕迹 → 看不到残差流动。alpha 混合保留渐变
+      // ★ 全透明背景 discard（不写深度 → 水可透过贴片透明背景显示）：
+      //   残差流动痕迹是渐变 alpha（>0.02），不受影响——仅在 alpha≈0 的
+      //   纯背景处丢弃，保留"残差平流到基础色=0 区域"的流动表现。
+      if (fluid.a < 0.02) discard;
       gl_FragColor = fluid;
       return;
     }

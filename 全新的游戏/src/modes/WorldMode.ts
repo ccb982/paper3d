@@ -506,18 +506,20 @@ export class WorldMode implements IGameMode {
     }
 
     // --------------------------------------------------
-    // ★ 无人机跟随：悬浮在玩家侧上方（hoverTarget 由模式层驱动；先于实体管线，
-    //   保证本帧 syncRender 使用新位置）
-    //   摄像机坐标系：right = 画面右方向。为不挡视野，把无人机固定在角色左右侧
-    //   （沿相机 right 水平偏移），随相机旋转保持在侧旁，禁止贴到画面正中。
+    // ★ 无人机召唤 AI：喂跟随目标（玩家侧上方，沿相机 right 偏移防挡视野）与
+    //   玩家位置 → updateAI（跟随→锁定最近敌人→贴脸攻击→目标死/离太远返回重锁）
+    //   先于实体管线，保证本帧 syncRender 使用新位置。
     if (this.drone) {
       const dp = this.player.position;
       const frame = this.cameraCtrl.getFrame();
       const sideOff = 1.1;
-      this.drone.hoverTarget.x = dp.x + frame.right.x * sideOff;
-      this.drone.hoverTarget.z = dp.z + frame.right.z * sideOff;
-      this.drone.hoverTarget.y = dp.y + 2.2;
-      this.drone.flyTo(dt);
+      this.drone.followTarget.x = dp.x + frame.right.x * sideOff;
+      this.drone.followTarget.z = dp.z + frame.right.z * sideOff;
+      this.drone.followTarget.y = dp.y + 2.2;
+      this.drone.playerPos.x = dp.x;
+      this.drone.playerPos.y = dp.y;
+      this.drone.playerPos.z = dp.z;
+      this.drone.updateAI(dt);
     }
 
     // ---- 实体管线驱动 ----
