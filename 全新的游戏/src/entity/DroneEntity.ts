@@ -43,6 +43,9 @@ export class DroneEntity extends EntityBase {
     });
     this.camp = 'neutral';
     this.billboard = true;
+    // ★ 无人机豁免视锥裁剪 + 距离 LOD：LOD≥2 会冻结动画时间轴（FrameAnimatorBase.update），
+    //   双翼 VAT 连续时钟（localTime）随之停摆 → 必须全程满档
+    this.lodExempt = true;
     this.attachToScene(scene);
 
     // 按画布宽高比设贴片尺寸（宽 = baseSize；不压扁）

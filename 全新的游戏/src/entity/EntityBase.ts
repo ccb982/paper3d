@@ -190,6 +190,11 @@ export abstract class EntityBase {
    *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
   viewLod = 0;
 
+  /** ★ 视锥/LOD 豁免（主角/无人机/子弹等关键实体）：
+   *   renderAll 绕过梯形视锥裁剪，且始终 applyViewDistance(0) →
+   *   动画时间轴永不因 LOD≥2 冻结（含 VAT 连续时钟），不受距离/视野影响 */
+  lodExempt = false;
+
   /** ★ 渲染距离应用（renderAll 每帧传入；★ 实体不持有 LOD 状态——
    *   内部按距离表算级，联动动画/渲染管线响应。子类可覆写做表现降级） */
   applyViewDistance(distance: number): void {

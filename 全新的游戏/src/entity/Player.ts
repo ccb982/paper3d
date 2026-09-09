@@ -19,6 +19,8 @@ export class Player extends CharacterBase {
   ) {
     super(em, { ...opts, kind: 'player', asset });
     this.camp = 'player';
+    // ★ 主角豁免视锥裁剪 + 距离 LOD：动画永不因远距离/出视野冻结
+    this.lodExempt = true;
     this.attachToScene(scene);
     // bbox 映射（帧数据 → quad；★ 纹理已按 bbox 裁剪，尺寸 = bbox 尺寸，偏移归零，与 EnemyBase 一致）
     const source = asset as unknown as { frames: Array<{ bbox: { x: number; y: number; w: number; h: number } }> };

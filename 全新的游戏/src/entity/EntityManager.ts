@@ -105,21 +105,22 @@ export class EntityManager {
 
   /** ★ 渲染阶段：2D 梯形（相机视锥地面投影）内实体 → 距离分级 LOD →
    *   lod0-2 渲染（lod2 渐隐）、lod3 消失不渲染（架构 3.10）。
-   *   ★ 子弹排除在裁剪/LOD 之外：生命周期短（2s）+ 数量少 → 全量直接渲染
-   *   （不做梯形剔除/距离衰减，避免高速小物体被裁剪漏画） */
+   *   ★ lodExempt 实体（主角/无人机/子弹）绕过梯形视锥裁剪 + 距离 LOD：
+   *   始终 applyViewDistance(0) 全量渲染——动画（含 VAT 连续时钟）不受
+   *   距离/视野影响；子弹另因生命周期短+数量少需免裁避免高速漏画 */
   renderAll(camera: Parameters<EntityBase['render']>[0]): void {
     const cam = camera.position;
     for (const base of this.raster.queryFrustum(camera as Parameters<EntityBase['render']>[0], LOD_MAX_DIST)) {
-      if (base.entity.kind === 'bullet') continue; // 子弹走全量渲染
+      if (base.lodExempt) continue; // 豁免实体走下方全量渲染
       const dx = base.position.x - cam.x;
       const dz = base.position.z - cam.z;
       const d = Math.hypot(dx, dz);
       base.applyViewDistance(d);
       if (levelForDistance(d) < 3) base.render(camera);
     }
-    // ★ 子弹：全量渲染（不裁剪、不 LOD 衰减）
+    // ★ 豁免实体：全量渲染（不裁剪、不 LOD 衰减）
     for (const base of this.bases.values()) {
-      if (base.entity.kind !== 'bullet') continue;
+      if (!base.lodExempt) continue;
       base.applyViewDistance(0);
       base.render(camera);
     }

@@ -110,6 +110,8 @@ export class BulletEntity extends EntityBase {
     });
     this.camp = opts.camp;
     this.physicsMode = 'read'; // 物理飞行 → 位置读回
+    // ★ 子弹豁免视锥裁剪 + 距离 LOD：高速小物体被裁剪漏画 + 生命周期短
+    this.lodExempt = true;
     // ★ 初始即失活（入池状态）：退出管线 + 藏到地图外
     this.deactivate();
   }
