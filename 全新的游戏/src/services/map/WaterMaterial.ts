@@ -7,6 +7,11 @@
 //       - 顶点位移：L0/L1 高度+choppy 滚动采样（世界连续，跨 chunk 无缝）
 //       - 片元法线/焦散/泡沫：L1/L2 层世界法线叠加
 //       - 菲涅尔 + 程序化天空反演 + Blinn 太阳高光
+//   · ★ 距离 LOD 环（《水体管线架构.md》§1 播放/静态层；2026-09-09 落地）：
+//       uLodNear(12m) 内 = 三实例 FFT 全量；近→远 smoothstep 渐隐：
+//         顶点丢 L1/L2 采样 + 波高/choppy/激荡乘 lodW → 55m 外波高 0（静态基准面）；
+//         片元丢 n1/n2 法线级联，泡沫/波形交替高光消隐。纯 shader 零几何改动，
+//         无边跳变（宽 43m 渐变带 + border 顶点本就不参与位移）。
 //   · 坑水帘/斜边（deep<0）与 boss4D 水幕/漂浮保持原管线（旧解析波动）。
 //   · 一个全局共享实例喂所有 chunk（材质不参与地形分发）；防 chunk 重建误杀：
 //     userData.decorShared = true（ChunkManager.disposeVisual 跳过 shared 释放）。
@@ -144,6 +149,8 @@ const WATER_VERT = /* glsl */ `
   uniform vec3 uAmp;          // 每层高度幅度
   uniform vec3 uChop;         // 每层 choppy 位移幅度
   uniform vec3 uTriPeriod;    // 每层 A/B 交叠周期（s）
+  uniform float uLodNear;     // ★ 距离 LOD 近界（m；内 = 全量三实例）
+  uniform float uLodFar;      // ★ 距离 LOD 远界（m；外 = 静态基准面，波高→0）
 
   uniform sampler2D uHD0A; uniform sampler2D uHD0B;
   uniform sampler2D uHD1A; uniform sampler2D uHD1B;
@@ -212,23 +219,33 @@ const WATER_VERT = /* glsl */ `
     }
     vec4 wp = modelMatrix * vec4(pos, 1.0);
     vWorld = wp.xyz;
+    // ★ 距离 LOD 环（《水体管线架构.md》§1；smoothstep 无缝，无跳变）：
+    //   近界内 = 1（三实例 FFT 全量）→ 远界外 = 0（波高/choppy/激荡全灭，静态基准面）
+    float camDist = length(cameraPosition - wp.xyz);
+    float lodW = 1.0 - smoothstep(uLodNear, uLodFar, camDist);
     float wv = 0.0;
     if (isNotRoof > 0.5 && isFall <= 0.5 && uHasOcean > 0.5 && border < 0.5) {
       // ★ 水面（deep=0）内部顶点：预计算 FFT 位移（世界 uv，跨 chunk 无缝）
       //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
       vec2 uv0 = wp.xz / uLayerScale.x + uScrollDir * (uTime * uSpeed.x);
-      vec2 uv1 = wp.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
-      vec2 uv2 = wp.xz / uLayerScale.z + uScrollDir * (uTime * uSpeed.z);
       vec4 a = hdLayer0(uv0, uTime);
-      vec4 b = hdLayer1(uv1, uTime);
-      vec4 c = hdLayer2(uv2, uTime);
-      float h = a.r * uAmp.x * 0.5 + b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.08;
-      vec2 disp = a.gb * uChop.x + b.gb * uChop.y + c.gb * uChop.z * 0.7;
-      wp.x += disp.x * uChopScale;
-      wp.z += disp.y * uChopScale;
-      wp.y += h * uAmpScale * 5.0;
-      // ★ 局部落水剧烈波动（角色入水/炮弹近水；叠加在 FFT 涌浪上）
-      wp.y += impactAgitation(wp.xz, uTime);
+      float h = a.r * uAmp.x * 0.5;
+      vec2 disp = a.gb * uChop.x;
+      // ★ 中远距离丢 L1/L2（细节波对远处不可见；省 2/3 顶点采样）
+      if (lodW > 0.25) {
+        vec2 uv1 = wp.xz / uLayerScale.y + uScrollDir * (uTime * uSpeed.y);
+        vec2 uv2 = wp.xz / uLayerScale.z + uScrollDir * (uTime * uSpeed.z);
+        vec4 b = hdLayer1(uv1, uTime);
+        vec4 c = hdLayer2(uv2, uTime);
+        h += b.r * uAmp.y * 0.45 + c.r * uAmp.z * 0.08;
+        disp += b.gb * uChop.y + c.gb * uChop.z * 0.7;
+      }
+      wp.x += disp.x * uChopScale * lodW;
+      wp.z += disp.y * uChopScale * lodW;
+      // ★ 远界外波高 fade 到 0（静态基准面；近界内全量）
+      wp.y += h * uAmpScale * 5.0 * lodW;
+      // ★ 局部落水剧烈波动（角色入水/炮弹近水；远处衰减 → 幻游不见/近处叠加）
+      wp.y += impactAgitation(wp.xz, uTime) * lodW;
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
@@ -252,6 +269,8 @@ const WATER_FRAG = /* glsl */ `
   uniform vec3 uSunDir;
   uniform float uTime;
   uniform float uMaxDeep;
+  uniform float uLodNear;
+  uniform float uLodFar;
   uniform vec2 uScrollDir;
   uniform vec3 uLayerScale;
   uniform vec3 uSpeed;
@@ -363,18 +382,24 @@ const WATER_FRAG = /* glsl */ `
       float fpA = length(dq), fpB = length(dqv);
       float fpShade = sqrt(max(fpA * fpB, 1e-5));   // 各向同性等效足印
 
+      // ★ 距离 LOD 环（与顶点同档；远处丢 L1/L2 法线级联 + 泡沫/高光衰减）
+      float fragLodW = 1.0 - smoothstep(uLodNear, uLodFar, length(cameraPosition - vWorld));
+
       // --- 法线：多尺度斜率叠加（几何法线包底，保持"面"的连续性）---
-      vec3 n0 = norm(uN0A, uN0B, uv0, w0);   // L0 涌浪：大尺度斜率
-      vec3 n1 = norm(uN1A, uN1B, uv1, w1);   // L1 主波
-      vec3 n2 = norm(uN2A, uN2B, uv2, w2);   // L2 细节
-      // 微面放大：位移幅度小 → 烘焙法线退接近 (0,1,0)，放大水平分量让波面明暗随波浪变化
+      vec3 n0 = norm(uN0A, uN0B, uv0, w0);   // L0 涌浪：大尺度斜率（全距离保留）
+      vec3 n1 = vec3(0.0), n2 = vec3(0.0);
+      float hasDetail = step(0.25, fragLodW);
+      if (hasDetail > 0.5) {
+        n1 = norm(uN1A, uN1B, uv1, w1);   // L1 主波
+        n2 = norm(uN2A, uN2B, uv2, w2);   // L2 细节
+      }
       vec3 N3raw = n0 + n1 + n2;
       vec3 N3 = normalize(vec3(N3raw.x * 4.5, N3raw.y, N3raw.z * 4.5));
       // footprint 越大 → 保留几何法线越多（远处不抖、不花）
       float geoW = clamp(fpShade * 0.5, 0.0, 1.0);
       N = normalize(mix(N3, vNormal, geoW * 0.18));
 
-      // ★ 局部落水波动斜率并入法线（波动区的反光/波光随之剧烈晃动）
+      // ★ 局部落水波动斜率并入法线（波动区的反光/波光随之剧烈晃动；远距离衰减）
       {
         float impE = 0.08;
         vec2 impWp = vWorld.xz;
@@ -383,7 +408,7 @@ const WATER_FRAG = /* glsl */ `
         float hb = impactAgitation(impWp - vec2(0.0, impE), uTime);
         float hf = impactAgitation(impWp + vec2(0.0, impE), uTime);
         vec2 impSlope = vec2((hl - hr) / impE, (hb - hf) / impE);
-        N = normalize(vec3(N.x + impSlope.x * 0.5, N.y, N.z + impSlope.y * 0.5));
+        N = normalize(vec3(N.x + impSlope.x * 0.5 * fragLodW, N.y, N.z + impSlope.y * 0.5 * fragLodW));
       }
 
       // --- 粗糙度（Cox-Munk）：每个 cascade 丢失的细节 → mss ---
@@ -446,7 +471,7 @@ const WATER_FRAG = /* glsl */ `
       float carved = foamMask * (0.10 + windy * 1.0);
       float foam = smoothstep(onset, onset + 0.15, carved);
       foam *= 0.4 + 0.6 * smoothstep(0.35, 2.2, fpShade);       // 近处少量可见
-      refracted = mix(refracted, vec3(0.93, 0.96, 0.985) * (uAmbientColor * 1.1 + uSunColor * 0.45 * uSunDay), foam * 0.35);
+      refracted = mix(refracted, vec3(0.93, 0.96, 0.985) * (uAmbientColor * 1.1 + uSunColor * 0.45 * uSunDay), foam * 0.35 * fragLodW);
 
       // --- 程序化天空反演（含太阳盘；粗粗糙度越大反射越糊）---
       vec3 Rf = reflect(-V, N);
@@ -472,8 +497,9 @@ const WATER_FRAG = /* glsl */ `
       float Vis = smithGGXCorrelated(NoV, NoL, mssA);
       float Fs = 0.02 + 0.98 * pow(1.0 - VoH, 5.0);
       float spec = D * Vis * Fs * NoL;
-      color += uSunColor * spec * 16.0 * uSunDay;
-      // 波浪朝向变化的高频波光（L1/L2 法线），波纹形状明显
+      // ★ 距离 LOD：近场全量（基波 + 波形交替波光）；远场只留基波，波形交替高光渐隐
+      color += uSunColor * spec * 16.0 * uSunDay * (0.5 + 0.5 * fragLodW);
+      // 波浪朝向变化的高频波光（L1/L2 法线），波纹形状明显（远场 hasDetail=0 自然归零）
       color += uSunColor * spec * 6.0 * uSunDay * pow(max(dot(n1, L), 0.5), 2.0);
       color += uSunColor * spec * 4.0 * uSunDay * pow(max(dot(n2, L), 0.5), 3.0);
 
@@ -508,6 +534,9 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uSunDir: { value: new THREE.Vector3(-0.342, 1.0, 0.940).normalize() },
         uTime: { value: 0 },
         uMaxDeep: { value: WATER_MAX_DEEP },
+        // ---- 距离 LOD 环（§1 播放层/静态层；12m 内全量，55m 外静态基准面）----
+        uLodNear: { value: 12 },
+        uLodFar: { value: 55 },
         // ---- FFT 海况场 ----
         uHasOcean: { value: 1 },
         uScrollDir: { value: new THREE.Vector2(0.35, 0.94).normalize() },
