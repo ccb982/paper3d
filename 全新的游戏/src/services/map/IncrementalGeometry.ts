@@ -395,3 +395,83 @@ function buildNoPatchTop(table: FaceTable, src: BlockSource): FaceGeometry {
 function buildNoPatchWall(table: FaceTable, src: BlockSource): FaceGeometry {
   return buildWallGeometry(table, src);
 }
+
+// ============================================================
+// ★ 分区地面切分（2026-09-09）：物理按 grid×grid 空间分区（默认 3×3=9 块），
+// 挖坑只重建受影响分区（提前返回，其余不动）。教训（§17.8）：225 个 4m 小块 +
+// 预算队列 = 每帧 1 块 → 失败；此处 grid×grid（9 块）全同步创建，规避该坑。
+// ============================================================
+
+/** 分区网格数（每轴）；grid×grid 个物理分区 collider */
+export const PHYS_GRID = 3;
+
+/**
+ * ★ 把整 chunk 顶面+侧壁切成 grid×grid 个分区 trimesh（slot = pcz*grid+pcx）。
+ * 布局按输出 fine 掩码推导（受影响 cell 恒 fine、基座可能 coarse → 增量输出
+ * 偏移后移，不能拿基座布局切）。每分区 = 若干 4m 块（各自 16 cell + 4 壁边）
+ * 的字节拼接、索引重定基分区局部。cells 缺省 = 全部分区；增量只发受影响分区。
+ */
+export function partitionGroundCells(
+  top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array,
+  grid: number, cells?: number[] | null,
+): { slot: number; vertices: Float32Array; indices: Uint32Array }[] {
+  const tl = topLayout(fineE);
+  const wl = wallLayout(fineE);
+  const list = cells ?? Array.from({ length: grid * grid }, (_, i) => i);
+  const out: { slot: number; vertices: Float32Array; indices: Uint32Array }[] = [];
+  for (const slot of list) {
+    const pcx = slot % grid, pcz = Math.floor(slot / grid);
+    const bx0 = Math.floor((pcx * BPS) / grid), bx1 = Math.floor(((pcx + 1) * BPS) / grid);
+    const bz0 = Math.floor((pcz * BPS) / grid), bz1 = Math.floor(((pcz + 1) * BPS) / grid);
+    // ---- 总量：本分区所有 4m 块的 16 cell + 4 壁边 ----
+    let vCount = 0, iCount = 0;
+    for (let bz = bz0; bz < bz1; bz++) {
+      for (let bx = bx0; bx < bx1; bx++) {
+        for (let lz = bz * 4; lz < bz * 4 + 4; lz++) {
+          for (let lx = bx * 4; lx < bx * 4 + 4; lx++) {
+            const c = lz * N + lx;
+            vCount += tl.v[c];
+            iCount += fineE[c] ? TOP_FINE_TRI * 3 : TOP_COARSE_TRI * 3;
+          }
+        }
+        for (let dir = 0; dir < 4; dir++) {
+          const s = (bz * BPS + bx) * 4 + dir;
+          vCount += wl.v[s];
+          iCount += (wl.v[s] / 4) * 6;
+        }
+      }
+    }
+    if (vCount === 0) continue;
+    const vertices = new Float32Array(vCount * 3);
+    const indices = new Uint32Array(iCount);
+    let vi = 0, ii = 0;
+    const emitCell = (lx: number, lz: number): void => {
+      const c = lz * N + lx;
+      const vs = tl.vPre[c] * 3, vc = tl.v[c] * 3;
+      vertices.set(top.vertices.subarray(vs, vs + vc), vi * 3);
+      const is = tl.iPre[c], ic = fineE[c] ? TOP_FINE_TRI * 3 : TOP_COARSE_TRI * 3;
+      for (let k = 0; k < ic; k++) indices[ii + k] = top.indices[is + k] - tl.vPre[c] + vi;
+      vi += tl.v[c];
+      ii += ic;
+    };
+    const emitSide = (bx: number, bz: number, dir: number): void => {
+      const s = (bz * BPS + bx) * 4 + dir;
+      const vs = wl.vPre[s] * 3, vc = wl.v[s] * 3;
+      vertices.set(wall.vertices.subarray(vs, vs + vc), vi * 3);
+      const is = wl.iPre[s], ic = (wl.v[s] / 4) * 6;
+      for (let k = 0; k < ic; k++) indices[ii + k] = wall.indices[is + k] - wl.vPre[s] + vi;
+      vi += wl.v[s];
+      ii += ic;
+    };
+    for (let bz = bz0; bz < bz1; bz++) {
+      for (let bx = bx0; bx < bx1; bx++) {
+        for (let lz = bz * 4; lz < bz * 4 + 4; lz++) {
+          for (let lx = bx * 4; lx < bx * 4 + 4; lx++) emitCell(lx, lz);
+        }
+        for (let dir = 0; dir < 4; dir++) emitSide(bx, bz, dir);
+      }
+    }
+    out.push({ slot, vertices, indices });
+  }
+  return out;
+}

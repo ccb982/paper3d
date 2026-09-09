@@ -9,14 +9,16 @@
 // ============================================================
 
 import { buildFaceTable } from "./FaceTable";
+import { CHUNK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import {
   buildTopGeometry,
   buildWallGeometry,
   buildLevelOverlay,
   topFineCells,
+  topFineCellsFor,
   type FaceGeometry,
 } from "./FaceBuild";
-import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks } from "./IncrementalGeometry";
+import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
@@ -28,6 +30,13 @@ import {
 export interface GeomBounds {
   minY: number;
   maxY: number;
+}
+
+/** ★ 物理分区 trimesh（slot = pcz*grid+pcx；grid 默认 3×3=9 分区） */
+export interface PatchGroundCell {
+  slot: number;
+  vertices: Float32Array;
+  indices: Uint32Array;
 }
 
 /** Worker ↔ 主线程传输的几何结果（typed arrays；buffer 可 transfer） */
@@ -55,6 +64,8 @@ export interface PatchGeomRaw {
   };
   /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《水体管线架构.md》） */
   water: WaterSurfaceRaw;
+  /** ★ 物理分区（全量构建 = 全部 grid²；增量构建 = 受影响分区 → 主线程只换这些） */
+  cells: PatchGroundCell[];
   /** ★ y 范围（Worker 单遍扫出 → 主线程解析构造包围球；创建/原地更新共用） */
   topBounds: GeomBounds;
   wallBounds: GeomBounds;
@@ -89,10 +100,12 @@ export function computeTableGeometry(
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz) : undefined;
   const table = buildFaceTable(src, cx, cz);
-  let top: FaceGeometry, wall: FaceGeometry;
+  let top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array;
   if (patch) {
     const inc = incrementalGeometry(seed, cx, cz, table, src, patch, masks ?? undefined);
     top = inc.top; wall = inc.wall;
+    // ★ 分区布局 = 输出 fine 掩码（补丁强制 fine 区∪基座 fine 区）
+    fineE = topFineCellsFor(table, src, patch);
     if (INCREMENTAL_SELF_CHECK) {
       const fTop = buildTopGeometry(table, src, patch);
       const fWall = buildWallGeometry(table, src, patch);
@@ -105,6 +118,7 @@ export function computeTableGeometry(
     }
   } else {
     const baseFine = topFineCells(table, src);
+    fineE = baseFine;
     top = buildTopGeometry(table, src);
     wall = buildWallGeometry(table, src);
     seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall); // 播种基座缓存
@@ -113,6 +127,9 @@ export function computeTableGeometry(
     table, src, patch,
     patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
   );
+  // ★ 物理分区：全量 = 全部 grid²；增量 = 受影响 1m cell 掩码 → 所属分区（提前返回，
+  //   只输出命中分区，主线程只换这些 collider —— 顶点焊接跨界已由 ±1 环掩码覆盖）
+  const cells = partitionGroundCells(top, wall, fineE, PHYS_GRID, deriveAffectedCells(masks, PHYS_GRID));
   return {
     top: {
       vertices: top.vertices,
@@ -134,9 +151,30 @@ export function computeTableGeometry(
       topTriCount: wall.topTriCount,
     },
     water,
+    cells,
     topBounds: yBoundsOf(top.vertices),
     wallBounds: yBoundsOf(wall.vertices),
   };
+}
+
+/** ★ 受影响 1m cell 掩码（top，已含补丁∪1 圈）→ 所属物理分区 slot（null = 全部分区） */
+const N = CHUNK_SIZE;
+const BPS = BLOCKS_PER_SIDE;
+function deriveAffectedCells(
+  masks?: { top: Uint8Array; side: Uint8Array } | null,
+  grid = PHYS_GRID,
+): number[] | null {
+  if (!masks) return null;
+  const set = new Set<number>();
+  for (let lz = 0; lz < N; lz++) {
+    for (let lx = 0; lx < N; lx++) {
+      if (!masks.top[lz * N + lx]) continue;
+      const bx = lx >> 2, bz = lz >> 2; // 4m 块
+      const pcx = Math.floor((bx * grid) / BPS), pcz = Math.floor((bz * grid) / BPS);
+      set.add(pcz * grid + pcx);
+    }
+  }
+  return [...set];
 }
 
 /** 顶点数组 y 范围（单遍扫；空数组 = {0,0}） */

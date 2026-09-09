@@ -864,4 +864,15 @@ export interface ChunkGroundHost {
   destroyGround(id: number): void;
   /** 为装饰实体创建 fixed cuboid 碰撞体（世界坐标；返回可销毁的 id，null=不支持） */
   createPropBody?(x: number, y: number, z: number, r: number, h: number): number | null;
+  /** ★ 分区地面：每 chunk 一个刚体 + grid×grid 个 trimesh 分区 collider（全部同步建） */
+  createGroundCells?(cx: number, cz: number, cells: GroundCellGeom[]): number | null;
+  /** ★ 挖坑增量：只原位换受影响分区的 collider（O(受影响分区)，不重建整 chunk） */
+  updateGroundCell?(id: number, slot: number, vertices: Float32Array, indices: Uint32Array): void;
+}
+
+/** ★ 地面分区 trimesh（slot = pcz*grid+pcx；每分区含若干 4m 块） */
+export interface GroundCellGeom {
+  slot: number;
+  vertices: Float32Array;
+  indices: Uint32Array;
 }

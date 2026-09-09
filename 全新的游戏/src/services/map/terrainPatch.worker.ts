@@ -46,6 +46,7 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
   push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
   push(r.water.deep); push(r.water.spin); push(r.water.indices);
+  for (const c of r.cells) { push(c.vertices); push(c.indices); } // ★ 物理分区
   return out;
 }
 
