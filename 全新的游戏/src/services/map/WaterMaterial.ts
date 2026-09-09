@@ -3,7 +3,8 @@
 // ============================================================
 // 语义（《水体管线架构.md》§4）：
 //   · 静止基面几何（WaterSurface）由本材质做着色/动画；水位=0，顶点 y 即世界高。
-//   · 表面（deep>=0）：预计算 FFT 海况场（WaterFFT，3 层 × 2 相位变体）
+//   · 表面（deep>=0）：预计算 FFT 海况场（WaterFFT，3 层 × 2 相位变体；
+//       烘焙在 oceanBake worker 后台跑，主线程只打包 DataTexture——加载期不卡）
 //       - 顶点位移：L0/L1 高度+choppy 滚动采样（世界连续，跨 chunk 无缝）
 //       - 片元法线/焦散/泡沫：L1/L2 层世界法线叠加
 //       - 菲涅尔 + 程序化天空反演 + Blinn 太阳高光
@@ -24,9 +25,10 @@ import { registerWallLightTarget, unregisterWallLightTarget } from "./TerrainMat
 import { WATER_MAX_DEEP } from "./WaterSurface";
 import type { WaterSurfaceRaw } from "./WaterSurface";
 import { bakeOceanField, defaultOceanParams, DEFAULT_OCEAN_LAYERS, type OceanBakeParams, type OceanTile } from "./WaterFFT";
+import { oceanBaker } from "./OceanBaker";
 
 // ------------------------------------------------------------
-// 预计算 FFT 贴图（启动烘焙一次；HalfFloat + Linear 采样可行于 WebGL2）
+// 预计算 FFT 贴图（启动烘焙一次；Worker 后台跑 FFT，主线程只打包 DataTexture）
 // ------------------------------------------------------------
 const OCEAN_SEED = 12345; // 海况确定性种子
 
@@ -50,17 +52,19 @@ function halfFloatTexture(
   return tex;
 }
 
-/**
- * 全量烘焙并生成材质贴图：
- * 每层每变体 → texHD（RGBA：r=h，g=dx，b=dz）+ texN（RGB：世界法线）。
- */
-function bakeOceanTextures(
-  params: OceanBakeParams,
-): {
+interface OceanTextures {
   hdA: THREE.Texture[]; hdB: THREE.Texture[];
   nA: THREE.Texture[]; nB: THREE.Texture[];
-} {
-  const tiles = bakeOceanField(params);
+}
+
+/**
+ * 全量烘焙并生成材质贴图：
+ * FFT 字节来自 OceanBaker（oceanBake worker）；主线程只做 HalfFloat DataTexture 打包。
+ * Worker 不可用/故障 → 主线程同步 bakeOceanField 同源回退（字节一致）。
+ */
+async function bakeOceanTextures(params: OceanBakeParams): Promise<OceanTextures> {
+  let tiles = await oceanBaker.bake(params.seed);
+  if (!tiles) tiles = bakeOceanField(params);
   const hdA: THREE.Texture[] = [], hdB: THREE.Texture[] = [];
   const nA: THREE.Texture[] = [], nB: THREE.Texture[] = [];
   for (const layer of tiles) {
@@ -96,12 +100,22 @@ function bakeOceanTextures(
   }
 }
 
-let oceanTextures: ReturnType<typeof bakeOceanTextures> | null = null;
-function ensureOceanTextures(): ReturnType<typeof bakeOceanTextures> {
-  if (!oceanTextures) {
-    oceanTextures = bakeOceanTextures(defaultOceanParams(OCEAN_SEED));
-  }
-  return oceanTextures;
+/** 占位 1×1 纹理：烘焙就绪前喂给 uniform 槽（shader 以 uHasOcean=0 门控跳采样） */
+function placeholderTexture(): THREE.DataTexture {
+  const tex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 1]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+let oceanTextures: OceanTextures | null = null;
+let oceanTexturesPending: Promise<OceanTextures> | null = null;
+async function ensureOceanTextures(): Promise<OceanTextures> {
+  if (oceanTextures) return oceanTextures;
+  oceanTexturesPending ??= bakeOceanTextures(defaultOceanParams(OCEAN_SEED)).then((p) => {
+    oceanTextures = p;
+    return p;
+  });
+  return oceanTexturesPending;
 }
 
 // ------------------------------------------------------------
@@ -524,8 +538,10 @@ const WATER_FRAG = /* glsl */ `
 
 /** 全局共享水体材质（所有 chunk 共用一份；透明 pass renderOrder=10） */
 export class WaterMaterial extends THREE.ShaderMaterial {
+  private disposed = false;
+
   constructor() {
-    const tex = ensureOceanTextures();
+    const blank = placeholderTexture();
     super({
       uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
         uAmbientColor: { value: new THREE.Color(0x9aa8c4).multiplyScalar(0.65) },
@@ -537,8 +553,8 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         // ---- 距离 LOD 环（§1 播放层/静态层；12m 内全量，55m 外静态基准面）----
         uLodNear: { value: 12 },
         uLodFar: { value: 55 },
-        // ---- FFT 海况场 ----
-        uHasOcean: { value: 1 },
+        // ---- FFT 海况场（烘焙在 worker 后台；就绪前 uHasOcean=0 = 静态基面）----
+        uHasOcean: { value: 0 },
         uScrollDir: { value: new THREE.Vector2(0.35, 0.94).normalize() },
         uLayerScale: { value: new THREE.Vector3(16, 6, 1.5) },
         uSpeed: { value: new THREE.Vector3(0.14, 0.28, 0.5) },
@@ -548,12 +564,12 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         uTriPeriod: { value: new THREE.Vector3(11.0, 8.0, 5.0) },
         uTexelCount: { value: new THREE.Vector3(64, 128, 128) },
         uWindSpeed: { value: 5.0 },
-        uHD0A: { value: tex.hdA[0] }, uHD0B: { value: tex.hdB[0] },
-        uHD1A: { value: tex.hdA[1] }, uHD1B: { value: tex.hdB[1] },
-        uHD2A: { value: tex.hdA[2] }, uHD2B: { value: tex.hdB[2] },
-        uN0A: { value: tex.nA[0] }, uN0B: { value: tex.nB[0] },
-        uN1A: { value: tex.nA[1] }, uN1B: { value: tex.nB[1] },
-        uN2A: { value: tex.nA[2] }, uN2B: { value: tex.nB[2] },
+        uHD0A: { value: blank }, uHD0B: { value: blank },
+        uHD1A: { value: blank }, uHD1B: { value: blank },
+        uHD2A: { value: blank }, uHD2B: { value: blank },
+        uN0A: { value: blank }, uN0B: { value: blank },
+        uN1A: { value: blank }, uN1B: { value: blank },
+        uN2A: { value: blank }, uN2B: { value: blank },
         uAmpScale: { value: 1.0 },
         uChopScale: { value: 1.0 },
         // ---- 局部落水剧烈波动（空槽 w=-99）----
@@ -574,9 +590,29 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     });
     this.userData.decorShared = true; // ChunkManager.disposeVisual 跳过（全局共享）
     registerWallLightTarget(this);
+    void this.loadOceanTextures(); // 非阻塞：FFT 在 worker，就绪后热插纹理（uHasOcean 翻 1）
+  }
+
+  /** 海况场就绪后热插 12 张 FFT 贴图（字节全部来自 OceanBaker worker） */
+  private async loadOceanTextures(): Promise<void> {
+    try {
+      const tex = await ensureOceanTextures();
+      if (this.disposed) return;
+      const u = this.uniforms;
+      u.uHD0A.value = tex.hdA[0]; u.uHD0B.value = tex.hdB[0];
+      u.uHD1A.value = tex.hdA[1]; u.uHD1B.value = tex.hdB[1];
+      u.uHD2A.value = tex.hdA[2]; u.uHD2B.value = tex.hdB[2];
+      u.uN0A.value = tex.nA[0]; u.uN0B.value = tex.nB[0];
+      u.uN1A.value = tex.nA[1]; u.uN1B.value = tex.nB[1];
+      u.uN2A.value = tex.nA[2]; u.uN2B.value = tex.nB[2];
+      u.uHasOcean.value = 1;
+    } catch (e) {
+      console.error("[WaterMaterial] 海况场烘焙失败：水面保持静态基面", e);
+    }
   }
 
   override dispose(): void {
+    this.disposed = true;
     unregisterWallLightTarget(this);
     super.dispose();
   }
