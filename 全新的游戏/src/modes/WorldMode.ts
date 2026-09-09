@@ -19,6 +19,7 @@ import { EntityManager } from '../entity/EntityManager';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
+import { droneFollowOffset } from '../services/fx/DroneFormation';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
@@ -154,8 +155,8 @@ export class WorldMode implements IGameMode {
   /** ★ killed 事件订阅：杂兵死亡 → 从 enemies 列表移除 */
   private killedUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
-  /** ★ 可露希尔的无人机召唤物（无刚体悬浮体；使用道具触发，退出时销毁） */
-  private drone: DroneEntity | null = null;
+  /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁） */
+  private drones: DroneEntity[] = [];
   /** ★ 无人机素材（特效包/纯纹理包；enter 存入上下文引用） */
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
@@ -510,20 +511,23 @@ export class WorldMode implements IGameMode {
     }
 
     // --------------------------------------------------
-    // ★ 无人机召唤 AI：喂跟随目标（玩家侧上方，沿相机 right 偏移防挡视野）与
-    //   玩家位置 → updateAI（跟随→锁定最近敌人→贴脸攻击→目标死/离太远返回重锁）
+    // ★ 无人机编队 AI：按编队槽位 3D 分布跟随（左右交替/高度错层/前后错落，
+    //   远离准星正前方），各自 updateAI（跟随→锁定最近敌人→贴脸攻击→返回重锁）
     //   先于实体管线，保证本帧 syncRender 使用新位置。
-    if (this.drone) {
+    if (this.drones.length > 0) {
       const dp = this.player.position;
       const frame = this.cameraCtrl.getFrame();
-      const sideOff = 1.1;
-      this.drone.followTarget.x = dp.x + frame.right.x * sideOff;
-      this.drone.followTarget.z = dp.z + frame.right.z * sideOff;
-      this.drone.followTarget.y = dp.y + 2.2;
-      this.drone.playerPos.x = dp.x;
-      this.drone.playerPos.y = dp.y;
-      this.drone.playerPos.z = dp.z;
-      this.drone.updateAI(dt, this.camera);
+      for (let i = 0; i < this.drones.length; i++) {
+        const d = this.drones[i];
+        const off = droneFollowOffset(i, frame);
+        d.followTarget.x = dp.x + frame.right.x * off.r + frame.forward.x * off.f;
+        d.followTarget.z = dp.z + frame.right.z * off.r + frame.forward.z * off.f;
+        d.followTarget.y = dp.y + off.up;
+        d.playerPos.x = dp.x;
+        d.playerPos.y = dp.y;
+        d.playerPos.z = dp.z;
+        d.updateAI(dt, this.camera);
+      }
     }
 
     // ---- 实体管线驱动 ----
@@ -613,8 +617,8 @@ export class WorldMode implements IGameMode {
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
-    this.drone?.dispose();
-    this.drone = null;
+    for (const d of this.drones) d.dispose();
+    this.drones = [];
     this.droneAsset = null;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
@@ -1056,16 +1060,15 @@ export class WorldMode implements IGameMode {
     }
   }
 
+  /** ★ 生成一架无人机（追加进编队；道具可多次使用 → 多机编队） */
   private spawnDroneNearPlayer(): void {
     if (!this.scene || !this.player || !this.droneAsset) return;
-    this.drone?.dispose();
     const p = this.player.position;
-    const asset = this.droneAsset;
-    const drone = new DroneEntity(this.entities, this.scene, asset, {
-      x: p.x, y: p.y + 2.0, z: p.z,
+    const drone = new DroneEntity(this.entities, this.scene, this.droneAsset, {
+      x: p.x + (Math.random() - 0.5) * 2, y: p.y + 2.0, z: p.z + (Math.random() - 0.5) * 2,
       scale: 1.2,
     });
-    this.drone = drone;
+    this.drones.push(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
   }

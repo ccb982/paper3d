@@ -23,6 +23,7 @@ import { DroneCompositeRender } from '../services/render/DroneCompositeRender';
 import { DroneBeamEffect } from '../services/render/DroneBeam';
 import { executeAttack } from '../services/combat/Attack';
 import { RasterMap } from '../services/map/RasterMap';
+import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
 
 /** 无人机 AI 状态 */
 export type DroneState = 'follow' | 'approach' | 'attack' | 'return';
@@ -265,7 +266,41 @@ export class DroneEntity extends EntityBase {
 
   /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓） */
   protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
-    return { w: 0.8, h: 0.6, alpha: 0.32 };
+    return { w: 1.1, h: 0.7, alpha: 0.32 };
+  }
+
+  /** ★ 剪影源：三层（主体+双翼）alpha 按各自 bbox 合成到整画布 →
+   *  影子包含翅膀，不再只有主体轮廓。一次性构建（引用稳定 → 零重采）。 */
+  private _shdBase: { width: number; height: number; data: Float32Array } | null = null;
+  protected override getShadowFrameData(): ShadowFrameSource | null {
+    const source = this.anim?.source as unknown as {
+      getFtxFrame?: (i: number) => { bbox: { x: number; y: number; w: number; h: number }; width?: number; height?: number } | null;
+      getFramePair?: (i: number) => { base?: { image?: unknown } } | null;
+    } | null;
+    if (!source?.getFtxFrame || !source.getFramePair) return null;
+    if (this._shdBase) return { base: this._shdBase };
+
+    const f0 = source.getFtxFrame(0);
+    if (!f0) return null;
+    // 画布尺寸（与渲染器同源：frame0 的 width/height）
+    const W = f0.width ?? 441, H = f0.height ?? 300;
+    const data = new Float32Array(W * H * 4);
+    for (let i = 0; i < 3; i++) {
+      const f = source.getFtxFrame(i);
+      const img = source.getFramePair(i)?.base?.image as { width?: number; height?: number; data?: Float32Array } | undefined;
+      if (!f || !img?.data) continue;
+      const bw = img.width ?? 0, bh = img.height ?? 0;
+      for (let y = 0; y < bh; y++) {
+        for (let x = 0; x < bw; x++) {
+          const a = img.data[(y * bw + x) * 4 + 3];
+          if (a <= 0.5) continue;
+          const px = f.bbox.x + x, py = f.bbox.y + y;
+          if (px >= 0 && py >= 0 && px < W && py < H) data[(py * W + px) * 4 + 3] = a;
+        }
+      }
+    }
+    this._shdBase = { width: W, height: H, data };
+    return { base: this._shdBase };
   }
 
   override dispose(): void {
