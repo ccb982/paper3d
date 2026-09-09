@@ -14,7 +14,6 @@ import type { ItemManager } from '../../systems/inventory/ItemManager';
 import type { CraftingManager, Recipe } from '../../systems/inventory/CraftingManager';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
-import { ScrollableModuleList } from '../shared/ScrollableModuleList';
 import { compositeFrameToCanvas } from '../shared/ftxFrameToCanvas';
 
 const HSL_VERT = `
@@ -51,18 +50,51 @@ const HSL_FRAG = `
   }
 `;
 
-// 加工台页面布局 JSON（下方换算均按"我的电脑屏幕大小"标注比例缩放）：
-//   layer_1 屏幕标注 bbox（底部 y=0 起）：x 0.000~0.999，y 0.0773~0.9207
-//   屏幕尺寸 = 宽 0.99923、高 0.84335（画布归一化）
-//   layer_3 六个"加工模块"标注包围盒：x 0.3568~0.9702，底部起 y 0.1989~0.8206
-// ➜ 映射到真实屏幕（宽除 screenW，高先减 screenY0 再除 screenH）：
-//   left = 0.3568 / 0.99923 = 35.70%
-//   width = 0.6134 / 0.99923 = 61.39%
-//   bottom(top of released) = (0.8206-0.0773)/0.84335 = 88.13% → CSS top = 11.87%
-//   height = (0.8206-0.0773)/0.84335 - (0.1989-0.0773)/0.84335 = 73.71%
-const MODULE_AREA = { x: 0.3570, w: 0.6139, topY: 0.1187, h: 0.7371 };
-const MODULE_COLUMNS = 2;
-const MODULE_ROWS = 3;
+// 加工台页面布局 JSON（2026-09-09 用户新画）：
+//   layer_1 = 屏幕标注（宽 0.99923 / 高 0.84335，底部起 y0=0.0773）
+//   layer_3 = 六个「加工模块」区域（x/y 归一化，y 从屏幕底部起）
+// ➜ CSS 换算：left = x/0.99923；top = 1-(y+h-0.0773)/0.84335；w/h 同除以屏宽高。
+// ★ 素材用 cover 渲染（裁剪不拉伸）→ 圆形图标保持圆，矩形照旧。
+const SCREEN = { w: 0.99923, h: 0.84335, y0: 0.0773 };
+/** 六个加工模块区（布局 JSON 阅读序：左列上→中→下，右列上→中→下） */
+const MODULE_SLOTS = [
+  { x: 0.3568, y: 0.6213, w: 0.3033, h: 0.1977 }, // 左-上
+  { x: 0.3568, y: 0.4116, w: 0.3042, h: 0.1947 }, // 左-中
+  { x: 0.3568, y: 0.1989, w: 0.3042, h: 0.1977 }, // 左-下
+  { x: 0.6643, y: 0.6213, w: 0.3050, h: 0.1992 }, // 右-上
+  { x: 0.6651, y: 0.4101, w: 0.3033, h: 0.1977 }, // 右-中
+  { x: 0.6651, y: 0.1989, w: 0.3050, h: 0.1962 }, // 右-下
+];
+/** ★ 加工模块内部模板（drawing-export-2026-09-09：真实标注，页面坐标、y 底部起）：
+ *   frame = 模块框（素材底图铺这里，cover 不拉伸）；其余元素相对页面锚定 */
+const MODULE_TEMPLATE = {
+  frame: { b: 0.731, t: 0.821 },
+  outIcon: { x: 0.358, b: 0.660, w: 0.116, h: 0.124 }, // 被合成物品（输出图标）
+  outName: { x: 0.383, b: 0.629, w: 0.065, h: 0.025 }, // 被合成物品名字
+  mats: [
+    { icon: { x: 0.470, b: 0.679, w: 0.057, h: 0.071 }, cnt: { x: 0.487, b: 0.629, w: 0.026, h: 0.025 } }, // 原材料1 + 数量
+    { icon: { x: 0.527, b: 0.676, w: 0.067, h: 0.076 }, cnt: { x: 0.548, b: 0.629, w: 0.025, h: 0.025 } }, // 原材料2 + 数量
+    { icon: { x: 0.595, b: 0.682, w: 0.058, h: 0.063 }, cnt: { x: 0.606, b: 0.628, w: 0.032, h: 0.027 } }, // 原材料3 + 数量
+  ],
+};
+/** 槽位本身：页面坐标 → 屏幕 CSS（left/top/w/h） */
+function slotCss(s: { x: number; y: number; w: number; h: number }): string {
+  return [
+    `left:${(s.x / SCREEN.w) * 100}%`,
+    `top:${(1 - (s.y + s.h - SCREEN.y0) / SCREEN.h) * 100}%`,
+    `width:${(s.w / SCREEN.w) * 100}%`,
+    `height:${(s.h / SCREEN.h) * 100}%`,
+  ].join(';');
+}
+/** 槽位内页面坐标 → CSS（left/bottom 百分百） */
+function pageToCss(s: { x: number; y: number; w: number; h: number }, e: { x: number; b: number; w: number; h: number }): string {
+  return [
+    `left:${((e.x - s.x) / s.w) * 100}%`,
+    `bottom:${((e.b - s.y) / s.h) * 100}%`,
+    `width:${(e.w / s.w) * 100}%`,
+    `height:${(e.h / s.h) * 100}%`,
+  ].join(';');
+}
 
 export class CraftingOverlay {
   private root: HTMLDivElement;
@@ -77,8 +109,8 @@ export class CraftingOverlay {
   private bgMesh: THREE.Mesh | null = null;
   private moduleBgDataURL = '';
 
-  private moduleViewport: HTMLDivElement;
-  private moduleList: ScrollableModuleList;
+  /** 六个加工模块槽位（布局 JSON 定位） */
+  private moduleSlots: HTMLButtonElement[] = [];
   private quantityPanel: HTMLDivElement;
   private quantityRecipe: Recipe | null = null;
   private quantityValue = 1;
@@ -113,13 +145,19 @@ export class CraftingOverlay {
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-    this.moduleViewport = this.buildModuleViewport();
-    this.moduleList = new ScrollableModuleList({
-      columns: MODULE_COLUMNS,
-      gap: 8,
-    });
-    this.moduleViewport.appendChild(this.moduleList.element);
-    this.root.appendChild(this.moduleViewport);
+    // ★ 六个固定加工模块槽位（布局 JSON 区域；素材 cover 不拉伸 → 圆保持圆）
+    for (const slot of MODULE_SLOTS) {
+      const btn = document.createElement('button');
+      btn.style.cssText = [
+        'position:absolute', slotCss(slot),
+        'border:none', 'cursor:pointer', 'padding:0',
+        'border-radius:8px', 'overflow:hidden',
+        'background:rgba(20,20,40,0.35)',
+        'pointer-events:auto',
+      ].join(';');
+      this.moduleSlots.push(btn);
+      this.root.appendChild(btn);
+    }
 
     this.quantityPanel = this.buildQuantityPanel();
 
@@ -135,23 +173,6 @@ export class CraftingOverlay {
     this.root.appendChild(closeBtn);
 
     window.addEventListener('resize', this.onResize);
-  }
-
-  // ============================================================
-  // 模块列表容器（按 JSON 包围盒定位，屏幕坐标 Y 翻转）
-  // ============================================================
-
-  private buildModuleViewport(): HTMLDivElement {
-    const el = document.createElement('div');
-    el.style.cssText = [
-      'position:absolute',
-      `left:${MODULE_AREA.x * 100}%`,
-      `top:${MODULE_AREA.topY * 100}%`,
-      `width:${MODULE_AREA.w * 100}%`,
-      `height:${MODULE_AREA.h * 100}%`,
-      'z-index:200', 'pointer-events:auto',
-    ].join(';');
-    return el;
   }
 
   // ============================================================
@@ -294,7 +315,10 @@ export class CraftingOverlay {
       }
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:10px;';
-      row.appendChild(this.iconRegistry.getIcon(input.itemId));
+      const iconCanvas = this.iconRegistry.getIcon(input.itemId);
+      iconCanvas.style.width = '32px';
+      iconCanvas.style.height = '32px';
+      row.appendChild(iconCanvas);
       const arch = this.itemManager.getArchetype(input.itemId);
       const needTotal = input.count * this.quantityValue;
       const ok = have >= needTotal;
@@ -392,118 +416,101 @@ export class CraftingOverlay {
       this.bgMesh?.position.set(0.5, 0.5 / aspect, 0);
     }
     this.camera.updateProjectionMatrix();
-
-    // 模块行高：3 行均分可用高度
-    const gap = 8;
-    const cellH = (this.moduleViewport.clientHeight - gap * (MODULE_ROWS - 1)) / MODULE_ROWS;
-    this.moduleList.setRowHeight(cellH);
   }
 
   // ============================================================
-  // 模块列表构建（每个配方一个加工模块，按序添加）
+  // 模块列表构建（真配方 → 六个槽位；素材 cover 保持圆形图标不变形）
   // ============================================================
 
   private renderModuleList(): void {
-    this.moduleList.clear();
     const recipes = this.craftingManager.getAvailableRecipes(this.station);
-    for (const r of recipes) {
-      this.moduleList.append(this.buildModuleEntry(r));
+    for (let i = 0; i < this.moduleSlots.length; i++) {
+      this.moduleSlots[i].replaceChildren();
+      if (i < recipes.length) {
+        this.fillModuleSlot(this.moduleSlots[i], recipes[i]);
+      } else {
+        // 空槽位：仅显示素材底框（无内容、不可点）
+        this.moduleSlots[i].style.backgroundImage = this.moduleBgDataURL ? `url(${this.moduleBgDataURL})` : '';
+        this.moduleSlots[i].style.backgroundSize = 'cover';
+        this.moduleSlots[i].style.backgroundPosition = 'center';
+        this.moduleSlots[i].style.pointerEvents = 'none';
+        this.moduleSlots[i].onclick = null;
+      }
     }
   }
 
-  private buildModuleEntry(r: Recipe): HTMLButtonElement {
-    const btn = document.createElement('button');
-    btn.style.cssText = [
-      'position:relative', 'border:none', 'cursor:pointer', 'padding:0',
-      'border-radius:10px', 'overflow:hidden',
-      'display:flex', 'flex-direction:column',
-      'align-items:center', 'justify-content:center',
-      'color:#fff', 'font-weight:bold',
-      'background:rgba(20,20,40,0.85)',
-      this.moduleBgDataURL ? `background-image:url(${this.moduleBgDataURL});background-size:100% 100%;` : '',
+  /** ★ 真实模块模板：按 drawing-export 标注放置 输出图标/名字/原材料图标/数量 */
+  private fillModuleSlot(btn: HTMLButtonElement, r: Recipe): void {
+    // 槽位自身即容器（页面坐标 = 槽位坐标），元素按模板相对槽位定位
+    const slot = MODULE_SLOTS[this.moduleSlots.indexOf(btn)] ?? MODULE_SLOTS[0];
+    btn.style.backgroundImage = '';
+    btn.style.pointerEvents = 'auto';
+
+    // ---- 模块框：素材底图 cover 铺满框带（不拉伸 → 圆图标保持圆） ----
+    const frame = document.createElement('div');
+    frame.style.cssText = [
+      'position:absolute',
+      pageToCss(slot, { x: slot.x, b: MODULE_TEMPLATE.frame.b, w: slot.w, h: MODULE_TEMPLATE.frame.t - MODULE_TEMPLATE.frame.b }),
+      this.moduleBgDataURL ? `background-image:url(${this.moduleBgDataURL});` : '',
+      'background-size:cover', 'background-position:center',
+      'pointer-events:none',
     ].join(';');
-    btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.85'; });
-    btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+    btn.appendChild(frame);
+
+    // ---- 输出（被合成物品图标 + 名字） ----
+    const out = document.createElement('div');
+    out.style.cssText = [
+      'position:absolute', pageToCss(slot, MODULE_TEMPLATE.outIcon),
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'pointer-events:none',
+    ].join(';');
+    const outIcon = this.iconRegistry.getIcon(r.output.itemId);
+    outIcon.style.cssText = 'width:92%;height:92%;object-fit:contain;';
+    out.appendChild(outIcon);
+    btn.appendChild(out);
 
     const name = document.createElement('div');
     name.textContent = r.name;
     name.style.cssText = [
-      'position:absolute', 'top:6px', 'left:50%', 'transform:translateX(-50%)',
-      'font-size:14px', 'text-shadow:1px 1px 2px rgba(0,0,0,0.8)',
+      'position:absolute', pageToCss(slot, MODULE_TEMPLATE.outName),
+      'display:flex', 'align-items:center', 'justify-content:center',
+      'font-size:1vw', 'font-weight:bold', 'white-space:nowrap', 'overflow:hidden',
+      'color:#fff', 'text-shadow:1px 1px 2px rgba(0,0,0,0.9)',
+      'pointer-events:none',
     ].join(';');
     btn.appendChild(name);
 
-    // 材料 DOM 叠加：图标 + 需求数量（此处先粗略排布，后续按 JSON 精细绘制）
-    const mats = document.createElement('div');
-    mats.style.cssText = [
-      'position:absolute', 'bottom:20px', 'left:50%', 'transform:translateX(-50%)',
-      'display:flex', 'gap:6px',
-    ].join(';');
-    for (const input of r.inputs) {
-      const icon = document.createElement('div');
-      icon.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:2px;';
+    // ---- 原材料图标 + 数量（配方不足 3 种则留空） ----
+    for (let i = 0; i < MODULE_TEMPLATE.mats.length; i++) {
+      const input = r.inputs[i];
+      if (!input) continue;
+      const t = MODULE_TEMPLATE.mats[i];
+      const iconEl = document.createElement('div');
+      iconEl.style.cssText = [
+        'position:absolute', pageToCss(slot, t.icon),
+        'display:flex', 'align-items:center', 'justify-content:center',
+        'pointer-events:none',
+      ].join(';');
       const cv = this.iconRegistry.getIcon(input.itemId);
-      cv.style.width = '26px';
-      cv.style.height = '26px';
-      icon.appendChild(cv);
-      const cnt = document.createElement('span');
-      cnt.textContent = `${input.count}`;
-      cnt.style.cssText = 'font-size:11px;text-shadow:1px 1px 2px rgba(0,0,0,0.8);';
-      icon.appendChild(cnt);
-      mats.appendChild(icon);
+      cv.style.cssText = 'width:92%;height:92%;object-fit:contain;';
+      iconEl.appendChild(cv);
+      btn.appendChild(iconEl);
+
+      const cntEl = document.createElement('div');
+      cntEl.textContent = `${input.count}`;
+      cntEl.style.cssText = [
+        'position:absolute', pageToCss(slot, t.cnt),
+        'display:flex', 'align-items:center', 'justify-content:center',
+        'font-size:0.85vw', 'color:#fff', 'font-weight:bold',
+        'text-shadow:1px 1px 2px rgba(0,0,0,0.9)',
+        'pointer-events:none',
+      ].join(';');
+      btn.appendChild(cntEl);
     }
-    btn.appendChild(mats);
 
-    btn.addEventListener('click', () => this.openQuantityPanel(r));
-    return btn;
+    // onclick 单处理（重复渲染不累积监听器）
+    btn.onclick = () => this.openQuantityPanel(r);
   }
-
-  /** 占位加工模块：先填满 2×3 网格，再多追加若干以溢出可视区（检验滚动） */
-  private renderPlaceholderModules(): void {
-    this.moduleList.clear();
-    const visible = MODULE_COLUMNS * MODULE_ROWS;
-    const total = visible * 2;
-    for (let i = 0; i < total; i++) {
-      this.moduleList.append(this.buildPlaceholderEntry(i + 1));
-    }
-  }
-
-  private buildPlaceholderEntry(no: number): HTMLButtonElement {
-    const btn = document.createElement('button');
-    btn.style.cssText = [
-      'position:relative', 'border:none', 'cursor:pointer', 'padding:0',
-      'border-radius:10px', 'overflow:hidden',
-      'display:flex', 'flex-direction:column',
-      'align-items:center', 'justify-content:center',
-      'color:#fff', 'font-weight:bold',
-      'background:rgba(20,20,40,0.85)',
-      this.moduleBgDataURL ? `background-image:url(${this.moduleBgDataURL});background-size:100% 100%;` : '',
-    ].join(';');
-    btn.addEventListener('mouseenter', () => { btn.style.opacity = '0.85'; });
-    btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
-
-    const name = document.createElement('div');
-    name.textContent = `占位模块 ${no}`;
-    name.style.cssText = [
-      'font-size:16px', 'text-shadow:1px 1px 2px rgba(0,0,0,0.8)',
-    ].join(';');
-    btn.appendChild(name);
-
-    const hint = document.createElement('div');
-    hint.textContent = '待接入配方';
-    hint.style.cssText = [
-      'font-size:11px', 'opacity:0.55', 'margin-top:4px',
-    ].join(';');
-    btn.appendChild(hint);
-
-    btn.addEventListener('click', () => {
-      window.alert(`占位模块 ${no}：配方待接入`);
-    });
-    return btn;
-  }
-
-  /** 占位模式：仅显示占位模块（尚未接入真实配方） */
-  private placeholderOnly = true;
 
   // ============================================================
   // 显示/隐藏
@@ -512,12 +519,10 @@ export class CraftingOverlay {
   show(station: 'ship' | 'portable' = 'ship'): void {
     this.station = station;
     this.closeQuantityPanel();
-    // ★ 先显示 + 同步尺寸（保证模块区有真实 clientHeight 可算行高），
-    //   再渲染列表，避免条目在无行高时塌缩。
+    // ★ 先显示 + 同步尺寸（背景/槽位按真实屏幕比例定位），再渲染配方列表
     this.root.style.display = 'block';
     this.syncSize();
-    if (this.placeholderOnly) this.renderPlaceholderModules();
-    else this.renderModuleList();
+    this.renderModuleList();
     this.startTick();
   }
 
@@ -556,7 +561,7 @@ export class CraftingOverlay {
       this.scene.remove(this.bgMesh);
       this.bgMesh = null;
     }
-    this.moduleList.dispose();
+    this.moduleSlots = [];
     this.renderer.dispose();
     if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
   }
