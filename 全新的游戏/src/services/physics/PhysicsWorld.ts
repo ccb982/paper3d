@@ -68,9 +68,6 @@ export interface BodyOptions {
   ccd?: boolean;
   /** ★ 恢复系数（反弹：子弹打地面/墙弹起；默认 0 不弹） */
   restitution?: number;
-  /** ★ 分块地面 tile 槽位（4m 块 slot=bz*15+bx）：创建时即登记进 tile 记账，
-   *   后续 setTileCollider 可原位替换（挖坑增量不重建整块刚体） */
-  tileSlot?: number;
 }
 
 export interface CollisionEvent {
@@ -88,9 +85,6 @@ export class PhysicsWorld {
   /** ★ 自管刚体映射（绕过 rapier 坏 handle：id → RigidBody，id 不复用） */
   private bodyById = new Map<number, RAPIER.RigidBody>();
   private nextBodyId = 1;
-  /** ★ 分块地面 collider 记账（key = bodyId*1024+slot → Collider）；
-   *  同刚体多 trimesh collider，挖坑只换受影响 slot（O(块)，不重建整块） */
-  private tileColliders = new Map<number, RAPIER.Collider>();
 
   constructor(gravity: { x: number; y: number; z: number } = { x: 0, y: -9.8, z: 0 }) {
     this.world = new RAPIER.World(gravity);
@@ -110,15 +104,13 @@ export class PhysicsWorld {
     return this.bodyById.get(id) ?? null;
   }
 
-  /** 创建固定刚体（地面/墙/静态障碍；tileSlot = 分块地面首块登记） */
-  addFixed(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0, tileSlot?: number): number {
+  /** 创建固定刚体（地面/墙/静态障碍） */
+  addFixed(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0): number {
     const desc = RAPIER.RigidBodyDesc.fixed().setTranslation(position.x, position.y, position.z);
     desc.userData = userData; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    const col = this.attachCollider(body, shape);
-    const id = this.registerBody(body);
-    if (tileSlot !== undefined) this.tileColliders.set(id * 1024 + tileSlot, col);
-    return id;
+    this.attachCollider(body, shape);
+    return this.registerBody(body);
   }
 
   /** 创建运动学刚体（角色/敌人：位置 100% 代码驱动，推挤 dynamic，不受力/重力） */
@@ -154,33 +146,14 @@ export class PhysicsWorld {
     return this.registerBody(body);
   }
 
-  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number, restitution?: number): RAPIER.Collider {
+  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number, restitution?: number): void {
     const desc = makeColliderDesc(shape);
     if (sensor) desc.setSensor(true);
     if (density !== undefined) desc.setDensity(density);
     if (restitution !== undefined) desc.setRestitution(restitution);
     // ★ 碰撞事件（默认 NONE → 事件从不产生；子弹命中/拾取/碰撞分发全部依赖）
     desc.setActiveEvents(ActiveEvents.COLLISION_EVENTS);
-    return this.world.createCollider(desc, body);
-  }
-
-  /**
-   * ★ 分块地面原位换 collider（挖坑增量核心）：同刚体内移除旧 slot collider、
-   * 建新 trimesh collider。O(受影响块) —— 不再销毁/重建整块地面刚体。
-   * key = bodyId*1024+slot（slot ≤ 224 < 1024；bodyId 全局自增不复用）。
-   */
-  setTileCollider(bodyId: number, slot: number, vertices: Float32Array, indices: Uint32Array): void {
-    const body = this.getBody(bodyId);
-    if (!body) return;
-    const key = bodyId * 1024 + slot;
-    const old = this.tileColliders.get(key);
-    if (old) {
-      this.world.removeCollider(old, true);
-      this.tileColliders.delete(key);
-    }
-    const desc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-    desc.setActiveEvents(ActiveEvents.COLLISION_EVENTS);
-    this.tileColliders.set(key, this.world.createCollider(desc, body));
+    this.world.createCollider(desc, body);
   }
 
   /** 强制设刚体位置（初始位置修正/边界同步） */
@@ -194,10 +167,6 @@ export class PhysicsWorld {
   removeBody(id: number): void {
     const body = this.getBody(id);
     if (!body) { return; }
-    // ★ 名下分块 collider 记账清理（removeRigidBody 会带走 collider，这里只清映射）
-    for (const key of [...this.tileColliders.keys()]) {
-      if (Math.floor(key / 1024) === id) this.tileColliders.delete(key);
-    }
     this.world.removeRigidBody(body);
     this.bodyById.delete(id);
   }

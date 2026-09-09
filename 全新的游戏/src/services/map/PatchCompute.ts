@@ -9,29 +9,20 @@
 // ============================================================
 
 import { buildFaceTable } from "./FaceTable";
-import { BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import {
   buildTopGeometry,
   buildWallGeometry,
   buildLevelOverlay,
   topFineCells,
-  topFineCellsFor,
   type FaceGeometry,
 } from "./FaceBuild";
-import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundTiles } from "./IncrementalGeometry";
+import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
   refineChunkSource,
   type ChunkDataLite,
 } from "./Refinements";
-
-/** ★ 物理 4m 分块 trimesh（slot = bz*15+bx；与 GroundTileGeom 结构一致） */
-export interface PatchGroundTile {
-  slot: number;
-  vertices: Float32Array;
-  indices: Uint32Array;
-}
 
 /** 几何 y 范围（Worker 单遍扫出；主线程解析构造包围球，免 O(n) 重扫） */
 export interface GeomBounds {
@@ -64,8 +55,6 @@ export interface PatchGeomRaw {
   };
   /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《水体管线架构.md》） */
   water: WaterSurfaceRaw;
-  /** ★ 物理 4m 分块（全量构建 = 全部 225 块；增量构建 = dirty±1 块环 → 主线程只换这些 slot） */
-  tiles: PatchGroundTile[];
   /** ★ y 范围（Worker 单遍扫出 → 主线程解析构造包围球；创建/原地更新共用） */
   topBounds: GeomBounds;
   wallBounds: GeomBounds;
@@ -100,12 +89,10 @@ export function computeTableGeometry(
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz) : undefined;
   const table = buildFaceTable(src, cx, cz);
-  let top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array;
+  let top: FaceGeometry, wall: FaceGeometry;
   if (patch) {
     const inc = incrementalGeometry(seed, cx, cz, table, src, patch, masks ?? undefined);
     top = inc.top; wall = inc.wall;
-    // ★ 物理 4m 分块布局 = 输出 fine 掩码（补丁强制 fine 区∪基座 fine 区）
-    fineE = topFineCellsFor(table, src, patch);
     if (INCREMENTAL_SELF_CHECK) {
       const fTop = buildTopGeometry(table, src, patch);
       const fWall = buildWallGeometry(table, src, patch);
@@ -118,7 +105,6 @@ export function computeTableGeometry(
     }
   } else {
     const baseFine = topFineCells(table, src);
-    fineE = baseFine;
     top = buildTopGeometry(table, src);
     wall = buildWallGeometry(table, src);
     seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall); // 播种基座缓存
@@ -127,9 +113,6 @@ export function computeTableGeometry(
     table, src, patch,
     patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
   );
-  // ★ 物理 4m 分块：全量 = 全部 225 块；增量 = dirty 块 ±1 环（主线程只换这些
-  //   slot 的 collider——顶点焊接跨界 + 壁边 owner 均被 ±1 环覆盖）
-  const tiles = partitionGroundTiles(top, wall, fineE, deriveTileBlocks(cx, cz, dirty));
   return {
     top: {
       vertices: top.vertices,
@@ -151,7 +134,6 @@ export function computeTableGeometry(
       topTriCount: wall.topTriCount,
     },
     water,
-    tiles,
     topBounds: yBoundsOf(top.vertices),
     wallBounds: yBoundsOf(wall.vertices),
   };
@@ -167,25 +149,6 @@ function yBoundsOf(vertices: Float32Array): GeomBounds {
   }
   if (minY === Infinity) { minY = 0; maxY = 0; }
   return { minY, maxY };
-}
-
-/** dirty 世界 4m 块 key → 本 chunk 内 slot 列表（±1 块环；null = 全部块） */
-function deriveTileBlocks(cx: number, cz: number, dirty?: number[] | null): number[] | null {
-  if (!dirty || dirty.length === 0) return null;
-  const BPS = BLOCKS_PER_SIDE;
-  const set = new Set<number>();
-  for (const k of dirty) {
-    const bx = Math.floor(k / 8192) - 4096, bz = (k % 8192) - 4096;
-    const lbx = bx - cx * BPS, lbz = bz - cz * BPS; // 世界块 → chunk 本地
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const x = lbx + dx, z = lbz + dz;
-        if (x < 0 || z < 0 || x >= BPS || z >= BPS) continue;
-        set.add(z * BPS + x);
-      }
-    }
-  }
-  return [...set];
 }
 
 /** 增量/全量逐字节对比（仅自检用） */

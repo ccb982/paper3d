@@ -68,7 +68,7 @@ export class EntityManager {
     };
     if (opts.physics && this.physicsWorld) {
       const handle = opts.physics.type === 'fixed'
-        ? this.physicsWorld.addFixed({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id, opts.physics.options.tileSlot)
+        ? this.physicsWorld.addFixed({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id)
         : opts.physics.type === 'kinematic'
           ? this.physicsWorld.addKinematic({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id)
           : this.physicsWorld.addDynamic({ x: opts.x, y: opts.y, z: opts.z }, { ...opts.physics.options, userData: id });
