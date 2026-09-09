@@ -1,12 +1,17 @@
 // ============================================================
 // DroneCompositeRender —— 无人机多图层复合渲染器（主体固定 + 双翼 VAT）
 // ============================================================
-// 可露希尔的无人机特效包三帧实为三图层（主体/左翅膀/右翅膀，共享同一画布）。
+// 可露希尔的无人机特效包三帧实为三图层（主体/左翅膀/右翅膀）。
 //   - 主体（frame_0，无区域实体）：FTXQuad 静态贴片
 //   - 左/右翅膀（frame_1/2，带区域实体+maskEffect）：★ 独立走播放器管线——
-//     用 renderFrameData 把区域实体（VAT 位移 + maskEffect 扭曲）渲到各自离屏 RT，
-//     再由世界里的 billboard quad 采样显示（与 MoonEffect→SkyDome 同范式）。
+//     按整块美术 bbox 重建矩形网格（作者画的小区域多边形会裁掉大半翅膀）
+//     → buildEntityMesh 建 VAT 网格（maskEffect 驱动顶点呼吸）
+//     → renderFrameData 渲到各自离屏 RT → 世界 billboard quad 采样
+//     （与 MoonEffect→SkyDome 同范式）。
 //   - VAT 连续时间取实体基类动画播放器（FrameAnimatorBase.localTime），不另造计时器。
+// ★ uv 恒等采样：播放器 base/residual 纹理本身已按 bbox 裁剪（尺=bbox.w×bbox.h），
+//   0..1 即整幅翅膀。绝不能沿用 Asset 的整画布基准 texBbox/frameSize 映射，
+//   否则采样区间被推到纹理边缘 → 翅膀跑到画布顶部/大面积偏移。
 // 三个图层同时显示（不做帧序切换）。
 // 画布坐标 → 世界：统一按 canvasW 宽比例缩放，像素保持方形。
 // ============================================================
@@ -186,9 +191,13 @@ export class DroneCompositeRender extends FxRendererBase {
   }
 
   /** ★ 区域实体 VAT 翅膀：离屏 RT + 覆盖该翼美术 bbox 的正交相机。
- *  ★ 网格用整块美术 bbox 矩形重建（作者画的小区域会被裁掉大半翅膀）：
- *    顶点数按播放器位移管线重建，maskEffect 原样驱动顶点呼吸；
- *    uv 映射为恒等（base 纹理本身按 bbox 裁剪，0..1 即整幅翅膀）。 */
+   *  ① 网格重建：作者画的小区域多边形只罩住翅膀下小半 → 按整块美术 bbox 矩形
+   *     ring（标注空间、首尾闭合）重建；顶点走播放器位移管线（buildDisplacementTextureData
+   *     + buildEntityMesh），maskEffect 原样驱动顶点呼吸，矩形随位移自然扑扇。
+   *  ② uv 恒等：base/residual 纹理按 bbox 裁剪 → texBbox/scale 组合 offset=(art.x/canvasW,
+   *     1-(art.y+art.h)/canvasH)、scale=(art.w/canvasW, art.h/canvasH)，vUv=(x,1-y) 归一化
+   *     到 0..1，与直接绘制 FTX 像素级一致。
+   *  ③ 相机窗口 = 美术 bbox（外扩 5%，VAT 呼吸不裁边）；RT 尺寸按窗口像素×1.5。 */
   private buildWingVat(
     scene: THREE.Scene,
     data: NonNullable<ReturnType<Asset['getFrameRenderData']>>,
@@ -196,11 +205,8 @@ export class DroneCompositeRender extends FxRendererBase {
     cx: number,
     cy: number,
   ): WingVatLayer | null {
-    const src = data.entities[0];
-    const ent = src.entity;
+    const ent = data.entities[0].entity;
     if (!ent?.boundary?.length) return null;
-    // src 仅用于各帧标记内容（当前仅 entity），无渲染依赖
-    void src;
 
     // ---- 整块美术 bbox 矩形（标注空间，含闭合顶点，与播放器 ring 约定一致） ----
     const x0 = art.x / this.canvasW;
