@@ -292,21 +292,21 @@ export class WorldMode implements IGameMode {
     const MOB_BLUEPRINTS: Omit<MobDef, 'asset'>[] = [
       {
         ai: ROCK_BUG_AI, hp: 22, defense: 0, attackPower: 0,
-        scale: 1.6, collisionScale: 1.1, pack: 4, weight: 3, // ★ 成群（慢速炮灰）
+        scale: 1.6, collisionScale: 1.1, pack: 4, weight: 1, // ★ 成群（慢速炮灰；2026-09-09 权重 3→1：单次仍一次生 4 只）
         drops: [{ itemId: 'polyester', chance: 0.35, min: 1, max: 1 }],
       },
       {
-        ai: REUNION_AI, hp: 130, defense: 6, attackPower: 2,
-        scale: 2, collisionScale: 1.25, pack: 1, weight: 2, // ★ 高防高血
+        ai: REUNION_AI, hp: 75, defense: 3, attackPower: 2,
+        scale: 2, collisionScale: 1.25, pack: 1, weight: 1, // ★ 中高防中血（2026-09-09 削：130/6 → 75/3；权重 2→1 平衡牢杰）
         drops: [
           { itemId: 'polyester', chance: 0.3, min: 1, max: 1 },
-          { itemId: 'device', chance: 0.5, min: 1, max: 1 },
+          { itemId: 'device', chance: 0.8, min: 1, max: 2 },
         ],
       },
       {
         ai: LAOJIE_AI, hp: 45, defense: 0, attackPower: 12,
-        scale: 2, collisionScale: 1.25, pack: 1, weight: 1, // ★ 高速高攻脆皮
-        drops: [{ itemId: 'device', chance: 0.7, min: 1, max: 2 }],
+        scale: 2, collisionScale: 1.25, pack: 1, weight: 2, // ★ 高速高攻脆皮（2026-09-09 权重 1→2：提高出现率）
+        drops: [{ itemId: 'device', chance: 0.95, min: 1, max: 3 }],
       },
     ];
     this.mobDefs = (ctx.enemyAssets ?? []).map((asset, i) => ({
