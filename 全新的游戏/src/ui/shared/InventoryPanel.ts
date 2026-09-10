@@ -51,6 +51,8 @@ export interface InventoryPanelOptions {
   /** 宿主弹窗栈操作（BaseInteractionUI.open/closePanel） */
   openPanel: (def: PanelDef) => void;
   closePanel: (id?: string) => void;
+  /** ★ 弹窗栈查询（详情是否仍在栈中；缺省视为未知=不启用"就地表刷新"保护） */
+  isPanelOpen?: (id: string) => boolean;
   /** 物品变更（使用/转移/丢弃）后宿主如何刷新 */
   onDataChanged: () => void;
 }
@@ -59,9 +61,40 @@ export class InventoryPanel {
   private gridRenderer: InventoryGridRenderer;
   /** 当前选中的层（跨渲染保持，转移/丢弃后仍停留在当前标签） */
   private currentLayer: keyof GameSession['inventories'] | null = null;
+  /** ★ 当前打开的详情坐标（背景拾取刷新时用于"就地刷新详情、不打断"） */
+  private openDetailRef: { layer: keyof GameSession['inventories']; row: number; col: number } | null = null;
+  /** ★ 就地刷新（同 id 关→开）期间抑制 onClose 的整面板刷新（避免重复重建背包） */
+  private suppressDetailCloseRefresh = false;
 
   constructor(private opts: InventoryPanelOptions) {
     this.gridRenderer = new InventoryGridRenderer(opts.itemManager, opts.iconRegistry);
+  }
+
+  /** ★ 详情弹窗是否仍打开（栈查询缺失时按本地记录近似） */
+  get isDetailOpen(): boolean {
+    if (!this.openDetailRef) return false;
+    return this.opts.isPanelOpen ? this.opts.isPanelOpen('item-detail') : true;
+  }
+
+  /**
+   * ★ 背景数据变化（如拾取新物品）时就地刷新详情：同 id 弹窗"关→开"仍居栈顶，
+   *   不打断当前查看；详情所属格已空（用完/转移）→ 关闭详情。
+   * @returns true = 详情已处理（调用方不要再整面板刷新）；false = 无详情可刷
+   */
+  refreshOpenDetail(): boolean {
+    const ref = this.openDetailRef;
+    if (!ref || !this.isDetailOpen) return false;
+    const grid = this.opts.session.inventories[ref.layer] as InventoryGrid;
+    const slot = grid?.[ref.row]?.[ref.col];
+    if (!slot) {
+      this.opts.closePanel('item-detail');
+      return false;
+    }
+    // 同 id 关→开：旧实例 onClose 会触发，期间抑制"整面板刷新"（详情仍居栈顶）
+    this.suppressDetailCloseRefresh = true;
+    this.openItemDetail(ref.layer, ref.row, ref.col);
+    this.suppressDetailCloseRefresh = false;
+    return true;
   }
 
   /** 当前选中的层（宿主可读取用于刷新指示） */
@@ -251,7 +284,11 @@ export class InventoryPanel {
       id: 'item-detail',
       title: slot.itemId,
       onOpen: () => {},
-      onClose: () => {},
+      // ★ 关闭时清坐标；真实关闭（非就地刷新）→ 借宿主刷新背包，把期间新拾取的物品补上格子
+      onClose: () => {
+        this.openDetailRef = null;
+        if (!this.suppressDetailCloseRefresh) this.opts.onDataChanged?.();
+      },
       render: () => {
         const div = document.createElement('div');
         div.className = CSS.panel;
@@ -347,6 +384,8 @@ export class InventoryPanel {
         return div;
       },
     });
+    // ★ openPanel 可能是"同 id 关→开"：旧实例 onClose 先清引用，这里最后落位
+    this.openDetailRef = { layer, row, col };
   }
 
   /** 丢弃确认弹窗 */

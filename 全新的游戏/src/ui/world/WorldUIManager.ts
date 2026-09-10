@@ -77,6 +77,7 @@ export class WorldUIManager extends BaseInteractionUI {
       },
       openPanel: (def) => this.openPanel(def),
       closePanel: (id) => this.closePanel(id),
+      isPanelOpen: (id) => this.panels.isOpen(id),
       onDataChanged: () => {
         if (this.isInventoryOpen) this.renderInventoryPanel();
       },
@@ -361,11 +362,12 @@ export class WorldUIManager extends BaseInteractionUI {
     this.mapStyleBtn = btn;
   }
 
-  /** 刷新背包面板（如果已打开） */
+  /** 刷新背包面板（如果已打开）；★ 正在查看物品详情时就地刷新详情，不打断——
+   *  详情关闭时（onClose → onDataChanged）再整面板刷新，把期间拾取的物品补上格子 */
   refreshIfOpen(): void {
-    if (this.isInventoryOpen) {
-      this.renderInventoryPanel();
-    }
+    if (!this.isInventoryOpen) return;
+    if (this.inventoryPanel.refreshOpenDetail()) return;
+    this.renderInventoryPanel();
   }
 
   /** 拾取反馈：标记新增格子闪烁 + 刷新背包（若已打开）——子弹掉落直塞背包时保证实时可见 */
