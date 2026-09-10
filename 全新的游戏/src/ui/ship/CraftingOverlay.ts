@@ -272,14 +272,8 @@ export class CraftingOverlay {
 
   private maxCraftable(r: Recipe): number {
     let max = Infinity;
-    const grid = this.session.inventories.player;
     for (const input of r.inputs) {
-      let have = 0;
-      for (const row of grid) {
-        for (const cell of row) {
-          if (cell && cell.itemId === input.itemId) have += cell.stackSize;
-        }
-      }
+      const have = this.itemManager.countTotal(input.itemId);
       max = Math.min(max, Math.floor(have / input.count));
     }
     return Math.max(0, max);
@@ -309,14 +303,8 @@ export class CraftingOverlay {
 
     const matEl = this.quantityPanel.querySelector('#craft-qty-materials') as HTMLDivElement;
     matEl.innerHTML = '';
-    const grid = this.session.inventories.player;
     for (const input of r.inputs) {
-      let have = 0;
-      for (const row of grid) {
-        for (const cell of row) {
-          if (cell && cell.itemId === input.itemId) have += cell.stackSize;
-        }
-      }
+      const have = this.itemManager.countTotal(input.itemId);
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:10px;';
       const iconCanvas = this.cloneIcon(input.itemId);

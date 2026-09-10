@@ -32,26 +32,17 @@ export class CraftingManager {
     return this.recipes.filter(r => r.station === station || r.station === 'ship');
   }
 
-  /** 检查玩家是否拥有足够材料 */
-  canCraft(recipeId: string, srcLayer: keyof GameSession['inventories']): boolean {
+  /** 检查是否拥有足够材料（★ 统计所有背包层：基地+飞船+玩家 的总数） */
+  canCraft(recipeId: string, _srcLayer: keyof GameSession['inventories']): boolean {
     const recipe = this.recipes.find(r => r.id === recipeId);
     if (!recipe) return false;
-    const grid = this.session.inventories[srcLayer];
-    if (!Array.isArray(grid)) return false;
-
-    const available = new Map<string, number>();
-    for (const row of grid) {
-      for (const cell of row) {
-        if (cell) available.set(cell.itemId, (available.get(cell.itemId) || 0) + cell.stackSize);
-      }
-    }
     for (const input of recipe.inputs) {
-      if ((available.get(input.itemId) || 0) < input.count) return false;
+      if (this.itemManager.countTotal(input.itemId) < input.count) return false;
     }
     return true;
   }
 
-  /** 执行合成 */
+  /** 执行合成（★ 扣料跨层：按 基地→飞船→玩家 顺序；产出放 dstLayer） */
   craft(
     recipeId: string,
     srcLayer: keyof GameSession['inventories'],
@@ -60,21 +51,25 @@ export class CraftingManager {
     const recipe = this.recipes.find(r => r.id === recipeId);
     if (!recipe || !this.canCraft(recipeId, srcLayer)) return false;
 
-    // 扣材料
-    for (const input of recipe.inputs) {
-      this.itemManager.removeItem(srcLayer, input.itemId, input.count);
-    }
-
-    // 产出物（先判断目标网格是否有空间）
-    const output = recipe.output;
-    if (!this.itemManager.hasSpace(dstLayer, output.itemId, output.count)) {
-      // 回滚材料
-      for (const input of recipe.inputs) {
-        this.itemManager.addItem(srcLayer, input.itemId, input.count);
-      }
+    // 产出目标：同层合并语义下，目标层已有同类 → 恒有空间；否则需空格
+    if (!this.itemManager.hasSpace(dstLayer, recipe.output.itemId, recipe.output.count)) {
       return false;
     }
-    this.itemManager.addItem(dstLayer, output.itemId, output.count);
+
+    // 扣材料（基地优先 → 飞船 → 玩家；canCraft 已保证总量足够）
+    const deductOrder: (keyof GameSession['inventories'])[] = ['base', 'ship', 'player'];
+    for (const input of recipe.inputs) {
+      let need = input.count;
+      for (const layer of deductOrder) {
+        if (need <= 0) break;
+        const have = this.itemManager.countItem(layer, input.itemId);
+        const take = Math.min(have, need);
+        if (take > 0) this.itemManager.removeItem(layer, input.itemId, take);
+        need -= take;
+      }
+    }
+
+    this.itemManager.addItem(dstLayer, recipe.output.itemId, recipe.output.count);
     return true;
   }
 }

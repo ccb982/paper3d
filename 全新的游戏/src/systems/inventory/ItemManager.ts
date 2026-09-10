@@ -9,7 +9,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from '../../core/Session';
-import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids } from '../../core/Session';
+import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, findItemInGrid, findEmptySlot } from '../../core/Session';
 import { ItemArchetype } from '../../core/ItemArchetype';
 import { type ItemEffectContext } from '../../core/ItemEffect';
 import { eventBus } from '../../core/EventBus';
@@ -42,13 +42,11 @@ export class ItemManager {
     return this.archetypes.get(itemId) ?? null;
   }
 
-  /** 添加物品到指定网格（自动堆叠） */
+  /** 添加物品到指定网格（★ 同层合并：一格一类，数量无上限） */
   addItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    const arch = this.archetypes.get(itemId);
-    if (!arch) return false;
     const grid = this.session.inventories[layer] as InventoryGrid;
     if (!Array.isArray(grid)) return false;
-    return addItemToGrid(grid, itemId, count, arch.maxStack);
+    return addItemToGrid(grid, itemId, count);
   }
 
   /** 从指定网格移除物品 */
@@ -58,19 +56,17 @@ export class ItemManager {
     return removeItemFromGrid(grid, itemId, count);
   }
 
-  /** 跨层移动物品（原子回滚） */
+  /** 跨层移动物品（原子回滚；目标自动合并） */
   moveItem(
     srcLayer: keyof GameSession['inventories'],
     dstLayer: keyof GameSession['inventories'],
     itemId: string,
     count: number,
   ): boolean {
-    const arch = this.archetypes.get(itemId);
-    if (!arch) return false;
     const src = this.session.inventories[srcLayer] as InventoryGrid;
     const dst = this.session.inventories[dstLayer] as InventoryGrid;
     if (!Array.isArray(src) || !Array.isArray(dst)) return false;
-    return moveItemBetweenGrids(src, dst, itemId, count, arch.maxStack);
+    return moveItemBetweenGrids(src, dst, itemId, count);
   }
 
   /** 使用物品（核心逻辑：查原形 → 执行效果 → 扣减） */
@@ -114,23 +110,13 @@ export class ItemManager {
     return result;
   }
 
-  /** 检查是否有足够空间 */
+  /** 检查是否有足够空间（★ 同层合并语义：已有一格同类 → 恒可入；否则需空格） */
   hasSpace(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
-    const arch = this.archetypes.get(itemId);
-    if (!arch) return false;
+    if (count <= 0) return true;
     const grid = this.session.inventories[layer] as InventoryGrid;
     if (!Array.isArray(grid)) return false;
-    let emptySlots = 0;
-    for (const row of grid) {
-      for (const cell of row) {
-        if (cell === null) emptySlots++;
-        else if (cell.itemId === itemId) {
-          emptySlots += arch.maxStack - cell.stackSize;
-        }
-        if (emptySlots >= count) return true;
-      }
-    }
-    return false;
+    if (findItemInGrid(grid, itemId)) return true;
+    return findEmptySlot(grid) !== null;
   }
 
   /** 获取物品配置（兼容旧接口，底层已改用 archetype） */
@@ -148,18 +134,32 @@ export class ItemManager {
     };
   }
 
-  /** 玩家背包中某物品的数量 */
-  hasItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+  /** 指定背包层中某物品的数量（★ 唯一单层计数入口） */
+  countItem(layer: keyof GameSession['inventories'], itemId: string): number {
     const grid = this.session.inventories[layer] as InventoryGrid;
-    if (!Array.isArray(grid)) return false;
+    if (!Array.isArray(grid)) return 0;
     let total = 0;
     for (const row of grid) {
       for (const cell of row) {
         if (cell && cell.itemId === itemId) total += cell.stackSize;
-        if (total >= count) return true;
       }
     }
-    return false;
+    return total;
+  }
+
+  /** 所有背包层（基地+飞船+玩家）的总数（★ 加工台等跨层场景用） */
+  countTotal(itemId: string): number {
+    let total = 0;
+    for (const layer of Object.keys(this.session.inventories) as (keyof GameSession['inventories'])[]) {
+      total += this.countItem(layer, itemId);
+    }
+    return total;
+  }
+
+  /** 指定层某物品是否满足数量 */
+  hasItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    if (count <= 0) return true;
+    return this.countItem(layer, itemId) >= count;
   }
 
   // ==================== ★ 友军部署（背包页面友军槽位） ====================

@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from './Session';
-import { migrateGrid, GRID_DIMENSIONS } from './Session';
+import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS } from './Session';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -51,6 +51,13 @@ export const SaveSystem = {
       inv.base = migrateGrid(inv.base, GRID_DIMENSIONS.base.rows, GRID_DIMENSIONS.base.cols, 'base');
       inv.ship = migrateGrid(inv.ship, GRID_DIMENSIONS.ship.rows, GRID_DIMENSIONS.ship.cols, 'ship');
       inv.player = migrateGrid(inv.player, GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols, 'player');
+
+      // ★ 同层合并归一（旧存档可能有同 itemId 多堆 → 合并为 1 格求和）
+      for (const layer of ['base', 'ship', 'player'] as (keyof GameSession['inventories'])[]) {
+        if (mergeDuplicatesInGrid(inv[layer])) {
+          console.warn(`[迁移] ${layer} 背包重复堆已合并（一格一类）`);
+        }
+      }
 
       // ★ 旧存档迁移：友军槽位字段（无则空数组）
       if (!Array.isArray(data.deployedAllies)) {

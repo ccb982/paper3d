@@ -14,7 +14,7 @@ import { SIX_BROTHER_MATERIAL_IDS } from '../config/sixBrothers';
 /** 单个物品实例（极简，只存引用和数量） */
 export interface ItemInstance {
   itemId: string; // 配置表 items.json 的 id
-  stackSize: number; // 当前堆叠数量（1 ~ maxStack）
+  stackSize: number; // 当前数量（同层合并规则下无上限，一格一类）
 }
 
 /** 网格背包：二维数组，null 表示空格 */
@@ -188,38 +188,24 @@ export function findEmptySlot(grid: InventoryGrid): { row: number; col: number }
   return null;
 }
 
-/** 新增物品到网格（自动堆叠，否则放空位） */
-export function addItemToGrid(
-  grid: InventoryGrid,
-  itemId: string,
-  stackSize: number,
-  maxStack: number = 99,
-): boolean {
-  // 1. 先堆叠到已有同物品堆
+/**
+ * 新增物品到网格（★ 同层合并语义：一格一类，数量无上限，插入即合并）
+ * 已有该物品 → 数量直接累加；否则占用一个空格。空格不足则失败。
+ */
+export function addItemToGrid(grid: InventoryGrid, itemId: string, stackSize: number): boolean {
+  if (stackSize <= 0) return true;
   for (let r = 0; r < grid.length; r++) {
     for (let c = 0; c < grid[r].length; c++) {
       const slot = grid[r][c];
-      if (slot && slot.itemId === itemId && slot.stackSize < maxStack) {
-        const space = maxStack - slot.stackSize;
-        if (space >= stackSize) {
-          slot.stackSize += stackSize;
-          return true;
-        } else {
-          slot.stackSize = maxStack;
-          stackSize -= space;
-        }
+      if (slot && slot.itemId === itemId) {
+        slot.stackSize += stackSize;
+        return true;
       }
     }
   }
-
-  // 2. 放空位
-  while (stackSize > 0) {
-    const pos = findEmptySlot(grid);
-    if (!pos) return false;
-    const put = Math.min(stackSize, maxStack);
-    grid[pos.row][pos.col] = { itemId, stackSize: put };
-    stackSize -= put;
-  }
+  const pos = findEmptySlot(grid);
+  if (!pos) return false;
+  grid[pos.row][pos.col] = { itemId, stackSize };
   return true;
 }
 
@@ -247,21 +233,49 @@ export function removeItemFromGrid(
   return false;
 }
 
-/** 移动物品在网格间（从源网格拿取 count 个，放到目标网格） */
+/** 移动物品在网格间（从源网格拿取 count 个，放到目标网格，目标自动合并） */
 export function moveItemBetweenGrids(
   srcGrid: InventoryGrid,
   dstGrid: InventoryGrid,
   itemId: string,
   count: number,
-  maxStack: number = 99,
 ): boolean {
+  if (count <= 0) return true;
   if (!removeItemFromGrid(srcGrid, itemId, count)) return false;
-  if (!addItemToGrid(dstGrid, itemId, count, maxStack)) {
+  if (!addItemToGrid(dstGrid, itemId, count)) {
     // 回滚
-    addItemToGrid(srcGrid, itemId, count, maxStack);
+    addItemToGrid(srcGrid, itemId, count);
     return false;
   }
   return true;
+}
+
+/**
+ * ★ 同层合并归一（旧存档迁移用）：
+ * 把网格中重复 itemId 合并为 1 格（数量求和），其余格置空。
+ * 合并只会减少占用，返回是否发生过合并。
+ */
+export function mergeDuplicatesInGrid(grid: InventoryGrid): boolean {
+  const seen = new Map<string, { row: number; col: number }>();
+  let changed = false;
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < grid[r].length; c++) {
+      const slot = grid[r][c];
+      if (!slot) continue;
+      const keeper = seen.get(slot.itemId);
+      if (keeper) {
+        const keeperSlot = grid[keeper.row][keeper.col];
+        if (keeperSlot) {
+          keeperSlot.stackSize += slot.stackSize;
+        }
+        grid[r][c] = null;
+        changed = true;
+      } else {
+        seen.set(slot.itemId, { row: r, col: c });
+      }
+    }
+  }
+  return changed;
 }
 
 // ============================================================
