@@ -12,6 +12,7 @@
 import type { GameSession, InventoryGrid } from '../../core/Session';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import { ALLY_SLOT_COUNT } from '../../systems/inventory/ItemManager';
+import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import type { PanelDef } from '../BaseInteractionUI';
 import { InventoryGridRenderer } from './InventoryGridRenderer';
 import { createButton } from '../components/Button';
@@ -36,6 +37,8 @@ export interface InventoryPanelOptions {
   transferTargets?: Partial<Record<keyof GameSession['inventories'], Array<keyof GameSession['inventories']>>>;
   /** 是否显示"使用"按钮（消耗品） */
   allowUse?: boolean;
+  /** ★ 可选注入共享图标服务（与加工台同路径）；缺省网格内部自建 */
+  iconRegistry?: ItemIconRegistry;
   /** 网格区最小宽度（格子自适应：min(48, minWidth/cols)） */
   minWidth?: number;
   /** 宿主弹窗栈操作（BaseInteractionUI.open/closePanel） */
@@ -51,7 +54,7 @@ export class InventoryPanel {
   private currentLayer: keyof GameSession['inventories'] | null = null;
 
   constructor(private opts: InventoryPanelOptions) {
-    this.gridRenderer = new InventoryGridRenderer(opts.itemManager);
+    this.gridRenderer = new InventoryGridRenderer(opts.itemManager, opts.iconRegistry);
   }
 
   /** 当前选中的层（宿主可读取用于刷新指示） */

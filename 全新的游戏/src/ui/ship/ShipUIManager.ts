@@ -13,6 +13,7 @@ import { InventoryPanel } from '../shared/InventoryPanel';
 import { renderDialogBubble } from '../components/DialogBubble';
 import type { GachaOverlay } from './GachaOverlay';
 import type { CraftingOverlay } from './CraftingOverlay';
+import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { ActionPanel, FormationPanel, OperatorPanel } from './ShipPanels';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
@@ -43,13 +44,16 @@ export class ShipUIManager extends BaseInteractionUI {
     private itemManager: ItemManager,
     private craftingManager: CraftingManager,
     private interactionManager: InteractionManager,
+    private iconRegistry: ItemIconRegistry,
     private onDepart: (() => void) | null,
   ) {
     super();
     // ★ 独立背包模块：舰船模式显示全部三层 + 支持"转移到基地"
+    //   图标服务注入共享实例（与加工台同一路径）
     this.inventoryPanel = new InventoryPanel({
       session,
       itemManager,
+      iconRegistry,
       layers: [
         { key: 'base', label: '🏠 基地仓库' },
         { key: 'ship', label: '🚀 飞船仓库' },

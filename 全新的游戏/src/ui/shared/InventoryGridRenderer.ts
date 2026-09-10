@@ -20,8 +20,9 @@ export interface InventorySlotClickEvent {
 export class InventoryGridRenderer {
   private iconRegistry: ItemIconRegistry;
 
-  constructor(itemManager: ItemManager) {
-    this.iconRegistry = new ItemIconRegistry(itemManager);
+  constructor(itemManager: ItemManager, iconRegistry?: ItemIconRegistry) {
+    // ★ 共享图标服务：注入则与加工台同路径；缺省内部自建（战斗 UI 体系）
+    this.iconRegistry = iconRegistry ?? new ItemIconRegistry(itemManager);
   }
 
   /**
@@ -93,13 +94,11 @@ export class InventoryGridRenderer {
         el.classList.add('ui-slot-flash');
       }
 
-      // ★ 显示物品图标（六区兄弟 = FTX 帧画布，其余 = 色块兜底）
+      // ★ 显示物品图标（统一出口 createIconElement：静态 img / 无人机活动画布）
       try {
-        const iconCanvas = this.iconRegistry.getIcon(slot.itemId);
-        const img = document.createElement('img');
-        img.src = iconCanvas.toDataURL();
-        img.style.cssText = 'width:80%;height:80%;object-fit:contain;';
-        el.appendChild(img);
+        const iconEl = this.iconRegistry.createIconElement(slot.itemId);
+        iconEl.style.cssText = 'width:80%;height:80%;object-fit:contain;';
+        el.appendChild(iconEl);
       } catch {
         // 降级显示文字缩写
         el.textContent = slot.itemId.slice(0, 3);

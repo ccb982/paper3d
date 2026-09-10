@@ -78,12 +78,13 @@ export class ShipMode implements IGameMode {
       itemManager: this.itemManager,
     });
 
-    // ② 初始化 UI 层（舰船专属）
+    // ② 初始化 UI 层（舰船专属；图标服务与加工台/背包共享同一实例）
     this.uiManager = new ShipUIManager(
       ctx.session,
       this.itemManager,
       this.craftingManager,
       this.interactionManager,
+      this.iconRegistry,
       () => this.doDepart(),
     );
 
@@ -105,9 +106,8 @@ export class ShipMode implements IGameMode {
       this.uiManager.setGachaOverlay(this.gachaOverlay);
     });
 
-    // ⑥ 创建加工台覆盖层（基地入口：编队面板 → 合成台）
+    // ⑥ 创建加工台覆盖层（基地入口：编队面板 → 合成台；与背包共享图标服务）
     this.craftingOverlay = new CraftingOverlay(
-      ctx.session,
       this.craftingManager,
       this.itemManager,
       this.iconRegistry,

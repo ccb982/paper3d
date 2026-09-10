@@ -46,6 +46,18 @@ export class ItemIconRegistry {
     return canvas;
   }
 
+  /** ★ 统一图标出口：返回可直接挂载的独立显示元素（背包/加工台同一条绘制路径）。
+   *  静态（六兄弟/色块兜底）→ 独立 <img>(dataURL)，与背包一致；
+   *  动态（无人机）→ 活动画布（register 每次建新画布，翅膀动画播放）。 */
+  createIconElement(itemId: string): HTMLCanvasElement | HTMLImageElement {
+    const src = this.getIcon(itemId);
+    if (itemId === 'kaltsit_drone') return src;
+    const img = document.createElement('img');
+    img.src = src.toDataURL();
+    img.style.objectFit = 'contain';
+    return img;
+  }
+
   /** 色块兜底图标（装弹器/药水等无专用纹理物品） */
   private makeFallbackCanvas(itemId: string): HTMLCanvasElement {
     const arch = this.itemManager.getArchetype(itemId);
