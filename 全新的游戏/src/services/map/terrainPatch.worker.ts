@@ -7,7 +7,7 @@
 // 微信小游戏：与 terrainBake.worker 同适配点。
 // ============================================================
 
-import { computeTableGeometry, incrementalDropCache, dropPatchSourceCache, setHotChunk, type PatchGeomResult } from "./PatchCompute";
+import { computeTableGeometry, incrementalDropCache, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
 import { CHUNK_SIZE } from "./ChunkGenerator";
 
 interface PatchChunkMsg {
@@ -57,11 +57,6 @@ ctx.onmessage = (ev: MessageEvent) => {
   if ((ev.data as { type?: string }).type === "clearCache") {
     incrementalDropCache();
     dropPatchSourceCache();
-    return;
-  }
-  if ((ev.data as { type?: string }).type === "hotChunk") {
-    const m = ev.data as { seed: number; cx: number; cz: number };
-    setHotChunk(m.seed, m.cx, m.cz);
     return;
   }
   const msg = ev.data as PatchChunkMsg;

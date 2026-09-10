@@ -247,21 +247,15 @@ export class ChunkManager {
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number): void {
-    // ★ 热点 chunk（玩家当前所在）标记：钉缓存 + 重建/装配优先（快车道入口）
+    // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     this.flushPatchRebuilds();
     this.syncChunks(px, pz);
     // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
-    //   ★ 热点 chunk 优先出队（其余保持到达序/预算不变）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0) {
-      let idx = 0;
-      if (this.hotChunkKey >= 0) {
-        const hi = this.assembleQueue.findIndex((a) => a.key === this.hotChunkKey);
-        if (hi > 0) idx = hi;
-      }
-      const a = this.assembleQueue.splice(idx, 1)[0]!;
+      const a = this.assembleQueue.shift()!;
       this.geoInflight.delete(a.key);
       if (a.decor === null || a.deferDecor) {
         // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
@@ -1230,36 +1224,25 @@ const key2 = chunkKeyOf(cx, cz);
   /** 各 chunk 上次破坏重建发起时刻（performance.now） */
   private lastPatchStart = new Map<number, number>();
 
-  /** ★ 热点 chunk = 玩家当前所在（快车道）：其静态缓存被钉住（见 PatchCompute.setHotChunk），
-   *  重建走低节流、装配优先；其他 chunk 全部保持常规路径与参数。 */
+  /** ★ 热点 chunk = 玩家当前所在：重建节流间隔更短（40ms vs 120ms）。 */
   private hotChunkKey = -1;
 
   private markHotChunk(px: number, pz: number): void {
     const cx = Math.floor(px / CHUNK_SIZE);
     const cz = Math.floor(pz / CHUNK_SIZE);
-    const key = chunkKeyOf(cx, cz);
-    if (key === this.hotChunkKey) return;
-    this.hotChunkKey = key;
-    // 主线程回退缓存 + 全部 Worker 的缓存一并钉住（Worker 各自模块实例）
-    terrainPatch.setHotChunk(this.raster.worldSeed, cx, cz);
+    this.hotChunkKey = chunkKeyOf(cx, cz);
   }
 
   /** ★ 破坏重建帧间合并 + 节流（每帧开头调用）：把本帧攒下的挖坑请求按 chunk 合并后
    *   一次性投递。digCells 已同步落库（数据即时正确），此处只补视觉重建——
    *   同 chunk 同帧 N 挖 → 1 次重建（dirty 取并集，worker 收敛终态）；
    *   跨帧连续挖 → 按节流间隔分批，未到期/在途的继续攒缓冲。
-   *   ★ 热点 chunk 排最前 + 低节流（快车道）；其他 chunk 常规 120ms。 */
+   *   ★ 热点 chunk（玩家当前）节流 40ms；其他 chunk 120ms。 */
   private flushPatchRebuilds(): void {
     if (this.pendingPatches.size === 0) return;
     const now = performance.now();
     const items = [...this.pendingPatches.values()];
     this.pendingPatches.clear();
-    // 热点优先发射（其余保持原顺序）
-    items.sort((a, b) => {
-      const ah = chunkKeyOf(a.cx, a.cz) === this.hotChunkKey ? 0 : 1;
-      const bh = chunkKeyOf(b.cx, b.cz) === this.hotChunkKey ? 0 : 1;
-      return ah - bh;
-    });
     for (const p of items) {
       const key = chunkKeyOf(p.cx, p.cz);
       const hot = key === this.hotChunkKey;
@@ -1272,7 +1255,6 @@ const key2 = chunkKeyOf(cx, cz);
         continue;
       }
       this.lastPatchStart.set(key, now);
-      // ★ 空 dirty（邻块联动/无直接挖点）→ 水体走全量重解，避免增量列表为空漏更新
       this.patchRebuildChunk(p.cx, p.cz, p.dirty.size > 0 ? [...p.dirty] : null);
     }
   }

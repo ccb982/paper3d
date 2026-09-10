@@ -79,12 +79,6 @@ const baseCache = new Map<string, ChunkBase>();
  *  退化成每次全量构建（2026-09-10 由 16 上调） */
 const CACHE_CAP = 36;
 
-/** ★ 热点 chunk（玩家当前所在）：淘汰时跳过（钉住），保证"当前 chunk 快车道" */
-let hotBaseKey = "";
-export function setBaseCacheHotKey(key: string): void {
-  hotBaseKey = key;
-}
-
 function cacheKey(seed: number, cx: number, cz: number): string {
   return `${seed}/${cx},${cz}`;
 }
@@ -152,14 +146,8 @@ export function seedBaseGeometry(
     wallV: wl.v, wallVPre: wl.vPre, wallIPre: wl.iPre,
   };
   if (baseCache.size >= CACHE_CAP) {
-    // ★ 跳过热点 chunk（钉住）；全为热点时退化为删最旧
-    for (const k of baseCache.keys()) {
-      if (k !== hotBaseKey) { baseCache.delete(k); break; }
-    }
-    if (baseCache.size >= CACHE_CAP) {
-      const oldest = baseCache.keys().next();
-      if (!oldest.done) baseCache.delete(oldest.value);
-    }
+    const oldest = baseCache.keys().next();
+    if (!oldest.done) baseCache.delete(oldest.value);
   }
   baseCache.set(key, base);
   return base;

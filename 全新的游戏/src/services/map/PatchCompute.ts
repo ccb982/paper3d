@@ -20,7 +20,7 @@ import {
   type GeoUpdateRanges,
   type LevelAtWorld,
 } from "./FaceBuild";
-import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID, setBaseCacheHotKey } from "./IncrementalGeometry";
+import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
@@ -179,20 +179,10 @@ export function computeTableGeometry(
 interface PatchSourceEntry { src: BlockSource; table: FaceTable }
 const patchSourceCache = new Map<string, PatchSourceEntry>();
 const PATCH_SOURCE_CACHE_CAP = 16;
-/** ★ 热点 chunk（玩家当前所在）：淘汰时跳过（钉住） */
-let hotSourceKey = "";
 
 /** 清空每 chunk 静态数据缓存（数据换代时与基座缓存一并清） */
 export function dropPatchSourceCache(): void {
   patchSourceCache.clear();
-}
-
-/** ★ 标记热点 chunk（玩家当前）：源/表缓存与基座缓存一并钉住。
- *  ChunkManager 在玩家跨 chunk 时调用；只影响淘汰策略，不改变常规路径。 */
-export function setHotChunk(seed: number, cx: number, cz: number): void {
-  const key = `${seed}/${cx},${cz}`;
-  hotSourceKey = key;
-  setBaseCacheHotKey(key);
 }
 
 function getRefinedSource(
@@ -213,14 +203,8 @@ function getRefinedSource(
   }
   if (complete) {
     if (patchSourceCache.size >= PATCH_SOURCE_CACHE_CAP) {
-      // ★ 跳过热点 chunk（钉住）；全为热点时退化为删最旧
-      for (const k of patchSourceCache.keys()) {
-        if (k !== hotSourceKey) { patchSourceCache.delete(k); break; }
-      }
-      if (patchSourceCache.size >= PATCH_SOURCE_CACHE_CAP) {
-        const oldest = patchSourceCache.keys().next();
-        if (!oldest.done) patchSourceCache.delete(oldest.value);
-      }
+      const oldest = patchSourceCache.keys().next();
+      if (!oldest.done) patchSourceCache.delete(oldest.value);
     }
     patchSourceCache.set(key, { src, table });
   }
