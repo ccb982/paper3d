@@ -1072,7 +1072,6 @@ export class WorldMode implements IGameMode {
       return;
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
-    console.log(`[drops][静态命中] (${point.x.toFixed(1)},${point.y.toFixed(1)},${point.z.toFixed(1)}) 地块role=${impact.tile.role} water=${impact.water} prop=${impact.prop?.key ?? '无'}@r=${impact.prop?.r ?? 0}`);
     this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门）
     this.agitateWaterNear(point.x, point.z); // 水面波动
     this.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告
@@ -1125,7 +1124,6 @@ export class WorldMode implements IGameMode {
       hasWater: r.water !== 'none',
       hasCrystal: r.prop?.key === 'depleted_crystal',
     });
-    console.log(`[drops][roll] hasGround=${r.tile.role === 'ground' || r.tile.role === 'platform'} hasWater=${r.water !== 'none'} hasCrystal=${r.prop?.key === 'depleted_crystal'} → ${drops.map((d) => `${d.itemId}×${d.count}`).join(', ') || '无'}`);
     for (const drop of drops) {
       const ok = this.itemManager.hasSpace('player', drop.itemId, drop.count)
         && this.itemManager.addItem('player', drop.itemId, drop.count);
