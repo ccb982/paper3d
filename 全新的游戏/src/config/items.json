@@ -209,6 +209,31 @@
       "effects": []
     },
     {
+      "id": "shu_jie_xx",
+      "name": "黍姐的XX",
+      "type": "equip",
+      "description": "黍姐的神秘防具。穿戴后在角色前方等比缩小展示其纹理",
+      "maxStack": 1,
+      "combat": {
+        "kind": "equip",
+        "slot": "armor",
+        "asset": "/fx/黍姐的XX.ftx3.gz",
+        "offsetX": 0,
+        "offsetY": 0,
+        "offsetZ": 0.09,
+        "scale": 0.8
+      },
+      "color": { "h": 0.08, "s": 0.6, "l": 0.55 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.16, "hz": 0.18 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "equip", "slot": "armor" }
+      ]
+    },
+    {
       "id": "kaltsit_drone",
       "name": "可露希尔的无人机",
       "type": "consumable",

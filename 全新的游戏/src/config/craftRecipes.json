@@ -39,6 +39,25 @@
       "station": "ship"
     },
     {
+      "id": "shu_jie_xx",
+      "name": "黍姐的XX",
+      "inputs": [
+        {
+          "itemId": "iron_grain",
+          "count": 100
+        },
+        {
+          "itemId": "raw_rock",
+          "count": 100
+        }
+      ],
+      "output": {
+        "itemId": "shu_jie_xx",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
       "id": "kaltsit_drone_repair",
       "name": "维修无人机",
       "inputs": [

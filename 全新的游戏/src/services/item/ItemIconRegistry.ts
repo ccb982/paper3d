@@ -7,8 +7,9 @@
 // ============================================================
 
 import { ItemManager } from '../../systems/inventory/ItemManager';
-import { loadSixBrotherIcons } from './BasicMaterialsIcons';
+import { loadSixBrotherIcons, compositeFrameToCanvas } from './BasicMaterialsIcons';
 import { getDroneIconAnimator, DroneIconAnimator } from './DroneIcon';
+import { FtxAsset } from '../../vendor/player/FtxAsset';
 
 export interface ItemIconConfig {
   /** 色调 0-1 */
@@ -19,17 +20,34 @@ export interface ItemIconConfig {
   l: number;
 }
 
+/** ★ 直绘 FTX 图标源（itemId → .ftx3 URL；解包后第 0 帧合成，ID→画布失效则回退色块） */
+const FTX_ICON_SOURCES: Record<string, string> = {
+  shu_jie_xx: '/fx/黍姐的XX.ftx3.gz',
+};
+
 export class ItemIconRegistry {
   private cache = new Map<string, HTMLCanvasElement>();
   private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
   /** 无人机动态图标动画器（播放器路径：离屏 VAT 渲染） */
   private droneAnimator: DroneIconAnimator | null = null;
+  /** ★ 直绘 FTX 图标（解包完成的画布；驱动 getIcon 优先返回真实纹理） */
+  private ftxIcons = new Map<string, HTMLCanvasElement>();
 
   constructor(private itemManager: ItemManager) {
     // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
     loadSixBrotherIcons()
       .then((map) => { this.sixBrothers = map; })
       .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
+    // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具）
+    for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
+      FtxAsset.load(encodeURI(url))
+        .then((asset) => {
+          const canvas = compositeFrameToCanvas(asset, 0);
+          this.ftxIcons.set(id, canvas);
+          this.cache.delete(id);
+        })
+        .catch((err) => console.warn(`[ItemIconRegistry] ${id} FTX 图标载入失败，回退色块:`, err));
+    }
   }
 
   /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底） */
@@ -40,6 +58,9 @@ export class ItemIconRegistry {
       return this.droneAnimator.register(this.itemManager);
     }
     if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
+    // ★ 直绘 FTX 图标（尚未载入完成 → 走色块兜底，载入后即真实纹理）
+    const ftx = this.ftxIcons.get(itemId);
+    if (ftx) return ftx;
     if (this.cache.has(itemId)) return this.cache.get(itemId)!;
     const canvas = this.makeFallbackCanvas(itemId);
     this.cache.set(itemId, canvas);

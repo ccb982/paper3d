@@ -408,7 +408,8 @@ export class WorldMode implements IGameMode {
     this.combatItems = new CombatItemController(
       ctx.session,
       this.scene,
-      this.player.rendererMesh ?? new THREE.Object3D(),
+      this.player.rendererMesh
+        ?? (() => { const o = new THREE.Object3D(); this.scene!.add(o); return o; })(),
     );
     this.combatItems.syncEquips();
 

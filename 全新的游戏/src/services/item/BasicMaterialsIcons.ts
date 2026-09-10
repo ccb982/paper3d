@@ -33,8 +33,8 @@ function hsl2rgb(h: number, s: number, l: number): [number, number, number] {
   return [l + k * (r - 0.5), l + k * (g - 0.5), l + k * (b - 0.5)];
 }
 
-/** 单帧合成 → 画布（透明背景，像素尺寸 = 该帧 bbox） */
-function compositeFrameToCanvas(asset: FtxAsset, index: number): HTMLCanvasElement {
+/** 单帧合成 → 画布（透明背景，像素尺寸 = 该帧 bbox）。★ 直绘 FTX 路径公用：装备/道具图标复用 */
+export function compositeFrameToCanvas(asset: FtxAsset, index: number): HTMLCanvasElement {
   const frame = asset.getFtxFrame(index);
   if (!frame) throw new Error(`六区兄弟第 ${index} 帧不存在`);
   const base = buildBaseHslData(frame, asset.palette);

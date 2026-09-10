@@ -24,6 +24,7 @@ export interface EquipVisual {
   asset: string;
   offsetX: number;
   offsetY: number;
+  offsetZ: number;
   scale: number;
 }
 
@@ -31,7 +32,7 @@ export interface EquipVisual {
 const equipVisuals = new Map<string, EquipVisual>();
 for (const raw of (itemsConfig as { items: Array<Record<string, unknown>> }).items) {
   const combat = raw.combat as
-    | { kind?: string; slot?: string; asset?: string; offsetX?: number; offsetY?: number; scale?: number }
+    | { kind?: string; slot?: string; asset?: string; offsetX?: number; offsetY?: number; offsetZ?: number; scale?: number }
     | undefined;
   if (combat?.kind === 'equip' && typeof raw.id === 'string' && combat.asset) {
     const slot = (combat.slot ?? 'weapon') as EquipSlot;
@@ -41,6 +42,7 @@ for (const raw of (itemsConfig as { items: Array<Record<string, unknown>> }).ite
       asset: combat.asset,
       offsetX: combat.offsetX ?? 0,
       offsetY: combat.offsetY ?? 0,
+      offsetZ: combat.offsetZ ?? 0,
       scale: combat.scale ?? 1.0,
     });
   }
@@ -110,7 +112,9 @@ export class EquipmentLayer {
       quad.setFrameMapping({ width: frame0.w, height: frame0.h }, { x: 0, y: 0, w: frame0.w, h: frame0.h });
     }
     quad.setScaleKeepAspect(visual.scale);
-    quad.setPosition(visual.offsetX, visual.offsetY, 0);
+    // ★ offsetZ 推向画面前方（父贴片朝相的局部 +Z）、与角色本体错开深度，
+    //   避免与主角贴片共面 z-fighting（"在角色前面绘制"）
+    quad.setPosition(visual.offsetX, visual.offsetY, visual.offsetZ);
     this.slots.set(slot, {
       itemId,
       visual,
