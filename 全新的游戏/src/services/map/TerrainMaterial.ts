@@ -1170,9 +1170,15 @@ export class WallMaterial extends THREE.ShaderMaterial {
   }
 }
 
-/** 模式退出清空注册表（材质由 disposeVisual 释放；世界 Hot 段统一 reset 重来） */
+/** 模式退出清空注册表（材质由 disposeVisual 释放；世界 Hot 段统一 reset 重来）。
+ *  ★ 常驻共享材质（userData.decorShared，如 sharedWaterMaterial）不得清——
+ *    它是模块单例，构造时注册一次，被清掉后不会重新注册 → uTime/昼夜喂值冻结
+ *    （症状：返回舰船再进战场后水体静止、落水抖动失效）。 */
 export function clearWallMaterialRegistry(): void {
-  wallRegistry.clear();
+  for (const m of [...wallRegistry]) {
+    if ((m.userData as { decorShared?: boolean } | undefined)?.decorShared) continue;
+    wallRegistry.delete(m);
+  }
 }
 
 /**

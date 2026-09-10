@@ -262,6 +262,7 @@ export class WorldMode implements IGameMode {
 
     // ★ 昼夜循环重置：每次出击从晚上出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
+    sharedWaterMaterial.resetImpacts(); // ★ 清空落水扰动槽（防跨局残留）
 
     // 玩家出生 = 中心 chunk 中心
     const spawn = this.spawnPoint;
@@ -660,6 +661,9 @@ export class WorldMode implements IGameMode {
   /** 渲染：实体管线 + 场景 */
   render(): void {
     if (!this.scene || !this.camera || !this.renderer) return;
+    // ★ 防御：任何离屏 pass（流体/月亮/云/子弹特效）若遗留 FBO，主场景渲染会与
+    //   采样纹理形成 Feedback loop（GL_INVALID_OPERATION）。渲染前强制回默认帧缓冲。
+    this.renderer.setRenderTarget(null);
     // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) renderManager.follow(this.player.position);
     this.entities.renderAll(this.camera);

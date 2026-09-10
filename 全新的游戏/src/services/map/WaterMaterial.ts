@@ -621,11 +621,13 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     });
     this.userData.decorShared = true; // ChunkManager.disposeVisual 跳过（全局共享）
     registerWallLightTarget(this);
-    void this.loadOceanTextures(); // 非阻塞：FFT 在 worker，就绪后热插纹理（uHasOcean 翻 1）
+    void this.loadOceanTextures().catch((e) =>
+      console.error("[WaterMaterial] 海况初始化异常（未捕获）", e)); // 非阻塞：FFT 在 worker，就绪后热插纹理（uHasOcean 翻 1）
   }
 
   /** 海况场就绪后热插 12 张 FFT 贴图（字节全部来自 OceanBaker worker）；
    *  ★ 失败可重试（旧实现一次性：失败即永久静态水面）——抖动已与海况解耦，不受影响 */
+  private lastOceanError = "";
   private async loadOceanTextures(): Promise<void> {
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
@@ -642,12 +644,12 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         return;
       } catch (e) {
         if (this.disposed) return;
-        const em = (e as Error)?.message ?? String(e);
-        console.warn(`[WaterMaterial] 海况场烘焙失败（第 ${attempt + 1}/4 次）：${em}`, e);
+        this.lastOceanError = (e as Error)?.message ?? String(e);
+        console.warn(`[WaterMaterial] 海况场烘焙失败（第 ${attempt + 1}/4 次）：${this.lastOceanError}`, e);
         await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
       }
     }
-    console.error('[WaterMaterial] 海况场烘焙多次失败：水面保持静态基面（落水抖动不受影响）');
+    console.error(`[WaterMaterial] 海况场烘焙多次失败：水面保持静态基面（落水抖动不受影响）；最后错误：${this.lastOceanError || "无记录"}`);
   }
 
   override dispose(): void {
@@ -671,6 +673,12 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     }
     if (slot < 0) return;
     arr[slot].set(x, z, strength, performance.now() * 0.001);
+  }
+
+  /** ★ 清空全部扰动槽（模式进出防跨局残留；w<0 = 空槽） */
+  resetImpacts(): void {
+    const arr = this.uniforms.uImpact.value as THREE.Vector4[];
+    for (const v of arr) v.set(0, 0, 0, -99);
   }
 }
 
