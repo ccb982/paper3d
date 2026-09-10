@@ -68,7 +68,6 @@ export function executeAttack(
         const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
         // ★ 近战伤害同样上事件（浮动数字/导演反馈与子弹一致——无人机/敌人近战可见）
         eventBus.emit('damage', { target: t, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
-        console.log(`[近战] ${t.constructor.name}${r.dodged ? '【闪避】' : r.crit ? '【暴击】' : ''} -${r.final}`);
       }
       break;
     }

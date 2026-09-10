@@ -32,27 +32,43 @@ class OceanBakerService {
     try {
       const w = new Worker(new URL("./oceanBake.worker.ts", import.meta.url), { type: "module" });
       w.onmessage = (ev: MessageEvent) => {
-        const msg = ev.data as { type: string; id: number; layers?: OceanTile[][] };
+        const msg = ev.data as { type: string; id: number; layers?: OceanTile[][]; error?: string };
+        // ★ Worker 内部异常：给出真实错误文本并回退同步（不再只报"worker 异常终止"）
+        if (msg.type === "oceanError") {
+          const cb = this.pending.get(msg.id);
+          if (cb) {
+            this.pending.delete(msg.id);
+            console.warn("[OceanBaker] Worker 烘焙失败，回退主线程同步：", msg.error);
+            cb(null);
+          }
+          return;
+        }
         if (msg.type !== "oceanResult") return;
         const cb = this.pending.get(msg.id);
+        if (!cb) return;
         this.pending.delete(msg.id);
-        if (!cb || !msg.layers) return;
-        cb(msg.layers);
+        // ★ layers 缺失也走回退（旧实现 delete 后直接 return → promise 悬挂，
+        //   5s 超时又因 pending 已删而不触发 → 永久不初始化）
+        cb(msg.layers ?? null);
       };
-      w.onerror = () => {
-        console.warn("[OceanBaker] Worker 异常终止，海况烘焙回退主线程同步");
-        this.broken = true;
-        this.worker = null;
-        const cbs = [...this.pending.values()];
-        this.pending.clear();
-        for (const cb of cbs) cb(null);
-      };
+      w.onerror = () => this.failAll("[OceanBaker] Worker 异常终止，海况烘焙回退主线程同步");
+      w.onmessageerror = () => this.failAll("[OceanBaker] Worker 消息反序列化失败，海况烘焙回退主线程同步");
       this.worker = w;
       return w;
     } catch {
       this.broken = true;
       return null;
     }
+  }
+
+  /** Worker 致命失败：标记 broken 并把所有挂起请求转同步回退 */
+  private failAll(reason: string): void {
+    console.warn(reason);
+    this.broken = true;
+    this.worker = null;
+    const cbs = [...this.pending.values()];
+    this.pending.clear();
+    for (const cb of cbs) cb(null);
   }
 
   /**

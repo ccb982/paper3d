@@ -63,19 +63,36 @@ interface OceanTextures {
  * Worker 不可用/故障 → 主线程同步 bakeOceanField 同源回退（字节一致）。
  */
 async function bakeOceanTextures(params: OceanBakeParams): Promise<OceanTextures> {
-  let tiles = await oceanBaker.bake(params.seed);
-  if (!tiles) tiles = bakeOceanField(params);
-  const hdA: THREE.Texture[] = [], hdB: THREE.Texture[] = [];
-  const nA: THREE.Texture[] = [], nB: THREE.Texture[] = [];
-  for (const layer of tiles) {
-    const [tileA, tileB] = layer;
-    const N = Math.sqrt(tileA.h.length) | 0;
-    hdA.push(packHD(tileA, N));
-    hdB.push(packHD(tileB, N));
-    nA.push(packN(tileA, N));
-    nB.push(packN(tileB, N));
+  let tiles: OceanTile[][] | null = null;
+  try {
+    tiles = await oceanBaker.bake(params.seed);
+  } catch (e) {
+    console.warn("[WaterMaterial] 海况 Worker 请求异常，改主线程同步：", e);
   }
-  return { hdA, hdB, nA, nB };
+  if (!tiles) {
+    try {
+      tiles = bakeOceanField(params);
+    } catch (e) {
+      const err = e as Error;
+      throw new Error(`海况同步烘焙失败：${err?.stack ?? String(e)}`);
+    }
+  }
+  try {
+    const hdA: THREE.Texture[] = [], hdB: THREE.Texture[] = [];
+    const nA: THREE.Texture[] = [], nB: THREE.Texture[] = [];
+    for (const layer of tiles) {
+      const [tileA, tileB] = layer;
+      const N = Math.sqrt(tileA.h.length) | 0;
+      hdA.push(packHD(tileA, N));
+      hdB.push(packHD(tileB, N));
+      nA.push(packN(tileA, N));
+      nB.push(packN(tileB, N));
+    }
+    return { hdA, hdB, nA, nB };
+  } catch (e) {
+    const err = e as Error;
+    throw new Error(`海况贴图打包失败：${err?.stack ?? String(e)}`);
+  }
 
   function packHD(t: OceanTile, N: number): THREE.DataTexture {
     const f = new Float32Array(N * N * 4);
@@ -625,7 +642,8 @@ export class WaterMaterial extends THREE.ShaderMaterial {
         return;
       } catch (e) {
         if (this.disposed) return;
-        console.warn(`[WaterMaterial] 海况场烘焙失败（第 ${attempt + 1}/4 次），稍后重试`, e);
+        const em = (e as Error)?.message ?? String(e);
+        console.warn(`[WaterMaterial] 海况场烘焙失败（第 ${attempt + 1}/4 次）：${em}`, e);
         await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
       }
     }

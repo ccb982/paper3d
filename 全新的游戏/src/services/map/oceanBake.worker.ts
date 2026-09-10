@@ -24,16 +24,22 @@ const ctx = self as unknown as {
 ctx.onmessage = (ev: MessageEvent) => {
   const msg = ev.data as OceanBakeMsg;
   if (msg.type !== "oceanBake") return;
-  const tileLayers = bakeOceanField(defaultOceanParams(msg.seed));
-  // 结构拷贝（层 × 变体；typed array 本体零拷贝 transfer）
-  const layers = tileLayers.map((layer) =>
-    layer.map((tile) => ({ h: tile.h, d: tile.d, n: tile.n })),
-  ) as OceanTile[][];
-  const transfer: ArrayBuffer[] = [];
-  for (const layer of layers) {
-    for (const t of layer) {
-      transfer.push(t.h.buffer, t.d.buffer, t.n.buffer);
+  try {
+    const tileLayers = bakeOceanField(defaultOceanParams(msg.seed));
+    // 结构拷贝（层 × 变体；typed array 本体零拷贝 transfer）
+    const layers = tileLayers.map((layer) =>
+      layer.map((tile) => ({ h: tile.h, d: tile.d, n: tile.n })),
+    ) as OceanTile[][];
+    const transfer: ArrayBuffer[] = [];
+    for (const layer of layers) {
+      for (const t of layer) {
+        transfer.push(t.h.buffer, t.d.buffer, t.n.buffer);
+      }
     }
+    ctx.postMessage({ type: "oceanResult", id: msg.id, layers }, transfer);
+  } catch (e) {
+    // ★ 把真实错误文本回传（主线程据此回退同步 + 打日志）
+    const err = e as Error;
+    ctx.postMessage({ type: "oceanError", id: msg.id, error: err?.stack ?? String(e) });
   }
-  ctx.postMessage({ type: "oceanResult", id: msg.id, layers }, transfer);
 };

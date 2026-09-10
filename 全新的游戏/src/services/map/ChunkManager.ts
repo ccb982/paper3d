@@ -855,8 +855,6 @@ const key2 = chunkKeyOf(cx, cz);
     this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
     this.createDecorColliders(cx, cz, decor);
     this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
-    const wq = waterG ? waterG.quads : 0;
-    console.log(`[TABLE] chunk(${cx},${cz}) 顶tris=${topG.indices.length / 3} 壁quads=${wallG.indices.length / 6} 水quads=${wq}`);
   }
 /**
    * ★ 破坏重建/首建（2026-09-09 原地更新重构）：
@@ -1415,11 +1413,8 @@ const key2 = chunkKeyOf(cx, cz);
       rec.cells.push({ lx: c.lx, lz: c.lz });
       rec.dirty.add(worldBlockKey(c.cx * BLOCKS_PER_SIDE + (c.lx >> 2), c.cz * BLOCKS_PER_SIDE + (c.lz >> 2)));
     }
-    let changedChunks = 0, cells = 0;
     for (const [, rec] of byChunk) {
-      cells += rec.cells.length;
       if (this.raster.digCells(rec.cx, rec.cz, rec.cells)) {
-        changedChunks++;
         // ★ 帧间合并：不立即重建——digCells 已同步落库（数据即时正确），
         //   视觉重建攒进 pendingPatches，flushPatchRebuilds 每帧开头合并为一次
         const key = chunkKeyOf(rec.cx, rec.cz);
@@ -1438,15 +1433,6 @@ const key2 = chunkKeyOf(cx, cz);
       }
       // ★ 跨 chunk 联动（2026-09-10）：本块挖动改变邻块包络场/共享边 → 邻块也要重建
       this.markNeighborsForDug(rec);
-    }
-    if (changedChunks > 0) {
-      const now = performance.now();
-      if (now - this.lastPatchLog > 500) {
-        this.lastPatchLog = now;
-        console.log(
-          `[PATCH] 命中(${r.x.toFixed(1)},${r.z.toFixed(1)}) r=${R} 格${cells} 变化chunk=${changedChunks}`,
-        );
-      }
     }
   }
 
@@ -1509,9 +1495,6 @@ const key2 = chunkKeyOf(cx, cz);
     if (!dd) { dd = { cells: new Set(), full: false }; this.decorDirty.set(key, dd); }
     dd.full = true;
   }
-
-/** [PATCH] 日志节流（连射时 console 不刷屏；console.log 本身也是开销） */
-  private lastPatchLog = 0;
 
   /** 同一 chunk 破坏重建的最短间隔（ms）：连射/多跳弹 → 视觉分批下陷，
    *  不再每帧一次全量重建+装配（worker 与主线程都不再被持续射击打满）。 */

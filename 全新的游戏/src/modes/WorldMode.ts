@@ -881,9 +881,6 @@ export class WorldMode implements IGameMode {
           if (placed >= want || attempts >= want * 10) {
             this.spawnedChunks.add(key);
           }
-          if (placed > 0) {
-            console.log(`[WorldMode] chunk(${cx},${cz}) 补波 → ${placed} 个`);
-          }
         }
       }
     }
@@ -934,9 +931,6 @@ export class WorldMode implements IGameMode {
       const y = this.raster.surfaceHeightAt(x, z);
       if (y < -1.2) continue;
       if (this.spawnOne(this.pickMob(), x, y, z)) placed++;
-    }
-    if (placed > 0) {
-      console.log(`[WorldMode] LOD 外环波次 → ${placed} 个杂兵（共 ${this.enemies.length}）`);
     }
   }
 
@@ -1068,7 +1062,6 @@ export class WorldMode implements IGameMode {
     if (other) {
       const r = applyDamage(damage, self, other);
       eventBus.emit('damage', { target: other, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
-      console.log(`[bullet] 命中 ${other.constructor.name}，穿透${r.crit ? '【暴击】' : ''}（-${r.final}）`);
       return;
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
