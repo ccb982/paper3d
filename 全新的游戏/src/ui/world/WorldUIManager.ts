@@ -19,6 +19,7 @@ import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
 import { CSS } from '../shared/UIConstants';
+import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 
 export type FloatingTextType = 'normal' | 'crit' | 'heal' | 'miss' | 'pickup';
 
@@ -41,6 +42,13 @@ export class WorldUIManager extends BaseInteractionUI {
   private flashItemId: string | null = null;
   private flashTimer: number | undefined = undefined;
   private mapStyleBtn: HTMLButtonElement | null = null;
+  /** ★ 获得物品面板（用户手绘 JSON《页面布局/获得物品.json》换算）：右上角，
+   *  灰黑半透明面板；左 = 物品图标，右 = 文字。 */
+  private pickupPanel: HTMLDivElement | null = null;
+  private pickupIcon: HTMLDivElement | null = null;
+  private pickupText: HTMLDivElement | null = null;
+  private pickupTimer: number | undefined = undefined;
+  private iconRegistry: ItemIconRegistry | null = null;
 
   constructor(
     private session: GameSession,
@@ -178,20 +186,62 @@ export class WorldUIManager extends BaseInteractionUI {
     });
   }
 
-  /** 显示拾取结果（简化调用）：显示物品显示名 + 数量；背包满提示失败 */
+  /** 显示拾取结果：右上角"获得物品"面板（手绘 JSON 布局，左图标 + 右文字）；
+   *  背包满 → 同一面板显示失败文案（图标淡化）。重复拾取刷新内容并重置计时。 */
   showPickupResult(itemId: string, success: boolean, count = 1): void {
     const name = this.itemManager.getArchetype(itemId)?.name ?? itemId;
-    const label = success
-      ? count > 1 ? `拾取了 ${name} ×${count}` : `拾取了 ${name}`
+    this.ensurePickupPanel();
+    const icon = this.pickupIcon!;
+    const text = this.pickupText!;
+    icon.innerHTML = '';
+    this.iconRegistry ??= new ItemIconRegistry(this.itemManager);
+    const el = this.iconRegistry.createIconElement(itemId);
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.objectFit = 'contain';
+    el.style.imageRendering = 'pixelated';
+    el.style.opacity = success ? '1' : '0.35';
+    icon.appendChild(el);
+    text.textContent = success
+      ? count > 1 ? `获得了 ${name} ×${count}` : `获得了 ${name}`
       : `背包已满，无法拾取 ${name}`;
-    // 屏幕中央偏下显示
-    this.showFloatingText(window.innerWidth / 2, window.innerHeight / 2 - 50, label, 'pickup');
+    text.style.color = success ? '#e8ecf2' : '#ff9a9a';
+    const panel = this.pickupPanel!;
+    panel.style.opacity = '1';
+    clearTimeout(this.pickupTimer);
+    this.pickupTimer = window.setTimeout(() => { panel.style.opacity = '0'; }, 1800);
     // ★ 记录闪烁物品 ID，下次渲染背包时格子闪黄光
     if (success) {
       this.flashItemId = itemId;
       // 动画完成后清除
       setTimeout(() => { this.flashItemId = null; }, 700);
     }
+  }
+
+  /** 惰性建面板：位置/尺寸按手绘 JSON 归一化坐标换算
+   *  （x 0.8766~0.9984 → right 0.16% / width 12.18%；y 0.8093~0.9103，y 自下而上
+   *  → CSS top = 1-y1 = 8.97% / min-height 10.1%） */
+  private ensurePickupPanel(): void {
+    if (this.pickupPanel) return;
+    const panel = document.createElement('div');
+    panel.style.cssText = [
+      'position:fixed', 'top:8.97%', 'right:0.16%', 'width:12.18%', 'min-height:10.1%',
+      'z-index:70', 'display:flex', 'align-items:center', 'gap:8px',
+      'padding:6px 10px', 'box-sizing:border-box',
+      'background:rgba(18,20,24,0.72)', 'border:1px solid rgba(255,255,255,0.10)',
+      'border-radius:8px', 'pointer-events:none',
+      'opacity:0', 'transition:opacity .18s ease',
+    ].join(';');
+    const icon = document.createElement('div');
+    icon.style.cssText = 'flex:0 0 auto;width:36px;height:36px;display:flex;align-items:center;justify-content:center;';
+    const text = document.createElement('div');
+    text.style.cssText = 'flex:1 1 auto;color:#e8ecf2;font-size:13px;line-height:1.35;text-shadow:0 1px 2px rgba(0,0,0,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    panel.appendChild(icon);
+    panel.appendChild(text);
+    document.body.appendChild(panel);
+    this.pickupPanel = panel;
+    this.pickupIcon = icon;
+    this.pickupText = text;
   }
 
   /** 打开对话（世界轻量版，非模态 HUD 小部件） */
@@ -294,5 +344,12 @@ export class WorldUIManager extends BaseInteractionUI {
     this.mapStyleBtn = null;
     for (const ft of this.floatingTexts) ft.el.remove();
     this.floatingTexts = [];
+    // ★ 获得物品面板
+    clearTimeout(this.pickupTimer);
+    this.pickupPanel?.remove();
+    this.pickupPanel = null;
+    this.pickupIcon = null;
+    this.pickupText = null;
+    this.iconRegistry = null;
   }
 }

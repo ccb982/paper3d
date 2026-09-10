@@ -14,6 +14,10 @@
 import * as THREE from 'three';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { FTXQuad } from '../../services/render/FTXQuad';
+import { SilhouetteShadow } from '../../services/render/SilhouetteShadow';
+import { renderManager } from '../../services/render/RenderManager';
+import { RasterMap } from '../../services/map/RasterMap';
+import { levelForDistance } from '../../services/lod';
 import itemsConfig from '../../config/items.json';
 
 export type EquipSlot = 'weapon' | 'armor' | 'headgear';
@@ -65,9 +69,16 @@ interface MountedEquip {
   itemId: string;
   visual: EquipVisual;
   quad: FTXQuad;
+  asset: FtxAsset;
   frameCount: number;
   fps: number;
   t: number;
+  /** ★ 贴地剪影影子（首次获得帧数据时惰性创建；与角色同款太阳投影） */
+  shadow: SilhouetteShadow | null;
+  /** 剪影源包装（跨帧复用零分配；SilhouetteShadow 按 data 引用去重） */
+  fd: { base: { width: number; height: number; data: Float32Array } } | null;
+  worldPos: THREE.Vector3;
+  worldScale: THREE.Vector3;
 }
 
 export class EquipmentLayer {
@@ -104,6 +115,8 @@ export class EquipmentLayer {
       // 卸载已移除的
       for (const [id, m] of this.mounted) {
         if (!wanted.has(id)) {
+          m.shadow?.dispose();
+          m.shadow = null;
           m.quad.dispose();
           this.mounted.delete(id);
         }
@@ -155,19 +168,99 @@ export class EquipmentLayer {
       itemId,
       visual,
       quad,
+      asset,
       frameCount: asset.frameCount,
       fps: 4,
       t: 0,
+      shadow: null,
+      fd: null,
+      worldPos: new THREE.Vector3(),
+      worldScale: new THREE.Vector3(),
     });
   }
 
+  /**
+   * ★ 装备贴片贴地影子（与角色同款机制）：太阳解析投影 + 逐顶点贴地，
+   *   剪影随当前动画帧、翻转（父 scale 取反）通过世界 X 基自然镜像；
+   *   世界高/宽取贴片世界缩放 → 影长 = 视觉高 × 投影比。
+   */
+  private updateShadow(m: MountedEquip, frameIndex: number, camera?: THREE.Camera): void {
+    const ms = m.quad as unknown as { mesh?: THREE.Mesh | null };
+    const mesh = ms.mesh;
+    if (!mesh) return;
+    const pair = m.asset.getFramePair(frameIndex);
+    const img = pair?.base?.image as unknown as
+      | { data?: Float32Array; width: number; height: number }
+      | undefined;
+    const raw = img?.data;
+    if (!raw) {
+      if (m.shadow) m.shadow.mesh.visible = false;
+      return;
+    }
+    if (!m.fd) m.fd = { base: { width: 0, height: 0, data: raw } };
+    m.fd.base.width = img!.width;
+    m.fd.base.height = img!.height;
+    m.fd.base.data = raw;
+    if (!m.shadow) {
+      mesh.updateWorldMatrix(true, false);
+      m.worldScale.setFromMatrixScale(mesh.matrixWorld);
+      // ★ 含平面内旋转（rotateZ）：横置贴片的屏幕宽 = 纹理高 × sinθ
+      const th0 = m.visual.rotateZ;
+      const w = Math.max(0.05, Math.hypot(
+        Math.abs(m.worldScale.x) * Math.cos(th0),
+        Math.abs(m.worldScale.y) * Math.sin(th0),
+      ));
+      m.shadow = new SilhouetteShadow(this.scene, w, 0.30);
+    }
+    m.shadow.setSource(m.fd);
+
+    // ---- 太阳解析投影（与 EntityBase.syncShadow 同式） ----
+    mesh.getWorldPosition(m.worldPos);
+    const x = m.worldPos.x, y = m.worldPos.y, z = m.worldPos.z;
+    const gy = RasterMap.current?.surfaceHeightAt(x, z) ?? 0;
+    const airH = Math.max(0, y - gy);
+    const sun = renderManager.querySun();
+    const ux = -sun.dir.x, uz = -sun.dir.z;
+    const ul = Math.hypot(ux, uz) || 1e-6;
+    const sunUx = ux / ul, sunUz = uz / ul;
+    const ratio = ul / Math.max(0.15, sun.dir.y);
+    // 宽轴 = 贴片屏幕面内 X 轴（matrixWorld 列0/列1 按 rotateZ 合成）的地面投影
+    //（含父级翻转镜像）；近共线日照时退化垂直
+    const th = m.visual.rotateZ;
+    const cth = Math.cos(th), sth = Math.sin(th);
+    const e = mesh.matrixWorld.elements;
+    let rx = e[0] * cth + e[4] * sth;
+    let rz = e[2] * cth + e[6] * sth;
+    const rl = Math.hypot(rx, rz);
+    if (rl < 1e-4 || Math.abs((rx / rl) * sunUx + (rz / rl) * sunUz) > 0.98) {
+      rx = -sunUz; rz = sunUx;
+    } else {
+      rx /= rl; rz /= rl;
+    }
+    // 视觉高同样按平面内旋转合成（横置时高 = 纹理宽方向）
+    const worldH = Math.max(0.05, Math.hypot(
+      Math.abs(m.worldScale.x) * sth,
+      Math.abs(m.worldScale.y) * cth,
+    ));
+    const len = worldH * ratio;
+    const ax = x + sunUx * airH * ratio;
+    const az = z + sunUz * airH * ratio;
+    m.shadow.followAffine(ax, az, rx, rz, sunUx, sunUz, len,
+      (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
+    const dist = camera ? camera.position.distanceTo(m.worldPos) : 0;
+    const lod = levelForDistance(dist);
+    m.shadow.mesh.visible = mesh.visible && this.host.visible && lod < 3;
+    m.shadow.setLodOpacity(lod, 0.2 + 0.8 * sun.daylight);
+  }
+
   /** 每帧：推进贴片帧动画（只喂 uniforms，mesh 由场景自动渲染）；
-   *   角色朝向变化时刷新前后纹理显隐（缓存防每帧遍历） */
-  update(dt: number): void {
+   *   角色朝向变化时刷新前后纹理显隐（缓存防每帧遍历）；影子同步 */
+  update(dt: number, camera?: THREE.Camera): void {
     for (const m of this.mounted.values()) {
       m.t += dt;
       const idx = Math.floor(m.t * m.fps) % m.frameCount;
       m.quad.render({ frameIndex: idx });
+      this.updateShadow(m, idx, camera);
     }
     const facing = this.getFacing();
     if (facing !== this.lastFacing) {
@@ -177,7 +270,10 @@ export class EquipmentLayer {
   }
 
   dispose(): void {
-    for (const m of this.mounted.values()) m.quad.dispose();
+    for (const m of this.mounted.values()) {
+      m.shadow?.dispose();
+      m.quad.dispose();
+    }
     this.mounted.clear();
   }
 }

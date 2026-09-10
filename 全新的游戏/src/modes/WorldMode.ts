@@ -537,8 +537,8 @@ export class WorldMode implements IGameMode {
       ammo: this.combatItems.ammo.getCount(),
     });
 
-    // ★ 战斗道具播放：装备贴片帧动画驱动
-    this.combatItems.update(dt);
+    // ★ 战斗道具播放：装备贴片帧动画驱动（带相机 → 影子 LOD/昼夜浓度）
+    this.combatItems.update(dt, this.camera ?? undefined);
     // ★ 出击槽池同步（背包拖入/使用装备后，贴片及时刷新；内部 diff，未变则零开销）
     this.syncLoadoutAccum += dt;
     if (this.syncLoadoutAccum >= 0.5) {

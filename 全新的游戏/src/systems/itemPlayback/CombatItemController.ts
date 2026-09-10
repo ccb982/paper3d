@@ -32,9 +32,9 @@ export class CombatItemController {
     return this.ammo.tryFire(DEFAULT_AMMO_TYPE, 1);
   }
 
-  /** 每帧驱动（装备贴片帧动画） */
-  update(dt: number): void {
-    this.equipment.update(dt);
+  /** 每帧驱动（装备贴片帧动画 + 贴地影子） */
+  update(dt: number, camera?: THREE.Camera): void {
+    this.equipment.update(dt, camera);
   }
 
   /** ★ 同步出击槽池 → 装备贴片（进入战场时调用；内部 diff，槽位变更后可随时再调） */
