@@ -8,7 +8,7 @@
 //   ★ 继承父贴片翻转——父 scale 取反时子局部位置/缩放同步镜像
 //   ★ 帧时间由本层独立推进（loop 全部帧）
 // 不侵入播放器管线（子贴片叠加，非每帧纹理合成）。
-// 配置：items.json 条目 combat.kind === 'equip'，参数 asset/slot/facing/offsetX/offsetY/scale。
+// 配置：items.json 条目 combat.kind === 'equip'，参数 asset/slot/facing/offsetX/offsetY/scale/rotateZ。
 // ============================================================
 
 import * as THREE from 'three';
@@ -30,13 +30,15 @@ export interface EquipVisual {
   offsetY: number;
   offsetZ: number;
   scale: number;
+  /** 贴片在画面前的平面内自旋（弧度；90°=横过来） */
+  rotateZ: number;
 }
 
 /** ★ 配置读取：items.json 中 combat.kind==='equip' 的条目 → 视觉参数表 */
 const equipVisuals = new Map<string, EquipVisual>();
 for (const raw of (itemsConfig as { items: Array<Record<string, unknown>> }).items) {
   const combat = raw.combat as
-    | { kind?: string; slot?: string; asset?: string; facing?: 'front' | 'back'; offsetX?: number; offsetY?: number; offsetZ?: number; scale?: number }
+    | { kind?: string; slot?: string; asset?: string; facing?: 'front' | 'back'; offsetX?: number; offsetY?: number; offsetZ?: number; scale?: number; rotateZ?: number }
     | undefined;
   if (combat?.kind === 'equip' && typeof raw.id === 'string' && combat.asset) {
     const slot = (combat.slot ?? 'weapon') as EquipSlot;
@@ -49,6 +51,7 @@ for (const raw of (itemsConfig as { items: Array<Record<string, unknown>> }).ite
       offsetY: combat.offsetY ?? 0,
       offsetZ: combat.offsetZ ?? 0,
       scale: combat.scale ?? 1.0,
+      rotateZ: combat.rotateZ ?? 0,
     });
   }
 }
@@ -134,6 +137,9 @@ export class EquipmentLayer {
       quad.setFrameMapping({ width: frame0.w, height: frame0.h }, { x: 0, y: 0, w: frame0.w, h: frame0.h });
     }
     quad.setScaleKeepAspect(visual.scale);
+    // ★ 平面内自旋（"横过来"）：绕贴片法线（局部 Z，画面前方向）旋转，
+    //   继承父贴片 billboard 朝向 → 旋转始终发生在相机面内。
+    mesh.rotation.z = visual.rotateZ;
     // ★ offsetZ 推向画面前方（父贴片朝相的局部 +Z）、与角色本体错开深度，
     //   避免与主角贴片共面 z-fighting；★ 叠加件按挂载次序再 ±depthIndex 微推：
     //   front 逐件朝相机前移、back 逐件远离相机后移，让"同部位多件全量叠加"
