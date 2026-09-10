@@ -42,12 +42,14 @@ export class WorldUIManager extends BaseInteractionUI {
   private flashItemId: string | null = null;
   private flashTimer: number | undefined = undefined;
   private mapStyleBtn: HTMLButtonElement | null = null;
-  /** ★ 获得物品面板（用户手绘 JSON《页面布局/获得物品.json》换算）：右上角，
-   *  灰黑半透明面板；左 = 物品图标，右 = 文字。 */
-  private pickupPanel: HTMLDivElement | null = null;
-  private pickupIcon: HTMLDivElement | null = null;
-  private pickupText: HTMLDivElement | null = null;
-  private pickupTimer: number | undefined = undefined;
+  /** ★ 获得物品播报栈（用户手绘 JSON《页面布局/获得物品.json》右上区域）：
+   *  每次拾取生成一条面板向下堆叠；到期向下滑动 + 淡出后移除（播报式）。 */
+  private pickupStack: HTMLDivElement | null = null;
+  private pickupToasts: { el: HTMLDivElement; timer: number; dying: boolean }[] = [];
+  /** 同屏最多保留条数（超出时最早的一条立即退场） */
+  private static readonly PICKUP_TOAST_MAX = 5;
+  /** 单条停留时长（ms） */
+  private static readonly PICKUP_TOAST_LIFE_MS = 1800;
   private iconRegistry: ItemIconRegistry | null = null;
 
   constructor(
@@ -187,29 +189,28 @@ export class WorldUIManager extends BaseInteractionUI {
   }
 
   /** 显示拾取结果：右上角"获得物品"面板（手绘 JSON 布局，左图标 + 右文字）；
-   *  背包满 → 同一面板显示失败文案（图标淡化）。重复拾取刷新内容并重置计时。 */
+   *  背包满 → 失败文案（图标淡化）。可叠加：每次生成一条，向下堆叠、到期下滑淡出。 */
   showPickupResult(itemId: string, success: boolean, count = 1): void {
     const name = this.itemManager.getArchetype(itemId)?.name ?? itemId;
-    this.ensurePickupPanel();
-    const icon = this.pickupIcon!;
-    const text = this.pickupText!;
-    icon.innerHTML = '';
-    this.iconRegistry ??= new ItemIconRegistry(this.itemManager);
-    const el = this.iconRegistry.createIconElement(itemId);
-    el.style.width = '100%';
-    el.style.height = '100%';
-    el.style.objectFit = 'contain';
-    el.style.imageRendering = 'pixelated';
-    el.style.opacity = success ? '1' : '0.35';
-    icon.appendChild(el);
-    text.textContent = success
+    const label = success
       ? count > 1 ? `获得了 ${name} ×${count}` : `获得了 ${name}`
       : `背包已满，无法拾取 ${name}`;
-    text.style.color = success ? '#e8ecf2' : '#ff9a9a';
-    const panel = this.pickupPanel!;
-    panel.style.opacity = '1';
-    clearTimeout(this.pickupTimer);
-    this.pickupTimer = window.setTimeout(() => { panel.style.opacity = '0'; }, 1800);
+    const toast = this.buildPickupToast(itemId, success, label);
+    const stack = this.ensurePickupStack();
+    // 超过上限：最早的一条立即进入退场（保持播报流不堆满屏）
+    while (this.pickupToasts.length >= WorldUIManager.PICKUP_TOAST_MAX) {
+      const oldest = this.pickupToasts[0];
+      this.dismissPickupToast(oldest);
+    }
+    stack.appendChild(toast);
+    // 入场：下一帧切终态触发过渡（上方 10px 滑入 + 淡入）
+    requestAnimationFrame(() => {
+      toast.style.transform = 'translateY(0)';
+      toast.style.opacity = '1';
+    });
+    const rec = { el: toast, timer: 0, dying: false };
+    rec.timer = window.setTimeout(() => this.dismissPickupToast(rec), WorldUIManager.PICKUP_TOAST_LIFE_MS);
+    this.pickupToasts.push(rec);
     // ★ 记录闪烁物品 ID，下次渲染背包时格子闪黄光
     if (success) {
       this.flashItemId = itemId;
@@ -218,30 +219,67 @@ export class WorldUIManager extends BaseInteractionUI {
     }
   }
 
-  /** 惰性建面板：位置/尺寸按手绘 JSON 归一化坐标换算
-   *  （x 0.8766~0.9984 → right 0.16% / width 12.18%；y 0.8093~0.9103，y 自下而上
-   *  → CSS top = 1-y1 = 8.97% / min-height 10.1%） */
-  private ensurePickupPanel(): void {
-    if (this.pickupPanel) return;
+  /** 退场：向下滑动 + 淡出 → 移除（幂等） */
+  private dismissPickupToast(rec: { el: HTMLDivElement; timer: number; dying: boolean }): void {
+    if (rec.dying) return;
+    rec.dying = true;
+    clearTimeout(rec.timer);
+    const i = this.pickupToasts.indexOf(rec);
+    if (i >= 0) this.pickupToasts.splice(i, 1);
+    rec.el.style.transform = 'translateY(19px)';
+    rec.el.style.opacity = '0';
+    setTimeout(() => rec.el.remove(), 300);
+  }
+
+  /** 单条播报面板：灰黑半透明，左 = 物品图标，右 = 文字（失败红字 + 图标淡化）；
+   *  ★ 用户定调：先按手绘面板放大 2×，再缩小 1/3（净 ≈1.33×）。 */
+  private buildPickupToast(itemId: string, success: boolean, label: string): HTMLDivElement {
     const panel = document.createElement('div');
     panel.style.cssText = [
-      'position:fixed', 'top:8.97%', 'right:0.16%', 'width:12.18%', 'min-height:10.1%',
-      'z-index:70', 'display:flex', 'align-items:center', 'gap:8px',
-      'padding:6px 10px', 'box-sizing:border-box',
+      'width:100%', 'min-height:59px', 'display:flex', 'align-items:center', 'gap:11px',
+      'padding:8px 13px', 'box-sizing:border-box',
       'background:rgba(18,20,24,0.72)', 'border:1px solid rgba(255,255,255,0.10)',
-      'border-radius:8px', 'pointer-events:none',
-      'opacity:0', 'transition:opacity .18s ease',
+      'border-radius:11px', 'pointer-events:none',
+      // 入场起点：上方 13px + 全透明；位移动画统一由 transform/opacity 过渡驱动
+      'transform:translateY(-13px)', 'opacity:0',
+      'transition:transform .22s ease,opacity .22s ease',
     ].join(';');
     const icon = document.createElement('div');
-    icon.style.cssText = 'flex:0 0 auto;width:36px;height:36px;display:flex;align-items:center;justify-content:center;';
+    icon.style.cssText = 'flex:0 0 auto;width:48px;height:48px;display:flex;align-items:center;justify-content:center;';
+    this.iconRegistry ??= new ItemIconRegistry(this.itemManager);
+    const el = this.iconRegistry.createIconElement(itemId);
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.objectFit = 'contain';
+    el.style.imageRendering = 'pixelated';
+    el.style.opacity = success ? '1' : '0.35';
+    icon.appendChild(el);
     const text = document.createElement('div');
-    text.style.cssText = 'flex:1 1 auto;color:#e8ecf2;font-size:13px;line-height:1.35;text-shadow:0 1px 2px rgba(0,0,0,.6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    text.textContent = label;
+    text.style.cssText = [
+      'flex:1 1 auto', 'font-size:17px', 'line-height:1.35',
+      'text-shadow:0 1px 2px rgba(0,0,0,.6)',
+      'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis',
+      `color:${success ? '#e8ecf2' : '#ff9a9a'}`,
+    ].join(';');
     panel.appendChild(icon);
     panel.appendChild(text);
-    document.body.appendChild(panel);
-    this.pickupPanel = panel;
-    this.pickupIcon = icon;
-    this.pickupText = text;
+    return panel;
+  }
+
+  /** 惰性建播报栈容器：位置按手绘 JSON 归一化坐标换算；宽度 12.18% × 2 × (2/3) = 16.24%
+   *  （用户定调：放大 2× 后再缩 1/3）；叠加为列，单条高度取内容高度 59px 起。 */
+  private ensurePickupStack(): HTMLDivElement {
+    if (this.pickupStack) return this.pickupStack;
+    const stack = document.createElement('div');
+    stack.style.cssText = [
+      'position:fixed', 'top:8.97%', 'right:0.16%', 'width:16.24%',
+      'z-index:70', 'display:flex', 'flex-direction:column', 'gap:8px',
+      'align-items:stretch', 'pointer-events:none',
+    ].join(';');
+    document.body.appendChild(stack);
+    this.pickupStack = stack;
+    return stack;
   }
 
   /** 打开对话（世界轻量版，非模态 HUD 小部件） */
@@ -344,12 +382,11 @@ export class WorldUIManager extends BaseInteractionUI {
     this.mapStyleBtn = null;
     for (const ft of this.floatingTexts) ft.el.remove();
     this.floatingTexts = [];
-    // ★ 获得物品面板
-    clearTimeout(this.pickupTimer);
-    this.pickupPanel?.remove();
-    this.pickupPanel = null;
-    this.pickupIcon = null;
-    this.pickupText = null;
+    // ★ 获得物品播报栈
+    for (const rec of this.pickupToasts) clearTimeout(rec.timer);
+    this.pickupToasts = [];
+    this.pickupStack?.remove();
+    this.pickupStack = null;
     this.iconRegistry = null;
   }
 }

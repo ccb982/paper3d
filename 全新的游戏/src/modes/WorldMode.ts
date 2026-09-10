@@ -623,9 +623,10 @@ export class WorldMode implements IGameMode {
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
+    //    ★ 攻击间隔 0.45s → 0.9s（2026-09-10 用户定调：放大两倍）
     this.bulletCooldown -= dt;
     if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
-      this.bulletCooldown = 0.45;
+      this.bulletCooldown = 0.9;
       this.firePlayerBullet();
     }
 
