@@ -56,8 +56,8 @@ export class CombatDirector {
     if (target.entity.kind === 'player') return; // 玩家死亡走自己的结算演出
     const r = FEEL.killEnemy;
     renderManager.hitstop(r.hitstop, r.scale);
-    // ★ 无人机击杀不抖镜头（用户定调：角色/子弹击杀照常冲击）——无人机 camp=neutral
-    if (source?.camp !== 'neutral') this.camera?.addKick(r.camKick);
+    // ★ 无人机击杀不抖镜头（用户定调：角色/子弹击杀照常冲击）——仅玩家来源产生 kick
+    if (source?.camp === 'player') this.camera?.addKick(r.camKick);
     this.playSfx('kill');
   }
 

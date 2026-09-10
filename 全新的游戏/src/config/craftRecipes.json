@@ -18,6 +18,25 @@
         "count": 1
       },
       "station": "ship"
+    },
+    {
+      "id": "kaltsit_drone_repair",
+      "name": "维修无人机",
+      "inputs": [
+        {
+          "itemId": "kaltsit_drone_broken",
+          "count": 1
+        },
+        {
+          "itemId": "iron_grain",
+          "count": 2
+        }
+      ],
+      "output": {
+        "itemId": "kaltsit_drone",
+        "count": 1
+      },
+      "station": "ship"
     }
   ]
 }

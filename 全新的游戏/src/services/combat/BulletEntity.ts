@@ -7,6 +7,7 @@
 
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
+import { sameTeam } from './teams';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import type { ShadowFrameSource } from '../render/SilhouetteShadow';
 
@@ -161,7 +162,7 @@ export class BulletEntity extends EntityBase {
   override onCollision(other: EntityBase | null, started: boolean): void {
     if (!this.active) return;
     if (!started) return;
-    if (other && other.camp === this.camp) return;
+    if (other && sameTeam(other.camp, this.camp)) return; // ★ 友军过滤（唯一真源：player/ally 互免）
     this.hitFx?.(other);
     this.onHit?.({
       self: this,

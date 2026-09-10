@@ -50,6 +50,10 @@ import { WorldUIManager } from '../ui/world/WorldUIManager';
 import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
 
+/** ★ 友军物品 id：部署生成 / 损毁替换为残骸（维修配方在舰船加工台） */
+const DRONE_ITEM = 'kaltsit_drone';
+const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
+
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
 // ============================================================
@@ -395,11 +399,12 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
     this.droneAsset = ctx.droneAsset ?? null;
-    // ★ 玩家出生位置自动放一个无人机跟随（道具召唤保留，可再放）
+    // ★ 进入战场：按已部署友军槽位生成（残骸槽位不生成，需先维修）
     if (this.droneAsset) {
-      // ★ 进入战场：按已部署友军数生成（背包友军槽位）
-      const deployed = this.itemManager?.getDeployedAllies?.().length ?? 0;
-      for (let i = 0; i < deployed; i++) this.spawnDroneNearPlayer();
+      const deployed = this.itemManager?.getDeployedAllies?.() ?? [];
+      for (let i = 0; i < deployed.length; i++) {
+        if (deployed[i] === DRONE_ITEM) this.spawnDroneNearPlayer(i);
+      }
     }
 
     console.log(`[WorldMode] 进入战场，第 ${ctx.day} 天，HP ${ctx.combatStats.maxHp}`);
@@ -438,23 +443,33 @@ export class WorldMode implements IGameMode {
           this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
         }
       });
-      // ★ 杂兵死亡 → 结算击杀掉落 + 从 enemies 列表移除（含坠坑外的伤害致死）
+      // ★ 击杀结算：无人机与杂兵分流（无人机损毁 = 槽位换残骸 + 从编队移除）
       this.killedUnsub = eventBus.on('killed', (payload) => {
+        const di = this.drones.indexOf(payload.target as DroneEntity);
+        if (di !== -1) {
+          const drone = this.drones[di];
+          this.drones.splice(di, 1);
+          if (drone.slotIndex >= 0) this.itemManager?.replaceAlly(drone.slotIndex, DRONE_BROKEN_ITEM);
+          this.showFloatingAt(drone.position.x, drone.position.y, drone.position.z, '无人机损毁', 'crit');
+          return; // 不参与杂兵掉落结算
+        }
         const enemy = payload.target as EnemyBase;
         this.rollEnemyDrops(enemy);
         const idx = this.enemies.indexOf(enemy);
         if (idx !== -1) this.enemies.splice(idx, 1);
       });
-      // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出
+      // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
       this.droneSummonUnsub = eventBus.on('drone_summon', () => {
         this.spawnDroneNearPlayer();
       });
-      // ★ 友军槽位部署/卸载：背包拖入 → 生成，拖出 → 回收
+      // ★ 友军槽位部署/卸载：背包拖入 → 生成并记录槽位；拖出 → 回收对应无人机
       this.allyDeployUnsub = eventBus.on('ally_deploy', () => {
-        if (this.droneAsset) this.spawnDroneNearPlayer();
+        if (!this.droneAsset) return;
+        const slot = (this.itemManager?.getDeployedAllies?.().length ?? 1) - 1;
+        this.spawnDroneNearPlayer(slot);
       });
-      this.allyUndeployUnsub = eventBus.on('ally_undeploy', () => {
-        this.despawnLastDrone();
+      this.allyUndeployUnsub = eventBus.on('ally_undeploy', (payload) => {
+        this.despawnAllyAt(payload.slotIndex);
       });
     });
   }
@@ -1077,23 +1092,47 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 生成一架无人机（追加进编队；道具可多次使用 → 多机编队） */
-  private spawnDroneNearPlayer(): void {
+  /** ★ 生成一架无人机（追加进编队；道具可多次使用 → 多机编队）
+   *  slotIndex = 友军槽位号（-1 = 道具召唤不入槽） */
+  private spawnDroneNearPlayer(slotIndex = -1): void {
     if (!this.scene || !this.player || !this.droneAsset) return;
     const p = this.player.position;
     const drone = new DroneEntity(this.entities, this.scene, this.droneAsset, {
       x: p.x + (Math.random() - 0.5) * 2, y: p.y + 2.0, z: p.z + (Math.random() - 0.5) * 2,
       scale: 1.2,
     });
+    drone.slotIndex = slotIndex;
     this.drones.push(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
   }
 
-  /** ★ 回收最后一架无人机（背包友军槽位卸载时） */
-  private despawnLastDrone(): void {
-    const d = this.drones.pop();
-    d?.dispose();
+  /** ★ 回收指定槽位友军（背包拖出）：销毁对应无人机；其余槽位索引左移。
+   *  残骸槽位（无对应无人机）只左移索引；不误杀其它槽位的无人机。 */
+  private despawnAllyAt(slotIndex: number): void {
+    for (let i = 0; i < this.drones.length; i++) {
+      const d = this.drones[i];
+      if (d.slotIndex === slotIndex) {
+        this.drones.splice(i, 1);
+        d.dispose();
+        break;
+      }
+    }
+    for (const d of this.drones) if (d.slotIndex > slotIndex) d.slotIndex--;
+  }
+
+  /** 世界坐标 → 屏幕浮动文字（距相机 >20m 不显示，与伤害数字同 LOD 口径） */
+  private showFloatingAt(x: number, y: number, z: number, text: string, type: 'normal' | 'crit' | 'heal' | 'miss' | 'pickup'): void {
+    if (!this.camera || !this.worldUIManager) return;
+    const cam = this.camera.position;
+    const dx = x - cam.x, dz = z - cam.z;
+    if (dx * dx + dz * dz > 20 * 20) return;
+    const v = new THREE.Vector3(x, y + 1.0, z).project(this.camera);
+    this.worldUIManager.showFloatingText(
+      (v.x * 0.5 + 0.5) * window.innerWidth,
+      (-v.y * 0.5 + 0.5) * window.innerHeight - 30,
+      text, type,
+    );
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {

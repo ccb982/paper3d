@@ -21,6 +21,7 @@ import type { Asset } from '../vendor/player';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
 import { DroneCompositeRender } from '../services/render/DroneCompositeRender';
 import { DroneBeamEffect } from '../services/render/DroneBeam';
+import { HealthBar } from '../services/fx/HealthBar';
 import { executeAttack } from '../services/combat/Attack';
 import { RasterMap } from '../services/map/RasterMap';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
@@ -48,6 +49,8 @@ export class DroneEntity extends EntityBase {
   readonly followTarget = { x: 0, y: 0, z: 0 };
   /** 玩家位置（WorldMode 每帧喂入；锁定/返回判定用） */
   readonly playerPos = { x: 0, y: 0, z: 0 };
+  /** ★ 友军槽位号（-1 = 道具召唤不入槽；回收/损毁时按槽位精确联动） */
+  slotIndex = -1;
   /** 当前 AI 状态（调试/表现可读） */
   aiState: DroneState = 'follow';
   /** 悬浮相位（正弦摆动/环绕用） */
@@ -84,12 +87,14 @@ export class DroneEntity extends EntityBase {
       animInitial: opts.animInitial,
     });
     this._sceneRef = scene;
-    this.camp = 'neutral';
+    this.camp = 'ally';
     this.billboard = true;
     // ★ 无人机豁免视锥裁剪 + 距离 LOD：LOD≥2 会冻结动画时间轴（FrameAnimatorBase.update），
     //   双翼 VAT 连续时钟（localTime）随之停摆 → 必须全程满档
     this.lodExempt = true;
     this.attachToScene(scene);
+    // ★ 可损毁：头顶血条（损毁后残骸进槽位，舰船加工台用材料维修）
+    this.attachEffect('health', new HealthBar(scene, this, { width: 0.6, height: 0.07, offsetY: 1.6 }));
 
     // 按画布宽高比设贴片尺寸（宽 = baseSize；不压扁）
     const r = this.renderer as DroneCompositeRender | null;
@@ -151,7 +156,7 @@ export class DroneEntity extends EntityBase {
       x: t.position.x, y: t.position.y + ATTACK_AIM_Y, z: t.position.z,
       range: ATTACK_RANGE + 0.8,
       damage: DRONE_DAMAGE,
-      camp: 'player',
+      camp: 'ally',
       dmgType: 'physical',
     });
     // ★ 攻击特效：射线从无人机射向目标（0.55s 高亮保持；上一束未播完则先销毁）

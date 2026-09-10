@@ -34,14 +34,16 @@ export class HealthBar implements EntityEffect {
     this.maxHp = target.hp; // 初始血量 = 最大值
 
     const bgGeo = new THREE.PlaneGeometry(w, this.height);
-    // ★ depthTest 开启 + depthWrite 关闭：血条读深度（被地形遮挡时正确隐藏），
-    //   不写深度（透明排序安全）；polygonOffset 防与地形面 z-fighting
+    // ★ 与子弹同款层级（BulletRenderer）：水面 renderOrder=10 先画，血条排 20 后画；
+    //   不写深度（透明排序安全）→ 不会被远处的水无差别盖住；
+    //   depthTest 仍读地形/角色深度 → 被地形挡住的遮挡关系保持正确。
     const bgMat = new THREE.MeshBasicMaterial({
       color: 0x1a1a1a, transparent: true, opacity: 0.7,
       depthTest: true, depthWrite: false,
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
     });
     const bg = new THREE.Mesh(bgGeo, bgMat);
+    bg.renderOrder = 20;
 
     const fgGeo = new THREE.PlaneGeometry(w, this.height);
     const fgMat = new THREE.MeshBasicMaterial({
@@ -50,6 +52,8 @@ export class HealthBar implements EntityEffect {
       polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
     });
     this.fg = new THREE.Mesh(fgGeo, fgMat);
+    // ★ 前景排背景之后（同层内保证前景条盖在暗底上）
+    this.fg.renderOrder = 21;
     // ★ 锚点左端：几何平移到右侧 + 位置对齐背景左端 → scale.x 从左侧收缩
     this.fg.geometry.translate(w / 2, 0, 0);
     this.fg.position.x = -w / 2;

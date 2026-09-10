@@ -10,6 +10,7 @@
 import type { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { applyDamage } from './DamagePipeline';
+import { sameTeam } from './teams';
 import { eventBus } from '../../core/EventBus';
 import { BulletManager, type SpawnBulletOptions } from './BulletManager';
 
@@ -62,7 +63,7 @@ export function executeAttack(
       // 范围瞬时判定（RasterMap 分块查询）→ 敌对目标 → 伤害管线
       const targets = em.querySphere(opts.x, opts.z, opts.range);
       for (const t of targets) {
-        if (t === opts.source || t.camp === opts.camp) continue;
+        if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 2) continue; // 高度过滤（不同层）
         const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
         // ★ 近战伤害同样上事件（浮动数字/导演反馈与子弹一致——无人机/敌人近战可见）
@@ -75,7 +76,7 @@ export function executeAttack(
       // 范围结算（延迟效果后续：delay 到点再结算）
       const targets = em.querySphere(opts.x, opts.z, opts.radius);
       for (const t of targets) {
-        if (t === opts.source || t.camp === opts.camp) continue;
+        if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 3) continue;
         const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
         eventBus.emit('damage', { target: t, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });

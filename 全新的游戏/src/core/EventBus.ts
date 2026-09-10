@@ -46,7 +46,7 @@ export interface EventMap {
   'drone_summon': { x?: number; z?: number };
   // ★ 友军部署/卸载（背包页面友军槽位拖入/拖出；WorldMode 订阅生成/回收）
   'ally_deploy': { itemId: string };
-  'ally_undeploy': { itemId: string };
+  'ally_undeploy': { itemId: string; slotIndex: number };
 }
 
 export type EventKey = keyof EventMap;

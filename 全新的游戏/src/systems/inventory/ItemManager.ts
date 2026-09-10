@@ -189,7 +189,15 @@ export class ItemManager {
     if (!id) return false;
     list.splice(slotIndex, 1);
     this.addItem('player', id, 1);
-    eventBus.emit('ally_undeploy', { itemId: id });
+    eventBus.emit('ally_undeploy', { itemId: id, slotIndex });
+    return true;
+  }
+
+  /** ★ 友军损毁：槽位原位替换为残骸（不返还背包；维修配方在舰船加工台修回） */
+  replaceAlly(slotIndex: number, itemId: string): boolean {
+    const list = this.session.deployedAllies;
+    if (!Array.isArray(list) || slotIndex < 0 || slotIndex >= list.length) return false;
+    list[slotIndex] = itemId;
     return true;
   }
 

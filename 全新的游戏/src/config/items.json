@@ -223,6 +223,20 @@
       "effects": [
         { "type": "summon_drone" }
       ]
+    },
+    {
+      "id": "kaltsit_drone_broken",
+      "name": "无人机残骸",
+      "type": "material",
+      "description": "损毁的可露希尔无人机。在舰船加工台用 2 个异铁修好，就能重新部署",
+      "maxStack": 3,
+      "color": { "h": 0.05, "s": 0.30, "l": 0.35 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.25, "hy": 0.25, "hz": 0.25 },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": []
     }
   ]
 }
