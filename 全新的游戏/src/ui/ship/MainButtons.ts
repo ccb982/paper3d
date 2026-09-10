@@ -135,26 +135,12 @@ export class MainButtons {
 
     this._btnHitAreas = [];
 
-    console.log('[MainButtons] 按钮FTX帧数:', btnAsset.frameCount, '帧名:', btnAsset.frameNames());
-
     for (const anno of BUTTON_ANNOTATIONS) {
       const pair = btnAsset.getFramePair(anno.frameIndex);
       if (!pair) {
         console.warn('[MainButtons] 跳过无纹理按钮:', anno.label, '帧索引:', anno.frameIndex);
         continue;
       }
-      // 调试：检查纹理数据
-      const baseTex = pair.base;
-      const baseData = baseTex.image.data as unknown as Float32Array;
-      let alphaMax = 0, alphaCount = 0;
-      const step = Math.max(1, Math.floor(baseData.length / 4000)); // 最多采样~1000个像素
-      for (let i = 3; i < baseData.length; i += step * 4) {
-        if (baseData[i] > alphaMax) alphaMax = baseData[i];
-        if (baseData[i] > 0.5) alphaCount++;
-      }
-      alphaCount *= step; // 估算总数
-      console.log(`[MainButtons] ${anno.label} 纹理:`, baseTex.image.width, 'x', baseTex.image.height, `alpha>0.5约:${alphaCount}px, maxAlpha:${alphaMax}`);
-
       // 创建梯形几何体
       const { tl, tr, bl, br } = this.screenToThree(anno.corners, aspect);
       const geo = new THREE.BufferGeometry();

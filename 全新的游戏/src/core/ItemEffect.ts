@@ -53,7 +53,6 @@ effectRegistry.set('heal', (params, ctx) => {
 
 effectRegistry.set('buff_attack', (params, ctx) => {
   // 此处预留 Buff 系统接口
-  console.log(`[效果] 攻击力 +${params.value}，持续 ${params.duration ?? 10} 秒`);
   return { success: true, message: `攻击力提升 ${params.value}` };
 });
 

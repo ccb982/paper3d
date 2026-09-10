@@ -139,8 +139,6 @@ export class BulletVisual extends OffscreenBake {
 
   /** ★ 强制首帧烘焙 + 预热（解决构造时纹理全黑 + 首次开火 shader 编译卡顿） */
   init(): void {
-    // ★ 版本横幅：无条件打印，用于确认运行中的是最新代码
-    console.log(`[BulletVisual] init ✓ v230823-4 fluid=${!!this.fluid} dbgParam=${location.search || '(无参数)'}`);
     // ★ 诊断开关（临时）：URL 参数剥离源配置，定位周期性黑团来源
     //   ?nowp=1 去路点（源每1s瞬移）| ?nogate=1 去间歇门控 | ?nowave=1 去波形摆动
     if (this.fluid) {

@@ -18,8 +18,6 @@ export const SaveSystem = {
       session.meta.lastSavedAt = new Date().toISOString();
       const json = JSON.stringify(session);
       localStorage.setItem(STORAGE_KEY, json);
-      console.log(`[存档] 第 ${session.meta.day} 天已保存至舰船`);
-      console.log(`[存档] 背包: 基地 ${countItems(session.inventories.base)} 件, 飞船 ${countItems(session.inventories.ship)} 件, 玩家 ${countItems(session.inventories.player)} 件`);
     } catch (e) {
       console.error('[存档] 保存失败:', e);
     }
@@ -31,10 +29,7 @@ export const SaveSystem = {
   load(): GameSession | null {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) {
-        console.log('[存档] 未找到存档，将开始新游戏');
-        return null;
-      }
+      if (!raw) return null;
       const data = JSON.parse(raw) as GameSession;
       if (!data.meta || !data.meta.version) {
         console.warn('[存档] 存档版本不兼容，将丢弃');
@@ -83,13 +78,11 @@ export const SaveSystem = {
         }
         data.player.slots = merged.slice(0, SLOT_COUNT);
         while (data.player.slots.length < SLOT_COUNT) data.player.slots.push(null);
-        console.log(`[迁移] 出击槽池构建完成，含 ${merged.filter(Boolean).length} 件`);
       }
       // ★ 旧字段清理（已并入槽池）
       delete (data as unknown as { deployedAllies?: unknown }).deployedAllies;
       delete (data.player as { equips?: unknown }).equips;
 
-      console.log(`[存档] 读取成功，第 ${data.meta.day} 天`);
       return data;
     } catch (e) {
       console.error('[存档] 读取失败:', e);
@@ -103,7 +96,6 @@ export const SaveSystem = {
   clear(): void {
     try {
       localStorage.removeItem(STORAGE_KEY);
-      console.log('[存档] 存档已清除');
     } catch (e) {
       console.warn('[存档] 清除失败:', e);
     }

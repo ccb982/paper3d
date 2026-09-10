@@ -34,7 +34,6 @@ export class ItemManager {
       const arch = new ItemArchetype(raw);
       this.archetypes.set(arch.id, arch);
     }
-    console.log(`[ItemManager] 已加载 ${this.archetypes.size} 个物品原形`);
   }
 
   /** 获取原形（供 UI 查询颜色/名称/最大堆叠/世界参数） */

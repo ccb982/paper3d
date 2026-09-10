@@ -335,9 +335,6 @@ export class WorldMode implements IGameMode {
     );
     // ★ 首波节奏：1.5s 后先来第一波（出生圈附近的安全巡逻）
     this.respawnTimer = 1.5;
-    if (this.mobDefs.length > 0) {
-      console.log(`[WorldMode] 杂兵配置 ${this.mobDefs.length} 类，chunk 激活式波次生成`);
-    }
 
     // ---- 相机 ----
     this.cameraCtrl = new CameraController(this.camera);
@@ -379,7 +376,6 @@ export class WorldMode implements IGameMode {
       item.onPickup = (it, picker) => {
         const success = this.itemManager.addItem('player', it.archetype.id, 1);
         if (success) {
-          console.log(`[拾取] ${picker.constructor.name} 拾取了「${it.archetype.name}」(${it.archetype.id})`);
           // ★ 金色发光粒子
           const pos = it.position;
           this.pickupGlows.push(new PickupGlowEffect(this.scene!, pos.x, pos.y + 0.3, pos.z));
@@ -433,8 +429,6 @@ export class WorldMode implements IGameMode {
         if (entry) entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot) });
       }
     }
-
-    console.log(`[WorldMode] 进入战场，第 ${ctx.day} 天，HP ${ctx.combatStats.maxHp}`);
 
     // ---- ★ 调试：F9 回读最终绘制颜色（游标指向像素 + 中心网格；诊断警示贴画偏色用） ----
     const onF9 = (e: KeyboardEvent) => {
@@ -743,8 +737,6 @@ export class WorldMode implements IGameMode {
     this.scene = null;
     this.camera = null;
     this.renderer = null;
-
-    console.log('[WorldMode] 战场已清理，返回舰船');
   }
 
   // ============================================================

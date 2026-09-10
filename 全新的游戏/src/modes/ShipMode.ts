@@ -118,7 +118,6 @@ export class ShipMode implements IGameMode {
 
     // 触发存档事件
     eventBus.emit('save_complete', {});
-    console.log('[ShipMode] 舰船场景已加载');
   }
 
   exit(): void {
@@ -143,7 +142,6 @@ export class ShipMode implements IGameMode {
     // ⑤ 清空引用
     this.session = null;
     this.onDepart = undefined;
-    console.log('[ShipMode] 舰船场景已卸载');
   }
 
   update(_dt: number): void {

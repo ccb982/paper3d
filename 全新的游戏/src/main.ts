@@ -149,17 +149,14 @@ async function boot() {
 
   // ---- 3. 加载资产 ----
   protagonistAsset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
-  console.log('[boot] 主角已加载:', protagonistAsset.frameNames().join(', '));
 
   try {
     bulletAsset = await Asset.load(encodeURI('/fx/bullets/维什戴尔子弹.scene.zip'));
   } catch {
     bulletAsset = await FtxAsset.load(encodeURI('/fx/bullets/维什戴尔子弹.ftx3.gz'));
   }
-  console.log('[boot] 子弹资产已加载');
 
   enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
-  console.log('[boot] 敌人已加载:', enemyAsset.frameNames().join(', '), '帧');
 
   // ---- ★ 三个杂兵（纯纹理包）：地图大量随机生成用 ----
   mobAssets = await Promise.all([
@@ -167,7 +164,6 @@ async function boot() {
     FtxAsset.load(encodeURI('/characters/enemies/整合运动人员，杂兵.ftx3.gz')),
     FtxAsset.load(encodeURI('/characters/enemies/牢杰，杂兵.ftx3.gz')),
   ]);
-  console.log('[boot] 三杂兵已加载', mobAssets.length, '个');
 
   try {
     hitEffectAsset = await Asset.load(encodeURI('/fx/bullets/主角子弹击中特效.scene.zip'));
@@ -181,7 +177,6 @@ async function boot() {
   } catch {
     droneAsset = await FtxAsset.load(encodeURI('/fx/可露希尔的无人机.ftx3.gz'));
   }
-  console.log('[boot] 可露希尔的无人机已加载:', (droneAsset as Asset).frameNames?.()?.join(', ') ?? 'texture');
   // ★ 预热无人机动态图标（主渲染器离屏烘焙；背包/加工台从 this 取动画帧）
   getDroneIconAnimator().warm(droneAsset);
 
@@ -197,11 +192,9 @@ async function boot() {
         // ★ 用特效播放器完整管线 → 支持 VAT 顶点动画/扭曲等特效
         const moonEffect = new MoonEffect(moonAsset);
         renderManager.setMoonEffect(moonEffect);
-        console.log(`[boot] 月亮已启用特效播放器: ${ftx.width}×${ftx.height}, ${f0.regionEntities.length} region(s), VAT enabled`);
       } else {
         // 只有静态纹理 → 用旧模式直接采样
         renderManager.setMoonTexture(pair.base, pair.residual);
-        console.log(`[boot] 月亮已加载静态纹理: ${ftx.width}×${ftx.height}, bbox=(${ftx.bbox.x},${ftx.bbox.y},${ftx.bbox.w}x${ftx.bbox.h})`);
       }
     } else {
       renderManager.setMoonEffect(null);
@@ -217,7 +210,6 @@ async function boot() {
   if (!currentSession) {
     currentSession = createNewSession();
     SaveSystem.save(currentSession);
-    console.log('[boot] 新游戏存档已创建');
   }
 
   // ★★★★★ 修复：如果标志为 true 但游戏刚启动，说明上次出击未正常执行 ★★★★★
@@ -225,7 +217,6 @@ async function boot() {
     console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），战斗未正常执行，维持当天存档');
     currentSession.dayProgress.hasDepartedToday = false;
     SaveSystem.save(currentSession);
-    console.log(`[boot] 已重置出击标志，当前仍为第 ${currentSession.meta.day} 天`);
   }
 
   // ---- 4. 启动主循环 ----
@@ -297,7 +288,6 @@ async function boot() {
   enterShipMode(scene, camera, renderer);
 
   animate();
-  console.log('[boot] 架构就绪：main.ts 作为路由器，委托模式管理');
 }
 
 // ============================================================
@@ -331,7 +321,6 @@ function enterShipMode(
   currentMode = ship;
   currentEnv = 'ship';
   renderManager.setEnvironment('ship');
-  console.log(`[main] 进入 ShipMode，当前第 ${currentSession?.meta.day} 天`);
 }
 
 /** 出击到世界模式 */
@@ -373,8 +362,6 @@ function enterWorldMode(
   currentMode = world;
   currentEnv = 'world';
   renderManager.setEnvironment('world');
-
-  console.log(`[main] 进入 WorldMode，第 ${day} 天，战斗属性: HP ${combatStats.maxHp}`);
 }
 
 // ============================================================
