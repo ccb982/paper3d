@@ -71,9 +71,15 @@ const WALL_FLUSH_EPS = 0.002;  // 壁两侧表面视为等高的容差（m）。
                                // 真实地形哪怕 3~5mm 的高台棱也是可见侧壁，剔除会使其消失
                                // （2026-09-05 用户：微小高差地面补丁后侧壁不应消失）。
 
+/** ★ 跨 chunk 层数查询：世界 1m cell 下标 → 层数（未加载/无数据 = 0）。
+ *  包络场/深度场/补丁判定经此读邻 chunk，替代"出界=虚拟 0"的 seam 语义。 */
+export type LevelAtWorld = (wx: number, wz: number) => number;
+
 export interface PatchOverlay {
   /** 1m coarse cell(lx,lz)（chunk 局部）是否处于补丁区 */
   isPatched(lx: number, lz: number): boolean;
+  /** ★ 世界 1m cell 下标是否补丁（跨 chunk；缺省实现 = 仅本 chunk） */
+  isPatchedAtWorld?(wx: number, wz: number): boolean;
   /** 世界坐标补丁深度（逐顶点采样；坑内 = PATCH_DEPTH，坑缘坡降 → 0） */
   depthOf(wx: number, wz: number): number;
   /** 补丁顶点色（线性 rgb；材质替换基准色 = 焦土色） */
@@ -101,6 +107,8 @@ export function buildPatchOverlay(
   const ox = cx * chunkSize, oz = cz * chunkSize;
   const isPatched = (lx: number, lz: number): boolean =>
     lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize && patched[lz * chunkSize + lx] === 1;
+  const isPatchedAtWorld = (wx: number, wz: number): boolean =>
+    isPatched(Math.floor(wx) - ox, Math.floor(wz) - oz);
   const depthOf = (wx: number, wz: number): number => {
     const px = wx - ox, pz = wz - oz;
     const lx = Math.floor(px), lz = Math.floor(pz);
@@ -129,7 +137,7 @@ export function buildPatchOverlay(
     const s = t * t * (3 - 2 * t);                   // smoothstep 坡面插值
     return depth * s;
   };
-  return { isPatched, depthOf, color: color.slice() as [number, number, number], decor: { ...DEFAULT_PATCH_DECOR } };
+  return { isPatched, isPatchedAtWorld, depthOf, color: color.slice() as [number, number, number], decor: { ...DEFAULT_PATCH_DECOR } };
 }
 
 // ------------------------------------------------------------
@@ -140,11 +148,12 @@ export function buildPatchOverlay(
 export const PATCH_LEVEL_WIDTH = 0.5;
 
 /**
- * 包络场（原型定稿，chunk 局部）：
+ * 包络场（原型定稿，chunk 局部 + 跨 chunk 连续）：
  * u(p) = min over 4 卡氏射线 r of min_{k≥0}[ N[j+k] + d_k(p) / W ]
  *   - j = p 所在 cell；k=0 项 = N_p（自身 cell 常数地板，diag 不上射线 → 不泄压）
  *   - d_k = p 到第 k 个 cell 最近边的轴距（+x = k−frac；−x = frac+(k−1)；z 同理）
- *   - 出 chunk 界视作层 0（seam 收口，几何与采样同规则）
+ *   - ★ 跨 chunk（2026-09-10）：出本 chunk 后经 levelAt 继续读邻 chunk 层数，
+ *     坑口线/坡面跨 seam 连续；levelAt 缺省（旧兼容）= 出界视作层 0 收口。
  * 返回 u（层数，可为小数）；几何深度 = u × PATCH_DEPTH。
  */
 export function envelopeLevelAt(
@@ -155,46 +164,69 @@ export function envelopeLevelAt(
   x: number,
   z: number,
   W: number = PATCH_LEVEL_WIDTH,
+  levelAt?: LevelAtWorld,
 ): number {
   const px = x - cx * chunkSize, pz = z - cz * chunkSize;
   const lx = Math.floor(px), lz = Math.floor(pz);
-  if (lx < 0 || lz < 0 || lx >= chunkSize || lz >= chunkSize) return 0;
-  const fx = px - lx, fz = pz - lz;
-  const own = levels[lz * chunkSize + lx];
+  const inOwnP = lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize;
+  let own: number;
+  if (inOwnP) {
+    own = levels[lz * chunkSize + lx];
+  } else if (levelAt) {
+    // ★ 查询点落在邻 chunk（含恰在 seam 平面）：以邻 cell 作自身地板继续求值
+    //   —— 两侧 mesh 共享边界顶点经同一路径 → 同值（不再一侧 0 一侧非 0 撕裂）
+    own = levelAt(cx * chunkSize + lx, cz * chunkSize + lz);
+  } else {
+    return 0; // 旧兼容：出本 chunk = 0（seam 收口）
+  }
   if (own === 0) return 0;
+  const fx = px - lx, fz = pz - lz;
   let best = own;
+  const ox = cx * chunkSize, oz = cz * chunkSize; // 本 chunk 世界 cell 原点
+  const gx0 = ox + lx, gz0 = oz + lz;             // p 所在世界 cell 下标
   const edge = { px: chunkSize - px, nx: px, pz: chunkSize - pz, nz: pz };
+  const maxK = chunkSize * 4; // 安全上限（W 剪枝后实际远小于此）
   const ray = (
-    cellIdx: (k: number) => number,   // 返回该方向第 k 个 cell 的线性下标；<0 = 已出界
-    dOf: (k: number) => number,       // 到该 cell 最近边轴距（k≥1）
+    stepX: number,
+    stepZ: number,
+    dOf: (k: number) => number,
     edgeKey: 'px' | 'nx' | 'pz' | 'nz',
   ): void => {
     let v = best;
-    for (let k = 1; ; k++) {
-      const c = cellIdx(k);
-      if (c < 0) {
-        // ★ 出 chunk 界 = 虚拟层 0：到 chunk 边界平面距离收口（seam 语义）
+    for (let k = 1; k <= maxK; k++) {
+      const wx = gx0 + stepX * k;
+      const wz = gz0 + stepZ * k;
+      const d = dOf(k);
+      const inOwn = wx >= ox && wx < ox + chunkSize && wz >= oz && wz < oz + chunkSize;
+      let lev: number;
+      if (inOwn) {
+        lev = levels[(wz - oz) * chunkSize + (wx - ox)];
+      } else if (levelAt) {
+        // ★ 跨 chunk：继续沿射线读邻 chunk 层数（未加载 = 0 → 自然收口）
+        lev = levelAt(wx, wz);
+      } else {
+        // 旧兼容（无 provider）：出界 = 虚拟层 0，到 chunk 边界平面收口
         const cand = edge[edgeKey] / W;
         if (cand < v) v = cand;
         break;
       }
-      const d = dOf(k);
-      const cand = levels[c] + d / W;
+      const cand = lev + d / W;
       if (cand < v) { v = cand; if (v <= 0) break; }
-      if (d / W >= v) break; // 后续轴距单调增 → 剪枝
+      if (d / W >= v) break; // 轴距单调增 → 剪枝
     }
     if (v < best) best = v;
   };
-  ray((k) => (lx + k < chunkSize ? lz * chunkSize + (lx + k) : -1), (k) => k - fx, 'px');
-  ray((k) => (lx - k >= 0 ? lz * chunkSize + (lx - k) : -1), (k) => fx + (k - 1), 'nx');
-  ray((k) => (lz + k < chunkSize ? (lz + k) * chunkSize + lx : -1), (k) => k - fz, 'pz');
-  ray((k) => (lz - k >= 0 ? (lz - k) * chunkSize + lx : -1), (k) => fz + (k - 1), 'nz');
+  ray(1, 0, (k) => k - fx, 'px');
+  ray(-1, 0, (k) => fx + (k - 1), 'nx');
+  ray(0, 1, (k) => k - fz, 'pz');
+  ray(0, -1, (k) => fz + (k - 1), 'nz');
   return Math.max(0, best);
 }
 
 /**
  * 层数掩码 → PatchOverlay（isPatched = 层>0；depthOf = 包络场 u × depth）。
  * 渲染几何/高度采样共用同一函数（§14.11 单一真源）。
+ * ★ levelAt 传入时 depthOf/补丁判定跨 chunk 连续（2026-09-10）。
  */
 export function buildLevelOverlay(
   levels: Uint8Array,
@@ -202,13 +234,22 @@ export function buildLevelOverlay(
   cz: number,
   depth: number = PATCH_DEPTH,
   color: readonly [number, number, number] = PATCH_COLOR,
+  levelAt?: LevelAtWorld,
 ): PatchOverlay {
   const chunkSize = Math.round(Math.sqrt(levels.length));
+  const ox = cx * chunkSize, oz = cz * chunkSize;
   const isPatched = (lx: number, lz: number): boolean =>
     lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize && levels[lz * chunkSize + lx] > 0;
+  const isPatchedAtWorld = (wx: number, wz: number): boolean => {
+    const lx = Math.floor(wx) - ox, lz = Math.floor(wz) - oz;
+    if (lx >= 0 && lz >= 0 && lx < chunkSize && lz < chunkSize) {
+      return levels[lz * chunkSize + lx] > 0;
+    }
+    return levelAt ? levelAt(Math.floor(wx), Math.floor(wz)) > 0 : false;
+  };
   const depthOf = (wx: number, wz: number): number =>
-    envelopeLevelAt(levels, chunkSize, cx, cz, wx, wz) * depth;
-  return { isPatched, depthOf, color: color.slice() as [number, number, number], decor: { ...DEFAULT_PATCH_DECOR } };
+    envelopeLevelAt(levels, chunkSize, cx, cz, wx, wz, undefined, levelAt) * depth;
+  return { isPatched, isPatchedAtWorld, depthOf, color: color.slice() as [number, number, number], decor: { ...DEFAULT_PATCH_DECOR } };
 }
 
 // ------------------------------------------------------------
@@ -759,7 +800,11 @@ export function emitWallSide(
   const patchedNb = (s: number): boolean => {
     if (!P) return false;
     const { nb } = spanCellsOf(Math.min(3, Math.floor(s)));
-    // 跨 chunk 的邻 cell 状态未知 → 视为未补丁（另一 chunk 自带状态）
+    // ★ 跨 chunk（2026-09-10）：邻 cell 局部坐标直接平移成世界下标（chunk 无缝平铺），
+    //   经跨 chunk 补丁查询 → 两侧都补丁时坑内隔断壁跨 seam 也被剔除（连续凹陷）。
+    const wcx = table.cx * N + nb.lx, wcz = table.cz * N + nb.lz;
+    if (P.isPatchedAtWorld) return P.isPatchedAtWorld(wcx, wcz);
+    // 兼容无跨 chunk 能力的 overlay：出界视为未补丁（另一 chunk 自带状态）
     return nb.lx < 0 || nb.lz < 0 || nb.lx >= N || nb.lz >= N ? false : P.isPatched(nb.lx, nb.lz);
   };
   // 低侧基底（旧裙墙语义 lowBase = min(邻视觉顶, 两侧 hBase)）

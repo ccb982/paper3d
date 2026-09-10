@@ -8,6 +8,7 @@
 // ============================================================
 
 import { computeTableGeometry, incrementalDropCache, type PatchGeomResult } from "./PatchCompute";
+import { CHUNK_SIZE } from "./ChunkGenerator";
 
 interface PatchChunkMsg {
   type: "patchBuild";
@@ -25,6 +26,8 @@ interface PatchChunkMsg {
     ccz: number;
     heights: Float32Array;
     blockTypes: Uint8Array;
+    /** ★ 补丁层数表（跨 chunk 包络场查询用） */
+    levels?: Uint8Array;
   }[];
 }
 
@@ -57,8 +60,16 @@ ctx.onmessage = (ev: MessageEvent) => {
   }
   const msg = ev.data as PatchChunkMsg;
   if (msg.type !== "patchBuild") return;
-  const chunks = new Map<string, { heights: Float32Array; blockTypes: Uint8Array }>();
+  const chunks = new Map<string, { heights: Float32Array; blockTypes: Uint8Array; levels?: Uint8Array }>();
   for (const c of msg.chunks) chunks.set(`${c.ccx},${c.ccz}`, c);
+  // ★ 跨 chunk 层数查询（世界 1m cell 下标 → 层数；未加载 = 0）
+  const levelAt = (wx: number, wz: number): number => {
+    const ccx = Math.floor(wx / CHUNK_SIZE), ccz = Math.floor(wz / CHUNK_SIZE);
+    const c = chunks.get(`${ccx},${ccz}`);
+    if (!c?.levels) return 0;
+    const lx = wx - ccx * CHUNK_SIZE, lz = wz - ccz * CHUNK_SIZE;
+    return c.levels[lz * CHUNK_SIZE + lx] ?? 0;
+  };
   const levels = msg.levels && msg.levels.length > 0 ? msg.levels : undefined;
   const out = computeTableGeometry(
     (ccx, ccz) => chunks.get(`${ccx},${ccz}`),
@@ -68,6 +79,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     levels,
     msg.dirty ?? null,
     msg.masks,
+    levelAt,
   );
   ctx.postMessage(
     { type: "result", id: msg.id, ...out },

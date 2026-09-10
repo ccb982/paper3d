@@ -30,15 +30,32 @@
 import { computeTableGeometry, incrementalDropCache, type PatchGeomResult } from "./PatchCompute";
 import { computeIncrementalMasks } from "./IncrementalGeometry";
 import type { ChunkDataLite } from "./Refinements";
+import type { LevelAtWorld } from "./FaceBuild";
+import { CHUNK_SIZE } from "./ChunkGenerator";
 
 interface PatchChunkData {
   ccx: number;
   ccz: number;
   heights: Float32Array;
   blockTypes: Uint8Array;
+  /** ★ 补丁层数表（跨 chunk 包络场查询用；随 payload 拷贝进 Worker） */
+  levels?: Uint8Array;
 }
 
 const NEI = [-1, 0, 1];
+
+/** ★ 3×3 邻域 levels 拷贝 → 世界 cell 层数查询（主线程回退/Worker 同构） */
+function makeLevelAt(chunks: PatchChunkData[]): LevelAtWorld {
+  const map = new Map<string, Uint8Array>();
+  for (const c of chunks) if (c.levels) map.set(`${c.ccx},${c.ccz}`, c.levels);
+  return (wx: number, wz: number): number => {
+    const ccx = Math.floor(wx / CHUNK_SIZE), ccz = Math.floor(wz / CHUNK_SIZE);
+    const lv = map.get(`${ccx},${ccz}`);
+    if (!lv) return 0;
+    const lx = wx - ccx * CHUNK_SIZE, lz = wz - ccz * CHUNK_SIZE;
+    return lv[lz * CHUNK_SIZE + lx] ?? 0;
+  };
+}
 
 class TerrainPatchService {
   /** 破坏几何 Worker 数（平行 chunk 重建）；微信端可降为 1 */
@@ -130,6 +147,7 @@ class TerrainPatchService {
           ccx, ccz,
           heights: new Float32Array(d.heights),
           blockTypes: new Uint8Array(d.blockTypes),
+          levels: d.levels ? new Uint8Array(d.levels) : undefined,
         });
       }
     }
@@ -144,7 +162,7 @@ class TerrainPatchService {
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
       return Promise.resolve(
-        computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty, masks),
+        computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty, masks, makeLevelAt(chunks)),
       );
     }
     const id = this.nextIds[i] = (this.nextIds[i] ?? 0) + 1;
@@ -155,6 +173,7 @@ class TerrainPatchService {
       const transfer: ArrayBuffer[] = [];
       for (const c of chunks) {
         transfer.push(c.heights.buffer, c.blockTypes.buffer);
+        if (c.levels) transfer.push(c.levels.buffer);
       }
       if (req.levels) transfer.push(req.levels.buffer);
       // 层数表所有权转移：调用方必须传拷贝（ChunkManager 已拷贝，本体在 chunk 数据）

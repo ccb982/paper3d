@@ -29,7 +29,7 @@ import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { tileMaterialByKey } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
-import { circleCells, type FaceGeometry } from './FaceBuild';
+import { circleCells, PATCH_LEVEL_WIDTH, type FaceGeometry } from './FaceBuild';
 import { computeTableGeometry, type PatchGeomResult, type PatchGroundCell, type GeomBounds } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
@@ -1095,6 +1095,8 @@ const key2 = chunkKeyOf(cx, cz);
           for (const d of rec.dirty) p.dirty.add(d);
         }
       }
+      // ★ 跨 chunk 联动（2026-09-10）：本块挖动改变邻块包络场/共享边 → 邻块也要重建
+      this.markNeighborsForDug(rec);
     }
     if (changedChunks > 0) {
       const now = performance.now();
@@ -1104,6 +1106,62 @@ const key2 = chunkKeyOf(cx, cz);
           `[PATCH] 命中(${r.x.toFixed(1)},${r.z.toFixed(1)}) r=${R} 格${cells} 变化chunk=${changedChunks}`,
         );
       }
+    }
+  }
+
+  /**
+   * ★ 跨 chunk 破坏联动（2026-09-10）：本 chunk 的挖动会改变邻 chunk 的包络场
+   * （射线穿 seam 经 levelAt 读本块层数）与共享边补丁判定 → 需一并重建。
+   * 影响半径 = 邻块贴 seam 边界的最大层数 × 层过渡宽度 W（m/层）：
+   *   我们的挖动 cell 到该边界的距离 ≤ reach 时才可能改变邻块包络场（安全超集）。
+   * 邻块无补丁（边界层数 0）→ reach<0 跳过（其几何不依赖本块）。数据已同步落库；
+   * 未建成的 chunk 由后续标准构建自然读到新层数。
+   */
+  private markNeighborsForDug(rec: { cx: number; cz: number; cells: { lx: number; lz: number }[] }): void {
+    const N = CHUNK_SIZE;
+    for (const c of rec.cells) {
+      const dirs: [number, number, number][] = [
+        [c.lx, rec.cx - 1, rec.cz],          // 西邻：本 cell 距西边界距离
+        [N - 1 - c.lx, rec.cx + 1, rec.cz],  // 东邻
+        [c.lz, rec.cx, rec.cz - 1],          // 南邻
+        [N - 1 - c.lz, rec.cx, rec.cz + 1],  // 北邻
+      ];
+      for (const [dist, ncx, ncz] of dirs) {
+        const lv = this.neighborBoundaryMaxLevel(ncx, ncz);
+        if (lv <= 0) continue; // 邻块 seam 边界无补丁 → 不受本块影响
+        if (dist <= lv * PATCH_LEVEL_WIDTH) this.enqueuePatch(ncx, ncz);
+      }
+    }
+  }
+
+  /** 邻 chunk 面向本块一侧的边界线最大层数（0 = 无补丁/未加载） */
+  private neighborBoundaryMaxLevel(ncx: number, ncz: number): number {
+    const d = this.raster.getChunkData(ncx, ncz);
+    if (!d?.levels) return 0;
+    const lv = d.levels, N = CHUNK_SIZE;
+    let max = 0;
+    // 取四条边界线的最大值（安全超集：实际只同行 cell 的射线能看见本块）
+    for (let i = 0; i < N; i++) {
+      const wcol = lv[i * N];
+      if (wcol > max) max = wcol;
+      const ecol = lv[i * N + N - 1];
+      if (ecol > max) max = ecol;
+      const srow = lv[i];
+      if (srow > max) max = srow;
+      const nrow = lv[(N - 1) * N + i];
+      if (nrow > max) max = nrow;
+    }
+    return max;
+  }
+
+  /** 把邻 chunk 加入破坏重建缓冲（未建成则跳过：数据落库，后续构建自然带新层数） */
+  private enqueuePatch(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
+    let p = this.pendingPatches.get(key);
+    if (!p) {
+      p = { cx, cz, dirty: new Set() };
+      this.pendingPatches.set(key, p);
     }
   }
 
@@ -1136,7 +1194,8 @@ const key2 = chunkKeyOf(cx, cz);
         continue;
       }
       this.lastPatchStart.set(key, now);
-      this.patchRebuildChunk(p.cx, p.cz, [...p.dirty]);
+      // ★ 空 dirty（邻块联动/无直接挖点）→ 水体走全量重解，避免增量列表为空漏更新
+      this.patchRebuildChunk(p.cx, p.cz, p.dirty.size > 0 ? [...p.dirty] : null);
     }
   }
 
@@ -1152,7 +1211,7 @@ const key2 = chunkKeyOf(cx, cz);
    * 装配与同步路径共用 assembleTableChunk。纹理缓存缺失 → requestStandardBake 兜底
    * （其完成装配的几何在主线程内联生成，与无 Worker 回退同一函数，字节一致）。
    */
-  private patchRebuildChunk(cx: number, cz: number, dirty?: number[]): void {
+  private patchRebuildChunk(cx: number, cz: number, dirty?: number[] | null): void {
     const key = chunkKeyOf(cx, cz);
     // ★ 并发合并：同 chunk 在途 → 等其完成后再重算一次（掩码只增，第二次即终态）
     const prev = this.patchRebuilds.get(key);

@@ -130,6 +130,8 @@ export interface ChunkDataLite {
   blockTypes: Uint8Array;
   /** 本 chunk 生效的风格组（调色板查询用；几何不读，仅为语义完整性携带） */
   groupKey?: string;
+  /** ★ 补丁层数表（60×60；破坏几何跨 chunk 包络场查询用；缺省 = 无补丁） */
+  levels?: Uint8Array;
 }
 
 /**

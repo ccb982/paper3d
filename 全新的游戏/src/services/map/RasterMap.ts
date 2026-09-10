@@ -250,13 +250,25 @@ export class RasterMap {
     return this.chunks.get(chunkKeyOf(cx, cz))!.levels;
   }
 
-  /** 世界点补丁深度（m）：包络场 u × PATCH_DEPTH（坑内=N×D，坑缘 0.5m/层过渡） */
+  /** ★ 跨 chunk 层数查询（世界 1m cell 下标；未加载 = 0）——包络场/深度场跨 seam 连续 */
+  private levelAtWorld = (wx: number, wz: number): number => {
+    const ccx = Math.floor(wx / CHUNK_SIZE);
+    const ccz = Math.floor(wz / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
+    if (!chunk) return 0;
+    const lx = wx - ccx * CHUNK_SIZE;
+    const lz = wz - ccz * CHUNK_SIZE;
+    return chunk.levels[lz * CHUNK_SIZE + lx] ?? 0;
+  };
+
+  /** 世界点补丁深度（m）：包络场 u × PATCH_DEPTH（坑内=N×D，坑缘 0.5m/层过渡；
+   *  ★ 2026-09-10 跨 chunk：射线入邻块继续读层数 → 角色脚底/碰撞与几何同源连续） */
   levelDepthAt(x: number, z: number): number {
     const ccx = Math.floor(x / CHUNK_SIZE);
     const ccz = Math.floor(z / CHUNK_SIZE);
     const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
     if (!chunk) return 0;
-    return envelopeLevelAt(chunk.levels, CHUNK_SIZE, ccx, ccz, x, z) * PATCH_DEPTH;
+    return envelopeLevelAt(chunk.levels, CHUNK_SIZE, ccx, ccz, x, z, undefined, this.levelAtWorld) * PATCH_DEPTH;
   }
 
   /** 世界坐标所在 1m cell 是否已有补丁层（>0） */
@@ -287,8 +299,8 @@ export class RasterMap {
     for (const c of cells) {
       const wx = cx * CHUNK_SIZE + c.lx + 0.5;
       const wz = cz * CHUNK_SIZE + c.lz + 0.5;
-      const u0 = envelopeLevelAt(before, CHUNK_SIZE, cx, cz, wx, wz);
-      const u1 = envelopeLevelAt(levels, CHUNK_SIZE, cx, cz, wx, wz);
+      const u0 = envelopeLevelAt(before, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);
+      const u1 = envelopeLevelAt(levels, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);
       if (u1 - u0 > 1e-9) { changed = true; break; }
     }
     // ★ 层数变化 → 基面高度变化 → 围裙坡面拒绝/带顶采样随变 → 失效本 chunk

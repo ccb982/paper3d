@@ -17,6 +17,7 @@ import {
   topFineCells,
   topFineCellsFor,
   type FaceGeometry,
+  type LevelAtWorld,
 } from "./FaceBuild";
 import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
@@ -96,9 +97,10 @@ export function computeTableGeometry(
   levels?: Uint8Array,
   dirty?: number[] | null,
   masks?: { top: Uint8Array; side: Uint8Array } | null,
+  levelAt?: LevelAtWorld,
 ): PatchGeomResult {
   const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
-  const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz) : undefined;
+  const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz, undefined, undefined, levelAt) : undefined;
   const table = buildFaceTable(src, cx, cz);
   let top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array;
   if (patch) {
