@@ -85,13 +85,18 @@ function slotCss(s: { x: number; y: number; w: number; h: number }): string {
     `height:${(s.h / SCREEN.h) * 100}%`,
   ].join(';');
 }
-/** 槽位内页面坐标 → CSS（left/bottom 百分百） */
-function pageToCss(s: { x: number; y: number; w: number; h: number }, e: { x: number; b: number; w: number; h: number }): string {
+/** ★ 槽位内模板坐标 → CSS（left/bottom 百分百）。
+ *  ★ 模板是「全局页面坐标」，页面上六个模块排在屏幕不同高度；若按每个槽位自己原点
+ *    （e.b - s.y）换算，只有顶排槽位（y 恰在模板区间内）有内容，中/下排槽位
+ *    内容溢出 100% 被 overflow:hidden 裁掉 → 模块空白。改为统一以参考槽位
+ *    MODULE_SLOTS[0]（视觉已验证正常的一张）为换算基准 → 所有槽位复制同一套布局。 */
+const REF_SLOT = MODULE_SLOTS[0];
+function pageToCss(_s: { x: number; y: number; w: number; h: number }, e: { x: number; b: number; w: number; h: number }): string {
   return [
-    `left:${((e.x - s.x) / s.w) * 100}%`,
-    `bottom:${((e.b - s.y) / s.h) * 100}%`,
-    `width:${(e.w / s.w) * 100}%`,
-    `height:${(e.h / s.h) * 100}%`,
+    `left:${((e.x - REF_SLOT.x) / REF_SLOT.w) * 100}%`,
+    `bottom:${((e.b - REF_SLOT.y) / REF_SLOT.h) * 100}%`,
+    `width:${(e.w / REF_SLOT.w) * 100}%`,
+    `height:${(e.h / REF_SLOT.h) * 100}%`,
   ].join(';');
 }
 
@@ -314,7 +319,7 @@ export class CraftingOverlay {
       }
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:10px;';
-      const iconCanvas = this.iconRegistry.getIcon(input.itemId);
+      const iconCanvas = this.cloneIcon(input.itemId);
       iconCanvas.style.width = '32px';
       iconCanvas.style.height = '32px';
       row.appendChild(iconCanvas);
@@ -376,6 +381,19 @@ export class CraftingOverlay {
     }
 
     this.ready = true;
+  }
+
+  /** ★ 图标画布克隆：getIcon 对同一 itemId 缓存返回同一 element，DOM 一个元素
+   *  只能有唯一父节点 → 后挂的会从前一个位置摘下（图标"消失"）。
+   *  每个使用点克隆独立副本（无人机动态图标除外：DroneIcon.register 每次已建新画布）。 */
+  private cloneIcon(itemId: string): HTMLCanvasElement {
+    const src = this.iconRegistry.getIcon(itemId);
+    if (itemId === 'kaltsit_drone') return src;
+    const c = document.createElement('canvas');
+    c.width = src.width;
+    c.height = src.height;
+    c.getContext('2d')!.drawImage(src, 0, 0);
+    return c;
   }
 
   // ============================================================
@@ -466,7 +484,7 @@ export class CraftingOverlay {
       'display:flex', 'align-items:center', 'justify-content:center',
       'pointer-events:none',
     ].join(';');
-    const outIcon = this.iconRegistry.getIcon(r.output.itemId);
+    const outIcon = this.cloneIcon(r.output.itemId);
     outIcon.style.cssText = 'width:92%;height:92%;object-fit:contain;';
     out.appendChild(outIcon);
     btn.appendChild(out);
@@ -494,7 +512,7 @@ export class CraftingOverlay {
         'transform:translateY(-15%)',
         'pointer-events:none',
       ].join(';');
-      const cv = this.iconRegistry.getIcon(input.itemId);
+      const cv = this.cloneIcon(input.itemId);
       cv.style.cssText = 'width:120%;height:120%;object-fit:contain;';
       iconEl.appendChild(cv);
       btn.appendChild(iconEl);
