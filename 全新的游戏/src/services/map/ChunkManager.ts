@@ -49,7 +49,7 @@ import { buildPlatformAprons, type ApronPhysics } from './decor/PlatformApron';
 import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics } from './decor/CementPlinth';
 
 /** 命中解析：装饰实体探测半径（m）——耗尽原石晶体碰撞半径 ~1.15×scale */
-const PROP_PROBE_R = 2.2;
+const PROP_PROBE_R = 3.0;
 
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
@@ -1011,7 +1011,7 @@ const key2 = chunkKeyOf(cx, cz);
    * ★ 世界点 (x,z) 半径 r 内是否存在指定 key 的装饰实体（不含四维空间）。
    * 装饰计划按 seed/chunk 确定性复算（纯查询，不建网格），对命中点所在 chunk
    * 及其邻环逐一重算 → 世界坐标 = cx*60 + 本地（chunk 群中心+30 / 装饰层 −30 抵消）。
-   * 物品掉落管线用：耗尽原石晶体（depleted_crystal，半径 ~2.2m）→ 异铁。
+   * 物品掉落管线用：耗尽原石晶体（depleted_crystal，探测定界 ~3m）→ 异铁。
    */
   /**
    * ★ 装饰实体查询：命中点附近（水平距离 ≤ r）的可碰撞装饰物，取最近的那个。

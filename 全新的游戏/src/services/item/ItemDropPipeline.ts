@@ -15,7 +15,7 @@ export interface ItemDropEnvironment {
   hasGround: boolean;
   /** 命中点 4m 地块或贴邻是一格水面（water=hit/edge）→ 酮凝集 */
   hasWater: boolean;
-  /** 命中点 ~2.2m 内存在装饰性实体·耗尽原石晶体 → 异铁 */
+  /** 命中点 ~3m 内存在装饰性实体·耗尽原石晶体 → 异铁 */
   hasCrystal: boolean;
 }
 
@@ -35,9 +35,9 @@ interface DropRule {
 
 /** 掉落规则表（每格堆叠上限 99 由 items.json maxStack 约束） */
 export const DROP_RULES: DropRule[] = [
-  { env: 'hasCrystal', itemId: 'iron_grain', probability: 0.55, countMin: 1, countMax: 2 },
+  { env: 'hasCrystal', itemId: 'iron_grain', probability: 0.50, countMin: 1, countMax: 3 },
   { env: 'hasWater',   itemId: 'ketone',     probability: 0.40, countMin: 1, countMax: 2 },
-  { env: 'hasGround',  itemId: 'raw_rock',   probability: 0.35, countMin: 1, countMax: 2 },
+  { env: 'hasGround',  itemId: 'raw_rock',   probability: 0.20, countMin: 1, countMax: 2 },
 ];
 
 /**
