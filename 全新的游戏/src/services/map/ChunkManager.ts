@@ -147,10 +147,31 @@ export class ChunkManager {
   private queuedKeys = new Set<number>();
   /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
   private static readonly BUILD_BUDGET_MS = 8;
+  /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±3 = 7×7） */
+  private static readonly BUILD_RADIUS = 2;
+  private static readonly PREFETCH_RADIUS = 3;
+  /** ★ 烘焙在途上限（构建请求）：防止跨区/接缝批量时把多个烘焙任务同时塞进 worker 造成爆发 */
+  private static readonly BUILD_INFLIGHT_MAX = 2;
+  /** ★ 预烘焙投递间隔（ms）：空闲时每拍投 1 个 x 轴 + 1 个 y 轴的"前方条带"chunk */
+  private static readonly PREFETCH_INTERVAL_MS = 220;
+  /** 每拍预烘焙个数（x 轴 1 + y 轴 1） */
+  private static readonly PREFETCH_PER_TICK = 2;
+  /** 预烘焙节拍累加器 */
+  private prefetchAccum = 0;
+  /** 预烘焙方向（位移差分；本拍位移 ≥0.5m 才更新，否则沿用上次朝向） */
+  private prefetchDirX = 1;
+  private prefetchDirZ = 1;
+  private prefetchMoveX = 0;
+  private prefetchMoveZ = 0;
+  private prefetchLastPx = NaN;
+  private prefetchLastPz = NaN;
+  /** 玩家当前 chunk（队列最近优先 + 预烘焙环扫描用） */
+  private hotPcx = 0;
+  private hotPcz = 0;
 
   // ---- ★ 异步烘焙管线：重计算在 Worker，主线程零尖峰 ----
-  /** 在途烘焙（key→请求；t=发起时刻供看门狗超时判定） */
-  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number; t: number; decor: DecorPlan }>();
+  /** 在途烘焙（key→请求；t=发起时刻供看门狗超时判定；bakeOnly=预烘焙只入缓存不建网格） */
+  private pendingBakes = new Map<number, { cx: number; cz: number; gen: number; t: number; decor: DecorPlan; bakeOnly: boolean }>();
   /** 烘焙换代计数：dispose / 切地图风格时自增，使在途结果全部作废 */
   private bakeGen = 0;
   /** 看门狗节拍累加器 */
@@ -269,6 +290,8 @@ export class ChunkManager {
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     this.flushPatchRebuilds();
     this.syncChunks(px, pz);
+    // ★ 预烘焙（分批次提前生成）：空闲时向构建环外一档逐拍投递（只烘不建）
+    this.prefetchChunks(px, pz, dt);
     // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0) {
@@ -470,17 +493,30 @@ export class ChunkManager {
       this.processQueue();
       return;
     }
-    const added = this.raster.updateChunks(px, pz);
-    for (const { cx, cz } of added) {
-      this.enqueueChunk(cx, cz, false);
-    }
-    // 相邻接缝重建也入队（排在新建之后），避免同帧叠加烘焙开销
+    // ★ 数据环 = 预烘焙半径（±3 = 7×7），构建环另按 BUILD_RADIUS 取
+    const added = this.raster.updateChunks(px, pz, ChunkManager.PREFETCH_RADIUS);
+    // 数据新增 → 已有网格的 3×3 邻域变了 → 接缝重建（排在新建之后处理）
     for (const { cx, cz } of added) {
       for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
         const nkey = chunkKeyOf(cx + nx, cz + nz);
         if (this.meshes.has(nkey)) {
           this.enqueueChunk(cx + nx, cz + nz, true);
         }
+      }
+    }
+    // ★ 构建环（玩家 ±BUILD_RADIUS）：不依赖 added 列表——数据早已生成而 chunk
+    //   尚未建成的（跨区后回到旧区域/预烘焙环进入视野）同样会被补齐
+    const R = ChunkManager.BUILD_RADIUS;
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    for (let dz = -R; dz <= R; dz++) {
+      for (let dx = -R; dx <= R; dx++) {
+        const cx = pcx + dx, cz = pcz + dz;
+        const key = chunkKeyOf(cx, cz);
+        if (this.meshes.has(key) || this.voidKeys.has(key)) continue;
+        if (this.pendingBakes.has(key) || this.geoInflight.has(key)) continue;
+        if (!this.raster.getChunkData(cx, cz)) continue;
+        this.enqueueChunk(cx, cz, false);
       }
     }
     this.processQueue();
@@ -507,8 +543,18 @@ export class ChunkManager {
     //   2026-09-08 用户定调），把主线程+烘焙 worker 让给地形修改链路
     const patching = this.patchRebuilds.size > 0 || this.pendingPatches.size > 0;
     const budget = ChunkManager.BUILD_BUDGET_MS * (patching ? 0.5 : 1);
-    do {
-      const item = this.queue.shift()!;
+    while (this.queue.length > 0 && performance.now() - t0 < budget) {
+      // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
+      //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）
+      if (!this.boss4D && this.countBuildInflight() >= ChunkManager.BUILD_INFLIGHT_MAX) break;
+      // ★ 最近优先：先建脚下的，远处随预算/在途闸门分批消化
+      let best = 0, bestD = Infinity;
+      for (let i = 0; i < this.queue.length; i++) {
+        const it = this.queue[i];
+        const d = Math.max(Math.abs(it.cx - this.hotPcx), Math.abs(it.cz - this.hotPcz));
+        if (d < bestD) { bestD = d; best = i; }
+      }
+      const item = this.queue.splice(best, 1)[0];
       const key = chunkKeyOf(item.cx, item.cz);
       this.queuedKeys.delete(key);
       if (this.boss4D) {
@@ -524,10 +570,85 @@ export class ChunkManager {
           this.requestStandardBake(item.cx, item.cz);
         }
       }
-    } while (
-      this.queue.length > 0 &&
-      performance.now() - t0 < budget
-    );
+    }
+  }
+
+  /** 构建类（非预烘焙）在途数——processQueue 的闸门依据 */
+  private countBuildInflight(): number {
+    let n = 0;
+    for (const p of this.pendingBakes.values()) if (!p.bakeOnly) n++;
+    return n;
+  }
+
+  /**
+   * ★ 预烘焙（分批次提前生成，2026-09-10）：空闲时每拍投 **1 个 x 轴前方 + 1 个 y 轴
+   *   前方**的"只烘焙不建网格"chunk（沿移动方向的前方条带，横向由近到远）。
+   *   进入构建环时缓存命中 → 直接几何+装配，零烘焙等待；不提前占网格/物理/装饰。
+   */
+  private prefetchChunks(px: number, pz: number, dt: number): void {
+    if (this.boss4D || this.testChunk) return;
+    if (Number.isNaN(this.prefetchLastPx)) {
+      this.prefetchLastPx = px;
+      this.prefetchLastPz = pz;
+    }
+    this.prefetchMoveX += px - this.prefetchLastPx;
+    this.prefetchMoveZ += pz - this.prefetchLastPz;
+    this.prefetchLastPx = px;
+    this.prefetchLastPz = pz;
+    this.prefetchAccum += dt;
+    if (this.prefetchAccum < ChunkManager.PREFETCH_INTERVAL_MS) return;
+    this.prefetchAccum = 0;
+    // 方向：本拍实际位移 ≥0.5m 才更新（站立/微抖沿用上次朝向）
+    if (Math.abs(this.prefetchMoveX) > 0.5) this.prefetchDirX = Math.sign(this.prefetchMoveX);
+    if (Math.abs(this.prefetchMoveZ) > 0.5) this.prefetchDirZ = Math.sign(this.prefetchMoveZ);
+    this.prefetchMoveX = 0;
+    this.prefetchMoveZ = 0;
+    // 有建造成本在途（队列/烘焙/几何/挖掘重建）→ 不抢 worker
+    if (this.queue.length > 0 || this.pendingBakes.size > 0 || this.geoInflight.size > 0) return;
+    if (this.patchRebuilds.size > 0 || this.pendingPatches.size > 0) return;
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    // ★ 每拍：x 轴前方一条 + y 轴前方一条；都取不到再环扫兜底（角落/后方）
+    let sent = 0;
+    if (this.prefetchAxisLane(pcx, pcz, true, this.prefetchDirX)) sent++;
+    if (sent < ChunkManager.PREFETCH_PER_TICK && this.prefetchAxisLane(pcx, pcz, false, this.prefetchDirZ)) sent++;
+    if (sent < ChunkManager.PREFETCH_PER_TICK) this.prefetchRingFallback(pcx, pcz);
+  }
+
+  /** 沿 x/y 轴"前方"条带预烘一个：轴向前移（构建环外一档起），横向偏移按 |k| 由近到远 */
+  private prefetchAxisLane(pcx: number, pcz: number, xAxis: boolean, dir: number): boolean {
+    for (let ring = ChunkManager.BUILD_RADIUS + 1; ring <= ChunkManager.PREFETCH_RADIUS; ring++) {
+      const base = (xAxis ? pcx : pcz) + dir * ring;
+      for (const k of [0, 1, -1, 2, -2]) {
+        const cx = xAxis ? base : pcx + k;
+        const cz = xAxis ? pcz + k : base;
+        if (this.tryPrefetch(cx, cz)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** 环扫兜底（角落/后方；从构建环外一档到预烘半径由近到远） */
+  private prefetchRingFallback(pcx: number, pcz: number): void {
+    for (let ring = ChunkManager.BUILD_RADIUS + 1; ring <= ChunkManager.PREFETCH_RADIUS; ring++) {
+      for (let dz = -ring; dz <= ring; dz++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
+          if (this.tryPrefetch(pcx + dx, pcz + dz)) return;
+        }
+      }
+    }
+  }
+
+  /** 单个预烘投递（占用/已有缓存检查；命中即投 "只烘不建" 请求） */
+  private tryPrefetch(cx: number, cz: number): boolean {
+    const key = chunkKeyOf(cx, cz);
+    if (this.meshes.has(key) || this.voidKeys.has(key)) return false;
+    if (this.pendingBakes.has(key) || this.queuedKeys.has(key) || this.geoInflight.has(key)) return false;
+    if (!this.raster.getChunkData(cx, cz)) return false;
+    if (getCachedChunkMaps(this.raster.worldSeed, cx, cz)) return false;
+    this.requestStandardBake(cx, cz, true);
+    return true;
   }
 
   /**
@@ -566,10 +687,16 @@ export class ChunkManager {
    * ★ 标准风格构建①：装饰放置 → 缓存查询 → 快照投给 Worker
    * （无 Worker 时同步回退直建）。同 key 已在途则跳过；
    * 缓存命中则跳过烘焙直接装配（装饰计划确定性重算，结果一致）。
+   * @param bakeOnly 预烘焙：只烘进缓存，不建网格（进入构建环时缓存命中即建）
    */
-  private requestStandardBake(cx: number, cz: number): void {
+  private requestStandardBake(cx: number, cz: number, bakeOnly = false): void {
     const key = chunkKeyOf(cx, cz);
-    if (this.pendingBakes.has(key)) return;
+    const existing = this.pendingBakes.get(key);
+    if (existing) {
+      // ★ 预烘焙在途时来了正式构建需求 → 升级为"烘完即建"
+      if (!bakeOnly) existing.bakeOnly = false;
+      return;
+    }
     const seed = this.raster.worldSeed;
 
     // ★ 装饰先行：预渲染（烘焙）前完成贴图与装饰物的放置
@@ -578,7 +705,7 @@ export class ChunkManager {
     // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
     const cached = getCachedChunkMaps(seed, cx, cz);
     if (cached) {
-      this.finishStandardChunk(cx, cz, cached, decor);
+      if (!bakeOnly) this.finishStandardChunk(cx, cz, cached, decor);
       return;
     }
 
@@ -595,38 +722,39 @@ export class ChunkManager {
       { propVolumes: decor.propVolumes, decals: decor.decals },
     );
     if (!p) {
-      // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存 + 立即建
+      // Worker 不可用（如微信端未适配）：主线程同步烘 + 入缓存（+ 非预烘焙时立即建）
       for (let dz = -1; dz <= 1; dz++)
         for (let dx = -1; dx <= 1; dx++) this.raster.ensureData(cx + dx, cz + dz);
       const maps = bakeChunkMaps(this.raster, cx, cz, {
         propVolumes: decor.propVolumes, decals: decor.decals,
       }, this.chunkPalette(cx, cz));
       cacheChunkMaps(seed, cx, cz, maps);
-      this.finishStandardChunk(cx, cz, maps, decor);
+      if (!bakeOnly) this.finishStandardChunk(cx, cz, maps, decor);
       return;
     }
-    this.pendingBakes.set(key, { cx, cz, gen, t: performance.now(), decor });
+    this.pendingBakes.set(key, { cx, cz, gen, t: performance.now(), decor, bakeOnly });
     p.then((bufs) => {
-      if (this.pendingBakes.get(key)?.gen !== gen) return; // 换代（切风格/dispose）已作废
+      const rec = this.pendingBakes.get(key);
+      if (rec?.gen !== gen) return; // 换代（切风格/dispose）已作废
       this.pendingBakes.delete(key);
-      this.completeStandardBake(cx, cz, seed, bufs, decor);
+      this.completeStandardBake(cx, cz, seed, bufs, decor, rec.bakeOnly);
     });
   }
 
   /**
-   * ★ 烘焙完成落地（组装+入缓存+建网格）。
+   * ★ 烘焙完成落地（组装+入缓存；非预烘焙才建网格）。
    * 任何一步异常都回退主线程同步烘焙——绝不让 chunk 因单次失败而
    * 永久消失（"整片区域踩虚空"bug 的根因即此处的无兜底 rejection）。
    */
   private completeStandardBake(
     cx: number, cz: number, seed: number,
-    bufs: BakeResult | null, decor: DecorPlan,
+    bufs: BakeResult | null, decor: DecorPlan, bakeOnly = false,
   ): void {
     try {
       const maps = bufs ? assembleChunkMaps(bufs.albedo, bufs.light, bufs.low) : null;
       if (maps) {
         cacheChunkMaps(seed, cx, cz, maps);
-        this.finishStandardChunk(cx, cz, maps, decor);
+        if (!bakeOnly) this.finishStandardChunk(cx, cz, maps, decor); // 预烘焙：只入缓存
         return;
       }
       throw new Error('空结果');
@@ -639,7 +767,7 @@ export class ChunkManager {
           propVolumes: decor.propVolumes, decals: decor.decals,
         }, this.chunkPalette(cx, cz));
         cacheChunkMaps(seed, cx, cz, maps);
-        this.finishStandardChunk(cx, cz, maps, decor);
+        if (!bakeOnly) this.finishStandardChunk(cx, cz, maps, decor);
       } catch (e2) {
         // 不入缓存：看门狗 sweep 会在下个周期重新走完整请求
         console.error(`[ChunkManager] chunk(${cx},${cz}) 同步回退也失败，交由看门狗重试`, e2);
@@ -1402,6 +1530,8 @@ const key2 = chunkKeyOf(cx, cz);
     const cx = Math.floor(px / CHUNK_SIZE);
     const cz = Math.floor(pz / CHUNK_SIZE);
     this.hotChunkKey = chunkKeyOf(cx, cz);
+    this.hotPcx = cx;
+    this.hotPcz = cz;
   }
 
   /** ★ 破坏重建帧间合并 + 节流（每帧开头调用）：把本帧攒下的挖坑请求按 chunk 合并后
