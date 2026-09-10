@@ -193,6 +193,14 @@ export class ChunkManager {
   /** 已挂进 chunk group 的道具层引用（局部重贴地时只拆它，围裙/台座不动） */
   private propLayers = new Map<number, THREE.Object3D>();
 
+  // ---- ★ 物理分区 collider 帧预算化（2026-09-10） ----
+  /** 原位换队列：key = bodyId*1024+slot（同分区最新覆盖旧值）；典型一次挖 1 分区
+   *  → 同帧排空；多分区/跨 chunk 联动时按 GROUND_CELL_PER_FRAME 分摊，避免单帧
+   *  同步 cooking 尖峰（§17.8 的教训是 225 个 4m 小块逐帧 1 块 → 延迟过大，
+   *  此处 9 分区 + 3/帧，最坏 3 帧，物理滞后可忽略） */
+  private groundCellQueue = new Map<number, { bodyId: number; slot: number; vertices: Float32Array; indices: Uint32Array }>();
+  private static readonly GROUND_CELL_PER_FRAME = 3;
+
   // ---- ★ 地形修改性能重构（原地更新，2026-09-09） ----
   // 计算侧（Worker 内 IncrementalGeometry 逐 cell 重发）本就增量；主线程开销大头
   // 是「新建 BufferGeometry×3 + 材质×2 + 整块 trimesh 销毁重建 + 装饰销毁重挂」。
@@ -276,6 +284,22 @@ export class ChunkManager {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
       }
     }
+    // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
+    //   多分区联动按 3/帧分摊，防单帧同步 cooking 尖峰）
+    if (this.host.updateGroundCell) {
+      let g = ChunkManager.GROUND_CELL_PER_FRAME;
+      while (g-- > 0 && this.groundCellQueue.size > 0) {
+        const firstKey = this.groundCellQueue.keys().next().value;
+        if (firstKey === undefined) break;
+        const c = this.groundCellQueue.get(firstKey)!;
+        this.groundCellQueue.delete(firstKey);
+        try {
+          this.host.updateGroundCell(c.bodyId, c.slot, c.vertices, c.indices);
+        } catch (e) {
+          console.error('[ChunkManager] 分区 collider 原位换失败（保留旧碰撞体）', e);
+        }
+      }
+    }
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
     //   每帧预算个 chunk；同 chunk 多任务以更强模式合并（full > props）。
@@ -323,6 +347,7 @@ export class ChunkManager {
     this.decorCache.clear();
     this.decorDirty.clear();
     this.propLayers.clear();
+    this.groundCellQueue.clear(); // 物理原位换队列随风格换代作废
     for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
     this.pendingBakes.clear();
     // ★ 可见 + 虚空一并重建（虚空块不在 meshes 里，漏掉会永远悬空）
@@ -347,6 +372,7 @@ export class ChunkManager {
     this.decorCache.clear();
     this.decorDirty.clear();
     this.propLayers.clear();
+    this.groundCellQueue.clear(); // 物理原位换队列随 dispose 作废
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
     this.pendingBakes.clear();
     for (const id of this.bodies.values()) {
@@ -792,9 +818,11 @@ const key2 = chunkKeyOf(cx, cz);
     else if (decorMode === 'props') this.teardownPropsOnly(key);
     // ③ 水：小网格整体换（拓扑可变）
     this.replaceWaterMesh(group, entry, waterG);
-    // ② 物理：只换受影响分区（提前返回，其余分区不动；同步原位换）
+    // ② 物理：受影响分区入队（帧预算排空；同 slot 最新覆盖，其余分区不动）
     for (const c of cells) {
-      this.host.updateGroundCell(bodyId, c.slot, c.vertices, c.indices);
+      this.groundCellQueue.set(bodyId * 1024 + c.slot, {
+        bodyId, slot: c.slot, vertices: c.vertices, indices: c.indices,
+      });
     }
     return true;
   }

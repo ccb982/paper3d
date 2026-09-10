@@ -111,10 +111,18 @@ let oceanTextures: OceanTextures | null = null;
 let oceanTexturesPending: Promise<OceanTextures> | null = null;
 async function ensureOceanTextures(): Promise<OceanTextures> {
   if (oceanTextures) return oceanTextures;
-  oceanTexturesPending ??= bakeOceanTextures(defaultOceanParams(OCEAN_SEED)).then((p) => {
-    oceanTextures = p;
-    return p;
-  });
+  if (!oceanTexturesPending) {
+    // ★ 失败不缓存 rejected promise（旧实现失败一次 = 永久静态水面，无法重试）
+    oceanTexturesPending = bakeOceanTextures(defaultOceanParams(OCEAN_SEED))
+      .then((p) => {
+        oceanTextures = p;
+        return p;
+      })
+      .catch((e) => {
+        oceanTexturesPending = null;
+        throw e;
+      });
+  }
   return oceanTexturesPending;
 }
 
@@ -238,6 +246,13 @@ const WATER_VERT = /* glsl */ `
     float camDist = length(cameraPosition - wp.xyz);
     float lodW = 1.0 - smoothstep(uLodNear, uLodFar, camDist);
     float wv = 0.0;
+    // ★ 局部落水剧烈波动（角色入水/炮弹近水）：独立于 FFT 海况——
+    //   海况未就绪/烘焙失败时也照常抖动（此前误挂在海况分支内 → "抖动初始化失败"）。
+    //   连续空间场，含边界顶点一起抬升不会撕裂（不再受 border 静止约束）。
+    float shake = 0.0;
+    if (isNotRoof > 0.5 && isFall <= 0.5) {
+      shake = impactAgitation(wp.xz, uTime) * lodW;
+    }
     if (isNotRoof > 0.5 && isFall <= 0.5 && uHasOcean > 0.5 && border < 0.5) {
       // ★ 水面（deep=0）内部顶点：预计算 FFT 位移（世界 uv，跨 chunk 无缝）
       //   边界顶点（border=1，与岸/坑/水帘交界）保持静止，避免纹理性翘边。
@@ -258,13 +273,12 @@ const WATER_VERT = /* glsl */ `
       wp.z += disp.y * uChopScale * lodW;
       // ★ 远界外波高 fade 到 0（静态基准面；近界内全量）
       wp.y += h * uAmpScale * 5.0 * lodW;
-      // ★ 局部落水剧烈波动（角色入水/炮弹近水；远处衰减 → 幻游不见/近处叠加）
-      wp.y += impactAgitation(wp.xz, uTime) * lodW;
     } else if (isFall > 0.5) {
       wv = waterWaveY(wp.xz, uTime);
       if (isFall > 0.5) wv *= 1.0 - vUv.y * vUv.y;
       wp.y += wv;
     }
+    wp.y += shake; // ★ 抖动统一叠加（不依赖 uHasOcean / border）
     // deep=-3 屋顶：无位移（保持稳定）
     if (isBoss > 0.5) wp.y += 0.5 * sin(uTime * 0.9 + spin.y * 3.0); // 4D 漂浮微动
     vec4 mvPosition = viewMatrix * wp;
@@ -593,22 +607,29 @@ export class WaterMaterial extends THREE.ShaderMaterial {
     void this.loadOceanTextures(); // 非阻塞：FFT 在 worker，就绪后热插纹理（uHasOcean 翻 1）
   }
 
-  /** 海况场就绪后热插 12 张 FFT 贴图（字节全部来自 OceanBaker worker） */
+  /** 海况场就绪后热插 12 张 FFT 贴图（字节全部来自 OceanBaker worker）；
+   *  ★ 失败可重试（旧实现一次性：失败即永久静态水面）——抖动已与海况解耦，不受影响 */
   private async loadOceanTextures(): Promise<void> {
-    try {
-      const tex = await ensureOceanTextures();
-      if (this.disposed) return;
-      const u = this.uniforms;
-      u.uHD0A.value = tex.hdA[0]; u.uHD0B.value = tex.hdB[0];
-      u.uHD1A.value = tex.hdA[1]; u.uHD1B.value = tex.hdB[1];
-      u.uHD2A.value = tex.hdA[2]; u.uHD2B.value = tex.hdB[2];
-      u.uN0A.value = tex.nA[0]; u.uN0B.value = tex.nB[0];
-      u.uN1A.value = tex.nA[1]; u.uN1B.value = tex.nB[1];
-      u.uN2A.value = tex.nA[2]; u.uN2B.value = tex.nB[2];
-      u.uHasOcean.value = 1;
-    } catch (e) {
-      console.error("[WaterMaterial] 海况场烘焙失败：水面保持静态基面", e);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        const tex = await ensureOceanTextures();
+        if (this.disposed) return;
+        const u = this.uniforms;
+        u.uHD0A.value = tex.hdA[0]; u.uHD0B.value = tex.hdB[0];
+        u.uHD1A.value = tex.hdA[1]; u.uHD1B.value = tex.hdB[1];
+        u.uHD2A.value = tex.hdA[2]; u.uHD2B.value = tex.hdB[2];
+        u.uN0A.value = tex.nA[0]; u.uN0B.value = tex.nB[0];
+        u.uN1A.value = tex.nA[1]; u.uN1B.value = tex.nB[1];
+        u.uN2A.value = tex.nA[2]; u.uN2B.value = tex.nB[2];
+        u.uHasOcean.value = 1;
+        return;
+      } catch (e) {
+        if (this.disposed) return;
+        console.warn(`[WaterMaterial] 海况场烘焙失败（第 ${attempt + 1}/4 次），稍后重试`, e);
+        await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+      }
     }
+    console.error('[WaterMaterial] 海况场烘焙多次失败：水面保持静态基面（落水抖动不受影响）');
   }
 
   override dispose(): void {

@@ -22,6 +22,10 @@ class OceanBakerService {
   private nextId = 1;
   private pending = new Map<number, (tiles: OceanTile[][] | null) => void>();
 
+  /** ★ 烘焙超时（ms）：Worker 无响应（非 error）时兜底回退主线程同步，
+   *  避免 promise 永久挂起 → 海况一直不初始化 */
+  private static readonly TIMEOUT_MS = 5000;
+
   private ensure(): Worker | null {
     if (this.worker) return this.worker;
     if (this.broken) return null;
@@ -61,7 +65,17 @@ class OceanBakerService {
     if (!w) return Promise.resolve(null);
     const id = this.nextId++;
     return new Promise((resolve) => {
-      this.pending.set(id, resolve);
+      const timer = setTimeout(() => {
+        if (!this.pending.has(id)) return;
+        this.pending.delete(id);
+        console.warn("[OceanBaker] 海况烘焙超时（Worker 无响应），回退主线程同步");
+        resolve(null);
+      }, OceanBakerService.TIMEOUT_MS);
+      // 包装：清定时器后再 resolve（onmessage/onerror 两条路径共用）
+      this.pending.set(id, (tiles) => {
+        clearTimeout(timer);
+        resolve(tiles);
+      });
       w.postMessage({ type: "oceanBake", id, seed });
     });
   }

@@ -183,6 +183,24 @@ export const MATERIAL_GLSL = /* glsl */ `
   // ★ ES 1.00 不允许结构体数组成员——直接用函数读参数
   float matP(int id, int i) { return uMatParams[id * 16 + i]; }
 
+  // ==================== 解析线条抗锯齿 / 距离细节淡出（fwidth） ====================
+  // aaStep/aaBand：线条/条纹的阈值带按像素足迹自动加宽——近处保持原锐度
+  //   （minW 兜底）、远处随 fwidth 变软（minification 不再阶梯/闪噪）。
+  // detailVis：按像素足迹返回 1→0 的细节可见度；重噪声材质在远景早退
+  //   （"远处细节直接抛弃"，同时省掉后段 fbm/hash ALU）。
+  float aaStep(float x, float edge, float minW) {
+    float w = max(fwidth(x), minW);
+    return smoothstep(edge - w, edge + w, x);
+  }
+  float aaBand(float x, float edge, float halfW, float minW) {
+    float w = max(fwidth(x), minW);
+    return 1.0 - smoothstep(halfW - w, halfW + w, abs(x - edge));
+  }
+  float detailVis(vec2 w, float near, float far) {
+    float foot = max(fwidth(w.x), fwidth(w.y));
+    return 1.0 - smoothstep(near, far, foot);
+  }
+
   // ==================== OKLab 伪造渲染库（感知均匀空间，见 colorLab.ts） ====================
   // OKLab(L,a,b) → 线性 RGB。★ 输出 linear——ACES/colorspace_fragment 全在 linear 域。
   vec3 oklab2linear(vec3 lab) {
@@ -218,6 +236,9 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(patchv, f.y * 0.004, 0.0, patchv * 0.40);
   }
   vec4 mat_dirt_hi(float fz, vec2 w, int id) {
+    // ★ 远景早退：路辙/石子细于像素后整体丢弃（省噪声 ALU，防闪噪）
+    float vis = detailVis(w, 0.10, 0.35);
+    if (vis <= 0.002) return vec4(0.0);
     float grain = (h21(floor(w * 80.0)) - 0.5) * matP(id, 0) * 1.5;
     // 路辙扫痕：沿 x 拉伸的条状明暗（各向异性噪声，车辙走向感）
     float ruts = (vnoise2(vec2(w.x * 0.8, w.y * 14.0)) - 0.5) * matP(id, 2) * 0.9;
@@ -232,7 +253,7 @@ export const MATERIAL_GLSL = /* glsl */ `
     float pebRim = hasPeb * smoothstep(0.10, 0.20, pd) * smoothstep(0.32, 0.20, pd) * 0.03;
     float dL = ruts + grain + peb + pebRim;
     float reflect = ruts * 0.20 + grain * 0.10 + peb * 0.6;
-    return vec4(dL, 0.0, 0.0, reflect);
+    return vec4(dL, 0.0, 0.0, reflect) * vis;
   }
   vec4 mat_dirt(vec3 f, vec2 w, int id) { return mat_dirt_lo(f, w, id) + mat_dirt_hi(f.z, w, id); }
 
@@ -252,8 +273,9 @@ export const MATERIAL_GLSL = /* glsl */ `
     float variant = (h21(bc + vec2(29.3, 0.0)) - 0.5) * matP(id, 2) * 0.10; // ±0.05 连续（非硬切）
     float broken = h21(bc + vec2(41.7, 0.0)) < matP(id, 3) ? -0.05 : 0.0;
     float gw = matP(id, 0);
-    float groutX = smoothstep(1.0 - gw, 1.0 - gw * 0.6, lx);
-    float groutY = smoothstep(1.0 - gw, 1.0 - gw * 0.6, ly);
+    // ★ fwidth AA：灰缝宽度随像素足迹自适应（近处保持原锐度）
+    float groutX = aaStep(lx, 1.0 - gw * 0.8, gw * 0.2);
+    float groutY = aaStep(ly, 1.0 - gw * 0.8, gw * 0.2);
     float grout = max(groutX, groutY) * -0.12;
     float dL = jit + variant + broken + grout;
     float dH = variant * 0.20;                 // 原 0.4 → 温和色相偏
@@ -290,15 +312,16 @@ export const MATERIAL_GLSL = /* glsl */ `
     float seamOff = h21(vec2(row, 3.3)) * matP(id, 1) * 8.0;
     float ry = fract(w.y / pw);
     float band = max(ry, 1.0 - ry);                        // 板两端 = 缝区
-    float seam = (1.0 - smoothstep(0.020, 0.040, band)) * -0.12;
+    // ★ fwidth AA：板缝/端缝随像素足迹自适应
+    float seam = (1.0 - aaStep(band, 0.030, 0.010)) * -0.12;
     float seamX = abs(fract(w.x * 0.5 + seamOff) - 0.5);
-    float endSeam = (1.0 - smoothstep(0.006, 0.020, seamX)) * -0.10;
+    float endSeam = (1.0 - aaStep(seamX, 0.013, 0.007)) * -0.10;
     float grain = (vnoise2(vec2(w.x * 1.8, w.y * 50.0)) - 0.5) * matP(id, 3) * 0.32;
     float nail = 0.0;
     vec2 c = floor(w / 1.2);
     if (h21(c + vec2(88.3, 4.4)) < matP(id, 4)) {
       vec2 l = fract(w / 1.2) - 0.5;
-      if (dot(l, l) < 0.004) nail = -0.12;
+      nail = (1.0 - aaStep(length(l), 0.0632, 0.006)) * -0.12; // ★ fwidth AA 钉点
     }
     float dL = seam + endSeam + jit + grain + nail;
     float dH = (h21(vec2(row, 7.7)) - 0.5) * 0.012;
@@ -314,24 +337,27 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(base, 0.0, 0.0, 0.0);
   }
   vec4 mat_rock_hi(float fz, vec2 w, int id) {
+    // ★ 远景早退：曲纹/裂纹细于像素后整体丢弃（省 4×fbm2 大额 ALU，防闪噪）
+    float vis = detailVis(w, 0.30, 0.80);
+    if (vis <= 0.002) return vec4(0.0);
     // 曲纹场：两层异频 FBM 叠加出弯曲线路
     float v = fbm2(w * 1.4 + 7.0) + fbm2(w * 2.8 + 13.0) * 0.6 + fbm2(w * 5.6 + 21.0) * 0.35;
-    // 脊线（1 - |2v-1| → 越接近整数0/1 越亮），再 smoothstep 收成细白纹
+    // 脊线（1 - |2v-1| → 越接近整数0/1 越亮），再收成细白纹；fwidth AA
     float ridge = 1.0 - abs(v * 2.0 - 1.0);
     // strata 控密度（脊线阈值），streak 控弯度（噪声扰动幅度）
     float bend = (vnoise2(w * 1.1 + 41.0) - 0.5) * matP(id, 1) * 0.5;
-    float vein = smoothstep(1.0 - matP(id, 0) * 0.5, 1.0, ridge + bend) * 0.16;
-    // 轻裂纹（ridged 线状暗纹）
+    float vein = aaStep(ridge + bend, 1.0 - matP(id, 0) * 0.25, max(0.01, matP(id, 0) * 0.25)) * 0.16;
+    // 轻裂纹（ridged 线状暗纹）；fwidth AA
     float rn = fbm2(w * 1.3 + 27.0);
     float crackLine = 1.0 - abs(rn * 2.0 - 1.0);
-    float crack = smoothstep(1.0 - matP(id, 2) * 0.4, 1.0, crackLine) * -0.06;
+    float crack = aaStep(crackLine, 1.0 - matP(id, 2) * 0.2, max(0.01, matP(id, 2) * 0.2)) * -0.06;
     // 微凹凸
     float bump = max(fz, 0.0) * matP(id, 3) * 0.5;
     float dL = vein + crack + bump;
     // 大理纹微偏冷（亮度纹路给一点冷白，底偏暖形成层次）
     float dC = vein * 0.015;
     float reflect = vein * 0.10 + bump * 0.08;
-    return vec4(dL, dC, 0.0, reflect);
+    return vec4(dL, dC, 0.0, reflect) * vis;
   }
   vec4 mat_rock(vec3 f, vec2 w, int id) { return mat_rock_lo(f, w, id) + mat_rock_hi(f.z, w, id); }
 
@@ -375,6 +401,9 @@ export const MATERIAL_GLSL = /* glsl */ `
   // 石色 = 暖灰棕多矿复合（黑/白/土黄/黄褐/红棕，无蓝无青）；
   // 石缝细砂、被水浸润的湿润光泽。无动画、静态、reflect 归一 → 舒适。
   vec4 mat_pebble(vec3 f, vec2 w, int id) {
+    // ★ 远景早退：卵石细于像素后整体丢弃（省 3×3 邻格椭圆搜索的大额 ALU）
+    float vis = detailVis(w, 0.10, 0.35);
+    if (vis <= 0.002) return vec4(0.0);
     float cs = 1.0 / max(matP(id, 0) * 140.0, 2.0);        // 卵石格尺度（米）（默认 ~8cm）
     vec2 g = w / cs;
     vec2 gid = floor(g);
@@ -415,7 +444,7 @@ export const MATERIAL_GLSL = /* glsl */ `
     float dC = stone * chroma;
     float dH = hueOff;
     float reflect = stone * (dome * 0.22 + perTone * 0.06);  // 湿润中心光泽（delta）
-    return vec4(dL, dC, dH, reflect);
+    return vec4(dL, dC, dH, reflect) * vis;
   }
 
   // 冰面：冰层厚薄/霜斑/闪晶【低频·烘焙】+ 结晶裂纹【高频】
@@ -430,10 +459,13 @@ export const MATERIAL_GLSL = /* glsl */ `
       frost * 0.22 + depthv * 0.10 + shimmer * 0.14);
   }
   vec4 mat_ice_hi(float fz, vec2 w, int id) {
+    // ★ 远景早退：裂纹细于像素后整体丢弃（省 fbm ALU，防闪噪）
+    float vis = detailVis(w, 0.25, 0.70);
+    if (vis <= 0.002) return vec4(0.0);
     float rn = fbm2(w * 1.6);
     float crackL = 1.0 - abs(rn * 2.0 - 1.0);
-    float crack = smoothstep(1.0 - matP(id, 0) * 0.25, 1.0, crackL) * -0.05;
-    return vec4(crack, 0.0, 0.0, crack * 0.30);
+    float crack = aaStep(crackL, 1.0 - matP(id, 0) * 0.125, max(0.008, matP(id, 0) * 0.125)) * -0.05;
+    return vec4(crack, 0.0, 0.0, crack * 0.30) * vis;
   }
   vec4 mat_ice(vec3 f, vec2 w, int id) { return mat_ice_lo(f, w, id) + mat_ice_hi(f.z, w, id); }
 
@@ -465,10 +497,14 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(-puddle * 0.05 + wet, puddle * 0.010, 0.0, puddle * 0.25 + wet * 0.10);
   }
   vec4 mat_mud_hi(float fz, vec2 w, int id) {
+    // ★ 远景早退：干裂纹/泥粒细于像素后整体丢弃（省 fbm ALU，防闪噪）
+    float vis = detailVis(w, 0.20, 0.55);
+    if (vis <= 0.002) return vec4(0.0);
     float rn = fbm2(w * 1.1 + 53.0);
-    float crackL = smoothstep(0.88, 0.98, 1.0 - abs(rn * 2.0 - 1.0)) * matP(id, 1) * -0.06;
+    float crackBase = 1.0 - abs(rn * 2.0 - 1.0);
+    float crackL = aaStep(crackBase, 0.93, 0.05) * matP(id, 1) * -0.06; // fwidth AA
     float grain = (h21(floor(w * 60.0)) - 0.5) * matP(id, 3) * 0.60;
-    return vec4(crackL + grain, 0.0, 0.0, grain * 0.04);
+    return vec4(crackL + grain, 0.0, 0.0, grain * 0.04) * vis;
   }
   vec4 mat_mud(vec3 f, vec2 w, int id) { return mat_mud_lo(f, w, id) + mat_mud_hi(f.z, w, id); }
 
@@ -480,11 +516,15 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(depthv, 0.0, 0.0, depthv * 0.5);
   }
   vec4 mat_pit_hi(float fz, vec2 w, int id) {
+    // ★ 远景早退：裂纹/红光/暗粒细于像素后整体丢弃（省 fbm ALU，防闪噪）
+    float vis = detailVis(w, 0.20, 0.55);
+    if (vis <= 0.002) return vec4(0.0);
     float rn = fbm2(w * 0.9 + 91.0);
-    float crack = smoothstep(0.86, 0.97, 1.0 - abs(rn * 2.0 - 1.0)) * matP(id, 0) * -0.10;
+    float crackBase = 1.0 - abs(rn * 2.0 - 1.0);
+    float crack = aaStep(crackBase, 0.915, 0.055) * matP(id, 0) * -0.10; // fwidth AA
     float glow = crack * matP(id, 1) * 0.5;           // 裂纹微光（偏红）
     float grain = (h21(floor(w * 80.0)) - 0.5) * matP(id, 3) * 1.2;
-    return vec4(crack + grain, glow * 0.05, glow * 0.02, glow * 0.8 + grain * 0.1);
+    return vec4(crack + grain, glow * 0.05, glow * 0.02, glow * 0.8 + grain * 0.1) * vis;
   }
   vec4 mat_pit(vec3 f, vec2 w, int id) { return mat_pit_lo(f, w, id) + mat_pit_hi(f.z, w, id); }
 
@@ -524,19 +564,6 @@ export const MATERIAL_GLSL = /* glsl */ `
     return vec4(grain, 0.0, 0.0, 0.0);
   }
   vec4 mat_cement(vec3 f, vec2 w, int id) { return mat_cement_lo(f, w, id) + mat_cement_hi(f.z, w, id); }
-
-  // ==================== 解析线条抗锯齿工具（fwidth） ====================
-  // 线条/条纹的阈值带按像素足迹自动加宽：近处保持原锐度（minW 兜底）、
-  // 远处随 fwidth 变软（minification 不再阶梯/闪噪）。配合各装饰的
-  // foot 距离淡出 → "远处细节直接抛弃"（同时省掉后段噪声 ALU）。
-  float aaStep(float x, float edge, float minW) {
-    float w = max(fwidth(x), minW);
-    return smoothstep(edge - w, edge + w, x);
-  }
-  float aaBand(float x, float edge, float halfW, float minW) {
-    float w = max(fwidth(x), minW);
-    return 1.0 - smoothstep(halfW - w, halfW + w, abs(x - edge));
-  }
 
   // ==================== 条带装饰（《我画的第一个装饰性纹理》2026-09-05 定稿） ====================
   // 语义（用户定调）：规规矩矩的斑马线式标线——横平竖直 + 轻磨损。
