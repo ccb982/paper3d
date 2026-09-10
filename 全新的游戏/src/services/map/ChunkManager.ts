@@ -171,6 +171,7 @@ export class ChunkManager {
     key: number; cx: number; cz: number;
     maps: ChunkMaps; decor: DecorPlan | null; // null = 破坏重建(只换地形，见 rebuildTerrainOnly)
     deferDecor?: boolean; // 首建：先上地形，装饰层延后见 pendingDecorJobs
+    decorMode?: 'none' | 'props' | 'full'; // ★ 挖坑局部重贴地：无影响/仅道具/整块（缺省 full）
     top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw;
     cells?: PatchGroundCell[]; // ★ 物理分区（增量重建只含受影响分区；缺省 = 合并 trimesh）
     bounds?: { top: GeomBounds; wall: GeomBounds }; // ★ y 范围（Worker 扫出 → 解析构造包围球）
@@ -180,9 +181,17 @@ export class ChunkManager {
 
   // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
-  private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps }>();
+  private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps; mode: 'full' | 'props' }>();
   /** 每帧补挂装饰预算（个）—— 延后补挂同一 chunk 的 planDecor+buildDecorLayer+colliders */
   private static readonly DECOR_PER_FRAME = 1;
+
+  // ---- ★ 装饰脏区局部重贴地（2026-09-10）：挖坑不再整 chunk 重排装饰 ----
+  /** 最近一次构建的装饰计划（挖坑影响判定 + 道具 y 重贴地数据源） */
+  private decorCache = new Map<number, DecorPlan>();
+  /** 本 chunk 攒下的挖动 1m cell（局部 idx = lz*60+lx）；full = 必须整块重贴地（邻块联动等） */
+  private decorDirty = new Map<number, { cells: Set<number>; full: boolean }>();
+  /** 已挂进 chunk group 的道具层引用（局部重贴地时只拆它，围裙/台座不动） */
+  private propLayers = new Map<number, THREE.Object3D>();
 
   // ---- ★ 地形修改性能重构（原地更新，2026-09-09） ----
   // 计算侧（Worker 内 IncrementalGeometry 逐 cell 重发）本就增量；主线程开销大头
@@ -259,17 +268,17 @@ export class ChunkManager {
       this.geoInflight.delete(a.key);
       if (a.decor === null || a.deferDecor) {
         // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
-        //   装饰（props 贴地重造）随后经 pendingDecorJobs 在更后续帧补挂。
+        //   装饰按脏区模式处理（none=不动 / props=只重贴道具 / full=整块重贴）。
         //   2026-09-09：挖坑重建优先原地更新（attr 写入 + 分块 collider 原位换）
-        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.cells, a.bounds);
-        this.pendingDecorJobs.set(chunkKeyOf(a.cx, a.cz), { cx: a.cx, cz: a.cz, maps: a.maps });
+        const mode = a.decorMode ?? 'full';
+        this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.cells, a.bounds, mode);
       } else {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
       }
     }
-    // ★ 延迟装饰补挂：地形重建结束后重 planDecor（此刻 levels 已落库、
+    // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
-    //   每帧预算个 chunk；同 chunk 多坑以最新一次补挂为准（key 去重）。
+    //   每帧预算个 chunk；同 chunk 多任务以更强模式合并（full > props）。
     let d = ChunkManager.DECOR_PER_FRAME;
     while (d-- > 0 && this.pendingDecorJobs.size > 0) {
       const first = this.pendingDecorJobs.keys().next().value;
@@ -278,8 +287,14 @@ export class ChunkManager {
       this.pendingDecorJobs.delete(first);
       const group = this.meshes.get(first);
       if (!group) continue; // chunk 已被销毁或为虚空
-      // ★ 重贴地：以当前 levels 重计划整个 chunk 的装饰（props Y 含下探）
+      if (j.mode === 'props') {
+        // ★ 脏区局部：只重排/重贴受影响道具层（围裙/台座/碰撞体不动）——§17.11
+        this.resnapProps(j.cx, j.cz, group);
+        continue;
+      }
+      // ★ 整块重贴地：以当前 levels 重计划整个 chunk 的装饰（props Y 含下探）
       const decor = this.planDecor(j.cx, j.cz);
+      this.cacheDecorPlan(first, decor);
       const decorLayer = this.buildDecorLayer(j.cx, j.cz, decor);
       if (decorLayer) group.add(decorLayer.layer);
       // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
@@ -305,6 +320,9 @@ export class ChunkManager {
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随风格换代作废
+    this.decorCache.clear();
+    this.decorDirty.clear();
+    this.propLayers.clear();
     for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
     this.pendingBakes.clear();
     // ★ 可见 + 虚空一并重建（虚空块不在 meshes 里，漏掉会永远悬空）
@@ -326,6 +344,9 @@ export class ChunkManager {
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随 dispose 作废
+    this.decorCache.clear();
+    this.decorDirty.clear();
+    this.propLayers.clear();
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
     this.pendingBakes.clear();
     for (const id of this.bodies.values()) {
@@ -671,6 +692,8 @@ const key2 = chunkKeyOf(cx, cz);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
 
     const decorLayer = this.buildDecorLayer(cx, cz, decor);
+    // ★ 装饰计划入缓存（挖坑脏区局部重贴地的判定/数据源；§17.11）
+    this.cacheDecorPlan(key, decor);
     if (decorLayer) group.add(decorLayer.layer);
     (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
 
@@ -696,11 +719,16 @@ const key2 = chunkKeyOf(cx, cz);
     topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
     cells?: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
+    decorMode: 'none' | 'props' | 'full' = 'full',
   ): void {
     const key = chunkKeyOf(cx, cz);
     if (this.meshes.has(key)) {
       // ★ 挖坑增量：视觉原地写 + 受影响物理分区原位换；失败回退全量换装
-      if (cells && cells.length > 0 && this.applyTerrainPatchInPlace(key, topG, wallG, waterG, cells, bounds)) return;
+      if (cells && cells.length > 0 && this.applyTerrainPatchInPlace(key, topG, wallG, waterG, cells, bounds, decorMode)) {
+        // ★ 原地更新成功：装饰按脏区模式排队（none = 完全不动，零重排/零重建）
+        if (decorMode !== 'none') this.queueDecorJob(cx, cz, maps, decorMode === 'props' ? 'props' : 'full');
+        return;
+      }
       const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
@@ -710,6 +738,8 @@ const key2 = chunkKeyOf(cx, cz);
       // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
       // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
       this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
+      // ★ 全量换装把装饰整体销毁了 → 必须整块重贴地
+      this.queueDecorJob(cx, cz, maps, 'full');
       return;
     }
     if (!this.voidKeys.has(key)) {
@@ -722,6 +752,7 @@ const key2 = chunkKeyOf(cx, cz);
       this.scene.add(group);
       this.meshes.set(key, group);
       this.createChunkGround(key, cx, cz, cfg.pv, cfg.pi, cells);
+      this.queueDecorJob(cx, cz, maps, 'full');
     }
   }
 
@@ -731,7 +762,8 @@ const key2 = chunkKeyOf(cx, cz);
    *      Tier B：布局漂移 → 整体换 geometry，Mesh/材质保留）；
    *   ② 物理：只原位换受影响分区 collider（grid×grid；O(受影响分区) 提前返回）；
    *   ③ 水：小网格拓扑可变（干块摘除/拆池）→ 整体换 mesh（廉价）；
-   *   ④ 装饰：保持既有语义——销毁旧装饰层+其刚体，pendingDecorJobs 重贴地重造。
+   *   ④ 装饰：按脏区模式处理——none=保留旧装饰（最省）/ props=只拆道具层 /
+   *      full=拆整层；重贴地由 pendingDecorJobs 预算化补挂（§17.11）。
    *   任一失败 → 返回 false，调用方回退全量换装（分区全量重建）。
    */
   private applyTerrainPatchInPlace(
@@ -740,6 +772,7 @@ const key2 = chunkKeyOf(cx, cz);
     waterG: WaterSurfaceRaw | undefined,
     cells: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
+    decorMode: 'none' | 'props' | 'full' = 'full',
   ): boolean {
     const entry = this.terrainVisuals.get(key);
     const group = this.meshes.get(key) as THREE.Group | undefined;
@@ -754,9 +787,9 @@ const key2 = chunkKeyOf(cx, cz);
     } else if (entry.wall) {
       return false; // 防御：墙消失（现管线不发生）→ 回退全量
     }
-    // ④ 装饰先拆（replaceWaterMesh 会把新水网格 append 到末尾，先拆才能保住
-    //    terrainCount 索引语义：装饰销毁按 tc..end 裁剪，不能误伤新水网格）
-    this.teardownDecorOnly(key, group);
+    // ④ 装饰：按脏区模式处理（none=保留 / props=只拆道具层 / full=拆整层）
+    if (decorMode === 'full') this.teardownDecorOnly(key, group);
+    else if (decorMode === 'props') this.teardownPropsOnly(key);
     // ③ 水：小网格整体换（拓扑可变）
     this.replaceWaterMesh(group, entry, waterG);
     // ② 物理：只换受影响分区（提前返回，其余分区不动；同步原位换）
@@ -882,13 +915,13 @@ const key2 = chunkKeyOf(cx, cz);
     }
   }
 
-  /** ④ 装饰销毁（replaceChunk 的装饰半边；地形视觉/地面刚体不动）：
-   *  terrainCount 之后的 children（装饰层）逐个 dispose；装饰碰撞体/围裙/台座
+  /** ④ 装饰销毁（tag 版：不依赖 children 次序，水网格先/后挂都安全）：
+   *  userData.decorKind==='decor' 的子树逐个 dispose；装饰碰撞体/围裙/台座
    *  刚体与注册表清除——重贴地重造由 pendingDecorJobs 预算化补挂 */
   private teardownDecorOnly(key: number, group: THREE.Group): void {
-    const tc = (group.userData as { terrainCount?: number }).terrainCount ?? 0;
-    for (let i = group.children.length - 1; i >= tc; i--) {
+    for (let i = group.children.length - 1; i >= 0; i--) {
       const c = group.children[i];
+      if ((c.userData as { decorKind?: string }).decorKind !== 'decor') continue;
       group.remove(c);
       this.disposeVisual(c);
     }
@@ -908,6 +941,108 @@ const key2 = chunkKeyOf(cx, cz);
       this.host.destroyGround(oldPlinth);
       this.plinthBodies.delete(key);
     }
+    this.propLayers.delete(key);
+  }
+
+  /** ★ 只拆道具层（脏区局部重贴地；围裙/台座/地形/水不动 —— §17.11） */
+  private teardownPropsOnly(key: number): void {
+    const pl = this.propLayers.get(key);
+    if (pl) {
+      pl.parent?.remove(pl);
+      this.disposeVisual(pl);
+      this.propLayers.delete(key);
+    }
+    const oldProps = this.propBodies.get(key);
+    if (oldProps) {
+      for (const id of oldProps) this.host.destroyGround(id);
+      this.propBodies.delete(key);
+    }
+    this.propRegistry.delete(key);
+  }
+
+  /** ★ 局部重贴地（§17.11）：道具 y 按新表面重算（sink 不变），重挂道具层 + 碰撞体。
+   *  位置/存在性沿用原计划——presence 哈希与 blockTypes 均未变，与整块重排等价；
+   *  坡度门槛跨过时挖坑只会变陡，保留道具由 sink 吸收落位（不删除、不浮空）。 */
+  private resnapProps(cx: number, cz: number, group: THREE.Object3D): void {
+    const key = chunkKeyOf(cx, cz);
+    const cached = this.decorCache.get(key);
+    if (!cached) return;
+    const props = cached.props.map((p) => ({
+      ...p,
+      y: this.raster.surfaceHeightAt(cx * CHUNK_SIZE + p.x, cz * CHUNK_SIZE + p.z) - (p.sink ?? 0),
+    }));
+    if (props.length > 0) {
+      const propLayer = buildPropLayer(props);
+      if (propLayer) {
+        const wrap = new THREE.Group();
+        wrap.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
+        (wrap.userData as { decorKind?: string }).decorKind = 'decor';
+        wrap.add(propLayer);
+        group.add(wrap);
+        this.propLayers.set(key, wrap);
+      }
+    }
+    this.createDecorColliders(cx, cz, { ...cached, props });
+    cached.props = props;
+  }
+
+  /** ★ 装饰计划入缓存（只留重贴地需要的 props；decals/propVolumes 是烘焙一次性数据，不驻留） */
+  private cacheDecorPlan(key: number, decor: DecorPlan): void {
+    this.decorCache.set(key, { props: decor.props, decals: [], propVolumes: new Float32Array(0) });
+  }
+
+  /** ★ 装饰任务入队（full > props 合并：同 chunk 更强者优先） */
+  private queueDecorJob(cx: number, cz: number, maps: ChunkMaps, mode: 'full' | 'props'): void {
+    const key = chunkKeyOf(cx, cz);
+    const prev = this.pendingDecorJobs.get(key);
+    const final: 'full' | 'props' = prev?.mode === 'full' || mode === 'full' ? 'full' : 'props';
+    this.pendingDecorJobs.set(key, { cx, cz, maps, mode: final });
+  }
+
+  /** ★ 挖坑装饰影响判定：none=无影响（不拆不建）/ props=仅道具 / full=整块（结构件/未知） */
+  private decideDecorMode(
+    cx: number, cz: number,
+    dd: { cells: Set<number>; full: boolean } | undefined,
+  ): 'none' | 'props' | 'full' {
+    const key = chunkKeyOf(cx, cz);
+    const plan = this.decorCache.get(key);
+    if (!plan) return 'full';           // 无计划（首建等）：走整块
+    if (!dd) return 'full';             // 非挖动触发（邻块/其它）：保守整块
+    if (dd.full) return 'full';         // 邻块联动：保守整块
+    if (dd.cells.size === 0) return 'none';
+    if (this.dirtyTouchesPlatform(cx, cz, dd.cells)) return 'full'; // 围裙/台座可能受影响
+    // 道具足迹 ±6m 与脏区相交 → 仅重贴道具（余量覆盖层过渡 W=0.5m/层 × 深挖）
+    for (const p of plan.props) {
+      const x0 = Math.max(0, Math.floor(p.x) - 6);
+      const x1 = Math.min(CHUNK_SIZE - 1, Math.floor(p.x) + 6);
+      const z0 = Math.max(0, Math.floor(p.z) - 6);
+      const z1 = Math.min(CHUNK_SIZE - 1, Math.floor(p.z) + 6);
+      for (let lz = z0; lz <= z1; lz++) {
+        for (let lx = x0; lx <= x1; lx++) {
+          if (dd.cells.has(lz * CHUNK_SIZE + lx)) return 'props';
+        }
+      }
+    }
+    return 'none';
+  }
+
+  /** 脏区是否靠近 platform 地块（±2 个 4m 块）——围裙/台座结构件的保守触发 */
+  private dirtyTouchesPlatform(cx: number, cz: number, cells: Set<number>): boolean {
+    const d = this.raster.getChunkData(cx, cz);
+    if (!d) return true;
+    const B = BLOCKS_PER_SIDE;
+    for (const idx of cells) {
+      const lx = idx % CHUNK_SIZE;
+      const lz = (idx / CHUNK_SIZE) | 0;
+      const b0x = Math.max(0, (lx >> 2) - 2), b1x = Math.min(B - 1, (lx >> 2) + 2);
+      const b0z = Math.max(0, (lz >> 2) - 2), b1z = Math.min(B - 1, (lz >> 2) + 2);
+      for (let bz = b0z; bz <= b1z; bz++) {
+        for (let bx = b0x; bx <= b1x; bx++) {
+          if (tileById(d.blockTypes[bz * B + bx]).genRole === 'platform') return true;
+        }
+      }
+    }
+    return false;
   }
 
   /** 用几何字节构建地形 top/wall/water 网格 + 合并 trimesh（供非破坏装配与增量重建共用）
@@ -1139,6 +1274,10 @@ const key2 = chunkKeyOf(cx, cz);
             this.pendingPatches.set(key, p);
           }
           for (const d of rec.dirty) p.dirty.add(d);
+          // ★ 装饰脏区（局部 1m cell）：flushPatchRebuilds 据此判定局部重贴地
+          let dd = this.decorDirty.get(key);
+          if (!dd) { dd = { cells: new Set(), full: false }; this.decorDirty.set(key, dd); }
+          for (const c of rec.cells) dd.cells.add(c.lz * CHUNK_SIZE + c.lx);
         }
       }
       // ★ 跨 chunk 联动（2026-09-10）：本块挖动改变邻块包络场/共享边 → 邻块也要重建
@@ -1209,6 +1348,10 @@ const key2 = chunkKeyOf(cx, cz);
       p = { cx, cz, dirty: new Set() };
       this.pendingPatches.set(key, p);
     }
+    // ★ 邻块联动：包络场影响范围难精确 → 装饰脏区标记 full（保守整块重贴地）
+    let dd = this.decorDirty.get(key);
+    if (!dd) { dd = { cells: new Set(), full: false }; this.decorDirty.set(key, dd); }
+    dd.full = true;
   }
 
 /** [PATCH] 日志节流（连射时 console 不刷屏；console.log 本身也是开销） */
@@ -1255,7 +1398,12 @@ const key2 = chunkKeyOf(cx, cz);
         continue;
       }
       this.lastPatchStart.set(key, now);
-      this.patchRebuildChunk(p.cx, p.cz, p.dirty.size > 0 ? [...p.dirty] : null);
+      // ★ 装饰脏区快照 + 模式判定（与本次几何的 levels 快照同时消费；期间新挖的
+      //   会留在 decorDirty 里随下一次重建处理，不丢）
+      const dd = this.decorDirty.get(key);
+      this.decorDirty.delete(key);
+      const mode = this.decideDecorMode(p.cx, p.cz, dd);
+      this.patchRebuildChunk(p.cx, p.cz, p.dirty.size > 0 ? [...p.dirty] : null, mode);
     }
   }
 
@@ -1271,7 +1419,7 @@ const key2 = chunkKeyOf(cx, cz);
    * 装配与同步路径共用 assembleTableChunk。纹理缓存缺失 → requestStandardBake 兜底
    * （其完成装配的几何在主线程内联生成，与无 Worker 回退同一函数，字节一致）。
    */
-  private patchRebuildChunk(cx: number, cz: number, dirty?: number[] | null): void {
+  private patchRebuildChunk(cx: number, cz: number, dirty?: number[] | null, decorMode: 'none' | 'props' | 'full' = 'full'): void {
     const key = chunkKeyOf(cx, cz);
     // ★ 并发合并：同 chunk 在途 → 等其完成后再重算一次（掩码只增，第二次即终态）
     const prev = this.patchRebuilds.get(key);
@@ -1301,7 +1449,8 @@ const key2 = chunkKeyOf(cx, cz);
         //  仍走 assembleQueue 预算化装配（每帧 ≤ ASSEMBLE_PER_FRAME）
         //  2026-09-09 原地更新：视觉 attr 原地写 + 受影响物理分区原位换，失败回退全量
         this.assembleQueue.push({
-          key, cx, cz, maps: maps2, decor: null, top: geom.top, wall: geom.wall, water: geom.water,
+          key, cx, cz, maps: maps2, decor: null, decorMode,
+          top: geom.top, wall: geom.wall, water: geom.water,
           cells: geom.cells,
           bounds: { top: geom.topBounds, wall: geom.wallBounds },
         });
@@ -1333,8 +1482,9 @@ const key2 = chunkKeyOf(cx, cz);
     const parts: THREE.Object3D[] = [];
     let apronPhysics: ApronPhysics | null = null;
     let plinthPhysics: CementPlinthPhysics | null = null;
+    let propLayer: THREE.Object3D | null = null;
     if (decor.props.length > 0) {
-      const propLayer = buildPropLayer(decor.props);
+      propLayer = buildPropLayer(decor.props);
       if (propLayer) parts.push(propLayer);
       else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
     }
@@ -1370,11 +1520,14 @@ const key2 = chunkKeyOf(cx, cz);
     }
     if (parts.length === 0 && !apronPhysics && !plinthPhysics) return null;
     const layer = new THREE.Group();
+    (layer.userData as { decorKind?: string }).decorKind = 'decor'; // ★ 拆除识别（不依赖 children 次序）
     for (const p of parts) layer.add(p);
     // ★ 对齐 chunk 角：装饰 x/z 是 chunk 角落坐标(0~60)，而 chunk
     //   group 原点在 chunk 中心——不偏移会整体错位半块（30m），
     //   影子/碰撞体与可见网格三者错位（踩过的坑）
     layer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
+    // ★ 道具层引用：脏区局部重贴地只拆它（围裙/台座不动 —— §17.11）
+    if (propLayer) this.propLayers.set(chunkKeyOf(cx, cz), propLayer);
     return { layer, apronPhysics, plinthPhysics };
   }
 
@@ -1447,6 +1600,7 @@ const key2 = chunkKeyOf(cx, cz);
     }
     // ★ 装饰先行（与标准风格同管线）：贴图印进外观纹理、装饰物挂网格+碰撞
     const decor = this.planDecor(cx, cz);
+    this.cacheDecorPlan(key, decor);
     const b = buildBoss4DChunk(this.raster, cx, cz, decor.decals);
     const decorLayer = this.buildDecorLayer(cx, cz, decor);
     if (decorLayer) b.group.add(decorLayer.layer);

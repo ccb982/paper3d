@@ -233,6 +233,8 @@ export interface PlannedProp {
   scale: number;
   rotY: number;
   variant: number;
+  /** ★ 下沉深度（米）：挖坑局部重贴地时 newY = surfaceHeightAt - sink（免重排） */
+  sink?: number;
 }
 
 export interface PropPlanContext {
@@ -345,6 +347,7 @@ const sink = pick.placement.sinkRange
          scale: sMin + hash2(gxc, gyc, ctx.seed + 9606) * (sMax - sMin),
          rotY: hash2(gxc, gyc, ctx.seed + 9607) * Math.PI * 2,
          variant: Math.floor(hash2(gxc, gyc, ctx.seed + 9608) * 4),
+         sink,
        });
     }
   }
