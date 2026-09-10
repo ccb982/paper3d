@@ -42,7 +42,11 @@ export class InventoryGridRenderer {
     onSlotClick?: (e: InventorySlotClickEvent) => void,
     cellSize = 48,
     flashItemId?: string,
-    opts?: { dragItemIds?: Set<string> },
+    opts?: {
+      dragItemIds?: Set<string>;
+      /** ★ 网格内自由整理：把源格拖到目标格（同层）时回调（源 "layer,row,col"） */
+      onCellDrop?: (src: string, layer: string, row: number, col: number) => void;
+    },
   ): void {
     container.innerHTML = '';
     const rows = grid.length;
@@ -54,7 +58,7 @@ export class InventoryGridRenderer {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const slot = grid[r][c];
-        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick, flashItemId, opts?.dragItemIds);
+        const cell = this.createCell(slot, cellSize, layerName, r, c, onSlotClick, flashItemId, opts);
         gridDiv.appendChild(cell);
       }
     }
@@ -66,6 +70,11 @@ export class InventoryGridRenderer {
     return this.iconRegistry.getIcon(itemId);
   }
 
+  /** ★ 统一图标出口（活动画布 / 静态 img；部署槽与网格同一路径） */
+  createIconElement(itemId: string): HTMLCanvasElement | HTMLImageElement {
+    return this.iconRegistry.createIconElement(itemId);
+  }
+
   private createCell(
     slot: ItemInstance | null,
     size: number,
@@ -74,7 +83,10 @@ export class InventoryGridRenderer {
     col: number,
     onSlotClick?: (e: InventorySlotClickEvent) => void,
     flashItemId?: string,
-    dragItemIds?: Set<string>,
+    opts?: {
+      dragItemIds?: Set<string>;
+      onCellDrop?: (src: string, layer: string, row: number, col: number) => void;
+    },
   ): HTMLElement {
     const el = document.createElement('div');
     el.style.cssText = [
@@ -119,17 +131,32 @@ export class InventoryGridRenderer {
         onSlotClick?.({ layer, row, col, item: slot });
       });
 
-      // ★ 可部署友军 / 可装备：格子可拖拽 → 拖入友军槽位（部署）/ 装备栏（穿戴）
-      if (dragItemIds?.has(slot.itemId)) {
-        el.draggable = true;
+      // ★ 所有有物品的格子可拖拽：网格内自由整理（同层移动/交换）
+      el.draggable = true;
+      el.addEventListener('dragstart', (ev) => {
+        ev.dataTransfer?.setData('text/x-grid', `${layer},${row},${col}`);
+        if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+      });
+      // ★ 可部署友军 / 可装备：额外携带物品数据 → 拖入出击槽（部署）/ 装备栏（穿戴）
+      if (opts?.dragItemIds?.has(slot.itemId)) {
         el.addEventListener('dragstart', (ev) => {
           ev.dataTransfer?.setData('text/x-item', slot.itemId);
           // ★ 源格子坐标（装备栏 drop 用：精确到源 cell 执行使用，避免跨层歧义）
           ev.dataTransfer?.setData('text/x-src', `${layer},${row},${col}`);
-          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
         });
       }
     }
+
+    // ★ 目标格接收（含空格 = 移动）：把源格拖到本格
+    el.addEventListener('dragover', (ev) => {
+      if (ev.dataTransfer?.types.includes('text/x-grid')) ev.preventDefault();
+    });
+    el.addEventListener('drop', (ev) => {
+      const src = ev.dataTransfer?.getData('text/x-grid');
+      if (!src) return;
+      ev.preventDefault();
+      opts?.onCellDrop?.(src, layer, row, col);
+    });
 
     return el;
   }

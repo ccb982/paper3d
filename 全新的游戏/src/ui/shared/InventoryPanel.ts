@@ -123,6 +123,19 @@ export class InventoryPanel {
         this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
       }, cellSize, flashItemId, {
         dragItemIds: allItems,
+        // ★ 网格内自由整理（同层移动/交换；跨层仍走详情面板"转移"）
+        onCellDrop: (src, dstLayer, dstRow, dstCol) => {
+          const [sl, sr, sc] = src.split(',');
+          if (sl !== dstLayer) return;
+          const r1 = Number(sr), c1 = Number(sc);
+          if (!Number.isInteger(r1) || !Number.isInteger(c1)) return;
+          if (this.opts.itemManager.swapCells(
+            dstLayer as keyof GameSession['inventories'], r1, c1, dstRow, dstCol,
+          )) {
+            this.opts.onDataChanged?.();
+            refresh();
+          }
+        },
       });
     };
 
@@ -153,11 +166,10 @@ export class InventoryPanel {
       if (itemId) {
         // 已放入：图标 + 名称 + 可拖回背包
         try {
-          const iconCanvas = this.gridRenderer.getIcon(itemId);
-          const img = document.createElement('img');
-          img.src = iconCanvas.toDataURL();
-          img.style.cssText = 'width:70%;height:70%;object-fit:contain;';
-          cell.appendChild(img);
+          // ★ 统一图标出口（与网格一致）：无人机 → 活动画布（翅膀持续抖动，非随机帧快照）
+          const iconEl = this.gridRenderer.createIconElement(itemId);
+          iconEl.style.cssText = 'width:70%;height:70%;object-fit:contain;';
+          cell.appendChild(iconEl);
         } catch {
           cell.textContent = itemId.slice(0, 4);
         }

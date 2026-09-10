@@ -258,6 +258,29 @@ export function moveItemBetweenGrids(
 }
 
 /**
+ * ★ 网格内自由整理：交换两格内容（拖拽组织背包）。
+ *   目标空 = 移动；两格同类 = 数量合并到目标格（维持"一格一类"不变量）。
+ * 返回是否发生变更。
+ */
+export function swapGridCells(
+  grid: InventoryGrid,
+  r1: number, c1: number, r2: number, c2: number,
+): boolean {
+  if (r1 === r2 && c1 === c2) return false;
+  const a = grid[r1]?.[c1] ?? null;
+  const b = grid[r2]?.[c2] ?? null;
+  if (!a && !b) return false;
+  if (a && b && a.itemId === b.itemId) {
+    b.stackSize += a.stackSize;
+    grid[r1][c1] = null;
+    return true;
+  }
+  grid[r1][c1] = b;
+  grid[r2][c2] = a;
+  return true;
+}
+
+/**
  * ★ 同层合并归一（旧存档迁移用）：
  * 把网格中重复 itemId 合并为 1 格（数量求和），其余格置空。
  * 合并只会减少占用，返回是否发生过合并。

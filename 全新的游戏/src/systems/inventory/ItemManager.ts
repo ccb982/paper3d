@@ -9,7 +9,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from '../../core/Session';
-import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, findItemInGrid, findEmptySlot, SLOT_COUNT, SLOT_ROWS, SLOT_COLS } from '../../core/Session';
+import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, swapGridCells, findItemInGrid, findEmptySlot, SLOT_COUNT, SLOT_ROWS, SLOT_COLS } from '../../core/Session';
 import { ItemArchetype } from '../../core/ItemArchetype';
 import { type ItemEffectContext } from '../../core/ItemEffect';
 import { eventBus } from '../../core/EventBus';
@@ -66,6 +66,16 @@ export class ItemManager {
     const dst = this.session.inventories[dstLayer] as InventoryGrid;
     if (!Array.isArray(src) || !Array.isArray(dst)) return false;
     return moveItemBetweenGrids(src, dst, itemId, count);
+  }
+
+  /** ★ 网格内自由整理：交换两格（空 = 移动；同类 = 合并）——返回是否有变更 */
+  swapCells(
+    layer: keyof GameSession['inventories'],
+    r1: number, c1: number, r2: number, c2: number,
+  ): boolean {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return false;
+    return swapGridCells(grid, r1, c1, r2, c2);
   }
 
   /** 使用物品（核心逻辑：查原形 → 执行效果 → 扣减） */
