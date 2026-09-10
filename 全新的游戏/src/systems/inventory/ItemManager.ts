@@ -9,7 +9,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from '../../core/Session';
-import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, findItemInGrid, findEmptySlot } from '../../core/Session';
+import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, findItemInGrid, findEmptySlot, SLOT_COUNT, SLOT_ROWS, SLOT_COLS } from '../../core/Session';
 import { ItemArchetype } from '../../core/ItemArchetype';
 import { type ItemEffectContext } from '../../core/ItemEffect';
 import { eventBus } from '../../core/EventBus';
@@ -165,91 +165,69 @@ export class ItemManager {
     return this.countItem(layer, itemId) >= count;
   }
 
-  // ==================== ★ 友军部署（背包页面友军槽位） ====================
+  // ==================== ★ 出击槽池（12 格通用混用池：友军/装备任意混放） ====================
 
   /** 物品是否可部署为友军（items.json deployable 标记） */
   isDeployable(itemId: string): boolean {
     return this.archetypes.get(itemId)?.deployable === true;
   }
 
-  /** 部署：玩家背包移除 1 个可部署友军物品 → 占友军槽位（发事件，世界侧生成） */
-  deployAlly(itemId: string): boolean {
-    if (!this.isDeployable(itemId)) return false;
-    if (!Array.isArray(this.session.deployedAllies)) this.session.deployedAllies = [];
-    if (this.session.deployedAllies.length >= ALLY_SLOT_COUNT) return false;
-    if (!this.hasItem('player', itemId, 1)) return false;
-    if (!this.removeItem('player', itemId, 1)) return false;
-    this.session.deployedAllies.push(itemId);
-    eventBus.emit('ally_deploy', { itemId });
-    return true;
-  }
-
-  /** 卸载：友军槽位 → 放回玩家背包（发事件，世界侧回收） */
-  undeployAlly(slotIndex: number): boolean {
-    const list = this.session.deployedAllies;
-    if (!Array.isArray(list)) return false;
-    const id = list[slotIndex];
-    if (!id) return false;
-    list.splice(slotIndex, 1);
-    this.addItem('player', id, 1);
-    eventBus.emit('ally_undeploy', { itemId: id, slotIndex });
-    return true;
-  }
-
-  /** ★ 友军损毁：槽位原位替换为残骸（不返还背包；维修配方在舰船加工台修回） */
-  replaceAlly(slotIndex: number, itemId: string): boolean {
-    const list = this.session.deployedAllies;
-    if (!Array.isArray(list) || slotIndex < 0 || slotIndex >= list.length) return false;
-    list[slotIndex] = itemId;
-    return true;
-  }
-
-  /** 已部署友军列表（按槽位序） */
-  getDeployedAllies(): string[] {
-    return Array.isArray(this.session.deployedAllies) ? this.session.deployedAllies : [];
-  }
-
-  // ==================== ★ 装备栏（背包页面装备槽拖入/拖出） ====================
-
   /** 物品是否为可装备（items.json type === 'equip'） */
   isEquip(itemId: string): boolean {
     return this.archetypes.get(itemId)?.type === 'equip';
   }
 
-  /** 物品所属装备位（weapon/armor/headgear；非装备类返回 null） */
+  /** 物品所属装备位（weapon/armor/headgear；非装备类返回 null；仅信息展示/贴片锚点用） */
   equipSlotOf(itemId: string): string | null {
     return this.archetypes.get(itemId)?.equipSlot ?? null;
   }
 
-  /** 当前穿戴（player.equips） */
-  getEquipped(): { weapon?: string; armor?: string; headgear?: string } {
-    return this.session.player.equips ?? {};
+  /** 出击槽池（12 格；(string|null)[]，null = 空槽） */
+  getSlots(): (string | null)[] {
+    return Array.isArray(this.session.player.slots) ? this.session.player.slots : [];
   }
 
-  /** ★ 装备栏拖入：按格子（layer,row,col）执行使用（equip 效果：穿戴 + 旧装备回背包） */
-  equipCell(layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
-    return this.useItem(layer, row, col);
+  /** ★ 拖入槽池：源格子物品 → 放入指定空槽（一格一个物品，违规/占位拒绝）。发事件由世界侧生成/同步 */
+  putIntoSlot(slotIndex: number, layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return { success: false, message: '槽位越界' };
+    if (slots[slotIndex]) return { success: false, message: '该槽位已占用' };
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const slot = grid?.[row]?.[col];
+    if (!slot) return { success: false, message: '物品不存在' };
+    const arch = this.archetypes.get(slot.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    if (!arch.deployable && arch.type !== 'equip') return { success: false, message: '该物品不能放入出击槽' };
+    slots[slotIndex] = slot.itemId;
+    this.removeItem(layer, slot.itemId, 1);
+    eventBus.emit('deployment_changed', { slotIndex, itemId: slot.itemId, prev: null });
+    return { success: true, message: `已放入出击槽 ${slotIndex + 1}` };
   }
 
-  /** 装备栏拖入兜底：按物品 id 在玩家背包里查位置再穿戴 */
-  equipItem(itemId: string): UseItemResult {
-    const pos = this.getItems('player').find((i) => i.itemId === itemId);
-    if (!pos) return { success: false, message: '背包中没有该物品' };
-    return this.useItem('player', pos.row, pos.col);
+  /** ★ 拖出槽池：槽内物品 → 放回玩家背包（失败 = 背包无空位，保持槽内不放回，防丢件） */
+  removeFromSlot(slotIndex: number): boolean {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return false;
+    const itemId = slots[slotIndex];
+    if (!itemId) return false;
+    if (!this.hasSpace('player', itemId, 1)) return false;
+    slots[slotIndex] = null;
+    this.addItem('player', itemId, 1);
+    eventBus.emit('deployment_changed', { slotIndex, itemId: null, prev: itemId });
+    return true;
   }
 
-  /** ★ 装备栏拖出：卸载穿戴 → 放回玩家背包（失败 = 背包无空位，保持穿戴防丢件） */
-  unequipItem(slot: string): boolean {
-    const equips = this.session.player.equips;
-    if (!equips) return false;
-    const id = equips[slot as keyof typeof equips];
-    if (!id) return false;
-    if (!this.hasSpace('player', id, 1)) return false;
-    equips[slot as keyof typeof equips] = undefined;
-    this.addItem('player', id, 1);
+  /** ★ 槽位原位替换（友军损毁 → 残骸占槽，不清除槽位；发事件通知回收旧实体） */
+  replaceSlot(slotIndex: number, itemId: string): boolean {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots) || slotIndex < 0 || slotIndex >= slots.length) return false;
+    const prev = slots[slotIndex];
+    slots[slotIndex] = itemId;
+    eventBus.emit('deployment_changed', { slotIndex, itemId, prev });
     return true;
   }
 }
 
-/** ★ 友军槽位数（背包页面额外绘制；用户定调） */
-export const ALLY_SLOT_COUNT = 4;
+/** ★ 出击槽池规格（背包页面绘制 2 行 × 6 列；装具/友军混用池容积） */
+export { SLOT_COUNT, SLOT_ROWS, SLOT_COLS };

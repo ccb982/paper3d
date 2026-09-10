@@ -36,9 +36,10 @@ export class CombatItemController {
     this.equipment.update(dt);
   }
 
-  /** 同步穿戴数据 → 装备贴片（进入战场时调用；内部 diff，后续穿戴变更也可随时再调） */
-  syncEquips(): Promise<void> {
-    return this.equipment.apply(this.session.player.equips ?? {});
+  /** ★ 同步出击槽池 → 装备贴片（进入战场时调用；内部 diff，槽位变更后可随时再调） */
+  syncLoadout(): Promise<void> {
+    const slots = this.session.player.slots;
+    return this.equipment.apply(Array.isArray(slots) ? slots.filter((s): s is string => !!s) : []);
   }
 
   dispose(): void {

@@ -4,7 +4,7 @@
 // 播放 = 出实体跟随主角。注册表按 itemId 分发：
 //   kaltsit_drone       → 空中跟随（DroneEntity：VAT 双翼 + follow/attack AI）
 //   （后续地面跟随型 → 实体类 + 注册项，核心装配不变）
-// WorldMode 进战场按 deployedAllies 遍历注册表生成（原 drone 特判下沉到注册项）。
+// WorldMode 进战场按出击槽池（player.slots）遍历注册表生成（原 drone 特判下沉到注册项）。
 // ============================================================
 
 export interface AllyPlaybackContext {

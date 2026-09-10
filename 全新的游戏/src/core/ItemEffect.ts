@@ -7,7 +7,7 @@
 // ============================================================
 
 import type { GameSession } from './Session';
-import { addItemToGrid } from './Session';
+import { SLOT_COUNT } from './Session';
 import type { EntityBase } from '../entity/EntityBase';
 import { eventBus } from './EventBus';
 
@@ -68,24 +68,16 @@ effectRegistry.set('ammo', (params, ctx) => {
 });
 
 effectRegistry.set('equip', (params, ctx) => {
-  // ★ 防具武器类：使用道具 → 穿戴到指定装备位（旧装备回背包）
-  const slot: string = params.slot ?? 'weapon';
+  // ★ 防具武器类：使用道具 → 放入出击槽池第一个空槽（在格即已穿戴，贴片全量叠加）
   const itemId = ctx.itemId;
   if (!itemId) return { success: false, message: '装备数据缺失' };
-  const equips = ctx.session.player.equips;
-  if (!equips) return { success: false, message: '装备位未初始化' };
-  if (equips[slot as keyof typeof equips] === itemId) {
-    return { success: false, message: '已装备同类道具' };
-  }
-  const prev = equips[slot as keyof typeof equips];
-  if (prev) {
-    // ★ 旧装备先行退回背包（失败 = 背包无空位，不执行穿戴防丢件）
-    if (!addItemToGrid(ctx.session.inventories.player, prev, 1)) {
-      return { success: false, message: '背包已满，无法替换装备' };
-    }
-  }
-  equips[slot as keyof typeof equips] = itemId;
-  return { success: true, message: `已装备 ${itemId}` };
+  const slots = ctx.session.player.slots;
+  if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+  const idx = slots.findIndex((s) => !s);
+  if (idx === -1) return { success: false, message: `出击槽已满（${SLOT_COUNT}/${SLOT_COUNT}）` };
+  slots[idx] = itemId;
+  eventBus.emit('deployment_changed', { slotIndex: idx, itemId, prev: null });
+  return { success: true, message: `已放入出击槽 ${idx + 1}` };
 });
 
 effectRegistry.set('summon_drone', (_params, _ctx) => {

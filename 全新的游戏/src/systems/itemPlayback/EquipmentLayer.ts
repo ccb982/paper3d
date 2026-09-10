@@ -63,7 +63,8 @@ interface MountedEquip {
 }
 
 export class EquipmentLayer {
-  private slots = new Map<EquipSlot, MountedEquip>();
+  /** ★ 按 itemId 索引（出击槽池内所有装备全量叠加；同部位多件均挂载） */
+  private mounted = new Map<string, MountedEquip>();
   /** ★ 串行加载链：apply 并发调用排成一队，避免同一资产重复加载 */
   private chain: Promise<void> = Promise.resolve();
 
@@ -72,32 +73,37 @@ export class EquipmentLayer {
     private host: THREE.Object3D,
   ) {}
 
-  /** 按 session.player.equips 同步装备位（内部逐槽位 diff，不变则跳过） */
-  apply(equips: { weapon?: string; armor?: string; headgear?: string }): Promise<void> {
+  /** ★ 按出击槽池同步装备贴片（全量叠加）：diff 出新增挂载、移除卸载，未变则跳过 */
+  apply(items: string[]): Promise<void> {
     this.chain = this.chain.then(async () => {
-      const current = equips ?? {};
-      for (const slot of EQUIP_SLOTS) {
-        const itemId = current[slot];
-        const mounted = this.slots.get(slot);
-        if (mounted && mounted.itemId === itemId) continue; // 未变化
-        if (mounted) {
-          mounted.quad.dispose();
-          this.slots.delete(slot);
+      const wanted = new Map<string, EquipVisual>();
+      for (const id of items) {
+        if (!id) continue;
+        const visual = getEquipVisual(id);
+        if (visual) wanted.set(id, visual);
+      }
+      // 卸载已移除的
+      for (const [id, m] of this.mounted) {
+        if (!wanted.has(id)) {
+          m.quad.dispose();
+          this.mounted.delete(id);
         }
-        if (!itemId) continue;
-        const visual = getEquipVisual(itemId);
-        if (!visual) continue; // 该道具无装备视觉（配置缺失 → 跳过）
+      }
+      // 挂载新增的
+      let depthIndex = 0;
+      for (const [id, visual] of wanted) {
+        if (this.mounted.has(id)) continue;
         try {
-          await this.mount(slot, itemId, visual);
+          await this.mount(id, visual, depthIndex++);
         } catch (err) {
-          console.warn(`[EquipmentLayer] 装备 ${itemId} 挂载失败:`, err);
+          console.warn(`[EquipmentLayer] 装备 ${id} 挂载失败:`, err);
         }
       }
     });
     return this.chain;
   }
 
-  private async mount(slot: EquipSlot, itemId: string, visual: EquipVisual): Promise<void> {
+  private async mount(itemId: string, visual: EquipVisual, depthIndex = 0): Promise<void> {
     const asset = await FtxAsset.load(encodeURI(visual.asset));
     const quad = new FTXQuad(this.scene, asset);
     // ★ 子贴片：移除出 scene 根，挂到主角 mesh（继承 billboard/翻转/变换）
@@ -113,9 +119,10 @@ export class EquipmentLayer {
     }
     quad.setScaleKeepAspect(visual.scale);
     // ★ offsetZ 推向画面前方（父贴片朝相的局部 +Z）、与角色本体错开深度，
-    //   避免与主角贴片共面 z-fighting（"在角色前面绘制"）
-    quad.setPosition(visual.offsetX, visual.offsetY, visual.offsetZ);
-    this.slots.set(slot, {
+    //   避免与主角贴片共面 z-fighting；★ 叠加件按挂载次序再 +depthIndex 微推进，
+    //   让"同部位多件全量叠加"不至于共面互相盖掉（层层前移）。
+    quad.setPosition(visual.offsetX, visual.offsetY, visual.offsetZ + depthIndex * 0.02);
+    this.mounted.set(itemId, {
       itemId,
       visual,
       quad,
@@ -127,7 +134,7 @@ export class EquipmentLayer {
 
   /** 每帧：推进贴片帧动画（只喂 uniforms，mesh 由场景自动渲染） */
   update(dt: number): void {
-    for (const m of this.slots.values()) {
+    for (const m of this.mounted.values()) {
       m.t += dt;
       const idx = Math.floor(m.t * m.fps) % m.frameCount;
       m.quad.render({ frameIndex: idx });
@@ -135,7 +142,7 @@ export class EquipmentLayer {
   }
 
   dispose(): void {
-    for (const m of this.slots.values()) m.quad.dispose();
-    this.slots.clear();
+    for (const m of this.mounted.values()) m.quad.dispose();
+    this.mounted.clear();
   }
 }

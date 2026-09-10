@@ -20,6 +20,11 @@ export interface ItemInstance {
 /** 网格背包：二维数组，null 表示空格 */
 export type InventoryGrid = (ItemInstance | null)[][];
 
+/** ★ 出击槽池规格：12 格通用混用池（2 行 × 6 列展示；友军/装备任意混放，一格一个物品） */
+export const SLOT_COUNT = 12;
+export const SLOT_ROWS = 2;
+export const SLOT_COLS = 6;
+
 /** 炮塔状态（舰船固定防御） */
 export interface TurretState {
   slotId: number;
@@ -49,8 +54,9 @@ export interface GameSession {
     defense: number;
     /** ★ 弹药池（跨场保留 ≈ 随身携带的子弹数；弹药包使用 → 入池，开火 → 出池） */
     ammo: Record<string, number>;
-    /** ★ 装备位（防具武器类道具：穿戴写入，战斗侧 EquipmentLayer 叠主角纹理） */
-    equips: { weapon?: string; armor?: string; headgear?: string };
+    /** ★ 出击槽池（SLOT_COUNT 格）：友军/装备任意混放；
+     *  装备在格即视为已穿戴（全量叠加贴片）；可部署在格即出队。null = 空槽 */
+    slots: (string | null)[];
   };
 
   // ----- ③ ★ 三层背包（L4 队友背包已移除 2026-09-09） -----
@@ -66,10 +72,7 @@ export interface GameSession {
     slots: (string | null)[];   // 槽位（快捷展示）
   };
 
-  // ----- ⑤ ★ 已部署友军（友军槽位：无人机等；背包页面拖入/拖出） -----
-  deployedAllies: string[];
-
-  // ----- ⑤ 友军/干员 -----
+  // ----- ⑤ ★ 干员 -----
   allies: {
     roster: string[];           // 已招募的干员 id 列表
   };
@@ -359,13 +362,13 @@ export function createNewSession(): GameSession {
   });
   return {
     meta: {
-      version: '0.1.0',
+      version: '0.2.0',
       day: 1,
       totalDaysSurvived: 0,
       createdAt: new Date().toISOString(),
       lastSavedAt: new Date().toISOString(),
     },
-    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2, ammo: { default: 150 }, equips: {} },
+    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2, ammo: { default: 150 }, slots: Array<null>(SLOT_COUNT).fill(null) },
     inventories: {
       base: createEmptyGrid(30, 30),
       ship: createEmptyGrid(8, 10),
@@ -375,7 +378,6 @@ export function createNewSession(): GameSession {
       owned: ['black_crown'],
       slots: Array(5).fill(null),
     },
-    deployedAllies: [],
     allies: { roster: [] },
     ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
     gacha: { pityCounter: 0, totalPulls: 0 },

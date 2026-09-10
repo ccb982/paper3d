@@ -11,22 +11,19 @@
 
 import type { GameSession, InventoryGrid } from '../../core/Session';
 import type { ItemManager, UseItemResult } from '../../systems/inventory/ItemManager';
-import { ALLY_SLOT_COUNT } from '../../systems/inventory/ItemManager';
+import { SLOT_COUNT, SLOT_COLS } from '../../systems/inventory/ItemManager';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import type { PanelDef } from '../BaseInteractionUI';
 import { InventoryGridRenderer } from './InventoryGridRenderer';
 import { createButton } from '../components/Button';
 import { CSS } from './UIConstants';
 
-/** ★ 装备栏槽位定义（player.equips 键 → 中文名） */
-const EQUIP_BAR_SLOTS: { slot: 'weapon' | 'armor' | 'headgear'; label: string }[] = [
-  { slot: 'weapon', label: '武器' },
-  { slot: 'armor', label: '盔甲' },
-  { slot: 'headgear', label: '头盔' },
-];
-const EQUIP_SLOT_LABELS: Record<string, string> = Object.fromEntries(
-  EQUIP_BAR_SLOTS.map((s) => [s.slot, s.label]),
-);
+/** ★ 装备位中文名（详情弹窗标注用；槽位本身已通用化） */
+const EQUIP_SLOT_LABELS: Record<string, string> = {
+  weapon: '武器',
+  armor: '盔甲',
+  headgear: '头盔',
+};
 
 export interface InventoryLayerOption {
   key: keyof GameSession['inventories'];
@@ -129,148 +126,83 @@ export class InventoryPanel {
       });
     };
 
-    // ★ 友军槽位行（部署区）：可部署友军拖入 = 部署；槽位内物品可拖回网格 = 卸载
-    const allyRow = document.createElement('div');
-    allyRow.style.cssText = [
-      'display:flex', 'gap:6px', 'justify-content:center',
+    // ★ 出击槽池（SLOT_COUNT 格，2 行 × SLOT_COLS 列）：友军/装备任意混放。
+    //   · 背包里的可部署/可装备物品拖入空槽 = 放入（装备在格即已穿戴，贴片全量叠加）
+    //   · 槽位内物品拖回网格 = 放回玩家背包
+    const slotPool = document.createElement('div');
+    slotPool.title = `出击槽（${SLOT_COUNT} 格，2 行 × ${SLOT_COLS} 列：可部署友军 / 装备任意混放；在槽装备即已穿戴）`;
+    slotPool.style.cssText = [
+      'display:grid', `grid-template-columns:repeat(${SLOT_COLS},64px)`,
+      'gap:6px', 'justify-content:center',
       'padding:8px 0', 'border-bottom:1px solid rgba(255,255,255,0.08)',
       'margin-bottom:8px',
     ].join(';');
-    const deployed = this.opts.itemManager.getDeployedAllies();
-    for (let s = 0; s < ALLY_SLOT_COUNT; s++) {
-      const itemId = deployed[s];
-      const slotEl = document.createElement('div');
-      slotEl.style.cssText = [
+    const slots = this.opts.itemManager.getSlots();
+    for (let s = 0; s < SLOT_COUNT; s++) {
+      const itemId = slots[s];
+      const cell = document.createElement('div');
+      cell.style.cssText = [
         `width:64px`, `height:64px`,
         'border-radius:4px', 'display:flex', 'flex-direction:column',
         'align-items:center', 'justify-content:center',
-        'font-size:9px', 'color:#9bf', 'position:relative',
+        'font-size:9px', 'position:relative', 'cursor:pointer',
         itemId
           ? 'background:rgba(90,120,220,0.18);border:1px solid #5599ff;'
           : 'background:rgba(255,255,255,0.04);border:1px dashed #3a4a7a;',
-        'cursor:pointer',
       ].join(';');
       if (itemId) {
-        // 已部署：显示图标 + 可拖回背包
+        // 已放入：图标 + 名称 + 可拖回背包
         try {
           const iconCanvas = this.gridRenderer.getIcon(itemId);
           const img = document.createElement('img');
           img.src = iconCanvas.toDataURL();
           img.style.cssText = 'width:70%;height:70%;object-fit:contain;';
-          slotEl.appendChild(img);
+          cell.appendChild(img);
         } catch {
-          slotEl.textContent = itemId.slice(0, 4);
+          cell.textContent = itemId.slice(0, 4);
         }
         const label = document.createElement('span');
         label.textContent = this.opts.itemManager.getItemConfig(itemId)?.name ?? itemId;
         label.style.cssText = 'position:absolute;bottom:2px;font-size:8px;color:#9bf;';
-        slotEl.appendChild(label);
-        slotEl.draggable = true;
-        slotEl.addEventListener('dragstart', (ev) => {
-          ev.dataTransfer?.setData('text/x-ally', String(s));
+        cell.appendChild(label);
+        cell.draggable = true;
+        cell.addEventListener('dragstart', (ev) => {
+          ev.dataTransfer?.setData('text/x-slot', String(s));
           if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
         });
       } else {
-        slotEl.textContent = `友军\n槽位`;
+        cell.textContent = '空槽';
+        cell.style.cssText += 'color:#4a5a8a;';
       }
-      // 接收拖入：背包里的可部署物品 → 部署
-      slotEl.addEventListener('dragover', (ev) => ev.preventDefault());
-      slotEl.addEventListener('drop', (ev) => {
+      // 接收拖入：背包里的可部署/可装备物品 → 放入该槽（一格一个，违规拒绝）
+      cell.addEventListener('dragover', (ev) => ev.preventDefault());
+      cell.addEventListener('drop', (ev) => {
         ev.preventDefault();
         const itemId2 = ev.dataTransfer?.getData('text/x-item');
-        if (itemId2 && !itemId) {
-          if (this.opts.itemManager.deployAlly(itemId2)) {
-            this.opts.onDataChanged();
-            refresh();
-          }
-        }
-      });
-      allyRow.appendChild(slotEl);
-    }
-
-    // ★ 装备栏行：装备类物品拖入 = 穿戴（旧装备自动回背包）；已穿戴可拖回网格 = 卸载
-    const equipRow = document.createElement('div');
-    equipRow.style.cssText = [
-      'display:flex', 'gap:6px', 'justify-content:center',
-      'padding:8px 0', 'border-bottom:1px solid rgba(255,255,255,0.08)',
-      'margin-bottom:8px',
-    ].join(';');
-    const equips = this.opts.itemManager.getEquipped();
-    for (const def of EQUIP_BAR_SLOTS) {
-      const equippedId = equips[def.slot];
-      const slotEl = document.createElement('div');
-      slotEl.style.cssText = [
-        `width:64px`, `height:64px`,
-        'border-radius:4px', 'display:flex', 'flex-direction:column',
-        'align-items:center', 'justify-content:center',
-        'font-size:11px', 'position:relative',
-        equippedId
-          ? 'background:rgba(120,180,90,0.14);border:1px solid #77cc66;'
-          : 'background:rgba(255,255,255,0.04);border:1px dashed #3a4a7a;',
-        'cursor:pointer',
-      ].join(';');
-      if (equippedId) {
-        // 已穿戴：图标 + 名称 + 可拖出（拖回背包 = 卸载）
-        try {
-          const iconCanvas = this.gridRenderer.getIcon(equippedId);
-          const img = document.createElement('img');
-          img.src = iconCanvas.toDataURL();
-          img.style.cssText = 'width:70%;height:70%;object-fit:contain;';
-          slotEl.appendChild(img);
-        } catch {
-          slotEl.textContent = equippedId.slice(0, 4);
-        }
-        const label = document.createElement('span');
-        label.textContent = this.opts.itemManager.getItemConfig(equippedId)?.name ?? equippedId;
-        label.style.cssText = 'position:absolute;bottom:2px;font-size:8px;color:#8d8;';
-        slotEl.appendChild(label);
-        slotEl.draggable = true;
-        slotEl.addEventListener('dragstart', (ev) => {
-          ev.dataTransfer?.setData('text/x-equip', equips[def.slot] ?? '');
-          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
-        });
-      } else {
-        slotEl.textContent = def.label;
-        slotEl.style.cssText += 'color:#8af;';
-      }
-      // 接收拖入：背包里的同位置装备类物品 → 穿戴（源 cell 精确使用；旧装备回背包）
-      slotEl.addEventListener('dragover', (ev) => ev.preventDefault());
-      slotEl.addEventListener('drop', (ev) => {
-        ev.preventDefault();
-        const itemId2 = ev.dataTransfer?.getData('text/x-item');
-        if (!itemId2 || this.opts.itemManager.equipSlotOf(itemId2) !== def.slot) return;
-        let result: UseItemResult | null = null;
+        if (!itemId2) return;
         const src = ev.dataTransfer?.getData('text/x-src');
+        let result: UseItemResult | null = null;
         if (src) {
           const [l, r, c] = src.split(',');
           if (l && Number.isInteger(Number(r)) && Number.isInteger(Number(c))) {
-            result = this.opts.itemManager.equipCell(l as keyof GameSession['inventories'], Number(r), Number(c));
+            result = this.opts.itemManager.putIntoSlot(s, l as keyof GameSession['inventories'], Number(r), Number(c));
           }
         }
-        if (!result) result = this.opts.itemManager.equipItem(itemId2);
-        if (result.success) {
+        if (result?.success) {
           this.opts.onDataChanged();
           refresh();
         }
       });
-      equipRow.appendChild(slotEl);
+      slotPool.appendChild(cell);
     }
 
-    // 网格兜底接收：友军槽位拖出 → 卸载放回背包；装备栏拖出 → 卸载放回背包
+    // 网格兜底接收：出击槽拖出 → 放回玩家背包
     gridView.addEventListener('dragover', (ev) => ev.preventDefault());
     gridView.addEventListener('drop', (ev) => {
-      const ally = ev.dataTransfer?.getData('text/x-ally');
-      if (ally !== undefined && ally !== '') {
+      const slotStr = ev.dataTransfer?.getData('text/x-slot');
+      if (slotStr !== undefined && slotStr !== '') {
         ev.preventDefault();
-        if (this.opts.itemManager.undeployAlly(Number(ally))) {
-          this.opts.onDataChanged();
-          refresh();
-        }
-      }
-      const equipSlot = ev.dataTransfer?.getData('text/x-equip');
-      if (equipSlot) {
-        ev.preventDefault();
-        if (this.opts.itemManager.unequipItem(equipSlot)) {
+        if (this.opts.itemManager.removeFromSlot(Number(slotStr))) {
           this.opts.onDataChanged();
           refresh();
         }
@@ -281,8 +213,7 @@ export class InventoryPanel {
 
     container.innerHTML = '';
     container.appendChild(tabBar);
-    container.appendChild(allyRow);
-    container.appendChild(equipRow);
+    container.appendChild(slotPool);
     container.appendChild(gridView);
   }
 

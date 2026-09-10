@@ -146,7 +146,7 @@ export class WorldMode implements IGameMode {
   // ★ 战斗道具播放（弹药池 + 装备贴片）
   private combatItems!: CombatItemController;
   /** ★ 穿戴同步节拍（战斗中使用装备道具 → 贴片 0.5s 内刷新） */
-  private syncEquipsAccum = 0;
+  private syncLoadoutAccum = 0;
 
   // ★ UI 层（世界专属）
   private worldUIManager!: WorldUIManager;
@@ -172,8 +172,8 @@ export class WorldMode implements IGameMode {
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
-  private allyDeployUnsub?: () => void;
-  private allyUndeployUnsub?: () => void;
+  /** ★ 出击槽池变动订阅（部署/卸载/替换 → 友军生成/回收；enter 注册 / exit 移除） */
+  private deploymentUnsub?: () => void;
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
   private waterPrev = new Map<
     CharacterBase,
@@ -411,7 +411,7 @@ export class WorldMode implements IGameMode {
       this.player.rendererMesh
         ?? (() => { const o = new THREE.Object3D(); this.scene!.add(o); return o; })(),
     );
-    this.combatItems.syncEquips();
+    this.combatItems.syncLoadout();
 
     // ★ 友军播放注册表：可露希尔的无人机 → 空中的 DroneEntity（跟随/攻击/残骸回收）
     allyPlaybackRegistry.set(DRONE_ITEM, {
@@ -421,12 +421,14 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
     this.droneAsset = ctx.droneAsset ?? null;
-    // ★ 进入战场：按已部署友军槽位生成（残骸槽位不生成，需先维修）
+    // ★ 进入战场：按出击槽池生成友军（残骸/装备类不生成；槽位号 = 池内下标）
     if (this.droneAsset) {
-      const deployed = this.itemManager?.getDeployedAllies?.() ?? [];
-      for (let i = 0; i < deployed.length; i++) {
-        const entry = allyPlaybackRegistry.get(deployed[i]);
-        if (entry) entry.spawn({ itemId: deployed[i], slotIndex: i, spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot) });
+      const slots = this.itemManager?.getSlots?.() ?? [];
+      for (let i = 0; i < slots.length; i++) {
+        const id = slots[i];
+        if (!id) continue;
+        const entry = allyPlaybackRegistry.get(id);
+        if (entry) entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot) });
       }
     }
 
@@ -472,7 +474,7 @@ export class WorldMode implements IGameMode {
         if (di !== -1) {
           const drone = this.drones[di];
           this.drones.splice(di, 1);
-          if (drone.slotIndex >= 0) this.itemManager?.replaceAlly(drone.slotIndex, DRONE_BROKEN_ITEM);
+          if (drone.slotIndex >= 0) this.itemManager?.replaceSlot(drone.slotIndex, DRONE_BROKEN_ITEM);
           this.showFloatingAt(drone.position.x, drone.position.y, drone.position.z, '无人机损毁', 'crit');
           return; // 不参与杂兵掉落结算
         }
@@ -485,14 +487,17 @@ export class WorldMode implements IGameMode {
       this.droneSummonUnsub = eventBus.on('drone_summon', () => {
         this.spawnDroneNearPlayer();
       });
-      // ★ 友军槽位部署/卸载：背包拖入 → 生成并记录槽位；拖出 → 回收对应无人机
-      this.allyDeployUnsub = eventBus.on('ally_deploy', () => {
+      // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
+      this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
         if (!this.droneAsset) return;
-        const slot = (this.itemManager?.getDeployedAllies?.().length ?? 1) - 1;
-        this.spawnDroneNearPlayer(slot);
-      });
-      this.allyUndeployUnsub = eventBus.on('ally_undeploy', (payload) => {
         this.despawnAllyAt(payload.slotIndex);
+        if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
+          allyPlaybackRegistry.get(payload.itemId)!.spawn({
+            itemId: payload.itemId,
+            slotIndex: payload.slotIndex,
+            spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot),
+          });
+        }
       });
     });
   }
@@ -538,11 +543,11 @@ export class WorldMode implements IGameMode {
 
     // ★ 战斗道具播放：装备贴片帧动画驱动
     this.combatItems.update(dt);
-    // ★ 穿戴同步（玩家背包使用装备道具后，贴片及时刷新；内部 diff，未变则零开销）
-    this.syncEquipsAccum += dt;
-    if (this.syncEquipsAccum >= 0.5) {
-      this.syncEquipsAccum = 0;
-      this.combatItems.syncEquips();
+    // ★ 出击槽池同步（背包拖入/使用装备后，贴片及时刷新；内部 diff，未变则零开销）
+    this.syncLoadoutAccum += dt;
+    if (this.syncLoadoutAccum >= 0.5) {
+      this.syncLoadoutAccum = 0;
+      this.combatItems.syncLoadout();
     }
 
     // AI 上下文
@@ -678,10 +683,8 @@ export class WorldMode implements IGameMode {
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
-    this.allyDeployUnsub?.();
-    this.allyDeployUnsub = undefined;
-    this.allyUndeployUnsub?.();
-    this.allyUndeployUnsub = undefined;
+    this.deploymentUnsub?.();
+    this.deploymentUnsub = undefined;
     for (const d of this.drones) d.dispose();
     this.drones = [];
     this.droneAsset = null;
@@ -1143,8 +1146,8 @@ export class WorldMode implements IGameMode {
     if (this.renderer) drone.setRenderer(this.renderer);
   }
 
-  /** ★ 回收指定槽位友军（背包拖出）：销毁对应无人机；其余槽位索引左移。
-   *  残骸槽位（无对应无人机）只左移索引；不误杀其它槽位的无人机。 */
+  /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。
+   *  残骸/装备类槽位无对应实体，安全 no-op。 */
   private despawnAllyAt(slotIndex: number): void {
     for (let i = 0; i < this.drones.length; i++) {
       const d = this.drones[i];
@@ -1154,7 +1157,6 @@ export class WorldMode implements IGameMode {
         break;
       }
     }
-    for (const d of this.drones) if (d.slotIndex > slotIndex) d.slotIndex--;
   }
 
   /** 世界坐标 → 屏幕浮动文字（距相机 >20m 不显示，与伤害数字同 LOD 口径） */

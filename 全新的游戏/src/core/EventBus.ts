@@ -44,9 +44,8 @@ export interface EventMap {
   };
   // ★ 无人机召唤事件（WorldMode 订阅；使用「可露希尔的无人机」道具触发）
   'drone_summon': { x?: number; z?: number };
-  // ★ 友军部署/卸载（背包页面友军槽位拖入/拖出；WorldMode 订阅生成/回收）
-  'ally_deploy': { itemId: string };
-  'ally_undeploy': { itemId: string; slotIndex: number };
+  // ★ 出击槽池变动（背包页面拖入/拖出/替换；WorldMode 订阅生成/回收友军 + 贴片兜底同步）
+  'deployment_changed': { slotIndex: number; itemId: string | null; prev: string | null };
 }
 
 export type EventKey = keyof EventMap;

@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from './Session';
-import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS } from './Session';
+import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS, SLOT_COUNT } from './Session';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -59,18 +59,35 @@ export const SaveSystem = {
         }
       }
 
-      // ★ 旧存档迁移：友军槽位字段（无则空数组）
-      if (!Array.isArray(data.deployedAllies)) {
-        data.deployedAllies = [];
-      }
-
-      // ★ 旧存档迁移：弹药池 / 装备位（无则默认）
+      // ★ 旧存档迁移：弹药池（无则默认）
       if (!data.player.ammo || typeof data.player.ammo !== 'object') {
         data.player.ammo = {};
       }
-      if (!data.player.equips || typeof data.player.equips !== 'object') {
-        data.player.equips = {};
+      // ★ 旧存档迁移 → 出击槽池（v0.2.0）：
+      //   合并旧装备位（weapon/armor/headgear）+ 旧友军槽（deployedAllies）→ player.slots[12]
+      //   （装备优先，容量不足截断；旧字段随后清除）
+      if (!Array.isArray(data.player.slots)) {
+        const merged: (string | null)[] = [];
+        const d = data as unknown as {
+          deployedAllies?: unknown;
+          player: { equips?: { weapon?: string; armor?: string; headgear?: string } };
+        };
+        for (const k of ['weapon', 'armor', 'headgear'] as const) {
+          const id = d.player.equips?.[k];
+          if (id) merged.push(id);
+        }
+        if (Array.isArray(d.deployedAllies)) {
+          for (const id of d.deployedAllies) {
+            if (typeof id === 'string' && merged.length < SLOT_COUNT) merged.push(id);
+          }
+        }
+        data.player.slots = merged.slice(0, SLOT_COUNT);
+        while (data.player.slots.length < SLOT_COUNT) data.player.slots.push(null);
+        console.log(`[迁移] 出击槽池构建完成，含 ${merged.filter(Boolean).length} 件`);
       }
+      // ★ 旧字段清理（已并入槽池）
+      delete (data as unknown as { deployedAllies?: unknown }).deployedAllies;
+      delete (data.player as { equips?: unknown }).equips;
 
       console.log(`[存档] 读取成功，第 ${data.meta.day} 天`);
       return data;
