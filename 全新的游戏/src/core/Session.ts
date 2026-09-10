@@ -47,6 +47,10 @@ export interface GameSession {
     maxHp: number;
     attackPower: number;
     defense: number;
+    /** ★ 弹药池（跨场保留 ≈ 随身携带的子弹数；弹药包使用 → 入池，开火 → 出池） */
+    ammo: Record<string, number>;
+    /** ★ 装备位（防具武器类道具：穿戴写入，战斗侧 EquipmentLayer 叠主角纹理） */
+    equips: { weapon?: string; armor?: string; headgear?: string };
   };
 
   // ----- ③ ★ 三层背包（L4 队友背包已移除 2026-09-09） -----
@@ -361,7 +365,7 @@ export function createNewSession(): GameSession {
       createdAt: new Date().toISOString(),
       lastSavedAt: new Date().toISOString(),
     },
-    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2 },
+    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2, ammo: { default: 150 }, equips: {} },
     inventories: {
       base: createEmptyGrid(30, 30),
       ship: createEmptyGrid(8, 10),

@@ -79,7 +79,10 @@ export class ItemManager {
     const slot = grid[row][col]!;
     const arch = this.archetypes.get(slot.itemId);
     if (!arch) return { success: false, message: '未知物品' };
-    if (arch.type !== 'consumable') return { success: false, message: '该物品无法使用' };
+    // ★ 可使用类型：消耗品 / 弹药（入弹药池）/ 装备（穿戴到装备位）
+    if (arch.type !== 'consumable' && arch.type !== 'ammo' && arch.type !== 'equip') {
+      return { success: false, message: '该物品无法使用' };
+    }
 
     const ctx: ItemEffectContext = {
       session: this.session,

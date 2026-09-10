@@ -14,6 +14,7 @@ import { InventoryPanel } from '../shared/InventoryPanel';
 import { Minimap } from '../../services/ui/Minimap';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
+import { AmmoHud } from '../../systems/itemPlayback/AmmoHud';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
@@ -25,6 +26,7 @@ export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
   private hud: PlayerHud;
   private crosshair: Crosshair;
+  private ammoHud: AmmoHud;
   private interactPrompt: HTMLDivElement;
   private floatingTexts: {
     el: HTMLDivElement;
@@ -73,6 +75,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap = new Minimap(raster);
     this.hud = new PlayerHud();
     this.crosshair = new Crosshair();
+    // ★ 弹药 HUD（战斗道具播放 · 弹药类）：数据每帧经 update 传入
+    this.ammoHud = new AmmoHud(itemManager);
 
     // 交互提示
     this.interactPrompt = document.createElement('div');
@@ -97,6 +101,7 @@ export class WorldUIManager extends BaseInteractionUI {
   update(dt: number, ctx: WorldUIState): void {
     this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
     this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
+    this.ammoHud.update(ctx.ammo);
 
     // 交互提示
     if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
@@ -283,6 +288,7 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap.dispose();
     this.hud.dispose();
     this.crosshair.dispose();
+    this.ammoHud.dispose();
     this.interactPrompt.remove();
     this.mapStyleBtn?.remove();
     this.mapStyleBtn = null;

@@ -48,6 +48,11 @@ export class Player extends CharacterBase {
     this.controller.attack();
   }
 
+  /** ★ 贴片 mesh（装备贴片子节点宿主；表现层只读引用） */
+  get rendererMesh(): THREE.Mesh | null {
+    return (this.renderer as unknown as { mesh?: THREE.Mesh | null })?.mesh ?? null;
+  }
+
   /** ★ 玩家死亡（暂：不销毁主角——记录 + 扣血表现后续接；结算/重生后续） */
   override onDeath(source: EntityBase | null): void {
     console.log(`[玩家] 被 ${source?.constructor.name ?? '未知'} 击杀！`);

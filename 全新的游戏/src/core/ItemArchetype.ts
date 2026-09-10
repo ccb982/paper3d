@@ -86,7 +86,8 @@ export class ItemArchetype {
         console.warn(`[ItemArchetype] 未知效果类型: ${def.type}，跳过`);
         continue;
       }
-      const result = handler(def, ctx);
+      // ★ 效果上下文补上当前 itemId（装备类效果穿戴用）
+      const result = handler(def, { ...ctx, itemId: this.id });
       if (!result.success) {
         allSuccess = false;
         lastMessage = result.message ?? `效果 ${def.type} 执行失败`;

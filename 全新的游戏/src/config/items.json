@@ -39,6 +39,7 @@
       "type": "ammo",
       "description": "补充 50 发弹药",
       "maxStack": 20,
+      "combat": { "kind": "ammo", "ammoType": "default" },
       "color": { "h": 0.1, "s": 0.9, "l": 0.6 },
       "world": {
         "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.2 },
@@ -214,6 +215,7 @@
       "description": "放出可露希尔的无人机，盘旋跟随并守护作战区域",
       "maxStack": 3,
       "deployable": true,
+      "combat": { "kind": "ally", "allyType": "drone" },
       "color": { "h": 0.65, "s": 0.55, "l": 0.55 },
       "world": {
         "shape": { "type": "cuboid", "hx": 0.25, "hy": 0.25, "hz": 0.25 },

@@ -13,6 +13,8 @@ import * as THREE from 'three';
 import type { IGameMode, IGameModeContext } from '../core/IGameMode';
 import type { GameSession } from '../core/Session';
 import { FtxAsset } from '../vendor/player/FtxAsset';
+import { CombatItemController } from '../systems/itemPlayback/CombatItemController';
+import { allyPlaybackRegistry } from '../systems/itemPlayback/AllyPlayback';
 import type { Asset } from '../vendor/player';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
@@ -140,6 +142,11 @@ export class WorldMode implements IGameMode {
   private itemManager!: ItemManager;
   private craftingManager!: CraftingManager;
   private interactionManager!: InteractionManager;
+
+  // ★ 战斗道具播放（弹药池 + 装备贴片）
+  private combatItems!: CombatItemController;
+  /** ★ 穿戴同步节拍（战斗中使用装备道具 → 贴片 0.5s 内刷新） */
+  private syncEquipsAccum = 0;
 
   // ★ UI 层（世界专属）
   private worldUIManager!: WorldUIManager;
@@ -397,13 +404,28 @@ export class WorldMode implements IGameMode {
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
 
+    // ---- ★ 战斗道具播放：弹药池 + 装备贴片（挂主角 mesh） ----
+    this.combatItems = new CombatItemController(
+      ctx.session,
+      this.scene,
+      this.player.rendererMesh ?? new THREE.Object3D(),
+    );
+    this.combatItems.syncEquips();
+
+    // ★ 友军播放注册表：可露希尔的无人机 → 空中的 DroneEntity（跟随/攻击/残骸回收）
+    allyPlaybackRegistry.set(DRONE_ITEM, {
+      kind: 'drone',
+      spawn: ({ slotIndex, spawnDroneNearPlayer }) => spawnDroneNearPlayer(slotIndex),
+    });
+
     // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
     this.droneAsset = ctx.droneAsset ?? null;
     // ★ 进入战场：按已部署友军槽位生成（残骸槽位不生成，需先维修）
     if (this.droneAsset) {
       const deployed = this.itemManager?.getDeployedAllies?.() ?? [];
       for (let i = 0; i < deployed.length; i++) {
-        if (deployed[i] === DRONE_ITEM) this.spawnDroneNearPlayer(i);
+        const entry = allyPlaybackRegistry.get(deployed[i]);
+        if (entry) entry.spawn({ itemId: deployed[i], slotIndex: i, spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot) });
       }
     }
 
@@ -510,7 +532,17 @@ export class WorldMode implements IGameMode {
       cameraYaw: this.cameraCtrl.worldYaw,
       entities: this.entities.allBases(),
       playerStats: { hp: this.player.hp, maxHp: this.player.maxHp },
+      ammo: this.combatItems.ammo.getCount(),
     });
+
+    // ★ 战斗道具播放：装备贴片帧动画驱动
+    this.combatItems.update(dt);
+    // ★ 穿戴同步（玩家背包使用装备道具后，贴片及时刷新；内部 diff，未变则零开销）
+    this.syncEquipsAccum += dt;
+    if (this.syncEquipsAccum >= 0.5) {
+      this.syncEquipsAccum = 0;
+      this.combatItems.syncEquips();
+    }
 
     // AI 上下文
     this.aiCtx.dt = dt;
@@ -588,7 +620,7 @@ export class WorldMode implements IGameMode {
     }, this.player.controller.isMoving);
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
-    // ---- 玩家发射 ----
+    // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     this.bulletCooldown -= dt;
     if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
       this.bulletCooldown = 0.45;
@@ -666,6 +698,9 @@ export class WorldMode implements IGameMode {
 
     // ---- 实体清理 ----
     this.entities.clear();
+
+    // ---- ★ 战斗道具播放清理 ----
+    this.combatItems?.dispose();
 
     // ---- 准星 / UI / 子弹 ----
     this.worldUIManager?.dispose();

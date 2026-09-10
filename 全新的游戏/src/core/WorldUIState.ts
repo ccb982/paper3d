@@ -15,6 +15,8 @@ export interface WorldUIState {
   entities: EntityBase[];
   /** 玩家血量状态 */
   playerStats: { hp: number; maxHp: number };
+  /** ★ 当前弹药数（AmmoHud 显示；来源 AmmoStore） */
+  ammo: number;
   /** 附近可交互物品（可选） */
   nearbyItem?: { itemId: string; distance: number } | null;
 }

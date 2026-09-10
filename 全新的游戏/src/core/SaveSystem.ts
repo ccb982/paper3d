@@ -64,6 +64,14 @@ export const SaveSystem = {
         data.deployedAllies = [];
       }
 
+      // ★ 旧存档迁移：弹药池 / 装备位（无则默认）
+      if (!data.player.ammo || typeof data.player.ammo !== 'object') {
+        data.player.ammo = {};
+      }
+      if (!data.player.equips || typeof data.player.equips !== 'object') {
+        data.player.equips = {};
+      }
+
       console.log(`[存档] 读取成功，第 ${data.meta.day} 天`);
       return data;
     } catch (e) {

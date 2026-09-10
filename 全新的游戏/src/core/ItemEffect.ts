@@ -7,6 +7,7 @@
 // ============================================================
 
 import type { GameSession } from './Session';
+import { addItemToGrid } from './Session';
 import type { EntityBase } from '../entity/EntityBase';
 import { eventBus } from './EventBus';
 
@@ -17,6 +18,8 @@ export interface ItemEffectContext {
   targetLayer: string;
   row: number;
   col: number;
+  /** ★ 当前使用的物品 id（装备类效果用：把道具穿戴到对应装备位） */
+  itemId?: string;
   _accumulatedHeal?: number; // 用于跨效果累加
 }
 
@@ -55,9 +58,34 @@ effectRegistry.set('buff_attack', (params, ctx) => {
 });
 
 effectRegistry.set('ammo', (params, ctx) => {
-  // 弹药补给逻辑（预留）
+  // ★ 弹药补给：使用弹药包 → 入弹药池（AMMO类型分池，默认 'default'）
   const value = params.value ?? 50;
+  const ammoType = params.ammoType ?? 'default';
+  const pool = ctx.session.player.ammo;
+  if (!pool) return { success: false, message: '弹药池未初始化' };
+  pool[ammoType] = (pool[ammoType] ?? 0) + value;
   return { success: true, ammoAmount: value, message: `补充 ${value} 发弹药` };
+});
+
+effectRegistry.set('equip', (params, ctx) => {
+  // ★ 防具武器类：使用道具 → 穿戴到指定装备位（旧装备回背包）
+  const slot: string = params.slot ?? 'weapon';
+  const itemId = ctx.itemId;
+  if (!itemId) return { success: false, message: '装备数据缺失' };
+  const equips = ctx.session.player.equips;
+  if (!equips) return { success: false, message: '装备位未初始化' };
+  if (equips[slot as keyof typeof equips] === itemId) {
+    return { success: false, message: '已装备同类道具' };
+  }
+  const prev = equips[slot as keyof typeof equips];
+  if (prev) {
+    // ★ 旧装备先行退回背包（失败 = 背包无空位，不执行穿戴防丢件）
+    if (!addItemToGrid(ctx.session.inventories.player, prev, 1)) {
+      return { success: false, message: '背包已满，无法替换装备' };
+    }
+  }
+  equips[slot as keyof typeof equips] = itemId;
+  return { success: true, message: `已装备 ${itemId}` };
 });
 
 effectRegistry.set('summon_drone', (_params, _ctx) => {
