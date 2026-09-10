@@ -1,14 +1,14 @@
 // ============================================================
 // WaterMaterial —— 水体管线独立材质（不进 MAT_FN_INDEX，独享 GLSL）
 // ============================================================
-// 语义（《水体管线架构.md》§4）：
+// 语义（《地形与渲染管线架构.md》§4）：
 //   · 静止基面几何（WaterSurface）由本材质做着色/动画；水位=0，顶点 y 即世界高。
 //   · 表面（deep>=0）：预计算 FFT 海况场（WaterFFT，3 层 × 2 相位变体；
 //       烘焙在 oceanBake worker 后台跑，主线程只打包 DataTexture——加载期不卡）
 //       - 顶点位移：L0/L1 高度+choppy 滚动采样（世界连续，跨 chunk 无缝）
 //       - 片元法线/焦散/泡沫：L1/L2 层世界法线叠加
 //       - 菲涅尔 + 程序化天空反演 + Blinn 太阳高光
-//   · ★ 距离 LOD 环（《水体管线架构.md》§1 播放/静态层；2026-09-09 落地）：
+//   · ★ 距离 LOD 环（《地形与渲染管线架构.md》§1 播放/静态层；2026-09-09 落地）：
 //       uLodNear(12m) 内 = 三实例 FFT 全量；近→远 smoothstep 渐隐：
 //         顶点丢 L1/L2 采样 + 波高/choppy/激荡乘 lodW → 55m 外波高 0（静态基准面）；
 //         片元丢 n1/n2 法线级联，泡沫/波形交替高光消隐。纯 shader 零几何改动，
@@ -233,7 +233,7 @@ const WATER_VERT = /* glsl */ `
     }
     vec4 wp = modelMatrix * vec4(pos, 1.0);
     vWorld = wp.xyz;
-    // ★ 距离 LOD 环（《水体管线架构.md》§1；smoothstep 无缝，无跳变）：
+    // ★ 距离 LOD 环（《地形与渲染管线架构.md》§1；smoothstep 无缝，无跳变）：
     //   近界内 = 1（三实例 FFT 全量）→ 远界外 = 0（波高/choppy/激荡全灭，静态基准面）
     float camDist = length(cameraPosition - wp.xyz);
     float lodW = 1.0 - smoothstep(uLodNear, uLodFar, camDist);

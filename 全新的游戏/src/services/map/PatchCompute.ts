@@ -63,7 +63,7 @@ export interface PatchGeomRaw {
     indices: Uint32Array;
     topTriCount: number;
   };
-  /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《水体管线架构.md》） */
+  /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《地形与渲染管线架构.md》） */
   water: WaterSurfaceRaw;
   /** ★ 物理分区（全量构建 = 全部 grid²；增量构建 = 受影响分区 → 主线程只换这些） */
   cells: PatchGroundCell[];
