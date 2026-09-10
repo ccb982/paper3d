@@ -68,10 +68,22 @@ interface ChunkBase {
   wallVPre: Int32Array;
   /** 侧壁逐边索引前缀偏移（长度 NBS+1） */
   wallIPre: Int32Array;
+  /** ★ 上一次输出布局（供下一枪对齐主线程缓冲做局部区间；cache miss 后 undefined
+   *  → 本枪整块上传兜底，之后即可局部） */
+  outTop?: { vPre: Int32Array; iPre: Int32Array };
+  outWall?: { vPre: Int32Array; iPre: Int32Array };
 }
 
 const baseCache = new Map<string, ChunkBase>();
-const CACHE_CAP = 16; // LRU 封顶（chunk 基数小；超限淘汰最旧）
+/** ★ LRU 封顶 = 加载环（radius 2 → 5×5=25）+ 余量：小于环会来回跑动即逐出，
+ *  退化成每次全量构建（2026-09-10 由 16 上调） */
+const CACHE_CAP = 36;
+
+/** ★ 热点 chunk（玩家当前所在）：淘汰时跳过（钉住），保证"当前 chunk 快车道" */
+let hotBaseKey = "";
+export function setBaseCacheHotKey(key: string): void {
+  hotBaseKey = key;
+}
 
 function cacheKey(seed: number, cx: number, cz: number): string {
   return `${seed}/${cx},${cz}`;
@@ -140,8 +152,14 @@ export function seedBaseGeometry(
     wallV: wl.v, wallVPre: wl.vPre, wallIPre: wl.iPre,
   };
   if (baseCache.size >= CACHE_CAP) {
-    const oldest = baseCache.keys().next();
-    if (!oldest.done) baseCache.delete(oldest.value);
+    // ★ 跳过热点 chunk（钉住）；全为热点时退化为删最旧
+    for (const k of baseCache.keys()) {
+      if (k !== hotBaseKey) { baseCache.delete(k); break; }
+    }
+    if (baseCache.size >= CACHE_CAP) {
+      const oldest = baseCache.keys().next();
+      if (!oldest.done) baseCache.delete(oldest.value);
+    }
   }
   baseCache.set(key, base);
   return base;
@@ -221,7 +239,8 @@ export function computeIncrementalMasks(
 function buildTopIncremental(
   base: ChunkBase, table: FaceTable, src: BlockSource,
   patch: PatchOverlay, fineE: Uint8Array, mask: Uint8Array,
-): FaceGeometry {
+  prev?: { vPre: Int32Array; iPre: Int32Array },
+): { geom: FaceGeometry; vPre: Int32Array; iPre: Int32Array } {
   // ① 受影响 cell → 预发到 scratch（emitTopCellFine base=0：法线相对自身）
   const aff = new Map<number, TopAccum>();
   for (let lz = 0; lz < N; lz++) {
@@ -249,12 +268,20 @@ function buildTopIncremental(
   const patchW = new Float32Array(totalV);
   const indices = new Uint32Array(totalI);
   // ④ 填充：cell 序遍历，受影响写 scratch、未受影响拷基座段
+  //   ★ 同步收集受影响区间 + 布局漂移判定（stable=false → 主线程整块上传兜底）
   const bt = base.top;
   let vi = 0, ii = 0;
+  let stable = true;
+  const outVPre = new Int32Array(NC + 1);
+  const outIPre = new Int32Array(NC + 1);
+  const vertexRanges: { start: number; count: number }[] = [];
+  const indexRanges: { start: number; count: number }[] = [];
   for (let lz = 0; lz < N; lz++) {
     for (let lx = 0; lx < N; lx++) {
       const c = lz * N + lx;
       const bVPre = base.topVPre[c], bIPre = base.topIPre[c];
+      // ★ 与"上一次输出布局"比对（不是无补丁基座）——补丁会升 fine，基座必漂移
+      if (!prev || vi !== prev.vPre[c] || ii !== prev.iPre[c]) stable = false;
       if (mask[c]) {
         const a = aff.get(c)!;
         vertices.set(a.pos, vi * 3);
@@ -263,8 +290,12 @@ function buildTopIncremental(
         colors.set(a.col, vi * 3);
         patchW.set(a.pw, vi);
         writeTopIndices(indices, ii, vi, true);
+        vertexRanges.push({ start: vi, count: FINE_V });
+        indexRanges.push({ start: ii, count: TOP_FINE_TRI * 3 });
         vi += FINE_V;
         ii += TOP_FINE_TRI * 3;
+        outVPre[c + 1] = outVPre[c] + FINE_V;
+        outIPre[c + 1] = outIPre[c] + TOP_FINE_TRI * 3;
       } else {
         const vc = base.topV[c];
         vertices.set(bt.vertices.subarray(bVPre * 3, bVPre * 3 + vc * 3), vi * 3);
@@ -278,19 +309,27 @@ function buildTopIncremental(
         for (let k = 0; k < ic; k++) indices[ii + k] = is[k] + delta;
         vi += vc;
         ii += ic;
+        outVPre[c + 1] = outVPre[c] + vc;
+        outIPre[c + 1] = outIPre[c] + ic;
       }
     }
   }
   return {
-    vertices, normals, uvs, colors, patchW, indices,
-    topTriCount: indices.length / 3,
+    geom: {
+      vertices, normals, uvs, colors, patchW, indices,
+      topTriCount: indices.length / 3,
+      updateRanges: stable ? { vertex: vertexRanges, index: indexRanges } : undefined,
+    },
+    vPre: outVPre,
+    iPre: outIPre,
   };
 }
 
 function buildWallIncremental(
   base: ChunkBase, table: FaceTable, src: BlockSource,
   patch: PatchOverlay, fineE: Uint8Array, sideMask: Uint8Array,
-): FaceGeometry {
+  prev?: { vPre: Int32Array; iPre: Int32Array },
+): { geom: FaceGeometry; vPre: Int32Array; iPre: Int32Array } {
   // ① 受影响边 → 预发到 scratch（emitWallSide：idx 相对自身，写时加 vi）
   const aff = new Map<number, { s: number; a: WallAccum; idx: number[]; nv: number }>();
   let s = 0;
@@ -319,13 +358,21 @@ function buildWallIncremental(
   const patchW = new Float32Array(totalV);
   const indices = new Uint32Array(totalI);
   // ④ 填充：边序遍历，受影响写 scratch、未受影响拷基座段
+  //   ★ 同步收集受影响区间 + 布局漂移判定（stable=false → 主线程整块上传兜底）
   const bw = base.wall;
   let vi = 0, ii = 0;
+  let stable = true;
+  const outVPre = new Int32Array(NBS + 1);
+  const outIPre = new Int32Array(NBS + 1);
+  const vertexRanges: { start: number; count: number }[] = [];
+  const indexRanges: { start: number; count: number }[] = [];
   s = 0;
   for (let lbz = 0; lbz < BPS; lbz++) {
     for (let lbx = 0; lbx < BPS; lbx++) {
       for (let dir = 0; dir < 4; dir++, s++) {
         const bVPre = base.wallVPre[s], bIPre = base.wallIPre[s];
+        // ★ 与"上一次输出布局"比对（同顶面；cache miss 后 prev=undefined → 整块兜底）
+        if (!prev || vi !== prev.vPre[s] || ii !== prev.iPre[s]) stable = false;
         if (sideMask[s]) {
           const e = aff.get(s)!;
           vertices.set(e.a.pos, vi * 3);
@@ -335,8 +382,12 @@ function buildWallIncremental(
           shade.set(e.a.shd, vi);
           patchW.set(e.a.pw, vi);
           for (let k = 0; k < e.idx.length; k++) indices[ii + k] = e.idx[k] + vi;
+          vertexRanges.push({ start: vi, count: e.nv });
+          indexRanges.push({ start: ii, count: e.idx.length });
           vi += e.nv;
           ii += e.idx.length;
+          outVPre[s + 1] = outVPre[s] + e.nv;
+          outIPre[s + 1] = outIPre[s] + e.idx.length;
         } else {
           const vc = base.wallV[s];
           vertices.set(bw.vertices.subarray(bVPre * 3, bVPre * 3 + vc * 3), vi * 3);
@@ -351,13 +402,20 @@ function buildWallIncremental(
           for (let k = 0; k < ic; k++) indices[ii + k] = is[k] + delta;
           vi += vc;
           ii += ic;
+          outVPre[s + 1] = outVPre[s] + vc;
+          outIPre[s + 1] = outIPre[s] + ic;
         }
       }
     }
   }
   return {
-    vertices, normals, uvs, colors, shade, patchW, indices,
-    topTriCount: 0,
+    geom: {
+      vertices, normals, uvs, colors, shade, patchW, indices,
+      topTriCount: 0,
+      updateRanges: stable ? { vertex: vertexRanges, index: indexRanges } : undefined,
+    },
+    vPre: outVPre,
+    iPre: outIPre,
   };
 }
 
@@ -382,10 +440,12 @@ export function incrementalGeometry(
   // 掩码可主线程预算后传入（跳过 Worker 侧重复扫描）；缺省就地算
   const mask = masks ? masks.top : affectedTopMask(patch);
   const sideMask = masks ? masks.side : affectedSideMask(mask);
-  return {
-    top: buildTopIncremental(base, table, src, patch, fineE, mask),
-    wall: buildWallIncremental(base, table, src, patch, fineE, sideMask),
-  };
+  // ★ 与上一次输出布局对齐（cache miss 首枪 prev=undefined → 整块上传；随后局部）
+  const t = buildTopIncremental(base, table, src, patch, fineE, mask, base.outTop);
+  const w = buildWallIncremental(base, table, src, patch, fineE, sideMask, base.outWall);
+  base.outTop = { vPre: t.vPre, iPre: t.iPre };
+  base.outWall = { vPre: w.vPre, iPre: w.iPre };
+  return { top: t.geom, wall: w.geom };
 }
 
 // 基座（无补丁）构建用同一 full 函数（与主线程/Worker 同源）

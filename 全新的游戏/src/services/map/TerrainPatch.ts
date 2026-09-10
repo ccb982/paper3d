@@ -27,7 +27,7 @@
 //   可降为 1（WORKER_COUNT 常量调整即可）。
 // ============================================================
 
-import { computeTableGeometry, incrementalDropCache, type PatchGeomResult } from "./PatchCompute";
+import { computeTableGeometry, incrementalDropCache, dropPatchSourceCache, setHotChunk as setCacheHotChunk, type PatchGeomResult } from "./PatchCompute";
 import { computeIncrementalMasks } from "./IncrementalGeometry";
 import type { ChunkDataLite } from "./Refinements";
 import type { LevelAtWorld } from "./FaceBuild";
@@ -65,6 +65,18 @@ class TerrainPatchService {
   private brokenStates: boolean[] = [];
   private nextIds: number[] = [];
   private pendings: Map<number, (r: PatchGeomResult | null) => void>[] = [];
+  /** ★ 热点 chunk（玩家当前；新建 Worker 时补发） */
+  private hot: { seed: number; cx: number; cz: number } | null = null;
+
+  /** ★ 热点 chunk 钉缓存（玩家当前所在；全部 Worker 广播；
+   *  新建 Worker 时补发）——只影响缓存淘汰与调度优先，不改变常规路径 */
+  setHotChunk(seed: number, cx: number, cz: number): void {
+    setCacheHotChunk(seed, cx, cz); // 主线程回退缓存
+    this.hot = { seed, cx, cz };
+    for (let i = 0; i < TerrainPatchService.WORKER_COUNT; i++) {
+      this.workers[i]?.postMessage({ type: "hotChunk", seed, cx, cz });
+    }
+  }
 
   /** 全量保障：3 个 worker 惰性就绪（首次 compute 齐备，之后热用） */
   private ensureAll(): void {
@@ -106,6 +118,8 @@ class TerrainPatchService {
         for (const cb of cbs) cb(null);
       };
       this.workers[i] = w;
+      // ★ 补发热点 chunk（Worker 晚于玩家跨 chunk 创建时）
+      if (this.hot) w.postMessage({ type: "hotChunk", ...this.hot });
       return w;
     } catch {
       this.brokenStates[i] = true;
@@ -119,6 +133,7 @@ class TerrainPatchService {
    */
   clearCaches(): void {
     incrementalDropCache();
+    dropPatchSourceCache();
     for (let i = 0; i < TerrainPatchService.WORKER_COUNT; i++) {
       if (this.workers[i]) {
         this.workers[i]!.postMessage({ type: "clearCache" });

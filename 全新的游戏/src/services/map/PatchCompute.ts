@@ -8,7 +8,7 @@
 // 本文件不 import three —— Worker 依赖最小（与 terrainBake.worker 同哲学）。
 // ============================================================
 
-import { buildFaceTable } from "./FaceTable";
+import { buildFaceTable, type FaceTable } from "./FaceTable";
 import { CHUNK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import {
   buildTopGeometry,
@@ -17,13 +17,15 @@ import {
   topFineCells,
   topFineCellsFor,
   type FaceGeometry,
+  type GeoUpdateRanges,
   type LevelAtWorld,
 } from "./FaceBuild";
-import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
+import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID, setBaseCacheHotKey } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,
   refineChunkSource,
+  type BlockSource,
   type ChunkDataLite,
 } from "./Refinements";
 
@@ -51,6 +53,8 @@ export interface PatchGeomRaw {
     patchW: Float32Array;
     indices: Uint32Array;
     topTriCount: number;
+    /** ★ 增量局部更新区间（缺省 = 整块上传；主线程只拷/传这些区间） */
+    updateRanges?: GeoUpdateRanges;
   };
   wall: {
     vertices: Float32Array;
@@ -62,6 +66,8 @@ export interface PatchGeomRaw {
     patchW: Float32Array;
     indices: Uint32Array;
     topTriCount: number;
+    /** ★ 增量局部更新区间（缺省 = 整块上传） */
+    updateRanges?: GeoUpdateRanges;
   };
   /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《地形与渲染管线架构.md》） */
   water: WaterSurfaceRaw;
@@ -99,9 +105,10 @@ export function computeTableGeometry(
   masks?: { top: Uint8Array; side: Uint8Array } | null,
   levelAt?: LevelAtWorld,
 ): PatchGeomResult {
-  const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
+  // ★ 每 chunk 静态数据缓存：refined src + FaceTable 只依赖 heights/blockTypes
+  //   （与 levels 无关）→ 同一 chunk 连打不必每枪重跑 planRefinements/buildFaceTable
+  const { src, table } = getRefinedSource(readChunk, seed, cx, cz);
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz, undefined, undefined, levelAt) : undefined;
-  const table = buildFaceTable(src, cx, cz);
   let top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array;
   if (patch) {
     const inc = incrementalGeometry(seed, cx, cz, table, src, patch, masks ?? undefined);
@@ -141,6 +148,7 @@ export function computeTableGeometry(
       patchW: top.patchW as Float32Array,
       indices: top.indices,
       topTriCount: top.topTriCount,
+      updateRanges: top.updateRanges,
     },
     wall: {
       vertices: wall.vertices,
@@ -151,12 +159,72 @@ export function computeTableGeometry(
       patchW: wall.patchW as Float32Array,
       indices: wall.indices,
       topTriCount: wall.topTriCount,
+      updateRanges: wall.updateRanges,
     },
     water,
     cells,
     topBounds: yBoundsOf(top.vertices),
     wallBounds: yBoundsOf(wall.vertices),
   };
+}
+
+// ------------------------------------------------------------
+// ★ 每 chunk 静态数据缓存（2026-09-10）：
+//   refined src（3×3 高度/块类型 → 精修源）与 FaceTable 只依赖 heights/blockTypes，
+//   与 levels 无关 → 同一 chunk 反复挖坑不必每枪重跑 planRefinements/buildFaceTable。
+//   Worker 与主线程回退各自的模块实例各持一份；切风格/dispose/换代经
+//   dropPatchSourceCache()（TerrainPatch.clearCaches / Worker clearCache）清空。
+//   3×3 邻域缺块时不入缓存（缺块可能后续才生成，缓存会固化作废快照）。
+// ------------------------------------------------------------
+interface PatchSourceEntry { src: BlockSource; table: FaceTable }
+const patchSourceCache = new Map<string, PatchSourceEntry>();
+const PATCH_SOURCE_CACHE_CAP = 16;
+/** ★ 热点 chunk（玩家当前所在）：淘汰时跳过（钉住） */
+let hotSourceKey = "";
+
+/** 清空每 chunk 静态数据缓存（数据换代时与基座缓存一并清） */
+export function dropPatchSourceCache(): void {
+  patchSourceCache.clear();
+}
+
+/** ★ 标记热点 chunk（玩家当前）：源/表缓存与基座缓存一并钉住。
+ *  ChunkManager 在玩家跨 chunk 时调用；只影响淘汰策略，不改变常规路径。 */
+export function setHotChunk(seed: number, cx: number, cz: number): void {
+  const key = `${seed}/${cx},${cz}`;
+  hotSourceKey = key;
+  setBaseCacheHotKey(key);
+}
+
+function getRefinedSource(
+  readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
+  seed: number, cx: number, cz: number,
+): PatchSourceEntry {
+  const key = `${seed}/${cx},${cz}`;
+  const hit = patchSourceCache.get(key);
+  if (hit) return hit;
+  const src = refineChunkSource(makeChunkSource(readChunk), seed, cx, cz);
+  const table = buildFaceTable(src, cx, cz);
+  // 完整性守卫：3×3 邻域全部就绪才缓存（避免把"未生成邻块"的快照固化）
+  let complete = true;
+  for (let dz = -1; dz <= 1 && complete; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (!readChunk(cx + dx, cz + dz)) { complete = false; break; }
+    }
+  }
+  if (complete) {
+    if (patchSourceCache.size >= PATCH_SOURCE_CACHE_CAP) {
+      // ★ 跳过热点 chunk（钉住）；全为热点时退化为删最旧
+      for (const k of patchSourceCache.keys()) {
+        if (k !== hotSourceKey) { patchSourceCache.delete(k); break; }
+      }
+      if (patchSourceCache.size >= PATCH_SOURCE_CACHE_CAP) {
+        const oldest = patchSourceCache.keys().next();
+        if (!oldest.done) patchSourceCache.delete(oldest.value);
+      }
+    }
+    patchSourceCache.set(key, { src, table });
+  }
+  return { src, table };
 }
 
 /** ★ 受影响 1m cell 掩码（top，已含补丁∪1 圈）→ 所属物理分区 slot（null = 全部分区） */

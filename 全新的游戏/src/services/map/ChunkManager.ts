@@ -228,6 +228,7 @@ export class ChunkManager {
    */
   bootstrap(px: number, pz: number): void {
     this.syncChunks(px, pz);
+    this.markHotChunk(px, pz);
     const scx = Math.floor(px / CHUNK_SIZE);
     const scz = Math.floor(pz / CHUNK_SIZE);
     if (this.testChunk) {
@@ -246,13 +247,21 @@ export class ChunkManager {
 
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number): void {
+    // ★ 热点 chunk（玩家当前所在）标记：钉缓存 + 重建/装配优先（快车道入口）
+    this.markHotChunk(px, pz);
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     this.flushPatchRebuilds();
     this.syncChunks(px, pz);
     // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
+    //   ★ 热点 chunk 优先出队（其余保持到达序/预算不变）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0) {
-      const a = this.assembleQueue.shift()!;
+      let idx = 0;
+      if (this.hotChunkKey >= 0) {
+        const hi = this.assembleQueue.findIndex((a) => a.key === this.hotChunkKey);
+        if (hi > 0) idx = hi;
+      }
+      const a = this.assembleQueue.splice(idx, 1)[0]!;
       this.geoInflight.delete(a.key);
       if (a.decor === null || a.deferDecor) {
         // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
@@ -764,9 +773,11 @@ const key2 = chunkKeyOf(cx, cz);
   }
 
   /** ② 视觉原地写（两档）：
- *  Tier A 布局稳定（顶点/索引数一致）→ 逐属性 array.set（零分配）；
- *  Tier B 布局漂移（fine 区扩张 → 顶点数变化）→ 整体换 geometry（Mesh/材质保留，
- *  旧 GPU 缓冲 dispose，新缓冲渲染时惰性上传） */
+   *  Tier A 布局稳定（顶点/索引数一致）→ 逐属性 array.set（零分配）；
+   *    ★ 若输出带 updateRanges（增量未漂移）→ 只拷/传受影响区间（几 KB~几十 KB），
+   *      替代整块数 MB 的 CPU 拷贝 + GPU 重传（带宽优先路径）。
+   *  Tier B 布局漂移（fine 区扩张 → 顶点数变化）→ 整体换 geometry（Mesh/材质保留，
+   *  旧 GPU 缓冲 dispose，新缓冲渲染时惰性上传） */
   private applyGeoInPlace(
     mesh: THREE.Mesh, g: FaceGeometry, withShade: boolean, bounds?: GeomBounds,
   ): boolean {
@@ -779,6 +790,23 @@ const key2 = chunkKeyOf(cx, cz);
       pos.array.length === g.vertices.length &&
       idx.array.length === g.indices.length &&
       (!withShade || (!!g.shade && !!shade && shade.array.length === g.shade.length));
+    // ★ 局部区间上传（增量未漂移时）：只动受影响顶点/索引段
+    if (stable && g.updateRanges && g.updateRanges.vertex.length > 0) {
+      const ur = g.updateRanges;
+      const ok =
+        this.copyAttrRanges(geo, "position", g.vertices, ur.vertex) &&
+        this.copyAttrRanges(geo, "normal", g.normals, ur.vertex) &&
+        this.copyAttrRanges(geo, "uv", g.uvs, ur.vertex) &&
+        this.copyAttrRanges(geo, "color", g.colors, ur.vertex) &&
+        this.copyAttrRanges(geo, "apw", g.patchW, ur.vertex) &&
+        (!withShade || this.copyAttrRanges(geo, "shade", g.shade, ur.vertex)) &&
+        this.copyAttrRanges(geo, "index", g.indices, ur.index, true);
+      if (ok) {
+        if (bounds) this.setPaddedSphere(geo, bounds);
+        return true;
+      }
+      // 局部失败（异常属性缺失）→ 落入下方整块兜底
+    }
     if (stable) {
       const setArr = (name: string, arr: Float32Array | undefined): boolean => {
         if (!arr) return true; // 属性可缺省（未产出不消费）
@@ -812,6 +840,30 @@ const key2 = chunkKeyOf(cx, cz);
     this.setPaddedSphere(ng, bounds);
     mesh.geometry = ng;
     geo.dispose();
+    return true;
+  }
+
+  /** ★ 区间拷贝 + addUpdateRange（three 上传后自动清空区间）：
+   *  ranges 单位 = 顶点/索引下标；按 attribute.itemSize 换算成元素偏移。
+   *  isIndex=true 时处理索引属性（name 传 "index"）。属性缺省规则与整块路径一致。 */
+  private copyAttrRanges(
+    geo: THREE.BufferGeometry, name: string,
+    src: Float32Array | Uint32Array | undefined,
+    ranges: { start: number; count: number }[],
+    isIndex = false,
+  ): boolean {
+    const a = (isIndex ? geo.getIndex() : geo.getAttribute(name)) as THREE.BufferAttribute | null | undefined;
+    if (!src) return true; // 属性可缺省（未产出不消费）
+    if (!a) return false;
+    if (a.array.length !== src.length) return false;
+    const dst = a.array as Float32Array | Uint32Array;
+    const stride = a.itemSize;
+    for (const r of ranges) {
+      const start = r.start * stride, count = r.count * stride;
+      dst.set(src.subarray(start, start + count), start);
+      a.addUpdateRange(start, count);
+    }
+    a.needsUpdate = true;
     return true;
   }
 
@@ -1172,22 +1224,48 @@ const key2 = chunkKeyOf(cx, cz);
    *  不再每帧一次全量重建+装配（worker 与主线程都不再被持续射击打满）。 */
   private static readonly PATCH_REBUILD_MIN_MS = 120;
 
+  /** ★ 热点 chunk（玩家当前所在）重建最短间隔：比常规更短 → 连射当前坑更跟手 */
+  private static readonly PATCH_REBUILD_MIN_MS_HOT = 40;
+
   /** 各 chunk 上次破坏重建发起时刻（performance.now） */
   private lastPatchStart = new Map<number, number>();
+
+  /** ★ 热点 chunk = 玩家当前所在（快车道）：其静态缓存被钉住（见 PatchCompute.setHotChunk），
+   *  重建走低节流、装配优先；其他 chunk 全部保持常规路径与参数。 */
+  private hotChunkKey = -1;
+
+  private markHotChunk(px: number, pz: number): void {
+    const cx = Math.floor(px / CHUNK_SIZE);
+    const cz = Math.floor(pz / CHUNK_SIZE);
+    const key = chunkKeyOf(cx, cz);
+    if (key === this.hotChunkKey) return;
+    this.hotChunkKey = key;
+    // 主线程回退缓存 + 全部 Worker 的缓存一并钉住（Worker 各自模块实例）
+    terrainPatch.setHotChunk(this.raster.worldSeed, cx, cz);
+  }
 
   /** ★ 破坏重建帧间合并 + 节流（每帧开头调用）：把本帧攒下的挖坑请求按 chunk 合并后
    *   一次性投递。digCells 已同步落库（数据即时正确），此处只补视觉重建——
    *   同 chunk 同帧 N 挖 → 1 次重建（dirty 取并集，worker 收敛终态）；
-   *   跨帧连续挖 → 按 PATCH_REBUILD_MIN_MS 间隔分批，未到期/在途的继续攒缓冲。 */
+   *   跨帧连续挖 → 按节流间隔分批，未到期/在途的继续攒缓冲。
+   *   ★ 热点 chunk 排最前 + 低节流（快车道）；其他 chunk 常规 120ms。 */
   private flushPatchRebuilds(): void {
     if (this.pendingPatches.size === 0) return;
     const now = performance.now();
     const items = [...this.pendingPatches.values()];
     this.pendingPatches.clear();
+    // 热点优先发射（其余保持原顺序）
+    items.sort((a, b) => {
+      const ah = chunkKeyOf(a.cx, a.cz) === this.hotChunkKey ? 0 : 1;
+      const bh = chunkKeyOf(b.cx, b.cz) === this.hotChunkKey ? 0 : 1;
+      return ah - bh;
+    });
     for (const p of items) {
       const key = chunkKeyOf(p.cx, p.cz);
+      const hot = key === this.hotChunkKey;
+      const minMs = hot ? ChunkManager.PATCH_REBUILD_MIN_MS_HOT : ChunkManager.PATCH_REBUILD_MIN_MS;
       const last = this.lastPatchStart.get(key) ?? -Infinity;
-      if (now - last < ChunkManager.PATCH_REBUILD_MIN_MS || this.patchRebuilds.has(key)) {
+      if (now - last < minMs || this.patchRebuilds.has(key)) {
         let q = this.pendingPatches.get(key);
         if (!q) { q = { cx: p.cx, cz: p.cz, dirty: new Set() }; this.pendingPatches.set(key, q); }
         for (const d of p.dirty) q.dirty.add(d);

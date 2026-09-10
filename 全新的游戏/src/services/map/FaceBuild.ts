@@ -30,6 +30,15 @@ const DIRS = [
   { dx: 0, dz: -1 },
 ] as const;
 
+/** ★ 局部更新区间（**顶点/索引下标**；消费端按 attribute.itemSize 换算元素偏移，
+ *  与 three BufferAttribute.addUpdateRange 的元素级语义对接）：
+ *  增量重建输出里只有受影响 cell/side 的字节变化；区间齐全且布局未漂移时，
+ *  主线程只拷贝/上传这些区间（省掉整块数 MB 的带宽），否则整块上传。 */
+export interface GeoUpdateRanges {
+  vertex: { start: number; count: number }[];
+  index: { start: number; count: number }[];
+}
+
 export interface FaceGeometry {
   vertices: Float32Array;
   normals: Float32Array;
@@ -40,6 +49,8 @@ export interface FaceGeometry {
   patchW?: Float32Array;
   indices: Uint32Array;
   topTriCount: number;
+  /** ★ 增量局部更新区间（缺省 = 整块上传；布局漂移时缺省） */
+  updateRanges?: GeoUpdateRanges;
 }
 
 // ------------------------------------------------------------
