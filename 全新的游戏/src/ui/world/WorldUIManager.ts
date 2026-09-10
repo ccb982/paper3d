@@ -15,6 +15,7 @@ import { Minimap } from '../../services/ui/Minimap';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
 import { AmmoHud } from '../../systems/itemPlayback/AmmoHud';
+import { AllyHud } from '../../services/ui/AllyHud';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
@@ -28,6 +29,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private hud: PlayerHud;
   private crosshair: Crosshair;
   private ammoHud: AmmoHud;
+  /** ★ 左侧友军编队列表（方舟风：图标 + 血条） */
+  private allyHud: AllyHud;
   private interactPrompt: HTMLDivElement;
   private floatingTexts: {
     el: HTMLDivElement;
@@ -87,6 +90,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.crosshair = new Crosshair();
     // ★ 弹药 HUD（战斗道具播放 · 弹药类）：数据每帧经 update 传入
     this.ammoHud = new AmmoHud(itemManager);
+    // ★ 左侧友军编队列表（图标 + 血条）
+    this.allyHud = new AllyHud(itemManager);
 
     // 交互提示
     this.interactPrompt = document.createElement('div');
@@ -112,6 +117,7 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
     this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
     this.ammoHud.update(ctx.ammo);
+    this.allyHud.update(ctx.allies);
 
     // 交互提示
     if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
@@ -377,6 +383,7 @@ export class WorldUIManager extends BaseInteractionUI {
     this.hud.dispose();
     this.crosshair.dispose();
     this.ammoHud.dispose();
+    this.allyHud.dispose();
     this.interactPrompt.remove();
     this.mapStyleBtn?.remove();
     this.mapStyleBtn = null;

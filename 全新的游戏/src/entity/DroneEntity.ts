@@ -21,7 +21,6 @@ import type { Asset } from '../vendor/player';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
 import { DroneCompositeRender } from '../services/render/DroneCompositeRender';
 import { DroneBeamEffect } from '../services/render/DroneBeam';
-import { HealthBar } from '../services/fx/HealthBar';
 import { executeAttack } from '../services/combat/Attack';
 import { RasterMap } from '../services/map/RasterMap';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
@@ -51,6 +50,8 @@ export class DroneEntity extends EntityBase {
   readonly playerPos = { x: 0, y: 0, z: 0 };
   /** ★ 友军槽位号（-1 = 道具召唤不入槽；回收/损毁时按槽位精确联动） */
   slotIndex = -1;
+  /** ★ 道具 ID（HUD 图标/名称用；WorldMode 生成时写入） */
+  itemId = '';
   /** 当前 AI 状态（调试/表现可读） */
   aiState: DroneState = 'follow';
   /** 悬浮相位（正弦摆动/环绕用） */
@@ -93,8 +94,8 @@ export class DroneEntity extends EntityBase {
     //   双翼 VAT 连续时钟（localTime）随之停摆 → 必须全程满档
     this.lodExempt = true;
     this.attachToScene(scene);
-    // ★ 可损毁：头顶血条（损毁后残骸进槽位，舰船加工台用材料维修）
-    this.attachEffect('health', new HealthBar(scene, this, { width: 0.6, height: 0.07, offsetY: 1.6 }));
+    // ★ 可损毁：血量改由左侧编队列表（AllyHud）显示——不再挂头顶世界血条
+    //   （损毁后残骸进槽位，舰船加工台用材料维修）
 
     // 按画布宽高比设贴片尺寸（宽 = baseSize；不压扁）
     const r = this.renderer as DroneCompositeRender | null;

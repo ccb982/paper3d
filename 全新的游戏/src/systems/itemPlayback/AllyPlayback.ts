@@ -12,8 +12,9 @@ export interface AllyPlaybackContext {
   itemId: string;
   /** 友军槽位索引（残骸槽位不再生成，由调用方过滤） */
   slotIndex: number;
-  /** ★ 空中跟随：近玩家位置生成无人机（由 WorldMode 注入，避免注册表依赖模式层） */
-  spawnDroneNearPlayer: (slotIndex?: number) => void;
+  /** ★ 空中跟随：近玩家位置生成无人机（由 WorldMode 注入，避免注册表依赖模式层）
+   *  @param itemId 来源道具（HUD 图标/名称显示；缺省 = 无人机道具） */
+  spawnDroneNearPlayer: (slotIndex?: number, itemId?: string) => void;
 }
 
 export interface AllyPlayback {

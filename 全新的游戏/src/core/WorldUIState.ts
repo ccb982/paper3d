@@ -17,6 +17,8 @@ export interface WorldUIState {
   playerStats: { hp: number; maxHp: number };
   /** ★ 当前弹药数（AmmoHud 显示；来源 AmmoStore） */
   ammo: number;
+  /** ★ 友军编队列表（AllyHud 左侧渲染：图标 + 血条；WorldMode 每帧构造） */
+  allies: { id: string; itemId: string; hp: number; maxHp: number; slot?: number }[];
   /** 附近可交互物品（可选） */
   nearbyItem?: { itemId: string; distance: number } | null;
 }

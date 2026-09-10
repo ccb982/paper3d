@@ -414,7 +414,7 @@ export class WorldMode implements IGameMode {
     // ★ 友军播放注册表：可露希尔的无人机 → 空中的 DroneEntity（跟随/攻击/残骸回收）
     allyPlaybackRegistry.set(DRONE_ITEM, {
       kind: 'drone',
-      spawn: ({ slotIndex, spawnDroneNearPlayer }) => spawnDroneNearPlayer(slotIndex),
+      spawn: ({ itemId, slotIndex, spawnDroneNearPlayer }) => spawnDroneNearPlayer(slotIndex, itemId),
     });
 
     // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
@@ -426,7 +426,7 @@ export class WorldMode implements IGameMode {
         const id = slots[i];
         if (!id) continue;
         const entry = allyPlaybackRegistry.get(id);
-        if (entry) entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot) });
+        if (entry) entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId) });
       }
     }
 
@@ -491,7 +491,7 @@ export class WorldMode implements IGameMode {
           allyPlaybackRegistry.get(payload.itemId)!.spawn({
             itemId: payload.itemId,
             slotIndex: payload.slotIndex,
-            spawnDroneNearPlayer: (slot) => this.spawnDroneNearPlayer(slot),
+            spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId),
           });
         }
       });
@@ -535,6 +535,13 @@ export class WorldMode implements IGameMode {
       entities: this.entities.allBases(),
       playerStats: { hp: this.player.hp, maxHp: this.player.maxHp },
       ammo: this.combatItems.ammo.getCount(),
+      allies: this.drones.map((d) => ({
+        id: `a${d.entity.id}`,
+        itemId: d.itemId,
+        hp: d.hp,
+        maxHp: d.maxHp,
+        slot: d.slotIndex,
+      })),
     });
 
     // ★ 战斗道具播放：装备贴片帧动画驱动（带相机 → 影子 LOD/昼夜浓度）
@@ -1123,8 +1130,8 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 生成一架无人机（追加进编队；道具可多次使用 → 多机编队）
-   *  slotIndex = 友军槽位号（-1 = 道具召唤不入槽） */
-  private spawnDroneNearPlayer(slotIndex = -1): void {
+   *  slotIndex = 友军槽位号（-1 = 道具召唤不入槽）；itemId = 来源道具（HUD 显示） */
+  private spawnDroneNearPlayer(slotIndex = -1, itemId = DRONE_ITEM): void {
     if (!this.scene || !this.player || !this.droneAsset) return;
     const p = this.player.position;
     const drone = new DroneEntity(this.entities, this.scene, this.droneAsset, {
@@ -1132,6 +1139,7 @@ export class WorldMode implements IGameMode {
       scale: 1.2,
     });
     drone.slotIndex = slotIndex;
+    drone.itemId = itemId;
     this.drones.push(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
