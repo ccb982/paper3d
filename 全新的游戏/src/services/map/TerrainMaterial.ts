@@ -557,10 +557,11 @@ export const MATERIAL_GLSL = /* glsl */ `
     vec2 tc = floor(wt / 4.0);
     vec2 lp = wt - tc * 4.0;                            // 地块内坐标 0..4m
     // ★ 远处丢弃：像素足迹超过车道尺度（半宽 0.10m）后整体淡出——
-    //   提前于哈希门控/噪声前收敛（远景零后续 ALU），也杜绝细线闪噪
+    //   有 fwidth AA 兜底（亚像素时自动趋于均值），窗口放晚到接近彻底亚像素；
+    //   提前于哈希门控/噪声前收敛（远景零后续 ALU）
     //   （foot 取 wt：连续坐标，避免 fract 边界处导数尖峰误杀）
     float foot = max(fwidth(wt.x), fwidth(wt.y));
-    amt *= 1.0 - smoothstep(0.05, 0.20, foot);
+    amt *= 1.0 - smoothstep(0.24, 0.72, foot);
     if (amt <= 0.001) return vec4(0.0, 0.0, 0.0, 0.0);
     float tileH = h21(tc);                              // 地块主哈希
     if (tileH > 0.20) return vec4(0.0, 0.0, 0.0, 0.0);  // ★ 20% 出现概率
@@ -618,10 +619,11 @@ export const MATERIAL_GLSL = /* glsl */ `
     vec2 tc = floor(wt / 4.0);                            // 地块坐标（哈希盐）
     vec2 lp = wt - tc * 4.0;                              // 地块内坐标 0..4m
     // ★ 远处丢弃：像素足迹超过条纹尺度（半周期 0.16m）后整体淡出——
-    //   提前于哈希门控/噪声前收敛（远景零后续 ALU），也杜绝 45° 斜线闪噪
+    //   有 fwidth AA 兜底（亚像素时自动趋于均值），窗口放晚到接近彻底亚像素；
+    //   提前于哈希门控/噪声前收敛（远景零后续 ALU）
     //   （foot 取 wt：连续坐标，避免 fract 边界处导数尖峰误杀）
     float foot = max(fwidth(wt.x), fwidth(wt.y));
-    amt *= 1.0 - smoothstep(0.06, 0.24, foot);
+    amt *= 1.0 - smoothstep(0.30, 0.90, foot);
     if (amt <= 0.001) return vec4(0.0, 0.0, 0.0, 0.0);
     float tileH = h21(tc + 7.31);                         // ★ 独立盐：~10% 出现
     if (tileH > 0.10) return vec4(0.0, 0.0, 0.0, 0.0);
