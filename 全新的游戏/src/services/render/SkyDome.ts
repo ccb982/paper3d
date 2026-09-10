@@ -416,12 +416,15 @@ export class SkyDome {
     (this.skyMat.uniforms.uCloudDay.value as number) = sun.daylight;
 
     // ---- 太阳圆盘：沿 sun.dir 放置 + 白昼可见 ~ 仰角 ----
-    const sx = anchor.x + sun.dir.x * DISC_DISTANCE;
-    const sy = anchor.y + sun.dir.y * DISC_DISTANCE;
-    const sz = anchor.z + sun.dir.z * DISC_DISTANCE;
+    // ★ 本 group 已锚定到 anchor（头顶罩着天空），子 mesh 只写相对偏移 →
+    //   世界位置恰为 anchor + dir×DISC_DISTANCE。若再写绝对 anchor+…
+    //   会叠加成 2×anchor，太阳/月亮随玩家绝对坐标漂移、转动视角时错位。
+    const sx = sun.dir.x * DISC_DISTANCE;
+    const sy = sun.dir.y * DISC_DISTANCE;
+    const sz = sun.dir.z * DISC_DISTANCE;
     this.sunMesh.position.set(sx, sy, sz);
     // 让圆盘正对相机（锚点近似相机位置）
-    this.sunMesh.lookAt(anchor.x, anchor.y, anchor.z);
+    this.sunMesh.lookAt(0, 0, 0);
     // 可见度：白天可见（daylight 高；低仰角保持可见但有微弱呼吸）
     const sunVisible = sun.daylight;
     this.sunMat.uniforms.uVisible.value = sunVisible;
@@ -429,9 +432,9 @@ export class SkyDome {
     this.sunMat.uniforms.uGlow.value = 0.4 + 0.6 * sunVisible;
 
     // ---- ★ 月亮贴图：沿 moon.dir 放置 + 夜晚可见 ----
-    const mx = anchor.x + moon.dir.x * DISC_DISTANCE;
-    const my = anchor.y + moon.dir.y * DISC_DISTANCE;
-    const mz = anchor.z + moon.dir.z * DISC_DISTANCE;
+    const mx = moon.dir.x * DISC_DISTANCE;
+    const my = moon.dir.y * DISC_DISTANCE;
+    const mz = moon.dir.z * DISC_DISTANCE;
     if (this.moonTexReady) {
       // 可见度 = 夜对应（1 - daylight）× 月亮可见度
       const moonVisible = (1 - sun.daylight) * moon.visibility;
@@ -442,14 +445,14 @@ export class SkyDome {
       const horizFade = THREE.MathUtils.clamp(moon.dir.y * 6.0, 0, 1);
       const vis = moonVisible * horizFade;
       this.moonTexMesh.position.set(mx, my, mz);
-      this.moonTexMesh.lookAt(anchor.x, anchor.y, anchor.z);
+      this.moonTexMesh.lookAt(0, 0, 0);
       this.moonTexMat.uniforms.uVisible.value = vis;
       // ★ 表面浅月色叠加：夜晚微亮（最多 0.28 强度）
       this.moonTexMat.uniforms.uTint.value = vis * 0.28;
 
       // ★ 外发光：位置/朝向与月亮同步，强度随可见度（满月最亮）
       this.moonGlowMesh.position.set(mx, my, mz);
-      this.moonGlowMesh.lookAt(anchor.x, anchor.y, anchor.z);
+      this.moonGlowMesh.lookAt(0, 0, 0);
       this.moonGlowMat.uniforms.uIntensity.value = vis * 0.55;
     }
   }
