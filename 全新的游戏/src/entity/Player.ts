@@ -53,6 +53,11 @@ export class Player extends CharacterBase {
     return (this.renderer as unknown as { mesh?: THREE.Mesh | null })?.mesh ?? null;
   }
 
+  /** ★ 当前朝向（前=脸朝相机 / 后=背向相机）；装备前后纹理展示判定用 */
+  get facing(): '前' | '后' {
+    return (this.controller.anim.state.facing ?? '前') as '前' | '后';
+  }
+
   /** ★ 玩家死亡（暂：不销毁主角——记录 + 扣血表现后续接；结算/重生后续） */
   override onDeath(source: EntityBase | null): void {
     console.log(`[玩家] 被 ${source?.constructor.name ?? '未知'} 击杀！`);

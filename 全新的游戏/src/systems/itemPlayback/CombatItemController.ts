@@ -21,9 +21,10 @@ export class CombatItemController {
     private session: GameSession,
     scene: THREE.Scene,
     host: THREE.Object3D,
+    getFacing: () => '前' | '后',
   ) {
     this.ammo = new AmmoStore(session);
-    this.equipment = new EquipmentLayer(scene, host);
+    this.equipment = new EquipmentLayer(scene, host, getFacing);
   }
 
   /** ★ 玩家开火弹药消耗：池空 → 拒发（返回 false，调用方跳过开火） */

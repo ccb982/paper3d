@@ -8,7 +8,7 @@
 //   ★ 继承父贴片翻转——父 scale 取反时子局部位置/缩放同步镜像
 //   ★ 帧时间由本层独立推进（loop 全部帧）
 // 不侵入播放器管线（子贴片叠加，非每帧纹理合成）。
-// 配置：items.json 条目 combat.kind === 'equip'，参数 asset/slot/offsetX/offsetY/scale。
+// 配置：items.json 条目 combat.kind === 'equip'，参数 asset/slot/facing/offsetX/offsetY/scale。
 // ============================================================
 
 import * as THREE from 'three';
@@ -22,6 +22,10 @@ export const EQUIP_SLOTS: EquipSlot[] = ['weapon', 'armor', 'headgear'];
 export interface EquipVisual {
   slot: EquipSlot;
   asset: string;
+  /** ★ 角色朝向限定：front=仅角色"前"（脸朝相机）时显示；back=仅"后"时显示。
+   *   同时决定前后层深度：front 叠在角色之上（offsetZ 推向相机侧），
+   *   back 位于角色后（负向 local Z，被角色深度遮挡，如背包/披风）。 */
+  facing: 'front' | 'back';
   offsetX: number;
   offsetY: number;
   offsetZ: number;
@@ -32,7 +36,7 @@ export interface EquipVisual {
 const equipVisuals = new Map<string, EquipVisual>();
 for (const raw of (itemsConfig as { items: Array<Record<string, unknown>> }).items) {
   const combat = raw.combat as
-    | { kind?: string; slot?: string; asset?: string; offsetX?: number; offsetY?: number; offsetZ?: number; scale?: number }
+    | { kind?: string; slot?: string; asset?: string; facing?: 'front' | 'back'; offsetX?: number; offsetY?: number; offsetZ?: number; scale?: number }
     | undefined;
   if (combat?.kind === 'equip' && typeof raw.id === 'string' && combat.asset) {
     const slot = (combat.slot ?? 'weapon') as EquipSlot;
@@ -40,6 +44,7 @@ for (const raw of (itemsConfig as { items: Array<Record<string, unknown>> }).ite
     equipVisuals.set(raw.id, {
       slot,
       asset: combat.asset,
+      facing: combat.facing ?? 'front',
       offsetX: combat.offsetX ?? 0,
       offsetY: combat.offsetY ?? 0,
       offsetZ: combat.offsetZ ?? 0,
@@ -67,11 +72,22 @@ export class EquipmentLayer {
   private mounted = new Map<string, MountedEquip>();
   /** ★ 串行加载链：apply 并发调用排成一队，避免同一资产重复加载 */
   private chain: Promise<void> = Promise.resolve();
+  /** ★ 已应用朝向缓存（仅在变化时刷显隐，避免每帧遍历） */
+  private lastFacing: '前' | '后' | null = null;
 
   constructor(
     private scene: THREE.Scene,
     private host: THREE.Object3D,
+    private getFacing: () => '前' | '后',
   ) {}
+
+  /** ★ 按当前角色朝向刷新各挂载件的显隐（front↔'前' / back↔'后'） */
+  private applyFacing(facing: '前' | '后'): void {
+    for (const m of this.mounted.values()) {
+      const ms = m.quad as unknown as { mesh?: THREE.Mesh | null };
+      if (ms.mesh) ms.mesh.visible = (m.visual.facing === 'front' ? '前' : '后') === facing;
+    }
+  }
 
   /** ★ 按出击槽池同步装备贴片（全量叠加）：diff 出新增挂载、移除卸载，未变则跳过 */
   apply(items: string[]): Promise<void> {
@@ -119,9 +135,16 @@ export class EquipmentLayer {
     }
     quad.setScaleKeepAspect(visual.scale);
     // ★ offsetZ 推向画面前方（父贴片朝相的局部 +Z）、与角色本体错开深度，
-    //   避免与主角贴片共面 z-fighting；★ 叠加件按挂载次序再 +depthIndex 微推进，
-    //   让"同部位多件全量叠加"不至于共面互相盖掉（层层前移）。
-    quad.setPosition(visual.offsetX, visual.offsetY, visual.offsetZ + depthIndex * 0.02);
+    //   避免与主角贴片共面 z-fighting；★ 叠加件按挂载次序再 ±depthIndex 微推：
+    //   front 逐件朝相机前移、back 逐件远离相机后移，让"同部位多件全量叠加"
+    //   不至于共面互相盖掉（层层错开）。back 层取负向 local Z = 角色后纹理
+    //   （角色深度遮挡在后贴片之上 → 视觉上"在角色背后"）。
+    const layeredZ = visual.facing === 'back'
+      ? -visual.offsetZ - (depthIndex + 1) * 0.02
+      : visual.offsetZ + depthIndex * 0.02;
+    quad.setPosition(visual.offsetX, visual.offsetY, layeredZ);
+    // 初始显隐按当前朝向生效（front↔'前' / back↔'后'）
+    mesh.visible = (visual.facing === 'front' ? '前' : '后') === this.getFacing();
     this.mounted.set(itemId, {
       itemId,
       visual,
@@ -132,12 +155,18 @@ export class EquipmentLayer {
     });
   }
 
-  /** 每帧：推进贴片帧动画（只喂 uniforms，mesh 由场景自动渲染） */
+  /** 每帧：推进贴片帧动画（只喂 uniforms，mesh 由场景自动渲染）；
+   *   角色朝向变化时刷新前后纹理显隐（缓存防每帧遍历） */
   update(dt: number): void {
     for (const m of this.mounted.values()) {
       m.t += dt;
       const idx = Math.floor(m.t * m.fps) % m.frameCount;
       m.quad.render({ frameIndex: idx });
+    }
+    const facing = this.getFacing();
+    if (facing !== this.lastFacing) {
+      this.applyFacing(facing);
+      this.lastFacing = facing;
     }
   }
 

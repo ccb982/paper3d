@@ -218,10 +218,11 @@
         "kind": "equip",
         "slot": "armor",
         "asset": "/fx/黍姐的XX.ftx3.gz",
+        "facing": "front",
         "offsetX": 0,
         "offsetY": 0,
         "offsetZ": 0.09,
-        "scale": 0.8
+        "scale": 0.267
       },
       "color": { "h": 0.08, "s": 0.6, "l": 0.55 },
       "world": {
