@@ -53,9 +53,12 @@ export class Player extends CharacterBase {
     return (this.renderer as unknown as { mesh?: THREE.Mesh | null })?.mesh ?? null;
   }
 
-  /** ★ 当前朝向（前=脸朝相机 / 后=背向相机）；装备前后纹理展示判定用 */
+  /** ★ 当前朝向（前=脸朝相机 / 后=背向相机）；装备前后纹理展示判定用。
+   *   判定以"当前真实绘制帧的帧名前缀"为准（如 前_xxx / 后_xxx），
+   *   与按键无关——站定时跟随最后一帧实绘纹理，斜向/攻击亦如实。 */
   get facing(): '前' | '后' {
-    return (this.controller.anim.state.facing ?? '前') as '前' | '后';
+    const name = this.controller.anim.currentFrameName();
+    return name.startsWith('后') ? '后' : '前';
   }
 
   /** ★ 玩家死亡（暂：不销毁主角——记录 + 扣血表现后续接；结算/重生后续） */

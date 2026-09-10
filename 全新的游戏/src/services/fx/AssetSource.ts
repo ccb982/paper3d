@@ -23,6 +23,8 @@ export interface FrameAssetSource {
   resolveFrame(name: string): number | null;
   /** 是否存在该帧名 */
   hasFrame(name: string): boolean;
+  /** 全部帧名（按索引顺序，names[i] 对应第 i 帧；纯纹理包可空数组） */
+  frameNames(): string[];
 }
 
 /**

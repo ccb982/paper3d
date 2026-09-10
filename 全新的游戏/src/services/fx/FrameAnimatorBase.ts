@@ -160,6 +160,13 @@ export class FrameAnimatorBase {
     return this.controller.state === 'playing';
   }
 
+  /** ★ 当前实际绘制帧的帧名（前后纹理判定以"正在绘制的真贴图"为源，
+   *   与输入/动画朝向状态解耦——站定/斜向/攻击等任何状态都如实反映画面） */
+  currentFrameName(): string {
+    const names = this.source.frameNames();
+    return names[this.state.frameIndex] ?? '';
+  }
+
   dispose(): void {
     this.controller.dispose();
     this.onAnimationComplete = null;

@@ -62,5 +62,6 @@ export function createSolidBulletAsset(size = 64, h = 0.0, s = 0.9, l = 0.6): Fr
       }) as unknown as FramePlaybackController,
     resolveFrame: () => 0,
     hasFrame: () => false,
+    frameNames: () => [],
   };
 }
