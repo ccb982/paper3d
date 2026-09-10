@@ -1178,9 +1178,11 @@ export class WorldMode implements IGameMode {
     const targetY = this.raster.surfaceHeightAt(p.x, p.z);
     // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
     //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须
-    //   所在 4m 地块是坑洞（tileDefAt.isDepression）。普通地块被挖深的补丁坑：
-    //   正常贴地站立（不沉落、不判死）；天然坑洞：维持沉落死亡。
-    const onPitTile = this.raster.tileDefAt(p.x, p.z).isDepression;
+    //   所在 4m 地块是坑洞（genRole==='pit'）。普通地块被挖深的补丁坑：正常贴地站立
+    //   （不沉落、不判死）；天然坑洞：维持沉落死亡。
+    //   ★ 2026-09-10 水里连射被误判掉坑：isDepression 同时覆盖坑洞与水（Tiles.ts），
+    //   子弹会把水底挖到 −1.5 以下 → 判死传送。水不是坑洞 → 死亡门槛只认 pit。
+    const onPitTile = this.raster.tileDefAt(p.x, p.z).genRole === 'pit';
     if (targetY >= -1.5 || !onPitTile) {
       const dy = targetY - p.y;
       if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
