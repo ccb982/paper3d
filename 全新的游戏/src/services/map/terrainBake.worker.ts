@@ -24,7 +24,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     { propVolumes: msg.snap.propVolumes, decals: msg.snap.decals },
   );
   ctx.postMessage(
-    { type: 'result', id: msg.id, albedo: out.albedo.buffer, light: out.light.buffer },
-    [out.albedo.buffer, out.light.buffer],
+    { type: 'result', id: msg.id, albedo: out.albedo.buffer, light: out.light.buffer, low: out.low.buffer },
+    [out.albedo.buffer, out.light.buffer, out.low.buffer],
   );
 };

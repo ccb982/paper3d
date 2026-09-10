@@ -45,6 +45,7 @@ import {
   refineChunkSource,
 } from "./Refinements";
 import { ppSurfaceHeight } from "./RefinementPostProcess";
+import { computeMaterialLowRGBA, pseudoAoFromPatch } from "./materialLow";
 
 // ============================================================
 // 查询源接口（新路径唯一消费面——只有视觉面采样，无块状 heightAt）
@@ -106,8 +107,10 @@ const LIGHT_BLUR_PASSES = 1;
 export interface ChunkPixels {
   /** 材质色图（纯颜色，无明暗；sRGB） */
   albedo: Uint8ClampedArray;
-  /** 光照图（R=直射项 N·L×阴影可见度 / G=AO / B 预留；线性空间数据） */
+  /** 光照图（R=直射项 N·L×阴影可见度 / G=AO / B=伪 AO(材质低频) ；线性空间数据） */
   light: Uint8ClampedArray;
+  /** ★ 材质低频图（RGB=sRGB 低频色；A 预留）——顶面 shader 低频采样（性能 Step 1） */
+  low: Uint8ClampedArray;
 }
 
 export function computeChunkMapsRGBA(
@@ -119,6 +122,7 @@ export function computeChunkMapsRGBA(
   return {
     albedo: computeAlbedoRGBA(q, cx, cz, extras?.decals),
     light: computeLightRGBA(q, cx, cz, extras?.propVolumes),
+    low: computeMaterialLowRGBA(q, cx, cz),
   };
 }
 
@@ -277,7 +281,9 @@ function computeLightRGBA(
   const surf = new Float32Array(S * S); // 视觉面高度（模糊权重按它断崖衰减）
   const directF = new Float32Array(S * S);
   const aoF = new Float32Array(S * S);
-  /** 装饰物阴影掩膜（0~1；写进光照图 B 预留通道——调试红影/发光预留用） */
+  /** ★ 伪 AO（材质低频 patch 场）：顶面 shader 的 patch 暗谷 → 烘进 B 通道 */
+  const pseudoAoF = new Float32Array(S * S);
+  /** 装饰物阴影掩膜（0~1；模糊用——B 通道已改为伪 AO） */
   const propShadowF = new Float32Array(S * S);
   for (let py = 0; py < S; py++) {
     for (let px = 0; px < S; px++) {
@@ -285,6 +291,7 @@ function computeLightRGBA(
       const wz = originZ + (py + 0.5) * step;
       const h = q.surfaceHeightAt(wx, wz);
       surf[py * S + px] = h;
+      pseudoAoF[py * S + px] = pseudoAoFromPatch(wx, wz);
 
       // 顶面：常数直射 × 投影可见度（留底防死黑）。
       // ★ 软阴影 = iq 标准公式的地形变体：res = min(res, k·h/t)，
@@ -372,8 +379,8 @@ function computeLightRGBA(
   for (let i = 0; i < S * S; i++) {
     out[i * 4] = Math.round(Math.min(1, directF[i]) * 255);
     out[i * 4 + 1] = Math.round(Math.min(1, aoF[i]) * 255);
-    // B 预留通道：1 - 装饰物阴影掩膜（调试红影可视化 / 未来发光预留）
-    out[i * 4 + 2] = Math.round((1 - propShadowF[i]) * 255);
+    // B 通道：伪 AO（材质低频 patch 场 → 顶面 shader 暗谷；wall 路径不读）
+    out[i * 4 + 2] = Math.round(Math.min(1, Math.max(0, pseudoAoF[i])) * 255);
     out[i * 4 + 3] = 255;
   }
   return out;

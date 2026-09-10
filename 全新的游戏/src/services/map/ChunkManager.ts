@@ -576,7 +576,7 @@ export class ChunkManager {
     bufs: BakeResult | null, decor: DecorPlan,
   ): void {
     try {
-      const maps = bufs ? assembleChunkMaps(bufs.albedo, bufs.light) : null;
+      const maps = bufs ? assembleChunkMaps(bufs.albedo, bufs.light, bufs.low) : null;
       if (maps) {
         cacheChunkMaps(seed, cx, cz, maps);
         this.finishStandardChunk(cx, cz, maps, decor);
@@ -933,7 +933,7 @@ const key2 = chunkKeyOf(cx, cz);
     const palette = this.chunkPalette(cx, cz);
     const chunkDataForMat = this.raster.getChunkData(cx, cz);
     const matCfg = chunkDataForMat ? buildTileRenderConfig(chunkDataForMat, palette) : undefined;
-    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, matCfg, true);
+    const mat = new TerrainMaterial(maps.albedo, maps.lightmap, maps.matLow, matCfg, true);
     (mat as unknown as { userData: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData =
       { lightMap: maps.lightmap, tileIds: matCfg?.tileIds, cached: true };
     const topMesh = new THREE.Mesh(toGeo(topG, false, bounds?.top), mat);

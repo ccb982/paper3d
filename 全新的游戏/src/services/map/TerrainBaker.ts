@@ -25,6 +25,8 @@ import type { PlannedDecal } from './decor/TileDecalBase';
 export interface BakeResult {
   albedo: Uint8ClampedArray;
   light: Uint8ClampedArray;
+  /** ★ 材质低频图（性能 Step 1；RGB=sRGB 低频色） */
+  low: Uint8ClampedArray;
 }
 
 class TerrainBakerService {
@@ -40,14 +42,15 @@ class TerrainBakerService {
       // ★ 微信小游戏适配点：替换为 wx.createWorker('workers/terrainBake.js')
       const w = new Worker(new URL('./terrainBake.worker.ts', import.meta.url), { type: 'module' });
       w.onmessage = (ev: MessageEvent) => {
-        const msg = ev.data as { type: string; id: number; albedo?: ArrayBuffer; light?: ArrayBuffer };
+        const msg = ev.data as { type: string; id: number; albedo?: ArrayBuffer; light?: ArrayBuffer; low?: ArrayBuffer };
         if (msg.type !== 'result') return;
         const cb = this.pending.get(msg.id);
         this.pending.delete(msg.id);
-        if (!cb || !msg.albedo || !msg.light) return;
+        if (!cb || !msg.albedo || !msg.light || !msg.low) return;
         cb({
           albedo: new Uint8ClampedArray(msg.albedo),
           light: new Uint8ClampedArray(msg.light),
+          low: new Uint8ClampedArray(msg.low),
         });
       };
       w.onerror = () => {

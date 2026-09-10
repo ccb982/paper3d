@@ -346,12 +346,14 @@ export function bakeChunkAppearance(
 export interface ChunkMaps {
   /** 材质色图（纯颜色，无明暗；sRGB） */
   albedo: THREE.CanvasTexture;
-  /** 光照图（R=直射项 N·L×阴影可见度 / G=AO / B 预留；线性空间数据） */
+  /** 光照图（R=直射项 N·L×阴影可见度 / G=AO / B=伪 AO；线性空间数据） */
   lightmap: THREE.CanvasTexture;
+  /** ★ 材质低频图（RGB=sRGB 低频色；顶面 shader 低频采样——性能 Step 1） */
+  matLow: THREE.CanvasTexture;
 }
 
 /** 由像素缓冲组装纹理（Worker 结果与同步回退共用此尾部；主线程执行） */
-export function assembleChunkMaps(albedoBuf: Uint8ClampedArray, lightBuf: Uint8ClampedArray): ChunkMaps {
+export function assembleChunkMaps(albedoBuf: Uint8ClampedArray, lightBuf: Uint8ClampedArray, lowBuf: Uint8ClampedArray): ChunkMaps {
   // ---- albedo：sRGB + mipmap + 各向异性（地面掠射角画质）----
   const aCvs = document.createElement('canvas');
   aCvs.width = aCvs.height = APPEARANCE_RES;
@@ -374,7 +376,18 @@ export function assembleChunkMaps(albedoBuf: Uint8ClampedArray, lightBuf: Uint8C
   lightmap.magFilter = THREE.LinearFilter;
   lightmap.wrapS = lightmap.wrapT = THREE.ClampToEdgeWrapping;
 
-  return { albedo, lightmap };
+  // ---- matLow：材质低频图（sRGB 色 + mip；低频 128²，远景自动丢弃细节）----
+  const lowRes = Math.sqrt(lowBuf.length / 4) | 0;
+  const lowCvs = document.createElement('canvas');
+  lowCvs.width = lowCvs.height = lowRes;
+  lowCvs.getContext('2d')!.putImageData(new ImageData(lowBuf, lowRes, lowRes), 0, 0);
+  const matLow = new THREE.CanvasTexture(lowCvs);
+  matLow.flipY = false;                       // 与 albedo/lightmap 同 UV 约定
+  matLow.colorSpace = THREE.SRGBColorSpace;   // 低频色（three 解码回线性）
+  matLow.anisotropy = 4;
+  matLow.wrapS = matLow.wrapT = THREE.ClampToEdgeWrapping;
+
+  return { albedo, lightmap, matLow };
 }
 
 /**
@@ -394,7 +407,7 @@ export function bakeChunkMaps(
     palette,
   };
   const out = computeChunkMapsRGBA(q, cx, cz, extras);
-  return assembleChunkMaps(out.albedo, out.light);
+  return assembleChunkMaps(out.albedo, out.light, out.low);
 }
 
 // ============================================================
@@ -429,6 +442,7 @@ export function releaseBakeCache(): void {
   for (const m of bakeCache.values()) {
     m.albedo.dispose();
     m.lightmap.dispose();
+    m.matLow.dispose();
   }
   bakeCache.clear();
 }
