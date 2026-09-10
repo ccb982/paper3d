@@ -208,6 +208,47 @@ export class ItemManager {
   getDeployedAllies(): string[] {
     return Array.isArray(this.session.deployedAllies) ? this.session.deployedAllies : [];
   }
+
+  // ==================== ★ 装备栏（背包页面装备槽拖入/拖出） ====================
+
+  /** 物品是否为可装备（items.json type === 'equip'） */
+  isEquip(itemId: string): boolean {
+    return this.archetypes.get(itemId)?.type === 'equip';
+  }
+
+  /** 物品所属装备位（weapon/armor/headgear；非装备类返回 null） */
+  equipSlotOf(itemId: string): string | null {
+    return this.archetypes.get(itemId)?.equipSlot ?? null;
+  }
+
+  /** 当前穿戴（player.equips） */
+  getEquipped(): { weapon?: string; armor?: string; headgear?: string } {
+    return this.session.player.equips ?? {};
+  }
+
+  /** ★ 装备栏拖入：按格子（layer,row,col）执行使用（equip 效果：穿戴 + 旧装备回背包） */
+  equipCell(layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    return this.useItem(layer, row, col);
+  }
+
+  /** 装备栏拖入兜底：按物品 id 在玩家背包里查位置再穿戴 */
+  equipItem(itemId: string): UseItemResult {
+    const pos = this.getItems('player').find((i) => i.itemId === itemId);
+    if (!pos) return { success: false, message: '背包中没有该物品' };
+    return this.useItem('player', pos.row, pos.col);
+  }
+
+  /** ★ 装备栏拖出：卸载穿戴 → 放回玩家背包（失败 = 背包无空位，保持穿戴防丢件） */
+  unequipItem(slot: string): boolean {
+    const equips = this.session.player.equips;
+    if (!equips) return false;
+    const id = equips[slot as keyof typeof equips];
+    if (!id) return false;
+    if (!this.hasSpace('player', id, 1)) return false;
+    equips[slot as keyof typeof equips] = undefined;
+    this.addItem('player', id, 1);
+    return true;
+  }
 }
 
 /** ★ 友军槽位数（背包页面额外绘制；用户定调） */

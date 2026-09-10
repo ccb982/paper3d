@@ -33,7 +33,7 @@ export class InventoryGridRenderer {
    * @param onSlotClick 点击回调
    * @param cellSize 格子大小（px）
    * @param flashItemId 闪烁的物品 ID（拾取后高亮）
-   * @param opts.dragItemIds 这些物品的格子可拖拽（拖入友军槽位）
+   * @param opts.dragItemIds 这些物品的格子可拖拽（可部署友军 → 拖入友军槽位；装备 → 拖入装备栏）
    */
   render(
     container: HTMLElement,
@@ -119,11 +119,13 @@ export class InventoryGridRenderer {
         onSlotClick?.({ layer, row, col, item: slot });
       });
 
-      // ★ 可部署友军：格子可拖拽 → 拖入友军槽位部署
+      // ★ 可部署友军 / 可装备：格子可拖拽 → 拖入友军槽位（部署）/ 装备栏（穿戴）
       if (dragItemIds?.has(slot.itemId)) {
         el.draggable = true;
         el.addEventListener('dragstart', (ev) => {
           ev.dataTransfer?.setData('text/x-item', slot.itemId);
+          // ★ 源格子坐标（装备栏 drop 用：精确到源 cell 执行使用，避免跨层歧义）
+          ev.dataTransfer?.setData('text/x-src', `${layer},${row},${col}`);
           if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
         });
       }

@@ -49,6 +49,8 @@ export class ItemArchetype {
   readonly worldConfig: ItemWorldConfig | null;
   /** ★ 可部署为友军（背包友军槽位拖入条件） */
   readonly deployable: boolean;
+  /** ★ 装备位（effects 里 type==='equip' 的 slot；非装备类为 null。装备栏拖入判定用） */
+  readonly equipSlot: string | null;
   private readonly _effects: ItemEffectDef[];
 
   constructor(data: any) {
@@ -71,6 +73,8 @@ export class ItemArchetype {
     this.worldScale = w?.scale ?? 0.5;
     this.pickupRadius = w?.pickupRadius ?? 1.5;
     this._effects = data.effects ?? [];
+    const equipDef = data.effects?.find((e: any) => e?.type === 'equip');
+    this.equipSlot = equipDef?.slot ?? null;
   }
 
   /** ★ 背包中使用：遍历所有效果，逐条交给注册表执行 */
