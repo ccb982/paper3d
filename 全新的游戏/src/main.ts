@@ -28,6 +28,8 @@ import { setGameRenderer } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
 import { registerAssetIconSource } from './services/item/ItemIconRegistry';
 import { ItemManager } from './systems/inventory/ItemManager';
+import { relicGrantsFor, dispatchRelicEvent } from './core/RelicEffects';
+import { RELIC_ITEM_CONFIG } from './config/relics';
 
 /** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
 function fallbackCopy(text: string): void {
@@ -485,7 +487,7 @@ function enterWorldMode(
     sentinelAsset: sentinelAsset ?? undefined,
     debug: { testChunk },
     onReturn: () => {
-      // 返回时：行囊中的祖宗自动带回舰船（货舱优先，满则基地仓）→ 推进天数 → ShipMode
+      // 返回时：行囊祖宗带回货舱/基地 → 遗物"返回/天数"时机管线 → 推进天数 → ShipMode
       if (currentSession) {
         const im = new ItemManager(currentSession);
         const carried = im.countItem('player', 'zuzong');
@@ -493,9 +495,15 @@ function enterWorldMode(
           if (!im.moveItem('player', 'ship', 'zuzong', 1)
             && !im.moveItem('player', 'base', 'zuzong', 1)) break;
         }
+        // ★ 遗物「返回」时机（可授予道具；行囊落账）
+        for (const g of relicGrantsFor(currentSession, RELIC_ITEM_CONFIG, 'onRunEnd')) {
+          if (im.hasSpace('player', g.itemId, g.count)) im.addItem('player', g.itemId, g.count);
+        }
         currentSession.meta.day++;
         currentSession.meta.totalDaysSurvived++;
         currentSession.dayProgress.hasDepartedToday = false;
+        // ★ 遗物「天数推进」时机
+        dispatchRelicEvent(currentSession, RELIC_ITEM_CONFIG, 'onDayAdvance', {});
       }
       enterShipMode(scene, camera, renderer);
     },

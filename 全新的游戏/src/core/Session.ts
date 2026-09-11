@@ -6,6 +6,7 @@
 
 // 六区兄弟 = 六种基础合成材料（开荒种子用）
 import { SIX_BROTHER_MATERIAL_IDS } from '../config/sixBrothers';
+import { relicEffectRegistry, eachOwnedRelic, type RelicEffectConfig, type RelicStatAccumulator } from './RelicEffects';
 
 // ============================================================
 // 1. 基础类型
@@ -326,14 +327,9 @@ export interface RelicItemConfig {
   texture?: string;
   /** ★ 多帧图标：根据拥有数量挑选 FTX 帧（count=拥有数；省略恒为第 0 帧） */
   iconFrame?: (count: number) => number;
-  effect?: {
-    /** 每次死亡全属性 ×perDeathMultiplier（乘方累积：×（1.05 ^ 死亡次数×拥有数）） */
-    perDeathMultiplier?: number;
-    /** 每天全属性 ×perDayMultiplier（乘方累积：×（1.01 ^ 天数×拥有数）） */
-    perDayMultiplier?: number;
-    /** ★ 开局授予局内道具（每次出击补足；已有则不重复给） */
-    startItems?: { itemId: string; count: number }[];
-  };
+  /** ★ 效果列表（每条独立管线；type → RelicEffects 注册表处理器）。
+   *  一个遗物可挂多条效果（如"每日属性 + 开局道具"），核心代码零改动。 */
+  effects?: RelicEffectConfig[];
 }
 
 export function computeCombatStats(
@@ -342,29 +338,28 @@ export function computeCombatStats(
 ): PlayerCombatStats {
   const base = session.player;
   const day = session.meta.day;
-
-  let bonusAttack = 0, bonusDefense = 0, bonusMaxHp = 0;
-  let multiplier = 1;
-
-  // ---- ★ 遗物：每天/每次死亡 全属性乘方累积 ----
-  const ownedOut = session.outOfRun?.owned ?? {};
   const deaths = session.meta?.deaths ?? 0;
-  for (const [id, count] of Object.entries(ownedOut)) {
-    const cfg = relicItemConfig?.[id];
-    if (!cfg || (count ?? 0) <= 0) continue;
-    if (cfg.effect?.perDayMultiplier) {
-      multiplier *= Math.pow(cfg.effect.perDayMultiplier, day * count);
+
+  // ★ 属性累加器：各遗物效果管线独立写入，最后统一结算
+  const acc: RelicStatAccumulator = {
+    mulHp: 1, mulAtk: 1, mulDef: 1,
+    bonusHp: 0, bonusAtk: 0, bonusDef: 0,
+  };
+
+  eachOwnedRelic(session, relicItemConfig ?? ({} as Record<string, RelicItemConfig>), (cfg, count) => {
+    for (const eff of cfg.effects ?? []) {
+      relicEffectRegistry.get(eff.type)?.modifyStats?.(
+        { session, day, deaths, count, acc },
+        eff,
+      );
     }
-    if (cfg.effect?.perDeathMultiplier) {
-      multiplier *= Math.pow(cfg.effect.perDeathMultiplier, deaths * count);
-    }
-  }
+  });
 
   return {
     hp: base.hp,
-    maxHp: Math.floor(base.maxHp * multiplier) + bonusMaxHp,
-    attackPower: Math.floor(base.attackPower * multiplier) + bonusAttack,
-    defense: Math.floor(base.defense * multiplier) + bonusDefense,
+    maxHp: Math.floor(base.maxHp * acc.mulHp) + acc.bonusHp,
+    attackPower: Math.floor(base.attackPower * acc.mulAtk) + acc.bonusAtk,
+    defense: Math.floor(base.defense * acc.mulDef) + acc.bonusDef,
   };
 }
 

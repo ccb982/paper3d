@@ -44,6 +44,7 @@ import { BulletManager, type BulletHitPayload } from '../services/combat/BulletM
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { eventBus } from '../core/EventBus';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
+import { relicGrantsFor, dispatchRelicEvent } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
@@ -327,16 +328,11 @@ export class WorldMode implements IGameMode {
       session: ctx.session,
       itemManager: this.itemManager,
     });
-    // ★ 开局遗物授予（遗物 effect.startItems）：如「祖宗发射器」→ 开局背包自动获得祖宗
-    //   ★ 可累积：每次出击都 +count（叠加上限由 items.json maxStack 决定）；没格子则跳过
-    const ownedRelics = ctx.session.outOfRun?.owned ?? {};
-    for (const [rid, rcount] of Object.entries(ownedRelics)) {
-      const rcfg = RELIC_ITEM_CONFIG[rid];
-      if (!rcfg || (rcount ?? 0) <= 0) continue;
-      for (const grant of rcfg.effect?.startItems ?? []) {
-        if (this.itemManager.hasSpace('player', grant.itemId, grant.count)) {
-          this.itemManager.addItem('player', grant.itemId, grant.count);
-        }
+    // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 行囊落账
+    //   数量语义由各效果处理器决定（如 start_items：每件遗物 count × 拥有件数）
+    for (const g of relicGrantsFor(ctx.session, RELIC_ITEM_CONFIG, 'onRunStart')) {
+      if (this.itemManager.hasSpace('player', g.itemId, g.count)) {
+        this.itemManager.addItem('player', g.itemId, g.count);
       }
     }
 
@@ -489,6 +485,13 @@ export class WorldMode implements IGameMode {
     this.damageUnsub = eventBus.on('damage', (payload) => {
       const target = payload.target;
       const pos = target.position;
+      // ★ 遗物伤害时机管线：玩家受伤 / 造成伤害（与显示 LOD 无关，先派发再显示）
+      if (this.session) {
+        const isPlayer = target.entity.kind === 'player';
+        dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, isPlayer ? 'onDamageTaken' : 'onDamageDealt', {
+          damage: payload.damage, crit: payload.crit, blocked: payload.blocked, dodged: payload.dodged,
+        });
+      }
       // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
       const camP = this.camera!.position;
       const dx = pos.x - camP.x, dz = pos.z - camP.z;
@@ -515,6 +518,8 @@ export class WorldMode implements IGameMode {
         const s = this.session;
         if (!s) return;
         s.meta.deaths = (s.meta.deaths ?? 0) + 1;
+        // ★ 遗物死亡时机管线
+        dispatchRelicEvent(s, RELIC_ITEM_CONFIG, 'onPlayerDeath', {});
         return; // 玩家不算杂兵、不掉落
       }
       const di = this.drones.indexOf(payload.target as DroneEntity);
@@ -529,6 +534,8 @@ export class WorldMode implements IGameMode {
       this.rollEnemyDrops(enemy);
       const idx = this.enemies.indexOf(enemy);
       if (idx !== -1) this.enemies.splice(idx, 1);
+      // ★ 遗物击杀时机管线
+      if (this.session) dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
     });
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
