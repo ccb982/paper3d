@@ -189,6 +189,13 @@ export class PhysicsWorld {
     body.setTranslation({ x, y, z }, true);
   }
 
+  /** ★ 停用/恢复刚体（远处 chunk 封存：停用 = 不参与模拟，保留对象/句柄 → 回程瞬间恢复） */
+  setBodyEnabled(id: number, enabled: boolean): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.setEnabled(enabled);
+  }
+
   /** ★ 移除刚体（实体销毁联动：不移除 = 物理世界泄漏膨胀） */
   removeBody(id: number): void {
     const body = this.getBody(id);

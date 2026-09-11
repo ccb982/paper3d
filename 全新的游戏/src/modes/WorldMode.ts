@@ -259,6 +259,8 @@ export class WorldMode implements IGameMode {
         const rb = this.entities.get(id)?.rigidBody;
         if (rb) this.physics?.setTileCollider(rb.handle, slot, vertices, indices);
       },
+      // ★ 远处 chunk 封存：停用/恢复刚体（保留对象，回程零重建）
+      setBodyEnabled: (id, enabled) => this.physics?.setBodyEnabled(id, enabled),
       // ★ 装饰物碰撞体：fixed cuboid（挡住玩家/子弹；y 为体积中心）
       //   ★ 同步登记 JS 空间索引（角色静态推挤不再走 rapier 查询）
       createPropBody: (x, y, z, r, h) => {

@@ -871,6 +871,8 @@ export interface ChunkGroundHost {
   createGroundCells?(cx: number, cz: number, cells: GroundCellGeom[]): number | null;
   /** ★ 挖坑增量：只原位换受影响分区的 collider（O(受影响分区)，不重建整 chunk） */
   updateGroundCell?(id: number, slot: number, vertices: Float32Array, indices: Uint32Array): void;
+  /** ★ 停用/恢复刚体（远处 chunk 封存：停用 = 不参与模拟、保留句柄；回程瞬间恢复） */
+  setBodyEnabled?(id: number, enabled: boolean): void;
 }
 
 /** ★ 地面分区 trimesh（slot = pcz*grid+pcx；每分区含若干 4m 块） */

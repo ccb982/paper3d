@@ -232,6 +232,14 @@ export class ChunkManager {
   /** 预烘积压上限：待装配队列达到此长度暂停预烘（保住提前量的同时防内存/worker 过载）
    *  ★ 2026-09-11：12 → 6（配合 700ms 节拍，减少"算好堆着"的数量） */
   private static readonly PREFETCH_BACKLOG_MAX = 6;
+  /** ★ 远处 chunk 封存半径（切比雪夫，chunk 数）：> 此距离停止渲染 + 物理停用，
+   *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封 */
+  private static readonly PARK_RADIUS = 6;
+  /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
+   *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 6 → 销毁 10 */
+  private static readonly DESTROY_RADIUS = 10;
+  /** 已封存 chunk key（网格已从场景摘除、刚体已停用） */
+  private parkedKeys = new Set<number>();
 
   // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
@@ -387,6 +395,11 @@ export class ChunkManager {
         if (idx === -1) break;
       }
       const a = this.assembleQueue.splice(idx, 1)[0];
+      // ★ 卸载范围外作废：unload 后晚到的 Worker 结果/队列项不再装配（防复活）
+      if (Math.max(Math.abs(a.cx - this.hotPcx), Math.abs(a.cz - this.hotPcz)) > ChunkManager.PARK_RADIUS) {
+        this.geoInflight.delete(a.key);
+        continue;
+      }
       this.geoInflight.delete(a.key);
       const _ta = performance.now();
       if (a.decor === null || a.deferDecor) {
@@ -606,9 +619,29 @@ export class ChunkManager {
       }
     }
 
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    // ★ 远处 chunk 封存/解封/销毁（2026-09-11）：
+    //   > PARK_RADIUS：摘除视觉 + 刚体停用（保留对象，回程瞬间恢复）；
+    //   > DESTROY_RADIUS：才真正销毁释放；回程由 syncChunks + 预烘缓存重建。
+    const parkR = ChunkManager.PARK_RADIUS;
+    const destroyR = ChunkManager.DESTROY_RADIUS;
+    const allKeys = new Set<number>([...this.meshes.keys(), ...this.voidKeys]);
+    for (const key of allKeys) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      const d = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
+      if (d > destroyR) {
+        this.destroyChunk(key);
+      } else if (d > parkR) {
+        if (!this.parkedKeys.has(key)) this.parkChunk(key);
+      } else if (this.parkedKeys.has(key)) {
+        this.unparkChunk(key);
+      }
+    }
+
     if (this.boss4D) return; // boss4D 同步构建，不存在异步空洞
-    if (this.testChunk) {
-      // ★ 测试地图：只自愈 chunk(0,0)。注意邻居的"数据"是烘焙快照的
+    if (this.testChunk) {      // ★ 测试地图：只自愈 chunk(0,0)。注意邻居的"数据"是烘焙快照的
       //   ensureData 邻域采样（不可见、无物理），不等于加载——若不加此守卫，
       //   sweep 会见"有数据无网格"而把 8 个邻居全部重建出来。
       const key = chunkKeyOf(0, 0);
@@ -618,8 +651,6 @@ export class ChunkManager {
       }
       return;
     }
-    const pcx = Math.floor(px / CHUNK_SIZE);
-    const pcz = Math.floor(pz / CHUNK_SIZE);
     for (let dz = -2; dz <= 2; dz++) {
       for (let dx = -2; dx <= 2; dx++) {
         const cx = pcx + dx, cz = pcz + dz;
@@ -631,6 +662,86 @@ export class ChunkManager {
         if (!this.raster.getChunkData(cx, cz)) continue; // 数据未生成=本来就没排
         this.requestStandardBake(cx, cz);
       }
+    }
+  }
+
+  /** ★ 卸载远处 chunk：视觉/地面物理/装饰碰撞实体/全部运行时索引一起销毁；
+   *  chunk 数据与烘焙缓存保留 → 回程 syncChunks 命中缓存快速重建。
+   *  ★ 在途请求同步作废，防晚到的 Worker 结果把已卸载 chunk"复活"。 */
+  /** ★ 封存 chunk（>PARK_RADIUS）：视觉从场景摘除 + 刚体停用（保留对象/句柄/索引），
+   *  回程 unparkChunk 瞬间恢复；不释放任何资源 */
+  private parkChunk(key: number): void {
+    const v = this.meshes.get(key);
+    if (v) this.scene.remove(v);
+    this.parkedKeys.add(key);
+    this.host.setBodyEnabled?.(this.bodies.get(key) ?? -1, false);
+    const props = this.propBodies.get(key);
+    if (props) for (const id of props) this.host.setBodyEnabled?.(id, false);
+    const apron = this.apronBodies.get(key);
+    if (apron !== undefined) this.host.setBodyEnabled?.(apron, false);
+    const plinth = this.plinthBodies.get(key);
+    if (plinth !== undefined) this.host.setBodyEnabled?.(plinth, false);
+  }
+
+  /** ★ 解封 chunk（≤PARK_RADIUS）：视觉挂回场景 + 刚体启用（零重建、瞬时） */
+  private unparkChunk(key: number): void {
+    this.parkedKeys.delete(key);
+    const v = this.meshes.get(key);
+    if (v && !v.parent) this.scene.add(v);
+    const body = this.bodies.get(key);
+    if (body !== undefined) this.host.setBodyEnabled?.(body, true);
+    const props = this.propBodies.get(key);
+    if (props) for (const id of props) this.host.setBodyEnabled?.(id, true);
+    const apron = this.apronBodies.get(key);
+    if (apron !== undefined) this.host.setBodyEnabled?.(apron, true);
+    const plinth = this.plinthBodies.get(key);
+    if (plinth !== undefined) this.host.setBodyEnabled?.(plinth, true);
+  }
+
+  /** ★ 销毁 chunk（>DESTROY_RADIUS）：释放全部视觉/物理/索引（封存上限，防内存累积）；
+   *  数据与烘焙缓存保留 → 回程 syncChunks 命中缓存重建。 */
+  private destroyChunk(key: number): void {
+    this.parkedKeys.delete(key);
+    const v = this.meshes.get(key);
+    if (v) {
+      this.scene.remove(v);
+      this.disposeVisual(v);
+      this.meshes.delete(key);
+    }
+    this.voidKeys.delete(key);
+    this.terrainVisuals.delete(key);
+    const body = this.bodies.get(key);
+    if (body !== undefined) {
+      this.host.destroyGround(body);
+      this.bodies.delete(key);
+    }
+    const props = this.propBodies.get(key);
+    if (props) {
+      for (const id of props) this.host.destroyGround(id);
+      this.propBodies.delete(key);
+    }
+    this.propRegistry.delete(key);
+    const apron = this.apronBodies.get(key);
+    if (apron !== undefined) {
+      this.host.destroyGround(apron);
+      this.apronBodies.delete(key);
+    }
+    const plinth = this.plinthBodies.get(key);
+    if (plinth !== undefined) {
+      this.host.destroyGround(plinth);
+      this.plinthBodies.delete(key);
+    }
+    // 运行时索引/缓存清理（装饰计划确定性重算，回程自动重建）
+    this.decorCache.delete(key);
+    this.propLayers.delete(key);
+    this.decorDirty.delete(key);
+    this.activated.delete(key);
+    this.pendingDecorJobs.delete(key);
+    // 在途请求作废
+    this.queuedKeys.delete(key);
+    this.geoInflight.delete(key);
+    for (let i = this.assembleQueue.length - 1; i >= 0; i--) {
+      if (this.assembleQueue[i].key === key) this.assembleQueue.splice(i, 1);
     }
   }
 
@@ -1572,7 +1683,8 @@ const key2 = chunkKeyOf(cx, cz);
    */
   playBulletImpact(r: ImpactReport): void {
     if (this.boss4D) return; // 四维空间不扣地形
-    const R = 0.6; // §14.10 T2 轻量档（破坏小）
+    // ★ 打坑半径：0.6 → 0.49（面积 ×2/3，即"打坑面积缩小 1/3"；0.6×√(2/3)≈0.49）
+    const R = 0.49; // §14.10 T2 轻量档（破坏小）
     const byChunk = new Map<number, {
       cx: number; cz: number;
       cells: { lx: number; lz: number }[];
