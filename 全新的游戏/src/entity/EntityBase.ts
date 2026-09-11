@@ -30,6 +30,7 @@ import type { FxRendererBase } from '../services/render/FxRendererBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import { entityPerf } from './EntityPerf';
+import { effectSystem, type ActiveEffect, type EffectStatKey } from '../services/combat/EffectSystem';
 
 /** 物理同步模式：kinematic=位置代码驱动（角色/敌人：setNextKinematicTranslation，
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
@@ -275,6 +276,12 @@ export abstract class EntityBase {
   attackPower = 0;
   /** 防御（减法减伤） */
   defense = 0;
+  /** ★ 攻击速度点数（方舟口径：100 为基准；实际间隔 = 基础间隔 × 100 / (100 + attackSpeed)） */
+  attackSpeed = 0;
+  /** ★ 庇护：受到的伤害降低比例 0-1（modifierDamageReduction 在防御后乘算） */
+  damageReduction = 0;
+  /** ★ 生命回复速度（每秒回血；模式层每帧结算，卸载装备即失效） */
+  hpRegen = 0;
   /** 暴击率 0-1（modifierCrit） */
   critRate = 0;
   /** 暴击倍率 */
@@ -287,6 +294,11 @@ export abstract class EntityBase {
   blockMult = 0.5;
   /** 护盾值（modifierShield：先扣护盾再扣血） */
   shield = 0;
+
+  /** ★ 活跃效果列表（EffectSystem 统一队列管理；null = 无效果，更新零开销） */
+  effects: ActiveEffect[] | null = null;
+  /** ★ 效果基础属性（聚合公式的底；首次挂效果/模式层注入时捕获） */
+  statBase: Partial<Record<EffectStatKey, number>> | null = null;
 
   /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
   onTakeDamage(dmg: number, source: EntityBase | null): void {
@@ -359,6 +371,8 @@ export abstract class EntityBase {
   /** 每帧驱动（模式层/EntityManager 调用） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
     const _p0 = performance.now();
+    // ⓪ ★ 效果队列推进（时长→过期→属性重算→生命回复；无效果实体零开销）
+    if (this.effects) effectSystem.tickEntity(this, dt);
     this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
     const _p1 = performance.now();
     this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
@@ -474,6 +488,8 @@ export abstract class EntityBase {
 
   /** 销毁（动画/渲染/管线资源全释放） */
   dispose(): void {
+    this.effects = null;
+    this.statBase = null;
     this.anim?.dispose();
     this.renderer?.dispose();
     this.gsShadow?.dispose();

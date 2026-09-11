@@ -10,6 +10,7 @@ import type { GameSession } from './Session';
 import { SLOT_COUNT } from './Session';
 import type { EntityBase } from '../entity/EntityBase';
 import { eventBus } from './EventBus';
+import { effectSystem } from '../services/combat/EffectSystem';
 
 /** 物品效果执行上下文 */
 export interface ItemEffectContext {
@@ -52,8 +53,35 @@ effectRegistry.set('heal', (params, ctx) => {
 });
 
 effectRegistry.set('buff_attack', (params, ctx) => {
-  // 此处预留 Buff 系统接口
-  return { success: true, message: `攻击力提升 ${params.value}` };
+  // ★ 限时攻击增益：走统一效果队列（时长/延长叠层；需在世界内对实体生效）
+  if (!ctx.user) return { success: false, message: '需在作战中使用' };
+  const value = params.value ?? 5;
+  const duration = params.duration ?? 30;
+  effectSystem.addEffect(ctx.user, {
+    id: params.id ?? 'buff_attack',
+    source: 'consumable',
+    duration,
+    stackMode: 'extend',
+    flat: { attackPower: value },
+  });
+  return { success: true, message: `攻击力提升 ${value}（${duration} 秒）` };
+});
+
+effectRegistry.set('buff', (params, ctx) => {
+  // ★ 通用限时增益（items.json 配置驱动）：stats/pct 键 = EntityBase 战斗属性名
+  if (!ctx.user) return { success: false, message: '需在作战中使用' };
+  const duration = params.duration ?? 30;
+  effectSystem.addEffect(ctx.user, {
+    id: params.id ?? 'buff',
+    source: 'consumable',
+    duration,
+    stacks: params.stacks ?? 1,
+    maxStacks: params.maxStacks ?? 1,
+    stackMode: params.stackMode ?? 'refresh',
+    flat: params.stats,
+    pct: params.pct,
+  });
+  return { success: true, message: params.message ?? '获得增益' };
 });
 
 effectRegistry.set('ammo', (params, ctx) => {

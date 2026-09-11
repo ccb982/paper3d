@@ -195,9 +195,15 @@
       "id": "shu_jie_xx",
       "name": "黍姐的XX",
       "type": "equip",
-      "description": "黍姐的神秘防具。穿戴后在角色前方等比缩小展示其纹理",
+      "description": "黍姐的神秘防具（离离枯荣×百谷长青）：攻击力+50%、攻击速度+25、防御+5、15%庇护（受到伤害降低）、每秒回复2.5生命",
       "maxStack": 1,
-      "stats": { "defense": 3 },
+      "stats": {
+        "attackPct": 0.5,
+        "attackSpeed": 25,
+        "defense": 5,
+        "damageReduction": 0.15,
+        "hpRegen": 2.5
+      },
       "combat": {
         "kind": "equip",
         "slot": "armor",

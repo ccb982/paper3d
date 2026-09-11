@@ -54,17 +54,15 @@ const modifierBlock: DamageModifier = (ctx) => {
   }
 };
 
-/** 护盾：先扣护盾值（护盾吸收伤害，超出部分穿透） */
-const modifierShield: DamageModifier = (ctx) => {
-  if (ctx.target.shield <= 0) return;
-  const absorbed = Math.min(ctx.target.shield, ctx.damage);
-  ctx.target.shield -= absorbed;
-  ctx.damage -= absorbed;
-};
-
 /** 防御：减法（base + attackPower - defense，下限 1） */
 const modifierDefense: DamageModifier = (ctx) => {
   ctx.damage = ctx.damage + ctx.source.attackPower - ctx.target.defense;
+};
+
+/** 庇护/伤害减免：防御后乘算（方舟"庇护"口径；上限 90%） */
+const modifierDamageReduction: DamageModifier = (ctx) => {
+  const dr = Math.max(0, Math.min(0.9, ctx.target.damageReduction));
+  if (dr > 0) ctx.damage *= 1 - dr;
 };
 
 /** 暴击：roll < critRate → × critMult（放在防御后，暴击作用于净伤害） */
@@ -73,6 +71,14 @@ const modifierCrit: DamageModifier = (ctx) => {
     ctx.crit = true;
     ctx.damage *= ctx.source.critMult;
   }
+};
+
+/** 护盾：吸收最终伤害（放在防御/减伤/暴击之后，避免净伤害为 0 时白扣护盾） */
+const modifierShield: DamageModifier = (ctx) => {
+  if (ctx.target.shield <= 0) return;
+  const absorbed = Math.min(ctx.target.shield, ctx.damage);
+  ctx.target.shield -= absorbed;
+  ctx.damage -= absorbed;
 };
 
 /** 下限/取整 */
@@ -84,9 +90,10 @@ const modifierClamp: DamageModifier = (ctx) => {
 const PIPELINE: DamageModifier[] = [
   modifierDodge,
   modifierBlock,
-  modifierShield,
   modifierDefense,
+  modifierDamageReduction,
   modifierCrit,
+  modifierShield,
   modifierClamp,
 ];
 

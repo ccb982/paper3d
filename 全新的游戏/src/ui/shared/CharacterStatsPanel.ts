@@ -26,6 +26,15 @@ export interface StatTriple {
   defense: number;
 }
 
+/** ★ 扩展属性行（攻速/庇护/生命回复等；perm 为永久基线，temp 为装备临时加成） */
+export interface StatExtra {
+  label: string;
+  perm: number;
+  temp: number;
+  /** 数值后缀（如 '%'、'/s'） */
+  suffix?: string;
+}
+
 export interface CharacterStatsSnapshot {
   /** 基础（session.player 原始） */
   base: StatTriple;
@@ -35,6 +44,8 @@ export interface CharacterStatsSnapshot {
   temp: StatTriple;
   /** 当前实际（perm + temp） */
   current: StatTriple;
+  /** 扩展属性（攻速点数/庇护%/生命回复/s） */
+  extras: StatExtra[];
   day: number;
   deaths: number;
   relics: RelicEntry[];
@@ -93,6 +104,9 @@ export class CharacterStatsPanel {
     root.appendChild(this.statRowComp('生命上限', snapshot.perm.maxHp, snapshot.current.maxHp).el);
     root.appendChild(this.statRowComp('攻击力', snapshot.perm.attackPower, snapshot.current.attackPower).el);
     root.appendChild(this.statRowComp('防御', snapshot.perm.defense, snapshot.current.defense).el);
+    for (const ex of snapshot.extras ?? []) {
+      root.appendChild(this.statRowComp(ex.label, ex.perm, ex.perm + ex.temp, ex.suffix).el);
+    }
     // 图例：青色 = 局内装备临时（会随穿脱消失）
     const legend = document.createElement('div');
     legend.style.cssText = `color:${TEXT_DIM};font-size:10px;`;
@@ -146,21 +160,21 @@ export class CharacterStatsPanel {
     return { el, value };
   }
 
-  /** 直接显示叠加遗物后的永久值；局内装备临时追加青色 `+N = 当前` */
-  private statRowComp(label: string, perm: number, current: number): { el: HTMLDivElement } {
+  /** 直接显示叠加遗物后的永久值；局内装备临时追加青色 `+N = 当前`（可带后缀如 % / /s） */
+  private statRowComp(label: string, perm: number, current: number, suffix = ''): { el: HTMLDivElement } {
     const row = this.statRow(label);
     const p = document.createElement('span');
-    p.textContent = String(perm);
+    p.textContent = `${perm}${suffix}`;
     p.style.cssText = 'color:#f2e3d0;font-weight:bold;';
     row.value.appendChild(p);
     const temp = current - perm;
     if (temp > 0) {
       const t = document.createElement('span');
-      t.textContent = ` +${temp}`;
+      t.textContent = ` +${+temp.toFixed(2)}${suffix}`;
       t.style.cssText = `color:${TEMP};font-weight:bold;`;
       row.value.appendChild(t);
       const c = document.createElement('span');
-      c.textContent = ` = ${current}`;
+      c.textContent = ` = ${+current.toFixed(2)}${suffix}`;
       c.style.cssText = 'color:#e8f6ff;font-weight:bold;';
       row.value.appendChild(c);
     }

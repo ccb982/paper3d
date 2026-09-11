@@ -381,15 +381,22 @@ export class WorldUIManager extends BaseInteractionUI {
           description: cfg?.description ?? '',
         };
       });
+    const curAtk = Math.floor(perm.attackPower * (1 + temp.attackPct)) + temp.attackPower;
+    const curDef = Math.floor(perm.defense * (1 + temp.defensePct)) + temp.defense;
     return {
       base: { maxHp: base.maxHp, attackPower: base.attackPower, defense: base.defense },
       perm: { maxHp: perm.maxHp, attackPower: perm.attackPower, defense: perm.defense },
-      temp: { maxHp: temp.maxHp, attackPower: temp.attackPower, defense: temp.defense },
+      temp: { maxHp: temp.maxHp, attackPower: curAtk - perm.attackPower, defense: curDef - perm.defense },
       current: {
         maxHp: perm.maxHp + temp.maxHp,
-        attackPower: perm.attackPower + temp.attackPower,
-        defense: perm.defense + temp.defense,
+        attackPower: curAtk,
+        defense: curDef,
       },
+      extras: [
+        { label: '攻击速度', perm: 100, temp: temp.attackSpeed },
+        { label: '伤害减免', perm: 0, temp: Math.round(temp.damageReduction * 100), suffix: '%' },
+        { label: '生命回复', perm: 0, temp: temp.hpRegen, suffix: '/s' },
+      ],
       day: this.session.meta.day,
       deaths: this.session.meta.deaths ?? 0,
       relics,

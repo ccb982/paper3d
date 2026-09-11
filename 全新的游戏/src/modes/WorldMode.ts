@@ -46,6 +46,7 @@ import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { applyDamage } from '../services/combat/DamagePipeline';
+import { effectSystem } from '../services/combat/EffectSystem';
 import { eventBus } from '../core/EventBus';
 import type { PlayerCombatStats } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
@@ -69,6 +70,8 @@ const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
  *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
 const PLAYER_BULLET_MIN_DAMAGE = 10;
 const PLAYER_BULLET_ATK_RATIO = 1.0;
+/** ★ 主角基础攻击间隔（秒）：实际间隔 = 本值 × 100 / (100 + 攻击速度点数)（方舟攻速口径） */
+const PLAYER_ATTACK_INTERVAL = 0.9;
 /** ★ 主角子弹飞行参数：速度（m/s）/ 寿命（s）→ 射程 = 速度 × 寿命 */
 const PLAYER_BULLET_SPEED = 50;
 const PLAYER_BULLET_LIFETIME = 3.0;
@@ -369,6 +372,8 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
     this.itemManager = new ItemManager(ctx.session);
+    // ★ 注入效果执行用户：消耗品 buff 作用于玩家实体的效果队列
+    this.itemManager.setEffectUser(this.player);
     this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
     this.interactionManager = new InteractionManager({
       session: ctx.session,
@@ -377,7 +382,8 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 应用战斗属性（永久 = 基础 + 遗物；装备临时加成由 applyEquipmentStats 叠加） ----
     this.permStats = ctx.combatStats;
-    this.player.hp = ctx.combatStats.hp;
+    // ★ 存档血量兜底：旧档可能存了死亡后的 0 血（修复前遗留）→ 满血出击
+    this.player.hp = ctx.combatStats.hp > 0 ? ctx.combatStats.hp : ctx.combatStats.maxHp;
     this.applyEquipmentStats();
 
     // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 优先背包（行囊），满则货舱/基地仓
@@ -797,12 +803,14 @@ export class WorldMode implements IGameMode {
     this.player.visible = !this.cameraCtrl.isFirstPerson;
 
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
-    //    ★ 攻击间隔 0.45s → 0.9s（2026-09-10 用户定调：放大两倍）
+    //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
     this.bulletCooldown -= dt;
     if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
-      this.bulletCooldown = 0.9;
+      this.bulletCooldown = PLAYER_ATTACK_INTERVAL * 100 / (100 + this.player.attackSpeed);
       this.firePlayerBullet();
     }
+
+    // （生命回复已入 EffectSystem 队列：EntityBase.update 每帧统一结算）
 
     // ---- 子弹效果/死亡动画 ----
     this.bullets.update(dt, this.camera);
@@ -890,10 +898,9 @@ export class WorldMode implements IGameMode {
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
 
-    // ---- 回写玩家血量到 Session ----
+    // ---- 回写玩家血量到 Session（★ 上限不写装备临时值：避免下次出击把装备 maxHp 当基础值重复吃遗物乘算） ----
     if (this.session && this.player) {
-      this.session.player.hp = this.player.hp;
-      this.session.player.maxHp = this.player.maxHp;
+      this.session.player.hp = Math.min(this.player.hp, this.session.player.maxHp);
     }
 
     // ---- 地图流式管理器（chunk 刚体移出物理世界 + 视觉销毁 + 烘焙缓存释放） ----
@@ -1626,16 +1633,36 @@ export class WorldMode implements IGameMode {
     return { x: mx, y: my, z: mz };
   }
 
-  /** ★ 应用装备临时属性：maxHp/攻击/防御 = 永久（基础+遗物） + 出击槽装备 stats（卸载即还原） */
+  /** ★ 同步装备到效果队列：永久（基础+遗物）设为实体基础值，装备作为 'equipment' 源原子替换。
+   *   换装/卸载/消耗品 buff 全部由 EffectSystem 统一聚合（不再直接写字段）。 */
   private applyEquipmentStats(): void {
     const perm = this.permStats;
     if (!perm || !this.player || !this.itemManager) return;
+    effectSystem.setBaseStats(this.player, {
+      maxHp: perm.maxHp,
+      attackPower: perm.attackPower,
+      defense: perm.defense,
+      attackSpeed: 0,
+      damageReduction: 0,
+      hpRegen: 0,
+    });
     const eq = this.itemManager.getEquipmentStats();
-    const maxHp = perm.maxHp + eq.maxHp;
-    this.player.maxHp = maxHp;
-    if (this.player.hp > maxHp) this.player.hp = maxHp;
-    this.player.attackPower = perm.attackPower + eq.attackPower;
-    this.player.defense = perm.defense + eq.defense;
+    effectSystem.setSourceEffects(this.player, 'equipment', [{
+      id: 'equipment',
+      duration: Infinity,
+      flat: {
+        maxHp: eq.maxHp,
+        attackPower: eq.attackPower,
+        defense: eq.defense,
+        attackSpeed: eq.attackSpeed,
+        damageReduction: eq.damageReduction,
+        hpRegen: eq.hpRegen,
+      },
+      pct: {
+        attackPower: eq.attackPct,
+        defense: eq.defensePct,
+      },
+    }]);
   }
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */

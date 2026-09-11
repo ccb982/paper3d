@@ -36,6 +36,22 @@ export interface ItemWorldConfig {
   pickupRadius?: number;
 }
 
+/** ★ 局内装备临时属性（穿戴生效、卸载即消失；与遗物永久加成区分）
+ *   - maxHp/attackPower/defense/hpRegen：加算
+ *   - attackPct/defensePct：对（基础+遗物）终值乘算（0.5 = +50%）
+ *   - attackSpeed：方舟攻速点数（100 基准；实际间隔 = 基础间隔 × 100 /(100+X)）
+ *   - damageReduction：庇护（受到的伤害降低比例 0-1；同名效果取最高） */
+export interface EquipmentStats {
+  maxHp?: number;
+  attackPower?: number;
+  attackPct?: number;
+  defense?: number;
+  defensePct?: number;
+  attackSpeed?: number;
+  damageReduction?: number;
+  hpRegen?: number;
+}
+
 export class ItemArchetype {
   readonly id: string;
   readonly name: string;
@@ -52,7 +68,7 @@ export class ItemArchetype {
   /** ★ 装备位（effects 里 type==='equip' 的 slot；非装备类为 null。装备栏拖入判定用） */
   readonly equipSlot: string | null;
   /** ★ 局内装备临时属性（穿戴在出击槽即生效，卸载即消失；与遗物永久加成区分） */
-  readonly stats: { maxHp?: number; attackPower?: number; defense?: number } | null;
+  readonly stats: EquipmentStats | null;
   private readonly _effects: ItemEffectDef[];
 
   constructor(data: any) {

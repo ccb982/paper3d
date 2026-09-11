@@ -10,9 +10,10 @@
 
 import type { GameSession, InventoryGrid } from '../../core/Session';
 import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, swapGridCells, findItemInGrid, findEmptySlot, SLOT_COUNT, SLOT_ROWS, SLOT_COLS } from '../../core/Session';
-import { ItemArchetype } from '../../core/ItemArchetype';
+import { ItemArchetype, type EquipmentStats } from '../../core/ItemArchetype';
 import { type ItemEffectContext } from '../../core/ItemEffect';
 import { eventBus } from '../../core/EventBus';
+import type { EntityBase } from '../../entity/EntityBase';
 import itemsConfig from '../../config/items.json';
 
 export interface UseItemResult {
@@ -24,9 +25,16 @@ export interface UseItemResult {
 
 export class ItemManager {
   private archetypes = new Map<string, ItemArchetype>();
+  /** ★ 效果执行用户（世界模式注入玩家实体；buff 类消耗品作用于实体效果队列） */
+  private effectUser: EntityBase | null = null;
 
   constructor(private session: GameSession) {
     this.loadArchetypes();
+  }
+
+  /** ★ 注入效果执行用户（WorldMode.enter 调；ShipMode 无实体 → 消耗品 buff 不可用） */
+  setEffectUser(user: EntityBase | null): void {
+    this.effectUser = user;
   }
 
   private loadArchetypes(): void {
@@ -95,7 +103,7 @@ export class ItemManager {
 
     const ctx: ItemEffectContext = {
       session: this.session,
-      user: null,
+      user: this.effectUser,
       targetLayer: layer,
       row,
       col,
@@ -300,9 +308,15 @@ export class ItemManager {
     return { success: false, message: '背包中没有该物品' };
   }
 
-  /** ★ 局内装备临时属性：遍历出击槽累加各装备 stats（卸载/换装即自动消失，与遗物永久加成区分） */
-  getEquipmentStats(): { maxHp: number; attackPower: number; defense: number } {
-    const out = { maxHp: 0, attackPower: 0, defense: 0 };
+  /** ★ 局内装备临时属性：遍历出击槽汇总各装备 stats（卸载/换装即自动消失，与遗物永久加成区分）
+   *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen
+   *   取最高：damageReduction（方舟"庇护"同名效果取最高，不叠加） */
+  getEquipmentStats(): Required<EquipmentStats> {
+    const out: Required<EquipmentStats> = {
+      maxHp: 0, attackPower: 0, attackPct: 0,
+      defense: 0, defensePct: 0,
+      attackSpeed: 0, damageReduction: 0, hpRegen: 0,
+    };
     const slots = this.session.player.slots;
     if (!Array.isArray(slots)) return out;
     for (const id of slots) {
@@ -311,7 +325,12 @@ export class ItemManager {
       if (!s) continue;
       out.maxHp += s.maxHp ?? 0;
       out.attackPower += s.attackPower ?? 0;
+      out.attackPct += s.attackPct ?? 0;
       out.defense += s.defense ?? 0;
+      out.defensePct += s.defensePct ?? 0;
+      out.attackSpeed += s.attackSpeed ?? 0;
+      out.damageReduction = Math.max(out.damageReduction, s.damageReduction ?? 0);
+      out.hpRegen += s.hpRegen ?? 0;
     }
     return out;
   }

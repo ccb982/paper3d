@@ -61,9 +61,11 @@ export class Player extends CharacterBase {
     return name.startsWith('后') ? '后' : '前';
   }
 
-  /** ★ 玩家死亡（暂：不销毁主角——记录 + 扣血表现后续接；结算/重生后续） */
+  /** ★ 玩家死亡（不销毁主角；死亡动画 + 立即复活） */
   override onDeath(_source: EntityBase | null): void {
     // ★ 死亡动画（自动管线：只播动画不销毁实体，传送复活）
     this.playDeathAnim();
+    // ★ 复活回满血：血量停在 0 会让伤害管线早退（无敌）且效果队列不回血 → "0 血幽灵"
+    this.hp = this.maxHp;
   }
 }
