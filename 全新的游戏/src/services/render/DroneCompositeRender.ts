@@ -34,8 +34,8 @@ interface LayerLayout {
 }
 
 /** 翅膀 VAT 层：离屏 RT + 区域实体网格 + 世界采样 quad */
-interface WingVatLayer {
-  quad: RtSamplerQuad;
+/** ★ 共享翅膀烘焙（同素材全局一份）：离屏 RT + VAT 场景/网格 + 尺寸/偏移/连续时钟 */
+interface WingBake {
   rt: THREE.WebGLRenderTarget;
   scene: THREE.Scene;
   camera: THREE.OrthographicCamera;
@@ -44,7 +44,21 @@ interface WingVatLayer {
   chh: number; // 画布像素高（ch * canvasH）
   offX: number;
   offY: number;
+  /** 共享连续时钟（秒）——避免多实例 localTime 交替导致扇动相位跳变 */
+  time: number;
+  lastTimeMs: number;
+  /** 上次烘焙时刻：同帧去重，所有实例每帧只离屏渲染一次 */
+  lastBakeMs: number;
 }
+
+/** 每实例的翅膀采样贴片（指向共享烘焙 RT；位置/翻转各自独立） */
+interface WingVatLayer {
+  quad: RtSamplerQuad;
+  bake: WingBake;
+}
+
+/** ★ 共享翅膀烘焙缓存（key = 素材对象；value = 按帧序的烘焙） */
+const wingBakeCache = new WeakMap<object, WingBake[]>();
 
 /** RT 采样贴片：离屏渲染结果贴到世界 quad（与 SkyDome 月亮同款——
  *  ShaderMaterial 原样输出 sRGB，不触发内置颜色空间转换（避免二次增亮）；
@@ -220,9 +234,18 @@ export class DroneCompositeRender extends FxRendererBase {
       if (i > 0 && hasEntityPath) {
         const data = asset.getFrameRenderData!(i);
         if (data && data.entities.length > 0) {
-          const wing = this.buildWingVat(scene, data, b, cx, cy);
-          if (wing) {
-            this.vatWings.push(wing);
+          // ★ 共享烘焙：同素材全局只建一份 RT/VAT 场景（首见者构建，后续实例只挂采样贴片）
+          const key = source as unknown as object;
+          let list = wingBakeCache.get(key);
+          if (!list) { list = []; wingBakeCache.set(key, list); }
+          let bake: WingBake | undefined = list[i - 1];
+          if (!bake) {
+            const built = this.buildWingBake(data, b, cx, cy);
+            if (built) { bake = built; list[i - 1] = built; }
+          }
+          if (bake) {
+            const quad = new RtSamplerQuad(scene, bake.rt.texture);
+            this.vatWings.push({ quad, bake });
             return;
           }
         }
@@ -270,13 +293,12 @@ export class DroneCompositeRender extends FxRendererBase {
    *      offset=(art.x/canvasW, 1-(art.y+art.h)/canvasH)、scale=(art.w/canvasW, art.h/canvasH)，
    *      vUv=(x,1-y) 归一化 0..1，与直接绘制 FTX 像素级一致。
    *   ④ 相机窗口 = 美术 bbox（外扩 5%，VAT 呼吸不裁边）；RT 尺寸按窗口像素×1.5。 */
-  private buildWingVat(
-    scene: THREE.Scene,
+  private buildWingBake(
     data: NonNullable<ReturnType<Asset['getFrameRenderData']>>,
     art: { x: number; y: number; w: number; h: number },
     cx: number,
     cy: number,
-  ): WingVatLayer | null {
+  ): WingBake | null {
     const ent = data.entities[0].entity;
     if (!ent?.boundary?.length) return null;
 
@@ -368,16 +390,18 @@ export class DroneCompositeRender extends FxRendererBase {
     const wingScene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(minX, maxX, minY, maxY, -1, 1);
 
-    const quad = new RtSamplerQuad(scene, rt.texture);
-    const wing: WingVatLayer = {
-      quad, rt, scene: wingScene, camera,
+    const bake: WingBake = {
+      rt, scene: wingScene, camera,
       data: { ...data, entities: [meshData] },
       cs: (maxX - minX) * this.canvasW,
       chh: (maxY - minY) * this.canvasH,
       offX: cx,
       offY: cy,
+      time: 0,
+      lastTimeMs: 0,
+      lastBakeMs: -1e9,
     };
-    return wing;
+    return bake;
   }
 
   /** 画布世界宽（米）；各图层按 bbox 比例随之缩放 */
@@ -403,7 +427,7 @@ export class DroneCompositeRender extends FxRendererBase {
       this.quads[i].setScale(l.w * kx * this.canvasW, l.h * kx * this.canvasW);
     }
     for (const w of this.vatWings) {
-      w.quad.setScale(w.cs * kx, w.chh * kx);
+      w.quad.setScale(w.bake.cs * kx, w.bake.chh * kx);
     }
   }
 
@@ -421,9 +445,9 @@ export class DroneCompositeRender extends FxRendererBase {
       this.quads[i].setPosition(x + off * kx * this.canvasW, y + l.offY * kx * this.canvasH, z);
     }
     for (const w of this.vatWings) {
-      let off = w.offX * fx;
+      let off = w.bake.offX * fx;
       if (this.flipX && off > 0) off -= FLIP_TUCK;
-      w.quad.setPosition(x + off * kx * this.canvasW, y + w.offY * kx * this.canvasH, z);
+      w.quad.setPosition(x + off * kx * this.canvasW, y + w.bake.offY * kx * this.canvasH, z);
     }
   }
 
@@ -453,10 +477,10 @@ export class DroneCompositeRender extends FxRendererBase {
       this.quads[i].setBillboard(camera);
     }
     for (const w of this.vatWings) {
-      let off = w.offX * fx;
-      if (this.flipX && off > 0) off -= FLIP_TUCK; // ★ 反转内收（同 setPosition）
+      let off = w.bake.offX * fx;
+      if (this.flipX && off > 0) off -= FLIP_TUCK; // 反转内收（同 setPosition）
       const dx = off * kx * this.canvasW;
-      const dy = w.offY * kx * this.canvasH;
+      const dy = w.bake.offY * kx * this.canvasH;
       const ox = this._tmpV.set(dx, 0, 0).applyQuaternion(this._tmpQ);
       w.quad.setPosition(this._basePos.x + ox.x, this._basePos.y + dy, this._basePos.z + ox.z);
       w.quad.setBillboard(camera);
@@ -485,26 +509,35 @@ export class DroneCompositeRender extends FxRendererBase {
     this.renderer = renderer;
   }
 
-  private renderWingVat(w: WingVatLayer, t: number): void {
+  /** ★ 共享翅膀烘焙：所有同素材实例每帧只离屏渲染一次（同帧去重 + 共享连续时钟） */
+  private renderWingBake(b: WingBake): void {
     const renderer = this.renderer!;
+    const now = performance.now();
+    // 同帧去重：第二次调用（别的无人机）直接复用上一帧烘焙结果
+    if (now - b.lastBakeMs < 8) return;
+    const dt = b.lastTimeMs > 0 ? Math.min(0.1, (now - b.lastTimeMs) / 1000) : 0;
+    b.lastTimeMs = now;
+    b.lastBakeMs = now;
+    b.time += dt;
+
     const prevRt = renderer.getRenderTarget();
     const prevAutoClear = renderer.autoClear;
     renderer.getClearColor(this._prevClearColor);
     const prevClearAlpha = renderer.getClearAlpha();
 
     renderer.setClearColor(0x000000, 0);
-    renderer.setRenderTarget(w.rt);
+    renderer.setRenderTarget(b.rt);
     renderer.autoClear = true;
     renderer.clear();
     renderer.autoClear = false;
     renderFrameData(
-      w.data,
-      t,
+      b.data,
+      b.time,
       this.vatFps,
       IDENTITY_TRANSFORM,
       renderer,
-      w.scene,
-      w.camera,
+      b.scene,
+      b.camera,
     );
 
     renderer.setRenderTarget(prevRt);
@@ -517,24 +550,17 @@ export class DroneCompositeRender extends FxRendererBase {
     for (let i = 0; i < this.quads.length; i++) {
       this.quads[i].render({ frameIndex: i }, fluidTexture);
     }
-    // 翅膀 VAT：时间源 = 实体基类动画播放器的连续时钟
+    // 翅膀 VAT：共享烘焙每帧只渲染一次（所有同素材无人机复用）
     if (this.renderer && this.anim) {
-      const t = this.anim.localTime;
-      for (const w of this.vatWings) this.renderWingVat(w, t);
+      for (const w of this.vatWings) this.renderWingBake(w.bake);
     }
   }
 
   override dispose(): void {
     for (const q of this.quads) q.dispose();
+    // ★ 共享翅膀烘焙归资产级缓存持有（WeakMap），这里只释放本实例的采样贴片
     for (const w of this.vatWings) {
-      const em = w.data.entities[0];
-      em.mesh.geometry.dispose();
-      (em.mesh.material as THREE.Material).dispose();
-      em.fillMesh.geometry.dispose();
-      (em.fillMesh.material as THREE.Material).dispose();
-      em.displacementTexture.dispose();
       w.quad.dispose();
-      w.rt.dispose();
     }
     this.quads = [];
     this.layout = [];
