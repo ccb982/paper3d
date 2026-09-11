@@ -26,7 +26,7 @@ import { createNewSession, type GameSession, type PlayerCombatStats } from './co
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
-import { registerAssetIconSource } from './services/item/ItemIconRegistry';
+import { registerAssetIconSource, registerDynamicIcon } from './services/item/ItemIconRegistry';
 import { ItemManager } from './systems/inventory/ItemManager';
 import { relicGrantsFor, dispatchRelicEvent } from './core/RelicEffects';
 import { RELIC_ITEM_CONFIG } from './config/relics';
@@ -164,6 +164,8 @@ async function boot() {
   } catch {
     bulletAsset = await FtxAsset.load(encodeURI('/fx/bullets/维什戴尔子弹.ftx3.gz'));
   }
+  // ★ 常规子弹动态图标：统一走 DynamicIconAnimator（VAT + 流体离屏 + 循环）
+  registerDynamicIcon('bullet_default', bulletAsset);
 
   enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
 

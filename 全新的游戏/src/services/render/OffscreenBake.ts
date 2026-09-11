@@ -70,6 +70,11 @@ export class OffscreenBake {
     return this.rt.texture;
   }
 
+  /** ★ 输出烘焙目标（图标等消费者直接回读同一张 RT；与战斗渲染器同源像素） */
+  getRenderTarget(): THREE.WebGLRenderTarget {
+    return this.rt;
+  }
+
   dispose(): void {
     this.rt.dispose();
   }

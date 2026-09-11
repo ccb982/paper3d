@@ -86,7 +86,7 @@ export class BulletVisual extends OffscreenBake {
   private dbgN = 1;
   private dbgFrame = 0;
 
-  constructor(renderer: THREE.WebGLRenderer, asset: FrameAssetSource) {
+  constructor(renderer: THREE.WebGLRenderer, asset: FrameAssetSource, opts?: { isolatedFluid?: boolean }) {
     const pair = asset.getFramePair(0);
     const w = pair?.base.image.width ?? 134;
     const h = pair?.base.image.height ?? 508;
@@ -96,12 +96,23 @@ export class BulletVisual extends OffscreenBake {
     this.residualTex = pair!.residual;
 
     // ---- 流体（素材包 physics；纯纹理包无物理 → null） ----
-    const anyAsset = asset as { getFluidEffect?: (idx: number, r: THREE.WebGLRenderer) => FluidEffect | null };
-    if (anyAsset.getFluidEffect) {
+    // ★ isolatedFluid：图标等第二消费者用独立实例，避免与战斗 BulletVisual 共享同一份
+    //   流体被两边各自 step（双重求解）；战斗路径仍走资产缓存共享实例。
+    if (opts?.isolatedFluid) {
+      const anyAsset = asset as { createAmbientFluidEffect?: (r: THREE.WebGLRenderer, i: number) => FluidEffect | null };
       try {
-        this.fluid = anyAsset.getFluidEffect(0, renderer);
+        this.fluid = anyAsset.createAmbientFluidEffect?.(renderer, 0) ?? null;
       } catch {
         this.fluid = null;
+      }
+    } else {
+      const anyAsset = asset as { getFluidEffect?: (idx: number, r: THREE.WebGLRenderer) => FluidEffect | null };
+      if (anyAsset.getFluidEffect) {
+        try {
+          this.fluid = anyAsset.getFluidEffect(0, renderer);
+        } catch {
+          this.fluid = null;
+        }
       }
     }
 

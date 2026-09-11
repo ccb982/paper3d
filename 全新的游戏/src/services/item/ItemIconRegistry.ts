@@ -10,6 +10,7 @@ import { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadSixBrotherIcons, compositeFrameToCanvas } from './BasicMaterialsIcons';
 import { getDroneIconAnimator, DroneIconAnimator } from './DroneIcon';
 import { getFluidIconAnimator } from './FluidIconAnimator';
+import { getDynamicIconAnimator } from './DynamicIconAnimator';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import type { Asset } from '../../vendor/player';
 
@@ -20,6 +21,15 @@ const assetIconSources = new Map<string, Asset | FtxAsset>();
 /** ★ 注册资产图标源（boot 加载完素材后调用；重复注册覆盖） */
 export function registerAssetIconSource(itemId: string, asset: Asset | FtxAsset): void {
   assetIconSources.set(itemId, asset);
+}
+
+/** ★ 动态离屏图标源（itemId → 素材 + 帧号）：统一走 DynamicIconAnimator
+ *  （VAT 区域实体 + 流体 + 循环播放）；如常规子弹图标。 */
+const dynamicIconSources = new Map<string, { asset: Asset | FtxAsset; frameIndex: number }>();
+
+/** ★ 注册动态离屏图标（boot 后调用；多帧素材自动按帧渲染） */
+export function registerDynamicIcon(itemId: string, asset: Asset | FtxAsset, frameIndex = 0): void {
+  dynamicIconSources.set(itemId, { asset, frameIndex });
 }
 
 export interface ItemIconConfig {
@@ -131,6 +141,12 @@ export class ItemIconRegistry {
     const assetSrc = assetIconSources.get(itemId);
     if (assetSrc) {
       const live = getFluidIconAnimator().register(assetSrc, frameIndex);
+      if (live) return live;
+    }
+    // ★ 动态离屏图标（如常规子弹）：VAT + 流体通用生产线（循环播放）
+    const dyn = dynamicIconSources.get(itemId);
+    if (dyn) {
+      const live = getDynamicIconAnimator().register(dyn.asset, dyn.frameIndex);
       if (live) return live;
     }
     // ★ FTX 图标素材未加载完成：先给色块占位，加载完成后自动替换 src

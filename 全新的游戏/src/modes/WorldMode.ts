@@ -1513,7 +1513,7 @@ export class WorldMode implements IGameMode {
   /** ★ 弹药栏条目：普通弹药（∞）+ 背包中可发射弹药（数量 = 行囊内该类总和） */
   private buildAmmoEntries(): AmmoEntryView[] {
     const out: AmmoEntryView[] = [
-      { id: 'default', name: '普通弹药', count: -1, iconId: 'ammo_pack', selected: this.selectedAmmo === 'default' },
+      { id: 'default', name: '普通弹药', count: -1, iconId: 'bullet_default', selected: this.selectedAmmo === 'default' },
     ];
     const counts = new Map<string, number>();
     if (this.itemManager) {
