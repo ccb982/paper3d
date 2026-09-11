@@ -222,7 +222,15 @@ export class WorldMode implements IGameMode {
   /** ★ 当前选择的弹药类型（'default' = 普通弹药；其余 = 可发射弹药 itemId，如祖宗） */
   private selectedAmmo = 'default';
   /** ★ 祖宗弹投影物（专属纹理/朝向；落地或寿命到 → 生成站桩祖宗） */
-  private sentinelShots: SentinelProjectile[] = [];
+  private sentinelShots: {
+    proj: SentinelProjectile;
+    /** 落地是否生成祖宗（玩家祖宗弹 true；祖宗自身攻击弹 false） */
+    spawnOnLand: boolean;
+    /** 命中伤害（<0 = 玩家祖宗弹：用 SENTINEL_IMPACT_* 公式现场结算） */
+    damage: number;
+    /** 伤害来源（伤害事件/遗物管线用） */
+    source: EntityBase | null;
+  }[] = [];
   /** 祖宗弹共享纹理（懒建；exit 释放） */
   private sentinelTex: THREE.CanvasTexture | null = null;
   /** ★ 祖宗共享流体（多个祖宗共用一份；每帧只步进一次，避免 N 倍求解卡顿） */
@@ -860,7 +868,7 @@ export class WorldMode implements IGameMode {
     this.deploymentUnsub?.();
     this.deploymentUnsub = undefined;
     for (const d of this.drones) d.dispose();
-    for (const s of this.sentinelShots) s.dispose();
+    for (const s of this.sentinelShots) s.proj.dispose();
     this.sentinelShots = [];
     this.sentinelTex?.dispose();
     this.sentinelTex = null;
@@ -1398,11 +1406,16 @@ export class WorldMode implements IGameMode {
     // 轻微弹道修正（与普通子弹同口径）
     const assisted = this.aimAssist(muzzle, dx, dy, dz);
     dx = assisted.x; dy = assisted.y; dz = assisted.z;
-    this.sentinelShots.push(new SentinelProjectile(
-      this.scene, tex,
-      muzzle.x + dx * 1.5, muzzle.y + dy * 1.5, muzzle.z + dz * 1.5,
-      dx, dy, dz, SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME,
-    ));
+    this.sentinelShots.push({
+      proj: new SentinelProjectile(
+        this.scene, tex,
+        muzzle.x + dx * 1.5, muzzle.y + dy * 1.5, muzzle.z + dz * 1.5,
+        dx, dy, dz, SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME,
+      ),
+      spawnOnLand: true,
+      damage: -1,
+      source: this.player,
+    });
   }
 
   /** 祖宗弹纹理（懒建缓存：祖宗素材第 0 帧合成） */
@@ -1422,27 +1435,28 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** 每帧推进祖宗弹：命中敌人 → 少量伤害 + 原地落地；触地/寿命到 → 原地生成站桩祖宗 */
+  /** 每帧推进祖宗弹：命中敌人 → 伤害（玩家弹还额外落地生成祖宗）；触地/寿命到 → 按记录处理 */
   private updateSentinelShots(dt: number): void {
     if (this.sentinelShots.length === 0 || !this.camera) return;
     for (let i = this.sentinelShots.length - 1; i >= 0; i--) {
-      const shot = this.sentinelShots[i];
+      const rec = this.sentinelShots[i];
+      const shot = rec.proj;
       const land = shot.update(dt, this.camera);
-      // ★ 命中敌人：来点伤害（然后按落点处理）
+      // ★ 命中敌人：结算伤害（玩家弹用 IMPACT 公式；祖宗攻击弹用发射时算好的 damage）
       const hit = land ? null : this.sentinelShotHitEnemy(shot);
       if (hit) {
-        const dmg = Math.max(
-          SENTINEL_IMPACT_MIN_DAMAGE,
-          Math.round(this.player.attackPower * SENTINEL_IMPACT_ATK_RATIO),
-        );
-        const r = applyDamage(dmg, this.player, hit);
-        eventBus.emit('damage', { target: hit, source: this.player, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+        const src = rec.source ?? this.player;
+        const dmg = rec.damage >= 0
+          ? rec.damage
+          : Math.max(SENTINEL_IMPACT_MIN_DAMAGE, Math.round(this.player.attackPower * SENTINEL_IMPACT_ATK_RATIO));
+        const r = applyDamage(dmg, src, hit);
+        eventBus.emit('damage', { target: hit, source: src, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
       }
       if (land || hit) {
         this.sentinelShots.splice(i, 1);
         const p = shot.sprite.position;
         shot.dispose();
-        this.spawnSentinelAt(p.x, p.z);
+        if (rec.spawnOnLand) this.spawnSentinelAt(p.x, p.z);
       }
     }
   }
@@ -1576,21 +1590,11 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */
+  /** ★ 祖宗激光命中结算（红色激光是瞬时 hitscan；光束特效由祖宗实体播放） */
   private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
-    if (!this.bullets) return;
-    const p = from.position;
-    const tp = target.position;
-    let dx = tp.x - p.x, dy = tp.y + 0.8 - p.y, dz = tp.z - p.z;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    dx /= len; dy /= len; dz /= len;
-    // ★ 伤害 = max(下限, 主角攻击力 × 系数)
     const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(this.player.attackPower * SENTINEL_ATK_RATIO));
-    executeAttack(this.entities, this.bullets, {
-      type: 'projectile', source: from,
-      x: p.x + dx * 0.6, y: p.y + dy * 0.6, z: p.z + dz * 0.6,
-      dirX: dx, dirY: dy, dirZ: dz,
-      speed: 18, camp: 'ally', lifetime: 1.2, damage: dmg,
-    });
+    const r = applyDamage(dmg, from, target);
+    eventBus.emit('damage', { target, source: from, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
   }
 
   /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。

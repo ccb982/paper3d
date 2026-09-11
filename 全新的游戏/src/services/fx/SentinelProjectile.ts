@@ -10,13 +10,16 @@
 import * as THREE from 'three';
 import { RasterMap } from '../map/RasterMap';
 
-/** 世界尺寸（贴片宽，米） */
+/** 世界尺寸（贴片宽，米；祖宗攻击用小号） */
 const SHOT_SIZE = 1.3;
+const ATTACK_SIZE = 0.8;
 
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 
 export class SentinelProjectile {
+  /** 祖宗自身攻击弹的小号尺寸（WorldMode 引用） */
+  static readonly ATTACK_SIZE = ATTACK_SIZE;
   readonly sprite: THREE.Sprite;
   private readonly vel: THREE.Vector3;
   private life: number;
@@ -28,6 +31,8 @@ export class SentinelProjectile {
     dirX: number, dirY: number, dirZ: number,
     speed: number,
     lifetime: number,
+    /** 贴片尺寸（默认玩家祖宗弹；祖宗自身攻击传 ATTACK_SIZE） */
+    size = SHOT_SIZE,
   ) {
     const mat = new THREE.SpriteMaterial({
       map: texture,
@@ -36,7 +41,7 @@ export class SentinelProjectile {
       toneMapped: false,
     });
     this.sprite = new THREE.Sprite(mat);
-    this.sprite.scale.set(SHOT_SIZE, SHOT_SIZE, 1);
+    this.sprite.scale.set(size, size, 1);
     this.sprite.position.set(x, y, z);
     scene.add(this.sprite);
     const len = Math.hypot(dirX, dirY, dirZ) || 1;

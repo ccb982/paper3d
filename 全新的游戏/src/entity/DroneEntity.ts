@@ -40,9 +40,10 @@ const DRONE_MIN_DAMAGE = 12;
 const DRONE_ATK_RATIO = 1.0;
 /** ★ 攻击瞄准高度：敌人身体（脚部 + 0.9m 躯干），不追脚、不擦角 */
 const ATTACK_AIM_Y = 0.9;
-/** ★ 站桩模式（祖宗）：以自身为中心的索敌/攻击参数 */
-const SENTINEL_RANGE = 12;      // 索敌/射程（米）
-const SENTINEL_ATTACK_CD = 1.1; // 远程射击冷却（秒）
+/** ★ 站桩模式（祖宗）：以自身为中心的索敌/攻击参数
+ *  ★ 射程远大于无人机（LOD 12m）——站桩单位靠长手覆盖；命中为瞬时激光，天然穿墙 */
+const SENTINEL_RANGE = 28;      // 索敌/射程（米）
+const SENTINEL_ATTACK_CD = 1.1; // 激光冷却（秒）
 
 export interface DroneOptions extends Omit<EntityBaseOptions, 'kind'> {
   /** 贴片放大（默认 1.2） */
@@ -191,75 +192,76 @@ export class DroneEntity extends EntityBase {
   updateAI(dt: number, camera?: THREE.Camera | null): void {
     this.lastCamera = camera ?? this.lastCamera;
     this.phase += dt * 2.2;
-    // ★ 站桩模式（祖宗）：不跟随/不移动，绕自身索敌 + 远程攻击
-    if (this.stationary) {
-      this.updateStationaryAI(dt);
-      return;
-    }
     const p = this.entity.position;
-    const distPlayer = Math.hypot(p.x - this.playerPos.x, p.z - this.playerPos.z);
+    if (this.stationary) {
+      // ★ 站桩模式（祖宗）：不跟随/不移动，绕自身索敌 + 红色激光
+      this.updateStationaryAI(dt);
+    } else {
+      const distPlayer = Math.hypot(p.x - this.playerPos.x, p.z - this.playerPos.z);
 
-    // ★ 强制返回：与玩家距离非常远（任意非 follow 状态都触发）
-    if (this.aiState !== 'follow' && distPlayer > RETURN_DIST) {
-      this.aiState = 'return';
-      this.target = null;
+      // ★ 强制返回：与玩家距离非常远（任意非 follow 状态都触发）
+      if (this.aiState !== 'follow' && distPlayer > RETURN_DIST) {
+        this.aiState = 'return';
+        this.target = null;
+      }
+
+      switch (this.aiState) {
+        case 'follow': {
+          // 跟随玩家侧上方
+          this.moveTo(dt, this.followTarget.x, this.followTarget.y, this.followTarget.z, 6);
+          // 周期扫描：锁定此刻距离最近的敌人
+          this.relockTimer -= dt;
+          if (this.relockTimer <= 0) {
+            this.relockTimer = 0.4;
+            const t = this.findNearestEnemy(LOCK_RANGE);
+            if (t) { this.target = t; this.aiState = 'approach'; }
+          }
+          break;
+        }
+        case 'approach': {
+          const t = this.target;
+          if (!this.targetAlive(t)) { this.target = null; this.aiState = 'follow'; break; }
+          const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
+          if (Math.hypot(dx, dz) <= ATTACK_RANGE) { this.aiState = 'attack'; break; }
+          // ★ 悬停高度 = 敌人身体（脚部 + 0.9），水平飞近，不俯冲追脚
+          this.moveTo(dt, t!.position.x, t!.position.y + ATTACK_AIM_Y, t!.position.z, 7);
+          break;
+        }
+        case 'attack': {
+          const t = this.target;
+          if (!this.targetAlive(t)) { this.target = null; this.aiState = 'return'; break; }
+          const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
+          const d = Math.hypot(dx, dz);
+          // 拉近到攻击圈内（攻击范围小 → 必须贴脸；身体高度）
+          if (d > ATTACK_RANGE) {
+            this.moveTo(dt, t!.position.x, t!.position.y + ATTACK_AIM_Y, t!.position.z, 8);
+          } else {
+            // 圈内：绕目标缓慢环绕（不重叠、不静止；身体高度）
+            const a = this.phase * 0.6;
+            const ox = t!.position.x + Math.cos(a) * 1.0;
+            const oz = t!.position.z + Math.sin(a) * 1.0;
+            this.moveTo(dt, ox, t!.position.y + ATTACK_AIM_Y, oz, 2);
+          }
+          // 挥击冷却
+          this.attackCd -= dt;
+          if (this.attackCd <= 0) {
+            this.attackCd = ATTACK_CD;
+            this.swing(t!);
+          }
+          break;
+        }
+        case 'return': {
+          // 返回玩家（目标已死或离玩家太远）；归队后重新锁定
+          this.moveTo(dt, this.followTarget.x, this.followTarget.y, this.followTarget.z, 6);
+          const dp = Math.hypot(p.x - this.followTarget.x, p.z - this.followTarget.z);
+          if (dp < RETURN_OK_DIST || distPlayer < RETURN_OK_DIST) this.aiState = 'follow';
+          break;
+        }
+      }
     }
 
-    switch (this.aiState) {
-      case 'follow': {
-        // 跟随玩家侧上方
-        this.moveTo(dt, this.followTarget.x, this.followTarget.y, this.followTarget.z, 6);
-        // 周期扫描：锁定此刻距离最近的敌人
-        this.relockTimer -= dt;
-        if (this.relockTimer <= 0) {
-          this.relockTimer = 0.4;
-          const t = this.findNearestEnemy(LOCK_RANGE);
-          if (t) { this.target = t; this.aiState = 'approach'; }
-        }
-        break;
-      }
-      case 'approach': {
-        const t = this.target;
-        if (!this.targetAlive(t)) { this.target = null; this.aiState = 'follow'; break; }
-        const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
-        if (Math.hypot(dx, dz) <= ATTACK_RANGE) { this.aiState = 'attack'; break; }
-        // ★ 悬停高度 = 敌人身体（脚部 + 0.9），水平飞近，不俯冲追脚
-        this.moveTo(dt, t!.position.x, t!.position.y + ATTACK_AIM_Y, t!.position.z, 7);
-        break;
-      }
-      case 'attack': {
-        const t = this.target;
-        if (!this.targetAlive(t)) { this.target = null; this.aiState = 'return'; break; }
-        const dx = p.x - t!.position.x, dz = p.z - t!.position.z;
-        const d = Math.hypot(dx, dz);
-        // 拉近到攻击圈内（攻击范围小 → 必须贴脸；身体高度）
-        if (d > ATTACK_RANGE) {
-          this.moveTo(dt, t!.position.x, t!.position.y + ATTACK_AIM_Y, t!.position.z, 8);
-        } else {
-          // 圈内：绕目标缓慢环绕（不重叠、不静止；身体高度）
-          const a = this.phase * 0.6;
-          const ox = t!.position.x + Math.cos(a) * 1.0;
-          const oz = t!.position.z + Math.sin(a) * 1.0;
-          this.moveTo(dt, ox, t!.position.y + ATTACK_AIM_Y, oz, 2);
-        }
-        // 挥击冷却
-        this.attackCd -= dt;
-        if (this.attackCd <= 0) {
-          this.attackCd = ATTACK_CD;
-          this.swing(t!);
-        }
-        break;
-      }
-      case 'return': {
-        // 返回玩家（目标已死或离玩家太远）；归队后重新锁定
-        this.moveTo(dt, this.followTarget.x, this.followTarget.y, this.followTarget.z, 6);
-        const dp = Math.hypot(p.x - this.followTarget.x, p.z - this.followTarget.z);
-        if (dp < RETURN_OK_DIST || distPlayer < RETURN_OK_DIST) this.aiState = 'follow';
-        break;
-      }
-    }
-
-    // ★ 攻击射线推进：起点 = 无人机，终点 = 目标身体（脚部 + ATTACK_AIM_Y；目标已死则停在最后落点）
+    // ★ 攻击射线推进：起点 = 无人机/祖宗，终点 = 目标身体（脚部 + ATTACK_AIM_Y；
+    //   目标已死则停在最后落点）——★ 站桩/跟随两条分支都要走这里
     if (this.beam) {
       const end = this._beamEnd;
       if (this.target && this.targetAlive(this.target)) {
@@ -332,6 +334,9 @@ export class DroneEntity extends EntityBase {
         this.attackCd -= dt;
         if (this.attackCd <= 0) {
           this.attackCd = SENTINEL_ATTACK_CD;
+          // ★ 红色激光：光束特效从这里射向目标；瞬时伤害由模式层结算（rangedAttack）
+          this.beam?.dispose();
+          this.beam = new DroneBeamEffect(this._sceneRef);
           this.rangedAttack?.(t);
         }
       }
