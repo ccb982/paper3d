@@ -502,12 +502,13 @@ export class WorldMode implements IGameMode {
           damage: payload.damage, crit: payload.crit, blocked: payload.blocked, dodged: payload.dodged,
         });
       }
-      // ★ 主角攻击不显示伤害数字（友军/敌人/主角受击照常显示；遗物时机上方已派发）
-      if (payload.source?.camp === 'player') return;
       // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
-      const camP = this.camera!.position;
-      const dx = pos.x - camP.x, dz = pos.z - camP.z;
-      if (dx * dx + dz * dz > 20 * 20) return;
+      //   ★ 例外：主角自己的攻击（子弹多为远距离命中）不受此限，保证打击反馈
+      if (payload.source?.camp !== 'player') {
+        const camP = this.camera!.position;
+        const dx = pos.x - camP.x, dz = pos.z - camP.z;
+        if (dx * dx + dz * dz > 20 * 20) return;
+      }
       // 将世界坐标投影到屏幕
       const vec = new THREE.Vector3(pos.x, pos.y + 1.0, pos.z);
       vec.project(this.camera!);
