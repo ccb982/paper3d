@@ -30,7 +30,7 @@ import type { FxRendererBase } from '../services/render/FxRendererBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import { entityPerf } from './EntityPerf';
-import { effectSystem, type ActiveEffect, type EffectStatKey, type HealProcDef } from '../services/combat/EffectSystem';
+import type { ActiveEffect, EffectStatKey, HealProcDef } from '../services/combat/EffectSystem';
 
 /** 物理同步模式：kinematic=位置代码驱动（角色/敌人：setNextKinematicTranslation，
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
@@ -295,7 +295,8 @@ export abstract class EntityBase {
   /** 护盾值（modifierShield：先扣护盾再扣血） */
   shield = 0;
 
-  /** ★ 活跃效果列表（EffectSystem 统一队列管理；null = 无效果，更新零开销） */
+  /** ★ 活跃效果列表（EffectSystem 队列；当前仅玩家使用。
+   *  tick 由 WorldMode 每帧显式调用——队友/敌人不参与，无每帧开销） */
   effects: ActiveEffect[] | null = null;
   /** ★ 效果基础属性（聚合公式的底；首次挂效果/模式层注入时捕获） */
   statBase: Partial<Record<EffectStatKey, number>> | null = null;
@@ -375,8 +376,6 @@ export abstract class EntityBase {
   /** 每帧驱动（模式层/EntityManager 调用） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
     const _p0 = performance.now();
-    // ⓪ ★ 效果队列推进（时长→过期→属性重算→生命回复；无效果实体零开销）
-    if (this.effects) effectSystem.tickEntity(this, dt);
     this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
     const _p1 = performance.now();
     this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）

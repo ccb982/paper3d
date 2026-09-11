@@ -769,6 +769,8 @@ export class WorldMode implements IGameMode {
     const _e1 = performance.now();
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
+    // ★ 效果队列只服务玩家（队友/敌人不参与、零每帧开销）：WorldMode 每帧显式推进
+    if (this.player.effects) effectSystem.tickEntity(this.player, dt);
     const _e2 = performance.now();
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感） ----

@@ -8,7 +8,8 @@
 //   - EntityBase.effects  活跃效果列表（惰性创建；null = 零开销）
 //   - EntityBase.statBase 基础属性（聚合公式的底；首次挂效果自动捕获）
 //
-// 处理节奏：EntityBase.update 每帧 ⓪ 调 tickEntity：
+// 作用域：★ 只服务玩家（队友/敌人不挂效果）——WorldMode 每帧对玩家显式调
+//   tickEntity（实体自身 update 不做任何效果推进，260 实体零额外开销）：
 //   ① 推进时长 → 过期移除
 //   ② 属性聚合：base × (1+pct) + flat → 写回实体战斗属性
 //   ③ 逐帧结算生命回复（hpRegen；死亡/满血跳过）
