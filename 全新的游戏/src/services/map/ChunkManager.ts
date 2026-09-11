@@ -147,9 +147,10 @@ export class ChunkManager {
   private queuedKeys = new Set<number>();
   /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
   private static readonly BUILD_BUDGET_MS = 8;
-  /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±3 = 7×7） */
+  /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±4 = 9×9）
+   *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
   private static readonly BUILD_RADIUS = 2;
-  private static readonly PREFETCH_RADIUS = 3;
+  private static readonly PREFETCH_RADIUS = 4;
   /** ★ 烘焙在途上限（构建请求）：防止跨区/接缝批量时把多个烘焙任务同时塞进 worker 造成爆发 */
   private static readonly BUILD_INFLIGHT_MAX = 2;
   /** ★ 预烘焙投递间隔（ms）：空闲时每拍投 1 个 x 轴 + 1 个 y 轴的"前方条带"chunk */
@@ -168,6 +169,18 @@ export class ChunkManager {
   /** 玩家当前 chunk（队列最近优先 + 预烘焙环扫描用） */
   private hotPcx = 0;
   private hotPcz = 0;
+  /** ★ 移动方向（逐帧平滑；构建队列的前向优先加权用） */
+  private moveDirSmX = 0;
+  private moveDirSmZ = 0;
+  private moveLastPx = NaN;
+  private moveLastPz = NaN;
+  /** ★ 前向优先：构建环内前向已建数量低于该阈值 → 前向 chunk 加权抢占
+   *  （用户定调：优先补角色当前移动方向上"数量不足"的 chunk） */
+  private static readonly FORWARD_MIN_BUILT = 3;
+  /** 前向投影加权系数（score = 距离 − 投影 × 系数；不足阈值全权重，足够时降权） */
+  private static readonly FORWARD_BONUS = 1.2;
+  /** ★ 地形光照可见距离（米）：超出 + 视野锥外的 chunk 材质不喂昼夜 uniform */
+  private static readonly LIGHT_VISIBLE_DIST = 170;
 
   // ---- ★ 异步烘焙管线：重计算在 Worker，主线程零尖峰 ----
   /** 在途烘焙（key→请求；t=发起时刻供看门狗超时判定；bakeOnly=预烘焙只入缓存不建网格） */
@@ -206,6 +219,14 @@ export class ChunkManager {
   private assembleCooldownUntil = 0;
   /** 装饰补挂冷却截止时刻（同上） */
   private decorCooldownUntil = 0;
+  /** ★ 首建交付限流：滚动窗口（BUILD_RATE_WINDOW_MS）内最多 BUILD_RATE_MAX 块
+   *  （用户定调：一段时间更新 chunk 不得超过两个；挖坑重建不受限、优先放行） */
+  private static readonly BUILD_RATE_WINDOW_MS = 1000;
+  private static readonly BUILD_RATE_MAX = 2;
+  /** 最近首建交付时刻（滚动窗口记账） */
+  private buildStamps: number[] = [];
+  /** 预烘积压上限：待装配队列达到此长度暂停预烘（保住提前量的同时防内存/worker 过载） */
+  private static readonly PREFETCH_BACKLOG_MAX = 12;
 
   // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
@@ -298,16 +319,35 @@ export class ChunkManager {
   update(px: number, pz: number, dt: number): void {
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
+    // ★ 移动方向平滑（构建队列前向优先加权；站立时自然衰减归零）
+    if (!Number.isNaN(this.moveLastPx)) {
+      const mdx = px - this.moveLastPx, mdz = pz - this.moveLastPz;
+      if (mdx * mdx + mdz * mdz > 1e-4) {
+        this.moveDirSmX += (mdx - this.moveDirSmX) * 0.25;
+        this.moveDirSmZ += (mdz - this.moveDirSmZ) * 0.25;
+      } else {
+        this.moveDirSmX *= 0.9;
+        this.moveDirSmZ *= 0.9;
+      }
+    }
+    this.moveLastPx = px;
+    this.moveLastPz = pz;
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     this.flushPatchRebuilds();
     this.syncChunks(px, pz);
     // ★ 预烘焙（分批次提前生成）：空闲时向构建环外一档逐拍投递（只烘不建）
     this.prefetchChunks(px, pz, dt);
-    // ★ 装配预算（时间感知）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算) 再装下一块，
-    //   把"多块瞬时交付"摊成隔帧交付（宁可晚一点，也别掉帧）
+    // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
+    //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0 && performance.now() >= this.assembleCooldownUntil) {
-      const a = this.assembleQueue.shift()!;
+      // ★ 首建限流：超限时跳过首建，找挖坑重建（decor===null）先放行；没有则本帧停装
+      let idx = 0;
+      if (!this.allowFirstBuild()) {
+        idx = this.assembleQueue.findIndex((q) => q.decor === null);
+        if (idx === -1) break;
+      }
+      const a = this.assembleQueue.splice(idx, 1)[0];
       this.geoInflight.delete(a.key);
       const _ta = performance.now();
       if (a.decor === null || a.deferDecor) {
@@ -319,6 +359,7 @@ export class ChunkManager {
       } else {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
       }
+      if (a.decor !== null && a.deferDecor) this.buildStamps.push(performance.now());
       const _cost = performance.now() - _ta;
       if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
         this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
@@ -374,6 +415,49 @@ export class ChunkManager {
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
     this.sweepChunks(px, pz, dt);
+  }
+
+  /** 构建环内"移动方向前方"的已建数量（前向优先阈值判定；5×5 环最多 25 次查表） */
+  private forwardBuiltCount(dirX: number, dirZ: number): number {
+    const R = ChunkManager.BUILD_RADIUS;
+    let n = 0;
+    for (let dz = -R; dz <= R; dz++) {
+      for (let dx = -R; dx <= R; dx++) {
+        if (dx * dirX + dz * dirZ <= 0.1) continue; // 只统计前向格
+        const key = chunkKeyOf(this.hotPcx + dx, this.hotPcz + dz);
+        if (this.meshes.has(key) || this.voidKeys.has(key)) n++;
+      }
+    }
+    return n;
+  }
+
+  /** ★ 地形光照可见性（每帧由 WorldMode.render 传入相机位置/前向）：
+   *  视野锥（半角 75° + 距离余量）外的 chunk 材质标记 lightVisible=false，
+   *  updateTerrainLighting/updateWallMaterialsLighting 跳过——进视野即恢复刷新。 */
+  markLightVisibility(camX: number, camZ: number, fwdX: number, fwdZ: number): void {
+    const fl = Math.hypot(fwdX, fwdZ) || 1;
+    const fx = fwdX / fl, fz = fwdZ / fl;
+    const cosLimit = Math.cos((75 * Math.PI) / 180);
+    const maxD = ChunkManager.LIGHT_VISIBLE_DIST;
+    for (const [key, vis] of this.terrainVisuals) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      const dx = (cx * CHUNK_SIZE + CHUNK_SIZE / 2) - camX;
+      const dz = (cz * CHUNK_SIZE + CHUNK_SIZE / 2) - camZ;
+      const dl = Math.hypot(dx, dz) || 1;
+      const on = dl < maxD && (dx / dl) * fx + (dz / dl) * fz > cosLimit;
+      (vis.top.material as THREE.Material).userData.lightVisible = on;
+      if (vis.wall) (vis.wall.material as THREE.Material).userData.lightVisible = on;
+    }
+  }
+
+  /** 首建限流判定：滚动窗口内首建交付数是否未达上限（顺带清理过期时间戳） */
+  private allowFirstBuild(): boolean {
+    const now = performance.now();
+    while (this.buildStamps.length > 0 && now - this.buildStamps[0] > ChunkManager.BUILD_RATE_WINDOW_MS) {
+      this.buildStamps.shift();
+    }
+    return this.buildStamps.length < ChunkManager.BUILD_RATE_MAX;
   }
 
   /** 装饰补挂耗时冷却：本次超过预算 → 下一块推迟同等时间（把尖峰摊到后续帧） */
@@ -574,16 +658,27 @@ export class ChunkManager {
     //   2026-09-08 用户定调），把主线程+烘焙 worker 让给地形修改链路
     const patching = this.patchRebuilds.size > 0 || this.pendingPatches.size > 0;
     const budget = ChunkManager.BUILD_BUDGET_MS * (patching ? 0.5 : 1);
+    // ★ 移动方向优先（用户定调）：前向已建数量不足阈值 → 前向 chunk 全权重加权抢占；
+    //   足够时降权（仍略有偏向），站立不动 → 纯最近优先
+    const mlen = Math.hypot(this.moveDirSmX, this.moveDirSmZ);
+    const dirX = mlen > 0.05 ? this.moveDirSmX / mlen : 0;
+    const dirZ = mlen > 0.05 ? this.moveDirSmZ / mlen : 0;
+    const moving = dirX !== 0 || dirZ !== 0;
+    const boost = moving && this.forwardBuiltCount(dirX, dirZ) < ChunkManager.FORWARD_MIN_BUILT
+      ? ChunkManager.FORWARD_BONUS
+      : ChunkManager.FORWARD_BONUS * 0.3;
     while (this.queue.length > 0 && performance.now() - t0 < budget) {
       // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
       //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）
       if (!this.boss4D && this.countBuildInflight() >= ChunkManager.BUILD_INFLIGHT_MAX) break;
-      // ★ 最近优先：先建脚下的，远处随预算/在途闸门分批消化
-      let best = 0, bestD = Infinity;
+      // ★ 最近优先 + 前向加权：score = 切比雪夫距离 − 前向投影 × 加权（越小越先建）
+      let best = 0, bestScore = Infinity;
       for (let i = 0; i < this.queue.length; i++) {
         const it = this.queue[i];
-        const d = Math.max(Math.abs(it.cx - this.hotPcx), Math.abs(it.cz - this.hotPcz));
-        if (d < bestD) { bestD = d; best = i; }
+        const qdx = it.cx - this.hotPcx, qdz = it.cz - this.hotPcz;
+        const d = Math.max(Math.abs(qdx), Math.abs(qdz));
+        const score = d - (qdx * dirX + qdz * dirZ) * boost;
+        if (score < bestScore) { bestScore = score; best = i; }
       }
       const item = this.queue.splice(best, 1)[0];
       const key = chunkKeyOf(item.cx, item.cz);
@@ -634,9 +729,11 @@ export class ChunkManager {
     if (Math.abs(this.prefetchMoveZ) > 0.5) this.prefetchDirZ = Math.sign(this.prefetchMoveZ);
     this.prefetchMoveX = 0;
     this.prefetchMoveZ = 0;
-    // 有建造成本在途（队列/烘焙/几何/挖掘重建）→ 不抢 worker
-    if (this.queue.length > 0 || this.pendingBakes.size > 0 || this.geoInflight.size > 0) return;
+    // 有建造成本在途（raster 生成/烘焙/挖掘重建）→ 不抢 worker；
+    // ★ 装配积压不再阻塞预烘（提前算好，等限流慢慢交付），仅以积压上限约束
+    if (this.queue.length > 0 || this.pendingBakes.size > 0) return;
     if (this.patchRebuilds.size > 0 || this.pendingPatches.size > 0) return;
+    if (this.assembleQueue.length >= ChunkManager.PREFETCH_BACKLOG_MAX) return;
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     // ★ 每拍：x 轴前方一条 + y 轴前方一条；都取不到再环扫兜底（角落/后方）

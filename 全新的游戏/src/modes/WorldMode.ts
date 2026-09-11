@@ -718,6 +718,9 @@ export class WorldMode implements IGameMode {
     // ★ 防御：任何离屏 pass（流体/月亮/云/子弹特效）若遗留 FBO，主场景渲染会与
     //   采样纹理形成 Feedback loop（GL_INVALID_OPERATION）。渲染前强制回默认帧缓冲。
     this.renderer.setRenderTarget(null);
+    // ★ 地形光照视锥裁剪：只喂视野锥内 chunk 的昼夜 uniform（视锥外冻结，进视野即刷新）
+    const fw = this.cameraCtrl.getFrame().forward;
+    this.chunks.markLightVisibility(this.camera.position.x, this.camera.position.z, fw.x, fw.z);
     // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) renderManager.follow(this.player.position);
     this.entities.renderAll(this.camera);

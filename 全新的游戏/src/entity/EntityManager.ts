@@ -110,7 +110,10 @@ export class EntityManager {
    *   距离/视野影响；子弹另因生命周期短+数量少需免裁避免高速漏画 */
   renderAll(camera: Parameters<EntityBase['render']>[0]): void {
     const cam = camera.position;
+    // ★ 视锥标记复位（上一帧渲染结果；视锥外实体更新管线据此跳过影子等纯表现计算）
+    for (const base of this.bases.values()) base.inFrustum = false;
     for (const base of this.raster.queryFrustum(camera as Parameters<EntityBase['render']>[0], LOD_MAX_DIST)) {
+      base.inFrustum = true;
       if (base.lodExempt) continue; // 豁免实体走下方全量渲染
       const dx = base.position.x - cam.x;
       const dz = base.position.z - cam.z;
@@ -121,6 +124,7 @@ export class EntityManager {
     // ★ 豁免实体：全量渲染（不裁剪、不 LOD 衰减）
     for (const base of this.bases.values()) {
       if (!base.lodExempt) continue;
+      base.inFrustum = true;
       base.applyViewDistance(0);
       base.render(camera);
     }

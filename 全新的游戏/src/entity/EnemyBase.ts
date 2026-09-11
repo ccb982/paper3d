@@ -256,6 +256,8 @@ export class EnemyBase extends CharacterBase {
     // ★ 显示帧 + 转身由相机判定（旁观者视角）：
     //   相机在角色正面侧 → 前帧 + 贴片保持移动方向朝向
     //   相机在背面侧 → 后帧 + 贴片转身 180°（面向相机绘制背面）
+    //   ★ 视锥外不做这些纯表现计算（动画/朝向/扭曲），回到视野下一帧自动恢复
+    if (!this.inFrustum) return;
     if (this.camera) {
       const camDirZ = this.camera.position.z - this.entity.position.z;
       const camDirX = this.camera.position.x - this.entity.position.x;

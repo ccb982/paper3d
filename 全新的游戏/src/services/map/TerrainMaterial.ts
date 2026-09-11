@@ -1199,6 +1199,8 @@ export function updateTerrainLighting(sun: {
   const hxz = Math.hypot(sun.dir.x, sun.dir.z) || 1;
   const sunSide = new THREE.Vector2(sun.dir.x / hxz, sun.dir.z / hxz);
   for (const m of registry) {
+    // ★ 视野锥外（ChunkManager.markLightVisibility 标记）→ 跳过；进视野下一帧恢复
+    if (m.userData.lightVisible === false) continue;
     m.uniforms.uAmbientColor.value.setHex(ambHex).multiplyScalar(ambI);
     m.uniforms.uSunColor.value.setHex(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
     m.uniforms.uSunDir.value.set(sun.dir.x, sun.dir.y, sun.dir.z);
@@ -1226,6 +1228,8 @@ export function updateWallMaterialsLighting(sun: {
   const ambI = T.ambientNightIntensity +
     (T.ambientDayIntensity - T.ambientNightIntensity) * sun.daylight;
   for (const m of wallRegistry) {
+    // ★ 视野锥外（ChunkManager.markLightVisibility 标记）→ 跳过；进视野下一帧恢复
+    if (m.userData.lightVisible === false) continue;
     m.uniforms.uAmbientColor.value.setHex(ambHex).multiplyScalar(ambI);
     m.uniforms.uSunColor.value.setHex(sun.color).multiplyScalar(T.sunIntensity * sun.intensityScale);
     // ★ 夜晚直射保底开关（WALL_FRAG 用；Boss4D 墙材质无此 uniform，跳过）

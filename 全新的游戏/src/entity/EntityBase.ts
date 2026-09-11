@@ -129,6 +129,11 @@ export abstract class EntityBase {
   private syncShadow(): void {
     const shape = this.shadowShape;
     if (!shape || !this._scene) return;
+    // ★ 视锥外（上一帧渲染未命中）→ 影子不计算、网格隐藏；转回视野内下一帧自动恢复
+    if (!this.inFrustum) {
+      if (this.gsShadow) this.gsShadow.mesh.visible = false;
+      return;
+    }
     const fd = this.getShadowFrameData();
     if (!fd) return; // 无剪影源 = 无影子（不做纯色矩形兜底）
     if (!this.gsShadow) {
@@ -202,6 +207,10 @@ export abstract class EntityBase {
   /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
    *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
   viewLod = 0;
+
+  /** ★ 上一帧渲染是否命中视锥（EntityManager.renderAll 写入）。
+   *  视锥外的实体跳过影子计算（viewLod 对视锥外实体是过期值，不可依赖） */
+  inFrustum = false;
 
   /** ★ 视锥/LOD 豁免（主角/无人机/子弹等关键实体）：
    *   renderAll 绕过梯形视锥裁剪，且始终 applyViewDistance(0) →
@@ -350,9 +359,13 @@ export abstract class EntityBase {
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
     this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
     this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
-    this.anim?.update(dt);                  // ③ 动画推进
-    this.syncRender();                      // ④ 渲染同步
-    this.updateEffects(dt);                 // ⑤ 附属特效驱动（跟随/时间轴/回收）
+    // ★ 视锥外：跳过纯渲染管线（动画/渲染同步/特效），只保留玩法+物理+空间索引
+    //   （inFrustum 由上帧 renderAll 写入；lodExempt 豁免体恒 true）
+    if (this.inFrustum) {
+      this.anim?.update(dt);                // ③ 动画推进
+      this.syncRender();                    // ④ 渲染同步
+      this.updateEffects(dt);               // ⑤ 附属特效驱动（跟随/时间轴/回收）
+    }
     this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
     this.syncShadow();                      // ⑦ 贴地剪影影子同步（统一机制）
 
