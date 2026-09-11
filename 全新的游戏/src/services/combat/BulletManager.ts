@@ -33,6 +33,8 @@ export interface SpawnBulletOptions {
   camp: 'player' | 'ally' | 'enemy';
   lifetime?: number;
   damage?: number;
+  /** ★ 命中/落地后在该点生成站桩友军（itemId；如祖宗弹） */
+  allyOnHit?: string;
 }
 
 export class BulletManager {

@@ -42,6 +42,8 @@ export interface BulletEntityOptions {
   radius?: number;
   /** 伤害值（穿透命中实体时结算） */
   damage?: number;
+  /** ★ 命中/落地后在该点生成站桩友军（itemId；如祖宗弹） */
+  allyOnHit?: string;
 }
 
 export class BulletEntity extends EntityBase {
@@ -56,6 +58,8 @@ export class BulletEntity extends EntityBase {
   private lifetime = 0;
   private damage = 0;
   private active = false;
+  /** ★ 命中/落地后生成站桩友军（itemId；null = 普通子弹） */
+  allyOnHit: string | null = null;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
   recycle: (() => void) | null = null;
   /** ★ 命中特效回调（BulletManager 注册：每次碰撞开始只调用一次；
@@ -122,6 +126,7 @@ export class BulletEntity extends EntityBase {
     this.camp = opts.camp;
     this.lifetime = opts.lifetime ?? 2;
     this.damage = opts.damage ?? 10;
+    this.allyOnHit = opts.allyOnHit ?? null;
     this.entity.position.x = opts.x;
     this.entity.position.y = opts.y;
     this.entity.position.z = opts.z;

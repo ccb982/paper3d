@@ -328,13 +328,12 @@ export class WorldMode implements IGameMode {
       itemManager: this.itemManager,
     });
     // ★ 开局遗物授予（遗物 effect.startItems）：如「祖宗发射器」→ 开局背包自动获得祖宗
-    //   （已有则不重复给；缺格子则跳过）
+    //   ★ 可累积：每次出击都 +count（叠加上限由 items.json maxStack 决定）；没格子则跳过
     const ownedRelics = ctx.session.outOfRun?.owned ?? {};
     for (const [rid, rcount] of Object.entries(ownedRelics)) {
       const rcfg = RELIC_ITEM_CONFIG[rid];
       if (!rcfg || (rcount ?? 0) <= 0) continue;
       for (const grant of rcfg.effect?.startItems ?? []) {
-        if (this.itemManager.hasItem('player', grant.itemId, grant.count)) continue;
         if (this.itemManager.hasSpace('player', grant.itemId, grant.count)) {
           this.itemManager.addItem('player', grant.itemId, grant.count);
         }
@@ -535,9 +534,9 @@ export class WorldMode implements IGameMode {
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
       this.spawnDroneNearPlayer();
     });
-    // ★ 祖宗放置：使用「祖宗」局内道具 → 玩家身前站桩友军（同类型限 1，重复使用 = 移位重放）
+    // ★ 祖宗放置：使用「祖宗」→ 从枪口沿准星发射祖宗弹，命中/落地生成站桩友军
     this.sentinelSummonUnsub = eventBus.on('sentinel_summon', () => {
-      this.spawnSentinelNearPlayer();
+      this.launchSentinelProjectile();
     });
     // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
     this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
@@ -1169,6 +1168,13 @@ export class WorldMode implements IGameMode {
    *     地形扣除（消费地块属性）/ 水面波动 / 物品掉落（消费报告三键）。
    */
   private resolveBulletHit({ self, other, point, damage }: BulletHitPayload): void {
+    // ★ 祖宗弹：命中/落地 → 在落点生成站桩友军，子弹就地回收（不结算伤害、不改地形）
+    if (self.allyOnHit) {
+      self.deactivate();
+      self.recycle?.();
+      this.spawnSentinelAt(point.x, point.z);
+      return;
+    }
     if (other) {
       const r = applyDamage(damage, self, other);
       eventBus.emit('damage', { target: other, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
@@ -1251,8 +1257,8 @@ export class WorldMode implements IGameMode {
     if (this.renderer) drone.setRenderer(this.renderer);
   }
 
-  /** ★ 放置祖宗（站桩友军）：身前 2m；同类型限 1 个（重复使用 = 回收旧的再放新的） */
-  private spawnSentinelNearPlayer(): void {
+  /** ★ 在指定落点生成祖宗（站桩友军）：同类型限 1 个（重复 = 回收旧的再放新的） */
+  private spawnSentinelAt(x: number, z: number): void {
     if (!this.scene || !this.player) return;
     const asset = this.sentinelAsset ?? this.droneAsset;
     if (!asset) return;
@@ -1264,12 +1270,9 @@ export class WorldMode implements IGameMode {
         d.dispose();
       }
     }
-    const fw = this.cameraCtrl.getFrame().forward;
-    const px = this.player.position.x + fw.x * 2;
-    const pz = this.player.position.z + fw.z * 2;
     // ★ 与主角同尺寸（主角 applyRenderScale(2.0)）；中心锚点 → 半身高贴身摆放（可调）
-    const py = this.raster.surfaceHeightAt(px, pz) + 0.5;
-    const s = new DroneEntity(this.entities, this.scene, asset, { x: px, y: py, z: pz, scale: 2.0 });
+    const py = this.raster.surfaceHeightAt(x, z) + 0.5;
+    const s = new DroneEntity(this.entities, this.scene, asset, { x, y: py, z, scale: 2.0 });
     s.slotIndex = -1;
     s.itemId = 'zuzong';
     s.stationary = true;
@@ -1281,6 +1284,33 @@ export class WorldMode implements IGameMode {
       // ★ 祖宗：单帧 + 流体参数 → 启用常驻流体（魂体流动；无流体参数则自动跳过）
       s.enableAmbientFluid(this.renderer);
     }
+  }
+
+  /** ★ 发射祖宗弹：从玩家枪口沿准星方向飞出；命中/落地由 resolveBulletHit 生成友军 */
+  private launchSentinelProjectile(): void {
+    if (!this.player || !this.bullets) return;
+    const p = this.player.position;
+    const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
+    const ray = this.cameraRay();
+    let dx = ray.dir.x, dy = ray.dir.y, dz = ray.dir.z;
+    try {
+      const aim = this.aimRaycast();
+      if (aim && isFinite(aim.x) && isFinite(aim.y) && isFinite(aim.z)) {
+        const ax = aim.x - muzzle.x, ay = aim.y - muzzle.y, az = aim.z - muzzle.z;
+        const alen2 = ax * ax + ay * ay + az * az;
+        if (alen2 >= 1) {
+          const alen = Math.sqrt(alen2);
+          dx = ax / alen; dy = ay / alen; dz = az / alen;
+        }
+      }
+    } catch { /* 忽略 */ }
+    executeAttack(this.entities, this.bullets, {
+      type: 'projectile', source: this.player,
+      x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
+      dirX: dx, dirY: dy, dirZ: dz,
+      speed: 20, camp: 'player', lifetime: 2.5, damage: 0,
+      allyOnHit: 'zuzong',
+    });
   }
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */

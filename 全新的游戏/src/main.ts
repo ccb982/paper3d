@@ -27,6 +27,7 @@ import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
 import { registerAssetIconSource } from './services/item/ItemIconRegistry';
+import { ItemManager } from './systems/inventory/ItemManager';
 
 /** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
 function fallbackCopy(text: string): void {
@@ -484,8 +485,14 @@ function enterWorldMode(
     sentinelAsset: sentinelAsset ?? undefined,
     debug: { testChunk },
     onReturn: () => {
-      // 返回时：推进天数 + 进入 ShipMode
+      // 返回时：行囊中的祖宗自动带回舰船（货舱优先，满则基地仓）→ 推进天数 → ShipMode
       if (currentSession) {
+        const im = new ItemManager(currentSession);
+        const carried = im.countItem('player', 'zuzong');
+        for (let i = 0; i < carried; i++) {
+          if (!im.moveItem('player', 'ship', 'zuzong', 1)
+            && !im.moveItem('player', 'base', 'zuzong', 1)) break;
+        }
         currentSession.meta.day++;
         currentSession.meta.totalDaysSurvived++;
         currentSession.dayProgress.hasDepartedToday = false;
