@@ -6,7 +6,6 @@
   "items": [
     { "id": "healing_potion", "rarity": 3, "weight": 24 },
     { "id": "food_ration", "rarity": 3, "weight": 22 },
-    { "id": "ammo_pack", "rarity": 3, "weight": 20 },
     { "id": "strength_potion", "rarity": 4, "weight": 12 },
     { "id": "medkit", "rarity": 4, "weight": 10 },
     { "id": "kaltsit_drone", "rarity": 4, "weight": 8 }

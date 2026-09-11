@@ -33,6 +33,10 @@ export interface InputActions {
     interact: boolean;
     jump: boolean;
     inventory: boolean;
+    /** ★ 切换快捷物品（弹药/消耗品，Q；战斗中鼠标隐藏 → 键盘切换） */
+    switchItem: boolean;
+    /** ★ 使用所选消耗品（F；弹药仍由攻击键发射） */
+    useItem: boolean;
   };
   /** ★ 按住状态（持续，非消费式；长按语义用——如按住跳跃=连跳、按住攻击=持续发射） */
   held: {
@@ -53,7 +57,7 @@ export function createInputActions(): InputActions {
     lookAxis: { x: 0, y: 0 },
     zoomAxis: 0,
     pointer: null,
-    pressed: { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false },
+    pressed: { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false, switchItem: false, useItem: false },
     held: { attack: false, jump: false, dodge: false, skill: false, interact: false },
     interactions: [],
   };

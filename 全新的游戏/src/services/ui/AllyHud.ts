@@ -49,10 +49,10 @@ export class AllyHud {
     this.root = document.createElement('div');
     this.root.style.cssText = [
       'position:fixed', 'left:8px', 'top:206px', 'z-index:40',
-      // ★ 每列 8 行、column 自动流 → 槽位号自上而下；超出第 2 列继续向右排（无上限，满屏也不裁）；
+      // ★ 每列 6 行、column 自动流 → 槽位号自上而下；超出第 2 列继续向右排（无上限，满屏也不裁）；
       //   列表顺序 = WorldMode 排序（有槽位按槽号升序在前，无槽位如祖宗/召唤物在尾部）
       'display:grid', 'grid-auto-flow:column', 'grid-auto-columns:172px',
-      'grid-template-rows:repeat(8,auto)', 'gap:6px 8px',
+      'grid-template-rows:repeat(6,auto)', 'gap:6px 8px',
       'pointer-events:none',
     ].join(';');
     document.body.appendChild(this.root);

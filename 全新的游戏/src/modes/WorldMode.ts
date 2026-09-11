@@ -220,8 +220,9 @@ export class WorldMode implements IGameMode {
   private sentinelAsset: Asset | FtxAsset | null = null;
   /** ★ 永久战斗属性（基础 + 遗物；局内装备在其上临时叠加） */
   private permStats: PlayerCombatStats | null = null;
-  /** ★ 当前选择的弹药类型（'default' = 普通弹药；其余 = 可发射弹药 itemId，如祖宗） */
-  private selectedAmmo = 'default';
+  /** ★ 当前选择的快捷物品（'default' = 普通弹药；其余 = 弹药/消耗品 itemId）
+   *  Q 切换 / 点击切换；弹药由攻击键发射，消耗品由 F 使用 */
+  private selectedQuickItem = 'default';
   /** ★ 祖宗弹投影物（专属纹理/朝向；落地或寿命到 → 生成站桩祖宗） */
   private sentinelShots: {
     proj: SentinelProjectile;
@@ -437,8 +438,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
     );
-    // ★ 弹药栏切换：点击左下角弹药条目 → 更新当前发射弹药（普通攻击消耗所选弹药）
-    this.worldUIManager.setAmmoSelector((id) => { this.selectedAmmo = id; });
+    // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
+    this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
     // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
     // ★ boss4D 玩家专属：真实落地模式（每次跳跃必须踩实地面，禁止悬空穿/悬浮连跳）
     this.player.controller.requireRealLanding = this.chunks.isBoss4D;
@@ -637,6 +638,9 @@ export class WorldMode implements IGameMode {
     if (this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
+    // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
+    if (this.binding.consumeSwitchItem()) this.cycleQuickItem();
+    if (this.binding.consumeUseItem()) this.useSelectedConsumable();
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
     //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
     //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
@@ -1016,15 +1020,17 @@ export class WorldMode implements IGameMode {
 
   private firePlayerBullet(): void {
     // ★ 选中特殊弹药：消耗 1 并发射该弹药（打空/无库存自动回普通弹药）
-    if (this.selectedAmmo !== 'default' && FIREABLE_AMMO.has(this.selectedAmmo)
-      && this.itemManager?.hasItem('player', this.selectedAmmo, 1)) {
-      this.itemManager.removeItem('player', this.selectedAmmo, 1);
-      if (this.selectedAmmo === 'zuzong') {
+    if (this.selectedQuickItem !== 'default' && FIREABLE_AMMO.has(this.selectedQuickItem)
+      && this.itemManager?.hasItem('player', this.selectedQuickItem, 1)) {
+      this.itemManager.removeItem('player', this.selectedQuickItem, 1);
+      if (this.selectedQuickItem === 'zuzong') {
         this.launchSentinelProjectile();
         return;
       }
     }
-    if (this.selectedAmmo !== 'default') this.selectedAmmo = 'default';
+    if (this.selectedQuickItem !== 'default' && FIREABLE_AMMO.has(this.selectedQuickItem)) {
+      this.selectedQuickItem = 'default';
+    }
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
     const ray = this.cameraRay();
@@ -1510,34 +1516,69 @@ export class WorldMode implements IGameMode {
     return out;
   }
 
-  /** ★ 弹药栏条目：普通弹药（∞）+ 背包中可发射弹药（数量 = 行囊内该类总和） */
+  /** ★ 快捷栏条目：普通弹药（∞）+ 行囊内可发射弹药 + 可消耗物品（药品/增益品等）。
+   *  排序：普通弹药 → 弹药（祖宗等）→ 消耗品（各自内部保持背包扫描顺序，稳定排序）；
+   *  弹药 → 攻击键发射消耗；消耗品 → F 使用；Q/点击切换。只列行囊（player）里的。 */
   private buildAmmoEntries(): AmmoEntryView[] {
     const out: AmmoEntryView[] = [
-      { id: 'default', name: '普通弹药', count: -1, iconId: 'bullet_default', selected: this.selectedAmmo === 'default' },
+      { id: 'default', name: '普通弹药', count: -1, iconId: 'bullet_default', selected: this.selectedQuickItem === 'default' },
     ];
-    const counts = new Map<string, number>();
+    // ★ 先归并计数 + 定优先级（0=可发射弹药 1=其它弹药 2=消耗品），再稳定排序
+    const found: { id: string; count: number; rank: number }[] = [];
     if (this.itemManager) {
       for (const it of this.itemManager.getItems('player')) {
-        if (!FIREABLE_AMMO.has(it.itemId)) continue;
-        counts.set(it.itemId, (counts.get(it.itemId) ?? 0) + it.stackSize);
+        const arch = this.itemManager.getArchetype(it.itemId);
+        if (!arch) continue;
+        // ★ 可部署友军（可露希尔的无人机等）走出击槽，不进快捷栏；只留弹药与消耗品
+        if (this.itemManager.isDeployable(it.itemId)) continue;
+        const isFireable = FIREABLE_AMMO.has(it.itemId);
+        const quick = isFireable || arch.type === 'consumable' || arch.type === 'ammo';
+        if (!quick) continue;
+        const rank = isFireable ? 0 : arch.type === 'ammo' ? 1 : 2;
+        const exist = found.find((f) => f.id === it.itemId);
+        if (exist) exist.count += it.stackSize;
+        else found.push({ id: it.itemId, count: it.stackSize, rank });
       }
     }
-    for (const [id, count] of counts) {
-      const arch = this.itemManager?.getArchetype(id);
+    found.sort((a, b) => a.rank - b.rank); // 稳定排序：同类保持背包扫描顺序
+    const counts = new Map<string, number>();
+    for (const f of found) {
+      counts.set(f.id, f.count);
+      const arch = this.itemManager?.getArchetype(f.id);
       out.push({
-        id,
-        name: arch?.name ?? id,
-        count,
-        iconId: id,
-        selected: this.selectedAmmo === id,
+        id: f.id,
+        name: arch?.name ?? f.id,
+        count: f.count,
+        iconId: f.id,
+        selected: this.selectedQuickItem === f.id,
       });
     }
-    // 选中的弹药已打空 → 自动回普通弹药
-    if (this.selectedAmmo !== 'default' && (counts.get(this.selectedAmmo) ?? 0) <= 0) {
-      this.selectedAmmo = 'default';
+    // 选中的物品已用完/不在行囊 → 自动回普通弹药
+    if (this.selectedQuickItem !== 'default' && (counts.get(this.selectedQuickItem) ?? 0) <= 0) {
+      this.selectedQuickItem = 'default';
       out[0].selected = true;
     }
     return out;
+  }
+
+  /** ★ Q：顺序切换快捷物品（普通弹药 → 行囊内各项，循环；鼠标隐藏时的换武器/道具） */
+  private cycleQuickItem(): void {
+    const entries = this.buildAmmoEntries();
+    if (entries.length <= 1) return;
+    const idx = entries.findIndex((e) => e.id === this.selectedQuickItem);
+    const next = entries[(idx + 1) % entries.length];
+    this.selectedQuickItem = next.id;
+  }
+
+  /** ★ F：使用所选消耗品（弹药不在此列——弹药由攻击键发射） */
+  private useSelectedConsumable(): void {
+    const id = this.selectedQuickItem;
+    if (id === 'default' || FIREABLE_AMMO.has(id)) return;
+    const res = this.itemManager?.useItemId('player', id);
+    if (res?.message && this.player) {
+      const p = this.player.position;
+      this.showFloatingAt(p.x, p.y + 1.8, p.z, res.message, res.success ? 'heal' : 'miss');
+    }
   }
 
   /** ★ 轻微弹道修正（自瞄）：从枪口看，偏角 ≤ AIM_ASSIST_ANGLE 的最近方向目标 →

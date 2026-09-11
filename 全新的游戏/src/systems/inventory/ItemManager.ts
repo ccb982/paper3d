@@ -288,6 +288,18 @@ export class ItemManager {
     return { success: true, message: itemTo ? `已互换槽位 ${from + 1} ↔ ${to + 1}` : `已移到槽位 ${to + 1}` };
   }
 
+  /** ★ 按 itemId 使用一个（找该层第一堆 → 走 useItem；快捷栏 QF 消耗品用） */
+  useItemId(layer: keyof GameSession['inventories'], itemId: string): UseItemResult {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return { success: false, message: '背包未初始化' };
+    for (let r = 0; r < grid.length; r++) {
+      for (let c = 0; c < (grid[r]?.length ?? 0); c++) {
+        if (grid[r][c]?.itemId === itemId) return this.useItem(layer, r, c);
+      }
+    }
+    return { success: false, message: '背包中没有该物品' };
+  }
+
   /** ★ 局内装备临时属性：遍历出击槽累加各装备 stats（卸载/换装即自动消失，与遗物永久加成区分） */
   getEquipmentStats(): { maxHp: number; attackPower: number; defense: number } {
     const out = { maxHp: 0, attackPower: 0, defense: 0 };

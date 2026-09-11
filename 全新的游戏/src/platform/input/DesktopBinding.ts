@@ -55,6 +55,8 @@ export class DesktopBinding {
         if (e.code === 'KeyL') this.state.pressed.skill = true;
         if (e.code === 'KeyE') this.state.pressed.interact = true;
         if (e.code === 'KeyI') this.state.pressed.inventory = true;
+        if (e.code === 'KeyQ') this.state.pressed.switchItem = true;
+        if (e.code === 'KeyF') this.state.pressed.useItem = true;
         if (e.code === 'Space') this.state.pressed.jump = true;
       }
       this.keyState.set(e.code, true);
@@ -127,7 +129,7 @@ export class DesktopBinding {
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
-      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false };
+      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false, switchItem: false, useItem: false };
       this.state.interactions = [];
       this.state.zoomAxis = 0;
       pointerDown = false;
@@ -236,6 +238,20 @@ export class DesktopBinding {
   consumeInventory(): boolean {
     const v = this.state.pressed.inventory;
     this.state.pressed.inventory = false;
+    return v;
+  }
+
+  /** ★ 消费切换快捷物品键（Q） */
+  consumeSwitchItem(): boolean {
+    const v = this.state.pressed.switchItem;
+    this.state.pressed.switchItem = false;
+    return v;
+  }
+
+  /** ★ 消费使用消耗品键（F） */
+  consumeUseItem(): boolean {
+    const v = this.state.pressed.useItem;
+    this.state.pressed.useItem = false;
     return v;
   }
 

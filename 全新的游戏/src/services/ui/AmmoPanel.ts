@@ -38,7 +38,9 @@ export class AmmoPanel {
     this.root = document.createElement('div');
     this.root.style.cssText = [
       'position:fixed', 'left:8px', 'bottom:12px', 'z-index:998',
-      'display:flex', 'flex-direction:column-reverse', 'gap:4px',
+      // ★ 每列 4 个（column 自动流）：第 1 列自上而下 = 前 4 项，超出向右开新列
+      'display:grid', 'grid-auto-flow:column', 'grid-auto-columns:168px',
+      'grid-template-rows:repeat(4,auto)', 'gap:4px 6px',
       'pointer-events:auto',
     ].join(';');
     document.body.appendChild(this.root);

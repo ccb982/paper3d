@@ -34,23 +34,6 @@
       ]
     },
     {
-      "id": "ammo_pack",
-      "name": "弹药包",
-      "type": "ammo",
-      "description": "补充 50 发弹药",
-      "maxStack": 20,
-      "combat": { "kind": "ammo", "ammoType": "default" },
-      "color": { "h": 0.1, "s": 0.9, "l": 0.6 },
-      "world": {
-        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.15, "hz": 0.2 },
-        "scale": 0.4,
-        "pickupRadius": 1.5
-      },
-      "effects": [
-        { "type": "ammo", "value": 50 }
-      ]
-    },
-    {
       "id": "iron_ore",
       "name": "铁矿石",
       "type": "material",

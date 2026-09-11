@@ -2,7 +2,7 @@
 // CombatItemController —— 战斗道具播放装配（弹药 + 友军 + 装备）
 // ============================================================
 // WorldMode 唯一的战斗道具播放入口：
-//   ammo     弹药池（数值 + AmmoHud 由 WorldUIManager 消费）
+//   ammo     弹药池（数值；快捷栏 AmmoPanel 显示背包弹药，弹药包已移除）
 //   equipment 装备贴片（挂主角 mesh，场景内自动渲染）
 //   友军    由 WorldMode 进战场时查 AllyPlaybackRegistry 分发
 // 方向：表现模块单向调用 Session/ItemManager，不反向。
