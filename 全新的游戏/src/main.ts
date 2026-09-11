@@ -86,6 +86,8 @@ let mobAssets: FtxAsset[] = [];
 let hitEffectAsset: Asset | null;
 /** ★ 可露希尔的无人机（特效包优先，回退纯纹理包） */
 let droneAsset: Asset | FtxAsset | null = null;
+/** ★ 祖宗素材（站桩友军；缺失时回退无人机素材占位） */
+let sentinelAsset: Asset | FtxAsset | null = null;
 /** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
 let testChunk = false;
 
@@ -182,6 +184,19 @@ async function boot() {
   }
   // ★ 预热无人机动态图标（主渲染器离屏烘焙；背包/加工台从 this 取动画帧）
   getDroneIconAnimator().warm(droneAsset);
+
+  // ---- ★ 祖宗素材（站桩友军）：特效包优先 → 纯纹理包 → 无人机素材占位 ----
+  //   路径约定：public/fx/祖宗.scene.zip（或 .ftx3.gz）；素材到位只放文件即可
+  try {
+    sentinelAsset = await Asset.load(encodeURI('/fx/祖宗.scene.zip'));
+  } catch {
+    try {
+      sentinelAsset = await FtxAsset.load(encodeURI('/fx/祖宗.ftx3.gz'));
+    } catch {
+      console.warn('[boot] 祖宗素材缺失，暂用无人机素材占位（放入 public/fx/祖宗.scene.zip 或 .ftx3.gz 即生效）');
+      sentinelAsset = droneAsset;
+    }
+  }
 
   // ---- ★ 月亮贴图：加载大猫哥月亮素材包（特效播放器解码），替换天空程序化月相 ----
   try {
@@ -463,6 +478,7 @@ function enterWorldMode(
     enemyAssets: mobAssets,
     hitEffectAsset: hitEffectAsset ?? undefined,
     droneAsset: droneAsset ?? undefined,
+    sentinelAsset: sentinelAsset ?? undefined,
     debug: { testChunk },
     onReturn: () => {
       // 返回时：推进天数 + 进入 ShipMode

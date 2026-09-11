@@ -24,6 +24,7 @@ import { DroneBeamEffect } from '../services/render/DroneBeam';
 import { executeAttack } from '../services/combat/Attack';
 import { RasterMap } from '../services/map/RasterMap';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
+import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 
 /** 无人机 AI 状态 */
 export type DroneState = 'follow' | 'approach' | 'attack' | 'return';
@@ -37,6 +38,9 @@ const ATTACK_CD = 1.2;      // 挥击冷却（秒）
 const DRONE_DAMAGE = 12;    // 单次挥击伤害
 /** ★ 攻击瞄准高度：敌人身体（脚部 + 0.9m 躯干），不追脚、不擦角 */
 const ATTACK_AIM_Y = 0.9;
+/** ★ 站桩模式（祖宗）：以自身为中心的索敌/攻击参数 */
+const SENTINEL_RANGE = 12;      // 索敌/射程（米）
+const SENTINEL_ATTACK_CD = 1.1; // 远程射击冷却（秒）
 
 export interface DroneOptions extends Omit<EntityBaseOptions, 'kind'> {
   /** 贴片放大（默认 1.2） */
@@ -52,6 +56,14 @@ export class DroneEntity extends EntityBase {
   slotIndex = -1;
   /** ★ 道具 ID（HUD 图标/名称用；WorldMode 生成时写入） */
   itemId = '';
+  /** ★ 站桩模式（祖宗）：原地不动、绕自身索敌、走注入的远程攻击 */
+  stationary = false;
+  /** ★ 站桩基座高度（放置时的 y；贴地 + 微浮动，不移动） */
+  stationaryBaseY = 0;
+  /** ★ 远程攻击回调（站桩模式；WorldMode 注入 = 发射友军弹道） */
+  rangedAttack: ((target: EntityBase) => void) | null = null;
+  /** ★ 常驻流体（祖宗：单帧 + 流体参数；由资产缓存持有，实体销毁不 dispose） */
+  private soulFluid: FluidEffect | null = null;
   /** 当前 AI 状态（调试/表现可读） */
   aiState: DroneState = 'follow';
   /** 悬浮相位（正弦摆动/环绕用） */
@@ -122,11 +134,10 @@ export class DroneEntity extends EntityBase {
     return !!t && t.camp === 'enemy' && (t as { hp?: number }).hp != null && (t as { hp?: number }).hp! > 0;
   }
 
-  /** ★ 玩家周围半径内最近的存活敌人（此刻距离最近；horizontal） */
-  private findNearestEnemy(radius: number): EntityBase | null {
+  /** ★ 半径内最近的存活敌人（默认绕玩家；站桩模式传自身坐标） */
+  private findNearestEnemy(radius: number, px = this.playerPos.x, pz = this.playerPos.z): EntityBase | null {
     let best: EntityBase | null = null;
     let bestD2 = Infinity;
-    const px = this.playerPos.x, pz = this.playerPos.z;
     for (const b of this.em.querySphere(px, pz, radius)) {
       if (!this.targetAlive(b)) continue;
       const dx = b.position.x - px, dz = b.position.z - pz;
@@ -174,6 +185,11 @@ export class DroneEntity extends EntityBase {
   updateAI(dt: number, camera?: THREE.Camera | null): void {
     this.lastCamera = camera ?? this.lastCamera;
     this.phase += dt * 2.2;
+    // ★ 站桩模式（祖宗）：不跟随/不移动，绕自身索敌 + 远程攻击
+    if (this.stationary) {
+      this.updateStationaryAI(dt);
+      return;
+    }
     const p = this.entity.position;
     const distPlayer = Math.hypot(p.x - this.playerPos.x, p.z - this.playerPos.z);
 
@@ -268,6 +284,49 @@ export class DroneEntity extends EntityBase {
     } else {
       this._lastX = p.x; this._lastZ = p.z;
     }
+  }
+
+  /** ★ 启用常驻流体（祖宗：读取该帧自带的流体参数；单帧资产专用）。
+   *  实例由资产内部缓存持有（重复放置复用同一份），实体销毁不 dispose。 */
+  enableAmbientFluid(renderer: THREE.WebGLRenderer): void {
+    const source = this.anim?.source as unknown as {
+      getFluidEffect?: (i: number, r: THREE.WebGLRenderer) => FluidEffect | null;
+    } | null;
+    this.soulFluid = source?.getFluidEffect?.(0, renderer) ?? null;
+  }
+
+  /** ★ 祖宗常驻流体合成纹理（FTXQuad 采样；无流体 = 原贴图） */
+  protected override getFluidTexture(): THREE.Texture | null {
+    return this.soulFluid ? this.soulFluid.getCompositeTexture() : null;
+  }
+
+  /** ★ 站桩模式 AI（祖宗）：原地不动；绕自身索敌；目标在射程内 → 定时远程攻击。
+   *  远程攻击由模式层注入（rangedAttack → executeAttack projectile，友军弹道）。 */
+  private updateStationaryAI(dt: number): void {
+    const p = this.entity.position;
+    this.soulFluid?.step(dt);
+    if (!this.targetAlive(this.target)) this.target = null;
+    this.relockTimer -= dt;
+    if (!this.target && this.relockTimer <= 0) {
+      this.relockTimer = 0.4;
+      this.target = this.findNearestEnemy(SENTINEL_RANGE, p.x, p.z);
+    }
+    if (this.target) {
+      const t = this.target;
+      const d = Math.hypot(p.x - t.position.x, p.z - t.position.z);
+      if (d > SENTINEL_RANGE * 1.25) {
+        this.target = null; // 超出射程：重新索敌
+      } else {
+        this.attackCd -= dt;
+        if (this.attackCd <= 0) {
+          this.attackCd = SENTINEL_ATTACK_CD;
+          this.rangedAttack?.(t);
+        }
+      }
+    }
+    // 原地微浮动（贴地 + 相位起伏；不移动）
+    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    p.y = Math.max(gy + 0.25, this.stationaryBaseY) + Math.sin(this.phase) * 0.1;
   }
 
   /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓） */

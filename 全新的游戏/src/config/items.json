@@ -254,6 +254,22 @@
       ]
     },
     {
+      "id": "zuzong",
+      "name": "祖宗",
+      "type": "consumable",
+      "description": "放置一个站桩的祖宗，自动攻击附近敌人",
+      "maxStack": 1,
+      "color": { "h": 0.72, "s": 0.45, "l": 0.45 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.25, "hy": 0.25, "hz": 0.25 },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "summon_sentinel" }
+      ]
+    },
+    {
       "id": "kaltsit_drone_broken",
       "name": "无人机残骸",
       "type": "material",

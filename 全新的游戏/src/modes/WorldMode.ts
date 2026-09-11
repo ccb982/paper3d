@@ -18,6 +18,7 @@ import { allyPlaybackRegistry } from '../systems/itemPlayback/AllyPlayback';
 import type { Asset } from '../vendor/player';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
+import type { EntityBase } from '../entity/EntityBase';
 import { Player } from '../entity/Player';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
@@ -71,6 +72,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   hitEffectAsset?: Asset;
   /** ★ 可露希尔的无人机素材（特效包优先，回退纯纹理包） */
   droneAsset?: Asset | FtxAsset;
+  /** ★ 祖宗素材（站桩友军；缺省回退无人机素材） */
+  sentinelAsset?: Asset | FtxAsset;
   /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
   debug?: { testChunk?: boolean };
 }
@@ -180,8 +183,12 @@ export class WorldMode implements IGameMode {
   private drones: DroneEntity[] = [];
   /** ★ 无人机素材（特效包/纯纹理包；enter 存入上下文引用） */
   private droneAsset: Asset | FtxAsset | null = null;
+  /** ★ 祖宗素材（站桩友军；缺省回退无人机素材，美术到位后只换路径） */
+  private sentinelAsset: Asset | FtxAsset | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
+  /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
+  private sentinelSummonUnsub?: () => void;
   /** ★ 出击槽池变动订阅（部署/卸载/替换 → 友军生成/回收；enter 注册 / exit 移除） */
   private deploymentUnsub?: () => void;
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
@@ -319,6 +326,11 @@ export class WorldMode implements IGameMode {
       session: ctx.session,
       itemManager: this.itemManager,
     });
+    // ★ 起始角色额外携带：祖宗（局内道具，每局补足 1 个；已有则不重复给）
+    if (!this.itemManager.hasItem('player', 'zuzong', 1)
+      && this.itemManager.hasSpace('player', 'zuzong', 1)) {
+      this.itemManager.addItem('player', 'zuzong', 1);
+    }
 
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
@@ -440,6 +452,8 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 无人机素材（特效包优先；道具召唤用） ----
     this.droneAsset = ctx.droneAsset ?? null;
+    // ★ 祖宗素材（缺省回退无人机素材 → 美术到位前管线可跑）
+    this.sentinelAsset = ctx.sentinelAsset ?? null;
     // ★ 进入战场：按出击槽池生成友军（残骸/装备类不生成；槽位号 = 池内下标）
     if (this.droneAsset) {
       const slots = this.itemManager?.getSlots?.() ?? [];
@@ -511,6 +525,10 @@ export class WorldMode implements IGameMode {
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
       this.spawnDroneNearPlayer();
+    });
+    // ★ 祖宗放置：使用「祖宗」局内道具 → 玩家身前站桩友军（同类型限 1，重复使用 = 移位重放）
+    this.sentinelSummonUnsub = eventBus.on('sentinel_summon', () => {
+      this.spawnSentinelNearPlayer();
     });
     // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
     this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
@@ -762,6 +780,8 @@ export class WorldMode implements IGameMode {
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
+    this.sentinelSummonUnsub?.();
+    this.sentinelSummonUnsub = undefined;
     this.deploymentUnsub?.();
     this.deploymentUnsub = undefined;
     for (const d of this.drones) d.dispose();
@@ -1220,6 +1240,53 @@ export class WorldMode implements IGameMode {
     this.drones.push(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
+  }
+
+  /** ★ 放置祖宗（站桩友军）：身前 2m；同类型限 1 个（重复使用 = 回收旧的再放新的） */
+  private spawnSentinelNearPlayer(): void {
+    if (!this.scene || !this.player) return;
+    const asset = this.sentinelAsset ?? this.droneAsset;
+    if (!asset) return;
+    // 限 1：先回收旧祖宗
+    for (let i = this.drones.length - 1; i >= 0; i--) {
+      const d = this.drones[i];
+      if (d.stationary) {
+        this.drones.splice(i, 1);
+        d.dispose();
+      }
+    }
+    const fw = this.cameraCtrl.getFrame().forward;
+    const px = this.player.position.x + fw.x * 2;
+    const pz = this.player.position.z + fw.z * 2;
+    const py = this.raster.surfaceHeightAt(px, pz) + 0.2;
+    const s = new DroneEntity(this.entities, this.scene, asset, { x: px, y: py, z: pz, scale: 1.0 });
+    s.slotIndex = -1;
+    s.itemId = 'zuzong';
+    s.stationary = true;
+    s.stationaryBaseY = py;
+    s.rangedAttack = (t) => this.fireSentinelShot(s, t);
+    this.drones.push(s);
+    if (this.renderer) {
+      s.setRenderer(this.renderer);
+      // ★ 祖宗：单帧 + 流体参数 → 启用常驻流体（魂体流动；无流体参数则自动跳过）
+      s.enableAmbientFluid(this.renderer);
+    }
+  }
+
+  /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */
+  private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
+    if (!this.bullets) return;
+    const p = from.position;
+    const tp = target.position;
+    let dx = tp.x - p.x, dy = tp.y + 0.8 - p.y, dz = tp.z - p.z;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    dx /= len; dy /= len; dz /= len;
+    executeAttack(this.entities, this.bullets, {
+      type: 'projectile', source: from,
+      x: p.x + dx * 0.6, y: p.y + dy * 0.6, z: p.z + dz * 0.6,
+      dirX: dx, dirY: dy, dirZ: dz,
+      speed: 18, camp: 'ally', lifetime: 1.2, damage: 8,
+    });
   }
 
   /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。

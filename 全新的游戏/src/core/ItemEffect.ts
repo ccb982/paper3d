@@ -84,3 +84,9 @@ effectRegistry.set('summon_drone', (_params, _ctx) => {
   eventBus.emit('drone_summon', {});
   return { success: true, message: '已放出可露希尔的无人机' };
 });
+
+effectRegistry.set('summon_sentinel', (_params, _ctx) => {
+  // ★ 放置「祖宗」：广播事件，由 WorldMode 在玩家身前放置站桩友军
+  eventBus.emit('sentinel_summon', {});
+  return { success: true, message: '已放置祖宗' };
+});
