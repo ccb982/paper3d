@@ -37,35 +37,54 @@ export class AllyHud {
   private root: HTMLDivElement;
   private rows = new Map<string, Row>();
   private iconRegistry: ItemIconRegistry;
+  /** 待播放的装备变动闪效槽位（deployment_changed 事件驱动；每帧应用一次即清，绝不会循环闪） */
+  private flashSlots = new Set<number>();
+  private flashUnsub: (() => void) | null = null;
+  /** 上一帧列表是否为空（构造时为 true）→ 空→有行 = 入场，播一次进入动画 */
+  private lastWasEmpty = true;
 
   constructor(private itemManager: ItemManager) {
     this.iconRegistry = new ItemIconRegistry(itemManager);
     this.root = document.createElement('div');
     this.root.style.cssText = [
       'position:fixed', 'left:8px', 'top:206px', 'z-index:40',
-      'display:flex', 'flex-direction:column', 'gap:6px',
+      // ★ 两列 × 六行：column 自动流 → 槽位号自上而下、每列 6 个（列1 = 槽1-6，列2 = 槽7-12）
+      'display:grid', 'grid-auto-flow:column', 'grid-auto-columns:172px',
+      'grid-template-rows:repeat(6,auto)', 'gap:6px 8px',
       'pointer-events:none',
     ].join(';');
     document.body.appendChild(this.root);
+    // ★ 出击槽位变动（拖入/拖出/互换）→ 一次性角标弹跳 + 卡片亮闪（仅真实变动，不会每帧循环）
+    import('../../core/EventBus').then(({ eventBus }) => {
+      this.flashUnsub = eventBus.on('deployment_changed', (payload) => {
+        this.flashSlots.add(payload.slotIndex);
+      });
+    });
   }
 
   /** 每帧：按 id 增删/排序行，刷新血条与数值（低血量呼吸） */
   update(allies: AllyHudEntry[]): void {
+    // ★ 入场判定：空列表 → 出现行 = 进入地图，该批新建行各播一次入场动画；其余增删不播
+    const entering = allies.length > 0 && this.lastWasEmpty;
     // 1) 移除消失的
+    let dirty = false;
     for (const [id, r] of this.rows) {
       if (!allies.some((a) => a.id === id)) {
         r.el.remove();
         this.rows.delete(id);
+        dirty = true;
       }
     }
-    // 2) 建行 / 刷新（appendChild 把已有节点移到末尾 → 顺序跟随 allies）
+    // 2) 建行 / 刷新（新行按 allies 顺序追加 → 两列网格按槽位号排布）
     for (const a of allies) {
       let r = this.rows.get(a.id);
       if (!r) {
         r = this.buildRow(a.itemId, a.slot);
         this.rows.set(a.id, r);
+        this.root.appendChild(r.el);
+        if (entering) this.playEnter(r.el);
+        dirty = true;
       }
-      this.root.appendChild(r.el);
       // ★ 槽号角标：把"当前条目"的槽位写给它自己的角标；只有槽位值变化时才重算
       //   （进图首帧算一次；槽位交换/拖入/拖出时才变 → 恰好交换时重算，稳态零 DOM 写）
       const slot = a.slot ?? -1;
@@ -73,6 +92,12 @@ export class AllyHud {
         r.lastSlot = slot;
         r.badge.textContent = String(slot + 1);
         r.badge.style.display = slot >= 0 ? 'block' : 'none';
+      }
+      // ★ 装备变动动画：事件驱动（deployment_changed），命中该槽位行时播放一次即清
+      if (this.flashSlots.delete(slot)) {
+        this.playFlash(r);
+        // ★ 物品替换：同槽位新行带偏移入场（滑动进入），与亮闪叠加
+        this.playEnter(r.el);
       }
       const ratio = a.maxHp > 0 ? Math.max(0, Math.min(1, a.hp / a.maxHp)) : 0;
       const low = ratio <= 0.35;
@@ -87,6 +112,44 @@ export class AllyHud {
       r.hpText.textContent = `${Math.ceil(Math.max(0, a.hp))}/${Math.ceil(a.maxHp)}`;
       r.hpText.style.color = low ? '#ff9c9c' : 'rgba(214,226,238,.88)';
     }
+    // 3) 仅在有增删当帧收敛一次 DOM 顺序（按 allies 槽位序；稳态零写入，不产生列表级动画）
+    if (dirty) {
+      for (const a of allies) {
+        const r = this.rows.get(a.id);
+        if (r) this.root.appendChild(r.el);
+      }
+    }
+    this.flashSlots.clear();
+    this.lastWasEmpty = allies.length === 0;
+  }
+
+  /** 入场动画：新批同行淡入 + 左侧滑入（进入地图播一次；稳态/替换不播） */
+  private playEnter(el: HTMLElement): void {
+    el.animate(
+      [
+        { opacity: '0', transform: 'translateX(-14px)' },
+        { opacity: '1', transform: 'translateX(0)' },
+      ],
+      { duration: 320, easing: 'ease-out' },
+    );
+  }
+
+  /** 装备变动：角标弹跳缩放 + 卡片金色亮闪（一次性，事件驱动，绝不循环） */
+  private playFlash(r: Row): void {
+    r.badge.animate(
+      [
+        { transform: 'scale(1.7)', backgroundColor: '#ffe9a8' },
+        { transform: 'scale(1)', backgroundColor: '#f0cf74' },
+      ],
+      { duration: 200, easing: 'ease-out' },
+    );
+    r.el.animate(
+      [
+        { filter: 'brightness(1.8)' },
+        { filter: 'brightness(1)' },
+      ],
+      { duration: 480, easing: 'ease-out' },
+    );
   }
 
   /** 单行：斜切卡片 + 金边头像（含槽号角标）+ 名称/血条/数值 */
@@ -127,9 +190,9 @@ export class AllyHud {
       'color:#0b0e13', 'background:#f0cf74', 'border-radius:2px',
       'font-weight:bold',
     ].join(';');
-    const slotNum = slot ?? -1;
-    badge.textContent = String(slotNum + 1);
-    badge.style.display = slotNum >= 0 ? 'block' : 'none';
+    const slotNow = slot ?? -1;
+    badge.textContent = String(slotNow + 1);
+    badge.style.display = slotNow >= 0 ? 'block' : 'none';
     iconBox.appendChild(badge);
 
     // ---- 右侧：名称 + 血条 + 数值 ----
@@ -166,11 +229,13 @@ export class AllyHud {
 
     el.appendChild(iconBox);
     el.appendChild(col);
-    this.root.appendChild(el);
-    return { el, fill, hpText, badge, lastSlot: slot ?? -1 };
+    const slotNum = slot ?? -1;
+    return { el, fill, hpText, badge, lastSlot: slotNum };
   }
 
   dispose(): void {
+    this.flashUnsub?.();
+    this.flashUnsub = null;
     this.rows.clear();
     this.root.remove();
   }
