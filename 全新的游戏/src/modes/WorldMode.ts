@@ -16,6 +16,7 @@ import { FtxAsset } from '../vendor/player/FtxAsset';
 import { CombatItemController } from '../systems/itemPlayback/CombatItemController';
 import { allyPlaybackRegistry } from '../systems/itemPlayback/AllyPlayback';
 import type { Asset } from '../vendor/player';
+import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
 import { CharacterBase } from '../entity/CharacterBase';
@@ -82,6 +83,9 @@ const SENTINEL_TAUNT_RADIUS = 40;
 /** ★ 祖宗弹（专属投影物）：速度（m/s）/ 寿命（s） */
 const SENTINEL_SHOT_SPEED = 20;
 const SENTINEL_SHOT_LIFETIME = 3.0;
+/** ★ 祖宗弹命中伤害 = max(下限, 主角攻击力 × 系数)，结算后立即落地生成祖宗 */
+const SENTINEL_IMPACT_MIN_DAMAGE = 8;
+const SENTINEL_IMPACT_ATK_RATIO = 0.8;
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
@@ -221,6 +225,8 @@ export class WorldMode implements IGameMode {
   private sentinelShots: SentinelProjectile[] = [];
   /** 祖宗弹共享纹理（懒建；exit 释放） */
   private sentinelTex: THREE.CanvasTexture | null = null;
+  /** ★ 祖宗共享流体（多个祖宗共用一份；每帧只步进一次，避免 N 倍求解卡顿） */
+  private sentinelFluid: FluidEffect | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -708,6 +714,10 @@ export class WorldMode implements IGameMode {
     //   先于实体管线，保证本帧 syncRender 使用新位置。
     const _e0 = performance.now();
     if (this.drones.length > 0) {
+      // ★ 祖宗共享流体：每帧只步进一次（有存活祖宗时）
+      if (this.sentinelFluid && this.drones.some((d) => d.stationary && d.hp > 0)) {
+        this.sentinelFluid.step(dt);
+      }
       const dp = this.player.position;
       const frame = this.cameraCtrl.getFrame();
       for (let i = 0; i < this.drones.length; i++) {
@@ -1337,19 +1347,11 @@ export class WorldMode implements IGameMode {
     if (this.renderer) drone.setRenderer(this.renderer);
   }
 
-  /** ★ 在指定落点生成祖宗（站桩友军）：同类型限 1 个（重复 = 回收旧的再放新的） */
+  /** ★ 在指定落点生成祖宗（站桩友军）：每个祖宗都是独立实体，可多个并存（列表按落地顺序追加） */
   private spawnSentinelAt(x: number, z: number): void {
     if (!this.scene || !this.player) return;
     const asset = this.sentinelAsset ?? this.droneAsset;
     if (!asset) return;
-    // 限 1：先回收旧祖宗
-    for (let i = this.drones.length - 1; i >= 0; i--) {
-      const d = this.drones[i];
-      if (d.stationary) {
-        this.drones.splice(i, 1);
-        d.dispose();
-      }
-    }
     // ★ 与主角同尺寸（主角 applyRenderScale(2.0)）；中心锚点 → 半身高贴身摆放（可调）
     const py = this.raster.surfaceHeightAt(x, z) + 0.5;
     const s = new DroneEntity(this.entities, this.scene, asset, { x, y: py, z, scale: 2.0 });
@@ -1363,6 +1365,13 @@ export class WorldMode implements IGameMode {
       s.setRenderer(this.renderer);
       // ★ 祖宗：单帧 + 流体参数 → 启用常驻流体（魂体流动；无流体参数则自动跳过）
       s.enableAmbientFluid(this.renderer);
+      // ★ 魂体渲染模式：流体裁到轮廓 + 不写深度（透明背景不挡水/子弹）
+      s.enableSoulRenderMode();
+      // ★ 记录共享流体实例（资产缓存同一份）→ WorldMode 每帧只步进一次
+      const fxSrc = asset as unknown as {
+        getFluidEffect?: (i: number, r: THREE.WebGLRenderer) => FluidEffect | null;
+      };
+      this.sentinelFluid ??= fxSrc.getFluidEffect?.(0, this.renderer) ?? null;
     }
   }
 
@@ -1413,18 +1422,42 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** 每帧推进祖宗弹：落地/寿命到 → 在原处地面生成站桩祖宗 */
+  /** 每帧推进祖宗弹：命中敌人 → 少量伤害 + 原地落地；触地/寿命到 → 原地生成站桩祖宗 */
   private updateSentinelShots(dt: number): void {
     if (this.sentinelShots.length === 0 || !this.camera) return;
     for (let i = this.sentinelShots.length - 1; i >= 0; i--) {
       const shot = this.sentinelShots[i];
       const land = shot.update(dt, this.camera);
-      if (land) {
+      // ★ 命中敌人：来点伤害（然后按落点处理）
+      const hit = land ? null : this.sentinelShotHitEnemy(shot);
+      if (hit) {
+        const dmg = Math.max(
+          SENTINEL_IMPACT_MIN_DAMAGE,
+          Math.round(this.player.attackPower * SENTINEL_IMPACT_ATK_RATIO),
+        );
+        const r = applyDamage(dmg, this.player, hit);
+        eventBus.emit('damage', { target: hit, source: this.player, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+      }
+      if (land || hit) {
         this.sentinelShots.splice(i, 1);
+        const p = shot.sprite.position;
         shot.dispose();
-        this.spawnSentinelAt(land.x, land.z);
+        this.spawnSentinelAt(p.x, p.z);
       }
     }
+  }
+
+  /** 祖宗弹命中检测（球心 ≈ 弹体中心；半径 1.0m，含高度带） */
+  private sentinelShotHitEnemy(shot: SentinelProjectile): EnemyBase | null {
+    const p = shot.sprite.position;
+    for (const e of this.enemies) {
+      if (e.hp <= 0) continue;
+      const dx = e.position.x - p.x;
+      const dy = (e.position.y + 0.9) - p.y;
+      const dz = e.position.z - p.z;
+      if (dx * dx + dy * dy + dz * dz <= 1.0 * 1.0) return e;
+    }
+    return null;
   }
 
   /** ★ 敌人索敌候选（优先级从高到低）：

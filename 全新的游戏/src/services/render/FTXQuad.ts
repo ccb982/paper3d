@@ -25,6 +25,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uResidual;
   uniform sampler2D uFluidTex;
   uniform float uUseFluid;
+  uniform float uFluidClip;
   uniform vec2 uFrameSize;
   uniform vec4 uBbox; // x, y, w, h（像素）
   varying vec2 vUv;
@@ -97,11 +98,18 @@ const FRAGMENT_SHADER = /* glsl */ `
     }
     if (uUseFluid > 0.5) {
       vec4 fluid = texture2D(uFluidTex, texUV);
+      // ★ 魂体模式（uFluidClip=1，祖宗等）：流体 alpha 裁到基础色轮廓——
+      //   背景不参与混合、不写深度（不挡水/子弹）；默认关（受击染料要能溢出体外）
+      float fa = fluid.a;
+      if (uFluidClip > 0.5) {
+        vec4 baseForClip = texture2D(uBaseTexture, texUV);
+        fa = min(fa, baseForClip.a);
+      }
       // ★ 全透明背景 discard（不写深度 → 水可透过贴片透明背景显示）：
       //   残差流动痕迹是渐变 alpha（>0.02），不受影响——仅在 alpha≈0 的
       //   纯背景处丢弃，保留"残差平流到基础色=0 区域"的流动表现。
-      if (fluid.a < 0.02) discard;
-      gl_FragColor = fluid;
+      if (fa < 0.02) discard;
+      gl_FragColor = vec4(fluid.rgb, fa);
       return;
     }
     vec4 base = texture2D(uBaseTexture, texUV);
@@ -154,6 +162,8 @@ export class FTXQuad extends FxRendererBase {
         uResidual: { value: null as unknown as THREE.Texture },
         uFluidTex: { value: null as unknown as THREE.Texture },
         uUseFluid: { value: 0 },
+        /** ★ 魂体模式：流体 alpha 裁到基础色轮廓（祖宗等；默认 0） */
+        uFluidClip: { value: 0 },
         uFrameSize: { value: this._frameSize },
         uBbox: { value: this._bbox },
         uTime: { value: 0 },
@@ -259,6 +269,17 @@ export class FTXQuad extends FxRendererBase {
     this._bbox.set(bbox.x, bbox.y, bbox.w, bbox.h);
     this._texAspect = frameSize.height / frameSize.width;
     this.material.uniforms.uFrameSize.value.needsUpdate = true;
+  }
+
+  /** ★ 魂体模式：流体 alpha 裁到基础色轮廓（祖宗等；默认关——受击染料需可溢出体外） */
+  setFluidClipToBase(v: boolean): void {
+    this.material.uniforms.uFluidClip.value = v ? 1 : 0;
+  }
+
+  /** ★ 深度写入开关（祖宗：透明背景不挡水/子弹；默认 true 保留水面遮挡语义） */
+  setDepthWrite(v: boolean): void {
+    this.material.depthWrite = v;
+    this.material.needsUpdate = true;
   }
 
   override dispose(): void {

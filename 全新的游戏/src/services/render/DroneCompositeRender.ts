@@ -103,6 +103,12 @@ class RtSamplerQuad extends FxRendererBase {
     }
     this.applyFlip();
   }
+
+  /** ★ 魂体模式：不写深度（透明背景不挡水/子弹） */
+  setDepthWrite(v: boolean): void {
+    this.material.depthWrite = v;
+    this.material.needsUpdate = true;
+  }
 }
 
 /**
@@ -375,6 +381,15 @@ export class DroneCompositeRender extends FxRendererBase {
   }
 
   /** 画布世界宽（米）；各图层按 bbox 比例随之缩放 */
+  /** ★ 魂体渲染模式（祖宗）：流体 alpha 裁到基础色轮廓——
+   *  背景像素 discard（不写深度、不混合 → 水/子弹可透过）；
+   *  本体像素保持正常深度写入（水面按深度正确遮挡，不会被水"盖到前面"） */
+  setSoulMode(): void {
+    for (const q of this.quads) {
+      q.setFluidClipToBase(true);
+    }
+  }
+
   setScaleKeepAspect(baseSize: number): void {
     this.worldWidth = baseSize;
     this.applyScale();

@@ -301,6 +301,12 @@ export class DroneEntity extends EntityBase {
     this.soulFluid = source?.getFluidEffect?.(0, renderer) ?? null;
   }
 
+  /** ★ 魂体渲染模式（祖宗）：透明背景不写深度、流体裁到轮廓（不挡水/子弹） */
+  enableSoulRenderMode(): void {
+    const r = this.renderer as unknown as { setSoulMode?: () => void } | null;
+    r?.setSoulMode?.();
+  }
+
   /** ★ 祖宗常驻流体合成纹理（FTXQuad 采样；无流体 = 原贴图） */
   protected override getFluidTexture(): THREE.Texture | null {
     return this.soulFluid ? this.soulFluid.getCompositeTexture() : null;
@@ -310,7 +316,7 @@ export class DroneEntity extends EntityBase {
    *  远程攻击由模式层注入（rangedAttack → executeAttack projectile，友军弹道）。 */
   private updateStationaryAI(dt: number): void {
     const p = this.entity.position;
-    this.soulFluid?.step(dt);
+    // ★ 流体步进由 WorldMode 统一每帧一次（多个祖宗共享同一份实例，绝不能每个都 step）
     if (!this.targetAlive(this.target)) this.target = null;
     this.relockTimer -= dt;
     if (!this.target && this.relockTimer <= 0) {
@@ -335,9 +341,12 @@ export class DroneEntity extends EntityBase {
     p.y = Math.max(gy + 0.5, this.stationaryBaseY);
   }
 
-  /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓） */
+  /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓）；
+   *  ★ 祖宗是 2.0 大体积站桩 → 用更大的影子，避免"看起来没影子" */
   protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
-    return { w: 1.1, h: 0.7, alpha: 0.32 };
+    return this.stationary
+      ? { w: 1.9, h: 1.3, alpha: 0.36 }
+      : { w: 1.1, h: 0.7, alpha: 0.32 };
   }
 
   /** ★ 剪影源：三层（主体+双翼）alpha 按各自 bbox 合成到整画布 →
