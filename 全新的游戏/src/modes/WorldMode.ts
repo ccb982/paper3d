@@ -16,6 +16,8 @@ import { FtxAsset } from '../vendor/player/FtxAsset';
 import { CombatItemController } from '../systems/itemPlayback/CombatItemController';
 import { allyPlaybackRegistry } from '../systems/itemPlayback/AllyPlayback';
 import type { Asset } from '../vendor/player';
+import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
+import { SentinelProjectile } from '../services/fx/SentinelProjectile';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import type { EntityBase } from '../entity/EntityBase';
@@ -77,6 +79,9 @@ const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
 const FIREABLE_AMMO = new Set<string>(['zuzong']);
 /** ★ 祖宗吸仇恨半径（米）：敌人与祖宗在此范围内时，索敌优先级压过玩家 */
 const SENTINEL_TAUNT_RADIUS = 40;
+/** ★ 祖宗弹（专属投影物）：速度（m/s）/ 寿命（s） */
+const SENTINEL_SHOT_SPEED = 20;
+const SENTINEL_SHOT_LIFETIME = 3.0;
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
@@ -212,6 +217,10 @@ export class WorldMode implements IGameMode {
   private permStats: PlayerCombatStats | null = null;
   /** ★ 当前选择的弹药类型（'default' = 普通弹药；其余 = 可发射弹药 itemId，如祖宗） */
   private selectedAmmo = 'default';
+  /** ★ 祖宗弹投影物（专属纹理/朝向；落地或寿命到 → 生成站桩祖宗） */
+  private sentinelShots: SentinelProjectile[] = [];
+  /** 祖宗弹共享纹理（懒建；exit 释放） */
+  private sentinelTex: THREE.CanvasTexture | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -767,6 +776,8 @@ export class WorldMode implements IGameMode {
 
     // ---- 子弹效果/死亡动画 ----
     this.bullets.update(dt, this.camera);
+    // ★ 祖宗弹推进（落地/寿命到 → 生成站桩祖宗）
+    this.updateSentinelShots(dt);
     CharacterFxManager.update(dt, this.camera);
 
     // ---- 拾取发光粒子 ----
@@ -839,6 +850,10 @@ export class WorldMode implements IGameMode {
     this.deploymentUnsub?.();
     this.deploymentUnsub = undefined;
     for (const d of this.drones) d.dispose();
+    for (const s of this.sentinelShots) s.dispose();
+    this.sentinelShots = [];
+    this.sentinelTex?.dispose();
+    this.sentinelTex = null;
     this.drones = [];
     this.droneAsset = null;
     this.permStats = null;
@@ -1351,9 +1366,11 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 发射祖宗弹：从玩家枪口沿准星方向飞出；命中/落地由 resolveBulletHit 生成友军 */
+  /** ★ 发射祖宗弹：专属投影物（祖宗纹理、尾部朝飞行方向）；落地/寿命到 → 该处生成站桩祖宗 */
   private launchSentinelProjectile(): void {
-    if (!this.player || !this.bullets) return;
+    if (!this.player || !this.scene) return;
+    const tex = this.getSentinelTexture();
+    if (!tex) return;
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
     const ray = this.cameraRay();
@@ -1369,13 +1386,45 @@ export class WorldMode implements IGameMode {
         }
       }
     } catch { /* 忽略 */ }
-    executeAttack(this.entities, this.bullets, {
-      type: 'projectile', source: this.player,
-      x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
-      dirX: dx, dirY: dy, dirZ: dz,
-      speed: 20, camp: 'player', lifetime: 2.5, damage: 0,
-      allyOnHit: 'zuzong',
-    });
+    // 轻微弹道修正（与普通子弹同口径）
+    const assisted = this.aimAssist(muzzle, dx, dy, dz);
+    dx = assisted.x; dy = assisted.y; dz = assisted.z;
+    this.sentinelShots.push(new SentinelProjectile(
+      this.scene, tex,
+      muzzle.x + dx * 1.5, muzzle.y + dy * 1.5, muzzle.z + dz * 1.5,
+      dx, dy, dz, SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME,
+    ));
+  }
+
+  /** 祖宗弹纹理（懒建缓存：祖宗素材第 0 帧合成） */
+  private getSentinelTexture(): THREE.CanvasTexture | null {
+    if (this.sentinelTex) return this.sentinelTex;
+    const asset = this.sentinelAsset ?? this.droneAsset;
+    if (!asset) return null;
+    try {
+      const canvas = compositeFrameToCanvas(asset as unknown as FtxAsset, 0);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this.sentinelTex = tex;
+      return tex;
+    } catch (e) {
+      console.warn('[WorldMode] 祖宗弹纹理合成失败:', e);
+      return null;
+    }
+  }
+
+  /** 每帧推进祖宗弹：落地/寿命到 → 在原处地面生成站桩祖宗 */
+  private updateSentinelShots(dt: number): void {
+    if (this.sentinelShots.length === 0 || !this.camera) return;
+    for (let i = this.sentinelShots.length - 1; i >= 0; i--) {
+      const shot = this.sentinelShots[i];
+      const land = shot.update(dt, this.camera);
+      if (land) {
+        this.sentinelShots.splice(i, 1);
+        shot.dispose();
+        this.spawnSentinelAt(land.x, land.z);
+      }
+    }
   }
 
   /** ★ 敌人索敌候选（优先级从高到低）：
