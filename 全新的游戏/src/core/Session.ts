@@ -42,6 +42,7 @@ export interface GameSession {
     version: string;
     day: number;                // ★ 当前天数（既是进度标识，也是地图种子来源）
     totalDaysSurvived: number;
+    deaths: number;             // ★ 累计死亡次数（局外道具 "每次死亡×1.05 全属性" 的驱动）
     createdAt: string;
     lastSavedAt: string;
   };
@@ -96,6 +97,11 @@ export interface GameSession {
   // ----- ⑧ 每日进度 -----
   dayProgress: {
     hasDepartedToday: boolean;
+  };
+
+  // ----- ⑨ ★ 局外道具（只可抽取、不占背包、无需携带；拥有即全局永久生效） -----
+  outOfRun: {
+    owned: Record<string, number>; // 道具 id → 拥有数（重复抽取叠加）
   };
 }
 
@@ -337,9 +343,24 @@ export interface RelicConfigEntry {
   };
 }
 
+/** 局外道具配置（只可抽取、不入背包；拥有即全局永久生效） */
+export interface OutOfRunItemConfig {
+  id: string;
+  name: string;
+  rarity: number;
+  description: string;
+  /** FTX 纹理路径（仅展示用） */
+  texture?: string;
+  effect?: {
+    /** 每次死亡全属性 ×perDeathMultiplier（乘方累积：×（1.05 ^ 死亡次数×拥有数）） */
+    perDeathMultiplier?: number;
+  };
+}
+
 export function computeCombatStats(
   session: GameSession,
   relicConfig: Record<string, RelicConfigEntry>,
+  outOfRunConfig?: Record<string, OutOfRunItemConfig>,
 ): PlayerCombatStats {
   const base = session.player;
   const owned = session.relics.owned;
@@ -365,6 +386,16 @@ export function computeCombatStats(
     }
   }
 
+  // ---- ★ 局外道具：每次死亡全属性乘方累积（与藏品 multiplier 相乘） ----
+  const ownedOut = session.outOfRun?.owned ?? {};
+  const deaths = session.meta?.deaths ?? 0;
+  for (const [id, count] of Object.entries(ownedOut)) {
+    const cfg = outOfRunConfig?.[id];
+    const pdm = cfg?.effect?.perDeathMultiplier;
+    if (!cfg || !pdm || (count ?? 0) <= 0) continue;
+    multiplier *= Math.pow(pdm, deaths * count);
+  }
+
   return {
     hp: base.hp,
     maxHp: Math.floor(base.maxHp * multiplier) + bonusMaxHp,
@@ -388,6 +419,7 @@ export function createNewSession(): GameSession {
       version: '0.2.0',
       day: 1,
       totalDaysSurvived: 0,
+      deaths: 0,
       createdAt: new Date().toISOString(),
       lastSavedAt: new Date().toISOString(),
     },
@@ -405,5 +437,6 @@ export function createNewSession(): GameSession {
     ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
     gacha: { pityCounter: 0, totalPulls: 0 },
     dayProgress: { hasDepartedToday: false },
+    outOfRun: { owned: {} },
   };
 }

@@ -12,7 +12,10 @@ import * as THREE from 'three';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { Asset } from '../../vendor/player/index';
 import gachaPool from '../../config/gachaPool.json';
+import itemsJson from '../../config/items.json';
 import type { GameSession } from '../../core/Session';
+import { addItemToGrid } from '../../core/Session';
+import { OUT_OF_RUN_ITEM_CONFIG } from '../../config/outOfRunItems';
 
 import { SaveSystem } from '../../core/SaveSystem';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
@@ -133,7 +136,6 @@ export class GachaOverlay {
   
   private resultOverlay: HTMLDivElement;
   private resultList: HTMLDivElement;
-  private tickets: number;
   private _charMats: THREE.ShaderMaterial[] = [];
   private bgFluidEffect: FluidEffect | null = null;
   private isPointerDown = false;
@@ -283,7 +285,6 @@ export class GachaOverlay {
   constructor(
     private session: GameSession,
   ) {
-    this.tickets = (session as any).resources?.gachaTickets ?? 999;
     // 根容器
     this.root = document.createElement('div');
     this.root.id = 'gacha-overlay';
@@ -962,52 +963,90 @@ export class GachaOverlay {
 
   private doGacha(count: number): void {
     const s = this.session;
-    if (this.tickets < count) {
-      this.showResult([{ name: '招募凭证不足', rarity: 0, description: '需要 ' + count + ' 张招募凭证', isNew: false }]);
+    // ★ 抽卡完全免费：无票证、无资源消耗
+    if (!s.gacha) s.gacha = { pityCounter: 0, totalPulls: 0 };
+    if (!s.outOfRun) s.outOfRun = { owned: {} };
+    if (!s.outOfRun.owned) s.outOfRun.owned = {};
+
+    // ★ 单一综合池 = 局内道具（进背包）+ 局外道具（永久生效）；kind 决定落账目标
+    type PoolEntry = { kind: 'inRun' | 'outRun'; id: string; rarity: number; weight: number; name: string; description: string };
+    const pool: PoolEntry[] = [];
+    for (const it of (gachaPool.items ?? [])) {
+      const cfg = itemsJson.items.find((i) => i.id === it.id);
+      pool.push({
+        kind: 'inRun',
+        id: it.id,
+        rarity: it.rarity,
+        weight: it.weight,
+        name: cfg?.name ?? it.id,
+        description: cfg?.description ?? '',
+      });
+    }
+    for (const o of (gachaPool.outOfRunItems ?? [])) {
+      const cfg = OUT_OF_RUN_ITEM_CONFIG[o.id];
+      pool.push({
+        kind: 'outRun',
+        id: o.id,
+        rarity: o.rarity,
+        weight: o.weight,
+        name: cfg?.name ?? o.id,
+        description: cfg?.description ?? '',
+      });
+    }
+
+    if (pool.length === 0) {
+      this.showResult([{ kind: 'inRun', name: '卡池为空', rarity: 0, description: '卡池还没有收录任何道具', isNew: false }]);
       return;
     }
 
-    this.tickets -= count;
-    if (!s.gacha) s.gacha = { pityCounter: 0, totalPulls: 0 };
-    if (!s.allies.roster) s.allies.roster = [];
-
-    const chars = gachaPool.characters;
     let totalWeight = 0;
-    for (const ch of chars) totalWeight += ch.weight;
+    for (const p of pool) totalWeight += p.weight;
+    const topRarity = Math.max(...pool.map((p) => p.rarity));
+    const PITY_LIMIT = 60;
 
-    const results: Array<{ name: string; rarity: number; description: string; isNew: boolean }> = [];
+    const results: Array<{ kind: 'inRun' | 'outRun'; name: string; rarity: number; description: string; isNew: boolean }> = [];
     for (let i = 0; i < count; i++) {
       s.gacha.totalPulls++;
       s.gacha.pityCounter++;
 
-      let roll = Math.random() * totalWeight;
-      let picked = chars[0];
-
-      if (s.gacha.pityCounter >= 90) {
-        const sixStars = chars.filter(c => c.rarity === 6);
-        if (sixStars.length > 0) {
-          picked = sixStars[Math.floor(Math.random() * sixStars.length)];
-          s.gacha.pityCounter = 0;
-        }
+      let picked: PoolEntry;
+      if (s.gacha.pityCounter >= PITY_LIMIT) {
+        // ★ 保底：必出最高稀有度（局外道具）
+        const tops = pool.filter((p) => p.rarity === topRarity);
+        picked = tops[Math.floor(Math.random() * tops.length)];
       } else {
-        for (const ch of chars) {
-          roll -= ch.weight;
-          if (roll <= 0) { picked = ch; break; }
+        let roll = Math.random() * totalWeight;
+        picked = pool[0];
+        for (const p of pool) {
+          roll -= p.weight;
+          if (roll <= 0) { picked = p; break; }
         }
       }
 
-      const isNew = s.allies.roster.indexOf(picked.id) === -1;
-      results.push({
-        name: picked.name,
-        rarity: picked.rarity,
-        description: picked.description,
-        isNew,
-      });
-
-      if (isNew) {
-        s.allies.roster.push(picked.id);
+      if (picked.kind === 'inRun') {
+        // 局内道具 → 入玩家背包（同层合并；背包满 → 白抽警示）
+        const added = addItemToGrid(s.inventories.player, picked.id, 1);
+        results.push({
+          kind: 'inRun',
+          name: picked.name,
+          rarity: picked.rarity,
+          description: added ? picked.description : picked.description + '（玩家背包已满，无法入账）',
+          isNew: false,
+        });
+      } else {
+        // 局外道具 → 永久生效（数量叠加）
+        const owned = s.outOfRun.owned[picked.id] ?? 0;
+        s.outOfRun.owned[picked.id] = owned + 1;
+        results.push({
+          kind: 'outRun',
+          name: picked.name,
+          rarity: picked.rarity,
+          description: picked.description,
+          isNew: owned === 0,
+        });
       }
-      if (picked.rarity === 6) s.gacha.pityCounter = 0;
+      // ★ 抽中最高稀有度 → 保底计数重置（局外道具同样重置，防刷保底）
+      if (picked.rarity >= topRarity) s.gacha.pityCounter = 0;
     }
 
     this.updatePullCount();
@@ -1015,7 +1054,7 @@ export class GachaOverlay {
     this.showResult(results);
   }
 
-  private showResult(results: Array<{ name: string; rarity: number; description: string; isNew: boolean }>): void {
+  private showResult(results: Array<{ kind: 'inRun' | 'outRun'; name: string; rarity: number; description: string; isNew: boolean }>): void {
     this.resultList.innerHTML = '';
     for (const r of results) {
       const item = document.createElement('div');
@@ -1033,8 +1072,12 @@ export class GachaOverlay {
       const rarityLabel = r.rarity >= 6 ? '\u26056' : r.rarity >= 5 ? '\u26055' : r.rarity >= 4 ? '\u26054' : '\u26053';
       const newBadge = r.isNew ? ' \uD83C\uDD95' : '';
 
+      const badge = r.kind === 'outRun'
+        ? '<span style="color:#ff9;font-size:12px;padding:1px 6px;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.4);border-radius:4px;margin-right:6px;">局外道具</span>'
+        : '<span style="color:#9cf;font-size:12px;padding:1px 6px;background:rgba(68,136,255,0.15);border:1px solid rgba(68,136,255,0.45);border-radius:4px;margin-right:6px;">局内道具</span>';
       const nameDiv = document.createElement('div');
-      nameDiv.innerHTML = '<div style="color:#eee;font-size:15px;font-weight:bold;">' + r.name + newBadge + '</div>' +
+      nameDiv.innerHTML = '<div style="color:#eee;font-size:15px;font-weight:bold;">' +
+        badge + r.name + newBadge + '</div>' +
         (r.description ? '<div style="color:#888;font-size:12px;margin-top:2px;">' + r.description + '</div>' : '');
 
       const raritySpan = document.createElement('span');

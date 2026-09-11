@@ -13,6 +13,7 @@ import type { ItemManager } from '../../systems/inventory/ItemManager';
 import type { CraftingManager } from '../../systems/inventory/CraftingManager';
 import type { InventoryPanel } from '../shared/InventoryPanel';
 import { createButton } from '../components/Button';
+import { OUT_OF_RUN_ITEM_CONFIG } from '../../config/outOfRunItems';
 
 // ------------------------------------------------------------
 // 行动面板
@@ -47,6 +48,7 @@ export class ActionPanel extends SidePanel<ActionPanelProps> {
       </div>
       <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
         <div>🏆 藏品: ${s.relics.owned.length} 件 | 干员: ${s.allies.roster.length} 人</div>
+        <div>🎁 局外道具: ${Object.keys(s.outOfRun?.owned ?? {}).length} 种 | 💀 累计死亡: ${s.meta?.deaths ?? 0} 次</div>
         <div>🎰 抽卡保底: ${s.gacha.pityCounter} 抽</div>
       </div>
     `;
@@ -149,6 +151,29 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
       html += `<span style="padding:4px 10px;background:rgba(102,68,170,0.3);border:1px solid #8866cc;border-radius:4px;font-size:12px;color:#caf;">${id}</span>`;
     }
     html += '</div></div>';
+
+    // ★ 局外道具（只可抽取、不入背包；拥有即全局永久生效）
+    const outOwned = this.props.session.outOfRun?.owned ?? {};
+    const outIds = Object.keys(outOwned);
+    const deaths = this.props.session.meta?.deaths ?? 0;
+    html += `
+      <div style="padding:8px;background:rgba(204,170,68,0.12);border-radius:4px;margin-top:10px;">
+        <h4 style="color:#ffc;margin:0 0 6px 0;">局外道具 (${outIds.length} 种 · 只可抽取 · 无需携带)</h4>
+        <div style="color:#ca9;font-size:12px;margin-bottom:8px;">💀 当前累计死亡 ${deaths} 次</div>
+        ${outIds.length === 0
+          ? '<div style="color:#665;font-size:12px;">还没有局外道具，去招募池抽取吧</div>'
+          : '<div style="display:flex;flex-direction:column;gap:6px;">' + outIds.map((id) => {
+              const cfg = OUT_OF_RUN_ITEM_CONFIG[id];
+              if (!cfg) return '';
+              const count = outOwned[id] ?? 0;
+              const stars = cfg.rarity >= 6 ? '★' : '☆';
+              return `<div style="padding:6px 10px;background:rgba(255,215,0,0.08);border:1px solid ${cfg.rarity >= 6 ? '#ffd700' : '#c8a0ff'};border-radius:4px;font-size:12px;">
+                <div style="color:#ffd;font-weight:bold;">${cfg.name} ${stars} ×${count}</div>
+                <div style="color:#ca9;margin-top:2px;">${cfg.description}</div>
+              </div>`;
+            }).join('') + '</div>'
+        }
+      </div>`;
     content.innerHTML = html;
   }
 }
