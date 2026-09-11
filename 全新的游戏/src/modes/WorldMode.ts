@@ -43,6 +43,7 @@ import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { eventBus } from '../core/EventBus';
+import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
@@ -326,10 +327,18 @@ export class WorldMode implements IGameMode {
       session: ctx.session,
       itemManager: this.itemManager,
     });
-    // ★ 起始角色额外携带：祖宗（局内道具，每局补足 1 个；已有则不重复给）
-    if (!this.itemManager.hasItem('player', 'zuzong', 1)
-      && this.itemManager.hasSpace('player', 'zuzong', 1)) {
-      this.itemManager.addItem('player', 'zuzong', 1);
+    // ★ 开局遗物授予（遗物 effect.startItems）：如「祖宗发射器」→ 开局背包自动获得祖宗
+    //   （已有则不重复给；缺格子则跳过）
+    const ownedRelics = ctx.session.outOfRun?.owned ?? {};
+    for (const [rid, rcount] of Object.entries(ownedRelics)) {
+      const rcfg = RELIC_ITEM_CONFIG[rid];
+      if (!rcfg || (rcount ?? 0) <= 0) continue;
+      for (const grant of rcfg.effect?.startItems ?? []) {
+        if (this.itemManager.hasItem('player', grant.itemId, grant.count)) continue;
+        if (this.itemManager.hasSpace('player', grant.itemId, grant.count)) {
+          this.itemManager.addItem('player', grant.itemId, grant.count);
+        }
+      }
     }
 
     // ---- ★ 死亡动画管线初始化 ----

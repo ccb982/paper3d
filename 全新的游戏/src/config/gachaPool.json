@@ -13,6 +13,7 @@
   ],
   "outOfRunItems": [
     { "id": "black_crown", "rarity": 5, "weight": 2 },
-    { "id": "gravel_love", "rarity": 5, "weight": 3 }
+    { "id": "gravel_love", "rarity": 5, "weight": 3 },
+    { "id": "zuzong_launcher", "rarity": 5, "weight": 3 }
   ]
 }

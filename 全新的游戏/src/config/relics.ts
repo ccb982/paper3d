@@ -27,5 +27,14 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     effect: { perDeathMultiplier: 1.05 },
   },
 
+  zuzong_launcher: {
+    id: 'zuzong_launcher',
+    name: '祖宗发射器',
+    rarity: 5,
+    description: '开局背包中自动获得一个祖宗',
+    texture: '/fx/祖宗发射器.ftx3.gz',
+    effect: { startItems: [{ itemId: 'zuzong', count: 1 }] },
+  },
+
   // 新增遗物只需在这里加配置，代码零改动
 };

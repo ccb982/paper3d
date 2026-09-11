@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from './Session';
-import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS, SLOT_COUNT } from './Session';
+import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS, SLOT_COUNT, STARTER_RELICS } from './Session';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -94,6 +94,13 @@ export const SaveSystem = {
       // ★ 旧字段清理（已并入槽池）
       delete (data as unknown as { deployedAllies?: unknown }).deployedAllies;
       delete (data.player as { equips?: unknown }).equips;
+
+      // ★ 旧档迁移：补足开局自带遗物（如祖宗发射器）——已有数量更高则保留
+      if (!data.outOfRun) data.outOfRun = { owned: {} };
+      const owned = data.outOfRun.owned ?? (data.outOfRun.owned = {});
+      for (const [id, n] of Object.entries(STARTER_RELICS)) {
+        if ((owned[id] ?? 0) < n) owned[id] = n;
+      }
 
       return data;
     } catch (e) {

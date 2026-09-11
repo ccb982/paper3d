@@ -331,6 +331,8 @@ export interface RelicItemConfig {
     perDeathMultiplier?: number;
     /** 每天全属性 ×perDayMultiplier（乘方累积：×（1.01 ^ 天数×拥有数）） */
     perDayMultiplier?: number;
+    /** ★ 开局授予局内道具（每次出击补足；已有则不重复给） */
+    startItems?: { itemId: string; count: number }[];
   };
 }
 
@@ -394,6 +396,13 @@ export function createNewSession(): GameSession {
     ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
     gacha: { pityCounter: 0, totalPulls: 0 },
     dayProgress: { hasDepartedToday: false },
-    outOfRun: { owned: { black_crown: 1 } },
+    // ★ 开局自带遗物：魔王的黑冠 + 祖宗发射器（维什戴尔的信物）；其余靠卡池抽取
+    outOfRun: { owned: { ...STARTER_RELICS } },
   };
 }
+
+/** ★ 开局自带遗物（新局默认 + 旧档迁移补足；维什戴尔信物） */
+export const STARTER_RELICS: Record<string, number> = {
+  black_crown: 1,
+  zuzong_launcher: 1,
+};
