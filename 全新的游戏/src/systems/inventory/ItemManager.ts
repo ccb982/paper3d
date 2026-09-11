@@ -227,6 +227,40 @@ export class ItemManager {
     return true;
   }
 
+  /** ★ 背包物品 ⇄ 已占用出击槽 互换：新物品入槽、旧槽物品回背包。
+   *  ★ 换出物品走 addItemToGrid 自动归类（并入同类堆；无同类才占空格）；
+   *  源格堆叠 >1 且无同类堆、无空格 → 拒绝（防丢件）。空槽 = 走 putIntoSlot。 */
+  swapIntoSlot(slotIndex: number, layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return { success: false, message: '槽位越界' };
+    const prev = slots[slotIndex];
+    if (!prev) return this.putIntoSlot(slotIndex, layer, row, col);
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const cell = grid?.[row]?.[col];
+    if (!cell) return { success: false, message: '物品不存在' };
+    const arch = this.archetypes.get(cell.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    if (!arch.deployable && arch.type !== 'equip') return { success: false, message: '该物品不能放入出击槽' };
+    // ★ 预检：换出物品能否回背包（有同类堆必可；否则需要空格——源格会空出也算）
+    const willFreeCell = cell.stackSize <= 1;
+    if (!findItemInGrid(grid, prev) && !willFreeCell && !findEmptySlot(grid)) {
+      return { success: false, message: '背包无空位放下换出的物品' };
+    }
+    const newId = cell.itemId;
+    if (willFreeCell) {
+      grid[row][col] = null; // 先腾出源格
+      slots[slotIndex] = newId;
+      addItemToGrid(grid, prev, 1); // ★ 自动归类：并入同类堆，否则落空格（含刚腾出的源格）
+    } else {
+      slots[slotIndex] = newId;
+      cell.stackSize -= 1;
+      addItemToGrid(grid, prev, 1); // ★ 自动归类
+    }
+    eventBus.emit('deployment_changed', { slotIndex, itemId: newId, prev });
+    return { success: true, message: `已与槽位 ${slotIndex + 1} 互换` };
+  }
+
   /** ★ 槽位原位替换（友军损毁 → 残骸占槽，不清除槽位；发事件通知回收旧实体） */
   replaceSlot(slotIndex: number, itemId: string): boolean {
     const slots = this.session.player.slots;

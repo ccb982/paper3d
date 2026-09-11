@@ -237,7 +237,8 @@ export class InventoryPanel {
           if (src) {
             const [l, r, c] = src.split(',');
             if (l && Number.isInteger(Number(r)) && Number.isInteger(Number(c))) {
-              result = this.opts.itemManager.putIntoSlot(s, l as keyof GameSession['inventories'], Number(r), Number(c));
+              // ★ 空槽 = 放入；已占用 = 与槽内物品互换（可装备/可部署均支持）
+              result = this.opts.itemManager.swapIntoSlot(s, l as keyof GameSession['inventories'], Number(r), Number(c));
             }
           }
         }

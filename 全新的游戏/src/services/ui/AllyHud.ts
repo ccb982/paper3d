@@ -66,13 +66,21 @@ export class AllyHud {
   update(allies: AllyHudEntry[]): void {
     // ★ 入场判定：空列表 → 出现行 = 进入地图，该批新建行各播一次入场动画；其余增删不播
     const entering = allies.length > 0 && this.lastWasEmpty;
-    // 1) 移除消失的
+    // 1) 移除消失的（★ 退场动画：淡出 + 左滑，播完再摘 DOM；换装/换槽后列表不乱跳）
     let dirty = false;
     for (const [id, r] of this.rows) {
       if (!allies.some((a) => a.id === id)) {
-        r.el.remove();
         this.rows.delete(id);
         dirty = true;
+        const anim = r.el.animate(
+          [
+            { opacity: '1', transform: 'translateX(0)' },
+            { opacity: '0', transform: 'translateX(-14px)' },
+          ],
+          { duration: 180, easing: 'ease-in' },
+        );
+        anim.onfinish = () => r.el.remove();
+        anim.oncancel = () => r.el.remove();
       }
     }
     // 2) 建行 / 刷新（新行按 allies 顺序追加 → 两列网格按槽位号排布）
