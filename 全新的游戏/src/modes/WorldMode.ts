@@ -44,6 +44,7 @@ import { BulletManager, type BulletHitPayload } from '../services/combat/BulletM
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { eventBus } from '../core/EventBus';
 import type { PlayerCombatStats } from '../core/Session';
+import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
@@ -72,6 +73,8 @@ const AIM_ASSIST_ANGLE = 0.05;    // 仅候选：偏角 ≤ ~2.9°
 const AIM_ASSIST_MAX = 0.03;      // 单发最多修正 ~1.7°
 const AIM_ASSIST_RANGE = 32;      // 只对 32m 内敌人生效（米）
 const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
+/** ★ 可发射弹药 itemId（背包中有该类型即可在弹药栏切换；开火消耗 1） */
+const FIREABLE_AMMO = new Set<string>(['zuzong']);
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
@@ -205,6 +208,8 @@ export class WorldMode implements IGameMode {
   private sentinelAsset: Asset | FtxAsset | null = null;
   /** ★ 永久战斗属性（基础 + 遗物；局内装备在其上临时叠加） */
   private permStats: PlayerCombatStats | null = null;
+  /** ★ 当前选择的弹药类型（'default' = 普通弹药；其余 = 可发射弹药 itemId，如祖宗） */
+  private selectedAmmo = 'default';
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -346,11 +351,14 @@ export class WorldMode implements IGameMode {
     this.player.hp = ctx.combatStats.hp;
     this.applyEquipmentStats();
 
-    // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 行囊落账
+    // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 优先背包（行囊），满则货舱/基地仓
     //   数量语义由各效果处理器决定（如 start_items：每件遗物 count × 拥有件数）
     for (const g of relicGrantsFor(ctx.session, RELIC_ITEM_CONFIG, 'onRunStart')) {
-      if (this.itemManager.hasSpace('player', g.itemId, g.count)) {
-        this.itemManager.addItem('player', g.itemId, g.count);
+      for (const layer of ['player', 'ship', 'base'] as const) {
+        if (this.itemManager.hasSpace(layer, g.itemId, g.count)) {
+          this.itemManager.addItem(layer, g.itemId, g.count);
+          break;
+        }
       }
     }
 
@@ -401,6 +409,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
     );
+    // ★ 弹药栏切换：点击左下角弹药条目 → 更新当前发射弹药（普通攻击消耗所选弹药）
+    this.worldUIManager.setAmmoSelector((id) => { this.selectedAmmo = id; });
     // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
     // ★ boss4D 玩家专属：真实落地模式（每次跳跃必须踩实地面，禁止悬空穿/悬浮连跳）
     this.player.controller.requireRealLanding = this.chunks.isBoss4D;
@@ -622,7 +632,7 @@ export class WorldMode implements IGameMode {
       cameraYaw: this.cameraCtrl.worldYaw,
       entities: this.entities.allBases(),
       playerStats: { hp: this.player.hp, maxHp: this.player.maxHp },
-      ammo: this.combatItems.ammo.getCount(),
+      ammoEntries: this.buildAmmoEntries(),
       allies: this.drones
         .map((d) => ({
           id: `a${d.entity.id}`,
@@ -960,6 +970,16 @@ export class WorldMode implements IGameMode {
   }
 
   private firePlayerBullet(): void {
+    // ★ 选中特殊弹药：消耗 1 并发射该弹药（打空/无库存自动回普通弹药）
+    if (this.selectedAmmo !== 'default' && FIREABLE_AMMO.has(this.selectedAmmo)
+      && this.itemManager?.hasItem('player', this.selectedAmmo, 1)) {
+      this.itemManager.removeItem('player', this.selectedAmmo, 1);
+      if (this.selectedAmmo === 'zuzong') {
+        this.launchSentinelProjectile();
+        return;
+      }
+    }
+    if (this.selectedAmmo !== 'default') this.selectedAmmo = 'default';
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
     const ray = this.cameraRay();
@@ -1352,6 +1372,36 @@ export class WorldMode implements IGameMode {
       speed: 20, camp: 'player', lifetime: 2.5, damage: 0,
       allyOnHit: 'zuzong',
     });
+  }
+
+  /** ★ 弹药栏条目：普通弹药（∞）+ 背包中可发射弹药（数量 = 行囊内该类总和） */
+  private buildAmmoEntries(): AmmoEntryView[] {
+    const out: AmmoEntryView[] = [
+      { id: 'default', name: '普通弹药', count: -1, iconId: 'ammo_pack', selected: this.selectedAmmo === 'default' },
+    ];
+    const counts = new Map<string, number>();
+    if (this.itemManager) {
+      for (const it of this.itemManager.getItems('player')) {
+        if (!FIREABLE_AMMO.has(it.itemId)) continue;
+        counts.set(it.itemId, (counts.get(it.itemId) ?? 0) + it.stackSize);
+      }
+    }
+    for (const [id, count] of counts) {
+      const arch = this.itemManager?.getArchetype(id);
+      out.push({
+        id,
+        name: arch?.name ?? id,
+        count,
+        iconId: id,
+        selected: this.selectedAmmo === id,
+      });
+    }
+    // 选中的弹药已打空 → 自动回普通弹药
+    if (this.selectedAmmo !== 'default' && (counts.get(this.selectedAmmo) ?? 0) <= 0) {
+      this.selectedAmmo = 'default';
+      out[0].selected = true;
+    }
+    return out;
   }
 
   /** ★ 轻微弹道修正（自瞄）：从枪口看，偏角 ≤ AIM_ASSIST_ANGLE 的最近方向目标 →

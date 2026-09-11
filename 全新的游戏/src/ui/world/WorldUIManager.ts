@@ -17,7 +17,7 @@ import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/Char
 import { Minimap } from '../../services/ui/Minimap';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
-import { AmmoHud } from '../../systems/itemPlayback/AmmoHud';
+import { AmmoPanel } from '../../services/ui/AmmoPanel';
 import { AllyHud } from '../../services/ui/AllyHud';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
@@ -31,7 +31,7 @@ export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
   private hud: PlayerHud;
   private crosshair: Crosshair;
-  private ammoHud: AmmoHud;
+  private ammoPanel: AmmoPanel;
   /** ★ 左侧友军编队列表（方舟风：图标 + 血条） */
   private allyHud: AllyHud;
   private interactPrompt: HTMLDivElement;
@@ -93,8 +93,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap = new Minimap(raster);
     this.hud = new PlayerHud();
     this.crosshair = new Crosshair();
-    // ★ 弹药 HUD（战斗道具播放 · 弹药类）：数据每帧经 update 传入
-    this.ammoHud = new AmmoHud(itemManager);
+    // ★ 左下角弹药栏（显示背包弹药类型/数量；点击切换当前弹药）
+    this.ammoPanel = new AmmoPanel(itemManager);
     // ★ 左侧友军编队列表（图标 + 血条）
     this.allyHud = new AllyHud(itemManager);
 
@@ -109,7 +109,7 @@ export class WorldUIManager extends BaseInteractionUI {
   update(dt: number, ctx: WorldUIState): void {
     this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
     this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
-    this.ammoHud.update(ctx.ammo);
+    this.ammoPanel.update(ctx.ammoEntries);
     this.allyHud.update(ctx.allies);
     // ★ 背包打开时：实时刷新属性栏生命（关着零开销）
     if (this.isInventoryOpen) {
@@ -305,6 +305,11 @@ export class WorldUIManager extends BaseInteractionUI {
     }
   }
 
+  /** ★ 弹药栏：点击切换回调（WorldMode 注入 → 更新当前弹药） */
+  setAmmoSelector(cb: (id: string) => void): void {
+    this.ammoPanel.setSelector(cb);
+  }
+
   /** 背包面板是否打开（由弹窗栈实际状态推导，与手动关闭按钮保持同步） */
   get isInventoryOpen(): boolean {
     return this.panels.isOpen('inventory-panel');
@@ -428,7 +433,7 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap.dispose();
     this.hud.dispose();
     this.crosshair.dispose();
-    this.ammoHud.dispose();
+    this.ammoPanel.dispose();
     this.allyHud.dispose();
     this.interactPrompt.remove();
     this.mapStyleBtn?.remove();
