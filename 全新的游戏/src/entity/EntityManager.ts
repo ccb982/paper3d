@@ -13,6 +13,7 @@ import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import type { RasterMap } from '../services/map/RasterMap';
 import { levelForDistance, LOD_MAX_DIST } from '../services/lod';
+import { entityPerf } from './EntityPerf';
 
 export interface EntityCreateOptions {
   kind: EntityKind;
@@ -98,8 +99,14 @@ export class EntityManager {
 
   /** ★ 每帧驱动所有基类实体（统一管线入口：行为→物理→动画→渲染同步） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    // ★ 阶段耗时聚合归零（EntityBase.update 内累加；main.ts HUD 读取）
+    entityPerf.behavior = 0; entityPerf.phys = 0; entityPerf.anim = 0;
+    entityPerf.render = 0; entityPerf.moved = 0; entityPerf.shadow = 0;
+    entityPerf.move = 0; entityPerf.sepOther = 0; entityPerf.sepStatic = 0; entityPerf.dye = 0;
+    entityPerf.count = 0;
     for (const base of this.bases.values()) {
       base.update(dt, input, cameraFrame);
+      entityPerf.count++;
     }
   }
 

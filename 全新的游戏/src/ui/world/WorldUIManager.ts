@@ -41,7 +41,6 @@ export class WorldUIManager extends BaseInteractionUI {
     speed: number;    // 上浮速度
   }[] = [];
   private inventoryPanel: InventoryPanel;
-  private eventUnsub?: () => void;
   private flashItemId: string | null = null;
   private flashTimer: number | undefined = undefined;
   private mapStyleBtn: HTMLButtonElement | null = null;
@@ -99,18 +98,6 @@ export class WorldUIManager extends BaseInteractionUI {
     this.interactPrompt.className = CSS.interactPrompt;
     this.interactPrompt.textContent = '按 E 拾取';
     document.body.appendChild(this.interactPrompt);
-
-    // ★ 订阅伤害事件（显示浮动数字）
-    import('../../core/EventBus').then(({ eventBus }) => {
-      this.eventUnsub = eventBus.on('damage', (payload) => {
-        // 这里只负责显示，位置计算由调用方传入，但我们需要获取坐标
-        // 由于 WorldMode 会负责投影并调用 showFloatingText，所以这里只做展示
-        // 但为了解耦，我们也可以在内部直接调用 showFloatingText，但需要传递屏幕坐标
-        // 这里我们暴露一个方法给 WorldMode 调用，不在此处直接处理事件
-        // 我们将事件绑定移到 WorldMode 中，以便拥有相机进行投影
-        // 因此这个订阅仅为占位，实际由 WorldMode 调用 showFloatingText
-      });
-    });
   }
 
   /** 每帧更新（高频调用） */
@@ -380,7 +367,6 @@ export class WorldUIManager extends BaseInteractionUI {
 
   override dispose(): void {
     super.dispose();
-    this.eventUnsub?.();
     this.minimap.dispose();
     this.hud.dispose();
     this.crosshair.dispose();

@@ -221,6 +221,8 @@ export class ChunkManager {
   private static readonly ASSEMBLE_BUDGET_MS = 8;
   /** 装配冷却截止时刻（performance.now；update 内消费） */
   private assembleCooldownUntil = 0;
+  /** ★ 本帧装配耗时（ms；0 = 本帧未装配。WorldMode 读入 HUD，定位交付尖峰） */
+  lastAssembleMs = 0;
   /** 装饰补挂冷却截止时刻（同上） */
   private decorCooldownUntil = 0;
   /** ★ 首建交付节拍（用户定调：700ms 交一块；挖坑重建不受限、优先放行） */
@@ -375,6 +377,7 @@ export class ChunkManager {
     this.prefetchChunks(px, pz, dt);
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
+    this.lastAssembleMs = 0;
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0 && performance.now() >= this.assembleCooldownUntil) {
       // ★ 首建限流：超限时跳过首建，找挖坑重建（decor===null）先放行；没有则本帧停装
@@ -397,6 +400,7 @@ export class ChunkManager {
       }
       if (a.decor !== null && a.deferDecor) this.lastBuildStamp = performance.now();
       const _cost = performance.now() - _ta;
+      this.lastAssembleMs = _cost;
       if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
         this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
       }

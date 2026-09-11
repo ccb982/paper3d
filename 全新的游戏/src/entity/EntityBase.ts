@@ -29,6 +29,7 @@ import type { FrameState } from '../services/fx/FrameState';
 import type { FxRendererBase } from '../services/render/FxRendererBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
+import { entityPerf } from './EntityPerf';
 
 /** 物理同步模式：kinematic=位置代码驱动（角色/敌人：setNextKinematicTranslation，
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
@@ -357,17 +358,32 @@ export abstract class EntityBase {
 
   /** 每帧驱动（模式层/EntityManager 调用） */
   update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    const _p0 = performance.now();
     this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
+    const _p1 = performance.now();
     this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
+    const _p2 = performance.now();
     // ★ 视锥外：跳过纯渲染管线（动画/渲染同步/特效），只保留玩法+物理+空间索引
     //   （inFrustum 由上帧 renderAll 写入；lodExempt 豁免体恒 true）
     if (this.inFrustum) {
       this.anim?.update(dt);                // ③ 动画推进
+    }
+    const _p3 = performance.now();
+    if (this.inFrustum) {
       this.syncRender();                    // ④ 渲染同步
       this.updateEffects(dt);               // ⑤ 附属特效驱动（跟随/时间轴/回收）
     }
+    const _p4 = performance.now();
     this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
+    const _p5 = performance.now();
     this.syncShadow();                      // ⑦ 贴地剪影影子同步（统一机制）
+    const _p6 = performance.now();
+    entityPerf.behavior += _p1 - _p0;
+    entityPerf.phys += _p2 - _p1;
+    entityPerf.anim += _p3 - _p2;
+    entityPerf.render += _p4 - _p3;
+    entityPerf.moved += _p5 - _p4;
+    entityPerf.shadow += _p6 - _p5;
 
     // ★ 影子朝向跟踪：从位移差实时更新（shadowYaw 消费；与相机角度无关）
     if (!isNaN(this._gsLastX)) {

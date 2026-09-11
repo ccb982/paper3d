@@ -42,6 +42,7 @@ import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { eventBus } from '../core/EventBus';
+import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
 import { executeAttack } from '../services/combat/Attack';
@@ -102,6 +103,8 @@ export const worldPerf = {
   chunks: 0, ui: 0, combat: 0, ai: 0, entity: 0, post: 0, phys: 0, total: 0,
   drones: 0, ent: 0, water: 0, clamp: 0,
   nEnemies: 0, nDrones: 0, nEntities: 0,
+  /** ★ 本帧 chunk 装配耗时（ms；0=未装配） */
+  assembly: 0,
 };
 
 export class WorldMode implements IGameMode {
@@ -224,7 +227,11 @@ export class WorldMode implements IGameMode {
           options: { shape: { type: 'trimesh', vertices, indices } },
         },
       }).id,
-      destroyGround: (id) => this.entities.destroy(id),
+      destroyGround: (id) => {
+        // ★ 装饰物 JS 空间索引同步注销（地面 trimesh 不在索引中 → no-op）
+        removeStaticObstacle(id);
+        this.entities.destroy(id);
+      },
       // ★ 分区地面：首 cell 随实体创建（tileSlot 登记），其余分区挂同刚体（全同步）
       createGroundCells: (cx, cz, cells) => {
         if (cells.length === 0) return null;
@@ -253,14 +260,19 @@ export class WorldMode implements IGameMode {
         if (rb) this.physics?.setTileCollider(rb.handle, slot, vertices, indices);
       },
       // ★ 装饰物碰撞体：fixed cuboid（挡住玩家/子弹；y 为体积中心）
-      createPropBody: (x, y, z, r, h) => this.entities.create({
-        kind: 'decoration',
-        x, y, z,
-        physics: {
-          type: 'fixed',
-          options: { shape: { type: 'cuboid', hx: r, hy: h / 2, hz: r } },
-        },
-      }).id,
+      //   ★ 同步登记 JS 空间索引（角色静态推挤不再走 rapier 查询）
+      createPropBody: (x, y, z, r, h) => {
+        const id = this.entities.create({
+          kind: 'decoration',
+          x, y, z,
+          physics: {
+            type: 'fixed',
+            options: { shape: { type: 'cuboid', hx: r, hy: h / 2, hz: r } },
+          },
+        }).id;
+        addStaticObstacle(id, x, y, z, r, h / 2);
+        return id;
+      },
     };
     this.chunks = new ChunkManager(this.scene, this.raster, groundHost, {
       testChunk: ctx.debug?.testChunk ?? false,
@@ -448,67 +460,67 @@ export class WorldMode implements IGameMode {
     this._f9Handler = onF9;
 
     // ---- ★ 订阅伤害事件，显示浮动数字 ----
-    import('../core/EventBus').then(({ eventBus }) => {
-      this.damageUnsub = eventBus.on('damage', (payload) => {
-        const target = payload.target;
-        const pos = target.position;
-        // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
-        const camP = this.camera!.position;
-        const dx = pos.x - camP.x, dz = pos.z - camP.z;
-        if (dx * dx + dz * dz > 20 * 20) return;
-        // 将世界坐标投影到屏幕
-        const vec = new THREE.Vector3(pos.x, pos.y + 1.0, pos.z);
-        vec.project(this.camera!);
-        const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
-        const y = (-vec.y * 0.5 + 0.5) * window.innerHeight;
-        // 只显示实际造成的伤害（大于0），并且没有被闪避/格挡免疫
-        if (payload.damage > 0) {
-          const type = payload.crit ? 'crit' : 'normal';
-          this.worldUIManager.showFloatingText(x, y - 30, String(payload.damage), type);
-        } else if (payload.dodged) {
-          this.worldUIManager.showFloatingText(x, y - 30, 'Miss', 'miss');
-        } else if (payload.blocked) {
-          this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
-        }
-      });
-      // ★ 击杀结算：无人机与杂兵分流（无人机损毁 = 槽位换残骸 + 从编队移除）
-      this.killedUnsub = eventBus.on('killed', (payload) => {
-        // ★ 玩家死亡：累计永久死亡次数（遗物"每次死亡全属性 +5%"的驱动）
-        if (payload.target === this.player) {
-          const s = this.session;
-          if (!s) return;
-          s.meta.deaths = (s.meta.deaths ?? 0) + 1;
-          return; // 玩家不算杂兵、不掉落
-        }
-        const di = this.drones.indexOf(payload.target as DroneEntity);
-        if (di !== -1) {
-          const drone = this.drones[di];
-          this.drones.splice(di, 1);
-          if (drone.slotIndex >= 0) this.itemManager?.replaceSlot(drone.slotIndex, DRONE_BROKEN_ITEM);
-          this.showFloatingAt(drone.position.x, drone.position.y, drone.position.z, '无人机损毁', 'crit');
-          return; // 不参与杂兵掉落结算
-        }
-        const enemy = payload.target as EnemyBase;
-        this.rollEnemyDrops(enemy);
-        const idx = this.enemies.indexOf(enemy);
-        if (idx !== -1) this.enemies.splice(idx, 1);
-      });
-      // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
-      this.droneSummonUnsub = eventBus.on('drone_summon', () => {
-        this.spawnDroneNearPlayer();
-      });
-      // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
-      this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
-        if (!this.droneAsset) return;
-        this.despawnAllyAt(payload.slotIndex);
-        if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
-          allyPlaybackRegistry.get(payload.itemId)!.spawn({
-            itemId: payload.itemId,
-            slotIndex: payload.slotIndex,
-            spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId),
-          });
-        }
-      });
+    //   ★ 2026-09-11：改静态 import 同步注册——原先动态 import().then 存在竞态：
+    //   enter() 后立刻 exit() 时 promise resolve 晚于 exit → 订阅悬空、跨局累积
+    this.damageUnsub = eventBus.on('damage', (payload) => {
+      const target = payload.target;
+      const pos = target.position;
+      // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
+      const camP = this.camera!.position;
+      const dx = pos.x - camP.x, dz = pos.z - camP.z;
+      if (dx * dx + dz * dz > 20 * 20) return;
+      // 将世界坐标投影到屏幕
+      const vec = new THREE.Vector3(pos.x, pos.y + 1.0, pos.z);
+      vec.project(this.camera!);
+      const x = (vec.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (-vec.y * 0.5 + 0.5) * window.innerHeight;
+      // 只显示实际造成的伤害（大于0），并且没有被闪避/格挡免疫
+      if (payload.damage > 0) {
+        const type = payload.crit ? 'crit' : 'normal';
+        this.worldUIManager.showFloatingText(x, y - 30, String(payload.damage), type);
+      } else if (payload.dodged) {
+        this.worldUIManager.showFloatingText(x, y - 30, 'Miss', 'miss');
+      } else if (payload.blocked) {
+        this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
+      }
+    });
+    // ★ 击杀结算：无人机与杂兵分流（无人机损毁 = 槽位换残骸 + 从编队移除）
+    this.killedUnsub = eventBus.on('killed', (payload) => {
+      // ★ 玩家死亡：累计永久死亡次数（遗物"每次死亡全属性 +5%"的驱动）
+      if (payload.target === this.player) {
+        const s = this.session;
+        if (!s) return;
+        s.meta.deaths = (s.meta.deaths ?? 0) + 1;
+        return; // 玩家不算杂兵、不掉落
+      }
+      const di = this.drones.indexOf(payload.target as DroneEntity);
+      if (di !== -1) {
+        const drone = this.drones[di];
+        this.drones.splice(di, 1);
+        if (drone.slotIndex >= 0) this.itemManager?.replaceSlot(drone.slotIndex, DRONE_BROKEN_ITEM);
+        this.showFloatingAt(drone.position.x, drone.position.y, drone.position.z, '无人机损毁', 'crit');
+        return; // 不参与杂兵掉落结算
+      }
+      const enemy = payload.target as EnemyBase;
+      this.rollEnemyDrops(enemy);
+      const idx = this.enemies.indexOf(enemy);
+      if (idx !== -1) this.enemies.splice(idx, 1);
+    });
+    // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
+    this.droneSummonUnsub = eventBus.on('drone_summon', () => {
+      this.spawnDroneNearPlayer();
+    });
+    // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
+    this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
+      if (!this.droneAsset) return;
+      this.despawnAllyAt(payload.slotIndex);
+      if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
+        allyPlaybackRegistry.get(payload.itemId)!.spawn({
+          itemId: payload.itemId,
+          slotIndex: payload.slotIndex,
+          spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId),
+        });
+      }
     });
   }
 
@@ -712,6 +724,7 @@ export class WorldMode implements IGameMode {
     worldPerf.post = _t6 - _t5;
     worldPerf.phys = _t7 - _t6;
     worldPerf.total = _t7 - _t0;
+    worldPerf.assembly = this.chunks.lastAssembleMs;
   }
 
   /** 渲染：实体管线 + 场景 */

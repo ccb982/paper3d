@@ -11,11 +11,23 @@ const STORAGE_KEY = 'arknights_rogue_save';
 
 export const SaveSystem = {
   /**
-   * ★ 保存存档（仅在安全点调用）
+   * ★ 保存存档（仅在安全点调用）。
+   *   ★ 2026-09-11 拆分职责：唯一副作用 = 刷新 `meta.lastSavedAt`（存档时间元数据）。
+   *   需要"零副作用纯写入"的调用方请改用 `write()`（自行决定时间戳）。
    */
   save(session: GameSession): void {
+    this.touch(session);
+    this.write(session);
+  },
+
+  /** ★ 刷新存档时间戳（独立职责，不写存储；如需显式控制保存时间可单独调用） */
+  touch(session: GameSession): void {
+    session.meta.lastSavedAt = new Date().toISOString();
+  },
+
+  /** ★ 纯写入：不修改 session 任何字段（时间戳由调用方自行 touch） */
+  write(session: GameSession): void {
     try {
-      session.meta.lastSavedAt = new Date().toISOString();
       const json = JSON.stringify(session);
       localStorage.setItem(STORAGE_KEY, json);
     } catch (e) {

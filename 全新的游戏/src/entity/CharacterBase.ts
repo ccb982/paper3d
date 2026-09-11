@@ -20,6 +20,11 @@ import { CharacterFxManager } from "../services/fx/CharacterFxManager";
 import type { FluidEffect } from "../vendor/player/fluid/FluidEffect";
 import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/SurfaceRules";
+import { entityPerf } from "./EntityPerf";
+import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
+
+/** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
+const _obstacleBuf: StaticObstacle[] = [];
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -78,6 +83,7 @@ export abstract class CharacterBase extends EntityBase {
     input?: InputActions,
     cameraFrame?: CameraFrame,
   ): void {
+    const _c0 = performance.now();
     if (input && cameraFrame) {
       this.controller.update(dt, input, cameraFrame);
     }
@@ -153,21 +159,20 @@ export abstract class CharacterBase extends EntityBase {
         !this.controller.isAirborne() && Math.abs(p.y - floorY) <= 0.05;
     }
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
+    const _c1 = performance.now();
     this.separateFromOthers();
-    // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍；同上原理）
-    //   ★ 性能：静态障碍不动，rapier 查询无需每帧——玩家每帧保手感，
-    //     敌人 60ms 一次（穿透滞后不可感，60 敌省下 ~90% 查询）
-    if (this.entity.kind === "player") {
-      this.separateFromStatics();
-    } else {
-      this.sepStaticAccum += dt;
-      if (this.sepStaticAccum >= 0.06) {
-        this.sepStaticAccum = 0;
-        this.separateFromStatics();
-      }
-    }
+    const _c2 = performance.now();
+    // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
+    //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
+    this.separateFromStatics();
+    const _c3 = performance.now();
     // ★ 受击染料推进（矢量平流 + 计时释放）
     this.updateHitDye(dt);
+    const _c4 = performance.now();
+    entityPerf.move += _c1 - _c0;
+    entityPerf.sepOther += _c2 - _c1;
+    entityPerf.sepStatic += _c3 - _c2;
+    entityPerf.dye += _c4 - _c3;
   }
 
   /** ★ 受击染料流体纹理（有染料时贴片采样 composite；Timer 结束后恢复 null） */
@@ -213,21 +218,16 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 地图装饰物推挤（碎石等 fixed cuboid；kinematic 无物理响应 → 手动弹出）。
    *   与角色间推挤同套路：圆形重叠 → 沿连线把角色推出障碍半径外。
-   *   只处理 kind='decoration' 的 cuboid（trimesh/角色/物品由各自机制负责）。 */
+   *   ★ 2026-09-11：改查 JS 空间索引（StaticObstacleRegistry）——原 rapier
+   *   queryStaticObstacles 在装饰物密集区单次毫秒级（实测静态段 11.4ms/帧）。 */
   private separateFromStatics(): void {
     const vol = this.collisionVolume;
-    const pw = this.em.physics;
-    if (!vol || !pw) return;
+    if (!vol) return;
     const me = shapeExtents(vol.shape);
     if (me.hx <= 0 || me.hz <= 0) return;
     const p = this.entity.position;
-    const obstacles = pw.queryStaticObstacles(
-      { x: p.x, y: p.y, z: p.z },
-      me.hx + 0.4,
-    );
-    for (const o of obstacles) {
-      const ent = this.em.get(o.id);
-      if (!ent || ent.kind !== "decoration") continue; // 只推挤地图装饰物
+    queryStaticObstaclesInto(p.x, p.z, me.hx + 0.4, _obstacleBuf);
+    for (const o of _obstacleBuf) {
       // 层差过滤：角色脚底不在障碍高度带内不推挤（允许上下平台重叠）
       const baseY = o.y - o.hy,
         topY = o.y + o.hy;
@@ -289,8 +289,6 @@ export abstract class CharacterBase extends EntityBase {
 
   // ★ 受击染料管线（矢量平流注红 + 速度阻尼；变色表示受伤，缓停后恢复）
   protected hitDye: FluidEffect | null = null;
-  /** ★ 静态障碍推挤节流累计（敌人 60ms 一次；玩家每帧） */
-  private sepStaticAccum = 0;
   /** 受击染料存活计时（超时释放 → 恢复原纹理） */
   private hitDyeTimer = 0;
   /** 受击染料时长（秒，默认 1.2） */

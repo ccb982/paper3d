@@ -16,6 +16,7 @@ import { Asset, MoonEffect } from './vendor/player';
 import type { IGameMode } from './core/IGameMode';
 import { ShipMode } from './modes/ShipMode';
 import { WorldMode, worldPerf } from './modes/WorldMode';
+import { entityPerf } from './entity/EntityPerf';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { RasterMap } from './services/map/RasterMap';
@@ -285,6 +286,17 @@ async function boot() {
   let rendMsSum = 0;
   let callsSum = 0;
   let trisSum = 0;
+  // ★ 世界更新拆项也按同窗口平均（否则与"更新 ms"对不上账：拆项瞬时值看不到装配尖峰）
+  let wpChunksSum = 0, wpUiSum = 0, wpCombatSum = 0, wpAiSum = 0;
+  let wpEntSum = 0, wpPostSum = 0, wpPhysSum = 0;
+  let wpDronesSum = 0, wpEntSubSum = 0, wpWaterSum = 0, wpClampSum = 0;
+  /** ★ 窗口内 chunk 装配峰值（确认走路卡顿是否来自交付尖峰） */
+  let wpAsmMax = 0;
+  // ★ 实体管线阶段耗时（EntityBase.update 聚合；同窗口平均）
+  let epBehSum = 0, epPhysSum = 0, epAnimSum = 0;
+  let epRenderSum = 0, epMovedSum = 0, epShadowSum = 0;
+  /** ★ 行为细分（移动/角色推挤/静态推挤/染料） */
+  let epMoveSum = 0, epSepOtherSum = 0, epSepStaticSum = 0, epDyeSum = 0;
   const cameraPos = camera.position;
 
   function animate() {
@@ -311,6 +323,11 @@ async function boot() {
     updateSky();
 
     if (currentMode) {
+      // ★ 实体阶段计时清零（该帧无实体更新 → 全 0，不显示陈旧值）
+      entityPerf.behavior = 0; entityPerf.phys = 0; entityPerf.anim = 0;
+      entityPerf.render = 0; entityPerf.moved = 0; entityPerf.shadow = 0;
+      entityPerf.move = 0; entityPerf.sepOther = 0; entityPerf.sepStatic = 0; entityPerf.dye = 0;
+      entityPerf.count = 0;
       const u0 = performance.now();
       currentMode.update(renderManager.scaledDt);
       const u1 = performance.now();
@@ -328,6 +345,28 @@ async function boot() {
     const rinfo = rendererLocal.info.render;
     callsSum += rinfo.calls;
     trisSum += rinfo.triangles;
+    wpChunksSum += worldPerf.chunks;
+    wpUiSum += worldPerf.ui;
+    wpCombatSum += worldPerf.combat;
+    wpAiSum += worldPerf.ai;
+    wpEntSum += worldPerf.entity;
+    wpPostSum += worldPerf.post;
+    wpPhysSum += worldPerf.phys;
+    wpDronesSum += worldPerf.drones;
+    wpEntSubSum += worldPerf.ent;
+    wpWaterSum += worldPerf.water;
+    wpClampSum += worldPerf.clamp;
+    if (worldPerf.assembly > wpAsmMax) wpAsmMax = worldPerf.assembly;
+    epBehSum += entityPerf.behavior;
+    epPhysSum += entityPerf.phys;
+    epAnimSum += entityPerf.anim;
+    epRenderSum += entityPerf.render;
+    epMovedSum += entityPerf.moved;
+    epShadowSum += entityPerf.shadow;
+    epMoveSum += entityPerf.move;
+    epSepOtherSum += entityPerf.sepOther;
+    epSepStaticSum += entityPerf.sepStatic;
+    epDyeSum += entityPerf.dye;
     fpsFrames++;
     fpsAcc += dt;
     if (dt > fpsWorstMs) fpsWorstMs = dt;
@@ -337,9 +376,11 @@ async function boot() {
           `${(fpsFrames / fpsAcc).toFixed(1)} FPS   ${((fpsAcc / fpsFrames) * 1000).toFixed(1)} ms (峰值 ${(fpsWorstMs * 1000).toFixed(0)})\n`
           + `绘制 ${Math.round(callsSum / fpsFrames)} 调用   三角 ${Math.round(trisSum / fpsFrames)}\n`
           + `更新 ${(updMsSum / fpsFrames).toFixed(2)} ms   渲染 ${(rendMsSum / fpsFrames).toFixed(2)} ms\n`
-          + `区块 ${worldPerf.chunks.toFixed(1)}  界面 ${worldPerf.ui.toFixed(1)}  贴片 ${worldPerf.combat.toFixed(1)}  AI ${worldPerf.ai.toFixed(1)}\n`
-          + `实体 ${worldPerf.entity.toFixed(1)}  后段 ${worldPerf.post.toFixed(1)}  物理 ${worldPerf.phys.toFixed(1)}\n`
-          + `子项 无人机 ${worldPerf.drones.toFixed(1)}  实体更新 ${worldPerf.ent.toFixed(1)}  入水 ${worldPerf.water.toFixed(1)}  贴地 ${worldPerf.clamp.toFixed(1)}\n`
+          + `区块 ${(wpChunksSum / fpsFrames).toFixed(1)}  装配峰 ${wpAsmMax.toFixed(1)}  界面 ${(wpUiSum / fpsFrames).toFixed(1)}  贴片 ${(wpCombatSum / fpsFrames).toFixed(1)}  AI ${(wpAiSum / fpsFrames).toFixed(1)}\n`
+          + `实体 ${(wpEntSum / fpsFrames).toFixed(1)}  后段 ${(wpPostSum / fpsFrames).toFixed(1)}  物理 ${(wpPhysSum / fpsFrames).toFixed(1)}\n`
+          + `子项 无人机 ${(wpDronesSum / fpsFrames).toFixed(1)}  实体更新 ${(wpEntSubSum / fpsFrames).toFixed(1)}  入水 ${(wpWaterSum / fpsFrames).toFixed(1)}  贴地 ${(wpClampSum / fpsFrames).toFixed(1)}\n`
+          + `阶段 行为 ${(epBehSum / fpsFrames).toFixed(1)}  物理 ${(epPhysSum / fpsFrames).toFixed(1)}  动画 ${(epAnimSum / fpsFrames).toFixed(1)}  渲染 ${(epRenderSum / fpsFrames).toFixed(1)}  索引 ${(epMovedSum / fpsFrames).toFixed(1)}  影子 ${(epShadowSum / fpsFrames).toFixed(1)}\n`
+          + `行为拆 移动 ${(epMoveSum / fpsFrames).toFixed(1)}  推挤 ${(epSepOtherSum / fpsFrames).toFixed(1)}  静态 ${(epSepStaticSum / fpsFrames).toFixed(1)}  染料 ${(epDyeSum / fpsFrames).toFixed(1)}\n`
           + `实体数 ${worldPerf.nEntities} (敌 ${worldPerf.nEnemies} 机 ${worldPerf.nDrones})`;
       }
       fpsFrames = 0;
@@ -349,6 +390,13 @@ async function boot() {
       rendMsSum = 0;
       callsSum = 0;
       trisSum = 0;
+      wpChunksSum = 0; wpUiSum = 0; wpCombatSum = 0; wpAiSum = 0;
+      wpEntSum = 0; wpPostSum = 0; wpPhysSum = 0;
+      wpDronesSum = 0; wpEntSubSum = 0; wpWaterSum = 0; wpClampSum = 0;
+      wpAsmMax = 0;
+      epBehSum = 0; epPhysSum = 0; epAnimSum = 0;
+      epRenderSum = 0; epMovedSum = 0; epShadowSum = 0;
+      epMoveSum = 0; epSepOtherSum = 0; epSepStaticSum = 0; epDyeSum = 0;
     }
   }
 

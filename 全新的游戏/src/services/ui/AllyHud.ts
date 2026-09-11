@@ -12,6 +12,7 @@
 
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import { ItemIconRegistry } from '../item/ItemIconRegistry';
+import { eventBus } from '../../core/EventBus';
 
 export interface AllyHudEntry {
   /** 稳定身份（编队实体 entity.id，帧间不变） */
@@ -55,10 +56,9 @@ export class AllyHud {
     ].join(';');
     document.body.appendChild(this.root);
     // ★ 出击槽位变动（拖入/拖出/互换）→ 一次性角标弹跳 + 卡片亮闪（仅真实变动，不会每帧循环）
-    import('../../core/EventBus').then(({ eventBus }) => {
-      this.flashUnsub = eventBus.on('deployment_changed', (payload) => {
-        this.flashSlots.add(payload.slotIndex);
-      });
+    //   ★ 静态 import 同步注册（动态 import().then 可能在 dispose 之后才挂载 → 订阅泄漏）
+    this.flashUnsub = eventBus.on('deployment_changed', (payload) => {
+      this.flashSlots.add(payload.slotIndex);
     });
   }
 
