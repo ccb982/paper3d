@@ -64,6 +64,14 @@ const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
  *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
 const PLAYER_BULLET_MIN_DAMAGE = 10;
 const PLAYER_BULLET_ATK_RATIO = 1.0;
+/** ★ 主角子弹飞行参数：速度（m/s）/ 寿命（s）→ 射程 = 速度 × 寿命 */
+const PLAYER_BULLET_SPEED = 50;
+const PLAYER_BULLET_LIFETIME = 3.0;
+/** ★ 主角子弹轻微弹道修正（自瞄）：只修正准星小偏角内的敌人，幅度很小不影响甩枪手感 */
+const AIM_ASSIST_ANGLE = 0.05;    // 仅候选：偏角 ≤ ~2.9°
+const AIM_ASSIST_MAX = 0.03;      // 单发最多修正 ~1.7°
+const AIM_ASSIST_RANGE = 32;      // 只对 32m 内敌人生效（米）
+const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
@@ -967,6 +975,9 @@ export class WorldMode implements IGameMode {
         }
       }
     } catch { /* 忽略 */ }
+    // ★ 轻微弹道修正：朝准星小偏角内的敌人修正一点点（手感向）
+    const assisted = this.aimAssist(muzzle, dx, dy, dz);
+    dx = assisted.x; dy = assisted.y; dz = assisted.z;
     // ★ 子弹伤害 = max(下限, 角色攻击力 × 系数)（遗物永久 + 装备临时 都实时参与）
     const dmg = Math.max(
       PLAYER_BULLET_MIN_DAMAGE,
@@ -976,7 +987,7 @@ export class WorldMode implements IGameMode {
       type: 'projectile', source: this.player,
       x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
       dirX: dx, dirY: dy, dirZ: dz,
-      speed: 25, camp: 'player', lifetime: 2, damage: dmg,
+      speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME, damage: dmg,
     });
   }
 
@@ -1341,6 +1352,51 @@ export class WorldMode implements IGameMode {
       speed: 20, camp: 'player', lifetime: 2.5, damage: 0,
       allyOnHit: 'zuzong',
     });
+  }
+
+  /** ★ 轻微弹道修正（自瞄）：从枪口看，偏角 ≤ AIM_ASSIST_ANGLE 的最近方向目标 →
+   *  方向按 AIM_ASSIST_STRENGTH 混合，且相对原方向最多修正 AIM_ASSIST_MAX 弧度。
+   *  保持"一点点"：大角度甩枪、无目标时不生效。 */
+  private aimAssist(
+    muzzle: { x: number; y: number; z: number },
+    dx: number, dy: number, dz: number,
+  ): { x: number; y: number; z: number } {
+    if (this.enemies.length === 0) return { x: dx, y: dy, z: dz };
+    let bx = 0, by = 0, bz = 0;
+    let bestAng = AIM_ASSIST_ANGLE;
+    for (const e of this.enemies) {
+      if (e.hp <= 0) continue;
+      const ex = e.position.x - muzzle.x;
+      const ey = e.position.y + 0.8 - muzzle.y; // 瞄身体
+      const ez = e.position.z - muzzle.z;
+      const len = Math.hypot(ex, ey, ez);
+      if (len < 0.6 || len > AIM_ASSIST_RANGE) continue;
+      const dot = (ex * dx + ey * dy + ez * dz) / len;
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot)));
+      if (ang < bestAng) {
+        bestAng = ang;
+        bx = ex / len; by = ey / len; bz = ez / len;
+      }
+    }
+    if (bestAng >= AIM_ASSIST_ANGLE) return { x: dx, y: dy, z: dz };
+    // 按强度混合 + 归一化
+    let mx = dx + (bx - dx) * AIM_ASSIST_STRENGTH;
+    let my = dy + (by - dy) * AIM_ASSIST_STRENGTH;
+    let mz = dz + (bz - dz) * AIM_ASSIST_STRENGTH;
+    let ml = Math.hypot(mx, my, mz) || 1;
+    mx /= ml; my /= ml; mz /= ml;
+    // 限制相对原方向的最大修正角（把偏移向量按比例缩回）
+    const dot2 = Math.max(-1, Math.min(1, mx * dx + my * dy + mz * dz));
+    const ang2 = Math.acos(dot2);
+    if (ang2 > AIM_ASSIST_MAX) {
+      const t = AIM_ASSIST_MAX / Math.max(1e-6, ang2);
+      mx = dx + (mx - dx) * t;
+      my = dy + (my - dy) * t;
+      mz = dz + (mz - dz) * t;
+      ml = Math.hypot(mx, my, mz) || 1;
+      mx /= ml; my /= ml; mz /= ml;
+    }
+    return { x: mx, y: my, z: mz };
   }
 
   /** ★ 应用装备临时属性：maxHp/攻击/防御 = 永久（基础+遗物） + 出击槽装备 stats（卸载即还原） */

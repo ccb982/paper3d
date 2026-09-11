@@ -19,12 +19,13 @@ import { renderManager } from '../render/RenderManager';
 import type { CameraController } from '../camera/CameraController';
 import type { EntityBase } from '../../entity/EntityBase';
 
-/** ★ 手感规则表（唯一的调参入口；hitstop=顿帧秒数 scale=时间缩放 camKick=镜头冲击） */
+/** ★ 手感规则表（唯一的调参入口；hitstop=顿帧秒数 scale=时间缩放 camKick=镜头冲击）
+ *  ★ 2026-09-11 用户反馈：命中/击杀镜头抖动过强 → camKick 整体下调（约原值 40%） */
 const FEEL = {
-  normalHit:  { hitstop: 0.04, scale: 0.10, camKick: 0.06 },
-  critHit:    { hitstop: 0.09, scale: 0.02, camKick: 0.16 },
-  killEnemy:  { hitstop: 0.11, scale: 0.00, camKick: 0.22 },
-  playerHurt: { hitstop: 0.06, scale: 0.05, camKick: 0.12 },
+  normalHit:  { hitstop: 0.04, scale: 0.10, camKick: 0.025 },
+  critHit:    { hitstop: 0.09, scale: 0.02, camKick: 0.06 },
+  killEnemy:  { hitstop: 0.11, scale: 0.00, camKick: 0.09 },
+  playerHurt: { hitstop: 0.06, scale: 0.05, camKick: 0.05 },
 };
 
 interface DamagePayload {
