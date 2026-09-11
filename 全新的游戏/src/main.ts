@@ -487,14 +487,10 @@ function enterWorldMode(
     sentinelAsset: sentinelAsset ?? undefined,
     debug: { testChunk },
     onReturn: () => {
-      // 返回时：行囊祖宗带回货舱/基地 → 遗物"返回/天数"时机管线 → 推进天数 → ShipMode
+      // 返回时：★ 行囊（弹药背包）保持原样——不转移祖宗，随存档原样落盘
+      //   → 遗物"返回/天数"时机管线 → 推进天数 → ShipMode（内部 SaveSystem.save）
       if (currentSession) {
         const im = new ItemManager(currentSession);
-        const carried = im.countItem('player', 'zuzong');
-        for (let i = 0; i < carried; i++) {
-          if (!im.moveItem('player', 'ship', 'zuzong', 1)
-            && !im.moveItem('player', 'base', 'zuzong', 1)) break;
-        }
         // ★ 遗物「返回」时机（可授予道具；行囊落账）
         for (const g of relicGrantsFor(currentSession, RELIC_ITEM_CONFIG, 'onRunEnd')) {
           if (im.hasSpace('player', g.itemId, g.count)) im.addItem('player', g.itemId, g.count);
