@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import { OffscreenBake } from '../render/OffscreenBake';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
+import { markFluidStepped } from '../fx/FluidShared';
 import type { EntityMeshData } from '../../vendor/player/gl/renderer';
 import type { FrameAssetSource } from '../fx/AssetSource';
 
@@ -197,6 +198,8 @@ export class BulletVisual extends OffscreenBake {
         n++;
       }
       if (this.simAccum > BulletVisual.SIM_DT) this.simAccum = 0;
+      // ★ 声明本帧驱动权：共享同一份流体的图标（动态图标产线）据此让出 step/reset
+      markFluidStepped(this.fluid);
     }
     // ★ 每帧场回读（?dbg=1）：观察密度/速度场的周期性异常
     if (this.dbg && this.fluid) {

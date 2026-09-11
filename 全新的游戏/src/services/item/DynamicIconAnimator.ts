@@ -22,6 +22,7 @@ import type { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import { OffscreenBake } from '../render/OffscreenBake';
 import { FTXQuad } from '../render/FTXQuad';
 import { getGameRenderer } from '../render/GameRenderer';
+import { fluidSteppedRecently } from '../fx/FluidShared';
 
 const ICON_SIZE = 128;
 const FPS = 24;
@@ -39,6 +40,8 @@ class IconBake extends OffscreenBake {
 /** 单素材的离屏生产线 + 其上挂载的活动画布 */
 interface Producer {
   fluid: FluidEffect | null;
+  /** true = 资产缓存共享实例（与世界同一份；世界驱动时图标让出驱动权） */
+  sharedFluid: boolean;
   scene: THREE.Scene;
   camera: THREE.OrthographicCamera;
   bake: IconBake;
@@ -138,9 +141,12 @@ class DynamicIconAnimator {
     if (alive) this.rafId = requestAnimationFrame(this.tick);
   };
 
-  /** 流体推进 + 周期 reset（连发式循环；无流体则纯 VAT/base 静态画面） */
+  /** 流体推进 + 周期 reset（连发式循环；无流体则纯 VAT/base 静态画面）
+   *  ★ 共享流体且世界侧正在驱动（BulletManager 等）→ 图标只显示，不 step/不 reset：
+   *    避免双份求解、也避免把飞行中的弹体流体重置。 */
   private advance(p: Producer, dt: number): void {
     if (!p.fluid) return;
+    if (p.sharedFluid && fluidSteppedRecently(p.fluid)) return;
     p.loopAccum += dt;
     if (p.loopAccum >= LOOP_SEC) {
       p.loopAccum = 0;
@@ -231,15 +237,24 @@ class DynamicIconAnimator {
     }).getFramePair?.(frameIndex) ?? null;
     if (!pair?.base) return null;
 
-    // 独立流体实例（Asset 有 createAmbientFluidEffect；纯纹理包 → 静态）
+    // ★ 优先复用资产缓存共享流体（与世界子弹/实体同一实例 → 全局只一次求解）；
+    //   不可用（无两参 getFluidEffect / 异常）才自建独立实例。
     const anyAsset = asset as unknown as {
+      getFluidEffect?: (...a: unknown[]) => FluidEffect | null;
       createAmbientFluidEffect?: (r: THREE.WebGLRenderer, i: number) => FluidEffect | null;
     };
     let fluid: FluidEffect | null = null;
+    let sharedFluid = false;
     try {
-      fluid = anyAsset.createAmbientFluidEffect?.(renderer, frameIndex) ?? null;
+      const fx = anyAsset.getFluidEffect;
+      if (fx && fx.length <= 2) {
+        fluid = fx.call(asset, frameIndex, renderer);
+        sharedFluid = !!fluid;
+      }
+      if (!fluid) fluid = anyAsset.createAmbientFluidEffect?.(renderer, frameIndex) ?? null;
     } catch {
       fluid = null;
+      sharedFluid = false;
     }
 
     const scene = new THREE.Scene();
@@ -309,7 +324,7 @@ class DynamicIconAnimator {
     const fitH = Math.max(1, Math.round(srcH * s));
 
     const producer: Producer = {
-      fluid, scene, camera,
+      fluid, sharedFluid, scene, camera,
       bake: new IconBake(renderer, srcW, srcH),
       fillObjs, meshObjs, meshMats, fillMats, quadBase, quadFluid,
       baseTex: pair.base, residualTex: pair.residual ?? null,

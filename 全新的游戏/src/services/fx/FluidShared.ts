@@ -20,3 +20,14 @@ export function stepFluidShared(effect: FluidEffect, dt: number): void {
   lastStep.set(effect, now);
   effect.step(dt);
 }
+
+/** ★ 声明"本帧已由我驱动"（BulletVisual 等固定步长路径用；只记账不步进） */
+export function markFluidStepped(effect: FluidEffect): void {
+  lastStep.set(effect, performance.now());
+}
+
+/** ★ 最近是否有其它所有者驱动过这份流体（图标据此让出 step/reset 权） */
+export function fluidSteppedRecently(effect: FluidEffect, windowMs = 50): boolean {
+  const last = lastStep.get(effect);
+  return last !== undefined && performance.now() - last < windowMs;
+}
