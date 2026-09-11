@@ -325,18 +325,19 @@ export class WorldMode implements IGameMode {
       facing: '后',
     });
 
-    // ---- ★ 应用战斗属性（永久 = 基础 + 遗物；装备临时加成由 applyEquipmentStats 叠加） ----
-    this.permStats = ctx.combatStats;
-    this.player.hp = ctx.combatStats.hp;
-    this.applyEquipmentStats();
-
-    // ---- ★ 初始化业务逻辑层（共享模块） ----
+    // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
     this.itemManager = new ItemManager(ctx.session);
     this.craftingManager = new CraftingManager(ctx.session, this.itemManager);
     this.interactionManager = new InteractionManager({
       session: ctx.session,
       itemManager: this.itemManager,
     });
+
+    // ---- ★ 应用战斗属性（永久 = 基础 + 遗物；装备临时加成由 applyEquipmentStats 叠加） ----
+    this.permStats = ctx.combatStats;
+    this.player.hp = ctx.combatStats.hp;
+    this.applyEquipmentStats();
+
     // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 行囊落账
     //   数量语义由各效果处理器决定（如 start_items：每件遗物 count × 拥有件数）
     for (const g of relicGrantsFor(ctx.session, RELIC_ITEM_CONFIG, 'onRunStart')) {
@@ -501,6 +502,8 @@ export class WorldMode implements IGameMode {
           damage: payload.damage, crit: payload.crit, blocked: payload.blocked, dodged: payload.dodged,
         });
       }
+      // ★ 主角攻击不显示伤害数字（友军/敌人/主角受击照常显示；遗物时机上方已派发）
+      if (payload.source?.camp === 'player') return;
       // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
       const camP = this.camera!.position;
       const dx = pos.x - camP.x, dz = pos.z - camP.z;
@@ -1203,7 +1206,7 @@ export class WorldMode implements IGameMode {
     }
     if (other) {
       const r = applyDamage(damage, self, other);
-      eventBus.emit('damage', { target: other, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+      eventBus.emit('damage', { target: other, source: self, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
       return;
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);

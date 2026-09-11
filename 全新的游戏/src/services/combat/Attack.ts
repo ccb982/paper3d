@@ -67,7 +67,7 @@ export function executeAttack(
         if (Math.abs(t.position.y - opts.y) > 2) continue; // 高度过滤（不同层）
         const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
         // ★ 近战伤害同样上事件（浮动数字/导演反馈与子弹一致——无人机/敌人近战可见）
-        eventBus.emit('damage', { target: t, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+        eventBus.emit('damage', { target: t, source: opts.source, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
       }
       break;
     }
@@ -78,7 +78,7 @@ export function executeAttack(
         if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 3) continue;
         const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
-        eventBus.emit('damage', { target: t, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+        eventBus.emit('damage', { target: t, source: opts.source, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
       }
       break;
     }

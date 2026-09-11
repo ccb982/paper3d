@@ -32,6 +32,8 @@ export interface EventMap {
   // ★ 伤害事件（用于显示伤害数字 / 战斗导演编排打击反馈）
   'damage': {
     target: import('../entity/EntityBase').EntityBase;
+    /** ★ 伤害来源（子弹实体/近战发起者；主角攻击=player camp，浮动数字据此过滤） */
+    source: import('../entity/EntityBase').EntityBase | null;
     damage: number;
     crit: boolean;
     dodged: boolean;
