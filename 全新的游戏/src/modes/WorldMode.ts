@@ -19,6 +19,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
+import { stepFluidShared } from '../services/fx/FluidShared';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import type { EntityBase } from '../entity/EntityBase';
@@ -725,10 +726,11 @@ export class WorldMode implements IGameMode {
     const _e0 = performance.now();
     if (this.drones.length > 0) {
       // ★ 祖宗共享流体：每帧只步进一次（有存活祖宗时），且 30Hz 节流省 GPU
+      //   与图标动画器共用同一实例 → stepFluidShared 去重，全局每帧仅一次求解
       if (this.sentinelFluid && this.drones.some((d) => d.stationary && d.hp > 0)) {
         this.sentinelFluidAccum += dt;
         if (this.sentinelFluidAccum >= 1 / 30) {
-          this.sentinelFluid.step(this.sentinelFluidAccum);
+          stepFluidShared(this.sentinelFluid, this.sentinelFluidAccum);
           this.sentinelFluidAccum = 0;
         }
       }

@@ -11,12 +11,13 @@
 import * as THREE from 'three';
 import type { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import { getGameRenderer } from '../render/GameRenderer';
+import { stepFluidShared } from '../fx/FluidShared';
 
 const ICON_SIZE = 128;
 const FPS = 24;
 const FRAME_MS = 1000 / FPS;
 
-/** 最小资产接口（Asset 提供 createAmbientFluidEffect；FtxAsset 无 → 回退静态图标） */
+/** 最小资产接口（Asset 提供共享/独立流体；FtxAsset 无 → 回退静态图标） */
 export interface FluidIconAsset {
   getFtxFrame(i: number): { width?: number; height?: number } | null;
   createAmbientFluidEffect?(renderer: THREE.WebGLRenderer, i: number): FluidEffect | null;
@@ -24,6 +25,8 @@ export interface FluidIconAsset {
 
 interface Group {
   effect: FluidEffect;
+  /** ★ true = 本动画器自建（可释放）；false = 资产缓存共享实例（不得 dispose） */
+  owned: boolean;
   rt: THREE.WebGLRenderTarget;
   scene: THREE.Scene;
   camera: THREE.OrthographicCamera;
@@ -51,7 +54,17 @@ class FluidIconAnimator {
     if (!renderer || typeof asset.createAmbientFluidEffect !== 'function') return null;
     let g = this.groups.get(asset);
     if (!g) {
-      const effect = asset.createAmbientFluidEffect(renderer, frameIndex);
+      // ★ 优先复用资产缓存共享实例（与世界里祖宗实体同一份流体 → 全局只一次求解）；
+      //   共享不可用时才自建独立实例（并标记 owned，断连后释放）。
+      //   注：FtxAsset 的 getFluidEffect 是三参版本（需要 physics），不能直接当共享口用 → 仅认两参版本。
+      const src = asset as unknown as {
+        getFluidEffect?: (...a: unknown[]) => FluidEffect | null;
+        createAmbientFluidEffect?: (r: THREE.WebGLRenderer, i: number) => FluidEffect | null;
+      };
+      const fxFn = src.getFluidEffect;
+      const shared = fxFn && fxFn.length <= 2 ? fxFn.call(asset, frameIndex, renderer) : null;
+      const effect = shared
+        ?? (src.createAmbientFluidEffect ? src.createAmbientFluidEffect.call(asset, renderer, frameIndex) : null);
       if (!effect) return null;
       const rt = new THREE.WebGLRenderTarget(ICON_SIZE, ICON_SIZE, { depthBuffer: false });
       const scene = new THREE.Scene();
@@ -70,7 +83,7 @@ class FluidIconAnimator {
       const qh = aspect >= 1 ? 1 / aspect : 1;
       scene.add(new THREE.Mesh(new THREE.PlaneGeometry(qw, qh), material));
       g = {
-        effect, rt, scene, camera, material,
+        effect, owned: !shared, rt, scene, camera, material,
         buf: new Uint8Array(ICON_SIZE * ICON_SIZE * 4),
         pixels: new ImageData(ICON_SIZE, ICON_SIZE),
         canvases: [],
@@ -108,15 +121,15 @@ class FluidIconAnimator {
         if (!g.canvases[i].isConnected) g.canvases.splice(i, 1);
       }
       if (g.canvases.length === 0) {
-        // 无画布：释放该资产的求解/RT（下次注册重建）
-        g.effect.dispose();
+        // 无画布：自有实例释放；共享实例只丢引用（由资产缓存/世界侧持有）
+        if (g.owned) g.effect.dispose();
         g.rt.dispose();
         g.material.dispose();
         this.groups.delete(key);
         continue;
       }
       alive = true;
-      g.effect.step(dt);
+      stepFluidShared(g.effect, dt);
       if (paintDue) this.paint(g);
     }
     if (paintDue) this.lastPaint = now;
