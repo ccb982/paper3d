@@ -1200,6 +1200,11 @@ export class WorldMode implements IGameMode {
     }
     p.y += Math.max(targetY - p.y, -25 * dt);
     if (p.y <= targetY + 0.05) {
+      // ★ 玩家掉坑死亡：补发 killed 事件 → 计入遗物"每次死亡"统计（meta.deaths）
+      //   （血量归零路径经由 onTakeDamage 自发 killed；掉坑是环境死亡，需手动补发）
+      if (e === this.player) {
+        eventBus.emit('killed', { target: e, source: null });
+      }
       e.onDeath(null);
       if (e === this.player) {
         p.x = this.spawnPoint.x;
