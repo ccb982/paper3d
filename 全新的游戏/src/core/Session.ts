@@ -354,6 +354,8 @@ export interface OutOfRunItemConfig {
   effect?: {
     /** 每次死亡全属性 ×perDeathMultiplier（乘方累积：×（1.05 ^ 死亡次数×拥有数）） */
     perDeathMultiplier?: number;
+    /** 每天全属性 ×perDayMultiplier（乘方累积：×（1.01 ^ 天数×拥有数）） */
+    perDayMultiplier?: number;
   };
 }
 
@@ -386,14 +388,18 @@ export function computeCombatStats(
     }
   }
 
-  // ---- ★ 局外道具：每次死亡全属性乘方累积（与藏品 multiplier 相乘） ----
+  // ---- ★ 局外道具：每天/每次死亡 全属性乘方累积（与藏品 multiplier 相乘） ----
   const ownedOut = session.outOfRun?.owned ?? {};
   const deaths = session.meta?.deaths ?? 0;
   for (const [id, count] of Object.entries(ownedOut)) {
     const cfg = outOfRunConfig?.[id];
-    const pdm = cfg?.effect?.perDeathMultiplier;
-    if (!cfg || !pdm || (count ?? 0) <= 0) continue;
-    multiplier *= Math.pow(pdm, deaths * count);
+    if (!cfg || (count ?? 0) <= 0) continue;
+    if (cfg.effect?.perDayMultiplier) {
+      multiplier *= Math.pow(cfg.effect.perDayMultiplier, day * count);
+    }
+    if (cfg.effect?.perDeathMultiplier) {
+      multiplier *= Math.pow(cfg.effect.perDeathMultiplier, deaths * count);
+    }
   }
 
   return {
@@ -430,13 +436,13 @@ export function createNewSession(): GameSession {
       player,
     },
     relics: {
-      owned: ['black_crown'],
+      owned: [],
       slots: Array(5).fill(null),
     },
     allies: { roster: [] },
     ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
     gacha: { pityCounter: 0, totalPulls: 0 },
     dayProgress: { hasDepartedToday: false },
-    outOfRun: { owned: {} },
+    outOfRun: { owned: { black_crown: 1 } },
   };
 }

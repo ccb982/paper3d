@@ -12,6 +12,7 @@ import { countItemsInGrid } from '../../core/Session';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import type { CraftingManager } from '../../systems/inventory/CraftingManager';
 import type { InventoryPanel } from '../shared/InventoryPanel';
+import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { createButton } from '../components/Button';
 import { OUT_OF_RUN_ITEM_CONFIG } from '../../config/outOfRunItems';
 
@@ -78,6 +79,8 @@ export interface FormationPanelProps {
   itemManager: ItemManager;
   craftingManager: CraftingManager;
   inventoryPanel: InventoryPanel;
+  /** ★ 图标服务（藏品/局外道具查看与背包同一条绘制 + 播放管线） */
+  iconRegistry: ItemIconRegistry;
   /** 打开合成台（站类型由调用方决定） */
   openCrafting: (station: 'ship' | 'portable') => void;
 }
@@ -152,29 +155,54 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
     }
     html += '</div></div>';
 
-    // ★ 局外道具（只可抽取、不入背包；拥有即全局永久生效）
+    // ★ 局外道具（只可抽取、不入背包；拥有即全局永久生效/播放图标纹理）
     const outOwned = this.props.session.outOfRun?.owned ?? {};
     const outIds = Object.keys(outOwned);
     const deaths = this.props.session.meta?.deaths ?? 0;
-    html += `
-      <div style="padding:8px;background:rgba(204,170,68,0.12);border-radius:4px;margin-top:10px;">
-        <h4 style="color:#ffc;margin:0 0 6px 0;">局外道具 (${outIds.length} 种 · 只可抽取 · 无需携带)</h4>
-        <div style="color:#ca9;font-size:12px;margin-bottom:8px;">💀 当前累计死亡 ${deaths} 次</div>
-        ${outIds.length === 0
-          ? '<div style="color:#665;font-size:12px;">还没有局外道具，去招募池抽取吧</div>'
-          : '<div style="display:flex;flex-direction:column;gap:6px;">' + outIds.map((id) => {
-              const cfg = OUT_OF_RUN_ITEM_CONFIG[id];
-              if (!cfg) return '';
-              const count = outOwned[id] ?? 0;
-              const stars = cfg.rarity >= 6 ? '★' : '☆';
-              return `<div style="padding:6px 10px;background:rgba(255,215,0,0.08);border:1px solid ${cfg.rarity >= 6 ? '#ffd700' : '#c8a0ff'};border-radius:4px;font-size:12px;">
-                <div style="color:#ffd;font-weight:bold;">${cfg.name} ${stars} ×${count}</div>
-                <div style="color:#ca9;margin-top:2px;">${cfg.description}</div>
-              </div>`;
-            }).join('') + '</div>'
-        }
-      </div>`;
+    const section = document.createElement('div');
+    section.style.cssText = 'padding:8px;background:rgba(204,170,68,0.12);border-radius:4px;margin-top:10px;';
+    const heading = document.createElement('h4');
+    heading.style.cssText = 'color:#ffc;margin:0 0 6px 0;';
+    heading.textContent = `局外道具 (${outIds.length} 种 · 只可抽取 · 无需携带)`;
+    section.appendChild(heading);
+    const deathLine = document.createElement('div');
+    deathLine.style.cssText = 'color:#ca9;font-size:12px;margin-bottom:8px;';
+    deathLine.textContent = `💀 当前累计死亡 ${deaths} 次`;
+    section.appendChild(deathLine);
+    if (outIds.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'color:#665;font-size:12px;';
+      empty.textContent = '还没有局外道具，去招募池抽取吧';
+      section.appendChild(empty);
+    } else {
+      const list = document.createElement('div');
+      list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+      for (const id of outIds) {
+        const cfg = OUT_OF_RUN_ITEM_CONFIG[id];
+        if (!cfg) continue;
+        const count = outOwned[id] ?? 0;
+        const stars = cfg.rarity >= 6 ? '★' : '☆';
+        const row = document.createElement('div');
+        row.style.cssText = `padding:6px 10px;background:rgba(255,215,0,0.08);border:1px solid ${cfg.rarity >= 6 ? '#ffd700' : '#c8a0ff'};border-radius:4px;font-size:12px;display:flex;align-items:center;gap:10px;`;
+        const iconBox = document.createElement('div');
+        iconBox.style.cssText = 'width:36px;height:36px;border-radius:6px;overflow:hidden;flex:none;background:rgba(15,15,30,0.7);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,215,0,0.35);';
+        const icon = this.props.iconRegistry.createIconElement(id);
+        icon.style.width = '100%';
+        icon.style.height = '100%';
+        icon.style.objectFit = 'contain';
+        iconBox.appendChild(icon);
+        row.appendChild(iconBox);
+        const text = document.createElement('div');
+        text.style.cssText = 'flex:1;';
+        text.innerHTML = `<div style="color:#ffd;font-weight:bold;">${cfg.name} ${stars} ×${count}</div>` +
+          `<div style="color:#ca9;margin-top:2px;">${cfg.description}</div>`;
+        row.appendChild(text);
+        list.appendChild(row);
+      }
+      section.appendChild(list);
+    }
     content.innerHTML = html;
+    content.append(section);
   }
 }
 

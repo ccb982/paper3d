@@ -7,14 +7,7 @@ import type { RelicConfigEntry } from '../core/Session';
 
 export const RELIC_CONFIG: Record<string, RelicConfigEntry> = {
   // ---- 永久型藏品（局外全局加成） ----
-
-  black_crown: {
-    id: 'black_crown',
-    name: '黑冠',
-    type: 'permanent',
-    description: '每日全属性 ×1.01',
-    effect: { multiplier: 1.01 },
-  },
+  // ★ 黑冠（black_crown）已于 2026-09-11 归位为"局外道具"（见 outOfRunItems.ts）
 
   ancient_tome: {
     id: 'ancient_tome',

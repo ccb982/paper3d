@@ -212,6 +212,18 @@ async function boot() {
     SaveSystem.save(currentSession);
   }
 
+  // ★ 迁移（2026-09-11）：黑冠从"藏品"归位为"局外道具"（开局即拥 1 件）
+  if (currentSession) {
+    const rIdx = currentSession.relics?.owned?.indexOf('black_crown') ?? -1;
+    if (rIdx !== -1) {
+      currentSession.relics.owned.splice(rIdx, 1);
+      if (!currentSession.outOfRun) currentSession.outOfRun = { owned: {} };
+      if (!currentSession.outOfRun.owned) currentSession.outOfRun.owned = {};
+      currentSession.outOfRun.owned.black_crown = (currentSession.outOfRun.owned.black_crown ?? 0) + 1;
+      SaveSystem.save(currentSession);
+    }
+  }
+
   // ★★★★★ 修复：如果标志为 true 但游戏刚启动，说明上次出击未正常执行 ★★★★★
   if (currentSession && currentSession.dayProgress.hasDepartedToday) {
     console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），战斗未正常执行，维持当天存档');

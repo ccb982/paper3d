@@ -100,8 +100,8 @@ export class ShipMode implements IGameMode {
       console.error('[ShipMode] 主页面按钮加载失败:', err);
     });
 
-    // ⑤ 创建抽卡覆盖层（行动后触发）
-    this.gachaOverlay = new GachaOverlay(ctx.session);
+    // ⑤ 创建抽卡覆盖层（行动后触发；与背包/加工台共享图标服务）
+    this.gachaOverlay = new GachaOverlay(ctx.session, this.iconRegistry);
     this.gachaOverlay.load().then(() => {
       // 将抽卡覆盖层传递给 UI 管理器，点在"行动"时显示
       this.uiManager.setGachaOverlay(this.gachaOverlay);

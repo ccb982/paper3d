@@ -7,6 +7,15 @@
 import type { OutOfRunItemConfig } from '../core/Session';
 
 export const OUT_OF_RUN_ITEM_CONFIG: Record<string, OutOfRunItemConfig> = {
+  black_crown: {
+    id: 'black_crown',
+    name: '魔王的黑冠',
+    rarity: 5,
+    description: '每日全属性 ×1.01（开局即拥，卡池可重复抽到叠加）',
+    texture: '/fx/魔王的黑冠.ftx3.gz',
+    effect: { perDayMultiplier: 1.01 },
+  },
+
   gravel_love: {
     id: 'gravel_love',
     name: '砾小姐的爱',

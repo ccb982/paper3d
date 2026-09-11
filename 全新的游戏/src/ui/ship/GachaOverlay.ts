@@ -16,6 +16,7 @@ import itemsJson from '../../config/items.json';
 import type { GameSession } from '../../core/Session';
 import { addItemToGrid } from '../../core/Session';
 import { OUT_OF_RUN_ITEM_CONFIG } from '../../config/outOfRunItems';
+import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 
 import { SaveSystem } from '../../core/SaveSystem';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
@@ -284,6 +285,8 @@ export class GachaOverlay {
 
   constructor(
     private session: GameSession,
+    /** ★ 图标服务（与背包/加工台同一条绘制管线：色块兜底 / 六兄弟 FTX / 无人机动态 / 局外道具 FTX） */
+    private iconRegistry: ItemIconRegistry,
   ) {
     // 根容器
     this.root = document.createElement('div');
@@ -995,7 +998,7 @@ export class GachaOverlay {
     }
 
     if (pool.length === 0) {
-      this.showResult([{ kind: 'inRun', name: '卡池为空', rarity: 0, description: '卡池还没有收录任何道具', isNew: false }]);
+      this.showResult([{ kind: 'inRun', id: '', name: '卡池为空', rarity: 0, description: '卡池还没有收录任何道具', isNew: false }]);
       return;
     }
 
@@ -1004,7 +1007,7 @@ export class GachaOverlay {
     const topRarity = Math.max(...pool.map((p) => p.rarity));
     const PITY_LIMIT = 60;
 
-    const results: Array<{ kind: 'inRun' | 'outRun'; name: string; rarity: number; description: string; isNew: boolean }> = [];
+    const results: Array<{ kind: 'inRun' | 'outRun'; id: string; name: string; rarity: number; description: string; isNew: boolean }> = [];
     for (let i = 0; i < count; i++) {
       s.gacha.totalPulls++;
       s.gacha.pityCounter++;
@@ -1028,6 +1031,7 @@ export class GachaOverlay {
         const added = addItemToGrid(s.inventories.player, picked.id, 1);
         results.push({
           kind: 'inRun',
+          id: picked.id,
           name: picked.name,
           rarity: picked.rarity,
           description: added ? picked.description : picked.description + '（玩家背包已满，无法入账）',
@@ -1039,6 +1043,7 @@ export class GachaOverlay {
         s.outOfRun.owned[picked.id] = owned + 1;
         results.push({
           kind: 'outRun',
+          id: picked.id,
           name: picked.name,
           rarity: picked.rarity,
           description: picked.description,
@@ -1054,7 +1059,7 @@ export class GachaOverlay {
     this.showResult(results);
   }
 
-  private showResult(results: Array<{ kind: 'inRun' | 'outRun'; name: string; rarity: number; description: string; isNew: boolean }>): void {
+  private showResult(results: Array<{ kind: 'inRun' | 'outRun'; id: string; name: string; rarity: number; description: string; isNew: boolean }>): void {
     this.resultList.innerHTML = '';
     for (const r of results) {
       const item = document.createElement('div');
@@ -1064,7 +1069,7 @@ export class GachaOverlay {
       else if (r.rarity >= 4) cls = 'rarity-4';
       item.className = 'result-item ' + cls;
       item.style.cssText = [
-        'display:flex', 'align-items:center', 'justify-content:space-between',
+        'display:flex', 'align-items:center', 'gap:12px',
         'padding:10px 14px', 'background:rgba(255,255,255,0.05)',
         'border-radius:8px', 'border-left:3px solid #666',
       ].join(';');
@@ -1075,7 +1080,11 @@ export class GachaOverlay {
       const badge = r.kind === 'outRun'
         ? '<span style="color:#ff9;font-size:12px;padding:1px 6px;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.4);border-radius:4px;margin-right:6px;">局外道具</span>'
         : '<span style="color:#9cf;font-size:12px;padding:1px 6px;background:rgba(68,136,255,0.15);border:1px solid rgba(68,136,255,0.45);border-radius:4px;margin-right:6px;">局内道具</span>';
+
+      item.appendChild(this.makeResultIcon(r));
+
       const nameDiv = document.createElement('div');
+      nameDiv.style.cssText = 'flex:1;text-align:left;';
       nameDiv.innerHTML = '<div style="color:#eee;font-size:15px;font-weight:bold;">' +
         badge + r.name + newBadge + '</div>' +
         (r.description ? '<div style="color:#888;font-size:12px;margin-top:2px;">' + r.description + '</div>' : '');
@@ -1093,6 +1102,23 @@ export class GachaOverlay {
       this.resultList.appendChild(item);
     }
     this.resultOverlay.style.display = 'flex';
+  }
+
+  /** ★ 结果卡片图标：与背包/加工台同一条绘制管线（局外 FTX 纹理、局内物品色块/无人机动态播放） */
+  private makeResultIcon(r: { kind: 'inRun' | 'outRun'; id: string; rarity: number }): HTMLElement {
+    const box = document.createElement('div');
+    const borderColor = r.rarity >= 5 ? '#c8a0ff' : r.rarity >= 4 ? '#8af' : '#8c8';
+    box.style.cssText = [
+      'width:48px', 'height:48px', 'border-radius:8px', 'overflow:hidden', 'flex:none',
+      `border:2px solid ${borderColor}`, 'background:rgba(15,15,30,0.7)',
+      'display:flex', 'align-items:center', 'justify-content:center',
+    ].join(';');
+    const el = this.iconRegistry.createIconElement(r.id);
+    el.style.width = '100%';
+    el.style.height = '100%';
+    el.style.objectFit = 'contain';
+    box.appendChild(el);
+    return box;
   }
 
   // ============================================================

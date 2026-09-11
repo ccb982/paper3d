@@ -150,6 +150,7 @@ export class ShipUIManager extends BaseInteractionUI {
           itemManager: this.itemManager,
           craftingManager: this.craftingManager,
           inventoryPanel: this.inventoryPanel,
+          iconRegistry: this.iconRegistry,
           openCrafting: (station) => this.openCrafting(station),
         });
         this.formationPanel = p;
