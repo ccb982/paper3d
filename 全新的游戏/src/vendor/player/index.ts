@@ -325,6 +325,25 @@ export class Asset implements CharacterFxAssetSource {
     return effect;
   }
 
+  /**
+   * ★ 创建独立"环境流体"（图标动效等）：不缓存，直接使用该帧自带的流体参数。
+   * 与 getFluidEffect（共享缓存）隔离——图标动画不会影响世界实体同一实例的求解节奏。
+   */
+  createAmbientFluidEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null {
+    if (frameIndex < 0 || frameIndex >= this.frames.length) return null;
+    const physics = this.frames[frameIndex].physics;
+    if (!physics) return null;
+    const ftxFrame = this.getFtxFrame(frameIndex);
+    if (!ftxFrame) return null;
+    const palette = this._ftx!.palette;
+
+    const entities: SerializedRegionEntity[] = [];
+    for (const ed of this.frames[frameIndex].regionEntities) {
+      entities.push(ed);
+    }
+    return new FluidEffect(renderer, physics, ftxFrame, palette, entities);
+  }
+
   /** 释放所有流体效果（重新加载或 dispose 时调用） */
   clearFluidEffects(): void {
     for (const [, eff] of this._fluidEffects) eff.dispose();

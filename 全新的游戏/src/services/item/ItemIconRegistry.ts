@@ -9,6 +9,7 @@
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadSixBrotherIcons, compositeFrameToCanvas } from './BasicMaterialsIcons';
 import { getDroneIconAnimator, DroneIconAnimator } from './DroneIcon';
+import { getFluidIconAnimator } from './FluidIconAnimator';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import type { Asset } from '../../vendor/player';
 
@@ -114,8 +115,14 @@ export class ItemIconRegistry {
    *  静态（六兄弟/色块兜底）→ 独立 <img>(dataURL)，与背包一致；
    *  动态（无人机）→ 活动画布（register 每次建新画布，翅膀动画播放）。 */
   createIconElement(itemId: string, frameIndex = 0): HTMLCanvasElement | HTMLImageElement {
+    if (itemId === 'kaltsit_drone') return this.getIcon(itemId, frameIndex);
+    // ★ 资产流体图标（如祖宗）：活体画布直接返回（保持流体求解动画）
+    const assetSrc = assetIconSources.get(itemId);
+    if (assetSrc) {
+      const live = getFluidIconAnimator().register(assetSrc, frameIndex);
+      if (live) return live;
+    }
     const src = this.getIcon(itemId, frameIndex);
-    if (itemId === 'kaltsit_drone') return src;
     const img = document.createElement('img');
     img.src = src.toDataURL();
     img.style.objectFit = 'contain';
