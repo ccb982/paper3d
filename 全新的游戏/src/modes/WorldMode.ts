@@ -93,6 +93,8 @@ const SENTINEL_IMPACT_ATK_RATIO = 0.8;
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
+/** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
+const HEAL_PROC_MIN_HEAL = 1.0;
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -242,6 +244,8 @@ export class WorldMode implements IGameMode {
   private sentinelFluid: FluidEffect | null = null;
   /** ★ 祖宗流体步进蓄积（30Hz 节流：半速求解不可感，省 GPU 合成开销） */
   private sentinelFluidAccum = 0;
+  /** ★ 治疗转伤害 proc 命中候选缓冲（复用防每帧分配） */
+  private _healProcTargets: EnemyBase[] = [];
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -816,6 +820,8 @@ export class WorldMode implements IGameMode {
     this.bullets.update(dt, this.camera);
     // ★ 祖宗弹推进（落地/寿命到 → 生成站桩祖宗）
     this.updateSentinelShots(dt);
+    // ★ 治疗转伤害 proc（鱼生萌萌香/遥·幽隙栖萤）
+    this.updateHealProc();
     CharacterFxManager.update(dt, this.camera);
 
     // ---- 拾取发光粒子 ----
@@ -1662,7 +1668,41 @@ export class WorldMode implements IGameMode {
         attackPower: eq.attackPct,
         defense: eq.defensePct,
       },
+      healProc: eq.healProc ?? undefined,
     }]);
+  }
+
+  /** ★ 治疗转伤害（遥·幽隙栖萤 口径）：累计治疗量 ≥ 阈值 → 对半径内最多 N 名敌人结算
+   *  伤害 = 累计治疗量 × ratio（直接扣血、不经减法防御——按法术伤害口径） */
+  private updateHealProc(): void {
+    const p = this.player;
+    const proc = p.healProc;
+    if (!proc || p.hp <= 0 || p.healBuffer < HEAL_PROC_MIN_HEAL) return;
+    const heal = p.healBuffer;
+    p.healBuffer = 0;
+    const dmg = Math.max(1, Math.round(heal * proc.ratio));
+    const r2 = proc.radius * proc.radius;
+    const px = p.position.x, pz = p.position.z;
+    const targets = this._healProcTargets;
+    targets.length = 0;
+    for (const e of this.enemies) {
+      if (e.hp <= 0) continue;
+      const dx = e.position.x - px;
+      const dz = e.position.z - pz;
+      if (dx * dx + dz * dz <= r2) targets.push(e);
+    }
+    if (targets.length === 0) return;
+    targets.sort((a, b) => {
+      const adx = a.position.x - px, adz = a.position.z - pz;
+      const bdx = b.position.x - px, bdz = b.position.z - pz;
+      return adx * adx + adz * adz - (bdx * bdx + bdz * bdz);
+    });
+    const n = Math.min(proc.maxTargets, targets.length);
+    for (let i = 0; i < n; i++) {
+      const t = targets[i];
+      t.onTakeDamage(dmg, p);
+      eventBus.emit('damage', { target: t, source: p, damage: dmg, crit: false, dodged: false, blocked: false });
+    }
   }
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */

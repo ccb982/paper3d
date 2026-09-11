@@ -11,6 +11,7 @@
 import type { GameSession, InventoryGrid } from '../../core/Session';
 import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, swapGridCells, findItemInGrid, findEmptySlot, SLOT_COUNT, SLOT_ROWS, SLOT_COLS } from '../../core/Session';
 import { ItemArchetype, type EquipmentStats } from '../../core/ItemArchetype';
+import type { HealProcDef } from '../../services/combat/EffectSystem';
 import { type ItemEffectContext } from '../../core/ItemEffect';
 import { eventBus } from '../../core/EventBus';
 import type { EntityBase } from '../../entity/EntityBase';
@@ -22,6 +23,9 @@ export interface UseItemResult {
   healAmount?: number;
   ammoAmount?: number;
 }
+
+/** ★ 装备属性汇总（数值项全量；healProc 为 proc 配置而非数值，取单件生效） */
+export type EquipmentStatsTotal = Required<Omit<EquipmentStats, 'healProc'>> & { healProc: HealProcDef | null };
 
 export class ItemManager {
   private archetypes = new Map<string, ItemArchetype>();
@@ -310,12 +314,14 @@ export class ItemManager {
 
   /** ★ 局内装备临时属性：遍历出击槽汇总各装备 stats（卸载/换装即自动消失，与遗物永久加成区分）
    *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen
-   *   取最高：damageReduction（方舟"庇护"同名效果取最高，不叠加） */
-  getEquipmentStats(): Required<EquipmentStats> {
-    const out: Required<EquipmentStats> = {
+   *   取最高：damageReduction（方舟"庇护"同名效果取最高，不叠加）
+   *   proc：healProc（取最后一件配置者；装备间不叠） */
+  getEquipmentStats(): EquipmentStatsTotal {
+    const out: EquipmentStatsTotal = {
       maxHp: 0, attackPower: 0, attackPct: 0,
       defense: 0, defensePct: 0,
       attackSpeed: 0, damageReduction: 0, hpRegen: 0,
+      healProc: null,
     };
     const slots = this.session.player.slots;
     if (!Array.isArray(slots)) return out;
@@ -331,6 +337,7 @@ export class ItemManager {
       out.attackSpeed += s.attackSpeed ?? 0;
       out.damageReduction = Math.max(out.damageReduction, s.damageReduction ?? 0);
       out.hpRegen += s.hpRegen ?? 0;
+      if (s.healProc) out.healProc = s.healProc;
     }
     return out;
   }

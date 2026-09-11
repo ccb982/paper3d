@@ -42,13 +42,20 @@ export const effectRegistry = new Map<string, ItemEffectHandler>();
 // ===== 内置效果注册 =====
 
 effectRegistry.set('heal', (params, ctx) => {
-  const player = ctx.session.player;
   const value = params.value ?? 30;
+  // ★ 世界内：治疗实体（与 HUD/效果队列同源，且作为"治疗转伤害"proc 的燃料）；
+  //   舰船上（无实体）：治疗存档数值
+  const entity = ctx.user;
+  const maxHp = entity ? entity.maxHp : ctx.session.player.maxHp;
+  const hp = entity ? entity.hp : ctx.session.player.hp;
   // 999 = 恢复全部
-  const actual = value >= 999
-    ? player.maxHp - player.hp
-    : Math.min(player.maxHp - player.hp, value);
-  player.hp += actual;
+  const actual = Math.max(0, value >= 999 ? maxHp - hp : Math.min(maxHp - hp, value));
+  if (entity) {
+    entity.hp += actual;
+    entity.healBuffer += actual;
+  } else {
+    ctx.session.player.hp += actual;
+  }
   return { success: true, healAmount: actual, message: `回复 ${actual} 点生命` };
 });
 

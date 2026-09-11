@@ -11,6 +11,7 @@ import type { EntityManager } from '../entity/EntityManager';
 import type { ItemBase } from '../entity/ItemBase';
 import type { ColliderShape } from '../services/physics/PhysicsWorld';
 import { effectRegistry, type ItemEffectContext, type ItemEffectResult } from './ItemEffect';
+import type { HealProcDef } from '../services/combat/EffectSystem';
 
 /** 效果定义（配置表 effects 数组中的条目） */
 export interface ItemEffectDef {
@@ -40,7 +41,8 @@ export interface ItemWorldConfig {
  *   - maxHp/attackPower/defense/hpRegen：加算
  *   - attackPct/defensePct：对（基础+遗物）终值乘算（0.5 = +50%）
  *   - attackSpeed：方舟攻速点数（100 基准；实际间隔 = 基础间隔 × 100 /(100+X)）
- *   - damageReduction：庇护（受到的伤害降低比例 0-1；同名效果取最高） */
+ *   - damageReduction：庇护（受到的伤害降低比例 0-1；同名效果取最高）
+ *   - healProc：治疗转伤害 proc（非数值；装备期间由模式层消费） */
 export interface EquipmentStats {
   maxHp?: number;
   attackPower?: number;
@@ -50,6 +52,7 @@ export interface EquipmentStats {
   attackSpeed?: number;
   damageReduction?: number;
   hpRegen?: number;
+  healProc?: HealProcDef;
 }
 
 export class ItemArchetype {

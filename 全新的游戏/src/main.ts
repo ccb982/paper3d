@@ -206,6 +206,14 @@ async function boot() {
   // ★ 祖宗图标路径：注册资产图标源（背包/加工台/友军列表统一由此合成贴图）
   if (sentinelAsset) registerAssetIconSource('zuzong', sentinelAsset);
 
+  // ---- ★ 鱼生萌萌香（头部装备）：3 帧动态图标统一走 DynamicIconAnimator 通用线 ----
+  try {
+    const yushengAsset = await FtxAsset.load(encodeURI('/fx/鱼生萌萌香.ftx3.gz'));
+    registerDynamicIcon('yusheng_mengmengxiang', yushengAsset);
+  } catch {
+    console.warn('[boot] 鱼生萌萌香素材缺失，图标回退色块');
+  }
+
   // ---- ★ 月亮贴图：加载大猫哥月亮素材包（特效播放器解码），替换天空程序化月相 ----
   try {
     const moonAsset = await Asset.load(encodeURI('/characters/大猫哥的月亮.scene.zip'));

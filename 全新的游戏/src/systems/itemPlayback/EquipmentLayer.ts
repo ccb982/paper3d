@@ -214,7 +214,7 @@ export class EquipmentLayer {
     }
     m.shadow.setSource(m.fd);
 
-    // ---- 太阳解析投影（与 EntityBase.syncShadow 同式） ----
+    // ---- 太阳解析投影（与 EntityBase.syncShadow 同式：按贴片自身世界高度投影） ----
     mesh.getWorldPosition(m.worldPos);
     const x = m.worldPos.x, y = m.worldPos.y, z = m.worldPos.z;
     const gy = RasterMap.current?.surfaceHeightAt(x, z) ?? 0;

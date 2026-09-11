@@ -34,6 +34,16 @@ export type EffectStatKey =
   | 'attackSpeed' | 'hpRegen' | 'damageReduction'
   | 'critRate' | 'critMult' | 'dodgeRate' | 'blockRate' | 'blockMult';
 
+/** ★ 治疗转伤害 proc（遥·幽隙栖萤口径）：累计治疗量 × ratio → 对半径内最多 maxTargets 名敌人结算 */
+export interface HealProcDef {
+  /** 伤害 = 治疗量 × ratio（1 = 100%） */
+  ratio: number;
+  /** 每次触发最多命中数 */
+  maxTargets: number;
+  /** 触发半径（米） */
+  radius: number;
+}
+
 /** 效果定义（挂载入口） */
 export interface EffectDef {
   /** 唯一 id：同 id 按 stackMode 刷新/叠层/延长 */
@@ -51,6 +61,8 @@ export interface EffectDef {
   flat?: Partial<Record<EffectStatKey, number>>;
   /** 乘算修正（对 maxHp/attackPower/defense/critMult/blockMult 生效） */
   pct?: Partial<Record<EffectStatKey, number>>;
+  /** ★ 治疗转伤害 proc（多个效果时取 ratio 最高者） */
+  healProc?: HealProcDef;
 }
 
 /** 活跃效果（实体持有时长实例） */
@@ -66,6 +78,7 @@ export interface ActiveEffect {
   stackMode: 'refresh' | 'stack' | 'extend';
   flat: Partial<Record<EffectStatKey, number>>;
   pct: Partial<Record<EffectStatKey, number>>;
+  healProc?: HealProcDef;
 }
 
 class EffectSystem {
@@ -95,6 +108,7 @@ class EffectSystem {
       }
       existing.flat = def.flat ? { ...def.flat } : {};
       existing.pct = def.pct ? { ...def.pct } : {};
+      existing.healProc = def.healProc ? { ...def.healProc } : undefined;
       this.applyAggregated(e);
       return existing;
     }
@@ -108,6 +122,7 @@ class EffectSystem {
       stackMode: def.stackMode ?? 'refresh',
       flat: def.flat ? { ...def.flat } : {},
       pct: def.pct ? { ...def.pct } : {},
+      healProc: def.healProc ? { ...def.healProc } : undefined,
     };
     e.effects.push(fx);
     this.applyAggregated(e);
@@ -159,9 +174,13 @@ class EffectSystem {
     }
     if (list.length === 0) e.effects = null;
     if (expired) this.applyAggregated(e);
-    // ★ 生命回复（聚合后的 hpRegen；死亡/满血不结算）
+    // ★ 生命回复（聚合后的 hpRegen；死亡/满血不结算）→ 治疗量进 healBuffer（治疗转伤害 proc 燃料）
     if (e.hpRegen > 0 && e.hp > 0 && e.hp < e.maxHp) {
-      e.hp = Math.min(e.maxHp, e.hp + e.hpRegen * dt);
+      const healed = Math.min(e.maxHp - e.hp, e.hpRegen * dt);
+      if (healed > 0) {
+        e.hp += healed;
+        e.healBuffer += healed;
+      }
     }
   }
 
@@ -215,6 +234,15 @@ class EffectSystem {
     e.dodgeRate = statOf('dodgeRate') + F('dodgeRate');
     e.blockRate = statOf('blockRate') + F('blockRate');
     e.damageReduction = Math.min(0.9, Math.max(statOf('damageReduction'), drMax));
+    // ★ 治疗转伤害 proc（多效果取 ratio 最高；无则清空）
+    let proc: HealProcDef | null = null;
+    if (list) {
+      for (const fx of list) {
+        if (fx.healProc && (!proc || fx.healProc.ratio > proc.ratio)) proc = fx.healProc;
+      }
+    }
+    e.healProc = proc;
+    if (!proc) e.healBuffer = 0; // ★ 无 proc 时清空累计治疗（防止重新装备时一次性爆发）
     if (e.hp > e.maxHp) e.hp = e.maxHp;
   }
 }

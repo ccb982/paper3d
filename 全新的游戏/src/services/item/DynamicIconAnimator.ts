@@ -29,6 +29,8 @@ const FPS = 24;
 const FRAME_MS = 1000 / FPS;
 /** 循环周期（秒）：到点 reset 流体，恢复初始残差重新流动（像连发） */
 const LOOP_SEC = 1.5;
+/** ★ 兜底路径（无区域实体素材）的帧序列播放速度（如 3 帧装饰类图标） */
+const FRAME_FPS = 8;
 
 /** 公开 begin/end/RT 的离屏烘焙（OffscreenBake 设计为子类使用） */
 class IconBake extends OffscreenBake {
@@ -55,6 +57,8 @@ interface Producer {
   quadFluid: FTXQuad | null;
   baseTex: THREE.Texture | null;
   residualTex: THREE.Texture | null;
+  /** ★ 素材总帧数（兜底路径按 FRAME_FPS 循环播放；VAT 路径由 uTime 驱动） */
+  frameCount: number;
   /** RT 尺寸与回读/适配缓冲 */
   srcW: number;
   srcH: number;
@@ -192,8 +196,10 @@ class DynamicIconAnimator {
         p.bake.endBake();
         gl.disable(gl.STENCIL_TEST);
       } else {
-        p.quadBase?.render({ frameIndex: 0 });
-        p.quadFluid?.render({ frameIndex: 0 }, fluidTex);
+        // ★ 多帧素材：按 FRAME_FPS 循环帧序列（3 帧装饰类等；单帧恒 0）
+        const fi = p.frameCount > 1 ? Math.floor(time * FRAME_FPS) % p.frameCount : 0;
+        p.quadBase?.render({ frameIndex: fi });
+        p.quadFluid?.render({ frameIndex: fi }, fluidTex);
         p.bake.beginBake();
         renderer.render(p.scene, p.camera);
         p.bake.endBake();
@@ -328,6 +334,7 @@ class DynamicIconAnimator {
       bake: new IconBake(renderer, srcW, srcH),
       fillObjs, meshObjs, meshMats, fillMats, quadBase, quadFluid,
       baseTex: pair.base, residualTex: pair.residual ?? null,
+      frameCount: Math.max(1, src.frameCount ?? 1),
       srcW, srcH,
       buf: new Uint8Array(srcW * srcH * 4),
       flip: new Uint8ClampedArray(srcW * srcH * 4),

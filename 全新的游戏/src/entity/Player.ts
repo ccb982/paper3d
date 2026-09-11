@@ -61,11 +61,15 @@ export class Player extends CharacterBase {
     return name.startsWith('后') ? '后' : '前';
   }
 
-  /** ★ 玩家死亡（不销毁主角；死亡动画 + 立即复活） */
-  override onDeath(_source: EntityBase | null): void {
-    // ★ 死亡动画（自动管线：只播动画不销毁实体，传送复活）
+  /** ★ 玩家死亡（不销毁主角；死亡动画 + 复活）
+   *   - 战斗死亡（source=敌人/子弹）→ 复活回满血（血量停在 0 会变"0 血幽灵"：伤害早退+不回血）
+   *   - 环境死亡（source=null，掉坑）→ 当前血量减半（保底 1），由 WorldMode 传送回出生点 */
+  override onDeath(source: EntityBase | null): void {
     this.playDeathAnim();
-    // ★ 复活回满血：血量停在 0 会让伤害管线早退（无敌）且效果队列不回血 → "0 血幽灵"
-    this.hp = this.maxHp;
+    if (source === null) {
+      this.hp = Math.max(1, Math.floor(this.hp * 0.5));
+    } else {
+      this.hp = this.maxHp;
+    }
   }
 }

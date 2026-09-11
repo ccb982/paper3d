@@ -39,6 +39,25 @@
       "station": "ship"
     },
     {
+      "id": "yusheng_mengmengxiang",
+      "name": "鱼生萌萌香",
+      "inputs": [
+        {
+          "itemId": "sugar",
+          "count": 100
+        },
+        {
+          "itemId": "polyester",
+          "count": 100
+        }
+      ],
+      "output": {
+        "itemId": "yusheng_mengmengxiang",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
       "id": "kaltsit_drone_repair",
       "name": "维修无人机",
       "inputs": [

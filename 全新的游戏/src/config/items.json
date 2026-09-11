@@ -226,6 +226,37 @@
       ]
     },
     {
+      "id": "yusheng_mengmengxiang",
+      "name": "鱼生萌萌香",
+      "type": "equip",
+      "description": "遥的演出服头饰（幽隙栖萤）：攻击力+40%；受到治疗时，对周围最多3名敌人造成相当于治疗量200%的伤害",
+      "maxStack": 1,
+      "stats": {
+        "attackPct": 0.4,
+        "healProc": { "ratio": 2.0, "maxTargets": 3, "radius": 10 }
+      },
+      "combat": {
+        "kind": "equip",
+        "slot": "headgear",
+        "asset": "/fx/鱼生萌萌香.ftx3.gz",
+        "facing": "front",
+        "offsetX": 0,
+        "offsetY": 0.32,
+        "offsetZ": 0.09,
+        "scale": 0.4,
+        "rotateZ": 0
+      },
+      "color": { "h": 0.07, "s": 0.6, "l": 0.6 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.2, "hy": 0.16, "hz": 0.18 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "equip", "slot": "headgear" }
+      ]
+    },
+    {
       "id": "kaltsit_drone",
       "name": "可露希尔的无人机",
       "type": "consumable",

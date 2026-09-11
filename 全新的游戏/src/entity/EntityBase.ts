@@ -30,7 +30,7 @@ import type { FxRendererBase } from '../services/render/FxRendererBase';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import { entityPerf } from './EntityPerf';
-import { effectSystem, type ActiveEffect, type EffectStatKey } from '../services/combat/EffectSystem';
+import { effectSystem, type ActiveEffect, type EffectStatKey, type HealProcDef } from '../services/combat/EffectSystem';
 
 /** 物理同步模式：kinematic=位置代码驱动（角色/敌人：setNextKinematicTranslation，
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
@@ -299,6 +299,10 @@ export abstract class EntityBase {
   effects: ActiveEffect[] | null = null;
   /** ★ 效果基础属性（聚合公式的底；首次挂效果/模式层注入时捕获） */
   statBase: Partial<Record<EffectStatKey, number>> | null = null;
+  /** ★ 治疗转伤害 proc 配置（EffectSystem 聚合；null = 无。触发逻辑由模式层消费） */
+  healProc: HealProcDef | null = null;
+  /** ★ 累计已治疗量（治疗转伤害的燃料；模式层触发后清零） */
+  healBuffer = 0;
 
   /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
   onTakeDamage(dmg: number, source: EntityBase | null): void {
