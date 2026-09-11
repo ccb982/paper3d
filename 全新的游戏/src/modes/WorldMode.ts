@@ -97,6 +97,13 @@ interface MobDef {
 // WorldMode 类
 // ============================================================
 
+/** ★ 每帧性能细分（毫秒；main.ts 的 FPS HUD 读取，定位更新耗时分布） */
+export const worldPerf = {
+  chunks: 0, ui: 0, combat: 0, ai: 0, entity: 0, post: 0, phys: 0, total: 0,
+  drones: 0, ent: 0, water: 0, clamp: 0,
+  nEnemies: 0, nDrones: 0, nEntities: 0,
+};
+
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
   player!: Player;
@@ -509,6 +516,7 @@ export class WorldMode implements IGameMode {
   update(dt: number): void {
     if (!this.binding || !this.physics || !this.scene || !this.camera || !this.renderer) return;
 
+    const _t0 = performance.now();
     this.binding.update();
     const input = this.binding.input;
     const attackPressed = this.binding.consumeAttack();
@@ -534,6 +542,7 @@ export class WorldMode implements IGameMode {
 
     // ★ 无限地图扩张 + 看门狗自愈（chunk 流式管线在 ChunkManager 内）
     this.chunks.update(pp.x, pp.y, dt);
+    const _t1 = performance.now();
 
     // ★ 小地图更新
     this.worldUIManager.update(dt, {
@@ -559,6 +568,7 @@ export class WorldMode implements IGameMode {
           return sp - sq;
         }),
     });
+    const _t2 = performance.now();
 
     // ★ 战斗道具播放：装备贴片帧动画驱动（带相机 → 影子 LOD/昼夜浓度）
     this.combatItems.update(dt, this.camera ?? undefined);
@@ -568,6 +578,7 @@ export class WorldMode implements IGameMode {
       this.syncLoadoutAccum = 0;
       this.combatItems.syncLoadout();
     }
+    const _t3 = performance.now();
 
     // AI 上下文
     this.aiCtx.dt = dt;
@@ -594,11 +605,13 @@ export class WorldMode implements IGameMode {
       this.cullAccum = 0;
       this.cullFarEnemies(pp.x, pp.y);
     }
+    const _t4 = performance.now();
 
     // --------------------------------------------------
     // ★ 无人机编队 AI：按编队槽位 3D 分布跟随（左右交替/高度错层/前后错落，
     //   远离准星正前方），各自 updateAI（跟随→锁定最近敌人→贴脸攻击→返回重锁）
     //   先于实体管线，保证本帧 syncRender 使用新位置。
+    const _e0 = performance.now();
     if (this.drones.length > 0) {
       const dp = this.player.position;
       const frame = this.cameraCtrl.getFrame();
@@ -616,16 +629,27 @@ export class WorldMode implements IGameMode {
     }
 
     // ---- 实体管线驱动 ----
+    const _e1 = performance.now();
     if (attackPressed) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
+    const _e2 = performance.now();
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感） ----
     this.updateWaterEntry(this.player, dt);
     for (const e of this.enemies) this.updateWaterEntry(e, dt);
+    const _e3 = performance.now();
 
     // ---- 角色地形跟随 ----
     this.clampCharacter(this.player, dt);
     for (const e of this.enemies) this.clampCharacter(e, dt);
+    const _t5 = performance.now();
+    worldPerf.drones = _e1 - _e0;
+    worldPerf.ent = _e2 - _e1;
+    worldPerf.water = _e3 - _e2;
+    worldPerf.clamp = _t5 - _e3;
+    worldPerf.nEnemies = this.enemies.length;
+    worldPerf.nDrones = this.drones.length;
+    worldPerf.nEntities = this.entities.count;
 
     // ---- ★ 测试地图：玩家钳在出生 chunk 内（世界只有这一块，无邻可走） ----
     if (this.testChunk) {
@@ -663,6 +687,7 @@ export class WorldMode implements IGameMode {
         this.pickupGlows.splice(i, 1);
       }
     }
+    const _t6 = performance.now();
 
     // ---- 物理固定步长 ----
     this.acc += dt;
@@ -674,6 +699,17 @@ export class WorldMode implements IGameMode {
       steps++;
     }
     if (steps >= 5) this.acc = 0;
+
+    // ★ 性能细分落账（每帧覆写；main.ts HUD 读取）
+    const _t7 = performance.now();
+    worldPerf.chunks = _t1 - _t0;
+    worldPerf.ui = _t2 - _t1;
+    worldPerf.combat = _t3 - _t2;
+    worldPerf.ai = _t4 - _t3;
+    worldPerf.entity = _t5 - _t4;
+    worldPerf.post = _t6 - _t5;
+    worldPerf.phys = _t7 - _t6;
+    worldPerf.total = _t7 - _t0;
   }
 
   /** 渲染：实体管线 + 场景 */
@@ -1039,31 +1075,36 @@ export class WorldMode implements IGameMode {
   private updateWaterEntry(e: CharacterBase, dt: number): void {
     const p = e.position;
     const liquid = this.raster.tileDefAt(p.x, p.z).genRole === 'liquid';
-    const prev = this.waterPrev.get(e);
-    this.waterPrev.set(e, {
-      liquid, y: p.y, rippleMs: prev ? prev.rippleMs : 0,
-    });
-    if (!prev) return;
+    // ★ 复用记录对象（每帧 set 新对象会制造 GC 压力——60+ 实体每帧一个）
+    let rec = this.waterPrev.get(e);
+    if (!rec) {
+      rec = { liquid, y: p.y, rippleMs: 0 };
+      this.waterPrev.set(e, rec);
+      return;
+    }
+    const prevLiquid = rec.liquid;
+    const prevY = rec.y;
+    rec.liquid = liquid;
+    rec.y = p.y;
     // 走进水面（方块由非水 → 水，且脚底在水面以下 0.5m 内才算真正入水）
-    if (liquid && !prev.liquid && p.y < 0.5) {
-      this.waterPrev.get(e)!.rippleMs = performance.now();
+    if (liquid && !prevLiquid && p.y < 0.5) {
+      rec.rippleMs = performance.now();
       sharedWaterMaterial.addImpact(p.x, p.z, 0.8);
       return;
     }
     // 高处坠落 / 跳入：本帧穿过 y=0 水面 → 波幅随坠落速度增大
-    if (liquid && prev.y > 0.08 && p.y <= 0.08) {
-      this.waterPrev.get(e)!.rippleMs = performance.now();
-      const vy = Math.max(0, (prev.y - p.y) / Math.max(dt, 1e-3));
+    if (liquid && prevY > 0.08 && p.y <= 0.08) {
+      rec.rippleMs = performance.now();
+      const vy = Math.max(0, (prevY - p.y) / Math.max(dt, 1e-3));
       sharedWaterMaterial.addImpact(p.x, p.z, Math.min(1.6, 0.7 + vy * 0.15));
       return;
     }
     // ★ 在水中移动 → 脚下周期性泛波（速度越快越密/越强）
     if (liquid && e.controller.moveSpeed > 0.3) {
-      const st = this.waterPrev.get(e)!;
       const now = performance.now();
       const gap = 340 - e.controller.moveSpeed * 28; // 慢走 0.3s 一泛，快跑 ~0.2s
-      if (now - st.rippleMs >= gap) {
-        st.rippleMs = now;
+      if (now - rec.rippleMs >= gap) {
+        rec.rippleMs = now;
         sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + e.controller.moveSpeed * 0.06));
       }
     }

@@ -155,7 +155,17 @@ export abstract class CharacterBase extends EntityBase {
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
     this.separateFromOthers();
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍；同上原理）
-    this.separateFromStatics();
+    //   ★ 性能：静态障碍不动，rapier 查询无需每帧——玩家每帧保手感，
+    //     敌人 60ms 一次（穿透滞后不可感，60 敌省下 ~90% 查询）
+    if (this.entity.kind === "player") {
+      this.separateFromStatics();
+    } else {
+      this.sepStaticAccum += dt;
+      if (this.sepStaticAccum >= 0.06) {
+        this.sepStaticAccum = 0;
+        this.separateFromStatics();
+      }
+    }
     // ★ 受击染料推进（矢量平流 + 计时释放）
     this.updateHitDye(dt);
   }
@@ -279,6 +289,8 @@ export abstract class CharacterBase extends EntityBase {
 
   // ★ 受击染料管线（矢量平流注红 + 速度阻尼；变色表示受伤，缓停后恢复）
   protected hitDye: FluidEffect | null = null;
+  /** ★ 静态障碍推挤节流累计（敌人 60ms 一次；玩家每帧） */
+  private sepStaticAccum = 0;
   /** 受击染料存活计时（超时释放 → 恢复原纹理） */
   private hitDyeTimer = 0;
   /** 受击染料时长（秒，默认 1.2） */

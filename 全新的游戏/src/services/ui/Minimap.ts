@@ -24,6 +24,10 @@ export class Minimap {
   private viewRadius: number;
   /** ★ 稀疏探索状态（无限持久） */
   private visited = new Map<number, boolean>();
+  /** ★ 复用的地表底图（地形+雾；仅玩家跨格时重建，避免每帧 createImageData/逐像素重算） */
+  private baseImg: ImageData | null = null;
+  private lastCellX = NaN;
+  private lastCellZ = NaN;
 
   /** ★ 记忆灰雾：常驻掩码，盖住【所有】已探明区域；仅 LOD 圈内不绘制（挖孔露全彩）。
    *  偏暗 = "记忆中"的观感；未探明区仍是纯黑，三种状态一眼可分 */
@@ -48,21 +52,83 @@ export class Minimap {
     document.body.appendChild(this.canvas);
   }
 
-  /** ★ 每帧更新：地形+黑雾（一次 ImageData）→ 实体点 → 玩家箭头（居中，= 摄像机朝向） */
+  /** ★ 每帧更新：地表底图仅跨格重建 → 其余帧重贴底图 + 实体点 + 玩家箭头（居中，= 摄像机朝向） */
   update(px: number, pz: number, playerYaw: number, entities: EntityBase[]): void {
-    this.reveal(px, pz);
     const ctx = this.ctx;
     const ds = this.displaySize;
+
+    // ★ 重算门：窗口/点亮/地表都以整格为单位 → 只有玩家跨格（或首帧）才重算，
+    //   站立不动/少动时从每帧 25600 像素降到几乎零开销
+    const cx = Math.floor(px);
+    const cz = Math.floor(pz);
+    if (!this.baseImg || cx !== this.lastCellX || cz !== this.lastCellZ) {
+      this.lastCellX = cx;
+      this.lastCellZ = cz;
+      this.reveal(px, pz);
+      this.rebuildBase(px, pz);
+    }
+    ctx.putImageData(this.baseImg!, 0, 0);
+
+    // 实体点（世界 → 窗口像素）：
+    //   敌人：仅【已探索 且 LOD 圈内】绘制（圈外探明区有灰雾=记忆区，敌人不显示）
+    //   物品：静止的始终绘制（我方道具不受灰雾影响）
     const x0 = Math.floor(px - this.windowHalf);
     const z0 = Math.floor(pz - this.windowHalf);
+    const rSq = this.viewRadius * this.viewRadius;
+    for (const e of entities) {
+      const ex = Math.floor(e.position.x);
+      const ez = Math.floor(e.position.z);
+      const info = e.minimapInfo;
+      if (info.kind === 'enemy') {
+        const edx = ex - px;
+        const edz = ez - pz;
+        const explored = this.visited.has(cellKeyOf(ex, ez));
+        const inLod = edx * edx + edz * edz <= rSq;
+        if (!explored || !inLod) continue;
+      }
+      if (info.kind === 'item' && info.moving) continue;
+      const pxw = ex - x0;
+      const pzw = ez - z0;
+      if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
+      const color = info.kind === 'player' ? '#ffffff' : info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
+      ctx.fillStyle = color;
+      ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
+    }
 
-    // 地形 + 双层雾（窗口内逐像素）：
-    //   未探索 = 雾黑 | 已探明 = 记忆灰雾（常驻掩码）| LOD 圈内 = 挖孔露全彩
-    // ★ 屏幕对齐映射：canvas 上 = 3D 屏幕上方（-z，玩家初始朝向）、
-    //   canvas 右 = 3D 屏幕右（+x）→ 右方物体在箭头右手边（符合直觉）
+    // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 旋转角 = π - θ；
+    //   世界 +z → canvas 下方 → (sinθ,cosθ) → canvas (sinθ,+cosθ)）
+    const acx = ds / 2;
+    const acy = ds / 2;
+    const phi = Math.PI - playerYaw;
+    ctx.save();
+    ctx.translate(acx, acy);
+    ctx.rotate(phi);
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.lineTo(-4.5, 5);
+    ctx.lineTo(0, 2.5);
+    ctx.lineTo(4.5, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  /** ★ 重建地表底图（地形 + 双层雾，窗口内逐像素；复用 ImageData，仅玩家跨格时调用）：
+   *  未探索 = 雾黑 | 已探明 = 记忆灰雾（常驻掩码）| LOD 圈内 = 挖孔露全彩
+   *  ★ 屏幕对齐映射：canvas 上 = 3D 屏幕上方（-z，玩家初始朝向）、
+   *    canvas 右 = 3D 屏幕右（+x）→ 右方物体在箭头右手边（符合直觉） */
+  private rebuildBase(px: number, pz: number): void {
+    const ds = this.displaySize;
+    if (!this.baseImg) this.baseImg = this.ctx.createImageData(ds, ds);
+    const img = this.baseImg;
+    const x0 = Math.floor(px - this.windowHalf);
+    const z0 = Math.floor(pz - this.windowHalf);
     const rSq = this.viewRadius * this.viewRadius;
     const M = Minimap;
-    const img = ctx.createImageData(ds, ds);
     for (let iy = 0; iy < ds; iy++) {
       const wz = z0 + iy;
       for (let ix = 0; ix < ds; ix++) {
@@ -89,51 +155,6 @@ export class Minimap {
         img.data[i + 3] = 255;
       }
     }
-    ctx.putImageData(img, 0, 0);
-
-    // 实体点（世界 → 窗口像素）：
-    //   敌人：仅【已探索 且 LOD 圈内】绘制（圈外探明区有灰雾=记忆区，敌人不显示）
-    //   物品：静止的始终绘制（我方道具不受灰雾影响）
-    for (const e of entities) {
-      const ex = Math.floor(e.position.x);
-      const ez = Math.floor(e.position.z);
-      const info = e.minimapInfo;
-      if (info.kind === 'enemy') {
-        const edx = ex - px;
-        const edz = ez - pz;
-        const explored = this.visited.has(cellKeyOf(ex, ez));
-        const inLod = edx * edx + edz * edz <= rSq;
-        if (!explored || !inLod) continue;
-      }
-      if (info.kind === 'item' && info.moving) continue;
-      const pxw = ex - x0;
-      const pzw = ez - z0;
-      if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
-      const color = info.kind === 'player' ? '#ffffff' : info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
-      ctx.fillStyle = color;
-      ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
-    }
-
-    // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 旋转角 = π - θ；
-    //   世界 +z → canvas 下方 → (sinθ,cosθ) → canvas (sinθ,+cosθ)）
-    const cx = ds / 2;
-    const cy = ds / 2;
-    const phi = Math.PI - playerYaw;
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(phi);
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, -6);
-    ctx.lineTo(-4.5, 5);
-    ctx.lineTo(0, 2.5);
-    ctx.lineTo(4.5, 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
   }
 
   /** ★ 探索点亮：玩家周围 viewRadius 内标记已见（稀疏持久） */

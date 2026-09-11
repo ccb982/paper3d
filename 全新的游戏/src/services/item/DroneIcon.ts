@@ -20,8 +20,8 @@ import { OffscreenBake } from '../render/OffscreenBake';
 import { getGameRenderer } from '../render/GameRenderer';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 
-/** 图标烘焙分辨率（像素，方形） */
-const ICON_SIZE = 256;
+/** 图标烘焙分辨率（像素，方形；128 足够 38~64px 显示，回读/拷贝量比 256 少 4 倍） */
+const ICON_SIZE = 128;
 const FPS = 30;
 const FRAME_MS = 1000 / FPS;
 
@@ -58,6 +58,11 @@ export class DroneIconAnimator {
   private lastT = 0;
   private lastPaint = 0;
   private buf: Uint8Array | null = null;
+  /** 像素回读进行中（异步 PBO 路径；防重入，慢时自动降频） */
+  private painting = false;
+  /** 翻转/上屏复用缓冲（避免每次烘焙都分配） */
+  private flipBuf: Uint8ClampedArray | null = null;
+  private pixels: ImageData | null = null;
 
   private constructor() { /* 单例 */ }
 
@@ -145,7 +150,7 @@ export class DroneIconAnimator {
     this.lastT = performance.now();
     this.lastPaint = 0;
     if (this.living.length > 0) this.startLoop();
-    else this.paintFrame(); // 预热：立刻烘焙一帧供 register 快照
+    else void this.paintFrame(); // 预热：立刻烘焙一帧供 register 快照
   }
 
   private startLoop(): void {
@@ -169,56 +174,77 @@ export class DroneIconAnimator {
 
     // 30fps 烘焙节流
     if (now - this.lastPaint >= FRAME_MS) {
-      this.paintFrame();
+      void this.paintFrame();
     }
     this.rafId = requestAnimationFrame(this.tick);
   };
 
-  /** 烘焙一帧：advance → VAT 双翼 → 主渲染器渲进 OffscreenBake RT → 回读像素 */
-  private paintFrame(): void {
-    if (!this.anim || !this.drone || !this.bake || !this.buf) return;
+  /** 烘焙一帧：advance → VAT 双翼 → 主渲染器渲进 OffscreenBake RT → 回读像素
+   *  ★ 异步 PBO 回读（fence 轮询）替代同步 readRenderTargetPixels，避免卡住 GPU 管线；
+   *    回读未完成时跳过本次烘焙（自动降频，不重入） */
+  private async paintFrame(): Promise<void> {
+    if (this.painting) return;
+    const anim = this.anim;
+    const drone = this.drone;
+    const bake = this.bake;
+    const buf = this.buf;
+    const scene = this.scene;
+    const camera = this.camera;
+    if (!anim || !drone || !bake || !buf || !scene || !camera) return;
     const renderer = getGameRenderer();
     if (!renderer) return;
+    this.painting = true;
 
     try {
       const t = performance.now();
-      this.bake.beginBake();
-      this.drone.render({ frameIndex: this.anim.frameIndex }, null);
-      renderer.render(this.scene!, this.camera!);
-      this.bake.endBake();
+      bake.beginBake();
+      drone.render({ frameIndex: anim.frameIndex }, null);
+      renderer.render(scene, camera);
+      bake.endBake();
       this.lastPaint = t;
 
-      renderer.readRenderTargetPixels(
-        this.bake.target, 0, 0,
-        ICON_SIZE, ICON_SIZE, this.buf,
-      );
+      try {
+        await renderer.readRenderTargetPixelsAsync(
+          bake.target, 0, 0,
+          ICON_SIZE, ICON_SIZE, buf,
+        );
+      } catch {
+        // 异步路径不可用 → 退回同步（老设备）
+        renderer.readRenderTargetPixels(
+          bake.target, 0, 0,
+          ICON_SIZE, ICON_SIZE, buf,
+        );
+      }
 
-      // ★ GL 行 0=底部 → canvas 行 0=顶部（与 ftxFrameToCanvas 图标朝向一致）
-      const flipped = new Uint8Array(ICON_SIZE * ICON_SIZE * 4);
+      // ★ GL 行 0=底部 → canvas 行 0=顶部（与 ftxFrameToCanvas 图标朝向一致）；复用缓冲
       const rowBytes = ICON_SIZE * 4;
+      if (!this.flipBuf) this.flipBuf = new Uint8ClampedArray(ICON_SIZE * ICON_SIZE * 4);
+      const flipped = this.flipBuf;
       for (let y = 0; y < ICON_SIZE; y++) {
         const srcRow = y * rowBytes;
         const dstRow = (ICON_SIZE - 1 - y) * rowBytes;
-        flipped.set(this.buf.subarray(srcRow, srcRow + rowBytes), dstRow);
+        flipped.set(buf.subarray(srcRow, srcRow + rowBytes), dstRow);
       }
-      const img = new ImageData(new Uint8ClampedArray(flipped), ICON_SIZE, ICON_SIZE);
+      this.pixels ??= new ImageData(flipped, ICON_SIZE, ICON_SIZE);
 
       if (!this.staticCanvas) {
         this.staticCanvas = document.createElement('canvas');
         this.staticCanvas.width = ICON_SIZE;
         this.staticCanvas.height = ICON_SIZE;
       }
-      this.staticCanvas.getContext('2d')!.putImageData(img, 0, 0);
+      this.staticCanvas.getContext('2d')!.putImageData(this.pixels, 0, 0);
 
       for (const c of this.living) {
         const ctx = c.getContext('2d');
         if (!ctx) continue;
-        ctx.putImageData(img, 0, 0);
+        ctx.putImageData(this.pixels, 0, 0);
       }
       this.everPainted = true;
     } catch (err) {
       if (!this.everPainted) this.errText = String(err);
       console.warn('[DroneIcon] 无人机图标烘焙失败，保留色块兜底:', err);
+    } finally {
+      this.painting = false;
     }
   }
 

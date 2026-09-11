@@ -15,7 +15,7 @@ import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset, MoonEffect } from './vendor/player';
 import type { IGameMode } from './core/IGameMode';
 import { ShipMode } from './modes/ShipMode';
-import { WorldMode } from './modes/WorldMode';
+import { WorldMode, worldPerf } from './modes/WorldMode';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { RasterMap } from './services/map/RasterMap';
@@ -106,7 +106,9 @@ async function boot() {
   // ★ UI 离屏烘焙（背包/加工台无人机图标）复用主渲染器，与战斗共用纹理绘制路径
   setGameRenderer(rendererLocal);
   rendererLocal.setSize(window.innerWidth, window.innerHeight);
-  rendererLocal.setPixelRatio(adapter.info.dpr);
+  // ★ 像素比上限：高 DPI 屏（dpr=2）全渲染 = 4 倍像素，是低帧率最大单点开销；
+  //   压到 1.5 视觉几乎无差（画布由 CSS 拉伸）
+  rendererLocal.setPixelRatio(Math.min(adapter.info.dpr, 1.5));
   rendererLocal.setClearColor(0xcccccc, 1);
   // ★ 实时光照包：电影级色调滚降（所有颜色统一进 ACES 管线）
   rendererLocal.toneMapping = THREE.ACESFilmicToneMapping;
@@ -253,7 +255,8 @@ async function boot() {
     'pointer-events:auto;color:#fff;background:rgba(20,80,200,0.75);border:none;border-radius:6px;'
     + 'padding:4px 10px;font:13px "Microsoft YaHei",sans-serif;cursor:pointer';
   hudBtn.addEventListener('click', () => {
-    const txt = hudEl.textContent ?? '';
+    // ★ 复制内容含帧率技术统计（FPS/绘制/更新/渲染）+ 坐标，便于定位性能问题
+    const txt = `${fpsEl.textContent ?? ''}\n${hudEl.textContent ?? ''}`;
     const done = () => {
       hudBtn.textContent = '已复制 ✓';
       setTimeout(() => { hudBtn.textContent = '复制位置'; }, 1200);
@@ -265,6 +268,23 @@ async function boot() {
   hudWrap.appendChild(hudEl);
   hudWrap.appendChild(hudBtn);
   document.body.appendChild(hudWrap);
+
+  // ★ 帧率技术统计（FPS / 帧时峰值 / 主渲染器绘制调用与三角数 / 更新与渲染耗时）
+  const fpsEl = document.createElement('div');
+  fpsEl.style.cssText =
+    'color:#9fe8ff;background:rgba(0,0,0,0.55);'
+    + 'padding:6px 10px;font:13px Consolas,monospace;white-space:pre;border-radius:6px';
+  fpsEl.textContent = '-- FPS';
+  hudWrap.prepend(fpsEl);
+
+  /** 帧率统计窗口（0.25s 聚合一次；_FPS_HUD=false 可隐藏文本） */
+  let fpsFrames = 0;
+  let fpsAcc = 0;
+  let fpsWorstMs = 0;
+  let updMsSum = 0;
+  let rendMsSum = 0;
+  let callsSum = 0;
+  let trisSum = 0;
   const cameraPos = camera.position;
 
   function animate() {
@@ -291,10 +311,44 @@ async function boot() {
     updateSky();
 
     if (currentMode) {
+      const u0 = performance.now();
       currentMode.update(renderManager.scaledDt);
+      const u1 = performance.now();
       currentMode.render();
+      const r1 = performance.now();
+      updMsSum += u1 - u0;
+      rendMsSum += r1 - u1;
     } else {
+      const r0 = performance.now();
       renderer.render(scene, camera);
+      rendMsSum += performance.now() - r0;
+    }
+
+    // ★ 帧率技术统计：主渲染器本帧绘制调用 / 三角数（读在 render 紧后，不受离屏烘焙污染）
+    const rinfo = rendererLocal.info.render;
+    callsSum += rinfo.calls;
+    trisSum += rinfo.triangles;
+    fpsFrames++;
+    fpsAcc += dt;
+    if (dt > fpsWorstMs) fpsWorstMs = dt;
+    if (fpsAcc >= 0.25) {
+      if ((globalThis as { __PP_FPS_HUD?: boolean }).__PP_FPS_HUD !== false) {
+        fpsEl.textContent =
+          `${(fpsFrames / fpsAcc).toFixed(1)} FPS   ${((fpsAcc / fpsFrames) * 1000).toFixed(1)} ms (峰值 ${(fpsWorstMs * 1000).toFixed(0)})\n`
+          + `绘制 ${Math.round(callsSum / fpsFrames)} 调用   三角 ${Math.round(trisSum / fpsFrames)}\n`
+          + `更新 ${(updMsSum / fpsFrames).toFixed(2)} ms   渲染 ${(rendMsSum / fpsFrames).toFixed(2)} ms\n`
+          + `区块 ${worldPerf.chunks.toFixed(1)}  界面 ${worldPerf.ui.toFixed(1)}  贴片 ${worldPerf.combat.toFixed(1)}  AI ${worldPerf.ai.toFixed(1)}\n`
+          + `实体 ${worldPerf.entity.toFixed(1)}  后段 ${worldPerf.post.toFixed(1)}  物理 ${worldPerf.phys.toFixed(1)}\n`
+          + `子项 无人机 ${worldPerf.drones.toFixed(1)}  实体更新 ${worldPerf.ent.toFixed(1)}  入水 ${worldPerf.water.toFixed(1)}  贴地 ${worldPerf.clamp.toFixed(1)}\n`
+          + `实体数 ${worldPerf.nEntities} (敌 ${worldPerf.nEnemies} 机 ${worldPerf.nDrones})`;
+      }
+      fpsFrames = 0;
+      fpsAcc = 0;
+      fpsWorstMs = 0;
+      updMsSum = 0;
+      rendMsSum = 0;
+      callsSum = 0;
+      trisSum = 0;
     }
   }
 

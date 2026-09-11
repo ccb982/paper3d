@@ -89,15 +89,9 @@ export class ItemBase extends EntityBase {
     return this.collisionVolume?.offsetY ?? 0.22;
   }
 
-  /** ★ 影子声明（物品：贴片同宽；太阳投影模式，剪影源由基类自动取帧） */
+  /** ★ 影子：物品一律无动态影子（数量多、影子小不可感；省逐帧贴地采样） */
   protected override get shadowShape(): { w: number; h?: number; alpha?: number } | null {
-    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
-    if (!r?.mesh) return null;
-    return {
-      w: Math.abs(r.mesh.scale.x),
-      h: Math.abs(r.mesh.scale.y),
-      alpha: 0.3,
-    };
+    return null;
   }
 
   /** ★ 小地图：物品只显示静止的 */

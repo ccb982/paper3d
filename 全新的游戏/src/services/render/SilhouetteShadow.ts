@@ -126,9 +126,11 @@ export class SilhouetteShadow {
     opacity = 0.38,
   ) {
     // 躺平网格：宽 w × 深 1（深度由仿射基的长度向量逐帧决定），分段用于贴地起伏。
+    // ★ 性能：影子小、贴地只需少量采样点——2×4 段（15 顶点）比 6×10（77 顶点）
+    //   少 5 倍 surfaceHeightAt 采样（每个实体每帧的大头，见 EntityBase.syncShadow）
     // ★ 深度平移到 [0,1]：局部 Z=0 是"脚跟"（锚点），Z=1 是影子末端——
     //   影子从脚下向太阳反方向长出，而不是以角色为中心对称展开
-    this.geo = new THREE.PlaneGeometry(width, 1, 6, 10);
+    this.geo = new THREE.PlaneGeometry(width, 1, 2, 4);
     this.geo.rotateX(-Math.PI / 2);
     this.geo.translate(0, 0, 0.5);
 

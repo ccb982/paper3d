@@ -197,14 +197,23 @@ export class ChunkManager {
     cells?: PatchGroundCell[]; // ★ 物理分区（增量重建只含受影响分区；缺省 = 合并 trimesh）
     bounds?: { top: GeomBounds; wall: GeomBounds }; // ★ y 范围（Worker 扫出 → 解析构造包围球）
   }[] = [];
-  /** 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销） */
-  private static readonly ASSEMBLE_PER_FRAME = 2;
+  /** 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
+   *  ★ 2026-09：1 个/帧 + 耗时冷却（见 update）——单块装配超预算时，下一块推迟交付 */
+  private static readonly ASSEMBLE_PER_FRAME = 1;
+  /** 单块装配耗时预算（ms）：本次超过多少，下一块就等同等时间再装（把尖峰摊到后续帧） */
+  private static readonly ASSEMBLE_BUDGET_MS = 8;
+  /** 装配冷却截止时刻（performance.now；update 内消费） */
+  private assembleCooldownUntil = 0;
+  /** 装饰补挂冷却截止时刻（同上） */
+  private decorCooldownUntil = 0;
 
   // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
   private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps; mode: 'full' | 'props' }>();
   /** 每帧补挂装饰预算（个）—— 延后补挂同一 chunk 的 planDecor+buildDecorLayer+colliders */
   private static readonly DECOR_PER_FRAME = 1;
+  /** 装饰补挂耗时预算（ms）：超出则下一块推迟（与装配同款冷却） */
+  private static readonly DECOR_BUDGET_MS = 6;
 
   // ---- ★ 装饰脏区局部重贴地（2026-09-10）：挖坑不再整 chunk 重排装饰 ----
   /** 最近一次构建的装饰计划（挖坑影响判定 + 道具 y 重贴地数据源） */
@@ -221,6 +230,8 @@ export class ChunkManager {
    *  此处 9 分区 + 3/帧，最坏 3 帧，物理滞后可忽略） */
   private groundCellQueue = new Map<number, { bodyId: number; slot: number; vertices: Float32Array; indices: Uint32Array }>();
   private static readonly GROUND_CELL_PER_FRAME = 3;
+  /** 物理分区原位换耗时预算（ms）：超出即停（防多分区同步 cooking 尖峰） */
+  private static readonly GROUND_CELL_BUDGET_MS = 3;
 
   // ---- ★ 地形修改性能重构（原地更新，2026-09-09） ----
   // 计算侧（Worker 内 IncrementalGeometry 逐 cell 重发）本就增量；主线程开销大头
@@ -292,11 +303,13 @@ export class ChunkManager {
     this.syncChunks(px, pz);
     // ★ 预烘焙（分批次提前生成）：空闲时向构建环外一档逐拍投递（只烘不建）
     this.prefetchChunks(px, pz, dt);
-    // ★ 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
+    // ★ 装配预算（时间感知）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算) 再装下一块，
+    //   把"多块瞬时交付"摊成隔帧交付（宁可晚一点，也别掉帧）
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
-    while (n-- > 0 && this.assembleQueue.length > 0) {
+    while (n-- > 0 && this.assembleQueue.length > 0 && performance.now() >= this.assembleCooldownUntil) {
       const a = this.assembleQueue.shift()!;
       this.geoInflight.delete(a.key);
+      const _ta = performance.now();
       if (a.decor === null || a.deferDecor) {
         // ★ 首建/破坏重建统一走增量地形：只挂 top/wall/water + trimesh。
         //   装饰按脏区模式处理（none=不动 / props=只重贴道具 / full=整块重贴）。
@@ -306,12 +319,19 @@ export class ChunkManager {
       } else {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
       }
+      const _cost = performance.now() - _ta;
+      if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
+        this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
+      }
     }
     // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
-    //   多分区联动按 3/帧分摊，防单帧同步 cooking 尖峰）
+    //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
     if (this.host.updateGroundCell) {
       let g = ChunkManager.GROUND_CELL_PER_FRAME;
+      const _tg = performance.now();
       while (g-- > 0 && this.groundCellQueue.size > 0) {
+        // 已超时且本帧已换过至少一个 → 停止（保底第一个必换，物理滞后最小）
+        if (g < ChunkManager.GROUND_CELL_PER_FRAME - 1 && performance.now() - _tg > ChunkManager.GROUND_CELL_BUDGET_MS) break;
         const firstKey = this.groundCellQueue.keys().next().value;
         if (firstKey === undefined) break;
         const c = this.groundCellQueue.get(firstKey)!;
@@ -325,9 +345,10 @@ export class ChunkManager {
     }
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
-    //   每帧预算个 chunk；同 chunk 多任务以更强模式合并（full > props）。
+    //   每帧预算个 chunk（同样带耗时冷却）；同 chunk 多任务以更强模式合并（full > props）。
     let d = ChunkManager.DECOR_PER_FRAME;
-    while (d-- > 0 && this.pendingDecorJobs.size > 0) {
+    while (d-- > 0 && this.pendingDecorJobs.size > 0 && performance.now() >= this.decorCooldownUntil) {
+      const _td = performance.now();
       const first = this.pendingDecorJobs.keys().next().value;
       if (first === undefined) break;
       const j = this.pendingDecorJobs.get(first)!;
@@ -337,6 +358,7 @@ export class ChunkManager {
       if (j.mode === 'props') {
         // ★ 脏区局部：只重排/重贴受影响道具层（围裙/台座/碰撞体不动）——§17.11
         this.resnapProps(j.cx, j.cz, group);
+        this.applyDecorCooldown(_td);
         continue;
       }
       // ★ 整块重贴地：以当前 levels 重计划整个 chunk 的装饰（props Y 含下探）
@@ -347,10 +369,19 @@ export class ChunkManager {
       // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
       this.createDecorColliders(j.cx, j.cz, decor);
       this.createStructuralGround(j.cx, j.cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
+      this.applyDecorCooldown(_td);
     }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
     this.sweepChunks(px, pz, dt);
+  }
+
+  /** 装饰补挂耗时冷却：本次超过预算 → 下一块推迟同等时间（把尖峰摊到后续帧） */
+  private applyDecorCooldown(t0: number): void {
+    const cost = performance.now() - t0;
+    if (cost > ChunkManager.DECOR_BUDGET_MS) {
+      this.decorCooldownUntil = performance.now() + (cost - ChunkManager.DECOR_BUDGET_MS);
+    }
   }
 
   /** ★ 地图风格切换：重建全部已加载 chunk 的物理+视觉 */

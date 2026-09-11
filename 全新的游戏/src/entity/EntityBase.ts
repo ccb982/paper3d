@@ -122,6 +122,8 @@ export abstract class EntityBase {
   private _gsLastZ = NaN;
 
   private gsShadow: SilhouetteShadow | null = null;
+  /** ★ 影子仿射上次更新时刻（中远 LOD 降频用） */
+  private _gsLastAffMs = 0;
 
   /** ★ 每帧影子同步（update 骨架⑦：惰性创建 + 剪影更新 + 太阳投影仿射 + LOD/日照渐隐） */
   private syncShadow(): void {
@@ -133,6 +135,17 @@ export abstract class EntityBase {
       this.gsShadow = new SilhouetteShadow(this._scene, shape.w, shape.alpha ?? 0.38);
     }
     this.gsShadow.setSource(fd);
+
+    // ★ 性能：逐顶点贴地采样（77→15 点/次）是实体更新的最大单点开销，
+    //   不可见/最远档直接隐藏跳过；中远档（lod≥1）降频到 80ms 一次（位置差不可感）
+    const lod = this.viewLod;
+    if (!this.visible || lod >= 3) {
+      this.gsShadow.mesh.visible = false;
+      return;
+    }
+    const nowMs = performance.now();
+    if (lod >= 1 && nowMs - this._gsLastAffMs < 80) return;
+    this._gsLastAffMs = nowMs;
 
     // ---- 地面仿射基：宽向量 R × 长向量 S（脚跟锚定，向阳反方向延伸） ----
     const p = this.entity.position;
@@ -170,9 +183,9 @@ export abstract class EntityBase {
 
     this.gsShadow.followAffine(ax, az, rx, rz, sx, sz, len,
       (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
-    this.gsShadow.mesh.visible = this.visible && this.viewLod < 3;
+    this.gsShadow.mesh.visible = true;
     // 浓度随白昼因子调制：正午浓、晨昏淡、夜晚自然消失
-    this.gsShadow.setLodOpacity(this.viewLod, 0.2 + 0.8 * sun.daylight);
+    this.gsShadow.setLodOpacity(lod, 0.2 + 0.8 * sun.daylight);
   }
 
   /** 贴片右向量（mesh 矩阵 X 基）的地面投影——剪影影子的宽轴 */
