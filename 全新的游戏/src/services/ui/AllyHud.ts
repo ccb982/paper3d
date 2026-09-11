@@ -12,6 +12,7 @@
 
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import { ItemIconRegistry } from '../item/ItemIconRegistry';
+import { eventBus } from '../../core/EventBus';
 
 export interface AllyHudEntry {
   /** 稳定身份（编队实体 entity.id，帧间不变） */
@@ -27,12 +28,17 @@ interface Row {
   el: HTMLDivElement;
   fill: HTMLDivElement;
   hpText: HTMLDivElement;
+  /** 槽号角标（左下序号；仅出击槽变动时重算） */
+  badge: HTMLDivElement;
+  /** 上次记录的槽位（update 维护，deployment_changed 时据此重算角标） */
+  lastSlot: number;
 }
 
 export class AllyHud {
   private root: HTMLDivElement;
   private rows = new Map<string, Row>();
   private iconRegistry: ItemIconRegistry;
+  private slotUnsub?: () => void;
 
   constructor(private itemManager: ItemManager) {
     this.iconRegistry = new ItemIconRegistry(itemManager);
@@ -43,6 +49,14 @@ export class AllyHud {
       'pointer-events:none',
     ].join(';');
     document.body.appendChild(this.root);
+    // ★ 出击槽变动（拖入/拖出/交换/替换）→ 重算所有行的槽号角标
+    this.slotUnsub = eventBus.on('deployment_changed', () => {
+      for (const r of this.rows.values()) {
+        const s = r.lastSlot;
+        r.badge.textContent = String(s + 1);
+        r.badge.style.display = s >= 0 ? 'block' : 'none';
+      }
+    });
   }
 
   /** 每帧：按 id 增删/排序行，刷新血条与数值（低血量呼吸） */
@@ -62,6 +76,8 @@ export class AllyHud {
         this.rows.set(a.id, r);
       }
       this.root.appendChild(r.el);
+      // ★ 仅记槽位值（角标由 deployment_changed 事件统一重算，不在每帧写 DOM）
+      r.lastSlot = a.slot ?? -1;
       const ratio = a.maxHp > 0 ? Math.max(0, Math.min(1, a.hp / a.maxHp)) : 0;
       const low = ratio <= 0.35;
       r.fill.style.width = `${(ratio * 100).toFixed(1)}%`;
@@ -106,18 +122,17 @@ export class AllyHud {
     iconEl.style.objectFit = 'contain';
     iconEl.style.imageRendering = 'pixelated';
     iconBox.appendChild(iconEl);
-    if (slot !== undefined && slot >= 0) {
-      const badge = document.createElement('div');
-      badge.textContent = String(slot + 1);
-      badge.style.cssText = [
-        'position:absolute', 'right:-4px', 'bottom:-4px',
-        'min-width:14px', 'padding:0 2px', 'box-sizing:border-box',
-        'font-size:10px', 'line-height:14px', 'text-align:center',
-        'color:#0b0e13', 'background:#f0cf74', 'border-radius:2px',
-        'font-weight:bold',
-      ].join(';');
-      iconBox.appendChild(badge);
-    }
+    // ★ 槽号角标：建行即渲染（隐藏仍占位，随后由 update 每帧按 slot 重算显隐/序号）
+    const badge = document.createElement('div');
+    badge.style.cssText = [
+      'position:absolute', 'right:-4px', 'bottom:-4px',
+      'min-width:14px', 'padding:0 2px', 'box-sizing:border-box',
+      'font-size:10px', 'line-height:14px', 'text-align:center',
+      'color:#0b0e13', 'background:#f0cf74', 'border-radius:2px',
+      'font-weight:bold',
+    ].join(';');
+    badge.style.display = (slot !== undefined && slot >= 0) ? 'block' : 'none';
+    iconBox.appendChild(badge);
 
     // ---- 右侧：名称 + 血条 + 数值 ----
     const col = document.createElement('div');
@@ -154,10 +169,11 @@ export class AllyHud {
     el.appendChild(iconBox);
     el.appendChild(col);
     this.root.appendChild(el);
-    return { el, fill, hpText };
+    return { el, fill, hpText, badge, lastSlot: slot ?? -1 };
   }
 
   dispose(): void {
+    this.slotUnsub?.();
     this.rows.clear();
     this.root.remove();
   }

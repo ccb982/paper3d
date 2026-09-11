@@ -219,18 +219,26 @@ export class InventoryPanel {
         cell.textContent = '空槽';
         cell.style.cssText += 'color:#4a5a8a;';
       }
-      // 接收拖入：背包里的可部署/可装备物品 → 放入该槽（一格一个，违规拒绝）
+      // 接收拖入：背包物品 → 放入该槽；槽位物品 → 槽间移动/交换（一格一个，违规拒绝）
       cell.addEventListener('dragover', (ev) => ev.preventDefault());
       cell.addEventListener('drop', (ev) => {
         ev.preventDefault();
+        const fromSlot = ev.dataTransfer?.getData('text/x-slot');
         const itemId2 = ev.dataTransfer?.getData('text/x-item');
-        if (!itemId2) return;
-        const src = ev.dataTransfer?.getData('text/x-src');
         let result: UseItemResult | null = null;
-        if (src) {
-          const [l, r, c] = src.split(',');
-          if (l && Number.isInteger(Number(r)) && Number.isInteger(Number(c))) {
-            result = this.opts.itemManager.putIntoSlot(s, l as keyof GameSession['inventories'], Number(r), Number(c));
+        if (fromSlot) {
+          // ★ 槽位间移动/交换：目标空 = 移动，目标占用 = 互换
+          const fromIdx = Number(fromSlot);
+          if (Number.isInteger(fromIdx)) {
+            result = this.opts.itemManager.swapSlots(fromIdx, s);
+          }
+        } else if (itemId2) {
+          const src = ev.dataTransfer?.getData('text/x-src');
+          if (src) {
+            const [l, r, c] = src.split(',');
+            if (l && Number.isInteger(Number(r)) && Number.isInteger(Number(c))) {
+              result = this.opts.itemManager.putIntoSlot(s, l as keyof GameSession['inventories'], Number(r), Number(c));
+            }
           }
         }
         if (result?.success) {

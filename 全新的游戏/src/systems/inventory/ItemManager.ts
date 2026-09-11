@@ -236,6 +236,23 @@ export class ItemManager {
     eventBus.emit('deployment_changed', { slotIndex, itemId, prev });
     return true;
   }
+
+  /** ★ 槽位间移动/交换：目标空 = 移动，目标占用 = 互换。逐槽发事件（世界侧按槽 idempotent 同步） */
+  swapSlots(from: number, to: number): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    if (from < 0 || from >= SLOT_COUNT || to < 0 || to >= SLOT_COUNT) return { success: false, message: '槽位越界' };
+    if (from === to) return { success: false, message: '相同槽位' };
+    const itemFrom = slots[from];
+    if (!itemFrom) return { success: false, message: '源槽为空' };
+    const itemTo = slots[to];
+    slots[from] = itemTo;
+    slots[to] = itemFrom;
+    eventBus.emit('deployment_changed', { slotIndex: from, itemId: itemTo, prev: itemFrom });
+    // ★ 无论目标是否空槽都发第二条：目标空 = 移动需在新槽重生；起收事件定位在源槽、落点在目标槽
+    eventBus.emit('deployment_changed', { slotIndex: to, itemId: itemFrom, prev: itemTo });
+    return { success: true, message: itemTo ? `已互换槽位 ${from + 1} ↔ ${to + 1}` : `已移到槽位 ${to + 1}` };
+  }
 }
 
 /** ★ 出击槽池规格（背包页面绘制 2 行 × 6 列；装具/友军混用池容积） */
