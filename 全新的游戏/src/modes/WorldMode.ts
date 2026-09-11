@@ -542,13 +542,22 @@ export class WorldMode implements IGameMode {
       entities: this.entities.allBases(),
       playerStats: { hp: this.player.hp, maxHp: this.player.maxHp },
       ammo: this.combatItems.ammo.getCount(),
-      allies: this.drones.map((d) => ({
-        id: `a${d.entity.id}`,
-        itemId: d.itemId,
-        hp: d.hp,
-        maxHp: d.maxHp,
-        slot: d.slotIndex,
-      })),
+      allies: this.drones
+        .map((d) => ({
+          id: `a${d.entity.id}`,
+          itemId: d.itemId,
+          hp: d.hp,
+          maxHp: d.maxHp,
+          slot: d.slotIndex,
+        }))
+        // ★ 列表顺序始终跟随出击槽位号（顶→下递增；道具召唤不入槽的沉底），
+        //   槽位交换/移动后新实体生成顺序 ≠ 槽位顺序 → 在此重排，确保序号自上而下递增
+        .sort((p, q) => {
+          const sp = p.slot ?? -1, sq = q.slot ?? -1;
+          if (sp < 0) return sq < 0 ? 0 : 1;
+          if (sq < 0) return -1;
+          return sp - sq;
+        }),
     });
 
     // ★ 战斗道具播放：装备贴片帧动画驱动（带相机 → 影子 LOD/昼夜浓度）
