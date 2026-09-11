@@ -60,6 +60,13 @@ import { rollDrops } from '../services/item/ItemDropPipeline';
 /** ★ 友军物品 id：部署生成 / 损毁替换为残骸（维修配方在舰船加工台） */
 const DRONE_ITEM = 'kaltsit_drone';
 const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
+/** ★ 玩家子弹伤害 = max(下限, 角色攻击力 × 系数)；遗物/装备加成的攻击力实时生效。
+ *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
+const PLAYER_BULLET_MIN_DAMAGE = 10;
+const PLAYER_BULLET_ATK_RATIO = 1.0;
+/** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
+const SENTINEL_MIN_DAMAGE = 8;
+const SENTINEL_ATK_RATIO = 1.0;
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -677,6 +684,8 @@ export class WorldMode implements IGameMode {
         d.playerPos.x = dp.x;
         d.playerPos.y = dp.y;
         d.playerPos.z = dp.z;
+        // ★ 友军伤害随主角攻击力（含遗物/装备实时加成）
+        d.ownerAttackPower = this.player.attackPower;
         d.updateAI(dt, this.camera);
       }
     }
@@ -954,11 +963,16 @@ export class WorldMode implements IGameMode {
         }
       }
     } catch { /* 忽略 */ }
+    // ★ 子弹伤害 = max(下限, 角色攻击力 × 系数)（遗物永久 + 装备临时 都实时参与）
+    const dmg = Math.max(
+      PLAYER_BULLET_MIN_DAMAGE,
+      Math.round(this.player.attackPower * PLAYER_BULLET_ATK_RATIO),
+    );
     executeAttack(this.entities, this.bullets, {
       type: 'projectile', source: this.player,
       x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
       dirX: dx, dirY: dy, dirZ: dz,
-      speed: 25, camp: 'player', lifetime: 2, damage: 10,
+      speed: 25, camp: 'player', lifetime: 2, damage: dmg,
     });
   }
 
@@ -1345,11 +1359,13 @@ export class WorldMode implements IGameMode {
     let dx = tp.x - p.x, dy = tp.y + 0.8 - p.y, dz = tp.z - p.z;
     const len = Math.hypot(dx, dy, dz) || 1;
     dx /= len; dy /= len; dz /= len;
+    // ★ 伤害 = max(下限, 主角攻击力 × 系数)
+    const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(this.player.attackPower * SENTINEL_ATK_RATIO));
     executeAttack(this.entities, this.bullets, {
       type: 'projectile', source: from,
       x: p.x + dx * 0.6, y: p.y + dy * 0.6, z: p.z + dz * 0.6,
       dirX: dx, dirY: dy, dirZ: dz,
-      speed: 18, camp: 'ally', lifetime: 1.2, damage: 8,
+      speed: 18, camp: 'ally', lifetime: 1.2, damage: dmg,
     });
   }
 
