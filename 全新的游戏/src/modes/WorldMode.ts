@@ -235,6 +235,8 @@ export class WorldMode implements IGameMode {
   private sentinelTex: THREE.CanvasTexture | null = null;
   /** ★ 祖宗共享流体（多个祖宗共用一份；每帧只步进一次，避免 N 倍求解卡顿） */
   private sentinelFluid: FluidEffect | null = null;
+  /** ★ 祖宗流体步进蓄积（30Hz 节流：半速求解不可感，省 GPU 合成开销） */
+  private sentinelFluidAccum = 0;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -722,9 +724,13 @@ export class WorldMode implements IGameMode {
     //   先于实体管线，保证本帧 syncRender 使用新位置。
     const _e0 = performance.now();
     if (this.drones.length > 0) {
-      // ★ 祖宗共享流体：每帧只步进一次（有存活祖宗时）
+      // ★ 祖宗共享流体：每帧只步进一次（有存活祖宗时），且 30Hz 节流省 GPU
       if (this.sentinelFluid && this.drones.some((d) => d.stationary && d.hp > 0)) {
-        this.sentinelFluid.step(dt);
+        this.sentinelFluidAccum += dt;
+        if (this.sentinelFluidAccum >= 1 / 30) {
+          this.sentinelFluid.step(this.sentinelFluidAccum);
+          this.sentinelFluidAccum = 0;
+        }
       }
       const dp = this.player.position;
       const frame = this.cameraCtrl.getFrame();

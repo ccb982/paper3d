@@ -1554,16 +1554,30 @@ const key2 = chunkKeyOf(cx, cz);
     }
   }
 
-  /** ★ chunk 地面刚体创建：分区优先（cells 就绪且宿主支持 → grid×grid 分区 collider
-   *  全同步建；物理立即完整）；宿主不支持 → 整 chunk 合并 trimesh 兜底 */
+  /** ★ chunk 地面刚体创建：分区优先（宿主不支持 → 整 chunk 合并 trimesh 兜底）。
+   *  ★ 物理 cooking 摊帧（2026-09-11）：玩家脚下热点 chunk 同步全建（防掉坑），
+   *    其余 chunk 只建首分区 → 余下分区进 groundCellQueue 帧预算化 cooking，
+   *    避免单块装配出现 ~100ms 尖峰（初始入图 25 块连建尤其明显）。 */
   private createChunkGround(
     key: number, cx: number, cz: number,
     pv: Float32Array, pi: Uint32Array, cells?: PatchGroundCell[],
   ): void {
     if (cells && cells.length > 0 && this.host.createGroundCells) {
-      const id = this.host.createGroundCells(cx, cz, cells);
+      const hot = key === this.hotChunkKey;
+      const first = hot ? cells : [cells[0]];
+      const id = this.host.createGroundCells(cx, cz, first);
       if (id !== null && id !== undefined) {
         this.bodies.set(key, id);
+        if (!hot) {
+          for (let i = 1; i < cells.length; i++) {
+            this.groundCellQueue.set(id * 1024 + cells[i].slot, {
+              bodyId: id,
+              slot: cells[i].slot,
+              vertices: cells[i].vertices,
+              indices: cells[i].indices,
+            });
+          }
+        }
         return;
       }
     }
