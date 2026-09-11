@@ -214,6 +214,7 @@
       "type": "equip",
       "description": "黍姐的神秘防具。穿戴后在角色前方等比缩小展示其纹理",
       "maxStack": 1,
+      "stats": { "defense": 3 },
       "combat": {
         "kind": "equip",
         "slot": "armor",

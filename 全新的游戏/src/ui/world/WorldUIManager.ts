@@ -7,10 +7,13 @@
 
 import { BaseInteractionUI } from '../BaseInteractionUI';
 import type { GameSession } from '../../core/Session';
+import { computeCombatStats } from '../../core/Session';
+import { RELIC_ITEM_CONFIG } from '../../config/relics';
 import type { WorldUIState } from '../../core/WorldUIState';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
 import { InventoryPanel } from '../shared/InventoryPanel';
+import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/CharacterStatsPanel';
 import { Minimap } from '../../services/ui/Minimap';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
@@ -41,6 +44,8 @@ export class WorldUIManager extends BaseInteractionUI {
     speed: number;    // 上浮速度
   }[] = [];
   private inventoryPanel: InventoryPanel;
+  /** ★ 角色属性栏（背包面板左栏；橘色方舟风） */
+  private characterStatsPanel = new CharacterStatsPanel();
   private flashItemId: string | null = null;
   private flashTimer: number | undefined = undefined;
   private mapStyleBtn: HTMLButtonElement | null = null;
@@ -106,6 +111,10 @@ export class WorldUIManager extends BaseInteractionUI {
     this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
     this.ammoHud.update(ctx.ammo);
     this.allyHud.update(ctx.allies);
+    // ★ 背包打开时：实时刷新属性栏生命（关着零开销）
+    if (this.isInventoryOpen) {
+      this.characterStatsPanel.updateHp(ctx.playerStats.hp, ctx.playerStats.maxHp);
+    }
 
     // 交互提示
     if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
@@ -322,7 +331,22 @@ export class WorldUIManager extends BaseInteractionUI {
 
     // ★ 独立背包模块渲染（标签页 + 网格）—— 渲染进独立子容器，避免清空标题栏
     const gridRoot = document.createElement('div');
-    content.appendChild(gridRoot);
+    // ★ 无横向滚动条：宽度交给分栏总宽，纵向可滚
+    gridRoot.style.cssText = 'flex:1 1 auto;min-width:0;overflow-y:auto;overflow-x:hidden;';
+
+    // ★ 左右分栏：左 = 角色属性（橘色），右 = 背包；总宽加宽，避免横向滑块
+    const columns = document.createElement('div');
+    columns.style.cssText = [
+      'display:flex', 'gap:12px', 'align-items:flex-start',
+      'width:min(94vw,1120px)', 'box-sizing:border-box',
+    ].join(';');
+    const statsRoot = document.createElement('div');
+    this.iconRegistry ??= new ItemIconRegistry(this.itemManager);
+    this.characterStatsPanel.render(statsRoot, this.buildStatsSnapshot(), this.iconRegistry);
+    columns.appendChild(statsRoot);
+    columns.appendChild(gridRoot);
+    content.appendChild(columns);
+
     this.inventoryPanel.render(gridRoot, this.flashItemId ?? undefined);
 
     this.openPanel({
@@ -331,6 +355,40 @@ export class WorldUIManager extends BaseInteractionUI {
       onClose: () => {},
       render: () => content,
     });
+  }
+
+  /** ★ 角色属性快照（打开背包时组装一次；局内天数/死亡/遗物不变，生命由 update 实时刷）
+   *  三段语义：base（原始）→ perm（基础+遗物，永久）→ current（+装备，临时） */
+  private buildStatsSnapshot(): CharacterStatsSnapshot {
+    const base = this.session.player;
+    const perm = computeCombatStats(this.session, RELIC_ITEM_CONFIG);
+    const temp = this.itemManager.getEquipmentStats();
+    const owned = this.session.outOfRun?.owned ?? {};
+    const relics = Object.entries(owned)
+      .filter(([, count]) => (count ?? 0) > 0)
+      .map(([id, count]) => {
+        const cfg = RELIC_ITEM_CONFIG[id];
+        return {
+          id,
+          name: cfg?.name ?? id,
+          count,
+          iconFrame: cfg?.iconFrame ? cfg.iconFrame(count) : 0,
+          description: cfg?.description ?? '',
+        };
+      });
+    return {
+      base: { maxHp: base.maxHp, attackPower: base.attackPower, defense: base.defense },
+      perm: { maxHp: perm.maxHp, attackPower: perm.attackPower, defense: perm.defense },
+      temp: { maxHp: temp.maxHp, attackPower: temp.attackPower, defense: temp.defense },
+      current: {
+        maxHp: perm.maxHp + temp.maxHp,
+        attackPower: perm.attackPower + temp.attackPower,
+        defense: perm.defense + temp.defense,
+      },
+      day: this.session.meta.day,
+      deaths: this.session.meta.deaths ?? 0,
+      relics,
+    };
   }
 
   /** ★ 地图风格切换按钮（右上角悬浮；标签由外部状态刷新） */

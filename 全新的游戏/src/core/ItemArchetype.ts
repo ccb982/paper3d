@@ -51,6 +51,8 @@ export class ItemArchetype {
   readonly deployable: boolean;
   /** ★ 装备位（effects 里 type==='equip' 的 slot；非装备类为 null。装备栏拖入判定用） */
   readonly equipSlot: string | null;
+  /** ★ 局内装备临时属性（穿戴在出击槽即生效，卸载即消失；与遗物永久加成区分） */
+  readonly stats: { maxHp?: number; attackPower?: number; defense?: number } | null;
   private readonly _effects: ItemEffectDef[];
 
   constructor(data: any) {
@@ -75,6 +77,7 @@ export class ItemArchetype {
     this._effects = data.effects ?? [];
     const equipDef = data.effects?.find((e: any) => e?.type === 'equip');
     this.equipSlot = equipDef?.slot ?? null;
+    this.stats = data.stats ?? null;
   }
 
   /** ★ 背包中使用：遍历所有效果，逐条交给注册表执行 */

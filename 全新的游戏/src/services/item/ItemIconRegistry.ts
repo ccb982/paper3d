@@ -49,6 +49,8 @@ export class ItemIconRegistry {
   private ftxAssets = new Map<string, FtxAsset>();
   /** (id:frame) → 渲染画布缓存 */
   private ftxFrameCache = new Map<string, HTMLCanvasElement>();
+  /** ★ FTX 素材未加载完成时创建的占位 img（加载完成后自动替换 src，避免"开面板早=永远色块"） */
+  private pendingFtxImgs = new Map<string, { img: HTMLImageElement; frameIndex: number }[]>();
 
   constructor(private itemManager: ItemManager) {
     // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
@@ -61,6 +63,14 @@ export class ItemIconRegistry {
         .then((asset) => {
           this.ftxAssets.set(id, asset);
           this.cache.delete(id);
+          // ★ 升级早先创建的占位图标（背包面板可能在素材加载完成前就已渲染）
+          const pending = this.pendingFtxImgs.get(id);
+          if (pending) {
+            for (const p of pending) {
+              try { p.img.src = this.getIcon(id, p.frameIndex).toDataURL(); } catch { /* 保持占位 */ }
+            }
+            this.pendingFtxImgs.delete(id);
+          }
         })
         .catch((err) => console.warn(`[ItemIconRegistry] ${id} FTX 图标载入失败，回退色块:`, err));
     }
@@ -122,6 +132,16 @@ export class ItemIconRegistry {
     if (assetSrc) {
       const live = getFluidIconAnimator().register(assetSrc, frameIndex);
       if (live) return live;
+    }
+    // ★ FTX 图标素材未加载完成：先给色块占位，加载完成后自动替换 src
+    if (FTX_ICON_SOURCES[itemId] && !this.ftxAssets.has(itemId)) {
+      const img = document.createElement('img');
+      img.src = this.makeFallbackCanvas(itemId).toDataURL();
+      img.style.objectFit = 'contain';
+      let list = this.pendingFtxImgs.get(itemId);
+      if (!list) { list = []; this.pendingFtxImgs.set(itemId, list); }
+      list.push({ img, frameIndex });
+      return img;
     }
     const src = this.getIcon(itemId, frameIndex);
     const img = document.createElement('img');

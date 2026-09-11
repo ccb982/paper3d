@@ -43,6 +43,7 @@ import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { eventBus } from '../core/EventBus';
+import type { PlayerCombatStats } from '../core/Session';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
@@ -187,6 +188,8 @@ export class WorldMode implements IGameMode {
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 祖宗素材（站桩友军；缺省回退无人机素材，美术到位后只换路径） */
   private sentinelAsset: Asset | FtxAsset | null = null;
+  /** ★ 永久战斗属性（基础 + 遗物；局内装备在其上临时叠加） */
+  private permStats: PlayerCombatStats | null = null;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -315,11 +318,10 @@ export class WorldMode implements IGameMode {
       facing: '后',
     });
 
-    // ---- ★ 应用战斗属性 ----
-    this.player.maxHp = ctx.combatStats.maxHp;
+    // ---- ★ 应用战斗属性（永久 = 基础 + 遗物；装备临时加成由 applyEquipmentStats 叠加） ----
+    this.permStats = ctx.combatStats;
     this.player.hp = ctx.combatStats.hp;
-    (this.player as any).attackPower = ctx.combatStats.attackPower;
-    (this.player as any).defense = ctx.combatStats.defense;
+    this.applyEquipmentStats();
 
     // ---- ★ 初始化业务逻辑层（共享模块） ----
     this.itemManager = new ItemManager(ctx.session);
@@ -547,6 +549,8 @@ export class WorldMode implements IGameMode {
     });
     // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
     this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
+      // ★ 装备临时属性重算（穿脱/互换立即生效；与友军生成无关，先于无人机素材守卫）
+      this.applyEquipmentStats();
       if (!this.droneAsset) return;
       this.despawnAllyAt(payload.slotIndex);
       if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
@@ -802,6 +806,7 @@ export class WorldMode implements IGameMode {
     for (const d of this.drones) d.dispose();
     this.drones = [];
     this.droneAsset = null;
+    this.permStats = null;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
 
@@ -1318,6 +1323,18 @@ export class WorldMode implements IGameMode {
       speed: 20, camp: 'player', lifetime: 2.5, damage: 0,
       allyOnHit: 'zuzong',
     });
+  }
+
+  /** ★ 应用装备临时属性：maxHp/攻击/防御 = 永久（基础+遗物） + 出击槽装备 stats（卸载即还原） */
+  private applyEquipmentStats(): void {
+    const perm = this.permStats;
+    if (!perm || !this.player || !this.itemManager) return;
+    const eq = this.itemManager.getEquipmentStats();
+    const maxHp = perm.maxHp + eq.maxHp;
+    this.player.maxHp = maxHp;
+    if (this.player.hp > maxHp) this.player.hp = maxHp;
+    this.player.attackPower = perm.attackPower + eq.attackPower;
+    this.player.defense = perm.defense + eq.defense;
   }
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */

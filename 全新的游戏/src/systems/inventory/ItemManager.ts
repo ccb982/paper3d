@@ -287,6 +287,22 @@ export class ItemManager {
     eventBus.emit('deployment_changed', { slotIndex: to, itemId: itemFrom, prev: itemTo });
     return { success: true, message: itemTo ? `已互换槽位 ${from + 1} ↔ ${to + 1}` : `已移到槽位 ${to + 1}` };
   }
+
+  /** ★ 局内装备临时属性：遍历出击槽累加各装备 stats（卸载/换装即自动消失，与遗物永久加成区分） */
+  getEquipmentStats(): { maxHp: number; attackPower: number; defense: number } {
+    const out = { maxHp: 0, attackPower: 0, defense: 0 };
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return out;
+    for (const id of slots) {
+      if (!id) continue;
+      const s = this.archetypes.get(id)?.stats;
+      if (!s) continue;
+      out.maxHp += s.maxHp ?? 0;
+      out.attackPower += s.attackPower ?? 0;
+      out.defense += s.defense ?? 0;
+    }
+    return out;
+  }
 }
 
 /** ★ 出击槽池规格（背包页面绘制 2 行 × 6 列；装具/友军混用池容积） */
