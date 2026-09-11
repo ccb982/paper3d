@@ -33,28 +33,29 @@ export class ItemIconRegistry {
   private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
   /** 无人机动态图标动画器（播放器路径：离屏 VAT 渲染） */
   private droneAnimator: DroneIconAnimator | null = null;
-  /** ★ 直绘 FTX 图标（解包完成的画布；驱动 getIcon 优先返回真实纹理） */
-  private ftxIcons = new Map<string, HTMLCanvasElement>();
+  /** ★ 直绘 FTX 图标源（解包完的 FtxAsset；getIcon 按需取帧渲染） */
+  private ftxAssets = new Map<string, FtxAsset>();
+  /** (id:frame) → 渲染画布缓存 */
+  private ftxFrameCache = new Map<string, HTMLCanvasElement>();
 
   constructor(private itemManager: ItemManager) {
     // 异步预载六区兄弟图标（六种基础材料），失败则回退色块
     loadSixBrotherIcons()
       .then((map) => { this.sixBrothers = map; })
       .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
-    // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具）
+    // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具 / 局外道具），按需取帧
     for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
       FtxAsset.load(encodeURI(url))
         .then((asset) => {
-          const canvas = compositeFrameToCanvas(asset, 0);
-          this.ftxIcons.set(id, canvas);
+          this.ftxAssets.set(id, asset);
           this.cache.delete(id);
         })
         .catch((err) => console.warn(`[ItemIconRegistry] ${id} FTX 图标载入失败，回退色块:`, err));
     }
   }
 
-  /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底） */
-  getIcon(itemId: string): HTMLCanvasElement {
+  /** 获取物品图标画布（六区兄弟来自 FTX 纹理，其余为色块兜底）。frameIndex 用于多帧纹理（如砾小姐的爱按拥有数换帧）。 */
+  getIcon(itemId: string, frameIndex = 0): HTMLCanvasElement {
     if (itemId === 'kaltsit_drone') {
       // ★ 动态图标：播放器路径驱动翅膀抖动；每次调用注册独立画布
       this.droneAnimator ??= getDroneIconAnimator();
@@ -62,8 +63,21 @@ export class ItemIconRegistry {
     }
     if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
     // ★ 直绘 FTX 图标（尚未载入完成 → 走色块兜底，载入后即真实纹理）
-    const ftx = this.ftxIcons.get(itemId);
-    if (ftx) return ftx;
+    const asset = this.ftxAssets.get(itemId);
+    if (asset) {
+      const key = itemId + ':' + frameIndex;
+      let canvas = this.ftxFrameCache.get(key);
+      if (!canvas) {
+        try {
+          canvas = compositeFrameToCanvas(asset, frameIndex);
+          this.ftxFrameCache.set(key, canvas);
+        } catch (e) {
+          console.warn(`[ItemIconRegistry] ${itemId} 帧 ${frameIndex} 渲染失败，回退色块:`, e);
+          canvas = this.makeFallbackCanvas(itemId);
+        }
+      }
+      return canvas;
+    }
     if (this.cache.has(itemId)) return this.cache.get(itemId)!;
     const canvas = this.makeFallbackCanvas(itemId);
     this.cache.set(itemId, canvas);
@@ -73,8 +87,8 @@ export class ItemIconRegistry {
   /** ★ 统一图标出口：返回可直接挂载的独立显示元素（背包/加工台同一条绘制路径）。
    *  静态（六兄弟/色块兜底）→ 独立 <img>(dataURL)，与背包一致；
    *  动态（无人机）→ 活动画布（register 每次建新画布，翅膀动画播放）。 */
-  createIconElement(itemId: string): HTMLCanvasElement | HTMLImageElement {
-    const src = this.getIcon(itemId);
+  createIconElement(itemId: string, frameIndex = 0): HTMLCanvasElement | HTMLImageElement {
+    const src = this.getIcon(itemId, frameIndex);
     if (itemId === 'kaltsit_drone') return src;
     const img = document.createElement('img');
     img.src = src.toDataURL();

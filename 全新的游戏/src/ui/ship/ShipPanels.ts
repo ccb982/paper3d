@@ -186,7 +186,9 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
         row.style.cssText = `padding:6px 10px;background:rgba(255,215,0,0.08);border:1px solid ${cfg.rarity >= 6 ? '#ffd700' : '#c8a0ff'};border-radius:4px;font-size:12px;display:flex;align-items:center;gap:10px;`;
         const iconBox = document.createElement('div');
         iconBox.style.cssText = 'width:36px;height:36px;border-radius:6px;overflow:hidden;flex:none;background:rgba(15,15,30,0.7);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,215,0,0.35);';
-        const icon = this.props.iconRegistry.createIconElement(id);
+        // ★ 多帧纹理：按拥有数选帧（如砾小姐的爱：1件=帧1、≥2件=帧2）
+        const frame = cfg.iconFrame ? cfg.iconFrame(count) : 0;
+        const icon = this.props.iconRegistry.createIconElement(id, frame);
         icon.style.width = '100%';
         icon.style.height = '100%';
         icon.style.objectFit = 'contain';

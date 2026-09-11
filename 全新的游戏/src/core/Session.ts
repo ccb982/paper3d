@@ -351,6 +351,8 @@ export interface OutOfRunItemConfig {
   description: string;
   /** FTX 纹理路径（仅展示用） */
   texture?: string;
+  /** ★ 多帧图标：根据拥有数量挑选 FTX 帧（count=拥有数；省略恒为第 0 帧） */
+  iconFrame?: (count: number) => number;
   effect?: {
     /** 每次死亡全属性 ×perDeathMultiplier（乘方累积：×（1.05 ^ 死亡次数×拥有数）） */
     perDeathMultiplier?: number;

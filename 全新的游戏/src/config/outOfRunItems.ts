@@ -22,6 +22,8 @@ export const OUT_OF_RUN_ITEM_CONFIG: Record<string, OutOfRunItemConfig> = {
     rarity: 5,
     description: '角色每次死亡，生命/攻击/防御全属性 +5%（永久）',
     texture: '/fx/砾小姐的爱.ftx3.gz',
+    /** ★ 单件显示帧1、≥2 件显示帧2 */
+    iconFrame: (count) => (count >= 2 ? 1 : 0),
     effect: { perDeathMultiplier: 1.05 },
   },
 

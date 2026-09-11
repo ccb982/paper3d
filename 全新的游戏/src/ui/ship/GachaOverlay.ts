@@ -1104,7 +1104,7 @@ export class GachaOverlay {
     this.resultOverlay.style.display = 'flex';
   }
 
-  /** ★ 结果卡片图标：与背包/加工台同一条绘制管线（局外 FTX 纹理、局内物品色块/无人机动态播放） */
+/** ★ 结果卡片图标：与背包/加工台同一条绘制管线（局外 FTX 纹理、局内物品色块/无人机动态播放） */
   private makeResultIcon(r: { kind: 'inRun' | 'outRun'; id: string; rarity: number }): HTMLElement {
     const box = document.createElement('div');
     const borderColor = r.rarity >= 5 ? '#c8a0ff' : r.rarity >= 4 ? '#8af' : '#8c8';
@@ -1113,7 +1113,11 @@ export class GachaOverlay {
       `border:2px solid ${borderColor}`, 'background:rgba(15,15,30,0.7)',
       'display:flex', 'align-items:center', 'justify-content:center',
     ].join(';');
-    const el = this.iconRegistry.createIconElement(r.id);
+    // ★ 多帧纹理：局外道具按拥有数选帧（如砾小姐的爱：1件=帧1、≥2件=帧2）
+    const owned = r.kind === 'outRun' ? (this.session.outOfRun?.owned?.[r.id] ?? 0) : 0;
+    const cfg = r.kind === 'outRun' ? OUT_OF_RUN_ITEM_CONFIG[r.id] : undefined;
+    const frame = cfg?.iconFrame ? cfg.iconFrame(owned) : 0;
+    const el = this.iconRegistry.createIconElement(r.id, frame);
     el.style.width = '100%';
     el.style.height = '100%';
     el.style.objectFit = 'contain';
