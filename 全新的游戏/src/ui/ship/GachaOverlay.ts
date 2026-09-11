@@ -15,7 +15,7 @@ import gachaPool from '../../config/gachaPool.json';
 import itemsJson from '../../config/items.json';
 import type { GameSession } from '../../core/Session';
 import { addItemToGrid } from '../../core/Session';
-import { OUT_OF_RUN_ITEM_CONFIG } from '../../config/outOfRunItems';
+import { RELIC_ITEM_CONFIG } from '../../config/relics';
 import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 
 import { SaveSystem } from '../../core/SaveSystem';
@@ -285,7 +285,7 @@ export class GachaOverlay {
 
   constructor(
     private session: GameSession,
-    /** ★ 图标服务（与背包/加工台同一条绘制管线：色块兜底 / 六兄弟 FTX / 无人机动态 / 局外道具 FTX） */
+    /** ★ 图标服务（与背包/加工台同一条绘制管线：色块兜底 / 六兄弟 FTX / 无人机动态 / 遗物 FTX） */
     private iconRegistry: ItemIconRegistry,
   ) {
     // 根容器
@@ -971,7 +971,7 @@ export class GachaOverlay {
     if (!s.outOfRun) s.outOfRun = { owned: {} };
     if (!s.outOfRun.owned) s.outOfRun.owned = {};
 
-    // ★ 单一综合池 = 局内道具（进背包）+ 局外道具（永久生效）；kind 决定落账目标
+    // ★ 单一综合池 = 物资（进背包）+ 遗物（永久生效）；kind 决定落账目标
     type PoolEntry = { kind: 'inRun' | 'outRun'; id: string; rarity: number; weight: number; name: string; description: string };
     const pool: PoolEntry[] = [];
     for (const it of (gachaPool.items ?? [])) {
@@ -986,7 +986,7 @@ export class GachaOverlay {
       });
     }
     for (const o of (gachaPool.outOfRunItems ?? [])) {
-      const cfg = OUT_OF_RUN_ITEM_CONFIG[o.id];
+      const cfg = RELIC_ITEM_CONFIG[o.id];
       pool.push({
         kind: 'outRun',
         id: o.id,
@@ -1014,7 +1014,7 @@ export class GachaOverlay {
 
       let picked: PoolEntry;
       if (s.gacha.pityCounter >= PITY_LIMIT) {
-        // ★ 保底：必出最高稀有度（局外道具）
+        // ★ 保底：必出最高稀有度（遗物）
         const tops = pool.filter((p) => p.rarity === topRarity);
         picked = tops[Math.floor(Math.random() * tops.length)];
       } else {
@@ -1038,7 +1038,7 @@ export class GachaOverlay {
           isNew: false,
         });
       } else {
-        // 局外道具 → 永久生效（数量叠加）
+        // 遗物 → 永久生效（数量叠加）
         const owned = s.outOfRun.owned[picked.id] ?? 0;
         s.outOfRun.owned[picked.id] = owned + 1;
         results.push({
@@ -1050,7 +1050,7 @@ export class GachaOverlay {
           isNew: owned === 0,
         });
       }
-      // ★ 抽中最高稀有度 → 保底计数重置（局外道具同样重置，防刷保底）
+      // ★ 抽中最高稀有度 → 保底计数重置（遗物同样重置，防刷保底）
       if (picked.rarity >= topRarity) s.gacha.pityCounter = 0;
     }
 
@@ -1078,8 +1078,8 @@ export class GachaOverlay {
       const newBadge = r.isNew ? ' \uD83C\uDD95' : '';
 
       const badge = r.kind === 'outRun'
-        ? '<span style="color:#ff9;font-size:12px;padding:1px 6px;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.4);border-radius:4px;margin-right:6px;">局外道具</span>'
-        : '<span style="color:#9cf;font-size:12px;padding:1px 6px;background:rgba(68,136,255,0.15);border:1px solid rgba(68,136,255,0.45);border-radius:4px;margin-right:6px;">局内道具</span>';
+        ? '<span style="color:#ff9;font-size:12px;padding:1px 6px;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.4);border-radius:4px;margin-right:6px;">遗物</span>'
+        : '<span style="color:#9cf;font-size:12px;padding:1px 6px;background:rgba(68,136,255,0.15);border:1px solid rgba(68,136,255,0.45);border-radius:4px;margin-right:6px;">物资</span>';
 
       item.appendChild(this.makeResultIcon(r));
 
@@ -1113,9 +1113,9 @@ export class GachaOverlay {
       `border:2px solid ${borderColor}`, 'background:rgba(15,15,30,0.7)',
       'display:flex', 'align-items:center', 'justify-content:center',
     ].join(';');
-    // ★ 多帧纹理：局外道具按拥有数选帧（如砾小姐的爱：1件=帧1、≥2件=帧2）
+    // ★ 多帧纹理：遗物按拥有数选帧（如砾小姐的爱：1件=帧1、≥2件=帧2）
     const owned = r.kind === 'outRun' ? (this.session.outOfRun?.owned?.[r.id] ?? 0) : 0;
-    const cfg = r.kind === 'outRun' ? OUT_OF_RUN_ITEM_CONFIG[r.id] : undefined;
+    const cfg = r.kind === 'outRun' ? RELIC_ITEM_CONFIG[r.id] : undefined;
     const frame = cfg?.iconFrame ? cfg.iconFrame(owned) : 0;
     const el = this.iconRegistry.createIconElement(r.id, frame);
     el.style.width = '100%';

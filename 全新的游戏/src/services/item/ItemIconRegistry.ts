@@ -23,7 +23,7 @@ export interface ItemIconConfig {
 /** ★ 直绘 FTX 图标源（itemId → .ftx3 URL；解包后第 0 帧合成，ID→画布失效则回退色块） */
 const FTX_ICON_SOURCES: Record<string, string> = {
   shu_jie_xx: '/fx/黍姐的XX.ftx3.gz',
-  // 局外道具（抽卡/藏品查看与背包同一条"服务 + 播放"管线的回退）：
+  // 遗物（抽卡/遗物查看与背包同一条"服务 + 播放"管线的回退）：
   black_crown: '/fx/魔王的黑冠.ftx3.gz',
   gravel_love: '/fx/砾小姐的爱.ftx3.gz',
 };
@@ -43,7 +43,7 @@ export class ItemIconRegistry {
     loadSixBrotherIcons()
       .then((map) => { this.sixBrothers = map; })
       .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
-    // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具 / 局外道具），按需取帧
+    // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具 / 遗物），按需取帧
     for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
       FtxAsset.load(encodeURI(url))
         .then((asset) => {

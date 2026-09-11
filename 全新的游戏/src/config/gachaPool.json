@@ -1,7 +1,7 @@
 {
   "pool": {
     "name": "综合物资池",
-    "description": "全部免费。局内道具抽到即进背包，局外道具抽到即永久生效。保底 60 抽必出局外道具。"
+    "description": "全部免费。物资抽到即进背包，遗物抽到即永久生效。保底 60 抽必出遗物。"
   },
   "items": [
     { "id": "healing_potion", "rarity": 3, "weight": 24 },

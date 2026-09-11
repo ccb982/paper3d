@@ -18,8 +18,7 @@ import type { PlayerCombatStats } from '../core/Session';
 import { computeCombatStats } from '../core/Session';
 import { SaveSystem } from '../core/SaveSystem';
 import { eventBus } from '../core/EventBus';
-import { RELIC_CONFIG } from '../config/relics';
-import { OUT_OF_RUN_ITEM_CONFIG } from '../config/outOfRunItems';
+import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
@@ -160,7 +159,7 @@ export class ShipMode implements IGameMode {
   /** 出击：计算战斗属性并回调主流程 */
   private doDepart(): void {
     if (!this.session || !this.onDepart) return;
-    const combatStats = computeCombatStats(this.session, RELIC_CONFIG, OUT_OF_RUN_ITEM_CONFIG);
+    const combatStats = computeCombatStats(this.session, RELIC_ITEM_CONFIG);
     this.session.dayProgress.hasDepartedToday = true;
     SaveSystem.save(this.session);
     this.onDepart(this.session.meta.day, combatStats);

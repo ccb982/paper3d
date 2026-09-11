@@ -466,7 +466,7 @@ export class WorldMode implements IGameMode {
       });
       // ★ 击杀结算：无人机与杂兵分流（无人机损毁 = 槽位换残骸 + 从编队移除）
       this.killedUnsub = eventBus.on('killed', (payload) => {
-        // ★ 玩家死亡：累计永久死亡次数（局外道具"每次死亡全属性 +5%"的驱动）
+        // ★ 玩家死亡：累计永久死亡次数（遗物"每次死亡全属性 +5%"的驱动）
         if (payload.target === this.player) {
           const s = this.session;
           if (!s) return;

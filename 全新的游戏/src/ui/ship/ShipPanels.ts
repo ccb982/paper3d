@@ -14,7 +14,7 @@ import type { CraftingManager } from '../../systems/inventory/CraftingManager';
 import type { InventoryPanel } from '../shared/InventoryPanel';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { createButton } from '../components/Button';
-import { OUT_OF_RUN_ITEM_CONFIG } from '../../config/outOfRunItems';
+import { RELIC_ITEM_CONFIG } from '../../config/relics';
 
 // ------------------------------------------------------------
 // 行动面板
@@ -48,8 +48,7 @@ export class ActionPanel extends SidePanel<ActionPanelProps> {
         <div>  玩家背包: ${countItemsInGrid(inv.player)} 件</div>
       </div>
       <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
-        <div>🏆 藏品: ${s.relics.owned.length} 件 | 干员: ${s.allies.roster.length} 人</div>
-        <div>🎁 局外道具: ${Object.keys(s.outOfRun?.owned ?? {}).length} 种 | 💀 累计死亡: ${s.meta?.deaths ?? 0} 次</div>
+        <div>💠 遗物: ${Object.keys(s.outOfRun?.owned ?? {}).length} 种 | 💀 累计死亡: ${s.meta?.deaths ?? 0} 次</div>
         <div>🎰 抽卡保底: ${s.gacha.pityCounter} 抽</div>
       </div>
     `;
@@ -79,8 +78,6 @@ export interface FormationPanelProps {
   itemManager: ItemManager;
   craftingManager: CraftingManager;
   inventoryPanel: InventoryPanel;
-  /** ★ 图标服务（藏品/局外道具查看与背包同一条绘制 + 播放管线） */
-  iconRegistry: ItemIconRegistry;
   /** 打开合成台（站类型由调用方决定） */
   openCrafting: (station: 'ship' | 'portable') => void;
 }
@@ -96,7 +93,6 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
     const btnBar = document.createElement('div');
     btnBar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;';
     btnBar.appendChild(createButton({ label: '🎒 打开背包', size: 'sm', style: 'secondary', onClick: () => this.renderInventoryView() }));
-    btnBar.appendChild(createButton({ label: '🏆 藏品查看', size: 'sm', style: 'secondary', onClick: () => this.renderRelicsView() }));
     btnBar.appendChild(createButton({ label: '🔧 合成台', size: 'sm', style: 'secondary', onClick: () => this.props.openCrafting('ship') }));
     div.appendChild(btnBar);
 
@@ -109,20 +105,13 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
     return div;
   }
 
-  /** ★ 数据变更后刷新当前子视图，保持停留（背包/藏品） */
+  /** ★ 数据变更后刷新当前子视图（仅背包） */
   refresh(): void {
-    if (this.activeView === 'inventory') {
-      this.renderInventoryView();
-    } else {
-      this.renderRelicsView();
-    }
+    this.renderInventoryView();
   }
-
-  private activeView: 'inventory' | 'relics' = 'inventory';
 
   /** 子视图：背包 */
   private renderInventoryView(): void {
-    this.activeView = 'inventory';
     const content = document.getElementById('ship-formation-content');
     if (!content) return;
     const box = document.createElement('div');
@@ -134,51 +123,49 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
     content.appendChild(box);
     this.props.inventoryPanel.render(grid);
   }
+}
 
-  /** 子视图：藏品 */
-  private renderRelicsView(): void {
-    this.activeView = 'relics';
-    const content = document.getElementById('ship-formation-content');
-    if (!content) return;
-    this.renderRelicsContent(content);
+// ------------------------------------------------------------
+// 遗物管理面板（承接原"干员"按钮位；旧的干员招募/藏品代码已彻底废弃）
+// 遗物 = 原"藏品/局外道具"统一归类（2026-09-11）
+// ------------------------------------------------------------
+export interface OperatorPanelProps {
+  session: GameSession;
+  /** ★ 图标服务（遗物查看与背包同一条绘制 + 播放管线） */
+  iconRegistry: ItemIconRegistry;
+}
+
+export class OperatorPanel extends SidePanel<OperatorPanelProps> {
+  protected title(): string {
+    return '遗物';
   }
 
-  private renderRelicsContent(content: HTMLElement): void {
-    const relics = this.props.session.relics;
-    let html = `
-      <div style="padding:8px;background:rgba(102,68,170,0.15);border-radius:4px;">
-        <h4 style="color:#a8f;margin:0 0 8px 0;">藏品 (${relics.owned.length} 件)</h4>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;">
-    `;
-    for (const id of relics.owned) {
-      html += `<span style="padding:4px 10px;background:rgba(102,68,170,0.3);border:1px solid #8866cc;border-radius:4px;font-size:12px;color:#caf;">${id}</span>`;
-    }
-    html += '</div></div>';
+  protected body(): HTMLElement {
+    const div = document.createElement('div');
+    div.appendChild(this.renderRelicSection());
+    return div;
+  }
 
-    // ★ 局外道具（只可抽取、不入背包；拥有即全局永久生效/播放图标纹理）
+  /** ★ 遗物（只可抽取、不入背包；拥有即全局永久生效/播放图标纹理） */
+  private renderRelicSection(): HTMLElement {
     const outOwned = this.props.session.outOfRun?.owned ?? {};
     const outIds = Object.keys(outOwned);
-    const deaths = this.props.session.meta?.deaths ?? 0;
     const section = document.createElement('div');
-    section.style.cssText = 'padding:8px;background:rgba(204,170,68,0.12);border-radius:4px;margin-top:10px;';
+    section.style.cssText = 'padding:8px;background:rgba(204,170,68,0.12);border-radius:4px;';
     const heading = document.createElement('h4');
-    heading.style.cssText = 'color:#ffc;margin:0 0 6px 0;';
-    heading.textContent = `局外道具 (${outIds.length} 种 · 只可抽取 · 无需携带)`;
+    heading.style.cssText = 'color:#ffc;margin:0 0 8px 0;font-style:italic;';
+    heading.textContent = '他们仍愿意帮助你';
     section.appendChild(heading);
-    const deathLine = document.createElement('div');
-    deathLine.style.cssText = 'color:#ca9;font-size:12px;margin-bottom:8px;';
-    deathLine.textContent = `💀 当前累计死亡 ${deaths} 次`;
-    section.appendChild(deathLine);
     if (outIds.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'color:#665;font-size:12px;';
-      empty.textContent = '还没有局外道具，去招募池抽取吧';
+      empty.textContent = '还没有遗物，去招募池抽取吧';
       section.appendChild(empty);
     } else {
       const list = document.createElement('div');
       list.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
       for (const id of outIds) {
-        const cfg = OUT_OF_RUN_ITEM_CONFIG[id];
+        const cfg = RELIC_ITEM_CONFIG[id];
         if (!cfg) continue;
         const count = outOwned[id] ?? 0;
         const stars = cfg.rarity >= 6 ? '★' : '☆';
@@ -203,37 +190,6 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
       }
       section.appendChild(list);
     }
-    content.innerHTML = html;
-    content.append(section);
-  }
-}
-
-// ------------------------------------------------------------
-// 干员面板
-// ------------------------------------------------------------
-export interface OperatorPanelProps {
-  session: GameSession;
-}
-
-export class OperatorPanel extends SidePanel<OperatorPanelProps> {
-  protected title(): string {
-    return '干员管理';
-  }
-
-  protected body(): HTMLElement {
-    const s = this.props.session;
-    const div = document.createElement('div');
-    div.innerHTML = `
-      <div style="padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
-        <div>已招募干员: ${s.allies.roster.length} 人</div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
-          ${s.allies.roster.length === 0
-            ? '<span style="color:#666;">还没有干员，去招募吧</span>'
-            : s.allies.roster.map(id => `<span style="padding:4px 10px;background:rgba(68,136,255,0.2);border:1px solid #4488ff;border-radius:4px;font-size:12px;color:#8af;">${id}</span>`).join('')
-          }
-        </div>
-      </div>
-    `;
-    return div;
+    return section;
   }
 }

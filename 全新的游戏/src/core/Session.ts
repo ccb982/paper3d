@@ -42,7 +42,7 @@ export interface GameSession {
     version: string;
     day: number;                // ★ 当前天数（既是进度标识，也是地图种子来源）
     totalDaysSurvived: number;
-    deaths: number;             // ★ 累计死亡次数（局外道具 "每次死亡×1.05 全属性" 的驱动）
+    deaths: number;             // ★ 累计死亡次数（遗物 "每次死亡×1.05 全属性" 的驱动）
     createdAt: string;
     lastSavedAt: string;
   };
@@ -67,18 +67,9 @@ export interface GameSession {
     player: InventoryGrid;      // L3: 玩家自身背包（4×6）
   };
 
-  // ----- ④ ★ 藏品/遗物 -----
-  relics: {
-    owned: string[];            // 所有藏品 ID
-    slots: (string | null)[];   // 槽位（快捷展示）
-  };
+  // ----- ④ ★ 遗物（原"藏品/局外道具"统一归类 2026-09-11：永久生效、不入背包、只可抽取） -----
 
-  // ----- ⑤ ★ 干员 -----
-  allies: {
-    roster: string[];           // 已招募的干员 id 列表
-  };
-
-  // ----- ⑥ 舰船状态 -----
+  // ----- ⑤ 舰船状态 -----
   ship: {
     hp: number;
     maxHp: number;
@@ -99,9 +90,9 @@ export interface GameSession {
     hasDepartedToday: boolean;
   };
 
-  // ----- ⑨ ★ 局外道具（只可抽取、不占背包、无需携带；拥有即全局永久生效） -----
+  // ----- ⑨ ★ 遗物（原局外道具：只可抽取、不占背包、无需携带；拥有即全局永久生效） -----
   outOfRun: {
-    owned: Record<string, number>; // 道具 id → 拥有数（重复抽取叠加）
+    owned: Record<string, number>; // 遗物 id → 拥有数（重复抽取叠加）
   };
 }
 
@@ -325,26 +316,8 @@ export interface PlayerCombatStats {
   defense: number;
 }
 
-export interface RelicConfigEntry {
-  id: string;
-  name: string;
-  type: 'carry' | 'permanent';
-  description: string;
-  effect?: {
-    attackBonus?: number;
-    defenseBonus?: number;
-    hpBonus?: number;
-    multiplier?: number;
-    flatBonus?: {
-      attackBonus?: number;
-      defenseBonus?: number;
-      hpBonus?: number;
-    };
-  };
-}
-
-/** 局外道具配置（只可抽取、不入背包；拥有即全局永久生效） */
-export interface OutOfRunItemConfig {
+/** 遗物配置（原局外道具：只可抽取、不入背包；拥有即全局永久生效） */
+export interface RelicItemConfig {
   id: string;
   name: string;
   rarity: number;
@@ -363,38 +336,19 @@ export interface OutOfRunItemConfig {
 
 export function computeCombatStats(
   session: GameSession,
-  relicConfig: Record<string, RelicConfigEntry>,
-  outOfRunConfig?: Record<string, OutOfRunItemConfig>,
+  relicItemConfig?: Record<string, RelicItemConfig>,
 ): PlayerCombatStats {
   const base = session.player;
-  const owned = session.relics.owned;
   const day = session.meta.day;
 
   let bonusAttack = 0, bonusDefense = 0, bonusMaxHp = 0;
   let multiplier = 1;
 
-  for (const id of owned) {
-    const cfg = relicConfig[id];
-    if (!cfg) continue;
-    if (cfg.type === 'carry') {
-      bonusAttack += cfg.effect?.attackBonus || 0;
-      bonusDefense += cfg.effect?.defenseBonus || 0;
-      bonusMaxHp += cfg.effect?.hpBonus || 0;
-    } else if (cfg.type === 'permanent') {
-      if (cfg.effect?.multiplier) {
-        multiplier *= Math.pow(cfg.effect.multiplier, day);
-      }
-      bonusAttack += cfg.effect?.flatBonus?.attackBonus || 0;
-      bonusDefense += cfg.effect?.flatBonus?.defenseBonus || 0;
-      bonusMaxHp += cfg.effect?.flatBonus?.hpBonus || 0;
-    }
-  }
-
-  // ---- ★ 局外道具：每天/每次死亡 全属性乘方累积（与藏品 multiplier 相乘） ----
+  // ---- ★ 遗物：每天/每次死亡 全属性乘方累积 ----
   const ownedOut = session.outOfRun?.owned ?? {};
   const deaths = session.meta?.deaths ?? 0;
   for (const [id, count] of Object.entries(ownedOut)) {
-    const cfg = outOfRunConfig?.[id];
+    const cfg = relicItemConfig?.[id];
     if (!cfg || (count ?? 0) <= 0) continue;
     if (cfg.effect?.perDayMultiplier) {
       multiplier *= Math.pow(cfg.effect.perDayMultiplier, day * count);
@@ -437,11 +391,6 @@ export function createNewSession(): GameSession {
       ship: createEmptyGrid(8, 10),
       player,
     },
-    relics: {
-      owned: [],
-      slots: Array(5).fill(null),
-    },
-    allies: { roster: [] },
     ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
     gacha: { pityCounter: 0, totalPulls: 0 },
     dayProgress: { hasDepartedToday: false },

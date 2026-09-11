@@ -212,11 +212,13 @@ async function boot() {
     SaveSystem.save(currentSession);
   }
 
-  // ★ 迁移（2026-09-11）：黑冠从"藏品"归位为"局外道具"（开局即拥 1 件）
+  // ★ 迁移（2026-09-11）：黑冠从旧"藏品"归位为"遗物"（开局即拥 1 件）
+  // 旧存档可能残留 relics.owned；新权威字段为 outOfRun（遗物）
   if (currentSession) {
-    const rIdx = currentSession.relics?.owned?.indexOf('black_crown') ?? -1;
-    if (rIdx !== -1) {
-      currentSession.relics.owned.splice(rIdx, 1);
+    const oldRelics = (currentSession as { relics?: { owned?: string[] } }).relics;
+    const rIdx = oldRelics?.owned?.indexOf('black_crown') ?? -1;
+    if (rIdx !== -1 && oldRelics?.owned) {
+      oldRelics.owned.splice(rIdx, 1);
       if (!currentSession.outOfRun) currentSession.outOfRun = { owned: {} };
       if (!currentSession.outOfRun.owned) currentSession.outOfRun.owned = {};
       currentSession.outOfRun.owned.black_crown = (currentSession.outOfRun.owned.black_crown ?? 0) + 1;
