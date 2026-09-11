@@ -151,12 +151,16 @@ export class ChunkManager {
    *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
   private static readonly BUILD_RADIUS = 2;
   private static readonly PREFETCH_RADIUS = 4;
-  /** ★ 烘焙在途上限（构建请求）：防止跨区/接缝批量时把多个烘焙任务同时塞进 worker 造成爆发 */
-  private static readonly BUILD_INFLIGHT_MAX = 2;
-  /** ★ 预烘焙投递间隔（ms）：空闲时每拍投 1 个 x 轴 + 1 个 y 轴的"前方条带"chunk */
+  /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
+   *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
+  private static readonly BUILD_INFLIGHT_MAX = 1;
+  /** ★ 预烘焙投递间隔（ms）：空闲时每拍投"前方条带"chunk（★ 2026-09-11：每拍 1 个，
+   *  x/y 轴交替，减少同时计算量） */
   private static readonly PREFETCH_INTERVAL_MS = 220;
-  /** 每拍预烘焙个数（x 轴 1 + y 轴 1） */
-  private static readonly PREFETCH_PER_TICK = 2;
+  /** 每拍预烘焙个数（★ 2026-09-11：2 → 1，轴间交替） */
+  private static readonly PREFETCH_PER_TICK = 1;
+  /** 预烘焙轴交替开关（每拍翻转，保证 x/y 前方都被覆盖） */
+  private prefetchLaneAlt = false;
   /** 预烘焙节拍累加器 */
   private prefetchAccum = 0;
   /** 预烘焙方向（位移差分；本拍位移 ≥0.5m 才更新，否则沿用上次朝向） */
@@ -219,14 +223,13 @@ export class ChunkManager {
   private assembleCooldownUntil = 0;
   /** 装饰补挂冷却截止时刻（同上） */
   private decorCooldownUntil = 0;
-  /** ★ 首建交付限流：滚动窗口（BUILD_RATE_WINDOW_MS）内最多 BUILD_RATE_MAX 块
-   *  （用户定调：一段时间更新 chunk 不得超过两个；挖坑重建不受限、优先放行） */
-  private static readonly BUILD_RATE_WINDOW_MS = 1000;
-  private static readonly BUILD_RATE_MAX = 2;
-  /** 最近首建交付时刻（滚动窗口记账） */
-  private buildStamps: number[] = [];
-  /** 预烘积压上限：待装配队列达到此长度暂停预烘（保住提前量的同时防内存/worker 过载） */
-  private static readonly PREFETCH_BACKLOG_MAX = 12;
+  /** ★ 首建交付节拍（用户定调：700ms 交一块；挖坑重建不受限、优先放行） */
+  private static readonly BUILD_RATE_MIN_INTERVAL_MS = 700;
+  /** 上一块首建交付时刻（performance.now；节拍依据） */
+  private lastBuildStamp = 0;
+  /** 预烘积压上限：待装配队列达到此长度暂停预烘（保住提前量的同时防内存/worker 过载）
+   *  ★ 2026-09-11：12 → 6（配合 700ms 节拍，减少"算好堆着"的数量） */
+  private static readonly PREFETCH_BACKLOG_MAX = 6;
 
   // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
@@ -315,10 +318,43 @@ export class ChunkManager {
     }
   }
 
+  /** ★ 正前方三层 chunk（最高优先级：预烘与构建队列都最先处理；
+   *  每层 = 前向第 k 排、横向铺满构建环宽度 ±BUILD_RADIUS） */
+  private static readonly FRONT_LAYERS = 3;
+  /** 当前正前方三层 chunk key 集（层内由近到远；每帧重算） */
+  private frontKeys = new Set<number>();
+  /** 角色正前方向（相机/朝向单位向量；WorldMode.update 传入） */
+  private faceX = 0;
+  private faceZ = 0;
+
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
-  update(px: number, pz: number, dt: number): void {
+  update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
     this.markHotChunk(px, pz);
+    // ★ 正前方三层（最高优先级；沿主轴方向分层、横向铺满，视角变化每帧重算）
+    const fl = Math.hypot(faceX, faceZ);
+    if (fl > 1e-4) {
+      this.faceX = faceX / fl;
+      this.faceZ = faceZ / fl;
+    }
+    this.frontKeys.clear();
+    const ax = Math.abs(this.faceX), az = Math.abs(this.faceZ);
+    if (ax > 1e-3 || az > 1e-3) {
+      const alongX = ax >= az;
+      const s = alongX ? (this.faceX >= 0 ? 1 : -1) : (this.faceZ >= 0 ? 1 : -1);
+      const R = ChunkManager.BUILD_RADIUS;
+      for (let k = 1; k <= ChunkManager.FRONT_LAYERS; k++) {
+        // 先中间后两侧（预烘/装配优先顺序更顺路）
+        for (let j = 0; j <= R; j++) {
+          const offs = j === 0 ? [0] : [j, -j];
+          for (const off of offs) {
+            const cx = alongX ? this.hotPcx + s * k : this.hotPcx + off;
+            const cz = alongX ? this.hotPcz + off : this.hotPcz + s * k;
+            this.frontKeys.add(chunkKeyOf(cx, cz));
+          }
+        }
+      }
+    }
     // ★ 移动方向平滑（构建队列前向优先加权；站立时自然衰减归零）
     if (!Number.isNaN(this.moveLastPx)) {
       const mdx = px - this.moveLastPx, mdz = pz - this.moveLastPz;
@@ -359,7 +395,7 @@ export class ChunkManager {
       } else {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
       }
-      if (a.decor !== null && a.deferDecor) this.buildStamps.push(performance.now());
+      if (a.decor !== null && a.deferDecor) this.lastBuildStamp = performance.now();
       const _cost = performance.now() - _ta;
       if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
         this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
@@ -451,13 +487,9 @@ export class ChunkManager {
     }
   }
 
-  /** 首建限流判定：滚动窗口内首建交付数是否未达上限（顺带清理过期时间戳） */
+  /** 首建节拍判定：距上一块首建交付 ≥ BUILD_RATE_MIN_INTERVAL_MS 才放行 */
   private allowFirstBuild(): boolean {
-    const now = performance.now();
-    while (this.buildStamps.length > 0 && now - this.buildStamps[0] > ChunkManager.BUILD_RATE_WINDOW_MS) {
-      this.buildStamps.shift();
-    }
-    return this.buildStamps.length < ChunkManager.BUILD_RATE_MAX;
+    return performance.now() - this.lastBuildStamp >= ChunkManager.BUILD_RATE_MIN_INTERVAL_MS;
   }
 
   /** 装饰补挂耗时冷却：本次超过预算 → 下一块推迟同等时间（把尖峰摊到后续帧） */
@@ -671,13 +703,15 @@ export class ChunkManager {
       // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
       //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）
       if (!this.boss4D && this.countBuildInflight() >= ChunkManager.BUILD_INFLIGHT_MAX) break;
-      // ★ 最近优先 + 前向加权：score = 切比雪夫距离 − 前向投影 × 加权（越小越先建）
+      // ★ 最近优先 + 前向加权 + 正前方三层绝对抢占：
+      //   score = 距离 − 前向投影 × 加权（越小越先建）；正前块 −1e6 恒第一
       let best = 0, bestScore = Infinity;
       for (let i = 0; i < this.queue.length; i++) {
         const it = this.queue[i];
         const qdx = it.cx - this.hotPcx, qdz = it.cz - this.hotPcz;
         const d = Math.max(Math.abs(qdx), Math.abs(qdz));
-        const score = d - (qdx * dirX + qdz * dirZ) * boost;
+        const front = this.frontKeys.has(chunkKeyOf(it.cx, it.cz)) ? -1e6 : 0;
+        const score = front + d - (qdx * dirX + qdz * dirZ) * boost;
         if (score < bestScore) { bestScore = score; best = i; }
       }
       const item = this.queue.splice(best, 1)[0];
@@ -736,10 +770,19 @@ export class ChunkManager {
     if (this.assembleQueue.length >= ChunkManager.PREFETCH_BACKLOG_MAX) return;
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
-    // ★ 每拍：x 轴前方一条 + y 轴前方一条；都取不到再环扫兜底（角落/后方）
+    // ★ 最高优先级：角色正前方三层先投（每拍上限内，层内由中间向两侧）
     let sent = 0;
-    if (this.prefetchAxisLane(pcx, pcz, true, this.prefetchDirX)) sent++;
-    if (sent < ChunkManager.PREFETCH_PER_TICK && this.prefetchAxisLane(pcx, pcz, false, this.prefetchDirZ)) sent++;
+    for (const key of this.frontKeys) {
+      if (sent >= ChunkManager.PREFETCH_PER_TICK) break;
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      if (this.tryPrefetch(cx, cz)) sent++;
+    }
+    // 再走轴间交替（每拍 1 块，x/y 前方轮流覆盖）；都取不到再环扫兜底
+    this.prefetchLaneAlt = !this.prefetchLaneAlt;
+    const xFirst = this.prefetchLaneAlt;
+    if (sent < ChunkManager.PREFETCH_PER_TICK && this.prefetchAxisLane(pcx, pcz, xFirst, xFirst ? this.prefetchDirX : this.prefetchDirZ)) sent++;
+    if (sent < ChunkManager.PREFETCH_PER_TICK && this.prefetchAxisLane(pcx, pcz, !xFirst, xFirst ? this.prefetchDirZ : this.prefetchDirX)) sent++;
     if (sent < ChunkManager.PREFETCH_PER_TICK) this.prefetchRingFallback(pcx, pcz);
   }
 

@@ -541,7 +541,9 @@ export class WorldMode implements IGameMode {
     const pp = this.player.controllerPosition;
 
     // ★ 无限地图扩张 + 看门狗自愈（chunk 流式管线在 ChunkManager 内）
-    this.chunks.update(pp.x, pp.y, dt);
+    //   ★ 传入角色正前方（相机视线）→ ChunkManager 优先算/建正前 4 块
+    const faceFw = this.cameraCtrl.getFrame().forward;
+    this.chunks.update(pp.x, pp.y, dt, faceFw.x, faceFw.z);
     const _t1 = performance.now();
 
     // ★ 小地图更新
