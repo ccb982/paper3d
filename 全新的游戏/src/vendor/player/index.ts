@@ -56,6 +56,11 @@ export class Asset implements CharacterFxAssetSource {
   /** FTX 解码数据（构建流体效果用） */
   private _ftx: DecodedMultiFrame | null = null;
 
+  /** ★ 调色板（图标合成/流体构建共享；未解码时为空数组） */
+  get palette(): PaletteColor[] {
+    return this._ftx?.palette ?? [];
+  }
+
   private _entityMeshMap: Map<string, EntityMeshData> = new Map();
   private _controllers: Set<FramePlaybackController> = new Set();
   private _fluidEffects: Map<number, FluidEffect> = new Map();

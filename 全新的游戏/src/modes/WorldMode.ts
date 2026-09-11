@@ -1258,8 +1258,9 @@ export class WorldMode implements IGameMode {
     const fw = this.cameraCtrl.getFrame().forward;
     const px = this.player.position.x + fw.x * 2;
     const pz = this.player.position.z + fw.z * 2;
-    const py = this.raster.surfaceHeightAt(px, pz) + 0.2;
-    const s = new DroneEntity(this.entities, this.scene, asset, { x: px, y: py, z: pz, scale: 1.0 });
+    // ★ 与主角同尺寸（主角 applyRenderScale(2.0)）；中心锚点 → 半身高贴身摆放（可调）
+    const py = this.raster.surfaceHeightAt(px, pz) + 0.5;
+    const s = new DroneEntity(this.entities, this.scene, asset, { x: px, y: py, z: pz, scale: 2.0 });
     s.slotIndex = -1;
     s.itemId = 'zuzong';
     s.stationary = true;

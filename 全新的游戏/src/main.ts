@@ -26,6 +26,7 @@ import { createNewSession, type GameSession, type PlayerCombatStats } from './co
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
+import { registerAssetIconSource } from './services/item/ItemIconRegistry';
 
 /** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
 function fallbackCopy(text: string): void {
@@ -197,6 +198,8 @@ async function boot() {
       sentinelAsset = droneAsset;
     }
   }
+  // ★ 祖宗图标路径：注册资产图标源（背包/加工台/友军列表统一由此合成贴图）
+  if (sentinelAsset) registerAssetIconSource('zuzong', sentinelAsset);
 
   // ---- ★ 月亮贴图：加载大猫哥月亮素材包（特效播放器解码），替换天空程序化月相 ----
   try {

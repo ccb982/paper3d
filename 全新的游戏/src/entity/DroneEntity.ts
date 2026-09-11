@@ -324,9 +324,9 @@ export class DroneEntity extends EntityBase {
         }
       }
     }
-    // 原地微浮动（贴地 + 相位起伏；不移动）
+    // 原地固定高度（不上下摆动；随地形抬升但不低于放置基准）
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
-    p.y = Math.max(gy + 0.25, this.stationaryBaseY) + Math.sin(this.phase) * 0.1;
+    p.y = Math.max(gy + 0.5, this.stationaryBaseY);
   }
 
   /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓） */

@@ -10,6 +10,16 @@ import { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadSixBrotherIcons, compositeFrameToCanvas } from './BasicMaterialsIcons';
 import { getDroneIconAnimator, DroneIconAnimator } from './DroneIcon';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
+import type { Asset } from '../../vendor/player';
+
+/** ★ 运行时注册的资产图标源（itemId → scene.zip/FTX 资产；取指定帧合成静态图标）。
+ *  如「祖宗」：唯一图标出口 = 这里注册，背包/加工台/友军列表自动共享。 */
+const assetIconSources = new Map<string, Asset | FtxAsset>();
+
+/** ★ 注册资产图标源（boot 加载完素材后调用；重复注册覆盖） */
+export function registerAssetIconSource(itemId: string, asset: Asset | FtxAsset): void {
+  assetIconSources.set(itemId, asset);
+}
 
 export interface ItemIconConfig {
   /** 色调 0-1 */
@@ -60,6 +70,22 @@ export class ItemIconRegistry {
       // ★ 动态图标：播放器路径驱动翅膀抖动；每次调用注册独立画布
       this.droneAnimator ??= getDroneIconAnimator();
       return this.droneAnimator.register(this.itemManager);
+    }
+    // ★ 运行时注册的资产图标（如祖宗 scene.zip）：取帧合成静态配色图
+    const assetIcon = assetIconSources.get(itemId);
+    if (assetIcon) {
+      const akey = itemId + ':' + frameIndex;
+      let canvas = this.ftxFrameCache.get(akey);
+      if (!canvas) {
+        try {
+          canvas = compositeFrameToCanvas(assetIcon as unknown as FtxAsset, frameIndex);
+          this.ftxFrameCache.set(akey, canvas);
+        } catch (e) {
+          console.warn(`[ItemIconRegistry] ${itemId} 资产图标合成失败，回退色块:`, e);
+          canvas = this.makeFallbackCanvas(itemId);
+        }
+      }
+      return canvas;
     }
     if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
     // ★ 直绘 FTX 图标（尚未载入完成 → 走色块兜底，载入后即真实纹理）
