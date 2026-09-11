@@ -75,6 +75,8 @@ const AIM_ASSIST_RANGE = 32;      // 只对 32m 内敌人生效（米）
 const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
 /** ★ 可发射弹药 itemId（背包中有该类型即可在弹药栏切换；开火消耗 1） */
 const FIREABLE_AMMO = new Set<string>(['zuzong']);
+/** ★ 祖宗吸仇恨半径（米）：敌人与祖宗在此范围内时，索敌优先级压过玩家 */
+const SENTINEL_TAUNT_RADIUS = 40;
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
@@ -465,6 +467,8 @@ export class WorldMode implements IGameMode {
       (payload) => this.resolveBulletHit(payload),
     );
     this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
+    // ★ 敌人索敌优先级队列：祖宗（吸仇恨）＞ 玩家 ＞ 一般友军（无人机）
+    this.aiCtx.targetCandidates = (e) => this.enemyTargetCandidates(e);
 
     // ---- ★ 战斗道具播放：弹药池 + 装备贴片（挂主角 mesh） ----
     this.combatItems = new CombatItemController(
@@ -1372,6 +1376,34 @@ export class WorldMode implements IGameMode {
       speed: 20, camp: 'player', lifetime: 2.5, damage: 0,
       allyOnHit: 'zuzong',
     });
+  }
+
+  /** ★ 敌人索敌候选（优先级从高到低）：
+   *  ① 祖宗（站桩·吸仇恨；TAUNT 半径内）② 玩家 ③ 一般友军（最近无人机）
+   *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列 */
+  private enemyTargetCandidates(enemy: EnemyBase): { x: number; z: number }[] {
+    const ep = enemy.position;
+    const out: { x: number; z: number }[] = [];
+    let sentinel: DroneEntity | null = null, sentinelD2 = Infinity;
+    let ally: DroneEntity | null = null, allyD2 = Infinity;
+    for (const d of this.drones) {
+      if (d.hp <= 0) continue;
+      const dx = d.position.x - ep.x, dz = d.position.z - ep.z;
+      const d2 = dx * dx + dz * dz;
+      if (d.stationary) {
+        if (d2 < sentinelD2) { sentinelD2 = d2; sentinel = d; }
+      } else if (d2 < allyD2) {
+        allyD2 = d2;
+        ally = d;
+      }
+    }
+    const taunt2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
+    if (sentinel && sentinelD2 <= taunt2) {
+      out.push({ x: sentinel.position.x, z: sentinel.position.z });
+    }
+    if (this.player) out.push({ x: this.player.position.x, z: this.player.position.z });
+    if (ally) out.push({ x: ally.position.x, z: ally.position.z });
+    return out;
   }
 
   /** ★ 弹药栏条目：普通弹药（∞）+ 背包中可发射弹药（数量 = 行囊内该类总和） */

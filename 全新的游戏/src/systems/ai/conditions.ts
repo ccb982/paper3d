@@ -16,24 +16,40 @@ export function registerCondition(name: string, fn: ConditionFn): void {
   conditionTable[name] = fn;
 }
 
-/** 索敌：视野半径内找到目标（camp 参数指定阵营，逗号分隔多选）→ 写入 ctx.target */
+/** 索敌：视野半径内找到目标（camp 参数指定阵营，逗号分隔多选）→ 写入 ctx.target。
+ *  ★ 若模式层提供 targetCandidates（优先级队列：祖宗 > 玩家 > 友军），按序取第一个在视野内的 */
 registerCondition('seePlayer', (entity, ctx, params) => {
   const radius = pnum(params, 'radius', 8);
-  const camps = pstr(params, 'camp', 'player').split(',');
+  const r2 = radius * radius;
+  const ep = entity.entity.position;
   let t: { x: number; z: number } | null = null;
-  for (const c of camps) {
-    t = ctx.findTarget(c);
-    if (t) break;
+
+  const cands = ctx.targetCandidates?.(entity);
+  if (cands && cands.length > 0) {
+    for (const c of cands) {
+      const dx = c.x - ep.x;
+      const dz = c.z - ep.z;
+      if (dx * dx + dz * dz <= r2) { t = c; break; }
+    }
+  } else {
+    const camps = pstr(params, 'camp', 'player').split(',');
+    for (const c of camps) {
+      t = ctx.findTarget(c);
+      if (t) break;
+    }
+    if (t) {
+      const dx = t.x - ep.x;
+      const dz = t.z - ep.z;
+      if (dx * dx + dz * dz > r2) t = null;
+    }
   }
-  if (!t) return false;
-  const dx = t.x - entity.entity.position.x;
-  const dz = t.z - entity.entity.position.z;
-  if (dx * dx + dz * dz <= radius * radius) {
-    ctx.target = t;
-    return true;
+
+  if (!t) {
+    ctx.target = null;
+    return false;
   }
-  ctx.target = null;
-  return false;
+  ctx.target = t;
+  return true;
 });
 
 /** 目标在攻击距离内 */

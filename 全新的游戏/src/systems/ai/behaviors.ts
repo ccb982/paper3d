@@ -16,6 +16,9 @@ export interface BehaviorContext {
   target: { x: number; z: number } | null;
   /** 索敌回调（camp → 目标位置；WorldMode 注入：敌人找玩家） */
   findTarget: (camp: string) => { x: number; z: number } | null;
+  /** ★ 候选目标（按优先级从高到低；如 祖宗[吸仇恨] > 玩家 > 友军）。
+   *  条件按序取第一个"在视野半径内"的候选；未提供时回退 findTarget。 */
+  targetCandidates?: (entity: EnemyBase) => { x: number; z: number }[];
   /** ★ 攻击意图入口（模式层注入 = executeAttack——近战/远程/范围统一分派） */
   attack: (opts: AttackOptions) => void;
   /** ★ 玩家世界坐标（AI 距离分级/波次生成用） */
