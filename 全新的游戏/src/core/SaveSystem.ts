@@ -95,6 +95,20 @@ export const SaveSystem = {
       delete (data as unknown as { deployedAllies?: unknown }).deployedAllies;
       delete (data.player as { equips?: unknown }).equips;
 
+      // ★ 旧档迁移：舰船油量/位置（航行/停靠系统）
+      if (!data.ship) {
+        data.ship = {
+          hp: 1000, maxHp: 1000, shield: 200, armor: 5,
+          fuel: 60, fuelMax: 60,
+          position: { x: 50.6, z: 101.6 },
+          techTree: [], turrets: [],
+        };
+      } else {
+        if (typeof data.ship.fuel !== 'number') data.ship.fuel = 60;
+        if (typeof data.ship.fuelMax !== 'number') data.ship.fuelMax = data.ship.fuel || 60;
+        if (!data.ship.position) data.ship.position = { x: 50.6, z: 101.6 };
+      }
+
       // ★ 旧档迁移：补足开局自带遗物（如祖宗发射器）——已有数量更高则保留
       if (!data.outOfRun) data.outOfRun = { owned: {} };
       const owned = data.outOfRun.owned ?? (data.outOfRun.owned = {});

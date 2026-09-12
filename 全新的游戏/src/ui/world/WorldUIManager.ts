@@ -63,6 +63,12 @@ export class WorldUIManager extends BaseInteractionUI {
   private respawnEl: HTMLDivElement | null = null;
   /** ★ 玩家最终属性提供者（WorldMode 注入 queryFinalStats；面板实时显示含限时 buff） */
   private playerStatsProvider: (() => FinalStats) | null = null;
+  /** ★ 航行期停靠按钮 */
+  private dockBtn: HTMLButtonElement | null = null;
+  /** ★ 舰船状态条（HP/油量；航行与探索均显示） */
+  private shipStatusEl: HTMLDivElement | null = null;
+  /** ★ 战斗 HUD 显隐（航行操船期隐藏：血条/准星/快捷栏/友军列表） */
+  private combatHudVisible = true;
 
   constructor(
     private session: GameSession,
@@ -113,9 +119,12 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 每帧更新（高频调用） */
   update(dt: number, ctx: WorldUIState): void {
     this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
-    this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
-    this.ammoPanel.update(ctx.ammoEntries);
-    this.allyHud.update(ctx.allies);
+    // ★ 航行操船期：战斗 HUD（血条/快捷栏/友军列表）不绘制也不更新
+    if (this.combatHudVisible) {
+      this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
+      this.ammoPanel.update(ctx.ammoEntries);
+      this.allyHud.update(ctx.allies);
+    }
     // ★ 背包打开时：实时刷新属性栏生命（关着零开销）
     if (this.isInventoryOpen) {
       this.characterStatsPanel.updateHp(ctx.playerStats.hp, ctx.playerStats.maxHp);
@@ -199,6 +208,65 @@ export class WorldUIManager extends BaseInteractionUI {
   /** ★ 注入玩家最终属性提供者（打开属性面板时实时取；缺省回退装备配置计算） */
   setPlayerStatsProvider(fn: (() => FinalStats) | null): void {
     this.playerStatsProvider = fn;
+  }
+
+  /** ★ 航行期停靠按钮（点击/按 F 停靠） */
+  setDockButton(onDock: () => void): void {
+    if (this.dockBtn) return;
+    const btn = document.createElement('button');
+    btn.textContent = '停靠 (F)';
+    btn.style.cssText = [
+      'position:fixed', 'left:50%', 'bottom:96px', 'transform:translateX(-50%)',
+      'z-index:60', 'padding:10px 34px', 'font-size:16px', 'font-weight:bold',
+      'color:#eaf6ff', 'background:rgba(24,44,72,0.85)',
+      'border:2px solid #6ab0ff', 'border-radius:10px', 'cursor:pointer',
+      'letter-spacing:2px', 'text-shadow:0 1px 3px #000',
+      'box-shadow:0 0 14px rgba(106,176,255,0.35)',
+    ].join(';');
+    btn.addEventListener('click', () => onDock());
+    document.body.appendChild(btn);
+    this.dockBtn = btn;
+  }
+
+  setDockButtonVisible(v: boolean): void {
+    if (this.dockBtn) this.dockBtn.style.display = v ? 'block' : 'none';
+  }
+
+  /** ★ 舰船状态条（顶部居中：HP + 油量；sailing=航行中标注） */
+  setShipStatus(hp: number, maxHp: number, fuel: number, fuelMax: number, sailing: boolean): void {
+    if (!this.shipStatusEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:10px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:60', 'pointer-events:none', 'text-align:center',
+        'font-size:14px', 'font-weight:bold', 'letter-spacing:1px',
+        'color:#cfe8ff', 'text-shadow:0 1px 3px #000,0 0 8px rgba(60,120,200,0.4)',
+      ].join(';');
+      document.body.appendChild(el);
+      this.shipStatusEl = el;
+    }
+    const hpRatio = maxHp > 0 ? hp / maxHp : 0;
+    this.shipStatusEl.style.color = hpRatio < 0.3 ? '#ff8a8a' : '#cfe8ff';
+    this.shipStatusEl.textContent =
+      `舰船 ${Math.ceil(hp)}/${Math.ceil(maxHp)}　油量 ${Math.ceil(fuel)}/${Math.ceil(fuelMax)}${sailing ? '　· 航行中' : ''}`;
+  }
+
+  /** ★ 舰船被摧毁面板（真结局触发；按钮"复活"回调，暂不删档） */
+  showShipDestroyedPanel(onRevive: () => void): void {
+    const content = document.createElement('div');
+    content.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:16px;padding:26px 40px;color:#f2e3d0;font-size:14px;text-align:center;';
+    const title = document.createElement('div');
+    title.textContent = '舰船已被摧毁';
+    title.style.cssText = 'font-size:22px;font-weight:bold;color:#ff8a8a;letter-spacing:3px;text-shadow:0 0 12px rgba(255,80,80,0.5);';
+    const body = document.createElement('div');
+    body.textContent = '本次航行到此为止。';
+    body.style.cssText = 'color:#c9b8a2;';
+    const btn = createButton({ label: '复活', size: 'md', onClick: () => {
+      this.closePanel('ship-destroyed');
+      onRevive();
+    } });
+    content.append(title, body, btn);
+    this.openPanel({ id: 'ship-destroyed', onOpen: () => {}, onClose: () => {}, render: () => content });
   }
 
   /** ★ 死亡复活倒计时（屏幕中央大字；null = 隐藏） */
@@ -325,6 +393,16 @@ export class WorldUIManager extends BaseInteractionUI {
 
   /** 准星显隐 */
   setCrosshairVisible(v: boolean): void {
+    this.crosshair.setVisible(v);
+  }
+
+  /** ★ 战斗 HUD 整体显隐（航行操船期 false；停靠进入探索后 true） */
+  setCombatHudVisible(v: boolean): void {
+    if (this.combatHudVisible === v) return;
+    this.combatHudVisible = v;
+    this.hud.setVisible(v);
+    this.ammoPanel.setVisible(v);
+    this.allyHud.setVisible(v);
     this.crosshair.setVisible(v);
   }
 
@@ -489,6 +567,13 @@ export class WorldUIManager extends BaseInteractionUI {
     this.crosshair.dispose();
     this.ammoPanel.dispose();
     this.allyHud.dispose();
+    // ★ 舰船相关 DOM（停靠按钮/状态条/复活倒计时）跨局防残留
+    this.dockBtn?.remove();
+    this.dockBtn = null;
+    this.shipStatusEl?.remove();
+    this.shipStatusEl = null;
+    this.respawnEl?.remove();
+    this.respawnEl = null;
     this.interactPrompt.remove();
     this.mapStyleBtn?.remove();
     this.mapStyleBtn = null;

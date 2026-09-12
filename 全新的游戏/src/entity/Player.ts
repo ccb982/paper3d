@@ -65,6 +65,8 @@ export class Player extends CharacterBase {
 
   /** ★ 致死前血量（复活回半用；掉坑等无伤致死时由 onDeath 现场补记） */
   preDeathHp = 0;
+  /** ★ 操作锁（航行阶段由舰船操控；锁定时输入清零，位置随舰船同步） */
+  controlLocked = false;
 
   /** ★ 受击：记录致死前血量（复活 = 死前一半，保底 10% 上限） */
   override onTakeDamage(dmg: number, source: EntityBase | null): void {
@@ -88,10 +90,10 @@ export class Player extends CharacterBase {
     this.dead = false;
   }
 
-  /** ★ 死亡等待期：锁操作（输入清零；位置/物理骨架照常），复活后恢复 */
+  /** ★ 死亡等待期 / 航行操船期：锁操作（输入清零；位置/物理骨架照常），恢复后接管 */
   private static _deadInput: InputActions | null = null;
   protected override onUpdate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
-    if (this.dead) {
+    if (this.dead || this.controlLocked) {
       if (!Player._deadInput) Player._deadInput = createInputActions();
       super.onUpdate(dt, Player._deadInput, cameraFrame);
       return;

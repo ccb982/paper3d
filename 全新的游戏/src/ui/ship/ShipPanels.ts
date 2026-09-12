@@ -38,7 +38,7 @@ export class ActionPanel extends SidePanel<ActionPanelProps> {
     div.innerHTML = `
       <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">
         <div>📅 第 ${s.meta.day} 天</div>
-        <div>🚢 舰船: HP ${ship.hp}/${ship.maxHp} | 护盾 ${ship.shield} | 装甲 ${ship.armor}</div>
+        <div>🚢 舰船: HP ${ship.hp}/${ship.maxHp} | 护盾 ${ship.shield} | 装甲 ${ship.armor} | 油量 ${Math.ceil(ship.fuel ?? 0)}/${ship.fuelMax ?? 60}</div>
         <div>🛡 炮塔: ${ship.turrets.length} 座</div>
       </div>
       <div style="margin-bottom:12px;padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;">

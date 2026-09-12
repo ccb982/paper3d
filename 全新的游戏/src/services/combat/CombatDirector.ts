@@ -46,6 +46,7 @@ export class CombatDirector {
 
   private onDamage(p: DamagePayload): void {
     if (p.dodged) return; // 闪避 = 完全落空，无打击反馈（浮动文字已有 Miss）
+    if (p.target.entity.kind === 'ship') return; // ★ 舰船受击不走打击手感（防持续 hitstop）
     const isPlayer = p.target.entity.kind === 'player';
     const r = isPlayer ? FEEL.playerHurt : p.crit ? FEEL.critHit : FEEL.normalHit;
     renderManager.hitstop(r.hitstop, r.scale);

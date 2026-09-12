@@ -4,7 +4,7 @@
 // 纯数据容器。物理通过 RigidBodyRef 引用（handle 由 PhysicsWorld 分配），
 // 实体本身不碰 rapier。未来扩展组件（Transform/Health/AI/Weapon...）。
 
-export type EntityKind = 'player' | 'ground' | 'enemy' | 'bullet' | 'item' | 'decoration';
+export type EntityKind = 'player' | 'ground' | 'enemy' | 'bullet' | 'item' | 'decoration' | 'ship';
 
 export interface RigidBodyRef {
   /** rapier 刚体 handle（由 PhysicsWorld 分配） */

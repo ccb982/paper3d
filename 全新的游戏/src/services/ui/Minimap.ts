@@ -90,7 +90,10 @@ export class Minimap {
       const pxw = ex - x0;
       const pzw = ez - z0;
       if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
-      const color = info.kind === 'player' ? '#ffffff' : info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
+      const color = info.kind === 'player' ? '#ffffff'
+        : info.kind === 'enemy' ? '#ff4444'
+        : info.kind === 'ship' ? '#66e0ff'
+        : '#ffdd55';
       ctx.fillStyle = color;
       ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
     }

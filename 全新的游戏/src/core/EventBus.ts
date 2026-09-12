@@ -46,6 +46,11 @@ export interface EventMap {
     target: import('../entity/EntityBase').EntityBase;
     source: import('../entity/EntityBase').EntityBase | null;
   };
+  // ★ 舰船受击（结算/UI/复活流程用）
+  'ship_damaged': {
+    damage: number;
+    destroyed: boolean;
+  };
   // ★ 无人机召唤事件（WorldMode 订阅；使用「可露希尔的无人机」道具触发）
   'drone_summon': { x?: number; z?: number };
   // ★ 祖宗召唤事件（WorldMode 订阅；使用「祖宗」局内道具触发 → 身前放置站桩友军）

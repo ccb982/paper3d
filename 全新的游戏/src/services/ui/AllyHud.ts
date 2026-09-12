@@ -63,6 +63,11 @@ export class AllyHud {
     });
   }
 
+  /** ★ 显隐（航行操船期隐藏友军列表） */
+  setVisible(v: boolean): void {
+    this.root.style.display = v ? 'grid' : 'none';
+  }
+
   /** 每帧：按 id 增删/排序行，刷新血条与数值（低血量呼吸） */
   update(allies: AllyHudEntry[]): void {
     // ★ 入场判定：空列表 → 出现行 = 进入地图，该批新建行各播一次入场动画；其余增删不播

@@ -24,6 +24,10 @@ import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import type { EntityBase } from '../entity/EntityBase';
 import { Player } from '../entity/Player';
+import { ShipEntity } from '../entity/ShipEntity';
+import { resolveDockSpawn } from '../services/ship/DockResolver';
+import { applyShipDamage, isShipDestroyed, reviveShip } from '../systems/ship/ShipState';
+import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
 import { droneFollowOffset } from '../services/fx/DroneFormation';
@@ -166,6 +170,14 @@ export const worldPerf = {
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
   player!: Player;
+  /** ★ 舰船实体（航行阶段可操控；停靠后静止，敌人索敌最优先） */
+  ship!: ShipEntity;
+  /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索 */
+  private phase: 'sail' | 'explore' = 'sail';
+  /** 舰船已毁（结算/复活等待：冻结玩法更新） */
+  private shipDestroyed = false;
+  /** 舰船状态 HUD 刷新节拍（0.1s） */
+  private shipStatusAccum = 0;
   /** ★ 地图上所有杂兵（按 chunk 波次生成，逐个独立 AI） */
   enemies: EnemyBase[] = [];
 
@@ -376,11 +388,20 @@ export class WorldMode implements IGameMode {
     renderManager.resetDay();
     sharedWaterMaterial.resetImpacts(); // ★ 清空落水扰动槽（防跨局残留）
 
-    // 玩家出生 = 中心 chunk 中心
-    const spawn = this.spawnPoint;
+    // ★ 本图起点 = 舰船当前位置（上次停靠点；航行阶段从这里出发）
+    const shipPos = ctx.session.ship?.position ?? { x: this.spawnPoint.x, z: this.spawnPoint.z };
+    const spawn = shipPos;
+
+    // ★ 每天出击满油（油量 = 每日航行预算）
+    if (ctx.session.ship) ctx.session.ship.fuel = ctx.session.ship.fuelMax;
 
     // ---- ★ 初始 chunk 数据环 + 出生区 3×3 强制构建（不等队列调度） ----
     this.chunks.bootstrap(spawn.x, spawn.z);
+
+    // ★ 舰船：航行阶段可操控（停靠后转为静止受击目标，敌人索敌最优先）
+    this.ship = new ShipEntity(this.entities, this.scene, ctx.session, spawn.x, spawn.z);
+    this.phase = 'sail';
+    this.shipDestroyed = false;
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -396,6 +417,8 @@ export class WorldMode implements IGameMode {
       moveSpeed: 5.0,
       facing: '后',
     });
+    // ★ 航行期：角色隐藏 + 操作锁（停靠时落到安全出生点接管）
+    this.player.controlLocked = true;
 
     // ★ 复活倒计时状态：每天出击重置（首死瞬间复活）
     this.runDeaths = 0;
@@ -479,6 +502,10 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
     // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
+    // ★ 航行期：停靠按钮（F 键同义）+ 隐藏战斗 HUD（停靠后才绘制）
+    this.worldUIManager.setDockButton(() => this.requestDock(false));
+    this.worldUIManager.setDockButtonVisible(true);
+    this.worldUIManager.setCombatHudVisible(false);
     // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
     // ★ boss4D 玩家专属：真实落地模式（每次跳跃必须踩实地面，禁止悬空穿/悬浮连跳）
     this.player.controller.requireRealLanding = this.chunks.isBoss4D;
@@ -585,10 +612,13 @@ export class WorldMode implements IGameMode {
       const pos = target.position;
       // ★ 遗物伤害时机管线：玩家受伤 / 造成伤害（与显示 LOD 无关，先派发再显示）
       if (this.session) {
-        const isPlayer = target.entity.kind === 'player';
-        dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, isPlayer ? 'onDamageTaken' : 'onDamageDealt', {
-          damage: payload.damage, crit: payload.crit, blocked: payload.blocked, dodged: payload.dodged,
-        });
+        const kind = target.entity.kind;
+        // ★ 舰船受击不算"造成/受到伤害"遗物时机（伤害由 ShipState 结算）
+        if (kind !== 'ship') {
+          dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, kind === 'player' ? 'onDamageTaken' : 'onDamageDealt', {
+            damage: payload.damage, crit: payload.crit, blocked: payload.blocked, dodged: payload.dodged,
+          });
+        }
       }
       // ★ 伤害显示 LOD：距相机 >20m 不显示（近战/远射数字只在眼前出现，不刷屏）
       //   ★ 例外：主角自己的攻击（子弹多为远距离命中）不受此限，保证打击反馈
@@ -699,11 +729,17 @@ export class WorldMode implements IGameMode {
       zoom = 0; // 滚轮已用于切换 → 本帧不缩放
     }
     if (this.binding.consumeSwitchItem()) this.cycleQuickItem();
-    if (this.binding.consumeUseItem() && !this.player.dead) this.useSelectedConsumable();
+    if (this.binding.consumeUseItem()) {
+      if (this.phase === 'sail') this.requestDock(false);       // 航行期：F = 停靠
+      else if (!this.player.dead) this.useSelectedConsumable(); // 探索期：F = 使用消耗品
+    }
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
     //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
     //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
     this.binding.setPointerLock(!this.worldUIManager.hasModalOpen);
+
+    // ★ 舰船已毁：冻结玩法更新（结算/复活面板接管；相机/输入不再跑）
+    if (this.shipDestroyed) return;
 
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
     if (input.held.interact) {
@@ -762,23 +798,24 @@ export class WorldMode implements IGameMode {
     this.aiCtx.focusX = pp.x;
     this.aiCtx.focusZ = pp.y;
 
-    // ---- AI 驱动 ----
-    aiSystem.updateAll(dt, this.aiCtx);
-
-    // ---- ★ 敌人波次节奏：定时在玩家 LOD 外环周围补一波 ----
-    this.respawnTimer -= dt;
-    if (this.respawnTimer <= 0) {
-      // 下一波随机 15~30s（弱化档：补怪更稀疏）
-      this.respawnTimer = 15 + Math.random() * 15;
-      this.spawnAmbientWave(pp.x, pp.y);
-    }
-    // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（预算减半） ----
-    this.scanAndSpawnWaves(pp.x, pp.y, 4);
-    // ---- ★ 远距敌人回收（1s 一拍；玩家走过的旧区清场） ----
-    this.cullAccum += dt;
-    if (this.cullAccum >= 1) {
-      this.cullAccum = 0;
-      this.cullFarEnemies(pp.x, pp.y);
+    // ---- AI / 波次：仅探索阶段（航行期不刷怪、不打船） ----
+    if (this.phase === 'explore') {
+      aiSystem.updateAll(dt, this.aiCtx);
+      // ---- ★ 敌人波次节奏：定时在玩家 LOD 外环周围补一波 ----
+      this.respawnTimer -= dt;
+      if (this.respawnTimer <= 0) {
+        // 下一波随机 15~30s（弱化档：补怪更稀疏）
+        this.respawnTimer = 15 + Math.random() * 15;
+        this.spawnAmbientWave(pp.x, pp.y);
+      }
+      // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（预算减半） ----
+      this.scanAndSpawnWaves(pp.x, pp.y, 4);
+      // ---- ★ 远距敌人回收（1s 一拍；玩家走过的旧区清场） ----
+      this.cullAccum += dt;
+      if (this.cullAccum >= 1) {
+        this.cullAccum = 0;
+        this.cullFarEnemies(pp.x, pp.y);
+      }
     }
     const _t4 = performance.now();
 
@@ -815,8 +852,16 @@ export class WorldMode implements IGameMode {
 
     // ---- 实体管线驱动 ----
     const _e1 = performance.now();
-    if (attackPressed && !this.player.dead) this.player.attack();
+    if (this.phase === 'explore' && attackPressed && !this.player.dead) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
+    // ★ 航行阶段：耗油/停靠推进；角色位置随舰船（相机/无人机/小地图跟随）
+    if (this.phase === 'sail') {
+      this.updateSail(dt);
+      const sp = this.ship.position;
+      this.player.position.x = sp.x;
+      this.player.position.z = sp.z;
+      this.player.position.y = sp.y;
+    }
     // ★ 效果队列只服务玩家（队友/敌人不参与、零每帧开销）：WorldMode 每帧显式推进
     if (this.player.effects) effectSystem.tickEntity(this.player, dt);
     // ★ 遗物属性脏标记：本帧统一刷新（基础+遗物+装备一次聚合；每帧最多一次，事件处只标记）
@@ -828,13 +873,13 @@ export class WorldMode implements IGameMode {
     this.updatePlayerRespawn(dt);
     const _e2 = performance.now();
 
-    // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感） ----
-    this.updateWaterEntry(this.player, dt);
+    // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感；航行期角色在船上） ----
+    if (this.phase === 'explore') this.updateWaterEntry(this.player, dt);
     for (const e of this.enemies) this.updateWaterEntry(e, dt);
     const _e3 = performance.now();
 
-    // ---- 角色地形跟随 ----
-    this.clampCharacter(this.player, dt);
+    // ---- 角色地形跟随（航行期角色位置由舰船同步） ----
+    if (this.phase === 'explore') this.clampCharacter(this.player, dt);
     for (const e of this.enemies) this.clampCharacter(e, dt);
     const _t5 = performance.now();
     worldPerf.drones = _e1 - _e0;
@@ -846,7 +891,7 @@ export class WorldMode implements IGameMode {
     worldPerf.nEntities = this.entities.count;
 
     // ---- ★ 测试地图：玩家钳在出生 chunk 内（世界只有这一块，无邻可走） ----
-    if (this.testChunk) {
+    if (this.testChunk && this.phase === 'explore') {
       const wp = this.player.position;
       wp.x = Math.min(CHUNK_SIZE - 1, Math.max(1, wp.x));
       wp.z = Math.min(CHUNK_SIZE - 1, Math.max(1, wp.z));
@@ -861,15 +906,27 @@ export class WorldMode implements IGameMode {
       height: this.player.position.y - jumpOff,
       jump: jumpOff,
     }, this.player.controller.isMoving);
-    // ★ 死亡等待复活期间隐藏本体（死亡动画是独立特效；复活后自动恢复）
-    this.player.visible = !this.cameraCtrl.isFirstPerson && !this.player.dead;
+    // ★ 死亡等待复活 / 航行操船期间隐藏本体（复活/停靠后自动恢复）
+    this.player.visible = !this.cameraCtrl.isFirstPerson && !this.player.dead && this.phase === 'explore';
 
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
     this.bulletCooldown -= dt;
-    if (!this.player.dead && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
+    if (this.phase === 'explore' && !this.player.dead && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
       this.bulletCooldown = PLAYER_ATTACK_INTERVAL * 100 / (100 + queryFinalStats(this.player).attackSpeed);
       this.firePlayerBullet();
+    }
+
+    // ---- ★ 舰船状态：HUD 节拍刷新 + 毁灭判定（真结局 → 结算/复活面板） ----
+    this.shipStatusAccum += dt;
+    if (this.shipStatusAccum >= 0.1 && this.session) {
+      this.shipStatusAccum = 0;
+      const s = this.session.ship;
+      this.worldUIManager.setShipStatus(s.hp, s.maxHp, s.fuel, s.fuelMax, this.phase === 'sail');
+    }
+    if (this.session && !this.shipDestroyed && isShipDestroyed(this.session)) {
+      this.shipDestroyed = true;
+      this.worldUIManager.showShipDestroyedPanel(() => this.reviveShip());
     }
 
     // （生命回复已入 EffectSystem 队列：EntityBase.update 每帧统一结算）
@@ -1560,11 +1617,16 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 敌人索敌候选（优先级从高到低）：
-   *  ① 祖宗（站桩·吸仇恨；TAUNT 半径内）② 玩家 ③ 一般友军（最近无人机）
+   *  ① 舰船（停靠后；用户定调：优先打舰船）② 祖宗（站桩·吸仇恨；TAUNT 半径内）
+   *  ③ 玩家 ④ 一般友军（最近无人机）
    *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列 */
   private enemyTargetCandidates(enemy: EnemyBase): { x: number; z: number }[] {
     const ep = enemy.position;
     const out: { x: number; z: number }[] = [];
+    // ★ 舰船最优先（仅探索阶段存在；hp<=0 由结算接管不再嘲讽）
+    if (this.phase === 'explore' && this.ship && this.ship.hp > 0) {
+      out.push({ x: this.ship.position.x, z: this.ship.position.z });
+    }
     let sentinel: DroneEntity | null = null, sentinelD2 = Infinity;
     let ally: DroneEntity | null = null, allyD2 = Infinity;
     for (const d of this.drones) {
@@ -1807,8 +1869,8 @@ export class WorldMode implements IGameMode {
     }
     const maxHp = queryFinalStats(this.player).maxHp;
     const hp = Math.max(this.player.preDeathHp * 0.5, maxHp * PLAYER_RESPAWN_FLOOR_HP_RATIO);
-    // ★ 复活点：传送回出生点 + 相机同步归位（死亡期间镜头留在死亡地点）
-    const sp = this.spawnPoint;
+    // ★ 复活点 = 舰船停靠点（出生点）；死亡期间镜头留在死亡地点
+    const sp = this.ship?.position ?? this.spawnPoint;
     const pos = this.player.position;
     pos.x = sp.x;
     pos.z = sp.z;
@@ -1818,6 +1880,55 @@ export class WorldMode implements IGameMode {
     this.playerRespawnShown = -1;
     this.worldUIManager.setRespawnCountdown(null);
     this.showFloatingAt(pos.x, pos.y, pos.z, '复活', 'heal');
+  }
+
+  /** ★ 航行推进：耗油 + 油尽惩罚（扣当前血量一半 → 当前位置就近安全点紧急停靠） */
+  private updateSail(dt: number): void {
+    const s = this.session;
+    if (!s || !this.ship) return;
+    const sh = s.ship;
+    sh.position.x = this.ship.position.x;
+    sh.position.z = this.ship.position.z;
+    if (!this.ship.sailable) return;
+    sh.fuel = Math.max(0, sh.fuel - travelConfig.fuelDrainPerSec * dt);
+    if (sh.fuel > 0) return;
+    // 油尽：扣半血 + 紧急停靠（就近安全点）
+    applyShipDamage(s, sh.hp * travelConfig.emergencyHpLossRatio);
+    this.ship.hp = sh.hp;
+    if (isShipDestroyed(s)) return; // 毁灭由结算/复活面板接管
+    this.requestDock(true);
+  }
+
+  /** ★ 停靠：DockResolver 安全落点（只避坑）→ 角色出生、进入探索；
+   *   舰船停在落点转为静止受击目标（敌人索敌最优先） */
+  private requestDock(emergency: boolean): void {
+    if (this.phase !== 'sail' || !this.session || !this.ship) return;
+    const sp = resolveDockSpawn(this.raster, this.ship.position.x, this.ship.position.z);
+    this.phase = 'explore';
+    // 舰船落点 = 出生点（吸附后的安全点）
+    this.ship.position.x = sp.x;
+    this.ship.position.z = sp.z;
+    this.ship.land();
+    this.session.ship.position = { x: sp.x, z: sp.z };
+    // 角色接管
+    const p = this.player;
+    p.controlLocked = false;
+    p.position.x = sp.x;
+    p.position.z = sp.z;
+    p.position.y = sp.y;
+    this.cameraCtrl.snapTo(sp.x, sp.y, sp.z);
+    this.worldUIManager.setDockButtonVisible(false);
+    this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
+    this.showFloatingAt(sp.x, sp.y + 1.6, sp.z, emergency ? '紧急停靠' : '已停靠', 'heal');
+  }
+
+  /** ★ 舰船复活（结算页按钮）：回满血满油，恢复探索 */
+  private reviveShip(): void {
+    if (!this.session || !this.ship) return;
+    reviveShip(this.session);
+    this.ship.hp = this.session.ship.hp;
+    this.shipDestroyed = false;
+    this.shipStatusAccum = 1; // 下一帧立刻刷新 HUD
   }
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */

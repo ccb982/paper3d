@@ -51,6 +51,11 @@ export class AmmoPanel {
     this.onSelect = cb;
   }
 
+  /** ★ 显隐（航行操船期隐藏快捷栏） */
+  setVisible(v: boolean): void {
+    this.root.style.display = v ? 'grid' : 'none';
+  }
+
   /** 每帧更新（DOM diff：数量/选中态变化才写） */
   update(entries: AmmoEntryView[]): void {
     // 移除消失的类型

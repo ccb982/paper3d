@@ -76,6 +76,11 @@ export interface GameSession {
     maxHp: number;
     shield: number;
     armor: number;
+    /** ★ 油量（每天出击重置为满；航行按时间消耗，耗尽 → 扣半血 + 紧急停靠） */
+    fuel: number;
+    fuelMax: number;
+    /** ★ 舰船本图位置（停靠后 = 出生点；断线/返程持久化） */
+    position: { x: number; z: number };
     techTree: string[];
     turrets: TurretState[];
   };
@@ -405,7 +410,12 @@ export function createNewSession(): GameSession {
       ship: createEmptyGrid(8, 10),
       player,
     },
-    ship: { hp: 1000, maxHp: 1000, shield: 200, armor: 5, techTree: [], turrets: [] },
+    ship: {
+      hp: 1000, maxHp: 1000, shield: 200, armor: 5,
+      fuel: 60, fuelMax: 60,
+      position: { x: 50.6, z: 101.6 },
+      techTree: [], turrets: [],
+    },
     gacha: { pityCounter: 0, totalPulls: 0 },
     dayProgress: { hasDepartedToday: false },
     // ★ 开局自带遗物：魔王的黑冠 + 祖宗发射器（维什戴尔的信物）；其余靠卡池抽取

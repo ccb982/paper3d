@@ -26,6 +26,11 @@ export class PlayerHud {
     document.body.appendChild(this.canvas);
   }
 
+  /** ★ 显隐（航行操船期隐藏战斗 HUD） */
+  setVisible(v: boolean): void {
+    this.canvas.style.display = v ? 'block' : 'none';
+  }
+
   /** 每帧绘制：10 段血条 + 低血量呼吸 + HP 数字 */
   update(hp: number, maxHp: number): void {
     const ctx = this.ctx;
