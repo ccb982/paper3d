@@ -8,6 +8,7 @@
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { sameTeam } from './teams';
+import { queryFinalStats } from './FinalStats';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import type { ShadowFrameSource } from '../render/SilhouetteShadow';
 
@@ -40,8 +41,12 @@ export interface BulletEntityOptions {
   lifetime?: number;
   /** 半径 */
   radius?: number;
-  /** 伤害值（穿透命中实体时结算） */
+  /** 伤害值（无 attackFormula 时使用；穿透命中实体时结算） */
   damage?: number;
+  /** ★ 攻击公式：命中瞬间实时查询 owner 最终攻击力（子弹不再开火快照） */
+  attackFormula?: { min: number; ratio: number } | null;
+  /** ★ 攻击公式的主人（伤害在命中时按主人实时攻击力现算） */
+  owner?: EntityBase | null;
   /** ★ 命中/落地后在该点生成站桩友军（itemId；如祖宗弹） */
   allyOnHit?: string;
 }
@@ -57,6 +62,10 @@ export class BulletEntity extends EntityBase {
   };
   private lifetime = 0;
   private damage = 0;
+  /** ★ 攻击公式（命中时按 owner 实时最终攻击力现算；null = 固定伤害） */
+  private attackFormula: { min: number; ratio: number } | null = null;
+  /** ★ 公式的主人（发射者） */
+  private owner: EntityBase | null = null;
   private active = false;
   /** ★ 命中/落地后生成站桩友军（itemId；null = 普通子弹） */
   allyOnHit: string | null = null;
@@ -126,6 +135,8 @@ export class BulletEntity extends EntityBase {
     this.camp = opts.camp;
     this.lifetime = opts.lifetime ?? 2;
     this.damage = opts.damage ?? 10;
+    this.attackFormula = opts.attackFormula ?? null;
+    this.owner = opts.owner ?? null;
     this.allyOnHit = opts.allyOnHit ?? null;
     this.entity.position.x = opts.x;
     this.entity.position.y = opts.y;
@@ -161,6 +172,16 @@ export class BulletEntity extends EntityBase {
     }
   }
 
+  /** ★ 命中瞬间伤害：有攻击公式 → 实时查询主人最终攻击力（遗物/装备/限时全实时）；
+   *  无公式 → 固定伤害值（开火时给定的炮弹） */
+  damageAtHit(): number {
+    const f = this.attackFormula;
+    if (f && this.owner) {
+      return Math.max(f.min, Math.round(queryFinalStats(this.owner).attackPower * f.ratio));
+    }
+    return this.damage;
+  }
+
   /** ★ 命中处理：同阵营忽略 / 一律交给命中解析层（敌人=伤害结算，静态世界=细分）。
    *   每次碰撞开始（started）只触发一次命中特效（不再一直播放）。
    *   子弹实体零世界认知：不判地形不判装饰物不扣伤害——全是解析层（组合层）的事。 */
@@ -177,7 +198,7 @@ export class BulletEntity extends EntityBase {
         y: this.entity.position.y,
         z: this.entity.position.z,
       },
-      damage: this.damage,
+      damage: this.damageAtHit(),
     });
   }
 

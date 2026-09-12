@@ -15,7 +15,7 @@ export type FinalStats = Pick<
   EntityBase,
   | 'hp' | 'maxHp' | 'attackPower' | 'defense'
   | 'attackSpeed' | 'damageReduction' | 'hpRegen'
-  | 'critRate' | 'critMult' | 'dodgeRate' | 'blockRate' | 'blockMult' | 'shield'
+  | 'critRate' | 'critMult' | 'dodgeRate' | 'blockRate' | 'blockMult'
 >;
 
 /** ★ 实时查询角色最终属性（零分配：返回实体本体；只读，勿长期持有引用语义以外的东西） */

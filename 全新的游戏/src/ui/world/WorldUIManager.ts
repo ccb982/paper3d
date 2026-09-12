@@ -24,6 +24,7 @@ import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
 import { CSS } from '../shared/UIConstants';
 import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
+import type { FinalStats } from '../../services/combat/FinalStats';
 
 export type FloatingTextType = 'normal' | 'crit' | 'heal' | 'miss' | 'pickup';
 
@@ -60,6 +61,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private iconRegistry: ItemIconRegistry | null = null;
   /** ★ 死亡复活倒计时（屏幕中央；null = 隐藏） */
   private respawnEl: HTMLDivElement | null = null;
+  /** ★ 玩家最终属性提供者（WorldMode 注入 queryFinalStats；面板实时显示含限时 buff） */
+  private playerStatsProvider: (() => FinalStats) | null = null;
 
   constructor(
     private session: GameSession,
@@ -191,6 +194,11 @@ export class WorldUIManager extends BaseInteractionUI {
       startY: screenY,
       speed,
     });
+  }
+
+  /** ★ 注入玩家最终属性提供者（打开属性面板时实时取；缺省回退装备配置计算） */
+  setPlayerStatsProvider(fn: (() => FinalStats) | null): void {
+    this.playerStatsProvider = fn;
   }
 
   /** ★ 死亡复活倒计时（屏幕中央大字；null = 隐藏） */
@@ -405,22 +413,37 @@ export class WorldUIManager extends BaseInteractionUI {
           description: cfg?.description ?? '',
         };
       });
-    const curAtk = Math.floor(perm.attackPower * (1 + temp.attackPct)) + temp.attackPower;
-    const curDef = Math.floor(perm.defense * (1 + temp.defensePct)) + temp.defense;
+    // ★ 优先用实时最终属性（含限时 buff/遗物变化）；无提供者时回退装备配置计算
+    const live = this.playerStatsProvider?.() ?? null;
+    const curAtk = live ? live.attackPower : Math.floor(perm.attackPower * (1 + temp.attackPct)) + temp.attackPower;
+    const curDef = live ? live.defense : Math.floor(perm.defense * (1 + temp.defensePct)) + temp.defense;
+    const curMaxHp = live ? live.maxHp : perm.maxHp + temp.maxHp;
+    const extras: { label: string; perm: number; temp: number; suffix?: string }[] = live
+      ? [
+          { label: '攻击速度', perm: 100, temp: live.attackSpeed },
+          { label: '伤害减免', perm: 0, temp: Math.round(live.damageReduction * 100), suffix: '%' },
+          { label: '生命回复', perm: 0, temp: +live.hpRegen.toFixed(2), suffix: '/s' },
+        ]
+      : [
+          { label: '攻击速度', perm: 100, temp: temp.attackSpeed },
+          { label: '伤害减免', perm: 0, temp: Math.round(temp.damageReduction * 100), suffix: '%' },
+          { label: '生命回复', perm: 0, temp: temp.hpRegen, suffix: '/s' },
+        ];
+    if (live) {
+      if (live.critRate > 0) extras.push({ label: '暴击率', perm: 0, temp: Math.round(live.critRate * 100), suffix: '%' });
+      if (live.dodgeRate > 0) extras.push({ label: '闪避率', perm: 0, temp: Math.round(live.dodgeRate * 100), suffix: '%' });
+      if (live.blockRate > 0) extras.push({ label: '格挡率', perm: 0, temp: Math.round(live.blockRate * 100), suffix: '%' });
+    }
     return {
       base: { maxHp: base.maxHp, attackPower: base.attackPower, defense: base.defense },
       perm: { maxHp: perm.maxHp, attackPower: perm.attackPower, defense: perm.defense },
-      temp: { maxHp: temp.maxHp, attackPower: curAtk - perm.attackPower, defense: curDef - perm.defense },
+      temp: { maxHp: curMaxHp - perm.maxHp, attackPower: curAtk - perm.attackPower, defense: curDef - perm.defense },
       current: {
-        maxHp: perm.maxHp + temp.maxHp,
+        maxHp: curMaxHp,
         attackPower: curAtk,
         defense: curDef,
       },
-      extras: [
-        { label: '攻击速度', perm: 100, temp: temp.attackSpeed },
-        { label: '伤害减免', perm: 0, temp: Math.round(temp.damageReduction * 100), suffix: '%' },
-        { label: '生命回复', perm: 0, temp: temp.hpRegen, suffix: '/s' },
-      ],
+      extras,
       day: this.session.meta.day,
       deaths: this.session.meta.deaths ?? 0,
       relics,

@@ -313,7 +313,7 @@ export class ItemManager {
   }
 
   /** ★ 局内装备临时属性：遍历出击槽汇总各装备 stats（卸载/换装即自动消失，与遗物永久加成区分）
-   *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen
+   *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen/crit系列
    *   取最高：damageReduction（方舟"庇护"同名效果取最高，不叠加）
    *   proc：healProc（取最后一件配置者；装备间不叠） */
   getEquipmentStats(): EquipmentStatsTotal {
@@ -321,6 +321,7 @@ export class ItemManager {
       maxHp: 0, attackPower: 0, attackPct: 0,
       defense: 0, defensePct: 0,
       attackSpeed: 0, damageReduction: 0, hpRegen: 0,
+      critRate: 0, critMult: 0, dodgeRate: 0, blockRate: 0, blockMult: 0,
       healProc: null,
     };
     const slots = this.session.player.slots;
@@ -337,6 +338,11 @@ export class ItemManager {
       out.attackSpeed += s.attackSpeed ?? 0;
       out.damageReduction = Math.max(out.damageReduction, s.damageReduction ?? 0);
       out.hpRegen += s.hpRegen ?? 0;
+      out.critRate += s.critRate ?? 0;
+      out.critMult += s.critMult ?? 0;
+      out.dodgeRate += s.dodgeRate ?? 0;
+      out.blockRate += s.blockRate ?? 0;
+      out.blockMult += s.blockMult ?? 0;
       if (s.healProc) out.healProc = s.healProc;
     }
     return out;

@@ -21,7 +21,7 @@ export interface IGameModeContext {
   /** 返回回调：WorldMode 按 E 键时触发 → main 进入 ShipMode */
   onReturn?: () => void;
   /** 出击回调：ShipMode 点击"出击"时触发 → main 进入 WorldMode */
-  onDepart?: (day: number, stats: import('./Session').PlayerCombatStats) => void;
+  onDepart?: (day: number) => void;
 }
 
 export interface IGameMode {

@@ -310,13 +310,11 @@ export function mergeDuplicatesInGrid(grid: InventoryGrid): boolean {
 // 4. 战斗属性计算（★ 唯一加成入口，完全配置驱动）
 // ============================================================
 
+/** ★ 显示用战斗属性（基础×遗物；供属性面板"永久"列参考，实体数值一律走 EffectSystem） */
 export interface PlayerCombatStats {
-  hp: number;
   maxHp: number;
   attackPower: number;
   defense: number;
-  /** ★ 复活等待时间倍率（1 = 无缩减；遗物 respawn_time 效果汇总） */
-  respawnTimeMul: number;
 }
 
 /** 遗物配置（原局外道具：只可抽取、不入背包；拥有即全局永久生效） */
@@ -334,21 +332,29 @@ export interface RelicItemConfig {
   effects?: RelicEffectConfig[];
 }
 
-export function computeCombatStats(
+/** ★ 遗物修正汇总（效果源 'relic' 的原始乘区；EffectSystem 消费） */
+export interface RelicStatModifiers {
+  mulHp: number;
+  mulAtk: number;
+  mulDef: number;
+  bonusHp: number;
+  bonusAtk: number;
+  bonusDef: number;
+  respawnTimeMul: number;
+}
+
+/** ★ 汇总遗物修正（computeCombatStats 与 EffectSystem 遗物源共用同一结算） */
+export function computeRelicModifiers(
   session: GameSession,
   relicItemConfig?: Record<string, RelicItemConfig>,
-): PlayerCombatStats {
-  const base = session.player;
+): RelicStatModifiers {
   const day = session.meta.day;
   const deaths = session.meta?.deaths ?? 0;
-
-  // ★ 属性累加器：各遗物效果管线独立写入，最后统一结算
   const acc: RelicStatAccumulator = {
     mulHp: 1, mulAtk: 1, mulDef: 1,
     bonusHp: 0, bonusAtk: 0, bonusDef: 0,
     respawnTimeMul: 1,
   };
-
   eachOwnedRelic(session, relicItemConfig ?? ({} as Record<string, RelicItemConfig>), (cfg, count) => {
     for (const eff of cfg.effects ?? []) {
       relicEffectRegistry.get(eff.type)?.modifyStats?.(
@@ -357,13 +363,20 @@ export function computeCombatStats(
       );
     }
   });
+  return acc;
+}
+
+export function computeCombatStats(
+  session: GameSession,
+  relicItemConfig?: Record<string, RelicItemConfig>,
+): PlayerCombatStats {
+  const base = session.player;
+  const acc = computeRelicModifiers(session, relicItemConfig);
 
   return {
-    hp: base.hp,
     maxHp: Math.floor(base.maxHp * acc.mulHp) + acc.bonusHp,
     attackPower: Math.floor(base.attackPower * acc.mulAtk) + acc.bonusAtk,
     defense: Math.floor(base.defense * acc.mulDef) + acc.bonusDef,
-    respawnTimeMul: acc.respawnTimeMul,
   };
 }
 

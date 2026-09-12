@@ -49,8 +49,7 @@ import { applyDamage } from '../services/combat/DamagePipeline';
 import { effectSystem } from '../services/combat/EffectSystem';
 import { queryFinalStats } from '../services/combat/FinalStats';
 import { eventBus } from '../core/EventBus';
-import type { PlayerCombatStats } from '../core/Session';
-import { computeCombatStats } from '../core/Session';
+import { computeRelicModifiers } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent } from '../core/RelicEffects';
@@ -115,7 +114,6 @@ const PLAYER_RESPAWN_FLOOR_HP_RATIO = 0.1;
 
 export interface WorldModeEnterContext extends IGameModeContext {
   day: number;
-  combatStats: import('../core/Session').PlayerCombatStats;
   protagonistAsset: FtxAsset;
   bulletAsset?: Asset | FtxAsset;
   /** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
@@ -236,8 +234,8 @@ export class WorldMode implements IGameMode {
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 祖宗素材（站桩友军；缺省回退无人机素材，美术到位后只换路径） */
   private sentinelAsset: Asset | FtxAsset | null = null;
-  /** ★ 永久战斗属性（基础 + 遗物；局内装备在其上临时叠加） */
-  private permStats: PlayerCombatStats | null = null;
+  /** ★ 遗物复活时间倍率（computeRelicModifiers 汇总；复活倒计时结算用） */
+  private relicRespawnMul = 1;
   /** ★ 当前选择的快捷物品（'default' = 普通弹药；其余 = 弹药/消耗品 itemId）
    *  Q 切换 / 点击切换；弹药由攻击键发射，消耗品由 F 使用 */
   private selectedQuickItem = 'default';
@@ -261,6 +259,8 @@ export class WorldMode implements IGameMode {
   private _healProcTargets: EnemyBase[] = [];
   /** ★ 当天出击内死亡次数（复活倒计时阶梯；每次进入世界清零 → 每天重置） */
   private runDeaths = 0;
+  /** ★ 遗物属性脏标记（死亡/击杀等事件可能改变遗物结算；每帧最多重算一次） */
+  private statsDirty = false;
   /** ★ 玩家复活倒计时（秒；玩家 dead 时倒数，到 0 复活）——与刷怪波次 respawnTimer 区分 */
   private playerRespawnTimer = 0;
   /** 倒计时 UI 上次刷新值（0.1s 节流，避免每帧写 DOM） */
@@ -408,9 +408,8 @@ export class WorldMode implements IGameMode {
       itemManager: this.itemManager,
     });
 
-    // ---- ★ 应用战斗属性（永久 = 基础 + 遗物；装备临时加成由 applyEquipmentStats 叠加） ----
-    this.permStats = ctx.combatStats;
-    this.applyEquipmentStats();
+    // ---- ★ 应用战斗属性：基础（存档原值）× 遗物（效果源）× 装备（效果源），统一走 EffectSystem ----
+    this.refreshPlayerStats();
     // ★ 每次出击满血（上限含遗物/装备加成，不沿用上次剩余血量）
     this.player.hp = queryFinalStats(this.player).maxHp;
 
@@ -472,6 +471,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster,
     );
+    // ★ 属性面板实时数据源（含限时 buff/遗物变化的最终属性）
+    this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
     // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
     // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
@@ -616,10 +617,8 @@ export class WorldMode implements IGameMode {
         s.meta.deaths = (s.meta.deaths ?? 0) + 1;
         // ★ 遗物死亡时机管线
         dispatchRelicEvent(s, RELIC_ITEM_CONFIG, 'onPlayerDeath', {});
-        // ★ 死亡后重算永久属性并同步效果队列：砾小姐的爱等"每次死亡"遗物实时生效
-        //   （否则实体仍用进图快照，子弹/无人机/祖宗伤害不涨）
-        this.permStats = computeCombatStats(s, RELIC_ITEM_CONFIG);
-        this.applyEquipmentStats();
+        // ★ 标记属性脏：砾小姐的爱等"每次死亡"遗物实时生效（本帧统一重算，非手动刷点）
+        this.statsDirty = true;
         // ★ 复活倒计时：按当天出击内累计死亡次数分档（每天重置；首死 0s 瞬间复活）
         this.runDeaths++;
         let delay = 0;
@@ -627,7 +626,7 @@ export class WorldMode implements IGameMode {
           if (this.runDeaths >= t.minDeaths) delay = t.delay;
         }
         // ★ 遗物缩减（砾小姐的爱等：respawnTimeMul < 1）
-        this.playerRespawnTimer = delay * (this.permStats?.respawnTimeMul ?? 1);
+        this.playerRespawnTimer = delay * this.relicRespawnMul;
         this.playerRespawnShown = -1;
         return; // 玩家不算杂兵、不掉落
       }
@@ -643,8 +642,11 @@ export class WorldMode implements IGameMode {
       this.rollEnemyDrops(enemy);
       const idx = this.enemies.indexOf(enemy);
       if (idx !== -1) this.enemies.splice(idx, 1);
-      // ★ 遗物击杀时机管线
-      if (this.session) dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
+      // ★ 遗物击杀时机管线（脏标记：击杀类属性遗物统一在本帧重算）
+      if (this.session) {
+        dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
+        this.statsDirty = true;
+      }
     });
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
@@ -656,8 +658,8 @@ export class WorldMode implements IGameMode {
     });
     // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
     this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
-      // ★ 装备临时属性重算（穿脱/互换立即生效；与友军生成无关，先于无人机素材守卫）
-      this.applyEquipmentStats();
+      // ★ 装备属性重算（穿脱/互换立即生效；与友军生成无关，先于无人机素材守卫）
+      this.refreshPlayerStats();
       if (!this.droneAsset) return;
       this.despawnAllyAt(payload.slotIndex);
       if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
@@ -797,8 +799,7 @@ export class WorldMode implements IGameMode {
         d.playerPos.x = dp.x;
         d.playerPos.y = dp.y;
         d.playerPos.z = dp.z;
-        // ★ 友军伤害随主角攻击力（统一走最终属性实时查询）
-        d.ownerAttackPower = queryFinalStats(this.player).attackPower;
+        // （友军伤害在攻击瞬间 queryFinalStats(d.owner) 实时查询，无需逐帧注入）
         d.updateAI(dt, this.camera);
       }
     }
@@ -809,6 +810,11 @@ export class WorldMode implements IGameMode {
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
     // ★ 效果队列只服务玩家（队友/敌人不参与、零每帧开销）：WorldMode 每帧显式推进
     if (this.player.effects) effectSystem.tickEntity(this.player, dt);
+    // ★ 遗物属性脏标记：本帧统一刷新（基础+遗物+装备一次聚合；每帧最多一次，事件处只标记）
+    if (this.statsDirty) {
+      this.statsDirty = false;
+      this.refreshPlayerStats();
+    }
     // ★ 复活倒计时推进（玩家死亡等待期）
     this.updatePlayerRespawn(dt);
     const _e2 = performance.now();
@@ -943,7 +949,7 @@ export class WorldMode implements IGameMode {
     this.sentinelTex = null;
     this.drones = [];
     this.droneAsset = null;
-    this.permStats = null;
+    this.relicRespawnMul = 1;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
 
@@ -1105,16 +1111,13 @@ export class WorldMode implements IGameMode {
     // ★ 轻微弹道修正：朝准星小偏角内的敌人修正一点点（手感向）
     const assisted = this.aimAssist(muzzle, dx, dy, dz);
     dx = assisted.x; dy = assisted.y; dz = assisted.z;
-    // ★ 子弹伤害 = max(下限, 角色攻击力 × 系数)（遗物/装备/限时效果实时参与）
-    const dmg = Math.max(
-      PLAYER_BULLET_MIN_DAMAGE,
-      Math.round(queryFinalStats(this.player).attackPower * PLAYER_BULLET_ATK_RATIO),
-    );
+    // ★ 子弹伤害在命中瞬间按角色最终攻击力现算（攻击公式：遗物/装备/限时效果全实时）
     executeAttack(this.entities, this.bullets, {
       type: 'projectile', source: this.player,
       x: muzzle.x + dx * 1.5, y: muzzle.y + dy * 1.5, z: muzzle.z + dz * 1.5,
       dirX: dx, dirY: dy, dirZ: dz,
-      speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME, damage: dmg,
+      speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
+      attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
     });
   }
 
@@ -1344,8 +1347,8 @@ export class WorldMode implements IGameMode {
       return;
     }
     if (other) {
-      const r = applyDamage(damage, self, other);
-      eventBus.emit('damage', { target: other, source: self, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+      // 伤害/事件统一在 applyDamage 内结算（base 已含攻击力 → 不再叠加）
+      applyDamage(damage, self, other);
       return;
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
@@ -1420,6 +1423,7 @@ export class WorldMode implements IGameMode {
     });
     drone.slotIndex = slotIndex;
     drone.itemId = itemId;
+    drone.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
     this.drones.push(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
@@ -1438,6 +1442,7 @@ export class WorldMode implements IGameMode {
     s.stationary = true;
     s.stationaryBaseY = py;
     s.rangedAttack = (t) => this.fireSentinelShot(s, t);
+    s.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
     this.drones.push(s);
     if (this.renderer) {
       s.setRenderer(this.renderer);
@@ -1519,8 +1524,8 @@ export class WorldMode implements IGameMode {
         const dmg = rec.damage >= 0
           ? rec.damage
           : Math.max(SENTINEL_IMPACT_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_IMPACT_ATK_RATIO));
-        const r = applyDamage(dmg, src, hit);
-        eventBus.emit('damage', { target: hit, source: src, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+        // 玩家祖宗弹的 dmg 已含攻击力 → 不再叠加 source.attackPower（修双计）
+        applyDamage(dmg, src, hit);
       }
       if (land || hit) {
         this.sentinelShots.splice(i, 1);
@@ -1682,19 +1687,38 @@ export class WorldMode implements IGameMode {
     return { x: mx, y: my, z: mz };
   }
 
-  /** ★ 同步装备到效果队列：永久（基础+遗物）设为实体基础值，装备作为 'equipment' 源原子替换。
-   *   换装/卸载/消耗品 buff 全部由 EffectSystem 统一聚合（不再直接写字段）。 */
-  private applyEquipmentStats(): void {
-    const perm = this.permStats;
-    if (!perm || !this.player || !this.itemManager) return;
+  /** ★ 统一属性刷新（唯一入口）：基础 = 存档原值；遗物 = 'relic' 效果源；装备 = 'equipment' 效果源；
+   *   限时效果 = 队列内 consumable 源。三者在 EffectSystem 一次聚合，实体字段即最终值。 */
+  private refreshPlayerStats(): void {
+    const s = this.session;
+    if (!s || !this.player || !this.itemManager) return;
+    // ---- 基础层：存档原值（派生值一律由效果源叠加） ----
     effectSystem.setBaseStats(this.player, {
-      maxHp: perm.maxHp,
-      attackPower: perm.attackPower,
-      defense: perm.defense,
+      maxHp: s.player.maxHp,
+      attackPower: s.player.attackPower,
+      defense: s.player.defense,
       attackSpeed: 0,
       damageReduction: 0,
       hpRegen: 0,
     });
+    // ---- 遗物层：复利乘区 + 加值（每次死亡/击杀后由 statsDirty 触发重算） ----
+    const mods = computeRelicModifiers(s, RELIC_ITEM_CONFIG);
+    this.relicRespawnMul = mods.respawnTimeMul;
+    effectSystem.setSourceEffects(this.player, 'relic', [{
+      id: 'relics',
+      duration: Infinity,
+      mul: {
+        maxHp: mods.mulHp,
+        attackPower: mods.mulAtk,
+        defense: mods.mulDef,
+      },
+      flat: {
+        maxHp: mods.bonusHp,
+        attackPower: mods.bonusAtk,
+        defense: mods.bonusDef,
+      },
+    }]);
+    // ---- 装备层：加算 + 加法乘区（弹药/装备/消耗品 buff 由队列各自维护） ----
     const eq = this.itemManager.getEquipmentStats();
     effectSystem.setSourceEffects(this.player, 'equipment', [{
       id: 'equipment',
@@ -1706,6 +1730,11 @@ export class WorldMode implements IGameMode {
         attackSpeed: eq.attackSpeed,
         damageReduction: eq.damageReduction,
         hpRegen: eq.hpRegen,
+        critRate: eq.critRate,
+        critMult: eq.critMult,
+        dodgeRate: eq.dodgeRate,
+        blockRate: eq.blockRate,
+        blockMult: eq.blockMult,
       },
       pct: {
         attackPower: eq.attackPct,
@@ -1742,9 +1771,8 @@ export class WorldMode implements IGameMode {
     });
     const n = Math.min(proc.maxTargets, targets.length);
     for (let i = 0; i < n; i++) {
-      const t = targets[i];
-      t.onTakeDamage(dmg, p);
-      eventBus.emit('damage', { target: t, source: p, damage: dmg, crit: false, dodged: false, blocked: false });
+      // ★ 法术口径：跳过减法防御（其余照常，事件统一在 applyDamage）
+      applyDamage(dmg, p, targets[i], { type: 'arts', ignoreDefense: true });
     }
   }
 
@@ -1780,8 +1808,7 @@ export class WorldMode implements IGameMode {
   /** ★ 祖宗激光命中结算（红色激光是瞬时 hitscan；光束特效由祖宗实体播放） */
   private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
     const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
-    const r = applyDamage(dmg, from, target);
-    eventBus.emit('damage', { target, source: from, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+    applyDamage(dmg, from, target); // 事件统一在 applyDamage
   }
 
   /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。

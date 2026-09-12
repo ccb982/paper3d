@@ -292,8 +292,6 @@ export abstract class EntityBase {
   blockRate = 0;
   /** 格挡减伤倍率（格挡时伤害 × blockMult） */
   blockMult = 0.5;
-  /** 护盾值（modifierShield：先扣护盾再扣血） */
-  shield = 0;
 
   /** ★ 活跃效果列表（EffectSystem 队列；当前仅玩家使用。
    *  tick 由 WorldMode 每帧显式调用——队友/敌人不参与，无每帧开销） */

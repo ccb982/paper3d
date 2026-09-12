@@ -25,6 +25,7 @@
 //   - damageReduction：max(base, 各效果)（"庇护"同名取最高，不叠加）
 
 import type { EntityBase } from '../../entity/EntityBase';
+import { applyHeal } from './Healing';
 
 /** 效果来源分组（同源替换、跨源叠加） */
 export type EffectSource = 'equipment' | 'consumable' | 'relic' | 'aura';
@@ -60,8 +61,10 @@ export interface EffectDef {
   stackMode?: 'refresh' | 'stack' | 'extend';
   /** 加算修正 */
   flat?: Partial<Record<EffectStatKey, number>>;
-  /** 乘算修正（对 maxHp/attackPower/defense/critMult/blockMult 生效） */
+  /** 加法乘区（多个效果求和：base × mul × (1 + Σpct) + Σflat） */
   pct?: Partial<Record<EffectStatKey, number>>;
+  /** ★ 乘法乘区（多个效果相乘：遗物复利等；与 pct 独立） */
+  mul?: Partial<Record<EffectStatKey, number>>;
   /** ★ 治疗转伤害 proc（多个效果时取 ratio 最高者） */
   healProc?: HealProcDef;
 }
@@ -79,6 +82,7 @@ export interface ActiveEffect {
   stackMode: 'refresh' | 'stack' | 'extend';
   flat: Partial<Record<EffectStatKey, number>>;
   pct: Partial<Record<EffectStatKey, number>>;
+  mul?: Partial<Record<EffectStatKey, number>>;
   healProc?: HealProcDef;
 }
 
@@ -109,6 +113,7 @@ class EffectSystem {
       }
       existing.flat = def.flat ? { ...def.flat } : {};
       existing.pct = def.pct ? { ...def.pct } : {};
+      existing.mul = def.mul ? { ...def.mul } : undefined;
       existing.healProc = def.healProc ? { ...def.healProc } : undefined;
       this.applyAggregated(e);
       return existing;
@@ -123,22 +128,12 @@ class EffectSystem {
       stackMode: def.stackMode ?? 'refresh',
       flat: def.flat ? { ...def.flat } : {},
       pct: def.pct ? { ...def.pct } : {},
+      mul: def.mul ? { ...def.mul } : undefined,
       healProc: def.healProc ? { ...def.healProc } : undefined,
     };
     e.effects.push(fx);
     this.applyAggregated(e);
     return fx;
-  }
-
-  /** 移除效果（返回是否存在） */
-  removeEffect(e: EntityBase, id: string): boolean {
-    if (!e.effects) return false;
-    const i = e.effects.findIndex((f) => f.id === id);
-    if (i < 0) return false;
-    e.effects.splice(i, 1);
-    if (e.effects.length === 0) e.effects = null;
-    this.applyAggregated(e);
-    return true;
   }
 
   /** ★ 原子替换某来源的全部效果（装备同步用：换装/卸载一次到位） */
@@ -154,12 +149,7 @@ class EffectSystem {
     this.applyAggregated(e);
   }
 
-  /** 是否存在某效果 */
-  hasEffect(e: EntityBase, id: string): boolean {
-    return !!e.effects?.some((f) => f.id === id);
-  }
-
-  /** ★ 每帧推进（EntityBase.update 骨架 ⓪ 调用；无效果实体零开销） */
+  /** ★ 每帧推进（WorldMode 对玩家调用；无效果实体不参与） */
   tickEntity(e: EntityBase, dt: number): void {
     const list = e.effects;
     if (!list) return;
@@ -175,14 +165,8 @@ class EffectSystem {
     }
     if (list.length === 0) e.effects = null;
     if (expired) this.applyAggregated(e);
-    // ★ 生命回复（聚合后的 hpRegen；死亡/满血不结算）→ 治疗量进 healBuffer（治疗转伤害 proc 燃料）
-    if (e.hpRegen > 0 && e.hp > 0 && e.hp < e.maxHp) {
-      const healed = Math.min(e.maxHp - e.hp, e.hpRegen * dt);
-      if (healed > 0) {
-        e.hp += healed;
-        e.healBuffer += healed;
-      }
-    }
+    // ★ 生命回复（聚合后的 hpRegen）→ 统一治疗入口（截断/死亡跳过/healBuffer 累积）
+    if (e.hpRegen > 0) applyHeal(e, e.hpRegen * dt);
   }
 
   /** 基础属性捕获：首次挂效果时把被修正的键现值记为底（避免叠加漂移） */
@@ -195,9 +179,10 @@ class EffectSystem {
     };
     if (def.flat) for (const k of Object.keys(def.flat) as EffectStatKey[]) put(k);
     if (def.pct) for (const k of Object.keys(def.pct) as EffectStatKey[]) put(k);
+    if (def.mul) for (const k of Object.keys(def.mul) as EffectStatKey[]) put(k);
   }
 
-  /** ★ 属性聚合：base × (1+pct) + flat → 写回实体（伤害管线/开火逻辑只读实体字段） */
+  /** ★ 属性聚合：base × Πmul × (1 + Σpct) + Σflat → 写回实体（伤害管线/开火逻辑只读实体字段） */
   private applyAggregated(e: EntityBase): void {
     const statOf = (k: EffectStatKey): number => {
       const base = e.statBase?.[k];
@@ -206,6 +191,7 @@ class EffectSystem {
     };
     const flat: Record<string, number> = {};
     const pct: Record<string, number> = {};
+    const mul: Record<string, number> = {};
     let drMax = 0;
     const list = e.effects;
     if (list) {
@@ -219,22 +205,29 @@ class EffectSystem {
         for (const k of Object.keys(fx.pct) as EffectStatKey[]) {
           pct[k] = (pct[k] ?? 0) + (fx.pct[k] ?? 0) * n;
         }
+        // ★ 乘法乘区：逐效果相乘（层数 = 幂）
+        if (fx.mul) {
+          for (const k of Object.keys(fx.mul) as EffectStatKey[]) {
+            mul[k] = (mul[k] ?? 1) * Math.pow(fx.mul[k] ?? 1, n);
+          }
+        }
       }
     }
     const F = (k: EffectStatKey): number => flat[k] ?? 0;
     const P = (k: EffectStatKey): number => pct[k] ?? 0;
+    const M = (k: EffectStatKey): number => mul[k] ?? 1;
 
-    e.maxHp = Math.floor(statOf('maxHp') * (1 + P('maxHp')) + F('maxHp'));
-    e.attackPower = Math.floor(statOf('attackPower') * (1 + P('attackPower')) + F('attackPower'));
-    e.defense = Math.floor(statOf('defense') * (1 + P('defense')) + F('defense'));
-    e.critMult = statOf('critMult') * (1 + P('critMult')) + F('critMult');
-    e.blockMult = statOf('blockMult') * (1 + P('blockMult')) + F('blockMult');
-    e.attackSpeed = statOf('attackSpeed') + F('attackSpeed');
-    e.hpRegen = statOf('hpRegen') + F('hpRegen');
-    e.critRate = statOf('critRate') + F('critRate');
-    e.dodgeRate = statOf('dodgeRate') + F('dodgeRate');
-    e.blockRate = statOf('blockRate') + F('blockRate');
-    e.damageReduction = Math.min(0.9, Math.max(statOf('damageReduction'), drMax));
+    e.maxHp = Math.floor(statOf('maxHp') * M('maxHp') * (1 + P('maxHp')) + F('maxHp'));
+    e.attackPower = Math.floor(statOf('attackPower') * M('attackPower') * (1 + P('attackPower')) + F('attackPower'));
+    e.defense = Math.floor(statOf('defense') * M('defense') * (1 + P('defense')) + F('defense'));
+    e.critMult = statOf('critMult') * M('critMult') * (1 + P('critMult')) + F('critMult');
+    e.blockMult = statOf('blockMult') * M('blockMult') * (1 + P('blockMult')) + F('blockMult');
+    e.attackSpeed = statOf('attackSpeed') * M('attackSpeed') + F('attackSpeed');
+    e.hpRegen = statOf('hpRegen') * M('hpRegen') + F('hpRegen');
+    e.critRate = statOf('critRate') * M('critRate') + F('critRate');
+    e.dodgeRate = statOf('dodgeRate') * M('dodgeRate') + F('dodgeRate');
+    e.blockRate = statOf('blockRate') * M('blockRate') + F('blockRate');
+    e.damageReduction = Math.min(0.9, Math.max(statOf('damageReduction') * M('damageReduction'), drMax));
     // ★ 治疗转伤害 proc（多效果取 ratio 最高；无则清空）
     let proc: HealProcDef | null = null;
     if (list) {

@@ -38,6 +38,8 @@ export interface EventMap {
     crit: boolean;
     dodged: boolean;
     blocked: boolean;
+    /** ★ 伤害类型（'physical' 默认；类型化管线后由 applyDamage 统一带出） */
+    type?: string;
   };
   // ★ 击杀事件（CombatDirector 编排击杀定格等）
   'killed': {

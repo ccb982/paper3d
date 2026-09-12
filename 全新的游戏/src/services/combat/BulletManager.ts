@@ -33,6 +33,10 @@ export interface SpawnBulletOptions {
   camp: 'player' | 'ally' | 'enemy';
   lifetime?: number;
   damage?: number;
+  /** ★ 攻击公式（命中时按 owner 实时最终攻击力现算；与 damage 二选一） */
+  attackFormula?: { min: number; ratio: number } | null;
+  /** ★ 公式主人（executeAttack 自动取 source） */
+  owner?: import('../../entity/EntityBase').EntityBase | null;
   /** ★ 命中/落地后在该点生成站桩友军（itemId；如祖宗弹） */
   allyOnHit?: string;
 }

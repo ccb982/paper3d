@@ -11,6 +11,7 @@ import { SLOT_COUNT } from './Session';
 import type { EntityBase } from '../entity/EntityBase';
 import { eventBus } from './EventBus';
 import { effectSystem } from '../services/combat/EffectSystem';
+import { applyHeal } from '../services/combat/Healing';
 
 /** 物品效果执行上下文 */
 export interface ItemEffectContext {
@@ -43,20 +44,17 @@ export const effectRegistry = new Map<string, ItemEffectHandler>();
 
 effectRegistry.set('heal', (params, ctx) => {
   const value = params.value ?? 30;
-  // ★ 世界内：治疗实体（与 HUD/效果队列同源，且作为"治疗转伤害"proc 的燃料）；
-  //   舰船上（无实体）：治疗存档数值
+  // ★ 世界内：走统一治疗入口（截断/死亡跳过/healBuffer 累积）
   const entity = ctx.user;
-  if (entity?.dead) return { success: false, message: '等待复活中' };
-  const maxHp = entity ? entity.maxHp : ctx.session.player.maxHp;
-  const hp = entity ? entity.hp : ctx.session.player.hp;
-  // 999 = 恢复全部
-  const actual = Math.max(0, value >= 999 ? maxHp - hp : Math.min(maxHp - hp, value));
   if (entity) {
-    entity.hp += actual;
-    entity.healBuffer += actual;
-  } else {
-    ctx.session.player.hp += actual;
+    if (entity.dead) return { success: false, message: '等待复活中' };
+    const actual = applyHeal(entity, value >= 999 ? entity.maxHp : value);
+    return { success: true, healAmount: actual, message: `回复 ${actual} 点生命` };
   }
+  // ★ 舰船上（无实体）：治疗存档数值
+  const player = ctx.session.player;
+  const actual = Math.max(0, value >= 999 ? player.maxHp - player.hp : Math.min(player.maxHp - player.hp, value));
+  player.hp += actual;
   return { success: true, healAmount: actual, message: `回复 ${actual} 点生命` };
 });
 

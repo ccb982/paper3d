@@ -11,7 +11,6 @@ import type { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { applyDamage } from './DamagePipeline';
 import { sameTeam } from './teams';
-import { eventBus } from '../../core/EventBus';
 import { BulletManager, type SpawnBulletOptions } from './BulletManager';
 
 /** 阵营类型 */
@@ -56,7 +55,8 @@ export function executeAttack(
 ): void {
   switch (opts.type) {
     case 'projectile': {
-      bullets?.spawn(opts);
+      // ★ owner = 发射者：子弹命中时按主人实时最终攻击力现算（攻击公式）
+      bullets?.spawn({ ...opts, owner: opts.source });
       break;
     }
     case 'melee': {
@@ -65,9 +65,8 @@ export function executeAttack(
       for (const t of targets) {
         if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 2) continue; // 高度过滤（不同层）
-        const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
-        // ★ 近战伤害同样上事件（浮动数字/导演反馈与子弹一致——无人机/敌人近战可见）
-        eventBus.emit('damage', { target: t, source: opts.source, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+        // ★ 近战 = "AI 基础伤害 + 攻方攻击力"：显式开启叠加（事件由 applyDamage 统一发）
+        applyDamage(opts.damage, opts.source, t, { type: opts.dmgType, includeSourceAttack: true });
       }
       break;
     }
@@ -77,8 +76,7 @@ export function executeAttack(
       for (const t of targets) {
         if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 3) continue;
-        const r = applyDamage(opts.damage, opts.source, t, opts.dmgType);
-        eventBus.emit('damage', { target: t, source: opts.source, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
+        applyDamage(opts.damage, opts.source, t, { type: opts.dmgType, includeSourceAttack: true });
       }
       break;
     }

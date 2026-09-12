@@ -22,6 +22,7 @@ import type { FtxAsset } from '../vendor/player/FtxAsset';
 import { DroneCompositeRender } from '../services/render/DroneCompositeRender';
 import { DroneBeamEffect } from '../services/render/DroneBeam';
 import { executeAttack } from '../services/combat/Attack';
+import { queryFinalStats } from '../services/combat/FinalStats';
 import { RasterMap } from '../services/map/RasterMap';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
@@ -35,7 +36,7 @@ const ATTACK_RANGE = 1.8;   // 攻击范围（米；攻击范围小 → 必须�
 const RETURN_DIST = 30;     // 与玩家距离非常远 → 强制返回（米）
 const RETURN_OK_DIST = 2.5; // 返回至多近算归队（米）
 const ATTACK_CD = 1.2;      // 挥击冷却（秒）
-/** ★ 无人机伤害 = max(下限, 主人攻击力 × 系数)（WorldMode 每帧注入 ownerAttackPower） */
+/** ★ 无人机伤害 = max(下限, 主人攻击力 × 系数)（攻击瞬间 queryFinalStats(owner) 实时查询） */
 const DRONE_MIN_DAMAGE = 12;
 const DRONE_ATK_RATIO = 1.0;
 /** ★ 攻击瞄准高度：敌人身体（脚部 + 0.9m 躯干），不追脚、不擦角 */
@@ -65,8 +66,8 @@ export class DroneEntity extends EntityBase {
   stationaryBaseY = 0;
   /** ★ 远程攻击回调（站桩模式；WorldMode 注入 = 发射友军弹道） */
   rangedAttack: ((target: EntityBase) => void) | null = null;
-  /** ★ 主人攻击力（WorldMode 每帧注入；友军伤害 = max(下限, 主人攻击力 × 系数)） */
-  ownerAttackPower = 0;
+  /** ★ 主人实体（WorldMode 生成时写入；攻击瞬间实时查询其最终攻击力） */
+  owner: EntityBase | null = null;
   /** ★ 常驻流体（祖宗：单帧 + 流体参数；由资产缓存持有，实体销毁不 dispose） */
   private soulFluid: FluidEffect | null = null;
   /** 当前 AI 状态（调试/表现可读） */
@@ -167,8 +168,9 @@ export class DroneEntity extends EntityBase {
   /** ★ 近战挥击（贴脸小范围；执行器内自动排除同阵营）+ 发射外红内白射线。
  *  瞄准点 = 敌人身体（脚部 + ATTACK_AIM_Y），不打脚不擦角 */
   private swing(t: EntityBase): void {
-    // ★ 伤害 = max(下限, 主人攻击力 × 系数)：随主角遗物/装备强度实时成长
-    const dmg = Math.max(DRONE_MIN_DAMAGE, Math.round(this.ownerAttackPower * DRONE_ATK_RATIO));
+    // ★ 伤害 = max(下限, 主人攻击力 × 系数)：攻击瞬间实时查询（遗物/装备/限时效果全实时）
+    const atk = this.owner ? queryFinalStats(this.owner).attackPower : 0;
+    const dmg = Math.max(DRONE_MIN_DAMAGE, Math.round(atk * DRONE_ATK_RATIO));
     executeAttack(this.em, null, {
       type: 'melee',
       source: this,

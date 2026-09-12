@@ -110,7 +110,7 @@ export class CharacterStatsPanel {
     // 图例：青色 = 局内装备临时（会随穿脱消失）
     const legend = document.createElement('div');
     legend.style.cssText = `color:${TEXT_DIM};font-size:10px;`;
-    legend.innerHTML = `已含遗物永久加成；<span style="color:${TEMP}">+N</span> 为局内装备临时（卸载消失）`;
+    legend.innerHTML = `已含遗物永久加成；<span style="color:${TEMP}">+N</span> 为局内加成（装备/限时增益，实时）`;
     root.appendChild(legend);
 
     // ---- 局内进度 ----

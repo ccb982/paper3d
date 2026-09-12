@@ -42,6 +42,7 @@ export interface ItemWorldConfig {
  *   - attackPct/defensePct：对（基础+遗物）终值乘算（0.5 = +50%）
  *   - attackSpeed：方舟攻速点数（100 基准；实际间隔 = 基础间隔 × 100 /(100+X)）
  *   - damageReduction：庇护（受到的伤害降低比例 0-1；同名效果取最高）
+ *   - critRate/dodgeRate/blockRate：概率 0-1（加算）；critMult/blockMult：倍率加值
  *   - healProc：治疗转伤害 proc（非数值；装备期间由模式层消费） */
 export interface EquipmentStats {
   maxHp?: number;
@@ -52,6 +53,16 @@ export interface EquipmentStats {
   attackSpeed?: number;
   damageReduction?: number;
   hpRegen?: number;
+  /** 暴击率（0-1 加算） */
+  critRate?: number;
+  /** 暴击倍率加值（基础 1.5） */
+  critMult?: number;
+  /** 闪避率（0-1 加算） */
+  dodgeRate?: number;
+  /** 格挡率（0-1 加算） */
+  blockRate?: number;
+  /** 格挡减伤倍率加值（基础 0.5，越低越强） */
+  blockMult?: number;
   healProc?: HealProcDef;
 }
 

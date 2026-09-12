@@ -22,7 +22,7 @@ import { SaveSystem } from './core/SaveSystem';
 import { RasterMap } from './services/map/RasterMap';
 import { setTestGroup } from './services/map/TileGroups';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
-import { createNewSession, type GameSession, type PlayerCombatStats } from './core/Session';
+import { createNewSession, type GameSession } from './core/Session';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
@@ -461,8 +461,8 @@ function enterShipMode(
   ship.enter({
     scene, camera, renderer,
     session: currentSession!,
-    onDepart: (day: number, combatStats: PlayerCombatStats) => {
-      enterWorldMode(scene, camera, renderer, day, combatStats);
+    onDepart: (day: number) => {
+      enterWorldMode(scene, camera, renderer, day);
     },
   });
   currentMode = ship;
@@ -476,7 +476,6 @@ function enterWorldMode(
   camera: THREE.PerspectiveCamera,
   renderer: THREE.WebGLRenderer,
   day: number,
-  combatStats: PlayerCombatStats,
 ): void {
   // 1. 清理旧模式
   currentMode?.exit();
@@ -488,7 +487,6 @@ function enterWorldMode(
     scene, camera, renderer,
     session: currentSession!,
     day,
-    combatStats,
     protagonistAsset,
     bulletAsset,
     enemyAssets: mobAssets,
