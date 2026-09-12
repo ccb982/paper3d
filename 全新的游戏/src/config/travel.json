@@ -17,6 +17,7 @@
   "flightLandingSpeed": 8,
   "flightLandingSink": 2,
   "flightLandingSinkMax": 8,
+  "flightTakeoffClimb": 12,
   "flightCamDist": 30,
   "flightCamUp": 10,
   "flightCamDamp": 3.5,

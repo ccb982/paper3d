@@ -192,6 +192,10 @@ export class WorldMode implements IGameMode {
   private landingTouchdown = false;
   /** 落稳段时长（秒）：镜头保持追尾，看舰船贴地/滑到安全点 */
   private static readonly LAND_SETTLE_SECONDS = 1.8;
+  /** ★ 起飞段（登船后自动爬升到最低净空；期间锁输入） */
+  private takeoff = false;
+  /** ★ 登船半径（米）：探索期靠近舰船按 F = 再次起飞（舰船当实体载具） */
+  private static readonly REBOARD_RADIUS = 10;
   /** 飞行追尾相机首帧就位标记（防从舰内相机位缓慢飞入 → 黑屏感） */
   private flightCamInit = false;
   /** 舰船已毁（结算/复活等待：冻结玩法更新） */
@@ -433,6 +437,7 @@ export class WorldMode implements IGameMode {
     this.flightCamInit = false;
     this.landing = null;
     this.landingTouchdown = false;
+    this.takeoff = false;
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -754,7 +759,10 @@ export class WorldMode implements IGameMode {
     if (this.binding.consumeSwitchItem()) this.cycleQuickItem();
     if (this.binding.consumeUseItem()) {
       if (this.phase === 'sail') this.requestDock(false);       // 航行期：F = 停靠
-      else if (!this.player.dead) this.useSelectedConsumable(); // 探索期：F = 使用消耗品
+      else if (!this.player.dead) {
+        // ★ 探索期：靠近舰船 = 登船起飞（舰船当实体载具可再飞）；否则 F = 使用消耗品
+        if (!this.tryBoardShip()) this.useSelectedConsumable();
+      }
     }
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
     //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
@@ -769,10 +777,10 @@ export class WorldMode implements IGameMode {
     if (this.phase === 'sail') {
       if (this.landing?.phase === 'approach') {
         this.landingTouchdown = this.ship.landingStep(dt, look.x, look.y, input.moveAxis.x);
-      } else if (!this.landing) {
+      } else if (!this.landing && !this.takeoff) {
         this.ship.steer(look.x, look.y, input.moveAxis.x, input.moveAxis.y, dt);
       }
-      // settle 段：位置由落稳插值驱动（下面实体段），输入不再作用于舰船
+      // settle / 起飞段：位置由状态机驱动，输入不作用于舰船
     }
 
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
@@ -898,7 +906,12 @@ export class WorldMode implements IGameMode {
     if (this.phase === 'sail') {
       // ★ 航行期：实体管线全免（AI/物理/动画/渲染同步都不跑）——只推进舰船
       //   降落进近：位置/姿态由 landingStep 驱动（stepFlight 跳过）
-      if (!this.landing) this.ship.stepFlight(dt);
+      if (this.takeoff) {
+        // ★ 起飞段：自动爬升到最低净空后交还驾驶
+        if (this.ship.takeoffStep(dt)) this.takeoff = false;
+      } else if (!this.landing) {
+        this.ship.stepFlight(dt);
+      }
       this.entities.onEntityMoved(this.ship);
       if (this.landing?.phase === 'approach') {
         // ★ 触地 → 转落稳段（镜头仍追舰船；完整看到接地）；无超时瞬移接地
@@ -2082,6 +2095,30 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
     this.deploySlotAllies();                       // ★ 停靠后：友军出队
     this.showFloatingAt(sp.x, sp.y + 1.6, sp.z, emergency ? '紧急停靠' : '已停靠', 'heal');
+  }
+
+  /** ★ 登船起飞（探索期靠近舰船按 F；2026-09-12 用户定调：舰船当实体载具）：
+   *  收起友军 → 回航行阶段（起飞爬升段 + 追尾相机 + 航行极简帧），可继续飞行。 */
+  private tryBoardShip(): boolean {
+    if (!this.ship || !this.session) return false;
+    const p = this.player.position;
+    const s = this.ship.position;
+    const dx = p.x - s.x, dz = p.z - s.z;
+    if (dx * dx + dz * dz > WorldMode.REBOARD_RADIUS ** 2) return false;
+    for (const d of this.drones) d.dispose();
+    this.drones = [];
+    this.takeoff = true;
+    this.ship.beginTakeoff();
+    this.phase = 'sail';
+    this.flightCamInit = false;       // 追尾相机下一帧直接就位
+    this.chunks.setCoarseMode(true);  // 航行极简：粗块 LOD
+    this.chunks.setWaterVisible(false);
+    renderManager.setFlightMode(true);
+    this.player.controlLocked = true;
+    this.worldUIManager.setCombatHudVisible(false);
+    this.worldUIManager.setDockButtonVisible(true);
+    this.showFloatingAt(s.x, s.y + 2.5, s.z, '起飞', 'heal');
+    return true;
   }
 
   /** ★ 舰船复活（结算页按钮）：回满血满油，恢复探索 */

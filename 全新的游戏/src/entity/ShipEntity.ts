@@ -135,14 +135,44 @@ export class ShipEntity extends EntityBase {
         Math.max(travelConfig.flightLandingSink, alt * 0.4),
       );
       p.y = Math.max(target, p.y - sink * dt);
-    } else {
-      p.y = target;
+    } else if (target - p.y > 1e-3) {
+      // ★ 地形抬升：限速爬升（原先 p.y=target 会瞬间弹起 → 玩家体感"卡一下就落地"）
+      p.y = Math.min(target, p.y + travelConfig.flightLandingSinkMax * dt);
     }
     this.renderer?.setPosition(p.x, p.y, p.z);
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);
     sr?.setThrottle?.(0.35);
-    return p.y <= target + 0.05;
+    // ★ 到位收敛才判触地（消除"瞬移接地"的跳变）
+    return Math.abs(p.y - target) <= 0.15;
+  }
+
+  /** ★ 起飞前设定（登船后调用）：恢复可操控、水平姿态、进近速度起步 */
+  beginTakeoff(): void {
+    this.sailable = true;
+    this.pitch = 0;
+    this.roll = 0;
+    this.speed = travelConfig.flightLandingSpeed;
+  }
+
+  /** ★ 起飞段步进（WorldMode 状态机驱动）：自动爬升到最低净空 + 油门渐增；
+   *  姿态/航向保持不动；到位返回 true（交还驾驶） */
+  takeoffStep(dt: number): boolean {
+    const p = this.entity.position;
+    const f = this.forward;
+    this.speed = Math.min(travelConfig.flightThrottleStart, this.speed + 18 * dt);
+    p.x += f.x * this.speed * dt;
+    p.z += f.z * this.speed * dt;
+    p.y += travelConfig.flightTakeoffClimb * dt;
+    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const minY = gy + travelConfig.flightMinClearance;
+    const arrived = p.y >= minY;
+    if (arrived) p.y = minY;
+    this.renderer?.setPosition(p.x, p.y, p.z);
+    const sr = this.renderer as ShipRenderer | null;
+    sr?.setAttitude?.(this.heading, this.pitch, this.roll);
+    sr?.setThrottle?.(0.85);
+    return arrived;
   }
 
   /** ★ 落稳段步进：只固定位置（贴地 + 水平滑向安全点），**姿态角度保持玩家操作结果** */
