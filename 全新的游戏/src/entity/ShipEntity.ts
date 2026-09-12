@@ -17,6 +17,7 @@ import type { EntityManager } from './EntityManager';
 import type { GameSession } from '../core/Session';
 import { applyShipDamage, isShipDestroyed } from '../systems/ship/ShipState';
 import { RasterMap } from '../services/map/RasterMap';
+import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { FxRendererBase } from '../services/render/FxRendererBase';
 import { ShipRenderer } from './ship/ShipRenderer';
 import { eventBus } from '../core/EventBus';
@@ -49,6 +50,14 @@ export class ShipEntity extends EntityBase {
       x,
       y: (RasterMap.current?.surfaceHeightAt(x, z) ?? 0) + travelConfig.flightStartClearance,
       z,
+      // ★ 船体实体（2026-09-12 用户点题：舰船必须有实体）：fixed 刚体（主船体 cuboid）
+      //   —— 子弹命中船体；航行期物理步不跑（位置在停靠/落稳时同步）。
+      physics: {
+        type: 'fixed',
+        options: {
+          shape: { type: 'cuboid', hx: 3.6, hy: 1.9, hz: 12.5 }, // 4× 船体 ≈26m 长
+        },
+      },
     });
     this.session = session;
     this.camp = 'player';   // 敌方索敌/受击；同阵营过滤保证玩家子弹不伤舰船
@@ -98,12 +107,52 @@ export class ShipEntity extends EntityBase {
     this.roll += (targetRoll - this.roll) * Math.min(1, dt * 8);
   }
 
-  /** ★ 停靠：转为静止目标（位置由 WorldMode 设为安全落点） */
+  /** ★ 停靠：转为静止目标（位置由 WorldMode 设为安全落点）；
+   *  同步刚体位置 + 登记船体挡人索引（仅停靠期） */
   land(): void {
     this.sailable = false;
     const p = this.entity.position;
     p.y = (RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0) + LANDED_HEIGHT;
     this.renderer?.setPosition(p.x, p.y, p.z); // 停靠当帧就位（下一帧起骨架接管同步）
+    this.syncBody();
+    this.registerHullBlock();
+  }
+
+  /** 同步 fixed 刚体到当前船体位置（停靠/落稳；航行期物理步不跑无需逐帧） */
+  private syncBody(): void {
+    const rb = this.entity.rigidBody;
+    const p = this.entity.position;
+    if (rb && this.em.physics) this.em.physics.setPosition(rb.handle, p.x, p.y, p.z);
+  }
+
+  /** ★ 船体挡人（静态障碍 JS 索引；仅停靠期）：机身三圆 + 两翼中段两圆 */
+  private hullBlockIds: number[] = [];
+  private registerHullBlock(): void {
+    this.clearHullBlock();
+    const p = this.entity.position;
+    const f = this.forward;
+    const rx = f.z, rz = -f.x; // 右向量
+    const spots: [number, number][] = [
+      [0, -8], [0, 0], [0, 8],       // 机身（沿机头方向）
+      [7, -1.5], [-7, -1.5],         // 两翼中段（右向量）
+    ];
+    for (let k = 0; k < spots.length; k++) {
+      const id = -(this.entity.id * 16 + k + 1); // 负 id：与实体/地面/装饰 id 不冲突
+      const x = p.x + f.x * spots[k][1] + rx * spots[k][0];
+      const z = p.z + f.z * spots[k][1] + rz * spots[k][0];
+      addStaticObstacle(id, x, p.y, z, 4.5, 2.0);
+      this.hullBlockIds.push(id);
+    }
+  }
+
+  private clearHullBlock(): void {
+    for (const id of this.hullBlockIds) removeStaticObstacle(id);
+    this.hullBlockIds.length = 0;
+  }
+
+  override dispose(): void {
+    this.clearHullBlock();
+    super.dispose();
   }
 
   /** ★ 降落进近步进（WorldMode 降落状态机驱动）：
@@ -158,6 +207,7 @@ export class ShipEntity extends EntityBase {
     this.roll = 0;
     this.speed = travelConfig.flightLandingSpeed;
     this.groundSmY = NaN; // 起飞重置低通（立即贴合当前地形）
+    this.clearHullBlock(); // 起飞：船体挡人索引撤除（航行期不挡路）
   }
 
   /** 当前速度（m/s；降落预测/镜头调度用） */
@@ -193,11 +243,13 @@ export class ShipEntity extends EntityBase {
     return arrived;
   }
 
-  /** ★ 落稳段步进：只固定位置（贴地 + 水平滑向安全点），**姿态角度保持玩家操作结果** */
+  /** ★ 落稳段步进：只固定位置（贴地 + 水平滑向安全点），**姿态角度保持玩家操作结果**；
+   *  同步刚体（落稳结束时刚体正好在最终落点） */
   settleStep(x: number, y: number, z: number): void {
     const p = this.entity.position;
     p.x = x; p.y = y; p.z = z;
     this.renderer?.setPosition(x, y, z);
+    this.syncBody();
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);
     sr?.setThrottle?.(0.15);

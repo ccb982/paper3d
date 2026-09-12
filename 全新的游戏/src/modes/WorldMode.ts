@@ -293,8 +293,12 @@ export class WorldMode implements IGameMode {
   private enemyDefs = new WeakMap<EnemyBase, MobDef>();
   /** ★ 出生 chunk key（玩家安全区：自己不刷怪；敌人从他处生成） */
   private spawnChunkKey = -1;
-  /** ★ 波次节奏（秒）：距下次"LOD 外环"刷怪的倒计时 */
-  private respawnTimer = 0;
+  /** ★ 波次节奏（秒，2026-09-12 拆两个）：舰船旁 / 玩家旁 各自独立倒计时 */
+  private waveTimerShip = 0;
+  private waveTimerPlayer = 0;
+  /** 波次间隔随机区间（秒） */
+  private static readonly WAVE_MIN = 6;
+  private static readonly WAVE_SPAN = 6;
   /** ★ 全图杂兵上限（2026-09-12 用户定调：60 → 50——总量控住，靠快刷快清维持密度） */
   private static readonly MAX_ENEMIES = 50;
   /** ★ 敌人远距回收半径（米，2026-09-12 用户定调【狠狠缩小】260 → 120）：
@@ -504,8 +508,11 @@ export class WorldMode implements IGameMode {
     const shipPos = ctx.session.ship?.position ?? { x: this.spawnPoint.x, z: this.spawnPoint.z };
     const spawn = shipPos;
 
-    // ★ 每天出击满油（油量 = 每日航行预算）
-    if (ctx.session.ship) ctx.session.ship.fuel = ctx.session.ship.fuelMax;
+    // ★ 每天出击满油 + 满血（2026-09-12 用户定调：船每天修满，与油同口径）
+    if (ctx.session.ship) {
+      ctx.session.ship.fuel = ctx.session.ship.fuelMax;
+      ctx.session.ship.hp = ctx.session.ship.maxHp;
+    }
 
     // ---- ★ 初始 chunk 数据环 + 出生区 3×3 强制构建（不等队列调度） ----
     this.chunks.bootstrap(spawn.x, spawn.z);
@@ -603,8 +610,9 @@ export class WorldMode implements IGameMode {
       Math.floor(spawn.x / CHUNK_SIZE),
       Math.floor(spawn.z / CHUNK_SIZE),
     );
-    // ★ 首波节奏：1.5s 后先来第一波（出生圈附近的安全巡逻）
-    this.respawnTimer = 1.5;
+    // ★ 首波节奏：两个波次错开（舰船旁 1.5s、玩家旁 3s）
+    this.waveTimerShip = 1.5;
+    this.waveTimerPlayer = 3;
 
     // ---- 相机 ----
     this.cameraCtrl = new CameraController(this.camera);
@@ -933,20 +941,25 @@ export class WorldMode implements IGameMode {
     // ---- AI / 波次：仅探索阶段（航行期不刷怪、不打船） ----
     if (this.phase === 'explore') {
       aiSystem.updateAll(dt, this.aiCtx);
-      // ---- ★ 敌人波次节奏：定时在玩家 LOD 外环周围补一波 ----
-      this.respawnTimer -= dt;
-      if (this.respawnTimer <= 0) {
-        // ★ 下一波随机 5~10s（2026-09-12 用户定调：生成速度加快，配 50 上限快刷快清）
-        this.respawnTimer = 5 + Math.random() * 5;
-        this.spawnAmbientWave(pp.x, pp.y);
+      // ---- ★ 波次拆两个（2026-09-12 用户定调）：舰船旁 / 玩家旁 各自独立倒计时 ----
+      this.waveTimerShip -= dt;
+      if (this.waveTimerShip <= 0) {
+        this.waveTimerShip = WorldMode.WAVE_MIN + Math.random() * WorldMode.WAVE_SPAN;
+        this.spawnWaveNear(this.ship.position.x, this.ship.position.z);
+      }
+      this.waveTimerPlayer -= dt;
+      if (this.waveTimerPlayer <= 0) {
+        this.waveTimerPlayer = WorldMode.WAVE_MIN + Math.random() * WorldMode.WAVE_SPAN;
+        this.spawnWaveNear(pp.x, pp.y);
       }
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
       this.scanAndSpawnWaves(pp.x, pp.y, 8);
-      // ---- ★ 远距敌人回收（0.25s 一拍；玩家走过的旧区清场） ----
+      // ---- ★ 远距敌人回收（0.25s 一拍）：
+      //   判定基准 = 玩家/舰船【就近】，且不销毁不可见者（后台继续维护；见 §19.4） ----
       this.cullAccum += dt;
       if (this.cullAccum >= WorldMode.ENEMY_CULL_INTERVAL) {
         this.cullAccum = 0;
-        this.cullFarEnemies(pp.x, pp.y);
+        this.cullFarEnemies(pp.x, pp.y, this.ship.position.x, this.ship.position.z);
       }
     }
     const _t4 = performance.now();
@@ -1435,19 +1448,26 @@ export class WorldMode implements IGameMode {
     return this.spawnOne(this.pickMob(), x, y, z);
   }
 
-  /** ★ 定时波次：在玩家 LOD 外环（60m+，chunk 数据环内）周围随机生成一波 */
-  private spawnAmbientWave(px: number, pz: number): void {
+  /** ★ 定时波次（2026-09-12 拆两个调用点：舰船旁 / 玩家旁）：
+   *  在指定焦点 LOD 外环（94~110m，chunk 数据环内）周围随机生成一波。
+   *  ⚠️ 无论焦点是谁，都避开 玩家 12m / 舰船 15m 的安全圈。 */
+  private spawnWaveNear(fx: number, fz: number): void {
     if (this.testChunk || this.mobDefs.length === 0) return;
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
     const want = 2 + (Math.random() < 0.5 ? 1 : 0); // ★ 每波 2~3 个（2026-09-12 生成加速）
     let placed = 0;
+    const pp = this.player?.position;
+    const sp = this.ship?.position;
     // 环带：内圈 > LOD3（LOD_MAX_DIST，随 LOD 放宽外移），外圈 < 数据预载环（~2 chunk）
     for (let i = 0; i < want * 10 && placed < want; i++) {
       const ang = Math.random() * Math.PI * 2;
       // ★ 94~110m：LOD 外（不 pop-in）且回收环 120m 内（可持续，不刷出即销毁）
       const dist = LOD_MAX_DIST + 4 + Math.random() * 16;
-      const x = px + Math.cos(ang) * dist;
-      const z = pz + Math.sin(ang) * dist;
+      const x = fx + Math.cos(ang) * dist;
+      const z = fz + Math.sin(ang) * dist;
+      // 安全圈：不在玩家/舰船近旁生成（焦点波次也不贴脸）
+      if (pp && (x - pp.x) ** 2 + (z - pp.z) ** 2 < 12 * 12) continue;
+      if (sp && (x - sp.x) ** 2 + (z - sp.z) ** 2 < 15 * 15) continue;
       // 目标 chunk 必须已有地形数据（未生成的世界区域不刷）
       const cx = Math.floor(x / CHUNK_SIZE);
       const cz = Math.floor(z / CHUNK_SIZE);
@@ -1473,15 +1493,17 @@ export class WorldMode implements IGameMode {
     return this.mobDefs[this.mobDefs.length - 1];
   }
 
-  /** ★ 远距回收：距玩家超 ENEMY_CULL_RADIUS 的敌人销毁并移除
-   *   （无限世界防累积；靠近后再由 chunk 激活/周期波次补上） */
-  private cullFarEnemies(px: number, pz: number): void {
+  /** ★ 远距回收（2026-09-12 修订）：判定基准 = 玩家/舰船【就近】——
+   *  玩家走远时，舰船旁的进攻者仍在后台维护（看不到只跳渲染，不销毁）；
+   *  两边都超过 ENEMY_CULL_RADIUS 才回收（无限世界防累积）。 */
+  private cullFarEnemies(px: number, pz: number, sx: number, sz: number): void {
     const r2 = WorldMode.ENEMY_CULL_RADIUS ** 2;
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
-      const dx = e.position.x - px;
-      const dz = e.position.z - pz;
-      if (dx * dx + dz * dz > r2) {
+      const dpx = e.position.x - px, dpz = e.position.z - pz;
+      const dsx = e.position.x - sx, dsz = e.position.z - sz;
+      const d2 = Math.min(dpx * dpx + dpz * dpz, dsx * dsx + dsz * dsz);
+      if (d2 > r2) {
         e.dispose();
         this.enemies.splice(i, 1);
       }
@@ -1802,17 +1824,13 @@ export class WorldMode implements IGameMode {
     return null;
   }
 
-  /** ★ 敌人索敌候选（优先级从高到低）：
-   *  ① 舰船（停靠后；用户定调：优先打舰船）② 祖宗（站桩·吸仇恨；TAUNT 半径内）
-   *  ③ 玩家 ④ 一般友军（最近无人机）
+  /** ★ 敌人索敌候选（优先级从高到低，2026-09-12 用户定调）：
+   *  ① 祖宗（站桩·吸仇恨；TAUNT 半径内——有索敌效果，优先级最高）
+   *  ② 舰船（停靠后）③ 玩家 ④ 一般友军（最近无人机）
    *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列 */
   private enemyTargetCandidates(enemy: EnemyBase): { x: number; z: number }[] {
     const ep = enemy.position;
     const out: { x: number; z: number }[] = [];
-    // ★ 舰船最优先（仅探索阶段存在；hp<=0 由结算接管不再嘲讽）
-    if (this.phase === 'explore' && this.ship && this.ship.hp > 0) {
-      out.push({ x: this.ship.position.x, z: this.ship.position.z });
-    }
     let sentinel: DroneEntity | null = null, sentinelD2 = Infinity;
     let ally: DroneEntity | null = null, allyD2 = Infinity;
     for (const d of this.drones) {
@@ -1826,9 +1844,14 @@ export class WorldMode implements IGameMode {
         ally = d;
       }
     }
+    // ★ 祖宗最高优先（TAUNT 半径内；吸仇恨）
     const taunt2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
     if (sentinel && sentinelD2 <= taunt2) {
       out.push({ x: sentinel.position.x, z: sentinel.position.z });
+    }
+    // ★ 其次舰船（仅探索阶段存在；hp<=0 由结算接管不再嘲讽）
+    if (this.phase === 'explore' && this.ship && this.ship.hp > 0) {
+      out.push({ x: this.ship.position.x, z: this.ship.position.z });
     }
     if (this.player) out.push({ x: this.player.position.x, z: this.player.position.z });
     if (ally) out.push({ x: ally.position.x, z: ally.position.z });
