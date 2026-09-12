@@ -13,7 +13,7 @@
 // ============================================================================
 import { RasterMap } from '../src/services/map/RasterMap';
 import { tileById, TILE_FLAT_SAND } from '../src/services/map/Tiles';
-import { tileMaterialByKey } from '../src/services/map/TileMaterials';
+import { resolveTileLook } from '../src/services/map/TileMaterials';
 import { groupByKey, applyGroupTintHsl } from '../src/services/map/TileGroups';
 import { srgbHslToOklch, srgbHslJitterAmp, linearToSrgb } from '../src/services/map/colorLab';
 import { planChunkDecals, type PlannedDecal } from '../src/services/map/decor/TileDecalBase';
@@ -57,12 +57,13 @@ const groupDef = groupByKey(chunk.groupKey!);
 const palette = groupDef?.palette;
 
 const td = raster.tileDefAt(WX, WZ);
-const tintHsl = applyGroupTintHsl(td.visual.baseHsl, palette);
+const look = resolveTileLook(td);
+const tintHsl = applyGroupTintHsl(look.baseHsl, palette);
 const lch = srgbHslToOklch(tintHsl.h, tintHsl.s, tintHsl.l);
 const j = td.visual.jitter ?? { h: 0, s: 0, l: 0 };
 const jlch = srgbHslJitterAmp(tintHsl.h, tintHsl.s, tintHsl.l, j.h, j.s, j.l);
-const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
-const merged = { ...mat?.params, ...(td.visual.material?.params ?? {}) };
+const mat = look.mat;
+const merged = { ...mat?.detail.params, ...(td.visual.material?.params ?? {}) };
 
 console.log(`seed=${seed} chunk(${cx},${cz}) group=${chunk.groupKey} palette=${palette ? `${palette.length}色` : null}`);
 console.log(`站点 (${WX},${WZ}) tile=id${td.id} ${td.key ?? ''} mat=${td.visual.material?.fnId ?? 'none'}`);

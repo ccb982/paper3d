@@ -28,7 +28,7 @@ import { coarsePatch } from './CoarsePatch';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, clearWallMaterialRegistry, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
-import { tileMaterialByKey } from './TileMaterials';
+import { resolveTileLook } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, PATCH_LEVEL_WIDTH, type FaceGeometry } from './FaceBuild';
 import { computeTableGeometry, type PatchGeomResult, type PatchGroundCell, type GeomBounds } from './PatchCompute';
@@ -1010,7 +1010,10 @@ export class ChunkManager {
       if (!this.raster.getChunkData(cx, cz)) continue;
       this.coarseInflight.add(key);
       coarsePatch
-        .compute({ seed: this.raster.worldSeed, cx, cz }, (a, b) => this.raster.getChunkData(a, b))
+        .compute(
+          { seed: this.raster.worldSeed, cx, cz, palette: this.chunkPalette(cx, cz) },
+          (a, b) => this.raster.getChunkData(a, b),
+        )
         .then((geom) => {
           this.coarseInflight.delete(key);
           if (!geom || epoch !== this.coarseEpoch) return;
@@ -2372,22 +2375,23 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
 
    for (let id = 0; id < MATERIAL_SLOTS; id++) {
      const td = tileById(id);
-     const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
+     const look = resolveTileLook(td); // ★ 两级解析：一级底色（基底）+ 二级细节材质
+     const mat = look.mat;
       // ★ 无材质地块：基色由 albedo 纹理承载，uMatBaseLCH 必须置白（OKLab 白 = L1,C0,H0），
       //   否则 base=LCH 解码 × alb(已含完整基色) 会把颜色平方 → 坑/水/冰发黑
-      // ★ 有材质地块：uMatBaseLCH = 组调色板(融合原 RegionTheme)调制后的基色，
-      //   着色器 oklchShade = LCH + 逐像素偏移 + 每地块抖动 → 得"随组变色"的材质地面
+      // ★ 有材质地块：uMatBaseLCH = 组调色板(融合原 RegionTheme)调制后的材质一级底色，
+      //   着色器 oklchShade = LCH + 二级细节逐像素偏移 + 每地块抖动
       //   （2026-08-31：旧实现直接喂 sRGB 值到 linear 管线 = srgb/linear bug；现整链路 OKLab）
-      const tintHsl = td.visual.material
-        ? applyGroupTintHsl(td.visual.baseHsl, palette)
-        : td.visual.baseHsl;
-      const lch = td.visual.material
+      const tintHsl = mat
+        ? applyGroupTintHsl(look.baseHsl, palette)
+        : look.baseHsl;
+      const lch = mat
         ? srgbHslToOklch(tintHsl.h, tintHsl.s, tintHsl.l)
         : { L: 1, C: 0, H: 0 };   // OKLab 白
      base[id * 4] = lch.L;
      base[id * 4 + 1] = lch.C;
      base[id * 4 + 2] = lch.H;
-    base[id * 4 + 3] = mat?.surface.roughness ?? 0.9;
+    base[id * 4 + 3] = mat?.detail.surface.roughness ?? 0.9;
     // ★ 逐地块抖动幅度：GPU 化（原 albedo 侧 CPU 抖动移除）→ uMatJitter[id].xyz
     const j = td.visual.jitter ?? { h: 0, s: 0, l: 0 };
     const jlch = td.visual.material
@@ -2396,7 +2400,7 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
     jitter[id * 4] = jlch.L;
     jitter[id * 4 + 1] = jlch.C;
     jitter[id * 4 + 2] = jlch.H;
-    const s = mat?.surface;
+    const s = mat?.detail.surface;
     surface[id * 4] = s?.specular ?? 0;
     surface[id * 4 + 1] = s?.fresnel ?? 0;
     surface[id * 4 + 2] = s?.emissive ? s.emissive.strength : 0;
@@ -2408,10 +2412,10 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
     emissive[id * 4 + 2] = s?.emissive?.b ?? 0;
     // 材质图案参数：模板声明顺序打包（GLSL 端按同序索引读取）
     if (mat) {
-      const merged = { ...mat.params, ...(td.visual.material?.params ?? {}) };
+      const merged = { ...mat.detail.params, ...(td.visual.material?.params ?? {}) };
       let i = 0;
-      for (const k of Object.keys(mat.params)) {
-        params[id * 16 + i++] = merged[k] ?? mat.params[k];
+      for (const k of Object.keys(mat.detail.params)) {
+        params[id * 16 + i++] = merged[k] ?? mat.detail.params[k];
       }
       // ★ 通用装饰槽（slot 15）：条带装饰强度——全材质统一索引（模板无需声明），
       //   地块 material.params 加 { stripes: 0.6 } 即启用，0/缺省 = 关
@@ -2436,9 +2440,8 @@ function buildTileRenderConfig(chunkData: { blockTypes: Uint8Array }, palette?: 
   for (let id = 0; id < MATERIAL_SLOTS; id++) {
     const td = tileById(id);
     fn[id] = td.visual.material ? materialFnIndex(td.visual.material.fnId) : -1;
-    // ★ LOD 高台发光强度（材质模板声明；无材质机构地块 = 0）
-    const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
-    lodEmissive[id] = mat?.lodEmissive ?? 0;
+    // ★ LOD 高台发光强度（材质二级声明；无材质机构地块 = 0）
+    lodEmissive[id] = resolveTileLook(td).mat?.detail.lodEmissive ?? 0;
   }
 
   return { tileIds, base, jitter, surface, emissive, params, lodEmissive, fn };

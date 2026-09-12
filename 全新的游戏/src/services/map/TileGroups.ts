@@ -22,7 +22,7 @@ import { tileByKey, tileById, allTiles, TILE_FLAT_SAND, TILE_PLATFORM_SAND, TILE
 
 /** 组级调色板（融合原 RegionTheme：hue/sat/light 偏移；作用于本组所有地块） */
 export interface GroupPalette {
-  /** 色相偏移（叠加到 tile baseHsl.h 后取 fract） */
+  /** 色相偏移（叠加到 resolveTileLook(td).baseHsl.h 后取 fract=材质一级底色） */
   hueShift: number;
   /** 饱和度系数 */
   satMul: number;

@@ -32,6 +32,7 @@ import {
 import { vnoise } from "./TerrainNoise";
 import { hsl2rgb } from "./TerrainPalette";
 import { tileById, type TileDef } from "./Tiles";
+import { resolveTileLook } from "./TileMaterials";
 import {
   SEMANTIC_THEME_MIX,
   applyGroupTintHsl,
@@ -174,7 +175,7 @@ function computeAlbedoRGBA(
       //   （融合原 RegionTheme；色相平移 + 饱和/明度系数，按组恒定——硬边界、肉鸽友好）
       //   水/坑等语义色只吃部分强度(SEMANTIC_THEME_MIX)——警示红与深蓝是玩法可读性
       const thM = td.isDepression ? SEMANTIC_THEME_MIX : 1;
-      const th = applyGroupTintHsl(td.visual.baseHsl, q.palette, thM);
+      const th = applyGroupTintHsl(resolveTileLook(td).baseHsl, q.palette, thM);
 
       const tx = Math.floor(wx / 4);
       const tz = Math.floor(wz / 4);

@@ -25,7 +25,7 @@ import {
   srgbHslJitterAmp,
   type Oklch,
 } from "./colorLab";
-import { tileMaterialByKey } from "./TileMaterials";
+import { resolveTileLook } from "./TileMaterials";
 import type { TileDef } from "./Tiles";
 import type { BakeQuery } from "./bakeCompute";
 
@@ -128,9 +128,9 @@ type LowOffset = { dL: number; dC: number; dH: number; dRef: number };
 const ZERO: LowOffset = { dL: 0, dC: 0, dH: 0, dRef: 0 };
 
 /** 参数按模板声明顺序取值（与 buildTileRenderConfig 的打包顺序一致） */
-function makeParamReader(mat: ReturnType<typeof tileMaterialByKey>, td: TileDef): (i: number) => number {
-  const keys = mat ? Object.keys(mat.params) : [];
-  const merged: Record<string, number> = mat ? { ...mat.params, ...(td.visual.material?.params ?? {}) } : {};
+function makeParamReader(mat: ReturnType<typeof resolveTileLook>["mat"], td: TileDef): (i: number) => number {
+  const keys = mat ? Object.keys(mat.detail.params) : [];
+  const merged: Record<string, number> = mat ? { ...mat.detail.params, ...(td.visual.material?.params ?? {}) } : {};
   return (i: number) => merged[keys[i]] ?? 0;
 }
 
@@ -260,10 +260,11 @@ export function computeMaterialLowRGBA(q: BakeQuery, cx: number, cz: number): Ui
   const tileInfo = (td: TileDef): TileLowInfo => {
     const cached = infoCache.get(td.id);
     if (cached) return cached;
-    const mat = td.visual.material ? tileMaterialByKey(td.visual.material.fnId) : undefined;
-    const tintHsl = td.visual.material
-      ? applyGroupTintHsl(td.visual.baseHsl, q.palette)
-      : td.visual.baseHsl;
+    const look = resolveTileLook(td); // ★ 两级解析：一级底色 + 二级细节
+    const mat = look.mat;
+    const tintHsl = mat
+      ? applyGroupTintHsl(look.baseHsl, q.palette)
+      : look.baseHsl;
     const j = td.visual.jitter ?? { h: 0, s: 0, l: 0 };
     const info: TileLowInfo = mat
       ? {

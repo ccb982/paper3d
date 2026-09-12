@@ -42,6 +42,7 @@ import { CHUNK_SIZE, hash2 } from './ChunkGenerator';
 import { vnoise } from './TerrainNoise';
 import { hsl2rgb } from './TerrainPalette';
 import { tileById, type TileDef } from './Tiles';
+import { resolveTileLook } from './TileMaterials';
 import {
   AO_RADIUS, AO_STRENGTH, AO_MIN, APPEARANCE_RES,
   computeChunkMapsRGBA,
@@ -226,10 +227,11 @@ export function bakeChunkAppearance(
       // ---- 基准色 → 逐地块 HSL 抖动 → RGB（幅度来自 Tiles 注册表）----
       const tx = Math.floor(wx / 4);
       const tz = Math.floor(wz / 4);
+      const th = resolveTileLook(td).baseHsl; // ★ 两级解析：一级底色
       let [r, g, b] = hsl2rgb(
-        td.visual.baseHsl.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
-        td.visual.baseHsl.s * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
-        td.visual.baseHsl.l * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
+        th.h + (hash2(tx, tz, seed + 101) - 0.5) * 2 * td.visual.jitter.h,
+        th.s * (1 + (hash2(tx, tz, seed + 202) - 0.5) * 2 * td.visual.jitter.s),
+        th.l * (1 + (hash2(tx, tz, seed + 303) - 0.5) * 2 * td.visual.jitter.l),
       );
 
       // ---- 结构化细节层（替代白噪点——白噪=脏，结构=设计）----

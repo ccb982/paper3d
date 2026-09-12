@@ -12,7 +12,10 @@
 // ★ 类型/材质分离铁律（2026-08-28 定稿，详见《地形与渲染管线架构.md》§1.0）：
 //   类型 = genRole + physics —— 封闭集合，必须确定（四基础类型 + 装饰变体；
 //          变体 physics 必须 ≙ 基础类型，换皮不改结构）
-//   材质 = visual.material + baseHsl + key/label —— 完全自由（名字/材质/颜色任意）
+//   材质 = visual.material(细节) + 材质底色 + visual.baseHsl(变体覆盖) + key/label
+//          —— 完全自由（名字/材质/颜色任意）
+//         ★ 两级模型（2026-09-12）：底色归材质（TileMaterials.baseHsl，粗块直接用），
+//         细节归 fnId/params（细化块在底色之上绘制）；地块只按需覆盖底色。
 //   加类型 = 体系决策（慎）；加材质皮 = 日常内容（注册即生效）
 //
 // ⚠️ 行为兼容承诺：
@@ -24,6 +27,7 @@
 
 import type { Hsl } from "./TerrainPalette";
 import { hsl2rgb } from "./TerrainPalette";
+import { resolveTileLook } from "./TileMaterials";
 
 // ============================================================
 // 角色（生成器结构槽位 ↔ 地块匹配的唯一维度）
@@ -37,8 +41,11 @@ export type TileGenRole = "ground" | "platform" | "liquid" | "pit";
 
 /** 外观层属性（表现层消费；阶段二起为 shader 图案库的输入参数） */
 export interface TileVisual {
-  /** 基准色（显示空间 HSL）——JS/GLSL 两端共用的唯一颜色真源 */
-  baseHsl: Hsl;
+  /**
+   * ★ 地块级底色覆盖（显示空间 HSL）——变体皮专用（如沙土高台比沙土地面亮）。
+   * 缺省 = 继承材质底色（TileMaterials.baseHsl）；解析统一走 resolveTileLook()。
+   */
+  baseHsl?: Hsl;
   /** 逐地块抖动幅度（世界tile坐标 hash2 派生；0 = 均质不抖，如水面） */
   jitter: { h: number; s: number; l: number };
   /** 凹陷地块：表面按 ≤0 平面均匀着色（无邻域AO）；侧壁>0 部分自动转平地材质 */
@@ -107,13 +114,10 @@ export class TileDef {
     return this.visual.depression;
   }
 
-  /** 基准色 RGB（显示空间；小地图等直接消费） */
+  /** 基准色 RGB（显示空间；小地图等直接消费）——两级解析后的 Tier-1 底色 */
   get baseRgb(): [number, number, number] {
-    return hsl2rgb(
-      this.visual.baseHsl.h,
-      this.visual.baseHsl.s,
-      this.visual.baseHsl.l,
-    );
+    const b = resolveTileLook(this).baseHsl;
+    return hsl2rgb(b.h, b.s, b.l);
   }
 }
 
@@ -159,7 +163,7 @@ export const TILE_FLAT = new TileDef(
   "平地/路",
   "ground",
   {
-    baseHsl: { h: 0.0881, s: 0.343, l: 0.400 }, // ★ 明日方舟 1-7 地面 rgb(137,104,67)
+    // 底色继承 dirt 材质（rgb(137,104,67)）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: false, // ★ 1-7 写实风：无 4×4 黑框（去方块拼贴感）
@@ -185,7 +189,7 @@ export const TILE_PLATFORM = new TileDef(
   "高台",
   "platform",
   {
-    baseHsl: { h: 0.0774, s: 0.356, l: 0.537 }, // ★ 明日方舟 1-7 高台 rgb(179,134,95)
+    // 底色继承 rock 材质（rgb(179,134,95)）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: false, // ★ 1-7 写实风：无 4×4 黑框（去方块拼贴感）
@@ -210,7 +214,7 @@ export const TILE_PIT = new TileDef(
   "坑洞",
   "pit",
   {
-    baseHsl: { h: 0.98, s: 0.30, l: 0.34 }, // 暗红警示（2026-09-05 抬 l：0.22 基色深度影下乘光仍黑到无法辨认，坡面侧壁全黑）
+    // 底色继承 pit 材质（暗红警示；2026-09-05 抬 l 记录见材质表）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: true,
     patches: true,
@@ -232,7 +236,7 @@ export const TILE_WATER = new TileDef(
   "水域",
   "liquid",
   {
-    baseHsl: { h: 0.12, s: 0.06, l: 0.42 }, // 河床基调（2026-09-07：中性灰褐沙砾，多彩卵石色由 pebble 材质逐石调制）
+    // 底色继承 pebble 材质（河床基调；多彩卵石色由细节函数逐石调制）
     jitter: { h: 0.003, s: 0.012, l: 0.022 }, // 河床逐地块轻微色偏（鹅卵石底，非液态均质）
     depression: true,
     patches: false, // 河床无色阶斑块（自有鹅卵石纹理）
@@ -254,7 +258,8 @@ export const TILE_SLOPE = new TileDef(
   "坡道（预留）",
   "ground",
   {
-    baseHsl: TILE_FLAT.visual.baseHsl,
+    // ★ 预留位无材质 → 必须显式底色（否则走兜底灰）；数值 = dirt 材质底色
+    baseHsl: { h: 0.0881, s: 0.343, l: 0.4 },
     jitter: TILE_FLAT.visual.jitter,
     depression: false,
   },
@@ -272,7 +277,7 @@ export const TILE_ICE = new TileDef(
   "冰面",
   "ground",
   {
-    baseHsl: { h: 0.55, s: 0.3, l: 0.72 },
+    // 底色继承 ice 材质
     jitter: { h: 0.006, s: 0.02, l: 0.04 },
     depression: false,
     borderLine: true,
@@ -295,7 +300,7 @@ export const TILE_ASH_FIELD = new TileDef(
   "灰烬地",
   "ground",
   {
-    baseHsl: { h: 0.05, s: 0.06, l: 0.40 }, // 灰烬地（2026-09-05 抬 l：0.32 深影下坡面读作黑）
+    // 底色继承 ash 材质（灰烬地；2026-09-05 抬 l 记录见材质表）
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -318,7 +323,7 @@ export const TILE_MUD = new TileDef(
   "泥沼地",
   "ground",
   {
-    baseHsl: { h: 0.08, s: 0.15, l: 0.36 }, // 暗灰棕（2026-09-05 抬 l：0.26 深影坡面黑）
+    // 底色继承 mud 材质（暗灰棕）
     jitter: { h: 0.006, s: 0.03, l: 0.04 },
     depression: false,
     borderLine: true,
@@ -381,7 +386,7 @@ export const TILE_MOSSY_PLATFORM = new TileDef(
   "苔台",
   "platform",
   {
-    baseHsl: { h: 0.3, s: 0.35, l: 0.4 },
+    // 底色继承 moss 材质
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -409,7 +414,7 @@ export const TILE_BRICK = new TileDef(
   "砖石路",
   "ground",
   {
-    baseHsl: { h: 0.08, s: 0.18, l: 0.42 },
+    // 底色继承 brick 材质
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -432,7 +437,7 @@ export const TILE_GRASS = new TileDef(
   "草地",
   "ground",
   {
-    baseHsl: { h: 0.3, s: 0.32, l: 0.38 },
+    // 底色继承 grass 材质
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -455,7 +460,7 @@ export const TILE_WOOD = new TileDef(
   "木板路",
   "ground",
   {
-    baseHsl: { h: 0.07, s: 0.35, l: 0.38 },
+    // 底色继承 wood 材质
     jitter: { h: 0.008, s: 0.03, l: 0.05 },
     depression: false,
     borderLine: true,
@@ -483,7 +488,7 @@ export const TILE_FLAT_SAND = new TileDef(
   "沙土地面",
   "ground",
   {
-    baseHsl: { h: 0.0881, s: 0.343, l: 0.400 }, // rgb(137,104,67)
+    // 底色继承 sand 材质（rgb(137,104,67)）
     jitter: { h: 0.003, s: 0.012, l: 0.022 }, // ★ 逐地块轻微 HSL 色偏（4m 地块粒度）
     depression: false,
     borderLine: true, // ★ 地块交界黑线（0.85 强度；强化逐地块色差层次）

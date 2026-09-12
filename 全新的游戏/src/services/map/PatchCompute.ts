@@ -10,7 +10,9 @@
 
 import { buildFaceTable, type FaceTable } from "./FaceTable";
 import { tileById } from "./Tiles";
-import { CHUNK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
+import { CHUNK_SIZE, BLOCKS_PER_SIDE, hash2 } from "./ChunkGenerator";
+import { applyGroupTintHsl, SEMANTIC_THEME_MIX, type GroupPalette } from "./TileGroups";
+import { resolveTileLook, DEFAULT_BASE_HSL } from "./TileMaterials";
 import {
   buildTopGeometry,
   buildWallGeometry,
@@ -131,8 +133,14 @@ function srgbToLinear(c: number): number {
   return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 }
 
-/** ★ 粗块纯色化：顶点色 = 所属地块基色（侧壁压暗一档）——无纹理渲染路径 */
-function colorizeCoarse(g: FaceGeometry, table: FaceTable, src: BlockSource, darken = false): void {
+/** ★ 粗块底色化（材质一级）——无细节渲染路径：
+ *   顶点色 = 地块一级底色（地块覆盖 → 材质底色）+ 组调色板 + 逐 4m 抖动，
+ *   与细化基底（uMatBaseLCH + uMatJitter）同规则同盐 → 粗/细切换不跳色；
+ *   侧壁压暗一档（着色器侧壁 shade 同义）。 */
+function colorizeCoarse(
+  g: FaceGeometry, table: FaceTable, src: BlockSource,
+  darken: boolean, palette: GroupPalette | undefined, seed: number,
+): void {
   const col = g.colors;
   if (!col) return;
   const ox = table.cx * CHUNK_SIZE, oz = table.cz * CHUNK_SIZE;
@@ -147,8 +155,20 @@ function colorizeCoarse(g: FaceGeometry, table: FaceTable, src: BlockSource, dar
     if (bx !== lastBx || bz !== lastBz) {
       lastBx = bx; lastBz = bz;
       const info = src.blockAt(bx, bz);
-      const hsl = info ? tileById(info.id).visual.baseHsl : { h: 0.55, s: 0.2, l: 0.5 };
-      const rgb = hslToRgb(hsl.h, hsl.s, darken ? hsl.l * 0.62 : hsl.l);
+      const td = info ? tileById(info.id) : undefined;
+      // 语义色（水/坑）只吃部分组调色（与细化/烘焙同规则）
+      const th = applyGroupTintHsl(
+        td ? resolveTileLook(td).baseHsl : DEFAULT_BASE_HSL,
+        palette,
+        td?.isDepression ? SEMANTIC_THEME_MIX : 1,
+      );
+      // 逐 4m 抖动（与 bake/外观同 hash 盐；粗块一次即可，无需逐像素）
+      const j = td?.visual.jitter;
+      const h = j ? th.h + (hash2(bx, bz, seed + 101) - 0.5) * 2 * j.h : th.h;
+      const s = j ? Math.min(1, th.s * (1 + (hash2(bx, bz, seed + 202) - 0.5) * 2 * j.s)) : th.s;
+      let l = j ? Math.min(1, th.l * (1 + (hash2(bx, bz, seed + 303) - 0.5) * 2 * j.l)) : th.l;
+      if (darken) l *= 0.62;
+      const rgb = hslToRgb(h, s, l);
       r = srgbToLinear(rgb[0]); gr = srgbToLinear(rgb[1]); b = srgbToLinear(rgb[2]);
     }
     col[i] = r; col[i + 1] = gr; col[i + 2] = b;
@@ -173,8 +193,10 @@ export function computeTableGeometry(
   dirty?: number[] | null,
   masks?: { top: Uint8Array; side: Uint8Array } | null,
   levelAt?: LevelAtWorld,
-  /** ★ 粗块模式：只出硬边几何（无 fine/弧边/水面/物理分区），顶点色=地块纯色 */
+  /** ★ 粗块模式：只出硬边几何（无 fine/弧边/水面/物理分区），顶点色=材质一级底色 */
   coarse = false,
+  /** ★ 粗块组调色（与细化 uMatBase 同源；缺省 = 中性不调色） */
+  palette?: GroupPalette,
 ): PatchGeomResult {
   // ★ 每 chunk 静态数据缓存：refined src + FaceTable 只依赖 heights/blockTypes
   //   （与 levels 无关）→ 同一 chunk 连打不必每枪重跑 planRefinements/buildFaceTable
@@ -184,8 +206,8 @@ export function computeTableGeometry(
     const table = coarseFaceTable(baseTable);
     const top = buildTopGeometry(table, src);
     const wall = buildWallGeometry(table, src);
-    colorizeCoarse(top, table, src, false);
-    colorizeCoarse(wall, table, src, true);
+    colorizeCoarse(top, table, src, false, palette, seed);
+    colorizeCoarse(wall, table, src, true, palette, seed);
     return {
       top: {
         vertices: top.vertices, normals: top.normals, uvs: top.uvs as Float32Array,

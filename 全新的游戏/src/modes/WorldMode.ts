@@ -38,6 +38,7 @@ import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport } from '../services/map/ChunkManager';
+import { resolveTileLook } from '../services/map/TileMaterials';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
@@ -1128,7 +1129,8 @@ export class WorldMode implements IGameMode {
     let tileInfo = '?';
     if (aim && this.raster) {
       const td = this.raster.tileDefAt(aim.x, aim.z);
-      tileInfo = `id=${td.id} key=${td.key} mat=${td.visual.material?.fnId ?? 'none'} baseHsl=${td.visual.baseHsl.h.toFixed(3)},${td.visual.baseHsl.s.toFixed(3)},${td.visual.baseHsl.l.toFixed(3)}`;
+      const look = resolveTileLook(td);
+      tileInfo = `id=${td.id} key=${td.key} mat=${td.visual.material?.fnId ?? 'none'} baseHsl=${look.baseHsl.h.toFixed(3)},${look.baseHsl.s.toFixed(3)},${look.baseHsl.l.toFixed(3)}`;
     }
 
     // 游标 1×1 精确像素

@@ -8,7 +8,7 @@ import { planChunkProps, computePropVolumes } from '../src/services/map/decor/Ma
 import { buildSnapshotFromChunks, makeSnapshotSource, computeChunkMapsRGBA } from '../src/services/map/bakeCompute';
 import { CHUNK_SIZE } from '../src/services/map/ChunkGenerator';
 import { TILE_FLAT_SAND, tileById } from '../src/services/map/Tiles';
-import { tileMaterialByKey } from '../src/services/map/TileMaterials';
+import { resolveTileLook } from '../src/services/map/TileMaterials';
 import { applyGroupTintHsl } from '../src/services/map/TileGroups';
 import { srgbHslToOklch } from '../src/services/map/colorLab';
 import { groupByKey } from '../src/services/map/TileGroups';
@@ -38,17 +38,18 @@ const chunkGroup = groupByKey(chunk.groupKey);
 const palette = chunkGroup?.palette;
 // 复算 buildTileRenderConfig 的核心值（与 ChunkManager 同公式）
 const td19 = tileById(TILE_FLAT_SAND.id);
-const mat19 = td19.visual.material ? tileMaterialByKey(td19.visual.material.fnId) : undefined;
-const tintHsl = applyGroupTintHsl(td19.visual.baseHsl, palette);
+const look19 = resolveTileLook(td19);
+const mat19 = look19.mat;
+const tintHsl = applyGroupTintHsl(look19.baseHsl, palette);
 const lch = srgbHslToOklch(tintHsl.h, tintHsl.s, tintHsl.l);
 const j = td19.visual.jitter ?? { h: 0, s: 0, l: 0 };
-const merged = { ...mat19?.params, ...(td19.visual.material?.params ?? {}) };
+const merged = { ...mat19?.detail.params, ...(td19.visual.material?.params ?? {}) };
 console.log(`chunk(${CX},${CZ}) group=${chunk.groupKey} groupDef=${!!chunkGroup} palette=${palette ?? null}`);
 console.log(`贴图=${decals.length} 装饰物=${props.length}`);
 
 console.log(`\n[生成参数] TILE_FLAT_SAND(id=${TILE_FLAT_SAND.id}):`);
-console.log(`  baseHsl=(${td19.visual.baseHsl.h.toFixed(3)},${td19.visual.baseHsl.s.toFixed(3)},${td19.visual.baseHsl.l.toFixed(3)}) tinted=(${tintHsl.h.toFixed(3)},${tintHsl.s.toFixed(3)},${tintHsl.l.toFixed(3)})`);
-console.log(`  baseLCH=(${lch.L.toFixed(3)},${lch.C.toFixed(3)},${lch.H.toFixed(3)}) roughness=${mat19?.surface.roughness}`);
+console.log(`  baseHsl=(${look19.baseHsl.h.toFixed(3)},${look19.baseHsl.s.toFixed(3)},${look19.baseHsl.l.toFixed(3)}) tinted=(${tintHsl.h.toFixed(3)},${tintHsl.s.toFixed(3)},${tintHsl.l.toFixed(3)})`);
+console.log(`  baseLCH=(${lch.L.toFixed(3)},${lch.C.toFixed(3)},${lch.H.toFixed(3)}) roughness=${mat19?.detail.surface.roughness}`);
 console.log(`  params slots14/15: hazard=${merged.hazard ?? 0} stripes=${merged.stripes ?? 0}`);
 console.log(`  jitter=(${j.h},${j.s},${j.l}) fnId=${td19.visual.material?.fnId}`);
 

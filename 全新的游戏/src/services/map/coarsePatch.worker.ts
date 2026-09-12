@@ -6,6 +6,7 @@
 // 与 terrainPatch.worker（细化）分池，互不抢队列。
 
 import { computeTableGeometry, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
+import type { GroupPalette } from "./TileGroups";
 
 interface CoarseChunkMsg {
   type: "coarseBuild";
@@ -19,6 +20,8 @@ interface CoarseChunkMsg {
     heights: Float32Array;
     blockTypes: Uint8Array;
   }[];
+  /** 组调色板（粗块底色与细化 uMatBase 同源） */
+  palette?: GroupPalette;
 }
 
 const ctx = self as unknown as {
@@ -59,6 +62,7 @@ ctx.onmessage = (ev: MessageEvent) => {
     null,
     undefined,
     true,
+    msg.palette,
   );
   ctx.postMessage({ type: "result", id: msg.id, ...out }, transferOf(out));
 };

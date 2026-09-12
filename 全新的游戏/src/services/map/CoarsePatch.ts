@@ -7,6 +7,7 @@
 
 import { computeTableGeometry, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
 import type { ChunkDataLite } from "./Refinements";
+import type { GroupPalette } from "./TileGroups";
 
 const NEI = [-1, 0, 1];
 
@@ -78,12 +79,13 @@ class CoarsePatchService {
     return best;
   }
 
-  /** ★ 请求粗块几何（3×3 邻域拷贝 → worker/主线程同函数 coarse=true） */
+  /** ★ 请求粗块几何（3×3 邻域拷贝 → worker/主线程同函数 coarse=true）；
+   *  palette = 本 chunk 的组调色板（粗块顶点色与细化 uMatBase 同源） */
   compute(
-    req: { seed: number; cx: number; cz: number },
+    req: { seed: number; cx: number; cz: number; palette?: GroupPalette },
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<PatchGeomResult | null> {
-    const { seed, cx, cz } = req;
+    const { seed, cx, cz, palette } = req;
     const chunks: CoarseChunkData[] = [];
     for (const dz of NEI) {
       for (const dx of NEI) {
@@ -102,7 +104,7 @@ class CoarsePatchService {
     if (!w) {
       // 主线程回退：同一纯函数（粗模式）
       return Promise.resolve(
-        computeTableGeometry(readChunk, seed, cx, cz, undefined, null, null, undefined, true),
+        computeTableGeometry(readChunk, seed, cx, cz, undefined, null, null, undefined, true, palette),
       );
     }
     const id = this.nextIds[i] = (this.nextIds[i] ?? 0) + 1;
@@ -112,7 +114,7 @@ class CoarsePatchService {
       pending.set(id, resolve);
       const transfer: ArrayBuffer[] = [];
       for (const c of chunks) transfer.push(c.heights.buffer, c.blockTypes.buffer);
-      w.postMessage({ type: "coarseBuild", id, seed, cx, cz, chunks }, transfer);
+      w.postMessage({ type: "coarseBuild", id, seed, cx, cz, chunks, palette }, transfer);
     });
   }
 }

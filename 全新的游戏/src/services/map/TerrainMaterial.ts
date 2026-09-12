@@ -16,8 +16,9 @@
 //   uMatEmissive[id]  = vec4(emissive rgb)
 //   uMatParams[id*16] = 材质图案参数（16 个 float，顺序 = 注册模板声明顺序）
 //
-// 伪造渲染（2026-08-31 素材填充，OKLab 定稿）：
-//   每个地块只声明一个 sRGB-HSL 基色（作者侧），丰富渐变全由 GPU 逐像素产生：
+// 伪造渲染（2026-08-31 素材填充，OKLab 定稿；2026-09-12 两级模型）：
+//   每个材质声明一个 sRGB-HSL 一级底色（地块可覆盖；resolveTileLook 解析），
+//   二级细节渐变全由 GPU 逐像素在底色之上产生：
 //   base = oklchShade(...) —— 在感知均匀的 OKLab(L,C,H) 里做空间非均匀偏移
 //     （shadeField 三尺度 patch/mid/grain + 每地块独立 jitter），收口 OKLab→线性 RGB，
 //     喂给 linear 光照管线（ACES 全程 linear，three 末尾 linearToOutputTexel 转 sRGB）。
