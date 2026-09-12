@@ -179,11 +179,46 @@ export class ChunkManager {
   private moveDirSmZ = 0;
   private moveLastPx = NaN;
   private moveLastPz = NaN;
+  /** 平滑移动方向单位向量（站立 → 0,0；数据加载/粗块请求共用） */
+  private moveDirUnit(): { x: number; z: number } {
+    const l = Math.hypot(this.moveDirSmX, this.moveDirSmZ);
+    return l > 0.05 ? { x: this.moveDirSmX / l, z: this.moveDirSmZ / l } : { x: 0, z: 0 };
+  }
+  /** 构建优先级方向/加权（update 每帧刷新；构建队列与装配队列共用） */
+  private prioDirX = 0;
+  private prioDirZ = 0;
+  private prioBoost = 0;
+  /** 刷新构建优先级参数（移动方向平滑后调用） */
+  private refreshBuildPriority(): void {
+    const l = Math.hypot(this.moveDirSmX, this.moveDirSmZ);
+    const moving = l > 0.05;
+    this.prioDirX = moving ? this.moveDirSmX / l : 0;
+    this.prioDirZ = moving ? this.moveDirSmZ / l : 0;
+    this.prioBoost = moving && this.forwardBuiltCount(this.prioDirX, this.prioDirZ) < ChunkManager.FORWARD_MIN_BUILT
+      ? ChunkManager.FORWARD_BONUS
+      : ChunkManager.FORWARD_BONUS * 0.3;
+  }
+  /** ★ 构建优先级评分（越小越先）：角色所在 chunk 绝对第一 → 正前方三层 →
+   *  十字臂（对角惩罚）→ 移动方向加权 → 最近优先。
+   *  构建队列（processQueue）与装配队列（update 内）共用同一评分。 */
+  private buildPriorityScore(cx: number, cz: number): number {
+    const qdx = cx - this.hotPcx, qdz = cz - this.hotPcz;
+    const d = Math.max(Math.abs(qdx), Math.abs(qdz));
+    if (d === 0) return -2e6; // ★ 角色落点 chunk 第一（用户定调）
+    if (this.frontKeys.has(chunkKeyOf(cx, cz))) return -1e6 + d;
+    const cross = qdx !== 0 && qdz !== 0 ? ChunkManager.CROSS_PENALTY : 0;
+    return d + cross - (qdx * this.prioDirX + qdz * this.prioDirZ) * this.prioBoost;
+  }
   /** ★ 前向优先：构建环内前向已建数量低于该阈值 → 前向 chunk 加权抢占
    *  （用户定调：优先补角色当前移动方向上"数量不足"的 chunk） */
   private static readonly FORWARD_MIN_BUILT = 3;
   /** 前向投影加权系数（score = 距离 − 投影 × 系数；不足阈值全权重，足够时降权） */
   private static readonly FORWARD_BONUS = 1.2;
+  /** ★ 细块十字形扩充（用户定调）：非轴（对角）格的惩罚——角色落点 chunk 起，
+   *  十字臂（dx=0 或 dz=0）先铺满构建环，四角最后补（2 > 环距 1，臂优先于角） */
+  private static readonly CROSS_PENALTY = 2;
+  /** ★ 粗块请求前向加权（归一化投影；前向最多提前 ~1.5 环，环距仍是第一序） */
+  private static readonly COARSE_FORWARD_BONUS = 1.5;
   /** ★ 地形光照可见距离（米）：超出 + 视野锥外的 chunk 材质不喂昼夜 uniform */
   private static readonly LIGHT_VISIBLE_DIST = 170;
 
@@ -359,6 +394,11 @@ export class ChunkManager {
     out.sort((a, b) => Math.max(Math.abs(a.dx), Math.abs(a.dz)) - Math.max(Math.abs(b.dx), Math.abs(b.dz)));
     return out;
   })();
+  /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
+  private coarseOrder: number[] | null = null;
+  private coarseOrderScore: Float32Array | null = null;
+  private coarseOrderDirX = 0;
+  private coarseOrderDirZ = 0;
   /** 已装配粗块（key → group） */
   private coarseMeshes = new Map<number, THREE.Group>();
   /** 粗块几何在途（防重复请求） */
@@ -440,6 +480,8 @@ export class ChunkManager {
     }
     this.moveLastPx = px;
     this.moveLastPz = pz;
+    // ★ 构建优先级参数（角色 chunk 第一/十字/前向；构建+装配共用）
+    this.refreshBuildPriority();
     // ★ 烘焙缓存 LRU 淘汰（2s 一拍；在用块跳过）——长距离跑图防显存无界增长
     this.bakeTrimAccum += dt;
     if (this.bakeTrimAccum >= 2) {
@@ -451,7 +493,8 @@ export class ChunkManager {
     }
     // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
     if (this.coarseOnly) {
-      this.raster.updateChunks(px, pz, this.dataRadius());
+      const md = this.moveDirUnit();
+      this.raster.updateChunks(px, pz, this.dataRadius(), md.x, md.z);
       this.syncCoarse(px, pz);
       this.flushCoarseQueue();
       this.parkFarChunks(px, pz);
@@ -467,12 +510,19 @@ export class ChunkManager {
     this.lastAssembleMs = 0;
     let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0 && performance.now() >= this.assembleCooldownUntil) {
-      // ★ 首建限流：超限时跳过首建，找挖坑重建（decor===null）先放行；没有则本帧停装
-      let idx = 0;
-      if (!this.allowFirstBuild()) {
-        idx = this.assembleQueue.findIndex((q) => q.decor === null);
-        if (idx === -1) break;
+      // ★ 装配顺序 = 构建优先级（角色所在 chunk 第一；用户定调 2026-09-12）：
+      //   装配队列按 bake 结果**到达顺序**堆积，若按 FIFO 装配，角色 chunk 会被
+      //   先到的远处结果插队 → 这里按 buildPriorityScore 选出最高优先级项。
+      //   首建限流时只放行重建（decor===null，挖坑链路）；没有则本帧停装。
+      const onlyRebuild = !this.allowFirstBuild();
+      let idx = -1, bestScore = Infinity;
+      for (let i = 0; i < this.assembleQueue.length; i++) {
+        const q = this.assembleQueue[i];
+        if (onlyRebuild && q.decor !== null) continue;
+        const sc = this.buildPriorityScore(q.cx, q.cz);
+        if (sc < bestScore) { bestScore = sc; idx = i; }
       }
+      if (idx === -1) break;
       const a = this.assembleQueue.splice(idx, 1)[0];
       // ★ 卸载范围外作废：unload 后晚到的 Worker 结果/队列项不再装配（防复活）
       if (Math.max(Math.abs(a.cx - this.hotPcx), Math.abs(a.cz - this.hotPcz)) > ChunkManager.PARK_RADIUS) {
@@ -833,7 +883,9 @@ export class ChunkManager {
       return;
     }
     // ★ 数据环 = 预烘焙半径（±3 = 7×7），构建环另按 BUILD_RADIUS 取
-    const added = this.raster.updateChunks(px, pz, this.dataRadius());
+    //   ★ 移动方向优先（用户定调）：方向上的数据块先加载
+    const mdir = this.moveDirUnit();
+    const added = this.raster.updateChunks(px, pz, this.dataRadius(), mdir.x, mdir.z);
     // 数据新增 → 已有网格的 3×3 邻域变了 → 接缝重建（排在新建之后处理）
     for (const { cx, cz } of added) {
       for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -882,28 +934,16 @@ export class ChunkManager {
     //   2026-09-08 用户定调），把主线程+烘焙 worker 让给地形修改链路
     const patching = this.patchRebuilds.size > 0 || this.pendingPatches.size > 0;
     const budget = ChunkManager.BUILD_BUDGET_MS * (patching ? 0.5 : 1);
-    // ★ 移动方向优先（用户定调）：前向已建数量不足阈值 → 前向 chunk 全权重加权抢占；
-    //   足够时降权（仍略有偏向），站立不动 → 纯最近优先
-    const mlen = Math.hypot(this.moveDirSmX, this.moveDirSmZ);
-    const dirX = mlen > 0.05 ? this.moveDirSmX / mlen : 0;
-    const dirZ = mlen > 0.05 ? this.moveDirSmZ / mlen : 0;
-    const moving = dirX !== 0 || dirZ !== 0;
-    const boost = moving && this.forwardBuiltCount(dirX, dirZ) < ChunkManager.FORWARD_MIN_BUILT
-      ? ChunkManager.FORWARD_BONUS
-      : ChunkManager.FORWARD_BONUS * 0.3;
     while (this.queue.length > 0 && performance.now() - t0 < budget) {
       // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
       //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）
       if (!this.boss4D && this.countBuildInflight() >= ChunkManager.BUILD_INFLIGHT_MAX) break;
-      // ★ 最近优先 + 前向加权 + 正前方三层绝对抢占：
-      //   score = 距离 − 前向投影 × 加权（越小越先建）；正前块 −1e6 恒第一
+      // ★ 构建优先级（buildPriorityScore）：角色 chunk 绝对第一 → 正前方三层
+      //   → 十字臂（对角惩罚）→ 前向加权 → 最近优先
       let best = 0, bestScore = Infinity;
       for (let i = 0; i < this.queue.length; i++) {
         const it = this.queue[i];
-        const qdx = it.cx - this.hotPcx, qdz = it.cz - this.hotPcz;
-        const d = Math.max(Math.abs(qdx), Math.abs(qdz));
-        const front = this.frontKeys.has(chunkKeyOf(it.cx, it.cz)) ? -1e6 : 0;
-        const score = front + d - (qdx * dirX + qdz * dirZ) * boost;
+        const score = this.buildPriorityScore(it.cx, it.cz);
         if (score < bestScore) { bestScore = score; best = i; }
       }
       const item = this.queue.splice(best, 1)[0];
@@ -946,7 +986,7 @@ export class ChunkManager {
     const destroyR = ChunkManager.DESTROY_RADIUS;
     const destroys: { key: number; d: number }[] = [];
     const parks: { key: number; d: number }[] = [];
-    const unparks: number[] = [];
+    const unparks: { key: number; d: number }[] = [];
     for (const key of [...this.meshes.keys(), ...this.voidKeys]) {
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
@@ -956,7 +996,7 @@ export class ChunkManager {
       } else if (d > parkR) {
         if (!this.parkedKeys.has(key)) parks.push({ key, d });
       } else if (this.parkedKeys.has(key)) {
-        unparks.push(key);
+        unparks.push({ key, d });
       }
     }
     destroys.sort((a, b) => b.d - a.d); // 最远先卸
@@ -967,8 +1007,11 @@ export class ChunkManager {
     for (let i = 0; i < parks.length && i < ChunkManager.UNLOAD_PER_SWEEP; i++) {
       this.parkChunk(parks[i].key);
     }
+    // ★ 解封最近优先（用户定调）：回程时角色所在 chunk 先挂回视觉，
+    //   而不是按 Map 迭代序（否则附近已解封一半、脚下还是粗块）
+    unparks.sort((a, b) => a.d - b.d);
     for (let i = 0; i < unparks.length && i < ChunkManager.UNPARK_PER_SWEEP; i++) {
-      this.unparkChunk(unparks[i]);
+      this.unparkChunk(unparks[i].key);
     }
     // 粗块同样按范围剔除（超出粗块环 +1 即销毁重建；同样预算化）
     let coarseBudget = ChunkManager.UNLOAD_PER_SWEEP;
@@ -992,13 +1035,43 @@ export class ChunkManager {
     return Math.max(ChunkManager.PREFETCH_RADIUS, ChunkManager.COARSE_RADIUS + 1);
   }
 
-  /** 粗块请求/补齐：环内数据块（近处交给细化）→ coarsePatch worker */
+  /** ★ 粗块请求顺序（移动方向优先）：score = 环距 − 前向投影 × 加权；
+   *  站立（方向≈0）→ 纯由内向外；方向稳定时复用上次排序 */
+  private coarseRequestOrder(): number[] {
+    const n = ChunkManager.COARSE_OFFSETS.length;
+    if (!this.coarseOrder) {
+      this.coarseOrder = Array.from({ length: n }, (_, i) => i);
+      this.coarseOrderScore = new Float32Array(n);
+    }
+    const dir = this.moveDirUnit();
+    if (
+      Math.abs(dir.x - this.coarseOrderDirX) > 0.15 ||
+      Math.abs(dir.z - this.coarseOrderDirZ) > 0.15
+    ) {
+      const s = this.coarseOrderScore!;
+      for (let i = 0; i < n; i++) {
+        const o = ChunkManager.COARSE_OFFSETS[i];
+        if (o.dx === 0 && o.dz === 0) { s[i] = -1e6; continue; } // ★ 舰船所在块第一
+        const d = Math.max(Math.abs(o.dx), Math.abs(o.dz));
+        // 环距为第一序（近处永远先于远处）；归一化前向投影为第二序（同环内方向优先）
+        s[i] = d - ((o.dx * dir.x + o.dz * dir.z) / d) * ChunkManager.COARSE_FORWARD_BONUS;
+      }
+      this.coarseOrder.sort((a, b) => s[a] - s[b]);
+      this.coarseOrderDirX = dir.x;
+      this.coarseOrderDirZ = dir.z;
+    }
+    return this.coarseOrder;
+  }
+
+  /** 粗块请求/补齐：环内数据块（近处交给细化）→ coarsePatch worker；
+   *  ★ 移动方向优先（用户定调）：方向上的环先铺 */
   private syncCoarse(px: number, pz: number): void {
     if (this.boss4D) return; // 四维空间不铺粗块（同步构建）
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const epoch = this.coarseEpoch;
-    for (const o of ChunkManager.COARSE_OFFSETS) {
+    for (const oi of this.coarseRequestOrder()) {
+      const o = ChunkManager.COARSE_OFFSETS[oi];
       const cx = pcx + o.dx, cz = pcz + o.dz;
       const key = chunkKeyOf(cx, cz);
       // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
@@ -2036,6 +2109,8 @@ const key2 = chunkKeyOf(cx, cz);
     this.hotChunkKey = chunkKeyOf(cx, cz);
     this.hotPcx = cx;
     this.hotPcz = cz;
+    // ★ 脚下封存块立即解封（不等 sweep 预算/排序）：回程或落地瞬间细化视觉即刻恢复
+    if (this.parkedKeys.has(this.hotChunkKey)) this.unparkChunk(this.hotChunkKey);
   }
 
   /** ★ 破坏重建帧间合并 + 节流（每帧开头调用）：把本帧攒下的挖坑请求按 chunk 合并后

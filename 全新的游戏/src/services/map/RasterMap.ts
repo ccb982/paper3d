@@ -66,8 +66,13 @@ export class RasterMap {
   private static readonly UNLOAD_MARGIN = 2;
   /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
   private static readonly DATA_LOAD_PER_FRAME = 6;
+  /** ★ 数据加载前向加权（归一化投影；前向最多提前 ~1.5 环，环距仍是第一序） */
+  private static readonly DATA_FORWARD_BONUS = 1.5;
   /** 待加载清单（跨 chunk 时重建；逐帧预算消化） */
   private pendingLoads: { cx: number; cz: number }[] = [];
+  /** 上次排序所用移动方向（中途掉头时对剩余清单重排） */
+  private loadSortX = 0;
+  private loadSortZ = 0;
   /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
@@ -114,11 +119,14 @@ export class RasterMap {
   }
 
   /** ★ 玩家驱动加载：跨 chunk 时按加载半径扩张，返回本次新增 chunk 列表
-   *   （调用方据此建地面刚体/视觉网格）。加载半径 = 可视(1) + 预加载(1) */
+   *   （调用方据此建地面刚体/视觉网格）。加载半径 = 可视(1) + 预加载(1)
+   *  dirX/dirZ = 当前移动方向（可选）：方向上的块优先加载（前向加权） */
   updateChunks(
     px: number,
     pz: number,
     loadRadius = 2,
+    dirX = 0,
+    dirZ = 0,
   ): { cx: number; cz: number }[] {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
@@ -137,6 +145,23 @@ export class RasterMap {
       // ★ 距离卸载：环外数据释放（挖过的层数入持久层）——防长距离跑图内存无界增长
       this.evictFarChunks(pcx, pcz, loadRadius + RasterMap.UNLOAD_MARGIN);
     }
+    // ★ 移动方向优先（用户定调）：环距为第一序（近处永远先于远处）、
+    //   归一化前向投影为第二序（同环内方向上的块提前、背面最后）；原地不偏。
+    //   ⚠️ 勿用原始投影加权（|投影| 可到 ±7）——会把"远前方"排到"近处"前面。
+    //   跨区重建时排；中途掉头（方向差 >0.3）对剩余清单重排；站立 → 回到纯环距序。
+    const dl0 = Math.hypot(dirX, dirZ);
+    const nx = dl0 > 0.05 ? dirX / dl0 : 0;
+    const nz = dl0 > 0.05 ? dirZ / dl0 : 0;
+    const turned = Math.abs(nx - this.loadSortX) + Math.abs(nz - this.loadSortZ) > 0.3;
+    if ((moved || turned) && this.pendingLoads.length > 1) {
+      this.loadSortX = nx;
+      this.loadSortZ = nz;
+      this.pendingLoads.sort((a, c) => RasterMap.loadScore(
+        a.cx - pcx, a.cz - pcz, nx, nz,
+      ) - RasterMap.loadScore(
+        c.cx - pcx, c.cz - pcz, nx, nz,
+      ));
+    }
     if (this.pendingLoads.length === 0) return [];
     // ★ 预算化消费待加载清单（返回本次真正新增，调用方据此接缝重建/构建）
     const added: { cx: number; cz: number }[] = [];
@@ -148,6 +173,13 @@ export class RasterMap {
       added.push(c);
     }
     return added;
+  }
+
+  /** 数据加载评分（越小越先）：角色所在块绝对第一；否则环距 − 归一化前向投影 × 加权 */
+  private static loadScore(dx: number, dz: number, nx: number, nz: number): number {
+    if (dx === 0 && dz === 0) return -1e6;
+    const d = Math.max(Math.abs(dx), Math.abs(dz));
+    return d - ((dx * nx + dz * nz) / d) * RasterMap.DATA_FORWARD_BONUS;
   }
 
   /** ★ 天结束统一回收（世界重建；seed 确定性保证每天地形一致） */
