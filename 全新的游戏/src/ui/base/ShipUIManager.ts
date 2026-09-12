@@ -14,14 +14,18 @@ import { renderDialogBubble } from '../components/DialogBubble';
 import type { GachaOverlay } from './GachaOverlay';
 import type { CraftingOverlay } from './CraftingOverlay';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
-import { ActionPanel, FormationPanel, OperatorPanel } from './ShipPanels';
+import { ActionPanel, OperatorPanel } from './ShipPanels';
+import { computeCombatStats } from '../../core/Session';
+import { RELIC_ITEM_CONFIG } from '../../config/relics';
+import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/CharacterStatsPanel';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
 
 export class ShipUIManager extends BaseInteractionUI {
   private currentPanel: ShipPanel = 'none';
-  /** ★ 挂载中的编队面板实例（子视图刷新委托） */
-  private formationPanel: FormationPanel | null = null;
+  /** ★ 编队 → 完整背包页（2026-09-12）：角色属性 + 背包网格 + 出击槽 */
+  private characterStatsPanel = new CharacterStatsPanel();
+  private inventoryPageOpen = false;
   private root: HTMLDivElement;
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
@@ -115,8 +119,12 @@ export class ShipUIManager extends BaseInteractionUI {
   // 面板切换
   // ============================================================
 
-  /** 切换面板（公开供按钮点击调用） */
+  /** 切换面板（公开供按钮点击调用）；★ 编队 → 直接打开完整背包页 */
   togglePanel(panel: ShipPanel): void {
+    if (panel === 'formation') {
+      this.toggleInventoryPage();
+      return;
+    }
     if (this.currentPanel === panel) {
       this.closeCurrentPanel();
       return;
@@ -144,17 +152,6 @@ export class ShipUIManager extends BaseInteractionUI {
         content = this.buildSidePanel(p);
         break;
       }
-      case 'formation': {
-        const p = new FormationPanel({
-          session: this.session,
-          itemManager: this.itemManager,
-          craftingManager: this.craftingManager,
-          inventoryPanel: this.inventoryPanel,
-        });
-        this.formationPanel = p;
-        content = this.buildSidePanel(p);
-        break;
-      }
       case 'operator': {
         const p = new OperatorPanel({
           session: this.session,
@@ -176,11 +173,82 @@ export class ShipUIManager extends BaseInteractionUI {
 
   /** ★ 数据变更后刷新当前面板内容，保持子视图停留 */
   private refreshPanelContent(): void {
-    if (this.currentPanel !== 'formation') {
-      this.renderPanel(this.currentPanel);
+    this.renderPanel(this.currentPanel);
+  }
+
+  // ============================================================
+  // 编队 → 完整背包页（2026-09-12 用户定调：点击编队直接进入背包页面）
+  // ============================================================
+
+  private toggleInventoryPage(): void {
+    if (this.inventoryPageOpen) {
+      this.closePanel('base-inventory');
       return;
     }
-    this.formationPanel?.refresh();
+    const content = document.createElement('div');
+    content.className = 'ui-panel-inner';
+
+    // 左右分栏：左 = 角色属性（橙色）；右 = 背包 + 出击槽
+    const columns = document.createElement('div');
+    columns.style.cssText =
+      'display:flex;gap:12px;align-items:flex-start;width:min(94vw,1120px);box-sizing:border-box;';
+    const statsRoot = document.createElement('div');
+    this.characterStatsPanel.render(statsRoot, this.buildStatsSnapshot(), this.iconRegistry);
+    columns.appendChild(statsRoot);
+    const gridRoot = document.createElement('div');
+    gridRoot.style.cssText = 'flex:1 1 auto;min-width:0;overflow-y:auto;overflow-x:hidden;';
+    columns.appendChild(gridRoot);
+    content.appendChild(columns);
+    this.inventoryPanel.render(gridRoot);
+
+    this.inventoryPageOpen = true;
+    this.openPanel({
+      id: 'base-inventory',
+      title: '背包',
+      render: () => content,
+      onClose: () => { this.inventoryPageOpen = false; },
+    });
+  }
+
+  /** ★ 角色属性快照（基地无实时实体：current = 永久 + 装备临时加成；不含限时 buff） */
+  private buildStatsSnapshot(): CharacterStatsSnapshot {
+    const base = this.session.player;
+    const perm = computeCombatStats(this.session, RELIC_ITEM_CONFIG);
+    const temp = this.itemManager.getEquipmentStats();
+    const owned = this.session.outOfRun?.owned ?? {};
+    const relics = Object.entries(owned)
+      .filter(([, count]) => (count ?? 0) > 0)
+      .map(([id, count]) => {
+        const cfg = RELIC_ITEM_CONFIG[id];
+        return {
+          id,
+          name: cfg?.name ?? id,
+          count,
+          iconFrame: cfg?.iconFrame ? cfg.iconFrame(count) : 0,
+          description: cfg?.description ?? '',
+        };
+      });
+    const curAtk = Math.floor(perm.attackPower * (1 + temp.attackPct)) + temp.attackPower;
+    const curDef = Math.floor(perm.defense * (1 + temp.defensePct)) + temp.defense;
+    const curMaxHp = perm.maxHp + temp.maxHp;
+    const extras: { label: string; perm: number; temp: number; suffix?: string }[] = [
+      { label: '攻击速度', perm: 100, temp: temp.attackSpeed },
+      { label: '伤害减免', perm: 0, temp: Math.round(temp.damageReduction * 100), suffix: '%' },
+      { label: '生命回复', perm: 0, temp: +temp.hpRegen.toFixed(2), suffix: '/s' },
+    ];
+    if (temp.critRate > 0) extras.push({ label: '暴击率', perm: 0, temp: Math.round(temp.critRate * 100), suffix: '%' });
+    if (temp.dodgeRate > 0) extras.push({ label: '闪避率', perm: 0, temp: Math.round(temp.dodgeRate * 100), suffix: '%' });
+    if (temp.blockRate > 0) extras.push({ label: '格挡率', perm: 0, temp: Math.round(temp.blockRate * 100), suffix: '%' });
+    return {
+      base: { maxHp: base.maxHp, attackPower: base.attackPower, defense: base.defense },
+      perm: { maxHp: perm.maxHp, attackPower: perm.attackPower, defense: perm.defense },
+      temp: { maxHp: curMaxHp - perm.maxHp, attackPower: curAtk - perm.attackPower, defense: curDef - perm.defense },
+      current: { maxHp: curMaxHp, attackPower: curAtk, defense: curDef },
+      extras,
+      day: this.session.meta.day,
+      deaths: this.session.meta.deaths ?? 0,
+      relics,
+    };
   }
 
   // ============================================================
@@ -211,7 +279,7 @@ export class ShipUIManager extends BaseInteractionUI {
 
   override dispose(): void {
     super.dispose();
-    this.formationPanel = null;
+    this.inventoryPageOpen = false;
     if (this.root?.parentNode) this.root.parentNode.removeChild(this.root);
     this.panelContainer.innerHTML = '';
   }

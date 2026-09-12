@@ -9,9 +9,6 @@ import { SidePanel } from '../panel/SidePanel';
 import type { PanelRenderOptions } from '../panel/types';
 import type { GameSession } from '../../core/Session';
 import { countItemsInGrid } from '../../core/Session';
-import type { ItemManager } from '../../systems/inventory/ItemManager';
-import type { CraftingManager } from '../../systems/inventory/CraftingManager';
-import type { InventoryPanel } from '../shared/InventoryPanel';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { createButton } from '../components/Button';
 import { RELIC_ITEM_CONFIG } from '../../config/relics';
@@ -71,57 +68,9 @@ export class ActionPanel extends SidePanel<ActionPanelProps> {
 }
 
 // ------------------------------------------------------------
-// 编队面板
+// （编队面板已废弃：2026-09-12 用户定调——点击"编队"直接打开完整背包页，
+//   出击槽在背包页内；原侧边面板与合成台入口一并移除）
 // ------------------------------------------------------------
-export interface FormationPanelProps {
-  session: GameSession;
-  itemManager: ItemManager;
-  craftingManager: CraftingManager;
-  inventoryPanel: InventoryPanel;
-}
-
-export class FormationPanel extends SidePanel<FormationPanelProps> {
-  protected title(): string {
-    return '编队管理';
-  }
-
-  protected body(): HTMLElement {
-    const div = document.createElement('div');
-
-    const btnBar = document.createElement('div');
-    btnBar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;';
-    btnBar.appendChild(createButton({ label: '🎒 打开背包', size: 'sm', style: 'secondary', onClick: () => this.renderInventoryView() }));
-    // ★ 合成台入口已移入基地"加工站"房间（2026-09-12 用户定调：走到加工站按 F）
-    div.appendChild(btnBar);
-
-    const content = document.createElement('div');
-    content.id = 'ship-formation-content';
-    div.appendChild(content);
-
-    // 默认展示子视图：背包
-    this.renderInventoryView();
-    return div;
-  }
-
-  /** ★ 数据变更后刷新当前子视图（仅背包） */
-  refresh(): void {
-    this.renderInventoryView();
-  }
-
-  /** 子视图：背包 */
-  private renderInventoryView(): void {
-    const content = document.getElementById('ship-formation-content');
-    if (!content) return;
-    const box = document.createElement('div');
-    box.style.cssText = 'padding:8px;background:rgba(68,102,170,0.15);border-radius:4px;';
-    const grid = document.createElement('div');
-    grid.id = 'inv-grid-view';
-    box.appendChild(grid);
-    content.innerHTML = '';
-    content.appendChild(box);
-    this.props.inventoryPanel.render(grid);
-  }
-}
 
 // ------------------------------------------------------------
 // 遗物管理面板（承接原"干员"按钮位；旧的干员招募/藏品代码已彻底废弃）

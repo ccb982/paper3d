@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import type { GameSession } from './Session';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
+import type { FrameAssetSource } from '../services/fx/AssetSource';
 
 export interface IGameModeContext {
   scene: THREE.Scene;
@@ -21,6 +22,8 @@ export interface IGameModeContext {
   session: GameSession;
   /** ★ 主角素材（维维美）；基地内部行走立绘用（BaseMode 也会收到） */
   protagonistAsset?: FtxAsset;
+  /** ★ 基地盟友立绘素材（无人机）：出击槽带槽即跟随绘制（祖宗是弹药消耗品，不进基地） */
+  droneAsset?: FrameAssetSource;
   /** 返回回调：WorldMode 按 E 键时触发 → main 进入 BaseMode */
   onReturn?: () => void;
   /** 出击回调：BaseMode 点击"出击"时触发 → main 进入 WorldMode */

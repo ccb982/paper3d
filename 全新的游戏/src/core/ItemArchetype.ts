@@ -79,6 +79,8 @@ export class ItemArchetype {
   readonly worldConfig: ItemWorldConfig | null;
   /** ★ 可部署为友军（背包友军槽位拖入条件） */
   readonly deployable: boolean;
+  /** ★ 友军类型（combat.kind==='ally' 时：'drone' 等；非友军为 null）。基地绘制跟随盟友判定用 */
+  readonly allyType: string | null;
   /** ★ 装备位（effects 里 type==='equip' 的 slot；非装备类为 null。装备栏拖入判定用） */
   readonly equipSlot: string | null;
   /** ★ 局内装备临时属性（穿戴在出击槽即生效，卸载即消失；与遗物永久加成区分） */
@@ -94,6 +96,7 @@ export class ItemArchetype {
     this.color = data.color ?? { h: 0.5, s: 0.5, l: 0.5 };
     this.worldConfig = data.world ?? null;
     this.deployable = data.deployable ?? false;
+    this.allyType = data.combat?.kind === 'ally' ? (data.combat.allyType ?? null) : null;
 
     // 解析世界掉落参数
     const w = data.world;

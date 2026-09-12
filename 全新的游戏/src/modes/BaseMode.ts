@@ -56,6 +56,8 @@ export class BaseMode implements IGameMode {
   // ★ 基地内部 3D 剖切空间（固定侧视；返回后的界面）与主按钮
   private baseScene: BaseScene | null = null;
   private mainButtons: MainButtons | null = null;
+  /** ★ 出击槽变动订阅（基地内换装：装备贴片/无人机即时刷新） */
+  private deploymentUnsub: (() => void) | null = null;
 
   // ============================================================
   // IGameMode 接口实现
@@ -88,10 +90,21 @@ export class BaseMode implements IGameMode {
     );
 
     // ③ 基地内部 3D 剖切空间（三间打通 + 维维美行走 + 镜头跟随/缩放）
-    this.baseScene = new BaseScene(ctx.scene!, ctx.protagonistAsset);
+    //    角色身上绘制装备贴片（黍姐的XX/鱼生萌萌香…），出击槽里的无人机三帧合成跟随
+    //    （祖宗是弹药消耗品，不在基地绘制）
+    this.baseScene = new BaseScene(ctx.scene!, {
+      protagonistAsset: ctx.protagonistAsset,
+      droneAsset: ctx.droneAsset,
+      itemManager: this.itemManager,
+      renderer: ctx.renderer,
+    });
     this.baseScene.setupCamera(ctx.camera!);
     // ★ 加工台入口（2026-09-12 用户定调）：走到"加工站"房间按 F（原编队面板入口已移除）
     this.baseScene.onCraftStation(() => this.uiManager.openCrafting('ship'));
+    // ★ 出击槽变动（背包页穿脱/互换）：装备贴片与无人机三帧合成即时刷新
+    this.deploymentUnsub = eventBus.on('deployment_changed', () => {
+      this.baseScene?.refreshDeployment();
+    });
 
     // ④ 加载主页面按钮（FTX 纹理，梯形透视；异步不阻塞进入）
     this.mainButtons = new MainButtons();
@@ -122,6 +135,10 @@ export class BaseMode implements IGameMode {
   }
 
   exit(): void {
+    // ⓪ 退订出击槽变动
+    this.deploymentUnsub?.();
+    this.deploymentUnsub = null;
+
     // ① 销毁主页面按钮
     this.mainButtons?.dispose();
     this.mainButtons = null;

@@ -7,12 +7,15 @@
 //   · **维维美（主角）在里面**：WASD/方向键在大厅内行走（立绘 + 走/待机帧动画）；
 //   · **镜头跟随维维美**：平滑跟随；**滚轮缩放视野**（改跟随机距）；
 //   · 原来的页面按钮（MainButtons）保持不变；基地不绘制战机。
-// 生命周期：ShipMode.enter 创建、exit dispose（几何/材质/贴图/监听全清）。
+// 生命周期：BaseMode.enter 创建、exit dispose（几何/材质/贴图/监听全清）。
 
 import * as THREE from 'three';
 import { FTXQuad } from '../../services/render/FTXQuad';
+import { DroneCompositeRender } from '../../services/render/DroneCompositeRender';
 import { FrameAnimatorBase } from '../../services/fx/FrameAnimatorBase';
-import type { FrameAssetSource } from '../../services/fx/AssetSource';
+import type { CharacterFxAssetSource, FrameAssetSource } from '../../services/fx/AssetSource';
+import { EquipmentLayer } from '../../systems/itemPlayback/EquipmentLayer';
+import type { ItemManager } from '../../systems/inventory/ItemManager';
 import baseRooms from '../../config/baseRooms.json';
 
 interface RoomDef {
@@ -22,24 +25,42 @@ interface RoomDef {
   label: string;
 }
 
-/** 单间尺寸（米）与分界缝；三间打通 = 大厅宽 = 3×ROOM_W + 2×ROOM_GAP */
-const ROOM_W = 9;
-const ROOM_H = 4.2;
-const ROOM_D = 6;
+/** 单间尺寸（米）与分界缝；三间打通 = 大厅宽 = 3×ROOM_W + 2×ROOM_GAP
+ *  ★ 2026-09-12 用户定调：房间扩大三倍（27×12.6×18m；门/家具保持人体尺度） */
+const ROOM_W = 27;
+const ROOM_H = 12.6;
+const ROOM_D = 18;
 const ROOM_GAP = 1.4;
 const WALL_T = 0.3;
-/** 角色参数（2026-09-12 用户定调：可跳跃、移速加快） */
-const MOVE_SPEED = 6.2;
+/** 角色参数（2026-09-12 用户定调：可跳跃、移速加快；房间 3× 后再提一档） */
+const MOVE_SPEED = 9.5;
 const JUMP_V = 7.2;
 const GRAVITY = 20;
 /** 分界墙门洞半宽（沿进深 z；门高 3.0） */
 const DOOR_HALF = 1.1;
 const DOOR_H = 3.0;
 
+export interface BaseSceneOptions {
+  /** 主角立绘（维维美） */
+  protagonistAsset?: FrameAssetSource;
+  /** 盟友立绘素材（无人机；祖宗为弹药消耗品不再绘制） */
+  droneAsset?: FrameAssetSource;
+  /** 出击槽读取（装备贴片 / 盟友跟随） */
+  itemManager?: ItemManager;
+  /** WebGL 渲染器（无人机三帧合成 + 翅膀 VAT 离屏烘焙共享上下文用） */
+  renderer?: THREE.WebGLRenderer;
+}
+
 export class BaseScene {
+  private sceneRef: THREE.Scene;
+  /** 主渲染器（无人机翅膀 VAT 离屏烘焙共享上下文） */
+  private renderer3d: THREE.WebGLRenderer | null = null;
   private root: THREE.Group;
   private hallW: number;
   private bays: number[] = [];
+
+  /** 通用时钟（盟友绕行/呼吸等周期动画用） */
+  private t = 0;
 
   // ---- 角色（维维美） ----
   private quad: FTXQuad | null = null;
@@ -61,13 +82,23 @@ export class BaseScene {
   private craftCb: (() => void) | null = null;
   private promptEl: HTMLDivElement;
 
+  // ---- 身上的各种图标（装备贴片）与盟友跟随 ----
+  //   无人机 = DroneCompositeRender（★ 三帧叠加合成：主体 + 左翼 + 右翼，与游戏内同管线）
+  //   祖宗是弹药消耗品 → 基地内不绘制
+  private equip: EquipmentLayer | null = null;
+  private droneAllies: { view: DroneCompositeRender; anim: FrameAnimatorBase; index: number }[] = [];
+  private droneAssetSrc: FrameAssetSource | null = null;
+  private itemManagerRef: ItemManager | null = null;
+
   // ---- 相机（跟随 + 缩放） ----
   private camera: THREE.PerspectiveCamera | null = null;
-  private camPos = new THREE.Vector3(0, 7.4, 16.5);
-  private camDist = 16.5;
-  private camDistTarget = 16.5;
+  private camPos = new THREE.Vector3(0, 8.8, 24);
+  private camDist = 24;
+  private camDistTarget = 24;
 
-  constructor(scene: THREE.Scene, protagonistAsset?: FrameAssetSource) {
+  constructor(scene: THREE.Scene, opts: BaseSceneOptions = {}) {
+    this.sceneRef = scene;
+    this.renderer3d = opts.renderer ?? null;
     this.root = new THREE.Group();
     scene.add(this.root);
 
@@ -87,6 +118,7 @@ export class BaseScene {
     this.buildHall(defs);
 
     // 角色（无素材时跳过，仅保留空间）
+    const protagonistAsset = opts.protagonistAsset;
     if (protagonistAsset) {
       this.quad = new FTXQuad(scene, protagonistAsset);
       this.quad.setScaleKeepAspect(2.4);
@@ -94,6 +126,18 @@ export class BaseScene {
       this.quad.setPosition(this.charPos.x, 0, this.charPos.z);
       this.anim = new FrameAnimatorBase(protagonistAsset);
       this.anim.playFrames(['前0', '前1'], { fps: 2, loop: true });
+
+      // ★ 身上的各种图标（装备贴片）：按出击槽全量叠加（武器/防具/头饰，
+      //   如黍姐的XX、鱼生萌萌香），与游戏内 EquipmentLayer 同一管线
+      this.droneAssetSrc = opts.droneAsset ?? null;
+      this.itemManagerRef = opts.itemManager ?? null;
+      const slots = this.currentSlots();
+      const hostMesh = (this.quad as unknown as { mesh?: THREE.Mesh | null }).mesh ?? null;
+      if (hostMesh) {
+        this.equip = new EquipmentLayer(scene, hostMesh, () => '前');
+        void this.equip.apply(slots);
+      }
+      this.syncDroneAlly(slots);
     }
 
     // 加工站提示条（靠近加工站房间时显示）
@@ -111,9 +155,46 @@ export class BaseScene {
     window.addEventListener('wheel', this.onWheel, { passive: true });
   }
 
-  /** 加工站交互回调（ShipMode 注入：打开加工台覆盖层） */
+  /** 加工站交互回调（BaseMode 注入：打开加工台覆盖层） */
   onCraftStation(cb: () => void): void {
     this.craftCb = cb;
+  }
+
+  /** 无人机盟友：★ 三帧同时叠加绘制（主体 + 左翼 + 右翼），与游戏内 DroneCompositeRender 同管线 */
+  private addDrone(asset: FrameAssetSource, size: number): void {
+    const anim = new FrameAnimatorBase(asset);
+    const view = new DroneCompositeRender(this.sceneRef, asset as CharacterFxAssetSource, anim);
+    if (this.renderer3d) view.setRenderer(this.renderer3d); // 翅膀 VAT 离屏烘焙共享上下文
+    view.setScaleKeepAspect(size);
+    view.setPosition(this.charPos.x, this.charY + 2.1, this.charPos.z);
+    this.droneAllies.push({ view, anim, index: this.droneAllies.length });
+  }
+
+  /** 当前出击槽（已过滤空槽） */
+  private currentSlots(): string[] {
+    return (this.itemManagerRef?.getSlots() ?? []).filter((s): s is string => !!s);
+  }
+
+  /** 槽内是友军无人机？（配置驱动：combat.kind='ally' + allyType='drone'） */
+  private isDroneSlot(itemId: string): boolean {
+    return this.itemManagerRef?.getArchetype(itemId)?.allyType === 'drone';
+  }
+
+  /** ★ 按出击槽同步无人机编队（★ 每槽一架，多架一起包围角色转圈；重复调用先清后建） */
+  private syncDroneAlly(slots: string[]): void {
+    for (const d of this.droneAllies) d.view.dispose();
+    this.droneAllies.length = 0;
+    if (!this.droneAssetSrc) return;
+    for (const id of slots) {
+      if (this.isDroneSlot(id)) this.addDrone(this.droneAssetSrc, 1.3);
+    }
+  }
+
+  /** ★ 出击槽变化（deployment_changed）：重挂装备贴片 + 同步无人机（基地内在背包页换装即时可见） */
+  refreshDeployment(): void {
+    const slots = this.currentSlots();
+    void this.equip?.apply(slots);
+    this.syncDroneAlly(slots);
   }
 
   /** 固定基准 = (0, 7.4, 16.5) 看向大厅中部；实际机位由跟随更新接管 */
@@ -125,8 +206,9 @@ export class BaseScene {
     camera.lookAt(this.charPos.x, 1.6, this.charPos.z);
   }
 
-  /** 每帧：角色行走 → 帧动画 → 相机跟随/缩放（ShipMode.update 调用） */
+  /** 每帧：角色行走 → 帧动画 → 相机跟随/缩放（BaseMode.update 调用） */
   update(dt: number): void {
+    this.t += dt;
     this.updateInput(dt);
     if (this.anim && this.quad) {
       if (this.moving !== this.wasMoving) {
@@ -135,6 +217,28 @@ export class BaseScene {
       }
       this.anim.update(dt);
       this.quad.render({ frameIndex: this.anim.frameIndex });
+    }
+    // ★ 身上的装备贴片（帧动画 + 影子；与游戏内同管线）
+    this.equip?.update(dt, this.camera ?? undefined);
+    // ★ 无人机编队：三帧叠加合成 + 包围角色转圈。
+    //   防重叠：每层 4 架（层内 90° 间隔）、逐层半径+高度递增、层内奇偶槽再交错半径/高度，
+    //   让正/背面的机体在屏幕上也拉开（纯圆环会让前后机投影到同一位置）
+    const DRONES_PER_RING = 4;
+    for (const d of this.droneAllies) {
+      d.anim.update(dt);
+      const ring = Math.floor(d.index / DRONES_PER_RING);
+      const islot = d.index % DRONES_PER_RING;
+      const ang = this.t * 0.7 + islot * (Math.PI / 2) + ring * 0.78;
+      const radius = 2.6 + ring * 1.15 + (islot % 2) * 0.55;
+      const height =
+        2.0 + ring * 0.95 + (islot % 2) * 0.4 + Math.sin(this.t * 2.1 + d.index * 1.7) * 0.12;
+      d.view.setPosition(
+        this.charPos.x + Math.cos(ang) * radius,
+        this.charY + height,
+        this.charPos.z + Math.sin(ang) * radius,
+      );
+      d.view.render({ frameIndex: d.anim.frameIndex });
+      if (this.camera) d.view.setBillboard(this.camera);
     }
     const cam = this.camera;
     if (!cam) return;
@@ -155,6 +259,10 @@ export class BaseScene {
     this.anim?.dispose();
     this.quad = null;
     this.anim = null;
+    this.equip?.dispose();
+    this.equip = null;
+    for (const d of this.droneAllies) d.view.dispose();
+    this.droneAllies.length = 0;
     this.root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose();
@@ -237,7 +345,8 @@ export class BaseScene {
         this.craftBayX = this.bays[i]; // ★ 加工站房间（按 F 打开加工台的区域）
       } else this.fillWorkshop(addIn, matStd);
       const plate = this.makeNameplate(defs[i].name, defs[i].label);
-      addIn(new THREE.PlaneGeometry(3.2, 0.9), plate, 0, ROOM_H + 0.9, -ROOM_D / 2 + 0.4);
+      // 名牌贴背墙中部（房间 3× 后尺寸放大；不要放到天花板之上）
+      addIn(new THREE.PlaneGeometry(5.4, 1.5), plate, 0, ROOM_H * 0.58, -ROOM_D / 2 + 0.4);
       addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), matEmis(0xdfefff), 0, ROOM_H - 0.06, 0.4);
     }
   }
@@ -248,16 +357,17 @@ export class BaseScene {
     matStd: (hex: number, rough?: number) => THREE.MeshStandardMaterial,
     matEmis: (hex: number) => THREE.MeshBasicMaterial,
   ): void {
-    const zb = -ROOM_D / 2 + 0.4;
+    const zb = -ROOM_D / 2 + 0.6; // 背墙内侧（房间 3×：贴背墙布置）
     for (let i = -1; i <= 1; i++) {
-      add(new THREE.BoxGeometry(2.0, 1.2, 0.12), matEmis(0x2e6f8f), i * 2.4, 2.5, zb + 0.02);
-      add(new THREE.BoxGeometry(2.2, 1.4, 0.1), matStd(0x0e1a22), i * 2.4, 2.5, zb);
+      add(new THREE.BoxGeometry(3.0, 1.8, 0.14), matEmis(0x2e6f8f), i * 5.0, 3.2, zb + 0.03);
+      add(new THREE.BoxGeometry(3.3, 2.1, 0.12), matStd(0x0e1a22), i * 5.0, 3.2, zb);
     }
-    add(new THREE.BoxGeometry(7.2, 0.16, 1.1), matStd(0x2a3742), 0, 1.1, -0.6);
-    add(new THREE.BoxGeometry(7.2, 0.9, 0.16), matStd(0x1e2830), 0, 0.55, -1.05);
-    for (const dx of [-2.2, 0, 2.2]) {
-      add(new THREE.BoxGeometry(0.7, 0.12, 0.7), matStd(0x37424e), dx, 0.62, 1.1);
-      add(new THREE.BoxGeometry(0.7, 0.9, 0.12), matStd(0x37424e), dx, 1.06, 1.42);
+    // 长操作台（人体尺度，居中）
+    add(new THREE.BoxGeometry(16, 0.2, 1.4), matStd(0x2a3742), 0, 1.1, -5.0);
+    add(new THREE.BoxGeometry(16, 1.0, 0.2), matStd(0x1e2830), 0, 0.55, -5.8);
+    for (const dx of [-5.0, 0, 5.0]) {
+      add(new THREE.BoxGeometry(0.8, 0.14, 0.8), matStd(0x37424e), dx, 0.62, -2.6);
+      add(new THREE.BoxGeometry(0.8, 1.0, 0.14), matStd(0x37424e), dx, 1.1, -2.1);
     }
   }
 
@@ -270,13 +380,19 @@ export class BaseScene {
       add(new THREE.BoxGeometry(s, s, s), matStd(tone), x, y + s / 2, z);
       add(new THREE.BoxGeometry(s * 0.92, 0.1, s * 0.92), matStd(0x1a2229), x, y + s * 0.62, z);
     };
-    crate(-3.0, 0, -1.4, 1.3, 0x3a4753);
-    crate(-1.6, 0, -1.6, 1.1, 0x44515e);
-    crate(-2.3, 1.3, -1.5, 1.0, 0x4a5764);
-    crate(1.6, 0, -1.3, 1.4, 0x3a4753);
-    crate(3.0, 0, -1.7, 1.0, 0x44515e);
-    crate(2.3, 1.4, -1.4, 0.9, 0x4a5764);
-    add(new THREE.BoxGeometry(1.6, 0.14, 1.2), matStd(0x2a343d), 0.6, 0.07, 1.6);
+    // 沿背墙一排货堆（人体尺度货箱铺满 27m 宽；房间 3×）
+    crate(-10.0, 0, -6.6, 1.4, 0x3a4753);
+    crate(-8.4, 0, -6.9, 1.2, 0x44515e);
+    crate(-9.2, 1.4, -6.7, 1.0, 0x4a5764);
+    crate(-2.0, 0, -6.5, 1.5, 0x3a4753);
+    crate(-0.3, 0, -6.8, 1.1, 0x44515e);
+    crate(5.5, 0, -6.4, 1.4, 0x3a4753);
+    crate(7.2, 0, -6.7, 1.2, 0x44515e);
+    crate(6.3, 1.5, -6.5, 1.0, 0x4a5764);
+    crate(11.0, 0, -6.8, 1.3, 0x44515e);
+    // 托盘（散放在中区）
+    add(new THREE.BoxGeometry(1.8, 0.16, 1.4), matStd(0x2a343d), -5.0, 0.08, -2.0);
+    add(new THREE.BoxGeometry(1.8, 0.16, 1.4), matStd(0x2a343d), 3.0, 0.08, 0.5);
   }
 
   /** 加工站占位：工作台 + 机械臂 */
@@ -284,12 +400,15 @@ export class BaseScene {
     add: (geo: THREE.BufferGeometry, mat: THREE.Material, px: number, py: number, pz: number, rx?: number, ry?: number, rz?: number) => THREE.Mesh,
     matStd: (hex: number, rough?: number) => THREE.MeshStandardMaterial,
   ): void {
-    add(new THREE.BoxGeometry(4.6, 0.18, 1.4), matStd(0x2a3742), 0, 1.1, -1.2);
-    add(new THREE.BoxGeometry(4.6, 0.9, 0.3), matStd(0x1e2830), 0, 0.55, -1.75);
-    add(new THREE.CylinderGeometry(0.16, 0.22, 1.6, 10), matStd(0x54616e), 2.4, 2.0, -1.9);
-    add(new THREE.CylinderGeometry(0.12, 0.12, 1.8, 10), matStd(0x54616e), 1.6, 3.0, -1.6, 0, 0, 1.0);
-    add(new THREE.BoxGeometry(0.5, 0.3, 0.5), matStd(0x6b7885), 0.9, 3.3, -1.5);
-    add(new THREE.BoxGeometry(0.8, 0.6, 0.8), matStd(0x4a5764), -1.2, 1.5, -1.2);
+    const zb = -ROOM_D / 2 + 2.2; // 工作台靠背墙（房间 3×）
+    add(new THREE.BoxGeometry(6.0, 0.2, 1.6), matStd(0x2a3742), 0, 1.1, zb);
+    add(new THREE.BoxGeometry(6.0, 1.0, 0.35), matStd(0x1e2830), 0, 0.55, zb - 0.8);
+    // 两节机械臂（人体尺度）
+    add(new THREE.CylinderGeometry(0.18, 0.26, 2.4, 10), matStd(0x54616e), 4.6, 2.4, zb - 0.4);
+    add(new THREE.CylinderGeometry(0.14, 0.14, 3.0, 10), matStd(0x54616e), 2.6, 4.2, zb + 0.2, 0, 0, 1.0);
+    add(new THREE.BoxGeometry(0.6, 0.36, 0.6), matStd(0x6b7885), 1.2, 4.8, zb + 0.4);
+    // 工件
+    add(new THREE.BoxGeometry(0.9, 0.7, 0.9), matStd(0x4a5764), -0.8, 1.55, zb);
   }
 
   /** 名牌贴片：Canvas 文本 → 纹理 */
@@ -334,9 +453,9 @@ export class BaseScene {
     this.keys.delete(e.key.toLowerCase());
   };
 
-  /** 滚轮：缩放视野（改跟随机距；6~26m 平滑） */
+  /** 滚轮：缩放视野（改跟随机距；8~45m 平滑；房间 3× 后放宽上限） */
   private onWheel = (e: WheelEvent): void => {
-    this.camDistTarget = Math.max(6, Math.min(26, this.camDistTarget * (1 + e.deltaY * 0.0012)));
+    this.camDistTarget = Math.max(8, Math.min(45, this.camDistTarget * (1 + e.deltaY * 0.0012)));
   };
 
   private updateInput(dt: number): void {

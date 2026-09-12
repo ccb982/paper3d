@@ -476,6 +476,7 @@ function enterBaseMode(
       scene, camera, renderer,
       session: currentSession!,
       protagonistAsset, // ★ 基地内部行走立绘（维维美）
+      droneAsset: droneAsset ?? undefined, // 基地盟友跟随（无人机；祖宗为弹药消耗品不绘制）
       onDepart: (day: number) => {
         enterWorldMode(scene, camera, renderer, day);
       },
@@ -515,7 +516,7 @@ function enterWorldMode(
     debug: { testChunk },
     onReturn: () => {
       // 返回时：★ 行囊（弹药背包）保持原样——不转移祖宗，随存档原样落盘
-      //   → 遗物"返回/天数"时机管线 → 推进天数 → ShipMode（内部 SaveSystem.save）
+      //   → 遗物"返回/天数"时机管线 → 推进天数 → BaseMode（内部 SaveSystem.save）
       if (currentSession) {
         const im = new ItemManager(currentSession);
         // ★ 遗物「返回」时机（可授予道具；行囊落账）
