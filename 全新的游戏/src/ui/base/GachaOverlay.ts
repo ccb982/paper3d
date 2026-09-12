@@ -1141,6 +1141,11 @@ export class GachaOverlay {
     this.resultOverlay.style.display = 'none';
   }
 
+  /** ★ 是否正在显示（基地提示/输入遮挡判定用） */
+  isOpen(): boolean {
+    return this.root.style.display !== 'none';
+  }
+
   private syncSize(): void {
     const w = window.innerWidth;
     const h = window.innerHeight;

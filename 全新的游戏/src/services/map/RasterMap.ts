@@ -20,9 +20,9 @@ import { generateChunk, type ChunkData, CHUNK_SIZE } from "./ChunkGenerator";
 import {
   makeChunkSource,
   refineChunkSource,
+  sampleSurface,
   type BlockSource,
 } from "./Refinements";
-import { ppSurfaceHeight } from "./RefinementPostProcess";
 import { envelopeLevelAt, PATCH_DEPTH } from "./FaceBuild";
 import { planPlatformAprons, apronBandHeightAt, type ApronEdge } from "./decor/PlatformApron";
 import { planCementPlinths, cementPlinthHeightAt, type CementPlinthTile } from "./decor/CementPlinth";
@@ -223,7 +223,7 @@ export class RasterMap {
   }
 
   /**
-   * ★ 视觉面一致采样（角色脚底/影子贴地）—— SurfaceRules 唯一真源薄封装。
+   * ★ 视觉面一致采样（角色脚底/影子贴地）—— Refinements 唯一真源薄封装。
    *   语义（2026-08-29 定稿，《地形与渲染管线架构.md》§3）：
    *   查询点所在米格的四角按【块归属】取高（weld 角点 = 2×2 max 与旧公式
    *   逐位一致；cliff 硬角点 = 本块自持高度）后三角形插值——与网格渲染
@@ -237,13 +237,9 @@ export class RasterMap {
     //   应用同意图（chunkSource）；当前 planRefinements 恒空 → 透传。
     const ccx = Math.floor(x / CHUNK_SIZE);
     const ccz = Math.floor(z / CHUNK_SIZE);
-    // ★ 坑裂后处理已弃用（2026-09-05，POST_PROCESS_ENABLED=false）：
-    //   ppSurfaceHeight ≡ 纯精修层视觉面（cornerCell 三角插值，无坑/裂/旧倒角）。
-    //   表驱动 weld/fine 微差为 §8 P1 收敛项。
     // ★ §14.11 三端同源：渲染几何 / rapier trimesh / 玩法高度采样共读同一张
     //   levels 覆盖层（包络场 u×D；角色脚底/贴地/clamp 落入坑内）
-    return ppSurfaceHeight(x, z, this.seed, this.chunkSource(ccx, ccz))
-      - this.levelDepthAt(x, z);
+    return sampleSurface(this.chunkSource(ccx, ccz), x, z) - this.levelDepthAt(x, z);
   }
 
   /**

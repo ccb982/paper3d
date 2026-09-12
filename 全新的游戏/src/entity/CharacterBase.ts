@@ -19,7 +19,7 @@ import { shapeExtents, separateXZ } from "../services/physics/Collision";
 import { CharacterFxManager } from "../services/fx/CharacterFxManager";
 import type { FluidEffect } from "../vendor/player/fluid/FluidEffect";
 import { RasterMap } from "../services/map/RasterMap";
-import { EDGE_CLIFF_BAND } from "../services/map/SurfaceRules";
+import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
 

@@ -22,12 +22,7 @@ export class BaseInteractionUI {
   /** ★ 非模态小部件管理器（对话/提示/悬浮文字） */
   protected widgets = new WidgetManager(document.body);
 
-  /** 旧接口：overlay 根元素（供子类兼容读取） */
-  protected get overlayRoot(): HTMLElement | null {
-    return (this.panels as unknown as { overlayRoot: HTMLElement }).overlayRoot;
-  }
-
-  /** 旧接口：是否有任意面板打开（指针锁定联动） */
+  /** 是否有任意面板打开（指针锁定联动） */
   get hasModalOpen(): boolean {
     return this.panels.hasModalOpen;
   }

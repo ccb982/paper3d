@@ -7,13 +7,13 @@
 //   - buildSnapshotFromChunks / makeSnapshotSource：主线程拷贝
 //     chunk 原始数组 → Worker 内重构查询源（与 RasterMap 同公式，逐位一致）
 //
-// ★★ 采样统一（2026-08-26 定稿；2026-08-29 升级为 SurfaceRules 真源）：
-//   烘焙只消费「视觉面」surfaceHeightAt——顶点高度语义统一在 SurfaceRules
+// ★★ 采样统一（2026-08-26 定稿；2026-08-29 定稿于 Refinements 真源）：
+//   烘焙只消费「视觉面」surfaceHeightAt——顶点高度语义统一在 Refinements
 //   （weld 角点 = 2×2 格 max，cliff 硬角点 = 本块自持；面内 = 三角形插值
 //   = PlaneGeometry 真实剖分）。主线程与 Worker import 同一份纯函数，
 //   逐位一致由构造保证。双线性在斜坡过渡带偏差可达米级，禁止回退。
 //   快照携带【米格高度场】（逐块恒定平面的原始格值），Worker 端用
-//   SurfaceRules 本地重构同一语义（裁决输入 = 米格高 + blockIds）。
+//   Refinements 本地重构同一语义（裁决输入 = 米格高 + blockIds）。
 //   旧的块状 heightAt（4m 恒定）仅剩 Boss4D 单纹理旧路径使用。
 //
 // 快照协议（为什么拷原始数组而不是逐点查询）：
@@ -44,8 +44,8 @@ import {
   type BlockSource,
   type ChunkDataLite,
   refineChunkSource,
+  sampleSurface,
 } from "./Refinements";
-import { ppSurfaceHeight } from "./RefinementPostProcess";
 import { computeMaterialLowRGBA, pseudoAoFromPatch } from "./materialLow";
 
 // ============================================================
@@ -537,7 +537,7 @@ export type { ChunkDataLite } from "./Refinements";
  * 主线程提取快照：直接拷贝覆盖区内全部 chunk 的原始数组再本地重排
  * （亚毫秒级；未加载 chunk 高度记 0，与 RasterMap.heightAt 回退一致）。
  * 米格高度场 = 逐块恒定平面原始格值（视觉面语义由 Worker 端
- * SurfaceRules 从本场 + blockIds 确定性重构，见 makeSnapshotSource）。
+ * Refinements 从本场 + blockIds 确定性重构，见 makeSnapshotSource）。
  */
 export function buildSnapshotFromChunks(
   seed: number,
@@ -636,7 +636,7 @@ export function buildSnapshotFromChunks(
 
 /**
  * Worker 端：快照 → BakeQuery。
- * ★ 视觉面采样与主线程同一份 SurfaceRules 纯函数（逐位一致由构造保证）：
+ * ★ 视觉面采样与主线程同一份 Refinements 纯函数（逐位一致由构造保证）：
  * 块数据源 = 米格高度场（块角格值）+ blockIds（块类型）本地重构。
  */
 export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
@@ -653,7 +653,7 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
       const gz = bz * BLOCK_SIZE - s.vz0;
       const ibx = bx - s.bx0;
       const ibz = bz - s.bz0;
-      // 快照覆盖外 → undefined（SurfaceRules 按 0 号平地/0 高兜底，同旧回退）
+      // 快照覆盖外 → undefined（Refinements 按 0 号平地/0 高兜底，同旧回退）
       if (gx < 0 || gz < 0 || gx >= s.vw || gz >= s.vw) return undefined;
       if (ibx < 0 || ibz < 0 || ibx >= s.bw || ibz >= s.bh) return undefined;
       return {
@@ -676,8 +676,8 @@ export function makeSnapshotSource(s: BakeSnapshot): BakeQuery {
         ref = refineChunkSource(src, s.seed, ccx, ccz);
         refinedCache.set(key, ref);
       }
-      // ★ 后处理同源：烘焙跟渲染版最终面（ppSurfaceHeight ≡ sampleSurface 当总开关关）
-      return ppSurfaceHeight(x, z, s.seed, ref);
+      // ★ 与主线程同源：烘焙高度 = 精修层视觉面（cornerCell 三角插值）
+      return sampleSurface(ref, x, z);
     },
     tileDefAt(x: number, z: number): TileDef {
       let bx = Math.floor(x / BLOCK_SIZE) - s.bx0;

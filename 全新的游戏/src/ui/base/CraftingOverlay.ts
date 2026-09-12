@@ -263,6 +263,11 @@ export class CraftingOverlay {
     this.stopTick();
   }
 
+  /** ★ 是否正在显示（基地加工站提示/输入遮挡判定用） */
+  isOpen(): boolean {
+    return this.root.style.display !== 'none';
+  }
+
   private closeAllQuantity(): void {
     if (this.activeModule) {
       this.activeModule.closeQuantity();

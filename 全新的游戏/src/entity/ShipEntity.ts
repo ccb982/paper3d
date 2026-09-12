@@ -9,7 +9,8 @@
 //             受击走 ShipState.applyShipDamage（护盾→装甲→HP）。
 // 视觉：ShipRenderer（GLB `public/models/ship.glb` 优先 + 程序化军武运输舰兜底；
 //       机头朝 +Z，姿态 YXZ，喷口随油门增亮）。
-// 无物理刚体：敌人近战经 querySphere（空间索引）命中，不依赖 rapier。
+// 物理：fixed 刚体（圆柱碰撞体横放对齐机身，机翼不参与物理）；停靠时挡人走 JS 静态障碍索引。
+//       敌人近战经 querySphere（空间索引）命中。
 
 import * as THREE from 'three';
 import { EntityBase } from './EntityBase';
@@ -31,6 +32,10 @@ export const SHIP_LANDED_HEIGHT = 2.0;
 const LANDED_HEIGHT = SHIP_LANDED_HEIGHT;
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
+/** 姿态同步临时对象（避免每次 setFromEuler 分配） */
+const _tmpEuler = new THREE.Euler();
+const _tmpQuat = new THREE.Quaternion();
+
 export class ShipEntity extends EntityBase {
   /** ★ 是否处于可操控航行（false = 已停靠，静止目标） */
   sailable = true;
@@ -50,12 +55,14 @@ export class ShipEntity extends EntityBase {
       x,
       y: (RasterMap.current?.surfaceHeightAt(x, z) ?? 0) + travelConfig.flightStartClearance,
       z,
-      // ★ 船体实体（2026-09-12 用户点题：舰船必须有实体）：fixed 刚体（主船体 cuboid）
-      //   —— 子弹命中船体；航行期物理步不跑（位置在停靠/落稳时同步）。
+      // ★ 船体实体（2026-09-12 用户点题：舰船必须有实体）：fixed 刚体，
+      //   碰撞体抽象成【圆柱】（半径 3.6 / 全長 25，绕 X 转 90° 横放对齐机头方向）；
+      //   机翼不参与物理（无碰撞体）。子弹命中船体；航行期物理步不跑（停靠/落稳时同步位置）。
       physics: {
         type: 'fixed',
         options: {
-          shape: { type: 'cuboid', hx: 3.6, hy: 1.9, hz: 12.5 }, // 4× 船体 ≈26m 长
+          shape: { type: 'cylinder', halfHeight: 12.5, radius: 3.6 }, // 4× 船体 ≈25m 长
+          rotation: { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 }, // Y 轴 → Z 轴（绕 X +90°）
         },
       },
     });
@@ -118,29 +125,33 @@ export class ShipEntity extends EntityBase {
     this.registerHullBlock();
   }
 
-  /** 同步 fixed 刚体到当前船体位置（停靠/落稳；航行期物理步不跑无需逐帧） */
+  /** 同步 fixed 刚体到当前船体位置与姿态（停靠/落稳；航行期物理步不跑无需逐帧） */
   private syncBody(): void {
     const rb = this.entity.rigidBody;
     const p = this.entity.position;
-    if (rb && this.em.physics) this.em.physics.setPosition(rb.handle, p.x, p.y, p.z);
+    const phys = this.em.physics;
+    if (!rb || !phys) return;
+    phys.setPosition(rb.handle, p.x, p.y, p.z);
+    // ★ 圆柱碰撞体随姿态（与 ShipRenderer 同序 YXZ：航向→俯仰→滚转）
+    _tmpEuler.set(-this.pitch, this.heading, this.roll, 'XYZ');
+    _tmpQuat.setFromEuler(_tmpEuler);
+    phys.setRotation(rb.handle, { x: _tmpQuat.x, y: _tmpQuat.y, z: _tmpQuat.z, w: _tmpQuat.w });
   }
 
-  /** ★ 船体挡人（静态障碍 JS 索引；仅停靠期）：机身三圆 + 两翼中段两圆 */
+  /** ★ 船体挡人（静态障碍 JS 索引；仅停靠期）：机身三圆近似圆柱（机翼不挡人） */
   private hullBlockIds: number[] = [];
   private registerHullBlock(): void {
     this.clearHullBlock();
     const p = this.entity.position;
     const f = this.forward;
-    const rx = f.z, rz = -f.x; // 右向量
     const spots: [number, number][] = [
-      [0, -8], [0, 0], [0, 8],       // 机身（沿机头方向）
-      [7, -1.5], [-7, -1.5],         // 两翼中段（右向量）
+      [0, -8], [0, 0], [0, 8], // 机身（沿机头方向）
     ];
     for (let k = 0; k < spots.length; k++) {
       const id = -(this.entity.id * 16 + k + 1); // 负 id：与实体/地面/装饰 id 不冲突
-      const x = p.x + f.x * spots[k][1] + rx * spots[k][0];
-      const z = p.z + f.z * spots[k][1] + rz * spots[k][0];
-      addStaticObstacle(id, x, p.y, z, 4.5, 2.0);
+      const x = p.x + f.x * spots[k][1];
+      const z = p.z + f.z * spots[k][1];
+      addStaticObstacle(id, x, p.y, z, 3.6, 2.0);
       this.hullBlockIds.push(id);
     }
   }

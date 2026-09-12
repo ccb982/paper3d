@@ -5,9 +5,8 @@
 // ★ 本文件在表驱动管线中的角色 = 唯一高度场/裁决基源：
 //   FaceTable（kind 判定/Pass2 顶高）与 FaceBuild（顶面/壁顶沿采样）都经
 //   surfaceHeightCore/cornerCell/finalRuling/interpEdge 读本层输出；
-//   旧《地形与渲染管线架构.md》描述的「定型快照 + 墙缓冲」几何链（buildChunkFinal /
-//   buildChunkWallBuffers / mergeTerrainPhysics）已被表驱动取代，仅残留在
-//   __PP_TABLE_BUILD=false 回退路径（退役拆分见架构文档 §7.3/§12）。
+//   旧「定型快照 + 墙缓冲」几何链（buildChunkFinal / buildChunkWallBuffers /
+//   mergeTerrainPhysics）与坑裂/圆角后处理（ppHeight）均已删除，表驱动为唯一路径。
 //
 // ★ 保留的核心语义（原《地形与渲染管线架构.md》收敛而来，规则不变）：
 //   1) 边裁决：块边界「硬过渡(cliff) vs 插值(weld)」判定执行权由本层全权执掌：
@@ -17,7 +16,7 @@
 //      - 消费者一律走 finalRuling/edgeOf，只读本层输出（第五铁律）。
 //   2) 视觉面几何：角点高度 cornerCell、边插值 interpEdge、斜坡剖面
 //      rampProfile、贴地采样 sampleSurface、面板底 baseHeightOf 的语义公式
-//      全部并入本文件（2026-08-30 SurfaceRules 物理并入）。角无独立插值，
+//      全部并入本文件（2026-08-30 物理并入）。角无独立插值，
 //      由两条触及 weld 边在 t=0 的 crest 汇合（表驱动文档 §6.1）。
 //
 // ★ 确定性/可重放：纯函数、逐位可复现（同种子同源同输出）。

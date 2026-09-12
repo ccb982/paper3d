@@ -101,6 +101,8 @@ export class BaseMode implements IGameMode {
     this.baseScene.setupCamera(ctx.camera!);
     // ★ 加工台入口（2026-09-12 用户定调）：走到"加工站"房间按 F（原编队面板入口已移除）
     this.baseScene.onCraftStation(() => this.uiManager.openCrafting('ship'));
+    // ★ UI 遮挡：抽卡页/加工台/背包等任何覆盖层打开时，不绘制加工站提示且 F 不响应
+    this.baseScene.setUiBlocking(() => this.isUiBlocking());
     // ★ 出击槽变动（背包页穿脱/互换）：装备贴片与无人机三帧合成即时刷新
     this.deploymentUnsub = eventBus.on('deployment_changed', () => {
       this.baseScene?.refreshDeployment();
@@ -165,6 +167,14 @@ export class BaseMode implements IGameMode {
   update(dt: number): void {
     // 基地：角色行走 + 帧动画 + 镜头跟随/缩放（UI 仍为事件驱动）
     this.baseScene?.update(dt);
+  }
+
+  /** 是否有 UI 遮挡（模态面板 / 抽卡 / 加工台 / 全屏背包页） */
+  private isUiBlocking(): boolean {
+    if (this.uiManager?.hasModalOpen) return true;
+    if (this.craftingOverlay?.isOpen()) return true;
+    if (this.gachaOverlay?.isOpen()) return true;
+    return false;
   }
 
   render(): void {

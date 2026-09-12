@@ -81,6 +81,10 @@ export class BaseScene {
   private inCraftZone = false;
   private craftCb: (() => void) | null = null;
   private promptEl: HTMLDivElement;
+  /** 提示是否已显示（与 inCraftZone 分开：UI 打开时要临时隐藏） */
+  private promptShown = false;
+  /** ★ UI 遮挡判定（面板/覆盖层打开 → 隐藏加工台提示并禁用 F；BaseMode 注入） */
+  private uiBlocking: (() => boolean) | null = null;
 
   // ---- 身上的各种图标（装备贴片）与盟友跟随 ----
   //   无人机 = DroneCompositeRender（★ 三帧叠加合成：主体 + 左翼 + 右翼，与游戏内同管线）
@@ -158,6 +162,11 @@ export class BaseScene {
   /** 加工站交互回调（BaseMode 注入：打开加工台覆盖层） */
   onCraftStation(cb: () => void): void {
     this.craftCb = cb;
+  }
+
+  /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、F 禁用） */
+  setUiBlocking(fn: () => boolean): void {
+    this.uiBlocking = fn;
   }
 
   /** 无人机盟友：★ 三帧同时叠加绘制（主体 + 左翼 + 右翼），与游戏内 DroneCompositeRender 同管线 */
@@ -446,7 +455,8 @@ export class BaseScene {
       this.wantJump = true; // ★ 空格：跳跃
       e.preventDefault();
     }
-    if (k === 'f' && this.inCraftZone) this.craftCb?.(); // ★ 加工站：F 打开加工台
+    // ★ 加工站：F 打开加工台（UI 遮挡期不响应，避免叠层里再开）
+    if (k === 'f' && this.inCraftZone && !(this.uiBlocking?.() ?? false)) this.craftCb?.();
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
@@ -507,12 +517,14 @@ export class BaseScene {
         }
       }
       this.quad.setPosition(this.charPos.x, this.charY, this.charPos.z);
-      // ★ 加工站区域判定（在加工站房间内 → 显示"F · 打开加工台"提示）
-      const inZone = this.craftBayX !== null
+      // ★ 加工站区域判定（在加工站房间内 → 显示"F · 打开加工台"提示）；
+      //   抽卡/加工台/背包等 UI 打开时（uiBlocking）不绘制提示
+      this.inCraftZone = this.craftBayX !== null
         && Math.abs(this.charPos.x - this.craftBayX) <= ROOM_W / 2 - 0.5;
-      if (inZone !== this.inCraftZone) {
-        this.inCraftZone = inZone;
-        this.promptEl.style.display = inZone ? 'block' : 'none';
+      const showPrompt = this.inCraftZone && !(this.uiBlocking?.() ?? false);
+      if (showPrompt !== this.promptShown) {
+        this.promptShown = showPrompt;
+        this.promptEl.style.display = showPrompt ? 'block' : 'none';
       }
     } else {
       this.wantJump = false;

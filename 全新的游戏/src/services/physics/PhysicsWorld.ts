@@ -31,9 +31,19 @@ export type ColliderShape =
   | { type: 'cuboid'; hx: number; hy: number; hz: number }
   /** 胶囊（角色用：贴片宽/高更真实）；halfHeight=半高（不含帽），radius=半径，轴=Y */
   | { type: 'capsule'; halfHeight: number; radius: number }
+  /** ★ 圆柱（舰船等抽象碰撞体）；halfHeight=半高，radius=半径，轴=Y（横放需配 BodyOptions.rotation） */
+  | { type: 'cylinder'; halfHeight: number; radius: number }
   /** ★ 三角网格（地形用：视觉网格几何直接复用 = 视觉/物理同源）；
    *   vertices = 扁平 [x,y,z,...]，indices = 三角形索引 */
   | { type: 'trimesh'; vertices: Float32Array; indices: Uint32Array };
+
+/** ★ 四元数（碰撞体局部旋转；如圆柱轴 Y→Z = 绕 X 转 90°） */
+export interface Quat {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
 
 /** 形状 → rapier 碰撞体描述 */
 function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
@@ -44,6 +54,8 @@ function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
       return RAPIER.ColliderDesc.cuboid(shape.hx, shape.hy, shape.hz);
     case 'capsule':
       return RAPIER.ColliderDesc.capsule(shape.halfHeight, shape.radius);
+    case 'cylinder':
+      return RAPIER.ColliderDesc.cylinder(shape.halfHeight, shape.radius);
     case 'trimesh':
       return RAPIER.ColliderDesc.trimesh(shape.vertices, shape.indices);
   }
@@ -71,6 +83,8 @@ export interface BodyOptions {
   /** ★ 分块地面分区槽位（grid 分区 cell 序）：创建首块时登记进记账，
    *   后续 setTileCollider 可原位替换（挖坑只重建受影响分区） */
   tileSlot?: number;
+  /** ★ 碰撞体局部旋转（四元数；圆柱横放用：Y 轴 → Z 轴 = 绕 X 转 90°） */
+  rotation?: Quat;
 }
 
 export interface CollisionEvent {
@@ -110,11 +124,11 @@ export class PhysicsWorld {
   }
 
   /** 创建固定刚体（地面/墙/静态障碍；tileSlot = 分区地面首块登记） */
-  addFixed(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0, tileSlot?: number): number {
+  addFixed(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0, tileSlot?: number, rotation?: Quat): number {
     const desc = RAPIER.RigidBodyDesc.fixed().setTranslation(position.x, position.y, position.z);
     desc.userData = userData; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    const col = this.attachCollider(body, shape);
+    const col = this.attachCollider(body, shape, false, undefined, undefined, rotation);
     const id = this.registerBody(body);
     if (tileSlot !== undefined) this.tileColliders.set(id * 1024 + tileSlot, col);
     return id;
@@ -149,12 +163,13 @@ export class PhysicsWorld {
     }
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution);
+    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution, opts.rotation);
     return this.registerBody(body);
   }
 
-  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number, restitution?: number): RAPIER.Collider {
+  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number, restitution?: number, rotation?: Quat): RAPIER.Collider {
     const desc = makeColliderDesc(shape);
+    if (rotation) desc.setRotation(rotation); // ★ 碰撞体局部旋转（圆柱横放等）
     if (sensor) desc.setSensor(true);
     if (density !== undefined) desc.setDensity(density);
     if (restitution !== undefined) desc.setRestitution(restitution);
@@ -187,6 +202,13 @@ export class PhysicsWorld {
     const body = this.getBody(id);
     if (!body) { return; }
     body.setTranslation({ x, y, z }, true);
+  }
+
+  /** ★ 强制设刚体姿态（fixed 刚体随实体姿态同步：舰船圆柱碰撞体随航向/俯仰） */
+  setRotation(id: number, rotation: Quat): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.setRotation(rotation, true);
   }
 
   /** ★ 停用/恢复刚体（远处 chunk 封存：停用 = 不参与模拟，保留对象/句柄 → 回程瞬间恢复） */
