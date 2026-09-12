@@ -195,11 +195,14 @@ export class WorldMode implements IGameMode {
   private spawnChunkKey = -1;
   /** ★ 波次节奏（秒）：距下次"LOD 外环"刷怪的倒计时 */
   private respawnTimer = 0;
-  /** ★ 全图杂兵上限（弱化档：总量克制，死亡后周期波次慢慢补） */
-  private static readonly MAX_ENEMIES = 60;
-  /** ★ 敌人远距回收半径（米）：玩家离开后该区敌人销毁，名额让给新 frontier */
-  private static readonly ENEMY_CULL_RADIUS = 200;
-  /** 远距回收节拍（每 1s 扫一次，避免每帧 O(n)） */
+  /** ★ 全图杂兵上限（2026-09-12 用户定调：60 → 50——总量控住，靠快刷快清维持密度） */
+  private static readonly MAX_ENEMIES = 50;
+  /** ★ 敌人远距回收半径（米，2026-09-12 用户定调【狠狠缩小】260 → 120）：
+   *  只留"可视 LOD 90m 外一点点"的缓冲——90m 外本就看不见，超过 120m 即清，
+   *  不许"看不见还活着"；刷怪点同样被约束在回收环内（见 spawnAtRandomPointInChunk） */
+  private static readonly ENEMY_CULL_RADIUS = 120;
+  /** ★ 远距回收节拍（2026-09-12 用户定调：1s → 0.25s：销毁速度加快，超环即清） */
+  private static readonly ENEMY_CULL_INTERVAL = 0.25;
   private cullAccum = 0;
 
   // ★ 私有物理世界和输入绑定（外界不可见，exit 时完整清理）
@@ -819,15 +822,15 @@ export class WorldMode implements IGameMode {
       // ---- ★ 敌人波次节奏：定时在玩家 LOD 外环周围补一波 ----
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) {
-        // 下一波随机 15~30s（弱化档：补怪更稀疏）
-        this.respawnTimer = 15 + Math.random() * 15;
+        // ★ 下一波随机 5~10s（2026-09-12 用户定调：生成速度加快，配 50 上限快刷快清）
+        this.respawnTimer = 5 + Math.random() * 5;
         this.spawnAmbientWave(pp.x, pp.y);
       }
-      // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（预算减半） ----
-      this.scanAndSpawnWaves(pp.x, pp.y, 4);
-      // ---- ★ 远距敌人回收（1s 一拍；玩家走过的旧区清场） ----
+      // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
+      this.scanAndSpawnWaves(pp.x, pp.y, 8);
+      // ---- ★ 远距敌人回收（0.25s 一拍；玩家走过的旧区清场） ----
       this.cullAccum += dt;
-      if (this.cullAccum >= 1) {
+      if (this.cullAccum >= WorldMode.ENEMY_CULL_INTERVAL) {
         this.cullAccum = 0;
         this.cullFarEnemies(pp.x, pp.y);
       }
@@ -1239,6 +1242,12 @@ export class WorldMode implements IGameMode {
           if (this.spawnedChunks.has(key)) continue; // 已完成波次的 chunk 跳过
           // ★ chunk 地形已就绪（有数据环）才可落点
           if (!this.raster.getChunkData(cx, cz)) continue;
+          // ★ 回收环约束（2026-09-12 狠缩环配套）：chunk 最近点超过回收环 −10m
+          //   → 整块不刷【且不标记完成】（靠近后转内环再补），避免刷出即被销毁
+          const nxp = Math.max(cx * CHUNK_SIZE, Math.min(px, (cx + 1) * CHUNK_SIZE));
+          const nzp = Math.max(cz * CHUNK_SIZE, Math.min(pz, (cz + 1) * CHUNK_SIZE));
+          const nd = Math.hypot(nxp - px, nzp - pz);
+          if (nd > WorldMode.ENEMY_CULL_RADIUS - 10) continue;
           // ★ 每 chunk 一波 2~4 个（比全铺档减半：有怪但不会过密）
           const want = 2 + Math.floor(Math.random() * 3);
           let placed = 0;
@@ -1268,7 +1277,11 @@ export class WorldMode implements IGameMode {
     const p = this.player?.position;
     if (p) {
       const ddx = x - p.x, ddz = z - p.z;
-      if (ddx * ddx + ddz * ddz < 12 * 12) return false;
+      const d2 = ddx * ddx + ddz * ddz;
+      if (d2 < 12 * 12) return false;
+      // ★ 回收环约束（配套狠缩环）：超出 回收环−10m 的点不刷——否则 0.25s 后即被清
+      const maxR = WorldMode.ENEMY_CULL_RADIUS - 10;
+      if (d2 > maxR * maxR) return false;
     }
     // ★ 坑/水/虚空/未生成：不站（isDepression 包含坑洞与水）
     const role = this.raster.tileDefAt(x, z).genRole;
@@ -1283,12 +1296,13 @@ export class WorldMode implements IGameMode {
   private spawnAmbientWave(px: number, pz: number): void {
     if (this.testChunk || this.mobDefs.length === 0) return;
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
-    const want = 1 + (Math.random() < 0.5 ? 1 : 0); // 每波 1~2 个（弱化档）
+    const want = 2 + (Math.random() < 0.5 ? 1 : 0); // ★ 每波 2~3 个（2026-09-12 生成加速）
     let placed = 0;
     // 环带：内圈 > LOD3（LOD_MAX_DIST，随 LOD 放宽外移），外圈 < 数据预载环（~2 chunk）
     for (let i = 0; i < want * 10 && placed < want; i++) {
       const ang = Math.random() * Math.PI * 2;
-      const dist = LOD_MAX_DIST + 4 + Math.random() * 40; // LOD 外环外一档
+      // ★ 94~110m：LOD 外（不 pop-in）且回收环 120m 内（可持续，不刷出即销毁）
+      const dist = LOD_MAX_DIST + 4 + Math.random() * 16;
       const x = px + Math.cos(ang) * dist;
       const z = pz + Math.sin(ang) * dist;
       // 目标 chunk 必须已有地形数据（未生成的世界区域不刷）

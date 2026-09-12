@@ -126,6 +126,11 @@ export abstract class EntityBase {
   private gsShadow: SilhouetteShadow | null = null;
   /** ★ 影子仿射上次更新时刻（中远 LOD 降频用） */
   private _gsLastAffMs = 0;
+  /** ★ 远距影子强 LOD 裁剪比例（0~1；0 = 不裁）：lod≥1 按实体固定键裁掉该比例，
+   *  lod≥2 全裁。敌人 = 0.8（80% 远距无需影子）；主角/无人机 lodExempt 不受影响 */
+  shadowFarCull = 0;
+  /** 实体级固定裁剪随机键（构造时一次；同一实体远近移动不闪变） */
+  private readonly shadowCullKey = Math.random();
 
   /** ★ 每帧影子同步（update 骨架⑦：惰性创建 + 剪影更新 + 太阳投影仿射 + LOD/日照渐隐） */
   private syncShadow(): void {
@@ -133,6 +138,20 @@ export abstract class EntityBase {
     if (!shape || !this._scene) return;
     // ★ 视锥外（上一帧渲染未命中）→ 影子不计算、网格隐藏；转回视野内下一帧自动恢复
     if (!this.inFrustum) {
+      if (this.gsShadow) this.gsShadow.mesh.visible = false;
+      return;
+    }
+    const lod = this.viewLod;
+    if (!this.visible || lod >= 3) {
+      if (this.gsShadow) this.gsShadow.mesh.visible = false;
+      return;
+    }
+    // ★ 强 LOD（2026-09-12 用户定调：80% 远距敌人无需影子）：
+    //   lod≥1 按实体固定 hash 裁掉 shadowFarCull 比例，lod≥2 全裁；
+    //   放在剪影源解析/网格创建【之前】→ 连逐顶点贴地采样都省掉。
+    //   （主角/无人机 lodExempt 恒 lod0，不受影响；Items 默认 0 = 不裁）
+    if (this.shadowFarCull > 0 && lod >= 1
+      && (lod >= 2 || this.shadowCullKey < this.shadowFarCull)) {
       if (this.gsShadow) this.gsShadow.mesh.visible = false;
       return;
     }
@@ -145,11 +164,6 @@ export abstract class EntityBase {
 
     // ★ 性能：逐顶点贴地采样（77→15 点/次）是实体更新的最大单点开销，
     //   不可见/最远档直接隐藏跳过；中远档（lod≥1）降频到 80ms 一次（位置差不可感）
-    const lod = this.viewLod;
-    if (!this.visible || lod >= 3) {
-      this.gsShadow.mesh.visible = false;
-      return;
-    }
     const nowMs = performance.now();
     if (lod >= 1 && nowMs - this._gsLastAffMs < 80) return;
     this._gsLastAffMs = nowMs;

@@ -58,6 +58,9 @@ export class EnemyBase extends CharacterBase {
   private hazardSafeDir: { x: number; z: number } | null = null;
   /** ★ 前方探测距离（米；> 碰撞半宽，提前一个身位避开坑沿） */
   private static readonly HAZARD_PROBE = 2.0;
+  /** ★ 远距影子强 LOD（2026-09-12 用户定调）：lod1 起 80% 敌人无影子、lod2 起全无
+   *  （剪影解析前裁剪 → 逐顶点贴地采样/仿射全免） */
+  private static readonly SHADOW_FAR_CULL = 0.8;
 
   constructor(
     em: EntityManager,
@@ -90,6 +93,8 @@ export class EnemyBase extends CharacterBase {
     this.attackPower = opts.attackPower ?? 0; // ★ 攻击力加成（叠加在 AI 近战伤害上）
     this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
     this.attachToScene(scene);
+    // ★ 远距影子强 LOD：80% 远敌无影子（lod≥2 全无）
+    this.shadowFarCull = EnemyBase.SHADOW_FAR_CULL;
 
     // bbox 映射（base/residual 纹理已按 bbox 裁剪 → 尺寸 = bbox.w×bbox.h，
     // 但 bbox 偏移量已裁掉，shader 映射必须用原点 0，否则内容被二次平移裁剪）
