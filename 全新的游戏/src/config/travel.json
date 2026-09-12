@@ -18,5 +18,6 @@
   "flightCamUp": 5,
   "flightCamDamp": 3.5,
   "dockSearchRings": [1, 2, 4, 8, 12, 16, 24],
-  "dockSearchDirs": 16
+  "dockSearchDirs": 16,
+  "shipModelYawDeg": 0
 }
