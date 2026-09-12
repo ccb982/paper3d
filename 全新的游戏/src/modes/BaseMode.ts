@@ -1,16 +1,18 @@
 // ============================================================
-// ShipMode.ts —— 舰船日常模式（纯组装器）
+// BaseMode.ts —— 基地模式（纯组装器；2026-09-12 从 ShipMode 独立归属）
 // ============================================================
-// 职责边界（2026-08-23 拆分后）：
+// 职责边界（2026-09-12 独立归属后）：
 //   - IGameMode 生命周期实现（enter/exit/update/render）
-//   - 组装协作者：ShipScene / MainButtons / ShipUIManager / GachaOverlay
+//   - 组装协作者：BaseScene（基地 3D 剖切空间）/ MainButtons / ShipUIManager /
+//     GachaOverlay / CraftingOverlay
 //   - 业务装配：ItemManager / CraftingManager / InteractionManager
 //   - 出击结算（doDepart）+ 按钮业务路由（onButtonPress）
 // 不做的：
-//   - 3D 场景构建细节 → ui/ship/ShipScene
-//   - 按钮覆盖层子系统 → ui/ship/MainButtons
-//   - 面板内部逻辑 → ui/ship/ShipUIManager
-//   - 抽卡内部逻辑 → ui/ship/GachaOverlay
+//   - 基地空间与角色行走细节 → ui/base/BaseScene
+//   - 按钮覆盖层子系统 → ui/base/MainButtons
+//   - 面板内部逻辑 → ui/base/ShipUIManager
+//   - 抽卡/加工内部逻辑 → ui/base/GachaOverlay / CraftingOverlay
+// 路由：main.ts（enterBaseMode）；WorldMode 返回 → BaseMode。
 // ============================================================
 
 import type { IGameMode, IGameModeContext } from '../core/IGameMode';
@@ -20,13 +22,13 @@ import { ItemManager } from '../systems/inventory/ItemManager';
 import { CraftingManager } from '../systems/inventory/CraftingManager';
 import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
 import { InteractionManager } from '../systems/interaction/InteractionManager';
-import { ShipUIManager } from '../ui/ship/ShipUIManager';
-import { GachaOverlay } from '../ui/ship/GachaOverlay';
-import { CraftingOverlay } from '../ui/ship/CraftingOverlay';
-import { ShipScene } from '../ui/ship/ShipScene';
-import { MainButtons, type ButtonId } from '../ui/ship/MainButtons';
+import { ShipUIManager } from '../ui/base/ShipUIManager';
+import { GachaOverlay } from '../ui/base/GachaOverlay';
+import { CraftingOverlay } from '../ui/base/CraftingOverlay';
+import { BaseScene } from '../ui/base/BaseScene';
+import { MainButtons, type ButtonId } from '../ui/base/MainButtons';
 
-export class ShipMode implements IGameMode {
+export class BaseMode implements IGameMode {
   // 场景对象（由 ctx 注入，模式内只读）
   private scene: IGameModeContext['scene'] | null = null;
   private camera: IGameModeContext['camera'] | null = null;
@@ -51,8 +53,8 @@ export class ShipMode implements IGameMode {
   // ★ 加工台覆盖层（基地入口：编队面板 → 合成台）
   private craftingOverlay: CraftingOverlay | null = null;
 
-  // ★ 场景与按钮（拆分后的自治组件）
-  private shipScene: ShipScene | null = null;
+  // ★ 基地内部 3D 剖切空间（固定侧视；返回后的界面）与主按钮
+  private baseScene: BaseScene | null = null;
   private mainButtons: MainButtons | null = null;
 
   // ============================================================
@@ -85,15 +87,17 @@ export class ShipMode implements IGameMode {
       () => this.doDepart(),
     );
 
-    // ③ 构建舰船 3D 场景 + 机位
-    this.shipScene = new ShipScene(ctx.scene!);
-    this.shipScene.setupCamera(ctx.camera!);
+    // ③ 基地内部 3D 剖切空间（三间打通 + 维维美行走 + 镜头跟随/缩放）
+    this.baseScene = new BaseScene(ctx.scene!, ctx.protagonistAsset);
+    this.baseScene.setupCamera(ctx.camera!);
+    // ★ 加工台入口（2026-09-12 用户定调）：走到"加工站"房间按 F（原编队面板入口已移除）
+    this.baseScene.onCraftStation(() => this.uiManager.openCrafting('ship'));
 
     // ④ 加载主页面按钮（FTX 纹理，梯形透视；异步不阻塞进入）
     this.mainButtons = new MainButtons();
     this.mainButtons.onPress(id => this.onButtonPress(id));
     this.mainButtons.init(ctx.renderer!).catch(err => {
-      console.error('[ShipMode] 主页面按钮加载失败:', err);
+      console.error('[BaseMode] 主页面按钮加载失败:', err);
     });
 
     // ⑤ 创建抽卡覆盖层（行动后触发；与背包/加工台共享图标服务）
@@ -132,17 +136,18 @@ export class ShipMode implements IGameMode {
     // ③ 销毁 UI 层
     this.uiManager?.dispose();
 
-    // ④ 销毁 3D 场景
-    this.shipScene?.dispose();
-    this.shipScene = null;
+    // ④ 销毁基地 3D 空间
+    this.baseScene?.dispose();
+    this.baseScene = null;
 
     // ⑤ 清空引用
     this.session = null;
     this.onDepart = undefined;
   }
 
-  update(_dt: number): void {
-    // 舰船中不需要每帧更新（UI 为事件驱动）
+  update(dt: number): void {
+    // 基地：角色行走 + 帧动画 + 镜头跟随/缩放（UI 仍为事件驱动）
+    this.baseScene?.update(dt);
   }
 
   render(): void {
@@ -161,7 +166,7 @@ export class ShipMode implements IGameMode {
     this.onDepart(this.session.meta.day);
   }
 
-  /** 主页面按钮业务路由（action→抽卡覆盖层；其余→面板开关） */
+  /** 主页面按钮业务路由（action→抽卡覆盖层；其余→面板开关）——原逻辑不变 */
   private onButtonPress(id: ButtonId): void {
     if (id === 'action') {
       const gacha = this.gachaOverlay;

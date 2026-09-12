@@ -14,7 +14,7 @@ import { ensureRapierReady } from './services/physics/PhysicsWorld';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset, MoonEffect } from './vendor/player';
 import type { IGameMode } from './core/IGameMode';
-import { ShipMode } from './modes/ShipMode';
+import { BaseMode } from './modes/BaseMode';
 import { WorldMode, worldPerf } from './modes/WorldMode';
 import { entityPerf } from './entity/EntityPerf';
 import type { WorldModeEnterContext } from './modes/WorldMode';
@@ -341,7 +341,7 @@ async function boot() {
         hudAcc = 0;
         const p = cameraPos;
         hudEl.textContent =
-          `${currentEnv === 'world' ? '世界' : '舰船'}  seed ${RasterMap.current?.worldSeed ?? '?'}\n`
+          `${currentEnv === 'world' ? '世界' : '基地'}  seed ${RasterMap.current?.worldSeed ?? '?'}\n`
           + `x ${p.x.toFixed(1)}  z ${p.z.toFixed(1)}\n`
           + `chunk (${Math.floor(p.x / 60)},${Math.floor(p.z / 60)})`;
       }
@@ -444,8 +444,8 @@ async function boot() {
     }
   }
 
-  // ---- 5. 进入 ShipMode（默认模式） ----
-  enterShipMode(scene, camera, renderer);
+  // ---- 5. 进入 BaseMode（基地，默认模式；2026-09-12 从 ShipMode 独立归属） ----
+  enterBaseMode(scene, camera, renderer);
 
   animate();
 }
@@ -454,8 +454,8 @@ async function boot() {
 // 模式切换函数（main.ts 的唯一额外职责）
 // ============================================================
 
-/** 进入舰船模式 */
-function enterShipMode(
+/** 进入基地模式（返回后 / 启动默认） */
+function enterBaseMode(
   scene: THREE.Scene,
   camera: THREE.PerspectiveCamera,
   renderer: THREE.WebGLRenderer,
@@ -469,21 +469,22 @@ function enterShipMode(
     SaveSystem.save(currentSession);
   }
 
-  // 3. 创建新 ShipMode
-  const ship = new ShipMode();
+  // 3. 创建新 BaseMode（基地内部：3D 剖切空间 + 主按钮 + 覆盖层）
+  const base = new BaseMode();
   try {
-    ship.enter({
+    base.enter({
       scene, camera, renderer,
       session: currentSession!,
+      protagonistAsset, // ★ 基地内部行走立绘（维维美）
       onDepart: (day: number) => {
         enterWorldMode(scene, camera, renderer, day);
       },
     });
   } catch (err) {
-    showRuntimeError('[enterShip]', err);
+    showRuntimeError('[enterBase]', err);
     return;
   }
-  currentMode = ship;
+  currentMode = base;
   currentEnv = 'ship';
   renderManager.setEnvironment('ship');
 }
@@ -527,7 +528,7 @@ function enterWorldMode(
         // ★ 遗物「天数推进」时机
         dispatchRelicEvent(currentSession, RELIC_ITEM_CONFIG, 'onDayAdvance', {});
       }
-      enterShipMode(scene, camera, renderer);
+      enterBaseMode(scene, camera, renderer);
     },
   };
   try {

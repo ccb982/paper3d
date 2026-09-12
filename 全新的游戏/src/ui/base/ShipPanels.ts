@@ -78,8 +78,6 @@ export interface FormationPanelProps {
   itemManager: ItemManager;
   craftingManager: CraftingManager;
   inventoryPanel: InventoryPanel;
-  /** 打开合成台（站类型由调用方决定） */
-  openCrafting: (station: 'ship' | 'portable') => void;
 }
 
 export class FormationPanel extends SidePanel<FormationPanelProps> {
@@ -93,7 +91,7 @@ export class FormationPanel extends SidePanel<FormationPanelProps> {
     const btnBar = document.createElement('div');
     btnBar.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;';
     btnBar.appendChild(createButton({ label: '🎒 打开背包', size: 'sm', style: 'secondary', onClick: () => this.renderInventoryView() }));
-    btnBar.appendChild(createButton({ label: '🔧 合成台', size: 'sm', style: 'secondary', onClick: () => this.props.openCrafting('ship') }));
+    // ★ 合成台入口已移入基地"加工站"房间（2026-09-12 用户定调：走到加工站按 F）
     div.appendChild(btnBar);
 
     const content = document.createElement('div');

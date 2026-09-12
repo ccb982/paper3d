@@ -1,6 +1,6 @@
 // ============================================================
 // IGameMode.ts —— 统一模式接口
-// 所有模式（ShipMode / WorldMode / BossMode）实现此接口，
+// 所有模式（BaseMode / WorldMode / BossMode）实现此接口，
 // main.ts 只依赖此接口，不做"管家"。
 // ============================================================
 // 核心原则："谁创建，谁销毁；谁拥有，谁负责"
@@ -12,15 +12,18 @@
 
 import * as THREE from 'three';
 import type { GameSession } from './Session';
+import type { FtxAsset } from '../vendor/player/FtxAsset';
 
 export interface IGameModeContext {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
   session: GameSession;
-  /** 返回回调：WorldMode 按 E 键时触发 → main 进入 ShipMode */
+  /** ★ 主角素材（维维美）；基地内部行走立绘用（BaseMode 也会收到） */
+  protagonistAsset?: FtxAsset;
+  /** 返回回调：WorldMode 按 E 键时触发 → main 进入 BaseMode */
   onReturn?: () => void;
-  /** 出击回调：ShipMode 点击"出击"时触发 → main 进入 WorldMode */
+  /** 出击回调：BaseMode 点击"出击"时触发 → main 进入 WorldMode */
   onDepart?: (day: number) => void;
 }
 
