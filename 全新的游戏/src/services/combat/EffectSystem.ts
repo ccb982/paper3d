@@ -17,7 +17,8 @@
 // 效果源（source）：
 //   - 'equipment'  装备：setSourceEffects 原子替换（换装/卸载）
 //   - 'consumable' 消耗品：addEffect（限时/叠层/延长；力量药剂等）
-//   - 'relic' / 'aura' 预留（遗物当前走 computeCombatStats 进基础值）
+//   - 'relic'      遗物：永久源（mul 复利 + flat；死亡/击杀后由脏标记重刷）
+//   - 'aura'       预留（范围光环类）
 //
 // 聚合口径（对齐方舟）：
 //   - maxHp/attackPower/defense/critMult/blockMult：base × (1+pct) + flat

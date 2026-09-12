@@ -5,7 +5,7 @@
 // 现在改为"配置 → 效果类型 → 处理器"分发，一个遗物可挂多条效果，各自独立管线。
 //
 // ★ 作用时机（每个遗物效果只实现自己关心的钩子即可，互不影响）：
-//   modifyStats     属性结算（computeCombatStats：任意属性倍率/加值）
+//   modifyStats     属性结算（computeRelicModifiers：任意属性倍率/加值）
 //   onRunStart      出击开局（WorldMode.enter：可返回授予道具）
 //   onRunEnd        返回舰船（main.onReturn：可返回授予道具）
 //   onDayAdvance    天数推进（返回舰船 day+1 后）
@@ -26,7 +26,7 @@ export interface RelicEffectConfig {
   [key: string]: unknown;
 }
 
-/** 属性累加器：各遗物效果把修正写进来，由 computeCombatStats 统一结算 */
+/** 属性累加器：各遗物效果把修正写进来，由 computeRelicModifiers 统一汇总 */
 export interface RelicStatAccumulator {
   mulHp: number;
   mulAtk: number;
@@ -80,7 +80,7 @@ export type RelicEventHook =
 
 /** 遗物效果处理器（只实现关心的钩子） */
 export interface RelicEffectHandler {
-  /** 属性管线：由 computeCombatStats 调用 */
+  /** 属性管线：由 computeRelicModifiers 调用 */
   modifyStats?(ctx: RelicStatContext, cfg: RelicEffectConfig): void;
   /** 出击：由 WorldMode.enter 调用（返回的道具由模式层落账） */
   onRunStart?(ctx: RelicRunContext, cfg: RelicEffectConfig): RelicStartGrant[] | void;
