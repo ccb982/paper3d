@@ -155,6 +155,12 @@ export class ChunkManager {
   /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
    *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
   private static readonly BUILD_INFLIGHT_MAX = 1;
+  /** ★ 降落冲刺（WorldMode 进近）：窗口内放开首建节流/在途/装配三档闸门
+   *  （进近变慢后窗口同步拉长，覆盖整段下降） */
+  private static readonly RUSH_SECONDS = 18;
+  private static readonly BUILD_INFLIGHT_MAX_RUSH = 4;
+  private static readonly ASSEMBLE_PER_FRAME_RUSH = 3;
+  private rushUntil = 0;
   /** ★ 预烘焙投递间隔（ms）：空闲时每拍投"前方条带"chunk（★ 2026-09-11：每拍 1 个，
    *  x/y 轴交替，减少同时计算量） */
   private static readonly PREFETCH_INTERVAL_MS = 220;
@@ -508,8 +514,10 @@ export class ChunkManager {
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     this.lastAssembleMs = 0;
-    let n = ChunkManager.ASSEMBLE_PER_FRAME;
-    while (n-- > 0 && this.assembleQueue.length > 0 && performance.now() >= this.assembleCooldownUntil) {
+    const rushing = performance.now() < this.rushUntil;
+    let n = rushing ? ChunkManager.ASSEMBLE_PER_FRAME_RUSH : ChunkManager.ASSEMBLE_PER_FRAME;
+    while (n-- > 0 && this.assembleQueue.length > 0
+      && (rushing || performance.now() >= this.assembleCooldownUntil)) {
       // ★ 装配顺序 = 构建优先级（角色所在 chunk 第一；用户定调 2026-09-12）：
       //   装配队列按 bake 结果**到达顺序**堆积，若按 FIFO 装配，角色 chunk 会被
       //   先到的远处结果插队 → 这里按 buildPriorityScore 选出最高优先级项。
@@ -570,8 +578,9 @@ export class ChunkManager {
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
     //   每帧预算个 chunk（同样带耗时冷却）；同 chunk 多任务以更强模式合并（full > props）。
-    let d = ChunkManager.DECOR_PER_FRAME;
-    while (d-- > 0 && this.pendingDecorJobs.size > 0 && performance.now() >= this.decorCooldownUntil) {
+    let d = rushing ? ChunkManager.DECOR_PER_FRAME + 1 : ChunkManager.DECOR_PER_FRAME;
+    while (d-- > 0 && this.pendingDecorJobs.size > 0
+      && (rushing || performance.now() >= this.decorCooldownUntil)) {
       const _td = performance.now();
       const first = this.pendingDecorJobs.keys().next().value;
       if (first === undefined) break;
@@ -637,9 +646,21 @@ export class ChunkManager {
     }
   }
 
-  /** 首建节拍判定：距上一块首建交付 ≥ BUILD_RATE_MIN_INTERVAL_MS 才放行 */
+  /** 首建节拍判定：距上一块首建交付 ≥ BUILD_RATE_MIN_INTERVAL_MS 才放行
+   *  （降落冲刺窗口内全放行） */
   private allowFirstBuild(): boolean {
+    if (performance.now() < this.rushUntil) return true;
     return performance.now() - this.lastBuildStamp >= ChunkManager.BUILD_RATE_MIN_INTERVAL_MS;
+  }
+
+  /** ★ 降落冲刺（WorldMode 进近调用）：立刻转细化 + 落点 3×3 强制构建，
+   *  并在 `seconds` 秒内放开首建节流/在途闸门/装配预算——
+   *  让"按下 F"的瞬间就开始实时细化装配（不再 0.7s 一块慢慢吞） */
+  rushTerrain(px: number, pz: number, seconds = ChunkManager.RUSH_SECONDS): void {
+    this.rushUntil = performance.now() + seconds * 1000;
+    this.assembleCooldownUntil = 0;
+    this.setCoarseMode(false);
+    this.bootstrap(px, pz);
   }
 
   /** 装饰补挂耗时冷却：本次超过预算 → 下一块推迟同等时间（把尖峰摊到后续帧） */
@@ -937,7 +958,11 @@ export class ChunkManager {
     while (this.queue.length > 0 && performance.now() - t0 < budget) {
       // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
       //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）
-      if (!this.boss4D && this.countBuildInflight() >= ChunkManager.BUILD_INFLIGHT_MAX) break;
+      //   ★ 降落冲刺窗口内放宽到 RUSH 上限（进近时限内把落点区铺出来）
+      const inflightMax = performance.now() < this.rushUntil
+        ? ChunkManager.BUILD_INFLIGHT_MAX_RUSH
+        : ChunkManager.BUILD_INFLIGHT_MAX;
+      if (!this.boss4D && this.countBuildInflight() >= inflightMax) break;
       // ★ 构建优先级（buildPriorityScore）：角色 chunk 绝对第一 → 正前方三层
       //   → 十字臂（对角惩罚）→ 前向加权 → 最近优先
       let best = 0, bestScore = Infinity;

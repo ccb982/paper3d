@@ -178,6 +178,11 @@ export class WorldMode implements IGameMode {
   ship!: ShipEntity;
   /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索 */
   private phase: 'sail' | 'explore' = 'sail';
+  /** ★ 降落进近（按 F 后，2026-09-12 用户定调）：保留前进速度 + 低操控（25%）+
+   *  自动收油/下降；期间地形已切细化实时加载，触地那刻地形就绪。 */
+  private landing: { emergency: boolean } | null = null;
+  /** 本帧是否触地（landingStep 结果；实体段收尾用） */
+  private landingTouchdown = false;
   /** 飞行追尾相机首帧就位标记（防从舰内相机位缓慢飞入 → 黑屏感） */
   private flightCamInit = false;
   /** 舰船已毁（结算/复活等待：冻结玩法更新） */
@@ -417,6 +422,8 @@ export class WorldMode implements IGameMode {
     this.phase = 'sail';
     this.shipDestroyed = false;
     this.flightCamInit = false;
+    this.landing = null;
+    this.landingTouchdown = false;
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -749,8 +756,13 @@ export class WorldMode implements IGameMode {
     if (this.shipDestroyed) return;
 
     // ★ 航行驾驶（飞行手感）：本帧鼠标增量交给舰船姿态，实体管线前先转向/俯仰/油门
+    //   降落进近期：低操控权限（25%）+ 自动收油/下降（landingStep 驱动）
     if (this.phase === 'sail') {
-      this.ship.steer(look.x, look.y, input.moveAxis.x, input.moveAxis.y, dt);
+      if (this.landing) {
+        this.landingTouchdown = this.ship.landingStep(dt, look.x, look.y, input.moveAxis.x);
+      } else {
+        this.ship.steer(look.x, look.y, input.moveAxis.x, input.moveAxis.y, dt);
+      }
     }
 
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
@@ -875,14 +887,20 @@ export class WorldMode implements IGameMode {
     if (this.phase === 'explore' && attackPressed && !this.player.dead) this.player.attack();
     if (this.phase === 'sail') {
       // ★ 航行期：实体管线全免（AI/物理/动画/渲染同步都不跑）——只推进舰船
-      this.ship.stepFlight(dt);
+      //   降落进近：位置/姿态由 landingStep 驱动（stepFlight 跳过）
+      if (!this.landing) this.ship.stepFlight(dt);
       this.entities.onEntityMoved(this.ship);
-      // 耗油/停靠推进；角色位置随舰船（小地图/相机跟随）
-      this.updateSail(dt);
-      const sp = this.ship.position;
-      this.player.position.x = sp.x;
-      this.player.position.z = sp.z;
-      this.player.position.y = sp.y;
+      if (this.landing) {
+        // ★ 只有自然触地才收尾（自适应下降率保证必到；不做超时瞬移接地）
+        if (this.landingTouchdown) this.finishDock();
+      } else {
+        // 耗油/停靠推进；角色位置随舰船（小地图/相机跟随）
+        this.updateSail(dt);
+        const sp = this.ship.position;
+        this.player.position.x = sp.x;
+        this.player.position.z = sp.z;
+        this.player.position.y = sp.y;
+      }
     } else {
       this.entities.update(dt, input, this.cameraCtrl.getFrame());
     }
@@ -1983,20 +2001,32 @@ export class WorldMode implements IGameMode {
     cam.lookAt(sp.x + f.x * 8, sp.y + f.y * 8 + 1.2, sp.z + f.z * 8);
   }
 
-  /** ★ 停靠：DockResolver 安全落点（只避坑）→ 角色出生、友军部署、进入探索；
-   *   舰船停在落点转为静止受击目标（敌人索敌最优先） */
+  /** ★ 停靠请求（F/油尽）：进入**降落进近**（§19.7）——保留前进速度、低操控、
+   *  自动收油下降；进近一开始就切【细化】+ 当前位置 3×3 强制构建（进近漂移量
+   *  远小于细化环半径）→ 触地那刻地形已就绪。触地收尾见 finishDock。 */
   private requestDock(emergency: boolean): void {
-    if (this.phase !== 'sail' || !this.session || !this.ship) return;
-    const sp = resolveDockSpawn(this.raster, this.ship.position.x, this.ship.position.z);
+    if (this.phase !== 'sail' || !this.session || !this.ship || this.landing) return;
+    this.landing = { emergency };
+    this.landingTouchdown = false;
+    // ★ 降落冲刺：立刻转细化 + 落点 3×3 强制构建，并放开首建/在途/装配闸门 12s
+    this.chunks.rushTerrain(this.ship.position.x, this.ship.position.z);
+    this.worldUIManager.setDockButtonVisible(false);
+  }
+
+  /** ★ 触地收尾：原地吸附安全落点 → 舰船转静止目标、角色接管、友军部署、恢复水面/云月 */
+  private finishDock(): void {
+    if (!this.session || !this.ship) return;
+    const emergency = this.landing?.emergency ?? false;
+    this.landing = null;
+    this.landingTouchdown = false;
+    const cur = this.ship.position;
+    const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.phase = 'explore';
-    // 舰船落点 = 出生点（吸附后的安全点）
     this.ship.position.x = sp.x;
     this.ship.position.z = sp.z;
     this.ship.land();
     this.entities.onEntityMoved(this.ship); // 航行期索引未逐帧刷新 → 停靠后就位
     this.session.ship.position = { x: sp.x, z: sp.z };
-    this.chunks.setCoarseMode(false);       // 停靠：转入【细化】（近处全量；粗块保留作远景 LOD）
-    this.chunks.bootstrap(sp.x, sp.z);      // 停靠区 3×3 全量强制构建（立即有地形/碰撞）
     this.chunks.setWaterVisible(true);      // 停靠：恢复水面渲染
     renderManager.setFlightMode(false);     // 停靠：恢复云/月亮更新
     // 角色接管

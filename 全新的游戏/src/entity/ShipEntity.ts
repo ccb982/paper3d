@@ -104,6 +104,46 @@ export class ShipEntity extends EntityBase {
     this.renderer?.setPosition(p.x, p.y, p.z); // 停靠当帧就位（下一帧起骨架接管同步）
   }
 
+  /** ★ 降落进近步进（WorldMode 降落状态机驱动）：
+   *  · 保留前进速度（自动收油到 `flightLandingSpeed`），继续向前飞；
+   *  · 操控权限低（25%：鼠标姿态/方向舵可用但钝）；
+   *  · 自动下降（`flightLandingSink` 指数贴向落点高度，不适用最低净空）；
+   *  返回 true = 已触地（WorldMode 收尾吸附安全点）。 */
+  landingStep(dt: number, lookX: number, lookY: number, moveX: number): boolean {
+    const k = 0.25; // 低操控权限
+    this.pitch = clamp(this.pitch - lookY * k * travelConfig.flightMouseSens, -0.3, 0.3);
+    this.heading -= lookX * k * travelConfig.flightMouseSens;
+    this.heading -= moveX * k * travelConfig.flightRudderRate * dt;
+    // 自动收油到进近速度（保留前进动量）
+    this.speed = Math.max(travelConfig.flightLandingSpeed, this.speed - 16 * dt);
+    const p = this.entity.position;
+    const f = this.forward;
+    p.x += f.x * this.speed * dt;
+    p.z += f.z * this.speed * dt;
+    p.y += f.y * this.speed * dt;
+    // 自动下降：高时快、近地慢（alt×0.4，夹在 [Sink, SinkMax]）——
+    // 最后几米是 3m/s 级的软着陆，不会"最后一瞬砸到地上"
+    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const target = gy + LANDED_HEIGHT;
+    if (p.y > target) {
+      const alt = p.y - target;
+      const sink = Math.min(
+        travelConfig.flightLandingSinkMax,
+        Math.max(travelConfig.flightLandingSink, alt * 0.4),
+      );
+      p.y = Math.max(target, p.y - sink * dt);
+    } else {
+      p.y = target;
+    }
+    // 滚转回正（进近姿态）
+    this.roll += (0 - this.roll) * Math.min(1, dt * 4);
+    this.renderer?.setPosition(p.x, p.y, p.z);
+    const sr = this.renderer as ShipRenderer | null;
+    sr?.setAttitude?.(this.heading, this.pitch, this.roll);
+    sr?.setThrottle?.(0.35);
+    return p.y <= target + 0.05;
+  }
+
   /** ★ 航行推进（WorldMode 航行帧直接调用——航行期实体管线全免，不进 EntityBase.update）
    *  ★ 注意：跳过了骨架的 syncRender，必须自己同步网格位置（否则船体网格留在世界原点） */
   stepFlight(dt: number): void {
