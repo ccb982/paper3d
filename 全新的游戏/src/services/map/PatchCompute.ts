@@ -9,6 +9,7 @@
 // ============================================================
 
 import { buildFaceTable, type FaceTable } from "./FaceTable";
+import { tileById } from "./Tiles";
 import { CHUNK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import {
   buildTopGeometry,
@@ -95,6 +96,74 @@ const INCREMENTAL_SELF_CHECK = false;
  *   地块重发"（其余字节级复用）；无补丁时全量构建并播种基座缓存（供首次挖坑
  *   即时命中）。Worker 与主线程回退共用本函数 → 字节一致由构造保证。
  */
+/** ★ 粗块表：所有 weld/bevel 边降级为 hard（粗块=硬边，fine 细分/弧边由细化阶段补） */
+function coarseFaceTable(t: FaceTable): FaceTable {
+  const cells = t.cells.map((c) => {
+    let dirty = false;
+    const sides = c.sides.map((s) => {
+      if (s.kind === 'hard') return s;
+      dirty = true;
+      return { ...s, kind: 'hard' as const };
+    }) as unknown as FaceTable['cells'][number]['sides'];
+    return dirty ? { ...c, sides } : c;
+  });
+  return { ...t, cells };
+}
+
+/** HSL→RGB（0~1；粗块纯色化用，Worker 不依赖 three） */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t: number): number => {
+    let x = t;
+    if (x < 0) x += 1;
+    if (x > 1) x -= 1;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
+}
+
+/** sRGB → 线性（顶点色进渲染管线要线性；MeshBasic 不做解码） */
+function srgbToLinear(c: number): number {
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/** ★ 粗块纯色化：顶点色 = 所属地块基色（侧壁压暗一档）——无纹理渲染路径 */
+function colorizeCoarse(g: FaceGeometry, table: FaceTable, src: BlockSource, darken = false): void {
+  const col = g.colors;
+  if (!col) return;
+  const ox = table.cx * CHUNK_SIZE, oz = table.cz * CHUNK_SIZE;
+  const HALF = CHUNK_SIZE * 0.5;
+  const B = 4; // 4m 块
+  let lastBx = NaN, lastBz = NaN;
+  let r = 0.6, gr = 0.6, b = 0.6;
+  for (let i = 0; i < g.vertices.length; i += 3) {
+    const wx = ox + HALF + g.vertices[i];
+    const wz = oz + HALF + g.vertices[i + 2];
+    const bx = Math.floor(wx / B), bz = Math.floor(wz / B);
+    if (bx !== lastBx || bz !== lastBz) {
+      lastBx = bx; lastBz = bz;
+      const info = src.blockAt(bx, bz);
+      const hsl = info ? tileById(info.id).visual.baseHsl : { h: 0.55, s: 0.2, l: 0.5 };
+      const rgb = hslToRgb(hsl.h, hsl.s, darken ? hsl.l * 0.62 : hsl.l);
+      r = srgbToLinear(rgb[0]); gr = srgbToLinear(rgb[1]); b = srgbToLinear(rgb[2]);
+    }
+    col[i] = r; col[i + 1] = gr; col[i + 2] = b;
+  }
+}
+
+/** 空水体（粗块不建水面） */
+function emptyWater(): WaterSurfaceRaw {
+  return {
+    vertices: new Float32Array(0), normals: new Float32Array(0), uvs: new Float32Array(0),
+    deep: new Float32Array(0), border: new Float32Array(0), spin: new Float32Array(0),
+    indices: new Uint32Array(0), quads: 0,
+  };
+}
+
 export function computeTableGeometry(
   readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   seed: number,
@@ -104,10 +173,37 @@ export function computeTableGeometry(
   dirty?: number[] | null,
   masks?: { top: Uint8Array; side: Uint8Array } | null,
   levelAt?: LevelAtWorld,
+  /** ★ 粗块模式：只出硬边几何（无 fine/弧边/水面/物理分区），顶点色=地块纯色 */
+  coarse = false,
 ): PatchGeomResult {
   // ★ 每 chunk 静态数据缓存：refined src + FaceTable 只依赖 heights/blockTypes
   //   （与 levels 无关）→ 同一 chunk 连打不必每枪重跑 planRefinements/buildFaceTable
-  const { src, table } = getRefinedSource(readChunk, seed, cx, cz);
+  const { src, table: baseTable } = getRefinedSource(readChunk, seed, cx, cz);
+  if (coarse) {
+    // ★ 粗块：硬边表 + 纯色化；无补丁/增量/水面/物理
+    const table = coarseFaceTable(baseTable);
+    const top = buildTopGeometry(table, src);
+    const wall = buildWallGeometry(table, src);
+    colorizeCoarse(top, table, src, false);
+    colorizeCoarse(wall, table, src, true);
+    return {
+      top: {
+        vertices: top.vertices, normals: top.normals, uvs: top.uvs as Float32Array,
+        colors: top.colors as Float32Array, patchW: top.patchW as Float32Array,
+        indices: top.indices, topTriCount: top.topTriCount,
+      },
+      wall: {
+        vertices: wall.vertices, normals: wall.normals, uvs: wall.uvs as Float32Array,
+        colors: wall.colors as Float32Array, shade: wall.shade as Float32Array,
+        patchW: wall.patchW as Float32Array, indices: wall.indices, topTriCount: wall.topTriCount,
+      },
+      water: emptyWater(),
+      cells: [],
+      topBounds: yBoundsOf(top.vertices),
+      wallBounds: yBoundsOf(wall.vertices),
+    };
+  }
+  const table = baseTable;
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz, undefined, undefined, levelAt) : undefined;
   let top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array;
   if (patch) {

@@ -385,8 +385,8 @@ export class WorldMode implements IGameMode {
       testChunk: ctx.debug?.testChunk ?? false,
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
-    // ★ 航行期：地形流式全功率（解除节流/加大预算并发；停靠时关）
-    this.chunks.setFullPower(true);
+    // ★ 航行期：地图两级构建的【粗加载】——大半径铺粗块（硬边/纯色/无物理/无水面/无装饰）
+    this.chunks.setCoarseMode(true);
     // ★ 航行低耗渲染：水面隐藏（不渲染水/不跑水面 FFT 着色）+ 云流体/月亮离屏不推进
     this.chunks.setWaterVisible(false);
     renderManager.setFlightMode(true);
@@ -1970,6 +1970,7 @@ export class WorldMode implements IGameMode {
     this.ship.land();
     this.entities.onEntityMoved(this.ship); // 航行期索引未逐帧刷新 → 停靠后就位
     this.session.ship.position = { x: sp.x, z: sp.z };
+    this.chunks.setCoarseMode(false);       // 停靠：转入【细化】（近处全量；粗块保留作远景 LOD）
     this.chunks.bootstrap(sp.x, sp.z);      // 停靠区 3×3 全量强制构建（立即有地形/碰撞）
     this.chunks.setFullPower(false);        // 停靠：恢复常规节流
     this.chunks.setWaterVisible(true);      // 停靠：恢复水面渲染

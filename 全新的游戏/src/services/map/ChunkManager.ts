@@ -24,6 +24,7 @@ import {
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { terrainPatch } from './TerrainPatch';
+import { coarsePatch } from './CoarsePatch';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, clearWallMaterialRegistry, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
 import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
@@ -338,6 +339,45 @@ export class ChunkManager {
   private faceX = 0;
   private faceZ = 0;
 
+  // ============================================================
+  // ★ 地图两级构建：粗块（硬边/纯色/无物理/无水面/无装饰）→ 细化（全量）
+  //   粗块：飞行期大半径铺（coarseOnly）＋ 探索期远景 LOD；
+  //   细化：探索期近处环全量构建，完成时粗块退场（dropCoarse）。
+  // ============================================================
+  /** 粗块专属模式（航行期）：只走粗块管线，不投细化 */
+  private coarseOnly = false;
+  /** 粗块半径（±6 = 约 420m 视距；"±6 试试"用户定调） */
+  private static readonly COARSE_RADIUS = 6;
+  /** 每帧最多装配粗块数 */
+  private static readonly COARSE_PER_FRAME = 3;
+  /** 粗块补齐顺序（由内向外） */
+  private static readonly COARSE_OFFSETS: { dx: number; dz: number }[] = (() => {
+    const R = ChunkManager.COARSE_RADIUS;
+    const out: { dx: number; dz: number }[] = [];
+    for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) out.push({ dx, dz });
+    out.sort((a, b) => Math.max(Math.abs(a.dx), Math.abs(a.dz)) - Math.max(Math.abs(b.dx), Math.abs(b.dz)));
+    return out;
+  })();
+  /** 已装配粗块（key → group） */
+  private coarseMeshes = new Map<number, THREE.Group>();
+  /** 粗块几何在途（防重复请求） */
+  private coarseInflight = new Set<number>();
+  /** 粗块装配队列（几何到达 → 预算化建网格） */
+  private coarseQueue: (() => void)[] = [];
+  /** 粗块数据代（切风格/dispose 递增 → 丢弃迟到结果） */
+  private coarseEpoch = 0;
+  private _coarseMat: THREE.MeshBasicMaterial | null = null;
+
+  /** ★ 粗块模式开关（WorldMode：航行开、停靠关；关后粗块保留作远景 LOD） */
+  setCoarseMode(v: boolean): void {
+    this.coarseOnly = v;
+  }
+
+  private coarseMat(): THREE.MeshBasicMaterial {
+    this._coarseMat ??= new THREE.MeshBasicMaterial({ vertexColors: true });
+    return this._coarseMat;
+  }
+
   /** ★ 全功率模式（航行赶路）：地形流式解除节流、加大预算/并发；聚焦点 = 舰船 */
   private fullPower = false;
 
@@ -427,6 +467,14 @@ export class ChunkManager {
     }
     this.moveLastPx = px;
     this.moveLastPz = pz;
+    // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
+    if (this.coarseOnly) {
+      this.raster.updateChunks(px, pz, this.dataRadius());
+      this.syncCoarse(px, pz);
+      this.flushCoarseQueue();
+      this.parkFarChunks(px, pz);
+      return;
+    }
     // ★ 优先级：地形修改（坑洞）重建排在帧首，先于地形创建（2026-09-08 用户定调）
     this.flushPatchRebuilds();
     this.syncChunks(px, pz);
@@ -517,6 +565,9 @@ export class ChunkManager {
     }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
     //   装配异常等任何原因造成的空洞，0.5s 内补请求）
+    // ★ 远景粗块（探索期：近处细化，远处粗块 LOD）
+    this.syncCoarse(px, pz);
+    this.flushCoarseQueue();
     this.sweepChunks(px, pz, dt);
   }
 
@@ -577,6 +628,8 @@ export class ChunkManager {
     sharedWaterMaterial.uniforms.uChopScale.value = boss4D ? 0.6 : 1.0;
     // ★ 作废在途标准烘焙；未建成的 key 重新按当前风格构建
     this.bakeGen++;
+    this.coarseEpoch++;            // ★ 粗块数据换代（丢弃迟到结果）
+    this.clearCoarse();
     terrainPatch.clearCaches(); // ★ 增量基座缓存随 chunk 数据换代作废
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
@@ -602,6 +655,10 @@ export class ChunkManager {
     this.queue.length = 0;        // ★ 清空构建队列
     this.queuedKeys.clear();
     this.bakeGen++;
+    this.coarseEpoch++;           // ★ 粗块数据换代（丢弃迟到结果）
+    this.clearCoarse();
+    this._coarseMat?.dispose();
+    this._coarseMat = null;
     terrainPatch.clearCaches();   // ★ 增量基座缓存随 dispose 作废
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
@@ -790,7 +847,7 @@ export class ChunkManager {
       return;
     }
     // ★ 数据环 = 预烘焙半径（±3 = 7×7），构建环另按 BUILD_RADIUS 取
-    const added = this.raster.updateChunks(px, pz, this.prefetchRadius);
+    const added = this.raster.updateChunks(px, pz, this.dataRadius());
     // 数据新增 → 已有网格的 3×3 邻域变了 → 接缝重建（排在新建之后处理）
     for (const { cx, cz } of added) {
       for (const [nx, nz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
@@ -907,6 +964,96 @@ export class ChunkManager {
         this.unparkChunk(key);
       }
     }
+    // 粗块同样按范围剔除（超出粗块环 +1 即销毁重建）
+    for (const key of [...this.coarseMeshes.keys()]) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > ChunkManager.COARSE_RADIUS + 1) {
+        this.dropCoarse(key);
+      }
+    }
+  }
+
+  // ============================================================
+  // ★ 粗块管线（地图两级构建第一级）
+  // ============================================================
+
+  /** 数据环半径：取预烘半径与粗块半径+1 的较大者（粗块取数需要） */
+  private dataRadius(): number {
+    return Math.max(this.prefetchRadius, ChunkManager.COARSE_RADIUS + 1);
+  }
+
+  /** 粗块请求/补齐：环内数据块（近处交给细化）→ coarsePatch worker */
+  private syncCoarse(px: number, pz: number): void {
+    if (this.boss4D) return; // 四维空间不铺粗块（同步构建）
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    const epoch = this.coarseEpoch;
+    for (const o of ChunkManager.COARSE_OFFSETS) {
+      const cx = pcx + o.dx, cz = pcz + o.dz;
+      const key = chunkKeyOf(cx, cz);
+      if (this.meshes.has(key) || this.voidKeys.has(key)) continue;
+      if (this.coarseMeshes.has(key) || this.coarseInflight.has(key)) continue;
+      // 探索期：近处（细化环内）留给细化，不铺粗块
+      if (!this.coarseOnly && Math.max(Math.abs(o.dx), Math.abs(o.dz)) <= ChunkManager.BUILD_RADIUS) continue;
+      if (!this.raster.getChunkData(cx, cz)) continue;
+      this.coarseInflight.add(key);
+      coarsePatch
+        .compute({ seed: this.raster.worldSeed, cx, cz }, (a, b) => this.raster.getChunkData(a, b))
+        .then((geom) => {
+          this.coarseInflight.delete(key);
+          if (!geom || epoch !== this.coarseEpoch) return;
+          this.coarseQueue.push(() => this.buildCoarseMesh(cx, cz, geom));
+        });
+    }
+  }
+
+  /** 粗块装配预算（每帧限量，防上传尖峰） */
+  private flushCoarseQueue(): void {
+    let n = ChunkManager.COARSE_PER_FRAME;
+    while (n-- > 0 && this.coarseQueue.length > 0) this.coarseQueue.shift()!();
+  }
+
+  /** ★ 由粗几何建粗网格：纯色顶点色 + MeshBasic（无纹理/水面/装饰/物理） */
+  private buildCoarseMesh(cx: number, cz: number, g: PatchGeomResult): void {
+    const key = chunkKeyOf(cx, cz);
+    if (this.coarseMeshes.has(key) || this.meshes.has(key) || this.voidKeys.has(key)) return;
+    const mat = this.coarseMat();
+    const group = new THREE.Group();
+    const addPart = (part: { vertices: Float32Array; colors?: Float32Array; indices: Uint32Array }): void => {
+      if (!part.indices || part.indices.length === 0) return;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(part.vertices, 3));
+      const n = part.vertices.length / 3;
+      geo.setAttribute('color', new THREE.BufferAttribute(
+        part.colors && part.colors.length === n * 3 ? part.colors : new Float32Array(n * 3).fill(0.7), 3,
+      ));
+      geo.setIndex(new THREE.BufferAttribute(part.indices, 1));
+      geo.computeBoundingSphere();
+      group.add(new THREE.Mesh(geo, mat));
+    };
+    addPart(g.top);
+    addPart(g.wall);
+    group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
+    this.scene.add(group);
+    this.coarseMeshes.set(key, group);
+  }
+
+  /** 粗块退场（细化就位 / 超出范围 / dispose） */
+  private dropCoarse(key: number): void {
+    const g = this.coarseMeshes.get(key);
+    if (!g) return;
+    this.scene.remove(g);
+    g.traverse((o) => {
+      if (o instanceof THREE.Mesh) o.geometry.dispose();
+    });
+    this.coarseMeshes.delete(key);
+  }
+
+  private clearCoarse(): void {
+    for (const key of [...this.coarseMeshes.keys()]) this.dropCoarse(key);
+    this.coarseQueue.length = 0;
+    this.coarseInflight.clear();
   }
 
   /**
@@ -1243,6 +1390,7 @@ const key2 = chunkKeyOf(cx, cz);
       (group.userData as { terrainCount?: number }).terrainCount = cfg.meshes.length;
       this.scene.add(group);
       this.meshes.set(key, group);
+      this.dropCoarse(key); // ★ 细化就位 → 粗块退场
       this.createChunkGround(key, cx, cz, cfg.pv, cfg.pi, cells);
       this.queueDecorJob(cx, cz, maps, 'full');
     }
@@ -2154,6 +2302,7 @@ const key2 = chunkKeyOf(cx, cz);
     if (visual) {
       this.scene.add(visual);
       this.meshes.set(key, visual);
+      this.dropCoarse(key); // ★ 细化就位 → 粗块退场
     } else {
       this.voidKeys.add(key);
     }
