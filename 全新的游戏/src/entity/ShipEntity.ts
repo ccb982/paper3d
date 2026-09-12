@@ -24,8 +24,10 @@ import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import travelConfig from '../config/travel.json';
 
-/** 停靠后舰体离地高度（贴地摆放视觉用） */
-const LANDED_HEIGHT = 1.0;
+/** 停靠后舰体中心离地高度（贴地摆放视觉用；= 船底局部 -0.99 × MODEL_SCALE 的一半量级）
+ *  ★ 4× 模型：船底局部 ≈ -1.98 → 中心 2.0 时船底贴地 */
+export const SHIP_LANDED_HEIGHT = 2.0;
+const LANDED_HEIGHT = SHIP_LANDED_HEIGHT;
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
 export class ShipEntity extends EntityBase {
@@ -126,7 +128,9 @@ export class ShipEntity extends EntityBase {
     p.z += f.z * this.speed * dt;
     p.y += f.y * this.speed * dt;
     // 只固定高度：高时快、近地慢（alt×0.4，夹在 [Sink, SinkMax]）——软着地
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    // ★ 落体目标同样低通地形高度，末端不随逐块高差抖
+    const rawGy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const gy = this.smoothGround(rawGy, dt, 12, 6);
     const target = gy + LANDED_HEIGHT;
     if (p.y > target) {
       const alt = p.y - target;
@@ -153,6 +157,20 @@ export class ShipEntity extends EntityBase {
     this.pitch = 0;
     this.roll = 0;
     this.speed = travelConfig.flightLandingSpeed;
+    this.groundSmY = NaN; // 起飞重置低通（立即贴合当前地形）
+  }
+
+  /** 当前速度（m/s；降落预测/镜头调度用） */
+  get speedValue(): number { return this.speed; }
+
+  /** ★ 地形高度低通值（贴下限巡航/落体目标防抖：地形逐块高差噪声不直接进高度） */
+  private groundSmY = NaN;
+  /** 低通：上升跟手（防穿地）、下降更缓（防掉高抖动）；rate 单位 m/s */
+  private smoothGround(raw: number, dt: number, upRate = 10, downRate = 5): number {
+    if (Number.isNaN(this.groundSmY)) this.groundSmY = raw;
+    const lim = (raw > this.groundSmY ? upRate : downRate) * dt;
+    this.groundSmY += Math.max(-lim, Math.min(lim, raw - this.groundSmY));
+    return this.groundSmY;
   }
 
   /** ★ 起飞段步进（WorldMode 状态机驱动）：自动爬升到最低净空 + 油门渐增；
@@ -195,8 +213,10 @@ export class ShipEntity extends EntityBase {
     p.z += f.z * this.speed * dt;
     p.y += f.y * this.speed * dt;
     // 地形净空（不撞地：最低离地；上限防飞出天外）
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
-    p.y = clamp(p.y, gy + travelConfig.flightMinClearance, gy + travelConfig.flightMaxClearance);
+    // ★ 下限用低通后的地形高度：贴下限巡航时不再随逐块高差"台阶式"抖动
+    const rawGy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const gy = this.smoothGround(rawGy, dt);
+    p.y = clamp(p.y, gy + travelConfig.flightMinClearance, rawGy + travelConfig.flightMaxClearance);
     this.renderer?.setPosition(p.x, p.y, p.z);
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);

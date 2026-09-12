@@ -24,7 +24,7 @@ import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import type { EntityBase } from '../entity/EntityBase';
 import { Player } from '../entity/Player';
-import { ShipEntity } from '../entity/ShipEntity';
+import { ShipEntity, SHIP_LANDED_HEIGHT } from '../entity/ShipEntity';
 import { resolveDockSpawn } from '../services/ship/DockResolver';
 import { applyShipDamage, isShipDestroyed, reviveShip } from '../systems/ship/ShipState';
 import travelConfig from '../config/travel.json';
@@ -171,6 +171,50 @@ export const worldPerf = {
   assembly: 0,
 };
 
+// ★ 镜头调度临时量（follow 每帧刷新目标机位，零分配）
+const _camMat = new THREE.Matrix4();
+const _camEye = new THREE.Vector3();
+const _camAt = new THREE.Vector3();
+const _camUp = new THREE.Vector3(0, 1, 0);
+const _camQuat = new THREE.Quaternion();
+const _arcV = new THREE.Vector3();
+
+/** ★ 相机姿态插值（资料共识"绕注视点的球面弧"）：
+ *  位置 = 相对 pivot 的球坐标 (r,θ,φ) 各分量插值（角度走最短路径）→ 折返弧线，
+ *  不会直线穿过地形/目标；朝向独立 slerp。pivot 为空退化为线性。 */
+function interpCamPose(
+  fromPos: THREE.Vector3, fromQuat: THREE.Quaternion,
+  toPos: THREE.Vector3, toQuat: THREE.Quaternion,
+  e: number, pivot: THREE.Vector3 | null,
+  outPos: THREE.Vector3, outQuat: THREE.Quaternion,
+): void {
+  if (!pivot) {
+    outPos.lerpVectors(fromPos, toPos, e);
+  } else {
+    const fv = _arcV.copy(fromPos).sub(pivot);
+    const rF = Math.max(fv.length(), 1e-3);
+    const thF = Math.atan2(fv.z, fv.x);
+    const phF = Math.asin(Math.max(-1, Math.min(1, fv.y / rF)));
+    const tv = _arcV.copy(toPos).sub(pivot);
+    const rT = Math.max(tv.length(), 1e-3);
+    const thT = Math.atan2(tv.z, tv.x);
+    const phT = Math.asin(Math.max(-1, Math.min(1, tv.y / rT)));
+    let dTh = thT - thF;
+    while (dTh > Math.PI) dTh -= Math.PI * 2;
+    while (dTh < -Math.PI) dTh += Math.PI * 2;
+    const r = rF + (rT - rF) * e;
+    const th = thF + dTh * e;
+    const ph = phF + (phT - phF) * e;
+    const cp = Math.cos(ph);
+    outPos.set(
+      pivot.x + r * cp * Math.cos(th),
+      pivot.y + r * Math.sin(ph),
+      pivot.z + r * cp * Math.sin(th),
+    );
+  }
+  outQuat.slerpQuaternions(fromQuat, toQuat, e);
+}
+
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
   player!: Player;
@@ -186,16 +230,52 @@ export class WorldMode implements IGameMode {
     t: number;
     fromX: number; fromZ: number;
     toX: number; toZ: number;
+    /** 玩家下机点（舰船侧旁，beginSettle 时解析） */
+    exitX: number; exitY: number; exitZ: number;
     emergency: boolean;
   } | null = null;
+  /** ★ 降落"观察机位"（2026-09-12 重写，按资料共识：固定镜头 + 一次性取景）：
+   *  到起调高度后在**触发瞬间一次算好**机位/朝向/注视点（装下"飞机→预测落点"整段），
+   *  用缓入缓出+绕注视点的球面弧移动过去，之后**保持不动**——飞机独立降入画面。
+   *  全程无逐帧重算/无双重混合 → 不抖。 */
+  private camShot: {
+    t: number;
+    fromPos: THREE.Vector3; fromQuat: THREE.Quaternion;
+    shotPos: THREE.Vector3; shotQuat: THREE.Quaternion;
+    /** 注视点（也是弧线插值中心） */
+    pivot: THREE.Vector3;
+  } | null = null;
+  /** 观察机位起调高度（米）：高空段仍是追尾机 */
+  private static readonly CAM_SHOT_START_ALT = 45;
+  /** 追尾机位 → 观察机位 的过渡时长（秒；资料建议 0.5~1.5s 缓入缓出） */
+  private static readonly CAM_SHOT_BLEND = 1.2;
+  /** 玩家下机点：舰船侧旁偏移（米；避开翼展/机体——4× 模型翼展 ≈±10m） */
+  private static readonly PLAYER_EXIT_OFFSET = 13;
   /** 本帧是否触地（landingStep 结果；实体段转落稳用） */
   private landingTouchdown = false;
   /** 落稳段时长（秒）：镜头保持追尾，看舰船贴地/滑到安全点 */
   private static readonly LAND_SETTLE_SECONDS = 1.8;
   /** ★ 起飞段（登船后自动爬升到最低净空；期间锁输入） */
   private takeoff = false;
-  /** ★ 登船半径（米）：探索期靠近舰船按 F = 再次起飞（舰船当实体载具） */
-  private static readonly REBOARD_RADIUS = 10;
+  /** ★ 登船半径（米）：探索期靠近舰船按 F = 再次起飞（舰船当实体载具）
+   *  （4× 模型船体 ≈26m 长，半径放宽） */
+  private static readonly REBOARD_RADIUS = 18;
+  /** ★ 镜头调度（落地下机 / 登机上机）：机位-朝向平滑过渡，无缝衔接控制权 */
+  private camBlend: {
+    t: number;
+    dur: number;
+    fromPos: THREE.Vector3;
+    fromQuat: THREE.Quaternion;
+    toPos: THREE.Vector3;
+    toQuat: THREE.Quaternion;
+    /** 弧线插值中心（非空 → 机位绕它走球面弧，避免直线穿地形；空 = 线性） */
+    pivot: THREE.Vector3 | null;
+    /** 每帧刷新目标机位（跟运动目标；如起飞时舰船仍在爬升） */
+    follow?: () => void;
+    onDone?: () => void;
+  } | null = null;
+  /** 登机上机镜头时长（秒；角色第三人称 → 追尾机位） */
+  private static readonly CAM_BLEND_UP = 1.2;
   /** 飞行追尾相机首帧就位标记（防从舰内相机位缓慢飞入 → 黑屏感） */
   private flightCamInit = false;
   /** 舰船已毁（结算/复活等待：冻结玩法更新） */
@@ -438,6 +518,8 @@ export class WorldMode implements IGameMode {
     this.landing = null;
     this.landingTouchdown = false;
     this.takeoff = false;
+    this.camBlend = null;
+    this.camShot = null;
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -971,9 +1053,19 @@ export class WorldMode implements IGameMode {
     }
 
     // ---- 相机 ----
-    if (this.phase === 'sail') {
-      // ★ 飞行追尾相机：机后上方平滑跟随 + 看向机头前方（不随滚转翻转地平线）
-      this.updateFlightCamera(dt);
+    if (this.camBlend) {
+      // ★ 镜头调度接管（下机/上机过渡；期间两套相机控制器都不驱动 → 无漂移）
+      this.updateCamBlend(dt);
+    } else if (this.phase === 'sail') {
+      if (this.camShot) {
+        // ★ 观察机位接管：移动到定好的机位后保持不动（飞机独立降入画面）
+        this.updateLandingShot(dt);
+      } else {
+        // ★ 飞行追尾相机：机后上方平滑跟随 + 看向机头前方（不随滚转翻转地平线）
+        this.updateFlightCamera(dt);
+        // ★ 降到起调高度 → 一次性取景切换到观察机位
+        if (this.landing?.phase === 'approach') this.tryStartLandingShot();
+      }
     } else {
       // ★ position.y 现在空中含真实跳高 → height = 贴地/起跳站立面（减回跳高），
       //   jump = 跳高偏移，二者语义与 CameraController 契约一致（不重复记账）。
@@ -2007,6 +2099,109 @@ export class WorldMode implements IGameMode {
     }
   }
 
+  /** ★ 玩家下机点：舰船右舷侧旁偏移（右向量 = (f.z, -f.x)），只避坑 */
+  private playerExitPoint(shipX: number, shipZ: number): { x: number; y: number; z: number } {
+    const f = this.ship?.forward ?? { x: 0, y: 0, z: 1 };
+    const rx = f.z, rz = -f.x;
+    const safe = resolveDockSpawn(
+      this.raster,
+      shipX + rx * WorldMode.PLAYER_EXIT_OFFSET,
+      shipZ + rz * WorldMode.PLAYER_EXIT_OFFSET,
+    );
+    return { x: safe.x, y: this.raster.surfaceHeightAt(safe.x, safe.z), z: safe.z };
+  }
+
+  /** ★ 起调判定（降到起调高度）→ **一次性取景**：观察机位装下"飞机当前位置 →
+   *  预测落点"整段（垂直跨度按 FOV 反推距离），注视点取两点中段偏上。
+   *  触发后相机姿势/朝向/注视点全部冻结，不再逐帧重算（资料共识：固定镜头不抖）。 */
+  private tryStartLandingShot(): void {
+    const cam = this.camera;
+    const ship = this.ship;
+    if (!cam || !ship || this.camShot) return;
+    const gy0 = RasterMap.current?.surfaceHeightAt(ship.position.x, ship.position.z) ?? 0;
+    const alt0 = ship.position.y - gy0;
+    if (alt0 > WorldMode.CAM_SHOT_START_ALT) return;
+    // ★ 落点预测 = 与 landingStep 同模型的离散推进（收油 16 m/s²、sink=clamp(alt×0.4,2,8)）
+    //   （旧版 speed×时间×0.6 在高速时严重高估漂移 → 跨度巨大 → 机位被推到几百米外）
+    const f = ship.forward;
+    let px = ship.position.x, pz = ship.position.z;
+    let alt = alt0, v = ship.speedValue;
+    for (let t = 0; t < 30 && alt > 0; t += 0.25) {
+      px += f.x * v * 0.25;
+      pz += f.z * v * 0.25;
+      const sink = Math.min(
+        travelConfig.flightLandingSinkMax,
+        Math.max(travelConfig.flightLandingSink, alt * 0.4),
+      );
+      alt -= sink * 0.25;
+      v = Math.max(travelConfig.flightLandingSpeed, v - 16 * 0.25);
+    }
+    const lgy = RasterMap.current?.surfaceHeightAt(px, pz) ?? 0;
+    const ax = ship.position.x, ay = ship.position.y, az = ship.position.z;
+    const dx = px - ax, dz = pz - az;
+    const hspan = Math.hypot(dx, dz);
+    const hl = hspan || 1;
+    const dirX = dx / hl, dirZ = dz / hl;
+    const sideX = dirZ, sideZ = -dirX; // 进近方向右侧
+    // ★ 机位基准 = A→B 整段【中点】（侧向取景；不再相对落点前移 → 修"只能看到机头"）
+    const mx = (ax + px) * 0.5, mz = (az + pz) * 0.5;
+    const span3 = Math.hypot(hspan, ay - lgy);
+    // 4× 大船：取景距离/高度同步放大（船体 ≈26m 长）
+    const D = Math.min(140, Math.max(70, span3 * 0.55));
+    const H = Math.min(50, Math.max(18, span3 * 0.25));
+    // 正侧方（略向 A 偏 10%：从侧后方看，能看到完整机身而非迎面机头）
+    const sx = mx + sideX * D - dirX * D * 0.1;
+    const sz = mz + sideZ * D - dirZ * D * 0.1;
+    const sgy = RasterMap.current?.surfaceHeightAt(sx, sz) ?? 0;
+    // 机位抬高到"整段中间高度"之上（含地形净空）
+    const midY = (ay + lgy) * 0.5;
+    const shotPos = new THREE.Vector3(sx, Math.max(midY + H, sgy + 8), sz);
+    // 注视点 = 整段中点（飞机从画面上方一路降到中心，全程在画幅内）
+    const pivot = new THREE.Vector3(mx, midY + span3 * 0.06, mz);
+    _camMat.lookAt(_camEye.copy(shotPos), pivot, _camUp);
+    const shotQuat = new THREE.Quaternion().setFromRotationMatrix(_camMat);
+    this.camShot = {
+      t: 0,
+      fromPos: cam.position.clone(),
+      fromQuat: cam.quaternion.clone(),
+      shotPos, shotQuat, pivot,
+    };
+  }
+
+  /** ★ 观察机位步进：缓入缓出 + 绕注视点的球面弧移动过去；到位后保持静止
+   *  （飞机独立降入画面，全程无逐帧目标重算 → 不抖）。 */
+  private updateLandingShot(dt: number): void {
+    const S = this.camShot;
+    const cam = this.camera;
+    if (!S || !cam) return;
+    S.t += dt;
+    const k = Math.min(1, S.t / WorldMode.CAM_SHOT_BLEND);
+    const e = k * k * (3 - 2 * k);
+    interpCamPose(S.fromPos, S.fromQuat, S.shotPos, S.shotQuat, e, S.pivot, cam.position, cam.quaternion);
+    if (k >= 1) {
+      // 到位：钉死在观察机位（其它系统若有残留写入也被覆盖）
+      cam.position.copy(S.shotPos);
+      cam.quaternion.copy(S.shotQuat);
+    }
+  }
+
+  /** ★ 镜头调度步进：缓入缓出 + 绕注视点的球面弧（pivot 为空则线性），
+   *  完成后交还控制权 */
+  private updateCamBlend(dt: number): void {
+    const B = this.camBlend;
+    const cam = this.camera;
+    if (!B || !cam) return;
+    B.follow?.();
+    B.t += dt;
+    const k = Math.min(1, B.t / B.dur);
+    const e = k * k * (3 - 2 * k);
+    interpCamPose(B.fromPos, B.fromQuat, B.toPos, B.toQuat, e, B.pivot, cam.position, cam.quaternion);
+    if (k >= 1) {
+      this.camBlend = null;
+      B.onDone?.();
+    }
+  }
+
   /** ★ 飞行追尾相机（航行期替代 CameraController）：机后上方平滑跟随 + 看向机头前方。
    *  首帧直接就位（否则从舰内相机位慢慢飞过来 → 前几秒看着黑屏/别处）。 */
   private updateFlightCamera(dt: number): void {
@@ -2030,9 +2225,14 @@ export class WorldMode implements IGameMode {
    *  自动收油下降；进近一开始就切【细化】+ 当前位置 3×3 强制构建（进近漂移量
    *  远小于细化环半径）→ 触地那刻地形已就绪。触地收尾见 finishDock。 */
   private requestDock(emergency: boolean): void {
-    if (this.phase !== 'sail' || !this.session || !this.ship || this.landing) return;
-    this.landing = { phase: 'approach', t: 0, fromX: 0, fromZ: 0, toX: 0, toZ: 0, emergency };
+    if (this.phase !== 'sail' || !this.session || !this.ship || this.landing
+      || this.takeoff || this.camBlend) return;
+    this.landing = {
+      phase: 'approach', t: 0, fromX: 0, fromZ: 0, toX: 0, toZ: 0,
+      exitX: 0, exitY: 0, exitZ: 0, emergency,
+    };
     this.landingTouchdown = false;
+    this.camShot = null; // 高空段追尾；降到起调高度再切观察机位
     // ★ 降落冲刺：立刻转细化 + 落点 3×3 强制构建 + 放开闸门；
     //   优先级（进近窗口内）= 当前块 > 机头方向下一块 > 十字臂 > 其余
     const fw = this.ship.forward;
@@ -2040,7 +2240,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setDockButtonVisible(false);
   }
 
-  /** ★ 触地 → 落稳段：记录安全落点，1.8s 内贴地滑过去（镜头保持追尾） */
+  /** ★ 触地 → 落稳段：记录安全落点 + 解析玩家下机点（舰船侧旁），
+   *  并启动镜头调度后半程（当前机位 → 角色机位，与落稳同时结束）。 */
   private beginSettle(): void {
     const L = this.landing;
     if (!L || !this.ship) return;
@@ -2052,6 +2253,29 @@ export class WorldMode implements IGameMode {
     L.fromZ = cur.z;
     L.toX = sp.x;
     L.toZ = sp.z;
+    this.camShot = null; // 观察机位结束，交棒落稳段镜头
+    // 玩家下机点：舰船右舷侧旁（不在机体里）
+    const exit = this.playerExitPoint(sp.x, sp.z);
+    L.exitX = exit.x; L.exitY = exit.y; L.exitZ = exit.z;
+    // ★ 镜头调度收尾：从当前（已预调度过半的）机位 → 角色机位；与落稳同步结束
+    const cam = this.camera;
+    if (!cam) return;
+    const fromPos = cam.position.clone();
+    const fromQuat = cam.quaternion.clone();
+    this.cameraCtrl.snapTo(exit.x, exit.y, exit.z);
+    this.cameraCtrl.update(1, { x: 0, y: 0 }, 0,
+      { x: exit.x, y: 0, z: exit.z, height: exit.y, jump: 0 }, false);
+    const toPos = cam.position.clone();
+    const toQuat = cam.quaternion.clone();
+    cam.position.copy(fromPos);
+    cam.quaternion.copy(fromQuat);
+    this.camBlend = {
+      t: 0, dur: WorldMode.LAND_SETTLE_SECONDS,
+      fromPos, fromQuat, toPos, toQuat,
+      // 绕"角色焦点"的球面弧收尾（观察机位 → 角色机位，不直线穿地）
+      pivot: new THREE.Vector3(exit.x, exit.y + 1.6, exit.z),
+      onDone: () => { this.player.controlLocked = false; },
+    };
   }
 
   /** ★ 落稳段步进：只固定位置（贴地 + 平滑滑向安全点），姿态角度不动 */
@@ -2064,14 +2288,16 @@ export class WorldMode implements IGameMode {
     const x = L.fromX + (L.toX - L.fromX) * e;
     const z = L.fromZ + (L.toZ - L.fromZ) * e;
     const gy = RasterMap.current?.surfaceHeightAt(x, z) ?? 0;
-    this.ship.settleStep(x, gy + 1.0, z);
+    this.ship.settleStep(x, gy + SHIP_LANDED_HEIGHT, z);
     if (k >= 1) this.finishDock();
   }
 
-  /** ★ 触地收尾：原地吸附安全落点 → 舰船转静止目标、角色接管、友军部署、恢复水面/云月 */
+  /** ★ 触地收尾：舰船落位、角色在下机点接管、友军部署、恢复水面/云月。
+   *  镜头调度已在 beginSettle 启动（与落稳同步结束），此处不再重建过渡。 */
   private finishDock(): void {
     if (!this.session || !this.ship) return;
     const emergency = this.landing?.emergency ?? false;
+    const L = this.landing;
     this.landing = null;
     this.landingTouchdown = false;
     const cur = this.ship.position;
@@ -2084,23 +2310,30 @@ export class WorldMode implements IGameMode {
     this.session.ship.position = { x: sp.x, z: sp.z };
     this.chunks.setWaterVisible(true);      // 停靠：恢复水面渲染
     renderManager.setFlightMode(false);     // 停靠：恢复云/月亮更新
-    // 角色接管
+    // ★ 角色在下机点就位（舰船侧旁，不在飞机里）；控制权由镜头调度结束交还
+    const exit = L && (L.exitX !== 0 || L.exitZ !== 0)
+      ? { x: L.exitX, y: L.exitY, z: L.exitZ }
+      : this.playerExitPoint(sp.x, sp.z);
     const p = this.player;
-    p.controlLocked = false;
-    p.position.x = sp.x;
-    p.position.z = sp.z;
-    p.position.y = sp.y;
-    this.cameraCtrl.snapTo(sp.x, sp.y, sp.z);
+    p.controlLocked = true;
+    p.position.x = exit.x;
+    p.position.z = exit.z;
+    p.position.y = exit.y;
     this.worldUIManager.setDockButtonVisible(false);
     this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
     this.deploySlotAllies();                       // ★ 停靠后：友军出队
-    this.showFloatingAt(sp.x, sp.y + 1.6, sp.z, emergency ? '紧急停靠' : '已停靠', 'heal');
+    this.showFloatingAt(exit.x, exit.y + 1.6, exit.z, emergency ? '紧急停靠' : '已停靠', 'heal');
+    // 兜底：若镜头调度意外缺失（无相机/被取消），直接就位并交还控制
+    if (!this.camBlend) {
+      this.cameraCtrl.snapTo(exit.x, exit.y, exit.z);
+      p.controlLocked = false;
+    }
   }
 
   /** ★ 登船起飞（探索期靠近舰船按 F；2026-09-12 用户定调：舰船当实体载具）：
    *  收起友军 → 回航行阶段（起飞爬升段 + 追尾相机 + 航行极简帧），可继续飞行。 */
   private tryBoardShip(): boolean {
-    if (!this.ship || !this.session) return false;
+    if (!this.ship || !this.session || this.camBlend) return false;
     const p = this.player.position;
     const s = this.ship.position;
     const dx = p.x - s.x, dz = p.z - s.z;
@@ -2110,7 +2343,6 @@ export class WorldMode implements IGameMode {
     this.takeoff = true;
     this.ship.beginTakeoff();
     this.phase = 'sail';
-    this.flightCamInit = false;       // 追尾相机下一帧直接就位
     this.chunks.setCoarseMode(true);  // 航行极简：粗块 LOD
     this.chunks.setWaterVisible(false);
     renderManager.setFlightMode(true);
@@ -2118,6 +2350,40 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setCombatHudVisible(false);
     this.worldUIManager.setDockButtonVisible(true);
     this.showFloatingAt(s.x, s.y + 2.5, s.z, '起飞', 'heal');
+
+    // ★ 镜头调度（上机）：角色第三人称 → 追尾机位（目标每帧跟随舰船爬升）
+    const cam = this.camera;
+    if (cam) {
+      const follow = (): void => {
+        if (!this.ship || !this.camBlend) return;
+        const sp = this.ship.position;
+        const f = this.ship.forward;
+        const dist = travelConfig.flightCamDist;
+        const tx = sp.x - f.x * dist;
+        const ty = sp.y - f.y * dist + travelConfig.flightCamUp;
+        const tz = sp.z - f.z * dist;
+        this.camBlend.toPos.set(tx, ty, tz);
+        _camMat.lookAt(
+          _camEye.set(tx, ty, tz),
+          _camAt.set(sp.x + f.x * 8, sp.y + f.y * 8 + 1.2, sp.z + f.z * 8),
+          _camUp,
+        );
+        this.camBlend.toQuat.setFromRotationMatrix(_camMat);
+      };
+      this.camBlend = {
+        t: 0, dur: WorldMode.CAM_BLEND_UP,
+        fromPos: cam.position.clone(),
+        fromQuat: cam.quaternion.clone(),
+        toPos: new THREE.Vector3(),
+        toQuat: new THREE.Quaternion(),
+        pivot: null, // 上机：直线（机位相邻，无需弧线）
+        follow,
+        onDone: () => { this.flightCamInit = true; }, // 交还追尾相机（位置已一致 → 无跳变）
+      };
+      follow();
+    } else {
+      this.flightCamInit = false;
+    }
     return true;
   }
 

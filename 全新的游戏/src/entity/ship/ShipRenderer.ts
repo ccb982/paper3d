@@ -18,8 +18,9 @@ import travelConfig from '../../config/travel.json';
 
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 
-/** ★ 模型整体缩放（2026-09-12 用户定调：2× 大船；GLB 归一化后再乘此值） */
-const MODEL_SCALE = 2;
+/** ★ 模型整体缩放（2026-09-12 用户定调：4× 大船——船内要内置房间；
+ *  GLB 归一化后再乘此值） */
+const MODEL_SCALE = 4;
 
 export class ShipRenderer extends FxRendererBase {
   /** 姿态组（唯一旋转节点：飞行代码只碰它） */

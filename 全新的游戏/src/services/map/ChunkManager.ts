@@ -155,11 +155,10 @@ export class ChunkManager {
   /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
    *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
   private static readonly BUILD_INFLIGHT_MAX = 1;
-  /** ★ 降落冲刺（WorldMode 进近）：窗口内放开首建节流/在途/装配三档闸门
-   *  （进近变慢后窗口同步拉长，覆盖整段下降） */
+  /** ★ 降落冲刺（WorldMode 进近）：窗口内放开**首建节流 + 在途闸门**（让细化立刻
+   *  开工）；装配预算不放开（3/帧无冷却会造成帧时间尖刺 → 镜头抖动，用户反馈）。 */
   private static readonly RUSH_SECONDS = 30;
   private static readonly BUILD_INFLIGHT_MAX_RUSH = 4;
-  private static readonly ASSEMBLE_PER_FRAME_RUSH = 3;
   private rushUntil = 0;
   /** ★ 降落进近的"当前方向"（舰船机头；优先块计算用） */
   private rushDirX = 0;
@@ -525,10 +524,9 @@ export class ChunkManager {
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     this.lastAssembleMs = 0;
-    const rushing = performance.now() < this.rushUntil;
-    let n = rushing ? ChunkManager.ASSEMBLE_PER_FRAME_RUSH : ChunkManager.ASSEMBLE_PER_FRAME;
+    let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0
-      && (rushing || performance.now() >= this.assembleCooldownUntil)) {
+      && performance.now() >= this.assembleCooldownUntil) {
       // ★ 装配顺序 = 构建优先级（角色所在 chunk 第一；用户定调 2026-09-12）：
       //   装配队列按 bake 结果**到达顺序**堆积，若按 FIFO 装配，角色 chunk 会被
       //   先到的远处结果插队 → 这里按 buildPriorityScore 选出最高优先级项。
@@ -589,9 +587,9 @@ export class ChunkManager {
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
     //   每帧预算个 chunk（同样带耗时冷却）；同 chunk 多任务以更强模式合并（full > props）。
-    let d = rushing ? ChunkManager.DECOR_PER_FRAME + 1 : ChunkManager.DECOR_PER_FRAME;
+    let d = ChunkManager.DECOR_PER_FRAME;
     while (d-- > 0 && this.pendingDecorJobs.size > 0
-      && (rushing || performance.now() >= this.decorCooldownUntil)) {
+      && performance.now() >= this.decorCooldownUntil) {
       const _td = performance.now();
       const first = this.pendingDecorJobs.keys().next().value;
       if (first === undefined) break;
