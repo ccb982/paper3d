@@ -50,10 +50,23 @@ export class ShipRenderer extends FxRendererBase {
     this.group.rotation.z = roll;
   }
 
-  /** ★ 油门视觉（0..1）：程序化模型喷口随油门增亮（GLB 由美术自带 emissive） */
+  /** ★ 油门视觉（0..1）：喷口增亮 + 尾焰伸缩/闪烁（GLB 模型由美术自带 emissive） */
   setThrottle(t: number): void {
-    const mat = this.procedural?.nozzleMat;
-    if (mat) mat.color.copy(this.nozzleBase).multiplyScalar(0.45 + 1.25 * clamp01(t));
+    const th = clamp01(t);
+    const proc = this.procedural;
+    if (!proc) return;
+    proc.nozzleMat.color.copy(this.nozzleBase).multiplyScalar(0.45 + 1.25 * th);
+    const flames = proc.flames;
+    if (flames.length === 0) return;
+    const now = performance.now() * 0.001;
+    const len = 0.18 + 1.0 * th;
+    for (let i = 0; i < flames.length; i++) {
+      const f = flames[i];
+      f.visible = th > 0.02;
+      // 每个喷口独立相位抖动（0.9~1.15），避免四道焰完全同步
+      f.scale.z = len * (0.9 + 0.25 * Math.sin(now * 41.0 + i * 1.7));
+    }
+    proc.flameMat.opacity = (0.22 + 0.7 * th) * (0.86 + 0.14 * Math.sin(now * 37.0));
   }
 
   /** 异步加载 models/ship.glb（存在即替换程序化模型；失败静默） */
