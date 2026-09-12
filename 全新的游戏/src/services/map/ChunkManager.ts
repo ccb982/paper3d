@@ -378,16 +378,6 @@ export class ChunkManager {
     return this._coarseMat;
   }
 
-  /** ★ 全功率模式（航行赶路）：地形流式解除节流、加大预算/并发；聚焦点 = 舰船 */
-  private fullPower = false;
-
-  /** ★ 全功率开关（WorldMode：航行期开、停靠关） */
-  setFullPower(v: boolean): void {
-    this.fullPower = v;
-  }
-
-
-
   /** ★ 水面网格显隐（航行期隐藏：不渲染水、不跑水面 FFT 着色；停靠恢复）。
    *  新装配的 chunk 水网格按当前开关创建。 */
   private waterVisible = true;
@@ -405,27 +395,6 @@ export class ChunkManager {
     }
   }
 
-  // ---- 全功率档覆盖值（航行期把主线程/worker 全部让给地形流式） ----
-  // ★ 2026-09-12 用户定调：极速移动时掉帧不易感知 → 交付间隔再缩短（预算拉高、冷却取消）
-  private get assemblePerFrame(): number { return this.fullPower ? 10 : ChunkManager.ASSEMBLE_PER_FRAME; }
-  private get assembleBudgetMs(): number { return this.fullPower ? 40 : ChunkManager.ASSEMBLE_BUDGET_MS; }
-  private get buildBudgetMs(): number { return this.fullPower ? 40 : ChunkManager.BUILD_BUDGET_MS; }
-  private get buildRateMinIntervalMs(): number { return this.fullPower ? 0 : ChunkManager.BUILD_RATE_MIN_INTERVAL_MS; }
-  private get buildInflightMax(): number { return this.fullPower ? 6 : ChunkManager.BUILD_INFLIGHT_MAX; }
-  private get prefetchIntervalMs(): number { return this.fullPower ? 30 : ChunkManager.PREFETCH_INTERVAL_MS; }
-  private get prefetchPerTick(): number { return this.fullPower ? 5 : ChunkManager.PREFETCH_PER_TICK; }
-  private get prefetchBacklogMax(): number { return this.fullPower ? 20 : ChunkManager.PREFETCH_BACKLOG_MAX; }
-  private get decorPerFrame(): number { return this.fullPower ? 4 : ChunkManager.DECOR_PER_FRAME; }
-  private get decorBudgetMs(): number { return this.fullPower ? 24 : ChunkManager.DECOR_BUDGET_MS; }
-  private get groundCellPerFrame(): number { return this.fullPower ? 10 : ChunkManager.GROUND_CELL_PER_FRAME; }
-  private get groundCellBudgetMs(): number { return this.fullPower ? 14 : ChunkManager.GROUND_CELL_BUDGET_MS; }
-  /** ★ 构建环半径（航行期扩一圈：高速下前方交付更远，减少"追着船建"的滞后） */
-  private get buildRadius(): number { return this.fullPower ? 3 : ChunkManager.BUILD_RADIUS; }
-  /** ★ 预烘半径（航行期扩一圈） */
-  private get prefetchRadius(): number { return this.fullPower ? 5 : ChunkManager.PREFETCH_RADIUS; }
-  /** ★ 正前方优先层数（航行期 +1：机头方向更早铺到） */
-  private get frontLayers(): number { return this.fullPower ? 4 : ChunkManager.FRONT_LAYERS; }
-
   /** 每帧驱动：玩家驱动的无限扩张 + 看门狗自愈 + 几何装配预算 */
   update(px: number, pz: number, dt: number, faceX = 0, faceZ = 0): void {
     // ★ 热点 chunk 标记（玩家当前所在，用于降低该 chunk 重建节流间隔）
@@ -441,8 +410,8 @@ export class ChunkManager {
     if (ax > 1e-3 || az > 1e-3) {
       const alongX = ax >= az;
       const s = alongX ? (this.faceX >= 0 ? 1 : -1) : (this.faceZ >= 0 ? 1 : -1);
-      const R = this.buildRadius;
-      for (let k = 1; k <= this.frontLayers; k++) {
+      const R = ChunkManager.BUILD_RADIUS;
+      for (let k = 1; k <= ChunkManager.FRONT_LAYERS; k++) {
         // 先中间后两侧（预烘/装配优先顺序更顺路）
         for (let j = 0; j <= R; j++) {
           const offs = j === 0 ? [0] : [j, -j];
@@ -483,7 +452,7 @@ export class ChunkManager {
     // ★ 装配预算（时间感知 + 首建限流）：每帧最多 1 块；单块耗时超预算 → 冷却 (耗时−预算)；
     //   首建遵守滚动窗口 ≤2（挖坑重建不受限、优先放行）
     this.lastAssembleMs = 0;
-    let n = this.assemblePerFrame;
+    let n = ChunkManager.ASSEMBLE_PER_FRAME;
     while (n-- > 0 && this.assembleQueue.length > 0 && performance.now() >= this.assembleCooldownUntil) {
       // ★ 首建限流：超限时跳过首建，找挖坑重建（decor===null）先放行；没有则本帧停装
       let idx = 0;
@@ -512,18 +481,18 @@ export class ChunkManager {
       const _cost = performance.now() - _ta;
       this.lastAssembleMs = _cost;
       // ★ 全功率档不设冷却（高速移动宁可吃帧重也要连续交付地形）
-      if (!this.fullPower && _cost > this.assembleBudgetMs) {
-        this.assembleCooldownUntil = performance.now() + (_cost - this.assembleBudgetMs);
+      if (_cost > ChunkManager.ASSEMBLE_BUDGET_MS) {
+        this.assembleCooldownUntil = performance.now() + (_cost - ChunkManager.ASSEMBLE_BUDGET_MS);
       }
     }
     // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
     //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
     if (this.host.updateGroundCell) {
-      let g = this.groundCellPerFrame;
+      let g = ChunkManager.GROUND_CELL_PER_FRAME;
       const _tg = performance.now();
       while (g-- > 0 && this.groundCellQueue.size > 0) {
         // 已超时且本帧已换过至少一个 → 停止（保底第一个必换，物理滞后最小）
-        if (g < this.groundCellPerFrame - 1 && performance.now() - _tg > this.groundCellBudgetMs) break;
+        if (g < ChunkManager.GROUND_CELL_PER_FRAME - 1 && performance.now() - _tg > ChunkManager.GROUND_CELL_BUDGET_MS) break;
         const firstKey = this.groundCellQueue.keys().next().value;
         if (firstKey === undefined) break;
         const c = this.groundCellQueue.get(firstKey)!;
@@ -538,7 +507,7 @@ export class ChunkManager {
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
     //   每帧预算个 chunk（同样带耗时冷却）；同 chunk 多任务以更强模式合并（full > props）。
-    let d = this.decorPerFrame;
+    let d = ChunkManager.DECOR_PER_FRAME;
     while (d-- > 0 && this.pendingDecorJobs.size > 0 && performance.now() >= this.decorCooldownUntil) {
       const _td = performance.now();
       const first = this.pendingDecorJobs.keys().next().value;
@@ -573,7 +542,7 @@ export class ChunkManager {
 
   /** 构建环内"移动方向前方"的已建数量（前向优先阈值判定；5×5 环最多 25 次查表） */
   private forwardBuiltCount(dirX: number, dirZ: number): number {
-    const R = this.buildRadius;
+    const R = ChunkManager.BUILD_RADIUS;
     let n = 0;
     for (let dz = -R; dz <= R; dz++) {
       for (let dx = -R; dx <= R; dx++) {
@@ -607,14 +576,14 @@ export class ChunkManager {
 
   /** 首建节拍判定：距上一块首建交付 ≥ BUILD_RATE_MIN_INTERVAL_MS 才放行 */
   private allowFirstBuild(): boolean {
-    return performance.now() - this.lastBuildStamp >= this.buildRateMinIntervalMs;
+    return performance.now() - this.lastBuildStamp >= ChunkManager.BUILD_RATE_MIN_INTERVAL_MS;
   }
 
   /** 装饰补挂耗时冷却：本次超过预算 → 下一块推迟同等时间（把尖峰摊到后续帧） */
   private applyDecorCooldown(t0: number): void {
     const cost = performance.now() - t0;
-    if (cost > this.decorBudgetMs) {
-      this.decorCooldownUntil = performance.now() + (cost - this.decorBudgetMs);
+    if (cost > ChunkManager.DECOR_BUDGET_MS) {
+      this.decorCooldownUntil = performance.now() + (cost - ChunkManager.DECOR_BUDGET_MS);
     }
   }
 
@@ -630,6 +599,7 @@ export class ChunkManager {
     this.bakeGen++;
     this.coarseEpoch++;            // ★ 粗块数据换代（丢弃迟到结果）
     this.clearCoarse();
+    coarsePatch.clearCaches();   // ★ 粗池静态源缓存同换代
     terrainPatch.clearCaches(); // ★ 增量基座缓存随 chunk 数据换代作废
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
@@ -659,6 +629,7 @@ export class ChunkManager {
     this.clearCoarse();
     this._coarseMat?.dispose();
     this._coarseMat = null;
+    coarsePatch.clearCaches();    // ★ 粗池静态源缓存同清
     terrainPatch.clearCaches();   // ★ 增量基座缓存随 dispose 作废
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
@@ -774,9 +745,11 @@ export class ChunkManager {
     if (plinth !== undefined) this.host.setBodyEnabled?.(plinth, false);
   }
 
-  /** ★ 解封 chunk（≤PARK_RADIUS）：视觉挂回场景 + 刚体启用（零重建、瞬时） */
+  /** ★ 解封 chunk（≤PARK_RADIUS）：视觉挂回场景 + 刚体启用（零重建、瞬时）；
+   *  同时粗块退场（细化视觉回归） */
   private unparkChunk(key: number): void {
     this.parkedKeys.delete(key);
+    this.dropCoarse(key);
     const v = this.meshes.get(key);
     if (v && !v.parent) this.scene.add(v);
     const body = this.bodies.get(key);
@@ -859,7 +832,7 @@ export class ChunkManager {
     }
     // ★ 构建环（玩家 ±BUILD_RADIUS）：不依赖 added 列表——数据早已生成而 chunk
     //   尚未建成的（跨区后回到旧区域/预烘焙环进入视野）同样会被补齐
-    const R = this.buildRadius;
+    const R = ChunkManager.BUILD_RADIUS;
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     for (let dz = -R; dz <= R; dz++) {
@@ -894,8 +867,8 @@ export class ChunkManager {
     const t0 = performance.now();
     // ★ 优先级：坑洞重建在途/待投时压缩地形创建预算（地形创建优先级不高——
     //   2026-09-08 用户定调），把主线程+烘焙 worker 让给地形修改链路
-    const patching = !this.fullPower && (this.patchRebuilds.size > 0 || this.pendingPatches.size > 0);
-    const budget = this.buildBudgetMs * (patching ? 0.5 : 1);
+    const patching = this.patchRebuilds.size > 0 || this.pendingPatches.size > 0;
+    const budget = ChunkManager.BUILD_BUDGET_MS * (patching ? 0.5 : 1);
     // ★ 移动方向优先（用户定调）：前向已建数量不足阈值 → 前向 chunk 全权重加权抢占；
     //   足够时降权（仍略有偏向），站立不动 → 纯最近优先
     const mlen = Math.hypot(this.moveDirSmX, this.moveDirSmZ);
@@ -908,7 +881,7 @@ export class ChunkManager {
     while (this.queue.length > 0 && performance.now() - t0 < budget) {
       // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
       //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）
-      if (!this.boss4D && this.countBuildInflight() >= this.buildInflightMax) break;
+      if (!this.boss4D && this.countBuildInflight() >= ChunkManager.BUILD_INFLIGHT_MAX) break;
       // ★ 最近优先 + 前向加权 + 正前方三层绝对抢占：
       //   score = 距离 − 前向投影 × 加权（越小越先建）；正前块 −1e6 恒第一
       let best = 0, bestScore = Infinity;
@@ -980,7 +953,7 @@ export class ChunkManager {
 
   /** 数据环半径：取预烘半径与粗块半径+1 的较大者（粗块取数需要） */
   private dataRadius(): number {
-    return Math.max(this.prefetchRadius, ChunkManager.COARSE_RADIUS + 1);
+    return Math.max(ChunkManager.PREFETCH_RADIUS, ChunkManager.COARSE_RADIUS + 1);
   }
 
   /** 粗块请求/补齐：环内数据块（近处交给细化）→ coarsePatch worker */
@@ -992,7 +965,9 @@ export class ChunkManager {
     for (const o of ChunkManager.COARSE_OFFSETS) {
       const cx = pcx + o.dx, cz = pcz + o.dz;
       const key = chunkKeyOf(cx, cz);
-      if (this.meshes.has(key) || this.voidKeys.has(key)) continue;
+      // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
+      if (this.voidKeys.has(key)) continue;
+      if (this.meshes.has(key) && !this.parkedKeys.has(key)) continue;
       if (this.coarseMeshes.has(key) || this.coarseInflight.has(key)) continue;
       // 探索期：近处（细化环内）留给细化，不铺粗块
       if (!this.coarseOnly && Math.max(Math.abs(o.dx), Math.abs(o.dz)) <= ChunkManager.BUILD_RADIUS) continue;
@@ -1072,7 +1047,7 @@ export class ChunkManager {
     this.prefetchLastPx = px;
     this.prefetchLastPz = pz;
     this.prefetchAccum += dt;
-    if (this.prefetchAccum < this.prefetchIntervalMs) return;
+    if (this.prefetchAccum < ChunkManager.PREFETCH_INTERVAL_MS) return;
     this.prefetchAccum = 0;
     // 方向：本拍实际位移 ≥0.5m 才更新（站立/微抖沿用上次朝向）
     if (Math.abs(this.prefetchMoveX) > 0.5) this.prefetchDirX = Math.sign(this.prefetchMoveX);
@@ -1083,13 +1058,13 @@ export class ChunkManager {
     // ★ 装配积压不再阻塞预烘（提前算好，等限流慢慢交付），仅以积压上限约束
     if (this.queue.length > 0 || this.pendingBakes.size > 0) return;
     if (this.patchRebuilds.size > 0 || this.pendingPatches.size > 0) return;
-    if (this.assembleQueue.length >= this.prefetchBacklogMax) return;
+    if (this.assembleQueue.length >= ChunkManager.PREFETCH_BACKLOG_MAX) return;
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     // ★ 最高优先级：角色正前方三层先投（每拍上限内，层内由中间向两侧）
     let sent = 0;
     for (const key of this.frontKeys) {
-      if (sent >= this.prefetchPerTick) break;
+      if (sent >= ChunkManager.PREFETCH_PER_TICK) break;
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
       if (this.tryPrefetch(cx, cz)) sent++;
@@ -1097,14 +1072,14 @@ export class ChunkManager {
     // 再走轴间交替（每拍 1 块，x/y 前方轮流覆盖）；都取不到再环扫兜底
     this.prefetchLaneAlt = !this.prefetchLaneAlt;
     const xFirst = this.prefetchLaneAlt;
-    if (sent < this.prefetchPerTick && this.prefetchAxisLane(pcx, pcz, xFirst, xFirst ? this.prefetchDirX : this.prefetchDirZ)) sent++;
-    if (sent < this.prefetchPerTick && this.prefetchAxisLane(pcx, pcz, !xFirst, xFirst ? this.prefetchDirZ : this.prefetchDirX)) sent++;
-    if (sent < this.prefetchPerTick) this.prefetchRingFallback(pcx, pcz);
+    if (sent < ChunkManager.PREFETCH_PER_TICK && this.prefetchAxisLane(pcx, pcz, xFirst, xFirst ? this.prefetchDirX : this.prefetchDirZ)) sent++;
+    if (sent < ChunkManager.PREFETCH_PER_TICK && this.prefetchAxisLane(pcx, pcz, !xFirst, xFirst ? this.prefetchDirZ : this.prefetchDirX)) sent++;
+    if (sent < ChunkManager.PREFETCH_PER_TICK) this.prefetchRingFallback(pcx, pcz);
   }
 
   /** 沿 x/y 轴"前方"条带预烘一个：轴向前移（构建环外一档起），横向偏移按 |k| 由近到远 */
   private prefetchAxisLane(pcx: number, pcz: number, xAxis: boolean, dir: number): boolean {
-    for (let ring = this.buildRadius + 1; ring <= this.prefetchRadius; ring++) {
+    for (let ring = ChunkManager.BUILD_RADIUS + 1; ring <= ChunkManager.PREFETCH_RADIUS; ring++) {
       const base = (xAxis ? pcx : pcz) + dir * ring;
       for (const k of [0, 1, -1, 2, -2]) {
         const cx = xAxis ? base : pcx + k;
@@ -1117,7 +1092,7 @@ export class ChunkManager {
 
   /** 环扫兜底（角落/后方；从构建环外一档到预烘半径由近到远） */
   private prefetchRingFallback(pcx: number, pcz: number): void {
-    for (let ring = this.buildRadius + 1; ring <= this.prefetchRadius; ring++) {
+    for (let ring = ChunkManager.BUILD_RADIUS + 1; ring <= ChunkManager.PREFETCH_RADIUS; ring++) {
       for (let dz = -ring; dz <= ring; dz++) {
         for (let dx = -ring; dx <= ring; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;

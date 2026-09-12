@@ -5,7 +5,7 @@
 // 硬边、纯色顶点色、无 fine/弧边/水面/物理）→ 零拷贝回传。
 // 与 terrainPatch.worker（细化）分池，互不抢队列。
 
-import { computeTableGeometry, type PatchGeomResult } from "./PatchCompute";
+import { computeTableGeometry, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
 
 interface CoarseChunkMsg {
   type: "coarseBuild";
@@ -41,6 +41,10 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
 }
 
 ctx.onmessage = (ev: MessageEvent) => {
+  if ((ev.data as { type?: string }).type === "clearCache") {
+    dropPatchSourceCache();
+    return;
+  }
   const msg = ev.data as CoarseChunkMsg;
   if (msg.type !== "coarseBuild") return;
   const chunks = new Map<string, { heights: Float32Array; blockTypes: Uint8Array }>();

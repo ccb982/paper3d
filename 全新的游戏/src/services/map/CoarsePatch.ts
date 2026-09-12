@@ -5,7 +5,7 @@
 // 无烘焙/水面/装饰/物理 → 单块成本远低于细化；飞行期大半径铺粗块。
 // 细化阶段在粗块基础上全量重建（首版），完成后粗块退场（ChunkManager 管）。
 
-import { computeTableGeometry, type PatchGeomResult } from "./PatchCompute";
+import { computeTableGeometry, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
 import type { ChunkDataLite } from "./Refinements";
 
 const NEI = [-1, 0, 1];
@@ -58,6 +58,14 @@ class CoarsePatchService {
 
   private ensureAll(): void {
     for (let i = 0; i < CoarsePatchService.WORKER_COUNT; i++) this.ensure(i);
+  }
+
+  /** ★ 清空粗池静态源缓存（切风格/dispose 元数据换代时调用；主线程回退与 worker 同清） */
+  clearCaches(): void {
+    dropPatchSourceCache();
+    for (let i = 0; i < CoarsePatchService.WORKER_COUNT; i++) {
+      this.workers[i]?.postMessage({ type: "clearCache" });
+    }
   }
 
   private pickLeastBusy(): number {
