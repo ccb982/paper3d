@@ -174,6 +174,8 @@ export class WorldMode implements IGameMode {
   ship!: ShipEntity;
   /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索 */
   private phase: 'sail' | 'explore' = 'sail';
+  /** 飞行追尾相机首帧就位标记（防从舰内相机位缓慢飞入 → 黑屏感） */
+  private flightCamInit = false;
   /** 舰船已毁（结算/复活等待：冻结玩法更新） */
   private shipDestroyed = false;
   /** 舰船状态 HUD 刷新节拍（0.1s） */
@@ -383,6 +385,11 @@ export class WorldMode implements IGameMode {
       testChunk: ctx.debug?.testChunk ?? false,
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
+    // ★ 航行期：地形流式全功率（解除节流/加大预算并发；停靠时关）
+    this.chunks.setFullPower(true);
+    // ★ 航行低耗渲染：水面隐藏（不渲染水/不跑水面 FFT 着色）+ 云流体/月亮离屏不推进
+    this.chunks.setWaterVisible(false);
+    renderManager.setFlightMode(true);
 
     // ★ 昼夜循环重置：每次出击从晚上出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
@@ -402,6 +409,7 @@ export class WorldMode implements IGameMode {
     this.ship = new ShipEntity(this.entities, this.scene, ctx.session, spawn.x, spawn.z);
     this.phase = 'sail';
     this.shipDestroyed = false;
+    this.flightCamInit = false;
 
     // ★ 主角
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
@@ -733,24 +741,37 @@ export class WorldMode implements IGameMode {
     // ★ 舰船已毁：冻结玩法更新（结算/复活面板接管；相机/输入不再跑）
     if (this.shipDestroyed) return;
 
+    // ★ 航行驾驶（飞行手感）：本帧鼠标增量交给舰船姿态，实体管线前先转向/俯仰/油门
+    if (this.phase === 'sail') {
+      this.ship.steer(look.x, look.y, input.moveAxis.x, input.moveAxis.y, dt);
+    }
+
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
     if (input.held.interact) {
       this.onReturn?.();
       return;
     }
 
-    const pp = this.player.controllerPosition;
-
-    // ★ 无限地图扩张 + 看门狗自愈（chunk 流式管线在 ChunkManager 内）
-    //   ★ 传入角色正前方（相机视线）→ ChunkManager 优先算/建正前 4 块
-    const faceFw = this.cameraCtrl.getFrame().forward;
+    // ★ 航行期：地形流式以舰船为焦点（优先算/建机头下方与前向）；探索期=角色
+    const sailing = this.phase === 'sail';
+    const shipPos = this.ship?.position;
+    const shipFwd = this.ship?.forward;
+    const pp = sailing && shipPos
+      ? { x: shipPos.x, y: shipPos.z }
+      : this.player.controllerPosition;
+    const faceFw = sailing && shipFwd
+      ? { x: shipFwd.x, z: shipFwd.z }
+      : this.cameraCtrl.getFrame().forward;
     this.chunks.update(pp.x, pp.y, dt, faceFw.x, faceFw.z);
     const _t1 = performance.now();
 
     // ★ 小地图更新
     this.worldUIManager.update(dt, {
       playerPosition: { x: pp.x, z: pp.y },
-      cameraYaw: this.cameraCtrl.worldYaw,
+      // ★ 航行期：小地图朝向取机头前方（追尾相机不再由 cameraCtrl 驱动）
+      cameraYaw: this.phase === 'sail' && this.ship
+        ? (() => { const f = this.ship.forward; return Math.atan2(f.x, f.z); })()
+        : this.cameraCtrl.worldYaw,
       entities: this.entities.allBases(),
       playerStats: { hp: this.player.hp, maxHp: queryFinalStats(this.player).maxHp },
       ammoEntries: this.buildAmmoEntries(),
@@ -845,20 +866,18 @@ export class WorldMode implements IGameMode {
     // ---- 实体管线驱动 ----
     const _e1 = performance.now();
     if (this.phase === 'explore' && attackPressed && !this.player.dead) this.player.attack();
-    this.entities.update(dt, input, this.cameraCtrl.getFrame());
-    // ★ 航行阶段：耗油/停靠推进；角色位置随舰船（相机/无人机/小地图跟随）
     if (this.phase === 'sail') {
+      // ★ 航行期：实体管线全免（AI/物理/动画/渲染同步都不跑）——只推进舰船
+      this.ship.stepFlight(dt);
+      this.entities.onEntityMoved(this.ship);
+      // 耗油/停靠推进；角色位置随舰船（小地图/相机跟随）
       this.updateSail(dt);
-      // ★ 飞行高度：鼠标方向（相机俯仰）绝对映射——仰视升高、俯视降低
-      const pitch = Math.max(-1.55, Math.min(1.55, this.cameraCtrl.getPitch()));
-      const t = (pitch + 1.55) / 3.1; // 0 = 仰望（最高）.. 1 = 俯视（最低）
-      this.ship.setFlyHeight(
-        travelConfig.sailMaxHeight - t * (travelConfig.sailMaxHeight - travelConfig.sailMinHeight),
-      );
       const sp = this.ship.position;
       this.player.position.x = sp.x;
       this.player.position.z = sp.z;
       this.player.position.y = sp.y;
+    } else {
+      this.entities.update(dt, input, this.cameraCtrl.getFrame());
     }
     // ★ 效果队列只服务玩家（队友/敌人不参与、零每帧开销）：WorldMode 每帧显式推进
     if (this.player.effects) effectSystem.tickEntity(this.player, dt);
@@ -896,14 +915,19 @@ export class WorldMode implements IGameMode {
     }
 
     // ---- 相机 ----
-    // ★ position.y 现在空中含真实跳高 → height = 贴地/起跳站立面（减回跳高），
-    //   jump = 跳高偏移，二者语义与 CameraController 契约一致（不重复记账）。
-    const jumpOff = this.player.jumpHeight;
-    this.cameraCtrl.update(dt, look, zoom, {
-      x: this.player.position.x, y: 0, z: this.player.position.z,
-      height: this.player.position.y - jumpOff,
-      jump: jumpOff,
-    }, this.player.controller.isMoving);
+    if (this.phase === 'sail') {
+      // ★ 飞行追尾相机：机后上方平滑跟随 + 看向机头前方（不随滚转翻转地平线）
+      this.updateFlightCamera(dt);
+    } else {
+      // ★ position.y 现在空中含真实跳高 → height = 贴地/起跳站立面（减回跳高），
+      //   jump = 跳高偏移，二者语义与 CameraController 契约一致（不重复记账）。
+      const jumpOff = this.player.jumpHeight;
+      this.cameraCtrl.update(dt, look, zoom, {
+        x: this.player.position.x, y: 0, z: this.player.position.z,
+        height: this.player.position.y - jumpOff,
+        jump: jumpOff,
+      }, this.player.controller.isMoving);
+    }
     // ★ 死亡等待复活 / 航行操船期间隐藏本体（复活/停靠后自动恢复）
     this.player.visible = !this.cameraCtrl.isFirstPerson && !this.player.dead && this.phase === 'explore';
 
@@ -929,13 +953,15 @@ export class WorldMode implements IGameMode {
 
     // （生命回复已入 EffectSystem 队列：EntityBase.update 每帧统一结算）
 
-    // ---- 子弹效果/死亡动画 ----
-    this.bullets.update(dt, this.camera);
-    // ★ 祖宗弹推进（落地/寿命到 → 生成站桩祖宗）
-    this.updateSentinelShots(dt);
-    // ★ 治疗转伤害 proc（鱼生萌萌香/遥·幽隙栖萤）
-    this.updateHealProc();
-    CharacterFxManager.update(dt, this.camera);
+    // ---- 子弹效果/死亡动画（航行期全免：只算地形） ----
+    if (this.phase === 'explore') {
+      this.bullets.update(dt, this.camera);
+      // ★ 祖宗弹推进（落地/寿命到 → 生成站桩祖宗）
+      this.updateSentinelShots(dt);
+      // ★ 治疗转伤害 proc（鱼生萌萌香/遥·幽隙栖萤）
+      this.updateHealProc();
+      CharacterFxManager.update(dt, this.camera);
+    }
 
     // ---- 拾取发光粒子 ----
     for (let i = this.pickupGlows.length - 1; i >= 0; i--) {
@@ -945,16 +971,18 @@ export class WorldMode implements IGameMode {
     }
     const _t6 = performance.now();
 
-    // ---- 物理固定步长 ----
-    this.acc += dt;
-    const FIXED = 1 / 60;
-    let steps = 0;
-    while (this.acc >= FIXED && steps < 5) {
-      this.physics.step();
-      this.acc -= FIXED;
-      steps++;
+    // ---- 物理固定步长（航行期无物理需求：舰船无刚体、无实体推进 → 全免） ----
+    if (this.phase === 'explore') {
+      this.acc += dt;
+      const FIXED = 1 / 60;
+      let steps = 0;
+      while (this.acc >= FIXED && steps < 5) {
+        this.physics.step();
+        this.acc -= FIXED;
+        steps++;
+      }
+      if (steps >= 5) this.acc = 0;
     }
-    if (steps >= 5) this.acc = 0;
 
     // ★ 性能细分落账（每帧覆写；main.ts HUD 读取）
     const _t7 = performance.now();
@@ -1911,6 +1939,25 @@ export class WorldMode implements IGameMode {
     }
   }
 
+  /** ★ 飞行追尾相机（航行期替代 CameraController）：机后上方平滑跟随 + 看向机头前方。
+   *  首帧直接就位（否则从舰内相机位慢慢飞过来 → 前几秒看着黑屏/别处）。 */
+  private updateFlightCamera(dt: number): void {
+    const cam = this.camera;
+    if (!cam || !this.ship) return;
+    const sp = this.ship.position;
+    const f = this.ship.forward;
+    const dist = travelConfig.flightCamDist;
+    const tx = sp.x - f.x * dist;
+    const ty = sp.y - f.y * dist + travelConfig.flightCamUp;
+    const tz = sp.z - f.z * dist;
+    const k = this.flightCamInit ? 1 - Math.exp(-dt * travelConfig.flightCamDamp) : 1;
+    this.flightCamInit = true;
+    cam.position.x += (tx - cam.position.x) * k;
+    cam.position.y += (ty - cam.position.y) * k;
+    cam.position.z += (tz - cam.position.z) * k;
+    cam.lookAt(sp.x + f.x * 8, sp.y + f.y * 8 + 1.2, sp.z + f.z * 8);
+  }
+
   /** ★ 停靠：DockResolver 安全落点（只避坑）→ 角色出生、友军部署、进入探索；
    *   舰船停在落点转为静止受击目标（敌人索敌最优先） */
   private requestDock(emergency: boolean): void {
@@ -1921,7 +1968,12 @@ export class WorldMode implements IGameMode {
     this.ship.position.x = sp.x;
     this.ship.position.z = sp.z;
     this.ship.land();
+    this.entities.onEntityMoved(this.ship); // 航行期索引未逐帧刷新 → 停靠后就位
     this.session.ship.position = { x: sp.x, z: sp.z };
+    this.chunks.bootstrap(sp.x, sp.z);      // 停靠区 3×3 全量强制构建（立即有地形/碰撞）
+    this.chunks.setFullPower(false);        // 停靠：恢复常规节流
+    this.chunks.setWaterVisible(true);      // 停靠：恢复水面渲染
+    renderManager.setFlightMode(false);     // 停靠：恢复云/月亮更新
     // 角色接管
     const p = this.player;
     p.controlLocked = false;

@@ -55,6 +55,13 @@ class RenderManager {
    * 每帧推进（★ main.ts 主循环调用，替代此前 WorldMode 内调用——
    * 全局唯一的时间入口）。产出 scaledDt 供模式层驱动世界。
    */
+  /** ★ 航行低耗渲染模式（用户定调）：云流体不推进、月亮离屏渲染不更新
+   *  （水由 ChunkManager.setWaterVisible 隐藏） */
+  private flightMode = false;
+  setFlightMode(v: boolean): void {
+    this.flightMode = v;
+  }
+
   update(dt: number): void {
     this._rawDt = dt;
     let ts = 1;
@@ -64,9 +71,11 @@ class RenderManager {
     }
     this._timeScale = ts;
     this.sunCycle.update(dt * ts); // 顿帧时全世界冻结（含太阳），经典 hitstop
-    // 云朵求解推进（跟随真实时间，顿帧时也冻结保持一致性）
-    this.cloudSolver?.setHour(this.sunCycle.current.hour);
-    this.cloudSolver?.update(dt * ts);
+    // 云朵求解推进（跟随真实时间，顿帧时也冻结保持一致性）；航行期不推进（省 GPU）
+    if (!this.flightMode) {
+      this.cloudSolver?.setHour(this.sunCycle.current.hour);
+      this.cloudSolver?.update(dt * ts);
+    }
   }
 
   /** 缩放后的帧时间（模式层用这个驱动一切更新） */
@@ -93,8 +102,8 @@ class RenderManager {
   /** 渲染前锚定光照到跟随目标（WorldMode.render 调用；位置已是本帧最终值） */
   follow(target: { x: number; y: number; z: number }): void {
     gameLights.follow(target, this.sunCycle.current, this.sunCycle.moon);
-    // ★ 月亮 VAT 动画（在天空穹顶更新前推进）
-    this.skyDome.updateMoonEffect(this.scaledDt);
+    // ★ 月亮 VAT 动画（在天空穹顶更新前推进）；航行期跳过（省离屏渲染）
+    if (!this.flightMode) this.skyDome.updateMoonEffect(this.scaledDt);
     // ★ 天空穹顶 + 太阳/月亮圆盘：锚定跟随点，按 SunCycle 刷新颜色与位置
     this.skyDome.update(target, this.sunCycle.current, this.sunCycle.moon, this.sunCycle.sky);
     // ★ 云朵双缓冲纹理 + 过渡进度（每帧喂，平滑 2fps 结算）

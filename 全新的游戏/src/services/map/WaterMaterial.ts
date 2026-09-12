@@ -700,5 +700,6 @@ const geo = new THREE.BufferGeometry();
   geo.setIndex(new THREE.BufferAttribute(raw.indices, 1));
   const mesh = new THREE.Mesh(geo, sharedWaterMaterial);
   mesh.renderOrder = 10;
+  mesh.userData.isWater = true; // ★ 水面标记（航行期整批隐藏：不渲染水/不跑 FFT 着色）
   return mesh;
 }
