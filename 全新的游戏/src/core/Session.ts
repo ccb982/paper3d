@@ -315,6 +315,8 @@ export interface PlayerCombatStats {
   maxHp: number;
   attackPower: number;
   defense: number;
+  /** ★ 复活等待时间倍率（1 = 无缩减；遗物 respawn_time 效果汇总） */
+  respawnTimeMul: number;
 }
 
 /** 遗物配置（原局外道具：只可抽取、不入背包；拥有即全局永久生效） */
@@ -344,6 +346,7 @@ export function computeCombatStats(
   const acc: RelicStatAccumulator = {
     mulHp: 1, mulAtk: 1, mulDef: 1,
     bonusHp: 0, bonusAtk: 0, bonusDef: 0,
+    respawnTimeMul: 1,
   };
 
   eachOwnedRelic(session, relicItemConfig ?? ({} as Record<string, RelicItemConfig>), (cfg, count) => {
@@ -360,6 +363,7 @@ export function computeCombatStats(
     maxHp: Math.floor(base.maxHp * acc.mulHp) + acc.bonusHp,
     attackPower: Math.floor(base.attackPower * acc.mulAtk) + acc.bonusAtk,
     defense: Math.floor(base.defense * acc.mulDef) + acc.bonusDef,
+    respawnTimeMul: acc.respawnTimeMul,
   };
 }
 

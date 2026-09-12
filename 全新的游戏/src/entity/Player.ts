@@ -9,6 +9,8 @@ import type { EntityBase } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
+import { createInputActions, type InputActions } from '../platform/input/InputActions';
+import type { CameraFrame } from '../services/camera/CameraController';
 
 export class Player extends CharacterBase {
   constructor(
@@ -61,15 +63,39 @@ export class Player extends CharacterBase {
     return name.startsWith('后') ? '后' : '前';
   }
 
-  /** ★ 玩家死亡（不销毁主角；死亡动画 + 复活）
-   *   - 战斗死亡（source=敌人/子弹）→ 复活回满血（血量停在 0 会变"0 血幽灵"：伤害早退+不回血）
-   *   - 环境死亡（source=null，掉坑）→ 当前血量减半（保底 1），由 WorldMode 传送回出生点 */
+  /** ★ 致死前血量（复活回半用；掉坑等无伤致死时由 onDeath 现场补记） */
+  preDeathHp = 0;
+
+  /** ★ 受击：记录致死前血量（复活 = 死前一半，保底 10% 上限） */
+  override onTakeDamage(dmg: number, source: EntityBase | null): void {
+    if (this.dead) return; // 死亡等待复活：免伤
+    if (this.hp > 0) this.preDeathHp = this.hp;
+    super.onTakeDamage(dmg, source);
+  }
+
+  /** ★ 玩家死亡（不销毁主角；死亡动画 + 等待 WorldMode 倒计时复活）
+   *   不再即时回血——复活血量/时机由 WorldMode 统一结算 */
   override onDeath(source: EntityBase | null): void {
     this.playDeathAnim();
-    if (source === null) {
-      this.hp = Math.max(1, Math.floor(this.hp * 0.5));
-    } else {
-      this.hp = this.maxHp;
+    if (this.preDeathHp <= 0) this.preDeathHp = this.hp > 0 ? this.hp : this.maxHp * 0.5;
+    this.dead = true;
+  }
+
+  /** ★ 复活（WorldMode 倒计时结束时调用）：复位死亡状态并设置血量 */
+  revive(hp: number): void {
+    this.hp = Math.max(1, Math.min(this.maxHp, hp));
+    this.preDeathHp = 0;
+    this.dead = false;
+  }
+
+  /** ★ 死亡等待期：锁操作（输入清零；位置/物理骨架照常），复活后恢复 */
+  private static _deadInput: InputActions | null = null;
+  protected override onUpdate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    if (this.dead) {
+      if (!Player._deadInput) Player._deadInput = createInputActions();
+      super.onUpdate(dt, Player._deadInput, cameraFrame);
+      return;
     }
+    super.onUpdate(dt, input, cameraFrame);
   }
 }

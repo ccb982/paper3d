@@ -304,6 +304,8 @@ export abstract class EntityBase {
   healProc: HealProcDef | null = null;
   /** ★ 累计已治疗量（治疗转伤害的燃料；模式层触发后清零） */
   healBuffer = 0;
+  /** ★ 死亡等待复活状态（当前仅玩家：锁操作 + 免伤；其他实体死亡即销毁，用不到） */
+  dead = false;
 
   /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
   onTakeDamage(dmg: number, source: EntityBase | null): void {

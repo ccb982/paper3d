@@ -47,8 +47,10 @@ import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { effectSystem } from '../services/combat/EffectSystem';
+import { queryFinalStats } from '../services/combat/FinalStats';
 import { eventBus } from '../core/EventBus';
 import type { PlayerCombatStats } from '../core/Session';
+import { computeCombatStats } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent } from '../core/RelicEffects';
@@ -95,6 +97,17 @@ const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
 /** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
 const HEAL_PROC_MIN_HEAL = 1.0;
+/** ★ 复活倒计时阶梯（按"当天出击内"累计死亡次数分档；每天出击重置）：
+ *   1 死瞬间复活 → 2~10 死 5s → 11~20 死 10s → 21~30 死 20s → 31 死起 30s 封顶 */
+const PLAYER_RESPAWN_TIERS: { minDeaths: number; delay: number }[] = [
+  { minDeaths: 1, delay: 0 },
+  { minDeaths: 2, delay: 5 },
+  { minDeaths: 11, delay: 10 },
+  { minDeaths: 21, delay: 20 },
+  { minDeaths: 31, delay: 30 },
+];
+/** ★ 复活血量保底 = 最大血量 × 该比例（死前一半更低时取保底） */
+const PLAYER_RESPAWN_FLOOR_HP_RATIO = 0.1;
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -246,6 +259,12 @@ export class WorldMode implements IGameMode {
   private sentinelFluidAccum = 0;
   /** ★ 治疗转伤害 proc 命中候选缓冲（复用防每帧分配） */
   private _healProcTargets: EnemyBase[] = [];
+  /** ★ 当天出击内死亡次数（复活倒计时阶梯；每次进入世界清零 → 每天重置） */
+  private runDeaths = 0;
+  /** ★ 玩家复活倒计时（秒；玩家 dead 时倒数，到 0 复活）——与刷怪波次 respawnTimer 区分 */
+  private playerRespawnTimer = 0;
+  /** 倒计时 UI 上次刷新值（0.1s 节流，避免每帧写 DOM） */
+  private playerRespawnShown = -1;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -374,6 +393,11 @@ export class WorldMode implements IGameMode {
       facing: '后',
     });
 
+    // ★ 复活倒计时状态：每天出击重置（首死瞬间复活）
+    this.runDeaths = 0;
+    this.playerRespawnTimer = 0;
+    this.playerRespawnShown = -1;
+
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
     this.itemManager = new ItemManager(ctx.session);
     // ★ 注入效果执行用户：消耗品 buff 作用于玩家实体的效果队列
@@ -388,7 +412,7 @@ export class WorldMode implements IGameMode {
     this.permStats = ctx.combatStats;
     this.applyEquipmentStats();
     // ★ 每次出击满血（上限含遗物/装备加成，不沿用上次剩余血量）
-    this.player.hp = this.player.maxHp;
+    this.player.hp = queryFinalStats(this.player).maxHp;
 
     // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 优先背包（行囊），满则货舱/基地仓
     //   数量语义由各效果处理器决定（如 start_items：每件遗物 count × 拥有件数）
@@ -592,6 +616,19 @@ export class WorldMode implements IGameMode {
         s.meta.deaths = (s.meta.deaths ?? 0) + 1;
         // ★ 遗物死亡时机管线
         dispatchRelicEvent(s, RELIC_ITEM_CONFIG, 'onPlayerDeath', {});
+        // ★ 死亡后重算永久属性并同步效果队列：砾小姐的爱等"每次死亡"遗物实时生效
+        //   （否则实体仍用进图快照，子弹/无人机/祖宗伤害不涨）
+        this.permStats = computeCombatStats(s, RELIC_ITEM_CONFIG);
+        this.applyEquipmentStats();
+        // ★ 复活倒计时：按当天出击内累计死亡次数分档（每天重置；首死 0s 瞬间复活）
+        this.runDeaths++;
+        let delay = 0;
+        for (const t of PLAYER_RESPAWN_TIERS) {
+          if (this.runDeaths >= t.minDeaths) delay = t.delay;
+        }
+        // ★ 遗物缩减（砾小姐的爱等：respawnTimeMul < 1）
+        this.playerRespawnTimer = delay * (this.permStats?.respawnTimeMul ?? 1);
+        this.playerRespawnShown = -1;
         return; // 玩家不算杂兵、不掉落
       }
       const di = this.drones.indexOf(payload.target as DroneEntity);
@@ -649,8 +686,9 @@ export class WorldMode implements IGameMode {
       this.worldUIManager.toggleInventory();
     }
     // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
+    //   死亡等待复活期间：锁消耗品使用（切换仍可看）
     if (this.binding.consumeSwitchItem()) this.cycleQuickItem();
-    if (this.binding.consumeUseItem()) this.useSelectedConsumable();
+    if (this.binding.consumeUseItem() && !this.player.dead) this.useSelectedConsumable();
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
     //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
     //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
@@ -675,7 +713,7 @@ export class WorldMode implements IGameMode {
       playerPosition: { x: pp.x, z: pp.y },
       cameraYaw: this.cameraCtrl.worldYaw,
       entities: this.entities.allBases(),
-      playerStats: { hp: this.player.hp, maxHp: this.player.maxHp },
+      playerStats: { hp: this.player.hp, maxHp: queryFinalStats(this.player).maxHp },
       ammoEntries: this.buildAmmoEntries(),
       allies: this.drones
         .map((d) => ({
@@ -759,18 +797,20 @@ export class WorldMode implements IGameMode {
         d.playerPos.x = dp.x;
         d.playerPos.y = dp.y;
         d.playerPos.z = dp.z;
-        // ★ 友军伤害随主角攻击力（含遗物/装备实时加成）
-        d.ownerAttackPower = this.player.attackPower;
+        // ★ 友军伤害随主角攻击力（统一走最终属性实时查询）
+        d.ownerAttackPower = queryFinalStats(this.player).attackPower;
         d.updateAI(dt, this.camera);
       }
     }
 
     // ---- 实体管线驱动 ----
     const _e1 = performance.now();
-    if (attackPressed) this.player.attack();
+    if (attackPressed && !this.player.dead) this.player.attack();
     this.entities.update(dt, input, this.cameraCtrl.getFrame());
     // ★ 效果队列只服务玩家（队友/敌人不参与、零每帧开销）：WorldMode 每帧显式推进
     if (this.player.effects) effectSystem.tickEntity(this.player, dt);
+    // ★ 复活倒计时推进（玩家死亡等待期）
+    this.updatePlayerRespawn(dt);
     const _e2 = performance.now();
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感） ----
@@ -806,13 +846,14 @@ export class WorldMode implements IGameMode {
       height: this.player.position.y - jumpOff,
       jump: jumpOff,
     }, this.player.controller.isMoving);
-    this.player.visible = !this.cameraCtrl.isFirstPerson;
+    // ★ 死亡等待复活期间隐藏本体（死亡动画是独立特效；复活后自动恢复）
+    this.player.visible = !this.cameraCtrl.isFirstPerson && !this.player.dead;
 
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
     this.bulletCooldown -= dt;
-    if (this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
-      this.bulletCooldown = PLAYER_ATTACK_INTERVAL * 100 / (100 + this.player.attackSpeed);
+    if (!this.player.dead && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
+      this.bulletCooldown = PLAYER_ATTACK_INTERVAL * 100 / (100 + queryFinalStats(this.player).attackSpeed);
       this.firePlayerBullet();
     }
 
@@ -1064,10 +1105,10 @@ export class WorldMode implements IGameMode {
     // ★ 轻微弹道修正：朝准星小偏角内的敌人修正一点点（手感向）
     const assisted = this.aimAssist(muzzle, dx, dy, dz);
     dx = assisted.x; dy = assisted.y; dz = assisted.z;
-    // ★ 子弹伤害 = max(下限, 角色攻击力 × 系数)（遗物永久 + 装备临时 都实时参与）
+    // ★ 子弹伤害 = max(下限, 角色攻击力 × 系数)（遗物/装备/限时效果实时参与）
     const dmg = Math.max(
       PLAYER_BULLET_MIN_DAMAGE,
-      Math.round(this.player.attackPower * PLAYER_BULLET_ATK_RATIO),
+      Math.round(queryFinalStats(this.player).attackPower * PLAYER_BULLET_ATK_RATIO),
     );
     executeAttack(this.entities, this.bullets, {
       type: 'projectile', source: this.player,
@@ -1477,7 +1518,7 @@ export class WorldMode implements IGameMode {
         const src = rec.source ?? this.player;
         const dmg = rec.damage >= 0
           ? rec.damage
-          : Math.max(SENTINEL_IMPACT_MIN_DAMAGE, Math.round(this.player.attackPower * SENTINEL_IMPACT_ATK_RATIO));
+          : Math.max(SENTINEL_IMPACT_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_IMPACT_ATK_RATIO));
         const r = applyDamage(dmg, src, hit);
         eventBus.emit('damage', { target: hit, source: src, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
       }
@@ -1707,10 +1748,38 @@ export class WorldMode implements IGameMode {
     }
   }
 
+  /** ★ 玩家死亡等待复活：倒计时推进 → 到期复活
+   *   复活血量 = 死前血量一半，保底最大血量 10%（阶梯/重置见 PLAYER_RESPAWN_DELAYS） */
+  private updatePlayerRespawn(dt: number): void {
+    if (!this.player.dead) return;
+    if (this.playerRespawnTimer > 0) {
+      this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - dt);
+      const shown = Math.ceil(this.playerRespawnTimer * 10) / 10;
+      if (shown !== this.playerRespawnShown) {
+        this.playerRespawnShown = shown;
+        this.worldUIManager.setRespawnCountdown(shown);
+      }
+      if (this.playerRespawnTimer > 0) return;
+    }
+    const maxHp = queryFinalStats(this.player).maxHp;
+    const hp = Math.max(this.player.preDeathHp * 0.5, maxHp * PLAYER_RESPAWN_FLOOR_HP_RATIO);
+    // ★ 复活点：传送回出生点 + 相机同步归位（死亡期间镜头留在死亡地点）
+    const sp = this.spawnPoint;
+    const pos = this.player.position;
+    pos.x = sp.x;
+    pos.z = sp.z;
+    pos.y = this.raster.surfaceHeightAt(sp.x, sp.z);
+    this.cameraCtrl.snapTo(pos.x, pos.y, pos.z);
+    this.player.revive(hp);
+    this.playerRespawnShown = -1;
+    this.worldUIManager.setRespawnCountdown(null);
+    this.showFloatingAt(pos.x, pos.y, pos.z, '复活', 'heal');
+  }
+
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */
   /** ★ 祖宗激光命中结算（红色激光是瞬时 hitscan；光束特效由祖宗实体播放） */
   private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
-    const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(this.player.attackPower * SENTINEL_ATK_RATIO));
+    const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
     const r = applyDamage(dmg, from, target);
     eventBus.emit('damage', { target, source: from, damage: r.final, crit: r.crit, dodged: r.dodged, blocked: r.blocked });
   }
@@ -1743,6 +1812,8 @@ export class WorldMode implements IGameMode {
   }
 
   private clampCharacter(e: CharacterBase, dt: number): void {
+    // ★ 死亡等待复活：冻结在死亡地点（不贴地/不重复判死），复活时统一传送回出生点
+    if (e.dead) return;
     // ★ 空中态不钉地形：真实跳跃（空格）让 y 由 CharacterBase 的抛物线结算，
     //   落地瞬间再回落贴地；否则会把跳起来的角色钉回地面、无法跃过 0.5 高差。
     if (e.controller.isAirborne()) return;
@@ -1769,16 +1840,12 @@ export class WorldMode implements IGameMode {
         eventBus.emit('killed', { target: e, source: null });
       }
       e.onDeath(null);
-      if (e === this.player) {
-        p.x = this.spawnPoint.x;
-        p.z = this.spawnPoint.z;
-        p.y = this.raster.surfaceHeightAt(p.x, p.z);
-        this.cameraCtrl.snapTo(p.x, p.y, p.z);
-      } else {
+      if (e !== this.player) {
         // 杂兵坠坑死亡：从列表移除
         const idx = this.enemies.indexOf(e as EnemyBase);
         if (idx !== -1) this.enemies.splice(idx, 1);
       }
+      // 玩家：不在此处传送——镜头留在死亡地点，复活时统一回出生点（updatePlayerRespawn）
     }
   }
 }

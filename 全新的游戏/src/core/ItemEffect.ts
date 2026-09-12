@@ -46,6 +46,7 @@ effectRegistry.set('heal', (params, ctx) => {
   // ★ 世界内：治疗实体（与 HUD/效果队列同源，且作为"治疗转伤害"proc 的燃料）；
   //   舰船上（无实体）：治疗存档数值
   const entity = ctx.user;
+  if (entity?.dead) return { success: false, message: '等待复活中' };
   const maxHp = entity ? entity.maxHp : ctx.session.player.maxHp;
   const hp = entity ? entity.hp : ctx.session.player.hp;
   // 999 = 恢复全部

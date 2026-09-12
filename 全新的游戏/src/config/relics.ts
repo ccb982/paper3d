@@ -22,12 +22,14 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     id: 'gravel_love',
     name: '砾小姐的爱',
     rarity: 5,
-    description: '角色每次死亡，攻击力 +0.5%（永久）；每多抽到一件再 +0.1%',
+    description: '角色每次死亡，攻击力 +0.5%（永久）；每多抽到一件再 +0.1%；死亡复活等待 -30%，每多一件再 -1%',
     texture: '/fx/砾小姐的爱.ftx3.gz',
     /** ★ 单件显示帧1、≥2 件显示帧2 */
     iconFrame: (count) => (count >= 2 ? 1 : 0),
     effects: [
       { type: 'stat_multiplier', perDeath: 1.005, perDeathStep: 0.001, scope: 'attack' },
+      // ★ 复活等待缩减：首件 -30%，每多一件再 -1%
+      { type: 'respawn_time', base: 0.3, perCopy: 0.01 },
     ],
   },
 

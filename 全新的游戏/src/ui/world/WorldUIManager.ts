@@ -58,6 +58,8 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 单条停留时长（ms） */
   private static readonly PICKUP_TOAST_LIFE_MS = 1800;
   private iconRegistry: ItemIconRegistry | null = null;
+  /** ★ 死亡复活倒计时（屏幕中央；null = 隐藏） */
+  private respawnEl: HTMLDivElement | null = null;
 
   constructor(
     private session: GameSession,
@@ -189,6 +191,28 @@ export class WorldUIManager extends BaseInteractionUI {
       startY: screenY,
       speed,
     });
+  }
+
+  /** ★ 死亡复活倒计时（屏幕中央大字；null = 隐藏） */
+  setRespawnCountdown(seconds: number | null): void {
+    if (seconds === null) {
+      if (this.respawnEl) this.respawnEl.style.display = 'none';
+      return;
+    }
+    if (!this.respawnEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'left:50%', 'top:38%', 'transform:translate(-50%,-50%)',
+        'z-index:400', 'pointer-events:none', 'text-align:center',
+        'color:#ff6b6b', 'font-size:30px', 'font-weight:bold', 'font-style:italic',
+        'letter-spacing:2px',
+        'text-shadow:0 0 12px rgba(255,60,60,0.8),1px 1px 3px #000',
+      ].join(';');
+      document.body.appendChild(el);
+      this.respawnEl = el;
+    }
+    this.respawnEl.style.display = 'block';
+    this.respawnEl.textContent = `复活倒计时 ${seconds.toFixed(1)}s`;
   }
 
   /** 显示拾取结果：右上角"获得物品"面板（手绘 JSON 布局，左图标 + 右文字）；

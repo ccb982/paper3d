@@ -34,6 +34,8 @@ export interface RelicStatAccumulator {
   bonusHp: number;
   bonusAtk: number;
   bonusDef: number;
+  /** ★ 复活等待时间倍率（1 = 无缩减；<1 = 更快复活；多效果相乘） */
+  respawnTimeMul: number;
 }
 
 export interface RelicStatContext {
@@ -182,6 +184,22 @@ relicEffectRegistry.set('stat_multiplier', {
       ctx.acc.mulAtk *= m;
       ctx.acc.mulDef *= m;
     }
+  },
+});
+
+/**
+ * respawn_time —— 缩短死亡复活等待时间（多件递增，多效果相乘）。
+ * 参数：
+ *   base     首件缩短比例（0.3 = 30%）
+ *   perCopy  每多一件的额外缩短步长（0.01 = 再 1%）
+ * 口径：单效果内部可减最多 90%；多枚遗物/多效果之间复利相乘（0.7 × 0.7 …）。
+ */
+relicEffectRegistry.set('respawn_time', {
+  modifyStats(ctx, cfg) {
+    const base = (cfg.base as number | undefined) ?? 0.3;
+    const perCopy = (cfg.perCopy as number | undefined) ?? 0.01;
+    const cut = Math.min(0.9, Math.max(0, base + perCopy * (ctx.count - 1)));
+    ctx.acc.respawnTimeMul *= 1 - cut;
   },
 });
 
