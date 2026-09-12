@@ -39,6 +39,7 @@ import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport } from '../services/map/ChunkManager';
 import { resolveTileLook } from '../services/map/TileMaterials';
+import { LOD_MAX_DIST } from '../services/lod';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
@@ -1284,10 +1285,10 @@ export class WorldMode implements IGameMode {
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
     const want = 1 + (Math.random() < 0.5 ? 1 : 0); // 每波 1~2 个（弱化档）
     let placed = 0;
-    // 环带：内圈 > LOD3（60m），外圈 < 数据预载环（~2 chunk）
+    // 环带：内圈 > LOD3（LOD_MAX_DIST，随 LOD 放宽外移），外圈 < 数据预载环（~2 chunk）
     for (let i = 0; i < want * 10 && placed < want; i++) {
       const ang = Math.random() * Math.PI * 2;
-      const dist = 64 + Math.random() * 40; // 64~104m
+      const dist = LOD_MAX_DIST + 4 + Math.random() * 40; // LOD 外环外一档
       const x = px + Math.cos(ang) * dist;
       const z = pz + Math.sin(ang) * dist;
       // 目标 chunk 必须已有地形数据（未生成的世界区域不刷）

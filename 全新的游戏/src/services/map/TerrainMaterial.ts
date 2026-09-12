@@ -36,6 +36,7 @@
 
 import * as THREE from 'three';
 import { PATCH_DECOR_GLSL } from './PatchDecor';
+import { LOD_RANGES } from '../lod';
 
 /** 地形光照调参入口。
  *  ★ 光照哲学（定稿）：默认整个地面是暗的，光是把亮度"加上去"的——
@@ -72,11 +73,18 @@ export const WALL_NIGHT_DIRECT_FLOOR = 0.30;
  *  dirMod = N·L / L.y：平地恒 1（亮度守恒），坡面/侧壁方向感随实时太阳旋转；
  *  距离 NEAR 内全强度、FAR 外平滑淡回纯烘焙（远场保持静态阴影形状）。
  *  clamp 幅度防止背光死黑/顺光过曝（背光轻压 -15%、顺光增强 +20%——
- *  2026-09-05 用户反馈背光太暗后 0.6→0.85，顺光太高后 1.4→1.2）。 */
-export const SUN_DIR_LOD_NEAR = 30;
-export const SUN_DIR_LOD_FAR = 90;
+ *  2026-09-05 用户反馈背光太暗后 0.6→0.85，顺光太高后 1.4→1.2）。
+ *  ★ 2026-09-12：近/远界从 LOD_RANGES 推导（放宽 LOD 时材质同步，见下）。 */
+export const SUN_DIR_LOD_NEAR = LOD_RANGES[0] * 1.5;
+export const SUN_DIR_LOD_FAR = LOD_RANGES[2] * 1.5;
 export const SUN_DIR_MOD_MIN = 0.85;
 export const SUN_DIR_MOD_MAX = 1.2;
+
+/** ★ 材质 LOD 发光带（与 LOD_RANGES 对齐：主带/次带/近距微带；放宽时同步外扩）。
+ *  推导式复现旧值（[20,40,60] → 60/12、40/28、22/14，逐值一致）。 */
+const LOD_GLOW_MAIN = `${LOD_RANGES[2].toFixed(1)}, ${(LOD_RANGES[0] * 0.6).toFixed(1)}`;
+const LOD_GLOW_SUB = `${LOD_RANGES[1].toFixed(1)}, ${(LOD_RANGES[1] * 0.7).toFixed(1)}`;
+const LOD_GLOW_NEAR = `${(LOD_RANGES[0] * 1.1).toFixed(1)}, ${(LOD_RANGES[0] * 0.7).toFixed(1)}`;
 
 /** 侧壁白天直射保底（2026-09-05）：墙光 = 所属列烘焙顶光，坡脚/坑谷列在
  *  台影+AO 带内 lm.r≈0.12~0.3，坡面侧壁系统性比断崖墙黑一块（断崖归高处
@@ -889,10 +897,10 @@ const FRAGMENT_MAIN = /* glsl */ `
             float toCamL = max(length(toCam), 1e-4);
 
             // ① 距离带状呼吸：多环带锯齿 → 俯瞰时邻近区域出现明暗环带，移动明显
-            //   （chunk=60m/LOD_RANGES=20,40,60 对齐：主带 0/20/40/60 退缩环）
-            float ring1 = smoothstep(60.0, 12.0, dist);       // 主发光带（远→近亮起）
-            float ring2 = smoothstep(40.0, 28.0, dist) * 0.6; // 次带叠加
-            float ring3 = smoothstep(22.0, 14.0, dist) * 0.4; // 近距微带
+            //   （与 LOD_RANGES 对齐：主带 = lod2 外沿 → 0.6×lod0，放宽时同步外扩）
+            float ring1 = smoothstep(${LOD_GLOW_MAIN}, dist);       // 主发光带（远→近亮起）
+            float ring2 = smoothstep(${LOD_GLOW_SUB}, dist) * 0.6;  // 次带叠加
+            float ring3 = smoothstep(${LOD_GLOW_NEAR}, dist) * 0.4; // 近距微带
             float distBand = clamp(ring1 + ring2 + ring3, 0.0, 1.6);
 
             // ② 掠射增强：降得越多（越俯视）掠射角越大越亮，侧看/俯瞰平台明显
