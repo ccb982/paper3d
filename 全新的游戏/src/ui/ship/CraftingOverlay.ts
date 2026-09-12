@@ -196,12 +196,11 @@ export class CraftingOverlay {
         });
         mod.mount(btn);
         this.modules.push(mod);
+        btn.style.display = ''; // ★ 配方数量变化时恢复显示
       } else {
-        // 空槽位：仅显示素材底框（无内容、不可点）
-        btn.style.backgroundImage = this.moduleBgDataURL ? `url(${this.moduleBgDataURL})` : '';
-        btn.style.backgroundSize = 'cover';
-        btn.style.backgroundPosition = 'center';
-        btn.style.pointerEvents = 'none';
+        // ★ 无配方的槽位：整块隐藏（不再显示空底框占位）
+        btn.style.display = 'none';
+        btn.style.backgroundImage = '';
         btn.onclick = null;
       }
     }
