@@ -102,8 +102,9 @@ export class ShipEntity extends EntityBase {
     if (this.sailable && input && cameraFrame) {
       const ax = input.moveAxis.x, ay = input.moveAxis.y;
       if (Math.hypot(ax, ay) > 0.2) {
-        let mx = cameraFrame.right.x * ax + cameraFrame.forward.x * ay;
-        let mz = cameraFrame.right.z * ax + cameraFrame.forward.z * ay;
+        // ★ 与 CharacterController 同口径：世界方向 = right*x + forward*(-y)
+        let mx = cameraFrame.right.x * ax + cameraFrame.forward.x * (-ay);
+        let mz = cameraFrame.right.z * ax + cameraFrame.forward.z * (-ay);
         const l = Math.hypot(mx, mz) || 1;
         mx /= l; mz /= l;
         p.x += mx * SAIL_SPEED * dt;
