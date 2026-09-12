@@ -386,9 +386,9 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 应用战斗属性（永久 = 基础 + 遗物；装备临时加成由 applyEquipmentStats 叠加） ----
     this.permStats = ctx.combatStats;
-    // ★ 存档血量兜底：旧档可能存了死亡后的 0 血（修复前遗留）→ 满血出击
-    this.player.hp = ctx.combatStats.hp > 0 ? ctx.combatStats.hp : ctx.combatStats.maxHp;
     this.applyEquipmentStats();
+    // ★ 每次出击满血（上限含遗物/装备加成，不沿用上次剩余血量）
+    this.player.hp = this.player.maxHp;
 
     // ★ 开局遗物管线（onRunStart 时机；多遗物多效果聚合）→ 优先背包（行囊），满则货舱/基地仓
     //   数量语义由各效果处理器决定（如 start_items：每件遗物 count × 拥有件数）
