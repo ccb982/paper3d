@@ -45,6 +45,8 @@ const ATTACK_AIM_Y = 0.9;
  *  ★ 射程远大于无人机（LOD 12m）——站桩单位靠长手覆盖；命中为瞬时激光，天然穿墙 */
 const SENTINEL_RANGE = 28;      // 索敌/射程（米）
 const SENTINEL_ATTACK_CD = 1.1; // 激光冷却（秒）
+/** ★ 祖宗自动挖矿冷却（无敌人时；随机打附近的铁/水/地面） */
+const SENTINEL_MINE_CD = 1.8;
 
 export interface DroneOptions extends Omit<EntityBaseOptions, 'kind'> {
   /** 贴片放大（默认 1.2） */
@@ -66,6 +68,10 @@ export class DroneEntity extends EntityBase {
   stationaryBaseY = 0;
   /** ★ 远程攻击回调（站桩模式；WorldMode 注入 = 发射友军弹道） */
   rangedAttack: ((target: EntityBase) => void) | null = null;
+  /** ★ 自动挖矿回调（站桩模式无敌人时；WorldMode 选点/结算，实体只播光束） */
+  mineAttack: ((from: DroneEntity) => void) | null = null;
+  /** 挖矿冷却计时 */
+  private mineCd = 0;
   /** ★ 主人实体（WorldMode 生成时写入；攻击瞬间实时查询其最终攻击力） */
   owner: EntityBase | null = null;
   /** ★ 常驻流体（祖宗：单帧 + 流体参数；由资产缓存持有，实体销毁不 dispose） */
@@ -337,15 +343,27 @@ export class DroneEntity extends EntityBase {
         if (this.attackCd <= 0) {
           this.attackCd = SENTINEL_ATTACK_CD;
           // ★ 红色激光：光束特效从这里射向目标；瞬时伤害由模式层结算（rangedAttack）
-          this.beam?.dispose();
-          this.beam = new DroneBeamEffect(this._sceneRef);
+          this.playBeam();
           this.rangedAttack?.(t);
         }
+      }
+    } else {
+      // ★ 无敌人 → 自动挖矿：随机打附近的铁（原石晶体）/ 水 / 地面
+      this.mineCd -= dt;
+      if (this.mineCd <= 0) {
+        this.mineCd = SENTINEL_MINE_CD;
+        this.mineAttack?.(this);
       }
     }
     // 原地固定高度（不上下摆动；随地形抬升但不低于放置基准）
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
     p.y = Math.max(gy + 0.5, this.stationaryBaseY);
+  }
+
+  /** ★ 播放红色激光光束（攻击/挖矿共用；上一束未播完先销毁） */
+  playBeam(): void {
+    this.beam?.dispose();
+    this.beam = new DroneBeamEffect(this._sceneRef);
   }
 
   /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓）；

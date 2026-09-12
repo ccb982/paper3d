@@ -1606,8 +1606,9 @@ const key2 = chunkKeyOf(cx, cz);
    * ★ 装饰实体查询：命中点附近（水平距离 ≤ r）的可碰撞装饰物，取最近的那个。
    * 权威索引 = propRegistry（实际存在物；随 createDecorColliders / chunk 销毁同步）。
    * 含本 chunk + 8 邻环（跨片边界处的实体仍会被探到）。
+   * ★ 可选 key：只取指定类型（祖宗挖矿索敌"耗尽原石晶体"）。
    */
-  queryPropsNear(x: number, z: number, r: number): ImpactProp | null {
+  queryPropsNear(x: number, z: number, r: number, key?: string): ImpactProp | null {
     if (this.boss4D || this.propRegistry.size === 0) return null;
     const baseCx = Math.floor(x / CHUNK_SIZE);
     const baseCz = Math.floor(z / CHUNK_SIZE);
@@ -1619,6 +1620,7 @@ const key2 = chunkKeyOf(cx, cz);
         const list = this.propRegistry.get(chunkKeyOf(baseCx + dx, baseCz + dz));
         if (!list) continue;
         for (const p of list) {
+          if (key && p.key !== key) continue; // ★ 指定类型过滤（挖矿索敌用）
           const ddx = p.x - x;
           const ddz = p.z - z;
           const d2 = ddx * ddx + ddz * ddz;
@@ -1634,7 +1636,7 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** 附近（r 内）是否存在某类装饰性实体（授权实现 = propRegistry，无重放代价） */
   hasPropTypeNear(x: number, z: number, propKey: string, r: number): boolean {
-    return this.queryPropsNear(x, z, r)?.key === propKey;
+    return this.queryPropsNear(x, z, r, propKey) !== null;
   }
 
   /** ★ 命中解析层：一次调用产出权威 ImpactReport（地形修改 / 掉落 / 表现三端共用） */

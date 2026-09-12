@@ -94,6 +94,10 @@ const SENTINEL_IMPACT_ATK_RATIO = 0.8;
 /** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
 const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
+/** ★ 祖宗自动挖矿：索矿半径（米；无敌人时随机打铁/水/地面） */
+const SENTINEL_MINE_RANGE = 22;
+/** 挖矿采样次数上限（每类） */
+const SENTINEL_MINE_SAMPLES = 16;
 /** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
 const HEAL_PROC_MIN_HEAL = 1.0;
 /** ★ 复活倒计时阶梯（按"当天出击内"累计死亡次数分档；每天出击重置）：
@@ -1447,6 +1451,7 @@ export class WorldMode implements IGameMode {
     s.stationary = true;
     s.stationaryBaseY = py;
     s.rangedAttack = (t) => this.fireSentinelShot(s, t);
+    s.mineAttack = (d) => this.sentinelMine(d); // ★ 无敌人时自动挖矿
     s.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
     this.drones.push(s);
     if (this.renderer) {
@@ -1820,6 +1825,56 @@ export class WorldMode implements IGameMode {
   private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
     const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
     applyDamage(dmg, from, target); // 事件统一在 applyDamage
+  }
+
+  /** ★ 祖宗自动挖矿（无敌人时）：随机在 铁（耗尽原石晶体）/ 水 / 地面 三类中找点，
+   *  播激光 → 复用命中解析层掉落（只出资源，不挖坑/不改地形） */
+  private sentinelMine(from: DroneEntity): void {
+    if (!this.itemManager || !this.worldUIManager) return;
+    const p = from.position;
+    const pt = this.pickMinePoint(p.x, p.z);
+    if (!pt) return;
+    from.playBeam();
+    const y = this.raster.surfaceHeightAt(pt.x, pt.z);
+    const impact = this.chunks.resolveImpact(pt.x, y, pt.z);
+    this.spawnItemDrops(impact);      // 掉落：铁/水/地面 → 异铁/酮凝集/固原岩
+    if (impact.water !== 'none') this.agitateWaterNear(pt.x, pt.z);
+  }
+
+  /** ★ 挖矿选点：三类随机优先（1/3 概率），采样不中回退其它两类；全无 → null */
+  private pickMinePoint(x: number, z: number): { x: number; z: number } | null {
+    const kinds = ['iron', 'water', 'ground'] as const;
+    const first = kinds[(Math.random() * kinds.length) | 0];
+    for (const kind of [first, ...kinds.filter((k) => k !== first)]) {
+      const pt = this.sampleMinePoint(x, z, kind);
+      if (pt) return pt;
+    }
+    return null;
+  }
+
+  /** 单类采样：环带（3m~射程）+ 随机角度丢点，命中该类地形/装饰即可 */
+  private sampleMinePoint(x: number, z: number, kind: 'iron' | 'water' | 'ground'): { x: number; z: number } | null {
+    const inner = 3;
+    const span = Math.max(0, SENTINEL_MINE_RANGE - inner);
+    for (let i = 0; i < SENTINEL_MINE_SAMPLES; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = inner + Math.random() * span;
+      const px = x + Math.cos(a) * d;
+      const pz = z + Math.sin(a) * d;
+      if (kind === 'iron') {
+        // 铁 = 耗尽原石晶体装饰物（直接瞄准晶体本体）
+        const prop = this.chunks.queryPropsNear(px, pz, 3.0, 'depleted_crystal');
+        if (prop) return { x: prop.x, z: prop.z };
+        continue;
+      }
+      const role = this.raster.tileDefAt(px, pz).genRole;
+      if (kind === 'water') {
+        if (role === 'liquid') return { x: px, z: pz };
+      } else if (role === 'ground' || role === 'platform') {
+        return { x: px, z: pz };
+      }
+    }
+    return null;
   }
 
   /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。
