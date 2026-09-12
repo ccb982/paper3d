@@ -3,7 +3,9 @@
   "fuelDrainPerSec": 1,
   "emergencyHpLossRatio": 0.5,
   "sailSpeed": 18,
-  "sailHeight": 3.0,
+  "sailMinHeight": 4,
+  "sailMaxHeight": 80,
+  "sailStartHeight": 30,
   "dockSearchRings": [1, 2, 4, 8, 12, 16, 24],
   "dockSearchDirs": 16
 }

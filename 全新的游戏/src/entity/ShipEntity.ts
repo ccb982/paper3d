@@ -64,13 +64,15 @@ class ShipPlaceholderRenderer extends FxRendererBase {
 export class ShipEntity extends EntityBase {
   /** ★ 是否处于可操控航行（false = 已停靠，静止目标） */
   sailable = true;
+  /** ★ 飞行高度（离地净空；航行期鼠标俯仰控制，停靠时忽略） */
+  private flyHeight = travelConfig.sailStartHeight;
   private readonly session: GameSession;
 
   constructor(em: EntityManager, scene: THREE.Scene, session: GameSession, x: number, z: number) {
     super(em, {
       kind: 'ship',
       x,
-      y: (RasterMap.current?.surfaceHeightAt(x, z) ?? 0) + travelConfig.sailHeight,
+      y: (RasterMap.current?.surfaceHeightAt(x, z) ?? 0) + travelConfig.sailStartHeight,
       z,
     });
     this.session = session;
@@ -87,6 +89,11 @@ export class ShipEntity extends EntityBase {
 
   override get minimapInfo(): { kind: string; moving: boolean } {
     return { kind: 'ship', moving: this.sailable };
+  }
+
+  /** ★ 飞行高度控制（WorldMode 每帧按相机俯仰映射；停靠时无效） */
+  setFlyHeight(h: number): void {
+    this.flyHeight = h;
   }
 
   /** ★ 停靠：转为静止目标（位置由 WorldMode 设为安全落点） */
@@ -112,7 +119,7 @@ export class ShipEntity extends EntityBase {
       }
     }
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
-    p.y = gy + (this.sailable ? travelConfig.sailHeight : LANDED_HEIGHT);
+    p.y = gy + (this.sailable ? this.flyHeight : LANDED_HEIGHT);
   }
 
   /** ★ 受击：舰船结算（护盾→装甲→HP）；同步实体血量 + 发事件。

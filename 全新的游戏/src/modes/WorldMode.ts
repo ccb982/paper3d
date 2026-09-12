@@ -583,16 +583,7 @@ export class WorldMode implements IGameMode {
     this.droneAsset = ctx.droneAsset ?? null;
     // ★ 祖宗素材（缺省回退无人机素材 → 美术到位前管线可跑）
     this.sentinelAsset = ctx.sentinelAsset ?? null;
-    // ★ 进入战场：按出击槽池生成友军（残骸/装备类不生成；槽位号 = 池内下标）
-    if (this.droneAsset) {
-      const slots = this.itemManager?.getSlots?.() ?? [];
-      for (let i = 0; i < slots.length; i++) {
-        const id = slots[i];
-        if (!id) continue;
-        const entry = allyPlaybackRegistry.get(id);
-        if (entry) entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId) });
-      }
-    }
+    // ★ 友军部署推迟到停靠（航行操船期不绘制友军；停靠后 deploySlotAllies）
 
     // ---- ★ 调试：F9 回读最终绘制颜色（游标指向像素 + 中心网格；诊断警示贴画偏色用） ----
     const onF9 = (e: KeyboardEvent) => {
@@ -694,7 +685,8 @@ export class WorldMode implements IGameMode {
     this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
       // ★ 装备属性重算（穿脱/互换立即生效；与友军生成无关，先于无人机素材守卫）
       this.refreshPlayerStats();
-      if (!this.droneAsset) return;
+      // ★ 航行操船期：友军不部署（停靠时统一 deploySlotAllies 生成）
+      if (!this.droneAsset || this.phase !== 'explore') return;
       this.despawnAllyAt(payload.slotIndex);
       if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
         allyPlaybackRegistry.get(payload.itemId)!.spawn({
@@ -857,6 +849,12 @@ export class WorldMode implements IGameMode {
     // ★ 航行阶段：耗油/停靠推进；角色位置随舰船（相机/无人机/小地图跟随）
     if (this.phase === 'sail') {
       this.updateSail(dt);
+      // ★ 飞行高度：鼠标方向（相机俯仰）绝对映射——仰视升高、俯视降低
+      const pitch = Math.max(-1.55, Math.min(1.55, this.cameraCtrl.getPitch()));
+      const t = (pitch + 1.55) / 3.1; // 0 = 仰望（最高）.. 1 = 俯视（最低）
+      this.ship.setFlyHeight(
+        travelConfig.sailMaxHeight - t * (travelConfig.sailMaxHeight - travelConfig.sailMinHeight),
+      );
       const sp = this.ship.position;
       this.player.position.x = sp.x;
       this.player.position.z = sp.z;
@@ -1899,7 +1897,21 @@ export class WorldMode implements IGameMode {
     this.requestDock(true);
   }
 
-  /** ★ 停靠：DockResolver 安全落点（只避坑）→ 角色出生、进入探索；
+  /** ★ 出击槽池 → 友军实体部署（停靠时调用；航行期不绘制友军） */
+  private deploySlotAllies(): void {
+    if (!this.droneAsset) return;
+    const slots = this.itemManager?.getSlots?.() ?? [];
+    for (let i = 0; i < slots.length; i++) {
+      const id = slots[i];
+      if (!id) continue;
+      const entry = allyPlaybackRegistry.get(id);
+      if (entry) {
+        entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId) });
+      }
+    }
+  }
+
+  /** ★ 停靠：DockResolver 安全落点（只避坑）→ 角色出生、友军部署、进入探索；
    *   舰船停在落点转为静止受击目标（敌人索敌最优先） */
   private requestDock(emergency: boolean): void {
     if (this.phase !== 'sail' || !this.session || !this.ship) return;
@@ -1919,6 +1931,7 @@ export class WorldMode implements IGameMode {
     this.cameraCtrl.snapTo(sp.x, sp.y, sp.z);
     this.worldUIManager.setDockButtonVisible(false);
     this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
+    this.deploySlotAllies();                       // ★ 停靠后：友军出队
     this.showFloatingAt(sp.x, sp.y + 1.6, sp.z, emergency ? '紧急停靠' : '已停靠', 'heal');
   }
 

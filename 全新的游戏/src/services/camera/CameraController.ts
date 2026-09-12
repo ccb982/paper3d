@@ -197,6 +197,11 @@ export class CameraController {
     return this.distance <= this.firstPersonDistance;
   }
 
+  /** ★ 当前俯仰角（弧度；负=仰视、正=俯视）——航行飞行高度映射用 */
+  getPitch(): number {
+    return this.pitch;
+  }
+
   /** ★ 相机水平坐标系（角色移动/朝向用） */
   getFrame(): CameraFrame {
     const sx = Math.sin(this.yaw);
