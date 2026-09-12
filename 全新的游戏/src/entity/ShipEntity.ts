@@ -106,12 +106,16 @@ export class ShipEntity extends EntityBase {
 
   /** ★ 降落进近步进（WorldMode 降落状态机驱动）：
    *  · 保留前进速度（自动收油到 `flightLandingSpeed`），继续向前飞；
-   *  · 操控权限低（25%：鼠标姿态/方向舵可用但钝）；
-   *  · 自动下降（`flightLandingSink` 指数贴向落点高度，不适用最低净空）；
-   *  返回 true = 已触地（WorldMode 收尾吸附安全点）。 */
+   *  · 操控权限低（25%），但**角度/方向只由玩家输入决定**——不做自动回正/限幅；
+   *  · **只自动固定高度**（`flightLandingSink` 指数贴向落点高度，不适用最低净空）；
+   *  返回 true = 已触地（WorldMode 进入落稳段）。 */
   landingStep(dt: number, lookX: number, lookY: number, moveX: number): boolean {
     const k = 0.25; // 低操控权限
-    this.pitch = clamp(this.pitch - lookY * k * travelConfig.flightMouseSens, -0.3, 0.3);
+    this.pitch = clamp(
+      this.pitch - lookY * k * travelConfig.flightMouseSens,
+      -travelConfig.flightPitchMax,
+      travelConfig.flightPitchMax,
+    );
     this.heading -= lookX * k * travelConfig.flightMouseSens;
     this.heading -= moveX * k * travelConfig.flightRudderRate * dt;
     // 自动收油到进近速度（保留前进动量）
@@ -121,8 +125,7 @@ export class ShipEntity extends EntityBase {
     p.x += f.x * this.speed * dt;
     p.z += f.z * this.speed * dt;
     p.y += f.y * this.speed * dt;
-    // 自动下降：高时快、近地慢（alt×0.4，夹在 [Sink, SinkMax]）——
-    // 最后几米是 3m/s 级的软着陆，不会"最后一瞬砸到地上"
+    // 只固定高度：高时快、近地慢（alt×0.4，夹在 [Sink, SinkMax]）——软着地
     const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
     const target = gy + LANDED_HEIGHT;
     if (p.y > target) {
@@ -135,13 +138,21 @@ export class ShipEntity extends EntityBase {
     } else {
       p.y = target;
     }
-    // 滚转回正（进近姿态）
-    this.roll += (0 - this.roll) * Math.min(1, dt * 4);
     this.renderer?.setPosition(p.x, p.y, p.z);
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);
     sr?.setThrottle?.(0.35);
     return p.y <= target + 0.05;
+  }
+
+  /** ★ 落稳段步进：只固定位置（贴地 + 水平滑向安全点），**姿态角度保持玩家操作结果** */
+  settleStep(x: number, y: number, z: number): void {
+    const p = this.entity.position;
+    p.x = x; p.y = y; p.z = z;
+    this.renderer?.setPosition(x, y, z);
+    const sr = this.renderer as ShipRenderer | null;
+    sr?.setAttitude?.(this.heading, this.pitch, this.roll);
+    sr?.setThrottle?.(0.15);
   }
 
   /** ★ 航行推进（WorldMode 航行帧直接调用——航行期实体管线全免，不进 EntityBase.update）

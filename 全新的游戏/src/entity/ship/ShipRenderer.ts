@@ -18,6 +18,9 @@ import travelConfig from '../../config/travel.json';
 
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 
+/** ★ 模型整体缩放（2026-09-12 用户定调：2× 大船；GLB 归一化后再乘此值） */
+const MODEL_SCALE = 2;
+
 export class ShipRenderer extends FxRendererBase {
   /** 姿态组（唯一旋转节点：飞行代码只碰它） */
   private group: THREE.Group;
@@ -31,6 +34,7 @@ export class ShipRenderer extends FxRendererBase {
     super();
     const g = new THREE.Group();
     g.rotation.order = 'YXZ';
+    g.scale.setScalar(MODEL_SCALE); // ★ 2× 大船（模型/G 尾焰/GLB 一起放大）
     scene.add(g);
     this.group = g;
     this.mesh = g as unknown as THREE.Mesh;

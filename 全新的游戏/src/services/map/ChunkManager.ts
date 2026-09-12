@@ -157,10 +157,13 @@ export class ChunkManager {
   private static readonly BUILD_INFLIGHT_MAX = 1;
   /** ★ 降落冲刺（WorldMode 进近）：窗口内放开首建节流/在途/装配三档闸门
    *  （进近变慢后窗口同步拉长，覆盖整段下降） */
-  private static readonly RUSH_SECONDS = 18;
+  private static readonly RUSH_SECONDS = 30;
   private static readonly BUILD_INFLIGHT_MAX_RUSH = 4;
   private static readonly ASSEMBLE_PER_FRAME_RUSH = 3;
   private rushUntil = 0;
+  /** ★ 降落进近的"当前方向"（舰船机头；优先块计算用） */
+  private rushDirX = 0;
+  private rushDirZ = 0;
   /** ★ 预烘焙投递间隔（ms）：空闲时每拍投"前方条带"chunk（★ 2026-09-11：每拍 1 个，
    *  x/y 轴交替，减少同时计算量） */
   private static readonly PREFETCH_INTERVAL_MS = 220;
@@ -210,7 +213,15 @@ export class ChunkManager {
   private buildPriorityScore(cx: number, cz: number): number {
     const qdx = cx - this.hotPcx, qdz = cz - this.hotPcz;
     const d = Math.max(Math.abs(qdx), Math.abs(qdz));
-    if (d === 0) return -2e6; // ★ 角色落点 chunk 第一（用户定调）
+    if (d === 0) return -2e6; // ★ 角色/舰船所在 chunk 第一（用户定调）
+    if (performance.now() < this.rushUntil) {
+      // ★ 降落进近专属优先（用户定调）：
+      //   ① 当前方向下一块 → ② 当前块的十字臂 → ③ 其余（对角最后）
+      const along = qdx * this.rushDirX + qdz * this.rushDirZ;
+      if (d === 1 && along > 0.5) return -1.9e6;
+      const onAxis = qdx === 0 || qdz === 0;
+      return d * 10 + (onAxis ? 0 : ChunkManager.CROSS_PENALTY);
+    }
     if (this.frontKeys.has(chunkKeyOf(cx, cz))) return -1e6 + d;
     const cross = qdx !== 0 && qdz !== 0 ? ChunkManager.CROSS_PENALTY : 0;
     return d + cross - (qdx * this.prioDirX + qdz * this.prioDirZ) * this.prioBoost;
@@ -655,10 +666,16 @@ export class ChunkManager {
 
   /** ★ 降落冲刺（WorldMode 进近调用）：立刻转细化 + 落点 3×3 强制构建，
    *  并在 `seconds` 秒内放开首建节流/在途闸门/装配预算——
-   *  让"按下 F"的瞬间就开始实时细化装配（不再 0.7s 一块慢慢吞） */
-  rushTerrain(px: number, pz: number, seconds = ChunkManager.RUSH_SECONDS): void {
+   *  让"按下 F"的瞬间就开始实时细化装配（不再 0.7s 一块慢慢吞）。
+   *  dirX/dirZ = 机头方向（"下一块"优先判定用）。 */
+  rushTerrain(px: number, pz: number, dirX = 0, dirZ = 0, seconds = ChunkManager.RUSH_SECONDS): void {
     this.rushUntil = performance.now() + seconds * 1000;
     this.assembleCooldownUntil = 0;
+    const l = Math.hypot(dirX, dirZ);
+    if (l > 1e-3) {
+      this.rushDirX = dirX / l;
+      this.rushDirZ = dirZ / l;
+    }
     this.setCoarseMode(false);
     this.bootstrap(px, pz);
   }

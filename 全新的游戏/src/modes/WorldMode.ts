@@ -179,10 +179,19 @@ export class WorldMode implements IGameMode {
   /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索 */
   private phase: 'sail' | 'explore' = 'sail';
   /** ★ 降落进近（按 F 后，2026-09-12 用户定调）：保留前进速度 + 低操控（25%）+
-   *  自动收油/下降；期间地形已切细化实时加载，触地那刻地形就绪。 */
-  private landing: { emergency: boolean } | null = null;
-  /** 本帧是否触地（landingStep 结果；实体段收尾用） */
+   *  只自动固定高度（不动角度/方向）；期间地形已切细化实时加载。
+   *  approach → 触地 → settle（镜头仍跟随舰船，完整看到接地停稳）→ finishDock。 */
+  private landing: {
+    phase: 'approach' | 'settle';
+    t: number;
+    fromX: number; fromZ: number;
+    toX: number; toZ: number;
+    emergency: boolean;
+  } | null = null;
+  /** 本帧是否触地（landingStep 结果；实体段转落稳用） */
   private landingTouchdown = false;
+  /** 落稳段时长（秒）：镜头保持追尾，看舰船贴地/滑到安全点 */
+  private static readonly LAND_SETTLE_SECONDS = 1.8;
   /** 飞行追尾相机首帧就位标记（防从舰内相机位缓慢飞入 → 黑屏感） */
   private flightCamInit = false;
   /** 舰船已毁（结算/复活等待：冻结玩法更新） */
@@ -758,11 +767,12 @@ export class WorldMode implements IGameMode {
     // ★ 航行驾驶（飞行手感）：本帧鼠标增量交给舰船姿态，实体管线前先转向/俯仰/油门
     //   降落进近期：低操控权限（25%）+ 自动收油/下降（landingStep 驱动）
     if (this.phase === 'sail') {
-      if (this.landing) {
+      if (this.landing?.phase === 'approach') {
         this.landingTouchdown = this.ship.landingStep(dt, look.x, look.y, input.moveAxis.x);
-      } else {
+      } else if (!this.landing) {
         this.ship.steer(look.x, look.y, input.moveAxis.x, input.moveAxis.y, dt);
       }
+      // settle 段：位置由落稳插值驱动（下面实体段），输入不再作用于舰船
     }
 
     // ★ 按 E 键返回舰船（held 状态，每帧检查）
@@ -890,10 +900,12 @@ export class WorldMode implements IGameMode {
       //   降落进近：位置/姿态由 landingStep 驱动（stepFlight 跳过）
       if (!this.landing) this.ship.stepFlight(dt);
       this.entities.onEntityMoved(this.ship);
-      if (this.landing) {
-        // ★ 只有自然触地才收尾（自适应下降率保证必到；不做超时瞬移接地）
-        if (this.landingTouchdown) this.finishDock();
-      } else {
+      if (this.landing?.phase === 'approach') {
+        // ★ 触地 → 转落稳段（镜头仍追舰船；完整看到接地）；无超时瞬移接地
+        if (this.landingTouchdown) this.beginSettle();
+      } else if (this.landing?.phase === 'settle') {
+        this.updateSettle(dt);
+      } else if (!this.landing) {
         // 耗油/停靠推进；角色位置随舰船（小地图/相机跟随）
         this.updateSail(dt);
         const sp = this.ship.position;
@@ -2006,11 +2018,41 @@ export class WorldMode implements IGameMode {
    *  远小于细化环半径）→ 触地那刻地形已就绪。触地收尾见 finishDock。 */
   private requestDock(emergency: boolean): void {
     if (this.phase !== 'sail' || !this.session || !this.ship || this.landing) return;
-    this.landing = { emergency };
+    this.landing = { phase: 'approach', t: 0, fromX: 0, fromZ: 0, toX: 0, toZ: 0, emergency };
     this.landingTouchdown = false;
-    // ★ 降落冲刺：立刻转细化 + 落点 3×3 强制构建，并放开首建/在途/装配闸门 12s
-    this.chunks.rushTerrain(this.ship.position.x, this.ship.position.z);
+    // ★ 降落冲刺：立刻转细化 + 落点 3×3 强制构建 + 放开闸门；
+    //   优先级（进近窗口内）= 当前块 > 机头方向下一块 > 十字臂 > 其余
+    const fw = this.ship.forward;
+    this.chunks.rushTerrain(this.ship.position.x, this.ship.position.z, fw.x, fw.z);
     this.worldUIManager.setDockButtonVisible(false);
+  }
+
+  /** ★ 触地 → 落稳段：记录安全落点，1.8s 内贴地滑过去（镜头保持追尾） */
+  private beginSettle(): void {
+    const L = this.landing;
+    if (!L || !this.ship) return;
+    const cur = this.ship.position;
+    const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
+    L.phase = 'settle';
+    L.t = 0;
+    L.fromX = cur.x;
+    L.fromZ = cur.z;
+    L.toX = sp.x;
+    L.toZ = sp.z;
+  }
+
+  /** ★ 落稳段步进：只固定位置（贴地 + 平滑滑向安全点），姿态角度不动 */
+  private updateSettle(dt: number): void {
+    const L = this.landing;
+    if (!L || !this.ship) return;
+    L.t += dt;
+    const k = Math.min(1, L.t / WorldMode.LAND_SETTLE_SECONDS);
+    const e = k * k * (3 - 2 * k);
+    const x = L.fromX + (L.toX - L.fromX) * e;
+    const z = L.fromZ + (L.toZ - L.fromZ) * e;
+    const gy = RasterMap.current?.surfaceHeightAt(x, z) ?? 0;
+    this.ship.settleStep(x, gy + 1.0, z);
+    if (k >= 1) this.finishDock();
   }
 
   /** ★ 触地收尾：原地吸附安全落点 → 舰船转静止目标、角色接管、友军部署、恢复水面/云月 */
