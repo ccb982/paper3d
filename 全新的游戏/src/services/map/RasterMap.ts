@@ -5,7 +5,8 @@
 //   - chunk 60×60 米，初始 3×3，玩家移动驱动扩张（updateChunks）
 //   - 地形：chunk → ChunkData（heights/blockTypes/blockHeight/walkable）
 //   - 实体索引：cellKey 全局编码（无限）→ 查询跨 chunk 无界
-//   - 回收：天内只增不删；clearAll() 天结束统一回收
+//   - 回收：数据环外 + UNLOAD_MARGIN 距离卸载（evictFarChunks，防长距离跑图内存无界）；
+//     被挖过的 levels 入持久层（回程恢复、坑不愈合）；clearAll() 天结束统一回收
 // 消费方：Minimap（地形/黑雾数据）、EntityManager（实体索引/梯形剔除）、
 //         WorldMode（玩家驱动加载 + 地面刚体/视觉网格）
 // ★ 结构上满足 ChunkAppearance.TerrainBakeSource 烘焙契约
@@ -56,6 +57,17 @@ export class RasterMap {
   /** ★ 水泥台座块计划缓存（chunkKey → CementPlinthTile[]/null；纯块类型+哈希
    *   决定，不依赖基面高度 → 挖掘无需失效，仅 clearAll 清空） */
   private plinthTileCache = new Map<number, CementPlinthTile[] | null>();
+  /** ★ 挖坑层数持久层（2026-09-12）：chunk 数据按距离卸载后，被运行时挖过的
+   *  层数在此保留（3.6KB/chunk，仅脏块入表）；回程再加载时原样恢复（坑不愈合）。 */
+  private levelsStore = new Map<number, Uint8Array>();
+  /** 被运行时挖过的 chunk（evict 时把 levels 移入 levelsStore） */
+  private dirtyLevelKeys = new Set<number>();
+  /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
+  private static readonly UNLOAD_MARGIN = 2;
+  /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
+  private static readonly DATA_LOAD_PER_FRAME = 6;
+  /** 待加载清单（跨 chunk 时重建；逐帧预算消化） */
+  private pendingLoads: { cx: number; cz: number }[] = [];
   /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
    *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
   private initialized = false;
@@ -73,11 +85,32 @@ export class RasterMap {
 
   // ============ chunk 加载（玩家驱动扩张） ============
 
-  /** 确保单个 chunk 存在（块状地形生成，确定性） */
+  /** 确保单个 chunk 存在（块状地形生成，确定性；挖过的层数从持久层恢复） */
   private ensureChunk(cx: number, cz: number): void {
     const key = chunkKeyOf(cx, cz);
     if (this.chunks.has(key)) return;
-    this.chunks.set(key, generateChunk(this.seed, cx, cz));
+    const cd = generateChunk(this.seed, cx, cz);
+    const lv = this.levelsStore.get(key);
+    if (lv) cd.levels = lv; // ★ 回程恢复挖坑层数（坑不愈合）
+    this.chunks.set(key, cd);
+  }
+
+  /** ★ 距离卸载：数据环外（radius + UNLOAD_MARGIN）释放 chunk 数据，防长距离跑图内存无界增长；
+   *  被挖过的 chunk 先把 levels 移入持久层（回程原样恢复），纯生成块直接丢弃（确定性重生成）。 */
+  private evictFarChunks(pcx: number, pcz: number, keepRadius: number): void {
+    for (const [key, cd] of this.chunks) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= keepRadius) continue;
+      if (this.dirtyLevelKeys.has(key)) {
+        this.levelsStore.set(key, cd.levels);
+        this.dirtyLevelKeys.delete(key);
+      }
+      this.chunks.delete(key);
+      this.chunkSourceCache.delete(key);
+      this.apronEdgeCache.delete(key);
+      this.plinthTileCache.delete(key);
+    }
   }
 
   /** ★ 玩家驱动加载：跨 chunk 时按加载半径扩张，返回本次新增 chunk 列表
@@ -89,21 +122,30 @@ export class RasterMap {
   ): { cx: number; cz: number }[] {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
-    if (this.initialized) {
-      if (pcx === this.lastPcx && pcz === this.lastPcz) return [];
-    } else {
+    const moved = !this.initialized || pcx !== this.lastPcx || pcz !== this.lastPcz;
+    if (moved) {
       this.initialized = true; // ★ 首次强制加载（数据已就绪，同步刚体/网格）
-    }
-    this.lastPcx = pcx;
-    this.lastPcz = pcz;
-    const added: { cx: number; cz: number }[] = [];
-    for (let cx = pcx - loadRadius; cx <= pcx + loadRadius; cx++) {
-      for (let cz = pcz - loadRadius; cz <= pcz + loadRadius; cz++) {
-        if (!this.chunks.has(chunkKeyOf(cx, cz))) {
-          this.ensureChunk(cx, cz);
-          added.push({ cx, cz });
+      this.lastPcx = pcx;
+      this.lastPcz = pcz;
+      // ★ 重建待加载清单（跨 chunk 一步可能缺 ~15 块 → 逐帧预算生成，防生成尖峰）
+      this.pendingLoads.length = 0;
+      for (let cx = pcx - loadRadius; cx <= pcx + loadRadius; cx++) {
+        for (let cz = pcz - loadRadius; cz <= pcz + loadRadius; cz++) {
+          if (!this.chunks.has(chunkKeyOf(cx, cz))) this.pendingLoads.push({ cx, cz });
         }
       }
+      // ★ 距离卸载：环外数据释放（挖过的层数入持久层）——防长距离跑图内存无界增长
+      this.evictFarChunks(pcx, pcz, loadRadius + RasterMap.UNLOAD_MARGIN);
+    }
+    if (this.pendingLoads.length === 0) return [];
+    // ★ 预算化消费待加载清单（返回本次真正新增，调用方据此接缝重建/构建）
+    const added: { cx: number; cz: number }[] = [];
+    let n = RasterMap.DATA_LOAD_PER_FRAME;
+    while (n-- > 0 && this.pendingLoads.length > 0) {
+      const c = this.pendingLoads.shift()!;
+      if (this.chunks.has(chunkKeyOf(c.cx, c.cz))) continue;
+      this.ensureChunk(c.cx, c.cz);
+      added.push(c);
     }
     return added;
   }
@@ -116,6 +158,9 @@ export class RasterMap {
     this.chunkSourceCache.clear();
     this.apronEdgeCache.clear();
     this.plinthTileCache.clear();
+    this.levelsStore.clear();      // ★ 挖坑层数随世界重建清空（与旧语义一致）
+    this.dirtyLevelKeys.clear();
+    this.pendingLoads.length = 0;
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
 
@@ -303,6 +348,8 @@ export class RasterMap {
       const u1 = envelopeLevelAt(levels, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);
       if (u1 - u0 > 1e-9) { changed = true; break; }
     }
+    // ★ 标记脏块：距离卸载时把 levels 移入持久层（回程恢复，坑不愈合）
+    this.dirtyLevelKeys.add(chunkKeyOf(cx, cz));
     // ★ 层数变化 → 基面高度变化 → 围裙坡面拒绝/带顶采样随变 → 失效本 chunk
     //   与 4 侧邻（围裙坡面采样跨边界 ±0.45m）
     this.apronEdgeCache.delete(chunkKeyOf(cx, cz));

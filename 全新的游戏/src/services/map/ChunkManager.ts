@@ -19,7 +19,7 @@ import { CHUNK_SIZE, BLOCKS_PER_SIDE, BLOCK_SIZE } from './ChunkGenerator';
 import { RasterMap, chunkKeyOf } from './RasterMap';
 import {
   bakeChunkMaps, assembleChunkMaps,
-  getCachedChunkMaps, cacheChunkMaps, releaseBakeCache,
+  getCachedChunkMaps, cacheChunkMaps, releaseBakeCache, trimBakeCache,
   type ChunkMaps,
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
@@ -235,11 +235,12 @@ export class ChunkManager {
   private static readonly PREFETCH_BACKLOG_MAX = 6;
   /** ★ 远处 chunk 封存半径（切比雪夫，chunk 数）：> 此距离停止渲染 + 物理停用，
    *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封。
-   *  ★ 2026-09-12：6 → 5（远景跑图 8M 三角/54FPS → 缩减可视环，砍约 1/3 三角） */
-  private static readonly PARK_RADIUS = 5;
+   *  ★ 2026-09-12：6 → 5 → **4**（细化环收窄：可视/封存/内存三降；远景由粗块 LOD 接） */
+  private static readonly PARK_RADIUS = 4;
   /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
-   *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 5 → 销毁 8 */
-  private static readonly DESTROY_RADIUS = 8;
+   *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 4 → 销毁 6
+   *  ★ 2026-09-12：8 → 6（封存区最多 48 块，砍掉 ≈70% 封存几何内存；更远留给粗块） */
+  private static readonly DESTROY_RADIUS = 6;
   /** 已封存 chunk key（网格已从场景摘除、刚体已停用） */
   private parkedKeys = new Set<number>();
 
@@ -366,6 +367,9 @@ export class ChunkManager {
   private coarseQueue: (() => void)[] = [];
   /** 粗块数据代（切风格/dispose 递增 → 丢弃迟到结果） */
   private coarseEpoch = 0;
+  /** ★ 烘焙缓存 LRU 上限（块数；在用块不淘汰）与节拍 */
+  private static readonly BAKE_CACHE_CAP = 32;
+  private bakeTrimAccum = 0;
   private _coarseMat: THREE.MeshBasicMaterial | null = null;
 
   /** ★ 粗块模式开关（WorldMode：航行开、停靠关；关后粗块保留作远景 LOD） */
@@ -436,6 +440,15 @@ export class ChunkManager {
     }
     this.moveLastPx = px;
     this.moveLastPz = pz;
+    // ★ 烘焙缓存 LRU 淘汰（2s 一拍；在用块跳过）——长距离跑图防显存无界增长
+    this.bakeTrimAccum += dt;
+    if (this.bakeTrimAccum >= 2) {
+      this.bakeTrimAccum = 0;
+      trimBakeCache(ChunkManager.BAKE_CACHE_CAP, (cx, cz) => {
+        const key = chunkKeyOf(cx, cz);
+        return this.meshes.has(key) || this.voidKeys.has(key);
+      });
+    }
     // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
     if (this.coarseOnly) {
       this.raster.updateChunks(px, pz, this.dataRadius());
@@ -919,30 +932,53 @@ export class ChunkManager {
     return n;
   }
 
-  /** ★ 远处全量 chunk 封存/解封/销毁（探索期由 sweepChunks 每 0.5s 调用） */
+  /** ★ 每拍卸载预算：远的优先（销毁/封存），防跨区一步销毁十几块的帧尖峰 */
+  private static readonly UNLOAD_PER_SWEEP = 6;
+  /** ★ 解封预算（回程回填视觉；超限下拍继续） */
+  private static readonly UNPARK_PER_SWEEP = 12;
+
+  /** ★ 远处全量 chunk 封存/解封/销毁（探索期由 sweepChunks 每 0.5s 调用；
+   *  飞行粗块期每帧调用）：按距离降序 + 每拍预算化，防单帧批量 dispose 尖峰 */
   private parkFarChunks(px: number, pz: number): void {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const parkR = ChunkManager.PARK_RADIUS;
     const destroyR = ChunkManager.DESTROY_RADIUS;
+    const destroys: { key: number; d: number }[] = [];
+    const parks: { key: number; d: number }[] = [];
+    const unparks: number[] = [];
     for (const key of [...this.meshes.keys(), ...this.voidKeys]) {
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
       const d = Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz));
       if (d > destroyR) {
-        this.destroyChunk(key);
+        destroys.push({ key, d });
       } else if (d > parkR) {
-        if (!this.parkedKeys.has(key)) this.parkChunk(key);
+        if (!this.parkedKeys.has(key)) parks.push({ key, d });
       } else if (this.parkedKeys.has(key)) {
-        this.unparkChunk(key);
+        unparks.push(key);
       }
     }
-    // 粗块同样按范围剔除（超出粗块环 +1 即销毁重建）
+    destroys.sort((a, b) => b.d - a.d); // 最远先卸
+    parks.sort((a, b) => b.d - a.d);
+    for (let i = 0; i < destroys.length && i < ChunkManager.UNLOAD_PER_SWEEP; i++) {
+      this.destroyChunk(destroys[i].key);
+    }
+    for (let i = 0; i < parks.length && i < ChunkManager.UNLOAD_PER_SWEEP; i++) {
+      this.parkChunk(parks[i].key);
+    }
+    for (let i = 0; i < unparks.length && i < ChunkManager.UNPARK_PER_SWEEP; i++) {
+      this.unparkChunk(unparks[i]);
+    }
+    // 粗块同样按范围剔除（超出粗块环 +1 即销毁重建；同样预算化）
+    let coarseBudget = ChunkManager.UNLOAD_PER_SWEEP;
     for (const key of [...this.coarseMeshes.keys()]) {
+      if (coarseBudget <= 0) break;
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
       if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > ChunkManager.COARSE_RADIUS + 1) {
         this.dropCoarse(key);
+        coarseBudget--;
       }
     }
   }

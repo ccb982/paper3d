@@ -423,26 +423,52 @@ export function bakeChunkMaps(
 //     标记即跳过纹理释放（材质本身仍随 chunk 销毁）
 //   - 模式退出 releaseBakeCache() 取出全部并销毁（不跨模式占显存）
 //   - key 含 seed：换 seed 自然失配，无陈旧命中风险
-const bakeCache = new Map<string, ChunkMaps>();
+//   ★ 2026-09-12：LRU 上限 trimBakeCache（长距离跑图防显存无界增长）——
+//     淘汰条目若仍被在用 chunk 的材质引用（isLive）则跳过（等其销毁后再淘汰），
+//     绝不 dispose 在用纹理。
+interface BakeCacheEntry { maps: ChunkMaps; cx: number; cz: number }
+const bakeCache = new Map<string, BakeCacheEntry>();
 const mapsCacheKey = (seed: number, cx: number, cz: number) => `${seed}|${cx}|${cz}`;
 
 /** 缓存命中则返回纹理组（调用方直接装配，跳过烘焙） */
 export function getCachedChunkMaps(seed: number, cx: number, cz: number): ChunkMaps | undefined {
-  return bakeCache.get(mapsCacheKey(seed, cx, cz));
+  const key = mapsCacheKey(seed, cx, cz);
+  const hit = bakeCache.get(key);
+  if (!hit) return undefined;
+  // ★ LRU：命中移到队尾（Map 保序）
+  bakeCache.delete(key);
+  bakeCache.set(key, hit);
+  return hit.maps;
 }
 
 /** 存入缓存（接管纹理所有权；此后 chunk 销毁不得 dispose 这两张纹理） */
 export function cacheChunkMaps(seed: number, cx: number, cz: number, maps: ChunkMaps): void {
   const key = mapsCacheKey(seed, cx, cz);
-  if (!bakeCache.has(key)) bakeCache.set(key, maps);
+  if (!bakeCache.has(key)) bakeCache.set(key, { maps, cx, cz });
+}
+
+/**
+ * ★ 烘焙缓存 LRU 淘汰：容量降至 cap 以内；**在用块（isLive）跳过**不淘汰、不释放，
+ *  其余按最久未用淘汰并销毁其纹理（唯一合法的缓存侧 dispose 点之一）。
+ */
+export function trimBakeCache(cap: number, isLive: (cx: number, cz: number) => boolean): void {
+  if (bakeCache.size <= cap) return;
+  for (const [key, rec] of [...bakeCache]) {
+    if (bakeCache.size <= cap) break;
+    if (isLive(rec.cx, rec.cz)) continue; // 在用：纹理仍被材质引用
+    bakeCache.delete(key);
+    rec.maps.albedo.dispose();
+    rec.maps.lightmap.dispose();
+    rec.maps.matLow.dispose();
+  }
 }
 
 /** 模式退出：取出全部缓存并销毁纹理（唯一合法的缓存侧 dispose 点） */
 export function releaseBakeCache(): void {
-  for (const m of bakeCache.values()) {
-    m.albedo.dispose();
-    m.lightmap.dispose();
-    m.matLow.dispose();
+  for (const rec of bakeCache.values()) {
+    rec.maps.albedo.dispose();
+    rec.maps.lightmap.dispose();
+    rec.maps.matLow.dispose();
   }
   bakeCache.clear();
 }
