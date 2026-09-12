@@ -7,7 +7,7 @@
 //   - 全部渲染进【1 张离屏 RT】→ 对外只暴露 getTexture()
 //
 // 3D 世界不知道它怎么烘焙；它不知道 3D 世界/相机/子弹实例。
-// 唯一接口 = 一张纹理（100 颗子弹的渲染器统一采样）。
+// 唯一接口 = 一张纹理（全部子弹的渲染器统一采样）。
 
 import * as THREE from 'three';
 import { OffscreenBake } from '../render/OffscreenBake';

@@ -341,7 +341,7 @@ async function boot() {
         hudAcc = 0;
         const p = cameraPos;
         hudEl.textContent =
-          `seed ${RasterMap.current?.worldSeed ?? '?'}\n`
+          `${currentEnv === 'world' ? '世界' : '舰船'}  seed ${RasterMap.current?.worldSeed ?? '?'}\n`
           + `x ${p.x.toFixed(1)}  z ${p.z.toFixed(1)}\n`
           + `chunk (${Math.floor(p.x / 60)},${Math.floor(p.z / 60)})`;
       }
@@ -360,12 +360,17 @@ async function boot() {
       entityPerf.move = 0; entityPerf.sepOther = 0; entityPerf.sepStatic = 0; entityPerf.dye = 0;
       entityPerf.count = 0;
       const u0 = performance.now();
-      currentMode.update(renderManager.scaledDt);
-      const u1 = performance.now();
-      currentMode.render();
-      const r1 = performance.now();
-      updMsSum += u1 - u0;
-      rendMsSum += r1 - u1;
+      // ★ 帧级异常兜底：update/render 抛错不再中断 rAF 循环（错误上屏，见 showRuntimeError）
+      try {
+        currentMode.update(renderManager.scaledDt);
+        const u1 = performance.now();
+        currentMode.render();
+        const r1 = performance.now();
+        updMsSum += u1 - u0;
+        rendMsSum += r1 - u1;
+      } catch (err) {
+        showRuntimeError('[frame]', err);
+      }
     } else {
       const r0 = performance.now();
       renderer.render(scene, camera);
@@ -376,28 +381,32 @@ async function boot() {
     const rinfo = rendererLocal.info.render;
     callsSum += rinfo.calls;
     trisSum += rinfo.triangles;
-    wpChunksSum += worldPerf.chunks;
-    wpUiSum += worldPerf.ui;
-    wpCombatSum += worldPerf.combat;
-    wpAiSum += worldPerf.ai;
-    wpEntSum += worldPerf.entity;
-    wpPostSum += worldPerf.post;
-    wpPhysSum += worldPerf.phys;
-    wpDronesSum += worldPerf.drones;
-    wpEntSubSum += worldPerf.ent;
-    wpWaterSum += worldPerf.water;
-    wpClampSum += worldPerf.clamp;
-    if (worldPerf.assembly > wpAsmMax) wpAsmMax = worldPerf.assembly;
-    epBehSum += entityPerf.behavior;
-    epPhysSum += entityPerf.phys;
-    epAnimSum += entityPerf.anim;
-    epRenderSum += entityPerf.render;
-    epMovedSum += entityPerf.moved;
-    epShadowSum += entityPerf.shadow;
-    epMoveSum += entityPerf.move;
-    epSepOtherSum += entityPerf.sepOther;
-    epSepStaticSum += entityPerf.sepStatic;
-    epDyeSum += entityPerf.dye;
+    // ★ 世界拆项只在世界模式累加（舰船模式下 worldPerf 是上一局旧值 → 会误导）
+    const inWorldEnv = currentEnv === 'world';
+    if (inWorldEnv) {
+      wpChunksSum += worldPerf.chunks;
+      wpUiSum += worldPerf.ui;
+      wpCombatSum += worldPerf.combat;
+      wpAiSum += worldPerf.ai;
+      wpEntSum += worldPerf.entity;
+      wpPostSum += worldPerf.post;
+      wpPhysSum += worldPerf.phys;
+      wpDronesSum += worldPerf.drones;
+      wpEntSubSum += worldPerf.ent;
+      wpWaterSum += worldPerf.water;
+      wpClampSum += worldPerf.clamp;
+      if (worldPerf.assembly > wpAsmMax) wpAsmMax = worldPerf.assembly;
+      epBehSum += entityPerf.behavior;
+      epPhysSum += entityPerf.phys;
+      epAnimSum += entityPerf.anim;
+      epRenderSum += entityPerf.render;
+      epMovedSum += entityPerf.moved;
+      epShadowSum += entityPerf.shadow;
+      epMoveSum += entityPerf.move;
+      epSepOtherSum += entityPerf.sepOther;
+      epSepStaticSum += entityPerf.sepStatic;
+      epDyeSum += entityPerf.dye;
+    }
     fpsFrames++;
     fpsAcc += dt;
     if (dt > fpsWorstMs) fpsWorstMs = dt;
@@ -412,7 +421,11 @@ async function boot() {
           + `子项 无人机 ${(wpDronesSum / fpsFrames).toFixed(1)}  实体更新 ${(wpEntSubSum / fpsFrames).toFixed(1)}  入水 ${(wpWaterSum / fpsFrames).toFixed(1)}  贴地 ${(wpClampSum / fpsFrames).toFixed(1)}\n`
           + `阶段 行为 ${(epBehSum / fpsFrames).toFixed(1)}  物理 ${(epPhysSum / fpsFrames).toFixed(1)}  动画 ${(epAnimSum / fpsFrames).toFixed(1)}  渲染 ${(epRenderSum / fpsFrames).toFixed(1)}  索引 ${(epMovedSum / fpsFrames).toFixed(1)}  影子 ${(epShadowSum / fpsFrames).toFixed(1)}\n`
           + `行为拆 移动 ${(epMoveSum / fpsFrames).toFixed(1)}  推挤 ${(epSepOtherSum / fpsFrames).toFixed(1)}  静态 ${(epSepStaticSum / fpsFrames).toFixed(1)}  染料 ${(epDyeSum / fpsFrames).toFixed(1)}\n`
-          + `实体数 ${worldPerf.nEntities} (敌 ${worldPerf.nEnemies} 机 ${worldPerf.nDrones})`;
+          + (inWorldEnv
+            ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 机 ${worldPerf.nDrones})  `
+              + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
+              + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
+            : `（舰船模式：世界统计暂停）`);
       }
       fpsFrames = 0;
       fpsAcc = 0;
@@ -458,13 +471,18 @@ function enterShipMode(
 
   // 3. 创建新 ShipMode
   const ship = new ShipMode();
-  ship.enter({
-    scene, camera, renderer,
-    session: currentSession!,
-    onDepart: (day: number) => {
-      enterWorldMode(scene, camera, renderer, day);
-    },
-  });
+  try {
+    ship.enter({
+      scene, camera, renderer,
+      session: currentSession!,
+      onDepart: (day: number) => {
+        enterWorldMode(scene, camera, renderer, day);
+      },
+    });
+  } catch (err) {
+    showRuntimeError('[enterShip]', err);
+    return;
+  }
   currentMode = ship;
   currentEnv = 'ship';
   renderManager.setEnvironment('ship');
@@ -512,11 +530,42 @@ function enterWorldMode(
       enterShipMode(scene, camera, renderer);
     },
   };
-  world.enter(ctx);
+  try {
+    world.enter(ctx);
+  } catch (err) {
+    showRuntimeError('[enterWorld]', err);
+    return; // 进图失败：错误上屏（不再留下"空世界 + 冻结 HUD"的无提示状态）
+  }
   currentMode = world;
   currentEnv = 'world';
   renderManager.setEnvironment('world');
 }
+
+// ============================================================
+// ★ 运行期异常上屏（进图/模式切换/帧更新抛错不再无声空屏）
+// ============================================================
+
+let runtimeErrShown = 0;
+function showRuntimeError(tag: string, err: unknown): void {
+  console.error(tag, err);
+  if (runtimeErrShown >= 6) return; // 防刷屏（同一异常每帧抛也只显示前几条）
+  runtimeErrShown++;
+  let el = document.getElementById('__pp_err');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = '__pp_err';
+    el.style.cssText =
+      'position:fixed;bottom:8px;left:8px;right:8px;max-height:45vh;overflow:auto;'
+      + 'color:#ff9090;background:rgba(25,0,0,0.9);padding:8px 10px;'
+      + 'font:12px/1.5 Consolas,monospace;white-space:pre-wrap;z-index:99999;'
+      + 'border:1px solid #a33;border-radius:6px;pointer-events:auto';
+    document.body.appendChild(el);
+  }
+  const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  el.textContent += `${tag} ${msg}\n\n`;
+}
+window.addEventListener('error', (e) => showRuntimeError('[error]', e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => showRuntimeError('[reject]', e.reason));
 
 // ============================================================
 // 启动

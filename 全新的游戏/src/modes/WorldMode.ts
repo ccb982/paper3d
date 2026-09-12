@@ -164,7 +164,9 @@ interface MobDef {
 export const worldPerf = {
   chunks: 0, ui: 0, combat: 0, ai: 0, entity: 0, post: 0, phys: 0, total: 0,
   drones: 0, ent: 0, water: 0, clamp: 0,
-  nEnemies: 0, nDrones: 0, nEntities: 0,
+  nEnemies: 0, nDrones: 0, nEntities: 0, nBases: 0,
+  /** 记录构成（HUD 诊断）：地形 trimesh / 装饰与友军碰撞体 / 其他活体 */
+  nGround: 0, nDecor: 0,
   /** ★ 本帧 chunk 装配耗时（ms；0=未装配） */
   assembly: 0,
 };
@@ -566,7 +568,7 @@ export class WorldMode implements IGameMode {
     // ---- 子弹池 ----
     this.bullets = new BulletManager(
       this.entities, this.scene,
-      ctx.bulletAsset ?? createSolidBulletAsset(), 100,
+      ctx.bulletAsset ?? createSolidBulletAsset(), 10, // ★ 池 100 → 10（用户定调：10 颗足够；同时省 90 个记录/刚体）
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
       // ★ 命中解析层入口：每次碰撞开始，所有命中（敌人 / 装饰物 / 地块）都进这里分类结算
@@ -910,7 +912,13 @@ export class WorldMode implements IGameMode {
     worldPerf.clamp = _t5 - _e3;
     worldPerf.nEnemies = this.enemies.length;
     worldPerf.nDrones = this.drones.length;
+    // ★ 口径区分（2026-09-12）：活体实体（角色/道具/子弹）vs 全部物理记录
+    //   （后者含 每 chunk 地面 trimesh + 每装饰物 cuboid ——"刚进图 105"即此类）
+    worldPerf.nBases = this.entities.baseCount;
     worldPerf.nEntities = this.entities.count;
+    const kc = this.entities.kindCounts();
+    worldPerf.nGround = kc.ground;
+    worldPerf.nDecor = kc.decoration;
 
     // ---- ★ 测试地图：玩家钳在出生 chunk 内（世界只有这一块，无邻可走） ----
     if (this.testChunk && this.phase === 'explore') {

@@ -59,7 +59,7 @@ export class BulletManager {
     private em: EntityManager,
     private scene: THREE.Scene,
     private asset: FrameAssetSource,
-    capacity = 100,
+    capacity = 10, // ★ 2026-09-12：池 100 → 10（用户定调；90 个休眠记录/刚体随之消失）
     glRenderer?: THREE.WebGLRenderer,
     hitEffectShapes: HitEffectShapeExport[] = [],
     onHit?: (payload: BulletHitPayload) => void,
@@ -134,7 +134,7 @@ export class BulletManager {
   spawn(opts: SpawnBulletOptions): BulletEntity | null {
     const b = this.pool.pop();
     if (!b) {
-      console.warn('[bullet] 池空：100 颗都在飞行中，等待超时回收');
+      console.warn(`[bullet] 池空：${this.allBullets.length} 颗都在飞行中，等待超时回收`);
       return null;
     }
     const full: BulletEntityOptions = {

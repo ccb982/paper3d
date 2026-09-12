@@ -146,9 +146,11 @@ export class BulletEntity extends EntityBase {
     this.em.register(this);
     const rb = this.entity.rigidBody;
     if (rb && this.em.physics) {
-      this.em.physics?.setPosition(rb.handle, opts.x, opts.y, opts.z);
+      // ★ 池化刚体：发射时恢复模拟（入池时已禁用，见 deactivate）
+      this.em.physics.setBodyEnabled(rb.handle, true);
+      this.em.physics.setPosition(rb.handle, opts.x, opts.y, opts.z);
       const len = Math.hypot(opts.dirX, opts.dirY, opts.dirZ) || 1;
-      this.em.physics?.setLinearVelocity(
+      this.em.physics.setLinearVelocity(
         rb.handle,
         (opts.dirX / len) * opts.speed,
         (opts.dirY / len) * opts.speed,
@@ -157,7 +159,9 @@ export class BulletEntity extends EntityBase {
     }
   }
 
-  /** ★ 失活回收（池化复用：退出管线 + 藏到地图外 + 清速；不销毁） */
+  /** ★ 失活回收（池化复用：退出管线 + 藏到地图外 + 清速；不销毁）
+   *  ★ 2026-09-12：同时禁用刚体——池内 100 个 dynamic body 不再参与 rapier
+   *  模拟/宽相（物理步空转清零），发射时 activate 恢复。 */
   deactivate(): void {
     this.active = false;
     this.visible = false;
@@ -167,8 +171,9 @@ export class BulletEntity extends EntityBase {
     this.entity.position.z = 0;
     const rb = this.entity.rigidBody;
     if (rb && this.em.physics) {
-      this.em.physics?.setLinearVelocity(rb.handle, 0, 0, 0);
-      this.em.physics?.setPosition(rb.handle, 0, -50, 0);
+      this.em.physics.setLinearVelocity(rb.handle, 0, 0, 0);
+      this.em.physics.setPosition(rb.handle, 0, -50, 0);
+      this.em.physics.setBodyEnabled(rb.handle, false);
     }
   }
 

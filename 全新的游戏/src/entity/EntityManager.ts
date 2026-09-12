@@ -175,6 +175,23 @@ export class EntityManager {
     return this.entities.size;
   }
 
+  /** ★ 活体实体数（EntityBase：角色/道具/子弹/舰船；不含地形/装饰物理记录）
+   *  ——HUD"实体数"应读这个；count 含每 chunk 地面 + 每装饰物碰撞体记录 */
+  get baseCount(): number {
+    return this.bases.size;
+  }
+
+  /** ★ 记录按 kind 计数（HUD 诊断"105 到底是什么"；复用对象零分配） */
+  private kindTally: Record<string, number> = {
+    player: 0, ground: 0, enemy: 0, bullet: 0, item: 0, decoration: 0, ship: 0,
+  };
+  kindCounts(): Record<string, number> {
+    const o = this.kindTally;
+    o.player = o.ground = o.enemy = o.bullet = o.item = o.decoration = o.ship = 0;
+    for (const e of this.entities.values()) o[e.kind]++;
+    return o;
+  }
+
   /** 销毁全部（模式切换/场景卸载） */
   clear(): void {
     for (const base of this.bases.values()) base.dispose();
