@@ -248,6 +248,11 @@ export class DesktopBinding {
     return v;
   }
 
+  /** ★ 切换物品键（Q）是否按住（Q+滚轮 = 弹药/物品切换，不缩放） */
+  isSwitchItemHeld(): boolean {
+    return !!this.keyState.get('KeyQ');
+  }
+
   /** ★ 消费使用消耗品键（F） */
   consumeUseItem(): boolean {
     const v = this.state.pressed.useItem;

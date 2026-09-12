@@ -681,14 +681,19 @@ export class WorldMode implements IGameMode {
     const input = this.binding.input;
     const attackPressed = this.binding.consumeAttack();
     const look = this.binding.consumeLook();
-    const zoom = this.binding.consumeZoom();
+    let zoom = this.binding.consumeZoom();
 
     // ★ 按 I 键打开/关闭背包
     if (this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
     // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
+    //   ★ Q 按住 + 滚轮 = 直接前后切换弹药/物品（不缩放视角）；点按 Q 仍顺序切换
     //   死亡等待复活期间：锁消耗品使用（切换仍可看）
+    if (this.binding.isSwitchItemHeld() && zoom !== 0) {
+      this.cycleQuickItem(zoom > 0 ? 1 : -1);
+      zoom = 0; // 滚轮已用于切换 → 本帧不缩放
+    }
     if (this.binding.consumeSwitchItem()) this.cycleQuickItem();
     if (this.binding.consumeUseItem() && !this.player.dead) this.useSelectedConsumable();
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
@@ -1622,12 +1627,18 @@ export class WorldMode implements IGameMode {
     return out;
   }
 
-  /** ★ Q：顺序切换快捷物品（普通弹药 → 行囊内各项，循环；鼠标隐藏时的换武器/道具） */
-  private cycleQuickItem(): void {
+  /** ★ 切换快捷物品（dir=+1 下一个 / -1 上一个，循环；普通弹药 → 行囊内各项）：
+   *   点按 Q = 顺序 +1；Q+滚轮 = 前后双向切换 */
+  private cycleQuickItem(dir = 1): void {
     const entries = this.buildAmmoEntries();
     if (entries.length <= 1) return;
     const idx = entries.findIndex((e) => e.id === this.selectedQuickItem);
-    const next = entries[(idx + 1) % entries.length];
+    if (idx < 0) {
+      // 当前选择不在列表（刚消耗完/被移除）→ 从头（或尾）
+      this.selectedQuickItem = entries[dir >= 0 ? 0 : entries.length - 1].id;
+      return;
+    }
+    const next = entries[(idx + dir + entries.length) % entries.length];
     this.selectedQuickItem = next.id;
   }
 
