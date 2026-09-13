@@ -686,7 +686,7 @@ export class WorldMode implements IGameMode {
       const ss = String(sec % 60).padStart(2, '0');
       const tier = this.threat ? threatTier(this.threat.index) : null;
       this.worldUIManager.setAssaultBanner(
-        `【预警】敌军来袭倒计时 ${mm}:${ss}　目标：${label}${tier ? `　敌军强度：${tier.label}` : ''}　请做好准备`, true,
+        `【预警】敌军来袭倒计时 ${mm}:${ss}　目标：${label}${tier ? `　敌军攻势：${tier.label}` : ''}　请做好准备`, true,
       );
     };
     this.directorHooks.onAssault = (label) => {
@@ -1561,7 +1561,7 @@ export class WorldMode implements IGameMode {
     this.swarmDirector.setThreat(this.threat);
     // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
     const tier = threatTier(this.threat.index);
-    this.worldUIManager.setThreatLabel(`敌军强度：${tier.label}`, tier.color);
+    this.worldUIManager.setThreatLabel(`敌军攻势：${tier.label}`, tier.color);
   }
 
   /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，

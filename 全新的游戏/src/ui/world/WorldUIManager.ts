@@ -69,7 +69,7 @@ export class WorldUIManager extends BaseInteractionUI {
   private shipStatusEl: HTMLDivElement | null = null;
   /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
   private assaultBannerEl: HTMLDivElement | null = null;
-  /** ★ 敌军强度档位（顶部小字；EnemyScaling） */
+  /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
   private enemyScaleEl: HTMLDivElement | null = null;
   /** ★ 战斗 HUD 显隐（航行操船期隐藏：血条/准星/快捷栏/友军列表） */
   private combatHudVisible = true;
@@ -282,7 +282,7 @@ export class WorldUIManager extends BaseInteractionUI {
     el.textContent = text;
   }
 
-  /** ★ 敌军强度档位（顶部小字；《EnemyScaling.ts》统一口径：低/较低/中/较高/极高） */
+  /** ★ 敌军攻势档位（顶部小字；《EnemyScaling.ts》统一口径：低/较低/中/较高/极高） */
   setThreatLabel(text: string, color = '#ffcf9a'): void {
     if (!this.enemyScaleEl) {
       const el = document.createElement('div');
