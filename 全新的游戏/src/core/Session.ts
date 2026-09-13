@@ -104,6 +104,14 @@ export interface GameSession {
   outOfRun: {
     owned: Record<string, number>; // 遗物 id → 拥有数（重复抽取叠加）
   };
+
+  // ----- ⑩ ★ 剧情状态（对话/事件模块；2026-09-14） -----
+  story: {
+    /** 对话/事件写入的标记（数值；条件求值只判真假） */
+    flags: Record<string, number>;
+    /** 事件运行记录：id → { count 完成次数, lastDay 最近完成天 }（once/冷却判定） */
+    events: Record<string, { count: number; lastDay: number }>;
+  };
 }
 
 // ============================================================
@@ -424,6 +432,7 @@ export function createNewSession(): GameSession {
     dayProgress: { hasDepartedToday: false },
     // ★ 开局自带遗物：魔王的黑冠 + 祖宗发射器（维什戴尔的信物）；其余靠卡池抽取
     outOfRun: { owned: { ...STARTER_RELICS } },
+    story: { flags: {}, events: {} },
   };
 }
 

@@ -28,6 +28,9 @@ import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { BaseScene } from '../ui/base/BaseScene';
 import { MainButtons, type ButtonId } from '../ui/base/MainButtons';
 import { createButton } from '../ui/components/Button';
+import { DialogueView } from '../ui/shared/DialogueView';
+import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
+import { EventSystem } from '../systems/events/EventSystem';
 
 export class BaseMode implements IGameMode {
   // 场景对象（由 ctx 注入，模式内只读）
@@ -61,6 +64,11 @@ export class BaseMode implements IGameMode {
   private deploymentUnsub: (() => void) | null = null;
   /** ★ 删档按钮（基地右上角；确认后清 localStorage 并重开） */
   private wipeBtn: HTMLButtonElement | null = null;
+
+  // ★ 事件 / 对话模块（2026-09-14；基地与战斗共用同一套系统与 UI）
+  private eventSystem!: EventSystem;
+  private dialogue!: DialogueSystem;
+  private dialogueView: DialogueView | null = null;
 
   // ============================================================
   // IGameMode 接口实现
@@ -111,6 +119,23 @@ export class BaseMode implements IGameMode {
       this.baseScene?.refreshDeployment();
     });
 
+    // ★ 事件 / 对话（基地固定位；锚点每天确定性轮换，站着的角色 F 交谈）
+    this.eventSystem = new EventSystem(ctx.session, 10007);
+    this.dialogueView = new DialogueView(document.body);
+    this.dialogue = new DialogueSystem({
+      session: ctx.session,
+      itemManager: this.itemManager,
+      view: this.dialogueView,
+      onEnd: (eventId) => {
+        if (eventId) {
+          this.eventSystem.complete(eventId);
+          SaveSystem.save(ctx.session);
+        }
+        this.refreshBaseEvents();
+      },
+    });
+    this.refreshBaseEvents();
+
     // ④ 加载主页面按钮（FTX 纹理，梯形透视；异步不阻塞进入）
     this.mainButtons = new MainButtons();
     this.mainButtons.onPress(id => this.onButtonPress(id));
@@ -159,6 +184,11 @@ export class BaseMode implements IGameMode {
     this.craftingOverlay?.dispose();
     this.craftingOverlay = null;
 
+    // ③.5 销毁对话模块
+    this.dialogue?.close();
+    this.dialogueView?.dispose();
+    this.dialogueView = null;
+
     // ③ 销毁 UI 层
     this.uiManager?.dispose();
 
@@ -176,12 +206,25 @@ export class BaseMode implements IGameMode {
     this.baseScene?.update(dt);
   }
 
-  /** 是否有 UI 遮挡（模态面板 / 抽卡 / 加工台 / 全屏背包页） */
+  /** 是否有 UI 遮挡（模态面板 / 抽卡 / 加工台 / 全屏背包页 / 对话） */
   private isUiBlocking(): boolean {
     if (this.uiManager?.hasModalOpen) return true;
     if (this.craftingOverlay?.isOpen()) return true;
     if (this.gachaOverlay?.isOpen()) return true;
+    if (this.dialogue?.isActive) return true;
     return false;
+  }
+
+  /** ★ 事件站点与 NPC 立绘刷新（进入基地 + 每次事件完成后） */
+  private refreshBaseEvents(): void {
+    if (!this.baseScene || !this.eventSystem || !this.dialogue) return;
+    const fixed = this.eventSystem.fixedEvents('base');
+    this.baseScene.setEventStations(fixed.map((f) => ({
+      x: f.x, z: f.z, rx: 2.4, rz: 2.0,
+      label: this.eventSystem.label(f.event),
+      cb: () => { this.dialogue.start(f.event.dialogue, { eventId: f.event.id }); },
+    })));
+    this.baseScene.setEventNpcs(fixed.map((f) => ({ x: f.x, z: f.z, assetUrl: f.event.npc.portrait })));
   }
 
   render(): void {

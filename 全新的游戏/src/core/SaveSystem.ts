@@ -116,6 +116,11 @@ export const SaveSystem = {
         if ((owned[id] ?? 0) < n) owned[id] = n;
       }
 
+      // ★ 旧档迁移：剧情状态（对话/事件模块）
+      if (!data.story) data.story = { flags: {}, events: {} };
+      if (!data.story.flags || typeof data.story.flags !== 'object') data.story.flags = {};
+      if (!data.story.events || typeof data.story.events !== 'object') data.story.events = {};
+
       return data;
     } catch (e) {
       console.error('[存档] 读取失败:', e);

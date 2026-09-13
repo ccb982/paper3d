@@ -12,6 +12,7 @@
 import * as THREE from 'three';
 import type { IGameMode, IGameModeContext } from '../core/IGameMode';
 import type { GameSession } from '../core/Session';
+import { SaveSystem } from '../core/SaveSystem';
 import { FtxAsset } from '../vendor/player/FtxAsset';
 import { CombatItemController } from '../systems/itemPlayback/CombatItemController';
 import { allyPlaybackRegistry } from '../systems/itemPlayback/AllyPlayback';
@@ -56,6 +57,7 @@ import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type Thr
 import { AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { ItemBase } from '../entity/ItemBase';
+import { NpcEntity } from '../entity/NpcEntity';
 import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
@@ -70,6 +72,11 @@ import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent, relicTimedFor } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
+import { DialogueView } from '../ui/shared/DialogueView';
+import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
+import { EventSystem } from '../systems/events/EventSystem';
+import { loadFtxCached } from '../services/fx/FtxAssetCache';
+import { hash2 } from '../services/map/TerrainNoise';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
 import { executeAttack } from '../services/combat/Attack';
@@ -359,6 +366,19 @@ export class WorldMode implements IGameMode {
   /** ★ 加工台覆盖层（舰内按钮打开；懒建）与共享图标服务 */
   private craftingOverlay: CraftingOverlay | null = null;
   private iconRegistry: ItemIconRegistry | null = null;
+
+  // ★ 事件 / 对话（2026-09-14；基地与战斗共用系统，模式内各自装配）
+  private eventSystem!: EventSystem;
+  private dialogue!: DialogueSystem;
+  private dialogueView: DialogueView | null = null;
+  /** 探索期事件 NPC（走到近处 E 对话；走远回收） */
+  private npcs: NpcEntity[] = [];
+  /** 当前就近可交互 NPC（每帧判定；提示/E 键用） */
+  private nearbyNpc: NpcEntity | null = null;
+  /** 正在对话的 NPC（结束后消失） */
+  private pendingNpc: NpcEntity | null = null;
+  /** 世界事件 NPC 同时存在上限 */
+  private static readonly MAX_EVENT_NPCS = 2;
   private protagonistAssetRef: FtxAsset | null = null;
   /** ★ Boss 战（抽到普瑞赛斯 → 四维空间；击败 = 通关） */
   private bossRun = false;
@@ -561,6 +581,7 @@ export class WorldMode implements IGameMode {
     };
     this.chunks = new ChunkManager(this.scene, this.raster, groundHost, {
       testChunk: ctx.debug?.testChunk ?? false,
+      onChunkActivated: (cx, cz) => this.onChunkActivated(cx, cz),
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
     // ★ 航行期：地图两级构建的【粗加载】——大半径铺粗块（硬边/纯色/无物理/无水面/无装饰）
@@ -733,6 +754,32 @@ export class WorldMode implements IGameMode {
     // ★ 遗物局内周期补给（祖宗发射器等）：每间隔补 1，多件缩短间隔
     this.timedRelics = relicTimedFor(ctx.session, RELIC_ITEM_CONFIG)
       .map((g) => ({ itemId: g.itemId, interval: g.interval, timer: 0 }));
+    // ★ 事件 / 对话（用户定调：事件属于基地与战斗；探索期刷 NPC + 舰内固定位）
+    this.eventSystem = new EventSystem(ctx.session, 10007);
+    this.dialogueView = new DialogueView(document.body);
+    this.dialogue = new DialogueSystem({
+      session: ctx.session,
+      itemManager: this.itemManager,
+      view: this.dialogueView,
+      onEnd: (eventId) => {
+        if (eventId) {
+          this.eventSystem.complete(eventId);
+          SaveSystem.save(ctx.session);
+        }
+        if (this.phase === 'explore') this.player.controlLocked = false;
+        // 事件完成 → 消耗该 NPC；舰内则刷新固定位（once/冷却生效）
+        if (this.pendingNpc) {
+          this.pendingNpc.dispose();
+          const i = this.npcs.indexOf(this.pendingNpc);
+          if (i >= 0) this.npcs.splice(i, 1);
+          this.pendingNpc = null;
+        }
+        if (this.shipInterior) {
+          this.applyShipInteriorEvents(this.shipInterior);
+          this.buildInteriorButtons();
+        }
+      },
+    });
     // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
     // ★ 航行期：停靠按钮（F 键同义）+ 隐藏战斗 HUD（停靠后才绘制）
@@ -940,41 +987,62 @@ export class WorldMode implements IGameMode {
     let zoom = this.binding.consumeZoom();
     // ★ 舰内房间：世界输入全部不消费（房间自己的键盘监听驱动行走）
     const inInterior = this.phase === 'interior';
+    // ★ 对话中：世界输入全部不消费（指针解锁、角色站定；按键由对话视图处理）
+    const talking = this.dialogue?.isActive ?? false;
+    const uiLocked = inInterior || talking;
 
     // ★ 按 I 键打开/关闭背包
-    if (!inInterior && this.binding.consumeInventory()) {
+    if (!uiLocked && this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
     // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
     //   ★ Q 按住 + 滚轮 = 直接前后切换弹药/物品（不缩放视角）；点按 Q 仍顺序切换
     //   死亡等待复活期间：锁消耗品使用（切换仍可看）
-    if (!inInterior && this.binding.isSwitchItemHeld() && zoom !== 0) {
+    if (!uiLocked && this.binding.isSwitchItemHeld() && zoom !== 0) {
       this.cycleQuickItem(zoom > 0 ? 1 : -1);
       zoom = 0; // 滚轮已用于切换 → 本帧不缩放
     }
-    if (!inInterior && this.binding.consumeSwitchItem()) this.cycleQuickItem();
-    if (!inInterior && this.binding.consumeUseItem()) {
+    if (!uiLocked && this.binding.consumeSwitchItem()) this.cycleQuickItem();
+    if (!uiLocked && this.binding.consumeUseItem()) {
       if (this.phase === 'sail') this.requestDock(false);       // 航行期：F = 停靠
       else if (!this.player.dead) this.useSelectedConsumable();  // 探索期：F = 使用消耗品
     }
-    // ★ 按 E 进入舰内（2026-09-13 用户定调：仅降落后、靠近舰船；飞行中不进）
-    if (!inInterior && input.held.interact && this.phase === 'explore' && !this.player.dead) {
-      this.enterShipInterior();
+
+    // ★ 探索期事件 NPC：就近判定（E 对话优先于 E 进舰）
+    this.nearbyNpc = null;
+    if (this.phase === 'explore' && !inInterior && !talking && !this.player.dead
+      && !this.worldUIManager.hasModalOpen) {
+      const p0 = this.player.position;
+      let bestD = Infinity;
+      for (const npc of this.npcs) {
+        const d2 = (npc.position.x - p0.x) ** 2 + (npc.position.z - p0.z) ** 2;
+        if (d2 <= npc.interactRadius * npc.interactRadius && d2 < bestD) {
+          bestD = d2;
+          this.nearbyNpc = npc;
+        }
+      }
     }
-    // ★ 进舰提示（靠近舰船 + 探索期 + 无面板遮挡）
+    // ★ 按 E：就近 NPC 对话 / 进舰内（仅降落后；飞行中不进）
+    if (!uiLocked && input.held.interact && this.phase === 'explore' && !this.player.dead) {
+      if (this.nearbyNpc) this.startNpcDialogue(this.nearbyNpc);
+      else this.enterShipInterior();
+    }
+    // ★ 交互提示（对话中隐藏；NPC 优先于舰船）
     {
       const s0 = this.ship?.position;
       const p0 = this.player.position;
-      const near = !this.worldUIManager.hasModalOpen && !!s0
+      const nearShip = !this.worldUIManager.hasModalOpen && !!s0
         && this.phase === 'explore' && !this.player.dead
         && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2;
-      this.worldUIManager.setBoardPrompt(near);
+      if (talking) this.worldUIManager.setBoardPrompt(false);
+      else if (this.nearbyNpc) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyNpc.displayName}交谈`);
+      else this.worldUIManager.setBoardPrompt(nearShip);
     }
 
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
-    //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
+    //   任一面板/对话打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
     //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
-    this.binding.setPointerLock(!this.worldUIManager.hasModalOpen && this.phase !== 'interior');
+    this.binding.setPointerLock(!this.worldUIManager.hasModalOpen && !talking && this.phase !== 'interior');
 
     // ★ 舰内房间（2026-09-13）：世界冻结，只驱动房间场景（行走；操作走按钮条）
     if (this.phase === 'interior') {
@@ -984,6 +1052,20 @@ export class WorldMode implements IGameMode {
 
     // ★ 舰船已毁：冻结玩法更新（结算/复活面板接管；相机/输入不再跑）
     if (this.shipDestroyed) return;
+
+    // ★ 事件 NPC：走远回收（防无限世界累积；对话中的 NPC 不回收）
+    if (this.npcs.length > 0) {
+      const p0 = this.player.position;
+      for (let i = this.npcs.length - 1; i >= 0; i--) {
+        const npc = this.npcs[i];
+        if (npc === this.pendingNpc) continue;
+        const d2 = (npc.position.x - p0.x) ** 2 + (npc.position.z - p0.z) ** 2;
+        if (d2 > 140 * 140) {
+          npc.dispose();
+          this.npcs.splice(i, 1);
+        }
+      }
+    }
 
     // ★ 航行驾驶（飞行手感）：本帧鼠标增量交给舰船姿态，实体管线前先转向/俯仰/油门
     //   降落进近期：低操控权限（25%）+ 自动收油/下降（landingStep 驱动）
@@ -1239,7 +1321,7 @@ export class WorldMode implements IGameMode {
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
     this.bulletCooldown -= dt;
-    if (this.phase === 'explore' && !this.player.dead && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
+    if (this.phase === 'explore' && !this.player.dead && !talking && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
       this.bulletCooldown = PLAYER_ATTACK_INTERVAL * 100 / (100 + queryFinalStats(this.player).attackSpeed);
       this.firePlayerBullet();
     }
@@ -1340,6 +1422,14 @@ export class WorldMode implements IGameMode {
     this.shipInterior?.dispose();
     this.shipInterior = null;
     this.interiorScene = null;
+    // ---- 事件 / 对话（对话视图销毁 + NPC 实体回收） ----
+    this.dialogue?.close();
+    this.dialogueView?.dispose();
+    this.dialogueView = null;
+    for (const npc of this.npcs) npc.dispose();
+    this.npcs = [];
+    this.nearbyNpc = null;
+    this.pendingNpc = null;
     // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
     this.swarm.dispose();
     // ---- 取消伤害事件订阅 ----
@@ -2837,6 +2927,74 @@ export class WorldMode implements IGameMode {
   //   起飞（回航行）/ 返回基地 / 下船 / 加工台。世界在舱内期间冻结（同航行期）。
   // ============================================================
 
+  // ============================================================
+  // ★ 事件 / 对话（2026-09-14）
+  //   · 探索期：区块激活抽选事件 → 刷 NPC 实体，近处 E 对话
+  //   · 舰内：固定锚点交互站（F 交谈），与按钮条并存
+  // ============================================================
+
+  /** ★ 区块激活：世界事件抽选 → 刷事件 NPC（探索期；位置/结果确定性：同天同块稳定） */
+  private onChunkActivated(cx: number, cz: number): void {
+    if (this.phase !== 'explore' || !this.scene || !this.dialogue) return;
+    if (this.npcs.length >= WorldMode.MAX_EVENT_NPCS) return;
+    const ev = this.eventSystem.rollWorldEvent(cx, cz);
+    if (!ev) return;
+    const assetUrl = ev.npc.portrait;
+    if (!assetUrl) return;
+    // 位置：chunk 内确定性随机点（避开坑/水/过低/玩家近旁）
+    const seed = this.raster.worldSeed + 7717;
+    const x = cx * CHUNK_SIZE + 4 + hash2(cx * 131 + 17, cz * 197 + 31, seed) * (CHUNK_SIZE - 8);
+    const z = cz * CHUNK_SIZE + 4 + hash2(cx * 313 + 41, cz * 419 + 53, seed) * (CHUNK_SIZE - 8);
+    const p = this.player?.position;
+    if (p && (x - p.x) ** 2 + (z - p.z) ** 2 < 14 * 14) return;
+    const role = this.raster.tileDefAt(x, z).genRole;
+    if (role === 'pit' || role === 'liquid') return;
+    const y = this.raster.surfaceHeightAt(x, z);
+    if (y < -1.2) return;
+    void loadFtxCached(assetUrl)
+      .then((asset) => {
+        if (!this.scene || this.phase !== 'explore') return; // 期间模式退出/换阶段
+        if (this.npcs.length >= WorldMode.MAX_EVENT_NPCS) return;
+        const npc = new NpcEntity(this.entities, this.scene, asset, {
+          x, y, z,
+          npcId: ev.id,
+          name: ev.npc.speaker,
+          dialogue: ev.dialogue,
+          eventId: ev.id,
+        });
+        this.npcs.push(npc);
+        this.showFloatingAt(x, y + 2.6, z, '？', 'heal');
+      })
+      .catch((err) => console.warn('[事件] NPC 立绘加载失败:', assetUrl, err));
+  }
+
+  /** ★ 开始与事件 NPC 对话（探索期；锁玩家操作，结束回调恢复） */
+  private startNpcDialogue(npc: NpcEntity): void {
+    if (!this.dialogue) return;
+    if (!this.dialogue.start(npc.dialogueTree, { eventId: npc.eventId ?? undefined })) return;
+    this.pendingNpc = npc;
+    this.player.controlLocked = true;
+    eventBus.emit('dialogue', { id: npc.dialogueTree });
+  }
+
+  /** ★ 舰内固定位事件：交互站（F 交谈）+ NPC 立绘（本地坐标；与按钮条并存） */
+  private applyShipInteriorEvents(interior: BaseScene): void {
+    if (!this.eventSystem || !this.dialogue) return;
+    const fixed = this.eventSystem.fixedEvents('ship');
+    interior.setEventStations(fixed.map((f) => ({
+      x: f.x, z: f.z, rx: 2.4, rz: 2.0,
+      label: this.eventSystem.label(f.event),
+      cb: () => {
+        if (this.dialogue.start(f.event.dialogue, { eventId: f.event.id })) {
+          this.player.controlLocked = true;
+          this.removeInteriorButtons(); // 对话期间收起操作按钮，防误点
+          eventBus.emit('dialogue', { id: f.event.dialogue });
+        }
+      },
+    })));
+    interior.setEventNpcs(fixed.map((f) => ({ x: f.x, z: f.z, assetUrl: f.event.npc.portrait })));
+  }
+
   /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
   private enterShipInterior(): boolean {
     if (!this.ship || !this.scene || !this.camera || !this.renderer) return false;
@@ -2863,7 +3021,7 @@ export class WorldMode implements IGameMode {
       renderer: this.renderer,
     });
     interior.setupCamera(this.camera);
-    interior.setUiBlocking(() => this.worldUIManager?.hasModalOpen ?? false);
+    interior.setUiBlocking(() => this.dialogue?.isActive || (this.worldUIManager?.hasModalOpen ?? false));
     } catch (err) {
       console.error('[interior] 创建失败:', err);
       return false;
@@ -2882,8 +3040,9 @@ export class WorldMode implements IGameMode {
     renderManager.setEnvironment('ship');
     renderManager.setFlightMode(true);
     this.chunks.setWaterVisible(false);
-    // ★ 舰内操作按钮（用户定调：按钮而不是走位交互）
+    // ★ 舰内操作按钮（用户定调：按钮而不是走位交互）+ 固定位事件（F 交谈）
     this.buildInteriorButtons();
+    this.applyShipInteriorEvents(interior);
     return true;
   }
 

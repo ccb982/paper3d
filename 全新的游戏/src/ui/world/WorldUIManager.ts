@@ -310,8 +310,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap.setVisible(v);
   }
 
-  /** ★ 进舰提示（靠近舰船按 E；探索期显示，其余隐藏） */
-  setBoardPrompt(visible: boolean): void {
+  /** ★ 交互提示（靠近舰船/事件 NPC 按 E；探索期显示，其余隐藏；文案由调用方给） */
+  setBoardPrompt(visible: boolean, text = 'E · 进入舰船'): void {
     if (!visible) {
       if (this.boardPromptEl) this.boardPromptEl.style.display = 'none';
       return;
@@ -326,10 +326,11 @@ export class WorldUIManager extends BaseInteractionUI {
         'padding:6px 16px', 'font:14px "Microsoft YaHei",sans-serif',
         'text-shadow:0 1px 3px #000',
       ].join(';');
-      el.textContent = 'E · 进入舰船';
+      el.textContent = text;
       document.body.appendChild(el);
       this.boardPromptEl = el;
     }
+    if (this.boardPromptEl.textContent !== text) this.boardPromptEl.textContent = text;
     this.boardPromptEl.style.display = 'block';
   }
 

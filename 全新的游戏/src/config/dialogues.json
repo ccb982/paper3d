@@ -1,0 +1,127 @@
+{
+  "trees": {
+    "ship_first": {
+      "speaker": "维维美",
+      "portrait": "/characters/protagonist/维维美.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "醒了？别急着下船——先把话说清楚。",
+          "next": "n2"
+        },
+        "n2": {
+          "text": "这片废土上能信的人不多。你有什么想问的？",
+          "choices": [
+            { "text": "这是哪里？", "next": "n3" },
+            { "text": "你是谁？", "next": "n4" },
+            { "text": "没什么好问的。", "next": "n5" }
+          ]
+        },
+        "n3": {
+          "text": "一块被战争犁过的地方。地图上已经没有名字了。",
+          "next": "n5"
+        },
+        "n4": {
+          "text": "维维美。名字不重要——重要的是我们能不能活到明天。",
+          "next": "n5"
+        },
+        "n5": {
+          "text": "……拿着这个。路上小心。",
+          "effects": [
+            { "kind": "item", "id": "healing_potion", "count": 1 },
+            { "kind": "flag", "key": "met_veveme" }
+          ],
+          "end": true
+        }
+      }
+    },
+    "base_supply": {
+      "speaker": "维维美",
+      "portrait": "/characters/protagonist/维维美.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "仓库里翻出来一点余粮，你要哪份？",
+          "choices": [
+            { "text": "口粮（食物 ×2）", "next": "n2" },
+            { "text": "药剂（治疗药水 ×1）", "next": "n3" },
+            { "text": "留给船上吧。", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "省着点吃。",
+          "effects": [{ "kind": "item", "id": "food_ration", "count": 2 }],
+          "end": true
+        },
+        "n3": {
+          "text": "疼的时候别硬扛。",
+          "effects": [{ "kind": "item", "id": "healing_potion", "count": 1 }],
+          "end": true
+        },
+        "n4": {
+          "text": "随你。",
+          "end": true
+        }
+      }
+    },
+    "base_echo": {
+      "speaker": "神秘残响",
+      "portrait": "/characters/protagonist/维维美.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "……你能听见我吗？别怕，我只是一段残响。",
+          "next": "n2"
+        },
+        "n2": {
+          "text": "曾经我也在这艘船上。你想知道些什么？",
+          "choices": [
+            { "text": "你是谁？", "next": "n3" },
+            { "text": "（伸手触碰）", "next": "n4" },
+            { "text": "（转身离开）", "next": "n5" }
+          ]
+        },
+        "n3": {
+          "text": "名字早就忘了……只剩下一点执念。这个给你，拿着。",
+          "effects": [{ "kind": "relic", "id": "black_crown", "count": 1 }],
+          "end": true
+        },
+        "n4": {
+          "text": "一股暖流顺着指尖涌上来……",
+          "effects": [{ "kind": "heal", "percent": 0.25 }],
+          "end": true
+        },
+        "n5": {
+          "text": "……也好。下次再见。",
+          "end": true
+        }
+      }
+    },
+    "world_survivor": {
+      "speaker": "幸存者",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "别、别开枪……我只是路过的。",
+          "next": "n2"
+        },
+        "n2": {
+          "text": "这附近不安全……你也是来捡东西的？",
+          "choices": [
+            { "text": "你还好吗？", "next": "n3" },
+            { "text": "离我远点。", "next": "n4" }
+          ]
+        },
+        "n3": {
+          "text": "……谢谢。这个给你，就当谢礼。",
+          "effects": [{ "kind": "item", "id": "originium_shard", "count": 2 }],
+          "end": true
+        },
+        "n4": {
+          "text": "好好好，我走，我这就走……",
+          "end": true
+        }
+      }
+    }
+  }
+}

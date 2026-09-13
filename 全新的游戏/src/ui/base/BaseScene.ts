@@ -17,6 +17,7 @@ import type { CharacterFxAssetSource, FrameAssetSource } from '../../services/fx
 import { EquipmentLayer } from '../../systems/itemPlayback/EquipmentLayer';
 import { VehicleRide } from '../../systems/itemPlayback/VehicleRide';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
+import { loadFtxCached } from '../../services/fx/FtxAssetCache';
 import baseRooms from '../../config/baseRooms.json';
 
 export interface RoomDef {
@@ -89,11 +90,19 @@ export class BaseScene {
   private grounded = true;
   private wantJump = false;
 
-  // ---- 交互站（F 触发；基地默认 = 加工站，舰内 = 起飞/回家/下船） ----
+  // ---- 交互站（F 触发；基地 = 加工站 + 事件角色，舰内 = 事件角色 + 按钮条） ----
   /** 加工站房间的本地 x（onCraftStation 默认站点用） */
   private craftBayX: number | null = null;
+  /** 加工站回调（与事件站点合并进交互站列表） */
+  private craftCb: (() => void) | null = null;
+  /** ★ 事件站点（对话/事件模块注入：BaseMode/WorldMode 装配） */
+  private eventStations: BaseStation[] = [];
   private stations: BaseStation[] = [];
   private activeStation: BaseStation | null = null;
+  /** ★ 事件 NPC 立绘（固定位贴片；setEventNpcs 全量替换） */
+  private npcQuads: FTXQuad[] = [];
+  /** ★ NPC 立绘异步装载令牌（防过期加载回写） */
+  private npcLoadToken = 0;
   private promptEl: HTMLDivElement;
   /** 提示是否已显示（与 inCraftZone 分开：UI 打开时要临时隐藏） */
   private promptShown = false;
@@ -186,14 +195,51 @@ export class BaseScene {
     this.activeStation = null;
   }
 
-  /** 加工站交互回调（BaseMode 注入：打开加工台覆盖层；= 单站点快捷方式） */
+  /** 加工站交互回调（BaseMode 注入：打开加工台覆盖层） */
   onCraftStation(cb: () => void): void {
-    this.setStations([{
-      x: this.craftBayX ?? 0, z: 0,
-      rx: ROOM_W / 2 - 0.5, rz: 1e9,
-      label: '打开加工台',
-      cb,
-    }]);
+    this.craftCb = cb;
+    this.rebuildStations();
+  }
+
+  /** ★ 事件站点（对话/事件模块注入；与加工站合并） */
+  setEventStations(list: BaseStation[]): void {
+    this.eventStations = list;
+    this.rebuildStations();
+  }
+
+  /** ★ 事件 NPC 立绘（固定位；与站点同源注入。assetUrl 为空 = 不绘制贴片） */
+  setEventNpcs(list: { x: number; z: number; assetUrl?: string }[]): void {
+    const token = ++this.npcLoadToken;
+    for (const q of this.npcQuads) q.dispose();
+    this.npcQuads = [];
+    for (const npc of list) {
+      if (!npc.assetUrl) continue;
+      void loadFtxCached(npc.assetUrl)
+        .then((asset) => {
+          if (token !== this.npcLoadToken) return; // 已过期（场景重建/列表更新）
+          const q = new FTXQuad(this.sceneRef, asset);
+          q.setScaleKeepAspect(2.4);
+          q.setAnchorBottom(true);
+          q.setPosition(npc.x, 0, npc.z);
+          q.render({ frameIndex: 0 });
+          this.npcQuads.push(q);
+        })
+        .catch((err) => console.warn('[事件] NPC 立绘加载失败:', npc.assetUrl, err));
+    }
+  }
+
+  /** 合并加工站 + 事件站点 → 生效交互站列表 */
+  private rebuildStations(): void {
+    const list: BaseStation[] = [...this.eventStations];
+    if (this.craftCb) {
+      list.push({
+        x: this.craftBayX ?? 0, z: 0,
+        rx: ROOM_W / 2 - 0.5, rz: 1e9,
+        label: '打开加工台',
+        cb: this.craftCb,
+      });
+    }
+    this.setStations(list);
   }
 
   /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、F 禁用） */
@@ -271,6 +317,10 @@ export class BaseScene {
     this.equip?.update(dt, this.camera ?? undefined);
     // ★ 载具贴片跟随（圆凳）
     this.vehicleRide?.update(dt, this.camera ?? undefined);
+    // ★ 事件 NPC 立绘：面向相机
+    if (this.camera) {
+      for (const q of this.npcQuads) q.setBillboard(this.camera);
+    }
     // ★ 无人机编队：三帧叠加合成 + 包围角色转圈。
     //   防重叠：每层 4 架（层内 90° 间隔）、逐层半径+高度递增、层内奇偶槽再交错半径/高度，
     //   让正/背面的机体在屏幕上也拉开（纯圆环会让前后机投影到同一位置）
@@ -314,6 +364,9 @@ export class BaseScene {
     this.equip = null;
     this.vehicleRide?.dispose();
     this.vehicleRide = null;
+    for (const q of this.npcQuads) q.dispose();
+    this.npcQuads = [];
+    this.npcLoadToken++;
     for (const d of this.droneAllies) d.view.dispose();
     this.droneAllies.length = 0;
     this.root.traverse((o) => {
@@ -514,6 +567,12 @@ export class BaseScene {
   };
 
   private updateInput(dt: number): void {
+    // ★ UI 遮挡（面板/对话打开）：角色站定（提示隐藏、F 禁用另行处理）
+    if (this.uiBlocking?.() ?? false) {
+      this.moving = false;
+      this.wantJump = false;
+      return;
+    }
     const k = this.keys;
     let mx = 0, mz = 0;
     if (k.has('a') || k.has('arrowleft')) mx -= 1;
