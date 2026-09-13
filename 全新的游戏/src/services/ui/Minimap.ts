@@ -26,7 +26,7 @@ export class Minimap {
   private displaySize: number;
   private windowHalf: number;
   private viewRadius: number;
-  /** ★ 稀疏探索状态（无限持久） */
+  /** ★ 稀疏探索状态（无限持久：run 内不回退；地表色由 raster 地形记录派生） */
   private visited = new Map<number, boolean>();
   /** ★ 复用的地表底图（地形+雾；仅玩家跨格时重建，避免每帧 createImageData/逐像素重算） */
   private baseImg: ImageData | null = null;
@@ -142,7 +142,11 @@ export class Minimap {
         const wx = x0 + ix;
         const i = (iy * ds + ix) * 4;
         if (this.visited.has(cellKeyOf(wx, wz))) {
-          let [r, g, b] = this.raster.terrainColorAt(wx, wz);
+          // ★ 颜色来自地形记录（raster.mapColorAt：实时 chunk 优先，卸载回放快照）
+          const packed = this.raster.mapColorAt(wx, wz);
+          let r = (packed >> 16) & 255;
+          let g = (packed >> 8) & 255;
+          let b = packed & 255;
           // ★ 灰雾是常驻掩码：圈外一律覆盖（无渐变带，像素风格硬边）
           const ddx = wx + 0.5 - px;
           const ddz = wz + 0.5 - pz;
@@ -177,6 +181,16 @@ export class Minimap {
         }
       }
     }
+  }
+
+  /** ★ 探索判定出口（大地图面板共用同一探索记忆） */
+  isExplored(x: number, z: number): boolean {
+    return this.visited.has(cellKeyOf(Math.floor(x), Math.floor(z)));
+  }
+
+  /** 已探索格数（面板信息行） */
+  get exploredCount(): number {
+    return this.visited.size;
   }
 
   dispose(): void {

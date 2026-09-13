@@ -57,6 +57,7 @@ export class DesktopBinding {
         if (e.code === 'KeyI') this.state.pressed.inventory = true;
         if (e.code === 'KeyQ') this.state.pressed.switchItem = true;
         if (e.code === 'KeyF') this.state.pressed.useItem = true;
+        if (e.code === 'KeyM') this.state.pressed.map = true;
         if (e.code === 'Space') this.state.pressed.jump = true;
       }
       this.keyState.set(e.code, true);
@@ -129,7 +130,7 @@ export class DesktopBinding {
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
-      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false, switchItem: false, useItem: false };
+      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false, switchItem: false, useItem: false, map: false };
       this.state.interactions = [];
       this.state.zoomAxis = 0;
       pointerDown = false;
@@ -257,6 +258,13 @@ export class DesktopBinding {
   consumeUseItem(): boolean {
     const v = this.state.pressed.useItem;
     this.state.pressed.useItem = false;
+    return v;
+  }
+
+  /** ★ 消费世界地图键（M） */
+  consumeMap(): boolean {
+    const v = this.state.pressed.map;
+    this.state.pressed.map = false;
     return v;
   }
 

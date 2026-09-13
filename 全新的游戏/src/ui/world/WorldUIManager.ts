@@ -15,6 +15,7 @@ import { InteractionManager } from '../../systems/interaction/InteractionManager
 import { InventoryPanel } from '../shared/InventoryPanel';
 import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/CharacterStatsPanel';
 import { Minimap } from '../../services/ui/Minimap';
+import { MapPanel } from './MapPanel';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
 import { AmmoPanel } from '../../services/ui/AmmoPanel';
@@ -30,6 +31,8 @@ export type FloatingTextType = 'normal' | 'crit' | 'heal' | 'miss' | 'pickup';
 
 export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
+  /** ★ 世界地图面板（M 键；读地形记录表，chunk 卸载不丢） */
+  private mapPanel: MapPanel | null = null;
   private hud: PlayerHud;
   private crosshair: Crosshair;
   private ammoPanel: AmmoPanel;
@@ -84,7 +87,7 @@ export class WorldUIManager extends BaseInteractionUI {
     private session: GameSession,
     private itemManager: ItemManager,
     private interactionManager: InteractionManager,
-    raster: RasterMap,
+    private raster: RasterMap,
   ) {
     super();
     // ★ 独立背包模块：地图模式只暴露玩家背包 + 飞船仓库（隐藏基地层）
@@ -129,6 +132,10 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 每帧更新（高频调用） */
   update(dt: number, ctx: WorldUIState): void {
     this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
+    // ★ 世界地图面板（打开时才重绘）
+    if (this.mapPanel?.isOpen) {
+      this.mapPanel.update(dt, ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
+    }
     // ★ 航行操船期：战斗 HUD（血条/快捷栏/友军列表）不绘制也不更新
     if (this.combatHudVisible) {
       this.hud.update(ctx.playerStats.hp, ctx.playerStats.maxHp);
@@ -308,6 +315,27 @@ export class WorldUIManager extends BaseInteractionUI {
   /** ★ 小地图显隐（舰内房间隐藏；世界/航行保持显示） */
   setMinimapVisible(v: boolean): void {
     this.minimap.setVisible(v);
+  }
+
+  /** ★ 世界地图面板是否打开（输入门控：打开时丢弃视角/缩放） */
+  get isMapPanelOpen(): boolean {
+    return this.panels.isOpen('map-panel');
+  }
+
+  /** ★ 开关世界地图面板（M 键；地形记录表 + 探索记忆，chunk 卸载不丢） */
+  toggleMapPanel(): void {
+    if (this.panels.isOpen('map-panel')) {
+      this.closePanel('map-panel');
+      return;
+    }
+    this.mapPanel ??= new MapPanel(this.raster, this.minimap);
+    const panel = this.mapPanel;
+    this.openPanel({
+      id: 'map-panel',
+      onOpen: () => panel.open(() => this.closePanel('map-panel')),
+      onClose: () => panel.close(),
+      render: () => panel.root,
+    });
   }
 
   /** ★ 交互提示（靠近舰船/事件 NPC 按 E；探索期显示，其余隐藏；文案由调用方给） */
@@ -649,6 +677,8 @@ export class WorldUIManager extends BaseInteractionUI {
   override dispose(): void {
     super.dispose();
     this.minimap.dispose();
+    this.mapPanel?.dispose();
+    this.mapPanel = null;
     this.hud.dispose();
     this.crosshair.dispose();
     this.ammoPanel.dispose();

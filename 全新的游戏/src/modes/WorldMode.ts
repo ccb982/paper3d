@@ -985,15 +985,24 @@ export class WorldMode implements IGameMode {
     const attackPressed = this.binding.consumeAttack();
     const look = this.binding.consumeLook();
     let zoom = this.binding.consumeZoom();
+    // ★ 大地图打开：鼠标用于拖拽/缩放 → 丢弃视角与缩放输入（防镜头跟着转/拉）
+    if (this.worldUIManager.isMapPanelOpen) {
+      look.x = 0;
+      look.y = 0;
+      zoom = 0;
+    }
     // ★ 舰内房间：世界输入全部不消费（房间自己的键盘监听驱动行走）
     const inInterior = this.phase === 'interior';
     // ★ 对话中：世界输入全部不消费（指针解锁、角色站定；按键由对话视图处理）
     const talking = this.dialogue?.isActive ?? false;
     const uiLocked = inInterior || talking;
 
-    // ★ 按 I 键打开/关闭背包
+    // ★ 按 I 键打开/关闭背包；M 打开/关闭世界地图（读持久小地图表）
     if (!uiLocked && this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
+    }
+    if (!uiLocked && this.binding.consumeMap()) {
+      this.worldUIManager.toggleMapPanel();
     }
     // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
     //   ★ Q 按住 + 滚轮 = 直接前后切换弹药/物品（不缩放视角）；点按 Q 仍顺序切换
@@ -1321,7 +1330,9 @@ export class WorldMode implements IGameMode {
     // ---- 玩家发射（★ 默认攻击走原路径：不消耗弹药；弹药出池留待后续弹药武器接入） ----
     //    ★ 基础间隔 0.9s（2026-09-10 用户定调）× 攻速修正（装备/遗物 attackSpeed 点数）
     this.bulletCooldown -= dt;
-    if (this.phase === 'explore' && !this.player.dead && !talking && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
+    if (this.phase === 'explore' && !this.player.dead && !talking
+      && !this.worldUIManager.isMapPanelOpen // ★ 地图上拖拽/点击不触发开火
+      && this.bulletCooldown <= 0 && (input.held.attack || attackPressed)) {
       this.bulletCooldown = PLAYER_ATTACK_INTERVAL * 100 / (100 + queryFinalStats(this.player).attackSpeed);
       this.firePlayerBullet();
     }
@@ -3034,6 +3045,7 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setMinimapVisible(false);
     this.worldUIManager?.setDockButtonVisible(false);
     this.worldUIManager?.setBoardPrompt(false);
+    this.worldUIManager?.closePanel('map-panel');
     this.worldUIManager?.setAssaultBanner('舰内 · 驾驶舱', false);
     // ★ 与基地模式同款：舰内关闭天空/云/月亮/水的离屏 pass
     //   （否则离屏 RT 与主渲染形成 feedback loop：GL_INVALID_OPERATION）

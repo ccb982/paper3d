@@ -60,6 +60,10 @@ export class RasterMap {
   /** ★ 挖坑层数持久层（2026-09-12）：chunk 数据按距离卸载后，被运行时挖过的
    *  层数在此保留（3.6KB/chunk，仅脏块入表）；回程再加载时原样恢复（坑不愈合）。 */
   private levelsStore = new Map<number, Uint8Array>();
+  /** ★ 地形记录表（小地图/大地图用）：已生成 chunk 的 blockTypes 快照（225B/块）。
+   *  chunk 视觉/物理/烘焙照常卸载，此表不卸载 → 地图可回放；
+   *  颜色由 tileById 派生（与地形同源）→ 地图永远和生成数据一致。 */
+  private mapRecords = new Map<number, Uint8Array>();
   /** 被运行时挖过的 chunk（evict 时把 levels 移入 levelsStore） */
   private dirtyLevelKeys = new Set<number>();
   /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
@@ -115,6 +119,7 @@ export class RasterMap {
         this.levelsStore.set(key, cd.levels);
         this.dirtyLevelKeys.delete(key);
       }
+      this.mapRecords.set(key, cd.blockTypes); // ★ 留地形记录（地图回放用）
       this.chunks.delete(key);
       this.chunkSourceCache.delete(key);
       this.apronEdgeCache.delete(key);
@@ -212,6 +217,7 @@ export class RasterMap {
     this.plinthTileCache.clear();
     this.levelsStore.clear();      // ★ 挖坑层数随世界重建清空（与旧语义一致）
     this.dirtyLevelKeys.clear();
+    this.mapRecords.clear();       // ★ 地形记录随世界重建清空
     this.pendingLoads.length = 0;
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
@@ -478,6 +484,28 @@ export class RasterMap {
   /** 基准色 RGB（纯净无抖动；小地图消费） */
   terrainColorAt(x: number, z: number): [number, number, number] {
     return this.tileDefAt(x, z).baseRgb;
+  }
+
+  /** ★ 小地图/大地图采样：已加载 chunk 读实时数据，已卸载回放地形记录，从未生成 → flat。
+   *  与 tileDefAt 的区别：后者对未加载 chunk 直接返 flat（会被误画）；本方法读记录表。 */
+  mapTileAt(x: number, z: number): TileDef {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const key = chunkKeyOf(cx, cz);
+    const bx = Math.floor((x - cx * CHUNK_SIZE) / 4);
+    const bz = Math.floor((z - cz * CHUNK_SIZE) / 4);
+    const idx = bz * 15 + bx;
+    const chunk = this.chunks.get(key);
+    if (chunk) return tileById(chunk.blockTypes[idx]);
+    const rec = this.mapRecords.get(key);
+    if (rec) return tileById(rec[idx]);
+    return tileById(0);
+  }
+
+  /** ★ 地图色（mapTileAt 的颜色出口；0xRRGGBB 打包便于逐像素写图） */
+  mapColorAt(x: number, z: number): number {
+    const [r, g, b] = this.mapTileAt(x, z).baseRgb;
+    return (r << 16) | (g << 8) | b;
   }
 
   // ============ 实体索引（全局 cell，无限） ============

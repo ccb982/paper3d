@@ -1,0 +1,316 @@
+// ============================================================
+// MapPanel.ts —— 世界地图面板（M 键；读持久小地图表）
+// ============================================================
+// 定位：左上角 Minimap 的"全屏版"——数据源同一张 minimapTable
+//   （世界格 → 探索时采样的地表色），因此 chunk 被卸载后依旧可回放。
+// 交互：
+//   · 滚轮缩放（px/米）、拖拽平移（拖动后停止跟随玩家）
+//   · 「回到玩家」重新跟随；M / Esc 关闭
+// 标记：白=玩家 青=舰船 黄=NPC 红=敌人（仅已探索格）
+// ============================================================
+
+import type { EntityBase } from '../../entity/EntityBase';
+import type { RasterMap } from '../../services/map/RasterMap';
+import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
+
+/** 探索记忆（Minimap 实现；地形记录由 RasterMap 提供——地图不再自建彩色表） */
+export interface MapPanelMemory {
+  isExplored(x: number, z: number): boolean;
+  readonly exploredCount: number;
+}
+
+const CANVAS_W = 1000;
+const CANVAS_H = 620;
+/** 未探索格背景 */
+const DARK: [number, number, number] = [6, 9, 15];
+const MIN_SCALE = 0.6;
+const MAX_SCALE = 12;
+
+export class MapPanel {
+  readonly root: HTMLDivElement;
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private gate: HTMLDivElement;
+  private off: HTMLCanvasElement;
+  private offCtx: CanvasRenderingContext2D;
+  private img: ImageData | null = null;
+  private infoEl: HTMLDivElement;
+
+  private open_ = false;
+  private onClose: (() => void) | null = null;
+
+  /** 视图：中心世界坐标 + 像素/米 */
+  private centerX = 0;
+  private centerZ = 0;
+  private scale = 3;
+  /** 跟随玩家（拖动后关闭；「回到玩家」恢复） */
+  private follow = true;
+  private dragging = false;
+  private dragLast = { x: 0, y: 0 };
+  private redrawAccum = 0;
+  private dirty = true;
+
+  constructor(
+    private readonly raster: RasterMap,
+    private readonly memory: MapPanelMemory,
+    parent: HTMLElement = document.body,
+  ) {
+    this.root = document.createElement('div');
+    this.root.style.cssText = [
+      'width:min(1040px,92vw)', 'box-sizing:border-box', 'padding:12px 14px',
+      'display:none', 'flex-direction:column', 'gap:8px',
+      'background:rgba(8,13,22,0.97)', 'border:1px solid rgba(110,170,235,0.45)',
+      'border-radius:12px', 'box-shadow:0 10px 40px rgba(0,0,0,0.6)',
+      'color:#e8f0fa', 'font:14px "Microsoft YaHei",sans-serif', 'user-select:none',
+    ].join(';');
+
+    // 标题栏
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    const title = document.createElement('div');
+    title.textContent = '世界地图';
+    title.style.cssText = 'font-size:16px;font-weight:bold;color:#8ac8ff;letter-spacing:2px;';
+    const spacer = document.createElement('div');
+    spacer.style.cssText = 'flex:1 1 auto;';
+    const mkBtn = (label: string, cb: () => void): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = [
+        'padding:5px 14px', 'cursor:pointer', 'border-radius:6px',
+        'font:13px "Microsoft YaHei",sans-serif', 'color:#cfe8ff',
+        'background:rgba(26,44,68,0.9)', 'border:1px solid rgba(110,170,235,0.45)',
+      ].join(';');
+      b.addEventListener('click', cb);
+      return b;
+    };
+    const recenter = mkBtn('回到玩家', () => { this.follow = true; this.dirty = true; });
+    const close = mkBtn('关闭 (M)', () => this.onClose?.());
+    head.append(title, spacer, recenter, close);
+
+    // 画布
+    const box = document.createElement('div');
+    box.style.cssText = 'position:relative;border-radius:8px;overflow:hidden;border:1px solid rgba(70,110,160,0.4);';
+    this.canvas = document.createElement('canvas');
+    this.canvas.width = CANVAS_W;
+    this.canvas.height = CANVAS_H;
+    this.canvas.style.cssText = [
+      'display:block', 'width:100%', 'height:auto', 'cursor:grab',
+      'image-rendering:pixelated', 'background:#04060a', 'touch-action:none',
+    ].join(';');
+    this.ctx = this.canvas.getContext('2d')!;
+    this.gate = document.createElement('div');
+    box.append(this.canvas, this.gate);
+
+    // 底部信息
+    this.infoEl = document.createElement('div');
+    this.infoEl.style.cssText = 'font-size:12px;color:#7fa8cd;line-height:1.6;';
+
+    this.root.append(head, box, this.infoEl);
+
+    // 离屏（1 像素 = 1 米；放大绘制）
+    this.off = document.createElement('canvas');
+    this.off.width = 1;
+    this.off.height = 1;
+    this.offCtx = this.off.getContext('2d')!;
+
+    // ---- 交互 ----
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const f = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+      this.scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this.scale * f));
+      this.dirty = true;
+    }, { passive: false });
+    this.canvas.addEventListener('mousedown', (e) => {
+      this.dragging = true;
+      this.follow = false;
+      this.dragLast = { x: e.clientX, y: e.clientY };
+      this.canvas.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+    const onMove = (e: MouseEvent): void => {
+      if (!this.dragging) return;
+      const rect = this.canvas.getBoundingClientRect();
+      const k = CANVAS_W / Math.max(1, rect.width);
+      this.centerX -= (e.clientX - this.dragLast.x) * k / this.scale;
+      this.centerZ -= (e.clientY - this.dragLast.y) * k / this.scale;
+      this.dragLast = { x: e.clientX, y: e.clientY };
+      this.dirty = true;
+    };
+    const onUp = (): void => {
+      if (!this.dragging) return;
+      this.dragging = false;
+      this.canvas.style.cursor = 'grab';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    this._onMove = onMove;
+    this._onUp = onUp;
+
+    parent.appendChild(this.root);
+  }
+
+  private _onMove: (e: MouseEvent) => void;
+  private _onUp: () => void;
+
+  get isOpen(): boolean {
+    return this.open_;
+  }
+
+  open(onClose: () => void): void {
+    this.onClose = onClose;
+    this.open_ = true;
+    this.follow = true;
+    this.dirty = true;
+    this.root.style.display = 'flex';
+    window.addEventListener('keydown', this.onKeyDown, true);
+  }
+
+  close(): void {
+    if (!this.open_) return;
+    this.open_ = false;
+    this.onClose = null;
+    this.dragging = false;
+    this.root.style.display = 'none';
+    window.removeEventListener('keydown', this.onKeyDown, true);
+  }
+
+  dispose(): void {
+    this.close();
+    window.removeEventListener('mousemove', this._onMove);
+    window.removeEventListener('mouseup', this._onUp);
+    this.root.remove();
+  }
+
+  /** 每帧驱动（打开时；重绘节流 ~8Hz，拖拽/缩放立即） */
+  update(dt: number, px: number, pz: number, yaw: number, entities: EntityBase[]): void {
+    if (!this.open_) return;
+    if (this.follow) {
+      this.centerX = px;
+      this.centerZ = pz;
+      this.dirty = true;
+    }
+    this.redrawAccum += dt;
+    if (this.dirty || this.redrawAccum >= 0.12) {
+      this.redrawAccum = 0;
+      this.dirty = false;
+      this.render(px, pz, yaw, entities);
+    }
+  }
+
+  // ============================================================
+  // 渲染
+  // ============================================================
+
+  private render(px: number, pz: number, yaw: number, entities: EntityBase[]): void {
+    const vw = Math.max(8, Math.ceil(CANVAS_W / this.scale));
+    const vh = Math.max(8, Math.ceil(CANVAS_H / this.scale));
+    const x0 = Math.floor(this.centerX - vw / 2);
+    const z0 = Math.floor(this.centerZ - vh / 2);
+
+    // 1m/px 底图（持久表；无记录 = 未探索暗色）
+    if (this.off.width !== vw || this.off.height !== vh) {
+      this.off.width = vw;
+      this.off.height = vh;
+      this.img = null;
+    }
+    if (!this.img) this.img = this.offCtx.createImageData(vw, vh);
+    const img = this.img;
+    const d = img.data;
+    for (let iz = 0; iz < vh; iz++) {
+      const wz = z0 + iz;
+      for (let ix = 0; ix < vw; ix++) {
+        const wx = x0 + ix;
+        const i = (iz * vw + ix) * 4;
+        if (this.memory.isExplored(wx, wz)) {
+          // ★ 地形记录取色（实时 chunk 优先，卸载回放 blockTypes 快照）
+          const packed = this.raster.mapColorAt(wx, wz);
+          d[i] = (packed >> 16) & 255;
+          d[i + 1] = (packed >> 8) & 255;
+          d[i + 2] = packed & 255;
+        } else {
+          d[i] = DARK[0];
+          d[i + 1] = DARK[1];
+          d[i + 2] = DARK[2];
+        }
+        d[i + 3] = 255;
+      }
+    }
+    this.offCtx.putImageData(img, 0, 0);
+
+    const ctx = this.ctx;
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#04060a';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.drawImage(this.off, 0, 0, vw, vh, 0, 0, vw * this.scale, vh * this.scale);
+
+    // 区块网格（60m；淡线）
+    ctx.strokeStyle = 'rgba(120,170,220,0.12)';
+    ctx.lineWidth = 1;
+    const gx0 = Math.ceil(x0 / CHUNK_SIZE) * CHUNK_SIZE;
+    for (let wx = gx0; wx < x0 + vw; wx += CHUNK_SIZE) {
+      const sx = Math.round((wx - x0) * this.scale) + 0.5;
+      ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, CANVAS_H); ctx.stroke();
+    }
+    const gz0 = Math.ceil(z0 / CHUNK_SIZE) * CHUNK_SIZE;
+    for (let wz = gz0; wz < z0 + vh; wz += CHUNK_SIZE) {
+      const sy = Math.round((wz - z0) * this.scale) + 0.5;
+      ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(CANVAS_W, sy); ctx.stroke();
+    }
+
+    // 实体标记
+    const toX = (wx: number): number => (wx - x0) * this.scale;
+    const toY = (wz: number): number => (wz - z0) * this.scale;
+    for (const e of entities) {
+      const info = e.minimapInfo;
+      if (info.kind === 'player' || info.kind === 'decoration') continue;
+      if (info.kind === 'item' && info.moving) continue;
+      const ex = e.position.x;
+      const ez = e.position.z;
+      if (info.kind === 'enemy' && !this.memory.isExplored(ex, ez)) continue;
+      const sx = toX(ex);
+      const sy = toY(ez);
+      if (sx < -6 || sy < -6 || sx > CANVAS_W + 6 || sy > CANVAS_H + 6) continue;
+      ctx.fillStyle = info.kind === 'enemy' ? '#ff4444'
+        : info.kind === 'ship' ? '#66e0ff'
+        : info.kind === 'npc' ? '#ffd75e'
+        : '#ffdd55';
+      const s = info.kind === 'ship' || info.kind === 'npc' ? 5 : 3;
+      ctx.fillRect(sx - s / 2, sy - s / 2, s, s);
+    }
+
+    // 玩家箭头（屏幕朝向 = 相机偏航；与 Minimap 同款旋转）
+    const acx = toX(px);
+    const acy = toY(pz);
+    ctx.save();
+    ctx.translate(acx, acy);
+    ctx.rotate(Math.PI - yaw);
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#0a1420';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, -9);
+    ctx.lineTo(-6, 7);
+    ctx.lineTo(0, 3.5);
+    ctx.lineTo(6, 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // 信息行
+    const fmt = (v: number): string => v.toFixed(1);
+    this.infoEl.textContent =
+      `已探索 ${this.memory.exploredCount} 格　·　视野中心 (${fmt(this.centerX)}, ${fmt(this.centerZ)})`
+      + `${this.follow ? '（跟随玩家）' : '（拖拽定位）'}　·　缩放 ${this.scale.toFixed(1)} 像素/米`
+      + '　·　白=玩家 青=舰船 黄=NPC 红=敌人';
+  }
+
+  private onKeyDown = (e: KeyboardEvent): void => {
+    if (!this.open_) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.onClose?.();
+    }
+  };
+}
