@@ -175,12 +175,42 @@ function colorizeCoarse(
   }
 }
 
-/** 空水体（粗块不建水面） */
-function emptyWater(): WaterSurfaceRaw {
+/** ★ 粗块静水（2026-09-14）：液块 → 每个 4m 块一张平 quad（y=0 水面，与细化无补丁水位一致）。
+ *  供粗加载/航行期看见湖盆/孤岛；不抖动（无 FFT/无 border 缝合/无时间动画）。 */
+function buildCoarseWater(table: FaceTable, src: BlockSource): WaterSurfaceRaw {
+  const verts: number[] = [];
+  const nors: number[] = [];
+  const uvs: number[] = [];
+  const deep: number[] = [];
+  const border: number[] = [];
+  const spin: number[] = [];
+  const idx: number[] = [];
+  const HALF = CHUNK_SIZE * 0.5;
+  for (let bz = 0; bz < BLOCKS_PER_SIDE; bz++) {
+    for (let bx = 0; bx < BLOCKS_PER_SIDE; bx++) {
+      const info = src.blockAt(table.cx * BLOCKS_PER_SIDE + bx, table.cz * BLOCKS_PER_SIDE + bz);
+      if (!info) continue;
+      if (tileById(info.id).genRole !== 'liquid') continue;
+      const x0 = bx * 4 - HALF, z0 = bz * 4 - HALF;
+      const x1 = x0 + 4, z1 = z0 + 4;
+      const base = verts.length / 3;
+      // 顶点序 v0(x0,z0) v1(x1,z0) v2(x1,z1) v3(x0,z1)；索引保证法线朝上
+      verts.push(x0, 0, z0, x1, 0, z0, x1, 0, z1, x0, 0, z1);
+      for (let k = 0; k < 4; k++) {
+        nors.push(0, 1, 0);
+        deep.push(1.5); // 水底 -1.5 的水深（粗块材质不读，仅保持语义一致）
+        border.push(1); // 静水全钉死（无需 FFT 位移）
+        spin.push(0, 0);
+      }
+      // uv = 世界平面坐标（chunk 局部即可：水面平铺纹理按世界尺度重复）
+      uvs.push(x0, z0, x1, z0, x1, z1, x0, z1);
+      idx.push(base, base + 3, base + 2, base, base + 2, base + 1);
+    }
+  }
   return {
-    vertices: new Float32Array(0), normals: new Float32Array(0), uvs: new Float32Array(0),
-    deep: new Float32Array(0), border: new Float32Array(0), spin: new Float32Array(0),
-    indices: new Uint32Array(0), quads: 0,
+    vertices: new Float32Array(verts), normals: new Float32Array(nors), uvs: new Float32Array(uvs),
+    deep: new Float32Array(deep), border: new Float32Array(border), spin: new Float32Array(spin),
+    indices: new Uint32Array(idx), quads: idx.length / 6,
   };
 }
 
@@ -193,7 +223,8 @@ export function computeTableGeometry(
   dirty?: number[] | null,
   masks?: { top: Uint8Array; side: Uint8Array } | null,
   levelAt?: LevelAtWorld,
-  /** ★ 粗块模式：只出硬边几何（无 fine/弧边/水面/物理分区），顶点色=材质一级底色 */
+  /** ★ 粗块模式：只出硬边几何（无 fine/弧边/物理分区），顶点色=材质一级底色；
+   *  水面 = 液块平 quad 静水（不抖动；粗加载/航行期可见湖盆/孤岛） */
   coarse = false,
   /** ★ 粗块组调色（与细化 uMatBase 同源；缺省 = 中性不调色） */
   palette?: GroupPalette,
@@ -219,7 +250,7 @@ export function computeTableGeometry(
         colors: wall.colors as Float32Array, shade: wall.shade as Float32Array,
         patchW: wall.patchW as Float32Array, indices: wall.indices, topTriCount: wall.topTriCount,
       },
-      water: emptyWater(),
+      water: buildCoarseWater(baseTable, src),
       cells: [],
       topBounds: yBoundsOf(top.vertices),
       wallBounds: yBoundsOf(wall.vertices),

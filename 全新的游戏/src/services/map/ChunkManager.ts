@@ -31,6 +31,7 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { resolveTileLook } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, PATCH_LEVEL_WIDTH, type FaceGeometry } from './FaceBuild';
+import { vnoise } from './TerrainNoise';
 import { computeTableGeometry, type PatchGeomResult, type PatchGroundCell, type GeomBounds } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
@@ -119,6 +120,36 @@ function packVolumes(v: { x: number; z: number; y: number; r: number; h: number 
     out[i * 5 + 4] = v[i].h;
   }
   return out;
+}
+
+/** ★ 粗块静水纹理（一次性生成；低饱和蓝 + 柔和斑驳的水纹，**不随时间变化**）：
+ *  uv = chunk 局部世界坐标（米），repeat 1/24 → 每 24m 平铺一张。
+ *  与细化 FFT 动水区分：这里只求"粗加载/航行期一眼能认出是水"。 */
+function makeStaticWaterTexture(): THREE.CanvasTexture {
+  const S = 64;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d')!;
+  const img = ctx.createImageData(S, S);
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const i = (y * S + x) * 4;
+      // 两层静态噪声叠加（低频起伏 + 细纹）→ 斑驳水色
+      const n = vnoise(x / 10, y / 10, 7711) * 0.62 + vnoise(x / 3.5, y / 3.5, 991) * 0.38;
+      const k = 0.72 + (n - 0.5) * 0.5;
+      img.data[i] = Math.min(255, Math.round(44 * k));
+      img.data[i + 1] = Math.min(255, Math.round(108 * k));
+      img.data[i + 2] = Math.min(255, Math.round(168 * k));
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1 / 24, 1 / 24);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 export class ChunkManager {
@@ -438,6 +469,9 @@ export class ChunkManager {
   private static readonly BAKE_CACHE_CAP = 32;
   private bakeTrimAccum = 0;
   private _coarseMat: THREE.MeshBasicMaterial | null = null;
+  /** ★ 粗块静水材质/纹理（静态不抖动；惰性创建，dispose 释放） */
+  private _coarseWaterMat: THREE.MeshBasicMaterial | null = null;
+  private _coarseWaterTex: THREE.CanvasTexture | null = null;
 
   /** ★ 粗块模式开关（WorldMode：航行开、停靠关；关后粗块保留作远景 LOD） */
   setCoarseMode(v: boolean): void {
@@ -451,6 +485,21 @@ export class ChunkManager {
   private coarseMat(): THREE.MeshBasicMaterial {
     this._coarseMat ??= new THREE.MeshBasicMaterial({ vertexColors: true });
     return this._coarseMat;
+  }
+
+  /** ★ 粗块静水材质：静态水纹（不滚动/不抖动）+ 半透明。
+   *  与细化 WaterMaterial（FFT 动水、航行期整批隐藏）区分——粗加载/航行期也能看见湖盆/孤岛 */
+  private coarseWaterMat(): THREE.MeshBasicMaterial {
+    if (this._coarseWaterMat) return this._coarseWaterMat;
+    this._coarseWaterTex = makeStaticWaterTexture();
+    this._coarseWaterMat = new THREE.MeshBasicMaterial({
+      map: this._coarseWaterTex,
+      transparent: true,
+      opacity: 0.8,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    return this._coarseWaterMat;
   }
 
   /** ★ 水面网格显隐（航行期隐藏：不渲染水、不跑水面 FFT 着色；停靠恢复）。
@@ -743,6 +792,10 @@ export class ChunkManager {
     this.clearCoarse();
     this._coarseMat?.dispose();
     this._coarseMat = null;
+    this._coarseWaterMat?.dispose();
+    this._coarseWaterMat = null;
+    this._coarseWaterTex?.dispose();
+    this._coarseWaterTex = null;
     coarsePatch.clearCaches();    // ★ 粗池静态源缓存同清
     terrainPatch.clearCaches();   // ★ 增量基座缓存随 dispose 作废
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
@@ -1185,7 +1238,7 @@ export class ChunkManager {
     while (n-- > 0 && this.coarseQueue.length > 0) this.coarseQueue.shift()!();
   }
 
-  /** ★ 由粗几何建粗网格：纯色顶点色 + MeshBasic（无纹理/水面/装饰/物理） */
+  /** ★ 由粗几何建粗网格：纯色顶点色 + MeshBasic + 静态水面（无烘焙/装饰/物理） */
   private buildCoarseMesh(cx: number, cz: number, g: PatchGeomResult): void {
     const key = chunkKeyOf(cx, cz);
     if (this.coarseMeshes.has(key) || this.meshes.has(key) || this.voidKeys.has(key)) return;
@@ -1205,6 +1258,19 @@ export class ChunkManager {
     };
     addPart(g.top);
     addPart(g.wall);
+    // ★ 粗块静水：液块平 quad + 静态水纹材质（不抖动）——粗加载/航行期可见湖盆/孤岛；
+    //   不标记 isWater（不参与航行期整批隐藏——那套是给细化 FFT 动水的）
+    if (g.water.indices.length > 0) {
+      const wgeo = new THREE.BufferGeometry();
+      wgeo.setAttribute('position', new THREE.BufferAttribute(g.water.vertices, 3));
+      wgeo.setAttribute('normal', new THREE.BufferAttribute(g.water.normals, 3));
+      wgeo.setAttribute('uv', new THREE.BufferAttribute(g.water.uvs, 2));
+      wgeo.setIndex(new THREE.BufferAttribute(g.water.indices, 1));
+      wgeo.computeBoundingSphere();
+      const wmesh = new THREE.Mesh(wgeo, this.coarseWaterMat());
+      wmesh.renderOrder = 10;
+      group.add(wmesh);
+    }
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
     this.scene.add(group);
     this.coarseMeshes.set(key, group);

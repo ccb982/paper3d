@@ -2,7 +2,7 @@
 // coarsePatch.worker —— 粗块几何 Worker（地图构建两级的第一级）
 // ============================================================
 // 收 3×3 邻域数据拷贝 → 纯表驱动几何（computeTableGeometry coarse=true：
-// 硬边、纯色顶点色、无 fine/弧边/水面/物理）→ 零拷贝回传。
+// 硬边、纯色顶点色、无 fine/弧边/物理；含液块平 quad 静水）→ 零拷贝回传。
 // 与 terrainPatch.worker（细化）分池，互不抢队列。
 
 import { computeTableGeometry, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
@@ -40,6 +40,9 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.top.colors); push(r.top.patchW); push(r.top.indices);
   push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
+  // ★ 粗块静水（液块平 quad；粗加载/航行期可见）
+  push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
+  push(r.water.deep); push(r.water.border); push(r.water.spin); push(r.water.indices);
   return out;
 }
 

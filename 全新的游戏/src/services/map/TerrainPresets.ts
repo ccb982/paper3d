@@ -2,12 +2,14 @@
 // TerrainPresets —— 地形结构预设（chunk 级形态模板；与材质解耦）
 // ============================================================
 // 定位（2026-09-13 定调）：只负责「精细层之前」的结构生成——
-//   ① 区域级抽预设：每 4×4 chunk 一个区域，区域种子决定本区预设（可带边缘过渡）
+//   ① 区域级抽预设：每 2×2 chunk（120m）一个区域；四邻+对角去重 →
+//      相邻区域形态必不同，同形态至少隔 240m 才会重现（2026-09-14 优化：破"连片"）
 //   ② 块级预设种子：同一种预设在不同 chunk/区域形态各异（salt 驱动）
 //   ③ 输出 = 225 角色槽位（ROLE_*）；材质（TileGroups 选组/调色）仍走原 L2，互不影响
 // 下游不变：L3 抽取 / L4 高度与连通 / L5 输出 / 精细层（FaceTable/FaceBuild）全部沿用。
 //
 // 加新形态 = 注册一个预设（build 返回角色槽位）；不改任何下游代码。
+// ★ 2026-09-14：移除「旷野」「迷宫」两个重复无特色预设（高原来承接平原替身）。
 // ============================================================
 
 import { hash2, vnoise } from './TerrainNoise';
@@ -103,8 +105,8 @@ export function allPresets(): TerrainPreset[] {
 
 // ============ 区域抽取（预设 + 种子） ============
 
-/** 区域边长（chunk）：4×4 = 240m 一个形态区域 */
-const REGION = 4;
+/** 区域边长（chunk）：2×2 = 120m 一个形态区域（2026-09-14：4→2 破"同一地形连片"） */
+const REGION = 2;
 
 function weightedPickPreset(r: number): TerrainPreset {
   const pool = ORDER.map((k) => REGISTRY.get(k)!).filter((p) => p.weight > 0);
@@ -120,20 +122,22 @@ function weightedPickPreset(r: number): TerrainPreset {
 
 const presetCache = new Map<number, TerrainPreset>();
 
-// ---- ★「325」稀疏投放（2026-09-13 用户定调：≈2% 且不成片） ----
-// 每区域至多 1 块，且候选格限定在区域内部 2×2 → 相邻区域的 325 至少隔 2 块（120m）
-const P325_REGION = 0.32;
+// ---- ★「325」稀疏投放（≈2% 且不成片；投放区与形态区域解耦） ----
+// 以 4×4 chunk 为投放区：每区至多 1 块，候选格限定区域内部 2×2 →
+// 相邻投放区的 325 至少隔 2 块（120m）
+const P325_REGION_SIZE = 4;
+const P325_CHANCE = 0.32;
 
 /** 该 chunk 是否是「325」（独立于区域预设抽样） */
 function is325Chunk(seed: number, cx: number, cz: number): boolean {
-  const rx = Math.floor(cx / REGION);
-  const rz = Math.floor(cz / REGION);
-  if (hash2(rx, rz, seed + 9606) >= P325_REGION) return false;
+  const rx = Math.floor(cx / P325_REGION_SIZE);
+  const rz = Math.floor(cz / P325_REGION_SIZE);
+  if (hash2(rx, rz, seed + 9606) >= P325_CHANCE) return false;
   // 候选格：区域内部 2×2（(1,1)~(2,2)），远离边界 → 不会与邻区 325 贴脸
   const pick = Math.floor(hash2(rx, rz, seed + 9616) * 4);
   const lx = 1 + (pick % 2);
   const lz = 1 + Math.floor(pick / 2);
-  return cx - rx * REGION === lx && cz - rz * REGION === lz;
+  return cx - rx * P325_REGION_SIZE === lx && cz - rz * P325_REGION_SIZE === lz;
 }
 
 /** 区域原始抽样（纯 hash；去重比较用，不含去重位移） */
@@ -141,12 +145,23 @@ function regionPickRaw(seed: number, rx: number, rz: number): TerrainPreset {
   return weightedPickPreset(hash2(rx, rz, seed + 9101));
 }
 
-/** 区域预设（★ 去重：与左/上邻区同名 → 剔除该名后按权重重抽；比例不偏） */
+/** 邻区原始 key 集合（左/上/左上/右上；纯 hash → 与求值顺序无关） */
+function neighborKeys(seed: number, rx: number, rz: number): Set<string> {
+  return new Set([
+    regionPickRaw(seed, rx - 1, rz).key,
+    regionPickRaw(seed, rx, rz - 1).key,
+    regionPickRaw(seed, rx - 1, rz - 1).key,
+    regionPickRaw(seed, rx + 1, rz - 1).key,
+  ]);
+}
+
+/** 区域预设（★ 去重：与任一相关邻区同名 → 剔除全部冲突名后按权重重抽；比例不偏） */
 function regionPick(seed: number, rx: number, rz: number): TerrainPreset {
   const p = regionPickRaw(seed, rx, rz);
-  const same = p.key === regionPickRaw(seed, rx - 1, rz).key || p.key === regionPickRaw(seed, rx, rz - 1).key;
-  if (!same) return p;
-  const pool = ORDER.map((k) => REGISTRY.get(k)!).filter((q) => q.weight > 0 && q.key !== p.key);
+  const bad = neighborKeys(seed, rx, rz);
+  if (!bad.has(p.key)) return p;
+  const pool = ORDER.map((k) => REGISTRY.get(k)!).filter((q) => q.weight > 0 && !bad.has(q.key));
+  if (pool.length === 0) return p;
   let total = 0;
   for (const q of pool) total += q.weight;
   let r = hash2(rx, rz, seed + 9505) * total;
@@ -157,30 +172,13 @@ function regionPick(seed: number, rx: number, rz: number): TerrainPreset {
   return pool[pool.length - 1];
 }
 
-/** 该 chunk 的预设（区域一致 + 边缘 20% 过渡） */
+/** 该 chunk 的预设（区域一致；小区域不做边缘过渡——跨块连通由端口保证） */
 export function pickPreset(seed: number, cx: number, cz: number): TerrainPreset {
   const key = ((cx + 32768) * 65536 + (cz + 32768)) ^ seed;
   const cached = presetCache.get(key);
   if (cached) return cached;
-  let rx = Math.floor(cx / REGION);
-  let rz = Math.floor(cz / REGION);
-  const lx = cx - rx * REGION;
-  const lz = cz - rz * REGION;
-  // 边缘过渡：靠边的 chunk 有概率跟随邻区（形态交界不硬切）
-  if (hash2(cx, cz, seed + 9303) < 0.2) {
-    const cands: number[] = [];
-    if (lx === 0) cands.push(0);            // 左邻
-    if (lx === REGION - 1) cands.push(1);   // 右邻
-    if (lz === 0) cands.push(2);            // 上邻
-    if (lz === REGION - 1) cands.push(3);   // 下邻
-    if (cands.length > 0) {
-      const c = cands[Math.floor(hash2(cx, cz, seed + 9404) * cands.length)];
-      if (c === 0) rx--;
-      else if (c === 1) rx++;
-      else if (c === 2) rz--;
-      else rz++;
-    }
-  }
+  const rx = Math.floor(cx / REGION);
+  const rz = Math.floor(cz / REGION);
   const p = regionPick(seed, rx, rz);
   const out = is325Chunk(seed, cx, cz) ? (REGISTRY.get('field325') ?? p) : p;
   if (presetCache.size > 4096) presetCache.clear();
@@ -334,52 +332,11 @@ function hazards(gen: GroupDef['gen'] | undefined): { water: number; pit: number
   return { water: wm, pit: pm };
 }
 
-/** 建筑密度偏置 → 可用墙比例（0.5 = 中性） */
-function wallRatio(gen: GroupDef['gen'] | undefined, base: number): number {
-  const bias = gen?.densityBias ?? 0;
-  return Math.min(0.85, Math.max(0.05, base - bias));
-}
-
 // ============================================================
 // 内置预设
 // ============================================================
 
-/** ① 旷野：大面地面 + 稀疏墙团 + 少量水/坑（蜂群大波的主战场） */
-registerPreset({
-  key: 'plain', label: '旷野', weight: 1.4,     // 基础地貌
-  build(ctx) {
-    const roles = new Uint8Array(N); // 默认 PATH
-    const near = portNearSet(ctx.ports);
-    const { water, pit } = hazards(ctx.gen);
-    const wallTarget = Math.floor(N * wallRatio(ctx.gen, 0.22) * (0.7 + hash2(ctx.cx, ctx.cz, ctx.salt + 1) * 0.6));
-    // 墙团 3~7 格
-    let walls = 0;
-    for (let k = 0; k < 24 && walls < wallTarget; k++) {
-      const s = pickStart(roles, (i) => roles[i] === ROLE_PATH && !near.has(i), ctx.salt + 101 + k);
-      if (s < 0) break;
-      const size = 3 + Math.floor(hash2(k, 1, ctx.salt + 7) * 5);
-      walls += paintCluster(roles, s, size, ROLE_WALL, near, ctx.salt + 201 + k);
-    }
-    // 小水洼 2~4 团
-    const waterTarget = Math.floor(3 * water);
-    for (let k = 0; k < waterTarget; k++) {
-      const s = pickStart(roles, (i) => roles[i] === ROLE_PATH && !near.has(i), ctx.salt + 301 + k);
-      if (s < 0) break;
-      paintCluster(roles, s, 2 + Math.floor(hash2(k, 2, ctx.salt + 11) * 3), ROLE_LIQUID, near, ctx.salt + 401 + k);
-    }
-    // 小坑 1~3 团
-    const pitTarget = Math.floor(2 * pit);
-    for (let k = 0; k < pitTarget; k++) {
-      const s = pickStart(roles, (i) => roles[i] === ROLE_PATH && !near.has(i), ctx.salt + 501 + k);
-      if (s < 0) break;
-      paintCluster(roles, s, 2 + Math.floor(hash2(k, 3, ctx.salt + 17) * 2), ROLE_PIT, near, ctx.salt + 601 + k);
-    }
-    openPorts(roles, ctx.ports);
-    return roles;
-  },
-});
-
-/** ② 湖盆：中央大水体 + 环岸 + 少量岛 */
+/** ① 湖盆：中央大水体 + 环岸 + 少量岛 */
 registerPreset({
   key: 'lake', label: '湖盆', weight: 1.7,      // 常规变体
   build(ctx) {
@@ -413,7 +370,7 @@ registerPreset({
   },
 });
 
-/** ③ 遗迹：房间阵列（墙线 + 门洞） */
+/** ② 遗迹：房间阵列（墙线 + 门洞） */
 registerPreset({
   key: 'ruins', label: '遗迹', weight: 1.6,     // 常规变体
   build(ctx) {
@@ -456,7 +413,7 @@ registerPreset({
   },
 });
 
-/** ④ 坑原：大片地面 + 密集坑簇（危险高原） */
+/** ③ 坑原：大片地面 + 密集坑簇（危险高原） */
 registerPreset({
   key: 'pitfield', label: '坑原', weight: 1.1,  // 地标
   build(ctx) {
@@ -480,7 +437,7 @@ registerPreset({
   },
 });
 
-/** ⑤ 峡道：2~3 条宽走廊穿过墙区（险要地形） */
+/** ④ 峡道：2~3 条宽走廊穿过墙区（险要地形） */
 registerPreset({
   key: 'corridor', label: '峡道', weight: 1.1,  // 地标
   build(ctx) {
@@ -515,7 +472,7 @@ registerPreset({
   },
 });
 
-/** ⑥ 高原：高顶 11.5~13.5m（平均 >10m）+ 常高缘台 7.5m + 端口坡道（替代一部分平原） */
+/** ⑤ 高原：高顶 11.5~13.5m（平均 >10m）+ 常高缘台 7.5m + 端口坡道（替代一部分平原） */
 registerPreset({
   key: 'highland', label: '高原', weight: 2.2, // 常规地貌（体量大，承担"平原替身"）
   build(ctx) {
@@ -577,7 +534,7 @@ registerPreset({
   },
 });
 
-/** ⑦ 325：全平地面 + 高台刻「325」（≈2% 稀疏投放；背景/字各一个固定材质） */
+/** ⑥ 325：全平地面 + 高台刻「325」（≈2% 稀疏投放；背景/字各一个固定材质） */
 registerPreset({
   key: 'field325', label: '325', weight: 0,    // 不参与区域抽取：独立稀疏规则投放（≈2%，互不靠近）
   build(ctx) {
@@ -628,7 +585,7 @@ registerPreset({
   },
 });
 
-/** ⑧ 山峰：主峰 + 山肩裙坡（真实高程；可驾驶爬升/绕行） */
+/** ⑦ 山峰：主峰 + 山肩裙坡（真实高程；可驾驶爬升/绕行） */
 registerPreset({
   key: 'peak', label: '山峰', weight: 1.5,      // 地标
   build(ctx) {
@@ -680,7 +637,7 @@ registerPreset({
   },
 });
 
-/** ⑨ 大峡谷：高原中一条蜿蜒峡谷（一侧陡壁 + 一侧可攀台阶，谷底可走可进出） */
+/** ⑧ 大峡谷：高原中一条蜿蜒峡谷（一侧陡壁 + 一侧可攀台阶，谷底可走可进出） */
 registerPreset({
   key: 'canyon', label: '大峡谷', weight: 1.4,  // 地标
   build(ctx) {
@@ -741,7 +698,7 @@ registerPreset({
   },
 });
 
-/** ⑩ 孤岛：大面积水域 + 中央主岛 + 小岛/栈桥（可涉水或走桥） */
+/** ⑨ 孤岛：大面积水域 + 中央主岛 + 小岛/栈桥（可涉水或走桥） */
 registerPreset({
   key: 'island', label: '孤岛', weight: 1.3,    // 地标
   build(ctx) {
@@ -796,147 +753,3 @@ registerPreset({
     return { roles, heights };
   },
 });
-
-/** ⑪ 迷宫（原结构层；保留为预设之一，密度吃组偏置） */
-registerPreset({
-  key: 'maze', label: '迷宫', weight: 2.0,      // 基础地貌
-  build(ctx) {
-    const density = hash2(ctx.cx, ctx.cz, ctx.seed + 1818);
-    let targetPassageRatio = 0.3 + density * 0.4;
-    targetPassageRatio = Math.min(0.75, Math.max(0.25, targetPassageRatio + (ctx.gen?.densityBias ?? 0)));
-    const passage = generateMaze(ctx.seed, ctx.cx, ctx.cz, ctx.ports, targetPassageRatio);
-    return structureSlots(ctx.seed, ctx.cx, ctx.cz, passage, ctx.ports, ctx.gen);
-  },
-});
-
-// ============ 迷宫内核（原 ChunkGenerator L1；随机盐逐位保留） ============
-
-function generateMaze(seed: number, cx: number, cz: number, ports: Ports, targetPassageRatio: number): Uint8Array {
-  const passage = new Uint8Array(N);
-  const frontier: number[] = [];
-  const allPorts = portCells(ports);
-  for (const p of allPorts) {
-    if (passage[p]) continue;
-    passage[p] = 1;
-    for (const nb of gridNeighbors(p)) {
-      if (!passage[nb]) frontier.push(nb);
-    }
-  }
-
-  let mazeSeed = (hash2(cx, cz, seed + 505) * 1000000) | 0;
-  const targetCount = Math.floor(N * targetPassageRatio);
-
-  while (frontier.length > 0) {
-    mazeSeed = (mazeSeed + 1) % 1000000;
-    const fi = Math.floor(hash2(mazeSeed, 0, seed + 606) * frontier.length);
-    const cur = frontier[fi];
-    const nbrs = gridNeighbors(cur);
-    const roadNbrs = nbrs.filter((nb) => passage[nb]);
-    if (roadNbrs.length > 0) {
-      passage[cur] = 1;
-      for (const nb of nbrs) {
-        if (!passage[nb] && !frontier.includes(nb)) frontier.push(nb);
-      }
-    }
-    frontier[fi] = frontier[frontier.length - 1];
-    frontier.pop();
-
-    let roadCount = 0;
-    for (let i = 0; i < N; i++) if (passage[i]) roadCount++;
-    if (roadCount >= targetCount) break;
-  }
-  return passage;
-}
-
-function structureSlots(
-  seed: number, cx: number, cz: number,
-  passage: Uint8Array, ports: Ports,
-  gen?: GroupDef['gen'],
-): Uint8Array {
-  const roles = new Uint8Array(N);
-  const portSet = new Set<number>(portCells(ports));
-
-  for (let i = 0; i < N; i++) {
-    if (passage[i]) roles[i] = ROLE_PATH;
-  }
-  for (const p of portSet) roles[p] = ROLE_PATH;
-
-  const wallSet = new Set<number>();
-  for (let i = 0; i < N; i++) {
-    if (!passage[i] && !portSet.has(i)) wallSet.add(i);
-  }
-  if (wallSet.size === 0) return roles;
-
-  let wallPool = [...wallSet];
-  let terrSeed = (hash2(cx, cz, seed + 1010) * 1000000) | 0;
-  for (let i = wallPool.length - 1; i > 0; i--) {
-    terrSeed = (terrSeed + 1) % 1000000;
-    const j = Math.floor(hash2(terrSeed, 0, seed + 1111) * (i + 1));
-    const t = wallPool[i];
-    wallPool[i] = wallPool[j];
-    wallPool[j] = t;
-  }
-
-  const used = new Uint8Array(N);
-  const total = wallPool.length;
-
-  function growCluster(sizeMin: number, sizeMax: number): number[] {
-    let seedCell = -1;
-    for (const c of wallPool) {
-      if (!used[c]) { seedCell = c; break; }
-    }
-    if (seedCell === -1) return [];
-    const targetSize = Math.min(sizeMin + Math.floor(hash2(terrSeed, 0, seed + 1313) * (sizeMax - sizeMin + 1)), total);
-    const cluster: number[] = [];
-    const frontier: number[] = [seedCell];
-    const visited = new Set<number>([seedCell]);
-    while (frontier.length > 0 && cluster.length < targetSize) {
-      terrSeed = (terrSeed + 1) % 1000000;
-      const fi = Math.floor(hash2(terrSeed, 0, seed + 1414) * frontier.length);
-      const cur = frontier[fi];
-      frontier[fi] = frontier[frontier.length - 1];
-      frontier.pop();
-      if (used[cur] || portSet.has(cur)) continue; // ★ 集群不漫到端口
-      cluster.push(cur);
-      used[cur] = 1;
-      for (const nb of gridNeighbors(cur)) {
-        if (!visited.has(nb) && !used[nb] && !portSet.has(nb)) {
-          visited.add(nb);
-          frontier.push(nb);
-        }
-      }
-    }
-    return cluster;
-  }
-
-  const rp = gen ?? { waterMul: 1, pitMul: 1 };
-  const targetWater = Math.floor(total * 0.15 * rp.waterMul);
-  const targetPit = Math.floor(total * 0.15 * rp.pitMul);
-
-  let waterCount = 0;
-  while (waterCount < targetWater) {
-    const rem = targetWater - waterCount;
-    const cluster = growCluster(Math.min(3, rem), Math.min(6, rem));
-    for (const c of cluster) { roles[c] = ROLE_LIQUID; waterCount++; }
-    if (cluster.length === 0) break;
-  }
-  let pitCount = 0;
-  while (pitCount < targetPit) {
-    const rem = targetPit - pitCount;
-    const cluster = growCluster(Math.min(2, rem), Math.min(4, rem));
-    for (const c of cluster) { roles[c] = ROLE_PIT; pitCount++; }
-    if (cluster.length === 0) break;
-  }
-
-  let platformCount = 0;
-  const targetPlatform = Math.floor(total * 0.45);
-  for (const c of wallPool) {
-    if (used[c]) continue;
-    if (platformCount < targetPlatform) {
-      roles[c] = ROLE_WALL;
-      used[c] = 1;
-      platformCount++;
-    }
-  }
-  return roles;
-}

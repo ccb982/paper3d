@@ -244,7 +244,9 @@ export const TILE_WATER = new TileDef(
     material: { fnId: "pebble" }, // ★ 水底鹅卵石河床（2026-09-07：水体模块未开工，临时静态占位；开工后换回真实水面）
   },
   {
-    height: -0.5,
+    // ★ 水底高程（2026-09-14 加深：-0.5 → -1.5）——水面恒 y=0，
+    //   水深 = -height（此值）→ 湖盆/孤岛观感更深，且仍 << WATER_MAX_DEEP(6)
+    height: -1.5,
     walkable: false,
     smoothDirs: [0, 1, 2, 3], // 水全向插值
   },
