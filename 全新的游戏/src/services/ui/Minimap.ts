@@ -17,6 +17,10 @@ import { LOD_MAX_DIST } from '../lod';
 
 export class Minimap {
   private canvas: HTMLCanvasElement;
+  /** ★ 显隐（舰内房间：隐藏世界小地图） */
+  setVisible(v: boolean): void {
+    this.canvas.style.display = v ? 'block' : 'none';
+  }
   private ctx: CanvasRenderingContext2D;
   private raster: RasterMap;
   private displaySize: number;

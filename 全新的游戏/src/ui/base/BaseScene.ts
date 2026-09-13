@@ -19,7 +19,7 @@ import { VehicleRide } from '../../systems/itemPlayback/VehicleRide';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import baseRooms from '../../config/baseRooms.json';
 
-interface RoomDef {
+export interface RoomDef {
   id: string;
   name: string;
   kind: string;
@@ -41,7 +41,19 @@ const GRAVITY = 20;
 const DOOR_HALF = 1.1;
 const DOOR_H = 3.0;
 
+/** ★ 交互站（F 触发）：本地大厅坐标 + 触发范围（xz 半宽；1e9 = 不限） */
+export interface BaseStation {
+  x: number;
+  z: number;
+  rx: number;
+  rz: number;
+  label: string;
+  cb: () => void;
+}
+
 export interface BaseSceneOptions {
+  /** 房间定义（缺省 = 基地三间；舰内 = [shipRoom]） */
+  rooms?: RoomDef[];
   /** 主角立绘（维维美） */
   protagonistAsset?: FrameAssetSource;
   /** 盟友立绘素材（无人机；祖宗为弹药消耗品不再绘制） */
@@ -77,10 +89,11 @@ export class BaseScene {
   private grounded = true;
   private wantJump = false;
 
-  // ---- 加工站交互（走到加工站房间按 F 打开加工台；2026-09-12 用户定调） ----
+  // ---- 交互站（F 触发；基地默认 = 加工站，舰内 = 起飞/回家/下船） ----
+  /** 加工站房间的本地 x（onCraftStation 默认站点用） */
   private craftBayX: number | null = null;
-  private inCraftZone = false;
-  private craftCb: (() => void) | null = null;
+  private stations: BaseStation[] = [];
+  private activeStation: BaseStation | null = null;
   private promptEl: HTMLDivElement;
   /** 提示是否已显示（与 inCraftZone 分开：UI 打开时要临时隐藏） */
   private promptShown = false;
@@ -119,7 +132,7 @@ export class BaseScene {
     fill.position.set(0, 6, 18);
     this.root.add(hemi, key, warm, fill);
 
-    const defs = baseRooms.rooms as RoomDef[];
+    const defs = (opts.rooms ?? (baseRooms.rooms as RoomDef[]));
     this.hallW = defs.length * ROOM_W + (defs.length - 1) * ROOM_GAP;
     for (let i = 0; i < defs.length; i++) {
       this.bays.push((i - (defs.length - 1) / 2) * (ROOM_W + ROOM_GAP));
@@ -159,7 +172,7 @@ export class BaseScene {
       + 'color:#ffe9b0;background:rgba(20,14,4,0.88);border:1px solid rgba(216,166,58,0.7);'
       + 'padding:6px 14px;border-radius:8px;font:14px "Microsoft YaHei",sans-serif;'
       + 'z-index:600;pointer-events:none;white-space:pre';
-    this.promptEl.textContent = 'F · 打开加工台';
+    this.promptEl.textContent = 'F';
     document.body.appendChild(this.promptEl);
 
     window.addEventListener('keydown', this.onKeyDown);
@@ -167,9 +180,20 @@ export class BaseScene {
     window.addEventListener('wheel', this.onWheel, { passive: true });
   }
 
-  /** 加工站交互回调（BaseMode 注入：打开加工台覆盖层） */
+  /** ★ 交互站列表（F 触发；本地大厅坐标） */
+  setStations(stations: BaseStation[]): void {
+    this.stations = stations;
+    this.activeStation = null;
+  }
+
+  /** 加工站交互回调（BaseMode 注入：打开加工台覆盖层；= 单站点快捷方式） */
   onCraftStation(cb: () => void): void {
-    this.craftCb = cb;
+    this.setStations([{
+      x: this.craftBayX ?? 0, z: 0,
+      rx: ROOM_W / 2 - 0.5, rz: 1e9,
+      label: '打开加工台',
+      cb,
+    }]);
   }
 
   /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、F 禁用） */
@@ -476,7 +500,8 @@ export class BaseScene {
       e.preventDefault();
     }
     // ★ 加工站：F 打开加工台（UI 遮挡期不响应，避免叠层里再开）
-    if (k === 'f' && this.inCraftZone && !(this.uiBlocking?.() ?? false)) this.craftCb?.();
+    // ★ 交互站：F 触发（UI 遮挡期不响应）
+    if (k === 'f' && this.activeStation && !(this.uiBlocking?.() ?? false)) this.activeStation.cb();
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
@@ -540,12 +565,24 @@ export class BaseScene {
       this.quad.setPosition(this.charPos.x, this.charY, this.charPos.z);
       // ★ 加工站区域判定（在加工站房间内 → 显示"F · 打开加工台"提示）；
       //   抽卡/加工台/背包等 UI 打开时（uiBlocking）不绘制提示
-      this.inCraftZone = this.craftBayX !== null
-        && Math.abs(this.charPos.x - this.craftBayX) <= ROOM_W / 2 - 0.5;
-      const showPrompt = this.inCraftZone && !(this.uiBlocking?.() ?? false);
+      // ★ 交互站判定（大厅坐标；最近的命中站点生效）→ 显示"F · 标签"
+      const lx = this.charPos.x;
+      const lz = this.charPos.z;
+      let best: BaseStation | null = null;
+      let bestD = Infinity;
+      for (const st of this.stations) {
+        if (Math.abs(lx - st.x) > st.rx || Math.abs(lz - st.z) > st.rz) continue;
+        const d = Math.hypot(lx - st.x, lz - st.z);
+        if (d < bestD) { bestD = d; best = st; }
+      }
+      this.activeStation = best;
+      const showPrompt = !!best && !(this.uiBlocking?.() ?? false);
       if (showPrompt !== this.promptShown) {
         this.promptShown = showPrompt;
         this.promptEl.style.display = showPrompt ? 'block' : 'none';
+      }
+      if (best && this.promptEl.textContent !== `F · ${best.label}`) {
+        this.promptEl.textContent = `F · ${best.label}`;
       }
     } else {
       this.wantJump = false;

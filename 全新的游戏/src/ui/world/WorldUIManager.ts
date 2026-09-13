@@ -70,6 +70,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private assaultBannerEl: HTMLDivElement | null = null;
   /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
   private enemyScaleEl: HTMLDivElement | null = null;
+  /** ★ 进舰提示（靠近舰船按 E） */
+  private boardPromptEl: HTMLDivElement | null = null;
   /** ★ 战斗 HUD 显隐（航行操船期隐藏：血条/准星/快捷栏/友军列表） */
   private combatHudVisible = true;
 
@@ -296,6 +298,34 @@ export class WorldUIManager extends BaseInteractionUI {
     }
     this.enemyScaleEl.textContent = text;
     this.enemyScaleEl.style.color = color;
+  }
+
+  /** ★ 小地图显隐（舰内房间隐藏；世界/航行保持显示） */
+  setMinimapVisible(v: boolean): void {
+    this.minimap.setVisible(v);
+  }
+
+  /** ★ 进舰提示（靠近舰船按 E；探索期显示，其余隐藏） */
+  setBoardPrompt(visible: boolean): void {
+    if (!visible) {
+      if (this.boardPromptEl) this.boardPromptEl.style.display = 'none';
+      return;
+    }
+    if (!this.boardPromptEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'left:50%', 'bottom:16%', 'transform:translateX(-50%)',
+        'z-index:65', 'pointer-events:none', 'white-space:pre',
+        'color:#cfe8ff', 'background:rgba(12,20,34,0.88)',
+        'border:1px solid rgba(106,176,255,0.7)', 'border-radius:8px',
+        'padding:6px 16px', 'font:14px "Microsoft YaHei",sans-serif',
+        'text-shadow:0 1px 3px #000',
+      ].join(';');
+      el.textContent = 'E · 进入舰船';
+      document.body.appendChild(el);
+      this.boardPromptEl = el;
+    }
+    this.boardPromptEl.style.display = 'block';
   }
 
   /** ★ 舰船被摧毁面板（真结局触发；按钮"复活"回调，暂不删档） */
@@ -626,6 +656,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.assaultBannerEl = null;
     this.enemyScaleEl?.remove();
     this.enemyScaleEl = null;
+    this.boardPromptEl?.remove();
+    this.boardPromptEl = null;
     this.respawnEl?.remove();
     this.respawnEl = null;
     this.interactPrompt.remove();

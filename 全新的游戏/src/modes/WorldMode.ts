@@ -30,6 +30,8 @@ import { applyShipDamage, isShipDestroyed, reviveShip } from '../systems/ship/Sh
 import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
+import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
+import baseRoomsJson from '../config/baseRooms.json';
 import { droneFollowOffset } from '../services/fx/DroneFormation';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
@@ -246,7 +248,7 @@ export class WorldMode implements IGameMode {
   /** ★ 舰船实体（航行阶段可操控；停靠后静止，敌人索敌最优先） */
   ship!: ShipEntity;
   /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索 */
-  private phase: 'sail' | 'explore' = 'sail';
+  private phase: 'sail' | 'explore' | 'interior' = 'sail';
   /** ★ 降落进近（按 F 后，2026-09-12 用户定调）：保留前进速度 + 低操控（25%）+
    *  只自动固定高度（不动角度/方向）；期间地形已切细化实时加载。
    *  approach → 触地 → settle（镜头仍跟随舰船，完整看到接地停稳）→ finishDock。 */
@@ -345,6 +347,11 @@ export class WorldMode implements IGameMode {
   private threat: ThreatProfile | null = null;
   /** ★ 遗物周期补给（祖宗发射器：进入战斗后每 interval 秒补 1；多件更快） */
   private timedRelics: { itemId: string; interval: number; timer: number }[] = [];
+  /** ★ 舰内房间（E 进舰：起飞/回家/下船；世界冻结） */
+  private shipInterior: BaseScene | null = null;
+  /** ★ 舰内独立场景（不画世界：彻底隔离粗块/地形/雾/天空） */
+  private interiorScene: THREE.Scene | null = null;
+  private protagonistAssetRef: FtxAsset | null = null;
   /** ★ Boss 战（抽到普瑞赛斯 → 四维空间；击败 = 通关） */
   private bossRun = false;
   private bossEntity: EnemyBase | null = null;
@@ -588,6 +595,7 @@ export class WorldMode implements IGameMode {
     this.camShot = null;
 
     // ★ 主角
+    this.protagonistAssetRef = ctx.protagonistAsset ?? null;
     this.player = new Player(this.entities, this.scene, ctx.protagonistAsset, {
       x: spawn.x, y: 0, z: spawn.z,
       animMap: {
@@ -919,30 +927,53 @@ export class WorldMode implements IGameMode {
     const attackPressed = this.binding.consumeAttack();
     const look = this.binding.consumeLook();
     let zoom = this.binding.consumeZoom();
+    // ★ 舰内房间：世界输入全部不消费（房间自己的键盘监听驱动行走/交互站）
+    const inInterior = this.phase === 'interior';
 
     // ★ 按 I 键打开/关闭背包
-    if (this.binding.consumeInventory()) {
+    if (!inInterior && this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
     // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
     //   ★ Q 按住 + 滚轮 = 直接前后切换弹药/物品（不缩放视角）；点按 Q 仍顺序切换
     //   死亡等待复活期间：锁消耗品使用（切换仍可看）
-    if (this.binding.isSwitchItemHeld() && zoom !== 0) {
+    if (!inInterior && this.binding.isSwitchItemHeld() && zoom !== 0) {
       this.cycleQuickItem(zoom > 0 ? 1 : -1);
       zoom = 0; // 滚轮已用于切换 → 本帧不缩放
     }
-    if (this.binding.consumeSwitchItem()) this.cycleQuickItem();
-    if (this.binding.consumeUseItem()) {
+    if (!inInterior && this.binding.consumeSwitchItem()) this.cycleQuickItem();
+    if (!inInterior && this.binding.consumeUseItem()) {
       if (this.phase === 'sail') this.requestDock(false);       // 航行期：F = 停靠
-      else if (!this.player.dead) {
-        // ★ 探索期：靠近舰船 = 登船起飞（舰船当实体载具可再飞）；否则 F = 使用消耗品
-        if (!this.tryBoardShip()) this.useSelectedConsumable();
-      }
+      else if (!this.player.dead) this.useSelectedConsumable();  // 探索期：F = 使用消耗品
     }
+    // ★ 按 E 进入舰内（2026-09-13 用户定调）：
+    //   探索期 = 靠近舰船进舱；航行期 = 在机上直接进驾驶舱（悬停，不落）
+    if (!inInterior && input.held.interact) {
+      if (this.phase === 'explore' && !this.player.dead) this.enterShipInterior('explore');
+      else if (this.phase === 'sail') this.enterShipInterior('sail');
+    }
+    // ★ 进舰提示（靠近舰船 + 探索期 + 无面板遮挡）
+    {
+      const s0 = this.ship?.position;
+      const p0 = this.player.position;
+      const near = !this.worldUIManager.hasModalOpen && !!s0 && (
+        this.phase === 'sail'
+        || (this.phase === 'explore' && !this.player.dead
+          && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2)
+      );
+      this.worldUIManager.setBoardPrompt(near);
+    }
+
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
     //   任一面板打开 → 解锁；全部关闭（回到战场）→ 恢复锁定。
     //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
-    this.binding.setPointerLock(!this.worldUIManager.hasModalOpen);
+    this.binding.setPointerLock(!this.worldUIManager.hasModalOpen && this.phase !== 'interior');
+
+    // ★ 舰内房间（2026-09-13）：世界冻结，只驱动房间场景（行走/交互站）
+    if (this.phase === 'interior') {
+      this.shipInterior?.update(dt);
+      return;
+    }
 
     // ★ 舰船已毁：冻结玩法更新（结算/复活面板接管；相机/输入不再跑）
     if (this.shipDestroyed) return;
@@ -956,12 +987,6 @@ export class WorldMode implements IGameMode {
         this.ship.steer(look.x, look.y, input.moveAxis.x, input.moveAxis.y, dt);
       }
       // settle / 起飞段：位置由状态机驱动，输入不作用于舰船
-    }
-
-    // ★ 按 E 键返回舰船（held 状态，每帧检查）
-    if (input.held.interact) {
-      this.onReturn?.();
-      return;
     }
 
     // ★ 航行期：地形流式以舰船为焦点（优先算/建机头下方与前向）；探索期=角色
@@ -1276,6 +1301,11 @@ export class WorldMode implements IGameMode {
     // ★ 防御：任何离屏 pass（流体/月亮/云/子弹特效）若遗留 FBO，主场景渲染会与
     //   采样纹理形成 Feedback loop（GL_INVALID_OPERATION）。渲染前强制回默认帧缓冲。
     this.renderer.setRenderTarget(null);
+    // ★ 舰内：只渲染独立房间场景（世界粗块/地形/天空/雾全部不参与）
+    if (this.phase === 'interior' && this.interiorScene) {
+      this.renderer.render(this.interiorScene, this.camera); // 场景自带背景色
+      return;
+    }
     // ★ 地形光照视锥裁剪：只喂视野锥内 chunk 的昼夜 uniform（视锥外冻结，进视野即刷新）
     const fw = this.cameraCtrl.getFrame().forward;
     this.chunks.markLightVisibility(this.camera.position.x, this.camera.position.z, fw.x, fw.z);
@@ -1296,6 +1326,9 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
+    // ---- 舰内房间（若在舱内退出：释放房间场景） ----
+    this.shipInterior?.dispose();
+    this.shipInterior = null;
     // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
     this.swarm.dispose();
     // ---- 取消伤害事件订阅 ----
@@ -2785,6 +2818,113 @@ export class WorldMode implements IGameMode {
       this.cameraCtrl.snapTo(exit.x, exit.y, exit.z);
       p.controlLocked = false;
     }
+  }
+
+  // ============================================================
+  // ★ 舰内房间（2026-09-13 用户定调）
+  //   F 靠近舰船 → 进入舰内（类似基地的 3D 房间，可走动）；舱内三站：
+  //   起飞（回航行）/ 返回基地 / 下船。世界在舱内期间冻结（同航行期）。
+  // ============================================================
+
+  /** 舰内来源（探索=落地后在舰旁 / 航行=在机上）——决定出舱恢复与舱内站点 */
+  private interiorFrom: 'explore' | 'sail' = 'explore';
+
+  /** 进入舰内房间（E 调用：探索期靠近舰船 / 航行期在机上；返回是否进入） */
+  private enterShipInterior(from: 'explore' | 'sail'): boolean {
+    if (!this.ship || !this.scene || !this.camera || !this.renderer) return false;
+    if (this.phase !== from || this.shipInterior) return false;
+    this.camBlend = null; // ★ 进舰取消在途镜头过渡（房间 setupCamera 直接接管）
+    if (this.shipDestroyed) return false;
+    const sp = this.ship.position;
+    if (from === 'explore') {
+      const p = this.player.position;
+      const d2 = (p.x - sp.x) ** 2 + (p.z - sp.z) ** 2;
+      if (d2 > WorldMode.REBOARD_RADIUS ** 2) return false;
+    }
+    if (!this.protagonistAssetRef) return false;
+    this.interiorFrom = from;
+
+    let interior: BaseScene;
+    try {
+    const shipRoom = (baseRoomsJson as unknown as { shipRoom: import('../ui/base/BaseScene').RoomDef }).shipRoom;
+    // ★ 独立场景：舰内只画自己（世界粗块/地形/天空/雾全部不参与）
+    this.interiorScene = new THREE.Scene();
+    this.interiorScene.background = new THREE.Color(0x0b1016);
+    interior = new BaseScene(this.interiorScene, {
+      rooms: [shipRoom],
+      protagonistAsset: this.protagonistAssetRef,
+      droneAsset: this.droneAsset ?? undefined,
+      itemManager: this.itemManager,
+      renderer: this.renderer,
+    });
+    interior.setupCamera(this.camera);
+    interior.setUiBlocking(() => this.worldUIManager?.hasModalOpen ?? false);
+    const toHome = (): void => { this.exitShipInterior(); this.onReturn?.(); };
+    const stations: BaseStation[] = from === 'sail'
+      ? [
+        // 航行期进舱：继续飞行 / 返回基地
+        { x: -4, z: -3, rx: 2.8, rz: 2.6, label: '继续飞行', cb: () => this.exitShipInterior() },
+        { x: 4, z: -3, rx: 2.8, rz: 2.6, label: '返回基地', cb: toHome },
+      ]
+      : [
+        // 探索期进舱：起飞 / 返回基地 / 下船
+        {
+          x: -6, z: -3, rx: 2.8, rz: 2.6, label: '起飞',
+          cb: () => { this.exitShipInterior(); this.tryBoardShip(); },
+        },
+        { x: 0, z: -3, rx: 2.8, rz: 2.6, label: '返回基地', cb: toHome },
+        { x: 6, z: -3, rx: 2.8, rz: 2.6, label: '下船', cb: () => this.exitShipInterior() },
+      ];
+    interior.setStations(stations);
+    } catch (err) {
+      console.error('[interior] 创建失败:', err);
+      return false;
+    }
+    this.shipInterior = interior;
+    this.phase = 'interior';
+    this.player.controlLocked = true;
+    this.player.visible = false;
+    this.worldUIManager?.setCombatHudVisible(false);
+    this.worldUIManager?.setMinimapVisible(false);
+    this.worldUIManager?.setDockButtonVisible(false);
+    this.worldUIManager?.setBoardPrompt(false);
+    this.worldUIManager?.setAssaultBanner('舰内 · 驾驶舱', false);
+    // ★ 与基地模式同款：舰内关闭天空/云/月亮/水的离屏 pass
+    //   （否则离屏 RT 与主渲染形成 feedback loop：GL_INVALID_OPERATION）
+    renderManager.setEnvironment('ship');
+    renderManager.setFlightMode(true);
+    this.chunks.setWaterVisible(false);
+    return true;
+  }
+
+  /** 离开舰内房间（按来源恢复：探索=回地面 / 航行=回驾驶；相机瞬移防长镜头） */
+  private exitShipInterior(): void {
+    if (!this.shipInterior) return;
+    const from = this.interiorFrom;
+    this.shipInterior.dispose();
+    this.shipInterior = null;
+    this.interiorScene = null; // 场景随房间一并废弃（下次重建）
+    this.worldUIManager?.setAssaultBanner(null);
+    if (from === 'sail') {
+      // ★ 航行者：回到航行（环境保持 ship/极简；追尾相机下一帧直接吸附）
+      this.phase = 'sail';
+      this.flightCamInit = false;
+      this.worldUIManager?.setCombatHudVisible(false);
+      this.worldUIManager?.setMinimapVisible(true);
+      this.worldUIManager?.setDockButtonVisible(true);
+      return;
+    }
+    // 探索者：回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
+    this.phase = 'explore';
+    this.player.controlLocked = false;
+    this.player.visible = true;
+    this.worldUIManager?.setCombatHudVisible(true);
+    this.worldUIManager?.setDockButtonVisible(true);
+    renderManager.setEnvironment('world');
+    renderManager.setFlightMode(false);
+    this.chunks.setWaterVisible(true);
+    const p = this.player.position;
+    this.cameraCtrl?.snapTo(p.x, p.y, p.z);
   }
 
   /** ★ 登船起飞（探索期靠近舰船按 F；2026-09-12 用户定调：舰船当实体载具）：
