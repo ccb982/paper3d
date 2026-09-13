@@ -956,21 +956,17 @@ export class WorldMode implements IGameMode {
       if (this.phase === 'sail') this.requestDock(false);       // 航行期：F = 停靠
       else if (!this.player.dead) this.useSelectedConsumable();  // 探索期：F = 使用消耗品
     }
-    // ★ 按 E 进入舰内（2026-09-13 用户定调）：
-    //   探索期 = 靠近舰船进舱；航行期 = 在机上直接进驾驶舱（悬停，不落）
-    if (!inInterior && input.held.interact) {
-      if (this.phase === 'explore' && !this.player.dead) this.enterShipInterior('explore');
-      else if (this.phase === 'sail') this.enterShipInterior('sail');
+    // ★ 按 E 进入舰内（2026-09-13 用户定调：仅降落后、靠近舰船；飞行中不进）
+    if (!inInterior && input.held.interact && this.phase === 'explore' && !this.player.dead) {
+      this.enterShipInterior();
     }
     // ★ 进舰提示（靠近舰船 + 探索期 + 无面板遮挡）
     {
       const s0 = this.ship?.position;
       const p0 = this.player.position;
-      const near = !this.worldUIManager.hasModalOpen && !!s0 && (
-        this.phase === 'sail'
-        || (this.phase === 'explore' && !this.player.dead
-          && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2)
-      );
+      const near = !this.worldUIManager.hasModalOpen && !!s0
+        && this.phase === 'explore' && !this.player.dead
+        && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2;
       this.worldUIManager.setBoardPrompt(near);
     }
 
@@ -2837,26 +2833,20 @@ export class WorldMode implements IGameMode {
   // ============================================================
   // ★ 舰内房间（2026-09-13 用户定调）
   //   F 靠近舰船 → 进入舰内（类似基地的 3D 房间，可走动）；舱内三站：
-  //   起飞（回航行）/ 返回基地 / 下船。世界在舱内期间冻结（同航行期）。
+  //   起飞（回航行）/ 返回基地 / 下船 / 加工台。世界在舱内期间冻结（同航行期）。
   // ============================================================
 
-  /** 舰内来源（探索=落地后在舰旁 / 航行=在机上）——决定出舱恢复与舱内站点 */
-  private interiorFrom: 'explore' | 'sail' = 'explore';
-
-  /** 进入舰内房间（E 调用：探索期靠近舰船 / 航行期在机上；返回是否进入） */
-  private enterShipInterior(from: 'explore' | 'sail'): boolean {
+  /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
+  private enterShipInterior(): boolean {
     if (!this.ship || !this.scene || !this.camera || !this.renderer) return false;
-    if (this.phase !== from || this.shipInterior) return false;
+    if (this.phase !== 'explore' || this.shipInterior) return false;
     this.camBlend = null; // ★ 进舰取消在途镜头过渡（房间 setupCamera 直接接管）
     if (this.shipDestroyed) return false;
     const sp = this.ship.position;
-    if (from === 'explore') {
-      const p = this.player.position;
-      const d2 = (p.x - sp.x) ** 2 + (p.z - sp.z) ** 2;
-      if (d2 > WorldMode.REBOARD_RADIUS ** 2) return false;
-    }
+    const p = this.player.position;
+    const d2 = (p.x - sp.x) ** 2 + (p.z - sp.z) ** 2;
+    if (d2 > WorldMode.REBOARD_RADIUS ** 2) return false;
     if (!this.protagonistAssetRef) return false;
-    this.interiorFrom = from;
 
     let interior: BaseScene;
     try {
@@ -2892,12 +2882,12 @@ export class WorldMode implements IGameMode {
     renderManager.setFlightMode(true);
     this.chunks.setWaterVisible(false);
     // ★ 舰内操作按钮（用户定调：按钮而不是走位交互）
-    this.buildInteriorButtons(from);
+    this.buildInteriorButtons();
     return true;
   }
 
-  /** ★ 舰内操作按钮条：下船/起飞/返回基地/加工台（航行中进舱则"继续飞行"） */
-  private buildInteriorButtons(from: 'explore' | 'sail'): void {
+  /** ★ 舰内操作按钮条：下船/起飞/返回基地/加工台 */
+  private buildInteriorButtons(): void {
     this.removeInteriorButtons();
     const bar = document.createElement('div');
     bar.style.cssText = [
@@ -2915,14 +2905,9 @@ export class WorldMode implements IGameMode {
       b.addEventListener('click', cb);
       bar.appendChild(b);
     };
-    if (from === 'sail') {
-      mk('继续飞行', () => this.exitShipInterior());
-      mk('返回基地', () => { this.exitShipInterior(); this.onReturn?.(); });
-    } else {
-      mk('下船', () => this.exitShipInterior());
-      mk('起飞', () => { this.exitShipInterior(); this.tryBoardShip(); });
-      mk('返回基地', () => { this.exitShipInterior(); this.onReturn?.(); });
-    }
+    mk('下船', () => this.exitShipInterior());
+    mk('起飞', () => { this.exitShipInterior(); this.tryBoardShip(); });
+    mk('返回基地', () => { this.exitShipInterior(); this.onReturn?.(); });
     mk('加工台', () => this.openShipCrafting());
     document.body.appendChild(bar);
     this.interiorButtons = bar;
@@ -2946,23 +2931,13 @@ export class WorldMode implements IGameMode {
   /** 离开舰内房间（按来源恢复：探索=回地面 / 航行=回驾驶；相机瞬移防长镜头） */
   private exitShipInterior(): void {
     if (!this.shipInterior) return;
-    const from = this.interiorFrom;
     this.removeInteriorButtons();
     this.craftingOverlay?.hide();
     this.shipInterior.dispose();
     this.shipInterior = null;
     this.interiorScene = null; // 场景随房间一并废弃（下次重建）
     this.worldUIManager?.setAssaultBanner(null);
-    if (from === 'sail') {
-      // ★ 航行者：回到航行（环境保持 ship/极简；追尾相机下一帧直接吸附）
-      this.phase = 'sail';
-      this.flightCamInit = false;
-      this.worldUIManager?.setCombatHudVisible(false);
-      this.worldUIManager?.setMinimapVisible(true);
-      this.worldUIManager?.setDockButtonVisible(true);
-      return;
-    }
-    // 探索者：回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
+    // 回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
     this.phase = 'explore';
     this.player.controlLocked = false;
     this.player.visible = true;
