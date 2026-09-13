@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { GameSession, InventoryGrid } from './Session';
-import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS, SLOT_COUNT, STARTER_RELICS } from './Session';
+import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS, SLOT_COUNT, STARTER_RELICS, newRunSeed } from './Session';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -120,6 +120,11 @@ export const SaveSystem = {
       if (!data.story) data.story = { flags: {}, events: {} };
       if (!data.story.flags || typeof data.story.flags !== 'object') data.story.flags = {};
       if (!data.story.events || typeof data.story.events !== 'object') data.story.events = {};
+
+      // ★ 旧档迁移：主要种子（当天地图 = dailyMapSeed(seed, day)；缺失则现场补随机值）
+      if (typeof data.meta?.seed !== 'number' || !Number.isFinite(data.meta.seed)) {
+        data.meta.seed = newRunSeed();
+      }
 
       return data;
     } catch (e) {

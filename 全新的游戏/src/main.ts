@@ -23,7 +23,7 @@ import { RasterMap } from './services/map/RasterMap';
 import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
-import { createNewSession, type GameSession } from './core/Session';
+import { createNewSession, dailyMapSeed, type GameSession } from './core/Session';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
@@ -156,7 +156,7 @@ async function boot() {
   if (testPreset) setTestPreset(testPreset); // 未知 key 抛错（fail-fast）
   testChunk = testGroup !== null || urlParams.get('single') === '1';
   enemyStress = Math.max(0, Math.min(200, Number(urlParams.get('enemies') ?? 0) || 0));
-  if (testChunk) showTestGroupPanel(testGroup ?? undefined); // 组内容面板（缺省=实际 chunk 生效组）
+  // ★ 测试组面板延后到存档就绪（需当天地图种子 = 主种子 × 天数）再显示
   // 控制台换组时联动刷新面板
   (window as unknown as { setTestPreset?: (k: string | null) => void }).setTestPreset = (k) => {
     setTestPreset(k);
@@ -164,7 +164,12 @@ async function boot() {
   };
   (window as unknown as { setTestGroup: (k: string | null) => void }).setTestGroup = (k) => {
     setTestGroup(k);
-    if (testChunk) showTestGroupPanel(k ?? undefined);
+    if (testChunk) {
+      showTestGroupPanel(
+        k ?? undefined,
+        currentSession ? dailyMapSeed(currentSession.meta.seed, currentSession.meta.day) : undefined,
+      );
+    }
   };
 
   // ---- 3. 加载资产 ----
@@ -264,6 +269,10 @@ async function boot() {
   if (!currentSession) {
     currentSession = createNewSession();
     SaveSystem.save(currentSession);
+  }
+  // ★ 测试组面板（调试）：存档就绪后用当天地图种子（主种子 × 天数）统计实际 chunk
+  if (testChunk) {
+    showTestGroupPanel(testGroup ?? undefined, dailyMapSeed(currentSession.meta.seed, currentSession.meta.day));
   }
 
   // ★ 调试：?priestess=1 直接获得普瑞赛斯（验证四维空间 Boss 流程用）

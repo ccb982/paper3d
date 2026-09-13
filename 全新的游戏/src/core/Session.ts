@@ -41,7 +41,10 @@ export interface GameSession {
   // ----- ① 元信息 -----
   meta: {
     version: string;
-    day: number;                // ★ 当前天数（既是进度标识，也是地图种子来源）
+    day: number;                // ★ 当前天数（进度标识；地图种子 = 主种子 × 天数 混合）
+    /** ★ 主要种子（新局随机生成、随存档持久）：当天地图 = dailyMapSeed(seed, day)，
+     *  同主种子同天恒同图；不同天/不同局不同图 */
+    seed: number;
     totalDaysSurvived: number;
     deaths: number;             // ★ 累计死亡次数（遗物 "每次死亡×1.05 全属性" 的驱动）
     createdAt: string;
@@ -401,6 +404,21 @@ export function computeCombatStats(
 // 5. 创建新游戏存档
 // ============================================================
 
+/** ★ 主要种子：新局随机生成（1 ~ 2^31-1；随存档持久，地图 = 主种子 × 天数） */
+export function newRunSeed(): number {
+  return 1 + Math.floor(Math.random() * 0x7ffffffe);
+}
+
+/** ★ 当天地图种子 = 主种子 × 天数 混合（确定性 32 位）。
+ *  同主种子同天恒同图（重进/回放一致）；不同天/不同局不同图。
+ *  RasterMap 生成、外观烘焙、装饰噪声全部以本值为 seed。 */
+export function dailyMapSeed(mainSeed: number, day: number): number {
+  let h = (Math.imul(mainSeed | 0, 0x9e3779b1) ^ Math.imul(day | 0, 0x85ebca77)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x21f0aaad);
+  h = Math.imul(h ^ (h >>> 15), 0x735a2d97);
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
 export function createNewSession(): GameSession {
   const player = createEmptyGrid(GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols);
   // 开荒种子：六区兄弟（六种基础材料）各一份，背包首行展示
@@ -411,6 +429,7 @@ export function createNewSession(): GameSession {
     meta: {
       version: '0.2.0',
       day: 1,
+      seed: newRunSeed(),
       totalDaysSurvived: 0,
       deaths: 0,
       createdAt: new Date().toISOString(),

@@ -68,7 +68,7 @@ import { applyHeal } from '../services/combat/Healing';
 import { effectSystem } from '../services/combat/EffectSystem';
 import { queryFinalStats } from '../services/combat/FinalStats';
 import { eventBus } from '../core/EventBus';
-import { computeRelicModifiers } from '../core/Session';
+import { computeRelicModifiers, dailyMapSeed } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent, relicTimedFor } from '../core/RelicEffects';
@@ -523,7 +523,8 @@ export class WorldMode implements IGameMode {
     this.binding = new DesktopBinding(window, document.querySelector('canvas')!);
 
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张） ----
-    this.raster = new RasterMap();
+    // ★ 当天地图种子 = 主种子 × 天数（同局同天恒同图；换天/换局换图）
+    this.raster = new RasterMap(dailyMapSeed(ctx.session.meta.seed, ctx.day));
     this.entities = new EntityManager(this.physics, this.raster);
 
     // ---- ★ 地图流式管理器（地面刚体经 ChunkGroundHost 适配进实体系统） ----
