@@ -22,8 +22,7 @@
 //   改任何一个数 = 全世界地形重洗，回归基线全部失效。
 // ============================================================
 
-import { TILE_FLAT_SAND } from './Tiles';
-import { tileById } from './Tiles';
+import { TILE_FLAT_SAND, tileById, tileByKey, type TileDef } from './Tiles';
 import { pickChunkGroup, drawTileForRole, drawGroundDecorTile, type GroupDef } from './TileGroups';
 import { hash2, vnoise } from './TerrainNoise';
 
@@ -145,27 +144,43 @@ function fillSlots(
   seed: number, cx: number, cz: number,
   roles: Uint8Array, ports: Ports, panel: GroupDef,
   blockIds: Uint8Array,
+  materialOverride?: Partial<Record<'ground' | 'platform' | 'liquid' | 'pit', string>> | null,
+  noGroundPatch = false,
 ): void {
   const portNear = buildPortNearSet(ports);
+  // ★ 材质覆盖查表（人造地形：背景/字各一个固定材质，不走组抽取）
+  const overrideOf = (role: 'ground' | 'platform' | 'liquid' | 'pit'): TileDef | null => {
+    const key = materialOverride?.[role];
+    return key ? (tileByKey(key) ?? null) : null;
+  };
+  const ovGround = overrideOf('ground');
+  const ovPlatform = overrideOf('platform');
+  const ovLiquid = overrideOf('liquid');
+  const ovPit = overrideOf('pit');
 
   for (let i = 0; i < 225; i++) {
     switch (roles[i]) {
       case ROLE_WALL:
-        blockIds[i] = drawTileForRole(panel, 'platform', seed, cx, cz, i).id;
+        blockIds[i] = (ovPlatform ?? drawTileForRole(panel, 'platform', seed, cx, cz, i)).id;
         break;
       case ROLE_LIQUID:
-        blockIds[i] = drawTileForRole(panel, 'liquid', seed, cx, cz, i).id;
+        blockIds[i] = (ovLiquid ?? drawTileForRole(panel, 'liquid', seed, cx, cz, i)).id;
         break;
       case ROLE_PIT:
-        blockIds[i] = drawTileForRole(panel, 'pit', seed, cx, cz, i).id;
+        blockIds[i] = (ovPit ?? drawTileForRole(panel, 'pit', seed, cx, cz, i)).id;
         break;
       default: {
+        // ★ 材质覆盖优先（背景材质）：人造地形不参与地面装饰斑块
+        if (ovGround) {
+          blockIds[i] = ovGround.id;
+          break;
+        }
         // PATH：低频噪声成片替换为装饰平面地块（冰原/灰烬地/泥沼…）
         const bx = i % BLOCKS_PER_SIDE;
         const bz = Math.floor(i / BLOCKS_PER_SIDE);
         const wx = (cx * BLOCKS_PER_SIDE + bx) * BLOCK_SIZE;
         const wz = (cz * BLOCKS_PER_SIDE + bz) * BLOCK_SIZE;
-        if (!portNear.has(i) && vnoise(wx * PATCH_FREQ, wz * PATCH_FREQ, seed + 7349) > PATCH_TAU) {
+        if (!noGroundPatch && !portNear.has(i) && vnoise(wx * PATCH_FREQ, wz * PATCH_FREQ, seed + 7349) > PATCH_TAU) {
           const decor = drawGroundDecorTile(panel, seed, cx, cz, i);
           blockIds[i] = decor ? decor.id : TILE_FLAT_SAND.id;
         } else {
@@ -186,15 +201,27 @@ function assignHeights(
   seed: number,
   chunkX: number,
   chunkZ: number,
+  overrides?: Float32Array | null,
+  overridePortHeights = false,
 ): Float32Array {
   const heights = new Float32Array(225);
-  const allPorts = new Set([...ports.top, ...ports.bottom, ...ports.left, ...ports.right]);
+  const allPorts = new Set<number>(); // ★ 端口格（正确坐标映射；高度归基础面保跨块顺滑）
+  for (const c of ports.top) allPorts.add(c);
+  for (const c of ports.bottom) allPorts.add((BLOCKS_PER_SIDE - 1) * BLOCKS_PER_SIDE + c);
+  for (const r of ports.left) allPorts.add(r * BLOCKS_PER_SIDE);
+  for (const r of ports.right) allPorts.add(r * BLOCKS_PER_SIDE + (BLOCKS_PER_SIDE - 1));
 
   // 高度分配（确定性；规则来自被抽地块自身的 physics）
   //   ground: height + jitter，端口平整
   //   platform 角色: 三档梯田 1.2/2.2/3.4（低频噪声分带，同档成片）
   //   liquid/pit: 各自 physics.height
   for (let i = 0; i < 225; i++) {
+    // ★ 预设高度覆盖（山峰/峡谷/岛屿/高原）：默认端口格除外；
+    //   overridePortHeights = true 时端口也生效（高原等大高程地形的跨块同高）
+    if (overrides && (overridePortHeights || !allPorts.has(i)) && Number.isFinite(overrides[i])) {
+      heights[i] = overrides[i];
+      continue;
+    }
     const def = tileById(blockIds[i]);
     const p = def.physics;
 
@@ -438,6 +465,10 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   //   材质选组（L2）与之完全独立。
   let roles: Uint8Array;
   let presetKey: string;
+  let heightOverrides: Float32Array | null = null;
+  let overridePortHeights = false;
+  let materialOverride: Partial<Record<'ground' | 'platform' | 'liquid' | 'pit', string>> | null = null;
+  let noGroundPatch = false;
   if (special?.mode === 'replace' && special.roles) {
     roles = special.roles.slice();
     presetKey = 'special';
@@ -445,7 +476,16 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
     const preset = getTestPreset() ? (presetByKey(getTestPreset()!) ?? pickPreset(seed, chunkX, chunkZ)) : pickPreset(seed, chunkX, chunkZ);
     presetKey = preset.key;
     const salt = ((hash2(chunkX, chunkZ, seed + 9202) * 1000000000) | 0) ^ (seed * 2654435761);
-    roles = preset.build({ seed, cx: chunkX, cz: chunkZ, ports, salt, gen: panel.gen });
+    const built = preset.build({ seed, cx: chunkX, cz: chunkZ, ports, salt, gen: panel.gen });
+    if (built instanceof Uint8Array) {
+      roles = built;
+    } else {
+      roles = built.roles;
+      heightOverrides = built.heights ?? null;
+      overridePortHeights = built.overridePorts === true;
+      materialOverride = built.materials ?? null;
+      noGroundPatch = built.noGroundPatch === true;
+    }
   }
 
   // ---- L4a 连通性修复（对所有布局来源兜底） ----
@@ -453,10 +493,10 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
 
   // ---- L2+L3 选组与抽取 ----
   const blockIds = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);
-  fillSlots(seed, chunkX, chunkZ, roles, ports, panel, blockIds);
+  fillSlots(seed, chunkX, chunkZ, roles, ports, panel, blockIds, materialOverride, noGroundPatch);
 
   // ---- L4 高度分配 ----
-  const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ);
+  const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ, heightOverrides, overridePortHeights);
 
   // ---- L5 输出 ----
   const data = toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key, presetKey);

@@ -62,13 +62,26 @@ export interface PresetCtx {
   gen?: GroupDef['gen'];
 }
 
+/** 预设输出：角色槽位 + 可选高度覆盖（Float32(225)；NaN = 走 L4 自动高度） */
+export interface PresetResult {
+  roles: Uint8Array;
+  heights?: Float32Array;
+  /** ★ 端口格也应用高度覆盖（默认 false：端口强制基础面保跨块顺滑）。
+   *  大高程地形（高原）置 true → 相邻同预设块在端口处同高、可直接连通。 */
+  overridePorts?: boolean;
+  /** ★ 材质覆盖：角色 → 固定地块 key（跳过组抽取；人造地形需要明确对比，如 325）*/
+  materials?: Partial<Record<'ground' | 'platform' | 'liquid' | 'pit', string>>;
+  /** ★ 不做 PATH 装饰斑块（背景保持纯净；配合 materials.ground）*/
+  noGroundPatch?: boolean;
+}
+
 export interface TerrainPreset {
   key: string;
   label: string;
   /** 区域抽取权重（0 = 只作测试用，不参与自然生成） */
   weight: number;
-  /** 生成角色槽位（225；端口处会被统一凿通） */
-  build(ctx: PresetCtx): Uint8Array;
+  /** 生成角色槽位（225；端口处会被统一凿通）；可附带高度覆盖（山峰/峡谷/岛屿用） */
+  build(ctx: PresetCtx): Uint8Array | PresetResult;
 }
 
 const REGISTRY = new Map<string, TerrainPreset>();
@@ -107,6 +120,43 @@ function weightedPickPreset(r: number): TerrainPreset {
 
 const presetCache = new Map<number, TerrainPreset>();
 
+// ---- ★「325」稀疏投放（2026-09-13 用户定调：≈2% 且不成片） ----
+// 每区域至多 1 块，且候选格限定在区域内部 2×2 → 相邻区域的 325 至少隔 2 块（120m）
+const P325_REGION = 0.32;
+
+/** 该 chunk 是否是「325」（独立于区域预设抽样） */
+function is325Chunk(seed: number, cx: number, cz: number): boolean {
+  const rx = Math.floor(cx / REGION);
+  const rz = Math.floor(cz / REGION);
+  if (hash2(rx, rz, seed + 9606) >= P325_REGION) return false;
+  // 候选格：区域内部 2×2（(1,1)~(2,2)），远离边界 → 不会与邻区 325 贴脸
+  const pick = Math.floor(hash2(rx, rz, seed + 9616) * 4);
+  const lx = 1 + (pick % 2);
+  const lz = 1 + Math.floor(pick / 2);
+  return cx - rx * REGION === lx && cz - rz * REGION === lz;
+}
+
+/** 区域原始抽样（纯 hash；去重比较用，不含去重位移） */
+function regionPickRaw(seed: number, rx: number, rz: number): TerrainPreset {
+  return weightedPickPreset(hash2(rx, rz, seed + 9101));
+}
+
+/** 区域预设（★ 去重：与左/上邻区同名 → 剔除该名后按权重重抽；比例不偏） */
+function regionPick(seed: number, rx: number, rz: number): TerrainPreset {
+  const p = regionPickRaw(seed, rx, rz);
+  const same = p.key === regionPickRaw(seed, rx - 1, rz).key || p.key === regionPickRaw(seed, rx, rz - 1).key;
+  if (!same) return p;
+  const pool = ORDER.map((k) => REGISTRY.get(k)!).filter((q) => q.weight > 0 && q.key !== p.key);
+  let total = 0;
+  for (const q of pool) total += q.weight;
+  let r = hash2(rx, rz, seed + 9505) * total;
+  for (const q of pool) {
+    r -= q.weight;
+    if (r <= 0) return q;
+  }
+  return pool[pool.length - 1];
+}
+
 /** 该 chunk 的预设（区域一致 + 边缘 20% 过渡） */
 export function pickPreset(seed: number, cx: number, cz: number): TerrainPreset {
   const key = ((cx + 32768) * 65536 + (cz + 32768)) ^ seed;
@@ -131,10 +181,11 @@ export function pickPreset(seed: number, cx: number, cz: number): TerrainPreset 
       else rz++;
     }
   }
-  const p = weightedPickPreset(hash2(rx, rz, seed + 9101));
+  const p = regionPick(seed, rx, rz);
+  const out = is325Chunk(seed, cx, cz) ? (REGISTRY.get('field325') ?? p) : p;
   if (presetCache.size > 4096) presetCache.clear();
-  presetCache.set(key, p);
-  return p;
+  presetCache.set(key, out);
+  return out;
 }
 
 /** ★ 测试地图：强制所有 chunk 使用指定预设（null = 恢复自然加权） */
@@ -295,7 +346,7 @@ function wallRatio(gen: GroupDef['gen'] | undefined, base: number): number {
 
 /** ① 旷野：大面地面 + 稀疏墙团 + 少量水/坑（蜂群大波的主战场） */
 registerPreset({
-  key: 'plain', label: '旷野', weight: 2,
+  key: 'plain', label: '旷野', weight: 1.4,     // 基础地貌
   build(ctx) {
     const roles = new Uint8Array(N); // 默认 PATH
     const near = portNearSet(ctx.ports);
@@ -330,7 +381,7 @@ registerPreset({
 
 /** ② 湖盆：中央大水体 + 环岸 + 少量岛 */
 registerPreset({
-  key: 'lake', label: '湖盆', weight: 1.5,
+  key: 'lake', label: '湖盆', weight: 1.7,      // 常规变体
   build(ctx) {
     const roles = new Uint8Array(N);
     const near = portNearSet(ctx.ports);
@@ -362,69 +413,9 @@ registerPreset({
   },
 });
 
-/** ③ 台地：成片高台 + 其间峡道（断崖天际线） */
+/** ③ 遗迹：房间阵列（墙线 + 门洞） */
 registerPreset({
-  key: 'plateau', label: '台地', weight: 1.5,
-  build(ctx) {
-    const roles = new Uint8Array(N);
-    const near = portNearSet(ctx.ports);
-    const target = Math.floor(N * wallRatio(ctx.gen, 0.52));
-    let walls = 0;
-    for (let k = 0; k < 20 && walls < target; k++) {
-      const s = pickStart(roles, (i) => roles[i] === ROLE_PATH && !near.has(i), ctx.salt + 111 + k);
-      if (s < 0) break;
-      const size = 8 + Math.floor(hash2(k, 7, ctx.salt + 12) * 14);
-      walls += paintCluster(roles, s, size, ROLE_WALL, near, ctx.salt + 211 + k);
-    }
-    // 峡道保障：横向/纵向各留 1~2 条通路（防大台地全堵）
-    const dir = hash2(ctx.cx, ctx.cz, ctx.salt + 13) < 0.5;
-    const lanes = 1 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 14) * 2);
-    for (let k = 0; k < lanes; k++) {
-      const line = 2 + Math.floor(hash2(k, 8, ctx.salt + 15) * (SIDE - 4));
-      for (let j = 0; j < SIDE; j++) {
-        const i = dir ? line * SIDE + j : j * SIDE + line;
-        if (!near.has(i)) roles[i] = ROLE_PATH;
-      }
-    }
-    openPorts(roles, ctx.ports);
-    return roles;
-  },
-});
-
-/** ④ 山脊：平行条带（走向随块种子） */
-registerPreset({
-  key: 'ridges', label: '山脊', weight: 1.5,
-  build(ctx) {
-    const roles = new Uint8Array(N);
-    const near = portNearSet(ctx.ports);
-    const vert = hash2(ctx.cx, ctx.cz, ctx.salt + 16) < 0.5;
-    const period = 3 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 17) * 2); // 3~4 格周期
-    for (let a = 0; a < SIDE; a++) {
-      const band = ((a + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 18) * period)) % period);
-      const isWall = band < period - 1; // 留 1 格通路
-      for (let b = 0; b < SIDE; b++) {
-        const i = vert ? b * SIDE + a : a * SIDE + b;
-        if (near.has(i)) continue;
-        roles[i] = isWall ? ROLE_WALL : ROLE_PATH;
-      }
-    }
-    // 缺口（每 2 条脊开 1~2 个 2 格缺口，避免长墙锁死）
-    for (let k = 0; k < 6; k++) {
-      const a = Math.floor(hash2(k, 9, ctx.salt + 19) * SIDE);
-      const b = Math.floor(hash2(k, 10, ctx.salt + 20) * (SIDE - 2));
-      for (let d = 0; d < 2; d++) {
-        const i = vert ? (b + d) * SIDE + a : a * SIDE + (b + d);
-        if (!near.has(i)) roles[i] = ROLE_PATH;
-      }
-    }
-    openPorts(roles, ctx.ports);
-    return roles;
-  },
-});
-
-/** ⑤ 遗迹：房间阵列（墙线 + 门洞） */
-registerPreset({
-  key: 'ruins', label: '遗迹', weight: 1,
+  key: 'ruins', label: '遗迹', weight: 1.6,     // 常规变体
   build(ctx) {
     const roles = new Uint8Array(N);
     const near = portNearSet(ctx.ports);
@@ -465,9 +456,9 @@ registerPreset({
   },
 });
 
-/** ⑥ 坑原：大片地面 + 密集坑簇（危险高原） */
+/** ④ 坑原：大片地面 + 密集坑簇（危险高原） */
 registerPreset({
-  key: 'pitfield', label: '坑原', weight: 1,
+  key: 'pitfield', label: '坑原', weight: 1.1,  // 地标
   build(ctx) {
     const roles = new Uint8Array(N);
     const near = portNearSet(ctx.ports);
@@ -489,40 +480,9 @@ registerPreset({
   },
 });
 
-/** ⑦ 梯田：横向台带（高度档位由 L4 噪声分带形成层叠） */
+/** ⑤ 峡道：2~3 条宽走廊穿过墙区（险要地形） */
 registerPreset({
-  key: 'terraces', label: '梯田', weight: 1,
-  build(ctx) {
-    const roles = new Uint8Array(N);
-    const near = portNearSet(ctx.ports);
-    const bandH = 2 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 26) * 2); // 台带宽 2~3
-    const pathH = 1 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 27) * 2); // 通路带 1~2
-    const period = bandH + pathH;
-    const phase = Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 28) * period);
-    for (let z = 0; z < SIDE; z++) {
-      const inBand = ((z + phase) % period) < bandH;
-      for (let x = 0; x < SIDE; x++) {
-        const i = z * SIDE + x;
-        if (near.has(i)) continue;
-        roles[i] = inBand ? ROLE_WALL : ROLE_PATH;
-      }
-    }
-    // 台带纵向缺口
-    for (let k = 0; k < 5; k++) {
-      const x = Math.floor(hash2(k, 13, ctx.salt + 29) * SIDE);
-      for (let z = 0; z < SIDE; z++) {
-        const i = z * SIDE + x;
-        if (!near.has(i)) roles[i] = ROLE_PATH;
-      }
-    }
-    openPorts(roles, ctx.ports);
-    return roles;
-  },
-});
-
-/** ⑧ 峡道：2~3 条宽走廊穿过墙区（险要地形） */
-registerPreset({
-  key: 'corridor', label: '峡道', weight: 1,
+  key: 'corridor', label: '峡道', weight: 1.1,  // 地标
   build(ctx) {
     const roles = new Uint8Array(N);
     const near = portNearSet(ctx.ports);
@@ -555,9 +515,291 @@ registerPreset({
   },
 });
 
-/** ⑨ 迷宫（原结构层；保留为预设之一，密度吃组偏置） */
+/** ⑥ 高原：高顶 11.5~13.5m（平均 >10m）+ 常高缘台 7.5m + 端口坡道（替代一部分平原） */
 registerPreset({
-  key: 'maze', label: '迷宫', weight: 1.5,
+  key: 'highland', label: '高原', weight: 2.2, // 常规地貌（体量大，承担"平原替身"）
+  build(ctx) {
+    const roles = new Uint8Array(N);
+    const heights = new Float32Array(N).fill(NaN);
+    const SHELF = 6.0;                                   // 缘台常高（跨块可直连）
+    const H = 9 + hash2(ctx.cx, ctx.cz, ctx.salt + 71) * 2; // 顶面 9~11m
+    for (let z = 0; z < SIDE; z++) {
+      for (let x = 0; x < SIDE; x++) {
+        const i = z * SIDE + x;
+        const edge = Math.min(x, z, SIDE - 1 - x, SIDE - 1 - z);
+        if (edge < 1) {
+          // 缘台（含端口）：常高，保证相邻高原地块跨块直连
+          roles[i] = ROLE_PATH;
+          heights[i] = Math.round((SHELF + (vnoise(x * 0.3, z * 0.3, ctx.salt + 74) - 0.5) * 0.4) * 4) / 4;
+          continue;
+        }
+        const wob = (vnoise(x * 0.3, z * 0.3, ctx.salt + 72) - 0.5) * 0.8;
+        heights[i] = Math.round((H + wob) * 4) / 4;
+        const soil = vnoise(x * 0.22, z * 0.22, ctx.salt + 73) > 0.62;
+        roles[i] = soil ? ROLE_PATH : ROLE_WALL;
+      }
+    }
+    // 端口坡道：端口向内 1 格宽；前 2 格缘台 → 每 0.75m 一级上到顶面
+    const ramp = (p0: number, inward: number): void => {
+      let cur = p0;
+      let h = SHELF;
+      for (let k = 1; k <= 12; k++) {
+        const nb = cur + inward;
+        if (nb < 0 || nb >= N) break;
+        if (inward === SIDE && Math.floor(nb / SIDE) > SIDE - 1) break;
+        if (inward === -SIDE && Math.floor(nb / SIDE) < 0) break;
+        if (inward === 1 && nb % SIDE === 0) break;
+        if (inward === -1 && nb % SIDE === SIDE - 1) break;
+        roles[nb] = ROLE_PATH;
+        if (k <= 2) {
+          heights[nb] = SHELF;
+        } else {
+          h = Math.min(H, SHELF + (k - 2) * 0.75);
+          heights[nb] = Math.round(h * 4) / 4;
+        }
+        cur = nb;
+        if (h >= H) break;
+      }
+    };
+    for (const c of ctx.ports.top) ramp(c, SIDE);
+    for (const c of ctx.ports.bottom) ramp((SIDE - 1) * SIDE + c, -SIDE);
+    for (const r of ctx.ports.left) ramp(r * SIDE, 1);
+    for (const r of ctx.ports.right) ramp(r * SIDE + (SIDE - 1), -1);
+    // 顶面点缀：石柱
+    for (let k = 0; k < 4; k++) {
+      const s0 = pickStart(roles, (i) => roles[i] === ROLE_WALL && heights[i] > SHELF + 2, ctx.salt + 741 + k);
+      if (s0 < 0) break;
+      heights[s0] = Math.round((heights[s0] + 1.2) * 4) / 4;
+    }
+    openPorts(roles, ctx.ports);
+    // ★ overridePorts：端口保持缘台高度（相邻高原地块直连）
+    return { roles, heights, overridePorts: true };
+  },
+});
+
+/** ⑦ 325：全平地面 + 高台刻「325」（≈2% 稀疏投放；背景/字各一个固定材质） */
+registerPreset({
+  key: 'field325', label: '325', weight: 0,    // 不参与区域抽取：独立稀疏规则投放（≈2%，互不靠近）
+  build(ctx) {
+    const roles = new Uint8Array(N); // 全 PATH（平地）
+    const heights = new Float32Array(N).fill(0);
+    // 高台：13×9 方台，高 2.5m
+    const PLAT = 2.5;
+    for (let z = 3; z <= 11; z++) {
+      for (let x = 1; x <= 13; x++) {
+        const i = z * SIDE + x;
+        roles[i] = ROLE_PATH;
+        heights[i] = PLAT;
+      }
+    }
+    // 上台坡道（南侧 x=4，3 级 0.8m；只走台面下缘 rows 10~12，不切数字带 5~9）
+    const rampH = [0.9, 1.7, PLAT];
+    for (let k = 0; k < 3; k++) {
+      const i = (12 - k) * SIDE + 4;
+      roles[i] = ROLE_PATH;
+      heights[i] = Math.round(rampH[k] * 4) / 4;
+    }
+    // 端口凿通先做——数字最后覆盖绘制（防止凿通/坡道切掉笔画）
+    openPorts(roles, ctx.ports);
+    const G3 = [0b111, 0b001, 0b011, 0b001, 0b111];
+    const G2 = [0b111, 0b001, 0b111, 0b100, 0b111];
+    const G5 = [0b111, 0b100, 0b111, 0b001, 0b111];
+    const glyph = (g: number[], ox: number, oz = 5): void => {
+      for (let r = 0; r < g.length; r++) {
+        for (let c = 0; c < 3; c++) {
+          if ((g[r] >> (2 - c)) & 1) {
+            const i = (oz + r) * SIDE + (ox + c);
+            roles[i] = ROLE_WALL;
+            heights[i] = PLAT + 0.6;
+          }
+        }
+      }
+    };
+    glyph(G3, 2);
+    glyph(G2, 6);
+    glyph(G5, 10);
+    // ★ 材质（用户定调）：背景一个材质（沙土）、字一个材质（水泥深色）——
+    //   不走组抽取与地面装饰斑块，保证「325」清晰完整
+    return {
+      roles, heights,
+      materials: { ground: 'flat_sand', platform: 'cement_platform' },
+      noGroundPatch: true,
+    };
+  },
+});
+
+/** ⑧ 山峰：主峰 + 山肩裙坡（真实高程；可驾驶爬升/绕行） */
+registerPreset({
+  key: 'peak', label: '山峰', weight: 1.5,      // 地标
+  build(ctx) {
+    const roles = new Uint8Array(N); // 默认 PATH
+    const heights = new Float32Array(N).fill(NaN);
+    const near = portNearSet(ctx.ports);
+    // 主峰（内区）+ 可选副峰
+    const cx0 = 4 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 41) * 7);
+    const cz0 = 4 + Math.floor(hash2(ctx.cz, ctx.cx, ctx.salt + 42) * 7);
+    const R = 6 + hash2(ctx.cx + 1, ctx.cz, ctx.salt + 43) * 3;       // 半径 6~9 块
+    const H = 12 + hash2(ctx.cx, ctx.cz + 1, ctx.salt + 44) * 8;     // 峰高 12~20m
+    const peaks = [{ x: cx0, z: cz0, r: R, h: H }];
+    if (hash2(ctx.cx, ctx.cz, ctx.salt + 45) < 0.6) {
+      peaks.push({
+        x: 2 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 46) * 11),
+        z: 2 + Math.floor(hash2(ctx.cz, ctx.cx, ctx.salt + 47) * 11),
+        r: 3.5 + hash2(ctx.cx, ctx.cz, ctx.salt + 48) * 2.5,
+        h: H * 0.6,
+      });
+    }
+    for (let z = 0; z < SIDE; z++) {
+      for (let x = 0; x < SIDE; x++) {
+        const i = z * SIDE + x;
+        if (near.has(i)) continue;
+        let h = 0;
+        for (const p of peaks) {
+          const dx = x - p.x, dz = z - p.z;
+          const d = Math.sqrt(dx * dx + dz * dz);
+          const wob = (vnoise(x * 0.45, z * 0.45, ctx.salt + 49) - 0.5) * 1.6;
+          const t = 1 - (d + wob) / p.r;
+          if (t > 0) h = Math.max(h, p.h * Math.pow(t, 1.5));
+        }
+        if (h <= 0.05) continue;
+        heights[i] = Math.round(h * 4) / 4;          // 0.25m 台阶
+        if (h > 1.2) roles[i] = ROLE_WALL;           // 山体 = 高台材质
+      }
+    }
+    // 碎石点缀（山脚独立岩块）
+    for (let k = 0; k < 5; k++) {
+      const s0 = pickStart(roles, (i) => roles[i] === ROLE_PATH && !near.has(i) && !Number.isFinite(heights[i]), ctx.salt + 451 + k);
+      if (s0 < 0) break;
+      roles[s0] = ROLE_WALL;
+      heights[s0] = 0.8;
+    }
+    openPorts(roles, ctx.ports);
+    // 端口高度归零（跨块顺滑；override 在端口处不生效）
+    for (const p of portCells(ctx.ports)) heights[p] = NaN;
+    return { roles, heights };
+  },
+});
+
+/** ⑨ 大峡谷：高原中一条蜿蜒峡谷（一侧陡壁 + 一侧可攀台阶，谷底可走可进出） */
+registerPreset({
+  key: 'canyon', label: '大峡谷', weight: 1.4,  // 地标
+  build(ctx) {
+    const roles = new Uint8Array(N);
+    const heights = new Float32Array(N).fill(NaN);
+    const near = portNearSet(ctx.ports);
+    const plateauH = 2.2;
+    roles.fill(ROLE_WALL);
+    for (let i = 0; i < N; i++) heights[i] = plateauH;
+    // 峡谷走向（横穿/纵穿）+ 位置（保证整条谷含台阶都在块内）
+    const horiz = hash2(ctx.cx, ctx.cz, ctx.salt + 52) < 0.5;
+    const halfW = 1 + (hash2(ctx.cx, ctx.cz, ctx.salt + 53) < 0.5 ? 1 : 0); // 谷底 2~4 宽
+    const stepH = 0.72;                 // 台阶级差（< 跳跃峰值 0.8：可跳上，逐级可攀）
+    const banks = 5;                    // 台阶侧 5 级
+    const floorH = plateauH - banks * stepH; // ≈ -1.4（谷深 ~3.6m）
+    const loPos = halfW + banks + 1;
+    const hiPos = SIDE - 1 - (halfW + 1);
+    let pos = loPos + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 54) * Math.max(1, hiPos - loPos + 1));
+    const span = halfW * 2 + banks + 1;
+    for (let step = 0; step < SIDE; step++) {
+      if (hash2(step, 0, ctx.salt + 55) < 0.45) pos += hash2(step, 1, ctx.salt + 56) < 0.5 ? -1 : 1;
+      pos = Math.min(hiPos, Math.max(loPos, pos));
+      for (let d = -(halfW + banks); d <= halfW + 1; d++) {
+        const a = pos + d;
+        if (a < 0 || a >= SIDE) continue;
+        const i = horiz ? a * SIDE + step : step * SIDE + a;
+        if (near.has(i)) continue;
+        const ad = Math.abs(d);
+        let h: number;
+        if (d >= 0) {
+          // 右侧：谷底 → 陡壁
+          h = ad < halfW ? floorH : plateauH;
+        } else {
+          // 左侧：逐级台阶（谷底 → 高原）
+          const perp = Math.max(0, ad - halfW + 1);
+          h = Math.max(floorH, plateauH - perp * stepH);
+        }
+        heights[i] = Math.round(h * 4) / 4;
+        roles[i] = h > 0.5 ? ROLE_WALL : ROLE_PATH;
+      }
+    }
+    void span;
+    // 谷底点缀（碎石/积水口袋）
+    for (let k = 0; k < 3; k++) {
+      const s0 = pickStart(roles, (i) => roles[i] === ROLE_PATH && !near.has(i), ctx.salt + 571 + k);
+      if (s0 < 0) break;
+      if (hash2(k, 30, ctx.salt + 57) < 0.5) {
+        roles[s0] = ROLE_WALL;
+        heights[s0] = 0.3;
+      } else {
+        roles[s0] = ROLE_LIQUID;
+        heights[s0] = NaN; // 水皮走地块自身
+      }
+    }
+    openPorts(roles, ctx.ports);
+    for (const p of portCells(ctx.ports)) heights[p] = NaN;
+    return { roles, heights };
+  },
+});
+
+/** ⑩ 孤岛：大面积水域 + 中央主岛 + 小岛/栈桥（可涉水或走桥） */
+registerPreset({
+  key: 'island', label: '孤岛', weight: 1.3,    // 地标
+  build(ctx) {
+    const roles = new Uint8Array(N);
+    roles.fill(ROLE_LIQUID);
+    const heights = new Float32Array(N).fill(NaN); // 水面高度走地块自身
+    const near = portNearSet(ctx.ports);
+    // 主岛（中央偏内）
+    const cx0 = 5 + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 61) * 5);
+    const cz0 = 5 + Math.floor(hash2(ctx.cz, ctx.cx, ctx.salt + 62) * 5);
+    const R = 3.2 + hash2(ctx.cx + 1, ctx.cz + 1, ctx.salt + 63) * 1.8;
+    for (let z = 0; z < SIDE; z++) {
+      for (let x = 0; x < SIDE; x++) {
+        const i = z * SIDE + x;
+        if (near.has(i)) continue;
+        const dx = x - cx0, dz = z - cz0;
+        const d = Math.sqrt(dx * dx + dz * dz);
+        const wob = (vnoise(x * 0.5, z * 0.5, ctx.salt + 64) - 0.5) * 1.4;
+        if (d + wob < R) {
+          const t = 1 - (d + wob) / R;
+          heights[i] = Math.max(0.4, t * 1.8);   // 岛心缓丘
+          roles[i] = t > 0.55 ? ROLE_WALL : ROLE_PATH;
+        }
+      }
+    }
+    // 小岛 0~2
+    const isles = hash2(cx0, cz0, ctx.salt + 65) < 0.55 ? 1 + Math.floor(hash2(cx0, cz0, ctx.salt + 66) * 2) : 0;
+    for (let k = 0; k < isles; k++) {
+      const s0 = pickStart(roles, (i) => roles[i] === ROLE_LIQUID && !near.has(i), ctx.salt + 661 + k);
+      if (s0 < 0) break;
+      const painted = paintCluster(roles, s0, 2 + Math.floor(hash2(k, 21, ctx.salt + 67) * 2), ROLE_PATH, near, ctx.salt + 671 + k);
+      if (painted > 0) heights[s0] = 0.5;
+    }
+    // 栈桥：每个端口向主岛方向铺 1 格宽通路（跨水）
+    const bridge = (c: number, sx: number, sz: number): void => {
+      let x = sx, z = sz;
+      for (let guard = 0; guard < SIDE * 2; guard++) {
+        const i = z * SIDE + x;
+        roles[i] = ROLE_PATH;
+        if (!Number.isFinite(heights[i])) heights[i] = 0.6;
+        if (x === cx0 && z === cz0) break;
+        if (Math.abs(cx0 - x) > Math.abs(cz0 - z)) x += Math.sign(cx0 - x);
+        else z += Math.sign(cz0 - z);
+      }
+    };
+    for (const c of ctx.ports.top) bridge(c, c, 0);
+    for (const c of ctx.ports.bottom) bridge((c), c, SIDE - 1);
+    for (const r of ctx.ports.left) bridge(r, 0, r);
+    for (const r of ctx.ports.right) bridge(r, SIDE - 1, r);
+    openPorts(roles, ctx.ports);
+    for (const p of portCells(ctx.ports)) heights[p] = NaN;
+    return { roles, heights };
+  },
+});
+
+/** ⑪ 迷宫（原结构层；保留为预设之一，密度吃组偏置） */
+registerPreset({
+  key: 'maze', label: '迷宫', weight: 2.0,      // 基础地貌
   build(ctx) {
     const density = hash2(ctx.cx, ctx.cz, ctx.seed + 1818);
     let targetPassageRatio = 0.3 + density * 0.4;

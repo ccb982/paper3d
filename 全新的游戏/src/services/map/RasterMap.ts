@@ -102,11 +102,15 @@ export class RasterMap {
 
   /** ★ 距离卸载：数据环外（radius + UNLOAD_MARGIN）释放 chunk 数据，防长距离跑图内存无界增长；
    *  被挖过的 chunk 先把 levels 移入持久层（回程原样恢复），纯生成块直接丢弃（确定性重生成）。 */
-  private evictFarChunks(pcx: number, pcz: number, keepRadius: number): void {
+  private evictFarChunks(
+    pcx: number, pcz: number, keepRadius: number,
+    fwdRadius = 0, nx = 0, nz = 0,
+  ): void {
     for (const [key, cd] of this.chunks) {
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
-      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= keepRadius) continue;
+      // ★ 前向延伸：锥内数据保留（航行期前方看更远）
+      if (RasterMap.inLoadRing(cx - pcx, cz - pcz, keepRadius, fwdRadius, nx, nz)) continue;
       if (this.dirtyLevelKeys.has(key)) {
         this.levelsStore.set(key, cd.levels);
         this.dirtyLevelKeys.delete(key);
@@ -127,31 +131,38 @@ export class RasterMap {
     loadRadius = 2,
     dirX = 0,
     dirZ = 0,
+    /** ★ 前向延伸半径（航行期前方看更远；0 = 各向同环） */
+    fwdRadius = 0,
   ): { cx: number; cz: number }[] {
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
+    // 方向单位化（前向锥判定用）
+    const dl = Math.hypot(dirX, dirZ);
+    const nx = dl > 0.05 ? dirX / dl : 0;
+    const nz = dl > 0.05 ? dirZ / dl : 0;
     const moved = !this.initialized || pcx !== this.lastPcx || pcz !== this.lastPcz;
     if (moved) {
       this.initialized = true; // ★ 首次强制加载（数据已就绪，同步刚体/网格）
       this.lastPcx = pcx;
       this.lastPcz = pcz;
       // ★ 重建待加载清单（跨 chunk 一步可能缺 ~15 块 → 逐帧预算生成，防生成尖峰）
+      //   航行前向延伸：包围盒取 max(loadRadius, fwdRadius)，用锥形范围过滤
+      const R = Math.max(loadRadius, fwdRadius);
       this.pendingLoads.length = 0;
-      for (let cx = pcx - loadRadius; cx <= pcx + loadRadius; cx++) {
-        for (let cz = pcz - loadRadius; cz <= pcz + loadRadius; cz++) {
-          if (!this.chunks.has(chunkKeyOf(cx, cz))) this.pendingLoads.push({ cx, cz });
+      for (let cx = pcx - R; cx <= pcx + R; cx++) {
+        for (let cz = pcz - R; cz <= pcz + R; cz++) {
+          if (!this.chunks.has(chunkKeyOf(cx, cz)) && RasterMap.inLoadRing(cx - pcx, cz - pcz, loadRadius, fwdRadius, nx, nz)) {
+            this.pendingLoads.push({ cx, cz });
+          }
         }
       }
       // ★ 距离卸载：环外数据释放（挖过的层数入持久层）——防长距离跑图内存无界增长
-      this.evictFarChunks(pcx, pcz, loadRadius + RasterMap.UNLOAD_MARGIN);
+      this.evictFarChunks(pcx, pcz, loadRadius + RasterMap.UNLOAD_MARGIN, fwdRadius, nx, nz);
     }
     // ★ 移动方向优先（用户定调）：环距为第一序（近处永远先于远处）、
     //   归一化前向投影为第二序（同环内方向上的块提前、背面最后）；原地不偏。
     //   ⚠️ 勿用原始投影加权（|投影| 可到 ±7）——会把"远前方"排到"近处"前面。
     //   跨区重建时排；中途掉头（方向差 >0.3）对剩余清单重排；站立 → 回到纯环距序。
-    const dl0 = Math.hypot(dirX, dirZ);
-    const nx = dl0 > 0.05 ? dirX / dl0 : 0;
-    const nz = dl0 > 0.05 ? dirZ / dl0 : 0;
     const turned = Math.abs(nx - this.loadSortX) + Math.abs(nz - this.loadSortZ) > 0.3;
     if ((moved || turned) && this.pendingLoads.length > 1) {
       this.loadSortX = nx;
@@ -173,6 +184,15 @@ export class RasterMap {
       added.push(c);
     }
     return added;
+  }
+
+  /** ★ 加载环判定（各向异性）：基准方环 ±loadRadius；fwdRadius>0 时前方锥形延伸 */
+  private static inLoadRing(dx: number, dz: number, loadRadius: number, fwdRadius: number, nx: number, nz: number): boolean {
+    if (Math.max(Math.abs(dx), Math.abs(dz)) <= loadRadius) return true;
+    if (fwdRadius <= loadRadius) return false;
+    const fwd = dx * nx + dz * nz;
+    const lat = Math.abs(-dx * nz + dz * nx);
+    return fwd > 0 && fwd <= fwdRadius && lat <= loadRadius;
   }
 
   /** 数据加载评分（越小越先）：角色所在块绝对第一；否则环距 − 归一化前向投影 × 加权 */

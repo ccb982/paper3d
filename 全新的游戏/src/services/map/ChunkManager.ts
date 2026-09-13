@@ -400,6 +400,17 @@ export class ChunkManager {
   private coarseOnly = false;
   /** 粗块半径（±6 = 约 420m 视距；"±6 试试"用户定调） */
   private static readonly COARSE_RADIUS = 6;
+  /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
+   *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
+   *  "让飞机飞行的时候前方看得远，侧方不变" */
+  private static readonly COARSE_FWD_RADIUS = 12;
+  /** 当前前向延伸半径（0 = 关闭；仅航行期） */
+  private coarseFwd = 0;
+  /** 前向锥方向（单位向量；来自移动方向） */
+  private coarseDirX = 0;
+  private coarseDirZ = 0;
+  /** 动态粗块候选（包围盒过滤后的偏移表；方向/延伸变化时重建） */
+  private coarseDynamic: { dx: number; dz: number }[] = [];
   /** 每帧最多装配粗块数 */
   private static readonly COARSE_PER_FRAME = 3;
   /** 粗块补齐顺序（由内向外） */
@@ -431,6 +442,10 @@ export class ChunkManager {
   /** ★ 粗块模式开关（WorldMode：航行开、停靠关；关后粗块保留作远景 LOD） */
   setCoarseMode(v: boolean): void {
     this.coarseOnly = v;
+    // ★ 航行：前方延伸开启；落地：恢复（用户定调）
+    this.coarseFwd = v ? ChunkManager.COARSE_FWD_RADIUS : 0;
+    this.coarseOrder = null;
+    this.coarseDynamic = [];
   }
 
   private coarseMat(): THREE.MeshBasicMaterial {
@@ -510,7 +525,7 @@ export class ChunkManager {
     // ★ 粗块专属模式（航行）：只铺粗块（大半径、无物理/水面/装饰），不投细化
     if (this.coarseOnly) {
       const md = this.moveDirUnit();
-      this.raster.updateChunks(px, pz, this.dataRadius(), md.x, md.z);
+      this.raster.updateChunks(px, pz, this.dataRadius(), md.x, md.z, this.coarseFwd);
       this.syncCoarse(px, pz);
       this.flushCoarseQueue();
       this.parkFarChunks(px, pz);
@@ -1059,7 +1074,9 @@ export class ChunkManager {
       if (coarseBudget <= 0) break;
       const cz = (key % 8192) - 4096;
       const cx = Math.floor(key / 8192) - 4096;
-      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > ChunkManager.COARSE_RADIUS + 1) {
+      // ★ 各向异性：基准方环 + 航行前向锥内都保留；锥外（含正后方）超出才丢
+      const rdx = cx - pcx, rdz = cz - pcz;
+      if (!this.inCoarseRing(rdx, rdz) && Math.max(Math.abs(rdx), Math.abs(rdz)) > ChunkManager.COARSE_RADIUS + 1) {
         this.dropCoarse(key);
         coarseBudget--;
       }
@@ -1070,27 +1087,53 @@ export class ChunkManager {
   // ★ 粗块管线（地图两级构建第一级）
   // ============================================================
 
-  /** 数据环半径：取预烘半径与粗块半径+1 的较大者（粗块取数需要） */
+  /** 数据环半径：取预烘半径与粗块半径+1 的较大者（粗块取数需要）；
+   *  ★ 航行期取前向延伸半径+1（前方锥需要的数据） */
   private dataRadius(): number {
-    return Math.max(ChunkManager.PREFETCH_RADIUS, ChunkManager.COARSE_RADIUS + 1);
+    return Math.max(
+      ChunkManager.PREFETCH_RADIUS,
+      Math.max(ChunkManager.COARSE_RADIUS, this.coarseFwd) + 1,
+    );
   }
 
-  /** ★ 粗块请求顺序（移动方向优先）：score = 环距 − 前向投影 × 加权；
-   *  站立（方向≈0）→ 纯由内向外；方向稳定时复用上次排序 */
+  /** ★ 粗块范围判定（各向异性）：基准方环 ±COARSE_RADIUS；
+   *  航行期前方锥形延伸到 coarseFwd（侧向仍 ≤ COARSE_RADIUS） */
+  private inCoarseRing(dx: number, dz: number, dirX = this.coarseDirX, dirZ = this.coarseDirZ): boolean {
+    const base = ChunkManager.COARSE_RADIUS;
+    if (Math.max(Math.abs(dx), Math.abs(dz)) <= base) return true;
+    if (this.coarseFwd <= base) return false;
+    const fwd = dx * dirX + dz * dirZ;
+    const lat = Math.abs(-dx * dirZ + dz * dirX);
+    return fwd > 0 && fwd <= this.coarseFwd && lat <= base;
+  }
+
+  /** ★ 粗块请求顺序（移动方向优先）：score = 环距 − 归一化前向投影 × 加权；
+   *  站立（方向≈0）→ 纯由内向外；方向/前向延伸变化时重建候选与排序。
+   *  候选 = ±COARSE_RADIUS 方环 ∪ 航行期前方锥（inCoarseRing 过滤）。 */
   private coarseRequestOrder(): number[] {
-    const n = ChunkManager.COARSE_OFFSETS.length;
-    if (!this.coarseOrder) {
+    const dir = this.moveDirUnit();
+    const changed =
+      !this.coarseOrder ||
+      Math.abs(dir.x - this.coarseOrderDirX) > 0.15 ||
+      Math.abs(dir.z - this.coarseOrderDirZ) > 0.15 ||
+      this.coarseDynamic.length === 0;
+    if (changed) {
+      this.coarseDirX = dir.x;
+      this.coarseDirZ = dir.z;
+      const R = Math.max(ChunkManager.COARSE_RADIUS, this.coarseFwd);
+      const list: { dx: number; dz: number }[] = [];
+      for (let dz = -R; dz <= R; dz++) {
+        for (let dx = -R; dx <= R; dx++) {
+          if (this.inCoarseRing(dx, dz, dir.x, dir.z)) list.push({ dx, dz });
+        }
+      }
+      this.coarseDynamic = list;
+      const n = list.length;
       this.coarseOrder = Array.from({ length: n }, (_, i) => i);
       this.coarseOrderScore = new Float32Array(n);
-    }
-    const dir = this.moveDirUnit();
-    if (
-      Math.abs(dir.x - this.coarseOrderDirX) > 0.15 ||
-      Math.abs(dir.z - this.coarseOrderDirZ) > 0.15
-    ) {
-      const s = this.coarseOrderScore!;
+      const s = this.coarseOrderScore;
       for (let i = 0; i < n; i++) {
-        const o = ChunkManager.COARSE_OFFSETS[i];
+        const o = list[i];
         if (o.dx === 0 && o.dz === 0) { s[i] = -1e6; continue; } // ★ 舰船所在块第一
         const d = Math.max(Math.abs(o.dx), Math.abs(o.dz));
         // 环距为第一序（近处永远先于远处）；归一化前向投影为第二序（同环内方向优先）
@@ -1100,7 +1143,7 @@ export class ChunkManager {
       this.coarseOrderDirX = dir.x;
       this.coarseOrderDirZ = dir.z;
     }
-    return this.coarseOrder;
+    return this.coarseOrder!;
   }
 
   /** 粗块请求/补齐：环内数据块（近处交给细化）→ coarsePatch worker；
@@ -1111,7 +1154,8 @@ export class ChunkManager {
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const epoch = this.coarseEpoch;
     for (const oi of this.coarseRequestOrder()) {
-      const o = ChunkManager.COARSE_OFFSETS[oi];
+      const o = this.coarseDynamic[oi];
+      if (!o) continue;
       const cx = pcx + o.dx, cz = pcz + o.dz;
       const key = chunkKeyOf(cx, cz);
       // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
