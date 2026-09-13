@@ -39,6 +39,8 @@ export interface AgentSpawnData {
   aggro: number;
   /** 游走速度（m/s；原 AI wander 一致） */
   wanderSpeed: number;
+  /** 攻击意图（Director.ts 的 INTENT_*；缺省 255 = 无意图） */
+  intent?: number;
 }
 
 /** 代理快照（升格/降格搬运） */
@@ -60,6 +62,8 @@ export interface AgentSnapshot {
   /** 仇恨半径 / 游走速度（降格携带，缺省由模式层补） */
   aggro?: number;
   wanderSpeed?: number;
+  /** 攻击意图（缺省 = 无意图/环境刷新） */
+  intent?: number;
 }
 
 export class AgentPool {
@@ -130,6 +134,18 @@ export class AgentPool {
   /** 警戒反应到点时间（0 = 未触发；now ≥ 该值 → 已察觉） */
   readonly alertAt = new Float32Array(AGENT_CAPACITY);
 
+  // ---- P3：受击反馈 ----
+  /** 受击白闪量（0~1；命中置 1，指数衰减；实例化批渲染消费） */
+  readonly flash = new Float32Array(AGENT_CAPACITY);
+
+  // ---- P4：导演意图 / 士气 ----
+  /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
+  readonly intent = new Uint8Array(AGENT_CAPACITY);
+  /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，performance.now/1000） */
+  readonly retreatUntil = new Float32Array(AGENT_CAPACITY);
+  readonly nextRetreatAt = new Float32Array(AGENT_CAPACITY);
+  readonly rageUntil = new Float32Array(AGENT_CAPACITY);
+
   push(d: AgentSpawnData): number {
     if (this.count >= AGENT_CAPACITY) return -1;
     const i = this.count++;
@@ -162,6 +178,11 @@ export class AgentPool {
     this.attackHold[i] = 0;
     this.fromFlow[i] = 0;
     this.alertAt[i] = 0;
+    this.flash[i] = 0;
+    this.intent[i] = d.intent ?? 255;
+    this.retreatUntil[i] = 0;
+    this.nextRetreatAt[i] = 0;
+    this.rageUntil[i] = 0;
     return i;
   }
 
@@ -199,6 +220,11 @@ export class AgentPool {
     this.attackHold[to] = this.attackHold[from];
     this.fromFlow[to] = this.fromFlow[from];
     this.alertAt[to] = this.alertAt[from];
+    this.flash[to] = this.flash[from];
+    this.intent[to] = this.intent[from];
+    this.retreatUntil[to] = this.retreatUntil[from];
+    this.nextRetreatAt[to] = this.nextRetreatAt[from];
+    this.rageUntil[to] = this.rageUntil[from];
   }
 
   /** 快照（升格用） */

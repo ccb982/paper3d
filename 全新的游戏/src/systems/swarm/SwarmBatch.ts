@@ -14,6 +14,8 @@ import { AGENT_CAPACITY } from './AgentPool';
 interface MobBatch {
   mesh: THREE.InstancedMesh;
   tiles: THREE.InstancedBufferAttribute;
+  /** ★ 受击白闪（0~1；命中置 1，指数衰减） */
+  flash: THREE.InstancedBufferAttribute;
   /** 贴图高宽比（h/w；实例缩放用） */
   aspect: number;
 }
@@ -71,12 +73,15 @@ function bakeFrame(asset: FrameAssetSource, frameIndex: number): ImageData | nul
 
 const VERT = /* glsl */ `
   attribute float aTile;
+  attribute float aFlash;
   uniform vec4 uTiles[2];
   varying vec2 vUv;
+  varying float vFlash;
   void main() {
     vec4 t = uTiles[0];
     if (aTile > 0.5) t = uTiles[1];
     vUv = t.xy + uv * t.zw;
+    vFlash = aFlash;
     vec3 transformed = position;
     #ifdef USE_INSTANCING
       gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(transformed, 1.0);
@@ -89,9 +94,12 @@ const VERT = /* glsl */ `
 const FRAG = /* glsl */ `
   uniform sampler2D uAtlas;
   varying vec2 vUv;
+  varying float vFlash;
   void main() {
     vec4 c = texture2D(uAtlas, vUv);
     if (c.a < 0.5) discard;
+    // ★ 受击白闪（P3）：朝白混色，0 无效果
+    c.rgb = mix(c.rgb, vec3(1.0, 0.92, 0.85), clamp(vFlash, 0.0, 1.0) * 0.85);
     gl_FragColor = c;
   }
 `;
@@ -153,18 +161,21 @@ export class SwarmBatch {
         polygonOffsetUnits: -2,
       });
 
-      // ★ 每兵种独立几何（aTile 实例属性挂在几何上，不能跨兵种共用）
+      // ★ 每兵种独立几何（实例属性挂在几何上，不能跨兵种共用）
       const geo = new THREE.PlaneGeometry(1, 1);
       const tiles = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
       tiles.setUsage(THREE.DynamicDrawUsage);
       geo.setAttribute('aTile', tiles);
+      const flash = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
+      flash.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aFlash', flash);
 
       const mesh = new THREE.InstancedMesh(geo, material, AGENT_CAPACITY);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.frustumCulled = false;
       mesh.count = 0;
       scene.add(mesh);
-      this.mobs.push({ mesh, tiles, aspect: h1 / Math.max(1, w1) });
+      this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1) });
     }
   }
 
@@ -187,6 +198,7 @@ export class SwarmBatch {
       _m.compose(_p, _q, _s);
       batch.mesh.setMatrixAt(idx, _m);
       batch.tiles.setX(idx, pool.facingBack[i]);
+      batch.flash.setX(idx, pool.flash[i]);
     }
     for (let m = 0; m < this.mobs.length; m++) {
       const b = this.mobs[m];
@@ -194,6 +206,7 @@ export class SwarmBatch {
       b.mesh.count = counters[m];
       b.mesh.instanceMatrix.needsUpdate = true;
       b.tiles.needsUpdate = true;
+      b.flash.needsUpdate = true;
     }
   }
 

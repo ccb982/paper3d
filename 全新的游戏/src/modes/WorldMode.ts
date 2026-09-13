@@ -46,6 +46,7 @@ import type { BehaviorContext } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
+import { Director, INTENT_NONE, type SpawnOrder } from '../systems/swarm/Director';
 import { AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { ItemBase } from '../entity/ItemBase';
@@ -327,14 +328,12 @@ export class WorldMode implements IGameMode {
   private enemyDefs = new WeakMap<EnemyBase, MobDef>();
   /** ★ 出生 chunk key（玩家安全区：自己不刷怪；敌人从他处生成） */
   private spawnChunkKey = -1;
-  /** ★ 波次节奏（秒，2026-09-12 拆两个）：舰船旁 / 玩家旁 各自独立倒计时 */
-  private waveTimerShip = 0;
-  private waveTimerPlayer = 0;
-  /** 波次间隔随机区间（秒） */
-  private static readonly WAVE_MIN = 6;
-  private static readonly WAVE_SPAN = 6;
+  /** ★ P4：蜂群导演（节奏 + 威胁预算 + intent 分工；替代旧双计时波次） */
+  private swarmDirector = new Director();
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
+  /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演按节奏投放） */
+  private static readonly AMBIENT_CAP = 80;
   /** ★ 压测：?enemies=N 开局在玩家周围铺 N 只代理（P0 度量；0 = 关） */
   private debugEnemyStress = 0;
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
@@ -654,9 +653,7 @@ export class WorldMode implements IGameMode {
       Math.floor(spawn.x / CHUNK_SIZE),
       Math.floor(spawn.z / CHUNK_SIZE),
     );
-    // ★ 首波节奏：两个波次错开（舰船旁 1.5s、玩家旁 3s）
-    this.waveTimerShip = 1.5;
-    this.waveTimerPlayer = 3;
+    // ★ P4：波次由导演控制（威胁预算 + 节奏；不再双计时器硬刷）
 
     // ---- 相机 ----
     this.cameraCtrl = new CameraController(this.camera);
@@ -998,17 +995,15 @@ export class WorldMode implements IGameMode {
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.swarmBulletCheck(dt);
-      // ---- ★ 波次拆两个（2026-09-12 用户定调）：舰船旁 / 玩家旁 各自独立倒计时 ----
-      this.waveTimerShip -= dt;
-      if (this.waveTimerShip <= 0) {
-        this.waveTimerShip = WorldMode.WAVE_MIN + Math.random() * WorldMode.WAVE_SPAN;
-        this.spawnWaveNear(this.ship.position.x, this.ship.position.z);
-      }
-      this.waveTimerPlayer -= dt;
-      if (this.waveTimerPlayer <= 0) {
-        this.waveTimerPlayer = WorldMode.WAVE_MIN + Math.random() * WorldMode.WAVE_SPAN;
-        this.spawnWaveNear(pp.x, pp.y);
-      }
+      // ---- ★ P4：导演调度波次（节奏 + 预算 + intent 分工） ----
+      const order = this.swarmDirector.update({
+        dt,
+        alive: this.enemies.length + this.swarm.count,
+        playerHpRatio: this.player.hp / Math.max(1, this.player.maxHp),
+        playerX: pp.x, playerZ: pp.y,
+        shipX: this.ship.position.x, shipZ: this.ship.position.z,
+      });
+      if (order) this.spawnDirectorWave(order);
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
       this.scanAndSpawnWaves(pp.x, pp.y, 8);
       // ---- ★ 远距实体降格（0.25s 一拍；《蜂群架构.md》P1）：
@@ -1489,8 +1484,10 @@ export class WorldMode implements IGameMode {
   /** ★ 随机在 chunk 内找一个可站立点并生成一个杂兵（不可站立点返回 false） */
   private spawnAtRandomPointInChunk(cx: number, cz: number): boolean {
     if (this.mobDefs.length === 0 || !this.scene || !this.camera) return false;
-    // ★ 存活上限（实体 + 代理合计；防无限世界累积）
+    // ★ 存活上限（实体 + 代理合计；防无限世界累积）+ 环境刷怪闸（80：
+    //   之上的名额留给导演按节奏投放，避免环境铺怪吃光预算）
     if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) return false;
+    if (this.enemies.length + this.swarm.count >= WorldMode.AMBIENT_CAP) return false;
     const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     // ★ 玩家近旁不刷（防贴脸 pop-in；出生 chunk 自身已整体排除，
@@ -1513,19 +1510,36 @@ export class WorldMode implements IGameMode {
     return this.spawnOne(this.pickMob(), x, y, z);
   }
 
-  /** ★ 定时波次（2026-09-12 拆两个调用点：舰船旁 / 玩家旁）：
-   *  在指定焦点 LOD 外环（94~110m，chunk 数据环内）周围随机生成一波。
+  /** ★ P4：执行导演订单（锚点 + intent + 数量 + 偏成群） */
+  private spawnDirectorWave(order: SpawnOrder): void {
+    this.spawnWaveNear(order.anchorX, order.anchorZ, {
+      count: order.count,
+      intent: order.intent,
+      preferPack: order.preferPack,
+    });
+  }
+
+  /** ★ 波次生成（导演订单 / 调试用）：
+   *  在指定焦点 LOD 外环（94~110m，chunk 数据环内）周围随机铺 count 只代理。
    *  ⚠️ 无论焦点是谁，都避开 玩家 12m / 舰船 15m 的安全圈。 */
-  private spawnWaveNear(fx: number, fz: number): void {
+  private spawnWaveNear(
+    fx: number, fz: number,
+    opts: { count: number; intent: number; preferPack: boolean },
+  ): void {
     if (this.testChunk || this.mobDefs.length === 0) return;
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
-    const want = 2 + (Math.random() < 0.5 ? 1 : 0); // ★ 每波 2~3 个（2026-09-12 生成加速）
+    const want = Math.max(1, opts.count);
     let placed = 0;
     const pp = this.player?.position;
     const sp = this.ship?.position;
     // 环带：内圈 > LOD3（LOD_MAX_DIST，随 LOD 放宽外移），外圈 < 数据预载环（~2 chunk）
     for (let i = 0; i < want * 10 && placed < want; i++) {
-      const ang = Math.random() * Math.PI * 2;
+      // ★ 包抄（flank）：锚点侧向 ±70° 扇区偏置，制造"从侧面压来"的观感
+      let ang = Math.random() * Math.PI * 2;
+      if (opts.intent === 2) {
+        const side = Math.random() < 0.5 ? 1 : -1;
+        ang = (side > 0 ? Math.PI / 2 : -Math.PI / 2) + (Math.random() - 0.5) * 1.2;
+      }
       // ★ 94~110m：LOD 外（不 pop-in）且回收环 120m 内（可持续，不刷出即销毁）
       const dist = LOD_MAX_DIST + 4 + Math.random() * 16;
       const x = fx + Math.cos(ang) * dist;
@@ -1542,17 +1556,18 @@ export class WorldMode implements IGameMode {
       if (role === 'pit' || role === 'liquid') continue;
       const y = this.raster.surfaceHeightAt(x, z);
       if (y < -1.2) continue;
-      if (this.spawnOne(this.pickMob(), x, y, z)) placed++;
+      if (this.spawnOne(this.pickMob(opts.preferPack), x, y, z, opts.intent)) placed++;
     }
   }
 
-  /** ★ 随机取一条杂兵配置（按 weight 加权：原石虫权重大 → 成群出现） */
-  private pickMob(): MobDef {
+  /** ★ 随机取一条杂兵配置（按 weight 加权：原石虫权重大 → 成群出现）；
+   *  preferPack = 突涌期偏成群（洪流感） */
+  private pickMob(preferPack = false): MobDef {
     let total = 0;
-    for (const d of this.mobDefs) total += d.weight;
+    for (const d of this.mobDefs) total += d.weight * (preferPack && d.pack > 1 ? 4 : 1);
     let r = Math.random() * total;
     for (const d of this.mobDefs) {
-      r -= d.weight;
+      r -= d.weight * (preferPack && d.pack > 1 ? 4 : 1);
       if (r <= 0) return d;
     }
     return this.mobDefs[this.mobDefs.length - 1];
@@ -1667,6 +1682,7 @@ export class WorldMode implements IGameMode {
   private spawnOne(
     def: MobDef,
     x: number, y: number, z: number,
+    intent: number = INTENT_NONE,
   ): boolean {
     if (!this.scene || !this.camera || this.mobDefs.length === 0) return false;
     const mobIndex = this.mobDefs.indexOf(def);
@@ -1700,6 +1716,7 @@ export class WorldMode implements IGameMode {
         tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
         aggro: stats.aggro,
         wanderSpeed: stats.wanderSpeed,
+        intent,
       });
       if (idx >= 0) any = true;
     }
@@ -1875,13 +1892,15 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ P2：代理被子弹击杀（掉落 + 遗物击杀统计，与实体击杀同口径） */
-  private onAgentKilled(mobIndex: number, _x: number, _y: number, _z: number): void {
+  private onAgentKilled(mobIndex: number, x: number, y: number, z: number): void {
     const def = this.mobDefs[mobIndex];
     if (def) this.rollDropsFromDef(def);
     if (this.session) {
       dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
       this.statsDirty = true;
     }
+    // ★ P4：同伴阵亡 → 附近代理狂暴（短时加速，冲上来拼命）
+    this.swarm.enrageAt(x, z, SWARM.RAGE_RADIUS, SWARM.RAGE_SECONDS);
   }
 
   /** ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算并回收子弹） */

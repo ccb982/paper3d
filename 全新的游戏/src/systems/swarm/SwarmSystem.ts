@@ -23,6 +23,7 @@ import {
 import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
+import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
 /** 分层/回收参数（《蜂群架构.md》§9；集中可调） */
@@ -64,6 +65,14 @@ export const SWARM = {
   ATTACK_TOKENS: 3,
   /** 令牌/挥击保持窗口（秒） */
   ATTACK_HOLD: 0.3,
+  /** P4 士气：低血撤退阈值 / 撤退时长区间 / 撤退冷却 / 狂暴速度倍率与时长 */
+  RETREAT_HP_RATIO: 0.3,
+  RETREAT_TIME_MIN: 2,
+  RETREAT_TIME_SPAN: 2,
+  RETREAT_COOLDOWN: 8,
+  RAGE_SPEED: 1.25,
+  RAGE_SECONDS: 5,
+  RAGE_RADIUS: 12,
   /** 警戒场：持续时间 / 反应延迟区间 / 察觉时刷出的半径 / 挥击时刷出的半径 */
   ALERT_SECONDS: 6,
   ALERT_DELAY_MIN: 0.2,
@@ -136,6 +145,7 @@ export class SwarmSystem {
       tier: snap.tier,
       aggro: snap.aggro ?? 8,
       wanderSpeed: snap.wanderSpeed ?? 2,
+      intent: 255,
     });
   }
 
@@ -190,6 +200,9 @@ export class SwarmSystem {
         continue;
       }
       // ---- 层级 ----
+      // ★ P3：受击白闪衰减
+      if (p.flash[i] > 0.01) p.flash[i] *= Math.exp(-dt * 6);
+      else p.flash[i] = 0;
       const tier = dFocus2 <= l2R2 ? AGENT_TIER_MID : AGENT_TIER_FAR;
       p.tier[i] = tier;
       // ---- 脑 tick（降频 + 个体相位抖动） ----
@@ -233,7 +246,12 @@ export class SwarmSystem {
     const dsx = hooks.shipX - px, dsz = hooks.shipZ - pz;
     const dP2 = dpx * dpx + dpz * dpz;
     const dS2 = dsx * dsx + dsz * dsz;
-    const tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+    // ★ P4：意图优先（导演分工）；无意图 = 就近（旧观感）
+    const intent = p.intent[i];
+    let tk: number;
+    if (intent === INTENT_SHIP) tk = dS2 <= 150 * 150 ? AGENT_TARGET_SHIP : AGENT_TARGET_PLAYER;
+    else if (intent === INTENT_PLAYER || intent === INTENT_FLANK) tk = dP2 <= 150 * 150 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+    else tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
     p.targetKind[i] = tk;
     const gx = tk === AGENT_TARGET_PLAYER ? hooks.playerX : hooks.shipX;
     const gz = tk === AGENT_TARGET_PLAYER ? hooks.playerZ : hooks.shipZ;
@@ -251,7 +269,8 @@ export class SwarmSystem {
       p.alertAt[i] = 0;
     }
     const aware = alerted && now >= p.alertAt[i];
-    const chasing = d <= p.aggro[i] || aware;
+    const objective = intent !== INTENT_NONE;
+    const chasing = objective || d <= p.aggro[i] || aware;
 
     // ---- 攻击冷却 / 令牌释放 ----
     p.attackCd[i] -= tick;
@@ -263,6 +282,13 @@ export class SwarmSystem {
         this.tokenUsed[tt] = Math.max(0, this.tokenUsed[tt] - 1);
       }
     }
+
+    // ---- P4：士气（低血撤退；同伴阵亡由 WorldMode 触发狂暴） ----
+    if (objective && d < 20 && now >= p.nextRetreatAt[i] && p.hp[i] < p.maxHp[i] * SWARM.RETREAT_HP_RATIO) {
+      p.retreatUntil[i] = now + SWARM.RETREAT_TIME_MIN + Math.random() * SWARM.RETREAT_TIME_SPAN;
+      p.nextRetreatAt[i] = now + SWARM.RETREAT_COOLDOWN;
+    }
+    const retreating = p.retreatUntil[i] > now;
 
     if (!chasing || d < 1e-4) {
       // 圈外：家附近游走（轻微偏向目标）+ 释放槽/令牌
@@ -286,10 +312,28 @@ export class SwarmSystem {
       const ml = Math.hypot(mx, mz);
       p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
       p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
+    } else if (retreating) {
+      // 低血撤离：背向目标撤（不攻击；释放槽/令牌让给同伴）
+      this.releaseSlot(i);
+      if (p.hasToken[i]) {
+        p.hasToken[i] = 0;
+        this.tokenUsed[p.tokenTarget[i]] = Math.max(0, this.tokenUsed[p.tokenTarget[i]] - 1);
+      }
+      p.curSpeed[i] = p.wanderSpeed[i];
+      p.fromFlow[i] = 0;
+      const bx = d > 1e-4 ? -tx / d : 0;
+      const bz = d > 1e-4 ? -tz / d : 0;
+      // 侧向偏移避免笔直倒退成一列
+      const side = p.phase[i] < 0.5 ? 1 : -1;
+      const mx = bx - bz * 0.35 * side;
+      const mz = bz + bx * 0.35 * side;
+      const ml = Math.hypot(mx, mz);
+      p.dirX[i] = ml > 1e-4 ? mx / ml : bx;
+      p.dirZ[i] = ml > 1e-4 ? mz / ml : bz;
     } else {
       // 察觉/进入仇恨 → 刷警戒（同伴延迟响应）
       if (aware) this.flow.paintAlert(px, pz, SWARM.ALERT_PAINT_RADIUS, now, SWARM.ALERT_SECONDS);
-      p.curSpeed[i] = p.speed[i];
+      p.curSpeed[i] = p.speed[i] * (p.rageUntil[i] > now ? SWARM.RAGE_SPEED : 1);
       // 目标点：近距占攻击槽（环形包围），远距走流场
       let destX = gx, destZ = gz;
       if (d <= SWARM.SLOT_COMMIT) {
@@ -456,7 +500,10 @@ export class SwarmSystem {
   damageAgent(i: number, base: number): number {
     const raw = base - this.pool.defense[i];
     const final = raw > 0 ? Math.max(1, Math.round(raw)) : 0;
-    if (final > 0) this.pool.hp[i] -= final;
+    if (final > 0) {
+      this.pool.hp[i] -= final;
+      this.pool.flash[i] = 1; // ★ P3：受击白闪
+    }
     return final;
   }
 
@@ -464,6 +511,19 @@ export class SwarmSystem {
   agentX(i: number): number { return this.pool.x[i]; }
   agentY(i: number): number { return this.pool.y[i]; }
   agentZ(i: number): number { return this.pool.z[i]; }
+
+  /** ★ P4 狂暴（同伴阵亡：附近代理短时加速，冲上去拼命） */
+  enrageAt(x: number, z: number, radius: number, seconds: number): void {
+    const now = performance.now() / 1000;
+    const r2 = radius * radius;
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) {
+      const dx = p.x[i] - x, dz = p.z[i] - z;
+      if (dx * dx + dz * dz <= r2) {
+        p.rageUntil[i] = Math.max(p.rageUntil[i], now + seconds);
+      }
+    }
+  }
 
   /** 刷警戒（玩家开火 / 爆炸等；共享感知入口） */
   alertAt(x: number, z: number, radius: number, seconds: number): void {
