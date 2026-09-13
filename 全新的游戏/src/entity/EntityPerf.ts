@@ -28,4 +28,19 @@ export const entityPerf = {
   dye: 0,
   /** 本帧 update 的实体数 */
   count: 0,
+
+  // ---- ★ 蜂群分项（P0 度量；《蜂群架构.md》§2 预算对照） ----
+  /** 代理决策（脑） */
+  swarmBrain: 0,
+  /** 代理移动积分 + 贴地 */
+  swarmMove: 0,
+  /** 代理分离（人群网格） */
+  swarmSep: 0,
+  /** 代理渲染同步（实例化矩阵写入） */
+  swarmRender: 0,
+  /** 升格/降格/回收 */
+  swarmTier: 0,
+  /** 本帧代理数 / 实体数 */
+  swarmAgents: 0,
+  swarmEntities: 0,
 };

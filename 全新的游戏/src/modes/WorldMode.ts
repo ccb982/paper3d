@@ -45,6 +45,9 @@ import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
+import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
+import { AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
+import { entityPerf } from '../entity/EntityPerf';
 import { ItemBase } from '../entity/ItemBase';
 import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
@@ -71,6 +74,15 @@ import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
 
 /** ★ 友军物品 id：部署生成 / 损毁替换为残骸（维修配方在舰船加工台） */
+/** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
+ *  代理没有 EntityBase 实体，数值全部由 dmg 直接给出） */
+const AGENT_SOURCE = {
+  camp: 'enemy',
+  attackPower: 0,
+  critRate: 0,
+  critMult: 1.5,
+} as unknown as EntityBase;
+
 const DRONE_ITEM = 'kaltsit_drone';
 const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
 // ---- ★ 载具（逻各斯的圆凳）：移速 / 爬坡 / 过坑 ----
@@ -142,7 +154,7 @@ export interface WorldModeEnterContext extends IGameModeContext {
   /** ★ 祖宗素材（站桩友军；缺省回退无人机素材） */
   sentinelAsset?: Asset | FtxAsset;
   /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
-  debug?: { testChunk?: boolean };
+  debug?: { testChunk?: boolean; enemyStress?: number };
 }
 
 /** ★ 杂兵配置条目（素材 + AI + 属性 + 体型 + 集群；生成时随机取一条） */
@@ -173,6 +185,8 @@ export const worldPerf = {
   chunks: 0, ui: 0, combat: 0, ai: 0, entity: 0, post: 0, phys: 0, total: 0,
   drones: 0, ent: 0, water: 0, clamp: 0,
   nEnemies: 0, nDrones: 0, nEntities: 0, nBases: 0,
+  /** ★ 蜂群代理数（L1+L2；P0 度量） */
+  nAgents: 0,
   /** 记录构成（HUD 诊断）：地形 trimesh / 装饰与友军碰撞体 / 其他活体 */
   nGround: 0, nDecor: 0,
   /** ★ 本帧 chunk 装配耗时（ms；0=未装配） */
@@ -293,6 +307,18 @@ export class WorldMode implements IGameMode {
   /** ★ 地图上所有杂兵（按 chunk 波次生成，逐个独立 AI） */
   enemies: EnemyBase[] = [];
 
+  /** ★ 蜂群系统（《蜂群架构.md》P1）：远层代理 + 升/降格 + 批量渲染 */
+  private swarm = new SwarmSystem();
+  /** 蜂群每帧回调（复用对象，避免每帧分配） */
+  private swarmHooks: SwarmHooks = {
+    playerX: 0, playerZ: 0,
+    shipX: 0, shipZ: 0,
+    camForwardX: 0, camForwardZ: 1,
+    entityCount: 0,
+    promote: () => {},
+    melee: () => {},
+  };
+
   /** ★ 杂兵配置条目（由 enemyAssets 派生：素材+AI+HP+体型；生成时随机取一条） */
   private mobDefs: MobDef[] = [];
   /** ★ 已生成过的 chunk key（每 chunk 一波，不重复生成） */
@@ -307,13 +333,14 @@ export class WorldMode implements IGameMode {
   /** 波次间隔随机区间（秒） */
   private static readonly WAVE_MIN = 6;
   private static readonly WAVE_SPAN = 6;
-  /** ★ 全图杂兵上限（2026-09-12 用户定调：60 → 50——总量控住，靠快刷快清维持密度） */
-  private static readonly MAX_ENEMIES = 50;
-  /** ★ 敌人远距回收半径（米，2026-09-12 用户定调【狠狠缩小】260 → 120）：
-   *  只留"可视 LOD 90m 外一点点"的缓冲——90m 外本就看不见，超过 120m 即清，
-   *  不许"看不见还活着"；刷怪点同样被约束在回收环内（见 spawnAtRandomPointInChunk） */
+  /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
+  private static readonly MAX_ALIVE = 200;
+  /** ★ 压测：?enemies=N 开局在玩家周围铺 N 只代理（P0 度量；0 = 关） */
+  private debugEnemyStress = 0;
+  /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
+   *  远距回收本身已由 SwarmSystem 统一处理（实体降格 40m / 代理回收 140m） */
   private static readonly ENEMY_CULL_RADIUS = 120;
-  /** ★ 远距回收节拍（2026-09-12 用户定调：1s → 0.25s：销毁速度加快，超环即清） */
+  /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
   private static readonly ENEMY_CULL_INTERVAL = 0.25;
   private cullAccum = 0;
 
@@ -613,6 +640,15 @@ export class WorldMode implements IGameMode {
       asset,
       ...(MOB_BLUEPRINTS[i % MOB_BLUEPRINTS.length] ?? MOB_BLUEPRINTS[1]),
     }));
+    // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《蜂群架构.md》§5.7）
+    this.swarm.buildBatch(this.scene!, this.mobDefs.map((d) => d.asset));
+    // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
+    this.swarmHooks.promote = (snap) => this.promoteAgent(snap);
+    this.swarmHooks.melee = (tk, dmg) => this.agentMelee(tk, dmg);
+    this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
+    // ★ P0 压测：?enemies=N → 开局在玩家周围 40~120m 铺 N 只代理（基线度量用）
+    this.debugEnemyStress = ctx.debug?.enemyStress ?? 0;
+    if (this.debugEnemyStress > 0) this.spawnStressAgents(this.debugEnemyStress);
     // ★ 出生 chunk 不刷怪（自己的 chunk 留给玩家出生/回城安全区）
     this.spawnChunkKey = chunkKeyOf(
       Math.floor(spawn.x / CHUNK_SIZE),
@@ -951,6 +987,17 @@ export class WorldMode implements IGameMode {
     // ---- AI / 波次：仅探索阶段（航行期不刷怪、不打船） ----
     if (this.phase === 'explore') {
       aiSystem.updateAll(dt, this.aiCtx);
+      // ---- ★ 蜂群（《蜂群架构.md》P1）：远层代理升/降格 + 降频决策/移动 ----
+      const camF = this.cameraCtrl.getFrame().forward;
+      const hooks = this.swarmHooks;
+      hooks.playerX = pp.x; hooks.playerZ = pp.y;
+      hooks.shipX = this.ship.position.x; hooks.shipZ = this.ship.position.z;
+      hooks.camForwardX = camF.x; hooks.camForwardZ = camF.z;
+      hooks.entityCount = this.enemies.length;
+      this.swarm.update(dt, hooks);
+      entityPerf.swarmEntities = this.enemies.length;
+      // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
+      this.swarmBulletCheck(dt);
       // ---- ★ 波次拆两个（2026-09-12 用户定调）：舰船旁 / 玩家旁 各自独立倒计时 ----
       this.waveTimerShip -= dt;
       if (this.waveTimerShip <= 0) {
@@ -964,12 +1011,13 @@ export class WorldMode implements IGameMode {
       }
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
       this.scanAndSpawnWaves(pp.x, pp.y, 8);
-      // ---- ★ 远距敌人回收（0.25s 一拍）：
-      //   判定基准 = 玩家/舰船【就近】，且不销毁不可见者（后台继续维护；见 §19.4） ----
+      // ---- ★ 远距实体降格（0.25s 一拍；《蜂群架构.md》P1）：
+      //   实体超出 DEMOTE_RADIUS → 回代理池（不销毁，后台继续维护），
+      //   代理的远距回收由 SwarmSystem 统一处理（L1 半径外删除） ----
       this.cullAccum += dt;
       if (this.cullAccum >= WorldMode.ENEMY_CULL_INTERVAL) {
         this.cullAccum = 0;
-        this.cullFarEnemies(pp.x, pp.y, this.ship.position.x, this.ship.position.z);
+        this.demoteFarEnemies(pp.x, pp.y);
       }
     }
     const _t4 = performance.now();
@@ -1060,6 +1108,7 @@ export class WorldMode implements IGameMode {
     worldPerf.clamp = _t5 - _e3;
     worldPerf.nEnemies = this.enemies.length;
     worldPerf.nDrones = this.drones.length;
+    worldPerf.nAgents = this.swarm.count;
     // ★ 口径区分（2026-09-12）：活体实体（角色/道具/子弹）vs 全部物理记录
     //   （后者含 每 chunk 地面 trimesh + 每装饰物 cuboid ——"刚进图 105"即此类）
     worldPerf.nBases = this.entities.baseCount;
@@ -1180,6 +1229,8 @@ export class WorldMode implements IGameMode {
     // ★ 光照锚定玩家（update 后、渲染前，位置已是本帧最终值）
     if (this.player) renderManager.follow(this.player.position);
     this.entities.renderAll(this.camera);
+    // ★ 蜂群代理批量渲染（实例矩阵同步；每帧一次，与实体渲染同帧）
+    this.swarm.syncRender();
     this.bullets.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
 
@@ -1192,6 +1243,8 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
+    // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
+    this.swarm.dispose();
     // ---- 取消伤害事件订阅 ----
     this.damageUnsub?.();
     this.damageUnsub = undefined;
@@ -1383,6 +1436,8 @@ export class WorldMode implements IGameMode {
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
     });
+    // ★ P2：枪声刷警戒（共享感知——附近游走的代理按个体延迟进入追击）
+    this.swarm.alertAt(p.x, p.z, 16, 6);
   }
 
   /**
@@ -1434,8 +1489,8 @@ export class WorldMode implements IGameMode {
   /** ★ 随机在 chunk 内找一个可站立点并生成一个杂兵（不可站立点返回 false） */
   private spawnAtRandomPointInChunk(cx: number, cz: number): boolean {
     if (this.mobDefs.length === 0 || !this.scene || !this.camera) return false;
-    // ★ 敌人上限（防无限世界累积过多实体）
-    if (this.enemies.length >= WorldMode.MAX_ENEMIES) return false;
+    // ★ 存活上限（实体 + 代理合计；防无限世界累积）
+    if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) return false;
     const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     // ★ 玩家近旁不刷（防贴脸 pop-in；出生 chunk 自身已整体排除，
@@ -1503,30 +1558,120 @@ export class WorldMode implements IGameMode {
     return this.mobDefs[this.mobDefs.length - 1];
   }
 
-  /** ★ 远距回收（2026-09-12 修订）：判定基准 = 玩家/舰船【就近】——
-   *  玩家走远时，舰船旁的进攻者仍在后台维护（看不到只跳渲染，不销毁）；
-   *  两边都超过 ENEMY_CULL_RADIUS 才回收（无限世界防累积）。 */
-  private cullFarEnemies(px: number, pz: number, sx: number, sz: number): void {
-    const r2 = WorldMode.ENEMY_CULL_RADIUS ** 2;
+  /** ★ 远距实体降格（《蜂群架构.md》§5.5）：实体超出 DEMOTE_RADIUS →
+   *  数据快照回代理池 + 销毁实体（远层继续用廉价代理维护，不再硬销毁）。
+   *  远距硬回收由 SwarmSystem 的 L1_RADIUS 统一执行（代理池侧）。 */
+  private demoteFarEnemies(px: number, pz: number): void {
+    const r2 = SWARM.DEMOTE_RADIUS ** 2;
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
-      const dpx = e.position.x - px, dpz = e.position.z - pz;
-      const dsx = e.position.x - sx, dsz = e.position.z - sz;
-      const d2 = Math.min(dpx * dpx + dpz * dpz, dsx * dsx + dsz * dsz);
-      if (d2 > r2) {
+      const dx = e.position.x - px, dz = e.position.z - pz;
+      if (dx * dx + dz * dz <= r2) continue;
+      if (e.dead) continue;
+      const def = this.enemyDefs.get(e);
+      const mobIndex = def ? this.mobDefs.indexOf(def) : -1;
+      if (!def || mobIndex < 0) {
         e.dispose();
         this.enemies.splice(i, 1);
+        continue;
       }
+      const stats = this.mobAgentStats(def);
+      this.swarm.demote({
+        mobIndex,
+        x: e.position.x, y: e.position.y, z: e.position.z,
+        hp: e.hp, maxHp: e.maxHp,
+        defense: e.defense, attackPower: e.attackPower,
+        speed: stats.speed, meleeDamage: stats.damage, meleeRange: stats.range,
+        scale: def.scale,
+        tier: AGENT_TIER_FAR,
+        yaw: 0,
+        aggro: stats.aggro, wanderSpeed: stats.wanderSpeed,
+      });
+      e.dispose();
+      this.enemies.splice(i, 1);
     }
   }
 
-  /** ★ 生成一"窝"杂兵：以落点为中心放 def.pack 只（原石虫 = 一整窝），
-   *   同伴围绕中心 ±1.6m 散布（同一 asset/属性）。返回是否至少放了 1 只。 */
+  /** ★ 代理近战结算（伤害管线同源；source = 代理占位源，数值全由 dmg 给出） */
+  private agentMelee(targetKind: number, dmg: number): void {
+    const s = this.session;
+    if (!s) return;
+    if (targetKind === AGENT_TARGET_SHIP) {
+      if (!isShipDestroyed(s)) applyShipDamage(s, dmg);
+      return;
+    }
+    if (!this.player.dead) applyDamage(dmg, AGENT_SOURCE, this.player);
+  }
+
+  /** ★ P0 压测：在玩家周围 40~120m 铺 N 只代理（?enemies=N；近处会自动升格为实体） */
+  private spawnStressAgents(n: number): void {
+    if (!this.scene || this.mobDefs.length === 0) return;
+    const pp = this.player?.position;
+    if (!pp) return;
+    let placed = 0;
+    for (let guard = 0; guard < n * 20 && placed < n; guard++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 40 + Math.random() * 80;
+      const x = pp.x + Math.cos(ang) * dist;
+      const z = pp.z + Math.sin(ang) * dist;
+      const role = this.raster.tileDefAt(x, z).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const y = this.raster.surfaceHeightAt(x, z);
+      if (y < -1.2) continue;
+      const def = this.pickMob();
+      const mobIndex = this.mobDefs.indexOf(def);
+      if (mobIndex < 0) return;
+      const stats = this.mobAgentStats(def);
+      const idx = this.swarm.spawn({
+        mobIndex,
+        x, y, z,
+        hp: def.hp, maxHp: def.hp,
+        defense: def.defense, attackPower: def.attackPower,
+        speed: stats.speed,
+        meleeDamage: stats.damage, meleeRange: stats.range,
+        scale: def.scale,
+        tier: AGENT_TIER_FAR,
+        aggro: stats.aggro,
+        wanderSpeed: stats.wanderSpeed,
+      });
+      if (idx >= 0) placed++;
+      if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) break;
+    }
+  }
+
+  /** ★ 从 MobDef 的 AI 配置提取代理所需的移动/近战/仇恨参数（缺省与 behaviors 默认一致） */
+  private mobAgentStats(def: MobDef): {
+    speed: number; damage: number; range: number;
+    wanderSpeed: number; aggro: number;
+  } {
+    let speed = 2.5, damage = 8, range = 1.8;
+    let wanderSpeed = 2, aggro = 8;
+    for (const st of Object.values(def.ai.states)) {
+      for (const b of st.behaviors) {
+        if (b.name === 'moveToTarget' && b.params?.speed !== undefined) speed = Number(b.params.speed);
+        if (b.name === 'wander' && b.params?.speed !== undefined) wanderSpeed = Number(b.params.speed);
+        if (b.name === 'meleeSwing') {
+          if (b.params?.damage !== undefined) damage = Number(b.params.damage);
+          if (b.params?.range !== undefined) range = Number(b.params.range);
+        }
+      }
+      for (const tr of st.transitions) {
+        if (tr.cond === 'seePlayer' && tr.params?.radius !== undefined) aggro = Number(tr.params.radius);
+      }
+    }
+    return { speed, damage, range, wanderSpeed, aggro };
+  }
+
+  /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
+   *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。 */
   private spawnOne(
     def: MobDef,
     x: number, y: number, z: number,
   ): boolean {
-    if (!this.scene || !this.camera) return false;
+    if (!this.scene || !this.camera || this.mobDefs.length === 0) return false;
+    const mobIndex = this.mobDefs.indexOf(def);
+    if (mobIndex < 0) return false;
+    const stats = this.mobAgentStats(def);
     let any = false;
     for (let k = 0; k < def.pack; k++) {
       // ★ 同伴散布（k=0 中心；其余绕圈小偏移）
@@ -1537,38 +1682,74 @@ export class WorldMode implements IGameMode {
         sx = x + Math.cos(ang) * dist;
         sz = z + Math.sin(ang) * dist;
       }
-      // ★ 上限检查（每只都查）
-      if (this.enemies.length >= WorldMode.MAX_ENEMIES) break;
+      // ★ 上限检查（每只都查；实体 + 代理合计）
+      if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) break;
       // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
       const role = this.raster.tileDefAt(sx, sz).genRole;
       if (role === 'pit' || role === 'liquid') continue;
       const sy = this.raster.surfaceHeightAt(sx, sz);
       if (sy < -1.2) continue;
-      const enemy = new EnemyBase(this.entities, this.scene, def.asset, {
+      const idx = this.swarm.spawn({
+        mobIndex,
         x: sx, y: sy, z: sz,
-        animMap: {
-          states: {
-            idle: { 前: ['前'], 后: ['后'] },
-            walk: { 前: ['前'], 后: ['后'] },
-            attack: { 前: ['前'], 后: ['后'] },
-          },
-          fps: { idle: 1, walk: 1, attack: 1 },
-        },
-        facing: Math.random() < 0.5 ? '前' : '后',
-        aggressive: true,
-        aiConfig: def.ai,
-        hp: def.hp,
-        defense: def.defense,
-        attackPower: def.attackPower,
+        hp: def.hp, maxHp: def.hp,
+        defense: def.defense, attackPower: def.attackPower,
+        speed: stats.speed,
+        meleeDamage: stats.damage, meleeRange: stats.range,
         scale: def.scale,
-        collisionScale: def.collisionScale,
-      }, this.camera);
-      enemy.billboard = false;
-      this.enemyDefs.set(enemy, def);
-      this.enemies.push(enemy);
-      any = true;
+        tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
+        aggro: stats.aggro,
+        wanderSpeed: stats.wanderSpeed,
+      });
+      if (idx >= 0) any = true;
     }
     return any;
+  }
+
+  /** ★ 升格：代理 → L3 实体（蜂群 hooks.promote；同步创建 EnemyBase） */
+  private promoteAgent(snap: AgentSnapshot): void {
+    if (!this.scene || !this.camera) return;
+    const def = this.mobDefs[snap.mobIndex];
+    if (!def) return;
+    const enemy = this.createEnemyEntity(def, snap.x, snap.y, snap.z, snap.hp, snap.maxHp);
+    if (!enemy) return;
+    enemy.defense = snap.defense;
+    enemy.attackPower = snap.attackPower;
+    enemy.hp = Math.min(snap.hp, snap.maxHp);
+  }
+
+  /** ★ 创建 L3 实体（升格路径；统一在此维护 animMap/掉落映射） */
+  private createEnemyEntity(
+    def: MobDef,
+    x: number, y: number, z: number,
+    hp: number, maxHp: number,
+  ): EnemyBase | null {
+    if (!this.scene || !this.camera) return null;
+    const enemy = new EnemyBase(this.entities, this.scene, def.asset, {
+      x, y, z,
+      animMap: {
+        states: {
+          idle: { 前: ['前'], 后: ['后'] },
+          walk: { 前: ['前'], 后: ['后'] },
+          attack: { 前: ['前'], 后: ['后'] },
+        },
+        fps: { idle: 1, walk: 1, attack: 1 },
+      },
+      facing: Math.random() < 0.5 ? '前' : '后',
+      aggressive: true,
+      aiConfig: def.ai,
+      hp,
+      defense: def.defense,
+      attackPower: def.attackPower,
+      scale: def.scale,
+      collisionScale: def.collisionScale,
+    }, this.camera);
+    enemy.maxHp = maxHp;
+    enemy.hp = Math.min(hp, maxHp);
+    enemy.billboard = false;
+    this.enemyDefs.set(enemy, def);
+    this.enemies.push(enemy);
+    return enemy;
   }
 
   /**
@@ -1676,7 +1857,13 @@ export class WorldMode implements IGameMode {
   /** ★ 击杀掉落：按敌人 MobDef.drops 逐项掷概率 → 直接入袋 + UI 提示 */
   private rollEnemyDrops(enemy: EnemyBase): void {
     const def = this.enemyDefs.get(enemy);
-    if (!def || !this.itemManager || !this.worldUIManager) return;
+    if (!def) return;
+    this.rollDropsFromDef(def);
+  }
+
+  /** ★ 掉落结算（实体/代理共用；掉落直接入袋 + UI 提示） */
+  private rollDropsFromDef(def: MobDef): void {
+    if (!this.itemManager || !this.worldUIManager) return;
     for (const d of def.drops) {
       if (Math.random() >= d.chance) continue;
       const count = d.min + Math.floor(Math.random() * (d.max - d.min + 1));
@@ -1685,6 +1872,43 @@ export class WorldMode implements IGameMode {
       this.worldUIManager.showPickupResult(d.itemId, ok, count);
       if (ok) this.worldUIManager.flashItemAndRefresh(d.itemId);
     }
+  }
+
+  /** ★ P2：代理被子弹击杀（掉落 + 遗物击杀统计，与实体击杀同口径） */
+  private onAgentKilled(mobIndex: number, _x: number, _y: number, _z: number): void {
+    const def = this.mobDefs[mobIndex];
+    if (def) this.rollDropsFromDef(def);
+    if (this.session) {
+      dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
+      this.statsDirty = true;
+    }
+  }
+
+  /** ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算并回收子弹） */
+  private swarmBulletCheck(dt: number): void {
+    const phys = this.physics;
+    if (!phys || this.swarm.count === 0) return;
+    this.bullets.forEachActive((b) => {
+      if (!b.isActive || b.camp === 'enemy') return;
+      const p = b.entity.position;
+      let x0 = p.x, z0 = p.z;
+      const rb = b.entity.rigidBody;
+      if (rb) {
+        const v = phys.getLinearVelocity(rb.handle);
+        x0 -= v.x * dt;
+        z0 -= v.z * dt;
+      }
+      const idx = this.swarm.hitTestSegment(x0, z0, p.x, p.z, 0.4);
+      if (idx < 0) return;
+      const final = this.swarm.damageAgent(idx, b.damageAtHit());
+      if (final > 0) {
+        this.showFloatingAt(
+          this.swarm.agentX(idx), this.swarm.agentY(idx) + 1.4, this.swarm.agentZ(idx),
+          String(final), 'normal',
+        );
+      }
+      b.deactivate();
+    });
   }
 
   private spawnItemDrops(r: ImpactReport): void {

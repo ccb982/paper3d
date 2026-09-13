@@ -1,0 +1,221 @@
+// ============================================================
+// AgentPool —— 蜂群代理池（SoA 定长数组；《蜂群架构.md》§4/§5.5）
+// ============================================================
+// 远层敌人（L1/L2）的唯一载体：定长 Float32Array/TypedArray 热字段，
+// swap-remove 删除，全程零分配；升格为 L3 实体 / 降格回池都走快照拷贝。
+// ============================================================
+
+/** 池容量（= 全图存活上限 200 + 缓冲；《蜂群架构.md》§9） */
+export const AGENT_CAPACITY = 256;
+
+/** 目标类型（代理索敌） */
+export const AGENT_TARGET_PLAYER = 0;
+export const AGENT_TARGET_SHIP = 1;
+
+/** 代理层级 */
+export const AGENT_TIER_FAR = 1; // L1 远群（冻结帧）
+export const AGENT_TIER_MID = 2; // L2 代理（半频动画）
+
+/** 代理生成数据（WorldMode 从 MobDef 提取） */
+export interface AgentSpawnData {
+  /** 兵种索引（mobDefs 下标；素材/属性/掉落回查用） */
+  mobIndex: number;
+  x: number;
+  y: number;
+  z: number;
+  hp: number;
+  maxHp: number;
+  defense: number;
+  attackPower: number;
+  /** 移动速度（m/s） */
+  speed: number;
+  /** 近战伤害 / 攻击距离（m） */
+  meleeDamage: number;
+  meleeRange: number;
+  /** 贴片世界宽（体型） */
+  scale: number;
+  tier: number;
+  /** 仇恨半径（m；原 AI seePlayer 一致） */
+  aggro: number;
+  /** 游走速度（m/s；原 AI wander 一致） */
+  wanderSpeed: number;
+}
+
+/** 代理快照（升格/降格搬运） */
+export interface AgentSnapshot {
+  mobIndex: number;
+  x: number;
+  y: number;
+  z: number;
+  hp: number;
+  maxHp: number;
+  defense: number;
+  attackPower: number;
+  speed: number;
+  meleeDamage: number;
+  meleeRange: number;
+  scale: number;
+  tier: number;
+  yaw: number;
+  /** 仇恨半径 / 游走速度（降格携带，缺省由模式层补） */
+  aggro?: number;
+  wanderSpeed?: number;
+}
+
+export class AgentPool {
+  count = 0;
+
+  // ---- 位置/朝向 ----
+  readonly x = new Float32Array(AGENT_CAPACITY);
+  readonly y = new Float32Array(AGENT_CAPACITY);
+  readonly z = new Float32Array(AGENT_CAPACITY);
+  readonly yaw = new Float32Array(AGENT_CAPACITY);
+  /** 期望移动方向（单位向量；0 = 静止） */
+  readonly dirX = new Float32Array(AGENT_CAPACITY);
+  readonly dirZ = new Float32Array(AGENT_CAPACITY);
+
+  // ---- 属性 ----
+  readonly hp = new Float32Array(AGENT_CAPACITY);
+  readonly maxHp = new Float32Array(AGENT_CAPACITY);
+  readonly defense = new Float32Array(AGENT_CAPACITY);
+  readonly attackPower = new Float32Array(AGENT_CAPACITY);
+  readonly speed = new Float32Array(AGENT_CAPACITY);
+  readonly meleeDamage = new Float32Array(AGENT_CAPACITY);
+  readonly meleeRange = new Float32Array(AGENT_CAPACITY);
+  readonly scale = new Float32Array(AGENT_CAPACITY);
+  readonly mobIndex = new Int16Array(AGENT_CAPACITY);
+
+  // ---- 状态/计时 ----
+  readonly tier = new Uint8Array(AGENT_CAPACITY);
+  /** 索敌目标（AGENT_TARGET_*） */
+  readonly targetKind = new Uint8Array(AGENT_CAPACITY);
+  /** 贴图帧位（0 = 前 / 1 = 后；实例化批渲染用） */
+  readonly facingBack = new Uint8Array(AGENT_CAPACITY);
+  /** 决策累计 / 移动累计 / 攻击冷却（秒） */
+  readonly thinkAcc = new Float32Array(AGENT_CAPACITY);
+  readonly moveAcc = new Float32Array(AGENT_CAPACITY);
+  readonly attackCd = new Float32Array(AGENT_CAPACITY);
+  /** 个体相位（0~1）：决策/移动 tick 抖动，消灭"整齐划一" */
+  readonly phase = new Float32Array(AGENT_CAPACITY);
+  /** 危险地形绕行缓存（方向 + 冷却） */
+  readonly safeDirX = new Float32Array(AGENT_CAPACITY);
+  readonly safeDirZ = new Float32Array(AGENT_CAPACITY);
+  readonly hazardTimer = new Float32Array(AGENT_CAPACITY);
+
+  // ---- 游走/仇恨（与原 AI 观感等价：远离目标时在家附近游走 + 轻微偏向目标） ----
+  /** 出生锚点（游走中心） */
+  readonly homeX = new Float32Array(AGENT_CAPACITY);
+  readonly homeZ = new Float32Array(AGENT_CAPACITY);
+  /** 游走当前目标点 / 换点计时 */
+  readonly wanderX = new Float32Array(AGENT_CAPACITY);
+  readonly wanderZ = new Float32Array(AGENT_CAPACITY);
+  readonly wanderTimer = new Float32Array(AGENT_CAPACITY);
+  /** 仇恨半径（原 AI seePlayer.radius）与游走速度 */
+  readonly aggro = new Float32Array(AGENT_CAPACITY);
+  readonly wanderSpeed = new Float32Array(AGENT_CAPACITY);
+  /** 当前移动速度（think 决策时写入：追击 = speed / 游走 = wanderSpeed） */
+  readonly curSpeed = new Float32Array(AGENT_CAPACITY);
+
+  // ---- P2：攻击槽 / 攻击令牌 / 警戒反应 ----
+  /** 攻击槽索引（-1 = 未占；按目标扇区环形占位） */
+  readonly slotIdx = new Int8Array(AGENT_CAPACITY);
+  /** 是否持有攻击令牌（同目标同时挥击上限） */
+  readonly hasToken = new Uint8Array(AGENT_CAPACITY);
+  /** 令牌所属目标（释放计数用；目标切换时仍能归还原计数器） */
+  readonly tokenTarget = new Uint8Array(AGENT_CAPACITY);
+  /** 令牌保持剩余时间（挥击窗口；到点释放） */
+  readonly attackHold = new Float32Array(AGENT_CAPACITY);
+  /** 本 tick 方向来自流场（1 = 移动时跳过坑探测：流场已编码危险） */
+  readonly fromFlow = new Uint8Array(AGENT_CAPACITY);
+  /** 警戒反应到点时间（0 = 未触发；now ≥ 该值 → 已察觉） */
+  readonly alertAt = new Float32Array(AGENT_CAPACITY);
+
+  push(d: AgentSpawnData): number {
+    if (this.count >= AGENT_CAPACITY) return -1;
+    const i = this.count++;
+    this.x[i] = d.x; this.y[i] = d.y; this.z[i] = d.z;
+    this.yaw[i] = 0;
+    this.dirX[i] = 0; this.dirZ[i] = 0;
+    this.hp[i] = d.hp; this.maxHp[i] = d.maxHp;
+    this.defense[i] = d.defense; this.attackPower[i] = d.attackPower;
+    this.speed[i] = d.speed;
+    this.meleeDamage[i] = d.meleeDamage; this.meleeRange[i] = d.meleeRange;
+    this.scale[i] = d.scale; this.mobIndex[i] = d.mobIndex;
+    this.tier[i] = d.tier;
+    this.targetKind[i] = AGENT_TARGET_PLAYER;
+    this.facingBack[i] = 0;
+    this.thinkAcc[i] = Math.random() * 0.2;
+    this.moveAcc[i] = Math.random() * 0.05;
+    this.attackCd[i] = 0.4 + Math.random() * 0.8;
+    this.phase[i] = Math.random();
+    this.safeDirX[i] = 0; this.safeDirZ[i] = 0;
+    this.hazardTimer[i] = 0;
+    this.homeX[i] = d.x; this.homeZ[i] = d.z;
+    this.wanderX[i] = d.x; this.wanderZ[i] = d.z;
+    this.wanderTimer[i] = Math.random() * 3;
+    this.aggro[i] = d.aggro;
+    this.wanderSpeed[i] = d.wanderSpeed;
+    this.curSpeed[i] = d.wanderSpeed;
+    this.slotIdx[i] = -1;
+    this.hasToken[i] = 0;
+    this.tokenTarget[i] = 0;
+    this.attackHold[i] = 0;
+    this.fromFlow[i] = 0;
+    this.alertAt[i] = 0;
+    return i;
+  }
+
+  /** swap-remove（尾元素填位；所有数组同步搬移） */
+  removeAt(i: number): void {
+    const last = this.count - 1;
+    if (i !== last) this.copy(last, i);
+    this.count = last;
+  }
+
+  private copy(from: number, to: number): void {
+    this.x[to] = this.x[from]; this.y[to] = this.y[from]; this.z[to] = this.z[from];
+    this.yaw[to] = this.yaw[from];
+    this.dirX[to] = this.dirX[from]; this.dirZ[to] = this.dirZ[from];
+    this.hp[to] = this.hp[from]; this.maxHp[to] = this.maxHp[from];
+    this.defense[to] = this.defense[from]; this.attackPower[to] = this.attackPower[from];
+    this.speed[to] = this.speed[from];
+    this.meleeDamage[to] = this.meleeDamage[from]; this.meleeRange[to] = this.meleeRange[from];
+    this.scale[to] = this.scale[from]; this.mobIndex[to] = this.mobIndex[from];
+    this.tier[to] = this.tier[from]; this.targetKind[to] = this.targetKind[from];
+    this.facingBack[to] = this.facingBack[from];
+    this.thinkAcc[to] = this.thinkAcc[from]; this.moveAcc[to] = this.moveAcc[from];
+    this.attackCd[to] = this.attackCd[from]; this.phase[to] = this.phase[from];
+    this.safeDirX[to] = this.safeDirX[from]; this.safeDirZ[to] = this.safeDirZ[from];
+    this.hazardTimer[to] = this.hazardTimer[from];
+    this.homeX[to] = this.homeX[from]; this.homeZ[to] = this.homeZ[from];
+    this.wanderX[to] = this.wanderX[from]; this.wanderZ[to] = this.wanderZ[from];
+    this.wanderTimer[to] = this.wanderTimer[from];
+    this.aggro[to] = this.aggro[from];
+    this.wanderSpeed[to] = this.wanderSpeed[from];
+    this.curSpeed[to] = this.curSpeed[from];
+    this.slotIdx[to] = this.slotIdx[from];
+    this.hasToken[to] = this.hasToken[from];
+    this.tokenTarget[to] = this.tokenTarget[from];
+    this.attackHold[to] = this.attackHold[from];
+    this.fromFlow[to] = this.fromFlow[from];
+    this.alertAt[to] = this.alertAt[from];
+  }
+
+  /** 快照（升格用） */
+  snapshot(i: number): AgentSnapshot {
+    return {
+      mobIndex: this.mobIndex[i],
+      x: this.x[i], y: this.y[i], z: this.z[i],
+      hp: this.hp[i], maxHp: this.maxHp[i],
+      defense: this.defense[i], attackPower: this.attackPower[i],
+      speed: this.speed[i],
+      meleeDamage: this.meleeDamage[i], meleeRange: this.meleeRange[i],
+      scale: this.scale[i], tier: this.tier[i],
+      yaw: this.yaw[i],
+    };
+  }
+
+  clear(): void {
+    this.count = 0;
+  }
+}

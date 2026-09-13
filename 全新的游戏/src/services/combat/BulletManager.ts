@@ -164,6 +164,11 @@ export class BulletManager {
     }
   }
 
+  /** ★ 遍历激活子弹（蜂群代理命中判定用；不暴露内部集合） */
+  forEachActive(cb: (b: BulletEntity) => void): void {
+    for (const b of this.activeBullets) cb(b);
+  }
+
   /** ★ 命中特效 billboard 朝向（render 前调用；实体槽特效由实体骨架驱动） */
   syncHitEffects(camera: THREE.Camera): void {
     for (const item of this.terrainFxViews) item.fx.render(camera);

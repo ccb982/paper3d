@@ -94,6 +94,8 @@ let droneAsset: Asset | FtxAsset | null = null;
 let sentinelAsset: Asset | FtxAsset | null = null;
 /** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
 let testChunk = false;
+/** ★ P0 蜂群压测：?enemies=N 开局铺 N 只代理（0 = 关；《蜂群架构.md》§8-P0） */
+let enemyStress = 0;
 
 // ============================================================
 // 启动引导
@@ -149,6 +151,7 @@ async function boot() {
   const testGroup = urlParams.get('group');
   if (testGroup) setTestGroup(testGroup); // 未知 key 在 setTestGroup 内抛错（fail-fast）
   testChunk = testGroup !== null || urlParams.get('single') === '1';
+  enemyStress = Math.max(0, Math.min(200, Number(urlParams.get('enemies') ?? 0) || 0));
   if (testChunk) showTestGroupPanel(testGroup ?? undefined); // 组内容面板（缺省=实际 chunk 生效组）
   // 控制台换组时联动刷新面板
   (window as unknown as { setTestGroup: (k: string | null) => void }).setTestGroup = (k) => {
@@ -328,6 +331,8 @@ async function boot() {
   let epRenderSum = 0, epMovedSum = 0, epShadowSum = 0;
   /** ★ 行为细分（移动/角色推挤/静态推挤/染料） */
   let epMoveSum = 0, epSepOtherSum = 0, epSepStaticSum = 0, epDyeSum = 0;
+  /** ★ 蜂群分项（P0 度量） */
+  let epSwarmSum = 0, epSwarmSepSum = 0, epSwarmRenderSum = 0;
   const cameraPos = camera.position;
 
   function animate() {
@@ -406,6 +411,9 @@ async function boot() {
       epSepOtherSum += entityPerf.sepOther;
       epSepStaticSum += entityPerf.sepStatic;
       epDyeSum += entityPerf.dye;
+      epSwarmSum += entityPerf.swarmBrain + entityPerf.swarmMove + entityPerf.swarmTier;
+      epSwarmSepSum += entityPerf.swarmSep;
+      epSwarmRenderSum += entityPerf.swarmRender;
     }
     fpsFrames++;
     fpsAcc += dt;
@@ -421,8 +429,9 @@ async function boot() {
           + `子项 无人机 ${(wpDronesSum / fpsFrames).toFixed(1)}  实体更新 ${(wpEntSubSum / fpsFrames).toFixed(1)}  入水 ${(wpWaterSum / fpsFrames).toFixed(1)}  贴地 ${(wpClampSum / fpsFrames).toFixed(1)}\n`
           + `阶段 行为 ${(epBehSum / fpsFrames).toFixed(1)}  物理 ${(epPhysSum / fpsFrames).toFixed(1)}  动画 ${(epAnimSum / fpsFrames).toFixed(1)}  渲染 ${(epRenderSum / fpsFrames).toFixed(1)}  索引 ${(epMovedSum / fpsFrames).toFixed(1)}  影子 ${(epShadowSum / fpsFrames).toFixed(1)}\n`
           + `行为拆 移动 ${(epMoveSum / fpsFrames).toFixed(1)}  推挤 ${(epSepOtherSum / fpsFrames).toFixed(1)}  静态 ${(epSepStaticSum / fpsFrames).toFixed(1)}  染料 ${(epDyeSum / fpsFrames).toFixed(1)}\n`
+          + `蜂群 决策 ${(epSwarmSum / fpsFrames).toFixed(2)}  分离 ${(epSwarmSepSum / fpsFrames).toFixed(2)}  批渲 ${(epSwarmRenderSum / fpsFrames).toFixed(2)}\n`
           + (inWorldEnv
-            ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 机 ${worldPerf.nDrones})  `
+            ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 机 ${worldPerf.nDrones})  `
               + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
               + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
             : `（舰船模式：世界统计暂停）`);
@@ -441,6 +450,7 @@ async function boot() {
       epBehSum = 0; epPhysSum = 0; epAnimSum = 0;
       epRenderSum = 0; epMovedSum = 0; epShadowSum = 0;
       epMoveSum = 0; epSepOtherSum = 0; epSepStaticSum = 0; epDyeSum = 0;
+      epSwarmSum = 0; epSwarmSepSum = 0; epSwarmRenderSum = 0;
     }
   }
 
@@ -513,7 +523,7 @@ function enterWorldMode(
     hitEffectAsset: hitEffectAsset ?? undefined,
     droneAsset: droneAsset ?? undefined,
     sentinelAsset: sentinelAsset ?? undefined,
-    debug: { testChunk },
+    debug: { testChunk, enemyStress },
     onReturn: () => {
       // 返回时：★ 行囊（弹药背包）保持原样——不转移祖宗，随存档原样落盘
       //   → 遗物"返回/天数"时机管线 → 推进天数 → BaseMode（内部 SaveSystem.save）
