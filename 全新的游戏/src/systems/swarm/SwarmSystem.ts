@@ -15,6 +15,7 @@ import {
   AgentPool,
   AGENT_TARGET_PLAYER,
   AGENT_TARGET_SHIP,
+  AGENT_TARGET_SENTINEL,
   AGENT_TIER_FAR,
   AGENT_TIER_MID,
   type AgentSpawnData,
@@ -95,8 +96,10 @@ export interface SwarmHooks {
   entityCount: number;
   /** 升格：由模式层创建 EnemyBase 并注册 */
   promote: (snap: AgentSnapshot) => void;
-  /** 代理近战结算（targetKind：0=玩家 / 1=舰船） */
-  melee: (targetKind: number, dmg: number) => void;
+  /** 代理近战结算（targetKind：0=玩家 / 1=舰船 / 2=祖宗；x/z = 代理位置——祖宗结算定位用） */
+  melee: (targetKind: number, dmg: number, x: number, z: number) => void;
+  /** ★ 祖宗嘲讽：查询 (x,z) 嘲讽圈内最近的祖宗位置（null = 圈外；返回对象会被复用） */
+  nearestTaunt?: (x: number, z: number) => { x: number; z: number } | null;
   /** 代理被击杀（掉落/遗物击杀统计由模式层结算） */
   onAgentKilled?: (mobIndex: number, x: number, y: number, z: number) => void;
 }
@@ -111,13 +114,14 @@ export class SwarmSystem {
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
   private flow = new FlowField();
   private flowTimer = 0;
-  /** ★ P2：攻击槽（每个目标一圈扇区；owner = 代理下标，-1 空） */
+  /** ★ P2：攻击槽（每个目标一圈扇区；owner = 代理下标，-1 空；索引含祖宗 2） */
   private slotOwner: Int16Array[] = [
     new Int16Array(SWARM.SLOT_ANGLES).fill(-1),
     new Int16Array(SWARM.SLOT_ANGLES).fill(-1),
+    new Int16Array(SWARM.SLOT_ANGLES).fill(-1),
   ];
-  /** ★ P2：攻击令牌计数（每目标同时挥击数） */
-  private tokenUsed = [0, 0];
+  /** ★ P2：攻击令牌计数（每目标同时挥击数；索引含祖宗 2） */
+  private tokenUsed = [0, 0, 0];
 
   /** 构建批量渲染（模式层在 mobDefs 就绪后调用；素材顺序 = mobIndex） */
   buildBatch(scene: import('three').Scene, assets: FrameAssetSource[]): void {
@@ -248,13 +252,22 @@ export class SwarmSystem {
     const dS2 = dsx * dsx + dsz * dsz;
     // ★ P4：意图优先（导演分工）；无意图 = 就近（旧观感）
     const intent = p.intent[i];
+    // ★ 祖宗嘲讽最优先（吸仇恨）：嘲讽圈内强制换目标，无视导演意图/就近
+    const taunt = hooks.nearestTaunt?.(px, pz) ?? null;
     let tk: number;
-    if (intent === INTENT_SHIP) tk = dS2 <= 150 * 150 ? AGENT_TARGET_SHIP : AGENT_TARGET_PLAYER;
-    else if (intent === INTENT_PLAYER || intent === INTENT_FLANK) tk = dP2 <= 150 * 150 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
-    else tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+    let gx: number, gz: number;
+    if (taunt) {
+      tk = AGENT_TARGET_SENTINEL;
+      gx = taunt.x;
+      gz = taunt.z;
+    } else {
+      if (intent === INTENT_SHIP) tk = dS2 <= 150 * 150 ? AGENT_TARGET_SHIP : AGENT_TARGET_PLAYER;
+      else if (intent === INTENT_PLAYER || intent === INTENT_FLANK) tk = dP2 <= 150 * 150 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+      else tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+      gx = tk === AGENT_TARGET_PLAYER ? hooks.playerX : hooks.shipX;
+      gz = tk === AGENT_TARGET_PLAYER ? hooks.playerZ : hooks.shipZ;
+    }
     p.targetKind[i] = tk;
-    const gx = tk === AGENT_TARGET_PLAYER ? hooks.playerX : hooks.shipX;
-    const gz = tk === AGENT_TARGET_PLAYER ? hooks.playerZ : hooks.shipZ;
     const tx = gx - px, tz = gz - pz;
     const d = Math.hypot(tx, tz);
     const tick = 1 / SWARM.THINK_HZ[p.tier[i]];
@@ -270,7 +283,8 @@ export class SwarmSystem {
     }
     const aware = alerted && now >= p.alertAt[i];
     const objective = intent !== INTENT_NONE;
-    const chasing = objective || d <= p.aggro[i] || aware;
+    const taunted = taunt !== null;
+    const chasing = objective || taunted || d <= p.aggro[i] || aware;
 
     // ---- 攻击冷却 / 令牌释放 ----
     p.attackCd[i] -= tick;
@@ -347,10 +361,15 @@ export class SwarmSystem {
         p.fromFlow[i] = 0;
       } else {
         if (p.slotIdx[i] >= 0) this.releaseSlot(i);
-        p.fromFlow[i] = this.flow.dirAt(px, pz, _flow) ? 1 : 0;
-        if (p.fromFlow[i]) {
-          destX = px + _flow.x * SWARM.FLOW_LOOKAHEAD;
-          destZ = pz + _flow.z * SWARM.FLOW_LOOKAHEAD;
+        if (tk === AGENT_TARGET_SENTINEL) {
+          // ★ 祖宗是静止目标：不借流场，直走（流场只指向玩家/舰船）
+          p.fromFlow[i] = 0;
+        } else {
+          p.fromFlow[i] = this.flow.dirAt(px, pz, _flow) ? 1 : 0;
+          if (p.fromFlow[i]) {
+            destX = px + _flow.x * SWARM.FLOW_LOOKAHEAD;
+            destZ = pz + _flow.z * SWARM.FLOW_LOOKAHEAD;
+          }
         }
       }
       const mx = destX - px, mz = destZ - pz;
@@ -372,7 +391,7 @@ export class SwarmSystem {
           p.tokenTarget[i] = tk;
           this.tokenUsed[tk]++;
           p.attackHold[i] = SWARM.ATTACK_HOLD;
-          hooks.melee(tk, p.meleeDamage[i] + p.attackPower[i]);
+          hooks.melee(tk, p.meleeDamage[i] + p.attackPower[i], px, pz);
           this.flow.paintAlert(px, pz, SWARM.ALERT_PAINT_RADIUS_ATTACK, now, SWARM.ALERT_SECONDS);
         }
       }

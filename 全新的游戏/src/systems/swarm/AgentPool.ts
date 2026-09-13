@@ -11,6 +11,7 @@ export const AGENT_CAPACITY = 256;
 /** 目标类型（代理索敌） */
 export const AGENT_TARGET_PLAYER = 0;
 export const AGENT_TARGET_SHIP = 1;
+export const AGENT_TARGET_SENTINEL = 2; // ★ 祖宗（嘲讽圈内强制换仇）
 
 /** 代理层级 */
 export const AGENT_TIER_FAR = 1; // L1 远群（冻结帧）

@@ -48,13 +48,13 @@ import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST } from '../services/lod';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
-import type { BehaviorContext } from '../systems/ai/behaviors';
+import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
-import { AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
+import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { ItemBase } from '../entity/ItemBase';
 import { NpcEntity } from '../entity/NpcEntity';
@@ -333,6 +333,8 @@ export class WorldMode implements IGameMode {
     promote: () => {},
     melee: () => {},
   };
+  /** ★ 祖宗嘲讽查询复用对象（蜂群每帧多次调用 → 零分配） */
+  private _tauntScratch = { x: 0, z: 0 };
 
   /** ★ 杂兵配置条目（由 enemyAssets 派生：素材+AI+HP+体型；生成时随机取一条） */
   private mobDefs: MobDef[] = [];
@@ -706,7 +708,8 @@ export class WorldMode implements IGameMode {
     this.swarm.buildBatch(this.scene!, this.mobDefs.map((d) => d.asset));
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     this.swarmHooks.promote = (snap) => this.promoteAgent(snap);
-    this.swarmHooks.melee = (tk, dmg) => this.agentMelee(tk, dmg);
+    this.swarmHooks.melee = (tk, dmg, x, z) => this.agentMelee(tk, dmg, x, z);
+    this.swarmHooks.nearestTaunt = (x, z) => this.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
     // ★ P0 压测：?enemies=N → 开局在玩家周围 40~120m 铺 N 只代理（基线度量用）
     this.debugEnemyStress = ctx.debug?.enemyStress ?? 0;
@@ -1903,7 +1906,20 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 代理近战结算（伤害管线同源；source = 代理占位源，数值全由 dmg 给出） */
-  private agentMelee(targetKind: number, dmg: number): void {
+  private agentMelee(targetKind: number, dmg: number, x: number, z: number): void {
+    // ★ 祖宗：代理思考侧已在贴身距离判定 → 取近旁存活祖宗（取最近者兜底 3m）
+    if (targetKind === AGENT_TARGET_SENTINEL) {
+      let best: DroneEntity | null = null;
+      let bestD2 = 3 * 3;
+      for (const d of this.drones) {
+        if (!d.stationary || d.hp <= 0) continue;
+        const dx = d.position.x - x, dz = d.position.z - z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= bestD2) { bestD2 = d2; best = d; }
+      }
+      if (best) applyDamage(dmg, AGENT_SOURCE, best);
+      return;
+    }
     const s = this.session;
     if (!s) return;
     if (targetKind === AGENT_TARGET_SHIP) {
@@ -1911,6 +1927,22 @@ export class WorldMode implements IGameMode {
       return;
     }
     if (!this.player.dead) applyDamage(dmg, AGENT_SOURCE, this.player);
+  }
+
+  /** ★ 祖宗嘲讽查询（蜂群代理）：(x,z) 嘲讽圈内最近存活祖宗；对象复用零分配 */
+  private nearestTauntSentinel(x: number, z: number): { x: number; z: number } | null {
+    let best: DroneEntity | null = null;
+    let bestD2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
+    for (const d of this.drones) {
+      if (!d.stationary || d.hp <= 0) continue;
+      const dx = d.position.x - x, dz = d.position.z - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= bestD2) { bestD2 = d2; best = d; }
+    }
+    if (!best) return null;
+    this._tauntScratch.x = best.position.x;
+    this._tauntScratch.z = best.position.z;
+    return this._tauntScratch;
   }
 
   /** ★ P0 压测：在玩家周围 40~120m 铺 N 只代理（?enemies=N；近处会自动升格为实体） */
@@ -2401,9 +2433,9 @@ export class WorldMode implements IGameMode {
    *  ① 祖宗（站桩·吸仇恨；TAUNT 半径内——有索敌效果，优先级最高）
    *  ② 舰船（停靠后）③ 玩家 ④ 一般友军（最近无人机）
    *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列 */
-  private enemyTargetCandidates(enemy: EnemyBase): { x: number; z: number }[] {
+  private enemyTargetCandidates(enemy: EnemyBase): TargetCandidate[] {
     const ep = enemy.position;
-    const out: { x: number; z: number }[] = [];
+    const out: TargetCandidate[] = [];
     let sentinel: DroneEntity | null = null, sentinelD2 = Infinity;
     let ally: DroneEntity | null = null, allyD2 = Infinity;
     for (const d of this.drones) {
@@ -2417,10 +2449,11 @@ export class WorldMode implements IGameMode {
         ally = d;
       }
     }
-    // ★ 祖宗最高优先（TAUNT 半径内；吸仇恨）
+    // ★ 祖宗最高优先（TAUNT 半径内；吸仇恨）：radius = 自身嘲讽半径，
+    //   seePlayer/retarget 用该半径判定，不走敌人通用视野半径
     const taunt2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
     if (sentinel && sentinelD2 <= taunt2) {
-      out.push({ x: sentinel.position.x, z: sentinel.position.z });
+      out.push({ x: sentinel.position.x, z: sentinel.position.z, radius: SENTINEL_TAUNT_RADIUS });
     }
     // ★ 其次舰船（仅探索阶段存在；hp<=0 由结算接管不再嘲讽）
     if (this.phase === 'explore' && this.ship && this.ship.hp > 0) {

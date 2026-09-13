@@ -32,7 +32,7 @@ export type DroneState = 'follow' | 'approach' | 'attack' | 'return';
 
 /** ★ 无人机战斗参数（可调） */
 const LOCK_RANGE = 12;      // 锁定最近敌人的搜索半径（米，绕玩家）
-const ATTACK_RANGE = 1.8;   // 攻击范围（米；攻击范围小 → 必须贴脸）
+const ATTACK_RANGE = 3.6;   // 攻击范围（米；攻击范围小 → 必须贴脸）
 const RETURN_DIST = 30;     // 与玩家距离非常远 → 强制返回（米）
 const RETURN_OK_DIST = 2.5; // 返回至多近算归队（米）
 const ATTACK_CD = 1.2;      // 挥击冷却（秒）
@@ -43,7 +43,7 @@ const DRONE_ATK_RATIO = 1.0;
 const ATTACK_AIM_Y = 0.9;
 /** ★ 站桩模式（祖宗）：以自身为中心的索敌/攻击参数
  *  ★ 射程远大于无人机（LOD 12m）——站桩单位靠长手覆盖；命中为瞬时激光，天然穿墙 */
-const SENTINEL_RANGE = 28;      // 索敌/射程（米）
+const SENTINEL_RANGE = 42;      // 索敌/射程（米）
 const SENTINEL_ATTACK_CD = 1.1; // 激光冷却（秒）
 /** ★ 祖宗自动挖矿冷却（无敌人时；随机打附近的铁/水/地面） */
 const SENTINEL_MINE_CD = 1.8;

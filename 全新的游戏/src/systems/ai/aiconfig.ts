@@ -47,6 +47,8 @@ export const PRESERVER_AI: AIConfig = {
     chase: {
       behaviors: [{ name: 'moveToTarget', params: { speed: 2.5 } }],
       transitions: [
+        // ★ 追人途中祖宗在嘲讽半径内 → 强制换仇（挂在最前，优先于攻击判定）
+        { cond: 'retarget', to: 'chase' },
         { cond: 'inRange', params: { radius: 1.5 }, to: 'attack' },
         { cond: 'loseTarget', params: { radius: 12 }, to: 'patrol' },
       ],
@@ -55,6 +57,7 @@ export const PRESERVER_AI: AIConfig = {
       // ★ 一次性近战挥击：播完（duration 秒）→ attackFinished 自动退出
       behaviors: [{ name: 'meleeSwing', params: { duration: 0.6 } }],
       transitions: [
+        { cond: 'retarget', to: 'chase' },
         { cond: 'attackFinished', to: 'patrol' },
         { cond: 'outOfRange', params: { radius: 2 }, to: 'patrol' },
       ],
@@ -76,6 +79,7 @@ export const BOSS_AI: AIConfig = {
     chase: {
       behaviors: [{ name: 'moveToTarget', params: { speed: 4.2 } }],
       transitions: [
+        { cond: 'retarget', to: 'chase' },
         { cond: 'inRange', params: { radius: 3.0 }, to: 'attack' },
         { cond: 'loseTarget', params: { radius: 90 }, to: 'patrol' },
       ],
@@ -83,6 +87,7 @@ export const BOSS_AI: AIConfig = {
     attack: {
       behaviors: [{ name: 'meleeSwing', params: { duration: 0.9, range: 3.4, damage: 22 } }],
       transitions: [
+        { cond: 'retarget', to: 'chase' },
         { cond: 'attackFinished', to: 'chase' },
         { cond: 'outOfRange', params: { radius: 4.5 }, to: 'chase' },
       ],
@@ -137,6 +142,7 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
       chase: {
         behaviors: [{ name: 'moveToTarget', params: { speed: chase } }],
         transitions: [
+          { cond: 'retarget', to: 'chase' },
           { cond: 'inRange', params: { radius: attack }, to: 'attack' },
           { cond: 'loseTarget', params: { radius: lose }, to: 'patrol' },
         ],
@@ -144,6 +150,7 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
       attack: {
         behaviors: [{ name: 'meleeSwing', params: { duration: melee, damage: dmg } }],
         transitions: [
+          { cond: 'retarget', to: 'chase' },
           { cond: 'attackFinished', to: 'patrol' },
           { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: 'patrol' },
         ],

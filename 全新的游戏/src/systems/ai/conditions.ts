@@ -17,10 +17,10 @@ export function registerCondition(name: string, fn: ConditionFn): void {
 }
 
 /** 索敌：视野半径内找到目标（camp 参数指定阵营，逗号分隔多选）→ 写入 ctx.target。
- *  ★ 若模式层提供 targetCandidates（优先级队列：祖宗 > 玩家 > 友军），按序取第一个在视野内的 */
+ *  ★ 若模式层提供 targetCandidates（优先级队列：祖宗 > 舰船 > 玩家 > 友军），
+ *    按序取第一个"在有效半径内"的候选；候选自带 radius（如祖宗嘲讽半径）优先于通用视野半径 */
 registerCondition('seePlayer', (entity, ctx, params) => {
   const radius = pnum(params, 'radius', 8);
-  const r2 = radius * radius;
   const ep = entity.entity.position;
   let t: { x: number; z: number } | null = null;
 
@@ -29,9 +29,11 @@ registerCondition('seePlayer', (entity, ctx, params) => {
     for (const c of cands) {
       const dx = c.x - ep.x;
       const dz = c.z - ep.z;
-      if (dx * dx + dz * dz <= r2) { t = c; break; }
+      const r = c.radius ?? radius;
+      if (dx * dx + dz * dz <= r * r) { t = c; break; }
     }
   } else {
+    const r2 = radius * radius;
     const camps = pstr(params, 'camp', 'player').split(',');
     for (const c of camps) {
       t = ctx.findTarget(c);
@@ -50,6 +52,26 @@ registerCondition('seePlayer', (entity, ctx, params) => {
   }
   ctx.target = t;
   return true;
+});
+
+/** ★ 嘲讽重索敌（祖宗吸仇恨）：只认"自带 radius"的候选（如祖宗）。
+ *  在半径内 → 强制把目标切过去（即使正在追玩家）；否则保留当前目标（不丢仇）。
+ *  挂到 chase / attack 的转移表首位：追人途中祖宗落地也能拉走仇恨 */
+registerCondition('retarget', (entity, ctx) => {
+  const cands = ctx.targetCandidates?.(entity);
+  if (!cands || cands.length === 0) return false;
+  const ep = entity.entity.position;
+  for (const c of cands) {
+    if (c.radius === undefined) continue;
+    const dx = c.x - ep.x;
+    const dz = c.z - ep.z;
+    if (dx * dx + dz * dz > c.radius * c.radius) continue;
+    const cur = ctx.target;
+    if (cur && cur.x === c.x && cur.z === c.z) return false;
+    ctx.target = { x: c.x, z: c.z };
+    return true;
+  }
+  return false;
 });
 
 /** 目标在攻击距离内 */
