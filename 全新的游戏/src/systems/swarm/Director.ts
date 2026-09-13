@@ -128,7 +128,9 @@ export class Director {
     this.warnedSecond = -1;
     this.spawnTimer = 3;
 
-    const n = 1 + (Math.random() < 0.55 ? 1 : 0); // 每天 1~2 波
+    // ★ 每天袭击场数由威胁度决定（前期恒 1 场＝每天只有一大波；后期 1~2 场）
+    const [aLo, aHi] = this.threat.assaultsPerDay ?? [1, 2];
+    const n = aLo + Math.floor(Math.random() * (aHi - aLo + 1));
     this.plan = [];
     const [faLo, faHi] = this.threat.firstAssault;
     const [gapLo, gapHi] = this.threat.assaultGap;

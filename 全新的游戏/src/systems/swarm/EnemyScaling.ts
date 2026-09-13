@@ -127,6 +127,8 @@ const THREAT_TEN_PENALTY = 0.15; // ★ 每满 10 抽额外一跳
 export interface ThreatProfile {
   /** 威胁度（1~6） */
   index: number;
+  /** ★ 每天的袭击场数区间（前期 [1,1]＝每天只来一场） */
+  assaultsPerDay: [number, number];
   /** 单场袭击波数区间 */
   assaultWaves: [number, number];
   /** 每波人数区间 */
@@ -156,17 +158,28 @@ function lerp(a: number, b: number, t: number): number {
 function buildThreat(index: number): ThreatProfile {
   const idx = Math.min(THREAT_MAX, Math.max(1, index));
   const t = (idx - 1) / (THREAT_MAX - 1); // 0..1
+  // ★ 敌人生成曲线（2026-09-13 四次定调：前期每天一场、一场一大波，给足发育时间）
+  //   威胁 1~2（约第 1~4 天，无抽卡）：每天 1 场 × 严格 1 波 × 8~12 只，
+  //   首波 4~6 分钟后才到；打完当天基本无扰（常驻仅 6 只、16s 才补 1）。
+  //   威胁 3 起（第 5 天左右）波数/人数/场数逐档加码 → 威胁 6 每天最多 2 场 × 3~5 波 × 16~26 只。
   return {
     index: idx,
-    // 波次：2~3 场 → 4~6 场；每波 5~8 → 16~26 只（2026-09-13 二次调低首日强度）
-    assaultWaves: [Math.round(lerp(2, 4, t)), Math.round(lerp(3, 6, t))],
-    waveCount: [Math.round(lerp(5, 16, t)), Math.round(lerp(8, 26, t))],
-    // 节奏：首波 150~240s → 40~70s；间隔 180~300s → 70~140s
-    firstAssault: [lerp(150, 40, t), lerp(240, 70, t)],
-    assaultGap: [lerp(180, 70, t), lerp(300, 140, t)],
-    // 平时游荡：10 只 / 14s → 36 只 / 4.5s（导演低频补至该目标数；扫描器只预铺一部分）
-    ambientTarget: Math.round(lerp(10, 36, t)),
-    ambientInterval: lerp(14, 4.5, t),
+    // 每天场数：下限恒 1（前期恒 1）；威胁 ≥4（约第 6 天）上限才到 2
+    assaultsPerDay: [1, Math.max(1, Math.round(lerp(1, 2, t)))],
+    // 每场波数：floor 取整保证前期严格 1 波；1~1 → 3~5
+    assaultWaves: [
+      Math.max(1, Math.floor(lerp(1, 3, t))),
+      Math.max(1, Math.floor(lerp(1, 5, t))),
+    ],
+    // 每波人数：8~12 → 16~26（前期只有一波 → 单波规模比旧版更大）
+    waveCount: [Math.round(lerp(8, 16, t)), Math.round(lerp(12, 26, t))],
+    // 首波时间：4~6 分钟 → 50~90 秒（前期给足探索/采集/加工时间）
+    firstAssault: [lerp(240, 50, t), lerp(360, 90, t)],
+    // 两场间隔：200~300s → 70~140s（前期只有一场，用不到）
+    assaultGap: [lerp(200, 70, t), lerp(300, 140, t)],
+    // 平时游荡：6 只 / 16s → 36 只 / 4.5s（前期场间安静，方便发育）
+    ambientTarget: Math.round(lerp(6, 36, t)),
+    ambientInterval: lerp(16, 4.5, t),
     // 攻击欲望：仇恨圈 ×1 → ×2.2；游荡偏向 0.12 → 0.35；环境怪主动开进概率 0 → 0.7
     aggroMul: lerp(1, 2.2, t),
     biasMul: lerp(0.12, 0.35, t),

@@ -389,9 +389,10 @@ export class WorldMode implements IGameMode {
   private bossAsset: FtxAsset | Asset | null = null;
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
-  /** ★ 环境刷怪闸（扫描式波次只批量预铺到这里；之上由导演低频补至
-   *  threat.ambientTarget。2026-09-13 二次定调：首日强度下调——预铺 6，常驻 ~10） */
-  private static readonly AMBIENT_CAP = 6;
+  /** ★ 环境刷怪预铺闸（扫描式波次只批量预铺到 ambientTarget 的一半；
+   *  其余由导演低频补至 threat.ambientTarget。前期 target=6 → 只预铺 3 只，
+   *  场间几乎无扰，给足发育时间；中后期随威胁度增长铺满） */
+  private static readonly AMBIENT_PRELOAD_RATIO = 0.5;
   /** ★ 压测：?enemies=N 开局在玩家周围铺 N 只代理（P0 度量；0 = 关） */
   private debugEnemyStress = 0;
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
@@ -1699,10 +1700,12 @@ export class WorldMode implements IGameMode {
   /** ★ 随机在 chunk 内找一个可站立点并生成一个杂兵（不可站立点返回 false） */
   private spawnAtRandomPointInChunk(cx: number, cz: number): boolean {
     if (this.mobDefs.length === 0 || !this.scene || !this.camera) return false;
-    // ★ 存活上限（实体 + 代理合计；防无限世界累积）+ 环境刷怪闸（80：
-    //   之上的名额留给导演按节奏投放，避免环境铺怪吃光预算）
+    // ★ 存活上限（实体 + 代理合计；防无限世界累积）+ 环境预铺闸
+    //   （预铺 = ambientTarget 的一半，其余交给导演按 ambientInterval 低频补）
     if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) return false;
-    if (this.enemies.length + this.swarm.count >= WorldMode.AMBIENT_CAP) return false;
+    const ambientTarget = this.threat?.ambientTarget ?? 10;
+    const preloadCap = Math.max(2, Math.ceil(ambientTarget * WorldMode.AMBIENT_PRELOAD_RATIO));
+    if (this.enemies.length + this.swarm.count >= preloadCap) return false;
     const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
     // ★ 玩家近旁不刷（防贴脸 pop-in；出生 chunk 自身已整体排除，
@@ -1846,6 +1849,8 @@ export class WorldMode implements IGameMode {
     const spread = opts.spread ?? Math.PI;
     const lo = LOD_MAX_DIST + 4;
     const span = 130 - lo; // 波内纵深带（lo~130m；回收环 140 内）
+    // ★ count = 个体数（2026-09-13 三次修正：原按"窝"计数——原石虫一窝 4 只，
+    //   导演"每波 5~8"实际最多刷 32 只；现按个体扣减，窝仍是刷怪单位）
     for (let i = 0; i < want * 10 && placed < want; i++) {
       const ang = baseAng + (Math.random() - 0.5) * 2 * spread;
       const dist = lo + Math.random() * span;
@@ -1863,7 +1868,8 @@ export class WorldMode implements IGameMode {
       if (role === 'pit' || role === 'liquid') continue;
       const y = this.raster.surfaceHeightAt(x, z);
       if (y < -1.2) continue;
-      if (this.spawnOne(this.pickMob(opts.preferPack), x, y, z, opts.intent, opts.assaultIndex ?? -1)) placed++;
+      const def = this.pickMob(opts.preferPack);
+      if (this.spawnOne(def, x, y, z, opts.intent, opts.assaultIndex ?? -1)) placed += def.pack;
     }
   }
 
