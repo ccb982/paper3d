@@ -75,6 +75,11 @@ export interface PresetResult {
   materials?: Partial<Record<'ground' | 'platform' | 'liquid' | 'pit', string>>;
   /** ★ 不做 PATH 装饰斑块（背景保持纯净；配合 materials.ground）*/
   noGroundPatch?: boolean;
+  /** ★ 浮空洞顶（2026-09-14）：逐 4m 块顶面高度（NaN = 无）。
+   *  语义 = "该格上方有一层可站的岩板"（高度场第二层）：地表 floor 仍是角色
+   *  脚下的洞底，顶面供站立/遮挡；由 RasterMap.surfaceHeightAtFor(x,z,y) 按
+   *  当前高度选择层。渲染/物理由 ChunkManager 生成岩板网格 + 固定 trimesh。 */
+  caveCaps?: Float32Array;
 }
 
 export interface TerrainPreset {
@@ -752,5 +757,88 @@ registerPreset({
     openPorts(roles, ctx.ports);
     for (const p of portCells(ctx.ports)) heights[p] = NaN;
     return { roles, heights };
+  },
+});
+
+/** ⑩ 洞穴山丘（2026-09-14 用户定调："坑洞 + 顶上浮空块封顶"）：
+ *  山体实心（全平台面），从某个端口向内挖一条隧道 + 洞厅；
+ *  洞顶用【浮空岩板】封盖（caveCaps：逐 4m 块顶面 = 山体面 PH）——
+ *  地表高度场仍是洞底（可走进去），顶面 = 第二层高度（崖顶可站/可跑，
+ *  实体不会掉洞里）；入口段（坡道）露天使玩家能走下去。 */
+const CAVE_CLEARANCE = 2.8;   // 洞内净高（岩板底面到洞底）
+const CAVE_CAP_THICK = 0.6;   // 岩板厚度
+const CAVE_RAMP_STEPS = 7;    // 入口坡道步数（步高 = (PH-PF)/7 ≈ 0.49 ≤ 0.5 可登）
+registerPreset({
+  key: 'cave', label: '洞穴山丘', weight: 1.2,
+  build(ctx) {
+    const roles = new Uint8Array(N);
+    const heights = new Float32Array(N).fill(NaN);
+    const caps = new Float32Array(N).fill(NaN);
+    const PH = Math.round((5 + hash2(ctx.cx, ctx.cz, ctx.salt + 81) * 1.5) * 4) / 4; // 山体顶 5~6.5（0.25 台阶）
+    const PF = Math.round((PH - (CAVE_CLEARANCE + CAVE_CAP_THICK)) * 4) / 4;         // 洞底
+    // 山体实心：全平台（可站），端口凿通保跨块
+    roles.fill(ROLE_WALL);
+    for (let i = 0; i < N; i++) heights[i] = PH;
+
+    // 入口选边（取该边的一个端口作起点）——隧道从边缘向内
+    const side = Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 82) * 4);
+    const portsOf = [ctx.ports.top, ctx.ports.bottom, ctx.ports.left, ctx.ports.right][side];
+    const pick = portsOf.length > 0
+      ? portsOf[Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 83) * portsOf.length)]
+      : 7;
+    let x: number, z: number, ddx: number, ddz: number;
+    if (side === 0) { x = Math.max(2, Math.min(SIDE - 3, pick)); z = 0; ddx = 0; ddz = 1; }
+    else if (side === 1) { x = Math.max(2, Math.min(SIDE - 3, pick)); z = SIDE - 1; ddx = 0; ddz = -1; }
+    else if (side === 2) { x = 0; z = Math.max(2, Math.min(SIDE - 3, pick)); ddx = 1; ddz = 0; }
+    else { x = SIDE - 1; z = Math.max(2, Math.min(SIDE - 3, pick)); ddx = -1; ddz = 0; }
+
+    // 挖隧道：入口 CAVE_RAMP_STEPS 步下坡（露顶），之后平洞（封顶）+ 洞厅
+    const totalSteps = CAVE_RAMP_STEPS + 5;
+    const perpX = ddz, perpZ = ddx; // 垂直方向（2 格宽）
+    const tunnel: { x: number; z: number; h: number }[] = [];
+    for (let s = 0; s < totalSteps; s++) {
+      // 横向随机游走（蜿蜒），限制在块内
+      if (s > 1 && hash2(s, 1, ctx.salt + 84) < 0.4) {
+        const d = hash2(s, 2, ctx.salt + 85) < 0.5 ? -1 : 1;
+        x += perpX * d;
+        z += perpZ * d;
+        x = Math.max(1, Math.min(SIDE - 2, x));
+        z = Math.max(1, Math.min(SIDE - 2, z));
+      }
+      const t = Math.min(1, s / CAVE_RAMP_STEPS);
+      const h = Math.round((PH + (PF - PH) * t) * 4) / 4;
+      for (let w = 0; w < 2; w++) {
+        const tx = Math.max(0, Math.min(SIDE - 1, x + perpX * w));
+        const tz = Math.max(0, Math.min(SIDE - 1, z + perpZ * w));
+        tunnel.push({ x: tx, z: tz, h });
+      }
+      // 前进
+      x += ddx; z += ddz;
+      x = Math.max(0, Math.min(SIDE - 1, x));
+      z = Math.max(0, Math.min(SIDE - 1, z));
+    }
+    // 洞厅：隧道尽头 3×3 全平到洞底
+    const end = tunnel[tunnel.length - 1];
+    for (let zz = -1; zz <= 1; zz++) {
+      for (let xx = -1; xx <= 1; xx++) {
+        const hx = Math.max(0, Math.min(SIDE - 1, end.x + xx));
+        const hz = Math.max(0, Math.min(SIDE - 1, end.z + zz));
+        tunnel.push({ x: hx, z: hz, h: PF });
+      }
+    }
+    // 落位：洞底 PATH + 高度；顶面 = 岩板（洞内净高足够才封顶：入口坡道保持露天）
+    for (const c of tunnel) {
+      const i = c.z * SIDE + c.x;
+      roles[i] = ROLE_PATH;
+      heights[i] = c.h;
+      if (PH - c.h >= CAVE_CLEARANCE + CAVE_CAP_THICK - 0.3) caps[i] = PH;
+    }
+    openPorts(roles, ctx.ports);
+    return {
+      roles, heights, caveCaps: caps,
+      overridePorts: true,
+      materials: { ground: 'cave_floor', platform: 'cave_platform' },
+      noGroundPatch: true,
+    };
   },
 });

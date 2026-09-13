@@ -43,7 +43,8 @@ import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
-import { ChunkManager, type ImpactReport } from '../services/map/ChunkManager';
+import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
+import { collectibleDropOf, collectibleLabelOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST } from '../services/lod';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
@@ -377,6 +378,10 @@ export class WorldMode implements IGameMode {
   private npcs: NpcEntity[] = [];
   /** 当前就近可交互 NPC（每帧判定；提示/E 键用） */
   private nearbyNpc: NpcEntity | null = null;
+  /** ★ 当前就近可采集物（每帧判定；E 采集；优先级低于 NPC、高于进舰） */
+  private nearbyCollectible: DecorPropInstance | null = null;
+  /** 采集交互半径（米） */
+  private static readonly COLLECT_RADIUS = 2.6;
   /** 正在对话的 NPC（结束后消失） */
   private pendingNpc: NpcEntity | null = null;
   /** 世界事件 NPC 同时存在上限 */
@@ -1002,6 +1007,7 @@ export class WorldMode implements IGameMode {
 
     // ★ 探索期事件 NPC：就近判定（E 对话优先于 E 进舰）
     this.nearbyNpc = null;
+    this.nearbyCollectible = null;
     if (this.phase === 'explore' && !inInterior && !talking && !this.player.dead
       && !this.worldUIManager.hasModalOpen) {
       const p0 = this.player.position;
@@ -1013,13 +1019,16 @@ export class WorldMode implements IGameMode {
           this.nearbyNpc = npc;
         }
       }
+      // ★ 就近采集物（草丛/花丛/浆果丛/小树；JS 查询 propRegistry，零物理）
+      this.nearbyCollectible = this.chunks.queryCollectibleNear(p0.x, p0.z, WorldMode.COLLECT_RADIUS);
     }
-    // ★ 按 E：就近 NPC 对话 / 进舰内（仅降落后；飞行中不进）
+    // ★ 按 E：就近 NPC 对话 → 采集 → 进舰内（仅降落后；飞行中不进）
     if (!uiLocked && input.held.interact && this.phase === 'explore' && !this.player.dead) {
       if (this.nearbyNpc) this.startNpcDialogue(this.nearbyNpc);
+      else if (this.nearbyCollectible) this.harvestCollectible(this.nearbyCollectible);
       else this.enterShipInterior();
     }
-    // ★ 交互提示（对话中隐藏；NPC 优先于舰船）
+    // ★ 交互提示（对话中隐藏；NPC 优先于采集/舰船）
     {
       const s0 = this.ship?.position;
       const p0 = this.player.position;
@@ -1028,7 +1037,9 @@ export class WorldMode implements IGameMode {
         && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2;
       if (talking) this.worldUIManager.setBoardPrompt(false);
       else if (this.nearbyNpc) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyNpc.displayName}交谈`);
-      else this.worldUIManager.setBoardPrompt(nearShip);
+      else if (this.nearbyCollectible) {
+        this.worldUIManager.setBoardPrompt(true, `E · 采集 ${collectibleLabelOf(this.nearbyCollectible.key)}`);
+      } else this.worldUIManager.setBoardPrompt(nearShip);
     }
 
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
@@ -1429,6 +1440,7 @@ export class WorldMode implements IGameMode {
     for (const npc of this.npcs) npc.dispose();
     this.npcs = [];
     this.nearbyNpc = null;
+    this.nearbyCollectible = null;
     this.pendingNpc = null;
     // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
     this.swarm.dispose();
@@ -1700,7 +1712,8 @@ export class WorldMode implements IGameMode {
     // ★ 坑/水/虚空/未生成：不站（isDepression 包含坑洞与水）
     const role = this.raster.tileDefAt(x, z).genRole;
     if (role === 'pit' || role === 'liquid') return false;
-    const y = this.raster.surfaceHeightAt(x, z);
+    // ★ 洞顶优先（浮空洞顶第二层）：不把杂兵刷进洞里
+    const y = this.raster.surfaceHeightAtFor(x, z, 1e9);
     // ★ 落点过低（挖坑后的深坑区）不生成
     if (y < -1.2) return false;
     return this.spawnOne(this.pickMob(), x, y, z);
@@ -1844,7 +1857,7 @@ export class WorldMode implements IGameMode {
       if (!this.raster.getChunkData(cx, cz)) continue;
       const role = this.raster.tileDefAt(x, z).genRole;
       if (role === 'pit' || role === 'liquid') continue;
-      const y = this.raster.surfaceHeightAt(x, z);
+      const y = this.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（不刷进洞里）
       if (y < -1.2) continue;
       const def = this.pickMob(opts.preferPack);
       if (this.spawnOne(def, x, y, z, opts.intent, opts.assaultIndex ?? -1)) placed += def.pack;
@@ -1951,7 +1964,7 @@ export class WorldMode implements IGameMode {
       const z = pp.z + Math.sin(ang) * dist;
       const role = this.raster.tileDefAt(x, z).genRole;
       if (role === 'pit' || role === 'liquid') continue;
-      const y = this.raster.surfaceHeightAt(x, z);
+      const y = this.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（压测铺代理）
       if (y < -1.2) continue;
       const def = this.pickMob();
       const mobIndex = this.mobDefs.indexOf(def);
@@ -2176,9 +2189,9 @@ export class WorldMode implements IGameMode {
       return;
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
-    this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门）
+    this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门；capHit 走挖洞顶）
     this.agitateWaterNear(point.x, point.z); // 水面波动
-    this.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告
+    if (!impact.capHit) this.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告（洞顶不掉）
   }
 
   private agitateWaterNear(x: number, z: number): void {
@@ -3016,6 +3029,26 @@ export class WorldMode implements IGameMode {
     eventBus.emit('dialogue', { id: npc.dialogueTree });
   }
 
+  /** ★ 采集（E）：掉落入包 + 标记已采（该 chunk 道具层重贴，已采株从渲染/查询一起消失）。
+   *  背包满 → 失败提示、不消耗植株（可清背包后再采）。 */
+  private harvestCollectible(c: DecorPropInstance): void {
+    if (!this.itemManager || !this.worldUIManager) return;
+    const drop = collectibleDropOf(c.key);
+    if (!drop) return;
+    const count = drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
+    const ok = this.itemManager.hasSpace('player', drop.itemId, count)
+      && this.itemManager.addItem('player', drop.itemId, count);
+    if (ok) {
+      this.chunks.harvestProp(c.cx, c.cz, c.index);
+      this.showFloatingAt(c.x, c.y + 1.2, c.z, `+${count} ${collectibleLabelOf(c.key)}`, 'pickup');
+      this.worldUIManager.showPickupResult(drop.itemId, true, count);
+      this.worldUIManager.flashItemAndRefresh(drop.itemId);
+    } else {
+      this.worldUIManager.showPickupResult(drop.itemId, false);
+    }
+    this.nearbyCollectible = null;
+  }
+
   /** ★ 舰内固定位事件：交互站（F 交谈）+ NPC 立绘（本地坐标；与按钮条并存） */
   private applyShipInteriorEvents(interior: BaseScene): void {
     if (!this.eventSystem || !this.dialogue) return;
@@ -3346,11 +3379,11 @@ export class WorldMode implements IGameMode {
     const p = this.player.position;
     const r = VEHICLE_BRIDGE_RADIUS;
     const targetY = Math.max(
-      this.raster.surfaceHeightAt(p.x, p.z),
-      this.raster.surfaceHeightAt(p.x + r, p.z),
-      this.raster.surfaceHeightAt(p.x - r, p.z),
-      this.raster.surfaceHeightAt(p.x, p.z + r),
-      this.raster.surfaceHeightAt(p.x, p.z - r),
+      this.raster.surfaceHeightAtFor(p.x, p.z, p.y),
+      this.raster.surfaceHeightAtFor(p.x + r, p.z, p.y),
+      this.raster.surfaceHeightAtFor(p.x - r, p.z, p.y),
+      this.raster.surfaceHeightAtFor(p.x, p.z + r, p.y),
+      this.raster.surfaceHeightAtFor(p.x, p.z - r, p.y),
     );
     const dy = targetY - p.y;
     p.y += dy > 0 ? Math.min(dy, VEHICLE_CLIMB_SPEED * dt) : Math.max(dy, -30 * dt);
@@ -3367,7 +3400,8 @@ export class WorldMode implements IGameMode {
       return;
     }
     const p = e.position;
-    const targetY = this.raster.surfaceHeightAt(p.x, p.z);
+    // ★ 第二层高度（浮空洞顶）：在山上走站洞顶、进洞后站洞底（surfaceHeightAtFor）
+    const targetY = this.raster.surfaceHeightAtFor(p.x, p.z, p.y);
     // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
     //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须
     //   所在 4m 地块是坑洞（genRole==='pit'）。普通地块被挖深的补丁坑：正常贴地站立

@@ -111,17 +111,18 @@ export abstract class CharacterBase extends EntityBase {
     if (!this.climbAnyTerrain && (this.controller.requireRealLanding || this.blockCliffClimb)) {
       const raster = RasterMap.current;
       const p0 = this.entity.position;
-      const gyHere = raster?.surfaceHeightAt(p0.x, p0.z) ?? 0;
+      // ★ 第二层高度（浮空洞顶）：按自身高度选层（山上的敌/玩家不会误判洞为崖）
+      const gyHere = raster?.surfaceHeightAtFor(p0.x, p0.z, p0.y) ?? 0;
       if (raster) {
         const ext = shapeExtents(this.collisionVolume.shape);
         const m = 0.1; // 贴壁保留距离
         /** 该采样点是否"墙"（陡升 > 台阶豁免，且再远 0.8m 不再延续） */
         const isWall = (sx: number, sz: number, ux: number, uz: number): boolean => {
-          const h1 = raster.surfaceHeightAt(sx, sz);
+          const h1 = raster.surfaceHeightAtFor(sx, sz, p0.y);
           const rise = h1 - gyHere;
           if (rise <= EDGE_CLIFF_BAND) return false;
           if (!this.blockCliffClimb) return true; // boss4D 玩家：原逻辑
-          const h2 = raster.surfaceHeightAt(sx + ux * 0.8, sz + uz * 0.8);
+          const h2 = raster.surfaceHeightAtFor(sx + ux * 0.8, sz + uz * 0.8, p0.y);
           return h2 - h1 < rise * 0.5;
         };
         if (dx > 0 && isWall(p0.x + ext.hx + m, p0.z, 1, 0)) dx = 0;
@@ -133,7 +134,7 @@ export abstract class CharacterBase extends EntityBase {
     this.entity.position.x += dx;
     this.entity.position.z += dz;
     const p = this.entity.position;
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const gy = RasterMap.current?.surfaceHeightAtFor(p.x, p.z, p.y) ?? 0;
     if (this.controller.isAirborne()) {
       // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.8 → 可越 0.5 高差）。
       //   落地交给 WorldMode 落回贴地。横向位移已在上面按分量做了垂直壁受阻检查，

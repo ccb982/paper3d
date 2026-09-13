@@ -253,7 +253,7 @@ export class SwarmSystem {
     if (!this.batch) return;
     const t0 = performance.now();
     const raster = RasterMap.current;
-    this.batch.sync(this.pool, (x, z) => raster?.surfaceHeightAt(x, z) ?? 0);
+    this.batch.sync(this.pool, (x, z, y) => raster?.surfaceHeightAtFor(x, z, y) ?? 0);
     entityPerf.swarmRender += performance.now() - t0;
   }
 
@@ -430,17 +430,19 @@ export class SwarmSystem {
       p.hazardTimer[i] -= dt;
       const raster = RasterMap.current;
       const probe = SWARM.HAZARD_PROBE;
-      const here = raster ? raster.surfaceHeightAt(p.x[i], p.z[i]) : 0;
+      // ★ 第二层高度（浮空洞顶）：按代理当前高度选层——洞顶上的代理不会把洞当坑
+      const hint = p.y[i];
+      const here = raster ? raster.surfaceHeightAtFor(p.x[i], p.z[i], hint) : 0;
       const danger = (ux: number, uz: number): boolean => {
         if (!raster) return false;
         const hx = p.x[i] + ux * probe, hz = p.z[i] + uz * probe;
         const role = raster.tileDefAt(hx, hz).genRole;
-        const h = raster.surfaceHeightAt(hx, hz);
+        const h = raster.surfaceHeightAtFor(hx, hz, hint);
         if (role === 'pit' && h < -1.2) return true;
         if (role === 'liquid' && h < -SWARM.DEEP_WATER) return true; // 深水
         // 高台立面：0.45m 陡升 > 阈值且 1.2m 无同斜率延续 → 墙（插值坡放行）
-        const hn = raster.surfaceHeightAt(p.x[i] + ux * 0.45, p.z[i] + uz * 0.45);
-        const hf = raster.surfaceHeightAt(p.x[i] + ux * 1.2, p.z[i] + uz * 1.2);
+        const hn = raster.surfaceHeightAtFor(p.x[i] + ux * 0.45, p.z[i] + uz * 0.45, hint);
+        const hf = raster.surfaceHeightAtFor(p.x[i] + ux * 1.2, p.z[i] + uz * 1.2, hint);
         const rn = hn - here, rf = hf - hn;
         return rn > SWARM.MOVE_STEP_MAX && rf < rn * 0.5;
       };

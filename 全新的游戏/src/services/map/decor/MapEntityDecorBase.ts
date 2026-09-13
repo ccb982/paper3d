@@ -61,6 +61,8 @@ export interface MapEntityDecorConfig {
   physics?: DecorCollider;
   /** 程序化几何参数（three 依赖只允许出现在渲染适配层，规划层纯函数） */
   geometry?: { type: string; params: Record<string, number> };
+  /** ★ 几何变体数（缺省 4）：高频小物件（花草）设 1~2 以减少 InstancedMesh 桶数/draw call */
+  variantCount?: number;
 }
 
 /**
@@ -76,6 +78,8 @@ export class MapEntityDecorBase {
   readonly shadow: 'disc' | 'none';
   readonly physics?: DecorCollider;
   readonly geometry?: { type: string; params: Record<string, number> };
+  /** ★ 几何变体数（缺省 INST_VARIANT_COUNT=4；1~2 高频小物件用） */
+  readonly variantCount?: number;
 
   constructor(cfg: MapEntityDecorConfig) {
     this.key = cfg.key;
@@ -86,6 +90,7 @@ export class MapEntityDecorBase {
     this.shadow = cfg.shadow;
     this.physics = cfg.physics;
     this.geometry = cfg.geometry;
+    this.variantCount = cfg.variantCount;
   }
 
   // ============================================================
@@ -276,18 +281,13 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
   const defs = propsForGroup(ctx.groupKey);
   if (defs.length === 0) return out;
 
-  // 加权池（主打加成：出现率只看 perCellProb 总和，主打只影响"抽谁"）
+  // 加权池（主打加成：出现率只看可用池 perCellProb 之和，主打只影响"抽谁"）
   const FEATURED_BOOST = 3;
   const featuredKey = defs[Math.floor(hash2(ctx.cx, ctx.cz, ctx.seed + 9601) * defs.length)].key;
-  let presenceProb = 0;
   const weights = new Map<string, number>();
   for (const p of defs) {
-    presenceProb += p.placement.perCellProb;
     weights.set(p.key, p.placement.perCellProb * (p.key === featuredKey ? FEATURED_BOOST : 1));
   }
-  presenceProb = Math.min(1, presenceProb);
-  let total = 0;
-  for (const w of weights.values()) total += w;
 
   for (let cy = 0; cy < PROP_GRID && out.length < PROP_BUDGET; cy++) {
     for (let cx = 0; cx < PROP_GRID && out.length < PROP_BUDGET; cx++) {
@@ -298,7 +298,21 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
       const gxc = ctx.cx * PROP_GRID + cx;
       const gyc = ctx.cz * PROP_GRID + cy;
       const r = hash2(gxc * 7 + 1, gyc * 7 + 2, ctx.seed + 9602);
-      if (r >= presenceProb) continue;
+
+      // ★ 先按地块角色筛"本格可用池"，再以【可用池】perCellProb 之和做出现判定
+      //   （2026-09-14 修正：此前用全量 defs 求和 → 高台格只有晶簇可用时，
+      //    出现率被花草的 perCellProb 一起抬高（晶簇高台出现率 ~20 倍）；
+      //    逐格可用池后各物出现率 = 各自声明值，回到原比例）
+      const tile = tileAtCell(ctx, cx, cy);
+      const eligible = defs.filter((p) => {
+        if (p.placement.tiles && p.placement.tiles.length > 0 && !p.placement.tiles.includes(tile.key)) return false;
+        if (!p.placement.hostRole.includes(tile.genRole as PropHostRole)) return false;
+        return true;
+      });
+      if (eligible.length === 0) continue;
+      let presenceProb = 0;
+      for (const d of eligible) presenceProb += d.placement.perCellProb;
+      if (r >= Math.min(1, presenceProb)) continue;
 
       const wx = ctx.cx * 60 + (cx + 0.5) * PROP_CELL;
       const wz = ctx.cz * 60 + (cy + 0.5) * PROP_CELL;
@@ -306,14 +320,6 @@ export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
       const jz = wz + (hash2(gxc, gyc, ctx.seed + 9604) - 0.5) * PROP_CELL * 0.6;
 
       if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
-
-       const tile = tileAtCell(ctx, cx, cy);
-       const eligible = defs.filter((p) => {
-         if (p.placement.tiles && p.placement.tiles.length > 0 && !p.placement.tiles.includes(tile.key)) return false;
-         if (!p.placement.hostRole.includes(tile.genRole as PropHostRole)) return false;
-         return true;
-       });
-       if (eligible.length === 0) continue;
 
        let etotal = 0;
        for (const d of eligible) etotal += weights.get(d.key)!;
@@ -731,12 +737,193 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
   return geo;
 }
 
+// ============================================================
+// ★ 采集物植被几何（2026-09-14 新增）：草丛 / 花丛 / 浆果丛 / 小树
+//   程序化低多边形 + 逐顶点色（材质 vertexColors + DoubleSide；薄叶双面可见）；
+//   每变体一套形态（crystalRng 确定性）；无 physics（纯视觉 + JS 查询采集）。
+// ============================================================
+
+const PLANT_STEM: [number, number, number] = [0.30, 0.48, 0.22];
+const PLANT_STEM_DARK: [number, number, number] = [0.21, 0.35, 0.15];
+const PLANT_TRUNK: [number, number, number] = [0.42, 0.29, 0.18];
+const PLANT_LEAF: [number, number, number] = [0.24, 0.45, 0.20];
+
+/** 0xRRGGBB → 0..1 顶点色 */
+function rgbOf(hex: number): [number, number, number] {
+  const c = new THREE.Color(hex);
+  return [c.r, c.g, c.b];
+}
+
+/** 非索引三角形 + 逐顶点色 累积器（computeVertexNormals 出硬棱） */
+function plantBuilder() {
+  const V: number[] = [];
+  const C: number[] = [];
+  type V3 = [number, number, number];
+  const tri = (a: V3, b: V3, c: V3, ca: V3, cb: V3 = ca, cc: V3 = ca): void => {
+    V.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+    C.push(ca[0], ca[1], ca[2], cb[0], cb[1], cb[2], cc[0], cc[1], cc[2]);
+  };
+  /** 八面体（叶团/浆果用；squash 压扁） */
+  const octa = (cx: number, cy: number, cz: number, r: number, squash: number, col: V3, jitter: number, rng: () => number): void => {
+    const ys = r * squash;
+    const e: V3[] = [
+      [cx + r, cy, cz], [cx, cy, cz + r], [cx - r, cy, cz], [cx, cy, cz - r],
+    ];
+    const top: V3 = [cx, cy + ys, cz];
+    const bot: V3 = [cx, cy - ys, cz];
+    for (let k = 0; k < 4; k++) {
+      const f = 1 + (rng() - 0.5) * jitter;
+      const c: V3 = [Math.min(1, col[0] * f), Math.min(1, col[1] * f), Math.min(1, col[2] * f)];
+      tri(top, e[k], e[(k + 1) % 4], c);
+      tri(bot, e[(k + 1) % 4], e[k], c);
+    }
+  };
+  const geo = (): THREE.BufferGeometry => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+    g.computeVertexNormals();
+    g.computeBoundingSphere();
+    return g;
+  };
+  return { tri, octa, geo };
+}
+
+/** 一撮放射状叶片（草/花茎共用；lean = 外倾量） */
+function emitTuft(
+  tri: ReturnType<typeof plantBuilder>['tri'],
+  rng: () => number,
+  blades: number, hMin: number, hMax: number, lean: number,
+  col: [number, number, number],
+): void {
+  for (let i = 0; i < blades; i++) {
+    const a = (i / blades) * Math.PI * 2 + rng() * 0.7;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    const px = -dz, pz = dx;
+    const h = hMin + rng() * (hMax - hMin);
+    const w = 0.042 + rng() * 0.03;
+    const out = lean * (0.6 + rng() * 0.9);
+    const f = 0.85 + rng() * 0.3;
+    const c: [number, number, number] = [col[0] * f, col[1] * f, col[2] * f];
+    const tipC: [number, number, number] = [Math.min(1, c[0] * 1.2 + 0.04), Math.min(1, c[1] * 1.2 + 0.04), Math.min(1, c[2] * 1.15)];
+    const baseL: [number, number, number] = [px * w, 0, pz * w];
+    const baseR: [number, number, number] = [-px * w, 0, -pz * w];
+    const mid: [number, number, number] = [dx * out * 0.35, h * 0.55, dz * out * 0.35];
+    const tip: [number, number, number] = [dx * out, h, dz * out];
+    tri(baseL, baseR, mid, PLANT_STEM_DARK, PLANT_STEM_DARK, c);
+    tri(baseL, mid, tip, PLANT_STEM_DARK, c, tipC);
+    tri(baseR, tip, mid, PLANT_STEM_DARK, tipC, c);
+  }
+}
+
+/** 草丛：7~10 片细叶，中心略高外圈外倾 */
+function buildGrassTuft(_params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const rng = crystalRng(variant * 131 + 23);
+  const b = plantBuilder();
+  emitTuft(b.tri, rng, 7 + Math.floor(rng() * 4), 0.45, 0.95, 0.22, PLANT_STEM);
+  return b.geo();
+}
+
+/** 花丛：绿茎 + 数朵菱形十字花（花瓣色取 params.color2，缺省品红） */
+function buildFlowerCluster(params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const rng = crystalRng(variant * 137 + 41);
+  const b = plantBuilder();
+  emitTuft(b.tri, rng, 5 + Math.floor(rng() * 3), 0.30, 0.58, 0.15, PLANT_STEM);
+  const petal = params.color2 !== undefined ? rgbOf(params.color2) : ([0.86, 0.45, 0.62] as [number, number, number]);
+  const n = 3 + Math.floor(rng() * 3);
+  for (let i = 0; i < n; i++) {
+    const a = rng() * Math.PI * 2;
+    const rad = 0.05 + rng() * 0.14;
+    const h = 0.34 + rng() * 0.3;
+    const cx = Math.cos(a) * rad, cz = Math.sin(a) * rad;
+    const s = 0.065 + rng() * 0.05;
+    const top: [number, number, number] = [cx, h + s * 0.8, cz];
+    const bot: [number, number, number] = [cx, h - s * 0.8, cz];
+    const le: [number, number, number] = [cx - s, h, cz];
+    const ri: [number, number, number] = [cx + s, h, cz];
+    const f = 0.9 + rng() * 0.25;
+    const pc: [number, number, number] = [Math.min(1, petal[0] * f), Math.min(1, petal[1] * f), Math.min(1, petal[2] * f)];
+    b.tri(top, le, bot, pc);
+    b.tri(top, bot, ri, pc);
+    b.tri(top, ri, le, pc); // 背面补一片，任意角度有色
+  }
+  return b.geo();
+}
+
+/** 浆果丛：3 团压扁八面体叶团 + 6~9 颗浆果（浆果色取 params.color2，缺省红） */
+function buildBerryBush(params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const rng = crystalRng(variant * 139 + 59);
+  const b = plantBuilder();
+  b.octa(0, 0.44, 0, 0.52, 0.72, PLANT_LEAF, 0.35, rng);
+  b.octa(0.30, 0.34, 0.20, 0.34, 0.78, PLANT_LEAF, 0.35, rng);
+  b.octa(-0.28, 0.37, -0.22, 0.32, 0.75, PLANT_LEAF, 0.35, rng);
+  const berry = params.color2 !== undefined ? rgbOf(params.color2) : ([0.78, 0.16, 0.18] as [number, number, number]);
+  const n = 6 + Math.floor(rng() * 4);
+  for (let i = 0; i < n; i++) {
+    const a = rng() * Math.PI * 2;
+    const rr = 0.25 + rng() * 0.35;
+    const br = 0.05 + rng() * 0.03;
+    b.octa(Math.cos(a) * rr, 0.34 + rng() * 0.42, Math.sin(a) * rr, br, 1.0, berry, 0.25, rng);
+  }
+  return b.geo();
+}
+
+/** 小树：六边锥台树干 + 3 层锥形树冠（低多边形） */
+function buildYoungTree(_params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const rng = crystalRng(variant * 149 + 73);
+  const b = plantBuilder();
+  const trunkH = 1.5 + rng() * 0.5;
+  const sides = 6;
+  const r0 = 0.15 + rng() * 0.03;
+  const r1 = 0.085;
+  const ring = (y: number, r: number): [number, number, number][] => {
+    const out: [number, number, number][] = [];
+    for (let k = 0; k < sides; k++) {
+      const a = (k / sides) * Math.PI * 2 + rng() * 0.12;
+      out.push([Math.cos(a) * r, y, Math.sin(a) * r]);
+    }
+    return out;
+  };
+  const bot = ring(0, r0);
+  const top = ring(trunkH, r1);
+  for (let k = 0; k < sides; k++) {
+    const k1 = (k + 1) % sides;
+    const f = 0.9 + rng() * 0.2;
+    const c: [number, number, number] = [PLANT_TRUNK[0] * f, PLANT_TRUNK[1] * f, PLANT_TRUNK[2] * f];
+    b.tri(bot[k], top[k1], top[k], c);
+    b.tri(bot[k], bot[k1], top[k1], c);
+  }
+  // 树冠：三层锥（底环 → 尖顶）
+  const cones: { y: number; r: number; h: number }[] = [
+    { y: trunkH - 0.25, r: 0.95, h: 1.05 },
+    { y: trunkH + 0.45, r: 0.78, h: 0.95 },
+    { y: trunkH + 1.05, r: 0.55, h: 0.85 },
+  ];
+  for (const cone of cones) {
+    const cs = 8;
+    const base: [number, number, number][] = [];
+    for (let k = 0; k < cs; k++) {
+      const a = (k / cs) * Math.PI * 2 + rng() * 0.2;
+      base.push([Math.cos(a) * cone.r, cone.y, Math.sin(a) * cone.r]);
+    }
+    const apex: [number, number, number] = [(rng() - 0.5) * 0.1, cone.y + cone.h, (rng() - 0.5) * 0.1];
+    for (let k = 0; k < cs; k++) {
+      const k1 = (k + 1) % cs;
+      const f = 0.85 + rng() * 0.3;
+      const c: [number, number, number] = [PLANT_LEAF[0] * f, PLANT_LEAF[1] * f, PLANT_LEAF[2] * f];
+      b.tri(base[k], base[k1], apex, c);
+    }
+  }
+  return b.geo();
+}
+
 /**
  * 共享几何工厂：按 geometry.type 分发——
  * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
  * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
  * 'trapezoid'：平截四棱台（底大方、顶小方 ÷ 梯台）+ 顶面下沉槽
  * 'crystal'：能量耗尽原石晶体簇（多变体：主峰+环晶+细针+碎屑，倾斜+歪尖）
+ * 'grass' / 'flower' / 'bush' / 'tree'：采集物植被（顶点色 + 双面；每变体一套形态）
  *（《水泥高台上的装饰性实体.json》：侧面梯形 + 顶面一块向下凹且保持平面）
  */
 function buildSharedGeometry(type: string | undefined, params: Record<string, number>, variant: number): THREE.BufferGeometry {
@@ -746,6 +933,18 @@ function buildSharedGeometry(type: string | undefined, params: Record<string, nu
   }
   if (type === 'crystal') {
     return buildCrystalCluster(params, variant);
+  }
+  if (type === 'grass') {
+    return buildGrassTuft(params, variant);
+  }
+  if (type === 'flower') {
+    return buildFlowerCluster(params, variant);
+  }
+  if (type === 'bush') {
+    return buildBerryBush(params, variant);
+  }
+  if (type === 'tree') {
+    return buildYoungTree(params, variant);
   }
   if (type === 'block') {
     const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
@@ -792,6 +991,9 @@ function getSharedRock(key: string, type: string | undefined, params: Record<str
     mat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(params.color ?? 0x8a7f74),
       roughness: 0.95, metalness: 0, flatShading: true,
+      // ★ 植被等程序化几何用逐顶点色；薄叶双面可见（params 显式开启）
+      vertexColors: params.vertexColors === 1,
+      side: params.doubleSide === 1 ? THREE.DoubleSide : THREE.FrontSide,
     });
     mat.userData.decorShared = true;
     SHARED_MAT.set(key, mat);
@@ -805,10 +1007,12 @@ registerPropRenderer('instanced', {
     const params = def.geometry?.params ?? {};
     const type = def.geometry?.type ?? '';
     const matKey = `${def.key}|${type}`;
-    // ★ 按 variant 分桶成多个 InstancedMesh（每组占用自己的一套簇形几何）
+    // ★ 按 variant 分桶成多个 InstancedMesh（每组占用自己的一套簇形几何）；
+    //   变体数可由声明收窄（花草 1~2 → 减少 draw call）
+    const VC = Math.max(1, def.variantCount ?? INST_VARIANT_COUNT);
     const counts = new Map<number, number>();
     for (const p of instances) {
-      const v = p.variant % INST_VARIANT_COUNT;
+      const v = p.variant % VC;
       counts.set(v, (counts.get(v) ?? 0) + 1);
     }
     const m = new THREE.Matrix4();
@@ -824,16 +1028,18 @@ registerPropRenderer('instanced', {
       mesh.name = `${def.key}|v${variant}`;
       let idx = 0;
       for (const p of instances) {
-        if (p.variant % INST_VARIANT_COUNT !== variant) continue;
+        if (p.variant % VC !== variant) continue;
         e.set(0, p.rotY, 0);
         q.setFromEuler(e);
         vp.set(p.x, p.y, p.z);
-        const yScale = 0.85 + 0.15 * (p.variant / 4);
+        const yScale = 0.85 + 0.15 * ((p.variant % VC) / VC);
         s.set(p.scale, p.scale * yScale, p.scale);
         m.compose(vp, q, s);
         mesh.setMatrixAt(idx++, m);
       }
       mesh.instanceMatrix.needsUpdate = true;
+      // ★ 实例化包围球：默认只按基几何算 → 实例远离原点会被错误视锥剔除（花草/晶体边缘消失）
+      mesh.computeBoundingSphere();
       group.add(mesh);
     }
     return group;

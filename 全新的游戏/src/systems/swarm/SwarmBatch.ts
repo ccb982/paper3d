@@ -180,7 +180,7 @@ export class SwarmBatch {
   }
 
   /** 每帧同步：代理 → 各兵种实例矩阵（贴地 + 底部锚点 + yaw + 前后帧） */
-  sync(pool: AgentPool, groundAt: (x: number, z: number) => number): void {
+  sync(pool: AgentPool, groundAt: (x: number, z: number, y: number) => number): void {
     const counters: number[] = [];
     for (let m = 0; m < this.mobs.length; m++) counters.push(0);
     for (let i = 0; i < pool.count; i++) {
@@ -190,7 +190,7 @@ export class SwarmBatch {
       const idx = counters[mob]++;
       const w = Math.max(0.05, pool.scale[i]);
       const h = w * batch.aspect;
-      const gy = groundAt(pool.x[i], pool.z[i]);
+      const gy = groundAt(pool.x[i], pool.z[i], pool.y[i]); // ★ y 提示选层（浮空洞顶）
       pool.y[i] = gy; // 贴地回写（渲染与逻辑同源）
       _p.set(pool.x[i], gy + h / 2, pool.z[i]);
       _q.setFromAxisAngle(_axisY, pool.yaw[i]);

@@ -166,7 +166,7 @@ export class DroneEntity extends EntityBase {
     const k = Math.min(1, dt * speed);
     p.x += (tx - p.x) * k;
     p.z += (tz - p.z) * k;
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const gy = RasterMap.current?.surfaceHeightAtFor(p.x, p.z, p.y) ?? 0; // 洞顶不穿模
     const baseY = Math.max(ty, gy + minAir);
     p.y += (baseY + Math.sin(this.phase) * 0.18 - p.y) * Math.min(1, dt * speed);
   }
@@ -356,7 +356,7 @@ export class DroneEntity extends EntityBase {
       }
     }
     // 原地固定高度（不上下摆动；随地形抬升但不低于放置基准）
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
+    const gy = RasterMap.current?.surfaceHeightAtFor(p.x, p.z, p.y) ?? 0; // 洞顶不穿模
     p.y = Math.max(gy + 0.5, this.stationaryBaseY);
   }
 

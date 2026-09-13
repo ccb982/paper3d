@@ -316,6 +316,48 @@
       "effects": [
         { "type": "summon_sentinel" }
       ]
+    },
+    {
+      "id": "herb",
+      "name": "草药",
+      "type": "material",
+      "description": "野外采集的药用植物，可用于调配恢复类制剂",
+      "maxStack": 99,
+      "color": { "h": 0.30, "s": 0.55, "l": 0.45 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.12, "hy": 0.10, "hz": 0.12 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "berry",
+      "name": "浆果",
+      "type": "material",
+      "description": "酸甜多汁的野果，采集自灌木丛",
+      "maxStack": 99,
+      "color": { "h": 0.97, "s": 0.62, "l": 0.48 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.12, "hy": 0.10, "hz": 0.12 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "wood",
+      "name": "木料",
+      "type": "material",
+      "description": "从树木上取得的硬质木料，建造与加工的基础材料",
+      "maxStack": 99,
+      "color": { "h": 0.08, "s": 0.50, "l": 0.35 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.18, "hy": 0.14, "hz": 0.14 },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
     }
   ]
 }

@@ -543,6 +543,47 @@ export const TILE_CEMENT_PLATFORM = new TileDef(
 );
 
 // ============================================================
+// ★ 洞穴山丘地块（2026-09-14：洞穴预设专用，材质覆盖引用，不入任何风格组）
+// ============================================================
+
+/** 洞穴地面（暗色岩石；洞穴预设 materials.ground 指定） */
+export const TILE_CAVE_FLOOR = new TileDef(
+  22,
+  "cave_floor",
+  "洞穴地面",
+  "ground",
+  {
+    // 岩灰岩底（2026-09-14 调亮：0.16 → 0.30——洞内太暗看不清材质）
+    baseHsl: { h: 0.09, s: 0.08, l: 0.30 },
+    jitter: { h: 0.006, s: 0.02, l: 0.03 },
+    depression: false,
+    borderLine: true,
+    material: { fnId: "rock", params: { strata: 0.05, streak: 0.04, cracks: 0.10 } },
+  },
+  TILE_FLAT.physics,
+  [],
+);
+
+/** 洞穴岩壁（暗色；洞穴预设 materials.platform 指定） */
+export const TILE_CAVE_PLATFORM = new TileDef(
+  23,
+  "cave_platform",
+  "洞穴岩壁",
+  "platform",
+  {
+    // ★ 2026-09-14 调亮：0.24 → 0.38（洞内墙面别发黑）
+    baseHsl: { h: 0.09, s: 0.09, l: 0.38 },
+    jitter: { h: 0.006, s: 0.02, l: 0.04 },
+    depression: false,
+    borderLine: true,
+    streaks: true,
+    material: { fnId: "rock", params: { strata: 0.06, streak: 0.05, cracks: 0.08 } },
+  },
+  TILE_PLATFORM.physics,
+  [],
+);
+
+// ============================================================
 // 注册表
 // ============================================================
 
@@ -566,6 +607,8 @@ for (const t of [
   TILE_FLAT_SAND,
   TILE_PLATFORM_SAND,
   TILE_CEMENT_PLATFORM,
+  TILE_CAVE_FLOOR,
+  TILE_CAVE_PLATFORM,
 ]) {
   if (REGISTRY.has(t.id)) throw new Error(`[Tiles] 地块 id 冲突: ${t.id}`);
   REGISTRY.set(t.id, t);

@@ -46,6 +46,9 @@ import {
   planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey, groupPropsByKey,
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
+// ★ 采集物植被（side-effect 注册：草丛/花丛/浆果丛/小树）
+import { isCollectibleKey } from './decor/CollectibleProps';
+import { buildCaveCaps, disposeCaveCapShared, CAVE_CAP_THICK, type CaveCapPhysics } from './decor/CaveCap';
 import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
 import { buildPlatformAprons, type ApronPhysics } from './decor/PlatformApron';
 import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics } from './decor/CementPlinth';
@@ -63,7 +66,8 @@ export interface DecorPlan {
 
 /** 水体几何共享装配（createWaterMesh，WaterMaterial 统一管理闪烁/波/LOD） */
 
-/** ★ 运行时装饰实体索引条目（权威=实际存在于场景的碰撞体；与 propBodies 同步登记/销毁） */
+/** ★ 运行时装饰实体索引条目（权威=实际存在于场景的装饰物；含无碰撞采集物，
+ *  与 propRegistry 同步登记/销毁；index = 本 chunk 装饰计划数组下标，采集用） */
 export interface DecorPropInstance {
   key: string;
   cx: number;
@@ -74,6 +78,8 @@ export interface DecorPropInstance {
   z: number;
   r: number;
   h: number;
+  /** ★ 本 chunk 装饰计划序号（planChunkProps 输出下标；采集标记用） */
+  index: number;
 }
 
 /** ★ 命中解析结果：地形修改 / 掉落 / 表现三端共用一份权威判定 */
@@ -107,6 +113,8 @@ export interface ImpactReport {
   water: 'hit' | 'edge' | 'none';
   /** 命中点附近（PROP_PROBE_R 内）的装饰性实体；无 = null */
   prop: ImpactProp | null;
+  /** ★ 命中浮空洞顶岩板（2026-09-14）：是 → 挖岩板（digCaveCap），不挖地形/不掉落 */
+  capHit?: boolean;
 }
 
 /** 体积列表 → 平面 Float32Array（每 5 个 [x,z,y,r,h]） */
@@ -171,6 +179,10 @@ export class ChunkManager {
   private apronBodies = new Map<number, number>();
   /** 水泥台座地面刚体 id（chunkKey → id；同墙裙 trimesh 管线） */
   private plinthBodies = new Map<number, number>();
+  /** ★ 浮空洞顶岩板刚体 id（chunkKey → id；caveCap 数据 → 固定 trimesh，随 chunk 生灭） */
+  private caveBodies = new Map<number, number>();
+  /** ★ 浮空洞顶岩板网格（chunkKey → mesh；挖洞重建时要替换） */
+  private caveMeshes = new Map<number, THREE.Mesh>();
   /** ★ 地图风格：false=标准外观 / true=四维空间（最终 Boss 战地图，Boss4DArena） */
   private boss4D = false;
 
@@ -674,7 +686,7 @@ export class ChunkManager {
       if (decorLayer) group.add(decorLayer.layer);
       // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
       this.createDecorColliders(j.cx, j.cz, decor);
-      this.createStructuralGround(j.cx, j.cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
+      this.createStructuralGround(j.cx, j.cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
       this.applyDecorCooldown(_td);
     }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
@@ -826,6 +838,12 @@ export class ChunkManager {
       this.host.destroyGround(id);
     }
     this.plinthBodies.clear();
+    for (const id of this.caveBodies.values()) {
+      this.host.destroyGround(id);
+    }
+    this.caveBodies.clear();
+    this.caveMeshes.clear();
+    disposeCaveCapShared();
     for (const v of this.meshes.values()) {
       this.scene.remove(v);
       this.disposeVisual(v);
@@ -910,6 +928,8 @@ export class ChunkManager {
     if (apron !== undefined) this.host.setBodyEnabled?.(apron, false);
     const plinth = this.plinthBodies.get(key);
     if (plinth !== undefined) this.host.setBodyEnabled?.(plinth, false);
+    const cave = this.caveBodies.get(key);
+    if (cave !== undefined) this.host.setBodyEnabled?.(cave, false);
   }
 
   /** ★ 解封 chunk（≤PARK_RADIUS）：视觉挂回场景 + 刚体启用（零重建、瞬时）；
@@ -927,6 +947,8 @@ export class ChunkManager {
     if (apron !== undefined) this.host.setBodyEnabled?.(apron, true);
     const plinth = this.plinthBodies.get(key);
     if (plinth !== undefined) this.host.setBodyEnabled?.(plinth, true);
+    const cave = this.caveBodies.get(key);
+    if (cave !== undefined) this.host.setBodyEnabled?.(cave, true);
   }
 
   /** ★ 销毁 chunk（>DESTROY_RADIUS）：释放全部视觉/物理/索引（封存上限，防内存累积）；
@@ -962,6 +984,12 @@ export class ChunkManager {
       this.host.destroyGround(plinth);
       this.plinthBodies.delete(key);
     }
+    const cave = this.caveBodies.get(key);
+    if (cave !== undefined) {
+      this.host.destroyGround(cave);
+      this.caveBodies.delete(key);
+    }
+    this.caveMeshes.delete(key);
     // 运行时索引/缓存清理（装饰计划确定性重算，回程自动重建）
     this.decorCache.delete(key);
     this.propLayers.delete(key);
@@ -1578,7 +1606,7 @@ const key2 = chunkKeyOf(cx, cz);
     // 物理：分区优先（cells → grid×grid collider），兜底整 chunk 合并 trimesh
     this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
     this.createDecorColliders(cx, cz, decor);
-    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
+    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
   }
 /**
    * ★ 破坏重建/首建（2026-09-09 原地更新重构）：
@@ -1821,6 +1849,12 @@ const key2 = chunkKeyOf(cx, cz);
       this.host.destroyGround(oldPlinth);
       this.plinthBodies.delete(key);
     }
+    const oldCave = this.caveBodies.get(key);
+    if (oldCave !== undefined) {
+      this.host.destroyGround(oldCave);
+      this.caveBodies.delete(key);
+    }
+    this.caveMeshes.delete(key);
     this.propLayers.delete(key);
   }
 
@@ -1851,8 +1885,12 @@ const key2 = chunkKeyOf(cx, cz);
       ...p,
       y: this.raster.surfaceHeightAt(cx * CHUNK_SIZE + p.x, cz * CHUNK_SIZE + p.z) - (p.sink ?? 0),
     }));
-    if (props.length > 0) {
-      const propLayer = buildPropLayer(props);
+    // ★ 已采采集物不重挂（序号过滤；resnap 保留原数组顺序 → 下标仍对得上）
+    const visibleProps = this.raster.hasHarvestedAt(cx, cz)
+      ? props.filter((_, i) => !this.raster.isPropHarvested(cx, cz, i))
+      : props;
+    if (visibleProps.length > 0) {
+      const propLayer = buildPropLayer(visibleProps);
       if (propLayer) {
         const wrap = new THREE.Group();
         wrap.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
@@ -2099,7 +2137,15 @@ const key2 = chunkKeyOf(cx, cz);
       const gz = Math.min(CHUNK_SIZE - 1, Math.max(0, Math.floor(z - cz * CHUNK_SIZE)));
       h = cd.heights[gz * CHUNK_SIZE + gx];
     }
-    let water: ImpactReport['water'] = role === 'liquid' ? 'hit' : 'none';
+    // ★ 浮空洞顶命中判定：点在岩板厚度带内（含上下 0.6 余量）
+    let capHit = false;
+    if (cd?.caveCap) {
+      const lbx = bx - cx * BLOCKS_PER_SIDE;
+      const lbz = bz - cz * BLOCKS_PER_SIDE;
+      const cap = cd.caveCap[lbz * BLOCKS_PER_SIDE + lbx];
+      if (Number.isFinite(cap) && y >= cap - CAVE_CAP_THICK - 0.6 && y <= cap + 0.6) capHit = true;
+    }
+    let water: ImpactReport['water'] = capHit ? 'none' : role === 'liquid' ? 'hit' : 'none';
     if (water === 'none') {
       for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
         if (this.isLiquidBlock(bx + dx, bz + dz)) {
@@ -2113,6 +2159,7 @@ const key2 = chunkKeyOf(cx, cz);
       tile: { cx, cz, bx, bz, id, role, h },
       water,
       prop: this.queryPropsNear(x, z, PROP_PROBE_R),
+      capHit,
     };
   }
 
@@ -2140,6 +2187,11 @@ const key2 = chunkKeyOf(cx, cz);
    */
   playBulletImpact(r: ImpactReport): void {
     if (this.boss4D) return; // 四维空间不扣地形
+    // ★ 浮空洞顶：命中岩板 → 挖岩板（出天窗/洞口），不挖下方地形
+    if (r.capHit) {
+      this.digCaveCap(r.tile.cx, r.tile.cz, r.tile.bx, r.tile.bz);
+      return;
+    }
     // ★ 打坑半径：0.6 → 0.49（面积 ×2/3，即"打坑面积缩小 1/3"；0.6×√(2/3)≈0.49）
     const R = 0.49; // §14.10 T2 轻量档（破坏小）
     const byChunk = new Map<number, {
@@ -2365,15 +2417,20 @@ const key2 = chunkKeyOf(cx, cz);
    */
   private buildDecorLayer(
     cx: number, cz: number, decor: DecorPlan,
-  ): { layer: THREE.Object3D; apronPhysics: ApronPhysics | null; plinthPhysics: CementPlinthPhysics | null } | null {
+  ): { layer: THREE.Object3D; apronPhysics: ApronPhysics | null; plinthPhysics: CementPlinthPhysics | null; cavePhysics: CaveCapPhysics | null } | null {
     const parts: THREE.Object3D[] = [];
     let apronPhysics: ApronPhysics | null = null;
     let plinthPhysics: CementPlinthPhysics | null = null;
+    let cavePhysics: CaveCapPhysics | null = null;
     let propLayer: THREE.Object3D | null = null;
-    if (decor.props.length > 0) {
-      propLayer = buildPropLayer(decor.props);
+    // ★ 已采采集物不渲染（序号过滤；无记录时零开销零分配）
+    const visibleProps = this.raster.hasHarvestedAt(cx, cz)
+      ? decor.props.filter((_, i) => !this.raster.isPropHarvested(cx, cz, i))
+      : decor.props;
+    if (visibleProps.length > 0) {
+      propLayer = buildPropLayer(visibleProps);
       if (propLayer) parts.push(propLayer);
-      else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${decor.props.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
+      else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${visibleProps.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
     }
     // ★ 水泥台座（cement_platform 专属结构件，35% 高台块）：4×4 整格正置、
     //   顶面进 surfaceHeightAt 叠加层（站得上去）；采样用 base 防自反馈。
@@ -2405,7 +2462,22 @@ const key2 = chunkKeyOf(cx, cz);
       parts.push(apron.mesh);
       apronPhysics = apron.physics;   // 调用方在 replaceChunk 后经 createApronGround 建体
     }
-    if (parts.length === 0 && !apronPhysics && !plinthPhysics) return null;
+    // ★ 浮空洞顶岩板（洞穴预设）：caveCap 数据 → 暗色岩盒网格 + 固定 trimesh；
+    //   顶面第二层站立由 RasterMap.surfaceHeightAtFor 负责（网格只管看得见/挡子弹）
+    // ★ 洞顶材质复用本 chunk 地形顶面材质（albedo/lightmap/材质图案 + 昼夜光照同源）
+    const topM = this.terrainVisuals.get(chunkKeyOf(cx, cz))?.top.material;
+    const topMat = Array.isArray(topM) ? (topM[0] ?? null) : (topM ?? null);
+    const cave = buildCaveCaps(
+      cx, cz, this.raster.worldSeed,
+      this.raster.getChunkData(cx, cz)?.caveCap,
+      topMat,
+    );
+    if (cave) {
+      parts.push(cave.mesh);
+      cavePhysics = cave.physics;
+      this.caveMeshes.set(chunkKeyOf(cx, cz), cave.mesh as THREE.Mesh);
+    }
+    if (parts.length === 0 && !apronPhysics && !plinthPhysics && !cavePhysics) return null;
     const layer = new THREE.Group();
     (layer.userData as { decorKind?: string }).decorKind = 'decor'; // ★ 拆除识别（不依赖 children 次序）
     for (const p of parts) layer.add(p);
@@ -2415,41 +2487,126 @@ const key2 = chunkKeyOf(cx, cz);
     layer.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
     // ★ 道具层引用：脏区局部重贴地只拆它（围裙/台座不动 —— §17.11）
     if (propLayer) this.propLayers.set(chunkKeyOf(cx, cz), propLayer);
-    return { layer, apronPhysics, plinthPhysics };
+    return { layer, apronPhysics, plinthPhysics, cavePhysics };
   }
 
   /**
-   * 装饰物碰撞体：必须在 replaceChunk 之后创建（replaceChunk 会销毁
+   * 装饰物碰撞体 + 查询索引：必须在 replaceChunk 之后创建（replaceChunk 会销毁
    * propBodies[key] 的"旧"碰撞体——若先创建，刚建的会被当旧体立刻销毁，
    * 物理实体永不存在。踩过的坑）。创建走基类统一实现。
+   * ★ 2026-09-14：propRegistry 改为**全量登记**（含无碰撞采集物）——
+   *   采集物没有 physics，但 E 键采集/掉落查询都要能看见它；
+   *   已采序号在此过滤（不渲染由 buildDecorLayer/resnapProps 侧过滤）。
    */
   private createDecorColliders(cx: number, cz: number, decor: DecorPlan): void {
-    if (!this.host.createPropBody) return;
+    const key = chunkKeyOf(cx, cz);
     const ids: number[] = [];
     const instances: DecorPropInstance[] = [];
-    for (const [key, list] of groupPropsByKey(decor.props)) {
-      const def = mapDecorByKey(key);
-      if (!def?.isCollidable) continue;
-      ids.push(...def.createColliders(this.host, list, cx, cz));
-      const ph = def.physics!;
-      for (const p of list) {
-        const r = ph.radius * p.scale;
-        instances.push({
-          key, cx, cz,
-          x: cx * CHUNK_SIZE + p.x,
-          y: p.y,
-          z: cz * CHUNK_SIZE + p.z,
-          r,
-          h: ph.height * p.scale,
-        });
+    const props = decor.props;
+    for (let i = 0; i < props.length; i++) {
+      const p = props[i];
+      if (this.raster.isPropHarvested(cx, cz, i)) continue; // ★ 已采：不登记（不可再采/不可命中）
+      const def = mapDecorByKey(p.propKey);
+      if (!def) continue;
+      if (def.physics && this.host.createPropBody) {
+        const r = def.physics.radius * p.scale;
+        const h = def.physics.height * p.scale;
+        const id = this.host.createPropBody(cx * CHUNK_SIZE + p.x, p.y + h / 2, cz * CHUNK_SIZE + p.z, r, h);
+        if (id !== null && id !== undefined) ids.push(id);
+      }
+      // ★ 全量登记（无碰撞用名义半径/高度；查询只看水平距离）
+      const r = def.physics ? def.physics.radius * p.scale : 0.6;
+      const h = def.physics ? def.physics.height * p.scale : 1.0;
+      instances.push({
+        key: p.propKey, cx, cz,
+        x: cx * CHUNK_SIZE + p.x,
+        y: p.y,
+        z: cz * CHUNK_SIZE + p.z,
+        r, h, index: i,
+      });
+    }
+    if (ids.length > 0) this.propBodies.set(key, ids);
+    if (instances.length > 0) this.propRegistry.set(key, instances);
+  }
+
+  /** ★ 采集物就近查询（含 chunk/序号；E 键采集判定用）——只认采集物 key，
+   *  过滤已采；权威索引 = propRegistry（本 chunk + 8 邻环）。 */
+  queryCollectibleNear(x: number, z: number, r: number): DecorPropInstance | null {
+    if (this.boss4D || this.propRegistry.size === 0) return null;
+    const baseCx = Math.floor(x / CHUNK_SIZE);
+    const baseCz = Math.floor(z / CHUNK_SIZE);
+    const r2 = r * r;
+    let best: DecorPropInstance | null = null;
+    let bestD2 = Infinity;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const list = this.propRegistry.get(chunkKeyOf(baseCx + dx, baseCz + dz));
+        if (!list) continue;
+        for (const p of list) {
+          if (!isCollectibleKey(p.key)) continue;
+          const ddx = p.x - x;
+          const ddz = p.z - z;
+          const d2 = ddx * ddx + ddz * ddz;
+          if (d2 <= r2 && d2 < bestD2) {
+            bestD2 = d2;
+            best = p;
+          }
+        }
       }
     }
-    if (ids.length > 0) {
-      this.propBodies.set(chunkKeyOf(cx, cz), ids);
-      this.propRegistry.set(chunkKeyOf(cx, cz), instances);
-    } else if (decor.props.some((p) => mapDecorByKey(p.propKey)?.isCollidable)) {
-      console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有可碰撞装饰物但 createPropBody 返回空（宿主未实现？）`);
+    return best;
+  }
+
+  /** ★ 挖浮空洞顶（2026-09-14）：命中岩板的 4m 块 → 数据置空 + 重建该 chunk 岩板
+   *  （mesh + 固定 trimesh）；洞口/天窗即由"少一块" + 自动裙边生成，地形不动。 */
+  digCaveCap(cx: number, cz: number, bx: number, bz: number): boolean {
+    const cd = this.raster.getChunkData(cx, cz);
+    if (!cd?.caveCap) return false;
+    const lbx = bx - cx * BLOCKS_PER_SIDE;
+    const lbz = bz - cz * BLOCKS_PER_SIDE;
+    if (lbx < 0 || lbx >= BLOCKS_PER_SIDE || lbz < 0 || lbz >= BLOCKS_PER_SIDE) return false;
+    const bi = lbz * BLOCKS_PER_SIDE + lbx;
+    if (!Number.isFinite(cd.caveCap[bi])) return false;
+    cd.caveCap[bi] = NaN;
+    const key = chunkKeyOf(cx, cz);
+    // 拆旧：网格 + 固定刚体
+    // ★ parent 必须在 remove 之前取（remove 会把 child.parent 置 null →
+    //   之前取成 null，导致新洞顶当帧挂不回去、整块洞顶消失一两帧 = "闪一下"）
+    const oldMesh = this.caveMeshes.get(key);
+    const parent = oldMesh?.parent ?? null;
+    if (oldMesh) {
+      parent?.remove(oldMesh);
+      this.disposeVisual(oldMesh);
+      this.caveMeshes.delete(key);
     }
+    const oldBody = this.caveBodies.get(key);
+    if (oldBody !== undefined) {
+      this.host.destroyGround(oldBody);
+      this.caveBodies.delete(key);
+    }
+    // 重建（无剩余封顶块 → 什么都不建）；材质同样借用本 chunk 地形顶面材质
+    const topM2 = this.terrainVisuals.get(key)?.top.material;
+    const topMat = Array.isArray(topM2) ? (topM2[0] ?? null) : (topM2 ?? null);
+    const cap = buildCaveCaps(cx, cz, this.raster.worldSeed, cd.caveCap, topMat);
+    if (cap) {
+      if (parent) parent.add(cap.mesh);
+      else this.pendingDecorJobs.set(key, { cx, cz, maps: null as unknown as ChunkMaps, mode: 'full' });
+      this.caveMeshes.set(key, cap.mesh as THREE.Mesh);
+      const id = this.host.createGround(cx, cz, cap.physics.vertices, cap.physics.indices);
+      this.caveBodies.set(key, id);
+    }
+    return true;
+  }
+
+  /** ★ 采集落地：标记已采 + 只刷新该 chunk 道具层（围裙/台座/地形不动）。
+   *  采集后已采株从渲染与查询索引中一起移除（先拆旧层/旧碰撞体，再重贴）。 */
+  harvestProp(cx: number, cz: number, index: number): void {
+    this.raster.markPropHarvested(cx, cz, index);
+    const key = chunkKeyOf(cx, cz);
+    const group = this.meshes.get(key);
+    if (!group) return; // chunk 未建（远处）：下次建时按已采过滤，天然不渲染
+    this.teardownPropsOnly(key);
+    this.resnapProps(cx, cz, group);
   }
 
   /**
@@ -2459,7 +2616,7 @@ const key2 = chunkKeyOf(cx, cz);
    *   之后调用（旧体销毁 → 新体创建，同装饰物碰撞时序）。
    *   apronPhysics/plinthPhysics 由 buildDecorLayer 随视觉层产出。
    */
-  private createStructuralGround(cx: number, cz: number, apronPhysics: ApronPhysics | null, plinthPhysics: CementPlinthPhysics | null): void {
+  private createStructuralGround(cx: number, cz: number, apronPhysics: ApronPhysics | null, plinthPhysics: CementPlinthPhysics | null, cavePhysics: CaveCapPhysics | null = null): void {
     if (apronPhysics) {
       const key = chunkKeyOf(cx, cz);
       const id = this.host.createGround(cx, cz, apronPhysics.vertices, apronPhysics.indices);
@@ -2469,6 +2626,11 @@ const key2 = chunkKeyOf(cx, cz);
       const key = chunkKeyOf(cx, cz);
       const id = this.host.createGround(cx, cz, plinthPhysics.vertices, plinthPhysics.indices);
       this.plinthBodies.set(key, id);
+    }
+    if (cavePhysics) {
+      const key = chunkKeyOf(cx, cz);
+      const id = this.host.createGround(cx, cz, cavePhysics.vertices, cavePhysics.indices);
+      this.caveBodies.set(key, id);
     }
   }
 
@@ -2494,7 +2656,7 @@ const key2 = chunkKeyOf(cx, cz);
     this.replaceChunk(key, b.group, cx, cz, b.trimeshVertices, b.trimeshIndices);
     // ★ 装饰物碰撞体独立阶段（地形后补，不依赖视觉层）——同上解耦逻辑
     this.createDecorColliders(cx, cz, decor);
-    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null);
+    this.createStructuralGround(cx, cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
   }
 
   /** 拆旧视觉+旧物理 → 装新视觉 → 建配套新物理体（风格切换/流式构建共用） */
@@ -2538,6 +2700,12 @@ const key2 = chunkKeyOf(cx, cz);
       this.host.destroyGround(oldPlinth);
       this.plinthBodies.delete(key);
     }
+    const oldCave = this.caveBodies.get(key);
+    if (oldCave !== undefined) {
+      this.host.destroyGround(oldCave);
+      this.caveBodies.delete(key);
+    }
+    this.caveMeshes.delete(key);
     if (visual) {
       this.scene.add(visual);
       this.meshes.set(key, visual);
@@ -2556,29 +2724,34 @@ const key2 = chunkKeyOf(cx, cz);
   }
 
   /** 释放 chunk 视觉资源（兼容 Mesh 与 Group 两种形态） */
-   private disposeVisual(obj: THREE.Object3D): void {
-     obj.traverse((o) => {
-       const m = o as THREE.Mesh;
-       if (!m.geometry) return;
-       const mm = m.material as THREE.MeshStandardMaterial | undefined;
-       // ★ 装饰物共享几何/材质（decorShared 标记）：chunk 重建不得释放，
-       //   仅由 disposePropRenderers 在模式退出时统一释放
-       const shared = (m.geometry.userData as { decorShared?: boolean } | undefined)?.decorShared
-         || (mm?.userData as { decorShared?: boolean } | undefined)?.decorShared;
-       if (!shared) m.geometry.dispose();
-       if (!mm) return;
-       // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
-       //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
-       const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData;
-       // ★ 块 id 微纹理是本 chunk 私有（每次构建新建），无条件释放
-       extra?.tileIds?.dispose();
-       if (!extra?.cached) {
-         mm.map?.dispose();
-         extra?.lightMap?.dispose();
-       }
-       if (!shared) mm.dispose();
-     });
-   }
+  private disposeVisual(obj: THREE.Object3D): void {
+    obj.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.geometry) return;
+      const mm = m.material as THREE.MeshStandardMaterial | undefined;
+      // ★ 共享标记按资源分别判定（几何与材质可各自共享）：
+      //   装饰物晶体两者皆共享；洞顶岩板 = 材质共享 + 几何每 chunk 私有（须释放）
+      const geoShared = (m.geometry.userData as { decorShared?: boolean } | undefined)?.decorShared === true;
+      const matShared = (mm?.userData as { decorShared?: boolean } | undefined)?.decorShared === true;
+      // ★ 借用材质（如洞顶借地形顶面材质）：只释放自己的几何，材质归原主
+      const borrowed = (o.userData as { borrowedMaterial?: boolean } | undefined)?.borrowedMaterial === true;
+      if (!geoShared) m.geometry.dispose();
+      if (!mm) return;
+      // ★ 借用/共享材质：材质与其纹理都不归本网格所有 → 直接返回（几何已在上面处理）。
+      //   （曾把借来的地形材质 tileIds/lightMap 一起 dispose → 整块地形闪一下）
+      if (borrowed || matShared) return;
+      // ★ 双纹理方案：lightmap 挂在材质 userData 上；cached = 纹理归烘焙
+      //   缓存所有（接缝重建/风格切换要复用），跳过纹理释放，材质照常销毁
+      const extra = (mm as unknown as { userData?: { lightMap?: THREE.Texture; tileIds?: THREE.Texture; cached?: boolean } }).userData;
+      // ★ 块 id 微纹理是本 chunk 私有（每次构建新建），随材质释放
+      extra?.tileIds?.dispose();
+      if (!extra?.cached) {
+        mm.map?.dispose();
+        extra?.lightMap?.dispose();
+      }
+      mm.dispose();
+    });
+  }
 }
 
 // ============================================================

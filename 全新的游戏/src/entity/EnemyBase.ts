@@ -250,12 +250,13 @@ export class EnemyBase extends CharacterBase {
     const p = this.entity.position;
     const p1 = EnemyBase.HAZARD_PROBE;
     const p2 = p1 * 0.55; // 中间采样点（更早发现坑沿，转角更平滑）
-    const h0 = raster.surfaceHeightAt(p.x, p.z);
+    // ★ 第二层高度（浮空洞顶）：用自身当前高度选层——站在山上的敌人不会把洞当坑
+    const h0 = raster.surfaceHeightAtFor(p.x, p.z, p.y);
     for (const d of [p2, p1]) {
       const hx = p.x + ux * d;
       const hz = p.z + uz * d;
       const role = raster.tileDefAt(hx, hz).genRole;
-      const h = raster.surfaceHeightAt(hx, hz);
+      const h = raster.surfaceHeightAtFor(hx, hz, p.y);
       // 坑洞地块（lethal 深坑）：不可站立 → 危险
       if (role === 'pit') return true;
       // 坑底过低（挖深/坑洞的深底，判定死亡线以下）→ 危险
@@ -264,8 +265,8 @@ export class EnemyBase extends CharacterBase {
       if (role === 'liquid' && h < -0.8) return true;
     }
     // ★ 高台立面判定：0.45m 处陡升 > 0.6m，且 1.2m 处没有同斜率延续 → 墙（插值坡放行）
-    const hNear = raster.surfaceHeightAt(p.x + ux * 0.45, p.z + uz * 0.45);
-    const hFar = raster.surfaceHeightAt(p.x + ux * 1.2, p.z + uz * 1.2);
+    const hNear = raster.surfaceHeightAtFor(p.x + ux * 0.45, p.z + uz * 0.45, p.y);
+    const hFar = raster.surfaceHeightAtFor(p.x + ux * 1.2, p.z + uz * 1.2, p.y);
     const riseNear = hNear - h0;
     const riseFar = hFar - hNear;
     if (riseNear > 0.6 && riseFar < riseNear * 0.5) return true;

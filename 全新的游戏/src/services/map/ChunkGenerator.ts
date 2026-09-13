@@ -100,6 +100,9 @@ export interface ChunkData {
   /** ★ §14.11 补丁层数覆盖（1m cell，0=无；N = 累深 N×PATCH_DEPTH）。
    *   生成器恒产出全 0 —— 仅运行时 playBulletImpact 写；clearAll 随 chunk 回收。 */
   levels: Uint8Array;
+  /** ★ 浮空洞顶（2026-09-14）：逐 4m 块顶面高度（NaN = 无）。
+   *  地表 heights 仍是洞底；顶面供"第二层站立"（RasterMap.surfaceHeightAtFor）。 */
+  caveCap?: Float32Array;
 }
 
 // ============ L4a 连通性修复（角色级；对特殊布局同样兜底） ============
@@ -265,6 +268,7 @@ function toChunkData(
   chunkX: number, chunkZ: number,
   groupKey: string,
   presetKey: string,
+  caveCap?: Float32Array | null,
 ): ChunkData {
   const heights = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);
   const blockTypes = new Uint8Array(BLOCKS_PER_SIDE * BLOCKS_PER_SIDE);
@@ -298,6 +302,7 @@ function toChunkData(
   return {
     chunkX, chunkZ, heights, blockTypes, blockHeight, walkable, groupKey, presetKey,
     levels: new Uint8Array(CHUNK_SIZE * CHUNK_SIZE), // ★ §14.11 覆盖层：初始 0，L6 预置伤痕 + 运行时挖坑共写
+    caveCap: caveCap ?? undefined,
   };
 }
 
@@ -469,6 +474,7 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   let overridePortHeights = false;
   let materialOverride: Partial<Record<'ground' | 'platform' | 'liquid' | 'pit', string>> | null = null;
   let noGroundPatch = false;
+  let caveCaps: Float32Array | null = null;
   if (special?.mode === 'replace' && special.roles) {
     roles = special.roles.slice();
     presetKey = 'special';
@@ -485,6 +491,7 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
       overridePortHeights = built.overridePorts === true;
       materialOverride = built.materials ?? null;
       noGroundPatch = built.noGroundPatch === true;
+      caveCaps = built.caveCaps ?? null;
     }
   }
 
@@ -499,7 +506,7 @@ export function generateChunk(seed: number, chunkX: number, chunkZ: number): Chu
   const tileHeights = assignHeights(blockIds, roles, ports, seed, chunkX, chunkZ, heightOverrides, overridePortHeights);
 
   // ---- L5 输出 ----
-  const data = toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key, presetKey);
+  const data = toChunkData(blockIds, tileHeights, chunkX, chunkZ, panel.key, presetKey, caveCaps);
   // ---- L6 预置伤痕（装饰弹坑/裂隙；levels 预写，确定性） ----
   presetLevelScars(seed, chunkX, chunkZ, data);
   return data;

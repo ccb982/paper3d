@@ -16,7 +16,7 @@
 import type { EntityBase } from "../../entity/EntityBase";
 import * as THREE from "three";
 import { tileById, type TileDef } from "./Tiles";
-import { generateChunk, type ChunkData, CHUNK_SIZE } from "./ChunkGenerator";
+import { generateChunk, type ChunkData, CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import {
   makeChunkSource,
   refineChunkSource,
@@ -66,6 +66,11 @@ export class RasterMap {
   private mapRecords = new Map<number, Uint8Array>();
   /** 被运行时挖过的 chunk（evict 时把 levels 移入 levelsStore） */
   private dirtyLevelKeys = new Set<number>();
+  /** ★ 采集物已采状态（2026-09-14）：chunkKey → 已采装饰序号集合。
+   *  生存期 = 本次出击（RasterMap 实例）；跨 chunk 卸载保留（回程不复活），
+   *  clearAll（换天/世界重建）清空。序号 = planChunkProps 输出数组下标
+   *  （确定性重算 → 卸载重载后同一株仍是同一下标）。 */
+  private harvestedStore = new Map<number, Set<number>>();
   /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
   private static readonly UNLOAD_MARGIN = 2;
   /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
@@ -218,8 +223,32 @@ export class RasterMap {
     this.levelsStore.clear();      // ★ 挖坑层数随世界重建清空（与旧语义一致）
     this.dirtyLevelKeys.clear();
     this.mapRecords.clear();       // ★ 地形记录随世界重建清空
+    this.harvestedStore.clear();   // ★ 采集物已采状态随世界重建清空
     this.pendingLoads.length = 0;
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
+  }
+
+  // ============ ★ 采集物已采状态（2026-09-14） ============
+
+  /** 该 chunk 是否有已采记录（快路径：无记录直接跳过过滤） */
+  hasHarvestedAt(cx: number, cz: number): boolean {
+    return this.harvestedStore.has(chunkKeyOf(cx, cz));
+  }
+
+  /** 该 chunk 第 index 个装饰是否已被采集 */
+  isPropHarvested(cx: number, cz: number, index: number): boolean {
+    return this.harvestedStore.get(chunkKeyOf(cx, cz))?.has(index) ?? false;
+  }
+
+  /** 标记采集（序号 = planChunkProps 输出下标） */
+  markPropHarvested(cx: number, cz: number, index: number): void {
+    const key = chunkKeyOf(cx, cz);
+    let set = this.harvestedStore.get(key);
+    if (!set) {
+      set = new Set<number>();
+      this.harvestedStore.set(key, set);
+    }
+    set.add(index);
   }
 
   // ============ 静态地形（无界采样） ============
@@ -281,6 +310,23 @@ export class RasterMap {
     if (apron !== null) return apron;
     const plinth = this.plinthHeightAt(x, z);
     return plinth ?? base;
+  }
+
+  /** ★ 带"第二层"的贴地采样（2026-09-14 浮空洞顶 / "坑洞 + 顶板封顶"）：
+   *  格子上方有浮空岩板（caveCap）且实体当前高度接近/高于板顶 → 返回板顶；
+   *  否则返回地表（洞底）。角色/敌人贴地与危险探针用本函数——
+   *  在山上走不会掉进洞里；走到入口下坡（y 低于板顶 0.6 以上）后自然切回洞底。 */
+  surfaceHeightAtFor(x: number, z: number, y: number): number {
+    const base = this.surfaceHeightAt(x, z);
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const caps = this.chunks.get(chunkKeyOf(cx, cz))?.caveCap;
+    if (!caps) return base;
+    const bx = Math.max(0, Math.min(BLOCKS_PER_SIDE - 1, Math.floor((x - cx * CHUNK_SIZE) / BLOCK_SIZE)));
+    const bz = Math.max(0, Math.min(BLOCKS_PER_SIDE - 1, Math.floor((z - cz * CHUNK_SIZE) / BLOCK_SIZE)));
+    const cap = caps[bz * BLOCKS_PER_SIDE + bx];
+    if (Number.isFinite(cap) && y >= cap - 0.6) return Math.max(base, cap);
+    return base;
   }
 
   /** 水泥台座叠加层：查询点落在某棵台座的 4×4 块带内 → 带顶高度；否则 null */
