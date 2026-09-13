@@ -109,13 +109,15 @@ export class BaseScene {
     this.root = new THREE.Group();
     scene.add(this.root);
 
-    // 环境光（冷顶光 + 暖补光）
-    const hemi = new THREE.HemisphereLight(0x9db4c8, 0x141a20, 0.85);
-    const key = new THREE.DirectionalLight(0xd8e6f2, 1.05);
+    // 环境光（冷顶光 + 暖补光 + 相机侧正面补光；2026-09-13 提亮：基地不再灰暗）
+    const hemi = new THREE.HemisphereLight(0xbcd0e0, 0x2a3540, 1.15);
+    const key = new THREE.DirectionalLight(0xe4eef8, 1.35);
     key.position.set(-6, 10, 8);
-    const warm = new THREE.DirectionalLight(0xffd6a0, 0.35);
+    const warm = new THREE.DirectionalLight(0xffd9a8, 0.5);
     warm.position.set(7, 4, 6);
-    this.root.add(hemi, key, warm);
+    const fill = new THREE.DirectionalLight(0xc8d8e6, 0.5);
+    fill.position.set(0, 6, 18);
+    this.root.add(hemi, key, warm, fill);
 
     const defs = baseRooms.rooms as RoomDef[];
     this.hallW = defs.length * ROOM_W + (defs.length - 1) * ROOM_GAP;
@@ -324,11 +326,11 @@ export class BaseScene {
       return m;
     };
     // 壳体（打通：一整条）
-    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), matStd(0x1d2b33), 0, -WALL_T / 2, 0);
-    add(new THREE.BoxGeometry(W, ROOM_H, WALL_T), matStd(0x16242e), 0, ROOM_H / 2, -ROOM_D / 2 - WALL_T / 2);
-    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), matStd(0x101c24), 0, ROOM_H + WALL_T / 2, 0);
-    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), matStd(0x121f28), -W / 2 - WALL_T / 2, ROOM_H / 2, 0);
-    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), matStd(0x121f28), W / 2 + WALL_T / 2, ROOM_H / 2, 0);
+    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), matStd(0x2b3f4b), 0, -WALL_T / 2, 0);
+    add(new THREE.BoxGeometry(W, ROOM_H, WALL_T), matStd(0x263c4a), 0, ROOM_H / 2, -ROOM_D / 2 - WALL_T / 2);
+    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), matStd(0x1c2a35), 0, ROOM_H + WALL_T / 2, 0);
+    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), matStd(0x223542), -W / 2 - WALL_T / 2, ROOM_H / 2, 0);
+    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), matStd(0x223542), W / 2 + WALL_T / 2, ROOM_H / 2, 0);
     // 背墙灯带（贯通）+ 天花板灯管（每间一根）
     add(new THREE.BoxGeometry(W * 0.9, 0.12, 0.06), matEmis(0xffd6a0), 0, ROOM_H * 0.78, -ROOM_D / 2 + 0.05);
     // ★ 分界：墙 + 门（2026-09-12 用户定调：房间之间要有墙、留门）
@@ -337,15 +339,15 @@ export class BaseScene {
     const segD = ROOM_D / 2 - DOOR_HALF; // 单段深度
     for (const bx of this.bays.slice(0, -1)) {
       const divider = bx + (ROOM_W + ROOM_GAP) / 2;
-      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), matStd(0x1a2830), divider,
+      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), matStd(0x2a4050), divider,
         ROOM_H / 2, -(ROOM_D / 2 - segD / 2)); // 后段
-      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), matStd(0x1a2830), divider,
+      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), matStd(0x2a4050), divider,
         ROOM_H / 2, ROOM_D / 2 - segD / 2);    // 前段
-      add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), matStd(0x1a2830), divider,
+      add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), matStd(0x2a4050), divider,
         (ROOM_H + DOOR_H) / 2, 0);             // 门楣
-      add(new THREE.BoxGeometry(WALL_T + 0.08, DOOR_H, 0.22), matStd(0x2b3a45), divider,
+      add(new THREE.BoxGeometry(WALL_T + 0.08, DOOR_H, 0.22), matStd(0x38505f), divider,
         DOOR_H / 2, DOOR_HALF + 0.11);         // 门柱（前）
-      add(new THREE.BoxGeometry(WALL_T + 0.08, DOOR_H, 0.22), matStd(0x2b3a45), divider,
+      add(new THREE.BoxGeometry(WALL_T + 0.08, DOOR_H, 0.22), matStd(0x38505f), divider,
         DOOR_H / 2, -DOOR_HALF - 0.11);        // 门柱（后）
       add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.44), matEmis(0x8fd0ff), divider,
         DOOR_H + 0.1, 0);                      // 门头灯带
