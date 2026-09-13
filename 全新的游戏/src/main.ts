@@ -584,8 +584,22 @@ function showRuntimeError(tag: string, err: unknown): void {
   const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
   el.textContent += `${tag} ${msg}\n\n`;
 }
-window.addEventListener('error', (e) => showRuntimeError('[error]', e.error ?? e.message));
-window.addEventListener('unhandledrejection', (e) => showRuntimeError('[reject]', e.reason));
+// ★ 忽略浏览器扩展异常（钱包 inpage.js 等注入脚本的 promise 拒绝会冒泡到页面；
+//   不是游戏错误，不上屏；标识：堆栈/来源命中 inpage/扩展协议/已知扩展报错文案）
+function isExtensionError(data: unknown, source?: string): boolean {
+  const text = `${source ?? ''}
+${data instanceof Error ? (data.stack ?? data.message) : String(data)}`;
+  return /inpage\.js|contentscript|chrome-extension:\/\/|moz-extension:\/\/|safari-extension:|callback id:|func sseError not found/i.test(text);
+}
+window.addEventListener('error', (e) => {
+  const data = e.error ?? e.message;
+  if (isExtensionError(data, e.filename)) return;
+  showRuntimeError('[error]', data);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  if (isExtensionError(e.reason)) return;
+  showRuntimeError('[reject]', e.reason);
+});
 
 // ============================================================
 // 启动
