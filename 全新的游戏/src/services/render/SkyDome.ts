@@ -247,8 +247,10 @@ export class SkyDome {
         uGlow: { value: 1 },
       },
       transparent: true,
-      depthWrite: false,
-      depthTest: false,   // 永远在最上层（远景天空不参与深度遮罩）
+      // ★ 2026-09-14 用户定调：太阳写入深度并参与深度测试——
+      //   山体/地形/建筑可正确遮挡太阳（原先 depthTest:false = 永远盖在最上层、穿山）
+      depthWrite: true,
+      depthTest: true,
       fog: false,
     });
     this.sunMesh = new THREE.Mesh(new THREE.CircleGeometry(SUN_RADIUS, 32), this.sunMat);
@@ -272,6 +274,8 @@ export class SkyDome {
       },
       transparent: true,
       depthWrite: false,
+      // ★ 2026-09-14 用户定调：月亮不写深度、也不参与深度测试——保持"永远在最上层"，
+      //   落山遮挡由下方地平线淡出处理（与太阳相反：太阳写深度、吃地形遮挡）
       depthTest: false,
       fog: false,
     });
@@ -293,7 +297,7 @@ export class SkyDome {
       transparent: true,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
-      depthTest: false,
+      depthTest: false, // ★ 月晕同月亮：不写深度、不参与深度测试（用户定调）
       fog: false,
     });
     this.moonGlowMesh = new THREE.Mesh(this.moonTexMesh.geometry, this.moonGlowMat);
@@ -439,8 +443,8 @@ export class SkyDome {
       // 可见度 = 夜对应（1 - daylight）× 月亮可见度
       const moonVisible = (1 - sun.daylight) * moon.visibility;
       // ★ 地平线淡出：月亮落到地平线下方彻底隐藏。
-      //   否则 depthTest=false 的 quad 落山时仍画在最上层，会盖住同一位置
-      //   升起的太阳（日出与月落同时发生在地平线附近）。
+      //   depthTest=false（用户定调：月亮不参与深度）→ 落山时不靠地形遮挡，
+      //   靠这里的淡出收尾，也避免盖住同一位置升起的太阳（日出/月落相邻）。
       //   dir.y = sin(仰角)，0..1/6（约 0~9.6°）线性淡出。
       const horizFade = THREE.MathUtils.clamp(moon.dir.y * 6.0, 0, 1);
       const vis = moonVisible * horizFade;
