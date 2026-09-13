@@ -21,6 +21,7 @@ import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { RasterMap } from './services/map/RasterMap';
 import { setTestGroup } from './services/map/TileGroups';
+import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, type GameSession } from './core/Session';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
@@ -150,10 +151,17 @@ async function boot() {
   const urlParams = new URLSearchParams(location.search);
   const testGroup = urlParams.get('group');
   if (testGroup) setTestGroup(testGroup); // 未知 key 在 setTestGroup 内抛错（fail-fast）
+  // ★ 地形结构预设调试：?preset=maze|plain|lake|plateau|ridges|ruins|pitfield|terraces|corridor
+  const testPreset = urlParams.get('preset');
+  if (testPreset) setTestPreset(testPreset); // 未知 key 抛错（fail-fast）
   testChunk = testGroup !== null || urlParams.get('single') === '1';
   enemyStress = Math.max(0, Math.min(200, Number(urlParams.get('enemies') ?? 0) || 0));
   if (testChunk) showTestGroupPanel(testGroup ?? undefined); // 组内容面板（缺省=实际 chunk 生效组）
   // 控制台换组时联动刷新面板
+  (window as unknown as { setTestPreset?: (k: string | null) => void }).setTestPreset = (k) => {
+    setTestPreset(k);
+    location.reload(); // 结构化地形需重建：直接刷新
+  };
   (window as unknown as { setTestGroup: (k: string | null) => void }).setTestGroup = (k) => {
     setTestGroup(k);
     if (testChunk) showTestGroupPanel(k ?? undefined);
