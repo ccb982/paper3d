@@ -889,10 +889,13 @@ export class GachaOverlay {
       'border:1px solid rgba(216,166,58,0.5)', 'border-radius:6px', 'pointer-events:none',
       'white-space:pre-line',
     ].join(';');
+    const relicPity = this.session.gacha?.pityCounter ?? 0;
     info.textContent = owned
-      ? '6★ 普瑞赛斯：已获得 —— 下一次出击进入「四维空间」，击败她即通关'
+      ? `6★ 普瑞赛斯：已获得 —— 下一次出击进入「四维空间」，击败她即通关
+遗物保底：每 10 抽内必出遗物（当前累计 ${relicPity} 抽）`
       : `6★ 普瑞赛斯（唯一 6★）：基础 2%；连续 50 抽未出后每抽 +2%；第 99 抽必出
-当前已累计 ${pity} 抽（获得后重置）`;
+当前已累计 ${pity} 抽（获得后重置）
+遗物保底：每 10 抽内必出遗物（当前累计 ${relicPity} 抽）`;
     overlay.appendChild(info);
     this.root.appendChild(overlay);
 
@@ -1020,8 +1023,8 @@ export class GachaOverlay {
 
     let totalWeight = 0;
     for (const p of pool) totalWeight += p.weight;
-    const topRarity = Math.max(...pool.map((p) => p.rarity));
-    const PITY_LIMIT = 60;
+    // ★ 遗物保底（2026-09-13 用户定调）：连续 10 抽未出遗物 → 下一抽必出遗物
+    const PITY_LIMIT = 10;
 
     // ★ 6★ 普瑞赛斯（唯一 6★）：明日方舟 6★ 规则——
     //   基础 2%；连续 50 抽未出 6★ → 第 51 抽起每抽 +2%（第 51 抽 4%）；
@@ -1057,10 +1060,10 @@ export class GachaOverlay {
       }
 
       let picked: PoolEntry;
-      if (s.gacha.pityCounter >= PITY_LIMIT) {
-        // ★ 保底：必出最高稀有度（遗物）
-        const tops = pool.filter((p) => p.rarity === topRarity);
-        picked = tops[Math.floor(Math.random() * tops.length)];
+      const relics = pool.filter((p) => p.kind === 'outRun');
+      if (relics.length > 0 && s.gacha.pityCounter >= PITY_LIMIT) {
+        // ★ 保底：必出遗物（物资不参与）
+        picked = relics[Math.floor(Math.random() * relics.length)];
       } else {
         let roll = Math.random() * totalWeight;
         picked = pool[0];
@@ -1094,8 +1097,8 @@ export class GachaOverlay {
           isNew: owned === 0,
         });
       }
-      // ★ 抽中最高稀有度 → 保底计数重置（遗物同样重置，防刷保底）
-      if (picked.rarity >= topRarity) s.gacha.pityCounter = 0;
+      // ★ 抽中遗物 → 保底计数重置（物资不重置；普瑞赛斯抽不占用遗物保底判定）
+      if (picked.kind === 'outRun') s.gacha.pityCounter = 0;
     }
 
     this.updatePullCount();
