@@ -158,15 +158,15 @@ function buildThreat(index: number): ThreatProfile {
   const t = (idx - 1) / (THREAT_MAX - 1); // 0..1
   return {
     index: idx,
-    // 波次：3~4 场 → 5~7 场；每波 8~14 → 20~30 只
-    assaultWaves: [Math.round(lerp(3, 5, t)), Math.round(lerp(4, 7, t))],
-    waveCount: [Math.round(lerp(8, 20, t)), Math.round(lerp(14, 30, t))],
-    // 节奏：首波 100~180s → 40~70s；间隔 150~270s → 70~140s
-    firstAssault: [lerp(100, 40, t), lerp(180, 70, t)],
-    assaultGap: [lerp(150, 70, t), lerp(270, 140, t)],
-    // 平时游荡：15 只 / 10s → 45 只 / 4s
-    ambientTarget: Math.round(lerp(15, 45, t)),
-    ambientInterval: lerp(10, 4, t),
+    // 波次：2~3 场 → 4~6 场；每波 5~8 → 16~26 只（2026-09-13 二次调低首日强度）
+    assaultWaves: [Math.round(lerp(2, 4, t)), Math.round(lerp(3, 6, t))],
+    waveCount: [Math.round(lerp(5, 16, t)), Math.round(lerp(8, 26, t))],
+    // 节奏：首波 150~240s → 40~70s；间隔 180~300s → 70~140s
+    firstAssault: [lerp(150, 40, t), lerp(240, 70, t)],
+    assaultGap: [lerp(180, 70, t), lerp(300, 140, t)],
+    // 平时游荡：10 只 / 14s → 36 只 / 4.5s（导演低频补至该目标数；扫描器只预铺一部分）
+    ambientTarget: Math.round(lerp(10, 36, t)),
+    ambientInterval: lerp(14, 4.5, t),
     // 攻击欲望：仇恨圈 ×1 → ×2.2；游荡偏向 0.12 → 0.35；环境怪主动开进概率 0 → 0.7
     aggroMul: lerp(1, 2.2, t),
     biasMul: lerp(0.12, 0.35, t),

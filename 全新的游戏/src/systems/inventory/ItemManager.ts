@@ -322,7 +322,7 @@ export class ItemManager {
     const out: EquipmentStatsTotal = {
       maxHp: 0, attackPower: 0, attackPct: 0,
       defense: 0, defensePct: 0,
-      attackSpeed: 0, damageReduction: 0, hpRegen: 0,
+      attackSpeed: 0, damageReduction: 0, hpRegen: 0, allyRegen: 0,
       critRate: 0, critMult: 0, dodgeRate: 0, blockRate: 0, blockMult: 0,
       healProc: null,
       moveSpeedPct: 0, vehicle: false,
@@ -341,6 +341,7 @@ export class ItemManager {
       out.attackSpeed += s.attackSpeed ?? 0;
       out.damageReduction = Math.max(out.damageReduction, s.damageReduction ?? 0);
       out.hpRegen += s.hpRegen ?? 0;
+      out.allyRegen += s.allyRegen ?? 0;
       out.critRate += s.critRate ?? 0;
       out.critMult += s.critMult ?? 0;
       out.dodgeRate += s.dodgeRate ?? 0;

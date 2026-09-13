@@ -53,6 +53,8 @@ export interface EquipmentStats {
   attackSpeed?: number;
   damageReduction?: number;
   hpRegen?: number;
+  /** ★ 友军生命回复（每秒；穿戴期间对所有友军生效，模式层每帧结算） */
+  allyRegen?: number;
   /** 暴击率（0-1 加算） */
   critRate?: number;
   /** 暴击倍率加值（基础 1.5） */

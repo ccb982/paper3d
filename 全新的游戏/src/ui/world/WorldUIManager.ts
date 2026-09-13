@@ -641,6 +641,7 @@ export class WorldUIManager extends BaseInteractionUI {
       if (live.dodgeRate > 0) extras.push({ label: '闪避率', perm: 0, temp: Math.round(live.dodgeRate * 100), suffix: '%' });
       if (live.blockRate > 0) extras.push({ label: '格挡率', perm: 0, temp: Math.round(live.blockRate * 100), suffix: '%' });
     }
+    if (temp.allyRegen > 0) extras.push({ label: '友军回复', perm: 0, temp: +temp.allyRegen.toFixed(2), suffix: '/s' });
     return {
       base: { maxHp: base.maxHp, attackPower: base.attackPower, defense: base.defense },
       perm: { maxHp: perm.maxHp, attackPower: perm.attackPower, defense: perm.defense },

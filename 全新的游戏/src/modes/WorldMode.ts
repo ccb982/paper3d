@@ -64,6 +64,7 @@ import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { applyDamage } from '../services/combat/DamagePipeline';
+import { applyHeal } from '../services/combat/Healing';
 import { effectSystem } from '../services/combat/EffectSystem';
 import { queryFinalStats } from '../services/combat/FinalStats';
 import { eventBus } from '../core/EventBus';
@@ -363,7 +364,7 @@ export class WorldMode implements IGameMode {
   private shipInterior: BaseScene | null = null;
   /** ★ 舰内独立场景（不画世界：彻底隔离粗块/地形/雾/天空） */
   private interiorScene: THREE.Scene | null = null;
-  /** ★ 舰内操作按钮条（下船/起飞/返回基地/加工台） */
+  /** ★ 舰内操作按钮条（下船/起飞/返回罗德岛号/加工台/背包） */
   private interiorButtons: HTMLDivElement | null = null;
   /** ★ 加工台覆盖层（舰内按钮打开；懒建）与共享图标服务 */
   private craftingOverlay: CraftingOverlay | null = null;
@@ -388,9 +389,9 @@ export class WorldMode implements IGameMode {
   private bossAsset: FtxAsset | Asset | null = null;
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
-  /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演的大波按节奏投放。
-   *  2026-09-13 用户定调：平时少量游荡（24），主力来自每天 1~2 波集中大举进攻） */
-  private static readonly AMBIENT_CAP = 24;
+  /** ★ 环境刷怪闸（扫描式波次只批量预铺到这里；之上由导演低频补至
+   *  threat.ambientTarget。2026-09-13 二次定调：首日强度下调——预铺 6，常驻 ~10） */
+  private static readonly AMBIENT_CAP = 6;
   /** ★ 压测：?enemies=N 开局在玩家周围铺 N 只代理（P0 度量；0 = 关） */
   private debugEnemyStress = 0;
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
@@ -454,6 +455,8 @@ export class WorldMode implements IGameMode {
   private sentinelAsset: Asset | FtxAsset | null = null;
   /** ★ 遗物复活时间倍率（computeRelicModifiers 汇总；复活倒计时结算用） */
   private relicRespawnMul = 1;
+  /** ★ 装备提供的友军每秒回血（黍姐的XX 等；refreshPlayerStats 汇总，无人机/祖宗每帧结算） */
+  private allyRegen = 0;
   /** ★ 当前选择的快捷物品（'default' = 普通弹药；其余 = 弹药/消耗品 itemId）
    *  Q 切换 / 点击切换；弹药由攻击键发射，消耗品由 F 使用 */
   private selectedQuickItem = 'default';
@@ -1000,8 +1003,8 @@ export class WorldMode implements IGameMode {
     const talking = this.dialogue?.isActive ?? false;
     const uiLocked = inInterior || talking;
 
-    // ★ 按 I 键打开/关闭背包；M 打开/关闭世界地图（读持久小地图表）
-    if (!uiLocked && this.binding.consumeInventory()) {
+    // ★ 按 I 键打开/关闭背包（舰内同样可用）；M 打开/关闭世界地图（读持久小地图表）
+    if (!talking && this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
     if (!uiLocked && this.binding.consumeMap()) {
@@ -1189,7 +1192,7 @@ export class WorldMode implements IGameMode {
       }, this.directorHooks);
       if (order) this.spawnDirectorWave(order);
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
-      this.scanAndSpawnWaves(pp.x, pp.y, 8);
+      this.scanAndSpawnWaves(pp.x, pp.y, 4);
       // ---- ★ 远距实体降格（0.25s 一拍；《蜂群架构.md》P1）：
       //   实体超出 DEMOTE_RADIUS → 回代理池（不销毁，后台继续维护），
       //   代理的远距回收由 SwarmSystem 统一处理（L1 半径外删除） ----
@@ -1229,6 +1232,12 @@ export class WorldMode implements IGameMode {
         d.playerPos.z = dp.z;
         // （友军伤害在攻击瞬间 queryFinalStats(d.owner) 实时查询，无需逐帧注入）
         d.updateAI(dt, this.camera);
+      }
+      // ★ 友军回血（黍姐的XX）：装备汇总的每秒回复量 → 所有友军（无人机/祖宗）
+      if (this.allyRegen > 0) {
+        for (const d of this.drones) {
+          if (d.hp > 0) applyHeal(d, this.allyRegen * dt);
+        }
       }
     }
 
@@ -1670,8 +1679,8 @@ export class WorldMode implements IGameMode {
           const nzp = Math.max(cz * CHUNK_SIZE, Math.min(pz, (cz + 1) * CHUNK_SIZE));
           const nd = Math.hypot(nxp - px, nzp - pz);
           if (nd > WorldMode.ENEMY_CULL_RADIUS - 10) continue;
-          // ★ 每 chunk 一波 2~4 个（比全铺档减半：有怪但不会过密）
-          const want = 2 + Math.floor(Math.random() * 3);
+          // ★ 每 chunk 一波 1~2 个（2026-09-13 二次定调：预铺只做保底，密度减半）
+          const want = 1 + Math.floor(Math.random() * 2);
           let placed = 0;
           let attempts = 0;
           for (; attempts < want * 10 && placed < want && placedTotal < budget; attempts++) {
@@ -2613,6 +2622,8 @@ export class WorldMode implements IGameMode {
     }]);
     // ---- 装备层：加算 + 加法乘区（弹药/装备/消耗品 buff 由队列各自维护） ----
     const eq = this.itemManager.getEquipmentStats();
+    // ★ 友军回血（黍姐的XX）：装备汇总 → 无人机/祖宗每帧结算
+    this.allyRegen = eq.allyRegen;
     effectSystem.setSourceEffects(this.player, 'equipment', [{
       id: 'equipment',
       duration: Infinity,
@@ -2968,7 +2979,7 @@ export class WorldMode implements IGameMode {
   // ============================================================
   // ★ 舰内房间（2026-09-13 用户定调）
   //   F 靠近舰船 → 进入舰内（类似基地的 3D 房间，可走动）；舱内三站：
-  //   起飞（回航行）/ 返回基地 / 下船 / 加工台。世界在舱内期间冻结（同航行期）。
+  //   起飞（回航行）/ 返回罗德岛号 / 下船 / 加工台 / 背包。世界在舱内期间冻结（同航行期）。
   // ============================================================
 
   // ============================================================
@@ -3091,7 +3102,7 @@ export class WorldMode implements IGameMode {
     return true;
   }
 
-  /** ★ 舰内操作按钮条：下船/起飞/返回基地/加工台 */
+  /** ★ 舰内操作按钮条：下船/起飞/返回罗德岛号/加工台/背包 */
   private buildInteriorButtons(): void {
     this.removeInteriorButtons();
     const bar = document.createElement('div');
@@ -3112,8 +3123,9 @@ export class WorldMode implements IGameMode {
     };
     mk('下船', () => this.exitShipInterior());
     mk('起飞', () => { this.exitShipInterior(); this.tryBoardShip(); });
-    mk('返回基地', () => this.openReturnConfirm()); // ★ 二次确认，防点错
+    mk('返回罗德岛号', () => this.openReturnConfirm()); // ★ 二次确认，防点错
     mk('加工台', () => this.openShipCrafting());
+    mk('背包', () => this.worldUIManager?.toggleInventory()); // ★ 舰内也可使用背包（含 I 键）
     document.body.appendChild(bar);
     this.interiorButtons = bar;
   }
@@ -3123,15 +3135,15 @@ export class WorldMode implements IGameMode {
     this.interiorButtons = null;
   }
 
-  /** ★ 返回基地确认面板（舰内按钮触发；确认后才出舱返航） */
+  /** ★ 返回罗德岛号确认面板（舰内按钮触发；确认后才出舱返航） */
   private openReturnConfirm(): void {
     const content = document.createElement('div');
     content.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 36px;color:#eaf6ff;font-size:14px;text-align:center;';
     const title = document.createElement('div');
-    title.textContent = '返回基地？';
+    title.textContent = '返回罗德岛号？';
     title.style.cssText = 'font-size:19px;font-weight:bold;color:#8ac8ff;letter-spacing:2px;';
     const body = document.createElement('div');
-    body.textContent = '将立即结束本次出击，启程返回基地（本日战斗进度不会保留）。';
+    body.textContent = '将立即结束本次出击，启程返回罗德岛号（本日战斗进度不会保留）。';
     body.style.cssText = 'color:#a8c4e0;line-height:1.7;';
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:14px;';
@@ -3151,7 +3163,7 @@ export class WorldMode implements IGameMode {
     content.append(title, body, row);
     this.worldUIManager?.openPanel({
       id: 'interior-return',
-      title: '返回基地',
+      title: '返回罗德岛号',
       render: () => content,
       onClose: () => {},
     });
@@ -3182,6 +3194,7 @@ export class WorldMode implements IGameMode {
     this.player.controlLocked = false;
     this.player.visible = true;
     this.worldUIManager?.setCombatHudVisible(true);
+    this.worldUIManager?.setMinimapVisible(true); // ★ 修复：舰内隐藏的小地图出舱恢复（否则一去不回）
     this.worldUIManager?.setDockButtonVisible(true);
     renderManager.setEnvironment('world');
     renderManager.setFlightMode(false);

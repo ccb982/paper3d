@@ -239,6 +239,7 @@ export class ShipUIManager extends BaseInteractionUI {
     if (temp.critRate > 0) extras.push({ label: '暴击率', perm: 0, temp: Math.round(temp.critRate * 100), suffix: '%' });
     if (temp.dodgeRate > 0) extras.push({ label: '闪避率', perm: 0, temp: Math.round(temp.dodgeRate * 100), suffix: '%' });
     if (temp.blockRate > 0) extras.push({ label: '格挡率', perm: 0, temp: Math.round(temp.blockRate * 100), suffix: '%' });
+    if (temp.allyRegen > 0) extras.push({ label: '友军回复', perm: 0, temp: +temp.allyRegen.toFixed(2), suffix: '/s' });
     return {
       base: { maxHp: base.maxHp, attackPower: base.attackPower, defense: base.defense },
       perm: { maxHp: perm.maxHp, attackPower: perm.attackPower, defense: perm.defense },
