@@ -4,8 +4,7 @@
 // 存储介质：localStorage（Web）/ 后续可替换为 Adapter
 // ============================================================
 
-import type { GameSession, InventoryGrid } from './Session';
-import { migrateGrid, mergeDuplicatesInGrid, GRID_DIMENSIONS, SLOT_COUNT, STARTER_RELICS, newRunSeed } from './Session';
+import type { GameSession } from './Session';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -43,89 +42,10 @@ export const SaveSystem = {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       const data = JSON.parse(raw) as GameSession;
-      if (!data.meta || !data.meta.version) {
-        console.warn('[存档] 存档版本不兼容，将丢弃');
+      if (!data?.meta?.version || !data.inventories) {
+        console.warn('[存档] 存档缺失必要字段，将丢弃');
         return null;
       }
-      // 确保四层背包完整
-      if (!data.inventories) {
-        console.warn('[存档] 缺少 inventories 字段，将丢弃');
-        return null;
-      }
-
-      // ★ 修复网格尺寸（防止旧存档行列数不匹配导致越界）
-      const inv = data.inventories;
-      inv.base = migrateGrid(inv.base, GRID_DIMENSIONS.base.rows, GRID_DIMENSIONS.base.cols, 'base');
-      inv.ship = migrateGrid(inv.ship, GRID_DIMENSIONS.ship.rows, GRID_DIMENSIONS.ship.cols, 'ship');
-      inv.player = migrateGrid(inv.player, GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols, 'player');
-
-      // ★ 同层合并归一（旧存档可能有同 itemId 多堆 → 合并为 1 格求和）
-      for (const layer of ['base', 'ship', 'player'] as (keyof GameSession['inventories'])[]) {
-        if (mergeDuplicatesInGrid(inv[layer])) {
-          console.warn(`[迁移] ${layer} 背包重复堆已合并（一格一类）`);
-        }
-      }
-
-      // ★ 旧存档迁移：弹药池（无则默认）
-      if (!data.player.ammo || typeof data.player.ammo !== 'object') {
-        data.player.ammo = {};
-      }
-      // ★ 旧存档迁移 → 出击槽池（v0.2.0）：
-      //   合并旧装备位（weapon/armor/headgear）+ 旧友军槽（deployedAllies）→ player.slots[12]
-      //   （装备优先，容量不足截断；旧字段随后清除）
-      if (!Array.isArray(data.player.slots)) {
-        const merged: (string | null)[] = [];
-        const d = data as unknown as {
-          deployedAllies?: unknown;
-          player: { equips?: { weapon?: string; armor?: string; headgear?: string } };
-        };
-        for (const k of ['weapon', 'armor', 'headgear'] as const) {
-          const id = d.player.equips?.[k];
-          if (id) merged.push(id);
-        }
-        if (Array.isArray(d.deployedAllies)) {
-          for (const id of d.deployedAllies) {
-            if (typeof id === 'string' && merged.length < SLOT_COUNT) merged.push(id);
-          }
-        }
-        data.player.slots = merged.slice(0, SLOT_COUNT);
-        while (data.player.slots.length < SLOT_COUNT) data.player.slots.push(null);
-      }
-      // ★ 旧字段清理（已并入槽池）
-      delete (data as unknown as { deployedAllies?: unknown }).deployedAllies;
-      delete (data.player as { equips?: unknown }).equips;
-
-      // ★ 旧档迁移：舰船油量/位置（航行/停靠系统）
-      if (!data.ship) {
-        data.ship = {
-          hp: 1000, maxHp: 1000, shield: 200, armor: 5,
-          fuel: 60, fuelMax: 60,
-          position: { x: 50.6, z: 101.6 },
-          techTree: [], turrets: [],
-        };
-      } else {
-        if (typeof data.ship.fuel !== 'number') data.ship.fuel = 60;
-        if (typeof data.ship.fuelMax !== 'number') data.ship.fuelMax = data.ship.fuel || 60;
-        if (!data.ship.position) data.ship.position = { x: 50.6, z: 101.6 };
-      }
-
-      // ★ 旧档迁移：补足开局自带遗物（如祖宗发射器）——已有数量更高则保留
-      if (!data.outOfRun) data.outOfRun = { owned: {} };
-      const owned = data.outOfRun.owned ?? (data.outOfRun.owned = {});
-      for (const [id, n] of Object.entries(STARTER_RELICS)) {
-        if ((owned[id] ?? 0) < n) owned[id] = n;
-      }
-
-      // ★ 旧档迁移：剧情状态（对话/事件模块）
-      if (!data.story) data.story = { flags: {}, events: {} };
-      if (!data.story.flags || typeof data.story.flags !== 'object') data.story.flags = {};
-      if (!data.story.events || typeof data.story.events !== 'object') data.story.events = {};
-
-      // ★ 旧档迁移：主要种子（当天地图 = dailyMapSeed(seed, day)；缺失则现场补随机值）
-      if (typeof data.meta?.seed !== 'number' || !Number.isFinite(data.meta.seed)) {
-        data.meta.seed = newRunSeed();
-      }
-
       return data;
     } catch (e) {
       console.error('[存档] 读取失败:', e);
@@ -159,13 +79,3 @@ export const SaveSystem = {
     return raw ? raw.length : 0;
   },
 };
-
-function countItems(grid: InventoryGrid): number {
-  let count = 0;
-  for (const row of grid) {
-    for (const cell of row) {
-      if (cell !== null) count++;
-    }
-  }
-  return count;
-}

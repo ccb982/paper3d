@@ -285,20 +285,6 @@ async function boot() {
     console.warn('[boot] 调试：已直接获得普瑞赛斯（?priestess=1）');
   }
 
-  // ★ 迁移（2026-09-11）：黑冠从旧"藏品"归位为"遗物"（开局即拥 1 件）
-  // 旧存档可能残留 relics.owned；新权威字段为 outOfRun（遗物）
-  if (currentSession) {
-    const oldRelics = (currentSession as { relics?: { owned?: string[] } }).relics;
-    const rIdx = oldRelics?.owned?.indexOf('black_crown') ?? -1;
-    if (rIdx !== -1 && oldRelics?.owned) {
-      oldRelics.owned.splice(rIdx, 1);
-      if (!currentSession.outOfRun) currentSession.outOfRun = { owned: {} };
-      if (!currentSession.outOfRun.owned) currentSession.outOfRun.owned = {};
-      currentSession.outOfRun.owned.black_crown = (currentSession.outOfRun.owned.black_crown ?? 0) + 1;
-      SaveSystem.save(currentSession);
-    }
-  }
-
   // ★★★★★ 修复：如果标志为 true 但游戏刚启动，说明上次出击未正常执行 ★★★★★
   if (currentSession && currentSession.dayProgress.hasDepartedToday) {
     console.warn('[boot] 检测到未完成的出击（hasDepartedToday=true），战斗未正常执行，维持当天存档');

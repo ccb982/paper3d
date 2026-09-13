@@ -142,49 +142,6 @@ export function countItemsInGrid(grid: InventoryGrid): number {
   return count;
 }
 
-/** 网格尺寸期望配置 */
-export const GRID_DIMENSIONS: Record<string, { rows: number; cols: number }> = {
-  base: { rows: 30, cols: 30 },
-  ship: { rows: 8, cols: 10 },
-  player: { rows: 4, cols: 6 },
-};
-
-/**
- * 修复网格尺寸（迁移旧数据到新网格）
- * 防止 createEmptyGrid 调整行列数后旧存档静默越界
- */
-export function migrateGrid(
-  grid: InventoryGrid | undefined | null,
-  expectedRows: number,
-  expectedCols: number,
-  label: string,
-): InventoryGrid {
-  if (!grid || !Array.isArray(grid) || grid.length === 0) {
-    console.warn(`[迁移] ${label} 网格为空/无效，重建 ${expectedRows}x${expectedCols}`);
-    return createEmptyGrid(expectedRows, expectedCols);
-  }
-  const actualRows = grid.length;
-  const actualCols = grid[0]?.length ?? 0;
-  if (actualRows === expectedRows && actualCols === expectedCols) {
-    return grid; // 尺寸一致，无需迁移
-  }
-  console.warn(
-    `[迁移] ${label} 尺寸不匹配 (${actualRows}x${actualCols} → ${expectedRows}x${expectedCols})，迁移物品`,
-  );
-  const newGrid = createEmptyGrid(expectedRows, expectedCols);
-  for (let r = 0; r < Math.min(actualRows, expectedRows); r++) {
-    const srcRow = grid[r];
-    if (!srcRow) continue;
-    for (let c = 0; c < Math.min(srcRow.length, expectedCols); c++) {
-      const item = srcRow[c];
-      if (item) {
-        newGrid[r][c] = { ...item };
-      }
-    }
-  }
-  return newGrid;
-}
-
 /** 在网格中查找特定物品的第一个位置 */
 export function findItemInGrid(
   grid: InventoryGrid,
@@ -298,34 +255,6 @@ export function swapGridCells(
   return true;
 }
 
-/**
- * ★ 同层合并归一（旧存档迁移用）：
- * 把网格中重复 itemId 合并为 1 格（数量求和），其余格置空。
- * 合并只会减少占用，返回是否发生过合并。
- */
-export function mergeDuplicatesInGrid(grid: InventoryGrid): boolean {
-  const seen = new Map<string, { row: number; col: number }>();
-  let changed = false;
-  for (let r = 0; r < grid.length; r++) {
-    for (let c = 0; c < grid[r].length; c++) {
-      const slot = grid[r][c];
-      if (!slot) continue;
-      const keeper = seen.get(slot.itemId);
-      if (keeper) {
-        const keeperSlot = grid[keeper.row][keeper.col];
-        if (keeperSlot) {
-          keeperSlot.stackSize += slot.stackSize;
-        }
-        grid[r][c] = null;
-        changed = true;
-      } else {
-        seen.set(slot.itemId, { row: r, col: c });
-      }
-    }
-  }
-  return changed;
-}
-
 // ============================================================
 // 4. 战斗属性计算（★ 唯一加成入口，完全配置驱动）
 // ============================================================
@@ -420,7 +349,7 @@ export function dailyMapSeed(mainSeed: number, day: number): number {
 }
 
 export function createNewSession(): GameSession {
-  const player = createEmptyGrid(GRID_DIMENSIONS.player.rows, GRID_DIMENSIONS.player.cols);
+  const player = createEmptyGrid(4, 6);
   // 开荒种子：六区兄弟（六种基础材料）各一份，背包首行展示
   SIX_BROTHER_MATERIAL_IDS.forEach((id, i) => {
     player[0][i] = { itemId: id, stackSize: 1 };
@@ -455,7 +384,7 @@ export function createNewSession(): GameSession {
   };
 }
 
-/** ★ 开局自带遗物（新局默认 + 旧档迁移补足；维什戴尔信物） */
+/** ★ 开局自带遗物（新局默认；维什戴尔信物） */
 export const STARTER_RELICS: Record<string, number> = {
   black_crown: 1,
   zuzong_launcher: 1,
