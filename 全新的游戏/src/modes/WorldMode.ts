@@ -2093,7 +2093,10 @@ export class WorldMode implements IGameMode {
           String(final), 'normal',
         );
       }
+      // ★ 命中反馈 + 正确回池：只 deactivate 不 recycle 会漏池（10 发池打空后无法开火）
+      b.hitFx?.(null);
       b.deactivate();
+      b.recycle?.();
     });
   }
 
