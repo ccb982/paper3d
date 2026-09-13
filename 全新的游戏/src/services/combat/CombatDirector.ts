@@ -20,16 +20,22 @@ import type { CameraController } from '../camera/CameraController';
 import type { EntityBase } from '../../entity/EntityBase';
 
 /** ★ 手感规则表（唯一的调参入口；hitstop=顿帧秒数 scale=时间缩放 camKick=镜头冲击）
- *  ★ 2026-09-11 用户反馈：命中/击杀镜头抖动过强 → camKick 整体下调（约原值 40%） */
+ *  ★ 2026-09-11：命中/击杀镜头抖动过强 → camKick 整体下调（约原值 40%）
+ *  ★ 2026-09-13（用户定调）：大批量敌人下镜头摇晃影响操作 →
+ *    · 命中反馈再削（camKick ≈ 减半）
+ *    · 友军（无人机/祖宗）击中/击杀敌人 → 完全无反馈
+ *    · 仅玩家来源的命中/击杀有反馈；玩家受击不变 */
 const FEEL = {
-  normalHit:  { hitstop: 0.04, scale: 0.10, camKick: 0.025 },
-  critHit:    { hitstop: 0.09, scale: 0.02, camKick: 0.06 },
-  killEnemy:  { hitstop: 0.11, scale: 0.00, camKick: 0.09 },
+  normalHit:  { hitstop: 0.03, scale: 0.12, camKick: 0.012 },
+  critHit:    { hitstop: 0.06, scale: 0.05, camKick: 0.03 },
+  killEnemy:  { hitstop: 0.08, scale: 0.00, camKick: 0.045 },
   playerHurt: { hitstop: 0.06, scale: 0.05, camKick: 0.05 },
 };
 
 interface DamagePayload {
   target: EntityBase;
+  /** ★ 伤害来源（玩家方子弹 camp='player' / 友军 'ally' / 敌人 'enemy'；可为 null） */
+  source: EntityBase | null;
   damage: number;
   crit: boolean;
   dodged: boolean;
@@ -47,19 +53,29 @@ export class CombatDirector {
   private onDamage(p: DamagePayload): void {
     if (p.dodged) return; // 闪避 = 完全落空，无打击反馈（浮动文字已有 Miss）
     if (p.target.entity.kind === 'ship') return; // ★ 舰船受击不走打击手感（防持续 hitstop）
-    const isPlayer = p.target.entity.kind === 'player';
-    const r = isPlayer ? FEEL.playerHurt : p.crit ? FEEL.critHit : FEEL.normalHit;
+    // 玩家受击：任何来源都保留（且强度不变）
+    if (p.target.entity.kind === 'player') {
+      const r = FEEL.playerHurt;
+      renderManager.hitstop(r.hitstop, r.scale);
+      this.camera?.addKick(r.camKick);
+      this.playSfx('hurt');
+      return;
+    }
+    // ★ 非玩家目标：只有玩家来源才有打击反馈（友军击中 / 敌方互击 → 无反馈）
+    if (p.source?.camp !== 'player') return;
+    const r = p.crit ? FEEL.critHit : FEEL.normalHit;
     renderManager.hitstop(r.hitstop, r.scale);
     this.camera?.addKick(r.camKick);
-    this.playSfx(isPlayer ? 'hurt' : p.crit ? 'crit' : 'hit');
+    this.playSfx(p.crit ? 'crit' : 'hit');
   }
 
   private onKilled(target: EntityBase, source: EntityBase | null): void {
     if (target.entity.kind === 'player') return; // 玩家死亡走自己的结算演出
+    // ★ 只有玩家来源的击杀才有反馈（友军击杀无反馈；环境死亡同样静默）
+    if (source?.camp !== 'player') return;
     const r = FEEL.killEnemy;
     renderManager.hitstop(r.hitstop, r.scale);
-    // ★ 无人机击杀不抖镜头（用户定调：角色/子弹击杀照常冲击）——仅玩家来源产生 kick
-    if (source?.camp === 'player') this.camera?.addKick(r.camKick);
+    this.camera?.addKick(r.camKick);
     this.playSfx('kill');
   }
 
