@@ -46,7 +46,7 @@ import type { BehaviorContext } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
-import { Director, INTENT_NONE, type SpawnOrder } from '../systems/swarm/Director';
+import { Director, INTENT_NONE, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { ItemBase } from '../entity/ItemBase';
@@ -328,13 +328,15 @@ export class WorldMode implements IGameMode {
   private enemyDefs = new WeakMap<EnemyBase, MobDef>();
   /** ★ 出生 chunk key（玩家安全区：自己不刷怪；敌人从他处生成） */
   private spawnChunkKey = -1;
-  /** ★ P4：蜂群导演（节奏 + 威胁预算 + intent 分工；替代旧双计时波次） */
+  /** ★ P4→日节律：战斗节奏导演（平时少量游荡 / 每天 1~2 波大举进攻 + 预警 + 按天强化） */
   private swarmDirector = new Director();
+  /** 导演播报钩子（复用对象；enter 时绑定 UI） */
+  private directorHooks: DirectorHooks = {};
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
   /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演的大波按节奏投放。
-   *  2026-09-13 用户定调：全向散兵不好守 → 环境少量（30），主力来自集中大波） */
-  private static readonly AMBIENT_CAP = 30;
+   *  2026-09-13 用户定调：平时少量游荡（24），主力来自每天 1~2 波集中大举进攻） */
+  private static readonly AMBIENT_CAP = 24;
   /** ★ 压测：?enemies=N 开局在玩家周围铺 N 只代理（P0 度量；0 = 关） */
   private debugEnemyStress = 0;
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
@@ -383,7 +385,7 @@ export class WorldMode implements IGameMode {
     findTarget: () => null,
     attack: () => undefined,
   };
-  // ★ 调试：出生点临时改到侧壁缺口报告位（seed 12345, chunk(0,1)）
+  // ★ 出生点/召回兜底位（seed 12345, chunk(0,1)）
   private readonly spawnPoint = { x: 50.6, z: 101.6 };
   private acc = 0;
   private damageUnsub?: () => void;
@@ -539,9 +541,9 @@ export class WorldMode implements IGameMode {
     renderManager.resetDay();
     sharedWaterMaterial.resetImpacts(); // ★ 清空落水扰动槽（防跨局残留）
 
-    // ★ 本图起点 = 舰船当前位置（上次停靠点；航行阶段从这里出发）
-    const shipPos = ctx.session.ship?.position ?? { x: this.spawnPoint.x, z: this.spawnPoint.z };
-    const spawn = shipPos;
+    // ★ 每次出击出生点固定 chunk (0,0)：舰船与角色都从 (30,30) 出发
+    const spawn = { x: 30, z: 30 };
+    if (ctx.session.ship) ctx.session.ship.position = { x: spawn.x, z: spawn.z };
 
     // ★ 每天出击满油 + 满血（2026-09-12 用户定调：船每天修满，与油同口径）
     if (ctx.session.ship) {
@@ -668,6 +670,22 @@ export class WorldMode implements IGameMode {
     );
     // ★ 属性面板实时数据源（含限时 buff/遗物变化的最终属性）
     this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
+    // ★ 战斗节奏导演：日节律（平时少量游荡 / 每天 1~2 波大举进攻）+ 预警播报 + 按天强化
+    this.directorHooks.onWarning = (sec, label) => {
+      const mm = String(Math.floor(sec / 60)).padStart(2, '0');
+      const ss = String(sec % 60).padStart(2, '0');
+      this.worldUIManager.setAssaultBanner(
+        `【预警】敌军来袭倒计时 ${mm}:${ss}　目标：${label}　请做好准备`, true,
+      );
+    };
+    this.directorHooks.onAssault = (label) => {
+      this.worldUIManager.setAssaultBanner(`敌军来袭！目标：${label}`, true);
+      this.showFloatingAt(this.player.position.x, this.player.position.y + 2.4, this.player.position.z, '敌军来袭', 'crit');
+    };
+    this.directorHooks.onClear = () => {
+      this.worldUIManager.setAssaultBanner(null);
+    };
+    this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
     // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
     // ★ 航行期：停靠按钮（F 键同义）+ 隐藏战斗 HUD（停靠后才绘制）
@@ -1003,7 +1021,7 @@ export class WorldMode implements IGameMode {
         playerHpRatio: this.player.hp / Math.max(1, this.player.maxHp),
         playerX: pp.x, playerZ: pp.y,
         shipX: this.ship.position.x, shipZ: this.ship.position.z,
-      });
+      }, this.directorHooks);
       if (order) this.spawnDirectorWave(order);
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
       this.scanAndSpawnWaves(pp.x, pp.y, 8);
@@ -1514,7 +1532,8 @@ export class WorldMode implements IGameMode {
   /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，
    *  两波之间方向明显错开（双面夹击），但每面都是"一团人"而非全向散兵 */
   private spawnDirectorWave(order: SpawnOrder): void {
-    let sector = Math.random() * Math.PI * 2;
+    // ★ 袭击订单带主攻扇区（整场固定的一个方向）；环境散兵随机
+    let sector = order.sector ?? Math.random() * Math.PI * 2;
     for (let w = 0; w < order.waves; w++) {
       this.spawnWaveNear(order.anchorX, order.anchorZ, {
         count: order.count,
@@ -1522,6 +1541,7 @@ export class WorldMode implements IGameMode {
         preferPack: order.preferPack,
         sector,
         spread: 0.5,
+        assaultIndex: order.assaultIndex ?? -1,
       });
       sector += Math.PI * (0.6 + Math.random() * 0.6);
     }
@@ -1533,7 +1553,10 @@ export class WorldMode implements IGameMode {
    *  ⚠️ 无论焦点是谁，都避开 玩家 12m / 舰船 15m 的安全圈。 */
   private spawnWaveNear(
     fx: number, fz: number,
-    opts: { count: number; intent: number; preferPack: boolean; sector?: number; spread?: number },
+    opts: {
+      count: number; intent: number; preferPack: boolean;
+      sector?: number; spread?: number; assaultIndex?: number;
+    },
   ): void {
     if (this.testChunk || this.mobDefs.length === 0) return;
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
@@ -1563,7 +1586,7 @@ export class WorldMode implements IGameMode {
       if (role === 'pit' || role === 'liquid') continue;
       const y = this.raster.surfaceHeightAt(x, z);
       if (y < -1.2) continue;
-      if (this.spawnOne(this.pickMob(opts.preferPack), x, y, z, opts.intent)) placed++;
+      if (this.spawnOne(this.pickMob(opts.preferPack), x, y, z, opts.intent, opts.assaultIndex ?? -1)) placed++;
     }
   }
 
@@ -1690,11 +1713,17 @@ export class WorldMode implements IGameMode {
     def: MobDef,
     x: number, y: number, z: number,
     intent: number = INTENT_NONE,
+    assaultIndex = -1,
   ): boolean {
     if (!this.scene || !this.camera || this.mobDefs.length === 0) return false;
     const mobIndex = this.mobDefs.indexOf(def);
     if (mobIndex < 0) return false;
     const stats = this.mobAgentStats(def);
+    // ★ 按天强化（导演日节律；同日第二波已含额外乘数）
+    const sc = this.swarmDirector.scale(assaultIndex);
+    const hp = Math.max(1, Math.round(def.hp * sc.hp));
+    const atk = def.attackPower > 0 ? Math.max(1, Math.round(def.attackPower * sc.atk)) : 0;
+    const dfs = def.defense + sc.def;
     let any = false;
     for (let k = 0; k < def.pack; k++) {
       // ★ 同伴散布（k=0 中心；其余绕圈小偏移）
@@ -1715,8 +1744,8 @@ export class WorldMode implements IGameMode {
       const idx = this.swarm.spawn({
         mobIndex,
         x: sx, y: sy, z: sz,
-        hp: def.hp, maxHp: def.hp,
-        defense: def.defense, attackPower: def.attackPower,
+        hp, maxHp: hp,
+        defense: dfs, attackPower: atk,
         speed: stats.speed,
         meleeDamage: stats.damage, meleeRange: stats.range,
         scale: def.scale,

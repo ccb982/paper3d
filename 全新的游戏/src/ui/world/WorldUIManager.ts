@@ -67,6 +67,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private dockBtn: HTMLButtonElement | null = null;
   /** ★ 舰船状态条（HP/油量；航行与探索均显示） */
   private shipStatusEl: HTMLDivElement | null = null;
+  /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
+  private assaultBannerEl: HTMLDivElement | null = null;
   /** ★ 战斗 HUD 显隐（航行操船期隐藏：血条/准星/快捷栏/友军列表） */
   private combatHudVisible = true;
 
@@ -249,6 +251,33 @@ export class WorldUIManager extends BaseInteractionUI {
     this.shipStatusEl.style.color = hpRatio < 0.3 ? '#ff8a8a' : '#cfe8ff';
     this.shipStatusEl.textContent =
       `舰船 ${Math.ceil(hp)}/${Math.ceil(maxHp)}　油量 ${Math.ceil(fuel)}/${Math.ceil(fuelMax)}${sailing ? '　· 航行中' : ''}`;
+  }
+
+  /** ★ 敌袭预警/战报横幅（顶部居中，打字机感描边；null = 隐藏）
+   *  用法：倒计时期间每秒更新文案；开战换成"敌军来袭！"；结束传 null 清除。 */
+  setAssaultBanner(text: string | null, danger = true): void {
+    if (text === null) {
+      if (this.assaultBannerEl) this.assaultBannerEl.style.display = 'none';
+      return;
+    }
+    if (!this.assaultBannerEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:38px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:65', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
+        'font-size:17px', 'font-weight:bold', 'letter-spacing:2px',
+        'padding:6px 18px', 'border-radius:4px',
+        'background:rgba(30,10,10,0.55)',
+        'color:#ffb3a0', 'text-shadow:0 1px 3px #000, 0 0 10px rgba(255,80,60,0.55)',
+      ].join(';');
+      document.body.appendChild(el);
+      this.assaultBannerEl = el;
+    }
+    const el = this.assaultBannerEl;
+    el.style.display = 'block';
+    el.style.color = danger ? '#ffb3a0' : '#cfe8ff';
+    el.style.background = danger ? 'rgba(30,10,10,0.55)' : 'rgba(10,16,26,0.55)';
+    el.textContent = text;
   }
 
   /** ★ 舰船被摧毁面板（真结局触发；按钮"复活"回调，暂不删档） */
@@ -572,6 +601,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.dockBtn = null;
     this.shipStatusEl?.remove();
     this.shipStatusEl = null;
+    this.assaultBannerEl?.remove();
+    this.assaultBannerEl = null;
     this.respawnEl?.remove();
     this.respawnEl = null;
     this.interactPrompt.remove();
