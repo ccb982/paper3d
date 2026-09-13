@@ -58,6 +58,11 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 单条停留时长（ms） */
   private static readonly PICKUP_TOAST_LIFE_MS = 1800;
   private iconRegistry: ItemIconRegistry | null = null;
+
+  /** ★ 注入共享图标服务（背包/加工台等复用同一份缓存） */
+  setIconRegistry(reg: ItemIconRegistry): void {
+    this.iconRegistry = reg;
+  }
   /** ★ 死亡复活倒计时（屏幕中央；null = 隐藏） */
   private respawnEl: HTMLDivElement | null = null;
   /** ★ 玩家最终属性提供者（WorldMode 注入 queryFinalStats；面板实时显示含限时 buff） */

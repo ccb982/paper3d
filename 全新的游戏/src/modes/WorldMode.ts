@@ -30,7 +30,9 @@ import { applyShipDamage, isShipDestroyed, reviveShip } from '../systems/ship/Sh
 import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
-import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
+import { BaseScene } from '../ui/base/BaseScene';
+import { CraftingOverlay } from '../ui/base/CraftingOverlay';
+import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
 import baseRoomsJson from '../config/baseRooms.json';
 import { droneFollowOffset } from '../services/fx/DroneFormation';
 import { CameraController } from '../services/camera/CameraController';
@@ -351,6 +353,11 @@ export class WorldMode implements IGameMode {
   private shipInterior: BaseScene | null = null;
   /** ★ 舰内独立场景（不画世界：彻底隔离粗块/地形/雾/天空） */
   private interiorScene: THREE.Scene | null = null;
+  /** ★ 舰内操作按钮条（下船/起飞/返回基地/加工台） */
+  private interiorButtons: HTMLDivElement | null = null;
+  /** ★ 加工台覆盖层（舰内按钮打开；懒建）与共享图标服务 */
+  private craftingOverlay: CraftingOverlay | null = null;
+  private iconRegistry: ItemIconRegistry | null = null;
   private protagonistAssetRef: FtxAsset | null = null;
   /** ★ Boss 战（抽到普瑞赛斯 → 四维空间；击败 = 通关） */
   private bossRun = false;
@@ -701,6 +708,9 @@ export class WorldMode implements IGameMode {
     );
     // ★ 属性面板实时数据源（含限时 buff/遗物变化的最终属性）
     this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
+    // ★ 共享图标服务（背包/加工台同一份）
+    this.iconRegistry = new ItemIconRegistry(this.itemManager);
+    this.worldUIManager.setIconRegistry(this.iconRegistry);
     // ★ 战斗节奏导演：日节律（平时少量游荡 / 每天 1~2 波大举进攻）+ 预警播报 + 按天强化
     this.directorHooks.onWarning = (sec, label) => {
       const mm = String(Math.floor(sec / 60)).padStart(2, '0');
@@ -927,7 +937,7 @@ export class WorldMode implements IGameMode {
     const attackPressed = this.binding.consumeAttack();
     const look = this.binding.consumeLook();
     let zoom = this.binding.consumeZoom();
-    // ★ 舰内房间：世界输入全部不消费（房间自己的键盘监听驱动行走/交互站）
+    // ★ 舰内房间：世界输入全部不消费（房间自己的键盘监听驱动行走）
     const inInterior = this.phase === 'interior';
 
     // ★ 按 I 键打开/关闭背包
@@ -969,7 +979,7 @@ export class WorldMode implements IGameMode {
     //   setPointerLock 内含冷却重试，且只在状态变化时真正请求/释放。
     this.binding.setPointerLock(!this.worldUIManager.hasModalOpen && this.phase !== 'interior');
 
-    // ★ 舰内房间（2026-09-13）：世界冻结，只驱动房间场景（行走/交互站）
+    // ★ 舰内房间（2026-09-13）：世界冻结，只驱动房间场景（行走；操作走按钮条）
     if (this.phase === 'interior') {
       this.shipInterior?.update(dt);
       return;
@@ -1326,9 +1336,13 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
-    // ---- 舰内房间（若在舱内退出：释放房间场景） ----
+    // ---- 舰内房间（若在舱内退出：释放房间场景/按钮/加工台） ----
+    this.removeInteriorButtons();
+    this.craftingOverlay?.dispose();
+    this.craftingOverlay = null;
     this.shipInterior?.dispose();
     this.shipInterior = null;
+    this.interiorScene = null;
     // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
     this.swarm.dispose();
     // ---- 取消伤害事件订阅 ----
@@ -2859,23 +2873,6 @@ export class WorldMode implements IGameMode {
     });
     interior.setupCamera(this.camera);
     interior.setUiBlocking(() => this.worldUIManager?.hasModalOpen ?? false);
-    const toHome = (): void => { this.exitShipInterior(); this.onReturn?.(); };
-    const stations: BaseStation[] = from === 'sail'
-      ? [
-        // 航行期进舱：继续飞行 / 返回基地
-        { x: -4, z: -3, rx: 2.8, rz: 2.6, label: '继续飞行', cb: () => this.exitShipInterior() },
-        { x: 4, z: -3, rx: 2.8, rz: 2.6, label: '返回基地', cb: toHome },
-      ]
-      : [
-        // 探索期进舱：起飞 / 返回基地 / 下船
-        {
-          x: -6, z: -3, rx: 2.8, rz: 2.6, label: '起飞',
-          cb: () => { this.exitShipInterior(); this.tryBoardShip(); },
-        },
-        { x: 0, z: -3, rx: 2.8, rz: 2.6, label: '返回基地', cb: toHome },
-        { x: 6, z: -3, rx: 2.8, rz: 2.6, label: '下船', cb: () => this.exitShipInterior() },
-      ];
-    interior.setStations(stations);
     } catch (err) {
       console.error('[interior] 创建失败:', err);
       return false;
@@ -2894,13 +2891,64 @@ export class WorldMode implements IGameMode {
     renderManager.setEnvironment('ship');
     renderManager.setFlightMode(true);
     this.chunks.setWaterVisible(false);
+    // ★ 舰内操作按钮（用户定调：按钮而不是走位交互）
+    this.buildInteriorButtons(from);
     return true;
+  }
+
+  /** ★ 舰内操作按钮条：下船/起飞/返回基地/加工台（航行中进舱则"继续飞行"） */
+  private buildInteriorButtons(from: 'explore' | 'sail'): void {
+    this.removeInteriorButtons();
+    const bar = document.createElement('div');
+    bar.style.cssText = [
+      'position:fixed', 'left:50%', 'bottom:7%', 'transform:translateX(-50%)',
+      'z-index:90', 'display:flex', 'gap:12px', 'pointer-events:auto',
+    ].join(';');
+    const mk = (label: string, cb: () => void): void => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = [
+        'padding:10px 26px', 'font:15px "Microsoft YaHei",sans-serif', 'font-weight:bold',
+        'letter-spacing:2px', 'color:#eaf6ff', 'background:rgba(24,44,72,0.9)',
+        'border:2px solid #6ab0ff', 'border-radius:10px', 'cursor:pointer',
+      ].join(';');
+      b.addEventListener('click', cb);
+      bar.appendChild(b);
+    };
+    if (from === 'sail') {
+      mk('继续飞行', () => this.exitShipInterior());
+      mk('返回基地', () => { this.exitShipInterior(); this.onReturn?.(); });
+    } else {
+      mk('下船', () => this.exitShipInterior());
+      mk('起飞', () => { this.exitShipInterior(); this.tryBoardShip(); });
+      mk('返回基地', () => { this.exitShipInterior(); this.onReturn?.(); });
+    }
+    mk('加工台', () => this.openShipCrafting());
+    document.body.appendChild(bar);
+    this.interiorButtons = bar;
+  }
+
+  private removeInteriorButtons(): void {
+    this.interiorButtons?.remove();
+    this.interiorButtons = null;
+  }
+
+  /** ★ 舰内加工台（懒建覆盖层；与基地加工台同一实现） */
+  private openShipCrafting(): void {
+    if (!this.craftingManager || !this.itemManager || !this.iconRegistry) return;
+    if (!this.craftingOverlay) {
+      this.craftingOverlay = new CraftingOverlay(this.craftingManager, this.itemManager, this.iconRegistry);
+      this.craftingOverlay.load().catch((err) => console.error('[interior] 加工台加载失败:', err));
+    }
+    this.craftingOverlay.show('ship');
   }
 
   /** 离开舰内房间（按来源恢复：探索=回地面 / 航行=回驾驶；相机瞬移防长镜头） */
   private exitShipInterior(): void {
     if (!this.shipInterior) return;
     const from = this.interiorFrom;
+    this.removeInteriorButtons();
+    this.craftingOverlay?.hide();
     this.shipInterior.dispose();
     this.shipInterior = null;
     this.interiorScene = null; // 场景随房间一并废弃（下次重建）
