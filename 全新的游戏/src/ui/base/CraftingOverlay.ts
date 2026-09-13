@@ -193,6 +193,8 @@ export class CraftingOverlay {
           moduleBgDataURL: this.moduleBgDataURL,
           host: this.root,
           onRequestOpen: (m) => this.openModuleQuantity(m),
+          // ★ 任一模块加工完成 → 刷新其它模块的材料数量（2026-09-14 修复）
+          onCrafted: () => this.refreshAllModules(),
         });
         mod.mount(btn);
         this.modules.push(mod);
@@ -211,6 +213,12 @@ export class CraftingOverlay {
     if (this.activeModule && this.activeModule !== m) this.activeModule.closeQuantity();
     this.activeModule = m;
     m.openQuantity();
+  }
+
+  /** ★ 任一模块加工完成：刷新全部模块材料数量（含当前打开的数量窗） */
+  private refreshAllModules(): void {
+    for (const m of this.modules) m.refresh();
+    this.activeModule?.refreshQuantity();
   }
 
   // ============================================================

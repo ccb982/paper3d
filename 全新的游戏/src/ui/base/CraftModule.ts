@@ -69,6 +69,8 @@ export interface CraftModuleDeps {
   host: HTMLElement;
   /** 点击模块时请求打开（宿主用它先关掉其它模块的窗，保证单开） */
   onRequestOpen: (m: CraftModule) => void;
+  /** ★ 本模块完成一次加工后通知宿主（宿主刷新其它模块的材料数量） */
+  onCrafted?: (m: CraftModule) => void;
 }
 
 export class CraftModule {
@@ -173,6 +175,14 @@ export class CraftModule {
       m.haveEl.textContent = `${have}/${m.need}`;
       m.haveEl.style.color = have >= m.need ? '#fff' : '#f77';
     }
+  }
+
+  /** ★ 外部数据变化（如其它模块加工消耗了材料）后：重刷数量窗并钳制数量上限 */
+  refreshQuantity(): void {
+    if (!this.qtyPanel || this.qtyPanel.style.display === 'none') return;
+    const max = this.maxCraftable();
+    this.qtyValue = Math.max(0, Math.min(this.qtyValue, max));
+    this.renderQuantityPanel();
   }
 
   // ============================================================
@@ -295,15 +305,19 @@ export class CraftModule {
 
   private confirmCraft(): void {
     if (this.qtyValue <= 0) return;
+    const planned = this.qtyValue;
     let done = 0;
-    for (let i = 0; i < this.qtyValue; i++) {
+    for (let i = 0; i < planned; i++) {
       if (this.deps.craftingManager.craft(this.recipe.id, 'player', 'player')) done++;
       else break;
     }
     if (done > 0) {
       this.renderQuantityPanel();
       this.refresh();
-      if (done < this.qtyValue) {
+      // ★ 通知宿主：其它加工模块的材料数量同步刷新（2026-09-14 修复）；
+      //   注意用 planned 判定部分成功（通知后数量窗会把 qtyValue 钳到剩余上限）
+      this.deps.onCrafted?.(this);
+      if (done < planned) {
         window.alert(`材料不足，已加工 ${done} 个`);
       }
     } else {

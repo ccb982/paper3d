@@ -367,8 +367,12 @@ async function boot() {
       if (hudAcc > 0.15) {
         hudAcc = 0;
         const p = cameraPos;
+        // ★ 种子权威来源 = 存档（主种子 × 天数）；RasterMap.current 极端情况
+        //   （HMR/模块换代）可能为空 → 用 dailyMapSeed 回退，保证 HUD 恒有数值
+        const dailySeed = RasterMap.current?.worldSeed
+          ?? (currentSession ? dailyMapSeed(currentSession.meta.seed, currentSession.meta.day) : null);
         hudEl.textContent =
-          `${currentEnv === 'world' ? '世界' : '基地'}  seed ${RasterMap.current?.worldSeed ?? '?'}\n`
+          `${currentEnv === 'world' ? '世界' : '基地'}  seed ${dailySeed ?? '?'}\n`
           + `x ${p.x.toFixed(1)}  z ${p.z.toFixed(1)}\n`
           + `chunk (${Math.floor(p.x / 60)},${Math.floor(p.z / 60)})`;
       }
@@ -386,6 +390,9 @@ async function boot() {
       entityPerf.render = 0; entityPerf.moved = 0; entityPerf.shadow = 0;
       entityPerf.move = 0; entityPerf.sepOther = 0; entityPerf.sepStatic = 0; entityPerf.dye = 0;
       entityPerf.count = 0;
+      // ★ 蜂群分项同样逐帧清零（此前只读不清 → HUD 显示的是跨帧累计和，越跑越大）
+      entityPerf.swarmBrain = 0; entityPerf.swarmMove = 0; entityPerf.swarmSep = 0;
+      entityPerf.swarmRender = 0; entityPerf.swarmTier = 0;
       const u0 = performance.now();
       // ★ 帧级异常兜底：update/render 抛错不再中断 rAF 循环（错误上屏，见 showRuntimeError）
       try {

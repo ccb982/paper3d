@@ -651,8 +651,9 @@ registerPreset({
     const horiz = hash2(ctx.cx, ctx.cz, ctx.salt + 52) < 0.5;
     const halfW = 1 + (hash2(ctx.cx, ctx.cz, ctx.salt + 53) < 0.5 ? 1 : 0); // 谷底 2~4 宽
     const stepH = 0.72;                 // 台阶级差（< 跳跃峰值 0.8：可跳上，逐级可攀）
-    const banks = 5;                    // 台阶侧 5 级
-    const floorH = plateauH - banks * stepH; // ≈ -1.4（谷深 ~3.6m）
+    // ★ 2026-09-14 用户定调：峡谷加深——台阶侧 5 → 7 级，谷深 ~3.6m → ~5m
+    const banks = 7;
+    const floorH = plateauH - banks * stepH; // ≈ -2.84（谷深 ~5m）
     const loPos = halfW + banks + 1;
     const hiPos = SIDE - 1 - (halfW + 1);
     let pos = loPos + Math.floor(hash2(ctx.cx, ctx.cz, ctx.salt + 54) * Math.max(1, hiPos - loPos + 1));
@@ -686,10 +687,10 @@ registerPreset({
       if (s0 < 0) break;
       if (hash2(k, 30, ctx.salt + 57) < 0.5) {
         roles[s0] = ROLE_WALL;
-        heights[s0] = 0.3;
+        heights[s0] = floorH + 0.3;   // 谷底碎石（相对谷底，不悬浮）
       } else {
         roles[s0] = ROLE_LIQUID;
-        heights[s0] = NaN; // 水皮走地块自身
+        heights[s0] = floorH - 0.4;   // ★ 池底低于谷底（深潭；水面仍为全局 y=0）
       }
     }
     openPorts(roles, ctx.ports);
