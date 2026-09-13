@@ -41,6 +41,8 @@ export interface AgentSpawnData {
   wanderSpeed: number;
   /** 攻击意图（Director.ts 的 INTENT_*；缺省 255 = 无意图） */
   intent?: number;
+  /** 游荡时朝目标的偏向强度（威胁度驱动；缺省 0.12） */
+  bias?: number;
 }
 
 /** 代理快照（升格/降格搬运） */
@@ -119,6 +121,8 @@ export class AgentPool {
   readonly wanderSpeed = new Float32Array(AGENT_CAPACITY);
   /** 当前移动速度（think 决策时写入：追击 = speed / 游走 = wanderSpeed） */
   readonly curSpeed = new Float32Array(AGENT_CAPACITY);
+  /** 游荡偏向强度（威胁度驱动） */
+  readonly bias = new Float32Array(AGENT_CAPACITY);
 
   // ---- P2：攻击槽 / 攻击令牌 / 警戒反应 ----
   /** 攻击槽索引（-1 = 未占；按目标扇区环形占位） */
@@ -180,6 +184,7 @@ export class AgentPool {
     this.alertAt[i] = 0;
     this.flash[i] = 0;
     this.intent[i] = d.intent ?? 255;
+    this.bias[i] = d.bias ?? 0.12;
     this.retreatUntil[i] = 0;
     this.nextRetreatAt[i] = 0;
     this.rageUntil[i] = 0;
@@ -222,6 +227,7 @@ export class AgentPool {
     this.alertAt[to] = this.alertAt[from];
     this.flash[to] = this.flash[from];
     this.intent[to] = this.intent[from];
+    this.bias[to] = this.bias[from];
     this.retreatUntil[to] = this.retreatUntil[from];
     this.nextRetreatAt[to] = this.nextRetreatAt[from];
     this.rageUntil[to] = this.rageUntil[from];

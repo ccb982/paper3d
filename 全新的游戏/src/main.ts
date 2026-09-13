@@ -242,7 +242,15 @@ async function boot() {
     console.warn('[boot] 大猫哥月亮素材包加载失败，回退程序化月相:', e);
   }
 
-  // ---- 3. 读取或创建存档 ----
+  // ---- 3. 读取或创建存档（?wipe=1 → 先删档再开新档） ----
+  if (new URLSearchParams(location.search).get('wipe') === '1') {
+    try {
+      localStorage.removeItem('arknights_rogue_save');
+      console.warn('[boot] 已删档（?wipe=1）：旧存档清除，将创建新档');
+    } catch (e) {
+      console.error('[boot] 删档失败:', e);
+    }
+  }
   currentSession = SaveSystem.load();
   if (!currentSession) {
     currentSession = createNewSession();

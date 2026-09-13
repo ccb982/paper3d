@@ -4,10 +4,13 @@
 // 节奏（2026-09-13 用户定调）：
 //   · 平时：少量怪物游荡（环境散兵，无意图）
 //   · 每天 1~2 波大举进攻：提前预警（倒计时 + 目标告知）→ 集中大波 → 间歇
-//   · 敌人按天增强（血量/攻击/防御），同日第二波更凶
+//   · 敌人数值增强由《EnemyScaling.ts》统一计算（天数 / 抽卡 / 玩家三维），
+//     本模块只负责节奏与生成订单
 // 输出 = 生成订单（锚点 / intent / 波数 / 每波人数 / 偏成群），由模式层执行；
 // 预警/开战/结束 通过 DirectorHooks 交给 UI 层播报。
 // ============================================================
+
+import { neutralThreat, type ThreatProfile } from './EnemyScaling';
 
 /** 攻击意图（代理索敌偏好；255 = 无意图，维持"游走 + 仇恨圈"旧观感） */
 export const INTENT_PLAYER = 0;
@@ -26,24 +29,10 @@ const REGEN: Record<DirectorPhase, number> = { calm: 5, warning: 6, assault: 10,
 // ---- 日节律（2026-09-13 用户定调：平时少量游荡、每天 1~2 波大举进攻） ----
 /** 预警提前量（秒）：预警期内 HUD 倒计时 + 目标告知 */
 const WARNING_LEAD = 40;
-/** 首波袭击时间区间（秒；自当天出击开始） */
-const FIRST_ASSAULT_MIN = 100;
-const FIRST_ASSAULT_SPAN = 80;
-/** 两波袭击之间的间隔区间（秒） */
-const ASSAULT_GAP_MIN = 150;
-const ASSAULT_GAP_SPAN = 120;
-/** 单次袭击：波数 / 每波人数 / 波间隔（秒）/ 收尾时长（秒） */
-const ASSAULT_WAVES_MIN = 3;
-const ASSAULT_WAVES_SPAN = 2;
-const ASSAULT_WAVE_COUNT_MIN = 8;
-const ASSAULT_WAVE_COUNT_SPAN = 7;
+/** 波间隔（秒）/ 收尾时长（秒）/ 间歇（秒） */
 const ASSAULT_WAVE_INTERVAL = 7;
 const ASSAULT_SETTLE = 30;
-/** 间歇时长（秒） */
 const LULL_TIME = 18;
-/** 平时游荡目标数量：低于此值 → 每 10s 补一只无意图散兵 */
-const AMBIENT_TARGET = 15;
-const AMBIENT_INTERVAL = 10;
 
 export interface DirectorInputs {
   dt: number;
@@ -82,13 +71,6 @@ export interface DirectorHooks {
   onClear?: () => void;
 }
 
-/** 敌人强化倍率（按天） */
-export interface EnemyScale {
-  hp: number;
-  atk: number;
-  def: number;
-}
-
 interface AssaultPlan {
   at: number;
   waves: number;
@@ -106,10 +88,12 @@ export class Director {
   private day = 1;
   private dayTime = 0;
   private budget = 60;
-  private spawnTimer = AMBIENT_INTERVAL;
+  private spawnTimer = 3;
   private lullTimer = 0;
   private warnedSecond = -1;
 
+  /** ★ 威胁度档案（波次/数量/攻击欲望；由模式层出击时注入） */
+  private threat: ThreatProfile = neutralThreat();
   /** 当日袭击计划（1~2 次） */
   private plan: AssaultPlan[] = [];
   /** 进行中的袭击 */
@@ -126,14 +110,14 @@ export class Director {
     wavesTotal: number;
   } | null = null;
 
-  /** 敌人强化（按天） */
-  private scaleHp = 1;
-  private scaleAtk = 1;
-  private scaleDef = 0;
-
   // ============================================================
   // 日生命周期
   // ============================================================
+
+  /** ★ 注入当日威胁度（出击时；在 beginDay 之前调用） */
+  setThreat(t: ThreatProfile): void {
+    this.threat = t;
+  }
 
   /** 新的一天（出击开始）调用：重置计时 + 排 1~2 次袭击 */
   beginDay(day: number, hooks?: DirectorHooks): void {
@@ -143,34 +127,27 @@ export class Director {
     this.assault = null;
     this.warnedSecond = -1;
     this.spawnTimer = 3;
-    // 按天强化（封顶 3×；同日第二波再 ×1.15）
-    const d = this.day - 1;
-    this.scaleHp = Math.min(3, 1 + d * 0.12);
-    this.scaleAtk = Math.min(2.5, 1 + d * 0.08);
-    this.scaleDef = Math.min(20, Math.floor(d * 0.8));
 
     const n = 1 + (Math.random() < 0.55 ? 1 : 0); // 每天 1~2 波
     this.plan = [];
-    let t = FIRST_ASSAULT_MIN + Math.random() * FIRST_ASSAULT_SPAN;
+    const [faLo, faHi] = this.threat.firstAssault;
+    const [gapLo, gapHi] = this.threat.assaultGap;
+    const [wLo, wHi] = this.threat.assaultWaves;
+    const [cLo, cHi] = this.threat.waveCount;
+    let t = faLo + Math.random() * (faHi - faLo);
     for (let i = 0; i < n; i++) {
       this.plan.push({
         at: t,
-        waves: ASSAULT_WAVES_MIN + Math.floor(Math.random() * ASSAULT_WAVES_SPAN),
-        count: ASSAULT_WAVE_COUNT_MIN + Math.floor(Math.random() * ASSAULT_WAVE_COUNT_SPAN),
+        waves: wLo + Math.floor(Math.random() * (wHi - wLo + 1)),
+        count: cLo + Math.floor(Math.random() * (cHi - cLo + 1)),
         intent: INTENT_PLAYER,
         label: '玩家',
         resolved: false,
         index: i,
       });
-      t += ASSAULT_GAP_MIN + Math.random() * ASSAULT_GAP_SPAN;
+      t += gapLo + Math.random() * (gapHi - gapLo);
     }
     hooks?.onClear?.();
-  }
-
-  /** 当前敌人强化倍率（生成时乘算；同日第二波已含 ×1.15） */
-  scale(assaultIndex = -1): EnemyScale {
-    const bonus = assaultIndex > 0 ? 1.15 : 1;
-    return { hp: this.scaleHp, atk: this.scaleAtk * bonus, def: this.scaleDef };
   }
 
   /** 当天是否还有未打的袭击（HUD/调试） */
@@ -207,11 +184,13 @@ export class Director {
         }
       }
       if (this.phase === 'calm' && this.spawnTimer <= 0) {
-        this.spawnTimer = AMBIENT_INTERVAL;
-        if (inp.alive < AMBIENT_TARGET && inp.playerHpRatio >= 0.3) {
+        this.spawnTimer = this.threat.ambientInterval;
+        if (inp.alive < this.threat.ambientTarget && inp.playerHpRatio >= 0.3) {
+          // ★ 攻击欲望：威胁越高，越多的环境怪直接带追击意图开进（不再是纯游荡）
+          const hunter = Math.random() < this.threat.intentChance;
           return {
             anchorX: inp.playerX, anchorZ: inp.playerZ,
-            intent: INTENT_NONE,
+            intent: hunter ? INTENT_PLAYER : INTENT_NONE,
             waves: 1, count: 1,
             preferPack: false,
           };

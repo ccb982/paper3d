@@ -69,6 +69,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private shipStatusEl: HTMLDivElement | null = null;
   /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
   private assaultBannerEl: HTMLDivElement | null = null;
+  /** ★ 敌军强度档位（顶部小字；EnemyScaling） */
+  private enemyScaleEl: HTMLDivElement | null = null;
   /** ★ 战斗 HUD 显隐（航行操船期隐藏：血条/准星/快捷栏/友军列表） */
   private combatHudVisible = true;
 
@@ -278,6 +280,23 @@ export class WorldUIManager extends BaseInteractionUI {
     el.style.color = danger ? '#ffb3a0' : '#cfe8ff';
     el.style.background = danger ? 'rgba(30,10,10,0.55)' : 'rgba(10,16,26,0.55)';
     el.textContent = text;
+  }
+
+  /** ★ 敌军强度档位（顶部小字；《EnemyScaling.ts》统一口径：低/较低/中/较高/极高） */
+  setThreatLabel(text: string, color = '#ffcf9a'): void {
+    if (!this.enemyScaleEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:28px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:60', 'pointer-events:none', 'text-align:center',
+        'font-size:12px', 'letter-spacing:1px',
+        'color:#ffcf9a', 'text-shadow:0 1px 2px #000',
+      ].join(';');
+      document.body.appendChild(el);
+      this.enemyScaleEl = el;
+    }
+    this.enemyScaleEl.textContent = text;
+    this.enemyScaleEl.style.color = color;
   }
 
   /** ★ 舰船被摧毁面板（真结局触发；按钮"复活"回调，暂不删档） */
@@ -603,6 +622,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.shipStatusEl = null;
     this.assaultBannerEl?.remove();
     this.assaultBannerEl = null;
+    this.enemyScaleEl?.remove();
+    this.enemyScaleEl = null;
     this.respawnEl?.remove();
     this.respawnEl = null;
     this.interactPrompt.remove();

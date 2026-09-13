@@ -306,7 +306,7 @@ export class SwarmSystem {
       const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
       const wd = Math.hypot(wdx, wdz);
       const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
-      const bias = 0.12;
+      const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
       const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
       const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
       const ml = Math.hypot(mx, mz);

@@ -47,6 +47,7 @@ import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
+import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
 import { AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { ItemBase } from '../entity/ItemBase';
@@ -332,6 +333,15 @@ export class WorldMode implements IGameMode {
   private swarmDirector = new Director();
   /** 导演播报钩子（复用对象；enter 时绑定 UI） */
   private directorHooks: DirectorHooks = {};
+  /** ★ 敌人数值增强（每日系数；出击时按 天数/抽卡/玩家参考三维 重算） */
+  private enemyScale: EnemyScale = { hp: 1, atk: 1, def: 0, hpFloor: 0, atkFloor: 0, total: 1 };
+  /** 敌强计算输入快照（生成时按袭击序号现算；参考属性不含装备） */
+  private scalingInputs: {
+    day: number; totalPulls: number;
+    refHp: number; refAtk: number; refDef: number;
+  } | null = null;
+  /** ★ 威胁度（波次/每波人数/攻击欲望；与敌强同一套输入） */
+  private threat: ThreatProfile | null = null;
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
   /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演的大波按节奏投放。
@@ -674,8 +684,9 @@ export class WorldMode implements IGameMode {
     this.directorHooks.onWarning = (sec, label) => {
       const mm = String(Math.floor(sec / 60)).padStart(2, '0');
       const ss = String(sec % 60).padStart(2, '0');
+      const tier = this.threat ? threatTier(this.threat.index) : null;
       this.worldUIManager.setAssaultBanner(
-        `【预警】敌军来袭倒计时 ${mm}:${ss}　目标：${label}　请做好准备`, true,
+        `【预警】敌军来袭倒计时 ${mm}:${ss}　目标：${label}${tier ? `　敌军强度：${tier.label}` : ''}　请做好准备`, true,
       );
     };
     this.directorHooks.onAssault = (label) => {
@@ -685,6 +696,7 @@ export class WorldMode implements IGameMode {
     this.directorHooks.onClear = () => {
       this.worldUIManager.setAssaultBanner(null);
     };
+    this.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
     // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
@@ -1529,6 +1541,29 @@ export class WorldMode implements IGameMode {
     return this.spawnOne(this.pickMob(), x, y, z);
   }
 
+  /** ★ 重算当日敌强（出击开始）——参考属性 = 玩家基础 + 遗物，**不含装备**；
+   *  生成/升格共用同一口径（含硬下限：血量 ≥ 角色攻击/2、攻击 ≥ 角色攻击/10） */
+  private refreshEnemyScale(): void {
+    if (!this.session || !this.player || !this.worldUIManager) return;
+    const base = this.session.player;
+    const mods = computeRelicModifiers(this.session, RELIC_ITEM_CONFIG);
+    const inputs = {
+      day: this.session.meta.day ?? 1,
+      totalPulls: this.session.gacha?.totalPulls ?? 0,
+      refHp: base.maxHp * mods.mulHp + mods.bonusHp,
+      refAtk: base.attackPower * mods.mulAtk + mods.bonusAtk,
+      refDef: base.defense * mods.mulDef + mods.bonusDef,
+    };
+    this.scalingInputs = inputs;
+    this.enemyScale = computeEnemyScale(inputs);
+    // ★ 威胁度（波次/数量/攻击欲望）与敌强同源；注入导演后再开局
+    this.threat = computeThreat(inputs);
+    this.swarmDirector.setThreat(this.threat);
+    // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
+    const tier = threatTier(this.threat.index);
+    this.worldUIManager.setThreatLabel(`敌军强度：${tier.label}`, tier.color);
+  }
+
   /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，
    *  两波之间方向明显错开（双面夹击），但每面都是"一团人"而非全向散兵 */
   private spawnDirectorWave(order: SpawnOrder): void {
@@ -1667,17 +1702,21 @@ export class WorldMode implements IGameMode {
       const mobIndex = this.mobDefs.indexOf(def);
       if (mobIndex < 0) return;
       const stats = this.mobAgentStats(def);
+      const sc = this.enemyScale;
+      const hp = Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
+      const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
       const idx = this.swarm.spawn({
         mobIndex,
         x, y, z,
-        hp: def.hp, maxHp: def.hp,
-        defense: def.defense, attackPower: def.attackPower,
+        hp, maxHp: hp,
+        defense: def.defense + sc.def, attackPower: 0,
         speed: stats.speed,
-        meleeDamage: stats.damage, meleeRange: stats.range,
+        meleeDamage: meleeTotal, meleeRange: stats.range,
         scale: def.scale,
         tier: AGENT_TIER_FAR,
-        aggro: stats.aggro,
+        aggro: stats.aggro * (this.threat?.aggroMul ?? 1),
         wanderSpeed: stats.wanderSpeed,
+        bias: this.threat?.biasMul ?? 0.12,
       });
       if (idx >= 0) placed++;
       if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) break;
@@ -1719,10 +1758,14 @@ export class WorldMode implements IGameMode {
     const mobIndex = this.mobDefs.indexOf(def);
     if (mobIndex < 0) return false;
     const stats = this.mobAgentStats(def);
-    // ★ 按天强化（导演日节律；同日第二波已含额外乘数）
-    const sc = this.swarmDirector.scale(assaultIndex);
-    const hp = Math.max(1, Math.round(def.hp * sc.hp));
-    const atk = def.attackPower > 0 ? Math.max(1, Math.round(def.attackPower * sc.atk)) : 0;
+    // ★ 敌人数值增强（EnemyScaling：基础随角色增强 + 天数/抽卡；硬下限防一下秒）
+    const base = this.scalingInputs ?? { day: 1, totalPulls: 0, refHp: 100, refAtk: 10, refDef: 2 };
+    const sc = assaultIndex > 0
+      ? computeEnemyScale({ ...base, assaultIndex })
+      : this.enemyScale;
+    const hp = Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
+    // 近战总量 =（AI 挥击 + 攻击力加成）× 攻击倍率，且不低于攻击下限；代理统一记在 meleeDamage
+    const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
     const dfs = def.defense + sc.def;
     let any = false;
     for (let k = 0; k < def.pack; k++) {
@@ -1745,13 +1788,14 @@ export class WorldMode implements IGameMode {
         mobIndex,
         x: sx, y: sy, z: sz,
         hp, maxHp: hp,
-        defense: dfs, attackPower: atk,
+        defense: dfs, attackPower: 0,
         speed: stats.speed,
-        meleeDamage: stats.damage, meleeRange: stats.range,
+        meleeDamage: meleeTotal, meleeRange: stats.range,
         scale: def.scale,
         tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
-        aggro: stats.aggro,
+        aggro: stats.aggro * (this.threat?.aggroMul ?? 1),
         wanderSpeed: stats.wanderSpeed,
+        bias: this.threat?.biasMul ?? 0.12,
         intent,
       });
       if (idx >= 0) any = true;
@@ -1766,8 +1810,10 @@ export class WorldMode implements IGameMode {
     if (!def) return;
     const enemy = this.createEnemyEntity(def, snap.x, snap.y, snap.z, snap.hp, snap.maxHp);
     if (!enemy) return;
+    const stats = this.mobAgentStats(def);
     enemy.defense = snap.defense;
-    enemy.attackPower = snap.attackPower;
+    // ★ 实体近战 = AI 基础挥击（behavior.damage）+ attackPower → 反推 attackPower 保持同口径
+    enemy.attackPower = Math.max(0, Math.round(snap.meleeDamage - stats.damage));
     enemy.hp = Math.min(snap.hp, snap.maxHp);
   }
 
