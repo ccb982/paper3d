@@ -63,6 +63,34 @@ export const PRESERVER_AI: AIConfig = {
   initial: 'patrol',
 };
 
+/** ★ Boss（普瑞赛斯·四维空间决战）：大仇恨圈、更快追击、重击挥砍 */
+export const BOSS_AI: AIConfig = {
+  states: {
+    patrol: {
+      behaviors: [{ name: 'wander', params: { speed: 2.5, turnRate: 0.6, turnInterval: 0.4, targetBias: 0.08, biasCamp: 'player' } }],
+      transitions: [
+        { cond: 'seePlayer', params: { radius: 60, camp: 'player' }, to: 'chase' },
+      ],
+      minStay: 1,
+    },
+    chase: {
+      behaviors: [{ name: 'moveToTarget', params: { speed: 4.2 } }],
+      transitions: [
+        { cond: 'inRange', params: { radius: 3.0 }, to: 'attack' },
+        { cond: 'loseTarget', params: { radius: 90 }, to: 'patrol' },
+      ],
+    },
+    attack: {
+      behaviors: [{ name: 'meleeSwing', params: { duration: 0.9, range: 3.4, damage: 22 } }],
+      transitions: [
+        { cond: 'attackFinished', to: 'chase' },
+        { cond: 'outOfRange', params: { radius: 4.5 }, to: 'chase' },
+      ],
+    },
+  },
+  initial: 'patrol',
+};
+
 // ============================================================
 // ★ 三杂兵 AI（数据驱动，按主流敌人模板派生不同参数）
 //   加新敌人 = 加配置条目，不改代码。

@@ -43,7 +43,7 @@ import { LOD_MAX_DIST } from '../services/lod';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext } from '../systems/ai/behaviors';
-import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI } from '../systems/ai/aiconfig';
+import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
@@ -149,6 +149,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   bulletAsset?: Asset | FtxAsset;
   /** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
   enemyAssets?: FtxAsset[];
+  /** ★ 普瑞赛斯（Boss 战实体素材；scene.zip） */
+  bossAsset?: FtxAsset | Asset;
   hitEffectAsset?: Asset;
   /** ★ 可露希尔的无人机素材（特效包优先，回退纯纹理包） */
   droneAsset?: Asset | FtxAsset;
@@ -343,6 +345,10 @@ export class WorldMode implements IGameMode {
   private threat: ThreatProfile | null = null;
   /** ★ 遗物周期补给（祖宗发射器：进入战斗后每 interval 秒补 1；多件更快） */
   private timedRelics: { itemId: string; interval: number; timer: number }[] = [];
+  /** ★ Boss 战（抽到普瑞赛斯 → 四维空间；击败 = 通关） */
+  private bossRun = false;
+  private bossEntity: EnemyBase | null = null;
+  private bossAsset: FtxAsset | Asset | null = null;
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
   /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演的大波按节奏投放。
@@ -562,6 +568,11 @@ export class WorldMode implements IGameMode {
       ctx.session.ship.hp = ctx.session.ship.maxHp;
     }
 
+    // ★ Boss 战判定（必须先于 bootstrap：直接按四维空间风格建图，避免整套重建）
+    this.bossRun = !!ctx.session.outOfRun?.owned?.['priestess'] && !ctx.session.meta?.bossCleared;
+    if (this.bossRun) this.chunks.setStyle(true);
+    this.bossEntity = null;
+
     // ---- ★ 初始 chunk 数据环 + 出生区 3×3 强制构建（不等队列调度） ----
     this.chunks.bootstrap(spawn.x, spawn.z);
 
@@ -649,6 +660,7 @@ export class WorldMode implements IGameMode {
         drops: [{ itemId: 'device', chance: 0.95, min: 1, max: 3 }],
       },
     ];
+    this.bossAsset = ctx.bossAsset ?? null;
     this.mobDefs = (ctx.enemyAssets ?? []).map((asset, i) => ({
       asset,
       ...(MOB_BLUEPRINTS[i % MOB_BLUEPRINTS.length] ?? MOB_BLUEPRINTS[1]),
@@ -708,17 +720,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setDockButton(() => this.requestDock(false));
     this.worldUIManager.setDockButtonVisible(true);
     this.worldUIManager.setCombatHudVisible(false);
-    // ★ 地图风格切换按钮（标准外观 ↔ 四维空间[最终 Boss 战地图]）
     // ★ boss4D 玩家专属：真实落地模式（每次跳跃必须踩实地面，禁止悬空穿/悬浮连跳）
     this.player.controller.requireRealLanding = this.chunks.isBoss4D;
-    this.worldUIManager.addMapStyleButton(
-      () => (this.chunks.isBoss4D ? '地图：四维空间' : '地图：标准'),
-      () => {
-        this.chunks.setStyle(!this.chunks.isBoss4D);
-        // 仅玩家生效（敌人维持旧连跳行为）
-        this.player.controller.requireRealLanding = this.chunks.isBoss4D;
-      },
-    );
 
     // ---- ★ 测试物品（UI 初始化后创建，避免碰撞回调时 worldUIManager 未就绪） ----
     const testArchetypes = [
@@ -867,6 +870,11 @@ export class WorldMode implements IGameMode {
         return; // 不参与杂兵掉落结算
       }
       const enemy = payload.target as EnemyBase;
+      // ★ 击败普瑞赛斯 = 通关
+      if (enemy === this.bossEntity) {
+        this.bossEntity = null;
+        this.onBossDefeated();
+      }
       this.rollEnemyDrops(enemy);
       const idx = this.enemies.indexOf(enemy);
       if (idx !== -1) this.enemies.splice(idx, 1);
@@ -1581,6 +1589,64 @@ export class WorldMode implements IGameMode {
     // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
     const tier = threatTier(this.threat.index);
     this.worldUIManager.setThreatLabel(`敌军攻势：${tier.label}`, tier.color);
+  }
+
+  /** ★ 生成 Boss（普瑞赛斯）：四维空间决战；数值吃当日敌强，体型 4× */
+  private spawnBoss(x: number, z: number): void {
+    const asset = this.bossAsset;
+    if (!asset || !this.scene || !this.camera) return;
+    const safe = resolveDockSpawn(this.raster, x + 30, z);
+    const sc = this.enemyScale;
+    const ai = BOSS_AI;
+    const hp = Math.max(1200, Math.round(2500 * sc.hp));
+    const atkPower = Math.round(30 * sc.atk);
+    const dfs = 8 + sc.def;
+    const enemy = new EnemyBase(this.entities, this.scene, asset, {
+      x: safe.x, y: safe.y, z: safe.z,
+      animMap: {
+        states: {
+          idle: { 前: ['前'], 后: ['后'] },
+          walk: { 前: ['前'], 后: ['后'] },
+          attack: { 前: ['前'], 后: ['后'] },
+        },
+        fps: { idle: 1, walk: 1, attack: 1 },
+      },
+      facing: '前',
+      aggressive: true,
+      aiConfig: ai,
+      hp,
+      defense: dfs,
+      attackPower: atkPower,
+      scale: 4,
+      collisionScale: 2.2,
+    }, this.camera);
+    enemy.billboard = false;
+    const def: MobDef = {
+      asset: asset as unknown as FtxAsset,
+      ai,
+      hp,
+      defense: dfs,
+      attackPower: atkPower,
+      scale: 4,
+      collisionScale: 2.2,
+      pack: 1,
+      weight: 0,
+      drops: [],
+    };
+    this.enemyDefs.set(enemy, def);
+    this.enemies.push(enemy);
+    this.bossEntity = enemy;
+    this.showFloatingAt(safe.x, safe.y + 4, safe.z, '普瑞赛斯', 'crit');
+  }
+
+  /** ★ 击败普瑞赛斯：通关（四维空间结束；之后恢复常规出击） */
+  private onBossDefeated(): void {
+    if (!this.session) return;
+    this.session.meta.bossCleared = true;
+    this.bossRun = false;
+    this.chunks.setStyle(false);
+    this.player.controller.requireRealLanding = this.chunks.isBoss4D;
+    this.worldUIManager?.showVictoryPanel(() => this.onReturn?.());
   }
 
   /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，
@@ -2689,6 +2755,8 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.phase = 'explore';
+    // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
+    if (this.bossRun && !this.bossEntity) this.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
     this.ship.position.z = sp.z;
     this.ship.land();

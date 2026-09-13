@@ -49,7 +49,6 @@ export class WorldUIManager extends BaseInteractionUI {
   private characterStatsPanel = new CharacterStatsPanel();
   private flashItemId: string | null = null;
   private flashTimer: number | undefined = undefined;
-  private mapStyleBtn: HTMLButtonElement | null = null;
   /** ★ 获得物品播报栈（用户手绘 JSON《页面布局/获得物品.json》右上区域）：
    *  每次拾取生成一条面板向下堆叠；到期向下滑动 + 淡出后移除（播报式）。 */
   private pickupStack: HTMLDivElement | null = null;
@@ -317,6 +316,24 @@ export class WorldUIManager extends BaseInteractionUI {
     this.openPanel({ id: 'ship-destroyed', onOpen: () => {}, onClose: () => {}, render: () => content });
   }
 
+  /** ★ 通关面板（击败普瑞赛斯；按钮回调 = 返回基地） */
+  showVictoryPanel(onConfirm: () => void): void {
+    const content = document.createElement('div');
+    content.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:16px;padding:28px 44px;color:#f6ecd8;font-size:14px;text-align:center;';
+    const title = document.createElement('div');
+    title.textContent = '普瑞赛斯已被击败';
+    title.style.cssText = 'font-size:24px;font-weight:bold;color:#ffd87a;letter-spacing:4px;text-shadow:0 0 14px rgba(255,200,90,0.55);';
+    const body = document.createElement('div');
+    body.textContent = '四维空间归于沉寂。这一切，结束了。';
+    body.style.cssText = 'color:#d8c8a8;line-height:1.8;';
+    const btn = createButton({ label: '返回基地', size: 'md', onClick: () => {
+      this.closePanel('victory');
+      onConfirm();
+    } });
+    content.append(title, body, btn);
+    this.openPanel({ id: 'victory', onOpen: () => {}, onClose: () => {}, render: () => content });
+  }
+
   /** ★ 死亡复活倒计时（屏幕中央大字；null = 隐藏） */
   setRespawnCountdown(seconds: number | null): void {
     if (seconds === null) {
@@ -577,21 +594,6 @@ export class WorldUIManager extends BaseInteractionUI {
   }
 
   /** ★ 地图风格切换按钮（右上角悬浮；标签由外部状态刷新） */
-  addMapStyleButton(getLabel: () => string, onToggle: () => void): void {
-    const btn = document.createElement('button');
-    btn.style.cssText = [
-      'position:fixed', 'top:12px', 'right:12px', 'z-index:50',
-      'padding:6px 14px', 'font-size:12px', 'font-weight:bold',
-      'background:#1a2238cc', 'color:#9cf',
-      'border:1px solid #4466aa', 'border-radius:6px', 'cursor:pointer',
-    ].join(';');
-    const refresh = () => { btn.textContent = getLabel(); };
-    refresh();
-    btn.addEventListener('click', () => { onToggle(); refresh(); });
-    document.body.appendChild(btn);
-    this.mapStyleBtn = btn;
-  }
-
   /** 刷新背包面板（如果已打开）；★ 正在查看物品详情时就地刷新详情，不打断——
    *  详情关闭时（onClose → onDataChanged）再整面板刷新，把期间拾取的物品补上格子 */
   refreshIfOpen(): void {
@@ -627,8 +629,6 @@ export class WorldUIManager extends BaseInteractionUI {
     this.respawnEl?.remove();
     this.respawnEl = null;
     this.interactPrompt.remove();
-    this.mapStyleBtn?.remove();
-    this.mapStyleBtn = null;
     for (const ft of this.floatingTexts) ft.el.remove();
     this.floatingTexts = [];
     // ★ 获得物品播报栈

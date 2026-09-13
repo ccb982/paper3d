@@ -1,7 +1,7 @@
 {
   "pool": {
     "name": "综合物资池",
-    "description": "全部免费。物资抽到即进背包，遗物抽到即永久生效。保底 60 抽必出遗物。"
+    "description": "全部免费。物资抽到即进背包，遗物抽到即永久生效。保底 60 抽必出遗物。唯一 6★ 普瑞赛斯：基础 2%，50 抽后递增，99 抽必出。"
   },
   "items": [
     { "id": "healing_potion", "rarity": 3, "weight": 24 },
@@ -13,6 +13,10 @@
     { "id": "yusheng_mengmengxiang", "rarity": 4, "weight": 6 },
     { "id": "yuandeng", "rarity": 4, "weight": 6 }
   ],
+  "boss": {
+    "id": "priestess",
+    "rarity": 6
+  },
   "outOfRunItems": [
     { "id": "black_crown", "rarity": 5, "weight": 2 },
     { "id": "gravel_love", "rarity": 5, "weight": 3 },

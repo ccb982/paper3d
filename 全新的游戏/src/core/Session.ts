@@ -46,6 +46,8 @@ export interface GameSession {
     deaths: number;             // ★ 累计死亡次数（遗物 "每次死亡×1.05 全属性" 的驱动）
     createdAt: string;
     lastSavedAt: string;
+    /** ★ 已击败普瑞赛斯（通关；之后不再进入四维空间） */
+    bossCleared?: boolean;
   };
 
   // ----- ② ★ 玩家"裸装"基础属性 -----
@@ -89,6 +91,8 @@ export interface GameSession {
   gacha: {
     pityCounter: number;
     totalPulls: number;
+    /** ★ 6★ 普瑞赛斯递增计数（第 n 抽概率 = n/50，必出于第 50 抽） */
+    bossPity?: number;
   };
 
   // ----- ⑧ 每日进度 -----
@@ -416,7 +420,7 @@ export function createNewSession(): GameSession {
       position: { x: 50.6, z: 101.6 },
       techTree: [], turrets: [],
     },
-    gacha: { pityCounter: 0, totalPulls: 0 },
+    gacha: { pityCounter: 0, totalPulls: 0, bossPity: 0 },
     dayProgress: { hasDepartedToday: false },
     // ★ 开局自带遗物：魔王的黑冠 + 祖宗发射器（维什戴尔的信物）；其余靠卡池抽取
     outOfRun: { owned: { ...STARTER_RELICS } },

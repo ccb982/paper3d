@@ -171,6 +171,7 @@ async function boot() {
   registerDynamicIcon('bullet_default', bulletAsset);
 
   enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
+  registerDynamicIcon('priestess', enemyAsset); // ★ 6★ 普瑞赛斯图标（卡池/遗物面板）
 
   // ---- ★ 三个杂兵（纯纹理包）：地图大量随机生成用 ----
   mobAssets = await Promise.all([
@@ -255,6 +256,16 @@ async function boot() {
   if (!currentSession) {
     currentSession = createNewSession();
     SaveSystem.save(currentSession);
+  }
+
+  // ★ 调试：?priestess=1 直接获得普瑞赛斯（验证四维空间 Boss 流程用）
+  if (new URLSearchParams(location.search).get('priestess') === '1' && currentSession) {
+    if (!currentSession.outOfRun) currentSession.outOfRun = { owned: {} };
+    if (!currentSession.outOfRun.owned) currentSession.outOfRun.owned = {};
+    currentSession.outOfRun.owned.priestess = 1;
+    currentSession.meta.bossCleared = false;
+    SaveSystem.save(currentSession);
+    console.warn('[boot] 调试：已直接获得普瑞赛斯（?priestess=1）');
   }
 
   // ★ 迁移（2026-09-11）：黑冠从旧"藏品"归位为"遗物"（开局即拥 1 件）
@@ -528,6 +539,7 @@ function enterWorldMode(
     protagonistAsset,
     bulletAsset,
     enemyAssets: mobAssets,
+    bossAsset: enemyAsset, // ★ 普瑞赛斯（Boss 战）
     hitEffectAsset: hitEffectAsset ?? undefined,
     droneAsset: droneAsset ?? undefined,
     sentinelAsset: sentinelAsset ?? undefined,

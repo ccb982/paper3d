@@ -878,6 +878,22 @@ export class GachaOverlay {
     canvas.style.height = fh + 'px';
     canvas.style.display = 'block';
     overlay.appendChild(canvas);
+    // ★ 6★ 普瑞赛斯规则与当前保底计数（静态概率图不含此信息，这里动态补上）
+    const pity = this.session.gacha?.bossPity ?? 0;
+    const owned = !!this.session.outOfRun?.owned?.priestess;
+    const info = document.createElement('div');
+    info.style.cssText = [
+      'position:absolute', 'left:50%', 'transform:translateX(-50%)', 'bottom:48px',
+      'color:#ffe9b0', 'font:13px/1.9 "Microsoft YaHei",sans-serif', 'text-align:center',
+      'text-shadow:0 1px 3px #000', 'background:rgba(12,9,4,0.82)', 'padding:10px 20px',
+      'border:1px solid rgba(216,166,58,0.5)', 'border-radius:6px', 'pointer-events:none',
+      'white-space:pre-line',
+    ].join(';');
+    info.textContent = owned
+      ? '6★ 普瑞赛斯：已获得 —— 下一次出击进入「四维空间」，击败她即通关'
+      : `6★ 普瑞赛斯（唯一 6★）：基础 2%；连续 50 抽未出后每抽 +2%；第 99 抽必出
+当前已累计 ${pity} 抽（获得后重置）`;
+    overlay.appendChild(info);
     this.root.appendChild(overlay);
 
     overlay.addEventListener('click', () => {
@@ -1007,10 +1023,38 @@ export class GachaOverlay {
     const topRarity = Math.max(...pool.map((p) => p.rarity));
     const PITY_LIMIT = 60;
 
+    // ★ 6★ 普瑞赛斯（唯一 6★）：明日方舟 6★ 规则——
+    //   基础 2%；连续 50 抽未出 6★ → 第 51 抽起每抽 +2%（第 51 抽 4%）；
+    //   第 99 抽必出（100%）；获得即重置计数
+    const bossCfg = (gachaPool as unknown as { boss?: { id: string; rarity: number } }).boss;
+    const bossOwned = !!(bossCfg && s.outOfRun.owned[bossCfg.id]);
+
     const results: Array<{ kind: 'inRun' | 'outRun'; id: string; name: string; rarity: number; description: string; isNew: boolean }> = [];
     for (let i = 0; i < count; i++) {
       s.gacha.totalPulls++;
       s.gacha.pityCounter++;
+
+      // ★ 普瑞赛斯优先判定（未拥有时）；命中则本次该抽归她
+      if (bossCfg && !s.outOfRun.owned[bossCfg.id]) {
+        s.gacha.bossPity = (s.gacha.bossPity ?? 0) + 1;
+        const n = s.gacha.bossPity;
+        // 明日方舟 6★ 概率：≤50 抽恒 2%；第 51 抽起 +2%/抽；第 99 抽 100%
+        const chance = n <= 50 ? 0.02 : Math.min(1, 0.02 + 0.02 * (n - 50));
+        if (Math.random() < chance) {
+          s.outOfRun.owned[bossCfg.id] = 1;
+          s.gacha.bossPity = 0;
+          const cfg = RELIC_ITEM_CONFIG[bossCfg.id];
+          results.push({
+            kind: 'outRun',
+            id: bossCfg.id,
+            name: cfg?.name ?? bossCfg.id,
+            rarity: bossCfg.rarity,
+            description: cfg?.description ?? '',
+            isNew: true,
+          });
+          continue; // 该抽已归属普瑞赛斯
+        }
+      }
 
       let picked: PoolEntry;
       if (s.gacha.pityCounter >= PITY_LIMIT) {

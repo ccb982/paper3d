@@ -33,6 +33,14 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     ],
   },
 
+  priestess: {
+    id: 'priestess',
+    name: '普瑞赛斯',
+    rarity: 6,
+    description: '唯一的 6★（明日方舟 6★ 规则：基础 2%，50 抽未出后每抽 +2%，99 抽必出）。抽到她之后，下一次出击将进入「四维空间」——击败她，这一切就结束了。',
+    effects: [],
+  },
+
   zuzong_launcher: {
     id: 'zuzong_launcher',
     name: '祖宗发射器',
