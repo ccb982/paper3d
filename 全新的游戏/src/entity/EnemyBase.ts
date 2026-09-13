@@ -49,6 +49,12 @@ export class EnemyBase extends CharacterBase {
   aiAttackTimer = 0;
   /** ★ 本次挥击是否已播完（attackFinished 条件用） */
   aiSwingDone = false;
+  /** ★ 眩晕截止 / 免疫截止时刻（秒；祖宗激光效果，2026-09-14 用户定调） */
+  private stunUntil = 0;
+  private stunImmuneUntil = 0;
+  /** 眩晕时长（秒）/ 眩晕结束后的免疫时长（秒）——防连续锁死 */
+  private static readonly STUN_SECONDS = 1.0;
+  private static readonly STUN_IMMUNE_AFTER = 2.0;
   aiMoveDir = { x: 1, z: 0 };
   /** 巡逻目标点（wander 用；null = 选新目标） */
   aiWaypoint: { x: number; z: number } | null = null;
@@ -87,6 +93,8 @@ export class EnemyBase extends CharacterBase {
     // ★ 推挤/偏移逻辑读取的碰撞体积 = 实际物理形状（super 后字段可写）
     this.collisionVolume = { shape, offsetY };
     this.camp = 'enemy';
+    // ★ 2026-09-14 用户定调：敌人只能从插值坡上高台（禁止贴墙瞬移攀爬）
+    this.blockCliffClimb = true;
     this.hp = opts.hp ?? 30; // ★ 敌人生命（普瑞赛斯 30；子弹 10 伤害 × 3 发）
     this.maxHp = this.hp;
     this.defense = opts.defense ?? 0;       // ★ 防御（高防 = 子弹/近战都更难打动）
@@ -138,6 +146,8 @@ export class EnemyBase extends CharacterBase {
     // ★ 本帧默认不移动；行为调 moveBy 才设方向（否则攻击等无移动行为会残留速度漂移）
     this.controller.moveDir.x = 0;
     this.controller.moveDir.y = 0;
+    // ★ 眩晕中：禁止移动/攻击/状态机推进（祖宗激光命中效果）
+    if (this.isStunned) return;
     // ★ 距离分级：超出 AI 激活半径 → 休眠（chunk 波次可能在 100m+ 外生成，
     //   全图 AI 全速跑没意义——进入半径自动唤醒，状态机保留）
     if (ctx.focusX !== undefined && ctx.focusZ !== undefined) {
@@ -147,6 +157,23 @@ export class EnemyBase extends CharacterBase {
       if (dx * dx + dz * dz > r * r) return;
     }
     this.aiStateMachine?.update(this, ctx);
+  }
+
+  /** ★ 当前是否眩晕中（祖宗激光；眩晕期间 AI 完全停摆） */
+  get isStunned(): boolean {
+    return performance.now() / 1000 < this.stunUntil;
+  }
+
+  /** ★ 施加眩晕（祖宗激光命中）：免疫期内/已死亡 → 不生效。
+   *  眩晕同时打断当前挥击（可读性：被打断即中止）。返回是否实际眩晕。 */
+  applyStun(): boolean {
+    const now = performance.now() / 1000;
+    if (this.hp <= 0 || now < this.stunImmuneUntil) return false;
+    this.stunUntil = now + EnemyBase.STUN_SECONDS;
+    this.stunImmuneUntil = now + EnemyBase.STUN_SECONDS + EnemyBase.STUN_IMMUNE_AFTER;
+    this.aiAttackTimer = 0; // 打断当前挥击
+    this.aiSwingDone = true;
+    return true;
   }
 
   /** ★ 移动（统一走 CharacterController 基类函数，与玩家一致）：
@@ -208,12 +235,11 @@ export class EnemyBase extends CharacterBase {
     }
   }
 
-  /** ★ 前方是否有危险地形（只挡"坑"：坑洞地块 / 过深的坑底）：
+  /** ★ 前方是否有危险地形（只挡"坑/深水/高台立面"）：
    *   从脚下向 (dx,dz) 方向探测 HAZARD_PROBE 米，
-   *   落点是坑洞地块（lethal）或表面过低（深坑底）→ 危险。
-   *   ★ 不挡普通高低差/悬崖：高台 1.8m 上下是允许的（clampCharacter
-   *   会把角色贴回地表），只要不近坑即可。
-   *   水也不在此列（可涉水，不致命）。
+   *   落点是坑洞地块（lethal）或表面过低（深坑底）→ 危险；
+   *   ★ 深水（水深 > 0.8m）→ 危险（敌人不过水）；
+   *   ★ 高台立面（近探陡升且不继续延伸 = 墙）→ 危险；插值坡（连续上升）放行。
    *   用 RasterMap 高度场（静态），不依赖物理体，成本极低。 */
   private isDangerAhead(dx: number, dz: number): boolean {
     const len = Math.hypot(dx, dz);
@@ -224,14 +250,25 @@ export class EnemyBase extends CharacterBase {
     const p = this.entity.position;
     const p1 = EnemyBase.HAZARD_PROBE;
     const p2 = p1 * 0.55; // 中间采样点（更早发现坑沿，转角更平滑）
+    const h0 = raster.surfaceHeightAt(p.x, p.z);
     for (const d of [p2, p1]) {
       const hx = p.x + ux * d;
       const hz = p.z + uz * d;
+      const role = raster.tileDefAt(hx, hz).genRole;
+      const h = raster.surfaceHeightAt(hx, hz);
       // 坑洞地块（lethal 深坑）：不可站立 → 危险
-      if (raster.tileDefAt(hx, hz).genRole === 'pit') return true;
+      if (role === 'pit') return true;
       // 坑底过低（挖深/坑洞的深底，判定死亡线以下）→ 危险
-      if (raster.surfaceHeightAt(hx, hz) < -1.2) return true;
+      if (h < -1.2) return true;
+      // ★ 深水（水面 0 − 水底 > 0.8m）：敌人不涉水 → 危险
+      if (role === 'liquid' && h < -0.8) return true;
     }
+    // ★ 高台立面判定：0.45m 处陡升 > 0.6m，且 1.2m 处没有同斜率延续 → 墙（插值坡放行）
+    const hNear = raster.surfaceHeightAt(p.x + ux * 0.45, p.z + uz * 0.45);
+    const hFar = raster.surfaceHeightAt(p.x + ux * 1.2, p.z + uz * 1.2);
+    const riseNear = hNear - h0;
+    const riseFar = hFar - hNear;
+    if (riseNear > 0.6 && riseFar < riseNear * 0.5) return true;
     return false;
   }
 

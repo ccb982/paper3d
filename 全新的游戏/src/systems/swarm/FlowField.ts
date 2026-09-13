@@ -18,7 +18,8 @@ const CELL_COUNT = FLOW_SIZE * FLOW_SIZE;
 
 /** 危险性代价（格子上叠加） */
 const COST_PIT = 8;
-const COST_LIQUID = 2;
+/** ★ 深水代价（2026-09-14：敌人不涉水 → 高代价让路径偏好绕岸；本地探测再兜底阻挡） */
+const COST_LIQUID = 8;
 /** 爬坡代价系数（上坡每米加价） */
 const COST_CLIMB = 1.5;
 /** 判定"崖"的最小高差（米） */

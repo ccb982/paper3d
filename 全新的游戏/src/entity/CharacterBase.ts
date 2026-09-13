@@ -48,6 +48,9 @@ export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
   /** ★ 无视地形落差行进（载具：爬坡/过坑；开启后不再被 EDGE_CLIFF_BAND 立面阻挡） */
   climbAnyTerrain = false;
+  /** ★ 限制爬崖（敌人等开启）：禁止朝高台立面位移——只能走插值坡/≤EDGE_CLIFF_BAND 小台阶，
+   *  防"贴墙被 clampCharacter 抬升"式瞬移上高台。玩家默认关（boss4D 走 requireRealLanding） */
+  blockCliffClimb = false;
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
@@ -102,35 +105,29 @@ export abstract class CharacterBase extends EntityBase {
     //   实现"跳跃无向墙壁速度"。
     let dx = dir.x * speed * dt;
     let dz = dir.y * speed * dt;
-    if (this.controller.requireRealLanding && !this.climbAnyTerrain) {
+    // ★ 立面阻挡：boss4D 玩家（requireRealLanding）与受限爬崖单位（blockCliffClimb，
+    //   敌人）共用——朝壁方向位移分量清零；blockCliffClimb 单位放行"插值坡"
+    //   （陡升但仍在延续 = 坡），requireRealLanding 保持原严格逻辑（>0.5 即挡）
+    if (!this.climbAnyTerrain && (this.controller.requireRealLanding || this.blockCliffClimb)) {
       const raster = RasterMap.current;
       const p0 = this.entity.position;
       const gyHere = raster?.surfaceHeightAt(p0.x, p0.z) ?? 0;
       if (raster) {
         const ext = shapeExtents(this.collisionVolume.shape);
         const m = 0.1; // 贴壁保留距离
-        if (
-          dx > 0 &&
-          raster.surfaceHeightAt(p0.x + ext.hx + m, p0.z) - gyHere > EDGE_CLIFF_BAND
-        ) {
-          dx = 0;
-        } else if (
-          dx < 0 &&
-          raster.surfaceHeightAt(p0.x - ext.hx - m, p0.z) - gyHere > EDGE_CLIFF_BAND
-        ) {
-          dx = 0;
-        }
-        if (
-          dz > 0 &&
-          raster.surfaceHeightAt(p0.x, p0.z + ext.hz + m) - gyHere > EDGE_CLIFF_BAND
-        ) {
-          dz = 0;
-        } else if (
-          dz < 0 &&
-          raster.surfaceHeightAt(p0.x, p0.z - ext.hz - m) - gyHere > EDGE_CLIFF_BAND
-        ) {
-          dz = 0;
-        }
+        /** 该采样点是否"墙"（陡升 > 台阶豁免，且再远 0.8m 不再延续） */
+        const isWall = (sx: number, sz: number, ux: number, uz: number): boolean => {
+          const h1 = raster.surfaceHeightAt(sx, sz);
+          const rise = h1 - gyHere;
+          if (rise <= EDGE_CLIFF_BAND) return false;
+          if (!this.blockCliffClimb) return true; // boss4D 玩家：原逻辑
+          const h2 = raster.surfaceHeightAt(sx + ux * 0.8, sz + uz * 0.8);
+          return h2 - h1 < rise * 0.5;
+        };
+        if (dx > 0 && isWall(p0.x + ext.hx + m, p0.z, 1, 0)) dx = 0;
+        else if (dx < 0 && isWall(p0.x - ext.hx - m, p0.z, -1, 0)) dx = 0;
+        if (dz > 0 && isWall(p0.x, p0.z + ext.hz + m, 0, 1)) dz = 0;
+        else if (dz < 0 && isWall(p0.x, p0.z - ext.hz - m, 0, -1)) dz = 0;
       }
     }
     this.entity.position.x += dx;

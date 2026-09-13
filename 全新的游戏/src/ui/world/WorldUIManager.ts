@@ -74,6 +74,10 @@ export class WorldUIManager extends BaseInteractionUI {
   private dockBtn: HTMLButtonElement | null = null;
   /** ★ 舰船状态条（HP/油量；航行与探索均显示） */
   private shipStatusEl: HTMLDivElement | null = null;
+  /** ★ 舰船受击报警：顶部大横幅 + 全屏红晕（脉冲闪烁；剩余秒数） */
+  private shipAlertEl: HTMLDivElement | null = null;
+  private shipVignetteEl: HTMLDivElement | null = null;
+  private shipAlertTimer = 0;
   /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
   private assaultBannerEl: HTMLDivElement | null = null;
   /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
@@ -132,6 +136,20 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 每帧更新（高频调用） */
   update(dt: number, ctx: WorldUIState): void {
     this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
+    // ★ 舰船受击报警：横幅脉冲闪烁 + 红晕随剩余时间渐隐
+    if (this.shipAlertTimer > 0) {
+      this.shipAlertTimer -= dt;
+      const pulse = 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 1000 * 9));
+      if (this.shipAlertEl) this.shipAlertEl.style.opacity = String(pulse);
+      if (this.shipVignetteEl) {
+        const fade = Math.max(0, Math.min(1, this.shipAlertTimer / 1.8));
+        this.shipVignetteEl.style.opacity = String(fade * (0.35 + 0.45 * pulse));
+      }
+      if (this.shipAlertTimer <= 0) {
+        if (this.shipAlertEl) this.shipAlertEl.style.display = 'none';
+        if (this.shipVignetteEl) this.shipVignetteEl.style.display = 'none';
+      }
+    }
     // ★ 世界地图面板（打开时才重绘）
     if (this.mapPanel?.isOpen) {
       this.mapPanel.update(dt, ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
@@ -263,9 +281,49 @@ export class WorldUIManager extends BaseInteractionUI {
       this.shipStatusEl = el;
     }
     const hpRatio = maxHp > 0 ? hp / maxHp : 0;
-    this.shipStatusEl.style.color = hpRatio < 0.3 ? '#ff8a8a' : '#cfe8ff';
+    const alert = this.shipAlertTimer > 0;
+    this.shipStatusEl.style.color = alert ? '#ff5b5b' : hpRatio < 0.3 ? '#ff8a8a' : '#cfe8ff';
+    this.shipStatusEl.style.textShadow = alert
+      ? '0 1px 3px #000, 0 0 14px rgba(255,60,60,0.9)'
+      : '0 1px 3px #000, 0 0 8px rgba(60,120,200,0.4)';
     this.shipStatusEl.textContent =
-      `舰船 ${Math.ceil(hp)}/${Math.ceil(maxHp)}　油量 ${Math.ceil(fuel)}/${Math.ceil(fuelMax)}${sailing ? '　· 航行中' : ''}`;
+      `${alert ? '⚠ ' : ''}舰船 ${Math.ceil(hp)}/${Math.ceil(maxHp)}　油量 ${Math.ceil(fuel)}/${Math.ceil(fuelMax)}${sailing ? '　· 航行中' : ''}`;
+  }
+
+  /** ★ 舰船受击：明显 UI 报警（顶部大横幅 + 全屏红晕脉冲 + 状态条闪红）——
+   *  持续 ~1.8s（摧毁时 3s）；每次受击刷新计时与伤害数字。
+   *  由 WorldMode 订阅 `ship_damaged` 事件调用；与"敌袭预警横幅"分层（top 不同）。 */
+  triggerShipAlert(damage: number, destroyed = false): void {
+    if (!this.shipAlertEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:66px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:70', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
+        'font-size:22px', 'font-weight:bold', 'letter-spacing:3px',
+        'padding:8px 26px', 'border-radius:6px',
+        'background:rgba(60,6,6,0.72)', 'border:2px solid rgba(255,70,70,0.85)',
+        'color:#ffd9d0', 'text-shadow:0 2px 4px #000, 0 0 16px rgba(255,60,50,0.85)',
+      ].join(';');
+      document.body.appendChild(el);
+      this.shipAlertEl = el;
+    }
+    if (!this.shipVignetteEl) {
+      const v = document.createElement('div');
+      v.style.cssText = [
+        'position:fixed', 'inset:0', 'z-index:69', 'pointer-events:none',
+        'box-shadow:inset 0 0 140px rgba(255,30,30,0.85)',
+      ].join(';');
+      document.body.appendChild(v);
+      this.shipVignetteEl = v;
+    }
+    this.shipAlertTimer = destroyed ? 3.0 : 1.8;
+    this.shipAlertEl.textContent = destroyed
+      ? '⚠ 舰船已被摧毁！'
+      : `⚠ 舰船正在遭受攻击！  -${Math.ceil(damage)}`;
+    this.shipAlertEl.style.display = 'block';
+    this.shipVignetteEl.style.display = 'block';
+    this.shipAlertEl.style.opacity = '1';
+    this.shipVignetteEl.style.opacity = '0.75';
   }
 
   /** ★ 敌袭预警/战报横幅（顶部居中，打字机感描边；null = 隐藏）
@@ -689,6 +747,12 @@ export class WorldUIManager extends BaseInteractionUI {
     this.dockBtn = null;
     this.shipStatusEl?.remove();
     this.shipStatusEl = null;
+    // ★ 舰船受击报警 DOM（横幅 + 红晕）跨局防残留
+    this.shipAlertEl?.remove();
+    this.shipAlertEl = null;
+    this.shipVignetteEl?.remove();
+    this.shipVignetteEl = null;
+    this.shipAlertTimer = 0;
     this.assaultBannerEl?.remove();
     this.assaultBannerEl = null;
     this.enemyScaleEl?.remove();

@@ -7,6 +7,7 @@
 // ship.hp <= 0 = 真结局（结算/复活由 WorldMode 弹层接管）。
 
 import type { GameSession } from '../../core/Session';
+import { eventBus } from '../../core/EventBus';
 
 /** ★ 结算舰船伤害（返回实际扣血量；护盾→装甲→HP，截断到 0） */
 export function applyShipDamage(session: GameSession, amount: number): number {
@@ -21,6 +22,19 @@ export function applyShipDamage(session: GameSession, amount: number): number {
   if (d > 0) d = Math.max(1, d - s.armor);
   s.hp = Math.max(0, s.hp - d);
   return d;
+}
+
+/** ★ 舰船受伤统一入口（2026-09-14）：结算 + 发 `ship_damaged` 事件——
+ *  所有伤害来源（敌人近战/代理近战/油尽惩罚…）都走这里，UI 报警只订阅事件。 */
+export function damageShip(session: GameSession, amount: number): number {
+  const actual = applyShipDamage(session, amount);
+  if (actual > 0) {
+    eventBus.emit('ship_damaged', {
+      damage: actual,
+      destroyed: isShipDestroyed(session),
+    });
+  }
+  return actual;
 }
 
 /** 舰船是否已毁（真结局条件） */

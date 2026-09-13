@@ -16,12 +16,11 @@ import * as THREE from 'three';
 import { EntityBase } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { GameSession } from '../core/Session';
-import { applyShipDamage, isShipDestroyed } from '../systems/ship/ShipState';
+import { damageShip } from '../systems/ship/ShipState';
 import { RasterMap } from '../services/map/RasterMap';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { FxRendererBase } from '../services/render/FxRendererBase';
 import { ShipRenderer } from './ship/ShipRenderer';
-import { eventBus } from '../core/EventBus';
 import type { InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 import travelConfig from '../config/travel.json';
@@ -298,16 +297,10 @@ export class ShipEntity extends EntityBase {
     sr?.setThrottle?.(0); // 停靠：喷口熄灭
   }
 
-  /** ★ 受击：舰船结算（护盾→装甲→HP）；同步实体血量 + 发事件。
+  /** ★ 受击：舰船结算（护盾→装甲→HP）；同步实体血量 + `ship_damaged` 事件由 damageShip 统一发。
    *  不调用 super（避免走通用 killed/onDeath 流程） */
   override onTakeDamage(dmg: number, _source: EntityBase | null): void {
-    const actual = applyShipDamage(this.session, dmg);
+    damageShip(this.session, dmg);
     this.hp = this.session.ship.hp;
-    if (actual > 0) {
-      eventBus.emit('ship_damaged', {
-        damage: actual,
-        destroyed: isShipDestroyed(this.session),
-      });
-    }
   }
 }

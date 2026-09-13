@@ -27,7 +27,7 @@ import type { EntityBase } from '../entity/EntityBase';
 import { Player } from '../entity/Player';
 import { ShipEntity, SHIP_LANDED_HEIGHT } from '../entity/ShipEntity';
 import { resolveDockSpawn } from '../services/ship/DockResolver';
-import { applyShipDamage, isShipDestroyed, reviveShip } from '../systems/ship/ShipState';
+import { applyShipDamage, damageShip, isShipDestroyed, reviveShip } from '../systems/ship/ShipState';
 import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
@@ -493,6 +493,8 @@ export class WorldMode implements IGameMode {
   private sentinelSummonUnsub?: () => void;
   /** ★ 出击槽池变动订阅（部署/卸载/替换 → 友军生成/回收；enter 注册 / exit 移除） */
   private deploymentUnsub?: () => void;
+  /** ★ 舰船受击订阅（UI 明显报警：横幅+红屏+状态条闪红；天气来自 damageShip 事件） */
+  private shipDamagedUnsub?: () => void;
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 位置上帧快照 + 上次溅波时刻） */
   private waterPrev = new Map<
     CharacterBase,
@@ -961,6 +963,12 @@ export class WorldMode implements IGameMode {
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
       this.spawnDroneNearPlayer();
+    });
+    // ★ 舰船受击（damageShip 统一发）：明显 UI 报警 + 舰船头顶飘伤害数字
+    this.shipDamagedUnsub = eventBus.on('ship_damaged', (payload) => {
+      this.worldUIManager?.triggerShipAlert(payload.damage, payload.destroyed);
+      const sp = this.ship?.position;
+      if (sp) this.showFloatingAt(sp.x, sp.y + 3.2, sp.z, `-${payload.damage}`, 'crit');
     });
     // ★ 祖宗放置：使用「祖宗」→ 从枪口沿准星发射祖宗弹，命中/落地生成站桩友军
     this.sentinelSummonUnsub = eventBus.on('sentinel_summon', () => {
@@ -1470,6 +1478,8 @@ export class WorldMode implements IGameMode {
     this.sentinelSummonUnsub = undefined;
     this.deploymentUnsub?.();
     this.deploymentUnsub = undefined;
+    this.shipDamagedUnsub?.();
+    this.shipDamagedUnsub = undefined;
     for (const d of this.drones) d.dispose();
     for (const s of this.sentinelShots) s.proj.dispose();
     this.sentinelShots = [];
@@ -1939,7 +1949,7 @@ export class WorldMode implements IGameMode {
     const s = this.session;
     if (!s) return;
     if (targetKind === AGENT_TARGET_SHIP) {
-      if (!isShipDestroyed(s)) applyShipDamage(s, dmg);
+      if (!isShipDestroyed(s)) damageShip(s, dmg);
       return;
     }
     if (!this.player.dead) applyDamage(dmg, AGENT_SOURCE, this.player);
@@ -3281,6 +3291,10 @@ export class WorldMode implements IGameMode {
   private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
     const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
     applyDamage(dmg, from, target); // 事件统一在 applyDamage
+    // ★ 眩晕（2026-09-14 用户定调）：激光命中 → 眩晕 1s；眩晕结束后 2s 免疫（防锁死）
+    if (target instanceof EnemyBase && target.hp > 0 && target.applyStun()) {
+      this.showFloatingAt(target.position.x, target.position.y + 2.2, target.position.z, '眩晕', 'normal');
+    }
   }
 
   /** ★ 祖宗自动挖矿（无敌人时）：随机在 铁（耗尽原石晶体）/ 水 / 地面 三类中找点，
@@ -3402,18 +3416,41 @@ export class WorldMode implements IGameMode {
     }
     p.y += Math.max(targetY - p.y, -25 * dt);
     if (p.y <= targetY + 0.05) {
-      // ★ 玩家掉坑死亡：补发 killed 事件 → 计入遗物"每次死亡"统计（meta.deaths）
-      //   （血量归零路径经由 onTakeDamage 自发 killed；掉坑是环境死亡，需手动补发）
       if (e === this.player) {
+        // ★ 玩家掉坑死亡：补发 killed 事件 → 计入遗物"每次死亡"统计（meta.deaths）
+        //   （血量归零路径经由 onTakeDamage 自发 killed；掉坑是环境死亡，需手动补发）
         eventBus.emit('killed', { target: e, source: null });
-      }
-      e.onDeath(null);
-      if (e !== this.player) {
-        // 杂兵坠坑死亡：从列表移除
-        const idx = this.enemies.indexOf(e as EnemyBase);
-        if (idx !== -1) this.enemies.splice(idx, 1);
+        e.onDeath(null);
+      } else {
+        // ★ 敌人掉坑减半血（2026-09-14 用户定调）：按最大生命 50% 直接扣血（不吃防御/闪避）；
+        //   扣死 → onTakeDamage 自发 killed（掉落/统计走统一管线并移除）；
+        //   存活 → 放回坑沿最近可站点，防永久卡坑底
+        e.onTakeDamage(Math.max(1, Math.round(e.maxHp * 0.5)), null);
+        if (e.hp > 0) this.relocateFromPit(e);
       }
       // 玩家：不在此处传送——镜头留在死亡地点，复活时统一回出生点（updatePlayerRespawn）
     }
+  }
+
+  /** ★ 敌人掉坑幸存：放回坑沿最近可站点（8 向 × 1.5~8m 搜索；
+   *  找不到落点（大坑/孤岛）→ 补刀结算，不留卡坑单位） */
+  private relocateFromPit(e: CharacterBase): void {
+    const p = e.position;
+    for (let r = 1.5; r <= 8; r += 0.75) {
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const x = p.x + Math.cos(a) * r;
+        const z = p.z + Math.sin(a) * r;
+        const td = this.raster.tileDefAt(x, z);
+        if (td.genRole === 'pit' || td.genRole === 'liquid') continue;
+        const y = this.raster.surfaceHeightAt(x, z);
+        if (y < -1.2) continue;
+        p.x = x;
+        p.z = z;
+        p.y = y;
+        return;
+      }
+    }
+    e.onTakeDamage(e.hp, null); // 无处可放 → 补刀（killed 由 onTakeDamage 统一发）
   }
 }

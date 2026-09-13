@@ -51,6 +51,10 @@ export const SWARM = {
   ATTACK_CD_SPAN: 0.4,
   /** 危险地形（坑）前瞻距离（米；仅非流场方向使用） */
   HAZARD_PROBE: 1.8,
+  /** ★ 2026-09-14 敌群地形限制：深水判定（水深 > 此值视为不可涉水） */
+  DEEP_WATER: 0.8,
+  /** ★ 高台立面陡升阈值（米；配合"不延续"判定区分墙与插值坡） */
+  MOVE_STEP_MAX: 0.6,
 
   // ---- P2：流场 / 攻击槽 / 警戒场 ----
   /** 流场重建频率（Hz） */
@@ -185,6 +189,19 @@ export class SwarmSystem {
         this.removeAgent(i);
         hooks.onAgentKilled?.(mobIndex, kx, ky, kz);
         continue;
+      }
+      // ★ 掉坑（深坑底）：代理直接结算死亡（实体层掉半血并爬回；代理简化——防永久卡坑底）
+      if (raster) {
+        if (
+          raster.tileDefAt(p.x[i], p.z[i]).genRole === 'pit' &&
+          raster.surfaceHeightAt(p.x[i], p.z[i]) < -1.2
+        ) {
+          const mobIndex = p.mobIndex[i];
+          const kx = p.x[i], ky = p.y[i], kz = p.z[i];
+          this.removeAgent(i);
+          hooks.onAgentKilled?.(mobIndex, kx, ky, kz);
+          continue;
+        }
       }
       // ---- 回收（距玩家/舰船都超 L1_RADIUS） ----
       const dpx = p.x[i] - hooks.playerX, dpz = p.z[i] - hooks.playerZ;
@@ -402,31 +419,47 @@ export class SwarmSystem {
     p.facingBack[i] = dot > 0.25 ? 1 : 0;
   }
 
-  /** 移动积分（流场方向跳过坑探测；非流场方向保留单点避坑 + 人群分离） */
+  /** 移动积分（危险地形绕行：坑/深水/高台立面，无论流场还是直行都探测） */
   private move(i: number, dt: number): void {
     const p = this.pool;
     let dx = p.dirX[i], dz = p.dirZ[i];
     if (dx !== 0 || dz !== 0) {
-      if (!p.fromFlow[i]) {
-        // ---- 危险地形（坑）绕行：前瞻探测 → 转向 ±90°，缓存 0.4s ----
-        p.hazardTimer[i] -= dt;
-        const raster = RasterMap.current;
-        const probe = SWARM.HAZARD_PROBE;
-        const danger = (ux: number, uz: number): boolean => {
-          if (!raster) return false;
-          const hx = p.x[i] + ux * probe, hz = p.z[i] + uz * probe;
-          return raster.tileDefAt(hx, hz).genRole === 'pit' && (raster.surfaceHeightAt(hx, hz) < -1.2);
-        };
-        if (danger(dx, dz)) {
-          if (p.hazardTimer[i] <= 0) {
-            const a = Math.atan2(dz, dx) + (p.phase[i] < 0.5 ? Math.PI / 2 : -Math.PI / 2);
-            p.safeDirX[i] = Math.cos(a);
-            p.safeDirZ[i] = Math.sin(a);
-            p.hazardTimer[i] = 0.4;
+      // ---- 危险地形绕行：前瞻探测 → 转向 ±90°，缓存 0.4s ----
+      //   ★ 2026-09-14：探测常态开启（原先只探非流场方向）——流场也可能指向深水/立面；
+      //   深水（敌人不涉水）与高台立面（只能走插值坡）一并阻挡
+      p.hazardTimer[i] -= dt;
+      const raster = RasterMap.current;
+      const probe = SWARM.HAZARD_PROBE;
+      const here = raster ? raster.surfaceHeightAt(p.x[i], p.z[i]) : 0;
+      const danger = (ux: number, uz: number): boolean => {
+        if (!raster) return false;
+        const hx = p.x[i] + ux * probe, hz = p.z[i] + uz * probe;
+        const role = raster.tileDefAt(hx, hz).genRole;
+        const h = raster.surfaceHeightAt(hx, hz);
+        if (role === 'pit' && h < -1.2) return true;
+        if (role === 'liquid' && h < -SWARM.DEEP_WATER) return true; // 深水
+        // 高台立面：0.45m 陡升 > 阈值且 1.2m 无同斜率延续 → 墙（插值坡放行）
+        const hn = raster.surfaceHeightAt(p.x[i] + ux * 0.45, p.z[i] + uz * 0.45);
+        const hf = raster.surfaceHeightAt(p.x[i] + ux * 1.2, p.z[i] + uz * 1.2);
+        const rn = hn - here, rf = hf - hn;
+        return rn > SWARM.MOVE_STEP_MAX && rf < rn * 0.5;
+      };
+      if (danger(dx, dz)) {
+        if (p.hazardTimer[i] <= 0) {
+          // 两侧 ±90° 优先选不危险的一侧（避免"绕开墙却撞进水里"）
+          const base = Math.atan2(dz, dx);
+          const offs = p.phase[i] < 0.5 ? [Math.PI / 2, -Math.PI / 2] : [-Math.PI / 2, Math.PI / 2];
+          let a = base + offs[0];
+          for (const off of offs) {
+            const c = base + off;
+            if (!danger(Math.cos(c), Math.sin(c))) { a = c; break; }
           }
-          dx = p.safeDirX[i];
-          dz = p.safeDirZ[i];
+          p.safeDirX[i] = Math.cos(a);
+          p.safeDirZ[i] = Math.sin(a);
+          p.hazardTimer[i] = 0.4;
         }
+        dx = p.safeDirX[i];
+        dz = p.safeDirZ[i];
       }
       const sp = p.curSpeed[i] * dt;
       p.x[i] += dx * sp;
