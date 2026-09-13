@@ -33,6 +33,7 @@ import { DroneEntity } from '../entity/DroneEntity';
 import { BaseScene } from '../ui/base/BaseScene';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
+import { createButton } from '../ui/components/Button';
 import baseRoomsJson from '../config/baseRooms.json';
 import { droneFollowOffset } from '../services/fx/DroneFormation';
 import { CameraController } from '../services/camera/CameraController';
@@ -2907,7 +2908,7 @@ export class WorldMode implements IGameMode {
     };
     mk('下船', () => this.exitShipInterior());
     mk('起飞', () => { this.exitShipInterior(); this.tryBoardShip(); });
-    mk('返回基地', () => { this.exitShipInterior(); this.onReturn?.(); });
+    mk('返回基地', () => this.openReturnConfirm()); // ★ 二次确认，防点错
     mk('加工台', () => this.openShipCrafting());
     document.body.appendChild(bar);
     this.interiorButtons = bar;
@@ -2916,6 +2917,40 @@ export class WorldMode implements IGameMode {
   private removeInteriorButtons(): void {
     this.interiorButtons?.remove();
     this.interiorButtons = null;
+  }
+
+  /** ★ 返回基地确认面板（舰内按钮触发；确认后才出舱返航） */
+  private openReturnConfirm(): void {
+    const content = document.createElement('div');
+    content.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 36px;color:#eaf6ff;font-size:14px;text-align:center;';
+    const title = document.createElement('div');
+    title.textContent = '返回基地？';
+    title.style.cssText = 'font-size:19px;font-weight:bold;color:#8ac8ff;letter-spacing:2px;';
+    const body = document.createElement('div');
+    body.textContent = '将立即结束本次出击，启程返回基地（本日战斗进度不会保留）。';
+    body.style.cssText = 'color:#a8c4e0;line-height:1.7;';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:14px;';
+    const cancel = createButton({
+      label: '取消', style: 'secondary', size: 'md',
+      onClick: () => this.worldUIManager?.closePanel('interior-return'),
+    });
+    const confirm = createButton({
+      label: '确认返航', style: 'danger', size: 'md',
+      onClick: () => {
+        this.worldUIManager?.closePanel('interior-return');
+        this.exitShipInterior();
+        this.onReturn?.();
+      },
+    });
+    row.append(cancel, confirm);
+    content.append(title, body, row);
+    this.worldUIManager?.openPanel({
+      id: 'interior-return',
+      title: '返回基地',
+      render: () => content,
+      onClose: () => {},
+    });
   }
 
   /** ★ 舰内加工台（懒建覆盖层；与基地加工台同一实现） */
@@ -2933,6 +2968,7 @@ export class WorldMode implements IGameMode {
     if (!this.shipInterior) return;
     this.removeInteriorButtons();
     this.craftingOverlay?.hide();
+    this.worldUIManager?.closePanel('interior-return');
     this.shipInterior.dispose();
     this.shipInterior = null;
     this.interiorScene = null; // 场景随房间一并废弃（下次重建）
