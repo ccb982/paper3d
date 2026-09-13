@@ -227,9 +227,9 @@
     },
     {
       "id": "yuandeng",
-      "name": "圆凳",
+      "name": "逻各斯的圆凳",
       "type": "equip",
-      "description": "神秘的圆凳载具：装备后维维美（连同身上装备）躺乘其上滑行。移动速度大幅提升，可爬坡、可过坑。",
+      "description": "逻各斯的圆凳载具：装备后维维美（连同身上装备）躺乘其上滑行（躺姿不挡准星）。移动速度大幅提升，可爬坡、可过坑。",
       "maxStack": 1,
       "stats": { "vehicle": true, "moveSpeedPct": 1.0 },
       "combat": {
@@ -238,7 +238,7 @@
         "asset": "/fx/圆凳.ftx3.gz",
         "scale": 0.9,
         "offsetX": 0,
-        "offsetY": 0.02,
+        "offsetY": 0,
         "offsetZ": 0
       },
       "color": { "h": 0.12, "s": 0.5, "l": 0.55 },

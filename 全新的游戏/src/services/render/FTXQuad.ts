@@ -12,8 +12,10 @@ import * as THREE from 'three';
 import { FxRendererBase } from './FxRendererBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
 
-/** 滚转临时对象（避免每帧分配） */
+/** 姿态临时对象（避免每帧分配） */
 const _rollQ = new THREE.Quaternion();
+const _lieQ = new THREE.Quaternion();
+const _LOCAL_Y = new THREE.Vector3(0, 1, 0);
 const _LOCAL_Z = new THREE.Vector3(0, 0, 1);
 
 const VERTEX_SHADER = /* glsl */ `
@@ -139,8 +141,10 @@ export class FTXQuad extends FxRendererBase {
   private anchorBottom = true;
   /** ★ 底部锚点抬升覆写（世界单位；null = 默认 baseScale.y/2；载具躺乘压低中心用） */
   private anchorLift: number | null = null;
-  /** ★ 平面内整体滚转（弧度；绕贴片法线，相机面内躺倒用） */
+  /** ★ 平面内整体滚转（弧度；绕贴片法线，横过来用） */
   private rollRad = 0;
+  /** ★ 侧躺下沉角（弧度；绕贴片自身纵轴 → 横躺后贴向地面，带透视深度） */
+  private lieRad = 0;
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
     this.setScale(baseSize, baseSize * this._texAspect);
@@ -162,9 +166,15 @@ export class FTXQuad extends FxRendererBase {
     this.anchorLift = v;
   }
 
-  /** ★ 平面内滚转（弧度；setBillboard 时绕贴片法线应用；0 = 还原站立） */
+  /** ★ 平面内滚转（弧度；setBillboard 时绕贴片法线应用；0 = 还原） */
   setRoll(rad: number): void {
     this.rollRad = rad;
+  }
+
+  /** ★ 侧躺下沉角（弧度；setBillboard 时绕贴片自身纵轴应用；
+   *  横过来后 -90° = 完全平躺（正面向上）、0 = 仍站立） */
+  setLie(rad: number): void {
+    this.lieRad = rad;
   }
 
   constructor(
@@ -215,6 +225,11 @@ export class FTXQuad extends FxRendererBase {
     scene.add(this.mesh);
   }
 
+  /** ★ 贴片 mesh（子节点挂载 / 载具读取宿主姿态用；构造后恒非空） */
+  get meshObject(): THREE.Mesh | null {
+    return this.mesh;
+  }
+
   override render(state: { frameIndex: number }, fluidTexture?: THREE.Texture | null): void {
     const pair = this.source.getFramePair(state.frameIndex);
     if (!pair) return;
@@ -244,9 +259,13 @@ export class FTXQuad extends FxRendererBase {
       dir.normalize();
       this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
     }
-    // ★ 平面内滚转（躺倒）：绕贴片自身法线（局部 +Z）旋转 → 相机面内旋转
+    // ★ 姿态：先平面内横倒（绕局部 +Z），再绕身体纵轴侧躺下沉（局部 +Y）
+    //   → 纹理横过来的同时有真实深度（贴向凳面），不是纯屏幕面内旋转
     if (this.rollRad) {
       this.mesh.quaternion.multiply(_rollQ.setFromAxisAngle(_LOCAL_Z, this.rollRad));
+    }
+    if (this.lieRad) {
+      this.mesh.quaternion.multiply(_lieQ.setFromAxisAngle(_LOCAL_Y, this.lieRad));
     }
     this.applyFlip();
   }

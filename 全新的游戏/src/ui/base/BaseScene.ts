@@ -94,9 +94,8 @@ export class BaseScene {
   private droneAllies: { view: DroneCompositeRender; anim: FrameAnimatorBase; index: number }[] = [];
   private droneAssetSrc: FrameAssetSource | null = null;
   private itemManagerRef: ItemManager | null = null;
-  /** ★ 载具乘骑（圆凳）与基地移速乘数（换装时刷新） */
+  /** ★ 载具乘骑（逻各斯的圆凳）：姿态 + 移速乘数（换装时 setStats 刷新） */
   private vehicleRide: VehicleRide | null = null;
-  private rideSpeedMul = 1;
 
   // ---- 相机（跟随 + 缩放） ----
   private camera: THREE.PerspectiveCamera | null = null;
@@ -144,11 +143,11 @@ export class BaseScene {
       if (hostMesh) {
         this.equip = new EquipmentLayer(scene, hostMesh, () => '前');
         void this.equip.apply(slots);
-        // ★ 载具乘骑（圆凳）：躺乘姿态 + 载具贴片（基地内与游戏内同表现）
-        this.vehicleRide = new VehicleRide(scene, hostMesh, this.quad, 2.4);
+        // ★ 载具乘骑（逻各斯的圆凳）：基地内与游戏内同一套表现
+        this.vehicleRide = new VehicleRide(scene, this.quad, 2.4);
       }
       this.syncDroneAlly(slots);
-      this.syncVehicleRide();
+      this.syncVehicle();
     }
 
     // 加工站提示条（靠近加工站房间时显示）
@@ -211,14 +210,13 @@ export class BaseScene {
     const slots = this.currentSlots();
     void this.equip?.apply(slots);
     this.syncDroneAlly(slots);
-    this.syncVehicleRide();
+    this.syncVehicle();
   }
 
-  /** ★ 载具状态同步：躺乘姿态 + 基地移速乘数（统计只在换装时算一次） */
-  private syncVehicleRide(): void {
+  /** ★ 载具状态同步（换装时算一次：姿态 + 移速乘数都在 VehicleRide 内） */
+  private syncVehicle(): void {
     const stats = this.itemManagerRef?.getEquipmentStats();
-    this.rideSpeedMul = 1 + (stats?.moveSpeedPct ?? 0);
-    this.vehicleRide?.setActive(stats?.vehicle ?? false);
+    this.vehicleRide?.setStats(stats ?? { vehicle: false, moveSpeedPct: 0 });
   }
 
   /** 固定基准 = (0, 7.4, 16.5) 看向大厅中部；实际机位由跟随更新接管 */
@@ -500,7 +498,7 @@ export class BaseScene {
     if (this.quad) {
       const prevX = this.charPos.x;
       if (this.moving) {
-        const spd = MOVE_SPEED * this.rideSpeedMul; // ★ 载具移速提升
+        const spd = MOVE_SPEED * (this.vehicleRide?.moveSpeedMul ?? 1); // ★ 载具移速提升
         this.charPos.x += (mx / len) * spd * dt;
         this.charPos.z += (mz / len) * spd * dt;
       }

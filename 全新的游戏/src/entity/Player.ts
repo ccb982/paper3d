@@ -14,10 +14,8 @@ import { createInputActions, type InputActions } from '../platform/input/InputAc
 import type { CameraFrame } from '../services/camera/CameraController';
 
 export class Player extends CharacterBase {
-  /** ★ 载具乘骑播放（圆凳）：躺乘姿态 + 载具贴片跟随 */
+  /** ★ 载具乘骑（逻各斯的圆凳）：姿态/贴片/移速乘数都在此（装备 stats.vehicle 驱动） */
   readonly vehicleRide: VehicleRide;
-  /** ★ 是否在乘骑载具（装备 stats.vehicle 决定；爬坡/过坑读取） */
-  rideVehicle = false;
 
   constructor(
     em: EntityManager,
@@ -42,22 +40,26 @@ export class Player extends CharacterBase {
     // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）→ 2.0（2026-09-06 用户：纹理大小增大一倍；
     //   仅视觉放大，碰撞体仍为 1.0 胶囊）
     this.applyRenderScale(2.0);
-    // ★ 载具乘骑播放（基准尺寸 = 贴片世界高 2.0）
-    this.vehicleRide = new VehicleRide(
-      scene,
-      this.rendererMesh ?? new THREE.Object3D(),
-      this.renderer as FTXQuad,
-      2.0,
-    );
+    // ★ 载具乘骑（逻各斯的圆凳；基准尺寸 = 贴片世界宽 2.0）
+    this.vehicleRide = new VehicleRide(scene, this.renderer as FTXQuad, 2.0);
   }
 
-  /** ★ 载具模式开关（equipment 属性变化时由 WorldMode 调用）：
-   *  躺乘姿态 + 无视地形落差（爬坡/过坑；过坑的贴地桥接在 WorldMode.clampCharacter） */
-  setVehicleMode(on: boolean): void {
-    if (on === this.rideVehicle) return;
-    this.rideVehicle = on;
-    this.climbAnyTerrain = on;
-    this.vehicleRide.setActive(on);
+  /** ★ 是否在乘骑载具（爬坡/过坑读取；状态唯一真源在 VehicleRide） */
+  get rideVehicle(): boolean {
+    return this.vehicleRide.riding;
+  }
+
+  /** ★ 应用装备统计（WorldMode 换装时调用）：
+   *  躺乘姿态 + 移速乘数（VehicleRide）；爬坡/过坑 = 无视地形落差
+   *  （过坑的贴地桥接在 WorldMode.clampVehicle） */
+  applyVehicleStats(stats: { vehicle: boolean; moveSpeedPct: number }): void {
+    this.climbAnyTerrain = stats.vehicle;
+    this.vehicleRide.setStats(stats);
+  }
+
+  /** ★ 移速乘数（含载具加成；调用方 × 基础移速） */
+  get moveSpeedMul(): number {
+    return this.vehicleRide.moveSpeedMul;
   }
 
   override dispose(): void {
@@ -123,8 +125,10 @@ export class Player extends CharacterBase {
     if (this.dead || this.controlLocked) {
       if (!Player._deadInput) Player._deadInput = createInputActions();
       super.onUpdate(dt, Player._deadInput, cameraFrame);
-      return;
+    } else {
+      super.onUpdate(dt, input, cameraFrame);
     }
-    super.onUpdate(dt, input, cameraFrame);
+    // ★ 躺乘恒正面朝上（不播背面纹理：躺姿就是为了不挡准星，背面翻转会翻走构图）
+    if (this.rideVehicle) this.anim?.setFacing('前');
   }
 }

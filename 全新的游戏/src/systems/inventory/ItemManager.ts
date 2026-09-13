@@ -313,8 +313,9 @@ export class ItemManager {
   }
 
   /** ★ 局内装备临时属性：遍历出击槽汇总各装备 stats（卸载/换装即自动消失，与遗物永久加成区分）
-   *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen/crit系列
+   *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen/crit系列/moveSpeedPct
    *   取最高：damageReduction（方舟"庇护"同名效果取最高，不叠加）
+   *   或：vehicle（任一装备为载具即真；消费方 VehicleRide）
    *   proc：healProc（取最后一件配置者；装备间不叠） */
   getEquipmentStats(): EquipmentStatsTotal {
     const out: EquipmentStatsTotal = {

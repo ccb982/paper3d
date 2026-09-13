@@ -73,15 +73,16 @@ import { rollDrops } from '../services/item/ItemDropPipeline';
 /** ★ 友军物品 id：部署生成 / 损毁替换为残骸（维修配方在舰船加工台） */
 const DRONE_ITEM = 'kaltsit_drone';
 const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
-/** ★ 玩家子弹伤害 = max(下限, 角色攻击力 × 系数)；遗物/装备加成的攻击力实时生效。
- *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
-/** 主角基础移速（m/s）；装备移速加成（moveSpeedPct）在此之上乘算 */
+// ---- ★ 载具（逻各斯的圆凳）：移速 / 爬坡 / 过坑 ----
+/** 主角基础移速（m/s）；装备移速加成（VehicleRide.moveSpeedMul）在此之上乘算 */
 const PLAYER_MOVE_SPEED = 5.0;
-/** 载具过坑：贴地桥接采样半径（米）——脚下取邻域最高面，骑过坑洞不沉底 */
+/** 过坑：贴地桥接采样半径（米）——脚下取邻域最高面，骑过坑洞不沉底 */
 const VEHICLE_BRIDGE_RADIUS = 1.6;
-/** 载具爬坡上行速度（m/s；普通角色 7.5） */
+/** 爬坡上行速度（m/s；普通角色 7.5） */
 const VEHICLE_CLIMB_SPEED = 24;
 
+/** ★ 玩家子弹伤害 = max(下限, 角色攻击力 × 系数)；遗物/装备加成的攻击力实时生效。
+ *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
 const PLAYER_BULLET_MIN_DAMAGE = 10;
 const PLAYER_BULLET_ATK_RATIO = 1.0;
 /** ★ 主角基础攻击间隔（秒）：实际间隔 = 本值 × 100 / (100 + 攻击速度点数)（方舟攻速口径） */
@@ -405,10 +406,10 @@ export class WorldMode implements IGameMode {
   private sentinelSummonUnsub?: () => void;
   /** ★ 出击槽池变动订阅（部署/卸载/替换 → 友军生成/回收；enter 注册 / exit 移除） */
   private deploymentUnsub?: () => void;
-  /** ★ 角色入水检测（每角色上一帧：是否水面 + 高度/位置 + 上次溅波时刻） */
+  /** ★ 角色入水检测（每角色上一帧：是否水面 + 位置上帧快照 + 上次溅波时刻） */
   private waterPrev = new Map<
     CharacterBase,
-    { liquid: boolean; y: number; rippleMs: number }
+    { liquid: boolean; y: number; x: number; z: number; rippleMs: number }
   >();
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
@@ -1580,14 +1581,18 @@ export class WorldMode implements IGameMode {
     // ★ 复用记录对象（每帧 set 新对象会制造 GC 压力——60+ 实体每帧一个）
     let rec = this.waterPrev.get(e);
     if (!rec) {
-      rec = { liquid, y: p.y, rippleMs: 0 };
+      rec = { liquid, y: p.y, x: p.x, z: p.z, rippleMs: 0 };
       this.waterPrev.set(e, rec);
       return;
     }
     const prevLiquid = rec.liquid;
     const prevY = rec.y;
+    const prevX = rec.x;
+    const prevZ = rec.z;
     rec.liquid = liquid;
     rec.y = p.y;
+    rec.x = p.x;
+    rec.z = p.z;
     // 走进水面（方块由非水 → 水，且脚底在水面以下 0.5m 内才算真正入水）
     if (liquid && !prevLiquid && p.y < 0.5) {
       rec.rippleMs = performance.now();
@@ -1601,13 +1606,14 @@ export class WorldMode implements IGameMode {
       sharedWaterMaterial.addImpact(p.x, p.z, Math.min(1.6, 0.7 + vy * 0.15));
       return;
     }
-    // ★ 在水中移动 → 脚下周期性泛波（速度越快越密/越强）
-    if (liquid && e.controller.moveSpeed > 0.3) {
+    // ★ 在水中移动 → 脚下周期性泛波（按【实际位移速度】：静止不泛波——载具圆凳悬停时不再高频溅波）
+    const movedSpeed = dt > 1e-3 ? Math.hypot(p.x - prevX, p.z - prevZ) / dt : 0;
+    if (liquid && movedSpeed > 0.3) {
       const now = performance.now();
-      const gap = 340 - e.controller.moveSpeed * 28; // 慢走 0.3s 一泛，快跑 ~0.2s
+      const gap = 340 - Math.min(movedSpeed, 10) * 28; // 慢走 0.3s 一泛，快跑 ~0.2s
       if (now - rec.rippleMs >= gap) {
         rec.rippleMs = now;
-        sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + e.controller.moveSpeed * 0.06));
+        sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + movedSpeed * 0.06));
       }
     }
   }
@@ -2038,10 +2044,10 @@ export class WorldMode implements IGameMode {
       },
       healProc: eq.healProc ?? undefined,
     }]);
-    // ★ 载具（圆凳）：躺乘姿态 + 移速大提升（爬坡/过坑见 CharacterBase.climbAnyTerrain /
-    //   clampCharacter 的贴地桥接）
-    this.player.controller.moveSpeed = PLAYER_MOVE_SPEED * (1 + eq.moveSpeedPct);
-    this.player.setVehicleMode(eq.vehicle);
+    // ★ 载具（逻各斯的圆凳）：躺乘姿态 + 移速大提升 + 爬坡/过坑
+    //   （姿态/乘数在 Player.applyVehicleStats → VehicleRide；过坑桥接见 clampVehicle）
+    this.player.applyVehicleStats(eq);
+    this.player.controller.moveSpeed = PLAYER_MOVE_SPEED * this.player.moveSpeedMul;
   }
 
   /** ★ 治疗转伤害（遥·幽隙栖萤 口径）：累计治疗量 ≥ 阈值 → 对半径内最多 N 名敌人结算
@@ -2516,27 +2522,32 @@ export class WorldMode implements IGameMode {
     );
   }
 
+  /** ★ 载具贴地（逻各斯的圆凳）：过坑——脚下取邻域最高面桥接（不沉坑、不判死）+ 快速爬坡 */
+  private clampVehicle(dt: number): void {
+    const p = this.player.position;
+    const r = VEHICLE_BRIDGE_RADIUS;
+    const targetY = Math.max(
+      this.raster.surfaceHeightAt(p.x, p.z),
+      this.raster.surfaceHeightAt(p.x + r, p.z),
+      this.raster.surfaceHeightAt(p.x - r, p.z),
+      this.raster.surfaceHeightAt(p.x, p.z + r),
+      this.raster.surfaceHeightAt(p.x, p.z - r),
+    );
+    const dy = targetY - p.y;
+    p.y += dy > 0 ? Math.min(dy, VEHICLE_CLIMB_SPEED * dt) : Math.max(dy, -30 * dt);
+  }
+
   private clampCharacter(e: CharacterBase, dt: number): void {
     // ★ 死亡等待复活：冻结在死亡地点（不贴地/不重复判死），复活时统一传送回出生点
     if (e.dead) return;
     // ★ 空中态不钉地形：真实跳跃（空格）让 y 由 CharacterBase 的抛物线结算，
     //   落地瞬间再回落贴地；否则会把跳起来的角色钉回地面、无法跃过 0.5 高差。
     if (e.controller.isAirborne()) return;
-    const p = e.position;
-    // ★ 载具（圆凳）：过坑——脚下取邻域最高面桥接（不沉坑、不判死）+ 快速爬坡
     if (e === this.player && this.player.rideVehicle) {
-      const r = VEHICLE_BRIDGE_RADIUS;
-      const targetY = Math.max(
-        this.raster.surfaceHeightAt(p.x, p.z),
-        this.raster.surfaceHeightAt(p.x + r, p.z),
-        this.raster.surfaceHeightAt(p.x - r, p.z),
-        this.raster.surfaceHeightAt(p.x, p.z + r),
-        this.raster.surfaceHeightAt(p.x, p.z - r),
-      );
-      const dy = targetY - p.y;
-      p.y += dy > 0 ? Math.min(dy, VEHICLE_CLIMB_SPEED * dt) : Math.max(dy, -30 * dt);
+      this.clampVehicle(dt);
       return;
     }
+    const p = e.position;
     const targetY = this.raster.surfaceHeightAt(p.x, p.z);
     // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
     //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须
