@@ -13,6 +13,7 @@
 //   onKill          击杀敌人
 //   onDamageDealt   造成伤害（target 非玩家）
 //   onDamageTaken   受到伤害（target 是玩家）
+//   timedItem       局内周期补给（WorldMode 计时：如祖宗发射器每分钟补 1，多件更快）
 //
 // 新增遗物效果 = 注册一个处理器 + 配置引用类型；核心（Session/WorldMode/main）零改动。
 // 分发器（eachOwnedRelic / relicGrantsFor / dispatchRelicEvent）由各时机调用点使用。
@@ -78,6 +79,13 @@ export type RelicEventHook =
   | 'onDamageDealt'
   | 'onDamageTaken';
 
+/** ★ 周期补给条目（timedItem 钩子返回；interval 已按件数缩减） */
+export interface RelicTimedGrant {
+  itemId: string;
+  /** 间隔（秒） */
+  interval: number;
+}
+
 /** 遗物效果处理器（只实现关心的钩子） */
 export interface RelicEffectHandler {
   /** 属性管线：由 computeRelicModifiers 调用 */
@@ -96,6 +104,8 @@ export interface RelicEffectHandler {
   onDamageDealt?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
   /** 受到伤害 */
   onDamageTaken?(ctx: RelicRunContext, cfg: RelicEffectConfig, ev: RelicEventPayload): void;
+  /** ★ 局内周期补给（WorldMode 每次出击结算一次；interval 已按拥有件数缩减） */
+  timedItem?(ctx: RelicRunContext, cfg: RelicEffectConfig): RelicTimedGrant | void;
 }
 
 /** 全局效果注册表：type → 处理器 */
@@ -133,6 +143,23 @@ export function relicGrantsFor(
     }
   });
   return out;
+}
+
+/** ★ 收集局内周期补给（出击时结算；interval 已按件数缩减；同 itemId 取最短间隔） */
+export function relicTimedFor(
+  session: GameSession,
+  configs: Record<string, RelicItemConfig>,
+): RelicTimedGrant[] {
+  const byItem = new Map<string, number>();
+  eachOwnedRelic(session, configs, (cfg, count) => {
+    for (const eff of cfg.effects ?? []) {
+      const g = relicEffectRegistry.get(eff.type)?.timedItem?.({ session, count }, eff);
+      if (!g) continue;
+      const prev = byItem.get(g.itemId);
+      if (prev === undefined || g.interval < prev) byItem.set(g.itemId, g.interval);
+    }
+  });
+  return [...byItem].map(([itemId, interval]) => ({ itemId, interval }));
 }
 
 /** 派发无返回值的时点事件（天数/死亡/击杀/伤害） */
@@ -184,6 +211,26 @@ relicEffectRegistry.set('stat_multiplier', {
       ctx.acc.mulAtk *= m;
       ctx.acc.mulDef *= m;
     }
+  },
+});
+
+/**
+ * timed_item —— 局内周期补给（进入战斗后每 interval 秒补 1 个；多件递减间隔）。
+ * 参数：
+ *   itemId        补给道具 id
+ *   interval      基准间隔（秒）
+ *   perCopyMul    每多一件的间隔乘数（如 0.8 = 再快 20%）
+ *   minInterval   间隔下限（秒）
+ */
+relicEffectRegistry.set('timed_item', {
+  timedItem(ctx, cfg) {
+    const itemId = cfg.itemId as string | undefined;
+    if (!itemId) return;
+    const base = (cfg.interval as number | undefined) ?? 60;
+    const mul = (cfg.perCopyMul as number | undefined) ?? 0.8;
+    const minInterval = (cfg.minInterval as number | undefined) ?? 15;
+    const interval = Math.max(minInterval, base * Math.pow(mul, Math.max(0, ctx.count - 1)));
+    return { itemId, interval };
   },
 });
 

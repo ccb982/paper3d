@@ -37,10 +37,13 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     id: 'zuzong_launcher',
     name: '祖宗发射器',
     rarity: 5,
-    description: '开局背包中自动获得一个祖宗（每多抽到一件多带一个）',
+    description: '进入战场立即获得一个祖宗（每多获得一件多带一个）；之后每分钟恢复一个，多件再缩短补充间隔',
     texture: '/fx/祖宗发射器.ftx3.gz',
     effects: [
+      // ★ 进入战场：立即授予（数量 = 1 × 拥有件数）
       { type: 'start_items', items: [{ itemId: 'zuzong', count: 1 }] },
+      // ★ 后续恢复：每分钟 1 个；每多一件 ×0.8（下限 15s）
+      { type: 'timed_item', itemId: 'zuzong', interval: 60, perCopyMul: 0.8, minInterval: 15 },
     ],
   },
 

@@ -273,13 +273,14 @@ export class ItemManager {
     return { success: true, message: `已与槽位 ${slotIndex + 1} 互换` };
   }
 
-  /** ★ 槽位原位替换（友军损毁 → 残骸占槽，不清除槽位；发事件通知回收旧实体） */
-  replaceSlot(slotIndex: number, itemId: string): boolean {
+  /** ★ 清空槽位（友军损毁 → 彻底没了：不返还、不生成残骸、不可维修）；
+   *  发事件通知世界侧回收对应实体 */
+  clearSlot(slotIndex: number): boolean {
     const slots = this.session.player.slots;
     if (!Array.isArray(slots) || slotIndex < 0 || slotIndex >= slots.length) return false;
     const prev = slots[slotIndex];
-    slots[slotIndex] = itemId;
-    eventBus.emit('deployment_changed', { slotIndex, itemId, prev });
+    slots[slotIndex] = null;
+    eventBus.emit('deployment_changed', { slotIndex, itemId: null, prev });
     return true;
   }
 

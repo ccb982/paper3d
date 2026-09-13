@@ -82,6 +82,26 @@ export class AmmoPanel {
       if (r.countEl.textContent !== text) r.countEl.textContent = text;
       r.countEl.style.color = e.count === 0 ? '#ff6666' : selected ? '#ffd87a' : '#d6dee8';
     }
+    // ★ 行序 = 条目顺序（2026-09-13 修复：新增行此前只追加在末尾，
+    //   祖宗补给回来会排到消耗品后面；这里顺序不一致才整体重排，零常态开销）
+    let needOrder = false;
+    let prevEl: Element | null = null;
+    for (const e of entries) {
+      const r = this.rows.get(e.id);
+      if (!r) continue;
+      const expect: Element | null = prevEl ? prevEl.nextElementSibling : this.root.firstElementChild;
+      if (expect !== r.el) {
+        needOrder = true;
+        break;
+      }
+      prevEl = r.el;
+    }
+    if (needOrder) {
+      for (const e of entries) {
+        const r = this.rows.get(e.id);
+        if (r) this.root.appendChild(r.el);
+      }
+    }
   }
 
   private buildRow(e: AmmoEntryView): RowView {

@@ -63,7 +63,7 @@ import { eventBus } from '../core/EventBus';
 import { computeRelicModifiers } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
-import { relicGrantsFor, dispatchRelicEvent } from '../core/RelicEffects';
+import { relicGrantsFor, dispatchRelicEvent, relicTimedFor } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
@@ -75,7 +75,7 @@ import { WorldUIManager } from '../ui/world/WorldUIManager';
 import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
 
-/** ★ 友军物品 id：部署生成 / 损毁替换为残骸（维修配方在舰船加工台） */
+/** ★ 友军物品 id：部署生成 / 损毁即彻底消失（不返还、不可维修） */
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
  *  代理没有 EntityBase 实体，数值全部由 dmg 直接给出） */
 const AGENT_SOURCE = {
@@ -86,7 +86,6 @@ const AGENT_SOURCE = {
 } as unknown as EntityBase;
 
 const DRONE_ITEM = 'kaltsit_drone';
-const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
 // ---- ★ 载具（逻各斯的圆凳）：移速 / 爬坡 / 过坑 ----
 /** 主角基础移速（m/s）；装备移速加成（VehicleRide.moveSpeedMul）在此之上乘算 */
 const PLAYER_MOVE_SPEED = 5.0;
@@ -342,6 +341,8 @@ export class WorldMode implements IGameMode {
   } | null = null;
   /** ★ 威胁度（波次/每波人数/攻击欲望；与敌强同一套输入） */
   private threat: ThreatProfile | null = null;
+  /** ★ 遗物周期补给（祖宗发射器：进入战斗后每 interval 秒补 1；多件更快） */
+  private timedRelics: { itemId: string; interval: number; timer: number }[] = [];
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
   /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演的大波按节奏投放。
@@ -698,6 +699,9 @@ export class WorldMode implements IGameMode {
     };
     this.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
+    // ★ 遗物局内周期补给（祖宗发射器等）：每间隔补 1，多件缩短间隔
+    this.timedRelics = relicTimedFor(ctx.session, RELIC_ITEM_CONFIG)
+      .map((g) => ({ itemId: g.itemId, interval: g.interval, timer: 0 }));
     // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
     // ★ 航行期：停靠按钮（F 键同义）+ 隐藏战斗 HUD（停靠后才绘制）
@@ -771,7 +775,7 @@ export class WorldMode implements IGameMode {
     );
     this.combatItems.syncLoadout();
 
-    // ★ 友军播放注册表：可露希尔的无人机 → 空中的 DroneEntity（跟随/攻击/残骸回收）
+    // ★ 友军播放注册表：可露希尔的无人机 → 空中的 DroneEntity（跟随/攻击/损毁回收）
     allyPlaybackRegistry.set(DRONE_ITEM, {
       kind: 'drone',
       spawn: ({ itemId, slotIndex, spawnDroneNearPlayer }) => spawnDroneNearPlayer(slotIndex, itemId),
@@ -831,7 +835,7 @@ export class WorldMode implements IGameMode {
         this.worldUIManager.showFloatingText(x, y - 30, 'Blocked', 'normal');
       }
     });
-    // ★ 击杀结算：无人机与杂兵分流（无人机损毁 = 槽位换残骸 + 从编队移除）
+    // ★ 击杀结算：无人机与杂兵分流（无人机损毁 = 清空槽位 + 从编队移除）
     this.killedUnsub = eventBus.on('killed', (payload) => {
       // ★ 玩家死亡：累计永久死亡次数（遗物"每次死亡全属性 +5%"的驱动）
       if (payload.target === this.player) {
@@ -857,7 +861,8 @@ export class WorldMode implements IGameMode {
       if (di !== -1) {
         const drone = this.drones[di];
         this.drones.splice(di, 1);
-        if (drone.slotIndex >= 0) this.itemManager?.replaceSlot(drone.slotIndex, DRONE_BROKEN_ITEM);
+        // ★ 无人机损毁 = 彻底没了（2026-09-13 用户定调：不再有残骸/维修）
+        if (drone.slotIndex >= 0) this.itemManager?.clearSlot(drone.slotIndex);
         this.showFloatingAt(drone.position.x, drone.position.y, drone.position.z, '无人机损毁', 'crit');
         return; // 不参与杂兵掉落结算
       }
@@ -992,6 +997,20 @@ export class WorldMode implements IGameMode {
         }),
     });
     const _t2 = performance.now();
+
+    // ---- ★ 遗物周期补给（祖宗发射器）：进入战场后每 interval 秒补 1（背包满则保持就绪重试） ----
+    for (const t of this.timedRelics) {
+      t.timer += dt;
+      if (t.timer < t.interval) continue;
+      if (this.itemManager?.addItem('player', t.itemId, 1)) {
+        t.timer -= t.interval;
+        // ★ 走右上角"获得物品"播报渠道（不再头顶浮字）
+        this.worldUIManager?.showPickupResult(t.itemId, true, 1);
+        this.worldUIManager?.flashItemAndRefresh(t.itemId);
+      } else {
+        t.timer = t.interval; // 背包满：保持就绪，下一帧重试
+      }
+    }
 
     // ★ 战斗道具播放：装备贴片帧动画驱动（带相机 → 影子 LOD/昼夜浓度）
     this.combatItems.update(dt, this.camera ?? undefined);
@@ -2821,7 +2840,7 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。
-   *  残骸/装备类槽位无对应实体，安全 no-op。 */
+   *  装备类槽位无对应实体，安全 no-op。 */
   private despawnAllyAt(slotIndex: number): void {
     for (let i = 0; i < this.drones.length; i++) {
       const d = this.drones[i];

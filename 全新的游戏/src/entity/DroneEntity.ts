@@ -119,7 +119,7 @@ export class DroneEntity extends EntityBase {
     this.lodExempt = true;
     this.attachToScene(scene);
     // ★ 可损毁：血量改由左侧编队列表（AllyHud）显示——不再挂头顶世界血条
-    //   （损毁后残骸进槽位，舰船加工台用材料维修）
+    //   （损毁后彻底消失：不返还、不生成残骸、不可维修）
 
     // 按画布宽高比设贴片尺寸（宽 = baseSize；不压扁）
     const r = this.renderer as DroneCompositeRender | null;
