@@ -56,7 +56,6 @@ import { Director, INTENT_NONE, type DirectorHooks, type SpawnOrder } from '../s
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
-import { ItemBase } from '../entity/ItemBase';
 import { NpcEntity } from '../entity/NpcEntity';
 import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
@@ -798,38 +797,6 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setCombatHudVisible(false);
     // ★ boss4D 玩家专属：真实落地模式（每次跳跃必须踩实地面，禁止悬空穿/悬浮连跳）
     this.player.controller.requireRealLanding = this.chunks.isBoss4D;
-
-    // ---- ★ 测试物品（UI 初始化后创建，避免碰撞回调时 worldUIManager 未就绪） ----
-    const testArchetypes = [
-      this.itemManager.getArchetype('healing_potion')!,
-      this.itemManager.getArchetype('iron_ore')!,
-      this.itemManager.getArchetype('originium_shard')!,
-    ];
-    for (let i = 0; i < testArchetypes.length; i++) {
-      const arch = testArchetypes[i];
-      const item = new ItemBase(this.entities, this.scene, arch,
-        spawn.x + 6 + i * 2.5,
-        this.raster.surfaceHeightAt(spawn.x + 6 + i * 2.5, spawn.z + 6),
-        spawn.z + 6,
-        this.itemManager,
-        { physical: true },
-      );
-      item.onPickup = (it, picker) => {
-        const success = this.itemManager.addItem('player', it.archetype.id, 1);
-        if (success) {
-          // ★ 金色发光粒子
-          const pos = it.position;
-          this.pickupGlows.push(new PickupGlowEffect(this.scene!, pos.x, pos.y + 0.3, pos.z));
-          // ★ HUD 浮动文字 + 格子闪烁
-          this.worldUIManager.showPickupResult(it.archetype.id, true);
-          this.worldUIManager.refreshIfOpen();
-          return true;
-        } else {
-          this.worldUIManager.showPickupResult(it.archetype.id, false);
-          return false;
-        }
-      };
-    }
 
     // ---- 子弹池 ----
     this.bullets = new BulletManager(
