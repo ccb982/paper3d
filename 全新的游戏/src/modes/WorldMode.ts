@@ -75,6 +75,13 @@ const DRONE_ITEM = 'kaltsit_drone';
 const DRONE_BROKEN_ITEM = 'kaltsit_drone_broken';
 /** ★ 玩家子弹伤害 = max(下限, 角色攻击力 × 系数)；遗物/装备加成的攻击力实时生效。
  *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
+/** 主角基础移速（m/s）；装备移速加成（moveSpeedPct）在此之上乘算 */
+const PLAYER_MOVE_SPEED = 5.0;
+/** 载具过坑：贴地桥接采样半径（米）——脚下取邻域最高面，骑过坑洞不沉底 */
+const VEHICLE_BRIDGE_RADIUS = 1.6;
+/** 载具爬坡上行速度（m/s；普通角色 7.5） */
+const VEHICLE_CLIMB_SPEED = 24;
+
 const PLAYER_BULLET_MIN_DAMAGE = 10;
 const PLAYER_BULLET_ATK_RATIO = 1.0;
 /** ★ 主角基础攻击间隔（秒）：实际间隔 = 本值 × 100 / (100 + 攻击速度点数)（方舟攻速口径） */
@@ -539,7 +546,7 @@ export class WorldMode implements IGameMode {
         },
         fps: { idle: 2, walk: 6, attack: 8 },
       },
-      moveSpeed: 5.0,
+      moveSpeed: PLAYER_MOVE_SPEED,
       facing: '后',
     });
     // ★ 航行期：角色隐藏 + 操作锁（停靠时落到安全出生点接管）
@@ -923,6 +930,8 @@ export class WorldMode implements IGameMode {
 
     // ★ 战斗道具播放：装备贴片帧动画驱动（带相机 → 影子 LOD/昼夜浓度）
     this.combatItems.update(dt, this.camera ?? undefined);
+    // ★ 载具贴片跟随（圆凳；装备时贴在主角脚下，独立 billboard）
+    this.player.vehicleRide.update(dt, this.camera ?? undefined);
     // ★ 出击槽池同步（背包拖入/使用装备后，贴片及时刷新；内部 diff，未变则零开销）
     this.syncLoadoutAccum += dt;
     if (this.syncLoadoutAccum >= 0.5) {
@@ -2029,6 +2038,10 @@ export class WorldMode implements IGameMode {
       },
       healProc: eq.healProc ?? undefined,
     }]);
+    // ★ 载具（圆凳）：躺乘姿态 + 移速大提升（爬坡/过坑见 CharacterBase.climbAnyTerrain /
+    //   clampCharacter 的贴地桥接）
+    this.player.controller.moveSpeed = PLAYER_MOVE_SPEED * (1 + eq.moveSpeedPct);
+    this.player.setVehicleMode(eq.vehicle);
   }
 
   /** ★ 治疗转伤害（遥·幽隙栖萤 口径）：累计治疗量 ≥ 阈值 → 对半径内最多 N 名敌人结算
@@ -2510,6 +2523,20 @@ export class WorldMode implements IGameMode {
     //   落地瞬间再回落贴地；否则会把跳起来的角色钉回地面、无法跃过 0.5 高差。
     if (e.controller.isAirborne()) return;
     const p = e.position;
+    // ★ 载具（圆凳）：过坑——脚下取邻域最高面桥接（不沉坑、不判死）+ 快速爬坡
+    if (e === this.player && this.player.rideVehicle) {
+      const r = VEHICLE_BRIDGE_RADIUS;
+      const targetY = Math.max(
+        this.raster.surfaceHeightAt(p.x, p.z),
+        this.raster.surfaceHeightAt(p.x + r, p.z),
+        this.raster.surfaceHeightAt(p.x - r, p.z),
+        this.raster.surfaceHeightAt(p.x, p.z + r),
+        this.raster.surfaceHeightAt(p.x, p.z - r),
+      );
+      const dy = targetY - p.y;
+      p.y += dy > 0 ? Math.min(dy, VEHICLE_CLIMB_SPEED * dt) : Math.max(dy, -30 * dt);
+      return;
+    }
     const targetY = this.raster.surfaceHeightAt(p.x, p.z);
     // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
     //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须

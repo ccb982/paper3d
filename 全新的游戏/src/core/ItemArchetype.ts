@@ -64,6 +64,10 @@ export interface EquipmentStats {
   /** 格挡减伤倍率加值（基础 0.5，越低越强） */
   blockMult?: number;
   healProc?: HealProcDef;
+  /** ★ 移速加成（0.8 = +80%；载具/加速装备） */
+  moveSpeedPct?: number;
+  /** ★ 载具：装备后角色躺乘（视觉 + 移速 + 爬坡/过坑），不进战斗数值链 */
+  vehicle?: boolean;
 }
 
 export class ItemArchetype {

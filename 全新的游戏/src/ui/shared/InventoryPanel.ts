@@ -23,6 +23,7 @@ const EQUIP_SLOT_LABELS: Record<string, string> = {
   weapon: '武器',
   armor: '盔甲',
   headgear: '头盔',
+  vehicle: '载具',
 };
 
 export interface InventoryLayerOption {

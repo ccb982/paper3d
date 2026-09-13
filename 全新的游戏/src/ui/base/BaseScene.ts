@@ -15,6 +15,7 @@ import { DroneCompositeRender } from '../../services/render/DroneCompositeRender
 import { FrameAnimatorBase } from '../../services/fx/FrameAnimatorBase';
 import type { CharacterFxAssetSource, FrameAssetSource } from '../../services/fx/AssetSource';
 import { EquipmentLayer } from '../../systems/itemPlayback/EquipmentLayer';
+import { VehicleRide } from '../../systems/itemPlayback/VehicleRide';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import baseRooms from '../../config/baseRooms.json';
 
@@ -93,6 +94,9 @@ export class BaseScene {
   private droneAllies: { view: DroneCompositeRender; anim: FrameAnimatorBase; index: number }[] = [];
   private droneAssetSrc: FrameAssetSource | null = null;
   private itemManagerRef: ItemManager | null = null;
+  /** ★ 载具乘骑（圆凳）与基地移速乘数（换装时刷新） */
+  private vehicleRide: VehicleRide | null = null;
+  private rideSpeedMul = 1;
 
   // ---- 相机（跟随 + 缩放） ----
   private camera: THREE.PerspectiveCamera | null = null;
@@ -140,8 +144,11 @@ export class BaseScene {
       if (hostMesh) {
         this.equip = new EquipmentLayer(scene, hostMesh, () => '前');
         void this.equip.apply(slots);
+        // ★ 载具乘骑（圆凳）：躺乘姿态 + 载具贴片（基地内与游戏内同表现）
+        this.vehicleRide = new VehicleRide(scene, hostMesh, this.quad, 2.4);
       }
       this.syncDroneAlly(slots);
+      this.syncVehicleRide();
     }
 
     // 加工站提示条（靠近加工站房间时显示）
@@ -199,11 +206,19 @@ export class BaseScene {
     }
   }
 
-  /** ★ 出击槽变化（deployment_changed）：重挂装备贴片 + 同步无人机（基地内在背包页换装即时可见） */
+  /** ★ 出击槽变化（deployment_changed）：重挂装备贴片 + 同步无人机/载具（基地内换装即时可见） */
   refreshDeployment(): void {
     const slots = this.currentSlots();
     void this.equip?.apply(slots);
     this.syncDroneAlly(slots);
+    this.syncVehicleRide();
+  }
+
+  /** ★ 载具状态同步：躺乘姿态 + 基地移速乘数（统计只在换装时算一次） */
+  private syncVehicleRide(): void {
+    const stats = this.itemManagerRef?.getEquipmentStats();
+    this.rideSpeedMul = 1 + (stats?.moveSpeedPct ?? 0);
+    this.vehicleRide?.setActive(stats?.vehicle ?? false);
   }
 
   /** 固定基准 = (0, 7.4, 16.5) 看向大厅中部；实际机位由跟随更新接管 */
@@ -227,8 +242,11 @@ export class BaseScene {
       this.anim.update(dt);
       this.quad.render({ frameIndex: this.anim.frameIndex });
     }
-    // ★ 身上的装备贴片（帧动画 + 影子；与游戏内同管线）
+    // ★ 站立/躺倒姿态下发（躺乘时 roll 在 setBillboard 内应用）＋装备贴片
+    if (this.quad && this.camera) this.quad.setBillboard(this.camera);
     this.equip?.update(dt, this.camera ?? undefined);
+    // ★ 载具贴片跟随（圆凳）
+    this.vehicleRide?.update(dt, this.camera ?? undefined);
     // ★ 无人机编队：三帧叠加合成 + 包围角色转圈。
     //   防重叠：每层 4 架（层内 90° 间隔）、逐层半径+高度递增、层内奇偶槽再交错半径/高度，
     //   让正/背面的机体在屏幕上也拉开（纯圆环会让前后机投影到同一位置）
@@ -270,6 +288,8 @@ export class BaseScene {
     this.anim = null;
     this.equip?.dispose();
     this.equip = null;
+    this.vehicleRide?.dispose();
+    this.vehicleRide = null;
     for (const d of this.droneAllies) d.view.dispose();
     this.droneAllies.length = 0;
     this.root.traverse((o) => {
@@ -480,8 +500,9 @@ export class BaseScene {
     if (this.quad) {
       const prevX = this.charPos.x;
       if (this.moving) {
-        this.charPos.x += (mx / len) * MOVE_SPEED * dt;
-        this.charPos.z += (mz / len) * MOVE_SPEED * dt;
+        const spd = MOVE_SPEED * this.rideSpeedMul; // ★ 载具移速提升
+        this.charPos.x += (mx / len) * spd * dt;
+        this.charPos.z += (mz / len) * spd * dt;
       }
       // 边界
       const halfW = this.hallW / 2 - 0.9;

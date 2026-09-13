@@ -226,6 +226,32 @@
       ]
     },
     {
+      "id": "yuandeng",
+      "name": "圆凳",
+      "type": "equip",
+      "description": "神秘的圆凳载具：装备后维维美（连同身上装备）躺乘其上滑行。移动速度大幅提升，可爬坡、可过坑。",
+      "maxStack": 1,
+      "stats": { "vehicle": true, "moveSpeedPct": 1.0 },
+      "combat": {
+        "kind": "vehicle",
+        "slot": "vehicle",
+        "asset": "/fx/圆凳.ftx3.gz",
+        "scale": 0.9,
+        "offsetX": 0,
+        "offsetY": 0.02,
+        "offsetZ": 0
+      },
+      "color": { "h": 0.12, "s": 0.5, "l": 0.55 },
+      "world": {
+        "shape": { "type": "cuboid", "hx": 0.22, "hy": 0.12, "hz": 0.22 },
+        "scale": 0.45,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        { "type": "equip", "slot": "vehicle" }
+      ]
+    },
+    {
       "id": "yusheng_mengmengxiang",
       "name": "鱼生萌萌香",
       "type": "equip",

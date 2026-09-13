@@ -44,6 +44,7 @@ export interface ItemIconConfig {
 /** ★ 直绘 FTX 图标源（itemId → .ftx3 URL；解包后第 0 帧合成，ID→画布失效则回退色块） */
 const FTX_ICON_SOURCES: Record<string, string> = {
   shu_jie_xx: '/fx/黍姐的XX.ftx3.gz',
+  yuandeng: '/fx/圆凳.ftx3.gz',
   // 遗物（抽卡/遗物查看与背包同一条"服务 + 播放"管线的回退）：
   black_crown: '/fx/魔王的黑冠.ftx3.gz',
   gravel_love: '/fx/砾小姐的爱.ftx3.gz',

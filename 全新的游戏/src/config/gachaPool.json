@@ -10,7 +10,8 @@
     { "id": "medkit", "rarity": 4, "weight": 10 },
     { "id": "kaltsit_drone", "rarity": 4, "weight": 8 },
     { "id": "shu_jie_xx", "rarity": 4, "weight": 6 },
-    { "id": "yusheng_mengmengxiang", "rarity": 4, "weight": 6 }
+    { "id": "yusheng_mengmengxiang", "rarity": 4, "weight": 6 },
+    { "id": "yuandeng", "rarity": 4, "weight": 6 }
   ],
   "outOfRunItems": [
     { "id": "black_crown", "rarity": 5, "weight": 2 },

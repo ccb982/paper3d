@@ -46,6 +46,8 @@ export const DEFAULT_COLLISION_VOLUME = {
 
 export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
+  /** ★ 无视地形落差行进（载具：爬坡/过坑；开启后不再被 EDGE_CLIFF_BAND 立面阻挡） */
+  climbAnyTerrain = false;
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
@@ -100,7 +102,7 @@ export abstract class CharacterBase extends EntityBase {
     //   实现"跳跃无向墙壁速度"。
     let dx = dir.x * speed * dt;
     let dz = dir.y * speed * dt;
-    if (this.controller.requireRealLanding) {
+    if (this.controller.requireRealLanding && !this.climbAnyTerrain) {
       const raster = RasterMap.current;
       const p0 = this.entity.position;
       const gyHere = raster?.surfaceHeightAt(p0.x, p0.z) ?? 0;
@@ -145,7 +147,7 @@ export abstract class CharacterBase extends EntityBase {
       //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.5) 以上 → 回退，
       //   0.5 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
-      if (gy - p.y > EDGE_CLIFF_BAND) {
+      if (!this.climbAnyTerrain && gy - p.y > EDGE_CLIFF_BAND) {
         p.x = prevX;
         p.z = prevZ;
       }
@@ -153,7 +155,7 @@ export abstract class CharacterBase extends EntityBase {
     // ★ 真实贴地信号（boss4D 玩家跳跃资格用）：落地态 ∧ 脚底已贴合实际站位
     //   地表高（±0.05）才算"在地面上"。悬崖回退后重新采样，避免用位移前采样。
     //   悬空/虚空（地表低于脚底）→ 不贴地 → 长按跳跃不生效。
-    if (this.controller.requireRealLanding) {
+    if (this.controller.requireRealLanding && !this.climbAnyTerrain) {
       const floorY = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
       this.controller.onFloor =
         !this.controller.isAirborne() && Math.abs(p.y - floorY) <= 0.05;

@@ -12,6 +12,10 @@ import * as THREE from 'three';
 import { FxRendererBase } from './FxRendererBase';
 import type { FrameAssetSource } from '../fx/AssetSource';
 
+/** 滚转临时对象（避免每帧分配） */
+const _rollQ = new THREE.Quaternion();
+const _LOCAL_Z = new THREE.Vector3(0, 0, 1);
+
 const VERTEX_SHADER = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -133,6 +137,10 @@ export class FTXQuad extends FxRendererBase {
   private _texAspect = 1;
   /** ★ 贴片底部锚点（脚踩地面）：setPosition 时 y 自动 + 贴片半高 */
   private anchorBottom = true;
+  /** ★ 底部锚点抬升覆写（世界单位；null = 默认 baseScale.y/2；载具躺乘压低中心用） */
+  private anchorLift: number | null = null;
+  /** ★ 平面内整体滚转（弧度；绕贴片法线，相机面内躺倒用） */
+  private rollRad = 0;
   /** ★ 按纹理宽高比设置 quad 缩放（避免竖长/横长纹理被压扁） */
   setScaleKeepAspect(baseSize: number): void {
     this.setScale(baseSize, baseSize * this._texAspect);
@@ -140,13 +148,23 @@ export class FTXQuad extends FxRendererBase {
 
   /** ★ 覆写 setPosition：底部锚点 → y 自动抬升贴片半高（脚踩地面，不在地底） */
   override setPosition(x: number, y: number, z = 0): void {
-    const halfH = this.anchorBottom ? Math.abs(this.baseScale.y) / 2 : 0;
+    const halfH = this.anchorBottom ? (this.anchorLift ?? Math.abs(this.baseScale.y) / 2) : 0;
     super.setPosition(x, y + halfH, z);
   }
 
   /** 切换底部锚点（默认 true：脚踩地面） */
   setAnchorBottom(v: boolean): void {
     this.anchorBottom = v;
+  }
+
+  /** ★ 覆写底部锚点抬升量（世界单位；null = 还原默认半高） */
+  setAnchorLift(v: number | null): void {
+    this.anchorLift = v;
+  }
+
+  /** ★ 平面内滚转（弧度；setBillboard 时绕贴片法线应用；0 = 还原站立） */
+  setRoll(rad: number): void {
+    this.rollRad = rad;
   }
 
   constructor(
@@ -225,6 +243,10 @@ export class FTXQuad extends FxRendererBase {
     if (dir.lengthSq() > 1e-8) {
       dir.normalize();
       this.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+    }
+    // ★ 平面内滚转（躺倒）：绕贴片自身法线（局部 +Z）旋转 → 相机面内旋转
+    if (this.rollRad) {
+      this.mesh.quaternion.multiply(_rollQ.setFromAxisAngle(_LOCAL_Z, this.rollRad));
     }
     this.applyFlip();
   }

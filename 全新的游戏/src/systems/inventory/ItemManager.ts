@@ -323,6 +323,7 @@ export class ItemManager {
       attackSpeed: 0, damageReduction: 0, hpRegen: 0,
       critRate: 0, critMult: 0, dodgeRate: 0, blockRate: 0, blockMult: 0,
       healProc: null,
+      moveSpeedPct: 0, vehicle: false,
     };
     const slots = this.session.player.slots;
     if (!Array.isArray(slots)) return out;
@@ -343,6 +344,8 @@ export class ItemManager {
       out.dodgeRate += s.dodgeRate ?? 0;
       out.blockRate += s.blockRate ?? 0;
       out.blockMult += s.blockMult ?? 0;
+      out.moveSpeedPct += s.moveSpeedPct ?? 0;
+      if (s.vehicle) out.vehicle = true;
       if (s.healProc) out.healProc = s.healProc;
     }
     return out;

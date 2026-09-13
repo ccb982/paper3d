@@ -9,10 +9,16 @@ import type { EntityBase } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
+import { VehicleRide } from '../systems/itemPlayback/VehicleRide';
 import { createInputActions, type InputActions } from '../platform/input/InputActions';
 import type { CameraFrame } from '../services/camera/CameraController';
 
 export class Player extends CharacterBase {
+  /** ★ 载具乘骑播放（圆凳）：躺乘姿态 + 载具贴片跟随 */
+  readonly vehicleRide: VehicleRide;
+  /** ★ 是否在乘骑载具（装备 stats.vehicle 决定；爬坡/过坑读取） */
+  rideVehicle = false;
+
   constructor(
     em: EntityManager,
     scene: THREE.Scene,
@@ -36,6 +42,27 @@ export class Player extends CharacterBase {
     // ★ 贴片宽 1.0（与碰撞胶囊 1.0 直径对齐）→ 2.0（2026-09-06 用户：纹理大小增大一倍；
     //   仅视觉放大，碰撞体仍为 1.0 胶囊）
     this.applyRenderScale(2.0);
+    // ★ 载具乘骑播放（基准尺寸 = 贴片世界高 2.0）
+    this.vehicleRide = new VehicleRide(
+      scene,
+      this.rendererMesh ?? new THREE.Object3D(),
+      this.renderer as FTXQuad,
+      2.0,
+    );
+  }
+
+  /** ★ 载具模式开关（equipment 属性变化时由 WorldMode 调用）：
+   *  躺乘姿态 + 无视地形落差（爬坡/过坑；过坑的贴地桥接在 WorldMode.clampCharacter） */
+  setVehicleMode(on: boolean): void {
+    if (on === this.rideVehicle) return;
+    this.rideVehicle = on;
+    this.climbAnyTerrain = on;
+    this.vehicleRide.setActive(on);
+  }
+
+  override dispose(): void {
+    this.vehicleRide.dispose();
+    super.dispose();
   }
 
   protected createRenderer(scene: THREE.Scene): FTXQuad {
