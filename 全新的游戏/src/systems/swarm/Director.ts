@@ -14,12 +14,22 @@ export const INTENT_NONE = 255;
 
 export type DirectorPhase = 'calm' | 'probe' | 'surge' | 'lull';
 
-/** 每次生成的威胁成本（预算单位） */
-const SPAWN_COST = 20;
+/** 每名敌人的威胁成本（预算单位） */
+const AGENT_COST = 3;
 /** 预算上限 */
-const BUDGET_MAX = 140;
+const BUDGET_MAX = 220;
 /** 各阶段预算回复（单位/秒） */
-const REGEN: Record<DirectorPhase, number> = { calm: 3, probe: 5, surge: 8, lull: 6 };
+const REGEN: Record<DirectorPhase, number> = { calm: 5, probe: 7, surge: 11, lull: 6 };
+
+/** ★ 大波节奏（2026-09-13 用户定调）：每次 1~2 波、每波人数多、方向集中，便于防守 */
+/** 每次事件波数（1~2） */
+const EVENT_WAVES: Record<DirectorPhase, number> = { calm: 1, probe: 1, surge: 2, lull: 0 };
+/** 每波人数区间 */
+const WAVE_COUNT: Record<DirectorPhase, [number, number]> = {
+  calm: [5, 7], probe: [7, 10], surge: [10, 14], lull: [0, 0],
+};
+/** 事件间隔（秒） */
+const EVENT_INTERVAL: Record<DirectorPhase, number> = { calm: 15, probe: 12, surge: 9, lull: Infinity };
 
 export interface DirectorInputs {
   dt: number;
@@ -36,17 +46,13 @@ export interface SpawnOrder {
   anchorX: number;
   anchorZ: number;
   intent: number;
-  /** 本波数量（成群兵种按 pack 放大） */
+  /** ★ 本次事件的波数（1~2；每波方向集中） */
+  waves: number;
+  /** ★ 每波人数 */
   count: number;
   /** 偏成群兵种（突涌期洪流感） */
   preferPack: boolean;
 }
-
-/** 各阶段生成间隔（秒）与单波数量 */
-const SPAWN_INTERVAL: Record<DirectorPhase, number> = { calm: 8, probe: 5, surge: 3.5, lull: Infinity };
-const SPAWN_COUNT: Record<DirectorPhase, [number, number]> = {
-  calm: [1, 1], probe: [1, 2], surge: [2, 4], lull: [0, 0],
-};
 
 export class Director {
   phase: DirectorPhase = 'calm';
@@ -64,36 +70,39 @@ export class Director {
 
     // ---- 阶段切换（压力修正：场上过少加速） ----
     if (this.phase === 'calm') {
-      if (inp.alive < 30) this.timer = Math.min(this.timer, 3);
+      if (inp.alive < 30) this.timer = Math.min(this.timer, 4);
       if (this.timer <= 0) {
         this.phase = 'probe';
-        this.timer = 8 + Math.random() * 4;
+        this.timer = 12 + Math.random() * 5;
       }
     } else if (this.phase === 'probe') {
       if (this.timer <= 0) {
         this.phase = 'surge';
-        this.timer = 7 + Math.random() * 4;
+        this.timer = 16 + Math.random() * 6;
       }
     } else if (this.phase === 'surge') {
       if (this.timer <= 0) {
         this.phase = 'lull';
-        this.timer = 4 + Math.random() * 2;
+        this.timer = 5 + Math.random() * 3;
       }
     } else {
       if (this.timer <= 0) {
         this.phase = 'calm';
-        this.timer = 10 + Math.random() * 6;
+        this.timer = 14 + Math.random() * 6;
       }
     }
 
-    // ---- 生成闸门 ----
+    // ---- 生成闸门（大波：事件间隔长、单次人数多） ----
     if (inp.playerHpRatio < 0.3) return null;  // 濒死：收手
     if (this.phase === 'lull') return null;    // 间歇期不刷
     if (inp.alive >= 200) return null;
-    if (this.budget < SPAWN_COST) return null;
     if (this.spawnTimer > 0) return null;
-    this.spawnTimer = SPAWN_INTERVAL[this.phase];
-    this.budget -= SPAWN_COST;
+    const waves = EVENT_WAVES[this.phase];
+    const [lo, hi] = WAVE_COUNT[this.phase];
+    const count = lo + Math.floor(Math.random() * (hi - lo + 1));
+    if (this.budget < count * waves * AGENT_COST) return null;
+    this.spawnTimer = EVENT_INTERVAL[this.phase];
+    this.budget -= count * waves * AGENT_COST;
 
     // ---- intent 分工（距离上下文加权） ----
     const dx = inp.playerX - inp.shipX;
@@ -107,13 +116,12 @@ export class Director {
     if (r < wShip) intent = INTENT_SHIP;
     else if (r < wShip + 0.2) intent = INTENT_FLANK;
 
-    const [lo, hi] = SPAWN_COUNT[this.phase];
-    const count = lo + Math.floor(Math.random() * (hi - lo + 1));
     const anchorToShip = intent === INTENT_SHIP;
     return {
       anchorX: anchorToShip ? inp.shipX : inp.playerX,
       anchorZ: anchorToShip ? inp.shipZ : inp.playerZ,
       intent,
+      waves,
       count,
       preferPack: this.phase === 'surge',
     };

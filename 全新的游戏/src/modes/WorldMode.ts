@@ -332,8 +332,9 @@ export class WorldMode implements IGameMode {
   private swarmDirector = new Director();
   /** ★ 全图存活上限（《蜂群架构.md》§9：实体 + 代理合计 200；先小步 50/200） */
   private static readonly MAX_ALIVE = 200;
-  /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演按节奏投放） */
-  private static readonly AMBIENT_CAP = 80;
+  /** ★ 环境刷怪闸（扫描式波次只铺到这里；之上由导演的大波按节奏投放。
+   *  2026-09-13 用户定调：全向散兵不好守 → 环境少量（30），主力来自集中大波） */
+  private static readonly AMBIENT_CAP = 30;
   /** ★ 压测：?enemies=N 开局在玩家周围铺 N 只代理（P0 度量；0 = 关） */
   private debugEnemyStress = 0;
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
@@ -1510,21 +1511,29 @@ export class WorldMode implements IGameMode {
     return this.spawnOne(this.pickMob(), x, y, z);
   }
 
-  /** ★ P4：执行导演订单（锚点 + intent + 数量 + 偏成群） */
+  /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，
+   *  两波之间方向明显错开（双面夹击），但每面都是"一团人"而非全向散兵 */
   private spawnDirectorWave(order: SpawnOrder): void {
-    this.spawnWaveNear(order.anchorX, order.anchorZ, {
-      count: order.count,
-      intent: order.intent,
-      preferPack: order.preferPack,
-    });
+    let sector = Math.random() * Math.PI * 2;
+    for (let w = 0; w < order.waves; w++) {
+      this.spawnWaveNear(order.anchorX, order.anchorZ, {
+        count: order.count,
+        intent: order.intent,
+        preferPack: order.preferPack,
+        sector,
+        spread: 0.5,
+      });
+      sector += Math.PI * (0.6 + Math.random() * 0.6);
+    }
   }
 
   /** ★ 波次生成（导演订单 / 调试用）：
-   *  在指定焦点 LOD 外环（94~110m，chunk 数据环内）周围随机铺 count 只代理。
+   *  在指定焦点的 LOD 外环（94~130m 纵深带，chunk 数据环内）铺 count 只代理。
+   *  sector 给定则整波集中在 ±spread 扇区（集中大波，便于防守）。
    *  ⚠️ 无论焦点是谁，都避开 玩家 12m / 舰船 15m 的安全圈。 */
   private spawnWaveNear(
     fx: number, fz: number,
-    opts: { count: number; intent: number; preferPack: boolean },
+    opts: { count: number; intent: number; preferPack: boolean; sector?: number; spread?: number },
   ): void {
     if (this.testChunk || this.mobDefs.length === 0) return;
     if (this.chunks.isBoss4D) return; // 四维空间不补杂兵
@@ -1532,16 +1541,14 @@ export class WorldMode implements IGameMode {
     let placed = 0;
     const pp = this.player?.position;
     const sp = this.ship?.position;
-    // 环带：内圈 > LOD3（LOD_MAX_DIST，随 LOD 放宽外移），外圈 < 数据预载环（~2 chunk）
+    // ★ 方向：整波集中在 [sector ± spread] 扇区（默认全向；导演订单必带扇区）
+    const baseAng = opts.sector ?? Math.random() * Math.PI * 2;
+    const spread = opts.spread ?? Math.PI;
+    const lo = LOD_MAX_DIST + 4;
+    const span = 130 - lo; // 波内纵深带（lo~130m；回收环 140 内）
     for (let i = 0; i < want * 10 && placed < want; i++) {
-      // ★ 包抄（flank）：锚点侧向 ±70° 扇区偏置，制造"从侧面压来"的观感
-      let ang = Math.random() * Math.PI * 2;
-      if (opts.intent === 2) {
-        const side = Math.random() < 0.5 ? 1 : -1;
-        ang = (side > 0 ? Math.PI / 2 : -Math.PI / 2) + (Math.random() - 0.5) * 1.2;
-      }
-      // ★ 94~110m：LOD 外（不 pop-in）且回收环 120m 内（可持续，不刷出即销毁）
-      const dist = LOD_MAX_DIST + 4 + Math.random() * 16;
+      const ang = baseAng + (Math.random() - 0.5) * 2 * spread;
+      const dist = lo + Math.random() * span;
       const x = fx + Math.cos(ang) * dist;
       const z = fz + Math.sin(ang) * dist;
       // 安全圈：不在玩家/舰船近旁生成（焦点波次也不贴脸）
