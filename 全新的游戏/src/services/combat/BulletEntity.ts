@@ -49,17 +49,34 @@ export interface BulletEntityOptions {
   owner?: EntityBase | null;
   /** ★ 命中/落地后在该点生成站桩友军（itemId；如祖宗弹） */
   allyOnHit?: string;
+  /** ★ 投射落点（准星收敛点；发射时由组合层计算）——命中窗口放大的基准点 */
+  targetX?: number;
+  targetY?: number;
+  targetZ?: number;
 }
 
-/** ★ 子弹命中判定半径（米）——普通攻击对敌人的判定范围
- *  2026-09-14 调大：0.4 → 0.9（更容易命中敌人，与 3.0m 渲染 quad 观感对齐） */
+/** ★ 子弹命中判定半径（米）——逻辑命中口径（蜂群线段判定等）×
+ *  2026-09-14 定：与物理体积解耦（物理体积极小 0.05，见 BULLET_BODY_RADIUS） */
 export const BULLET_HIT_RADIUS = 0.9;
+
+/** ★ 常规物理半径（2026-09-14 用户定：0.9 → 0.05）——飞行期间物理体积始终极小：
+ *  不误触地形/装饰物/自军；命中由「逻辑判定(0.9) + 临近落点放大(1.5)」保证 */
+export const BULLET_BODY_RADIUS = 0.05;
+
+/** ★ 命中窗口放大（2026-09-14）：临近"投射落点"（准星收敛点）时的物理半径——
+ *  补偿目标移动/弹道与准星的细微偏差：飞抵落点前放大 → 过点后缩回常规体积 */
+export const BULLET_BULGE_RADIUS = 1.5;
+/** ★ 命中窗口放大：距投射落点多近开始放大（米） */
+export const BULLET_BULGE_DIST = 5.0;
+/** ★ 近点小弹（2026-09-14）：投射落点离出生点 ≤ 本距离（米）→ 全程保持小体积
+ *  （不放大）：近距离射击不误触地形/装饰物/自军，手感最干净（用户定：15m 内都是近点） */
+export const BULLET_CLOSE_DIST = 15.0;
 
 export class BulletEntity extends EntityBase {
   /** 共享剪影画布（所有同类子弹共用一张；BulletManager 初始化时提取一次） */
   static sharedSilhouetteCanvas: HTMLCanvasElement | null = null;
 
-  /** ★ 子弹碰撞体积（球体；弹头锚点由渲染器折叠进实例变换） */
+  /** ★ 子弹逻辑命中体积（球体；物理体积另见 BULLET_BODY_RADIUS，二者解耦） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
     shape: { type: 'ball', radius: BULLET_HIT_RADIUS },
     offsetY: 0,
@@ -71,6 +88,12 @@ export class BulletEntity extends EntityBase {
   /** ★ 公式的主人（发射者） */
   private owner: EntityBase | null = null;
   private active = false;
+  /** ★ 命中窗口放大：投射落点（null = 无 → 不做临近放大） */
+  private target: { x: number; y: number; z: number } | null = null;
+  /** ★ 命中窗口放大：当前是否处于放大态 */
+  private bulged = false;
+  /** ★ 近点小弹：投射落点离出生点很近（≤ BULLET_CLOSE_DIST）→ 全程小体积 */
+  private closeShot = false;
   /** ★ 命中/落地后生成站桩友军（itemId；null = 普通子弹） */
   allyOnHit: string | null = null;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
@@ -117,7 +140,7 @@ export class BulletEntity extends EntityBase {
       physics: {
         type: 'dynamic',
         options: {
-          shape: { type: 'ball', radius: opts.radius ?? BULLET_HIT_RADIUS },
+          shape: { type: 'ball', radius: opts.radius ?? BULLET_BODY_RADIUS },
           canSleep: false,
           gravityScale: 0,    // ★ 无重力：直线弹道
           ccd: true,          // ★ 连续碰撞检测：防隧穿
@@ -145,6 +168,13 @@ export class BulletEntity extends EntityBase {
     this.entity.position.x = opts.x;
     this.entity.position.y = opts.y;
     this.entity.position.z = opts.z;
+    // ★ 命中窗口放大：记录投射落点（无则 null）；近点小弹：落点近 → 全程小体积
+    this.target = (opts.targetX !== undefined && opts.targetY !== undefined && opts.targetZ !== undefined)
+      ? { x: opts.targetX, y: opts.targetY, z: opts.targetZ }
+      : null;
+    this.closeShot = !!this.target
+      && Math.hypot(this.target.x - opts.x, this.target.y - opts.y, this.target.z - opts.z) <= BULLET_CLOSE_DIST;
+    this.bulged = false;
     this.active = true;
     this.visible = true;
     this.em.register(this);
@@ -153,6 +183,8 @@ export class BulletEntity extends EntityBase {
       // ★ 池化刚体：发射时恢复模拟（入池时已禁用，见 deactivate）
       this.em.physics.setBodyEnabled(rb.handle, true);
       this.em.physics.setPosition(rb.handle, opts.x, opts.y, opts.z);
+      // ★ 常规物理体积全程极小（0.05）：近点不放大；远点由 onUpdate 临近落点放大
+      this.em.physics.setBallRadius(rb.handle, BULLET_BODY_RADIUS);
       const len = Math.hypot(opts.dirX, opts.dirY, opts.dirZ) || 1;
       this.em.physics.setLinearVelocity(
         rb.handle,
@@ -175,6 +207,11 @@ export class BulletEntity extends EntityBase {
     this.entity.position.z = 0;
     const rb = this.entity.rigidBody;
     if (rb && this.em.physics) {
+      // ★ 命中窗口复位：池内不残留放大态（回常规小体积）
+      if (this.bulged) this.em.physics.setBallRadius(rb.handle, BULLET_BODY_RADIUS);
+      this.bulged = false;
+      this.closeShot = false;
+      this.target = null;
       this.em.physics.setLinearVelocity(rb.handle, 0, 0, 0);
       this.em.physics.setPosition(rb.handle, 0, -50, 0);
       this.em.physics.setBodyEnabled(rb.handle, false);
@@ -213,11 +250,37 @@ export class BulletEntity extends EntityBase {
 
   protected override onUpdate(dt: number): void {
     if (!this.active) return;
+    // ★ 命中窗口放大：远点弹临近投射落点放大物理体积（1.5），过点/远离立即缩回常规（0.05）
+    //   近点小弹（落点 ≤ BULLET_CLOSE_DIST）→ 全程小体积，不放大
+    if (this.target && !this.closeShot) {
+      const t = this.target;
+      const tx = t.x - this.entity.position.x;
+      const ty = t.y - this.entity.position.y;
+      const tz = t.z - this.entity.position.z;
+      const rem2 = tx * tx + ty * ty + tz * tz;
+      let want = false;
+      if (rem2 <= BULLET_BULGE_DIST * BULLET_BULGE_DIST) {
+        const v = this.velocity;
+        want = v.x * tx + v.y * ty + v.z * tz > 0; // 仍在接近落点（否则已过点）
+      }
+      if (want !== this.bulged) {
+        this.bulged = want;
+        const rb = this.entity.rigidBody;
+        if (rb && this.em.physics) {
+          this.em.physics.setBallRadius(rb.handle, want ? BULLET_BULGE_RADIUS : BULLET_BODY_RADIUS);
+        }
+      }
+    }
     this.lifetime -= dt;
     if (this.lifetime <= 0) {
       this.deactivate();
       this.recycle?.();
     }
+  }
+
+  /** ★ 当前对敌判定半径（蜂群线段命中用）：逻辑口径 0.9 / 放大 1.5（与物理体积解耦） */
+  get hitRadius(): number {
+    return this.bulged ? BULLET_BULGE_RADIUS : BULLET_HIT_RADIUS;
   }
 
   /** ★ 纯物理实体：不创建任何渲染器（绘制由 BulletRenderer 完成） */

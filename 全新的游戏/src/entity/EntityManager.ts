@@ -150,6 +150,11 @@ export class EntityManager {
     return this.entities.get(id);
   }
 
+  /** ★ 按实体 id 取基类实例（组合层判定用：阵营/类型过滤等） */
+  baseOf(id: number): EntityBase | undefined {
+    return this.bases.get(id);
+  }
+
   /** 按类型遍历 */
   all(kind?: EntityKind): Entity[] {
     if (!kind) return [...this.entities.values()];

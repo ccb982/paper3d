@@ -218,6 +218,14 @@ export class PhysicsWorld {
     body.setEnabled(enabled);
   }
 
+  /** ★ 运行时改碰撞球半径（子弹"安全出膛"：出生小体积 → 飞行一段距离恢复判定体积；
+   *  仅球体；非球/无碰撞体静默跳过） */
+  setBallRadius(id: number, radius: number): void {
+    const body = this.getBody(id);
+    if (!body || body.numColliders() <= 0) return;
+    body.collider(0).setShape(new RAPIER.Ball(radius));
+  }
+
   /** ★ 移除刚体（实体销毁联动：不移除 = 物理世界泄漏膨胀） */
   removeBody(id: number): void {
     const body = this.getBody(id);

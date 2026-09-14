@@ -39,6 +39,10 @@ export interface SpawnBulletOptions {
   owner?: import('../../entity/EntityBase').EntityBase | null;
   /** ★ 命中/落地后在该点生成站桩友军（itemId；如祖宗弹） */
   allyOnHit?: string;
+  /** ★ 投射落点（准星收敛点；组合层计算）——命中窗口放大的基准点 */
+  targetX?: number;
+  targetY?: number;
+  targetZ?: number;
 }
 
 export class BulletManager {

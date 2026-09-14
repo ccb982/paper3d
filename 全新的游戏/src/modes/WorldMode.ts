@@ -61,7 +61,7 @@ import { NpcEntity } from '../entity/NpcEntity';
 import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
-import { aimRaycast } from '../services/combat/Targeting';
+import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { BULLET_HIT_RADIUS } from '../services/combat/BulletEntity';
 import { applyDamage } from '../services/combat/DamagePipeline';
@@ -122,6 +122,9 @@ const AIM_ASSIST_ANGLE = 0.05;    // 仅候选：偏角 ≤ ~2.9°
 const AIM_ASSIST_MAX = 0.03;      // 单发最多修正 ~1.7°
 const AIM_ASSIST_RANGE = 32;      // 只对 32m 内敌人生效（米）
 const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
+/** ★ 经典 TPS 枪口→准星收敛：准星射线无命中（对天/虚空）时，
+ *  取相机射线上此距离处作为虚拟落点 → 子弹仍与准星共点（不会与相机平行"各飞各的"） */
+const CROSSHAIR_CONVERGE_DIST = 200;
 /** ★ 可发射弹药 itemId（背包中有该类型即可在弹药栏切换；开火消耗 1） */
 const FIREABLE_AMMO = new Set<string>(['zuzong']);
 /** ★ 祖宗吸仇恨半径（米）：敌人与祖宗在此范围内时，索敌优先级压过玩家 */
@@ -1549,7 +1552,7 @@ export class WorldMode implements IGameMode {
     // 游标位置（射线方向投影到屏幕中心附近）
     const ray = this.cameraRay();
     let sx = Math.round(cw / 2), sy = Math.round(ch / 2);
-    const aim = this.aimRaycast();
+    const aim = this.crosshairPoint();
     if (aim && this.camera) {
       const v = new THREE.Vector3(aim.x, aim.y, aim.z).project(this.camera);
       sx = Math.round((v.x * 0.5 + 0.5) * cw);
@@ -1597,12 +1600,77 @@ export class WorldMode implements IGameMode {
     };
   }
 
-  private aimRaycast(): { x: number; y: number; z: number } | null {
+  /** ★ 经典 TPS 准星落点（弹道收敛点）：
+   *  相机沿准星发线 → ① 蜂群代理优先（无物理体；3D 圆柱近似，比地形近才锁）
+   *  ② 敌人实体 / 地形静态物兜底（phys 射线，越过自家舰船/友军/飞行弹体）
+   *  ③ 全无命中（对天/虚空）→ 相机射线上 CROSSHAIR_CONVERGE_DIST 处虚拟落点。
+   *  子弹方向 = 枪口 → 本落点 ⇒ 无论哪种情况，弹道都经过准星所指处。 */
+  private crosshairPoint(): { x: number; y: number; z: number } {
     const ray = this.cameraRay();
     const hit = aimRaycast(this.entities, {
-      origin: ray.origin, dir: ray.dir, maxDist: 200, exclude: this.player,
+      origin: ray.origin, dir: ray.dir, maxDist: CROSSHAIR_CONVERGE_DIST,
+      exclude: this.player,
+      filter: (e) => e.camp === 'enemy',
+      skipPhysics: (e) => e.camp === 'player' || e.camp === 'ally',
     });
-    return hit ? hit.point : null;
+    // ★ 蜂群代理（主力杂兵）：3D 圆柱近似锁准星——比地形/实体落点更近才采用
+    const swarmDist = hit ? hit.distance : Infinity;
+    const agent = this.nearestSwarmOnRay(ray, swarmDist);
+    if (agent) return agent;
+    if (hit && isFinite(hit.point.x) && isFinite(hit.point.y) && isFinite(hit.point.z)) {
+      return hit.point;
+    }
+    return {
+      x: ray.origin.x + ray.dir.x * CROSSHAIR_CONVERGE_DIST,
+      y: ray.origin.y + ray.dir.y * CROSSHAIR_CONVERGE_DIST,
+      z: ray.origin.z + ray.dir.z * CROSSHAIR_CONVERGE_DIST,
+    };
+  }
+
+  /** ★ 准星射线上的最近蜂群代理（3D 圆柱近似：与射线垂距 ≤ 命中半径视为正对准星；
+   *  maxDist 之外/身后的不吃 → 不隔着地形抢锁）。返回身体瞄准点或 null。 */
+  private nearestSwarmOnRay(
+    ray: { origin: { x: number; y: number; z: number }; dir: { x: number; y: number; z: number } },
+    maxDist: number,
+  ): { x: number; y: number; z: number } | null {
+    if (this.swarm.count === 0) return null;
+    let bestT = Math.min(maxDist, CROSSHAIR_CONVERGE_DIST);
+    let bestIdx = -1;
+    for (let i = 0; i < this.swarm.count; i++) {
+      const cx = this.swarm.agentX(i);
+      const cy = this.swarm.agentY(i) + 0.9; // 瞄胸口（与自瞄口径一致）
+      const cz = this.swarm.agentZ(i);
+      const t = raySphereHit(ray.origin, ray.dir, { x: cx, y: cy, z: cz }, BULLET_HIT_RADIUS);
+      if (t !== null && t > 1 && t < bestT) {
+        bestT = t;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx < 0) return null;
+    return {
+      x: this.swarm.agentX(bestIdx),
+      y: this.swarm.agentY(bestIdx) + 0.9,
+      z: this.swarm.agentZ(bestIdx),
+    };
+  }
+
+  /** ★ 枪口 → 指定落点 的发射方向（近距退化保险：太近退回相机方向） */
+  private dirTo(
+    muzzle: { x: number; y: number; z: number },
+    aim: { x: number; y: number; z: number },
+  ): { x: number; y: number; z: number } {
+    const ax = aim.x - muzzle.x, ay = aim.y - muzzle.y, az = aim.z - muzzle.z;
+    const len = Math.hypot(ax, ay, az);
+    if (len > 0.6) return { x: ax / len, y: ay / len, z: az / len };
+    const ray = this.cameraRay();
+    return { x: ray.dir.x, y: ray.dir.y, z: ray.dir.z };
+  }
+
+  /** ★ 枪口 → 准星落点 的发射方向（祖宗弹等共用；普通弹为复用落点走 dirTo） */
+  private aimDirectionFromMuzzle(
+    muzzle: { x: number; y: number; z: number },
+  ): { x: number; y: number; z: number } {
+    return this.dirTo(muzzle, this.crosshairPoint());
   }
 
   private firePlayerBullet(): void {
@@ -1620,20 +1688,11 @@ export class WorldMode implements IGameMode {
     }
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
-    const ray = this.cameraRay();
-    let dx = ray.dir.x, dy = ray.dir.y, dz = ray.dir.z;
-    try {
-      const aim = this.aimRaycast();
-      if (aim && isFinite(aim.x) && isFinite(aim.y) && isFinite(aim.z)) {
-        const ax = aim.x - muzzle.x, ay = aim.y - muzzle.y, az = aim.z - muzzle.z;
-        const alen2 = ax * ax + ay * ay + az * az;
-        if (alen2 >= 1) {
-          const alen = Math.sqrt(alen2);
-          dx = ax / alen; dy = ay / alen; dz = az / alen;
-        }
-      }
-    } catch { /* 忽略 */ }
-    // ★ 轻微弹道修正：朝准星小偏角内的敌人修正一点点（手感向）
+    // ★ 经典 TPS：枪口 → 准星落点（命中点/虚拟远点），再叠轻微自瞄修正；
+    //   落点同时下发给子弹（命中窗口放大基准：临近落点放大体积，过点缩回）
+    const aim = this.crosshairPoint();
+    const dir = this.dirTo(muzzle, aim);
+    let dx = dir.x, dy = dir.y, dz = dir.z;
     const assisted = this.aimAssist(muzzle, dx, dy, dz);
     dx = assisted.x; dy = assisted.y; dz = assisted.z;
     // ★ 子弹伤害在命中瞬间按角色最终攻击力现算（攻击公式：遗物/装备/限时效果全实时）
@@ -1643,6 +1702,7 @@ export class WorldMode implements IGameMode {
       dirX: dx, dirY: dy, dirZ: dz,
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
+      targetX: aim.x, targetY: aim.y, targetZ: aim.z,
     });
     // ★ P2：枪声刷警戒（共享感知——附近游走的代理按个体延迟进入追击）
     this.swarm.alertAt(p.x, p.z, 16, 6);
@@ -2274,7 +2334,7 @@ export class WorldMode implements IGameMode {
         x0 -= v.x * dt;
         z0 -= v.z * dt;
       }
-      const idx = this.swarm.hitTestSegment(x0, z0, p.x, p.z, BULLET_HIT_RADIUS);
+      const idx = this.swarm.hitTestSegment(x0, z0, p.x, p.z, b.hitRadius);
       if (idx < 0) return;
       const final = this.swarm.damageAgent(idx, b.damageAtHit());
       if (final > 0) {
@@ -2358,19 +2418,9 @@ export class WorldMode implements IGameMode {
     if (!tex) return;
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
-    const ray = this.cameraRay();
-    let dx = ray.dir.x, dy = ray.dir.y, dz = ray.dir.z;
-    try {
-      const aim = this.aimRaycast();
-      if (aim && isFinite(aim.x) && isFinite(aim.y) && isFinite(aim.z)) {
-        const ax = aim.x - muzzle.x, ay = aim.y - muzzle.y, az = aim.z - muzzle.z;
-        const alen2 = ax * ax + ay * ay + az * az;
-        if (alen2 >= 1) {
-          const alen = Math.sqrt(alen2);
-          dx = ax / alen; dy = ay / alen; dz = az / alen;
-        }
-      }
-    } catch { /* 忽略 */ }
+    // 与普通子弹同口径：枪口 → 准星落点（命中点/虚拟远点）
+    const dir = this.aimDirectionFromMuzzle(muzzle);
+    let dx = dir.x, dy = dir.y, dz = dir.z;
     // 轻微弹道修正（与普通子弹同口径）
     const assisted = this.aimAssist(muzzle, dx, dy, dz);
     dx = assisted.x; dy = assisted.y; dz = assisted.z;

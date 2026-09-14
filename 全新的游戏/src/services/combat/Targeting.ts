@@ -31,6 +31,9 @@ export interface AimOptions {
   exclude?: EntityBase;
   /** 附加过滤（如只锁定敌对阵营）；默认排除飞行中的子弹 */
   filter?: (e: EntityBase) => boolean;
+  /** ★ 物理兜底忽略的实体（如友军/舰船）：命中它不算落点，越过它继续投。
+   *  典型用例：TPS 准星射线不被自己的舰船/友军劫持。 */
+  skipPhysics?: (e: EntityBase) => boolean;
 }
 
 /** ★ 公共射线检测：实体优先 → 物理兜底（见文件头注释） */
@@ -65,9 +68,9 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
     }
   }
   if (bestPoint) {
-    // ★ 遮挡校验：物理射线确认目标之前无遮挡（墙后目标不算命中）
+    // ★ 遮挡校验：物理射线确认目标之前无遮挡（墙后目标不算命中；友军不算遮挡）
     const rb = opts.exclude?.entity.rigidBody;
-    const wallHit = em.physics?.castRay(o, d, bestT + 0.1, rb?.handle);
+    const wallHit = castRayPast(em, o, d, bestT + 0.1, rb?.handle, opts.skipPhysics);
     if (wallHit) {
       const dWall = Math.hypot(wallHit.point.x - o.x, wallHit.point.y - o.y, wallHit.point.z - o.z);
       if (dWall < bestT) {
@@ -78,21 +81,49 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
     return { point: bestPoint, target: bestTarget, distance: bestT };
   }
 
-  // ② 物理兜底（地面/墙）
+  // ② 物理兜底（地面/墙）：子弹/友军实体不算落点 → 越过继续投
   const rb = opts.exclude?.entity.rigidBody;
-  let hit = em.physics?.castRay(o, d, maxDist, rb?.handle);
-  // ★ 飞行中的子弹不算瞄准落点：向天发射时准星路径上可能有上一发子弹，
-  //   否则新子弹会"追着子弹"飞（无命中 → 由调用方沿相机射线兜底发射）
-  if (hit) {
-    const hitEntity = em.get(hit.handle);
-    if (hitEntity && hitEntity.kind === 'bullet') hit = null;
-  }
+  const hit = castRayPast(em, o, d, maxDist, rb?.handle, opts.skipPhysics);
   if (!hit) return null;
   const dist = Math.hypot(hit.point.x - o.x, hit.point.y - o.y, hit.point.z - o.z);
   // ★ 落点过近（射线起点在碰撞体内 → rapier 返回 TOI≈0）→ 视为无命中，
   //   由调用方走备用瞄准（相机射线远处落点），避免子弹朝自己/脚下打
   if (dist < 0.5) return null;
   return { point: hit.point, target: null, distance: dist };
+}
+
+/** ★ 物理射线（忽略子弹/友军实体）：命中 skip 实体 → 从命中点稍前继续投，最多 4 次。
+ *  用于准星落点：子弹飞行中的弹体、自家舰船/友军都不能劫持准星。 */
+function castRayPast(
+  em: EntityManager,
+  o: { x: number; y: number; z: number },
+  d: { x: number; y: number; z: number },
+  maxToi: number,
+  excludeBody: number | undefined,
+  skip?: (e: EntityBase) => boolean,
+): { handle: number; point: { x: number; y: number; z: number } } | null {
+  if (!em.physics) return null;
+  const ADV = 0.05;
+  let origin = o;
+  let toi = maxToi;
+  let excl = excludeBody;
+  let hit = em.physics.castRay(origin, d, toi, excl);
+  for (let i = 0; i < 4; i++) {
+    if (!hit) return null;
+    const record = em.get(hit.handle);
+    const base = em.baseOf(hit.handle);
+    const isBullet = record?.kind === 'bullet';
+    const skipped = !!base && !!skip?.(base);
+    if (!isBullet && !skipped) return hit;
+    // 越过该实体：起点前移 命中距离+ADV，剩余距离扣减；刚体句柄作排除项
+    const gone = Math.hypot(hit.point.x - origin.x, hit.point.y - origin.y, hit.point.z - origin.z) + ADV;
+    toi -= gone;
+    if (toi <= 0.5) return null;
+    origin = { x: hit.point.x + d.x * ADV, y: hit.point.y + d.y * ADV, z: hit.point.z + d.z * ADV };
+    excl = record?.rigidBody?.handle ?? excl;
+    hit = em.physics.castRay(origin, d, toi, excl);
+  }
+  return null;
 }
 
 /** ★ 射线 vs 球（二次方程）：返回 t（沿射线距离）；null = 不交 */
