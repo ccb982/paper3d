@@ -93,6 +93,8 @@ let hitEffectAsset: Asset | null;
 let droneAsset: Asset | FtxAsset | null = null;
 /** ★ 祖宗素材（站桩友军；缺失时回退无人机素材占位） */
 let sentinelAsset: Asset | FtxAsset | null = null;
+/** ★ 采集物纹理图集（key → FTX 包，每包 4 帧；'plant' 渲染器消费；缺省 = 不生成） */
+const plantAssets: Record<string, FtxAsset> = {};
 /** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
 let testChunk = false;
 /** ★ P0 蜂群压测：?enemies=N 开局铺 N 只代理（0 = 关；《蜂群架构.md》§8-P0） */
@@ -201,6 +203,18 @@ async function boot() {
     FtxAsset.load(encodeURI('/characters/enemies/整合运动人员，杂兵.ftx3.gz')),
     FtxAsset.load(encodeURI('/characters/enemies/牢杰，杂兵.ftx3.gz')),
   ]);
+
+  // ---- ★ 采集物纹理图集（每 key 一包 4 帧；替代程序化模型，直接贴图）----
+  for (const [key, file] of [
+    ['herb_grass', '草'], ['flower_bloom', '花'],
+    ['berry_bush', '浆果丛'], ['young_tree', '树'],
+  ] as const) {
+    try {
+      plantAssets[key] = await FtxAsset.load(encodeURI(`/textures/${file}.ftx3.gz`));
+    } catch {
+      console.warn(`[boot] 采集物纹理缺失：/textures/${file}.ftx3.gz（${key} 将不生成）`);
+    }
+  }
 
   try {
     hitEffectAsset = await Asset.load(encodeURI('/fx/bullets/主角子弹击中特效.scene.zip'));
@@ -562,6 +576,7 @@ function enterWorldMode(
     hitEffectAsset: hitEffectAsset ?? undefined,
     droneAsset: droneAsset ?? undefined,
     sentinelAsset: sentinelAsset ?? undefined,
+    plantAssets,
     debug: { testChunk, enemyStress },
     onReturn: () => {
       // 返回时：★ 行囊（弹药背包）保持原样——不转移祖宗，随存档原样落盘

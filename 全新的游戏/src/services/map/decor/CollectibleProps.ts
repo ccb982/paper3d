@@ -64,23 +64,21 @@ registerMapDecor(new MapEntityDecorBase({
     hostRole: ['ground'], perCellProb: 0.050,
     scaleRange: [0.8, 1.5], sinkRange: [0.02, 0.06],
   },
-  render: 'instanced', shadow: 'none',
-  variantCount: 1,
-  lod: true,
-  geometry: { type: 'grass', params: { vertexColors: 1, doubleSide: 1 } },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 1.4 } },
 }));
 
-/** 野花：花茎 + 彩色花冠（每 key 共享材质色，顶点色描述花瓣/茎干） */
+/** 野花：花茎 + 彩色花冠（图集 4 帧，每实例抽一帧） */
 registerMapDecor(new MapEntityDecorBase({
   key: 'flower_bloom', label: '野花', groups: [FOUNDATION_PROP_GROUP],
   placement: {
     hostRole: ['ground'], perCellProb: 0.030,
     scaleRange: [0.8, 1.25], sinkRange: [0.02, 0.05],
   },
-  render: 'instanced', shadow: 'none',
-  variantCount: 2,
-  lod: true,
-  geometry: { type: 'flower', params: { vertexColors: 1, doubleSide: 1, color2: 0xdb7099 } },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 1.2 } },
 }));
 
 /** 浆果丛：低矮叶球 + 红果 */
@@ -90,21 +88,19 @@ registerMapDecor(new MapEntityDecorBase({
     hostRole: ['ground'], perCellProb: 0.015,
     scaleRange: [0.9, 1.4], sinkRange: [0.03, 0.08],
   },
-  render: 'instanced', shadow: 'none',
-  variantCount: 2,
-  lod: true,
-  geometry: { type: 'bush', params: { vertexColors: 1, doubleSide: 1, color2: 0xc23b2e } },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 1.8 } },
 }));
 
-/** 小树：树干 + 三层锥冠（稀疏，地标感） */
+/** 小树：稀疏，地标感 */
 registerMapDecor(new MapEntityDecorBase({
   key: 'young_tree', label: '小树', groups: [FOUNDATION_PROP_GROUP],
   placement: {
     hostRole: ['ground'], perCellProb: 0.008,
     scaleRange: [0.9, 1.6], sinkRange: [0.04, 0.10],
   },
-  render: 'instanced', shadow: 'none',
-  variantCount: 3,
-  lod: true,
-  geometry: { type: 'tree', params: { vertexColors: 1, doubleSide: 1 } },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 4.8, groundSink: 0.1 } },
 }));

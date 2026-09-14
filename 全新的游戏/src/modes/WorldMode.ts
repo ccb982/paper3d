@@ -47,7 +47,7 @@ import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../serv
 import { collectibleDropOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST } from '../services/lod';
-import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
+import { setPropAtlas, type ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../systems/ai/aiconfig';
@@ -173,6 +173,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   droneAsset?: Asset | FtxAsset;
   /** ★ 祖宗素材（站桩友军；缺省回退无人机素材） */
   sentinelAsset?: Asset | FtxAsset;
+  /** ★ 采集物纹理图集（key → FTX 包，每包 4 帧；每株随机抽 1 帧静态显示） */
+  plantAssets?: Record<string, FtxAsset>;
   /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
   debug?: { testChunk?: boolean; enemyStress?: number };
 }
@@ -720,6 +722,10 @@ export class WorldMode implements IGameMode {
       asset,
       ...(MOB_BLUEPRINTS[i % MOB_BLUEPRINTS.length] ?? MOB_BLUEPRINTS[1]),
     }));
+    // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
+    for (const [key, asset] of Object.entries(ctx.plantAssets ?? {})) {
+      setPropAtlas(key, asset);
+    }
     // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《蜂群架构.md》§5.7）
     this.swarm.buildBatch(this.scene!, this.mobDefs.map((d) => d.asset));
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
