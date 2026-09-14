@@ -556,7 +556,9 @@ const WATER_FRAG = /* glsl */ `
       color = mix(color, color * 1.12 + vec3(0.04, 0.10, 0.08), shore * 0.5);
 
       col = color;
-      alpha = clamp(mix(0.72, 0.92, depthT) + foam * 0.18, 0.0, 0.96);
+      // ★ 更透（2026-09-14 用户定调「纹理不咋透明」）：浅水 0.72 → 0.50（玻璃感、透出河床），
+      //   深水 0.92 → 0.90（保住深水读感）；泡沫仍加 0.18
+      alpha = clamp(mix(0.50, 0.90, depthT) + foam * 0.18, 0.0, 0.96);
       N = normalize(vNormal);
     }
 
@@ -610,8 +612,12 @@ export class WaterMaterial extends THREE.ShaderMaterial {
             () => new THREE.Vector4(0, 0, 0, -99),
           ),
         },
-        uWaterScatter: { value: new THREE.Vector3(0.018, 0.075, 0.088) },
-        uWaterAbsorb: { value: new THREE.Vector3(0.004, 0.021, 0.036) },
+        // ★ 经典水体调色（2026-09-14 用户"质感差"）：
+        //   参考 tuxalin/water-shader（Unity 经典水面）：Surface (0.0078,0.5176,0.7) 青蓝 /
+        //   Deep (0.0039,0.00196,0.145) 深蓝；按本管线 ×~10 的散射量级折算成 uniforms。
+        //   旧值 (0.018,0.075,0.088) 偏灰绿、发白 → 换成更饱和的青蓝。
+        uWaterScatter: { value: new THREE.Vector3(0.006, 0.055, 0.075) },
+        uWaterAbsorb: { value: new THREE.Vector3(0.006, 0.014, 0.052) },
       }),
       vertexShader: WATER_VERT,
       fragmentShader: WATER_FRAG,
