@@ -171,6 +171,15 @@ async function boot() {
       );
     }
   };
+  // ★ ?perf=1 → 暴露性能采样钩子（scripts/perf/* 采集用，默认零足迹）
+  if (urlParams.get('perf') === '1') {
+    (window as unknown as { __ppMode?: () => unknown }).__ppMode = () => currentMode;
+    (window as unknown as { __ppWp?: unknown }).__ppWp = worldPerf;
+    (window as unknown as { __ppEp?: unknown }).__ppEp = entityPerf;
+    (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
+      if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
+    };
+  }
 
   // ---- 3. 加载资产 ----
   protagonistAsset = await FtxAsset.load(encodeURI('/characters/protagonist/维维美.ftx3.gz'));
