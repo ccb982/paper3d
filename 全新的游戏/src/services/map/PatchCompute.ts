@@ -9,7 +9,7 @@
 // ============================================================
 
 import { buildFaceTable, type FaceTable } from "./FaceTable";
-import { setFineS, FINE_S_NEAR } from "./FaceBuild";
+import { setFineS, FINE_S_NEAR, FINE_S_FAR } from "./FaceBuild";
 import { tileById } from "./Tiles";
 import { CHUNK_SIZE, BLOCKS_PER_SIDE, hash2 } from "./ChunkGenerator";
 import { applyGroupTintHsl, SEMANTIC_THEME_MIX, type GroupPalette } from "./TileGroups";
@@ -291,7 +291,20 @@ export function computeTableGeometry(
   );
   // ★ 物理分区：全量 = 全部 grid²；增量 = 受影响 1m cell 掩码 → 所属分区（提前返回，
   //   只输出命中分区，主线程只换这些 collider —— 顶点焊接跨界已由 ±1 环掩码覆盖）
-  const cells = partitionGroundCells(top, wall, fineE, fineS, PHYS_GRID, deriveAffectedCells(masks, PHYS_GRID));
+  // ★ 物理分区恒用【粗档 0.25m】（2026-09-14 用户定：物理与视觉解耦）——
+  //   近档视觉（0.125m）时另建一份 4 档几何专供分区 collider（隧道随建随释放），
+  //   既保住近处细弧观感，又让 rapier 恒吃粗档 trimesh（BVH/步进都轻）。
+  const affectedCells = deriveAffectedCells(masks, PHYS_GRID);
+  let cells: { slot: number; vertices: Float32Array; indices: Uint32Array }[];
+  if (fineS === FINE_S_FAR) {
+    cells = partitionGroundCells(top, wall, fineE, fineS, PHYS_GRID, affectedCells);
+  } else {
+    setFineS(FINE_S_FAR);
+    const topP = buildTopGeometry(table, src, patch);
+    const wallP = buildWallGeometry(table, src, patch);
+    setFineS(fineS); // 还原视觉档
+    cells = partitionGroundCells(topP, wallP, fineE, FINE_S_FAR, PHYS_GRID, affectedCells);
+  }
   return {
     top: {
       vertices: top.vertices,

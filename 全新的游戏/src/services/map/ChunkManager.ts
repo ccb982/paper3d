@@ -332,11 +332,11 @@ export class ChunkManager {
    *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封。
    *  ★ 2026-09-12：6 → 5 → **4**（细化环收窄：可视/封存/内存三降；远景由粗块 LOD 接） */
   private static readonly PARK_RADIUS = 4;
-  /** ★ 弧面双档（2026-09-14 用户定：60m 内用细弧边）：以"玩家 → chunk 矩形最近点"
-   *  距离判档——≤DETAIL_NEAR_DIST(60m) 用 0.125m 细档；≥DETAIL_FAR_DIST(90m) 用 0.25m
-   *  粗档；60~90m 滞回带保持现状（防边界抖动反复重建）。 */
+  /** ★ 弧面双档（2026-09-14 用户定）：**≤60m 0.125m 细弧；≥70m 0.25m 粗弧；
+   *  60~70m 为 10m 滞回带（保持现状，防边界抖动反复重建）**。
+   *  ★ 物理恒用粗档（见 PatchCompute）：档位切换只需换视觉，物理分区不动。 */
   private static readonly DETAIL_NEAR_DIST = 60;
-  private static readonly DETAIL_FAR_DIST = 90;
+  private static readonly DETAIL_FAR_DIST = 70;
 
   /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
    *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 4 → 销毁 6
@@ -1036,6 +1036,7 @@ export class ChunkManager {
       const cx = Math.floor(key / 8192) - 4096;
       const d = this.chunkDistToPlayer(cx, cz, px, pz);
       const cur = this.chunkFineS.get(key) ?? FINE_S_NEAR;
+      // ★ 双阈值 + 10m 滞回：≤60m 细弧；≥70m 粗弧；60~70m 保持现状
       let want = cur;
       if (d <= ChunkManager.DETAIL_NEAR_DIST) want = FINE_S_NEAR;
       else if (d >= ChunkManager.DETAIL_FAR_DIST) want = FINE_S_FAR;
@@ -1074,8 +1075,9 @@ export class ChunkManager {
           this.enqueueChunk(cx, cz, true);
           return;
         }
+        // ★ 物理恒粗档（与视觉档解耦）→ 档位切换物理分区不变，cells 传空跳过 collider 换装
         const ok = this.applyTerrainPatchInPlace(
-          key, geom.top, geom.wall, geom.water, geom.cells,
+          key, geom.top, geom.wall, geom.water, [],
           { top: geom.topBounds, wall: geom.wallBounds }, 'none',
         );
         if (ok) {
