@@ -38,6 +38,7 @@ import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
 import { WallMaterial } from './TerrainMaterial';
 import { disposePropRenderers } from './decor/MapEntityDecorBase';
+import { LOD_RANGES } from '../lod';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
@@ -342,6 +343,11 @@ export class ChunkManager {
   /** 近桶切换距离（米）：此范围内全细节；范围外切低模（PARK 环内仍可见但顶点大减） */
   private static readonly PROP_LOD_NEAR = 70;
   private static readonly PROP_LOD_NEAR2 = ChunkManager.PROP_LOD_NEAR * ChunkManager.PROP_LOD_NEAR;
+  /** ★ 整组隐藏距离（米）：chunk 中心超过「最远渲染带 + chunk 半对角」→ 任何实例都不可能
+   *  进入可见带 → 整个装饰组不绘制（省掉整块 draw call；与植被着色器的 90m 逐实例剔除双层） */
+  private static readonly PROP_HIDE_MARGIN = CHUNK_SIZE * Math.SQRT1_2; // ≈42.4m
+  private static readonly PROP_HIDE_DIST = LOD_RANGES[2] + ChunkManager.PROP_HIDE_MARGIN;
+  private static readonly PROP_HIDE_DIST2 = ChunkManager.PROP_HIDE_DIST * ChunkManager.PROP_HIDE_DIST;
   /** propLayer（wrap 或裸 propLayer 组）→ 调试好的近/远桶数组（懒收集 + WeakMap 缓存） */
   private propLodCache = new WeakMap<THREE.Object3D, { near: THREE.Object3D[]; far: THREE.Object3D[] } | null>();
 
@@ -749,7 +755,12 @@ export class ChunkManager {
       const cx = Math.floor(key / 8192) - 4096;
       const dx = (cx * CHUNK_SIZE + CHUNK_SIZE / 2) - px;
       const dz = (cz * CHUNK_SIZE + CHUNK_SIZE / 2) - pz;
-      const wantNear = dx * dx + dz * dz <= ChunkManager.PROP_LOD_NEAR2;
+      const d2 = dx * dx + dz * dz;
+      // ★ 整组隐藏：远到任何实例都不可能进入可见带 → 不绘制（藏进雾里）
+      const wantVisible = d2 <= ChunkManager.PROP_HIDE_DIST2;
+      if (entry.visible !== wantVisible) entry.visible = wantVisible;
+      if (!wantVisible) continue;
+      const wantNear = d2 <= ChunkManager.PROP_LOD_NEAR2;
       if (entry.userData.propLodBand === (wantNear ? 'near' : 'far')) continue;
       entry.userData.propLodBand = wantNear ? 'near' : 'far';
       let cached = this.propLodCache.get(entry);

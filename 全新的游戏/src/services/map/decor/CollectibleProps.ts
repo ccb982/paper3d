@@ -67,6 +67,7 @@ registerMapDecor(new MapEntityDecorBase({
   render: 'plant', shadow: 'none',
   variantCount: 4,
   geometry: { type: 'plant', params: { size: 1.4 } },
+  lod: true,
 }));
 
 /** 野花：花茎 + 彩色花冠（图集 4 帧，每实例抽一帧） */
@@ -79,6 +80,7 @@ registerMapDecor(new MapEntityDecorBase({
   render: 'plant', shadow: 'none',
   variantCount: 4,
   geometry: { type: 'plant', params: { size: 1.2 } },
+  lod: true,
 }));
 
 /** 浆果丛：低矮叶球 + 红果 */
@@ -91,6 +93,7 @@ registerMapDecor(new MapEntityDecorBase({
   render: 'plant', shadow: 'none',
   variantCount: 4,
   geometry: { type: 'plant', params: { size: 1.8 } },
+  lod: true,
 }));
 
 /** 小树：稀疏，地标感 */
@@ -103,4 +106,5 @@ registerMapDecor(new MapEntityDecorBase({
   render: 'plant', shadow: 'none',
   variantCount: 4,
   geometry: { type: 'plant', params: { size: 4.8, groundSink: 0.1 } },
+  lod: true,
 }));

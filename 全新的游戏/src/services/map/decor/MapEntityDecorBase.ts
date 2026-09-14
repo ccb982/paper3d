@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { hash2 } from '../TerrainNoise';
 import { tileById, type TileDef } from '../Tiles';
+import { LOD_RANGES } from '../../lod';
 import { compositeFrameToCanvas } from '../../../ui/shared/ftxFrameToCanvas';
 import type { FtxAsset } from '../../../vendor/player/FtxAsset';
 
@@ -65,6 +66,9 @@ export interface MapEntityDecorConfig {
   geometry?: { type: string; params: Record<string, number> };
   /** ★ 几何变体数（缺省 4）：高频小物件（花草）可收窄以减少 InstancedMesh 桶数/draw call */
   variantCount?: number;
+  /** ★ 距离 LOD（'plant' 渲染器实现）：额外建远桶（单面片、无风摆），
+   *  ChunkManager.updatePropLod 按 chunk 中心距离 ≤PROP_LOD_NEAR(70m) 切近/远 */
+  lod?: boolean;
 }
 
 /**
@@ -82,6 +86,8 @@ export class MapEntityDecorBase {
   readonly geometry?: { type: string; params: Record<string, number> };
   /** ★ 几何变体数（缺省 INST_VARIANT_COUNT=4；1~2 高频小物件用） */
   readonly variantCount?: number;
+  /** ★ 距离 LOD 开关（见 MapEntityDecorConfig.lod；当前 'plant' 渲染器实现） */
+  readonly lod?: boolean;
 
   constructor(cfg: MapEntityDecorConfig) {
     this.key = cfg.key;
@@ -93,6 +99,7 @@ export class MapEntityDecorBase {
     this.physics = cfg.physics;
     this.geometry = cfg.geometry;
     this.variantCount = cfg.variantCount;
+    this.lod = cfg.lod;
   }
 
   // ============================================================
@@ -777,10 +784,10 @@ function getPlantTexture(key: string, asset: FtxAsset, frame: number): THREE.Can
 /** 共享 uniform：一处更新 → 全体风摆同相推进 */
 const PLANT_TIME: { value: number } = { value: 0 };
 
-/** 交叉面片几何（单位宽高；底边 y=0 → 根部对齐地面） */
+/** 交叉面片几何（单位宽高；底边 y=0 → 根部对齐地面）；crossed=false 为单面片（远桶用） */
 let PLANT_CARD: THREE.BufferGeometry | null = null;
-function getPlantCard(): THREE.BufferGeometry {
-  if (PLANT_CARD) return PLANT_CARD;
+let PLANT_CARD_FAR: THREE.BufferGeometry | null = null;
+function buildPlantCardGeo(crossed: boolean): THREE.BufferGeometry {
   const pos: number[] = [];
   const nor: number[] = [];
   const uv: number[] = [];
@@ -799,7 +806,7 @@ function getPlantCard(): THREE.BufferGeometry {
     idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
   };
   quad(1, 0);
-  quad(0, 1);
+  if (crossed) quad(0, 1);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
@@ -807,31 +814,59 @@ function getPlantCard(): THREE.BufferGeometry {
   g.setIndex(idx);
   g.computeBoundingSphere();
   g.userData.decorShared = true;
-  PLANT_CARD = g;
   return g;
 }
+function getPlantCard(): THREE.BufferGeometry {
+  PLANT_CARD ??= buildPlantCardGeo(true);
+  return PLANT_CARD;
+}
+function getPlantCardFar(): THREE.BufferGeometry {
+  PLANT_CARD_FAR ??= buildPlantCardGeo(false);
+  return PLANT_CARD_FAR;
+}
 
-/** 风摆材质（每 (key,frame) 一份；UV 扭曲固定下部两点） */
+/** 风摆材质（每 (key,frame[,far]) 一份；UV 扭曲固定下部两点）
+ *  ★ 三级 LOD 逐实例硬切（对齐全局 LOD_RANGES）：
+ *    · 近卡（crossed）：带 [0, 60m)，风幅度 30→60m 渐隐为 0；
+ *    · 远卡（single）：带 [60m, 90m)，静态无风；
+ *    · ≥90m：带外实例折叠到裁剪空间外 → 不产生任何片元（"藏在雾里"）。 */
 const SHARED_PLANT_MAT = new Map<string, THREE.ShaderMaterial>();
-function getPlantMaterial(key: string, frame: number, tex: THREE.Texture): THREE.ShaderMaterial {
-  const mk = `${key}|f${frame}`;
+function getPlantMaterial(key: string, frame: number, tex: THREE.Texture, far = false, hasFar = true): THREE.ShaderMaterial {
+  const mk = far ? `${key}|f${frame}|far` : `${key}|f${frame}${hasFar ? '' : '|nh'}`;
   const cached = SHARED_PLANT_MAT.get(mk);
   if (cached) return cached;
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       uMap: { value: tex },
       uTime: PLANT_TIME,
-      uSway: { value: 0.06 },   // UV 扭曲幅度（底边 0 → 顶边最大）
+      uSway: { value: far ? 0 : 0.06 },   // UV 扭曲幅度（底边 0 → 顶边最大）
       uFreq: { value: 1.7 },    // 摆动频率
+      uBandMin: { value: far ? LOD_RANGES[1] : 0 },
+      // 近卡：有远卡 → [0,60)；无远卡（未开 lod）→ [0,90)（避免 60m 处凭空消失）
+      uBandMax: { value: far ? LOD_RANGES[2] : (hasFar ? LOD_RANGES[1] : LOD_RANGES[2]) },
+      uFadeNear: { value: LOD_RANGES[0] },
+      uFadeFar: { value: LOD_RANGES[1] },
     },
     vertexShader: /* glsl */ `
+      uniform float uBandMin;
+      uniform float uBandMax;
       varying vec2 vUv;
       varying float vPhase;
       varying float vWorldY;
+      varying float vCamDist;
       void main() {
         vUv = uv;
         vec4 wp = modelMatrix * (instanceMatrix * vec4(position, 1.0));
         vWorldY = wp.y;
+        // ★ 距离用【实例原点】算（同实例三个顶点一致 → 不会切出半边）
+        vec4 inst = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        float d = length(inst.xz - cameraPosition.xz);
+        vCamDist = d;
+        // ★ 三级 LOD 硬带外剔除：折叠到裁剪空间外 → 顶点级丢弃，无任何片元
+        if (d < uBandMin || d >= uBandMax) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          return;
+        }
         // 稳定随机相位（按实例水平位置；同实例恒定 → 各株不同步）
         vPhase = fract(sin(dot(wp.xz, vec2(12.9898, 78.233))) * 43758.5453);
         gl_Position = projectionMatrix * viewMatrix * wp;
@@ -842,13 +877,18 @@ function getPlantMaterial(key: string, frame: number, tex: THREE.Texture): THREE
       uniform float uTime;
       uniform float uSway;
       uniform float uFreq;
+      uniform float uFadeNear;
+      uniform float uFadeFar;
       varying vec2 vUv;
       varying float vPhase;
       varying float vWorldY;
+      varying float vCamDist;
       void main() {
         // ★ 固定下部两个点：w = v（v=0 底边 → 0）→ 根部不动、越往上摆幅越大（平方更"根固梢摆"）
         float w = vUv.y;
-        float sway = sin(uTime * uFreq + vPhase * 6.2831853 + vWorldY * 0.35) * uSway * w * w;
+        // ★ 风幅度随距离渐隐（近段满幅 → uFadeFar 处归零）
+        float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, vCamDist);
+        float sway = sin(uTime * uFreq + vPhase * 6.2831853 + vWorldY * 0.35) * uSway * w * w * fade;
         vec4 c = texture2D(uMap, vec2(vUv.x + sway, vUv.y));
         if (c.a < 0.35) discard;
         gl_FragColor = c;
@@ -878,6 +918,7 @@ registerPropRenderer('plant', {
       counts.set(f, (counts.get(f) ?? 0) + 1);
     }
     const geo = getPlantCard();
+    const geoFar = def.lod ? getPlantCardFar() : null;
     const m = new THREE.Matrix4();
     const e = new THREE.Euler();
     const q = new THREE.Quaternion();
@@ -885,11 +926,8 @@ registerPropRenderer('plant', {
     const s = new THREE.Vector3();
     const group = new THREE.Group();
     group.name = `props:${def.key}`;
-    for (const [frame, n] of counts) {
-      const tex = getPlantTexture(def.key, atlas, frame);
-      if (!tex) continue;
-      const mesh = new THREE.InstancedMesh(geo, getPlantMaterial(def.key, frame, tex), n);
-      mesh.name = `${def.key}|f${frame}`;
+    /** 同帧同实例矩阵填充（近/远桶共用） */
+    const fill = (mesh: THREE.InstancedMesh, frame: number): void => {
       let idx = 0;
       for (const p of instances) {
         if (p.variant % frames !== frame) continue;
@@ -905,8 +943,23 @@ registerPropRenderer('plant', {
       }
       mesh.instanceMatrix.needsUpdate = true;
       mesh.computeBoundingSphere(); // ★ 实例化包围球（否则边缘实例被错误视锥剔除）
+    };
+    for (const [frame, n] of counts) {
+      const tex = getPlantTexture(def.key, atlas, frame);
+      if (!tex) continue;
+      // 近卡：band [0,60)（风 30→60m 渐隐）；远卡：band [60,90)；≥90 两卡都不出片元
+      const mesh = new THREE.InstancedMesh(geo, getPlantMaterial(def.key, frame, tex, false, !!geoFar), n);
+      mesh.name = `${def.key}|f${frame}`;
       mesh.onBeforeRender = () => { PLANT_TIME.value = performance.now() * 0.001; };
+      fill(mesh, frame);
       group.add(mesh);
+      if (geoFar) {
+        const far = new THREE.InstancedMesh(geoFar, getPlantMaterial(def.key, frame, tex, true), n);
+        far.name = `${def.key}|lod1|f${frame}`;
+        far.onBeforeRender = () => { PLANT_TIME.value = performance.now() * 0.001; };
+        fill(far, frame);
+        group.add(far);
+      }
     }
     return group.children.length > 0 ? group : null;
   },
@@ -917,6 +970,8 @@ registerPropRenderer('plant', {
     SHARED_PLANT_MAT.clear();
     PLANT_CARD?.dispose();
     PLANT_CARD = null;
+    PLANT_CARD_FAR?.dispose();
+    PLANT_CARD_FAR = null;
   },
 });
 
