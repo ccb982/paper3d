@@ -36,7 +36,7 @@ export const COLLECTIBLE_LABELS: Record<string, string> = {
 /** 采集掉落表（key → 产出） */
 export const COLLECTIBLE_DROPS: Record<string, CollectibleDrop> = {
   herb_grass: { itemId: 'herb', min: 1, max: 2 },
-  flower_bloom: { itemId: 'herb', min: 1, max: 1 },
+  flower_bloom: { itemId: 'flower', min: 1, max: 1 },
   berry_bush: { itemId: 'berry', min: 1, max: 2 },
   young_tree: { itemId: 'wood', min: 1, max: 3 },
 };

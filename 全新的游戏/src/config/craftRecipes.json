@@ -75,6 +75,74 @@
         "count": 1
       },
       "station": "ship"
+    },
+    {
+      "id": "healing_potion",
+      "name": "治疗药水",
+      "inputs": [
+        {
+          "itemId": "herb",
+          "count": 3
+        }
+      ],
+      "output": {
+        "itemId": "healing_potion",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "strength_potion",
+      "name": "力量药剂",
+      "inputs": [
+        {
+          "itemId": "berry",
+          "count": 3
+        }
+      ],
+      "output": {
+        "itemId": "strength_potion",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "food_ration",
+      "name": "应急口粮",
+      "inputs": [
+        {
+          "itemId": "berry",
+          "count": 2
+        },
+        {
+          "itemId": "flower",
+          "count": 1
+        }
+      ],
+      "output": {
+        "itemId": "food_ration",
+        "count": 1
+      },
+      "station": "ship"
+    },
+    {
+      "id": "medkit",
+      "name": "医疗包",
+      "inputs": [
+        {
+          "itemId": "herb",
+          "count": 2
+        },
+        {
+          "itemId": "wood",
+          "count": 1
+        }
+      ],
+      "output": {
+        "itemId": "medkit",
+        "count": 1
+      },
+      "station": "ship"
     }
   ]
 }

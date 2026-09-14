@@ -8,6 +8,7 @@
 
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadSixBrotherIcons, compositeFrameToCanvas } from './BasicMaterialsIcons';
+import { loadGatherIcons } from './GatherIcons';
 import { getDroneIconAnimator, DroneIconAnimator } from './DroneIcon';
 import { getFluidIconAnimator } from './FluidIconAnimator';
 import { getDynamicIconAnimator } from './DynamicIconAnimator';
@@ -54,6 +55,8 @@ const FTX_ICON_SOURCES: Record<string, string> = {
 export class ItemIconRegistry {
   private cache = new Map<string, HTMLCanvasElement>();
   private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
+  /** ★ 采集物图标（道具图标.ftx3.gz：草药/花/木/浆果） */
+  private gatherIcons: Map<string, HTMLCanvasElement> | null = null;
   /** 无人机动态图标动画器（播放器路径：离屏 VAT 渲染） */
   private droneAnimator: DroneIconAnimator | null = null;
   /** ★ 直绘 FTX 图标源（解包完的 FtxAsset；getIcon 按需取帧渲染） */
@@ -68,6 +71,10 @@ export class ItemIconRegistry {
     loadSixBrotherIcons()
       .then((map) => { this.sixBrothers = map; })
       .catch((err) => console.warn('[ItemIconRegistry] 六区兄弟图标载入失败，回退色块:', err));
+    // ★ 采集物图标（草药/花/木/浆果）：异步预载，失败回退色块
+    loadGatherIcons()
+      .then((map) => { this.gatherIcons = map; this.cache.delete('herb'); this.cache.delete('flower'); this.cache.delete('wood'); this.cache.delete('berry'); })
+      .catch((err) => console.warn('[ItemIconRegistry] 采集物图标载入失败，回退色块:', err));
     // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具 / 遗物），按需取帧
     for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
       FtxAsset.load(encodeURI(url))
@@ -111,6 +118,7 @@ export class ItemIconRegistry {
       return canvas;
     }
     if (this.sixBrothers?.has(itemId)) return this.sixBrothers.get(itemId)!;
+    if (this.gatherIcons?.has(itemId)) return this.gatherIcons.get(itemId)!;
     // ★ 直绘 FTX 图标（尚未载入完成 → 走色块兜底，载入后即真实纹理）
     const asset = this.ftxAssets.get(itemId);
     if (asset) {
