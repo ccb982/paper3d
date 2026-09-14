@@ -66,6 +66,7 @@ interface Producer {
   flip: Uint8ClampedArray;
   srcCanvas: HTMLCanvasElement;
   srcCtx: CanvasRenderingContext2D | null;
+  /** ★ 直接背在 flip 缓冲上（零拷贝上屏；不再逐帧 data.set） */
   srcPixels: ImageData;
   fitX: number;
   fitY: number;
@@ -75,6 +76,8 @@ interface Producer {
   canvases: HTMLCanvasElement[];
   loopAccum: number;
   lastPaint: number;
+  /** ★ 异步 PBO 回读进行中（防重入；慢时自动跳过本次烘焙） */
+  painting: boolean;
 }
 
 class DynamicIconAnimator {
@@ -84,10 +87,34 @@ class DynamicIconAnimator {
   private producers = new WeakMap<object, Producer>();
   private rafId = 0;
   private lastT = 0;
+  /** ★ 画布可见性（IntersectionObserver：不可见的生产线跳过推进/烘焙 → 零开销） */
+  private io: IntersectionObserver | null = null;
+  private visible = new WeakSet<HTMLCanvasElement>();
 
   static getInstance(): DynamicIconAnimator {
     if (!DynamicIconAnimator.instance) DynamicIconAnimator.instance = new DynamicIconAnimator();
     return DynamicIconAnimator.instance;
+  }
+
+  /** ★ 注册画布可见性跟踪（默认可见，IO 首回调后修正）；可见恢复时若无 RAF 补启动 */
+  private trackVisibility(canvas: HTMLCanvasElement): void {
+    this.visible.add(canvas);
+    if (!this.io && typeof IntersectionObserver !== 'undefined') {
+      this.io = new IntersectionObserver((entries) => {
+        let gained = false;
+        for (const en of entries) {
+          const c = en.target as HTMLCanvasElement;
+          if (en.isIntersecting) {
+            if (!this.visible.has(c)) gained = true;
+            this.visible.add(c);
+          } else {
+            this.visible.delete(c);
+          }
+        }
+        if (gained && !this.rafId) this.startLoop();
+      });
+    }
+    this.io?.observe(canvas);
   }
 
   /** 注册活动画布（未注入渲染器/构建失败 → null，调用方回退静态图标） */
@@ -112,7 +139,8 @@ class DynamicIconAnimator {
     canvas.width = ICON_SIZE;
     canvas.height = ICON_SIZE;
     p.canvases.push(canvas);
-    this.paint(p);
+    this.trackVisibility(canvas);
+    this.paint(p, true); // 首帧同步出一帧（不等 RAF；异步回读要下一拍才上屏）
     this.startLoop();
     return canvas;
   }
@@ -132,9 +160,19 @@ class DynamicIconAnimator {
     // WeakMap 不可枚举 → 用强引用列表遍历（条目 = 已注册素材数，极少）
     for (const p of this.list) {
       for (let i = p.canvases.length - 1; i >= 0; i--) {
-        if (!p.canvases[i].isConnected) p.canvases.splice(i, 1);
+        if (!p.canvases[i].isConnected) {
+          this.io?.unobserve(p.canvases[i]);
+          this.visible.delete(p.canvases[i]);
+          p.canvases.splice(i, 1);
+        }
       }
       if (p.canvases.length === 0) continue;
+      // ★ 不可见的生产线（面板隐藏/滚出视口）→ 跳过推进与烘焙（IO 恢复时补启动）
+      let shown = false;
+      for (const c of p.canvases) {
+        if (this.visible.has(c)) { shown = true; break; }
+      }
+      if (!shown) continue;
       alive = true;
       this.advance(p, dt);
       if (now - p.lastPaint >= FRAME_MS) {
@@ -161,13 +199,35 @@ class DynamicIconAnimator {
     p.fluid.step(dt);
   }
 
-  /** 渲染（VAT 两遍 / 兜底两贴片）→ 回读 → contain 上屏 */
-  private paint(p: Producer): void {
+  /** 渲染（VAT 两遍 / 兜底两贴片）→ 回读 → contain 上屏。
+   *  ★ 异步 PBO 回读（fence 轮询）替代同步 readRenderTargetPixels，避免卡住 GPU 管线；
+   *    回读未完成时本次烘焙跳过（painting 防重入，自动降频）。
+   *  sync=true 仅注册首帧用（同步出一帧，画布立即有内容）。 */
+  private paint(p: Producer, sync = false): void {
+    if (p.painting) return;
     const renderer = getGameRenderer();
     if (!renderer) return;
+    p.painting = true;
     const useFluid = !!p.fluid;
     const fluidTex = p.fluid?.getCompositeTexture() ?? null;
     const time = performance.now() / 1000;
+    /** GL 行 0=底部 → canvas 行 0=顶部（flip 即 srcPixels 底层缓冲，零拷贝） */
+    const upload = (): void => {
+      const row = p.srcW * 4;
+      for (let y = 0; y < p.srcH; y++) {
+        const srcY = y * row;
+        const dstY = (p.srcH - 1 - y) * row;
+        p.flip.set(p.buf.subarray(srcY, srcY + row), dstY);
+      }
+      p.srcCtx?.putImageData(p.srcPixels, 0, 0);
+      for (const c of p.canvases) {
+        const ctx = c.getContext('2d');
+        if (!ctx) continue;
+        ctx.clearRect(0, 0, ICON_SIZE, ICON_SIZE);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(p.srcCanvas, p.fitX, p.fitY, p.fitW, p.fitH);
+      }
+    };
     try {
       if (p.meshObjs.length > 0) {
         // 与 BulletVisual 同款 uniforms
@@ -205,24 +265,26 @@ class DynamicIconAnimator {
         p.bake.endBake();
       }
 
-      renderer.readRenderTargetPixels(p.bake.target, 0, 0, p.srcW, p.srcH, p.buf);
-      // GL 行 0=底部 → canvas 行 0=顶部
-      const row = p.srcW * 4;
-      for (let y = 0; y < p.srcH; y++) {
-        const srcY = y * row;
-        const dstY = (p.srcH - 1 - y) * row;
-        p.flip.set(p.buf.subarray(srcY, srcY + row), dstY);
+      if (sync) {
+        renderer.readRenderTargetPixels(p.bake.target, 0, 0, p.srcW, p.srcH, p.buf);
+        upload();
+        p.painting = false;
+        return;
       }
-      p.srcPixels.data.set(p.flip);
-      p.srcCtx?.putImageData(p.srcPixels, 0, 0);
-      for (const c of p.canvases) {
-        const ctx = c.getContext('2d');
-        if (!ctx) continue;
-        ctx.clearRect(0, 0, ICON_SIZE, ICON_SIZE);
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(p.srcCanvas, p.fitX, p.fitY, p.fitW, p.fitH);
-      }
+      renderer.readRenderTargetPixelsAsync(p.bake.target, 0, 0, p.srcW, p.srcH, p.buf)
+        .then(() => { upload(); })
+        .catch(() => {
+          // 异步路径不可用（老设备）→ 退回同步
+          try {
+            renderer.readRenderTargetPixels(p.bake.target, 0, 0, p.srcW, p.srcH, p.buf);
+            upload();
+          } catch (e) {
+            console.warn('[DynamicIcon] 烘焙失败:', e);
+          }
+        })
+        .finally(() => { p.painting = false; });
     } catch (e) {
+      p.painting = false;
       console.warn('[DynamicIcon] 烘焙失败:', e);
     }
   }
@@ -329,6 +391,8 @@ class DynamicIconAnimator {
     const fitW = Math.max(1, Math.round(srcW * s));
     const fitH = Math.max(1, Math.round(srcH * s));
 
+    // ★ 上屏缓冲：ImageData 直接背在 flip 上（零拷贝——不再逐帧 data.set）
+    const flipBuf = new Uint8ClampedArray(srcW * srcH * 4);
     const producer: Producer = {
       fluid, sharedFluid, scene, camera,
       bake: new IconBake(renderer, srcW, srcH),
@@ -337,16 +401,17 @@ class DynamicIconAnimator {
       frameCount: Math.max(1, src.frameCount ?? 1),
       srcW, srcH,
       buf: new Uint8Array(srcW * srcH * 4),
-      flip: new Uint8ClampedArray(srcW * srcH * 4),
+      flip: flipBuf,
       srcCanvas,
       srcCtx: srcCanvas.getContext('2d'),
-      srcPixels: new ImageData(srcW, srcH),
+      srcPixels: new ImageData(flipBuf, srcW, srcH),
       fitX: Math.round((ICON_SIZE - fitW) / 2),
       fitY: Math.round((ICON_SIZE - fitH) / 2),
       fitW, fitH,
       canvases: [],
       loopAccum: LOOP_SEC, // 首帧先恢复初始态
       lastPaint: 0,
+      painting: false,
     };
     this.list.push(producer);
     return producer;
