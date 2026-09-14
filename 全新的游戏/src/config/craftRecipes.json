@@ -143,6 +143,21 @@
         "count": 1
       },
       "station": "ship"
+    },
+    {
+      "id": "sugar",
+      "name": "糖",
+      "inputs": [
+        {
+          "itemId": "flower",
+          "count": 2
+        }
+      ],
+      "output": {
+        "itemId": "sugar",
+        "count": 1
+      },
+      "station": "ship"
     }
   ]
 }
