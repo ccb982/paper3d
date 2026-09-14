@@ -18,11 +18,15 @@
 
 import { FOUNDATION_PROP_GROUP, MapEntityDecorBase, registerMapDecor } from './MapEntityDecorBase';
 
-/** 采集掉落：itemId + 数量区间（采集时掷） */
+/** 采集掉落：itemId + 数量区间（采集时掷）
+ *  cap —— 每株可被采收的总次数（E 键 / 子弹命中共享）；到 0 → 株消失（走已采标记）。
+ *  cooldown —— 同株相邻两次产出最小间隔（秒；防自动接触 E / 快枪一帧抽干整株）。 */
 export interface CollectibleDrop {
   itemId: string;
   min: number;
   max: number;
+  cap: number;
+  cooldown?: number;
 }
 
 /** 采集物显示名（提示文案用） */
@@ -33,12 +37,13 @@ export const COLLECTIBLE_LABELS: Record<string, string> = {
   young_tree: '小树',
 };
 
-/** 采集掉落表（key → 产出） */
+/** 采集掉落表（key → 产出）
+ *  cap：每株采收次数上限（0 = 不可采）。cooldown 缺省 0.35s。 */
 export const COLLECTIBLE_DROPS: Record<string, CollectibleDrop> = {
-  herb_grass: { itemId: 'herb', min: 1, max: 2 },
-  flower_bloom: { itemId: 'flower', min: 1, max: 1 },
-  berry_bush: { itemId: 'berry', min: 1, max: 2 },
-  young_tree: { itemId: 'wood', min: 1, max: 3 },
+  herb_grass: { itemId: 'herb', min: 1, max: 2, cap: 3, cooldown: 0.35 },
+  flower_bloom: { itemId: 'flower', min: 1, max: 1, cap: 2, cooldown: 0.35 },
+  berry_bush: { itemId: 'berry', min: 1, max: 2, cap: 3, cooldown: 0.35 },
+  young_tree: { itemId: 'wood', min: 1, max: 3, cap: 4, cooldown: 0.45 },
 };
 
 export function isCollectibleKey(key: string): boolean {
@@ -47,6 +52,11 @@ export function isCollectibleKey(key: string): boolean {
 
 export function collectibleDropOf(key: string): CollectibleDrop | null {
   return COLLECTIBLE_DROPS[key] ?? null;
+}
+
+/** ★ 每株采收次数上限（查询用；无记录 = 不可采，保守返回 0） */
+export function collectibleCapOf(key: string): number {
+  return COLLECTIBLE_DROPS[key]?.cap ?? 0;
 }
 
 export function collectibleLabelOf(key: string): string {

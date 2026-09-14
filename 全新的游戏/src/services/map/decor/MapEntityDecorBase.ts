@@ -398,9 +398,17 @@ export function groupPropsByKey(props: PlannedProp[]): Map<string, PlannedProp[]
 // 渲染适配层（基类实例经渲染器注册表出网格；three 只允许出现在本层）
 // ============================================================
 
+export interface PropRenderContext {
+  /** 本 chunk 世界坐标（渲染器算世界位置/注册运行时索引用） */
+  cx: number;
+  cz: number;
+  /** ★ 实例 → 装饰计划序号（planChunkProps 输出下标；与 ChunkManager propRegistry.index 对齐） */
+  planIdx?: number[];
+}
+
 export interface PropRenderer {
   /** 构建实例组；无内容时返回 null（调用方跳过） */
-  build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null;
+  build(def: MapEntityDecorBase, instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null;
   /** 共享资源回收（geometry/material 的 module 级缓存） */
   dispose?(): void;
 }
@@ -416,15 +424,21 @@ export function registerPropRenderer(type: string, renderer: PropRenderer): void
  * ★ 渲染入口（ChunkManager.finishStandardChunk 调用）：
  * 按实例分组 → 交给对应渲染器 → 挂进 chunk group。
  */
-export function buildPropLayer(instances: PlannedProp[]): THREE.Object3D | null {
+export function buildPropLayer(instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null {
   if (instances.length === 0) return null;
   const group = new THREE.Group();
+  // ★ ctx.planIdx 与传入的 instances 数组同位对齐 → 每个子列表要重新对齐一次
+  const indexOfInst = ctx?.planIdx ? new Map<PlannedProp, number>() : null;
+  if (indexOfInst) for (let i = 0; i < instances.length; i++) indexOfInst.set(instances[i], i);
   for (const [key, list] of groupPropsByKey(instances)) {
     const def = mapDecorByKey(key);
     if (!def) continue;
     const renderer = RENDERERS.get(def.render);
     if (renderer) {
-      const obj = renderer.build(def, list);
+      const subCtx = indexOfInst
+        ? { ...ctx!, planIdx: list.map((p) => ctx!.planIdx![indexOfInst.get(p)!]) }
+        : ctx;
+      const obj = renderer.build(def, list, subCtx);
       if (obj) group.add(obj);
     }
   }
@@ -762,6 +776,132 @@ export function setPropAtlas(key: string, asset: FtxAsset): void {
   PROP_ATLAS.set(key, asset);
 }
 
+// ============================================================
+// ★ 子弹扫掠 · 顶部扭曲状态（2026-09-14）
+//   每株一个状态位（强度 0~1 + 随机方向相位），存进 instanceColor.g/b；
+//   CPU 触发（赋满 + 随机相位）→ 逐帧指数衰减 → 顶点着色器读 g/b 混入摆动。
+//   触发源 = ChunkManager.propRegistry（与 E 键采集同一个 LOD1 物品索引），
+//   由 WorldMode 扫描每个角色子弹附近命中采集物后调用 plantGustAt()。
+// ============================================================
+
+interface PlantGustEntry {
+  mesh: THREE.InstancedMesh;
+  /** 每实例 → 装饰计划序号（decor.props 下标；与 propRegistry.index 对齐） */
+  planIdx: number[];
+  /** 每实例当前扭曲强度（0~1） */
+  gust: Float32Array;
+  /** 每实例随机方向相位（0~1） */
+  dir: Float32Array;
+  /** 每实例最近触发时间（ms；冷却判定用） */
+  last: Float32Array;
+  /** 每实例最近采收时间（ms；株级采收冷却——E/子弹共享） */
+  lastDrop: Float32Array;
+  removed: boolean;
+}
+
+/** chunkKey"{cx}|{cz}" → 该 chunk 的植物 mesh 条目（build 时注册 / teardown 注销） */
+const PLANT_GUST_CHUNKS = new Map<string, PlantGustEntry[]>();
+/** 全部条目（跨 chunk 清理散热用；与 PLANT_GUST_CHUNKS 同引用） */
+const ALL_PLANT_GUST: PlantGustEntry[] = [];
+/** 本帧有衰减更新的条目（减少无谓的 instanceColor.needsUpdate） */
+const GUST_DIRTY = new Set<PlantGustEntry>();
+/** 尚未注册的残留条目（chunk 销毁时并入清理） */
+const GUST_DEAD: PlantGustEntry[] = [];
+
+/** ★ 注册某 chunk 的植物 mesh 条目（'plant' 渲染器 build 时调用） */
+export function registerPlantGust(cx: number, cz: number, entry: PlantGustEntry): void {
+  const key = `${cx}|${cz}`;
+  let list = PLANT_GUST_CHUNKS.get(key);
+  if (!list) { list = []; PLANT_GUST_CHUNKS.set(key, list); }
+  list.push(entry);
+  ALL_PLANT_GUST.push(entry);
+}
+
+/** ★ 注销某 chunk 的全部植物条目（teardown 时调用；防残留引用积累） */
+export function unregisterPlantGustChunk(cx: number, cz: number): void {
+  const key = `${cx}|${cz}`;
+  const list = PLANT_GUST_CHUNKS.get(key);
+  if (!list) return;
+  PLANT_GUST_CHUNKS.delete(key);
+  for (const idx of GUST_DIRTY) if (list.includes(idx)) GUST_DIRTY.delete(idx);
+  for (let i = 0; i < ALL_PLANT_GUST.length; i++) {
+    if (list.includes(ALL_PLANT_GUST[i])) {
+      ALL_PLANT_GUST[i].removed = true;
+      ALL_PLANT_GUST.splice(i, 1);
+      i--;
+    }
+  }
+}
+
+/** ★ 角色子弹命中采集物触发：按 propRegistry 的 (cx, cz, planIndex) 找株、赋满扭曲 */
+export function plantGustAt(cx: number, cz: number, planIndex: number, now = performance.now()): void {
+  const list = PLANT_GUST_CHUNKS.get(`${cx}|${cz}`);
+  if (!list) return;
+  for (const e of list) {
+    // planIdx 与 propRegistry 同序（build 时按同批 visibleProps 生成）→ 下标一一对应
+    const i = e.planIdx.indexOf(planIndex);
+    if (i < 0) continue;
+    if (now - e.last[i] < PROP_GUST_RETRIGGER_COOLDOWN * 1000) continue;
+    e.gust[i] = 1;
+    // ★ 随机方向：按实例位置 hash（确定性 → 组里各株方向各异、同株重掷也乱）
+    e.dir[i] = hash2(e.mesh.count * 7 + i, planIndex * 13, 4242 + Math.floor(now / 1000) * 31) % 1;
+    e.last[i] = now;
+    GUST_DIRTY.add(e);
+    return; // 一张 mesh 内 planIdx 唯一
+  }
+}
+
+/** ★ 采收冷却门（E 键 / 子弹共享，2026-09-14）：同株两次掉落至少间隔 cooldownMs。
+ *  返回 true = 本次采收成立（调用方掉落入包 + 采集次数 +1）；false = 冷却中/未注册。 */
+export function plantDropTryClaim(cx: number, cz: number, planIndex: number, cooldownMs: number, now = performance.now()): boolean {
+  const list = PLANT_GUST_CHUNKS.get(`${cx}|${cz}`);
+  if (!list) return false;
+  for (const e of list) {
+    const i = e.planIdx.indexOf(planIndex);
+    if (i < 0) continue;
+    if (now - e.lastDrop[i] < cooldownMs) return false; // ★ 株冷却：同一株短时间内不重复给
+    e.lastDrop[i] = now;
+    return true;
+  }
+  return false;
+}
+
+/** ★ 逐帧衰减（WorldMode explore 阶段调用）；强度过小归零 */
+export function tickPlantGust(dt: number): void {
+  if (GUST_DIRTY.size === 0) return;
+  const k = Math.exp(-Math.LN2 * dt / PROP_GUST_HALF_LIFE);
+  for (const e of GUST_DIRTY) {
+    const n = e.mesh.count;
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      const g = e.gust[i];
+      if (g <= 0) continue;
+      e.gust[i] = g * k;
+      if (e.gust[i] < 0.001) e.gust[i] = 0; // ★ 归零 → 恢复常规 VAT
+      else any = true;
+    }
+    // ★ 写入 instanceColor.g（强度）+ b（方向相位）：着色器读它混入摆动
+    //   （three 的 instanceColor 是 vec3 属性 → 步长 3；r 通道留给帧号不动）
+    if (e.mesh.instanceColor && e.mesh.instanceColor.array.length === n * 3) {
+      const arr = e.mesh.instanceColor.array;
+      for (let i = 0; i < n; i++) {
+        arr[i * 3 + 1] = e.gust[i];
+        arr[i * 3 + 2] = e.dir[i];
+      }
+      e.mesh.instanceColor.needsUpdate = true;
+    }
+    if (!any) GUST_DIRTY.delete(e); // 全归零：脱离逐帧更新
+    if (e.removed) GUST_DIRTY.delete(e);
+  }
+}
+
+/** ★ 模式退出/setPropAtlas 重建时全量清空（防脏条目残留引用） */
+export function resetPlantGust(): void {
+  PLANT_GUST_CHUNKS.clear();
+  ALL_PLANT_GUST.length = 0;
+  GUST_DIRTY.clear();
+}
+
 /** 图集帧 → 合成画布纹理（CPU 合成，与图标管线同款数学；按 key|frame 缓存） */
 const SHARED_PLANT_TEX = new Map<string, THREE.DataArrayTexture>();
 /** 图集 4 帧 → 纹理数组（sampler2DArray；每帧独立图层与 mipmap）。返回 [纹理, 帧数]。 */
@@ -898,6 +1038,24 @@ function getPlantVat(key: string): THREE.DataTexture {
   return tex;
 }
 
+// ============================================================
+// ★ 子弹扫掠 · 顶部扭曲（2026-09-14）：角色子弹经过可采集植被附近时，
+//   CPU 计算一段"幅度更大、更随机"的梢部摆动，随后指数衰减回常规 VAT。
+//   · 触发源 = ChunkManager.propRegistry（与 E 键采集同一个 LOD1 物品索引）
+//   · 状态以 instanceColor.g = 扭曲强度、instanceColor.b = 随机方向相位 下发
+//   · 扭曲幅度 = uGustAmp（比常规风摆 uSway 大数倍）；随机方向按实例位置 hash
+//   · 顶点着色器把扭曲强度按顶部权重（uv.y²）混合进现有 VAT 摆动
+// ============================================================
+
+/** ★ 子弹扫掠触发半径（米）：角色子弹与采集物水平距离 ≤ 此值 → 触发扭曲 */
+export const PROP_GUST_RADIUS = 1.6;
+/** ★ 扭曲强度衰减半衰期（秒）：指数衰减，视觉上"先猛后缓" */
+export const PROP_GUST_HALF_LIFE = 0.22;
+/** ★ 扭曲幅度（米）：梢部最大额外位移（乘实例尺寸；比 uSway=0.10 大一个量级） */
+export const PROP_GUST_AMP = 0.55;
+/** ★ 每株扭曲重触发冷却（秒）：同一株在冷却期内不重复触发（连续弹幕不抖成筛子） */
+export const PROP_GUST_RETRIGGER_COOLDOWN = 0.12;
+
 /** ★ 植被最远绘制距离（米）：L2 单面片带终点 / 雾隐终点 / ≥此距离不绘制。
  *  可调（2026-09-14 用户定：扩大 2、3 级 LOD 范围）。 */
 export const PROP_LOD_FADE_FAR = 140;
@@ -931,6 +1089,7 @@ function getPlantMaterial(key: string, tex: THREE.DataArrayTexture, frames: numb
       uTime: PLANT_TIME,
       uVatPeriod: { value: 2.6 },   // VAT 循环周期（秒）
       uSway: { value: 0.10 },       // 扭动幅度（米；按实例尺寸同比放大）
+      uGustAmp: { value: PROP_GUST_AMP }, // ★ 子弹扫掠顶部扭曲幅度（比 uSway 大一个量级）
       uMorphNear: { value: morphNear },
       uMorphFar: { value: morphFar },
       uFadeNear: { value: LOD_RANGES[0] },
@@ -944,6 +1103,7 @@ function getPlantMaterial(key: string, tex: THREE.DataArrayTexture, frames: numb
       uniform float uTime;
       uniform float uVatPeriod;
       uniform float uSway;
+      uniform float uGustAmp;
       uniform float uMorphNear;
       uniform float uMorphFar;
       uniform float uHideFar;
@@ -968,12 +1128,25 @@ function getPlantMaterial(key: string, tex: THREE.DataArrayTexture, frames: numb
         // ★ 风幅度随距离渐隐（近段满幅 → uFadeFar 处归零）
         float wind = 1.0 - smoothstep(uFadeNear, uFadeFar, d);
         vec2 sway = vec2(0.0);
+        float iScale = 1.0;
         // ★ 2 级（远处）不用 VAT：风已归零的实例跳过采样（省顶点纹理采样 + hash）
         if (wind > 0.001) {
-          float iScale = (length(instanceMatrix[0].xyz) + length(instanceMatrix[1].xyz) + length(instanceMatrix[2].xyz)) / 3.0;
+          iScale = (length(instanceMatrix[0].xyz) + length(instanceMatrix[1].xyz) + length(instanceMatrix[2].xyz)) / 3.0;
           float phase = fract(sin(dot(inst.xz, vec2(12.9898, 78.233))) * 43758.5453);
           vec2 vat = texture2D(uVat, vec2(uv.y, fract(uTime / uVatPeriod + phase))).rg * 2.0 - 1.0;
           sway = vat * uSway * iScale * wind;
+          // ★ 子弹扫掠顶部扭曲（2026-09-14）：CPU 经 instanceColor.g/b 下发
+          //   g=扭曲强度（指数衰减，触发后恢复常规 VAT）、b=随机方向相位。
+          //   顶点混合按顶部权重 uv.y²（根部不晃、梢部最猛）——幅度 uGustAmp
+          //   比常规风摆 uSway 大一个量级，方向每株不同 + 随时间再叠加随机转。
+          float gust = instanceColor.g;
+          if (gust > 0.001) {
+            float gph = instanceColor.b * 6.28318;
+            // ★ "更随机"：方向 = 触发相位 + 株 hash 相位 + 随时间旋转（防同向僵摆）
+            float gT = uTime * 3.0;
+            vec2 gdir = vec2(cos(gph + phase * 6.28318 + gT), sin(gph + phase * 6.28318 + gT));
+            sway += gdir * uGustAmp * gust * iScale * uv.y * uv.y * wind;
+          }
         }
         // ★ 1↔2 级几何缓慢过渡：侧面片宽度 1→0 收拢
         float k = smoothstep(uMorphNear, uMorphFar, d);
@@ -1018,7 +1191,7 @@ function getPlantMaterial(key: string, tex: THREE.DataArrayTexture, frames: numb
 
 /** 'plant' 渲染器：按帧分桶 → InstancedMesh（交叉面片 + 图集帧贴图 + 风摆） */
 registerPropRenderer('plant', {
-  build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
+  build(def: MapEntityDecorBase, instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null {
     const atlas = PROP_ATLAS.get(def.key);
     if (!atlas || atlas.frameCount === 0) return null;
     const size = def.geometry?.params?.size ?? 1;
@@ -1065,6 +1238,18 @@ registerPropRenderer('plant', {
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.computeBoundingSphere(); // ★ 实例化包围球（否则边缘实例被错误视锥剔除）
+      // ★ 子弹扫掠注册：每株一个 {planIdx, gust, dir, last, lastDrop}（propRegistry 索引驱动）
+      if (ctx?.cx !== undefined && ctx?.cz !== undefined && ctx?.planIdx) {
+        registerPlantGust(ctx.cx, ctx.cz, {
+          mesh,
+          planIdx: ctx.planIdx.slice(),
+          gust: new Float32Array(instances.length),
+          dir: new Float32Array(instances.length),
+          last: new Float32Array(instances.length),
+          lastDrop: new Float32Array(instances.length),
+          removed: false,
+        });
+      }
       group.add(mesh);
     }
     return group.children.length > 0 ? group : null;

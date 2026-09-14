@@ -71,6 +71,9 @@ export class RasterMap {
    *  clearAll（换天/世界重建）清空。序号 = planChunkProps 输出数组下标
    *  （确定性重算 → 卸载重载后同一株仍是同一下标）。 */
   private harvestedStore = new Map<number, Set<number>>();
+  /** ★ 采集次数（2026-09-14 采集上限）：chunkKey → 装饰序号 → 已采收次数。
+   *  与 harvestedStore 同生命周期；次数达株 cap 时由 ChunkManager 标记已采消失。 */
+  private propHarvestCounts = new Map<number, Map<number, number>>();
   /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
   private static readonly UNLOAD_MARGIN = 2;
   /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
@@ -224,6 +227,7 @@ export class RasterMap {
     this.dirtyLevelKeys.clear();
     this.mapRecords.clear();       // ★ 地形记录随世界重建清空
     this.harvestedStore.clear();   // ★ 采集物已采状态随世界重建清空
+    this.propHarvestCounts.clear();// ★ 采集次数随世界重建清空（与已采标识同生命周期）
     this.pendingLoads.length = 0;
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
@@ -249,6 +253,24 @@ export class RasterMap {
       this.harvestedStore.set(key, set);
     }
     set.add(index);
+  }
+
+  // ============ ★ 采集次数（2026-09-14 · 采集上限） ============
+
+  /** 该株已被采收的次数（0 = 未采过） */
+  propHarvestCountAt(cx: number, cz: number, index: number): number {
+    return this.propHarvestCounts.get(chunkKeyOf(cx, cz))?.get(index) ?? 0;
+  }
+
+  /** 采收次数 +1（株在已采前可多次采收；幂等：重复调用安全累加） */
+  recordPropHarvest(cx: number, cz: number, index: number): void {
+    const key = chunkKeyOf(cx, cz);
+    let counts = this.propHarvestCounts.get(key);
+    if (!counts) {
+      counts = new Map<number, number>();
+      this.propHarvestCounts.set(key, counts);
+    }
+    counts.set(index, (counts.get(index) ?? 0) + 1);
   }
 
   // ============ 静态地形（无界采样） ============

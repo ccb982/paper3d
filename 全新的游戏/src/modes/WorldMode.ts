@@ -44,10 +44,10 @@ import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
-import { collectibleDropOf } from '../services/map/decor/CollectibleProps';
+import { collectibleDropOf, collectibleCapOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST } from '../services/lod';
-import { setPropAtlas, type ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
+import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_RADIUS, type ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../systems/ai/aiconfig';
@@ -1370,6 +1370,9 @@ export class WorldMode implements IGameMode {
     // ---- 子弹效果/死亡动画（航行期全免：只算地形） ----
     if (this.phase === 'explore') {
       this.bullets.update(dt, this.camera);
+      // ★ 子弹扫掠采集物 → 顶部扭曲（2026-09-14）：角色子弹经过植被附近，
+      //   触发 CPU 大摆（复用 propRegistry 索引、不另建检测体系）
+      this.updatePlantGustSweep(dt);
       // ★ 祖宗弹推进（落地/寿命到 → 生成站桩祖宗）
       this.updateSentinelShots(dt);
       // ★ 治疗转伤害 proc（鱼生萌萌香/遥·幽隙栖萤）
@@ -2485,6 +2488,25 @@ export class WorldMode implements IGameMode {
     }
   }
 
+  /** ★ 子弹扫掠采集物 → 顶部扭曲 + 采收（2026-09-14）：角色子弹经过近场植被时
+   *   CPU 大摆 + 随机掉落（株级冷却门 + cap 上限，到上限株消失）。
+   *  只认角色子弹（player/ally）；触发源 = ChunkManager.propRegistry（与 E 键
+   *  采集同一 LOD1 物品索引）。每帧 tick 衰减在当前方法尾部统一做。 */
+  private updatePlantGustSweep(dt: number): void {
+    if (this.chunks) {
+      this.bullets.forEachActive((b) => {
+        if (b.camp !== 'player' && b.camp !== 'ally') return;
+        const p = b.entity.position;
+        this.chunks.forEachCollectibleNear(p.x, p.z, PROP_GUST_RADIUS, (prop) => {
+          plantGustAt(prop.cx, prop.cz, prop.index);
+          // ★ 射击采收：与 E 键同一条掉落/上限管线（含株级冷却 → 一发子弹一次掉落）
+          this.harvestCollectible(prop, true);
+        });
+      });
+    }
+    tickPlantGust(dt);
+  }
+
   /** 祖宗弹命中检测（球心 ≈ 弹体中心；半径 1.0m，含高度带） */
   private sentinelShotHitEnemy(shot: SentinelProjectile): EnemyBase | null {
     const p = shot.sprite.position;
@@ -3109,17 +3131,24 @@ export class WorldMode implements IGameMode {
     eventBus.emit('dialogue', { id: npc.dialogueTree });
   }
 
-  /** ★ 采集（接触自动触发）：掉落入包 + 标记已采（该 chunk 道具层重贴，已采株消失）。
-   *  背包满 → 不消耗植株（auto 触发的"背包已满"提示带 2s 冷却，防每帧刷屏）。 */
+  /** ★ 采收（E 自动接触 / 子弹命中共享）：掉落入包 + 株采集次数 +1。
+   *  · 株级冷却 → 不抽干（auto 接触每帧触发 / 快枪多弹都只按株节流）
+   *  · 次数达 cap → 标记已采 + 重贴（株消失）；背包满 → 不消耗株 */
   private harvestCollectible(c: DecorPropInstance, auto = false): void {
     if (!this.itemManager || !this.worldUIManager) return;
     const drop = collectibleDropOf(c.key);
     if (!drop) return;
+    const cap = collectibleCapOf(c.key);
+    if (cap <= 0) return; // ★ 无上限声明 = 不可采（保守防御）
+    // ★ 株级冷却门：同株两次产出间隔（秒）。E auto 每帧触发 / 一条弹道数次扫掠，
+    //   都只让"每次经过"消费 1 次 → 株的 cap 不被一次贴脸/一发弹幕抽干。
+    if (!plantDropTryClaim(c.cx, c.cz, c.index, (drop.cooldown ?? 0.35) * 1000)) return;
     const count = drop.min + Math.floor(Math.random() * (drop.max - drop.min + 1));
     const ok = this.itemManager.hasSpace('player', drop.itemId, count)
       && this.itemManager.addItem('player', drop.itemId, count);
     if (ok) {
-      this.chunks.harvestProp(c.cx, c.cz, c.index);
+      // ★ 采集次数 +1；到 cap → 株消失（重贴，从渲染与查询索引中移除）
+      this.chunks.advanceCollectible(c.cx, c.cz, c.index, cap);
       // ★ 采集粒子特效（金色飞散；替代原植株头顶飘字——获取提示走右上角播报）
       if (this.scene) this.pickupGlows.push(new PickupGlowEffect(this.scene, c.x, c.y + 0.35, c.z));
       this.worldUIManager.showPickupResult(drop.itemId, true, count);

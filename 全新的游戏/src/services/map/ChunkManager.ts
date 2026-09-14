@@ -37,7 +37,10 @@ import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
 import { createWaterMesh, sharedWaterMaterial } from './WaterMaterial';
 import { WallMaterial } from './TerrainMaterial';
-import { disposePropRenderers, PROP_LOD_FADE_FAR } from './decor/MapEntityDecorBase';
+import {
+  disposePropRenderers, PROP_LOD_FADE_FAR,
+  unregisterPlantGustChunk, resetPlantGust,
+} from './decor/MapEntityDecorBase';
 import { FINE_S_NEAR, FINE_S_FAR } from './FaceBuild';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -875,6 +878,7 @@ export class ChunkManager {
     this.terrainVisuals.clear(); // ★ 原地更新登记随 dispose 作废
     clearWallMaterialRegistry();   // ★ 侧壁材质注册表清空（材质已由 disposeVisual 释放）
     disposePropRenderers(); // ★ 装饰共享几何/材质统一释放（chunk 重建不释放）
+    resetPlantGust(); // ★ 子弹扫掠扭曲状态全清（脏条目/引用防残留）
     disposeCementPlinthShared(); // ★ 台座共享几何/材质统一释放（模块级单例）
     disposeTileLabelCache(); // ★ 测试地图标牌纹理/材质统一释放（共享缓存唯一 dispose 点）
     releaseBakeCache(); // ★ 缓存纹理统一销毁（唯一缓存侧 dispose 点）
@@ -1944,12 +1948,15 @@ const key2 = chunkKeyOf(cx, cz);
    *  userData.decorKind==='decor' 的子树逐个 dispose；装饰碰撞体/围裙/台座
    *  刚体与注册表清除——重贴地重造由 pendingDecorJobs 预算化补挂 */
   private teardownDecorOnly(key: number, group: THREE.Group): void {
+    const ccx = Math.floor(key / 8192) - 4096;
+    const ccz = (key % 8192) - 4096;
     for (let i = group.children.length - 1; i >= 0; i--) {
       const c = group.children[i];
       if ((c.userData as { decorKind?: string }).decorKind !== 'decor') continue;
       group.remove(c);
       this.disposeVisual(c);
     }
+    unregisterPlantGustChunk(ccx, ccz); // ★ 子弹扫掠扭曲条目随道具层拆除（防残留引用）
     const oldProps = this.propBodies.get(key);
     if (oldProps) {
       for (const id of oldProps) this.host.destroyGround(id);
@@ -1977,12 +1984,15 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 只拆道具层（脏区局部重贴地；围裙/台座/地形/水不动 —— §17.11） */
   private teardownPropsOnly(key: number): void {
+    const ccx = Math.floor(key / 8192) - 4096;
+    const ccz = (key % 8192) - 4096;
     const pl = this.propLayers.get(key);
     if (pl) {
       pl.parent?.remove(pl);
       this.disposeVisual(pl);
       this.propLayers.delete(key);
     }
+    unregisterPlantGustChunk(ccx, ccz); // ★ 子弹扫掠扭曲条目随道具层拆除（防残留引用）
     const oldProps = this.propBodies.get(key);
     if (oldProps) {
       for (const id of oldProps) this.host.destroyGround(id);
@@ -2006,8 +2016,14 @@ const key2 = chunkKeyOf(cx, cz);
     const visibleProps = this.raster.hasHarvestedAt(cx, cz)
       ? props.filter((_, i) => !this.raster.isPropHarvested(cx, cz, i))
       : props;
+    // ★ 子弹扫掠：把"渲染实例 → 计划序号"对齐信息随层给渲染器（propRegistry 索引驱动）
+    const planIdx: number[] = [];
+    for (let i = 0; i < props.length; i++) {
+      if (this.raster.isPropHarvested(cx, cz, i)) continue;
+      planIdx.push(i);
+    }
     if (visibleProps.length > 0) {
-      const propLayer = buildPropLayer(visibleProps);
+      const propLayer = buildPropLayer(visibleProps, { cx, cz, planIdx });
       if (propLayer) {
         const wrap = new THREE.Group();
         wrap.position.set(-CHUNK_SIZE / 2, 0, -CHUNK_SIZE / 2);
@@ -2544,8 +2560,14 @@ const key2 = chunkKeyOf(cx, cz);
     const visibleProps = this.raster.hasHarvestedAt(cx, cz)
       ? decor.props.filter((_, i) => !this.raster.isPropHarvested(cx, cz, i))
       : decor.props;
+    // ★ 子弹扫掠：把"渲染实例 → 计划序号"对齐信息随层给渲染器（propRegistry 索引驱动）
+    const planIdx: number[] = [];
+    for (let i = 0; i < decor.props.length; i++) {
+      if (this.raster.isPropHarvested(cx, cz, i)) continue;
+      planIdx.push(i);
+    }
     if (visibleProps.length > 0) {
-      propLayer = buildPropLayer(visibleProps);
+      propLayer = buildPropLayer(visibleProps, { cx, cz, planIdx });
       if (propLayer) parts.push(propLayer);
       else console.warn(`[ChunkManager][装饰] chunk(${cx},${cz}) 有 ${visibleProps.length} 个装饰物但 buildPropLayer 返回 null（渲染器未注册？）`);
     }
@@ -2674,6 +2696,28 @@ const key2 = chunkKeyOf(cx, cz);
     return best;
   }
 
+  /** ★ 采集物扫掠回调（子弹 gust 用）：r 内全部采集物逐个回调（不含四维空间）。
+   *  权威索引 = propRegistry（与 queryCollectibleNear 同一套，本 chunk + 8 邻环）；
+   *  供 WorldMode 角色子弹扫掠触发植被顶部扭曲，不另建检测体系。 */
+  forEachCollectibleNear(x: number, z: number, r: number, cb: (p: DecorPropInstance) => void): void {
+    if (this.boss4D || this.propRegistry.size === 0) return;
+    const baseCx = Math.floor(x / CHUNK_SIZE);
+    const baseCz = Math.floor(z / CHUNK_SIZE);
+    const r2 = r * r;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const list = this.propRegistry.get(chunkKeyOf(baseCx + dx, baseCz + dz));
+        if (!list) continue;
+        for (const p of list) {
+          if (!isCollectibleKey(p.key)) continue; // ★ 与采集同目录（含 key 过滤）
+          const ddx = p.x - x;
+          const ddz = p.z - z;
+          if (ddx * ddx + ddz * ddz <= r2) cb(p);
+        }
+      }
+    }
+  }
+
   /** ★ 挖浮空洞顶（2026-09-14）：命中岩板的 4m 块 → 数据置空 + 重建该 chunk 岩板
    *  （mesh + 固定 trimesh）；洞口/天窗即由"少一块" + 自动裙边生成，地形不动。 */
   digCaveCap(cx: number, cz: number, bx: number, bz: number): boolean {
@@ -2724,6 +2768,18 @@ const key2 = chunkKeyOf(cx, cz);
     if (!group) return; // chunk 未建（远处）：下次建时按已采过滤，天然不渲染
     this.teardownPropsOnly(key);
     this.resnapProps(cx, cz, group);
+  }
+
+  /** ★ 采集次数 +1（E 键/子弹共享，2026-09-14 采集上限）：次数已由调用层门控
+   *  （株级冷却），此方法幂等累加；达到 cap → 标记已采 + 重贴（株消失）。
+   *  返回 true = 该株已到上限消失（下一次查询不会再见到它）。 */
+  advanceCollectible(cx: number, cz: number, index: number, cap: number): boolean {
+    this.raster.recordPropHarvest(cx, cz, index);
+    if (this.raster.propHarvestCountAt(cx, cz, index) >= cap) {
+      this.harvestProp(cx, cz, index);
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -2805,6 +2861,7 @@ const key2 = chunkKeyOf(cx, cz);
       this.propBodies.delete(key);
     }
     this.propRegistry.delete(key);
+    unregisterPlantGustChunk(cx, cz); // ★ 子弹扫掠扭曲条目随 chunk 整体替换作废
     // 石围裙地面刚体同生命周期销毁（trimesh，与地形同管线）
     const oldApron = this.apronBodies.get(key);
     if (oldApron !== undefined) {
