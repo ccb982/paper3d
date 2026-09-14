@@ -338,6 +338,13 @@ export class ChunkManager {
   /** 已封存 chunk key（网格已从场景摘除、刚体已停用） */
   private parkedKeys = new Set<number>();
 
+  // ---- ★ 装饰物距离 LOD（2026-09-14）：可拾取小植被 近桶 ⇄ 远桶（低模 blob） ----
+  /** 近桶切换距离（米）：此范围内全细节；范围外切低模（PARK 环内仍可见但顶点大减） */
+  private static readonly PROP_LOD_NEAR = 70;
+  private static readonly PROP_LOD_NEAR2 = ChunkManager.PROP_LOD_NEAR * ChunkManager.PROP_LOD_NEAR;
+  /** propLayer（wrap 或裸 propLayer 组）→ 调试好的近/远桶数组（懒收集 + WeakMap 缓存） */
+  private propLodCache = new WeakMap<THREE.Object3D, { near: THREE.Object3D[]; far: THREE.Object3D[] } | null>();
+
   // ---- ★ 延迟装饰（首建/破坏重建共用）：地形先上，装饰延后重贴地重建 ----
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
   private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps; mode: 'full' | 'props' }>();
@@ -694,6 +701,7 @@ export class ChunkManager {
     // ★ 远景粗块（探索期：近处细化，远处粗块 LOD）
     this.syncCoarse(px, pz);
     this.flushCoarseQueue();
+    this.updatePropLod(px, pz);
     this.sweepChunks(px, pz, dt);
   }
 
@@ -729,6 +737,47 @@ export class ChunkManager {
       (vis.top.material as THREE.Material).userData.lightVisible = on;
       if (vis.wall) (vis.wall.material as THREE.Material).userData.lightVisible = on;
     }
+  }
+
+  /** ★ 装饰物距离 LOD 驱动（每帧 update 末尾）：可拾取小植被近桶 ⇄ 远桶（低模）。
+   *  按 chunk 中心到玩家距离切换；只在大跨度变化时改 visibility（无每帧分配）。
+   *  propLayer 懒收集进 WeakMap（chunk 重建/采集重挂 → 新 Object3D 自动重收集）。 */
+  private updatePropLod(px: number, pz: number): void {
+    if (this.propLayers.size === 0) return;
+    for (const [key, entry] of this.propLayers) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      const dx = (cx * CHUNK_SIZE + CHUNK_SIZE / 2) - px;
+      const dz = (cz * CHUNK_SIZE + CHUNK_SIZE / 2) - pz;
+      const wantNear = dx * dx + dz * dz <= ChunkManager.PROP_LOD_NEAR2;
+      if (entry.userData.propLodBand === (wantNear ? 'near' : 'far')) continue;
+      entry.userData.propLodBand = wantNear ? 'near' : 'far';
+      let cached = this.propLodCache.get(entry);
+      if (cached === undefined) {
+        cached = this.collectPropLod(entry);
+        this.propLodCache.set(entry, cached);
+      }
+      if (!cached) continue;
+      for (const m of cached.near) m.visible = wantNear;
+      for (const m of cached.far) m.visible = !wantNear;
+    }
+  }
+
+  /** 收集某 propLayer（wrap 组或裸组）下的近/远桶 InstancedMesh；无 LOD 装饰返回 null */
+  private collectPropLod(root: THREE.Object3D): { near: THREE.Object3D[]; far: THREE.Object3D[] } | null {
+    const out = { near: [] as THREE.Object3D[], far: [] as THREE.Object3D[] };
+    let any = false;
+    root.traverse((o) => {
+      const branch = (o as THREE.Mesh).userData?.decorLodBranch as string | undefined;
+      if (branch === 'far') {
+        out.far.push(o);
+        any = true;
+      } else if (branch === 'near') {
+        out.near.push(o);
+        any = true;
+      }
+    });
+    return any ? out : null;
   }
 
   /** 首建节拍判定：距上一块首建交付 ≥ BUILD_RATE_MIN_INTERVAL_MS 才放行

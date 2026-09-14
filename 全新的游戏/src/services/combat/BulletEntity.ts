@@ -51,13 +51,17 @@ export interface BulletEntityOptions {
   allyOnHit?: string;
 }
 
+/** ★ 子弹命中判定半径（米）——普通攻击对敌人的判定范围
+ *  2026-09-14 调大：0.4 → 0.9（更容易命中敌人，与 3.0m 渲染 quad 观感对齐） */
+export const BULLET_HIT_RADIUS = 0.9;
+
 export class BulletEntity extends EntityBase {
   /** 共享剪影画布（所有同类子弹共用一张；BulletManager 初始化时提取一次） */
   static sharedSilhouetteCanvas: HTMLCanvasElement | null = null;
 
   /** ★ 子弹碰撞体积（球体；弹头锚点由渲染器折叠进实例变换） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
-    shape: { type: 'ball', radius: 0.4 },
+    shape: { type: 'ball', radius: BULLET_HIT_RADIUS },
     offsetY: 0,
   };
   private lifetime = 0;
@@ -113,7 +117,7 @@ export class BulletEntity extends EntityBase {
       physics: {
         type: 'dynamic',
         options: {
-          shape: { type: 'ball', radius: opts.radius ?? 0.4 },
+          shape: { type: 'ball', radius: opts.radius ?? BULLET_HIT_RADIUS },
           canSleep: false,
           gravityScale: 0,    // ★ 无重力：直线弹道
           ccd: true,          // ★ 连续碰撞检测：防隧穿

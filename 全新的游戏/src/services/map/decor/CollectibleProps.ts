@@ -66,6 +66,7 @@ registerMapDecor(new MapEntityDecorBase({
   },
   render: 'instanced', shadow: 'none',
   variantCount: 1,
+  lod: true,
   geometry: { type: 'grass', params: { vertexColors: 1, doubleSide: 1 } },
 }));
 
@@ -78,6 +79,7 @@ registerMapDecor(new MapEntityDecorBase({
   },
   render: 'instanced', shadow: 'none',
   variantCount: 2,
+  lod: true,
   geometry: { type: 'flower', params: { vertexColors: 1, doubleSide: 1, color2: 0xdb7099 } },
 }));
 
@@ -90,6 +92,7 @@ registerMapDecor(new MapEntityDecorBase({
   },
   render: 'instanced', shadow: 'none',
   variantCount: 2,
+  lod: true,
   geometry: { type: 'bush', params: { vertexColors: 1, doubleSide: 1, color2: 0xc23b2e } },
 }));
 
@@ -102,5 +105,6 @@ registerMapDecor(new MapEntityDecorBase({
   },
   render: 'instanced', shadow: 'none',
   variantCount: 3,
+  lod: true,
   geometry: { type: 'tree', params: { vertexColors: 1, doubleSide: 1 } },
 }));

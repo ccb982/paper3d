@@ -63,6 +63,9 @@ export interface MapEntityDecorConfig {
   geometry?: { type: string; params: Record<string, number> };
   /** ★ 几何变体数（缺省 4）：高频小物件（花草）设 1~2 以减少 InstancedMesh 桶数/draw call */
   variantCount?: number;
+  /** ★ 距离 LOD：实例渲染额外建低模 far 桶（ChunkManager.updatePropLod 按距离切换；
+   *   仅纯视觉小物件用——无物理/无阴影的可拾取植被） */
+  lod?: boolean;
 }
 
 /**
@@ -80,6 +83,8 @@ export class MapEntityDecorBase {
   readonly geometry?: { type: string; params: Record<string, number> };
   /** ★ 几何变体数（缺省 INST_VARIANT_COUNT=4；1~2 高频小物件用） */
   readonly variantCount?: number;
+  /** ★ 距离 LOD 开关（见 MapEntityDecorConfig.lod） */
+  readonly lod?: boolean;
 
   constructor(cfg: MapEntityDecorConfig) {
     this.key = cfg.key;
@@ -91,6 +96,7 @@ export class MapEntityDecorBase {
     this.physics = cfg.physics;
     this.geometry = cfg.geometry;
     this.variantCount = cfg.variantCount;
+    this.lod = cfg.lod;
   }
 
   // ============================================================
@@ -918,6 +924,32 @@ function buildYoungTree(_params: Record<string, number>, variant: number): THREE
 }
 
 /**
+ * ★ 植被距离 LOD 低模（2026-09-14 新增）：单个压扁八面体叶球 +（花/浆果）
+ *   3 颗彩色小点。组件全品牌通用：草丛/花丛/浆果/小树远距离 ≈ 一团叶色斑点。
+ *   · 八面体 8 面（24 顶点，非索引）≈ 全细节 1/4~1/10 顶点量；
+ *   · 沿用同一 vertexColors 材质（远看颜色一致，规避"色差爆闪"）；
+ *   · 确定性（variant 种子）→ 跨 chunk 共享缓存安全。
+ */
+function buildPlantLod(params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const rng = crystalRng(variant * 157 + 91);
+  const b = plantBuilder();
+  // 主体叶球（偏竖，群组观感）
+  b.octa(0, 0.62, 0, 0.5, 1.3, PLANT_LEAF, 0.3, rng);
+  b.octa(0.22, 0.42, 0.16, 0.3, 1.2, PLANT_LEAF, 0.3, rng);
+  // 花/浆果：3 颗 color2 彩色小点（远看可辨识花冠/浆果的红粉色）
+  if (params.color2 !== undefined) {
+    const petal = rgbOf(params.color2);
+    for (let i = 0; i < 3; i++) {
+      const a = rng() * Math.PI * 2;
+      const rr = 0.18 + rng() * 0.28;
+      const hh = 0.4 + rng() * 0.55;
+      b.octa(Math.cos(a) * rr, hh, Math.sin(a) * rr, 0.09, 1, petal, 0.3, rng);
+    }
+  }
+  return b.geo();
+}
+
+/**
  * 共享几何工厂：按 geometry.type 分发——
  * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
  * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
@@ -945,6 +977,9 @@ function buildSharedGeometry(type: string | undefined, params: Record<string, nu
   }
   if (type === 'tree') {
     return buildYoungTree(params, variant);
+  }
+  if (type === 'lod') {
+    return buildPlantLod(params, variant);
   }
   if (type === 'block') {
     const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
@@ -1001,6 +1036,18 @@ function getSharedRock(key: string, type: string | undefined, params: Record<str
   return { geo, mat };
 }
 
+/** ★ 植被 LOD 低模共享几何（远桶用；几何按变体缓存、与近桶同材质同矩阵） */
+function getSharedLodGeo(params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const geoKey = `lod|v${variant}|c${params.color2 ?? 0}`;
+  let geo = SHARED_GEO.get(geoKey);
+  if (!geo) {
+    geo = buildPlantLod(params, variant);
+    geo.userData.decorShared = true;
+    SHARED_GEO.set(geoKey, geo);
+  }
+  return geo;
+}
+
 /** 注册内置 instanced 渲染器（几何按 geometry.type × variant 分发；后续几何类型在此扩展） */
 registerPropRenderer('instanced', {
   build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
@@ -1022,10 +1069,7 @@ registerPropRenderer('instanced', {
     const s = new THREE.Vector3();
     const group = new THREE.Group();
     group.name = `props:${def.key}`;
-    for (const [variant, n] of counts) {
-      const { geo, mat } = getSharedRock(matKey, type, params, variant);
-      const mesh = new THREE.InstancedMesh(geo, mat, n);
-      mesh.name = `${def.key}|v${variant}`;
+    const fill = (mesh: THREE.InstancedMesh, variant: number): void => {
       let idx = 0;
       for (const p of instances) {
         if (p.variant % VC !== variant) continue;
@@ -1040,7 +1084,23 @@ registerPropRenderer('instanced', {
       mesh.instanceMatrix.needsUpdate = true;
       // ★ 实例化包围球：默认只按基几何算 → 实例远离原点会被错误视锥剔除（花草/晶体边缘消失）
       mesh.computeBoundingSphere();
+    };
+    for (const [variant, n] of counts) {
+      const { geo, mat } = getSharedRock(matKey, type, params, variant);
+      const mesh = new THREE.InstancedMesh(geo, mat, n);
+      mesh.name = `${def.key}|v${variant}`;
+      mesh.userData.decorLodBranch = 'near';
+      fill(mesh, variant);
       group.add(mesh);
+      // ★ 距离 LOD（def.lod）：远桶低模（默认隐藏；ChunkManager.updatePropLod 按距离切换）
+      if (def.lod) {
+        const far = new THREE.InstancedMesh(getSharedLodGeo(params, variant), mat, n);
+        far.name = `${def.key}|lod1|v${variant}`;
+        far.userData.decorLodBranch = 'far';
+        far.visible = false;
+        fill(far, variant);
+        group.add(far);
+      }
     }
     return group;
   },

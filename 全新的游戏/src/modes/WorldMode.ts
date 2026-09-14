@@ -63,6 +63,7 @@ import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
+import { BULLET_HIT_RADIUS } from '../services/combat/BulletEntity';
 import { applyDamage } from '../services/combat/DamagePipeline';
 import { applyHeal } from '../services/combat/Healing';
 import { effectSystem } from '../services/combat/EffectSystem';
@@ -2273,7 +2274,7 @@ export class WorldMode implements IGameMode {
         x0 -= v.x * dt;
         z0 -= v.z * dt;
       }
-      const idx = this.swarm.hitTestSegment(x0, z0, p.x, p.z, 0.4);
+      const idx = this.swarm.hitTestSegment(x0, z0, p.x, p.z, BULLET_HIT_RADIUS);
       if (idx < 0) return;
       const final = this.swarm.damageAgent(idx, b.damageAtHit());
       if (final > 0) {
