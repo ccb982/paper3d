@@ -17,7 +17,8 @@
         "itemId": "kaltsit_drone",
         "count": 1
       },
-      "station": "ship"
+      "station": "ship",
+      "sort": 250
     },
     {
       "id": "shu_jie_xx",

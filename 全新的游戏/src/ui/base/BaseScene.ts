@@ -232,6 +232,8 @@ export class BaseScene {
   private rebuildStations(): void {
     const list: BaseStation[] = [...this.eventStations];
     if (this.craftCb) {
+      // ★ 触发区 = 加工站【整间房】（进房间就一直显示提示/可按 F；用户定调）
+      //   房间按 x 分间 → rx 限房间半宽、z 不限；UI 打开时提示由 updateInput 隐藏
       list.push({
         x: this.craftBayX ?? 0, z: 0,
         rx: ROOM_W / 2 - 0.5, rz: 1e9,
@@ -567,10 +569,16 @@ export class BaseScene {
   };
 
   private updateInput(dt: number): void {
-    // ★ UI 遮挡（面板/对话打开）：角色站定（提示隐藏、F 禁用另行处理）
+    // ★ UI 遮挡（面板/对话打开）：角色站定 + **交互提示必须立即隐藏**
+    //   （此前直接 return，提示隐藏逻辑在后方 → 提示会盖在加工台/抽卡页之上）
     if (this.uiBlocking?.() ?? false) {
       this.moving = false;
       this.wantJump = false;
+      if (this.promptShown) {
+        this.promptShown = false;
+        this.promptEl.style.display = 'none';
+      }
+      this.activeStation = null;
       return;
     }
     const k = this.keys;

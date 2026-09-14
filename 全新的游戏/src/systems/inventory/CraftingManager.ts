@@ -14,6 +14,8 @@ export interface Recipe {
   inputs: { itemId: string; count: number }[];
   output: { itemId: string; count: number };
   station: 'ship' | 'portable';
+  /** ★ 展示排序权重覆盖（可选；缺省按产出类型分档：原料 100 / 消耗品 200 / 装备 300 / 其它 900） */
+  sort?: number;
 }
 
 export class CraftingManager {
@@ -27,9 +29,23 @@ export class CraftingManager {
     private itemManager: ItemManager,
   ) {}
 
-  /** 获取当前合成台可用的配方 */
+  /** ★ 配方展示排序基准（2026-09-14 用户定）：原料 → 消耗品 → 穿戴装备 → 其它（垫底）；
+   *  单个配方可用 `sort` 覆盖（如无人机 250：排在消耗品之后、装备之前）。 */
+  private static readonly RECIPE_TIER_BASE: Record<string, number> = {
+    material: 100,
+    consumable: 200,
+    equip: 300,
+  };
+
+  /** 获取当前合成台可用的配方（★ 按权重升序排序；同权重保持配置顺序；网格横排阅读序） */
   getAvailableRecipes(station: 'ship' | 'portable'): Recipe[] {
-    return this.recipes.filter(r => r.station === station || r.station === 'ship');
+    const list = this.recipes.filter(r => r.station === station || r.station === 'ship');
+    const score = (r: Recipe): number =>
+      r.sort ?? CraftingManager.RECIPE_TIER_BASE[this.itemManager.getArchetype(r.output.itemId)?.type ?? ''] ?? 900;
+    return list
+      .map((r, i) => ({ r, i }))
+      .sort((a, b) => (score(a.r) - score(b.r)) || (a.i - b.i))
+      .map((x) => x.r);
   }
 
   /** 检查是否拥有足够材料（★ 统计所有背包层：基地+飞船+玩家 的总数） */

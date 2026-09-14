@@ -61,8 +61,13 @@ export class CraftingOverlay {
   private bgMesh: THREE.Mesh | null = null;
   private moduleBgDataURL = '';
 
-  /** 六个加工模块槽位（布局 JSON 定位） */
+  /** ★ 配方滚动容器（6 槽位窗口 = 可视区；配方多时可向下滑，方舟同款交互） */
+  private scrollEl!: HTMLDivElement;
+  private contentEl!: HTMLDivElement;
+  /** 当前渲染出的配方按钮（= 内容网格单元） */
   private moduleSlots: HTMLButtonElement[] = [];
+  /** 拖拽滑动状态（pointer 拖动 + wheel；拖动后抑制 click） */
+  private dragState = { active: false, moved: 0, lastY: 0 };
   /** 已装配的加工模块（每个 = 一个配方） */
   private modules: CraftModule[] = [];
   /** 当前打开数量窗的模块（保证单开） */
@@ -71,6 +76,7 @@ export class CraftingOverlay {
   private onResize = (): void => {
     if (this.root.style.display === 'none') return;
     this.syncSize();
+    this.renderModuleList(); // 网格单元按窗口像素换算 → 尺寸变化后重算
   };
 
   constructor(
@@ -97,19 +103,46 @@ export class CraftingOverlay {
     this.scene = new THREE.Scene();
     this.camera = new THREE.OrthographicCamera(0, 1, 1, 0, -1, 1);
 
-    // ★ 六个固定加工模块槽位（布局 JSON 区域；素材 cover 不拉伸 → 圆保持圆）
-    for (const slot of MODULE_SLOTS) {
-      const btn = document.createElement('button');
-      btn.style.cssText = [
-        'position:absolute', slotCss(slot),
-        'border:none', 'cursor:pointer', 'padding:0',
-        'border-radius:8px', 'overflow:hidden',
-        'background:rgba(20,20,40,0.35)',
-        'pointer-events:auto',
-      ].join(';');
-      this.moduleSlots.push(btn);
-      this.root.appendChild(btn);
-    }
+    // ★ 配方滚动窗口（占 6 槽位包围盒；溢出可向下滑 —— 方舟加工台同款）：
+    //   内容 = 2 列网格（配方按阅读序填充），行高/列宽按窗口像素换算 → 与美术槽位对齐。
+    const CONT_RECT = { x: 0.3568, y: 0.1989, w: 0.9701 - 0.3568, h: 0.8190 - 0.1989 };
+    const hideSb = document.createElement('style');
+    hideSb.textContent = '#craft-scroll::-webkit-scrollbar{display:none}';
+    document.head.appendChild(hideSb);
+    this.scrollEl = document.createElement('div');
+    this.scrollEl.id = 'craft-scroll';
+    this.scrollEl.style.cssText = [
+      'position:absolute', slotCss(CONT_RECT),
+      'overflow-y:auto', 'overflow-x:hidden',
+      'pointer-events:auto', 'z-index:200',
+      'scrollbar-width:none', '-ms-overflow-style:none',
+      'touch-action:pan-y',
+    ].join(';');
+    this.contentEl = document.createElement('div');
+    this.contentEl.style.cssText = 'display:grid;width:100%;box-sizing:border-box;';
+    this.scrollEl.appendChild(this.contentEl);
+    this.root.appendChild(this.scrollEl);
+    // 滚轮下滑
+    this.scrollEl.addEventListener('wheel', (e) => {
+      this.scrollEl.scrollTop += e.deltaY;
+      e.preventDefault();
+    }, { passive: false });
+    // 拖拽下滑（桌面按住拖动 / 触屏滑动）；拖动距离 > 6px 时抑制按钮 click
+    this.scrollEl.addEventListener('pointerdown', (e) => {
+      this.dragState = { active: true, moved: 0, lastY: e.clientY };
+    });
+    window.addEventListener('pointermove', (e) => {
+      const d = this.dragState;
+      if (!d.active) return;
+      d.moved += Math.abs(e.clientY - d.lastY);
+      this.scrollEl.scrollTop += d.lastY - e.clientY;
+      d.lastY = e.clientY;
+    });
+    window.addEventListener('pointerup', () => { this.dragState.active = false; });
+    this.scrollEl.addEventListener('click', (e) => {
+      if (this.dragState.moved > 6) { e.stopPropagation(); e.preventDefault(); }
+      this.dragState.moved = 0;
+    }, true);
 
     const closeBtn = document.createElement('button');
     closeBtn.textContent = '✕ 关闭';
@@ -182,29 +215,42 @@ export class CraftingOverlay {
     const recipes = this.craftingManager.getAvailableRecipes(this.station);
     for (const m of this.modules) m.dispose();
     this.modules = [];
-    for (let i = 0; i < this.moduleSlots.length; i++) {
-      const btn = this.moduleSlots[i];
-      btn.replaceChildren();
-      if (i < recipes.length) {
-        const mod = new CraftModule(recipes[i], {
-          craftingManager: this.craftingManager,
-          itemManager: this.itemManager,
-          iconRegistry: this.iconRegistry,
-          moduleBgDataURL: this.moduleBgDataURL,
-          host: this.root,
-          onRequestOpen: (m) => this.openModuleQuantity(m),
-          // ★ 任一模块加工完成 → 刷新其它模块的材料数量（2026-09-14 修复）
-          onCrafted: () => this.refreshAllModules(),
-        });
-        mod.mount(btn);
-        this.modules.push(mod);
-        btn.style.display = ''; // ★ 配方数量变化时恢复显示
-      } else {
-        // ★ 无配方的槽位：整块隐藏（不再显示空底框占位）
-        btn.style.display = 'none';
-        btn.style.backgroundImage = '';
-        btn.onclick = null;
-      }
+    this.moduleSlots = [];
+    this.contentEl.replaceChildren();
+    // 行高/列宽按可视窗口像素换算（与美术 6 槽位一致）：3 行可见，其余向下滑
+    const vw = this.scrollEl.clientWidth || 1;
+    const vh = this.scrollEl.clientHeight || 1;
+    const cellW = vw * (0.3033 / 0.6133);
+    const cellH = vh * (0.1977 / 0.6201);
+    const gapX = vw * (0.0067 / 0.6133);
+    const gapY = vh * (0.01245 / 0.6201);
+    this.contentEl.style.gridTemplateColumns = `${cellW}px ${cellW}px`;
+    this.contentEl.style.gridAutoRows = `${cellH}px`;
+    this.contentEl.style.columnGap = `${gapX}px`;
+    this.contentEl.style.rowGap = `${gapY}px`;
+    this.contentEl.style.padding = `${vh * 0.0}px 0 ${gapY}px 0`;
+    for (const r of recipes) {
+      const btn = document.createElement('button');
+      btn.style.cssText = [
+        'position:relative', 'width:100%', 'height:100%',
+        'border:none', 'cursor:pointer', 'padding:0',
+        'border-radius:8px', 'overflow:hidden',
+        'background:rgba(20,20,40,0.35)', 'pointer-events:auto',
+      ].join(';');
+      const mod = new CraftModule(r, {
+        craftingManager: this.craftingManager,
+        itemManager: this.itemManager,
+        iconRegistry: this.iconRegistry,
+        moduleBgDataURL: this.moduleBgDataURL,
+        host: this.root,
+        onRequestOpen: (m) => this.openModuleQuantity(m),
+        // ★ 任一模块加工完成 → 刷新其它模块的材料数量（2026-09-14 修复）
+        onCrafted: () => this.refreshAllModules(),
+      });
+      mod.mount(btn);
+      this.modules.push(mod);
+      this.moduleSlots.push(btn);
+      this.contentEl.appendChild(btn);
     }
   }
 
@@ -262,6 +308,7 @@ export class CraftingOverlay {
     this.root.style.display = 'block';
     this.syncSize();
     this.renderModuleList();
+    this.scrollEl.scrollTop = 0; // ★ 打开时回到顶部（方舟同款）
     this.startTick();
   }
 
