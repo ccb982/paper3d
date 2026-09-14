@@ -26,6 +26,8 @@ export class ShipUIManager extends BaseInteractionUI {
   /** ★ 编队 → 完整背包页（2026-09-12）：角色属性 + 背包网格 + 出击槽 */
   private characterStatsPanel = new CharacterStatsPanel();
   private inventoryPageOpen = false;
+  /** ★ 背包页左栏（角色属性）挂载点：换装后就地刷新用 */
+  private inventoryStatsRoot: HTMLDivElement | null = null;
   private root: HTMLDivElement;
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
@@ -73,6 +75,9 @@ export class ShipUIManager extends BaseInteractionUI {
       openPanel: (def) => this.openPanel(def),
       closePanel: (id) => this.closePanel(id),
       onDataChanged: () => {
+        // ★ 背包数据变化（换装/转移/丢弃）→ 属性面板就地刷新：
+        //   基地内刚装备/卸下的加成立刻可见（此前要重开页面或出击往返才更新）
+        this.refreshInventoryStats();
         if (this.currentPanel !== 'none') this.refreshPanelContent();
       },
     });
@@ -193,6 +198,7 @@ export class ShipUIManager extends BaseInteractionUI {
     columns.style.cssText =
       'display:flex;gap:12px;align-items:flex-start;width:min(94vw,1120px);box-sizing:border-box;';
     const statsRoot = document.createElement('div');
+    this.inventoryStatsRoot = statsRoot;
     this.characterStatsPanel.render(statsRoot, this.buildStatsSnapshot(), this.iconRegistry);
     columns.appendChild(statsRoot);
     const gridRoot = document.createElement('div');
@@ -206,8 +212,18 @@ export class ShipUIManager extends BaseInteractionUI {
       id: 'base-inventory',
       title: '背包',
       render: () => content,
-      onClose: () => { this.inventoryPageOpen = false; },
+      onClose: () => {
+        this.inventoryPageOpen = false;
+        this.inventoryStatsRoot = null;
+      },
     });
+  }
+
+  /** ★ 背包页属性面板就地刷新（换装后攻击/防御等立即更新，无需重开页面/出击往返） */
+  private refreshInventoryStats(): void {
+    const root = this.inventoryStatsRoot;
+    if (!root) return;
+    this.characterStatsPanel.render(root, this.buildStatsSnapshot(), this.iconRegistry);
   }
 
   /** ★ 角色属性快照（基地无实时实体：current = 永久 + 装备临时加成；不含限时 buff） */

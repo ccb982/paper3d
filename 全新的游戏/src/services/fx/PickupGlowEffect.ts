@@ -7,6 +7,28 @@
 
 import * as THREE from 'three';
 
+/** ★ 共享金色粒子纹理（2026-09-14：自动采集高频触发 → 不再每次拾取新建/销毁 canvas 纹理） */
+let _glowTex: THREE.CanvasTexture | null = null;
+function glowTexture(): THREE.CanvasTexture {
+  if (_glowTex) return _glowTex;
+  const canvas = document.createElement('canvas');
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext('2d')!;
+  const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+  gradient.addColorStop(0, 'rgba(255, 215, 0, 1)');
+  gradient.addColorStop(0.3, 'rgba(255, 200, 50, 0.9)');
+  gradient.addColorStop(0.7, 'rgba(255, 180, 0, 0.4)');
+  gradient.addColorStop(1, 'rgba(255, 180, 0, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 32, 32);
+  const texture = new THREE.CanvasTexture(canvas);
+  // ★ 径向渐变是显示空间 sRGB 色：打标签走 解码→线性→ACES→编码 正确管线
+  texture.colorSpace = THREE.SRGBColorSpace;
+  _glowTex = texture;
+  return texture;
+}
+
 export class PickupGlowEffect {
   private scene: THREE.Scene;
   private particles: {
@@ -22,22 +44,7 @@ export class PickupGlowEffect {
   constructor(scene: THREE.Scene, x: number, y: number, z: number) {
     this.scene = scene;
 
-    // 生成金色径向渐变纹理
-    const canvas = document.createElement('canvas');
-    canvas.width = 32;
-    canvas.height = 32;
-    const ctx = canvas.getContext('2d')!;
-    const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-    gradient.addColorStop(0, 'rgba(255, 215, 0, 1)');
-    gradient.addColorStop(0.3, 'rgba(255, 200, 50, 0.9)');
-    gradient.addColorStop(0.7, 'rgba(255, 180, 0, 0.4)');
-    gradient.addColorStop(1, 'rgba(255, 180, 0, 0)');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 32, 32);
-    const texture = new THREE.CanvasTexture(canvas);
-    // ★ 径向渐变是显示空间 sRGB 色：打标签走 解码→线性→ACES→编码 正确管线，
-    //   否则被当线性直通 → ACES 后过亮（与 HitEffectView 同款修复，2026-08-23）
-    texture.colorSpace = THREE.SRGBColorSpace;
+    const texture = glowTexture();
 
     // 生成 8 个粒子，沿圆周均匀分布 + 随机上浮速度
     for (let i = 0; i < 8; i++) {
@@ -89,8 +96,7 @@ export class PickupGlowEffect {
     this.disposed = true;
     for (const p of this.particles) {
       this.scene.remove(p.sprite);
-      p.sprite.material.dispose();
-      (p.sprite.material as THREE.SpriteMaterial).map?.dispose();
+      p.sprite.material.dispose(); // ★ map 是共享纹理，不随实例释放
     }
     this.particles = [];
   }

@@ -516,26 +516,27 @@ export class WorldUIManager extends BaseInteractionUI {
     clearTimeout(rec.timer);
     const i = this.pickupToasts.indexOf(rec);
     if (i >= 0) this.pickupToasts.splice(i, 1);
-    rec.el.style.transform = 'translateY(19px)';
+    rec.el.style.transform = 'translateY(23px)';
     rec.el.style.opacity = '0';
     setTimeout(() => rec.el.remove(), 300);
   }
 
   /** 单条播报面板：灰黑半透明，左 = 物品图标，右 = 文字（失败红字 + 图标淡化）；
-   *  ★ 用户定调：先按手绘面板放大 2×，再缩小 1/3（净 ≈1.33×）。 */
+   *  ★ 用户定调：先按手绘面板放大 2×，再缩小 1/3（净 ≈1.33×）；
+   *  2026-09-14 两次"面积 +25%"→ 线性累计 ×1.25（面积 ×1.5625）。 */
   private buildPickupToast(itemId: string, success: boolean, label: string): HTMLDivElement {
     const panel = document.createElement('div');
     panel.style.cssText = [
-      'width:100%', 'min-height:59px', 'display:flex', 'align-items:center', 'gap:11px',
-      'padding:8px 13px', 'box-sizing:border-box',
+      'width:100%', 'min-height:74px', 'display:flex', 'align-items:center', 'gap:13px',
+      'padding:10px 17px', 'box-sizing:border-box',
       'background:rgba(18,20,24,0.72)', 'border:1px solid rgba(255,255,255,0.10)',
-      'border-radius:11px', 'pointer-events:none',
-      // 入场起点：上方 13px + 全透明；位移动画统一由 transform/opacity 过渡驱动
-      'transform:translateY(-13px)', 'opacity:0',
+      'border-radius:13px', 'pointer-events:none',
+      // 入场起点：上方 17px + 全透明；位移动画统一由 transform/opacity 过渡驱动
+      'transform:translateY(-17px)', 'opacity:0',
       'transition:transform .22s ease,opacity .22s ease',
     ].join(';');
     const icon = document.createElement('div');
-    icon.style.cssText = 'flex:0 0 auto;width:48px;height:48px;display:flex;align-items:center;justify-content:center;';
+    icon.style.cssText = 'flex:0 0 auto;width:60px;height:60px;display:flex;align-items:center;justify-content:center;';
     this.iconRegistry ??= new ItemIconRegistry(this.itemManager);
     const el = this.iconRegistry.createIconElement(itemId);
     el.style.width = '100%';
@@ -547,7 +548,7 @@ export class WorldUIManager extends BaseInteractionUI {
     const text = document.createElement('div');
     text.textContent = label;
     text.style.cssText = [
-      'flex:1 1 auto', 'font-size:17px', 'line-height:1.35',
+      'flex:1 1 auto', 'font-size:21px', 'line-height:1.35',
       'text-shadow:0 1px 2px rgba(0,0,0,.6)',
       'white-space:nowrap', 'overflow:hidden', 'text-overflow:ellipsis',
       `color:${success ? '#e8ecf2' : '#ff9a9a'}`,
@@ -557,13 +558,14 @@ export class WorldUIManager extends BaseInteractionUI {
     return panel;
   }
 
-  /** 惰性建播报栈容器：位置按手绘 JSON 归一化坐标换算；宽度 12.18% × 2 × (2/3) = 16.24%
-   *  （用户定调：放大 2× 后再缩 1/3）；叠加为列，单条高度取内容高度 59px 起。 */
+  /** 惰性建播报栈容器：位置按手绘 JSON 归一化坐标换算；
+   *  宽度 12.18% × 2 × (2/3) = 16.24%，两次"面积 +25%"后 ≈ 20.3%；
+   *  叠加为列，单条高度取内容高度 74px 起。 */
   private ensurePickupStack(): HTMLDivElement {
     if (this.pickupStack) return this.pickupStack;
     const stack = document.createElement('div');
     stack.style.cssText = [
-      'position:fixed', 'top:8.97%', 'right:0.16%', 'width:16.24%',
+      'position:fixed', 'top:8.97%', 'right:0.16%', 'width:20.3%',
       'z-index:70', 'display:flex', 'flex-direction:column', 'gap:8px',
       'align-items:stretch', 'pointer-events:none',
     ].join(';');

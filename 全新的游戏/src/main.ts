@@ -57,14 +57,14 @@ let currentEnv: 'ship' | 'world' = 'ship';
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
 
-/** 舰船内部固定背景色（深空舱内；不随昼夜变化） */
-const SHIP_BG = 0x14142a;
+/** 舰船内部固定背景色（中性灰；2026-09-14 用户定调：基地区背景改为灰色，不随昼夜变化） */
+const SHIP_BG = 0x808080;
 
 /**
  * ★ 每帧刷新背景清屏色 + 雾色（按当前模式区分）：
  *   - world：露天战场，背景用天空边界（地平线）色随昼夜渐变，雾色与之同色，
  *            远处地形融进地平线 → 与穹顶底部无缝衔接
- *   - ship：舰船内部，用固定深空背景，不受天空影响
+ *   - ship：舰船内部，固定灰色背景，不受天空影响
  */
 function updateSky(): void {
   if (currentEnv === 'world') {

@@ -44,7 +44,7 @@ import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
-import { collectibleDropOf, collectibleLabelOf } from '../services/map/decor/CollectibleProps';
+import { collectibleDropOf } from '../services/map/decor/CollectibleProps';
 import { resolveTileLook } from '../services/map/TileMaterials';
 import { LOD_MAX_DIST } from '../services/lod';
 import type { ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
@@ -378,10 +378,11 @@ export class WorldMode implements IGameMode {
   private npcs: NpcEntity[] = [];
   /** 当前就近可交互 NPC（每帧判定；提示/E 键用） */
   private nearbyNpc: NpcEntity | null = null;
-  /** ★ 当前就近可采集物（每帧判定；E 采集；优先级低于 NPC、高于进舰） */
-  private nearbyCollectible: DecorPropInstance | null = null;
-  /** 采集交互半径（米） */
-  private static readonly COLLECT_RADIUS = 2.6;
+  /** ★ 采集物"接触即入包"节拍（0.1s 查询一次）与背包满提示冷却 */
+  private autoPickAccum = 0;
+  private autoPickToastCd = 0;
+  /** 接触采集半径（米；碰到就自动入包，无需按键） */
+  private static readonly COLLECT_TOUCH_RADIUS = 1.3;
   /** 正在对话的 NPC（结束后消失） */
   private pendingNpc: NpcEntity | null = null;
   /** 世界事件 NPC 同时存在上限 */
@@ -836,7 +837,7 @@ export class WorldMode implements IGameMode {
     this.droneAsset = ctx.droneAsset ?? null;
     // ★ 祖宗素材（缺省回退无人机素材 → 美术到位前管线可跑）
     this.sentinelAsset = ctx.sentinelAsset ?? null;
-    // ★ 友军部署推迟到停靠（航行操船期不绘制友军；停靠后 deploySlotAllies）
+    // ★ 友军部署推迟到停靠（航行操船期不绘制友军；停靠/出舱时 syncSlotAllies 全量同步）
 
     // ---- ★ 调试：F9 回读最终绘制颜色（游标指向像素 + 中心网格；诊断警示贴画偏色用） ----
     const onF9 = (e: KeyboardEvent) => {
@@ -946,19 +947,18 @@ export class WorldMode implements IGameMode {
     this.sentinelSummonUnsub = eventBus.on('sentinel_summon', () => {
       this.launchSentinelProjectile();
     });
-    // ★ 出击槽池变动：友军部署 → 生成；卸载/替换 → 回收对应实体（装备贴片由 0.5s 同步兜底）
-    this.deploymentUnsub = eventBus.on('deployment_changed', (payload) => {
-      // ★ 装备属性重算（穿脱/互换立即生效；与友军生成无关，先于无人机素材守卫）
+    // ★ 出击槽池变动（装备/友军增删换）：2026-09-14 修复"舰内换装不刷新"
+    this.deploymentUnsub = eventBus.on('deployment_changed', () => {
+      // ① 装备属性重算（穿脱/互换立即生效）
       this.refreshPlayerStats();
-      // ★ 航行操船期：友军不部署（停靠时统一 deploySlotAllies 生成）
-      if (!this.droneAsset || this.phase !== 'explore') return;
-      this.despawnAllyAt(payload.slotIndex);
-      if (payload.itemId && allyPlaybackRegistry.has(payload.itemId)) {
-        allyPlaybackRegistry.get(payload.itemId)!.spawn({
-          itemId: payload.itemId,
-          slotIndex: payload.slotIndex,
-          spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId),
-        });
+      // ② 舰内空间（E 进舱）用独立 BaseScene：换装立刻作用于舱内角色
+      //    （贴片/跟随无人机/载具；出舱后世界侧再由 ③ 补齐）
+      this.shipInterior?.refreshDeployment();
+      // ③ 世界侧：探索期当场增删友军 + 立即重挂角色贴片（不等 0.5s 节拍）；
+      //    航行/舰内期间不生成实体（出舱/停靠时 syncSlotAllies 统一同步）
+      if (this.phase === 'explore') {
+        this.syncSlotAllies();
+        this.combatItems?.syncLoadout();
       }
     });
   }
@@ -1007,7 +1007,6 @@ export class WorldMode implements IGameMode {
 
     // ★ 探索期事件 NPC：就近判定（E 对话优先于 E 进舰）
     this.nearbyNpc = null;
-    this.nearbyCollectible = null;
     if (this.phase === 'explore' && !inInterior && !talking && !this.player.dead
       && !this.worldUIManager.hasModalOpen) {
       const p0 = this.player.position;
@@ -1019,16 +1018,25 @@ export class WorldMode implements IGameMode {
           this.nearbyNpc = npc;
         }
       }
-      // ★ 就近采集物（草丛/花丛/浆果丛/小树；JS 查询 propRegistry，零物理）
-      this.nearbyCollectible = this.chunks.queryCollectibleNear(p0.x, p0.z, WorldMode.COLLECT_RADIUS);
     }
-    // ★ 按 E：就近 NPC 对话 → 采集 → 进舰内（仅降落后；飞行中不进）
+    // ★ 采集物：接触即自动入包（2026-09-14 用户定调；0.1s 节拍省查询，JS 查 propRegistry）
+    this.autoPickToastCd = Math.max(0, this.autoPickToastCd - dt);
+    if (this.phase === 'explore' && !inInterior && !talking && !this.player.dead
+      && !this.worldUIManager.hasModalOpen) {
+      this.autoPickAccum += dt;
+      if (this.autoPickAccum >= 0.1) {
+        this.autoPickAccum = 0;
+        const pp0 = this.player.position;
+        const c = this.chunks.queryCollectibleNear(pp0.x, pp0.z, WorldMode.COLLECT_TOUCH_RADIUS);
+        if (c) this.harvestCollectible(c, true);
+      }
+    }
+    // ★ 按 E：就近 NPC 对话 / 进舰内（仅降落后；飞行中不进）
     if (!uiLocked && input.held.interact && this.phase === 'explore' && !this.player.dead) {
       if (this.nearbyNpc) this.startNpcDialogue(this.nearbyNpc);
-      else if (this.nearbyCollectible) this.harvestCollectible(this.nearbyCollectible);
       else this.enterShipInterior();
     }
-    // ★ 交互提示（对话中隐藏；NPC 优先于采集/舰船）
+    // ★ 交互提示（对话中隐藏；NPC 优先于舰船）
     {
       const s0 = this.ship?.position;
       const p0 = this.player.position;
@@ -1037,9 +1045,7 @@ export class WorldMode implements IGameMode {
         && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2;
       if (talking) this.worldUIManager.setBoardPrompt(false);
       else if (this.nearbyNpc) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyNpc.displayName}交谈`);
-      else if (this.nearbyCollectible) {
-        this.worldUIManager.setBoardPrompt(true, `E · 采集 ${collectibleLabelOf(this.nearbyCollectible.key)}`);
-      } else this.worldUIManager.setBoardPrompt(nearShip);
+      else this.worldUIManager.setBoardPrompt(nearShip);
     }
 
     // ★ 指针锁定唯一事实来源 = 是否有非战斗 UI 打开：
@@ -1440,7 +1446,7 @@ export class WorldMode implements IGameMode {
     for (const npc of this.npcs) npc.dispose();
     this.npcs = [];
     this.nearbyNpc = null;
-    this.nearbyCollectible = null;
+    this.autoPickAccum = 0;
     this.pendingNpc = null;
     // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
     this.swarm.dispose();
@@ -2726,17 +2732,34 @@ export class WorldMode implements IGameMode {
     this.requestDock(true);
   }
 
-  /** ★ 出击槽池 → 友军实体部署（停靠时调用；航行期不绘制友军） */
-  private deploySlotAllies(): void {
+  /** ★ 出击槽 ↔ 世界友军**全量同步**（增/删/换；2026-09-14 重做）：
+   *  - 只处理入驻槽位的友军（slotIndex ≥ 0；道具召唤的无人机不动）
+   *  - 槽位已空/换型 → 销毁对应世界实体；槽位有友军无实体 → 生成
+   *  - 调用点：停靠（航行→探索）、出舱（舰内→探索）、探索期换装变化 */
+  private syncSlotAllies(): void {
     if (!this.droneAsset) return;
     const slots = this.itemManager?.getSlots?.() ?? [];
+    const wanted = new Map<number, string>();
     for (let i = 0; i < slots.length; i++) {
       const id = slots[i];
-      if (!id) continue;
-      const entry = allyPlaybackRegistry.get(id);
-      if (entry) {
-        entry.spawn({ itemId: id, slotIndex: i, spawnDroneNearPlayer: (slot, itemId) => this.spawnDroneNearPlayer(slot, itemId) });
-      }
+      if (id && allyPlaybackRegistry.has(id)) wanted.set(i, id);
+    }
+    // ① 回收：槽位已空 / 换型 → 销毁世界实体
+    for (let i = this.drones.length - 1; i >= 0; i--) {
+      const d = this.drones[i];
+      if (d.slotIndex < 0) continue;
+      if (wanted.get(d.slotIndex) === d.itemId) continue;
+      this.drones.splice(i, 1);
+      d.dispose();
+    }
+    // ② 补齐：有槽位但没有实体 → 生成
+    for (const [slotIndex, itemId] of wanted) {
+      if (this.drones.some((d) => d.slotIndex === slotIndex && d.itemId === itemId)) continue;
+      allyPlaybackRegistry.get(itemId)!.spawn({
+        itemId,
+        slotIndex,
+        spawnDroneNearPlayer: (slot, id) => this.spawnDroneNearPlayer(slot, id),
+      });
     }
   }
 
@@ -2964,7 +2987,7 @@ export class WorldMode implements IGameMode {
     p.position.y = exit.y;
     this.worldUIManager.setDockButtonVisible(false);
     this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
-    this.deploySlotAllies();                       // ★ 停靠后：友军出队
+    this.syncSlotAllies();                         // ★ 停靠后：友军出队（与出击槽全量同步）
     this.showFloatingAt(exit.x, exit.y + 1.6, exit.z, emergency ? '紧急停靠' : '已停靠', 'heal');
     // 兜底：若镜头调度意外缺失（无相机/被取消），直接就位并交还控制
     if (!this.camBlend) {
@@ -3029,9 +3052,9 @@ export class WorldMode implements IGameMode {
     eventBus.emit('dialogue', { id: npc.dialogueTree });
   }
 
-  /** ★ 采集（E）：掉落入包 + 标记已采（该 chunk 道具层重贴，已采株从渲染/查询一起消失）。
-   *  背包满 → 失败提示、不消耗植株（可清背包后再采）。 */
-  private harvestCollectible(c: DecorPropInstance): void {
+  /** ★ 采集（接触自动触发）：掉落入包 + 标记已采（该 chunk 道具层重贴，已采株消失）。
+   *  背包满 → 不消耗植株（auto 触发的"背包已满"提示带 2s 冷却，防每帧刷屏）。 */
+  private harvestCollectible(c: DecorPropInstance, auto = false): void {
     if (!this.itemManager || !this.worldUIManager) return;
     const drop = collectibleDropOf(c.key);
     if (!drop) return;
@@ -3040,13 +3063,14 @@ export class WorldMode implements IGameMode {
       && this.itemManager.addItem('player', drop.itemId, count);
     if (ok) {
       this.chunks.harvestProp(c.cx, c.cz, c.index);
-      this.showFloatingAt(c.x, c.y + 1.2, c.z, `+${count} ${collectibleLabelOf(c.key)}`, 'pickup');
+      // ★ 采集粒子特效（金色飞散；替代原植株头顶飘字——获取提示走右上角播报）
+      if (this.scene) this.pickupGlows.push(new PickupGlowEffect(this.scene, c.x, c.y + 0.35, c.z));
       this.worldUIManager.showPickupResult(drop.itemId, true, count);
       this.worldUIManager.flashItemAndRefresh(drop.itemId);
-    } else {
+    } else if (!auto || this.autoPickToastCd <= 0) {
       this.worldUIManager.showPickupResult(drop.itemId, false);
+      if (auto) this.autoPickToastCd = 2;
     }
-    this.nearbyCollectible = null;
   }
 
   /** ★ 舰内固定位事件：交互站（F 交谈）+ NPC 立绘（本地坐标；与按钮条并存） */
@@ -3208,6 +3232,9 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setAssaultBanner(null);
     // 回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
     this.phase = 'explore';
+    // ★ 舰内换装落地：出舱时与世界侧对齐（友军增删换 + 角色贴片立即重挂）
+    this.syncSlotAllies();
+    this.combatItems?.syncLoadout();
     this.player.controlLocked = false;
     this.player.visible = true;
     this.worldUIManager?.setCombatHudVisible(true);
@@ -3349,17 +3376,6 @@ export class WorldMode implements IGameMode {
 
   /** ★ 回收指定槽位友军（槽位被卸载/替换/损毁）：销毁对应无人机（池固定 12 格，索引不移位）。
    *  装备类槽位无对应实体，安全 no-op。 */
-  private despawnAllyAt(slotIndex: number): void {
-    for (let i = 0; i < this.drones.length; i++) {
-      const d = this.drones[i];
-      if (d.slotIndex === slotIndex) {
-        this.drones.splice(i, 1);
-        d.dispose();
-        break;
-      }
-    }
-  }
-
   /** 世界坐标 → 屏幕浮动文字（距相机 >20m 不显示，与伤害数字同 LOD 口径） */
   private showFloatingAt(x: number, y: number, z: number, text: string, type: 'normal' | 'crit' | 'heal' | 'miss' | 'pickup'): void {
     if (!this.camera || !this.worldUIManager) return;
