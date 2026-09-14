@@ -825,25 +825,38 @@ function getPlantCardFar(): THREE.BufferGeometry {
   return PLANT_CARD_FAR;
 }
 
-/** 风摆材质（每 (key,frame[,far]) 一份；UV 扭曲固定下部两点）
- *  ★ 三级 LOD 逐实例硬切（对齐全局 LOD_RANGES）：
+/** ★ 植被最远绘制距离（米）：L2 单面片带终点 / 雾隐终点 / ≥此距离不绘制。
+ *  可调（2026-09-14 用户定：扩大 2、3 级 LOD 范围）。 */
+export const PROP_LOD_FADE_FAR = 140;
+
+/**
+ * → 风摆材质（每 (key,frame,variant) 一份；UV 扭曲固定下部两点）
+ *  ★ 三级 LOD（逐实例按实例原点距离；阈值 = 全局 LOD_RANGES + PROP_LOD_FADE_FAR）：
  *    · 近卡（crossed）：带 [0, 60m)，风幅度 30→60m 渐隐为 0；
- *    · 远卡（single）：带 [60m, 90m)，静态无风；
- *    · ≥90m：带外实例折叠到裁剪空间外 → 不产生任何片元（"藏在雾里"）。 */
+ *    · 远卡（single）：带 [60m, 140m)，静态无风；
+ *    · ≥140m：带外实例折叠到裁剪空间外 → 不产生任何片元（整株消失）。
+ *  ★ 渲染方式 = 不透明 + alpha 硬裁切（discard）：不做 alpha 混合、不做换卡交叉淡入淡出
+ *    ——线性过滤/mipmap 在贴图边缘产生的半透明像素若参与混合会露成"透明描边"，
+ *    硬裁切保证 1/2 级边界干净（贴图本身是 0/255 二值 alpha）。 */
 const SHARED_PLANT_MAT = new Map<string, THREE.ShaderMaterial>();
-function getPlantMaterial(key: string, frame: number, tex: THREE.Texture, far = false, hasFar = true): THREE.ShaderMaterial {
-  const mk = far ? `${key}|f${frame}|far` : `${key}|f${frame}${hasFar ? '' : '|nh'}`;
+function getPlantMaterial(
+  key: string, frame: number, tex: THREE.Texture,
+  variant: 'near' | 'far' | 'noFar' = 'near',
+): THREE.ShaderMaterial {
+  const mk = variant === 'far' ? `${key}|f${frame}|far` : `${key}|f${frame}${variant === 'noFar' ? '|nh' : ''}`;
   const cached = SHARED_PLANT_MAT.get(mk);
   if (cached) return cached;
+  // 换卡 = 60m 硬切（无淡入淡出 → 不产生透明描边）
+  const bandMin = variant === 'far' ? LOD_RANGES[1] : 0;
+  const bandMax = variant === 'far' ? PROP_LOD_FADE_FAR : (variant === 'near' ? LOD_RANGES[1] : PROP_LOD_FADE_FAR);
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       uMap: { value: tex },
       uTime: PLANT_TIME,
-      uSway: { value: far ? 0 : 0.06 },   // UV 扭曲幅度（底边 0 → 顶边最大）
+      uSway: { value: variant === 'far' ? 0 : 0.06 },   // UV 扭曲幅度（底边 0 → 顶边最大）
       uFreq: { value: 1.7 },    // 摆动频率
-      uBandMin: { value: far ? LOD_RANGES[1] : 0 },
-      // 近卡：有远卡 → [0,60)；无远卡（未开 lod）→ [0,90)（避免 60m 处凭空消失）
-      uBandMax: { value: far ? LOD_RANGES[2] : (hasFar ? LOD_RANGES[1] : LOD_RANGES[2]) },
+      uBandMin: { value: bandMin },
+      uBandMax: { value: bandMax },
       uFadeNear: { value: LOD_RANGES[0] },
       uFadeFar: { value: LOD_RANGES[1] },
     },
@@ -890,11 +903,12 @@ function getPlantMaterial(key: string, frame: number, tex: THREE.Texture, far = 
         float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, vCamDist);
         float sway = sin(uTime * uFreq + vPhase * 6.2831853 + vWorldY * 0.35) * uSway * w * w * fade;
         vec4 c = texture2D(uMap, vec2(vUv.x + sway, vUv.y));
-        if (c.a < 0.35) discard;
+        // ★ 不透明 + alpha 硬裁切：贴图边缘的半透明过滤像素直接丢弃（无透明描边）
+        if (c.a < 0.5) discard;
         gl_FragColor = c;
       }
     `,
-    transparent: true,
+    transparent: false,
     side: THREE.DoubleSide,
     depthWrite: true,
     depthTest: true,
@@ -947,14 +961,14 @@ registerPropRenderer('plant', {
     for (const [frame, n] of counts) {
       const tex = getPlantTexture(def.key, atlas, frame);
       if (!tex) continue;
-      // 近卡：band [0,60)（风 30→60m 渐隐）；远卡：band [60,90)；≥90 两卡都不出片元
-      const mesh = new THREE.InstancedMesh(geo, getPlantMaterial(def.key, frame, tex, false, !!geoFar), n);
+      // 近卡：band [0,60)（风 30→60m 渐隐）；远卡：band [60,140)；≥140 两卡都不出片元
+      const mesh = new THREE.InstancedMesh(geo, getPlantMaterial(def.key, frame, tex, geoFar ? 'near' : 'noFar'), n);
       mesh.name = `${def.key}|f${frame}`;
       mesh.onBeforeRender = () => { PLANT_TIME.value = performance.now() * 0.001; };
       fill(mesh, frame);
       group.add(mesh);
       if (geoFar) {
-        const far = new THREE.InstancedMesh(geoFar, getPlantMaterial(def.key, frame, tex, true), n);
+        const far = new THREE.InstancedMesh(geoFar, getPlantMaterial(def.key, frame, tex, 'far'), n);
         far.name = `${def.key}|lod1|f${frame}`;
         far.onBeforeRender = () => { PLANT_TIME.value = performance.now() * 0.001; };
         fill(far, frame);
