@@ -32,9 +32,10 @@ import {
   buildTopGeometry,
   buildWallGeometry,
   buildLevelOverlay,
-  FINE_S,
+  FINE_S_NEAR,
+  getFineS,
+  setFineS,
   TOP_COARSE_TRI,
-  TOP_FINE_TRI,
   type FaceGeometry,
   type PatchOverlay,
   type TopAccum,
@@ -46,13 +47,16 @@ const N = CHUNK_SIZE;      // 60
 const BPS = BLOCKS_PER_SIDE; // 15
 const NC = N * N;          // 顶面 coarse cell 数
 const NBS = BPS * BPS * 4; // 侧壁 4m 边数
-const FINE_V = (FINE_S + 1) * (FINE_S + 1); // fine cell 顶点数（81）
+/** fine cell 顶点数（按档位） */
+function fineV(FS: number): number { return (FS + 1) * (FS + 1); }
 
 /** 基座几何缓存（每 chunk 一份；LRU 封顶） */
 interface ChunkBase {
   seed: number;
   cx: number;
   cz: number;
+  /** ★ 构建档位（8=0.125m 近环 / 4=0.25m 远环）：布局/增量输出必须同档 */
+  fineS: number;
   baseFine: Uint8Array;       // 无补丁 fine 掩码（= topFineCells）
   top: FaceGeometry;          // 无补丁顶面全量字节
   wall: FaceGeometry;         // 无补丁侧壁全量字节
@@ -79,18 +83,19 @@ const baseCache = new Map<string, ChunkBase>();
  *  退化成每次全量构建（2026-09-10 由 16 上调） */
 const CACHE_CAP = 36;
 
-function cacheKey(seed: number, cx: number, cz: number): string {
-  return `${seed}/${cx},${cz}`;
+function cacheKey(seed: number, cx: number, cz: number, fineS: number): string {
+  return `${seed}/${cx},${cz}/f${fineS}`;
 }
 
 /** 顶面逐 cell 布局（顶点数/前缀），从无补丁 fine 掩码推导（4 | 81） */
-function topLayout(fine: Uint8Array): { v: Int32Array; vPre: Int32Array; iPre: Int32Array } {
+function topLayout(fine: Uint8Array, FS: number): { v: Int32Array; vPre: Int32Array; iPre: Int32Array } {
   const v = new Int32Array(NC);
   const vPre = new Int32Array(NC + 1);
   const iPre = new Int32Array(NC + 1);
-  const fineTri = TOP_FINE_TRI * 3, coarseTri = TOP_COARSE_TRI * 3;
+  const fineTri = FS * FS * 2 * 3, coarseTri = TOP_COARSE_TRI * 3;
+  const fv = fineV(FS);
   for (let i = 0; i < NC; i++) {
-    v[i] = fine[i] ? FINE_V : 4;
+    v[i] = fine[i] ? fv : 4;
     vPre[i + 1] = vPre[i] + v[i];
     iPre[i + 1] = iPre[i] + (fine[i] ? fineTri : coarseTri);
   }
@@ -98,7 +103,7 @@ function topLayout(fine: Uint8Array): { v: Int32Array; vPre: Int32Array; iPre: I
 }
 
 /** 侧壁逐边布局：节点数 = Σ(span fine ? 8 : 1) + 1；无补丁必全发 → 顶点数=(节点−1)*4 */
-function wallLayout(fine: Uint8Array): { v: Int32Array; vPre: Int32Array; iPre: Int32Array } {
+function wallLayout(fine: Uint8Array, FS: number): { v: Int32Array; vPre: Int32Array; iPre: Int32Array } {
   const v = new Int32Array(NBS);
   const vPre = new Int32Array(NBS + 1);
   const iPre = new Int32Array(NBS + 1);
@@ -106,7 +111,7 @@ function wallLayout(fine: Uint8Array): { v: Int32Array; vPre: Int32Array; iPre: 
     const lbz = Math.floor(s / (BPS * 4));
     const lbx = Math.floor((s % (BPS * 4)) / 4);
     const dir = s % 4;
-    const nodes = wallNodes(fine, lbx, lbz, dir);
+    const nodes = wallNodes(fine, lbx, lbz, dir, FS);
     const verts = (nodes - 1) * 4;
     v[s] = verts;
     vPre[s + 1] = vPre[s] + verts;
@@ -116,7 +121,7 @@ function wallLayout(fine: Uint8Array): { v: Int32Array; vPre: Int32Array; iPre: 
 }
 
 /** 与 emitWallSide 同一节点列生成（无补丁计数用） */
-function wallNodes(fine: Uint8Array, lbx: number, lbz: number, dir: number): number {
+function wallNodes(fine: Uint8Array, lbx: number, lbz: number, dir: number, FS: number): number {
   let n = 0;
   for (let span = 0; span < 4; span++) {
     let cell: number;
@@ -124,24 +129,24 @@ function wallNodes(fine: Uint8Array, lbx: number, lbz: number, dir: number): num
     else if (dir === 1) cell = fine[(lbz * 4 + span) * N + lbx * 4];
     else if (dir === 2) cell = fine[(lbz * 4 + 3) * N + lbx * 4 + span];
     else cell = fine[(lbz * 4) * N + lbx * 4 + span];
-    n += cell ? FINE_S : 1;
+    n += cell ? FS : 1;
   }
   return n + 1;
 }
 
 /** 构建并缓存基座（无补丁 full 构建）；已缓存直接返回 */
 export function seedBaseGeometry(
-  seed: number, cx: number, cz: number,
+  seed: number, cx: number, cz: number, fineS: number,
   table: FaceTable, src: BlockSource,
   baseFine: Uint8Array, top: FaceGeometry, wall: FaceGeometry,
 ): ChunkBase {
-  const key = cacheKey(seed, cx, cz);
+  const key = cacheKey(seed, cx, cz, fineS);
   const hit = baseCache.get(key);
   if (hit) return hit;
-  const tv = topLayout(baseFine);
-  const wl = wallLayout(baseFine);
+  const tv = topLayout(baseFine, fineS);
+  const wl = wallLayout(baseFine, fineS);
   const base: ChunkBase = {
-    seed, cx, cz, baseFine, top, wall,
+    seed, cx, cz, fineS, baseFine, top, wall,
     topV: tv.v, topVPre: tv.vPre, topIPre: tv.iPre,
     wallV: wl.v, wallVPre: wl.vPre, wallIPre: wl.iPre,
   };
@@ -229,6 +234,9 @@ function buildTopIncremental(
   patch: PatchOverlay, fineE: Uint8Array, mask: Uint8Array,
   prev?: { vPre: Int32Array; iPre: Int32Array },
 ): { geom: FaceGeometry; vPre: Int32Array; iPre: Int32Array } {
+  const FS = base.fineS;
+  const FINE_V = fineV(FS);
+  const TOP_FINE_TRI = FS * FS * 2; // 本档位 fine cell 三角数
   // ① 受影响 cell → 预发到 scratch（emitTopCellFine base=0：法线相对自身）
   const aff = new Map<number, TopAccum>();
   for (let lz = 0; lz < N; lz++) {
@@ -413,16 +421,17 @@ function buildWallIncremental(
  * full 构建逐位一致（受影响走同一 emit 函数；未受影响区 depthOf=0）。
  */
 export function incrementalGeometry(
-  seed: number, cx: number, cz: number,
+  seed: number, cx: number, cz: number, fineS: number,
   table: FaceTable, src: BlockSource, patch: PatchOverlay,
   masks?: { top: Uint8Array; side: Uint8Array },
 ): IncrementalResult {
-  let base = baseCache.get(cacheKey(seed, cx, cz));
+  setFineS(fineS); // ★ 档位：后续 FaceBuild 构建/发射按此档
+  let base = baseCache.get(cacheKey(seed, cx, cz, fineS));
   if (!base) {
     const baseFine = topFineCells(table, src);
     const top = buildNoPatchTop(table, src);
     const wall = buildNoPatchWall(table, src);
-    base = seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall);
+    base = seedBaseGeometry(seed, cx, cz, fineS, table, src, baseFine, top, wall);
   }
   const fineE = topFineCellsFor(table, src, patch);
   // 掩码可主线程预算后传入（跳过 Worker 侧重复扫描）；缺省就地算
@@ -460,11 +469,12 @@ export const PHYS_GRID = 3;
  * 的字节拼接、索引重定基分区局部。cells 缺省 = 全部分区；增量只发受影响分区。
  */
 export function partitionGroundCells(
-  top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array,
+  top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array, fineS: number,
   grid: number, cells?: number[] | null,
 ): { slot: number; vertices: Float32Array; indices: Uint32Array }[] {
-  const tl = topLayout(fineE);
-  const wl = wallLayout(fineE);
+  const tl = topLayout(fineE, fineS);
+  const wl = wallLayout(fineE, fineS);
+  const TOP_FINE_TRI = fineS * fineS * 2;
   const list = cells ?? Array.from({ length: grid * grid }, (_, i) => i);
   const out: { slot: number; vertices: Float32Array; indices: Uint32Array }[] = [];
   for (const slot of list) {

@@ -9,6 +9,7 @@
 // ============================================================
 
 import { buildFaceTable, type FaceTable } from "./FaceTable";
+import { setFineS, FINE_S_NEAR } from "./FaceBuild";
 import { tileById } from "./Tiles";
 import { CHUNK_SIZE, BLOCKS_PER_SIDE, hash2 } from "./ChunkGenerator";
 import { applyGroupTintHsl, SEMANTIC_THEME_MIX, type GroupPalette } from "./TileGroups";
@@ -228,7 +229,10 @@ export function computeTableGeometry(
   coarse = false,
   /** ★ 粗块组调色（与细化 uMatBase 同源；缺省 = 中性不调色） */
   palette?: GroupPalette,
+  /** ★ 构建档位（每 1m cell 细分段数：8=0.125m 近环 / 4=0.25m 远环；缺省近档） */
+  fineS: number = FINE_S_NEAR,
 ): PatchGeomResult {
+  setFineS(fineS); // ★ 档位注入：顶面/侧壁/增量布局统一按此档位
   // ★ 每 chunk 静态数据缓存：refined src + FaceTable 只依赖 heights/blockTypes
   //   （与 levels 无关）→ 同一 chunk 连打不必每枪重跑 planRefinements/buildFaceTable
   const { src, table: baseTable } = getRefinedSource(readChunk, seed, cx, cz);
@@ -260,7 +264,7 @@ export function computeTableGeometry(
   const patch = levels && levels.length > 0 ? buildLevelOverlay(levels, cx, cz, undefined, undefined, levelAt) : undefined;
   let top: FaceGeometry, wall: FaceGeometry, fineE: Uint8Array;
   if (patch) {
-    const inc = incrementalGeometry(seed, cx, cz, table, src, patch, masks ?? undefined);
+    const inc = incrementalGeometry(seed, cx, cz, fineS, table, src, patch, masks ?? undefined);
     top = inc.top; wall = inc.wall;
     // ★ 分区布局 = 输出 fine 掩码（补丁强制 fine 区∪基座 fine 区）
     fineE = topFineCellsFor(table, src, patch);
@@ -279,7 +283,7 @@ export function computeTableGeometry(
     fineE = baseFine;
     top = buildTopGeometry(table, src);
     wall = buildWallGeometry(table, src);
-    seedBaseGeometry(seed, cx, cz, table, src, baseFine, top, wall); // 播种基座缓存
+    seedBaseGeometry(seed, cx, cz, fineS, table, src, baseFine, top, wall); // 播种基座缓存
   }
   const water = buildWaterSurface(
     table, src, patch,
@@ -287,7 +291,7 @@ export function computeTableGeometry(
   );
   // ★ 物理分区：全量 = 全部 grid²；增量 = 受影响 1m cell 掩码 → 所属分区（提前返回，
   //   只输出命中分区，主线程只换这些 collider —— 顶点焊接跨界已由 ±1 环掩码覆盖）
-  const cells = partitionGroundCells(top, wall, fineE, PHYS_GRID, deriveAffectedCells(masks, PHYS_GRID));
+  const cells = partitionGroundCells(top, wall, fineE, fineS, PHYS_GRID, deriveAffectedCells(masks, PHYS_GRID));
   return {
     top: {
       vertices: top.vertices,

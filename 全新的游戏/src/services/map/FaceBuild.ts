@@ -4,10 +4,10 @@
 // ============================================================
 // 输入 FaceTable + src，直接产出顶面与侧壁几何：
 //   · 顶面：coarse 1m（平面 + weld 坡进顶 + bevel 弧带下弯），
-//     fine 0.125m 只落在 bevel 弧带与 weld 坡脚/角脊非线性 cell
+//     fine 0.25m 只落在 bevel 弧带与 weld 坡脚/角脊非线性 cell
 //     （topFineCells 统一判定：顶面与侧壁共用同一张细分图）
 //   · 侧壁：每边恒壁（表 depth = calc+保底）；壁顶沿节点列 = 顶网格
-//     边界折线同列（fine cell 段 0.125m / 其余 1m）→ 壁顶与顶面逐段
+//     边界折线同列（fine cell 段 0.25m / 其余 1m）→ 壁顶与顶面逐段
 //     同端点闭合，weld 坡脚/弧带处不再各自近似开口（2026-09-05 修）
 // pit/crack 属后处理精细 pass（另行施加，不入本函数）。
 // ============================================================
@@ -315,10 +315,20 @@ export function topYAt(
 }
 
 // ------------------------------------------------------------
-// 顶面网格（coarse 1m + fine 0.125m 拼 bevel 弧 / weld 坡脚角脊；坑/裂已废弃）
+// 顶面网格（coarse 1m + fine 0.25m 拼 bevel 弧 / weld 坡脚角脊；坑/裂已废弃）
 // ------------------------------------------------------------
-const FINE_D = 3; // 2^3 = 0.125m
-export const FINE_S = 1 << FINE_D;
+/** ★ 构建档位（2026-09-14 分环双档）：每 1m cell 的细分段数——
+ *  8 = 0.125m（近环）/ 4 = 0.25m（远环）；由 setFineS 在每次几何构建前设定。 */
+export const FINE_S_NEAR = 8;
+export const FINE_S_FAR = 4;
+let currentFineS = FINE_S_FAR;
+/** 设定当前构建档位（几何构建入口调用；worker/主线程同构） */
+export function setFineS(v: number): void {
+  currentFineS = v === FINE_S_NEAR ? FINE_S_NEAR : FINE_S_FAR;
+}
+export function getFineS(): number {
+  return currentFineS;
+}
 
 /** weld 坡顶面非线性判据：cell 内网格边(1m 直线)与真实坡面的允许偏差（m） */
 const WELD_FINE_EPS = 0.03;
@@ -399,7 +409,7 @@ function cellWeldCurvFine(
 }
 
 /**
- * ★ 顶面 fine 细分图（N×N，1 = 该 1m cell 用 0.125m 子网格）：
+ * ★ 顶面 fine 细分图（N×N，1 = 该 1m cell 用 0.25m 子网格）：
  *   bevel 弧带 cell ∪ weld 非线性 cell（坡脚/角脊），外扩 1 格保水密
  *   （coarse/fine 之间不出现共享边 = 无 T 结）。
  *   顶面与侧壁共用同一张图 → 壁顶沿按同一节点列采样，闭合一致。
@@ -517,8 +527,9 @@ function weldOut(
     const yA = topYView(table, src, vbx, vbz, ax, az);
     const yB = topYView(table, src, vbx, vbz, bx2, bz2);
     let worst = 0;
-    for (let k = 1; k < FINE_S; k++) {
-      const t = k / FINE_S;
+    const FS = getFineS();
+    for (let k = 1; k < FS; k++) {
+      const t = k / FS;
       const yE = topYView(table, src, vbx, vbz,
         ax + (bx2 - ax) * t, az + (bz2 - az) * t);
       worst = Math.max(worst, Math.abs(yE - (yA + (yB - yA) * t)));
@@ -621,14 +632,15 @@ export function emitTopCellFine(
   // ★ 补丁 fine cell：逐顶点深度场下挖 + 补丁色（细分不变 → 无 T 结）
   const pcell = patch && patch.isPatched(lx, lz);
   const cc = pcell ? patch!.color : W;
-  // fine：0.125m 网格，顶点 y = topYView − depthOf，法线用中差
-  const G = FINE_S + 1; // 9
+  // fine：0.25m 网格，顶点 y = topYView − depthOf，法线用中差
+  const FS = getFineS();
+  const G = FS + 1;
   const yt = new Float64Array(G * G);
   const dv = new Float64Array(G * G); // 深度场（补丁色权重同源）
   for (let gy = 0; gy < G; gy++) {
     for (let gx = 0; gx < G; gx++) {
-      const wx = wx0 + gx / FINE_S;
-      const wz = wz0 + gy / FINE_S;
+      const wx = wx0 + gx / FS;
+      const wz = wz0 + gy / FS;
       const dV = patch ? patch.depthOf(wx, wz) : 0;
       dv[gy * G + gx] = dV;
       yt[gy * G + gx] = topYView(table, src, vbx, vbz, wx, wz) - dV;
@@ -643,7 +655,7 @@ export function emitTopCellFine(
   }
   // 顶点先占位法线，后差分
   for (let c = 0; c < G * G; c++) a.nor.push(0, 0, 0);
-  const step = 1 / FINE_S;
+  const step = 1 / FS;
   for (let gy = 0; gy < G; gy++) {
     for (let gx = 0; gx < G; gx++) {
       const yC = yt[gy * G + gx];
@@ -664,7 +676,11 @@ export function emitTopCellFine(
 }
 
 export const TOP_COARSE_TRI = 2;       // coarse cell 三角形数
-export const TOP_FINE_TRI = FINE_S * FINE_S * 2; // fine cell 三角形数
+/** fine cell 三角形数（按当前档位） */
+export function topFineTri(): number {
+  const FS = getFineS();
+  return FS * FS * 2;
+}
 
 /** 顶面 cell 索引（coarse 6 / fine 384；相对 base；供 full 构建累加） */
 export function pushTopIndices(idx: number[], base: number, fine: boolean): void {
@@ -672,9 +688,10 @@ export function pushTopIndices(idx: number[], base: number, fine: boolean): void
     idx.push(base, base + 3, base + 1, base + 3, base + 2, base + 1);
     return;
   }
-  const G = FINE_S + 1;
-  for (let jz = 0; jz < FINE_S; jz++) {
-    for (let jx = 0; jx < FINE_S; jx++) {
+  const FS = getFineS();
+  const G = FS + 1;
+  for (let jz = 0; jz < FS; jz++) {
+    for (let jx = 0; jx < FS; jx++) {
       const v00 = base + jz * G + jx;
       const v10 = v00 + 1;
       const v01 = v00 + G;
@@ -693,10 +710,11 @@ export function writeTopIndices(
     dst[off + 3] = base + 3; dst[off + 4] = base + 2; dst[off + 5] = base + 1;
     return;
   }
-  const G = FINE_S + 1;
+  const FS = getFineS();
+  const G = FS + 1;
   let p = off;
-  for (let jz = 0; jz < FINE_S; jz++) {
-    for (let jx = 0; jx < FINE_S; jx++) {
+  for (let jz = 0; jz < FS; jz++) {
+    for (let jx = 0; jx < FS; jx++) {
       const v00 = base + jz * G + jx;
       dst[p] = v00; dst[p + 1] = v00 + G; dst[p + 2] = v00 + 1;
       dst[p + 3] = v00 + G; dst[p + 4] = v00 + G + 1; dst[p + 5] = v00 + 1;
@@ -729,7 +747,7 @@ export function buildTopGeometry(
       } else {
         emitTopCellFine(a, table, src, patch, lx, lz, vbx, vbz, ox, oz, vi);
         pushTopIndices(idx, vi, true);
-        vi += (FINE_S + 1) * (FINE_S + 1);
+        vi += (getFineS() + 1) * (getFineS() + 1);
       }
     }
   }
@@ -772,14 +790,15 @@ export function emitWallSide(
   const uV = (lbz + 0.5) / 15;
   const nbx = bx + DIRS[dir].dx;
   const nbz = bz + DIRS[dir].dz;
-  // ★ 沿边节点列：按本块侧 4 个 1m cell 的 fine 标记定 0.125m/1m 步长。
-  //   顶网格边界折线在 fine cell 上是 0.125m 折线、coarse cell 上是
+  // ★ 沿边节点列：按本块侧 4 个 1m cell 的 fine 标记定 0.25m/1m 步长。
+  //   顶网格边界折线在 fine cell 上是 0.25m 折线、coarse cell 上是
   //   1m 直线 —— 壁顶沿取同一节点列 → 每段与顶网格边界段同端点，
   //   weld 坡脚/弧带处不再各自近似（否则壁顶低于网格边 = 开口）。
   const rowCells = dirEdgeCells(dir, lbx, lbz, fineE);
   const nodes: number[] = [];
   for (let span = 0; span < 4; span++) {
-    const sub = rowCells[span] ? FINE_S : 1;
+    const FS = getFineS();
+    const sub = rowCells[span] ? FS : 1;
     for (let k = 0; k < sub; k++) nodes.push(span + k / sub);
   }
   nodes.push(4);

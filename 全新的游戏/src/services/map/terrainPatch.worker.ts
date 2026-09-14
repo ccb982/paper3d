@@ -21,6 +21,8 @@ interface PatchChunkMsg {
   dirty: number[] | null;
   /** ★ 主线程（CPU 侧）预算的受影响掩码（top+side）；缺省 = Worker 就地算 */
   masks: { top: Uint8Array; side: Uint8Array } | null;
+  /** ★ 构建档位（细分段数：8=0.125m 近环 / 4=0.25m 远环） */
+  fineS: number;
   chunks: {
     ccx: number;
     ccz: number;
@@ -81,6 +83,9 @@ ctx.onmessage = (ev: MessageEvent) => {
     msg.dirty ?? null,
     msg.masks,
     levelAt,
+    false,              // coarse
+    undefined,          // palette
+    msg.fineS,          // ★ 构建档位
   );
   ctx.postMessage(
     { type: "result", id: msg.id, ...out },

@@ -133,7 +133,12 @@ class TerrainPatchService {
    * @returns 几何字节；归属 Worker 失败 → resolve(null)，调用方走标准烘焙兜底。
    */
   compute(
-    req: { seed: number; cx: number; cz: number; levels: Uint8Array | undefined; dirty?: number[] | null },
+    req: {
+      seed: number; cx: number; cz: number;
+      levels: Uint8Array | undefined; dirty?: number[] | null;
+      /** ★ 构建档位（8=0.125m / 4=0.25m；缺省 = FINE_S_NEAR） */
+      fineS?: number;
+    },
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<PatchGeomResult | null> {
     const { seed, cx, cz } = req;
@@ -163,7 +168,7 @@ class TerrainPatchService {
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
       return Promise.resolve(
-        computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty, masks, makeLevelAt(chunks)),
+        computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty, masks, makeLevelAt(chunks), false, undefined, req.fineS),
       );
     }
     const id = this.nextIds[i] = (this.nextIds[i] ?? 0) + 1;
@@ -188,6 +193,7 @@ class TerrainPatchService {
           levels: req.levels ?? new Uint8Array(0),
           dirty: req.dirty ?? null,
           masks,
+          fineS: req.fineS ?? 8,
           chunks,
         },
         transfer,
