@@ -23,6 +23,8 @@ import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { CharacterAnimMap } from '../systems/player/CharacterController';
 import type { CameraFrame } from '../services/camera/CameraController';
 import { FTXQuad } from '../services/render/FTXQuad';
+import type { FxRendererBase } from '../services/render/FxRendererBase';
+import { VisitorBodyRenderer, type VisitorBodyStyle } from '../services/render/VisitorBodyRenderer';
 import { sameTeam } from '../services/combat/teams';
 import { RasterMap } from '../services/map/RasterMap';
 
@@ -82,6 +84,9 @@ export interface VisitorDef {
   fleeDamageThreshold?: number;
   /** 伤害统计窗口覆盖（秒；缺省 VISITOR_FLEE_WINDOW） */
   fleeWindow?: number;
+  /** ★ 程序化身体（球头 + 方身 + 关节胶囊四肢；每名访客只换脸纹理）。
+   *  填了则不走 FTX 贴片（纹理资产只取首帧/前帧作脸）；不填 = 传统贴片访客 */
+  body?: VisitorBodyStyle;
 }
 
 export interface VisitorNpcOptions {
@@ -134,6 +139,8 @@ export class VisitorNpcBase extends CharacterBase {
   private readonly visitorAnimMap: CharacterAnimMap;
   /** 当前动画态（幂等：状态不变不重播） */
   private animMoving: boolean | null = null;
+  /** ★ 程序化身体渲染器（def.body 时启用；关节动画由它自己驱动） */
+  private bodyRenderer: VisitorBodyRenderer | null = null;
 
   constructor(em: EntityManager, scene: THREE.Scene, asset: FrameAssetSource, opts: VisitorNpcOptions) {
     const animMap = opts.animMap ?? deriveVisitorAnimMap(asset);
@@ -164,6 +171,8 @@ export class VisitorNpcBase extends CharacterBase {
     this.getCameraFrame = opts.getCameraFrame;
     this.visitorAnimMap = animMap;
     this.camp = 'neutral';
+    // ★ 程序化身体：关 billboard（3D 身体按移动方向 yaw，不用面向相机的 2D 贴片）
+    if (opts.def.body) this.billboard = false;
     // ★ 访客不参战；地形跟随与玩家同款：可涉水、可爬坡，仅绕开坑洞
     this.blockCliffClimb = false;
     this.attachToScene(scene);
@@ -220,9 +229,13 @@ export class VisitorNpcBase extends CharacterBase {
     return Math.hypot(target.x - p.x, target.z - p.z);
   }
 
-  /** ★ 面向世界点（途中/舰内对话时让访客看向玩家；按相机帧判 前/后 + 镜像） */
+  /** ★ 面向世界点（途中/舰内对话时让访客看向玩家；贴片按相机帧、身体直接转 yaw） */
   faceToward(x: number, z: number): void {
     const p = this.entity.position;
+    if (this.bodyRenderer) {
+      this.bodyRenderer.setYaw(Math.atan2(x - p.x, z - p.z));
+      return;
+    }
     this.updateFacing(x - p.x, z - p.z);
   }
 
@@ -235,13 +248,24 @@ export class VisitorNpcBase extends CharacterBase {
     }
   }
 
-  /** 渲染器：FTXQuad billboard 贴片（与 NPC / 主角同管线） */
-  protected createRenderer(scene: THREE.Scene): FTXQuad | null {
+  /** ★ 渲染器：程序化身体（def.body）或 FTXQuad billboard 贴片（与 NPC / 主角同管线） */
+  protected createRenderer(scene: THREE.Scene): FxRendererBase | null {
+    if (this.def.body) {
+      const body = new VisitorBodyRenderer(scene, this.anim?.source ?? null, this.def.body);
+      this.bodyRenderer = body;
+      return body;
+    }
     if (!this.anim) return null;
     return new FTXQuad(scene, this.anim.source);
   }
 
   protected override onUpdate(dt: number): void {
+    this.updateMotion(dt);
+    // ★ 程序化身体：关节步态每帧驱动（视锥外省算，回到视野下一帧恢复）
+    if (this.bodyRenderer && this.inFrustum) this.bodyRenderer.update(dt);
+  }
+
+  private updateMotion(dt: number): void {
     if (this.paused) {
       this.stopMove();
       this.playVisitorAnim(false);
@@ -392,8 +416,14 @@ export class VisitorNpcBase extends CharacterBase {
       this.hazardTurnTimer = 0;
     }
     this.controller.moveToward(nx, nz, dt, speed);
-    this.updateFacing(nx, nz);
-    this.playVisitorAnim(true);
+    if (this.bodyRenderer) {
+      // 程序化身体：朝向 = 移动方向；步态交给自己（含频率/关节/起伏）
+      this.bodyRenderer.setYaw(Math.atan2(nx, nz));
+      this.bodyRenderer.setLocomotion(true, speed);
+    } else {
+      this.updateFacing(nx, nz);
+      this.playVisitorAnim(true);
+    }
     super.onUpdate(dt);
     this.followTerrain(dt);
   }
@@ -475,10 +505,13 @@ export class VisitorNpcBase extends CharacterBase {
   private stopMove(): void {
     this.controller.moveDir.x = 0;
     this.controller.moveDir.y = 0;
+    this.bodyRenderer?.setLocomotion(false, 0);
   }
 
-  /** 朝向：按相机帧判定 前/后 帧组 + 左右镜像（无相机读取器则保持 前 + 不翻转） */
+  /** 朝向：按相机帧判定 前/后 帧组 + 左右镜像（无相机读取器则保持 前 + 不翻转）。
+   *  程序化身体由 setYaw 控制，不走这里 */
   private updateFacing(dx: number, dz: number): void {
+    if (this.bodyRenderer) return;
     const frame = this.getCameraFrame?.() ?? null;
     if (!frame || !this.anim) return;
     const len = Math.hypot(dx, dz);
@@ -493,8 +526,9 @@ export class VisitorNpcBase extends CharacterBase {
     else if (rDot > 0.35) this.anim.setFlipX(false);
   }
 
-  /** 步行/待机动画（幂等；帧组取当前朝向） */
+  /** 步行/待机动画（幂等；帧组取当前朝向；程序化身体交给自己驱动） */
   private playVisitorAnim(walking: boolean): void {
+    if (this.bodyRenderer) return;
     if (this.animMoving === walking) return;
     this.animMoving = walking;
     if (!this.anim) return;
