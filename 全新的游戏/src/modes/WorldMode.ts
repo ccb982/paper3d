@@ -78,6 +78,7 @@ import { DialogueView } from '../ui/shared/DialogueView';
 import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
 import { EventSystem } from '../systems/events/EventSystem';
 import { loadFtxCached } from '../services/fx/FtxAssetCache';
+import { MAP_SPAWN_X, MAP_SPAWN_Z } from '../services/ui/MinimapWarmup';
 import { hash2 } from '../services/map/TerrainNoise';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
@@ -615,7 +616,8 @@ export class WorldMode implements IGameMode {
     sharedWaterMaterial.resetImpacts(); // ★ 清空落水扰动槽（防跨局残留）
 
     // ★ 每次出击出生点固定 chunk (0,0)：舰船与角色都从 (30,30) 出发
-    const spawn = { x: 30, z: 30 };
+    //   （常量与 MinimapWarmup 同源——抽卡页预加载的探索圆盘/底图就以本格为中心）
+    const spawn = { x: MAP_SPAWN_X, z: MAP_SPAWN_Z };
     if (ctx.session.ship) ctx.session.ship.position = { x: spawn.x, z: spawn.z };
 
     // ★ 每天出击满油 + 满血（2026-09-12 用户定调：船每天修满，与油同口径）

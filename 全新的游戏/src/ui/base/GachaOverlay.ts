@@ -19,6 +19,8 @@ import { RELIC_ITEM_CONFIG } from '../../config/relics';
 import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 
 import { SaveSystem } from '../../core/SaveSystem';
+import { applyShaderDebug } from '../../services/render/GameRenderer';
+import { warmupMinimap } from '../../services/ui/MinimapWarmup';
 import { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 import type { PhysicsConfig } from '../../vendor/player/core/types';
 
@@ -344,6 +346,8 @@ export class GachaOverlay {
     this.root.appendChild(this.canvas);
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
+    // ★ 默认关掉着色器错误回读：否则首次打开抽卡页会同步阻塞主线程
+    applyShaderDebug(this.renderer);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x0a0a1a, 1);
 
@@ -1023,6 +1027,7 @@ export class GachaOverlay {
     canvas.height = fh;
 
     const renderer = new THREE.WebGLRenderer({ canvas, alpha: true });
+    applyShaderDebug(renderer);
     renderer.setSize(fw, fh, false);
     renderer.setClearColor(0x000000, 0);
 
@@ -1382,6 +1387,10 @@ export class GachaOverlay {
 
   show(onDepart: () => void): void {
     this.onDepart = onDepart;
+    // ★ 抽卡页预热小地图（当天地图种子 + 出生格已知、地形色纯函数）：
+    //   分帧算好 探索圆盘 / 底图 / LOD 边带索引 → 出击进世界时直接交接，首帧零成本。
+    //   幂等（同种子直接返回）；换天换局换种子自动重算；失败一律回退冷路径。
+    warmupMinimap(this.session);
     // ★ 每次进入抽卡页都回到「抽卡按钮」态（行动按钮由抽完卡触发）
     this.resetToGachaState();
     this.root.style.display = 'block';

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import earcut from 'earcut';
 import type { SerializedRegionEntity } from '../core/types';
+import { applyShaderDebug } from '../../../services/render/GameRenderer';
 
 export interface EntityMeshData {
   entity: SerializedRegionEntity;
@@ -387,6 +388,8 @@ export function createThreeContext(sizeOrCanvas?: number | HTMLCanvasElement): {
   const renderer = new THREE.WebGLRenderer({
     canvas, alpha: true, stencil: true, antialias: true, preserveDrawingBuffer: false,
   });
+  // ★ 与主渲染器一致：默认关掉着色器错误回读（详见 services/render/GameRenderer.ts）
+  applyShaderDebug(renderer);
   renderer.setSize(size, size);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace;

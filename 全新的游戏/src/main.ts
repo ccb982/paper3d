@@ -24,8 +24,9 @@ import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, dailyMapSeed, type GameSession } from './core/Session';
+import { minimapWarmupState } from './services/ui/MinimapWarmup';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
-import { setGameRenderer } from './services/render/GameRenderer';
+import { setGameRenderer, applyShaderDebug } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
 import { registerAssetIconSource, registerDynamicIcon } from './services/item/ItemIconRegistry';
 import { ItemManager } from './systems/inventory/ItemManager';
@@ -114,6 +115,10 @@ async function boot() {
   document.body.appendChild(canvas);
 
   const rendererLocal = new THREE.WebGLRenderer({ canvas, antialias: true });
+  // ★ 着色器错误校验默认关闭：three 默认 true 会让每个 program 链接后同步回读
+  //   驱动日志（getProgramInfoLog，强制 GPU 同步），实测 CPU 占比 ~66%，
+  //   是"进入世界/停靠"长任务主因。排查 GLSL 错误用 ?shadercheck=1。
+  applyShaderDebug(rendererLocal);
   renderer = rendererLocal;
   // ★ UI 离屏烘焙（背包/加工台无人机图标）复用主渲染器，与战斗共用纹理绘制路径
   setGameRenderer(rendererLocal);
@@ -178,6 +183,8 @@ async function boot() {
     (window as unknown as { __ppMode?: () => unknown }).__ppMode = () => currentMode;
     (window as unknown as { __ppWp?: unknown }).__ppWp = worldPerf;
     (window as unknown as { __ppEp?: unknown }).__ppEp = entityPerf;
+    // ★ 小地图预加载状态（拿它验证"抽卡页预热 → 进世界交接"是否生效）
+    (window as unknown as { __mmWarm?: () => unknown }).__mmWarm = () => minimapWarmupState();
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
       if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
     };

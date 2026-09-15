@@ -570,10 +570,11 @@ export class RasterMap {
     return tileById(0);
   }
 
-  /** ★ 地图色（mapTileAt 的颜色出口；0xRRGGBB 打包便于逐像素写图） */
+  /** ★ 地图色（mapTileAt 的颜色出口；0xRRGGBB 打包便于逐像素写图）
+   *  2026-09-15：走 TileDef.packedRgb（地块级惰性缓存）——原实现每像素都要重跑
+   *  resolveTileLook + hsl2rgb（含分配），是小地图/大地图整幅重绘的主要成本。 */
   mapColorAt(x: number, z: number): number {
-    const [r, g, b] = this.mapTileAt(x, z).baseRgb;
-    return (r << 16) | (g << 8) | b;
+    return this.mapTileAt(x, z).packedRgb;
   }
 
   // ============ 实体索引（全局 cell，无限） ============

@@ -3,17 +3,33 @@
 // ============================================================
 // ★ 无限地图适配：
 //   - 不预构建全图——每帧按"玩家 ±windowHalf 窗口"实时采样地形色
-//   - 黑雾 = 稀疏 visited（无限持久），窗口内未探索像素盖黑
+//   - 黑雾 = 稀疏探索记忆（无限持久），窗口内未探索像素盖黑
 //   - ★ 记忆灰雾（2026-08-23）：常驻掩码盖住所有已探明区域，
 //     仅 LOD_MAX_DIST 圈内"挖孔"露全彩；偏暗=记忆观感。
 //     敌人只在【已探索 且 LOD 圈内】显示；我方道具始终显示
 //   - 玩家恒居中，箭头 = 摄像机朝向（准星方向）
 // 窗口 ±80 米（160px → 1m/px，与 RasterMap 1 地块 = 1 像素对应）
 // 开雾范围 = LOD_MAX_DIST（< 窗口 → 可见雾边界）
+//
+// ★ 预加载（2026-09-15）：探索记忆 / 底图 / LOD 边带索引三样都是纯函数
+//   （探索圆盘与地形数据无关；地形色 = f(seed,x,z)，blockTypes 运行时不改），
+//   故可在抽卡页算好（见 MinimapWarmup），进世界时交接 → 首帧**零成本**：
+//   构造时就贴好底图，并把 lastCell/lastReveal 落在出生格 → 第一次 update 直接跳过
+//   整段 reveal + rebuildBase。
+// ============================================================
 
-import { RasterMap, cellKeyOf } from '../map/RasterMap';
+import { RasterMap } from '../map/RasterMap';
+import { ExploredMask } from '../map/ExploredMask';
 import type { EntityBase } from '../../entity/EntityBase';
-import { LOD_MAX_DIST } from '../lod';
+import {
+  buildBandIdx,
+  consumeMinimapWarmup,
+  MINIMAP_SIZE,
+  MINIMAP_WINDOW_HALF,
+  MINIMAP_VIEW_RADIUS,
+  LOD_BAND,
+  type MinimapWarmData,
+} from './MinimapWarmup';
 
 export class Minimap {
   /** ★ 底图层（可见；仅跨格时"滚动 + 补边条"更新，不再每帧全量 putImageData） */
@@ -33,8 +49,11 @@ export class Minimap {
   private displaySize: number;
   private windowHalf: number;
   private viewRadius: number;
-  /** ★ 稀疏探索状态（无限持久：run 内不回退；地表色由 raster 地形记录派生） */
-  private visited = new Map<number, boolean>();
+  /**
+   * ★ 探索记忆（无限持久：run 内不回退；地表色由 raster 地形记录派生）
+   * 稠密位图（出生区 181×181）+ 越界稀疏回退；可比 Map<cellKey> 快一个数量级。
+   */
+  private explored: ExploredMask;
   /** ★ 复用的地表底图（地形+雾；仅玩家跨格时滚动 + 补新边条） */
   private baseImg: ImageData | null = null;
   /** ★ 底图窗口原点（世界格坐标；滚动差量用） */
@@ -50,11 +69,34 @@ export class Minimap {
   private static readonly MIST_B = 72;
   private static readonly MIST_STRENGTH = 0.85;
 
-  constructor(raster: RasterMap, displaySize = 160, windowHalf = 80, viewRadius = LOD_MAX_DIST) {
+  /**
+   * ★ 上次 reveal 的玩家**位置**（浮点，= 上次点亮的那个圆盘的圆心）。
+   *   NaN = 尚无 → 首次全量。★ 必须是浮点而不是格：增量环带的内径 = r − d，
+   *   这里的 d 是两次圆心之间的**真实位移**，用格作基准会把 d 低估最多 1.4m
+   *   （见 reveal 的推导）。
+   */
+  private lastRevealPX = NaN;
+  private lastRevealPZ = NaN;
+  /** ★ LOD 圈边带像素索引（静态预计算） */
+  private bandIdx: Uint32Array | null = null;
+  private bandIdxReady = false;
+
+  /** ★ 是否吃到预加载（调试/HUD 可读） */
+  private warmed = false;
+
+  constructor(
+    raster: RasterMap,
+    displaySize = MINIMAP_SIZE,
+    windowHalf = MINIMAP_WINDOW_HALF,
+    viewRadius = MINIMAP_VIEW_RADIUS,
+    /** ★ 预加载数据（缺省自动按 raster.worldSeed 取；传 null 显式走冷路径） */
+    warm: MinimapWarmData | null | undefined = undefined,
+  ) {
     this.raster = raster;
     this.displaySize = displaySize;
     this.windowHalf = windowHalf;
     this.viewRadius = viewRadius;
+    this.explored = new ExploredMask(0, 0, 0, 0); // 默认全稀疏（= 旧行为）
     const posCss =
       `position:fixed;top:8px;left:8px;width:${displaySize}px;height:${displaySize}px;` +
       'image-rendering:pixelated;pointer-events:none;';
@@ -73,6 +115,39 @@ export class Minimap {
     this.canvas.style.cssText = posCss + 'z-index:999;';
     this.ctx = this.canvas.getContext('2d')!;
     document.body.appendChild(this.canvas);
+
+    // ★ 预加载交接：整段"开局点亮"在抽卡页已经算完，这里只做两次字节拷贝
+    const w = warm === undefined
+      ? consumeMinimapWarmup(raster.worldSeed, displaySize, windowHalf, viewRadius)
+      : warm;
+    if (w) this.adoptWarm(w);
+  }
+
+  /** ★ 吃下预加载数据：底图即刻上屏 + 探索记忆/边带索引就位 + 首次 update 直接跳过 */
+  private adoptWarm(w: MinimapWarmData): void {
+    const ds = this.displaySize;
+    if (w.size !== ds) return;
+    this.explored = w.mask;
+    const img = this.baseCtx.createImageData(ds, ds);
+    img.data.set(w.baseImg);
+    this.baseImg = img;
+    this.baseOX = w.baseOX;
+    this.baseOZ = w.baseOZ;
+    // ★ 首次 update 的位置恰是出生格 → 让它直接命中"未跨格"分支（零 reveal / 零 rebuild）
+    this.lastCellX = w.cellX;
+    this.lastCellZ = w.cellZ;
+    // ★ 预热圆盘的圆心（= 出生格中心）→ 后续增量环带以内径 r−d 从它量起（精确）
+    this.lastRevealPX = w.cellX + 0.5;
+    this.lastRevealPZ = w.cellZ + 0.5;
+    this.bandIdx = w.bandIdx;
+    this.bandIdxReady = true;
+    this.baseCtx.putImageData(img, 0, 0);
+    this.warmed = true;
+  }
+
+  /** ★ 是否吃到预加载（调试 HUD 用） */
+  get isWarmed(): boolean {
+    return this.warmed;
   }
 
   /** ★ 每帧更新：地表底图仅跨格重建 → 其余帧重贴底图 + 实体点 + 玩家箭头（居中，= 摄像机朝向） */
@@ -109,7 +184,7 @@ export class Minimap {
       if (info.kind === 'enemy') {
         const edx = ex - px;
         const edz = ez - pz;
-        const explored = this.visited.has(cellKeyOf(ex, ez));
+        const explored = this.explored.has(ex, ez);
         const inLod = edx * edx + edz * edz <= rSq;
         if (!explored || !inLod) continue;
       }
@@ -152,9 +227,9 @@ export class Minimap {
    *  ★ 屏幕对齐映射：canvas 上 = 3D 屏幕上方（-z）、canvas 右 = 3D 屏幕右（+x） */
   private rebuildBase(px: number, pz: number): void {
     const ds = this.displaySize;
+    const rSq = this.viewRadius * this.viewRadius;
     const x0 = Math.floor(px - this.windowHalf);
     const z0 = Math.floor(pz - this.windowHalf);
-    const rSq = this.viewRadius * this.viewRadius;
     if (!this.baseImg) {
       // 首帧全量
       this.baseImg = this.baseCtx.createImageData(ds, ds);
@@ -215,17 +290,36 @@ export class Minimap {
     // ③ 补"点亮圈边带"：reveal 半径(viewRadius=90m) > 窗口半宽(80m) → 四角区域
     //    存在"窗口内但当初未点亮、后被点亮"的像素（不在新条带里）；同时已点亮像素
     //    越过雾圈后要转灰雾。两者都只发生在 |d-r| ≲ 跨格位移处 → 重画该边带。
-    const band = 4.0; // 覆盖跨格位移 + reveal 浮点/量化中心偏差（±~0.7m）
-    for (let iy = 0; iy < ds; iy++) {
-      const ddz = z0 + iy + 0.5 - pz;
-      for (let ix = 0; ix < ds; ix++) {
-        const ddx = x0 + ix + 0.5 - px;
-        const d = Math.sqrt(ddx * ddx + ddz * ddz);
-        if (d > this.viewRadius - band && d < this.viewRadius + band) {
-          this.paintPixel(this.baseImg, (iy * ds + ix) * 4, x0 + ix, z0 + iy, px, pz, rSq);
+    //   ★ 性能（2026-09-15）：px/pz 恒为"玩家格中心"（唯一调用点传 cx+0.5/cz+0.5），
+    //     故每个像素到中心的距离在每次调用间**不变** → 索引表一次算好，之后只遍历
+    //     命中的 ~1.1k 个像素（原实现每次跨格都扫全部 160²=25600 个并各算一次 hypot）。
+    const idx = this.ensureBandIdx();
+    if (idx) {
+      const dsI = ds;
+      for (let k = 0; k < idx.length; k++) {
+        const p = idx[k];
+        this.paintPixel(this.baseImg, p * 4, x0 + (p % dsI), z0 + ((p / dsI) | 0), px, pz, rSq);
+      }
+    } else {
+      for (let iy = 0; iy < ds; iy++) {
+        const ddz = z0 + iy + 0.5 - pz;
+        for (let ix = 0; ix < ds; ix++) {
+          const ddx = x0 + ix + 0.5 - px;
+          const d = Math.sqrt(ddx * ddx + ddz * ddz);
+          if (d > this.viewRadius - LOD_BAND && d < this.viewRadius + LOD_BAND) {
+            this.paintPixel(this.baseImg, (iy * ds + ix) * 4, x0 + ix, z0 + iy, px, pz, rSq);
+          }
         }
       }
     }
+  }
+
+  /** ★ LOD 圈边带像素索引（静态预计算；见 MinimapWarmup.buildBandIdx） */
+  private ensureBandIdx(): Uint32Array | null {
+    if (this.bandIdxReady) return this.bandIdx;
+    this.bandIdxReady = true;
+    this.bandIdx = buildBandIdx(this.displaySize, this.windowHalf, this.viewRadius, LOD_BAND);
+    return this.bandIdx;
   }
 
   /** 单像素落色（地形色 + 探索雾 + LOD 挖孔；rebuildBase 的共用叶子） */
@@ -234,7 +328,7 @@ export class Minimap {
     wx: number, wz: number,
     px: number, pz: number, rSq: number,
   ): void {
-    if (this.visited.has(cellKeyOf(wx, wz))) {
+    if (this.explored.has(wx, wz)) {
       // ★ 颜色来自地形记录（raster.mapColorAt：实时 chunk 优先，卸载回放快照）
       const packed = this.raster.mapColorAt(wx, wz);
       let r = (packed >> 16) & 255;
@@ -259,34 +353,98 @@ export class Minimap {
     img.data[i + 3] = 255;
   }
 
-  /** ★ 探索点亮：玩家周围 viewRadius 内标记已见（稀疏持久） */
+  /**
+   * ★ 探索点亮：玩家周围 viewRadius 内标记已见（持久；mark 幂等，永不回退）
+   *
+   * ★ 增量扫描（2026-09-15 重写）：每跨 1 格全量扫 (2r+1)² = 32,761 格是"停靠/
+   *   打坑/航行"冷帧里最大的单项 CPU（首次 ~27ms；远航时因稀疏回退反复触发，
+   *   每次 3 万次 Map 查找 → 持续掉帧）。
+   *
+   *   关键性质：新点亮的区域恒等于【新圆盘 − 旧圆盘】。
+   *   设两圆心位移 d = |新心 − 旧心|。若格 C 不在旧盘内（dist_old > r）而在新盘内，
+   *   由三角不等式 dist_old ≤ dist_new + d 得
+   *       dist_new > r − d
+   *   → **crescent ⊆ 以新心为心、(r−d, r] 的环带**。
+   *   环带外的旧盘部分早已标过（幂等），故"只扫这个环带"与全量扫描**逐格等价**。
+   *
+   *   ⚠ 为什么不能按"新矩形 − 旧矩形"取边缘条带（2026-09-15 踩坑）：
+   *     那个 crescent 不是贴着位移方向的一小块，而是**沿新圆周张角近 180°、
+   *     厚 ≈ d 的一段细月牙**（位移方向为正中央，两端厚度渐收为 0）。
+   *     用"新边缘 |d| 列/行 + 固定内扩 12 格"只能覆盖月牙的**两个端点**，
+   *     中间整段（如位移 (−1,−1) 时的 (−34,−34)）永久漏标 →
+   *     表现为雾界上黑色斑点/黑块随移动不断累积（"黑雾清不掉"）。
+   *     环带写法与张角无关，不存在这个盲区。
+   *
+   *   开销：d 为常规跨格位移（≤ ~2m）时环带 ≈ 2πr·d ≈ 1.1k 格，
+   *        单次 ≈ 20µs（且只是 Uint8Array 写；远低于原 2.5 万次 Map 读写）。
+   *        d ≥ r（停靠/传送/紧急迫降）时内径 ≤ 0 → 自动退化为全量，仍正确。
+   */
   private reveal(px: number, pz: number): void {
-    const r = this.viewRadius;
-    for (let z = Math.floor(pz - r); z <= Math.floor(pz + r); z++) {
-      for (let x = Math.floor(px - r); x <= Math.floor(px + r); x++) {
-        const dx = x + 0.5 - px;
-        const dz = z + 0.5 - pz;
-        if (dx * dx + dz * dz <= r * r) {
-          const key = cellKeyOf(x, z);
-          if (!this.visited.has(key)) this.visited.set(key, true);
+    const ox = this.lastRevealPX;
+    const oz = this.lastRevealPZ;
+    this.lastRevealPX = px;
+    this.lastRevealPZ = pz;
+    if (!Number.isFinite(ox)) {
+      this.markDisk(px, pz, this.viewRadius, -1); // 首次：全量
+      return;
+    }
+    // ★ 内径 = r − d：d 越大环带越厚；d ≥ r 时 ≤ 0 → markDisk 视作全量
+    this.markDisk(px, pz, this.viewRadius, this.viewRadius - Math.hypot(px - ox, pz - oz));
+  }
+
+  /**
+   * ★ 点亮"以 (px,pz) 为心、半径 r"的圆盘内所有整数格；`inner > 0` 时挖掉内盘，
+   *   只标 dist ∈ (inner, r] 的环带。逐行求圆的 x 区间（无浪费的圆判定、无漏格）。
+   *   格 x 在盘内 ⇔ |x + 0.5 − px| ≤ √(r² − dz²)（dz = z + 0.5 − pz）
+   *            ⇔ px − h − 0.5 ≤ x ≤ px + h − 0.5
+   */
+  private markDisk(px: number, pz: number, r: number, inner: number): void {
+    const mask = this.explored;
+    const rSq = r * r;
+    const innerSq = inner > 0 ? inner * inner : -1;
+    const zA = Math.floor(pz - r);
+    const zB = Math.floor(pz + r);
+    for (let z = zA; z <= zB; z++) {
+      const dz = z + 0.5 - pz;
+      const dzSq = dz * dz;
+      if (dzSq > rSq) continue; // 整行在圆外
+      const hOut = Math.sqrt(rSq - dzSq);
+      const xa = Math.ceil(px - hOut - 0.5);
+      const xb = Math.floor(px + hOut - 0.5);
+      if (innerSq > 0) {
+        const inSq = innerSq - dzSq;
+        if (inSq > 0) {
+          // 内盘在本行占据 [ia, ib] → 只标左右两段
+          const hIn = Math.sqrt(inSq);
+          const ia = Math.ceil(px - hIn - 0.5);
+          const ib = Math.floor(px + hIn - 0.5);
+          for (let x = xa; x < ia; x++) mask.mark(x, z);
+          for (let x = ib + 1; x <= xb; x++) mask.mark(x, z);
+          continue;
         }
       }
+      for (let x = xa; x <= xb; x++) mask.mark(x, z);
     }
   }
 
   /** ★ 探索判定出口（大地图面板共用同一探索记忆） */
   isExplored(x: number, z: number): boolean {
-    return this.visited.has(cellKeyOf(Math.floor(x), Math.floor(z)));
+    return this.explored.has(Math.floor(x), Math.floor(z));
   }
 
   /** 已探索格数（面板信息行） */
   get exploredCount(): number {
-    return this.visited.size;
+    return this.explored.size;
   }
 
   dispose(): void {
     this.canvas.remove();
     this.baseCanvas.remove();
-    this.visited.clear();
+    this.explored = new ExploredMask(0, 0, 0, 0);
+    this.baseImg = null;
+    this.lastCellX = NaN;
+    this.lastCellZ = NaN;
+    this.lastRevealPX = NaN;
+    this.lastRevealPZ = NaN;
   }
 }

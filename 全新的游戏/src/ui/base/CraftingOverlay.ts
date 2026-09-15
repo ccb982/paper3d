@@ -13,6 +13,7 @@ import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { CraftModule, MODULE_SLOTS, slotCss } from './CraftModule';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { compositeFrameToCanvas } from '../shared/ftxFrameToCanvas';
+import { applyShaderDebug } from '../../services/render/GameRenderer';
 
 const HSL_VERT = `
   varying vec2 vUv;
@@ -97,6 +98,8 @@ export class CraftingOverlay {
     this.root.appendChild(this.canvas);
 
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
+    // ★ 默认关掉着色器错误回读（详见 services/render/GameRenderer.ts）
+    applyShaderDebug(this.renderer);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x0a0a1a, 1);
 

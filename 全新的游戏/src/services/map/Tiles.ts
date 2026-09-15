@@ -114,10 +114,34 @@ export class TileDef {
     return this.visual.depression;
   }
 
-  /** 基准色 RGB（显示空间；小地图等直接消费）——两级解析后的 Tier-1 底色 */
+  /** ★ 缓存槽（见 baseRgb 说明；地块注册后 visual 不再变，缓存永久有效） */
+  private _baseRgb: [number, number, number] | null = null;
+  private _packedRgb = -1;
+
+  /**
+   * 基准色 RGB（显示空间；小地图等直接消费）——两级解析后的 Tier-1 底色
+   *
+   * ★ 性能（2026-09-15）：本 getter 是**逐像素热路径**的叶子——小地图跨格重绘每帧
+   *   25,600 次、大地图整屏可达 6.9 万次。原实现每次都要跑 resolveTileLook
+   *   （内含 `{...params}` 对象展开分配）+ hsl2rgb（内含闭包 + 数组分配），
+   *   实测单次上百 ns → 单次整幅重绘 5~10ms。
+   *   而 resolveTileLook 只读 `visual.material`（静态引用）/ `visual.baseHsl`（静态字段）
+   *   / 静态材质注册表 → 结果对同一 TileDef **恒定**，故惰性算一次即可。
+   */
   get baseRgb(): [number, number, number] {
+    const c = this._baseRgb;
+    if (c) return c;
     const b = resolveTileLook(this).baseHsl;
-    return hsl2rgb(b.h, b.s, b.l);
+    return (this._baseRgb = hsl2rgb(b.h, b.s, b.l));
+  }
+
+  /** 基准色打包 0xRRGGBB（地图逐像素写图用；避免每像素解构数组） */
+  get packedRgb(): number {
+    if (this._packedRgb < 0) {
+      const [r, g, b] = this.baseRgb;
+      this._packedRgb = (r << 16) | (g << 8) | b;
+    }
+    return this._packedRgb;
   }
 }
 
