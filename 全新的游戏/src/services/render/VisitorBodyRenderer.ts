@@ -2,10 +2,9 @@
 // VisitorBodyRenderer —— 访客程序化身体（球头 + 方身 + 关节胶囊四肢）
 // ============================================================
 // 用户定调（2026-09-15）：访客没有模型 ——
-//   · 头 = 球（SphereGeometry）
-//   · 身体 = 方盒（BoxGeometry）
+//   · 头 = 球（大头比例 0.155×身高）/ 身体 = 方盒
 //   · 四肢 = 两端半球圆柱（THREE.CapsuleGeometry，即"有头有尾的圆柱"）
-//   · 每名访客只换"脸"纹理（FTX 帧 → 头顶前方的贴片）
+//   · 每名访客只换"脸"纹理（FTX 帧 → 大头正前方 1.9×头半径的贴板，按宽高比自适应）
 // 关节：肩/肘/髋/膝各一个 Group 轴心，rotation.x 前后摆动。
 //   （人物面朝 +Z；绕 +X 正旋转 = 肢体向后摆 → 前摆用负值。）
 //
@@ -32,6 +31,8 @@ import type { FtxAsset } from '../../vendor/player/FtxAsset';
 export interface VisitorBodyStyle {
   /** 身高（米；缺省 1.8） */
   height?: number;
+  /** 整体尺寸倍率（缺省 1.8；2026-09-15 用户两次反馈"NPC 太小" → 放大 + 大头比例） */
+  scale?: number;
   /** 躯干/头部颜色（hex 或 CSS；缺省米灰 #d8d2c6） */
   bodyColor?: number | string;
   /** 四肢颜色（缺省 = bodyColor 略深） */
@@ -80,6 +81,8 @@ export class VisitorBodyRenderer extends FxRendererBase {
 
   /** 髋高（body 组基准 y；起伏在其上叠加） */
   private hipY: number;
+  /** 头球半径（脸贴片按它定尺寸） */
+  private headR = 0;
   private strideLength: number;
   private legSwing: number;
   private kneeBend: number;
@@ -98,7 +101,7 @@ export class VisitorBodyRenderer extends FxRendererBase {
 
   constructor(scene: THREE.Scene, faceAsset: FrameAssetSource | null, style: VisitorBodyStyle = {}) {
     super();
-    const H = style.height ?? 1.8;
+    const H = (style.height ?? 1.8) * (style.scale ?? 1.8);
     this.strideLength = style.strideLength ?? 1.6;
     this.legSwing = style.legSwing ?? 0.45;
     this.kneeBend = style.kneeBend ?? 0.9;
@@ -116,19 +119,20 @@ export class VisitorBodyRenderer extends FxRendererBase {
     const limbMat = new THREE.MeshStandardMaterial({ color: limbColor, roughness: 0.9, metalness: 0.02, flatShading: true });
     this.materials.push(bodyMat, limbMat);
 
-    // ---- 尺寸（按身高比例）----
-    const legLen = H * 0.48;
-    const torsoH = H * 0.3;
-    const torsoW = H * 0.26;
-    const torsoD = H * 0.15;
-    const headR = H * 0.085;
-    const armR = H * 0.038;
-    const legR = H * 0.052;
-    const upperArm = H * 0.16;
-    const foreArm = H * 0.15;
-    const thigh = H * 0.24;
-    const shin = H * 0.23;
+    // ---- 尺寸（按身高比例；★ 大头卡通比例 —— 用户要求"脸上的纹理非常明显"）----
+    const legLen = H * 0.4;
+    const torsoH = H * 0.28;
+    const torsoW = H * 0.3;
+    const torsoD = H * 0.17;
+    const headR = H * 0.155;
+    const armR = H * 0.045;
+    const legR = H * 0.06;
+    const upperArm = H * 0.15;
+    const foreArm = H * 0.14;
+    const thigh = H * 0.2;
+    const shin = H * 0.2;
     this.hipY = legLen;
+    this.headR = headR;
 
     this.root = new THREE.Group();
     this.body = new THREE.Group();
@@ -141,18 +145,20 @@ export class VisitorBodyRenderer extends FxRendererBase {
     torso.castShadow = false;
     this.body.add(torso);
 
-    // 头（球）
-    const headY = torsoH + headR * 0.92;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(headR, 16, 12), bodyMat);
+    // 头（球；★ 大头比例，让脸纹理一目了然）
+    const headY = torsoH + headR * 0.85;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(headR, 20, 14), bodyMat);
     head.position.y = headY;
     this.body.add(head);
 
-    // 脸贴片（每名访客只换这张纹理；无纹理时留空）
-    const faceGeo = new THREE.PlaneGeometry(headR * 1.7, headR * 1.7);
-    const faceMat = new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false });
+    // 脸贴片（每名访客只换这张纹理；贴在大头正前方 —— 尺寸自适应纹理宽高比）
+    const faceMat = new THREE.MeshBasicMaterial({
+      transparent: true, depthWrite: false, toneMapped: false,
+    });
     this.materials.push(faceMat);
-    this.faceMesh = new THREE.Mesh(faceGeo, faceMat);
-    this.faceMesh.position.set(0, headY, headR * 1.02);
+    this.faceMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), faceMat);
+    this.faceMesh.position.set(0, headY, headR * 0.92);
+    this.faceMesh.scale.set(headR * 1.9, headR * 1.9, 1);
     this.faceMesh.visible = false;
     this.body.add(this.faceMesh);
     if (faceAsset) void this.loadFace(faceAsset, style.faceFrame);
@@ -281,23 +287,28 @@ export class VisitorBodyRenderer extends FxRendererBase {
       tex.generateMipmaps = true;
       tex.needsUpdate = true;
       if (this.disposed) { tex.dispose(); return; }
-      this.setFaceTexture(tex);
+      this.setFaceTexture(tex, canvas.width / Math.max(1, canvas.height));
     } catch (e) {
       console.warn('[VisitorBody] 脸纹理合成失败:', e);
     }
   }
 
-  /** 直接注入脸纹理（上层已加载/自定义贴图；旧纹理自动释放） */
-  setFaceTexture(tex: THREE.Texture | null): void {
+  /** 直接注入脸纹理（上层已加载/自定义贴图；旧纹理自动释放；aspect = 宽/高） */
+  setFaceTexture(tex: THREE.Texture | null, aspect = 1): void {
     if (this.disposed) { tex?.dispose(); return; }
     this.faceTex?.dispose();
     this.faceTex = tex;
-    if (this.faceMesh) {
-      const mat = this.faceMesh.material as THREE.MeshBasicMaterial;
-      mat.map = tex;
-      mat.needsUpdate = true;
-      this.faceMesh.visible = !!tex;
-    }
+    if (!this.faceMesh) return;
+    const mat = this.faceMesh.material as THREE.MeshBasicMaterial;
+    mat.map = tex;
+    mat.needsUpdate = true;
+    this.faceMesh.visible = !!tex;
+    if (!tex) return;
+    // 脸板贴满大头正面（长边 = 1.9 × 头半径；按纹理宽高比自适应）
+    const size = this.headR * 1.9;
+    const w = aspect >= 1 ? size : size * aspect;
+    const h = aspect >= 1 ? size / aspect : size;
+    this.faceMesh.scale.set(w, h, 1);
   }
 
   override dispose(): void {

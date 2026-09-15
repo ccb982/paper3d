@@ -87,6 +87,9 @@ export class WorldUIManager extends BaseInteractionUI {
   private shipAlertTimer = 0;
   /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
   private assaultBannerEl: HTMLDivElement | null = null;
+  /** ★ 访客到访提示（金色横幅；独立于敌袭横幅，到时自动隐藏） */
+  private visitorNoticeEl: HTMLDivElement | null = null;
+  private visitorNoticeTimer = 0;
   /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
   private enemyScaleEl: HTMLDivElement | null = null;
   /** ★ 进舰提示（靠近舰船按 E） */
@@ -163,6 +166,15 @@ export class WorldUIManager extends BaseInteractionUI {
       if (this.shipAlertTimer <= 0) {
         if (this.shipAlertEl) this.shipAlertEl.style.display = 'none';
         if (this.shipVignetteEl) this.shipVignetteEl.style.display = 'none';
+      }
+    }
+    // ★ 访客到访提示：到时淡出（最后一秒渐隐）
+    if (this.visitorNoticeTimer > 0) {
+      this.visitorNoticeTimer -= dt;
+      const el = this.visitorNoticeEl;
+      if (el) {
+        if (this.visitorNoticeTimer <= 0) el.style.display = 'none';
+        else if (this.visitorNoticeTimer < 1) el.style.opacity = String(Math.max(0, this.visitorNoticeTimer));
       }
     }
     // ★ 世界地图面板（打开时才重绘）
@@ -366,6 +378,34 @@ export class WorldUIManager extends BaseInteractionUI {
     el.style.color = danger ? '#ffb3a0' : '#cfe8ff';
     el.style.background = danger ? 'rgba(30,10,10,0.55)' : 'rgba(10,16,26,0.55)';
     el.textContent = text;
+  }
+
+  /** ★ 访客到访提示（金色横幅：停留 seconds 秒后淡出；与敌袭横幅互不干扰） */
+  showVisitorNotice(text: string, seconds = 12): void {
+    if (!this.visitorNoticeEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:74px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:65', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
+        'font-size:16px', 'font-weight:bold', 'letter-spacing:2px',
+        'padding:6px 18px', 'border-radius:4px',
+        'background:rgba(26,20,8,0.62)', 'color:#ffd87a',
+        'text-shadow:0 1px 3px #000, 0 0 10px rgba(240,200,110,0.55)',
+        'transition:opacity 0.4s',
+      ].join(';');
+      document.body.appendChild(el);
+      this.visitorNoticeEl = el;
+    }
+    this.visitorNoticeEl.textContent = text;
+    this.visitorNoticeEl.style.display = 'block';
+    this.visitorNoticeEl.style.opacity = '1';
+    this.visitorNoticeTimer = seconds;
+  }
+
+  /** 隐藏访客到访提示（进舰/谈完/访客离开时调用） */
+  clearVisitorNotice(): void {
+    this.visitorNoticeTimer = 0;
+    if (this.visitorNoticeEl) this.visitorNoticeEl.style.display = 'none';
   }
 
   /** ★ 敌军攻势档位（顶部小字；《EnemyScaling.ts》统一口径：低/较低/中/较高/极高） */
@@ -775,6 +815,9 @@ export class WorldUIManager extends BaseInteractionUI {
     this.shipAlertTimer = 0;
     this.assaultBannerEl?.remove();
     this.assaultBannerEl = null;
+    this.visitorNoticeEl?.remove();
+    this.visitorNoticeEl = null;
+    this.visitorNoticeTimer = 0;
     this.enemyScaleEl?.remove();
     this.enemyScaleEl = null;
     this.boardPromptEl?.remove();

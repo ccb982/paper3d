@@ -18,6 +18,7 @@ import { EquipmentLayer } from '../../systems/itemPlayback/EquipmentLayer';
 import { VehicleRide } from '../../systems/itemPlayback/VehicleRide';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadFtxCached } from '../../services/fx/FtxAssetCache';
+import { VisitorBodyRenderer, type VisitorBodyStyle } from '../../services/render/VisitorBodyRenderer';
 import baseRooms from '../../config/baseRooms.json';
 
 export interface RoomDef {
@@ -101,6 +102,8 @@ export class BaseScene {
   private activeStation: BaseStation | null = null;
   /** ★ 事件 NPC 立绘（固定位贴片；setEventNpcs 全量替换） */
   private npcQuads: FTXQuad[] = [];
+  /** ★ 访客程序化身体（舰内：球头/方盒身/关节胶囊四肢 + 脸部纹理；setEventBodies 全量替换） */
+  private eventBodies: { body: VisitorBodyRenderer; x: number; z: number }[] = [];
   /** ★ NPC 立绘异步装载令牌（防过期加载回写） */
   private npcLoadToken = 0;
   private promptEl: HTMLDivElement;
@@ -228,6 +231,21 @@ export class BaseScene {
     }
   }
 
+  /** ★ 访客程序化身体（舰内；与事件 NPC 立绘并存）。
+   *  资产已在上层加载好 → 同步创建；每帧面向维维美待机（见 update）。 */
+  setEventBodies(list: { x: number; z: number; asset?: FrameAssetSource | null; style?: VisitorBodyStyle }[]): void {
+    for (const b of this.eventBodies) b.body.dispose();
+    this.eventBodies = [];
+    for (const e of list) {
+      if (!e.asset || !e.style) continue;
+      const body = new VisitorBodyRenderer(this.sceneRef, e.asset, e.style);
+      body.setPosition(e.x, 0, e.z);
+      body.setLocomotion(false, 0);
+      body.update(0);
+      this.eventBodies.push({ body, x: e.x, z: e.z });
+    }
+  }
+
   /** 合并加工站 + 事件站点 → 生效交互站列表 */
   private rebuildStations(): void {
     const list: BaseStation[] = [...this.eventStations];
@@ -323,6 +341,11 @@ export class BaseScene {
     if (this.camera) {
       for (const q of this.npcQuads) q.setBillboard(this.camera);
     }
+    // ★ 访客身体：待机步态 + 面向维维美（人走到哪看到哪）
+    for (const b of this.eventBodies) {
+      b.body.setYaw(Math.atan2(this.charPos.x - b.x, this.charPos.z - b.z));
+      b.body.update(dt);
+    }
     // ★ 无人机编队：三帧叠加合成 + 包围角色转圈。
     //   防重叠：每层 4 架（层内 90° 间隔）、逐层半径+高度递增、层内奇偶槽再交错半径/高度，
     //   让正/背面的机体在屏幕上也拉开（纯圆环会让前后机投影到同一位置）
@@ -368,6 +391,8 @@ export class BaseScene {
     this.vehicleRide = null;
     for (const q of this.npcQuads) q.dispose();
     this.npcQuads = [];
+    for (const b of this.eventBodies) b.body.dispose();
+    this.eventBodies = [];
     this.npcLoadToken++;
     for (const d of this.droneAllies) d.view.dispose();
     this.droneAllies.length = 0;

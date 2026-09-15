@@ -58,6 +58,10 @@ import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type Thr
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { NpcEntity } from '../entity/NpcEntity';
+import { VisitorNpcBase } from '../entity/VisitorNpc';
+import { VisitorManager } from '../systems/visitors/VisitorManager';
+import type { VisitorBodyStyle } from '../services/render/VisitorBodyRenderer';
+import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
@@ -392,6 +396,20 @@ export class WorldMode implements IGameMode {
   private pendingNpc: NpcEntity | null = null;
   /** 世界事件 NPC 同时存在上限 */
   private static readonly MAX_EVENT_NPCS = 2;
+  // ★ 访客系统（每天 1~2 名；config/visitors.ts；抵达 → 进舰内房间）
+  private visitorManager: VisitorManager | null = null;
+  /** 当天是否已生成过访客（航行飞越不刷；首次探索帧生成） */
+  private visitorsSpawned = false;
+  /** 当前就近可交谈访客（途中 E 对话） */
+  private nearbyVisitor: VisitorNpcBase | null = null;
+  /** 正在对话的访客（结束统一收尾：途中续行 / 舰内离舰） */
+  private pendingVisitor: VisitorNpcBase | null = null;
+  /** 本次出击天数（访客按天生成） */
+  private curDay = 1;
+  /** ★ 舰内访客站位（房间本地坐标；按到舰顺序分配） */
+  private static readonly VISITOR_ANCHORS = [
+    { x: -7, z: 3 }, { x: 7, z: 3 }, { x: -7, z: -2 }, { x: 7, z: -2 }, { x: 0, z: 6 },
+  ];
   private protagonistAssetRef: FtxAsset | null = null;
   /** ★ Boss 战（抽到普瑞赛斯 → 四维空间；击败 = 通关） */
   private bossRun = false;
@@ -801,10 +819,43 @@ export class WorldMode implements IGameMode {
           if (i >= 0) this.npcs.splice(i, 1);
           this.pendingNpc = null;
         }
+        // ★ 访客对话收尾：途中 → 继续赶路；舰内 → 道别离舰（移出名册 + 清到访提示）
+        if (this.pendingVisitor) {
+          const v = this.pendingVisitor;
+          this.pendingVisitor = null;
+          if (v.visitPhase === 'approaching') {
+            v.setPaused(false);
+          } else {
+            this.visitorManager?.removeInsider(v);
+            if ((this.visitorManager?.insiders.length ?? 0) === 0) {
+              this.worldUIManager.clearVisitorNotice();
+            }
+          }
+        }
         if (this.shipInterior) {
           this.applyShipInteriorEvents(this.shipInterior);
           this.buildInteriorButtons();
         }
+      },
+    });
+    // ★ 访客系统：每天 1~2 名访客向舰船行进（首次探索帧生成；位置取当前停靠点）
+    this.curDay = ctx.day;
+    this.visitorsSpawned = false;
+    this.nearbyVisitor = null;
+    this.pendingVisitor = null;
+    this.visitorManager = new VisitorManager({
+      session: ctx.session,
+      entities: this.entities,
+      scene: this.scene,
+      getShipPosition: () => this.ship?.position ?? null,
+      getCameraFrame: () => this.cameraCtrl.getFrame(),
+      onArrive: (v) => {
+        // 进舰（房间）提示：金色横幅 + 现场飘字
+        this.worldUIManager.showVisitorNotice('神秘访客已到访，快回舰船内看看吧！');
+        this.showFloatingAt(v.position.x, v.position.y + 2.6, v.position.z, '已登舰', 'heal');
+      },
+      onFlee: (v) => {
+        this.showFloatingAt(v.position.x, v.position.y + 2.2, v.position.z, '访客被吓跑了', 'miss');
       },
     });
     // ★ 弹药栏切换：点击/按键切换当前弹药（攻击键发射）
@@ -1022,8 +1073,9 @@ export class WorldMode implements IGameMode {
       this.requestDock(false);
     }
 
-    // ★ 探索期事件 NPC：就近判定（E 对话优先于 E 进舰）
+    // ★ 探索期事件 NPC / 途中访客：就近判定（E 对话优先于 E 进舰）
     this.nearbyNpc = null;
+    this.nearbyVisitor = null;
     if (this.phase === 'explore' && !inInterior && !talking && !this.player.dead
       && !this.worldUIManager.hasModalOpen) {
       const p0 = this.player.position;
@@ -1035,6 +1087,8 @@ export class WorldMode implements IGameMode {
           this.nearbyNpc = npc;
         }
       }
+      // ★ 访客（途中可对话；优先级低于事件 NPC）
+      this.nearbyVisitor = this.visitorManager?.nearestTalkable(p0.x, p0.z) ?? null;
     }
     // ★ 采集物：接触即自动入包（2026-09-14 用户定调；0.1s 节拍省查询，JS 查 propRegistry）
     this.autoPickToastCd = Math.max(0, this.autoPickToastCd - dt);
@@ -1048,12 +1102,13 @@ export class WorldMode implements IGameMode {
         if (c) this.harvestCollectible(c, true);
       }
     }
-    // ★ 按 E：就近 NPC 对话 / 进舰内（仅降落后；飞行中不进）
+    // ★ 按 E：就近 NPC / 途中访客对话 / 进舰内（仅降落后；飞行中不进）
     if (!uiLocked && input.held.interact && this.phase === 'explore' && !this.player.dead) {
       if (this.nearbyNpc) this.startNpcDialogue(this.nearbyNpc);
+      else if (this.nearbyVisitor) this.startVisitorDialogue(this.nearbyVisitor);
       else this.enterShipInterior();
     }
-    // ★ 交互提示（对话中隐藏；NPC 优先于舰船）
+    // ★ 交互提示（对话中隐藏；NPC/访客优先于舰船）
     {
       const s0 = this.ship?.position;
       const p0 = this.player.position;
@@ -1062,6 +1117,7 @@ export class WorldMode implements IGameMode {
         && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2;
       if (talking) this.worldUIManager.setBoardPrompt(false);
       else if (this.nearbyNpc) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyNpc.displayName}交谈`);
+      else if (this.nearbyVisitor) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyVisitor.displayName}交谈`);
       else this.worldUIManager.setBoardPrompt(nearShip);
     }
 
@@ -1078,6 +1134,12 @@ export class WorldMode implements IGameMode {
 
     // ★ 舰船已毁：冻结玩法更新（结算/复活面板接管；相机/输入不再跑）
     if (this.shipDestroyed) return;
+
+    // ★ 访客：当天首次探索 → 生成 1~2 名（航行飞越/舰内不刷；落点取当前停靠点）
+    if (this.phase === 'explore' && !this.visitorsSpawned) {
+      this.visitorsSpawned = true;
+      this.visitorManager?.beginDay(this.curDay);
+    }
 
     // ★ 事件 NPC：走远回收（防无限世界累积；对话中的 NPC 不回收）
     if (this.npcs.length > 0) {
@@ -1474,6 +1536,12 @@ export class WorldMode implements IGameMode {
     this.nearbyNpc = null;
     this.autoPickAccum = 0;
     this.pendingNpc = null;
+    // ---- 访客（世界侧 + 舰内名册实体全释放；跨局防残留） ----
+    this.visitorManager?.dispose();
+    this.visitorManager = null;
+    this.nearbyVisitor = null;
+    this.pendingVisitor = null;
+    this.visitorsSpawned = false;
     // ---- 蜂群：代理池 + 批量渲染资源全释放 ----
     this.swarm.dispose();
     // ---- 取消伤害事件订阅 ----
@@ -3136,6 +3204,17 @@ export class WorldMode implements IGameMode {
     eventBus.emit('dialogue', { id: npc.dialogueTree });
   }
 
+  /** ★ 途中访客对话：暂停赶路 + 看向玩家；结束由 dialogue.onEnd 续行/离舰 */
+  private startVisitorDialogue(v: VisitorNpcBase): void {
+    if (!this.dialogue) return;
+    if (!this.dialogue.start(v.approachDialogue)) return;
+    this.pendingVisitor = v;
+    v.setPaused(true);
+    v.faceToward(this.player.position.x, this.player.position.z);
+    this.player.controlLocked = true;
+    eventBus.emit('dialogue', { id: v.approachDialogue });
+  }
+
   /** ★ 采收（E 自动接触 / 子弹命中共享）：掉落入包 + 株采集次数 +1。
    *  · 株级冷却 → 不抽干（auto 接触每帧触发 / 快枪多弹都只按株节流）
    *  · 次数达 cap → 标记已采 + 重贴（株消失）；背包满 → 不消耗株 */
@@ -3168,7 +3247,7 @@ export class WorldMode implements IGameMode {
   private applyShipInteriorEvents(interior: BaseScene): void {
     if (!this.eventSystem || !this.dialogue) return;
     const fixed = this.eventSystem.fixedEvents('ship');
-    interior.setEventStations(fixed.map((f) => ({
+    const stations = fixed.map((f) => ({
       x: f.x, z: f.z, rx: 2.4, rz: 2.0,
       label: this.eventSystem.label(f.event),
       cb: () => {
@@ -3178,8 +3257,35 @@ export class WorldMode implements IGameMode {
           eventBus.emit('dialogue', { id: f.event.dialogue });
         }
       },
-    })));
-    interior.setEventNpcs(fixed.map((f) => ({ x: f.x, z: f.z, assetUrl: f.event.npc.portrait })));
+    }));
+    const quads = fixed.map((f) => ({ x: f.x, z: f.z, assetUrl: f.event.npc.portrait }));
+    // ★ 已到舰访客：固定站位（按到舰顺序分配）；F 交谈 → 谈完离舰（onEnd 收尾）。
+    //   有程序化身体的走 3D 身体（脸=各自纹理）；没有的退回贴片立绘。
+    const bodies: { x: number; z: number; asset?: FrameAssetSource | null; style?: VisitorBodyStyle }[] = [];
+    const insiders = this.visitorManager?.insiders ?? [];
+    insiders.forEach((v, i) => {
+      const a = WorldMode.VISITOR_ANCHORS[i % WorldMode.VISITOR_ANCHORS.length];
+      stations.push({
+        x: a.x, z: a.z, rx: 2.4, rz: 2.0,
+        label: '交谈',
+        cb: () => {
+          if (this.dialogue!.start(v.visitDialogue)) {
+            this.pendingVisitor = v;
+            this.player.controlLocked = true;
+            this.removeInteriorButtons();
+            eventBus.emit('dialogue', { id: v.visitDialogue });
+          }
+        },
+      });
+      if (v.def.body) {
+        bodies.push({ x: a.x, z: a.z, asset: v.anim?.source ?? null, style: v.def.body });
+      } else {
+        quads.push({ x: a.x, z: a.z, assetUrl: v.def.assetUrl });
+      }
+    });
+    interior.setEventStations(stations);
+    interior.setEventNpcs(quads);
+    interior.setEventBodies(bodies);
   }
 
   /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
@@ -3223,6 +3329,7 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setBoardPrompt(false);
     this.worldUIManager?.closePanel('map-panel');
     this.worldUIManager?.setAssaultBanner('舰内 · 驾驶舱', false);
+    this.worldUIManager?.clearVisitorNotice(); // 已回舰：到访提示谢幕（人在房间里了）
     // ★ 与基地模式同款：舰内关闭天空/云/月亮/水的离屏 pass
     //   （否则离屏 RT 与主渲染形成 feedback loop：GL_INVALID_OPERATION）
     renderManager.setEnvironment('ship');

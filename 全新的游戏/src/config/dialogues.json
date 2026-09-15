@@ -122,6 +122,193 @@
           "end": true
         }
       }
+    },
+    "visitor_zc": {
+      "speaker": "ZC",
+      "portrait": "/characters/protagonist/zc.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "……你就是这艘船的主人？我路过，顺手带了点东西。",
+          "choices": [
+            { "text": "你是谁？", "next": "n2" },
+            { "text": "带了什么？", "next": "n3" },
+            { "text": "（点头致意）", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "代号 ZC，别的不重要。废土上名字换得比天气还勤。",
+          "next": "n3"
+        },
+        "n3": {
+          "text": "一点铁砂，换你一句真话——这船，还能飞多久？",
+          "effects": [
+            { "kind": "item", "id": "iron_grain", "count": 2 },
+            { "kind": "flag", "key": "met_zc" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "……下次见。",
+          "end": true
+        }
+      }
+    },
+    "visitor_buxiaoxiao": {
+      "speaker": "不许笑",
+      "portrait": "/characters/protagonist/不许笑.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "先说好——不许笑。我讲个正经的。",
+          "next": "n2"
+        },
+        "n2": {
+          "text": "为什么废土上的人都不怕冷？……因为心早就凉了。",
+          "choices": [
+            { "text": "（憋住）确实不冷。", "next": "n3" },
+            { "text": "噗——", "next": "n4" },
+            { "text": "……", "next": "n5" }
+          ]
+        },
+        "n3": {
+          "text": "懂我。这个给你，甜的，压压嘴角。",
+          "effects": [
+            { "kind": "item", "id": "gummy_honey_candy", "count": 1 },
+            { "kind": "flag", "key": "met_buxiaoxiao" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "……你笑了。记下了。",
+          "end": true
+        },
+        "n5": {
+          "text": "沉默是最高级的捧场。给你一颗糖。",
+          "effects": [
+            { "kind": "item", "id": "gummy_honey_candy", "count": 1 },
+            { "kind": "flag", "key": "met_buxiaoxiao" }
+          ],
+          "end": true
+        }
+      }
+    },
+    "visitor_tutou": {
+      "speaker": "兔头",
+      "portrait": "/characters/protagonist/兔头.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "别、别盯着我的头看！……好吧，我承认，还挺可爱的。",
+          "choices": [
+            { "text": "你从哪来？", "next": "n2" },
+            { "text": "（摸摸兔头）", "next": "n3" },
+            { "text": "确实可爱。", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "从地图另一头蹦过来的……路上采了些草药，分你点。",
+          "effects": [
+            { "kind": "item", "id": "herb", "count": 3 },
+            { "kind": "flag", "key": "met_tutou" }
+          ],
+          "end": true
+        },
+        "n3": {
+          "text": "呜……不许摸。算了，给你点浆果当赔礼吧。",
+          "effects": [
+            { "kind": "item", "id": "berry", "count": 3 },
+            { "kind": "flag", "key": "met_tutou" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "嘿嘿。拿好，路上吃。",
+          "effects": [
+            { "kind": "item", "id": "berry", "count": 2 },
+            { "kind": "flag", "key": "met_tutou" }
+          ],
+          "end": true
+        }
+      }
+    },
+    "visitor_jiaofu": {
+      "speaker": "教父",
+      "portrait": "/characters/protagonist/教父.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "年轻人，能在废土上把船养这么亮，有点本事。",
+          "choices": [
+            { "text": "您过奖了。", "next": "n2" },
+            { "text": "您想要什么？", "next": "n3" },
+            { "text": "（警惕）", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "江湖不是打打杀杀……是会用祖宗。拿着，两发。",
+          "effects": [
+            { "kind": "item", "id": "zuzong", "count": 2 },
+            { "kind": "flag", "key": "met_jiaofu" }
+          ],
+          "end": true
+        },
+        "n3": {
+          "text": "什么也不要。留一句：别把船开到没有名字的海上。",
+          "effects": [
+            { "kind": "item", "id": "zuzong", "count": 1 },
+            { "kind": "flag", "key": "met_jiaofu" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "警惕是好东西。那我们两清——这个当见面礼。",
+          "effects": [
+            { "kind": "item", "id": "sugar", "count": 2 },
+            { "kind": "flag", "key": "met_jiaofu" }
+          ],
+          "end": true
+        }
+      }
+    },
+    "visitor_shenren": {
+      "speaker": "神人",
+      "portrait": "/characters/protagonist/神人.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "吾观此船，气运尚存。汝等尚可一战。",
+          "choices": [
+            { "text": "帮帮我们。", "next": "n2" },
+            { "text": "少装神弄鬼。", "next": "n3" },
+            { "text": "（行礼）", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "赐汝一口真气——伤痛自消。",
+          "effects": [
+            { "kind": "heal", "percent": 0.3 },
+            { "kind": "flag", "key": "met_shenren" }
+          ],
+          "end": true
+        },
+        "n3": {
+          "text": "信与不信，皆是缘。此物赠汝，聊表心意。",
+          "effects": [
+            { "kind": "item", "id": "polyester", "count": 1 },
+            { "kind": "flag", "key": "met_shenren" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "善。今日之言，来日自验。",
+          "effects": [
+            { "kind": "item", "id": "ketone", "count": 1 },
+            { "kind": "flag", "key": "met_shenren" }
+          ],
+          "end": true
+        }
+      }
     }
   }
 }
