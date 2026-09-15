@@ -10,22 +10,6 @@
       "once": true
     },
     {
-      "id": "base_supply",
-      "where": "base",
-      "npc": { "speaker": "维维美", "portrait": "/characters/protagonist/维维美.ftx3.gz" },
-      "dialogue": "base_supply",
-      "label": "交谈",
-      "anchors": [{ "x": -28.4, "z": 4 }]
-    },
-    {
-      "id": "base_echo",
-      "where": "base",
-      "npc": { "speaker": "神秘残响", "portrait": "/characters/protagonist/维维美.ftx3.gz" },
-      "dialogue": "base_echo",
-      "label": "交谈",
-      "anchors": [{ "x": 0, "z": 4 }]
-    },
-    {
       "id": "world_survivor",
       "where": "world",
       "npc": { "speaker": "幸存者", "portrait": "/characters/protagonist/维维美.ftx3.gz" },
