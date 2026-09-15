@@ -42,6 +42,7 @@ import {
   unregisterPlantGustChunk, resetPlantGust,
 } from './decor/MapEntityDecorBase';
 import { FINE_S_NEAR, FINE_S_FAR } from './FaceBuild';
+import { PHYS_GRID } from './IncrementalGeometry';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
 } from './Boss4DArena';
@@ -61,9 +62,10 @@ import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics
 const PROP_PROBE_R = 3.0;
 
 /**
- * ★ 打坑链路分项耗时（累计 ms / 计数；?perf=1 由 main.ts 暴露为 window.__ppDig）。
- *  用途：定位「挖坑卡顿」到底花在同步落库 / 跨块联动 / 视觉原地写 / 分区 collider
- *  原位换 / 装饰重贴地 的哪一段——纯数字累加，零分配零开销，常驻开启。
+ * ★ chunk 管线分项耗时袋（累计 ms / 计数；?perf=1 由 main.ts 暴露为 `window.__ppDig`）。
+ *  用途：把「挖坑卡 / 停靠卡 / 进世界卡」拆到具体环节——同步落库 / 跨块联动 /
+ *  掩码+拷贝投递 / Worker 往返 / 装配 / 分区 collider 原位换 / 装饰重贴地 /
+ *  planDecor / bootstrap——纯数字累加，零分配零开销，常驻开启。
  */
 export const digPerf = {
   /** 命中次数（playBulletImpact 进入次数） */
@@ -91,12 +93,24 @@ export const digPerf = {
   /** 装饰重贴地排空（full 段 / props 段 分别计时） */
   decorDrainFull: 0,
   decorDrainProps: 0,
+  /** 出生/停靠强制构建（bootstrap 直建那一块；其余走预算化队列） */
+  bootstrap: 0,
+  bootstrapN: 0,
+  /** 主线程装饰计划 planDecor 累计（planChunkProps + computePropVolumes；每块一算） */
+  planDecor: 0,
+  planCount: 0,
+  /** 装配子项①：buildTerrainMeshes（BufferGeometry/材质/网格创建） */
+  terrainMesh: 0,
+  /** 装配子项②：createChunkGround（同步建分区 trimesh collider） */
+  chunkGround: 0,
   /** 重置（脚本按段采样用） */
   reset(): void {
     this.hits = 0; this.digCells = 0; this.neighbors = 0; this.neighborEnq = 0;
     this.decorFull = 0; this.decorLocal = 0; this.dispatch = 0; this.assemble = 0;
     this.workerWait = 0; this.rebuilds = 0;
     this.ground = 0; this.groundCount = 0; this.decorDrainFull = 0; this.decorDrainProps = 0;
+    this.bootstrap = 0; this.bootstrapN = 0; this.planDecor = 0; this.planCount = 0;
+    this.terrainMesh = 0; this.chunkGround = 0;
   },
 };
 
@@ -445,6 +459,15 @@ export class ChunkManager {
    * 标准风格走异步烘焙不阻塞主线程——角色 Y 由 clampCharacter 按
    * raster 高度场驱动，不依赖地面刚体先存在；
    * 地面视觉/刚体在头几帧内由烘焙结果补齐。
+   *
+   * ★ 2026-09-15 修「按 F 停靠单帧 150ms」：原来这里对 3×3 共 9 块**逐个直接**调
+   *   `requestStandardBake`——绕过了 `processQueue` 的 8ms 帧预算与在途闸门。而
+   *   `requestStandardBake` 在主线程要同步做 `planDecor`（逐道具采样地形高度 +
+   *   打包阴影体积）+ 3×3 邻域数据快照，9 块叠在一帧就是那一记长任务。
+   *   注意 `syncChunks()`（本函数第一行）已经把构建环 ±BUILD_RADIUS 内的所有块
+   *   按优先级压进了 `this.queue`，并已按帧预算投递过一轮 → 这里的 9 连发本就是**重复劳动**。
+   *   现在只保留「脚下那一块」同帧直建（保证落地瞬间地面/刚体在位），其余交给
+   *   常规预算化队列铺开（约 0.1s 内铺完；进近过程有几秒，且外围仍由粗块 LOD 覆盖）。
    */
   bootstrap(px: number, pz: number): void {
     this.syncChunks(px, pz);
@@ -457,10 +480,16 @@ export class ChunkManager {
       else this.requestStandardBake(scx, scz);
       return;
     }
+    const _t0 = performance.now();
+    if (this.boss4D) this.buildChunkMesh(scx, scz);
+    else this.requestStandardBake(scx, scz);
+    digPerf.bootstrap += performance.now() - _t0;
+    digPerf.bootstrapN++;
+    // 其余 8 块：已在 syncChunks 的构建环里排队 → 这里只做「确保入队」（幂等）
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
-        if (this.boss4D) this.buildChunkMesh(scx + dx, scz + dz);
-        else this.requestStandardBake(scx + dx, scz + dz);
+        if (dx === 0 && dz === 0) continue;
+        this.enqueueChunk(scx + dx, scz + dz, false);
       }
     }
   }
@@ -1609,7 +1638,10 @@ export class ChunkManager {
     const seed = this.raster.worldSeed;
 
     // ★ 装饰先行：预渲染（烘焙）前完成贴图与装饰物的放置
+    const _tp = performance.now();
     const decor = this.planDecor(cx, cz);
+    digPerf.planDecor += performance.now() - _tp;
+    digPerf.planCount++;
 
     // ★ 烘焙缓存命中：接缝重建 / 风格切换往返零重烘（纹理复用）
     const cached = getCachedChunkMaps(seed, cx, cz);
@@ -2158,6 +2190,7 @@ const key2 = chunkKeyOf(cx, cz);
     topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
     bounds?: { top: GeomBounds; wall: GeomBounds },
   ): { meshes: THREE.Object3D[]; pv: Float32Array; pi: Uint32Array } {
+    const _tb = performance.now();
     const toGeo = (g: FaceGeometry, withColor: boolean, b?: GeomBounds): THREE.BufferGeometry => {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute("position", new THREE.BufferAttribute(g.vertices, 3));
@@ -2199,6 +2232,7 @@ const key2 = chunkKeyOf(cx, cz);
     const pi = new Uint32Array(topG.indices.length + wallG.indices.length);
     pi.set(topG.indices, 0);
     for (let i = 0; i < wallG.indices.length; i++) pi[topG.indices.length + i] = wallG.indices[i] + nVT;
+    digPerf.terrainMesh += performance.now() - _tb;
     return { meshes, pv, pi };
   }
 
@@ -2228,26 +2262,45 @@ const key2 = chunkKeyOf(cx, cz);
     key: number, cx: number, cz: number,
     pv: Float32Array, pi: Uint32Array, cells?: PatchGroundCell[],
   ): void {
+    const _tg = performance.now();
     if (cells && cells.length > 0 && this.host.createGroundCells) {
       const hot = key === this.hotChunkKey;
-      const first = hot ? cells : [cells[0]];
-      const id = this.host.createGroundCells(cx, cz, first);
+      // ★ 2026-09-15 修「按 F 停靠单帧 150ms」最大的一笔：
+      //   热点 chunk 原先 `first = cells`（全 9 个分区）→ WorldMode.createGroundCells
+      //   内部 for 循环逐个 `setTileCollider`（实测 4.6~6.5ms/个，Rapier 同步建 trimesh
+      //   QBVH）→ 停靠装配那一帧白吃 ~40ms。
+      //   现在只同步建「玩家脚下那个分区」（保证站得住/掉得下去），其余 8 个分区改走
+      //   groundCellQueue 帧预算化 cooking（约 8 帧 ≈ 0.13s 铺完；脚下分区从不延迟）。
+      let sync: PatchGroundCell[] = [cells[0]];
+      let queued: PatchGroundCell[] = cells.slice(1);
+      if (hot) {
+        const focus = this.hotFocusSlot(cx, cz);
+        const fi = focus === null ? -1 : cells.findIndex((c) => c.slot === focus);
+        if (fi >= 0) {
+          sync = [cells[fi]];
+          queued = cells.filter((_, i) => i !== fi);
+        } else {
+          sync = cells; // 找不到脚下分区（坐标异常）→ 保守全同步，防掉坑
+          queued = [];
+        }
+      }
+      const id = this.host.createGroundCells(cx, cz, sync);
       if (id !== null && id !== undefined) {
         this.bodies.set(key, id);
-        if (!hot) {
-          for (let i = 1; i < cells.length; i++) {
-            this.groundCellQueue.set(id * 1024 + cells[i].slot, {
-              bodyId: id,
-              slot: cells[i].slot,
-              vertices: cells[i].vertices,
-              indices: cells[i].indices,
-            });
-          }
+        for (const c of queued) {
+          this.groundCellQueue.set(id * 1024 + c.slot, {
+            bodyId: id,
+            slot: c.slot,
+            vertices: c.vertices,
+            indices: c.indices,
+          });
         }
+        digPerf.chunkGround += performance.now() - _tg;
         return;
       }
     }
     this.bodies.set(key, this.host.createGround(cx, cz, pv, pi));
+    digPerf.chunkGround += performance.now() - _tg;
   }
 
   // ============================================================
@@ -2585,6 +2638,9 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 热点 chunk = 玩家当前所在：重建节流间隔更短（40ms vs 120ms）。 */
   private hotChunkKey = -1;
+  /** 玩家浮点世界坐标（热点分区判定用；markHotChunk 写入） */
+  private hotPx = 0;
+  private hotPz = 0;
 
   /** ★ 本帧刚被打中的 chunk（准星落点）：与热点同享 40ms 短节流
    *  —— 远距离射击时坑在别的 chunk，原先吃 120ms 节流 → 「打了半天没反应」。 */
@@ -2596,8 +2652,29 @@ const key2 = chunkKeyOf(cx, cz);
     this.hotChunkKey = chunkKeyOf(cx, cz);
     this.hotPcx = cx;
     this.hotPcz = cz;
+    // ★ 浮点玩家坐标：热点 chunk 只同步建「脚下那个分区」的判定依据（见 hotFocusSlot）
+    this.hotPx = px;
+    this.hotPz = pz;
     // ★ 脚下封存块立即解封（不等 sweep 预算/排序）：回程或落地瞬间细化视觉即刻恢复
     if (this.parkedKeys.has(this.hotChunkKey)) this.unparkChunk(this.hotChunkKey);
+  }
+
+  /**
+   * ★ 热点 chunk 内「玩家脚下那个物理分区」的 slot（只同步建它）。
+   *  推导与 IncrementalGeometry.partitionGroundCells 完全同构：
+   *    4m 块下标 bx = lx>>2 → 分区 pcx = floor(bx * PHYS_GRID / BLOCKS_PER_SIDE)
+   *    slot = pcz * PHYS_GRID + pcx
+   *  返回 null = 玩家不在该 chunk 内（或坐标异常）→ 调用方回落到"全部同步建"。
+   */
+  private hotFocusSlot(cx: number, cz: number): number | null {
+    if (this.hotChunkKey !== chunkKeyOf(cx, cz)) return null;
+    const lx = Math.floor(this.hotPx) - cx * CHUNK_SIZE;
+    const lz = Math.floor(this.hotPz) - cz * CHUNK_SIZE;
+    if (!(lx >= 0 && lz >= 0 && lx < CHUNK_SIZE && lz < CHUNK_SIZE)) return null;
+    const g = PHYS_GRID;
+    const pcx = Math.min(g - 1, Math.max(0, Math.floor(((lx >> 2) * g) / BLOCKS_PER_SIDE)));
+    const pcz = Math.min(g - 1, Math.max(0, Math.floor(((lz >> 2) * g) / BLOCKS_PER_SIDE)));
+    return pcz * g + pcx;
   }
 
   /** ★ 破坏重建帧间合并 + 节流（每帧开头调用）：把本帧攒下的挖坑请求按 chunk 合并后
