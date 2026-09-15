@@ -4,7 +4,10 @@
 // 非模态覆盖层（底部对话框），基地/战斗共用：
 //   · 无选项：点击面板或按 空格/回车/E 推进
 //   · 有选项：点击选项按钮（或按 1~9）
-//   · 立绘：FTX 第 0 帧 CPU 合成 → dataURL（按 URL 缓存，加载中显示占位）
+//   · 立绘：FTX（优先"前"帧，缺省第 0 帧）CPU 合成 → dataURL（按 URL 缓存，加载中占位）
+//     —— 与访客身体脸部取帧口径一致；画布按 contain 填满头像框（小纹理自动放大）
+//   · ★ 点头像框 = UV 扭曲彩蛋：以点击点为圆心的径向涟漪 + 横向抖动，0.85s 衰减
+//     （逐像素反向采样：经典 UV warp；不冒泡推进对话）
 // 打开期间吞掉键盘事件（capture），避免与行走/开火抢键；世界输入另由
 // 模式层按 DialogueSystem.isActive 屏蔽。
 // ============================================================
@@ -18,11 +21,19 @@ import type {
 } from '../../systems/dialogue/DialogueTypes';
 
 const portraitDataUrlCache = new Map<string, string>();
+/** 头像画布内部分辨率（= 头像框 CSS 尺寸） */
+const PORTRAIT_W = 132;
+const PORTRAIT_H = 168;
+/** UV 扭曲时长（秒）与振幅参数 */
+const DISTORT_SECONDS = 0.85;
+const DISTORT_AMP = 5.5;
+const DISTORT_WOBBLE = 1.4;
 
 export class DialogueView implements DialogueViewLike {
   private root: HTMLDivElement;
-  private portraitEl: HTMLImageElement;
   private portraitBox: HTMLDivElement;
+  private portraitCanvas: HTMLCanvasElement;
+  private portraitCtx: CanvasRenderingContext2D;
   private speakerEl: HTMLDivElement;
   private textEl: HTMLDivElement;
   private choicesEl: HTMLDivElement;
@@ -31,6 +42,18 @@ export class DialogueView implements DialogueViewLike {
   private open_ = false;
   /** 当前立绘 URL（异步加载完成后仅当仍匹配才写入） */
   private portraitUrl: string | null = null;
+  /** ★ 已发起加载的立绘 URL（防重复请求；不用 img.src 判定——空 src 会解析成页面 URL） */
+  private loadingPortraitUrl: string | null = null;
+  /** 当前头像位图（UV 扭曲的采样源；切换立绘时替换） */
+  private portraitImg: HTMLImageElement | null = null;
+  /** 一次性的源/目标像素缓冲与方向场（点击时构建） */
+  private srcData: ImageData | null = null;
+  private dstData: ImageData | null = null;
+  private distortField: {
+    rx: Float32Array; ry: Float32Array; dist: Float32Array; fall: Float32Array;
+  } | null = null;
+  private distortStart = 0;
+  private distortRaf = 0;
 
   constructor(parent: HTMLElement = document.body) {
     this.root = document.createElement('div');
@@ -52,9 +75,18 @@ export class DialogueView implements DialogueViewLike {
       'border-radius:8px', 'overflow:hidden', 'display:flex',
       'align-items:flex-end', 'justify-content:center',
     ].join(';');
-    this.portraitEl = document.createElement('img');
-    this.portraitEl.style.cssText = 'max-width:100%;max-height:100%;display:block;';
-    this.portraitBox.appendChild(this.portraitEl);
+    // ★ 头像 = 画布（含 UV 扭曲彩蛋：点头像框触发径向涟漪）
+    this.portraitCanvas = document.createElement('canvas');
+    this.portraitCanvas.width = PORTRAIT_W;
+    this.portraitCanvas.height = PORTRAIT_H;
+    this.portraitCanvas.style.cssText = 'width:100%;height:100%;display:block;';
+    this.portraitBox.appendChild(this.portraitCanvas);
+    this.portraitCtx = this.portraitCanvas.getContext('2d')!;
+    // 点头像框 → UV 扭曲（stopPropagation：别顺手把对话推进了）
+    this.portraitBox.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.pulseDistort(e.clientX, e.clientY);
+    });
 
     // 右侧文本列
     const col = document.createElement('div');
@@ -97,19 +129,23 @@ export class DialogueView implements DialogueViewLike {
     // 立绘（缓存 dataURL；加载完成前占位）
     if (state.portrait !== this.portraitUrl) {
       this.portraitUrl = state.portrait ?? null;
-      this.portraitEl.src = '';
+      this.loadingPortraitUrl = null;
+      this.clearPortrait();
     }
     if (state.portrait) {
-      const cached = portraitDataUrlCache.get(state.portrait);
+      const url = state.portrait;
+      const cached = portraitDataUrlCache.get(url);
       if (cached) {
-        this.portraitEl.src = cached;
-      } else if (!this.portraitEl.src) {
-        const url = state.portrait;
+        this.setPortrait(cached);
+      } else if (this.loadingPortraitUrl !== url) {
+        this.loadingPortraitUrl = url;
         void loadFtxCached(url)
           .then((asset) => {
-            const dataUrl = compositeFrameToDataURL(asset, 0);
+            // ★ 与访客脸部同一取帧口径：优先"前"帧，缺省 0
+            const frame = asset.resolveFrame('前') ?? 0;
+            const dataUrl = compositeFrameToDataURL(asset, frame);
             portraitDataUrlCache.set(url, dataUrl);
-            if (this.portraitUrl === url) this.portraitEl.src = dataUrl;
+            if (this.portraitUrl === url) this.setPortrait(dataUrl);
           })
           .catch((err) => console.warn('[对话] 立绘加载失败:', url, err));
       }
@@ -136,12 +172,138 @@ export class DialogueView implements DialogueViewLike {
     });
   }
 
+  // ============================================================
+  // 头像（画布）+ ★ UV 扭曲彩蛋
+  // ============================================================
+
+  /** 立绘 dataURL → 位图 → 像素缓冲（contain 填满头像框，与 object-fit:contain 同口径） */
+  private setPortrait(dataUrl: string): void {
+    const img = new Image();
+    this.portraitImg = img;
+    img.onload = () => {
+      if (this.portraitImg !== img) return; // 已切换立绘 → 丢弃
+      this.buildPortraitSource(img);
+    };
+    img.src = dataUrl;
+  }
+
+  private buildPortraitSource(img: HTMLImageElement): void {
+    const W = PORTRAIT_W;
+    const H = PORTRAIT_H;
+    const src = document.createElement('canvas');
+    src.width = W;
+    src.height = H;
+    const sctx = src.getContext('2d')!;
+    const k = Math.min(W / Math.max(1, img.width), H / Math.max(1, img.height));
+    const w = img.width * k;
+    const h = img.height * k;
+    sctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+    this.srcData = sctx.getImageData(0, 0, W, H);
+    this.dstData = this.portraitCtx.createImageData(W, H);
+    this.drawCleanPortrait();
+  }
+
+  private clearPortrait(): void {
+    this.cancelDistort();
+    this.portraitImg = null;
+    this.srcData = null;
+    this.dstData = null;
+    this.distortField = null;
+    this.portraitCtx.clearRect(0, 0, PORTRAIT_W, PORTRAIT_H);
+  }
+
+  private drawCleanPortrait(): void {
+    if (this.srcData) this.portraitCtx.putImageData(this.srcData, 0, 0);
+  }
+
+  private cancelDistort(): void {
+    if (this.distortRaf) cancelAnimationFrame(this.distortRaf);
+    this.distortRaf = 0;
+  }
+
+  /** ★ 点击头像 → 以点击点为圆心的 UV 涟漪（径向推挤 + 横向抖动，0.85s 衰减） */
+  private pulseDistort(clientX: number, clientY: number): void {
+    if (!this.srcData) return;
+    const rect = this.portraitCanvas.getBoundingClientRect();
+    const cx = ((clientX - rect.left) / Math.max(1, rect.width)) * PORTRAIT_W;
+    const cy = ((clientY - rect.top) / Math.max(1, rect.height)) * PORTRAIT_H;
+    const W = PORTRAIT_W;
+    const H = PORTRAIT_H;
+    const n = W * H;
+    const rx = new Float32Array(n);
+    const ry = new Float32Array(n);
+    const dist = new Float32Array(n);
+    const fall = new Float32Array(n);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const dx = x + 0.5 - cx;
+        const dy = y + 0.5 - cy;
+        const d = Math.hypot(dx, dy) || 1;
+        rx[i] = dx / d;
+        ry[i] = dy / d;
+        dist[i] = d;
+        fall[i] = Math.exp(-d * 0.03); // 离点击点越远越弱
+      }
+    }
+    this.distortField = { rx, ry, dist, fall };
+    this.distortStart = performance.now();
+    this.cancelDistort();
+    this.distortRaf = requestAnimationFrame(this.distortTick);
+  }
+
+  /** UV 扭曲帧：逐像素反向采样（经典 UV warp；alpha 0 = 采样越界） */
+  private distortTick = (): void => {
+    const f = this.distortField;
+    const src = this.srcData;
+    const dst = this.dstData;
+    if (!f || !src || !dst) {
+      this.distortRaf = 0;
+      return;
+    }
+    const t = (performance.now() - this.distortStart) / 1000;
+    if (t >= DISTORT_SECONDS) {
+      this.distortRaf = 0;
+      this.drawCleanPortrait();
+      return;
+    }
+    const decay = 1 - t / DISTORT_SECONDS;
+    const amp = DISTORT_AMP * decay;
+    const wob = DISTORT_WOBBLE * decay;
+    const W = PORTRAIT_W;
+    const H = PORTRAIT_H;
+    const s = src.data;
+    const d = dst.data;
+    const n = W * H;
+    for (let i = 0; i < n; i++) {
+      const x = i % W;
+      const y = (i / W) | 0;
+      const w = Math.sin(f.dist[i] * 0.32 - t * 17) * amp * f.fall[i];
+      const sx = Math.round(x + f.rx[i] * w + Math.sin(y * 0.09 + t * 21) * wob);
+      const sy = Math.round(y + f.ry[i] * w);
+      const o = i * 4;
+      if (sx < 0 || sy < 0 || sx >= W || sy >= H) {
+        d[o + 3] = 0;
+        continue;
+      }
+      const j = (sy * W + sx) * 4;
+      d[o] = s[j];
+      d[o + 1] = s[j + 1];
+      d[o + 2] = s[j + 2];
+      d[o + 3] = s[j + 3];
+    }
+    this.portraitCtx.putImageData(dst, 0, 0);
+    this.distortRaf = requestAnimationFrame(this.distortTick);
+  };
+
   close(): void {
     if (!this.open_) return;
     this.open_ = false;
     this.handlers = null;
     this.root.style.display = 'none';
     this.choicesEl.innerHTML = '';
+    this.cancelDistort();
+    this.drawCleanPortrait();
     window.removeEventListener('keydown', this.onKeyDown, true);
   }
 
