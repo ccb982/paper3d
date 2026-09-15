@@ -33,9 +33,9 @@ export interface InputActions {
     interact: boolean;
     jump: boolean;
     inventory: boolean;
-    /** ★ 切换快捷物品（弹药/消耗品，Q；战斗中鼠标隐藏 → 键盘切换） */
+    /** ★ 切换快捷弹药（Q；战斗中鼠标隐藏 → 键盘切换） */
     switchItem: boolean;
-    /** ★ 使用所选消耗品（F；弹药仍由攻击键发射） */
+    /** ★ 使用键（F；航行期 = 停靠；消耗品改在背包内点击使用） */
     useItem: boolean;
     /** ★ 世界地图面板（M） */
     map: boolean;

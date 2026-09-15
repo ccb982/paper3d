@@ -254,7 +254,7 @@ export class DesktopBinding {
     return !!this.keyState.get('KeyQ');
   }
 
-  /** ★ 消费使用消耗品键（F） */
+  /** ★ 消费使用键（F；航行期 = 停靠） */
   consumeUseItem(): boolean {
     const v = this.state.pressed.useItem;
     this.state.pressed.useItem = false;

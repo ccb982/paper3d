@@ -468,8 +468,8 @@ export class WorldMode implements IGameMode {
   private relicRespawnMul = 1;
   /** ★ 装备提供的友军每秒回血（黍姐的XX 等；refreshPlayerStats 汇总，无人机/祖宗每帧结算） */
   private allyRegen = 0;
-  /** ★ 当前选择的快捷物品（'default' = 普通弹药；其余 = 弹药/消耗品 itemId）
-   *  Q 切换 / 点击切换；弹药由攻击键发射，消耗品由 F 使用 */
+  /** ★ 当前选择的快捷弹药（'default' = 普通弹药；其余 = 弹药 itemId）
+   *  Q 切换 / 点击切换；攻击键发射。消耗品不进快捷栏，在背包内使用 */
   private selectedQuickItem = 'default';
   /** ★ 祖宗弹投影物（专属纹理/朝向；落地或寿命到 → 生成站桩祖宗） */
   private sentinelShots: {
@@ -807,7 +807,7 @@ export class WorldMode implements IGameMode {
         }
       },
     });
-    // ★ 快捷栏切换：点击/按键切换当前物品（弹药 → 攻击键发射；消耗品 → F 使用）
+    // ★ 弹药栏切换：点击/按键切换当前弹药（攻击键发射）
     this.worldUIManager.setAmmoSelector((id) => { this.selectedQuickItem = id; });
     // ★ 航行期：停靠按钮（F 键同义）+ 隐藏战斗 HUD（停靠后才绘制）
     this.worldUIManager.setDockButton(() => this.requestDock(false));
@@ -1010,17 +1010,16 @@ export class WorldMode implements IGameMode {
     if (!uiLocked && this.binding.consumeMap()) {
       this.worldUIManager.toggleMapPanel();
     }
-    // ★ Q 切换快捷物品（换武器/道具）；F 使用所选消耗品（战斗中鼠标隐藏 → 键盘操作）
-    //   ★ Q 按住 + 滚轮 = 直接前后切换弹药/物品（不缩放视角）；点按 Q 仍顺序切换
-    //   死亡等待复活期间：锁消耗品使用（切换仍可看）
+    // ★ Q 切换快捷弹药（战斗中鼠标隐藏 → 键盘操作）
+    //   ★ Q 按住 + 滚轮 = 直接前后切换弹药（不缩放视角）；点按 Q 仍顺序切换
     if (!uiLocked && this.binding.isSwitchItemHeld() && zoom !== 0) {
       this.cycleQuickItem(zoom > 0 ? 1 : -1);
       zoom = 0; // 滚轮已用于切换 → 本帧不缩放
     }
     if (!uiLocked && this.binding.consumeSwitchItem()) this.cycleQuickItem();
-    if (!uiLocked && this.binding.consumeUseItem()) {
-      if (this.phase === 'sail') this.requestDock(false);       // 航行期：F = 停靠
-      else if (!this.player.dead) this.useSelectedConsumable();  // 探索期：F = 使用消耗品
+    // ★ F：航行期 = 停靠；探索期的消耗品请在背包（I）内点击使用
+    if (!uiLocked && this.binding.consumeUseItem() && this.phase === 'sail') {
+      this.requestDock(false);
     }
 
     // ★ 探索期事件 NPC：就近判定（E 对话优先于 E 进舰）
@@ -2570,25 +2569,25 @@ export class WorldMode implements IGameMode {
     return out;
   }
 
-  /** ★ 快捷栏条目：普通弹药（∞）+ 行囊内可发射弹药 + 可消耗物品（药品/增益品等）。
-   *  排序：普通弹药 → 弹药（祖宗等）→ 消耗品（各自内部保持背包扫描顺序，稳定排序）；
-   *  弹药 → 攻击键发射消耗；消耗品 → F 使用；Q/点击切换。只列行囊（player）里的。 */
+  /** ★ 快捷栏条目：普通弹药（∞）+ 行囊内弹药（祖宗等）。
+   *  排序：普通弹药 → 弹药（各自内部保持背包扫描顺序，稳定排序）；
+   *  弹药由攻击键发射消耗；Q/点击切换。只列行囊（player）里的。
+   *  ★ 消耗品不进快捷栏：直接在背包（I）内点击使用。 */
   private buildAmmoEntries(): AmmoEntryView[] {
     const out: AmmoEntryView[] = [
       { id: 'default', name: '普通弹药', count: -1, iconId: 'bullet_default', selected: this.selectedQuickItem === 'default' },
     ];
-    // ★ 先归并计数 + 定优先级（0=可发射弹药 1=其它弹药 2=消耗品），再稳定排序
+    // ★ 先归并计数 + 定优先级（0=可发射弹药 1=其它弹药），再稳定排序
     const found: { id: string; count: number; rank: number }[] = [];
     if (this.itemManager) {
       for (const it of this.itemManager.getItems('player')) {
         const arch = this.itemManager.getArchetype(it.itemId);
         if (!arch) continue;
-        // ★ 可部署友军（可露希尔的无人机等）走出击槽，不进快捷栏；只留弹药与消耗品
+        // ★ 可部署友军（可露希尔的无人机等）走出击槽，不进快捷栏；只留弹药
         if (this.itemManager.isDeployable(it.itemId)) continue;
         const isFireable = FIREABLE_AMMO.has(it.itemId);
-        const quick = isFireable || arch.type === 'consumable' || arch.type === 'ammo';
-        if (!quick) continue;
-        const rank = isFireable ? 0 : arch.type === 'ammo' ? 1 : 2;
+        if (!isFireable && arch.type !== 'ammo') continue;
+        const rank = isFireable ? 0 : 1;
         const exist = found.find((f) => f.id === it.itemId);
         if (exist) exist.count += it.stackSize;
         else found.push({ id: it.itemId, count: it.stackSize, rank });
@@ -2615,7 +2614,7 @@ export class WorldMode implements IGameMode {
     return out;
   }
 
-  /** ★ 切换快捷物品（dir=+1 下一个 / -1 上一个，循环；普通弹药 → 行囊内各项）：
+  /** ★ 切换快捷弹药（dir=+1 下一个 / -1 上一个，循环；普通弹药 → 行囊内弹药）：
    *   点按 Q = 顺序 +1；Q+滚轮 = 前后双向切换 */
   private cycleQuickItem(dir = 1): void {
     const entries = this.buildAmmoEntries();
@@ -2628,17 +2627,6 @@ export class WorldMode implements IGameMode {
     }
     const next = entries[(idx + dir + entries.length) % entries.length];
     this.selectedQuickItem = next.id;
-  }
-
-  /** ★ F：使用所选消耗品（弹药不在此列——弹药由攻击键发射） */
-  private useSelectedConsumable(): void {
-    const id = this.selectedQuickItem;
-    if (id === 'default' || FIREABLE_AMMO.has(id)) return;
-    const res = this.itemManager?.useItemId('player', id);
-    if (res?.message && this.player) {
-      const p = this.player.position;
-      this.showFloatingAt(p.x, p.y + 1.8, p.z, res.message, res.success ? 'heal' : 'miss');
-    }
   }
 
   /** ★ 轻微弹道修正（自瞄）：从枪口看，偏角 ≤ AIM_ASSIST_ANGLE 的最近方向目标 →

@@ -83,7 +83,7 @@ export class AmmoPanel {
       r.countEl.style.color = e.count === 0 ? '#ff6666' : selected ? '#ffd87a' : '#d6dee8';
     }
     // ★ 行序 = 条目顺序（2026-09-13 修复：新增行此前只追加在末尾，
-    //   祖宗补给回来会排到消耗品后面；这里顺序不一致才整体重排，零常态开销）
+    //   弹药补给回来会排到其它弹药后面；这里顺序不一致才整体重排，零常态开销）
     let needOrder = false;
     let prevEl: Element | null = null;
     for (const e of entries) {
