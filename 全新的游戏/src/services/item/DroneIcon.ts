@@ -22,7 +22,9 @@ import type { ItemManager } from '../../systems/inventory/ItemManager';
 
 /** 图标烘焙分辨率（像素，方形；128 足够 38~64px 显示，回读/拷贝量比 256 少 4 倍） */
 const ICON_SIZE = 128;
-const FPS = 30;
+// ★ 2026-09-15：UI 图标烘焙 30fps → 10fps（PBO 异步回读 getBufferSubData 在 CPU
+//   profile 里占 6.4%，是 GPU 回读停顿；图标只是面板里的 128² 小图，10fps 足够）。
+const FPS = 10;
 const FRAME_MS = 1000 / FPS;
 
 /** 素材 / 渲染失败时兜底色（深蓝块，不闪） */
@@ -168,12 +170,12 @@ export class DroneIconAnimator {
     if (this.living.length === 0) return; // 无活动画布 → 停转（RAF 不再续约）
 
     const now = performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - this.lastT) / 1000));
-    this.lastT = now;
-    if (this.anim) this.anim.update(dt);
 
-    // 30fps 烘焙节流
+    // ★ 烘焙节流：动画推进与烘焙**同拍**（原先 60Hz 推进只为 30fps 上屏 → 白烧解算）
     if (now - this.lastPaint >= FRAME_MS) {
+      const dt = Math.max(0, Math.min(0.1, (now - this.lastT) / 1000));
+      this.lastT = now;
+      if (this.anim) this.anim.update(dt);
       void this.paintFrame();
     }
     this.rafId = requestAnimationFrame(this.tick);

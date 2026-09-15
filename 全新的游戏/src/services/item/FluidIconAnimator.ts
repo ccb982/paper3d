@@ -14,8 +14,13 @@ import { getGameRenderer } from '../render/GameRenderer';
 import { stepFluidShared } from '../fx/FluidShared';
 
 const ICON_SIZE = 128;
-const FPS = 24;
+// ★ 2026-09-15：24fps → 10fps（PBO 异步回读 getBufferSubData 在 CPU profile 里
+//   占 6.4%；图标只是面板里的 128² 小图，10fps 足够）。
+const FPS = 10;
 const FRAME_MS = 1000 / FPS;
+/** ★ 单步推进上限（秒）：降频后一次推进要吃掉整段 100ms，直接喂给求解器会炸，
+ *  钳到 1/30 —— 流体按 ~1/3 速度演化，对循环装饰图标无感。 */
+const MAX_STEP = 1 / 30;
 
 /** 最小资产接口（Asset 提供共享/独立流体；FtxAsset 无 → 回退静态图标） */
 export interface FluidIconAsset {
@@ -139,9 +144,9 @@ class FluidIconAnimator {
   private tick = (): void => {
     this.rafId = 0;
     const now = performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - this.lastT) / 1000));
-    this.lastT = now;
     const paintDue = now - this.lastPaint >= FRAME_MS;
+    // ★ 推进步长 = 距上次烘焙的真实时长（钳 MAX_STEP）——与烘焙同拍
+    const stepDt = paintDue ? Math.min(Math.max(0, now - this.lastT) / 1000, MAX_STEP) : 0;
     let alive = false;
     for (const key of [...this.groups.keys()]) {
       const g = this.groups.get(key);
@@ -171,10 +176,13 @@ class FluidIconAnimator {
       }
       if (!shown) continue;
       alive = true;
-      stepFluidShared(g.effect, dt);
-      if (paintDue) this.paint(g);
+      // ★ 流体推进与烘焙**同拍**（原先 60Hz 推进只为 24fps 上屏 → 白烧求解器）
+      if (paintDue) {
+        stepFluidShared(g.effect, stepDt);
+        this.paint(g);
+      }
     }
-    if (paintDue) this.lastPaint = now;
+    if (paintDue) { this.lastPaint = now; this.lastT = now; }
     if (alive) this.rafId = requestAnimationFrame(this.tick);
   };
 

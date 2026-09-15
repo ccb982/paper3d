@@ -25,8 +25,13 @@ import { getGameRenderer } from '../render/GameRenderer';
 import { fluidSteppedRecently } from '../fx/FluidShared';
 
 const ICON_SIZE = 128;
-const FPS = 24;
+// ★ 2026-09-15：24fps → 10fps（PBO 异步回读 getBufferSubData 在 CPU profile 里
+//   占 6.4%；图标只是面板里的 128² 小图，10fps 足够）。
+const FPS = 10;
 const FRAME_MS = 1000 / FPS;
+/** ★ 单步推进上限（秒）：降频后一次推进要吃掉整段 100ms，直接喂给求解器会炸，
+ *  钳到 1/30 —— 流体按 ~1/3 速度演化，对循环装饰图标无感。 */
+const MAX_STEP = 1 / 30;
 /** 循环周期（秒）：到点 reset 流体，恢复初始残差重新流动（像连发） */
 const LOOP_SEC = 1.5;
 /** ★ 兜底路径（无区域实体素材）的帧序列播放速度（如 3 帧装饰类图标） */
@@ -86,7 +91,6 @@ class DynamicIconAnimator {
   /** 素材 → 生产线（WeakMap：随素材回收，不泄漏） */
   private producers = new WeakMap<object, Producer>();
   private rafId = 0;
-  private lastT = 0;
   /** ★ 画布可见性（IntersectionObserver：不可见的生产线跳过推进/烘焙 → 零开销） */
   private io: IntersectionObserver | null = null;
   private visible = new WeakSet<HTMLCanvasElement>();
@@ -153,8 +157,6 @@ class DynamicIconAnimator {
   private tick = (): void => {
     this.rafId = 0;
     const now = performance.now();
-    const dt = Math.max(0, Math.min(0.1, (now - this.lastT) / 1000));
-    this.lastT = now;
 
     let alive = false;
     // WeakMap 不可枚举 → 用强引用列表遍历（条目 = 已注册素材数，极少）
@@ -174,8 +176,10 @@ class DynamicIconAnimator {
       }
       if (!shown) continue;
       alive = true;
-      this.advance(p, dt);
+      // ★ 推进与烘焙**同拍**（原先 60Hz 推进只为 24fps 上屏 → 白烧求解器）
       if (now - p.lastPaint >= FRAME_MS) {
+        const stepDt = Math.min(Math.max(0, now - p.lastPaint) / 1000, MAX_STEP);
+        this.advance(p, stepDt);
         this.paint(p);
         p.lastPaint = now;
       }
